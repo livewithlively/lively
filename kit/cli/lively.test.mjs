@@ -467,6 +467,16 @@ try {
       .map(([why, input, want]) => `${why}: got=${JSON.stringify(loginEscapeToken(input))} want=${JSON.stringify(want)}`);
     check("⑲ #916 — 로그인 탈출구 분기표(--token > 파일없음 > 비대화형 > 브라우저)", bads.length === 0, bads.join(" | "));
   }
+
+  // ⑳ onboarding — `lively onboarding` 은 claude 를 초기 프롬프트로 소환한다(설치 제안·수동 재실행 공용 진입).
+  //   --print 는 실제로 안 띄우고 실행할 명령만 낸다 → gateway·token·claude 없이 순수 검증(winArg 계열과 동류).
+  {
+    // say() 는 stderr 로 간다(stdout 은 --json 등 기계출력 전용) — resume --print 와 동일 관례.
+    const r = await pExecFile(process.execPath, [CLI, "onboarding", "--print"]);
+    check('⑳ onboarding --print — claude "온보딩 도와줘" 로 소환', r.stderr.includes('claude "온보딩 도와줘"'), JSON.stringify(r.stderr));
+    const r2 = await pExecFile(process.execPath, [CLI, "onboarding", "메모리만", "정리", "--print"]);
+    check("⑳ onboarding — 초기 프롬프트 override", r2.stderr.includes('claude "메모리만 정리"'), JSON.stringify(r2.stderr));
+  }
 } finally {
   server.close();
   cleanup();

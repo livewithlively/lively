@@ -14,7 +14,7 @@ import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { getRuntimeConfig } from "./org/store.js";
 import { appendSessionLog, sessionLogWatermark, sessionOwner, readSessionLog, listSessionsForOwner, listSessionsForProject } from "./v6/session-log-store.js";
-import { sessionBoundToMemberProject, isProjectMember } from "./v6/project-store.js";
+import { sessionBoundToMemberProject, isProjectMember, recordSessionProject } from "./v6/project-store.js";
 import { renderTranscript } from "./terminal-transcript.js";
 
 export const MAX_DELTA = 8 * 1024 * 1024;   // 한 번에 받는 델타 상한(8MB) — 큰 트랜스크립트도 청크로 나눠 보내게.
@@ -120,6 +120,15 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
 
     const data = await readRawBody(req, MAX_DELTA);
     const r = await appendSessionLog({ nodeId, sessionId, atOffset, data, harness, owner: requester });
+    // 프로젝트 귀속(#905 C1 슬⑤b) — 클라(훅·백필)가 **`.lively/project.json` 마커에서 읽어** 선언한 project 로 매핑한다
+    //  (경로 휴리스틱 아님 — 구조화된 값이 정본). claude uuid 세션을 프로젝트 탭 '세션 기록'에 잇는 다리
+    //  (recordSessionProject 의 tmux-id 매핑은 session_log 의 claude-uuid 와 안 붙으므로 이 경로가 필요).
+    //  위조 방어: 요청자가 그 프로젝트 멤버일 때만 기록. recordSessionProject 는 멱등(재백필·중복 append 에도 안전).
+    const claimProject = req.query.project !== undefined ? Number(req.query.project) : NaN;
+    if (Number.isInteger(claimProject) && claimProject > 0) {
+      try { if (await isProjectMember(claimProject, requester)) await recordSessionProject(sessionId, claimProject); }
+      catch { /* 귀속 실패는 비치명 — 로그 저장은 이미 끝났다 */ }
+    }
     res.setHeader("Cache-Control", "no-store");
     res.json(r);   // { ok, verdict, bytes } — 보낸 쪽이 bytes 로 로컬 오프셋을 정정한다.
   }));

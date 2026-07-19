@@ -25,7 +25,7 @@ import {
   readdirSync, statSync, realpathSync, openSync, closeSync,
 } from "node:fs";
 import { homedir, tmpdir, hostname } from "node:os";
-import { join, relative } from "node:path";
+import { join, relative, dirname } from "node:path";
 import { spawnSync, spawn, execFileSync } from "node:child_process";
 import { ReadStream, WriteStream } from "node:tty";
 import { fileURLToPath } from "node:url";
@@ -1307,6 +1307,7 @@ ${bold("시작하기")}
   setup                  로그인 + 설치를 한 번에 (처음 설치할 때)
   login                  접속 토큰 등록 (가림 입력 — 화면·히스토리에 안 남음)
   logout                 토큰만 지움 (설치는 유지)
+  onboarding             내 환경 정리 · 라이블리 첫 세팅을 지금 시작 ${dim("(claude 를 열어 온보딩 스킬 실행 — 언제든 재실행)")}
 
 ${bold("설치 · 유지보수")}
   install                키트 설치 / 재설치 (멱등)
@@ -1422,6 +1423,24 @@ async function cmdResume(args) {
 //  캡처 훅은 "켠 뒤 늘어나는 델타"만 보낸다 → 웹뷰가 과거 세션은 못 본다. 이 명령이 ~/.claude/projects/*/*.jsonl
 //  전체를 훑어 서버 워터마크부터 올린다(훅과 동일 로직의 배치판). 멱등(offset-CAS): 이미 올라간 건 서버가 흡수.
 //  소유자=인증한 나. 세션 공유가 꺼져 있으면 서버가 막는다(관리 ▸ 세션 공유를 먼저 켜라). --dry-run 은 조회만.
+// 트랜스크립트의 cwd → `.lively/project.json` 마커의 project_id(구조화된 정본 — 경로 휴리스틱 아님). 없으면 null.
+//  cwd 는 앞쪽 라인에 나오므로 앞부분만 스캔. cwd 에서 위로 올라가며 마커를 찾는다.
+function projectIdForTranscript(buf) {
+  let cwd = null;
+  const head = buf.toString("utf8", 0, Math.min(buf.length, 65536));
+  for (const line of head.split("\n")) {
+    if (!line.includes('"cwd"')) continue;
+    try { const o = JSON.parse(line); if (typeof o.cwd === "string" && o.cwd) { cwd = o.cwd; break; } } catch { /* 부분/깨진 줄 */ }
+  }
+  if (!cwd) return null;
+  let dir = cwd;
+  for (let i = 0; i < 40 && dir; i++) {
+    try { const m = JSON.parse(readFileSync(join(dir, ".lively", "project.json"), "utf8")); if (m && Number.isInteger(m.project_id) && m.project_id > 0) return m.project_id; } catch { /* 마커 없음·파손 */ }
+    const p = dirname(dir); if (p === dir) break; dir = p;
+  }
+  return null;
+}
+
 async function cmdBackfill(args) {
   const dry = args.includes("--dry-run") || args.includes("--print");
   const gw = gateway(), tok = token();
@@ -1439,7 +1458,7 @@ async function cmdBackfill(args) {
   say(`발견: ${files.length}개 세션 트랜스크립트${dry ? dim("  (dry-run — 전송 안 함)") : ""}`);
   const H = { authorization: `Bearer ${tok}` };
   const MAXD = 8 * 1024 * 1024;
-  let sent = 0, already = 0, skipped = 0, failed = 0, bytesUp = 0;
+  let sent = 0, already = 0, skipped = 0, failed = 0, bytesUp = 0, mapped = 0;
   for (const { sid, path: fp } of files) {
     if (!/^[A-Za-z0-9._-]{1,64}$/.test(sid)) { skipped++; continue; }
     let full; try { full = readFileSync(fp); } catch { skipped++; continue; }
@@ -1454,15 +1473,28 @@ async function cmdBackfill(args) {
       from = Number(j.bytes) || 0;
       if (j.capture && j.capture.enabled !== true) { say(red("세션 공유가 꺼져 있습니다 — 관리 ▸ 세션 공유에서 켜세요.")); process.exit(1); }
     } catch { failed++; continue; }
-    if (full.length <= from) { already++; continue; }   // 이미 다 올라감
-    if (dry) { say(dim(`  [dry] ${sid}  ${from}→${full.length} (+${full.length - from}B)`)); sent++; continue; }
+    // 프로젝트 귀속 값 — .lively/project.json 마커에서(구조화된 정본). append 쿼리에 실어 서버가 멤버 확인 후 매핑.
+    const projectId = projectIdForTranscript(full);
+    const projQ = projectId ? { project: String(projectId) } : {};
+    if (full.length <= from) {
+      // 내용은 이미 다 올라감 — 프로젝트 매핑만 갱신(0바이트 append + 마커 project). projectId 없으면 그냥 스킵.
+      if (projectId && !dry) {
+        try {
+          await fetch(`${gw}/api/ui/v6/sessions/${encodeURIComponent(sid)}/log?${new URLSearchParams({ at: String(from), node: "", harness: "claude", ...projQ })}`,
+            { method: "POST", headers: { ...H, "content-type": "application/octet-stream" }, body: Buffer.alloc(0) });
+          mapped++;
+        } catch { /* 비치명 */ }
+      }
+      already++; continue;
+    }
+    if (dry) { say(dim(`  [dry] ${sid}  ${from}→${full.length} (+${full.length - from}B)${projectId ? ` · project ${projectId}` : ""}`)); sent++; continue; }
     // 델타를 MAXD 청크로 순차 POST(offset-CAS 가 이어붙임). 응답 bytes 로 다음 오프셋 정정.
     let ok = true;
     while (from < full.length) {
       const end = Math.min(full.length, from + MAXD);
       const buf = full.subarray(from, end);
       try {
-        const r = await fetch(`${gw}/api/ui/v6/sessions/${encodeURIComponent(sid)}/log?${new URLSearchParams({ at: String(from), node: "", harness: "claude" })}`, {
+        const r = await fetch(`${gw}/api/ui/v6/sessions/${encodeURIComponent(sid)}/log?${new URLSearchParams({ at: String(from), node: "", harness: "claude", ...projQ })}`, {
           method: "POST", headers: { ...H, "content-type": "application/octet-stream" }, body: buf });
         if (!r.ok) { ok = false; break; }
         const j = await r.json();
@@ -1473,7 +1505,22 @@ async function cmdBackfill(args) {
     }
     if (ok) sent++; else failed++;
   }
-  say(`완료 — 전송 ${sent} · 이미있음 ${already} · 건너뜀 ${skipped} · 실패 ${failed}${bytesUp ? ` · ${Math.round(bytesUp / 1024)}KB` : ""}`);
+  say(`완료 — 전송 ${sent} · 이미있음 ${already} · 프로젝트매핑 ${mapped} · 건너뜀 ${skipped} · 실패 ${failed}${bytesUp ? ` · ${Math.round(bytesUp / 1024)}KB` : ""}`);
+}
+
+// lively onboarding [초기프롬프트…] — 온보딩 스킬을 이 PC 에서 바로 실행한다.
+//  claude 를 초기 프롬프트("온보딩 도와줘")로 띄우면 하네스가 그 문구로 lively-onboarding 스킬을 소환한다.
+//  설치 직후 제안(setup-mac.sh)과 사람의 수동 재실행이 같은 진입을 쓴다. cmdResume 과 동형(has 가드 + spawnSync inherit).
+//  ⚠ 자동승인 플래그는 주지 않는다 — 멤버가 깔아둔 auto-approve 를 쓰고 나머지는 정상 권한 프롬프트(온보딩은 신뢰가 전부).
+//  --print 는 실제로 안 띄우고 실행할 명령만 출력(테스트·확인용, resume 과 동일 관례).
+function cmdOnboarding(rest) {
+  const printOnly = rest.includes("--print") || rest.includes("--dry-run");
+  const prompt = rest.filter((a) => a !== "--print" && a !== "--dry-run").join(" ").trim() || "온보딩 도와줘";
+  if (printOnly) { say(`claude ${JSON.stringify(prompt)}`); return; }
+  if (!has("claude")) { say(red("claude 실행파일을 못 찾았습니다 — 먼저 `lively install` 로 하네스를 설치하세요.")); process.exit(1); }
+  say(dim(`  · 온보딩 세션을 엽니다 — "${prompt}"`));
+  const st = spawnSync("claude", [prompt], { stdio: "inherit", cwd: process.cwd() }).status;
+  process.exit(st ?? 0);
 }
 
 async function main() {
@@ -1485,6 +1532,8 @@ async function main() {
     case "setup": return cmdSetup();
     case "login": { await cmdLogin(o); return; }
     case "logout": return cmdLogout();
+    // onboarding — 온보딩 스킬을 이 PC 에서 바로 실행(설치 직후 제안·수동 재실행 공용). 나머지 인자=초기 프롬프트.
+    case "onboarding": return cmdOnboarding(argv.slice(argv.indexOf("onboarding") + 1));
     case "install": { await cmdInstall(); return; }
     case "update": case "upgrade": return cmdUpdate(o);
     case "uninstall": case "remove": return cmdUninstall(o);

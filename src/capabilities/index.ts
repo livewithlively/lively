@@ -30,6 +30,7 @@ import { getMember } from "../org/store.js";
 import { trashCapabilities } from "./trash.js";
 import { undoCapabilities } from "./undo.js";
 import { cronCapabilities } from "./cron.js";
+import { feedTargetCapabilities } from "./feed-targets.js";
 import { mappingCapabilities } from "./mapping.js";
 import { managedSessionCapabilities } from "./managed-session.js";
 import { delegateCapabilities } from "./delegate.js";
@@ -101,6 +102,7 @@ const all: Capability[] = [
   ...taskFieldV6Capabilities, // v6: 커스텀 필드(클릭업형 "+ 컬럼 추가") — 필드 정의 CRUD + 태스크별 값 패치. scope=memory. expose.mcp:true(자동등록)+REST(/api/ui/v6/projects/:id/fields, /fields/:id, /tasks/:id/fields/:fieldId). task_field_delete_v6 는 org_tool 기본 OFF(값 손실).
   ...trashCapabilities, // v6: 휴지통(deleted_list 조회 + content_restore 복원) — 감사로그 기반 공통 경로. 복원은 사람전용(에이전트 403). 삭제는 엔티티별(knowledge_delete·category_delete·project_delete_v6).
   ...undoCapabilities, // #702: 전역 실행취소(Cmd+Z) — org_content_audit before/after 역적용(content_undo, REST 전용 /api/ui/undo). 사람전용(에이전트 403), 대상=내 웹 채널 변경만.
+  ...feedTargetCapabilities, // #976 위키 아웃바운드 — 피드 목적지(feed_target)+카테고리 N:M 매핑 CRUD+드레인. admin scope, MCP+REST(/api/ui/feed-targets*). 관리탭 '위키 아웃바운드' 패널.
   ...cronCapabilities, // 서버사이드 스케줄 잡(org_cron) 관리 — admin scope. cron_list/set/delete/run_now(REST /api/ui/cron + MCP). 트리거 표준화: is 신선화·sync 를 게이트웨이가 주기 실행(웹훅 대체).
   ...mappingCapabilities, // 코드유닛→도메인 매핑 — context scope. list_unmapped(인박스)+map_code_unit(propose+근거, MCP+REST). LLM 판단주체: 에이전트가 도메인 should+DDD 로 분류.
   ...managedSessionCapabilities, // 상시 에이전트 세션 — admin scope. managed_session_list/set/delete/ensure. 격리 워크스페이스+keep-alive(createSession 재사용), 크론 타깃.

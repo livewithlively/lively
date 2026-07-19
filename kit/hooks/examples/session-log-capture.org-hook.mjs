@@ -40,6 +40,18 @@ const MAX_DELTA = 8 * 1024 * 1024;  // 한 번에 올릴 상한(엔드포인트 
   if (!sessionId || !transcriptPath) return;   // 이 정보가 없으면(구 하네스·비Claude) 캡처 불가 — 조용히 종료.
   if (!/^[A-Za-z0-9._-]{1,64}$/.test(sessionId)) return;
 
+  // 프로젝트 귀속(#905 C1) — **`.lively/project.json` 마커에서 project_id 를 읽는다**(경로 휴리스틱 아님, 구조화된 정본).
+  //  세션 cwd 에서 위로 올라가며 마커를 찾는다. 서버는 이 값을 받아 '요청자가 그 프로젝트 멤버일 때만' 귀속한다(위조 방어).
+  const cwd = String(ev.cwd || ev.cwd || "").trim() || process.cwd();
+  const projectId = (() => {
+    let dir = cwd;
+    for (let i = 0; i < 40 && dir; i++) {
+      try { const m = JSON.parse(fs.readFileSync(path.join(dir, ".lively", "project.json"), "utf8")); if (m && Number.isInteger(m.project_id) && m.project_id > 0) return m.project_id; } catch { /* 마커 없음·파손 */ }
+      const p = path.dirname(dir); if (p === dir) break; dir = p;
+    }
+    return null;
+  })();
+
   // 2) 게이트웨이 base + 토큰 (project-push 와 동일 출처).
   const HOME = process.env.LIVELY_HOME || os.homedir();
   const readLocal = (rel) => { try { return fs.readFileSync(path.join(HOME, ".lively", rel), "utf8").trim() || null; } catch { return null; } };
@@ -85,7 +97,7 @@ const MAX_DELTA = 8 * 1024 * 1024;  // 한 번에 올릴 상한(엔드포인트 
   if (!buf || !buf.length) return;
   if (Date.now() - startedAt > BUDGET_MS) return;                    // 예산 초과 — 다음 턴에(서버 워터마크가 이어준다)
   try {
-    await jfetch(`/api/ui/v6/sessions/${encodeURIComponent(sessionId)}/log?${q({ at: String(from), node: nodeId, harness })}`, {
+    await jfetch(`/api/ui/v6/sessions/${encodeURIComponent(sessionId)}/log?${q({ at: String(from), node: nodeId, harness, ...(projectId ? { project: String(projectId) } : {}) })}`, {
       method: "POST", headers: { "content-type": "application/octet-stream" }, body: buf,
     });
     // 응답을 굳이 안 본다 — ok/duplicate/gap 무엇이든 다음 턴에 GET watermark 로 서버 진실을 다시 받아 이어간다.
