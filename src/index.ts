@@ -38,6 +38,7 @@ import { readyReport } from "./health.js";
 import { startLogJanitor } from "./log-janitor.js";
 import { effectiveStoragePolicy } from "./org/storage-policy.js";
 import { getRuntimeConfig } from "./org/store.js";
+import { reapSessionLogs } from "./v6/session-log-store.js";
 import { ensureSharedCache } from "./session-cache.js";
 import { startBoxWatch } from "./box-watch.js";
 import { sendBoxAlert } from "./alerts.js";
@@ -318,6 +319,11 @@ const server = app.listen(PORT, () => {
         setInterval(() => { void runAutoBackfillSweep(); }, 600_000).unref();
         // #880 device-auth reaper — 만료 1h 경과 pending 행 정리(user_code 회수). start/poll 이 lazy 백업도 함.
         setInterval(() => { void reapDeviceAuth().catch(() => { /* best-effort */ }); }, 600_000).unref();
+        // #905 C1 — 세션이력 retention reap: session_share.retention_days 지나도록 손대지 않은 로그·청크 정리
+        //  (session 레코드는 불멸). retention_days=0 이면 no-op. 일 단위 보존이라 6h 주기로 충분.
+        setInterval(() => {
+          void getRuntimeConfig().then((c) => reapSessionLogs(c.session_share.retention_days)).catch(() => { /* best-effort */ });
+        }, 6 * 60 * 60_000).unref();
       })
       .catch((err) => logger.error({ err }, "schema init failed"));
   }
