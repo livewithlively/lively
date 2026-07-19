@@ -94,7 +94,10 @@ function composeFile(asset) {
   push("description", asset.description != null ? asset.description : (fm.description ?? "")); // description 컬럼이 진실원천
   for (const k of Object.keys(fm)) if (k !== "name" && k !== "description") push(k, fm[k]);
   const lines = ordered.map(([k, v]) => `${k}: ${yamlValue(v)}`);
-  return `---\n${lines.join("\n")}\n---\n\n${asset.body || ""}\n`;
+  // provenance 한 줄(#932) — 이 파일은 중앙 asset 의 사본이라 손으로 만든 로컬 스킬과 겉이 같다. 세션이 파일만 봐도
+  //  '사본이니 중앙을 고쳐라'를 알게 마커를 박는다(frontmatter 뒤 = 로더 무영향, HTML 주석 = 렌더 무영향, 한 줄 = 노이즈 최소).
+  const provenance = "<!-- 라이블리가 materialize 한 사본입니다. 편집은 MCP org_harness_asset_upsert(또는 관리탭 ▸ 하네스) — 이 파일 직접 수정은 다음 sync 에 덮어써집니다. -->";
+  return `---\n${lines.join("\n")}\n---\n\n${provenance}\n\n${asset.body || ""}\n`;
 }
 
 async function fetchAssets() {
