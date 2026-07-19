@@ -140,6 +140,8 @@ const ADMIN_SECTIONS = [
   // #976 위키 아웃바운드 — 우리 정본 지식을 외부(노션 등) '지식 피드' DB로 투영. 커넥터(인바운드)의 역방향.
   //  피드 목적지 + 카테고리 N:M 매핑(발행 게이트) 관리. 사람 페이지 불가침 — 전용 피드 DB에만 카드 append.
   { key: 'feed-targets', label: '위키 아웃바운드(피드)', meaning: null, group: 'data' },
+  // #975/#978 프로젝트 아웃바운드 — 우리 프로젝트·과업 편집을 외부 PM(ClickUp; GitHub/Jira 예정)에 push. 소스별 on/off.
+  { key: 'project-outbound', label: '프로젝트 아웃바운드', meaning: null, group: 'data' },
   // DB 데이터소스 — 등록 + 테이블 정책·컬럼 마스킹 + 감사 대상 식별자(subject-key) + 원본 열람 grant.
   //  subject-key 는 구 [DB 접근 감사] 화면에 잘못 꽂혀 있었다 — 서버는 /org/db-source/* 하위 리소스로 본다(#837 에서 이관).
   { key: 'db-sources', label: 'DB 데이터소스', meaning: 'db-source', group: 'data' },
@@ -168,7 +170,7 @@ const SECTION_REMAP = {
 // 구 [검토 큐]는 관리탭을 떠나 WIKI 탭으로 갔다(#837) — 섹션 리맵이 아니라 탭 밖 리다이렉트라 따로 둔다.
 const SECTION_EXIT = { 'review-queue': '#/knowledge/review' };
 // admin 권한 전용(쓰기·인프라·감사). #318 호출통계·#549 변경감사는 전 구성원의 변경·before/after 를 노출하므로 admin.
-const ADMIN_ONLY = ['credentials', 'connectors', 'feed-targets', 'db-sources', 'storage', 'embeddings', 'automation', 'audit', 'ingest-policy', 'session-share'];
+const ADMIN_ONLY = ['credentials', 'connectors', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'embeddings', 'automation', 'audit', 'ingest-policy', 'session-share'];
 const RUNTIME_ONLY = ['agent-assets']; // runtime 권한 전용(멤버 머신에서 도는 것의 정의)
 // [도구]는 두 권한의 합집합 — 사내 API 도구·빌트인은 runtime, 외부 MCP 서버 등록은 admin. 둘 중 하나라도 있으면
 //  섹션을 보여주고, 안에서 각 서브탭을 권한별로 켠다(구조상 한 섹션=한 scope 전제가 깨지는 유일한 자리라 명시한다).
@@ -424,6 +426,7 @@ function renderAdminDetail(detail, sel, data) {
   if (sel === 'automation') return automationSection(detail, data);
   if (sel === 'connectors') return connectorEditor(detail, data);
   if (sel === 'feed-targets') return feedTargetsEditor(detail, data);
+  if (sel === 'project-outbound') return projectOutboundEditor(detail, data);
   if (sel === 'db-sources') return dbSourceEditor(detail, data);
   if (sel === 'credentials') return credentialsEditor(detail);
   if (sel === 'storage') return storageEditor(detail, data);
@@ -2219,6 +2222,40 @@ function injectionMap(detail, data) {
     return field(labelText, el('div', {}, hint ? el('p', { class: 'admin-hint', style: 'margin:0 0 4px', text: hint }) : null, ta, el('div', { class: 'admin-actions' }, btn, st)));
   }
 
+  // #906/#959 pull_tools 전용 편집기 — 게이트웨이 프록시 MCP는 '+추가' 칩(org_mcp tools_snapshot에서 발견)으로,
+  //  자체설치 MCP는 그 툴이름 prefix(예: mcp__notion__)를 textarea에 직접. session-preload 가 비-lively prefix로
+  //  work-flag matcher를 세션마다 동적 배선(#959)하므로 자체설치도 커버된다 — 게이트웨이 강제 설치 불필요.
+  //  textarea = 전체 pull_tools 의 편집 가능한 단일 소스. 칩은 prefix 를 '추가'만(제거는 textarea에서).
+  function pullToolsEditor() {
+    const proxyServers = (data.mcpServers || []).filter((s) => s.mode === 'proxy' && s.enabled !== false);
+    const ta = el('textarea', { rows: '3', placeholder: 'mcp__lively__ext__   (비우면 이 기능 꺼짐)' });
+    ta.value = ((rc && rc.pull_tools) || []).join('\n'); ta.disabled = !canEdit;
+    const addPrefix = (p) => {
+      const lines = ta.value.split('\n').map((l) => l.trim()).filter(Boolean);
+      if (lines.includes(p)) { toast(p + ' 는 이미 있습니다'); return; }
+      lines.push(p); ta.value = lines.join('\n'); toast(p + ' 추가됨 — [저장]으로 확정');
+    };
+    const chips = el('div', { style: 'display:flex;flex-wrap:wrap;gap:6px;margin:4px 0' });
+    chips.append(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '+ 전체 프록시 (mcp__lively__ext__)', onclick: () => addPrefix('mcp__lively__ext__') }));
+    for (const s of proxyServers) {
+      const n = (s.tools_snapshot || []).length;
+      chips.append(el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '+ ' + s.name + (n ? ' (' + n + '개)' : ''), onclick: () => addPrefix('mcp__lively__ext__' + s.name + '__') }));
+    }
+    const btn = el('button', { class: 'btn btn-primary btn-sm', text: '저장' }); if (!canEdit) btn.disabled = true;
+    const st = el('span', { class: 'admin-status' });
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try { await saveRuntime({ pull_tools: ta.value.split('\n').map((l) => l.trim()).filter(Boolean) }); st.textContent = '저장됨'; }
+      catch (e) { toast(e.message, true); }
+      btn.disabled = false;
+    });
+    return field('외부 인입 툴(pull_tools) — 외부 맥락을 가져온 세션에 기록 너지',
+      el('div', {},
+        el('p', { class: 'admin-hint', style: 'margin:0 0 4px', text: '이 MCP 툴 prefix 로 시작하는 툴을 쓰면 "외부 맥락을 가져왔다"로 보고, 라이블리에 기록 없이 세션을 끝내면 너지합니다. 비우면 이 기능이 꺼집니다.' }),
+        canEdit ? el('p', { class: 'admin-hint', style: 'margin:0 0 4px', text: '아래 버튼으로 게이트웨이에 등록된 외부 MCP(프록시)를 추가하세요. 게이트웨이 밖의 자체설치 MCP(예: 구성원이 직접 붙인 Notion MCP)는 그 툴이름 prefix(예: mcp__notion__)를 아래 칸에 직접 적으면 세션 시작 훅이 자동으로 매처를 배선해 커버합니다(#959) — 게이트웨이에 다시 설치할 필요 없습니다.' }) : null,
+        canEdit ? chips : null, ta, el('div', { class: 'admin-actions' }, btn, st)));
+  }
+
   // 세션종료 너지 문구 — 기본값(서버 단일소스 data.writebackNoticeDefault)을 실제로 보여준다(숨은 파일 기본값 X).
   //  비우거나 기본값과 같게 저장하면 null(=기본값 사용)로 저장 → DB 는 'override 있음/없음'만 들고, 화면엔 항상 effective 값이 보임.
   function writebackEditor() {
@@ -2368,8 +2405,7 @@ function injectionMap(detail, data) {
     canEdit ? listEditor('work-roots — 이 폴더에서 켠 세션을 라이블리 작업으로 인식 (줄당 절대경로)', rc.work_roots, 'work_roots', '/Users/you/repo') : null,
     canEdit ? listEditor('기록 인정 툴(write_tools) — 이 lively 툴을 사용한 세션에는 종료 너지를 보내지 않습니다 · 비우면 기본 목록 사용', rc.write_tools, 'write_tools', 'knowledge_save') : null,
     // #906 — write_tools 와 시맨틱이 반대(비우면 끔)라 라벨에 명시. 값이 곧 on/off + 범위다.
-    canEdit ? listEditor('외부 인입 툴(pull_tools) — 외부 맥락을 가져온 세션을 종료 너지 대상에 넣습니다', rc.pull_tools, 'pull_tools', 'mcp__lively__ext__',
-      '이 prefix 로 시작하는 MCP 툴을 사용하면 외부 맥락을 가져온 세션으로 봅니다(가져온 내용을 기록하지 않은 채 끝내는 것을 막음) · 줄당 툴이름 prefix · 비우면 이 기능이 꺼집니다. 기본 mcp__lively__ext__ = 라이블리 MCP 프록시 전체. ⚠ 훅은 mcp__lively__* 만 관측하므로 다른 서버 prefix 는 적어 두어도 감지되지 않습니다(구성원이 자기 하네스에 직접 추가한 MCP 커버는 후속 작업)') : null,
+    pullToolsEditor(),
     customList('PostToolUse'));
 
   const stopBlock = momentBlock('세션 종료 — Stop', '작업했는데 기록이 없으면(조건 충족 시 1회) 기록을 권하는 너지 문구를 표시합니다.',
@@ -3825,6 +3861,58 @@ function newFeedForm(rerender) {
     el('label', { class: 'field-label', style: 'display:block;margin-top:6px' }, allChk, el('span', { text: ' 모든 카테고리 발행' })),
     el('div', { style: 'margin-top:10px' }, create));
   return wrap;
+}
+
+// #975/#978 프로젝트 아웃바운드 패널 — 우리 프로젝트·과업 편집 → 외부 PM(ClickUp) push, 소스별 on/off.
+//  on/off = push-clickup 크론 enabled(cron_set). 컨테이너 리스트는 커넥터 설정(외부 자료 수집 ▸ ClickUp).
+//  GitHub Issues·Jira 는 아웃바운드 어댑터 미구현(#975 예정) — 자리만 표시. 스키마·백엔드 변경 없이 기존 엔드포인트 orchestrate.
+async function projectOutboundEditor(detail, data) {
+  const meaning = data.meaning && data.meaning['project-outbound'];
+  const canEdit = !!data.canEdit;
+  detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('프로젝트 아웃바운드', meaning), el('p', { class: 'admin-hint', text: '불러오는 중…' })));
+  let jobs: any[] = [];
+  try { const cron = await api('/api/ui/cron'); jobs = (cron && cron.jobs) || []; } catch (e) { /* 크론 로드 실패 — 빈 목록으로 진행 */ }
+  const pushClickup = jobs.find((j) => j.id === 'push-clickup');
+  const clickup = (data.connectors || []).find((c) => c.system === 'clickup') || {};
+  const container = (clickup.config && clickup.config.container_list_id) || '';
+  const rerender = () => { void projectOutboundEditor(detail, data); };
+
+  const body = el('div', {});
+  body.append(el('p', { class: 'admin-hint', text: '우리 프로젝트·과업 편집(라이블리 웹/MCP)을 외부 PM 도구에 미러로 반영합니다(아웃바운드 push). 커넥터(인바운드 싱크)의 역방향 — 우리 DB가 master, 외부는 미러. 소스별로 켜고 끕니다.' }));
+
+  const table = el('table', { class: 'fields-table' });
+  table.append(el('tr', {}, el('th', { text: '소스' }), el('th', { text: '상태' }), el('th', { text: '설정' })));
+
+  // ClickUp — 유일한 구현 소스. on/off = push-clickup 크론.
+  const enabled = !!(pushClickup && pushClickup.enabled);
+  const toggle = el('button', { class: 'btn btn-ghost btn-sm', text: enabled ? '끄기' : '켜기' });
+  if (!canEdit) toggle.disabled = true;
+  toggle.addEventListener('click', async () => {
+    if (!enabled && !container) { toast('먼저 컨테이너 리스트를 설정하세요 (외부 자료 수집 ▸ ClickUp)', true); return; }
+    toggle.disabled = true;
+    try {
+      await api('/api/ui/cron', { method: 'POST', body: JSON.stringify({ id: 'push-clickup', action: 'connector_push', interval_sec: (pushClickup && pushClickup.interval_sec) || 120, params: { system: 'clickup' }, enabled: !enabled }) });
+      toast(!enabled ? 'ClickUp push 켜짐 — 로컬 편집이 미러에 반영됩니다' : 'ClickUp push 꺼짐'); rerender();
+    } catch (e) { toast(e.message, true); toggle.disabled = false; }
+  });
+  table.append(el('tr', {},
+    el('td', {}, el('span', { class: 'mini-title', text: 'ClickUp' })),
+    el('td', {}, el('span', { class: 'pill' + (enabled ? ' pill-ok' : ''), text: enabled ? '켜짐 · 2분마다' : '꺼짐' }), ' ', toggle),
+    el('td', {},
+      container ? el('span', { class: 'mini-meta', text: '컨테이너 리스트: ' + container }) : el('span', { class: 'pill', text: '⚠ 컨테이너 미설정' }),
+      el('span', { text: '  ' }), el('a', { href: '#/system/connectors', text: '커넥터 설정 →' }))));
+
+  // GitHub Issues · Jira — 아웃바운드 어댑터 미구현.
+  for (const s of ['GitHub Issues', 'Jira']) {
+    table.append(el('tr', {},
+      el('td', {}, el('span', { class: 'mini-title', text: s })),
+      el('td', {}, el('span', { class: 'pill', text: '미구현' })),
+      el('td', {}, el('span', { class: 'mini-meta', text: '아웃바운드 어댑터 예정 (#975) — SPI write method + 소스별 매핑' }))));
+  }
+  body.append(table);
+  body.append(el('p', { class: 'admin-hint', style: 'margin-top:10px', text: '※ 인바운드 싱크(외부→우리)와 토큰·컨테이너 설정은 [외부 자료 수집] 탭에 있습니다. 여기는 아웃바운드(우리→외부) on/off 전용입니다.' }));
+
+  detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('프로젝트 아웃바운드', meaning), body));
 }
 
 function dbSourceEditor(detail, data) {
