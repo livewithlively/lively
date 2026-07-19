@@ -19,9 +19,12 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync, realp
 import { execFileSync, spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const OFF = process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1";
-if (OFF) process.exit(0); // 모듈 최상단 — 토큰 읽기 전에 차단(클린룸)
+// ⚠ OFF 차단은 main() 안에서 한다(모듈 최상단 process.exit 금지) — main-guard(#959) 이후 이 파일은 test 가
+//  reconcileExtPullWiring 을 import 한다. 최상단에서 exit 하면 토큰/OFF 상태에 따라 import 가 프로세스를 죽여
+//  단언이 0개 실행되고도 exit 0(가짜 통과)이 된다(diff-reviewer #959 지적). 클린룸(OFF 시 토큰 미read)은 아래 TOKEN 가드로 유지.
 
 // 어드민 런타임 설정 — ~/.lively/hooks-config.json 의 hooks[name]===false 면 비활성(fail-open: 못 읽으면 활성).
 function hookDisabled(name) {
@@ -63,12 +66,8 @@ const readLocal = (rel) => {
 // 정적 org-context (토큰 무관 — cross-repo user-level 전달의 핵심). 동기·저렴, 4.5s 네트워크 타임박스 밖.
 const STATIC = readLocal("context.md");
 
-const TOKEN = (process.env.LIVELY_TOKEN || "").trim() || readLocal("token");
-// 토큰이 없으면 라이브 현황은 건너뛰되, 정적 컨텍스트는 그대로 주입한다(멤버 기본 상태에서도 org-context 는 옴).
-if (!TOKEN) {
-  emitContext(STATIC);
-  process.exit(0);
-}
+// OFF 면 토큰 파일도 안 읽는다(클린룸 유지 — 종전 최상단 exit 이 하던 일). !TOKEN 시 정적만 주입하는 처리는 main() 에서.
+const TOKEN = OFF ? "" : ((process.env.LIVELY_TOKEN || "").trim() || readLocal("token"));
 
 const GW = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readLocal("gateway-url") || "http://localhost:8080").replace(/\/$/, "");
 
@@ -219,6 +218,69 @@ function healAssetSyncWiring() {
   } catch { return false; }
 }
 
+// ── ext-pull 동적 배선(#959) — 구성원 자체설치 MCP 까지 work-flag 가 보게 한다 ──────────────────
+//  배경: 게이트웨이는 자체설치 MCP(`mode='client'`·stdio — 하네스 직결)를 **구조적으로 못 본다**. 훅이 유일한
+//   관측점이고, work-flag 의 판정 코드는 이미 서버 라벨 무관(pull_tools prefix startsWith)이라 **settings matcher 만**
+//   넓히면 열린다. 그런데 `mcp__.*` 로 통째 넓히면 모든 MCP 호출마다 훅이 스폰된다(실측 46ms/회 — playwright 200콜 ≈ 9s).
+//  설계: 메인 work-flag 엔트리(matcher `mcp__lively__.*`, user-install 소유·정적·불변)는 우리 툴·ext 프록시를 이미
+//   커버(스폰 증가 0). 그 **밖**(자체설치 MCP)은 #906 pull_tools 의 **비-lively prefix** 만 골라 **별도 엔트리**로 배선한다.
+//   → 관리자가 pull_tools 에 안 적은 서버(playwright·figma 등)엔 matcher 자체가 안 생겨 스폰 0. 노브는 여전히 하나.
+//  회수: matcher 가 pull_tools 따라 매 세션 바뀌므로 회수가 필요하다. 이 엔트리는 명령의 `--ext-pull` **sentinel 토큰**
+//   (우리 소유 규약 — 사용자·메인 훅은 안 씀)으로 식별해, **sentinel 을 가진 엔트리를 전부 걷어내고 현재 matcher 로 하나만
+//   추가**한다. 이 교체가 사용자 훅(예: Bash matcher 로 직접 단 work-flag)이나 메인 엔트리(sentinel 없음)를 절대 안 건드린다.
+//   (그냥 matcher 를 바꾸면 dedup 이 (matcher,정체성) 키라 구·신이 다른 키로 살아남아 2회 실행된다 — 그걸 이 방식이 피한다.)
+//   ⚠ 경로 기반 정체성(kitHookId)이 아니라 sentinel 토큰으로 잡는 이유: command 표기(node·경로 형태)가 조금만 달라도
+//   경로 정체성은 못 잡아 구 엔트리가 남고 회수가 샌다 — sentinel 은 표기 무관이라 create 와 detect 가 항상 일치한다.
+export function reconcileExtPullWiring(hooks, { extPullCmd, pullTools }) {
+  // ext 엔트리 = 명령에 `--ext-pull` sentinel 토큰을 가진 것(우리 소유 규약, 경로 표기 무관). 사용자·메인 훅은
+  //  이 sentinel 을 안 쓰므로 불침. (경로 기반 정체성으로 잡으면 command 표기가 조금만 달라도 못 잡아 회수가 샌다.)
+  const isExt = (e) => {
+    const hs = e && Array.isArray(e.hooks) ? e.hooks : null;
+    return !!hs && hs.some((h) => h && typeof h.command === "string" && /(^|\s)--ext-pull(\s|$)/.test(h.command));
+  };
+  const before = Array.isArray(hooks.PostToolUse) ? hooks.PostToolUse : [];
+  const kept = before.filter((e) => !isExt(e));
+  // 비-lively prefix 만 — mcp__lively__* 는 메인 엔트리(mcp__lively__.*)가 이미 커버한다(ext 프록시 포함).
+  const prefixes = (Array.isArray(pullTools) ? pullTools : [])
+    .filter((p) => typeof p === "string" && p && !p.startsWith("mcp__lively__"));
+  if (prefixes.length) {
+    // prefix 는 REST 검증(#906)에서 `[A-Za-z][A-Za-z0-9_-]*` 라 regex-safe. `.*` 는 메인 엔트리 스타일과 일치.
+    const matcher = prefixes.map((p) => `${p}.*`).join("|");
+    kept.push({ matcher, hooks: [{ type: "command", command: extPullCmd }] });
+  }
+  const changed = JSON.stringify(before) !== JSON.stringify(kept);
+  if (changed) hooks.PostToolUse = kept;
+  return changed;
+}
+
+// 위 순수 로직을 Claude settings.json 에 적용 — refreshRuntimeConfig 가 pull_tools 받은 뒤 self-heal 들과 나란히 호출.
+//  codex 제외(config.toml 센티널 관리 — 동적 matcher 밖, 자체설치 MCP 커버는 Claude 한정). 전 경로 fail-soft.
+//  extPullCmd 는 **메인 work-flag 엔트리의 command 를 그대로 재사용** + ' --ext-pull' — node 토큰·경로 표기를 잇는다.
+export function applyExtPullWiring(pullTools) {
+  if (HARNESS === "codex") return false;
+  try {
+    const sp = join(homedir(), ".claude", "settings.json");
+    if (!existsSync(sp)) return false;
+    let cur; try { cur = JSON.parse(readFileSync(sp, "utf8")); } catch { return false; }
+    if (!cur || typeof cur !== "object" || Array.isArray(cur)) return false;
+    if (!cur.hooks || typeof cur.hooks !== "object" || Array.isArray(cur.hooks)) return false;
+    // 메인 work-flag 엔트리(matcher mcp__lively__.* + 정체성 work-flag.mjs| , 인자 없음)의 command 를 찾아 미러한다.
+    //  matcher 도 확인 — 사용자가 같은 work-flag 를 다른 matcher(예 Bash)로 직접 단 경우 그걸 미러하지 않게(정체성 명확화).
+    const ptu = Array.isArray(cur.hooks.PostToolUse) ? cur.hooks.PostToolUse : [];
+    let mainCmd = null;
+    for (const e of ptu) {
+      const hs = e && Array.isArray(e.hooks) ? e.hooks : null;
+      if (e && e.matcher === "mcp__lively__.*" && hs && hs.length === 1 && typeof hs[0].command === "string" && kitHookId(hs[0].command) === "work-flag.mjs|") { mainCmd = hs[0].command; break; }
+    }
+    if (!mainCmd) return false; // 메인 배선이 없으면(비정상 — user-install 이 먼저 깔아야) 손대지 않음
+    const changed = reconcileExtPullWiring(cur.hooks, { extPullCmd: `${mainCmd} --ext-pull`, pullTools });
+    if (!changed) return false;
+    try { copyFileSync(sp, sp + ".bak-ext-pull"); } catch { /* 백업 실패해도 진행 */ }
+    writeFileSync(sp, JSON.stringify(cur, null, 2) + "\n");
+    return true;
+  } catch { return false; }
+}
+
 // 런타임 설정 동적 갱신 — 게이트웨이 org_runtime_config 를 받아 ~/.lively/hooks-config.json + work-roots 갱신.
 //  어드민의 훅 on/off·너지문구·work-roots 변경이 재설치 없이 다음 세션부터 반영(④ 패턴). 전부 fail-open.
 //  주의: session_preload 가 비활성이어도 이건 항상 돌려야 재활성화가 가능(자기-잠금 방지).
@@ -288,25 +350,41 @@ function takeUpdateNotice() {
 
 // 전체 하드 타임박스 4.5s — 어느 경로든 exit 0
 // 출력 = [정적 org-context(게이트웨이 우선, 로컬 폴백)]. 라이브 현황 블록은 폐기(v6 — 구 item/curate 모델 기반이라 제거).
-try {
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms, null));
-  // 런타임설정 갱신 + org-context(동적)를 병렬로 — 전부 4.5s 타임박스 안. 타임아웃이면 null.
-  const result = await Promise.race([Promise.all([refreshRuntimeConfig(), fetchOrgContext()]), sleep(4500)]);
-  const [rc, orgCtx] = Array.isArray(result) ? result : [null, null];
-  // 자산 sync 자기치유 + kit 훅 중복 dedup — 타임박스 밖(로컬 FS + 러너 1회, 러너는 자체 타임박스).
-  //  dedup 먼저(깨끗한 베이스 위에 배선 판정) — 둘 다 정상 상태면 즉시 false·무기록.
-  dedupKitWiring();
-  const healed = healAssetSyncWiring();
-  // 자가 업데이트는 **맨 마지막**에 띄운다 — 업데이터도 settings.json 을 만지므로, 위 두 자기치유의 쓰기가
-  //  끝난 뒤에 시작해야 read-modify-write 가 겹치지 않는다. spawn 은 즉시 반환한다(타임박스 무관).
-  const notice = takeUpdateNotice(); // 직전 업데이트 결과 안내(있으면 이번 세션에 1회)
-  maybeSelfUpdate(rc && rc.kit_version);
-  // 설정 갱신 후 판정 — session_preload 비활성이면 컨텍스트 주입만 스킵(설정은 이미 갱신돼 재활성화 가능).
-  if (hookDisabled("session_preload")) { emitContext("", { reloadSkills: healed }); process.exit(0); }
-  const blocks = [notice, orgCtx || STATIC].filter(Boolean); // 업데이트 안내 → 게이트웨이 org-context(없으면 로컬 STATIC)
-  emitContext(blocks.join("\n\n"), { reloadSkills: healed });
-} catch {
-  // fail-open — 라이브가 터져도 정적 컨텍스트(로컬)는 내보낸다.
-  emitContext(STATIC);
+async function main() {
+  if (OFF) process.exit(0);                              // incognito — 아무것도 안 함(클린룸)
+  if (!TOKEN) { emitContext(STATIC); process.exit(0); }  // 토큰 없으면 라이브 스킵, 정적 org-context 만 주입(멤버 기본 상태)
+  try {
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms, null));
+    // 런타임설정 갱신 + org-context(동적)를 병렬로 — 전부 4.5s 타임박스 안. 타임아웃이면 null.
+    const result = await Promise.race([Promise.all([refreshRuntimeConfig(), fetchOrgContext()]), sleep(4500)]);
+    const [rc, orgCtx] = Array.isArray(result) ? result : [null, null];
+    // 자산 sync 자기치유 + kit 훅 중복 dedup — 타임박스 밖(로컬 FS + 러너 1회, 러너는 자체 타임박스).
+    //  dedup 먼저(깨끗한 베이스 위에 배선 판정) — 둘 다 정상 상태면 즉시 false·무기록.
+    dedupKitWiring();
+    // ext-pull 배선(#959) — race 밖·다른 self-heal 과 순차(settings.json 쓰기 겹침 회피). rc 없으면(타임아웃) 스킵.
+    if (rc) applyExtPullWiring(rc.pull_tools);
+    const healed = healAssetSyncWiring();
+    // 자가 업데이트는 **맨 마지막**에 띄운다 — 업데이터도 settings.json 을 만지므로, 위 두 자기치유의 쓰기가
+    //  끝난 뒤에 시작해야 read-modify-write 가 겹치지 않는다. spawn 은 즉시 반환한다(타임박스 무관).
+    const notice = takeUpdateNotice(); // 직전 업데이트 결과 안내(있으면 이번 세션에 1회)
+    maybeSelfUpdate(rc && rc.kit_version);
+    // 설정 갱신 후 판정 — session_preload 비활성이면 컨텍스트 주입만 스킵(설정은 이미 갱신돼 재활성화 가능).
+    if (hookDisabled("session_preload")) { emitContext("", { reloadSkills: healed }); process.exit(0); }
+    const blocks = [notice, orgCtx || STATIC].filter(Boolean); // 업데이트 안내 → 게이트웨이 org-context(없으면 로컬 STATIC)
+    emitContext(blocks.join("\n\n"), { reloadSkills: healed });
+  } catch {
+    // fail-open — 라이브가 터져도 정적 컨텍스트(로컬)는 내보낸다.
+    emitContext(STATIC);
+  }
+  process.exit(0);
 }
-process.exit(0);
+
+// main-guard(#959) — 이 파일이 직접 실행될 때만 main() 을 돈다. 테스트가 reconcileExtPullWiring 을 import 할 때
+//  최상위 부수효과가 안 나게(user-install.mjs 의 DIRECT_RUN 과 동일 패턴). realpath 비교: 심링크(/tmp→/private/tmp)에서도 일치.
+//  판정 불가(realpathSync throw)면 **fail-open = 실행** — 이 파일의 종전 기본 동작이 '항상 최상위 실행'이었고, 훅이
+//  안 도는 무주입이 오판보다 나쁘다(user-install 동일 근거). 훅 정상 호출(node "<abs>")에선 argv[1] 이 늘 풀려 안 던진다.
+function isMain() {
+  try { return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1] || ""); }
+  catch { return true; }
+}
+if (isMain()) main();

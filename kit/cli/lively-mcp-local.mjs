@@ -152,12 +152,16 @@ registerTool({
     + "반환된 worktree 경로에서 코드 작업(편집·커밋·빌드)을 하라 — base(pristine 공유 원본)에서 직접 작업하지 말 것. "
     + "프로젝트 세션이면 기본 경로는 <프로젝트 폴더>/<repo>(cwd 가 그 하위 어디든 같은 자리 — 서버 provision 과 동일 슬롯이라 서로 멱등)이고 "
     + "브랜치는 project/<id>. 이미 떠 있으면 그대로 재사용한다. 몇 초 내 동기 완결. 코드 작업이 필요할 때 먼저 이걸 호출해 작업면을 준비하라 "
-    + "— 세션이 코드 없는 폴더에서 떴어도 그게 정상이다(워크트리는 세션 생성이 아니라 이 툴이 만든다).",
+    + "— 세션이 코드 없는 폴더에서 떴어도 그게 정상이다(워크트리는 세션 생성이 아니라 이 툴이 만든다). "
+    + "⚠ path 로 스크래치패드 같은 임시경로를 지정하지 마라(기본값을 그대로 써라): 워크트리는 임시파일이 아니라 **작업면(영속 자산)**이다. "
+    + "'임시파일은 스크래치패드' 규칙은 여기 적용 안 된다 — 스크래치패드는 하네스가 청소하는 휘발성이라 커밋 전 작업이 사라지고, "
+    + "project/<id> 를 비-canonical 자리에 걸어 그 프로젝트의 서버 provision 을 막는다(#932).",
   inputSchema: {
     type: "object",
     properties: {
       repo: { type: "string", description: "레포 이름(lively_local_repo_list 의 name)" },
-      path: { type: "string", description: "워크트리를 만들 경로(절대 또는 cwd 상대). 기본: 프로젝트면 <프로젝트 폴더>/<repo>, 밖이면 cwd/<repo>. "
+      path: { type: "string", description: "워크트리를 만들 경로(절대 또는 cwd 상대). **보통 주지 마라 — 기본값(canonical 슬롯)이 맞다.** 기본: 프로젝트면 "
+        + "<프로젝트 폴더>/<repo>, 밖이면 cwd/<repo>. ⚠ 스크래치패드/임시경로 금지(휘발성 → 작업 유실, 비-canonical → project/<id> provision 충돌 #932). "
         + "여길 벗어나면 브랜치 기본값도 project/<id> 가 아니라 wt/<repo> 계열이 된다(같은 브랜치를 두 자리에 걸 수 없으므로)" },
       branch: { type: "string", description: "워크트리 브랜치. 기본: 기본 경로(프로젝트 슬롯)면 project/<id>, 그 외엔 wt/<repo>[-n]" },
       ref: { type: "string", description: "이 ref(origin/<ref>)에서 분기. 기본: origin 기본 브랜치 최신" },

@@ -34,7 +34,15 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   process.env.LIVELY_REPOS_DIR = SB;                     // reposDir() → SB ⇒ base = SB/base
   process.env.TMPDIR = join(SB, "ostmp");                // os.tmpdir() → SB/ostmp (핀 기본경로를 샌드박스 안으로 — 실제 tmp 오염 방지)
   mkdirSync(join(SB, "ostmp"), { recursive: true });
-  const { repoWorktree, repoPin, repoPinRemove } = await import(join(HERE, "repo-worktree-core.mjs"));
+  const { repoWorktree, repoPin, repoPinRemove, REPO_NAME_RE } = await import(join(HERE, "repo-worktree-core.mjs"));
+
+  // ── 0) REPO_NAME_RE — 레포명은 경로 컴포넌트라 점세그먼트(traversal) 거부, 이름 속 점은 허용(#932 후속) ──
+  check("REPO_NAME_RE: '..' 거부(traversal)", REPO_NAME_RE.test("..") === false, "'..' 통과");
+  check("REPO_NAME_RE: '.' 거부", REPO_NAME_RE.test(".") === false, "'.' 통과");
+  check("REPO_NAME_RE: '...' 거부", REPO_NAME_RE.test("...") === false, "'...' 통과");
+  check("REPO_NAME_RE: 슬래시 거부", REPO_NAME_RE.test("a/b") === false, "'a/b' 통과");
+  check("REPO_NAME_RE: 정상 이름 허용", REPO_NAME_RE.test("context-ontology") === true, "정상명 거부");
+  check("REPO_NAME_RE: 이름 속 점 허용(my.repo)", REPO_NAME_RE.test("my.repo") === true, "점 포함명 거부");
 
   const proj = join(SB, "workspace", "project", "999");
   mkdirSync(join(proj, ".lively"), { recursive: true });

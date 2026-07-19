@@ -240,6 +240,19 @@ function parseTargetMembers(raw: unknown): string[] | null | undefined {
   return out.length ? out : null; // 빈 배열 = 전원(null)
 }
 
+// 커스텀 훅 source_code 해소 — target_members 와 같은 '미지정=보존' 규약(#970).
+//  ⚠ 종전엔 `str(input.source_code ?? "")` 로 **undefined 를 "" 로 강제**했다. store 의 보존 로직
+//   (`h.source_code ?? before?.source_code`)은 nullish 에만 걸리는데 ""(비-nullish)가 이겨서, source_code 를
+//   생략한 부분수정(예: target_members 만 변경)이 **훅 본문을 통째로 지웠다**(실제 데이터 소실 버그).
+//  undefined(생략) → undefined 를 그대로 store 에 넘겨 보존에 위임. 문자열이면 검증 + 시크릿 스캔.
+//  ""(명시적 빈 문자열)은 '지운다'는 명시적 의도이므로 그대로 통과(생략과 구분). null 등 비문자열은 str() 이 거부.
+export function resolveHookSource(raw: unknown): string | undefined {
+  if (raw === undefined) return undefined; // 미지정 = 변경 없음(store 가 기존 본문 유지)
+  const s = str(raw, "source_code", 16384); // 타입·길이 검증(null·숫자 등 비문자열 거부)
+  assertNoHardSecrets(s, "source_code"); // B20: 값이 있을 때만 평문 시크릿 hard-block
+  return s;
+}
+
 // #699: 개인 오버라이드 대상 종류 검증(harness_asset|org_hook).
 function assertPrefKind(raw: unknown): AssetPrefKind {
   const s = typeof raw === "string" ? raw.trim() : "";
@@ -1968,19 +1981,22 @@ export const deliveryCapabilities: Capability[] = [
       const id = assertHookId(input.id);
       const event = str(input.event, "event", 40);
       if (!HOOK_EVENTS.has(event)) throw new HttpError(400, `event 는 ${[...HOOK_EVENTS].join("|")} 만 허용됩니다`);
-      const harness = input.harness === undefined ? "all" : str(input.harness, "harness", 12);
-      if (!HOOK_HARNESSES.has(harness)) throw new HttpError(400, "harness 는 claude|codex|openclaw|all");
-      const sourceCode = str(input.source_code ?? "", "source_code", 16384);
-      assertNoHardSecrets(sourceCode, "source_code"); // B20: 평문 시크릿 hard-block
+      // #970: harness·timeout_sec 도 source_code 와 같은 데이터소실 부류였다 — 생략 시 store 의 preserve
+      //  (`?? before`)가 못 걸리게 항상 구체값('all'·10)을 넘겨, 부분수정이 이 필드를 기본값으로 되돌렸다.
+      //  '미지정=보존'으로 통일(enabled·sort·target_members 와 동형). 신규 훅은 store 가 기본값으로 채운다.
+      const harness = input.harness === undefined ? undefined : str(input.harness, "harness", 12);
+      if (harness !== undefined && !HOOK_HARNESSES.has(harness)) throw new HttpError(400, "harness 는 claude|codex|openclaw|all");
+      const sourceCode = resolveHookSource(input.source_code); // #970: 생략=보존(undefined→store 위임), "" 만 지움
       const matcher = (input.matcher === undefined || input.matcher === null || input.matcher === "")
         ? null : str(input.matcher, "matcher", 500);
-      const timeout = input.timeout_sec === undefined ? 10 : Number(input.timeout_sec);
-      if (!Number.isFinite(timeout) || timeout < 1 || timeout > 120) throw new HttpError(400, "timeout_sec 은 1~120 사이 정수여야 합니다");
+      const timeout = input.timeout_sec === undefined ? undefined : Number(input.timeout_sec);
+      if (timeout !== undefined && (!Number.isFinite(timeout) || timeout < 1 || timeout > 120)) throw new HttpError(400, "timeout_sec 은 1~120 사이 정수여야 합니다");
       const targetMembers = parseTargetMembers(input.target_members); // #699: null/빈=전원, 배열=지정, undefined=보존
       const hook = await upsertOrgHook({
         id,
         label: input.label == null ? undefined : str(input.label, "label", 200).trim(),
-        harness: harness as HookHarness, event, matcher, source_code: sourceCode, timeout_sec: Math.floor(timeout),
+        harness: harness as HookHarness | undefined, event, matcher, source_code: sourceCode,
+        timeout_sec: timeout === undefined ? undefined : Math.floor(timeout),
         note: input.note == null ? undefined : str(input.note, "note", 500),
         target_members: targetMembers,
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
