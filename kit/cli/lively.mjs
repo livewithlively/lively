@@ -1307,6 +1307,7 @@ ${bold("시작하기")}
   setup                  로그인 + 설치를 한 번에 (처음 설치할 때)
   login                  접속 토큰 등록 (가림 입력 — 화면·히스토리에 안 남음)
   logout                 토큰만 지움 (설치는 유지)
+  onboarding             내 환경 정리 · 라이블리 첫 세팅을 지금 시작 ${dim("(claude 를 열어 온보딩 스킬 실행 — 언제든 재실행)")}
 
 ${bold("설치 · 유지보수")}
   install                키트 설치 / 재설치 (멱등)
@@ -1476,6 +1477,21 @@ async function cmdBackfill(args) {
   say(`완료 — 전송 ${sent} · 이미있음 ${already} · 건너뜀 ${skipped} · 실패 ${failed}${bytesUp ? ` · ${Math.round(bytesUp / 1024)}KB` : ""}`);
 }
 
+// lively onboarding [초기프롬프트…] — 온보딩 스킬을 이 PC 에서 바로 실행한다.
+//  claude 를 초기 프롬프트("온보딩 도와줘")로 띄우면 하네스가 그 문구로 lively-onboarding 스킬을 소환한다.
+//  설치 직후 제안(setup-mac.sh)과 사람의 수동 재실행이 같은 진입을 쓴다. cmdResume 과 동형(has 가드 + spawnSync inherit).
+//  ⚠ 자동승인 플래그는 주지 않는다 — 멤버가 깔아둔 auto-approve 를 쓰고 나머지는 정상 권한 프롬프트(온보딩은 신뢰가 전부).
+//  --print 는 실제로 안 띄우고 실행할 명령만 출력(테스트·확인용, resume 과 동일 관례).
+function cmdOnboarding(rest) {
+  const printOnly = rest.includes("--print") || rest.includes("--dry-run");
+  const prompt = rest.filter((a) => a !== "--print" && a !== "--dry-run").join(" ").trim() || "온보딩 도와줘";
+  if (printOnly) { say(`claude ${JSON.stringify(prompt)}`); return; }
+  if (!has("claude")) { say(red("claude 실행파일을 못 찾았습니다 — 먼저 `lively install` 로 하네스를 설치하세요.")); process.exit(1); }
+  say(dim(`  · 온보딩 세션을 엽니다 — "${prompt}"`));
+  const st = spawnSync("claude", [prompt], { stdio: "inherit", cwd: process.cwd() }).status;
+  process.exit(st ?? 0);
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const o = parse(argv);
@@ -1485,6 +1501,8 @@ async function main() {
     case "setup": return cmdSetup();
     case "login": { await cmdLogin(o); return; }
     case "logout": return cmdLogout();
+    // onboarding — 온보딩 스킬을 이 PC 에서 바로 실행(설치 직후 제안·수동 재실행 공용). 나머지 인자=초기 프롬프트.
+    case "onboarding": return cmdOnboarding(argv.slice(argv.indexOf("onboarding") + 1));
     case "install": { await cmdInstall(); return; }
     case "update": case "upgrade": return cmdUpdate(o);
     case "uninstall": case "remove": return cmdUninstall(o);
