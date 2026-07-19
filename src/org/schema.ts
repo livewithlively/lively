@@ -793,7 +793,7 @@ export async function initOrgSchema(): Promise<void> {
     INSERT INTO org_cron(id, label, action, params, interval_sec, enabled, note) VALUES
       ('push-clickup','ClickUp 아웃바운드 푸시 (우리 편집→ClickUp)','connector_push','{"system":"clickup"}'::jsonb,120,false,
        'external_outbox(pending) 드레인 → ClickUp create/update/delete. 로컬 편집을 미러에 반영(멱등, 부모 미푸시면 다음 틱 수렴). 검증 후 enabled=true.'),
-      ('push-wiki-notion','위키 아웃바운드 푸시 (산출 지식→노션 피드, #976)','wiki_push',NULL,600,false,
+      ('push-wiki-notion','위키 아웃바운드 푸시 (산출 지식→노션 피드, #976)','wiki_push','{}'::jsonb,600,false,
        '등록 노션 feed_target(category_feed N:M 매핑)으로 정본·authored 지식을 피드 카드로 투영. 옵트인: 매핑 없으면 무동작. 멱등(content_hash skip). 피드 DB 부트스트랩+exclude_pages 등록·라이브 E2E 검증 후 enabled=true.')
     ON CONFLICT (id) DO NOTHING;
   `);
