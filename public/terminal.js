@@ -296,20 +296,29 @@ function copyText(text, silent) {
   else execCopy(text);
   if (!silent) toast('복사됨');
 }
-// [#967→#762] 클립보드 불변식: **사용자의 명시적 동작 없이는 절대 클립보드를 쓰지 않는다.**
-//  클립보드는 파괴적이다 — 한 번 덮이면 이전 내용이 소리 없이 사라진다. 그래서 쓰기 경로는 딱 둘:
-//   ① 선택 후 Ctrl/Cmd+C (setupClipboard) ② '복사' 류 버튼 클릭. 그 외 자동 복사는 전부 제거했다.
-//  · 제거: 드래그 선택 → 놓는 즉시 자동 복사(#252 copy-on-select). 미세한 클릭드래그(4px)에도 클립보드가
-//    덮여 "엄한 걸 눌렀는데 복사됐다"의 주범이었다. 선택 자체는 그대로 되고, 복사만 명시적으로 한다.
-//  · OSC 52 = 앱(Claude Code 등)이 '이 텍스트를 클립보드에 넣어줘'라고 터미널에 보내는 표준 신호(#252 에서
-//    tmux set-clipboard 로 전달받아 자동으로 썼다). #967 이 자동 쓰기 대신 '복사 확인' 배너로 완화했지만,
-//    배너조차 사용자가 원치 않는 시점(앱이 임의로 발신)에 떠서 거슬렸다(사용자 신고 #762) → **OSC52 는
-//    클립보드에 아무것도 하지 않고 그냥 삼킨다(배너도 제거).** 앱 발신 복사는 무시하고, 복사가 필요하면
-//    사용자가 위 두 경로(①②)로 직접 한다.
+// 복사 경로는 셋 — ① 선택 후 Ctrl/Cmd+C (setupClipboard) ② '복사' 류 버튼 클릭 ③ 앱(Claude Code)의 OSC52 복사 신호.
+//  · [#972] copy-on-select(드래그 놓는 즉시 자동복사, #252)는 되살리지 않는다 — 미세한 클릭드래그(4px)에도
+//    클립보드가 덮여 "엄한 걸 눌렀는데 복사됐다"의 주범이라 #967 이 제거했다. 선택은 그대로 되고, 드래그로는
+//    자동복사하지 않는다. 셸/Claude 모두 선택 후 Ctrl/Cmd+C 로 복사(Claude 마우스모드에선 Shift+드래그로 선택).
+//  · [#972] OSC 52 = 앱(Claude Code 등)이 '이 텍스트를 클립보드에 넣어줘'라고 보내는 표준 신호. 웹터미널+tmux+ssh
+//    너머라 그냥 두면 Claude 의 'copied N chars' 가 맥북 클립보드까지 안 닿는다(그 세션 tmux 버퍼엔 들어가도 다른
+//    세션·로컬엔 못 붙임 — 사용자 신고 #972). #252 원본대로 디코드해 브라우저 클립보드에 **조용히**(토스트·배너 없이)
+//    직접 쓴다 → Claude 네이티브 복사가 실동작. tmux set-clipboard 가 on|external 이면 OSC52 가 xterm 까지 통과(현재 external).
+//    ⚠ #967 이 넣었던 '복사 확인 배너'는 되살리지 않는다 — 배너가 거슬렸던 게 #762 신고였다. OSC52 는 배너 없이 쓴다.
 function setupOscClipboard() {
   try {
-    // OSC52 를 삼켜서(true) xterm 기본 동작·앱 재처리를 막되, 클립보드엔 손대지 않는다(자동복사·배너 전면 제거 #762).
-    term.parser.registerOscHandler(52, () => true);
+    term.parser.registerOscHandler(52, (data) => {
+      try {
+        const i = data.indexOf(';');
+        const b64 = i >= 0 ? data.slice(i + 1) : data;
+        if (b64 && b64 !== '?') {
+          let text = '';
+          try { text = decodeURIComponent(escape(atob(b64))); } catch (_) { try { text = atob(b64); } catch (__) { text = ''; } }
+          if (text) copyText(text, true); // 앱이 이미 'copied' 안내하므로 토스트는 생략
+        }
+      } catch (_) { /* noop */ }
+      return true; // 처리함(앱으로 다시 안 흘림)
+    });
   } catch (_) { /* noop */ }
 }
 // 입력(키스트로크/시퀀스)을 PTY 로 전송 — onData 와 동일 경로(터미널로 흘러 안에서 도는 프로그램이 받음).
@@ -475,6 +484,16 @@ function setupClipboard() {
     if (!mod || e.altKey) return true;
     const k = (e.key || '').toLowerCase();
     if (k === 'c' && term.hasSelection()) { copyText(term.getSelection()); return false; }
+    // [#972] Cmd+C 를 마우스모드 앱(Claude Code) 화면에선 Ctrl+C(\x03)로 브리지한다.
+    //  Claude 는 마우스모드로 텍스트 선택을 자체 관리 → xterm 은 그 선택을 몰라(hasSelection=false) 위 copyText 를 못 탄다.
+    //  게다가 macOS 는 xterm 이 Cmd(meta)키를 PTY 로 안 보내 앱이 Cmd+C 를 아예 못 받는다 — 반면 Ctrl+C 는 \x03 으로
+    //  전달돼 앱의 '선택 복사 → OSC52'가 동작한다(그래서 Ctrl+C 만 됐다). 마우스모드면 Cmd+C 도 \x03 으로 보내 Ctrl+C 와
+    //  동일하게 앱 복사를 트리거한다(셸 등 마우스모드 아님 화면은 손대지 않음 — 브라우저 기본 복사 유지).
+    if (k === 'c' && e.metaKey && !e.ctrlKey) {
+      let mouseOn = false;
+      try { mouseOn = !!(term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none'); } catch (_) { /* noop */ }
+      if (mouseOn) { sendInput('\x03'); return false; }
+    }
     if (k === 'v') {
       // 붙여넣기는 네이티브 paste 이벤트(setupPaste)가 처리한다 — 이미지 업로드+경로, 여러 줄은 bracketed paste.
       //  Mac Cmd+V 는 그대로 흘려 paste 이벤트가 뜨게 한다(xterm 은 Cmd 키로 셸에 아무 것도 안 보냄).
@@ -875,7 +894,8 @@ function openHelp() {
         kb(['휠 ↑'], '위로 스크롤해 지난 출력 보기')),
       sec('복사',
         kb(['드래그 → ⌘/Ctrl C'], '드래그로 선택한 뒤 복사 — 자동 복사는 없어요(클립보드 안 덮임)'),
-        kb(['Shift 드래그'], 'Claude 안에서는 Shift 누른 채 드래그로 선택')),
+        kb(['Shift 드래그'], 'Claude 안에서는 Shift 누른 채 드래그로 선택'),
+        kb(['Claude 복사'], 'Claude 가 복사한 내용은 맥북 클립보드에도 자동으로 올라가요')),
       sec('도구 (오른쪽 위 버튼)',
         tool('내 질문', '이 세션에서 보낸 질문 목록 — 클릭하면 그 위치로 이동'),
         tool('파일 탐색기', '파일 업로드·다운로드 (끌어다 놓아도 됨)'),
@@ -1172,7 +1192,7 @@ async function boot() {
   setupPaste();
   setupWheel();
   setupTouch();           // 모바일 터치 스와이프 스크롤(#585)
-  setupOscClipboard();    // 앱 OSC52 는 무시 — 클립보드 안 건드림(#762, 배너도 제거)
+  setupOscClipboard();    // 앱 OSC52 복사 신호 → 맥북 클립보드에 조용히 씀 (#972 · #252 방식 복원, 배너 없음)
   applyFit();
   window.addEventListener('resize', doResize);
   // window.resize 만으로는 '호스트가 0→풀사이즈로 처음 레이아웃되는 순간'을 못 잡는다(창은 리사이즈된 적
