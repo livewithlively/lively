@@ -444,6 +444,41 @@ export async function initV6Schema(): Promise<string> {
     CREATE INDEX IF NOT EXISTS session_project_project_idx ON session_project(project_id);
   `);
 
+  // ── 세션이력 자산화(#905 C1) — 트랜스크립트를 중앙에 무결하게 append + 회수. 설계: [[project-905-design-assetization]] §5. ──
+  //  ① session — **불멸** 세션 레지스트리. tmux 세션은 휘발이라(끝나면 사라짐) 로그·귀속의 안정된 기준점이 없었다.
+  //     한 번 생기면 안 지운다(session_log 는 30일 reap 하지만 이 레코드는 남아 '있었다'를 증언). **키는 (node_id,
+  //     session_id) 복합** — 같은 session_id 가 두 머신에 존재할 수 있다(경로무관 resume). node_id='' = 게이트웨이 로컬(박스).
+  //  ② session_log — offset-CAS 워터마크. bytes = 지금까지 커밋된 총 바이트(= 다음 델타가 와야 할 offset). append 는
+  //     조건부 UPDATE(WHERE bytes=$atOffset)로 원자적 — **락 없이** tailer 중복·재시작 재push·순서역전을 배제(설계 §5 ①).
+  //  ③ session_log_chunk — 실제 내용(append-only). at_offset = append 당시 워터마크 = (node,session) 안에서 유일(CAS 보장).
+  //     data = 캡처측이 슬림한 JSONL 바이트(zstd·채널필터는 후속 슬라이스 — 이 슬라이스는 내용 무관 바이트 append).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS session(
+      node_id TEXT NOT NULL DEFAULT '',
+      session_id TEXT NOT NULL,
+      harness TEXT,
+      first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (node_id, session_id));
+
+    CREATE TABLE IF NOT EXISTS session_log(
+      node_id TEXT NOT NULL DEFAULT '',
+      session_id TEXT NOT NULL,
+      bytes BIGINT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (node_id, session_id));
+
+    CREATE TABLE IF NOT EXISTS session_log_chunk(
+      node_id TEXT NOT NULL DEFAULT '',
+      session_id TEXT NOT NULL,
+      at_offset BIGINT NOT NULL,
+      data BYTEA NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (node_id, session_id, at_offset));
+    -- reap(30일) 는 updated_at 기준 — 오래된 세션 로그부터. 인덱스로 스윕을 싸게.
+    CREATE INDEX IF NOT EXISTS session_log_reap_idx ON session_log(updated_at);
+  `);
+
   // ── 6a-2) project_folder_binding — 한 프로젝트가 **어느 멤버의 어느 환경에서 어느 절대경로에 사는가**(N:M, #905 P1-①). ──
   //  ⚠ 이름 주의: **project_folder(6d) 와 무관하다.** 그건 클릭업 Folder(폴더›리스트›프로젝트 의 정리용 상위층)이고,
   //   이건 **파일시스템 폴더의 호스트별 실물 위치**다. (같은 혼동이 코드에도 이미 있다 — createProjectFolder 가
