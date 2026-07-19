@@ -484,6 +484,16 @@ function setupClipboard() {
     if (!mod || e.altKey) return true;
     const k = (e.key || '').toLowerCase();
     if (k === 'c' && term.hasSelection()) { copyText(term.getSelection()); return false; }
+    // [#972] Cmd+C 를 마우스모드 앱(Claude Code) 화면에선 Ctrl+C(\x03)로 브리지한다.
+    //  Claude 는 마우스모드로 텍스트 선택을 자체 관리 → xterm 은 그 선택을 몰라(hasSelection=false) 위 copyText 를 못 탄다.
+    //  게다가 macOS 는 xterm 이 Cmd(meta)키를 PTY 로 안 보내 앱이 Cmd+C 를 아예 못 받는다 — 반면 Ctrl+C 는 \x03 으로
+    //  전달돼 앱의 '선택 복사 → OSC52'가 동작한다(그래서 Ctrl+C 만 됐다). 마우스모드면 Cmd+C 도 \x03 으로 보내 Ctrl+C 와
+    //  동일하게 앱 복사를 트리거한다(셸 등 마우스모드 아님 화면은 손대지 않음 — 브라우저 기본 복사 유지).
+    if (k === 'c' && e.metaKey && !e.ctrlKey) {
+      let mouseOn = false;
+      try { mouseOn = !!(term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none'); } catch (_) { /* noop */ }
+      if (mouseOn) { sendInput('\x03'); return false; }
+    }
     if (k === 'v') {
       // 붙여넣기는 네이티브 paste 이벤트(setupPaste)가 처리한다 — 이미지 업로드+경로, 여러 줄은 bracketed paste.
       //  Mac Cmd+V 는 그대로 흘려 paste 이벤트가 뜨게 한다(xterm 은 Cmd 키로 셸에 아무 것도 안 보냄).
