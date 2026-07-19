@@ -236,6 +236,19 @@ function parseTargetMembers(raw: unknown): string[] | null | undefined {
   return out.length ? out : null; // 빈 배열 = 전원(null)
 }
 
+// 커스텀 훅 source_code 해소 — target_members 와 같은 '미지정=보존' 규약(#970).
+//  ⚠ 종전엔 `str(input.source_code ?? "")` 로 **undefined 를 "" 로 강제**했다. store 의 보존 로직
+//   (`h.source_code ?? before?.source_code`)은 nullish 에만 걸리는데 ""(비-nullish)가 이겨서, source_code 를
+//   생략한 부분수정(예: target_members 만 변경)이 **훅 본문을 통째로 지웠다**(실제 데이터 소실 버그).
+//  undefined(생략) → undefined 를 그대로 store 에 넘겨 보존에 위임. 문자열이면 검증 + 시크릿 스캔.
+//  ""(명시적 빈 문자열)은 '지운다'는 명시적 의도이므로 그대로 통과(생략과 구분). null 등 비문자열은 str() 이 거부.
+export function resolveHookSource(raw: unknown): string | undefined {
+  if (raw === undefined) return undefined; // 미지정 = 변경 없음(store 가 기존 본문 유지)
+  const s = str(raw, "source_code", 16384); // 타입·길이 검증(null·숫자 등 비문자열 거부)
+  assertNoHardSecrets(s, "source_code"); // B20: 값이 있을 때만 평문 시크릿 hard-block
+  return s;
+}
+
 // #699: 개인 오버라이드 대상 종류 검증(harness_asset|org_hook).
 function assertPrefKind(raw: unknown): AssetPrefKind {
   const s = typeof raw === "string" ? raw.trim() : "";
@@ -1928,8 +1941,7 @@ export const deliveryCapabilities: Capability[] = [
       if (!HOOK_EVENTS.has(event)) throw new HttpError(400, `event 는 ${[...HOOK_EVENTS].join("|")} 만 허용됩니다`);
       const harness = input.harness === undefined ? "all" : str(input.harness, "harness", 12);
       if (!HOOK_HARNESSES.has(harness)) throw new HttpError(400, "harness 는 claude|codex|openclaw|all");
-      const sourceCode = str(input.source_code ?? "", "source_code", 16384);
-      assertNoHardSecrets(sourceCode, "source_code"); // B20: 평문 시크릿 hard-block
+      const sourceCode = resolveHookSource(input.source_code); // #970: 생략=보존(undefined→store 위임), "" 만 지움
       const matcher = (input.matcher === undefined || input.matcher === null || input.matcher === "")
         ? null : str(input.matcher, "matcher", 500);
       const timeout = input.timeout_sec === undefined ? 10 : Number(input.timeout_sec);
