@@ -436,12 +436,32 @@ export async function initV6Schema(): Promise<string> {
 
   // ── 세션↔프로젝트 매핑 — 프로젝트 터미널 세션에서 한 AI 작업(activity.session_id)만 타임라인에 모으기 위한 영속 링크.
   //   tmux @box_project 는 휘발성(끝난 세션 사라짐)이라, 세션 생성 시 여기 기록해 끝난 세션 작업도 귀속한다.
+  //   ⚠ **시간구간(temporal) 모델**(#905 C1) — 행 하나가 "이 세션이 valid_from 부터 이 프로젝트에 속했다"는 구간이다.
+  //     한 세션이 재바인딩되면 옛 구간을 덮지 않고 **새 구간을 덧붙인다**. 그래야 A 밑에서 한 과거 작업이 B 로
+  //     소급 재귀속되지 않는다(옛 단일키 UPSERT 의 라이브 버그). 작업 귀속은 '작업 발생시각이 어느 구간에 드느냐'로 판정.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS session_project(
-      session_id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
       project_id INT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+      valid_from TIMESTAMPTZ NOT NULL DEFAULT now(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (session_id, valid_from));
     CREATE INDEX IF NOT EXISTS session_project_project_idx ON session_project(project_id);
+    -- 기존 배포(단일키 PK) → 시간구간 모델 이관. 신규 설치는 위 CREATE 로 이미 복합키라 아래는 전부 no-op.
+    ALTER TABLE session_project ADD COLUMN IF NOT EXISTS valid_from TIMESTAMPTZ;
+    UPDATE session_project SET valid_from = created_at WHERE valid_from IS NULL;   -- 옛 바인딩은 기록 시각부터 유효했다
+    ALTER TABLE session_project ALTER COLUMN valid_from SET NOT NULL;
+    ALTER TABLE session_project ALTER COLUMN valid_from SET DEFAULT now();
+    DO $$ BEGIN
+      -- PK 가 아직 단일컬럼(session_id)이면 복합키(session_id, valid_from)로 교체. 이미 복합이면 건너뛴다(부팅마다 재구축 방지).
+      IF EXISTS (
+        SELECT 1 FROM pg_constraint con JOIN pg_index i ON i.indexrelid = con.conindid
+        WHERE con.conrelid = 'session_project'::regclass AND con.contype = 'p'
+          AND array_length(i.indkey, 1) = 1) THEN
+        ALTER TABLE session_project DROP CONSTRAINT session_project_pkey;
+        ALTER TABLE session_project ADD CONSTRAINT session_project_pkey PRIMARY KEY (session_id, valid_from);
+      END IF;
+    END $$;
   `);
 
   // ── 세션이력 자산화(#905 C1) — 트랜스크립트를 중앙에 무결하게 append + 회수. 설계: [[project-905-design-assetization]] §5. ──
