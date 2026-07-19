@@ -4186,21 +4186,6 @@ p.md-p > .md-img:only-child { margin: 10px 0; }
 .kn-link-child { background: var(--bg-tint); color: var(--ink); }
 .crumb-cur { font-weight: 600; color: var(--ink); }
 
-/* 사이드바 페이지 트리 — 카테고리 트리와 같은 언어(들여쓰기 + 헤어라인 가이드). */
-.kn-mirror-tree { margin-top: 20px; }
-.kn-mirror-eyebrow { margin-bottom: 6px; }
-.kn-mirror-nodes { font-size: 13px; }
-.kn-tree-branch { margin: 0; }
-.kn-tree-branch > .kn-tree-sum { display: flex; align-items: center; gap: 6px; cursor: pointer; }
-.kn-tree-branch > .kn-tree-sum::-webkit-details-marker { display: none; }
-.kn-tree-sum::before { content: '▸'; font-size: 10px; color: var(--muted, #6b7a90); flex: none; transition: transform .12s ease; }
-.kn-tree-branch[open] > .kn-tree-sum::before { transform: rotate(90deg); }
-@media (prefers-reduced-motion: reduce) { .kn-tree-sum::before { transition: none; } }
-.kn-tree-leaf { display: flex; align-items: center; gap: 6px; padding-left: 14px; }
-.kn-tree-kids { margin-left: 13px; border-left: 1px solid var(--line); padding-left: 7px; }
-.kn-tree-link { color: inherit; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
-.kn-tree-link:hover { color: var(--blue); }
-.kn-tree-archived { opacity: .5; }
 /* ════ #541 ClickUp 무손실 이관 — 프론트 확장(뷰 피커·마크다운·모달·첨부) ════ */
 /* ── 마크다운 렌더 확장(#541 ClickUp 무손실 이관) — 체크박스 태스크 + 이미지 ── */
 .md-list li.md-task { list-style: none; }
@@ -5369,7 +5354,6 @@ main.doc-mode .kn-main { padding: 30px 44px 72px; }
 main.doc-mode .kn-side .eyebrow {
   font-size: 10.5px; font-weight: 700; letter-spacing: 1.6px; color: var(--muted-head);
   padding-bottom: 9px; margin: 0 4px 10px; border-bottom: 1px solid var(--wk-line-soft); }
-main.doc-mode .kn-mirror-eyebrow { margin-top: 20px; }
 
 /* 빠른 검색 버튼 — 종이 인셋 + mono ⌘K */
 main.doc-mode .kn-side-search { background: var(--wk-card); border: 1px solid var(--wk-line); border-radius: 10px;

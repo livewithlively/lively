@@ -1,10 +1,10 @@
 // wiki-side.ts — WIKI 좌측 카테고리 사이드바(#764 재구축의 유일한 '유지' 표면 — knowledge.ts 에서 동작 그대로 이관).
 //  사용자가 명시적으로 유지하라고 한 표면이라 마크업·클래스·동작을 바꾸지 않는다(검색·★내소유·space 그룹·트리 펼침·
-//  Notion 미러 트리·도구 섹션·폭 리사이즈(--pjv-side-w, localStorage 'pjv:sideW' — 프로젝트 탭 공유)·접기).
+//  도구 섹션·폭 리사이즈(--pjv-side-w, localStorage 'pjv:sideW' — 프로젝트 탭 공유)·접기).
 //  콘텐츠와의 접점은 3개뿐: ① [data-cat-val] 클릭 위임(onSelect) ② 문서 열기(onOpen) ③ rebuild().
 import { api, el, state, sv } from './core.js';
 import { reviewNavBadge } from './review.js';   // #837 검토 대기 배지(대기 0이면 안 그려진다)
-import { isCategoryHomeDoc, knFetchAuthoredTree, knFetchCategoryRows, knFolderFirstSort, knPageIcon, knTreeIcon, SPACE_LABEL } from './wiki-data.js';
+import { isCategoryHomeDoc, knFetchAuthoredTree, knFetchCategoryRows, knFolderFirstSort, knPageIcon, SPACE_LABEL } from './wiki-data.js';
 
 // WIKI 인덱스(#336) — '전체' 하위 '인덱스(핀)' 필터의 가짜 카테고리 센티넬. data-cat-val 위임에 실린다.
 const KN_INDEXED = '__indexed__';
@@ -253,60 +253,6 @@ function knMakeSideSearch(nav: any, st: any) {
   return box;
 }
 
-// ── #551 노션 무손실 미러 — 사이드바 페이지 트리 ──
-function knMirrorTreeNode(e, byParent) {
-  const kids = (byParent.get(e.name) || []);
-  const link = el('a', {
-    class: 'tree-label kn-tree-link' + (e.lifecycle === 'archived' ? ' kn-tree-archived' : ''),
-    href: '#/k/' + encodeURIComponent(e.name), title: e.title || e.name,
-    text: e.title || e.name });
-  link.addEventListener('click', (ev) => { ev.preventDefault(); location.hash = '#/k/' + encodeURIComponent(e.name); });
-  if (!kids.length) {
-    return el('div', { class: 'tree-item kn-tree-leaf' },
-      el('span', { class: 'tree-glyph', 'aria-hidden': 'true', text: knTreeIcon(e.kind) }), link);
-  }
-  const det = el('details', { class: 'kn-tree-branch' },
-    el('summary', { class: 'tree-item kn-tree-sum' },
-      el('span', { class: 'tree-glyph', 'aria-hidden': 'true', text: knTreeIcon(e.kind) }), link,
-      el('span', { class: 'tree-groupcount', text: String(kids.length) })));
-  const kidBox = el('div', { class: 'kn-tree-kids' });
-  for (const c of kids) kidBox.append(knMirrorTreeNode(c, byParent));
-  det.append(kidBox);
-  return det;
-}
-
-function buildMirrorTree(entries) {
-  const byName = new Map(entries.map((e) => [e.name, e]));
-  const byParent = new Map();
-  const roots: any[] = [];
-  for (const e of entries) {
-    const p = e.parent_name && byName.has(e.parent_name) ? e.parent_name : '';
-    if (!p) { roots.push(e); continue; }
-    if (!byParent.has(p)) byParent.set(p, []);
-    byParent.get(p).push(e);
-  }
-  const bySort = (a, b) => (a.sort - b.sort) || String(a.title || a.name).localeCompare(String(b.title || b.name));
-  roots.sort(bySort);
-  for (const arr of byParent.values()) arr.sort(bySort);
-  const box = el('div', { class: 'kn-mirror-nodes' });
-  for (const r of roots) box.append(knMirrorTreeNode(r, byParent));
-  return box;
-}
-
-function loadMirrorTreeInto(mirrorBox) {
-  (async () => {
-    try {
-      const r = await api('/api/ui/knowledge-tree?system=notion');
-      const entries = (r && r.entries) || [];
-      if (!entries.length) return;
-      mirrorBox.replaceChildren(
-        el('div', { class: 'eyebrow kn-mirror-eyebrow', text: 'Notion 페이지 트리' }),
-        buildMirrorTree(entries));
-      mirrorBox.hidden = false;
-    } catch (_) { /* 미러 없음/권한 없음 → 섹션 숨김 유지 */ }
-  })();
-}
-
 // ── 도구 섹션(목록 셸 전용) — 지식 그래프·자료·휴지통 ──
 function openKnowledgeAtlas() {
   let url = 'graph.html';
@@ -380,7 +326,6 @@ const KN_SIDE_COLLAPSE_KEY = 'kn-doc-side-collapsed';
 function createWikiSide(opts: any) {
   const side = el('aside', { class: 'kn-side' });
   const nav = el('nav', { class: 'browse-tree', 'aria-label': '카테고리' });
-  const mirrorBox = el('div', { class: 'kn-mirror-tree', hidden: true });
   const sideState = { q: '' };
   const myIds = myCatIdSet();
   let bySpace: any = { business: [], product: [], system: [] };
@@ -407,7 +352,7 @@ function createWikiSide(opts: any) {
       { indexed: true, onOpen: opts.onOpen, favCatIds, onToggleFav: toggleCatFav });
     side.replaceChildren(...[
       el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '지식 카테고리' }), collapseBtn),
-      knMakeSideSearch(nav, sideState), nav, mirrorBox,
+      knMakeSideSearch(nav, sideState), nav,
       opts.tools ? knSideTools() : null,
     ].filter(Boolean));   // replaceChildren 은 null 을 'null' 텍스트로 찍는다 — 필터 필수
     knSideFilterNav(nav, sideState.q);   // 재빌드 후에도 필터 유지
@@ -425,7 +370,6 @@ function createWikiSide(opts: any) {
     try { bySpace = await fetchAllSpaceCats(); } catch (_) { /* graceful: 사이드바 생략(콘텐츠는 계속) */ }
     try { const fd = await api('/api/ui/v6/favorites'); for (const id of ((fd && fd.categories) || [])) favCatIds.add(String(id)); } catch (_) { /* 비로그인/실패 */ }
     buildSide();
-    loadMirrorTreeInto(mirrorBox);
   })();
 
   function findCat(id: any) {
