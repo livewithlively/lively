@@ -1126,6 +1126,13 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .svc-panel-ic { font-size: 22px; line-height: 1; flex: none; }
 .svc-panel-nm { font-size: 16px; font-weight: 800; color: var(--ink); }
 .warn-badge { background: #FFF6E9; color: #B5791E; border: 1px solid #F0DBB0; border-radius: 9px; padding: 9px 12px; font-size: 13px; font-weight: 700; margin-bottom: 12px; }
+/* 훅 정책·건강 카드(#892) — 본문 안에 접히는 보조 블록. warn-badge 는 한 줄 배지라 여러 행을 담지 못한다. */
+.admin-subcard { border: 1px solid var(--line-note); border-radius: 11px; background: var(--bg-note); padding: 13px 15px; margin-bottom: 14px; }
+.admin-subcard h4 { margin: 0 0 6px; font-size: 13.5px; font-weight: 800; color: var(--ink); }
+.admin-subcard .admin-check { display: flex; align-items: flex-start; margin: 7px 0; }
+.warn-badge-soft { border-color: #F0DBB0; background: #FFF6E9; }
+.warn-badge-soft h4 { color: #B5791E; }
+.admin-pre { margin: 6px 0 0; padding: 8px 10px; border-radius: 7px; background: var(--bg-code, rgba(0,0,0,.04)); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; color: var(--ink-sub); }
 .builtin-toggles { margin-top: 10px; }
 .builtin-row { display: flex; align-items: center; gap: 16px; padding: 7px 0; border-bottom: 1px solid var(--line-row); }
 .builtin-row:last-child { border-bottom: none; }

@@ -33,7 +33,11 @@
 ## 1.5 커스텀 훅 런너 (run-custom.mjs — 2026-06-16)
 - 웹 관리(**runtime** scope)에서 정의하는 커스텀 훅(`org_hook`)을 실행하는 **불변 런너**. 본문(source_code)은 멤버 디스크에 저장하지 않는다 — 매 세션 게이트웨이 `GET /api/ui/org/runner/hooks?harness=&event=`(멤버 토큰 인증, `delivery.ts org_runner_hooks`)에서 enabled 훅을 받아 임시파일로 실행 후 삭제.
 - 이벤트당 고정 엔트리 1개로 settings 에 박힌다(SessionStart·UserPromptSubmit·PreToolUse·PostToolUse·Stop·SubagentStop·Notification). 커스텀 훅 추가/삭제는 settings 재작성 불요 — 동적성은 전부 서버측.
-- **fail-CLOSED + grace 캐시(10분)**: 게이트웨이 미도달 시 최근 성공 캐시만, 만료되면 무실행 → enabled=false/제거가 다음 세션부터 즉시 무효(실효 kill-switch). `content_hash` 필수+일치만 실행. `timeout_sec` 마다 SIGKILL(no-block 불변식). `LIVELY_OFF=1` 최상단 종료. SessionStart 만 stdout 을 컨텍스트로 주입, 그 외 이벤트는 부수효과만(v1: 차단 불가).
+- **fail-CLOSED + grace 캐시(10분)**: 게이트웨이 미도달 시 최근 성공 캐시만, 만료되면 무실행 → enabled=false/제거가 다음 세션부터 즉시 무효(실효 kill-switch). `content_hash` 필수+일치만 실행. `timeout_sec` 마다 SIGKILL(no-block 불변식). `LIVELY_OFF=1` 최상단 종료.
+- **stdout 전파(이벤트별)**: `SessionStart`·`UserPromptSubmit` 는 raw 텍스트, `PostToolUse` 는 `additionalContext` JSON 으로 컨텍스트 주입. **`PreToolUse` 는 '결정'을 전파한다(#892)** — 텍스트가 아니라 `permissionDecision` 이라 이어붙일 수 없어, 러너가 훅들의 JSON 을 파싱해 **가장 제한적인 결정**으로 병합한다(`deny`>`defer`>`ask`>`allow`, `additionalContext` 는 전부 보존). 러너는 하네스에 훅 1개로 보이므로 이 병합을 러너가 직접 해야 한다. 그 외 이벤트(Stop·SessionEnd 등)는 부수효과만.
+  - **전파 정책**: 관리탭 `runtime_config.hook_relay_decisions`(기본 `deny`·`ask`·`defer`). **`allow` 는 기본 제외** — 구성원의 권한 프롬프트를 건너뛰므로 명시 opt-in. 러너는 `/api/ui/org/runner/hooks` 응답의 `relay_decisions` 로 받는다(왕복 추가 없음).
+  - **모듈 타입**: 훅 소스가 CJS(`require`)면 `.cjs`, ESM 이면 `.mjs` 로 실행한다. **CJS 소스를 `.mjs` 로 쓰면 `require is not defined` 로 첫 줄에서 즉사**하는데, 그게 #892 에서 spec-blind guard/tracker 가 등록 이래 내내 죽어 있던 원인이다.
+- **훅 건강(#892)**: 훅이 죽거나 타임아웃되면 러너가 stderr 에 `[lively] hook '<id>' <사유>: <에러 헤드라인>` 을 남기고(디버그 로그), `POST /api/ui/org/runner/hook-report` 로 게이트웨이에 보고한다 → `org_hook.health`(멤버별 마지막 실패) → 관리탭 훅 목록에 `⚠ 실패 N대` 배지. **실패했을 때만** 보고하므로 정상 조직은 트래픽 0. 종전엔 크래시를 통째로 삼켜(`catch → ""`) '죽음'과 '결정 없음'이 구분되지 않았고, 그래서 죽은 훅을 아무도 몰랐다.
 - 설계/검증: `research/2026-06-16-hook-tool-crud-구현.md`.
 
 ## 2. 플래그 생명주기

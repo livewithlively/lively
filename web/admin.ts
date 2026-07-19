@@ -4012,9 +4012,12 @@ function customHookEditor(detail, data) {
   listCol.append(el('button', { class: 'btn btn-ghost btn-sm admin-add', text: '+ 추가',
     onclick: () => { state.admin.hookSel = '__new__'; renderAdminDetail(detail, 'custom-hooks', data); } }));
   for (const h of hooks) {
+    const failed = Object.keys(h.health || {}).length; // #892 — 죽은 훅을 목록에서 바로 보이게(조용한 죽음 방지)
     listCol.append(el('div', { class: 'mini-row' + (h.id === sel ? ' sel' : ''),
       onclick: () => { state.admin.hookSel = h.id; renderAdminDetail(detail, 'custom-hooks', data); } },
-      el('div', { class: 'mini-title', text: h.id }, h.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null),
+      el('div', { class: 'mini-title', text: h.id },
+        h.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null,
+        failed ? el('span', { class: 'pill pill-warn', text: '⚠ 실패 ' + failed + '대' }) : null),
       el('div', { class: 'mini-meta', text: h.event + (h.matcher ? ' · ' + h.matcher : '') + ' · ' + (h.harness || 'all')
         + (h.target_members && h.target_members.length ? ' · 지정 ' + h.target_members.length + '명' : '') })));
   }
@@ -4024,8 +4027,51 @@ function customHookEditor(detail, data) {
     : hooks.find((h) => h.id === sel);
   if (editing) hookForm(right, editing, data, detail, sel === '__new__');
   else right.append(
-    el('p', { class: 'admin-hint', text: '구성원 머신에서 특정 시점에 자동 실행되는 코드입니다. 본문은 구성원 디스크에 저장되지 않고 매 세션 게이트웨이에서 받아 실행됩니다(비활성화하면 다음 세션부터 실행되지 않습니다). 왼쪽 목록에서 항목을 선택하면 내용을 보고 편집할 수 있습니다.' }));
+    // origin/main(#968 계열)의 개선된 안내 문구 + #892 의 정책 카드 — 둘 다 유지.
+    el('p', { class: 'admin-hint', text: '구성원 머신에서 특정 시점에 자동 실행되는 코드입니다. 본문은 구성원 디스크에 저장되지 않고 매 세션 게이트웨이에서 받아 실행됩니다(비활성화하면 다음 세션부터 실행되지 않습니다). 왼쪽 목록에서 항목을 선택하면 내용을 보고 편집할 수 있습니다.' }),
+    relayPolicyCard(data, detail));
   detail.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
+}
+
+// PreToolUse 결정 전파 정책(#892) — 러너가 훅의 permissionDecision 중 무엇을 하네스로 넘길지.
+//  훅 하나가 아니라 러너 전체에 걸리는 org 정책이라 훅 폼이 아니라 목록 화면(훅 미선택 시)에 둔다.
+function relayPolicyCard(data, detail) {
+  const rc = data.runtimeConfig;
+  if (!rc) return el('span', {}); // 비-admin 은 runtimeConfig 를 못 받는다 → 정책 카드 숨김
+  const cur = new Set(rc.hook_relay_decisions || ['deny', 'ask', 'defer']);
+  const DESC = {
+    deny: 'deny — 도구 실행을 막는다(게이트). 훅이 준 사유가 AI 에게 전달된다.',
+    ask: 'ask — 사용자에게 권한 프롬프트를 띄운다.',
+    defer: 'defer — 비대화형(-p) 실행에서 판단을 미룬다.',
+    allow: 'allow — 권한 프롬프트를 건너뛰고 즉시 허용. ⚠ 구성원의 동의 화면이 사라집니다.',
+  };
+  const boxes = ['deny', 'ask', 'defer', 'allow'].map((d) => {
+    const cb = el('input', { type: 'checkbox' });
+    cb.checked = cur.has(d);
+    cb.dataset.decision = d;
+    return el('label', { class: 'admin-check' }, cb, el('span', { text: DESC[d] }));
+  });
+  const save = el('button', { class: 'btn btn-primary btn-sm', text: '정책 저장' });
+  save.addEventListener('click', async () => {
+    const picked = boxes.map((b) => b.querySelector('input')).filter((i) => i.checked).map((i) => i.dataset.decision);
+    // deny 를 빼는 건 allow 를 켜는 것보다 위험하다 — 모든 PreToolUse 게이트가 조용히 무력해진다.
+    //  #892 자체가 'deny 가 조용히 전파를 멈춘' 사고였다. 그 상태를 클릭 한 번에 만들 수 있으면 안 된다.
+    if (!picked.includes('deny')
+      && !confirm(picked.length
+        ? 'deny 를 빼면 도구를 막는 훅(게이트)이 전부 무력해집니다 — 훅은 돌지만 아무것도 못 막습니다. 계속할까요?'
+        : '전부 해제하면 모든 PreToolUse 훅의 결정이 무시됩니다(게이트 전면 해제). 계속할까요?')) return;
+    if (picked.includes('allow') && !confirm('allow 를 전파하면 관리자 훅이 구성원의 권한 프롬프트(동의 화면)를 건너뛸 수 있습니다. 계속할까요?')) return;
+    save.disabled = true;
+    try {
+      await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ hook_relay_decisions: picked }) });
+      await loadAdmin(true); toast('저장됨 — 구성원 다음 세션부터'); renderAdminDetail(detail, 'custom-hooks', state.admin.data);
+    } catch (e) { toast(e.message, true); save.disabled = false; }
+  });
+  return el('div', { class: 'admin-subcard' },
+    el('h4', { text: '도구 게이트 정책 (PreToolUse)' }),
+    el('p', { class: 'admin-hint', text: 'PreToolUse 훅이 내리는 결정 중 러너가 하네스로 실제 전달할 값입니다. 체크 해제하면 그 결정은 무시됩니다(훅은 돌지만 효과 없음). 기본값은 deny·ask·defer — allow 는 구성원의 동의 화면을 없애므로 기본에서 빠져 있습니다.' }),
+    ...boxes,
+    el('div', { class: 'admin-actions' }, save));
 }
 
 function hookForm(root, h, data, detail, isNew) {
@@ -4061,6 +4107,7 @@ function hookForm(root, h, data, detail, isNew) {
   } }));
   root.replaceChildren(
     el('div', { class: 'warn-badge', text: '⚠ 이 코드는 구성원 컴퓨터에서 그들의 권한으로 실제 실행됩니다.' }),
+    hookHealthCard(h),
     field('id', idIn), field('표시 이름', labelIn),
     field('하네스', harnessSel), field('이벤트(실행 시점)', eventSel),
     field('매처(선택 — PreToolUse/PostToolUse 의 도구명)', matcherIn),
@@ -4068,6 +4115,30 @@ function hookForm(root, h, data, detail, isNew) {
     field('타임아웃(초, 1~120)', timeoutIn),
     field('대상 구성원', tm.node),
     actions);
+}
+
+// 훅 건강(#892) — 구성원 러너가 보고한 마지막 실행 실패. 종전엔 훅이 죽어도 화면상 '활성'이라
+//  spec-blind guard/tracker 가 등록 이래 내내 죽은 걸 아무도 몰랐다. 실패가 없으면 아무것도 안 그린다.
+function hookHealthCard(h) {
+  const health = h.health || {};
+  const ids = Object.keys(health);
+  if (!ids.length) return el('span', {});
+  const REASON = {
+    crash: '실행 중 오류로 죽음', timeout: '타임아웃(시간 초과)',
+    hash_mismatch: '무결성 해시 불일치 — 실행 안 함', spawn_error: '실행 자체 실패',
+    // 훅은 정상 종료했지만 출력이 결정으로 안 읽혀 하네스가 통째로 무시한 경우 — 죽은 것과 결과가 같다.
+    bad_output: '출력을 결정으로 읽을 수 없음 — 하네스가 무시함(게이트 안 걸림)',
+  };
+  return el('div', { class: 'admin-subcard warn-badge-soft' },
+    el('h4', { text: '⚠ 이 훅이 구성원 컴퓨터에서 실패하고 있습니다 (' + ids.length + '대)' }),
+    el('p', { class: 'admin-hint', text: '실패한 훅은 아무 효과가 없습니다 — 화면상 "활성"이어도 실제로는 동작하지 않습니다.' }),
+    ...ids.map((m) => {
+      const e = health[m] || {};
+      return el('div', { class: 'mini-row' },
+        el('div', { class: 'mini-title', text: m + ' · ' + (REASON[e.reason] || e.reason || '알 수 없음') }),
+        el('div', { class: 'mini-meta', text: (e.at ? new Date(e.at).toLocaleString() : '') + (e.exit_code != null ? ' · exit ' + e.exit_code : '') }),
+        e.stderr ? el('pre', { class: 'admin-pre', text: String(e.stderr).slice(-400) }) : null);
+    }));
 }
 
 // ── 스킬 · 서브에이전트 · 슬래시커맨드 (org_harness_asset) — runtime 권한 ──
