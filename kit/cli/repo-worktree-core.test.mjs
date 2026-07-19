@@ -8,7 +8,7 @@
 //   마커까지 올라가 정하면서 경로는 cwd 에서 뽑아, 같은 project/<id> 를 노리는 워크트리가 여러 자리에 생겼다
 //   → 나중에 온 쪽이 죽었다(서버 provision 이면 502). 아래는 그 불변식들이다.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, rmSync, existsSync, mkdtempSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, mkdtempSync, utimesSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -122,6 +122,19 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   check("pin_remove 후에도 다른 SHA 핀(p1)은 남음", existsSync(p1.pin), "p1 이 사라짐");
   const rm2 = repoPinRemove(pinCtx, { repo: "base" });   // best-effort: 이미 없는 걸 또 지워도 에러 아님
   check("pin_remove 재호출 → 에러 없이 removed:null", rm2.removed === null, JSON.stringify(rm2));
+
+  // ── 11) 오래된 핀 TTL 스윕(#932) — repo_pin_remove 가 안 불려 누적된 핀을 다음 핀 호출이 걷는다 ──
+  //  content-addressed 라 SHA 마다 ~20MB 가 쌓이므로, 호출 시점 GC 로 TTL(기본 14일) 넘긴 것만 청소한다.
+  //  진행 중 분석(TTL 미만)과 지금 뜰 SHA 는 절대 안 건드린다. (p1 은 이 런 안에서 갓 만든 fresh 핀 = 보존돼야 함)
+  sh("git", ["commit", "-q", "--allow-empty", "-m", "adv2"], { cwd: join(SB, "origin-repo") });
+  const pOld = await repoPin(pinCtx, { repo: "base" });          // 새 SHA 핀
+  const old = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000);   // 20일 전으로 mtime 위조(TTL 14일 초과)
+  utimesSync(pOld.pin, old, old);
+  sh("git", ["commit", "-q", "--allow-empty", "-m", "adv3"], { cwd: join(SB, "origin-repo") });
+  const pNew = await repoPin(pinCtx, { repo: "base" });          // 또 다른 SHA → 스윕 트리거
+  check("TTL 넘긴 오래된 핀은 다음 핀 때 청소됨", !existsSync(pOld.pin), `pOld 아직 남음: ${pOld.pin}`);
+  check("갓 만든 핀은 스윕 안 됨(keepSha 보호)", existsSync(pNew.pin), `pNew 없음: ${pNew.pin}`);
+  check("TTL 미만 핀(p1, fresh)은 스윕 대상 아님", existsSync(p1.pin), "p1 이 과잉삭제됨");
 
   rmSync(SB, { recursive: true, force: true });
   console.error(`\n${pass} passed, ${fail} failed`);

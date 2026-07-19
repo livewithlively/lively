@@ -11,7 +11,7 @@
 //  규율: base working tree 는 안 건드리고 origin/<ref> 최신에서 워크트리를 분기한다(base RO). 서버측
 //   provisionProjectRepos·로컬 work.mjs 의 clone/worktree 와 동형이되 프로젝트에 매이지 않는다.
 // ═══════════════════════════════════════════════════════════════════════════
-import { readFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync } from "node:fs";
 import { join, dirname, isAbsolute, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 
@@ -234,6 +234,31 @@ export async function repoWorktree(ctx, args) {
     note: `이 경로에서 작업하세요: ${wt} · base(${base})는 pristine 공유 원본이라 직접 작업 금지(커밋·빌드는 워크트리에서).` };
 }
 
+// 오래된 핀 청소(#932) — content-addressed 라 SHA 마다 새 디렉터리(~20MB)가 쌓인다. repo_pin_remove 가 안 불리면
+//  (세션 크래시·스킬 스킵·main 이동으로 remove 가 현재 SHA 만 지목) tmpdir 에 누적된다. OS tmp 정리(macOS ~3일·
+//  Linux tmpfiles)가 백스톱이지만 장수 박스에선 순간 수백 MB. **데몬이 아니라 핀 호출 시점**(caller-triggered)에,
+//  이 repo 의 핀 중 mtime 이 TTL 을 넘긴 것만 best-effort 로 걷는다 — 핀은 읽기전용·재생성 자명이라 안전하고,
+//  지금 뜰 SHA(keepSha)와 TTL 미만은 안 건드린다(진행 중 분석 보호). "무인 자동삭제 데몬 금지"(haru) 원칙과 무충돌.
+const PIN_TTL_MS = Number(process.env.LIVELY_PIN_TTL_MS) || 14 * 24 * 60 * 60 * 1000; // 14일 (env 로 override — 테스트용)
+function sweepStalePins(ctx, base, repo, keepSha) {
+  let swept = 0;
+  try {
+    const root = join(tmpdir(), "lively-pin", repo);
+    const now = Date.now();
+    for (const ent of readdirSync(root, { withFileTypes: true })) {
+      if (!ent.isDirectory() || ent.name === keepSha) continue;      // 현재 SHA 는 보호
+      const dir = join(root, ent.name);
+      let mtimeMs; try { mtimeMs = statSync(dir).mtimeMs; } catch { continue; }
+      if (now - mtimeMs < PIN_TTL_MS) continue;                       // TTL 미만 = 진행 중일 수 있음 → 보존
+      ctx.sh("git", ["-C", base, "worktree", "remove", "--force", dir], { allowFail: true }); // 등록+디렉터리
+      try { rmSync(dir, { recursive: true, force: true }); } catch { /* 등록 없는 고아까지 */ }
+      swept++;
+    }
+    if (swept) ctx.sh("git", ["-C", base, "worktree", "prune"], { allowFail: true });
+  } catch { /* root 없음 등 — 무해 */ }
+  return swept;
+}
+
 // 핀 안내문 — 규약을 반환값에 실어 나른다(스킬이 절차를 중복 서술하지 않아도 되도록).
 const pinNote = (pin, repo, sha) =>
   `이후 이 레포의 코드 인용·grep 은 이 핀 경로에서만: ${pin} · 리포트·지식엔 경로가 아니라 '${repo}@${sha}' 로 앵커하라`
@@ -253,6 +278,9 @@ export async function repoPin(ctx, args) {
   const sha = ctx.sh("git", ["-C", base, "rev-parse", "--short", target], { allowFail: true }).stdout.trim();
   if (!sha) throw new Error(`ref 해석 실패: ${target} (레포 '${repo}') — ref 이름을 확인하세요.`);
   const pin = pinPathOf(ctx, repo, args.path && String(args.path).trim(), sha);
+
+  // 오래된 핀 GC — 이 핀 호출을 트리거 삼아, 이 repo 의 TTL 넘긴 핀을 걷는다(현재 SHA 는 보호). 누적 릭 방지(#932).
+  sweepStalePins(ctx, base, repo, sha);
 
   // 이미 이 경로에 핀이 있으면 재사용(멱등). 기본 경로는 content-addressed 라 여기 걸리면 곧 같은 SHA 다(다른 SHA 는
   //  애초에 다른 경로 = 스톰프 불가). HEAD 가 그 SHA 와 어긋난 이상 상태만 **우리 자신의 이 경로**를 고쳐 다시 뜬다
