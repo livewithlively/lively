@@ -5095,7 +5095,7 @@ function parseMyProfile(md) {
     r.address = grab(/^[-*\s]*\**\s*호칭[^:：\n]*\**\s*[:：]\s*(.+)$/m);
     const tone = grab(/^[-*\s]*\**\s*말투\s*\**\s*[:：]\s*(.+)$/m);
     r.tone = PROF_TONE.find((t) => tone.startsWith(t)) || '';
-    r.lang = grab(/^[-*\s]*\**\s*사용\s*언어\s*\**\s*[:：]\s*(.+)$/m); // 자유값(프리셋 또는 직접 입력) — 목록 매칭 없이 그대로 복원.
+    r.lang = grab(/^[-*\s]*\**\s*사용\s*언어\s*\**\s*[:：]\s*(.+)$/m).split(' — ')[0].trim(); // 뒤에 붙는 지시문(' — 되도록…')을 떼고 언어값만 복원(구 데이터는 지시문 없어 그대로).
     // 응답 길이·담당 영역·자주 쓰는 도구는 #837 에서 제거 — 파싱도 안 한다(다음 저장에 자연 소멸).
     return r;
 }
@@ -6196,7 +6196,7 @@ async function myAiSection(detail) {
         if (toneSel.v)
             lines.push('- 말투: ' + toneSel.v);
         if (langSel.v)
-            lines.push('- 사용 언어: ' + langSel.v);
+            lines.push('- 사용 언어: ' + langSel.v + ' — 되도록 이 언어로 답하고, 다른 언어는 쓰지 마세요');
         let body = lines.length ? ('## 내 프로필\n' + lines.join('\n') + '\n') : '';
         const memo = memoTa.value.trim();
         if (memo)
