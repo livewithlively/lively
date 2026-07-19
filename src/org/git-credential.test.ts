@@ -1,6 +1,7 @@
 // git 자격(#540) 단위 체크 — 봉투 암호화(secret-box)·SSH 키생성·provision 자격 주입(prepareGitAuth) 메커니즘.
 //  DB 없이 도는 순수 로직만(CRUD 는 박스 DB 통합검증). 실행: npm run build && node dist/org/git-credential.test.js
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 
@@ -178,6 +179,27 @@ const ok = (name: string) => { pass++; console.log(`ok  ${name}`); };
   assert.ok(lines.includes("https://user%20name:tok@gh.example.com"), "유저 인코딩");
   assert.ok(!lines.includes("p@ss"), "raw 특수문자 미노출");
   ok("buildGitCredLines URL 인코딩(URL 무결)");
+}
+
+// ── 🔴 원격 노드로 **조직 공용 git 자격이 나가면 안 된다**(#905 C4) ──
+//  노드는 멤버 개인 노트북일 수 있다. 게이트웨이(조직) git 키가 거기로 나가면 그 머신 주인이 조직 전체 레포
+//  권한을 쥔다 — 권한 상승이고 **한 번 나간 키는 회수할 수 없다**.
+//  게이트웨이 로컬용 resolveGitSecret 은 "멤버 없으면 조직 폴백"이라 **노드 주입에 쓰면 정확히 그 사고가 난다**.
+//  ⚠ 행위로 검증할 수 없다: 두 함수 다 첫 줄이 DB 조회라 DB 없이는 똑같이 던져 구별이 안 된다. 그래서
+//   "노드로 나가는 경로가 조직 폴백 경로를 아예 참조하지 않는다"를 **산출물에서** 확인하는 트립와이어를 둔다.
+//   (누가 나중에 leaseGitSecretForNode 를 resolveGitSecret 으로 '단순화'하면 여기서 걸린다.)
+{
+  // 주석은 걷어낸다 — "resolveGitSecret 을 쓰면 안 된다"고 **설명하는 주석**이 금지 문자열에 걸리면
+  //  설명을 지워야 통과하는 꼴이 된다(정확히 반대로 가는 인센티브). 검사 대상은 코드다.
+  const stripComments = (src: string): string => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const sched = stripComments(readFileSync(new URL("../node/task-scheduler.js", import.meta.url), "utf8"));
+  assert.ok(sched.includes("leaseGitSecretForNode"),
+    "노드 디스패치가 자격을 안 싣거나 다른 경로로 해소한다 — 이 계약이 사라졌는지 확인 필요");
+  assert.ok(!sched.includes("resolveGitSecret"),
+    "🔴 노드 디스패치가 resolveGitSecret(조직 폴백)을 쓴다 — 조직 공용 git 키가 멤버 노트북으로 나간다");
+  assert.ok(!sched.includes("GATEWAY_OWNER"),
+    "🔴 노드 디스패치가 게이트웨이(조직) 소유 자격을 직접 집는다 — 나가면 회수 못 한다");
+  ok("🔴 노드로 나가는 git 자격 경로는 조직 폴백을 참조하지 않는다(권한 상승 방지)");
 }
 
 console.log(`\n${pass} passed`);

@@ -130,6 +130,8 @@ export async function getGitSecret(owner: string, host: string): Promise<GitCred
 }
 
 // provision 클론 주입용 — 요청 멤버 자격 우선, 없으면 게이트웨이 머신 자격 폴백, 둘 다 없으면 null(앰비언트).
+//  ⚠ **게이트웨이 프로세스 안에서 클론할 때 전용**이다. 조직 공용 자격으로 폴백하므로, 이 결과를 다른 머신으로
+//   내보내면 안 된다 — 원격 노드로 보낼 자격은 아래 leaseGitSecretForNode 를 써라(#905 C4).
 export async function resolveGitSecret(memberId: string | null | undefined, host: string): Promise<GitCredentialSecret | null> {
   const h = normalizeHost(host);
   if (memberId) {
@@ -137,6 +139,17 @@ export async function resolveGitSecret(memberId: string | null | undefined, host
     if (mine) return mine;
   }
   return getGitSecret(GATEWAY_OWNER, h);
+}
+
+// 🔴 **원격 노드로 내보낼** git 자격(#905 C4) — 위 resolveGitSecret 과 의도적으로 다르다: **조직 폴백이 없다.**
+//  노드는 멤버 개인 노트북일 수 있다. 거기로 게이트웨이(조직) 공용 git 키를 보내면 그 머신을 가진 사람이 조직
+//  전체 레포 권한을 손에 쥔다 — 권한 상승이고, 한 번 나간 키는 회수할 수 없다.
+//  이건 새 원칙이 아니라 이미 선 선례다: 위탁 태스크의 하네스 자격 리스도 `getMemberSecret(t.requester, ...)` 로
+//  **본인 것만** 싣고 조직 폴백이 없다(node/task-scheduler.ts). 나가는 자격은 의뢰자 본인 것뿐이다.
+//  null 이면 자격 없이 보낸다 → 공개 레포는 클론되고, 비공개면 노드의 git 이 인증 실패를 정확한 사유로 보고한다.
+export async function leaseGitSecretForNode(requesterId: string, host: string): Promise<GitCredentialSecret | null> {
+  if (!requesterId) return null;
+  return getGitSecret(memberOwner(requesterId), normalizeHost(host));
 }
 
 // ── git 호스트/자격주입 헬퍼 — provision(project-provision.ts)·도메인맵 스캐너(domainmap/git-pull.ts·webhook.ts)가 공유.

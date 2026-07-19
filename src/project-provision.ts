@@ -14,6 +14,17 @@ import { getRepo } from "./domainmap/core/repos.js";
 import { sanitizeCloneUrl } from "./domainmap/core/queries.js";
 import { HttpError } from "./capabilities/rest-util.js";
 import { resolveGitSecret, hostOf, isAuthError, prepareGitAuth, describeGitError } from "./org/git-credential-store.js";
+import type { GitCredentialSecret } from "./org/git-credential-store.js";
+
+// 노드 provision 주입 묶음(#905 C4) — DB 를 아는 게이트웨이가 조회해 넘기고, DB 가 없는 노드는 그걸 그대로 쓴다.
+//  · gitUrl = 레지스트리 repo.git_url. **시크릿이 아니다** — 이것만 넘겨도 공개 레포는 클론되고, 무엇보다
+//    "레지스트리에 없다"는 오진이 사라진다(진짜 원인은 '노드가 DB 를 못 읽음'이었다).
+//  · secret = 그 host 의 git 자격. **의뢰자 본인 것만 넘긴다** — 게이트웨이(조직) 자격은 절대 안 넘긴다.
+//    근거는 이미 선 선례다: 위탁 태스크의 자격 리스도 `getMemberSecret(t.requester,...)` 로 **본인 것만** 싣고
+//    조직 폴백이 없다(task-scheduler.ts). 반면 게이트웨이 로컬용 resolveGitSecret 은 "멤버 없으면 조직 폴백"이라,
+//    그걸 그대로 노드에 주입하면 **조직 공용 git 키가 멤버 노트북으로 나간다**(권한 상승). 그래서 호출자가
+//    본인 자격만 해소해 넘기는 형태로 못 박는다 — 이 모듈은 받은 것만 쓴다.
+export interface RepoProvisionAuth { gitUrl: string | null; secret?: GitCredentialSecret | null }
 // hostOf·isAuthError·prepareGitAuth 는 git-credential-store 로 이관(#606, 스캐너와 공유). 하위호환·기존 테스트 위해 re-export.
 export { hostOf, isAuthError, prepareGitAuth, type GitAuth } from "./org/git-credential-store.js";
 
@@ -227,7 +238,8 @@ const expandHome = (p: string): string => (p.startsWith("~/") ? path.join(proces
 //  이 base 는 '읽기 원본'이다: 실제 작업은 worktree 로 격리한다(base 직접 작업 금지 규율). 프로젝트·위탁 provision 공용.
 //  자격(#540): 레포 host 매칭 멤버(없으면 게이트웨이) 자격을 이 호출의 git 에만 주입. inputPath 로 기존 클론 경로 지정 가능(프로젝트용).
 async function ensureBaseClone(
-  name: string, memberId: string | null, opts?: { inputPath?: string | null; allowClone?: boolean },
+  name: string, memberId: string | null,
+  opts?: { inputPath?: string | null; allowClone?: boolean; inject?: RepoProvisionAuth },
 ): Promise<{ repoPath: string; cloned: boolean }> {
   if (!REPO_NAME_RE.test(name)) throw new HttpError(400, `레포 이름 형식 오류(영숫자.-_, 슬래시 불가): ${name}`);
   const reposBase = path.join(PROJECT_SHARED_BASE, REPOS_SUBDIR);
@@ -235,9 +247,14 @@ async function ensureBaseClone(
   const repoPath = confineToWorkspace(inputPath, "레포");
   const allowClone = opts?.allowClone !== false;
   const existed = await isRepo(repoPath);
-  const row = await getRepo(name).catch(() => null);
+  // 🔴 주입 경로(#905 C4) — **노드엔 DB 가 없다**(agent.ts: "DB·웹 UI 없이 부팅한다"). 여기서 getRepo/resolveGitSecret 을
+  //  부르면 itemsPool 이 localhost:5432 로 붙으려다 실패하고, .catch(()=>null) 이 그걸 삼켜 아래에서 409
+  //  "레포의 git 주소가 레지스트리에 없습니다" 라는 **오진**이 난다 — 레포는 멀쩡히 등록돼 있는데 사용자에게
+  //  "레지스트리에 등록하라"고 시킨다(시키는 대로 해도 안 고쳐진다). 그래서 DB 를 아는 게이트웨이가 조회해 넘긴다.
+  const inject = opts?.inject;
+  const row = inject ? { git_url: inject.gitUrl } : await getRepo(name).catch(() => null);
   const host = hostOf(row?.git_url) ?? (existed ? hostOf(await originUrl(repoPath)) : null) ?? "github.com";
-  const secret = await resolveGitSecret(memberId, host).catch(() => null);
+  const secret = inject ? (inject.secret ?? null) : await resolveGitSecret(memberId, host).catch(() => null);
   const auth = await prepareGitAuth(secret);
   let cloned = false;
   try {
@@ -288,8 +305,11 @@ export async function ensureProvisionBase(
 //  중앙 노드·원격 노드가 각자 자기 호스트의 workspace/repos 에 클론(호스트별 로컬 복제본 — 미동기화, git remote 로 수렴).
 export async function provisionTaskRepo(
   workspaceDir: string, taskId: number, repo: string, ref: string | null, memberId: string | null,
+  inject?: RepoProvisionAuth,
 ): Promise<string> {
-  const { repoPath } = await ensureBaseClone(repo, memberId);
+  // inject 는 **노드에서 실행될 때** 게이트웨이가 실어 보낸다(노드엔 DB 가 없다 — ensureBaseClone 주석 참조).
+  //  중앙(게이트웨이 내장 노드)에서 돌 땐 undefined → 종전대로 DB 를 직접 읽는다(무회귀).
+  const { repoPath } = await ensureBaseClone(repo, memberId, { inject });
   const wtParent = confineToWorkspace(workspaceDir, "위탁 워크스페이스");
   const wtPath = confineToWorkspace(path.join(wtParent, repo), "위탁 워크트리");
   const branch = `delegate/task-${taskId}`;

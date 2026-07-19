@@ -9,6 +9,9 @@
 import { logger } from "../log.js";
 import { SHARED_ROOT } from "../terminal-sessions.js";
 import { getMemberSecret } from "../org/member-secret-store.js";
+import { getRepo } from "../domainmap/core/repos.js";
+import { leaseGitSecretForNode, hostOf } from "../org/git-credential-store.js";
+import type { RepoProvisionAuth } from "../project-provision.js";
 import { nodeOnline, nodeRpc, schedulableRemotes, onTaskDone } from "./registry.js";
 import { getNode } from "./store.js";
 import {
@@ -94,6 +97,21 @@ async function candidatesFor(t: DelegateTask, counts: Map<string, number>, extra
   return { nodes, env };
 }
 
+// 원격 노드로 보낼 레포 provision 주입을 해소한다(#905 C4).
+//  🔴 **의뢰자 본인 git 자격만** 싣는다 — 게이트웨이(조직) 자격은 절대 안 싣는다.
+//   provision 의 resolveGitSecret 은 "멤버 자격 없으면 조직 폴백"인데, 그건 게이트웨이 **안에서** 클론할 때 얘기다.
+//   그대로 노드에 주입하면 **조직 공용 git 키가 멤버 노트북으로 나간다**(권한 상승). 바로 위 candidatesFor 의 자격
+//   리스도 같은 이유로 getMemberSecret(t.requester) — 본인 것만 싣고 조직 폴백이 없다. 그 원칙을 그대로 따른다.
+//  자격이 없으면 secret=null 로 보낸다 → 공개 레포는 그대로 클론되고, 비공개면 노드의 git 이 인증 실패를
+//  **정확한 사유로** 보고한다(종전의 "레지스트리에 없다" 오진과 달리 사용자가 할 일을 안다).
+async function repoAuthFor(repo: string, requester: string): Promise<RepoProvisionAuth> {
+  const row = await getRepo(repo).catch(() => null);
+  const host = hostOf(row?.git_url);
+  // leaseGitSecretForNode — resolveGitSecret 이 아니다(그건 조직 폴백이 있어 노드로 나가면 안 된다). 위 주석 참조.
+  const secret = host ? await leaseGitSecretForNode(requester, host).catch(() => null) : null;
+  return { gitUrl: row?.git_url ?? null, secret };
+}
+
 // 한 태스크를 후보와 매칭해 실제 배정(spawn)한다. counts/extra 는 같은 tick 과배정 방지(단발 호출은 빈 extra).
 //  반환: assigned 되면 nodeId, 아니면 사람이 읽을 reason(하네스 로컬 폴백 판단용).
 export interface AssignResult { assigned: boolean; nodeId?: string; reason?: string }
@@ -101,16 +119,20 @@ async function assignOne(t: DelegateTask, counts: Map<string, number>, extra: Ma
   const { nodes, env } = await candidatesFor(t, counts, extra);
   const pick = matchNode(t, nodes);
   if (!pick) return { assigned: false, reason: capacityReason(t, nodes) };
-  const runArgs = {
+  const runArgs: Record<string, unknown> = {
     user: { userId: t.requester }, taskId: t.id, rootKey: "shared", subpath: t.subpath,
     prompt: t.prompt, harness: t.harness, repo: t.repo, gitRef: t.git_ref, flags: t.flags ?? {}, env,
   };
   let r: RunTaskResult;
   if (pick.id === CENTRAL_NODE_ID) {
-    r = await spawnTaskSession(runArgs as never);
+    r = await spawnTaskSession(runArgs as never);   // 중앙 = 게이트웨이 프로세스 → DB 를 직접 읽는다(주입 불필요)
   } else {
     const n = await getNode(pick.id);
     if (!n || !n.enabled) return { assigned: false, reason: `선정 노드 ${pick.id} 비활성` };
+    // 🔴 원격 노드엔 **DB 가 없다**(#905 C4) — 레포 정보를 여기서 해소해 실어 보내지 않으면, 노드의
+    //  ensureBaseClone 이 getRepo() 로 localhost:5432 에 붙으려다 실패하고 409 "레포의 git 주소가 레지스트리에
+    //  없습니다" 라는 **오진**을 낸다(레포는 멀쩡한데 사용자를 헛다리 짚게 한다 — 오늘 라이브 버그).
+    if (t.repo) runArgs.repoAuth = await repoAuthFor(String(t.repo), t.requester);
     r = await nodeRpc<RunTaskResult>(pick.id, "runTask", runArgs as never);
   }
   await markRunning(t.id, pick.id, r.sessionId, r.taskDir);
