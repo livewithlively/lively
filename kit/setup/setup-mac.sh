@@ -325,3 +325,15 @@ if [ "$HAVE_CODEX" = "1" ]; then
 fi
 echo
 echo "처음 실행이면 브라우저 로그인 창이 뜹니다(회사 계정으로 로그인)."
+
+# ── 온보딩 바로 시작 제안 (대화형 tty 일 때만 — [ -t 0 ] 가드는 위 claude 설치 프롬프트와 동일 관례) ──
+#  node 를 방금 부트스트랩했으면(현재 셸에 node 경로 없음 → 훅 실패) 제안하지 않는다 — 위 재시작 안내를 먼저 따르게 둔다.
+if [ -t 0 ] && [ "$NODE_BOOTSTRAPPED" != "1" ] && command -v claude >/dev/null 2>&1; then
+  echo
+  read -rp "지금 온보딩을 바로 시작할까요? (예전 AI 환경 정리·첫 세팅) [Y/n] " _ob || true
+  if [[ ! "${_ob:-Y}" =~ ^[Nn] ]]; then
+    echo "  · 온보딩 세션을 엽니다 — 회사 맥락은 다음 세션부터 붙습니다(스킬은 로컬 파일만 읽어 지금도 동작)."
+    exec claude "온보딩 도와줘"
+  fi
+  echo "  · 나중에 언제든:  \`lively onboarding\`  또는  claude 에서  \"온보딩 도와줘\""
+fi

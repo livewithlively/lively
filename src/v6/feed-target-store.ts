@@ -7,10 +7,10 @@ import { q, one } from "../domainmap/db.js";
 export interface FeedTargetRow {
   id: number; system: string; instance: string | null; target_id: string;
   data_source_id: string | null; parent_page_id: string | null; title: string | null;
-  exclude_registered: boolean; state: string;
+  exclude_registered: boolean; all_categories: boolean; state: string;
 }
 
-const FT_COLS = "id, system, instance, target_id, data_source_id, parent_page_id, title, exclude_registered, state";
+const FT_COLS = "id, system, instance, target_id, data_source_id, parent_page_id, title, exclude_registered, all_categories, state";
 
 // 피드 목적지 등록(멱등 upsert — (system,instance,target_id) 좌표). 기존이면 메타 갱신.
 export async function createFeedTarget(t: {
@@ -44,11 +44,12 @@ export async function getFeedTarget(id: number): Promise<FeedTargetRow | null> {
 
 // 해소 캐시·상태 갱신(드레인이 data_source 를 lazy 해소하면 저장, exclude_pages 등록 후 플래그).
 export async function updateFeedTarget(
-  id: number, patch: { dataSourceId?: string | null; excludeRegistered?: boolean; title?: string | null; state?: string },
+  id: number, patch: { dataSourceId?: string | null; excludeRegistered?: boolean; allCategories?: boolean; title?: string | null; state?: string },
 ): Promise<void> {
   const sets: string[] = [], params: unknown[] = [];
   if (patch.dataSourceId !== undefined) { params.push(patch.dataSourceId); sets.push(`data_source_id=$${params.length}`); }
   if (patch.excludeRegistered !== undefined) { params.push(patch.excludeRegistered); sets.push(`exclude_registered=$${params.length}`); }
+  if (patch.allCategories !== undefined) { params.push(patch.allCategories); sets.push(`all_categories=$${params.length}`); }
   if (patch.title !== undefined) { params.push(patch.title); sets.push(`title=$${params.length}`); }
   if (patch.state !== undefined) { params.push(patch.state); sets.push(`state=$${params.length}`); }
   if (!sets.length) return;
@@ -87,17 +88,25 @@ export async function categoriesForFeedTarget(feedTargetId: number): Promise<Arr
      WHERE cf.feed_target_id=$1 ORDER BY c.space, c.key`, [feedTargetId])) as Array<{ id: number; key: string; name: string | null; space: string }>;
 }
 
-// 드레인 대상 해소 — 이 feed_target 으로 발행할 지식 이름들(매핑 카테고리의 active·정본·authored).
-//  provenance='authored' 필수: observed(외부에서 들여온 미러)는 되쏘지 않는다. state='confirmed' 카테고리만.
+// 드레인 대상 해소 — 이 feed_target 으로 발행할 지식 이름들.
+//  provenance='authored' 필수: observed(외부에서 들여온 미러)는 되쏘지 않는다.
+//  all_categories=true 면 매핑 무시하고 모든 authored 정본(도메인은 발행 시 best-effort 해소) — 새 카테고리 자동 포함.
+//  아니면 category_feed 매핑 카테고리의 confirmed 지식만.
 export async function listPublishableForFeedTarget(feedTargetId: number, limit = 500): Promise<string[]> {
   const lim = Math.min(Math.max(limit, 1), 5000);
-  const rows = await q(itemsPool,
-    `SELECT DISTINCT k.name
-     FROM category_feed cf
-     JOIN knowledge_category kc ON kc.category_id=cf.category_id AND kc.state='confirmed'
-     JOIN knowledge k ON k.name=kc.name AND k.lifecycle='active' AND k.provenance='authored'
-     WHERE cf.feed_target_id=$1
-     ORDER BY k.name
-     LIMIT $2`, [feedTargetId, lim]);
+  const ft = await getFeedTarget(feedTargetId);
+  if (!ft) return [];
+  const rows = ft.all_categories
+    ? await q(itemsPool,
+        `SELECT k.name FROM knowledge k
+         WHERE k.provenance='authored' AND k.lifecycle='active'
+         ORDER BY k.name LIMIT $1`, [lim])
+    : await q(itemsPool,
+        `SELECT DISTINCT k.name
+         FROM category_feed cf
+         JOIN knowledge_category kc ON kc.category_id=cf.category_id AND kc.state='confirmed'
+         JOIN knowledge k ON k.name=kc.name AND k.lifecycle='active' AND k.provenance='authored'
+         WHERE cf.feed_target_id=$1
+         ORDER BY k.name LIMIT $2`, [feedTargetId, lim]);
   return rows.map((r) => r.name as string);
 }

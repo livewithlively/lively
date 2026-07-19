@@ -135,6 +135,9 @@ const ADMIN_SECTIONS = [
     // 커넥터 = **패시브 미러 싱크**(slack/notion/clickup/gmail/drive 를 우리 DB로 당겨온다). AI가 실시간 호출하는
     //  외부 시스템(=MCP 서버·사내 API 도구)과는 다른 것이다 — 그건 [AI 능력 ▸ 도구]에 있다.
     { key: 'connectors', label: '외부 자료 수집', meaning: null, group: 'data' },
+    // #976 위키 아웃바운드 — 우리 정본 지식을 외부(노션 등) '지식 피드' DB로 투영. 커넥터(인바운드)의 역방향.
+    //  피드 목적지 + 카테고리 N:M 매핑(발행 게이트) 관리. 사람 페이지 불가침 — 전용 피드 DB에만 카드 append.
+    { key: 'feed-targets', label: '위키 아웃바운드(피드)', meaning: null, group: 'data' },
     // DB 데이터소스 — 등록 + 테이블 정책·컬럼 마스킹 + 감사 대상 식별자(subject-key) + 원본 열람 grant.
     //  subject-key 는 구 [DB 접근 감사] 화면에 잘못 꽂혀 있었다 — 서버는 /org/db-source/* 하위 리소스로 본다(#837 에서 이관).
     { key: 'db-sources', label: 'DB 데이터소스', meaning: 'db-source', group: 'data' },
@@ -163,7 +166,7 @@ const SECTION_REMAP = {
 // 구 [검토 큐]는 관리탭을 떠나 WIKI 탭으로 갔다(#837) — 섹션 리맵이 아니라 탭 밖 리다이렉트라 따로 둔다.
 const SECTION_EXIT = { 'review-queue': '#/knowledge/review' };
 // admin 권한 전용(쓰기·인프라·감사). #318 호출통계·#549 변경감사는 전 구성원의 변경·before/after 를 노출하므로 admin.
-const ADMIN_ONLY = ['credentials', 'connectors', 'db-sources', 'storage', 'embeddings', 'automation', 'audit', 'ingest-policy', 'session-share'];
+const ADMIN_ONLY = ['credentials', 'connectors', 'feed-targets', 'db-sources', 'storage', 'embeddings', 'automation', 'audit', 'ingest-policy', 'session-share'];
 const RUNTIME_ONLY = ['agent-assets']; // runtime 권한 전용(멤버 머신에서 도는 것의 정의)
 // [도구]는 두 권한의 합집합 — 사내 API 도구·빌트인은 runtime, 외부 MCP 서버 등록은 admin. 둘 중 하나라도 있으면
 //  섹션을 보여주고, 안에서 각 서브탭을 권한별로 켠다(구조상 한 섹션=한 scope 전제가 깨지는 유일한 자리라 명시한다).
@@ -424,6 +427,8 @@ function renderAdminDetail(detail, sel, data) {
         return automationSection(detail, data);
     if (sel === 'connectors')
         return connectorEditor(detail, data);
+    if (sel === 'feed-targets')
+        return feedTargetsEditor(detail, data);
     if (sel === 'db-sources')
         return dbSourceEditor(detail, data);
     if (sel === 'credentials')
@@ -3823,6 +3828,141 @@ async function renderConnectorMemberPanel(panel, system) {
     }
     panel.replaceChildren(head, tbl);
 }
+// #976 위키 아웃바운드(피드) 패널 — 정본 지식 → 노션 등 '지식 피드' DB 카드 투영. 커넥터(인바운드)의 역방향.
+//  피드 목적지(feed_target) 목록 + 카테고리 N:M 매핑(발행 게이트) + all_categories + 새 피드 부트스트랩/등록.
+//  전용 GET /api/ui/feed-targets 로 자체 조회(연결 패널처럼) — /api/ui/org 페이로드 오염 안 시킴.
+async function feedTargetsEditor(detail, data) {
+    const meaning = data.meaning && data.meaning['feed-targets'];
+    detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('위키 아웃바운드(피드)', meaning), el('p', { class: 'admin-hint', text: '피드 목적지 불러오는 중…' })));
+    let res;
+    try {
+        res = await api('/api/ui/feed-targets');
+    }
+    catch (e) {
+        detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('위키 아웃바운드(피드)', meaning), el('p', { class: 'admin-hint', text: '로드 실패: ' + e.message })));
+        return;
+    }
+    const targets = res.targets || [];
+    const categories = res.categories || [];
+    const rerender = () => { void feedTargetsEditor(detail, data); };
+    const body = el('div', {});
+    // 소개 + 전체 발행(드레인) — 상시 갱신은 cron push-wiki-notion(자동화 탭).
+    const drainAll = el('button', { class: 'btn btn-ghost btn-sm', text: '지금 전체 발행' });
+    drainAll.addEventListener('click', async () => {
+        drainAll.disabled = true;
+        try {
+            await api('/api/ui/feed-targets/drain', { method: 'POST', body: '{}' });
+            toast('발행 시작 — 잠시 후 노션 피드에 반영됩니다(멱등 · 변경분만).');
+        }
+        catch (e) {
+            toast(e.message, true);
+        }
+        drainAll.disabled = false;
+    });
+    body.append(el('p', { class: 'admin-hint' }, el('span', { text: '우리 정본 지식(authored)을 노션 등 외부 ‘지식 피드’ DB에 카드로 투영합니다. 읽기전용·단방향 — 전체 내용은 Lively가 정본. 사람 페이지는 건드리지 않고 전용 피드 DB에만 카드를 올립니다. ' }), el('span', { text: '상시 갱신은 스케줄러 잡 ' }), el('b', { text: 'push-wiki-notion' }), el('span', { text: '(관리탭 ▸ 자동화)에서 켭니다.  ' }), drainAll));
+    if (!targets.length)
+        body.append(el('p', { class: 'admin-hint', text: '아직 등록된 피드가 없습니다. 아래에서 새 피드를 만드세요.' }));
+    for (const t of targets)
+        body.append(feedTargetCard(t, categories, rerender));
+    body.append(newFeedForm(rerender));
+    detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('위키 아웃바운드(피드)', meaning), body));
+}
+// 피드 목적지 카드 1개 — 상태·카드수·노션 링크 + all_categories 토글 + 카테고리 매핑 + 삭제.
+function feedTargetCard(t, categories, rerender) {
+    const notionUrl = 'https://notion.so/' + String(t.target_id || '').replace(/-/g, '');
+    const card = el('div', { class: 'card', style: 'margin-top:12px' });
+    card.append(el('div', { class: 'mini-title' }, el('span', { text: t.title || ('피드 #' + t.id) }), el('span', { class: 'pill' + (t.state === 'active' ? ' pill-ok' : ''), text: t.state === 'active' ? '활성' : '일시중지' }), el('span', { class: 'pill', text: '카드 ' + (t.card_count || 0) })));
+    card.append(el('div', { class: 'mini-meta' }, el('a', { href: notionUrl, target: '_blank', rel: 'noopener', text: '노션에서 열기 ↗' }), el('span', { text: t.exclude_registered ? '  · 인바운드 제외됨(안전)' : '  · ⚠ 인바운드 제외 미등록 — 재수집 위험' })));
+    // all_categories 토글
+    const allChk = el('input', { type: 'checkbox' });
+    allChk.checked = !!t.all_categories;
+    allChk.addEventListener('change', async () => {
+        try {
+            await api('/api/ui/feed-targets/' + t.id, { method: 'POST', body: JSON.stringify({ all_categories: allChk.checked }) });
+            toast('저장됨');
+            rerender();
+        }
+        catch (e) {
+            toast(e.message, true);
+            allChk.checked = !allChk.checked;
+        }
+    });
+    card.append(el('label', { class: 'field-label', style: 'display:block;margin-top:10px' }, allChk, el('span', { text: ' 모든 카테고리 발행(매핑 무시 · 새 카테고리 자동 포함)' })));
+    // 카테고리 매핑(all 아닐 때만) — 체크박스 + 저장.
+    if (!t.all_categories) {
+        const mappedIds = new Set((t.categories || []).map((c) => c.id));
+        const boxes = [];
+        const grid = el('div', { style: 'display:flex;flex-wrap:wrap;gap:8px;margin:8px 0' });
+        for (const c of categories) {
+            const cb = el('input', { type: 'checkbox', value: String(c.id) });
+            cb.checked = mappedIds.has(c.id);
+            boxes.push(cb);
+            grid.append(el('label', { class: 'pill' }, cb, el('span', { text: ' ' + (c.name || c.key) })));
+        }
+        const saveMap = el('button', { class: 'btn btn-ghost btn-sm', text: '매핑 저장' });
+        saveMap.addEventListener('click', async () => {
+            const ids = boxes.filter((b) => b.checked).map((b) => Number(b.value));
+            saveMap.disabled = true;
+            try {
+                await api('/api/ui/feed-targets/' + t.id + '/categories', { method: 'POST', body: JSON.stringify({ category_ids: ids }) });
+                toast('매핑 저장됨 — 다음 발행부터 반영');
+                rerender();
+            }
+            catch (e) {
+                toast(e.message, true);
+                saveMap.disabled = false;
+            }
+        });
+        card.append(el('div', { class: 'field-label', text: '발행할 카테고리' }), grid, saveMap);
+    }
+    const del = el('button', { class: 'btn-text', text: '삭제' });
+    del.addEventListener('click', async () => {
+        if (!confirm('이 피드 등록을 삭제할까요? (노션 DB와 이미 발행된 카드는 남습니다)'))
+            return;
+        try {
+            await api('/api/ui/feed-targets/' + t.id + '/delete', { method: 'POST', body: '{}' });
+            toast('삭제됨');
+            rerender();
+        }
+        catch (e) {
+            toast(e.message, true);
+        }
+    });
+    card.append(el('div', { style: 'margin-top:10px' }, del));
+    return card;
+}
+// 새 피드 만들기 — 부모 페이지 하위에 DB 생성(부트스트랩) 또는 기존 노션 DB id 등록. 둘 다 exclude_pages 자동 등록.
+function newFeedForm(rerender) {
+    const wrap = el('div', { class: 'card', style: 'margin-top:14px' });
+    const titleIn = el('input', { class: 'input', type: 'text', value: 'Lively 지식 피드' });
+    const parentIn = el('input', { class: 'input', type: 'text', placeholder: '노션 부모 페이지 URL 또는 id — 여기 하위에 피드 DB 생성' });
+    const dbIn = el('input', { class: 'input', type: 'text', placeholder: '또는: 이미 만든 노션 DB id 를 등록' });
+    const allChk = el('input', { type: 'checkbox' });
+    const create = el('button', { class: 'btn', text: '피드 만들기' });
+    create.addEventListener('click', async () => {
+        const payload = { title: titleIn.value.trim() || undefined, all_categories: allChk.checked };
+        if (dbIn.value.trim())
+            payload.database_id = dbIn.value.trim();
+        else if (parentIn.value.trim())
+            payload.parent_page_id = parentIn.value.trim();
+        else {
+            toast('노션 부모 페이지 또는 기존 DB id 중 하나를 입력하세요', true);
+            return;
+        }
+        create.disabled = true;
+        try {
+            const r = await api('/api/ui/feed-targets', { method: 'POST', body: JSON.stringify(payload) });
+            toast('피드 생성됨' + (r && r.exclude_registered ? ' · 인바운드 제외 등록됨' : ' · ⚠ 인바운드 제외 수동 등록 필요'));
+            rerender();
+        }
+        catch (e) {
+            toast(e.message, true);
+            create.disabled = false;
+        }
+    });
+    wrap.append(el('div', { class: 'field-label', text: '＋ 새 피드 만들기' }), el('div', { class: 'field' }, el('label', { class: 'field-label', text: '제목' }), titleIn), el('div', { class: 'field' }, el('label', { class: 'field-label', text: '노션 부모 페이지 (새로 만들 때)' }), parentIn), el('div', { class: 'field' }, el('label', { class: 'field-label', text: '기존 DB 등록 (선택)' }), dbIn), el('label', { class: 'field-label', style: 'display:block;margin-top:6px' }, allChk, el('span', { text: ' 모든 카테고리 발행' })), el('div', { style: 'margin-top:10px' }, create));
+    return wrap;
+}
 function dbSourceEditor(detail, data) {
     const sources = data.dbSources || [];
     const envSources = data.envSources || [];
@@ -4364,12 +4504,15 @@ function harnessAssetEditor(detail, data) {
     const assets = data.orgHarnessAssets || [];
     const sel = state.admin.assetSel;
     const KIND_LABEL = { skill: '스킬', subagent: '서브에이전트', command: '커맨드' };
+    // 멤버 셀프업로드(#990) 초안 = draft- 네임스페이스 + 비활성 + 제출자. 관리자가 [승격]으로 배포한다.
+    const isDraft = (a) => a.id && a.id.indexOf('draft-') === 0 && a.enabled === false && a.created_by;
     const listCol = el('div', { class: 'admin-sublist' });
     listCol.append(el('button', { class: 'btn btn-ghost btn-sm admin-add', text: '+ 추가',
         onclick: () => { state.admin.assetSel = '__new__'; renderAdminDetail(detail, 'harness-assets', data); } }));
     for (const a of assets) {
         listCol.append(el('div', { class: 'mini-row' + (a.id === sel ? ' sel' : ''),
-            onclick: () => { state.admin.assetSel = a.id; renderAdminDetail(detail, 'harness-assets', data); } }, el('div', { class: 'mini-title', text: a.id }, a.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null), el('div', { class: 'mini-meta', text: (KIND_LABEL[a.kind] || a.kind) + ' · ' + (a.harness || 'all')
+            onclick: () => { state.admin.assetSel = a.id; renderAdminDetail(detail, 'harness-assets', data); } }, el('div', { class: 'mini-title', text: a.id }, isDraft(a) ? el('span', { class: 'pill pill-warn', text: '제출 · ' + a.created_by })
+            : (a.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null)), el('div', { class: 'mini-meta', text: (KIND_LABEL[a.kind] || a.kind) + ' · ' + (a.harness || 'all')
                 + (a.target_members && a.target_members.length ? ' · 지정 ' + a.target_members.length + '명' : '')
                 + (a.paired_hook_id ? ' · 연결 훅:' + a.paired_hook_id : '') })));
     }
@@ -4446,6 +4589,27 @@ function assetForm(root, a, data, detail, isNew) {
         }
     });
     const actions = el('div', { class: 'admin-actions' }, saveBtn, status);
+    // #990 멤버 초안 승격 — draft- 네임스페이스 비활성 자산이면 클린 id 로 복제·활성화(초안 제거)하는 [승격] 노출.
+    const isDraft = !isNew && a.id && a.id.indexOf('draft-') === 0 && a.enabled === false && a.created_by;
+    if (isDraft)
+        actions.append(el('button', { class: 'btn btn-primary', text: '승격 →', onclick: async () => {
+                const suggested = a.id.replace(/^draft-[0-9a-f]+-/, '');
+                const newId = (prompt('조직에 배포할 클린 id (스킬 이름이 됩니다):', suggested) || '').trim().toLowerCase();
+                if (!newId)
+                    return;
+                if (!confirm(`'${a.created_by}' 님의 초안을 '${newId}' 로 승격해 배포합니다(초안은 제거). 계속할까요?`))
+                    return;
+                try {
+                    await api('/api/ui/org/harness-asset/adopt', { method: 'POST', body: JSON.stringify({ draft_id: a.id, new_id: newId, enabled: true }) });
+                    await loadAdmin(true);
+                    state.admin.assetSel = newId;
+                    toast('승격됨 — 구성원 다음 세션부터');
+                    renderAdminDetail(detail, 'harness-assets', state.admin.data);
+                }
+                catch (e) {
+                    toast(e.message, true);
+                }
+            } }));
     if (!isNew)
         actions.append(el('button', { class: 'btn-text', text: '제거', onclick: async () => {
                 if (!confirm(`'${a.id}' 제거? 다음 세션부터 구성원 하네스에서 제거됩니다(미접속 머신은 직전 상태 유지).`))
