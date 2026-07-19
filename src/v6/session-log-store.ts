@@ -122,6 +122,24 @@ export async function readSessionLog(nodeId: string, sessionId: string, from = 0
   return { from: start, bytes: total, data: Buffer.concat(parts) };
 }
 
+// 내 세션 목록(#905 C1 슬⑤b 웹뷰) — 소유자=요청자인 세션을 **모든 노드에서**(환경 무관 "내 세션들").
+//  회수 표면의 목록면: 어느 환경에서 만들었든 내 세션을 한 곳에서 본다. reap 된 세션도 남(bytes=0, session 불멸).
+export interface SessionListRow { node_id: string; session_id: string; harness: string | null; bytes: number; last_seen: string; }
+export async function listSessionsForOwner(owner: string, limit = 200): Promise<SessionListRow[]> {
+  if (!owner) return [];
+  const r = await itemsPool.query(
+    `SELECT s.node_id, s.session_id, s.harness, COALESCE(l.bytes, 0)::bigint AS bytes, s.last_seen
+       FROM session s LEFT JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id
+      WHERE s.owner = $1
+      ORDER BY s.last_seen DESC
+      LIMIT $2`,
+    [owner, Math.min(Math.max(Number(limit) || 200, 1), 500)]);
+  return r.rows.map((x) => ({
+    node_id: x.node_id, session_id: x.session_id, harness: x.harness,
+    bytes: Number(x.bytes), last_seen: x.last_seen,
+  }));
+}
+
 // 보존 reap(설계 §5 ③) — retentionDays 지나도록 **손대지 않은**(updated_at 기준) 로그를 통째로 지운다.
 //  · **세션 단위**로 지운다(청크만 부분삭제 금지 — offset 연속성이 깨져 회수가 구멍남). updated_at 은 마지막 append.
 //  · retentionDays<=0 → 무제한(아무것도 안 지움). session 레코드는 **불멸**(로그·청크만 삭제, '있었다'는 남는다).

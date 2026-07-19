@@ -13,8 +13,9 @@ import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { getRuntimeConfig } from "./org/store.js";
-import { appendSessionLog, sessionLogWatermark, sessionOwner, readSessionLog } from "./v6/session-log-store.js";
+import { appendSessionLog, sessionLogWatermark, sessionOwner, readSessionLog, listSessionsForOwner } from "./v6/session-log-store.js";
 import { sessionBoundToMemberProject } from "./v6/project-store.js";
+import { renderTranscript } from "./terminal-transcript.js";
 
 export const MAX_DELTA = 8 * 1024 * 1024;   // 한 번에 받는 델타 상한(8MB) — 큰 트랜스크립트도 청크로 나눠 보내게.
 
@@ -75,6 +76,14 @@ export function readRawBody(req: express.Request, limit: number): Promise<Buffer
 
 export function registerSessionLogRoutes(app: express.Express, verifier: BearerVerifier): void {
   const auth = sessionOrBearer(verifier);
+
+  // 내 세션 목록(웹뷰 슬⑤b) — 소유자=요청자인 세션을 모든 노드에서. "어느 환경에서 만들었든 내 세션들"의 목록면.
+  app.get("/api/ui/v6/sessions", auth, wrap(async (req, res) => {
+    const requester = idOf(userOf(req));
+    if (!requester) throw new HttpError(403, "사용자 신원이 없습니다");
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ sessions: await listSessionsForOwner(requester) });
+  }));
 
   // 델타 append — offset-CAS. at=현재 보낸 쪽 오프셋, node=실행 노드('' 기본). 응답 {ok, verdict, bytes} 로 오프셋 정정.
   app.post("/api/ui/v6/sessions/:id/log", auth, wrap(async (req, res) => {
@@ -146,6 +155,10 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
 
     const log = await readSessionLog(nodeId, sessionId, from);
     res.setHeader("Cache-Control", "no-store");
+    if (req.query.view === "render") {   // 웹뷰: 사람이 읽을 항목으로 파싱(채널필터) — 툴결과·노이즈 제거.
+      res.json({ from: log.from, bytes: log.bytes, items: renderTranscript(log.data.toString("utf8")) });
+      return;
+    }
     res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
     res.setHeader("X-Log-Bytes", String(log.bytes));   // 전체 워터마크 — UI 가 증분 tail 에 쓴다
     res.setHeader("X-Log-From", String(log.from));

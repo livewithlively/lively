@@ -56,6 +56,51 @@ export async function sessionPrompts(cwd: string, limit = 300): Promise<{ prompt
   return { prompts: out.slice(-limit), total, found: true };
 }
 
+// 세션이력 웹뷰 렌더(#905 C1 슬⑤b) — 중앙에서 받은 트랜스크립트 JSONL **원문**을 사람이 읽을 항목으로 파싱한다.
+//  "채널필터"(설계 §5 — 의미 있는 4.2%만): **사람 발화 + 어시스턴트 산문 + 툴콜 이름**만 남기고
+//  툴결과·서명·토큰통계·주입노이즈는 버린다. 순수함수(파일·DB 무관) — 원문 문자열만 받아 단위검증 가능.
+export interface TranscriptItem { role: "user" | "assistant" | "tool"; text: string; ts?: string; tool?: string }
+
+// 툴 입력 한 줄 요약 — 흔한 필드(명령·경로·패턴) 우선, 없으면 첫 문자열 값. 길면 자른다(렌더 노이즈 억제).
+function toolSummary(input: unknown): string {
+  if (input == null) return "";
+  const o = input as Record<string, unknown>;
+  const pick = o.command ?? o.file_path ?? o.path ?? o.pattern ?? o.query ?? o.url ?? o.description;
+  let s = typeof pick === "string" ? pick : "";
+  if (!s) { for (const v of Object.values(o)) { if (typeof v === "string" && v.trim()) { s = v; break; } } }
+  s = (s || "").replace(/\s+/g, " ").trim();
+  return s.length > 140 ? s.slice(0, 140) + "…" : s;
+}
+
+export function renderTranscript(jsonl: string, limit = 5000): TranscriptItem[] {
+  const out: TranscriptItem[] = [];
+  for (const line of jsonl.split("\n")) {
+    if (!line.trim()) continue;
+    let o: any;
+    try { o = JSON.parse(line); } catch { continue; }
+    if (!o || o.isMeta || o.isSidechain) continue;
+    const ts: string = o.timestamp || "";
+    if (o.type === "user") {
+      const c = o.message && o.message.content;
+      let text = "";
+      if (typeof c === "string") text = c;
+      else if (Array.isArray(c)) text = c.filter((x: any) => x && x.type === "text").map((x: any) => x.text || "").join("\n");
+      text = (text || "").trim();
+      if (!text || INJECTED_RE.test(text)) continue;   // 툴결과(배열이 tool_result 뿐)·주입 메시지 제외 → 사람 발화만
+      out.push({ role: "user", text, ts });
+    } else if (o.type === "assistant") {
+      const c = o.message && o.message.content;
+      if (!Array.isArray(c)) continue;
+      for (const b of c) {
+        if (b && b.type === "text" && typeof b.text === "string" && b.text.trim()) out.push({ role: "assistant", text: b.text.trim(), ts });
+        else if (b && b.type === "tool_use" && b.name) out.push({ role: "tool", tool: String(b.name), text: toolSummary(b.input), ts });
+      }
+    }
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 // 여러 세션 통합 검색(#745) — 접근 가능한 세션들의 트랜스크립트에서 질문을 찾아 어느 세션인지와 함께 반환.
 //  단순 부분문자열이 아니라 **토큰(공백분리) AND + 관련도 랭킹**: 모든 단어를 포함한 질문(순서·조사 무관)을
 //  경계·빈도·근접·정확구문 점수로 정렬. 전부 매치되는 게 없으면 **부분(일부 단어) 폴백**으로 그래도 결과를 준다.
