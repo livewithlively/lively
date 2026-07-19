@@ -334,9 +334,12 @@ export async function initV6Schema(): Promise<string> {
       parent_page_id TEXT,
       title TEXT,
       exclude_registered BOOLEAN NOT NULL DEFAULT false,
+      all_categories BOOLEAN NOT NULL DEFAULT false,
       state TEXT NOT NULL DEFAULT 'active',
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+    -- all_categories = 매핑 무시하고 모든 authored 정본 지식을 이 피드로(새 카테고리 자동 포함). 기존 테이블 비파괴 추가.
+    ALTER TABLE feed_target ADD COLUMN IF NOT EXISTS all_categories BOOLEAN NOT NULL DEFAULT false;
     DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='feed_target'::regclass AND conname='feed_target_state_chk') THEN
         ALTER TABLE feed_target ADD CONSTRAINT feed_target_state_chk CHECK (state IN ('active','paused'));
