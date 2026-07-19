@@ -306,6 +306,22 @@ export async function isProjectMember(projectId: number, memberId: string): Prom
   return (r.rowCount ?? 0) > 0;
 }
 
+// 세션이력 웹뷰 열람권한(#905 C1, view_policy="attach") — 이 세션이 **한 번이라도** 바인딩됐던 프로젝트 중
+//  memberId 가 생성자/멤버인 곳이 있나(시간구간 전체 조회). DB 기반이라 **끝난 세션(tmux 없음)도** 판정된다
+//  (canAttach 는 살아있는 tmux 기준이라 죽은 세션엔 못 씀 — 웹뷰는 DB 기반이어야 한다, 설계 §5).
+export async function sessionBoundToMemberProject(sessionId: string, memberId: string): Promise<boolean> {
+  if (!sessionId || !memberId) return false;
+  const r = await itemsPool.query(
+    `SELECT 1 FROM session_project sp
+       JOIN project p ON p.id = sp.project_id AND p.level='project'
+      WHERE sp.session_id = $1
+        AND (p.created_by = $2 OR EXISTS(
+          SELECT 1 FROM project_member pm WHERE pm.project_id = p.id AND pm.member_id = $2))
+      LIMIT 1`,
+    [sessionId, memberId]);
+  return (r.rowCount ?? 0) > 0;
+}
+
 // 내 상태 메시지(이 프로젝트 한정) 저장 — project_member.status_message 를 (project,member) 단위로 갱신.
 //  팀원 행이 없으면(생성자라서 멤버 미등록 등) 만들어 둔다. 빈 문자열은 NULL 로 저장(상태 없음).
 export async function setProjectMemberStatus(projectId: number, memberId: string, message: string | null): Promise<string | null> {

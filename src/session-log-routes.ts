@@ -13,7 +13,8 @@ import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { getRuntimeConfig } from "./org/store.js";
-import { appendSessionLog, sessionLogWatermark, sessionOwner } from "./v6/session-log-store.js";
+import { appendSessionLog, sessionLogWatermark, sessionOwner, readSessionLog } from "./v6/session-log-store.js";
+import { sessionBoundToMemberProject } from "./v6/project-store.js";
 
 export const MAX_DELTA = 8 * 1024 * 1024;   // 한 번에 받는 델타 상한(8MB) — 큰 트랜스크립트도 청크로 나눠 보내게.
 
@@ -31,6 +32,20 @@ export function checkAppendGate(g: AppendGateInput): { status: number; message: 
   if (g.harness && !g.harnesses.includes(g.harness)) return { status: 403, message: `하네스 '${g.harness}' 는 수집 대상이 아닙니다` };
   if (g.owner && g.owner !== g.requester) return { status: 403, message: "이 세션 로그의 소유자가 아닙니다" };
   return null;
+}
+
+// 웹뷰 열람 인가 판정(순수, #905 C1 슬2d) — 트랜스크립트 **전문**이 나가므로 프라이버시 게이트. ok면 null.
+//  · 신원부재 → 403. · 소유자면 항상 허용(view_policy 무관 — 자기 로그). · view_policy="attach" 면 프로젝트 멤버도 허용.
+//  · 그 외(owner 정책의 비소유자 등) → 403. 열람은 resume 보다 넓다(canViewLog ≠ canResumeAsOrigin, 설계 §5).
+//    isProjectMember 는 라우트가 DB 로 채운다(attach 이고 비소유자일 때만 필요 — 소유자면 조회조차 안 함).
+export interface ViewGateInput {
+  requester: string; owner: string | null; viewPolicy: string; isProjectMember: boolean;
+}
+export function checkViewGate(g: ViewGateInput): { status: number; message: string } | null {
+  if (!g.requester) return { status: 403, message: "사용자 신원이 없습니다" };
+  if (g.owner && g.owner === g.requester) return null;                    // 소유자는 언제나 자기 로그를 본다
+  if (g.viewPolicy === "attach" && g.isProjectMember) return null;        // 프로젝트 멤버 열람(DB 기반, 죽은 세션도)
+  return { status: 403, message: "이 세션 로그를 볼 권한이 없습니다" };
 }
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
@@ -105,5 +120,35 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
       bytes: await sessionLogWatermark(nodeId, sessionId),
       capture: { enabled: c.enabled, harnesses: c.harnesses, scope: c.scope, store: c.store },
     });
+  }));
+
+  // 트랜스크립트 회수(웹뷰, 슬2d) — from 바이트부터 끝까지 JSONL 원문을 돌려준다(렌더는 클라).
+  //  열람권한: 소유자(항상) 또는 view_policy="attach" 면 이 세션이 바인딩됐던 프로젝트의 멤버(DB 기반 — 죽은 세션도).
+  //  capture.enabled 와 **무관** — 이미 수집된 로그는 조직이 껐어도 소유자·멤버가 볼 수 있다(껐다고 과거를 못 보게 하진 않음).
+  app.get("/api/ui/v6/sessions/:id/log", auth, wrap(async (req, res) => {
+    const requester = idOf(userOf(req));
+    if (!requester) throw new HttpError(403, "사용자 신원이 없습니다");
+    const sessionId = String(req.params.id ?? "");
+    if (!SID_RE.test(sessionId)) throw new HttpError(400, "세션 id 형식 오류");
+    const nodeId = String(req.query.node ?? "");
+    if (!NODE_RE.test(nodeId)) throw new HttpError(400, "node 형식 오류");
+    const from = req.query.from !== undefined ? Number(req.query.from) : 0;
+    if (!Number.isFinite(from) || from < 0 || Math.floor(from) !== from) throw new HttpError(400, "from(오프셋)은 0 이상 정수여야 합니다");
+
+    // 열람 게이트(순수 checkViewGate) — owner·view_policy·멤버십. attach 이고 비소유자일 때만 멤버십 DB 조회.
+    const cfg = (await getRuntimeConfig()).session_share;
+    const owner = await sessionOwner(nodeId, sessionId);
+    const isOwner = !!owner && owner === requester;
+    const isProjectMember = !isOwner && cfg.view_policy === "attach"
+      ? await sessionBoundToMemberProject(sessionId, requester) : false;
+    const denied = checkViewGate({ requester, owner, viewPolicy: cfg.view_policy, isProjectMember });
+    if (denied) throw new HttpError(denied.status, denied.message);
+
+    const log = await readSessionLog(nodeId, sessionId, from);
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+    res.setHeader("X-Log-Bytes", String(log.bytes));   // 전체 워터마크 — UI 가 증분 tail 에 쓴다
+    res.setHeader("X-Log-From", String(log.from));
+    res.end(log.data);
   }));
 }
