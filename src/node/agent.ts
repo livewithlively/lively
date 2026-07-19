@@ -24,6 +24,7 @@ import {
 } from "./protocol.js";
 // 위탁 태스크(P2) — 러너/리소스 샘플러는 중앙(게이트웨이 내장 노드)과 공유(node/tasks.ts).
 import { sampleResources, detectDocker, spawnTaskSession, checkTask, tailTask, type TaskWatch, type RunTaskInput } from "./tasks.js";
+import { provisionProjectRepos, type RepoSpec as ProvisionRepoSpec } from "../project-provision.js";
 import { logger } from "../log.js";
 
 const GW_URL = process.env.LIVELY_GATEWAY_URL || "";
@@ -99,6 +100,42 @@ class ChanSocket implements AttachSocket {
 //  에이전트 재시작 시 비워지지만, 게이트웨이가 재연결 때 watchTask 로 재장전한다(복구 경로).
 const trackedTasks = new Map<number, TaskWatch>();
 
+// ── 프로젝트 provision 백그라운드 작업(#905 C4) — projectId 로 키잉. clone 은 분 단위라 RPC 로 못 기다린다. ──
+//  provision op 는 여기 등록만 하고 즉답 → 게이트웨이가 provisionStatus 로 폴링. 멱등: 이미 있는 클론/워크트리는
+//  재사용이라 재시작(맵 소실) 후 재-provision 도 안전하고 빠르다.
+type ProvisionJob = { state: "running" | "done" | "error"; result?: unknown; error?: string; at: number };
+const provisionJobs = new Map<number, ProvisionJob>();
+const PROVISION_JOB_TTL_MS = 60 * 60 * 1000;   // done/error 는 1시간 뒤 정리(맵 무한증식 방지 — 프로젝트 수는 적다)
+
+// started:true = 새로 시작 · false = 이미 진행 중이라 이 요청 specs 를 안 받음(coalesce). 게이트웨이가 이 구분을 로그에 쓴다.
+function startProvision(args: Record<string, unknown>): { started: boolean } {
+  const projectId = Number(args.projectId);
+  const folder = String(args.folder ?? "");
+  const specs = Array.isArray(args.specs) ? args.specs as ProvisionRepoSpec[] : [];
+  const memberId = args.memberId ? String(args.memberId) : null;
+  if (!projectId || !folder) throw new Error("provision: projectId·folder 필수");
+  // 정리 — 오래된 종료 작업 제거.
+  for (const [k, j] of provisionJobs) if (j.state !== "running" && Date.now() - j.at > PROVISION_JOB_TTL_MS) provisionJobs.delete(k);
+  const cur = provisionJobs.get(projectId);
+  // 🔴 started:false = 이미 돌고 있어 **이 요청의 specs 를 안 받았다**(coalesce). 게이트웨이가 로그로 알 수 있게 구분한다
+  //  (항상 true 면 "다른 specs 로 조용히 끝남"을 아무도 모른다).
+  if (cur?.state === "running") return { started: false };   // 진행 중이면 중복 시작 안 함(idempotent)
+  const job: ProvisionJob = { state: "running", at: Date.now() };
+  provisionJobs.set(projectId, job);
+  // 백그라운드 실행 — await 하지 않는다(즉답). 결과/실패를 job 에 적어 폴링이 회수한다.
+  void provisionProjectRepos(projectId, folder, specs, { clone: args.clone !== false, memberId })
+    .then((result) => { job.state = "done"; job.result = result; job.at = Date.now(); })
+    .catch((e) => { job.state = "error"; job.error = e instanceof Error ? e.message : String(e); job.at = Date.now(); });
+  return { started: true };
+}
+
+function provisionStatus(projectId: number): ProvisionJob & { known: boolean } {
+  const j = provisionJobs.get(projectId);
+  //  맵에 없음 = 이 노드가 재시작됐거나 애초에 안 받음 → known:false 로 알려 게이트웨이가 재-provision 하게 한다.
+  if (!j) return { known: false, state: "error", error: "no-provision-job", at: 0 };
+  return { known: true, ...j };
+}
+
 // 세션 작업폴더(@box_dir) 기준 안전 경로(#875) — .. 탈출 거부. requireSub 면 base 자체(빈 경로)는 파일 op 대상 불가로 거부.
 async function nodeSessionAbs(id: string, sub: string, requireSub = false): Promise<{ base: string; abs: string }> {
   const base = path.resolve(await sessionDir(id));
@@ -126,6 +163,12 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
       return { ok: true };
     }
     case "tailTask": return tailTask(String(args.taskDir), Number(args.from) || 0);
+    // 프로젝트 레포 provision(#905 C4) — clone 은 RPC 15s 를 넘기므로 **백그라운드로 시작만 하고 즉답**한다.
+    //  게이트웨이가 provisionStatus 로 폴링해 완료를 기다린다. 게이트웨이가 레지스트리 git_url·자격을 spec.inject 로
+    //  실어 보내므로(노드엔 DB 없음) provisionProjectRepos 가 그대로 돈다 — 경로모델(PROJECT_SHARED_BASE·
+    //  confineToWorkspace·assertDiskWritable)은 노드 자기 workspace 기준으로 동작한다.
+    case "provision": return startProvision(args);
+    case "provisionStatus": return provisionStatus(Number(args.projectId));
     case "list": return listSessionsRaw();
     case "create": {
       const session = await createSession(user, args.input as CreateInput);

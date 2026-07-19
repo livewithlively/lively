@@ -13,7 +13,7 @@ import { assertDiskWritable } from "./disk-guard.js"; // #813 T5 — 클론 전�
 import { getRepo } from "./domainmap/core/repos.js";
 import { sanitizeCloneUrl } from "./domainmap/core/queries.js";
 import { HttpError } from "./capabilities/rest-util.js";
-import { resolveGitSecret, hostOf, isAuthError, prepareGitAuth, describeGitError } from "./org/git-credential-store.js";
+import { resolveGitSecret, leaseGitSecretForNode, hostOf, isAuthError, prepareGitAuth, describeGitError } from "./org/git-credential-store.js";
 import type { GitCredentialSecret } from "./org/git-credential-store.js";
 
 // 노드 provision 주입 묶음(#905 C4) — DB 를 아는 게이트웨이가 조회해 넘기고, DB 가 없는 노드는 그걸 그대로 쓴다.
@@ -25,6 +25,19 @@ import type { GitCredentialSecret } from "./org/git-credential-store.js";
 //    그걸 그대로 노드에 주입하면 **조직 공용 git 키가 멤버 노트북으로 나간다**(권한 상승). 그래서 호출자가
 //    본인 자격만 해소해 넘기는 형태로 못 박는다 — 이 모듈은 받은 것만 쓴다.
 export interface RepoProvisionAuth { gitUrl: string | null; secret?: GitCredentialSecret | null }
+
+// 노드로 내보낼 레포 주입을 해소하는 **단일 관문**(#905 C4) — 위탁(task-scheduler)·프로젝트(provision-remote) 공용.
+//  DB(레지스트리 git_url + 자격)를 아는 게이트웨이에서만 부른다. 자격 정책(member=본인만 · worker=조직폴백)은
+//  leaseGitSecretForNode 안에 갇혀 있다 — 여기서 resolveGitSecret 을 쓰면 안 된다(그건 무조건 조직폴백이라
+//  member 노드로 조직 키가 샌다). 두 호출자가 이 함수만 쓰게 해 정책 우회 지점을 하나로 모은다.
+export async function resolveRepoInject(
+  repo: string, requesterId: string, nodeKind: "member" | "worker",
+): Promise<RepoProvisionAuth> {
+  const row = await getRepo(repo).catch(() => null);
+  const host = hostOf(row?.git_url);
+  const secret = host ? await leaseGitSecretForNode(requesterId, host, nodeKind).catch(() => null) : null;
+  return { gitUrl: row?.git_url ?? null, secret };
+}
 // hostOf·isAuthError·prepareGitAuth 는 git-credential-store 로 이관(#606, 스캐너와 공유). 하위호환·기존 테스트 위해 re-export.
 export { hostOf, isAuthError, prepareGitAuth, type GitAuth } from "./org/git-credential-store.js";
 
@@ -33,7 +46,10 @@ const REPO_NAME_RE = /^[A-Za-z0-9._-]{1,100}$/;        // 경로 컴포넌트로
 const BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._\/-]{0,99}$/; // git 브랜치명(선두 특수문자 금지)
 const GIT_TIMEOUT_MS = 180_000;
 
-export interface RepoSpec { name: string; path?: string; worktree?: boolean; branch?: string; }
+//  inject(#905 C4) — **노드 실행 전용**. 게이트웨이가 이 레포의 git_url + (정책에 맞는) 자격을 해소해 실어 보낸다.
+//   노드엔 DB 가 없어 getRepo/resolveGitSecret 이 실패하므로, spec 에 실려 오면 ensureBaseClone 이 DB 대신 이걸 쓴다.
+//   게이트웨이 로컬(중앙) 실행 땐 미설정 → 종전대로 DB 를 읽는다.
+export interface RepoSpec { name: string; path?: string; worktree?: boolean; branch?: string; inject?: RepoProvisionAuth; }
 //  subpath = cwd 의 workspace 루트 기준 상대경로. 워크트리(project/<id>/<repo>)면 프로젝트 폴더 안이라 세션 cwd 로 쓸 수 있다
 //   (세션 POST 가 프로젝트 폴더 봉쇄를 거므로). 클론 직접작업(workspace/repos/<repo>)이면 프로젝트 폴더 밖이라 세션 cwd 불가.
 export interface ProvisionedRepo { name: string; path: string; worktree: boolean; branch: string | null; cwd: string; subpath: string; cloned: boolean; }
@@ -347,7 +363,8 @@ export async function provisionProjectRepos(
     if (!BRANCH_RE.test(branch)) throw new HttpError(400, `브랜치명 형식 오류: ${branch}`);
 
     // ①·② 공유 base 확보(clone 또는 재사용+FF) — 자격주입·디스크가드·RO 리프레시는 ensureBaseClone 공용(위탁도 재사용).
-    const { repoPath, cloned } = await ensureBaseClone(name, opts?.memberId ?? null, { inputPath: spec.path, allowClone });
+    //  spec.inject 가 있으면(노드 실행) DB 대신 그걸 쓴다 — 없으면(중앙) 종전대로 DB 조회(무회귀).
+    const { repoPath, cloned } = await ensureBaseClone(name, opts?.memberId ?? null, { inputPath: spec.path, allowClone, inject: spec.inject });
 
     // ③ worktree 옵션 — project/<id>/<name> 에 브랜치 격리(이미 있으면 재사용). 미사용 시 cwd=클론 경로.
     let cwd = repoPath;
