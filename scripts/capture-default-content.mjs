@@ -41,6 +41,7 @@ const KNOWLEDGE_NAMES = [
 const SEED_DISABLED = new Set([
   "project-pull-turn",   // #828 — 턴마다 shared pull. 매니페스트 축소(#829)가 전제라 각 고객이 판단해 켠다.
   "project-push",        // #905 C3 — 턴 끝 up-sync. 팀 공유문서를 덮어쓸 수 있고 sync="both" 옵트인이 전제라 각 고객이 판단해 켠다.
+  "session-log-capture", // #905 C1 — 턴 끝 트랜스크립트 캡처. 대화 전문이 중앙에 저장되므로 관리탭 ▸ 세션 공유로 조직이 명시 opt-in.
 ]);
 
 const here = path.dirname(fileURLToPath(import.meta.url));

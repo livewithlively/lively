@@ -79,7 +79,9 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     res.json(r);   // { ok, verdict, bytes } — 보낸 쪽이 bytes 로 로컬 오프셋을 정정한다.
   }));
 
-  // 재연결 오프셋 고지 — 보낸 쪽이 "어디부터 보내야 하나"를 묻는다. append 와 같은 게이트(소유자).
+  // 재연결 오프셋 고지 + 캡처 정책 — 캡처 훅이 **한 번의 GET**으로 "보내야 하나·어떻게·어디부터"를 다 받는다
+  //  (로컬 오프셋 상태 파일 불요 — 서버 워터마크가 오프셋의 진실). append 와 같은 소유자 게이트.
+  //  capture 는 비밀이 아닌 정책 플래그라 인증된 멤버에게 노출해도 안전(훅이 이걸로 조기 종료 판단).
   app.get("/api/ui/v6/sessions/:id/log/watermark", auth, wrap(async (req, res) => {
     const requester = idOf(userOf(req));
     if (!requester) throw new HttpError(403, "사용자 신원이 없습니다");
@@ -89,7 +91,11 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     if (!NODE_RE.test(nodeId)) throw new HttpError(400, "node 형식 오류");
     const owner = await sessionOwner(nodeId, sessionId);
     if (owner && owner !== requester) throw new HttpError(403, "이 세션 로그의 소유자가 아닙니다");
+    const c = (await getRuntimeConfig()).session_share;
     res.setHeader("Cache-Control", "no-store");
-    res.json({ bytes: await sessionLogWatermark(nodeId, sessionId) });
+    res.json({
+      bytes: await sessionLogWatermark(nodeId, sessionId),
+      capture: { enabled: c.enabled, harnesses: c.harnesses, scope: c.scope, store: c.store },
+    });
   }));
 }
