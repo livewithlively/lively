@@ -152,12 +152,16 @@ registerTool({
     + "반환된 worktree 경로에서 코드 작업(편집·커밋·빌드)을 하라 — base(pristine 공유 원본)에서 직접 작업하지 말 것. "
     + "프로젝트 세션이면 기본 경로는 <프로젝트 폴더>/<repo>(cwd 가 그 하위 어디든 같은 자리 — 서버 provision 과 동일 슬롯이라 서로 멱등)이고 "
     + "브랜치는 project/<id>. 이미 떠 있으면 그대로 재사용한다. 몇 초 내 동기 완결. 코드 작업이 필요할 때 먼저 이걸 호출해 작업면을 준비하라 "
-    + "— 세션이 코드 없는 폴더에서 떴어도 그게 정상이다(워크트리는 세션 생성이 아니라 이 툴이 만든다).",
+    + "— 세션이 코드 없는 폴더에서 떴어도 그게 정상이다(워크트리는 세션 생성이 아니라 이 툴이 만든다). "
+    + "⚠ path 로 스크래치패드 같은 임시경로를 지정하지 마라(기본값을 그대로 써라): 워크트리는 임시파일이 아니라 **작업면(영속 자산)**이다. "
+    + "'임시파일은 스크래치패드' 규칙은 여기 적용 안 된다 — 스크래치패드는 하네스가 청소하는 휘발성이라 커밋 전 작업이 사라지고, "
+    + "project/<id> 를 비-canonical 자리에 걸어 그 프로젝트의 서버 provision 을 막는다(#932).",
   inputSchema: {
     type: "object",
     properties: {
       repo: { type: "string", description: "레포 이름(lively_local_repo_list 의 name)" },
-      path: { type: "string", description: "워크트리를 만들 경로(절대 또는 cwd 상대). 기본: 프로젝트면 <프로젝트 폴더>/<repo>, 밖이면 cwd/<repo>. "
+      path: { type: "string", description: "워크트리를 만들 경로(절대 또는 cwd 상대). **보통 주지 마라 — 기본값(canonical 슬롯)이 맞다.** 기본: 프로젝트면 "
+        + "<프로젝트 폴더>/<repo>, 밖이면 cwd/<repo>. ⚠ 스크래치패드/임시경로 금지(휘발성 → 작업 유실, 비-canonical → project/<id> provision 충돌 #932). "
         + "여길 벗어나면 브랜치 기본값도 project/<id> 가 아니라 wt/<repo> 계열이 된다(같은 브랜치를 두 자리에 걸 수 없으므로)" },
       branch: { type: "string", description: "워크트리 브랜치. 기본: 기본 경로(프로젝트 슬롯)면 project/<id>, 그 외엔 wt/<repo>[-n]" },
       ref: { type: "string", description: "이 ref(origin/<ref>)에서 분기. 기본: origin 기본 브랜치 최신" },
@@ -231,7 +235,8 @@ registerTool({
     properties: {
       repo: { type: "string", description: "레포 이름(lively_local_repo_list 의 name)" },
       ref: { type: "string", description: "핀할 ref(origin/<ref>). 기본: origin 기본 브랜치(main 등)" },
-      path: { type: "string", description: "핀 경로(절대 또는 cwd 상대). 기본: OS 임시디렉터리(세션 임시물)" },
+      path: { type: "string", description: "핀 경로(절대 또는 cwd 상대). 기본: OS 임시디렉터리 밑 repo+SHA(content-addressed — "
+        + "같은 SHA 는 세션 간 공유, 다른 SHA 는 공존)" },
     },
     required: ["repo"],
     additionalProperties: false,
@@ -242,17 +247,20 @@ registerTool({
 registerTool({
   name: "lively_local_repo_pin_remove",
   title: "핀 제거",
-  description: "lively_local_repo_pin 으로 만든 읽기전용 핀을 제거한다(base·작업 워크트리 무영향). 분석이 끝나면 호출해 정리한다.",
+  description: "lively_local_repo_pin 으로 만든 읽기전용 핀을 제거한다(base·작업 워크트리 무영향). 분석이 끝나면 호출해 정리한다. "
+    + "기본 경로는 repo+SHA 라, 핀 때와 같은 ref 를 줘야 그 SHA 의 핀을 찾아 지운다(기본은 원격 기본 브랜치로 대칭). "
+    + "핀이 이미 없어도 에러가 아니다(best-effort) — 다른 세션의 다른 SHA 핀은 건드리지 않는다.",
   inputSchema: {
     type: "object",
     properties: {
       repo: { type: "string", description: "레포 이름" },
-      path: { type: "string", description: "핀 경로(생성 때 지정했다면 같은 값). 기본: 생성 때와 동일 기본값" },
+      ref: { type: "string", description: "핀 때 쓴 ref(origin/<ref>). 기본: origin 기본 브랜치 — 기본 경로 SHA 를 이 ref 로 해석해 찾는다" },
+      path: { type: "string", description: "핀 경로(생성 때 --path 를 지정했다면 같은 값). 지정 시 ref 는 무시" },
     },
     required: ["repo"],
     additionalProperties: false,
   },
-  handler: (args, ctx) => ctx.text(`핀 제거됨: ${repoPinRemove(ctx, args).removed}`),
+  handler: (args, ctx) => { const r = repoPinRemove(ctx, args); return ctx.text(r.removed ? `핀 제거됨: ${r.removed}` : (r.note || "제거할 핀 없음")); },
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

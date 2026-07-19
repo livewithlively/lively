@@ -15,6 +15,7 @@ import { projectAbsPath } from "./project-fs.js";
 import { listSessions, createSession } from "./terminal-sessions.js";
 import { ensureAgentsMd, readProjectAgentsMd } from "./v6/agents-md.js";
 import { provisionProjectRepos } from "./project-provision.js";
+import { provisionProjectOnNode } from "./node/provision-remote.js";
 import { receiveUpload, uploadError } from "./upload-file.js";
 import { manifestFiles } from "./project-manifest.js";
 
@@ -252,14 +253,20 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     res.json({ session });
   }));
 
-  // ── ②-b 박스 레포 provision — 입력 경로 확보(없으면 레지스트리 clone_url 로 clone) + 옵션 worktree(project/<id>/<repo>).
-  //  서버가 박스에서 직접 실행(work.mjs 의 서버측 대응). 결과 경로는 .lively/project.json(provisioned)에 기록. 전원 접근(#452). ──
+  // ── ②-b 레포 provision — 입력 경로 확보(없으면 레지스트리 clone_url 로 clone) + 옵션 worktree(project/<id>/<repo>).
+  //  기본은 게이트웨이(박스)가 직접 실행(work.mjs 의 서버측 대응). body.node 를 주면 **그 원격 노드에서** provision 한다
+  //  (#905 C4 — 노드엔 DB 가 없어 게이트웨이가 git_url·자격을 실어 보낸다). 결과 경로는 그 실행 호스트의
+  //  .lively/project.json(provisioned)에 기록된다. 전원 접근(#452). ──
   app.post(`${prefix}/:id/provision`, auth, wrap(async (req, res) => {
     const { project } = await projBase(Number(req.params.id));
     const b = (req.body ?? {}) as Record<string, unknown>;
     const specs = Array.isArray(b.repos) ? b.repos as { name: string; path?: string; worktree?: boolean; branch?: string }[] : [];
     if (!specs.length) throw new HttpError(400, "provision 할 레포가 없습니다");
-    const provisioned = await provisionProjectRepos(project.id, project.folder, specs, { clone: b.clone !== false, memberId: userOf(req).userId ?? null });
+    const nodeId = String(b.node ?? "").trim();
+    const requester = userOf(req).userId ?? "";
+    const provisioned = nodeId
+      ? await provisionProjectOnNode(nodeId, project.id, project.folder, specs, requester)
+      : await provisionProjectRepos(project.id, project.folder, specs, { clone: b.clone !== false, memberId: requester || null });
     res.setHeader("Cache-Control", "no-store");
     res.json({ provisioned });
   }));

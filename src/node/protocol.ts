@@ -70,7 +70,9 @@ export interface CloseChanMsg { t: "close"; chan: number }
 const NODE_OPS_V1 = ["list", "create", "kill", "edit", "gone", "label", "runTask", "watchTask", "tailTask",
   "fsLs", "fsRead", "fsWrite", "fsMkdir", "prompts"] as const;
 // v1 이후 추가된 op — 이걸 지원하는 노드는 hello.caps 로 **스스로 선언한다**. 선언 없으면 게이트웨이가 안 보낸다.
-const NODE_OPS_NEW = [] as const;
+//  provision = 프로젝트 레포를 노드에 clone→worktree(#905 C4, 비동기 — clone 이 RPC 15s 를 넘겨 백그라운드로 돈다).
+//  provisionStatus = 그 백그라운드 작업 상태 폴링(즉답 — RPC 안에 든다). 이 둘이 "노드에서 프로젝트 provision"의 실체다.
+const NODE_OPS_NEW = ["provision", "provisionStatus"] as const;
 
 // 이 빌드가 아는 op 전량. **타입이 이 배열에서 파생**되므로 목록과 타입이 어긋날 수 없다.
 export const NODE_OPS = [...NODE_OPS_V1, ...NODE_OPS_NEW] as const;

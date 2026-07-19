@@ -141,15 +141,24 @@ export async function resolveGitSecret(memberId: string | null | undefined, host
   return getGitSecret(GATEWAY_OWNER, h);
 }
 
-// 🔴 **원격 노드로 내보낼** git 자격(#905 C4) — 위 resolveGitSecret 과 의도적으로 다르다: **조직 폴백이 없다.**
-//  노드는 멤버 개인 노트북일 수 있다. 거기로 게이트웨이(조직) 공용 git 키를 보내면 그 머신을 가진 사람이 조직
-//  전체 레포 권한을 손에 쥔다 — 권한 상승이고, 한 번 나간 키는 회수할 수 없다.
-//  이건 새 원칙이 아니라 이미 선 선례다: 위탁 태스크의 하네스 자격 리스도 `getMemberSecret(t.requester, ...)` 로
-//  **본인 것만** 싣고 조직 폴백이 없다(node/task-scheduler.ts). 나가는 자격은 의뢰자 본인 것뿐이다.
+// 🔴 **원격 노드로 내보낼** git 자격(#905 C4) — 노드 종류가 신뢰경계를 가른다. 조직 폴백은 여기서만 판정한다.
+//  · member 노드 = **멤버 개인 노트북** → 본인 자격만. 조직 공용 키를 개인 머신에 보내면 그 머신 주인이 조직
+//    전체 레포 권한을 쥔다 — 권한 상승이고 한 번 나간 키는 회수할 수 없다. (선례: 하네스 자격 리스도
+//    getMemberSecret(t.requester) 로 본인 것만 싣는다 — node/task-scheduler.ts.)
+//  · worker 노드 = **조직이 세운 공용 실행기**(admin 만 등록) → 조직 자격 폴백 허용(2026-07-19 윤상민 결정).
+//    개인 머신이 아니라 조직이 소유·통제하는 인프라라, 게이트웨이 안에서 클론하는 것과 신뢰경계가 같다.
 //  null 이면 자격 없이 보낸다 → 공개 레포는 클론되고, 비공개면 노드의 git 이 인증 실패를 정확한 사유로 보고한다.
-export async function leaseGitSecretForNode(requesterId: string, host: string): Promise<GitCredentialSecret | null> {
-  if (!requesterId) return null;
-  return getGitSecret(memberOwner(requesterId), normalizeHost(host));
+//  ⚠ 이 함수가 노드로 나가는 자격의 **유일한 관문**이다 — 호출자(스케줄러·라우트)가 GATEWAY_OWNER 를 직접
+//   집으면 이 정책을 우회한다. 그래서 org-fallback 결정을 이 한 곳에 가둔다(스케줄러는 이 함수만 부른다).
+export async function leaseGitSecretForNode(
+  requesterId: string, host: string, nodeKind: "member" | "worker",
+): Promise<GitCredentialSecret | null> {
+  const h = normalizeHost(host);
+  if (requesterId) {
+    const mine = await getGitSecret(memberOwner(requesterId), h);
+    if (mine) return mine;
+  }
+  return nodeKind === "worker" ? getGitSecret(GATEWAY_OWNER, h) : null;
 }
 
 // ── git 호스트/자격주입 헬퍼 — provision(project-provision.ts)·도메인맵 스캐너(domainmap/git-pull.ts·webhook.ts)가 공유.

@@ -11,13 +11,13 @@
 //  규율: base working tree 는 안 건드리고 origin/<ref> 최신에서 워크트리를 분기한다(base RO). 서버측
 //   provisionProjectRepos·로컬 work.mjs 의 clone/worktree 와 동형이되 프로젝트에 매이지 않는다.
 // ═══════════════════════════════════════════════════════════════════════════
-import { readFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, readdirSync, statSync, rmSync } from "node:fs";
 import { join, dirname, isAbsolute, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 
 const HOME = process.env.LIVELY_HOME || homedir();
 const LIVELY = join(HOME, ".lively");
-export const REPO_NAME_RE = /^[A-Za-z0-9._-]{1,100}$/;         // 경로 컴포넌트 — 슬래시·.. 금지(project-provision 과 동일)
+export const REPO_NAME_RE = /^(?!\.+$)[A-Za-z0-9._-]{1,100}$/; // 경로 컴포넌트 — 슬래시 금지 + 점세그먼트(.·..·…) 거부(traversal 방지, project-provision 과 동일). 이름 속 점(my.repo)은 허용
 export const BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/; // git 브랜치명(선두 특수문자 금지)
 
 // 이 머신의 base 레포 dir — 박스/워커: <work-root>/repos · 로컬 PC: ~/lively/repos.
@@ -158,8 +158,13 @@ async function ensureBase(ctx, repo, base) {
   }
 }
 
-// 핀 경로 — 지정 없으면 OS 임시디렉터리(세션 임시물). 작업 워크트리와 섞이지 않게 별도 루트.
-const pinPathOf = (ctx, repo, p) => (p ? (isAbsolute(p) ? p : join(ctx.cwd, p)) : join(tmpdir(), "lively-pin", repo));
+// 핀 경로 — 지정 없으면 tmpdir 밑 **repo + SHA** 로 content-addressed(#932). 작업 워크트리와 섞이지 않게 별도 루트.
+//  ⚠ 왜 SHA 를 박나: macOS `tmpdir()` 는 **세션당이 아니라 유저당** 하나다. sha 없이 `lively-pin/<repo>` 한 자리를
+//   쓰면, 세션 A 가 SHA1 을 핀한 사이 main 이 전진해 세션 B 가 SHA2 를 핀할 때 repoPin 이 A 의 핀을 force-remove 하고
+//   SHA2 로 덮어쓴다 — A 는 같은 경로를 계속 읽는데 발밑 코드가 바뀐다(핀이 막으려던 HEAD 드리프트를 핀이 세션 간에
+//   재도입). SHA 를 경로에 박으면 같은 SHA 는 공유(dedup)·다른 SHA 는 공존, force-remove 자체가 필요 없어진다.
+//   지정 경로(p)는 호출자가 자리를 명시한 것이라 그대로 둔다(그 자리의 스톰프는 호출자 책임).
+const pinPathOf = (ctx, repo, p, sha) => (p ? (isAbsolute(p) ? p : join(ctx.cwd, p)) : join(tmpdir(), "lively-pin", repo, sha));
 
 // 이 머신에서 뜰 수 있는 등록 레포 + 로컬 base 상태(clone 여부·브랜치·origin 대비 최신).
 export async function repoList(ctx) {
@@ -229,6 +234,31 @@ export async function repoWorktree(ctx, args) {
     note: `이 경로에서 작업하세요: ${wt} · base(${base})는 pristine 공유 원본이라 직접 작업 금지(커밋·빌드는 워크트리에서).` };
 }
 
+// 오래된 핀 청소(#932) — content-addressed 라 SHA 마다 새 디렉터리(~20MB)가 쌓인다. repo_pin_remove 가 안 불리면
+//  (세션 크래시·스킬 스킵·main 이동으로 remove 가 현재 SHA 만 지목) tmpdir 에 누적된다. OS tmp 정리(macOS ~3일·
+//  Linux tmpfiles)가 백스톱이지만 장수 박스에선 순간 수백 MB. **데몬이 아니라 핀 호출 시점**(caller-triggered)에,
+//  이 repo 의 핀 중 mtime 이 TTL 을 넘긴 것만 best-effort 로 걷는다 — 핀은 읽기전용·재생성 자명이라 안전하고,
+//  지금 뜰 SHA(keepSha)와 TTL 미만은 안 건드린다(진행 중 분석 보호). "무인 자동삭제 데몬 금지"(haru) 원칙과 무충돌.
+const PIN_TTL_MS = Number(process.env.LIVELY_PIN_TTL_MS) || 14 * 24 * 60 * 60 * 1000; // 14일 (env 로 override — 테스트용)
+function sweepStalePins(ctx, base, repo, keepSha) {
+  let swept = 0;
+  try {
+    const root = join(tmpdir(), "lively-pin", repo);
+    const now = Date.now();
+    for (const ent of readdirSync(root, { withFileTypes: true })) {
+      if (!ent.isDirectory() || ent.name === keepSha) continue;      // 현재 SHA 는 보호
+      const dir = join(root, ent.name);
+      let mtimeMs; try { mtimeMs = statSync(dir).mtimeMs; } catch { continue; }
+      if (now - mtimeMs < PIN_TTL_MS) continue;                       // TTL 미만 = 진행 중일 수 있음 → 보존
+      ctx.sh("git", ["-C", base, "worktree", "remove", "--force", dir], { allowFail: true }); // 등록+디렉터리
+      try { rmSync(dir, { recursive: true, force: true }); } catch { /* 등록 없는 고아까지 */ }
+      swept++;
+    }
+    if (swept) ctx.sh("git", ["-C", base, "worktree", "prune"], { allowFail: true });
+  } catch { /* root 없음 등 — 무해 */ }
+  return swept;
+}
+
 // 핀 안내문 — 규약을 반환값에 실어 나른다(스킬이 절차를 중복 서술하지 않아도 되도록).
 const pinNote = (pin, repo, sha) =>
   `이후 이 레포의 코드 인용·grep 은 이 핀 경로에서만: ${pin} · 리포트·지식엔 경로가 아니라 '${repo}@${sha}' 로 앵커하라`
@@ -247,9 +277,14 @@ export async function repoPin(ctx, args) {
   const target = `origin/${refBranch}`;
   const sha = ctx.sh("git", ["-C", base, "rev-parse", "--short", target], { allowFail: true }).stdout.trim();
   if (!sha) throw new Error(`ref 해석 실패: ${target} (레포 '${repo}') — ref 이름을 확인하세요.`);
-  const pin = pinPathOf(ctx, repo, args.path && String(args.path).trim());
+  const pin = pinPathOf(ctx, repo, args.path && String(args.path).trim(), sha);
 
-  // 이미 핀이 있으면 — 같은 SHA 면 재사용(멱등), 다르면 갈아끼운다(핀은 읽기전용 일회용이라 안전).
+  // 오래된 핀 GC — 이 핀 호출을 트리거 삼아, 이 repo 의 TTL 넘긴 핀을 걷는다(현재 SHA 는 보호). 누적 릭 방지(#932).
+  sweepStalePins(ctx, base, repo, sha);
+
+  // 이미 이 경로에 핀이 있으면 재사용(멱등). 기본 경로는 content-addressed 라 여기 걸리면 곧 같은 SHA 다(다른 SHA 는
+  //  애초에 다른 경로 = 스톰프 불가). HEAD 가 그 SHA 와 어긋난 이상 상태만 **우리 자신의 이 경로**를 고쳐 다시 뜬다
+  //  — 지우는 건 (기본이면) 이 SHA 의 자리이거나 (지정이면) 호출자가 명시한 자리라, 남의 세션 핀이 아니다(#932).
   if (isGitRepo(ctx, pin)) {
     const cur = ctx.sh("git", ["-C", pin, "rev-parse", "--short", "HEAD"], { allowFail: true }).stdout.trim();
     if (cur === sha) return { repo, pin, sha, ref: refBranch, base, reused: true, note: pinNote(pin, repo, sha) };
@@ -263,14 +298,28 @@ export async function repoPin(ctx, args) {
   return { repo, pin, sha, ref: refBranch, base, committed, reused: false, note: pinNote(pin, repo, sha) };
 }
 
-// 핀 제거 — 읽기전용 사본이라 항상 force(낙서가 있어도 버린다). base·작업 워크트리 무영향.
+// 핀 제거 — 읽기전용 사본이라 force(낙서 무시). base·작업 워크트리 무영향.
+//  기본 경로는 content-addressed(repo+sha)라 지우려면 SHA 를 알아야 한다 → origin/<ref> 를 repoPin 과 **같은 방식**으로
+//  다시 해석해 **그 SHA 의 핀만** 지운다(다른 세션의 다른 SHA 핀은 안 건드린다, #932). ref 는 핀 때와 같은 값을 줘야
+//  맞아떨어진다(기본은 원격 기본 브랜치로 대칭). **best-effort**: 핀이 이미 없어도(main 이 그새 움직여 SHA 가 달라졌거나
+//  tmpdir 이 청소됐거나) 에러가 아니다 — 스테일 등록만 털고 removed:null 로 알린다(남는 detached 핀은 읽기전용이라 무해).
 export function repoPinRemove(ctx, args) {
   const repo = String(args.repo || "").trim();
   if (!REPO_NAME_RE.test(repo)) throw new Error(`레포 이름 형식 오류(영숫자.-_): ${repo}`);
   const base = join(reposDir(), repo);
-  const pin = pinPathOf(ctx, repo, args.path && String(args.path).trim());
+  const explicit = args.path && String(args.path).trim();
+  let pin;
+  if (explicit) {
+    pin = isAbsolute(explicit) ? explicit : join(ctx.cwd, explicit);
+  } else {
+    const refBranch = args.ref && BRANCH_RE.test(String(args.ref).trim()) ? String(args.ref).trim() : remoteDefaultBranch(ctx, base);
+    const sha = ctx.sh("git", ["-C", base, "rev-parse", "--short", `origin/${refBranch}`], { allowFail: true }).stdout.trim();
+    if (!sha) { pruneWorktrees(ctx, base); return { removed: null, note: `핀을 특정할 수 없습니다(origin/${refBranch} 해석 실패) — 스테일 등록만 정리했습니다.` }; }
+    pin = pinPathOf(ctx, repo, null, sha);
+  }
   const r = ctx.sh("git", ["-C", base, "worktree", "remove", "--force", pin], { allowFail: true });
-  if (r.code !== 0) throw new Error(`핀 제거 실패: ${gitFail(r.stderr)}`);
+  pruneWorktrees(ctx, base); // 남은 등록 정리
+  if (r.code !== 0) return { removed: null, note: `핀이 이미 없거나 제거 실패(무해): ${gitFail(r.stderr)}` };
   return { removed: pin };
 }
 
