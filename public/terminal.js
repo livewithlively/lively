@@ -1153,7 +1153,7 @@ async function boot() {
     style: 'display:none; text-decoration:none' });
   const toolbar = el('div', { class: 'toolbar' },
     el('button', { class: 'tbtn', text: '📁 파일 탐색기', title: '파일 탐색기 열기/닫기 (업로드·다운로드)', onclick: toggleExplorer }),
-    titleEl, projectBtnEl,
+    projectBtnEl, titleEl,
     el('span', { class: 'spacer' }), statusEl,
     el('button', { class: 'tbtn', text: '💬 내 질문', title: '이 세션에서 클로드에게 보낸 질문 목록 — 클릭하면 그 위치로 이동', onclick: openMyPrompts }),
     el('button', { class: 'tbtn', text: '⟳ 화면 복구', title: '화면이 깨지거나 어긋났을 때 재연결로 복구(소프트 새로고침)', onclick: softReconnect }),
