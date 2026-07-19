@@ -108,7 +108,7 @@ export interface SessionInfo {
   //  @box_last_busy(tmux 세션 옵션)로 영속 → 게이트웨이가 재기동해도 유지(tmux 서버가 더 오래 산다).
   lastActive?: number;
 }
-export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; }
+export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; resume?: string; }
 
 const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "user";
 const userSlug = (u: LivelyUser): string => slug(u.userId || u.email || "user");
@@ -510,6 +510,11 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   const appliedFlags: Record<string, string> = {}; // 생성 시 적용한 플래그 — @box_flags 로 저장(수정 팝업 표시용).
   if (harness.bin) {
     cmd.push(harness.bin);
+    // 이어받기(#905 C1) — claude 하네스에 한해 --resume <sid> 주입(그 세션 대화를 이어서 연다). sid 형식 검증.
+    if (input.resume && harness.key === "claude") {
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(input.resume)) throw new HttpError(400, "resume 세션 id 형식이 잘못되었습니다");
+      cmd.push("--resume", input.resume);
+    }
     for (const def of harness.flags) {
       const raw = input.flags?.[def.name];
       if (raw === undefined || raw === null || raw === "") continue;

@@ -14,8 +14,10 @@ import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { getRuntimeConfig } from "./org/store.js";
 import { appendSessionLog, sessionLogWatermark, sessionOwner, readSessionLog, listSessionsForOwner, listSessionsForProject } from "./v6/session-log-store.js";
-import { sessionBoundToMemberProject, isProjectMember, recordSessionProject } from "./v6/project-store.js";
-import { renderTranscript } from "./terminal-transcript.js";
+import { sessionBoundToMemberProject, isProjectMember, recordSessionProject, latestProjectForSession } from "./v6/project-store.js";
+import { renderTranscript, firstTranscriptCwd, materializeTranscriptIfMissing } from "./terminal-transcript.js";
+import { createSession, SHARED_ROOT } from "./terminal-sessions.js";
+import path from "node:path";
 
 export const MAX_DELTA = 8 * 1024 * 1024;   // 한 번에 받는 델타 상한(8MB) — 큰 트랜스크립트도 청크로 나눠 보내게.
 
@@ -185,5 +187,55 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     res.setHeader("X-Log-Bytes", String(log.bytes));   // 전체 워터마크 — UI 가 증분 tail 에 쓴다
     res.setHeader("X-Log-From", String(log.from));
     res.end(log.data);
+  }));
+
+  // 이어 질문하기(#905 C1) — 이 세션을 **원본 박스에서** claude --resume 로 잇는 새 터미널 세션을 만든다.
+  //  소유자만(이어받기는 열람보다 강한 게이트). 원본이 박스(node_id='')·cwd 가 공유 루트 아래면 그 경로로 열어
+  //  로컬 기록을 잇고(없으면 중앙본을 그 경로로 물질화). 원격 노드/경로불명이면 같은 프로젝트에 '새 세션' 폴백(이력 없음).
+  app.post("/api/ui/v6/sessions/:id/resume", auth, wrap(async (req, res) => {
+    const requester = idOf(userOf(req));
+    if (!requester) throw new HttpError(403, "사용자 신원이 없습니다");
+    const sessionId = String(req.params.id ?? "");
+    if (!SID_RE.test(sessionId)) throw new HttpError(400, "세션 id 형식 오류");
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const nodeId = String(body.node ?? req.query.node ?? "");
+    if (!NODE_RE.test(nodeId)) throw new HttpError(400, "node 형식 오류");
+    // 소유자 게이트 — 이어받기는 소유자만.
+    const owner = await sessionOwner(nodeId, sessionId);
+    if (!owner) throw new HttpError(404, "세션 기록이 없습니다");
+    if (owner !== requester) throw new HttpError(403, "이 세션을 이어받을 수 없습니다(소유자만 가능).");
+
+    const log = await readSessionLog(nodeId, sessionId, 0);
+    if (!log.bytes) throw new HttpError(404, "이어받을 중앙 기록이 없습니다(내용 0).");
+    const cwd = firstTranscriptCwd(log.data.toString("utf8"));
+    const proj = await latestProjectForSession(sessionId);
+    const user = userOf(req);
+    const sharedBase = SHARED_ROOT.base;
+    const underShared = !!cwd && (cwd === sharedBase || cwd.startsWith(sharedBase + "/"));
+
+    // 원본이 이 박스이고 cwd 가 공유 루트 아래 → 원본 경로에서 이어받기(로컬 없으면 중앙본 물질화).
+    if (nodeId === "" && underShared && cwd) {
+      await materializeTranscriptIfMissing(cwd, sessionId, log.data);
+      const session = await createSession(user, {
+        label: `이어보기 · ${sessionId.slice(0, 8)}`, rootKey: "shared", subpath: path.relative(sharedBase, cwd),
+        harness: "claude", flags: {}, autoApprove: false, resume: sessionId, projectId: proj?.id, projectSrc: "v6",
+      });
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ mode: "resume", session, projectId: proj?.id ?? null, cwd });
+      return;
+    }
+
+    // 폴백 — 원격 노드/경로불명: 같은 프로젝트에 '원본 기반' 새 세션(이력 없음). 프로젝트도 없으면 만들 수 없음.
+    if (proj?.folder) {
+      const session = await createSession(user, {
+        label: `새 세션(원본 기반) · ${sessionId.slice(0, 8)}`, rootKey: "shared", subpath: proj.folder,
+        harness: "claude", flags: {}, autoApprove: false, projectId: proj.id, projectSrc: "v6",
+      });
+      res.setHeader("Cache-Control", "no-store");
+      res.json({ mode: "fallback", session, projectId: proj.id,
+        reason: nodeId ? "원본이 원격 노드라 여기서 바로 이어받을 수 없어, 같은 프로젝트에 새 세션을 만들었습니다." : "원본 실행 경로를 찾지 못해 같은 프로젝트에 새 세션을 만들었습니다." });
+      return;
+    }
+    throw new HttpError(409, "원본 머신을 열 수 없고 연결된 프로젝트도 없어 이어받기 세션을 만들 수 없습니다.");
   }));
 }

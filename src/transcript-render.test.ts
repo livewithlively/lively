@@ -2,7 +2,7 @@
 //  실행: npm run build && node dist/transcript-render.test.js
 //  계약(채널필터): 사람 발화 + 어시스턴트 산문 + 툴콜 이름만 남기고, 툴결과·주입노이즈·메타는 버린다.
 import assert from "node:assert/strict";
-import { renderTranscript } from "./terminal-transcript.js";
+import { renderTranscript, firstTranscriptCwd } from "./terminal-transcript.js";
 import { firstUserPromptTitle } from "./v6/session-log-store.js";
 
 let pass = 0;
@@ -132,6 +132,20 @@ const J = (o: unknown) => JSON.stringify(o);
   ].join("\n");
   assert.deepEqual(renderTranscript(jsonl).map((i) => i.text), ["진짜 질문"], "답변 전 취소된 질문도 폐기");
   ok("답변 시작 전 취소 → 질문 폐기");
+}
+
+// ── firstTranscriptCwd — 이어받기(#905 C1)가 원본 실행 경로를 본문에서 회수 ──
+{
+  const jsonl = [
+    J({ type: "user", message: { content: "안녕" } }),                                  // cwd 없음
+    J({ type: "user", cwd: "/Users/a/.openclaw/workspace/project/905", message: { content: "hi" } }),
+    J({ type: "assistant", cwd: "/other/path", message: { content: [{ type: "text", text: "x" }] } }),
+  ].join("\n");
+  assert.equal(firstTranscriptCwd(jsonl), "/Users/a/.openclaw/workspace/project/905", "첫 cwd 를 회수(뒤의 다른 cwd 무시)");
+  assert.equal(firstTranscriptCwd(J({ type: "user", message: { content: "no cwd" } })), null, "cwd 없으면 null");
+  assert.equal(firstTranscriptCwd("{깨진}\n" + J({ cwd: "/p" })), "/p", "깨진 줄 건너뛰고 회수");
+  assert.equal(firstTranscriptCwd(J({ type: "user", cwd: "  ", message: {} })), null, "공백 cwd 는 무시");
+  ok("firstTranscriptCwd — 첫 유효 cwd 회수 · 없으면 null · 깨진 줄 스킵");
 }
 
 console.log(`\n${pass} passed`);

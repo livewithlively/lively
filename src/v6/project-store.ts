@@ -349,6 +349,19 @@ export async function recordSessionProject(sessionId: string, projectId: number)
     [sessionId, projectId]);
 }
 
+// 이어받기(#905 C1) — 이 세션의 **가장 최근 바인딩** 프로젝트 id(+박스 폴더). 없으면 null. 세션이 어느 프로젝트에서
+//  돌았는지로 이어받기 세션의 작업 경로·멤버십 게이트를 정한다.
+export async function latestProjectForSession(sessionId: string): Promise<{ id: number; folder: string } | null> {
+  if (!sessionId) return null;
+  const r = await itemsPool.query(
+    `SELECT p.id, COALESCE(p.folder,'') AS folder
+       FROM session_project sp JOIN project p ON p.id = sp.project_id
+      WHERE sp.session_id = $1 ORDER BY sp.valid_from DESC LIMIT 1`,
+    [sessionId]);
+  const row = r.rows[0] as { id: number; folder: string } | undefined;
+  return row ? { id: Number(row.id), folder: String(row.folder || "") } : null;
+}
+
 // ── 폴더 바인딩(#905 P1-①) — "이 프로젝트가 어느 멤버의 어느 환경에서 어느 절대경로에 사는가"(N:M). ──
 //  project.folder(1:1, 박스 정본)로는 표현 불가한 나머지(멤버 노트북·워커노드·사용자 자기 폴더)를 담는다.
 //  ⚠ project_folder(클릭업 Folder)와 무관 — 스키마 주석(v6/schema.ts 6a-2) 참조.

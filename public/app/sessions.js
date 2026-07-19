@@ -168,6 +168,26 @@ async function renderTranscriptPage(view, sel) {
     const { sid, node } = sel;
     const copyBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '🔗 링크 복사' });
     copyBtn.addEventListener('click', () => copyLink(buildShareLink(sid, node)));
+    // 이어 질문하기 — 원본 박스에서 이 세션을 claude --resume 로 잇는다(원격/불가면 같은 프로젝트 새 세션 폴백).
+    const resumeBtn = el('button', { class: 'btn btn-primary btn-sm', text: '💬 이어 질문하기' });
+    resumeBtn.addEventListener('click', async () => {
+        const orig = resumeBtn.textContent;
+        resumeBtn.disabled = true;
+        resumeBtn.textContent = '여는 중…';
+        try {
+            const r = await api(`/api/ui/v6/sessions/${encodeURIComponent(sid)}/resume?node=${encodeURIComponent(node)}`, { method: 'POST', body: '{}' });
+            if (r?.mode === 'resume')
+                toast('원본 박스에 이어보기 세션을 만들었습니다 — 터미널에서 이어서 대화하세요.');
+            else
+                toast(r?.reason || '같은 프로젝트에 새 세션을 만들었습니다.');
+            location.hash = r?.projectId ? '#/projects2/p/' + r.projectId : '#/terminal';
+        }
+        catch (e) {
+            toast(e?.message || '이어받기 세션을 만들지 못했습니다.');
+            resumeBtn.disabled = false;
+            resumeBtn.textContent = orig || '💬 이어 질문하기';
+        }
+    });
     let returnTo = '#/sessions';
     try {
         returnTo = sessionStorage.getItem('sessReturn') || '#/sessions';
@@ -176,7 +196,7 @@ async function renderTranscriptPage(view, sel) {
     const back = el('a', { class: 'btn btn-ghost btn-sm', href: returnTo, text: '← 뒤로' });
     const sideSlot = el('nav', { class: 'sess-side' });
     const convo = el('div', { class: 'sess-main', style: 'min-width:0' }, el('p', { class: 'admin-hint', text: '불러오는 중…' }));
-    view.replaceChildren(el('div', { class: 'card', style: 'max-width:1160px;margin:20px auto' }, el('div', { class: 'card-head', style: 'display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap' }, el('h2', { id: 'sess-title', style: 'font-size:16px;margin:0;overflow:hidden;text-overflow:ellipsis', text: '세션 ' + shortId(sid) }), el('div', { style: 'display:flex;gap:6px' }, copyBtn, back)), el('div', { class: 'sess-layout', style: 'display:flex;gap:20px;align-items:flex-start;margin-top:8px' }, sideSlot, convo)));
+    view.replaceChildren(el('div', { class: 'card', style: 'max-width:1160px;margin:20px auto' }, el('div', { class: 'card-head', style: 'display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap' }, el('h2', { id: 'sess-title', style: 'font-size:16px;margin:0;overflow:hidden;text-overflow:ellipsis', text: '세션 ' + shortId(sid) }), el('div', { style: 'display:flex;gap:6px;flex-wrap:wrap' }, resumeBtn, copyBtn, back)), el('div', { class: 'sess-layout', style: 'display:flex;gap:20px;align-items:flex-start;margin-top:8px' }, sideSlot, convo)));
     const qy = new URLSearchParams({ node, view: 'render' }).toString();
     let data;
     try {

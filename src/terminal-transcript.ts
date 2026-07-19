@@ -16,6 +16,30 @@ function projectDirFor(cwd: string): string {
 
 export interface Prompt { text: string; ts: string; }
 
+// 트랜스크립트 원문에서 **첫 cwd**(세션이 실행된 절대경로)를 뽑는다 — 이어받기(#905 C1)에서 그 경로로 세션을 열어야
+//  claude --resume 이 로컬 jsonl(경로=cwd 인코딩)을 찾는다. 세션 row 엔 cwd 가 없어 본문에서 회수한다.
+export function firstTranscriptCwd(jsonl: string): string | null {
+  for (const line of jsonl.split("\n")) {
+    if (!line.trim() || line.indexOf('"cwd"') < 0) continue;
+    let o: { cwd?: unknown };
+    try { o = JSON.parse(line); } catch { continue; }
+    if (o && typeof o.cwd === "string" && o.cwd.trim()) return o.cwd.trim();
+  }
+  return null;
+}
+
+// 중앙 트랜스크립트를 이 박스의 claude 프로젝트 경로로 물질화 — **없을 때만**(라이브 로컬 기록을 덮지 않는다).
+//  이어받기가 로컬 기록이 이미 있으면 그대로, 리핑/타지 유입이면 중앙본으로 채운다. 비격리 박스(공유 ~/.claude) 전제.
+export async function materializeTranscriptIfMissing(cwd: string, sessionId: string, data: Buffer): Promise<boolean> {
+  const dir = projectDirFor(cwd);
+  const file = path.join(dir, `${sessionId}.jsonl`);
+  try { await fsp.access(file); return false; }   // 이미 있음 → 안 건드림
+  catch { /* 없음 → 물질화 */ }
+  await fsp.mkdir(dir, { recursive: true });
+  await fsp.writeFile(file, data);
+  return true;
+}
+
 // 사용자 질문이 아닌 '주입/노이즈' 메시지 — 슬래시커맨드 래퍼·태스크알림·시스템리마인더·caveat·중단표시 등.
 const INJECTED_RE = /^\s*(<command-name|<local-command-|<command-message|<command-args|<bash-|<task-notification|<system-reminder|\[Request interrupted|Caveat:|This session is being continued)/;
 // 사용자가 보내고 esc 로 취소한 표식('[Request interrupted by user]' / '...for tool use'). 그 앞 턴을 폐기하는 신호.
