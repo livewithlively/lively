@@ -1615,7 +1615,9 @@ function dashTourStep1() {
         target: '[data-tour="new-session"]',
         title: '① 새 세션 만들기',
         body: [el('p', { class: 'tour-p' }, '바로 옆 ', el('b', { text: '[+ 새 세션]' }), ' 을 눌러 주세요 — 세션 만들기 창이 이 대시보드 위에 바로 열려요.')],
-        placement: 'bottom', advanceOn: 'click',
+        // scrollIntoView: 세션이 여러 개면 [+ 새 세션]이 목록 아래(뷰포트 밖)로 밀린다 — 그럼 스포트라이트 구멍이
+        //  화면 밖이 돼(hole 높이 0) 딤이 통째로 덮고 버튼 클릭이 막힌다(#1000 버그). 진입 시 버튼을 화면 안으로 스크롤.
+        placement: 'bottom', advanceOn: 'click', scrollIntoView: true,
     };
 }
 // #req 세션 0개 첫 사용자 빈 상태 — 'AI 세션이 뭔지' 쉬운 설명 + 바로 시작(따라하기/새 세션). 팝업·투어 모두 대시보드에서.

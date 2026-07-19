@@ -7,8 +7,10 @@
 //   가리켜도 댕글링이 된다. 이 스크립트가 캡처한 데이터를 seed-content.ts 가 기동시 idempotent 시딩한다.
 //
 //  실행(canonical 게이트웨이 앱 루트, 빌드·.env 후):
-//    node --env-file=.env scripts/capture-default-content.mjs
-//  → src/org/default-content.ts 재생성. 커밋 전 `git diff` 로 의도한 변경만 들어갔는지 확인할 것.
+//    node --env-file=.env scripts/capture-default-content.mjs                  # 전체 캡처(종전 동작)
+//    node --env-file=.env scripts/capture-default-content.mjs --dry-run --diff # 안 쓰고 '바뀔 것'만(+본문 라인 diff)
+//    node --env-file=.env scripts/capture-default-content.mjs --only id1,id2   # 그 id 변경만 반영, 나머지 시드 보존
+//  → 항상 항목별 diff(추가/변경/제거)를 찍는다. src/org/default-content.ts 재생성 후 커밋 전 `git diff` 로 재확인.
 //  (DB 없이 지식만 다시 굳히려면 `node scripts/sync-seed-knowledge.mjs` — seed-knowledge/*.md 편집 후.)
 //
 //  ⚠ 훅·스킬은 org_hook/org_harness_asset **전체**를 캡처한다 — 이 스크립트는 defaults 의 SoT 인
@@ -117,37 +119,140 @@ export const DEFAULT_KNOWLEDGE: DefaultKnowledge[] = ${j(knowledge)};
 `;
 }
 
+// ── 항목별 diff / 선택 캡처 헬퍼(#988) — dev DB 를 통째로 쓸어오지 않고, 무엇이 바뀌는지 보고 골라 반영한다. ──
+export function parseCaptureArgs(argv) {
+  const a = { dryRun: false, diff: false, only: null };
+  for (let i = 0; i < argv.length; i++) {
+    const t = argv[i];
+    if (t === "--dry-run" || t === "-n") a.dryRun = true;
+    else if (t === "--diff") a.diff = true;
+    else if (t === "--only") a.only = (argv[++i] || "").split(",").map((s) => s.trim()).filter(Boolean);
+    else if (t.startsWith("--only=")) a.only = t.slice("--only=".length).split(",").map((s) => s.trim()).filter(Boolean);
+    else if (t === "--help" || t === "-h") {
+      console.log("사용법: capture-default-content.mjs [--dry-run] [--diff] [--only id1,id2]\n" +
+        "  --dry-run  파일 안 쓰고 바뀔 것만 보여줌\n" +
+        "  --diff     변경 항목의 본문 라인 diff 까지\n" +
+        "  --only     지정한 id 의 변경만 반영(나머지 시드는 현행 유지). 없으면 전체 캡처(종전 동작).");
+      process.exit(0);
+    }
+  }
+  if (a.only) a.only = new Set(a.only);
+  return a;
+}
+const byId = (rows) => new Map(rows.map((r) => [r.id, r]));
+// 현재 시드 vs DB 캡처 항목별 판정(추가/변경/제거) — id 기준, JSON 동등성으로 변경 감지.
+export function diffRows(current, next) {
+  const c = byId(current), n = byId(next), added = [], changed = [], removed = [];
+  for (const id of new Set([...c.keys(), ...n.keys()])) {
+    if (n.has(id) && !c.has(id)) added.push(id);
+    else if (!n.has(id) && c.has(id)) removed.push(id);
+    else if (JSON.stringify(c.get(id)) !== JSON.stringify(n.get(id))) changed.push(id);
+  }
+  return { added: added.sort(), changed: changed.sort(), removed: removed.sort() };
+}
+// 선택 반영 — only 없으면 next 전체(종전 동작). 있으면 현행에서 only id 만 next 로 교체(추가/제거 포함), 나머지 보존.
+export function mergeSelective(current, next, only) {
+  if (!only) return next;
+  const c = byId(current), n = byId(next), out = [];
+  for (const id of new Set([...c.keys(), ...n.keys()])) {
+    if (only.has(id)) { if (n.has(id)) out.push(n.get(id)); }   // 선택 = next 반영(next 에 없으면 제거)
+    else if (c.has(id)) out.push(c.get(id));                    // 비선택 = 현행 시드 보존
+  }
+  return out;
+}
+// 본문 라인 diff — 공통 접두/접미 뺀 가운데 블록만(-옛/+새). 리뷰 가독 우선(정밀 LCS 아님).
+export function lineDiff(a, b) {
+  const A = String(a ?? "").split("\n"), B = String(b ?? "").split("\n");
+  let p = 0; while (p < A.length && p < B.length && A[p] === B[p]) p++;
+  let ea = A.length, eb = B.length; while (ea > p && eb > p && A[ea - 1] === B[eb - 1]) { ea--; eb--; }
+  const out = [];
+  for (let i = p; i < ea; i++) out.push("      - " + A[i]);
+  for (let i = p; i < eb; i++) out.push("      + " + B[i]);
+  return out.length ? out.join("\n") : "      (본문 동일 — 메타만 변경)";
+}
+function reportRows(label, d, current, next, showBody, only) {
+  const parts = [];
+  if (d.added.length) parts.push(`+${d.added.length}`);
+  if (d.changed.length) parts.push(`~${d.changed.length}`);
+  if (d.removed.length) parts.push(`-${d.removed.length}`);
+  console.log(`\n[${label}] ${parts.length ? parts.join(" ") + "  (추가/변경/제거)" : "변경 없음"}`);
+  const c = byId(current), n = byId(next);
+  const mark = (id) => !only ? "" : (only.has(id) ? "  ✓적용" : "  ·유지(현행 시드)");
+  const willApply = (id) => !only || only.has(id);
+  for (const id of d.added) console.log(`  + ${id}${mark(id)}`);
+  for (const id of d.changed) {
+    console.log(`  ~ ${id}${mark(id)}`);
+    if (showBody && willApply(id)) console.log(lineDiff(c.get(id).body ?? c.get(id).source_code, n.get(id).body ?? n.get(id).source_code));
+  }
+  for (const id of d.removed) console.log(`  - ${id}${mark(id)}`);
+}
+const sortHooks = (rows) => rows.slice().sort((x, y) => (x.sort - y.sort) || String(x.id).localeCompare(y.id));
+const sortSkills = (rows) => rows.slice().sort((x, y) => String(x.kind).localeCompare(y.kind) || (x.sort - y.sort) || String(x.id).localeCompare(y.id));
+
 async function main() {
+  const args = parseCaptureArgs(process.argv.slice(2));
   if (!process.env.ITEMS_DATABASE_URL) {
     console.error("ITEMS_DATABASE_URL 미설정 — canonical 게이트웨이 앱 루트에서 `node --env-file=.env` 로 실행하세요.");
     process.exit(1);
   }
   const { default: pg } = await import("pg");
   const pool = new pg.Pool({ connectionString: process.env.ITEMS_DATABASE_URL, max: 2 });
-  const hooks = (await pool.query(
+  const nextHooks = (await pool.query(
     `SELECT id, label, harness, event, matcher, timeout_sec, note, enabled, sort, source_code
        FROM org_hook ORDER BY sort, id`)).rows;
-  const skills = (await pool.query(
+  const nextSkills = (await pool.query(
     `SELECT id, kind, label, harness, description, frontmatter, paired_hook_id, enabled, sort, body
        FROM org_harness_asset ORDER BY kind, sort, id`)).rows;
   await pool.end();
 
-  // 지식 본문은 DB 가 아니라 seed-knowledge/ 각색 스냅샷에서(위 헤더 참조 — #846 재오염 차단).
-  const knowledge = readSeedKnowledge();
-  // 코드 참조(KNOWLEDGE_NAMES) ↔ 시드(manifest) 정합 — 한쪽만 늘면 댕글링이거나 시드 누락이다.
-  const seededNames = new Set(knowledge.map((k) => k.name));
-  const missing = KNOWLEDGE_NAMES.filter((n) => !seededNames.has(n));
-  if (missing.length) throw new Error(`코드 참조 지식이 seed-knowledge/ 에 없음: ${missing.join(", ")} — manifest.json + <name>.md 를 추가하세요`);
-  const extra = [...seededNames].filter((n) => !KNOWLEDGE_NAMES.includes(n));
-  if (extra.length) console.warn(`⚠ seed-knowledge 에 코드가 참조하지 않는 지식: ${extra.join(", ")}`);
-
-  // 신규 설치 기본값 강제(위 SEED_DISABLED) — 우리 dev 토글이 고객 디폴트로 새지 않게.
-  const forced = [...hooks, ...skills].filter((r) => SEED_DISABLED.has(r.id) && r.enabled);
+  // 신규 설치 기본값 강제(SEED_DISABLED) — 우리 dev 토글이 고객 디폴트로 새지 않게. diff 가 '실제 쓰일 값'을 반영하도록 먼저.
+  const forced = [...nextHooks, ...nextSkills].filter((r) => SEED_DISABLED.has(r.id) && r.enabled);
   for (const r of forced) r.enabled = false;
-  if (forced.length) console.warn(`⚠ 시드 기본값 강제 off(dev 에선 켜져 있음): ${forced.map((r) => r.id).join(", ")}`);
+  if (forced.length) console.warn(`⚠ 시드 기본값 강제 off(dev 에선 켜짐): ${forced.map((r) => r.id).join(", ")}`);
 
-  fs.writeFileSync(OUT, emitDefaultContentModule({ hooks, skills, knowledge }));
-  console.log(`✓ ${path.relative(path.join(here, ".."), OUT)} — hooks=${hooks.length} skills=${skills.length} knowledge=${knowledge.length}`);
+  // 현재 시드에서 훅·스킬 배열 파싱 — 항목별 diff·선택 반영의 기준.
+  const currentSrc = fs.existsSync(OUT) ? fs.readFileSync(OUT, "utf8") : null;
+  const currentHooks = currentSrc ? parseModuleArray(currentSrc, "DEFAULT_HOOKS") : [];
+  const currentSkills = currentSrc ? parseModuleArray(currentSrc, "DEFAULT_SKILLS") : [];
+
+  const hookD = diffRows(currentHooks, nextHooks), skillD = diffRows(currentSkills, nextSkills);
+  if (args.only) {
+    const allIds = new Set([...currentHooks, ...nextHooks, ...currentSkills, ...nextSkills].map((r) => r.id));
+    const unknown = [...args.only].filter((id) => !allIds.has(id));
+    if (unknown.length) console.warn(`⚠ --only 에 없는 id(오타?): ${unknown.join(", ")}`);
+    const changedIds = new Set([...hookD.added, ...hookD.changed, ...hookD.removed, ...skillD.added, ...skillD.changed, ...skillD.removed]);
+    const noop = [...args.only].filter((id) => allIds.has(id) && !changedIds.has(id));
+    if (noop.length) console.warn(`ⓘ --only 인데 변경 없음(무시됨): ${noop.join(", ")}`);
+  }
+
+  reportRows("hooks", hookD, currentHooks, nextHooks, args.diff, args.only);
+  reportRows("skills", skillD, currentSkills, nextSkills, args.diff, args.only);
+  if (args.only) console.log(`\n선택 반영(--only): ${[...args.only].join(", ")}  (나머지 시드는 현행 유지)`);
+
+  const outHooks = sortHooks(mergeSelective(currentHooks, nextHooks, args.only));
+  const outSkills = sortSkills(mergeSelective(currentSkills, nextSkills, args.only));
+
+  // 지식: 전체모드=seed-knowledge/ 각색본에서 재생성(파일 SoT). 선택모드=현행 보존(지식은 DB 캡처 대상이 아니다).
+  let knowledge;
+  if (args.only) {
+    knowledge = currentSrc ? parseModuleArray(currentSrc, "DEFAULT_KNOWLEDGE") : [];
+  } else {
+    knowledge = readSeedKnowledge();
+    const seededNames = new Set(knowledge.map((k) => k.name));
+    const missing = KNOWLEDGE_NAMES.filter((n) => !seededNames.has(n));
+    if (missing.length) throw new Error(`코드 참조 지식이 seed-knowledge/ 에 없음: ${missing.join(", ")} — manifest.json + <name>.md 를 추가하세요`);
+    const extra = [...seededNames].filter((n) => !KNOWLEDGE_NAMES.includes(n));
+    if (extra.length) console.warn(`⚠ seed-knowledge 에 코드가 참조하지 않는 지식: ${extra.join(", ")}`);
+  }
+
+  const emitted = emitDefaultContentModule({ hooks: outHooks, skills: outSkills, knowledge });
+  const rel = path.relative(path.join(here, ".."), OUT);
+  if (args.dryRun) {
+    console.log(`\n(dry-run — ${rel} 안 씀)  최종 예정: hooks=${outHooks.length} skills=${outSkills.length} knowledge=${knowledge.length}`);
+    return;
+  }
+  fs.writeFileSync(OUT, emitted);
+  console.log(`\n✓ ${rel} 씀 — hooks=${outHooks.length} skills=${outSkills.length} knowledge=${knowledge.length}`);
 }
 
 // import 전용(테스트·genfromjson)일 땐 main 을 안 돈다. 직접 실행 판정은 경로 정규화로(상대/절대 혼용 footgun 회피).

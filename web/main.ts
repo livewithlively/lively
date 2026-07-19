@@ -86,24 +86,28 @@ async function route() {
         startDashboardSessionTour(fromOnboarding ? '#/start' : undefined);
       }
     } else if (page === 'learn') {
-      setActiveTab('learn'); // '사용 가이드' — 우측 상단 보조 링크(.help-link). 시작하기(설치)는 그 하위 서브탭(#617).
-      // #762 '내 AI 세션 생성'(#/learn/install) 페이지 숨김(사용자 요청) — 사용 가이드 개요로 리다이렉트(옛 북마크 방어).
-      //  복원: 아래 redirect 두 줄을 `await renderInstall(view);` 로 되돌리고 learn.ts nav 의 install 항목 주석 해제.
-      //  (화면 컴포넌트 renderInstall 은 삭제하지 않았다 — #/start/setup 이 그대로 재사용 중.)
-      if (segs[1] === 'install') { location.replace('#/learn'); return; } // 숨김: #/learn/install → #/learn
-      else if (segs[1] === 'tour') await renderLearnTour(view); // #/learn/tour — Lively 둘러보기(#761)
-      else if (segs[1] === 'menu') { location.replace('#/learn'); return; } // #/learn/menu 폐기 — 개요로 리다이렉트(옛 북마크·링크 방어)
-      else if (segs[1] === 'docs') await renderLearnDocs(view, decodeURIComponent(segs[2] || '').split('?')[0]); // #/learn/docs/<slug> — 사용설명서(#780)
+      setActiveTab('learn'); // '사용 가이드' — 우측 상단 보조 링크(.help-link). '직접 해보기'(시작하기 등)는 #/start/* 로 이동(#1000).
+      // #1000 직접 해보기 URI 를 #/start/* 로 통일 — 옛 #/learn 경로는 리다이렉트로 보존(북마크·외부 링크 방어).
+      if (segs[1] === 'install') { location.replace('#/start'); return; }        // 설치 = #/start ② 설정(모달)
+      else if (segs[1] === 'tour') { location.replace('#/start/tour'); return; } // #/learn/tour → #/start/tour
+      else if (segs[1] === 'menu') { location.replace('#/learn'); return; }      // #/learn/menu 폐기 — 개요로 리다이렉트
+      else if (segs[1] === 'docs') {
+        const slug = decodeURIComponent(segs[2] || '').split('?')[0];
+        if (slug === 'examples') { location.replace('#/start/examples'); return; } // '이런 걸 시켜보세요' → #/start/examples
+        await renderLearnDocs(view, slug); // #/learn/docs/<slug> — 읽는 문서(화면별 안내·레퍼런스)
+      }
       else await renderLearn(view);
     } else if (page === 'start') {
-      // #/start — 구성원 온보딩(#846/850). **온보딩의 유일한 진입·완주 표면.** 상태 SoT 는 서버
+      // #/start — 구성원 온보딩 '시작하기'. **온보딩의 유일한 진입·완주 표면.** 상태 SoT 는 서버
       //  computeMemberOnboarding 이고 이 화면과 AI 스킬이 같은 REST 를 읽는다(드리프트 0).
-      //  #/start/setup 은 기존 설치 화면(renderInstall)을 **그대로 재사용** — 화면을 복제하지 않는다
-      //  (#/learn/install 도 계속 살아 있어 기존 딥링크·북마크가 깨지지 않는다. 같은 컴포넌트, 두 경로).
+      //  #1000 URI 통일: 직접 해보기 그룹(examples·tour)이 #/start/* 로 모인다. 설치는 전체페이지 대신
+      //  모달(openInstallModal)로 — #/start/setup 전체페이지는 폐지하고 #/start 로 리다이렉트(딥링크 방어).
       setActiveTab('learn');
-      if (segs[1] === 'setup') await renderInstall(view);
+      if (segs[1] === 'setup') { location.replace('#/start'); return; } // 설치 = 모달. 전체페이지 폐지(#1000)
       else if (segs[1] === 'migrate') await renderStartMigrate(view);
       else if (segs[1] === 'project') await renderStartProject(view);   // #853 — 프로젝트 체험(손수 투어 랜딩)
+      else if (segs[1] === 'examples') await renderLearnDocs(view, 'examples'); // #1000 — '이런 걸 시켜보세요'(원고는 docs-content)
+      else if (segs[1] === 'tour') await renderLearnTour(view);         // #1000 — Lively 둘러보기(#/learn/tour 에서 이동)
       else if (segs[1] === 'harness') { location.replace('#/system/me-assets'); return; } // #893 — 하네스 관리는 관리탭이 정주소(기존 딥링크 보존)
       else await renderStart(view);
     } else if (page === 'activate') {

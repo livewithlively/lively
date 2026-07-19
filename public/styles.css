@@ -7374,3 +7374,27 @@ input.emb-num { width: 120px; flex: none; }
 .ob-choice-head { font-size: 15px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; margin-bottom: 4px; }
 .ob-choice-card.sel { border-color: var(--blue); background: color-mix(in srgb, var(--blue) 6%, var(--bg)); box-shadow: 0 0 0 1px var(--blue) inset; }
 .ob-choice-card.sel:hover { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue) inset, 0 3px 12px rgba(45,107,240,.12); }
+
+/* ── #1000 시작하기(#/start) — 3블록(① 바로 시작 / ② 상황별 설정 / ③ 더 해보기) + 부모 복귀 ── */
+.ob-block-head { display: flex; align-items: center; gap: 10px; }
+.ob-block-badge { flex: none; font-size: 10.5px; font-weight: 800; border-radius: 999px; padding: 2px 9px; letter-spacing: -.01em; color: var(--ink-sub); background: var(--bg-tint); }
+.ob-block-badge.req { color: var(--blue); background: var(--bg-punch); }
+.ob-block-badge.is-done { color: var(--mint-deep, #16a37f); background: rgba(58,157,110,.10); }
+/* ② 상황별 설정 카드 — '이런 분께 / 안 해도 되는 경우'로 스스로 판단하게 한다 */
+.setup-cards { display: flex; flex-direction: column; gap: 12px; margin-top: 4px; }
+.setup-card { border: 1.5px solid var(--line-net); border-radius: 14px; padding: 15px 17px; background: var(--bg); transition: border-color .14s ease, background-color .14s ease; }
+.setup-card:hover { border-color: color-mix(in srgb, var(--blue) 40%, var(--line-net)); background: var(--bg-tint); }
+.setup-card.is-done { background: rgba(58,157,110,.05); border-color: rgba(58,157,110,.28); }
+.setup-card-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.setup-card-title { font-size: 14.5px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
+.setup-card-who, .setup-card-skip { font-size: 13px; line-height: 1.55; margin: 3px 0 0; color: var(--ink-sub); }
+.setup-card-who b { color: var(--blue-deep, var(--blue)); font-weight: 700; }
+.setup-card-skip b { color: var(--muted-2); font-weight: 700; }
+.setup-card-pre { color: var(--muted-2); font-weight: 600; }
+.setup-card-act { margin-top: 11px; }
+/* 하위 안내 페이지(설정·이관·체험)에서 부모(#/start)로 돌아가는 링크 */
+.ob-back { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 700; color: var(--blue); text-decoration: none; margin-bottom: 2px; }
+.ob-back:hover { text-decoration: underline; text-underline-offset: 2px; }
+.ob-back-arrow { font-weight: 800; }
+/* 설치 모달 헤더 제목(옛 '전체보기 ↗' 자리) */
+.pjv-pm-title { font-size: 15px; font-weight: 800; color: var(--ink); }
