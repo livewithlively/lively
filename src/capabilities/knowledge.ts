@@ -6,7 +6,7 @@ import { HttpError, clampPage } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import {
   listKnowledge, countKnowledge, getKnowledge, upsertKnowledge, setKnowledgeLifecycle, getKnowledgeLifecycle, setKnowledgeWiki, deleteKnowledge,
-  linkKnowledgeCategory, unlinkKnowledgeCategory, searchKnowledge, countKnowledgeGrep, hybridSearchKnowledge,
+  linkKnowledgeCategory, unlinkKnowledgeCategory, listUnmappedKnowledge, proposeKnowledgeCategory, searchKnowledge, countKnowledgeGrep, hybridSearchKnowledge,
   findSimilarKnowledge, linkKnowledge, unlinkKnowledge, knowledgeGraphData, knowledgeTreeData,
   setKnowledgePropsUi, moveKnowledge, type WikiLinkResult, appendBody, isDuplicateAppend,
   listKnowledgeFeed,
@@ -508,6 +508,58 @@ const knowledgeLinkCategory: Capability = {
     if (input.unlink) { await unlinkKnowledgeCategory(input.name, input.categoryId, writeCtx); return { unlinked: true }; }
     await linkKnowledgeCategory(input.name, input.categoryId, input.state, writeCtx);
     return { linked: true };
+  },
+};
+
+// ── 미분류 지식 인박스(#982) — 카테고리 0건 active 지식. list_unmapped(코드유닛)의 지식판. 분류기(classify_knowledge 크론)·사람이 드레인. ──
+const knowledgeUnmapped: Capability = {
+  name: "knowledge_unmapped",
+  title: "미분류 지식 인박스",
+  description: "카테고리가 하나도 없는 active 지식 목록(최근순). 커넥터 미러(노션 등)는 카테고리를 안 써서 여기 쌓인다 — 미분류 지식은 recall 라우터의 INNER JOIN 에서 소환 불가라 편입 대상. 분류기가 여기서 드레인해 knowledge_propose_category 로 카테고리를 제안한다(map_unmapped→map_code_unit 의 지식판). 본문 미포함(포인터).",
+  scope: "memory",
+  input: { limit: z.number().int().positive().max(200).optional() },
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/knowledge/unmapped"],
+      parse: (req) => ({ limit: req.query?.limit ? Number(req.query.limit) : undefined }) }],
+  },
+  handler: async (input: any) => ({ entries: await listUnmappedKnowledge(input.limit ?? 50) }),
+};
+
+// ── LLM 분류 제안(#982, map_code_unit 의 지식판) — 미분류 지식에 카테고리를 mapped_by='llm'+evidence 로 제안. ──
+//  linkKnowledgeCategory(사람용, replace+manual)와 별개: DELETE 안 함·mapped_by='llm'·이미 카테고리 있으면 no-op(빈 자리만 채움).
+const knowledgeProposeCategory: Capability = {
+  name: "knowledge_propose_category",
+  title: "지식 카테고리 제안(LLM)",
+  description: "미분류 지식에 카테고리를 제안한다(mapped_by='llm', evidence 필수). 이미 카테고리가 있으면 건너뛴다(사람/기존 분류 불가침 — 덮지 않는다). state 미지정 시 confidence≥0.8 면 confirmed, 아니면 proposed. proposed 도 소비쿼리(state<>'rejected')에 즉시 잡혀 발견·소환된다. 분류기(classify_knowledge)가 도메인 should 를 읽고 판단해 호출하는 툴 — 사람이 쓰는 knowledge_link_category(교체 시맨틱)와 다르다.",
+  scope: "memory",
+  input: {
+    name: z.string().min(1).max(64),
+    categoryId: z.number().int().positive(),
+    evidence: z.string().min(1).max(2000),
+    confidence: z.number().min(0).max(1).optional(),
+    state: z.enum(["proposed", "confirmed", "rejected"]).optional(),
+  },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/knowledge/:name/propose-category"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const categoryId = Number(b.category_id ?? b.categoryId);
+        if (!Number.isInteger(categoryId)) throw new HttpError(400, "category_id 가 필요합니다");
+        const evidence = String(b.evidence ?? "").trim();
+        if (!evidence) throw new HttpError(400, "evidence(분류 근거)가 필요합니다");
+        return {
+          name: String(req.params?.name ?? ""), categoryId, evidence,
+          confidence: b.confidence != null ? Number(b.confidence) : undefined,
+          state: b.state ? String(b.state) : undefined,
+        };
+      } }],
+  },
+  handler: async (input: any, user: any, ctx: any) => {
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    return proposeKnowledgeCategory(input.name, input.categoryId,
+      { evidence: input.evidence, confidence: input.confidence, state: input.state }, writeCtx);
   },
 };
 
@@ -1069,7 +1121,8 @@ export const knowledgeCapabilities: Capability[] = [
   knowledgeRevisions, knowledgeRevisionGet, knowledgeRevisionReview,   // #783 수정 검토 큐(/knowledge-revisions* — :name 과 다른 경로)
   reviewQueueSummary,   // #802 검토 대기 카운트(/review-queue/summary — 대시보드·nav 배지)
   wiki2Feed,            // #968 WIKI2 기록 피드(/wiki2/feed — 정적 경로, :name 과 무충돌)
+  knowledgeUnmapped,    // #982 미분류 지식 인박스(/knowledge/unmapped — 정적, :name 보다 먼저)
   knowledgeGet,
-  knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeLinkCategory, knowledgeLink,
+  knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeLinkCategory, knowledgeProposeCategory, knowledgeLink,
   knowledgePropsUi, knowledgeComments, knowledgeCommentPost, knowledgeMove,   // #592 :name 하위 경로(깊이 상이 — 순서 무관)
 ];
