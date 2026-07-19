@@ -27,7 +27,7 @@ try {
   process.env.ITEMS_DATABASE_URL = url;
   const { itemsPool } = await import("../dist/items/store.js");
   await itemsPool.query(`
-    CREATE TABLE session(node_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, harness TEXT, owner TEXT,
+    CREATE TABLE session(node_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, harness TEXT, owner TEXT, title TEXT,
       first_seen TIMESTAMPTZ NOT NULL DEFAULT now(), last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (node_id, session_id));
     CREATE TABLE session_log(node_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL,

@@ -191,6 +191,29 @@ export async function listSessionsForProject(projectId: number, limit = 200): Pr
   return r.rows.map(mapSessionRow);
 }
 
+// 기존 세션 제목 백필(#905 C1 슬⑤b) — title 컬럼 도입 전 캡처/백필된 세션은 title=null(목록에 uuid 로 보임).
+//  제목은 append 시점에만 유도되므로, 이미 들어온 로그엔 소급이 필요하다. 첫 청크(at_offset=0)에서 제목을 뽑아 채운다.
+//  멱등: title IS NULL 인 것만 손댄다(다 채우면 no-op). 첫 청크에 사람 발화 없으면 그대로 null(다음에 재시도).
+export async function backfillSessionTitles(limit = 500): Promise<number> {
+  const rows = await itemsPool.query(
+    `SELECT s.node_id, s.session_id, c.data
+       FROM session s
+       JOIN session_log_chunk c ON c.node_id = s.node_id AND c.session_id = s.session_id AND c.at_offset = 0
+      WHERE s.title IS NULL
+      LIMIT $1`,
+    [Math.min(Math.max(Number(limit) || 500, 1), 5000)]);
+  let n = 0;
+  for (const r of rows.rows) {
+    const title = firstUserPromptTitle((r.data as Buffer).toString("utf8"));
+    if (!title) continue;
+    await itemsPool.query(
+      `UPDATE session SET title = $3 WHERE node_id = $1 AND session_id = $2 AND title IS NULL`,
+      [r.node_id, r.session_id, title]);
+    n++;
+  }
+  return n;
+}
+
 // 보존 reap(설계 §5 ③) — retentionDays 지나도록 **손대지 않은**(updated_at 기준) 로그를 통째로 지운다.
 //  · **세션 단위**로 지운다(청크만 부분삭제 금지 — offset 연속성이 깨져 회수가 구멍남). updated_at 은 마지막 append.
 //  · retentionDays<=0 → 무제한(아무것도 안 지움). session 레코드는 **불멸**(로그·청크만 삭제, '있었다'는 남는다).

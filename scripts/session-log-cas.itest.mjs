@@ -31,7 +31,7 @@ try {
   const { itemsPool } = await import("../dist/items/store.js");
   // C1 테이블만 생성(전체 initV6Schema 는 pgvector 필요 — 여기선 대상 테이블만 격리 검증).
   await itemsPool.query(`
-    CREATE TABLE session(node_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, harness TEXT, owner TEXT,
+    CREATE TABLE session(node_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, harness TEXT, owner TEXT, title TEXT,
       first_seen TIMESTAMPTZ NOT NULL DEFAULT now(), last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (node_id, session_id));
     CREATE TABLE session_log(node_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL,
@@ -142,6 +142,18 @@ try {
     const data = (await S.readSessionLog("", "ownrace", 0)).data.toString();
     assert.equal(data, owner === "alice" ? "AAAA" : "BBBB", "🔑 owner 를 굳힌 쪽의 데이터만 남는다(owner-승자 == 데이터-승자)");
     ok("🔑 서로 다른 두 멤버 동시 첫 append → owner 1명 확정 + append 1건 + owner·데이터 승자 일치");
+  }
+
+  // ── 제목 백필(#905 슬⑤b) — title 컬럼 도입 전 세션(title=null)을 첫 청크에서 소급 채운다. ──
+  {
+    await S.appendSessionLog({ nodeId: "", sessionId: "titl", atOffset: 0, data: B('{"type":"user","message":{"content":"제목이 될 질문"}}\n'), owner: "u" });
+    await itemsPool.query(`UPDATE session SET title=NULL WHERE session_id='titl'`);   // 도입 전 세션 흉내(append 가 이미 유도한 걸 되돌림)
+    const n = await S.backfillSessionTitles();
+    assert.ok(n >= 1, "null-title 세션을 최소 1건 백필");
+    assert.equal((await itemsPool.query(`SELECT title FROM session WHERE session_id='titl'`)).rows[0].title, "제목이 될 질문", "첫 청크의 첫 사람 발화로 제목 채움");
+    await S.backfillSessionTitles();   // 멱등 — 이미 채운 건 안 건드린다
+    assert.equal((await itemsPool.query(`SELECT title FROM session WHERE session_id='titl'`)).rows[0].title, "제목이 될 질문", "재실행해도 제목 불변(멱등)");
+    ok("제목 백필 — null-title 세션을 첫 청크에서 소급 채움 + 멱등");
   }
 
   await itemsPool.end();

@@ -38,7 +38,7 @@ import { readyReport } from "./health.js";
 import { startLogJanitor } from "./log-janitor.js";
 import { effectiveStoragePolicy } from "./org/storage-policy.js";
 import { getRuntimeConfig } from "./org/store.js";
-import { reapSessionLogs } from "./v6/session-log-store.js";
+import { reapSessionLogs, backfillSessionTitles } from "./v6/session-log-store.js";
 import { ensureSharedCache } from "./session-cache.js";
 import { startBoxWatch } from "./box-watch.js";
 import { sendBoxAlert } from "./alerts.js";
@@ -324,6 +324,8 @@ const server = app.listen(PORT, () => {
         setInterval(() => {
           void getRuntimeConfig().then((c) => reapSessionLogs(c.session_share.retention_days)).catch(() => { /* best-effort */ });
         }, 6 * 60 * 60_000).unref();
+        // #905 C1 — 제목 컬럼 도입(슬⑤b) 전 캡처/백필된 세션의 title 소급 채움(부팅 35초 후 1회, 멱등). 다 채우면 no-op.
+        setTimeout(() => { void backfillSessionTitles().catch(() => { /* best-effort */ }); }, 35_000).unref();
       })
       .catch((err) => logger.error({ err }, "schema init failed"));
   }
