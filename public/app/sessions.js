@@ -1,9 +1,7 @@
-// sessions.ts — 세션이력 웹뷰(#905 C1 슬⑤b). `#/sessions`(내 세션 목록) · `#/sessions/<sid>[?node=]`(대화록, 공유 링크).
-//  설계 목표(사용자 요청): **스키밍 가능** — 사람 질문·AI 답변 모두 적당한 높이에서 접고(더보기), 툴콜은 접힌 칩으로,
-//   라벨(나/AI) 없이 배경색으로 구분, 질문 인덱스로 네비게이트. 프로젝트 탭에선 섹션 대신 버튼→모달.
-//  ⚠ 트랜스크립트 본문은 신뢰 불가 → 반드시 el({text})(textContent)로만 렌더(innerHTML 금지, XSS 방어).
-import { api, el, toast } from './core.js';
-const CAP_PX = 200; // 사람 질문·AI 답변 공통 높이 캡(px) — 넘으면 접고 [더보기](스키밍).
+// sessions.ts — 세션이력 웹뷰(#905 C1 슬⑤b). `#/sessions`(내 세션 목록) · `#/sessions/<sid>[?node=&q=&ln=]`(대화록·공유).
+//  설계(사용자 요청): 스키밍 — 질문·답변 모두 10줄 하드 캡(더보기)·질문 사이드바 네비·마크다운 렌더·질문/줄 단위 링크.
+//  ⚠ 트랜스크립트 본문은 신뢰 불가 → el({text})(textContent) 또는 renderMarkdown(core, textContent 기반)로만 렌더(innerHTML 금지, XSS 방어).
+import { api, el, toast, renderMarkdown } from './core.js';
 const PAGE_SIZE = 15; // 목록 페이지당 세션 수(페이지네이션).
 const fmtBytes = (b) => !b ? '비어있음' : b >= 1048576 ? (b / 1048576).toFixed(1) + 'MB' : b >= 1024 ? Math.round(b / 1024) + 'KB' : b + 'B';
 function fmtWhen(iso) {
@@ -22,7 +20,7 @@ function fmtWhen(iso) {
     return new Date(iso).toISOString().slice(0, 10);
 }
 const shortId = (sid) => sid.length > 12 ? sid.slice(0, 8) + '…' : sid;
-// #/sessions/<sid>[?node=] 파싱 — 없으면(=목록) null.
+// #/sessions/<sid>[?node=&q=&ln=] 파싱 — 없으면(=목록) null. q=질문(턴) 앵커, ln=줄/블록 앵커.
 function parseSel() {
     const h = location.hash.replace(/^#\/?/, '');
     const path = h.split('?')[0];
@@ -30,12 +28,12 @@ function parseSel() {
     if (segs[0] !== 'sessions' || !segs[1])
         return null;
     const params = new URLSearchParams(h.includes('?') ? h.slice(h.indexOf('?') + 1) : '');
-    return { sid: decodeURIComponent(segs[1]), node: params.get('node') || '' };
+    return { sid: decodeURIComponent(segs[1]), node: params.get('node') || '', q: params.get('q') || '', ln: params.get('ln') || '' };
 }
 export async function renderSessions(view) {
     const sel = parseSel();
     if (sel)
-        return renderTranscriptPage(view, sel.sid, sel.node);
+        return renderTranscriptPage(view, sel);
     return renderList(view);
 }
 // ── 목록면(#/sessions) ──
@@ -92,7 +90,6 @@ function sessionRowEl(s, onGo) {
     const title = s.title || shortId(s.session_id);
     const who = s.owner_name || s.owner || '(알 수 없음)';
     const meta = `${who} · 만든 ${fmtWhen(s.first_seen)} · 마지막 ${fmtWhen(s.last_seen)} · ${fmtBytes(s.bytes)}${s.harness ? ' · ' + s.harness : ''}`;
-    // 진입 전 '돌아갈 곳'을 기억(← 뒤로 가 원래 페이지로). 모달에서 왔으면 onGo 로 오버레이도 닫는다.
     const remember = () => { try {
         sessionStorage.setItem('sessReturn', location.hash || '#/sessions');
     }
@@ -104,8 +101,7 @@ function sessionRowEl(s, onGo) {
     titleLink.addEventListener('click', remember);
     return el('div', { class: 'sess-row', style: 'display:flex;gap:12px;align-items:center;padding:10px 2px;border-bottom:1px solid rgba(127,127,127,.15)' }, el('div', { style: 'flex:1;min-width:0' }, el('div', { style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, titleLink), el('div', { class: 'admin-hint', style: 'font-size:12px;margin-top:2px', text: meta })), open);
 }
-// 프로젝트 탭 '세션 기록' — 섹션 대신 버튼→모달(공간 절약). 목록은 페이지네이션·빈세션 제외.
-//  행 진입 시 오버레이를 닫고 원래(프로젝트) 페이지를 '돌아갈 곳'으로 기억한다.
+// 프로젝트 탭 '세션 기록' — 버튼→모달(공간 절약). 페이지네이션·빈세션 제외. 진입 시 오버레이 닫고 프로젝트를 '돌아갈 곳'으로.
 export async function openProjectSessionsModal(projectId, projectName) {
     const body = el('div', { class: 'admin-hint', text: '불러오는 중…' });
     const box = el('div', { class: 'ov-box', style: 'max-width:820px;width:92%' }, el('div', { class: 'ov-head' }, el('h3', { text: `세션 기록${projectName ? ' · ' + projectName : ''}` }), el('button', { class: 'btn-text', text: '닫기', onclick: () => back.remove() })), el('p', { class: 'admin-hint', style: 'margin:0 0 8px', text: '이 프로젝트에서 만든 AI 세션 대화록(끝난 세션 포함).' }), body);
@@ -129,32 +125,62 @@ export async function openProjectSessionsModal(projectId, projectName) {
     renderSessionListInto(body, (d && d.sessions) || [], '이 프로젝트에 기록된(내용 있는) 세션이 없습니다.', () => back.remove());
 }
 // ── 대화록 페이지(공유 링크) ──
-async function renderTranscriptPage(view, sid, node) {
-    const shareUrl = location.origin + location.pathname + '#/sessions/' + encodeURIComponent(sid) + (node ? '?node=' + encodeURIComponent(node) : '');
-    const copyBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '🔗 링크 복사' });
-    copyBtn.addEventListener('click', async () => {
-        try {
-            await navigator.clipboard.writeText(shareUrl);
-            toast('링크를 복사했습니다 — 열람 권한 있는 사람과 공유하세요.');
-        }
-        catch {
-            window.prompt('이 링크를 복사하세요:', shareUrl);
-        }
+function buildShareLink(sid, node, extra) {
+    const p = new URLSearchParams();
+    if (node)
+        p.set('node', node);
+    for (const k in (extra || {}))
+        p.set(k, String(extra[k]));
+    const qs = p.toString();
+    return location.origin + location.pathname + '#/sessions/' + encodeURIComponent(sid) + (qs ? '?' + qs : '');
+}
+async function copyLink(url) {
+    try {
+        await navigator.clipboard.writeText(url);
+        toast('링크를 복사했습니다 — 열람 권한 있는 사람과 공유하세요.');
+    }
+    catch {
+        window.prompt('이 링크를 복사하세요:', url);
+    }
+}
+// 앵커(줄/블록·질문)로 스크롤 + 잠깐 하이라이트. 접힌 답변 안이면 먼저 펼친다.
+function gotoAnchor(sel) {
+    let target = null;
+    if (sel.ln)
+        target = document.getElementById('ln-' + sel.ln);
+    else if (sel.q)
+        target = document.getElementById('turn-' + sel.q);
+    if (!target)
+        return;
+    const body = target.closest('.sess-body'); // 접힌 답변 속이면 펼치기
+    if (body && body.classList.contains('clamp')) {
+        const more = body.parentElement?.querySelector('.sess-more');
+        if (more)
+            more.click();
+    }
+    requestAnimationFrame(() => {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        target.classList.add('sess-flash');
+        setTimeout(() => target.classList.remove('sess-flash'), 2600);
     });
-    // ← 뒤로: 이 대화록으로 들어온 원래 페이지(목록 or 프로젝트)로. 공유 링크로 바로 열었으면 목록으로.
+}
+async function renderTranscriptPage(view, sel) {
+    const { sid, node } = sel;
+    const copyBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '🔗 링크 복사' });
+    copyBtn.addEventListener('click', () => copyLink(buildShareLink(sid, node)));
     let returnTo = '#/sessions';
     try {
         returnTo = sessionStorage.getItem('sessReturn') || '#/sessions';
     }
     catch { /* */ }
     const back = el('a', { class: 'btn btn-ghost btn-sm', href: returnTo, text: '← 뒤로' });
-    const idxSlot = el('div');
-    const convo = el('div', { class: 'sess-convo', style: 'margin-top:8px' }, el('p', { class: 'admin-hint', text: '불러오는 중…' }));
-    view.replaceChildren(el('div', { class: 'card', style: 'max-width:920px;margin:20px auto' }, el('div', { class: 'card-head', style: 'display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap' }, el('h2', { id: 'sess-title', style: 'font-size:16px;margin:0;overflow:hidden;text-overflow:ellipsis', text: '세션 ' + shortId(sid) }), el('div', { style: 'display:flex;gap:6px' }, copyBtn, back)), idxSlot, convo));
-    const q = new URLSearchParams({ node, view: 'render' }).toString();
+    const sideSlot = el('nav', { class: 'sess-side' });
+    const convo = el('div', { class: 'sess-main', style: 'min-width:0' }, el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+    view.replaceChildren(el('div', { class: 'card', style: 'max-width:1160px;margin:20px auto' }, el('div', { class: 'card-head', style: 'display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap' }, el('h2', { id: 'sess-title', style: 'font-size:16px;margin:0;overflow:hidden;text-overflow:ellipsis', text: '세션 ' + shortId(sid) }), el('div', { style: 'display:flex;gap:6px' }, copyBtn, back)), el('div', { class: 'sess-layout', style: 'display:flex;gap:20px;align-items:flex-start;margin-top:8px' }, sideSlot, convo)));
+    const qy = new URLSearchParams({ node, view: 'render' }).toString();
     let data;
     try {
-        data = await api(`/api/ui/v6/sessions/${encodeURIComponent(sid)}/log?${q}`);
+        data = await api(`/api/ui/v6/sessions/${encodeURIComponent(sid)}/log?${qy}`);
     }
     catch (e) {
         convo.replaceChildren(el('p', { class: 'install-token-err', text: e?.message || '대화록을 불러오지 못했습니다(열람 권한이 없을 수 있습니다).' }));
@@ -172,9 +198,10 @@ async function renderTranscriptPage(view, sid, node) {
         if (h)
             h.textContent = firstQ.length > 80 ? firstQ.slice(0, 80) + '…' : firstQ;
     }
-    idxSlot.replaceChildren(questionIndex(turns));
-    convo.replaceChildren(...turns.map(turnEl));
-    requestAnimationFrame(() => finalizeCaps(convo)); // 마운트 후 실제 높이를 재서 넘치는 것만 접는다
+    sideSlot.replaceChildren(sidebar(turns, sid, node));
+    convo.replaceChildren(...turns.map((t, i) => turnEl(t, i, sid, node)));
+    requestAnimationFrame(() => { finalizeCaps(convo); if (sel.q || sel.ln)
+        setTimeout(() => gotoAnchor(sel), 60); });
 }
 // 사람 발화마다 새 턴 시작, 뒤따르는 AI/툴은 그 턴에 붙인다(첫 사람 발화 이전 AI 는 user=null 턴).
 function groupTurns(items) {
@@ -195,72 +222,78 @@ function groupTurns(items) {
     }
     return turns;
 }
-// 질문 인덱스(skimming/navigate) — 접이식. 각 항목 클릭 시 해당 턴으로 스크롤.
-function questionIndex(turns) {
+// 질문 사이드바(skimming/navigate) — 항상 보이는 세로 목록. 항목 클릭 = 그 질문으로 스크롤, 🔗 = 질문 링크 복사.
+function sidebar(turns, sid, node) {
     const qs = turns.map((t, i) => ({ i, text: t.user?.text || '' })).filter((x) => x.text);
-    if (!qs.length)
-        return el('div');
-    const list = el('div', { style: 'display:none;margin-top:6px;padding-left:4px;border-left:2px solid rgba(127,127,127,.25)' }, ...qs.map((qq) => {
-        const a = el('a', { href: 'javascript:void 0', class: 'admin-hint',
-            style: 'display:block;padding:3px 8px;font-size:12px;text-decoration:none;color:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap',
-            text: `${qq.i + 1}. ${qq.text}` });
-        a.addEventListener('click', (e) => { e.preventDefault(); document.getElementById('turn-' + qq.i)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
-        return a;
-    }));
-    const toggle = el('button', { class: 'btn btn-ghost btn-sm', text: `질문 ${qs.length}개 ▾` });
-    toggle.addEventListener('click', () => {
-        const open = list.style.display === 'none';
-        list.style.display = open ? 'block' : 'none';
-        toggle.textContent = `질문 ${qs.length}개 ${open ? '▴' : '▾'}`;
-    });
-    return el('div', { style: 'margin:6px 0' }, toggle, list);
+    const box = el('div', {}, el('div', { class: 'sess-side-head', text: `질문 ${qs.length}개` }));
+    if (!qs.length) {
+        box.append(el('p', { class: 'admin-hint', style: 'font-size:12px', text: '(질문 없음)' }));
+        return box;
+    }
+    for (const q of qs) {
+        const label = el('button', { class: 'sess-side-item', title: q.text, text: `${q.i + 1}. ${q.text}` });
+        label.addEventListener('click', () => document.getElementById('turn-' + q.i)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+        const cp = el('button', { class: 'sess-side-copy', title: '이 질문 링크 복사', text: '🔗' });
+        cp.addEventListener('click', (e) => { e.stopPropagation(); copyLink(buildShareLink(sid, node, { q: String(q.i) })); });
+        box.append(el('div', { class: 'sess-side-row' }, label, cp));
+    }
+    return box;
 }
-function turnEl(t, idx) {
-    const box = el('div', { class: 'sess-turn', id: 'turn-' + idx, style: 'margin:6px 0' });
+function turnEl(t, idx, sid, node) {
+    const box = el('div', { class: 'sess-turn', id: 'turn-' + idx, style: 'margin:8px 0 14px' });
     if (t.user)
-        box.append(userBubble(t.user.text));
+        box.append(userBubble(t.user.text, idx, sid, node));
+    let aiIdx = 0;
     for (const it of t.ai)
         if (it.role === 'assistant' && it.text)
-            box.append(aiBubble(it.text));
+            box.append(aiBubble(it.text, idx, aiIdx++, sid, node));
     const tools = t.ai.filter((i) => i.role === 'tool');
     if (tools.length)
         box.append(toolsChip(tools));
     return box;
 }
-// 높이 캡 본문 — 라벨 없이 배경만으로 구분. finalizeCaps 가 마운트 후 scrollHeight 를 재서 넘칠 때만 접기+[더보기].
-function capBody(text, fontPx) {
-    return el('div', { class: 'sess-cap', style: `white-space:pre-wrap;word-break:break-word;overflow:hidden;font-size:${fontPx}`, text });
+// 한 줄/블록을 앵커(id)+호버 링크복사(🔗)로 감싼다 — 질문/답변의 특정 지점으로 링크 전달.
+function lineWrap(content, anchor, sid, node) {
+    const cp = el('button', { class: 'sess-line-copy', title: '이 지점 링크 복사', text: '🔗' });
+    cp.addEventListener('click', () => copyLink(buildShareLink(sid, node, { ln: anchor })));
+    return el('div', { class: 'sess-line', id: 'ln-' + anchor }, cp, content);
 }
+// 사람 질문 — 파란 배경(라벨 없음). 원문 그대로(줄 단위 앵커), 10줄 넘으면 접힘.
+function userBubble(text, turnIdx, sid, node) {
+    const body = el('div', { class: 'sess-body clamp', style: 'font-size:14px' });
+    const lines = text.split('\n');
+    lines.forEach((ln, li) => body.append(lineWrap(el('span', { style: 'white-space:pre-wrap', text: ln || ' ' }), `${turnIdx}-q-${li}`, sid, node)));
+    return el('div', { class: 'sess-bubble sess-user' }, body);
+}
+// AI 답변 — 마크다운 렌더(**/목록/코드/표 등, textContent 기반 안전). 블록 단위 앵커. 10줄 넘으면 접힘.
+function aiBubble(text, turnIdx, aiIdx, sid, node) {
+    const body = el('div', { class: 'sess-body clamp', style: 'font-size:13.5px' });
+    const md = renderMarkdown(text); // <div class=md> — 안전 렌더(core)
+    const blocks = Array.from(md.children); // 블록 요소만(스냅샷 — append 가 원소를 옮기므로)
+    if (!blocks.length)
+        body.append(lineWrap(el('span', { style: 'white-space:pre-wrap', text }), `${turnIdx}-a${aiIdx}-0`, sid, node));
+    else
+        blocks.forEach((b, bi) => body.append(lineWrap(b, `${turnIdx}-a${aiIdx}-${bi}`, sid, node)));
+    return el('div', { class: 'sess-bubble sess-ai' }, body);
+}
+// 마운트 후 실제 높이로 캡 확정 — 안 넘치면 clamp 해제(버튼 없음), 넘치면 [더보기]/[접기]. (CSS 로 처음부터 접혀 플리커 없음)
 function finalizeCaps(root) {
-    root.querySelectorAll('.sess-cap').forEach((body) => {
+    root.querySelectorAll('.sess-body.clamp').forEach((body) => {
         if (body.dataset.capReady)
             return;
         body.dataset.capReady = '1';
-        if (body.scrollHeight <= CAP_PX + 16)
-            return; // 안 넘침 → 그대로(버튼 없음)
-        body.style.maxHeight = CAP_PX + 'px';
-        body.classList.add('capped'); // 하단 페이드(마스크 — 배경·테마 무관)
-        const btn = el('button', { class: 'btn btn-ghost btn-sm', style: 'font-size:12px;margin-top:4px', text: '더보기 ▾' });
+        if (body.scrollHeight <= body.clientHeight + 4) {
+            body.classList.remove('clamp');
+            return;
+        } // 안 넘침 → 펼쳐둠
+        const btn = el('button', { class: 'btn btn-ghost btn-sm sess-more', style: 'font-size:12px;margin-top:4px', text: '더보기 ▾' });
         let expanded = false;
-        btn.addEventListener('click', () => {
-            expanded = !expanded;
-            body.style.maxHeight = expanded ? 'none' : CAP_PX + 'px';
-            body.classList.toggle('capped', !expanded);
-            btn.textContent = expanded ? '접기 ▴' : '더보기 ▾';
-        });
+        btn.addEventListener('click', () => { expanded = !expanded; body.classList.toggle('clamp', !expanded); btn.textContent = expanded ? '접기 ▴' : '더보기 ▾'; });
         if (body.parentElement)
             body.parentElement.append(btn);
     });
 }
-// 사람 질문 — 파란 배경으로 구분(라벨 없음). 길면 캡+더보기.
-function userBubble(text) {
-    return el('div', { style: 'background:rgba(37,99,235,.10);border-left:3px solid #2563eb;border-radius:6px;padding:8px 12px;margin:10px 0' }, capBody(text, '14px'));
-}
-// AI 답변 — 라벨·배경 없음(들여쓰기로 구분). 길면 캡+더보기(스키밍).
-function aiBubble(text) {
-    return el('div', { style: 'padding:2px 12px;margin:4px 0 8px 8px;color:var(--fg,#333)' }, capBody(text, '13.5px'));
-}
-// 툴 호출 — 기본 접힘. [펼치기] 하면 이름+요약 목록. 대화 읽기 흐름에서 노이즈 제거(하지만 볼 수는 있게).
+// 툴 호출 — 기본 접힘. [펼치기] 하면 이름+요약 목록(노이즈 제거하되 볼 수는 있게).
 function toolsChip(tools) {
     const names = [...new Set(tools.map((t) => t.tool).filter(Boolean))].slice(0, 4).join(', ');
     const detail = el('div', { style: 'display:none;margin:4px 0 4px 8px;padding:6px 10px;border-left:2px solid rgba(161,98,7,.35);background:rgba(161,98,7,.06);border-radius:4px' }, ...tools.map((t) => el('div', { style: 'font-size:12px;padding:2px 0;font-family:ui-monospace,Menlo,monospace' }, el('span', { style: 'color:#a16207;font-weight:600', text: (t.tool || 'tool') + ' ' }), el('span', { style: 'opacity:.8', text: t.text || '' }))));
