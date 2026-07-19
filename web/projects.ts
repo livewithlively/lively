@@ -3745,7 +3745,7 @@ function pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDele
   let indentParent: any = null; // Tab 들여쓰기(#663) — 바로 위 프로젝트의 '태스크'로 만들 때 그 부모 {id,name}. Shift+Tab 해제.
   // 접힌 트리거 '＋' 를 그룹 헤더 상태점 열에 맞춘다(#613 후속) — 옛 트리거는 체크박스 자리(check-spacer) 가 없어
   //  '＋ 프로젝트' 가 헤더 파이 아이콘·라벨보다 왼쪽으로 어긋났다. 헤더 title-cell 과 동일한 선두 spacer 로 정렬.
-  const trigger = el('button', { class: 'pjv-addrow-trigger', type: 'button' },
+  const trigger = el('button', { class: 'pjv-addrow-trigger', type: 'button', 'data-tour': 'pd-new-project' },   // #853 '프로젝트 체험' 투어 앵커
     el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }),
     el('span', { class: 'pjv-addrow-plus', text: '＋' }), el('span', { text: '프로젝트' }));
   const input = el('input', { type: 'text', class: 'pjv-addrow-input', placeholder: '프로젝트 이름 입력 후 Enter (Esc 취소)', maxlength: '200', spellcheck: 'false', autocomplete: 'off' });
@@ -4153,7 +4153,7 @@ export function openProjectV2Form(reload, prefill?: any) {
   }
   // 태스크(선택) — 설명 바로 아래, 프로젝트 안 하위태스크 리스트를 옮긴 인메모리 트리 에디터. '만들기' 때 태스크(+하위)로 생성.
   const taskEd = npTaskEditor();
-  const saveBtn = el('button', { class: 'btn btn-primary', text: '만들기' });
+  const saveBtn = el('button', { class: 'btn btn-primary', text: '만들기', 'data-tour': 'pd-create-btn' });   // #853 '프로젝트 체험' 투어 앵커
   // #758 만들고 바로 이 프로젝트에 내 AI 세션 열기 + 그 세션 실행 기본값 편집(기본값 = pjvBulkRunDefaultsModal 의 __new__ 전역 스코프).
   const runBtn = el('button', { class: 'btn btn-primary np-run', text: '만들고 AI세션 실행', title: '프로젝트를 만들고 바로 이 프로젝트에 내 AI 세션을 열어 새 탭으로 입장' });
   const defaultsBtn = el('button', { class: 'btn btn-ghost np-run-cfg', type: 'button', text: '기본값', title: 'AI세션 실행 기본값 — 실행기·모델·자동승인·워크트리 등' });
@@ -5153,14 +5153,14 @@ function projectKnowledgeSection(id, p, reload) {
 
   const card = el('div', { class: 'card', style: 'margin-bottom:18px' });
   // 섹션 액션 — 칼럼별 버튼 대신 우상단 단일 버튼 하나(#317). 관계(필요/산출)는 픽커 라디오에서 고른다.
-  const knAddBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 지식 연결',
+  const knAddBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 지식 연결', 'data-tour': 'pd-link-kn',   // #853 '프로젝트 체험' 투어 앵커
     title: '관련 지식을 추천받고 검색해 연결 — 필요/산출은 픽커에서 선택(없으면 직접 작성)',
     onclick: () => openKnowledgePicker(id, 'required', cur.required.map(knName), refresh) });
   card.append(el('div', { class: 'card-head' },
     el('div', { class: 'pjk-head-titles', style: 'display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; min-width:0;' },
       el('h3', { text: '연결된 지식' }),
       el('span', { class: 'pjk-head-hint' },
-        '필요 지식을 연결하면 AI가 처음부터 그 맥락을 쥐고 시작해요 — ',
+        '필요 지식을 연결하면 AI가 그 문서를 미리 읽은 상태로 시작해요 — ',
         // 가이드도 새 탭(#804) — 지식 링크와 같은 이유(모달 뒤 라우트 변경 = 죽은 클릭) + 읽던 프로젝트를 잃지 않는다.
         //  목적지는 문서 사이트의 WIKI 페이지(#780) — 필요지식 카드가 그리로 이사했다.
         el('a', { href: '#/learn/docs/wiki?focus=required', target: '_blank', rel: 'noopener', title: '새 탭에서 사용 가이드 열기',
@@ -7970,7 +7970,7 @@ function pjvStatusGroup(projectId, key, list, members, reload, fields, withCols)
 function pjvAddRow(projectId, status, members, reload, body, countEl, fields) {
   const row = el('div', { class: 'pjv-addrow' });
   let indentParent: any = null; // Tab 들여쓰기 — 바로 위 상위태스크의 하위로 만들 때 그 부모 {id,name}. Shift+Tab 으로 해제.
-  const trigger = el('button', { class: 'pjv-addrow-trigger', type: 'button' },
+  const trigger = el('button', { class: 'pjv-addrow-trigger', type: 'button', 'data-tour': 'pd-add-task' },   // #853 '프로젝트 체험' 투어 앵커
     el('span', { class: 'pjv-addrow-plus', text: '＋' }), el('span', { text: '태스크' }));
   const input = el('input', { type: 'text', class: 'pjv-addrow-input', placeholder: '태스크 이름 입력 후 Enter (Esc 취소)', maxlength: '200' });
   // 생성 전 드래프트 — 담당자·마감·우선순위를 미리 지정해 생성 직후 한 번에 적용(클릭업식). 셀은 행과 동일.

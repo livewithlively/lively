@@ -442,6 +442,7 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
     let mode = dashProjFilterDefault(); // 진행 중 | 전체 — 완료 프로젝트 포함 여부(기본값 ⚙ 개인화).
     let selectedListId; // 선택된 리스트(아래 목록 필터). 기본=첫 리스트.
     let currentOrder = []; // 현재 표시 중인 리스트 순서(드래그 재정렬 기준).
+    const justCreated = new Set(); // 이 화면에서 방금 만든 리스트 — 비어도 개요에 뜨게(#762 '만들었는데 안 보임' 방지).
     const draw = () => {
         const shown = mode === 'active' ? projects.filter((p) => !isDone(p)) : projects;
         zone.countEl.textContent = String(shown.length);
@@ -461,13 +462,15 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
         // '내 프로젝트' 개요는 **내 프로젝트가 있는 리스트만** — 전체 조직 리스트를 다 노출하던 버그 수정.
         //  (예전 #req '빈 리스트도 노출'이 lists 전체에 과적용돼, 내 프로젝트 1개만 생겨도 관여 안 한 모든 열린 리스트가 카드로 떴다.
         //   새/빈 리스트는 프로젝트를 추가하면 byList 에 들어와 자동 등장하고, '＋ 새 리스트' 카드로 만들 수 있다.)
-        const base = [...lists.filter((l) => byList.has(l.id)).map((l) => l.id), ...(byList.has(0) ? [0] : [])];
+        // 내 프로젝트 있는 리스트(byList) + 이 화면에서 방금 만든 리스트(justCreated) — 새 리스트가 비어도 개요에 뜨게(#762).
+        const base = [...lists.filter((l) => byList.has(l.id) || justCreated.has(l.id)).map((l) => l.id), ...(byList.has(0) ? [0] : [])];
         currentOrder = dashApplyListOrder(base);
         // 숨긴 개요 카드 제외(#671). 선택된 리스트가 숨겨졌거나 사라졌으면 보이는 첫 카드로 폴백.
         const hiddenOv = dashOvHidden();
-        const hideEmpty = dashHideEmptyLists(); // #req 빈 리스트(프로젝트 0개) 개요 카드 숨김 옵션
-        const visibleOrder = currentOrder.filter((id) => !hiddenOv.has(Number(id)) && !(hideEmpty && !byList.has(id)));
-        if (selectedListId === undefined || !byList.has(selectedListId) || hiddenOv.has(Number(selectedListId))) {
+        const hideEmpty = dashHideEmptyLists(); // #req 빈 리스트(프로젝트 0개) 개요 카드 숨김 옵션 — 단, 방금 만든 리스트는 예외.
+        const visibleOrder = currentOrder.filter((id) => !hiddenOv.has(Number(id)) && !(hideEmpty && !byList.has(id) && !justCreated.has(Number(id))));
+        // 선택 리스트가 '보이는 목록'에 없을 때만 첫 카드로 폴백(방금 만든 빈 리스트 선택 유지).
+        if (selectedListId === undefined || !visibleOrder.some((id) => Number(id) === Number(selectedListId))) {
             selectedListId = visibleOrder.length ? visibleOrder[0] : currentOrder[0];
         }
         let gridEl;
@@ -526,7 +529,12 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
                 busy = true;
                 input.disabled = true;
                 try {
-                    await api('/api/ui/v6/project-lists', { method: 'POST', body: JSON.stringify({ name }) });
+                    const r = await api('/api/ui/v6/project-lists', { method: 'POST', body: JSON.stringify({ name }) });
+                    const newId = Number((r && (r.id || (r.list && r.list.id) || r.list_id)) || 0);
+                    if (newId) {
+                        justCreated.add(newId);
+                        selectedListId = newId;
+                    } // 방금 만든 리스트를 개요에 띄우고 선택(비어도)
                     toast('리스트를 추가했어요');
                     await reloadAll();
                 }
@@ -2165,11 +2173,12 @@ async function fillActivity(zone) {
         zone.body.replaceChildren(errorNote(e, '작업 로그를 불러오지 못했습니다'));
         return;
     }
+    // 활동 로그는 닉네임 우선 표시(#762) — 닉네임 비었으면 이름(display_name) 폴백.
     const nameOf = (pid) => {
         if (!pid)
             return '';
         const m = people.find((x) => x.author_person === pid);
-        return (m && m.display_name) || pid;
+        return (m && (m.nickname || m.display_name)) || pid;
     };
     // #req R14 — 팀원(인물) 필터 제거 → '팀이 한 작업의 성격(유형)'으로 필터. 유형 = feature·fix·decision·docs·research·review·chore·other.
     const TYPE_ORDER = ['feature', 'fix', 'decision', 'docs', 'research', 'review', 'chore', 'other'];
@@ -2231,7 +2240,7 @@ async function fillNotifications(zone, projectsP) {
     }
     const people = await api('/api/ui/dash/people').then((d) => (d && d.people) || []).catch(() => []);
     const nameOf = (pid) => { if (!pid)
-        return ''; const m = people.find((x) => x.author_person === pid); return (m && m.display_name) || pid; };
+        return ''; const m = people.find((x) => x.author_person === pid); return (m && (m.nickname || m.display_name)) || pid; };
     const projById = new Map(projects.map((p) => [p.id, p]));
     const myIds = new Set(projects.map((p) => p.id));
     // 댓글·변경 피드는 최근 갱신 상위 K개 프로젝트만(과다 요청 방지 — 활동은 대개 최근 프로젝트에 몰림).
@@ -2879,12 +2888,26 @@ function dueLabel(n) { return n < 0 ? Math.abs(n) + '일 지남' : (n === 0 ? '�
 // 홈에서 '내 AI 세션 만들기' 따라하기 시작(#780) — 사용 가이드의 [내 AI 세션 생성]이 #/dashboard?tour=1 로 보낸다.
 //  세션 위젯은 비동기로 채워지므로 앵커([data-tour="new-session"] — 목록 하단 ＋새 세션 / 빈 상태 버튼)가 뜰 때까지 기다린다.
 //  ①단계만 대시보드용이고 ②~⑦(생성 폼)은 터미널과 동일 폼이라 그대로 이어진다.
-async function startDashboardSessionTour() {
+async function startDashboardSessionTour(returnTo) {
     for (let i = 0; i < 40 && !document.querySelector('[data-tour="new-session"]'); i++) {
         await new Promise((r) => setTimeout(r, 100));
     }
     if (!document.querySelector('[data-tour="new-session"]'))
         return; // 못 찾으면 조용히 포기(딤만 남기지 않는다)
-    startTerminalTour(dashTourStep1());
+    // 온보딩(#/start)에서 '웹에서 만들기'로 들어온 경우(returnTo)엔, 끝나면 항상 온보딩 화면으로 되돌린다.
+    //  - 완주(⑦ [생성하기] 클릭=세션 생성)면 connect 를 done 으로 보고 → 다음 단계(2/4)로 넘어간 상태로 복귀.
+    //  - 중도 취소(투어 닫기/이탈)면 아무것도 마킹하지 않고 그대로 복귀 → 완료 안 된 상태(1/4) 유지.
+    const opts = returnTo ? {
+        onEnd: async (reason) => {
+            if (reason === 'complete') {
+                try {
+                    await api('/api/ui/me/onboarding', { method: 'POST', body: JSON.stringify({ step: 'connect', state: 'done', by: 'self' }) });
+                }
+                catch (_) { /* 마킹 실패해도 이동은 진행 — 서버 자동판정(첫 MCP 호출)이 곧 done 으로 만든다 */ }
+            }
+            location.hash = returnTo; // 완주든 취소든 원래 있던 곳으로. 취소면 위에서 마킹을 건너뛰어 미완료 유지.
+        },
+    } : undefined;
+    startTerminalTour(dashTourStep1(), opts);
 }
 export { startDashboardSessionTour, renderMyDashboard, };

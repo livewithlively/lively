@@ -18,7 +18,11 @@ const COURSES = [
   { key: 'projects', label: '프로젝트', scenes: ['projects-board', 'projects-detail'] },
   { key: 'domainmap', label: '도메인 맵', scenes: ['domainmap'] },
   { key: 'wiki', label: 'WIKI', scenes: ['wiki'] },
+  // #853 '프로젝트 체험'(손수 하기) — 둘러보기 랜딩엔 안 뜨고 #/start/project 에서만 시작(startGuideTour(['project-do'])).
+  //  둘러보기 완주(isGuideTourDone)·랜딩 코스 목록엔 포함하지 않는다(TOUR_ONLY 로 걸러냄).
+  { key: 'project-do', label: '프로젝트 체험', scenes: ['pd-create', 'pd-detail'] },
 ];
+const TOUR_ONLY = (c: any) => c.key !== 'project-do'; // 'Lively 둘러보기'(랜딩·완주) 대상 = project-do 제외 3섹션
 const courseLabel = (k: string) => (COURSES.find((c) => c.key === k) || { label: k }).label;
 
 const q = (sel: string) => document.querySelector(sel);
@@ -203,6 +207,133 @@ const SCENES: any[] = [
     },
   },
   {
+    // #853 '프로젝트 체험' ① — 보드에서 **진짜 프로젝트**를 직접 만든다(손수 하기 — 데모 아님).
+    //  '만들기' 저장이 새 프로젝트 상세로 라우팅(projects.ts go(): location.hash='#/projects2/p/<id>')하므로
+    //  장면 전환 스텝이 필요 없다 — resume 이 다음 장면(pd-detail)을 이어받는다.
+    key: 'pd-create', tab: 'projects2',
+    match: (h: string) => h.startsWith('#/projects2') && !h.startsWith('#/projects2/p/'),
+    ready: () => !!q('.pjv-board-wrap'),
+    build() {
+      return [
+        { // ＋ 프로젝트 → 인라인 입력(이름) → Enter 로 '새 프로젝트' 창까지. 창이 열리면 자동 진행.
+          //  타깃은 입력이 펼쳐지면 입력, 아니면 트리거 — 어느 쪽이든 실존 요소를 짚는다.
+          target: () => q('main .pjv-addrow-input') || q('[data-tour="pd-new-project"]'),
+          placement: 'top' as const, scrollIntoView: true,
+          advanceWhen: () => !!q('.np-form'),
+          title: '진짜 프로젝트를 하나 만들어 볼게요',
+          body: [
+            el('p', { class: 'tour-p' }, '목록 끝의 ', b('[＋ 프로젝트]'), ' 를 누르고, ', b('이름을 입력한 뒤 Enter'), ' 를 치세요.'),
+            p('연습이 아니라 진짜로 만들어져요 — 필요 없어지면 나중에 지워도 돼요.'),
+          ],
+        },
+        { // 새 프로젝트 창 — '리스트'만 짚는다(미선택이면 만들기가 막히는 유일한 필수 선택).
+          target: () => { const n = q('.ov-back .pjv-listpick'); return n ? (n.closest('.cf-row') || n) : null; },
+          placement: 'right' as const, scrollIntoView: true,
+          title: '어느 리스트(영역)에 둘까요',
+          body: el('p', { class: 'tour-p' }, '프로젝트가 속할 ', b('리스트'), '를 고르세요. 마땅한 게 없으면 ', b('‘기타 (미분류)’'), ' 를 고르면 돼요.'),
+        },
+        { // 만들기 — 실제 생성. 창이 닫히면(저장 성공) 자동 진행 → 앱이 스스로 상세로 이동해 다음 장면이 이어진다.
+          //  advanceOn:'click' 대신 advanceWhen(창 닫힘): 저장 실패(리스트 미선택 토스트)면 창이 남아 [이전]으로
+          //  리스트 단계에 되돌아갈 수 있다 — 막다른 길 0.
+          target: '[data-tour="pd-create-btn"]', placement: 'top' as const,
+          advanceWhen: () => !q('.ov-back'),
+          title: '만들기!',
+          body: [
+            el('p', { class: 'tour-p' }, b('[만들기]'), ' 를 누르면 프로젝트가 생기고, 곧장 그 안으로 들어가요.'),
+            p('안 넘어가고 안내가 뜨면 [이전]으로 돌아가 리스트를 골라 주세요.'),
+          ],
+        },
+      ];
+    },
+  },
+  {
+    // #853 '프로젝트 체험' ② — 방금 만든 진짜 프로젝트 안에서 손수: 지식 연결 → AI 세션 → 하위 태스크 → 여러 태스크 한 세션에.
+    //  둘러보기의 projects-detail(설명형·데모)과 별개 장면 — 이 장면은 project-do 플랜에서만 쓰인다.
+    key: 'pd-detail', tab: 'projects2',
+    match: (h: string) => h.startsWith('#/projects2/p/') && h.indexOf('__demo__') < 0,
+    ready: () => !!q('main .page-head'),
+    build() {
+      const steps: any[] = [];
+      steps.push({ target: 'main .page-head', placement: 'bottom',
+        title: '방금 만든 진짜 프로젝트예요',
+        body: p('이 안에서 넷을 직접 해볼게요 — 지식 연결 · AI 세션 · 하위 태스크 · 여러 태스크 한 번에 맡기기.') });
+      // ① 지식 연결 — 픽커를 열어 실제로 붙여 본다. 창을 닫으면 다음으로.
+      if (q('[data-tour="pd-link-kn"]')) {
+        steps.push({ target: '[data-tour="pd-link-kn"]', scrollIntoView: true, advanceOn: 'click' as const,
+          title: '① 지식 연결',
+          body: el('p', { class: 'tour-p' }, '이 일에 필요한 회사 지식(WIKI)을 붙여두면 ', b('AI 가 그걸 알고 시작'), '해요. ', b('[＋ 지식 연결]'), ' 을 눌러 보세요.') });
+        steps.push({
+          target: () => { const bk = Array.from(document.querySelectorAll('.ov-back')).pop() as any; return bk ? (bk.querySelector('.ov-box') || bk) : null; },
+          advanceWhen: () => !q('.ov-back'),
+          title: '골라서 [＋ 연결]',
+          body: [
+            p('추천 목록에서 [＋ 연결]을 누르거나, 검색해서 찾아 연결해 보세요.'),
+            p('다 했으면(또는 나중에 하려면) 창을 닫으세요 — 닫히면 다음으로 넘어가요.'),
+          ],
+        });
+      }
+      // ② AI 세션 — 실제 생성 폼까지. [만들고 입장]=진짜 생성(새 탭, 이 화면 유지) / [취소]도 허용 — 어느 쪽이든 창이 닫히면 진행.
+      if (q('.proj-term-card') && q('[data-tour="proj-new-session"]')) {
+        steps.push({ target: '[data-tour="proj-new-session"]', placement: 'left' as const, scrollIntoView: true, advanceOn: 'click' as const,
+          title: '② 이 프로젝트에서 AI 켜기',
+          body: el('p', { class: 'tour-p' }, '이 프로젝트 맥락(본문·연결된 지식)을 다 아는 ', b('AI 작업 세션'), '을 열 수 있어요. ', b('[＋ 새 세션]'), ' 을 눌러 보세요.') });
+        steps.push({ target: '[data-tour="sess-web"]', placement: 'left' as const, advanceOn: 'click' as const,
+          title: '☁️ 웹에서 바로 열기',
+          body: el('p', { class: 'tour-p' }, '설치 없이 중앙에서 열리는 세션이에요. 밝은 ', b('[☁️ 웹에서 바로 열기]'), ' 를 누르세요.') });
+        steps.push({ target: '[data-tour="sess-name"]', placement: 'right' as const, scrollIntoView: true,
+          title: '세션 이름',
+          body: el('p', { class: 'tour-p' }, '무슨 일을 시킬지 알아보기 쉽게 이름을 지어요. 예: ', b('“자료 조사”'), '. 저장소·실행 설정은 필요할 때만 만지면 돼요.') });
+        steps.push({ target: '[data-tour="sess-create"]', placement: 'top' as const, scrollIntoView: true,
+          advanceWhen: () => !q('.ov-back'),
+          title: '만들어 볼까요?',
+          body: [
+            el('p', { class: 'tour-p' }, b('[만들고 입장]'), ' 을 누르면 진짜 세션이 ', b('새 탭'), '에서 열려요 — 이 화면은 그대로라 체험은 계속돼요.'),
+            p('지금은 만들기 싫으면 [취소]로 닫아도 돼요. 창이 닫히면 다음으로 넘어가요.'),
+          ],
+        });
+      }
+      // ③ 하위 태스크 — 두어 개 직접 추가(Enter), Tab=하위로 들여쓰기. 2개 이상 생기면 자동 진행.
+      if (q('main .pjv-tasks-card')) {
+        steps.push({
+          target: () => q('main .pjv-tasks-card .pjv-addrow-input') || q('main .pjv-tasks-card [data-tour="pd-add-task"]') || q('main .pjv-tasks-card'),
+          scrollIntoView: true,
+          advanceWhen: () => document.querySelectorAll('main .pjv-tasks-card .pjv-row-check:not(.pjv-group-check)').length >= 2,
+          title: '③ 태스크로 나누기',
+          body: [
+            el('p', { class: 'tour-p' }, b('[＋ 태스크]'), ' 를 누르고 이름 입력 후 Enter — ', b('두어 개'), ' 만들어 보세요.'),
+            el('p', { class: 'tour-p' }, '입력 중 ', b('Tab'), ' 을 누르면 바로 위 태스크의 ', b('하위(서브태스크)'), ' 로 들어가요. 행을 더블클릭해도 하위를 추가할 수 있어요.'),
+          ],
+        });
+        // ④ 여러 태스크 체크 → 하단 바 등장까지.
+        steps.push({
+          target: () => q('main .pjv-tasks-card'), padding: 4, scrollIntoView: true,
+          advanceWhen: () => !!q('.pjv-bulkbar'),
+          title: '④ 여러 태스크 골라잡기',
+          body: p('태스크 행 왼쪽에 마우스를 올리면 체크박스가 나타나요 — 2개 이상 체크해 보세요.'),
+        });
+        steps.push({
+          target: () => q('.pjv-bulk-run') || q('.pjv-bulkbar'),
+          placement: 'top' as const,
+          advanceWhen: () => false, // 실행(새 탭)은 실제 클릭으로 — 진행은 [다음]으로(강제 실행 아님)
+          title: '한 번에 맡기기 — [클로드로 실행]',
+          body: [
+            el('p', { class: 'tour-p' }, '선택한 태스크들을 ', b('한 AI 세션에 묶어'), ' 통째로 맡겨요 — 내용·체크리스트까지 함께 전달돼요.'),
+            p('눌러 보면 새 탭에서 진짜 실행돼요. 구경만 했으면 [다음]으로.'),
+          ],
+        });
+      }
+      steps.push({
+        target: () => null, __finale: true, ctaNext: '마치기',
+        title: '프로젝트 체험 끝! 🎉',
+        body: [
+          p('프로젝트 만들기 → 지식 연결 → AI 세션 → 하위 태스크 → 여러 태스크 한 번에 맡기기까지 전부 해봤어요.'),
+          p('만든 프로젝트는 진짜예요 — 그대로 이어서 일해도 되고, ⚙ 세부 설정에서 지워도 돼요.'),
+        ],
+      });
+      return steps;
+    },
+  },
+  {
     key: 'wiki', tab: 'knowledge',
     match: (h: string) => h.startsWith('#/knowledge'),
     ready: () => !!q('.kn-side, .wk-home, .wk-cat'), hint: 'main .wk-row, main .wk-doccard',   // #764v2 카드 표면 포함
@@ -349,12 +480,18 @@ function markSectionsDone(keys: string[]) {
   try { localStorage.setItem(DONE_SECTIONS_KEY, JSON.stringify(merged)); } catch (_) { /* noop */ }
 }
 function isSectionDone(key: string) { return doneSections().includes(key); }
-function isGuideTourDone() { return COURSES.every((c) => isSectionDone(c.key)); }
+function isGuideTourDone() { return COURSES.filter(TOUR_ONLY).every((c) => isSectionDone(c.key)); }
 
 function finishGuideTour(courses: string[]) {
   dropPlan();
   markSectionsDone(courses);
-  const rest = COURSES.filter((c) => !isSectionDone(c.key));
+  // #853 '프로젝트 체험'은 둘러보기와 별개 — 완주 시 시작하기 화면으로 복귀(둘러보기 랜딩·완주 문구 안 씀).
+  if (courses.length === 1 && courses[0] === 'project-do') {
+    toast('프로젝트 체험 완료 — 방금 만든 프로젝트에서 이어서 일해 보세요!');
+    location.hash = '#/start/project';
+    return;
+  }
+  const rest = COURSES.filter(TOUR_ONLY).filter((c) => !isSectionDone(c.key));
   toast(rest.length
     ? courses.map(courseLabel).join(' · ') + ' 섹션 완료 — 남은 ' + rest.map((c) => c.label).join(' · ') + ' 섹션도 골라 볼 수 있어요.'
     : 'Lively 둘러보기 완주 — 수고했어요!');

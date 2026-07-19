@@ -2,7 +2,7 @@
 import { api, el, errorNote, pageHead, renderMarkdown, state, sv } from './core.js';
 import { copyButton, deployCommands, installCmd, loadAdmin } from './admin.js';
 import { isGuideTourDone, isSectionDone, startGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 크로스탭 스포트라이트 투어
-import { DOC_PAGES, INSTALL_EXTRA_MD } from './docs-content.js'; // 사용설명서 원고(#780) — Claude Code docs 형식
+import { DOC_PAGES } from './docs-content.js'; // 사용설명서 원고(#780) — Claude Code docs 형식
 
 // 안내(#/learn) — 지식유형/수집 ground-truth(GET /api/ui/learn = kind_registry + data_source) 렌더.
 //  비개발자 대상: V4 본질 종류 4종(R·K·H·W) 중심 + 통합 예정 legacy 종류는 graceful 표시 + 데이터소스별 수집방식. 읽기 전용.
@@ -18,10 +18,22 @@ import { DOC_PAGES, INSTALL_EXTRA_MD } from './docs-content.js'; // 사용설명
 //  core.renderMarkdown(:::tabs 지원). 설치·둘러보기·메뉴 한눈에 보기는 인터랙티브 화면 그대로 셸 안에 들어간다.
 //  active 키: 'overview'(=#/learn) | DOC_PAGES slug(#/learn/docs/<slug>) | 'install' | 'tour' | 'menu'.
 const DOCS_NAV = [
-  { group: '시작하기', items: [
+  // 라이블리가 '무엇이고 어떻게 도는지' — 먼저 읽고 이해하는 개괄 정보(액션 아님). 그래서 '시작하기'가 아니라 '라이블리 소개'.
+  { group: '라이블리 소개', items: [
     { key: 'overview', label: '라이블리 개요', href: '#/learn' },
-    { key: 'quickstart', label: '빠른 시작', href: '#/learn/docs/quickstart' },
     { key: 'how-it-works', label: '라이블리가 동작하는 방식', href: '#/learn/docs/how-it-works' },
+  ] },
+  // 읽는 문서가 아니라 '직접 해서 시작하는' 것들 — 온보딩 입구·5분 따라하기·화면 위 투어(#780). '시작하기'(온보딩
+  //  입구, #846/850)가 맨 위인 이유: 여기 없으면 홈 칩(미완일 때만)이 사라진 뒤 URL 직접 치는 것 말고 들어갈 길이 없다.
+  //  그룹명이 '직접 해보기'인 이유: 'AI 세션 체험'은 이 온보딩 페이지 자체의 이름이라 그룹명과 겹치면 안 된다. 페이지 H1(start.ts)과 라벨을 맞춘다(#762 '시작하기'→'AI 세션 체험').
+  { group: '직접 해보기', items: [
+    { key: 'start', label: 'AI 세션 체험', href: '#/start' },
+    { key: 'examples', label: '이런 걸 시켜보세요', href: '#/learn/docs/examples' },   // #853 — 세션에 무엇을 시킬지 예시 모음(구 '전체 사용 흐름' step-4 분리)
+    { key: 'start-project', label: '프로젝트 체험', href: '#/start/project' },   // #853 — 프로젝트 한 바퀴 손수 투어(project-do)
+    // #762 '내 AI 세션 생성'(#/learn/install) 가이드 항목 숨김(사용자 요청) — 복원: 아래 줄 주석 해제 + main.ts 라우트 렌더 복원.
+    //  화면 컴포넌트(renderInstall)는 그대로 살아 있다(#/start/setup 이 재사용). 여기서 지운 건 진입 링크뿐.
+    // { key: 'install', label: '내 AI 세션 생성', href: '#/learn/install' },
+    { key: 'tour', label: 'Lively 둘러보기', href: '#/learn/tour' },
   ] },
   { group: '화면별 안내', items: [
     { key: 'home', label: '홈 (대시보드)', href: '#/learn/docs/home' },
@@ -31,17 +43,11 @@ const DOCS_NAV = [
     { key: 'domainmap', label: '도메인 맵', href: '#/learn/docs/domainmap' },
     { key: 'admin', label: '관리', href: '#/learn/docs/admin' },
   ] },
-  // 읽는 문서가 아니라 '직접 해보는' 화면들 — 온보딩에서 시작해(#846/850), 세션을 어디서 열지 고르고(웹/내 PC),
-  //  실제 화면 위 투어를 켠다(#780). '시작하기'가 맨 위인 이유: **그게 온보딩의 입구**다. 여기 없으면
-  //  홈 칩(미완일 때만 뜬다)이 사라진 뒤엔 URL 을 직접 치는 것 말고 들어갈 길이 없다.
-  { group: '직접 해보기', items: [
-    { key: 'start', label: '시작하기 — 내 준비 상황', href: '#/start' },
-    { key: 'install', label: '내 AI 세션 생성', href: '#/learn/install' },
-    { key: 'tour', label: 'Lively 둘러보기', href: '#/learn/tour' },
-  ] },
   { group: '레퍼런스', items: [
+    { key: 'cli', label: 'AI 세션 명령어', href: '#/learn/docs/cli' },
     { key: 'glossary', label: '용어집', href: '#/learn/docs/glossary' },
-    { key: 'plan', label: '문서 안내 (IA·규칙)', href: '#/learn/docs/plan' },
+    // #762 '문서 안내(IA·규칙)'(plan) 가이드 항목 숨김(사용자 요청) — 복원: 아래 줄 주석 해제(라우트 리다이렉트도 renderLearnDocs 에서 제거).
+    // { key: 'plan', label: '문서 안내 (IA·규칙)', href: '#/learn/docs/plan' },
   ] },
 ];
 
@@ -137,6 +143,7 @@ function docsBody(md: string, ...lead: any[]) {
   for (const s of secs) {
     const body = s.lines.join('\n').trim();
     if (!body) continue;
+    if (s.title && /^다음\s*단계/.test(s.title)) continue;  // #req 각 페이지 끝 '다음 단계' 링크 묶음은 렌더 제외 — 사이드바와 중복되는 군더더기 내비
     if (!s.title) {
       // 도입부 — 문단·인용까지만 카드 밖 리드. 표·목록·코드 같은 '내용'이 시작되면 그 아래는 제목 없는 카드로
       //  감싼다(용어집처럼 본문이 통째로 표인 문서가 카드 밖으로 새는 것 방지).
@@ -229,6 +236,9 @@ function docsDecorate(root: any) {
 // md 문서 페이지 한 장 — slug 로 원고를 찾아 렌더. wiki 페이지엔 기존 인터랙티브 카드 2장을 이어 붙인다(내용 보존).
 //  머리(아이브로+제목)는 원고의 첫 # 제목을 승격해 그린다 — 문구는 원고 그대로, 표현만 히어로 문법.
 async function renderLearnDocs(view, slug) {
+  // #762 '문서 안내(IA·규칙)'(#/learn/docs/plan) 페이지 숨김(사용자 요청) — 개요로 리다이렉트. 원고(DOC_PAGES['plan'])는 보존.
+  //  복원: 이 줄 삭제 + learn.ts nav 의 plan 항목 주석 해제.
+  if (slug === 'plan') { location.replace('#/learn'); return; }
   const page = DOC_PAGES.find((p) => p.slug === slug);
   if (!page) { location.replace('#/learn'); return; }
   const h1 = /^#\s+(.+)\r?\n/.exec(page.md);
@@ -271,8 +281,8 @@ function heroCard() {
   return el('div', { class: 'card guide-hero' },
     el('div', { class: 'guide-hero-eyebrow', text: 'LIVELY CONTEXT' }),
     el('h2', { class: 'guide-hero-title' },
-      'Lively는 회사가 쓰는 AI를 위한 ', el('span', { class: 'accent', text: '공용 두뇌' }), '예요.'),
-    el('p', { class: 'guide-hero-lead', text: 'AI(Claude Code·Codex)는 똑똑하지만, 우리 회사가 무슨 일을 하는지·어떤 규칙이 있는지·지금 뭐가 진행 중인지는 모릅니다. 그래서 보통은 일을 시킬 때마다 배경을 처음부터 설명해야 해요. 이 도구는 그 배경(회사의 규칙·지식·진행상황)을 한곳에 모아두고, 구성원이 AI를 켤 때마다 자동으로 전달합니다. 그래서 누가 AI를 켜든, 회사를 ‘이미 아는’ 상태에서 일을 시작합니다.' }),
+      'Lively는 회사가 쓰는 AI를 위한 ', el('span', { class: 'accent', text: '공용 맥락 저장소' }), '예요.'),
+    el('p', { class: 'guide-hero-lead', text: 'AI(Claude Code·Codex)는 범용 지식은 풍부하지만, 우리 회사가 무슨 일을 하는지·어떤 규칙이 있는지·지금 뭐가 진행 중인지는 모릅니다. 그래서 보통은 일을 시킬 때마다 배경을 처음부터 설명해야 해요. 이 도구는 그 배경(회사의 규칙·지식·진행상황)을 한곳에 모아두고, 구성원이 AI를 켤 때마다 자동으로 전달합니다. 그래서 누가 AI를 켜든, 회사를 ‘이미 아는’ 상태에서 일을 시작합니다.' }),
     // 4단계 순환(#780) — 일한 결과가 다시 ①로 쌓인다. 되돌아가는 레일(guide-loop)이 그 순환을 그린다.
     el('div', { class: 'guide-cycle' },
       el('div', { class: 'guide-flow' },
@@ -280,17 +290,17 @@ function heroCard() {
         flowArrow(),
         flowStep('send', '자동 전달', '구성원이 AI를 켜면 그 내용이 자동으로 AI에게 들어갑니다.'),
         flowArrow(),
-        flowStep('zap', '바로 일 시작', 'AI가 회사를 아는 채로, 똑똑하게 일을 시작해요.'),
+        flowStep('zap', '바로 일 시작', 'AI가 회사 상황을 아는 상태로, 별도 설명 없이 바로 일을 시작합니다.'),
         flowArrow(),
-        flowStep('save', '다시 쌓기', '일하며 내린 결정·만든 결과를 AI가 지식으로 남겨요.')),
+        flowStep('save', '다시 쌓기', '일하며 내린 결정·만든 결과를 AI가 지식으로 기록합니다.')),
       el('div', { class: 'guide-loop' },
         el('span', { class: 'guide-loop-label' },
           el('span', { class: 'guide-loop-key', 'aria-hidden': 'true', text: '↻' }),
           el('b', { text: '남긴 지식은 다시 [모아두기]로' }),
-          el('span', { class: 'guide-loop-sub', text: '쓸수록 AI가 더 정확해져요' })))),
+          el('span', { class: 'guide-loop-sub', text: '쓸수록 AI가 받는 맥락이 정확해집니다' })))),
     el('div', { class: 'guide-remember' },
-      el('span', { class: 'guide-remember-key', text: '딱 한 줄' }),
-      el('p', { text: '여기에 잘 정리해 둘수록, 우리 회사가 쓰는 AI 전체가 더 똑똑해집니다.' })));
+      el('span', { class: 'guide-remember-key', text: '핵심 한 줄' }),
+      el('p', { text: '여기에 잘 정리해 둘수록, 우리 회사의 모든 AI 세션이 더 정확한 맥락을 받고 시작합니다.' })));
 }
 
 // 작동 3단계 — 아이콘 + 제목 + 한 줄.
@@ -406,33 +416,33 @@ function kindsCard() {
       el('span', { class: 'kn-ex-meta-sep', text: '·' }),
       chip('kn-inject-recalled', '검색'),
       chip('kn-prov-authored', '저작')),
-    el('div', { class: 'kn-ex-cap', text: '↑ 한 덩어리에는 ‘분야(카테고리)’ 하나와 꼬리표 두 개(주입·출처)가 붙어요.' }));
+    el('div', { class: 'kn-ex-cap', text: '↑ 한 덩어리에는 ‘분야(카테고리)’ 하나와 속성 두 개(주입·출처)가 붙습니다.' }));
 
   // 축 1 — 주입(언제 AI에게 전달되나)
   const injAxis = el('div', { class: 'kn-axis' },
     el('div', { class: 'kn-axis-q', text: '주입 — 언제 AI에게 전달되나?' }),
     el('p', { class: 'kn-axis-sub', text: '이 지식이 AI 대화에 들어가는 시점.' }),
     knOpt(chip('kn-inject-always', '항상 주입'), '회사 규칙·페르소나처럼 모든 대화에 늘 자동으로 들어가요.', '추측으로 답하지 않기 — 근거 없으면 “잘 모르겠다”고 말한다'),
-    knOpt(chip('kn-inject-recalled', '검색'), '평소엔 가만히 있다가, 관련된 일을 할 때 AI가 키워드로 찾아 꺼내 봐요.', '경쟁사 가격 비교 · 새 팀원 온보딩 절차'));
+    knOpt(chip('kn-inject-recalled', '검색'), '평소엔 주입되지 않고, 관련된 일을 할 때 AI가 검색해 읽습니다.', '경쟁사 가격 비교 · 새 팀원 온보딩 절차'));
 
   // 축 2 — 출처(어디서 왔나)
   const provAxis = el('div', { class: 'kn-axis' },
     el('div', { class: 'kn-axis-q', text: '출처 — 어디서 왔나?' }),
     el('p', { class: 'kn-axis-sub', text: '이 지식의 원본이 어디 있나.' }),
     knOpt(chip('kn-prov-authored', '저작'), '이 안에서 직접 써넣은 지식. 원본이 여기 있어요.', '우리가 정리한 결정·런북·조사'),
-    knOpt(chip('kn-prov-observed', '외부 미러'), '노션·클릭업 같은 바깥 도구의 내용을 비춰 온 것. 원본·수정은 바깥에서 해요.', '미러된 노션 문서 · 클릭업 과업'));
+    knOpt(chip('kn-prov-observed', '외부 미러'), '노션·클릭업 등 외부 도구에서 동기화해 가져온 사본입니다. 원본 편집은 외부 도구에서 합니다.', '미러된 노션 문서 · 클릭업 과업'));
 
   return el('div', { class: 'card' },
     el('div', { class: 'card-head' }, el('h2', { text: '조금 더: WIKI에 쌓이는 ‘지식 한 덩어리’란?' })),
     el('p', { class: 'guide-lead', text: 'WIKI에 담기는 지식은 제목과 내용으로 된 짧은 글 한 장이에요 — 메모 한 장, 문서 한 페이지 같은 거죠. 회사가 오래 기억해야 할 사실·결정·규칙·설명서가 한 덩어리씩 쌓입니다.' }),
     example,
-    el('p', { class: 'guide-kinds-q', text: '꼬리표 두 개는 각각 이런 질문에 답해요:' }),
+    el('p', { class: 'guide-kinds-q', text: '두 속성은 각각 이런 질문에 답합니다:' }),
     el('div', { class: 'kn-axis-grid' }, injAxis, provAxis),
     el('div', { class: 'guide-note' },
       el('span', { class: 'kn-chip kn-pin', text: '📌 인덱스' }),
-      el('div', {}, el('b', { text: '특히 중요한 지식' }), '은 인덱스에 ‘핀’해 두면, 제목이 매 대화 첫머리에 항상 깔려 모두가 바로 발견해요.')),
+      el('div', {}, el('b', { text: '특히 중요한 지식' }), '은 인덱스에 ‘핀’해 두면, 제목이 매 대화 첫머리에 항상 포함되어 모두가 바로 발견해요.')),
     el('p', { class: 'admin-hint', style: 'margin-top:12px' }, '‘지금 진행 중인 ', el('b', { text: '할 일·과업' }),
-      '’은 WIKI가 아니라 ', el('a', { href: '#/projects2', text: '[프로젝트] 탭' }), '에서 다뤄요 — WIKI는 ‘오래 남는 기록’만 담습니다.'),
+      '’은 WIKI가 아니라 ', el('a', { href: '#/projects2', text: '[프로젝트] 탭' }), '에서 다룹니다 — WIKI에는 ‘오래 남는 기록’만 담습니다.'),
     el('p', { class: 'admin-hint', style: 'margin-top:6px' }, '실제 지식들은 ',
       el('a', { href: '#/knowledge', text: '[WIKI] 탭' }), '에서 볼 수 있어요.'));
 }
@@ -450,11 +460,11 @@ function knOpt(chipEl, desc, ex) {
 function projectKnowledgeCard() {
   return el('div', { class: 'card', id: 'learn-required' },
     el('div', { class: 'card-head' }, el('h2', { text: '프로젝트에 ‘필요지식’을 연결하면 뭐가 좋나요' })),
-    el('p', { class: 'guide-lead', text: 'WIKI에 쌓인 지식은 [프로젝트]에서 ‘필요지식’으로 연결할 수 있어요. 어떤 일을 시작하기 전에 “이건 먼저 알아야 한다”는 지식을 골라 붙여두면, 그 프로젝트를 맡는 AI가 그 내용을 일일이 찾을 필요 없이 처음부터 손에 쥔 채로 일을 시작합니다.' }),
+    el('p', { class: 'guide-lead', text: 'WIKI에 쌓인 지식은 [프로젝트]에서 ‘필요지식’으로 연결할 수 있어요. 어떤 일을 시작하기 전에 “이건 먼저 알아야 한다”는 지식을 골라 붙여두면, 그 프로젝트를 맡는 AI가 그 내용을 검색으로 찾을 필요 없이 처음부터 아는 상태로 일을 시작합니다.' }),
     el('div', { class: 'guide-flow' },
       flowStep('book-open', '지식 고르기', '관련된 결정·규칙·자료를 그 프로젝트의 ‘필요지식’으로 연결해요.'),
       flowArrow(),
-      flowStep('send', '자동으로 손에', '그 프로젝트를 맡은 AI에게 그 지식이 처음부터 함께 전달돼요.'),
+      flowStep('send', '자동으로 전달', '그 프로젝트를 맡은 AI에게 그 지식이 처음부터 함께 전달돼요.'),
       flowArrow(),
       flowStep('zap', '헤매지 않고 시작', '배경을 다시 묻거나 모른 채 추측하지 않고, 팀의 결정대로 정확히 일해요.')),
     el('div', { class: 'guide-remember' },
@@ -502,10 +512,11 @@ async function renderLearnTour(view) {
 
   const intro = el('div', { class: 'card' },
     el('div', { class: 'card-head' }, el('h2', { text: '눌러보며 익혀요' })),
-    el('p', { class: 'guide-lead', text: '실제 화면 위에서, 지금 눌러야 할 곳만 밝게 비추며 한 단계씩 안내해요. 처음부터 쭉 볼 수도 있고, 아래에서 원하는 섹션만 골라 볼 수도 있어요. 언제든 ✕ 나 ESC 로 멈출 수 있어요.' }),
-    isGuideTourDone() ? el('p', { class: 'admin-hint', text: '✓ 세 섹션을 모두 봤어요 — 언제든 다시 돌아도 좋아요.' }) : null,
+    el('p', { class: 'guide-lead', text: '실제 화면 위에서 지금 눌러야 할 곳을 표시하며 한 단계씩 안내합니다. 처음부터 쭉 볼 수도 있고, 아래에서 원하는 섹션만 골라 볼 수도 있습니다. 진행 중 언제든 화면 위 ✕ 버튼이나 ESC 키로 멈출 수 있습니다.' }),
+    isGuideTourDone() ? el('p', { class: 'admin-hint', text: '✓ 세 섹션을 모두 봤어요 — 언제든 다시 볼 수 있어요.' }) : null,
     el('div', { class: 'step-cta' },
-      el('button', { class: 'btn btn-primary', text: '▶ 처음부터 쭉 보기 (프로젝트 → 도메인 맵 → WIKI, 약 3분)', onclick: () => startGuideTour() })));
+      el('button', { class: 'btn btn-primary', text: '▶ 처음부터 쭉 보기 (약 3분)', onclick: () => startGuideTour() })),
+    el('p', { class: 'admin-hint', style: 'margin:6px 0 0', text: '프로젝트 → 도메인 맵 → WIKI 순서로 진행돼요.' }));
 
   // 섹션 한 줄(#780) — 골라 들어가는 게 주 동선이라 진입 버튼을 각 줄에 두고, 본 섹션은 ✓ 로 표시한다.
   //  pathStep 과 같은 시각 언어(번호·제목·설명). §0.5 채색 예산: 채운 파란 버튼은 위 '처음부터 쭉 보기' 하나뿐.
@@ -520,15 +531,17 @@ async function renderLearnTour(view) {
     el('div', { class: 'card-head' }, el('h2', { text: '섹션만 골라 보기' })),
     el('p', { class: 'guide-lead', text: '급하면 필요한 것만 봐도 돼요. 각 섹션은 따로 시작하고 따로 끝나요.' }),
     el('div', { class: 'guide-path' },
-      courseRow('1', 'projects', '프로젝트 — 일의 흐름', '회사의 일이 어디서 어떻게 굴러가는지: 보드와 리스트, 프로젝트 상세, 그리고 AI에게 쥐여 주는 \'필요지식\'.'),
-      courseRow('2', 'domainmap', '도메인 맵 — 코드의 구조', '제품 코드가 어떤 덩어리(도메인)로 이뤄졌는지, 하려던 것(should)과 실제(is)의 대조.'),
+      courseRow('1', 'projects', '프로젝트 — 일의 흐름', '회사의 일이 어디서 어떻게 진행되는지: 보드와 리스트, 프로젝트 상세, 그리고 AI에게 전달하는 \'필요지식\'.'),
+      courseRow('2', 'domainmap', '도메인 맵 — 코드의 구조', '제품 코드가 어떤 도메인 단위로 나뉘어 있는지, 하려던 것(should)과 실제(is)의 대조.'),
       courseRow('3', 'wiki', 'WIKI — AI가 읽는 지식', '회사 지식이 어떻게 분류·검색되는지, 지식 한 덩어리와 핀(인덱스)의 의미.')));
 
   const extra = el('div', { class: 'card' },
     el('div', { class: 'card-head' }, el('h2', { text: '더 해보기' })),
-    el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, 'AI 세션을 직접 만들어 첫 대화까지 해보는 따라하기는 따로 있어요 — ',
-      el('a', { href: '#/dashboard?tour=1', text: '홈에서 따라하며 만들기 →' }), ' · 내 컴퓨터 설치는 ',
-      el('a', { href: '#/learn/install', text: '내 AI 세션 생성' }), ' 에서.'));
+    el('p', { class: 'admin-hint', text: 'AI 세션을 직접 만들어 첫 대화까지 해보는 실습 가이드는 별도로 있어요.' }),
+    el('div', { class: 'step-cta', style: 'margin-bottom:0' },
+      el('a', { class: 'btn btn-sm btn-ghost', href: '#/dashboard?tour=1', text: '홈에서 따라하며 만들기 →' }),
+      // #762 '#/learn/install' 페이지 숨김 → 같은 설치 화면을 품은 '시작하기'(#/start)로 링크(복원 시 '#/learn/install'·'내 AI 세션 생성'으로 되돌리기).
+      el('a', { class: 'btn btn-sm btn-ghost', href: '#/start', text: '내 컴퓨터에 설치하기 — 시작하기 →' })));
 
   docsShell(view, 'tour', docsEyebrow('tour'), head, el('div', { class: 'guide-cards' }, intro, courses, extra));
 }
@@ -542,42 +555,67 @@ async function renderInstall(view) {
   const head = pageHead('내 AI 세션 생성', null, [], '생성');
   const slot = el('div', { class: 'install-guide' });
   slot.append(skeleton('설치 안내를 준비하는 중'));
-  // 하네스별 차이·문제 해결 보충(#780) — 인터랙티브 가이드와 같은 카드 문법으로 이어 붙인다.
-  const extra = el('div', { style: 'margin-top:18px' }, docsBody(INSTALL_EXTRA_MD));
-  docsShell(view, 'install', docsEyebrow('install'), head, slot, extra);
+  // 설치 후 명령·Claude/Codex 차이·문제 해결은 별도 문서(#/learn/docs/cli)로 분리 — 설치 페이지는 '설치까지'만.
+  docsShell(view, 'install', docsEyebrow('install'), head, slot);
   onboardingBanner().then((b) => { if (b) head.before(b); }); // 온보딩 진행 배너(미완 시) — 제목 '위'로 → #/onboarding
   loadAdmin().then((data) => drawInstallGuide(slot, data))
     .catch((e) => slot.replaceChildren(errorNote(e, '설치 안내를 불러오지 못했습니다')));
 }
 
+// 설치 화면을 '팝업(모달)'으로 — 온보딩(#/start) '로컬에서 만들기'에서 호출. 페이지 이동 대신 그 자리에서 띄운다.
+//  사이드바 없이 설치 가이드(drawInstallGuide)만 담고, 헤더의 '전체보기 ↗'로 전체 페이지(#/start/setup)로 넘어갈 수 있다.
+//  프로젝트 상세 팝업(.pjv-pm)과 같은 셸을 재사용한다.
+function openInstallModal() {
+  const back = el('div', { class: 'pjv-pm-back' });
+  const box = el('div', { class: 'pjv-pm' });
+  const bodyEl = el('div', { class: 'pjv-pm-body' });
+  const fullLink = el('a', { class: 'btn btn-ghost btn-sm', href: '#/start/setup', text: '전체보기 ↗', title: '설치 화면을 전체 페이지로 열기' });
+  const closeBtn = el('button', { class: 'pjv-pm-x', type: 'button', title: '닫기 (Esc)', 'aria-label': '닫기', text: '✕' });
+  box.append(el('div', { class: 'pjv-pm-head' }, fullLink, closeBtn), bodyEl);
+  back.append(box);
+
+  let closed = false;
+  const close = () => {
+    if (closed) return; closed = true;
+    document.removeEventListener('keydown', onKey, true);
+    document.body.classList.remove('pjv-pm-open');
+    back.remove();
+  };
+  function onKey(e) { if (e.key === 'Escape' && !document.querySelector('.pjv-pop, .tour-root, .ov-back')) close(); }
+  back.addEventListener('mousedown', (e) => { if (e.target === back) close(); });
+  closeBtn.onclick = (e) => { e.stopPropagation(); close(); };
+  fullLink.onclick = () => close(); // 전체 페이지로 나갈 땐 모달을 닫는다
+  document.addEventListener('keydown', onKey, true);
+  document.body.append(back);
+  document.body.classList.add('pjv-pm-open');
+
+  const slot = el('div', { class: 'install-guide' }, skeleton('설치 안내를 준비하는 중'));
+  bodyEl.append(slot);
+  // 이미 '로컬에서 만들기'로 들어왔으니 상단 '어디서 쓰나' 선택 카드는 숨기고 로컬 설치 가이드만 바로 보여준다(중복 제거).
+  loadAdmin().then((data) => drawInstallGuide(slot, data, { noChooser: true }))
+    .catch((e) => slot.replaceChildren(errorNote(e, '설치 안내를 불러오지 못했습니다')));
+  return close;
+}
+
 // 설치 가이드 — 먼저 '어디서 쓰나'(web/local) 를 고르게 하고, 고른 모드의 가이드만 렌더. slot 안만 교체.
-function drawInstallGuide(slot, data) {
+//  opts.noChooser — 이미 '로컬'을 고르고 들어온 팝업(openInstallModal)에선 상단 '어디서 쓰나' 선택 카드를 숨기고
+//   로컬 가이드만 바로 보여준다(중복 제거). OS 토글 재렌더에도 opts 를 그대로 넘겨 유지한다.
+function drawInstallGuide(slot, data, opts?: any) {
+  const noChooser = !!(opts && opts.noChooser);
   const gw = (data.profile.gateway_url || window.location.origin).replace(/\/mcp$/, '').replace(/\/$/, '');
-  const mode = state.start.mode === 'local' ? 'local' : 'web';
+  const mode = noChooser ? 'local' : (state.start.mode === 'local' ? 'local' : 'web');
 
-  // ── 0. 먼저 이게 뭔가요(짧게) ──
-  const intro = el('div', { class: 'card install-intro' },
-    el('div', { class: 'card-head' }, el('h2', { text: '먼저, 이게 뭔가요' })),
-    el('p', { class: 'guide-lead', text: '이걸 쓰면 AI(Claude Code·Codex)가 우리 회사의 규칙·맥락·기억을 “이미 아는 채로” 일을 시작합니다. 매번 배경을 다시 설명할 필요가 없어져요.' }),
-    el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, '개념·용어가 더 궁금하면 ',
-      el('a', { href: '#/learn', text: '[사용설명서]' }), ' 를 먼저 봐도 좋아요.'));
-
-  // ── 1. 어디서 쓰나 — 두 갈래 선택(카드 클릭 시 아래 가이드가 바뀜) ──
-  //  평등 문구를 먼저 — '한쪽이 더 제한적'이라는 오해를 차단. 카드는 사람(개발/비개발)을 라벨하지 않고
-  //  '상황'으로 자가선택하게 한다(처음·부담 vs 평소 터미널 사용).
-  const chooser = el('div', { class: 'card' },
+  // ── 어디서 쓰나 — 두 갈래 선택(카드 클릭 시 아래 가이드가 바뀜). 설명은 한 줄만(#780 → 장황함 제거). ──
+  const chooser = noChooser ? null : el('div', { class: 'card' },
     el('div', { class: 'card-head' }, el('h2', { text: '어디서 AI를 쓰실 건가요?' })),
-    el('p', { class: 'guide-lead', style: 'margin-bottom:4px' },
-      el('b', { text: '할 수 있는 일은 양쪽이 똑같아요.' }),
-      ' 같은 AI(Claude Code·Codex)가 회사 맥락을 그대로 가진 채 돕니다 — 한쪽이 더 제한적이거나 기능이 적지 않아요. 차이는 딱 하나, ',
-      el('b', { text: '“어디서 켜느냐”' }), ' 입니다.'),
-    el('p', { class: 'admin-hint', text: '아래에서 본인에게 편한 쪽을 고르세요. 잘 모르겠으면 왼쪽(설치 없이 바로)을 추천해요 — 나중에 둘 다 써도 됩니다.' }),
+    el('p', { class: 'admin-hint', style: 'margin-bottom:12px' }, '어느 쪽을 골라도 같은 AI에 같은 회사 맥락이 들어갑니다. 고민되면 ',
+      el('b', { text: '설치 없이 바로 쓰는 왼쪽' }), ' 으로 시작하세요.'),
     el('div', { class: 'mode-choice' },
       modeCard('web', '라이블리 웹에서 바로', '설치 없이 · 브라우저만', '비개발자 친화', mode, slot, data),
       modeCard('local', '내 컴퓨터에서', '한 번 설치 · 약 5분', '개발자 친화', mode, slot, data)));
 
-  const guide = mode === 'web' ? webGuideNodes() : localGuideNodes(gw, slot, data);
-  slot.replaceChildren(intro, chooser, ...guide);
+  const guide = mode === 'web' ? webGuideNodes() : localGuideNodes(gw, slot, data, opts);
+  slot.replaceChildren(...(chooser ? [chooser] : []), ...guide);
 }
 
 // 모드 선택 카드(라이블리 웹 vs 내 컴퓨터). 선택 시 재렌더.
@@ -591,10 +629,10 @@ function modeCard(key, title, tag, audience, active, slot, data) {
     onclick: pick,
     onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } },
   },
-    el('div', { class: 'mode-card-top' },
-      el('span', { class: 'mode-card-radio', 'aria-hidden': 'true' }),
+    el('span', { class: 'mode-card-radio', 'aria-hidden': 'true' }),
+    el('div', { class: 'mode-card-head' },
+      el('div', { class: 'mode-card-title', text: title }),
       el('span', { class: 'mode-card-tag', text: tag })),
-    el('div', { class: 'mode-card-title', text: title }),
     el('div', { class: 'mode-card-who' },
       el('span', { class: 'mode-card-who-label', text: audience })));
 }
@@ -604,7 +642,7 @@ function modeCard(key, title, tag, audience, active, slot, data) {
 function webGuideNodes() {
   const callout = el('div', { class: 'card install-callout' },
     el('div', { class: 'callout-strong', text: '내 컴퓨터엔 아무것도 설치하지 않습니다.' }),
-    el('p', { class: 'callout-sub', text: 'AI는 라이블리 서버에서 돌고, 회사 맥락·규칙도 거기에 이미 준비돼 있어요. 브라우저만 있으면 바로 시작할 수 있습니다.' }));
+    el('p', { class: 'callout-sub', text: 'AI는 라이블리 서버에서 실행되고, 회사 맥락·규칙도 거기에 이미 준비돼 있어요. 브라우저만 있으면 바로 시작할 수 있습니다.' }));
 
   // 따라하기 투어 — 홈(#/dashboard?tour=1)으로 이동하면서 스포트라이트를 켠다(main.ts → startDashboardSessionTour).
   //  눌러야 할 곳만 밝게 남기고 나머지를 덮은 뒤, 실제 버튼을 직접 누르며 한 단계씩 진행한다.
@@ -614,7 +652,7 @@ function webGuideNodes() {
     text: '홈에서 따라하며 만들기 →',
   });
   const newWinBtn = el('a', {
-    class: 'btn btn-ghost btn-sm', href: '#/dashboard?tour=1', target: '_blank', rel: 'noopener',
+    class: 'btn btn-ghost', href: '#/dashboard?tour=1', target: '_blank', rel: 'noopener',
     text: '새 창으로 열기 ↗',
   });
 
@@ -626,20 +664,20 @@ function webGuideNodes() {
     el('div', { class: 'step-list' },
       installStep(1, '홈에서 [+ 새 세션] 누르기',
         el('p', { class: 'step-p' }, '홈 가운데 ', el('b', { text: '「내 AI 세션」' }), ' 카드에서 ',
-          el('b', { text: '[+ 새 세션]' }), ' 을 누르면 만들기 창이 홈 위에 바로 떠요.')),
+          el('b', { text: '[+ 새 세션]' }), ' 을 누르면 만들기 창이 홈 화면 위에 바로 열려요.')),
       installStep(2, '작업 폴더와 AI를 고르고 이름 정하기',
         el('p', { class: 'step-p' }, '작업 폴더(', el('b', { text: '공유 워크스페이스' }), ' 또는 ', el('b', { text: '개인 폴더' }),
-          '), 함께 일할 AI(', el('b', { text: 'Claude Code' }), ' 또는 ', el('b', { text: 'Codex' }), '), 세션 이름을 정하세요.'),
-        el('p', { class: 'step-note', text: '잘 모르겠으면 — 작업 폴더는 [개인 폴더], AI는 [Claude Code]로 두면 무난해요.' })),
-      installStep(3, '[생성하기] → 바로 일 시키기',
-        el('p', { class: 'step-p', text: '[생성하기]를 누르면 새 탭에 세션 창이 열려요. 거기에 하고 싶은 말을 그냥 입력하면 됩니다 — 회사 맥락·규칙은 이미 들어가 있어요.' }),
+          '), 사용할 AI(', el('b', { text: 'Claude Code' }), ' 또는 ', el('b', { text: 'Codex' }), '), 세션 이름을 정하세요.'),
+        el('p', { class: 'step-note', text: '잘 모르겠으면 — 작업 폴더는 [개인 폴더], AI는 [Claude Code]를 그대로 두면 됩니다.' })),
+      installStep(3, '[생성하기] → 바로 요청 입력하기',
+        el('p', { class: 'step-p', text: '[생성하기]를 누르면 새 탭에 세션 창이 열려요. 거기에 요청할 내용을 입력하면 됩니다 — 회사 맥락·규칙은 이미 들어가 있어요.' }),
         el('p', { class: 'step-note', text: '세션은 창을 닫아도 서버에 남아 있어요. 다음에 홈의 「내 AI 세션」에서 [열기]로 이어서 쓰면 됩니다.' }))));
 
   return [callout, steps];
 }
 
 // (local) 내 컴퓨터 터미널에서 쓰는 사람 — 내 머신에 한 번 설치. OS 토글로 단계가 바뀐다.
-function localGuideNodes(gw, slot, data) {
+function localGuideNodes(gw, slot, data, opts?: any) {
   const os = state.start.os === 'windows' ? 'windows' : 'mac';
   const isWin = os === 'windows';
 
@@ -663,7 +701,7 @@ function localGuideNodes(gw, slot, data) {
   const osTabs = el('div', { class: 'os-tabs' },
     ...[['mac', 'macOS'], ['windows', 'Windows']].map(([o, label]) => el('button', {
       class: 'btn btn-sm ' + (o === os ? 'btn-primary' : 'btn-ghost'), text: label,
-      onclick: () => { if (state.start.os !== o) { state.start.os = o; drawInstallGuide(slot, data); } } })));
+      onclick: () => { if (state.start.os !== o) { state.start.os = o; drawInstallGuide(slot, data, opts); } } })));
 
   // 1단계 — 명령 입력 창 열기. (여기서 말하는 '터미널'은 macOS 에 들어 있는 앱 이름이다. 제품의 AI 세션과는 다른 것.)
   const term = isWin
@@ -722,9 +760,12 @@ function localGuideNodes(gw, slot, data) {
   const next = el('div', { class: 'card install-next' },
     el('div', { class: 'card-head' }, el('h2', { text: '끝났어요 — 이제 뭘 하나요' })),
     el('p', { class: 'guide-lead', text: '설치가 끝나면 평소처럼 Claude Code 를 켜서 일하면 됩니다. 어느 폴더에서 켜든 회사 공통 맥락·규칙이 자동으로 함께 들어가요. 매번 회사 사정을 설명하지 않아도 됩니다.' }),
-    el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, '내 컴퓨터에서 켜든 웹에서 켜든 같은 회사 맥락을 씁니다 — 웹에서 열고 싶으면 ',
+    el('p', { class: 'admin-hint' }, '내 컴퓨터에서 켜든 웹에서 켜든 같은 회사 맥락을 씁니다 — 웹에서 열고 싶으면 ',
       el('a', { href: '#/dashboard', text: '[홈]' }), ' 의 「내 AI 세션」에서 [+ 새 세션]을 누르세요. 회사에 어떤 맥락이 쌓여 있는지는 ',
-      el('a', { href: '#/knowledge', text: '[WIKI]' }), ' 에서 볼 수 있어요.'));
+      el('a', { href: '#/knowledge', text: '[WIKI]' }), ' 에서 볼 수 있어요.'),
+    el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, '설치 후 쓸 수 있는 ',
+      el('code', { class: 'md-code', text: 'lively' }), ' 명령 · Claude/Codex 차이 · 문제 해결은 ',
+      el('a', { href: '#/learn/docs/cli', text: '[AI 세션 명령어]' }), ' 에서 보세요.'));
 
   // ── 4. 유지보수(접힘) — 업데이트는 이제 자동이라 평소엔 볼 일이 없다(#858). 제거·강제갱신용. ──
   const staticBlock = (c) => el('div', { class: 'deploy-block' },
@@ -891,6 +932,7 @@ async function renderOnboarding(view) {
 
 export {
   checklist,
+  openInstallModal,
   overlayBox,
   renderInstall,
   renderLearn,

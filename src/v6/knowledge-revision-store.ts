@@ -57,25 +57,29 @@ export interface ProposeRevisionInput {
   actor_kind?: string | null;
   agent?: string | null;
   rule_id?: number | null;
+  // #968 change_note — 제안자가 함께 낸 변경 요약·계기(1~2문장). 검토 카드·변화 기록이 이 문장을 그대로 보여준다.
+  //  스키마의 note 컬럼(#783 때 만들어졌으나 미배선)을 이제 쓴다 — 마이그레이션 불요.
+  note?: string | null;
 }
 
 // 수정 제안 적재 — (name) 당 pending 1행 coalesce. 기존 pending 이 있으면 new_* 만 갱신하고 base_* 는 보존(누적 diff).
 export async function proposeRevision(input: ProposeRevisionInput): Promise<KnowledgeRevisionRow> {
   const r = await itemsPool.query(
     `INSERT INTO knowledge_revision(name, mode, status, base_version, base_title, base_body_md, base_confidence,
-       new_title, new_body_md, new_summary, new_type, proposed_by, actor_kind, agent, rule_id)
-     VALUES($1,$2,'pending',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       new_title, new_body_md, new_summary, new_type, proposed_by, actor_kind, agent, rule_id, note)
+     VALUES($1,$2,'pending',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
      ON CONFLICT (name) WHERE status='pending' DO UPDATE SET
        mode=EXCLUDED.mode,
        new_title=EXCLUDED.new_title, new_body_md=EXCLUDED.new_body_md,
        new_summary=EXCLUDED.new_summary, new_type=EXCLUDED.new_type,
        proposed_by=EXCLUDED.proposed_by, actor_kind=EXCLUDED.actor_kind, agent=EXCLUDED.agent,
-       rule_id=EXCLUDED.rule_id, updated_at=now(), edits=knowledge_revision.edits+1
+       rule_id=EXCLUDED.rule_id, updated_at=now(), edits=knowledge_revision.edits+1,
+       note=COALESCE(EXCLUDED.note, knowledge_revision.note)
      RETURNING ${REV_SEL}`,
     [input.name, input.mode, input.base.version ?? null, input.base.title ?? null, input.base.body_md ?? null,
      input.base.confidence ?? null, input.next.title ?? null, input.next.body_md, input.next.summary ?? null,
      input.next.type ?? null, input.proposed_by ?? null, input.actor_kind ?? null, input.agent ?? null,
-     input.rule_id ?? null]);
+     input.rule_id ?? null, input.note ?? null]);
   return r.rows[0] as KnowledgeRevisionRow;
 }
 
@@ -88,6 +92,7 @@ export interface RevisionListItem {
   rule_id: number | null; edits: number; created_at: string; updated_at: string;
   knowledge_exists: boolean; conflict: boolean;
   added: number; removed: number;
+  note: string | null;   // #968 change_note — 목록 행 부제로 요약 문장을 바로 보여준다(WIKI2 검증 뷰)
 }
 
 // 줄 단위 증감 — 정확한 LCS 는 상세 diff(웹)에서. 목록용은 집합 근사(추가/삭제 줄 수)로 충분하고 O(n).
@@ -110,7 +115,7 @@ export async function listRevisions(status = "pending", limit = 200): Promise<Re
   // ⚠ 카테고리는 LATERAL LIMIT 1 — 평범한 JOIN 이면 (구 데이터의) 복수 카테고리 지식에서 큐 행이 중복된다.
   const rows = await q(itemsPool,
     `SELECT r.id, r.name, r.mode, r.status, r.base_version, r.base_body_md, r.new_body_md,
-            r.proposed_by, r.actor_kind, r.agent, r.rule_id, r.edits, r.created_at, r.updated_at,
+            r.proposed_by, r.actor_kind, r.agent, r.rule_id, r.edits, r.created_at, r.updated_at, r.note,
             k.title AS k_title, k.type AS k_type, k.version AS k_version, k.body_md AS k_body,
             cat.key AS category_key, cat.name AS category_name
        FROM knowledge_revision r
@@ -139,6 +144,7 @@ export async function listRevisions(status = "pending", limit = 200): Promise<Re
       agent: (r.agent as string | null) ?? null,
       rule_id: r.rule_id == null ? null : Number(r.rule_id),
       edits: Number(r.edits ?? 1),
+      note: (r.note as string | null) ?? null,
       created_at: String(r.created_at), updated_at: String(r.updated_at),
       knowledge_exists: exists,
       // staged 인데 라이브가 제안 이후 또 바뀜 → 승인 시 그 변경을 덮어쓴다(사람에게 경고).
@@ -208,6 +214,24 @@ export async function reviewQueueCounts(ownerCatIds: number[] = []): Promise<Rev
   const nNew = Number(r?.n_new ?? 0), nEdit = Number(r?.n_edit ?? 0);
   const mNew = Number(r?.n_new_mine ?? 0), mEdit = Number(r?.n_edit_mine ?? 0);
   return { new: nNew, edit: nEdit, total: nNew + nEdit, mine_new: mNew, mine_edit: mEdit, mine_total: mNew + mEdit };
+}
+
+// #968 카테고리별 검토 대기 카운트 — WIKI2 사이드바(카테고리 트리)의 배지용.
+//  집합은 reviewQueueCounts 와 동일(pending 지식 ∪ pending 리비전) — 배지 합계와 큐 총계가 어긋나면 안 된다.
+//  카테고리는 목록과 같은 LATERAL LIMIT 1 규칙(단일 home) — key=null 은 미분류(주로 observed 미러).
+export async function reviewQueueCountsByCategory(): Promise<{ key: string | null; n: number }[]> {
+  const rows = await q(itemsPool, `
+    SELECT cat.key, count(*)::int AS n FROM (
+      SELECT k.name FROM knowledge k WHERE k.lifecycle='pending'
+      UNION ALL
+      SELECT r.name FROM knowledge_revision r WHERE r.status='pending'
+    ) p
+    LEFT JOIN LATERAL (
+      SELECT c.key FROM knowledge_category kc JOIN category c ON c.id = kc.category_id
+       WHERE kc.name = p.name AND kc.state <> 'rejected' ORDER BY kc.category_id LIMIT 1
+    ) cat ON true
+    GROUP BY cat.key ORDER BY n DESC`) as { key: string | null; n: number }[];
+  return rows.map((r) => ({ key: r.key ?? null, n: Number(r.n) }));
 }
 
 // 리비전 본문을 지식에 적용 — upsertKnowledge 재사용(감사·버전업·재임베딩·facet 보존이 전부 거기 있다).

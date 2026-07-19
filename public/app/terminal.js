@@ -810,8 +810,8 @@ function openTermCreateForm(cfg, view, onCreated) {
     }
     loadPicker();
     // 폼 순서(#673) — 무엇(이름) → 어디(폴더) → 어떻게(실행 옵션 체크박스 · 실행 설정 프리셋) → 누구(초대는 맨 아래).
-    //  온보딩 투어(#517)의 data-tour 앵커도 이 순서에 맞춘다: label → folder → options → preset → invite → create.
-    const back = overlay('새 세션', el('div', { 'data-tour': 'label' }, field('이름', labelI)), (nodes.length ? field('실행 위치', nodeSel) : null), // #869 중앙 컴퓨터/등록 노드
+    //  온보딩 투어(#517)의 data-tour 앵커도 이 순서에 맞춘다: label → node → folder → options → preset → invite → create.
+    const back = overlay('새 세션', el('div', { 'data-tour': 'label' }, field('이름', labelI)), el('div', { 'data-tour': 'node' }, field('실행 위치', nodeSel)), // #869 중앙 컴퓨터/등록 노드 — 항상 노출: 투어 ③'실행 위치' 스텝의 대상(#req). 등록 노드가 없으면 '중앙 컴퓨터(기본)' 한 줄만 보인다(submit 값은 기존과 동일 '').
     // #853 작업 위치(공유/개인 토글) + 그 안의 폴더를 한 블록으로 — '이 폴더에서 AI를 실행한다'는 직관.
     el('div', { 'data-tour': 'folder' }, field('어디서 실행할까요', el('div', { class: 'term-loc' }, rootSeg, el('div', { class: 'term-loc-folder' }, pickerBox)))), el('div', { class: 'term-checks', 'data-tour': 'options' }, autoWrap), presetToggle, presetBody, el('div', { 'data-tour': 'invite' }, field('초대 (비우면 나만 보는 비공개 세션)', inviteBox.box)), el('div', { class: 'ov-actions' }, el('button', { class: 'btn btn-primary', 'data-tour': 'create', text: '생성하기', onclick: async (ev) => {
             const btn = ev.currentTarget;
@@ -1078,12 +1078,12 @@ function openTermSettings() {
 // 터미널 온보딩 투어(#517) — 세션 만드는 과정을 실제 UI 위에서 스포트라이트로 한 단계씩 짚어 준다.
 //  '새 창으로 열기'(원래 창을 가림)를 대체: 같은 화면에서 필요한 버튼만 밝게, 나머지는 어둡게 하고
 //  사용자가 실제 버튼을 직접 누르며 진행한다. renderTerminal/폼이 그린 DOM(data-tour 앵커)에 붙는다.
-//  순서는 만들기 창의 시각적 위→아래를 그대로 따른다: [+ 새 세션] 클릭 → ② 이름 → ③ 폴더 → ④ 실행 옵션 →
-//  ⑤ 실행 설정(선택) → ⑥ 초대(선택) → ⑦ [생성하기] 클릭 → 🎉 완료.
+//  순서는 만들기 창의 시각적 위→아래를 그대로 따른다: [+ 새 세션] 클릭 → ② 이름 → ③ 실행 위치(어느 컴퓨터) →
+//  ④ 어디서 실행할까요(어느 폴더) → ⑤ 실행 옵션 → ⑥ 실행 설정(선택) → ⑦ 초대(선택) → ⑧ [생성하기] 클릭 → 🎉 완료.
 //  ① 새 세션·⑦ 생성하기는 advanceOn:'click' — 실제 버튼을 눌러야만 진행되며(코치마크에 [이전]/[다음]
 //  없이 ✕ 닫기만), 나머지 정보 단계는 [다음 →]으로 넘어간다.
 // firstStep — 있으면 ① 단계를 이걸로 대체(대시보드 등 다른 진입점의 '새 세션' 버튼 위치·문구에 맞춤). 없으면 터미널 기본.
-function startTerminalTour(firstStep) {
+function startTerminalTour(firstStep, opts) {
     startTour([
         firstStep || {
             target: '[data-tour="new-session"]',
@@ -1098,41 +1098,54 @@ function startTerminalTour(firstStep) {
             placement: 'right', scrollIntoView: true,
         },
         {
+            // 실행 위치(#869 노드) — 어느 '컴퓨터'에서 돌지. folder(어느 '폴더'에서 일할지)와는 다른 것이라 스텝을 나눈다(#req).
+            target: '[data-tour="node"]',
+            title: '③ 실행 위치',
+            body: [el('p', { class: 'tour-p' }, 'AI가 실제로 ', el('b', { text: '어느 컴퓨터에서 실행될지' }), '예요.'),
+                el('p', { class: 'tour-p' }, '보통은 회사의 ', el('b', { text: '[중앙 컴퓨터]' }), '(기본)에서 돌아가니 ', el('b', { text: '그대로 두면 됩니다' }), '. 내 PC를 따로 등록해 뒀다면 여기서 골라 그 컴퓨터에서 돌릴 수도 있어요.')],
+            placement: 'right', scrollIntoView: true,
+        },
+        {
+            // 작업 위치(공유/개인) + 그 안의 폴더 = 어느 '폴더'에서 일할지. AI가 들여다보고 다룰 파일들이 있는 곳.
             target: '[data-tour="folder"]',
-            title: '③ 작업 폴더 고르기',
-            body: [el('p', { class: 'tour-p' }, '어디서 일할지 골라요 — ', el('b', { text: '작업 위치' }), '(공유 워크스페이스 · 개인 폴더)와 ', el('b', { text: '폴더' }), '.'),
-                el('p', { class: 'tour-p', text: '잘 모르겠으면 [개인 폴더] 그대로 두어도 괜찮아요.' })],
+            title: '④ 어디서 실행할까요',
+            body: [el('p', { class: 'tour-p' }, 'AI가 ', el('b', { text: '어느 폴더에서 일할지' }), ' 골라요 — 그 폴더 안의 파일을 AI가 보고 다뤄요.'),
+                el('p', { class: 'tour-p' }, '먼저 ', el('b', { text: '작업 위치' }), '를 골라요: ', el('b', { text: '공유 워크스페이스' }), '(팀이 함께 쓰는 곳) 또는 ', el('b', { text: '개인 폴더' }), '(나만 쓰는 곳). 그 아래 ', el('b', { text: '폴더' }), '에서 더 좁은 하위 폴더까지 정할 수 있어요.'),
+                el('p', { class: 'tour-p', text: '잘 모르겠으면 기본값 그대로 두어도 괜찮아요.' })],
             placement: 'right', scrollIntoView: true,
         },
         {
             target: '[data-tour="options"]',
-            title: '④ 실행 옵션',
+            title: '⑤ 실행 옵션',
             body: [el('p', { class: 'tour-p' }, el('b', { text: '자동 승인' }), ' — 확인 없이 바로 실행해 빨라요. 공유 폴더에선 꺼 두는 걸 권해요.')],
             placement: 'right', scrollIntoView: true,
         },
         {
             target: '[data-tour="preset"]',
-            title: '⑤ 실행 설정 (선택)',
+            title: '⑥ 실행 설정 (선택)',
             body: [el('p', { class: 'tour-p' }, '함께 일할 ', el('b', { text: 'AI · 모델 · effort' }), '예요. 기본값으로 접혀 있고 ', el('b', { text: '이전 설정을 기억' }), '해요 — 바꾸려면 눌러 펼치세요.'),
                 el('p', { class: 'tour-p', text: '잘 모르겠으면 그대로 — Claude Code · 기본 모델로 시작해요.' })],
             placement: 'right', scrollIntoView: true,
         },
         {
-            target: '[data-tour="invite"]',
-            title: '⑥ 함께 볼 사람 초대하기 (선택)',
+            // 검색하면 그 아래로 '사람 목록'(.proj-mp-menu, position:absolute)이 초대칸 밖으로 열린다 → 구멍이 초대칸만 뚫으면
+            //  목록이 딤(pointer-events:auto) 밑에 깔려 클릭이 씹힌다(#req). 목록이 열려 있으면 구멍에 함께 포함해 누를 수 있게.
+            target: () => { const f = document.querySelector('[data-tour="invite"]'); if (!f)
+                return null; const m = f.querySelector('.proj-mp-menu:not([hidden])'); return m ? [f, m] : f; },
+            title: '⑦ 함께 볼 사람 초대하기 (선택)',
             body: [el('p', { class: 'tour-p' }, '검색해서 추가하면 그 사람도 이 세션을 봐요. ', el('b', { text: '비워두면 나만 보는 비공개 세션' }), '이에요.'),
                 el('p', { class: 'tour-p', text: '지금 안 정해도 돼요 — 나중에 세션 [수정]에서 바꿀 수 있어요.' })],
             placement: 'right', scrollIntoView: true,
         },
         {
             target: '[data-tour="create"]',
-            title: '⑦ 만들기',
+            title: '⑧ 만들기',
             body: [el('p', { class: 'tour-p' }, '마지막! ', el('b', { text: '[생성하기]' }), ' 를 누르면 새 탭에 까만 터미널 창이 열리고, 거기서 완료 안내가 이어집니다.')],
             placement: 'top', scrollIntoView: true, advanceOn: 'click',
         },
         // '🎉 완료' 단계는 여기(원래 탭)에 안 띄운다 — 생성하면 새 탭으로 실제 터미널이 열리므로, 완료 안내는 그 새 탭에서
         //  보여준다(openTermCreateForm 이 &welcome=1 로 넘기고 terminal.js 의 maybeShowWelcome 이 띄운다). 흐름이 실제 터미널에서 끝난다.
-    ]);
+    ], opts);
 }
 export { renderTerminal, startTerminalTour, openTermCreateForm, teardownTerminal, 
 // '실행 설정' 기억(#673) — 프로젝트 탭 '웹에서 바로 열기' 폼도 같은 키를 읽고 써 두 폼이 기억을 공유한다(#req).
