@@ -4352,13 +4352,17 @@ function harnessAssetEditor(detail, data) {
   const assets = data.orgHarnessAssets || [];
   const sel = state.admin.assetSel;
   const KIND_LABEL = { skill: '스킬', subagent: '서브에이전트', command: '커맨드' };
+  // 멤버 셀프업로드(#990) 초안 = draft- 네임스페이스 + 비활성 + 제출자. 관리자가 [승격]으로 배포한다.
+  const isDraft = (a) => a.id && a.id.indexOf('draft-') === 0 && a.enabled === false && a.created_by;
   const listCol = el('div', { class: 'admin-sublist' });
   listCol.append(el('button', { class: 'btn btn-ghost btn-sm admin-add', text: '+ 추가',
     onclick: () => { state.admin.assetSel = '__new__'; renderAdminDetail(detail, 'harness-assets', data); } }));
   for (const a of assets) {
     listCol.append(el('div', { class: 'mini-row' + (a.id === sel ? ' sel' : ''),
       onclick: () => { state.admin.assetSel = a.id; renderAdminDetail(detail, 'harness-assets', data); } },
-      el('div', { class: 'mini-title', text: a.id }, a.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null),
+      el('div', { class: 'mini-title', text: a.id },
+        isDraft(a) ? el('span', { class: 'pill pill-warn', text: '제출 · ' + a.created_by })
+          : (a.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null)),
       el('div', { class: 'mini-meta', text: (KIND_LABEL[a.kind] || a.kind) + ' · ' + (a.harness || 'all')
         + (a.target_members && a.target_members.length ? ' · 지정 ' + a.target_members.length + '명' : '')
         + (a.paired_hook_id ? ' · 연결 훅:' + a.paired_hook_id : '') })));
@@ -4408,6 +4412,18 @@ function assetForm(root, a, data, detail, isNew) {
     } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
   });
   const actions = el('div', { class: 'admin-actions' }, saveBtn, status);
+  // #990 멤버 초안 승격 — draft- 네임스페이스 비활성 자산이면 클린 id 로 복제·활성화(초안 제거)하는 [승격] 노출.
+  const isDraft = !isNew && a.id && a.id.indexOf('draft-') === 0 && a.enabled === false && a.created_by;
+  if (isDraft) actions.append(el('button', { class: 'btn btn-primary', text: '승격 →', onclick: async () => {
+    const suggested = a.id.replace(/^draft-[0-9a-f]+-/, '');
+    const newId = (prompt('조직에 배포할 클린 id (스킬 이름이 됩니다):', suggested) || '').trim().toLowerCase();
+    if (!newId) return;
+    if (!confirm(`'${a.created_by}' 님의 초안을 '${newId}' 로 승격해 배포합니다(초안은 제거). 계속할까요?`)) return;
+    try {
+      await api('/api/ui/org/harness-asset/adopt', { method: 'POST', body: JSON.stringify({ draft_id: a.id, new_id: newId, enabled: true }) });
+      await loadAdmin(true); state.admin.assetSel = newId; toast('승격됨 — 구성원 다음 세션부터'); renderAdminDetail(detail, 'harness-assets', state.admin.data);
+    } catch (e) { toast(e.message, true); }
+  } }));
   if (!isNew) actions.append(el('button', { class: 'btn-text', text: '제거', onclick: async () => {
     if (!confirm(`'${a.id}' 제거? 다음 세션부터 구성원 하네스에서 제거됩니다(미접속 머신은 직전 상태 유지).`)) return;
     try { await api('/api/ui/org/harness-asset/remove', { method: 'POST', body: JSON.stringify({ id: a.id }) }); await loadAdmin(true); state.admin.assetSel = null; toast('제거됨'); renderAdminDetail(detail, 'harness-assets', state.admin.data); }

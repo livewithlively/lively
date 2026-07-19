@@ -2315,6 +2315,34 @@ export const deliveryCapabilities: Capability[] = [
     }, {
       id: z.string().describe("제거할 자산 id — 다음 세션부터 materializer 가 멤버 디스크에서 지운다(미접속 머신은 직전 상태 유지)"),
     }),
+  // ── 멤버 초안 승격(#990) — 멤버가 올린 비활성 초안을 클린 id 조직 자산으로 복제·활성화하고 초안 제거. runtime(관리자). ──
+  //  멤버 셀프업로드(me_harness_asset_draft)의 짝: 멤버는 비활성 초안만 올리고, 관리자가 여기서 검토·승격한다.
+  restRuntime("org_harness_asset_adopt", "멤버 초안 자산을 조직 자산으로 승격",
+    "멤버가 올린 비활성 초안(created_by 있는 enabled=false 자산)을 관리자가 정한 클린 id 의 조직 자산으로 복제·활성화하고, 원래 초안은 제거한다. 본문·종류·하네스·frontmatter 는 초안 그대로 옮기고 target_members·enabled 는 관리자가 정한다.",
+    [{ method: "POST", paths: ["/api/ui/org/harness-asset/adopt"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
+      const draftId = assertAssetId(input.draft_id);
+      const draft = await getOrgHarnessAsset(draftId);
+      if (!draft) throw new HttpError(404, "초안을 찾을 수 없습니다");
+      if (draft.enabled || !draft.created_by) throw new HttpError(400, "이 자산은 멤버 초안이 아닙니다 — 승격은 비활성(enabled=false)·제출자(created_by) 있는 초안만 대상입니다");
+      const newId = assertAssetId(input.new_id);
+      if (newId === draftId) throw new HttpError(400, "new_id 는 초안 id 와 달라야 합니다 — 배포될 클린 id 를 정하세요");
+      if (await getOrgHarnessAsset(newId)) throw new HttpError(409, `'${newId}' 자산이 이미 있습니다 — 다른 id 를 쓰세요`);
+      const asset = await upsertOrgHarnessAsset({
+        id: newId, kind: draft.kind, label: draft.label ?? undefined,
+        harness: draft.harness, description: draft.description, body: draft.body, frontmatter: draft.frontmatter,
+        target_members: parseTargetMembers(input.target_members) ?? null,
+        paired_hook_id: null, // 짝훅은 관리자가 이후 upsert 로 붙인다(초안엔 없다)
+        enabled: input.enabled === undefined ? true : Boolean(input.enabled),
+      }, wctx(user, ctx));
+      await removeOrgHarnessAsset(draftId, wctx(user, ctx)); // 승격됐으니 초안 제거(중복 방지)
+      return { asset, adopted_from: draftId, submitted_by: draft.created_by, ...seedAssetSyncWarning(newId) };
+    }, {
+      draft_id: z.string().describe("승격할 멤버 초안 id(draft-…)"),
+      new_id: z.string().describe("조직 자산으로 쓸 클린 id — 스킬이면 이 id 가 스킬 이름이 된다"),
+      target_members: z.array(z.string()).nullable().optional().describe("대상 멤버 id 배열(null/빈=전원)"),
+      enabled: z.boolean().optional().describe("활성 여부(기본 true — 바로 배포)"),
+    }),
 
   // ── materializer fetch — 멤버 세션훅(session-preload)이 매 세션 호출. 인증된 멤버면 OK(scope null). ──
   //  멤버 머신이 파일로 materialize 하므로 body/frontmatter 를 받는다(관리 목록과 달리 redact 안 함). user.userId 로 per-member 타깃팅.
