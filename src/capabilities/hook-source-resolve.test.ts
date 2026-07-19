@@ -5,7 +5,7 @@
 //  불변식: "생략(undefined)=보존 ≠ 빈문자열('')=지움". 둘은 다른 의도이므로 결과가 달라야 한다.
 //  거부(throw): 비문자열 · 상한(16384) 초과 · 평문 시크릿 포함. 단 시크릿 검사는 '값이 있을 때만' 돈다.
 import assert from "node:assert/strict";
-import { resolveHookSource } from "./delivery.js";
+import { resolveHookSource, resolveHookMatcher } from "./delivery.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => {
@@ -64,6 +64,28 @@ t("F: 생략(A)은 시크릿 검사를 타지 않는다 — 값 없으면 오류
 // ── 엣지: 유효한 문자열은 앞뒤 공백을 잘라내거나 변형하지 않는다. ──
 t("엣지: 앞뒤 공백은 트리밍하지 않고 원문 그대로 반환", () => {
   assert.equal(resolveHookSource("  hi  "), "  hi  ");
+});
+
+// ── resolveHookMatcher(#970) — source 와 달리 세 갈래: null 이 '전체 매칭'이라는 의미 있는 값이다. ──
+//  불변식: 생략(undefined)=보존 · 명시적 null/""=전체매칭(null) · 문자열=패턴. 셋을 뭉개면 '명시적 지움'이 삼켜진다.
+t("matcher A: 생략(undefined) → undefined(보존 신호)", () => {
+  assert.equal(resolveHookMatcher(undefined), undefined);
+});
+t("matcher B: 문자열 → 그대로(패턴)", () => {
+  assert.equal(resolveHookMatcher("Write|Edit"), "Write|Edit");
+});
+t("matcher C: 명시적 null → null(전체매칭)", () => {
+  assert.equal(resolveHookMatcher(null), null);
+});
+t("matcher C2: 빈 문자열 \"\" → null(전체매칭 — null 과 동일 취급)", () => {
+  assert.equal(resolveHookMatcher(""), null);
+});
+t("matcher D: 생략(보존)과 명시적 null(전체매칭)은 다르다 — undefined ≠ null", () => {
+  assert.notEqual(resolveHookMatcher(undefined), resolveHookMatcher(null));
+});
+t("matcher E: 비문자열(숫자·객체)은 거부", () => {
+  assert.throws(() => resolveHookMatcher(42));
+  assert.throws(() => resolveHookMatcher({}));
 });
 
 console.log(`\n${pass} passed`);

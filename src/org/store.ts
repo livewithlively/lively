@@ -1737,6 +1737,9 @@ export async function upsertOrgHook(h: OrgHookInput, ctx: WriteCtx = {}): Promis
   const sourceCode = h.source_code ?? before?.source_code ?? "";
   const contentHash = sha256(sourceCode);
   const targetMembers = h.target_members === undefined ? (before?.target_members ?? null) : h.target_members;
+  // matcher — target_members 와 동형(#970): null 은 '전체 매칭'이라는 의미 있는 값이라 `?? before`(nullish 보존)로는
+  //  '명시적 전체매칭'과 '미지정'을 못 가른다. undefined(미지정)만 보존, null/문자열은 그 값을 그대로 쓴다.
+  const matcher = h.matcher === undefined ? (before?.matcher ?? null) : h.matcher;
   await itemsPool.query(
     `INSERT INTO org_hook(id,label,harness,event,matcher,source_code,timeout_sec,note,target_members,enabled,sort,version,content_hash,created_by,updated_at,updated_by)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$14,$9,$10,1,$11,$12,now(),$13)
@@ -1748,7 +1751,7 @@ export async function upsertOrgHook(h: OrgHookInput, ctx: WriteCtx = {}): Promis
        -- '⚠ 실패' 배지가 영영 남아 지표를 못 믿게 된다(경보 피로). 본문이 그대로면(토글·라벨만 수정) 유지.
        health=CASE WHEN org_hook.content_hash IS DISTINCT FROM EXCLUDED.content_hash THEN '{}'::jsonb ELSE org_hook.health END,
        version=org_hook.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
-    [h.id, h.label ?? before?.label ?? null, harness, event, h.matcher ?? before?.matcher ?? null,
+    [h.id, h.label ?? before?.label ?? null, harness, event, matcher,
      sourceCode, h.timeout_sec ?? before?.timeout_sec ?? 10, h.note ?? before?.note ?? null,
      h.enabled ?? before?.enabled ?? true, h.sort ?? before?.sort ?? 0, contentHash,
      before?.created_by ?? ctx.actor ?? null, ctx.actor ?? null,
