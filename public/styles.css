@@ -1015,19 +1015,23 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 /* 어디서 쓰나 — 두 갈래 선택 카드 */
 .mode-choice { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 8px; }
 @media (max-width: 720px) { .mode-choice { grid-template-columns: 1fr; } }
-.mode-card { border: 1.5px solid var(--line-net); border-radius: 13px; padding: 16px 18px; cursor: pointer;
+/* 제목 우선 배치 — 제목(크게) → 부제(회색) → 핀. 라디오는 우상단 코너. 세로 중앙정렬 + 균등 리듬(#780 밸런스). */
+.mode-card { border: 1.5px solid var(--line-net); border-radius: 13px; padding: 17px 18px; cursor: pointer; position: relative;
+  display: flex; flex-direction: column; justify-content: center; gap: 11px; min-height: 98px;
   background: var(--bg); transition: border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease; }
 .mode-card:hover { border-color: var(--line-net-2); background: var(--bg-tint); }
 .mode-card.active { border-color: var(--blue); background: var(--bg-tint); box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
-.mode-card-top { display: flex; align-items: center; gap: 9px; margin-bottom: 7px; }
-.mode-card-radio { flex: none; width: 17px; height: 17px; border-radius: 999px; border: 2px solid var(--line-net-2); background: var(--bg); }
+.mode-card-radio { position: absolute; top: 15px; right: 15px; flex: none; width: 17px; height: 17px; border-radius: 999px; border: 2px solid var(--line-net-2); background: var(--bg); }
 .mode-card.active .mode-card-radio { border-color: var(--blue); box-shadow: inset 0 0 0 3px var(--bg), inset 0 0 0 9px var(--blue); }
-.mode-card-tag { font-size: 12px; font-weight: 700; color: var(--blue); }
-.mode-card-title { font-size: 16px; font-weight: 800; color: var(--ink); line-height: 1.3; }
+/* 제목 + 부제(회색) 한 묶음 — 타이트하게. 제목은 우측 라디오와 안 겹치게 여백. */
+.mode-card-head { display: flex; flex-direction: column; gap: 3px; padding-right: 28px; }
+.mode-card-title { font-size: 17px; font-weight: 800; color: var(--ink); line-height: 1.25; }
+.mode-card-tag { font-size: 13px; font-weight: 600; color: var(--muted); line-height: 1.35; }
+.mode-card.active .mode-card-tag { color: var(--ink-sub); }
 /* '이런 분께' — 상황 기반 자가선택 신호. 무채색 핀(채운 배지 금지, §0.5). */
-.mode-card-who { display: flex; align-items: baseline; gap: 8px; margin-top: 8px; }
-.mode-card-who-label { flex: none; font-size: 11px; font-weight: 800; color: var(--ink-sub); letter-spacing: .01em;
-  background: var(--bg-tint); border: 1px solid var(--line-net); border-radius: 6px; padding: 2px 7px; }
+.mode-card-who { display: flex; align-items: baseline; gap: 8px; margin-top: 0; }
+.mode-card-who-label { flex: none; font-size: 11.5px; font-weight: 700; color: var(--ink-sub); letter-spacing: .01em;
+  background: var(--bg-tint); border: 1px solid var(--line-net); border-radius: 6px; padding: 2px 8px; }
 .mode-card-who-text { font-size: 13px; font-weight: 700; color: var(--ink); line-height: 1.5; }
 .mode-card-hint { font-size: 13px; color: var(--ink-sub); line-height: 1.5; margin-top: 6px; }
 /* 모드별 한 줄 강조 콜아웃 */
@@ -6702,7 +6706,7 @@ body.pjv-pm-open { overflow: hidden; }
    화이트 카드 중첩(tabchapter↔tabguide-card 문법) · 파란 포인트는 아껴서(§0.5).
    ══════════════════════════════════════════════════════════════════ */
 .docs-layout { display: flex; align-items: flex-start; gap: 40px; }
-.docs-side { flex: 0 0 232px; position: sticky; top: 74px; max-height: calc(100vh - 96px); overflow-y: auto;
+.docs-side { flex: 0 0 var(--pjv-side-w, 240px); position: sticky; top: 74px; max-height: calc(100vh - 96px); overflow-y: auto;
   padding: 10px 18px 32px 2px; border-right: 1px solid var(--line); }
 .docs-side-group { margin: 0 0 24px; }
 .docs-side-group:last-child { margin-bottom: 0; }
@@ -6716,12 +6720,20 @@ body.pjv-pm-open { overflow: hidden; }
 .docs-side a.docs-item:hover { background: var(--bg-tint); color: var(--ink); }
 .docs-side a.docs-item.active { background: var(--bg-punch); color: var(--blue); font-weight: 700; }
 .docs-side a.docs-item:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-.docs-body { flex: 1; min-width: 0; max-width: 800px; padding-bottom: 72px; }
+.docs-body { flex: 1; min-width: 0; max-width: 920px; padding-bottom: 72px; }   /* 전 페이지 동일한 읽기 폭 — 사이드바(좌측 고정)에 붙고 오른쪽은 균일하게 비운다(#780). 목차 방식은 일부 페이지만 걸려 들쭉날쭉해 폐기, 통일성 우선. */
 .docs-body > .page-head { margin-bottom: 8px; padding-top: 0; }
+/* 섹션 앵커로 스크롤할 때 상단 고정 헤더에 가리지 않게 */
+.docs-body .card, .docs-body h2[id] { scroll-margin-top: 82px; }
 
 /* 관리(#/system, #827) — 사이드바는 위 문서 사이드바(.docs-side)를 그대로 쓰고, 본문만 다르다:
    문서는 읽기 폭(800px) 컬럼이지만 관리는 표·그리드·에디터라 전폭(main 의 1200px 상한도 푼다). */
 body[data-route="system"] main { max-width: none; }
+/* 사용 가이드 계열(#/learn·#/start·#/install·#/onboarding)도 다른 탭(프로젝트·위키·관리)처럼 전폭(#780) —
+   main 의 1200px 상한만 해제한다. .docs-body 는 읽기 폭을 유지하므로 사이드바가 좌측에 붙고 본문은 가독 컬럼으로 남는다. */
+body[data-route="learn"] main,
+body[data-route="start"] main,
+body[data-route="install"] main,
+body[data-route="onboarding"] main { max-width: none; }
 .admin-body { flex: 1; min-width: 0; padding-bottom: 48px; }
 /* 페이지 머리는 #837 에서 폐지 — 상단 탭 + 사이드바가 이미 위치를 말한다(화면마다 반복될 이유 없음).
    '읽기 전용'은 전역 배지(사이드바)가 아니라 **그 섹션이 실제로 나에게 읽기 전용일 때만** 본문 위에 붙인다:
@@ -7016,12 +7028,114 @@ a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; fo
 .ob-step-note { font-size: 13px; line-height: 1.55; color: var(--muted-head); font-style: italic; margin: 4px 0 0 32px; }
 .ob-step-act { margin: 12px 0 0 32px; }
 /* ⋯ 메뉴 */
+.ob-more { position: relative; }   /* ⋯ 팝오버(.ob-more-pop, absolute)가 이 버튼 기준으로 뜨게 — 없으면 페이지 우상단으로 튐 */
 .ob-more > summary { list-style: none; cursor: pointer; color: var(--muted-2); padding: 2px 8px; border-radius: 7px; }
 .ob-more > summary::-webkit-details-marker { display: none; }
 .ob-more > summary:hover { background: var(--bg-tint); color: var(--ink-sub); }
 .ob-more-pop { position: absolute; right: 0; top: 28px; z-index: 5; padding: 6px; min-width: 152px;
   display: flex; flex-direction: column; gap: 2px; box-shadow: 0 8px 24px rgba(21,35,59,.12); }
 .ob-more-pop .btn { justify-content: flex-start; }
+
+/* ── 시작하기 = '도장깨기' 순차 여정(#/start). 위→아래 한 단계씩 깨며 스탬프를 모은다. #req ── */
+.ob-journey-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.ob-journey-count { font-size: 15.5px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
+.ob-journey-count b { color: var(--blue); font-size: 18px; }
+.ob-journey-note { flex: none; font-size: 12.5px; font-weight: 700; color: var(--muted-2); }
+.ob-journey-note.ok { color: var(--mint-deep, #16a37f); }
+.ob-journey-bar { height: 7px; border-radius: 999px; background: var(--bg-tint); overflow: hidden; margin: 9px 0 20px; }
+.ob-journey-bar-fill { height: 100%; border-radius: 999px; min-width: 7px;
+  background: linear-gradient(90deg, var(--mint-deep, #16a37f), var(--blue)); transition: width .5s cubic-bezier(.2,.8,.2,1); }
+.ob-journey-steps { display: flex; flex-direction: column; }
+
+/* 스텝 = 레일 노드 + 본문 */
+.ob-quest { display: flex; gap: 14px; align-items: stretch; }
+.ob-quest-rail { flex: none; width: 34px; display: flex; flex-direction: column; align-items: center; }
+.ob-quest-node { flex: none; width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  font-size: 14px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; }
+.ob-quest-line { flex: 1; width: 2px; min-height: 14px; margin: 5px 0; border-radius: 2px; background: var(--line); }
+
+/* 노드 상태 — 깬 도장(민트)·지금 단계(파랑 맥동)·다음 차례(흐린 링) */
+.ob-quest.is-done .ob-quest-node { background: var(--mint-deep, #16a37f); color: #fff;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--mint-deep, #16a37f) 14%, transparent); }
+.ob-quest.is-skipped .ob-quest-node { background: var(--bg-tint); color: var(--muted-2); border: 1.5px dashed var(--line-net, #d9dee6); }
+.ob-quest.is-active .ob-quest-node { background: var(--blue); color: #fff;
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--blue) 16%, transparent); animation: obPulse 2.1s ease-in-out infinite; }
+.ob-quest.is-upcoming .ob-quest-node { background: var(--bg); color: var(--muted-2); border: 2px solid var(--line); }
+/* 프로젝트 체험(#/start/project) — 진행판정 없는 손수 투어라 번호 노드로 정적 표시(흐리지 않게). */
+.ob-quest.is-step .ob-quest-node { background: color-mix(in srgb, var(--blue) 12%, var(--bg)); color: var(--blue);
+  border: 1.5px solid color-mix(in srgb, var(--blue) 32%, var(--line)); font-weight: 800; }
+/* 여정 카드 안 리드 + CTA(진행바가 없어 스텝과 버튼 사이 여백을 직접 준다) */
+.ob-journey-lead { margin: 10px 0 20px; font-size: 13.5px; line-height: 1.6; color: var(--ink-sub); }
+.ob-journey .step-cta { margin: 4px 0 0; padding-top: 16px; border-top: 1px solid var(--line); justify-content: center; }
+/* 지나온 구간 레일 = 채워짐 */
+.ob-quest.is-done .ob-quest-line, .ob-quest.is-skipped .ob-quest-line { background: color-mix(in srgb, var(--mint-deep, #16a37f) 50%, var(--line)); }
+@keyframes obPulse { 0%,100% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--blue) 16%, transparent); }
+  50% { box-shadow: 0 0 0 9px color-mix(in srgb, var(--blue) 7%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .ob-quest.is-active .ob-quest-node { animation: none; } }
+
+/* 본문 */
+.ob-quest-body { flex: 1; min-width: 0; padding-bottom: 18px; }
+.ob-quest:last-child .ob-quest-body { padding-bottom: 0; }
+.ob-quest-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ob-quest-name { font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
+.ob-quest-badge { flex: none; font-size: 10.5px; font-weight: 800; border-radius: 999px; padding: 2px 9px; letter-spacing: -.01em; }
+.ob-quest-badge.now { background: var(--blue); color: #fff; }
+.ob-quest-badge.req { color: var(--blue); background: var(--bg-punch); }
+
+/* 지금 이 단계 — 크게, 강조 카드 */
+.ob-quest.is-active .ob-quest-body { margin: 1px 0 18px; padding: 15px 16px; border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--blue) 30%, var(--line)); background: color-mix(in srgb, var(--blue) 4%, var(--bg));
+  box-shadow: 0 3px 12px rgba(21,35,59,.06); }
+.ob-quest.is-active:last-child .ob-quest-body { margin-bottom: 1px; }
+.ob-quest.is-active .ob-quest-name { font-size: 15.5px; }
+.ob-quest-desc { margin: 8px 0 0; font-size: 13.5px; line-height: 1.6; color: var(--ink-sub); }
+.ob-quest-note { margin: 6px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--muted-2); font-style: italic; }
+.ob-quest-act { display: flex; align-items: center; gap: 8px; margin-top: 13px; }
+/* #853 완료·다음 차례 스텝 클릭 펼침 — 접힌 줄(head) + 펼침 상세(detail). 기본 접힘. */
+.ob-quest-collapse-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ob-quest-collapse-head.expandable { cursor: pointer; }
+.ob-quest-collapse-head.expandable:hover .ob-quest-name { color: var(--blue); }
+.ob-quest-caret { flex: none; margin-left: auto; font-size: 10px; color: var(--muted-2); transition: transform .15s ease; }
+.ob-quest-body.open .ob-quest-caret { transform: rotate(180deg); }
+.ob-quest-detail .ob-quest-desc { margin: 10px 0 0; }
+.ob-quest-detail .ob-quest-act { margin-top: 11px; }
+@media (prefers-reduced-motion: reduce) { .ob-quest-caret { transition: none; } }
+
+/* 펼치면 '지금 단계' 카드와 같은 활성 느낌으로(요청: 접힘→펼침이 활성 상태와 통일되게) */
+.ob-quest-body.open { margin: 2px 0 18px; border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--blue) 30%, var(--line));
+  background: color-mix(in srgb, var(--blue) 4%, var(--bg));
+  box-shadow: 0 3px 12px rgba(21,35,59,.06); }
+/* 접힘용 padding-top:6px/bottom:20px(아래 규칙, 0,3,0)를 이기려 상태까지 스코프(0,4,0) — active 카드처럼 위아래 균일 */
+.ob-quest.is-upcoming .ob-quest-body.open,
+.ob-quest.is-done .ob-quest-body.open,
+.ob-quest.is-skipped .ob-quest-body.open { padding: 14px 16px; }
+.ob-quest-body.open .ob-quest-collapse-head .ob-quest-name { font-size: 15.5px; font-weight: 800; color: var(--ink); }
+.ob-quest.is-upcoming:has(.ob-quest-body.open) { opacity: 1; }               /* 펼치면 흐림 해제 */
+.ob-quest.is-skipped .ob-quest-body.open .ob-quest-name { color: var(--ink); }
+
+/* 깬 도장(완료/나중에 하기) — 접힌 줄, 조용히. head 가 한 줄, 펼치면 detail 이 그 아래로(블록). */
+.ob-quest.is-done .ob-quest-body, .ob-quest.is-skipped .ob-quest-body,
+.ob-quest.is-upcoming .ob-quest-body { padding-top: 6px; padding-bottom: 20px; }
+.ob-quest.is-done .ob-quest-name, .ob-quest.is-skipped .ob-quest-name, .ob-quest.is-upcoming .ob-quest-name { font-size: 14px; font-weight: 700; }
+.ob-quest.is-skipped .ob-quest-name { color: var(--muted); }
+.ob-quest-tag { flex: none; font-size: 11.5px; font-weight: 700; color: var(--mint-deep, #16a37f); }
+.ob-quest.is-skipped .ob-quest-tag { color: var(--muted-2); }
+
+/* 다음 차례 — 흐리게(잠긴 느낌) */
+.ob-quest.is-upcoming { opacity: .6; }
+.ob-quest.is-upcoming .ob-quest-name { color: var(--ink-sub); }
+.ob-quest-next { flex: none; font-size: 11px; font-weight: 800; color: var(--muted-2); background: var(--bg-tint); border-radius: 999px; padding: 2px 9px; }
+
+/* 완주 축하 */
+.ob-done-all { text-align: center; padding: 6px 0 18px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+.ob-done-all-stamp { width: 46px; height: 46px; margin: 0 auto; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  font-size: 24px; font-weight: 800; color: #fff; background: var(--mint-deep, #16a37f); box-shadow: 0 0 0 5px color-mix(in srgb, var(--mint-deep, #16a37f) 14%, transparent); }
+.ob-done-all-title { margin-top: 8px; font-size: 17px; font-weight: 800; color: var(--ink); letter-spacing: -.3px; }
+.ob-done-all-sub { margin: 5px 0 0; font-size: 13px; line-height: 1.55; color: var(--ink-sub); }
+
+/* 좁은 화면 — 헤더 세로 */
+@media (max-width: 560px) { .ob-journey-head { flex-direction: column; align-items: flex-start; gap: 3px; } }
 
 /* ============================================================
    맥락의 세 축 다이어그램(:::axes — 사용설명서 how-it-works).
@@ -7217,7 +7331,7 @@ input.emb-num { width: 120px; flex: none; }
 /* ── #853 :::shot — 주석 스크린샷(실사 + 번호 핀 + 범례). 절제된 구성: 프레임·소수 핀·2열 범례. ── */
 /* ── #853 :::shot — 위: 구획 박스 스크린샷 / 아래: 번호별 1:1 상세 카드. 본문 폭(800)을 넘겨 크게. ── */
 .md-shot { margin: 22px 0 26px; display: flex; flex-direction: column; gap: 14px;
-  width: min(1120px, calc(100vw - 300px)); }   /* breakout: 읽기 폭보다 넓게(우측 여백으로 확장) */
+  width: 100%; max-width: 100%; }   /* 콘텐츠 컬럼(.docs-body)에 맞춰 담는다 — 전폭 셸(#780)에서 옛 breakout(1120px)이 뷰포트를 넘던 것 제거 */
 .md-shot-imgwrap { position: relative; display: block; border: 1px solid var(--line); border-radius: 12px;
   overflow: hidden; box-shadow: 0 6px 22px rgba(21,35,59,.12); line-height: 0; }
 .md-shot-img { width: 100%; height: auto; display: block; }
@@ -7247,3 +7361,23 @@ input.emb-num { width: 120px; flex: none; }
 .md-shot-dbody { font-size: 14px; color: var(--ink-sub, #40506a); line-height: 1.65; margin: 6px 0 0; }
 .md-shot-dbody + .md-shot-dbody { margin-top: 5px; }
 @media (max-width: 1120px) { .md-shot { width: 100%; } }
+
+/* 온보딩 connect '지금 하기' 선택 — 중앙 팝업(overlayBox). 웹=추천 / 로컬=개발자용 배지로 구분. */
+.ov-back.ob-choice-back { align-items: center; }   /* 세로도 화면 중앙(짧은 선택 팝업이라 위쪽에 붙지 않게) */
+.ob-choice-box { max-width: 560px; }
+.ob-choice-lead { font-size: 13px; color: var(--ink-sub); margin: 0 0 14px; line-height: 1.5; }
+.ob-choice-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 560px) { .ob-choice-grid { grid-template-columns: 1fr; } }
+.ob-choice-card { text-align: left; display: flex; flex-direction: column; gap: 6px; padding: 16px 18px; border: 1.5px solid var(--line-net); border-radius: 14px; background: var(--bg); cursor: pointer; font: inherit; transition: border-color .14s ease, background-color .14s ease, box-shadow .14s ease; }
+.ob-choice-card:hover { border-color: var(--blue); background: var(--bg-tint); box-shadow: 0 3px 12px rgba(45,107,240,.12); }
+.ob-choice-top { display: flex; align-items: center; gap: 8px; }   /* 배지는 제목 바로 옆(짧아진 워딩에 맞춰 붙임) */
+.ob-choice-title { font-size: 16px; font-weight: 800; color: var(--ink); letter-spacing: -.3px; }
+/* 배지 — 둘 다 같은 모양(테두리 없는 알약·같은 크기), 색만 다르다: 추천=파랑 강조 · 개발자=중립 회색. */
+.ob-choice-badge { flex: none; font-size: 11px; font-weight: 700; line-height: 1.3; border-radius: 999px; padding: 2px 9px; }
+.ob-choice-badge.rec { color: var(--blue); background: color-mix(in srgb, var(--blue) 12%, var(--bg)); }
+.ob-choice-badge.dev { color: var(--ink-sub); background: var(--bg-tint-2, var(--bg-tint)); }
+.ob-choice-desc { font-size: 13px; color: var(--ink-sub); line-height: 1.5; margin: 0; }
+/* 인라인 선택박스(#/start 맨 위) — 팝업 카드를 그대로 페이지에 얹고, 고른 카드는 파랑으로 강조. #req */
+.ob-choice-head { font-size: 15px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; margin-bottom: 4px; }
+.ob-choice-card.sel { border-color: var(--blue); background: color-mix(in srgb, var(--blue) 6%, var(--bg)); box-shadow: 0 0 0 1px var(--blue) inset; }
+.ob-choice-card.sel:hover { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue) inset, 0 3px 12px rgba(45,107,240,.12); }

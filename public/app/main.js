@@ -8,7 +8,7 @@ import { wkRouteCleanup } from './wiki-data.js'; // #764 — 라우트 이탈 �
 import { pjvCloseProjectModalOnRoute, renderProjectV2Detail, renderProjectsV2 } from './projects.js';
 import { pjvCloseTaskModalOnRoute, pjvRenderTaskRoute } from './taskmodal.js'; // #804 라우트 이탈 시 모달 정리 · #810 태스크 딥링크
 import { renderInstall, renderLearn, renderLearnDocs, renderLearnTour, renderOnboarding } from './learn.js';
-import { renderStart, renderStartMigrate } from './start.js'; // #/start — 구성원 온보딩(#846/850) + 하네스 관리(#891)
+import { renderStart, renderStartMigrate, renderStartProject } from './start.js'; // #/start — 구성원 온보딩(#846/850) + 프로젝트 체험(#853)
 import { renderActivate } from './activate.js'; // #/activate — CLI 디바이스 로그인 승인(#880)
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard, startDashboardSessionTour } from './dashboard-home.js';
@@ -76,8 +76,9 @@ async function route() {
             // 사용 가이드 [내 AI 세션 생성]의 '따라하며 만들기 →'(#/dashboard?tour=1) — 홈에서 세션 만들기 투어를 켠다(#780).
             //  쿼리는 새로고침 재실행 방지를 위해 조용히 제거(해시만 갱신 — hashchange/재라우팅 없음).
             if (params.get('tour') === '1') {
+                const fromOnboarding = params.get('from') === 'onboarding'; // #/start '웹에서 만들기' → 완주 후 #/start 복귀
                 history.replaceState(null, '', '#/dashboard');
-                startDashboardSessionTour();
+                startDashboardSessionTour(fromOnboarding ? '#/start' : undefined);
             }
         }
         else if (page === 'learn') {
@@ -110,6 +111,8 @@ async function route() {
                 await renderInstall(view);
             else if (segs[1] === 'migrate')
                 await renderStartMigrate(view);
+            else if (segs[1] === 'project')
+                await renderStartProject(view); // #853 — 프로젝트 체험(손수 투어 랜딩)
             else if (segs[1] === 'harness') {
                 location.replace('#/system/me-assets');
                 return;

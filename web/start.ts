@@ -1,4 +1,4 @@
-// start.ts — 구성원 온보딩 (#846 / 태스크 850, UI 전면개편 #870)
+// start.ts — 구성원 온보딩 (#846 / 태스크 850, UI 전면개편 #870 → 순차 완료 여정 #req)
 //  "온보딩은 여기서 시작해서 여기서 끝난다" — 유일한 **진입·완주 표면**.
 //
 //  ⚠ 화면은 SoT 가 아니다. 상태의 SoT 는 서버 `computeMemberOnboarding`(src/org/onboarding.ts) 한 함수이고
@@ -8,27 +8,82 @@
 //  ⚠ 이 페이지는 **값을 편집하지 않는다.** 케이스별로 관리탭·프로젝트로 보내는 **딥링크 런처**다
 //   (편집 UI 를 두면 관리탭과 두 개의 진실이 생긴다).
 //
-//  UI(#870): #/learn 문서 사이트와 같은 디자인 언어 — docsShell 사이드바 + docs-title 히어로 + 카드 클래스
-//   (.ob-*, .docs-*). 인라인 스타일·하드코딩 색 금지(그게 #/learn 과 이질감의 원인이었다). null 은 렌더 배열에서 걸러낸다.
+//  UI(#req): 처음 로그인한 사람이 **위→아래 한 단계씩 순서대로** 완주하는 여정. 스텝을 순서(connect→migrate
+//   →credentials→repos)로 세우고, 지나온 건 체크(✓)로 접고, 첫 미완만 '지금 이 단계'로 크게 편다. 다음 스텝은 흐리게
+//   '다음 차례'. 디자인은 #/learn 문서 사이트와 같은 언어(docsShell·docs-title·카드·토큰) — 인라인 색·하드코딩 금지.
 import { api, el, toast } from './core.js';
-import { docsEyebrow, docsShell } from './learn.js'; // 사용 가이드 사이드바 셸 — '직접 해보기 › 시작하기'가 이 페이지의 입구다
-import { isSectionDone, startGuideTour } from './guide-tour.js'; // #853 '프로젝트 체험' — 손수 하기 투어(project-do 코스) 시작·완료표시
+import { docsEyebrow, docsShell, openInstallModal } from './learn.js'; // 사용 가이드 셸 + 설치 팝업 — '직접 해보기 › 시작하기'가 이 페이지의 입구다
+import { isSectionDone, startGuideTour } from './guide-tour.js'; // '프로젝트 체험' — #/learn/tour 와 같은 'projects' 둘러보기 코스 시작·완료표시
 
-const ICON: Record<string, string> = { done: '✓', skipped: '—', todo: '○' };
+// 시작 모드(웹/로컬) — 이 사람이 어디서 AI를 쓸지. 기기별 localStorage(기본 web=추천).
+//  웹이면 로컬 전용 스텝('예전 환경 가져오기'=migrate)은 여정에서 뺀다(웹 세션은 내 컴퓨터 파일을 못 읽어 이관 불가).
+const OB_MODE_KEY = 'ob_start_mode';
+function obMode(): 'web' | 'local' { try { return localStorage.getItem(OB_MODE_KEY) === 'local' ? 'local' : 'web'; } catch { return 'web'; } }
+function setObMode(m: 'web' | 'local', view: any) { try { localStorage.setItem(OB_MODE_KEY, m); } catch { /* 저장 실패 무시 */ } renderStart(view); }
 
-async function mark(step: string, state: 'done' | 'skipped' | 'reset', view: any) {
+// 여정 맨 위 '어디서 AI를 쓰실 건가요' 선택 — 고르면 아래 여정이 그 모드로 바뀐다(웹=3스텝·로컬=4스텝). connect 스텝의
+//  '지금 하기'도 이 선택을 따라 바로 동작하므로(웹=홈 따라하기·로컬=설치 팝업), 예전의 스텝별 웹/로컬 팝업은 없앴다.
+function modeChoice(view: any) {
+  const mode = obMode();
+  const card = (m: 'web' | 'local', title: string, sub: string, tag: string, tagCls: string) => {
+    const c = el('button', { class: 'ob-choice-card' + (mode === m ? ' sel' : ''), type: 'button', 'aria-pressed': String(mode === m) },
+      el('div', { class: 'ob-choice-top' },
+        el('span', { class: 'ob-choice-title', text: title }),
+        el('span', { class: 'ob-choice-badge ' + tagCls, text: tag })),
+      el('p', { class: 'ob-choice-desc', text: sub }));
+    c.onclick = () => setObMode(m, view);
+    return c;
+  };
+  return el('div', { class: 'card docs-card ob-choice' },
+    el('div', { class: 'ob-choice-head' }, el('b', { text: '어디서 AI를 쓰실 건가요?' })),
+    el('p', { class: 'ob-choice-lead', text: '어느 쪽을 골라도 같은 AI에 같은 회사 맥락이 들어갑니다. 고민되면 설치 없이 바로 쓰는 왼쪽으로 시작하세요.' }),
+    el('div', { class: 'ob-choice-grid' },
+      card('web', '라이블리 웹에서 바로', '설치 없이 웹 브라우저에서', '추천', 'rec'),
+      card('local', '내 컴퓨터에서', '내 로컬 AI에 설치', '개발자', 'dev')));
+}
+
+async function mark(step: string, state: 'done', view: any) {
   await api('/api/ui/me/onboarding', { method: 'POST', body: JSON.stringify({ step, state, by: 'self' }) });
-  toast(state === 'reset' ? '다시 열었습니다' : state === 'skipped' ? '해당 없음으로 표시했습니다' : '완료로 표시했습니다');
+  toast('완료로 표시했습니다');
   await renderStart(view);   // 서버가 돌려준 최신 상태로 다시 그린다(화면이 상태를 들고 있지 않다)
 }
 
-// 진행률 요약 — #/learn 카드 언어(.ob-progress-*, .ob-bar). 하드코딩 색·인라인 스타일 제거.
-function progressCard(s: any) {
-  return el('div', { class: 'card docs-card' },
-    el('div', { class: 'ob-progress-head' },
-      el('span', { class: 'ob-progress-count', text: `${s.done}/${s.total} 완료` }),
-      el('span', { class: 'ob-progress-note', text: s.complete ? '필수 항목을 다 하셨어요' : '필수 항목만 마치면 시작할 수 있어요' })),
-    el('div', { class: 'ob-bar' }, el('div', { class: 'ob-bar-fill', style: `width:${s.pct}%` })));
+// ⋯ escape hatch — AI 보고·자동 판정이 주(主). "이미 했으니 완료로 표시"만 남긴다(수동 확인용).
+//  완료된 스텝은 되돌리지 않는다: 되돌리면 진행도가 후퇴(2/4→1/4)해 "뒤 단계가 안 한 게 됨"처럼 보여 혼란.
+//  '다시 보기'는 줄을 눌러 펼치는(비파괴) 것으로 충분하다 → done 스텝엔 ⋯ 를 아예 두지 않는다.
+function stepMore(it: any, view: any) {
+  if (it.state === 'done') return null;
+  return el('details', { class: 'ob-more' },
+    el('summary', { 'aria-label': '이 항목 상태 바꾸기', text: '⋯' }),
+    el('div', { class: 'card ob-more-pop' },
+      el('button', { class: 'btn btn-ghost btn-sm', text: '완료로 표시', onclick: () => mark(it.key, 'done', view) })));
+}
+
+// connect 는 선택한 모드(웹/로컬)대로 바로 동작 — 웹=홈 따라하기, 로컬=설치 팝업. 나머지 스텝은 딥링크(it.href).
+function primaryActBtn(it: any, _view: any, label: string) {
+  if (it.key === 'connect') {
+    return el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: label,
+      onclick: () => { if (obMode() === 'local') openInstallModal(); else location.hash = '#/dashboard?tour=1&from=onboarding'; } });
+  }
+  const href = stepHref(it);
+  return href ? el('a', { class: 'btn btn-primary btn-sm', href, text: label }) : null;
+}
+
+// connect 스텝 설명은 고른 모드에 맞춘다 — 웹=바로 열기 / 로컬=설치. 라벨('AI 설치하기')은 서버 SoT 그대로 두고 설명만 화면에서 바꾼다(#req).
+function stepHow(it: any): string {
+  if (it.key === 'connect') {
+    return obMode() === 'web'
+      ? '라이블리 웹에서 [내 AI 세션]을 바로 엽니다.'
+      : '내 컴퓨터의 AI(Claude Code·Codex)에 라이블리를 설치해서 사용합니다.';
+  }
+  return it.how;
+}
+
+// 외부 서비스 연결(credentials)의 '지금 하기'는 '내 서비스 로그인'(#/system/me-logins)으로 — 멤버 개인 자격을 연결하는 정확한 화면.
+//  href 는 웹UI 내비 용도(AI 판단엔 안 씀)라 서버 SoT 대신 화면에서 바꾼다(#req).
+function stepHref(it: any): string | undefined {
+  if (it.key === 'credentials') return '#/system/me-logins';
+  return it.href;
 }
 
 // 조직 축(관리자가 채우는 5단계) 배너 — 구성원 온보딩을 다 해도 **회사 맥락이 비어 있으면** AI 는
@@ -45,53 +100,110 @@ async function orgBanner() {
   } catch { return null; }
 }
 
-// ⋯ escape hatch — AI 보고·자동 판정이 주(主). "의도적으로 마킹하고 싶을 때"만.
-function stepMore(it: any, view: any) {
-  return el('details', { class: 'ob-more' },
-    el('summary', { 'aria-label': '이 항목 상태 바꾸기', text: '⋯' }),
-    el('div', { class: 'card ob-more-pop' },
-      it.state !== 'done' ? el('button', { class: 'btn btn-ghost btn-sm', text: '완료로 표시', onclick: () => mark(it.key, 'done', view) }) : null,
-      it.state !== 'skipped' && !it.required ? el('button', { class: 'btn btn-ghost btn-sm', text: '해당 없음', onclick: () => mark(it.key, 'skipped', view) }) : null,
-      it.state !== 'todo' ? el('button', { class: 'btn btn-ghost btn-sm', text: '다시 열기', onclick: () => mark(it.key, 'reset', view) }) : null));
+// #853 완료·다음 차례 스텝도 클릭하면 설명·[해보기]를 펼친다(기본 접힘). is-active(지금 단계)는 이미 펼친 카드라 제외.
+//  headEls = 접힌 줄에 보이는 것(이름·태그·⋯). 펼치면 그 아래 설명·노트·행동 버튼(actionText)이 나온다.
+function collapsibleBody(it: any, view: any, headEls: any[], actsEl: any) {
+  const hasActs = !!(actsEl && actsEl.childElementCount);
+  const canExpand = !!(stepHow(it) || it.note || hasActs);
+  const caret = canExpand ? el('span', { class: 'ob-quest-caret', 'aria-hidden': 'true', text: '▾' }) : null;
+  const head = el('div', { class: 'ob-quest-collapse-head' + (canExpand ? ' expandable' : '') }, ...headEls, caret);
+  if (!canExpand) return el('div', { class: 'ob-quest-body' }, head);
+  const detail = el('div', { class: 'ob-quest-detail', hidden: true },
+    stepHow(it) ? el('p', { class: 'ob-quest-desc', text: stepHow(it) }) : null,
+    it.note ? el('p', { class: 'ob-quest-note', text: it.note }) : null,
+    hasActs ? actsEl : null);
+  const wrap = el('div', { class: 'ob-quest-body' }, head, detail);
+  head.addEventListener('click', (e: any) => {
+    if (e.target.closest('.ob-more, a, button')) return;   // ⋯ 메뉴·링크·버튼 클릭은 펼침 토글 아님
+    const open = detail.hidden;
+    detail.hidden = !open;
+    wrap.classList.toggle('open', open);
+    head.setAttribute('aria-expanded', String(open));
+  });
+  head.setAttribute('role', 'button');
+  head.setAttribute('tabindex', '0');
+  head.setAttribute('aria-expanded', 'false');
+  head.addEventListener('keydown', (e: any) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); head.click(); } });
+  return wrap;
 }
 
-// 미완 = 크고 뚜렷한 '할 일' 카드 — 설명 + [해보기]. 필수는 .req 로 한 단계 더 강조.
-//  (완료/미완이 같은 크기 카드라 '점 색만' 다르던 게 안 읽힌 원인 → 미완만 풀카드로, 완료는 얇은 줄로 분리.)
-function todoCard(it: any, view: any) {
-  const cls = 'card ob-step todo' + (it.required ? ' req' : '');
-  return el('div', { class: cls },
-    el('div', { class: 'ob-step-top' },
-      el('div', { class: 'ob-step-head' },
-        el('span', { class: 'ob-step-dot' }),   // 속 빈/채운 파란 링 — CSS
-        el('span', { class: 'ob-step-label', text: it.label }),
-        it.required ? el('span', { class: 'ob-step-badge req', text: '필수' }) : null),
-      stepMore(it, view)),
-    el('p', { class: 'ob-step-desc', text: it.how }),
-    it.note ? el('p', { class: 'ob-step-note', text: it.note }) : null,
-    it.href
-      ? el('div', { class: 'ob-step-act' }, el('a', { class: 'btn btn-primary btn-sm', href: it.href, text: '해보기 →' }))
-      : null);
+// 여정의 한 스텝(레일 노드 + 본문). 상태별로 다른 얼굴:
+//  done/skipped = 완료(✓/—)로 접힌 줄(클릭 펼침) · active = 지금 단계 풀카드(설명+액션) · upcoming = 흐린 '다음 차례'(클릭 펼침).
+//  접힌 줄(upcoming/done/skipped)은 펼치면 active 카드와 같은 활성 느낌으로 보인다(CSS .ob-quest-body.open).
+function questRow(it: any, idx: number, isActive: boolean, isLast: boolean, view: any) {
+  const stateCls = it.state === 'done' ? 'is-done' : isActive ? 'is-active' : 'is-upcoming';
+  const glyph = it.state === 'done' ? '✓' : String(idx + 1);
+  const rail = el('div', { class: 'ob-quest-rail', 'aria-hidden': 'true' },
+    el('div', { class: 'ob-quest-node' }, el('span', { text: glyph })),
+    isLast ? null : el('div', { class: 'ob-quest-line' }));
+
+  let body: any;
+  if (stateCls === 'is-active') {
+    const acts = el('div', { class: 'ob-quest-act' }, primaryActBtn(it, view, '지금 하기 →'));
+    body = el('div', { class: 'ob-quest-body' },
+      el('div', { class: 'ob-quest-title' },
+        el('span', { class: 'ob-quest-name', text: it.label }),
+        it.required ? el('span', { class: 'ob-quest-badge req', text: '필수' }) : null,
+        stepMore(it, view)),
+      el('p', { class: 'ob-quest-desc', text: stepHow(it) }),
+      it.note ? el('p', { class: 'ob-quest-note', text: it.note }) : null,
+      (acts.childElementCount ? acts : null));
+  } else if (stateCls === 'is-upcoming') {
+    // 다음 차례 — 아직 안 한 단계. 기본은 접혀 있지만, 클릭해 펼치면 지금 단계와 **같은 카드 느낌·같은 가이드(it.how)+액션**을
+    //  받는다. 꼭 순서대로 하지 않아도 뒤 단계를 먼저 열어 바로 진행할 수 있게 액션은 '지금 하기 →'(미리보기 아님).
+    const acts = el('div', { class: 'ob-quest-act' }, primaryActBtn(it, view, '지금 하기 →'));
+    body = collapsibleBody(it, view, [
+      el('span', { class: 'ob-quest-name', text: it.label }),
+      it.required ? el('span', { class: 'ob-quest-badge req', text: '필수' }) : null,
+      el('span', { class: 'ob-quest-next', text: '다음 차례' }),
+    ], acts);
+  } else { // done — 완료. 클릭하면 설명·'다시 보기'를 펼친다(비파괴, #853).
+    //  ('미룸/나중에 하기'는 폐지 — skipped 상태는 위 is-active/is-upcoming 으로 흘러 '지금 하기'로 이어서 하면 된다. #req)
+    const by = it.by === 'ai' ? 'AI가 완료' : it.by === 'auto' ? '확인됨' : '완료';
+    const dhref = stepHref(it);
+    const acts = dhref ? el('div', { class: 'ob-quest-act' }, el('a', { class: 'btn btn-ghost btn-sm', href: dhref, text: '다시 보기 →' })) : null;
+    body = collapsibleBody(it, view, [
+      el('span', { class: 'ob-quest-name', text: it.label }),
+      el('span', { class: 'ob-quest-tag', text: by }),
+      it.by !== 'auto' ? stepMore(it, view) : null,
+    ], acts);
+  }
+  return el('div', { class: 'ob-quest ' + stateCls }, rail, body);
 }
 
-// 완료(또는 해당없음) = 접힌 얇은 줄 — 체크 + 라벨 + 상태 pill + ⋯. 설명·버튼 없음(끝난 일이라 조용히).
-function doneRow(it: any, view: any) {
-  const skipped = it.state === 'skipped';
-  const by = it.by === 'ai' ? 'AI가 완료' : it.by === 'auto' ? '확인됨' : '완료';
-  return el('div', { class: 'ob-done-row' + (skipped ? ' skipped' : '') },
-    el('span', { class: 'ob-done-check', text: skipped ? '—' : '✓' }),
-    el('span', { class: 'ob-done-label', text: it.label }),
-    el('span', { class: 'ob-done-tag', text: skipped ? '해당 없음' : by }),
-    stepMore(it, view));
+// 여정 카드 — 헤더(N/총 완료, 진행바) + 스텝 레일. 모두 마치면 완료 배너를 위에 얹는다.
+function journeyCard(items: any[], activeIdx: number, view: any, complete: boolean) {
+  const total = items.length;
+  const cleared = items.filter((it) => it.state === 'done').length;
+  const pct = total ? Math.round((cleared / total) * 100) : 0;
+  const allClear = activeIdx === -1;
+
+  const header = el('div', { class: 'ob-journey-head' },
+    el('span', { class: 'ob-journey-count' }, el('b', { text: String(cleared) }), ' / ' + total + ' 완료'),
+    el('span', { class: 'ob-journey-note' + (complete ? ' ok' : ''),
+      text: complete ? '✓ 필수 완료 — 이제 써도 돼요' : '필수 1개만 마치면 시작할 수 있어요' }));
+  const bar = el('div', { class: 'ob-journey-bar' }, el('div', { class: 'ob-journey-bar-fill', style: `width:${pct}%` }));
+
+  const celebrate = allClear
+    ? el('div', { class: 'ob-done-all' },
+      el('div', { class: 'ob-done-all-stamp', 'aria-hidden': 'true', text: '✓' }),
+      el('div', { class: 'ob-done-all-title', text: '준비 완료 — 이제 시작하세요' }),
+      el('p', { class: 'ob-done-all-sub' }, el('a', { href: '#/dashboard', text: '내 AI 세션' }),
+        ' 에서 한국어로 시키면 됩니다. 회사 맥락을 알고 답합니다.'))
+    : null;
+
+  const steps = el('div', { class: 'ob-journey-steps' },
+    ...items.map((it, i) => questRow(it, i, i === activeIdx, i === total - 1, view)));
+
+  return el('div', { class: 'card docs-card ob-journey' }, header, bar, celebrate, steps);
 }
 
 export async function renderStart(view: any) {
   // #/learn 과 같은 머리 — 아이브로(직접 해보기) + docs-title 히어로 + 리드 한 줄.
   const head = [
     docsEyebrow('start'),
-    el('h1', { class: 'docs-title', text: '시작하기' }),
-    el('p', { class: 'docs-lead' }, '라이블리를 쓸 준비가 얼마나 됐는지 한눈에 봅니다. AI 도 같은 현황을 읽으니, ',
-      el('a', { href: '#/dashboard', text: '내 AI 세션' }), ' 에서 AI 에게 ',
-      el('b', { text: '“온보딩 도와줘”' }), ' 라고 하면 이어서 도와줍니다.'),
+    el('h1', { class: 'docs-title', text: 'AI 세션 체험' }),
+    el('p', { class: 'docs-lead' }, '먼저 어디서 쓸지 고른 뒤, 아래 단계를 ', el('b', { text: '위에서부터 차례대로' }), ' 마치면 됩니다.'),
   ];
   const slot = el('div', { class: 'guide-cards' });
   docsShell(view, 'start', ...head, slot);   // 사이드바 유지 — 여기가 '직접 해보기'의 첫 항목
@@ -100,39 +212,15 @@ export async function renderStart(view: any) {
   try { d = await api('/api/ui/me/onboarding'); }
   catch (e: any) { slot.replaceChildren(el('p', { class: 'admin-hint', text: '현황을 불러오지 못했습니다 — ' + e.message })); return; }
   const s = d.status;
+  // 웹 모드는 로컬 전용 스텝('예전 환경 가져오기'=migrate)을 뺀다 — 웹 세션은 내 컴퓨터 파일을 못 읽어 이관이 불가하니까.
+  const items: any[] = (obMode() === 'web' ? s.items.filter((it: any) => it.key !== 'migrate') : s.items);
+  const activeIdx = items.findIndex((it: any) => it.state !== 'done'); // 첫 미완(미룬 것 포함) = '지금 이 단계'
 
-  // 상태로 가른다 — 미완(할 일)은 위·풀카드, 완료(끝난 것)는 아래·얇은 줄. "무엇이 남았나"가 한눈에.
-  const todo = s.items.filter((it: any) => it.state !== 'done' && it.state !== 'skipped');
-  const done = s.items.filter((it: any) => it.state === 'done' || it.state === 'skipped');
-
-  const doneBanner = s.complete
-    ? el('div', { class: 'ob-banner green' },
-      el('div', { class: 'ob-banner-title', text: '준비 끝 — 이제 그냥 쓰시면 됩니다.' }),
-      el('p', { class: 'ob-banner-sub' }, '아래 선택 항목은 필요할 때 하시면 됩니다. ',
-        el('a', { href: '#/dashboard', text: '내 AI 세션' }), ' 에서 AI 에게 한국어로 물어보세요 — 회사 맥락을 알고 답합니다.'))
-    : null;
-
-  const todoSection = todo.length
-    ? el('div', { class: 'ob-sec' },
-      el('div', { class: 'ob-sec-head' }, el('span', { class: 'ob-sec-title', text: '지금 할 일' }),
-        el('span', { class: 'ob-sec-count', text: String(todo.length) })),
-      ...todo.map((it: any) => todoCard(it, view)))
-    : null;
-
-  const doneSection = done.length
-    ? el('div', { class: 'ob-sec' },
-      el('div', { class: 'ob-sec-head' }, el('span', { class: 'ob-sec-title done', text: '완료' }),
-        el('span', { class: 'ob-sec-count', text: String(done.length) })),
-      el('div', { class: 'ob-done-list' }, ...done.map((it: any) => doneRow(it, view))))
-    : null;
-
-  // null 은 배열에서 걸러 낸다(예전엔 그대로 렌더돼 화면에 'null' 이 찍혔다).
+  // 선택박스(웹/로컬)를 맨 위에, 그 아래 모드에 맞춘 여정. null 은 배열에서 걸러 낸다.
   const cards = [
-    progressCard(s),
+    modeChoice(view),
+    journeyCard(items, activeIdx, view, s.complete),
     await orgBanner(),
-    doneBanner,
-    todoSection,
-    doneSection,
   ].filter(Boolean);
   slot.replaceChildren(...cards as any[]);
 }
@@ -171,34 +259,49 @@ export async function renderStartMigrate(view: any) {
 }
 
 
-// #/start/project — '프로젝트 체험'(#853): 프로젝트 흐름을 **진짜로 한 번 해보는** 손수 투어의 랜딩.
-//  옛 온보딩 4단계('프로젝트·코드 연결' 자동판정)를 대체한다 — 판정 대신 '해봤다'(투어 완주 표시)로 남는다.
-//  진행 자체는 guide-tour.ts 의 project-do 코스(pd-create → pd-detail)가 실제 화면 위에서 안내한다.
+// #/start/project — '프로젝트 체험': 프로젝트 화면을 예시 프로젝트에서 한 바퀴 둘러보는 랜딩.
+//  진행 자체는 guide-tour.ts 의 'projects' 코스(projects-board → projects-detail)가 안내한다 —
+//  #/learn/tour 의 프로젝트 둘러보기와 **완전히 같은 투어**다(요청: 두 곳을 동일하게). 별도 투어를 두지 않는다.
 export async function renderStartProject(view: any) {
-  const did = isSectionDone('project-do');
+  // UI 는 'AI 세션 체험'(renderStart)과 같은 여정 레일(ob-journey/ob-quest) 로 통일한다.
+  //  스텝은 정적으로 보여주고(번호 노드 → 둘러보면 ✓), 실행은 startGuideTour(['projects']) 하나만 띄운다.
+  const did = isSectionDone('projects');
   const head = [
     docsEyebrow('start-project'),
     el('h1', { class: 'docs-title', text: '프로젝트 체험' }),
-    el('p', { class: 'docs-lead', text: '라이블리의 기본 작업 흐름을 처음부터 끝까지 직접 해봅니다 — 프로젝트를 만들고, 지식을 연결하고, AI 세션을 열고, 태스크를 나누고, 여러 태스크를 한 번에 AI 에게 맡기는 것까지.' }),
+    el('p', { class: 'docs-lead', text: '프로젝트 화면이 어떤 부분들로 이뤄져 있고 각각 무엇에 쓰는지, 예시 프로젝트에서 한 바퀴 둘러봅니다.' }),
   ];
-  const stepRow = (num: string, title: string, desc: string) => el('div', { class: 'guide-path-step' },
-    el('div', { class: 'guide-path-num', 'aria-hidden': 'true', text: num }),
-    el('div', { class: 'guide-path-body' },
-      el('div', { class: 'guide-path-title' }, el('span', { text: title })),
-      el('p', { class: 'guide-path-desc', text: desc })));
+
+  const STEPS: [string, string][] = [
+    ['프로젝트 목록', '폴더·리스트로 묶어 보는 보드입니다(쓰던 클릭업과 비슷). 여기서 예시 프로젝트를 하나 엽니다.'],
+    ['선행·후속 프로젝트', '이 일의 앞뒤에 오는 프로젝트를 이어 두는 곳입니다. 일의 순서가 드러나고, AI 도 그 앞뒤를 아는 채로 시작합니다.'],
+    ['개요와 연결된 지식', '프로젝트의 배경을 적는 본문과, 이 일에 필요한 회사 지식(WIKI)을 미리 붙여 두는 곳입니다. 연결한 지식은 AI 세션에 자동으로 전달됩니다.'],
+    ['태스크와 공유 폴더', '프로젝트를 할 일로 나누는 태스크와, 팀이 함께 쓰는 파일을 두는 공유 폴더를 봅니다.'],
+    ['AI 세션 열기', '이 프로젝트의 맥락(본문·연결된 지식)을 이미 아는 AI 작업 세션을 여는 과정을 봅니다.'],
+  ];
+  const total = STEPS.length;
+  const questRowStatic = (i: number, title: string, desc: string) => {
+    const stateCls = did ? 'is-done' : 'is-step';       // 둘러보면 5단계 모두 ✓(민트), 아니면 번호 노드
+    const rail = el('div', { class: 'ob-quest-rail', 'aria-hidden': 'true' },
+      el('div', { class: 'ob-quest-node' }, el('span', { text: did ? '✓' : String(i + 1) })),
+      i === total - 1 ? null : el('div', { class: 'ob-quest-line' }));
+    const body = el('div', { class: 'ob-quest-body' },
+      el('div', { class: 'ob-quest-title' }, el('span', { class: 'ob-quest-name', text: title })),
+      el('p', { class: 'ob-quest-desc', text: desc }));
+    return el('div', { class: 'ob-quest ' + stateCls }, rail, body);
+  };
+
+  const header = el('div', { class: 'ob-journey-head' },
+    el('span', { class: 'ob-journey-count' }, el('b', { text: String(total) }), ' 단계 · 약 2분'),
+    el('span', { class: 'ob-journey-note' + (did ? ' ok' : ''), text: did ? '✓ 둘러봤어요' : '예시 프로젝트로 한 바퀴' }));
+  const lead = el('p', { class: 'ob-journey-lead', text: '실제 화면 위에서 지금 볼 곳을 표시하며 [다음]으로 한 단계씩 넘어갑니다. 예시 프로젝트라 실제로 만들거나 바꾸는 것은 없습니다 — 안심하고 둘러보세요. 언제든 ✕ 나 ESC 로 멈출 수 있습니다.' });
+  const steps = el('div', { class: 'ob-journey-steps' },
+    ...STEPS.map(([t, d], i) => questRowStatic(i, t, d)));
+  const cta = el('div', { class: 'step-cta step-cta-center' },
+    el('button', { class: 'btn btn-primary btn-lg', text: did ? '▶ 다시 둘러보기' : '▶ 둘러보기 시작', onclick: () => startGuideTour(['projects']) }),
+    el('span', { class: 'step-cta-hint', text: '약 2분 · 언제든 ESC 로 중단' }));
+
   docsShell(view, 'start-project', ...head,
     el('div', { class: 'guide-cards' },
-      el('div', { class: 'card' },
-        el('div', { class: 'card-head' }, el('h2', { text: '무엇을 해보나요' })),
-        el('p', { class: 'guide-lead', text: '실제 화면 위에서, 지금 눌러야 할 곳만 밝게 비추며 한 단계씩 따라 합니다. 연습용 데모가 아니라 실제 프로젝트가 만들어져요 — 그대로 이어서 일해도 되고, 나중에 지워도 됩니다. 언제든 ✕ 나 ESC 로 멈출 수 있어요.' }),
-        did ? el('p', { class: 'admin-hint', text: '✓ 해봤어요 — 언제든 다시 돌아도 좋아요.' }) : null,
-        el('div', { class: 'guide-path' },
-          stepRow('1', '프로젝트 만들기', '보드에서 [＋ 프로젝트] — 이름을 정하고 리스트를 골라 프로젝트를 하나 만듭니다.'),
-          stepRow('2', '지식 연결', '이 일에 필요한 회사 지식(WIKI)을 연결합니다 — 연결한 지식은 이 프로젝트에서 여는 AI 세션에 자동으로 전달돼요.'),
-          stepRow('3', 'AI 세션 열기', '프로젝트 안에서 [＋ 새 세션] — 프로젝트 본문과 연결된 지식을 자동으로 받은 AI 작업 세션을 엽니다.'),
-          stepRow('4', '태스크 나누기', '[＋ 태스크]로 할 일을 나누고, Tab 으로 하위(서브태스크)까지 만들어 봅니다.'),
-          stepRow('5', '여러 태스크 한 번에 맡기기', '태스크 여러 개를 체크하고 [클로드로 실행] — 선택한 태스크 전부를 한 AI 세션에 묶어 한 번에 맡깁니다.')),
-        el('div', { class: 'step-cta step-cta-center' },
-          el('button', { class: 'btn btn-primary btn-lg', text: did ? '▶ 다시 해보기' : '▶ 따라하며 만들어보기', onclick: () => startGuideTour(['project-do']) }),
-          el('span', { class: 'step-cta-hint', text: '약 3분 · 언제든 ESC 로 중단' })))));
+      el('div', { class: 'card docs-card ob-journey' }, header, lead, steps, cta)));
 }

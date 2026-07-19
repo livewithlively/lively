@@ -2888,12 +2888,26 @@ function dueLabel(n) { return n < 0 ? Math.abs(n) + '일 지남' : (n === 0 ? '�
 // 홈에서 '내 AI 세션 만들기' 따라하기 시작(#780) — 사용 가이드의 [내 AI 세션 생성]이 #/dashboard?tour=1 로 보낸다.
 //  세션 위젯은 비동기로 채워지므로 앵커([data-tour="new-session"] — 목록 하단 ＋새 세션 / 빈 상태 버튼)가 뜰 때까지 기다린다.
 //  ①단계만 대시보드용이고 ②~⑦(생성 폼)은 터미널과 동일 폼이라 그대로 이어진다.
-async function startDashboardSessionTour() {
+async function startDashboardSessionTour(returnTo) {
     for (let i = 0; i < 40 && !document.querySelector('[data-tour="new-session"]'); i++) {
         await new Promise((r) => setTimeout(r, 100));
     }
     if (!document.querySelector('[data-tour="new-session"]'))
         return; // 못 찾으면 조용히 포기(딤만 남기지 않는다)
-    startTerminalTour(dashTourStep1());
+    // 온보딩(#/start)에서 '웹에서 만들기'로 들어온 경우(returnTo)엔, 끝나면 항상 온보딩 화면으로 되돌린다.
+    //  - 완주(⑦ [생성하기] 클릭=세션 생성)면 connect 를 done 으로 보고 → 다음 단계(2/4)로 넘어간 상태로 복귀.
+    //  - 중도 취소(투어 닫기/이탈)면 아무것도 마킹하지 않고 그대로 복귀 → 완료 안 된 상태(1/4) 유지.
+    const opts = returnTo ? {
+        onEnd: async (reason) => {
+            if (reason === 'complete') {
+                try {
+                    await api('/api/ui/me/onboarding', { method: 'POST', body: JSON.stringify({ step: 'connect', state: 'done', by: 'self' }) });
+                }
+                catch (_) { /* 마킹 실패해도 이동은 진행 — 서버 자동판정(첫 MCP 호출)이 곧 done 으로 만든다 */ }
+            }
+            location.hash = returnTo; // 완주든 취소든 원래 있던 곳으로. 취소면 위에서 마킹을 건너뛰어 미완료 유지.
+        },
+    } : undefined;
+    startTerminalTour(dashTourStep1(), opts);
 }
 export { startDashboardSessionTour, renderMyDashboard, };

@@ -72,8 +72,9 @@ async function route() {
       // 사용 가이드 [내 AI 세션 생성]의 '따라하며 만들기 →'(#/dashboard?tour=1) — 홈에서 세션 만들기 투어를 켠다(#780).
       //  쿼리는 새로고침 재실행 방지를 위해 조용히 제거(해시만 갱신 — hashchange/재라우팅 없음).
       if (params.get('tour') === '1') {
+        const fromOnboarding = params.get('from') === 'onboarding'; // #/start '웹에서 만들기' → 완주 후 #/start 복귀
         history.replaceState(null, '', '#/dashboard');
-        startDashboardSessionTour();
+        startDashboardSessionTour(fromOnboarding ? '#/start' : undefined);
       }
     } else if (page === 'learn') {
       setActiveTab('learn'); // '사용 가이드' — 우측 상단 보조 링크(.help-link). 시작하기(설치)는 그 하위 서브탭(#617).
