@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 
 process.env.CONNECTOR_SECRET_KEY = "unit-test-key-do-not-use-in-prod-0123456789"; // #541 secret-box 공용 마스터키
 const { encryptSecret, decryptSecret, secretsEnabled } = await import("./secret-box.js");
-const { generateSshKeypair, describeGitError } = await import("./git-credential-store.js");
+const { generateSshKeypair, describeGitError, leaseGitSecretForNode } = await import("./git-credential-store.js");
 const { hostOf, prepareGitAuth, isAuthError } = await import("../project-provision.js");
 const { safeHost, buildSshConfigBlock, buildGitCredLines } = await import("./git-credential-materialize.js");
 const { sanitizeCloneUrl } = await import("../domainmap/core/queries.js");
@@ -181,25 +181,38 @@ const ok = (name: string) => { pass++; console.log(`ok  ${name}`); };
   ok("buildGitCredLines URL 인코딩(URL 무결)");
 }
 
-// ── 🔴 원격 노드로 **조직 공용 git 자격이 나가면 안 된다**(#905 C4) ──
-//  노드는 멤버 개인 노트북일 수 있다. 게이트웨이(조직) git 키가 거기로 나가면 그 머신 주인이 조직 전체 레포
-//  권한을 쥔다 — 권한 상승이고 **한 번 나간 키는 회수할 수 없다**.
-//  게이트웨이 로컬용 resolveGitSecret 은 "멤버 없으면 조직 폴백"이라 **노드 주입에 쓰면 정확히 그 사고가 난다**.
-//  ⚠ 행위로 검증할 수 없다: 두 함수 다 첫 줄이 DB 조회라 DB 없이는 똑같이 던져 구별이 안 된다. 그래서
-//   "노드로 나가는 경로가 조직 폴백 경로를 아예 참조하지 않는다"를 **산출물에서** 확인하는 트립와이어를 둔다.
-//   (누가 나중에 leaseGitSecretForNode 를 resolveGitSecret 으로 '단순화'하면 여기서 걸린다.)
+// ── 🔴 노드로 나가는 git 자격의 org-fallback 판정은 **한 곳(leaseGitSecretForNode)에만** 있어야 한다(#905 C4) ──
+//  정책: member 노드(개인 노트북) = 본인 자격만 · worker 노드(조직 인프라) = 조직 폴백 허용(2026-07-19).
+//  member 에 조직 공용 키가 나가면 그 머신 주인이 조직 전체 레포 권한을 쥔다 — 권한 상승·회수 불가.
+//  ⚠ 행위로 검증할 수 없다: 함수 첫 줄이 DB 조회라 DB 없이는 던져서 구별이 안 된다. 그래서 **스케줄러가
+//   자격 해소를 손으로 하지 않고 그 단일 관문만 부른다**를 산출물에서 확인한다 — 관문 안에 갇혀 있어야 member/
+//   worker 구분이 우회되지 않는다. (누가 스케줄러에서 GATEWAY_OWNER 를 직접 집으면 그 구분이 새므로 걸린다.)
 {
-  // 주석은 걷어낸다 — "resolveGitSecret 을 쓰면 안 된다"고 **설명하는 주석**이 금지 문자열에 걸리면
-  //  설명을 지워야 통과하는 꼴이 된다(정확히 반대로 가는 인센티브). 검사 대상은 코드다.
+  // 주석은 걷어낸다 — 금지 문자열을 '설명하는 주석'이 걸리면 설명을 지워야 통과하는 반대 인센티브가 생긴다.
   const stripComments = (src: string): string => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  const sched = stripComments(readFileSync(new URL("../node/task-scheduler.js", import.meta.url), "utf8"));
-  assert.ok(sched.includes("leaseGitSecretForNode"),
-    "노드 디스패치가 자격을 안 싣거나 다른 경로로 해소한다 — 이 계약이 사라졌는지 확인 필요");
-  assert.ok(!sched.includes("resolveGitSecret"),
-    "🔴 노드 디스패치가 resolveGitSecret(조직 폴백)을 쓴다 — 조직 공용 git 키가 멤버 노트북으로 나간다");
-  assert.ok(!sched.includes("GATEWAY_OWNER"),
-    "🔴 노드 디스패치가 게이트웨이(조직) 소유 자격을 직접 집는다 — 나가면 회수 못 한다");
-  ok("🔴 노드로 나가는 git 자격 경로는 조직 폴백을 참조하지 않는다(권한 상승 방지)");
+  // 노드로 자격을 보내는 **두 경로**(위탁=task-scheduler · 프로젝트=provision-remote) 모두 단일 관문
+  //  resolveRepoInject 만 쓰고, 조직 자격을 직접 집지 않아야 한다. 하나라도 손으로 해소하면 member/worker 구분이 샌다.
+  for (const mod of ["../node/task-scheduler.js", "../node/provision-remote.js"]) {
+    const src = stripComments(readFileSync(new URL(mod, import.meta.url), "utf8"));
+    assert.ok(src.includes("resolveRepoInject"), `${mod} 가 노드 자격 해소 단일 관문(resolveRepoInject)을 안 쓴다`);
+    assert.ok(!src.includes("resolveGitSecret"), `🔴 ${mod} 가 resolveGitSecret(무조건 조직 폴백)을 직접 쓴다 — member 노드에도 조직 키가 나간다`);
+    assert.ok(!src.includes("GATEWAY_OWNER"), `🔴 ${mod} 가 게이트웨이(조직) 소유 자격을 직접 집는다 — member/worker 구분을 우회`);
+  }
+  // 관문 자신은 member/worker 판정 함수(leaseGitSecretForNode)를 쓴다 — 여기서 resolveGitSecret 을 쓰면 무조건 조직폴백.
+  const gate = stripComments(readFileSync(new URL("../project-provision.js", import.meta.url), "utf8"));
+  const fn = gate.slice(gate.indexOf("async function resolveRepoInject"), gate.indexOf("async function resolveRepoInject") + 500);
+  assert.ok(fn.includes("leaseGitSecretForNode"), "🔴 resolveRepoInject 가 member/worker 판정(leaseGitSecretForNode)을 안 쓴다");
+  assert.ok(!fn.includes("resolveGitSecret"), "🔴 resolveRepoInject 가 resolveGitSecret(무조건 조직폴백)을 쓴다 — member 노드로 조직 키 유출");
+  ok("🔴 노드로 나가는 git 자격은 단일 관문(resolveRepoInject→leaseGitSecretForNode)에서만 org-fallback 판정(우회 방지)");
+}
+
+// ── leaseGitSecretForNode 는 member 노드엔 조직 폴백을 **하지 않는다**(DB 없이 검증 가능한 부분만). ──
+//  본인 자격 조회가 DB 라 전체 행위는 못 보지만, requesterId 가 빈 문자열이면 member 는 즉시 null(조회 자체가
+//  없어야 한다 = 조직 키를 절대 안 집는다). worker 만 그 경우 조직 폴백으로 넘어간다.
+{
+  const emptyMember = await leaseGitSecretForNode("", "github.com", "member");
+  assert.equal(emptyMember, null, "🔴 member 노드는 본인 자격이 없으면 null — 조직 폴백 금지");
+  ok("member 노드 + 본인 자격 없음 → null(조직 키 미유출)");
 }
 
 console.log(`\n${pass} passed`);
