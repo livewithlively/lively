@@ -1324,6 +1324,7 @@ ${bold("작업")}
       --create           새 프로젝트로 만들어 연결  ${dim('--name "<이름>"  --list <리스트id>')}
       --bind <id>        기존 프로젝트에 연결      ${dim("--path <폴더>  --json")}
   run <프로젝트번호>      프로젝트를 내 PC 에서 열기  ${dim("예: lively run 864")}
+  resume <세션id>         다른 환경/멤버에서 만든 내 세션을 이 PC 로 이어받기 ${dim("--node <id>  --print(내려받기만)")}
   delegate "<작업>"       무거운 작업을 워커/중앙에 위탁 — 진행을 미러하며 결과 출력 후 종료 ${dim('예: lively delegate "테스트 실행" --ram 2048')}
       --repo <이름> [--ref main]  대상 레포 자동 준비(공유 base→worktree, cwd 로)  ${dim("--ram/--cpu/--disk N  --docker  --node <id>  --timeout <초>")}
       --detach               번호만 반환하고 즉시 종료  ${dim("(나중에 lively delegate logs <번호>)")}
@@ -1362,6 +1363,60 @@ function parse(argv) {
   return o;
 }
 
+// lively resume <sid> — 다른 환경/멤버에서 만든 내 세션을 이 PC 로 이어받는다(#905 C1 슬⑤c).
+//  중앙 트랜스크립트를 이 머신의 claude 프로젝트 경로로 물질화한 뒤 `claude --resume <sid>` 를 띄운다.
+//  인가: 워터마크 GET 이 **소유자 전용**(owner && owner!==나 → 403) — 남의 세션은 못 이어받는다(canResumeAsOrigin=owner,
+//   열람보다 강한 게이트). ⚠ cwd 정합: claude --resume 은 트랜스크립트가 기록된 cwd 와 현재 cwd 가 어긋나면 어색할 수
+//   있다 — 환경 무관 동일 abs 경로(프로젝트 워크스페이스 격리)가 전제다(#905 설계). --print 는 물질화만 하고 명령만 출력.
+async function cmdResume(args) {
+  const o = { node: "", print: false, _: [] };
+  for (let i = 0; i < args.length; i++) {
+    const t = args[i];
+    if (t === "--node") o.node = String(args[++i] ?? "");
+    else if (t === "--print" || t === "--dry-run") o.print = true;
+    else o._.push(t);
+  }
+  const sid = o._[0];
+  if (!sid || !/^[A-Za-z0-9._-]{1,64}$/.test(sid)) { say(red("사용법: lively resume <세션id> [--node <id>] [--print]")); process.exit(2); }
+  const gw = gateway(), tok = token();
+  if (!gw) { say(red("게이트웨이 주소를 모릅니다 — `lively login --gateway <url>` 로 지정하세요.")); process.exit(1); }
+  if (!tok) { say(red("로그인이 필요합니다 — `lively login` 을 먼저 실행하세요.")); process.exit(1); }
+  const q = new URLSearchParams({ node: o.node }).toString();
+  const H = { authorization: `Bearer ${tok}` };
+
+  // 1) 소유권·오프셋 — 워터마크는 소유자 전용(비소유자 403). 이어받기는 열람보다 강한 게이트다.
+  let total = 0;
+  try {
+    const r = await fetch(`${gw}/api/ui/v6/sessions/${encodeURIComponent(sid)}/log/watermark?${q}`, { headers: H });
+    if (r.status === 401 || r.status === 403) { say(red("이 세션을 이어받을 수 없습니다 — 소유자가 아니거나 접근 권한이 없습니다.")); process.exit(1); }
+    if (!r.ok) { say(red(`게이트웨이 오류 ${r.status}.`)); process.exit(1); }
+    total = Number((await r.json())?.bytes) || 0;
+  } catch (e) { say(red(`게이트웨이 접속 실패: ${e.message}`)); process.exit(1); }
+  if (total <= 0) { say(red(`세션 ${sid} 의 중앙 기록이 없습니다(캡처 꺼짐/미수집?) — 이어받을 내용이 없습니다.`)); process.exit(1); }
+
+  // 2) 트랜스크립트 원문(x-ndjson) 회수.
+  let body;
+  try {
+    const r = await fetch(`${gw}/api/ui/v6/sessions/${encodeURIComponent(sid)}/log?${q}`, { headers: H });
+    if (!r.ok) { say(red(`트랜스크립트 회수 실패 ${r.status}.`)); process.exit(1); }
+    body = Buffer.from(await r.arrayBuffer());
+  } catch (e) { say(red(`트랜스크립트 회수 실패: ${e.message}`)); process.exit(1); }
+  if (!body.length) { say(red("회수된 트랜스크립트가 비었습니다.")); process.exit(1); }
+
+  // 3) 이 머신의 claude 프로젝트 경로로 물질화(cwd 인코딩 '/'·'.' → '-' — 서버 terminal-transcript 와 동일 규칙).
+  const dir = join(HOME, ".claude", "projects", process.cwd().replace(/[/.]/g, "-"));
+  const file = join(dir, `${sid}.jsonl`);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(file, body);
+  say(dim(`  · 트랜스크립트 물질화: ${file} (${body.length} 바이트)`));
+
+  // 4) claude --resume 실행(또는 --print 면 명령만 출력하고 끝).
+  if (o.print) { say(`claude --resume ${sid}`); return; }
+  if (!has("claude")) { say(red(`claude 실행파일을 못 찾았습니다 — 물질화만 완료. 수동으로 \`claude --resume ${sid}\` 하세요.`)); process.exit(1); }
+  const st = spawnSync("claude", ["--resume", sid], { stdio: "inherit", cwd: process.cwd() }).status;
+  process.exit(st ?? 0);
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const o = parse(argv);
@@ -1387,6 +1442,8 @@ async function main() {
     case "mcp-local": return cmdMcpLocal();
     // repo — 워크트리 셀프서비스(list/worktree). MCP 툴과 같은 코어. 나머지 인자 원형 보존.
     case "repo": return cmdRepo(argv.slice(argv.indexOf("repo") + 1));
+    // resume — 다른 환경에서 내 세션 이어받기(#905 C1). 중앙 트랜스크립트를 이 PC 로 내려 claude --resume.
+    case "resume": return cmdResume(argv.slice(argv.indexOf("resume") + 1));
     case "version": say(`lively ${CLI_VERSION}${readLively("kit-version") ? dim("  · 키트 " + readLively("kit-version")) : ""}`); return;
     case "help": say(HELP); return;
     default:
