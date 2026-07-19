@@ -32,17 +32,6 @@ export interface AppendResult {
   bytes: number;        // 이 (node,session) 로그의 현재 총 바이트 = 다음에 보내야 할 offset(보낸 쪽 워터마크 정정용).
 }
 
-// 불멸 세션 레코드 보장(있으면 last_seen 만 갱신). owner 는 **최초 1회만** 굳는다(COALESCE — 이후 안 바뀜).
-export async function ensureSession(nodeId: string, sessionId: string, harness?: string | null, owner?: string | null): Promise<void> {
-  await itemsPool.query(
-    `INSERT INTO session(node_id, session_id, harness, owner) VALUES($1,$2,$3,$4)
-     ON CONFLICT (node_id, session_id) DO UPDATE SET last_seen=now(),
-       harness=COALESCE(session.harness, EXCLUDED.harness),
-       owner=COALESCE(session.owner, EXCLUDED.owner)`,
-    [nodeId, sessionId, harness ?? null, owner ?? null],
-  );
-}
-
 // 로그 소유자(첫 append 한 멤버) 조회 — 없으면 null(아직 아무도 안 씀). 엔드포인트가 owner-gate 에 쓴다.
 export async function sessionOwner(nodeId: string, sessionId: string): Promise<string | null> {
   const r = await itemsPool.query(`SELECT owner FROM session WHERE node_id=$1 AND session_id=$2`, [nodeId, sessionId]);
@@ -58,6 +47,8 @@ export async function appendSessionLog(input: {
   const client = await itemsPool.connect();
   try {
     await client.query("BEGIN");
+    // 불멸 세션 레코드 보장(있으면 last_seen 만 갱신). owner 는 **최초 1회만** 굳는다(COALESCE — 첫 append 한
+    //  멤버가 소유자로 고정, 이후 append 가 못 덮는다). 프라이버시 게이트라 라우트의 owner-검사와 함께 이중방어.
     await client.query(
       `INSERT INTO session(node_id, session_id, harness, owner) VALUES($1,$2,$3,$4)
        ON CONFLICT (node_id, session_id) DO UPDATE SET last_seen=now(),
@@ -129,4 +120,42 @@ export async function readSessionLog(nodeId: string, sessionId: string, from = 0
     parts.push(skip > 0 ? buf.subarray(skip) : buf);
   }
   return { from: start, bytes: total, data: Buffer.concat(parts) };
+}
+
+// 내 세션 목록(#905 C1 슬⑤b 웹뷰) — 소유자=요청자인 세션을 **모든 노드에서**(환경 무관 "내 세션들").
+//  회수 표면의 목록면: 어느 환경에서 만들었든 내 세션을 한 곳에서 본다. reap 된 세션도 남(bytes=0, session 불멸).
+export interface SessionListRow { node_id: string; session_id: string; harness: string | null; bytes: number; last_seen: string; }
+export async function listSessionsForOwner(owner: string, limit = 200): Promise<SessionListRow[]> {
+  if (!owner) return [];
+  const r = await itemsPool.query(
+    `SELECT s.node_id, s.session_id, s.harness, COALESCE(l.bytes, 0)::bigint AS bytes, s.last_seen
+       FROM session s LEFT JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id
+      WHERE s.owner = $1
+      ORDER BY s.last_seen DESC
+      LIMIT $2`,
+    [owner, Math.min(Math.max(Number(limit) || 200, 1), 500)]);
+  return r.rows.map((x) => ({
+    node_id: x.node_id, session_id: x.session_id, harness: x.harness,
+    bytes: Number(x.bytes), last_seen: x.last_seen,
+  }));
+}
+
+// 보존 reap(설계 §5 ③) — retentionDays 지나도록 **손대지 않은**(updated_at 기준) 로그를 통째로 지운다.
+//  · **세션 단위**로 지운다(청크만 부분삭제 금지 — offset 연속성이 깨져 회수가 구멍남). updated_at 은 마지막 append.
+//  · retentionDays<=0 → 무제한(아무것도 안 지움). session 레코드는 **불멸**(로그·청크만 삭제, '있었다'는 남는다).
+//  · 단일 문장(modifying CTE)이라 원자적 — 지운 세션의 청크만 정확히 함께 삭제(활성 세션의 옛 청크는 안 건드림).
+export async function reapSessionLogs(retentionDays: number): Promise<{ logs: number; chunks: number }> {
+  if (!Number.isFinite(retentionDays) || retentionDays <= 0) return { logs: 0, chunks: 0 };
+  const r = await itemsPool.query(
+    `WITH reaped AS (
+       DELETE FROM session_log WHERE updated_at < now() - ($1 * interval '1 day')
+       RETURNING node_id, session_id
+     ), delchunks AS (
+       DELETE FROM session_log_chunk c USING reaped r
+        WHERE c.node_id = r.node_id AND c.session_id = r.session_id
+       RETURNING 1
+     )
+     SELECT (SELECT count(*) FROM reaped)::int AS logs, (SELECT count(*) FROM delchunks)::int AS chunks`,
+    [retentionDays]);
+  return { logs: Number(r.rows[0]?.logs ?? 0), chunks: Number(r.rows[0]?.chunks ?? 0) };
 }

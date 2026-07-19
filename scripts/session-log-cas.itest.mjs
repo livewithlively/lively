@@ -125,6 +125,25 @@ try {
     ok("소유자 — 첫 append 가 굳히고 불변(COALESCE) · 미기록 세션은 null");
   }
 
+  // ── 🔑 소유자 레이스(리뷰 지적) — 서로 다른 두 멤버가 **새 세션**에 동시에 첫 append. "둘 다 통과하나?" 반증. ──
+  //   session 행 락이 두 트랜잭션을 직렬화하므로 owner 를 굳힌 쪽이 CAS 도 먼저 이긴다 → owner-승자 == 데이터-승자.
+  {
+    const [ra, rb] = await Promise.all([
+      S.appendSessionLog({ nodeId: "", sessionId: "ownrace", atOffset: 0, data: B("AAAA"), owner: "alice" }),
+      S.appendSessionLog({ nodeId: "", sessionId: "ownrace", atOffset: 0, data: B("BBBB"), owner: "bob" }),
+    ]);
+    const owner = await S.sessionOwner("", "ownrace");
+    assert.ok(owner === "alice" || owner === "bob", "소유자는 둘 중 한 명으로 굳는다(둘 다 아님)");
+    const appended = [ra, rb].filter((r) => r.verdict === "append");
+    assert.equal(appended.length, 1, "🔑 동시 첫 append 는 정확히 한 명만 성공(둘 다 통과 금지)");
+    const cnt = await itemsPool.query(`SELECT count(*)::int c FROM session_log_chunk WHERE session_id='ownrace'`);
+    assert.equal(cnt.rows[0].c, 1, "성공한 한 명의 청크만 남는다(진 쪽 오염 없음)");
+    assert.equal(await S.sessionLogWatermark("", "ownrace"), 4, "워터마크 = 이긴 델타 길이(4)");
+    const data = (await S.readSessionLog("", "ownrace", 0)).data.toString();
+    assert.equal(data, owner === "alice" ? "AAAA" : "BBBB", "🔑 owner 를 굳힌 쪽의 데이터만 남는다(owner-승자 == 데이터-승자)");
+    ok("🔑 서로 다른 두 멤버 동시 첫 append → owner 1명 확정 + append 1건 + owner·데이터 승자 일치");
+  }
+
   await itemsPool.end();
   console.log(`\n${pass} passed`);
 } finally {

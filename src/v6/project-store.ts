@@ -306,6 +306,22 @@ export async function isProjectMember(projectId: number, memberId: string): Prom
   return (r.rowCount ?? 0) > 0;
 }
 
+// 세션이력 웹뷰 열람권한(#905 C1, view_policy="attach") — 이 세션이 **한 번이라도** 바인딩됐던 프로젝트 중
+//  memberId 가 생성자/멤버인 곳이 있나(시간구간 전체 조회). DB 기반이라 **끝난 세션(tmux 없음)도** 판정된다
+//  (canAttach 는 살아있는 tmux 기준이라 죽은 세션엔 못 씀 — 웹뷰는 DB 기반이어야 한다, 설계 §5).
+export async function sessionBoundToMemberProject(sessionId: string, memberId: string): Promise<boolean> {
+  if (!sessionId || !memberId) return false;
+  const r = await itemsPool.query(
+    `SELECT 1 FROM session_project sp
+       JOIN project p ON p.id = sp.project_id AND p.level='project'
+      WHERE sp.session_id = $1
+        AND (p.created_by = $2 OR EXISTS(
+          SELECT 1 FROM project_member pm WHERE pm.project_id = p.id AND pm.member_id = $2))
+      LIMIT 1`,
+    [sessionId, memberId]);
+  return (r.rowCount ?? 0) > 0;
+}
+
 // 내 상태 메시지(이 프로젝트 한정) 저장 — project_member.status_message 를 (project,member) 단위로 갱신.
 //  팀원 행이 없으면(생성자라서 멤버 미등록 등) 만들어 둔다. 빈 문자열은 NULL 로 저장(상태 없음).
 export async function setProjectMemberStatus(projectId: number, memberId: string, message: string | null): Promise<string | null> {
@@ -317,12 +333,19 @@ export async function setProjectMemberStatus(projectId: number, memberId: string
   return msg;
 }
 
-// 세션↔프로젝트 영속 기록 — 프로젝트 터미널 세션 생성 시 호출. 타임라인이 끝난 세션의 AI 작업도 이 프로젝트로 귀속할 수 있게.
+// 세션↔프로젝트 영속 기록 — 프로젝트 터미널 세션 생성/재바인딩 시 호출. 끝난 세션의 AI 작업도 이 프로젝트로 귀속.
+//  시간구간 모델(#905 C1): 마지막 구간의 프로젝트와 **다를 때만** 새 구간(valid_from=now())을 덧붙인다.
+//   - 같은 프로젝트 반복 바인딩(세션 시작마다 호출됨)은 새 구간을 안 만든다 → 구간 폭증 방지.
+//   - 재바인딩이면 새 구간이 생기고, 과거 작업은 옛 구간(옛 프로젝트)에 그대로 남는다(소급 재귀속 버그 차단).
+//   - 같은 시각 동시삽입 충돌은 DO NOTHING(멱등). 재바인딩 자체가 드물어 경쟁은 사실상 없다.
 export async function recordSessionProject(sessionId: string, projectId: number): Promise<void> {
   if (!sessionId || !projectId) return;
   await itemsPool.query(
-    `INSERT INTO session_project(session_id, project_id) VALUES($1,$2)
-     ON CONFLICT (session_id) DO UPDATE SET project_id=EXCLUDED.project_id`,
+    `INSERT INTO session_project(session_id, project_id)
+     SELECT $1::text, $2::int
+      WHERE (SELECT sp.project_id FROM session_project sp
+              WHERE sp.session_id = $1 ORDER BY sp.valid_from DESC LIMIT 1) IS DISTINCT FROM $2::int
+     ON CONFLICT (session_id, valid_from) DO NOTHING`,
     [sessionId, projectId]);
 }
 

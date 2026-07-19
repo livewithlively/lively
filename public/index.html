@@ -79,9 +79,11 @@
       <a href="#/dashboard" data-tab="dashboard">홈</a>
       <a href="#/projects2" data-tab="projects2">프로젝트</a>
       <a href="#/domainmap" data-tab="domainmap">도메인 맵</a>
+      <a href="#/sessions" data-tab="sessions">세션</a>
       <a href="#/knowledge" data-tab="knowledge">WIKI</a>
-      <!-- #968 WIKI2 — 검증(AI 제안 승인)·기록(변화 히스토리). 배지 = 검토 대기 총계(0이면 숨김, #802 관례). -->
-      <a href="#/wiki2" data-tab="wiki2">WIKI2<span class="wk2-navn" id="wiki2-navn" aria-label="검토 대기"></span></a>
+      <!-- #968 WIKI2 — 검증(AI 제안 승인)·기록(변화 히스토리). 배지 = 검토 대기 총계(0이면 숨김, #802 관례).
+           #971 아직 미완성 탭이라 hidden 으로 시작 — boot() 가 내부 도메인(lvly.io 계열)에서만 노출한다(system-tab 패턴). -->
+      <a href="#/wiki2" data-tab="wiki2" id="wiki2-tab" hidden>WIKI2<span class="wk2-navn" id="wiki2-navn" aria-label="검토 대기"></span></a>
       <a href="#/system" data-tab="system" id="system-tab" hidden>관리</a>
     </nav>
     <div class="topbar-right">

@@ -10,6 +10,7 @@ import { pjvCloseTaskModalOnRoute, pjvRenderTaskRoute } from './taskmodal.js';  
 import { renderInstall, renderLearn, renderLearnDocs, renderLearnMenu, renderLearnTour, renderOnboarding } from './learn.js';
 import { renderStart, renderStartMigrate, renderStartProject } from './start.js'; // #/start — 구성원 온보딩(#846/850) + 프로젝트 체험(#853)
 import { renderActivate } from './activate.js'; // #/activate — CLI 디바이스 로그인 승인(#880)
+import { renderSessions } from './sessions.js'; // #/sessions — 세션이력 웹뷰(#905 C1 이어보기)
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard, startDashboardSessionTour } from './dashboard-home.js';
 import { renderTerminal, startTerminalTour, teardownTerminal } from './terminal.js';
@@ -33,6 +34,14 @@ function setActiveTab(name) {
     if (on) a.setAttribute('aria-current', 'page');
     else a.removeAttribute('aria-current');
   }
+}
+
+// #971 WIKI2 는 아직 미완성 탭 — 내부 개발·데모 도메인(lvly.io 계열)에서만 노출하고, 파일럿 고객 박스
+//  (예: lively.honestai.tech)에는 숨긴다. 화이트리스트라 새 고객 도메인은 자동으로 차단된다(안전 기본값).
+//  boot() 의 탭 노출 · route() 의 직접 접근 가드 · 배지 refresh 세 곳이 이 단일 판정을 공유한다.
+function wiki2Visible(): boolean {
+  const h = location.hostname.toLowerCase();
+  return h === 'lvly.io' || h.endsWith('.lvly.io') || h === 'localhost' || h === '127.0.0.1';
 }
 
 async function route() {
@@ -64,7 +73,7 @@ async function route() {
   const mainEl = document.querySelector('main');
   if (mainEl) mainEl.classList.toggle('doc-mode',
     page === 'knowledge' || page === 'k' || page === 'k-edit' || page === 'trash' || page === 'wiki2');   // #968 WIKI2 도 .kn-shell 전폭
-  void refreshWiki2NavBadge();   // #968 상단 WIKI2 배지(검토 대기 총계) — 내부 60s 스로틀, 실패는 조용히
+  if (wiki2Visible()) void refreshWiki2NavBadge();   // #968 상단 WIKI2 배지(검토 대기 총계) — 내부 60s 스로틀, 실패는 조용히 · #971 미노출 도메인에선 호출 생략
   try {
     if (page === 'dashboard') {
       setActiveTab('dashboard'); // 대시보드 — 옛 '시작하기' 탭 자리를 개편(#617). 현재는 자리표시.
@@ -102,6 +111,10 @@ async function route() {
       //  로그인 후에도 살아남는다(route 가 state.me 없으면 showGate 후 return — 해시는 보존, boot 이 재실행).
       setActiveTab('');
       await renderActivate(view);
+    } else if (page === 'sessions') {
+      // #/sessions — 세션이력 웹뷰(#905 C1 이어보기). 내 세션 목록 + 트랜스크립트 회수(렌더).
+      setActiveTab('sessions');
+      await renderSessions(view);
     } else if (page === 'install') {
       // 옛 상단 탭(#/install) — 사용 가이드 › 시작하기로 이동(#617). 기존 딥링크·북마크 보존(projects v1→v2 와 동일 패턴).
       location.replace('#/learn/install');
@@ -110,6 +123,7 @@ async function route() {
       setActiveTab('domainmap'); // 도메인 맵 — 독립 탭(index.html data-tab="domainmap")
       await renderDomainmap(view, params);
     } else if (page === 'wiki2') {
+      if (!wiki2Visible()) { location.replace('#/dashboard'); return; } // #971 미완성 탭 — 미노출 도메인(고객 박스)에선 직접 URL 접근도 차단
       setActiveTab('wiki2'); // #968 WIKI2 — 변화의 관제실: 검증(#/wiki2) · 기록(#/wiki2/history)
       await renderWiki2(view, segs[1] || '', params);
     } else if (page === 'knowledge') {
@@ -196,6 +210,9 @@ async function boot() {
   // '관리' 탭은 모든 인증 사용자에게 — admin 은 편집, 그 외는 읽기 전용(서버가 쓰기를 강제 차단).
   const sysTab = document.getElementById('system-tab');
   if (sysTab) sysTab.hidden = false;
+  // #971 WIKI2 는 아직 미완성 탭 — 내부 개발·데모 도메인(lvly.io 계열)에서만 노출한다(파일럿 고객 박스엔 숨김).
+  const wiki2Tab = document.getElementById('wiki2-tab');
+  if (wiki2Tab && wiki2Visible()) wiki2Tab.hidden = false;
   const logoutBtn = document.getElementById('logout-btn');
   if (logoutBtn) logoutBtn.hidden = false;
   route();
