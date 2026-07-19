@@ -94,7 +94,7 @@ export function renderOnboardingBlock(status: OnboardingStatus): string {
 //  판정 우선순위: **자동 done > 보고(done/skipped) > todo**.
 //   자동 신호는 조회 시점 라이브 계산이라 진실을 이긴다 — 사용자가 skipped 로 꺼 뒀어도 실제로 연결했으면
 //   done 이다(거짓 진행률 방지). skipped 는 보고로만 설정된다(자동으로는 절대 skipped 가 안 된다).
-export const MEMBER_STEPS = ["connect", "migrate", "credentials", "repos"] as const;
+export const MEMBER_STEPS = ["connect", "migrate", "credentials"] as const; // repos 폐지(#853) — '프로젝트 체험' 투어로 대체
 export type MemberStepKey = (typeof MEMBER_STEPS)[number];
 export const isMemberStep = (v: unknown): v is MemberStepKey =>
   typeof v === "string" && (MEMBER_STEPS as readonly string[]).includes(v);
@@ -121,13 +121,11 @@ export interface MemberOnboardingStatus {
 }
 
 export async function computeMemberOnboarding(memberId: string): Promise<MemberOnboardingStatus> {
-  const [connected, hasCred, hasRepo, reported] = await Promise.all([
+  const [connected, hasCred, reported] = await Promise.all([
     // AI 켜기 — 이 사람 **신원으로 MCP 툴이 실제 호출된 적 있나**. "claude mcp list 해보세요"라고 시키는
     //  것보다 강한 증거다(설치·인증·연결이 전부 성공해야 이 행이 남는다). 로컬/웹터미널 어느 쪽이든 잡힌다.
     exists("SELECT 1 FROM mcp_call_log WHERE actor=$1 AND ok LIMIT 1", [memberId]),
     exists("SELECT 1 FROM member_secret WHERE owner=$1 LIMIT 1", [`member:${memberId}`]),
-    exists(`SELECT 1 FROM project_member pm JOIN project_repo pr ON pr.project_id = pm.project_id
-              WHERE pm.member_id=$1 LIMIT 1`, [memberId]),
     getMemberOnboarding(memberId).catch((): Record<string, ReportedStep> => ({})), // fail-open
   ]);
 
@@ -145,8 +143,8 @@ export async function computeMemberOnboarding(memberId: string): Promise<MemberO
   };
 
   const items: MemberOnboardingItem[] = [
-    build("connect", "AI 켜기", true, connected,
-      "설치 없이 웹에서 바로 [내 AI 세션]을 열거나, 내 컴퓨터에 한 번 설치해 켤 수 있습니다.", "#/start/setup"),
+    build("connect", "AI 설치하기", true, connected,
+      "라이블리 웹에서 [내 AI 세션]을 바로 열거나, 내 컴퓨터의 AI(Claude Code·Codex)에 라이블리를 설치해서 쓸 수 있습니다.", "#/start/setup"),
     // 자동 신호가 없다(null) — 그 사람 노트북의 사실이라 서버가 볼 수 없다. AI 스킬이 스캔 후 보고한다
     //  (이관할 게 없으면 skipped 로). 그래서 화면이 페르소나를 물어볼 필요가 없다.
     build("migrate", "예전에 쓰던 AI 환경 가져오기", false, null,
@@ -154,8 +152,7 @@ export async function computeMemberOnboarding(memberId: string): Promise<MemberO
       "#/start/migrate"),
     build("credentials", "외부 서비스 연결", false, hasCred,
       "AI 가 회사 서비스(깃랩·노션 등)를 대신 쓰려면 한 번 연결해 두면 됩니다.", "#/system"),
-    build("repos", "프로젝트·코드 연결", false, hasRepo,
-      "일할 프로젝트에 코드 저장소를 붙이면 AI 가 그 코드 위에서 일합니다.", "#/projects2"),
+    // '프로젝트·코드 연결'(repos) 단계는 폐지(#853) — '프로젝트 체험'(#/start/project) 손수-하기 투어로 대체.
   ];
 
   const countable = items.filter((i) => i.state !== "skipped");   // 건너뛴 건 분모에서 뺀다

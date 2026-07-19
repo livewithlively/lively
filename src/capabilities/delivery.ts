@@ -66,7 +66,7 @@ import { effectiveVisible, targetsMember } from "../org/asset-visibility.js"; //
 // ClickUp 멤버 매핑 패널(#541) — 팀 멤버 나열(getTeam) + person_identity 기반 매핑 상태 계산.
 import { connectors } from "../connectors/index.js";
 import type { ConnectorUser } from "../connectors/types.js";
-import { resetConnectorConfigCache } from "../connectors/config.js";
+import { resetConnectorConfigCache, CONNECTOR_SPECS } from "../connectors/config.js";
 import { itemsPool } from "../items/store.js";
 import { hostOfUrl, isHostBlocked, isSecretRefAllowed, inspectConnString, inspectMysqlUrl } from "../db/source-guard.js";
 import { invalidatePool } from "../db/pool.js";
@@ -743,7 +743,7 @@ export const deliveryCapabilities: Capability[] = [
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
       const m = await getMember(userId);
       // 이메일은 표시 전용(읽기) — 셀프 편집 대상 아님. 멤버행이 없어도 모달은 열리게 안전 폴백.
-      return { id: userId, display_name: m?.display_name ?? null, email: m?.email ?? user.email ?? null, body_md: m?.body_md ?? "", avatar: m?.avatar ?? null, avatar_char: m?.avatar_char ?? null, avatar_color: m?.avatar_color ?? null };
+      return { id: userId, display_name: m?.display_name ?? null, nickname: m?.nickname ?? null, email: m?.email ?? user.email ?? null, body_md: m?.body_md ?? "", avatar: m?.avatar ?? null, avatar_char: m?.avatar_char ?? null, avatar_color: m?.avatar_color ?? null };
     }),
 
   restRead("me_profile_update", "내 프로필 수정",
@@ -757,6 +757,8 @@ export const deliveryCapabilities: Capability[] = [
       if (!existing) throw new HttpError(404, "구성원 정보를 찾을 수 없습니다 — 관리자에게 문의하세요");
       // 표시이름: 미전송이면 보존(undefined), 빈 문자열이면 비우기.
       const displayName = input.display_name == null ? undefined : str(input.display_name, "display_name", 200).trim();
+      // 닉네임(#762): 미전송이면 보존, 빈 문자열이면 지움(→ display_name 폴백). 정규화는 upsertMember 담당.
+      const nickname = input.nickname == null ? undefined : str(input.nickname, "nickname", 80).trim();
       // 개인레이어(body_md)는 합성 컨텍스트에 실리는 자유텍스트 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point).
       const memberBody = input.body_md == null ? undefined : str(input.body_md, "body_md", 20000);
       if (memberBody !== undefined) assertNoHardSecrets(memberBody, "body_md"); // P8
@@ -774,8 +776,8 @@ export const deliveryCapabilities: Capability[] = [
       const avatarChar = input.avatar_char === undefined ? undefined : (input.avatar_char === null ? null : str(input.avatar_char, "avatar_char", 8).trim());
       const avatarColor = input.avatar_color === undefined ? undefined : (input.avatar_color === null ? null : str(input.avatar_color, "avatar_color", 32).trim());
       // id 만 principal 로 강제 — 그 외(권한·이메일·상태·신원·kind)는 넘기지 않아 upsertMember 가 전부 보존.
-      const member = await upsertMember({ id: userId, display_name: displayName, body_md: memberBody, avatar, avatar_char: avatarChar, avatar_color: avatarColor }, actorOf(user), "web-self");
-      return { member: { id: member.id, display_name: member.display_name, email: member.email, body_md: member.body_md, avatar: member.avatar, avatar_char: member.avatar_char, avatar_color: member.avatar_color } };
+      const member = await upsertMember({ id: userId, display_name: displayName, nickname, body_md: memberBody, avatar, avatar_char: avatarChar, avatar_color: avatarColor }, actorOf(user), "web-self");
+      return { member: { id: member.id, display_name: member.display_name, nickname: member.nickname, email: member.email, body_md: member.body_md, avatar: member.avatar, avatar_char: member.avatar_char, avatar_color: member.avatar_color } };
     }),
 
   // ── CLI 디바이스 로그인 승인 (#880) — 브라우저에서 CLI 를 승인한다. lookup/approve/deny. ──
@@ -1105,7 +1107,7 @@ export const deliveryCapabilities: Capability[] = [
       host: z.string().optional().describe("삭제할 자격의 git 호스트(기본 github.com) — parseGitHost 가 읽는다"),
     }),
 
-  restOnly("org_token_revoke", "접속 열쇠 해제",
+  restOnly("org_token_revoke", "접속 토큰 해제",
     "토큰을 즉시 무효화한다(게이트웨이 재시작 불요).",
     [{ method: "POST", paths: ["/api/ui/org/token/revoke"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
@@ -1868,7 +1870,7 @@ export const deliveryCapabilities: Capability[] = [
 
       let users: ConnectorUser[];
       try { users = await conn.listUsers(); }
-      catch (e) { return { system, supported: true, error: `${system} 사용자 목록 조회 실패: ${e instanceof Error ? e.message : String(e)}`, users: [] }; }
+      catch (e) { return { system, supported: true, error: `${CONNECTOR_SPECS[system]?.label ?? system} 사용자 목록을 불러오지 못했습니다: ${e instanceof Error ? e.message : String(e)}`, users: [] }; }
 
       const members = await listMembers();
       // org_member.email(소문자) → id — 효과적 매핑 ② 겸 자동매치 제안 공용.

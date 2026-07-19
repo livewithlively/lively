@@ -20,13 +20,13 @@ const CAT_NONE = '__none__';
 const CAT_MINE = '__mine__';
 // 신규 저장 시 동작.
 const CREATE_ACTS = [
-    ['confirm', '검토 후 반영 — 승인 전엔 검색·주입에서 제외'],
+    ['confirm', '검토 후 반영 — 승인 전에는 검색·세션주입에서 제외'],
     ['auto', '즉시 반영 — 검토 없이 바로 지식이 됨(현행)'],
     ['drop', '저장 금지 — 에이전트가 새 지식을 못 만듦'],
 ];
 // 기존 지식 수정 시 동작.
 const UPDATE_ACTS = [
-    ['review', '반영하되 사후검토 — 라이브는 유지, 검토 대기에 diff 적재'],
+    ['review', '반영하되 사후검토 — 반영 내용은 유지, 변경 diff는 검토 대기에 추가'],
     ['stage', '승인 후 반영 — 라이브는 옛 승인본 유지(제안만 접수)'],
     ['auto', '즉시 반영 — 검토 없음(현행)'],
     ['drop', '수정 금지'],
@@ -43,7 +43,8 @@ function hasScope(s) {
     return !!(state.me && Array.isArray(state.me.scopes) && state.me.scopes.includes(s));
 }
 // 패널 전용 CSS 1회 주입(546KB styles.css 를 건드리지 않는 기존 관례 — admin.ts oaEnsureStyles 동형).
-function rqEnsureStyles() {
+//  export(#968): WIKI2 가 diffView(.rq-diff/.rq-dl)를 재사용하므로 그 스타일도 함께 필요하다.
+export function rqEnsureStyles() {
     if (document.getElementById('rq-styles'))
         return;
     document.head.appendChild(el('style', {
@@ -173,7 +174,7 @@ export async function ingestPolicyPanel(detail, data) {
     }
     const preset = policies.find((p) => p.preset === GATE_PRESET) || null;
     const rules = policies.filter((p) => p.preset !== GATE_PRESET); // 프리셋은 위 스위치가 관리 — 목록에서 제외(두 곳 편집 방지)
-    const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '지식 검토 정책' })), el('p', { class: 'admin-hint', text: '에이전트(AI)가 기록한 지식을 사람이 확인한 뒤에 유효해지도록 할지 정합니다. 기본값은 “즉시 반영”(게이트 꺼짐)이라 켜지 않으면 지금과 똑같이 동작합니다. 켜면 에이전트가 쓴 지식은 [WIKI ▸ 검토 대기]로 가고, 승인 전까지는 검색·세션주입·목록에 뜨지 않습니다. 사람이 웹에서 직접 쓴 지식은 영향을 받지 않습니다.' }), gateCard(preset, obs, reload), rulesSection(rules, reload));
+    const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '지식 검토 정책' })), el('p', { class: 'admin-hint rq-intro', text: '에이전트(AI)가 기록한 지식을 사람이 확인한 뒤에 유효해지도록 할지 정합니다. 기본값은 “즉시 반영”(게이트 꺼짐)이므로 켜지 않으면 지금과 동일하게 동작합니다.' }), el('p', { class: 'admin-hint rq-intro', text: '켜면 에이전트가 기록한 지식은 [WIKI ▸ 검토 대기]로 이동하고, 승인 전까지는 검색·세션주입·목록에 표시되지 않습니다. 사람이 웹에서 직접 쓴 지식은 영향을 받지 않습니다.' }), gateCard(preset, obs, reload), rulesSection(rules, reload));
     detail.replaceChildren(card);
 }
 // 프리셋 카드 — "에이전트가 기록한 지식" 한 덩어리. 스위치 + 신규/수정 액션 선택.
@@ -199,18 +200,18 @@ function gateCard(preset, obs, reload) {
     // 지금 무슨 일이 일어나는지 한 문장 — 설정값을 사람 말로 되풀이해준다(스위치만 보고 결과를 상상하지 않도록).
     const stateText = on
         ? `켜짐 — 에이전트가 새로 쓴 지식은 “${ACT_SHORT[createAct]}”, 기존 지식 수정은 “${ACT_SHORT[updateAct]}”. 사람이 웹에서 쓴 지식은 그대로 즉시 반영됩니다.`
-        : '꺼짐 — 에이전트가 쓴 지식이 사람 확인 없이 곧바로 유효해집니다(검색·세션주입에 즉시 노출).';
+        : '꺼짐 — 에이전트가 기록한 지식이 사람 확인 없이 곧바로 유효해집니다(검색·세션주입에 즉시 노출).';
     const waiting = obs ? (Number(obs.pending_now || 0) + Number(obs.rev_pending || 0)) : 0;
     const hintBits = [];
     if (obs && Number(obs.agent_auto || 0) > 0 && !on) {
-        hintBits.push(el('span', { text: `최근 30일 에이전트가 검토 없이 반영한 신규 지식 ${obs.agent_auto}건.` }));
+        hintBits.push(el('span', {}, '최근 30일간 에이전트가 검토 없이 반영한 신규 지식이 ', el('b', { text: `${obs.agent_auto}건` }), '입니다.'));
     }
     if (waiting > 0) {
         hintBits.push(el('a', { class: 'btn btn-ghost btn-sm', href: '#/knowledge/review', text: `검토 대기 ${waiting}건 열기` }));
     }
-    return el('div', { class: 'rq-gate' }, el('div', { class: 'rq-gate-head' }, el('span', { class: 'rq-gate-title', text: '에이전트가 기록한 지식' }), sw), el('p', { class: 'rq-gate-state', text: stateText }), el('div', { class: 'rq-gate-opts' }, el('label', {}, el('span', { class: 'rq-opt-label', text: '새 지식을 쓸 때' }), createSel), el('label', {}, el('span', { class: 'rq-opt-label', text: '기존 지식을 고칠 때' }), updSel)), hintBits.length
-        ? el('div', { style: 'display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;font-size:12px;color:var(--ink-sub)' }, ...hintBits)
-        : null);
+    return el('div', { class: 'rq-gate' }, el('div', { class: 'rq-gate-head' }, el('span', { class: 'rq-gate-title', text: '에이전트가 기록한 지식' }), sw), el('p', { class: 'rq-gate-state', text: stateText }), hintBits.length
+        ? el('div', { class: 'rq-gate-note' }, ...hintBits)
+        : null, on ? null : el('p', { class: 'rq-gate-caption', text: '게이트를 켜면 아래 선택이 적용됩니다.' }), el('div', { class: 'rq-gate-opts' + (on ? '' : ' is-off') }, el('label', {}, el('span', { class: 'rq-opt-label', text: '새 지식을 쓸 때' }), createSel), el('label', {}, el('span', { class: 'rq-opt-label', text: '기존 지식을 수정할 때' }), updSel)));
 }
 // 프리셋 규칙 upsert — 축은 고정(에이전트 저작), 액션·on/off 만 사람이 고른다.
 async function gateSave(patch, reload) {
@@ -604,7 +605,8 @@ async function fillExpand(exp, it) {
 }
 // ── 줄단위 diff — 공통 prefix/suffix 를 깎고 가운데만 LCS(편집은 대개 국소적이라 창이 작다). ──
 //  가드: 남은 창이 800×800 을 넘으면 LCS 를 포기하고 블록 치환으로 폴백(브라우저 프리즈 방지).
-function lineDiff(aStr, bStr) {
+//  export(#968): WIKI2 검증 뷰가 같은 diff(변경 블록 파생·원문 비교 접힘)를 쓴다 — 알고리즘 두 벌 금지.
+export function lineDiff(aStr, bStr) {
     const a = String(aStr ?? '').split('\n'), b = String(bStr ?? '').split('\n');
     let s = 0;
     while (s < a.length && s < b.length && a[s] === b[s])
@@ -664,8 +666,8 @@ function lineDiff(aStr, bStr) {
         out.push({ t: ' ', s: b[k] });
     return out;
 }
-// 변경 주변 3줄만 — 긴 동일 구간은 접는다(스크롤 피로 감소).
-function diffView(before, after) {
+// 변경 주변 3줄만 — 긴 동일 구간은 접는다(스크롤 피로 감소). export(#968): WIKI2 '원문 비교' 접힘이 재사용.
+export function diffView(before, after) {
     const d = lineDiff(before, after);
     const CTX = 3;
     const keep = new Array(d.length).fill(false);

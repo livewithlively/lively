@@ -2,17 +2,18 @@
 import { $view, TOKEN_KEY, api, el, errorNote, hideGate, loadPeopleAvatars, profileAvatar, showGate, state } from './core.js';
 import { renderDomainmap } from './domainmap.js';
 import { renderWiki, renderWikiTrash } from './wiki.js'; // #764 WIKI 탭 전면 재구축(사이드바 유지)
+import { refreshWiki2NavBadge, renderWiki2 } from './wiki2.js'; // #968 WIKI2 — 검증·기록(변화의 관제실)
 import { consumeWikiPeekGuard, dismissWikiPeek, renderWikiDocPage } from './wiki-doc.js';
 import { wkRouteCleanup } from './wiki-data.js'; // #764 — 라우트 이탈 시 위키 에디터/팝오버 청소
 import { pjvCloseProjectModalOnRoute, renderProjectV2Detail, renderProjectsV2 } from './projects.js';
 import { pjvCloseTaskModalOnRoute, pjvRenderTaskRoute } from './taskmodal.js'; // #804 라우트 이탈 시 모달 정리 · #810 태스크 딥링크
 import { renderInstall, renderLearn, renderLearnDocs, renderLearnTour, renderOnboarding } from './learn.js';
-import { renderStart, renderStartMigrate } from './start.js'; // #/start — 구성원 온보딩(#846/850) + 하네스 관리(#891)
+import { renderStart, renderStartMigrate, renderStartProject } from './start.js'; // #/start — 구성원 온보딩(#846/850) + 프로젝트 체험(#853)
 import { renderActivate } from './activate.js'; // #/activate — CLI 디바이스 로그인 승인(#880)
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard, startDashboardSessionTour } from './dashboard-home.js';
 import { renderTerminal, startTerminalTour, teardownTerminal } from './terminal.js';
-import { changePasswordModal, renderSystem } from './admin.js';
+import { changePasswordModal, openMyProfileModal, renderSystem } from './admin.js';
 import { endTour } from './tour.js';
 import { installGlobalUndo } from './undo.js';
 // ── 라우터 ──
@@ -66,7 +67,8 @@ async function route() {
     //  셸(.kn-shell)/래퍼(.kn-plain)가 자체 패딩·사이드바 폭을 가진다. 그 외 탭은 기존 중앙 정렬 유지.
     const mainEl = document.querySelector('main');
     if (mainEl)
-        mainEl.classList.toggle('doc-mode', page === 'knowledge' || page === 'k' || page === 'k-edit' || page === 'trash');
+        mainEl.classList.toggle('doc-mode', page === 'knowledge' || page === 'k' || page === 'k-edit' || page === 'trash' || page === 'wiki2'); // #968 WIKI2 도 .kn-shell 전폭
+    void refreshWiki2NavBadge(); // #968 상단 WIKI2 배지(검토 대기 총계) — 내부 60s 스로틀, 실패는 조용히
     try {
         if (page === 'dashboard') {
             setActiveTab('dashboard'); // 대시보드 — 옛 '시작하기' 탭 자리를 개편(#617). 현재는 자리표시.
@@ -74,14 +76,20 @@ async function route() {
             // 사용 가이드 [내 AI 세션 생성]의 '따라하며 만들기 →'(#/dashboard?tour=1) — 홈에서 세션 만들기 투어를 켠다(#780).
             //  쿼리는 새로고침 재실행 방지를 위해 조용히 제거(해시만 갱신 — hashchange/재라우팅 없음).
             if (params.get('tour') === '1') {
+                const fromOnboarding = params.get('from') === 'onboarding'; // #/start '웹에서 만들기' → 완주 후 #/start 복귀
                 history.replaceState(null, '', '#/dashboard');
-                startDashboardSessionTour();
+                startDashboardSessionTour(fromOnboarding ? '#/start' : undefined);
             }
         }
         else if (page === 'learn') {
             setActiveTab('learn'); // '사용 가이드' — 우측 상단 보조 링크(.help-link). 시작하기(설치)는 그 하위 서브탭(#617).
-            if (segs[1] === 'install')
-                await renderInstall(view); // #/learn/install — 옮겨 온 설치 화면
+            // #762 '내 AI 세션 생성'(#/learn/install) 페이지 숨김(사용자 요청) — 사용 가이드 개요로 리다이렉트(옛 북마크 방어).
+            //  복원: 아래 redirect 두 줄을 `await renderInstall(view);` 로 되돌리고 learn.ts nav 의 install 항목 주석 해제.
+            //  (화면 컴포넌트 renderInstall 은 삭제하지 않았다 — #/start/setup 이 그대로 재사용 중.)
+            if (segs[1] === 'install') {
+                location.replace('#/learn');
+                return;
+            } // 숨김: #/learn/install → #/learn
             else if (segs[1] === 'tour')
                 await renderLearnTour(view); // #/learn/tour — Lively 둘러보기(#761)
             else if (segs[1] === 'menu') {
@@ -103,6 +111,8 @@ async function route() {
                 await renderInstall(view);
             else if (segs[1] === 'migrate')
                 await renderStartMigrate(view);
+            else if (segs[1] === 'project')
+                await renderStartProject(view); // #853 — 프로젝트 체험(손수 투어 랜딩)
             else if (segs[1] === 'harness') {
                 location.replace('#/system/me-assets');
                 return;
@@ -124,6 +134,10 @@ async function route() {
         else if (page === 'domainmap') {
             setActiveTab('domainmap'); // 도메인 맵 — 독립 탭(index.html data-tab="domainmap")
             await renderDomainmap(view, params);
+        }
+        else if (page === 'wiki2') {
+            setActiveTab('wiki2'); // #968 WIKI2 — 변화의 관제실: 검증(#/wiki2) · 기록(#/wiki2/history)
+            await renderWiki2(view, segs[1] || '', params);
         }
         else if (page === 'knowledge') {
             setActiveTab('knowledge'); // WIKI(맥락의 기록) — #764 재구축: 홈/카테고리 페이지/필터 목록/드래프트/자료
@@ -218,7 +232,7 @@ async function boot() {
         return;
     }
     hideGate();
-    // 우측 상단 = '내 프로필' 버튼(아바타 + 표시이름). 표시이름 우선(없으면 이메일/아이디). 클릭→[관리 ▸ 내 설정 ▸ 내 정보].
+    // 우측 상단 = '내 프로필' 버튼(아바타 + 표시이름). 표시이름 우선(없으면 이메일/아이디). 클릭→'내 정보' 팝업(#762).
     const userBtn = document.getElementById('user-email');
     if (userBtn) {
         const nm = state.me.display_name || state.me.email || state.me.userId || '';
@@ -251,15 +265,14 @@ async function boot() {
         showGate('로그아웃되었습니다.');
     });
 })();
-// 내 프로필 — 우측 상단 본인 표시(버튼) 클릭 시 [관리 ▸ 내 설정 ▸ 내 정보]로 이동. 한 번만 배선.
-//  구 셀프 편집 모달(openMyProfile)은 폐지(#837 · 사용자 지적: "내 설정이랑 겹치니까 모달 지우고 이동하게").
-//  모달에 프사·표시이름이 남아 있으면 [내 정보]와 **같은 걸 두 곳에서 편집**하는 게 된다 — 그걸 없애려고 폈던 건데.
+// 내 프로필 — 우측 상단 본인 표시(버튼) 클릭 시 '내 정보' 팝업 열기(#762). 관리 페이지로 이동하지 않는다.
+//  (내 정보 편집을 관리에서 분리 — 관리엔 me-profile 섹션이 더는 없다. 팝업이 유일한 진입점.)
 (() => {
     const btn = document.getElementById('user-email');
     if (!btn)
         return;
     btn.addEventListener('click', () => { if (state.me)
-        location.hash = '#/system/me-profile'; });
+        openMyProfileModal(); });
 })();
 // ── 부팅 이전에 등록되던 DOM 리스너(원래 파일 상단 로드 시 등록 — 모듈 진입점으로 이동, 동작 동일) ──
 // ── 스킵 링크 — href 를 따라가면 해시 라우터가 오작동하므로 JS 로 포커스만 이동(§8) ──

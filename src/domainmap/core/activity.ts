@@ -141,11 +141,11 @@ export interface DashAgentRow {
   tasks: number;
   lastActiveAt: string | null;
 }
-export interface DashPersonRow { author_person: string | null; display_name: string | null; total: number; agents: DashAgentRow[] }
+export interface DashPersonRow { author_person: string | null; display_name: string | null; nickname: string | null; total: number; agents: DashAgentRow[] }
 export async function dashPeople(viewer: string | null): Promise<DashPersonRow[]> {
   // 개인화 — 뷰어의 '내 목록'(dash_watch) + 나 자신만 보인다(30명 전원 나열 방지). watch 비면 = 나만.
   //  뷰어가 명부에 없고 watch 도 없으면(관리/외부 토큰) 빈 화면 방지로 전체 활성 멤버 폴백.
-  const members = await q(itemsPool, "SELECT id, display_name FROM org_member WHERE state='active' AND kind='human' ORDER BY sort, id");
+  const members = await q(itemsPool, "SELECT id, display_name, nickname FROM org_member WHERE state='active' AND kind='human' ORDER BY sort, id");
   const memberById = new Map<string, any>(members.map((m: any) => [String(m.id), m]));
   const watch = await q(itemsPool, "SELECT member_id FROM dash_watch WHERE owner=$1", [viewer ?? ""]);
   const targetIds = new Set<string>();
@@ -177,7 +177,7 @@ export async function dashPeople(viewer: string | null): Promise<DashPersonRow[]
   for (const r of rows) {
     const personKey = String(r.author_person);
     let bucket = byPerson.get(personKey);
-    if (!bucket) { bucket = { author_person: r.author_person, display_name: null, total: 0, agents: [] }; byPerson.set(personKey, bucket); }
+    if (!bucket) { bucket = { author_person: r.author_person, display_name: null, nickname: null, total: 0, agents: [] }; byPerson.set(personKey, bucket); }
     const lastActiveAt = r.last_active_at ? new Date(r.last_active_at).toISOString() : null;
     bucket.total += r.count;
     bucket.agents.push({
@@ -196,8 +196,8 @@ export async function dashPeople(viewer: string | null): Promise<DashPersonRow[]
   for (const id of ids) {
     const m = memberById.get(id);
     const bucket = byPerson.get(id);
-    if (!bucket) byPerson.set(id, { author_person: id, display_name: m?.display_name ?? null, total: 0, agents: [] });
-    else if (!bucket.display_name) bucket.display_name = m?.display_name ?? null;
+    if (!bucket) byPerson.set(id, { author_person: id, display_name: m?.display_name ?? null, nickname: m?.nickname ?? null, total: 0, agents: [] });
+    else { if (!bucket.display_name) bucket.display_name = m?.display_name ?? null; if (!bucket.nickname) bucket.nickname = m?.nickname ?? null; }
   }
   // 각 사람의 AI 행은 최근활동 desc. 사람 카드는 최근활동 desc(가장 최근 활동한 사람부터), 무활동 구성원은 표시명순으로 뒤에.
   const personLast = (p: { agents: DashAgentRow[] }) =>
