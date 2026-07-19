@@ -2044,6 +2044,13 @@ export async function getOrgHarnessAsset(id: string): Promise<OrgHarnessAsset | 
   return r.rows[0] ? mapAsset(r.rows[0]) : null;
 }
 
+// 멤버가 올린 비활성 초안 개수(#990 셀프 업로드 쿼터) — created_by=멤버 AND enabled=false.
+//  공유 테이블 무한 적재 + 관리 검토 화면(org_overview 가 전량 로드) DoS 를 막는 상한의 근거.
+export async function countMemberDraftAssets(createdBy: string): Promise<number> {
+  const r = await itemsPool.query(`SELECT count(*)::int AS n FROM org_harness_asset WHERE created_by=$1 AND enabled=false`, [createdBy]);
+  return (r.rows[0]?.n as number) ?? 0;
+}
+
 export interface OrgHarnessAssetInput {
   id: string;
   kind?: AssetKind;

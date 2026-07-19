@@ -1,6 +1,7 @@
 // 훅 id / 툴 name 식별자 — 단일 엄격 검증 + 예약어/빌트인 충돌 거부 (B6/B7).
 // 이 식별자는 멤버 머신의 settings.json 마커 · codex TOML 키 · `claude mcp` 인자로 흐른다.
 // 따라서 ASCII·길이상한을 강제하고(파일경로/키 주입 차단), 내장 훅/빌트인 툴 이름과의 충돌을 거부한다.
+import { createHash } from "node:crypto";
 import { HttpError } from "../capabilities/rest-util.js";
 import { isBuiltinToolName } from "../capabilities/mcp-surface.js";
 
@@ -48,4 +49,13 @@ export function assertAssetId(id: unknown): string {
   const s = id.trim().toLowerCase();
   if (!STRICT_SLUG.test(s)) throw new HttpError(400, "id 는 소문자 영숫자/_/- 1~64자(소문자·숫자로 시작)여야 합니다");
   return s;
+}
+
+// 멤버 셀프 초안 자산 id(#990) — userId 를 **charset-safe 하게 해시**해 네임스페이스로 쓴다.
+//  ⚠ org_member.id 는 한글(가-힣)도 허용된다(slug 검증) → raw 연결하면 STRICT_SLUG(ASCII)에 걸려 그 멤버는 영영 400.
+//   그래서 sha256(userId) 앞 10hex 로 인코딩: ASCII·per-member 유일·하이픈 구분자 모호성 없음('yo'+'on-x' == 'yo-on'+'x' 류 충돌 제거).
+//   id 는 불투명해도 된다 — 실 소유자는 created_by 컬럼이 담고, 관리 UI 는 그걸 보여준다. slug 형식·길이는 호출부가 검증.
+export function draftAssetId(userId: string, slug: string): string {
+  const uid = createHash("sha256").update(String(userId)).digest("hex").slice(0, 10);
+  return assertAssetId(`draft-${uid}-${slug}`); // 총길이(≤64)·charset 최종 검증(방어적)
 }

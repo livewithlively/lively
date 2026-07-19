@@ -42,7 +42,7 @@ import { DEFAULT_WRITEBACK_NOTICE } from "../org/hook-defaults.js";
 import { DEFAULT_SKILLS } from "../org/default-content.js"; // #878 시딩 스킬 편집 경고(seed_warning)
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { assertHookId, assertAssetId } from "../org/identity.js";
+import { assertHookId, assertAssetId, draftAssetId } from "../org/identity.js";
 import { isBuiltinToolName, toolCandidates } from "./mcp-surface.js";
 import { assertNoHardSecrets } from "../org/redact.js";
 import {
@@ -53,7 +53,7 @@ import {
   getRuntimeConfig, updateRuntimeConfig, getEmbeddingConfigSource, getStoragePolicySource, listMcpServers, upsertMcpServer, removeMcpServer,
   listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook, recordHookFailures,
   HOOK_RELAY_DECISIONS, type HookRelayDecision,
-  listOrgHarnessAssets, listEnabledAssets, upsertOrgHarnessAsset, removeOrgHarnessAsset,
+  listOrgHarnessAssets, listEnabledAssets, upsertOrgHarnessAsset, removeOrgHarnessAsset, countMemberDraftAssets,
   listAssetPrefs, setAssetPref, clearAssetPref, clearAssetPrefs, getOrgHook, getOrgHarnessAsset, type AssetPrefKind,
   listTools, upsertTool, removeTool, listAutoApproveTools,
   listDbSources, getDbSource, upsertDbSource, removeDbSource,
@@ -929,6 +929,55 @@ export const deliveryCapabilities: Capability[] = [
       if (input.clear === true) { await clearAssetPref(targetKind, refId, userId, wc); return { ok: true, cleared: true }; }
       const pref = await setAssetPref(targetKind, refId, userId, Boolean(input.state), wc);
       return { pref };
+    }),
+
+  // ── 멤버 셀프 하네스 자산 업로드 (#990 MVP) — 누구나 '비활성 초안'만 올린다. 승격(활성화+타깃)은 관리자(runtime). ──
+  //  왜 안전한가: enabled=false 를 서버가 **강제** → 마스터킬이라 아무에게도 배포 안 됨(asset-visibility, org_runner_assets 는
+  //   enabled=true 만 fetch). id 는 서버가 `draft-<sha10(멤버)>-<slug>` 로 고정(사용자는 slug 만) → upsert ON CONFLICT 이 **내
+  //   초안에만** 걸린다 = 조직 자산·타인 초안을 절대 덮을 수 없다(멤버해시라 한글 멤버 id 도 안전, 하이픈 모호성 없음).
+  //   정적토큰 거부·멤버당 초안 상한. paired_hook 불가(훅=runtime), target 무시. 본문·라벨 시크릿 hard-block.
+  //  관리자는 이 초안을 검토해 클린 id 로 승격한다(org_harness_asset_upsert). 로컬에 스킬 파일 직접 쓰는 것과 위험 동급.
+  restRead("me_harness_asset_draft", "내 하네스 자산 초안 올리기(비활성)",
+    "인증된 구성원이 스킬·서브에이전트·커맨드 **초안**을 올린다 — 서버가 항상 비활성(enabled=false)으로 저장하므로 아무에게도 배포되지 않는다. 관리자가 검토 후 활성화·타깃하면 배포된다. id 는 서버가 `draft-<멤버해시>-<slug>` 로 고정(조직 자산·타인 초안 보호). slug·kind·body 필수. 멤버당 초안 개수 상한. paired_hook·target 은 받지 않는다(승격 시 관리자가 정한다).",
+    [{ method: "POST", paths: ["/api/ui/me/harness-asset"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      // 공유 관리테이블 write 라 정적(회수불가) 토큰 거부 — me_asset_pref_set 과 동일 관례(로컬 전용 me_harness_local_pref 와 다르다).
+      if (user.tokenSource === "static") throw new HttpError(403, "정적 토큰으로는 초안을 올릴 수 없습니다 — 관리자에게 문의하세요");
+      const slug = str(input.slug ?? "", "slug", 40).trim().toLowerCase();
+      if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(slug)) throw new HttpError(400, "slug 는 소문자 영숫자·하이픈 1~40자(소문자·숫자로 시작)여야 합니다");
+      const id = draftAssetId(userId, slug); // draft-<sha10(userId)>-<slug> — charset-safe(한글 멤버 id 포함), 조직/타인 자산과 충돌 불가
+      // 이미 있으면 **내 것이고 아직 비활성일 때만** 갱신 — 승격(활성)된 자산이나 남의 것은 못 덮는다(방어적 이중잠금).
+      const before = await getOrgHarnessAsset(id);
+      if (before && before.created_by !== userId) throw new HttpError(409, "같은 이름의 초안이 이미 있습니다 — 다른 slug 를 쓰세요");
+      if (before && before.enabled) throw new HttpError(409, "이미 활성화(승격)된 자산입니다 — 관리자에게 문의하세요");
+      // 신규일 때만 쿼터 — 공유 테이블 무한적재 + 관리 검토화면 DoS 방지. 자기 초안 갱신은 개수 불변이라 통과.
+      if (!before) {
+        const DRAFT_CAP = 25;
+        if (await countMemberDraftAssets(userId) >= DRAFT_CAP) throw new HttpError(429, `초안이 너무 많습니다(최대 ${DRAFT_CAP}개) — 관리자 검토·정리 후 다시 올려주세요`);
+      }
+      const kind = str(input.kind ?? "skill", "kind", 12);
+      if (!HARNESS_ASSET_KINDS.has(kind)) throw new HttpError(400, `kind 는 ${[...HARNESS_ASSET_KINDS].join("|")} 만 허용됩니다`);
+      const harness = input.harness === undefined ? "all" : str(input.harness, "harness", 12);
+      if (!HOOK_HARNESSES.has(harness)) throw new HttpError(400, "harness 는 claude|codex|openclaw|all");
+      const label = input.label == null ? undefined : str(input.label, "label", 200).trim();
+      const description = str(input.description ?? "", "description", 2000);
+      const body = str(input.body ?? "", "body", 262144);
+      if (!body.trim()) throw new HttpError(400, "body(자산 본문)가 필요합니다");
+      const frontmatter = parseAssetFrontmatter(input.frontmatter);
+      if (label) assertNoHardSecrets(label, "label");
+      assertNoHardSecrets(description, "description");
+      assertNoHardSecrets(body, "body");
+      assertNoHardSecrets(JSON.stringify(frontmatter), "frontmatter");
+      const asset = await upsertOrgHarnessAsset({
+        id, kind: kind as AssetKind, label,
+        harness: harness as HookHarness, description, body, frontmatter,
+        target_members: null, // 무시 — 어차피 비활성. 승격 시 관리자가 타깃 지정.
+        paired_hook_id: null,  // 멤버는 짝훅 못 붙인다(훅=runtime 권한).
+        enabled: false,        // ★ 강제 비활성 — 마스터킬(아무에게도 안 감). 관리자만 켤 수 있다.
+      }, wctx(user, ctx));
+      return { asset, draft: true, note: "비활성 초안으로 저장됨 — 관리자가 검토 후 활성화하면 배포됩니다" };
     }),
 
   // ── 로컬 하네스 관측(#891 온보딩 C) — 세션훅 채널로 로컬↔라이블리 하네스를 웹에서 한눈에. 노드 불요. ──
