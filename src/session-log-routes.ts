@@ -15,7 +15,7 @@ import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { getRuntimeConfig } from "./org/store.js";
 import { appendSessionLog, sessionLogWatermark, sessionOwner } from "./v6/session-log-store.js";
 
-const MAX_DELTA = 8 * 1024 * 1024;   // 한 번에 받는 델타 상한(8MB) — 큰 트랜스크립트도 청크로 나눠 보내게.
+export const MAX_DELTA = 8 * 1024 * 1024;   // 한 번에 받는 델타 상한(8MB) — 큰 트랜스크립트도 청크로 나눠 보내게.
 
 // append 인가 판정(순수) — 프라이버시가 걸린 게이트라 HTTP 없이 단위검증한다. ok면 null, 막으면 {status,message}.
 //  ① enabled 꺼짐 → 403(조직이 안 켰으면 저장 안 함) ② 정책 밖 하네스 → 403 ③ 소유자 아님 → 403
@@ -38,14 +38,19 @@ const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 const SID_RE = /^[A-Za-z0-9._-]{1,64}$/;
 const NODE_RE = /^[A-Za-z0-9._-]{0,64}$/;   // 빈 문자열('' = 게이트웨이 로컬) 허용
 
-// raw 바디를 Buffer 로 수집(상한 초과 시 413). express.json 마운트 이전이 아니라도, 이 라우트는 자체 수집한다.
-function readRawBody(req: express.Request, limit: number): Promise<Buffer> {
+// raw 바디를 Buffer 로 수집(상한 초과 시 413). 이 라우트는 octet-stream 전용(핸들러가 content-type 게이트)이라 전역
+//  express.json 이 스트림을 소진하지 않는다. 그래도 방어적으로 처리한다:
+//   ① 상위 미들웨어가 이미 스트림을 다 읽었으면(readableEnded) 'data'/'end' 가 다시 안 온다 → **매달리지 말고** 즉시 종료.
+//   ② 상한 초과 시 소켓을 **죽이지 않는다**(pause 만) — 죽이면 413 응답을 보낼 상대가 사라진다(upload-file.ts 선례).
+export function readRawBody(req: express.Request, limit: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []; let n = 0; let done = false;
     const fin = (fn: () => void) => { if (!done) { done = true; fn(); } };
+    if (req.readableEnded || (req as unknown as { complete?: boolean }).complete) { resolve(Buffer.concat(chunks)); return; }
     req.on("data", (c: Buffer) => {
+      if (done) return;
       n += c.length;
-      if (n > limit) { fin(() => reject(new HttpError(413, `델타가 너무 큽니다(${limit} 바이트 이하로 나눠 보내세요)`))); req.destroy(); return; }
+      if (n > limit) { req.pause(); fin(() => reject(new HttpError(413, `델타가 너무 큽니다(${limit} 바이트 이하로 나눠 보내세요)`))); return; }
       chunks.push(c);
     });
     req.on("end", () => fin(() => resolve(Buffer.concat(chunks))));
@@ -64,6 +69,9 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     if (!SID_RE.test(sessionId)) throw new HttpError(400, "세션 id 형식 오류");
     const nodeId = String(req.query.node ?? "");
     if (!NODE_RE.test(nodeId)) throw new HttpError(400, "node 형식 오류");
+    // 이 엔드포인트는 octet-stream 델타 전용. 다른 content-type(특히 application/json)은 전역 express.json 이
+    //  먼저 스트림을 소진해 readRawBody 가 영원히 매달린다 → DB 접근 전에 415 로 일찍 막는다. 훅은 항상 octet-stream 전송.
+    if (!req.is("application/octet-stream")) throw new HttpError(415, "본문은 application/octet-stream 이어야 합니다");
     const atOffset = Number(req.query.at);
     const harness = req.query.harness ? String(req.query.harness) : null;
 

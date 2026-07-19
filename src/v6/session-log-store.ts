@@ -32,17 +32,6 @@ export interface AppendResult {
   bytes: number;        // 이 (node,session) 로그의 현재 총 바이트 = 다음에 보내야 할 offset(보낸 쪽 워터마크 정정용).
 }
 
-// 불멸 세션 레코드 보장(있으면 last_seen 만 갱신). owner 는 **최초 1회만** 굳는다(COALESCE — 이후 안 바뀜).
-export async function ensureSession(nodeId: string, sessionId: string, harness?: string | null, owner?: string | null): Promise<void> {
-  await itemsPool.query(
-    `INSERT INTO session(node_id, session_id, harness, owner) VALUES($1,$2,$3,$4)
-     ON CONFLICT (node_id, session_id) DO UPDATE SET last_seen=now(),
-       harness=COALESCE(session.harness, EXCLUDED.harness),
-       owner=COALESCE(session.owner, EXCLUDED.owner)`,
-    [nodeId, sessionId, harness ?? null, owner ?? null],
-  );
-}
-
 // 로그 소유자(첫 append 한 멤버) 조회 — 없으면 null(아직 아무도 안 씀). 엔드포인트가 owner-gate 에 쓴다.
 export async function sessionOwner(nodeId: string, sessionId: string): Promise<string | null> {
   const r = await itemsPool.query(`SELECT owner FROM session WHERE node_id=$1 AND session_id=$2`, [nodeId, sessionId]);
@@ -58,6 +47,8 @@ export async function appendSessionLog(input: {
   const client = await itemsPool.connect();
   try {
     await client.query("BEGIN");
+    // 불멸 세션 레코드 보장(있으면 last_seen 만 갱신). owner 는 **최초 1회만** 굳는다(COALESCE — 첫 append 한
+    //  멤버가 소유자로 고정, 이후 append 가 못 덮는다). 프라이버시 게이트라 라우트의 owner-검사와 함께 이중방어.
     await client.query(
       `INSERT INTO session(node_id, session_id, harness, owner) VALUES($1,$2,$3,$4)
        ON CONFLICT (node_id, session_id) DO UPDATE SET last_seen=now(),

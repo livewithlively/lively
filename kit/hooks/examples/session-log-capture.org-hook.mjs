@@ -19,7 +19,10 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 
-const BUDGET_MS = 8000;              // 턴 끝 지연 상한 — 넘기면 남은 건 다음 턴에(서버 워터마크가 이어준다).
+// 상한은 run-custom 이 알려준다(LIVELY_HOOK_TIMEOUT_MS = 이 훅의 timeout_sec). 하드코딩하면 관리탭에서 timeout_sec 을
+//  줄이는 순간 조용히 어긋난다. 구 run-custom(미전달)이면 시드 등록값 15s 로 가정. 하한을 깔지 않는다(1s 킬도 존중).
+const HOOK_TIMEOUT_MS = Number(process.env.LIVELY_HOOK_TIMEOUT_MS) > 0 ? Number(process.env.LIVELY_HOOK_TIMEOUT_MS) : 15_000;
+const BUDGET_MS = Math.floor(HOOK_TIMEOUT_MS * 0.7);   // 이 지점 넘기면 이번 턴 종료 — 남은 건 다음 턴(서버 워터마크가 이어줌).
 const MAX_DELTA = 8 * 1024 * 1024;  // 한 번에 올릴 상한(엔드포인트 상한과 동일) — 넘으면 이번엔 여기까지만.
 
 (async () => {
@@ -47,7 +50,8 @@ const MAX_DELTA = 8 * 1024 * 1024;  // 한 번에 올릴 상한(엔드포인트 
   const nodeId = (process.env.LIVELY_NODE_ID || "").trim() || readLocal("node-id") || "";   // '' = 게이트웨이 로컬(박스)
   const harness = (process.env.LIVELY_HARNESS || "claude").trim().toLowerCase();
   const jfetch = async (p, opts = {}) => {
-    const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 6000);
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), Math.max(500, Math.min(6000, BUDGET_MS - (Date.now() - startedAt))));
     try { return await fetch(base + p, { ...opts, signal: ctl.signal, headers: { authorization: "Bearer " + token, ...(opts.headers || {}) } }); }
     finally { clearTimeout(t); }
   };
