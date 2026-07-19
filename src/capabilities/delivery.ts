@@ -253,6 +253,17 @@ export function resolveHookSource(raw: unknown): string | undefined {
   return s;
 }
 
+// 커스텀 훅 matcher 해소(#970) — source 와 달리 **세 갈래**다: null 이 '전체 매칭'이라는 의미 있는 값이라서.
+//  · 미지정(undefined) = 보존(store 가 기존 matcher 유지)
+//  · 명시적 null 또는 "" = 전체 매칭(모든 툴). 스키마 "빈 값=전체"의 그 의미.
+//  · 문자열 = 그 정규식 패턴.
+//  종전엔 셋을 다 null 로 뭉개 store 가 '명시적 전체매칭'을 '미지정'과 못 갈라 무시했다(부분수정이 지움을 삼킴).
+export function resolveHookMatcher(raw: unknown): string | null | undefined {
+  if (raw === undefined) return undefined; // 미지정 = 보존
+  if (raw === null || raw === "") return null; // 명시적 = 전체 매칭
+  return str(raw, "matcher", 500);
+}
+
 // #699: 개인 오버라이드 대상 종류 검증(harness_asset|org_hook).
 function assertPrefKind(raw: unknown): AssetPrefKind {
   const s = typeof raw === "string" ? raw.trim() : "";
@@ -1979,16 +1990,17 @@ export const deliveryCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/org/hook"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       const id = assertHookId(input.id);
-      const event = str(input.event, "event", 40);
-      if (!HOOK_EVENTS.has(event)) throw new HttpError(400, `event 는 ${[...HOOK_EVENTS].join("|")} 만 허용됩니다`);
+      // event 도 부분수정 보존(#970): 생략하면 기존 event 유지(store 위임). 신규 훅은 event 필수 — store 가 방어.
+      //  단 제공되면 반드시 유효값이어야 한다(오타로 잘못된 event 를 저장하지 않게).
+      const event = input.event === undefined ? undefined : str(input.event, "event", 40);
+      if (event !== undefined && !HOOK_EVENTS.has(event)) throw new HttpError(400, `event 는 ${[...HOOK_EVENTS].join("|")} 만 허용됩니다`);
       // #970: harness·timeout_sec 도 source_code 와 같은 데이터소실 부류였다 — 생략 시 store 의 preserve
       //  (`?? before`)가 못 걸리게 항상 구체값('all'·10)을 넘겨, 부분수정이 이 필드를 기본값으로 되돌렸다.
       //  '미지정=보존'으로 통일(enabled·sort·target_members 와 동형). 신규 훅은 store 가 기본값으로 채운다.
       const harness = input.harness === undefined ? undefined : str(input.harness, "harness", 12);
       if (harness !== undefined && !HOOK_HARNESSES.has(harness)) throw new HttpError(400, "harness 는 claude|codex|openclaw|all");
       const sourceCode = resolveHookSource(input.source_code); // #970: 생략=보존(undefined→store 위임), "" 만 지움
-      const matcher = (input.matcher === undefined || input.matcher === null || input.matcher === "")
-        ? null : str(input.matcher, "matcher", 500);
+      const matcher = resolveHookMatcher(input.matcher); // #970: 생략=보존 / null·""=전체매칭 / 문자열=패턴
       const timeout = input.timeout_sec === undefined ? undefined : Number(input.timeout_sec);
       if (timeout !== undefined && (!Number.isFinite(timeout) || timeout < 1 || timeout > 120)) throw new HttpError(400, "timeout_sec 은 1~120 사이 정수여야 합니다");
       const targetMembers = parseTargetMembers(input.target_members); // #699: null/빈=전원, 배열=지정, undefined=보존
@@ -2006,10 +2018,11 @@ export const deliveryCapabilities: Capability[] = [
     }, {
       id: z.string().describe("훅 id(슬러그) — 있으면 수정, 없으면 생성"),
       event: z.enum(["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "Notification", "PreCompact", "PostCompact"])
-        .describe("발화 라이프사이클 이벤트. Codex 는 SessionStart/PostToolUse/Stop 만 지원"),
-      source_code: z.string().optional().describe("훅 본문(멤버 디스크에 굳히지 않고 런너가 매 세션 fetch). 평문 시크릿은 hard-block"),
-      harness: z.enum(["claude", "codex", "openclaw", "all"]).optional().describe("대상 하네스(기본 all)"),
-      matcher: z.string().nullable().optional().describe("PreToolUse/PostToolUse 등에서 대상 툴 매칭 패턴(빈 값=전체)"),
+        .optional()
+        .describe("발화 라이프사이클 이벤트. Codex 는 SessionStart/PostToolUse/Stop 만 지원. 미전송=기존 유지(#970, 신규 훅은 필수)"),
+      source_code: z.string().optional().describe("훅 본문(멤버 디스크에 굳히지 않고 런너가 매 세션 fetch). 평문 시크릿은 hard-block. 미전송=기존 유지, 빈 문자열=지움(#970)"),
+      harness: z.enum(["claude", "codex", "openclaw", "all"]).optional().describe("대상 하네스(기본 all). 미전송=기존 유지(#970)"),
+      matcher: z.string().nullable().optional().describe("PreToolUse/PostToolUse 등에서 대상 툴 매칭 패턴. null/빈값=전체매칭, 미전송=기존 유지(#970)"),
       timeout_sec: z.number().int().min(1).max(120).optional().describe("실행 타임아웃 초(1~120, 기본 10)"),
       target_members: z.array(z.string()).nullable().optional().describe("이 훅을 받을 멤버 id 배열. null/빈=전원, 미전송=기존 유지(#699)"),
       label: z.string().optional().describe("훅 라벨(표시명)"),
