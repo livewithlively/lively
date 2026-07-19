@@ -4854,28 +4854,32 @@ const PROF_DEV = [
   { v: '전문', label: '전문', hint: '아키텍처·리뷰까지 깊게 봐요 — 군더더기 없이 기술적으로' },
 ];
 const PROF_TONE = ['친근한 존댓말', '간결한 존댓말', '격식 있는 존댓말', '편한 반말', '위트 있는 존댓말'];
+// 사용 언어 — 내 AI 가 답하는 언어. 프리셋 칩 + '직접 입력'(목록 밖 언어). tone/dev 와 달리 언어는 장꼬리라 자유입력을 허용한다.
+const PROF_LANG = ['한국어', 'English', '日本語', '中文'];
 
 // 단일 선택 chip 그룹 — selected.v 를 토글(다시 누르면 해제). getVal/getLabel 로 옵션 모양에 무관.
 function profChips(opts, selected, getLabel, getVal, onPick?) {
   const wrap = el('div', { class: 'prof-chips' });
   const chips: any[] = [];
+  const repaint = () => chips.forEach((c) => c.el.classList.toggle('on', c.val === selected.v));
   opts.forEach((o) => {
     const val = getVal(o);
     const chip = el('button', { type: 'button', class: 'prof-chip' + (val === selected.v ? ' on' : ''), text: getLabel(o) });
     chip.addEventListener('click', () => {
       selected.v = (selected.v === val) ? '' : val;
-      chips.forEach((c) => c.el.classList.toggle('on', c.val === selected.v));
+      repaint();
       if (onPick) onPick(selected.v);
     });
     chips.push({ el: chip, val });
     wrap.append(chip);
   });
+  (wrap as any).repaint = repaint;   // 외부에서 selected.v 를 바꾼 뒤(예: '직접 입력' 타이핑) 칩 하이라이트를 동기화한다.
   return wrap;
 }
 
 // canonical body_md → 선택값 복원. 기본 견본(채워넣기/local.md)은 빈값으로(새로 시작).
 function parseMyProfile(md) {
-  const r = { role: '', dev: '', address: '', tone: '', memo: '' };
+  const r = { role: '', dev: '', address: '', tone: '', lang: '', memo: '' };
   if (!md || /채워넣기|members\/local\.md/.test(md)) return r;
   const parts = md.split(/^##\s*추가 메모\s*$/m);
   const head = parts[0] || '';
@@ -4887,6 +4891,7 @@ function parseMyProfile(md) {
   r.address = grab(/^[-*\s]*\**\s*호칭[^:：\n]*\**\s*[:：]\s*(.+)$/m);
   const tone = grab(/^[-*\s]*\**\s*말투\s*\**\s*[:：]\s*(.+)$/m);
   r.tone = PROF_TONE.find((t) => tone.startsWith(t)) || '';
+  r.lang = grab(/^[-*\s]*\**\s*사용\s*언어\s*\**\s*[:：]\s*(.+)$/m);   // 자유값(프리셋 또는 직접 입력) — 목록 매칭 없이 그대로 복원.
   // 응답 길이·담당 영역·자주 쓰는 도구는 #837 에서 제거 — 파싱도 안 한다(다음 저장에 자연 소멸).
   return r;
 }
@@ -5788,6 +5793,12 @@ async function myAiSection(detail) {
   renderDevHint();
   const toneSel = { v: pr.tone };
   const toneChips = profChips(PROF_TONE.map((t) => ({ v: t })), toneSel, (o) => o.v, (o) => o.v);
+  // 사용 언어 — 프리셋 칩과 '직접 입력'이 한 값(langSel.v)을 공유한다. 칩을 고르면 입력칸을 비우고, 직접 입력하면 칩 선택이 풀린다.
+  const langSel = { v: pr.lang };
+  const langCustom = el('input', { type: 'text', placeholder: '또는 직접 입력 (예: Français · Español · Tiếng Việt)' });
+  if (langSel.v && !PROF_LANG.includes(langSel.v)) langCustom.value = langSel.v;   // 프리셋 밖 값이면 입력칸에 복원
+  const langChips = profChips(PROF_LANG.map((t) => ({ v: t })), langSel, (o) => o.v, (o) => o.v, () => { langCustom.value = ''; });
+  langCustom.addEventListener('input', () => { langSel.v = langCustom.value.trim(); (langChips as any).repaint(); });
 
   // 실제 주입 전문 미리보기 — [세션 주입]의 것과 같은 관례지만 **개인 레이어까지 반영된** 내 컨텍스트다.
   //  /api/ui/org/preview 는 bearer principal 기준(previewMemberContext(orgName, memberId)) 이라, 지금 로그인한
@@ -5826,6 +5837,7 @@ async function myAiSection(detail) {
     if (d) lines.push('- 개발 이해도: ' + d.label + ' — ' + d.hint);
     if (addressIn.value.trim()) lines.push('- 호칭: ' + addressIn.value.trim());
     if (toneSel.v) lines.push('- 말투: ' + toneSel.v);
+    if (langSel.v) lines.push('- 사용 언어: ' + langSel.v);
     let body = lines.length ? ('## 내 프로필\n' + lines.join('\n') + '\n') : '';
     const memo = memoTa.value.trim();
     if (memo) body += (body ? '\n' : '') + '## 추가 메모\n' + memo + '\n';
@@ -5845,6 +5857,9 @@ async function myAiSection(detail) {
     field('개발 이해도', el('div', {}, devChips, devHint)),
     field('호칭 (AI가 나를 부르는 말)', addressIn),
     field('말투', toneChips),
+    field('사용 언어 (AI가 답하는 언어)', el('div', {}, langChips,
+      el('div', { style: 'margin-top:8px' }, langCustom),
+      el('p', { class: 'prof-hint', text: '고르거나 직접 적은 언어로 내 AI가 답해요. 비우면 조직 기본값(주로 한국어)을 따릅니다.' }))),
     field('추가 메모', memoTa),
     el('div', { class: 'admin-actions' }, saveBtn, status, pv.btn),
     pv.box));
