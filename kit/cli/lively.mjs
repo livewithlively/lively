@@ -1332,7 +1332,7 @@ ${bold("작업")}
       --daemon               상시화(부팅·로그인마다 자동) ${dim("macOS launchd · Linux systemd --user")}   ·   node stop  데몬 해제
   repo list              이 머신에서 뜰 수 있는 레포 + 로컬 상태
   repo pin <레포>        코드 근거 분석용 읽기전용 핀(SHA 고정) ${dim("--ref main  --path .  ·  pin remove <레포>")}
-  repo worktree <레포>   지금 폴더에 워크트리 생성(코드 작업면) ${dim("--branch b  --ref main  --path .  ·  worktree remove <레포> [--force]")}
+  repo worktree <레포>   워크트리 생성(코드 작업면) — 프로젝트면 그 폴더의 <레포> 자리 ${dim("--branch b  --ref main  --path .  ·  worktree remove <레포> [--force]")}
 
 ${bold("옵션")}
   --gateway <url>        게이트웨이 주소 지정 (login 과 함께)
