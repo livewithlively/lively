@@ -1325,6 +1325,7 @@ ${bold("작업")}
       --bind <id>        기존 프로젝트에 연결      ${dim("--path <폴더>  --json")}
   run <프로젝트번호>      프로젝트를 내 PC 에서 열기  ${dim("예: lively run 864")}
   resume <세션id>         다른 환경/멤버에서 만든 내 세션을 이 PC 로 이어받기 ${dim("--node <id>  --print(내려받기만)")}
+  backfill                이 PC 의 기존 claude 대화 기록을 중앙에 소급 업로드(웹뷰에 과거 세션도) ${dim("--dry-run")}
   delegate "<작업>"       무거운 작업을 워커/중앙에 위탁 — 진행을 미러하며 결과 출력 후 종료 ${dim('예: lively delegate "테스트 실행" --ram 2048')}
       --repo <이름> [--ref main]  대상 레포 자동 준비(공유 base→worktree, cwd 로)  ${dim("--ram/--cpu/--disk N  --docker  --node <id>  --timeout <초>")}
       --detach               번호만 반환하고 즉시 종료  ${dim("(나중에 lively delegate logs <번호>)")}
@@ -1417,6 +1418,64 @@ async function cmdResume(args) {
   process.exit(st ?? 0);
 }
 
+// lively backfill [--dry-run] — 이 머신의 **기존** claude 트랜스크립트를 중앙에 소급 업로드(#905 C1).
+//  캡처 훅은 "켠 뒤 늘어나는 델타"만 보낸다 → 웹뷰가 과거 세션은 못 본다. 이 명령이 ~/.claude/projects/*/*.jsonl
+//  전체를 훑어 서버 워터마크부터 올린다(훅과 동일 로직의 배치판). 멱등(offset-CAS): 이미 올라간 건 서버가 흡수.
+//  소유자=인증한 나. 세션 공유가 꺼져 있으면 서버가 막는다(관리 ▸ 세션 공유를 먼저 켜라). --dry-run 은 조회만.
+async function cmdBackfill(args) {
+  const dry = args.includes("--dry-run") || args.includes("--print");
+  const gw = gateway(), tok = token();
+  if (!gw) { say(red("게이트웨이 주소를 모릅니다 — `lively login --gateway <url>`.")); process.exit(1); }
+  if (!tok) { say(red("로그인이 필요합니다 — `lively login`.")); process.exit(1); }
+  const base = join(HOME, ".claude", "projects");
+  let dirs;
+  try { dirs = readdirSync(base); } catch { say(`claude 기록 폴더가 없습니다: ${base} — 올릴 게 없습니다.`); return; }
+  const files = [];
+  for (const d of dirs) {
+    let inner; try { inner = readdirSync(join(base, d)); } catch { continue; }
+    for (const f of inner) if (f.endsWith(".jsonl")) files.push({ sid: f.slice(0, -6), path: join(base, d, f) });
+  }
+  if (!files.length) { say("올릴 트랜스크립트가 없습니다."); return; }
+  say(`발견: ${files.length}개 세션 트랜스크립트${dry ? dim("  (dry-run — 전송 안 함)") : ""}`);
+  const H = { authorization: `Bearer ${tok}` };
+  const MAXD = 8 * 1024 * 1024;
+  let sent = 0, already = 0, skipped = 0, failed = 0, bytesUp = 0;
+  for (const { sid, path: fp } of files) {
+    if (!/^[A-Za-z0-9._-]{1,64}$/.test(sid)) { skipped++; continue; }
+    let full; try { full = readFileSync(fp); } catch { skipped++; continue; }
+    if (!full.length) { skipped++; continue; }
+    // 서버 워터마크 + 캡처 정책(한 왕복).
+    let from = 0;
+    try {
+      const r = await fetch(`${gw}/api/ui/v6/sessions/${encodeURIComponent(sid)}/log/watermark?node=`, { headers: H });
+      if (r.status === 401 || r.status === 403) { say(red("접근 거부(세션 공유 꺼짐 또는 토큰 무효) — 관리 ▸ 세션 공유를 켜고 다시 시도하세요.")); process.exit(1); }
+      if (!r.ok) { failed++; continue; }
+      const j = await r.json();
+      from = Number(j.bytes) || 0;
+      if (j.capture && j.capture.enabled !== true) { say(red("세션 공유가 꺼져 있습니다 — 관리 ▸ 세션 공유에서 켜세요.")); process.exit(1); }
+    } catch { failed++; continue; }
+    if (full.length <= from) { already++; continue; }   // 이미 다 올라감
+    if (dry) { say(dim(`  [dry] ${sid}  ${from}→${full.length} (+${full.length - from}B)`)); sent++; continue; }
+    // 델타를 MAXD 청크로 순차 POST(offset-CAS 가 이어붙임). 응답 bytes 로 다음 오프셋 정정.
+    let ok = true;
+    while (from < full.length) {
+      const end = Math.min(full.length, from + MAXD);
+      const buf = full.subarray(from, end);
+      try {
+        const r = await fetch(`${gw}/api/ui/v6/sessions/${encodeURIComponent(sid)}/log?${new URLSearchParams({ at: String(from), node: "", harness: "claude" })}`, {
+          method: "POST", headers: { ...H, "content-type": "application/octet-stream" }, body: buf });
+        if (!r.ok) { ok = false; break; }
+        const j = await r.json();
+        const nb = Number(j.bytes);
+        bytesUp += buf.length;
+        from = Number.isFinite(nb) && nb > from ? nb : end;   // 서버 진실로 전진(중복/gap 정정)
+      } catch { ok = false; break; }
+    }
+    if (ok) sent++; else failed++;
+  }
+  say(`완료 — 전송 ${sent} · 이미있음 ${already} · 건너뜀 ${skipped} · 실패 ${failed}${bytesUp ? ` · ${Math.round(bytesUp / 1024)}KB` : ""}`);
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const o = parse(argv);
@@ -1444,6 +1503,8 @@ async function main() {
     case "repo": return cmdRepo(argv.slice(argv.indexOf("repo") + 1));
     // resume — 다른 환경에서 내 세션 이어받기(#905 C1). 중앙 트랜스크립트를 이 PC 로 내려 claude --resume.
     case "resume": return cmdResume(argv.slice(argv.indexOf("resume") + 1));
+    // backfill — 이 머신의 기존 claude 트랜스크립트를 중앙에 소급 업로드(#905 C1). 웹뷰에 과거 세션도 보이게.
+    case "backfill": return cmdBackfill(argv.slice(argv.indexOf("backfill") + 1));
     case "version": say(`lively ${CLI_VERSION}${readLively("kit-version") ? dim("  · 키트 " + readLively("kit-version")) : ""}`); return;
     case "help": say(HELP); return;
     default:
