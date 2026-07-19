@@ -9,6 +9,8 @@
 // 플래그 디렉토리: os.tmpdir()/lively-hooks (전 플랫폼 동일) — macOS 의 TMPDIR 는 유저별 0700 디렉토리라
 // 공유 /tmp 의 심링크 사전심기/스푸핑 표면이 없다. 재부팅 시 자동 소멸, GC 불요.
 // 페일오픈: 어떤 실패든 무출력 exit 0. 비활성화(incognito): LIVELY_OFF=1 (구 LIVELY_HOOKS_OFF — alias)
+// ⚠ argv 는 안 본다 — session-preload 가 자체설치 MCP 커버용 엔트리를 `work-flag.mjs --ext-pull` 로 배선하는데(#959),
+//  그 sentinel 인자는 settings 엔트리를 회수-교체하기 위한 **정체성 discriminator**일 뿐 이 스크립트는 무시한다(판정 동일).
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
@@ -67,8 +69,8 @@ function effectiveWriteTools() {
 //   어드민이 웹에서 비우면 그대로 꺼지고, 항목을 더하면 범위가 넓어진다 — 노브 하나로 on/off + 범위를 잡는다.
 //   게이트웨이가 영영 불가해 설정이 없으면 넛지 안 함(fail-safe — 오넛지보다 미넛지가 안전).
 //   prefix 매칭인 이유: 프록시 툴이 mcp__lively__ext__<server>__<tool> 라 앞부분만으로 갈린다. substring 이면
-//   'context__' 같은 서버명이 오탐된다. 이 함수 자체는 서버 라벨 무관이라 matcher 만 넓히면 자체설치 MCP 도 잡는다 —
-//   다만 지금 matcher 는 mcp__lively__.* 라 그 경로는 아직 안 열려 있다(후속).
+//   'context__' 같은 서버명이 오탐된다. 이 함수 자체는 서버 라벨 무관이라, session-preload 가 pull_tools 의 비-lively
+//   prefix 로 별도 matcher 엔트리(work-flag.mjs --ext-pull)를 배선하면 자체설치 MCP 도 잡힌다(#959 — 그 경로 열림).
 function effectivePullTools() {
   try {
     const cfg = JSON.parse(readFileSync(join(homedir(), ".lively", "hooks-config.json"), "utf8"));

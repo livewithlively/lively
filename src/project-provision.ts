@@ -42,7 +42,7 @@ export async function resolveRepoInject(
 export { hostOf, isAuthError, prepareGitAuth, type GitAuth } from "./org/git-credential-store.js";
 
 export const REPOS_SUBDIR = "repos"; // workspace/repos/<name> — 박스 호스트 클론(프로젝트 간 공유, worktree 의 부모)
-const REPO_NAME_RE = /^[A-Za-z0-9._-]{1,100}$/;        // 경로 컴포넌트로 쓰이므로 슬래시·.. 금지
+const REPO_NAME_RE = /^(?!\.+$)[A-Za-z0-9._-]{1,100}$/; // 경로 컴포넌트로 쓰이므로 슬래시 금지 + 점세그먼트(.·..·…) 거부(traversal 방지). 이름 속 점은 허용
 const BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._\/-]{0,99}$/; // git 브랜치명(선두 특수문자 금지)
 const GIT_TIMEOUT_MS = 180_000;
 

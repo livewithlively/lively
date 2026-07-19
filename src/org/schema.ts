@@ -535,6 +535,12 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS hook_relay_decisions JSONB NOT NULL DEFAULT '["deny","ask","defer"]'::jsonb;
   `);
 
+  // ── org_runtime_config 확장: session_share — 세션이력 캡처 정책(#905 C1). 관리탭 ▸ 세션 공유 에서 조절. ──
+  //  기본 '{}' → resolveSessionShare 가 기본값(enabled=false)으로 접는다. **켜기 전엔 아무 세션도 캡처 안 함**(롤아웃 안전).
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS session_share JSONB NOT NULL DEFAULT '{}'::jsonb;
+  `);
+
   // ── org_hook 확장: health — 멤버별 마지막 훅 실행 실패 기록(#892 결함 C). ──
   // { "<member_id>": { at, reason, exit_code, stderr } } — 멤버 수로 자연히 유계라 별도 테이블·정리 불요.
   // 종전엔 훅이 죽어도 러너가 크래시를 삼켜(stdout "") '죽음'과 '결정 없음'이 구분 불가였고, 그래서 spec-blind

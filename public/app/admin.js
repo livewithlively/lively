@@ -128,6 +128,9 @@ const ADMIN_SECTIONS = [
     // 자동화 — 구 [스케줄러]+[상시 세션]. 크론 액션의 param kind 에 'session' 이 1급으로 있고 4개 액션이 상시
     //  세션을 필수 타깃으로 받는다(크론=언제 × 상시세션=어디서·누구로). 떨어뜨려 놓을 이유가 없다.
     { key: 'automation', label: '자동화', meaning: null, group: 'capability' },
+    // 세션 공유(#905 C1) — 구성원 AI 세션 대화 기록을 중앙에 모아 환경·멤버 무관 이어보기/이어받기. 프라이버시가
+    //  걸린 org 정책이라 admin 전용. 기본 꺼짐(켜기 전엔 수집 안 함).
+    { key: 'session-share', label: '세션 공유', meaning: null, group: 'capability' },
     // ── 데이터 연결 ──
     // 커넥터 = **패시브 미러 싱크**(slack/notion/clickup/gmail/drive 를 우리 DB로 당겨온다). AI가 실시간 호출하는
     //  외부 시스템(=MCP 서버·사내 API 도구)과는 다른 것이다 — 그건 [AI 능력 ▸ 도구]에 있다.
@@ -160,7 +163,7 @@ const SECTION_REMAP = {
 // 구 [검토 큐]는 관리탭을 떠나 WIKI 탭으로 갔다(#837) — 섹션 리맵이 아니라 탭 밖 리다이렉트라 따로 둔다.
 const SECTION_EXIT = { 'review-queue': '#/knowledge/review' };
 // admin 권한 전용(쓰기·인프라·감사). #318 호출통계·#549 변경감사는 전 구성원의 변경·before/after 를 노출하므로 admin.
-const ADMIN_ONLY = ['credentials', 'connectors', 'db-sources', 'storage', 'embeddings', 'automation', 'audit', 'ingest-policy'];
+const ADMIN_ONLY = ['credentials', 'connectors', 'db-sources', 'storage', 'embeddings', 'automation', 'audit', 'ingest-policy', 'session-share'];
 const RUNTIME_ONLY = ['agent-assets']; // runtime 권한 전용(멤버 머신에서 도는 것의 정의)
 // [도구]는 두 권한의 합집합 — 사내 API 도구·빌트인은 runtime, 외부 MCP 서버 등록은 admin. 둘 중 하나라도 있으면
 //  섹션을 보여주고, 안에서 각 서브탭을 권한별로 켠다(구조상 한 섹션=한 scope 전제가 깨지는 유일한 자리라 명시한다).
@@ -427,6 +430,8 @@ function renderAdminDetail(detail, sel, data) {
         return credentialsEditor(detail);
     if (sel === 'storage')
         return storageEditor(detail, data);
+    if (sel === 'session-share')
+        return sessionShareEditor(detail, data);
     if (sel === 'embeddings')
         return embeddingsEditor(detail, data);
     if (sel === 'repos')
@@ -2898,6 +2903,84 @@ function storageEditor(detail, data) {
         ] : []));
     }
     load();
+}
+// 세션 공유(세션이력 캡처) 정책(#905 C1) — 관리탭 ▸ 세션 공유. runtimeConfig.session_share 를 읽고 POST 로 저장.
+//  프라이버시가 걸린 설정이라 **무엇이 캡처되는지·기본이 꺼짐인지**를 화면에서 분명히 말한다.
+function sessionShareEditor(detail, data) {
+    const rc = data.runtimeConfig; // admin 만 non-null
+    const canEdit = !!data.canEdit && !!rc;
+    const DEF = { enabled: false, harnesses: ['claude'], scope: 'main', store: 'slim', retention_days: 30, view_policy: 'attach', resume_policy: 'owner' };
+    const body = el('div');
+    detail.replaceChildren(el('div', { class: 'card' }, sectionTitle('세션 공유', null), el('p', { class: 'admin-hint', text: '구성원의 AI 세션 대화 기록(트랜스크립트)을 게이트웨이에 모아, 환경·멤버가 달라도 이어보고(웹뷰) 이어받게(resume) 합니다. 기본은 꺼져 있어 켜기 전에는 어떤 세션도 수집하지 않습니다 — 대화 전문이 중앙에 저장되므로 조직이 명시적으로 켜는 설정입니다.' }), body));
+    if (!rc) {
+        body.append(el('p', { class: 'admin-hint', text: '이 설정은 관리자(admin)만 볼 수 있습니다.' }));
+        return;
+    }
+    build();
+    function build() {
+        const ss = { ...DEF, ...((rc && rc.session_share) || {}) };
+        body.replaceChildren();
+        // ── 마스터 스위치 ──
+        const enChk = el('input', { type: 'checkbox' });
+        enChk.checked = ss.enabled === true;
+        enChk.disabled = !canEdit;
+        const enRow = el('label', { class: 'admin-check' }, enChk, el('span', { text: ' 세션 대화 기록 수집 켜기 — 켜면 아래 하네스의 세션 트랜스크립트가 중앙에 저장됩니다' }));
+        // ── 하네스 ──
+        const hSet = new Set(Array.isArray(ss.harnesses) ? ss.harnesses : ['claude']);
+        const hChk = (key, label, note) => {
+            const c = el('input', { type: 'checkbox' });
+            c.checked = hSet.has(key);
+            c.disabled = !canEdit;
+            c.addEventListener('change', () => { if (c.checked)
+                hSet.add(key);
+            else
+                hSet.delete(key); });
+            return el('label', { class: 'admin-check' }, c, el('span', { text: ' ' + label }), note ? el('span', { class: 'admin-hint', text: '  ' + note }) : null);
+        };
+        const harnessRows = el('div', {}, hChk('claude', 'Claude Code', ''), hChk('codex', 'Codex', '구조적으로 별도 처리 필요 — 현재 파이프라인 미지원(실험)'));
+        // ── select 헬퍼 ──
+        const sel = (opts, val) => {
+            const s = el('select', { class: 'input' }, ...opts.map(([v, t]) => el('option', { value: v, text: t })));
+            s.value = val;
+            s.disabled = !canEdit;
+            return s;
+        };
+        const scopeSel = sel([['main', '주 대화만'], ['tree', '주 대화 + 서브에이전트(트리 전체)']], ss.scope);
+        const storeSel = sel([['slim', '슬림 — 서명·툴결과·토큰통계 제거(본문 유지, 용량↓)'], ['raw', '원본 그대로(용량↑)']], ss.store);
+        const viewSel = sel([['attach', '세션 입장 가능자'], ['owner', '세션 소유자만']], ss.view_policy);
+        const retIn = el('input', { class: 'input input-num', type: 'number', min: '0', max: '3650' });
+        retIn.value = String(ss.retention_days ?? 30);
+        retIn.disabled = !canEdit;
+        const field = (label, ctrl, hint) => el('div', { class: 'admin-field' }, el('label', { class: 'admin-field-label', text: label }), ctrl, hint ? el('p', { class: 'admin-hint', text: hint }) : null);
+        const saveBtn = el('button', { class: 'btn btn-primary', text: '저장', disabled: !canEdit });
+        saveBtn.addEventListener('click', async () => {
+            // 하네스 0개로 켜기 = 무의미(서버가 조용히 기본값으로 되돌린다). 사용자에게 이유를 말하고 막는다(무언 되돌림 방지).
+            if (enChk.checked && hSet.size === 0) {
+                toast('수집할 하네스를 하나 이상 선택하세요', true);
+                return;
+            }
+            saveBtn.disabled = true;
+            try {
+                const patch = {
+                    enabled: enChk.checked,
+                    harnesses: [...hSet],
+                    scope: scopeSel.value, store: storeSel.value, view_policy: viewSel.value,
+                    retention_days: Math.max(0, Math.min(3650, Math.floor(Number(retIn.value) || 0))),
+                };
+                const r = await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ session_share: patch }) });
+                if (r && r.runtimeConfig)
+                    data.runtimeConfig = r.runtimeConfig;
+                toast('세션 공유 설정 저장됨 — 구성원 다음 세션부터 반영');
+                build();
+            }
+            catch (e) {
+                toast(e.message, true);
+                saveBtn.disabled = !canEdit;
+            }
+        });
+        body.append(el('div', { class: 'card-sub' }, enRow), field('수집할 하네스', harnessRows, null), field('수집 범위', scopeSel, null), field('저장 형태', storeSel, null), field('보존 기간(일)', retIn, '0 = 무제한(디스크 주의). 지난 기록은 자동 정리됩니다.'), field('기록 열람 권한', viewSel, '중앙에 모인 대화를 누가 열람·이어받을 수 있는지.'), canEdit ? el('div', { class: 'admin-actions' }, saveBtn)
+            : el('p', { class: 'admin-hint', text: '읽기 전용 — 변경은 관리자(admin) 권한이 필요합니다.' }));
+    }
 }
 function embeddingsEditor(detail, data) {
     const canEdit = !!data.canEdit;
