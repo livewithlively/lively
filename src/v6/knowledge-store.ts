@@ -768,6 +768,42 @@ export async function unlinkKnowledgeCategory(name: string, categoryId: number, 
   await auditKnowledge(name, "unlink_category", { category_id: categoryId }, null, ctx);
 }
 
+// ── 미분류 지식 인박스(#982) — 카테고리 행이 하나도 없는 active 지식. 분류기(classify_knowledge)가 여기서 드레인. ──
+//  list_unmapped(코드유닛)의 지식판. 포인터만(본문 X). 커넥터 미러는 카테고리를 안 써서(connector-mirror 보존규칙) 여기 쌓인다.
+//  ⚠ '0행'(NOT EXISTS any) 기준 — knowledge_category_single_uq 가 name 당 1행이라, rejected 1행이라도 있으면 INSERT 가 uq 위반이므로
+//   애초에 인박스에서 뺀다(이미 판정된 것 재분류 안 함). 소비쿼리의 state<>'rejected' 와는 다른 기준(그건 '보이나', 이건 '빌 자리인가').
+export async function listUnmappedKnowledge(limit = 50): Promise<Array<{ name: string; title: string | null; type: string | null; provenance: string }>> {
+  const lim = Math.min(Math.max(limit, 1), 200);
+  const rows = await q(itemsPool, `
+    SELECT k.name, k.title, k.type, k.provenance
+    FROM knowledge k
+    WHERE k.lifecycle='active'
+      AND NOT EXISTS (SELECT 1 FROM knowledge_category kc WHERE kc.name=k.name)
+    ORDER BY k.updated_at DESC
+    LIMIT $1`, [lim]);
+  return rows.map((r) => ({ name: r.name as string, title: (r.title ?? null) as string | null, type: (r.type ?? null) as string | null, provenance: r.provenance as string }));
+}
+
+// ── LLM 분류 제안(#982, map_code_unit 의 지식판) — 미분류 지식에 카테고리를 mapped_by='llm'+evidence 로 건다. ──
+//  linkKnowledgeCategory 와 결정적 차이 3가지: ① DELETE 안 함(replace 아님 — 사람 분류 불가침) ② mapped_by='llm' ③ **이미 카테고리 행이 있으면 no-op**.
+//  state: 명시하면 그대로, 아니면 confidence≥0.8 → 'confirmed' 아니면 'proposed'. 소비쿼리는 state<>'rejected' 라 proposed 만으로 즉시 발견된다.
+export async function proposeKnowledgeCategory(
+  name: string, categoryId: number,
+  opts: { evidence: string; confidence?: number | null; state?: string }, ctx?: WriteCtx,
+): Promise<{ applied: boolean; state: string; skipped?: string }> {
+  const state = opts.state ?? ((opts.confidence ?? 0) >= 0.8 ? "confirmed" : "proposed");
+  // 분류기는 '빈 자리'만 채운다 — 이미 카테고리 행(어떤 state 든)이 있으면 건너뛴다(single_uq 위반 방지 + 사람/기존 판정 불가침).
+  const ex = await itemsPool.query(`SELECT 1 FROM knowledge_category WHERE name=$1 LIMIT 1`, [name]);
+  if (ex.rowCount) return { applied: false, state, skipped: "already_has_category" };
+  await itemsPool.query(
+    `INSERT INTO knowledge_category(name, category_id, mapped_by, confidence, state, evidence, created_at)
+     VALUES($1,$2,'llm',$3,$4,$5,now())
+     ON CONFLICT (name, category_id) DO UPDATE SET state=EXCLUDED.state, confidence=EXCLUDED.confidence, evidence=EXCLUDED.evidence, mapped_by='llm'`,
+    [name, categoryId, opts.confidence ?? null, state, opts.evidence]);
+  await auditKnowledge(name, "propose_category", null, { category_id: categoryId, state, mapped_by: "llm", confidence: opts.confidence ?? null }, ctx);
+  return { applied: true, state };
+}
+
 // ════════ #290 지식↔지식 링크(knowledge_link) — 빠진 1급 프리미티브. 단방향 1행 저장 + 역방향 쿼리로 백링크(MediaWiki/Obsidian 모델). ════════
 //  relation=related(대칭)|refines|contradicts|depends_on. FK 가 양 끝 지식 존재를 보장(없으면 INSERT 거부 → capability 에서 클린 에러).
 //  origin(#907): 'user'=사람·에이전트가 명시 · 'wikilink'=본문 [[…]] 파생 · 'connector:<sys>'=커넥터 물질화.
