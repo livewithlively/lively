@@ -173,7 +173,7 @@ export async function renderStartMigrate(view: any) {
       el('div', { class: 'card docs-card' },
         el('div', { class: 'card-head' }, el('h2', { text: '설치했다면 — 내 컴퓨터에서 AI 를 켜고, 이렇게 말해보세요' })),
         el('div', { class: 'md-prompt' }, el('p', { class: 'md-p', text: '온보딩 도와줘' })),
-        el('p', { class: 'admin-hint', style: 'margin:12px 0 0', text: 'AI 가 예전 작업 메모·직접 만든 스킬·연결해 둔 서비스·쓰던 코드 저장소를 읽어서 목록으로 보여주고, 무엇을 회사 위키로 올리고 무엇을 그대로 둘지 하나씩 같이 정합니다. 원본은 수정하거나 삭제하지 않습니다 — 위키로 올릴 때도 복사만 합니다. 다 끝나면 이 화면에도 자동으로 완료 표시가 됩니다.' })),
+        el('p', { class: 'admin-hint', style: 'margin:12px 0 0', text: 'AI 가 예전 작업 메모·직접 만든 스킬·훅·연결해 둔 서비스를 읽어서 목록으로 보여주고, 무엇을 회사와 공유하고(작업 메모는 위키로, 스킬·훅·MCP 는 각자 알맞은 곳으로) 무엇을 그대로 둘지 하나씩 같이 정합니다. 원본은 수정하거나 삭제하지 않습니다 — 옮길 때도 복사만 합니다. AI 가 끝나면 이 화면에 완료로 표시해 드립니다.' })),
       el('div', { class: 'card docs-card' },
         el('div', { class: 'card-head' }, el('h2', { text: '“예전 작업 메모가 사라졌어요”' })),
         el('p', { class: 'guide-lead', style: 'margin:0', text: '사라지지 않았습니다. AI 의 작업 메모는 폴더마다 따로 저장돼서, 다른 폴더에서 켜면 안 보일 뿐입니다. ‘온보딩 도와줘’ 를 실행하면 다른 폴더에 저장된 작업 메모까지 찾아서 보여줍니다.' })),

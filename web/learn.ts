@@ -763,6 +763,10 @@ function localGuideNodes(gw, slot, data, opts?: any) {
     el('p', { class: 'admin-hint' }, '내 컴퓨터에서 켜든 웹에서 켜든 같은 회사 맥락을 씁니다 — 웹에서 열고 싶으면 ',
       el('a', { href: '#/dashboard', text: '[홈]' }), ' 의 「내 AI 세션」에서 [+ 새 세션]을 누르세요. 회사에 어떤 맥락이 쌓여 있는지는 ',
       el('a', { href: '#/knowledge', text: '[WIKI]' }), ' 에서 볼 수 있어요.'),
+    el('p', { class: 'admin-hint' }, '예전에 쓰던 AI 환경(작업 메모·직접 만든 스킬 등)이 있다면 ',
+      el('a', { href: '#/start/migrate', text: '[예전 환경 가져오기]' }), ' — 켜서 ',
+      el('code', { class: 'md-code', text: '온보딩 도와줘' }), ' 라고 말하면(또는 ',
+      el('code', { class: 'md-code', text: 'lively onboarding' }), ') AI 가 읽어서 정리를 도와줍니다. 원본은 건드리지 않아요.'),
     el('p', { class: 'admin-hint', style: 'margin-bottom:0' }, '설치 후 쓸 수 있는 ',
       el('code', { class: 'md-code', text: 'lively' }), ' 명령 · Claude/Codex 차이 · 문제 해결은 ',
       el('a', { href: '#/learn/docs/cli', text: '[AI 세션 명령어]' }), ' 에서 보세요.'));
