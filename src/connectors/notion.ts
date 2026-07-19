@@ -73,7 +73,7 @@ type Rec = Record<string, unknown>;
 const asRec = (v: unknown): Rec => (v && typeof v === "object" ? (v as Rec) : {});
 const asArr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
-interface NotionConfig {
+export interface NotionConfig {
   token: string; instance: string; version: string;
   rootIds: string[]; excludeIds: string[]; comments: "page" | "all" | "off"; assetDir: string;
 }
@@ -170,6 +170,39 @@ async function notionFetch(cfg: NotionConfig, pathname: string, init?: { method?
     return res.json();
   }
   throw new Error(`Notion 요청 실패(예상치 못한 종료): ${pathname}`);
+}
+
+// ── #976 아웃바운드(위키 투영) 공개 표면 — 내부 loadConfig/notionFetch 재사용. 인바운드(run-sync)의 역방향. ──
+//  우리 SoT(지식)를 노션 피드 DB 에 투영한다. observed 미러 경로와 무관 — 발행표식(knowledge_publication)만 남긴다.
+//  얇은 래퍼(clickup.ts 의 createTask/updateTask 대칭) — 지식→속성 매핑 등 오케스트레이션은 notion-push.ts.
+export async function loadNotionConfig(): Promise<NotionConfig> { return loadConfig(); }
+
+export async function notionCreatePage(
+  cfg: NotionConfig, body: { parent: Rec; properties: Rec; children?: unknown[] },
+): Promise<{ id: string; url?: string }> {
+  return (await notionFetch(cfg, "/pages", { method: "POST", body })) as { id: string; url?: string };
+}
+
+// properties 부분수정(멱등 upsert 의 update 측). archived:true 로 발행 취소(휴지통)도 가능.
+export async function notionUpdatePage(
+  cfg: NotionConfig, pageId: string, body: { properties?: Rec; archived?: boolean },
+): Promise<{ id: string; url?: string }> {
+  return (await notionFetch(cfg, `/pages/${encodeURIComponent(pageId)}`, { method: "PATCH", body })) as { id: string; url?: string };
+}
+
+// 피드 DB 부트스트랩용(ensureFeedDatabase) — parent 페이지 하위에 알려진 스키마로 DB 생성.
+//  ⚠ API 2025-09-03: 속성은 initial_data_source.properties 로 감싼다(멀티소스 DB 분리). 응답에 data_sources[] 동봉.
+export async function notionCreateDatabase(
+  cfg: NotionConfig, body: { parent: Rec; title: unknown[]; initial_data_source: Rec },
+): Promise<{ id: string; url?: string; data_sources?: Array<{ id: string; name?: string }> }> {
+  return (await notionFetch(cfg, "/databases", { method: "POST", body })) as { id: string; url?: string; data_sources?: Array<{ id: string; name?: string }> };
+}
+
+// DB 조회 — data_source 해소용(2025-09-03: 페이지 부모는 data_source_id, database_id 아님). data_sources[] 반환.
+export async function notionRetrieveDatabase(
+  cfg: NotionConfig, dbId: string,
+): Promise<{ id: string; data_sources?: Array<{ id: string; name?: string }> }> {
+  return (await notionFetch(cfg, `/databases/${encodeURIComponent(dbId)}`)) as { id: string; data_sources?: Array<{ id: string; name?: string }> };
 }
 
 // 커서 페이지네이션 공통 — GET(qs) / POST(body) 양쪽.

@@ -27,6 +27,8 @@ export const CRON_ACTIONS: CronActionDef[] = [
   { key: "refresh_bases", label: "작업 base 레포 확보·최신화 (워크트리 원본)", params: [] },
   { key: "connector_sync", label: "커넥터 sync (외부→우리)", params: [{ name: "system", label: "커넥터 system", kind: "system", hint: "비우면 active 전체" }] },
   { key: "connector_push", label: "커넥터 push (우리→외부)", params: [{ name: "system", label: "커넥터 system", kind: "system", hint: "비우면 active 전체(run-push 는 clickup 전용)" }] },
+  // #976 위키 아웃바운드 — 등록 노션 feed_target(카테고리 N:M 매핑)로 정본 지식을 피드 카드로 투영. connector_push(프로젝트)의 위키판. 옵트인(매핑 없으면 무동작).
+  { key: "wiki_push", label: "위키 push (산출 지식 → 노션 피드)", params: [] },
   { key: "eval_domain_debt", label: "도메인 부채 평가", params: [] },
   // #907 본문 [[위키링크]] → 지식 엣지 수렴. 저장 시 그 문서는 이미 수렴하니 이 잡의 값어치는 **시간이 푸는 것들**이다:
   //  붕 뜬 링크의 대상이 나중에 생기거나(그때 저장을 다시 하지 않는다), 대상이 지워졌다 되살아나거나, 저장 중
@@ -160,6 +162,19 @@ async function runJob(job: CronJob): Promise<{ status: string; summary: unknown 
       } catch (e) { out.push({ system: sys, ok: false, error: (e as Error)?.message ?? String(e) }); }
     }
     return { status: "ok", summary: { systems: out } };
+  }
+
+  if (job.action === "wiki_push") {
+    // 위키 아웃바운드 — 등록 노션 feed_target 로 정본 지식 투영(카드). connector_push 의 위키판, 검증된 run-wiki-push CLI 서브프로세스.
+    //  옵트인: feed_target·category_feed 매핑 없으면 CLI 가 즉시 무동작 종료. 멱등(content_hash skip) — 반복 실행 안전.
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const execFileP = promisify(execFile);
+    try {
+      const r = await execFileP("node", ["--env-file-if-exists=.env", "dist/connectors/run-wiki-push.js"],
+        { timeout: 300_000, maxBuffer: 16 * 1024 * 1024 });
+      return { status: "ok", summary: { tail: (r.stdout || "").trim().split("\n").slice(-1)[0] ?? "" } };
+    } catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e) } }; }
   }
 
   if (job.action === "map_unmapped") {

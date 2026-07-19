@@ -804,6 +804,52 @@ export async function proposeKnowledgeCategory(
   return { applied: true, state };
 }
 
+// ════════ #976/#984 지식 발행표식(knowledge_publication) — authored 지식을 외부 피드로 투영한 좌표(external_* 과 직교). ════════
+//  멱등 upsert 좌표 (name, system, target_id). page_id 는 최초 create 성공 후 채워져 이후 update 대상이 된다.
+//  content_hash 로 무변경 재푸시 skip(드레인 비용·API 호출 절감). observed 미러 경로와 무관 — provenance 안 건드림(#984 결정).
+export interface KnowledgePublicationRow {
+  name: string; system: string; instance: string | null; target_id: string;
+  page_id: string | null; url: string | null; content_hash: string | null;
+  state: string; published_at: string | null;
+}
+
+export async function getKnowledgePublication(
+  name: string, system: string, targetId: string,
+): Promise<KnowledgePublicationRow | null> {
+  const r = (await one(itemsPool,
+    `SELECT name, system, instance, target_id, page_id, url, content_hash, state, published_at
+     FROM knowledge_publication WHERE name=$1 AND system=$2 AND target_id=$3`,
+    [name, system, targetId])) as KnowledgePublicationRow | undefined;
+  return r ?? null;
+}
+
+// create/update 성공 후 표식 확정(published) — page_id·url·hash 갱신. 멱등 upsert(좌표 재발행 시 UPDATE).
+export async function recordKnowledgePublication(
+  p: { name: string; system: string; instance?: string | null; targetId: string;
+       pageId: string; url?: string | null; contentHash: string; publishedBy?: string | null },
+): Promise<void> {
+  await itemsPool.query(
+    `INSERT INTO knowledge_publication(name, system, instance, target_id, page_id, url, content_hash, state, last_error, published_at, published_by, created_at, updated_at)
+     VALUES($1,$2,$3,$4,$5,$6,$7,'published',NULL,now(),$8,now(),now())
+     ON CONFLICT (name, system, target_id) DO UPDATE SET
+       instance=EXCLUDED.instance, page_id=EXCLUDED.page_id, url=EXCLUDED.url,
+       content_hash=EXCLUDED.content_hash, state='published', last_error=NULL,
+       published_at=now(), published_by=EXCLUDED.published_by, updated_at=now()`,
+    [p.name, p.system, p.instance ?? null, p.targetId, p.pageId, p.url ?? null, p.contentHash, p.publishedBy ?? null]);
+}
+
+// 발행 실패 기록(다음 드레인 재시도) — 좌표 행은 남기되 state=failed + last_error. page_id 기존값 보존.
+export async function markKnowledgePublicationFailed(
+  name: string, system: string, targetId: string, err: string,
+): Promise<void> {
+  await itemsPool.query(
+    `INSERT INTO knowledge_publication(name, system, target_id, state, last_error, created_at, updated_at)
+     VALUES($1,$2,$3,'failed',$4,now(),now())
+     ON CONFLICT (name, system, target_id) DO UPDATE SET
+       state='failed', last_error=EXCLUDED.last_error, updated_at=now()`,
+    [name, system, targetId, err.slice(0, 500)]);
+}
+
 // ════════ #290 지식↔지식 링크(knowledge_link) — 빠진 1급 프리미티브. 단방향 1행 저장 + 역방향 쿼리로 백링크(MediaWiki/Obsidian 모델). ════════
 //  relation=related(대칭)|refines|contradicts|depends_on. FK 가 양 끝 지식 존재를 보장(없으면 INSERT 거부 → capability 에서 클린 에러).
 //  origin(#907): 'user'=사람·에이전트가 명시 · 'wikilink'=본문 [[…]] 파생 · 'connector:<sys>'=커넥터 물질화.

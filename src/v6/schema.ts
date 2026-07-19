@@ -287,6 +287,73 @@ export async function initV6Schema(): Promise<string> {
     CREATE INDEX IF NOT EXISTS knowledge_category_state_idx ON knowledge_category(state);
   `);
 
+  // ── 4b) knowledge_publication — 지식→외부 피드 발행표식(#976/#984). authored 지식을 외부 피드(노션 등)에 투영한 좌표. ──
+  //  ⚠ external_*(인바운드 미러 좌표)와 **직교** — 여기 좌표는 '우리가 낸 사본의 위치(발행)'지 '출처'가 아니다.
+  //   그래서 provenance 는 authored 로 유지되고(#984 결정), connector-mirror 의 observed 강제 경로에 애초에 안 걸린다
+  //   (발행 대상 피드 DB 는 exclude_pages 로 인바운드 스코프에서 제외 → 재수집 자체가 없음). 미러 좌표 재사용 금지.
+  //  멱등 좌표 = (name, system, target_id): 지식당·대상피드(DB)당 1행. content_hash 로 무변경 재푸시 skip.
+  //  page_id = 발행된 노션 페이지 id(최초 create 성공 후 채움 — 이후 update). 지식 삭제 시 CASCADE(외부 삭제는 아웃박스 스냅샷으로, #976 후속).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS knowledge_publication(
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL REFERENCES knowledge(name) ON DELETE CASCADE,
+      system TEXT NOT NULL,
+      instance TEXT,
+      target_id TEXT NOT NULL,
+      page_id TEXT,
+      url TEXT,
+      content_hash TEXT,
+      state TEXT NOT NULL DEFAULT 'pending',
+      last_error TEXT,
+      published_at TIMESTAMPTZ,
+      published_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='knowledge_publication'::regclass AND conname='knowledge_publication_state_chk') THEN
+        ALTER TABLE knowledge_publication ADD CONSTRAINT knowledge_publication_state_chk CHECK (state IN ('pending','published','failed'));
+      END IF;
+    END $$;
+    CREATE UNIQUE INDEX IF NOT EXISTS knowledge_publication_uq ON knowledge_publication(name, system, target_id);
+    CREATE INDEX IF NOT EXISTS knowledge_publication_name_idx ON knowledge_publication(name);
+    CREATE INDEX IF NOT EXISTS knowledge_publication_page_idx ON knowledge_publication(system, page_id) WHERE page_id IS NOT NULL;
+  `);
+
+  // ── 4c) feed_target + category_feed — 위키 아웃바운드 라우팅(#976). 피드 목적지 레지스트리 + 카테고리↔피드 N:M. ──
+  //  feed_target = 등록된 피드 목적지(노션 DB 1개 = target_id). data_source_id 는 2025-09-03 페이지 부모(해소 캐시).
+  //   exclude_registered = 이 DB 를 exclude_pages 에 넣었는지(#984 — 안 넣으면 우리 발행물이 재수집돼 observed 로 뒤집힘).
+  //  category_feed = 카테고리 N:M feed_target — 한 도메인이 여러 피드로, 한 피드가 여러 도메인을 받는다(발행 게이트 = 옵트인 매핑).
+  //   drain 은 feed_target 별로 매핑된 카테고리의 active 정본 지식을 그 타깃에 발행(knowledge_publication 이 타깃별 1행으로 멱등).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS feed_target(
+      id SERIAL PRIMARY KEY,
+      system TEXT NOT NULL,
+      instance TEXT,
+      target_id TEXT NOT NULL,
+      data_source_id TEXT,
+      parent_page_id TEXT,
+      title TEXT,
+      exclude_registered BOOLEAN NOT NULL DEFAULT false,
+      state TEXT NOT NULL DEFAULT 'active',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='feed_target'::regclass AND conname='feed_target_state_chk') THEN
+        ALTER TABLE feed_target ADD CONSTRAINT feed_target_state_chk CHECK (state IN ('active','paused'));
+      END IF;
+    END $$;
+    -- (system, target_id) 유니크 — target_id(노션 DB id)는 전역 유니크라 instance 불요. instance 를 넣으면 NULL-distinct 로
+    --  instance=NULL 일 때 유니크가 안 걸려 ON CONFLICT 가 안 터지고 upsert 가 항상 insert 가 된다(중복 등록).
+    CREATE UNIQUE INDEX IF NOT EXISTS feed_target_uq ON feed_target(system, target_id);
+
+    CREATE TABLE IF NOT EXISTS category_feed(
+      category_id INT NOT NULL REFERENCES category(id) ON DELETE CASCADE,
+      feed_target_id INT NOT NULL REFERENCES feed_target(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY(category_id, feed_target_id));
+    CREATE INDEX IF NOT EXISTS category_feed_target_idx ON category_feed(feed_target_id);
+  `);
+
   // ── 5) project — 1급 엔티티. 위계 project▸task▸subtask(parent_id self-FK). 구 org_project 확장. ──
   //  task = 구 W ku 대체(별도 엔티티 아님). external_* = ClickUp 미러 좌표(부분유니크 멱등 upsert).
   //  level↔parent 불변식(task.parent=project, subtask.parent=task)은 쓰기경로가 강제(CHECK 는 타행 참조 불가).

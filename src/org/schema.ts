@@ -764,7 +764,7 @@ export async function initOrgSchema(): Promise<void> {
       -- action allowlist — 확장 시 DROP+ADD(IF NOT EXISTS 만으론 라이브 제약이 안 바뀜).
       ALTER TABLE org_cron DROP CONSTRAINT IF EXISTS org_cron_action_chk;
       ALTER TABLE org_cron ADD CONSTRAINT org_cron_action_chk
-        CHECK (action IN ('refresh_all','refresh_repo','refresh_bases','connector_sync','connector_push','eval_domain_debt','map_unmapped','classify_knowledge','bootstrap_is','distill_sources','agent_inject','ensure_managed_sessions','wikilink_sweep'));
+        CHECK (action IN ('refresh_all','refresh_repo','refresh_bases','connector_sync','connector_push','wiki_push','eval_domain_debt','map_unmapped','classify_knowledge','bootstrap_is','distill_sources','agent_inject','ensure_managed_sessions','wikilink_sweep'));
     END $$;
     -- cron_expr(절대 벽시계 스케줄, 5필드). NULL=interval_sec 상대 모드. 기존 테이블 비파괴 추가.
     ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS cron_expr TEXT;
@@ -792,7 +792,9 @@ export async function initOrgSchema(): Promise<void> {
   await itemsPool.query(`
     INSERT INTO org_cron(id, label, action, params, interval_sec, enabled, note) VALUES
       ('push-clickup','ClickUp 아웃바운드 푸시 (우리 편집→ClickUp)','connector_push','{"system":"clickup"}'::jsonb,120,false,
-       'external_outbox(pending) 드레인 → ClickUp create/update/delete. 로컬 편집을 미러에 반영(멱등, 부모 미푸시면 다음 틱 수렴). 검증 후 enabled=true.')
+       'external_outbox(pending) 드레인 → ClickUp create/update/delete. 로컬 편집을 미러에 반영(멱등, 부모 미푸시면 다음 틱 수렴). 검증 후 enabled=true.'),
+      ('push-wiki-notion','위키 아웃바운드 푸시 (산출 지식→노션 피드, #976)','wiki_push',NULL,600,false,
+       '등록 노션 feed_target(category_feed N:M 매핑)으로 정본·authored 지식을 피드 카드로 투영. 옵트인: 매핑 없으면 무동작. 멱등(content_hash skip). 피드 DB 부트스트랩+exclude_pages 등록·라이브 E2E 검증 후 enabled=true.')
     ON CONFLICT (id) DO NOTHING;
   `);
   // #177 #6d 인바운드 싱크 잡 — ClickUp→우리, external_base 3-way 머지(name/desc/status_category). 충돌=우리 DB master.
