@@ -1275,8 +1275,8 @@ async function cmdRepo(rest) {
     if (sub === "pin") {
       const op = String(pos[0] || "").toLowerCase();
       if (op === "remove" || op === "rm") {
-        const res = repoPinRemove(ctx, { repo: pos[1], path: o.path });
-        ok(`핀 제거: ${res.removed}`); return;
+        const res = repoPinRemove(ctx, { repo: pos[1], ref: o.ref, path: o.path });
+        ok(res.removed ? `핀 제거: ${res.removed}` : (res.note || "제거할 핀 없음")); return;
       }
       const repo = pos[0];
       if (!repo) die("레포 이름이 필요합니다.  예: lively repo pin <repo> [--ref main] [--path .]");

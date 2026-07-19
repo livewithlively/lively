@@ -158,8 +158,13 @@ async function ensureBase(ctx, repo, base) {
   }
 }
 
-// 핀 경로 — 지정 없으면 OS 임시디렉터리(세션 임시물). 작업 워크트리와 섞이지 않게 별도 루트.
-const pinPathOf = (ctx, repo, p) => (p ? (isAbsolute(p) ? p : join(ctx.cwd, p)) : join(tmpdir(), "lively-pin", repo));
+// 핀 경로 — 지정 없으면 tmpdir 밑 **repo + SHA** 로 content-addressed(#932). 작업 워크트리와 섞이지 않게 별도 루트.
+//  ⚠ 왜 SHA 를 박나: macOS `tmpdir()` 는 **세션당이 아니라 유저당** 하나다. sha 없이 `lively-pin/<repo>` 한 자리를
+//   쓰면, 세션 A 가 SHA1 을 핀한 사이 main 이 전진해 세션 B 가 SHA2 를 핀할 때 repoPin 이 A 의 핀을 force-remove 하고
+//   SHA2 로 덮어쓴다 — A 는 같은 경로를 계속 읽는데 발밑 코드가 바뀐다(핀이 막으려던 HEAD 드리프트를 핀이 세션 간에
+//   재도입). SHA 를 경로에 박으면 같은 SHA 는 공유(dedup)·다른 SHA 는 공존, force-remove 자체가 필요 없어진다.
+//   지정 경로(p)는 호출자가 자리를 명시한 것이라 그대로 둔다(그 자리의 스톰프는 호출자 책임).
+const pinPathOf = (ctx, repo, p, sha) => (p ? (isAbsolute(p) ? p : join(ctx.cwd, p)) : join(tmpdir(), "lively-pin", repo, sha));
 
 // 이 머신에서 뜰 수 있는 등록 레포 + 로컬 base 상태(clone 여부·브랜치·origin 대비 최신).
 export async function repoList(ctx) {
@@ -247,9 +252,11 @@ export async function repoPin(ctx, args) {
   const target = `origin/${refBranch}`;
   const sha = ctx.sh("git", ["-C", base, "rev-parse", "--short", target], { allowFail: true }).stdout.trim();
   if (!sha) throw new Error(`ref 해석 실패: ${target} (레포 '${repo}') — ref 이름을 확인하세요.`);
-  const pin = pinPathOf(ctx, repo, args.path && String(args.path).trim());
+  const pin = pinPathOf(ctx, repo, args.path && String(args.path).trim(), sha);
 
-  // 이미 핀이 있으면 — 같은 SHA 면 재사용(멱등), 다르면 갈아끼운다(핀은 읽기전용 일회용이라 안전).
+  // 이미 이 경로에 핀이 있으면 재사용(멱등). 기본 경로는 content-addressed 라 여기 걸리면 곧 같은 SHA 다(다른 SHA 는
+  //  애초에 다른 경로 = 스톰프 불가). HEAD 가 그 SHA 와 어긋난 이상 상태만 **우리 자신의 이 경로**를 고쳐 다시 뜬다
+  //  — 지우는 건 (기본이면) 이 SHA 의 자리이거나 (지정이면) 호출자가 명시한 자리라, 남의 세션 핀이 아니다(#932).
   if (isGitRepo(ctx, pin)) {
     const cur = ctx.sh("git", ["-C", pin, "rev-parse", "--short", "HEAD"], { allowFail: true }).stdout.trim();
     if (cur === sha) return { repo, pin, sha, ref: refBranch, base, reused: true, note: pinNote(pin, repo, sha) };
@@ -263,14 +270,28 @@ export async function repoPin(ctx, args) {
   return { repo, pin, sha, ref: refBranch, base, committed, reused: false, note: pinNote(pin, repo, sha) };
 }
 
-// 핀 제거 — 읽기전용 사본이라 항상 force(낙서가 있어도 버린다). base·작업 워크트리 무영향.
+// 핀 제거 — 읽기전용 사본이라 force(낙서 무시). base·작업 워크트리 무영향.
+//  기본 경로는 content-addressed(repo+sha)라 지우려면 SHA 를 알아야 한다 → origin/<ref> 를 repoPin 과 **같은 방식**으로
+//  다시 해석해 **그 SHA 의 핀만** 지운다(다른 세션의 다른 SHA 핀은 안 건드린다, #932). ref 는 핀 때와 같은 값을 줘야
+//  맞아떨어진다(기본은 원격 기본 브랜치로 대칭). **best-effort**: 핀이 이미 없어도(main 이 그새 움직여 SHA 가 달라졌거나
+//  tmpdir 이 청소됐거나) 에러가 아니다 — 스테일 등록만 털고 removed:null 로 알린다(남는 detached 핀은 읽기전용이라 무해).
 export function repoPinRemove(ctx, args) {
   const repo = String(args.repo || "").trim();
   if (!REPO_NAME_RE.test(repo)) throw new Error(`레포 이름 형식 오류(영숫자.-_): ${repo}`);
   const base = join(reposDir(), repo);
-  const pin = pinPathOf(ctx, repo, args.path && String(args.path).trim());
+  const explicit = args.path && String(args.path).trim();
+  let pin;
+  if (explicit) {
+    pin = isAbsolute(explicit) ? explicit : join(ctx.cwd, explicit);
+  } else {
+    const refBranch = args.ref && BRANCH_RE.test(String(args.ref).trim()) ? String(args.ref).trim() : remoteDefaultBranch(ctx, base);
+    const sha = ctx.sh("git", ["-C", base, "rev-parse", "--short", `origin/${refBranch}`], { allowFail: true }).stdout.trim();
+    if (!sha) { pruneWorktrees(ctx, base); return { removed: null, note: `핀을 특정할 수 없습니다(origin/${refBranch} 해석 실패) — 스테일 등록만 정리했습니다.` }; }
+    pin = pinPathOf(ctx, repo, null, sha);
+  }
   const r = ctx.sh("git", ["-C", base, "worktree", "remove", "--force", pin], { allowFail: true });
-  if (r.code !== 0) throw new Error(`핀 제거 실패: ${gitFail(r.stderr)}`);
+  pruneWorktrees(ctx, base); // 남은 등록 정리
+  if (r.code !== 0) return { removed: null, note: `핀이 이미 없거나 제거 실패(무해): ${gitFail(r.stderr)}` };
   return { removed: pin };
 }
 

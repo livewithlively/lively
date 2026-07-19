@@ -231,7 +231,8 @@ registerTool({
     properties: {
       repo: { type: "string", description: "레포 이름(lively_local_repo_list 의 name)" },
       ref: { type: "string", description: "핀할 ref(origin/<ref>). 기본: origin 기본 브랜치(main 등)" },
-      path: { type: "string", description: "핀 경로(절대 또는 cwd 상대). 기본: OS 임시디렉터리(세션 임시물)" },
+      path: { type: "string", description: "핀 경로(절대 또는 cwd 상대). 기본: OS 임시디렉터리 밑 repo+SHA(content-addressed — "
+        + "같은 SHA 는 세션 간 공유, 다른 SHA 는 공존)" },
     },
     required: ["repo"],
     additionalProperties: false,
@@ -242,17 +243,20 @@ registerTool({
 registerTool({
   name: "lively_local_repo_pin_remove",
   title: "핀 제거",
-  description: "lively_local_repo_pin 으로 만든 읽기전용 핀을 제거한다(base·작업 워크트리 무영향). 분석이 끝나면 호출해 정리한다.",
+  description: "lively_local_repo_pin 으로 만든 읽기전용 핀을 제거한다(base·작업 워크트리 무영향). 분석이 끝나면 호출해 정리한다. "
+    + "기본 경로는 repo+SHA 라, 핀 때와 같은 ref 를 줘야 그 SHA 의 핀을 찾아 지운다(기본은 원격 기본 브랜치로 대칭). "
+    + "핀이 이미 없어도 에러가 아니다(best-effort) — 다른 세션의 다른 SHA 핀은 건드리지 않는다.",
   inputSchema: {
     type: "object",
     properties: {
       repo: { type: "string", description: "레포 이름" },
-      path: { type: "string", description: "핀 경로(생성 때 지정했다면 같은 값). 기본: 생성 때와 동일 기본값" },
+      ref: { type: "string", description: "핀 때 쓴 ref(origin/<ref>). 기본: origin 기본 브랜치 — 기본 경로 SHA 를 이 ref 로 해석해 찾는다" },
+      path: { type: "string", description: "핀 경로(생성 때 --path 를 지정했다면 같은 값). 지정 시 ref 는 무시" },
     },
     required: ["repo"],
     additionalProperties: false,
   },
-  handler: (args, ctx) => ctx.text(`핀 제거됨: ${repoPinRemove(ctx, args).removed}`),
+  handler: (args, ctx) => { const r = repoPinRemove(ctx, args); return ctx.text(r.removed ? `핀 제거됨: ${r.removed}` : (r.note || "제거할 핀 없음")); },
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
