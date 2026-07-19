@@ -113,7 +113,7 @@ async function route() {
       await renderActivate(view);
     } else if (page === 'sessions') {
       // #/sessions — 세션이력 웹뷰(#905 C1 이어보기). 내 세션 목록 + 트랜스크립트 회수(렌더).
-      setActiveTab('');
+      setActiveTab('sessions');
       await renderSessions(view);
     } else if (page === 'install') {
       // 옛 상단 탭(#/install) — 사용 가이드 › 시작하기로 이동(#617). 기존 딥링크·북마크 보존(projects v1→v2 와 동일 패턴).

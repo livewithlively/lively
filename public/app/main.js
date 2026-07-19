@@ -137,7 +137,7 @@ async function route() {
         }
         else if (page === 'sessions') {
             // #/sessions — 세션이력 웹뷰(#905 C1 이어보기). 내 세션 목록 + 트랜스크립트 회수(렌더).
-            setActiveTab('');
+            setActiveTab('sessions');
             await renderSessions(view);
         }
         else if (page === 'install') {

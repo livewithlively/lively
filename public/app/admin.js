@@ -2918,7 +2918,10 @@ function sessionShareEditor(detail, data) {
     }
     build();
     function build() {
-        const ss = { ...DEF, ...((rc && rc.session_share) || {}) };
+        // ⚠ 저장 후 재렌더는 **data.runtimeConfig(최신)** 를 다시 읽는다 — 캡처된 옛 rc 를 쓰면 저장돼도 체크가 풀린다
+        //  (save 는 data.runtimeConfig 를 갱신하지 rc 를 안 바꾼다 — 스테일 클로저 버그).
+        const rcNow = data.runtimeConfig;
+        const ss = { ...DEF, ...((rcNow && rcNow.session_share) || {}) };
         body.replaceChildren();
         // ── 마스터 스위치 ──
         const enChk = el('input', { type: 'checkbox' });
