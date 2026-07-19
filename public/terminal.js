@@ -79,7 +79,7 @@ function toast(msg, isErr) {
 }
 
 // ── 상태 ──
-let term, fit, ws, statusEl, explorerEl, tabbarEl, panesEl, termPane, titleEl;
+let term, fit, ws, statusEl, explorerEl, tabbarEl, panesEl, termPane, titleEl, projectBtnEl;
 let curDir = '';
 const tabs = []; // { id, label, pane, closable }
 let activeId = 'term';
@@ -1107,14 +1107,21 @@ function setTitle(label) {
   titleEl.textContent = label;
   document.title = label + ' · Lively';
 }
-// 세션 이름(라벨) — id 로 서버의 '현재 이름'을 읽는다(프로젝트/팀 세션 포함). 실패하면 URL ?label= 폴백.
-//  생성 시점 ?label= 에 고정되지 않으므로 새로고침·재진입 시에도 바뀐 이름이 보인다.
-async function loadSessionLabel() {
-  try {
-    const data = await api(sUrl(''));
-    if (data && data.label) { setTitle(data.label); return; }
-  } catch (_) { /* 무시하고 폴백 */ }
-  if (SESSION_LABEL) setTitle(SESSION_LABEL);
+// 이 세션이 프로젝트 세션이면 상단 '프로젝트 페이지' 버튼을 그 프로젝트로 링크하고 표시(개인 세션이면 계속 숨김).
+//  새 탭으로 SPA 앱의 프로젝트 페이지(#/projects2/p/<id>)를 연다 — 세션 화면(그리드 셀 포함)을 잃지 않는다.
+function setProjectLink(projectId) {
+  if (!projectBtnEl || !(projectId > 0)) return;
+  projectBtnEl.href = '/ui/#/projects2/p/' + projectId;
+  projectBtnEl.style.display = '';
+}
+// 세션 메타(이름·프로젝트) — id 로 서버의 '현재 값'을 읽는다(프로젝트/팀 세션 포함). 실패하면 URL ?label= 폴백.
+//  생성 시점 ?label= 에 고정되지 않으므로 새로고침·재진입 시에도 바뀐 이름·프로젝트 링크가 보인다.
+async function loadSessionMeta() {
+  let data = null;
+  try { data = await api(sUrl('')); } catch (_) { /* 무시하고 폴백 */ }
+  if (data && data.label) setTitle(data.label);
+  else if (SESSION_LABEL) setTitle(SESSION_LABEL);
+  if (data) setProjectLink(Number(data.projectId) || 0);
 }
 
 async function boot() {
@@ -1137,12 +1144,16 @@ async function boot() {
       el('button', { class: 'tbtn', text: '⟳', title: '새로고침', onclick: () => loadDir(curDir) })),
     el('div', { id: 'exp-path', class: 'exp-path' }), el('div', { id: 'exp-list' }));
   statusEl = el('span', { class: 'status', text: '연결 중…' });
-  // 제목 = 세션 이름(라벨). URL ?label= 이 있으면 즉시 그 이름, 없으면 '터미널' → loadSessionLabel 이 보정. id 는 tooltip.
+  // 제목 = 세션 이름(라벨). URL ?label= 이 있으면 즉시 그 이름, 없으면 '터미널' → loadSessionMeta 가 보정. id 는 tooltip.
   titleEl = el('span', { class: 'title', text: SESSION_LABEL || '터미널', title: SESSION_ID });
   if (SESSION_LABEL) document.title = SESSION_LABEL + ' · Lively';
+  // 프로젝트 세션이면 상단에서 그 프로젝트 페이지로 바로 이동 — 초기엔 숨김. loadSessionMeta 가 projectId 를 받으면 링크·표시.
+  projectBtnEl = el('a', { class: 'tbtn', href: '/ui/', target: '_blank', rel: 'noopener',
+    text: '🗂 프로젝트 페이지', title: '이 세션이 속한 프로젝트 페이지 열기(새 탭)',
+    style: 'display:none; text-decoration:none' });
   const toolbar = el('div', { class: 'toolbar' },
     el('button', { class: 'tbtn', text: '📁 파일 탐색기', title: '파일 탐색기 열기/닫기 (업로드·다운로드)', onclick: toggleExplorer }),
-    titleEl,
+    titleEl, projectBtnEl,
     el('span', { class: 'spacer' }), statusEl,
     el('button', { class: 'tbtn', text: '💬 내 질문', title: '이 세션에서 클로드에게 보낸 질문 목록 — 클릭하면 그 위치로 이동', onclick: openMyPrompts }),
     el('button', { class: 'tbtn', text: '⟳ 화면 복구', title: '화면이 깨지거나 어긋났을 때 재연결로 복구(소프트 새로고침)', onclick: softReconnect }),
@@ -1158,7 +1169,7 @@ async function boot() {
   renderTabbar();
   setupDnd();
   setupTermDrop();
-  loadSessionLabel();
+  loadSessionMeta();
 
   // 이름 라이브 반영 — 다른 탭(프로젝트/세션 매니저)에서 이름을 바꾸면 같은 브라우저 안에선 즉시 받는다.
   try {
@@ -1170,8 +1181,8 @@ async function boot() {
   } catch (_) { /* BroadcastChannel 미지원 — 포커스 복귀/새로고침 시 서버값으로 보정 */ }
   // 폴백 보정 — 이 탭이 다시 보일 때 서버의 현재 이름을 다시 읽는다(BroadcastChannel 미지원·타 브라우저·기기 케이스).
   //  한 창의 탭 전환은 window 'focus' 가 안 뜨고 'visibilitychange' 만 뜨므로 둘 다 건다.
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) loadSessionLabel(); });
-  window.addEventListener('focus', () => { loadSessionLabel(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) loadSessionMeta(); });
+  window.addEventListener('focus', () => { loadSessionMeta(); });
 
   // xterm — control mode 에선 tmux 가 화면을 안 그리고 pane 출력을 스트림으로 보내므로 스크롤백을 xterm 이
   //  직접 소유한다(iTerm 처럼). 그래서 scrollback 을 충분히 둔다 → 휠 스크롤이 로컬 버퍼를 직접 오르내리고

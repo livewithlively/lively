@@ -10,7 +10,7 @@ import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { logger } from "./log.js";
-import { ROOTS, HARNESSES, listSessions, createSession, killSession, editSession, canAttach, getSessionLabel, sessionDir, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
+import { ROOTS, HARNESSES, listSessions, createSession, killSession, editSession, canAttach, getSessionLabel, getSessionProject, sessionDir, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
 import { sessionPrompts, searchPrompts, searchPromptsHybrid } from "./terminal-transcript.js";
 import { activeEmbeddingProvider } from "./v6/search-util.js";
 import { setupPtyUpgrade, type TicketLookup } from "./terminal-pty.js";
@@ -172,11 +172,16 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     if (nodeId) {
       const s = nodeSessionsFor(uid).find((x) => x.node.id === nodeId && x.id === req.params.id);
       if (!s) throw new HttpError(403, "세션에 접근할 수 없습니다");
-      res.json({ id: s.id, label: s.label });
+      res.json({ id: s.id, label: s.label, projectId: s.projectId || 0 });
       return;
     }
     if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
-    res.json({ id: req.params.id, label: await getSessionLabel(req.params.id) });
+    // 라벨 + 프로젝트 id 를 함께 반환 — 프로젝트 세션이면 프론트가 상단 '프로젝트 페이지 열기' 버튼을 켠다(개인 세션은 0 → 숨김).
+    const [label, projectId] = await Promise.all([
+      getSessionLabel(req.params.id),
+      getSessionProject(req.params.id),
+    ]);
+    res.json({ id: req.params.id, label, projectId });
   }));
   // 이 세션에서 사용자가 클로드에게 보낸 질문(프롬프트)만 모아 시간순 반환(#745 카드 '내 질문' 팝아웃).
   //  접근통제: canAttach(입장 가능한 사람 = 대화도 볼 수 있음, 프로젝트 세션은 전원 #452). 대화 기록 = ~/.claude 트랜스크립트.

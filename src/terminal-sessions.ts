@@ -727,6 +727,13 @@ export async function getSessionLabel(id: string): Promise<string> {
   return (await getOpt(id, "@box_label")) || "";
 }
 
+// 단일 세션의 프로젝트 id(@box_project) — 단독 터미널 페이지가 상단 '프로젝트 페이지 열기' 버튼을 위해 id 로 조회.
+//  프로젝트 세션이면 그 프로젝트 id, 개인 세션이면 0. 접근통제(canAttach)는 라우트에서 — 여기선 값만 읽는다.
+export async function getSessionProject(id: string): Promise<number> {
+  if (!ID_RE.test(id)) return 0;
+  return Number(await getOpt(id, "@box_project")) || 0;
+}
+
 // attach 시점에 스크롤·리사이즈 옵션 보장(생성 전 세션·옵션 누락 방어 + 옛 세션을 latest 로 마이그레이트). 비치명.
 // window-size latest: 창 크기를 '가장 최근 활동(refresh-client -C 포함) 클라이언트'에 맞춘다.
 //  웹 터미널은 한 tmux pane 을 여러 클라(여러 탭·기기·잔존 연결)가 공유하는데 pane 크기는 하나뿐이라,
