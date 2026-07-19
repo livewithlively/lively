@@ -34,7 +34,7 @@ const server = http.createServer((req, res) => {
     }
     if (req.method === "POST") {
       const at = Number(u.searchParams.get("at")); const body = Buffer.concat(chunks);
-      appends.push({ sid, at, len: body.length, harness: u.searchParams.get("harness") });
+      appends.push({ sid, at, len: body.length, harness: u.searchParams.get("harness"), project: u.searchParams.get("project") });
       if (at === s.bytes) { s.bytes += body.length; res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ ok: true, verdict: "append", bytes: s.bytes })); }
       res.writeHead(200, { "content-type": "application/json" }); return res.end(JSON.stringify({ ok: false, verdict: "gap", bytes: s.bytes }));
     }
@@ -117,6 +117,34 @@ try {
     assert.equal(appends.length, 0, "dry-run 은 전송 안 함");
     assert.match(r.out, /dry-run|dry/, "dry-run 표기");
     ok("--dry-run → 조회만(전송 0)");
+  }
+
+  // ── ✅ .lively/project.json 마커 → append 에 project 실려 감(구조화된 정본, 경로 휴리스틱 아님) ──
+  {
+    reset();
+    const projDir = fs.mkdtempSync(path.join(root, "proj-"));
+    fs.mkdirSync(path.join(projDir, ".lively"), { recursive: true });
+    fs.writeFileSync(path.join(projDir, ".lively", "project.json"), JSON.stringify({ project_id: 42, sync: "pull" }));
+    const body = JSON.stringify({ type: "user", cwd: projDir, message: { content: "hi" } }) + "\n";
+    const home = mkHome([{ dir: "-proj", sid: "sess-m", body }]);
+    const r = await runBackfill(home);
+    assert.equal(r.status, 0, "정상 종료");
+    const a = appends.find((x) => x.sid === "sess-m");
+    assert.ok(a, "세션 업로드됨");
+    assert.equal(a.project, "42", "🔑 마커의 project_id(42)를 append 에 실어 보낸다");
+    ok("✅ 마커(.lively/project.json) → append 에 project 실림");
+  }
+
+  // ── 마커 없으면 project 미전송(귀속 불가는 조용히) ──
+  {
+    reset();
+    const body = JSON.stringify({ type: "user", cwd: "/tmp/nowhere-xyz-none", message: { content: "hi" } }) + "\n";
+    const home = mkHome([{ dir: "-noproj", sid: "sess-n", body }]);
+    const r = await runBackfill(home);
+    assert.equal(r.status, 0);
+    const a = appends.find((x) => x.sid === "sess-n");
+    assert.equal(a.project, null, "마커 없으면 project 미전송");
+    ok("마커 없음 → project 미전송(귀속 없음)");
   }
 
   console.log(`\n${pass} passed`);
