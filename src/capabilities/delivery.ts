@@ -1939,18 +1939,22 @@ export const deliveryCapabilities: Capability[] = [
       const id = assertHookId(input.id);
       const event = str(input.event, "event", 40);
       if (!HOOK_EVENTS.has(event)) throw new HttpError(400, `event 는 ${[...HOOK_EVENTS].join("|")} 만 허용됩니다`);
-      const harness = input.harness === undefined ? "all" : str(input.harness, "harness", 12);
-      if (!HOOK_HARNESSES.has(harness)) throw new HttpError(400, "harness 는 claude|codex|openclaw|all");
+      // #970: harness·timeout_sec 도 source_code 와 같은 데이터소실 부류였다 — 생략 시 store 의 preserve
+      //  (`?? before`)가 못 걸리게 항상 구체값('all'·10)을 넘겨, 부분수정이 이 필드를 기본값으로 되돌렸다.
+      //  '미지정=보존'으로 통일(enabled·sort·target_members 와 동형). 신규 훅은 store 가 기본값으로 채운다.
+      const harness = input.harness === undefined ? undefined : str(input.harness, "harness", 12);
+      if (harness !== undefined && !HOOK_HARNESSES.has(harness)) throw new HttpError(400, "harness 는 claude|codex|openclaw|all");
       const sourceCode = resolveHookSource(input.source_code); // #970: 생략=보존(undefined→store 위임), "" 만 지움
       const matcher = (input.matcher === undefined || input.matcher === null || input.matcher === "")
         ? null : str(input.matcher, "matcher", 500);
-      const timeout = input.timeout_sec === undefined ? 10 : Number(input.timeout_sec);
-      if (!Number.isFinite(timeout) || timeout < 1 || timeout > 120) throw new HttpError(400, "timeout_sec 은 1~120 사이 정수여야 합니다");
+      const timeout = input.timeout_sec === undefined ? undefined : Number(input.timeout_sec);
+      if (timeout !== undefined && (!Number.isFinite(timeout) || timeout < 1 || timeout > 120)) throw new HttpError(400, "timeout_sec 은 1~120 사이 정수여야 합니다");
       const targetMembers = parseTargetMembers(input.target_members); // #699: null/빈=전원, 배열=지정, undefined=보존
       const hook = await upsertOrgHook({
         id,
         label: input.label == null ? undefined : str(input.label, "label", 200).trim(),
-        harness: harness as HookHarness, event, matcher, source_code: sourceCode, timeout_sec: Math.floor(timeout),
+        harness: harness as HookHarness | undefined, event, matcher, source_code: sourceCode,
+        timeout_sec: timeout === undefined ? undefined : Math.floor(timeout),
         note: input.note == null ? undefined : str(input.note, "note", 500),
         target_members: targetMembers,
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
