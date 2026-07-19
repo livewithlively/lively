@@ -801,6 +801,8 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .ov-box { background: var(--bg); border-radius: 16px; box-shadow: 0 24px 64px rgba(21,35,59,.28); max-width: 760px; width: 100%; padding: 22px 24px; }
 .ov-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .ov-head h3 { margin: 0; font-size: 17px; font-weight: 800; color: var(--ink); }
+/* 세션 대화록 높이 캡(#905 C1) — 접혔을 때 하단을 페이드(마스크: 배경·테마 무관). 펼치면 클래스 제거. */
+.sess-cap.capped { -webkit-mask-image: linear-gradient(180deg, #000 72%, transparent); mask-image: linear-gradient(180deg, #000 72%, transparent); }
 .admin-preview { background: var(--dark-1); color: #E8EEF8; border-radius: 11px; padding: 16px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; max-height: 56vh; overflow: auto; margin: 6px 0 12px; }
 .admin-warn { font-size: 12.5px; font-weight: 600; color: var(--coral-text); background: #FFF6F4; border: 1px solid #F3D2CD; border-radius: 9px; padding: 9px 12px; margin: 4px 0 10px; line-height: 1.5; }
 

@@ -165,9 +165,9 @@ export async function listSessionsForOwner(owner: string, limit = 200): Promise<
   const r = await itemsPool.query(
     `SELECT ${SESSION_LIST_COLS}
        FROM session s
-       LEFT JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id
+       JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id
        LEFT JOIN org_member m ON m.id = s.owner
-      WHERE s.owner = $1
+      WHERE s.owner = $1 AND l.bytes > 0
       ORDER BY s.last_seen DESC
       LIMIT $2`,
     [owner, Math.min(Math.max(Number(limit) || 200, 1), 500)]);
@@ -183,8 +183,9 @@ export async function listSessionsForProject(projectId: number, limit = 200): Pr
        SELECT DISTINCT ON (s.node_id, s.session_id) ${SESSION_LIST_COLS}
          FROM session s
          JOIN session_project sp ON sp.session_id = s.session_id AND sp.project_id = $1
-         LEFT JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id
+         JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id
          LEFT JOIN org_member m ON m.id = s.owner
+        WHERE l.bytes > 0
         ORDER BY s.node_id, s.session_id
      ) t ORDER BY t.last_seen DESC LIMIT $2`,
     [projectId, Math.min(Math.max(Number(limit) || 200, 1), 500)]);

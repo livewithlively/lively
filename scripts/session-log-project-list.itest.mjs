@@ -139,6 +139,15 @@ try {
     ok("⑥ last_seen 내림차순 정렬");
   }
 
+  // ── ⑦ 내용 없는(0바이트) 세션은 매핑돼 있어도 목록에서 제외(사용자 요청: 빈 세션 숨김) ──
+  {
+    await appendSessionLog({ nodeId: "", sessionId: "cu-empty", atOffset: 0, data: Buffer.alloc(0), owner: "bob" });
+    await recordSessionProject("cu-empty", P1);   // 매핑은 됐지만 바이트 0
+    const list = await listSessionsForProject(P1);
+    assert.ok(!list.some((r) => r.session_id === "cu-empty"), "0바이트 세션은 목록에 안 나온다");
+    ok("⑦ 내용 없는(0바이트) 세션은 매핑돼도 목록에서 제외");
+  }
+
   await itemsPool.end();
   console.log(`\n${pass} passed`);
 } finally {

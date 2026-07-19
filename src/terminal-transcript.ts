@@ -18,6 +18,8 @@ export interface Prompt { text: string; ts: string; }
 
 // 사용자 질문이 아닌 '주입/노이즈' 메시지 — 슬래시커맨드 래퍼·태스크알림·시스템리마인더·caveat·중단표시 등.
 const INJECTED_RE = /^\s*(<command-name|<local-command-|<command-message|<command-args|<bash-|<task-notification|<system-reminder|\[Request interrupted|Caveat:|This session is being continued)/;
+// 사용자가 보내고 esc 로 취소한 표식('[Request interrupted by user]' / '...for tool use'). 그 앞 턴을 폐기하는 신호.
+const INTERRUPT_RE = /^\s*\[Request interrupted/;
 
 // 한 세션(cwd)의 사용자 프롬프트를 시간순(오래된→최신)으로. '이 세션의 현재 대화' = 가장 최근 수정된 jsonl 기준.
 //  접근통제는 라우트(canAttach)에서 — 여기선 파일만 읽는다. 실패·미격리불가 = 빈 결과(비치명).
@@ -74,6 +76,7 @@ function toolSummary(input: unknown): string {
 
 export function renderTranscript(jsonl: string, limit = 5000): TranscriptItem[] {
   const out: TranscriptItem[] = [];
+  let pendingUserIdx = -1;   // 진행 중 턴의 사람 발화 위치(out 내). 중단(esc)되면 여기부터 끝까지 폐기.
   for (const line of jsonl.split("\n")) {
     if (!line.trim()) continue;
     let o: any;
@@ -86,7 +89,12 @@ export function renderTranscript(jsonl: string, limit = 5000): TranscriptItem[] 
       if (typeof c === "string") text = c;
       else if (Array.isArray(c)) text = c.filter((x: any) => x && x.type === "text").map((x: any) => x.text || "").join("\n");
       text = (text || "").trim();
-      if (!text || INJECTED_RE.test(text)) continue;   // 툴결과(배열이 tool_result 뿐)·주입 메시지 제외 → 사람 발화만
+      // 취소된 턴 — 사용자가 보내고 esc 로 끊은 질문 + 그 부분답변을 통째로 버린다(재작성본만 남게, 사용자 요청).
+      if (INTERRUPT_RE.test(text)) { if (pendingUserIdx >= 0) out.length = pendingUserIdx; pendingUserIdx = -1; continue; }
+      // 그 외 주입/노이즈(슬래시·bash·리마인더)는 표시 안 하되 '이전 턴 종료' 경계로만 삼는다 — 뒤의 중단표식이
+      //  이미 끝난 앞 턴을 잘못 지우지 않도록 pendingUserIdx 를 무효화(예: 완료턴 → bash 실행 → esc).
+      if (!text || INJECTED_RE.test(text)) { pendingUserIdx = -1; continue; }
+      pendingUserIdx = out.length;
       out.push({ role: "user", text, ts });
     } else if (o.type === "assistant") {
       const c = o.message && o.message.content;

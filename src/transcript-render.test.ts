@@ -93,4 +93,45 @@ const J = (o: unknown) => JSON.stringify(o);
   ok("제목 유도 — 첫 사람 발화(주입·툴결과·AI 제외) · 없으면 null · 장문 절단");
 }
 
+// ── 취소된 턴(esc) — 보낸 질문 + 부분답변을 버리고 재작성본만 남긴다(사용자 요청) ──
+{
+  const jsonl = [
+    J({ type: "user", message: { content: "첫 질문(취소될 것)" } }),
+    J({ type: "assistant", message: { content: [{ type: "text", text: "부분 답변…" }] } }),
+    J({ type: "user", message: { content: "[Request interrupted by user]" } }),   // esc
+    J({ type: "user", message: { content: "다시 쓴 질문" } }),
+    J({ type: "assistant", message: { content: [{ type: "text", text: "제대로 답변" }] } }),
+  ].join("\n");
+  const items = renderTranscript(jsonl);
+  assert.deepEqual(items.map((i) => i.text), ["다시 쓴 질문", "제대로 답변"],
+    "취소된 질문·부분답변은 사라지고 재작성본만");
+  ok("취소된 턴(질문+부분답변) 폐기 → 재작성본만 남음");
+}
+
+// ── 중단표식이 '이미 끝난 앞 턴'을 지우면 안 된다 — 사이에 다른 사용자 행동(bash 등)이 있으면 경계 ──
+{
+  const jsonl = [
+    J({ type: "user", message: { content: "완료된 질문" } }),
+    J({ type: "assistant", message: { content: [{ type: "text", text: "완결된 답변" }] } }),
+    J({ type: "user", message: { content: "<bash-input>ls</bash-input>" } }),       // 다른 행동 → 앞 턴 종료 경계
+    J({ type: "user", message: { content: "[Request interrupted by user]" } }),     // 이 esc 는 bash 를 끊은 것
+    J({ type: "user", message: { content: "다음 질문" } }),
+  ].join("\n");
+  const items = renderTranscript(jsonl);
+  assert.deepEqual(items.map((i) => i.text), ["완료된 질문", "완결된 답변", "다음 질문"],
+    "완료된 앞 턴은 보존(중단표식이 bash 뒤라 앞 턴을 안 지운다)");
+  ok("중단표식 앞에 다른 사용자 행동이 있으면 완료 턴 보존");
+}
+
+// ── 답변 시작 전 취소 — 질문만 있고 바로 esc → 그 질문도 버린다 ──
+{
+  const jsonl = [
+    J({ type: "user", message: { content: "바로 취소할 질문" } }),
+    J({ type: "user", message: { content: "[Request interrupted by user]" } }),
+    J({ type: "user", message: { content: "진짜 질문" } }),
+  ].join("\n");
+  assert.deepEqual(renderTranscript(jsonl).map((i) => i.text), ["진짜 질문"], "답변 전 취소된 질문도 폐기");
+  ok("답변 시작 전 취소 → 질문 폐기");
+}
+
 console.log(`\n${pass} passed`);
