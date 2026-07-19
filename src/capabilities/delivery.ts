@@ -47,7 +47,8 @@ import {
   mintToken, listTokens, revokeToken, memberHasActiveToken,
   listContentAudit, ADMIN_AUDIT_ENTITIES,
   getRuntimeConfig, updateRuntimeConfig, getEmbeddingConfigSource, getStoragePolicySource, listMcpServers, upsertMcpServer, removeMcpServer,
-  listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook,
+  listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook, recordHookFailures,
+  HOOK_RELAY_DECISIONS, type HookRelayDecision,
   listOrgHarnessAssets, listEnabledAssets, upsertOrgHarnessAsset, removeOrgHarnessAsset,
   listAssetPrefs, setAssetPref, clearAssetPref, clearAssetPrefs, getOrgHook, getOrgHarnessAsset, type AssetPrefKind,
   listTools, upsertTool, removeTool, listAutoApproveTools,
@@ -65,7 +66,7 @@ import { effectiveVisible, targetsMember } from "../org/asset-visibility.js"; //
 // ClickUp 멤버 매핑 패널(#541) — 팀 멤버 나열(getTeam) + person_identity 기반 매핑 상태 계산.
 import { connectors } from "../connectors/index.js";
 import type { ConnectorUser } from "../connectors/types.js";
-import { resetConnectorConfigCache } from "../connectors/config.js";
+import { resetConnectorConfigCache, CONNECTOR_SPECS } from "../connectors/config.js";
 import { itemsPool } from "../items/store.js";
 import { hostOfUrl, isHostBlocked, isSecretRefAllowed, inspectConnString, inspectMysqlUrl } from "../db/source-guard.js";
 import { invalidatePool } from "../db/pool.js";
@@ -742,7 +743,7 @@ export const deliveryCapabilities: Capability[] = [
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
       const m = await getMember(userId);
       // 이메일은 표시 전용(읽기) — 셀프 편집 대상 아님. 멤버행이 없어도 모달은 열리게 안전 폴백.
-      return { id: userId, display_name: m?.display_name ?? null, email: m?.email ?? user.email ?? null, body_md: m?.body_md ?? "", avatar: m?.avatar ?? null, avatar_char: m?.avatar_char ?? null, avatar_color: m?.avatar_color ?? null };
+      return { id: userId, display_name: m?.display_name ?? null, nickname: m?.nickname ?? null, email: m?.email ?? user.email ?? null, body_md: m?.body_md ?? "", avatar: m?.avatar ?? null, avatar_char: m?.avatar_char ?? null, avatar_color: m?.avatar_color ?? null };
     }),
 
   restRead("me_profile_update", "내 프로필 수정",
@@ -756,6 +757,8 @@ export const deliveryCapabilities: Capability[] = [
       if (!existing) throw new HttpError(404, "구성원 정보를 찾을 수 없습니다 — 관리자에게 문의하세요");
       // 표시이름: 미전송이면 보존(undefined), 빈 문자열이면 비우기.
       const displayName = input.display_name == null ? undefined : str(input.display_name, "display_name", 200).trim();
+      // 닉네임(#762): 미전송이면 보존, 빈 문자열이면 지움(→ display_name 폴백). 정규화는 upsertMember 담당.
+      const nickname = input.nickname == null ? undefined : str(input.nickname, "nickname", 80).trim();
       // 개인레이어(body_md)는 합성 컨텍스트에 실리는 자유텍스트 — 평문 시크릿 hard-block(ctx_save 와 동일 choke-point).
       const memberBody = input.body_md == null ? undefined : str(input.body_md, "body_md", 20000);
       if (memberBody !== undefined) assertNoHardSecrets(memberBody, "body_md"); // P8
@@ -773,8 +776,8 @@ export const deliveryCapabilities: Capability[] = [
       const avatarChar = input.avatar_char === undefined ? undefined : (input.avatar_char === null ? null : str(input.avatar_char, "avatar_char", 8).trim());
       const avatarColor = input.avatar_color === undefined ? undefined : (input.avatar_color === null ? null : str(input.avatar_color, "avatar_color", 32).trim());
       // id 만 principal 로 강제 — 그 외(권한·이메일·상태·신원·kind)는 넘기지 않아 upsertMember 가 전부 보존.
-      const member = await upsertMember({ id: userId, display_name: displayName, body_md: memberBody, avatar, avatar_char: avatarChar, avatar_color: avatarColor }, actorOf(user), "web-self");
-      return { member: { id: member.id, display_name: member.display_name, email: member.email, body_md: member.body_md, avatar: member.avatar, avatar_char: member.avatar_char, avatar_color: member.avatar_color } };
+      const member = await upsertMember({ id: userId, display_name: displayName, nickname, body_md: memberBody, avatar, avatar_char: avatarChar, avatar_color: avatarColor }, actorOf(user), "web-self");
+      return { member: { id: member.id, display_name: member.display_name, nickname: member.nickname, email: member.email, body_md: member.body_md, avatar: member.avatar, avatar_char: member.avatar_char, avatar_color: member.avatar_color } };
     }),
 
   // ── CLI 디바이스 로그인 승인 (#880) — 브라우저에서 CLI 를 승인한다. lookup/approve/deny. ──
@@ -1104,7 +1107,7 @@ export const deliveryCapabilities: Capability[] = [
       host: z.string().optional().describe("삭제할 자격의 git 호스트(기본 github.com) — parseGitHost 가 읽는다"),
     }),
 
-  restOnly("org_token_revoke", "접속 열쇠 해제",
+  restOnly("org_token_revoke", "접속 토큰 해제",
     "토큰을 즉시 무효화한다(게이트웨이 재시작 불요).",
     [{ method: "POST", paths: ["/api/ui/org/token/revoke"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
@@ -1152,6 +1155,7 @@ export const deliveryCapabilities: Capability[] = [
         allowed_db_secret_refs?: string[]; write_tools?: string[]; pull_tools?: string[];
         embedding_config?: EmbeddingConfigPatch;
         storage_policy?: StoragePolicyPatch;
+        hook_relay_decisions?: HookRelayDecision[];
       } = {};
       // 저장소 정책(#813) — 로그 상한·디스크 임계치. 잡값·뒤집힌 임계치(경고≥위험)는 normalize 가 잡는다.
       //  고객 박스는 .env 를 못 고치므로 **여기(관리탭)가 유일한 조절 창구**다.
@@ -1244,6 +1248,21 @@ export const deliveryCapabilities: Capability[] = [
         }
         if (patch.pull_tools.length > 100) throw new HttpError(400, "pull_tools 가 너무 많습니다(100개 이하)");
       }
+      // hook_relay_decisions(#892) — 러너가 PreToolUse 에서 하네스로 전파할 결정값. 빈 배열 = 아무것도 전파 안 함
+      //  (게이트 전면 해제 — 의도된 상태라 허용한다). 'allow' 를 넣으면 관리자 훅이 멤버의 권한 프롬프트를
+      //  건너뛸 수 있게 되므로 기본값에서 빠져 있다 — 명시 opt-in 만.
+      if (input.hook_relay_decisions !== undefined) {
+        if (!Array.isArray(input.hook_relay_decisions)) throw new HttpError(400, "hook_relay_decisions 는 배열이어야 합니다");
+        const seen = new Set<string>();
+        for (const d of input.hook_relay_decisions) {
+          const s = str(d, "hook_relay_decisions[]", 10).trim().toLowerCase();
+          if (!(HOOK_RELAY_DECISIONS as readonly string[]).includes(s)) {
+            throw new HttpError(400, `hook_relay_decisions 항목 '${d}' 는 ${HOOK_RELAY_DECISIONS.join("|")} 만 허용됩니다`);
+          }
+          seen.add(s);
+        }
+        patch.hook_relay_decisions = [...seen] as HookRelayDecision[];
+      }
       // 임베딩(벡터검색 #172) 런타임 토글 — provider off|http, 시크릿 금지(auth_env_ref=환경변수 이름만). store 가 다시 normalize.
       if (input.embedding_config !== undefined) {
         const raw = input.embedding_config;
@@ -1299,6 +1318,8 @@ export const deliveryCapabilities: Capability[] = [
       allowed_db_secret_refs: z.array(z.string()).optional().describe("db 소스 auth_ref 가 참조 가능한 비번 env 이름 화이트리스트(값 아님)"),
       write_tools: z.array(z.string()).optional().describe("writeback 인정 툴 이름"),
       pull_tools: z.array(z.string()).optional().describe("외부 맥락 인입으로 볼 MCP 툴 이름 prefix(#906) — 비우면 끔"),
+      hook_relay_decisions: z.array(z.enum(["deny", "defer", "ask", "allow"])).optional()
+        .describe("커스텀 훅(PreToolUse)의 결정 중 러너가 하네스로 전파할 값(#892). 기본 deny·ask·defer — 'allow' 는 멤버의 권한 프롬프트를 건너뛰므로 명시 opt-in. 비우면 전파 안 함(게이트 해제)"),
       // ⚠ 중첩 객체도 하위 키를 다 적어야 한다 — zod 는 미선언 하위 키를 strip 한다(#923).
       storage_policy: z.object({
         log_max_mb: z.number().int().min(0).max(10_000).optional().describe("로그 파일 상한(MB)"),
@@ -1849,7 +1870,7 @@ export const deliveryCapabilities: Capability[] = [
 
       let users: ConnectorUser[];
       try { users = await conn.listUsers(); }
-      catch (e) { return { system, supported: true, error: `${system} 사용자 목록 조회 실패: ${e instanceof Error ? e.message : String(e)}`, users: [] }; }
+      catch (e) { return { system, supported: true, error: `${CONNECTOR_SPECS[system]?.label ?? system} 사용자 목록을 불러오지 못했습니다: ${e instanceof Error ? e.message : String(e)}`, users: [] }; }
 
       const members = await listMembers();
       // org_member.email(소문자) → id — 효과적 매핑 ② 겸 자동매치 제안 공용.
@@ -1967,10 +1988,41 @@ export const deliveryCapabilities: Capability[] = [
       const event = typeof input.event === "string" && input.event ? input.event : undefined;
       let hooks = await listEnabledHooks(harness, user?.userId || null);
       if (event) hooks = hooks.filter((h) => h.event === event);
+      // relay_decisions(#892) — 러너가 PreToolUse 에서 하네스로 전파할 결정값. 이미 매 이벤트 오는 응답에
+      //  얹으므로 왕복이 늘지 않는다. 구버전 러너는 이 필드를 무시하고, 신 러너는 필드가 없으면 자체 기본값을 쓴다.
+      const relay = (await getRuntimeConfig()).hook_relay_decisions;
       return { hooks: hooks.map((h) => ({
         id: h.id, event: h.event, matcher: h.matcher, source_code: h.source_code,
         content_hash: h.content_hash, timeout_sec: h.timeout_sec,
-      })) };
+      })), relay_decisions: relay };
+    }),
+
+  // ── 런너 실패 보고(#892) — 멤버 러너가 훅 크래시/타임아웃을 알린다. scope null(인증된 멤버면 OK). ──
+  // 종전엔 훅이 죽어도 러너가 크래시를 삼켜 아무도 몰랐다(spec-blind guard/tracker 가 등록 이래 내내 죽어 있었음).
+  //  실패했을 때만 호출되므로 정상 조직에선 트래픽이 없다. 보고자는 본인 신원으로만 기록된다(member_id 위조 불가).
+  restRead("org_runner_hook_report", "런너 훅 실패 보고",
+    "멤버 러너가 커스텀 훅 실행 실패(크래시·타임아웃·해시불일치)를 보고한다 — 관리탭이 훅 건강을 본다.",
+    [{ method: "POST", paths: ["/api/ui/org/runner/hook-report"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const memberId = user?.userId || null;
+      if (!memberId) return { ok: false }; // 익명 러너는 기록하지 않는다(신원 없는 텔레메트리는 무의미)
+      const raw = Array.isArray(input.failures) ? input.failures : [];
+      // 보고자에게 실제로 배포된 훅만 받는다 — 아무 hook_id 나 쓰게 두면 자기와 무관한 훅의 건강판에
+      //  임의 텍스트를 남길 수 있다(표시 전용이라 피해는 작지만, GET 쪽과 스코프를 맞춰 두는 게 공짜다).
+      const harness = typeof input.harness === "string" && input.harness ? input.harness : undefined;
+      const mine = new Set((await listEnabledHooks(harness, memberId)).map((h) => h.id));
+      const failures = raw.slice(0, 20).flatMap((f) => { // 상한 — 한 번의 보고가 DB 를 밀지 못하게
+        const o = f as Record<string, unknown>;
+        if (typeof o?.hook_id !== "string" || !mine.has(o.hook_id)) return [];
+        return [{
+          hook_id: o.hook_id,
+          reason: typeof o.reason === "string" ? o.reason.slice(0, 32) : "unknown",
+          exit_code: typeof o.exit_code === "number" ? o.exit_code : null,
+          stderr: typeof o.stderr === "string" ? o.stderr : "",
+        }];
+      });
+      if (failures.length) await recordHookFailures(memberId, failures);
+      return { ok: true, recorded: failures.length };
     }),
 
   // ════════ MCP 툴 CRUD (runtime 권한) ════════

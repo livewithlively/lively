@@ -51,16 +51,16 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
       intro: "Slack 은 워크스페이스 멤버가 가입 안 한 공개채널도 검색으로 읽을 수 있어, 봇을 채널마다 초대하지 않고 전체 공개채널을 수집합니다. 이 방식(search.messages)은 봇 토큰(xoxb-)이 아니라 유저 토큰(xoxp-)이 필요합니다 — 봇 토큰은 search 를 거부(not_allowed_token_type)합니다.",
       steps: [
         "api.slack.com/apps ▸ 앱 선택(없으면 [Create New App] ▸ From scratch — 워크스페이스 선택)",
-        "OAuth & Permissions ▸ 'User Token Scopes'('Bot' 아님!)에 추가: search:read, channels:read, users:read, users:read.email",
-        "[Install to Workspace] 로 (재)설치·승인 → 'User OAuth Token'(xoxp-…) 복사 → 아래 저장 (봇 토큰 xoxb- 아님 주의)",
+        "OAuth & Permissions ▸ 'User Token Scopes'에 추가: search:read, channels:read, users:read, users:read.email",
+        "[Install to Workspace] 로 (재)설치·승인 → 'User OAuth Token'(xoxp-…) 복사 → 아래에 저장",
         "가입 안 한 공개채널도 검색으로 읽히므로 /invite 불필요. 모니터링·알람 등 노이즈 채널은 아래 '제외 채널'에 채널명을 넣으세요.",
       ],
       url: "https://api.slack.com/apps",
     },
     fields: [
       { key: "user_token", env: "SLACK_USER_TOKEN", secret: true, required: true, label: "User Token", hint: "xoxp-... (봇 토큰 xoxb- 아님 — search.messages 는 유저 토큰 필요)" },
-      { key: "noise_exclude", env: "SLACK_NOISE_EXCLUDE", secret: false, label: "제외 채널", hint: "모니터링/알람 등 고볼륨 봇 채널명 공백·쉼표 구분 (예: alerts monitoring) — 쿼리에서 -in: 으로 제외" },
-      { key: "backfill_since", env: "SLACK_BACKFILL_SINCE", secret: false, label: "최초 수집 시작일", hint: "최초 마이그레이션 하한 (YYYY-MM-DD, 비우면 활동이 끊길 때까지 과거로 자동 탐색)" },
+      { key: "noise_exclude", env: "SLACK_NOISE_EXCLUDE", secret: false, label: "제외 채널", hint: "수집에서 제외할 채널명을 공백·쉼표로 구분해 입력 (예: alerts monitoring) — 모니터링·알람 등 메시지가 많은 봇 채널에 사용합니다." },
+      { key: "backfill_since", env: "SLACK_BACKFILL_SINCE", secret: false, label: "최초 수집 시작일", hint: "이 날짜 이후의 자료만 수집합니다 (YYYY-MM-DD, 비우면 활동이 있는 과거 전체를 자동 수집)" },
     ],
   },
   discord: {

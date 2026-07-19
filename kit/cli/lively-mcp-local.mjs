@@ -122,7 +122,7 @@ function registerTool(tool) { TOOLS.push(tool); return tool; }
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  빌트인 로컬 툴 — 레포/워크트리 셀프서비스 (#900). 로직은 repo-worktree-core.mjs(CLI `lively repo` 와 공유·드리프트 0).
-//   어느 실행 환경(박스·로컬PC·워커노드)에서든 cwd 에 최신 워크트리를 떠서 그 위에서 작업하게 한다. base(공유
+//   어느 실행 환경(박스·로컬PC·워커노드)에서든 최신 워크트리를 떠서 그 위에서 작업하게 한다. base(공유
 //   원본)는 규율상 pristine — 코어가 fetch 로 refs 만 갱신하고 origin/<ref> 에서 워크트리를 분기한다.
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -147,17 +147,19 @@ registerTool({
 
 registerTool({
   name: "lively_local_repo_worktree",
-  title: "레포 워크트리를 cwd 에 생성(코드 작업 준비)",
-  description: "등록된 레포의 최신 코드를 이 머신에 확보(로컬에 없으면 clone·있으면 fetch)한 뒤, 지정 경로(기본 cwd 하위 <repo>)에 "
-    + "격리 브랜치로 git worktree 를 만든다. 반환된 worktree 경로에서 코드 작업(편집·커밋·빌드)을 하라 — base(pristine 공유 원본)에서 "
-    + "직접 작업하지 말 것. 프로젝트 세션이면 브랜치 기본값은 project/<id>. 몇 초 내 동기 완결. 코드 작업이 필요할 때 먼저 이걸 호출해 작업면을 준비하라 "
+  title: "레포 워크트리 생성(코드 작업 준비)",
+  description: "등록된 레포의 최신 코드를 이 머신에 확보(로컬에 없으면 clone·있으면 fetch)한 뒤, 격리 브랜치로 git worktree 를 만든다. "
+    + "반환된 worktree 경로에서 코드 작업(편집·커밋·빌드)을 하라 — base(pristine 공유 원본)에서 직접 작업하지 말 것. "
+    + "프로젝트 세션이면 기본 경로는 <프로젝트 폴더>/<repo>(cwd 가 그 하위 어디든 같은 자리 — 서버 provision 과 동일 슬롯이라 서로 멱등)이고 "
+    + "브랜치는 project/<id>. 이미 떠 있으면 그대로 재사용한다. 몇 초 내 동기 완결. 코드 작업이 필요할 때 먼저 이걸 호출해 작업면을 준비하라 "
     + "— 세션이 코드 없는 폴더에서 떴어도 그게 정상이다(워크트리는 세션 생성이 아니라 이 툴이 만든다).",
   inputSchema: {
     type: "object",
     properties: {
       repo: { type: "string", description: "레포 이름(lively_local_repo_list 의 name)" },
-      path: { type: "string", description: "워크트리를 만들 경로(절대 또는 cwd 상대). 기본 cwd/<repo>" },
-      branch: { type: "string", description: "워크트리 브랜치. 기본: 프로젝트 세션이면 project/<id>, 아니면 wt/<repo>" },
+      path: { type: "string", description: "워크트리를 만들 경로(절대 또는 cwd 상대). 기본: 프로젝트면 <프로젝트 폴더>/<repo>, 밖이면 cwd/<repo>. "
+        + "여길 벗어나면 브랜치 기본값도 project/<id> 가 아니라 wt/<repo> 계열이 된다(같은 브랜치를 두 자리에 걸 수 없으므로)" },
+      branch: { type: "string", description: "워크트리 브랜치. 기본: 기본 경로(프로젝트 슬롯)면 project/<id>, 그 외엔 wt/<repo>[-n]" },
       ref: { type: "string", description: "이 ref(origin/<ref>)에서 분기. 기본: origin 기본 브랜치 최신" },
     },
     required: ["repo"],
@@ -208,7 +210,7 @@ registerTool({
     type: "object",
     properties: {
       repo: { type: "string", description: "레포 이름" },
-      path: { type: "string", description: "워크트리 경로(절대 또는 cwd 상대). 기본 cwd/<repo>" },
+      path: { type: "string", description: "워크트리 경로(절대 또는 cwd 상대). 기본: 생성 때와 같은 자리(프로젝트면 <프로젝트 폴더>/<repo>, 밖이면 cwd/<repo>)" },
       force: { type: "boolean", description: "커밋 안 한 변경이 있어도 제거" },
     },
     required: ["repo"],
@@ -229,7 +231,8 @@ registerTool({
     properties: {
       repo: { type: "string", description: "레포 이름(lively_local_repo_list 의 name)" },
       ref: { type: "string", description: "핀할 ref(origin/<ref>). 기본: origin 기본 브랜치(main 등)" },
-      path: { type: "string", description: "핀 경로(절대 또는 cwd 상대). 기본: OS 임시디렉터리(세션 임시물)" },
+      path: { type: "string", description: "핀 경로(절대 또는 cwd 상대). 기본: OS 임시디렉터리 밑 repo+SHA(content-addressed — "
+        + "같은 SHA 는 세션 간 공유, 다른 SHA 는 공존)" },
     },
     required: ["repo"],
     additionalProperties: false,
@@ -240,17 +243,20 @@ registerTool({
 registerTool({
   name: "lively_local_repo_pin_remove",
   title: "핀 제거",
-  description: "lively_local_repo_pin 으로 만든 읽기전용 핀을 제거한다(base·작업 워크트리 무영향). 분석이 끝나면 호출해 정리한다.",
+  description: "lively_local_repo_pin 으로 만든 읽기전용 핀을 제거한다(base·작업 워크트리 무영향). 분석이 끝나면 호출해 정리한다. "
+    + "기본 경로는 repo+SHA 라, 핀 때와 같은 ref 를 줘야 그 SHA 의 핀을 찾아 지운다(기본은 원격 기본 브랜치로 대칭). "
+    + "핀이 이미 없어도 에러가 아니다(best-effort) — 다른 세션의 다른 SHA 핀은 건드리지 않는다.",
   inputSchema: {
     type: "object",
     properties: {
       repo: { type: "string", description: "레포 이름" },
-      path: { type: "string", description: "핀 경로(생성 때 지정했다면 같은 값). 기본: 생성 때와 동일 기본값" },
+      ref: { type: "string", description: "핀 때 쓴 ref(origin/<ref>). 기본: origin 기본 브랜치 — 기본 경로 SHA 를 이 ref 로 해석해 찾는다" },
+      path: { type: "string", description: "핀 경로(생성 때 --path 를 지정했다면 같은 값). 지정 시 ref 는 무시" },
     },
     required: ["repo"],
     additionalProperties: false,
   },
-  handler: (args, ctx) => ctx.text(`핀 제거됨: ${repoPinRemove(ctx, args).removed}`),
+  handler: (args, ctx) => { const r = repoPinRemove(ctx, args); return ctx.text(r.removed ? `핀 제거됨: ${r.removed}` : (r.note || "제거할 핀 없음")); },
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

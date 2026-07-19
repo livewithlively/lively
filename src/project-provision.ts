@@ -77,6 +77,24 @@ function git(args: string[], cwd?: string, extraEnv?: Record<string, string>, ti
 }
 async function isRepo(p: string): Promise<boolean> { return !!p && fs.existsSync(p) && (await git(["rev-parse", "--git-dir"], p)).ok; }
 
+// 스테일 워크트리 등록 정리 — 워크트리 디렉터리가 사라져도 git 은 등록을 남기고, 그 등록은 **prunable 이어도
+//  브랜치를 계속 점유**한다(-b 도 attach 도 실패). 청소되는 임시경로에 뜬 워크트리가 지워지면 그 브랜치가
+//  사람이 손으로 prune 할 때까지 영구히 막히므로, add 전에 항상 턴다(#932). 살아있는 등록엔 무해. best-effort.
+async function pruneWorktrees(repoPath: string): Promise<void> { await git(["worktree", "prune"], repoPath); }
+
+// 브랜치를 쥐고 있는 워크트리 경로(없으면 null) — git 은 한 브랜치를 두 워크트리에 못 건다.
+async function worktreeHolding(repoPath: string, branch: string): Promise<string | null> {
+  const r = await git(["worktree", "list", "--porcelain"], repoPath);
+  if (!r.ok) return null;
+  let at: string | null = null;
+  for (const raw of r.out.split("\n")) {
+    const line = raw.trim();
+    if (line.startsWith("worktree ")) at = line.slice("worktree ".length);
+    else if (line === `branch refs/heads/${branch}`) return at;
+  }
+  return null;
+}
+
 // 재사용 공유 클론 소급 보정(#522 B) — v0.1.70 이전 생성분은 .git 이 group-write 아니라 멤버(lively-shared)가 fetch/commit 못 함
 //  (FETCH_HEAD/objects 쓰기 Permission denied). .git 이 이미 group-write 면 skip(매 provision chmod -R 낭비 방지 → 사실상 1회성).
 //  게이트웨이가 클론 소유자라 chmod 가능. 경로는 "$1" 위치인자(인젝션 없음). best-effort.
@@ -314,10 +332,15 @@ export async function provisionTaskRepo(
   if (!BRANCH_RE.test(branch)) throw new HttpError(400, `브랜치명 형식 오류: ${branch}`);
   if (!fs.existsSync(wtPath)) {
     await fsp.mkdir(wtParent, { recursive: true });
+    await pruneWorktrees(repoPath); // #932 — 이전 위탁 워크트리가 지워졌어도 등록이 delegate/task-<id> 를 쥐고 있음
     const from = ref && BRANCH_RE.test(ref) ? [`origin/${ref}`] : []; // ref 지정 시 그 upstream 기준(없으면 base HEAD)
     let w = await git(["worktree", "add", wtPath, "-b", branch, ...from], repoPath);
     if (!w.ok) w = await git(["worktree", "add", wtPath, branch], repoPath); // 재큐로 이미 브랜치 있으면 attach 폴백
-    if (!w.ok) throw new HttpError(502, `위탁 워크트리 생성 실패(${repo}): ${w.err}`);
+    if (!w.ok) {
+      const at = await worktreeHolding(repoPath, branch);
+      throw new HttpError(502, `위탁 워크트리 생성 실패(${repo}): ${w.err}`
+        + (at ? ` — 브랜치 '${branch}' 는 이미 '${at}' 워크트리가 쥐고 있습니다(git 은 한 브랜치를 두 워크트리에 못 겁니다).` : ""));
+    }
   }
   return wtPath;
 }
@@ -350,10 +373,19 @@ export async function provisionProjectRepos(
       const wtPath = confineToWorkspace(path.join(projDir, name), "워크트리");
       if (!fs.existsSync(wtPath)) {
         await fsp.mkdir(projDir, { recursive: true });
+        await pruneWorktrees(repoPath); // #932 — 사라진 워크트리의 등록이 이 브랜치를 계속 쥐고 있지 않게
         // -b 로 새 브랜치 시도 → 같은 브랜치가 이미 다른 worktree 면 실패 → 기존 브랜치 attach 폴백(work.mjs 동형).
         let w = await git(["worktree", "add", wtPath, "-b", branch], repoPath);
         if (!w.ok) w = await git(["worktree", "add", wtPath, branch], repoPath);
-        if (!w.ok) throw new HttpError(502, `git worktree add 실패(${name}): ${w.err}`);
+        if (!w.ok) {
+          // #932 — 여기 오는 압도적 다수는 '그 브랜치를 다른 워크트리가 쥐고 있음'이다. git 은 점유자 경로를
+          //  말해주지만 왜/어떻게 빠져나오는지는 안 알려준다. 슬롯 밖 워크트리가 project/<id> 를 선점한 상태라
+          //  사람이 그 워크트리를 정리하거나 branch 를 지정해야 풀린다.
+          const at = await worktreeHolding(repoPath, branch);
+          throw new HttpError(502, `git worktree add 실패(${name}): ${w.err}`
+            + (at ? ` — 브랜치 '${branch}' 는 이미 '${at}' 워크트리가 쥐고 있습니다(git 은 한 브랜치를 두 워크트리에 못 겁니다).`
+              + ` 그 워크트리를 정리하거나, 이 레포의 branch 를 다른 이름으로 지정하세요.` : ""));
+        }
       }
       cwd = wtPath;
     }

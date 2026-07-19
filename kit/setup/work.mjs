@@ -185,10 +185,19 @@ for (const spec of repoSpecs) {
     const wtPath = path.join(projDir, path.basename(rpath));
     if (!fs.existsSync(wtPath)) {
       log(`worktree 생성: ${wtPath} (브랜치 ${br})`);
+      // 사라진 워크트리의 등록이 이 브랜치를 계속 쥐고 있지 않게 먼저 턴다(#932) — prunable 등록도 점유로 세서
+      //  -b 도 attach 도 막는다. 살아있는 등록엔 무해.
+      git(["worktree", "prune"], rpath);
       // 같은 브랜치가 이미 다른 worktree 에 있으면 -b 가 실패 → 기존 브랜치 attach 폴백.
       let w = git(["worktree", "add", wtPath, "-b", br], rpath);
       if (!w.ok) w = git(["worktree", "add", wtPath, br], rpath);
-      if (!w.ok) die("git worktree add 실패 — " + w.err);
+      // 점유가 원인일 때만 안내를 덧붙인다(디스크·권한 등 무관한 실패에 엉뚱한 힌트를 주지 않게) — .mjs/.ts 형제는
+      //  git worktree list 로 점유자를 조회하지만, 여기선 git 이 이미 그 경로를 stderr 에 찍어주므로 그걸 그대로 쓴다.
+      if (!w.ok) {
+        const held = /already used by worktree|already exists/i.test(w.err || "");
+        die(`git worktree add 실패 — ${w.err}`
+          + (held ? `\n  git 은 한 브랜치를 두 워크트리에 못 겁니다 — 위 경로의 워크트리에서 작업하거나 --branch 로 다른 이름을 주세요.` : ""));
+      }
     } else log(`worktree 이미 있음: ${wtPath}`);
     // worktree 는 projDir 하위 → cwd 기준 자동 접근(add-dir 불필요).
     usedRepos.push({ name: spec.name || path.basename(rpath), path: rpath, worktree: true, branch: br });

@@ -212,8 +212,8 @@ async function renderDashboard(view, params) {
   // 사람별 '가장 최근 작업'(피드는 최신순 → 사람별 첫 등장이 최신). 요약 한 줄 + 마지막 활동 시각 보강.
   const latestByPerson = new Map();
   for (const a of feed) { const k = a.author_person || ''; if (!latestByPerson.has(k)) latestByPerson.set(k, a); }
-  // 작성자 표시명(명부) — 피드 카드도 id 대신 표시명으로(요약·칩과 일관). people 에 display_name 동봉.
-  const displayName = (pid) => { if (!pid) return ''; const m = people.find((p) => p.author_person === pid); return (m && m.display_name) || pid; };
+  // 작성자 표시명(명부) — 활동 로그는 닉네임 우선(#762), 없으면 이름 폴백. people 에 nickname·display_name 동봉.
+  const displayName = (pid) => { if (!pid) return ''; const m = people.find((p) => p.author_person === pid); return (m && (m.nickname || m.display_name)) || pid; };
   // 내 목록(people) 사람 id 집합 — 타임라인도 '내 사람들'로 스코프(구성원 섹션과 일관).
   const myIds = new Set(people.map((p) => p.author_person).filter(Boolean));
 

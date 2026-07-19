@@ -175,7 +175,7 @@ async function renderDomainmap(view: any, params: any) {
     canvas.append(el('div', { class: 'dmx-canvas-head' },
       el('span', { class: 'dmx-ch-t', text: layer === 'should' ? '의도한 의존 (should)' : layer === 'is' ? '실제 코드 의존 (is)' : '의도 · 실제 대조' }),
       el('span', { class: 'dmx-ch-s', text: fmtNum(visibleNodes().length) + ' 도메인 · ' + fmtNum(activeEdges().length) + ' 의존' })));
-    if (!hasIs && layer !== 'should') canvas.append(el('div', { class: 'dmx-note' }, el('strong', { text: '실제(is) 의존은 아직 측정 전입니다.' }), document.createTextNode(' 코드 스캔(refresh)이 import 를 수집하면 실선과 괴리가 채워집니다.')));
+    if (!hasIs && layer !== 'should') canvas.append(el('div', { class: 'dmx-note' }, el('strong', { text: '실제(is) 의존은 아직 측정 전입니다.' }), document.createTextNode(' 코드 스캔(refresh)이 import 를 수집하면 실선(실제 의존)과 괴리 판정이 표시됩니다.')));
     stageInner = el('div', { class: 'dmx-stage-inner' });
     const svg = sv('svg', { class: 'dmx-graph', role: 'img', 'aria-label': '도메인 의존 흐름 그래프' });
     gViewport = sv('g', { class: 'dmx-viewport' });

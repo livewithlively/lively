@@ -49,6 +49,8 @@ export async function initOrgSchema(): Promise<void> {
     -- avatar_char/color = 이미지 없을 때 쓰는 커스텀 글자/배경색(프로필 설정). null = 이니셜/해시색 자동.
     ALTER TABLE org_member ADD COLUMN IF NOT EXISTS avatar_char TEXT;
     ALTER TABLE org_member ADD COLUMN IF NOT EXISTS avatar_color TEXT;
+    -- nickname = 표시 이름(display_name)과 별개의 닉네임(#762). 활동 로그 등 캐주얼 표기에 쓴다. null/'' = display_name 폴백.
+    ALTER TABLE org_member ADD COLUMN IF NOT EXISTS nickname TEXT;
     -- onboarding = 구성원 온보딩의 **보고된** 상태(#846/850). 형태:
     --   { "<step>": { "state": "done"|"skipped", "at": "<iso>", "by": "ai"|"self", "note": "…" } }
     -- ⚠ 자동 판정되는 것(MCP 호출 이력·자격 등록·레포 연결)은 **여기 저장하지 않는다** — 조회 시점에 라이브
@@ -523,6 +525,22 @@ export async function initOrgSchema(): Promise<void> {
   // **관리탭이 단일 창구**: 고객 박스는 우리가 SSH 로 못 들어가므로 .env 전용 정책은 사실상 아무도 못 바꾼다.
   await itemsPool.query(`
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS storage_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+  `);
+
+  // ── org_runtime_config 확장: hook_relay_decisions — 러너가 PreToolUse 에서 하네스로 전파할 결정값(#892). ──
+  // 기본 '["deny","ask","defer"]' = 제한적 결정만 전파. **'allow' 는 기본 제외**가 핵심: allow 는 멤버의 권한
+  //  프롬프트(동의 UI)를 건너뛰므로, 관리자 훅이 조용히 그걸 없애는 걸 기본값으로 두지 않는다. 넓히려면 명시 opt-in.
+  //  (관리자는 이미 멤버 머신에서 임의 코드를 실행할 수 있어 기술적 새 권한은 아니지만, 동의 표면은 별개 문제다.)
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS hook_relay_decisions JSONB NOT NULL DEFAULT '["deny","ask","defer"]'::jsonb;
+  `);
+
+  // ── org_hook 확장: health — 멤버별 마지막 훅 실행 실패 기록(#892 결함 C). ──
+  // { "<member_id>": { at, reason, exit_code, stderr } } — 멤버 수로 자연히 유계라 별도 테이블·정리 불요.
+  // 종전엔 훅이 죽어도 러너가 크래시를 삼켜(stdout "") '죽음'과 '결정 없음'이 구분 불가였고, 그래서 spec-blind
+  //  guard/tracker 가 등록 이래 내내 죽은 걸 아무도 몰랐다. 실패했을 때만 기록되므로 정상 조직은 항상 '{}'.
+  await itemsPool.query(`
+    ALTER TABLE org_hook ADD COLUMN IF NOT EXISTS health JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
 
   // ── org_db_source — db_query/db_schema 가 읽는 외부 데이터소스 레지스트리(웹 관리). ──
