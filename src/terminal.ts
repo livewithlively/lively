@@ -33,6 +33,11 @@ async function relayNodeOp<T>(nodeId: string, op: NodeOp, args: Record<string, u
     const msg = (e as Error)?.message ?? String(e);
     if (msg === "node-offline") throw new HttpError(409, "노드가 오프라인입니다 — 그 PC 의 lively 노드 연결을 확인하세요.");
     if (msg === "node-rpc-timeout") throw new HttpError(504, "노드 응답 시간 초과");
+    // 미지원(#905 C4) — **실행 실패가 아니다.** 502 "노드에서 실행 실패"로 뭉개면 사용자는 뭔가 터진 줄 알고
+    //  재시도하는데, 실제로는 그 노드 에이전트가 낡아 그 기능 자체가 없는 것이다. 할 일이 완전히 다르다.
+    if (msg.startsWith("node-unsupported-op:")) {
+      throw new HttpError(409, `이 노드의 에이전트가 낡아 '${msg.slice("node-unsupported-op:".length)}' 를 지원하지 않습니다 — 그 PC 에서 노드를 다시 설치·업데이트하세요.`);
+    }
     throw new HttpError(502, `노드에서 실행 실패: ${msg}`);
   }
 }

@@ -15,7 +15,7 @@ import {
   TMUX_BIN, PANE_LOCALE, HARNESSES, resolveRootPath, resolveProfileConfigDir, sessionPrefix, ensureMemberOsUser,
 } from "../terminal-sessions.js";
 import { wrapAsMember } from "../terminal-isolation.js";
-import { provisionTaskRepo } from "../project-provision.js";
+import { provisionTaskRepo, type RepoProvisionAuth } from "../project-provision.js";
 import type { NodeResources } from "./protocol.js";
 
 const execFileAsync = promisify(execFile);
@@ -88,6 +88,10 @@ export interface RunTaskInput {
   gitRef?: string | null;      // worktree 분기 기준 브랜치(origin/<ref>) — 없으면 base HEAD
   flags?: Record<string, string>;  // 화이트리스트(--model/--effort)만 적용
   env?: Record<string, string>;    // 자격 리스(CLAUDE_CODE_OAUTH_TOKEN 등) — 값은 세션 env 로만
+  // 레포 provision 주입(#905 C4) — **노드엔 DB 가 없다**. 게이트웨이가 레지스트리 git_url + (의뢰자 본인) git 자격을
+  //  조회해 실어 보낸다. 없으면 노드는 종전대로 DB 를 읽으려다 실패하고 "레지스트리에 없다"는 오진을 낸다.
+  //  중앙(게이트웨이 내장 노드) 실행 시엔 미설정 — 거기선 DB 를 직접 읽는 게 정상이다.
+  repoAuth?: RepoProvisionAuth;
 }
 export interface RunTaskResult { sessionId: string; taskDir: string; workspace: string }
 
@@ -115,7 +119,10 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
   //  둬 레포를 오염시키지 않는다(untracked). 미지정이면 빈 워크스페이스(cwd=baseWs, 프롬프트가 알아서 준비).
   let workspace = baseWs;
   if (input.repo) {
-    workspace = await provisionTaskRepo(baseWs, input.taskId, String(input.repo), input.gitRef ?? null, (user.userId || user.email || null));
+    workspace = await provisionTaskRepo(
+      baseWs, input.taskId, String(input.repo), input.gitRef ?? null, (user.userId || user.email || null),
+      input.repoAuth,   // 노드 실행이면 게이트웨이가 실어 보낸 주입(없으면 중앙 실행 → DB 직접 읽기)
+    );
   }
   const taskDir = path.join(baseWs, ".lively-task", String(input.taskId));
   await fsp.mkdir(taskDir, { recursive: true, mode: 0o770 });

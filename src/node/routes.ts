@@ -6,8 +6,9 @@
 import type express from "express";
 import { spawn } from "node:child_process";
 import path from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
@@ -15,6 +16,7 @@ import { wrap, HttpError } from "../capabilities/rest-util.js";
 import { getOrgProfile } from "../org/store.js";
 import { createNode, deleteNode, getNode, listNodes, rotateNodeToken, setNodeEnabled, type OrgNode } from "./store.js";
 import { liveNodes } from "./registry.js";
+import { agentIsLatest } from "./protocol.js";
 import { logger } from "../log.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."); // dist/node/ → 리포 루트
@@ -36,11 +38,34 @@ function installHint(_gw: string, _token: string, id: string): string {
   return `lively node --daemon --id ${id}`;
 }
 
-interface NodeView extends Omit<OrgNode, "token_hash"> { online: boolean; sessions: number }
+// 게이트웨이가 **지금 서빙하는** 에이전트 번들의 지문(#905 C4) — 노드가 hello 로 보내는 agentVer 와 같은 계산.
+//  키트 kit-version 과 같은 모델("서빙하는 바이트가 곧 버전"). 노드가 그 값을 그대로 보내면 최신, 다르면 구버전이다.
+//  캐시: 이 파일은 배포 때만 바뀌는데 노드 목록은 관리탭이 자주 조회한다.
+const AGENT_BUNDLE = path.join(REPO_ROOT, "dist", "node-agent", "agent.mjs");
+const AGENT_VER_TTL_MS = 60_000;
+let servedAgentVer: { v: string | null; at: number } | null = null;
+function servedAgentVersion(): string | null {
+  if (servedAgentVer && Date.now() - servedAgentVer.at < AGENT_VER_TTL_MS) return servedAgentVer.v;
+  let v: string | null = null;
+  try { v = createHash("sha256").update(readFileSync(AGENT_BUNDLE)).digest("hex").slice(0, 12); }
+  catch { v = null; }   // 번들 미빌드 → 모름. 모르면 최신 여부를 **판정하지 않는다**(아래 agent_latest=null).
+  servedAgentVer = { v, at: Date.now() };
+  return v;
+}
+
+//  agent_latest 3상(true/false/null)의 근거는 protocol.agentIsLatest 참조 — 거기서 검증한다.
+interface NodeView extends Omit<OrgNode, "token_hash"> {
+  online: boolean; sessions: number; agent_latest: boolean | null; agent_ver_latest: string | null;
+}
 function toView(n: OrgNode, live: Map<string, { online: boolean; sessions: number }>): NodeView {
   const { token_hash: _hash, ...rest } = n; // 토큰 해시는 응답에 싣지 않는다(상관추적은 토큰탭에서)
   const lv = live.get(n.id);
-  return { ...rest, online: lv?.online ?? false, sessions: lv?.sessions ?? 0 };
+  const served = servedAgentVersion();
+  return {
+    ...rest, online: lv?.online ?? false, sessions: lv?.sessions ?? 0,
+    agent_ver_latest: served,
+    agent_latest: agentIsLatest(n.agent_ver, served),
+  };
 }
 
 export function registerNodeRoutes(app: express.Express, verifier: BearerVerifier): void {
@@ -110,14 +135,14 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
   //  external 이라 실행환경에 필요). 인증된 멤버면 받는다(코드일 뿐 비밀 없음 — /install 과 동일 성격). tar.gz 스트림.
   app.get("/api/ui/node-agent", auth, wrap(async (req, res) => {
     if (!idOf(userOf(req))) throw new HttpError(403, "사용자 신원이 없습니다");
-    const bundle = path.join(REPO_ROOT, "dist", "node-agent", "agent.mjs");
-    if (!existsSync(bundle)) throw new HttpError(503, "노드 에이전트 번들이 아직 빌드되지 않았습니다(npm run build).");
+    // 버전 판정(servedAgentVersion)과 **같은 파일**이어야 한다 — 서빙본과 해시 대상이 갈리면 판정이 거짓이 된다.
+    if (!existsSync(AGENT_BUNDLE)) throw new HttpError(503, "노드 에이전트 번들이 아직 빌드되지 않았습니다(npm run build).");
     res.setHeader("Content-Type", "application/gzip");
     res.setHeader("Content-Disposition", 'attachment; filename="node-agent.tgz"');
     // dist/node-agent/agent.mjs → agent.mjs · node_modules/node-pty → node_modules/node-pty (전 플랫폼 prebuild 동봉)
     const tar = spawn("tar", [
       "-czf", "-",
-      "-C", path.join(REPO_ROOT, "dist", "node-agent"), "agent.mjs",
+      "-C", path.dirname(AGENT_BUNDLE), path.basename(AGENT_BUNDLE),
       "-C", REPO_ROOT, "node_modules/node-pty",
     ], { stdio: ["ignore", "pipe", "ignore"] });
     tar.stdout.pipe(res);

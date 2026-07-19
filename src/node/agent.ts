@@ -2,12 +2,15 @@
 // 연결은 항상 아웃바운드(노드 → 게이트웨이 WSS /node/ws, Bearer 노드토큰) — 포트를 열지 않는다(F1).
 // 역할: 게이트웨이의 타입드 ops(list/create/kill/edit/gone/label — 임의 셸 없음)를 로컬 tmux 에 실행하고,
 //  3s 주기로 세션 상태 스냅샷을 push 하며, attach 채널을 로컬 tmux -CC(node-pty)로 브리지한다.
-// 실행(설치 스크립트가 데몬으로 등록):
-//   LIVELY_GATEWAY_URL=https://gw LIVELY_NODE_TOKEN=lvk_... node dist/node/agent.js
+// 실행(설치 스크립트가 데몬으로 등록) — **게이트웨이가 서빙하는 단일 번들**을 돌린다:
+//   LIVELY_GATEWAY_URL=https://gw LIVELY_NODE_TOKEN=lvk_... node dist/node-agent/agent.mjs
+//   (tsc 원본 dist/node/agent.js 를 돌리면 자기해시 agentVer 가 서빙 번들과 영영 안 맞아 '구버전' 오판 — #905 C4)
 import WebSocket from "ws";
 import os from "node:os";
 import path from "node:path";
+import fs from "node:fs";
 import fsp from "node:fs/promises";
+import crypto from "node:crypto";
 import {
   listSessionsRaw, createSession, killSession, editSession, applyValidatedInvites,
   sessionGone, getSessionLabel, killEmptyTmuxServer, sessionDir, SHARED_ROOT, type CreateInput,
@@ -16,7 +19,7 @@ import { attachSession, killAttachedPtys, type AttachSocket } from "../terminal-
 import { sessionPrompts } from "../terminal-transcript.js";
 import type { LivelyUser } from "../context.js";
 import {
-  NODE_WS_PATH, PROTO_VER, encodeChanFrame, decodeChanFrame, parseMsg,
+  NODE_WS_PATH, PROTO_VER, NODE_OPS, encodeChanFrame, decodeChanFrame, parseMsg,
   type GwToNodeMsg, type NodeToGwMsg, type ReqMsg,
 } from "./protocol.js";
 // 위탁 태스크(P2) — 러너/리소스 샘플러는 중앙(게이트웨이 내장 노드)과 공유(node/tasks.ts).
@@ -26,6 +29,18 @@ import { logger } from "../log.js";
 const GW_URL = process.env.LIVELY_GATEWAY_URL || "";
 const TOKEN = process.env.LIVELY_NODE_TOKEN || "";
 const NODE_ID = process.env.LIVELY_NODE_ID || ""; // 표시용 — 신원은 서버가 토큰으로 특정한다
+
+// 도는 번들 자신의 지문(#905 C4) — 키트 kit-version 과 같은 모델: **실행 중인 바이트가 곧 버전**이라
+//  사람이 숫자를 올릴 필요도, 빠뜨릴 일도 없다. 게이트웨이가 서빙본 지문과 비교해 이 노드가 최신인지 안다.
+//  argv[1] = 이 파일(esbuild 단일 번들 agent.mjs). 읽기 실패는 치명이 아니다 — 그냥 '모름'(null)으로 보고한다.
+//  ⚠ null 이면 게이트웨이는 최신 여부를 판정하지 않는다(모르면 안 건드림). agent_ver 가 NULL 로 남던 게 이 과업의 발단이다.
+const AGENT_VER: string | null = (() => {
+  try {
+    const self = process.argv[1];
+    if (!self) return null;
+    return crypto.createHash("sha256").update(fs.readFileSync(self)).digest("hex").slice(0, 12);
+  } catch { return null; }
+})();
 if (!GW_URL || !TOKEN) {
   console.error("LIVELY_GATEWAY_URL / LIVELY_NODE_TOKEN 이 필요합니다");
   process.exit(2);
@@ -211,7 +226,12 @@ function connect(): void {
     logger.info({ url }, "게이트웨이 연결됨");
     void (async () => {
       const hasDocker = await detectDocker();
-      ws.send(JSON.stringify({ t: "hello", ver: PROTO_VER, node: NODE_ID, platform: process.platform, host: os.hostname(), hasDocker } satisfies NodeToGwMsg));
+      ws.send(JSON.stringify({
+        t: "hello", ver: PROTO_VER, node: NODE_ID, platform: process.platform, host: os.hostname(), hasDocker,
+        // agentVer = 이 번들의 지문 · caps = **이 빌드가 실제로 구현한 op**(protocol.NODE_OPS — 목록과 타입이 한 출처).
+        //  둘 다 없으면 게이트웨이는 "이 노드가 무엇인지·무엇을 하는지" 알 방법이 없어, 미지원을 실패와 구별 못 한다.
+        ...(AGENT_VER ? { agentVer: AGENT_VER } : {}), caps: [...NODE_OPS],
+      } satisfies NodeToGwMsg));
       await pushState(true);
       pusher = setInterval(() => { void pushState(); }, STATE_PUSH_MS);
     })();
