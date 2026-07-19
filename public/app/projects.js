@@ -2,6 +2,7 @@
 import { TOKEN_KEY, api, applyReveal, el, errorNote, lifecycleDot, personFace, relTime, renderMarkdown, safeHref, state, sv, toast } from './core.js';
 import { SPACE_LABEL, knInjectChip, knProvChip } from './wiki-data.js'; // #764 — knowledge.ts 해체(미사용 심볼 정리: knRow 등은 로컬 정의가 섀도잉하고 있었음)
 import { activityTimelineRow } from './dashboard.js';
+import { renderSessionListInto } from './sessions.js'; // #905 C1 — 프로젝트 세션 기록(중앙 로그) 목록 재사용
 import { overlayBox, skeleton, skeletonRows } from './learn.js';
 import { loadAdmin } from './admin.js';
 import { field } from './admin.js';
@@ -5887,12 +5888,21 @@ async function renderProjectV2Detail(view, idStr) {
     //  터미널 세션 · 작업 타임라인(org #/projects 템플릿과 동형, v6 데이터·라우트). 모든 섹션 v6 API base 연결.
     //  '필요/산출 지식'은 본문 바로 아래 '지식 흐름' 섹션으로 분리(#245) — 세부 설정 팝업에서 이관.
     // 후속/선행 프로젝트는 별도 박스(projectEdgesSection)를 없애고 상단 프로퍼티(pjvProjMetaPanel)로 이관(#359).
-    view.replaceChildren(head, projectBodySection(id, p, reload), projectKnowledgeSection(id, p, reload), projectCommentsSection(id, members), pjvTasksSection(id, p.tasks || [], members, reload, p.fields || []), projectFolderSection(id, V6_BASE), projectTerminalSection(id, members, meId, V6_BASE, p.name, p), projectTimelineSection(id, members, V6_BASE));
+    view.replaceChildren(head, projectBodySection(id, p, reload), projectKnowledgeSection(id, p, reload), projectCommentsSection(id, members), pjvTasksSection(id, p.tasks || [], members, reload, p.fields || []), projectFolderSection(id, V6_BASE), projectTerminalSection(id, members, meId, V6_BASE, p.name, p), projectSessionLogSection(id), projectTimelineSection(id, members, V6_BASE));
     // 인라인 편집 재렌더면 리빌 애니메이션 대신 스크롤 복원(전면 재애니메이션도 '새로고침'처럼 보임) (#358)
     if (keepY != null)
         pjvRestoreScroll(keepY);
     else
         applyReveal(Array.from(view.children).slice(1));
+}
+// ── 상세 — 세션 기록(#905 C1) — 이 프로젝트에 바인딩된 중앙 기록 세션(과거 포함). 행 클릭 시 대화록 웹뷰(#/sessions/<sid>). ──
+//  ⚠ 라이브 tmux 세션(터미널 섹션)과 별개: 여기는 끝난 세션까지 남는 '이력'. 인가는 서버(프로젝트 멤버).
+function projectSessionLogSection(id) {
+    const body = el('div', { class: 'admin-hint', text: '불러오는 중…' });
+    api('/api/ui/v6/projects/' + id + '/session-logs')
+        .then((d) => renderSessionListInto(body, (d && d.sessions) || [], '이 프로젝트에 기록된 세션이 없습니다. (관리 ▸ 세션 공유를 켜면 이 프로젝트에서 만든 세션 대화가 모입니다.)'))
+        .catch((e) => body.replaceChildren(el('p', { class: 'admin-hint', text: (e && e.message) || '세션 기록을 불러오지 못했습니다.' })));
+    return el('section', { class: 'card' }, el('div', { class: 'card-head' }, el('h3', { text: '세션 기록' }), el('span', { class: 'admin-hint', text: '  이 프로젝트에서 만든 AI 세션 대화록(끝난 세션 포함)' })), body);
 }
 // ── 본문 섹션 — 태스크 위, 다른 섹션(공유 폴더·터미널 세션·작업 타임라인)과 동일 위계·디자인(.card + .card-head). ──
 //  마크다운 렌더 + 본문 클릭/✎ 편집 버튼으로 그 자리 편집(Enter 저장·Shift+Enter 줄바꿈·Esc 취소). 길면 접힘+Expand.

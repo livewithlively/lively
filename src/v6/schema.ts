@@ -482,6 +482,7 @@ export async function initV6Schema(): Promise<string> {
       last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (node_id, session_id));
     ALTER TABLE session ADD COLUMN IF NOT EXISTS owner TEXT;  -- 슬라이스1 스키마로 만들어진 기존 테이블 보강
+    ALTER TABLE session ADD COLUMN IF NOT EXISTS title TEXT;  -- 웹뷰용 제목(#905 C1 슬⑤b) — 첫 사람 발화에서 자동 유도(uuid 대신).
 
     CREATE TABLE IF NOT EXISTS session_log(
       node_id TEXT NOT NULL DEFAULT '',

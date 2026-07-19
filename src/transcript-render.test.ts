@@ -3,6 +3,7 @@
 //  계약(채널필터): 사람 발화 + 어시스턴트 산문 + 툴콜 이름만 남기고, 툴결과·주입노이즈·메타는 버린다.
 import assert from "node:assert/strict";
 import { renderTranscript } from "./terminal-transcript.js";
+import { firstUserPromptTitle } from "./v6/session-log-store.js";
 
 let pass = 0;
 const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
@@ -69,6 +70,27 @@ const J = (o: unknown) => JSON.stringify(o);
   const items = renderTranscript(J({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command: long } }] } }));
   assert.ok(items[0].text.length <= 141 && items[0].text.endsWith("…"), "긴 툴 입력은 잘리고 … 표시");
   ok("긴 툴 입력 절단");
+}
+
+// ── 제목 유도(firstUserPromptTitle) — 첫 사람 발화에서 제목(uuid 대신). 툴결과·주입·메타는 건너뛴다. ──
+{
+  // 첫 사람 발화가 제목.
+  assert.equal(firstUserPromptTitle(J({ type: "user", message: { content: "프로젝트 상태 알려줘" } })), "프로젝트 상태 알려줘", "문자열 발화");
+  assert.equal(firstUserPromptTitle(J({ type: "user", message: { content: [{ type: "text", text: "배열 발화" }] } })), "배열 발화", "배열 발화");
+  // 주입/툴결과/어시스턴트는 건너뛰고 첫 '진짜' 사람 발화를 찾는다.
+  const mixed = [
+    J({ type: "user", message: { content: "<system-reminder>노이즈</system-reminder>" } }),   // 주입 → skip
+    J({ type: "user", message: { content: [{ type: "tool_result", content: "..." }] } }),        // 툴결과 → skip
+    J({ type: "assistant", message: { content: [{ type: "text", text: "안녕하세요" }] } }),       // AI → skip
+    J({ type: "user", message: { content: "진짜 질문입니다" } }),
+  ].join("\n");
+  assert.equal(firstUserPromptTitle(mixed), "진짜 질문입니다", "주입·툴결과·AI 건너뛰고 첫 사람 발화");
+  // 사람 발화 없음 → null.
+  assert.equal(firstUserPromptTitle(J({ type: "assistant", message: { content: [{ type: "text", text: "x" }] } })), null, "사람 발화 없으면 null");
+  // 아주 길면 120자로 자른다.
+  const longQ = firstUserPromptTitle(J({ type: "user", message: { content: "가".repeat(300) } }));
+  assert.ok(longQ && longQ.length <= 121 && longQ.endsWith("…"), "긴 발화는 120자+… 로 절단");
+  ok("제목 유도 — 첫 사람 발화(주입·툴결과·AI 제외) · 없으면 null · 장문 절단");
 }
 
 console.log(`\n${pass} passed`);

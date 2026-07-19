@@ -38,6 +38,26 @@ export async function sessionOwner(nodeId: string, sessionId: string): Promise<s
   return (r.rows[0]?.owner as string | null) ?? null;
 }
 
+// 제목 유도(#905 C1 슬⑤b) — 트랜스크립트 JSONL 에서 **첫 사람 발화**를 뽑아 세션 제목으로(uuid 대신 읽을 수 있게).
+//  주입/툴결과/메타 라인은 건너뛴다. 첫 append(offset 0)에서만 계산해 COALESCE 로 굳힌다(한 번 정해지면 불변).
+const TITLE_INJECTED = /^\s*(<command-name|<local-command-|<command-message|<command-args|<bash-|<task-notification|<system-reminder|\[Request interrupted|Caveat:|This session is being continued)/;
+export function firstUserPromptTitle(jsonl: string): string | null {
+  for (const line of jsonl.split("\n")) {
+    if (!line.trim()) continue;
+    let o: { type?: string; isMeta?: boolean; isSidechain?: boolean; message?: { content?: unknown } };
+    try { o = JSON.parse(line); } catch { continue; }
+    if (!o || o.type !== "user" || o.isMeta || o.isSidechain) continue;
+    const c = o.message && o.message.content;
+    let text = "";
+    if (typeof c === "string") text = c;
+    else if (Array.isArray(c)) text = c.filter((x): x is { type: string; text?: string } => !!x && (x as { type?: string }).type === "text").map((x) => x.text || "").join(" ");
+    text = (text || "").replace(/\s+/g, " ").trim();
+    if (!text || TITLE_INJECTED.test(text)) continue;
+    return text.length > 120 ? text.slice(0, 120) + "…" : text;
+  }
+  return null;
+}
+
 // 델타 append — offset-CAS. 성공/멱등이면 ok=true, gap/overlap 이면 ok=false(+정정용 현재 bytes).
 export async function appendSessionLog(input: {
   nodeId: string; sessionId: string; atOffset: number; data: Buffer; harness?: string | null; owner?: string | null;
@@ -49,12 +69,15 @@ export async function appendSessionLog(input: {
     await client.query("BEGIN");
     // 불멸 세션 레코드 보장(있으면 last_seen 만 갱신). owner 는 **최초 1회만** 굳는다(COALESCE — 첫 append 한
     //  멤버가 소유자로 고정, 이후 append 가 못 덮는다). 프라이버시 게이트라 라우트의 owner-검사와 함께 이중방어.
+    //  제목은 첫 append(offset 0)의 첫 사람 발화에서 유도해 COALESCE 로 굳힌다(uuid 대신 읽을 수 있는 제목, 한 번만).
+    const titleCand = atOffset === 0 && len > 0 ? firstUserPromptTitle(data.toString("utf8")) : null;
     await client.query(
-      `INSERT INTO session(node_id, session_id, harness, owner) VALUES($1,$2,$3,$4)
+      `INSERT INTO session(node_id, session_id, harness, owner, title) VALUES($1,$2,$3,$4,$5)
        ON CONFLICT (node_id, session_id) DO UPDATE SET last_seen=now(),
          harness=COALESCE(session.harness, EXCLUDED.harness),
-         owner=COALESCE(session.owner, EXCLUDED.owner)`,
-      [nodeId, sessionId, input.harness ?? null, input.owner ?? null]);
+         owner=COALESCE(session.owner, EXCLUDED.owner),
+         title=COALESCE(session.title, EXCLUDED.title)`,
+      [nodeId, sessionId, input.harness ?? null, input.owner ?? null, titleCand]);
     await client.query(
       `INSERT INTO session_log(node_id, session_id) VALUES($1,$2) ON CONFLICT DO NOTHING`,
       [nodeId, sessionId]);
@@ -124,20 +147,48 @@ export async function readSessionLog(nodeId: string, sessionId: string, from = 0
 
 // 내 세션 목록(#905 C1 슬⑤b 웹뷰) — 소유자=요청자인 세션을 **모든 노드에서**(환경 무관 "내 세션들").
 //  회수 표면의 목록면: 어느 환경에서 만들었든 내 세션을 한 곳에서 본다. reap 된 세션도 남(bytes=0, session 불멸).
-export interface SessionListRow { node_id: string; session_id: string; harness: string | null; bytes: number; last_seen: string; }
+export interface SessionListRow {
+  node_id: string; session_id: string; harness: string | null; title: string | null;
+  owner: string | null; owner_name: string | null; first_seen: string; last_seen: string; bytes: number;
+}
+const SESSION_LIST_COLS = `s.node_id, s.session_id, s.harness, s.title, s.owner, m.display_name AS owner_name,
+  s.first_seen, s.last_seen, COALESCE(l.bytes, 0)::bigint AS bytes`;
+const mapSessionRow = (x: Record<string, unknown>): SessionListRow => ({
+  node_id: x.node_id as string, session_id: x.session_id as string, harness: (x.harness as string) ?? null,
+  title: (x.title as string) ?? null, owner: (x.owner as string) ?? null, owner_name: (x.owner_name as string) ?? null,
+  first_seen: x.first_seen as string, last_seen: x.last_seen as string, bytes: Number(x.bytes),
+});
+
+// 내 세션 목록(웹뷰) — 소유자=요청자. 제목·소유자표시명·생성·마지막활동·크기 포함.
 export async function listSessionsForOwner(owner: string, limit = 200): Promise<SessionListRow[]> {
   if (!owner) return [];
   const r = await itemsPool.query(
-    `SELECT s.node_id, s.session_id, s.harness, COALESCE(l.bytes, 0)::bigint AS bytes, s.last_seen
-       FROM session s LEFT JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id
+    `SELECT ${SESSION_LIST_COLS}
+       FROM session s
+       LEFT JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id
+       LEFT JOIN org_member m ON m.id = s.owner
       WHERE s.owner = $1
       ORDER BY s.last_seen DESC
       LIMIT $2`,
     [owner, Math.min(Math.max(Number(limit) || 200, 1), 500)]);
-  return r.rows.map((x) => ({
-    node_id: x.node_id, session_id: x.session_id, harness: x.harness,
-    bytes: Number(x.bytes), last_seen: x.last_seen,
-  }));
+  return r.rows.map(mapSessionRow);
+}
+
+// 프로젝트 세션 목록(#905 C1 슬⑤b) — 이 프로젝트에 **한 번이라도** 바인딩된 세션(시간구간 전체). 프로젝트 상세 탭용.
+//  인가는 라우트에서(프로젝트 멤버). (node,session) 중복 제거 후 마지막활동 순.
+export async function listSessionsForProject(projectId: number, limit = 200): Promise<SessionListRow[]> {
+  if (!projectId) return [];
+  const r = await itemsPool.query(
+    `SELECT * FROM (
+       SELECT DISTINCT ON (s.node_id, s.session_id) ${SESSION_LIST_COLS}
+         FROM session s
+         JOIN session_project sp ON sp.session_id = s.session_id AND sp.project_id = $1
+         LEFT JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id
+         LEFT JOIN org_member m ON m.id = s.owner
+        ORDER BY s.node_id, s.session_id
+     ) t ORDER BY t.last_seen DESC LIMIT $2`,
+    [projectId, Math.min(Math.max(Number(limit) || 200, 1), 500)]);
+  return r.rows.map(mapSessionRow);
 }
 
 // 보존 reap(설계 §5 ③) — retentionDays 지나도록 **손대지 않은**(updated_at 기준) 로그를 통째로 지운다.

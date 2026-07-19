@@ -13,8 +13,8 @@ import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { getRuntimeConfig } from "./org/store.js";
-import { appendSessionLog, sessionLogWatermark, sessionOwner, readSessionLog, listSessionsForOwner } from "./v6/session-log-store.js";
-import { sessionBoundToMemberProject } from "./v6/project-store.js";
+import { appendSessionLog, sessionLogWatermark, sessionOwner, readSessionLog, listSessionsForOwner, listSessionsForProject } from "./v6/session-log-store.js";
+import { sessionBoundToMemberProject, isProjectMember } from "./v6/project-store.js";
 import { renderTranscript } from "./terminal-transcript.js";
 
 export const MAX_DELTA = 8 * 1024 * 1024;   // 한 번에 받는 델타 상한(8MB) — 큰 트랜스크립트도 청크로 나눠 보내게.
@@ -83,6 +83,19 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     if (!requester) throw new HttpError(403, "사용자 신원이 없습니다");
     res.setHeader("Cache-Control", "no-store");
     res.json({ sessions: await listSessionsForOwner(requester) });
+  }));
+
+  // 프로젝트 **세션이력** 목록(웹뷰 슬⑤b) — 이 프로젝트에 바인딩된 중앙 기록 세션(과거 포함). 인가: 프로젝트 멤버.
+  //  ⚠ 경로가 `/sessions` 가 아니라 `/session-logs` — `/projects/:id/sessions`(project-routes.ts)는 **살아있는
+  //    tmux 세션**을 돌려주는 별개 엔드포인트라 충돌한다. 여기는 중앙 로그 이력(죽은 세션 포함)이라 개념도 다르다.
+  app.get("/api/ui/v6/projects/:id/session-logs", auth, wrap(async (req, res) => {
+    const requester = idOf(userOf(req));
+    if (!requester) throw new HttpError(403, "사용자 신원이 없습니다");
+    const projectId = Number(req.params.id);
+    if (!Number.isInteger(projectId) || projectId <= 0) throw new HttpError(400, "프로젝트 id 형식 오류");
+    if (!(await isProjectMember(projectId, requester))) throw new HttpError(403, "이 프로젝트의 멤버가 아닙니다");
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ sessions: await listSessionsForProject(projectId) });
   }));
 
   // 델타 append — offset-CAS. at=현재 보낸 쪽 오프셋, node=실행 노드('' 기본). 응답 {ok, verdict, bytes} 로 오프셋 정정.
