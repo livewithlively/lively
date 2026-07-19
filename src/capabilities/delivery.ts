@@ -1976,10 +1976,11 @@ export const deliveryCapabilities: Capability[] = [
     }, {
       id: z.string().describe("훅 id(슬러그) — 있으면 수정, 없으면 생성"),
       event: z.enum(["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "Notification", "PreCompact", "PostCompact"])
-        .describe("발화 라이프사이클 이벤트. Codex 는 SessionStart/PostToolUse/Stop 만 지원"),
-      source_code: z.string().optional().describe("훅 본문(멤버 디스크에 굳히지 않고 런너가 매 세션 fetch). 평문 시크릿은 hard-block"),
-      harness: z.enum(["claude", "codex", "openclaw", "all"]).optional().describe("대상 하네스(기본 all)"),
-      matcher: z.string().nullable().optional().describe("PreToolUse/PostToolUse 등에서 대상 툴 매칭 패턴(빈 값=전체)"),
+        .optional()
+        .describe("발화 라이프사이클 이벤트. Codex 는 SessionStart/PostToolUse/Stop 만 지원. 미전송=기존 유지(#970, 신규 훅은 필수)"),
+      source_code: z.string().optional().describe("훅 본문(멤버 디스크에 굳히지 않고 런너가 매 세션 fetch). 평문 시크릿은 hard-block. 미전송=기존 유지, 빈 문자열=지움(#970)"),
+      harness: z.enum(["claude", "codex", "openclaw", "all"]).optional().describe("대상 하네스(기본 all). 미전송=기존 유지(#970)"),
+      matcher: z.string().nullable().optional().describe("PreToolUse/PostToolUse 등에서 대상 툴 매칭 패턴. null/빈값=전체매칭, 미전송=기존 유지(#970)"),
       timeout_sec: z.number().int().min(1).max(120).optional().describe("실행 타임아웃 초(1~120, 기본 10)"),
       target_members: z.array(z.string()).nullable().optional().describe("이 훅을 받을 멤버 id 배열. null/빈=전원, 미전송=기존 유지(#699)"),
       label: z.string().optional().describe("훅 라벨(표시명)"),
