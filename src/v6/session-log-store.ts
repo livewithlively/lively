@@ -32,19 +32,26 @@ export interface AppendResult {
   bytes: number;        // 이 (node,session) 로그의 현재 총 바이트 = 다음에 보내야 할 offset(보낸 쪽 워터마크 정정용).
 }
 
-// 불멸 세션 레코드 보장(있으면 last_seen 만 갱신). append 가 자동 호출하므로 별도 호출은 선택.
-export async function ensureSession(nodeId: string, sessionId: string, harness?: string | null): Promise<void> {
+// 불멸 세션 레코드 보장(있으면 last_seen 만 갱신). owner 는 **최초 1회만** 굳는다(COALESCE — 이후 안 바뀜).
+export async function ensureSession(nodeId: string, sessionId: string, harness?: string | null, owner?: string | null): Promise<void> {
   await itemsPool.query(
-    `INSERT INTO session(node_id, session_id, harness) VALUES($1,$2,$3)
+    `INSERT INTO session(node_id, session_id, harness, owner) VALUES($1,$2,$3,$4)
      ON CONFLICT (node_id, session_id) DO UPDATE SET last_seen=now(),
-       harness=COALESCE(session.harness, EXCLUDED.harness)`,
-    [nodeId, sessionId, harness ?? null],
+       harness=COALESCE(session.harness, EXCLUDED.harness),
+       owner=COALESCE(session.owner, EXCLUDED.owner)`,
+    [nodeId, sessionId, harness ?? null, owner ?? null],
   );
+}
+
+// 로그 소유자(첫 append 한 멤버) 조회 — 없으면 null(아직 아무도 안 씀). 엔드포인트가 owner-gate 에 쓴다.
+export async function sessionOwner(nodeId: string, sessionId: string): Promise<string | null> {
+  const r = await itemsPool.query(`SELECT owner FROM session WHERE node_id=$1 AND session_id=$2`, [nodeId, sessionId]);
+  return (r.rows[0]?.owner as string | null) ?? null;
 }
 
 // 델타 append — offset-CAS. 성공/멱등이면 ok=true, gap/overlap 이면 ok=false(+정정용 현재 bytes).
 export async function appendSessionLog(input: {
-  nodeId: string; sessionId: string; atOffset: number; data: Buffer; harness?: string | null;
+  nodeId: string; sessionId: string; atOffset: number; data: Buffer; harness?: string | null; owner?: string | null;
 }): Promise<AppendResult> {
   const { nodeId, sessionId, atOffset, data } = input;
   const len = data.length;
@@ -52,10 +59,11 @@ export async function appendSessionLog(input: {
   try {
     await client.query("BEGIN");
     await client.query(
-      `INSERT INTO session(node_id, session_id, harness) VALUES($1,$2,$3)
+      `INSERT INTO session(node_id, session_id, harness, owner) VALUES($1,$2,$3,$4)
        ON CONFLICT (node_id, session_id) DO UPDATE SET last_seen=now(),
-         harness=COALESCE(session.harness, EXCLUDED.harness)`,
-      [nodeId, sessionId, input.harness ?? null]);
+         harness=COALESCE(session.harness, EXCLUDED.harness),
+         owner=COALESCE(session.owner, EXCLUDED.owner)`,
+      [nodeId, sessionId, input.harness ?? null, input.owner ?? null]);
     await client.query(
       `INSERT INTO session_log(node_id, session_id) VALUES($1,$2) ON CONFLICT DO NOTHING`,
       [nodeId, sessionId]);

@@ -31,7 +31,7 @@ try {
   const { itemsPool } = await import("../dist/items/store.js");
   // C1 테이블만 생성(전체 initV6Schema 는 pgvector 필요 — 여기선 대상 테이블만 격리 검증).
   await itemsPool.query(`
-    CREATE TABLE session(node_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, harness TEXT,
+    CREATE TABLE session(node_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, harness TEXT, owner TEXT,
       first_seen TIMESTAMPTZ NOT NULL DEFAULT now(), last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (node_id, session_id));
     CREATE TABLE session_log(node_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL,
@@ -111,6 +111,18 @@ try {
     assert.equal(mid.data.toString(), "lo world", "from 이 청크 중간이면 그 지점부터 잘라 반환");
     assert.equal(mid.from, 3);
     ok("부분 회수 — from 이 경계 중간이어도 정확히 잘라 반환");
+  }
+
+  // ── 소유자(#905 슬2b) — 첫 append 가 owner 를 굳히고 이후 안 바뀐다(COALESCE). sessionOwner 조회. ──
+  {
+    await S.appendSessionLog({ nodeId: "", sessionId: "own1", atOffset: 0, data: B("hi"), owner: "alice" });
+    assert.equal(await S.sessionOwner("", "own1"), "alice", "첫 append 한 멤버가 소유자");
+    // bob 이 owner=bob 으로 또 append 해도 owner 는 안 바뀐다(COALESCE — 스토어는 소유자만 append 를 강제하지 않는다;
+    //  그 게이트는 라우트가 sessionOwner 로 한다. 스토어는 owner 를 '최초 1회'만 굳히는 것만 보장).
+    await S.appendSessionLog({ nodeId: "", sessionId: "own1", atOffset: 2, data: B("!"), owner: "bob" });
+    assert.equal(await S.sessionOwner("", "own1"), "alice", "owner 는 최초값 유지(이후 append 가 못 덮음)");
+    assert.equal(await S.sessionOwner("", "never"), null, "아무도 안 쓴 세션 → owner null");
+    ok("소유자 — 첫 append 가 굳히고 불변(COALESCE) · 미기록 세션은 null");
   }
 
   await itemsPool.end();

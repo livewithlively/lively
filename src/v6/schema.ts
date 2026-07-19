@@ -457,9 +457,11 @@ export async function initV6Schema(): Promise<string> {
       node_id TEXT NOT NULL DEFAULT '',
       session_id TEXT NOT NULL,
       harness TEXT,
+      owner TEXT,                    -- 첫 append 를 한 멤버 = 이 로그의 소유자(#905 C1 슬2b). 이후 그 사람만 append.
       first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
       last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (node_id, session_id));
+    ALTER TABLE session ADD COLUMN IF NOT EXISTS owner TEXT;  -- 슬라이스1 스키마로 만들어진 기존 테이블 보강
 
     CREATE TABLE IF NOT EXISTS session_log(
       node_id TEXT NOT NULL DEFAULT '',

@@ -27,6 +27,7 @@ import { killAttachedPtys } from "./terminal-pty.js";
 import { setupNodeUpgrade } from "./node/registry.js";
 import { startTaskScheduler } from "./node/task-scheduler.js";
 import { registerProjectV6Routes } from "./project-routes.js";
+import { registerSessionLogRoutes } from "./session-log-routes.js";
 import { getProject as v6GetProject, isProjectMember as v6IsProjectMember, setProjectFolder as v6SetProjectFolder } from "./v6/project-store.js";
 import { listProjectActivities } from "./org/store.js";
 import { createProjectFolder, backfillMarkerSync } from "./project-fs.js";
@@ -229,6 +230,8 @@ registerProjectV6Routes(app, verifier, {
     return folder;
   },
 });
+// 세션이력 회수·수집(#905 C1) — 트랜스크립트 델타 offset-CAS append + watermark. 캡처 훅(kit)이 POST 한다.
+registerSessionLogRoutes(app, verifier);
 
 const server = app.listen(PORT, () => {
   logger.info(`context-ontology listening on :${PORT}/mcp`);
