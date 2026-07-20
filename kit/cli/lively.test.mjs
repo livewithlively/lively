@@ -25,7 +25,7 @@ const { buildKitBundle } = await import(join(KIT, "generator", "build-context.mj
 const { CLI_SHIM, CLI_SHIM_CMD } = await import(join(KIT, "setup", "user-install.mjs"));
 // 순수함수 — 실행 경로로는 못 태우는 분기라 직접 검증한다: winArg 는 POSIX CI 에서 안 돌고(WIN=false),
 //  loginEscapeToken 은 제어단말(/dev/tty)이 있어야 밟히는 분기를 담는다(#916).
-const { winArg, loginEscapeToken } = await import(CLI);
+const { winArg, loginEscapeToken, shouldOfferOnboarding } = await import(CLI);
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -507,6 +507,35 @@ try {
     const r2 = await pExecFile(process.execPath, [CLI, "onboarding", "메모리만", "정리", "--print"]);
     check("⑳ onboarding — 초기 프롬프트 override", r2.stderr.includes('claude "메모리만 정리"'), JSON.stringify(r2.stderr));
   }
+  // ㉑ shouldOfferOnboarding — 설치 후 온보딩 제안 정책(#1024). 순수함수: 대화형 단말 AND claude 설치일 때만 제안.
+  //   ⚠ 안전 핵심: 비대화형(CI·프로비저닝·파이프)이면 hasClaude 와 무관하게 절대 제안 안 함(기본값 '예'로 멋대로 실행 금지).
+  {
+    // 진리표 4행 (isInteractive, hasClaude) → 제안?
+    check("㉑ 대화형 + claude 설치 → 제안함(true)",
+      shouldOfferOnboarding({ isInteractive: true, hasClaude: true }) === true, "T·T 는 true 여야 함");
+    check("㉑ 대화형 + claude 미설치 → 제안 안 함(false)",
+      shouldOfferOnboarding({ isInteractive: true, hasClaude: false }) === false, "T·F 는 false 여야 함");
+    check("㉑ 비대화형 + claude 설치 → 제안 안 함(false)",
+      shouldOfferOnboarding({ isInteractive: false, hasClaude: true }) === false, "F·T 는 false 여야 함");
+    check("㉑ 비대화형 + claude 미설치 → 제안 안 함(false)",
+      shouldOfferOnboarding({ isInteractive: false, hasClaude: false }) === false, "F·F 는 false 여야 함");
+    // 안전 정책: isInteractive=false 이면 hasClaude 값과 무관하게 항상 false (자동 프로비저닝 보호)
+    check("㉑ 안전 — 비대화형이면 hasClaude 무관하게 항상 제안 안 함",
+      shouldOfferOnboarding({ isInteractive: false, hasClaude: true }) === false
+        && shouldOfferOnboarding({ isInteractive: false, hasClaude: false }) === false,
+      "비대화형에서 제안이 새어나옴");
+    // 견고성: 비불리언 truthy/falsy 도 진리표와 일치 + 항상 순수 불리언 반환
+    const truthyBoth = shouldOfferOnboarding({ isInteractive: 1, hasClaude: "yes" });
+    check("㉑ 견고성 — truthy 입력(1·비어있지않은문자열)은 T·T 로 해석 → true(순수 불리언)",
+      truthyBoth === true, `got=${JSON.stringify(truthyBoth)}`);
+    const falsyInteractive = shouldOfferOnboarding({ isInteractive: undefined, hasClaude: true });
+    check("㉑ 견고성 — falsy isInteractive(undefined)는 비대화형으로 해석 → false(순수 불리언)",
+      falsyInteractive === false, `got=${JSON.stringify(falsyInteractive)}`);
+    const falsyClaude = shouldOfferOnboarding({ isInteractive: true, hasClaude: "" });
+    check("㉑ 견고성 — falsy hasClaude(빈 문자열)는 미설치로 해석 → false(순수 불리언)",
+      falsyClaude === false, `got=${JSON.stringify(falsyClaude)}`);
+  }
+
 } finally {
   server.close();
   cleanup();
