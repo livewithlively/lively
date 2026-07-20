@@ -22,31 +22,29 @@ set -euo pipefail
 #   채널: CLAUDE_INSTALL_CHANNEL(기본 latest — 맥미니와 동일 최신 추종). stable/버전 지정 가능.
 # ─────────────────────────────────────────────────────────────────────────────
 U="${1:-}"; [ -n "$U" ] || { echo "사용: sudo bash $0 <osuser>"; exit 0; }
-id "$U" >/dev/null 2>&1 || { echo "  ⚠ 유저 없음: $U — 네이티브 claude 스킵"; exit 0; }
+# ⚠ 로그 규약(상민님 피드백): **멱등 스킵 경로는 조용히**(무출력) — 매 update.sh 마다 전 멤버가
+#  '이미 설치됨'을 찍으면 노이즈다. 실제 '설치 액션'과 '실패'만 한 줄씩 낸다.
+id "$U" >/dev/null 2>&1 || exit 0                                    # 유저 없음(그룹 잔재 등) → 조용히 스킵
 H="$(getent passwd "$U" | cut -d: -f6 || true)"
-[ -n "$H" ] && [ -d "$H" ] || { echo "  ⚠ 홈 없음: $U — 네이티브 claude 스킵"; exit 0; }
+[ -n "$H" ] && [ -d "$H" ] || exit 0                                 # 홈 없음 → 조용히 스킵
 
-# 이미 네이티브 설치돼 있으면(멤버 소유 self-update 바이너리) 재설치 불필요 — updater 가 최신화.
+# 이미 네이티브 설치돼 있으면(멤버 소유 self-update 바이너리) 재설치 불필요 — updater 가 최신화 → 조용히 스킵.
 #  (root 는 700 홈 DAC 를 우회하므로 직접 확인 가능. 설치 '쓰기'만 멤버 uid(runuser)로 한다.)
-if [ -x "$H/.local/bin/claude" ]; then
-  echo "  ✓ $U — 네이티브 claude 이미 설치됨(self-update) — 스킵"; exit 0
-fi
+[ -x "$H/.local/bin/claude" ] && exit 0
 
-# 에어갭/오프라인이면 스킵(네이티브 설치기는 claude.ai 다운로드 필요).
-if [ "${OFFLINE:-0}" = "1" ]; then
-  echo "  ⚠ OFFLINE — $U 네이티브 claude 설치 스킵(사전설치 가정)"; exit 0
-fi
+# 에어갭/오프라인이면 스킵(네이티브 설치기는 claude.ai 다운로드 필요) → 조용히 스킵.
+[ "${OFFLINE:-0}" = "1" ] && exit 0
 
 # 채널 인자: 미설정이면 설치기 기본(latest GA)으로 — 인자 없이 호출(리터럴 'latest' 수용 여부에 무의존).
 #  CLAUDE_INSTALL_CHANNEL 지정 시에만 그 값을 넘긴다(stable / 2.1.x 등).
 CH="${CLAUDE_INSTALL_CHANNEL:-}"
-echo "  … $U — Claude Code 네이티브 설치(채널=${CH:-기본(latest)}, 홈=$H)"
+# 여기부터는 '실제 설치 액션' — 이 경우에만 로그를 낸다(성공/실패 각 한 줄).
 # 멤버 uid·비대화형. pipefail 로 curl 실패를 포착하고, 설치 후 실제 바이너리 존재로 성공 확정.
 if runuser -u "$U" -- env HOME="$H" CH="$CH" bash -c \
      'set -o pipefail; if [ -n "$CH" ]; then curl -fsSL --max-time 120 https://claude.ai/install.sh | bash -s -- "$CH"; else curl -fsSL --max-time 120 https://claude.ai/install.sh | bash; fi' >/dev/null 2>&1 \
    && [ -x "$H/.local/bin/claude" ]; then
-  echo "  ✓ $U — 네이티브 claude 설치 완료(~/.local/bin/claude · 이후 자동 업뎃)"
+  echo "  ✓ $U — 네이티브 claude 설치(~/.local/bin/claude · 이후 자동 업뎃)"
 else
-  echo "  ⚠ $U — 네이티브 claude 설치 실패(네트워크?) — 폴백=시스템 claude, 다음 프로비저닝/업뎃에 재시도"
+  echo "  ⚠ $U — 네이티브 claude 설치 실패(네트워크?) — 폴백=시스템 claude, 다음 업뎃에 재시도"
 fi
 exit 0
