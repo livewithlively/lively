@@ -13,7 +13,7 @@ import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { getRuntimeConfig } from "./org/store.js";
-import { appendSessionLog, sessionLogWatermark, sessionOwner, readSessionLog, listSessionsForOwner, listSessionsForProject } from "./v6/session-log-store.js";
+import { appendSessionLog, sessionLogWatermark, sessionOwner, sessionParent, readSessionLog, listSessionsForOwner, listSessionsForProject, listSubagentsForSession } from "./v6/session-log-store.js";
 import { sessionBoundToMemberProject, isProjectMember, recordSessionProject, latestProjectForSession } from "./v6/project-store.js";
 import { renderTranscript, firstTranscriptCwd, materializeTranscriptIfMissing } from "./terminal-transcript.js";
 import { createSession, SHARED_ROOT } from "./terminal-sessions.js";
@@ -64,7 +64,10 @@ export function readRawBody(req: express.Request, limit: number): Promise<Buffer
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []; let n = 0; let done = false;
     const fin = (fn: () => void) => { if (!done) { done = true; fn(); } };
-    if (req.readableEnded || (req as unknown as { complete?: boolean }).complete) { resolve(Buffer.concat(chunks)); return; }
+    // ⚠ readableEnded 일 때만 즉시 종료(=스트림이 실제로 소진됨, 예: 전역 json 파서가 이미 읽음). complete 는 쓰지 않는다:
+    //   작은 본문은 auth(비동기 토큰조회) 사이에 전부 버퍼되어 complete=true 가 되지만 **아직 안 읽힌** 상태 —
+    //   그걸 소진으로 오인해 조기 종료하면 본문을 통째로 잃는다(작은 델타·서브에이전트 캡처 유실. #905 C1 실버그).
+    if (req.readableEnded) { resolve(Buffer.concat(chunks)); return; }
     req.on("data", (c: Buffer) => {
       if (done) return;
       n += c.length;
@@ -121,7 +124,9 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     if (denied) throw new HttpError(denied.status, denied.message);
 
     const data = await readRawBody(req, MAX_DELTA);
-    const r = await appendSessionLog({ nodeId, sessionId, atOffset, data, harness, owner: requester, store: cfg.store });
+    // 서브에이전트 트리(#905 C1 슬⑥) — parent=부모(주) 세션 id. 최상위 목록엔 안 나오고 부모 대화록 아래에 붙는다.
+    const parentSessionId = req.query.parent !== undefined && SID_RE.test(String(req.query.parent)) ? String(req.query.parent) : null;
+    const r = await appendSessionLog({ nodeId, sessionId, atOffset, data, harness, owner: requester, store: cfg.store, parentSessionId });
     // 프로젝트 귀속(#905 C1 슬⑤b) — 클라(훅·백필)가 **`.lively/project.json` 마커에서 읽어** 선언한 project 로 매핑한다
     //  (경로 휴리스틱 아님 — 구조화된 값이 정본). claude uuid 세션을 프로젝트 탭 '세션 기록'에 잇는 다리
     //  (recordSessionProject 의 tmux-id 매핑은 session_log 의 claude-uuid 와 안 붙으므로 이 경로가 필요).
@@ -180,13 +185,33 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     const log = await readSessionLog(nodeId, sessionId, from);
     res.setHeader("Cache-Control", "no-store");
     if (req.query.view === "render") {   // 웹뷰: 사람이 읽을 항목으로 파싱(채널필터) — 툴결과·노이즈 제거.
-      res.json({ from: log.from, bytes: log.bytes, items: renderTranscript(log.data.toString("utf8")) });
+      // 서브에이전트 트랜스크립트(#905 C1 슬⑥)는 전 줄이 isSidechain 이라, 서브에이전트일 때만 sidechain 포함해 렌더.
+      const includeSidechain = !!(await sessionParent(nodeId, sessionId));
+      res.json({ from: log.from, bytes: log.bytes, items: renderTranscript(log.data.toString("utf8"), 5000, { includeSidechain }) });
       return;
     }
     res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
     res.setHeader("X-Log-Bytes", String(log.bytes));   // 전체 워터마크 — UI 가 증분 tail 에 쓴다
     res.setHeader("X-Log-From", String(log.from));
     res.end(log.data);
+  }));
+
+  // 서브에이전트 목록(#905 C1 슬⑥) — 이 (부모)세션이 스폰한 서브에이전트들(대화록 아래 트리). 열람 게이트는 log 회수와 동일.
+  app.get("/api/ui/v6/sessions/:id/subagents", auth, wrap(async (req, res) => {
+    const requester = idOf(userOf(req));
+    if (!requester) throw new HttpError(403, "사용자 신원이 없습니다");
+    const sessionId = String(req.params.id ?? "");
+    if (!SID_RE.test(sessionId)) throw new HttpError(400, "세션 id 형식 오류");
+    const nodeId = String(req.query.node ?? "");
+    if (!NODE_RE.test(nodeId)) throw new HttpError(400, "node 형식 오류");
+    const cfg = (await getRuntimeConfig()).session_share;
+    const owner = await sessionOwner(nodeId, sessionId);
+    const isOwner = !!owner && owner === requester;
+    const isMember = !isOwner && cfg.view_policy === "attach" ? await sessionBoundToMemberProject(sessionId, requester) : false;
+    const denied = checkViewGate({ requester, owner, viewPolicy: cfg.view_policy, isProjectMember: isMember });
+    if (denied) throw new HttpError(denied.status, denied.message);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ subagents: await listSubagentsForSession(nodeId, sessionId) });
   }));
 
   // 이어 질문하기(#905 C1) — 이 세션을 **원본 박스에서** claude --resume 로 잇는 새 터미널 세션을 만든다.

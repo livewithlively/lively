@@ -31,7 +31,7 @@ try {
   const { itemsPool } = await import("../dist/items/store.js");
   // C1 테이블만 생성(전체 initV6Schema 는 pgvector 필요 — 여기선 대상 테이블만 격리 검증).
   await itemsPool.query(`
-    CREATE TABLE session(node_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, harness TEXT, owner TEXT, title TEXT,
+    CREATE TABLE session(node_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, harness TEXT, owner TEXT, title TEXT, parent_session_id TEXT,
       first_seen TIMESTAMPTZ NOT NULL DEFAULT now(), last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (node_id, session_id));
     CREATE TABLE session_log(node_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL,

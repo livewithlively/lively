@@ -225,6 +225,31 @@ async function renderTranscriptPage(view, sel) {
     convo.replaceChildren(...turns.map((t, i) => turnEl(t, i, sid, node)));
     requestAnimationFrame(() => { finalizeCaps(convo); if (sel.q || sel.ln)
         setTimeout(() => gotoAnchor(sel), 60); });
+    // 서브에이전트 트리(#905 C1 슬⑥) — 이 세션이 스폰한 서브에이전트들. 접힌 목록, 클릭 시 각자 대화록으로.
+    api(`/api/ui/v6/sessions/${encodeURIComponent(sid)}/subagents${node ? '?node=' + encodeURIComponent(node) : ''}`)
+        .then((d) => { const subs = Array.isArray(d?.subagents) ? d.subagents : []; if (subs.length)
+        convo.append(subagentsSection(subs)); })
+        .catch(() => { });
+}
+// 서브에이전트 트리 섹션 — 기본 접힘 '🌿 서브에이전트 N개', 펼치면 각 서브에이전트(제목·크기) 링크(자기 대화록으로).
+function subagentsSection(subs) {
+    const list = el('div', { style: 'display:none;margin:4px 0 4px 8px;border-left:2px solid rgba(22,163,74,.3);padding-left:10px' }, ...subs.map((s) => {
+        const link = '#/sessions/' + encodeURIComponent(s.session_id) + (s.node_id ? '?node=' + encodeURIComponent(s.node_id) : '');
+        const title = s.title || shortId(s.session_id);
+        const a = el('a', { href: link, style: 'display:block;padding:4px 0;text-decoration:none;color:inherit;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, el('span', { text: '🌿 ' + title }), el('span', { class: 'admin-hint', style: 'font-size:11px;margin-left:6px', text: fmtBytes(s.bytes) }));
+        a.addEventListener('click', () => { try {
+            sessionStorage.setItem('sessReturn', location.hash || '#/sessions');
+        }
+        catch { /* */ } });
+        return a;
+    }));
+    const btn = el('button', { class: 'btn btn-ghost btn-sm', style: 'margin:8px 0 2px;font-size:12px', text: `🌿 서브에이전트 ${subs.length}개 ▸` });
+    btn.addEventListener('click', () => {
+        const open = list.style.display === 'none';
+        list.style.display = open ? 'block' : 'none';
+        btn.textContent = `🌿 서브에이전트 ${subs.length}개 ${open ? '▾' : '▸'}`;
+    });
+    return el('div', { style: 'margin-top:10px;border-top:1px solid rgba(127,127,127,.15);padding-top:6px' }, btn, list);
 }
 // 사람 발화마다 새 턴 시작, 뒤따르는 AI/툴은 그 턴에 붙인다(첫 사람 발화 이전 AI 는 user=null 턴).
 function groupTurns(items) {

@@ -574,6 +574,10 @@ export async function initV6Schema(): Promise<string> {
     --  ⚠ 워터마크·오프셋 회계는 항상 raw_len(원본) 기준. 구청크(raw_len NULL)는 octet_length(data)=원본(비압축)으로 취급.
     ALTER TABLE session_log_chunk ADD COLUMN IF NOT EXISTS raw_len BIGINT;
     ALTER TABLE session_log_chunk ADD COLUMN IF NOT EXISTS codec TEXT;
+    -- 서브에이전트 트리 캡처(#905 C1 슬⑥): 서브에이전트 세션은 parent_session_id=부모(주) 세션 id. 최상위(주) 세션은 NULL.
+    --  목록(내 세션·프로젝트)엔 최상위만, 서브에이전트는 부모 대화록 아래에서만 보인다.
+    ALTER TABLE session ADD COLUMN IF NOT EXISTS parent_session_id TEXT;
+    CREATE INDEX IF NOT EXISTS session_parent_idx ON session(parent_session_id) WHERE parent_session_id IS NOT NULL;
   `);
 
   // ── 6a-2) project_folder_binding — 한 프로젝트가 **어느 멤버의 어느 환경에서 어느 절대경로에 사는가**(N:M, #905 P1-①). ──

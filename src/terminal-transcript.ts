@@ -98,14 +98,15 @@ function toolSummary(input: unknown): string {
   return s.length > 140 ? s.slice(0, 140) + "…" : s;
 }
 
-export function renderTranscript(jsonl: string, limit = 5000): TranscriptItem[] {
+// opts.includeSidechain — 서브에이전트 트랜스크립트(#905 C1 슬⑥)는 모든 줄이 isSidechain 이라, 그 파일을 렌더할 땐 포함해야 한다.
+export function renderTranscript(jsonl: string, limit = 5000, opts?: { includeSidechain?: boolean }): TranscriptItem[] {
   const out: TranscriptItem[] = [];
   let pendingUserIdx = -1;   // 진행 중 턴의 사람 발화 위치(out 내). 중단(esc)되면 여기부터 끝까지 폐기.
   for (const line of jsonl.split("\n")) {
     if (!line.trim()) continue;
     let o: any;
     try { o = JSON.parse(line); } catch { continue; }
-    if (!o || o.isMeta || o.isSidechain) continue;
+    if (!o || o.isMeta || (o.isSidechain && !opts?.includeSidechain)) continue;
     const ts: string = o.timestamp || "";
     if (o.type === "user") {
       const c = o.message && o.message.content;

@@ -80,26 +80,41 @@ const MAX_DELTA = 8 * 1024 * 1024;  // 한 번에 올릴 상한(엔드포인트 
   if (!cap || cap.enabled !== true) return;                          // 조직이 안 켬 → 캡처 안 함
   if (Array.isArray(cap.harnesses) && !cap.harnesses.includes(harness)) return;   // 정책 밖 하네스
 
-  // 4) 서버 워터마크(bytes)부터 트랜스크립트 델타를 읽는다. 새 바이트 없으면 종료.
-  let from = Number(head.bytes) || 0;
-  let st;
-  try { st = await fsp.stat(transcriptPath); } catch { return; }     // 파일 없음(격리 등) → 조용히 종료
-  if (!st.isFile() || st.size <= from) return;                       // 늘어난 게 없음
+  // 4) 델타 업로드(한 파일) — from(서버 워터마크)부터 [from, end) 한 조각. gap/충돌은 서버 판정, 다음 턴 정정.
+  const uploadDelta = async (sid, filePath, from, extra) => {
+    let st; try { st = await fsp.stat(filePath); } catch { return; }
+    if (!st.isFile() || st.size <= from) return;                     // 늘어난 게 없음
+    const end = Math.min(st.size, from + MAX_DELTA);
+    let buf;
+    try {
+      const fh = await fsp.open(filePath, "r");
+      try { const want = end - from; const b = Buffer.alloc(want); const { bytesRead } = await fh.read(b, 0, want, from); buf = b.subarray(0, bytesRead); }
+      finally { await fh.close(); }
+    } catch { return; }
+    if (!buf || !buf.length) return;
+    try {
+      await jfetch(`/api/ui/v6/sessions/${encodeURIComponent(sid)}/log?${q({ at: String(from), node: nodeId, harness, ...(projectId ? { project: String(projectId) } : {}), ...(extra || {}) })}`, {
+        method: "POST", headers: { "content-type": "application/octet-stream" }, body: buf,
+      });
+    } catch { /* 전송 실패 → 다음 턴 재시도(영구 누락 없음: 서버 워터마크 기준) */ }
+  };
 
-  // 5) 델타 전송(원자 append). 상한 안에서 [from, end) 를 한 조각으로. gap/충돌은 서버가 판정, 다음 턴이 정정.
-  const end = Math.min(st.size, from + MAX_DELTA);
-  let buf;
-  try {
-    const fh = await fsp.open(transcriptPath, "r");
-    try { const want = end - from; const b = Buffer.alloc(want); const { bytesRead } = await fh.read(b, 0, want, from); buf = b.subarray(0, bytesRead); }
-    finally { await fh.close(); }
-  } catch { return; }
-  if (!buf || !buf.length) return;
-  if (Date.now() - startedAt > BUDGET_MS) return;                    // 예산 초과 — 다음 턴에(서버 워터마크가 이어준다)
-  try {
-    await jfetch(`/api/ui/v6/sessions/${encodeURIComponent(sessionId)}/log?${q({ at: String(from), node: nodeId, harness, ...(projectId ? { project: String(projectId) } : {}) })}`, {
-      method: "POST", headers: { "content-type": "application/octet-stream" }, body: buf,
-    });
-    // 응답을 굳이 안 본다 — ok/duplicate/gap 무엇이든 다음 턴에 GET watermark 로 서버 진실을 다시 받아 이어간다.
-  } catch { /* 전송 실패 → 다음 턴 재시도(영구 누락 없음: 서버 워터마크 기준) */ }
+  // 5) 주 트랜스크립트 먼저(head 로 워터마크 이미 받음).
+  await uploadDelta(sessionId, transcriptPath, Number(head.bytes) || 0, {});
+
+  // 6) scope=tree 면 서브에이전트(<주sid>/subagents/agent-*.jsonl)도 각각 올린다(#905 C1 슬⑥). parent 로 부모에 매단다.
+  //    예산 안에서만 — 초과분은 다음 턴(각자 서버 워터마크가 이어준다). 주 트랜스크립트가 항상 우선.
+  if (cap.scope === "tree" && Date.now() - startedAt <= BUDGET_MS) {
+    const subDir = path.join(path.dirname(transcriptPath), sessionId, "subagents");
+    let files = [];
+    try { files = (await fsp.readdir(subDir)).filter((f) => /^[A-Za-z0-9._-]{1,64}\.jsonl$/.test(f)); } catch { /* 서브에이전트 없음 */ }
+    for (const f of files) {
+      if (Date.now() - startedAt > BUDGET_MS) break;
+      const agentSid = f.slice(0, -6);   // '.jsonl' 제거 = 서브에이전트 세션 id(agent-<hex>)
+      let subFrom = 0;
+      try { const r = await jfetch(`/api/ui/v6/sessions/${encodeURIComponent(agentSid)}/log/watermark?${q({ node: nodeId })}`); if (!r.ok) continue; subFrom = Number((await r.json()).bytes) || 0; }
+      catch { continue; }
+      await uploadDelta(agentSid, path.join(subDir, f), subFrom, { parent: sessionId });
+    }
+  }
 })().then(() => process.exit(0)).catch(() => process.exit(0));

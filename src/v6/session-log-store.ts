@@ -52,6 +52,12 @@ export async function sessionOwner(nodeId: string, sessionId: string): Promise<s
   return (r.rows[0]?.owner as string | null) ?? null;
 }
 
+// 부모 세션 id — 서브에이전트면 부모(주) 세션 id, 최상위면 null(#905 C1 슬⑥). 렌더 시 sidechain 포함 여부 판정에 쓴다.
+export async function sessionParent(nodeId: string, sessionId: string): Promise<string | null> {
+  const r = await itemsPool.query(`SELECT parent_session_id FROM session WHERE node_id=$1 AND session_id=$2`, [nodeId, sessionId]);
+  return (r.rows[0]?.parent_session_id as string | null) ?? null;
+}
+
 // 제목 유도(#905 C1 슬⑤b) — 트랜스크립트 JSONL 에서 **첫 사람 발화**를 뽑아 세션 제목으로(uuid 대신 읽을 수 있게).
 //  주입/툴결과/메타 라인은 건너뛴다. 첫 append(offset 0)에서만 계산해 COALESCE 로 굳힌다(한 번 정해지면 불변).
 const TITLE_INJECTED = /^\s*(<command-name|<local-command-|<command-message|<command-args|<bash-|<task-notification|<system-reminder|\[Request interrupted|Caveat:|This session is being continued)/;
@@ -74,7 +80,7 @@ export function firstUserPromptTitle(jsonl: string): string | null {
 
 // 델타 append — offset-CAS. 성공/멱등이면 ok=true, gap/overlap 이면 ok=false(+정정용 현재 bytes).
 export async function appendSessionLog(input: {
-  nodeId: string; sessionId: string; atOffset: number; data: Buffer; harness?: string | null; owner?: string | null; store?: "slim" | "raw";
+  nodeId: string; sessionId: string; atOffset: number; data: Buffer; harness?: string | null; owner?: string | null; store?: "slim" | "raw"; parentSessionId?: string | null;
 }): Promise<AppendResult> {
   const { nodeId, sessionId, atOffset, data } = input;
   const len = data.length;
@@ -86,12 +92,13 @@ export async function appendSessionLog(input: {
     //  제목은 첫 append(offset 0)의 첫 사람 발화에서 유도해 COALESCE 로 굳힌다(uuid 대신 읽을 수 있는 제목, 한 번만).
     const titleCand = atOffset === 0 && len > 0 ? firstUserPromptTitle(data.toString("utf8")) : null;
     await client.query(
-      `INSERT INTO session(node_id, session_id, harness, owner, title) VALUES($1,$2,$3,$4,$5)
+      `INSERT INTO session(node_id, session_id, harness, owner, title, parent_session_id) VALUES($1,$2,$3,$4,$5,$6)
        ON CONFLICT (node_id, session_id) DO UPDATE SET last_seen=now(),
          harness=COALESCE(session.harness, EXCLUDED.harness),
          owner=COALESCE(session.owner, EXCLUDED.owner),
-         title=COALESCE(session.title, EXCLUDED.title)`,
-      [nodeId, sessionId, input.harness ?? null, input.owner ?? null, titleCand]);
+         title=COALESCE(session.title, EXCLUDED.title),
+         parent_session_id=COALESCE(session.parent_session_id, EXCLUDED.parent_session_id)`,
+      [nodeId, sessionId, input.harness ?? null, input.owner ?? null, titleCand, input.parentSessionId ?? null]);
     await client.query(
       `INSERT INTO session_log(node_id, session_id) VALUES($1,$2) ON CONFLICT DO NOTHING`,
       [nodeId, sessionId]);
@@ -184,7 +191,7 @@ export async function listSessionsForOwner(owner: string, limit = 200): Promise<
        FROM session s
        JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id
        LEFT JOIN org_member m ON m.id = s.owner
-      WHERE s.owner = $1 AND l.bytes > 0
+      WHERE s.owner = $1 AND l.bytes > 0 AND s.parent_session_id IS NULL
       ORDER BY s.last_seen DESC
       LIMIT $2`,
     [owner, Math.min(Math.max(Number(limit) || 200, 1), 500)]);
@@ -202,10 +209,26 @@ export async function listSessionsForProject(projectId: number, limit = 200): Pr
          JOIN session_project sp ON sp.session_id = s.session_id AND sp.project_id = $1
          JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id
          LEFT JOIN org_member m ON m.id = s.owner
-        WHERE l.bytes > 0
+        WHERE l.bytes > 0 AND s.parent_session_id IS NULL
         ORDER BY s.node_id, s.session_id
      ) t ORDER BY t.last_seen DESC LIMIT $2`,
     [projectId, Math.min(Math.max(Number(limit) || 200, 1), 500)]);
+  return r.rows.map(mapSessionRow);
+}
+
+// 서브에이전트 목록(#905 C1 슬⑥) — 이 (부모)세션이 스폰한 서브에이전트 세션들. 대화록 아래 트리로 보여준다.
+//  최상위 목록엔 안 나오고(부모의 parent_session_id IS NULL) 여기서만. 내용 있는(bytes>0) 것만, 시간순(오래된→최신).
+export async function listSubagentsForSession(nodeId: string, parentSessionId: string, limit = 200): Promise<SessionListRow[]> {
+  if (!parentSessionId) return [];
+  const r = await itemsPool.query(
+    `SELECT ${SESSION_LIST_COLS}
+       FROM session s
+       JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id
+       LEFT JOIN org_member m ON m.id = s.owner
+      WHERE s.node_id = $1 AND s.parent_session_id = $2 AND l.bytes > 0
+      ORDER BY s.first_seen ASC
+      LIMIT $3`,
+    [nodeId, parentSessionId, Math.min(Math.max(Number(limit) || 200, 1), 500)]);
   return r.rows.map(mapSessionRow);
 }
 

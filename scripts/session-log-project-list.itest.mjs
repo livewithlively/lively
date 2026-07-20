@@ -39,7 +39,7 @@ try {
   const { itemsPool } = await import("../dist/items/store.js");
   // 대상 함수들이 만지는 테이블만 격리 생성(전체 initV6Schema 는 pgvector 필요).
   await itemsPool.query(`
-    CREATE TABLE session(node_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, harness TEXT, owner TEXT, title TEXT,
+    CREATE TABLE session(node_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL, harness TEXT, owner TEXT, title TEXT, parent_session_id TEXT,
       first_seen TIMESTAMPTZ NOT NULL DEFAULT now(), last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (node_id, session_id));
     CREATE TABLE session_log(node_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL,
@@ -53,7 +53,7 @@ try {
       PRIMARY KEY (session_id, valid_from));
     CREATE TABLE org_member(id TEXT PRIMARY KEY, display_name TEXT);
   `);
-  const { appendSessionLog, listSessionsForProject } = await import("../dist/v6/session-log-store.js");
+  const { appendSessionLog, listSessionsForProject, listSubagentsForSession } = await import("../dist/v6/session-log-store.js");
   const { recordSessionProject } = await import("../dist/v6/project-store.js");
 
   await itemsPool.query(`INSERT INTO org_member(id, display_name) VALUES ('alice','Alice'),('bob','Bob')`);
@@ -146,6 +146,19 @@ try {
     const list = await listSessionsForProject(P1);
     assert.ok(!list.some((r) => r.session_id === "cu-empty"), "0바이트 세션은 목록에 안 나온다");
     ok("⑦ 내용 없는(0바이트) 세션은 매핑돼도 목록에서 제외");
+  }
+
+  // ── ⑧ 서브에이전트(#905 슬⑥): parent 있는 세션은 최상위 프로젝트 목록에서 제외 + listSubagentsForSession 으로만 조회 ──
+  {
+    await upload("cu-parent", "부모 세션", "alice"); await recordSessionProject("cu-parent", P1);
+    await appendSessionLog({ nodeId: "", sessionId: "cu-sub1", atOffset: 0, data: transcript("서브 작업"), owner: "alice", parentSessionId: "cu-parent" });
+    await recordSessionProject("cu-sub1", P1);   // 서브에이전트도 같은 프로젝트로 매핑됨(마커 동일)
+    const list = await listSessionsForProject(P1);
+    assert.ok(list.some((r) => r.session_id === "cu-parent"), "부모는 프로젝트 목록에 나온다");
+    assert.ok(!list.some((r) => r.session_id === "cu-sub1"), "🔑 서브에이전트(parent 있음)는 최상위 목록에서 제외");
+    const subs = await listSubagentsForSession("", "cu-parent");
+    assert.deepEqual(subs.map((r) => r.session_id), ["cu-sub1"], "listSubagentsForSession 은 그 부모의 서브에이전트만");
+    ok("⑧ 서브에이전트 — 최상위 목록 제외 + listSubagentsForSession 으로 부모 아래 조회");
   }
 
   await itemsPool.end();

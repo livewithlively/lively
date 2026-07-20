@@ -148,4 +148,16 @@ const J = (o: unknown) => JSON.stringify(o);
   ok("firstTranscriptCwd — 첫 유효 cwd 회수 · 없으면 null · 깨진 줄 스킵");
 }
 
+// ── includeSidechain(#905 슬⑥) — 서브에이전트 트랜스크립트는 전 줄 isSidechain: 기본 스킵, 옵션 주면 렌더 ──
+{
+  const jsonl = [
+    J({ type: "user", isSidechain: true, message: { content: "서브에이전트 작업 지시" } }),
+    J({ type: "assistant", isSidechain: true, message: { content: [{ type: "text", text: "서브 답변" }] } }),
+  ].join("\n");
+  assert.equal(renderTranscript(jsonl).length, 0, "기본은 sidechain 스킵(주 트랜스크립트 규약)");
+  const withSub = renderTranscript(jsonl, 5000, { includeSidechain: true });
+  assert.deepEqual(withSub.map((i) => i.text), ["서브에이전트 작업 지시", "서브 답변"], "includeSidechain → 서브에이전트 내용 렌더");
+  ok("includeSidechain — 서브에이전트(전 줄 sidechain)는 옵션 줄 때만 렌더");
+}
+
 console.log(`\n${pass} passed`);

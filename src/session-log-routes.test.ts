@@ -73,6 +73,8 @@ async function main(): Promise<void> {
   const rawApp = express();
   rawApp.use(express.json({ limit: "1mb" }));
   rawApp.post("/raw", wrap(async (req, res) => { const buf = await readRawBody(req, LIMIT); res.json({ n: buf.length }); }));
+  // 핸들러가 readRawBody 전에 비동기 작업(실제로는 auth 토큰조회)을 하는 경우 — 작은 본문이 그 사이 전부 버퍼된다.
+  rawApp.post("/rawdelay", wrap(async (req, res) => { await new Promise((r) => setTimeout(r, 40)); const buf = await readRawBody(req, LIMIT); res.json({ n: buf.length }); }));
   const raw = await listen(rawApp);
   try {
     // ② 정상 octet-stream → 그대로 수집.
@@ -95,6 +97,13 @@ async function main(): Promise<void> {
       assert.equal(r.status, 413, "🔴 초과는 413(소켓을 죽이면 커넥션 끊김만 보여 여기서 reject 됨)");
       assert.match(r.body, /너무 큽니다|error/, "413 바디가 실제로 전달된다(소켓 생존)");
       ok("④ 상한 초과 → 소켓 생존 + 진짜 413 응답");
+    }
+    // ⑤ 🔴 작은 octet-stream 이 핸들러 지연(auth 비동기) 중 전부 버퍼돼 complete=true 여도 잃지 않는다(#905 실버그 회귀).
+    //    complete 를 '소진'으로 오인해 조기 종료하면 여기서 n=0 이 되어 실패한다(작은 델타·서브에이전트 캡처 유실).
+    {
+      const r = await post(raw.port, "/rawdelay", { body: Buffer.from("small delta"), contentType: "application/octet-stream" }); // 11B
+      assert.equal(JSON.parse(r.body).n, 11, "🔑 지연 뒤에도 버퍼된 본문 전량 수집(complete=true 를 소진으로 오인 안 함)");
+      ok("⑤ 작은 본문이 핸들러 지연 중 complete=true 여도 유실 없이 수집(readRawBody 회귀)");
     }
   } finally { raw.close(); }
 
