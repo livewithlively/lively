@@ -57,6 +57,10 @@ echo "box-spawn → /opt/lively/libexec/box-spawn (root:root 0755)"
 #     웹 관리탭 [OS 격리 유저 만들기] 가 게이트웨이→잠긴 sudo→이 스크립트로 useradd. 코드(PROVISION_BIN)와 경로 일치.
 install -m 0755 -o root -g root "$DIR/../provision-member.sh" /opt/lively/libexec/provision-member
 echo "provision-member → /opt/lively/libexec/provision-member (root:root 0755)"
+# ②-c install-claude-user(멤버 네이티브 claude 설치 헬퍼 #1023) — provision-member 가 새 멤버 홈에
+#     self-update claude(~/.local/bin) 를 깔 때 호출(root 전역 스테일 claude no_permissions 근절).
+install -m 0755 -o root -g root "$DIR/../install-claude-user.sh" /opt/lively/libexec/install-claude-user
+echo "install-claude-user → /opt/lively/libexec/install-claude-user (root:root 0755)"
 
 # ③ 잠긴 sudoers — 템플릿의 'lively' 주체를 실제 게이트웨이 유저로 치환, visudo 검증 후 설치
 TMPS="$(mktemp)"

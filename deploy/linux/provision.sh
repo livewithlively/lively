@@ -31,8 +31,14 @@ os_install_deps() {
   fi
 
   if ! command -v claude >/dev/null 2>&1; then
-    log "Claude Code 설치(중앙박스 세션용 — 이후 사용자가 직접 인증)…"
-    sudo npm i -g @anthropic-ai/claude-code || warn "claude 전역설치 실패 — 나중에 수동 설치(npm i -g @anthropic-ai/claude-code)."
+    # 네이티브 설치(설치 유저 홈 ~/.local/bin — self-update). 과거 `sudo npm i -g` 는 root 전역(/usr/lib)이라
+    #  비-root 세션이 자동 업뎃을 못 해 no_permissions 로 스테일됐다(#1023). 네이티브는 사용자 소유라 스스로 최신화.
+    #  격리 박스는 멤버별로도 각자 네이티브 설치(provision-member/install-claude-user) — 여긴 호스트/비격리(단일유저) 세션용.
+    log "Claude Code 네이티브 설치(사용자 소유 self-update — #1023)…"
+    curl -fsSL --max-time 120 https://claude.ai/install.sh | bash \
+      || warn "claude 네이티브 설치 실패 — 나중에 수동: curl -fsSL https://claude.ai/install.sh | bash"
+    # 이번 실행의 이후 command -v claude 가 찾도록 PATH 보강(네이티브 설치기는 셸 rc 에도 등록).
+    case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH";; esac
   fi
   ok "의존성 준비 완료"
 }

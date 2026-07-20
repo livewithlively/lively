@@ -23,8 +23,13 @@ _home="$(getent passwd "$_u" | cut -d: -f6 || true)"
 export USER="$_u" LOGNAME="$_u" HOME="$_home"
 
 # 툴체인 PATH — 세션이 node/claude/codex/git/tmux 를 찾도록. 게이트웨이 유닛 PATH 를 상속하되(sudo -n 은
-#  기본 env_reset 로 PATH 를 secure_path 로 바꿀 수 있어) 표준 경로 + 멤버 npm-global 을 항상 보강한다.
-export PATH="${PATH:+$PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.npm-global/bin"
+#  기본 env_reset 로 PATH 를 secure_path 로 바꿀 수 있어) 표준 경로 + 멤버 소유 bin 을 항상 보강한다.
+#  ⚠ #1023: 멤버 소유 bin(~/.local/bin — 네이티브 self-update claude, ~/.npm-global/bin — 멤버 npm 전역)을
+#   시스템 경로보다 **앞**에 둔다. 이유: claude 가 root 전역(/usr/bin/claude → /usr/lib)으로 깔린 박스는
+#   비-root 멤버가 못 고쳐 자동 업뎃이 no_permissions 로 스테일된다. 멤버 홈의 self-update claude 를 우선
+#   해소(맥미니처럼 각자 최신화). 멤버가 네이티브 claude 미설치면 이 경로엔 파일이 없어 자연히 시스템
+#   claude 로 폴백(무회귀). ($HOME 는 위에서 passwd 로 결정적으로 되읽음.)
+export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:${PATH:+$PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 # UTF-8 로케일(없으면 tmux/한글 렌더 깨짐 — 게이트웨이 불변식과 동일).
 : "${LANG:=C.UTF-8}"; : "${LC_ALL:=C.UTF-8}"; : "${LC_CTYPE:=C.UTF-8}"

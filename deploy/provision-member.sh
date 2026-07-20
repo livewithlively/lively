@@ -134,5 +134,19 @@ if [ -n "${LIVELY_TOKEN:-}" ]; then
   rm -rf "$KTMP"
 fi
 
-echo "✓ $OSUSER 프로비저닝 완료 (홈 700 · 그룹 · .lively · 스켈레톤 · .claude · box · 키트)"
+# 멤버 claude 자동 업데이트(#1023) — root 전역(sudo npm i -g → /usr/lib) 설치는 비-root 멤버가 못 고쳐
+#  자동 업뎃이 no_permissions 로 실패한다. 멤버 700 홈에 **네이티브** claude(self-update)를 깔아 각자
+#  최신 추종(맥미니와 동일). box-spawn PATH 가 ~/.local/bin 을 시스템보다 우선해 멤버 소유 claude 를 쓴다.
+#  헬퍼(install-claude-user)는 install-isolation.sh 가 libexec 에 설치 — 멱등·OFFLINE 스킵·이미 있으면 스킵·best-effort.
+#  (repo 에서 직접 실행 시엔 sibling, 그 외엔 libexec 본을 쓴다.)
+_SELFDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLAUDE_HELPER="$_SELFDIR/install-claude-user.sh"
+[ -f "$CLAUDE_HELPER" ] || CLAUDE_HELPER="/opt/lively/libexec/install-claude-user"
+if [ -f "$CLAUDE_HELPER" ]; then
+  bash "$CLAUDE_HELPER" "$OSUSER" || true
+else
+  echo "  ⚠ install-claude-user 헬퍼 없음 — 멤버 네이티브 claude 스킵(자동 업뎃 원하면 install-isolation.sh 재실행)"
+fi
+
+echo "✓ $OSUSER 프로비저닝 완료 (홈 700 · 그룹 · .lively · 스켈레톤 · .claude · box · 키트 · 네이티브 claude)"
 echo "  로그인(멤버 1회, 자기 세션에서): claude → /login   (자격증명은 $HOME_DIR/.claude 에 격리)"
