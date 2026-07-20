@@ -233,6 +233,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
       autoApprove: !!b.autoApprove, invites: b.invites, loginProfile: !!b.loginProfile,
       readOnly: !!b.readOnly, // #1007 — 이 세션만 읽기전용(컨텍스트 스토어 쓰기 소거). 노드 세션도 아래 relay 가 input 스프레드로 전파.
       incognito: !!b.incognito, // #1007+ — 이 세션만 인코그니토(lively 전체 차단 + 훅 off). readOnly 보다 우선.
+      private: !!b.private,    // #1015 생성 시 비공개 선택(기본=공개=미설정). 없으면 공개.
     };
     const nodeId = String(b.node ?? "").trim();
     res.setHeader("Cache-Control", "no-store");

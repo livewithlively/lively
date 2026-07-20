@@ -396,12 +396,12 @@ export interface SessionAcl { owner: string; invites: string[]; private: boolean
 export function sessionVisibleTo(me: string | null, s: SessionAcl): boolean {
   if (me === null) return true;                 // 노드 raw 수집(#869) — 가시성은 게이트웨이가 뷰어별로 재판정
   if (s.projectFolder) return true;             // 프로젝트 공동 세션 — 항상 보임(멤버십 게이트는 소비자 측)
-  if (s.owner === me || s.invites.includes(me)) return true;
+  if (me && (s.owner === me || s.invites.includes(me))) return true; // me truthy 가드: 빈 신원이 빈 owner("")와 오매칭 방지
   return !s.private;                            // 남의 개인 세션: 공개면 보이고, 비공개면 숨김
 }
 export function sessionAttachableBy(me: string | null, s: SessionAcl): boolean {
   if (s.projectFolder) return true;             // 프로젝트 세션은 로그인 전원 입장(#452)
-  if (me === null) return false;
+  if (!me) return false;                        // 미식별(null·빈 신원) → 개인 세션 입장 불가
   return s.owner === me || s.invites.includes(me); // 개인 세션: 소유자·초대자만(공개여도 입장 제한)
 }
 
@@ -654,7 +654,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   await tmuxQuiet(["set-option", "-t", id, "mouse", "on"]);
   await tmuxQuiet(["set-window-option", "-t", id, "aggressive-resize", "off"]);
   await tmuxQuiet(["set-window-option", "-t", id, "window-size", "latest"]);
-  return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: Math.floor(Date.now() / 1000), attached: false, invites, flags: appliedFlags };
+  return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: Math.floor(Date.now() / 1000), attached: false, invites, flags: appliedFlags, private: !!input.private, attachable: true }; // #1015 생성 직후 낙관적 UI 가 공개여부·입장가능을 바로 반영
 }
 
 interface OwnerMeta { owner: string; invites: string[]; }
