@@ -4,8 +4,9 @@
 //  fetch 해 임시파일로 실행 후 삭제. 따라서 admin 이 본문을 못 바꾸고(디스크에 없음), enabled=false/제거는
 //  다음 세션부터 즉시 무효(=실효 kill-switch). 이 런너 1개만 settings 에 박히고 커스텀 훅별 엔트리는 없다.
 //
-//  fail-CLOSED + grace: 게이트웨이에 도달 못 하면 '최근 성공 캐시(grace 분 이내)'만 쓴다 — 만료되면 아무것도
-//   실행하지 않는다(회수 불가 코드가 영원히 도는 일 방지). 단, 어떤 경우에도 세션 자체는 막지 않는다(exit 0).
+//  게이트웨이 미도달 시: 최근 성공 캐시로 실행한다. 캐시 유효기간은 hooks-config.json 의 hook_grace_ms(관리탭 노브,
+//   runtime-config 발) — 기본 **무제한**(마지막 접속 기준 영구 실행, #1008). 값이 설정되면 그 ms 경과 후 fail-CLOSED(회수창).
+//   content_hash 무결성은 캐시에도 적용되고 재접속 시 캐시가 교체되므로, 무제한이어도 변조·미회수 위험은 없다. 세션은 어떤 경우에도 안 막는다(exit 0).
 //  비활성화(incognito): LIVELY_OFF=1 — 최상단에서 즉시 종료(커스텀 훅 일절 미실행).
 //  사용: node run-custom.mjs <Event> [--harness codex]   (Event = SessionStart|PostToolUse|… 설치 시 박힘)
 //
@@ -26,7 +27,7 @@ const HARNESS = ((hIdx > -1 ? process.argv[hIdx + 1] : "") || process.env.LIVELY
 
 const HOME = process.env.LIVELY_HOME || homedir();
 const LIVELY = join(HOME, ".lively");
-const GRACE_MS = 10 * 60 * 1000; // 게이트웨이 일시 다운 허용(최근 성공 캐시). 만료 후 fail-CLOSED.
+// 캐시 유효기간(grace)은 상수가 아니라 hooks-config.json 의 hook_grace_ms 에서 매번 읽는다(graceMs()) — 기본 무제한(#1008).
 const FETCH_MS = 3000;
 const REPORT_MS = 1500;   // 훅 실패 보고(fire-and-forget) 상한 — 세션을 절대 기다리게 하지 않는다.
 const REPORT_THROTTLE_MS = 10 * 60 * 1000; // 같은 훅 실패 재보고 최소 간격(툴콜마다 왕복하지 않기 위해).
@@ -124,11 +125,24 @@ async function reportFailures(fails) {
 function saveCache(hooks, relay) {
   try { mkdirSync(LIVELY, { recursive: true }); writeFileSync(cacheFile(), JSON.stringify({ at: Date.now(), hooks, relay }), { mode: 0o600 }); } catch { /* fail-open */ }
 }
+// 캐시 유효기간(ms) — hooks-config.json 의 hook_grace_ms(runtime-config 발, session-preload 가 매 세션 미러)에서 읽는다.
+//  null/미설정/못읽음/잡값 = 무제한(마지막 접속 기준 영구 실행 — #1008 기본). 양수 = 그 ms 경과 후 fail-CLOSED(회수창).
+//  오프라인이면 session-preload 가 파일을 못 갱신해 '마지막 접속 시 값'이 유지된다(그게 곧 last-known-good 정책).
+function graceMs() {
+  try {
+    const c = JSON.parse(readFileSync(join(LIVELY, "hooks-config.json"), "utf8"));
+    const g = c && c.hook_grace_ms;
+    if (g === null || g === undefined) return null;   // 무제한
+    const n = Number(g);
+    return Number.isFinite(n) && n >= 0 ? n : null;   // 잡값 → 무제한(fail-open 쪽)
+  } catch { return null; }                            // 못 읽으면 무제한 — 새 기본 정책과 일치
+}
 function loadCache() {
   try {
     const c = JSON.parse(readFileSync(cacheFile(), "utf8"));
     if (!c || typeof c.at !== "number" || !Array.isArray(c.hooks)) return null;
-    if (Date.now() - c.at > GRACE_MS) return null; // 만료 → fail-CLOSED(실행 안 함)
+    const grace = graceMs();
+    if (grace !== null && Date.now() - c.at > grace) return null; // grace 설정 + 만료 → fail-CLOSED. null(무제한)이면 나이 무관 사용.
     return { hooks: c.hooks, relay: Array.isArray(c.relay) ? c.relay : DEFAULT_RELAY };
   } catch { return null; }
 }

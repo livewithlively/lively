@@ -5,7 +5,7 @@
 // - registry: 파리티 스크립트의 직접 핸들러 호출 fallback 용 export.
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveUser, requireScope, type LivelyUser } from "../context.js";
-import { agentFromExtra, sessionFromExtra } from "../org/agent-identity.js";
+import { agentFromExtra, sessionFromExtra, readOnlyFromExtra } from "../org/agent-identity.js";
 import { contextCapabilities } from "./context.js";
 import { deliveryCapabilities } from "./delivery.js";
 import { domainmapCurationCapabilities } from "./domainmap-curation.js";
@@ -56,7 +56,7 @@ const me: Capability = {
   scope: null,
   input: {},
   expose: { mcp: false, rest: [{ method: "GET", paths: ["/api/ui/me"], parse: () => ({}) }] },
-  handler: async (_input, user) => {
+  handler: async (_input, user, ctx) => {
     const u = (user ?? {}) as Partial<LivelyUser>;
     const memberId = u.userId ?? "";
     // 소속 팀 + '우리 팀' 카테고리 id(소유 ∪ 이해관계) — 프론트 사이드바 '우리 팀' 우선노출의 단일 소스.
@@ -76,6 +76,9 @@ const me: Capability = {
 
       teams: teams.map((t) => ({ id: t.id, key: t.key, name: t.name })),
       team_category_ids: cats.all, team_owner_category_ids: cats.owner,
+      // 읽기전용 세션(#1007) — 이 요청이 read-only 모드로 게이트되고 있는가(x-lively-readonly 헤더 파생, 어댑터가 ctx 에 주입).
+      //  웹/AI 가 '모드가 실제로 켜졌는지'를 확인하는 관측 지점(쓰기 툴 부재와 함께 이중 신호 — 오탐 방지).
+      read_only: ctx?.readOnly ?? false,
     };
   },
 };
@@ -137,6 +140,31 @@ export function isToolExposed(cap: Capability, overrides?: ReadonlyMap<string, b
   return overrides?.has(cap.name) ? overrides.get(cap.name)! : true;
 }
 
+// 읽기전용 모드(#1007) 판정의 단일 진실원천 — 이 capability 가 컨텍스트 스토어를 **변형(write)**하는가.
+//  · cap.mutates 명시가 있으면 그것(POST인데 읽기·MCP전용 읽기 등 예외 표기).
+//  · 없으면 REST 마운트 method 에서 파생: POST 마운트가 하나라도 있으면 쓰기, GET-only 면 읽기
+//    (이 코드베이스 관례 = 읽기 GET·쓰기 POST. 드리프트 0 — 새 co-exposed 툴은 자동 분류).
+//  · rest:false(MCP 전용) + 명시 없음 → 파생 신호 부재 → **fail-closed = 쓰기로 간주**.
+//    보안 게이트라 미지정의 안전한 기본은 '차단'이다 — 새 MCP전용 쓰기 툴이 읽기전용 세션에서 조용히 새지 않게.
+//    (그래서 순수 MCP전용 '읽기'는 반드시 mutates:false 를 달아야 읽기전용에서도 노출된다 — 실패해도 방향이 안전).
+export function capMutates(cap: Capability): boolean {
+  if (typeof cap.mutates === "boolean") return cap.mutates;
+  const rest = cap.expose.rest;
+  if (Array.isArray(rest) && rest.length) return rest.some((m) => m.method === "POST");
+  return true;
+}
+
+// 읽기전용에서 차단 **예외**(#1007 사용자 스코프) — 컨텍스트 스토어 콘텐츠 쓰기가 아니라 '코드실행/오프로드'라 기밀 세션에서도 유지한다.
+//  broker_run(브로커 도구 실행)·delegate_run/cancel(무거운 작업 위탁)은 읽기전용이어도 '일'(빌드·테스트)을 계속하게 둔다는 사용자 결정.
+//  ⚠ 지식·프로젝트·작업 등 스토어 콘텐츠 쓰기는 여기 절대 넣지 않는다 — 그걸 막는 게 읽기전용의 본령이다.
+export const READONLY_KEEP: ReadonlySet<string> = new Set(["broker_run", "delegate_run", "delegate_cancel"]);
+
+// 읽기전용 세션이 이 capability 를 차단해야 하는가 — 쓰기(capMutates)이면서 예외(READONLY_KEEP)가 아닐 때.
+//  MCP(등록 스킵)·REST(403) 두 어댑터가 공유하는 단일 판정 — 표면 간 read-only 정책 불일치 방지.
+export function isReadOnlyBlocked(cap: Capability): boolean {
+  return capMutates(cap) && !READONLY_KEEP.has(cap.name);
+}
+
 // MCP 툴 description 에 붙일 REST 등가 힌트(#550) — 이 capability 가 REST 로도 열려 있으면 경로를 노출한다.
 //  co-exposed(같은 handler)라 REST body 필드 = 이 툴의 inputSchema 와 동일 → 에이전트가 소스를 뒤지지 않고
 //  대량·기계적 작업 때 REST 반복호출 스크립트를 짤 수 있다(#533 '코드/대량은 REST', #550 실박스 계정 60+개 계기).
@@ -155,9 +183,13 @@ export function registerMcpCapabilities(
   overrides?: ReadonlyMap<string, boolean>,
   alwaysLoadOverrides?: ReadonlyMap<string, boolean>,
   harness?: string | null,
+  readOnly?: boolean,
 ): void {
   for (const cap of registry.values()) {
     if (!isToolExposed(cap, overrides)) continue;
+    // 읽기전용 세션(#1007): 컨텍스트 스토어에 쓰는 툴은 아예 등록하지 않는다 → tools/list 에서 소거되어
+    //  하네스가 그 툴의 존재조차 모른다(호출 시도·혼란 0). 무상태 /mcp 라 요청마다 헤더로 재계산 = per-session.
+    if (readOnly && isReadOnlyBlocked(cap)) continue;
     const meta = resolveToolMeta(cap, alwaysLoadOverrides, harness);
     server.registerTool(
       cap.name,
@@ -169,7 +201,7 @@ export function registerMcpCapabilities(
         const agent = agentFromExtra(extra) ?? undefined;
         // 작업이 이뤄진 터미널 세션 — 같은 원리로 접속 헤더(x-lively-session)에서(#852). 세션 밖이면 undefined.
         const session = sessionFromExtra(extra) ?? undefined;
-        return json(await cap.handler(args, u, { source: "mcp", actor: u.userId, agent, session }));
+        return json(await cap.handler(args, u, { source: "mcp", actor: u.userId, agent, session, readOnly: readOnlyFromExtra(extra) }));
       },
     );
   }

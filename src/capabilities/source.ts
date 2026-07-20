@@ -179,6 +179,7 @@ const sourceUndistilled: Capability = {
 //  distill 이 볼 가치 있다고 판단한 것만 이 도구로 페치. 삭제/이동/미지원이면 에러(→ 그 자료 skip).
 const sourceArtifact: Capability = {
   name: "source_artifact",
+  mutates: false, // 읽기전용(#1007): MCP전용 읽기 — 자료 원본을 임시경로에 받아 경로 반환(스토어 쓰기 없음). 파생 신호 부재라 명시.
   title: "자료 원본(on-demand)",
   description:
     "바이너리 자료([BINARY] 스텁 — PDF·이미지 등)의 원본을 커넥터에서 on-demand 로 내려받아 짧은 TTL 임시경로에 저장하고 그 경로를 돌려준다({path,mime,bytes,expires_at}). distill 세션이 이 경로를 Read(Claude 가 PDF·이미지를 네이티브 파싱, 한글까지)해 실제 내용을 확보한다. 원본이 삭제/이동/권한상실이면 unavailable 에러(→ 그 자료 skip). 저장은 transient(수 시간 GC) — 커넥터 무관 공용(slack/gdrive/…).",

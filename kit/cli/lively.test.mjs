@@ -175,16 +175,28 @@ try {
       `stamp=${stamped} hooks=${hooks} cli=${cli} shim=${shim}\n${r.err.slice(-400)}`);
   }
 
-  // ④ **MCP 등록 인자** — register-clients.sh 와 동일해야 한다. 이 CLI 의 존재 이유이므로 argv 를 그대로 못박는다.
+  // ④ **MCP 등록 인자** — 이 CLI(registerLivelyMcp)와 register-clients.sh(scripts/ 소스 + kit/setup/ 트윈)는
+  //  **동일한 헤더 세트**여야 한다. register-clients.sh 는 죽은 코드가 아니라 fresh 설치·멤버 온보딩의 주 경로다
+  //  (deploy/install-kit.sh·provision-member.sh·setup-mac.sh 가 직접 호출) — 어느 한쪽만 헤더를 더하면 그 경로로 깐 세션은
+  //  헤더가 빠져 기능이 조용히 죽는다(#1007 리뷰). 그래서 아래 두 축으로 못박는다: (a) 이 CLI argv 를 리터럴로,
+  //  (b) register-clients.sh 파일이 실제로 같은 3헤더를 등록하는지(드리프트 가드 — 안전망이 CLI 만 보지 않게).
   {
     const adds = H.argv().filter((l) => l.startsWith("mcp add"));
-    // ⚠ 헤더 **2개** — register-clients.sh:15-17 이 캐노니컬이다. 예전 want 는 x-lively-session(#852)이 빠진
-    //  드리프트 형태를 못박고 있었다(= 테스트가 버그를 고정). 이게 빠지면 remove→add 가 세션 헤더를 지워
-    //  그 세션의 작업 귀속이 끊긴다. 값은 리터럴 — 확장은 접속 시 하네스가 제 env 로 한다.
+    // ⚠ 헤더 **3개**(토큰 + 세션귀속#852 + 읽기전용#1007). 예전 want 는 x-lively-session 이 빠진 드리프트를 못박고 있었다
+    //  (= 테스트가 버그를 고정). 이게 빠지면 remove→add 가 세션 헤더를 지워 그 세션의 작업 귀속이 끊긴다.
+    //  x-lively-readonly(#1007)는 세션별 읽기전용 신호(LIVELY_READONLY=1 로 실행 시 그 세션만 게이트웨이가 쓰기 툴 소거). 값은 리터럴 — 확장은 접속 시 하네스가 제 env 로.
     const want = `mcp add --transport http --scope user lively ${GW}/mcp `
-      + `--header Authorization: Bearer ${TOKEN} --header x-lively-session: \${LIVELY_SESSION_ID:-}`;
-    check("④ claude MCP 등록 argv 가 register-clients.sh 와 동일(헤더 2개 — 토큰 + 세션귀속)",
+      + `--header Authorization: Bearer ${TOKEN} --header x-lively-session: \${LIVELY_SESSION_ID:-}`
+      + ` --header x-lively-readonly: \${LIVELY_READONLY:-}`;
+    check("④ claude MCP 등록 argv 못박기(헤더 3개 — 토큰 + 세션귀속 + 읽기전용)",
       adds.some((l) => l === want), `got=${JSON.stringify(adds)}\nwant=${JSON.stringify(want)}`);
+    // (b) register-clients.sh parity — 파일을 읽어 같은 3헤더를 실제로 등록하는지 확인(이게 빠지면 위 (a) 만으론 gap 을 못 잡는다).
+    const regSh = readFileSync(join(REPO, "scripts", "register-clients.sh"), "utf8");
+    check("④ register-clients.sh 가 CLI 와 동일한 3헤더 등록(parity — 헤더 하나라도 빠지면 그 설치 경로서 읽기전용이 조용히 죽음)",
+      /--header +["']?Authorization: Bearer/.test(regSh)
+        && regSh.includes("x-lively-session: ${LIVELY_SESSION_ID:-}")
+        && regSh.includes("x-lively-readonly: ${LIVELY_READONLY:-}"),
+      "register-clients.sh 에 3헤더(Authorization+x-lively-session+x-lively-readonly) 중 일부 누락 — CLI 와 drift");
     check("④ remove → add 순서(재실행 안전)",
       H.argv().indexOf("mcp remove lively") < H.argv().findIndex((l) => l.startsWith("mcp add")),
       JSON.stringify(H.argv()));

@@ -541,6 +541,16 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS session_share JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
 
+  // ── org_runtime_config 확장: hook_grace_ms — 커스텀 훅 런너(run-custom)가 게이트웨이 미도달 시 최근 성공 캐시를
+  //  얼마나 오래 쓸지(ms). **NULL = 무제한**(마지막 접속 기준 영구 실행 — #1008 기본). 양수 = 그 ms 경과 후 fail-CLOSED.
+  //  종전엔 런너에 10분이 하드코딩돼 오프라인 10분 후 로컬-자족 커스텀 훅(스킬 라우터·spec-blind 품질게이트)까지 죽었다.
+  //  이 컬럼을 관리탭 노브로 승격 — 기본을 무제한으로 둬 오프라인에도 마지막 설정대로 돌게 한다. content_hash 무결성
+  //  검증은 캐시에도 적용되므로 무제한이어도 변조 훅 실행 위험은 없고, 회수의 실질(재접속 시 캐시 교체)은 그대로다.
+  //  DEFAULT NULL 이라 기존/신규 조직 전부 마이그레이션만으로 무제한이 된다. 보안상 짧은 회수창이 필요한 조직만 값을 준다.
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS hook_grace_ms BIGINT DEFAULT NULL;
+  `);
+
   // ── org_hook 확장: health — 멤버별 마지막 훅 실행 실패 기록(#892 결함 C). ──
   // { "<member_id>": { at, reason, exit_code, stderr } } — 멤버 수로 자연히 유계라 별도 테이블·정리 불요.
   // 종전엔 훅이 죽어도 러너가 크래시를 삼켜(stdout "") '죽음'과 '결정 없음'이 구분 불가였고, 그래서 spec-blind

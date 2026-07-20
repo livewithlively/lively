@@ -216,7 +216,10 @@ async function boot() {
   if (sysTab) sysTab.hidden = false;
   // #971 WIKI2 는 아직 미완성 탭 — 내부 개발·데모 도메인(lvly.io 계열)에서만 노출한다(파일럿 고객 박스엔 숨김).
   const wiki2Tab = document.getElementById('wiki2-tab');
-  if (wiki2Tab && wiki2Visible()) wiki2Tab.hidden = false;
+  // #1015 WIKI2 상단 탭 임시 숨김(장원준/상민님 요청, 2026-07-20) — 나중에 부활 시 아래 줄 주석 해제.
+  //  (#/wiki2 라우트·배지 로직은 그대로 — 나브 노출만 억제. 탭은 index.html 기본 hidden 유지.)
+  // if (wiki2Tab && wiki2Visible()) wiki2Tab.hidden = false;
+  void wiki2Tab;
   const logoutBtn = document.getElementById('logout-btn');
   if (logoutBtn) logoutBtn.hidden = false;
   route();

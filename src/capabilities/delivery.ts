@@ -487,7 +487,7 @@ export const deliveryCapabilities: Capability[] = [
   //  body_md(미저장 편집값)를 받아 ${rules}/${area} 를 라이브 데이터로 채워 실제 주입 모습을 보여준다(WYSIWYG, 편집 즉시).
   //  body_md 생략/공백이면 buildKnowledgeIndex 가 코드 기본 템플릿으로 폴백. 공유 맥락 미리보기라 scope null(인증만).
   {
-    name: "org_guide_preview", title: "컨텍스트 온톨로지 가이드 미리보기",
+    name: "org_guide_preview", mutates: false, title: "컨텍스트 온톨로지 가이드 미리보기", // 읽기전용(#1007): POST 지만 읽기(미리보기 렌더, 스토어 쓰기 없음)
     description: "컨텍스트 온톨로지 가이드 템플릿(편집값)에 카테고리·강제규칙을 채워 실제 주입되는 Knowledge Index 만 렌더한다(전체 맥락 아님).",
     scope: null, input: {}, expose: { mcp: false, rest: [{ method: "POST", paths: ["/api/ui/org/guide-preview"], parse: (req) => req.body ?? {} }] },
     handler: async (input: Record<string, unknown>) => {
@@ -1219,7 +1219,8 @@ export const deliveryCapabilities: Capability[] = [
       //  + writebackNoticeDefault 를 별도로 받으므로 override↔default 구분이 깨지지 않는다.
       // pull_tools(#906) — '외부 맥락 인입'으로 볼 MCP 툴 이름 prefix. write_tools 와 달리 fold 안 함:
       //  **비면 그대로 꺼짐**이 의도된 상태라 기본값을 씌우면 어드민의 '끄기'를 되살려버린다(DB 기본값이 곧 on).
-      return { hooks: c.hooks, writeback_notice: c.writeback_notice || DEFAULT_WRITEBACK_NOTICE, write_tools: c.write_tools, pull_tools: c.pull_tools, auto_approve: autoApprove, kit_version: kv };
+      // hook_grace_ms(#1008) — run-custom 캐시 유효기간(ms). null=무제한(기본). session-preload 가 hooks-config.json 에 미러 → run-custom 이 읽음.
+      return { hooks: c.hooks, writeback_notice: c.writeback_notice || DEFAULT_WRITEBACK_NOTICE, write_tools: c.write_tools, pull_tools: c.pull_tools, auto_approve: autoApprove, kit_version: kv, hook_grace_ms: c.hook_grace_ms };
     }),
   restOnly("org_runtime_update", "런타임 설정 수정",
     "훅 활성/비활성·work-roots·writeback 너지 + 안전 화이트리스트(allowed_auth_envs·url_allowlist·allowed_db_hosts·allowed_db_secret_refs)를 저장한다.",
@@ -1234,6 +1235,7 @@ export const deliveryCapabilities: Capability[] = [
         storage_policy?: StoragePolicyPatch;
         hook_relay_decisions?: HookRelayDecision[];
         session_share?: SessionSharePatch;
+        hook_grace_ms?: number | null;
       } = {};
       // 저장소 정책(#813) — 로그 상한·디스크 임계치. 잡값·뒤집힌 임계치(경고≥위험)는 normalize 가 잡는다.
       //  고객 박스는 .env 를 못 고치므로 **여기(관리탭)가 유일한 조절 창구**다.
@@ -1341,6 +1343,20 @@ export const deliveryCapabilities: Capability[] = [
         }
         patch.hook_relay_decisions = [...seen] as HookRelayDecision[];
       }
+      // hook_grace_ms(#1008) — 커스텀 훅 런너(run-custom)가 게이트웨이 미도달 시 최근 캐시를 쓸 유효기간(ms).
+      //  null=무제한(기본, 마지막 접속 기준 영구 실행). 0 이상 정수면 그 ms 경과 후 fail-CLOSED(회수창).
+      //  상한 365일 — 그 이상은 값을 크게 두는 게 아니라 null(무제한)을 쓰라는 뜻. 캐시에도 content_hash 무결성이 걸린다.
+      if (input.hook_grace_ms !== undefined) {
+        if (input.hook_grace_ms === null || input.hook_grace_ms === "") {
+          patch.hook_grace_ms = null;
+        } else {
+          const n = Number(input.hook_grace_ms);
+          if (!Number.isInteger(n) || n < 0 || n > 31_536_000_000) {
+            throw new HttpError(400, "hook_grace_ms 는 null(무제한) 또는 0~31536000000(365일) 정수(ms)여야 합니다");
+          }
+          patch.hook_grace_ms = n;
+        }
+      }
       // 임베딩(벡터검색 #172) 런타임 토글 — provider off|http, 시크릿 금지(auth_env_ref=환경변수 이름만). store 가 다시 normalize.
       if (input.embedding_config !== undefined) {
         const raw = input.embedding_config;
@@ -1435,6 +1451,8 @@ export const deliveryCapabilities: Capability[] = [
       }).partial().optional().describe("세션이력 캡처 정책(#905 C1) — 기본 enabled=false. 관리탭 ▸ 세션 공유"),
       hook_relay_decisions: z.array(z.enum(["deny", "defer", "ask", "allow"])).optional()
         .describe("커스텀 훅(PreToolUse)의 결정 중 러너가 하네스로 전파할 값(#892). 기본 deny·ask·defer — 'allow' 는 멤버의 권한 프롬프트를 건너뛰므로 명시 opt-in. 비우면 전파 안 함(게이트 해제)"),
+      hook_grace_ms: z.number().int().min(0).max(31_536_000_000).nullable().optional()
+        .describe("커스텀 훅 런너(run-custom) 캐시 유효기간(ms) — 게이트웨이 미도달 시. null=무제한(기본, 마지막 접속 기준 영구 실행). 0~365일(ms) 지정 시 그 후 fail-CLOSED(#1008)"),
       // ⚠ 중첩 객체도 하위 키를 다 적어야 한다 — zod 는 미선언 하위 키를 strip 한다(#923).
       storage_policy: z.object({
         log_max_mb: z.number().int().min(0).max(10_000).optional().describe("로그 파일 상한(MB)"),

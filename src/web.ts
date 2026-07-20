@@ -12,11 +12,11 @@ import { stateDir } from "./state-dir.js";
 import { fileURLToPath } from "node:url";
 import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
-import { restMounts } from "./capabilities/index.js";
+import { restMounts, isReadOnlyBlocked } from "./capabilities/index.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { DANGEROUS_SCOPES, type Scope } from "./capabilities/scopes.js";
 import { sessionOrBearer } from "./auth/http-auth.js";
-import { sessionFromHeaders } from "./org/agent-identity.js"; // #852 요청이 온 터미널 세션(x-lively-session)
+import { sessionFromHeaders, readOnlyFromHeaders } from "./org/agent-identity.js"; // #852 세션 · #1007 읽기전용(x-lively-readonly)
 import {
   parseSessionCookie, createSession, revokeSession, sessionCookie, clearSessionCookie,
 } from "./auth/sessions.js";
@@ -120,6 +120,13 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
 
   for (const { cap, mount } of restMounts()) {
     const handler = wrap(async (req, res) => {
+      // 읽기전용 세션(#1007) — 컨텍스트 스토어에 쓰는 REST 는 파싱 전에 403. MCP 는 tools/list 에서 이미 소거되지만,
+      //  헤더가 실린 REST(스크립트·웹)도 **같은 판정(isReadOnlyBlocked)**으로 강제해 표면 간 정책 불일치를 없앤다.
+      //  ⚠ 헤더 미실린 raw curl 은 못 막는다(그건 토큰 scope 영역) — AI 정상 경로는 MCP 소거 + 이 게이트로 커버.
+      const readOnly = readOnlyFromHeaders(req.headers);
+      if (readOnly && isReadOnlyBlocked(cap)) {
+        throw new HttpError(403, "읽기전용 세션 — 컨텍스트 스토어 쓰기가 비활성화되어 있습니다(#1007). 이 세션의 LIVELY_READONLY 를 끄고 다시 시도하세요.");
+      }
       const input = mount.parse(req); // 기존 qstr/qint/parseMappingBody 검증 그대로(HttpError → wrap)
       const user = userOf(req);
       // B3 defense-in-depth: 미들웨어(mw)에 더해 핸들러 경계에서도 scope 재확인(단일층 의존 제거).
@@ -141,6 +148,7 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
         session: sessionFromHeaders(req.headers) ?? undefined,
         tokenHashPrefix: user.tokenHashPrefix,
         ip: req.ip,
+        readOnly, // #1007 — me 가 반환(모드 관측). 강제는 위 게이트가 이미 수행.
       }));
     });
     for (const path of mount.paths) {
