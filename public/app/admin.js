@@ -1836,7 +1836,7 @@ function memberRead(root, m, data, detail, opts = {}) {
     ];
     if (canEdit) {
         const scopeText = (m.scopes || []).map((sk) => MEMBER_SCOPE_LABEL[sk] ? MEMBER_SCOPE_LABEL[sk] + ' (' + sk + ')' : sk).join(', ');
-        kids.push(roRow('아이디', m.id), roRow('종류', m.kind || 'human'), roRow('대표 이메일', m.email), roRow('상태', (m.state || 'active') === 'active' ? '활성' : '비활성'), roRow('권한 (이 구성원 토큰의 scope)', scopeText), field('외부 계정 연결 (신원 매칭 키)', idnSummary(m.identities || [])), field('개인 레이어', el('div', { class: 'admin-ro admin-ro-pre', text: (m.body_md && m.body_md.trim()) || '—' })));
+        kids.push(roRow('아이디', m.id), roRow('닉네임 (활동 로그 표시)', m.nickname), roRow('종류', m.kind || 'human'), roRow('대표 이메일', m.email), roRow('상태', (m.state || 'active') === 'active' ? '활성' : '비활성'), roRow('권한 (이 구성원 토큰의 scope)', scopeText), field('외부 계정 연결 (신원 매칭 키)', idnSummary(m.identities || [])), field('개인 레이어', el('div', { class: 'admin-ro admin-ro-pre', text: (m.body_md && m.body_md.trim()) || '—' })));
     }
     else {
         kids.push(el('div', { class: 'mini-meta', text: '종류: ' + (m.kind || 'human') + ' · 상태: ' + (m.state || 'active') }));
@@ -1878,6 +1878,8 @@ function memberForm(root, m, data, detail, isNew, opts = {}) {
     //  자동·유니크 생성(폼에서 숨김 — 관리자 비관여). 기존 멤버는 표시만(변경 불가).
     const idIn = el('input', { type: 'text', value: m.id, placeholder: '아이디(영문/숫자)', disabled: '' });
     const nameIn = el('input', { type: 'text', value: m.display_name || '', placeholder: '표시 이름' });
+    // 닉네임(#762) — 표시 이름과 별개, 활동 로그 등 캐주얼 표기용(비우면 이름 폴백). 개인 프로필 모달에만 있던 걸 관리자 편집에도(#1025).
+    const nickIn = el('input', { type: 'text', value: m.nickname || '', placeholder: '닉네임 (비우면 표시 이름으로)' });
     const emailIn = el('input', { type: 'email', value: m.email || '', placeholder: '대표 이메일(로그인 아이디)' });
     const kindSel = el('select', {}, ...['human', 'agent', 'system'].map((k) => el('option', { value: k, text: k })));
     kindSel.value = m.kind || 'human';
@@ -1908,7 +1910,7 @@ function memberForm(root, m, data, detail, isNew, opts = {}) {
         const knownScopes = SCOPE_OPTS.map(([sk]) => sk);
         const payload = {
             // 신규는 아이디를 보내지 않는다 — 서버가 이메일/표시이름에서 불변 내부키를 자동·유니크 생성(관리자 비관여).
-            id: isNew ? undefined : idIn.value.trim(), kind: kindSel.value, display_name: nameIn.value.trim(),
+            id: isNew ? undefined : idIn.value.trim(), kind: kindSel.value, display_name: nameIn.value.trim(), nickname: nickIn.value.trim(),
             // identities 는 **보내지 않는다** — 서버가 보존하고, 편집은 [외부 자료 수집 ▸ 멤버 매핑]에서만 한다(#837).
             email: emailIn.value.trim(), body_md: bodyTa.value, state: stateSel.value,
             // 체크된 권한 + 체크박스에 없는 권한은 보존 — 목록 누락으로 권한이 조용히 드롭되는 것 방지(안전망).
@@ -1981,7 +1983,7 @@ function memberForm(root, m, data, detail, isNew, opts = {}) {
                 }
             } }));
     }
-    root.replaceChildren(isNew ? el('span', { hidden: '' }, idIn) : field('아이디 (내부 식별자 · 변경 불가)', idIn), field('표시 이름', nameIn), field('종류', kindSel), field('대표 이메일', emailIn), field('상태', stateSel), field('권한 (이 구성원 토큰의 scope)', scopeWrap), el('div', { class: 'field' }, el('label', { class: 'field-label', text: '외부 계정 연결 (신원 매칭 키)' }), idnWrap), field('개인 레이어', bodyTa), actions);
+    root.replaceChildren(isNew ? el('span', { hidden: '' }, idIn) : field('아이디 (내부 식별자 · 변경 불가)', idIn), field('표시 이름', nameIn), field('닉네임 (활동 로그 등 표시 · 비우면 이름)', nickIn), field('종류', kindSel), field('대표 이메일', emailIn), field('상태', stateSel), field('권한 (이 구성원 토큰의 scope)', scopeWrap), el('div', { class: 'field' }, el('label', { class: 'field-label', text: '외부 계정 연결 (신원 매칭 키)' }), idnWrap), field('개인 레이어', bodyTa), actions);
 }
 // ── 팀 — 구성원을 팀(스쿼드)으로 묶고, 팀이 카테고리를 '소유'한다(표면화·주입의 '우리 팀' 기준). ──
 //  오너십 배정 자체는 [카테고리(분류 체계)] 화면(카테고리별 오너 드롭다운)에서. 여기선 팀 CRUD + 팀원(역할) + 소유 현황.

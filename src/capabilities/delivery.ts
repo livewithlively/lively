@@ -590,6 +590,8 @@ export const deliveryCapabilities: Capability[] = [
       const kind = input.kind == null ? undefined : str(input.kind, "kind", 10) as "human" | "agent" | "system";
       if (kind && !["human", "agent", "system"].includes(kind)) throw new HttpError(400, "kind 는 human|agent|system");
       const displayName = input.display_name == null ? undefined : str(input.display_name, "display_name", 200).trim();
+      // 닉네임(#762): 미전송=보존, 빈 문자열=지움(→ display_name 폴백). 정규화는 upsertMember 담당. 개인 프로필(self) 저장과 동일 처리 — 관리자도 편집 가능하게(#1025).
+      const nickname = input.nickname == null ? undefined : str(input.nickname, "nickname", 80).trim();
       // 이메일 = 로그인 아이디 → 형식 검증(생성·로그인 일관). 빈 값은 허용(로그인 불요 멤버 — 계정 미발급).
       const email = input.email == null ? undefined : str(input.email, "email", 200).trim();
       if (email) assertEmail(email);
@@ -614,6 +616,7 @@ export const deliveryCapabilities: Capability[] = [
       const member = await upsertMember({
         id, kind,
         display_name: displayName,
+        nickname,
         email,
         identities: input.identities === undefined ? undefined : parseIdentities(input.identities),
         body_md: memberBody,
@@ -670,6 +673,7 @@ export const deliveryCapabilities: Capability[] = [
       id: z.string().optional().describe("멤버 id(불변 내부키) — 생략 시 이메일 로컬파트에서 자동 생성"),
       kind: z.enum(["human", "agent", "system"]).optional().describe("멤버 종류(기본 human)"),
       display_name: z.string().optional().describe("표시 이름"),
+      nickname: z.string().optional().describe("닉네임(활동 로그 등 캐주얼 표기 · 비우면 표시 이름 폴백)"),
       email: z.string().optional().describe("이메일=로그인 아이디. 신규 human 이면 초기 비번 자동 발급(initialPassword 1회 반환)"),
       identities: z.array(z.object({ system: z.string(), external_id: z.string(), email: z.string().optional(), instance: z.string().optional(), display_name: z.string().optional() })).optional().describe("외부 계정 연결(slack/clickup 등)"),
       body_md: z.string().optional().describe("개인 레이어(세션 컨텍스트에 실림)"),
