@@ -22,7 +22,7 @@
 
 import {
   readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, chmodSync,
-  readdirSync, statSync, realpathSync, openSync, closeSync,
+  readdirSync, statSync, realpathSync, openSync,
 } from "node:fs";
 import { homedir, tmpdir, hostname } from "node:os";
 import { join, relative, dirname } from "node:path";
@@ -93,8 +93,13 @@ const has = (bin) => spawnSync(WIN ? "where" : "command", WIN ? [bin] : ["-v", b
 function ttyIO() {
   if (!WIN) {
     try {
-      const fd = openSync("/dev/tty", "r+");
-      return { in: new ReadStream(fd), out: new WriteStream(fd), close: () => { try { closeSync(fd); } catch { /* */ } } };
+      // 읽기·쓰기 fd 를 따로 연다 — 한 fd 를 두 스트림이 공유하면 teardown 때 이중 close(재사용된 남의 fd 를 닫는 사고) 위험.
+      const rfd = openSync("/dev/tty", "r+");
+      const wfd = openSync("/dev/tty", "r+");
+      const rs = new ReadStream(rfd), ws = new WriteStream(wfd);
+      // ⚠ resume() 로 연 tty 스트림을 fd 만 closeSync 하면 poll 핸들이 남아, 셸이 제어를 되찾을 때
+      //  엔터를 한 번 더 눌러야 프롬프트가 뜬다. 반드시 stream.destroy() 로 정리한다(각 스트림이 자기 fd 를 닫음).
+      return { in: rs, out: ws, close: () => { try { rs.destroy(); } catch { /* */ } try { ws.destroy(); } catch { /* */ } } };
     } catch { /* 단말 없음(CI·데몬) → 아래 폴백 */ }
   }
   return { in: process.stdin, out: process.stderr, close: () => { /* 소유 아님 — 닫지 않는다 */ } };
