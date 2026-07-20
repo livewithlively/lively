@@ -839,6 +839,37 @@ export async function initOrgSchema(): Promise<void> {
       updated_by TEXT);
   `);
 
+  // ── org_preview_env — 프리뷰 환경(작업자별 격리 미리보기)의 desired state (#1036). 관리탭 CRUD. ──
+  //  kind=work: 작업 워크트리(project/<id>)를 게이트웨이가 /preview/<id>/ 서브패스로 정적 서빙(shared-proxy — /api 는 게이트웨이 자신).
+  //   프론트가 API 를 root-relative(/api/ui)로 부르므로 페이지가 서브패스에서 로드돼도 진짜 API 로 간다 → 별도 프로세스·포트·프록시 불필요.
+  //  worktree_path = 서빙할 워크트리 절대경로(비우면 project_id+repo 로 canonical 슬롯 workspace/project/<id>/<repo> 계산).
+  //  kind=stage(2단계): 여러 브랜치를 base 위에 merge 한 통합 워크트리. backing_mode·backing_ref 는 3단계(throwaway·existing-ref) 확장 대비.
+  //  포트·pid 컬럼은 3단계에서 별도 백엔드 프로세스를 띄울 때 ALTER ADD(shared-proxy 는 불요). §설계 preview-environment-design-1036.
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_preview_env(
+      id TEXT PRIMARY KEY,
+      label TEXT,
+      kind TEXT NOT NULL DEFAULT 'work',
+      owner_member TEXT,
+      project_id INT,
+      repo TEXT NOT NULL,
+      branch TEXT,
+      worktree_path TEXT,
+      backing_mode TEXT NOT NULL DEFAULT 'shared-proxy',
+      backing_ref TEXT,
+      status TEXT NOT NULL DEFAULT 'stopped',
+      last_error TEXT,
+      last_active_at TIMESTAMPTZ,
+      ttl_idle_sec INT NOT NULL DEFAULT 0,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      note TEXT,
+      sort INT NOT NULL DEFAULT 0,
+      version INT NOT NULL DEFAULT 1,
+      created_by TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
+  `);
+
   // ── org_node — 분산 노드 레지스트리(#869). 멤버 PC(member)/워커(worker)에 도는 노드 에이전트의 desired state. ──
   //  연결은 항상 노드→게이트웨이 아웃바운드 WSS(/node/ws) — 노드는 포트를 열지 않는다(단일 정문 유지).
   //  token_hash = 이 노드 전용 auth_token(scopes=[] — REST/MCP 표면 접근 불가, 노드 채널 전용)의 해시.
