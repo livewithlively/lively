@@ -33,6 +33,7 @@ import { cronCapabilities } from "./cron.js";
 import { feedTargetCapabilities } from "./feed-targets.js";
 import { mappingCapabilities } from "./mapping.js";
 import { managedSessionCapabilities } from "./managed-session.js";
+import { previewEnvCapabilities } from "./preview-env.js";
 import { delegateCapabilities } from "./delegate.js";
 import { toolUsageCapabilities } from "./tool-usage.js";
 import { recallCapabilities } from "./recall.js";
@@ -111,6 +112,7 @@ const all: Capability[] = [
   ...cronCapabilities, // 서버사이드 스케줄 잡(org_cron) 관리 — admin scope. cron_list/set/delete/run_now(REST /api/ui/cron + MCP). 트리거 표준화: is 신선화·sync 를 게이트웨이가 주기 실행(웹훅 대체).
   ...mappingCapabilities, // 코드유닛→도메인 매핑 — context scope. list_unmapped(인박스)+map_code_unit(propose+근거, MCP+REST). LLM 판단주체: 에이전트가 도메인 should+DDD 로 분류.
   ...managedSessionCapabilities, // 상시 에이전트 세션 — admin scope. managed_session_list/set/delete/ensure. 격리 워크스페이스+keep-alive(createSession 재사용), 크론 타깃.
+  ...previewEnvCapabilities, // #1036 프리뷰 환경 — admin scope. preview_env_list/set/delete/ensure/stop. /preview/<id>/ 서브패스로 워크트리 public 정적 서빙(shared-proxy).
   ...delegateCapabilities, // P2(#869): 작업 위탁 — delegate_run/status/list/cancel(context scope, MCP+REST /api/ui/delegate*). 예상 소모량 신고→스케줄러가 노드 리소스 대조 배치, 결과는 .lively-task/<id>/.
   ...toolUsageCapabilities, // #318: MCP 호출 통계 집계(tool_usage_stats) — admin scope, REST 전용(/api/ui/tool-usage). mcp_call_log 를 요약/툴별/하네스/일별/최근으로 집계(관리탭 대시보드).
   ...recallCapabilities, // #637: 컨텍스트 라우팅(recall_route) — memory scope, REST 전용(POST /api/ui/recall/route). 작업맥락(프롬프트+최근Read경로)→도메인 HUB·leaf 지식 포인터. 훅 전용(주입은 훅이 포맷).

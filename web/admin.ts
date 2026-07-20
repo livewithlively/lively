@@ -130,6 +130,9 @@ const ADMIN_SECTIONS = [
   // 자동화 — 구 [스케줄러]+[상시 세션]. 크론 액션의 param kind 에 'session' 이 1급으로 있고 4개 액션이 상시
   //  세션을 필수 타깃으로 받는다(크론=언제 × 상시세션=어디서·누구로). 떨어뜨려 놓을 이유가 없다.
   { key: 'automation', label: '자동화', meaning: null, group: 'capability' },
+  // 프리뷰 환경(#1036) — 작업 워크트리의 화면을 라이브(:8080) 무접촉으로 확인하는 격리 미리보기. 게이트웨이가
+  //  워크트리 public/ 을 /preview/<id>/ 서브패스로 서빙(shared-proxy: /api 는 게이트웨이 자신 → 별도 프로세스·포트 불요).
+  { key: 'preview-envs', label: '프리뷰 환경', meaning: null, group: 'capability' },
   // 세션 공유(#905 C1) — 구성원 AI 세션 대화 기록을 중앙에 모아 환경·멤버 무관 이어보기/이어받기. 프라이버시가
   //  걸린 org 정책이라 admin 전용. 기본 꺼짐(켜기 전엔 수집 안 함).
   { key: 'session-share', label: '세션 공유', meaning: null, group: 'capability' },
@@ -170,7 +173,7 @@ const SECTION_REMAP = {
 // 구 [검토 큐]는 관리탭을 떠나 WIKI 탭으로 갔다(#837) — 섹션 리맵이 아니라 탭 밖 리다이렉트라 따로 둔다.
 const SECTION_EXIT = { 'review-queue': '#/knowledge/review' };
 // admin 권한 전용(쓰기·인프라·감사). #318 호출통계·#549 변경감사는 전 구성원의 변경·before/after 를 노출하므로 admin.
-const ADMIN_ONLY = ['credentials', 'connectors', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'embeddings', 'automation', 'audit', 'ingest-policy', 'session-share'];
+const ADMIN_ONLY = ['credentials', 'connectors', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'embeddings', 'automation', 'preview-envs', 'audit', 'ingest-policy', 'session-share'];
 const RUNTIME_ONLY = ['agent-assets']; // runtime 권한 전용(멤버 머신에서 도는 것의 정의)
 // [도구]는 두 권한의 합집합 — 사내 API 도구·빌트인은 runtime, 외부 MCP 서버 등록은 admin. 둘 중 하나라도 있으면
 //  섹션을 보여주고, 안에서 각 서브탭을 권한별로 켠다(구조상 한 섹션=한 scope 전제가 깨지는 유일한 자리라 명시한다).
@@ -454,6 +457,7 @@ function renderAdminDetail(detail, sel, data) {
   if (sel === 'db-audit') return void dbAuditEditor(detail, data);
   if (sel === 'cron') return void cronPanel(detail, data);
   if (sel === 'managed-sessions') return void managedSessionsPanel(detail, data);
+  if (sel === 'preview-envs') return void previewEnvsPanel(detail, data);
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -1287,6 +1291,105 @@ async function managedToggle(m, reload) {
 async function managedDelete(id, reload) {
   if (!confirm('상시 세션 등록 ‘' + id + '’을(를) 삭제할까요? (살아있는 터미널 세션은 별도로 종료)')) return;
   try { await api('/api/ui/managed-sessions/' + encodeURIComponent(id) + '/delete', { method: 'POST' }); toast('삭제했습니다'); reload(); }
+  catch (e) { toast('실패 — ' + e.message, true); }
+}
+
+// ── 프리뷰 환경(#1036) — 작업자별 격리 미리보기. 작업 워크트리(project/<id>)의 public/ 을 /preview/<id>/ 서브패스로 정적 서빙. ──
+//  shared-proxy: 프론트만 워크트리 것, /api 는 게이트웨이 자신 → 별도 프로세스·포트·프록시 불요(화면 확인용 개발 프리뷰). stage(통합)는 2단계.
+async function previewEnvsPanel(detail, data) {
+  const reload = () => previewEnvsPanel(detail, data);
+  detail.replaceChildren(el('div', { class: 'card' }, skeleton('프리뷰 환경을 불러오는 중')));
+  let envs;
+  try { const r = await api('/api/ui/preview-envs'); envs = (r && r.envs) || []; }
+  catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '프리뷰 환경을 불러오지 못했습니다'))); return; }
+
+  const rows = el('div', { class: 'wikicat-rows' });
+  if (!envs.length) rows.append(el('div', { class: 'wikicat-empty', text: '아직 프리뷰 환경이 없습니다. ‘+ 프리뷰 추가’로 작업 워크트리를 화면으로 띄우세요.' }));
+  for (const p of envs) {
+    const statusText = p.status === 'running' ? '실행중' : (p.status === 'error' ? '오류' : '정지');
+    const mainKids = [
+      el('span', { class: 'wikicat-name', text: p.label || p.id }),
+      el('span', { class: 'wikicat-key mono', text: (p.project_id ? '#' + p.project_id + ' · ' : '') + (p.repo || '') + ' · ' + (p.kind || 'work') }),
+      el('span', { class: 'dm-tag', text: p.enabled ? statusText : '비활성' }),
+      p.last_error ? el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '오류' }), p.last_error) : null,
+    ].filter(Boolean);
+    const actBtns = [
+      (p.status === 'running') ? el('a', { class: 'btn btn-ghost btn-sm', href: '/preview/' + encodeURIComponent(p.id) + '/', target: '_blank', text: '열기 ↗' }) : null,
+      el('button', { class: 'btn btn-ghost btn-sm', text: '띄우기', onclick: () => previewEnsure(p.id, reload) }),
+      (p.status === 'running') ? el('button', { class: 'btn btn-ghost btn-sm', text: '정지', onclick: () => previewStop(p.id, reload) }) : null,
+      el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openPreviewEnvForm(p, reload) }),
+      el('button', { class: 'btn btn-ghost btn-sm btn-ghost-danger', text: '삭제', onclick: () => previewDelete(p.id, reload) }),
+    ].filter(Boolean);
+    rows.append(el('div', { class: 'wikicat-row' }, el('div', { class: 'wikicat-row-main' }, ...mainKids), el('div', { class: 'wikicat-row-acts' }, ...actBtns)));
+  }
+  const head = el('div', { class: 'wikicat-grouphead' },
+    el('span', { class: 'wikicat-grouptitle', text: '프리뷰 환경' }),
+    el('span', { class: 'wikicat-groupcount', text: String(envs.length) }),
+    el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 프리뷰 추가', onclick: () => openPreviewEnvForm(null, reload) }));
+  const card = el('div', { class: 'card' },
+    el('p', { class: 'admin-hint', text: '작업 워크트리의 화면을 라이브(:8080)를 건드리지 않고 확인하는 격리 미리보기입니다. 게이트웨이가 워크트리의 public/ 을 /preview/<id>/ 로 서빙하고 API 는 게이트웨이 자신을 씁니다(shared-proxy) — 별도 서버·포트가 없습니다. 워크트리를 먼저 만들고(lively_local_repo_worktree) build:web 으로 빌드한 뒤 ‘띄우기’를 누르세요.' }),
+    el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
+  detail.replaceChildren(card);
+}
+
+function openPreviewEnvForm(p, reload) {
+  const isNew = !p;
+  const inputStyle = 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box';
+  const block = (title, hint, ctrl) => el('section', { class: 'ps-block' },
+    el('h3', { class: 'ps-block-title', text: title }),
+    hint ? el('p', { class: 'ps-block-hint', text: hint }) : null, ctrl);
+  const idInp = el('input', { type: 'text', style: inputStyle, value: p ? p.id : '', placeholder: 'wonjun-projects', ...(isNew ? {} : { disabled: true }) });
+  const labelInp = el('input', { type: 'text', style: inputStyle, value: (p && p.label) || '', placeholder: '원준 프로젝트 보드 프리뷰' });
+  const owner = memberCombo({ value: (p && p.owner_member) || '', placeholder: '구성원 id (예: wonjun)' });
+  const projInp = el('input', { type: 'number', style: inputStyle, value: (p && p.project_id) || '', placeholder: '작업 프로젝트 id (예: 1036)' });
+  const repoInp = el('input', { type: 'text', style: inputStyle, value: (p && p.repo) || 'context-ontology', placeholder: 'context-ontology' });
+  const wtInp = el('input', { type: 'text', style: inputStyle, value: (p && p.worktree_path) || '', placeholder: '비우면 workspace/project/<id>/<repo> 자동' });
+  const ttlInp = el('input', { type: 'number', style: inputStyle, value: (p && p.ttl_idle_sec) || '', placeholder: '0 = 무제한(유휴 유지)' });
+  const enabledChk = el('input', { type: 'checkbox', ...((p ? p.enabled : true) ? { checked: true } : {}) });
+  const noteInp = el('input', { type: 'text', style: inputStyle, value: (p && p.note) || '' });
+  const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '프리뷰 추가' : '저장' });
+  const form = el('div', { class: 'proj-settings' },
+    block('프리뷰 id', isNew ? '소문자 슬러그(a-z0-9_-). URL 이 /preview/<id>/ 가 됩니다.' : 'id 는 변경 불가.', idInp),
+    block('이름', '관리 목록에 보일 이름.', labelInp),
+    block('작업자', '이 프리뷰의 소유 작업자(참고용).', owner.el),
+    block('작업 프로젝트 id', '이 프리뷰가 가리킬 작업 프로젝트. 워크트리 경로 자동계산(workspace/project/<id>/<repo>)에 씁니다.', projInp),
+    block('레포', '프리뷰할 레포 이름.', repoInp),
+    block('워크트리 경로(선택)', '직접 지정할 때만. 비우면 프로젝트 id+레포로 자동 계산합니다.', wtInp),
+    block('유휴 회수(초)', '이 시간 동안 미접속이면 자동 정지. 0=무제한. shared-proxy 는 프로세스가 없어 0 무방.', ttlInp),
+    block('활성', '켜면 reconcile 이 서빙 준비를 보장합니다.', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' enabled' }))),
+    block('메모', '', noteInp),
+    el('div', { class: 'ps-rules-actions' }, saveBtn));
+  const back = overlayBox(isNew ? '프리뷰 추가' : '프리뷰 수정 — ' + p.id, form);
+  const boxw = back.querySelector('.ov-box'); if (boxw) boxw.classList.add('ov-box-wide');
+  saveBtn.onclick = async () => {
+    const id = idInp.value.trim();
+    if (!id) { toast('프리뷰 id 가 필요합니다', true); return; }
+    if (!repoInp.value.trim()) { toast('레포가 필요합니다', true); return; }
+    const body = { id, label: labelInp.value.trim() || null, owner_member: owner.value() || null,
+      project_id: projInp.value ? Number(projInp.value) : null, repo: repoInp.value.trim(),
+      worktree_path: wtInp.value.trim() || null, ttl_idle_sec: ttlInp.value ? Number(ttlInp.value) : null,
+      enabled: enabledChk.checked, note: noteInp.value.trim() || null };
+    saveBtn.disabled = true;
+    try { await api('/api/ui/preview-envs', { method: 'POST', body: JSON.stringify(body) }); toast(isNew ? '추가했습니다 — ‘띄우기’로 서빙을 시작하세요' : '저장했습니다'); back.remove(); reload(); }
+    catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; }
+  };
+}
+
+async function previewEnsure(id, reload) {
+  try {
+    const r = await api('/api/ui/preview-envs/' + encodeURIComponent(id) + '/ensure', { method: 'POST' });
+    if (r && r.status === 'running') toast('띄웠습니다 — ' + (r.url || ('/preview/' + id + '/')));
+    else toast('상태: ' + ((r && r.status) || '?') + (r && r.error ? ' — ' + r.error : ''), !!(r && r.status === 'error'));
+    reload();
+  } catch (e) { toast('실패 — ' + e.message, true); }
+}
+async function previewStop(id, reload) {
+  try { await api('/api/ui/preview-envs/' + encodeURIComponent(id) + '/stop', { method: 'POST' }); toast('정지했습니다'); reload(); }
+  catch (e) { toast('실패 — ' + e.message, true); }
+}
+async function previewDelete(id, reload) {
+  if (!confirm('프리뷰 환경 ‘' + id + '’을(를) 삭제할까요? (워크트리 자체는 남습니다)')) return;
+  try { await api('/api/ui/preview-envs/' + encodeURIComponent(id) + '/delete', { method: 'POST' }); toast('삭제했습니다'); reload(); }
   catch (e) { toast('실패 — ' + e.message, true); }
 }
 

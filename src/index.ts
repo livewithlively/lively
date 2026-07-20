@@ -28,6 +28,7 @@ import { setupNodeUpgrade } from "./node/registry.js";
 import { startTaskScheduler } from "./node/task-scheduler.js";
 import { registerProjectV6Routes } from "./project-routes.js";
 import { registerSessionLogRoutes } from "./session-log-routes.js";
+import { registerPreviewRoutes } from "./preview-routes.js";
 import { getProject as v6GetProject, isProjectMember as v6IsProjectMember, listProjectMemberIds as v6ListProjectMemberIds, setProjectFolder as v6SetProjectFolder } from "./v6/project-store.js";
 import { listProjectActivities } from "./org/store.js";
 import { createProjectFolder, backfillMarkerSync } from "./project-fs.js";
@@ -244,6 +245,9 @@ registerProjectV6Routes(app, verifier, {
 });
 // 세션이력 회수·수집(#905 C1) — 트랜스크립트 델타 offset-CAS append + watermark. 캡처 훅(kit)이 POST 한다.
 registerSessionLogRoutes(app, verifier);
+// #1036 프리뷰 환경 — /preview/<id>/* 를 프리뷰 환경의 워크트리 public/ 로 정적 서빙(shared-proxy: /api 는 게이트웨이 자신).
+//  express.json 이후·app.listen 이전. WS 불요(정적+REST 만)라 server 핸들 불필요.
+registerPreviewRoutes(app, verifier);
 
 const server = app.listen(PORT, () => {
   logger.info(`context-ontology listening on :${PORT}/mcp`);
