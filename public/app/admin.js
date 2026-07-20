@@ -4471,7 +4471,7 @@ function customHookEditor(detail, data) {
     else
         right.append(
         // origin/main(#968 계열)의 개선된 안내 문구 + #892 의 정책 카드 — 둘 다 유지.
-        el('p', { class: 'admin-hint', text: '구성원 머신에서 특정 시점에 자동 실행되는 코드입니다. 본문은 구성원 디스크에 저장되지 않고 매 세션 게이트웨이에서 받아 실행됩니다(비활성화하면 다음 세션부터 실행되지 않습니다). 왼쪽 목록에서 항목을 선택하면 내용을 보고 편집할 수 있습니다.' }), relayPolicyCard(data, detail));
+        el('p', { class: 'admin-hint', text: '구성원 머신에서 특정 시점에 자동 실행되는 코드입니다. 본문은 구성원 디스크에 저장되지 않고 매 세션 게이트웨이에서 받아 실행됩니다(비활성화하면 다음 세션부터 실행되지 않습니다). 왼쪽 목록에서 항목을 선택하면 내용을 보고 편집할 수 있습니다.' }), relayPolicyCard(data, detail), gracePolicyCard(data, detail));
     detail.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
 }
 // PreToolUse 결정 전파 정책(#892) — 러너가 훅의 permissionDecision 중 무엇을 하네스로 넘길지.
@@ -4518,6 +4518,45 @@ function relayPolicyCard(data, detail) {
         }
     });
     return el('div', { class: 'admin-subcard' }, el('h4', { text: '도구 게이트 정책 (PreToolUse)' }), el('p', { class: 'admin-hint', text: 'PreToolUse 훅이 내리는 결정 중 러너가 하네스로 실제 전달할 값입니다. 체크 해제하면 그 결정은 무시됩니다(훅은 돌지만 효과 없음). 기본값은 deny·ask·defer — allow 는 구성원의 동의 화면을 없애므로 기본에서 빠져 있습니다.' }), ...boxes, el('div', { class: 'admin-actions' }, save));
+}
+// 오프라인 캐시 유효기간(#1008) — 게이트웨이에 연결 안 되는 동안 마지막으로 받은 커스텀 훅을 얼마나 오래 계속 실행할지.
+//  러너 전체에 걸리는 org 정책이라 relayPolicyCard 와 같은 목록 화면(훅 미선택 시)에 둔다. 무제한(기본) = 마지막 접속 기준
+//  영구 실행 → 게이트웨이 없이도 동작하는 로컬 훅(스킬 라우터·품질 게이트)이 오프라인에서 유지된다. 기간을 정하면 회수창.
+function gracePolicyCard(data, detail) {
+    const rc = data.runtimeConfig;
+    if (!rc)
+        return el('span', {}); // 비-admin 은 runtimeConfig 를 못 받는다 → 카드 숨김
+    // 프리셋: '' = 무제한(null), '0' = 즉시 중단, 그 외는 ms. 현재값이 프리셋에 없으면 아래에서 별도 옵션으로 추가.
+    const PRESETS = [
+        ['', '무제한 — 마지막 접속 기준 영구 실행 (기본·권장)'],
+        ['0', '즉시 중단 — 연결이 끊기면 바로 커스텀 훅 정지 (가장 보수적)'],
+        ['600000', '10분 (종전 기본값)'],
+        ['3600000', '1시간'],
+        ['21600000', '6시간'],
+        ['86400000', '1일'],
+        ['604800000', '7일'],
+    ];
+    const curVal = (rc.hook_grace_ms === null || rc.hook_grace_ms === undefined) ? '' : String(rc.hook_grace_ms);
+    const sel = el('select', {}, ...PRESETS.map(([v, label]) => el('option', { value: v, text: label })));
+    if (!PRESETS.some(([v]) => v === curVal))
+        sel.append(el('option', { value: curVal, text: `현재 설정: ${curVal}ms` }));
+    sel.value = curVal;
+    const save = el('button', { class: 'btn btn-primary btn-sm', text: '정책 저장' });
+    save.addEventListener('click', async () => {
+        const v = sel.value === '' ? null : Number(sel.value);
+        save.disabled = true;
+        try {
+            await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ hook_grace_ms: v }) });
+            await loadAdmin(true);
+            toast('저장됨 — 구성원 다음 세션부터');
+            renderAdminDetail(detail, 'custom-hooks', state.admin.data);
+        }
+        catch (e) {
+            toast(e.message, true);
+            save.disabled = false;
+        }
+    });
+    return el('div', { class: 'admin-subcard' }, el('h4', { text: '오프라인 캐시 유효기간 (게이트웨이 미연결 시)' }), el('p', { class: 'admin-hint', text: '게이트웨이에 연결되지 않는 동안, 마지막으로 받은 커스텀 훅을 얼마나 오래 계속 실행할지입니다. 무제한(기본)이면 마지막 접속 기준으로 계속 실행됩니다 — 게이트웨이 없이 동작하는 로컬 훅(스킬 라우터·품질 게이트 등)이 오프라인에서도 유지됩니다. 기간을 정하면 그 시간이 지난 뒤 커스텀 훅 실행을 멈춥니다(제거한 훅의 회수 목적). 어느 경우든 훅 본문 무결성(content_hash)은 캐시에서도 검증되고, 재연결 시 즉시 갱신·회수됩니다.' }), field('연결 끊긴 뒤 유지 기간', sel), el('div', { class: 'admin-actions' }, save));
 }
 function hookForm(root, h, data, detail, isNew) {
     const idIn = el('input', { type: 'text', value: h.id, placeholder: '훅 id (소문자/숫자/_-)', disabled: isNew ? null : '' });
