@@ -12,16 +12,20 @@ import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { projectAbsPath } from "./project-fs.js";
-import { listSessions, createSession } from "./terminal-sessions.js";
+import { listSessions, createSession, validateInvites, type CreateInput } from "./terminal-sessions.js";
 import { ensureAgentsMd, readProjectAgentsMd } from "./v6/agents-md.js";
 import { provisionProjectRepos } from "./project-provision.js";
-import { provisionProjectOnNode } from "./node/provision-remote.js";
+import { provisionProjectOnNode, createProjectSessionOnNode, nodeProjectSessions } from "./node/provision-remote.js";
+import { recordSessionProject } from "./v6/project-store.js";
 import { receiveUpload, uploadError } from "./upload-file.js";
 import { manifestFiles } from "./project-manifest.js";
 
 const MAX_UPLOAD = 50 * 1024 * 1024; // 50MB (terminal-files 와 동일)
 const MAX_PREVIEW = 25 * 1024 * 1024; // 25MB — 이미지·PDF 인라인 미리보기 허용(텍스트는 클라가 별도 크기 가드)
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
+// 신원 id — 터미널/세션로그 라우트와 동일 헬퍼(userId 우선, email 폴백). 노드 세션 소유/가시성 판정이 그 라우트들과
+//  같은 값을 써야 노드에서 연 프로젝트 세션이 어느 표면에서든 일관되게 보인다(#905 C4).
+const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 
 // 확장자→Content-Type. **PDF/이미지 인라인 미리보기의 핵심** — 이 헤더가 없으면 브라우저가 blob 을 text 로
 //  취급해 iframe 에 PDF 원시바이트(%PDF-1.3…)가 그대로 노출된다. 미지정 확장자는 octet-stream(다운로드 유도).
@@ -43,6 +47,9 @@ interface ProjectDeps {
   prefix: string;
   getProject: (id: number) => Promise<{ id: number; name: string; folder: string | null } | undefined | null>;
   isProjectMember: (id: number, memberId: string) => Promise<boolean>;
+  // 프로젝트 접근 가능자 전원(id) — 노드 프로젝트 세션의 공동입장 스냅샷(#905 C4)에 쓴다(노드 세션은 owner∪invites 로
+  //  가시성 판정 → 게이트웨이가 멤버를 초대목록으로 넘겨야 다른 멤버도 입장).
+  listProjectMembers: (id: number) => Promise<string[]>;
   listProjectActivities: (id: number, authorPerson?: string, limit?: number, offset?: number) => Promise<unknown[]>;
   // folder 가 비었을 때 물리 폴더를 생성하고 DB 에 반영 후 상대경로 반환(v6 보강용). 없으면 폴더 없음 400.
   ensureFolder?: (project: { id: number; name: string }) => Promise<string>;
@@ -231,8 +238,11 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const { base } = await projBase(Number(req.params.id));
     res.setHeader("Cache-Control", "no-store");
     const all = await listSessions(userOf(req));
-    const sessions = all.filter((s) => s.dir && (s.dir === base || s.dir.startsWith(base + path.sep)));
-    res.json({ sessions });
+    const local = all.filter((s) => s.dir && (s.dir === base || s.dir.startsWith(base + path.sep)));
+    // 노드 프로젝트 세션(#905 C4) 병합 — 노드에서 연 이 프로젝트 세션도 목록에 보이게(가시성=invites 스냅샷 판정).
+    //  각 항목의 .node 로 프론트가 &node= 입장/삭제를 릴레이한다. 로컬은 dir 로, 노드는 projectId 로 좁힌다.
+    const remote = nodeProjectSessions(idOf(userOf(req)), Number(req.params.id));
+    res.json({ sessions: [...local, ...remote] });
   }));
   app.post(`${prefix}/:id/sessions`, auth, wrap(async (req, res) => {
     const { project } = await projBase(Number(req.params.id));
@@ -243,18 +253,35 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const want = String(b.subpath ?? "").trim().replace(/^[/\\]+|[/\\]+$/g, "");
     if (want && (want === project.folder || want.startsWith(project.folder + "/"))) subpath = want;
     else if (want) throw new HttpError(400, "세션 작업 경로가 프로젝트 폴더 밖입니다");
-    const session = await createSession(userOf(req), {
+    // rootKey="shared" 는 노드·게이트웨이 모두 PROJECT_SHARED_BASE 로 해소된다 — 그래서 로컬·노드 분기가 같은 입력을 쓴다.
+    const input: CreateInput = {
       label: String(b.label ?? ""), rootKey: "shared", subpath,
       harness: String(b.harness ?? "shell"),
       flags: (b.flags && typeof b.flags === "object") ? b.flags as Record<string, unknown> : {},
       autoApprove: !!b.autoApprove,
       readOnly: !!b.readOnly, // #1007 — 이 프로젝트 세션만 읽기전용(컨텍스트 스토어 쓰기 소거).
       incognito: !!b.incognito, // #1007+ — 이 프로젝트 세션만 인코그니토(lively 전체 차단 + 훅 off).
-      // 프로젝트 공동 세션은 초대 목록을 쓰지 않는다 — 입장은 프로젝트 멤버십(아래 projectId)으로 게이트.
       // 세션에 프로젝트 id 를 박아 입장 게이트가 폴더가 아닌 멤버십(id)으로 판정하게 한다(폴더 드리프트 면역).
       projectId: project.id, projectSrc: prefix.includes("/v6/") ? "v6" : "org",
-    });
+    };
     res.setHeader("Cache-Control", "no-store");
+    // 노드 프로젝트 세션(#905 C4) — body.node 면 그 원격 노드에서 연다(provision 과 같은 게이트). 중앙 프로젝트 세션은
+    //  초대 목록 없이 멤버십으로 게이트하지만, 노드는 프로젝트 무지(DB 없음)라 owner∪invites 로만 가시성을 판정한다
+    //  → 게이트웨이가 현재 프로젝트 멤버(생성자∪팀원)를 검증해 invites 스냅샷으로 넘겨 다른 멤버의 공동입장을 성립시킨다.
+    //  (멤버십 변경은 세션 재생성 전까지 미반영 — 중앙 세션은 동적. 알려진 한계.)
+    const nodeId = String(b.node ?? "").trim();
+    if (nodeId) {
+      const requester = idOf(userOf(req));
+      const memberIds = await deps.listProjectMembers(project.id);
+      const invites = await validateInvites(memberIds, requester); // 실제 org 멤버만·요청자(owner) 제외·중복 제거
+      const session = await createProjectSessionOnNode(nodeId, requester, input, invites);
+      // 노드측은 DB 무접속이라 createSession 내부 recordSessionProject 가 no-op → 게이트웨이가 대신 세션↔프로젝트
+      //  매핑을 남긴다(멱등). 이게 있어야 활동 타임라인 귀속·경로무관 resume(latestProjectForSession)이 노드 세션도 인지.
+      await recordSessionProject(session.id, project.id).catch(() => { /* 비치명 */ });
+      res.json({ session: { ...session, node: { id: nodeId, online: true } } });
+      return;
+    }
+    const session = await createSession(userOf(req), input);
     res.json({ session });
   }));
 
@@ -268,7 +295,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const specs = Array.isArray(b.repos) ? b.repos as { name: string; path?: string; worktree?: boolean; branch?: string }[] : [];
     if (!specs.length) throw new HttpError(400, "provision 할 레포가 없습니다");
     const nodeId = String(b.node ?? "").trim();
-    const requester = userOf(req).userId ?? "";
+    const requester = idOf(userOf(req));
     const provisioned = nodeId
       ? await provisionProjectOnNode(nodeId, project.id, project.folder, specs, requester)
       : await provisionProjectRepos(project.id, project.folder, specs, { clone: b.clone !== false, memberId: requester || null });
@@ -297,6 +324,7 @@ export function registerProjectV6Routes(
   deps: {
     getProject: ProjectDeps["getProject"];
     isProjectMember: ProjectDeps["isProjectMember"];
+    listProjectMembers: ProjectDeps["listProjectMembers"];
     listProjectActivities: ProjectDeps["listProjectActivities"];
     ensureFolder: NonNullable<ProjectDeps["ensureFolder"]>;
   },

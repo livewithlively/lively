@@ -8,9 +8,11 @@
 //   대기는 게이트웨이 프로세스 안(WS RPC)에서 일어난다 — HTTP 프록시를 통과하지 않으므로 프록시 504(#522)와 무관.
 //   ⚠ 그래도 호출자(라우트)는 이 함수를 **await 로 오래 붙들면 안 된다** — 202+백그라운드나 별도 상태 폴링으로
 //    감싸는 건 호출자 몫(현재 라우트는 clone 이 대개 초 단위인 사내 레포 전제로 직접 await, 상한은 아래 CAP).
-import { getNode } from "./store.js";
-import { nodeOnline, nodeRpc, nodeSupports } from "./registry.js";
+import { getNode, type OrgNode } from "./store.js";
+import { nodeOnline, nodeRpc, nodeSupports, nodeSessionsFor, type NodeSessionInfo } from "./registry.js";
+import type { NodeOp } from "./protocol.js";
 import { resolveRepoInject, type RepoSpec, type ProvisionedRepo } from "../project-provision.js";
+import type { CreateInput, SessionInfo } from "../terminal-sessions.js"; // type-only — 런타임 순환 없음(erased)
 import { HttpError } from "../capabilities/rest-util.js";
 import { logger } from "../log.js";
 
@@ -62,6 +64,39 @@ export async function drivePollProvision(
   }
 }
 
+// 노드 사용 게이트(#905 C4) — "이 요청자가 이 노드에 프로젝트 작업(provision·세션생성)을 시킬 수 있는가"의 단일 판정.
+//  provision·create 두 경로가 **같은 게이트**를 써야 한쪽만 통과하는 불일치(provision 됐는데 세션 못 열기, 그 반대)가
+//  안 난다. 레지스트리(online/supports)·DB(getNode)는 싱글턴이라 못 mock → 주입형으로 분리해 판정을 단위검증한다
+//  (drivePollProvision 과 같은 이유). 실경로는 아래 liveNodeDeps.
+export interface NodeUsableDeps {
+  online: (nodeId: string) => boolean;
+  supports: (nodeId: string, op: NodeOp) => boolean;
+  getNode: (nodeId: string) => Promise<OrgNode | null | undefined>;
+}
+const liveNodeDeps: NodeUsableDeps = { online: nodeOnline, supports: nodeSupports, getNode };
+
+// 정책(🔴 트립와이어): **member 노드 = 개인 것(본인만) · worker 노드 = 조직 공용(개방)**. provision 자격 주입(member=
+//  본인 git 자격·worker=조직 폴백)과 같은 경계다. 이게 무너지면 남의 노트북에 세션이 열리거나(격리 깨짐·자격 유출)
+//  조직 실행기를 못 쓴다(worker 막힘). requireProvision=true 는 provision 능력까지 요구(세션생성=create 는 v1 기본
+//  능력이라 false — 모든 노드가 가짐).
+export async function assertNodeUsable(
+  deps: NodeUsableDeps, nodeId: string, requesterId: string, opts?: { requireProvision?: boolean },
+): Promise<OrgNode> {
+  if (!deps.online(nodeId)) throw new HttpError(409, `노드 '${nodeId}' 가 오프라인입니다 — 그 PC/서버의 lively 노드 연결을 확인하세요.`);
+  // 미지원(구 번들) 노드엔 애초에 안 보낸다 — 보내면 nodeRpc 가 node-unsupported-op 로 던진다. 여기서 먼저 사람 말로.
+  if (opts?.requireProvision && !deps.supports(nodeId, "provision")) {
+    throw new HttpError(409, `노드 '${nodeId}' 의 에이전트가 낡아 프로젝트 provision 을 지원하지 않습니다 — 그 PC/서버에서 노드를 다시 설치·업데이트하세요.`);
+  }
+  const node = await deps.getNode(nodeId);
+  if (!node || !node.enabled) throw new HttpError(409, `노드 '${nodeId}' 가 비활성 상태입니다.`);
+  // 🔴 소유권 게이트 — member 노드는 개인 노트북이라 남의 것엔 아무것도 안 한다(격리·본인 git 자격 유출 차단).
+  //  위탁 스케줄러도 같은 규율(리스 없으면 owner===requester 만 후보). worker 노드는 조직 공용 실행기라 개방.
+  if (node.kind === "member" && node.owner_member !== requesterId) {
+    throw new HttpError(403, `노드 '${nodeId}' 는 본인 소유의 멤버 노드가 아닙니다 — 남의 멤버 노드에는 접근할 수 없습니다.`);
+  }
+  return node;
+}
+
 // 노드에 프로젝트 레포들을 provision 시키고 완료까지 기다려 결과(ProvisionedRepo[])를 돌려준다.
 //  specs 는 사용자 지정(name·worktree·branch·path). 여기서 각 spec 에 inject(git_url·자격)를 채워 노드에 보낸다
 //  — 노드엔 DB 가 없어 스스로 못 해낸다. 자격 정책(member=본인 · worker=조직폴백)은 resolveRepoInject 단일 관문.
@@ -69,19 +104,8 @@ export async function provisionProjectOnNode(
   nodeId: string, projectId: number, folder: string, specs: RepoSpec[], requesterId: string,
   opts?: { capMs?: number },
 ): Promise<ProvisionedRepo[]> {
-  if (!nodeOnline(nodeId)) throw new HttpError(409, `노드 '${nodeId}' 가 오프라인입니다 — 그 PC/서버의 lively 노드 연결을 확인하세요.`);
-  // 🔴 미지원 노드엔 애초에 보내지 않는다 — 보내면 nodeRpc 가 node-unsupported-op 로 던진다. 여기서 먼저 잡아 사람 말로.
-  if (!nodeSupports(nodeId, "provision")) {
-    throw new HttpError(409, `노드 '${nodeId}' 의 에이전트가 낡아 프로젝트 provision 을 지원하지 않습니다 — 그 PC/서버에서 노드를 다시 설치·업데이트하세요.`);
-  }
-  const node = await getNode(nodeId);
-  if (!node || !node.enabled) throw new HttpError(409, `노드 '${nodeId}' 가 비활성 상태입니다.`);
-  // 🔴 소유권 게이트 — **남의 멤버 노드**엔 provision 하지 않는다. member 노드는 개인 노트북이라, 거기에 provision
-  //  하면 요청자 본인 git 자격(leaseGitSecretForNode)이 그 남의 머신으로 나가고 남의 디스크에 내 레포가 클론된다.
-  //  위탁 스케줄러도 같은 규율(리스 없으면 owner===requester 노드만 후보). worker 노드는 조직 공용 실행기라 개방.
-  if (node.kind === "member" && node.owner_member !== requesterId) {
-    throw new HttpError(403, `노드 '${nodeId}' 는 본인 소유의 멤버 노드가 아닙니다 — 남의 노드엔 provision 할 수 없습니다.`);
-  }
+  // 게이트(online·provision 능력·enabled·소유권) — provision 은 능력까지 요구. node.kind 로 자격 정책이 갈린다.
+  const node = await assertNodeUsable(liveNodeDeps, nodeId, requesterId, { requireProvision: true });
 
   // 각 spec 에 inject 채우기 — 자격은 노드 종류가 가른다(member/worker). resolveRepoInject 안에 정책이 갇혀 있다.
   const injected: RepoSpec[] = [];
@@ -111,6 +135,36 @@ export async function provisionProjectOnNode(
     { online: () => nodeOnline(nodeId), status: () => nodeRpc<ProvisionStatus>(nodeId, "provisionStatus", { projectId }), reprovision: async () => { await dispatch(); } },
     { nodeId, projectId, capMs },
   );
+}
+
+// 노드에서 프로젝트 세션을 연다(#905 C4) — provision 과 **같은 게이트**(assertNodeUsable) 뒤 create op 을 릴레이한다.
+//  create 는 v1 기본 능력이라 requireProvision=false(단 UI 는 provision 미지원 노드를 애초에 안 보여준다). 세션 입력의
+//  rootKey/subpath 의미는 게이트웨이 로컬과 동일 — ROOTS["shared"].base 가 노드·게이트웨이 모두 PROJECT_SHARED_BASE
+//  라 같은 프로젝트 폴더로 해소된다. invites 는 게이트웨이가 프로젝트 멤버로 검증한 스냅샷을 넘긴다(노드는 프로젝트
+//  무지 — DB 없음 → createSession 내부 검증이 빈 배열이 되므로, 노드 create 핸들러가 이 별도 invites 를 적용한다).
+export async function createProjectSessionOnNode(
+  nodeId: string, requesterId: string, input: CreateInput, invites: string[],
+): Promise<SessionInfo> {
+  await assertNodeUsable(liveNodeDeps, nodeId, requesterId);
+  try {
+    return await nodeRpc<SessionInfo>(nodeId, "create", {
+      user: { userId: requesterId }, input: { ...input, invites: [] }, invites,
+    });
+  } catch (e) {
+    // 네트워크·미지원을 사람 말로(래핑 없으면 bare 500 로 샌다) — relayNodeOp 와 같은 매핑.
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg === "node-offline" || !nodeOnline(nodeId)) throw new HttpError(409, `노드 '${nodeId}' 연결이 끊겨 세션을 열지 못했습니다.`);
+    if (msg === "node-rpc-timeout") throw new HttpError(504, `노드 '${nodeId}' 응답 시간 초과 — 세션 생성을 확인하지 못했습니다.`);
+    if (msg.startsWith("node-unsupported-op:")) throw new HttpError(409, `노드 '${nodeId}' 의 에이전트가 낡아 세션 생성을 지원하지 않습니다 — 그 PC/서버에서 노드를 다시 설치·업데이트하세요.`);
+    throw new HttpError(502, `노드 '${nodeId}' 세션 생성 실패: ${msg}`);
+  }
+}
+
+// 이 프로젝트에 속한, 이 사용자에게 보이는 노드 세션들(#905 C4) — 프로젝트 세션 목록 병합용. 노드에서 연 프로젝트
+//  세션도 프로젝트 탭 목록에 보이게 한다. 가시성(owner∪invites 스냅샷)은 nodeSessionsFor 가 판정하므로, 여기선
+//  projectId 로만 좁힌다. 각 항목은 .node({id,name,online}) 를 달고 있어 프론트가 &node= 로 입장/삭제를 릴레이한다.
+export function nodeProjectSessions(viewerId: string, projectId: number): NodeSessionInfo[] {
+  return nodeSessionsFor(viewerId).filter((s) => s.projectId === projectId);
 }
 
 function realSleep(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)); }

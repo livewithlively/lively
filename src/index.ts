@@ -28,7 +28,7 @@ import { setupNodeUpgrade } from "./node/registry.js";
 import { startTaskScheduler } from "./node/task-scheduler.js";
 import { registerProjectV6Routes } from "./project-routes.js";
 import { registerSessionLogRoutes } from "./session-log-routes.js";
-import { getProject as v6GetProject, isProjectMember as v6IsProjectMember, setProjectFolder as v6SetProjectFolder } from "./v6/project-store.js";
+import { getProject as v6GetProject, isProjectMember as v6IsProjectMember, listProjectMemberIds as v6ListProjectMemberIds, setProjectFolder as v6SetProjectFolder } from "./v6/project-store.js";
 import { listProjectActivities } from "./org/store.js";
 import { createProjectFolder, backfillMarkerSync } from "./project-fs.js";
 import { startScheduler } from "./scheduler.js";
@@ -234,6 +234,7 @@ registerProjectV6Routes(app, verifier, {
     return p ? { id: p.id, name: p.name, folder: p.folder } : undefined;
   },
   isProjectMember: (id, m) => v6IsProjectMember(id, m),
+  listProjectMembers: (id) => v6ListProjectMemberIds(id),
   listProjectActivities: (id, a, l, o) => listProjectActivities(id, a, l, o),
   ensureFolder: async (project) => {
     const folder = await createProjectFolder(project.id);

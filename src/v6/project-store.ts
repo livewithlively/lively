@@ -619,6 +619,18 @@ export async function setProjectMembers(projectId: number, memberIds: string[], 
   return ids;
 }
 
+// 프로젝트 접근 가능자 전원(id) — 생성자(created_by) ∪ 팀원(project_member). 게이트웨이 프로젝트 세션 attach 게이트
+//  (isProjectMember)와 **같은 집합**을 뽑아, 노드 프로젝트 세션의 공동입장 스냅샷(#905 C4)으로 넘긴다: 노드 세션
+//  가시성은 owner∪invites 라, 이 집합을 초대목록으로 노드에 넘겨야 생성자 외 다른 멤버도 입장할 수 있다.
+export async function listProjectMemberIds(projectId: number): Promise<string[]> {
+  const rows = await q(itemsPool,
+    // level='project' 로 자기방어 — task/subtask id 를 넘겨도 그 created_by 를 '멤버'로 오인하지 않는다(sibling isProjectMember 와 정합).
+    `SELECT created_by AS member_id FROM project WHERE id=$1 AND level='project' AND created_by IS NOT NULL
+     UNION
+     SELECT member_id FROM project_member WHERE project_id=$1`, [projectId]);
+  return rows.map((r) => r.member_id).filter((x: unknown): x is string => typeof x === "string" && x.length > 0);
+}
+
 // ── 작업(task/subtask) 쓰기 ───────────────────────────────────────────────
 export async function createTask(
   input: { projectId: number; parentTaskId?: number; name: string; description?: string },

@@ -3223,7 +3223,8 @@ function pjvProjSessionCell(p, reload) {
                 item.onclick = (ev) => {
                     ev.stopPropagation();
                     close();
-                    window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank');
+                    // 노드 세션(#905 C4)은 &node= 로 열어야 attach 가 그 노드로 릴레이된다.
+                    window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || '') + (s.node ? '&node=' + encodeURIComponent(s.node.id) : ''), '_blank');
                 };
                 menu.append(item);
             }
@@ -11339,8 +11340,10 @@ function projectTerminalSection(id, members, meId, base, projectName, project) {
         if (s.owned)
             acts.push(el('button', { class: 'btn btn-ghost btn-sm', text: '이름변경', onclick: () => openSessionRename(s, load) }), el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: () => removeSession(s, load) }));
         acts.push(el('button', { class: 'btn btn-ghost btn-sm', text: 'ℹ 정보', onclick: () => openSessionInfo(s) })); // 세션 메타 팝업(#480 요청2)
-        acts.push(el('button', { class: 'btn btn-primary btn-sm', text: '입장', onclick: () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank') }));
-        return el('div', { class: 'proj-sess-row' }, el('div', { class: 'proj-sess-main' }, el('div', { class: 'proj-sess-name' }, (s.label || s.id), s.attached ? el('span', { class: 'proj-sess-live', text: '● 사용 중' }) : null), el('div', { class: 'proj-sess-meta', text: (s.harness || 'shell') + ' · 만든이 ' + ownerName(s.owner) })), el('div', { class: 'proj-sess-acts' }, ...acts));
+        // 노드 세션(#905 C4)은 &node= 로 입장해야 게이트웨이가 그 노드로 attach 를 릴레이한다.
+        const openQ = '/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || '') + (s.node ? '&node=' + encodeURIComponent(s.node.id) : '');
+        acts.push(el('button', { class: 'btn btn-primary btn-sm', text: '입장', onclick: () => window.open(openQ, '_blank') }));
+        return el('div', { class: 'proj-sess-row' }, el('div', { class: 'proj-sess-main' }, el('div', { class: 'proj-sess-name' }, (s.label || s.id), s.attached ? el('span', { class: 'proj-sess-live', text: '● 사용 중' }) : null), el('div', { class: 'proj-sess-meta', text: (s.harness || 'shell') + ' · 만든이 ' + ownerName(s.owner) + (s.node ? ' · 🖥 ' + (s.node.name || s.node.id) + (s.node.online ? '' : ' (끊김)') : '') })), el('div', { class: 'proj-sess-acts' }, ...acts));
     }
     // 세션 메타 팝업(#480 요청2) — 목록이 이미 담아 보내는 값만으로 구성(추가 백엔드 없음). 실시간 상태는 미포함(요청).
     function openSessionInfo(s) {
@@ -11351,6 +11354,7 @@ function projectTerminalSection(id, members, meId, base, projectName, project) {
         const rows = [
             ['이름', s.label || s.id],
             ['종류', harnessTxt],
+            ...(s.node ? [['실행 노드', '🖥 ' + (s.node.name || s.node.id) + (s.node.online ? '' : ' — 연결 끊김')]] : []), // #905 C4
             ['자동 승인', s.autoApprove ? '켜짐 — 권한 확인 없이 실행' : '꺼짐'],
             ['사용 중', s.attached ? '예 — 지금 열려 있음' : '아니오'],
             ['만든이', ownerName(s.owner)],
@@ -11361,7 +11365,7 @@ function projectTerminalSection(id, members, meId, base, projectName, project) {
         ];
         const rowEl = (kv) => el('div', { style: 'display:flex;gap:10px;padding:7px 0;border-bottom:1px solid rgba(127,127,127,.12)' }, el('div', { style: 'flex:0 0 92px;color:var(--muted,#888);font-size:13px', text: kv[0] }), el('div', { style: 'flex:1;min-width:0;word-break:break-all', text: kv[1] }));
         const enterBtn = el('button', { class: 'btn btn-primary', text: '입장',
-            onclick: () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank') });
+            onclick: () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || '') + (s.node ? '&node=' + encodeURIComponent(s.node.id) : ''), '_blank') });
         const back = overlayBox('세션 정보 — ' + (s.label || s.id), el('div', {}, ...rows.map(rowEl)), el('div', { class: 'ov-actions' }, enterBtn, el('button', { class: 'btn btn-ghost', text: '닫기', onclick: () => back.remove() })));
     }
     function editStatus(m) {
@@ -11525,11 +11529,27 @@ async function openProjectSessionForm(id, reload, base, projectName, projectRepo
     catch (_) { /* graceful: 레포 없음 */ }
     // 이 프로젝트의 관련 레포를 기본 행으로(있으면) — 없으면 빈 채로 '+ 레포 추가' 안내.
     (projectRepos || []).filter((n) => cloneRepoNames.includes(n)).forEach((n) => addRepoRow(n));
+    // 실행 위치(#905 C4) — 기본 중앙 박스. 등록된 워커/멤버 노드를 고르면 그 노드에서 레포 provision + 세션 생성.
+    //  usable=1 로 조직 worker 노드까지 조회(소유 무관 개방). provision 능력 없는 구 번들·오프라인 노드는 disabled 로 이유를 보인다.
+    let usableNodes = [];
+    try {
+        usableNodes = (await api('/api/ui/nodes?usable=1')).nodes || [];
+    }
+    catch (_) { /* graceful: 노드 없음 */ }
+    const nodeSel = el('select', { class: 'term-input' }, el('option', { value: '', text: '중앙 컴퓨터 (기본)' }), ...usableNodes.map((n) => {
+        const caps = Array.isArray(n.agent_caps) ? n.agent_caps : [];
+        const suffix = caps.indexOf('provision') < 0 ? ' — 에이전트 업데이트 필요' : (!n.online ? ' — 오프라인' : '');
+        const o = el('option', { value: n.id, text: '🖥 ' + (n.name || n.id) + (n.kind === 'worker' ? ' (워커)' : '') + suffix });
+        if (suffix)
+            o.disabled = true;
+        return o;
+    }));
+    const nodeField = el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '실행 위치' }), nodeSel, el('div', { class: 'caption', text: '기본은 중앙 컴퓨터입니다. 등록된 워커/멤버 노드를 고르면 그 노드에서 레포를 받아 세션을 엽니다(provision 지원 노드만 고를 수 있어요).' }));
     const saveBtn = el('button', { class: 'btn btn-primary', 'data-tour': 'sess-create', text: '만들고 입장' });
     const cancelBtn = el('button', { class: 'btn btn-ghost', 'data-tour': 'sess-cancel', text: '취소', onclick: () => back.remove() });
     // 옛 '▸ 고급 설정 (실행기·모델·자동 승인)' 접이 토글 폐기(#req) — 터미널 탭과 동일한 '실행 설정' 프리셋을
     //  기본 펼침으로 바로 노출(presetToggle + presetBody 위에서 구성). 이전 설정 프리필이라 대부분 그대로 만들면 된다.
-    const back = overlayBox('새 터미널 세션', el('p', { class: 'admin-hint', text: '이 프로젝트 폴더에서 시작하는 공동 세션입니다 — 프로젝트 팀원만 보고 입장할 수 있어요.' }), el('div', { class: 'field', 'data-tour': 'sess-name' }, el('label', { class: 'field-label', text: '이름' }), nameIn), el('div', { class: 'field', 'data-tour': 'sess-repos', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '코드 저장소 미리 받기 (선택 — 대개 필요 없어요)' }), el('div', { class: 'caption', text: '코드 작업이어도 고를 필요 없어요 — 세션이 코드가 필요해지면 스스로 가져옵니다(프로젝트에 연결된 저장소가 없어도 후보를 찾아 물어봐요). 큰 저장소라 받는 데 오래 걸려서 세션 시작 전에 미리 받아두고 싶을 때만 쓰세요.' }), reposWrap, el('div', { style: 'margin-top:8px' }, addRepoBtn)), el('div', { class: 'term-preset proj-sess-preset', style: 'margin-top:12px' }, presetToggle, presetBody), el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
+    const back = overlayBox('새 터미널 세션', el('p', { class: 'admin-hint', text: '이 프로젝트 폴더에서 시작하는 공동 세션입니다 — 프로젝트 팀원만 보고 입장할 수 있어요.' }), el('div', { class: 'field', 'data-tour': 'sess-name' }, el('label', { class: 'field-label', text: '이름' }), nameIn), ...(usableNodes.length ? [nodeField] : []), el('div', { class: 'field', 'data-tour': 'sess-repos', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '코드 저장소 미리 받기 (선택 — 대개 필요 없어요)' }), el('div', { class: 'caption', text: '코드 작업이어도 고를 필요 없어요 — 세션이 코드가 필요해지면 스스로 가져옵니다(프로젝트에 연결된 저장소가 없어도 후보를 찾아 물어봐요). 큰 저장소라 받는 데 오래 걸려서 세션 시작 전에 미리 받아두고 싶을 때만 쓰세요.' }), reposWrap, el('div', { style: 'margin-top:8px' }, addRepoBtn)), el('div', { class: 'term-preset proj-sess-preset', style: 'margin-top:12px' }, presetToggle, presetBody), el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
     setTimeout(() => nameIn.focus(), 0);
     saveBtn.onclick = async () => {
         saveBtn.disabled = true;
@@ -11542,20 +11562,23 @@ async function openProjectSessionForm(id, reload, base, projectName, projectRepo
         }
         saveTermCreatePrefs({ harness: harnessSel.value, flags, autoApprove: autoCb.checked }); // 다음 생성 때 기본값(터미널 탭과 공유 — #673/#req, 자동 승인은 #782)
         try {
-            // 선택한 레포(들)를 먼저 박스에 provision(clone/worktree + 비워크트리 add-dir). 세션은 프로젝트 폴더에서 연다.
+            // 선택한 레포(들)를 먼저 provision(clone/worktree + 비워크트리 add-dir). node 를 고르면 그 노드에서, 아니면 중앙 박스에서.
+            //  세션도 같은 node 로 열어야 provision 된 폴더에서 열린다(node 없으면 중앙 — 무회귀).
+            const node = nodeSel.value || undefined;
             const specs = rrows.map((r) => ({ name: r.sel.value, path: r.pathInp.value.trim(), worktree: r.wtChk.checked, branch: r.branchInp.value.trim() })).filter((s) => s.name);
             if (specs.length) {
-                saveBtn.textContent = '레포 준비 중… (clone 시 잠시)';
-                await api(B + id + '/provision', { method: 'POST', body: JSON.stringify({ repos: specs }) });
+                saveBtn.textContent = node ? '레포 준비 중… (노드에서 clone, 잠시)' : '레포 준비 중… (clone 시 잠시)';
+                await api(B + id + '/provision', { method: 'POST', body: JSON.stringify({ repos: specs, node }) });
             }
-            saveBtn.textContent = '세션 여는 중…';
+            saveBtn.textContent = node ? '노드에서 세션 여는 중…' : '세션 여는 중…';
             const r = await api(B + id + '/sessions', { method: 'POST', body: JSON.stringify({
-                    label: nameIn.value.trim(), harness: harnessSel.value, flags, autoApprove: autoCb.checked,
+                    label: nameIn.value.trim(), harness: harnessSel.value, flags, autoApprove: autoCb.checked, node,
                 }) });
             back.remove();
             toast(specs.length ? ('레포 ' + specs.length + '개 준비 완료 · 세션을 만들었습니다') : '세션을 만들었습니다');
+            // 노드 세션(#905 C4)은 &node= 로 열어야 게이트웨이가 그 노드로 attach WS 를 릴레이한다(public/terminal.js).
             if (r && r.session && r.session.id)
-                window.open('/ui/terminal.html?session=' + encodeURIComponent(r.session.id) + '&label=' + encodeURIComponent(r.session.label || ''), '_blank');
+                window.open('/ui/terminal.html?session=' + encodeURIComponent(r.session.id) + '&label=' + encodeURIComponent(r.session.label || '') + (node ? '&node=' + encodeURIComponent(node) : ''), '_blank');
             reload();
         }
         catch (e) {
@@ -11581,7 +11604,8 @@ function openSessionRename(s, reload) {
         }
         saveBtn.disabled = true;
         try {
-            await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify({ label }) });
+            // 노드 세션(#905 C4)은 node 를 함께 보내야 편집이 그 노드에 릴레이된다(안 보내면 게이트웨이 로컬 편집→소유권 오판 403).
+            await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify({ label, node: (s.node && s.node.id) || undefined }) });
             back.remove();
             toast('이름을 변경했습니다');
             reload();
@@ -11600,7 +11624,8 @@ async function removeSession(s, reload) {
     if (!confirm('세션 ‘' + (s.label || s.id) + '’을(를) 삭제할까요?\n\n실행 중인 작업이 함께 종료됩니다(되돌릴 수 없음).'))
         return;
     try {
-        await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'DELETE' });
+        // 노드 세션(#905 C4)은 ?node= 로 삭제를 그 노드에 위임한다(터미널 탭과 동일).
+        await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' });
         toast('세션을 삭제했습니다');
         reload();
     }

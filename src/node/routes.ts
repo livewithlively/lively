@@ -72,11 +72,15 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
   const auth = sessionOrBearer(verifier);
 
   // 목록 — 본인 소유(admin 은 전체). 라이브 연결 상태를 DB 행에 얹는다.
+  //  usable=1(#905 C4): 프로젝트 세션을 **열 수 있는** 노드 = 내 멤버 노드 ∪ 조직 공용 worker 노드(개방 — provision
+  //  게이트가 worker 를 누구에게나 허용하는 것과 정합). 기본(관리 목록)은 종전대로 본인 소유만 — worker 노드의 관리
+  //  액션(토글·삭제·토큰회전)은 별 라우트가 admin 게이트하므로, 여기서 worker 를 조회에 넣어도 선택용일 뿐 안전하다.
   app.get("/api/ui/nodes", auth, wrap(async (req, res) => {
     const u = userOf(req);
     const me = idOf(u);
+    const usable = req.query.usable === "1" || req.query.usable === "true";
     const live = new Map(liveNodes().map((n) => [n.id, { online: n.online, sessions: n.sessions }]));
-    const rows = (await listNodes()).filter((n) => isAdmin(u) || n.owner_member === me);
+    const rows = (await listNodes()).filter((n) => isAdmin(u) || n.owner_member === me || (usable && n.kind === "worker" && n.enabled));
     res.setHeader("Cache-Control", "no-store");
     res.json({ nodes: rows.map((n) => toView(n, live)) });
   }));
