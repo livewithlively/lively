@@ -188,9 +188,8 @@ function reconcileClaudeMcp(gw, token) {
   //  값은 정적 리터럴(${LIVELY_*:-}, 비밀 아님) — 접속 시 하네스가 제 env 로 확장. Authorization(토큰)만 멤버 값이라 아래 reconcile 이 안 건드린다.
   want["lively"] = { type: "http", url: `${gw}/mcp`, headers: {
     Authorization: `Bearer ${token}`,
-    "x-lively-session": "${LIVELY_SESSION_ID:-}",   // #852
-    "x-lively-readonly": "${LIVELY_READONLY:-}",    // #1007
-    "x-lively-incognito": "${LIVELY_INCOGNITO:-}",  // #1007+
+    "x-lively-session": "${LIVELY_SESSION_ID:-}",  // #852
+    "x-lively-mode": "${LIVELY_MODE:-}",           // #1007+ 단일 실행모드 헤더(readonly|incognito) — 미래 모드도 재등록 불요
   } };
   want["lively-local"] = { type: "stdio", command: shim, args: ["mcp-local"], env: {} };
   // 조직 추가 MCP 서버(mcp-servers.json) — [] 또는 {servers:[]} 양식 모두 허용. enabled·name 있는 것만, additive.

@@ -370,11 +370,11 @@ try {
       : bad("⑮ MCP reconcile", `llOk=${llOk} userKept=${userKept} livelyKept=${livelyKept} ll=${JSON.stringify(ll)}`);
 
     // ⑮c #1007+ — 헤더 additive: 기존 lively 항목에 **빠진 모드 헤더만** 더한다(재등록 없이 전파, 1세션 지연). 토큰(Authorization)은 불변(멤버 값 보존).
+    //  초기 lively 엔트리는 Authorization 만 있었으므로(위 셋업) reconcile 이 x-lively-session·x-lively-mode 를 더해야 한다.
     const h = (conf.mcpServers && conf.mcpServers.lively && conf.mcpServers.lively.headers) || {};
     const hdrOk = h.Authorization === "Bearer test-token"          // 토큰 안 건드림
       && h["x-lively-session"] === "${LIVELY_SESSION_ID:-}"
-      && h["x-lively-readonly"] === "${LIVELY_READONLY:-}"
-      && h["x-lively-incognito"] === "${LIVELY_INCOGNITO:-}";
+      && h["x-lively-mode"] === "${LIVELY_MODE:-}";
     hdrOk ? ok("⑮c 헤더 additive — 기존 lively 에 모드 헤더 추가 + 토큰 불변")
       : bad("⑮c 헤더 additive", `headers=${JSON.stringify(h)}`);
 

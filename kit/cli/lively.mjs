@@ -601,15 +601,14 @@ function backupUserMcp(name) {
 //   remove→add 가 **기존 세션 헤더를 지워** 그 세션의 작업 귀속이 끊긴다 — 프로비저닝된 멤버(provision-member.sh:122)가
 //   재로그인·재설치할 때 실제로 발생한다. 값은 **리터럴로** 넘긴다: 확장은 접속 시 하네스가 제 env 로 한다.
 //   `:-` 기본값이 없으면 세션 밖(랩탑)에서 "Missing environment variables" 경고가 뜬다(register-clients.sh 실측).
-//   x-lively-readonly(#1007): 세션을 LIVELY_READONLY=1 로 실행하면 그 세션만 읽기전용(게이트웨이가 쓰기 툴 소거). 미설정=빈 값=정상.
+//   x-lively-mode(#1007+): 세션을 LIVELY_MODE=readonly|incognito 로 실행하면 그 세션만 그 모드(게이트웨이 강제). 미설정=빈 값=normal. 단일 헤더라 미래 모드도 재등록 불요.
 function registerLivelyMcp(gw, tok) {
   run("claude", ["mcp", "remove", "lively"], { allowFail: true, quiet: true });
   try {
     run("claude", ["mcp", "add", "--transport", "http", "--scope", "user", "lively", `${gw}/mcp`,
       "--header", `Authorization: Bearer ${tok}`,
       "--header", "x-lively-session: ${LIVELY_SESSION_ID:-}",
-      "--header", "x-lively-readonly: ${LIVELY_READONLY:-}",
-      "--header", "x-lively-incognito: ${LIVELY_INCOGNITO:-}"], { quiet: true });
+      "--header", "x-lively-mode: ${LIVELY_MODE:-}"], { quiet: true });
     ok(`MCP 등록: lively → ${gw}/mcp`);
     return true;
   } catch (e) { fail(`MCP 등록 실패(lively): ${e.message}`); return false; }
@@ -1164,8 +1163,8 @@ async function cmdDoctor(opts) {
 
 // ── 실행 모드(#1007+) — 이 세션이 라이블리와 얼마나 상호작용하나. CLI 가 모드 이름을 env 플래그로 번역한다. ──
 //  normal   : 주입 ○ / 쓰기 ○ (기본)
-//  readonly : 주입 ○ / 쓰기 ✗ (게이트웨이가 x-lively-readonly 헤더로 쓰기 툴 소거 · REST 403)
-//  incognito: 주입 ✗ / 읽기 ✗ / 쓰기 ✗ (게이트웨이가 x-lively-incognito 로 lively 툴 0개+전체 차단 = 사실상 연결없음) + 훅 off
+//  readonly : 주입 ○ / 쓰기 ✗ (게이트웨이가 x-lively-mode=readonly 로 쓰기 툴 소거 · REST 403)
+//  incognito: 주입 ✗ / 읽기 ✗ / 쓰기 ✗ (게이트웨이가 x-lively-mode=incognito 로 lively 툴 0개+전체 차단 = 사실상 연결없음) + 훅 off
 const MODES = ["normal", "readonly", "incognito"];
 const MODE_FILE = "mode";
 // 디폴트 모드(~/.lively/mode) — 유효하지 않거나 없으면 normal.
@@ -1183,10 +1182,13 @@ function extractMode(rest) {
   }
   return { mode: mode ?? defaultMode(), rest: out };
 }
-// 모드 → 세션 env(하네스가 상속 → MCP 헤더가 이 env 를 확장 → 게이트웨이 강제). incognito 는 훅도 끈다(주입·넛지 off).
+// 모드 → 세션 env(하네스가 상속 → MCP 헤더 x-lively-mode 가 이 env 를 확장 → 게이트웨이 강제). 단일 헤더라 미래 모드 추가 시 재등록 불요(#1007+). incognito 는 LIVELY_OFF 로 훅(주입·넛지)도 끈다.
+//  ⚠ **전이기 dual-env**: 새 LIVELY_MODE(주 신호) 와 함께 구 LIVELY_READONLY/LIVELY_INCOGNITO 도 세팅한다 — 이 사용자의 claude.json MCP 설정에
+//   x-lively-mode 헤더가 아직 전파 안 된 경우(구 x-lively-readonly/incognito 헤더만 있음, self-update 1세션 지연)에도 격리가 fail-open 되지 않게.
+//   x-lively-mode 헤더가 있으면 게이트웨이 modeFromHeaders 가 그걸 우선한다(구 env 는 무해). 전파 완료 후 구 env 는 후속 정리에서 제거(#1021).
 function modeEnv(mode) {
-  if (mode === "readonly") return { LIVELY_READONLY: "1" };
-  if (mode === "incognito") return { LIVELY_INCOGNITO: "1", LIVELY_OFF: "1" };
+  if (mode === "readonly") return { LIVELY_MODE: "readonly", LIVELY_READONLY: "1" };
+  if (mode === "incognito") return { LIVELY_MODE: "incognito", LIVELY_INCOGNITO: "1", LIVELY_OFF: "1" };
   return {};
 }
 

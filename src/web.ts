@@ -127,11 +127,11 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       const incognito = incognitoFromHeaders(req.headers);
       // 인코그니토(#1007+): me(모드 확인용, scope 없음) 빼고 **모든** lively REST 를 403(읽기 포함) = 사실상 연결없음.
       if (incognito && cap.name !== "me") {
-        throw new HttpError(403, "인코그니토 세션 — 라이블리 접근이 비활성화되어 있습니다(#1007). 이 세션의 LIVELY_INCOGNITO 를 끄고 다시 시도하세요.");
+        throw new HttpError(403, "인코그니토 세션 — 라이블리 접근이 비활성화되어 있습니다(#1007). 이 세션의 LIVELY_MODE(=incognito)를 해제하고 다시 시도하세요.");
       }
       // 읽기전용: 컨텍스트 스토어에 쓰는 REST 만 403(isReadOnlyBlocked 는 MCP 스킵과 동일 판정).
       if (readOnly && isReadOnlyBlocked(cap)) {
-        throw new HttpError(403, "읽기전용 세션 — 컨텍스트 스토어 쓰기가 비활성화되어 있습니다(#1007). 이 세션의 LIVELY_READONLY 를 끄고 다시 시도하세요.");
+        throw new HttpError(403, "읽기전용 세션 — 컨텍스트 스토어 쓰기가 비활성화되어 있습니다(#1007). 이 세션의 LIVELY_MODE(=readonly)를 해제하고 다시 시도하세요.");
       }
       const input = mount.parse(req); // 기존 qstr/qint/parseMappingBody 검증 그대로(HttpError → wrap)
       const user = userOf(req);

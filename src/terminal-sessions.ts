@@ -472,6 +472,16 @@ export async function ensureMemberOsUser(user: LivelyUser): Promise<string | nul
 //  "폴더가 git 저장소가 아니라서"로 **오진**했다(진짜 이유는 격리). 코드 작업면은 lively_local_repo_worktree
 //  셀프서비스가 환경·격리 무관하게 만든다 — 세션 생성은 워크트리를 만들지 않는다.
 
+// 실행 모드(#1007+) → 격리 pane 에 실을 `-e` env 인자. 순수 함수라 단위테스트로 계약을 못박는다(terminal-sessions.test.ts).
+//  incognito 는 readonly 보다 강함(lively 전체 차단 + LIVELY_OFF 로 훅까지 off). 둘 다면 incognito.
+//  ⚠ **전이기 dual-env**: 새 LIVELY_MODE(주 신호) + 구 LIVELY_READONLY/LIVELY_INCOGNITO 를 함께 실어, x-lively-mode 헤더가 아직
+//   전파 안 된 설치(구 boolean 헤더만, self-update 1세션 지연)에서도 격리가 fail-open 되지 않게. 전파 완료 후 #1021 에서 구 env 제거.
+export function modeEnvArgs(input: { readOnly?: boolean; incognito?: boolean }): string[] {
+  if (input.incognito) return ["-e", "LIVELY_MODE=incognito", "-e", "LIVELY_INCOGNITO=1", "-e", "LIVELY_OFF=1"];
+  if (input.readOnly) return ["-e", "LIVELY_MODE=readonly", "-e", "LIVELY_READONLY=1"];
+  return [];
+}
+
 export async function createSession(user: LivelyUser, input: CreateInput): Promise<SessionInfo> {
   // 디스크 가드(#813 T5) — **맨 앞**에서 막는다. 세션은 워크트리 체크아웃 + 의존성 설치로 디스크를 크게 먹는데,
   //  꽉 차면 Postgres 가 죽어 전 기능이 500 이 되고 공간을 비워도 수동 재시작이 필요하다(2026-07-13 실증).
@@ -553,13 +563,11 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  ⚠ 격리(sudo → box-spawn) 분기는 env_reset 이 털어가므로 sudoers 가 명시 보존해야 한다(deploy/linux/sudoers-lively).
   //   구 sudoers 면 미보존 → 헤더 빈 값 → 미기록 = 종전 동작(무회귀).
   args.push("-e", `LIVELY_SESSION_ID=${id}`);
-  // 읽기전용 세션(#1007) — 이 pane 의 하네스만 읽기전용으로. MCP 헤더 `x-lively-readonly: ${LIVELY_READONLY:-}` 가 이 env 를 확장해
-  //  게이트웨이가 이 세션의 요청에만 쓰기 툴을 소거한다. **per-session env 라 동시 실행 세션 중 이것만 읽기전용, 나머지는 정상**(사용자 요구).
+  // 실행 모드 세션(#1007+) — 이 pane 의 하네스만 그 모드로. MCP 헤더 `x-lively-mode: ${LIVELY_MODE:-}` 가 이 env 를 확장해
+  //  게이트웨이가 이 세션의 요청에만 모드를 강제한다(readonly=쓰기 툴 소거 · incognito=lively 전체 차단). **per-session env 라 동시 실행 세션 중 이것만, 나머지는 정상**(사용자 요구).
   //  ⚠ pane env 는 exec 시점 고정 → **새 세션부터** 적용(LANG #633·TZ #778·SESSION_ID #852 와 동일 성질).
-  //  ⚠ 격리(sudo → box-spawn) 분기는 env_reset 이 털어가므로 sudoers 가 LIVELY_READONLY 를 명시 보존해야 한다(deploy/linux/sudoers-lively).
-  //  인코그니토(#1007+)는 읽기전용보다 강함(lively 전체 차단 + 훅 off) — 둘 다면 incognito 가 이긴다.
-  if (input.incognito) args.push("-e", "LIVELY_INCOGNITO=1", "-e", "LIVELY_OFF=1");
-  else if (input.readOnly) args.push("-e", "LIVELY_READONLY=1");
+  //  ⚠ 격리(sudo → box-spawn) 분기는 env_reset 이 털어가므로 sudoers 가 LIVELY_MODE(+전이기 구 LIVELY_READONLY/INCOGNITO)를 명시 보존해야 한다(deploy/linux/sudoers-lively).
+  args.push(...modeEnvArgs(input)); // 분기·전이기 dual-env 는 modeEnvArgs(순수·단위테스트됨)에
   // 공유 빌드 캐시(#813 T3) — 생태계별 다운로드/의존성 캐시를 박스 전역 한 곳으로. LANG/TZ 와 같은 세션스코프 -e
   //  (전역/타세션 누수 없음). 목적은 부피 감소가 아니라 **회수를 싸게 만드는 것**: 워크트리 파생물을 회수해도
   //  캐시가 warm 이라 재설치가 금방 끝난다. 부수로 멤버 격리(#524)로 갈린 홈들의 캐시 중복도 하나로 접는다.

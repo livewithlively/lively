@@ -9,10 +9,12 @@ const t = (name, fn) => { fn(); pass++; console.log(`ok  ${name}`); };
 
 t("MODES = normal|readonly|incognito", () => assert.deepEqual(MODES, ["normal", "readonly", "incognito"]));
 
-// 모드 → 세션 env (하네스가 상속 → MCP 헤더가 확장). incognito 는 전체차단 헤더 + 훅 off 를 함께.
-t("modeEnv: readonly → LIVELY_READONLY=1", () => assert.deepEqual(modeEnv("readonly"), { LIVELY_READONLY: "1" }));
-t("modeEnv: incognito → LIVELY_INCOGNITO=1 + LIVELY_OFF=1 (전체차단 + 훅 off)", () =>
-  assert.deepEqual(modeEnv("incognito"), { LIVELY_INCOGNITO: "1", LIVELY_OFF: "1" }));
+// 모드 → 세션 env (하네스가 상속 → MCP 헤더 x-lively-mode 가 확장). incognito 는 LIVELY_OFF 로 훅도 끈다.
+//  ⚠ 전이기 dual-env(#1007+): 주 신호 LIVELY_MODE + 구 boolean(LIVELY_READONLY/INCOGNITO)을 함께 세팅 — x-lively-mode 헤더 미전파 설치에서도 격리 유지.
+t("modeEnv: readonly → LIVELY_MODE=readonly + 전이기 구 LIVELY_READONLY=1", () =>
+  assert.deepEqual(modeEnv("readonly"), { LIVELY_MODE: "readonly", LIVELY_READONLY: "1" }));
+t("modeEnv: incognito → LIVELY_MODE=incognito + 구 LIVELY_INCOGNITO=1 + LIVELY_OFF=1 (전체차단 + 훅 off)", () =>
+  assert.deepEqual(modeEnv("incognito"), { LIVELY_MODE: "incognito", LIVELY_INCOGNITO: "1", LIVELY_OFF: "1" }));
 t("modeEnv: normal → 빈 env(플래그 없음)", () => assert.deepEqual(modeEnv("normal"), {}));
 
 // 플래그 파싱 — 모드 플래그만 소비하고 나머지(프로젝트#·하네스 인자)는 그대로 통과.
