@@ -7,7 +7,8 @@
 // 이 프록시의 인증이 신뢰 경계(절대 비인증 프록시 금지).
 import express from "express";
 import path from "node:path";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { stateDir } from "./state-dir.js";
 import { fileURLToPath } from "node:url";
 import type { BearerVerifier } from "./auth/bearer.js";
@@ -228,29 +229,86 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
 
   // ── 정적 프론트 — dist/web.js 기준 레포루트/public. 해시 라우팅이라 서버 폴백 불필요. ──
   const publicDir = fileURLToPath(new URL("../public", import.meta.url));
-  // #762/#766 후속 — 캐시 버스팅: index.html 의 로컬 자산(styles.css·app/main.js)에 파일 mtime 버전(?v=)을 박는다.
-  //  기본 express.static 은 Cache-Control: max-age=0(재검증) 이지만 일부 브라우저가 재검증을 건너뛰어(bfcache·메모리캐시)
-  //  배포 후 옛 CSS/JS 를 계속 보여주던 문제 방지 — 자산이 바뀌면 mtime→URL 이 바뀌어 브라우저가 강제 재요청한다.
-  const assetVer = (rel: string): string => {
-    try { return String(Math.floor(statSync(path.join(publicDir, rel)).mtimeMs)); } catch { return "0"; }
+  // #1017 — 콘텐츠 해시 불변 캐싱: mtime·재검증 의존을 폐기한다.
+  //  이전(#762/#766/#890)은 index.html→main.js·styles.css 두 자산에만 mtime 버전(?v=)을 박고, 나머지는 no-cache
+  //  재검증에 맡겼다. 문제: main.js 가 정적 import 하는 20개 모듈(core.js·projects.js·admin.js …)은 **버전 없는
+  //  고정 URL** 이라 전적으로 "브라우저가 no-cache 재검증을 성실히 수행하는가"에 의존했고, 이게 일반 새로고침에선
+  //  신뢰할 수 없어(모듈 memory-cache·bfcache) '강제 새로고침해야 반영'이 반복됐다. weak ETag(size+mtime)도
+  //  배포가 mtime 을 보존하는 경로(리눅스 고객 박스)에선 내용이 바뀌어도 304 로 옛 코드를 고정시킬 수 있었다.
+  //  해법: ① 모든 로컬 자산의 **콘텐츠 해시**로 빌드버전 1개를 만든다(내용 기반 → mtime·배포방식·프록시 무관).
+  //   ② HTML 의 로컬 자산 참조 + JS 모듈의 import 그래프 전체에 ?v=<버전> 을 서빙 시점에 주입한다.
+  //   ③ ?v= 가 붙은 요청은 immutable 로 서빙 → 내용이 바뀐 자산은 새 URL 이라 무조건 새로 받고(F5 로 충분,
+  //   강제 새로고침 불요), 안 바뀐 자산은 재검증 왕복 0(오히려 더 빠름). index.html 은 no-store 라 항상 최신 버전을 참조.
+  const IMMUTABLE = "public, max-age=31536000, immutable";
+  // 로컬 자산 = public 최상위 *.{js,mjs,css} + public/app/*.{js,mjs}. (fonts/img 는 자체로 거의 불변이라 제외 — 필요 시 확장.)
+  const listLocalAssets = (): string[] => {
+    const out: string[] = [];
+    try { for (const f of readdirSync(publicDir)) if (/\.(?:js|mjs|css)$/.test(f)) out.push(f); } catch { /* noop */ }
+    try { for (const f of readdirSync(path.join(publicDir, "app"))) if (/\.(?:js|mjs)$/.test(f)) out.push(`app/${f}`); } catch { /* noop */ }
+    return out.sort();
   };
-  const serveIndex = (_req: express.Request, res: express.Response): void => {
-    try {
-      const html = readFileSync(path.join(publicDir, "index.html"), "utf8")
-        .replace(/\.\/styles\.css/g, `./styles.css?v=${assetVer("styles.css")}`)
-        .replace(/\.\/app\/main\.js/g, `./app/main.js?v=${assetVer("app/main.js")}`);
-      res.setHeader("Cache-Control", "no-store"); // index.html 자체는 항상 최신(버전 스탬프가 최신이도록)
-      res.type("html").send(html);
-    } catch { res.sendFile(path.join(publicDir, "index.html")); } // 실패 시 원본 폴백
+  // 빌드버전: 자산 콘텐츠의 통합 sha256(앞 12자). 재계산 트리거만 지문(size+mtime, 1s TTL)으로 판단한다 —
+  //  dev 박스는 build:web 후 재시작 없이 즉시 반영되고(지문 변화 감지), 고객 박스는 배포=재시작이라 재계산이 보장된다.
+  //  ⚠ 지문이 틀려도(mtime 보존 배포) 값 자체는 콘텐츠 해시라 재시작 한 번이면 정확해진다 — mtime 은 최적화일 뿐 정답성 근거 아님.
+  const VER_TTL_MS = 1000;
+  let verVal = "", verFp = "", verAt = 0;
+  const assetVersion = (): string => {
+    const now = Date.now();
+    if (verVal && now - verAt < VER_TTL_MS) return verVal;
+    verAt = now;
+    const files = listLocalAssets();
+    let fp = "";
+    for (const rel of files) { try { const s = statSync(path.join(publicDir, rel)); fp += `${rel}:${s.size}:${Math.floor(s.mtimeMs)};`; } catch { /* 사라진 파일 무시 */ } }
+    if (verVal && fp === verFp) return verVal;
+    const h = createHash("sha256");
+    for (const rel of files) { try { h.update(rel).update("\0").update(readFileSync(path.join(publicDir, rel))); } catch { /* noop */ } }
+    verFp = fp; verVal = h.digest("hex").slice(0, 12);
+    return verVal;
   };
-  app.get(["/ui", "/ui/", "/ui/index.html"], serveIndex);
-  // 로컬 앱 자산(JS/CSS/ES모듈)은 항상 재검증(no-cache) — main.js 에 버전(?v=)을 박아도 그 import 그래프(app/*.js:
-  //  dashboard-home.js·projects.js 등)는 고정 URL 이라 브라우저 캐시에 남아 배포가 안 보이던 문제(#762 후속).
-  //  no-cache = 캐시하되 매 사용 전 ETag 재검증(변경 O→200 새 코드, 변경 X→304 저비용). 정적자산은 미인증이라 안전.
-  app.use("/ui", express.static(publicDir, {
-    setHeaders: (res, filePath) => {
-      if (/\.(?:css|js|mjs|html)$/.test(filePath)) res.setHeader("Cache-Control", "no-cache"); // .html 포함 — terminal.html·terminal-grid.html 도 새로고침에 항상 최신(index.html 은 위 serveIndex 가 no-store 로 먼저 처리)
-    },
-  }));
+  // 상대 자산 참조에 버전 주입.
+  //  JS: 정적 import/re-export(`… from './x.js'`)·동적 import(`import('./x.js')`) 의 상대 스펙파이어. CDN(https://)·bare 는 제외(`./` 필수).
+  //  HTML: <script src>·<link href> 의 상대 로컬 자산. 삽입은 문자열 리터럴 내부라 문법을 깨지 않는다(최악의 오탐도 무해한 쿼리 추가).
+  const JS_IMPORT_RE = /((?:\bfrom|\bimport)\s*|\bimport\s*\(\s*)(['"])(\.\/[^'"]+?\.(?:js|mjs|css))(['"])/g;
+  const HTML_ASSET_RE = /(\s(?:src|href)\s*=\s*)(['"])(\.\/[^'"]+?\.(?:js|mjs|css))(['"])/g;
+  const stampJs = (src: string, v: string): string => src.replace(JS_IMPORT_RE, (_m, pre, q1, spec, q2) => `${pre}${q1}${spec}?v=${v}${q2}`);
+  const stampHtml = (src: string, v: string): string => src.replace(HTML_ASSET_RE, (_m, pre, q1, spec, q2) => `${pre}${q1}${spec}?v=${v}${q2}`);
+  // 모듈 rewrite 결과 캐시(버전·mtime 키) — 큰 번들(projects.js 700KB+)의 매요청 정규식 치환 회피. immutable 이라 재요청도 드묾.
+  const modCache = new Map<string, { v: string; mtime: number; body: string }>();
+  const moduleBody = (full: string, v: string): string => {
+    const mtime = Math.floor(statSync(full).mtimeMs);
+    const c = modCache.get(full);
+    if (c && c.v === v && c.mtime === mtime) return c.body;
+    const body = stampJs(readFileSync(full, "utf8"), v);
+    modCache.set(full, { v, mtime, body });
+    return body;
+  };
+  // 경로 이탈(../) 차단 — 정규화 후 publicDir 하위만 허용.
+  const safeAsset = (rel: string): string | null => {
+    const full = path.resolve(publicDir, rel);
+    return (full === publicDir || full.startsWith(publicDir + path.sep)) ? full : null;
+  };
+  const sendHtml = (full: string, res: express.Response): void => {
+    res.setHeader("Cache-Control", "no-store"); // HTML 진입점은 항상 최신 — 버전 스탬프가 언제나 최신이도록
+    res.type("html").send(stampHtml(readFileSync(full, "utf8"), assetVersion()));
+  };
+  const serveStatic: express.RequestHandler = (req, res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD") { next(); return; }
+    let rel = decodeURIComponent(req.path).replace(/^\/+/, "");
+    if (rel === "") rel = "index.html"; // /ui · /ui/ → index.html
+    const full = safeAsset(rel);
+    if (!full) { res.status(400).end(); return; }
+    let st: ReturnType<typeof statSync>;
+    try { st = statSync(full); } catch { next(); return; } // 없으면 다음(해시라우팅이라 SPA 폴백 불요)
+    if (!st.isFile()) { next(); return; }
+    const versioned = typeof req.query.v === "string" && req.query.v.length > 0;
+    if (/\.(?:js|mjs)$/.test(full)) {
+      res.setHeader("Cache-Control", versioned ? IMMUTABLE : "no-cache"); // ?v= 없는 직접·구 URL 은 재검증(하위호환)
+      res.type("application/javascript; charset=utf-8").send(moduleBody(full, assetVersion())); return;
+    }
+    if (/\.html?$/.test(full)) { sendHtml(full, res); return; }
+    res.setHeader("Cache-Control", versioned ? IMMUTABLE : "no-cache");
+    res.sendFile(full, { cacheControl: false }); return; // cacheControl:false — express 가 우리 헤더를 덮어쓰지 않도록
+  };
+  app.use("/ui", serveStatic);
   app.get("/", (_req, res) => res.redirect("/ui/"));
 }
