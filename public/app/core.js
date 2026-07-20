@@ -168,7 +168,8 @@ function mdImage(src, alt) {
 //  '눌리는 버튼' 칩과 '부드러운 태그' 칩으로 승격해 가독성을 올린다. renderMarkdown(md, {uiChips:true}) 로만
 //  켜지며(learn.ts docs 렌더), 지식·위키·프로젝트 등 다른 마크다운 소비자엔 영향이 없다.
 let MD_UI_CHIPS = false;
-function renderInline(text) {
+function renderInline(text, opts) {
+    const noAutolink = !!(opts && opts.noAutolink); // 링크 label 안에선 autolink 끔(중첩 링크·저장 시 [url](url) 재-오토링크 방지)
     const out = [];
     let buf = '';
     const flush = () => { if (buf) {
@@ -268,6 +269,40 @@ function renderInline(text) {
                 continue;
             }
         }
+        // 자동 링크(autolink) — 본문에 그냥 붙여넣은 맨 URL(http/https/www)을 하이퍼링크로 만든다.
+        //  마크다운 링크 [텍스트](url) 는 아래에서 별도 처리되므로 여기선 '벌거벗은' URL 만 잡는다.
+        //  경계 가드: 여는 위치 앞이 단어문자면(이메일 도메인·URL 일부 등 오탐) 스킵. URL 은 공백/제어문자 전까지,
+        //  뒤따르는 문장부호(.,;:!?)·닫는 괄호는 링크에서 제외(문장 끝 오탐 방지). www. 는 https:// 를 붙여 링크.
+        if (!noAutolink && (ch === 'h' || ch === 'w') && (i === 0 || !/[\p{L}\p{N}@._-]/u.test(s[i - 1]))) {
+            const rest = s.slice(i);
+            const m = /^(https?:\/\/[^\s<]+|www\.[^\s<]+)/i.exec(rest);
+            if (m) {
+                let raw = m[0];
+                // 뒤쪽 문장부호·닫는 괄호 제거(단, 짝이 맞는 괄호는 URL 의 일부일 수 있어 보존).
+                let trail = '';
+                while (raw.length) {
+                    const last = raw[raw.length - 1];
+                    if ('.,;:!?"\''.indexOf(last) >= 0) {
+                        trail = last + trail;
+                        raw = raw.slice(0, -1);
+                        continue;
+                    }
+                    if (last === ')' && (raw.split('(').length - 1) < (raw.split(')').length - 1)) {
+                        trail = last + trail;
+                        raw = raw.slice(0, -1);
+                        continue;
+                    }
+                    break;
+                }
+                const href = safeHref(/^www\./i.test(raw) ? 'https://' + raw : raw);
+                if (href) {
+                    flush();
+                    out.push(el('a', { class: 'md-link', href, rel: 'noopener noreferrer nofollow' }, document.createTextNode(raw)));
+                    i += raw.length; // trail 은 다시 일반 파서로 흘려 문장부호로 렌더
+                    continue;
+                }
+            }
+        }
         // 링크 [텍스트](url)
         if (ch === '[') {
             const close = s.indexOf(']', i + 1);
@@ -279,11 +314,12 @@ function renderInline(text) {
                     flush();
                     if (href) {
                         // 내부 앵커(#/k/…)는 같은 SPA 이동이라 새 탭 힌트 불필요, 외부는 noopener.
-                        out.push(el('a', { class: 'md-link', href, rel: 'noopener noreferrer nofollow' }, ...renderInline(label)));
+                        //  label 은 noAutolink — label 이 URL 이어도([url](url)) 안에서 또 autolink 되어 링크가 중첩되지 않게(저장 왕복 안정).
+                        out.push(el('a', { class: 'md-link', href, rel: 'noopener noreferrer nofollow' }, ...renderInline(label, { noAutolink: true })));
                     }
                     else {
                         // 위험 스킴 → 링크 무력화. 라벨만 평문으로(href 비노출).
-                        out.push(...renderInline(label));
+                        out.push(...renderInline(label, { noAutolink: true }));
                     }
                     i = paren + 1;
                     continue;
