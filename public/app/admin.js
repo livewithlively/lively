@@ -1344,10 +1344,13 @@ async function previewEnvsPanel(detail, data) {
         rows.append(el('div', { class: 'wikicat-empty', text: '아직 프리뷰 환경이 없습니다. ‘+ 프리뷰 추가’로 작업 워크트리를 화면으로 띄우세요.' }));
     for (const p of envs) {
         const statusText = p.status === 'running' ? '실행중' : (p.status === 'error' ? '오류' : '정지');
+        const msText = (p.kind === 'stage' && p.merge_status && typeof p.merge_status === 'object')
+            ? Object.keys(p.merge_status).map((b) => b + ':' + p.merge_status[b]).join('  ') : '';
         const mainKids = [
             el('span', { class: 'wikicat-name', text: p.label || p.id }),
             el('span', { class: 'wikicat-key mono', text: (p.project_id ? '#' + p.project_id + ' · ' : '') + (p.repo || '') + ' · ' + (p.kind || 'work') }),
             el('span', { class: 'dm-tag', text: p.enabled ? statusText : '비활성' }),
+            msText ? el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: 'merge' }), msText) : null,
             p.last_error ? el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '오류' }), p.last_error) : null,
         ].filter(Boolean);
         const actBtns = [
@@ -1369,15 +1372,25 @@ function openPreviewEnvForm(p, reload) {
     const block = (title, hint, ctrl) => el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: title }), hint ? el('p', { class: 'ps-block-hint', text: hint }) : null, ctrl);
     const idInp = el('input', { type: 'text', style: inputStyle, value: p ? p.id : '', placeholder: 'wonjun-projects', ...(isNew ? {} : { disabled: true }) });
     const labelInp = el('input', { type: 'text', style: inputStyle, value: (p && p.label) || '', placeholder: '원준 프로젝트 보드 프리뷰' });
+    const kindSel = el('select', { style: inputStyle });
+    for (const k of [['work', 'work — 작업 프리뷰(내 워크트리 1:1)'], ['stage', 'stage — 통합(여러 브랜치 merge)']])
+        kindSel.append(el('option', { value: k[0], text: k[1], ...((p ? p.kind === k[0] : k[0] === 'work') ? { selected: true } : {}) }));
     const owner = memberCombo({ value: (p && p.owner_member) || '', placeholder: '구성원 id (예: wonjun)' });
     const projInp = el('input', { type: 'number', style: inputStyle, value: (p && p.project_id) || '', placeholder: '작업 프로젝트 id (예: 1036)' });
     const repoInp = el('input', { type: 'text', style: inputStyle, value: (p && p.repo) || 'context-ontology', placeholder: 'context-ontology' });
     const wtInp = el('input', { type: 'text', style: inputStyle, value: (p && p.worktree_path) || '', placeholder: '비우면 workspace/project/<id>/<repo> 자동' });
     const ttlInp = el('input', { type: 'number', style: inputStyle, value: (p && p.ttl_idle_sec) || '', placeholder: '0 = 무제한(유휴 유지)' });
+    // stage 전용
+    const branchesTa = el('textarea', { style: inputStyle + ';min-height:70px;resize:vertical' });
+    branchesTa.value = (p && Array.isArray(p.member_branches)) ? p.member_branches.join('\n') : '';
+    const baseRefInp = el('input', { type: 'text', style: inputStyle, value: (p && p.base_ref) || '', placeholder: 'origin/main (기본)' });
+    const triggerSel = el('select', { style: inputStyle });
+    for (const t of [['manual', 'manual — 수동(‘띄우기’ 누를 때만 재-merge)'], ['auto', 'auto — 커밋마다 재-merge(reconcile)']])
+        triggerSel.append(el('option', { value: t[0], text: t[1], ...((p && p.merge_trigger === t[0]) ? { selected: true } : {}) }));
     const enabledChk = el('input', { type: 'checkbox', ...((p ? p.enabled : true) ? { checked: true } : {}) });
     const noteInp = el('input', { type: 'text', style: inputStyle, value: (p && p.note) || '' });
     const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '프리뷰 추가' : '저장' });
-    const form = el('div', { class: 'proj-settings' }, block('프리뷰 id', isNew ? '소문자 슬러그(a-z0-9_-). URL 이 /preview/<id>/ 가 됩니다.' : 'id 는 변경 불가.', idInp), block('이름', '관리 목록에 보일 이름.', labelInp), block('작업자', '이 프리뷰의 소유 작업자(참고용).', owner.el), block('작업 프로젝트 id', '이 프리뷰가 가리킬 작업 프로젝트. 워크트리 경로 자동계산(workspace/project/<id>/<repo>)에 씁니다.', projInp), block('레포', '프리뷰할 레포 이름.', repoInp), block('워크트리 경로(선택)', '직접 지정할 때만. 비우면 프로젝트 id+레포로 자동 계산합니다.', wtInp), block('유휴 회수(초)', '이 시간 동안 미접속이면 자동 정지. 0=무제한. shared-proxy 는 프로세스가 없어 0 무방.', ttlInp), block('활성', '켜면 reconcile 이 서빙 준비를 보장합니다.', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' enabled' }))), block('메모', '', noteInp), el('div', { class: 'ps-rules-actions' }, saveBtn));
+    const form = el('div', { class: 'proj-settings' }, block('프리뷰 id', isNew ? '소문자 슬러그(a-z0-9_-). URL 이 /preview/<id>/ 가 됩니다.' : 'id 는 변경 불가.', idInp), block('이름', '관리 목록에 보일 이름.', labelInp), block('종류', 'work=내 작업 워크트리 1:1 미리보기. stage=여러 작업 브랜치를 합친 통합 미리보기.', kindSel), block('작업자', '이 프리뷰의 소유 작업자(참고용).', owner.el), block('레포', '프리뷰할 레포 이름.', repoInp), block('[work] 작업 프로젝트 id', 'work 전용 — 워크트리 경로 자동계산(workspace/project/<id>/<repo>). stage 는 비워도 됩니다.', projInp), block('[work] 워크트리 경로(선택)', 'work 전용 — 직접 지정할 때만. 비우면 프로젝트 id+레포로 자동 계산.', wtInp), block('[stage] 통합할 브랜치', 'stage 전용 — 한 줄에 하나(예: project/1030). base 위에 순서대로 merge하고, 충돌난 브랜치는 제외한 채 나머지를 통합합니다.', branchesTa), block('[stage] merge base', 'stage 전용 — 통합 기준. 비우면 origin/main.', baseRefInp), block('[stage] 재-merge 시점', 'stage 전용 — manual=‘띄우기’ 누를 때만. auto=reconcile 크론이 작업 브랜치 갱신을 주기 반영.', triggerSel), block('유휴 회수(초)', '이 시간 동안 미접속이면 자동 정지. 0=무제한.', ttlInp), block('활성', '켜면 reconcile 이 서빙 준비를 보장합니다.', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' enabled' }))), block('메모', '', noteInp), el('div', { class: 'ps-rules-actions' }, saveBtn));
     const back = overlayBox(isNew ? '프리뷰 추가' : '프리뷰 수정 — ' + p.id, form);
     const boxw = back.querySelector('.ov-box');
     if (boxw)
@@ -1392,10 +1405,17 @@ function openPreviewEnvForm(p, reload) {
             toast('레포가 필요합니다', true);
             return;
         }
-        const body = { id, label: labelInp.value.trim() || null, owner_member: owner.value() || null,
+        const kind = kindSel.value;
+        const branches = kind === 'stage' ? branchesTa.value.split('\n').map((s) => s.trim()).filter(Boolean) : [];
+        if (kind === 'stage' && !branches.length) {
+            toast('stage 는 통합할 브랜치를 최소 1개 입력하세요', true);
+            return;
+        }
+        const body = { id, kind, label: labelInp.value.trim() || null, owner_member: owner.value() || null,
             project_id: projInp.value ? Number(projInp.value) : null, repo: repoInp.value.trim(),
             worktree_path: wtInp.value.trim() || null, ttl_idle_sec: ttlInp.value ? Number(ttlInp.value) : null,
-            enabled: enabledChk.checked, note: noteInp.value.trim() || null };
+            enabled: enabledChk.checked, note: noteInp.value.trim() || null,
+            ...(kind === 'stage' ? { member_branches: branches, base_ref: baseRefInp.value.trim() || null, merge_trigger: triggerSel.value } : {}) };
         saveBtn.disabled = true;
         try {
             await api('/api/ui/preview-envs', { method: 'POST', body: JSON.stringify(body) });
