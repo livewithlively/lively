@@ -25,7 +25,7 @@ const { buildKitBundle } = await import(join(KIT, "generator", "build-context.mj
 const { CLI_SHIM, CLI_SHIM_CMD } = await import(join(KIT, "setup", "user-install.mjs"));
 // 순수함수 — 실행 경로로는 못 태우는 분기라 직접 검증한다: winArg 는 POSIX CI 에서 안 돌고(WIN=false),
 //  loginEscapeToken 은 제어단말(/dev/tty)이 있어야 밟히는 분기를 담는다(#916).
-const { winArg, loginEscapeToken } = await import(CLI);
+const { winArg, loginEscapeToken, shouldOfferOnboarding } = await import(CLI);
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -182,29 +182,27 @@ try {
   //  (b) register-clients.sh 파일이 실제로 같은 3헤더를 등록하는지(드리프트 가드 — 안전망이 CLI 만 보지 않게).
   {
     const adds = H.argv().filter((l) => l.startsWith("mcp add"));
-    // ⚠ 헤더 **3개**(토큰 + 세션귀속#852 + 읽기전용#1007). 예전 want 는 x-lively-session 이 빠진 드리프트를 못박고 있었다
+    // ⚠ 헤더 **3개**(토큰 + 세션귀속#852 + 실행모드#1007+). 예전 want 는 x-lively-session 이 빠진 드리프트를 못박고 있었다
     //  (= 테스트가 버그를 고정). 이게 빠지면 remove→add 가 세션 헤더를 지워 그 세션의 작업 귀속이 끊긴다.
-    //  x-lively-readonly(#1007)는 세션별 읽기전용 신호(LIVELY_READONLY=1 로 실행 시 그 세션만 게이트웨이가 쓰기 툴 소거). 값은 리터럴 — 확장은 접속 시 하네스가 제 env 로.
+    //  x-lively-mode(#1007+)는 세션별 실행모드 단일 신호(LIVELY_MODE=readonly|incognito 로 실행 시 그 세션만 게이트웨이가 강제). 값은 리터럴 — 확장은 접속 시 하네스가 제 env 로.
     const want = `mcp add --transport http --scope user lively ${GW}/mcp `
       + `--header Authorization: Bearer ${TOKEN} --header x-lively-session: \${LIVELY_SESSION_ID:-}`
-      + ` --header x-lively-readonly: \${LIVELY_READONLY:-} --header x-lively-incognito: \${LIVELY_INCOGNITO:-}`;
-    check("④ claude MCP 등록 argv 못박기(헤더 4개 — 토큰 + 세션귀속 + 읽기전용 + 인코그니토)",
+      + ` --header x-lively-mode: \${LIVELY_MODE:-}`;
+    check("④ claude MCP 등록 argv 못박기(헤더 3개 — 토큰 + 세션귀속 + 실행모드)",
       adds.some((l) => l === want), `got=${JSON.stringify(adds)}\nwant=${JSON.stringify(want)}`);
-    // (b) register-clients.sh parity — 파일을 읽어 같은 4헤더를 실제로 등록하는지 확인(이게 빠지면 위 (a) 만으론 gap 을 못 잡는다).
+    // (b) register-clients.sh parity — 파일을 읽어 같은 3헤더를 실제로 등록하는지 확인(이게 빠지면 위 (a) 만으론 gap 을 못 잡는다).
     const regSh = readFileSync(join(REPO, "scripts", "register-clients.sh"), "utf8");
-    check("④ register-clients.sh 가 CLI 와 동일한 4헤더 등록(parity — 헤더 하나라도 빠지면 그 설치 경로서 모드가 조용히 죽음)",
+    check("④ register-clients.sh 가 CLI 와 동일한 3헤더 등록(parity — 헤더 하나라도 빠지면 그 설치 경로서 모드가 조용히 죽음)",
       /--header +["']?Authorization: Bearer/.test(regSh)
         && regSh.includes("x-lively-session: ${LIVELY_SESSION_ID:-}")
-        && regSh.includes("x-lively-readonly: ${LIVELY_READONLY:-}")
-        && regSh.includes("x-lively-incognito: ${LIVELY_INCOGNITO:-}"),
-      "register-clients.sh 에 4헤더(Authorization+session+readonly+incognito) 중 일부 누락 — CLI 와 drift");
+        && regSh.includes("x-lively-mode: ${LIVELY_MODE:-}"),
+      "register-clients.sh 에 3헤더(Authorization+session+mode) 중 일부 누락 — CLI 와 drift");
     // (c) self-update.mjs(자동 업데이터 헤더 additive reconcile, #1007+) 도 같은 모드 헤더를 알아야 기존 멤버가 재등록 없이 받는다 — 4번째 동기화 지점 drift 가드.
     const selfUp = readFileSync(join(REPO, "kit", "hooks", "self-update.mjs"), "utf8");
-    check("④ self-update.mjs 가 같은 모드 헤더로 additive reconcile(register-clients·CLI 와 parity)",
+    check("④ self-update.mjs 가 같은 x-lively-mode 헤더로 additive reconcile(register-clients·CLI 와 parity)",
       selfUp.includes('"x-lively-session": "${LIVELY_SESSION_ID:-}"')
-        && selfUp.includes('"x-lively-readonly": "${LIVELY_READONLY:-}"')
-        && selfUp.includes('"x-lively-incognito": "${LIVELY_INCOGNITO:-}"'),
-      "self-update.mjs 에 모드 헤더 중 일부 누락 — 기존 멤버가 재등록 없이 못 받음(drift)");
+        && selfUp.includes('"x-lively-mode": "${LIVELY_MODE:-}"'),
+      "self-update.mjs 에 x-lively-mode 헤더 누락 — 기존 멤버가 재등록 없이 못 받음(drift)");
     check("④ remove → add 순서(재실행 안전)",
       H.argv().indexOf("mcp remove lively") < H.argv().findIndex((l) => l.startsWith("mcp add")),
       JSON.stringify(H.argv()));
@@ -401,14 +399,14 @@ try {
   // ⑮ run — 프로젝트# **없으면 하네스 바로 실행**(#1007+, 사용자 요청) + 모드 플래그가 세션 env 주입. --harness 로 하네스 지정.
   {
     const fakeH = join(H.home, "fake-harness.mjs");
-    writeFileSync(fakeH, "#!/usr/bin/env node\nprocess.stdout.write('HARNESS['+process.argv.slice(2).join(',')+'] RO='+(process.env.LIVELY_READONLY||'')+' INC='+(process.env.LIVELY_INCOGNITO||'')+' OFF='+(process.env.LIVELY_OFF||''));\n");
+    writeFileSync(fakeH, "#!/usr/bin/env node\nprocess.stdout.write('HARNESS['+process.argv.slice(2).join(',')+'] MODE='+(process.env.LIVELY_MODE||'')+' RO='+(process.env.LIVELY_READONLY||'')+' INC='+(process.env.LIVELY_INCOGNITO||'')+' OFF='+(process.env.LIVELY_OFF||''));\n");
     chmodSync(fakeH, 0o755);
     const r = await lively(H, ["run", "--readonly", "--harness", fakeH, "hello"]);
     check("⑮ run — 프로젝트# 없으면 하네스 직접 실행 + 모드 플래그는 인자에서 소비(하네스엔 hello 만)",
-      r.out.includes("HARNESS[hello]") && r.out.includes("RO=1"), r.out.trim());
+      r.out.includes("HARNESS[hello]") && r.out.includes("MODE=readonly") && r.out.includes("RO=1"), r.out.trim());
     const r2 = await lively(H, ["run", "--incognito", "--harness", fakeH]);
-    check("⑮ run --incognito → LIVELY_INCOGNITO=1 + LIVELY_OFF=1 세션 env 주입",
-      r2.out.includes("INC=1") && r2.out.includes("OFF=1"), r2.out.trim());
+    check("⑮ run --incognito → LIVELY_MODE=incognito + 전이기 INC=1 + LIVELY_OFF=1 세션 env 주입",
+      r2.out.includes("MODE=incognito") && r2.out.includes("INC=1") && r2.out.includes("OFF=1"), r2.out.trim());
   }
   {
     const r = await lively(H, ["run", "--harness", "definitely-not-real-xyz-123"], { expectFail: true });
@@ -509,6 +507,35 @@ try {
     const r2 = await pExecFile(process.execPath, [CLI, "onboarding", "메모리만", "정리", "--print"]);
     check("⑳ onboarding — 초기 프롬프트 override", r2.stderr.includes('claude "메모리만 정리"'), JSON.stringify(r2.stderr));
   }
+  // ㉑ shouldOfferOnboarding — 설치 후 온보딩 제안 정책(#1024). 순수함수: 대화형 단말 AND claude 설치일 때만 제안.
+  //   ⚠ 안전 핵심: 비대화형(CI·프로비저닝·파이프)이면 hasClaude 와 무관하게 절대 제안 안 함(기본값 '예'로 멋대로 실행 금지).
+  {
+    // 진리표 4행 (isInteractive, hasClaude) → 제안?
+    check("㉑ 대화형 + claude 설치 → 제안함(true)",
+      shouldOfferOnboarding({ isInteractive: true, hasClaude: true }) === true, "T·T 는 true 여야 함");
+    check("㉑ 대화형 + claude 미설치 → 제안 안 함(false)",
+      shouldOfferOnboarding({ isInteractive: true, hasClaude: false }) === false, "T·F 는 false 여야 함");
+    check("㉑ 비대화형 + claude 설치 → 제안 안 함(false)",
+      shouldOfferOnboarding({ isInteractive: false, hasClaude: true }) === false, "F·T 는 false 여야 함");
+    check("㉑ 비대화형 + claude 미설치 → 제안 안 함(false)",
+      shouldOfferOnboarding({ isInteractive: false, hasClaude: false }) === false, "F·F 는 false 여야 함");
+    // 안전 정책: isInteractive=false 이면 hasClaude 값과 무관하게 항상 false (자동 프로비저닝 보호)
+    check("㉑ 안전 — 비대화형이면 hasClaude 무관하게 항상 제안 안 함",
+      shouldOfferOnboarding({ isInteractive: false, hasClaude: true }) === false
+        && shouldOfferOnboarding({ isInteractive: false, hasClaude: false }) === false,
+      "비대화형에서 제안이 새어나옴");
+    // 견고성: 비불리언 truthy/falsy 도 진리표와 일치 + 항상 순수 불리언 반환
+    const truthyBoth = shouldOfferOnboarding({ isInteractive: 1, hasClaude: "yes" });
+    check("㉑ 견고성 — truthy 입력(1·비어있지않은문자열)은 T·T 로 해석 → true(순수 불리언)",
+      truthyBoth === true, `got=${JSON.stringify(truthyBoth)}`);
+    const falsyInteractive = shouldOfferOnboarding({ isInteractive: undefined, hasClaude: true });
+    check("㉑ 견고성 — falsy isInteractive(undefined)는 비대화형으로 해석 → false(순수 불리언)",
+      falsyInteractive === false, `got=${JSON.stringify(falsyInteractive)}`);
+    const falsyClaude = shouldOfferOnboarding({ isInteractive: true, hasClaude: "" });
+    check("㉑ 견고성 — falsy hasClaude(빈 문자열)는 미설치로 해석 → false(순수 불리언)",
+      falsyClaude === false, `got=${JSON.stringify(falsyClaude)}`);
+  }
+
 } finally {
   server.close();
   cleanup();

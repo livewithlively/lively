@@ -2,7 +2,7 @@
 // 프레임워크 없음: 컴파일된 스크립트로 실행, assert throw = 실패.
 import assert from "node:assert/strict";
 import { registry, capMutates, isReadOnlyBlocked, READONLY_KEEP, registerMcpCapabilities } from "./index.js";
-import { readOnlyFromHeaders, incognitoFromHeaders } from "../org/agent-identity.js";
+import { readOnlyFromHeaders, incognitoFromHeaders, modeFromHeaders } from "../org/agent-identity.js";
 import type { Capability } from "./types.js";
 
 let pass = 0;
@@ -69,6 +69,43 @@ t("readOnlyFromHeaders: 배열(중복 헤더)이면 첫 번째 값으로 판정"
   assert.equal(readOnlyFromHeaders({ "x-lively-readonly": ["false", "true"] }), false);
   assert.equal(readOnlyFromHeaders({ "x-lively-readonly": ["1"] }), true);
   assert.equal(readOnlyFromHeaders({ "x-lively-readonly": ["", "true"] }), false);
+});
+
+// ── §주경로: modeFromHeaders — 단일 헤더 x-lively-mode(#1007+) ──────────────
+//  위 readOnly/incognitoFromHeaders(구 x-lively-readonly/incognito 헤더) 케이스는 이제 **하위호환 fallback** 을 탄다.
+//  주 신호는 단일 x-lively-mode 헤더 — 유효값(readonly|incognito)만 인정, 나머지는 normal(opt-in fail-safe).
+t("modeFromHeaders: x-lively-mode=readonly|incognito 정확 매칭(대소문자·앞뒤공백 무관)", () => {
+  assert.equal(modeFromHeaders({ "x-lively-mode": "readonly" }), "readonly");
+  assert.equal(modeFromHeaders({ "x-lively-mode": "incognito" }), "incognito");
+  assert.equal(modeFromHeaders({ "x-lively-mode": "READONLY" }), "readonly");
+  assert.equal(modeFromHeaders({ "x-lively-mode": "  Incognito  " }), "incognito");
+});
+t("modeFromHeaders: 미설정·빈값·미확장 리터럴·무효값 → normal(opt-in fail-safe)", () => {
+  assert.equal(modeFromHeaders(undefined), "normal");
+  assert.equal(modeFromHeaders({}), "normal");
+  for (const v of ["", "${LIVELY_MODE:-}", "${LIVELY_MODE}", "1", "true", "on", "yes", "garbage", "read-only", "normal"]) {
+    assert.equal(modeFromHeaders({ "x-lively-mode": v }), "normal", `'${v}' → normal`);
+  }
+});
+t("modeFromHeaders: readOnly/incognitoFromHeaders 파생이 modeFromHeaders 와 일치", () => {
+  assert.equal(readOnlyFromHeaders({ "x-lively-mode": "readonly" }), true);
+  assert.equal(incognitoFromHeaders({ "x-lively-mode": "incognito" }), true);
+  assert.equal(readOnlyFromHeaders({ "x-lively-mode": "incognito" }), false);
+  assert.equal(incognitoFromHeaders({ "x-lively-mode": "readonly" }), false);
+});
+// ── §하위호환: 구 boolean 헤더 fallback + 우선순위(전이기 안전) ───────────────
+t("modeFromHeaders: x-lively-mode 없으면 구 boolean 헤더로 폴백(미전파 설치)", () => {
+  assert.equal(modeFromHeaders({ "x-lively-readonly": "1" }), "readonly");
+  assert.equal(modeFromHeaders({ "x-lively-incognito": "1" }), "incognito");
+  assert.equal(modeFromHeaders({ "x-lively-incognito": "1", "x-lively-readonly": "1" }), "incognito"); // incognito 가 더 강함
+});
+t("modeFromHeaders: 유효 x-lively-mode 는 구 헤더를 이긴다(주경로 우선)", () => {
+  assert.equal(modeFromHeaders({ "x-lively-mode": "readonly", "x-lively-incognito": "1" }), "readonly");
+  assert.equal(modeFromHeaders({ "x-lively-mode": "incognito", "x-lively-readonly": "1" }), "incognito");
+});
+t("modeFromHeaders: 무효 x-lively-mode(미확장 리터럴/빈값)면 구 헤더로 폴백(전이기 dual-env 안전)", () => {
+  assert.equal(modeFromHeaders({ "x-lively-mode": "${LIVELY_MODE:-}", "x-lively-readonly": "1" }), "readonly");
+  assert.equal(modeFromHeaders({ "x-lively-mode": "", "x-lively-incognito": "1" }), "incognito");
 });
 
 // ── §분류: capMutates — 명시 > POST/GET 파생 > fail-closed ────────────────

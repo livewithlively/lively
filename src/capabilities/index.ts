@@ -76,7 +76,7 @@ const me: Capability = {
 
       teams: teams.map((t) => ({ id: t.id, key: t.key, name: t.name })),
       team_category_ids: cats.all, team_owner_category_ids: cats.owner,
-      // 실행 모드(#1007+) — 이 요청이 어느 모드로 게이트되는가(x-lively-readonly / x-lively-incognito 헤더 파생, 어댑터가 ctx 에 주입).
+      // 실행 모드(#1007+) — 이 요청이 어느 모드로 게이트되는가(단일 x-lively-mode 헤더 파생, 어댑터가 ctx 에 주입).
       //  웹/AI 가 '모드가 실제로 켜졌는지' 확인하는 관측 지점. read_only 는 하위호환 유지.
       mode: ctx?.incognito ? "incognito" : ctx?.readOnly ? "readonly" : "normal",
       read_only: ctx?.readOnly ?? false,

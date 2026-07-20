@@ -22,9 +22,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const OFF = process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1";
-// 읽기전용 세션(#1007) — 게이트웨이 헤더(x-lively-readonly)와 같은 truthy 집합. 세션 pane 에 -e LIVELY_READONLY=1 로 주입된다.
+// 읽기전용 세션(#1007+) — 세션 pane 에 -e LIVELY_MODE=readonly 로 주입된다(게이트웨이 헤더 x-lively-mode 와 같은 값).
 //  주입 컨텍스트 맨 앞에 배너를 붙여 AI 가 '이 세션은 스토어에 안 쓴다'를 명확히 알게 한다(없는 writeback 툴을 찾는 혼란 방지).
-const READONLY = ["1", "true", "on", "yes"].includes((process.env.LIVELY_READONLY || "").trim().toLowerCase());
+const READONLY = (process.env.LIVELY_MODE || "").trim().toLowerCase() === "readonly";
 const RO_BANNER = [
   "## ⚠ 읽기전용 세션 (read-only, #1007)",
   "이 세션은 라이블리 컨텍스트 스토어에 **쓰지 않습니다**. 지식·프로젝트·작업·카테고리·자료·활동·도메인맵의 저장/수정 툴",

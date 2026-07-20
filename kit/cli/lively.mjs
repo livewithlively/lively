@@ -601,15 +601,14 @@ function backupUserMcp(name) {
 //   remove→add 가 **기존 세션 헤더를 지워** 그 세션의 작업 귀속이 끊긴다 — 프로비저닝된 멤버(provision-member.sh:122)가
 //   재로그인·재설치할 때 실제로 발생한다. 값은 **리터럴로** 넘긴다: 확장은 접속 시 하네스가 제 env 로 한다.
 //   `:-` 기본값이 없으면 세션 밖(랩탑)에서 "Missing environment variables" 경고가 뜬다(register-clients.sh 실측).
-//   x-lively-readonly(#1007): 세션을 LIVELY_READONLY=1 로 실행하면 그 세션만 읽기전용(게이트웨이가 쓰기 툴 소거). 미설정=빈 값=정상.
+//   x-lively-mode(#1007+): 세션을 LIVELY_MODE=readonly|incognito 로 실행하면 그 세션만 그 모드(게이트웨이 강제). 미설정=빈 값=normal. 단일 헤더라 미래 모드도 재등록 불요.
 function registerLivelyMcp(gw, tok) {
   run("claude", ["mcp", "remove", "lively"], { allowFail: true, quiet: true });
   try {
     run("claude", ["mcp", "add", "--transport", "http", "--scope", "user", "lively", `${gw}/mcp`,
       "--header", `Authorization: Bearer ${tok}`,
       "--header", "x-lively-session: ${LIVELY_SESSION_ID:-}",
-      "--header", "x-lively-readonly: ${LIVELY_READONLY:-}",
-      "--header", "x-lively-incognito: ${LIVELY_INCOGNITO:-}"], { quiet: true });
+      "--header", "x-lively-mode: ${LIVELY_MODE:-}"], { quiet: true });
     ok(`MCP 등록: lively → ${gw}/mcp`);
     return true;
   } catch (e) { fail(`MCP 등록 실패(lively): ${e.message}`); return false; }
@@ -1164,8 +1163,8 @@ async function cmdDoctor(opts) {
 
 // ── 실행 모드(#1007+) — 이 세션이 라이블리와 얼마나 상호작용하나. CLI 가 모드 이름을 env 플래그로 번역한다. ──
 //  normal   : 주입 ○ / 쓰기 ○ (기본)
-//  readonly : 주입 ○ / 쓰기 ✗ (게이트웨이가 x-lively-readonly 헤더로 쓰기 툴 소거 · REST 403)
-//  incognito: 주입 ✗ / 읽기 ✗ / 쓰기 ✗ (게이트웨이가 x-lively-incognito 로 lively 툴 0개+전체 차단 = 사실상 연결없음) + 훅 off
+//  readonly : 주입 ○ / 쓰기 ✗ (게이트웨이가 x-lively-mode=readonly 로 쓰기 툴 소거 · REST 403)
+//  incognito: 주입 ✗ / 읽기 ✗ / 쓰기 ✗ (게이트웨이가 x-lively-mode=incognito 로 lively 툴 0개+전체 차단 = 사실상 연결없음) + 훅 off
 const MODES = ["normal", "readonly", "incognito"];
 const MODE_FILE = "mode";
 // 디폴트 모드(~/.lively/mode) — 유효하지 않거나 없으면 normal.
@@ -1183,10 +1182,13 @@ function extractMode(rest) {
   }
   return { mode: mode ?? defaultMode(), rest: out };
 }
-// 모드 → 세션 env(하네스가 상속 → MCP 헤더가 이 env 를 확장 → 게이트웨이 강제). incognito 는 훅도 끈다(주입·넛지 off).
+// 모드 → 세션 env(하네스가 상속 → MCP 헤더 x-lively-mode 가 이 env 를 확장 → 게이트웨이 강제). 단일 헤더라 미래 모드 추가 시 재등록 불요(#1007+). incognito 는 LIVELY_OFF 로 훅(주입·넛지)도 끈다.
+//  ⚠ **전이기 dual-env**: 새 LIVELY_MODE(주 신호) 와 함께 구 LIVELY_READONLY/LIVELY_INCOGNITO 도 세팅한다 — 이 사용자의 claude.json MCP 설정에
+//   x-lively-mode 헤더가 아직 전파 안 된 경우(구 x-lively-readonly/incognito 헤더만 있음, self-update 1세션 지연)에도 격리가 fail-open 되지 않게.
+//   x-lively-mode 헤더가 있으면 게이트웨이 modeFromHeaders 가 그걸 우선한다(구 env 는 무해). 전파 완료 후 구 env 는 후속 정리에서 제거(#1021).
 function modeEnv(mode) {
-  if (mode === "readonly") return { LIVELY_READONLY: "1" };
-  if (mode === "incognito") return { LIVELY_INCOGNITO: "1", LIVELY_OFF: "1" };
+  if (mode === "readonly") return { LIVELY_MODE: "readonly", LIVELY_READONLY: "1" };
+  if (mode === "incognito") return { LIVELY_MODE: "incognito", LIVELY_INCOGNITO: "1", LIVELY_OFF: "1" };
   return {};
 }
 
@@ -1357,6 +1359,7 @@ async function cmdSetup() {
   if (token() && gateway()) info("이미 로그인돼 있습니다 — 설치만 진행합니다.");
   else await cmdLogin({});
   await cmdInstall();
+  await offerOnboarding();   // 설치 성공 → 온보딩 바로 시작할지 Y/n (대화형 단말에서만 · #1024)
 }
 
 // ── 10. 인자 파싱 · 디스패치 ───────────────────────────────────────────────
@@ -1654,6 +1657,24 @@ function cmdOnboarding(rest) {
   process.exit(st ?? 0);
 }
 
+// 온보딩 제안을 띄울지 결정하는 순수 술어 — tty·하네스 유무만 본다(loginEscapeToken 과 동류로 분리 → 직접 테스트).
+//  ⚠ 비대화형이면 반드시 false: askYesNo 는 무단말에서 기본값(true)을 돌려주므로, 이 게이트가 없으면
+//   CI·프로비저닝·파이프-무단말에서 claude 를 **자동 실행**해버린다. 하네스(claude)가 없으면 제안할 이유도 없다.
+const shouldOfferOnboarding = ({ isInteractive, hasClaude }) => !!isInteractive && !!hasClaude;
+
+// 설치 직후 온보딩 바로 시작 제안 — `lively setup` 마무리에서 부른다(cmdOnboarding 과 동일 진입).
+//  대화형 단말 + claude 있을 때만(shouldOfferOnboarding). Y(기본)면 claude 를 초기 프롬프트로 띄워 lively-onboarding 스킬을 소환한다.
+async function offerOnboarding() {
+  if (!shouldOfferOnboarding({ isInteractive: interactive(), hasClaude: has("claude") })) return;
+  say("");
+  if (await askYesNo("지금 온보딩을 바로 시작할까요? (예전 AI 환경 정리·첫 세팅)", true)) {
+    say(dim('  · 온보딩 세션을 엽니다 — 회사 맥락은 다음 세션부터 붙습니다(스킬은 로컬 파일만 읽어 지금도 동작).'));
+    const st = spawnSync("claude", ["온보딩 도와줘"], { stdio: "inherit", cwd: process.cwd() }).status;
+    process.exit(st ?? 0);
+  }
+  say(dim('  · 나중에 언제든:  ') + bold("lively onboarding") + dim('  또는  claude 에서  "온보딩 도와줘"'));
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const o = parse(argv);
@@ -1705,5 +1726,5 @@ const DIRECT_RUN = (() => {
 })();
 if (DIRECT_RUN) main().catch((e) => die(e?.message || String(e)));
 
-export { parse, detectHarnesses, verifyBundle, normGw, gatherStatus, registerClaudeMcp, backupUserMcp, winArg, loginEscapeToken, REQUIRED_HOOKS, CLI_VERSION };
+export { parse, detectHarnesses, verifyBundle, normGw, gatherStatus, registerClaudeMcp, backupUserMcp, winArg, loginEscapeToken, shouldOfferOnboarding, REQUIRED_HOOKS, CLI_VERSION };
 export { MODES, extractMode, modeEnv, defaultMode }; // #1007+ 실행 모드(normal|readonly|incognito) — 테스트용

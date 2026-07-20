@@ -114,7 +114,7 @@ async function buildRegisteredServer(req: express.Request): Promise<McpServer> {
   let alwaysLoad: Map<string, boolean> | undefined;
   try { alwaysLoad = await listBuiltinAlwaysLoad(); } catch { alwaysLoad = undefined; }
   const harness = agentFromHeaders(req.headers); // 하네스 신원(x-lively-harness>UA) — _meta 하네스별(#187)
-  // 읽기전용 세션(#1007) — 접속 헤더(x-lively-readonly)에서 파생. 무상태 /mcp 라 요청마다 재계산 = per-session(동시 세션 중 이 헤더가 실린 세션만 읽기전용).
+  // 읽기전용 세션(#1007+) — 접속 헤더(x-lively-mode=readonly)에서 파생. 무상태 /mcp 라 요청마다 재계산 = per-session(동시 세션 중 이 헤더가 실린 세션만 읽기전용).
   //  ⚠ 향후 하드닝: 읽기전용 토큰 scope 를 열려면 여기 `|| tokenReadOnly(req.auth?.extra)` 를 OR 로 더하면 된다(어느 전송으로도 못 씀).
   const readOnly = readOnlyFromHeaders(req.headers);
   // 인코그니토(#1007+) — lively 전체 차단(툴 0개). readonly 보다 우선(둘 다면 incognito 가 이긴다 = 더 강한 격리).

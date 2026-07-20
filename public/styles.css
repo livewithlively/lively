@@ -7276,14 +7276,17 @@ a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; fo
 .md-fig-arlab { font-size: 11px; color: var(--muted, #6b7a90); line-height: 1.35; text-align: center; max-width: 180px; }
 .md-fig-arline { display: inline-flex; align-items: center; width: 100%; min-width: 38px; height: 0;
   border-top: 2px solid var(--muted-2, #a6b2c8); position: relative; }
-.md-fig-arhead { position: absolute; right: -3px; top: -0.72em; font-size: 13px; font-weight: 800; color: var(--muted-2, #a6b2c8); }
+/* 화살촉 — 폰트 독립 CSS 삼각형(선 중심 정렬). 옛 ▸ 글리프+top:-0.72em 은 폰트 메트릭 따라 선 아래로 처졌다(#1013). */
+.md-fig-arhead { position: absolute; right: -1px; top: 50%; transform: translateY(-50%);
+  width: 0; height: 0; font-size: 0; line-height: 0; color: var(--muted-2, #a6b2c8);
+  border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 8px solid currentColor; }
 /* 화살표 의미색 — 도메인맵 범례와 동일(ok=일치·긍정 파랑 / viol=빨강 / should=주황 점선 / pend=회색 점선 / x=차단) */
 .md-fig-ar.is-ok .md-fig-arline { border-top-color: var(--blue); } .md-fig-ar.is-ok .md-fig-arhead { color: var(--blue); }
 .md-fig-ar.is-viol .md-fig-arline { border-top-color: #b0503f; } .md-fig-ar.is-viol .md-fig-arhead { color: #b0503f; }
 .md-fig-ar.is-should .md-fig-arline { border-top-style: dashed; border-top-color: #c2822f; } .md-fig-ar.is-should .md-fig-arhead { color: #c2822f; }
 .md-fig-ar.is-pend .md-fig-arline { border-top-style: dashed; } 
 .md-fig-ar.is-x .md-fig-arline { border-top-style: dashed; border-top-color: #b0503f; }
-.md-fig-ar.is-x .md-fig-arhead { color: #b0503f; font-size: 12px; top: -0.8em; }
+.md-fig-ar.is-x .md-fig-arhead { color: #b0503f; }
 .md-fig-cap { font-size: 12px; color: var(--muted, #6b7a90); margin-top: 2px; }
 /* fan — 소스 스택 → 공통 화살표 → 타깃 하나 */
 .md-fig-fan { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

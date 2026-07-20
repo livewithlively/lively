@@ -88,38 +88,33 @@ export function sessionFromExtra(extra: unknown): string | null {
   return sessionFromHeaders(headers);
 }
 
-// ── 읽기전용 세션(#1007) — "이 요청은 **읽기전용 모드**인가". ──
-//  x-lively-session(#852)·x-lively-harness(#182)와 **같은 레일·같은 원리**: 게이트웨이가 접속 헤더에서 본 것이 권위다.
-//  경로: 세션 생성 시 pane 에 `-e LIVELY_READONLY=1`(terminal-sessions.createSession, input.readOnly)
-//        → 하네스 MCP 설정 헤더 `x-lively-readonly: ${LIVELY_READONLY:-}`(연결 시 env 확장)
-//        → 여기서 읽어 무상태 게이트웨이가 요청별로 쓰기 capability 를 소거/거부(MCP)·403(REST).
-//  ⚠ **opt-in 방향으로 fail-safe**: 오직 명시 truthy(1|true|on, 대소문자 무관)만 read-only. 미설정·미확장 리터럴
-//   '${LIVELY_READONLY:-}'·빈 값·기타는 전부 **정상(쓰기 허용)** — 실수로 읽기전용에 빠지지 않게(모드는 명시 opt-in).
-//   per-session env 라 동시 실행 세션 중 이 헤더가 실린 세션만 읽기전용, 나머지는 정상.
-const READONLY_TRUTHY: ReadonlySet<string> = new Set(["1", "true", "on", "yes"]);
+// ── 실행 모드(#1007+) — "이 요청은 어느 모드인가"(normal|readonly|incognito). **단일 헤더 x-lively-mode** 로 전달. ──
+//  x-lively-session(#852)·x-lively-harness(#182)와 **같은 레일·같은 원리**: 게이트웨이가 접속 헤더에서 본 것이 권위. 무상태 /mcp 라 요청마다 재계산 = per-session.
+//  경로: `lively run --readonly|--incognito`(또는 웹 셀렉터) → pane env `LIVELY_MODE=…` → 하네스 MCP 헤더 `x-lively-mode: ${LIVELY_MODE:-}`(연결 시 확장) → 여기.
+//   readonly = 쓰기 툴 소거·REST 쓰기 403 · incognito = lively 툴 0개+전체 차단(읽기 포함) = 사실상 연결없음(+ 훅 off).
+//  ⚠ **opt-in fail-safe**: 유효 모드(readonly|incognito)만 인정. 미설정·미확장 리터럴 `${LIVELY_MODE:-}`·빈 값·기타는 전부 **normal(쓰기 허용)** — 실수로 격리에 빠지지 않게.
+//  ⚠ **하위호환**: 단일 헤더 이전(#1007 초기)의 구 boolean 헤더 x-lively-readonly / x-lively-incognito 도 fallback 으로 인정 — 아직 x-lively-mode 로 재등록/전파 안 된 기존 설치를 위해(자동 업데이터가 x-lively-mode 를 additive 로 채우면 그게 우선).
+const MODE_TRUTHY: ReadonlySet<string> = new Set(["1", "true", "on", "yes"]);
+const VALID_MODES: ReadonlySet<string> = new Set(["readonly", "incognito"]); // normal='아무것도 아님'이라 별도 취급 불요
+const isTruthy = (raw: string | null): boolean => !!raw && MODE_TRUTHY.has(String(raw).trim().toLowerCase());
 
-export function readOnlyFromHeaders(headers: Headers): boolean {
-  const raw = headerValue(headers, "x-lively-readonly");
-  if (!raw) return false;
-  return READONLY_TRUTHY.has(String(raw).trim().toLowerCase());
+export type SessionMode = "normal" | "readonly" | "incognito";
+
+export function modeFromHeaders(headers: Headers): SessionMode {
+  const m = headerValue(headers, "x-lively-mode");
+  if (m) { const v = String(m).trim().toLowerCase(); if (VALID_MODES.has(v)) return v as SessionMode; }
+  // 하위호환 fallback(구 boolean 헤더) — incognito 가 readonly 보다 강하므로 먼저 본다.
+  if (isTruthy(headerValue(headers, "x-lively-incognito"))) return "incognito";
+  if (isTruthy(headerValue(headers, "x-lively-readonly"))) return "readonly";
+  return "normal";
 }
-
-export function readOnlyFromExtra(extra: unknown): boolean {
+export function modeFromExtra(extra: unknown): SessionMode {
   const headers = (extra as { requestInfo?: { headers?: Headers } } | undefined)?.requestInfo?.headers;
-  return readOnlyFromHeaders(headers);
+  return modeFromHeaders(headers);
 }
 
-// ── 인코그니토 세션(#1007+) — readOnly 와 같은 레일(x-lively-incognito 헤더, 같은 truthy 집합). ──
-//  incognito = readonly 보다 강함: 게이트웨이가 그 세션에 lively 툴을 0개 노출하고 모든 호출(읽기 포함)을 막는다 =
-//  **사실상 연결 없음**. 물리적 연결 차단은 per-session 으로 안 되므로(MCP 설정이 정적) 서버측 전체차단으로 대신한다.
-//  경로: `lively run --incognito`(또는 웹 모드 셀렉터) → pane env LIVELY_INCOGNITO=1 → 헤더 → 여기. incognito 는 LIVELY_OFF 도 켜 훅(주입·넛지)까지 끈다(클라이언트측).
-export function incognitoFromHeaders(headers: Headers): boolean {
-  const raw = headerValue(headers, "x-lively-incognito");
-  if (!raw) return false;
-  return READONLY_TRUTHY.has(String(raw).trim().toLowerCase());
-}
-
-export function incognitoFromExtra(extra: unknown): boolean {
-  const headers = (extra as { requestInfo?: { headers?: Headers } } | undefined)?.requestInfo?.headers;
-  return incognitoFromHeaders(headers);
-}
+// 편의 파생 — 강제 코드(index.ts·web.ts·server.ts)는 이 둘로 게이트한다(모드 판정의 단일 소스는 modeFromHeaders).
+export function readOnlyFromHeaders(headers: Headers): boolean { return modeFromHeaders(headers) === "readonly"; }
+export function incognitoFromHeaders(headers: Headers): boolean { return modeFromHeaders(headers) === "incognito"; }
+export function readOnlyFromExtra(extra: unknown): boolean { return modeFromExtra(extra) === "readonly"; }
+export function incognitoFromExtra(extra: unknown): boolean { return modeFromExtra(extra) === "incognito"; }

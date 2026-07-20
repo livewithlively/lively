@@ -27,8 +27,16 @@ n=0
 for u in $members; do
   id "$u" >/dev/null 2>&1 || continue
   h="$(getent passwd "$u" | cut -d: -f6)"
-  # kit 미설치 멤버(~/.lively/hooks 없음)는 스킵 — 첫 세션 프로비저닝이 설치한다.
-  [ -n "$h" ] && [ -d "$h/.lively/hooks" ] || continue
+  [ -n "$h" ] || continue
+  # 멤버 claude 자동 업데이트 백필(#1023) — 이미 프로비저닝된 멤버(첫 세션 게이트로 재프로비저닝 안 됨)의
+  #  홈에 **네이티브** self-update claude 를 보장한다. root 전역 스테일 claude(no_permissions) → 멤버 소유
+  #  self-update 로 전환(box-spawn PATH 가 ~/.local/bin 우선). 멱등·이미 있으면 스킵·OFFLINE 스킵·best-effort.
+  #  훅 러너와 달리 kit 미설치 멤버(hooks 없음)도 대상 — claude 는 세션 필수라 미리 깔아둔다.
+  if [ -f "$DIR/install-claude-user.sh" ]; then
+    OFFLINE="${OFFLINE:-0}" bash "$DIR/install-claude-user.sh" "$u" || true
+  fi
+  # 이하 훅 러너 리프레시는 kit 설치 멤버(~/.lively/hooks 존재)만 — 첫 세션 프로비저닝이 설치한다.
+  [ -d "$h/.lively/hooks" ] || continue
   cnt=0
   for f in "$SRC"/*.mjs; do
     [ -f "$f" ] || continue

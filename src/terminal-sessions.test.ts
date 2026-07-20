@@ -1,7 +1,7 @@
 // 단위 체크(node:assert) — '확인 필요'(waiting) pane 판정. 픽스처는 tmux capture-pane 실측(#853).
 // 실행: npm run build && node dist/terminal-sessions.test.js
 import assert from "node:assert/strict";
-import { detectAwaiting } from "./terminal-sessions.js";
+import { detectAwaiting, modeEnvArgs } from "./terminal-sessions.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -94,6 +94,21 @@ t("Bash 승인 다이얼로그(Do you want to proceed?) → 대기", () => {
 
 t("빈 pane → 대기 아님", () => {
   assert.equal(detectAwaiting(""), false);
+});
+
+// ── 실행 모드(#1007+) 격리 pane env 인자 — 전이기 dual-env 계약(x-lively-mode 미전파 박스 안전, #1007 리뷰 지적) ──
+t("modeEnvArgs: normal(플래그 없음) → env 인자 없음", () => {
+  assert.deepEqual(modeEnvArgs({}), []);
+  assert.deepEqual(modeEnvArgs({ readOnly: false, incognito: false }), []);
+});
+t("modeEnvArgs: readonly → LIVELY_MODE=readonly + 전이기 구 LIVELY_READONLY=1", () => {
+  assert.deepEqual(modeEnvArgs({ readOnly: true }), ["-e", "LIVELY_MODE=readonly", "-e", "LIVELY_READONLY=1"]);
+});
+t("modeEnvArgs: incognito → LIVELY_MODE=incognito + 구 LIVELY_INCOGNITO=1 + LIVELY_OFF=1(훅 off)", () => {
+  assert.deepEqual(modeEnvArgs({ incognito: true }), ["-e", "LIVELY_MODE=incognito", "-e", "LIVELY_INCOGNITO=1", "-e", "LIVELY_OFF=1"]);
+});
+t("modeEnvArgs: 둘 다면 incognito 가 이긴다(더 강한 격리)", () => {
+  assert.deepEqual(modeEnvArgs({ readOnly: true, incognito: true }), ["-e", "LIVELY_MODE=incognito", "-e", "LIVELY_INCOGNITO=1", "-e", "LIVELY_OFF=1"]);
 });
 
 console.log(`\n${pass} passed`);

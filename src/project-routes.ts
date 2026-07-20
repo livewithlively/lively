@@ -103,7 +103,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     let folder = project.folder;
     // ⚠ 읽기전용(#1007) 예외: folder 미설정이면 여기서 project.folder 를 지연 persist 한다(capabilities 게이트 밖의 유일한
     //  project 테이블 쓰기). 이건 **결정적 폴더 경로 배정**이라 기밀 콘텐츠가 아니고, 이 파일 브라우징 라우트는 웹 UI 표면이라
-    //  x-lively-readonly 헤더가 실리는 AI MCP 세션에선 사실상 안 탄다 → 게이트하지 않는다(막으면 폴더 없는 프로젝트 브라우징이 깨짐).
+    //  x-lively-mode 헤더가 실리는 AI MCP 세션에선 사실상 안 탄다 → 게이트하지 않는다(막으면 폴더 없는 프로젝트 브라우징이 깨짐).
     if (!folder && deps.ensureFolder) folder = await deps.ensureFolder({ id: project.id, name: project.name });
     if (!folder) throw new HttpError(400, "프로젝트 폴더가 없습니다");
     return { project: { id: project.id, name: project.name, folder }, base: projectAbsPath(folder) };
