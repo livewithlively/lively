@@ -569,6 +569,9 @@ export function buildKitBundle(target, { orgName = "조직", orgLabel = "org", h
   // 워크트리 셀프서비스 코어(#900) — lively.mjs·lively-mcp-local.mjs 가 import. 번들 동봉(둘 옆에 둬야 import 해결).
   copyMjsWithHeader(kitAbs("cli/repo-worktree-core.mjs"), join(target, "cli", "repo-worktree-core.mjs"), "kit/cli/repo-worktree-core.mjs", orgLabel);
   copied.push("cli/repo-worktree-core.mjs");
+  // 프로젝트 init 코어(#905) — lively.mjs(`lively init`)·lively-mcp-local.mjs 가 import. 번들 동봉(둘 옆에 둬야 import 해결).
+  copyMjsWithHeader(kitAbs("cli/project-init-core.mjs"), join(target, "cli", "project-init-core.mjs"), "kit/cli/project-init-core.mjs", orgLabel);
+  copied.push("cli/project-init-core.mjs");
 
   // 가이드 md(멤버가 번들에서 바로 읽음)
   for (const g of ["setup/사용가이드.md", "setup/온보딩.md"]) {

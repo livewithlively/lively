@@ -295,6 +295,10 @@ function installCli() {
   // 워크트리 셀프서비스 코어(#900) — lively.mjs·lively-mcp-local.mjs 가 import 한다. 둘 옆(lib/)에 둔다(구버전 번들엔 없으면 스킵).
   const repoCore = cloneAbs(join("cli", "repo-worktree-core.mjs"));
   if (existsSync(repoCore)) { copyFileSync(repoCore, join(lib, "repo-worktree-core.mjs")); chmodSync(join(lib, "repo-worktree-core.mjs"), 0o755); }
+  // 프로젝트 init 코어(#905) — lively.mjs(`lively init`)·lively-mcp-local.mjs 가 import 한다. 둘 옆(lib/)에 둔다(구버전 번들엔 없으면 스킵).
+  //  ⚠ 이게 빠지면 lively-mcp-local.mjs 의 static import 가 부팅 즉시 죽어 `lively mcp-local` 이 통째로 못 뜬다(#905 회귀).
+  const projInitCore = cloneAbs(join("cli", "project-init-core.mjs"));
+  if (existsSync(projInitCore)) { copyFileSync(projInitCore, join(lib, "project-init-core.mjs")); chmodSync(join(lib, "project-init-core.mjs"), 0o755); }
   // 제거기 로컬 사본 — 로그아웃·오프라인 상태에서도 `lively uninstall` 이 되도록(제거는 언제나 가능해야 한다).
   const un = cloneAbs(join("setup", "user-uninstall.mjs"));
   if (existsSync(un)) { copyFileSync(un, join(lib, "user-uninstall.mjs")); chmodSync(join(lib, "user-uninstall.mjs"), 0o755); }
