@@ -96,6 +96,28 @@ bashKept ? ok("⑤ 다른 matcher 의 동일 스크립트 항목 보존") : bad(
   rmSync(box, { recursive: true, force: true });
 }
 
+// ⑦ CLI 모듈 배선 완결성(#905 회귀 방지) — 프로덕션 cli/*.mjs 는 하나도 빠짐없이
+//   발행(build-context publish)·설치(user-install installCli) 두 매니페스트 모두에 있어야 한다.
+//   빠지면 그 모듈을 static import 하는 엔트리포인트(예: lively-mcp-local.mjs → project-init-core.mjs)가
+//   부팅 즉시 죽어 `lively mcp-local`(lively-local MCP) 이 통째로 못 뜬다.
+{
+  const { readdirSync } = await import("node:fs");
+  const { fileURLToPath } = await import("node:url");
+  const HERE = join(fileURLToPath(import.meta.url), "..");          // kit/setup
+  const KIT = join(HERE, "..");                                     // kit
+  const installSrc = readFileSync(join(HERE, "user-install.mjs"), "utf8");
+  const buildCtxSrc = readFileSync(join(KIT, "generator", "build-context.mjs"), "utf8");
+  const cliMods = readdirSync(join(KIT, "cli")).filter((f) => f.endsWith(".mjs") && !f.endsWith(".test.mjs"));
+  const missing = [];
+  for (const m of cliMods) {
+    if (!installSrc.includes(m)) missing.push(`user-install(installCli): ${m}`);
+    if (!buildCtxSrc.includes(m)) missing.push(`build-context(publish): ${m}`);
+  }
+  missing.length === 0
+    ? ok(`⑦ CLI 모듈 배선 완결 — ${cliMods.length}개 모두 발행·설치 매니페스트 포함`)
+    : bad("⑦ CLI 모듈 배선 누락", missing.join(" · "));
+}
+
 rmSync(SANDBOX, { recursive: true, force: true });
 console.log(`user-install tests: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);
 if (fail) process.exit(1);
