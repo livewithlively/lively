@@ -357,11 +357,12 @@ function renderContainer(type, rest, bodyLines) {
       const rendered = inner();
       const panes = Array.from(rendered.children).filter((n: any) => n.classList && n.classList.contains('md-tabpane'));
       if (!panes.length) return moveChildren(rendered, el('div', { class: 'md-tabs-fallback' }));
+      const hue = (summary || '').split(/\s+/).includes('hue');  // :::tabs hue — 탭을 스크린샷 구역색(is-cN)과 1:1 연결 (#1013)
       const bar = el('div', { class: 'md-tabs-bar', role: 'tablist' });
       const body = el('div', { class: 'md-tabs-body' });
       const btns: any[] = [];
       panes.forEach((p: any, idx: number) => {
-        const btn = el('button', { class: 'md-tab-btn' + (idx === 0 ? ' active' : ''), type: 'button', role: 'tab',
+        const btn = el('button', { class: 'md-tab-btn' + (idx === 0 ? ' active' : '') + (hue ? ' is-c' + (idx % 5) : ''), type: 'button', role: 'tab',
           'aria-selected': idx === 0 ? 'true' : 'false', text: p.getAttribute('data-tab-label') || '탭 ' + (idx + 1) });
         btn.onclick = () => btns.forEach((b, k) => {
           const on = b === btn;
@@ -372,7 +373,7 @@ function renderContainer(type, rest, bodyLines) {
         if (idx > 0) p.style.display = 'none';
         bar.append(btn); body.append(p);
       });
-      return el('div', { class: 'md-tabs' }, bar, body);
+      return el('div', { class: 'md-tabs' + (hue ? ' md-tabs--hue' : '') }, bar, body);
     }
     case 'tab': {
       const pane = el('div', { class: 'md-tabpane' });

@@ -1187,8 +1187,7 @@ async function fillSessions(zone, onCount, projectsP) {
     let sessions, cfg, projects, lists;
     try {
         [sessions, cfg, projects, lists] = await Promise.all([
-            // #1015 대시보드 '내 AI 세션'은 개인 뷰 — 남의 공개 세션(attachable=false)은 제외(내 것·초대·프로젝트만). 팀 전체 목록은 'AI 세션' 탭.
-            api('/api/ui/terminal/sessions').then((d) => ((d && d.sessions) || []).filter((s) => s.attachable !== false)),
+            api('/api/ui/terminal/sessions').then((d) => (d && d.sessions) || []),
             api('/api/ui/terminal/config').catch(() => null), // 라벨 보강용 — 실패해도 폴백으로 진행
             (projectsP || Promise.resolve([])).catch(() => []), // 프로젝트 세션의 프로젝트명 매핑용
             api('/api/ui/v6/project-lists').then((d) => (d && d.lists) || []).catch(() => []), // 프로젝트 → 리스트(영역) 이름 매핑용
@@ -1442,7 +1441,7 @@ async function fillSessions(zone, onCount, projectsP) {
     // base 세션 + 프로젝트 세션 재병합(재렌더 없이 sessions 만 갱신).
     const refetchSessions = async () => {
         const d = await api('/api/ui/terminal/sessions');
-        sessions = ((d && d.sessions) || []).filter((s) => s.attachable !== false); // #1015 개인 뷰 — 남의 공개 세션 제외
+        sessions = (d && d.sessions) || [];
         const withSess = (projects || []).filter((p) => Number(p.my_session_count) > 0);
         if (withSess.length) {
             const arrs = await Promise.all(withSess.map((p) => api('/api/ui/v6/projects/' + p.id + '/sessions').then((d2) => (d2 && d2.sessions) || []).catch(() => [])));
@@ -2255,7 +2254,7 @@ async function fillNotifications(zone, projectsP) {
         api('/api/ui/activity/list?limit=100').then((d) => (Array.isArray(d) ? d : (d && d.rows) || [])).catch(() => []),
         Promise.all(topIds.map((id) => api('/api/ui/v6/projects/' + id + '/comments')
             .then((d) => ({ id, feed: (d && d.feed) || [] })).catch(() => ({ id, feed: [] })))),
-        api('/api/ui/terminal/sessions').then((d) => ((d && d.sessions) || []).filter((s) => s.attachable !== false)).catch(() => []), // 세션 초대용 — #1015 남의 공개 세션은 '초대'가 아니므로 제외(알림 날조 방지)
+        api('/api/ui/terminal/sessions').then((d) => (d && d.sessions) || []).catch(() => []), // 세션 초대용
         api('/api/ui/terminal/config').catch(() => null),
         // #802 검토 대기 건수(신규 pending 지식 + 수정 리비전, '내 도메인' 분리). 검토 권한(memory scope)이 없으면 403 →
         //  null → 행 자체를 안 그린다(검토할 수 없는 사람에게 알릴 이유가 없다).

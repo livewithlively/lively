@@ -103,17 +103,57 @@ function shortDir(d) {
   const segs = String(d || '').split('/').filter(Boolean);
   return segs.length <= 2 ? (d || '') : '…/' + segs.slice(-2).join('/');
 }
-// 기본 상태 필터(전체/작업중/대기/오프라인) — 브라우저에 기억.
-const TSESS_FILTER_KEY = 'lively_term_status_filter_v1';
-function tsessFilter() { try { return localStorage.getItem(TSESS_FILTER_KEY) || 'all'; } catch (_) { return 'all'; } }
-function saveTsessFilter(v) { try { localStorage.setItem(TSESS_FILTER_KEY, v); } catch (_) { /* noop */ } }
-
 // 상태 필터칩 겸 카운트 요약 — 색점 + 라벨 + 개수. (전체 칩은 색점 없음.)
 function tsessChip(label, count, cls, active, onClick) {
   const c = el('button', { class: 'tsess-chip-btn' + (active ? ' active' : '') + (cls ? ' ' + cls : ''), type: 'button', onclick: onClick });
   if (cls) c.append(el('span', { class: 'tsess-dot tsess-dot-' + cls }));
   c.append(el('span', { class: 'tsess-chip-label', text: label }), el('span', { class: 'tsess-chip-n', text: String(count) }));
   return c;
+}
+
+// #1015 D — 필터 상태 영속(브라우저). 상태(다중 on/off)·소유. 프로젝트 필터는 세션마다 달라 안 남긴다.
+const TSESS_STATUSSET_KEY = 'lively_term_statusset_v1';
+function tsessStatusSet(): Set<string> { try { const r = localStorage.getItem(TSESS_STATUSSET_KEY); const a = r ? JSON.parse(r) : []; return new Set(Array.isArray(a) ? a.filter((x) => typeof x === 'string') : []); } catch { return new Set(); } }
+function saveTsessStatusSet(s: Set<string>) { try { localStorage.setItem(TSESS_STATUSSET_KEY, JSON.stringify([...s])); } catch { /* noop */ } }
+const TSESS_OWN_KEY = 'lively_term_own_filter_v1';
+function tsessOwnFilter(): string { try { const v = localStorage.getItem(TSESS_OWN_KEY); return ['all', 'mine', 'invited'].includes(v as string) ? (v as string) : 'all'; } catch { return 'all'; } }
+function saveTsessOwnFilter(v: string) { try { localStorage.setItem(TSESS_OWN_KEY, v); } catch { /* noop */ } }
+
+// #1015 C — 검색형 프로젝트 필터(드롭다운 버튼 + 타이핑 검색). 값: 0=전체 · -1=개인 세션만 · -2=프로젝트 세션만 · >0=projectId.
+function buildSessProjFilter(projName: Map<any, string>, projIds: any[], current: number, onPick: (v: number) => void) {
+  const opts = [
+    { v: 0, label: '프로젝트 전체' },
+    { v: -1, label: '개인 세션만' },
+    { v: -2, label: '프로젝트 세션만' },
+    ...projIds.map((id) => ({ v: Number(id), label: projName.get(id) || ('프로젝트 #' + id) })),
+  ];
+  const cur = opts.find((o) => o.v === current) || opts[0];
+  const wrap = el('div', { class: 'tsess-projfilter' });
+  // 버튼 — 현재 선택 표시(전체면 '프로젝트'). 활성(전체 아님)이면 강조.
+  const btn = el('button', { type: 'button', class: 'tsess-projfilter-btn' + (current !== 0 ? ' active' : ''), title: '프로젝트로 필터' },
+    el('span', { text: current === 0 ? '프로젝트' : cur.label }), el('span', { class: 'tsess-projfilter-chev', text: '▾' }));
+  const dd = el('div', { class: 'tsess-projfilter-dd', hidden: true });
+  const search = el('input', { type: 'search', class: 'tsess-projfilter-search', placeholder: '프로젝트 검색…' }) as HTMLInputElement;
+  const listBox = el('div', { class: 'tsess-projfilter-list' });
+  const renderList = (q: string) => {
+    const ql = (q || '').trim().toLowerCase();
+    const matches = opts.filter((o) => !ql || o.label.toLowerCase().includes(ql));
+    listBox.replaceChildren(...(matches.length ? matches : [{ v: current, label: '(일치 없음)' }]).map((o) =>
+      el('button', { class: 'tsess-projfilter-opt' + (o.v === current ? ' active' : ''), type: 'button',
+        onmousedown: (e: any) => { e.preventDefault(); close(); if (o.v !== current) onPick(o.v); } }, o.label)));
+  };
+  let docHandler: any = null;
+  const close = () => { dd.hidden = true; if (docHandler) { document.removeEventListener('mousedown', docHandler); docHandler = null; } };
+  const open = () => {
+    dd.hidden = false; search.value = ''; renderList(''); search.focus();
+    docHandler = (e: any) => { if (!wrap.contains(e.target)) close(); };
+    document.addEventListener('mousedown', docHandler);
+  };
+  btn.addEventListener('click', () => (dd.hidden ? open() : close()));
+  search.addEventListener('input', () => renderList(search.value));
+  dd.append(search, listBox);
+  wrap.append(btn, dd);
+  return wrap;
 }
 
 async function renderTerminal(view) {
@@ -147,8 +187,9 @@ async function renderTerminal(view) {
   // 관리(선택삭제) 가능 = 내 소유 세션. 서버도 소유자 아니면 403 재검증.
   const ownedSessions = sessions.filter((s) => s.owned);
   const sel: any = { mode: false, ids: new Set() };
-  let statusF = tsessFilter();     // all | working | idle | offline
-  let projF = 0;                   // 0 = 전체, or projectId
+  let statusOn = tsessStatusSet();   // #1015 D 상태 필터(다중 on/off). 비어있으면 전체.
+  let ownF = tsessOwnFilter();        // 'all' | 'mine'(내 세션) | 'invited'(초대받은)
+  let projF = 0;                      // 0=전체 · -1=개인 세션만 · -2=프로젝트 세션만 · >0=projectId
 
   const headActions = el('div', { class: 'term-head-actions' });
   const bulkBar = el('div', { class: 'bulk-bar', hidden: true });
@@ -185,36 +226,54 @@ async function renderTerminal(view) {
       : null;
     headActions.replaceChildren(...[tourBtn, logBtn, nodeBtn, newBtn].filter(Boolean));
 
-    // 상태 카운트 = 필터칩 겸 요약.
-    const counts: any = { all: sessions.length, busy: 0, waiting: 0, idle: 0, offline: 0 };
+    // ── 1행: 상태 필터(다중 on/off — 색점·라벨 유지, 비어있으면 전체) + 우측 액션 ──
+    const counts: any = { waiting: 0, busy: 0, idle: 0, offline: 0 };
     for (const s of sessions) counts[s._st]++;
-    const chip = (label, key, cls) => tsessChip(label, key === 'all' ? counts.all : counts[key], cls, statusF === key, () => { statusF = key; saveTsessFilter(key); draw(); });
-    const chips = el('div', { class: 'tsess-chips' },
-      chip('전체', 'all', ''),
-      chip('확인 필요', 'waiting', 'waiting'),
-      chip('작업 중', 'busy', 'busy'),
-      chip('대기', 'idle', 'idle'),
-      chip('오프라인', 'offline', 'offline'));
+    const stChip = (key, label, cls) => tsessChip(label, counts[key], cls, statusOn.has(key), () => {
+      if (statusOn.has(key)) statusOn.delete(key); else statusOn.add(key);
+      saveTsessStatusSet(statusOn); draw();
+    });
+    const allChip = el('button', { class: 'tsess-chip-btn' + (statusOn.size === 0 ? ' active' : ''), type: 'button', title: '모든 상태',
+      onclick: () => { statusOn.clear(); saveTsessStatusSet(statusOn); draw(); } },
+      el('span', { class: 'tsess-chip-label', text: '전체' }), el('span', { class: 'tsess-chip-n', text: String(sessions.length) }));
+    const chips = el('div', { class: 'tsess-chips' }, allChip,
+      stChip('waiting', '확인 필요', 'waiting'), stChip('busy', '작업 중', 'busy'),
+      stChip('idle', '대기', 'idle'), stChip('offline', '오프라인', 'offline'));
 
-    // 우측 컨트롤 — 통합 질문검색 + 프로젝트 필터(세션에 프로젝트가 있을 때만) + 선택(일괄삭제) 토글.
+    // 우측 — 질문검색 + 프로젝트 필터(프로젝트 세션이 있을 때만) + 선택. (원래 한 줄 레이아웃 유지)
     const right = el('div', { class: 'tsess-controls-right' });
     right.append(el('button', { class: 'btn btn-ghost btn-sm tsess-gbtn', text: '질문 검색', title: '여러 세션에서 내가 클로드에게 보낸 질문을 통합 검색하고 어느 세션인지 찾기', onclick: () => openGlobalPromptSearch(ctx) }));
     const projIds = [...new Set(sessions.map((s) => Number(s.projectId) || 0).filter(Boolean))];
-    if (projIds.length) {
-      const psel = el('select', { class: 'tsess-projsel', onchange: () => { projF = Number((psel as any).value) || 0; draw(); } },
-        el('option', { value: '0' }, '프로젝트 전체'),
-        ...projIds.map((id) => el('option', { value: String(id), selected: id === projF ? '' : null }, projName.get(id) || ('프로젝트 #' + id))));
-      right.append(psel);
-    }
+    if (projIds.length) right.append(buildSessProjFilter(projName, projIds, projF, (v) => { projF = v; draw(); }));
     const selToggle = sel.mode
       ? el('button', { class: 'btn btn-ghost btn-sm', text: '취소', onclick: () => { sel.mode = false; sel.ids.clear(); draw(); } })
       : (sessions.length ? el('button', { class: 'btn btn-ghost btn-sm', text: '선택', title: '여러 세션을 골라 한 탭 그리드로 열거나 한 번에 삭제', onclick: () => { sel.mode = true; draw(); } }) : null);
     if (selToggle) right.append(selToggle);
-    controls.replaceChildren(chips, right);
 
-    // 필터 적용 + 정렬(작업중→대기→오프라인, 그 안에서 최근 활동순).
+    // ── 소유 필터(내 세션 / 초대받은 세션) — #1015 D. 초대받은 세션이 있을 때만 별도 줄로 노출(전부 내 것이면 무의미하므로 숨김). ──
+    const mineCount = sessions.filter((s) => s.owned).length;
+    const invitedCount = sessions.length - mineCount;
+    if (ownF !== 'all' && !invitedCount) ownF = 'all'; // 초대 세션 0개면 소유 필터 무효(줄이 숨겨지므로 갇히지 않게)
+    const rows = [el('div', { class: 'tsess-controls-top' }, chips, right)];
+    if (invitedCount) {
+      const ownChip = (key, label, cnt) => tsessChip(label, cnt, '', ownF === key, () => { ownF = ownF === key ? 'all' : key; saveTsessOwnFilter(ownF); draw(); });
+      rows.push(el('div', { class: 'tsess-filter-row' },
+        el('span', { class: 'tsess-filter-lbl', text: '소유' }),
+        ownChip('mine', '내 세션', mineCount), ownChip('invited', '초대받은 세션', invitedCount)));
+    }
+    controls.replaceChildren(...rows);
+
+    // 필터 적용(상태 다중 · 소유 · 프로젝트) + 정렬(작업중→대기→오프라인, 그 안에서 최근 활동순).
     const shown = sessions
-      .filter((s) => (statusF === 'all' || s._st === statusF) && (projF === 0 || Number(s.projectId) === projF))
+      .filter((s) => statusOn.size === 0 || statusOn.has(s._st))
+      .filter((s) => ownF === 'all' || (ownF === 'mine' && s.owned) || (ownF === 'invited' && !s.owned))
+      .filter((s) => {
+        if (projF === 0) return true;
+        const pid = Number(s.projectId) || 0;
+        if (projF === -1) return !pid;   // 개인 세션만
+        if (projF === -2) return !!pid;  // 프로젝트 세션만
+        return pid === projF;            // 특정 프로젝트
+      })
       .sort((a, b) => TSESS_STATUS[a._st].rank - TSESS_STATUS[b._st].rank
         || (Number(b.lastActive || b.created) || 0) - (Number(a.lastActive || a.created) || 0));
 
@@ -272,9 +331,6 @@ function tsessCard(s, ctx) {
   const model = (s.flags && s.flags['--model']) || '';
   const owner = memberName(cfg, s.owner) || s.owner || '?';
   const pid = Number(s.projectId) || 0;
-  // #1015 이 뷰어가 입장 가능한가(백엔드 attachable = 소유자·초대자, 프로젝트 세션 전원). 노드/구버전(undefined)은 입장 가능으로 폴백.
-  //  공개-남의세션이면 false → 열기·내 질문 버튼 숨기고 '보기 전용' 카드로.
-  const attachable = s.attachable !== false;
 
   // ── 1행: 상태점 + 이름 + 프로젝트 칩 + 배지 ──
   const title = el('div', { class: 'tsess-title' },
@@ -288,9 +344,7 @@ function tsessCard(s, ctx) {
   if (s.autoApprove) title.append(el('span', { class: 'tsess-badge danger', text: '자동승인' }));
   // 분산 노드(#869) — 원격 노드에서 도는 세션 표시. 노드가 끊겨 있으면(꺼짐·절전) 위험 배지로 구분.
   if (s.node) title.append(el('span', { class: 'tsess-badge' + (s.node.online ? '' : ' danger'), title: '실행 노드: ' + (s.node.name || s.node.id) + (s.node.online ? '' : ' — 연결 끊김(꺼짐/절전)'), text: '🖥 ' + (s.node.name || s.node.id) + (s.node.online ? '' : ' · 끊김') }));
-  if (!s.owned) title.append(attachable
-    ? el('span', { class: 'tsess-badge', title: '소유: ' + owner, text: '👤 ' + owner + ' · 초대받음' })
-    : el('span', { class: 'tsess-badge', title: '소유: ' + owner + ' · 공개 세션(보기 전용 — 입장은 소유자·초대자만)', text: '👤 ' + owner + ' · 공개' }));  // #1015 남의 공개 세션
+  if (!s.owned) title.append(el('span', { class: 'tsess-badge', title: '소유: ' + owner, text: '👤 ' + owner + ' · 초대받음' }));
   else if ((s.invites || []).length) title.append(el('span', { class: 'tsess-badge', title: s.invites.map((id) => memberName(cfg, id)).join(', '), text: '초대 ' + s.invites.length + '명' }));
 
   // ── 2행(있으면): '지금 하는 일' 실시간 요약(백엔드 title = Claude Code pane 요약) — 라벨과 다를 때만 ──
@@ -308,11 +362,7 @@ function tsessCard(s, ctx) {
 
   const info = el('div', { class: 'tsess-info' }, ...[title, workTitle, meta].filter(Boolean));
 
-  // 선택 모드 — 입장 가능한 카드에만 체크박스(카드 전체 토글). 골라서 한 탭 그리드로 '열기' 또는 '삭제'(삭제는 서버가 소유자만 허용).
-  //  #1015 남의 공개 세션(attachable=false)은 열 수 없으므로 선택 대상 아님 → 보기 전용 카드로.
-  if (sel && sel.mode && !attachable) {
-    return el('div', { class: 'tsess-card tsess-' + st.cls + ' tsess-card--sel' }, info);
-  }
+  // 선택 모드 — 모든 카드에 체크박스(카드 전체 토글). 골라서 한 탭 그리드로 '열기' 또는 '삭제'(삭제는 서버가 소유자만 허용).
   if (sel && sel.mode) {
     const cb = el('input', { type: 'checkbox' });
     cb.checked = sel.ids.has(s.id);
@@ -320,22 +370,12 @@ function tsessCard(s, ctx) {
     return el('label', { class: 'tsess-card tsess-' + st.cls + ' tsess-card--sel' }, el('span', { class: 'tsess-check' }, cb), info);
   }
 
-  // 액션 — 입장 가능하면 열기 + 내 질문(노드 세션도 트랜스크립트 릴레이 #875 ③). 소유자면 공개/비공개 토글·수정·삭제.
-  //  #1015 남의 공개 세션(attachable=false)은 액션 없이 '보기 전용'.
-  const acts = el('div', { class: 'tsess-acts' });
-  if (attachable) {
-    acts.append(el('button', { class: 'tsess-open', text: '열기', onclick: () => window.open(termUrl(s.id, s.label, s.node && s.node.id), '_blank') }));
-    acts.append(el('button', { class: 'tsess-icon tsess-q', title: '이 세션에서 클로드에게 보낸 내 질문만 순서대로 모아보기', text: '내 질문', onclick: () => openSessPrompts(s) }));
-  }
+  // 액션 — 열기(항상) + 내 질문(노드 세션도 트랜스크립트 릴레이 #875 ③) + 소유자면 수정·삭제.
+  const acts = el('div', { class: 'tsess-acts' },
+    el('button', { class: 'tsess-open', text: '열기', onclick: () => window.open(termUrl(s.id, s.label, s.node && s.node.id), '_blank') }));
+  acts.append(el('button', { class: 'tsess-icon tsess-q', title: '이 세션에서 클로드에게 보낸 내 질문만 순서대로 모아보기', text: '내 질문', onclick: () => openSessPrompts(s) }));
   if (s.owned) {
-    if (!s.node) { // #1015 공개/비공개 빠른 토글(노드 세션은 공개 모델 미지원 — 소유자·초대자만 유지)
-      acts.append(el('button', { class: 'tsess-icon', title: s.private ? '지금 비공개 — 눌러서 공개로(모든 멤버가 목록에서 봄)' : '지금 공개 — 눌러서 비공개로(나·초대한 멤버만 봄)', text: s.private ? '🔒 비공개' : '🌐 공개', onclick: async (ev) => {
-        ev.currentTarget.disabled = true;
-        try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify({ private: !s.private }) }); toast(s.private ? '공개로 전환됨' : '비공개로 전환됨'); reRender(); }
-        catch (e) { ev.currentTarget.disabled = false; toast('실패 — ' + e.message, true); }
-      } }));
-    }
-    acts.append(el('button', { class: 'tsess-icon', title: '이름·초대·공개 범위 수정', text: '수정', onclick: () => openTermEdit(s, cfg, view) }));
+    acts.append(el('button', { class: 'tsess-icon', title: '이름·초대 수정', text: '수정', onclick: () => openTermEdit(s, cfg, view) }));
     acts.append(el('button', { class: 'tsess-icon danger', title: '세션 종료(삭제)', text: '삭제', onclick: async () => {
       if (!confirm('세션 "' + s.label + '" 을(를) 종료할까요? 실행 중인 작업도 함께 종료됩니다.')) return;
       try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' }); toast('세션 종료됨'); reRender(); }
@@ -563,7 +603,7 @@ function loginBannerEl(cfg, view) {
     el('button', { class: 'btn btn-primary', text: '내 계정 로그인', onclick: () => openLoginSession(view) }));
 }
 
-// 새 세션 — 기본 공개(#1015: 모든 멤버가 목록에서 봄, 끄면 비공개). 초대한 멤버는 입장·조작·대화 열람 가능(공개여도 입장은 이들만).
+// 새 세션 — 기본 비공개. 초대 피커에서 멤버를 고르면 그 사람도 보고 열 수 있다.
 // onCreated(out) — 있으면 생성 후 그걸 호출(대시보드에서 재사용: 세션 위젯 새로고침). 없으면 터미널 뷰 재렌더.
 function openTermCreateForm(cfg, view, onCreated?) {
   const roots = cfg.roots || [];
@@ -607,7 +647,7 @@ function openTermCreateForm(cfg, view, onCreated?) {
   };
   nodeSel.addEventListener('change', paintPicker);
   const harnessSel = el('select', { class: 'term-input' }, ...harnesses.map((h) => el('option', { value: h.key }, h.label)));
-  const inviteBox = buildInvitePicker(cfg, new Set()); // 초대 없음 = 소유자만 입장(가시성은 아래 공개 토글이 결정 — #1015)
+  const inviteBox = buildInvitePicker(cfg, new Set()); // 기본 비공개(아무도 선택 안 됨)
   const flagsBox = el('div', { class: 'term-flags' });
   // 자동 승인은 기본 꺼짐이되, 내가 지난번에 켰다면 켠 채로 복원한다(#782 — 사용자별 기억).
   //  (#673 의 'git 워크트리에서 작업' 체크박스는 #918 에서 제거 — 서버측 근거가 사라졌다: terminal-sessions 참조.)
@@ -623,11 +663,6 @@ function openTermCreateForm(cfg, view, onCreated?) {
     el('option', { value: 'incognito' }, '인코그니토 — 라이블리 전혀 안 씀(클린룸)'));
   const modeWrap = el('label', { class: 'term-auto' },
     el('span', { text: ' 라이블리 모드 ' }), modeSel);
-  // #1015 공개 범위 — 기본 공개(모든 멤버가 목록에서 봄). 끄면 비공개(나·초대한 멤버만). 입장·조작은 어느 경우든 소유자·초대자만.
-  const pubCb = el('input', { type: 'checkbox' });
-  pubCb.checked = true;
-  const pubWrap = el('label', { class: 'term-auto' }, pubCb,
-    el('span', { text: ' 공개 — 모든 멤버가 세션 목록에서 이 세션을 봅니다(무슨 작업인지). 끄면 비공개(나·초대한 멤버만). 입장·조작은 어느 경우든 소유자·초대자만.' }));
 
   // '실행 설정'(하네스·모델·effort) — 접이식 프리셋으로 묶어 세로를 아끼고, 이전 설정을 기억한다(#673). 기본 접힘.
   const presetSum = el('div', { class: 'term-preset-sum' });
@@ -724,9 +759,9 @@ function openTermCreateForm(cfg, view, onCreated?) {
     el('div', { 'data-tour': 'node' }, field('실행 위치', nodeSel)), // #869 중앙 컴퓨터/등록 노드 — 항상 노출: 투어 ③'실행 위치' 스텝의 대상(#req). 등록 노드가 없으면 '중앙 컴퓨터(기본)' 한 줄만 보인다(submit 값은 기존과 동일 '').
     // #853 작업 위치(공유/개인 토글) + 그 안의 폴더를 한 블록으로 — '이 폴더에서 AI를 실행한다'는 직관.
     el('div', { 'data-tour': 'folder' }, field('어디서 실행할까요', el('div', { class: 'term-loc' }, rootSeg, el('div', { class: 'term-loc-folder' }, pickerBox)))),
-    el('div', { class: 'term-checks', 'data-tour': 'options' }, autoWrap, modeWrap, pubWrap),
+    el('div', { class: 'term-checks', 'data-tour': 'options' }, autoWrap, modeWrap),
     presetToggle, presetBody,
-    el('div', { 'data-tour': 'invite' }, field('입장 허용 (초대한 멤버는 이 세션에 들어와 조작·대화 열람 가능 · 공개여도 입장은 이들만)', inviteBox.box)),
+    el('div', { 'data-tour': 'invite' }, field('초대 (비우면 나만 보는 비공개 세션)', inviteBox.box)),
     el('div', { class: 'ov-actions' },
       el('button', { class: 'btn btn-primary', 'data-tour': 'create', text: '생성하기', onclick: async (ev) => {
         const btn = ev.currentTarget; btn.disabled = true;
@@ -735,7 +770,7 @@ function openTermCreateForm(cfg, view, onCreated?) {
         for (const c of flagsBox.querySelectorAll('[data-flag]')) flags[c.dataset.flag] = (c.type === 'checkbox') ? c.checked : c.value;
         const nodeId = nodeSel.value || ''; // #869 노드면 원격 경로(remoteSubI), 아니면 로컬 폴더(pickerPath)
         const mode = modeSel.value; // #1007+ 라이블리 모드 → readOnly/incognito 불리언(서버 CreateInput)
-        const payload = { label: labelI.value, rootKey, subpath: nodeId ? remoteSubI.value.trim() : pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, readOnly: mode === 'readonly', incognito: mode === 'incognito', private: !pubCb.checked, invites: inviteBox.selected(), node: nodeId || undefined };
+        const payload = { label: labelI.value, rootKey, subpath: nodeId ? remoteSubI.value.trim() : pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, readOnly: mode === 'readonly', incognito: mode === 'incognito', invites: inviteBox.selected(), node: nodeId || undefined };
         try {
           const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify(payload) });
           saveTermCreatePrefs({ harness: harnessSel.value, flags, autoApprove: autoCb.checked }); // 이 설정을 다음 생성 때 기본값으로 기억(#673, 자동 승인은 #782)
@@ -825,14 +860,6 @@ function openTermEdit(s, cfg, view) {
   // ── 변경 가능 ──
   const labelI = el('input', { class: 'term-input', type: 'text', value: s.label });
   const inviteBox = buildInvitePicker(cfg, new Set(s.invites || []));
-  // #1015 공개 범위 — 공개(모든 멤버가 목록에서 봄) / 비공개(나·초대자만). 노드 세션은 공개 모델 미지원(항상 소유자·초대자만).
-  const isNode = !!s.node;
-  const publicChk = el('input', { type: 'checkbox' });
-  publicChk.checked = isNode ? true : !s.private;
-  if (isNode) (publicChk as any).disabled = '';
-  const pubNote = isNode
-    ? '노드(원격) 세션은 아직 소유자·초대한 멤버만 볼 수 있습니다(공개 모델 미지원).'
-    : '공개 — 모든 멤버가 목록에서 이 세션을 보고 무슨 작업인지 압니다. 끄면 비공개(나·초대한 멤버만 목록에 뜸). 입장·조작·대화 열람은 어느 경우든 소유자·초대자만입니다.';
   // ── 생성 시 고정(비활성 표시) ──
   const ro = (val) => el('input', { class: 'term-input', type: 'text', value: val, disabled: '' });
   const author = memberName(cfg, s.owner) || s.owner || '?';
@@ -847,8 +874,7 @@ function openTermEdit(s, cfg, view) {
 
   const back = overlay('세션 수정',
     field('이름', labelI),
-    field('공개 범위', el('label', { class: 'term-check-row' }, publicChk, el('span', { class: 'term-check-note', text: pubNote }))),
-    field('입장 허용 (초대한 멤버는 이 세션에 들어와 조작·대화 열람 가능 · 나는 항상 가능)', inviteBox.box),
+    field('초대 (선택한 멤버만 이 세션을 보고 열 수 있음 · 비우면 비공개)', inviteBox.box),
     lockNote,
     field('작업자', ro(author)),
     field('작업 폴더', ro(s.dir || '(기본)')),
@@ -858,7 +884,7 @@ function openTermEdit(s, cfg, view) {
     el('div', { class: 'ov-actions' },
       el('button', { class: 'btn btn-primary', text: '저장', onclick: async (ev) => {
         ev.currentTarget.disabled = true;
-        try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify({ label: labelI.value, invites: inviteBox.selected(), private: isNode ? undefined : !publicChk.checked, node: (s.node && s.node.id) || undefined }) }); back.remove(); toast('수정됨'); renderTerminal(view); }
+        try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify({ label: labelI.value, invites: inviteBox.selected(), node: (s.node && s.node.id) || undefined }) }); back.remove(); toast('수정됨'); renderTerminal(view); }
         catch (e) { ev.currentTarget.disabled = false; toast('수정 실패 — ' + e.message, true); }
       } })));
 }

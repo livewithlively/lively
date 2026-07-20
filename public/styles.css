@@ -1628,7 +1628,24 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .term-badge.danger { color: #9A5B2E; background: #FBF1E7; border-color: #F0DCC4; }
 /* ════ 터미널 탭 세션 보드(#745) — 라이브 상태(작업중/대기/오프라인) + 프로젝트 할당 미션컨트롤 ════ */
 /* 상태칩(=카운트 요약) + 우측 프로젝트필터/선택토글 */
-.tsess-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 6px 0 14px; }
+.tsess-controls { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 14px; }
+.tsess-controls-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.tsess-filter-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tsess-filter-lbl { font-size: 11.5px; font-weight: 700; color: var(--ink-note); margin-left: 6px; }
+.tsess-filter-row > .tsess-filter-lbl:first-child { margin-left: 0; }
+.tsess-projfilter { position: relative; display: inline-flex; }
+.tsess-projfilter-btn { display: inline-flex; align-items: center; gap: 6px; font-family: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; cursor: pointer; max-width: 220px; }
+.tsess-projfilter-btn:hover { border-color: var(--muted-2); }
+.tsess-projfilter-btn.active { color: var(--ink); background: var(--bg-sel); border-color: var(--line-net-2); }
+.tsess-projfilter-btn > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tsess-projfilter-chev { color: var(--ink-note); font-size: 10px; }
+.tsess-projfilter-dd { position: absolute; top: calc(100% + 4px); right: 0; z-index: 30; width: 230px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,0.12); padding: 6px; }
+.tsess-projfilter-search { width: 100%; box-sizing: border-box; font-family: inherit; font-size: 12.5px; color: var(--ink); background: var(--bg-subtle, var(--bg)); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; margin-bottom: 4px; }
+.tsess-projfilter-search:focus { outline: none; border-color: var(--line-net-2); }
+.tsess-projfilter-list { max-height: 260px; overflow-y: auto; }
+.tsess-projfilter-opt { display: block; width: 100%; text-align: left; font-family: inherit; font-size: 12.5px; color: var(--ink-sub); background: none; border: none; border-radius: 6px; padding: 6px 10px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tsess-projfilter-opt:hover { background: var(--bg-sel); color: var(--ink); }
+.tsess-projfilter-opt.active { color: var(--ink); font-weight: 700; background: var(--bg-sel); }
 .tsess-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .tsess-controls-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .tsess-chip-btn { display: inline-flex; align-items: center; gap: 6px; font-family: inherit; font-size: 12.5px; font-weight: 700; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; cursor: pointer; }
@@ -6934,6 +6951,18 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .md-tabs-body { background: var(--bg); border: 1px solid var(--line-net); border-radius: 10px; padding: 16px 18px 8px; }
 .md-tabs-body .md-tabpane > :last-child { margin-bottom: 8px; }
 @media (prefers-reduced-motion: reduce) { .docs-side a.docs-item, .md-tab-btn { transition: none; } }
+/* :::tabs hue — 색상 구분 가로 탭: 스크린샷 ①~⑥ 구역 색(is-cN·--sc)과 1:1 연결 (#1013 홈 가이드) */
+.md-tabs--hue .md-tab-btn { display: inline-flex; align-items: center; gap: 7px;
+  border-color: color-mix(in srgb, var(--sc) 28%, transparent); }
+.md-tabs--hue .md-tab-btn::before { content: ''; width: 10px; height: 10px; flex: none;
+  border-radius: 4px 1.5px 4px 1.5px; background: var(--sc);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--sc) 40%, transparent); }
+.md-tabs--hue .md-tab-btn:hover { color: var(--ink);
+  background: color-mix(in srgb, var(--sc) 9%, transparent);
+  border-color: color-mix(in srgb, var(--sc) 45%, transparent); }
+.md-tabs--hue .md-tab-btn.active { color: var(--sc);
+  background: color-mix(in srgb, var(--sc) 12%, var(--bg));
+  border-color: var(--sc); box-shadow: 0 1px 5px color-mix(in srgb, var(--sc) 24%, transparent); }
 
 /* ============================================================
    사이드바 스크롤바 — 평소엔 숨기고, 그 영역에 호버(=스크롤할 때)만 얇게 노출.
