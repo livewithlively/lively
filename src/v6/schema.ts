@@ -570,6 +570,10 @@ export async function initV6Schema(): Promise<string> {
       PRIMARY KEY (node_id, session_id, at_offset));
     -- reap(30일) 는 updated_at 기준 — 오래된 세션 로그부터. 인덱스로 스윕을 싸게.
     CREATE INDEX IF NOT EXISTS session_log_reap_idx ON session_log(updated_at);
+    -- 무손실 압축 저장(#905 C1 슬②): data 는 압축될 수 있다. raw_len=원본(압축 전) 바이트, codec='zstd'면 data 가 압축본.
+    --  ⚠ 워터마크·오프셋 회계는 항상 raw_len(원본) 기준. 구청크(raw_len NULL)는 octet_length(data)=원본(비압축)으로 취급.
+    ALTER TABLE session_log_chunk ADD COLUMN IF NOT EXISTS raw_len BIGINT;
+    ALTER TABLE session_log_chunk ADD COLUMN IF NOT EXISTS codec TEXT;
   `);
 
   // ── 6a-2) project_folder_binding — 한 프로젝트가 **어느 멤버의 어느 환경에서 어느 절대경로에 사는가**(N:M, #905 P1-①). ──

@@ -46,7 +46,7 @@ try {
       bytes BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (node_id, session_id));
     CREATE TABLE session_log_chunk(node_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL,
-      at_offset BIGINT NOT NULL, data BYTEA NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      at_offset BIGINT NOT NULL, data BYTEA NOT NULL, raw_len BIGINT, codec TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (node_id, session_id, at_offset));
     CREATE TABLE session_project(session_id TEXT NOT NULL, project_id INT NOT NULL,
       valid_from TIMESTAMPTZ NOT NULL DEFAULT now(), created_at TIMESTAMPTZ NOT NULL DEFAULT now(),

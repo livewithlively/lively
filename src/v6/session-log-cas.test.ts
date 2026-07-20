@@ -3,7 +3,7 @@
 //  ⚠ DB 를 타는 append 자체(원자적 CAS·동시성)는 throwaway pg 통합검증(session-log-store.itest.mjs, docker)이 본다.
 //    여기선 "어떤 offset·길이가 어떤 판정인가"의 경계 의미만 — 계약 기준(구현 분기 순서와 무관).
 import assert from "node:assert/strict";
-import { casVerdict } from "./session-log-store.js";
+import { casVerdict, encodeChunk, decodeChunk } from "./session-log-store.js";
 
 let pass = 0;
 const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
@@ -56,6 +56,32 @@ const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
   assert.equal(casVerdict(10, 10, 3), "append",   "10..13 정확히 이어짐 = append");
   assert.equal(casVerdict(10, 11, 3), "gap",      "11.. 앞섬 = gap");
   ok("경계 전이 duplicate→overlap→append→gap 이 off-by-one 없이 갈린다");
+}
+
+// ── 무손실 압축 코덱(#905 슬②) — encode/decode 왕복은 항상 원본, 큰 것만 압축 ──
+{
+  const big = Buffer.from("가나다라마바사 ".repeat(300), "utf8");   // >512B, 압축성
+  const enc = encodeChunk(big);
+  assert.equal(enc.codec, "zstd", "큰 압축성 페이로드 → zstd");
+  assert.ok(enc.data.length < big.length, "실제로 줄어든다");
+  assert.ok(decodeChunk(enc.data, enc.codec).equals(big), "🔑 decode(encode)=원본(무손실 왕복)");
+
+  const small = Buffer.from("hi", "utf8");                          // <512B
+  const encS = encodeChunk(small);
+  assert.equal(encS.codec, null, "작은 청크는 압축 안 함(codec null)");
+  assert.ok(encS.data.equals(small), "작은 청크는 원본 그대로");
+  assert.ok(decodeChunk(encS.data, encS.codec).equals(small), "작은 청크 왕복=원본");
+
+  const encRaw = encodeChunk(big, "raw");
+  assert.equal(encRaw.codec, null, "store=raw 는 크더라도 압축 안 함");
+  assert.ok(encRaw.data.equals(big), "raw 모드는 원본 그대로");
+
+  // 바이너리/유니코드 왕복 무손실
+  const bin = Buffer.from(Array.from({ length: 2000 }, (_, i) => i % 256));
+  const encB = encodeChunk(bin);
+  assert.ok(decodeChunk(encB.data, encB.codec).equals(bin), "바이너리도 왕복 무손실");
+  assert.ok(decodeChunk(Buffer.from("x"), null).equals(Buffer.from("x")), "codec null → 그대로 반환");
+  ok("압축 코덱 — 왕복 무손실 · 큰 것만 zstd · 작은/raw 는 원본 · 바이너리 안전");
 }
 
 console.log(`\n${pass} passed`);

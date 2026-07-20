@@ -38,7 +38,7 @@ try {
       bytes BIGINT NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (node_id, session_id));
     CREATE TABLE session_log_chunk(node_id TEXT NOT NULL DEFAULT '', session_id TEXT NOT NULL,
-      at_offset BIGINT NOT NULL, data BYTEA NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      at_offset BIGINT NOT NULL, data BYTEA NOT NULL, raw_len BIGINT, codec TEXT, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (node_id, session_id, at_offset));
   `);
   const S = await import("../dist/v6/session-log-store.js");
@@ -154,6 +154,49 @@ try {
     await S.backfillSessionTitles();   // 멱등 — 이미 채운 건 안 건드린다
     assert.equal((await itemsPool.query(`SELECT title FROM session WHERE session_id='titl'`)).rows[0].title, "제목이 될 질문", "재실행해도 제목 불변(멱등)");
     ok("제목 백필 — null-title 세션을 첫 청크에서 소급 채움 + 멱등");
+  }
+
+  // ── 무손실 압축 저장(#905 슬②) — 큰 압축성 페이로드는 zstd 로 저장되지만 회수는 원본 그대로, 워터마크는 원본바이트 ──
+  {
+    const payload = B('{"type":"assistant","message":{"content":"' + "가나다라마바사 ".repeat(300) + '"}}\n');   // >512B, 압축 잘 됨
+    const r = await S.appendSessionLog({ nodeId: "", sessionId: "zst", atOffset: 0, data: payload });
+    assert.equal(r.bytes, payload.length, "워터마크 = 원본 바이트(압축 크기 아님)");
+    const back = await S.readSessionLog("", "zst", 0);
+    assert.ok(back.data.equals(payload), "왕복 무손실 — 회수 = 원본 바이트 그대로");
+    assert.equal(back.bytes, payload.length, "회수 워터마크 = 원본 바이트");
+    const row = (await itemsPool.query(`SELECT codec, octet_length(data)::int stored, raw_len::int raw FROM session_log_chunk WHERE session_id='zst'`)).rows[0];
+    assert.equal(row.codec, "zstd", "압축본으로 저장(codec=zstd)");
+    assert.equal(row.raw, payload.length, "raw_len = 원본 길이");
+    assert.ok(row.stored < row.raw, `저장 크기(${row.stored}) < 원본(${row.raw}) — 실제로 줄었다`);
+    const p2 = B("두번째 청크 " + "라마바사아 ".repeat(300));
+    await S.appendSessionLog({ nodeId: "", sessionId: "zst", atOffset: payload.length, data: p2 });
+    const full = await S.readSessionLog("", "zst", 0);
+    assert.ok(full.data.equals(Buffer.concat([payload, p2])), "여러 압축 청크 이어붙여도 원본 연속 복원");
+    const mid = await S.readSessionLog("", "zst", payload.length + 3);   // 두번째 압축 청크의 중간(원본 오프셋)부터
+    assert.ok(mid.data.equals(Buffer.concat([payload, p2]).subarray(payload.length + 3)), "압축 청크에서도 원본 오프셋 기준 부분회수 정확");
+    // 🔑 첫 청크 '내부'(원본 길이 안, 압축 길이 밖) 오프셋부터 회수 — WHERE 가 octet_length(압축) 이면 이 청크를 빠뜨린다(raw_len 필수).
+    const interior = await S.readSessionLog("", "zst", payload.length - 10);
+    assert.ok(interior.data.equals(Buffer.concat([payload, p2]).subarray(payload.length - 10)), "🔑 압축청크 내부 오프셋 부분회수 = raw_len 기준(압축길이 아님)");
+    ok("무손실 압축 — 왕복 원본 일치 · 워터마크=원본바이트 · 실제 압축 · 다청크·부분회수 정확");
+  }
+
+  // ── store="raw" → 압축 안 함(codec null), 회수는 동일 ──
+  {
+    const payload = B('{"raw":"' + "x".repeat(1000) + '"}\n');
+    await S.appendSessionLog({ nodeId: "", sessionId: "rawmode", atOffset: 0, data: payload, store: "raw" });
+    assert.equal((await itemsPool.query(`SELECT codec FROM session_log_chunk WHERE session_id='rawmode'`)).rows[0].codec, null, "store=raw 면 압축 안 함(codec null)");
+    assert.ok((await S.readSessionLog("", "rawmode", 0)).data.equals(payload), "raw 모드도 왕복 일치");
+    ok('store="raw" → 비압축 저장 + 왕복 일치');
+  }
+
+  // ── 하위호환: 압축 도입 전 청크(codec/raw_len NULL, 원본 그대로)도 정확히 읽힌다 ──
+  {
+    await itemsPool.query(`INSERT INTO session(node_id,session_id) VALUES('','legacy')`);
+    await itemsPool.query(`INSERT INTO session_log(node_id,session_id,bytes) VALUES('','legacy',11)`);
+    await itemsPool.query(`INSERT INTO session_log_chunk(node_id,session_id,at_offset,data) VALUES('','legacy',0,$1)`, [B("hello world")]);  // raw_len·codec NULL
+    assert.equal((await S.readSessionLog("", "legacy", 0)).data.toString(), "hello world", "구청크(raw_len/codec NULL)도 octet_length 로 원본 취급");
+    assert.equal((await S.readSessionLog("", "legacy", 6)).data.toString(), "world", "구청크 부분회수도 정확");
+    ok("하위호환 — 압축 도입 전 청크(codec/raw_len NULL)도 정확히 읽힘");
   }
 
   await itemsPool.end();

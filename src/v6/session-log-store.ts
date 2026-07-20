@@ -12,6 +12,20 @@
 //  ⚠ **키는 (node_id, session_id) 복합.** 스칼라면 같은 session_id 를 쓰는 두 머신 로그가 한 줄로 병합되고
 //   CAS 가 서로를 못 본다(설계 §5 ①). node_id='' = 게이트웨이 로컬(박스).
 import { itemsPool } from "../items/store.js";
+import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
+
+// 무손실 압축 저장(#905 C1 슬②) — 청크 data 를 zstd 로 압축해 저장 공간을 줄인다. **무손실**이라 회수 시 원본 그대로
+//  복원(resume/webview 충실성 유지) + 워터마크는 항상 원본 길이(raw_len) 기준(원본 바이트 불변식). 순수 함수라 단위검증.
+//  · store="raw" 면 압축 안 함. · 작은/비압축성 청크는 압축 안 하고 원본 저장(codec=null). · 압축 예외는 원본 폴백.
+const ZSTD_MIN_BYTES = 512;   // 이보다 작으면 압축 이득이 오버헤드보다 작다 → 원본 저장.
+export function encodeChunk(raw: Buffer, store: "slim" | "raw" = "slim"): { data: Buffer; codec: string | null } {
+  if (store === "raw" || raw.length < ZSTD_MIN_BYTES) return { data: raw, codec: null };
+  try { const c = zstdCompressSync(raw); return c.length < raw.length ? { data: c, codec: "zstd" } : { data: raw, codec: null }; }
+  catch { return { data: raw, codec: null }; }   // 압축 실패 → 원본 저장(비치명)
+}
+export function decodeChunk(data: Buffer, codec: string | null): Buffer {
+  return codec === "zstd" ? zstdDecompressSync(data) : data;
+}
 
 // append 판정(순수) — 현재 워터마크 대비 들어온 [atOffset, atOffset+len) 이 어떤 상태인가. DB 없이 단위검증한다.
 //  · append    : 정확히 이어짐(atOffset==current) → 커밋한다.
@@ -60,7 +74,7 @@ export function firstUserPromptTitle(jsonl: string): string | null {
 
 // 델타 append — offset-CAS. 성공/멱등이면 ok=true, gap/overlap 이면 ok=false(+정정용 현재 bytes).
 export async function appendSessionLog(input: {
-  nodeId: string; sessionId: string; atOffset: number; data: Buffer; harness?: string | null; owner?: string | null;
+  nodeId: string; sessionId: string; atOffset: number; data: Buffer; harness?: string | null; owner?: string | null; store?: "slim" | "raw";
 }): Promise<AppendResult> {
   const { nodeId, sessionId, atOffset, data } = input;
   const len = data.length;
@@ -98,9 +112,11 @@ export async function appendSessionLog(input: {
       [nodeId, sessionId, len, atOffset]);
 
     if (upd.rowCount === 1) {
+      // 무손실 압축 저장(#905 C1 슬②) — 저장은 압축본, 오프셋 회계는 원본(raw_len=len). CAS 는 원본 len 으로 이미 처리됨.
+      const enc = encodeChunk(data, input.store ?? "slim");
       await client.query(
-        `INSERT INTO session_log_chunk(node_id, session_id, at_offset, data) VALUES($1,$2,$3,$4)`,
-        [nodeId, sessionId, atOffset, data]);
+        `INSERT INTO session_log_chunk(node_id, session_id, at_offset, data, raw_len, codec) VALUES($1,$2,$3,$4,$5,$6)`,
+        [nodeId, sessionId, atOffset, enc.data, len, enc.codec]);
       await client.query("COMMIT");
       return { ok: true, verdict: "append", bytes: Number(upd.rows[0].bytes) };
     }
@@ -130,16 +146,17 @@ export async function sessionLogWatermark(nodeId: string, sessionId: string): Pr
 export async function readSessionLog(nodeId: string, sessionId: string, from = 0): Promise<{ from: number; bytes: number; data: Buffer }> {
   const total = await sessionLogWatermark(nodeId, sessionId);
   const start = Math.max(0, Math.min(from, total));
+  // 오프셋 회계는 **원본 길이**(raw_len) 기준 — 압축본 octet_length 가 아니라. 구청크(raw_len NULL)는 원본=octet_length(data).
   const r = await itemsPool.query(
-    `SELECT at_offset, data FROM session_log_chunk
-      WHERE node_id=$1 AND session_id=$2 AND at_offset + octet_length(data) > $3
+    `SELECT at_offset, data, codec, COALESCE(raw_len, octet_length(data)) AS raw_len FROM session_log_chunk
+      WHERE node_id=$1 AND session_id=$2 AND at_offset + COALESCE(raw_len, octet_length(data)) > $3
       ORDER BY at_offset`,
     [nodeId, sessionId, start]);
   const parts: Buffer[] = [];
   for (const row of r.rows) {
     const chunkAt = Number(row.at_offset);
-    const buf: Buffer = row.data;
-    const skip = start > chunkAt ? start - chunkAt : 0;   // 시작이 이 청크 중간이면 앞부분 잘라낸다
+    const buf: Buffer = decodeChunk(row.data as Buffer, (row.codec as string | null) ?? null);   // 압축본이면 원본 복원
+    const skip = start > chunkAt ? start - chunkAt : 0;   // 시작이 이 청크 중간이면 원본 기준 앞부분 잘라낸다
     parts.push(skip > 0 ? buf.subarray(skip) : buf);
   }
   return { from: start, bytes: total, data: Buffer.concat(parts) };

@@ -121,7 +121,7 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     if (denied) throw new HttpError(denied.status, denied.message);
 
     const data = await readRawBody(req, MAX_DELTA);
-    const r = await appendSessionLog({ nodeId, sessionId, atOffset, data, harness, owner: requester });
+    const r = await appendSessionLog({ nodeId, sessionId, atOffset, data, harness, owner: requester, store: cfg.store });
     // 프로젝트 귀속(#905 C1 슬⑤b) — 클라(훅·백필)가 **`.lively/project.json` 마커에서 읽어** 선언한 project 로 매핑한다
     //  (경로 휴리스틱 아님 — 구조화된 값이 정본). claude uuid 세션을 프로젝트 탭 '세션 기록'에 잇는 다리
     //  (recordSessionProject 의 tmux-id 매핑은 session_log 의 claude-uuid 와 안 붙으므로 이 경로가 필요).
