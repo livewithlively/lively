@@ -16,7 +16,8 @@ claude mcp remove "$MCP_LABEL" 2>/dev/null || true
 claude mcp add --transport http --scope user "$MCP_LABEL" "$STORE_URL" \
   --header "Authorization: Bearer ${LIVELY_TOKEN}" \
   --header 'x-lively-session: ${LIVELY_SESSION_ID:-}' \
-  --header 'x-lively-readonly: ${LIVELY_READONLY:-}'
+  --header 'x-lively-readonly: ${LIVELY_READONLY:-}' \
+  --header 'x-lively-incognito: ${LIVELY_INCOGNITO:-}'
 
 # ── 추가 MCP 서버(org_mcp_server) — mcp-servers.json 순회 등록(claude). lively 는 위에서 등록됨. ──
 #  소스 우선순위: MCP_SERVERS_FILE env > 번들 ../.lively/mcp-servers.json > ~/.lively/mcp-servers.json.
@@ -68,7 +69,8 @@ cat <<EOF
       "url": "${STORE_URL}",
       "headers": {
         "Authorization": "Bearer \${LIVELY_TOKEN}",
-        "x-lively-readonly": "\${LIVELY_READONLY:-}"
+        "x-lively-readonly": "\${LIVELY_READONLY:-}",
+        "x-lively-incognito": "\${LIVELY_INCOGNITO:-}"
       }
     }
   }

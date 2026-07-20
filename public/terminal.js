@@ -897,7 +897,8 @@ function openHelp() {
         kb(['Shift 드래그'], 'Claude 안에서는 Shift 누른 채 드래그로 선택'),
         kb(['Claude 복사'], 'Claude 가 복사한 내용은 맥북 클립보드에도 자동으로 올라가요')),
       sec('도구 (오른쪽 위 버튼)',
-        tool('내 질문', '이 세션에서 보낸 질문 목록 — 클릭하면 그 위치로 이동'),
+        // #1018 '내 질문' 상단 버튼 임시 숨김에 맞춰 사용법 안내에서도 숨김 — 부활 시 아래 줄 주석 해제.
+        // tool('내 질문', '이 세션에서 보낸 질문 목록 — 클릭하면 그 위치로 이동'),
         tool('파일 탐색기', '파일 업로드·다운로드 (끌어다 놓아도 됨)'),
         tool('화면 복구', '화면이 깨지거나 스크롤이 안 될 때 재연결로 복구'),
         tool('환경 설정', '글꼴·크기·테마·커서·스크롤 속도')),
@@ -1155,7 +1156,9 @@ async function boot() {
     el('button', { class: 'tbtn', text: '📁 파일 탐색기', title: '파일 탐색기 열기/닫기 (업로드·다운로드)', onclick: toggleExplorer }),
     projectBtnEl, titleEl,
     el('span', { class: 'spacer' }), statusEl,
-    el('button', { class: 'tbtn', text: '💬 내 질문', title: '이 세션에서 클로드에게 보낸 질문 목록 — 클릭하면 그 위치로 이동', onclick: openMyPrompts }),
+    // #1018 '내 질문' 상단 버튼 임시 숨김(상민님 요청, 2026-07-20) — 아직 제대로 작동하지 않아 버튼만 억제.
+    //  기능(openMyPrompts·#967 구현·서버 /prompts)은 그대로 보존 — 부활 시 아래 줄 주석 해제.
+    // el('button', { class: 'tbtn', text: '💬 내 질문', title: '이 세션에서 클로드에게 보낸 질문 목록 — 클릭하면 그 위치로 이동', onclick: openMyPrompts }),
     el('button', { class: 'tbtn', text: '⟳ 화면 복구', title: '화면이 깨지거나 어긋났을 때 재연결로 복구(소프트 새로고침)', onclick: softReconnect }),
     el('button', { class: 'tbtn', text: '⚙ 환경 설정', onclick: openSettings }),
     el('button', { class: 'tbtn', text: 'ⓘ 사용법 안내', title: '터미널·단축키 간단 사용법', onclick: openHelp }));

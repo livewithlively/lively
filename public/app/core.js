@@ -542,14 +542,17 @@ function renderContainer(type, rest, bodyLines) {
             if (attrs.caption || summary)
                 fig.append(el('figcaption', { class: 'md-shot-cap' }, ...renderInline(attrs.caption ? String(attrs.caption).replace(/_/g, ' ') : summary)));
             // 번호별 상세 카드(1:1) — 번호 배지 + 제목 + 설명 문단들.
-            const details = el('div', { class: 'md-shot-details' }, ...items.map((s0, i) => {
-                const main = el('div', { class: 'md-shot-dmain' }, el('div', { class: 'md-shot-dtitle' }, ...renderInline(s0.title || '')));
-                for (const d of s0.detail)
-                    if (d)
-                        main.append(el('p', { class: 'md-shot-dbody' }, ...renderInline(d)));
-                return el('div', { class: 'md-shot-detail is-c' + (i % 5) }, el('span', { class: 'md-shot-dnum', text: String(i + 1) }), main);
-            }));
-            fig.append(details);
+            //  legend=off 면 이 카드 목록을 생략한다(옵트인) — 스크린샷 아래 설명을 탭 등 다른 표면이 대신할 때(#1013 홈).
+            if (String(attrs.legend || '').toLowerCase() !== 'off') {
+                const details = el('div', { class: 'md-shot-details' }, ...items.map((s0, i) => {
+                    const main = el('div', { class: 'md-shot-dmain' }, el('div', { class: 'md-shot-dtitle' }, ...renderInline(s0.title || '')));
+                    for (const d of s0.detail)
+                        if (d)
+                            main.append(el('p', { class: 'md-shot-dbody' }, ...renderInline(d)));
+                    return el('div', { class: 'md-shot-detail is-c' + (i % 5) }, el('span', { class: 'md-shot-dnum', text: String(i + 1) }), main);
+                }));
+                fig.append(details);
+            }
             return fig;
         }
         case 'axes': {

@@ -187,16 +187,17 @@ try {
     //  x-lively-readonly(#1007)는 세션별 읽기전용 신호(LIVELY_READONLY=1 로 실행 시 그 세션만 게이트웨이가 쓰기 툴 소거). 값은 리터럴 — 확장은 접속 시 하네스가 제 env 로.
     const want = `mcp add --transport http --scope user lively ${GW}/mcp `
       + `--header Authorization: Bearer ${TOKEN} --header x-lively-session: \${LIVELY_SESSION_ID:-}`
-      + ` --header x-lively-readonly: \${LIVELY_READONLY:-}`;
-    check("④ claude MCP 등록 argv 못박기(헤더 3개 — 토큰 + 세션귀속 + 읽기전용)",
+      + ` --header x-lively-readonly: \${LIVELY_READONLY:-} --header x-lively-incognito: \${LIVELY_INCOGNITO:-}`;
+    check("④ claude MCP 등록 argv 못박기(헤더 4개 — 토큰 + 세션귀속 + 읽기전용 + 인코그니토)",
       adds.some((l) => l === want), `got=${JSON.stringify(adds)}\nwant=${JSON.stringify(want)}`);
-    // (b) register-clients.sh parity — 파일을 읽어 같은 3헤더를 실제로 등록하는지 확인(이게 빠지면 위 (a) 만으론 gap 을 못 잡는다).
+    // (b) register-clients.sh parity — 파일을 읽어 같은 4헤더를 실제로 등록하는지 확인(이게 빠지면 위 (a) 만으론 gap 을 못 잡는다).
     const regSh = readFileSync(join(REPO, "scripts", "register-clients.sh"), "utf8");
-    check("④ register-clients.sh 가 CLI 와 동일한 3헤더 등록(parity — 헤더 하나라도 빠지면 그 설치 경로서 읽기전용이 조용히 죽음)",
+    check("④ register-clients.sh 가 CLI 와 동일한 4헤더 등록(parity — 헤더 하나라도 빠지면 그 설치 경로서 모드가 조용히 죽음)",
       /--header +["']?Authorization: Bearer/.test(regSh)
         && regSh.includes("x-lively-session: ${LIVELY_SESSION_ID:-}")
-        && regSh.includes("x-lively-readonly: ${LIVELY_READONLY:-}"),
-      "register-clients.sh 에 3헤더(Authorization+x-lively-session+x-lively-readonly) 중 일부 누락 — CLI 와 drift");
+        && regSh.includes("x-lively-readonly: ${LIVELY_READONLY:-}")
+        && regSh.includes("x-lively-incognito: ${LIVELY_INCOGNITO:-}"),
+      "register-clients.sh 에 4헤더(Authorization+session+readonly+incognito) 중 일부 누락 — CLI 와 drift");
     check("④ remove → add 순서(재실행 안전)",
       H.argv().indexOf("mcp remove lively") < H.argv().findIndex((l) => l.startsWith("mcp add")),
       JSON.stringify(H.argv()));
@@ -390,9 +391,21 @@ try {
       r.out.trim() === JSON.stringify(["864", "--harness", "codex", "--auto-approve", "--repos", "eyJhIjoxfQ=="]),
       r.out.trim());
   }
+  // ⑮ run — 프로젝트# **없으면 하네스 바로 실행**(#1007+, 사용자 요청) + 모드 플래그가 세션 env 주입. --harness 로 하네스 지정.
   {
-    const r = await lively(H, ["run", "not-a-number"], { expectFail: true });
-    check("⑮ run — 프로젝트 번호가 아니면 usage(exit 2)", r.code === 2, `code=${r.code}`);
+    const fakeH = join(H.home, "fake-harness.mjs");
+    writeFileSync(fakeH, "#!/usr/bin/env node\nprocess.stdout.write('HARNESS['+process.argv.slice(2).join(',')+'] RO='+(process.env.LIVELY_READONLY||'')+' INC='+(process.env.LIVELY_INCOGNITO||'')+' OFF='+(process.env.LIVELY_OFF||''));\n");
+    chmodSync(fakeH, 0o755);
+    const r = await lively(H, ["run", "--readonly", "--harness", fakeH, "hello"]);
+    check("⑮ run — 프로젝트# 없으면 하네스 직접 실행 + 모드 플래그는 인자에서 소비(하네스엔 hello 만)",
+      r.out.includes("HARNESS[hello]") && r.out.includes("RO=1"), r.out.trim());
+    const r2 = await lively(H, ["run", "--incognito", "--harness", fakeH]);
+    check("⑮ run --incognito → LIVELY_INCOGNITO=1 + LIVELY_OFF=1 세션 env 주입",
+      r2.out.includes("INC=1") && r2.out.includes("OFF=1"), r2.out.trim());
+  }
+  {
+    const r = await lively(H, ["run", "--harness", "definitely-not-real-xyz-123"], { expectFail: true });
+    check("⑮ run — 없는 하네스면 usage(exit 2)", r.code === 2, `code=${r.code}`);
   }
 
   // ⑰ backupUserMcp — 비파괴 라운드트립의 설치측 절반: 유저가 라이블리 전부터 쓰던 org-겹침 MCP 를
