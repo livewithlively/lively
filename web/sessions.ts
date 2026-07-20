@@ -174,7 +174,10 @@ async function renderTranscriptPage(view: any, sel: { sid: string; node: string;
   const items: Item[] = Array.isArray(data?.items) ? data.items : [];
   if (!items.length) { convo.replaceChildren(el('p', { class: 'admin-hint', text: '표시할 대화가 없습니다.' })); return; }
 
-  const turns = groupTurns(items);
+  const grouped = groupTurns(items);
+  // 답변 없이 취소된(보냈다 esc) 질문 숨김 — 사용자 발화가 있는데 어시스턴트 '답변 텍스트'가 없고 마지막 턴이 아니면
+  //  이어지는 다른 질문이 있다는 뜻(=취소하고 다시 보냄). 마지막 턴·선행 AI(user=null)·답변 있는 턴은 유지.
+  const turns = grouped.filter((t, i) => i === grouped.length - 1 || !t.user || t.ai.some((x) => x.role === 'assistant' && !!x.text));
   const firstQ = turns.find((t) => t.user)?.user?.text;
   if (firstQ) { const h = document.getElementById('sess-title'); if (h) h.textContent = firstQ.length > 80 ? firstQ.slice(0, 80) + '…' : firstQ; }
   sideSlot.replaceChildren(sidebar(turns, sid, node));
