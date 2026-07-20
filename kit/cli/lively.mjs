@@ -1359,7 +1359,8 @@ async function cmdSetup() {
   if (token() && gateway()) info("이미 로그인돼 있습니다 — 설치만 진행합니다.");
   else await cmdLogin({});
   await cmdInstall();
-  await offerOnboarding();   // 설치 성공 → 온보딩 바로 시작할지 Y/n (대화형 단말에서만 · #1024)
+  // 설치 완료 → 온보딩 안내(정적 문구만 · #1024). 자동 실행·Y/n 프롬프트 없음 — 대화형/비대화형 모두 안전.
+  say(dim("\n  ") + bold("lively onboarding") + dim(" 을 실행하여 라이블리 초기 설정을 진행하세요."));
 }
 
 // ── 10. 인자 파싱 · 디스패치 ───────────────────────────────────────────────
@@ -1657,24 +1658,6 @@ function cmdOnboarding(rest) {
   process.exit(st ?? 0);
 }
 
-// 온보딩 제안을 띄울지 결정하는 순수 술어 — tty·하네스 유무만 본다(loginEscapeToken 과 동류로 분리 → 직접 테스트).
-//  ⚠ 비대화형이면 반드시 false: askYesNo 는 무단말에서 기본값(true)을 돌려주므로, 이 게이트가 없으면
-//   CI·프로비저닝·파이프-무단말에서 claude 를 **자동 실행**해버린다. 하네스(claude)가 없으면 제안할 이유도 없다.
-const shouldOfferOnboarding = ({ isInteractive, hasClaude }) => !!isInteractive && !!hasClaude;
-
-// 설치 직후 온보딩 바로 시작 제안 — `lively setup` 마무리에서 부른다(cmdOnboarding 과 동일 진입).
-//  대화형 단말 + claude 있을 때만(shouldOfferOnboarding). Y(기본)면 claude 를 초기 프롬프트로 띄워 lively-onboarding 스킬을 소환한다.
-async function offerOnboarding() {
-  if (!shouldOfferOnboarding({ isInteractive: interactive(), hasClaude: has("claude") })) return;
-  say("");
-  if (await askYesNo("지금 온보딩을 바로 시작할까요? (예전 AI 환경 정리·첫 세팅)", true)) {
-    say(dim('  · 온보딩 세션을 엽니다 — 회사 맥락은 다음 세션부터 붙습니다(스킬은 로컬 파일만 읽어 지금도 동작).'));
-    const st = spawnSync("claude", ["온보딩 도와줘"], { stdio: "inherit", cwd: process.cwd() }).status;
-    process.exit(st ?? 0);
-  }
-  say(dim('  · 나중에 언제든:  ') + bold("lively onboarding") + dim('  또는  claude 에서  "온보딩 도와줘"'));
-}
-
 async function main() {
   const argv = process.argv.slice(2);
   const o = parse(argv);
@@ -1726,5 +1709,5 @@ const DIRECT_RUN = (() => {
 })();
 if (DIRECT_RUN) main().catch((e) => die(e?.message || String(e)));
 
-export { parse, detectHarnesses, verifyBundle, normGw, gatherStatus, registerClaudeMcp, backupUserMcp, winArg, loginEscapeToken, shouldOfferOnboarding, REQUIRED_HOOKS, CLI_VERSION };
+export { parse, detectHarnesses, verifyBundle, normGw, gatherStatus, registerClaudeMcp, backupUserMcp, winArg, loginEscapeToken, REQUIRED_HOOKS, CLI_VERSION };
 export { MODES, extractMode, modeEnv, defaultMode }; // #1007+ 실행 모드(normal|readonly|incognito) — 테스트용
