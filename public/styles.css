@@ -6822,6 +6822,21 @@ body[data-route="onboarding"] main { max-width: none; }
 .docs-md .md-pre { padding: 13px 15px; margin: 2px 0 14px; border-radius: 11px; border-color: var(--line-net); }
 .docs-md .md-pre code { font-size: 12.5px; line-height: 1.6; }
 
+/* 사용가이드 인라인 UI 참조 칩(#1013) — 대괄호·꺽쇠 노이즈를 제거해 가독성↑.
+   [버튼]=아웃라인+두꺼운 밑선(눌리는 버튼 느낌, .kbd 시각언어), 「옵션·메뉴·상태」=틴트 채움 태그.
+   display:inline + box-decoration-break:clone → 긴 라벨이 줄바꿈돼도 배경·테두리·패딩이 조각마다 유지된다. */
+.docs-md .md-uikey, .docs-lead .md-uikey {
+  display: inline; -webkit-box-decoration-break: clone; box-decoration-break: clone;
+  font-size: 0.86em; font-weight: 700; line-height: 1.3; letter-spacing: -0.1px;
+  border-radius: 6px; padding: 1px 6px; margin: 0 1.5px; white-space: normal;
+}
+.docs-md .md-uikey-btn, .docs-lead .md-uikey-btn {
+  color: var(--ink); background: var(--bg); border: 1px solid var(--line-net); border-bottom-width: 2px;
+}
+.docs-md .md-uikey-opt, .docs-lead .md-uikey-opt {
+  color: var(--ink-note); background: var(--bg-tint-2);
+}
+
 /* 피처 카드 — '**굵은 제목** — 설명' 목록. 지식 축 옵션(kn-axis-opt)과 같은 틴트 박스. */
 .docs-featgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 4px 0 6px; }
 .docs-feat { background: var(--bg-tint); border: 1px solid var(--line-net); border-radius: 12px; padding: 13px 15px; }

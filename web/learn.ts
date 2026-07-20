@@ -149,14 +149,14 @@ function docsBody(md: string, ...lead: any[]) {
       const at = s.lines.findIndex((l) => /^\s*(\||[-*+]\s|\d+\.\s|```|~~~|:::)/.test(l));
       const lead = (at < 0 ? s.lines : s.lines.slice(0, at)).join('\n').trim();
       const rest = at < 0 ? '' : s.lines.slice(at).join('\n').trim();
-      if (lead) cards.append(el('div', { class: 'md-rendered docs-lead' }, renderMarkdown(lead)));
+      if (lead) cards.append(el('div', { class: 'md-rendered docs-lead' }, renderMarkdown(lead, { uiChips: true })));
       if (rest) cards.append(el('div', { class: 'card docs-card' },
-        el('div', { class: 'md-rendered docs-md' }, docsDecorate(renderMarkdown(rest)))));
+        el('div', { class: 'md-rendered docs-md' }, docsDecorate(renderMarkdown(rest, { uiChips: true })))));
       continue;
     }
     cards.append(el('div', { class: 'card docs-card' },
       el('div', { class: 'card-head' }, el('h2', { text: s.title })),
-      el('div', { class: 'md-rendered docs-md' }, docsDecorate(renderMarkdown(body)))));
+      el('div', { class: 'md-rendered docs-md' }, docsDecorate(renderMarkdown(body, { uiChips: true })))));
   }
   return cards;
 }
