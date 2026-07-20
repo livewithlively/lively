@@ -272,9 +272,6 @@ function tsessCard(s, ctx) {
   const model = (s.flags && s.flags['--model']) || '';
   const owner = memberName(cfg, s.owner) || s.owner || '?';
   const pid = Number(s.projectId) || 0;
-  // #1015 이 뷰어가 입장 가능한가(백엔드 attachable = 소유자·초대자, 프로젝트 세션 전원). 노드/구버전(undefined)은 입장 가능으로 폴백.
-  //  공개-남의세션이면 false → 열기·내 질문 버튼 숨기고 '보기 전용' 카드로.
-  const attachable = s.attachable !== false;
 
   // ── 1행: 상태점 + 이름 + 프로젝트 칩 + 배지 ──
   const title = el('div', { class: 'tsess-title' },
@@ -288,9 +285,7 @@ function tsessCard(s, ctx) {
   if (s.autoApprove) title.append(el('span', { class: 'tsess-badge danger', text: '자동승인' }));
   // 분산 노드(#869) — 원격 노드에서 도는 세션 표시. 노드가 끊겨 있으면(꺼짐·절전) 위험 배지로 구분.
   if (s.node) title.append(el('span', { class: 'tsess-badge' + (s.node.online ? '' : ' danger'), title: '실행 노드: ' + (s.node.name || s.node.id) + (s.node.online ? '' : ' — 연결 끊김(꺼짐/절전)'), text: '🖥 ' + (s.node.name || s.node.id) + (s.node.online ? '' : ' · 끊김') }));
-  if (!s.owned) title.append(attachable
-    ? el('span', { class: 'tsess-badge', title: '소유: ' + owner, text: '👤 ' + owner + ' · 초대받음' })
-    : el('span', { class: 'tsess-badge', title: '소유: ' + owner + ' · 공개 세션(보기 전용 — 입장은 소유자·초대자만)', text: '👤 ' + owner + ' · 공개' }));  // #1015 남의 공개 세션
+  if (!s.owned) title.append(el('span', { class: 'tsess-badge', title: '소유: ' + owner, text: '👤 ' + owner + ' · 초대받음' }));
   else if ((s.invites || []).length) title.append(el('span', { class: 'tsess-badge', title: s.invites.map((id) => memberName(cfg, id)).join(', '), text: '초대 ' + s.invites.length + '명' }));
 
   // ── 2행(있으면): '지금 하는 일' 실시간 요약(백엔드 title = Claude Code pane 요약) — 라벨과 다를 때만 ──
@@ -308,11 +303,7 @@ function tsessCard(s, ctx) {
 
   const info = el('div', { class: 'tsess-info' }, ...[title, workTitle, meta].filter(Boolean));
 
-  // 선택 모드 — 입장 가능한 카드에만 체크박스(카드 전체 토글). 골라서 한 탭 그리드로 '열기' 또는 '삭제'(삭제는 서버가 소유자만 허용).
-  //  #1015 남의 공개 세션(attachable=false)은 열 수 없으므로 선택 대상 아님 → 보기 전용 카드로.
-  if (sel && sel.mode && !attachable) {
-    return el('div', { class: 'tsess-card tsess-' + st.cls + ' tsess-card--sel' }, info);
-  }
+  // 선택 모드 — 모든 카드에 체크박스(카드 전체 토글). 골라서 한 탭 그리드로 '열기' 또는 '삭제'(삭제는 서버가 소유자만 허용).
   if (sel && sel.mode) {
     const cb = el('input', { type: 'checkbox' });
     cb.checked = sel.ids.has(s.id);
@@ -320,22 +311,12 @@ function tsessCard(s, ctx) {
     return el('label', { class: 'tsess-card tsess-' + st.cls + ' tsess-card--sel' }, el('span', { class: 'tsess-check' }, cb), info);
   }
 
-  // 액션 — 입장 가능하면 열기 + 내 질문(노드 세션도 트랜스크립트 릴레이 #875 ③). 소유자면 공개/비공개 토글·수정·삭제.
-  //  #1015 남의 공개 세션(attachable=false)은 액션 없이 '보기 전용'.
-  const acts = el('div', { class: 'tsess-acts' });
-  if (attachable) {
-    acts.append(el('button', { class: 'tsess-open', text: '열기', onclick: () => window.open(termUrl(s.id, s.label, s.node && s.node.id), '_blank') }));
-    acts.append(el('button', { class: 'tsess-icon tsess-q', title: '이 세션에서 클로드에게 보낸 내 질문만 순서대로 모아보기', text: '내 질문', onclick: () => openSessPrompts(s) }));
-  }
+  // 액션 — 열기(항상) + 내 질문(노드 세션도 트랜스크립트 릴레이 #875 ③) + 소유자면 수정·삭제.
+  const acts = el('div', { class: 'tsess-acts' },
+    el('button', { class: 'tsess-open', text: '열기', onclick: () => window.open(termUrl(s.id, s.label, s.node && s.node.id), '_blank') }));
+  acts.append(el('button', { class: 'tsess-icon tsess-q', title: '이 세션에서 클로드에게 보낸 내 질문만 순서대로 모아보기', text: '내 질문', onclick: () => openSessPrompts(s) }));
   if (s.owned) {
-    if (!s.node) { // #1015 공개/비공개 빠른 토글(노드 세션은 공개 모델 미지원 — 소유자·초대자만 유지)
-      acts.append(el('button', { class: 'tsess-icon', title: s.private ? '지금 비공개 — 눌러서 공개로(모든 멤버가 목록에서 봄)' : '지금 공개 — 눌러서 비공개로(나·초대한 멤버만 봄)', text: s.private ? '🔒 비공개' : '🌐 공개', onclick: async (ev) => {
-        ev.currentTarget.disabled = true;
-        try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify({ private: !s.private }) }); toast(s.private ? '공개로 전환됨' : '비공개로 전환됨'); reRender(); }
-        catch (e) { ev.currentTarget.disabled = false; toast('실패 — ' + e.message, true); }
-      } }));
-    }
-    acts.append(el('button', { class: 'tsess-icon', title: '이름·초대·공개 범위 수정', text: '수정', onclick: () => openTermEdit(s, cfg, view) }));
+    acts.append(el('button', { class: 'tsess-icon', title: '이름·초대 수정', text: '수정', onclick: () => openTermEdit(s, cfg, view) }));
     acts.append(el('button', { class: 'tsess-icon danger', title: '세션 종료(삭제)', text: '삭제', onclick: async () => {
       if (!confirm('세션 "' + s.label + '" 을(를) 종료할까요? 실행 중인 작업도 함께 종료됩니다.')) return;
       try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' }); toast('세션 종료됨'); reRender(); }
@@ -563,7 +544,7 @@ function loginBannerEl(cfg, view) {
     el('button', { class: 'btn btn-primary', text: '내 계정 로그인', onclick: () => openLoginSession(view) }));
 }
 
-// 새 세션 — 기본 공개(#1015: 모든 멤버가 목록에서 봄, 끄면 비공개). 초대한 멤버는 입장·조작·대화 열람 가능(공개여도 입장은 이들만).
+// 새 세션 — 기본 비공개. 초대 피커에서 멤버를 고르면 그 사람도 보고 열 수 있다.
 // onCreated(out) — 있으면 생성 후 그걸 호출(대시보드에서 재사용: 세션 위젯 새로고침). 없으면 터미널 뷰 재렌더.
 function openTermCreateForm(cfg, view, onCreated?) {
   const roots = cfg.roots || [];
@@ -607,7 +588,7 @@ function openTermCreateForm(cfg, view, onCreated?) {
   };
   nodeSel.addEventListener('change', paintPicker);
   const harnessSel = el('select', { class: 'term-input' }, ...harnesses.map((h) => el('option', { value: h.key }, h.label)));
-  const inviteBox = buildInvitePicker(cfg, new Set()); // 초대 없음 = 소유자만 입장(가시성은 아래 공개 토글이 결정 — #1015)
+  const inviteBox = buildInvitePicker(cfg, new Set()); // 기본 비공개(아무도 선택 안 됨)
   const flagsBox = el('div', { class: 'term-flags' });
   // 자동 승인은 기본 꺼짐이되, 내가 지난번에 켰다면 켠 채로 복원한다(#782 — 사용자별 기억).
   //  (#673 의 'git 워크트리에서 작업' 체크박스는 #918 에서 제거 — 서버측 근거가 사라졌다: terminal-sessions 참조.)
@@ -623,11 +604,6 @@ function openTermCreateForm(cfg, view, onCreated?) {
     el('option', { value: 'incognito' }, '인코그니토 — 라이블리 전혀 안 씀(클린룸)'));
   const modeWrap = el('label', { class: 'term-auto' },
     el('span', { text: ' 라이블리 모드 ' }), modeSel);
-  // #1015 공개 범위 — 기본 공개(모든 멤버가 목록에서 봄). 끄면 비공개(나·초대한 멤버만). 입장·조작은 어느 경우든 소유자·초대자만.
-  const pubCb = el('input', { type: 'checkbox' });
-  pubCb.checked = true;
-  const pubWrap = el('label', { class: 'term-auto' }, pubCb,
-    el('span', { text: ' 공개 — 모든 멤버가 세션 목록에서 이 세션을 봅니다(무슨 작업인지). 끄면 비공개(나·초대한 멤버만). 입장·조작은 어느 경우든 소유자·초대자만.' }));
 
   // '실행 설정'(하네스·모델·effort) — 접이식 프리셋으로 묶어 세로를 아끼고, 이전 설정을 기억한다(#673). 기본 접힘.
   const presetSum = el('div', { class: 'term-preset-sum' });
@@ -724,9 +700,9 @@ function openTermCreateForm(cfg, view, onCreated?) {
     el('div', { 'data-tour': 'node' }, field('실행 위치', nodeSel)), // #869 중앙 컴퓨터/등록 노드 — 항상 노출: 투어 ③'실행 위치' 스텝의 대상(#req). 등록 노드가 없으면 '중앙 컴퓨터(기본)' 한 줄만 보인다(submit 값은 기존과 동일 '').
     // #853 작업 위치(공유/개인 토글) + 그 안의 폴더를 한 블록으로 — '이 폴더에서 AI를 실행한다'는 직관.
     el('div', { 'data-tour': 'folder' }, field('어디서 실행할까요', el('div', { class: 'term-loc' }, rootSeg, el('div', { class: 'term-loc-folder' }, pickerBox)))),
-    el('div', { class: 'term-checks', 'data-tour': 'options' }, autoWrap, modeWrap, pubWrap),
+    el('div', { class: 'term-checks', 'data-tour': 'options' }, autoWrap, modeWrap),
     presetToggle, presetBody,
-    el('div', { 'data-tour': 'invite' }, field('입장 허용 (초대한 멤버는 이 세션에 들어와 조작·대화 열람 가능 · 공개여도 입장은 이들만)', inviteBox.box)),
+    el('div', { 'data-tour': 'invite' }, field('초대 (비우면 나만 보는 비공개 세션)', inviteBox.box)),
     el('div', { class: 'ov-actions' },
       el('button', { class: 'btn btn-primary', 'data-tour': 'create', text: '생성하기', onclick: async (ev) => {
         const btn = ev.currentTarget; btn.disabled = true;
@@ -735,7 +711,7 @@ function openTermCreateForm(cfg, view, onCreated?) {
         for (const c of flagsBox.querySelectorAll('[data-flag]')) flags[c.dataset.flag] = (c.type === 'checkbox') ? c.checked : c.value;
         const nodeId = nodeSel.value || ''; // #869 노드면 원격 경로(remoteSubI), 아니면 로컬 폴더(pickerPath)
         const mode = modeSel.value; // #1007+ 라이블리 모드 → readOnly/incognito 불리언(서버 CreateInput)
-        const payload = { label: labelI.value, rootKey, subpath: nodeId ? remoteSubI.value.trim() : pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, readOnly: mode === 'readonly', incognito: mode === 'incognito', private: !pubCb.checked, invites: inviteBox.selected(), node: nodeId || undefined };
+        const payload = { label: labelI.value, rootKey, subpath: nodeId ? remoteSubI.value.trim() : pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, readOnly: mode === 'readonly', incognito: mode === 'incognito', invites: inviteBox.selected(), node: nodeId || undefined };
         try {
           const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify(payload) });
           saveTermCreatePrefs({ harness: harnessSel.value, flags, autoApprove: autoCb.checked }); // 이 설정을 다음 생성 때 기본값으로 기억(#673, 자동 승인은 #782)
@@ -825,14 +801,6 @@ function openTermEdit(s, cfg, view) {
   // ── 변경 가능 ──
   const labelI = el('input', { class: 'term-input', type: 'text', value: s.label });
   const inviteBox = buildInvitePicker(cfg, new Set(s.invites || []));
-  // #1015 공개 범위 — 공개(모든 멤버가 목록에서 봄) / 비공개(나·초대자만). 노드 세션은 공개 모델 미지원(항상 소유자·초대자만).
-  const isNode = !!s.node;
-  const publicChk = el('input', { type: 'checkbox' });
-  publicChk.checked = isNode ? true : !s.private;
-  if (isNode) (publicChk as any).disabled = '';
-  const pubNote = isNode
-    ? '노드(원격) 세션은 아직 소유자·초대한 멤버만 볼 수 있습니다(공개 모델 미지원).'
-    : '공개 — 모든 멤버가 목록에서 이 세션을 보고 무슨 작업인지 압니다. 끄면 비공개(나·초대한 멤버만 목록에 뜸). 입장·조작·대화 열람은 어느 경우든 소유자·초대자만입니다.';
   // ── 생성 시 고정(비활성 표시) ──
   const ro = (val) => el('input', { class: 'term-input', type: 'text', value: val, disabled: '' });
   const author = memberName(cfg, s.owner) || s.owner || '?';
@@ -847,8 +815,7 @@ function openTermEdit(s, cfg, view) {
 
   const back = overlay('세션 수정',
     field('이름', labelI),
-    field('공개 범위', el('label', { class: 'term-check-row' }, publicChk, el('span', { class: 'term-check-note', text: pubNote }))),
-    field('입장 허용 (초대한 멤버는 이 세션에 들어와 조작·대화 열람 가능 · 나는 항상 가능)', inviteBox.box),
+    field('초대 (선택한 멤버만 이 세션을 보고 열 수 있음 · 비우면 비공개)', inviteBox.box),
     lockNote,
     field('작업자', ro(author)),
     field('작업 폴더', ro(s.dir || '(기본)')),
@@ -858,7 +825,7 @@ function openTermEdit(s, cfg, view) {
     el('div', { class: 'ov-actions' },
       el('button', { class: 'btn btn-primary', text: '저장', onclick: async (ev) => {
         ev.currentTarget.disabled = true;
-        try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify({ label: labelI.value, invites: inviteBox.selected(), private: isNode ? undefined : !publicChk.checked, node: (s.node && s.node.id) || undefined }) }); back.remove(); toast('수정됨'); renderTerminal(view); }
+        try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'POST', body: JSON.stringify({ label: labelI.value, invites: inviteBox.selected(), node: (s.node && s.node.id) || undefined }) }); back.remove(); toast('수정됨'); renderTerminal(view); }
         catch (e) { ev.currentTarget.disabled = false; toast('수정 실패 — ' + e.message, true); }
       } })));
 }

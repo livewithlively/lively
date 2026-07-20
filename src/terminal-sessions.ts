@@ -1,9 +1,7 @@
 // 중앙 박스 — tmux 세션 매니저 + 큐레이트 설정(허용 루트·하네스 플래그 카탈로그).
 // 모든 tmux 호출은 execFile argv(셸 미경유) — 인젝션 차단. 세션은 box-<userSlug>-* 네임스페이스.
 // 메타는 tmux @box_* user-option 에 저장(재기동 생존, tmux SoT — DB 미사용).
-// 접근 모델(#1015): 두 축이 직교한다. ① 가시성(목록) — 기본 '공개'(모든 멤버가 보고 무슨 작업인지 앎), @box_private=1 이면
-//  '비공개'(소유자·초대자만 목록에 뜸). ② 입장·조작·대화열람 — 항상 소유자 + 초대된 멤버(@box_invites)만(공개여도 입장 제한);
-//  프로젝트 폴더 세션은 로그인 전원(#452). 판정은 sessionVisibleTo / sessionAttachableBy(순수 함수) 참조.
+// 접근 모델: 소유자 + 초대된 멤버(@box_invites). 기본 비공개(초대 없음 = 소유자만). 공개/팀 개념 없음.
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import fsp from "node:fs/promises";
@@ -97,9 +95,7 @@ export const HARNESSES: Harness[] = [
 export interface SessionInfo {
   id: string; label: string; harness: string; dir: string; autoApprove: boolean;
   owner: string; owned: boolean; created: number; attached: boolean;
-  private?: boolean;     // #1015 비공개면 소유자·초대자만 목록에서 봄. 기본(미설정)=공개=모든 멤버가 목록에서 봄.
-  attachable?: boolean;  // #1015 이 뷰어가 입장·조작 가능한가(=canAttach: 소유자·초대자, 프로젝트 세션은 전원). 공개-남의세션이면 false → 프론트가 '보기 전용'.
-  invites: string[]; // 초대된 멤버 id(@box_invites). 초대자는 입장·조작 가능. (가시성은 private 플래그가 결정 — 초대 여부와 별개, #1015)
+  invites: string[]; // 초대된 멤버 id(@box_invites). 빈 배열 = 비공개(소유자만 보기·열기).
   flags: Record<string, string>; // 생성 시 적용된 하네스 플래그(@box_flags, 예: {"--model":"opus"}). 수정 팝업의 비활성 표시용.
   projectId?: number; // 프로젝트 세션이면 그 프로젝트 id(@box_project). 보드의 '내 세션' 칼럼 활성 판단용.
   // 에이전트 실행 상태(#req 4단계) — busy=프로세스그룹 CPU 큼(작업중, 접속 무관), waiting=접속중+화면에 사용자 선택/승인 대기(확인 필요),
@@ -112,7 +108,7 @@ export interface SessionInfo {
   //  @box_last_busy(tmux 세션 옵션)로 영속 → 게이트웨이가 재기동해도 유지(tmux 서버가 더 오래 산다).
   lastActive?: number;
 }
-export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; resume?: string; readOnly?: boolean; incognito?: boolean; private?: boolean; }
+export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; resume?: string; readOnly?: boolean; incognito?: boolean; }
 
 const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "user";
 const userSlug = (u: LivelyUser): string => slug(u.userId || u.email || "user");
@@ -308,7 +304,7 @@ async function getOpt(name: string, opt: string): Promise<string> {
 //  둘 다 JSON(탭 없음 — 멤버 id·플래그값은 탭 미포함)이라 탭 구분 파싱에 안전.
 // pane_current_command(포그라운드 프로세스)·pane_pid(=포그라운드 pid, CPU 판정용)를 label 앞에 추가(label 은 탭 포함 가능해 ...rest 로 받으므로 뒤에 오면 삼켜짐).
 // @box_last_busy = 마지막 작업(스피너 관측) 시각 epoch초 — 게이트웨이 재기동에도 살아남게 tmux 세션에 영속(#853).
-const LIST_FMT = "#{session_name}\t#{session_created}\t#{session_attached}\t#{@box_owner}\t#{@box_harness}\t#{@box_dir}\t#{@box_auto}\t#{@box_flags}\t#{@box_invites}\t#{@box_project}\t#{@box_private}\t#{pane_current_command}\t#{session_last_attached}\t#{@box_last_busy}\t#{pane_title}\t#{@box_label}";
+const LIST_FMT = "#{session_name}\t#{session_created}\t#{session_attached}\t#{@box_owner}\t#{@box_harness}\t#{@box_dir}\t#{@box_auto}\t#{@box_flags}\t#{@box_invites}\t#{@box_project}\t#{pane_current_command}\t#{session_last_attached}\t#{@box_last_busy}\t#{pane_title}\t#{@box_label}";
 
 // pane_title(=Claude Code 가 써두는 '지금 하는 일' 요약) → 표시용 제목. 상태 글리프(✳/스피너 등) 제거, 기본 셸 타이틀(user@host:path)·셸 세션은 무시.
 function sessionActivityTitle(paneTitle: string, harness: string): string {
@@ -388,23 +384,6 @@ export async function killEmptyTmuxServer(): Promise<void> {
   } catch { /* 서버 없음 등 — 무시 */ }
 }
 
-// #1015 세션 접근 모델(순수 판정 — tmux 무관, 단위테스트 대상). 두 축이 직교한다:
-//  · 가시성(목록에 뜨나): 공개면 모든 멤버가 봄 / 비공개면 소유자·초대자만. 프로젝트 폴더 세션은 항상 보임(공동 세션).
-//  · 입장(열기·조작·대화열람): 소유자·초대자만(프로젝트 세션은 로그인 전원, #452) — private 여부와 무관하게 항상 이 규칙.
-// 즉 '공개'는 남이 목록에서 보고 무슨 작업인지 아는 것까지고, 들어가 제어하는 건 여전히 소유자·초대자만이다.
-export interface SessionAcl { owner: string; invites: string[]; private: boolean; projectFolder: boolean; }
-export function sessionVisibleTo(me: string | null, s: SessionAcl): boolean {
-  if (me === null) return true;                 // 노드 raw 수집(#869) — 가시성은 게이트웨이가 뷰어별로 재판정
-  if (s.projectFolder) return true;             // 프로젝트 공동 세션 — 항상 보임(멤버십 게이트는 소비자 측)
-  if (me && (s.owner === me || s.invites.includes(me))) return true; // me truthy 가드: 빈 신원이 빈 owner("")와 오매칭 방지
-  return !s.private;                            // 남의 개인 세션: 공개면 보이고, 비공개면 숨김
-}
-export function sessionAttachableBy(me: string | null, s: SessionAcl): boolean {
-  if (s.projectFolder) return true;             // 프로젝트 세션은 로그인 전원 입장(#452)
-  if (!me) return false;                        // 미식별(null·빈 신원) → 개인 세션 입장 불가
-  return s.owner === me || s.invites.includes(me); // 개인 세션: 소유자·초대자만(공개여도 입장 제한)
-}
-
 // me=null 이면 필터 없이 전부(owned=false 고정 — 뷰어별 owned 는 소비자가 재계산).
 async function collectSessions(me: string | null): Promise<SessionInfo[]> {
   let out = "";
@@ -414,12 +393,9 @@ async function collectSessions(me: string | null): Promise<SessionInfo[]> {
   const rows: Array<Record<string, any>> = [];
   for (const line of out.split("\n")) {
     if (!line.startsWith("box-")) continue;
-    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, privateRaw, paneCmdRaw, _lastAttachedRaw, lastBusyRaw, paneTitleRaw, ...labelParts] = line.split("\t");
+    const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, paneCmdRaw, _lastAttachedRaw, lastBusyRaw, paneTitleRaw, ...labelParts] = line.split("\t");
     const owned = me !== null && !!owner && owner === me;
     const invites = parseInvites(invitesRaw);
-    const isPrivate = (privateRaw || "").trim() === "1";                 // #1015 기본(미설정)=공개
-    const projectFolder = !!dirToProjectFolder(dir || "");
-    const acl: SessionAcl = { owner: owner || "", invites, private: isPrivate, projectFolder };
     const offline = isAgentOffline(harness, paneCmdRaw);
     const busy = !offline && isSpinning(paneTitleRaw);
     // 마지막 작업 시각 = max(이번 프로세스 관측, tmux 에 영속된 값). busy 면 지금으로 갱신.
@@ -430,10 +406,10 @@ async function collectSessions(me: string | null): Promise<SessionInfo[]> {
       lastBusyAt.set(name, nowSec);
       if (nowSec - persisted >= 30) void tmuxQuiet(["set-option", "-t", name, "@box_last_busy", String(nowSec)]); // 30초 스로틀 — 폴링마다 쓰지 않는다
     }
-    // #1015 가시성 = sessionVisibleTo: 공개 개인세션은 전원, 비공개는 소유자·초대자, 프로젝트 세션은 항상.
+    // 프로젝트 폴더 세션은 프로젝트 멤버십으로 게이트(소비자 측), 개인 세션은 소유자·초대자만.
     //  me=null(노드 raw 수집 #869)은 필터 없이 전부 — 가시성은 게이트웨이가 판정.
-    if (!sessionVisibleTo(me, acl)) continue;
-    rows.push({ name, created, attached, owner, owned, harness, dir, auto, flagsRaw, invites, projectRaw, isPrivate, attachable: sessionAttachableBy(me, acl), paneTitleRaw, labelParts, offline, busy, lastBusy });
+    if (me !== null && !dirToProjectFolder(dir || "") && !owned && !invites.includes(me)) continue;
+    rows.push({ name, created, attached, owner, owned, harness, dir, auto, flagsRaw, invites, projectRaw, paneTitleRaw, labelParts, offline, busy, lastBusy });
   }
   // 2차: '확인 필요' 감지 — 비offline & 비busy 세션 전부 capture-pane(병렬). #req 접속 안 해도 떠야 하므로 접속 게이트 제거(알림 성격).
   const waitingIds = new Set<string>();
@@ -452,7 +428,6 @@ async function collectSessions(me: string | null): Promise<SessionInfo[]> {
       id: r.name, label: (r.labelParts.join("\t") || r.name), harness: r.harness || "shell", dir: r.dir || "",
       autoApprove: r.auto === "1", owner: r.owner || "", owned: r.owned,
       created: Number(r.created) || 0, attached: Number(r.attached) > 0, invites: r.invites, flags,
-      private: r.isPrivate, attachable: r.attachable, // #1015 가시성·입장 플래그(프론트 카드가 '보기 전용' 판정에 사용)
       projectId: Number(r.projectRaw) || 0,
       agentState: state, title: sessionActivityTitle(r.paneTitleRaw, r.harness),
       lastActive: r.lastBusy || undefined, // 마지막 작업 시각. 한 번도 작업 안 했으면 undefined → 프론트가 created 로 폴백.
@@ -638,7 +613,6 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   await tmux(["set-option", "-t", id, "@box_auto", input.autoApprove ? "1" : "0"]);
   await tmux(["set-option", "-t", id, "@box_flags", JSON.stringify(appliedFlags)]);
   await tmux(["set-option", "-t", id, "@box_invites", JSON.stringify(invites)]);
-  if (input.private) await tmux(["set-option", "-t", id, "@box_private", "1"]); // #1015 생성 시 비공개 선택(기본=공개=미설정)
   // 프로젝트 세션엔 프로젝트 id 를 박아둔다 — listSessions 의 projectId(프론트 세션 귀속·카운트) + 작업 타임라인 귀속용.
   //  (#452 이후 입장 게이트 canAttach 는 멤버십을 안 봄 — 이 id 는 표시·귀속 목적으로만 남는다.)
   if (input.projectId) {
@@ -654,7 +628,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   await tmuxQuiet(["set-option", "-t", id, "mouse", "on"]);
   await tmuxQuiet(["set-window-option", "-t", id, "aggressive-resize", "off"]);
   await tmuxQuiet(["set-window-option", "-t", id, "window-size", "latest"]);
-  return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: Math.floor(Date.now() / 1000), attached: false, invites, flags: appliedFlags, private: !!input.private, attachable: true }; // #1015 생성 직후 낙관적 UI 가 공개여부·입장가능을 바로 반영
+  return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: Math.floor(Date.now() / 1000), attached: false, invites, flags: appliedFlags };
 }
 
 interface OwnerMeta { owner: string; invites: string[]; }
@@ -700,7 +674,7 @@ export async function killSession(user: LivelyUser, id: string): Promise<void> {
   await assertManage(user, id);
   await tmux(["kill-session", "-t", id]);
 }
-export async function editSession(user: LivelyUser, id: string, patch: { label?: string; invites?: unknown; private?: boolean }): Promise<void> {
+export async function editSession(user: LivelyUser, id: string, patch: { label?: string; invites?: unknown }): Promise<void> {
   await assertManage(user, id);
   if (patch.label !== undefined) {
     const clean = cleanLabel(patch.label);
@@ -710,9 +684,6 @@ export async function editSession(user: LivelyUser, id: string, patch: { label?:
   if (patch.invites !== undefined) {
     const invites = await validInvites(patch.invites, ownerId(user));
     await tmux(["set-option", "-t", id, "@box_invites", JSON.stringify(invites)]);
-  }
-  if (patch.private !== undefined) { // #1015 공개/비공개 토글 — 소유자만(assertManage 위에서 강제)
-    await tmux(["set-option", "-t", id, "@box_private", patch.private ? "1" : "0"]);
   }
 }
 
