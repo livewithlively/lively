@@ -52,6 +52,7 @@ export function buildServer(
   overrides?: ReadonlyMap<string, boolean>,
   alwaysLoadOverrides?: ReadonlyMap<string, boolean>,
   harness?: string | null,
+  readOnly?: boolean, // 읽기전용 세션(#1007) — true 면 registerMcpCapabilities 가 쓰기 capability 를 등록 스킵(tools/list 소거).
 ): McpServer {
   const server = new McpServer({ name: "context-ontology", version: "0.1.0" });
   // registerTool 단일 wrap — 두 일을 한 경로에서 한다(capability·db·dynamic 모든 등록이 여길 지난다):
@@ -63,7 +64,7 @@ export function buildServer(
     const cb = typeof handler === "function" ? instrument(name, handler, harness) : handler;
     return (orig as (...a: unknown[]) => unknown)(name, config, cb);
   }) as typeof server.registerTool;
-  registerDbTools(server, harness);           // 제품 DB (읽기전용) — capability 밖, 직접 등록(override false 면 래핑이 스킵). harness=P5 감사 귀속
-  registerMcpCapabilities(server, overrides, alwaysLoadOverrides, harness); // capability: expose.mcp 기본값 + org_tool override(양방향) + 주입모드 _meta
+  registerDbTools(server, harness);           // 제품 DB (읽기전용 — SELECT-only firewall + BEGIN READ ONLY) — 읽기전용 세션서도 안전하게 유지(스토어 쓰기 불가).
+  registerMcpCapabilities(server, overrides, alwaysLoadOverrides, harness, readOnly); // capability: expose.mcp 기본값 + org_tool override + _meta + 읽기전용 쓰기 스킵(#1007)
   return server;
 }

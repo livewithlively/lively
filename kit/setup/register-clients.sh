@@ -9,12 +9,14 @@ STORE_URL="${STORE_URL:-http://localhost:8080/mcp}"
 
 echo "▶ Claude Code"
 claude mcp remove "$MCP_LABEL" 2>/dev/null || true
-# x-lively-session(#852) — kit/setup/register-clients.sh 와 **같은 내용을 유지할 것**(그쪽이 번들 캐노니컬).
-#  작은따옴표 = 셸 확장 금지(설정엔 리터럴이 들어가고 Claude Code 가 연결 시 제 env 로 확장).
+# x-lively-session(#852)·x-lively-readonly(#1007) — kit/cli/lively.mjs registerLivelyMcp 와 **같은 헤더 세트를 유지할 것**
+#  (kit/cli/lively.test.mjs ④ 가 그 CLI argv 를 이 3개 헤더로 못박는다). 작은따옴표 = 셸 확장 금지(설정엔 리터럴, Claude Code 가 연결 시 제 env 로 확장).
 #  `:-` 기본값이 필수 — 없으면 세션 밖(랩탑)에서 "Missing environment variables" 경고가 뜬다(실측 2.1.209).
+#  x-lively-readonly: 세션을 LIVELY_READONLY=1 로 실행하면 그 세션만 읽기전용(게이트웨이가 쓰기 툴 소거) — 미설정이면 빈 값=정상(#1007).
 claude mcp add --transport http --scope user "$MCP_LABEL" "$STORE_URL" \
   --header "Authorization: Bearer ${LIVELY_TOKEN}" \
-  --header 'x-lively-session: ${LIVELY_SESSION_ID:-}'
+  --header 'x-lively-session: ${LIVELY_SESSION_ID:-}' \
+  --header 'x-lively-readonly: ${LIVELY_READONLY:-}'
 
 # ── 추가 MCP 서버(org_mcp_server) — mcp-servers.json 순회 등록(claude). lively 는 위에서 등록됨. ──
 #  소스 우선순위: MCP_SERVERS_FILE env > 번들 ../.lively/mcp-servers.json > ~/.lively/mcp-servers.json.
@@ -53,6 +55,8 @@ cat <<EOF
 url = "${STORE_URL}"
 bearer_token_env_var = "LIVELY_TOKEN"
 EOF
+# ⚠ 읽기전용(#1007): codex 의 http_headers 는 정적값이라 x-lively-readonly 를 세션 env 로 확장하지 못한다
+#  → codex 는 per-session env→헤더 읽기전용을 지원하지 않는다(향후 읽기전용 토큰 scope 로 커버). claude-code 가 1차 대상.
 
 echo
 echo "▶ openclaw — openclaw.json 의 mcpServers 에 추가 (\${LIVELY_TOKEN} 은 환경변수 참조 — 토큰 값을 직접 적지 말 것):"
@@ -62,7 +66,10 @@ cat <<EOF
     "${MCP_LABEL}": {
       "type": "http",
       "url": "${STORE_URL}",
-      "headers": { "Authorization": "Bearer \${LIVELY_TOKEN}" }
+      "headers": {
+        "Authorization": "Bearer \${LIVELY_TOKEN}",
+        "x-lively-readonly": "\${LIVELY_READONLY:-}"
+      }
     }
   }
 }

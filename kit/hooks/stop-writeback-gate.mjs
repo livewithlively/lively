@@ -75,6 +75,9 @@ const REASON =
 
 try {
   if (process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1") process.exit(0);
+  // 읽기전용 세션(#1007) — 컨텍스트 스토어에 '안 쓰는 게 의도'다. "왜 기록 안 했냐" 넛지는 부적절 → 조용히 통과.
+  //  게이트웨이 헤더(x-lively-readonly)와 같은 truthy 집합. 세션 pane 에 -e LIVELY_READONLY=1 로 주입된다(createSession).
+  if (["1", "true", "on", "yes"].includes((process.env.LIVELY_READONLY || "").trim().toLowerCase())) process.exit(0);
   if (readHooksConfig()?.hooks?.stop_writeback_gate === false) process.exit(0); // 어드민이 이 훅 비활성화
   const raw = await readStdin();
   let input;

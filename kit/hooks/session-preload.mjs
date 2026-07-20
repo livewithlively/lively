@@ -22,6 +22,17 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const OFF = process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1";
+// 읽기전용 세션(#1007) — 게이트웨이 헤더(x-lively-readonly)와 같은 truthy 집합. 세션 pane 에 -e LIVELY_READONLY=1 로 주입된다.
+//  주입 컨텍스트 맨 앞에 배너를 붙여 AI 가 '이 세션은 스토어에 안 쓴다'를 명확히 알게 한다(없는 writeback 툴을 찾는 혼란 방지).
+const READONLY = ["1", "true", "on", "yes"].includes((process.env.LIVELY_READONLY || "").trim().toLowerCase());
+const RO_BANNER = [
+  "## ⚠ 읽기전용 세션 (read-only, #1007)",
+  "이 세션은 라이블리 컨텍스트 스토어에 **쓰지 않습니다**. 지식·프로젝트·작업·카테고리·자료·활동·도메인맵의 저장/수정 툴",
+  "(knowledge_save·activity_log·project/task 생성·category_update·source_save 등)은 이 세션에서 **비활성**입니다(tools/list 에 없음, REST 는 403).",
+  "그러니 세션 마무리의 컨텍스트 스토어 기록(writeback)을 **시도하지 마세요** — WIKI 인덱스·AGENTS.md 의 '기록하라' 규칙은 이 읽기전용 세션엔 적용되지 않습니다.",
+  "읽기·검색·분석·코드작업(파일 편집·빌드·커밋)은 정상입니다. 기밀 작업이 끝난 뒤 남길 조직 기록은 읽기전용을 끈 일반 세션에서 하세요.",
+].join("\n");
+const withRo = (t) => READONLY ? (RO_BANNER + "\n\n" + (t || "")).trimEnd() : t;
 // ⚠ OFF 차단은 main() 안에서 한다(모듈 최상단 process.exit 금지) — main-guard(#959) 이후 이 파일은 test 가
 //  reconcileExtPullWiring 을 import 한다. 최상단에서 exit 하면 토큰/OFF 상태에 따라 import 가 프로세스를 죽여
 //  단언이 0개 실행되고도 exit 0(가짜 통과)이 된다(diff-reviewer #959 지적). 클린룸(OFF 시 토큰 미read)은 아래 TOKEN 가드로 유지.
@@ -352,7 +363,7 @@ function takeUpdateNotice() {
 // 출력 = [정적 org-context(게이트웨이 우선, 로컬 폴백)]. 라이브 현황 블록은 폐기(v6 — 구 item/curate 모델 기반이라 제거).
 async function main() {
   if (OFF) process.exit(0);                              // incognito — 아무것도 안 함(클린룸)
-  if (!TOKEN) { emitContext(STATIC); process.exit(0); }  // 토큰 없으면 라이브 스킵, 정적 org-context 만 주입(멤버 기본 상태)
+  if (!TOKEN) { emitContext(withRo(STATIC)); process.exit(0); }  // 토큰 없으면 라이브 스킵, 정적 org-context 만 주입(멤버 기본 상태)
   try {
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms, null));
     // 런타임설정 갱신 + org-context(동적)를 병렬로 — 전부 4.5s 타임박스 안. 타임아웃이면 null.
@@ -371,10 +382,10 @@ async function main() {
     // 설정 갱신 후 판정 — session_preload 비활성이면 컨텍스트 주입만 스킵(설정은 이미 갱신돼 재활성화 가능).
     if (hookDisabled("session_preload")) { emitContext("", { reloadSkills: healed }); process.exit(0); }
     const blocks = [notice, orgCtx || STATIC].filter(Boolean); // 업데이트 안내 → 게이트웨이 org-context(없으면 로컬 STATIC)
-    emitContext(blocks.join("\n\n"), { reloadSkills: healed });
+    emitContext(withRo(blocks.join("\n\n")), { reloadSkills: healed }); // 읽기전용이면 배너를 맨 앞에(#1007)
   } catch {
     // fail-open — 라이브가 터져도 정적 컨텍스트(로컬)는 내보낸다.
-    emitContext(STATIC);
+    emitContext(withRo(STATIC));
   }
   process.exit(0);
 }

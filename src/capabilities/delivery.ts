@@ -487,7 +487,7 @@ export const deliveryCapabilities: Capability[] = [
   //  body_md(미저장 편집값)를 받아 ${rules}/${area} 를 라이브 데이터로 채워 실제 주입 모습을 보여준다(WYSIWYG, 편집 즉시).
   //  body_md 생략/공백이면 buildKnowledgeIndex 가 코드 기본 템플릿으로 폴백. 공유 맥락 미리보기라 scope null(인증만).
   {
-    name: "org_guide_preview", title: "컨텍스트 온톨로지 가이드 미리보기",
+    name: "org_guide_preview", mutates: false, title: "컨텍스트 온톨로지 가이드 미리보기", // 읽기전용(#1007): POST 지만 읽기(미리보기 렌더, 스토어 쓰기 없음)
     description: "컨텍스트 온톨로지 가이드 템플릿(편집값)에 카테고리·강제규칙을 채워 실제 주입되는 Knowledge Index 만 렌더한다(전체 맥락 아님).",
     scope: null, input: {}, expose: { mcp: false, rest: [{ method: "POST", paths: ["/api/ui/org/guide-preview"], parse: (req) => req.body ?? {} }] },
     handler: async (input: Record<string, unknown>) => {

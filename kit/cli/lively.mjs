@@ -597,16 +597,18 @@ function backupUserMcp(name) {
 //  remove 후 add(재실행 안전). remove 실패는 정상(미등록 상태). 호출 전에 has("claude") 를 확인할 것.
 //  ⚠ 위치는 claude 가 정한다(--scope user → CLAUDE_CONFIG_DIR 존중, deploy/provision-profile.sh:37) —
 //   .claude.json 을 우리가 직접 읽어 판단하지 않는다(프로필 격리 #346 에서 엉뚱한 파일을 보게 된다).
-//  ⚠ **헤더는 반드시 register-clients.sh 와 같은 2개**(그쪽이 번들 캐노니컬). x-lively-session(#852)을 빠뜨리면
+//  ⚠ **헤더는 반드시 register-clients.sh 와 같은 세트**(그쪽이 번들 캐노니컬). x-lively-session(#852)을 빠뜨리면
 //   remove→add 가 **기존 세션 헤더를 지워** 그 세션의 작업 귀속이 끊긴다 — 프로비저닝된 멤버(provision-member.sh:122)가
 //   재로그인·재설치할 때 실제로 발생한다. 값은 **리터럴로** 넘긴다: 확장은 접속 시 하네스가 제 env 로 한다.
 //   `:-` 기본값이 없으면 세션 밖(랩탑)에서 "Missing environment variables" 경고가 뜬다(register-clients.sh 실측).
+//   x-lively-readonly(#1007): 세션을 LIVELY_READONLY=1 로 실행하면 그 세션만 읽기전용(게이트웨이가 쓰기 툴 소거). 미설정=빈 값=정상.
 function registerLivelyMcp(gw, tok) {
   run("claude", ["mcp", "remove", "lively"], { allowFail: true, quiet: true });
   try {
     run("claude", ["mcp", "add", "--transport", "http", "--scope", "user", "lively", `${gw}/mcp`,
       "--header", `Authorization: Bearer ${tok}`,
-      "--header", "x-lively-session: ${LIVELY_SESSION_ID:-}"], { quiet: true });
+      "--header", "x-lively-session: ${LIVELY_SESSION_ID:-}",
+      "--header", "x-lively-readonly: ${LIVELY_READONLY:-}"], { quiet: true });
     ok(`MCP 등록: lively → ${gw}/mcp`);
     return true;
   } catch (e) { fail(`MCP 등록 실패(lively): ${e.message}`); return false; }

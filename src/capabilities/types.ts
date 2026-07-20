@@ -16,6 +16,7 @@ export interface CapabilityCtx {
   session?: string;         // 작업이 이뤄진 터미널 세션(tmux box) — 접속 헤더 x-lively-session 으로 식별(#852). 형식만 검증됨(권한은 소비처가)
   tokenHashPrefix?: string; // DB 토큰 해시 prefix(회수 대상 즉시 특정 — 비밀 아님)
   ip?: string;              // 요청 IP
+  readOnly?: boolean;       // 읽기전용 세션(#1007) — 이 요청이 read-only 모드인가(x-lively-readonly 헤더 파생). 강제는 어댑터가 하고, 여기선 관측용(me 가 반환).
 }
 
 // REST 마운트 1개 — paths 배열로 기존 alias(propose/confirm 이중 경로 등)를 표현.
@@ -34,6 +35,12 @@ export interface Capability {
   // admin = 전달/관리 표면(org-content 편집·발행·구성원/토큰), runtime = 멤버 머신에서 실행되는 것(훅·툴) 정의.
   // 허용 scope 의 단일 진실원천은 ./scopes.ts — web.ts mw() 가 여기서 fail-closed 게이트를 파생한다.
   scope: Scope | null;
+  // 읽기전용 모드(#1007) 판정용 — 이 op 가 컨텍스트 스토어를 **변형(write)**하는가.
+  //  보통은 생략한다: capMutates(index.ts)가 REST 마운트 method(POST=쓰기·GET=읽기)에서 자동 파생한다(코드베이스 관례).
+  //  ⚠ 명시가 필요한 예외만 지정: (a) POST 인데 읽기(예: recall_route=라우팅 계산) → false,
+  //   (b) REST 마운트가 없는 MCP 전용 읽기(파생 신호 부재 → fail-closed=쓰기로 오판) → false.
+  //   신호가 전무하면 capMutates 는 **쓰기로 간주(fail-closed)** 한다 — 새 쓰기 툴이 실수로 읽기전용에서 새지 않게.
+  mutates?: boolean;
   // MCP inputSchema(zod raw shape) — REST 는 이걸 안 쓰고 mount.parse 가 검증.
   input: ZodRawShape;
   expose: {

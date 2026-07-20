@@ -11,6 +11,7 @@ const asStrArr = (v: unknown, cap: number): string[] | undefined =>
 
 const recallRoute: Capability = {
   name: "recall_route",
+  mutates: false, // 읽기전용(#1007): POST 지만 순수 읽기(라우팅 계산) — 매 세션 recall 훅이 REST로 호출해 맥락 주입하므로 읽기전용서도 반드시 열려야 함.
   title: "컨텍스트 라우팅(recall)",
   description:
     "작업맥락(text=프롬프트, paths=최근 Read 파일 절대경로)으로 관련 도메인 HUB·leaf 지식을 라우팅해 " +

@@ -75,6 +75,7 @@ const repoRefresh: Capability = {
 // 주의: domainmap overview 가 미래에 'items' 필드를 추가하면 충돌(낮은 확률 — 그때 필드명 협상).
 const contextOverview: Capability = {
   name: "context_overview",
+  mutates: false, // 읽기전용(#1007): MCP전용 읽기 — REST 메서드 파생 신호가 없어 명시(없으면 fail-closed=쓰기 오판 → 읽기전용서 숨겨짐).
   title: "레포 도메인 개요 + 아이템 통계",
   description:
     "레포의 도메인·프로젝트·부채 요약(domainmap overview) + items 필드로 아이템 스토어 통계" +
@@ -100,6 +101,7 @@ const contextOverview: Capability = {
 //  + all_domains(REST /api/ui/domains — 웹 도메인 드롭다운 폐기로 소비자 0)는 제거. category 목록은 category_list 가 단일 표면.
 const debtList: Capability = {
   name: "debt_list",
+  mutates: false, // 읽기전용(#1007): MCP전용 읽기 — REST 메서드 파생 신호 부재라 명시(fail-closed 오판 방지).
   title: "도메인 부채 목록",
   description: "도메인 부채(debt) 항목과 상태.",
   scope: "context",
@@ -153,6 +155,7 @@ const domainmapProxy: Capability = {
 //  scope=context: 레포 편집 권한(관리탭 CONTEXT_EDIT)과 같은 게이트 — 픽커만 admin 이면 편집 가능한 사람이 403 을 본다.
 const repoDiscover: Capability = {
   name: "repo_discover",
+  mutates: false, // 읽기전용(#1007): POST 지만 읽기 — git 호스트 레포 목록 조회(스토어 쓰기 없음). 파생 오판 방지.
   title: "레포 목록 조회(픽커)",
   description:
     "저장된 자격으로 git 호스트가 가진 레포 목록을 조회한다 — 관리탭 '레포 추가' 드롭다운용. 조회 토큰은 " +
@@ -181,6 +184,7 @@ const repoDiscover: Capability = {
 //  에이전트에게 열지 않는다(같은 URL 을 등록하면 스캐너가 어차피 클론하니 새 위협은 아니지만, 표면은 좁게).
 const repoCheck: Capability = {
   name: "repo_check",
+  mutates: false, // 읽기전용(#1007): POST 지만 읽기 — ls-remote 연결 확인(클론·스토어 쓰기 없음). 파생 오판 방지.
   title: "레포 git 주소 연결 확인",
   description:
     "git 주소에 ls-remote 를 걸어 실제로 접근되는지와 원격의 실제 기본 브랜치를 확인한다(클론 없이). " +

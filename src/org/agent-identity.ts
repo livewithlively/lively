@@ -87,3 +87,24 @@ export function sessionFromExtra(extra: unknown): string | null {
   const headers = (extra as { requestInfo?: { headers?: Headers } } | undefined)?.requestInfo?.headers;
   return sessionFromHeaders(headers);
 }
+
+// ── 읽기전용 세션(#1007) — "이 요청은 **읽기전용 모드**인가". ──
+//  x-lively-session(#852)·x-lively-harness(#182)와 **같은 레일·같은 원리**: 게이트웨이가 접속 헤더에서 본 것이 권위다.
+//  경로: 세션 생성 시 pane 에 `-e LIVELY_READONLY=1`(terminal-sessions.createSession, input.readOnly)
+//        → 하네스 MCP 설정 헤더 `x-lively-readonly: ${LIVELY_READONLY:-}`(연결 시 env 확장)
+//        → 여기서 읽어 무상태 게이트웨이가 요청별로 쓰기 capability 를 소거/거부(MCP)·403(REST).
+//  ⚠ **opt-in 방향으로 fail-safe**: 오직 명시 truthy(1|true|on, 대소문자 무관)만 read-only. 미설정·미확장 리터럴
+//   '${LIVELY_READONLY:-}'·빈 값·기타는 전부 **정상(쓰기 허용)** — 실수로 읽기전용에 빠지지 않게(모드는 명시 opt-in).
+//   per-session env 라 동시 실행 세션 중 이 헤더가 실린 세션만 읽기전용, 나머지는 정상.
+const READONLY_TRUTHY: ReadonlySet<string> = new Set(["1", "true", "on", "yes"]);
+
+export function readOnlyFromHeaders(headers: Headers): boolean {
+  const raw = headerValue(headers, "x-lively-readonly");
+  if (!raw) return false;
+  return READONLY_TRUTHY.has(String(raw).trim().toLowerCase());
+}
+
+export function readOnlyFromExtra(extra: unknown): boolean {
+  const headers = (extra as { requestInfo?: { headers?: Headers } } | undefined)?.requestInfo?.headers;
+  return readOnlyFromHeaders(headers);
+}

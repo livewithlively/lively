@@ -936,6 +936,7 @@ const FOLDER_SYNC_MODES: readonly string[] = ["none", "pull", "both"];
 //  같은 레포가 다른 키가 되어 중복 프로젝트가 생긴다. 클라이언트는 URL 만 보낸다(자격은 보내기 전에 벗긴다).
 const projectFindByOriginV6: Capability = {
   name: "project_find_by_origin_v6",
+  mutates: false, // 읽기전용(#1007): POST 지만 읽기 — git origin 으로 기존 프로젝트 후보 조회(생성 아님). project_init 판정에 쓰이므로 열어둔다.
   title: "git origin 으로 기존 프로젝트 찾기(v6)",
   description: "git origin URL 로 그 레포를 쓰는 **기존 프로젝트 후보**를 찾는다(크로스멤버 신원 — #905 P1-③). "
     + "프로토콜·자격·포트·.git 표기 차이를 흡수해 같은 레포면 같은 키로 본다. `project_init` 이 '새로 만들까 기존에 붙일까'를 "

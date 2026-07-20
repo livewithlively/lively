@@ -24,8 +24,10 @@ lively ALL=(LIVELY_BOX_MEMBERS,LIVELY_BROKERS) NOPASSWD: /opt/lively/libexec/box
 # env_keep(sudo env_reset 우회): TZ 보존(#778 — 조직 시간대를 격리 세션 셸/클로드에 전달, 비밀 아님·권한확대 아님) +
 #  LIVELY_SESSION_ID(#852 — 이 pane 이 어느 터미널 세션인지. 하네스가 MCP 헤더로 되보내 게이트웨이가 작업의 세션을
 #   자동 기록한다. 세션 id 는 게이트웨이가 만든 공개 식별자라 비밀 아님·권한확대 아님 — 입장 권한은 게이트웨이가 따로 본다) +
+#  LIVELY_READONLY(#1007 — 이 세션이 읽기전용인지. 하네스가 MCP 헤더 x-lively-readonly 로 되보내 게이트웨이가 이 세션의
+#   쓰기 툴을 소거한다. **권한을 넓히는 게 아니라 좁히는** 플래그라 보존해도 안전 — 미보존이면 격리 세션에서 읽기전용이 안 걸릴 뿐) +
 #  브로커 config(#746 T4 — 소켓·member·workroot·툴목록·내부host·entry·per-broker 토큰. 전부 비밀 아님).
-Defaults!/opt/lively/libexec/box-spawn env_keep += "TZ LIVELY_SESSION_ID LIVELY_BROKER_SOCKET LIVELY_BROKER_MEMBER LIVELY_BROKER_WORKROOT LIVELY_BROKER_ALLOWED_TOOLS LIVELY_BROKER_INTERNAL_HOSTS LIVELY_BROKER_ENTRY LIVELY_BROKER_AUTH"
+Defaults!/opt/lively/libexec/box-spawn env_keep += "TZ LIVELY_SESSION_ID LIVELY_READONLY LIVELY_BROKER_SOCKET LIVELY_BROKER_MEMBER LIVELY_BROKER_WORKROOT LIVELY_BROKER_ALLOWED_TOOLS LIVELY_BROKER_INTERNAL_HOSTS LIVELY_BROKER_ENTRY LIVELY_BROKER_AUTH"
 
 # ② 웹 프로비저닝 — root 로 provision 스크립트 하나만. 토큰·이름·이메일만 env 보존(PATH 등은 미보존).
 Defaults!/opt/lively/libexec/provision-member env_keep += "LIVELY_TOKEN MEMBER_NAME MEMBER_EMAIL LIVELY_SHARED_DIR"
