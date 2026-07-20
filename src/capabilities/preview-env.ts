@@ -52,6 +52,9 @@ const set: Capability = {
     ttl_idle_sec: z.number().int().min(0).optional(),
     enabled: z.boolean().optional(),
     note: z.string().max(2000).optional(),
+    member_branches: z.array(z.string().max(200)).max(50).optional(), // stage: 통합할 작업 브랜치들(project/<id> 등)
+    base_ref: z.string().max(200).optional(),                          // stage: merge base(비면 origin/main)
+    merge_trigger: z.enum(["auto", "manual"]).optional(),              // stage: auto=reconcile 재-merge / manual=수동 편입
   },
   expose: {
     mcp: true,
@@ -62,6 +65,8 @@ const set: Capability = {
         worktree_path: b.worktree_path, backing_mode: b.backing_mode, backing_ref: b.backing_ref, note: b.note,
         project_id: numOpt(b.project_id), ttl_idle_sec: numOpt(b.ttl_idle_sec),
         enabled: typeof b.enabled === "boolean" ? b.enabled : undefined,
+        member_branches: Array.isArray(b.member_branches) ? b.member_branches : undefined,
+        base_ref: b.base_ref, merge_trigger: b.merge_trigger,
       };
     } }],
   },

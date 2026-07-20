@@ -53,6 +53,8 @@ export const CRON_ACTIONS: CronActionDef[] = [
     { name: "prompt", label: "프롬프트 (작업 지시)", kind: "textarea", hint: "이 세션에 주입할 작업. 세션 워크스페이스 + lively MCP 로 수행. (개행은 주입 시 공백으로 합쳐짐 — 한 단락 권장.)" },
   ] },
   { key: "ensure_managed_sessions", label: "상시 세션 keep-alive", params: [] },
+  // #1036 프리뷰 환경 — 유휴 TTL 회수 + auto 트리거 stage 재-merge(작업 브랜치 갱신 반영). 정지된 건 안 켬(온디맨드).
+  { key: "preview_reconcile", label: "프리뷰 환경 reconcile (유휴 회수 + auto stage 재-merge)", params: [] },
 ];
 export const CRON_ACTION_KEYS: string[] = CRON_ACTIONS.map((a) => a.key);
 
@@ -206,6 +208,12 @@ async function runJob(job: CronJob): Promise<{ status: string; summary: unknown 
     // keep-alive — enabled 상시 세션의 tmux 세션 보장(죽었으면 재생성). 등록 0이면 no-op.
     const { ensureAllManagedSessions } = await import("./org/managed-sessions.js");
     return { status: "ok", summary: { sessions: await ensureAllManagedSessions() } };
+  }
+
+  if (job.action === "preview_reconcile") {
+    // #1036 프리뷰 환경 reconcile — TTL 유휴 회수 + auto 트리거 stage 재-merge(정지된 건 안 켬). 등록 0이면 no-op.
+    const { reconcilePreviewEnvs } = await import("./org/preview-envs.js");
+    return { status: "ok", summary: { envs: await reconcilePreviewEnvs() } };
   }
 
   return { status: "error", summary: { error: "unknown action: " + job.action } };
