@@ -39,17 +39,12 @@ else
 fi
 chmod 750 "/home/$BROKER_USER" 2>/dev/null || true
 
-# ─── 멤버↔브로커 공유 작업 dir(#746 T4) — per-member 그룹 m_<slug>(box_·broker_ 둘만) + /srv/lively/member-work/<slug>. ───
-#   멤버는 여기서 편집(레포·terraform state), 브로커는 여기서 git/kubectl/terraform 실행. 멤버 홈(700 크레덴셜 격벽)과 별개.
-#   각 멤버 전용 그룹이라 타 멤버 uid 는 접근 불가(격리 유지). setgid 2770 → 새 파일이 m_<slug> 상속.
-MGROUP="m_$SLUG"
-getent group "$MGROUP" >/dev/null || { groupadd "$MGROUP"; echo "groupadd $MGROUP (멤버 전용 공유그룹)"; }
-usermod -aG "$MGROUP" "$OSUSER"; usermod -aG "$MGROUP" "$BROKER_USER"
-WORK_BASE="${LIVELY_MEMBER_WORK_BASE:-/srv/lively/member-work}"
-install -d -m 2770 -o "$OSUSER" -g "$MGROUP" "$WORK_BASE/$SLUG"; chmod g+s "$WORK_BASE/$SLUG"
-echo "공유 작업 dir → $WORK_BASE/$SLUG ($OSUSER:$MGROUP 2770 setgid) — 멤버·브로커 공유(타 멤버 격리)"
-
 # 유저(멱등) — 홈·셸·그룹·비번잠금(대화형 로그인 불가; 진입은 게이트웨이 sudo→box-spawn 로만)
+#  ⚠ #1014: 이 box_ 유저 생성은 아래 m_<slug> 공유그룹 블록보다 **반드시 먼저** 온다 — 그 블록의
+#    `usermod -aG m_<slug> box_<slug>` 는 대상 유저가 없으면 실패하고, `set -e` 로 스크립트가 여기 오기 전에
+#    abort 한다. 커밋 891a68d(#746 T4)가 공유그룹 블록을 유저 생성 위에 두어, 그 이후 프로비저닝된 새 멤버는
+#    전원 box_ 유저 생성 전에 죽었다(broker_·m_ 그룹만 남고 box_ 없음) → 격리 실패 → 세션이 공유 폴백으로
+#    남의 lively 신원 인증. 순서 불변식으로 고정한다.
 if id "$OSUSER" >/dev/null 2>&1; then
   usermod -aG box_members,lively-shared "$OSUSER"; echo "유저 $OSUSER 갱신"
 else
@@ -58,6 +53,17 @@ else
   echo "유저 $OSUSER 생성"
 fi
 chown "$OSUSER:$OSUSER" "$HOME_DIR"; chmod 700 "$HOME_DIR"   # ⭐ 홈 700 = 크레덴셜 격벽
+
+# ─── 멤버↔브로커 공유 작업 dir(#746 T4) — per-member 그룹 m_<slug>(box_·broker_ 둘만) + /srv/lively/member-work/<slug>. ───
+#   멤버는 여기서 편집(레포·terraform state), 브로커는 여기서 git/kubectl/terraform 실행. 멤버 홈(700 크레덴셜 격벽)과 별개.
+#   각 멤버 전용 그룹이라 타 멤버 uid 는 접근 불가(격리 유지). setgid 2770 → 새 파일이 m_<slug> 상속.
+#   ⚠ box_·broker_ 유저가 **둘 다 생성된 뒤**여야 한다(위 #1014 주석) — usermod 대상이 존재해야 set -e 로 안 죽는다.
+MGROUP="m_$SLUG"
+getent group "$MGROUP" >/dev/null || { groupadd "$MGROUP"; echo "groupadd $MGROUP (멤버 전용 공유그룹)"; }
+usermod -aG "$MGROUP" "$OSUSER"; usermod -aG "$MGROUP" "$BROKER_USER"
+WORK_BASE="${LIVELY_MEMBER_WORK_BASE:-/srv/lively/member-work}"
+install -d -m 2770 -o "$OSUSER" -g "$MGROUP" "$WORK_BASE/$SLUG"; chmod g+s "$WORK_BASE/$SLUG"
+echo "공유 작업 dir → $WORK_BASE/$SLUG ($OSUSER:$MGROUP 2770 setgid) — 멤버·브로커 공유(타 멤버 격리)"
 
 # .lively — 훅·컨텍스트(공유 소스=게이트웨이 홈에서 복사, 멤버 소유) + token(멤버 600)
 GW_LIVELY="${LIVELY_SHARED_DIR:-}"

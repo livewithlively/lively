@@ -165,15 +165,19 @@ export async function resolveRootPath(user: LivelyUser, rootKey: string, subpath
 // ── 멀티프로필 / 프로필별 Claude 계정(#346) ──
 //  M1: 프로필 = 세션 owner(멤버). 프로필별 격리된 CLAUDE_CONFIG_DIR(=config·자격증명·MCP)로 claude 를 띄운다.
 //  각 프로필 dir 은 1회 로그인(CLAUDE_CONFIG_DIR=<dir> claude)으로 프로비저닝된다(+키트로 lively MCP·훅 주입).
-//  ⚠ 폴백 불변식: 프로필이 아직 로그인 안 됐으면(.credentials.json 없음) CLAUDE_CONFIG_DIR 을 주입하지 않아
-//    호스트 공유 ~/.claude 를 그대로 쓴다(=오늘 동작, 무회귀). 멀티프로필은 프로필이 준비된 멤버만 opt-in.
-//    LIVELY_MULTIPROFILE=0 이면 전면 비활성(항상 공유) — 롤아웃 kill-switch.
+//  ⚠ 신원 불변식(#1014): 멀티프로필이 켜진 한(기본), 세션은 **항상 이 멤버 전용 CLAUDE_CONFIG_DIR** 로 뜬다 —
+//    로그인 전이어도. 예전엔 미로그인이면 CLAUDE_CONFIG_DIR 을 안 줘 호스트 공유 ~/.claude 로 폴백했는데, 그
+//    공유 config 엔 설치 때 구워진 **특정 멤버의 lively 토큰**이 있어 신규/미로그인 프로필이 조용히 그 사람으로
+//    인증되는 구멍이었다(fail-open 임퍼스네이션). 그래서 공유 폴백을 폐기했다: 자기 dir 을 가리키면 claude /login
+//    자격도 lively MCP(멤버 토큰, provisionProfile 이 구움)도 이 멤버 dir 에만 격리된다.
+//    LIVELY_MULTIPROFILE=0 이면 전면 비활성(항상 공유) — 단일-유저 박스 전용 kill-switch(계정이 하나라 임퍼스네이션 위험 0).
 const PROFILES_ROOT = process.env.LIVELY_PROFILES_ROOT || path.join(os.homedir(), ".lively", "profiles");
 export function profileConfigDir(user: LivelyUser): string {
   return path.join(PROFILES_ROOT, userSlug(user), "claude");
 }
-// 프로필이 프로비저닝됐으면(로그인된 자격증명 존재) 그 CLAUDE_CONFIG_DIR 을 반환, 아니면 null(→공유 폴백).
-//  (P2 위탁 태스크 러너 node/tasks.ts 가 재사용 — export)
+// 프로필이 로그인된 자격증명(.credentials.json)을 가졌으면 그 CLAUDE_CONFIG_DIR, 아니면 null.
+//  ⚠ null 의 의미는 호출자가 정한다 — createSession(웹터미널)은 #1014 이후 null 이어도 공유로 폴백하지 않고
+//    항상 자기 dir 을 만들어 쓴다(profileConfigDir). 이 함수는 위탁 러너 node/tasks.ts 의 노드-로컬 폴백 판정에만 쓰인다.
 export async function resolveProfileConfigDir(user: LivelyUser): Promise<string | null> {
   if (process.env.LIVELY_MULTIPROFILE === "0") return null;
   const dir = profileConfigDir(user);
@@ -582,18 +586,19 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     args.push(...wrapAsMember(osUser, cmd, target));
   } else {
     args.push("-c", target);
-    // 멀티프로필(#346): 프로필이 프로비저닝·로그인된 멤버면 세션스코프 -e CLAUDE_CONFIG_DIR 로 그 계정을 격리해 claude 를 띄운다.
-    //  ⚠ 세션스코프 -e 만 쓴다(persistent tmux 서버라 global set-environment 는 세션 간 누수). 미프로비저닝/미로그인=주입 안 함→공유 폴백.
-    //  loginProfile(최초 로그인 세션): 로그인 게이트를 우회해 owner 프로필 dir 을 **강제** 주입 — 아직 .credentials.json 이
-    //   없어도(닭-달걀) 그 dir 을 가리켜 거기로 claude 로그인하게 한다. dir 이 없으면 만든다(프로비저닝 전이어도 로그인만은 가능).
-    let profileDir: string | null;
-    if (input.loginProfile) {
-      profileDir = profileConfigDir(user);
+    // 멀티프로필(#346·#1014): 비격리 경로에서도 **항상 이 멤버 전용 CLAUDE_CONFIG_DIR** 을 준다(공유 폴백 폐기).
+    //  왜(#1014): CLAUDE_CONFIG_DIR 을 안 주면 claude 는 호스트 공유 $HOME/.claude.json 을 읽고, 거기 설치 때
+    //   구워진 **남의 lively 토큰으로 인증**된다 — 신규/미로그인 프로필이 조용히 타인 계정이 되는 fail-open 구멍.
+    //  이제 로그인 전이어도 자기 dir 을 가리킨다: 그 안에서 claude /login 하면 자격이 이 멤버 dir 에만 떨어지고
+    //   (닭-달걀 없음), lively MCP(멤버 토큰)는 provisionProfile 이 이 dir 에 굽는다. 절대 남의 신원으로 안 샌다.
+    //  ⚠ 세션스코프 -e 만(persistent tmux 서버라 global set-environment 는 세션 간 누수).
+    //  유일한 예외 = 단일-유저 kill-switch(LIVELY_MULTIPROFILE=0): 그 박스는 계정이 하나라 공유 config 가 곧 본인이다.
+    //  (input.loginProfile 은 이제 기본 동작에 흡수됨 — 항상 dir 을 만들어 주므로 별도 강제 분기 불요.)
+    if (process.env.LIVELY_MULTIPROFILE !== "0") {
+      const profileDir = profileConfigDir(user);
       await fsp.mkdir(profileDir, { recursive: true, mode: 0o700 });
-    } else {
-      profileDir = await resolveProfileConfigDir(user);
+      args.push("-e", `CLAUDE_CONFIG_DIR=${profileDir}`);
     }
-    if (profileDir) args.push("-e", `CLAUDE_CONFIG_DIR=${profileDir}`);
     if (cmd.length) args.push(...cmd);
   }
   // 웹터미널은 xterm.js 로 렌더된다 — pane TERM 을 xterm-256color 로 통일(색 일관성: 격리 세션은 box-spawn 이
