@@ -164,6 +164,10 @@ function mdImage(src, alt) {
 }
 // 인라인 파싱 → 텍스트 노드/엘리먼트 배열. 코드(`)·굵게(**)·기울임(*)·링크·이미지·취소선(~~)·밑줄(++)·하이라이트(==) 지원.
 //  이미지/밑줄/하이라이트는 #551 노션 무손실 미러 본문(notion-md.ts 방언) 대응 — 일반 저작 지식에도 동일 적용.
+// docs 전용 인라인 UI 참조 칩(#1013) — 사용가이드의 [버튼]·「메뉴/옵션/상태」 대괄호·꺽쇠 노이즈를
+//  '눌리는 버튼' 칩과 '부드러운 태그' 칩으로 승격해 가독성을 올린다. renderMarkdown(md, {uiChips:true}) 로만
+//  켜지며(learn.ts docs 렌더), 지식·위키·프로젝트 등 다른 마크다운 소비자엔 영향이 없다.
+let MD_UI_CHIPS = false;
 function renderInline(text) {
     const out = [];
     let buf = '';
@@ -286,6 +290,32 @@ function renderInline(text) {
                 }
             }
         }
+        // docs 전용: 링크가 아닌 [라벨] = UI 버튼/액션 참조 → 버튼 칩 (#1013). 링크([x](url))는 위에서 이미 처리됨.
+        if (MD_UI_CHIPS && ch === '[') {
+            const close = s.indexOf(']', i + 1);
+            if (close > i && s[close + 1] !== '(') {
+                const label = s.slice(i + 1, close);
+                if (label.trim() && label.indexOf('\n') < 0) {
+                    flush();
+                    out.push(el('span', { class: 'md-uikey md-uikey-btn' }, ...renderInline(label)));
+                    i = close + 1;
+                    continue;
+                }
+            }
+        }
+        // docs 전용: 「라벨」 = 메뉴/옵션/상태 이름 → 태그 칩 (#1013).
+        if (MD_UI_CHIPS && ch === '「') {
+            const close = s.indexOf('」', i + 1);
+            if (close > i) {
+                const label = s.slice(i + 1, close);
+                if (label.trim() && label.indexOf('\n') < 0) {
+                    flush();
+                    out.push(el('span', { class: 'md-uikey md-uikey-opt' }, ...renderInline(label)));
+                    i = close + 1;
+                    continue;
+                }
+            }
+        }
         buf += ch;
         i++;
     }
@@ -348,11 +378,12 @@ function renderContainer(type, rest, bodyLines) {
             const panes = Array.from(rendered.children).filter((n) => n.classList && n.classList.contains('md-tabpane'));
             if (!panes.length)
                 return moveChildren(rendered, el('div', { class: 'md-tabs-fallback' }));
+            const hue = (summary || '').split(/\s+/).includes('hue'); // :::tabs hue — 탭을 스크린샷 구역색(is-cN)과 1:1 연결 (#1013)
             const bar = el('div', { class: 'md-tabs-bar', role: 'tablist' });
             const body = el('div', { class: 'md-tabs-body' });
             const btns = [];
             panes.forEach((p, idx) => {
-                const btn = el('button', { class: 'md-tab-btn' + (idx === 0 ? ' active' : ''), type: 'button', role: 'tab',
+                const btn = el('button', { class: 'md-tab-btn' + (idx === 0 ? ' active' : '') + (hue ? ' is-c' + (idx % 5) : ''), type: 'button', role: 'tab',
                     'aria-selected': idx === 0 ? 'true' : 'false', text: p.getAttribute('data-tab-label') || '탭 ' + (idx + 1) });
                 btn.onclick = () => btns.forEach((b, k) => {
                     const on = b === btn;
@@ -366,7 +397,7 @@ function renderContainer(type, rest, bodyLines) {
                 bar.append(btn);
                 body.append(p);
             });
-            return el('div', { class: 'md-tabs' }, bar, body);
+            return el('div', { class: 'md-tabs' + (hue ? ' md-tabs--hue' : '') }, bar, body);
         }
         case 'tab': {
             const pane = el('div', { class: 'md-tabpane' });
@@ -644,7 +675,10 @@ function mdPageCard(label, href) {
     return el('a', { class: 'md-pagecard', href }, el('span', { class: 'md-pagecard-ic', 'aria-hidden': 'true', text: '📄' }), el('span', { class: 'md-pagecard-title', text: label }), el('span', { class: 'md-pagecard-arrow', 'aria-hidden': 'true', text: '↗' }));
 }
 // 블록 파서 — 줄 단위로 블록을 구성한다. 모든 텍스트는 renderInline 경유(textContent).
-function renderMarkdown(md) {
+function renderMarkdown(md, opts) {
+    const _prevChips = MD_UI_CHIPS; // #1013 docs UI 칩 모드 — 재진입(중첩 컨테이너) 안전하게 저장/복원
+    if (opts && typeof opts === 'object' && 'uiChips' in opts)
+        MD_UI_CHIPS = !!opts.uiChips;
     const root = el('div', { class: 'md' });
     const lines = String(md == null ? '' : md).replace(/\r\n?/g, '\n').split('\n');
     let i = 0;
@@ -919,6 +953,7 @@ function renderMarkdown(md) {
         }
         flushP();
     }
+    MD_UI_CHIPS = _prevChips; // #1013 복원 — 중첩 렌더는 상속(true 유지), 최상위 docs 호출만 false 로 되돌림
     return root;
 }
 // ── fetch 헬퍼 — 401 은 토큰 게이트, 그 외 비정상은 {error} 메시지로 throw ──

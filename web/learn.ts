@@ -30,9 +30,11 @@ const DOCS_NAV = [
   //  세션 체험') 그룹명 '직접 해보기'와 겹치지 않게 하고 페이지 H1(start.ts)과 맞춘다.
   { group: '직접 해보기', items: [
     { key: 'start', label: '시작하기', href: '#/start' },
-    { key: 'examples', label: '이런 걸 시켜보세요', href: '#/start/examples' },   // #853 세션에 무엇을 시킬지 예시 · #1000 URI #/start/*
+    // #req examples 탭 숨김(사용자 요청) — 본문을 #/start 블록 ③ 로 인라인 이동. 라우트는 유지(직접 URL 접근 가능). 복원: 아래 줄 주석 해제.
+    // { key: 'examples', label: '이런 걸 시켜보세요', href: '#/start/examples' },
     { key: 'start-project', label: '프로젝트 체험', href: '#/start/project' },   // #853 프로젝트 한 바퀴 손수 투어
-    { key: 'tour', label: 'Lively 둘러보기', href: '#/start/tour' },   // #1000 #/learn/tour → #/start/tour
+    // #req tour 탭 숨김(사용자 요청). 라우트는 유지. 복원: 아래 줄 주석 해제.
+    // { key: 'tour', label: 'Lively 둘러보기', href: '#/start/tour' },
   ] },
   { group: '화면별 안내', items: [
     { key: 'home', label: '홈 (대시보드)', href: '#/learn/docs/home' },
@@ -149,14 +151,14 @@ function docsBody(md: string, ...lead: any[]) {
       const at = s.lines.findIndex((l) => /^\s*(\||[-*+]\s|\d+\.\s|```|~~~|:::)/.test(l));
       const lead = (at < 0 ? s.lines : s.lines.slice(0, at)).join('\n').trim();
       const rest = at < 0 ? '' : s.lines.slice(at).join('\n').trim();
-      if (lead) cards.append(el('div', { class: 'md-rendered docs-lead' }, renderMarkdown(lead)));
+      if (lead) cards.append(el('div', { class: 'md-rendered docs-lead' }, renderMarkdown(lead, { uiChips: true })));
       if (rest) cards.append(el('div', { class: 'card docs-card' },
-        el('div', { class: 'md-rendered docs-md' }, docsDecorate(renderMarkdown(rest)))));
+        el('div', { class: 'md-rendered docs-md' }, docsDecorate(renderMarkdown(rest, { uiChips: true })))));
       continue;
     }
     cards.append(el('div', { class: 'card docs-card' },
       el('div', { class: 'card-head' }, el('h2', { text: s.title })),
-      el('div', { class: 'md-rendered docs-md' }, docsDecorate(renderMarkdown(body)))));
+      el('div', { class: 'md-rendered docs-md' }, docsDecorate(renderMarkdown(body, { uiChips: true })))));
   }
   return cards;
 }
@@ -272,7 +274,11 @@ async function renderLearn(view) {
   // 구 딥링크 #/learn?focus=required(#317) — 필요지식 카드는 WIKI 문서 페이지로 이사했다.
   if (/[?&]focus=required(?:&|$)/.test(location.hash)) { location.replace('#/learn/docs/wiki?focus=required'); return; }
   const page = DOC_PAGES.find((p) => p.slug === 'overview');
-  docsShell(view, 'overview', docsBody(page ? page.md : '', heroCard())); // 히어로 = 같은 카드 흐름의 첫 장(간격 통일)
+  // 다른 문서 페이지와 통일 — 상단에 아이브로(중분류)+docs-title(제목). 개요 md 는 h1(#) 이 없어 page.title 을 쓴다.
+  docsShell(view, 'overview',
+    docsEyebrow('overview'),
+    el('h1', { class: 'docs-title', text: page ? page.title : '라이블리 개요' }),
+    docsBody(page ? page.md : '', heroCard())); // 히어로 = 같은 카드 흐름의 첫 장(간격 통일)
 }
 
 // ── ① 히어로 — 이 서비스가 통째로 뭔지(한 문장) + 작동 원리 3단계 ──

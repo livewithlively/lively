@@ -6764,6 +6764,12 @@ body.pjv-pm-open { overflow: hidden; }
 .docs-side a.docs-item:hover { background: var(--bg-tint); color: var(--ink); }
 .docs-side a.docs-item.active { background: var(--bg-punch); color: var(--blue); font-weight: 700; }
 .docs-side a.docs-item:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+/* 관리자 전용 섹션 표식(#1010) — 비관리자에겐 sectionHidden 으로 아예 안 보이는 섹션(ADMIN_ONLY)임을,
+   관리자가 볼 때 라벨 옆 배지로 알린다(#837 이 그룹 아래 회색 힌트를 걷어낸 자리에 항목 단위 권한 신호만 남긴다). */
+.docs-side a.docs-item .admin-only-badge { display: inline-block; margin-left: 7px; padding: 0 6px;
+  border-radius: 999px; font-size: 10px; font-weight: 700; line-height: 16px; vertical-align: middle;
+  white-space: nowrap; background: var(--bg-tint-2); color: var(--muted-head); border: 1px solid var(--line); }
+.docs-side a.docs-item.active .admin-only-badge { background: var(--bg); border-color: var(--blue); color: var(--blue); }
 .docs-body { flex: 1; min-width: 0; max-width: 920px; padding-bottom: 72px; }   /* 전 페이지 동일한 읽기 폭 — 사이드바(좌측 고정)에 붙고 오른쪽은 균일하게 비운다(#780). 목차 방식은 일부 페이지만 걸려 들쭉날쭉해 폐기, 통일성 우선. */
 .docs-body > .page-head { margin-bottom: 8px; padding-top: 0; }
 /* 섹션 앵커로 스크롤할 때 상단 고정 헤더에 가리지 않게 */
@@ -6842,6 +6848,21 @@ body[data-route="onboarding"] main { max-width: none; }
 .docs-md .md-code { font-size: 12.5px; border-color: var(--line-net); border-radius: 6px; padding: 1.5px 6px; }
 .docs-md .md-pre { padding: 13px 15px; margin: 2px 0 14px; border-radius: 11px; border-color: var(--line-net); }
 .docs-md .md-pre code { font-size: 12.5px; line-height: 1.6; }
+
+/* 사용가이드 인라인 UI 참조 칩(#1013) — 대괄호·꺽쇠 노이즈를 제거해 가독성↑.
+   [버튼]=아웃라인+두꺼운 밑선(눌리는 버튼 느낌, .kbd 시각언어), 「옵션·메뉴·상태」=틴트 채움 태그.
+   display:inline + box-decoration-break:clone → 긴 라벨이 줄바꿈돼도 배경·테두리·패딩이 조각마다 유지된다. */
+.docs-md .md-uikey, .docs-lead .md-uikey {
+  display: inline; -webkit-box-decoration-break: clone; box-decoration-break: clone;
+  font-size: 0.86em; font-weight: 700; line-height: 1.3; letter-spacing: -0.1px;
+  border-radius: 6px; padding: 1px 6px; margin: 0 1.5px; white-space: normal;
+}
+.docs-md .md-uikey-btn, .docs-lead .md-uikey-btn {
+  color: var(--ink); background: var(--bg); border: 1px solid var(--line-net); border-bottom-width: 2px;
+}
+.docs-md .md-uikey-opt, .docs-lead .md-uikey-opt {
+  color: var(--ink-note); background: var(--bg-tint-2);
+}
 
 /* 피처 카드 — '**굵은 제목** — 설명' 목록. 지식 축 옵션(kn-axis-opt)과 같은 틴트 박스. */
 .docs-featgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 4px 0 6px; }
@@ -6930,6 +6951,18 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .md-tabs-body { background: var(--bg); border: 1px solid var(--line-net); border-radius: 10px; padding: 16px 18px 8px; }
 .md-tabs-body .md-tabpane > :last-child { margin-bottom: 8px; }
 @media (prefers-reduced-motion: reduce) { .docs-side a.docs-item, .md-tab-btn { transition: none; } }
+/* :::tabs hue — 색상 구분 가로 탭: 스크린샷 ①~⑥ 구역 색(is-cN·--sc)과 1:1 연결 (#1013 홈 가이드) */
+.md-tabs--hue .md-tab-btn { display: inline-flex; align-items: center; gap: 7px;
+  border-color: color-mix(in srgb, var(--sc) 28%, transparent); }
+.md-tabs--hue .md-tab-btn::before { content: ''; width: 10px; height: 10px; flex: none;
+  border-radius: 4px 1.5px 4px 1.5px; background: var(--sc);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--sc) 40%, transparent); }
+.md-tabs--hue .md-tab-btn:hover { color: var(--ink);
+  background: color-mix(in srgb, var(--sc) 9%, transparent);
+  border-color: color-mix(in srgb, var(--sc) 45%, transparent); }
+.md-tabs--hue .md-tab-btn.active { color: var(--sc);
+  background: color-mix(in srgb, var(--sc) 12%, var(--bg));
+  border-color: var(--sc); box-shadow: 0 1px 5px color-mix(in srgb, var(--sc) 24%, transparent); }
 
 /* ============================================================
    사이드바 스크롤바 — 평소엔 숨기고, 그 영역에 호버(=스크롤할 때)만 얇게 노출.
@@ -7243,14 +7276,17 @@ a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; fo
 .md-fig-arlab { font-size: 11px; color: var(--muted, #6b7a90); line-height: 1.35; text-align: center; max-width: 180px; }
 .md-fig-arline { display: inline-flex; align-items: center; width: 100%; min-width: 38px; height: 0;
   border-top: 2px solid var(--muted-2, #a6b2c8); position: relative; }
-.md-fig-arhead { position: absolute; right: -3px; top: -0.72em; font-size: 13px; font-weight: 800; color: var(--muted-2, #a6b2c8); }
+/* 화살촉 — 폰트 독립 CSS 삼각형(선 중심 정렬). 옛 ▸ 글리프+top:-0.72em 은 폰트 메트릭 따라 선 아래로 처졌다(#1013). */
+.md-fig-arhead { position: absolute; right: -1px; top: 50%; transform: translateY(-50%);
+  width: 0; height: 0; font-size: 0; line-height: 0; color: var(--muted-2, #a6b2c8);
+  border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 8px solid currentColor; }
 /* 화살표 의미색 — 도메인맵 범례와 동일(ok=일치·긍정 파랑 / viol=빨강 / should=주황 점선 / pend=회색 점선 / x=차단) */
 .md-fig-ar.is-ok .md-fig-arline { border-top-color: var(--blue); } .md-fig-ar.is-ok .md-fig-arhead { color: var(--blue); }
 .md-fig-ar.is-viol .md-fig-arline { border-top-color: #b0503f; } .md-fig-ar.is-viol .md-fig-arhead { color: #b0503f; }
 .md-fig-ar.is-should .md-fig-arline { border-top-style: dashed; border-top-color: #c2822f; } .md-fig-ar.is-should .md-fig-arhead { color: #c2822f; }
 .md-fig-ar.is-pend .md-fig-arline { border-top-style: dashed; } 
 .md-fig-ar.is-x .md-fig-arline { border-top-style: dashed; border-top-color: #b0503f; }
-.md-fig-ar.is-x .md-fig-arhead { color: #b0503f; font-size: 12px; top: -0.8em; }
+.md-fig-ar.is-x .md-fig-arhead { color: #b0503f; }
 .md-fig-cap { font-size: 12px; color: var(--muted, #6b7a90); margin-top: 2px; }
 /* fan — 소스 스택 → 공통 화살표 → 타깃 하나 */
 .md-fig-fan { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

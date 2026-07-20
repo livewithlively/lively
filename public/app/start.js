@@ -10,7 +10,8 @@
 //  ⚠ 화면은 SoT 가 아니다. 상태의 SoT 는 서버 computeMemberOnboarding(src/org/onboarding.ts) 한 함수이고
 //   이 화면과 AI 온보딩 스킬이 **같은 REST(/api/ui/me/onboarding)** 를 읽는다 → 둘이 어긋나지 않는다.
 //  ⚠ 이 페이지는 **값을 편집하지 않는다.** 케이스별로 관리탭·프로젝트로 보내는 딥링크 / 설치는 모달 런처다.
-import { api, el } from './core.js';
+import { api, el, renderMarkdown } from './core.js';
+import { DOC_PAGES } from './docs-content.js'; // 블록 ③ 인라인 — '이런 걸 시켜보세요'(examples) 원고 재사용
 import { docsEyebrow, docsShell, openInstallModal } from './learn.js'; // 사용 가이드 셸 + 설치 팝업(모달)
 import { isSectionDone, startGuideTour } from './guide-tour.js'; // '프로젝트 체험' — #/start/tour 와 같은 'projects' 코스
 // 하위 안내 페이지(설정·이관·체험)에서 부모(#/start)로 돌아가는 한 줄 링크 — 사용자 지적 ④(복귀 경로 부재) 해소.
@@ -85,10 +86,16 @@ function blockSetup(byKey) {
     ];
     return el('div', { class: 'card docs-card ob-block' }, el('div', { class: 'card-head ob-block-head' }, el('h2', { text: '② 내 상황에 맞는 설정' }), el('span', { class: 'ob-block-badge', text: '선택' })), el('p', { class: 'guide-lead', text: '아래는 해당하는 분만 하시면 됩니다. 웹에서만 쓰실 거면 ①로 충분해요 — 그래도 어떤 설정인지 한 번 읽어두면, 나중에 필요할 때 놓치지 않아요.' }), el('div', { class: 'setup-cards' }, ...cards));
 }
-// ── 블록 ③ 더 해보기 — AI 사용을 익히는 다음 화면들(같은 '직접 해보기' 그룹). ──
+// ── 블록 ③ 이런 걸 시켜보세요 — examples 원고를 이 블록에 인라인(#req). 옛 링크카드 3개(examples·project·tour) 폐지.
+//  '이런 걸 시켜보세요'(#/start/examples) 탭은 nav 에서 숨겼고(learn.ts DOCS_NAV), 본문이 여기로 이사했다. 원고 단일소스(docs-content.ts) 유지.
 function blockMore() {
-    const link = (href, title, desc) => el('a', { class: 'docs-linkcard', href }, el('span', { class: 'docs-linkcard-t' }, el('span', { text: title }), el('span', { class: 'docs-linkcard-arrow', 'aria-hidden': 'true', text: '→' })), el('span', { class: 'docs-linkcard-d', text: desc }));
-    return el('div', { class: 'card docs-card ob-block' }, el('div', { class: 'card-head ob-block-head' }, el('h2', { text: '③ 더 해보기' })), el('p', { class: 'guide-lead', text: 'AI 세션을 열었다면, 이제 이런 것들을 해볼 수 있어요.' }), el('div', { class: 'docs-linkgrid' }, link('#/start/examples', '이런 걸 시켜보세요', 'AI 세션에 무엇을 시킬지 예시 모음'), link('#/start/project', '프로젝트 체험', '프로젝트 화면을 예시 프로젝트로 한 바퀴 둘러보기'), link('#/start/tour', 'Lively 둘러보기', '실제 화면 위에서 눌러보며 익히는 투어')));
+    const page = DOC_PAGES.find((p) => p.slug === 'examples');
+    let md = page ? page.md : '';
+    md = md.replace(/^#\s+[^\n]*\r?\n+/, ''); // 맨 위 '# 이런 걸 시켜보세요' 제목 제거 → 블록 head 가 대신
+    md = md.replace(/\r?\n+##\s*다음\s*단계[\s\S]*$/, ''); // '다음 단계' 링크 묶음 제거(#/start 안이라 불필요)
+    md = md.replace(/^>\s?/gm, ''); // 인트로 인용부호 제거 → 리드 문단
+    md = md.replace(/^##\s/gm, '### '); // 하위 제목(##)을 블록 head 아래 소제목(###)으로 강등
+    return el('div', { class: 'card docs-card ob-block' }, el('div', { class: 'card-head ob-block-head' }, el('h2', { text: '③ 이런 걸 시켜보세요' })), el('div', { class: 'md-rendered docs-md' }, renderMarkdown(md)));
 }
 export async function renderStart(view) {
     // #/learn 과 같은 머리 — 아이브로(직접 해보기) + docs-title 히어로 + 리드 한 줄.
