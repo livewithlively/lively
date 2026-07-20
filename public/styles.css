@@ -6747,6 +6747,12 @@ body.pjv-pm-open { overflow: hidden; }
 .docs-side a.docs-item:hover { background: var(--bg-tint); color: var(--ink); }
 .docs-side a.docs-item.active { background: var(--bg-punch); color: var(--blue); font-weight: 700; }
 .docs-side a.docs-item:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+/* 관리자 전용 섹션 표식(#1010) — 비관리자에겐 sectionHidden 으로 아예 안 보이는 섹션(ADMIN_ONLY)임을,
+   관리자가 볼 때 라벨 옆 배지로 알린다(#837 이 그룹 아래 회색 힌트를 걷어낸 자리에 항목 단위 권한 신호만 남긴다). */
+.docs-side a.docs-item .admin-only-badge { display: inline-block; margin-left: 7px; padding: 0 6px;
+  border-radius: 999px; font-size: 10px; font-weight: 700; line-height: 16px; vertical-align: middle;
+  white-space: nowrap; background: var(--bg-tint-2); color: var(--muted-head); border: 1px solid var(--line); }
+.docs-side a.docs-item.active .admin-only-badge { background: var(--bg); border-color: var(--blue); color: var(--blue); }
 .docs-body { flex: 1; min-width: 0; max-width: 920px; padding-bottom: 72px; }   /* 전 페이지 동일한 읽기 폭 — 사이드바(좌측 고정)에 붙고 오른쪽은 균일하게 비운다(#780). 목차 방식은 일부 페이지만 걸려 들쭉날쭉해 폐기, 통일성 우선. */
 .docs-body > .page-head { margin-bottom: 8px; padding-top: 0; }
 /* 섹션 앵커로 스크롤할 때 상단 고정 헤더에 가리지 않게 */
