@@ -204,7 +204,8 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     const q = String((req.query.q ?? "") as string);
     const all = await listSessions(userOf(req));
     const sessions = all
-      .filter((s) => !isProjectSessionDir(s.dir) || s.owned)   // 개인(소유/초대) + 내가 만든 프로젝트 세션만(남의 비공개 미검색)
+      // #1015 대화 내용 열람 = 입장 가능한 세션만. 공개-남의세션(attachable=false)은 목록엔 떠도 프롬프트는 검색 안 함(보기≠내용열람).
+      .filter((s) => (!isProjectSessionDir(s.dir) && s.attachable) || s.owned)   // 개인(소유/초대) + 내가 만든 프로젝트 세션만
       .map((s) => ({ id: s.id, label: s.label, dir: s.dir, projectId: s.projectId }));
     // 임베딩 provider 켜져 있으면 의미(하이브리드) 검색, 아니면 렉시컬(토큰 AND+랭킹). 하이브리드 실패 시 렉시컬 폴백.
     const provider = await activeEmbeddingProvider().catch(() => null);
@@ -264,6 +265,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     await editSession(userOf(req), req.params.id, {
       label: b.label !== undefined ? String(b.label) : undefined,
       invites: b.invites,
+      private: b.private !== undefined ? !!b.private : undefined, // #1015 공개/비공개 토글(소유자만 — editSession 이 강제)
     });
     res.json({ ok: true });
   }));

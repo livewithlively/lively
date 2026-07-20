@@ -1,7 +1,7 @@
 // 단위 체크(node:assert) — '확인 필요'(waiting) pane 판정. 픽스처는 tmux capture-pane 실측(#853).
 // 실행: npm run build && node dist/terminal-sessions.test.js
 import assert from "node:assert/strict";
-import { detectAwaiting } from "./terminal-sessions.js";
+import { detectAwaiting, sessionVisibleTo, sessionAttachableBy, type SessionAcl } from "./terminal-sessions.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -94,6 +94,152 @@ t("Bash 승인 다이얼로그(Do you want to proceed?) → 대기", () => {
 
 t("빈 pane → 대기 아님", () => {
   assert.equal(detectAwaiting(""), false);
+});
+
+// ── #1015 세션 접근 모델(가시성·입장) — 사양 기반 블라인드 테스트(spec-blind-test) ──
+// ── Axis 1: sessionVisibleTo ──────────────────────────────────────────
+
+t("visible: owner sees their own private session", () => {
+  const s: SessionAcl = { owner: "alice", invites: [], private: true, projectFolder: false };
+  assert.equal(sessionVisibleTo("alice", s), true); // clause 1
+});
+
+t("visible: invited member sees a private session they're invited to", () => {
+  const s: SessionAcl = { owner: "alice", invites: ["bob"], private: true, projectFolder: false };
+  assert.equal(sessionVisibleTo("bob", s), true); // clause 2
+});
+
+t("visible: project-folder session is visible to an unrelated viewer", () => {
+  const s: SessionAcl = { owner: "alice", invites: [], private: false, projectFolder: true };
+  assert.equal(sessionVisibleTo("carol", s), true); // clause 3
+});
+
+t("visible: project-folder session visible to unrelated viewer even if marked private", () => {
+  const s: SessionAcl = { owner: "alice", invites: [], private: true, projectFolder: true };
+  assert.equal(sessionVisibleTo("carol", s), true); // clause 3 overrides 5
+});
+
+t("visible: public personal session is visible to a non-owner non-invited viewer", () => {
+  const s: SessionAcl = { owner: "alice", invites: [], private: false, projectFolder: false };
+  assert.equal(sessionVisibleTo("carol", s), true); // clause 4 (KEY: visible half)
+});
+
+t("visible: private personal session NOT visible to non-owner non-invited viewer", () => {
+  const s: SessionAcl = { owner: "alice", invites: [], private: true, projectFolder: false };
+  assert.equal(sessionVisibleTo("carol", s), false); // clause 5
+});
+
+t("visible: private session with an unrelated invitee stays hidden from someone else", () => {
+  const s: SessionAcl = { owner: "alice", invites: ["bob"], private: true, projectFolder: false };
+  assert.equal(sessionVisibleTo("carol", s), false); // clause 5 (carol not owner/invited)
+});
+
+t("visible: viewer=null sees a private non-project session", () => {
+  const s: SessionAcl = { owner: "alice", invites: [], private: true, projectFolder: false };
+  assert.equal(sessionVisibleTo(null, s), true); // clause 6
+});
+
+t("visible: viewer=null sees a public personal session", () => {
+  const s: SessionAcl = { owner: "alice", invites: [], private: false, projectFolder: false };
+  assert.equal(sessionVisibleTo(null, s), true); // clause 6
+});
+
+t("visible: viewer=null sees a project-folder session", () => {
+  const s: SessionAcl = { owner: "alice", invites: [], private: true, projectFolder: true };
+  assert.equal(sessionVisibleTo(null, s), true); // clause 6
+});
+
+// ── Axis 2: sessionAttachableBy ───────────────────────────────────────
+
+t("attach: owner can attach their own private session", () => {
+  const s: SessionAcl = { owner: "alice", invites: [], private: true, projectFolder: false };
+  assert.equal(sessionAttachableBy("alice", s), true); // clause 2 (owner)
+});
+
+t("attach: invited member can attach a private session they're invited to", () => {
+  const s: SessionAcl = { owner: "alice", invites: ["bob"], private: true, projectFolder: false };
+  assert.equal(sessionAttachableBy("bob", s), true); // clause 2 (invited)
+});
+
+t("attach: unrelated viewer can attach a project-folder session", () => {
+  const s: SessionAcl = { owner: "alice", invites: [], private: false, projectFolder: true };
+  assert.equal(sessionAttachableBy("carol", s), true); // clause 1
+});
+
+t("attach: unrelated viewer can attach a project-folder session even if marked private", () => {
+  const s: SessionAcl = { owner: "alice", invites: [], private: true, projectFolder: true };
+  assert.equal(sessionAttachableBy("carol", s), true); // clause 1 (public/private irrelevant to project folder)
+});
+
+t("attach: public personal session NOT attachable by non-owner non-invited viewer", () => {
+  const s: SessionAcl = { owner: "alice", invites: [], private: false, projectFolder: false };
+  assert.equal(sessionAttachableBy("carol", s), false); // clause 2 & 3 (KEY: attach half)
+});
+
+t("attach: private personal session NOT attachable by non-owner non-invited viewer", () => {
+  const s: SessionAcl = { owner: "alice", invites: [], private: true, projectFolder: false };
+  assert.equal(sessionAttachableBy("carol", s), false); // clause 2
+});
+
+t("attach: public flag does not grant attach to an unrelated viewer", () => {
+  const s: SessionAcl = { owner: "alice", invites: ["bob"], private: false, projectFolder: false };
+  assert.equal(sessionAttachableBy("carol", s), false); // clause 3
+});
+
+t("attach: viewer=null cannot attach a personal session", () => {
+  const s: SessionAcl = { owner: "alice", invites: [], private: false, projectFolder: false };
+  assert.equal(sessionAttachableBy(null, s), false); // clause 4
+});
+
+t("attach: viewer=null cannot attach a private personal session", () => {
+  const s: SessionAcl = { owner: "alice", invites: [], private: true, projectFolder: false };
+  assert.equal(sessionAttachableBy(null, s), false); // clause 4
+});
+
+t("attach: viewer=null can attach a project-folder session", () => {
+  const s: SessionAcl = { owner: "alice", invites: [], private: true, projectFolder: true };
+  assert.equal(sessionAttachableBy(null, s), true); // clause 4 exception (clause 1)
+});
+
+// ── Core edges: both axes together ────────────────────────────────────
+
+t("edge: public other's personal session — visible but NOT attachable (KEY)", () => {
+  const s: SessionAcl = { owner: "alice", invites: [], private: false, projectFolder: false };
+  assert.equal(sessionVisibleTo("carol", s), true);
+  assert.equal(sessionAttachableBy("carol", s), false);
+});
+
+t("edge: private other's personal session (no invite) — NOT visible and NOT attachable", () => {
+  const s: SessionAcl = { owner: "alice", invites: [], private: true, projectFolder: false };
+  assert.equal(sessionVisibleTo("carol", s), false);
+  assert.equal(sessionAttachableBy("carol", s), false);
+});
+
+t("edge: private other's session I'm invited to — visible and attachable", () => {
+  const s: SessionAcl = { owner: "alice", invites: ["bob"], private: true, projectFolder: false };
+  assert.equal(sessionVisibleTo("bob", s), true);
+  assert.equal(sessionAttachableBy("bob", s), true);
+});
+
+t("edge: my own private session — visible and attachable", () => {
+  const s: SessionAcl = { owner: "alice", invites: [], private: true, projectFolder: false };
+  assert.equal(sessionVisibleTo("alice", s), true);
+  assert.equal(sessionAttachableBy("alice", s), true);
+});
+
+t("edge: project-folder session (I'm not owner/invited) — visible and attachable", () => {
+  const s: SessionAcl = { owner: "alice", invites: [], private: false, projectFolder: true };
+  assert.equal(sessionVisibleTo("carol", s), true);
+  assert.equal(sessionAttachableBy("carol", s), true);
+});
+
+t("edge: viewer=null — all visible; personal not attachable, project folder attachable", () => {
+  const personal: SessionAcl = { owner: "alice", invites: [], private: true, projectFolder: false };
+  const folder: SessionAcl = { owner: "alice", invites: [], private: true, projectFolder: true };
+  assert.equal(sessionVisibleTo(null, personal), true);
+  assert.equal(sessionVisibleTo(null, folder), true);
+  assert.equal(sessionAttachableBy(null, personal), false);
+  assert.equal(sessionAttachableBy(null, folder), true);
 });
 
 console.log(`\n${pass} passed`);
