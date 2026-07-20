@@ -102,7 +102,7 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; }
   display: inline-flex; align-items: baseline; gap: 10px;
   font-size: 20px; font-weight: 800; color: var(--ink); letter-spacing: -0.4px;
 }
-/* 'for Honest AI' — 우아한 세리프 이탤릭 태그라인. 굵은 지오메트릭 산세(Lively)와 대비돼 '같은 글씨'가 아니고,
+/* 'for HonestAI' — 우아한 세리프 이탤릭 태그라인. 굵은 지오메트릭 산세(Lively)와 대비돼 '같은 글씨'가 아니고,
    손글씨 스크립트 같은 과함도 없다(#673 후속). Mac=Baskerville, 폴백 Hoefler/Garamond/serif. */
 /* 아주 약간만 더 볼드(#670): Baskerville 은 정적 폰트라 font-weight 500 이 400 으로 스냅되고 600 은 semibold 로 과함 →
    text-stroke 로 획만 미세하게 두껍게(자간·너비 불변, subtle). */
@@ -113,8 +113,8 @@ button, input, select, textarea { font-family: inherit; font-size: inherit; }
   box-shadow: 0 0 0 3px rgba(22, 199, 154, .16);
   animation: breathe 2.8s ease-in-out infinite;
 }
-/* Lively · (초록 점) · for Honest AI 사이 여백 정돈: gap 을 10px 로 키우고, 숨쉬는 후광의 peak 를 5px 로 줄여
-   pulse 가 커질 때 후광이 'Lively'·'for Honest AI' 글자에 부딪히지 않게(=여백이 부자연스럽던 원인 제거). */
+/* Lively · (초록 점) · for HonestAI 사이 여백 정돈: gap 을 10px 로 키우고, 숨쉬는 후광의 peak 를 5px 로 줄여
+   pulse 가 커질 때 후광이 'Lively'·'for HonestAI' 글자에 부딪히지 않게(=여백이 부자연스럽던 원인 제거). */
 @keyframes breathe {
   0%, 100% { box-shadow: 0 0 0 3px rgba(22, 199, 154, .18); }
   50%      { box-shadow: 0 0 0 5px rgba(22, 199, 154, .07); }
@@ -527,7 +527,7 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
   width: 100%; max-width: 380px; padding: 32px;
 }
 .gate-mark { font-size: 22px; margin-bottom: 14px; }
-/* #req 로그인 창에서만 'for Honest AI' 태그라인을 조금 키움(헤더는 그대로 15px). */
+/* #req 로그인 창에서만 'for HonestAI' 태그라인을 조금 키움(헤더는 그대로 15px). */
 .gate-mark .wordmark-sub { font-size: 17.5px; }
 .gate-copy { font-size: 14px; color: var(--ink-sub); margin: 0 0 18px; }
 #gate-form { display: flex; flex-direction: column; gap: 10px; }
@@ -5722,7 +5722,7 @@ main.doc-mode .kn-side-tools .kn-side-toolitem:hover { background: var(--bg-tint
   .user-email span { display: block; max-width: 86px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 @media (max-width: 560px) {
-  .wordmark-sub { display: none; }  /* 'for Honest AI' 태그라인 — 초소형 화면에서 로고만 */
+  .wordmark-sub { display: none; }  /* 'for HonestAI' 태그라인 — 초소형 화면에서 로고만 */
   .help-link, .logout-btn { padding: 0 10px; }
 }
 
