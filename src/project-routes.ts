@@ -249,6 +249,7 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
       flags: (b.flags && typeof b.flags === "object") ? b.flags as Record<string, unknown> : {},
       autoApprove: !!b.autoApprove,
       readOnly: !!b.readOnly, // #1007 — 이 프로젝트 세션만 읽기전용(컨텍스트 스토어 쓰기 소거).
+      incognito: !!b.incognito, // #1007+ — 이 프로젝트 세션만 인코그니토(lively 전체 차단 + 훅 off).
       // 프로젝트 공동 세션은 초대 목록을 쓰지 않는다 — 입장은 프로젝트 멤버십(아래 projectId)으로 게이트.
       // 세션에 프로젝트 id 를 박아 입장 게이트가 폴더가 아닌 멤버십(id)으로 판정하게 한다(폴더 드리프트 면역).
       projectId: project.id, projectSrc: prefix.includes("/v6/") ? "v6" : "org",

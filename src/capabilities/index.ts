@@ -76,9 +76,11 @@ const me: Capability = {
 
       teams: teams.map((t) => ({ id: t.id, key: t.key, name: t.name })),
       team_category_ids: cats.all, team_owner_category_ids: cats.owner,
-      // 읽기전용 세션(#1007) — 이 요청이 read-only 모드로 게이트되고 있는가(x-lively-readonly 헤더 파생, 어댑터가 ctx 에 주입).
-      //  웹/AI 가 '모드가 실제로 켜졌는지'를 확인하는 관측 지점(쓰기 툴 부재와 함께 이중 신호 — 오탐 방지).
+      // 실행 모드(#1007+) — 이 요청이 어느 모드로 게이트되는가(x-lively-readonly / x-lively-incognito 헤더 파생, 어댑터가 ctx 에 주입).
+      //  웹/AI 가 '모드가 실제로 켜졌는지' 확인하는 관측 지점. read_only 는 하위호환 유지.
+      mode: ctx?.incognito ? "incognito" : ctx?.readOnly ? "readonly" : "normal",
       read_only: ctx?.readOnly ?? false,
+      incognito: ctx?.incognito ?? false,
     };
   },
 };
@@ -184,7 +186,11 @@ export function registerMcpCapabilities(
   alwaysLoadOverrides?: ReadonlyMap<string, boolean>,
   harness?: string | null,
   readOnly?: boolean,
+  incognito?: boolean,
 ): void {
+  // 인코그니토 세션(#1007+): lively 툴을 **하나도** 등록하지 않는다 → tools/list 빈 표면 = 사실상 연결 없음(읽기·쓰기 모두 불가).
+  //  (물리적 연결 차단은 per-session 으로 안 되므로 서버측 전체차단으로 대신.) 무상태 /mcp 라 요청마다 헤더로 재계산 = per-session.
+  if (incognito) return;
   for (const cap of registry.values()) {
     if (!isToolExposed(cap, overrides)) continue;
     // 읽기전용 세션(#1007): 컨텍스트 스토어에 쓰는 툴은 아예 등록하지 않는다 → tools/list 에서 소거되어

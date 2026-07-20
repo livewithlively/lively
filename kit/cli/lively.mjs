@@ -608,7 +608,8 @@ function registerLivelyMcp(gw, tok) {
     run("claude", ["mcp", "add", "--transport", "http", "--scope", "user", "lively", `${gw}/mcp`,
       "--header", `Authorization: Bearer ${tok}`,
       "--header", "x-lively-session: ${LIVELY_SESSION_ID:-}",
-      "--header", "x-lively-readonly: ${LIVELY_READONLY:-}"], { quiet: true });
+      "--header", "x-lively-readonly: ${LIVELY_READONLY:-}",
+      "--header", "x-lively-incognito: ${LIVELY_INCOGNITO:-}"], { quiet: true });
     ok(`MCP 등록: lively → ${gw}/mcp`);
     return true;
   } catch (e) { fail(`MCP 등록 실패(lively): ${e.message}`); return false; }
@@ -1161,14 +1162,73 @@ async function cmdDoctor(opts) {
   else { say(yellow(`  ${bad.length}건 문제 — 위 '해결' 을 순서대로 실행하세요.`)); process.exitCode = 1; }
 }
 
-// 프로젝트를 내 PC 에서 연다 — 종전 `node ~/.lively/work.mjs <id> …` 의 이름 있는 표면.
-//  work.mjs 가 엔진(공유폴더 pull · 레포 clone/worktree · 하네스 실행) — CLI 는 인자를 **그대로** 넘긴다.
-function cmdRun(rest) {
-  const work = join(LIVELY, "work.mjs");
-  if (!existsSync(work)) die("work.mjs 가 없습니다 — `lively install` 로 키트를 설치하세요.");
-  if (!rest.length || !/^\d+$/.test(rest[0])) die("프로젝트 번호가 필요합니다.  예: lively run 864", 2);
-  const child = spawn(process.execPath, [work, ...rest], { stdio: "inherit" });
-  child.on("exit", (code, sig) => process.exit(sig ? 1 : (code ?? 0)));
+// ── 실행 모드(#1007+) — 이 세션이 라이블리와 얼마나 상호작용하나. CLI 가 모드 이름을 env 플래그로 번역한다. ──
+//  normal   : 주입 ○ / 쓰기 ○ (기본)
+//  readonly : 주입 ○ / 쓰기 ✗ (게이트웨이가 x-lively-readonly 헤더로 쓰기 툴 소거 · REST 403)
+//  incognito: 주입 ✗ / 읽기 ✗ / 쓰기 ✗ (게이트웨이가 x-lively-incognito 로 lively 툴 0개+전체 차단 = 사실상 연결없음) + 훅 off
+const MODES = ["normal", "readonly", "incognito"];
+const MODE_FILE = "mode";
+// 디폴트 모드(~/.lively/mode) — 유효하지 않거나 없으면 normal.
+function defaultMode() { const m = readLively(MODE_FILE); return MODES.includes(m) ? m : "normal"; }
+// rest 에서 모드 플래그(--mode M / --readonly / --incognito / --normal)를 뽑고 나머지를 돌려준다. 플래그 없으면 디폴트, 여러 개면 마지막이 이긴다.
+function extractMode(rest) {
+  let mode = null; const out = [];
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === "--mode") { const v = rest[++i]; if (!MODES.includes(v)) die(`--mode 는 ${MODES.join("|")} 중 하나여야 합니다.`, 2); mode = v; }
+    else if (a === "--readonly" || a === "--read-only") mode = "readonly";
+    else if (a === "--incognito") mode = "incognito";
+    else if (a === "--normal") mode = "normal";
+    else out.push(a);
+  }
+  return { mode: mode ?? defaultMode(), rest: out };
+}
+// 모드 → 세션 env(하네스가 상속 → MCP 헤더가 이 env 를 확장 → 게이트웨이 강제). incognito 는 훅도 끈다(주입·넛지 off).
+function modeEnv(mode) {
+  if (mode === "readonly") return { LIVELY_READONLY: "1" };
+  if (mode === "incognito") return { LIVELY_INCOGNITO: "1", LIVELY_OFF: "1" };
+  return {};
+}
+
+// `lively run [--mode M | --readonly | --incognito] [<프로젝트#> [work.mjs 인자…] | [--harness claude|codex] [하네스 인자…]]`
+//  · 프로젝트# 있으면 work.mjs(공유폴더 pull · 레포 clone/worktree · 하네스 실행) — 종전 표면.
+//  · 없으면 하네스를 **바로** 실행한다(프로젝트 없이 — 사용자 요청). 기본 claude, --harness 로 변경.
+//  두 경로 모두 모드 env 를 세팅 → 그 세션만 읽기전용/인코그니토가 헤더로 게이트웨이에 전달된다(per-session).
+function cmdRun(rest0) {
+  const { mode, rest } = extractMode(rest0);
+  const env = { ...process.env, ...modeEnv(mode) };
+  const badge = mode === "normal" ? "" : dim(` [${mode}]`);
+  const onExit = (child) => child.on("exit", (code, sig) => process.exit(sig ? 1 : (code ?? 0)));
+  // 프로젝트# → work.mjs (종전 동작 보존, 모드 env 만 추가)
+  if (rest.length && /^\d+$/.test(rest[0])) {
+    const work = join(LIVELY, "work.mjs");
+    if (!existsSync(work)) die("work.mjs 가 없습니다 — `lively install` 로 키트를 설치하세요.");
+    say(dim(`프로젝트 #${rest[0]} 열기`) + badge);
+    onExit(spawn(process.execPath, [work, ...rest], { stdio: "inherit", env }));
+    return;
+  }
+  // 프로젝트# 없음 → 하네스 직접 실행. --harness <name> 로 선택(기본 claude), 나머지는 하네스에 그대로 넘긴다.
+  let harness = "claude"; const args = [];
+  for (let i = 0; i < rest.length; i++) { if (rest[i] === "--harness") harness = rest[++i] || harness; else args.push(rest[i]); }
+  if (!has(harness)) die(`${harness} 이(가) 설치돼 있지 않습니다.`, 2);
+  say(dim(`${harness} 실행`) + badge);
+  onExit(spawn(harness, args, { stdio: "inherit", env, ...(WIN ? { shell: true } : {}) })); // WIN: .cmd 셰임이라 shell 필요(work.mjs:259 동형)
+}
+
+// `lively mode [normal|readonly|incognito]` — 디폴트 실행 모드 조회/설정(~/.lively/mode). lively run 이 --mode 없을 때 이걸 읽는다.
+function cmdMode(rest) {
+  const m = rest[0];
+  if (!m) {
+    const cur = defaultMode();
+    say(`디폴트 실행 모드: ${bold(cur)}`);
+    say(dim(`  변경: lively mode <${MODES.join("|")}>   ·   일회성: lively run --readonly  /  --incognito  /  --normal`));
+    return;
+  }
+  if (!MODES.includes(m)) die(`모드는 ${MODES.join("|")} 중 하나여야 합니다.`, 2);
+  mkdirSync(LIVELY, { recursive: true });
+  writeFileSync(join(LIVELY, MODE_FILE), m + "\n", { mode: 0o600 });
+  const hint = m === "incognito" ? "  (주입·읽기·쓰기 모두 off — 클린룸)" : m === "readonly" ? "  (읽기 O · 쓰기 X)" : "  (주입·읽기·쓰기 모두 on)";
+  say(green(`디폴트 실행 모드 → ${bold(m)}`) + dim(hint));
 }
 
 // `lively mcp-local` — 로컬 조작 stdio MCP 서버를 이 프로세스에서 실행(하네스가 매 세션 spawn, 사람이 직접 칠 일 없음).
@@ -1326,7 +1386,10 @@ ${bold("작업")}
   init                   지금 폴더를 프로젝트로 — 기본은 ${bold("제안만")}(무엇을 할지 알려주고 아무것도 안 바꿈)
       --create           새 프로젝트로 만들어 연결  ${dim('--name "<이름>"  --list <리스트id>')}
       --bind <id>        기존 프로젝트에 연결      ${dim("--path <폴더>  --json")}
-  run <프로젝트번호>      프로젝트를 내 PC 에서 열기  ${dim("예: lively run 864")}
+  run [<프로젝트번호>]    프로젝트 열기 / ${bold("인자 없으면 하네스 바로 실행")}  ${dim("예: lively run 864  ·  lively run --readonly")}
+      --readonly         이 세션만 읽기전용(라이블리 읽기 O · 쓰기 X) ${dim("· --incognito(주입·읽기·쓰기 all off) · --normal · --mode <m>")}
+      --harness <name>   무인자 실행 때 하네스 선택 ${dim("(기본 claude)")}
+  mode [<normal|readonly|incognito>]  디폴트 실행 모드 조회/설정 ${dim("(lively run 이 --mode 없을 때 읽음)")}
   resume <세션id>         다른 환경/멤버에서 만든 내 세션을 이 PC 로 이어받기 ${dim("--node <id>  --print(내려받기만)")}
   backfill                이 PC 의 기존 claude 대화 기록을 중앙에 소급 업로드(웹뷰에 과거 세션도) ${dim("--dry-run")}
   delegate "<작업>"       무거운 작업을 워커/중앙에 위탁 — 진행을 미러하며 결과 출력 후 종료 ${dim('예: lively delegate "테스트 실행" --ram 2048')}
@@ -1542,8 +1605,10 @@ async function main() {
     case "init": return cmdInit(argv.slice(argv.indexOf("init") + 1));
     case "status": return cmdStatus(o);
     case "doctor": return cmdDoctor(o);
-    // run 은 나머지 인자를 **그대로** work.mjs 로 넘긴다(--harness 등이 CLI 옵션과 겹쳐도 원형 보존).
+    // run 은 나머지 인자를 **그대로** 넘긴다(모드 플래그만 cmdRun 이 소비, 나머지는 work.mjs/하네스로 원형 보존).
     case "run": return cmdRun(argv.slice(argv.indexOf("run") + 1));
+    // mode — 디폴트 실행 모드(normal|readonly|incognito) 조회/설정(#1007+). lively run 이 이걸 읽는다.
+    case "mode": return cmdMode(argv.slice(argv.indexOf("mode") + 1));
     // delegate 도 나머지 인자 원형 보존(--ram 등 delegate 전용 옵션이 CLI 공통 파서에 안 먹히게).
     case "delegate": return cmdDelegate(argv.slice(argv.indexOf("delegate") + 1));
     // node — 이 PC 를 라이블리 노드로 연결(데몬 없이 foreground). 나머지 인자 원형 보존.
@@ -1574,3 +1639,4 @@ const DIRECT_RUN = (() => {
 if (DIRECT_RUN) main().catch((e) => die(e?.message || String(e)));
 
 export { parse, detectHarnesses, verifyBundle, normGw, gatherStatus, registerClaudeMcp, backupUserMcp, winArg, loginEscapeToken, REQUIRED_HOOKS, CLI_VERSION };
+export { MODES, extractMode, modeEnv, defaultMode }; // #1007+ 실행 모드(normal|readonly|incognito) — 테스트용

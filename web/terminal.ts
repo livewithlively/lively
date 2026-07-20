@@ -596,11 +596,14 @@ function openTermCreateForm(cfg, view, onCreated?) {
   autoCb.checked = prefs.autoApprove === true;
   const autoWrap = el('label', { class: 'term-auto' }, autoCb,
     el('span', { text: ' 자동 승인 — 확인 없이 바로 실행해 빨라요. 공유 폴더에선 꺼 두는 걸 권해요.' }));
-  // 읽기전용(#1007) — 이 세션은 라이블리에서 '읽기만' 하고 지식·프로젝트·작업 등 컨텍스트 스토어 쓰기는 안 한다(기밀·보안 작업용).
-  //  기본 꺼짐 + prefs 에 기억하지 않음(매번 명시 opt-in — 보안 모드라 의도적). claude-code 만 동작(codex 는 정적 헤더 → renderFlags 에서 숨김).
-  const roCb = el('input', { type: 'checkbox' });
-  const roWrap = el('label', { class: 'term-auto' }, roCb,
-    el('span', { text: ' 읽기전용 — 라이블리에서 읽기만 하고 지식·프로젝트·작업 등 쓰기는 안 합니다(기밀 작업용).' }));
+  // 라이블리 모드(#1007+) — 이 세션이 라이블리와 얼마나 상호작용하나. 기본 일반, prefs 에 기억하지 않음(매번 명시 — 보안 모드라 의도적).
+  //  claude-code 만 동작(codex 는 정적 헤더 → renderFlags 에서 숨김).
+  const modeSel = el('select', { class: 'term-input' },
+    el('option', { value: 'normal' }, '일반 — 라이블리 읽기·쓰기'),
+    el('option', { value: 'readonly' }, '읽기전용 — 읽되 쓰지 않음(기밀 작업)'),
+    el('option', { value: 'incognito' }, '인코그니토 — 라이블리 전혀 안 씀(클린룸)'));
+  const modeWrap = el('label', { class: 'term-auto' },
+    el('span', { text: ' 라이블리 모드 ' }), modeSel);
 
   // '실행 설정'(하네스·모델·effort) — 접이식 프리셋으로 묶어 세로를 아끼고, 이전 설정을 기억한다(#673). 기본 접힘.
   const presetSum = el('div', { class: 'term-preset-sum' });
@@ -640,7 +643,7 @@ function openTermCreateForm(cfg, view, onCreated?) {
       flagsBox.append(el('div', { class: 'field' }, el('label', { class: 'field-label', text: f.label }), ctrl, f.desc ? el('div', { class: 'caption', text: f.desc }) : null));
     }
     autoWrap.style.display = h.hasAutoApprove ? '' : 'none';
-    roWrap.style.display = h.key === 'claude' ? '' : 'none'; // 읽기전용은 claude-code 만 동작(codex 정적 헤더·shell 무 MCP) — 안 되는 하네스엔 안 보여 오해 방지(#1007)
+    modeWrap.style.display = h.key === 'claude' ? '' : 'none'; // 라이블리 모드는 claude-code 만 동작(codex 정적 헤더·shell 무 MCP) — 안 되는 하네스엔 안 보여 오해 방지(#1007+)
     presetSummary();
   }
   harnessSel.addEventListener('change', renderFlags);
@@ -697,7 +700,7 @@ function openTermCreateForm(cfg, view, onCreated?) {
     el('div', { 'data-tour': 'node' }, field('실행 위치', nodeSel)), // #869 중앙 컴퓨터/등록 노드 — 항상 노출: 투어 ③'실행 위치' 스텝의 대상(#req). 등록 노드가 없으면 '중앙 컴퓨터(기본)' 한 줄만 보인다(submit 값은 기존과 동일 '').
     // #853 작업 위치(공유/개인 토글) + 그 안의 폴더를 한 블록으로 — '이 폴더에서 AI를 실행한다'는 직관.
     el('div', { 'data-tour': 'folder' }, field('어디서 실행할까요', el('div', { class: 'term-loc' }, rootSeg, el('div', { class: 'term-loc-folder' }, pickerBox)))),
-    el('div', { class: 'term-checks', 'data-tour': 'options' }, autoWrap, roWrap),
+    el('div', { class: 'term-checks', 'data-tour': 'options' }, autoWrap, modeWrap),
     presetToggle, presetBody,
     el('div', { 'data-tour': 'invite' }, field('초대 (비우면 나만 보는 비공개 세션)', inviteBox.box)),
     el('div', { class: 'ov-actions' },
@@ -707,7 +710,8 @@ function openTermCreateForm(cfg, view, onCreated?) {
         const flags = {};
         for (const c of flagsBox.querySelectorAll('[data-flag]')) flags[c.dataset.flag] = (c.type === 'checkbox') ? c.checked : c.value;
         const nodeId = nodeSel.value || ''; // #869 노드면 원격 경로(remoteSubI), 아니면 로컬 폴더(pickerPath)
-        const payload = { label: labelI.value, rootKey, subpath: nodeId ? remoteSubI.value.trim() : pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, readOnly: roCb.checked, invites: inviteBox.selected(), node: nodeId || undefined };
+        const mode = modeSel.value; // #1007+ 라이블리 모드 → readOnly/incognito 불리언(서버 CreateInput)
+        const payload = { label: labelI.value, rootKey, subpath: nodeId ? remoteSubI.value.trim() : pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, readOnly: mode === 'readonly', incognito: mode === 'incognito', invites: inviteBox.selected(), node: nodeId || undefined };
         try {
           const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify(payload) });
           saveTermCreatePrefs({ harness: harnessSel.value, flags, autoApprove: autoCb.checked }); // 이 설정을 다음 생성 때 기본값으로 기억(#673, 자동 승인은 #782)

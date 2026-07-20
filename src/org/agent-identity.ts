@@ -108,3 +108,18 @@ export function readOnlyFromExtra(extra: unknown): boolean {
   const headers = (extra as { requestInfo?: { headers?: Headers } } | undefined)?.requestInfo?.headers;
   return readOnlyFromHeaders(headers);
 }
+
+// ── 인코그니토 세션(#1007+) — readOnly 와 같은 레일(x-lively-incognito 헤더, 같은 truthy 집합). ──
+//  incognito = readonly 보다 강함: 게이트웨이가 그 세션에 lively 툴을 0개 노출하고 모든 호출(읽기 포함)을 막는다 =
+//  **사실상 연결 없음**. 물리적 연결 차단은 per-session 으로 안 되므로(MCP 설정이 정적) 서버측 전체차단으로 대신한다.
+//  경로: `lively run --incognito`(또는 웹 모드 셀렉터) → pane env LIVELY_INCOGNITO=1 → 헤더 → 여기. incognito 는 LIVELY_OFF 도 켜 훅(주입·넛지)까지 끈다(클라이언트측).
+export function incognitoFromHeaders(headers: Headers): boolean {
+  const raw = headerValue(headers, "x-lively-incognito");
+  if (!raw) return false;
+  return READONLY_TRUTHY.has(String(raw).trim().toLowerCase());
+}
+
+export function incognitoFromExtra(extra: unknown): boolean {
+  const headers = (extra as { requestInfo?: { headers?: Headers } } | undefined)?.requestInfo?.headers;
+  return incognitoFromHeaders(headers);
+}

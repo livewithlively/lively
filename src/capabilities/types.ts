@@ -17,6 +17,7 @@ export interface CapabilityCtx {
   tokenHashPrefix?: string; // DB 토큰 해시 prefix(회수 대상 즉시 특정 — 비밀 아님)
   ip?: string;              // 요청 IP
   readOnly?: boolean;       // 읽기전용 세션(#1007) — 이 요청이 read-only 모드인가(x-lively-readonly 헤더 파생). 강제는 어댑터가 하고, 여기선 관측용(me 가 반환).
+  incognito?: boolean;      // 인코그니토 세션(#1007+) — 이 요청이 incognito 모드인가(x-lively-incognito 헤더 파생). incognito = lively 툴 0개+전체 차단(읽기·쓰기 모두). 관측용.
 }
 
 // REST 마운트 1개 — paths 배열로 기존 alias(propose/confirm 이중 경로 등)를 표현.

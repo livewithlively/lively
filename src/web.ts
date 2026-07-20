@@ -16,7 +16,7 @@ import { restMounts, isReadOnlyBlocked } from "./capabilities/index.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { DANGEROUS_SCOPES, type Scope } from "./capabilities/scopes.js";
 import { sessionOrBearer } from "./auth/http-auth.js";
-import { sessionFromHeaders, readOnlyFromHeaders } from "./org/agent-identity.js"; // #852 세션 · #1007 읽기전용(x-lively-readonly)
+import { sessionFromHeaders, readOnlyFromHeaders, incognitoFromHeaders } from "./org/agent-identity.js"; // #852 세션 · #1007 읽기전용/인코그니토
 import {
   parseSessionCookie, createSession, revokeSession, sessionCookie, clearSessionCookie,
 } from "./auth/sessions.js";
@@ -120,10 +120,15 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
 
   for (const { cap, mount } of restMounts()) {
     const handler = wrap(async (req, res) => {
-      // 읽기전용 세션(#1007) — 컨텍스트 스토어에 쓰는 REST 는 파싱 전에 403. MCP 는 tools/list 에서 이미 소거되지만,
-      //  헤더가 실린 REST(스크립트·웹)도 **같은 판정(isReadOnlyBlocked)**으로 강제해 표면 간 정책 불일치를 없앤다.
-      //  ⚠ 헤더 미실린 raw curl 은 못 막는다(그건 토큰 scope 영역) — AI 정상 경로는 MCP 소거 + 이 게이트로 커버.
+      // 모드 게이트(#1007) — 파싱/핸들러 전에 헤더로 판정. MCP 는 tools/list 에서 이미 소거되지만, 헤더 실린 REST(스크립트·웹)도
+      //  같은 정책으로 강제해 표면 간 불일치를 없앤다. ⚠ 헤더 미실린 raw curl 은 못 막는다(토큰 scope 영역).
       const readOnly = readOnlyFromHeaders(req.headers);
+      const incognito = incognitoFromHeaders(req.headers);
+      // 인코그니토(#1007+): me(모드 확인용, scope 없음) 빼고 **모든** lively REST 를 403(읽기 포함) = 사실상 연결없음.
+      if (incognito && cap.name !== "me") {
+        throw new HttpError(403, "인코그니토 세션 — 라이블리 접근이 비활성화되어 있습니다(#1007). 이 세션의 LIVELY_INCOGNITO 를 끄고 다시 시도하세요.");
+      }
+      // 읽기전용: 컨텍스트 스토어에 쓰는 REST 만 403(isReadOnlyBlocked 는 MCP 스킵과 동일 판정).
       if (readOnly && isReadOnlyBlocked(cap)) {
         throw new HttpError(403, "읽기전용 세션 — 컨텍스트 스토어 쓰기가 비활성화되어 있습니다(#1007). 이 세션의 LIVELY_READONLY 를 끄고 다시 시도하세요.");
       }
@@ -149,6 +154,7 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
         tokenHashPrefix: user.tokenHashPrefix,
         ip: req.ip,
         readOnly, // #1007 — me 가 반환(모드 관측). 강제는 위 게이트가 이미 수행.
+        incognito, // #1007+ — me 가 mode 반환
       }));
     });
     for (const path of mount.paths) {

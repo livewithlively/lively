@@ -2,7 +2,7 @@
 // 프레임워크 없음: 컴파일된 스크립트로 실행, assert throw = 실패.
 import assert from "node:assert/strict";
 import { registry, capMutates, isReadOnlyBlocked, READONLY_KEEP, registerMcpCapabilities } from "./index.js";
-import { readOnlyFromHeaders } from "../org/agent-identity.js";
+import { readOnlyFromHeaders, incognitoFromHeaders } from "../org/agent-identity.js";
 import type { Capability } from "./types.js";
 
 let pass = 0;
@@ -181,9 +181,9 @@ t("불변식: REST 마운트 없는 MCP전용 capability 는 전부 읽기(안 �
 });
 
 // ── §MCP 표면 강제: registerMcpCapabilities ───────────────────────────────
-const registeredNames = (readOnly: boolean): string[] => {
+const registeredNames = (readOnly: boolean, incognito = false): string[] => {
   const names: string[] = [];
-  registerMcpCapabilities({ registerTool: (n: string) => names.push(n) } as never, undefined, undefined, null, readOnly);
+  registerMcpCapabilities({ registerTool: (n: string) => names.push(n) } as never, undefined, undefined, null, readOnly, incognito);
   return names;
 };
 
@@ -206,6 +206,31 @@ t("registerMcpCapabilities: readOnly=true 는 읽기 + 코드실행 툴을 유�
 
 t("registerMcpCapabilities: readOnly=true 등록 수 < readOnly=false (실제로 소거됨)", () => {
   assert.ok(registeredNames(true).length < registeredNames(false).length, "read-only must erase something");
+});
+
+// ── §인코그니토(#1007+) — incognitoFromHeaders 파싱 + MCP 전체 차단(빈 표면) ──
+t("incognitoFromHeaders: truthy 값만 true(readOnly 와 같은 집합)", () => {
+  for (const v of ["1", "true", "on", "yes", "TRUE"]) assert.equal(incognitoFromHeaders({ "x-lively-incognito": v }), true, `'${v}'`);
+});
+t("incognitoFromHeaders: 미설정·거짓·미확장 리터럴은 false(opt-in fail-safe)", () => {
+  assert.equal(incognitoFromHeaders(undefined), false);
+  for (const v of ["", "0", "false", "${LIVELY_INCOGNITO:-}"]) assert.equal(incognitoFromHeaders({ "x-lively-incognito": v }), false, `'${v}'`);
+});
+t("incognito·readOnly 헤더는 독립(서로 안 섞임)", () => {
+  assert.equal(incognitoFromHeaders({ "x-lively-readonly": "1" }), false);
+  assert.equal(readOnlyFromHeaders({ "x-lively-incognito": "1" }), false);
+});
+t("registerMcpCapabilities: incognito=true 는 lively 툴을 하나도 등록 안 함(빈 표면 = 사실상 연결없음)", () => {
+  assert.equal(registeredNames(false, true).length, 0, "incognito must register nothing");
+});
+t("registerMcpCapabilities: incognito 는 readOnly 를 무시하고 전부 소거(더 강한 격리)", () => {
+  assert.equal(registeredNames(true, true).length, 0);
+});
+t("registerMcpCapabilities: 읽기·코드실행 툴도 incognito 에선 소거(readonly 와 대비)", () => {
+  const names = registeredNames(false, true);
+  for (const r of ["knowledge_get", "knowledge_grep", "context_overview", "broker_run", "delegate_run"]) {
+    assert.ok(!names.includes(r), `incognito should erase ${r}`);
+  }
 });
 
 console.log(`\nreadonly tests: ${pass} passed`);

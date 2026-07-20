@@ -7,7 +7,7 @@ import { initItemSchema, itemsPool } from "./items/store.js";
 import { initOrgSchema } from "./org/schema.js";
 import { reapDeviceAuth } from "./org/device-auth.js";
 import { listBuiltinOverrides, listBuiltinAlwaysLoad } from "./org/store.js";
-import { agentFromHeaders, readOnlyFromHeaders } from "./org/agent-identity.js";
+import { agentFromHeaders, readOnlyFromHeaders, incognitoFromHeaders } from "./org/agent-identity.js";
 import { buildToolCandidates } from "./capabilities/index.js";
 import { setToolCandidates } from "./capabilities/mcp-surface.js";
 import { registerDynamicTools } from "./capabilities/dynamic-tools.js";
@@ -117,10 +117,16 @@ async function buildRegisteredServer(req: express.Request): Promise<McpServer> {
   // 읽기전용 세션(#1007) — 접속 헤더(x-lively-readonly)에서 파생. 무상태 /mcp 라 요청마다 재계산 = per-session(동시 세션 중 이 헤더가 실린 세션만 읽기전용).
   //  ⚠ 향후 하드닝: 읽기전용 토큰 scope 를 열려면 여기 `|| tokenReadOnly(req.auth?.extra)` 를 OR 로 더하면 된다(어느 전송으로도 못 씀).
   const readOnly = readOnlyFromHeaders(req.headers);
-  if (readOnly) logger.info({ harness }, "읽기전용 세션 — 컨텍스트 스토어 쓰기 툴 소거(#1007)");
-  const server = buildServer(overrides, alwaysLoad, harness, readOnly);
-  try { await registerDynamicTools(server); } catch (err) { logger.warn({ err }, "동적 툴 등록 실패(무시)"); }
-  try { await registerProxiedMcpTools(server); } catch (err) { logger.warn({ err }, "프록시 MCP 등록 실패(무시)"); }
+  // 인코그니토(#1007+) — lively 전체 차단(툴 0개). readonly 보다 우선(둘 다면 incognito 가 이긴다 = 더 강한 격리).
+  const incognito = incognitoFromHeaders(req.headers);
+  if (incognito) logger.info({ harness }, "인코그니토 세션 — lively 툴 전부 소거(빈 표면, 읽기·쓰기 차단)(#1007+)");
+  else if (readOnly) logger.info({ harness }, "읽기전용 세션 — 컨텍스트 스토어 쓰기 툴 소거(#1007)");
+  const server = buildServer(overrides, alwaysLoad, harness, readOnly, incognito);
+  // 인코그니토면 외부 프록시·동적 툴도 노출하지 않는다(ext__*·http_proxy 도 lively 게이트웨이 표면 — 클린룸이면 전부 차단).
+  if (!incognito) {
+    try { await registerDynamicTools(server); } catch (err) { logger.warn({ err }, "동적 툴 등록 실패(무시)"); }
+    try { await registerProxiedMcpTools(server); } catch (err) { logger.warn({ err }, "프록시 MCP 등록 실패(무시)"); }
+  }
   return server;
 }
 
