@@ -198,6 +198,13 @@ try {
         && regSh.includes("x-lively-readonly: ${LIVELY_READONLY:-}")
         && regSh.includes("x-lively-incognito: ${LIVELY_INCOGNITO:-}"),
       "register-clients.sh 에 4헤더(Authorization+session+readonly+incognito) 중 일부 누락 — CLI 와 drift");
+    // (c) self-update.mjs(자동 업데이터 헤더 additive reconcile, #1007+) 도 같은 모드 헤더를 알아야 기존 멤버가 재등록 없이 받는다 — 4번째 동기화 지점 drift 가드.
+    const selfUp = readFileSync(join(REPO, "kit", "hooks", "self-update.mjs"), "utf8");
+    check("④ self-update.mjs 가 같은 모드 헤더로 additive reconcile(register-clients·CLI 와 parity)",
+      selfUp.includes('"x-lively-session": "${LIVELY_SESSION_ID:-}"')
+        && selfUp.includes('"x-lively-readonly": "${LIVELY_READONLY:-}"')
+        && selfUp.includes('"x-lively-incognito": "${LIVELY_INCOGNITO:-}"'),
+      "self-update.mjs 에 모드 헤더 중 일부 누락 — 기존 멤버가 재등록 없이 못 받음(drift)");
     check("④ remove → add 순서(재실행 안전)",
       H.argv().indexOf("mcp remove lively") < H.argv().findIndex((l) => l.startsWith("mcp add")),
       JSON.stringify(H.argv()));
