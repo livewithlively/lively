@@ -160,7 +160,7 @@ function saveTsessOwnFilter(v) { try {
     localStorage.setItem(TSESS_OWN_KEY, v);
 }
 catch { /* noop */ } }
-// #1015 C — 검색형 프로젝트 필터. 값: 0=전체 · -1=개인 세션만 · -2=프로젝트 세션만 · >0=projectId. onPick 이 draw() 재실행.
+// #1015 C — 검색형 프로젝트 필터(드롭다운 버튼 + 타이핑 검색). 값: 0=전체 · -1=개인 세션만 · -2=프로젝트 세션만 · >0=projectId.
 function buildSessProjFilter(projName, projIds, current, onPick) {
     const opts = [
         { v: 0, label: '프로젝트 전체' },
@@ -170,20 +170,36 @@ function buildSessProjFilter(projName, projIds, current, onPick) {
     ];
     const cur = opts.find((o) => o.v === current) || opts[0];
     const wrap = el('div', { class: 'tsess-projfilter' });
-    const input = el('input', { type: 'search', class: 'tsess-projfilter-in', value: cur.label, title: '프로젝트로 필터 — 눌러서 검색' });
+    // 버튼 — 현재 선택 표시(전체면 '프로젝트'). 활성(전체 아님)이면 강조.
+    const btn = el('button', { type: 'button', class: 'tsess-projfilter-btn' + (current !== 0 ? ' active' : ''), title: '프로젝트로 필터' }, el('span', { text: current === 0 ? '프로젝트' : cur.label }), el('span', { class: 'tsess-projfilter-chev', text: '▾' }));
     const dd = el('div', { class: 'tsess-projfilter-dd', hidden: true });
+    const search = el('input', { type: 'search', class: 'tsess-projfilter-search', placeholder: '프로젝트 검색…' });
+    const listBox = el('div', { class: 'tsess-projfilter-list' });
     const renderList = (q) => {
         const ql = (q || '').trim().toLowerCase();
         const matches = opts.filter((o) => !ql || o.label.toLowerCase().includes(ql));
-        dd.replaceChildren(...(matches.length ? matches : [{ v: current, label: '(일치하는 프로젝트 없음)' }]).map((o) => el('button', { class: 'tsess-projfilter-opt' + (o.v === current ? ' active' : ''), type: 'button',
-            // mousedown+preventDefault: input blur 로 드롭다운이 닫히기 전에 선택이 먼저 걸리게.
-            onmousedown: (e) => { e.preventDefault(); dd.hidden = true; if (o.v !== current)
+        listBox.replaceChildren(...(matches.length ? matches : [{ v: current, label: '(일치 없음)' }]).map((o) => el('button', { class: 'tsess-projfilter-opt' + (o.v === current ? ' active' : ''), type: 'button',
+            onmousedown: (e) => { e.preventDefault(); close(); if (o.v !== current)
                 onPick(o.v); } }, o.label)));
     };
-    input.addEventListener('focus', () => { input.value = ''; dd.hidden = false; renderList(''); });
-    input.addEventListener('input', () => renderList(input.value));
-    input.addEventListener('blur', () => { dd.hidden = true; input.value = cur.label; }); // 선택 없이 나가면 라벨 원복
-    wrap.append(input, dd);
+    let docHandler = null;
+    const close = () => { dd.hidden = true; if (docHandler) {
+        document.removeEventListener('mousedown', docHandler);
+        docHandler = null;
+    } };
+    const open = () => {
+        dd.hidden = false;
+        search.value = '';
+        renderList('');
+        search.focus();
+        docHandler = (e) => { if (!wrap.contains(e.target))
+            close(); };
+        document.addEventListener('mousedown', docHandler);
+    };
+    btn.addEventListener('click', () => (dd.hidden ? open() : close()));
+    search.addEventListener('input', () => renderList(search.value));
+    dd.append(search, listBox);
+    wrap.append(btn, dd);
     return wrap;
 }
 async function renderTerminal(view) {
@@ -280,27 +296,28 @@ async function renderTerminal(view) {
         const allChip = el('button', { class: 'tsess-chip-btn' + (statusOn.size === 0 ? ' active' : ''), type: 'button', title: '모든 상태',
             onclick: () => { statusOn.clear(); saveTsessStatusSet(statusOn); draw(); } }, el('span', { class: 'tsess-chip-label', text: '전체' }), el('span', { class: 'tsess-chip-n', text: String(sessions.length) }));
         const chips = el('div', { class: 'tsess-chips' }, allChip, stChip('waiting', '확인 필요', 'waiting'), stChip('busy', '작업 중', 'busy'), stChip('idle', '대기', 'idle'), stChip('offline', '오프라인', 'offline'));
+        // 우측 — 질문검색 + 프로젝트 필터(프로젝트 세션이 있을 때만) + 선택. (원래 한 줄 레이아웃 유지)
         const right = el('div', { class: 'tsess-controls-right' });
         right.append(el('button', { class: 'btn btn-ghost btn-sm tsess-gbtn', text: '질문 검색', title: '여러 세션에서 내가 클로드에게 보낸 질문을 통합 검색하고 어느 세션인지 찾기', onclick: () => openGlobalPromptSearch(ctx) }));
+        const projIds = [...new Set(sessions.map((s) => Number(s.projectId) || 0).filter(Boolean))];
+        if (projIds.length)
+            right.append(buildSessProjFilter(projName, projIds, projF, (v) => { projF = v; draw(); }));
         const selToggle = sel.mode
             ? el('button', { class: 'btn btn-ghost btn-sm', text: '취소', onclick: () => { sel.mode = false; sel.ids.clear(); draw(); } })
             : (sessions.length ? el('button', { class: 'btn btn-ghost btn-sm', text: '선택', title: '여러 세션을 골라 한 탭 그리드로 열거나 한 번에 삭제', onclick: () => { sel.mode = true; draw(); } }) : null);
         if (selToggle)
             right.append(selToggle);
-        // ── 2행: 소유 필터(내 세션 / 초대받은 세션) + 프로젝트 필터(검색형) ── #1015 D
+        // ── 소유 필터(내 세션 / 초대받은 세션) — #1015 D. 초대받은 세션이 있을 때만 별도 줄로 노출(전부 내 것이면 무의미하므로 숨김). ──
         const mineCount = sessions.filter((s) => s.owned).length;
         const invitedCount = sessions.length - mineCount;
-        if (ownF === 'invited' && !invitedCount)
-            ownF = 'all'; // 초대 세션 0개면 저장된 '초대받은' 필터에 갇히지 않게(칩이 숨겨지므로)
-        const ownChip = (key, label, cnt) => tsessChip(label, cnt, '', ownF === key, () => { ownF = ownF === key ? 'all' : key; saveTsessOwnFilter(ownF); draw(); });
-        const filterRow = el('div', { class: 'tsess-filter-row' });
-        filterRow.append(el('span', { class: 'tsess-filter-lbl', text: '소유' }), ownChip('mine', '내 세션', mineCount));
-        if (invitedCount)
-            filterRow.append(ownChip('invited', '초대받은 세션', invitedCount));
-        const projIds = [...new Set(sessions.map((s) => Number(s.projectId) || 0).filter(Boolean))];
-        if (projIds.length)
-            filterRow.append(el('span', { class: 'tsess-filter-lbl', text: '프로젝트' }), buildSessProjFilter(projName, projIds, projF, (v) => { projF = v; draw(); }));
-        controls.replaceChildren(el('div', { class: 'tsess-controls-top' }, chips, right), filterRow);
+        if (ownF !== 'all' && !invitedCount)
+            ownF = 'all'; // 초대 세션 0개면 소유 필터 무효(줄이 숨겨지므로 갇히지 않게)
+        const rows = [el('div', { class: 'tsess-controls-top' }, chips, right)];
+        if (invitedCount) {
+            const ownChip = (key, label, cnt) => tsessChip(label, cnt, '', ownF === key, () => { ownF = ownF === key ? 'all' : key; saveTsessOwnFilter(ownF); draw(); });
+            rows.push(el('div', { class: 'tsess-filter-row' }, el('span', { class: 'tsess-filter-lbl', text: '소유' }), ownChip('mine', '내 세션', mineCount), ownChip('invited', '초대받은 세션', invitedCount)));
+        }
+        controls.replaceChildren(...rows);
         // 필터 적용(상태 다중 · 소유 · 프로젝트) + 정렬(작업중→대기→오프라인, 그 안에서 최근 활동순).
         const shown = sessions
             .filter((s) => statusOn.size === 0 || statusOn.has(s._st))
