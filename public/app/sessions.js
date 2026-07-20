@@ -266,13 +266,13 @@ function turnEl(t, idx, sid, node) {
     const box = el('div', { class: 'sess-turn', id: 'turn-' + idx, style: 'margin:8px 0 14px' });
     if (t.user)
         box.append(userBubble(t.user.text, idx, sid, node));
-    let aiIdx = 0;
-    for (const it of t.ai)
-        if (it.role === 'assistant' && it.text)
-            box.append(aiBubble(it.text, idx, aiIdx++, sid, node));
+    // 이 턴의 AI 답변 '전체'(다음 질문 전까지의 모든 어시스턴트 텍스트)를 하나의 10줄 캡으로 묶는다.
+    const aiTexts = t.ai.filter((x) => x.role === 'assistant' && !!x.text);
+    if (aiTexts.length)
+        box.append(aiTurnBubble(aiTexts, idx, sid, node));
     const tools = t.ai.filter((i) => i.role === 'tool');
     if (tools.length)
-        box.append(toolsChip(tools));
+        box.append(toolsChip(tools)); // 툴콜은 캡 밖(항상 접힌 칩으로 접근 가능)
     return box;
 }
 // 한 줄/블록을 앵커(id)+호버 링크복사(🔗)로 감싼다 — 질문/답변의 특정 지점으로 링크 전달.
@@ -288,15 +288,18 @@ function userBubble(text, turnIdx, sid, node) {
     lines.forEach((ln, li) => body.append(lineWrap(el('span', { style: 'white-space:pre-wrap', text: ln || ' ' }), `${turnIdx}-q-${li}`, sid, node)));
     return el('div', { class: 'sess-bubble sess-user' }, body);
 }
-// AI 답변 — 마크다운 렌더(**/목록/코드/표 등, textContent 기반 안전). 블록 단위 앵커. 10줄 넘으면 접힘.
-function aiBubble(text, turnIdx, aiIdx, sid, node) {
+// AI 답변(턴 전체) — 이 턴의 모든 어시스턴트 텍스트를 **하나의** 10줄 캡 컨테이너에 담는다(질문 사이의 답변 통짜 캡).
+//  마크다운 렌더(**/목록/코드/표, textContent 기반 안전) + 블록 단위 앵커. 여러 답변 블록은 세로로 이어 붙인다.
+function aiTurnBubble(aiTexts, turnIdx, sid, node) {
     const body = el('div', { class: 'sess-body clamp', style: 'font-size:13.5px' });
-    const md = renderMarkdown(text); // <div class=md> — 안전 렌더(core)
-    const blocks = Array.from(md.children); // 블록 요소만(스냅샷 — append 가 원소를 옮기므로)
-    if (!blocks.length)
-        body.append(lineWrap(el('span', { style: 'white-space:pre-wrap', text }), `${turnIdx}-a${aiIdx}-0`, sid, node));
-    else
-        blocks.forEach((b, bi) => body.append(lineWrap(b, `${turnIdx}-a${aiIdx}-${bi}`, sid, node)));
+    aiTexts.forEach((it, aiIdx) => {
+        const md = renderMarkdown(it.text); // <div class=md> — 안전 렌더(core)
+        const blocks = Array.from(md.children); // 블록 요소만(스냅샷 — append 가 원소를 옮기므로)
+        if (!blocks.length)
+            body.append(lineWrap(el('span', { style: 'white-space:pre-wrap', text: it.text }), `${turnIdx}-a${aiIdx}-0`, sid, node));
+        else
+            blocks.forEach((b, bi) => body.append(lineWrap(b, `${turnIdx}-a${aiIdx}-${bi}`, sid, node)));
+    });
     return el('div', { class: 'sess-bubble sess-ai' }, body);
 }
 // 마운트 후 실제 높이로 캡 확정 — 안 넘치면 clamp 해제(버튼 없음), 넘치면 [더보기]/[접기]. (CSS 로 처음부터 접혀 플리커 없음)

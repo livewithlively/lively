@@ -814,8 +814,8 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .sess-bubble { border-radius: 6px; padding: 8px 12px; margin: 8px 0; }
 .sess-user { background: rgba(37,99,235,.10); border-left: 3px solid #2563eb; }
 .sess-ai { color: var(--fg, #333); margin-left: 8px; }
-.sess-body { line-height: 1; }
-.sess-body.clamp { max-height: 10em; overflow: hidden; -webkit-mask-image: linear-gradient(180deg, #000 78%, transparent); mask-image: linear-gradient(180deg, #000 78%, transparent); }
+.sess-body { line-height: 1.2; }   /* 한 섹션(문단) 안의 줄 간격 */
+.sess-body.clamp { max-height: 12em; overflow: hidden; -webkit-mask-image: linear-gradient(180deg, #000 80%, transparent); mask-image: linear-gradient(180deg, #000 80%, transparent); }
 /* AI 답변 마크다운 — 대화록 안에선 문단·목록 간격을 촘촘하게(기본 .md-p 12px 는 채팅엔 너무 넓다). */
 .sess-body .md-p, .sess-body .md-list, .sess-body .md-quote, .sess-body .md-table, .sess-body .md-pre { margin: 0 0 5px; }
 .sess-body .sess-line:last-child .md-p:last-child { margin-bottom: 0; }
