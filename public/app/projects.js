@@ -1186,7 +1186,9 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
             // (#670) '여기로 끌어 폴더 밖으로 빼기' 드롭존 박스 제거 — 폴더 안 리스트를 왼쪽으로 끌면 인라인 아웃덴트(pjvSideNavDrop onOutdent)로 폴더 밖.
             //  빈 곳 드롭 → 최상위 는 treeWrap 의 dragover/drop 이 폴백으로 계속 처리.
             // 휴지통 — 상단 헤더 줄에서 내려 사이드바 폴더형 항목으로(#670). 새 폴더/새 리스트 버튼 '위'에 배치.
-            treeWrap.append(el('a', { class: 'pjv-side-navitem pjv-side-navfolder pjv-side-trash', href: '#/trash', title: '삭제한 프로젝트·지식·카테고리 복원 (휴지통)' }, el('span', { class: 'pjv-side-navtrash-ico', 'aria-hidden': 'true', text: '🗑' }), el('span', { class: 'pjv-side-navlabel', text: '휴지통' })));
+            const trashItem = el('a', { class: 'pjv-side-navitem pjv-side-navfolder pjv-side-trash', href: '#/trash', title: '삭제한 프로젝트·지식·카테고리 복원 (휴지통) — 리스트·폴더·프로젝트를 여기로 끌어 삭제할 수 있어요' }, el('span', { class: 'pjv-side-navtrash-ico', 'aria-hidden': 'true', text: '🗑' }), el('span', { class: 'pjv-side-navlabel', text: '휴지통' }));
+            pjvTrashDropTarget(trashItem, lists, folderList, reload); // #1020 리스트·폴더·프로젝트를 끌어와 놓으면 삭제
+            treeWrap.append(trashItem);
             // 새 스페이스 / 새 폴더 / 새 리스트 (#766 — 네이티브 스페이스 생성)
             treeWrap.append(el('div', { class: 'pjv-side-newrow' }, el('button', { class: 'pjv-side-newlist', type: 'button', title: '새 스페이스 (최상위 구획)', onclick: (e) => { e.stopPropagation(); openFolderForm(reload, undefined, { kind: 'space' }); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 스페이스' })), el('button', { class: 'pjv-side-newlist', type: 'button', title: '새 폴더', onclick: (e) => { e.stopPropagation(); openFolderForm(reload); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 폴더' })), el('button', { class: 'pjv-side-newlist', type: 'button', title: '새 리스트', onclick: (e) => { e.stopPropagation(); openListForm(reload); } }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { text: '새 리스트' }))));
         };
@@ -1588,6 +1590,60 @@ function pjvFolderDropTarget(elm, targetListId, reload) {
             .then(() => { toast(targetListId == null ? '미분류로 옮겼습니다' : '리스트로 옮겼습니다'); if (reload)
             reload(); })
             .catch((e) => toast('이동 실패 — ' + e.message, true));
+    });
+}
+// 휴지통 드롭 타깃(#1020) — 사이드바에서 끌던 리스트·폴더·프로젝트를 이 항목 위에 놓으면 삭제(휴지통 이동)한다.
+//  드래그 종류가 둘로 갈린다: 리스트/폴더는 pjvSideDrag(kind), 프로젝트는 pjvFolderDrag(id). 어느 쪽이든 반응.
+//  삭제는 각자의 기존 확인 절차를 그대로 거친다 — 리스트=cascade 모달(pjvDeleteList), 폴더=confirm(pjvDeleteFolder),
+//  프로젝트=confirm(pjvProjDelete). 실수 드롭도 확인에서 막힌다. 놓을 수 있을 때만 빨강(파괴적) 하이라이트.
+//  드롭 처리는 setTimeout 로 미뤄 dragend 가 먼저 드래그 스타일을 정리하게 한다(모달·confirm 뒤 잔상 방지).
+function pjvTrashDropTarget(elm, lists, folderList, reload) {
+    const canDrop = () => pjvFolderDrag.id != null || pjvSideDrag.kind === 'list' || pjvSideDrag.kind === 'folder';
+    const over = (ev) => {
+        if (!canDrop())
+            return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        try {
+            ev.dataTransfer.dropEffect = 'move';
+        }
+        catch (_) { /* */ }
+        elm.classList.add('pjv-side-trash-over');
+    };
+    elm.addEventListener('dragover', over);
+    elm.addEventListener('dragenter', over);
+    elm.addEventListener('dragleave', (ev) => { if (!elm.contains(ev.relatedTarget))
+        elm.classList.remove('pjv-side-trash-over'); });
+    elm.addEventListener('drop', (ev) => {
+        elm.classList.remove('pjv-side-trash-over');
+        if (!canDrop())
+            return;
+        ev.preventDefault();
+        ev.stopPropagation(); // 링크(#/trash) 이동·treeWrap 최상위 이동 폴백을 막는다
+        // 프로젝트 드롭 — pjvFolderDrag 에서 id·name 을 꺼내 확인 후 삭제.
+        if (pjvFolderDrag.id != null) {
+            const proj = { id: pjvFolderDrag.id, name: pjvFolderDrag.name };
+            pjvFolderDrag.id = null;
+            pjvFolderDrag.name = null;
+            setTimeout(() => pjvProjDelete(proj, reload), 0);
+            return;
+        }
+        // 리스트/폴더 드롭 — pjvSideDrag 에서 대상 id 를 꺼내 원본 객체를 찾아(카운트·이름 필요) 확인 후 삭제.
+        const kind = pjvSideDrag.kind;
+        const id = pjvSideDrag.id;
+        pjvSideDrag.kind = null;
+        pjvSideDrag.id = null;
+        pjvSideDrag.folderId = null;
+        if (kind === 'list') {
+            const l = (lists || []).find((x) => String(x.id) === String(id));
+            if (l)
+                setTimeout(() => pjvDeleteList(l, reload), 0);
+        }
+        else if (kind === 'folder') {
+            const f = (folderList || []).find((x) => String(x.id) === String(id));
+            if (f)
+                setTimeout(() => pjvDeleteFolder(f, reload), 0);
+        }
     });
 }
 // ── 사이드바 파일탐색기 DnD(#473 후속) — 리스트(=파일)를 폴더로 넣기/빼기, 폴더 순서 재정렬. ──
@@ -4205,6 +4261,7 @@ function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
                 return;
             }
             pjvFolderDrag.id = p.id;
+            pjvFolderDrag.name = p.name; // #1020 이름은 휴지통 드롭 삭제 확인 문구에 쓴다
             try {
                 ev.dataTransfer.setData('text/plain', String(p.id));
                 ev.dataTransfer.effectAllowed = 'move';
@@ -7872,8 +7929,8 @@ const pjvBoardMineOnly = { on: false };
 //  byStatus=상태(할 일·진행 중·완료)로 나누기(기본 켜짐; byFolder 와 겹치면 폴더 › 상태 중첩). 세션 유지.
 //  byArea(사이드바)와 byFolder(인라인)는 같은 '폴더로 보기'의 두 방식이라 상호배타 — 한쪽을 켜면 다른쪽을 끈다.
 const pjvBoardView = { byArea: true, byStatus: true, byFolder: false, kanban: false, overview: false };
-// 프로젝트 → 폴더 드래그(#454) 진행 상태. dragstart 에서 프로젝트 id 를 담고, 폴더(사이드바 항목·인라인 그룹 헤더)가 드롭 타깃.
-const pjvFolderDrag = { id: null };
+// 프로젝트 → 폴더 드래그(#454) 진행 상태. dragstart 에서 프로젝트 id(+이름 #1020)를 담고, 폴더(사이드바 항목·인라인 그룹 헤더)·휴지통이 드롭 타깃.
+const pjvFolderDrag = { id: null, name: null };
 // 사이드바 내부 드래그(#473 후속) — kind:'list'(리스트를 폴더로 넣기/빼기) | 'folder'(폴더 순서 재정렬). id=끌고 있는 대상 id.
 const pjvSideDrag = { kind: null, id: null, folderId: null };
 // 영역 그룹 펼침 상태 사용자 오버라이드 — key: 'L'+id | '__none__'. 없으면 기본(내 영역=펼침)을 따른다. 세션 유지.

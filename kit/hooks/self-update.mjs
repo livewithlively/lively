@@ -184,7 +184,14 @@ function reconcileClaudeMcp(gw, token) {
   const servers = (conf.mcpServers && typeof conf.mcpServers === "object" && !Array.isArray(conf.mcpServers)) ? conf.mcpServers : {};
   const shim = join(LIVELY, "bin", process.platform === "win32" ? "lively.cmd" : "lively");
   const want = {};
-  want["lively"] = { type: "http", url: `${gw}/mcp`, headers: { Authorization: `Bearer ${token}` } };
+  // ⚠ 헤더 세트는 register-clients.sh(scripts/·kit/setup/)·kit/cli/lively.mjs 와 **동일하게 유지**(lively.test.mjs ④ 가 4곳 parity 강제).
+  //  값은 정적 리터럴(${LIVELY_*:-}, 비밀 아님) — 접속 시 하네스가 제 env 로 확장. Authorization(토큰)만 멤버 값이라 아래 reconcile 이 안 건드린다.
+  want["lively"] = { type: "http", url: `${gw}/mcp`, headers: {
+    Authorization: `Bearer ${token}`,
+    "x-lively-session": "${LIVELY_SESSION_ID:-}",   // #852
+    "x-lively-readonly": "${LIVELY_READONLY:-}",    // #1007
+    "x-lively-incognito": "${LIVELY_INCOGNITO:-}",  // #1007+
+  } };
   want["lively-local"] = { type: "stdio", command: shim, args: ["mcp-local"], env: {} };
   // 조직 추가 MCP 서버(mcp-servers.json) — [] 또는 {servers:[]} 양식 모두 허용. enabled·name 있는 것만, additive.
   try {
@@ -203,10 +210,16 @@ function reconcileClaudeMcp(gw, token) {
   } catch { /* 목록 없음/파손 — 무시 */ }
   let added = 0;
   for (const [name, entry] of Object.entries(want)) {
-    if (servers[name]) continue; // 이미 등록 — 불변(additive)
-    servers[name] = entry;
-    added++;
-    log(`MCP additive 등록: ${name}`); // ⚠ 이름만 — 토큰/시크릿 미출력(불변식)
+    const cur = servers[name];
+    if (!cur) { servers[name] = entry; added++; log(`MCP additive 등록: ${name}`); continue; } // 없는 서버 = 통째로 add(종전)
+    // 이미 등록됨 — URL·토큰·기존 헤더는 **불변**(멤버 값 보존). 다만 **빠진 헤더 키만** 더한다(모드 헤더 등 새 배선을 재등록 없이 전파, 1세션 지연).
+    //  remove/overwrite 를 안 하므로 무손실 불변식 유지. Authorization(토큰)은 절대 안 건드린다(멤버 값 — 값 변경은 명시적 lively update 몫).
+    if (entry.headers && cur.headers && typeof cur.headers === "object" && !Array.isArray(cur.headers)) {
+      for (const [hk, hv] of Object.entries(entry.headers)) {
+        if (hk.toLowerCase() === "authorization") continue;
+        if (!(hk in cur.headers)) { cur.headers[hk] = hv; added++; log(`MCP 헤더 additive: ${name}.${hk}`); }
+      }
+    }
   }
   if (!added) return; // 누락 0 → 파일 미변경(정상 세션 비용 0)
   conf.mcpServers = servers;

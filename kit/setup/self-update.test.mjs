@@ -369,6 +369,15 @@ try {
       ? ok("⑮ MCP additive reconcile — lively-local 자동 추가 + lively·유저 항목 불변")
       : bad("⑮ MCP reconcile", `llOk=${llOk} userKept=${userKept} livelyKept=${livelyKept} ll=${JSON.stringify(ll)}`);
 
+    // ⑮c #1007+ — 헤더 additive: 기존 lively 항목에 **빠진 모드 헤더만** 더한다(재등록 없이 전파, 1세션 지연). 토큰(Authorization)은 불변(멤버 값 보존).
+    const h = (conf.mcpServers && conf.mcpServers.lively && conf.mcpServers.lively.headers) || {};
+    const hdrOk = h.Authorization === "Bearer test-token"          // 토큰 안 건드림
+      && h["x-lively-session"] === "${LIVELY_SESSION_ID:-}"
+      && h["x-lively-readonly"] === "${LIVELY_READONLY:-}"
+      && h["x-lively-incognito"] === "${LIVELY_INCOGNITO:-}";
+    hdrOk ? ok("⑮c 헤더 additive — 기존 lively 에 모드 헤더 추가 + 토큰 불변")
+      : bad("⑮c 헤더 additive", `headers=${JSON.stringify(h)}`);
+
     // ⑮b 멱등 — 이미 등록됐으면 재실행해도 파일을 안 건드린다(additive no-op).
     rmSync(lv(home, "kit-version"), { force: true }); // 같은 버전 강제 재설치
     const before = readFileSync(cj, "utf8");

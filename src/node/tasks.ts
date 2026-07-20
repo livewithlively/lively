@@ -12,9 +12,9 @@ import os from "node:os";
 import crypto from "node:crypto";
 import type { LivelyUser } from "../context.js";
 import {
-  TMUX_BIN, PANE_LOCALE, HARNESSES, resolveRootPath, resolveProfileConfigDir, sessionPrefix, ensureMemberOsUser,
+  TMUX_BIN, PANE_LOCALE, HARNESSES, resolveRootPath, resolveProfileConfigDir, profileConfigDir, sessionPrefix, ensureMemberOsUser,
 } from "../terminal-sessions.js";
-import { wrapAsMember } from "../terminal-isolation.js";
+import { wrapAsMember, isolationInfraReady } from "../terminal-isolation.js";
 import { provisionTaskRepo, type RepoProvisionAuth } from "../project-provision.js";
 import type { NodeResources } from "./protocol.js";
 
@@ -151,8 +151,20 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
   if (osUser) {
     args.push(...wrapAsMember(osUser, ["sh", "-lc", script], workspace));
   } else {
-    const profileDir = await resolveProfileConfigDir(user);
-    if (profileDir && !(input.env && input.env.CLAUDE_CODE_OAUTH_TOKEN)) args.push("-e", `CLAUDE_CONFIG_DIR=${profileDir}`);
+    // #1014: 격리 인프라가 준비된 중앙(멀티유저) 박스에서는 비격리 폴백이 공유 $HOME/.claude.json(=설치 때 구워진
+    //  남의 lively 토큰)을 읽지 못하게 — 항상 이 멤버 전용 dir 로 격리(공유 폴백 폐기).
+    //  ⚠ CLAUDE_CONFIG_DIR(=claude 가 lively MCP 를 읽는 위치)은 CLAUDE_CODE_OAUTH_TOKEN(Anthropic 인증)과 **직교**다.
+    //   그래서 중앙 박스 분기는 리스(setup-token)가 있어도 **무조건** 자기 dir 을 박는다 — 그러지 않으면 리스를 든
+    //   요청자가 'central' 로 위탁할 때 공유 config(남의 신원)로 폴백하는 구멍이 남는다(리뷰 지적).
+    //  워커 노드(멤버 PC=단일유저, 인프라 미준비)만 종전 로컬 폴백 + 리스 시 CLAUDE_CONFIG_DIR 생략($HOME/.claude=본인).
+    if (isolationInfraReady() && process.env.LIVELY_MULTIPROFILE !== "0") {
+      const profileDir = profileConfigDir(user);
+      await fsp.mkdir(profileDir, { recursive: true, mode: 0o700 });
+      args.push("-e", `CLAUDE_CONFIG_DIR=${profileDir}`);
+    } else {
+      const profileDir = await resolveProfileConfigDir(user);
+      if (profileDir && !(input.env && input.env.CLAUDE_CODE_OAUTH_TOKEN)) args.push("-e", `CLAUDE_CONFIG_DIR=${profileDir}`);
+    }
     args.push("-c", workspace, "sh", "-lc", script);
   }
   await tmux(args);
