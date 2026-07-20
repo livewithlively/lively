@@ -150,9 +150,10 @@ const SCENES = [
                         el('p', { class: 'tour-p' }, b('☁️ 웹에서 바로'), ' — 설치 없이 중앙에서 열리는 팀 공용 세션이에요. 비개발자는 이게 쉬워요.'),
                         el('p', { class: 'tour-p' }, '밝은 ', b('[☁️ 웹에서 바로 열기]'), '를 눌러 볼게요.'),
                     ] });
+                // 프리필 값은 projects.ts 의 DEMO_SESSION_NAME('출시 안내 메일 초안') — 아래 예시와 반드시 일치시킨다(#1009).
                 steps.push({ target: '[data-tour="sess-name"]', placement: 'right', scrollIntoView: true,
                     title: '만들기 창 — 세션 이름',
-                    body: el('p', { class: 'tour-p' }, '무슨 일을 하는 세션인지 알아보기 쉽게 이름을 정해요. 예를 들어 ', b('“출시 안내 메일 초안”'), ' 처럼요.') });
+                    body: el('p', { class: 'tour-p' }, '무슨 일을 하는 세션인지 알아보기 쉽게 이름을 정해요. 여기선 예시로 ', b('“출시 안내 메일 초안”'), ' 을 넣어 뒀어요.') });
                 steps.push({ target: '[data-tour="sess-repos"]', placement: 'right', scrollIntoView: true,
                     title: '코드 저장소 (선택)',
                     body: [

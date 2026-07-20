@@ -5617,6 +5617,10 @@ const DEMO_PROJECT = {
     ],
     fields: [], repos: [],
 };
+// 데모 세션 이름 프리필 — 세션 이름은 '프로젝트명'이 아니라 '이 세션이 하는 일'로 짓는 게 자연스럽다(투어가 가르치려는 것).
+//  그래서 데모 '＋새 세션'(웹)의 이름은 프로젝트명(DEMO_PROJECT.name) 대신 이 예시로 프리필한다 — 데모 태스크 'demo-t3
+//  기존 고객에게 출시 안내 메일 발송'과 같은 세계. ⚠ guide-tour.ts 의 sess-name 코치마크 예시와 반드시 일치시킨다.
+const DEMO_SESSION_NAME = '출시 안내 메일 초안';
 function renderProjectDemo(view) {
     const P = DEMO_PROJECT, members = P.members, noop = () => { };
     const meId = (state.me && (state.me.userId || state.me.email)) || 'demo-me';
@@ -5653,7 +5657,9 @@ function demoTerminalCard(members, meId) {
             return item;
         };
         const localItem = mkItem('💻', '내 PC에서 열기', '개발자용 · 직접 설치해 실행', () => openLocalWorkModal('__demo__', { id: '__demo__', name: DEMO_PROJECT.name, repos: [] }));
-        const webItem = mkItem('☁️', '웹에서 바로 열기', '설치 불필요 · 팀 공용', () => openProjectSessionForm('__demo__', () => { }, '/api/ui/v6/projects/', DEMO_PROJECT.name, []));
+        const webItem = mkItem('☁️', '웹에서 바로 열기', '설치 불필요 · 팀 공용', 
+        // 세션 이름은 프로젝트명이 아니라 '이 세션이 하는 일'로 프리필한다(투어 sess-name 코치마크 예시와 일치, #1009).
+        () => openProjectSessionForm('__demo__', () => { }, '/api/ui/v6/projects/', DEMO_SESSION_NAME, []));
         webItem.dataset.tour = 'sess-web';
         menu.append(localItem, webItem);
     };
