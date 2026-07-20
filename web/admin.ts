@@ -1802,6 +1802,7 @@ function memberRead(root, m, data, detail, opts: any = {}) {
     const scopeText = (m.scopes || []).map((sk) => MEMBER_SCOPE_LABEL[sk] ? MEMBER_SCOPE_LABEL[sk] + ' (' + sk + ')' : sk).join(', ');
     kids.push(
       roRow('아이디', m.id),
+      roRow('닉네임 (활동 로그 표시)', m.nickname),
       roRow('종류', m.kind || 'human'),
       roRow('대표 이메일', m.email),
       roRow('상태', (m.state || 'active') === 'active' ? '활성' : '비활성'),
@@ -1840,6 +1841,8 @@ function memberForm(root, m, data, detail, isNew, opts: any = {}) {
   //  자동·유니크 생성(폼에서 숨김 — 관리자 비관여). 기존 멤버는 표시만(변경 불가).
   const idIn = el('input', { type: 'text', value: m.id, placeholder: '아이디(영문/숫자)', disabled: '' });
   const nameIn = el('input', { type: 'text', value: m.display_name || '', placeholder: '표시 이름' });
+  // 닉네임(#762) — 표시 이름과 별개, 활동 로그 등 캐주얼 표기용(비우면 이름 폴백). 개인 프로필 모달에만 있던 걸 관리자 편집에도(#1025).
+  const nickIn = el('input', { type: 'text', value: m.nickname || '', placeholder: '닉네임 (비우면 표시 이름으로)' });
   const emailIn = el('input', { type: 'email', value: m.email || '', placeholder: '대표 이메일(로그인 아이디)' });
   const kindSel = el('select', {}, ...['human', 'agent', 'system'].map((k) => el('option', { value: k, text: k })));
   kindSel.value = m.kind || 'human';
@@ -1873,7 +1876,7 @@ function memberForm(root, m, data, detail, isNew, opts: any = {}) {
     const knownScopes = SCOPE_OPTS.map(([sk]) => sk);
     const payload = {
       // 신규는 아이디를 보내지 않는다 — 서버가 이메일/표시이름에서 불변 내부키를 자동·유니크 생성(관리자 비관여).
-      id: isNew ? undefined : idIn.value.trim(), kind: kindSel.value, display_name: nameIn.value.trim(),
+      id: isNew ? undefined : idIn.value.trim(), kind: kindSel.value, display_name: nameIn.value.trim(), nickname: nickIn.value.trim(),
       // identities 는 **보내지 않는다** — 서버가 보존하고, 편집은 [외부 자료 수집 ▸ 멤버 매핑]에서만 한다(#837).
       email: emailIn.value.trim(), body_md: bodyTa.value, state: stateSel.value,
       // 체크된 권한 + 체크박스에 없는 권한은 보존 — 목록 누락으로 권한이 조용히 드롭되는 것 방지(안전망).
@@ -1924,7 +1927,7 @@ function memberForm(root, m, data, detail, isNew, opts: any = {}) {
   }
 
   root.replaceChildren(
-    isNew ? el('span', { hidden: '' }, idIn) : field('아이디 (내부 식별자 · 변경 불가)', idIn), field('표시 이름', nameIn), field('종류', kindSel),
+    isNew ? el('span', { hidden: '' }, idIn) : field('아이디 (내부 식별자 · 변경 불가)', idIn), field('표시 이름', nameIn), field('닉네임 (활동 로그 등 표시 · 비우면 이름)', nickIn), field('종류', kindSel),
     field('대표 이메일', emailIn), field('상태', stateSel),
     field('권한 (이 구성원 토큰의 scope)', scopeWrap),
     el('div', { class: 'field' }, el('label', { class: 'field-label', text: '외부 계정 연결 (신원 매칭 키)' }), idnWrap),
