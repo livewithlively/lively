@@ -1,5 +1,6 @@
 // terminal.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
 import { api, el, errorNote, pageHead, personFace, state, toast } from './core.js';
+import { openMySessionsModal } from './sessions.js'; // #905 C1 — 터미널 탭 '내 세션 기록' 버튼→모달
 import { skeleton } from './learn.js';
 import { field, overlay } from './admin.js';
 import { startTour, isTourActive } from './tour.js';
@@ -217,10 +218,12 @@ async function renderTerminal(view) {
         // 헤더 우측 — [+ 새 세션] + (내 세션 0개면) 따라하기. data-tour 앵커 유지(#517 온보딩).
         const newBtn = el('button', { class: 'btn btn-primary', 'data-tour': 'new-session', text: '+ 새 세션', onclick: () => openTermCreateForm(cfg, view) });
         const nodeBtn = el('button', { class: 'btn btn-ghost', title: '내 PC·서버를 노드로 연결/관리(#869)', text: '🖥 노드', onclick: () => openNodeManager(view) });
+        // 내 세션 기록(#905 C1) — 중앙에 기록된 내 세션 대화록(끝난 세션 포함). 프로젝트 탭과 동일 화면, 단 '내 세션'만.
+        const logBtn = el('button', { class: 'btn btn-ghost', title: '중앙에 기록된 내 AI 세션 대화록(끝난 세션 포함)', text: '📜 세션 기록', onclick: () => openMySessionsModal() });
         const tourBtn = ownedSessions.length === 0
             ? el('button', { class: 'btn btn-ghost', text: '🧭 따라하기', title: '세션 만드는 법을 화면에서 한 단계씩 짚어드려요', onclick: () => startTerminalTour() })
             : null;
-        headActions.replaceChildren(...[tourBtn, nodeBtn, newBtn].filter(Boolean));
+        headActions.replaceChildren(...[tourBtn, logBtn, nodeBtn, newBtn].filter(Boolean));
         // 상태 카운트 = 필터칩 겸 요약.
         const counts = { all: sessions.length, busy: 0, waiting: 0, idle: 0, offline: 0 };
         for (const s of sessions)

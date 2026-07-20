@@ -101,10 +101,11 @@ function sessionRowEl(s, onGo) {
     titleLink.addEventListener('click', remember);
     return el('div', { class: 'sess-row', style: 'display:flex;gap:12px;align-items:center;padding:10px 2px;border-bottom:1px solid rgba(127,127,127,.15)' }, el('div', { style: 'flex:1;min-width:0' }, el('div', { style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap' }, titleLink), el('div', { class: 'admin-hint', style: 'font-size:12px;margin-top:2px', text: meta })), open);
 }
-// 프로젝트 탭 '세션 기록' — 버튼→모달(공간 절약). 페이지네이션·빈세션 제외. 진입 시 오버레이 닫고 프로젝트를 '돌아갈 곳'으로.
-export async function openProjectSessionsModal(projectId, projectName) {
+// 세션 기록 모달(버튼→모달, 공간 절약) — 페이지네이션·빈세션 제외. 진입 시 오버레이 닫고 현재 페이지를 '돌아갈 곳'으로.
+//  프로젝트용(모두의 세션)·터미널탭용(내 세션)이 공유. url 만 다르다.
+async function openSessionsModal(title, hint, url, emptyMsg) {
     const body = el('div', { class: 'admin-hint', text: '불러오는 중…' });
-    const box = el('div', { class: 'ov-box', style: 'max-width:820px;width:92%' }, el('div', { class: 'ov-head' }, el('h3', { text: `세션 기록${projectName ? ' · ' + projectName : ''}` }), el('button', { class: 'btn-text', text: '닫기', onclick: () => back.remove() })), el('p', { class: 'admin-hint', style: 'margin:0 0 8px', text: '이 프로젝트에서 만든 AI 세션 대화록(끝난 세션 포함).' }), body);
+    const box = el('div', { class: 'ov-box', style: 'max-width:820px;width:92%' }, el('div', { class: 'ov-head' }, el('h3', { text: title }), el('button', { class: 'btn-text', text: '닫기', onclick: () => back.remove() })), el('p', { class: 'admin-hint', style: 'margin:0 0 8px', text: hint }), body);
     const back = el('div', { class: 'ov-back' }, box);
     back.addEventListener('click', (e) => { if (e.target === back)
         back.remove(); });
@@ -116,13 +117,21 @@ export async function openProjectSessionsModal(projectId, projectName) {
     document.body.append(back);
     let d;
     try {
-        d = await api('/api/ui/v6/projects/' + projectId + '/session-logs');
+        d = await api(url);
     }
     catch (e) {
         body.replaceChildren(el('p', { class: 'install-token-err', text: e?.message || '세션 기록을 불러오지 못했습니다.' }));
         return;
     }
-    renderSessionListInto(body, (d && d.sessions) || [], '이 프로젝트에 기록된(내용 있는) 세션이 없습니다.', () => back.remove());
+    renderSessionListInto(body, (d && d.sessions) || [], emptyMsg, () => back.remove());
+}
+// 프로젝트 탭 '세션 기록' — 이 프로젝트의 (모든 멤버) 세션(멤버 인가는 서버).
+export async function openProjectSessionsModal(projectId, projectName) {
+    return openSessionsModal(`세션 기록${projectName ? ' · ' + projectName : ''}`, '이 프로젝트에서 만든 AI 세션 대화록(끝난 세션 포함).', '/api/ui/v6/projects/' + projectId + '/session-logs', '이 프로젝트에 기록된(내용 있는) 세션이 없습니다.');
+}
+// 터미널 탭 '내 세션 기록' — 소유자=나인 세션만(/sessions 는 서버에서 owner=요청자로 스코프됨).
+export async function openMySessionsModal() {
+    return openSessionsModal('내 세션 기록', '어느 환경/멤버 노드에서 만들었든 중앙에 기록된 내 세션들. 클릭하면 대화를 이어봅니다.', '/api/ui/v6/sessions', '중앙에 기록된 내 세션이 없습니다. (관리 ▸ 세션 공유를 켜고 `lively backfill` 로 올리세요.)');
 }
 // ── 대화록 페이지(공유 링크) ──
 function buildShareLink(sid, node, extra) {
