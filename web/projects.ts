@@ -2250,6 +2250,15 @@ function pjvSetGroupBy(selList, v) {
     else localStorage.setItem(pjvGroupByStoreKey(selList && selList.id), JSON.stringify(v));
   } catch (_) { /* noop */ }
 }
+// 상태(그룹) 접힘 상태 저장(#req) — 리스트+그룹 단위로 localStorage 에 저장해 새로고침에도 유지된다.
+//  기본은 펼침(키 없음); 접으면 '0' 을 저장하고, 다시 펼치면 키를 지워 기본(펼침)으로 되돌린다(저장소 정리).
+//  gid = 커스텀 상태 key | 기본 3버킷 statusKey('in_progress'|'todo'|'done') | (필드 그룹) 라벨.
+//  이유: 태스크 수십 개인 조직에서 매 새로고침마다 다 펼쳐지면 원하는 그룹까지 매번 접어야 해 불편(#req).
+function pjvGrpOpenKey(listId, gid) { return 'pjv:grpOpen:' + (listId == null ? 'all' : listId) + ':' + gid; }
+function pjvGrpOpenGet(listId, gid) { try { return localStorage.getItem(pjvGrpOpenKey(listId, gid)) !== '0'; } catch (_) { return true; } }
+function pjvGrpOpenSet(listId, gid, open) {
+  try { const k = pjvGrpOpenKey(listId, gid); if (open) localStorage.removeItem(k); else localStorage.setItem(k, '0'); } catch (_) { /* noop */ }
+}
 
 // ── 그룹 내 컬럼 정렬(#541) — 헤더 클릭 3-state(오름→내림→해제). 기본값 = ClickUp 뷰 sorting.fields[0]. ──
 //  key: 'name'|'team'|'due'|'start'|'created'|'updated'|'priority'|'cu:<externalId>'. 저장값 {key,dir} | {off:true}(뷰 기본도 끔).
@@ -3731,11 +3740,15 @@ function pjvProjGroup(label, statusKey, list, reload, select, canDelete, withCol
   // 클릭업식 인라인 추가행 — 각 그룹(완료 제외) 맨 아래. 빈 그룹에선 이 행이 '시작하기' CTA. 선택(일괄삭제) 모드에선 숨김.
   if (!select && cat !== 'done' && cat !== 'closed' && !noAdd) body.append(pjvProjAddRow(meta.key, reload, body, countEl, fields, select, canDelete, anchorId, meId, taskCtx, listId, statusDef));
 
-  let gopen = true;
-  const gcaret = el('button', { class: 'pjv-tgroup-caret', type: 'button', text: '▾', 'aria-expanded': 'true' });
+  // 그룹 접힘 상태 — 리스트+그룹 단위로 localStorage 에 저장해 새로고침에도 유지(#req). 기본 펼침.
+  const gid = statusDef ? statusDef.key : (statusKey || label);
+  let gopen = pjvGrpOpenGet(listId, gid);
+  body.hidden = !gopen;   // 저장된 상태가 접힘이면 로드 시점부터 접혀 보이게
+  const gcaret = el('button', { class: 'pjv-tgroup-caret', type: 'button', text: gopen ? '▾' : '▸', 'aria-expanded': String(gopen) });
   gcaret.onclick = () => {
     gopen = !gopen; gcaret.textContent = gopen ? '▾' : '▸';
     gcaret.setAttribute('aria-expanded', gopen ? 'true' : 'false'); body.hidden = !gopen;
+    pjvGrpOpenSet(listId, gid, gopen);   // 접힘/펼침 저장 → 다음 새로고침에 반영
   };
   const dot = statusDef ? pjvCustomStatusDot(statusDef, 'sm')
     : statusKey ? pjvStatusIconStd(meta.key, 'sm')
@@ -7983,11 +7996,14 @@ function pjvStatusGroup(projectId, key, list, members, reload, fields, withCols)
   const countEl = el('span', { class: 'pjv-tgroup-count', text: String(list.length) });
   if (key !== 'done') body.append(pjvAddRow(projectId, key, members, reload, body, countEl, fields));
 
-  let gopen = true;
-  const gcaret = el('button', { class: 'pjv-tgroup-caret', type: 'button', text: '▾', 'aria-expanded': 'true' });
+  // 태스크 상태 그룹 접힘도 새로고침에 유지(#req) — 프로젝트 스코프('p'+id 로 리스트 id 와 네임스페이스 분리). 기본 펼침.
+  let gopen = pjvGrpOpenGet('p' + projectId, key);
+  body.hidden = !gopen;
+  const gcaret = el('button', { class: 'pjv-tgroup-caret', type: 'button', text: gopen ? '▾' : '▸', 'aria-expanded': String(gopen) });
   gcaret.onclick = () => {
     gopen = !gopen; gcaret.textContent = gopen ? '▾' : '▸';
     gcaret.setAttribute('aria-expanded', gopen ? 'true' : 'false'); body.hidden = !gopen;
+    pjvGrpOpenSet('p' + projectId, key, gopen);
   };
   const dot = pjvStatusIconStd(key, 'sm');
   const labelEl = el('span', { class: 'pjv-tgroup-label', text: m.label });
