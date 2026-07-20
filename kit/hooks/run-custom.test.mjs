@@ -39,9 +39,9 @@ const PRE_PAYLOAD = { session_id: "s1", tool_name: "Write", tool_input: { file_p
 //  · relay 를 생략하면 캐시에 relay 키 자체가 없다 = "정책 미지" → 기본 정책 경로를 탄다(§D).
 //  · execFileSync 는 반환값이 stdout 뿐이라 exit code(§E)와 진단 stderr(§F)를 함께 관측할 수 없다 → spawnSync 를 쓴다
 //    (같은 node:child_process 의 동기 실행, 여전히 진짜 자식 프로세스).
-function run(event, hooks, { relay, payload, timeoutMs = 20000 } = {}) {
+function run(event, hooks, { relay, payload, timeoutMs = 20000, cacheAgeMs = 0, graceMs } = {}) {
   const cache = {
-    at: Date.now(), // 오래된 캐시는 무시되므로 항상 '지금'으로 심는다
+    at: Date.now() - cacheAgeMs, // 기본 0 = 지금. cacheAgeMs 로 '오래된 캐시'를 재현한다(#1008 grace 테스트)
     hooks: hooks.map((h) => ({
       id: h.id,
       event,
@@ -53,6 +53,11 @@ function run(event, hooks, { relay, payload, timeoutMs = 20000 } = {}) {
   };
   if (relay !== undefined) cache.relay = relay;
   writeFileSync(join(HOME, ".lively", `custom-hooks-${event.replace(/[^A-Za-z]/g, "")}.json`), JSON.stringify(cache));
+  // hook_grace_ms(#1008) — graceMs 를 주면 hooks-config.json 에 심어 캐시 유효기간을 정하고, 안 주면 파일을 지워
+  //  '무제한(기본)' 경로를 재현한다(같은 HOME 재사용이라 직전 테스트가 남긴 값이 새지 않게 매번 명시).
+  const hcfg = join(HOME, ".lively", "hooks-config.json");
+  if (graceMs !== undefined) writeFileSync(hcfg, JSON.stringify({ hook_grace_ms: graceMs }));
+  else { try { rmSync(hcfg, { force: true }); } catch { /* 없으면 무시 */ } }
   const r = spawnSync(process.execPath, [RUNNER, event], {
     input: JSON.stringify(payload ?? PRE_PAYLOAD),
     env: ENV,
@@ -510,6 +515,48 @@ const stampSrc = 'import { writeFileSync } from "node:fs";\n'
   second.status === 0
     ? ok("F5b 스로틀되어도 세션은 여전히 안 막힌다")
     : bad("F5b 스로틀 exit 0", dbg(second));
+}
+
+// ── §I 오프라인 캐시 유효기간(#1008) — 게이트웨이 미도달 시 last-known-good 정책 ──
+// 종전엔 10분이 하드코딩돼 오프라인 10분 후 로컬-자족 훅(스킬 라우터·품질 게이트)까지 죽었다. 이제 hook_grace_ms
+// 노브로 승격, 기본(파일 없음/null) = 무제한(마지막 접속 기준 영구 실행). run() 은 오프라인이라 늘 캐시 폴백을 탄다.
+const graceHook = (id) => ({ id, src: decide({ decision: "deny", reason: id }) });
+
+// I1: 무제한 기본 — hooks-config.json 없음 + 아주 오래된 캐시(1년)여도 실행된다(마지막 접속 기준 영구).
+{
+  const r = run("PreToolUse", [graceHook("i1")], { cacheAgeMs: 365 * 24 * 3600 * 1000 });
+  decisionOf(r) === "deny"
+    ? ok("I1 무제한 기본 — 1년 된 캐시도 실행(마지막 접속 기준 영구)")
+    : bad("I1 무제한 기본", dbg(r));
+}
+// I2: grace 설정 + 캐시가 grace 보다 오래됨 → fail-CLOSED(결정 없음 = 하네스가 아무것도 못 본다).
+{
+  const r = run("PreToolUse", [graceHook("i2")], { graceMs: 600000, cacheAgeMs: 3600000 }); // grace 10분, 캐시 1시간 전
+  decisionOf(r) === undefined
+    ? ok("I2 grace 만료 — 캐시가 grace 보다 오래되면 fail-CLOSED(미실행)")
+    : bad("I2 grace 만료", dbg(r));
+}
+// I3: grace 설정 + 캐시가 grace 이내 → 실행된다.
+{
+  const r = run("PreToolUse", [graceHook("i3")], { graceMs: 3600000, cacheAgeMs: 60000 }); // grace 1시간, 캐시 1분 전
+  decisionOf(r) === "deny"
+    ? ok("I3 grace 이내 — 신선한 캐시는 실행")
+    : bad("I3 grace 이내", dbg(r));
+}
+// I4: grace=0(즉시 만료) + 살짝 오래된 캐시 → fail-CLOSED. 가장 보수적 설정이 실제로 즉시 끊는지.
+{
+  const r = run("PreToolUse", [graceHook("i4")], { graceMs: 0, cacheAgeMs: 5000 }); // grace 0, 캐시 5초 전
+  decisionOf(r) === undefined
+    ? ok("I4 grace=0 — 연결 끊기면 즉시 중단(가장 보수적)")
+    : bad("I4 grace=0 즉시 중단", dbg(r));
+}
+// I5: hooks-config.json 에 hook_grace_ms:null 이 명시돼 있어도(파일 부재의 catch 가 아닌 정상 파싱 경로) 무제한이다.
+//  session-preload 는 null 을 키 생략(undefined)으로 미러하지만, 방어적으로 literal null 도 무제한이어야 한다(graceMs() 의 g===null 분기).
+{
+  const r = run("PreToolUse", [graceHook("i5")], { graceMs: null, cacheAgeMs: 365 * 24 * 3600 * 1000 });
+  decisionOf(r) === "deny"
+    ? ok("I5 hook_grace_ms:null 명시 — 정상 파싱 경로에서도 무제한")
+    : bad("I5 literal null 무제한", dbg(r));
 }
 
 rmSync(SANDBOX, { recursive: true, force: true });
