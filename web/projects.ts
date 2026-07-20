@@ -8802,8 +8802,27 @@ async function openFileViewer(id, rel, name, reload, base) {
   // 텍스트 — 편집/저장
   const ta = el('textarea', { class: 'proj-file-edit' }); ta.value = await blob.text();
   const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
-  const back = overlayBox(name, ta);
-  back.querySelector('.ov-box').append(footer(back, [saveBtn]));
+  // #req 마크다운 — 원문 대신 렌더(제목·목록·표·코드…)로 보기 좋게. '✎ 편집' 토글로 원문 수정·저장.
+  const isMd = ext === 'md' || ext === 'markdown';
+  let content: any = ta;
+  let extraBtns: any[] = [saveBtn];
+  if (isMd) {
+    const wrap = el('div', { class: 'proj-file-mdwrap' }, el('div', { class: 'md-rendered proj-file-md' }, renderMarkdown(ta.value)));
+    let editing = false;
+    const toggle = el('button', { class: 'btn btn-ghost', text: '✎ 편집' });
+    toggle.onclick = () => {
+      editing = !editing;
+      wrap.replaceChildren(editing ? ta : el('div', { class: 'md-rendered proj-file-md' }, renderMarkdown(ta.value)));
+      toggle.textContent = editing ? '👁 렌더 보기' : '✎ 편집';
+      saveBtn.hidden = !editing; // 저장은 편집 모드에서만 노출
+    };
+    saveBtn.hidden = true;
+    content = wrap;
+    extraBtns = [toggle, saveBtn];
+  }
+  const back = overlayBox(name, content);
+  const box = back.querySelector('.ov-box'); if (isMd) box.classList.add('ov-box-wide');
+  box.append(footer(back, extraBtns));
   saveBtn.onclick = async () => {
     saveBtn.disabled = true;
     try { await authUpload(url, new Blob([ta.value])); toast('저장했습니다'); back.remove(); if (reload) reload(); }

@@ -623,16 +623,15 @@ function renderContainer(type, rest, bodyLines) {
             return fig;
         }
         case 'axes': {
-            // 맥락의 세 축(#762, #853 재설계) — 본문의 3축(카테고리·지식·프로젝트)과 도식을 일치시킨다:
-            //  카테고리(정점) 아래 [지식(정적) ⇄ 프로젝트(동적)] 두 박스, 가운데 양방향 화살표의 이름이 곧
+            // 맥락의 두 축(#1035) — [지식(정적) ⇄ 프로젝트(동적)] 두 박스, 가운데 양방향 화살표의 이름이 곧
             //  '필요 지식(꺼내 씀)'과 '산출 지식(새로 남김)' — 필요/산출이 별도 요소가 아니라 흐름의 이름임을 그림이 말한다.
-            //  본문 3줄 `이모지 | 이름 | 부제`(카테고리/지식/프로젝트 순, 기존 원고 호환).
+            //  카테고리는 맥락의 축이 아니라 이 둘을 담는 분류라 도식에서 뺐다(본문 '번외' 박스로 설명).
+            //  본문 2줄 `이모지 | 이름 | 부제`(지식/프로젝트 순).
             const rows = bodyLines.map((l) => l.trim()).filter((l) => l && l !== ':::').map((l) => l.split('|').map((s) => s.trim()));
-            const cat = rows[0] || [], kn = rows[1] || [], pj = rows[2] || [];
-            const apex = el('div', { class: 'md-axes-apex' }, el('span', { class: 'md-axes-ic', 'aria-hidden': 'true', text: cat[0] || '🗂' }), el('span', { class: 'md-axes-nm' }, ...renderInline(cat[1] || '카테고리')), el('span', { class: 'md-axes-apex-hint', text: '지식·프로젝트를 담는 분류' }));
+            const kn = rows[0] || [], pj = rows[1] || [];
             const fnode = (ic, nm, sub, cls) => el('div', { class: 'md-axes-fnode ' + cls }, el('span', { class: 'md-axes-ic', 'aria-hidden': 'true', text: ic }), el('span', { class: 'md-axes-nm' }, ...renderInline(nm)), el('span', { class: 'md-axes-sub' }, ...renderInline(sub)));
             const biflow = el('div', { class: 'md-axes-biflow' }, el('span', { class: 'md-axes-bi' }, el('span', { class: 'md-axes-bilab', text: '필요 지식으로 꺼내 씀' }), el('span', { class: 'md-axes-biar to-r', 'aria-hidden': 'true', text: '⟶' })), el('span', { class: 'md-axes-bi' }, el('span', { class: 'md-axes-biar to-l', 'aria-hidden': 'true', text: '⟵' }), el('span', { class: 'md-axes-bilab', text: '산출 지식으로 새로 남김' })));
-            return el('figure', { class: 'md-axes', role: 'group', 'aria-label': '맥락의 세 축' }, apex, el('span', { class: 'md-axes-stem', 'aria-hidden': 'true' }), el('div', { class: 'md-axes-flow' }, fnode(kn[0] || '📄', kn[1] || '지식', kn[2] || '정적 · 이미 정해진 것', 'is-static is-stack'), biflow, fnode(pj[0] || '🔄', pj[1] || '프로젝트', pj[2] || '동적 · 지금 바꾸는 것', 'is-dynamic')));
+            return el('figure', { class: 'md-axes', role: 'group', 'aria-label': '맥락의 두 축' }, el('div', { class: 'md-axes-flow' }, fnode(kn[0] || '📄', kn[1] || '지식', kn[2] || '정적 · 이미 정해진 것', 'is-static is-stack'), biflow, fnode(pj[0] || '🔄', pj[1] || '프로젝트', pj[2] || '동적 · 지금 바꾸는 것', 'is-dynamic')));
         }
         case 'synced': {
             const box = el('div', { class: 'md-synced' });

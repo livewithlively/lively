@@ -2446,6 +2446,10 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .proj-file-iconbtn:hover { background: var(--line); color: var(--ink); }
 .proj-file-iconbtn.danger:hover { background: #FDEAE6; color: #D14A32; }
 .proj-file-edit { width: 100%; min-height: 52vh; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 1.5; resize: vertical; }
+/* #req 프로젝트 공유 폴더 — 마크다운 렌더 미리보기(원문 대신 문서처럼). */
+.proj-file-mdwrap { width: 100%; }
+.proj-file-md { max-height: 68vh; overflow: auto; box-sizing: border-box; padding: 20px 24px; text-align: left;
+  background: var(--bg-tint); border: 1px solid var(--line); border-radius: 8px; scrollbar-width: thin; }
 .proj-file-img { max-width: 100%; max-height: 64vh; display: block; margin: 0 auto; border-radius: 8px; }
 .proj-file-pdf { width: 100%; height: 74vh; border: none; border-radius: 8px; background: #fff; }
 /* 상세 ② 터미널 세션 */
@@ -5145,6 +5149,10 @@ a.dash-ntf:hover { background: var(--bg-tint); }
   padding: 12px 14px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.55; color: var(--ink); white-space: pre; scrollbar-width: thin; }
 .dash-fp-code:not(.is-code) { white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 13.5px; line-height: 1.7; }
 .dash-fp-msg { padding: 34px 16px; text-align: center; font-size: 13.5px; color: var(--muted); }
+/* #req 마크다운 렌더 미리보기 — 스테이지의 중앙정렬을 벗어나 좌상단 정렬 + 전체폭, 문서처럼 읽기 좋게. */
+.dash-fp-md { align-self: stretch; width: 100%; max-width: 860px; margin: 0 auto; max-height: 70vh; overflow: auto; box-sizing: border-box;
+  padding: 20px 26px; background: var(--bg-tint); border: 1px solid var(--line); border-radius: 8px; text-align: left; scrollbar-width: thin; }
+.dash-modal--resizable .dash-fp-md { max-height: 100%; }
 /* CSV/TSV 표 미리보기 — 헤더·첫열 고정(sticky), 가로/세로 스크롤. */
 .dash-fp-tablewrap { flex: 1 1 100%; min-width: 0; width: 100%; max-height: 100%; align-self: stretch; overflow: auto; border: 1px solid var(--line); border-radius: 8px; scrollbar-width: thin; }
 .dash-fp-table { border-collapse: collapse; font-size: 12.5px; width: max-content; min-width: 100%; }

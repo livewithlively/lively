@@ -14,10 +14,6 @@ import { api, el, renderMarkdown } from './core.js';
 import { DOC_PAGES } from './docs-content.js'; // 블록 ③ 인라인 — '이런 걸 시켜보세요'(examples) 원고 재사용
 import { docsEyebrow, docsShell, openInstallModal } from './learn.js'; // 사용 가이드 셸 + 설치 팝업(모달)
 import { isSectionDone, startGuideTour } from './guide-tour.js'; // '프로젝트 체험' — #/start/tour 와 같은 'projects' 코스
-// 하위 안내 페이지(설정·이관·체험)에서 부모(#/start)로 돌아가는 한 줄 링크 — 사용자 지적 ④(복귀 경로 부재) 해소.
-function backToStart(label = '시작하기') {
-    return el('a', { class: 'ob-back', href: '#/start' }, el('span', { class: 'ob-back-arrow', 'aria-hidden': 'true', text: '←' }), label);
-}
 // 조직 축(관리자가 채우는 5단계) 배너 — 구성원 온보딩을 다 해도 **회사 맥락이 비어 있으면** AI 는
 //  baseline 안내만 한다. 관리자가 아직 채우는 중이면 알린다.
 async function orgBanner() {
@@ -41,7 +37,7 @@ function blockStartNow(connect) {
     const lead = done
         ? '이미 AI 세션을 여셨어요. 아래에서 언제든 이어서 쓰거나 새 세션을 열 수 있습니다.'
         : '설치 없이 라이블리 웹에서 AI를 바로 켜서 써보세요. 회사 맥락·규칙이 이미 들어가 있어, 까만 창에 한국어로 시키면 됩니다.';
-    return el('div', { class: 'card docs-card ob-block' }, el('div', { class: 'card-head ob-block-head' }, el('h2', { text: '① 지금 바로 시작하기' }), badge), el('p', { class: 'guide-lead', text: lead }), el('div', { class: 'step-cta', style: 'margin-bottom:0' }, el('a', { class: 'btn btn-primary', href: '#/dashboard?tour=1&from=onboarding', text: '내 AI 세션 열기 →' }), el('a', { class: 'btn btn-ghost', href: '#/dashboard?tour=1&from=onboarding', target: '_blank', rel: 'noopener', text: '새 창으로 ↗' })));
+    return el('div', { class: 'card docs-card ob-block' }, el('div', { class: 'card-head ob-block-head' }, el('h2', { text: '① 지금 바로 시작하기' }), badge), el('p', { class: 'guide-lead', text: lead }), el('div', { class: 'step-cta', style: 'margin-bottom:0' }, el('a', { class: 'btn btn-primary', href: '#/dashboard?tour=1&from=onboarding', target: '_blank', rel: 'noopener', text: '내 AI 세션 열기 ↗' })));
 }
 // 설정 카드 한 장 — 제목 + (상태칩) + '이런 분께' / '안 해도 되는 경우' + 액션. 상황을 스스로 판단하게 한다.
 //  state: 'done'|'skipped'|'todo'|null(서버가 추적하지 않는 항목=로컬 설치).
@@ -101,7 +97,7 @@ export async function renderStart(view) {
     // #/learn 과 같은 머리 — 아이브로(직접 해보기) + docs-title 히어로 + 리드 한 줄.
     const head = [
         docsEyebrow('start'),
-        el('h1', { class: 'docs-title', text: '시작하기' }),
+        el('h1', { class: 'docs-title', text: 'AI 세션 시작하기' }),
         el('p', { class: 'docs-lead', text: '라이블리로 AI를 쓰기 시작하는 곳입니다. 대부분 설치 없이 바로 시작할 수 있고, 필요한 설정만 골라서 하면 됩니다.' }),
     ];
     const slot = el('div', { class: 'guide-cards' });
@@ -132,7 +128,6 @@ export async function renderStartMigrate(view) {
     const openInstall = (e) => { e.preventDefault(); openInstallModal(); };
     const head = [
         docsEyebrow('start'),
-        backToStart(),
         el('h1', { class: 'docs-title', text: '예전에 쓰던 AI 환경 가져오기' }),
         el('p', { class: 'docs-lead', text: '가져오기는 내 컴퓨터의 AI 가 진행합니다 — 웹은 내 컴퓨터의 파일을 읽을 수 없어서, 이 화면에서는 방법만 안내해요.' }),
     ];
@@ -149,8 +144,7 @@ export async function renderStartProject(view) {
     const did = isSectionDone('projects');
     const head = [
         docsEyebrow('start-project'),
-        backToStart(),
-        el('h1', { class: 'docs-title', text: '프로젝트 체험' }),
+        el('h1', { class: 'docs-title', text: '프로젝트 생성하기' }),
         el('p', { class: 'docs-lead', text: '프로젝트 화면이 어떤 부분들로 이뤄져 있고 각각 무엇에 쓰는지, 예시 프로젝트에서 한 바퀴 둘러봅니다.' }),
     ];
     const STEPS = [

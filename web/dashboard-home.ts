@@ -4,7 +4,7 @@
 //   위젯별 독립 로드·독립 실패: 한 위젯의 API 오류가 대시보드 전체를 죽이지 않는다.
 //  2단계(예정): 위젯 레지스트리 + 12×12 {x,y,w,h} 편집 모드(추가/제거·드래그·리사이즈·사람별 저장) — 이 프리셋이 기본 배치가 된다.
 //  §0.5 채색 예산: 채운 파란 버튼은 화면당 1개([+ 새 세션])뿐. 나머지는 무채 카드 + 작은 상태점·아웃라인 배지.
-import { api, el, errorNote, relTime, state, sv, toast } from './core.js';
+import { api, el, errorNote, relTime, renderMarkdown, state, sv, toast } from './core.js';
 import { skeleton } from './learn.js';
 // 작업 상세 = 회사 타임라인·프로젝트 타임라인과 **같은** 범용 템플릿(#852) — 한 곳에서 고치면 모든 뷰가 같이 나아진다.
 import { activityDetailView, activityHasDetail } from './dashboard.js';
@@ -1433,10 +1433,13 @@ function dashFolderBrowser(root, startPath) {
     const ext = dashFileExt(name);
     const viewUrl = '/api/ui/terminal/browse/file?' + qp(rel);
     const dlUrl = '/api/ui/terminal/browse/file?download=1&' + qp(rel);
+    // 마크다운은 렌더/원문 토글을 붙인다(다른 형식엔 숨김). 클릭 핸들러는 md 분기에서 연결.
+    const mdToggle = el('button', { class: 'dash-fb-btn', type: 'button', text: '</> 원문', hidden: 'true' }) as HTMLButtonElement;
     const bar = el('div', { class: 'dash-fp-bar' },
       el('button', { class: 'dash-fb-btn', type: 'button', text: '← 뒤로', onclick: () => load() }),
       el('span', { class: 'dash-fp-name', title: name, text: name }),
       el('span', { class: 'dash-fb-spacer' }),
+      mdToggle,
       el('button', { class: 'dash-fb-btn', type: 'button', text: '⬇ 다운로드', onclick: () => authDownload(dlUrl, name) }));
     const stage = el('div', { class: 'dash-fp-stage' }, el('div', { class: 'dash-fp-load' }, skeleton('불러오는 중')));
     container.replaceChildren(bar, stage);
@@ -1467,6 +1470,19 @@ function dashFolderBrowser(root, startPath) {
         const isVid = !!DASH_VIDEO_MIME[ext];
         const url = URL.createObjectURL(new Blob([await res.blob()], { type: isVid ? DASH_VIDEO_MIME[ext] : DASH_AUDIO_MIME[ext] }));
         stage.replaceChildren(el(isVid ? 'video' : 'audio', { class: isVid ? 'dash-fp-video' : 'dash-fp-audio', src: url, controls: 'true', preload: 'metadata', playsinline: 'true' }));
+      } else if (ext === 'md' || ext === 'markdown') { // #req 마크다운 — 원문 대신 렌더(제목·목록·표·코드…)로 가독성↑. 토글로 원문도.
+        const res = await dashAuthFetch(viewUrl);
+        if (!res.ok) return fail(big(res) ? '파일이 커서 미리보기할 수 없어요 — 다운로드하세요.' : '미리보기를 불러오지 못했어요 (' + res.status + ')');
+        const text = await res.text();
+        let raw = false;
+        const renderMd = () => {
+          if (raw) { const pre = el('pre', { class: 'dash-fp-code' }); pre.textContent = text; stage.replaceChildren(pre); }
+          else stage.replaceChildren(el('div', { class: 'md-rendered dash-fp-md' }, renderMarkdown(text)));
+          mdToggle.textContent = raw ? '👁 렌더 보기' : '</> 원문';
+        };
+        mdToggle.hidden = false;
+        mdToggle.onclick = () => { raw = !raw; renderMd(); };
+        renderMd();
       } else if (DASH_PREVIEW_TEXT.includes(ext) || !ext) {
         const res = await dashAuthFetch(viewUrl);
         if (!res.ok) return fail(big(res) ? '파일이 커서 미리보기할 수 없어요 — 다운로드하세요.' : '미리보기를 불러오지 못했어요 (' + res.status + ')');
