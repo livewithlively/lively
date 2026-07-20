@@ -1628,7 +1628,18 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .term-badge.danger { color: #9A5B2E; background: #FBF1E7; border-color: #F0DCC4; }
 /* ════ 터미널 탭 세션 보드(#745) — 라이브 상태(작업중/대기/오프라인) + 프로젝트 할당 미션컨트롤 ════ */
 /* 상태칩(=카운트 요약) + 우측 프로젝트필터/선택토글 */
-.tsess-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 6px 0 14px; }
+.tsess-controls { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 14px; }
+.tsess-controls-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.tsess-filter-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tsess-filter-lbl { font-size: 11.5px; font-weight: 700; color: var(--ink-note); margin-left: 6px; }
+.tsess-filter-row > .tsess-filter-lbl:first-child { margin-left: 0; }
+.tsess-projfilter { position: relative; display: inline-flex; }
+.tsess-projfilter-in { font-family: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; cursor: pointer; max-width: 220px; }
+.tsess-projfilter-in:focus { outline: none; border-color: var(--line-net-2); color: var(--ink); cursor: text; }
+.tsess-projfilter-dd { position: absolute; top: calc(100% + 4px); left: 0; z-index: 30; min-width: 210px; max-height: 300px; overflow-y: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,0.12); padding: 4px; }
+.tsess-projfilter-opt { display: block; width: 100%; text-align: left; font-family: inherit; font-size: 12.5px; color: var(--ink-sub); background: none; border: none; border-radius: 6px; padding: 6px 10px; cursor: pointer; white-space: nowrap; }
+.tsess-projfilter-opt:hover { background: var(--bg-sel); color: var(--ink); }
+.tsess-projfilter-opt.active { color: var(--ink); font-weight: 700; background: var(--bg-sel); }
 .tsess-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .tsess-controls-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .tsess-chip-btn { display: inline-flex; align-items: center; gap: 6px; font-family: inherit; font-size: 12.5px; font-weight: 700; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; cursor: pointer; }
