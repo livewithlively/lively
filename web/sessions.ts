@@ -6,6 +6,7 @@ import { api, el, toast, renderMarkdown } from './core.js';
 interface SessRow {
   node_id: string; session_id: string; harness: string | null; title: string | null;
   owner: string | null; owner_name: string | null; first_seen: string; last_seen: string; bytes: number;
+  project_id?: number | null; project_name?: string | null;   // 내 세션 목록에서만 채워짐(#905 C1)
 }
 interface Item { role: string; text: string; tool?: string; ts?: string }
 interface Turn { user: Item | null; ai: Item[] }
@@ -81,7 +82,8 @@ function sessionRowEl(s: SessRow, onGo?: () => void): any {
   const link = '#/sessions/' + encodeURIComponent(s.session_id) + (s.node_id ? '?node=' + encodeURIComponent(s.node_id) : '');
   const title = s.title || shortId(s.session_id);
   const who = s.owner_name || s.owner || '(알 수 없음)';
-  const meta = `${who} · 만든 ${fmtWhen(s.first_seen)} · 마지막 ${fmtWhen(s.last_seen)} · ${fmtBytes(s.bytes)}${s.harness ? ' · ' + s.harness : ''}`;
+  const proj = s.project_name ? `📁 ${s.project_name} · ` : '';   // 내 세션 목록: 어느 프로젝트의 세션인지
+  const meta = `${proj}${who} · 만든 ${fmtWhen(s.first_seen)} · 마지막 ${fmtWhen(s.last_seen)} · ${fmtBytes(s.bytes)}${s.harness ? ' · ' + s.harness : ''}`;
   const remember = () => { try { sessionStorage.setItem('sessReturn', location.hash || '#/sessions'); } catch { /* */ } if (onGo) onGo(); };
   const open = el('a', { class: 'btn btn-ghost btn-sm', href: link, text: '이어보기 →' });
   const titleLink = el('a', { href: link, style: 'font-weight:600;text-decoration:none;color:inherit', text: title });

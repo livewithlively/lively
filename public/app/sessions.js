@@ -89,7 +89,8 @@ function sessionRowEl(s, onGo) {
     const link = '#/sessions/' + encodeURIComponent(s.session_id) + (s.node_id ? '?node=' + encodeURIComponent(s.node_id) : '');
     const title = s.title || shortId(s.session_id);
     const who = s.owner_name || s.owner || '(알 수 없음)';
-    const meta = `${who} · 만든 ${fmtWhen(s.first_seen)} · 마지막 ${fmtWhen(s.last_seen)} · ${fmtBytes(s.bytes)}${s.harness ? ' · ' + s.harness : ''}`;
+    const proj = s.project_name ? `📁 ${s.project_name} · ` : ''; // 내 세션 목록: 어느 프로젝트의 세션인지
+    const meta = `${proj}${who} · 만든 ${fmtWhen(s.first_seen)} · 마지막 ${fmtWhen(s.last_seen)} · ${fmtBytes(s.bytes)}${s.harness ? ' · ' + s.harness : ''}`;
     const remember = () => { try {
         sessionStorage.setItem('sessReturn', location.hash || '#/sessions');
     }

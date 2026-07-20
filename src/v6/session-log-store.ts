@@ -174,6 +174,7 @@ export async function readSessionLog(nodeId: string, sessionId: string, from = 0
 export interface SessionListRow {
   node_id: string; session_id: string; harness: string | null; title: string | null;
   owner: string | null; owner_name: string | null; first_seen: string; last_seen: string; bytes: number;
+  project_id?: number | null; project_name?: string | null;   // 최근 바인딩 프로젝트(내 세션 목록에서만 채움, #905 C1)
 }
 const SESSION_LIST_COLS = `s.node_id, s.session_id, s.harness, s.title, s.owner, m.display_name AS owner_name,
   s.first_seen, s.last_seen, COALESCE(l.bytes, 0)::bigint AS bytes`;
@@ -181,16 +182,22 @@ const mapSessionRow = (x: Record<string, unknown>): SessionListRow => ({
   node_id: x.node_id as string, session_id: x.session_id as string, harness: (x.harness as string) ?? null,
   title: (x.title as string) ?? null, owner: (x.owner as string) ?? null, owner_name: (x.owner_name as string) ?? null,
   first_seen: x.first_seen as string, last_seen: x.last_seen as string, bytes: Number(x.bytes),
+  project_id: x.project_id != null ? Number(x.project_id) : null, project_name: (x.project_name as string) ?? null,
 });
 
 // 내 세션 목록(웹뷰) — 소유자=요청자. 제목·소유자표시명·생성·마지막활동·크기 포함.
 export async function listSessionsForOwner(owner: string, limit = 200): Promise<SessionListRow[]> {
   if (!owner) return [];
   const r = await itemsPool.query(
-    `SELECT ${SESSION_LIST_COLS}
+    `SELECT ${SESSION_LIST_COLS}, proj.project_id, proj.project_name
        FROM session s
        JOIN session_log l ON l.node_id = s.node_id AND l.session_id = s.session_id
        LEFT JOIN org_member m ON m.id = s.owner
+       LEFT JOIN LATERAL (
+         SELECT sp.project_id, p.name AS project_name
+           FROM session_project sp JOIN project p ON p.id = sp.project_id
+          WHERE sp.session_id = s.session_id ORDER BY sp.valid_from DESC LIMIT 1
+       ) proj ON true
       WHERE s.owner = $1 AND l.bytes > 0 AND s.parent_session_id IS NULL
       ORDER BY s.last_seen DESC
       LIMIT $2`,

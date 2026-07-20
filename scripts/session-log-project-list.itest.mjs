@@ -52,8 +52,9 @@ try {
       valid_from TIMESTAMPTZ NOT NULL DEFAULT now(), created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (session_id, valid_from));
     CREATE TABLE org_member(id TEXT PRIMARY KEY, display_name TEXT);
+    CREATE TABLE project(id INT PRIMARY KEY, name TEXT);
   `);
-  const { appendSessionLog, listSessionsForProject, listSubagentsForSession } = await import("../dist/v6/session-log-store.js");
+  const { appendSessionLog, listSessionsForProject, listSubagentsForSession, listSessionsForOwner } = await import("../dist/v6/session-log-store.js");
   const { recordSessionProject } = await import("../dist/v6/project-store.js");
 
   await itemsPool.query(`INSERT INTO org_member(id, display_name) VALUES ('alice','Alice'),('bob','Bob')`);
@@ -159,6 +160,20 @@ try {
     const subs = await listSubagentsForSession("", "cu-parent");
     assert.deepEqual(subs.map((r) => r.session_id), ["cu-sub1"], "listSubagentsForSession 은 그 부모의 서브에이전트만");
     ok("⑧ 서브에이전트 — 최상위 목록 제외 + listSubagentsForSession 으로 부모 아래 조회");
+  }
+
+  // ── ⑨ 내 세션 목록(listSessionsForOwner)은 각 세션의 '최근 프로젝트명'을 함께 준다(터미널 탭 표시용) ──
+  {
+    await itemsPool.query(`INSERT INTO project(id, name) VALUES (700,'내 프로젝트 A'), (800,'내 프로젝트 B')`);
+    await upload("mine-a", "프로젝트A 세션", "alice"); await recordSessionProject("mine-a", 700);
+    await upload("mine-b", "재바인딩 세션", "alice"); await recordSessionProject("mine-b", 700); await recordSessionProject("mine-b", 800);  // 재바인딩 → 최근=800
+    await upload("mine-none", "매핑 없는 세션", "alice");   // 프로젝트 미매핑
+    const rows = await listSessionsForOwner("alice");
+    const by = (sid) => rows.find((r) => r.session_id === sid);
+    assert.equal(by("mine-a")?.project_name, "내 프로젝트 A", "매핑된 프로젝트명");
+    assert.equal(by("mine-b")?.project_name, "내 프로젝트 B", "🔑 재바인딩 시 '최근' 프로젝트명");
+    assert.equal(by("mine-none")?.project_name, null, "매핑 없으면 project_name null");
+    ok("⑨ 내 세션 목록 — 각 세션에 최근 프로젝트명(재바인딩=최근) · 미매핑은 null");
   }
 
   await itemsPool.end();
