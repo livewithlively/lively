@@ -1392,6 +1392,7 @@ ${bold("작업")}
   mode [<normal|readonly|incognito>]  디폴트 실행 모드 조회/설정 ${dim("(lively run 이 --mode 없을 때 읽음)")}
   resume <세션id>         다른 환경/멤버에서 만든 내 세션을 이 PC 로 이어받기 ${dim("--node <id>  --print(내려받기만)")}
   backfill                이 PC 의 기존 claude 대화 기록을 중앙에 소급 업로드(웹뷰에 과거 세션도) ${dim("--dry-run")}
+  share [<세션id>]         이 세션(진행 중 포함)을 팀원과 공유 — 최신 내용 올리고 열람 링크 출력 ${dim("--node <id>  --json")}
   delegate "<작업>"       무거운 작업을 워커/중앙에 위탁 — 진행을 미러하며 결과 출력 후 종료 ${dim('예: lively delegate "테스트 실행" --ram 2048')}
       --repo <이름> [--ref main]  대상 레포 자동 준비(공유 base→worktree, cwd 로)  ${dim("--ram/--cpu/--disk N  --docker  --node <id>  --timeout <초>")}
       --detach               번호만 반환하고 즉시 종료  ${dim("(나중에 lively delegate logs <번호>)")}
@@ -1573,6 +1574,71 @@ async function cmdBackfill(args) {
   say(`완료 — 전송 ${sent} · 이미있음 ${already} · 프로젝트매핑 ${mapped} · 건너뜀 ${skipped} · 실패 ${failed}${bytesUp ? ` · ${Math.round(bytesUp / 1024)}KB` : ""}`);
 }
 
+// lively share [<세션id>] [--node <id>] [--json] — 이 세션(진행 중 포함)을 팀원과 공유(#905 C1 · #911 요구3).
+//  사람 트리거(LLM 은 '언제 공유할지' 모른다). ① 대상 세션 확정(인자 or 이 cwd 의 가장 최근 트랜스크립트=현재 세션)
+//  ② 로컬이 서버보다 앞서면 델타를 지금 올려(1시간짜리 응답 진행 중이어도 최신이 보이게) ③ 열람 링크(웹뷰)를 출력.
+//  열람 권한(서버 게이트): 소유자 항상 · view_policy=attach 면 이 세션이 매핑된 프로젝트의 멤버. 사람 출력=stderr, stdout=--json.
+async function cmdShare(args) {
+  const o = { node: "", json: false, _: [] };
+  for (let i = 0; i < args.length; i++) { const t = args[i]; if (t === "--node") o.node = String(args[++i] ?? ""); else if (t === "--json") o.json = true; else if (!t.startsWith("-")) o._.push(t); }
+  const gw = gateway(), tok = token();
+  if (!gw) { say(red("게이트웨이 주소를 모릅니다 — `lively login --gateway <url>`.")); process.exit(1); }
+  if (!tok) { say(red("로그인이 필요합니다 — `lively login`.")); process.exit(1); }
+  const encDir = join(HOME, ".claude", "projects", process.cwd().replace(/[/.]/g, "-"));
+
+  // 1) 대상 세션 — 인자 or 이 cwd 의 가장 최근 트랜스크립트(현재 세션). 로컬 파일이 있으면 델타도 올린다.
+  let sid = o._[0], fp = null;
+  if (sid) {
+    if (!/^[A-Za-z0-9._-]{1,64}$/.test(sid)) { say(red("세션 id 형식 오류.")); process.exit(2); }
+    const p = join(encDir, `${sid}.jsonl`); if (existsSync(p)) fp = p;
+  } else {
+    let bestMt = -1;
+    try { for (const f of readdirSync(encDir)) { if (!f.endsWith(".jsonl")) continue; const st = statSync(join(encDir, f)); if (st.mtimeMs > bestMt) { bestMt = st.mtimeMs; sid = f.slice(0, -6); fp = join(encDir, f); } } } catch { /* 폴더 없음 */ }
+    if (!sid) { say(red("이 폴더에서 만든 세션을 찾지 못했습니다 — `lively share <세션id>` 로 직접 지정하세요.")); process.exit(1); }
+  }
+
+  const H = { authorization: `Bearer ${tok}` };
+  const q = new URLSearchParams({ node: o.node }).toString();
+
+  // 2) 워터마크 + 캡처 정책(소유자 게이트). 로컬이 앞서면 델타를 지금 올린다(진행 중 공유).
+  let serverBytes = 0, captureOn = true;
+  try {
+    const r = await fetch(`${gw}/api/ui/v6/sessions/${encodeURIComponent(sid)}/log/watermark?${q}`, { headers: H });
+    if (r.status === 401 || r.status === 403) { say(red("이 세션을 공유할 수 없습니다 — 소유자가 아니거나 접근 권한이 없습니다.")); process.exit(1); }
+    if (r.ok) { const j = await r.json(); serverBytes = Number(j.bytes) || 0; captureOn = !(j.capture && j.capture.enabled !== true); }
+  } catch (e) { say(red(`게이트웨이 접속 실패: ${e.message}`)); process.exit(1); }
+
+  let pushed = 0, projectId = null;
+  if (fp) {
+    let full = null; try { full = readFileSync(fp); } catch { /* */ }
+    if (full && full.length) {
+      projectId = projectIdForTranscript(full);
+      if (!captureOn) say(yellow("⚠ 세션 공유가 꺼져 있어 최신 내용을 못 올렸습니다 — 관리 ▸ 세션 공유를 켜면 진행 중 내용까지 공유됩니다."));
+      else if (full.length > serverBytes) {
+        const MAXD = 8 * 1024 * 1024; let from = serverBytes;
+        while (from < full.length) {
+          const end = Math.min(full.length, from + MAXD);
+          try {
+            const r = await fetch(`${gw}/api/ui/v6/sessions/${encodeURIComponent(sid)}/log?${new URLSearchParams({ at: String(from), node: o.node, harness: "claude", ...(projectId ? { project: String(projectId) } : {}) })}`, { method: "POST", headers: { ...H, "content-type": "application/octet-stream" }, body: full.subarray(from, end) });
+            if (!r.ok) break;
+            const j = await r.json(); const nb = Number(j.bytes); pushed += (end - from); from = Number.isFinite(nb) && nb > from ? nb : end;
+          } catch { break; }
+        }
+      }
+    }
+  }
+
+  // 3) 열람 링크.
+  const link = `${gw}/ui/#/sessions/${encodeURIComponent(sid)}${o.node ? "?node=" + encodeURIComponent(o.node) : ""}`;
+  if (o.json) { process.stdout.write(JSON.stringify({ session_id: sid, link, pushed_bytes: pushed, project_id: projectId }, null, 2) + "\n"); return; }
+  say(`\n${green("✓")} 세션 공유 링크${pushed ? dim(`  (최신 ${Math.round(pushed / 1024)}KB 올림)`) : ""}`);
+  say(`  ${bold(link)}`);
+  say(`  ${dim(projectId
+    ? `열람 권한 있는 사람(소유자 · 프로젝트 #${projectId} 멤버)과 공유하세요.`
+    : "프로젝트에 연결돼 있지 않아 지금은 소유자만 볼 수 있습니다 — `lively init` 으로 연결하면 팀원도 열람할 수 있습니다.")}`);
+  say("");
+}
+
 // lively onboarding [초기프롬프트…] — 온보딩 스킬을 이 PC 에서 바로 실행한다.
 //  claude 를 초기 프롬프트("온보딩 도와줘")로 띄우면 하네스가 그 문구로 lively-onboarding 스킬을 소환한다.
 //  설치 직후 제안(setup-mac.sh)과 사람의 수동 재실행이 같은 진입을 쓴다. cmdResume 과 동형(has 가드 + spawnSync inherit).
@@ -1621,6 +1687,7 @@ async function main() {
     case "resume": return cmdResume(argv.slice(argv.indexOf("resume") + 1));
     // backfill — 이 머신의 기존 claude 트랜스크립트를 중앙에 소급 업로드(#905 C1). 웹뷰에 과거 세션도 보이게.
     case "backfill": return cmdBackfill(argv.slice(argv.indexOf("backfill") + 1));
+    case "share": return cmdShare(argv.slice(argv.indexOf("share") + 1));
     case "version": say(`lively ${CLI_VERSION}${readLively("kit-version") ? dim("  · 키트 " + readLively("kit-version")) : ""}`); return;
     case "help": say(HELP); return;
     default:
