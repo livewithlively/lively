@@ -127,9 +127,12 @@ export async function refreshProxySnapshot(name: string, actor?: string): Promis
           headers: { authorization: `Bearer ${gwSecret}`, "content-type": "application/json", accept: "application/json, text/event-stream" },
           body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
         });
-        const wa = pr.headers.get("www-authenticate");
-        const bodyHead = (await pr.text()).slice(0, 400);
-        diag = ` [probe status=${pr.status}${wa ? ` www-authenticate="${wa}"` : ""} body=${bodyHead}]`;
+        const hdrs = Array.from(pr.headers.entries()).filter(([k]) => k !== "authorization").map(([k, v]) => `${k}:${v}`).join(" | ");
+        const body = await pr.text();
+        let jsonErr = "(none)";
+        try { const j = JSON.parse(body) as { error?: unknown; result?: unknown }; jsonErr = j?.error ? JSON.stringify(j.error) : (j?.result ? "result-present-no-error" : "neither"); }
+        catch { jsonErr = "non-json"; }
+        diag = ` [probe status=${pr.status} bodyLen=${body.length} json=${jsonErr} headers={${hdrs}} bodyTail=${body.slice(-250)}]`;
       } catch (e) { diag = ` [probe 실패: ${(e as Error).message}]`; }
     }
     throw new Error(redactSecret(pfx + (err as Error).message + diag, gwSecret)); // 상류 에러 본문에 gateway 자격 에코 방지
