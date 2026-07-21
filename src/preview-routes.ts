@@ -68,7 +68,12 @@ export function registerPreviewRoutes(app: express.Express, verifier: BearerVeri
     let p;
     try { p = await getPreviewEnv(id); } catch { res.status(500).end(); return; }
     if (!p) { res.status(404).type("text/plain; charset=utf-8").send("프리뷰 환경 없음: " + id); return; }
-    if (!p.enabled || p.status === "stopped") { res.status(409).type("text/plain; charset=utf-8").send("프리뷰가 정지 상태입니다 — 관리탭에서 띄우세요(ensure)."); return; }
+    if (!p.enabled || p.status === "stopped") { res.status(409).type("text/plain; charset=utf-8").send("이 미리보기는 정지 상태입니다 — 관리 화면에서 ‘띄우기’를 눌러 주세요."); return; }
+    if (p.status === "preparing") { // 작업 폴더 준비·빌드가 백그라운드로 도는 중 — 브라우저가 잠시 뒤 다시 오게 안내
+      res.status(503).setHeader("Retry-After", "5");
+      res.type("text/plain; charset=utf-8").send("미리보기를 준비하는 중입니다(작업 폴더 준비·빌드). 잠시 후 새로고침해 주세요.");
+      return;
+    }
 
     // 정적 서빙 — stage(merge 워크트리) 또는 work+shared-proxy
     if (p.kind === "stage" || p.backing_mode === "shared-proxy") {

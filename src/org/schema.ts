@@ -466,7 +466,9 @@ export async function initOrgSchema(): Promise<void> {
       ('source_get','builtin',true,true),
       ('source_save','builtin',true,true),
       ('source_link_knowledge','builtin',true,true),
-      ('source_delete','builtin',true,true)
+      ('source_delete','builtin',true,true),
+      -- #1072 whoami: 자기 신원 조회(읽기·인자 없음·부작용 0). 상시로드 툴이라 매 호출 컨펌은 순수 마찰 → 자동승인.
+      ('whoami','builtin',true,true)
     ON CONFLICT (name) DO NOTHING;
   `);
 
@@ -962,13 +964,21 @@ export async function initOrgSchema(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT);
   `);
+  // build_cmd — 미리보기를 띄우기 전에 워크트리에서 실행할 빌드(예: 프론트 번들). 사람이 터미널을 안 열어도 되게 하는 핵심.
+  await itemsPool.query(`ALTER TABLE org_stack_profile ADD COLUMN IF NOT EXISTS build_cmd TEXT;`);
   await itemsPool.query(`
-    INSERT INTO org_stack_profile(id,label,repo,static_only,start_cmd,port_env,env_json,healthcheck_path,note) VALUES
-      ('co-frontend','context-ontology 프론트 (정적·shared-proxy)','context-ontology',true,NULL,'PORT','{}'::jsonb,'/',
+    INSERT INTO org_stack_profile(id,label,repo,static_only,start_cmd,build_cmd,port_env,env_json,healthcheck_path,note) VALUES
+      ('co-frontend','context-ontology 프론트 (정적·shared-proxy)','context-ontology',true,NULL,'npm run build:web','PORT','{}'::jsonb,'/',
        '프론트(public/)만 서빙 — /api 는 게이트웨이 자신. 별도 프로세스·포트 없음(가장 싸고 안전).'),
-      ('co-fullstack','context-ontology 풀스택 (throwaway 게이트웨이)','context-ontology',false,'node dist/index.js','PORT','{"LIVELY_NO_SCHEDULER":"1"}'::jsonb,'/healthz',
-       '자체 게이트웨이 프로세스를 워크트리에서 기동 — 백엔드 변경까지 격리 확인. dist 빌드 선행, DB 등 backing 은 env 로 지정(라이브 DB 쓰기 금지).')
+      ('co-fullstack','context-ontology 풀스택 (throwaway 게이트웨이)','context-ontology',false,'node dist/index.js','npm run build','PORT','{"LIVELY_NO_SCHEDULER":"1"}'::jsonb,'/healthz',
+       '자체 게이트웨이 프로세스를 워크트리에서 기동 — 백엔드 변경까지 격리 확인. DB 등 backing 은 env 로 지정(라이브 DB 쓰기 금지).')
     ON CONFLICT (id) DO NOTHING;
+  `);
+  // 기존 프리셋 보정 — 위 INSERT 는 ON CONFLICT DO NOTHING 이라 이미 있던 행엔 build_cmd 가 안 들어간다.
+  //  운영자가 직접 채운 값은 건드리지 않는다(IS NULL 조건).
+  await itemsPool.query(`
+    UPDATE org_stack_profile SET build_cmd='npm run build:web' WHERE id='co-frontend' AND build_cmd IS NULL;
+    UPDATE org_stack_profile SET build_cmd='npm run build'     WHERE id='co-fullstack' AND build_cmd IS NULL;
   `);
 
   // ── org_node — 분산 노드 레지스트리(#869). 멤버 PC(member)/워커(worker)에 도는 노드 에이전트의 desired state. ──

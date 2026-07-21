@@ -1,10 +1,13 @@
-// 프리뷰 환경 capability — org_preview_env CRUD + ensure/stop, + org_stack_profile CRUD. admin scope, REST+MCP. #1036.
+// 미리보기 capability — org_preview_env CRUD + ensure/stop, + org_stack_profile 조회/정의. REST+MCP. #1036.
+//  ⚠ **권한이 갈린다.** 미리보기 사용(list/set/ensure/stop/delete)과 프로필 **조회**는 `code`(작업자) —
+//   관리자 전용으로 잠그면 정작 화면을 확인해야 할 사람이 못 쓴다. 반면 프로필 **정의**(stack_profile_set/delete)는
+//   `admin` — start_cmd·build_cmd 는 셸 명령이라 아무나 만들면 그게 곧 임의 코드 실행이다.
 //  managed-session.ts 패턴. registry(index.ts all[])에 넣으면 web.ts restMounts 가 REST 를, registerMcpCapabilities 가 MCP 를 자동 생성.
 import { z } from "zod";
 import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import {
-  listPreviewEnvs, getPreviewEnv, upsertPreviewEnv, deletePreviewEnv, ensurePreviewEnv, stopPreviewEnv,
+  listPreviewEnvs, getPreviewEnv, upsertPreviewEnv, deletePreviewEnv, ensurePreviewEnv, stopPreviewEnv, resolvePreviewId,
   listStackProfiles, upsertStackProfile, deleteStackProfile,
 } from "../org/preview-envs.js";
 
@@ -24,8 +27,8 @@ function numOpt(v: unknown): number | undefined {
 const list: Capability = {
   name: "preview_env_list",
   title: "프리뷰 환경 목록",
-  description: "프리뷰 환경(org_preview_env) 목록 — 작업자·프로젝트·레포·워크트리·kind(work|stage)·backing(shared-proxy|throwaway|existing-ref)·상태·포트. URL = /preview/<id>/.",
-  scope: "admin",
+  description: "미리보기(org_preview_env) 목록 — 담당자·프로젝트·레포·작업폴더·kind(work|stage)·backing(shared-proxy|throwaway|existing-ref)·상태(running|preparing|error|stopped)·포트. 주소 = /preview/<id>/.",
+  scope: "code", // 쓰는 사람은 **작업자**다 — 관리자 전용으로 잠그면 정작 화면을 봐야 할 사람이 못 쓴다.
   input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/preview-envs"], parse: () => ({}) }] },
   handler: async () => ({ envs: await listPreviewEnvs() }),
@@ -37,10 +40,10 @@ const set: Capability = {
   description:
     "프리뷰 환경 upsert(id 기준). kind=work(작업 1:1)|stage(통합). backing_mode=shared-proxy(워크트리 public 정적·API=게이트웨이 자신, 기본) | " +
     "throwaway(stack_profile 의 start_cmd 로 백엔드 프로세스를 워크트리에서 띄워 프록시) | existing-ref(backing_ref=기존 인스턴스 URL 로 프록시). " +
-    "throwaway 는 stack_profile 필수. project_id+repo 로 워크트리 특정(worktree_path 직접 가능). stage 는 member_branches/base_ref/merge_trigger.",
-  scope: "admin",
+    "throwaway 는 stack_profile 필요. **project_id+repo 만 주면 충분** — 작업 폴더 생성·빌드는 ensure 가 자동으로 한다. stage 는 member_branches/base_ref/merge_trigger.",
+  scope: "code",
   input: {
-    id: z.string(),
+    id: z.string().optional(), // 안 주면 같은 프로젝트·레포의 기존 미리보기를 재사용하거나 새로 만든다
     label: z.string().max(200).optional(),
     kind: z.enum(["work", "stage"]).optional(),
     owner_member: z.string().max(120).optional(),
@@ -74,15 +77,17 @@ const set: Capability = {
   },
   handler: async (input: any, user: any, ctx: any) => {
     const actor = ctx?.actor ?? user?.userId ?? null;
-    return { env: await upsertPreviewEnv({ ...input, id: pid(input.id) }, actor) };
+    // id 는 선택 — 안 주면 같은 프로젝트·레포의 기존 미리보기를 재사용하고, 없으면 읽을 만한 아이디를 만든다.
+    const id = input.id ? pid(input.id) : await resolvePreviewId(input);
+    return { env: await upsertPreviewEnv({ ...input, id }, actor) };
   },
 };
 
 const del: Capability = {
   name: "preview_env_delete",
   title: "프리뷰 환경 삭제",
-  description: "프리뷰 환경 등록을 삭제(throwaway 프로세스는 함께 정지). 워크트리 자체는 별도 — 제거는 워크트리 셀프서비스.",
-  scope: "admin",
+  description: "미리보기 등록을 삭제(throwaway 로 띄운 서버는 함께 정지). 작업 폴더와 코드는 그대로 남는다.",
+  scope: "code",
   input: { id: z.string() },
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/preview-envs/:id/delete"], parse: (req) => ({ id: req.params?.id }) }] },
   handler: async (input: any) => deletePreviewEnv(pid(input.id)),
@@ -91,8 +96,9 @@ const del: Capability = {
 const ensure: Capability = {
   name: "preview_env_ensure",
   title: "프리뷰 환경 띄우기",
-  description: "프리뷰 서빙을 지금 보장 — shared-proxy/stage=워크트리 확인, throwaway=백엔드 프로세스 spawn+헬스체크, existing-ref=대상 검증. 반환 {status, url, action, port?}.",
-  scope: "admin",
+  description: "미리보기를 지금 띄운다 — 작업 폴더가 없으면 만들고(provision) 스택 프로필의 build_cmd 로 빌드까지 한다. " +
+    "준비가 길면 **status='preparing' 을 먼저 돌려주고 백그라운드로 진행**하므로(요청을 막지 않는다) 목록을 폴링해 running 을 확인하라. 반환 {status, url, action, port?}.",
+  scope: "code",
   input: { id: z.string() },
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/preview-envs/:id/ensure"], parse: (req) => ({ id: req.params?.id }) }] },
   handler: async (input: any) => {
@@ -105,8 +111,8 @@ const ensure: Capability = {
 const stop: Capability = {
   name: "preview_env_stop",
   title: "프리뷰 환경 정지",
-  description: "프리뷰를 stopped 로 — throwaway 는 백엔드 프로세스 종료(SIGTERM), 정적/existing-ref 는 상태만.",
-  scope: "admin",
+  description: "미리보기를 끈다(stopped) — throwaway 로 띄운 서버는 종료(SIGTERM), 정적·existing-ref 는 상태만 바뀐다.",
+  scope: "code",
   input: { id: z.string() },
   expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/preview-envs/:id/stop"], parse: (req) => ({ id: req.params?.id }) }] },
   handler: async (input: any) => {
@@ -120,8 +126,8 @@ const stop: Capability = {
 const spList: Capability = {
   name: "stack_profile_list",
   title: "스택 프로필 목록",
-  description: "스택 프로필(org_stack_profile) 목록 — 프리뷰 throwaway 가 '어떻게 띄우나'(start_cmd·port_env·env·healthcheck). 프리셋 + 커스텀.",
-  scope: "admin",
+  description: "스택 프로필(org_stack_profile) 목록 — '어떻게 띄우나'(build_cmd·start_cmd·port_env·env·healthcheck). 미리보기를 만들 때 고르거나, 비우면 레포로 자동 매칭된다.",
+  scope: "code", // 조회는 작업자도 필요(만들 때 고른다). 정의(set/delete)는 셸 명령을 담으므로 admin.
   input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/stack-profiles"], parse: () => ({}) }] },
   handler: async () => ({ profiles: await listStackProfiles() }),
@@ -132,8 +138,8 @@ const spSet: Capability = {
   title: "스택 프로필 생성/수정",
   description:
     "스택 프로필 upsert(id 기준). static_only=true 면 정적(shared-proxy 용, start_cmd 불요). false 면 start_cmd 를 워크트리에서 실행하고 " +
-    "port_env(기본 PORT)로 할당 포트를 주입, env_json 을 추가 env 로 넣는다. healthcheck_path 로 기동 확인. 비개발자용 프리셋을 관리자가 정의.",
-  scope: "admin",
+    "port_env(기본 PORT)로 할당 포트를 주입, env_json 을 추가 env 로 넣는다. build_cmd 는 띄우기 전 빌드. healthcheck_path 로 기동 확인.",
+  scope: "admin", // start_cmd·build_cmd = 셸 명령 → **정의는 관리자만**(사용은 code).
   input: {
     id: z.string(),
     label: z.string().max(200).optional(),

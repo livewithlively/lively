@@ -15,6 +15,11 @@
 //
 //  ⚠ 훅·스킬은 org_hook/org_harness_asset **전체**를 캡처한다 — 이 스크립트는 defaults 의 SoT 인
 //    라이블리 게이트웨이에서만 돌린다는 전제(고객사·실험 자산이 섞인 DB 에서 돌리지 말 것).
+//  ⚠ **내부 전용 자산은 `frontmatter.internal_only = true` 로 표시하면 시드에서 통째로 빠진다**(excludeInternalOnly).
+//    우리 박스 특유의 경로(`workspace/productivity/...`)·포트(:8080)·사내 히스토리가 본문에 박힌 자산은 고객
+//    박스에서 무의미하거나 오해를 부른다. SEED_ENABLED_POLICY(=포함하되 기본값을 고정)와 **다르다** — 그건
+//    '기능은 주되 정해진 on/off 로' 주는 것이고, 이건 **아예 주지 않는** 것이다(본문도 안 나간다).
+//    지식이 #846 에서 DB 캡처를 끊은 것과 같은 취지.
 //  ⚠ 지식 본문은 **DB 에서 캡처하지 않는다**(#846 재오염 차단). 우리 dev WIKI 의 지식 본문에는 내부 사고
 //    이야기·`[[내부 링크]]`·사내 이슈번호·타 고객사 이름이 섞여 있어, DB 를 그대로 스냅샷하면 그게 고객
 //    박스로 새어 나간다(실측: closeout 루틴 메타블록·타 고객사 도메인 구조가 v0.1.148~150 에 유출됐다).
@@ -34,17 +39,40 @@ const KNOWLEDGE_NAMES = [
   "domainmap-is-bootstrap-runbook",  // src/scheduler.ts — 〃 (도구 델타)
 ];
 
-// ⚠ 신규 설치 기본값 오버라이드 — canonical 게이트웨이에서 **시험 삼아 켜 둔 것**이 그대로
-//  '신규 고객 기본 켜짐'으로 굳는 것을 막는다. capture 는 DB 를 스냅샷하므로 우리 dev 토글이
-//  디폴트를 오염시킨다(2026-07-14 실측: project-pull-turn 이 false→true 로 뒤집힐 뻔했다 —
-//  #828 은 "기본 꺼짐, 각 고객이 관리탭에서 켠다"로 결정했는데 우리가 dev 에서 켜 뒀을 뿐이다).
-//  여기 등재된 id 는 DB 상태와 무관하게 enabled=false 로 시딩된다. 운영자가 켜면 그 상태는
-//  보존된다(seed-content 는 '없을 때만 삽입' — 기존 행을 안 덮는다).
-const SEED_DISABLED = new Set([
-  "project-pull-turn",   // #828 — 턴마다 shared pull. 매니페스트 축소(#829)가 전제라 각 고객이 판단해 켠다.
-  "project-push",        // #905 C3 — 턴 끝 up-sync. 팀 공유문서를 덮어쓸 수 있고 sync="both" 옵트인이 전제라 각 고객이 판단해 켠다.
-  "session-log-capture", // #905 C1 — 턴 끝 트랜스크립트 캡처. 대화 전문이 중앙에 저장되므로 관리탭 ▸ 세션 공유로 조직이 명시 opt-in.
+// ⚠ 신규 설치 기본값 고정 — **라이블리 DB 의 on/off 는 "우리 조직이 고른 값"이지 "신규 고객 기본값"이 아니다.**
+//  capture 는 DB 를 스냅샷하므로, 여기 등재하지 않으면 우리 토글이 그대로 고객 디폴트로 굳는다.
+//  (2026-07-14 실측: project-pull-turn 이 false→true 로 뒤집힐 뻔했다 — #828 은 "기본 꺼짐, 각 고객이
+//   관리탭에서 켠다"로 결정했는데 우리가 dev 에서 켜 뒀을 뿐이다.)
+//  등재된 id 는 DB 상태와 무관하게 **이 값으로** 시딩된다. 운영자가 이후 바꾸면 그 상태는 보존된다
+//  (seed-content 는 '없을 때만 삽입' — 기존 행을 안 덮는다).
+//
+//  ⚠ **양방향이어야 한다**(#1069). 옛 SEED_DISABLED 는 Set 이라 'false 강제'만 표현할 수 있었는데,
+//   라이블리가 경량 테스트 스킬로 갈아타면서 **우리 DB=off / 고객 기본=on** 인 항목이 처음 생겼다.
+//   Set 으로는 그걸 못 적어서, 전체 capture 를 돌리는 순간 고객 기본값이 조용히 뒤집혔을 것이다.
+const SEED_ENABLED_POLICY = new Map([
+  ["project-pull-turn",   false], // #828 — 턴마다 shared pull. 매니페스트 축소(#829)가 전제라 각 고객이 판단해 켠다.
+  ["project-push",        false], // #905 C3 — 턴 끝 up-sync. 팀 공유문서를 덮어쓸 수 있고 sync="both" 옵트인이 전제라 각 고객이 판단해 켠다.
+  ["session-log-capture", false], // #905 C1 — 턴 끝 트랜스크립트 캡처. 대화 전문이 중앙에 저장되므로 관리탭 ▸ 세션 공유로 조직이 명시 opt-in.
+  // 테스트 작성 스킬은 **둘 중 하나만** 켠다(트리거가 겹친다). 고객 기본은 검증 이력이 긴 blind 쪽 —
+  //  라이블리는 경량판(failfirst)으로 갈아탔지만 그건 우리 선택이지 고객 기본값이 아니다(#1069).
+  ["spec-blind-test",     true],  // 라이블리 DB 는 off. 고객 기본은 on 으로 고정.
+  ["spec-failfirst-test", false], // 라이블리 DB 는 on.  고객 기본은 off 로 고정(고객이 관리탭에서 갈아탄다).
 ]);
+
+// 시드 산출물에 정책을 적용한다(제자리 수정). 반환 = **실제로 뒤집힌 것만** — 이미 정책 값이면 잡음이라 뺀다.
+//  훅·스킬을 가리지 않는다(같은 모양의 행). 정책이 비면 아무것도 안 한다.
+export function applySeedEnabledPolicy(rows, policy = SEED_ENABLED_POLICY) {
+  const flipped = [];
+  if (!policy || typeof policy.get !== "function") return flipped;
+  for (const r of rows || []) {
+    if (!policy.has(r.id)) continue;
+    const want = policy.get(r.id);
+    if (r.enabled === want) continue;     // 이미 맞음 → 보고 안 함
+    flipped.push({ id: r.id, from: r.enabled, to: want });
+    r.enabled = want;
+  }
+  return flipped;
+}
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.join(here, "..", "src", "org", "default-content.ts");
@@ -140,6 +168,13 @@ export function parseCaptureArgs(argv) {
   return a;
 }
 const byId = (rows) => new Map(rows.map((r) => [r.id, r]));
+// 내부 전용 자산 분리 — `frontmatter.internal_only === true` 면 고객 시드에서 **제외**(포함하되 off 가 아니라 미포함).
+//  본문에 우리 박스 특유 경로·포트·사내 히스토리가 박힌 자산이 고객 박스로 새지 않게 한다(#846 지식 재오염 차단과 같은 취지).
+export function excludeInternalOnly(rows) {
+  const kept = [], excluded = [];
+  for (const r of rows) ((r && r.frontmatter && r.frontmatter.internal_only === true) ? excluded : kept).push(r);
+  return { kept, excluded };
+}
 // 현재 시드 vs DB 캡처 항목별 판정(추가/변경/제거) — id 기준, JSON 동등성으로 변경 감지.
 export function diffRows(current, next) {
   const c = byId(current), n = byId(next), added = [], changed = [], removed = [];
@@ -200,15 +235,22 @@ async function main() {
   const nextHooks = (await pool.query(
     `SELECT id, label, harness, event, matcher, timeout_sec, note, enabled, sort, source_code
        FROM org_hook ORDER BY sort, id`)).rows;
-  const nextSkills = (await pool.query(
+  const capturedSkills = (await pool.query(
     `SELECT id, kind, label, harness, description, frontmatter, paired_hook_id, enabled, sort, body
        FROM org_harness_asset ORDER BY kind, sort, id`)).rows;
   await pool.end();
 
-  // 신규 설치 기본값 강제(SEED_DISABLED) — 우리 dev 토글이 고객 디폴트로 새지 않게. diff 가 '실제 쓰일 값'을 반영하도록 먼저.
-  const forced = [...nextHooks, ...nextSkills].filter((r) => SEED_DISABLED.has(r.id) && r.enabled);
-  for (const r of forced) r.enabled = false;
-  if (forced.length) console.warn(`⚠ 시드 기본값 강제 off(dev 에선 켜짐): ${forced.map((r) => r.id).join(", ")}`);
+  // 내부 전용(frontmatter.internal_only) 자산은 고객 시드에서 통째로 제외 — 본문도 안 나간다(위 헤더 ⚠ 참조).
+  const { kept: nextSkills, excluded: internalSkills } = excludeInternalOnly(capturedSkills);
+  if (internalSkills.length) console.warn(`ⓘ 내부 전용이라 시드에서 제외(frontmatter.internal_only): ${internalSkills.map((r) => r.id).join(", ")}`);
+
+  // 신규 설치 기본값 고정 — 우리 조직 토글이 고객 디폴트로 새지 않게. diff 가 '실제 쓰일 값'을 반영하도록 먼저.
+  //  제외되지 않고 실제로 시드에 나가는 행에만 적용된다(위 excludeInternalOnly 뒤).
+  const flipped = applySeedEnabledPolicy([...nextHooks, ...nextSkills]);
+  if (flipped.length) {
+    console.warn("⚠ 시드 기본값 고정 — 라이블리 DB 와 다르게 굳힙니다(고객 기본값 정책):");
+    for (const f of flipped) console.warn(`    ${f.id}: 우리=${f.from} → 시드=${f.to}`);
+  }
 
   // 현재 시드에서 훅·스킬 배열 파싱 — 항목별 diff·선택 반영의 기준.
   const currentSrc = fs.existsSync(OUT) ? fs.readFileSync(OUT, "utf8") : null;

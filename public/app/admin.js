@@ -128,9 +128,9 @@ const ADMIN_SECTIONS = [
     // 자동화 — 구 [스케줄러]+[상시 세션]. 크론 액션의 param kind 에 'session' 이 1급으로 있고 4개 액션이 상시
     //  세션을 필수 타깃으로 받는다(크론=언제 × 상시세션=어디서·누구로). 떨어뜨려 놓을 이유가 없다.
     { key: 'automation', label: '자동화', meaning: null, group: 'capability' },
-    // 프리뷰 환경(#1036) — 작업 워크트리의 화면을 라이브(:8080) 무접촉으로 확인하는 격리 미리보기. 게이트웨이가
-    //  워크트리 public/ 을 /preview/<id>/ 서브패스로 서빙(shared-proxy: /api 는 게이트웨이 자신 → 별도 프로세스·포트 불요).
-    { key: 'preview-envs', label: '프리뷰 환경', meaning: null, group: 'capability' },
+    // 미리보기(#1036) — 작업 중인 화면을 운영 화면·다른 사람 작업과 분리해 따로 띄워 본다. 사람이 고르는 건
+    //  '무엇을 미리볼지'(프로젝트·레포)뿐이고 작업 폴더 준비·빌드는 서버가 한다. 대개 AI 가 만들어 쓰고 여기선 보고·열고·끈다.
+    { key: 'preview-envs', label: '미리보기', meaning: null, group: 'capability' },
     // 세션 공유(#905 C1) — 구성원 AI 세션 대화 기록을 중앙에 모아 환경·멤버 무관 이어보기/이어받기. 프라이버시가
     //  걸린 org 정책이라 admin 전용. 기본 꺼짐(켜기 전엔 수집 안 함).
     { key: 'session-share', label: '세션 공유', meaning: null, group: 'capability' },
@@ -171,11 +171,14 @@ const SECTION_REMAP = {
 // 구 [검토 큐]는 관리탭을 떠나 WIKI 탭으로 갔다(#837) — 섹션 리맵이 아니라 탭 밖 리다이렉트라 따로 둔다.
 const SECTION_EXIT = { 'review-queue': '#/knowledge/review' };
 // admin 권한 전용(쓰기·인프라·감사). #318 호출통계·#549 변경감사는 전 구성원의 변경·before/after 를 노출하므로 admin.
-const ADMIN_ONLY = ['credentials', 'connectors', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'embeddings', 'automation', 'preview-envs', 'audit', 'ingest-policy', 'session-share'];
+const ADMIN_ONLY = ['credentials', 'connectors', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'embeddings', 'automation', 'audit', 'ingest-policy', 'session-share'];
 const RUNTIME_ONLY = ['agent-assets']; // runtime 권한 전용(멤버 머신에서 도는 것의 정의)
 // [도구]는 두 권한의 합집합 — 사내 API 도구·빌트인은 runtime, 외부 MCP 서버 등록은 admin. 둘 중 하나라도 있으면
 //  섹션을 보여주고, 안에서 각 서브탭을 권한별로 켠다(구조상 한 섹션=한 scope 전제가 깨지는 유일한 자리라 명시한다).
-const MIXED_SECTIONS = { tools: ['admin', 'runtime'] };
+//  [미리보기]도 합집합 — **쓰는 사람은 작업자(code)** 다. 관리자 전용으로 잠그면 정작 화면을 확인해야 할
+//   사람이 못 쓴다(실측: 활성 구성원 대다수는 items·context 뿐이고 code 는 개발 구성원에게 부여된다).
+//   단 '어떻게 띄울지'(스택 프로필)는 셸 명령을 담으므로 정의는 admin 만 — 사용은 code, 정의는 admin 으로 가른다.
+const MIXED_SECTIONS = { tools: ['admin', 'runtime'], 'preview-envs': ['code', 'admin'] };
 // V4-P5/J: 어휘(카테고리·레포·팀) CRUD = context 스코프(admin 완화). context 없는 사용자는 읽기 전용(섹션은 노출).
 const CONTEXT_EDIT = ['wiki-categories', 'repos', 'teams'];
 // 내 설정 — 권한 게이트 없음(전 구성원 노출·편집). 서버도 me/* 엔드포인트라 principal 로 강제된다.
@@ -1326,125 +1329,180 @@ async function managedDelete(id, reload) {
         toast('실패 — ' + e.message, true);
     }
 }
-// ── 프리뷰 환경(#1036) — 작업자별 격리 미리보기. 작업 워크트리(project/<id>)의 public/ 을 /preview/<id>/ 서브패스로 정적 서빙. ──
-//  shared-proxy: 프론트만 워크트리 것, /api 는 게이트웨이 자신 → 별도 프로세스·포트·프록시 불요(화면 확인용 개발 프리뷰). stage(통합)는 2단계.
+// ── 미리보기 — 작업 중인 화면을 운영 화면·남의 작업과 분리해 따로 띄워 본다. ──
+//  사람이 고르는 건 '무엇을 미리볼지'(프로젝트·레포)뿐이고, 작업 폴더 준비·빌드는 서버가 알아서 한다(비동기).
+//  대개는 AI 가 작업 중 자동으로 만들어 쓰고, 이 화면은 그것을 **보고·열고·끄는** 창구다.
+const PREVIEW_STATUS_TEXT = { running: '실행 중', preparing: '준비 중…', error: '문제 있음', stopped: '꺼짐' };
+let previewPollTimer = null;
 async function previewEnvsPanel(detail, data) {
     const reload = () => previewEnvsPanel(detail, data);
-    detail.replaceChildren(el('div', { class: 'card' }, skeleton('프리뷰 환경을 불러오는 중')));
+    if (previewPollTimer) {
+        clearTimeout(previewPollTimer);
+        previewPollTimer = null;
+    }
+    detail.replaceChildren(el('div', { class: 'card' }, skeleton('미리보기를 불러오는 중')));
     let envs;
     try {
         const r = await api('/api/ui/preview-envs');
         envs = (r && r.envs) || [];
     }
     catch (e) {
-        detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '프리뷰 환경을 불러오지 못했습니다')));
+        detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '미리보기 목록을 불러오지 못했습니다')));
         return;
     }
     const rows = el('div', { class: 'wikicat-rows' });
-    if (!envs.length)
-        rows.append(el('div', { class: 'wikicat-empty', text: '아직 프리뷰 환경이 없습니다. ‘+ 프리뷰 추가’로 작업 워크트리를 화면으로 띄우세요.' }));
+    if (!envs.length) {
+        rows.append(el('div', { class: 'wikicat-empty', text: '아직 만든 미리보기가 없습니다. 보통은 AI 가 화면을 확인해야 할 때 자동으로 만들어 쓰고, 직접 만들려면 오른쪽 위 ‘+ 미리보기 만들기’를 누르세요.' }));
+    }
     for (const p of envs) {
-        const statusText = p.status === 'running' ? '실행중' : (p.status === 'error' ? '오류' : '정지');
-        const msText = (p.kind === 'stage' && p.merge_status && typeof p.merge_status === 'object')
-            ? Object.keys(p.merge_status).map((b) => b + ':' + p.merge_status[b]).join('  ') : '';
+        const statusText = PREVIEW_STATUS_TEXT[p.status] || (p.status || '알 수 없음');
+        const where = [
+            p.project_name || (p.project_id ? '프로젝트 #' + p.project_id : null),
+            p.repo,
+            p.kind === 'stage' ? '여러 작업을 합쳐서 봄' : null,
+        ].filter(Boolean).join(' · ');
         const mainKids = [
             el('span', { class: 'wikicat-name', text: p.label || p.id }),
-            el('span', { class: 'wikicat-key mono', text: (p.project_id ? '#' + p.project_id + ' · ' : '') + (p.repo || '') + ' · ' + (p.kind || 'work') + '/' + (p.backing_mode || 'shared-proxy') + (p.port ? (' :' + p.port) : '') }),
-            el('span', { class: 'dm-tag', text: p.enabled ? statusText : '비활성' }),
-            msText ? el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: 'merge' }), msText) : null,
-            p.last_error ? el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '오류' }), p.last_error) : null,
+            where ? el('span', { class: 'wikicat-key', text: where }) : null,
+            el('span', { class: 'dm-tag', text: p.enabled ? statusText : '꺼둠' }),
+            p.last_error ? el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '안내' }), p.last_error) : null,
         ].filter(Boolean);
-        const actBtns = [
-            (p.status === 'running') ? el('a', { class: 'btn btn-ghost btn-sm', href: '/preview/' + encodeURIComponent(p.id) + '/', target: '_blank', text: '열기 ↗' }) : null,
-            el('button', { class: 'btn btn-ghost btn-sm', text: '띄우기', onclick: () => previewEnsure(p.id, reload) }),
-            (p.status === 'running') ? el('button', { class: 'btn btn-ghost btn-sm', text: '정지', onclick: () => previewStop(p.id, reload) }) : null,
-            el('button', { class: 'btn btn-ghost btn-sm', text: '수정', onclick: () => openPreviewEnvForm(p, reload) }),
+        const acts = [
+            (p.status === 'running') ? el('a', { class: 'btn btn-primary btn-sm', href: '/preview/' + encodeURIComponent(p.id) + '/', target: '_blank', text: '화면 열기 ↗' }) : null,
+            (p.status !== 'preparing') ? el('button', { class: 'btn btn-ghost btn-sm', text: p.status === 'running' ? '새로 만들기' : '띄우기', onclick: () => previewEnsure(p.id, reload) }) : null,
+            (p.status === 'running' || p.status === 'preparing') ? el('button', { class: 'btn btn-ghost btn-sm', text: '끄기', onclick: () => previewStop(p.id, reload) }) : null,
+            el('button', { class: 'btn btn-ghost btn-sm', text: '설정', onclick: () => openPreviewEnvForm(p, reload) }),
             el('button', { class: 'btn btn-ghost btn-sm btn-ghost-danger', text: '삭제', onclick: () => previewDelete(p.id, reload) }),
         ].filter(Boolean);
-        rows.append(el('div', { class: 'wikicat-row' }, el('div', { class: 'wikicat-row-main' }, ...mainKids), el('div', { class: 'wikicat-row-acts' }, ...actBtns)));
+        rows.append(el('div', { class: 'wikicat-row' }, el('div', { class: 'wikicat-row-main' }, ...mainKids), el('div', { class: 'wikicat-row-acts' }, ...acts)));
     }
-    const head = el('div', { class: 'wikicat-grouphead' }, el('span', { class: 'wikicat-grouptitle', text: '프리뷰 환경' }), el('span', { class: 'wikicat-groupcount', text: String(envs.length) }), el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 프리뷰 추가', onclick: () => openPreviewEnvForm(null, reload) }));
-    const card = el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '작업 워크트리의 화면을 라이브(:8080)를 건드리지 않고 확인하는 격리 미리보기입니다. 게이트웨이가 워크트리의 public/ 을 /preview/<id>/ 로 서빙하고 API 는 게이트웨이 자신을 씁니다(shared-proxy) — 별도 서버·포트가 없습니다. 워크트리를 먼저 만들고(lively_local_repo_worktree) build:web 으로 빌드한 뒤 ‘띄우기’를 누르세요.' }), el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
+    const head = el('div', { class: 'wikicat-grouphead' }, el('span', { class: 'wikicat-grouptitle', text: '미리보기' }), el('span', { class: 'wikicat-groupcount', text: String(envs.length) }), el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 미리보기 만들기', onclick: () => openPreviewEnvForm(null, reload) }));
+    const card = el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '작업 중인 화면을 운영 중인 화면이나 다른 사람 작업에 영향 없이 따로 띄워 봅니다. 무엇을 미리볼지만 고르면 나머지 준비는 자동으로 끝나고, 만들어진 주소를 팀원에게 그대로 보내 확인받을 수 있습니다.' }), el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
     detail.replaceChildren(card);
+    // 준비 중인 게 있으면 잠시 뒤 자동으로 다시 확인한다(사람이 새로고침하지 않아도 되게).
+    if (envs.some((x) => x.status === 'preparing')) {
+        previewPollTimer = setTimeout(() => { if (document.body.contains(detail))
+            reload(); }, 5000);
+    }
 }
 async function openPreviewEnvForm(p, reload) {
     const isNew = !p;
     const inputStyle = 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box';
     const block = (title, hint, ctrl) => el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: title }), hint ? el('p', { class: 'ps-block-hint', text: hint }) : null, ctrl);
-    let profiles = [];
+    // 고를 것들을 미리 읽어 둔다 — 사용자가 아이디·경로를 '타이핑'하지 않아도 되게.
+    let projects = [], repos = [], profiles = [];
+    try {
+        const r = await api('/api/ui/v6/projects');
+        projects = (r && r.projects) || [];
+    }
+    catch { /* 목록 못 읽어도 폼은 뜬다 */ }
+    try {
+        const r = await api('/api/ui/repos');
+        repos = (r && r.domainmapRepos) || [];
+    }
+    catch { /* 위와 동일 */ }
     try {
         const r = await api('/api/ui/stack-profiles');
         profiles = (r && r.profiles) || [];
     }
-    catch { /* throwaway 안 쓰면 무관 */ }
-    const idInp = el('input', { type: 'text', style: inputStyle, value: p ? p.id : '', placeholder: 'wonjun-projects', ...(isNew ? {} : { disabled: true }) });
-    const labelInp = el('input', { type: 'text', style: inputStyle, value: (p && p.label) || '', placeholder: '원준 프로젝트 보드 프리뷰' });
+    catch { /* 고급에서만 쓴다 */ }
+    // ── 기본: 무엇을 미리볼까 (이 셋만 채우면 된다) ──
+    const projListId = 'prevproj-' + Math.random().toString(36).slice(2, 8);
+    const projList = el('datalist', { id: projListId });
+    const projLabel = (x) => x.name + ' #' + x.id;
+    for (const x of projects.slice(0, 500))
+        projList.append(el('option', { value: projLabel(x) }));
+    const projInp = el('input', { type: 'text', style: inputStyle, list: projListId, placeholder: '프로젝트 이름으로 검색' });
+    if (p && p.project_id) {
+        const f = projects.find((x) => x.id === p.project_id);
+        projInp.value = f ? projLabel(f) : ('#' + p.project_id);
+    }
+    const pickProjectId = () => {
+        const v = String(projInp.value || '').trim();
+        const m = v.match(/#(\d+)\s*$/);
+        if (m)
+            return Number(m[1]);
+        const byName = projects.find((x) => x.name === v);
+        return byName ? byName.id : null;
+    };
+    const repoSel = el('select', { style: inputStyle });
+    repoSel.append(el('option', { value: '', text: '— 고르세요 —' }));
+    const repoNames = repos.map((r) => r.name).filter(Boolean);
+    if (p && p.repo && !repoNames.includes(p.repo))
+        repoNames.unshift(p.repo);
+    for (const n of repoNames)
+        repoSel.append(el('option', { value: n, text: n, ...((p && p.repo === n) ? { selected: true } : {}) }));
+    const labelInp = el('input', { type: 'text', style: inputStyle, value: (p && p.label) || '', placeholder: '비우면 자동으로 지어집니다' });
+    // ── 고급(보통 그대로 두면 된다) ──
     const kindSel = el('select', { style: inputStyle });
-    for (const k of [['work', 'work — 작업 프리뷰(내 워크트리 1:1)'], ['stage', 'stage — 통합(여러 브랜치 merge)']])
+    for (const k of [['work', '내 작업 하나만 본다 (기본)'], ['stage', '여러 작업을 합쳐서 본다']])
         kindSel.append(el('option', { value: k[0], text: k[1], ...((p ? p.kind === k[0] : k[0] === 'work') ? { selected: true } : {}) }));
     const backingSel = el('select', { style: inputStyle });
-    for (const bm of [['shared-proxy', 'shared-proxy — 프론트만(정적·API=게이트웨이)'], ['throwaway', 'throwaway — 자체 백엔드 프로세스 띄워 프록시'], ['existing-ref', 'existing-ref — 기존 인스턴스로 프록시']])
-        backingSel.append(el('option', { value: bm[0], text: bm[1], ...((p ? p.backing_mode === bm[0] : bm[0] === 'shared-proxy') ? { selected: true } : {}) }));
+    for (const b of [['shared-proxy', '화면만 따로 띄운다 (기본·가장 가벼움)'], ['throwaway', '전용 서버까지 새로 띄운다'], ['existing-ref', '이미 떠 있는 주소로 연결한다']])
+        backingSel.append(el('option', { value: b[0], text: b[1], ...((p ? p.backing_mode === b[0] : b[0] === 'shared-proxy') ? { selected: true } : {}) }));
     const stackSel = el('select', { style: inputStyle });
-    stackSel.append(el('option', { value: '', text: '(선택 — throwaway 일 때)' }));
+    stackSel.append(el('option', { value: '', text: '자동 — 이 레포에 맞는 설정을 씁니다' }));
     for (const sp of profiles)
-        stackSel.append(el('option', { value: sp.id, text: (sp.label || sp.id) + (sp.static_only ? ' [정적]' : ''), ...((p && p.stack_profile === sp.id) ? { selected: true } : {}) }));
-    const backingRefInp = el('input', { type: 'text', style: inputStyle, value: (p && p.backing_ref) || '', placeholder: 'http://localhost:8081 (existing-ref)' });
-    const owner = memberCombo({ value: (p && p.owner_member) || '', placeholder: '구성원 id (예: wonjun)' });
-    const projInp = el('input', { type: 'number', style: inputStyle, value: (p && p.project_id) || '', placeholder: '작업 프로젝트 id (예: 1036)' });
-    const repoInp = el('input', { type: 'text', style: inputStyle, value: (p && p.repo) || 'context-ontology', placeholder: 'context-ontology' });
-    const wtInp = el('input', { type: 'text', style: inputStyle, value: (p && p.worktree_path) || '', placeholder: '비우면 workspace/project/<id>/<repo> 자동' });
-    const ttlInp = el('input', { type: 'number', style: inputStyle, value: (p && p.ttl_idle_sec) || '', placeholder: '0 = 무제한(유휴 유지)' });
-    // stage 전용
+        stackSel.append(el('option', { value: sp.id, text: sp.label || sp.id, ...((p && p.stack_profile === sp.id) ? { selected: true } : {}) }));
+    const backingRefInp = el('input', { type: 'text', style: inputStyle, value: (p && p.backing_ref) || '', placeholder: 'http://localhost:8081' });
+    const owner = memberCombo({ value: (p && p.owner_member) || '', placeholder: '구성원 선택 (선택 사항)' });
+    const wtInp = el('input', { type: 'text', style: inputStyle, value: (p && p.worktree_path) || '', placeholder: '비워 두면 자동으로 만듭니다' });
+    const ttlInp = el('input', { type: 'number', style: inputStyle, value: (p && p.ttl_idle_sec) || '', placeholder: '0 = 계속 켜둠' });
     const branchesTa = el('textarea', { style: inputStyle + ';min-height:70px;resize:vertical' });
     branchesTa.value = (p && Array.isArray(p.member_branches)) ? p.member_branches.join('\n') : '';
-    const baseRefInp = el('input', { type: 'text', style: inputStyle, value: (p && p.base_ref) || '', placeholder: 'origin/main (기본)' });
+    const baseRefInp = el('input', { type: 'text', style: inputStyle, value: (p && p.base_ref) || '', placeholder: 'origin/main' });
     const triggerSel = el('select', { style: inputStyle });
-    for (const t of [['manual', 'manual — 수동(‘띄우기’ 누를 때만 재-merge)'], ['auto', 'auto — 커밋마다 재-merge(reconcile)']])
+    for (const t of [['manual', '내가 누를 때만 다시 합친다 (기본)'], ['auto', '작업이 바뀌면 자동으로 다시 합친다']])
         triggerSel.append(el('option', { value: t[0], text: t[1], ...((p && p.merge_trigger === t[0]) ? { selected: true } : {}) }));
     const enabledChk = el('input', { type: 'checkbox', ...((p ? p.enabled : true) ? { checked: true } : {}) });
     const noteInp = el('input', { type: 'text', style: inputStyle, value: (p && p.note) || '' });
-    const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '프리뷰 추가' : '저장' });
-    const form = el('div', { class: 'proj-settings' }, block('프리뷰 id', isNew ? '소문자 슬러그(a-z0-9_-). URL 이 /preview/<id>/ 가 됩니다.' : 'id 는 변경 불가.', idInp), block('이름', '관리 목록에 보일 이름.', labelInp), block('종류', 'work=내 작업 워크트리 1:1 미리보기. stage=여러 작업 브랜치를 합친 통합 미리보기.', kindSel), block('백엔드 방식', 'shared-proxy=프론트만(가장 쌈, 세션 몇 개든 부담 0). throwaway=자체 백엔드 프로세스를 워크트리에서 띄워 프록시. existing-ref=이미 떠있는 것으로 프록시. (stage 는 항상 정적)', backingSel), block('[throwaway] 스택 프로필', 'throwaway 전용 — 어떻게 띄울지 프리셋 선택(관리자 정의). 없으면 관리 REST/MCP 로 추가.', stackSel), block('[existing-ref] 대상 URL', 'existing-ref 전용 — 프록시할 기존 인스턴스. 예: http://localhost:8081', backingRefInp), block('작업자', '이 프리뷰의 소유 작업자(참고용).', owner.el), block('레포', '프리뷰할 레포 이름.', repoInp), block('[work] 작업 프로젝트 id', 'work 전용 — 워크트리 경로 자동계산(workspace/project/<id>/<repo>). stage 는 비워도 됩니다.', projInp), block('[work] 워크트리 경로(선택)', 'work 전용 — 직접 지정할 때만. 비우면 프로젝트 id+레포로 자동 계산.', wtInp), block('[stage] 통합할 브랜치', 'stage 전용 — 한 줄에 하나(예: project/1030). base 위에 순서대로 merge하고, 충돌난 브랜치는 제외한 채 나머지를 통합합니다.', branchesTa), block('[stage] merge base', 'stage 전용 — 통합 기준. 비우면 origin/main.', baseRefInp), block('[stage] 재-merge 시점', 'stage 전용 — manual=‘띄우기’ 누를 때만. auto=reconcile 크론이 작업 브랜치 갱신을 주기 반영.', triggerSel), block('유휴 회수(초)', '이 시간 동안 미접속이면 자동 정지. 0=무제한.', ttlInp), block('활성', '켜면 reconcile 이 서빙 준비를 보장합니다.', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' enabled' }))), block('메모', '', noteInp), el('div', { class: 'ps-rules-actions' }, saveBtn));
-    const back = overlayBox(isNew ? '프리뷰 추가' : '프리뷰 수정 — ' + p.id, form);
+    const advanced = el('details', { class: 'ps-block' }, el('summary', { style: 'cursor:pointer;font-weight:600;padding:6px 0', text: '고급 설정 — 보통은 그대로 두면 됩니다' }), block('보는 방식', '여러 사람의 작업을 한 화면에서 함께 보려면 바꾸세요.', kindSel), block('어떻게 띄울까', '기본은 화면만 따로 띄웁니다. 서버 동작까지 확인해야 하면 전용 서버를, 이미 띄워 둔 게 있으면 그 주소를 쓰세요.', backingSel), block('실행 설정', '‘전용 서버까지 새로 띄운다’일 때 어떤 방식으로 띄울지. 비우면 이 레포에 맞는 설정을 자동으로 씁니다.', stackSel), block('연결할 주소', '‘이미 떠 있는 주소로 연결한다’일 때만 씁니다.', backingRefInp), block('합쳐서 볼 작업들', '한 줄에 하나씩 적습니다(예: project/1030). 서로 충돌하는 작업은 자동으로 빼고 나머지를 합칩니다.', branchesTa), block('합치는 기준', '비우면 origin/main 을 씁니다.', baseRefInp), block('다시 합치는 시점', '', triggerSel), block('담당자', '이 미리보기의 주인(참고용).', owner.el), block('작업 폴더 경로', '직접 지정할 때만 씁니다. 비우면 프로젝트에 맞춰 자동으로 만듭니다.', wtInp), block('안 보면 자동으로 끄기 (초)', '이 시간 동안 아무도 열지 않으면 자동으로 끕니다. 0이면 계속 켜둡니다.', ttlInp), block('사용', '', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' 이 미리보기를 사용합니다' }))), block('메모', '', noteInp), ...(p ? [block('주소', '팀원에게 이 주소를 보내면 됩니다.', el('div', { class: 'mono', text: '/preview/' + p.id + '/' }))] : []));
+    const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '만들고 띄우기' : '저장' });
+    const form = el('div', { class: 'proj-settings' }, block('어떤 작업을 미리볼까요?', '작업 중인 프로젝트를 고르세요. 필요한 작업 폴더가 없으면 자동으로 만들어 줍니다.', projInp), projList, block('어느 코드 저장소인가요?', '', repoSel), block('이름 (선택)', '목록에서 알아보기 쉬운 이름. 비우면 자동으로 지어집니다.', labelInp), advanced, el('div', { class: 'ps-rules-actions' }, saveBtn));
+    const back = overlayBox(isNew ? '미리보기 만들기' : '미리보기 설정', form);
     const boxw = back.querySelector('.ov-box');
     if (boxw)
         boxw.classList.add('ov-box-wide');
     saveBtn.onclick = async () => {
-        const id = idInp.value.trim();
-        if (!id) {
-            toast('프리뷰 id 가 필요합니다', true);
-            return;
-        }
-        if (!repoInp.value.trim()) {
-            toast('레포가 필요합니다', true);
-            return;
-        }
-        const kind = kindSel.value;
-        const backing_mode = backingSel.value;
+        const kind = kindSel.value, backing_mode = backingSel.value;
+        const repo = repoSel.value.trim();
+        const project_id = pickProjectId();
         const branches = kind === 'stage' ? branchesTa.value.split('\n').map((s) => s.trim()).filter(Boolean) : [];
-        if (kind === 'stage' && !branches.length) {
-            toast('stage 는 통합할 브랜치를 최소 1개 입력하세요', true);
+        if (!repo) {
+            toast('어느 코드 저장소를 볼지 골라 주세요', true);
             return;
         }
-        if (kind === 'work' && backing_mode === 'throwaway' && !stackSel.value) {
-            toast('throwaway 는 스택 프로필을 고르세요', true);
+        if (kind === 'work' && !project_id && !wtInp.value.trim()) {
+            toast('어떤 작업을 미리볼지(프로젝트) 골라 주세요', true);
+            return;
+        }
+        if (kind === 'stage' && !branches.length) {
+            toast('합쳐서 볼 작업을 한 개 이상 적어 주세요 (고급 설정)', true);
             return;
         }
         if (kind === 'work' && backing_mode === 'existing-ref' && !backingRefInp.value.trim()) {
-            toast('existing-ref 는 대상 URL 을 입력하세요', true);
+            toast('연결할 주소를 입력해 주세요 (고급 설정)', true);
             return;
         }
-        const body = { id, kind, backing_mode, label: labelInp.value.trim() || null, owner_member: owner.value() || null,
-            project_id: projInp.value ? Number(projInp.value) : null, repo: repoInp.value.trim(),
+        const body = {
+            ...(p ? { id: p.id } : {}), kind, backing_mode, repo, project_id,
+            label: labelInp.value.trim() || null, owner_member: owner.value() || null,
             worktree_path: wtInp.value.trim() || null, ttl_idle_sec: ttlInp.value ? Number(ttlInp.value) : null,
             enabled: enabledChk.checked, note: noteInp.value.trim() || null,
             stack_profile: stackSel.value || null, backing_ref: backingRefInp.value.trim() || null,
-            ...(kind === 'stage' ? { member_branches: branches, base_ref: baseRefInp.value.trim() || null, merge_trigger: triggerSel.value } : {}) };
+            ...(kind === 'stage' ? { member_branches: branches, base_ref: baseRefInp.value.trim() || null, merge_trigger: triggerSel.value } : {}),
+        };
         saveBtn.disabled = true;
         try {
-            await api('/api/ui/preview-envs', { method: 'POST', body: JSON.stringify(body) });
-            toast(isNew ? '추가했습니다 — ‘띄우기’로 서빙을 시작하세요' : '저장했습니다');
+            const saved = await api('/api/ui/preview-envs', { method: 'POST', body: JSON.stringify(body) });
+            const id = (saved && saved.env && saved.env.id) || (p && p.id);
+            if (isNew && id) {
+                // 만들자마자 준비를 시작한다 — 사람이 '띄우기'를 한 번 더 누르지 않아도 되게.
+                await api('/api/ui/preview-envs/' + encodeURIComponent(id) + '/ensure', { method: 'POST' }).catch(() => { });
+                toast('만들었습니다 — 화면을 준비하고 있습니다');
+            }
+            else
+                toast('저장했습니다');
             back.remove();
             reload();
         }
@@ -1457,10 +1515,13 @@ async function openPreviewEnvForm(p, reload) {
 async function previewEnsure(id, reload) {
     try {
         const r = await api('/api/ui/preview-envs/' + encodeURIComponent(id) + '/ensure', { method: 'POST' });
-        if (r && r.status === 'running')
-            toast('띄웠습니다 — ' + (r.url || ('/preview/' + id + '/')));
+        const s = r && r.status;
+        if (s === 'running')
+            toast('준비됐습니다 — ‘화면 열기’로 확인하세요');
+        else if (s === 'preparing')
+            toast('준비를 시작했습니다 — 끝나면 목록에 자동으로 표시됩니다');
         else
-            toast('상태: ' + ((r && r.status) || '?') + (r && r.error ? ' — ' + r.error : ''), !!(r && r.status === 'error'));
+            toast((r && r.error) || '띄우지 못했습니다', true);
         reload();
     }
     catch (e) {
@@ -1470,7 +1531,7 @@ async function previewEnsure(id, reload) {
 async function previewStop(id, reload) {
     try {
         await api('/api/ui/preview-envs/' + encodeURIComponent(id) + '/stop', { method: 'POST' });
-        toast('정지했습니다');
+        toast('껐습니다');
         reload();
     }
     catch (e) {
@@ -1478,7 +1539,7 @@ async function previewStop(id, reload) {
     }
 }
 async function previewDelete(id, reload) {
-    if (!confirm('프리뷰 환경 ‘' + id + '’을(를) 삭제할까요? (워크트리 자체는 남습니다)'))
+    if (!confirm('이 미리보기를 삭제할까요?\n작업 폴더와 코드는 그대로 남습니다.'))
         return;
     try {
         await api('/api/ui/preview-envs/' + encodeURIComponent(id) + '/delete', { method: 'POST' });
