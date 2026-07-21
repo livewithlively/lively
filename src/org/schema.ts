@@ -877,6 +877,36 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_preview_env ADD COLUMN IF NOT EXISTS base_ref TEXT;
     ALTER TABLE org_preview_env ADD COLUMN IF NOT EXISTS merge_trigger TEXT NOT NULL DEFAULT 'manual';
     ALTER TABLE org_preview_env ADD COLUMN IF NOT EXISTS merge_status JSONB NOT NULL DEFAULT '{}'::jsonb;
+    ALTER TABLE org_preview_env ADD COLUMN IF NOT EXISTS port INT;          -- throwaway: 할당된 백엔드 포트
+    ALTER TABLE org_preview_env ADD COLUMN IF NOT EXISTS pid INT;           -- throwaway: 백엔드 프로세스 PID
+    ALTER TABLE org_preview_env ADD COLUMN IF NOT EXISTS stack_profile TEXT; -- 어떻게 띄우나(org_stack_profile.id) — throwaway 필수
+  `);
+  // #1036 3단계 — org_stack_profile: '어떻게 띄우나'(start_cmd·포트env·env·헬스체크)를 데이터로. throwaway backing 프로세스가 참조.
+  //  비개발자는 프리셋을 드롭다운으로 고르기만(제로 입력 회피). Heroku Procfile / devcontainer.json / .gitpod.yml 모델.
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_stack_profile(
+      id TEXT PRIMARY KEY,
+      label TEXT,
+      repo TEXT,
+      static_only BOOLEAN NOT NULL DEFAULT false,
+      start_cmd TEXT,
+      port_env TEXT NOT NULL DEFAULT 'PORT',
+      env_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      healthcheck_path TEXT,
+      note TEXT,
+      sort INT NOT NULL DEFAULT 0,
+      version INT NOT NULL DEFAULT 1,
+      created_by TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
+  `);
+  await itemsPool.query(`
+    INSERT INTO org_stack_profile(id,label,repo,static_only,start_cmd,port_env,env_json,healthcheck_path,note) VALUES
+      ('co-frontend','context-ontology 프론트 (정적·shared-proxy)','context-ontology',true,NULL,'PORT','{}'::jsonb,'/',
+       '프론트(public/)만 서빙 — /api 는 게이트웨이 자신. 별도 프로세스·포트 없음(가장 싸고 안전).'),
+      ('co-fullstack','context-ontology 풀스택 (throwaway 게이트웨이)','context-ontology',false,'node dist/index.js','PORT','{"LIVELY_NO_SCHEDULER":"1"}'::jsonb,'/healthz',
+       '자체 게이트웨이 프로세스를 워크트리에서 기동 — 백엔드 변경까지 격리 확인. dist 빌드 선행, DB 등 backing 은 env 로 지정(라이브 DB 쓰기 금지).')
+    ON CONFLICT (id) DO NOTHING;
   `);
 
   // ── org_node — 분산 노드 레지스트리(#869). 멤버 PC(member)/워커(worker)에 도는 노드 에이전트의 desired state. ──

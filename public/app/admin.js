@@ -1348,7 +1348,7 @@ async function previewEnvsPanel(detail, data) {
             ? Object.keys(p.merge_status).map((b) => b + ':' + p.merge_status[b]).join('  ') : '';
         const mainKids = [
             el('span', { class: 'wikicat-name', text: p.label || p.id }),
-            el('span', { class: 'wikicat-key mono', text: (p.project_id ? '#' + p.project_id + ' · ' : '') + (p.repo || '') + ' · ' + (p.kind || 'work') }),
+            el('span', { class: 'wikicat-key mono', text: (p.project_id ? '#' + p.project_id + ' · ' : '') + (p.repo || '') + ' · ' + (p.kind || 'work') + '/' + (p.backing_mode || 'shared-proxy') + (p.port ? (' :' + p.port) : '') }),
             el('span', { class: 'dm-tag', text: p.enabled ? statusText : '비활성' }),
             msText ? el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: 'merge' }), msText) : null,
             p.last_error ? el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '오류' }), p.last_error) : null,
@@ -1366,15 +1366,29 @@ async function previewEnvsPanel(detail, data) {
     const card = el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '작업 워크트리의 화면을 라이브(:8080)를 건드리지 않고 확인하는 격리 미리보기입니다. 게이트웨이가 워크트리의 public/ 을 /preview/<id>/ 로 서빙하고 API 는 게이트웨이 자신을 씁니다(shared-proxy) — 별도 서버·포트가 없습니다. 워크트리를 먼저 만들고(lively_local_repo_worktree) build:web 으로 빌드한 뒤 ‘띄우기’를 누르세요.' }), el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
     detail.replaceChildren(card);
 }
-function openPreviewEnvForm(p, reload) {
+async function openPreviewEnvForm(p, reload) {
     const isNew = !p;
     const inputStyle = 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box';
     const block = (title, hint, ctrl) => el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: title }), hint ? el('p', { class: 'ps-block-hint', text: hint }) : null, ctrl);
+    let profiles = [];
+    try {
+        const r = await api('/api/ui/stack-profiles');
+        profiles = (r && r.profiles) || [];
+    }
+    catch { /* throwaway 안 쓰면 무관 */ }
     const idInp = el('input', { type: 'text', style: inputStyle, value: p ? p.id : '', placeholder: 'wonjun-projects', ...(isNew ? {} : { disabled: true }) });
     const labelInp = el('input', { type: 'text', style: inputStyle, value: (p && p.label) || '', placeholder: '원준 프로젝트 보드 프리뷰' });
     const kindSel = el('select', { style: inputStyle });
     for (const k of [['work', 'work — 작업 프리뷰(내 워크트리 1:1)'], ['stage', 'stage — 통합(여러 브랜치 merge)']])
         kindSel.append(el('option', { value: k[0], text: k[1], ...((p ? p.kind === k[0] : k[0] === 'work') ? { selected: true } : {}) }));
+    const backingSel = el('select', { style: inputStyle });
+    for (const bm of [['shared-proxy', 'shared-proxy — 프론트만(정적·API=게이트웨이)'], ['throwaway', 'throwaway — 자체 백엔드 프로세스 띄워 프록시'], ['existing-ref', 'existing-ref — 기존 인스턴스로 프록시']])
+        backingSel.append(el('option', { value: bm[0], text: bm[1], ...((p ? p.backing_mode === bm[0] : bm[0] === 'shared-proxy') ? { selected: true } : {}) }));
+    const stackSel = el('select', { style: inputStyle });
+    stackSel.append(el('option', { value: '', text: '(선택 — throwaway 일 때)' }));
+    for (const sp of profiles)
+        stackSel.append(el('option', { value: sp.id, text: (sp.label || sp.id) + (sp.static_only ? ' [정적]' : ''), ...((p && p.stack_profile === sp.id) ? { selected: true } : {}) }));
+    const backingRefInp = el('input', { type: 'text', style: inputStyle, value: (p && p.backing_ref) || '', placeholder: 'http://localhost:8081 (existing-ref)' });
     const owner = memberCombo({ value: (p && p.owner_member) || '', placeholder: '구성원 id (예: wonjun)' });
     const projInp = el('input', { type: 'number', style: inputStyle, value: (p && p.project_id) || '', placeholder: '작업 프로젝트 id (예: 1036)' });
     const repoInp = el('input', { type: 'text', style: inputStyle, value: (p && p.repo) || 'context-ontology', placeholder: 'context-ontology' });
@@ -1390,7 +1404,7 @@ function openPreviewEnvForm(p, reload) {
     const enabledChk = el('input', { type: 'checkbox', ...((p ? p.enabled : true) ? { checked: true } : {}) });
     const noteInp = el('input', { type: 'text', style: inputStyle, value: (p && p.note) || '' });
     const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '프리뷰 추가' : '저장' });
-    const form = el('div', { class: 'proj-settings' }, block('프리뷰 id', isNew ? '소문자 슬러그(a-z0-9_-). URL 이 /preview/<id>/ 가 됩니다.' : 'id 는 변경 불가.', idInp), block('이름', '관리 목록에 보일 이름.', labelInp), block('종류', 'work=내 작업 워크트리 1:1 미리보기. stage=여러 작업 브랜치를 합친 통합 미리보기.', kindSel), block('작업자', '이 프리뷰의 소유 작업자(참고용).', owner.el), block('레포', '프리뷰할 레포 이름.', repoInp), block('[work] 작업 프로젝트 id', 'work 전용 — 워크트리 경로 자동계산(workspace/project/<id>/<repo>). stage 는 비워도 됩니다.', projInp), block('[work] 워크트리 경로(선택)', 'work 전용 — 직접 지정할 때만. 비우면 프로젝트 id+레포로 자동 계산.', wtInp), block('[stage] 통합할 브랜치', 'stage 전용 — 한 줄에 하나(예: project/1030). base 위에 순서대로 merge하고, 충돌난 브랜치는 제외한 채 나머지를 통합합니다.', branchesTa), block('[stage] merge base', 'stage 전용 — 통합 기준. 비우면 origin/main.', baseRefInp), block('[stage] 재-merge 시점', 'stage 전용 — manual=‘띄우기’ 누를 때만. auto=reconcile 크론이 작업 브랜치 갱신을 주기 반영.', triggerSel), block('유휴 회수(초)', '이 시간 동안 미접속이면 자동 정지. 0=무제한.', ttlInp), block('활성', '켜면 reconcile 이 서빙 준비를 보장합니다.', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' enabled' }))), block('메모', '', noteInp), el('div', { class: 'ps-rules-actions' }, saveBtn));
+    const form = el('div', { class: 'proj-settings' }, block('프리뷰 id', isNew ? '소문자 슬러그(a-z0-9_-). URL 이 /preview/<id>/ 가 됩니다.' : 'id 는 변경 불가.', idInp), block('이름', '관리 목록에 보일 이름.', labelInp), block('종류', 'work=내 작업 워크트리 1:1 미리보기. stage=여러 작업 브랜치를 합친 통합 미리보기.', kindSel), block('백엔드 방식', 'shared-proxy=프론트만(가장 쌈, 세션 몇 개든 부담 0). throwaway=자체 백엔드 프로세스를 워크트리에서 띄워 프록시. existing-ref=이미 떠있는 것으로 프록시. (stage 는 항상 정적)', backingSel), block('[throwaway] 스택 프로필', 'throwaway 전용 — 어떻게 띄울지 프리셋 선택(관리자 정의). 없으면 관리 REST/MCP 로 추가.', stackSel), block('[existing-ref] 대상 URL', 'existing-ref 전용 — 프록시할 기존 인스턴스. 예: http://localhost:8081', backingRefInp), block('작업자', '이 프리뷰의 소유 작업자(참고용).', owner.el), block('레포', '프리뷰할 레포 이름.', repoInp), block('[work] 작업 프로젝트 id', 'work 전용 — 워크트리 경로 자동계산(workspace/project/<id>/<repo>). stage 는 비워도 됩니다.', projInp), block('[work] 워크트리 경로(선택)', 'work 전용 — 직접 지정할 때만. 비우면 프로젝트 id+레포로 자동 계산.', wtInp), block('[stage] 통합할 브랜치', 'stage 전용 — 한 줄에 하나(예: project/1030). base 위에 순서대로 merge하고, 충돌난 브랜치는 제외한 채 나머지를 통합합니다.', branchesTa), block('[stage] merge base', 'stage 전용 — 통합 기준. 비우면 origin/main.', baseRefInp), block('[stage] 재-merge 시점', 'stage 전용 — manual=‘띄우기’ 누를 때만. auto=reconcile 크론이 작업 브랜치 갱신을 주기 반영.', triggerSel), block('유휴 회수(초)', '이 시간 동안 미접속이면 자동 정지. 0=무제한.', ttlInp), block('활성', '켜면 reconcile 이 서빙 준비를 보장합니다.', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' enabled' }))), block('메모', '', noteInp), el('div', { class: 'ps-rules-actions' }, saveBtn));
     const back = overlayBox(isNew ? '프리뷰 추가' : '프리뷰 수정 — ' + p.id, form);
     const boxw = back.querySelector('.ov-box');
     if (boxw)
@@ -1406,15 +1420,25 @@ function openPreviewEnvForm(p, reload) {
             return;
         }
         const kind = kindSel.value;
+        const backing_mode = backingSel.value;
         const branches = kind === 'stage' ? branchesTa.value.split('\n').map((s) => s.trim()).filter(Boolean) : [];
         if (kind === 'stage' && !branches.length) {
             toast('stage 는 통합할 브랜치를 최소 1개 입력하세요', true);
             return;
         }
-        const body = { id, kind, label: labelInp.value.trim() || null, owner_member: owner.value() || null,
+        if (kind === 'work' && backing_mode === 'throwaway' && !stackSel.value) {
+            toast('throwaway 는 스택 프로필을 고르세요', true);
+            return;
+        }
+        if (kind === 'work' && backing_mode === 'existing-ref' && !backingRefInp.value.trim()) {
+            toast('existing-ref 는 대상 URL 을 입력하세요', true);
+            return;
+        }
+        const body = { id, kind, backing_mode, label: labelInp.value.trim() || null, owner_member: owner.value() || null,
             project_id: projInp.value ? Number(projInp.value) : null, repo: repoInp.value.trim(),
             worktree_path: wtInp.value.trim() || null, ttl_idle_sec: ttlInp.value ? Number(ttlInp.value) : null,
             enabled: enabledChk.checked, note: noteInp.value.trim() || null,
+            stack_profile: stackSel.value || null, backing_ref: backingRefInp.value.trim() || null,
             ...(kind === 'stage' ? { member_branches: branches, base_ref: baseRefInp.value.trim() || null, merge_trigger: triggerSel.value } : {}) };
         saveBtn.disabled = true;
         try {
