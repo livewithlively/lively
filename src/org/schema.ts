@@ -466,7 +466,9 @@ export async function initOrgSchema(): Promise<void> {
       ('source_get','builtin',true,true),
       ('source_save','builtin',true,true),
       ('source_link_knowledge','builtin',true,true),
-      ('source_delete','builtin',true,true)
+      ('source_delete','builtin',true,true),
+      -- #1072 whoami: 자기 신원 조회(읽기·인자 없음·부작용 0). 상시로드 툴이라 매 호출 컨펌은 순수 마찰 → 자동승인.
+      ('whoami','builtin',true,true)
     ON CONFLICT (name) DO NOTHING;
   `);
 
