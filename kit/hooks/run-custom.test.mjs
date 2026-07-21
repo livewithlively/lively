@@ -39,7 +39,7 @@ const PRE_PAYLOAD = { session_id: "s1", tool_name: "Write", tool_input: { file_p
 //  · relay 를 생략하면 캐시에 relay 키 자체가 없다 = "정책 미지" → 기본 정책 경로를 탄다(§D).
 //  · execFileSync 는 반환값이 stdout 뿐이라 exit code(§E)와 진단 stderr(§F)를 함께 관측할 수 없다 → spawnSync 를 쓴다
 //    (같은 node:child_process 의 동기 실행, 여전히 진짜 자식 프로세스).
-function run(event, hooks, { relay, payload, timeoutMs = 20000, cacheAgeMs = 0, graceMs } = {}) {
+function run(event, hooks, { relay, payload, timeoutMs = 20000, cacheAgeMs = 0, graceMs, token, gatewayUrl } = {}) {
   const cache = {
     at: Date.now() - cacheAgeMs, // 기본 0 = 지금. cacheAgeMs 로 '오래된 캐시'를 재현한다(#1008 grace 테스트)
     hooks: hooks.map((h) => ({
@@ -58,13 +58,19 @@ function run(event, hooks, { relay, payload, timeoutMs = 20000, cacheAgeMs = 0, 
   const hcfg = join(HOME, ".lively", "hooks-config.json");
   if (graceMs !== undefined) writeFileSync(hcfg, JSON.stringify({ hook_grace_ms: graceMs }));
   else { try { rmSync(hcfg, { force: true }); } catch { /* 없으면 무시 */ } }
+  // 기본은 무토큰/무URL(게이트웨이 미도달 → 캐시 폴백). token+gatewayUrl 을 주면 실제 fetch 를 시도하게 해
+  //  '온라인처럼 시도하다 매달리는 오프라인'(도달불가 게이트웨이)을 재현한다(#1039 §J).
+  const env = { ...ENV };
+  if (token !== undefined) env.LIVELY_TOKEN = token;
+  if (gatewayUrl !== undefined) env.LIVELY_GATEWAY_URL = gatewayUrl;
+  const t0 = Date.now();
   const r = spawnSync(process.execPath, [RUNNER, event], {
     input: JSON.stringify(payload ?? PRE_PAYLOAD),
-    env: ENV,
+    env,
     encoding: "utf8",
     timeout: timeoutMs, // 러너가 매달려도 테스트 자체는 끝나야 한다(그 경우 status=null 로 FAIL 이 뜬다)
   });
-  return { status: r.status, signal: r.signal, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  return { status: r.status, signal: r.signal, stdout: r.stdout ?? "", stderr: r.stderr ?? "", elapsed: Date.now() - t0 };
 }
 
 // 러너가 하네스에 준 답(hookSpecificOutput). 출력이 아예 없으면 null = "전달할 것 없음".
@@ -557,6 +563,38 @@ const graceHook = (id) => ({ id, src: decide({ decision: "deny", reason: id }) }
   decisionOf(r) === "deny"
     ? ok("I5 hook_grace_ms:null 명시 — 정상 파싱 경로에서도 무제한")
     : bad("I5 literal null 무제한", dbg(r));
+}
+
+// ── §J SessionEnd 오프라인 — 하네스 취소창(1500ms) 안에 끝나야 한다 (#1039/#1043) ──
+// Claude Code(2.1.215)는 SessionEnd 훅을 AbortSignal.timeout(i)로 끊는다. 러너 엔트리에 timeout 이 없으면
+//  i = max(1500, min(엔트리.timeout*1000, 60000)) = 1500ms 바닥. 종전 러너는 오프라인(도달불가 게이트웨이)에서
+//  fetch 를 FETCH_MS(3000ms) 매달려 1500ms 를 넘겼고, 하네스가 러너를 통째로 abort → "Hook cancelled".
+//  이제 SessionEnd 는 fetch 예산(FETCH_MS_SESSIONEND)을 바닥 밑으로 줄여, 오프라인이어도 캐시로 손 떼고 제때 exit 0.
+{
+  const { createServer } = await import("node:net");
+  // 응답을 절대 주지 않는 로컬 게이트웨이(accept 만, HTTP 응답 없음) — 연결은 되지만 무한 대기라 fetch 가 예산까지
+  //  매달린다. 도달불가 IP(192.0.2.1 등)는 CI 망에 따라 즉시 ICMP-unreachable 로 빨리 죽어 회귀를 못 잡을 수 있어,
+  //  로컬 hang 서버가 결정적이다(spawnSync 로 부모 이벤트루프가 막혀도 커널 backlog 가 handshake 를 완결한다).
+  const hang = createServer((sock) => { sock.on("error", () => {}); });
+  await new Promise((res) => hang.listen(0, "127.0.0.1", res));
+  const port = hang.address().port;
+  const sentinel = join(HOME, "se-hook-ran.txt");
+  try { rmSync(sentinel, { force: true }); } catch { /* 없으면 무시 */ }
+  // 캐시된 SessionEnd 훅 1개 — 실행되면 sentinel 을 남긴다(SessionEnd stdout 은 미소비라 side-effect 로 관측).
+  const src = `require("node:fs").writeFileSync(${JSON.stringify(sentinel)}, "ran");\n`;
+  const r = run("SessionEnd", [{ id: "se-cleanup", src }], {
+    token: "x", gatewayUrl: `http://127.0.0.1:${port}`, timeoutMs: 9000,
+  });
+  hang.close();
+  // J1: 도달불가 게이트웨이여도 러너가 하네스 1500ms 취소창 안에 exit 0 — 이게 곧 'Hook cancelled 안 뜬다'의 사양.
+  //  (수정 전이면 fetch 가 3000ms 매달려 elapsed>3000 → 이 단언이 red.)
+  r.status === 0 && r.elapsed < 1500
+    ? ok(`J1 SessionEnd 오프라인이 하네스 1500ms 취소창 안에 exit 0 (${r.elapsed}ms)`)
+    : bad("J1 SessionEnd 1500ms 취소창", `${dbg(r)} ms=${r.elapsed}`);
+  // J2: 예산에서 손을 뗐어도 캐시된 SessionEnd 훅은 여전히 돌았다(오프라인 last-known-good 기능 보존).
+  existsSync(sentinel)
+    ? ok("J2 오프라인에서도 캐시된 SessionEnd 훅은 실행된다(기능 보존)")
+    : bad("J2 캐시된 SessionEnd 훅 실행", dbg(r));
 }
 
 rmSync(SANDBOX, { recursive: true, force: true });

@@ -29,10 +29,10 @@ const DOCS_NAV = [
   //  (옛 #/learn/docs/examples · #/learn/tour 는 리다이렉트로 보존, main.ts). 첫 항목 라벨을 '시작하기'로 바꿔(옛 'AI
   //  세션 체험') 그룹명 '직접 해보기'와 겹치지 않게 하고 페이지 H1(start.ts)과 맞춘다.
   { group: '직접 해보기', items: [
-    { key: 'start', label: '시작하기', href: '#/start' },
+    { key: 'start', label: 'AI 세션 시작하기', href: '#/start' },
     // #req examples 탭 숨김(사용자 요청) — 본문을 #/start 블록 ③ 로 인라인 이동. 라우트는 유지(직접 URL 접근 가능). 복원: 아래 줄 주석 해제.
     // { key: 'examples', label: '이런 걸 시켜보세요', href: '#/start/examples' },
-    { key: 'start-project', label: '프로젝트 체험', href: '#/start/project' },   // #853 프로젝트 한 바퀴 손수 투어
+    { key: 'start-project', label: '프로젝트 생성하기', href: '#/start/project' },   // #853 프로젝트 한 바퀴 손수 투어
     // #req tour 탭 숨김(사용자 요청). 라우트는 유지. 복원: 아래 줄 주석 해제.
     // { key: 'tour', label: 'Lively 둘러보기', href: '#/start/tour' },
   ] },

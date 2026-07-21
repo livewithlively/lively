@@ -22,6 +22,7 @@ import { listLogs } from "../log-janitor.js";
 import { stateRoot, logRoot } from "../state-dir.js";
 import { ROOTS as TERMINAL_ROOTS, SHARED_ROOT as TERMINAL_SHARED_ROOT } from "../terminal-sessions.js";
 import { normalizeStoragePolicy, type StoragePolicyPatch } from "../org/storage-policy.js";
+import { normalizeSessionMemoryPolicy, SESSION_MEM_MB_MIN, SESSION_MEM_MB_MAX, type SessionMemoryPolicyPatch } from "../org/session-memory-policy.js"; // #1059 D
 import {
   type SessionSharePatch, SESSION_SHARE_SCOPES, SESSION_SHARE_STORES, SESSION_SHARE_VIEW_POLICIES,
   KNOWN_HARNESSES, RETENTION_MAX_DAYS,
@@ -50,7 +51,7 @@ import {
   listMembers, getMember, memberIdByEmail, upsertMember, removeMember, listMemory,
   mintToken, listTokens, revokeToken, memberHasActiveToken,
   listContentAudit, ADMIN_AUDIT_ENTITIES,
-  getRuntimeConfig, updateRuntimeConfig, getEmbeddingConfigSource, getStoragePolicySource, listMcpServers, upsertMcpServer, removeMcpServer,
+  getRuntimeConfig, updateRuntimeConfig, getEmbeddingConfigSource, getStoragePolicySource, getSessionMemoryPolicySource, listMcpServers, upsertMcpServer, removeMcpServer,
   listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook, recordHookFailures,
   HOOK_RELAY_DECISIONS, type HookRelayDecision,
   listOrgHarnessAssets, listEnabledAssets, upsertOrgHarnessAsset, removeOrgHarnessAsset, countMemberDraftAssets,
@@ -81,11 +82,12 @@ import { isSystemDeniedTable } from "../db/firewall.js";
 import { generateInitialPassword, setMemberPassword, hasCredential, membersWithCredentials, verifyOwnPassword } from "../auth/local-accounts.js";
 import { lookupDeviceAuth, approveDeviceAuth, denyDeviceAuth, checkDeviceRate } from "../org/device-auth.js";
 // 임베딩(벡터검색 #172) — 런타임 토글(embedding_config)은 updateRuntimeConfig 로, 기존 지식 백필은 공유 코어로.
-import { startBackfillJob, getBackfillJob, countEmbeddingBacklog, runAutoBackfillSweep, PROJECT_TARGET, type BackfillMode } from "../v6/embedding-backfill.js";
+import { startBackfillJob, getBackfillJob, countEmbeddingBacklog, runAutoBackfillSweep, setBackfillPausedCache, PROJECT_TARGET, type BackfillMode } from "../v6/embedding-backfill.js";
 import type { EmbeddingConfigPatch } from "../v6/embedding-provider.js";
 import {
-  DEFAULT_EMBEDDING_BATCH_SIZE, DEFAULT_EMBEDDING_TIMEOUT_MS,
+  DEFAULT_EMBEDDING_BATCH_SIZE, DEFAULT_EMBEDDING_TIMEOUT_MS, DEFAULT_EMBEDDING_BACKFILL_MIN_MB,
   EMBEDDING_BATCH_MIN, EMBEDDING_BATCH_MAX, EMBEDDING_TIMEOUT_MIN_MS, EMBEDDING_TIMEOUT_MAX_MS,
+  EMBEDDING_BACKFILL_MIN_MB_MIN, EMBEDDING_BACKFILL_MIN_MB_MAX,
 } from "../v6/embedding-provider.js";
 import {
   GATEWAY_OWNER, memberOwner, listGitCredentialsPublic, setSshCredential, setHttpsCredential,
@@ -590,6 +592,8 @@ export const deliveryCapabilities: Capability[] = [
       const kind = input.kind == null ? undefined : str(input.kind, "kind", 10) as "human" | "agent" | "system";
       if (kind && !["human", "agent", "system"].includes(kind)) throw new HttpError(400, "kind 는 human|agent|system");
       const displayName = input.display_name == null ? undefined : str(input.display_name, "display_name", 200).trim();
+      // 닉네임(#762): 미전송=보존, 빈 문자열=지움(→ display_name 폴백). 정규화는 upsertMember 담당. 개인 프로필(self) 저장과 동일 처리 — 관리자도 편집 가능하게(#1025).
+      const nickname = input.nickname == null ? undefined : str(input.nickname, "nickname", 80).trim();
       // 이메일 = 로그인 아이디 → 형식 검증(생성·로그인 일관). 빈 값은 허용(로그인 불요 멤버 — 계정 미발급).
       const email = input.email == null ? undefined : str(input.email, "email", 200).trim();
       if (email) assertEmail(email);
@@ -614,6 +618,7 @@ export const deliveryCapabilities: Capability[] = [
       const member = await upsertMember({
         id, kind,
         display_name: displayName,
+        nickname,
         email,
         identities: input.identities === undefined ? undefined : parseIdentities(input.identities),
         body_md: memberBody,
@@ -670,6 +675,7 @@ export const deliveryCapabilities: Capability[] = [
       id: z.string().optional().describe("멤버 id(불변 내부키) — 생략 시 이메일 로컬파트에서 자동 생성"),
       kind: z.enum(["human", "agent", "system"]).optional().describe("멤버 종류(기본 human)"),
       display_name: z.string().optional().describe("표시 이름"),
+      nickname: z.string().optional().describe("닉네임(활동 로그 등 캐주얼 표기 · 비우면 표시 이름 폴백)"),
       email: z.string().optional().describe("이메일=로그인 아이디. 신규 human 이면 초기 비번 자동 발급(initialPassword 1회 반환)"),
       identities: z.array(z.object({ system: z.string(), external_id: z.string(), email: z.string().optional(), instance: z.string().optional(), display_name: z.string().optional() })).optional().describe("외부 계정 연결(slack/clickup 등)"),
       body_md: z.string().optional().describe("개인 레이어(세션 컨텍스트에 실림)"),
@@ -1233,6 +1239,7 @@ export const deliveryCapabilities: Capability[] = [
         allowed_db_secret_refs?: string[]; write_tools?: string[]; pull_tools?: string[];
         embedding_config?: EmbeddingConfigPatch;
         storage_policy?: StoragePolicyPatch;
+        session_memory_policy?: SessionMemoryPolicyPatch;
         hook_relay_decisions?: HookRelayDecision[];
         session_share?: SessionSharePatch;
         hook_grace_ms?: number | null;
@@ -1261,6 +1268,30 @@ export const deliveryCapabilities: Capability[] = [
           throw new HttpError(400, `경고 임계치(${patchIn.disk_warn_pct}%)는 위험 임계치(${merged.disk_critical_pct}%)보다 낮아야 합니다`);
         }
         patch.storage_policy = patchIn;
+      }
+      // per-session cgroup 메모리 정책(#1059 D) — 세션당 MemoryHigh/Max(MB). 0=무제한. 잡값·범위는 아래 + normalize 가 잡는다.
+      //  고객 박스는 .env 를 못 고치므로 여기(관리탭)가 유일한 조절 창구(storage_policy 와 동일 교리).
+      if (input.session_memory_policy !== undefined) {
+        const raw = input.session_memory_policy;
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "session_memory_policy 는 객체여야 합니다");
+        const s = raw as Record<string, unknown>;
+        const mb = (v: unknown, field: string): number => {
+          const n = Number(v);
+          if (!Number.isFinite(n) || n < SESSION_MEM_MB_MIN || n > SESSION_MEM_MB_MAX) throw new HttpError(400, `session_memory_policy.${field} 는 ${SESSION_MEM_MB_MIN}~${SESSION_MEM_MB_MAX} 정수(MB)여야 합니다 (0=무제한)`);
+          return Math.floor(n);
+        };
+        const patchIn: SessionMemoryPolicyPatch = {};
+        if (s.per_session_high_mb !== undefined) patchIn.per_session_high_mb = mb(s.per_session_high_mb, "per_session_high_mb");
+        if (s.per_session_max_mb !== undefined) patchIn.per_session_max_mb = mb(s.per_session_max_mb, "per_session_max_mb");
+        // high>max 는 무의미(하드 kill 전에 소프트 스로틀이 안 걸림) — 사용자 의도일 리 없으니 조용히 고치지 말고 알려준다.
+        //  ⚠ 검사는 **단방향**(제출한 high 가 결과 max 를 넘을 때만 400): 반대로 max 만 기존 high 아래로 낮추면
+        //   normalize 가 high 를 max 로 조용히 끌어내린다(안전 방향 — 하드캡을 낮추면 소프트캡도 같이 내려가는 게 자연스럽다).
+        //   storage_policy 의 warn≥critical 단방향 검사와 동일한 관례(#813).
+        const merged = normalizeSessionMemoryPolicy({ ...(await getRuntimeConfig()).session_memory_policy, ...patchIn });
+        if (patchIn.per_session_high_mb !== undefined && patchIn.per_session_high_mb > 0 && merged.per_session_max_mb > 0 && patchIn.per_session_high_mb > merged.per_session_max_mb) {
+          throw new HttpError(400, `MemoryHigh(${patchIn.per_session_high_mb}MB)는 MemoryMax(${merged.per_session_max_mb}MB) 이하여야 합니다`);
+        }
+        patch.session_memory_policy = patchIn;
       }
       if (input.hooks !== undefined) {
         const h = input.hooks;
@@ -1388,6 +1419,13 @@ export const deliveryCapabilities: Capability[] = [
           if (!Number.isFinite(timeoutMs) || timeoutMs < EMBEDDING_TIMEOUT_MIN_MS || timeoutMs > EMBEDDING_TIMEOUT_MAX_MS) throw new HttpError(400, `embedding_config.request_timeout_ms 는 ${EMBEDDING_TIMEOUT_MIN_MS}~${EMBEDDING_TIMEOUT_MAX_MS}(ms) 정수여야 합니다`);
           timeoutMs = Math.floor(timeoutMs);
         }
+        // 백필 pre-flight 메모리 게이트(#1059) — 자동 백필이 임베딩 백엔드를 깨우기 전 최소 가용 메모리(MB). 0=비활성. 비우면 기본 0.
+        let backfillMinMb = DEFAULT_EMBEDDING_BACKFILL_MIN_MB;
+        if (e.backfill_min_available_mb !== undefined && e.backfill_min_available_mb !== null && e.backfill_min_available_mb !== "") {
+          backfillMinMb = Number(e.backfill_min_available_mb);
+          if (!Number.isFinite(backfillMinMb) || backfillMinMb < EMBEDDING_BACKFILL_MIN_MB_MIN || backfillMinMb > EMBEDDING_BACKFILL_MIN_MB_MAX) throw new HttpError(400, `embedding_config.backfill_min_available_mb 는 ${EMBEDDING_BACKFILL_MIN_MB_MIN}~${EMBEDDING_BACKFILL_MIN_MB_MAX} 정수여야 합니다`);
+          backfillMinMb = Math.floor(backfillMinMb);
+        }
         // #688 관리탭에서 끄기 저장 = '명시적 off' 마커 — .env(EMBEDDINGS_*) 시드로 부활하지 않는다(관리탭 > env).
         patch.embedding_config = provider === "off" ? { provider: "off", explicit: true } : {
           provider: "http",
@@ -1397,6 +1435,7 @@ export const deliveryCapabilities: Capability[] = [
           auth_env_ref: authRef,
           batch_size: batchSize,
           request_timeout_ms: timeoutMs,
+          backfill_min_available_mb: backfillMinMb,
         };
       }
       // 세션 공유(세션이력 캡처) 정책(#905 C1) — 관리탭 ▸ 세션 공유. 잡값·미지원 하네스·범위초과는 여기서 400,
@@ -1462,6 +1501,10 @@ export const deliveryCapabilities: Capability[] = [
         shared_cache_enabled: z.boolean().optional().describe("공유 캐시 사용"),
         shared_cache_relocate_home: z.boolean().optional().describe("홈 캐시를 공유 캐시로 재배치"),
       }).optional().describe("저장소 정책(#813) — 로그 상한·디스크 임계치. 고객 박스는 .env 를 못 고치므로 여기가 유일한 조절 창구"),
+      session_memory_policy: z.object({
+        per_session_high_mb: z.number().int().min(0).max(1_048_576).optional().describe("세션당 MemoryHigh(MB) — 초과 시 강한 회수·스로틀(kill 아님). 0=무제한"),
+        per_session_max_mb: z.number().int().min(0).max(1_048_576).optional().describe("세션당 MemoryMax(MB) — 초과 시 그 세션 scope 안에서 OOM-kill. 0=무제한. MemoryHigh 이상이어야"),
+      }).optional().describe("per-session cgroup 메모리 격리(#1059 D) — 세션당 MemoryHigh/Max(MB). 0=무제한(무회귀). 캡을 걸면 세션이 box-cgspawn scope 로 격리돼 폭주 세션만 OOM-kill·박스 생존"),
       embedding_config: z.object({
         provider: z.enum(["off", "http"]).optional().describe("off=끄기(#688 명시적 off 마커 — .env 시드로 부활 안 함) · http=외부 임베딩 API"),
         base_url: z.string().nullable().optional().describe("provider=http 일 때 임베딩 API 주소"),
@@ -1525,7 +1568,7 @@ export const deliveryCapabilities: Capability[] = [
     }),
 
   restOnly("org_storage_status", "저장소·로그 상태",
-    "박스 디스크 사용률(경고/위험 판정 포함) + 로그 파일 크기 + 저장소 정책(로그 상한·디스크 임계치)과 그 출처. admin 전용.",
+    "박스 디스크 사용률(경고/위험 판정 포함) + 로그 파일 크기 + 저장소 정책(로그 상한·디스크 임계치) + per-session 메모리 캡 정책(#1059 D)과 각 출처. admin 전용.",
     [{ method: "GET", paths: ["/api/ui/org/storage"], parse: () => ({}) }],
     async () => {
       const cfg = await getRuntimeConfig();
@@ -1541,6 +1584,10 @@ export const deliveryCapabilities: Capability[] = [
       return {
         policy: p,
         policy_source: await getStoragePolicySource(), // db(관리탭) · env(.env 시드) · default(코드 기본값)
+        // per-session 메모리 캡(#1059 D) — 세션당 MemoryHigh/Max(MB, 0=무제한). 라이브 메모리 **사용량** status(available/Ollama/세션수)는
+        //  G1(#1064) 이 box-watch 로 여기 같은 ops 엔드포인트에 얹는다. 여기선 정책값·출처만 노출(설정은 org_runtime_update POST).
+        session_memory_policy: cfg.session_memory_policy,
+        session_memory_policy_source: await getSessionMemoryPolicySource(),
         disks,
         logs: {
           dir: logRoot(),
@@ -1648,7 +1695,8 @@ export const deliveryCapabilities: Capability[] = [
       const cfg = await getRuntimeConfig();
       const backlog = await countEmbeddingBacklog();
       // config_source(#688): db(관리탭)·db-off(명시적 끄기)·env(.env 시드)·off — UI 가 설정 출처를 안내.
-      return { config: cfg.embedding_config, config_source: await getEmbeddingConfigSource(), backlog, job: getBackfillJob() };
+      // backfill_paused(#1060): 자동 백필 일시중지 여부(knowledge·project 공통 스위치) — UI 가 배너·백필버튼 게이트에 쓴다.
+      return { config: cfg.embedding_config, config_source: await getEmbeddingConfigSource(), backlog, job: getBackfillJob(), backfill_paused: cfg.embedding_backfill_paused };
     }),
   restOnly("org_embeddings_backfill", "기존 지식 임베딩(백필) 실행",
     "이미 저장된 지식을 배치로 임베딩(뒤늦게 켠 경우). mode=pending(기본)|model-changed|all. 인프로세스 잡 — 진행은 GET /api/ui/org/embeddings 폴링. 이미 실행 중이면 409.",
@@ -1659,6 +1707,8 @@ export const deliveryCapabilities: Capability[] = [
       // provider off 면 백필 무의미 — 조기 400(코어도 off 면 no-op 이지만 잡을 만들지 않아 UX 명확).
       const cfg = await getRuntimeConfig();
       if (cfg.embedding_config.provider === "off") throw new HttpError(400, "임베딩이 꺼져 있습니다 — 먼저 provider 를 http 로 저장한 뒤 백필하세요.");
+      // #1060 — 자동 백필을 일시중지한 상태에서는 수동 백필도 시작하지 않는다(마스터 스위치). 재개 후 실행하세요.
+      if (cfg.embedding_backfill_paused) throw new HttpError(409, "임베딩 백필이 일시중지되었습니다 — 관리탭에서 재개한 뒤 실행하세요.");
       const { started, job } = startBackfillJob(mode as BackfillMode);
       if (!started) throw new HttpError(409, "이미 백필이 실행 중입니다.");
       return { started, job };
@@ -1673,7 +1723,7 @@ export const deliveryCapabilities: Capability[] = [
     async () => {
       const cfg = await getRuntimeConfig();
       const backlog = await countEmbeddingBacklog(PROJECT_TARGET);
-      return { config: cfg.embedding_config, config_source: await getEmbeddingConfigSource(), backlog, job: getBackfillJob(PROJECT_TARGET) };
+      return { config: cfg.embedding_config, config_source: await getEmbeddingConfigSource(), backlog, job: getBackfillJob(PROJECT_TARGET), backfill_paused: cfg.embedding_backfill_paused };
     }),
   restOnly("org_project_embeddings_backfill", "프로젝트 임베딩(백필) 실행",
     "프로젝트·태스크·서브태스크를 배치로 임베딩(검색 #631). mode=pending(기본)|model-changed|all. 인프로세스 잡 — 진행은 GET /api/ui/org/project-embeddings 폴링. 이미 실행 중이면 409. knowledge 백필과 독립(동시 실행 가능).",
@@ -1684,11 +1734,35 @@ export const deliveryCapabilities: Capability[] = [
       // provider off 면 백필 무의미 — 조기 400(코어도 off 면 no-op 이지만 잡을 만들지 않아 UX 명확).
       const cfg = await getRuntimeConfig();
       if (cfg.embedding_config.provider === "off") throw new HttpError(400, "임베딩이 꺼져 있습니다 — 먼저 provider 를 http 로 저장한 뒤 백필하세요.");
+      // #1060 — 자동 백필 일시중지 상태면 수동 프로젝트 백필도 거부(knowledge 와 공통 스위치). 재개 후 실행하세요.
+      if (cfg.embedding_backfill_paused) throw new HttpError(409, "임베딩 백필이 일시중지되었습니다 — 관리탭에서 재개한 뒤 실행하세요.");
       const { started, job } = startBackfillJob(mode as BackfillMode, PROJECT_TARGET);
       if (!started) throw new HttpError(409, "이미 프로젝트 백필이 실행 중입니다.");
       return { started, job };
     }, {
       mode: z.enum(["pending", "model-changed", "all"]).optional().describe("pending(기본)=미임베딩만 · model-changed=모델 바뀐 것 · all=전체 재임베딩. knowledge 백필과 독립(동시 실행 가능)"),
+    }),
+
+  // ── 자동 임베딩 백필 일시중지/재개(#1060) — 성능 이슈로 사람이 자동 백필을 멈추고 재개하는 마스터 스위치. ──
+  //  자동 백필 트리거(부팅 30초·10분 주기·connector_sync 완료 후·쓰기 nudge)는 전부 runAutoBackfillSweep 로 수렴하는데,
+  //  느린/CPU 임베딩 백엔드에서 그 스윕이 게이트웨이 성능을 갉아먹어도 종전엔 멈출 창구가 없었다. 이 토글이 그 창구다.
+  //  DB 영속(재시작에도 유지 — 부팅 스윕이 존중) + 인메모리 캐시(실행 중 잡을 다음 배치에서 협조적 중단). knowledge·project 공통.
+  restOnly("org_embeddings_backfill_pause", "임베딩 백필 일시중지/재개",
+    "자동 임베딩 백필 스윕(부팅·10분 주기·connector_sync 완료 후·쓰기 nudge)을 사람이 멈추고 재개한다. paused=true 면 스윕이 no-op 이 되고 실행 중이던 백필 잡도 현재 배치를 끝내고 중단된다(재진입 안전 — 채운 만큼 커밋). DB 영속이라 재시작에도 유지된다. 재개(paused=false) 시 그동안 쌓인 미임베딩을 즉시 한 번 스윕한다. knowledge·project 공통 스위치. admin 전용.",
+    [{ method: "POST", paths: ["/api/ui/org/embeddings/backfill/pause"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
+      if (typeof input.paused !== "boolean") throw new HttpError(400, "paused 는 boolean 이어야 합니다");
+      const paused = input.paused;
+      // DB 영속 — updateRuntimeConfig 가 before/after 감사를 남긴다(누가 언제 멈췄나).
+      await updateRuntimeConfig({ embedding_backfill_paused: paused }, actorOf(user), ctx?.source ?? "web",
+        { tokenHashPrefix: ctx?.tokenHashPrefix ?? null, ip: ctx?.ip ?? null });
+      // 라이브 신호 — 실행 중 잡의 (동기) shouldStop 이 즉시 이 값을 읽어 다음 배치 경계에서 멈춘다.
+      setBackfillPausedCache(paused);
+      // 재개면 10분 주기를 안 기다리고 즉시 1회 드레인(provider off/pending 0/일시중지 재확인은 스윕이 자체 게이트).
+      if (!paused) void runAutoBackfillSweep().catch(() => { /* best-effort */ });
+      return { paused, job: getBackfillJob(), project_job: getBackfillJob(PROJECT_TARGET) };
+    }, {
+      paused: z.boolean().describe("true=자동 백필 일시중지(실행 중 잡도 다음 배치에서 중단) · false=재개(즉시 1회 드레인). DB 영속(#1060)"),
     }),
 
   // ── MCP 서버 레지스트리 ──

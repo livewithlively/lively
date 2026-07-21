@@ -162,7 +162,8 @@ function mdImage(src, alt) {
 //  '눌리는 버튼' 칩과 '부드러운 태그' 칩으로 승격해 가독성을 올린다. renderMarkdown(md, {uiChips:true}) 로만
 //  켜지며(learn.ts docs 렌더), 지식·위키·프로젝트 등 다른 마크다운 소비자엔 영향이 없다.
 let MD_UI_CHIPS = false;
-function renderInline(text) {
+function renderInline(text, opts?: { noAutolink?: boolean }) {
+  const noAutolink = !!(opts && opts.noAutolink);   // 링크 label 안에선 autolink 끔(중첩 링크·저장 시 [url](url) 재-오토링크 방지)
   const out: any[] = [];
   let buf = '';
   const flush = () => { if (buf) { out.push(document.createTextNode(buf)); buf = ''; } };
@@ -253,6 +254,32 @@ function renderInline(text) {
         continue;
       }
     }
+    // 자동 링크(autolink) — 본문에 그냥 붙여넣은 맨 URL(http/https/www)을 하이퍼링크로 만든다.
+    //  마크다운 링크 [텍스트](url) 는 아래에서 별도 처리되므로 여기선 '벌거벗은' URL 만 잡는다.
+    //  경계 가드: 여는 위치 앞이 단어문자면(이메일 도메인·URL 일부 등 오탐) 스킵. URL 은 공백/제어문자 전까지,
+    //  뒤따르는 문장부호(.,;:!?)·닫는 괄호는 링크에서 제외(문장 끝 오탐 방지). www. 는 https:// 를 붙여 링크.
+    if (!noAutolink && (ch === 'h' || ch === 'w') && (i === 0 || !/[\p{L}\p{N}@._-]/u.test(s[i - 1]))) {
+      const rest = s.slice(i);
+      const m = /^(https?:\/\/[^\s<]+|www\.[^\s<]+)/i.exec(rest);
+      if (m) {
+        let raw = m[0];
+        // 뒤쪽 문장부호·닫는 괄호 제거(단, 짝이 맞는 괄호는 URL 의 일부일 수 있어 보존).
+        let trail = '';
+        while (raw.length) {
+          const last = raw[raw.length - 1];
+          if ('.,;:!?"\''.indexOf(last) >= 0) { trail = last + trail; raw = raw.slice(0, -1); continue; }
+          if (last === ')' && (raw.split('(').length - 1) < (raw.split(')').length - 1)) { trail = last + trail; raw = raw.slice(0, -1); continue; }
+          break;
+        }
+        const href = safeHref(/^www\./i.test(raw) ? 'https://' + raw : raw);
+        if (href) {
+          flush();
+          out.push(el('a', { class: 'md-link', href, rel: 'noopener noreferrer nofollow' }, document.createTextNode(raw)));
+          i += raw.length; // trail 은 다시 일반 파서로 흘려 문장부호로 렌더
+          continue;
+        }
+      }
+    }
     // 링크 [텍스트](url)
     if (ch === '[') {
       const close = s.indexOf(']', i + 1);
@@ -264,10 +291,11 @@ function renderInline(text) {
           flush();
           if (href) {
             // 내부 앵커(#/k/…)는 같은 SPA 이동이라 새 탭 힌트 불필요, 외부는 noopener.
-            out.push(el('a', { class: 'md-link', href, rel: 'noopener noreferrer nofollow' }, ...renderInline(label)));
+            //  label 은 noAutolink — label 이 URL 이어도([url](url)) 안에서 또 autolink 되어 링크가 중첩되지 않게(저장 왕복 안정).
+            out.push(el('a', { class: 'md-link', href, rel: 'noopener noreferrer nofollow' }, ...renderInline(label, { noAutolink: true })));
           } else {
             // 위험 스킴 → 링크 무력화. 라벨만 평문으로(href 비노출).
-            out.push(...renderInline(label));
+            out.push(...renderInline(label, { noAutolink: true }));
           }
           i = paren + 1;
           continue;
@@ -545,16 +573,12 @@ function renderContainer(type, rest, bodyLines) {
       return fig;
     }
     case 'axes': {
-      // 맥락의 세 축(#762, #853 재설계) — 본문의 3축(카테고리·지식·프로젝트)과 도식을 일치시킨다:
-      //  카테고리(정점) 아래 [지식(정적) ⇄ 프로젝트(동적)] 두 박스, 가운데 양방향 화살표의 이름이 곧
+      // 맥락의 두 축(#1035) — [지식(정적) ⇄ 프로젝트(동적)] 두 박스, 가운데 양방향 화살표의 이름이 곧
       //  '필요 지식(꺼내 씀)'과 '산출 지식(새로 남김)' — 필요/산출이 별도 요소가 아니라 흐름의 이름임을 그림이 말한다.
-      //  본문 3줄 `이모지 | 이름 | 부제`(카테고리/지식/프로젝트 순, 기존 원고 호환).
+      //  카테고리는 맥락의 축이 아니라 이 둘을 담는 분류라 도식에서 뺐다(본문 '번외' 박스로 설명).
+      //  본문 2줄 `이모지 | 이름 | 부제`(지식/프로젝트 순).
       const rows = bodyLines.map((l) => l.trim()).filter((l) => l && l !== ':::').map((l) => l.split('|').map((s) => s.trim()));
-      const cat = rows[0] || [], kn = rows[1] || [], pj = rows[2] || [];
-      const apex = el('div', { class: 'md-axes-apex' },
-        el('span', { class: 'md-axes-ic', 'aria-hidden': 'true', text: cat[0] || '🗂' }),
-        el('span', { class: 'md-axes-nm' }, ...renderInline(cat[1] || '카테고리')),
-        el('span', { class: 'md-axes-apex-hint', text: '지식·프로젝트를 담는 분류' }));
+      const kn = rows[0] || [], pj = rows[1] || [];
       const fnode = (ic, nm, sub, cls) => el('div', { class: 'md-axes-fnode ' + cls },
         el('span', { class: 'md-axes-ic', 'aria-hidden': 'true', text: ic }),
         el('span', { class: 'md-axes-nm' }, ...renderInline(nm)),
@@ -566,9 +590,7 @@ function renderContainer(type, rest, bodyLines) {
         el('span', { class: 'md-axes-bi' },
           el('span', { class: 'md-axes-biar to-l', 'aria-hidden': 'true', text: '⟵' }),
           el('span', { class: 'md-axes-bilab', text: '산출 지식으로 새로 남김' })));
-      return el('figure', { class: 'md-axes', role: 'group', 'aria-label': '맥락의 세 축' },
-        apex,
-        el('span', { class: 'md-axes-stem', 'aria-hidden': 'true' }),
+      return el('figure', { class: 'md-axes', role: 'group', 'aria-label': '맥락의 두 축' },
         el('div', { class: 'md-axes-flow' },
           fnode(kn[0] || '📄', kn[1] || '지식', kn[2] || '정적 · 이미 정해진 것', 'is-static is-stack'),
           biflow,

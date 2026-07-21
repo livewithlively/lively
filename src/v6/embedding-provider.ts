@@ -21,6 +21,10 @@ export interface EmbeddingConfig {
   // 성능 튜닝(#602) — 느린/CPU 백엔드 대응. 백엔드마다 처리속도가 크게 달라 config 로 조정(코드 변경 0).
   batch_size: number;          // 한 fetch 요청당 임베딩 텍스트 수 = 백필 커밋 단위. CPU 백엔드는 낮춰 요청당 시간을 300초 안으로.
   request_timeout_ms: number;  // 임베딩 요청당 AbortSignal.timeout(ms). undici 무설정 기본(≈300초)을 명시화·설정화. 초과 시 배치를 반으로 줄여 재시도.
+  // 백필 pre-flight 메모리 게이트(#1059) — 자동 백필 스윕이 임베딩 백엔드(예: Ollama bge-m3 = 로드 시 ~3.3GB)를 깨우기 전
+  //  가용 메모리가 이 값(MB) 미만이면 이번 스윕을 건너뛰고 다음 주기에 재시도(pending 은 DB 유지, 재진입 안전). 0=게이트 비활성(무회귀).
+  //  배경: claude 세션 baseline + 임베딩 3.3GB 스파이크 겹침이 스왑0 물리 초과로 박스를 뻗게 함(어니스트 2026-07-21). 권장=임베딩 백엔드 상주분+헤드룸.
+  backfill_min_available_mb: number;
 }
 
 // 임베딩 백엔드 1개. resolveEmbeddingProvider(config) 가 config 를 보고 구현을 고른다.
@@ -39,9 +43,11 @@ export const DEFAULT_EMBEDDING_DIMENSIONS = 1024; // bge-m3 / KURE-v1 둘 다 10
 //  ⚠ #602: 32건 배치는 CPU 에서 undici 기본 타임아웃(≈300초)을 넘겨 'fetch failed' → 백필이 0건 커밋 후 죽고 무한 재시도. GPU 는 config 로 올려 처리량 확보.
 export const DEFAULT_EMBEDDING_BATCH_SIZE = 8;
 export const DEFAULT_EMBEDDING_TIMEOUT_MS = 300000; // 요청당 300초. batch_size 를 이 안에 끝나게 잡는 게 정석 — 타임아웃은 이상치용 안전망(초과 시 배치 축소 재시도).
+export const DEFAULT_EMBEDDING_BACKFILL_MIN_MB = 0; // 0=백필 메모리 게이트 비활성(무회귀). 관리자가 박스 크기 보고 설정(#1059).
 export const EMBEDDING_OFF: EmbeddingConfig = {
   provider: "off", base_url: null, model: null, dimensions: DEFAULT_EMBEDDING_DIMENSIONS, auth_env_ref: null,
   batch_size: DEFAULT_EMBEDDING_BATCH_SIZE, request_timeout_ms: DEFAULT_EMBEDDING_TIMEOUT_MS,
+  backfill_min_available_mb: DEFAULT_EMBEDDING_BACKFILL_MIN_MB,
 };
 
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
@@ -52,6 +58,7 @@ const clampInt = (v: unknown, fallback: number, min: number, max: number): numbe
 };
 export const EMBEDDING_BATCH_MIN = 1, EMBEDDING_BATCH_MAX = 512;             // 배치 상한(과대 요청 방지)
 export const EMBEDDING_TIMEOUT_MIN_MS = 1000, EMBEDDING_TIMEOUT_MAX_MS = 3600000; // 1초~1시간
+export const EMBEDDING_BACKFILL_MIN_MB_MIN = 0, EMBEDDING_BACKFILL_MIN_MB_MAX = 1048576; // 0(비활성)~1TB(상한 방어)
 
 // DB row(JSONB) / env → 정규화된 EmbeddingConfig(순수). 알 수 없는 provider·잡값은 안전하게 off.
 export function normalizeEmbeddingConfig(raw: unknown): EmbeddingConfig {
@@ -65,6 +72,7 @@ export function normalizeEmbeddingConfig(raw: unknown): EmbeddingConfig {
     provider: "http", base_url: str(o.base_url), model: str(o.model), dimensions, auth_env_ref: str(o.auth_env_ref),
     batch_size: clampInt(o.batch_size, DEFAULT_EMBEDDING_BATCH_SIZE, EMBEDDING_BATCH_MIN, EMBEDDING_BATCH_MAX),
     request_timeout_ms: clampInt(o.request_timeout_ms, DEFAULT_EMBEDDING_TIMEOUT_MS, EMBEDDING_TIMEOUT_MIN_MS, EMBEDDING_TIMEOUT_MAX_MS),
+    backfill_min_available_mb: clampInt(o.backfill_min_available_mb, DEFAULT_EMBEDDING_BACKFILL_MIN_MB, EMBEDDING_BACKFILL_MIN_MB_MIN, EMBEDDING_BACKFILL_MIN_MB_MAX),
   };
 }
 
@@ -80,6 +88,7 @@ export function embeddingConfigFromEnv(): EmbeddingConfig {
     auth_env_ref: process.env.EMBEDDINGS_AUTH_ENV ?? null,
     batch_size: process.env.EMBEDDINGS_BATCH_SIZE ?? null,           // 비면 normalize 가 기본값(8)로
     request_timeout_ms: process.env.EMBEDDINGS_TIMEOUT_MS ?? null,   // 비면 normalize 가 기본값(300000)로
+    backfill_min_available_mb: process.env.EMBEDDINGS_BACKFILL_MIN_MB ?? null, // 비면 normalize 가 기본값(0=비활성)로
   });
 }
 

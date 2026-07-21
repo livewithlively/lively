@@ -58,6 +58,27 @@ const warn = (s) => say("  " + yellow("⚠") + " " + s);
 const fail = (s) => say("  " + red("✗") + " " + s);
 const die = (s, code = 1) => { say("\n" + red("✗ " + s)); process.exit(code); };
 
+// ── 1.5 Node 버전 게이트 (#1068) ────────────────────────────────────────────
+// 이 CLI 는 의존성 0 으로 **전역 fetch(Node 18+)** 등 최신 런타임 API 를 쓴다(맨 위 설계 원칙).
+//  구버전에서 돌면 증상이 `fetch is not defined` 로 `[1/3] 키트 내려받는 중…` 한복판에 터진다 —
+//  Node 얘기가 한 글자도 안 나와서 사람이 원인을 못 찾는다(실측: 시스템 node v16.20.2).
+//  그래서 **첫 줄에서, 무엇을 하면 되는지와 함께** 죽는다.
+//  정상 경로면 부트스트랩이 전용 런타임(~/.lively/runtime)을 깔아 여기 걸릴 일이 없다 — 걸렸다는 건
+//  그 런타임이 없어 심(~/.lively/bin/lively)이 시스템 node 로 폴백했다는 뜻이고, 그래서 재설치가 곧 해결이다.
+const NODE_MIN_MAJOR = 20;   // package.json engines(">=20") · bootstrap.sh/ps1 의 NODE_MIN_MAJOR 와 같은 계약.
+if (Number(process.versions.node.split(".")[0]) < NODE_MIN_MAJOR) {
+  let gw = "<게이트웨이>";
+  try { gw = readFileSync(join(LIVELY, "gateway-url"), "utf8").trim() || gw; } catch { /* 아직 없으면 자리표시자 */ }
+  say("");
+  fail(`Node ${process.versions.node} 에서 실행됐습니다 — 라이블리 CLI 는 Node ${NODE_MIN_MAJOR} 이상이 필요합니다.`);
+  info("라이블리 전용 런타임이 없어 시스템 node 로 폴백한 상태입니다.");
+  info("아래를 다시 실행하면 전용 런타임을 깔고 이어갑니다(시스템 node 는 그대로 둡니다).");
+  say("");
+  say(WIN ? `      irm ${gw}/cli.ps1 | iex` : `      curl -fsSL ${gw}/cli | sh`);
+  say("");
+  process.exit(1);
+}
+
 // ── 2. 자식 프로세스 ────────────────────────────────────────────────────────
 // Windows 의 claude/codex 는 .cmd/.ps1 셰임이라 shell 없이 spawn 하면 ENOENT(work.mjs:259 와 같은 이유).
 //  ⚠ 그런데 Node 는 shell:true 일 때 인자를 **자동 quote 하지 않는다** — 공백이 든 인자
@@ -72,12 +93,15 @@ const winArg = (s) => {
   if (v && !/[\s"^&|<>()%!]/.test(v)) return v;
   return '"' + v.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, "$1$1") + '"';
 };
-function run(cmd, args, { allowFail = false, quiet = false, env } = {}) {
+// timeout(ms) 를 주면 spawnSync 가 그 시간 뒤 killSignal(SIGKILL)로 자식을 죽인다 — 외부 CLI(claude 등)가
+//  네트워크에 매달려 `lively status` 를 무한정 hang 시키지 않게 하는 하드 백스톱(#1043). 미지정이면 종전대로 무제한.
+function run(cmd, args, { allowFail = false, quiet = false, env, timeout } = {}) {
   const r = spawnSync(cmd, WIN ? args.map(winArg) : args, {
     stdio: quiet ? ["ignore", "pipe", "pipe"] : "inherit",
     env: { ...process.env, ...(env || {}) },
     encoding: "utf8",
     shell: WIN,
+    ...(timeout ? { timeout, killSignal: "SIGKILL" } : {}),
   });
   if (r.error && !allowFail) throw r.error;
   if (r.status !== 0 && !allowFail) {
@@ -161,7 +185,7 @@ function writeLively(name, val, mode = 0o600) {
   writeFileSync(p, val, { mode });
   try { chmodSync(p, mode); } catch { /* Windows 는 무의미 */ }
 }
-// gateway-url 은 항상 **/mcp 없이** 저장한다(setup-mac.sh · user-install.mjs 와 같은 계약).
+// gateway-url 은 항상 **/mcp 없이** 저장한다(user-install.mjs 와 같은 계약).
 const normGw = (u) => String(u || "").trim().replace(/\/+$/, "").replace(/\/mcp$/, "").replace(/\/+$/, "");
 const gateway = () => normGw(process.env.LIVELY_GATEWAY_URL || readLively("gateway-url"));
 // ⚠ **파일이 정본이고 LIVELY_TOKEN env 는 그 캐시다**(#916 — 순서를 뒤집지 말 것).
@@ -557,7 +581,8 @@ function verifyBundle(root) {
 
 // ── 7. MCP 등록 — 이 CLI 의 존재 이유 ───────────────────────────────────────
 //  kit/setup/register-clients.sh 와 **동일한 claude 호출**을 Node 로 재현한다(bash·PowerShell 분기 제거 →
-//  mac/linux/windows 가 같은 코드). 셸 스크립트는 setup-mac.sh · deploy/install-kit.sh 하위호환으로 남는다.
+//  mac/linux/windows 가 같은 코드). 옛 셸 설치기(setup-mac.sh 등)는 #1068 에서 제거했다 —
+//  남은 셸 경로는 박스용 deploy/install-kit.sh 뿐이고 그건 user-install.mjs 를 직접 부른다.
 //  Codex 는 MCP 를 config.toml 에 쓰므로(user-install.mjs 가 담당) 여기서 할 일이 없다.
 function readMcpServers() {
   try {
@@ -986,7 +1011,11 @@ async function gatherStatus() {
   try { st.harness.codex.wired = readFileSync(CODEX_CFG, "utf8").includes("lively-managed"); } catch { /* */ }
   try { st.hooks.installed = readdirSync(join(LIVELY, "hooks")).filter((f) => REQUIRED_HOOKS.includes(f)).length; } catch { /* */ }
   if (st.harness.claude.installed) {
-    const r = run("claude", ["mcp", "list"], { allowFail: true, quiet: true });
+    // ⚠ `claude mcp list` 는 등록된 MCP 서버를 **헬스체크(=연결)** 한다. lively(http) 서버가 게이트웨이에 못 붙으면
+    //  (게이트웨이 미도달) 그 연결이 무한정 매달려 `lively status` 전체가 hang 된다 — #1043 실측: MCP_TIMEOUT 없으면
+    //  10초+ 후에도 안 끝나 SIGKILL. MCP_TIMEOUT 으로 서버별 헬스체크를 bound 하면 다운 서버는 ~3s 뒤 ✘ 로 완료되고,
+    //  spawnSync timeout 은 그마저 안 먹힐 때의 하드 백스톱이다. 등록 여부(이름 매칭)는 헬스체크 성패와 무관하게 출력에 남는다.
+    const r = run("claude", ["mcp", "list"], { allowFail: true, quiet: true, timeout: 8000, env: { MCP_TIMEOUT: "3000" } });
     st.harness.claude.mcp = /(^|\s)lively\b/m.test(r.out + r.err);
   }
   if (!gw) { st.gateway.error = "게이트웨이 미설정"; return st; }
@@ -1013,7 +1042,7 @@ async function gatherStatus() {
 //  ⚠ 이 섹션의 진짜 값어치 = **sync 모드를 사람 눈에 보이게 하는 것**(#905 P1-②). 마커의 sync 는 "이 폴더에
 //   서버 공유파일을 써도 되는가"를 정하는데, 지금까지 그걸 볼 수 있는 표면이 **어디에도 없었다**. 안 보이는 게이트는
 //   틀렸을 때 아무도 모른다.
-async function gatherProjectStatus(cwd) {
+async function gatherProjectStatus(cwd, reachable = true) {
   const { findProjectMarkerUp, markerSyncMode } = await import(new URL("./repo-worktree-core.mjs", import.meta.url));
   const found = findProjectMarkerUp(cwd);
   if (!found) return null;
@@ -1026,6 +1055,10 @@ async function gatherProjectStatus(cwd) {
     shared: null,                                // {server_newest, server_count, pending, truncated} — 조회 실패 시 null
     error: null,
   };
+  // ⚠ 게이트웨이가 이미 '미도달'로 판정났으면 서버 왕복(프로젝트명·매니페스트)은 똑같이 타임아웃만 쌓는다(#1043 —
+  //  미도달 시 8초짜리 futile 호출 2회가 status 를 20초+로 늘렸다). 도달을 아는 마당에 다시 찔러보지 않고 로컬 마커만 렌더.
+  if (!reachable) { p.error = "게이트웨이 미도달"; }
+  else {
   try { p.name = (await api(`/api/ui/v6/projects/${p.id}`, { timeoutMs: 8000 }))?.project?.name ?? null; }
   catch (e) { p.error = e.message; }
   // 공유폴더 상태 — sync 가 none 이면 애초에 안 받으므로 조회하지 않는다(불필요한 왕복 + 오해 소지).
@@ -1043,6 +1076,7 @@ async function gatherProjectStatus(cwd) {
       p.shared = { server_newest: m.newest || 0, server_count: typeof m.count === "number" ? m.count : files.length, pending, truncated: !!m.truncated };
     } catch (e) { p.error = p.error || e.message; }
   }
+  } // end else(reachable) — 위 두 서버 왕복은 게이트웨이 도달 시에만
   // up-sync 결과(#905 C3) — 자동 up 은 확인할 사람이 없어(수동 업로드의 #877 confirm 과 다름) **기록이 유일한 표면**이다.
   //  충돌이 조용히 쌓이면 "왜 내 변경이 안 올라갔지"를 아무도 모른다. host-local(dotfile — 동기화 안 됨).
   try { p.up = JSON.parse(readFileSync(join(p.dir, ".lively", "sync-up.json"), "utf8")); } catch { p.up = null; }
@@ -1099,7 +1133,7 @@ function renderProjectStatus(p) {
 
 async function cmdStatus(opts) {
   const st = await gatherStatus();
-  st.project = await gatherProjectStatus(process.cwd()).catch(() => null); // 프로젝트 섹션은 부가 — 실패해도 status 는 유효
+  st.project = await gatherProjectStatus(process.cwd(), st.gateway.reachable).catch(() => null); // 프로젝트 섹션은 부가 — 실패해도 status 는 유효(미도달이면 서버 왕복 스킵, #1043)
   if (opts.json) { process.stdout.write(JSON.stringify(st, null, 2) + "\n"); return; }
   const mark = (b) => (b ? green("✓") : dim("–"));
   say(`\n${bold("라이블리")} ${dim("CLI " + st.cli)}\n`);
@@ -1126,7 +1160,9 @@ async function cmdDoctor(opts) {
   const checks = [];
   const chk = (name, pass, detail, fix) => checks.push({ name, pass, detail, fix: fix || null });
 
-  chk("Node", true, `${process.version}`);
+  // 버전만이 아니라 **어느 런타임에서 도는지**를 말한다 — #1068 이 정확히 그 축에서 터졌고(시스템 구버전 node),
+  //  전용 런타임이 실제로 쓰이고 있는지는 여기 말고는 확인할 데가 없다.
+  chk("Node", true, `${process.version}  ${process.execPath.startsWith(join(LIVELY, "runtime")) ? "(라이블리 전용 런타임)" : "(시스템 node)"}`);
   chk("게이트웨이 설정", !!st.gateway.url, st.gateway.url || "~/.lively/gateway-url 없음", "lively login --gateway <url>");
   chk("게이트웨이 도달", st.gateway.reachable, st.gateway.reachable ? "OK" : (st.gateway.error || "실패"), "주소 · 네트워크 · VPN 확인");
   // 토큰의 **출처**를 사실대로 말한다 — 옛 코드는 출처와 무관하게 "~/.lively/token 있음"을 찍어서,
@@ -1650,7 +1686,7 @@ async function cmdShare(args) {
 
 // lively onboarding [초기프롬프트…] — 온보딩 스킬을 이 PC 에서 바로 실행한다.
 //  claude 를 초기 프롬프트("온보딩 도와줘")로 띄우면 하네스가 그 문구로 lively-onboarding 스킬을 소환한다.
-//  설치 직후 제안(setup-mac.sh)과 사람의 수동 재실행이 같은 진입을 쓴다. cmdResume 과 동형(has 가드 + spawnSync inherit).
+//  설치 직후 제안과 사람의 수동 재실행이 같은 진입을 쓴다. cmdResume 과 동형(has 가드 + spawnSync inherit).
 //  ⚠ 자동승인 플래그는 주지 않는다 — 멤버가 깔아둔 auto-approve 를 쓰고 나머지는 정상 권한 프롬프트(온보딩은 신뢰가 전부).
 //  --print 는 실제로 안 띄우고 실행할 명령만 출력(테스트·확인용, resume 과 동일 관례).
 function cmdOnboarding(rest) {

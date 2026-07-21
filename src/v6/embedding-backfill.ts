@@ -16,6 +16,7 @@ import {
   embeddingInputText,
   toVectorLiteral,
 } from "./embedding-provider.js";
+import { memAvailableMb } from "../host-mem.js"; // #1059 백필 pre-flight 메모리 게이트
 
 export type BackfillMode = "pending" | "model-changed" | "all";
 //  pending      = embedding_vector IS NULL 인 active 행만(신규/미임베딩 보강 — 처음 켤 때).
@@ -183,6 +184,27 @@ export async function runEmbeddingBackfill(opts: {
   }
 }
 
+// ── 자동 백필 일시중지(#1060) — 성능 이슈로 사람이 자동 임베딩 백필을 멈추고 재개하는 마스터 스위치. ──
+//  SoT = org_runtime_config.embedding_backfill_paused(DB, 영속 — 재시작에도 유지되어 부팅 스윕이 존중한다).
+//  인메모리 캐시(pausedCache)는 '동기' shouldStop 을 위한 라이브 신호다: runEmbeddingBackfill 의 배치 루프가 매 배치
+//  경계에서 shouldStop()(동기 시그니처)을 부르므로 DB(비동기)를 못 읽는다 → 캐시로 즉시 판정한다. 캐시 갱신 경로 둘:
+//   (a) REST 토글이 setBackfillPausedCache 로 즉시 반영(→ 실행 중 잡이 다음 배치에서 협조적 중단),
+//   (b) 스윕 진입의 refreshBackfillPausedFromDb 가 DB 로 재수화(부팅 스윕이 영속 상태를 픽업).
+//  게이트웨이는 단일 프로세스(스윕·REST 핸들러 동거)라 캐시가 정합적이다(스케줄러 게이트: LIVELY_NO_SCHEDULER).
+let pausedCache = false;
+export function isBackfillPaused(): boolean { return pausedCache; }
+export function setBackfillPausedCache(paused: boolean): void { pausedCache = paused; }
+// DB 의 일시중지 플래그를 읽어 캐시에 반영하고 반환. 컬럼/테이블 부재(구 DB)면 캐시 불변(기본 false=평소대로 자동 백필 — 하위호환).
+export async function refreshBackfillPausedFromDb(): Promise<boolean> {
+  try {
+    const r = await itemsPool.query(`SELECT embedding_backfill_paused FROM org_runtime_config WHERE id=1`);
+    pausedCache = (r.rows[0] as { embedding_backfill_paused?: unknown } | undefined)?.embedding_backfill_paused === true;
+  } catch {
+    /* 컬럼/테이블 부재(임베딩 미도입/구 DB) → 캐시 유지(기본 false). 스윕은 계속 돈다. */
+  }
+  return pausedCache;
+}
+
 // ── 인프로세스 백필 잡(웹 UI 트리거) — 게이트웨이 프로세스 내 단일 실행. 진행률은 폴링(GET /api/ui/org/embeddings 등). ──
 //  잡 유실(재시작)돼도 백필은 재진입 안전이라 다시 트리거하면 남은 것만 이어서. 동시 실행은 already-running 으로 거부.
 //  타깃별로 독립 잡(knowledge·project 를 동시에 돌릴 수 있다) — jobs Map 이 타깃명으로 보관.
@@ -220,6 +242,9 @@ export function startBackfillJob(
   void runEmbeddingBackfill({
     mode,
     onProgress: (p) => { job.total = p.total; job.done = p.done; },
+    // #1060 — 일시중지 토글 시 현재 배치를 끝내고 협조적 중단(재진입 안전: 채운 만큼 커밋됨, pending 은 재개 때 이어서).
+    //  자동 스윕 잡·수동 백필 잡 모두 이 게이트를 통과하므로, 일시중지는 어느 경로로 시작된 잡이든 멈춘다.
+    shouldStop: () => isBackfillPaused(),
   }, target)
     .then((res) => {
       job.embedded = res.embedded;
@@ -244,9 +269,26 @@ export async function runAutoBackfillSweep(): Promise<void> {
   if (sweepRunning) return;
   sweepRunning = true;
   try {
-    const provider = resolveEmbeddingProvider(await resolveConfigFromDb());
+    // #1060 — 일시중지면 스윕 자체가 no-op. DB 를 읽어 캐시 재수화(부팅 스윕이 영속 상태를 픽업) 후 게이트한다.
+    //  이 한 곳이 4개 자동 트리거(부팅 30초·10분 주기·connector_sync 완료 후·쓰기 nudge)의 공통 급소 — 전부 여기로 수렴한다.
+    if (await refreshBackfillPausedFromDb()) return;
+    const cfg = await resolveConfigFromDb();   // #1059 메모리 게이트가 cfg.backfill_min_available_mb 를 읽으므로 변수로 보관
+    const provider = resolveEmbeddingProvider(cfg);
     if (!provider) return;
+    // G2(#1059) 백필 pre-flight 메모리 게이트 — 임베딩 백엔드 로드(예: Ollama bge-m3 ~3.3GB)가 세션 baseline 과
+    //  겹쳐 물리 초과→OOM 스래싱 되던 것(어니스트 2026-07-21)을 사전 회피. 가용 메모리가 임계 미만이면 이번 스윕을
+    //  건너뛴다 — pending 은 DB 에 남아(embedding_vector IS NULL) 다음 주기(10분)·nudge 스윕이 여유 생기면 흡수(재진입 안전).
+    //  0=비활성(무회귀). 수동 백필(startBackfillJob = 관리탭 버튼)은 사용자 명시 의도라 게이트하지 않는다 — 자동 스윕만.
+    const minMb = cfg.backfill_min_available_mb;
+    if (minMb > 0) {
+      const availMb = await memAvailableMb();
+      if (availMb < minMb) {
+        console.warn(`[embedding] 자동 백필 스윕 보류 — 가용메모리 ${availMb}MB < 임계 ${minMb}MB (pending 유지, 다음 주기 재시도)`);
+        return;
+      }
+    }
     for (const target of [KNOWLEDGE_TARGET, PROJECT_TARGET]) {
+      if (isBackfillPaused()) break; // 스윕 도중 일시중지되면 남은 타깃으로 넘어가지 않는다(실행 중 잡은 shouldStop 으로 이미 중단).
       let pending = 0;
       try { pending = (await countEmbeddingBacklog(target)).pending; } catch { continue; }
       if (pending === 0) continue;
@@ -257,4 +299,46 @@ export async function runAutoBackfillSweep(): Promise<void> {
   } finally {
     sweepRunning = false;
   }
+}
+
+// ── 쓰기 경로 → pending 마킹(#1053) — 저장/수정 때 임베딩 HTTP(느린 CPU 백엔드는 건당 수십 초)를 인라인 호출하지 ──
+//  않는다. 대신 행의 벡터를 비워 'pending'(embedding_vector IS NULL) 풀로 되돌리고, 백그라운드 드레인
+//  (runAutoBackfillSweep)이 배치로 채운다 — 저장은 즉시 반환. 커넥터 미러의 knowledge 리셋 idiom(connector-mirror.ts)과 동형.
+//   · off/미설정: no-op(오늘의 embed*BestEffort 게이트와 동일 — 벡터 컬럼 부재 DB 의 헛 UPDATE 도 회피).
+//   · 신규 행: embedding_vector 가 이미 NULL(=pending) → 리셋 UPDATE 는 0행(IS NOT NULL 가드) + nudge 만.
+//   · 수정 행: 임베딩 입력 텍스트가 '실제로 바뀐' 경우에만 호출부가 부른다(무변경·facet-only 저장엔 헛임베딩·검색 공백 없음).
+//  내구성: pending 은 DB 에 남아 프로세스 재시작·엔드포인트 순단에도 부팅/주기 스윕이 반드시 흡수(재진입 안전).
+export async function markEmbeddingPending(
+  target: EmbeddingTarget,
+  id: string | number,
+  nudge = true,
+): Promise<void> {
+  // provider off 면 즉시 반환 — 리셋할 벡터도, 채울 스윕도 없다(오늘 동기 경로의 activeEmbeddingProvider 게이트와 동치 비용: 설정 1회 조회).
+  const cfg = await resolveConfigFromDb();
+  if (cfg.provider === "off") return;
+  try {
+    await itemsPool.query(
+      `UPDATE ${target.table} SET embedding_vector=NULL, embedding_model=NULL, embedding_updated_at=NULL
+         WHERE ${target.idCol}=$1 AND embedding_vector IS NOT NULL`,
+      [id],
+    );
+  } catch (e) {
+    // 벡터 컬럼 부재(임베딩 미도입 DB) 등 — 삼킨다(스윕이 스키마를 보장·수렴). 저장 자체는 이미 커밋됨.
+    console.warn(`[embeddings] pending 마킹 실패(best-effort, 스윕으로 보강) ${target.name}#${id}: ${(e as Error)?.message}`);
+  }
+  if (nudge) nudgeAutoBackfill();
+}
+
+// nudge — 방금 생긴 pending 을 10분 주기 스윕까지 안 기다리고 곧(디바운스) 드레인한다. arm-once(고정 지연):
+//  버스트(대량 저장·연속 편집)는 지연창 안에서 한 번의 스윕으로 합쳐지고, 스윕은 단일비행(sweepRunning)이라 겹치면
+//  자체 거부한다. 실행 중 스윕은 pending IS NULL 을 0행까지 재조회하므로 창 사이에 새로 생긴 pending 도 흡수한다.
+//  ⚠ 게이트웨이 프로세스 전용 실효 — run-sync 서브프로세스에서 스윕을 돌리지 않으려 그 경로(flushProjectEmbeds)는
+//   nudge=false 로 부른다(리셋만; 게이트웨이 post-sync 스윕이 드레인). unref 로 타이머가 프로세스를 붙잡지 않는다.
+let nudgeArmed = false;
+const NUDGE_DELAY_MS = 1000;
+export function nudgeAutoBackfill(): void {
+  if (nudgeArmed) return; // 이미 예약됨 — 합친다
+  nudgeArmed = true;
+  const t = setTimeout(() => { nudgeArmed = false; void runAutoBackfillSweep(); }, NUDGE_DELAY_MS);
+  t.unref?.();
 }

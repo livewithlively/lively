@@ -51,6 +51,7 @@ if [ "$OS" = linux ]; then
   export SERVICE_USER
 fi
 render_service_unit                 # 유닛 템플릿 변경(예: KillMode=process)을 이 박스에도 반영(단일 소스 — common.sh). 기존엔 코드만 갱신돼 유닛 픽스가 전파 안 되던 갭 해소.
+ensure_host_memory_safety           # #1059 OOM 재발방지 — 기존 박스(어니스트 등)도 update 로 swap·earlyoom 수령(멱등·비파괴). 비치명.
 # 격리 인프라(#524) 리프레시 — 이 박스가 '격리 박스'면(box-spawn 존재) box-spawn/sudoers/provision-member 를
 #  코드와 동기화(멱등). render_service_unit 과 같은 이유: 코드만 갱신되고 인프라(wrapper·sudoers)가 스테일해지는
 #  갭 방지 → 격리 관련 버전업마다 install-isolation 을 손으로 다시 돌릴 필요 없음. 미설치 박스는 no-op(opt-in 유지).

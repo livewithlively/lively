@@ -118,6 +118,35 @@ bashKept ? ok("⑤ 다른 matcher 의 동일 스크립트 항목 보존") : bad(
     : bad("⑦ CLI 모듈 배선 누락", missing.join(" · "));
 }
 
+// ⑧ #1043 — SessionEnd 러너 엔트리는 **명시 timeout** 을 가져야 한다. Claude Code 는 SessionEnd 훅에 `timeout`
+//   미선언 시 floor 1500ms 만 주는데(claude 2.1.x getSessionEndHookTimeoutMs), run-custom 이 SessionEnd 에서
+//   게이트웨이 fetch(org 훅 조회)를 하다 그 1500ms 를 넘기면 AbortSignal 로 잘려 "SessionEnd hook … failed:
+//   Hook cancelled" 워닝이 뜬다. 명시 timeout(초)이 그 상한을 올린다 — 이 배선이 사라지면 워닝이 재발한다.
+{
+  const t = runnerHooksBlock().SessionEnd?.[0]?.hooks?.[0]?.timeout;
+  (typeof t === "number" && t >= 5)   // 1500ms(=1.5s) floor 를 넉넉히 넘겨야 조기 abort 를 벗어난다
+    ? ok(`⑧ SessionEnd 러너 timeout=${t}s (Claude Code floor 1500ms 회피, #1043)`)
+    : bad("⑧ SessionEnd timeout 누락", `timeout=${t} — floor 1500ms 로 run-custom 이 조기 abort → "Hook cancelled"(#1043)`);
+}
+
+// ⑨ #1043 — 회수(reclaim)는 전문(timeout 포함) 변경도 반영한다: 같은 command 인데 timeout 만 다른 구(舊)엔트리가
+//   이미 설치돼 있으면(예: SessionEnd 에 timeout 이 없던 기존 멤버) 재설치가 그것을 **최신형으로 교체**해야 한다.
+//   종전 dedup 은 command 문자열만 봐서 timeout 변경이 영영 반영되지 않았다(같은 command → dup 스킵).
+{
+  const full = FULL();
+  const stripped = {};                         // SessionEnd 만 timeout 을 뗀 '구 세대' settings 재현
+  for (const [ev, entries] of Object.entries(full)) {
+    stripped[ev] = entries.map((e) => ({ ...e, hooks: e.hooks.map((h) => { const { timeout, ...rest } = h; return ev === "SessionEnd" ? rest : h; }) }));
+  }
+  writeFileSync(SP, JSON.stringify({ hooks: stripped }, null, 2) + "\n");
+  safeMergeUserSettings(full);
+  s = readS();
+  const seHooks = (s.hooks.SessionEnd || []).flatMap((e) => e.hooks || []);
+  const seOk = seHooks.length === 1 && seHooks[0].timeout === full.SessionEnd[0].hooks[0].timeout;
+  seOk ? ok("⑨ timeout 만 바뀐 구엔트리도 최신형으로 회수·교체(+중복 없음)")
+    : bad("⑨ timeout 회수", `SessionEnd hooks=${JSON.stringify(seHooks)}`);
+}
+
 rmSync(SANDBOX, { recursive: true, force: true });
 console.log(`user-install tests: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);
 if (fail) process.exit(1);

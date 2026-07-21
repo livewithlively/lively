@@ -189,7 +189,7 @@ app.delete("/mcp", auth, async (req, res) => {
 
 // 멤버 설치 — 토큰게이트 curl 모델(git clone 대체). 인증된 멤버 토큰이면 그 조직의 발행 아티팩트를
 //  tar.gz 로 동적 생성해 스트림한다(DB→materialize→generator→tar). 설치 한 줄:
-//    curl -fsSL -H "Authorization: Bearer <TOKEN>" <GW>/install | tar -xz -C <dir> && bash <dir>/setup/setup-mac.sh
+//    curl -fsSL <GW>/cli | sh          (→ lively CLI 가 /install 번들을 받아 설치)
 //  격리 모델: **조직당 1 게이트웨이+DB 인스턴스**(배포 유형화 T1~T5, 멀티테넌트 SaaS 제외). 따라서 org-content
 //  테이블에 org_id 컬럼이 없고 모든 멤버 토큰이 그 단일 조직 묶음을 받는다 — 이건 설계상 의도다.
 //  ⚠️ 만약 한 게이트웨이를 여러 조직이 공유하도록 바꾼다면 org_id 격리(스키마+모든 쿼리 필터)가 선행 필수.

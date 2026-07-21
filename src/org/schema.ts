@@ -527,6 +527,15 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS storage_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
 
+  // ── org_runtime_config 확장: session_memory_policy — per-session cgroup 메모리 격리(#1059 D). 세션당 MemoryHigh/Max(MB). ──
+  // 기본 '{}' = 미설정 → env 시드(LIVELY_SESSION_MEM_HIGH_MB·_MAX_MB) → 0/0(무제한, 무회귀) 순으로 해석
+  //  (src/org/session-memory-policy.ts). claude 는 네이티브라 힙제한이 안 통해 cgroup 이 유일 수단 — box-cgspawn 이
+  //  systemd-run --scope 로 세션을 이 상한의 scope 에 가둬 폭주 세션 하나만 OOM-kill 되고 박스는 생존(#1059 어니스트 다운).
+  // **관리탭이 단일 창구**: 고객 박스는 SSH 로 못 들어가므로 .env 전용 정책은 사실상 아무도 못 바꾼다(storage_policy 와 동일 교리).
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS session_memory_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+  `);
+
   // ── org_runtime_config 확장: hook_relay_decisions — 러너가 PreToolUse 에서 하네스로 전파할 결정값(#892). ──
   // 기본 '["deny","ask","defer"]' = 제한적 결정만 전파. **'allow' 는 기본 제외**가 핵심: allow 는 멤버의 권한
   //  프롬프트(동의 UI)를 건너뛰므로, 관리자 훅이 조용히 그걸 없애는 걸 기본값으로 두지 않는다. 넓히려면 명시 opt-in.
@@ -549,6 +558,15 @@ export async function initOrgSchema(): Promise<void> {
   //  DEFAULT NULL 이라 기존/신규 조직 전부 마이그레이션만으로 무제한이 된다. 보안상 짧은 회수창이 필요한 조직만 값을 준다.
   await itemsPool.query(`
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS hook_grace_ms BIGINT DEFAULT NULL;
+  `);
+
+  // ── org_runtime_config 확장: embedding_backfill_paused — 자동 임베딩 백필 스윕 일시중지(#1060). ──
+  //  자동 백필(부팅 30초·10분 주기·connector_sync 완료 후·쓰기 nudge)은 느린/CPU 임베딩 백엔드에서 게이트웨이 성능을
+  //  갉아먹을 수 있는데 종전엔 멈출 창구가 없었다. 이 플래그가 true 면 runAutoBackfillSweep 이 즉시 return(4개 트리거 전부
+  //  차단) + 실행 중 잡은 shouldStop 으로 협조적 중단. **DB 영속** — 재시작에도 유지되어 부팅 스윕이 이 상태를 존중한다
+  //  (성능 때문에 껐는데 재부팅으로 되살아나면 안 된다). 기본 false=평소대로 자동 백필. 관리탭 ▸ 의미 검색 에서 사람이 토글.
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS embedding_backfill_paused BOOLEAN NOT NULL DEFAULT false;
   `);
 
   // ── org_hook 확장: health — 멤버별 마지막 훅 실행 실패 기록(#892 결함 C). ──
@@ -774,7 +792,7 @@ export async function initOrgSchema(): Promise<void> {
       -- action allowlist — 확장 시 DROP+ADD(IF NOT EXISTS 만으론 라이브 제약이 안 바뀜).
       ALTER TABLE org_cron DROP CONSTRAINT IF EXISTS org_cron_action_chk;
       ALTER TABLE org_cron ADD CONSTRAINT org_cron_action_chk
-        CHECK (action IN ('refresh_all','refresh_repo','refresh_bases','connector_sync','connector_push','wiki_push','eval_domain_debt','map_unmapped','classify_knowledge','bootstrap_is','distill_sources','agent_inject','ensure_managed_sessions','wikilink_sweep','preview_reconcile'));
+        CHECK (action IN ('refresh_all','refresh_repo','refresh_bases','connector_sync','connector_push','wiki_push','eval_domain_debt','map_unmapped','map_unmapped_headless','classify_knowledge','classify_knowledge_headless','bootstrap_is','distill_sources','agent_inject','agent_headless','ensure_managed_sessions','wikilink_sweep','preview_reconcile'));
     END $$;
     -- cron_expr(절대 벽시계 스케줄, 5필드). NULL=interval_sec 상대 모드. 기존 테이블 비파괴 추가.
     ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS cron_expr TEXT;

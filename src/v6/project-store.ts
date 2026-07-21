@@ -10,8 +10,10 @@ import { auditOrgContent, restoreSnapshot, type WriteCtx } from "../db/write.js"
 import { findRecommendedKnowledge, type KnowledgeRecommendRow } from "./knowledge-store.js";
 // 아웃바운드 write-through(#177) — 로컬 편집을 외부 PM(ClickUp) 푸시 아웃박스에 적재. 커넥터는 project-store 우회라 루프 없음.
 import { enqueueExternalPush } from "./external-outbox.js";
-// 프로젝트 임베딩·검색(#631) — knowledge 와 동일 seam. embeddingInputText 는 name→title, description→body 로 매핑해 재사용.
-import { embeddingInputText, toVectorLiteral } from "./embedding-provider.js";
+// 프로젝트 검색(#631) — knowledge 와 동일 seam. 검색 경로의 쿼리 벡터 리터럴만 toVectorLiteral 로 만든다.
+import { toVectorLiteral } from "./embedding-provider.js";
+// 쓰기 경로 임베딩 비동기화(#1053) — 저장/수정 시 인라인 임베딩 대신 pending 마킹 후 백그라운드 스윕에 위임(knowledge 와 동형).
+import { markEmbeddingPending, PROJECT_TARGET } from "./embedding-backfill.js";
 import {
   type GrepPlan, parseGrep, grepWhere, grepExec, grepSnippet, RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider,
 } from "./search-util.js";
@@ -47,24 +49,13 @@ export interface ProjectRow {
 const auditProject = (entityKey: string, op: string, before: unknown, after: unknown, ctx?: WriteCtx): Promise<void> =>
   auditOrgContent("project", entityKey, op, before, after, ctx);
 
-// 쓰기 경로 best-effort 임베딩(#631 프로젝트 검색) — provider on 일 때만. 실패는 삼킨다(행은 이미 저장됨 → 백필로 보강). off=no-op.
-//  ⚠ 감사·커밋 이후 별도 UPDATE(임베딩 실패가 프로젝트 저장을 깨지 않게). knowledge embedKnowledgeBestEffort 와 동형(키만 id).
-//  name→title, description→body 로 매핑해 knowledge 와 같은 embeddingInputText(8000자 캡) 재사용.
-//  connector-mirror(ClickUp 미러)도 이 함수를 재사용한다(#624 트리거) — 그래서 export.
-export async function embedProjectBestEffort(id: number, fields: { name?: string | null; description?: string | null }): Promise<void> {
-  const provider = await activeEmbeddingProvider();
-  if (!provider) return;
-  try {
-    const text = embeddingInputText({ title: fields.name, body_md: fields.description });
-    if (!text) return;
-    const [vec] = await provider.embed([text]);
-    if (!vec || !vec.length) return;
-    await itemsPool.query(
-      `UPDATE project SET embedding_vector=$2::vector, embedding_model=$3, embedding_updated_at=now() WHERE id=$1`,
-      [id, toVectorLiteral(vec), provider.model]);
-  } catch (e) {
-    console.warn(`[embeddings] 프로젝트 #${id} 임베딩 실패(best-effort, 백필로 보강): ${(e as Error)?.message}`);
-  }
+// 쓰기 경로 임베딩 비동기화(#1053, 검색 #631) — 저장/수정 시 인라인 임베딩(HTTP, 느린 CPU 백엔드는 건당 수십 초)을
+//  하지 않고, 행의 벡터를 비워 pending 으로 되돌린 뒤 백그라운드 스윕(runAutoBackfillSweep)이 배치로 채운다. 저장은
+//  즉시 반환. 신규 행은 이미 NULL(=pending)이라 리셋은 no-op + nudge 만. off/실패는 no-op(스윕이 스키마 보장·수렴).
+//  connector-mirror(ClickUp 미러)도 이 함수를 재사용한다(#624 트리거) — 그래서 export. 미러는 서브프로세스라
+//  nudge=false(리셋만; 게이트웨이 post-sync 스윕이 드레인 — 서브프로세스에서 스윕을 돌리지 않기 위함).
+export async function markProjectEmbeddingPending(id: number, opts?: { nudge?: boolean }): Promise<void> {
+  await markEmbeddingPending(PROJECT_TARGET, id, opts?.nudge ?? true);
 }
 
 // 네이티브 status → 정규 카테고리(크로스툴: backlog|unstarted|started|done|canceled).
@@ -280,7 +271,7 @@ export async function createProject(
   }
   await auditProject(String(row.id), "insert", null, row, ctx);
   await enqueueExternalPush(row.id, "upsert", ctx); // 외부 푸시(create) — 드레인이 컨테이너/부모 해소 후 ClickUp 생성+링크백.
-  await embedProjectBestEffort(row.id, { name: row.name, description: row.description }); // #631 검색 임베딩(best-effort)
+  await markProjectEmbeddingPending(row.id); // #631/#1053 검색 임베딩 — pending 마킹(백그라운드 스윕이 채움)
   return row;
 }
 
@@ -505,7 +496,7 @@ export async function deleteTaskNode(id: number, ctx?: WriteCtx): Promise<Projec
 export async function restoreProject(before: Record<string, unknown>, ctx?: WriteCtx): Promise<ProjectRow> {
   const after = await restoreSnapshot<ProjectRow>("project", PROJECT_COLS, "id", before);
   await auditProject(String(after.id), "restore", null, after, ctx);
-  await embedProjectBestEffort(after.id, { name: after.name, description: after.description }); // #631 복원 행 재임베딩(best-effort)
+  await markProjectEmbeddingPending(after.id); // #631/#1053 복원 행 재임베딩 — pending 마킹(백그라운드 스윕이 채움)
   return after;
 }
 
@@ -563,7 +554,7 @@ export async function updateProject(
   // 이름/설명이 '실제로 바뀐' 경우에만 재임베딩 — 필드 존재(patch)가 아니라 before↔after 값 비교. no-op·미변경 저장,
   //  잦은 웹 인라인편집·MCP·ClickUp writeback 이 텍스트를 그대로 실어보내도 헛임베딩 방지(임베딩 부하 = 실제 텍스트 변경 수). #624/#631
   if (after.name !== before.name || (after.description ?? null) !== (before.description ?? null))
-    await embedProjectBestEffort(id, { name: after.name, description: after.description });
+    await markProjectEmbeddingPending(id);
   return after;
 }
 
@@ -663,7 +654,7 @@ export async function createTask(
     [level, parentId, input.name, input.description ?? null, ctx?.actor ?? null]);
   await auditProject(String(row.id), "insert", null, row, ctx);
   await enqueueExternalPush(row.id, "upsert", ctx); // 외부 푸시(create) — 드레인이 컨테이너/부모 해소 후 ClickUp 생성+링크백.
-  await embedProjectBestEffort(row.id, { name: row.name, description: row.description }); // #631 검색 임베딩(best-effort)
+  await markProjectEmbeddingPending(row.id); // #631/#1053 검색 임베딩 — pending 마킹(백그라운드 스윕이 채움)
   return row;
 }
 
@@ -763,7 +754,7 @@ export async function updateTask(
   // 이름/설명이 '실제로 바뀐' 경우에만 재임베딩 — before↔after 값 비교(필드 존재가 아니라). 상태·담당자·기간 인라인
   //  편집이 잦아도(웹 blur 저장 등) 텍스트가 안 바뀌면 스킵 → 임베딩 부하 = 실제 텍스트 변경 수로 상한. #624/#631
   if (after.name !== before.name || (after.description ?? null) !== (before.description ?? null))
-    await embedProjectBestEffort(id, { name: after.name, description: after.description });
+    await markProjectEmbeddingPending(id);
   return after;
 }
 

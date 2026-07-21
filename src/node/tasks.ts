@@ -17,6 +17,7 @@ import {
 import { wrapAsMember, isolationInfraReady } from "../terminal-isolation.js";
 import { provisionTaskRepo, type RepoProvisionAuth } from "../project-provision.js";
 import type { NodeResources } from "./protocol.js";
+import { memAvailableMb } from "../host-mem.js"; // #1059 공용 메모리 지표(백필 게이트와 단일 소스)
 
 const execFileAsync = promisify(execFile);
 
@@ -34,25 +35,7 @@ async function tmux(args: string[]): Promise<string> {
   return stdout;
 }
 
-// 가용 메모리(MB) — os.freemem() 은 캐시/inactive 를 빼고 세서 macOS(수십 MB로 나옴)·Linux(MemFree)에서
-//  심하게 과소보고한다 → 배치 필터가 멀쩡한 노드를 다 떨군다(e2e 실측). 플랫폼별 '회수 가능 포함' 지표를 쓴다:
-//  Linux=/proc/meminfo MemAvailable · macOS=vm_stat(free+inactive+purgeable+speculative). 실패 시 freemem 폴백.
-async function memAvailableMb(): Promise<number> {
-  try {
-    if (process.platform === "linux") {
-      const mi = await fsp.readFile("/proc/meminfo", "utf8");
-      const m = /MemAvailable:\s+(\d+)\s*kB/.exec(mi);
-      if (m) return Math.round(Number(m[1]) / 1024);
-    } else if (process.platform === "darwin") {
-      const { stdout } = await execFileAsync("vm_stat", [], { timeout: 3000 });
-      const page = Number(/page size of (\d+) bytes/.exec(stdout)?.[1] ?? 16384);
-      const grab = (k: string): number => Number(new RegExp(`${k}:\\s+(\\d+)`).exec(stdout)?.[1] ?? 0);
-      const pages = grab("Pages free") + grab("Pages inactive") + grab("Pages purgeable") + grab("Pages speculative");
-      if (pages > 0) return Math.round((pages * page) / 1048576);
-    }
-  } catch { /* 폴백 */ }
-  return Math.round(os.freemem() / 1048576);
-}
+// 가용 메모리(MB) 산출은 host-mem.ts 로 추출됨(#1059 — 임베딩 백필 pre-flight 게이트와 공용, 로직 단일화). memAvailableMb import.
 
 // ── 리소스 스냅샷(§10) — 상태 push 동봉용. disk 는 주어진 루트(공유 워크스페이스) 기준. ──
 export async function sampleResources(diskRoot: string): Promise<NodeResources> {
