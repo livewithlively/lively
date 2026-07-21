@@ -51,13 +51,14 @@ const projectFolderCreateV6: Capability = {
   name: "project_folder_create_v6",
   title: "프로젝트 폴더 생성(v6)",
   description: "폴더(정리용 상위 층)를 만든다. 폴더는 멤버·권한 없이 리스트를 담아 정리만 한다. "
-    + "kind='space' 면 최상위 스페이스로 생성(#766). parent_id 를 주면 그 스페이스/폴더 하위에 중첩 생성(스페이스는 최상위 전용이라 parent_id 무시).",
+    + "kind='space' 면 최상위 스페이스로 생성(#766). kind='archive' 면 사이드바 고정 '아카이브' 폴더로 생성(#1067 — 지난 리스트·폴더·프로젝트를 치워두는 곳, 조직당 하나). "
+    + "parent_id 를 주면 그 스페이스/폴더 하위에 중첩 생성(스페이스·아카이브는 최상위 전용이라 parent_id 무시).",
   scope: "memory",
   input: {
     name: z.string().min(1).max(120),
     color: z.string().max(32).nullable().optional(),
     parent_id: z.number().int().positive().nullable().optional(),
-    kind: z.enum(["space", "folder"]).optional(),
+    kind: z.enum(["space", "folder", "archive"]).optional(),
   },
   expose: {
     mcp: true,
@@ -72,7 +73,7 @@ const projectFolderCreateV6: Capability = {
           parentId = Number(b.parent_id);
           if (!Number.isInteger(parentId) || parentId <= 0) throw new HttpError(400, "parent_id 가 올바르지 않습니다");
         }
-        const kind = b.kind === "space" ? "space" : undefined;
+        const kind = b.kind === "space" ? "space" : (b.kind === "archive" ? "archive" : undefined);
         return { name, color: parseColorOrNull(b.color), parent_id: parentId, kind };
       } }],
   },
