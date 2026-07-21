@@ -7592,18 +7592,18 @@ input.emb-num { width: 120px; flex: none; }
 .pjv-tb-primary:hover, .pjv-tb-primary-more:hover { background: rgba(255,255,255,.14); }
 /* 검색 — 아이콘만 있다가 펼치면 입력창이 자란다. */
 .pjv-tb-search { display: inline-flex; align-items: center; flex: none; }
-.pjv-tb-search-input { width: 0; padding: 0; border: none; background: none; font-size: 12.5px; color: var(--ink); transition: width .16s ease, padding .16s ease; min-width: 0; }
-.pjv-tb-search.open .pjv-tb-search-input { width: 150px; padding: 0 8px; height: 26px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); }
+.pjv-tb-search-input { display: none; width: 150px; padding: 0 8px; height: 26px; box-sizing: border-box; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); font-size: 12.5px; color: var(--ink); min-width: 0; margin-left: 2px; }
+.pjv-tb-search.open .pjv-tb-search-input { display: block; }
 .pjv-tb-search-input:focus { outline: none; border-color: var(--blue); }
 
 /* ── 팝오버: 필터 빌더 ── */
-.pjv-filter-pop { min-width: 380px; max-width: 520px; padding: 6px; gap: 4px; }
+.pjv-filter-pop { min-width: 452px; max-width: 560px; padding: 6px; gap: 4px; }
 .pjv-filter-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 6px 3px; }
 .pjv-filter-title { font-size: 12.5px; font-weight: 800; color: var(--ink); }
 .pjv-filter-clear { border: none; background: none; cursor: pointer; font-size: 11.5px; font-weight: 700; color: var(--muted-2); padding: 2px 5px; border-radius: 6px; }
 .pjv-filter-clear:hover { background: var(--bg-tint-2); color: var(--coral-text, var(--ink)); }
 .pjv-filter-rows { display: flex; flex-direction: column; gap: 5px; }
-.pjv-filter-row { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.pjv-filter-row { display: flex; align-items: center; gap: 5px; flex-wrap: nowrap; }
 .pjv-filter-lead { font-size: 11.5px; font-weight: 700; color: var(--muted-2); min-width: 54px; padding-left: 4px; }
 .pjv-filter-match { min-width: 54px; }
 .pjv-filter-sel { display: inline-flex; align-items: center; justify-content: space-between; gap: 5px; height: 30px; box-sizing: border-box; padding: 0 7px 0 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--ink); }
@@ -7612,8 +7612,8 @@ input.emb-num { width: 120px; flex: none; }
 .pjv-filter-sel .pjv-tb-ic { color: var(--muted-2); }
 .pjv-filter-field { min-width: 88px; }
 .pjv-filter-op { min-width: 74px; }
-.pjv-filter-val { flex: 1 1 130px; min-width: 120px; }
-.pjv-filter-text, .pjv-filter-date { flex: 1 1 130px; min-width: 110px; height: 30px; box-sizing: border-box; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 12.5px; color: var(--ink); }
+.pjv-filter-val { flex: 1 1 110px; min-width: 96px; }
+.pjv-filter-text, .pjv-filter-date { flex: 1 1 110px; min-width: 96px; height: 30px; box-sizing: border-box; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 12.5px; color: var(--ink); }
 .pjv-filter-text:focus, .pjv-filter-date:focus { outline: none; border-color: var(--blue); }
 .pjv-filter-del { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex: none; border: none; background: none; border-radius: 7px; cursor: pointer; color: var(--muted-2); padding: 0; }
 .pjv-filter-del:hover { background: color-mix(in srgb, var(--coral-text, #d9534f) 10%, transparent); color: var(--coral-text, #d9534f); }
@@ -7625,8 +7625,11 @@ input.emb-num { width: 120px; flex: none; }
 .pjv-multipick { min-width: 250px; max-width: 320px; padding: 5px; gap: 3px; }
 .pjv-multipick-searchwrap { display: flex; align-items: center; gap: 6px; padding: 0 8px; height: 32px; border: 1px solid var(--line); border-radius: 8px; margin: 2px 2px 4px; color: var(--muted-2); }
 .pjv-multipick-searchwrap:focus-within { border-color: var(--blue); }
-.pjv-multipick-search { flex: 1; min-width: 0; border: none; background: none; font-size: 12.5px; color: var(--ink); }
-.pjv-multipick-search:focus { outline: none; }
+.pjv-multipick .pjv-multipick-search { flex: 1; min-width: 0; height: 100%; padding: 0; border: none; box-shadow: none; background: transparent; font-size: 12.5px; color: var(--ink); }
+.pjv-multipick .pjv-multipick-search:focus { outline: none; border: none; box-shadow: none; }
+/* 보기 설정 라디오 — 선택된 항목에 파란 점(라벨 색만으로는 '고를 수 있는 것'인지 안 보인다). */
+.pjv-view-radio { flex: none; width: 15px; height: 15px; border-radius: 50%; border: 1.6px solid var(--muted-3, #aab1bd); box-sizing: border-box; }
+.pjv-view-item.on .pjv-view-radio { border-color: var(--blue); border-width: 4.5px; }
 .pjv-multipick-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 3px 8px 4px; }
 .pjv-multipick-title { font-size: 11.5px; font-weight: 800; color: var(--muted-2); letter-spacing: .2px; }
 .pjv-multipick-all { border: none; background: none; cursor: pointer; font-size: 11.5px; font-weight: 700; color: var(--blue); padding: 2px 5px; border-radius: 6px; }
