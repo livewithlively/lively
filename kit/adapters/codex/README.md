@@ -37,4 +37,4 @@
 ## 생성기 라우팅 / 발행물
 
 `generator/build-context.mjs` 의 `--harness codex`(또는 `claude,codex`)는 `HARNESS_EMIT` 로 dispatch.
-user-level 발행물 경로는 동봉 `setup/user-install.mjs --harness codex`(자체완결 — generator 미의존)가 담당하고, 번들-안에서-실행(병행 경로)은 발행물 루트 `AGENTS.md` 를 Codex 가 네이티브 로드한다. `setup/setup-mac.sh` 는 `command -v claude/codex` 로 설치된 하네스를 자동 감지해 각각 설치한다.
+user-level 발행물 경로는 동봉 `setup/user-install.mjs --harness codex`(자체완결 — generator 미의존)가 담당하고, 번들-안에서-실행(병행 경로)은 발행물 루트 `AGENTS.md` 를 Codex 가 네이티브 로드한다. `lively install`(CLI) 은 설치된 하네스를 자동 감지해 각각 설치한다.

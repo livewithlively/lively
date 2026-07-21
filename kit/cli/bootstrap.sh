@@ -39,7 +39,7 @@ say ""
 
 # ── [1] Node 확보 ─────────────────────────────────────────────────────────────
 # CLI 도 훅도 전부 Node 다. 없으면 공식 tarball 을 **무sudo**로 ~/.lively/runtime 에 깐다(체크섬 검증).
-#  setup-mac.sh 의 ensure_node 와 같은 계약이되 Linux 까지 커버한다(박스·WSL·리눅스 노트북).
+#  mac·Linux 를 한 코드로 커버한다(박스·WSL·리눅스 노트북). 옛 setup-mac.sh 의 ensure_node 를 대체했다(#1068 에서 제거).
 #
 # ⚠ **존재가 아니라 버전으로 판정한다**(#1068). 옛 코드는 `command -v node` 하나로 시스템 node 를 무조건
 #   채택해서, 구버전 박스에선 CLI 가 그 위에서 돌다 `fetch is not defined`(전역 fetch 는 Node 18+)로

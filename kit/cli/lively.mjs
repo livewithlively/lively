@@ -185,7 +185,7 @@ function writeLively(name, val, mode = 0o600) {
   writeFileSync(p, val, { mode });
   try { chmodSync(p, mode); } catch { /* Windows 는 무의미 */ }
 }
-// gateway-url 은 항상 **/mcp 없이** 저장한다(setup-mac.sh · user-install.mjs 와 같은 계약).
+// gateway-url 은 항상 **/mcp 없이** 저장한다(user-install.mjs 와 같은 계약).
 const normGw = (u) => String(u || "").trim().replace(/\/+$/, "").replace(/\/mcp$/, "").replace(/\/+$/, "");
 const gateway = () => normGw(process.env.LIVELY_GATEWAY_URL || readLively("gateway-url"));
 // ⚠ **파일이 정본이고 LIVELY_TOKEN env 는 그 캐시다**(#916 — 순서를 뒤집지 말 것).
@@ -581,7 +581,8 @@ function verifyBundle(root) {
 
 // ── 7. MCP 등록 — 이 CLI 의 존재 이유 ───────────────────────────────────────
 //  kit/setup/register-clients.sh 와 **동일한 claude 호출**을 Node 로 재현한다(bash·PowerShell 분기 제거 →
-//  mac/linux/windows 가 같은 코드). 셸 스크립트는 setup-mac.sh · deploy/install-kit.sh 하위호환으로 남는다.
+//  mac/linux/windows 가 같은 코드). 옛 셸 설치기(setup-mac.sh 등)는 #1068 에서 제거했다 —
+//  남은 셸 경로는 박스용 deploy/install-kit.sh 뿐이고 그건 user-install.mjs 를 직접 부른다.
 //  Codex 는 MCP 를 config.toml 에 쓰므로(user-install.mjs 가 담당) 여기서 할 일이 없다.
 function readMcpServers() {
   try {
@@ -1685,7 +1686,7 @@ async function cmdShare(args) {
 
 // lively onboarding [초기프롬프트…] — 온보딩 스킬을 이 PC 에서 바로 실행한다.
 //  claude 를 초기 프롬프트("온보딩 도와줘")로 띄우면 하네스가 그 문구로 lively-onboarding 스킬을 소환한다.
-//  설치 직후 제안(setup-mac.sh)과 사람의 수동 재실행이 같은 진입을 쓴다. cmdResume 과 동형(has 가드 + spawnSync inherit).
+//  설치 직후 제안과 사람의 수동 재실행이 같은 진입을 쓴다. cmdResume 과 동형(has 가드 + spawnSync inherit).
 //  ⚠ 자동승인 플래그는 주지 않는다 — 멤버가 깔아둔 auto-approve 를 쓰고 나머지는 정상 권한 프롬프트(온보딩은 신뢰가 전부).
 //  --print 는 실제로 안 띄우고 실행할 명령만 출력(테스트·확인용, resume 과 동일 관례).
 function cmdOnboarding(rest) {

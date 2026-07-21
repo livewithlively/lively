@@ -289,7 +289,9 @@ try {
   {
     const ASSIGN = /([A-Za-z_$][A-Za-z0-9_$]*)\s*(?:=|:)\s*['"]?v?(\d{1,3})\b/g;
     const CMP = /(?:>=|<=|-ge|-gt|-lt|-le|>|<)\s*['"]?v?(\d{1,3})\b/g;
-    const surfaces = ["kit/cli/bootstrap.sh", "kit/cli/bootstrap.ps1", "kit/cli/lively.mjs", "kit/setup/setup-mac.sh"];
+    // 설치 표면은 셋뿐이다 — 옛 셸 설치기(setup-mac.sh 등)는 제거됐다(#1068). 표면이 줄어든 것 자체가
+    //  이 게이트의 유지비를 줄인 결과이므로, 여기 목록이 다시 늘어난다면 그게 곧 회귀 신호다.
+    const surfaces = ["kit/cli/bootstrap.sh", "kit/cli/bootstrap.ps1", "kit/cli/lively.mjs"];
     const found = [];
     const perFile = {};
     for (const rel of surfaces) {

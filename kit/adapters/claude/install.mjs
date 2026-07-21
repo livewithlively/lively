@@ -8,7 +8,7 @@
 //  (e) MCP 등록은 register-clients.sh 에 위임 — 여기서 claude mcp add 호출하지 않음(중복 등록 방지).
 //
 // 사용법: node adapters/claude/install.mjs --org <org-content-dir> [--work-root <abs-path>]…
-//   setup-mac.sh 가 토큰/게이트웨이 등록 후 이걸 호출한다.
+//   user-install.mjs 가 토큰/게이트웨이 등록 후 이걸 호출한다.
 // 비파괴 핵심: ~/.claude/settings.json 의 hooks 외 다른 키(env/permissions/enabledPlugins/theme/Stop의 tmux 훅 등)는
 //   절대 건드리지 않는다. user-level 훅 command 는 반드시 절대경로(\$CLAUDE_PROJECT_DIR 는 user-level 에서 미정의).
 
@@ -30,7 +30,7 @@ import { WORK_ROOTS_HEADER } from "../../setup/work-roots-header.mjs";
 // P-V3-5 Part A: 정적 폴백 context.md 단일소스 — 게이트웨이가 가용하면 DB-materialize 한 정적 컨텍스트(=AGENTS.md/
 //  preview 와 동일 DB Knowledge Index)를 받아 박고, 다운/토큰없음/오프라인이면 파일기반 buildStaticContext 로 폴백.
 //  진실원천 이원화 해소: 게이트웨이 가용 시 오프라인 폴백도 DB-인덱스를 보유(stale 파일기반 MEMORY.md 탈피).
-//  토큰/주소는 ~/.lively/{token,gateway-url}(setup-mac.sh 가 기록) 또는 env(LIVELY_TOKEN/LIVELY_GATEWAY_URL).
+//  토큰/주소는 ~/.lively/{token,gateway-url}(부트스트랩·CLI 가 기록) 또는 env(LIVELY_TOKEN/LIVELY_GATEWAY_URL).
 async function fetchDbStaticContext(home) {
   const readLively = (rel) => { try { return readFileSync(join(home, ".lively", rel), "utf8").trim() || null; } catch { return null; } };
   const token = (process.env.LIVELY_TOKEN || "").trim() || readLively("token");

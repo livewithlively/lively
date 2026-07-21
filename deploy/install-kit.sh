@@ -5,7 +5,7 @@ set -euo pipefail
 #   왜: 게이트웨이의 중앙박스(웹터미널) 세션은 이 호스트에서 claude 를 돌린다. 그 세션이 lively MCP 로
 #       조직 맥락을 CRUD 하려면, 호스트의 claude 에 lively 가 등록돼 있어야 한다(멤버 로컬 설치와 동일 필요).
 #   무엇: 멤버 로컬 설치(/install 번들)와 **동일한 end-state**를, 게이트웨이=localhost 로, OS-무관 경로로.
-#       (키트의 install-via-curl.sh 는 setup-mac.sh 에만 위임 = Mac 전용 → 중앙박스/Linux 는 이 스크립트로.)
+#       (멤버는 `curl <게이트웨이>/cli | sh` → lively CLI 로 깐다. 박스는 토큰·경로가 달라 이 스크립트로.)
 #   결과: ~/.lively/{token,gateway-url,context.md,hooks/…} + ~/.claude/settings.json(훅 비파괴 머지)
 #         + `claude mcp add lively`(user scope). → 호스트에서 켜는 모든 claude 세션이 lively-aware.
 #         + ~/.lively/{lib,bin}/lively — **lively CLI 도 함께 깔린다**(#864). user-install.mjs 가 번들의
@@ -61,7 +61,7 @@ tar -xzf "$TMP/bundle.tgz" -C "$TMP"
 [ -f "$TMP/setup/user-install.mjs" ] || die "번들 손상(setup/user-install.mjs 없음)."
 ok "발행 번들 다운로드·전개 ($(du -h "$TMP/bundle.tgz" | cut -f1))"
 
-# 3) user-level 설치(컨텍스트·훅·settings 비파괴 머지) — OS-무관(node). setup-mac.sh 대신 직접 호출.
+# 3) user-level 설치(컨텍스트·훅·settings 비파괴 머지) — OS-무관(node). 설치 엔진을 직접 호출한다.
 node "$TMP/setup/user-install.mjs" --harness "$HARNESS"
 ok "user-level 설치(~/.lively + ~/.claude/settings.json 훅 머지)"
 
