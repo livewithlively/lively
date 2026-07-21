@@ -35,12 +35,15 @@ Defaults!/opt/lively/libexec/box-spawn env_keep += "TZ LIVELY_SESSION_ID LIVELY_
 
 # ④ per-session cgroup 메모리 격리(#1059 D) — box-cgspawn 을 **root 로**. 세션(claude 등)은 네이티브 ELF 라
 #   힙제한이 안 통해 메모리 캡 수단이 cgroup 뿐인데, 비-root 게이트웨이는 polkit 때문에 cgroup 을 못 만든다.
-#   그래서 root 로 이 고정 wrapper 만 허용한다 — box-cgspawn 이 인자(osUser=box_/broker_·메모리값·'--'뒤 box-spawn
-#   고정)를 엄격검증하고 `systemd-run --scope --uid=box_X` 로 **즉시 uid 강하**하므로 root 상주가 아니다(box-cgspawn
-#   헤더의 불변식 참조). runas=(root) 인 이유: systemd-run 이 polkit 없이 scope 를 만들려면 root 여야 한다.
-#   env_keep: box-spawn 과 동일 목록 — 이 첫 sudo(lively→box-cgspawn)에서 보존해야 systemd-run --scope 가
+#   그래서 root 로 이 고정 wrapper 만 허용한다 — box-cgspawn 이 인자(osUser=box_/broker_·box_members 소속·메모리값·
+#   '--'뒤 box-spawn 고정)를 엄격검증하고 `systemd-run --scope -- setpriv --reuid --init-groups` 로 **즉시 uid 강하**
+#   하므로 root 상주가 아니다(box-cgspawn 헤더의 불변식 참조 — uid 강하를 systemd-run --uid 가 아니라 setpriv 로 하는
+#   이유도 거기 있다). runas=(root) 인 이유: systemd-run 이 polkit 없이 scope(cgroup)를 만들려면 root 여야 한다.
+#   env_keep: box-spawn 과 **동일 목록** — 이 첫 sudo(lively→box-cgspawn)에서 보존해야 systemd-run --scope 가
 #   그 env 를 상속해 box-spawn 까지 TZ/LIVELY_SESSION_ID/LIVELY_MODE 등을 흘려보낸다(box-spawn 은 systemd-run 이
 #   부르므로 box-spawn 자신의 env_keep 은 이 경로엔 안 걸린다 → 여기서 보존이 유일한 통로).
+#   ⚠ 위 box-spawn env_keep 목록과 **항상 동일하게 유지**할 것 — 한쪽에만 변수를 추가하면 캡 세션(box-cgspawn 경유)과
+#     비캡 세션(box-spawn 직행)의 env 가 갈린다(공유 상수·테스트로 강제하지 않으니 수기 동기화 규율).
 Defaults!/opt/lively/libexec/box-cgspawn env_keep += "TZ LIVELY_SESSION_ID LIVELY_MODE LIVELY_READONLY LIVELY_INCOGNITO LIVELY_OFF LIVELY_BROKER_SOCKET LIVELY_BROKER_MEMBER LIVELY_BROKER_WORKROOT LIVELY_BROKER_ALLOWED_TOOLS LIVELY_BROKER_INTERNAL_HOSTS LIVELY_BROKER_ENTRY LIVELY_BROKER_AUTH"
 lively ALL=(root) NOPASSWD: /opt/lively/libexec/box-cgspawn
 

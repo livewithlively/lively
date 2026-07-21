@@ -51,6 +51,13 @@ shift 4
 uid="$(id -u "$osuser" 2>/dev/null)" || die "unknown user: ${osuser}"
 gid="$(id -g "$osuser" 2>/dev/null)" || die "cannot resolve gid: ${osuser}"
 [ "$uid" != 0 ] || die "refusing uid 0 (${osuser})"   # 이중 안전: 접두사 규칙상 불가하지만 명시 거부
+# 방어심화 — OS 그룹 백스톱: box-spawn 은 sudo Runas_Alias(%box_members/%broker_members)로 대상 유저를 커널
+#  그룹으로 **이중 제약**받지만, box-cgspawn 은 (root)로 돌아 sudo 가 <osUser> 를 검사하지 않는다(대상은 이
+#  스크립트가 해석하는 문자열일 뿐) → 이 그룹 확인이 그 계층을 대신한다. 프로비저닝된 멤버는 provision-member.sh
+#  가 반드시 box_members(브로커=broker_members)에 넣으므로, 그룹 밖의 box_*/broker_* 유저(수동 생성된 비정상)로는
+#  강하를 거부한다. 접두사 정규식 + 존재 + uid≠0 위에 얹는 defense-in-depth(단독으로도 root/시스템유저 상승은 이미 봉쇄).
+id -nG "$osuser" 2>/dev/null | tr ' ' '\n' | grep -qxE 'box_members|broker_members' \
+  || die "user not in box_members/broker_members: ${osuser}"
 
 # ── uid 강하 계층 — supplementary 그룹 **초기화 필수**. ⚠ systemd-run --scope --uid 는 scope 모드(client-side)라
 #   initgroups 를 안 해 gid 는 드롭돼도 supplementary 가 잘못된다: 멤버 그룹(box_members·lively-shared) 누락 +

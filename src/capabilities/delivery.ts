@@ -1284,6 +1284,9 @@ export const deliveryCapabilities: Capability[] = [
         if (s.per_session_high_mb !== undefined) patchIn.per_session_high_mb = mb(s.per_session_high_mb, "per_session_high_mb");
         if (s.per_session_max_mb !== undefined) patchIn.per_session_max_mb = mb(s.per_session_max_mb, "per_session_max_mb");
         // high>max 는 무의미(하드 kill 전에 소프트 스로틀이 안 걸림) — 사용자 의도일 리 없으니 조용히 고치지 말고 알려준다.
+        //  ⚠ 검사는 **단방향**(제출한 high 가 결과 max 를 넘을 때만 400): 반대로 max 만 기존 high 아래로 낮추면
+        //   normalize 가 high 를 max 로 조용히 끌어내린다(안전 방향 — 하드캡을 낮추면 소프트캡도 같이 내려가는 게 자연스럽다).
+        //   storage_policy 의 warn≥critical 단방향 검사와 동일한 관례(#813).
         const merged = normalizeSessionMemoryPolicy({ ...(await getRuntimeConfig()).session_memory_policy, ...patchIn });
         if (patchIn.per_session_high_mb !== undefined && patchIn.per_session_high_mb > 0 && merged.per_session_max_mb > 0 && patchIn.per_session_high_mb > merged.per_session_max_mb) {
           throw new HttpError(400, `MemoryHigh(${patchIn.per_session_high_mb}MB)는 MemoryMax(${merged.per_session_max_mb}MB) 이하여야 합니다`);
@@ -1565,7 +1568,7 @@ export const deliveryCapabilities: Capability[] = [
     }),
 
   restOnly("org_storage_status", "저장소·로그 상태",
-    "박스 디스크 사용률(경고/위험 판정 포함) + 로그 파일 크기 + 저장소 정책(로그 상한·디스크 임계치)과 그 출처. admin 전용.",
+    "박스 디스크 사용률(경고/위험 판정 포함) + 로그 파일 크기 + 저장소 정책(로그 상한·디스크 임계치) + per-session 메모리 캡 정책(#1059 D)과 각 출처. admin 전용.",
     [{ method: "GET", paths: ["/api/ui/org/storage"], parse: () => ({}) }],
     async () => {
       const cfg = await getRuntimeConfig();

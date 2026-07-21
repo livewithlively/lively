@@ -62,7 +62,8 @@ function memArg(mb?: number): string {
 //
 //  cg(#1059 D — 메모리 한도)가 주어지고 cgroup 인프라가 설치돼 있으면 **box-cgspawn 경유**로 바꾼다:
 //   ["sudo","-n","--",BOX_CGSPAWN, osUser, <high>, <max>, "--", BOX_SPAWN, ("--cwd",cwd)?, ...argv]
-//   → root box-cgspawn 이 systemd-run --scope --uid=osUser(uid 강하) 로 세션을 메모리 scope 에 가둔다.
+//   → root box-cgspawn 이 systemd-run --scope 로 세션을 메모리 scope 에 가두고, uid 강하는 그 안에서 setpriv 로 한다
+//     (systemd-run --uid 는 scope 모드라 initgroups 를 안 해 멤버그룹 누락·root그룹 잔류 — box-cgspawn 헤더 참조).
 //   cg 없음(캡 미설정) 또는 인프라 미설치면 종전 sudo -u 경로 = **무회귀**(cap-gated — 운영자가 캡을 걸 때만 경유).
 export function wrapAsMember(osUser: string, argv: string[], cwd?: string, cg?: CgroupLimit): string[] {
   if (cg && cgroupInfraReady()) return cgspawnArgv(osUser, argv, cwd, cg);
