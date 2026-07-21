@@ -15,6 +15,11 @@
 //
 //  ⚠ 훅·스킬은 org_hook/org_harness_asset **전체**를 캡처한다 — 이 스크립트는 defaults 의 SoT 인
 //    라이블리 게이트웨이에서만 돌린다는 전제(고객사·실험 자산이 섞인 DB 에서 돌리지 말 것).
+//  ⚠ **내부 전용 자산은 `frontmatter.internal_only = true` 로 표시하면 시드에서 통째로 빠진다**(excludeInternalOnly).
+//    우리 박스 특유의 경로(`workspace/productivity/...`)·포트(:8080)·사내 히스토리가 본문에 박힌 자산은 고객
+//    박스에서 무의미하거나 오해를 부른다. SEED_ENABLED_POLICY(=포함하되 기본값을 고정)와 **다르다** — 그건
+//    '기능은 주되 정해진 on/off 로' 주는 것이고, 이건 **아예 주지 않는** 것이다(본문도 안 나간다).
+//    지식이 #846 에서 DB 캡처를 끊은 것과 같은 취지.
 //  ⚠ 지식 본문은 **DB 에서 캡처하지 않는다**(#846 재오염 차단). 우리 dev WIKI 의 지식 본문에는 내부 사고
 //    이야기·`[[내부 링크]]`·사내 이슈번호·타 고객사 이름이 섞여 있어, DB 를 그대로 스냅샷하면 그게 고객
 //    박스로 새어 나간다(실측: closeout 루틴 메타블록·타 고객사 도메인 구조가 v0.1.148~150 에 유출됐다).
@@ -163,6 +168,13 @@ export function parseCaptureArgs(argv) {
   return a;
 }
 const byId = (rows) => new Map(rows.map((r) => [r.id, r]));
+// 내부 전용 자산 분리 — `frontmatter.internal_only === true` 면 고객 시드에서 **제외**(포함하되 off 가 아니라 미포함).
+//  본문에 우리 박스 특유 경로·포트·사내 히스토리가 박힌 자산이 고객 박스로 새지 않게 한다(#846 지식 재오염 차단과 같은 취지).
+export function excludeInternalOnly(rows) {
+  const kept = [], excluded = [];
+  for (const r of rows) ((r && r.frontmatter && r.frontmatter.internal_only === true) ? excluded : kept).push(r);
+  return { kept, excluded };
+}
 // 현재 시드 vs DB 캡처 항목별 판정(추가/변경/제거) — id 기준, JSON 동등성으로 변경 감지.
 export function diffRows(current, next) {
   const c = byId(current), n = byId(next), added = [], changed = [], removed = [];
@@ -223,12 +235,17 @@ async function main() {
   const nextHooks = (await pool.query(
     `SELECT id, label, harness, event, matcher, timeout_sec, note, enabled, sort, source_code
        FROM org_hook ORDER BY sort, id`)).rows;
-  const nextSkills = (await pool.query(
+  const capturedSkills = (await pool.query(
     `SELECT id, kind, label, harness, description, frontmatter, paired_hook_id, enabled, sort, body
        FROM org_harness_asset ORDER BY kind, sort, id`)).rows;
   await pool.end();
 
+  // 내부 전용(frontmatter.internal_only) 자산은 고객 시드에서 통째로 제외 — 본문도 안 나간다(위 헤더 ⚠ 참조).
+  const { kept: nextSkills, excluded: internalSkills } = excludeInternalOnly(capturedSkills);
+  if (internalSkills.length) console.warn(`ⓘ 내부 전용이라 시드에서 제외(frontmatter.internal_only): ${internalSkills.map((r) => r.id).join(", ")}`);
+
   // 신규 설치 기본값 고정 — 우리 조직 토글이 고객 디폴트로 새지 않게. diff 가 '실제 쓰일 값'을 반영하도록 먼저.
+  //  제외되지 않고 실제로 시드에 나가는 행에만 적용된다(위 excludeInternalOnly 뒤).
   const flipped = applySeedEnabledPolicy([...nextHooks, ...nextSkills]);
   if (flipped.length) {
     console.warn("⚠ 시드 기본값 고정 — 라이블리 DB 와 다르게 굳힙니다(고객 기본값 정책):");

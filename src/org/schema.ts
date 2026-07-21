@@ -527,6 +527,15 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS storage_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
 
+  // ── org_runtime_config 확장: session_memory_policy — per-session cgroup 메모리 격리(#1059 D). 세션당 MemoryHigh/Max(MB). ──
+  // 기본 '{}' = 미설정 → env 시드(LIVELY_SESSION_MEM_HIGH_MB·_MAX_MB) → 0/0(무제한, 무회귀) 순으로 해석
+  //  (src/org/session-memory-policy.ts). claude 는 네이티브라 힙제한이 안 통해 cgroup 이 유일 수단 — box-cgspawn 이
+  //  systemd-run --scope 로 세션을 이 상한의 scope 에 가둬 폭주 세션 하나만 OOM-kill 되고 박스는 생존(#1059 어니스트 다운).
+  // **관리탭이 단일 창구**: 고객 박스는 SSH 로 못 들어가므로 .env 전용 정책은 사실상 아무도 못 바꾼다(storage_policy 와 동일 교리).
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS session_memory_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+  `);
+
   // ── org_runtime_config 확장: hook_relay_decisions — 러너가 PreToolUse 에서 하네스로 전파할 결정값(#892). ──
   // 기본 '["deny","ask","defer"]' = 제한적 결정만 전파. **'allow' 는 기본 제외**가 핵심: allow 는 멤버의 권한
   //  프롬프트(동의 UI)를 건너뛰므로, 관리자 훅이 조용히 그걸 없애는 걸 기본값으로 두지 않는다. 넓히려면 명시 opt-in.
@@ -909,13 +918,21 @@ export async function initOrgSchema(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT);
   `);
+  // build_cmd — 미리보기를 띄우기 전에 워크트리에서 실행할 빌드(예: 프론트 번들). 사람이 터미널을 안 열어도 되게 하는 핵심.
+  await itemsPool.query(`ALTER TABLE org_stack_profile ADD COLUMN IF NOT EXISTS build_cmd TEXT;`);
   await itemsPool.query(`
-    INSERT INTO org_stack_profile(id,label,repo,static_only,start_cmd,port_env,env_json,healthcheck_path,note) VALUES
-      ('co-frontend','context-ontology 프론트 (정적·shared-proxy)','context-ontology',true,NULL,'PORT','{}'::jsonb,'/',
+    INSERT INTO org_stack_profile(id,label,repo,static_only,start_cmd,build_cmd,port_env,env_json,healthcheck_path,note) VALUES
+      ('co-frontend','context-ontology 프론트 (정적·shared-proxy)','context-ontology',true,NULL,'npm run build:web','PORT','{}'::jsonb,'/',
        '프론트(public/)만 서빙 — /api 는 게이트웨이 자신. 별도 프로세스·포트 없음(가장 싸고 안전).'),
-      ('co-fullstack','context-ontology 풀스택 (throwaway 게이트웨이)','context-ontology',false,'node dist/index.js','PORT','{"LIVELY_NO_SCHEDULER":"1"}'::jsonb,'/healthz',
-       '자체 게이트웨이 프로세스를 워크트리에서 기동 — 백엔드 변경까지 격리 확인. dist 빌드 선행, DB 등 backing 은 env 로 지정(라이브 DB 쓰기 금지).')
+      ('co-fullstack','context-ontology 풀스택 (throwaway 게이트웨이)','context-ontology',false,'node dist/index.js','npm run build','PORT','{"LIVELY_NO_SCHEDULER":"1"}'::jsonb,'/healthz',
+       '자체 게이트웨이 프로세스를 워크트리에서 기동 — 백엔드 변경까지 격리 확인. DB 등 backing 은 env 로 지정(라이브 DB 쓰기 금지).')
     ON CONFLICT (id) DO NOTHING;
+  `);
+  // 기존 프리셋 보정 — 위 INSERT 는 ON CONFLICT DO NOTHING 이라 이미 있던 행엔 build_cmd 가 안 들어간다.
+  //  운영자가 직접 채운 값은 건드리지 않는다(IS NULL 조건).
+  await itemsPool.query(`
+    UPDATE org_stack_profile SET build_cmd='npm run build:web' WHERE id='co-frontend' AND build_cmd IS NULL;
+    UPDATE org_stack_profile SET build_cmd='npm run build'     WHERE id='co-fullstack' AND build_cmd IS NULL;
   `);
 
   // ── org_node — 분산 노드 레지스트리(#869). 멤버 PC(member)/워커(worker)에 도는 노드 에이전트의 desired state. ──
