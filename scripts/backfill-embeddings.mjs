@@ -8,6 +8,9 @@
 //     · --all          active 지식 전부 재임베딩(차원/모델 전면 교체 후)
 //
 //   ⚠ 라이브 DB 쓰기 — 검증 게이트에서 자동 실행하지 않는다. 임베딩 off(provider 미설정)면 사유 출력 후 무변경 종료(exit 2).
+//   ⚠ 일시중지(#1060): 관리탭 '자동 백필 일시중지'(embedding_backfill_paused)는 게이트웨이의 자동 스윕·수동 백필 버튼을
+//     막지만, 이 CLI 는 게이트웨이 밖 '의도적 오버라이드'(설치·enable 시 초기 백필용)라 그 플래그를 강제하지 않는다.
+//     대신 일시중지 상태면 경고만 출력하고 진행한다 — 성능 부하를 모르고 재유발하지 않도록(멈추려면 Ctrl-C, 관리탭에서 관리).
 import { itemsPool } from "../dist/items/store.js";
 import { runEmbeddingBackfill } from "../dist/v6/embedding-backfill.js";
 
@@ -19,6 +22,13 @@ const mode = process.argv.includes("--all")
 
 async function main() {
   console.log(`백필 시작: mode=${mode}`);
+  // #1060 — 관리탭에서 자동 백필을 일시중지해 둔 상태면 경고(이 CLI 는 의도적 오버라이드라 그대로 진행한다).
+  try {
+    const r = await itemsPool.query(`SELECT embedding_backfill_paused FROM org_runtime_config WHERE id=1`);
+    if (r.rows[0]?.embedding_backfill_paused === true) {
+      console.warn("⚠ 관리탭에서 자동 임베딩 백필이 '일시중지'된 상태입니다 — 이 CLI 는 그 설정과 무관하게 백필을 실행합니다(의도적 오버라이드). 성능 부하를 원치 않으면 지금 Ctrl-C 하세요(관리탭에서 재개/유지 관리).");
+    }
+  } catch { /* 컬럼/테이블 부재(구 DB) 등 — 무시하고 진행 */ }
   const res = await runEmbeddingBackfill({
     mode,
     onProgress: (p) => { process.stdout.write(`\r진행 ${p.done}/${p.total}    `); },

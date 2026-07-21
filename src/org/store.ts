@@ -754,6 +754,7 @@ export interface OrgRuntimeConfig {
   hook_relay_decisions: HookRelayDecision[]; // 러너가 PreToolUse 에서 전파할 결정(#892). 기본 deny/ask/defer — allow 는 명시 opt-in
   session_share: SessionShareConfig; // 세션이력 캡처 정책(#905 C1). 기본 enabled=false(롤아웃 꺼둠). 관리탭 ▸ 세션 공유.
   hook_grace_ms: number | null; // #1008 — run-custom 이 게이트웨이 미도달 시 최근 캐시를 쓸 유효기간(ms). NULL=무제한(기본). 양수=그 ms 후 fail-CLOSED.
+  embedding_backfill_paused: boolean; // #1060 — 자동 임베딩 백필 스윕 일시중지. true=부팅·주기·sync후·nudge 스윕 no-op + 실행 중 잡 중단. DB 영속(재시작에도 유지).
   version: number;
   updated_at: string | null;
   updated_by: string | null;
@@ -782,7 +783,7 @@ const graceMsSafe = (v: unknown): number | null => {
 
 export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
   const r = await itemsPool.query(
-    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, hook_relay_decisions, session_share, hook_grace_ms, version, updated_at, updated_by
+    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, version, updated_at, updated_by
        FROM org_runtime_config WHERE id=1`,
   );
   const row = r.rows[0] as Record<string, unknown> | undefined;
@@ -810,6 +811,7 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
     hook_relay_decisions: relayDecisionsSafe(row?.hook_relay_decisions), // #892 — 구 DB(컬럼 부재)면 기본값
     session_share: resolveSessionShare(row?.session_share), // #905 C1 — 구 DB(컬럼 부재)면 기본값(enabled=false)
     hook_grace_ms: graceMsSafe(row?.hook_grace_ms), // #1008 — 컬럼 부재/NULL 이면 null(무제한)
+    embedding_backfill_paused: row?.embedding_backfill_paused === true, // #1060 — 컬럼 부재(구 DB)면 undefined → false(평소대로 자동 백필)
     version: (row?.version as number) ?? 1,
     updated_at: (row?.updated_at as string) ?? null,
     updated_by: (row?.updated_by as string) ?? null,
@@ -833,6 +835,7 @@ export async function updateRuntimeConfig(
     hook_relay_decisions?: HookRelayDecision[];
     session_share?: SessionSharePatch;
     hook_grace_ms?: number | null;
+    embedding_backfill_paused?: boolean;
   },
   actor?: string,
   source?: string,
@@ -854,6 +857,8 @@ export async function updateRuntimeConfig(
   const relayDecisions = patch.hook_relay_decisions !== undefined ? patch.hook_relay_decisions : before.hook_relay_decisions;
   // #1008 — run-custom 캐시 유효기간(ms). null=무제한. before 는 이미 정규화된 값이라 되써도 안전(화이트리스트 idiom, relay 와 동일).
   const hookGraceMs = patch.hook_grace_ms !== undefined ? patch.hook_grace_ms : before.hook_grace_ms;
+  // #1060 — 자동 백필 일시중지 플래그. before 는 이미 정규화된 boolean 이라 되써도 안전(relay/grace 와 동일 화이트리스트 idiom).
+  const embeddingBackfillPaused = patch.embedding_backfill_paused !== undefined ? patch.embedding_backfill_paused : before.embedding_backfill_paused;
   // 임베딩 설정 — 저장 시 정규화(잡값/알 수 없는 provider → off). 시크릿 미저장(auth_env_ref=env 이름만).
   //  #688 두 가지 보존: ① '명시적 끄기'({provider:'off',explicit:true})는 normalize 로 마커를 벗기지 않고 그대로 저장
   //  (env 시드 부활 금지). ② embedding_config 를 안 건드린 저장은 DB '원본'을 유지 — before(resolved)를 되쓰면
@@ -886,8 +891,8 @@ export async function updateRuntimeConfig(
     sessionShare = (raw.rows[0] as { session_share?: unknown } | undefined)?.session_share ?? null;
   }
   await itemsPool.query(
-    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, hook_relay_decisions, session_share, hook_grace_ms, version, updated_at, updated_by)
-       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$14::jsonb,$15::jsonb,$16,1,now(),$13)
+    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, version, updated_at, updated_by)
+       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$14::jsonb,$15::jsonb,$16,$17,1,now(),$13)
      ON CONFLICT (id) DO UPDATE SET hooks=EXCLUDED.hooks, writeback_notice=EXCLUDED.writeback_notice,
        work_roots=EXCLUDED.work_roots, allowed_auth_envs=EXCLUDED.allowed_auth_envs, url_allowlist=EXCLUDED.url_allowlist,
        allowed_db_secret_refs=EXCLUDED.allowed_db_secret_refs, allowed_db_hosts=EXCLUDED.allowed_db_hosts,
@@ -895,9 +900,10 @@ export async function updateRuntimeConfig(
        write_tools=EXCLUDED.write_tools, pull_tools=EXCLUDED.pull_tools, embedding_config=EXCLUDED.embedding_config,
        storage_policy=EXCLUDED.storage_policy, hook_relay_decisions=EXCLUDED.hook_relay_decisions,
        session_share=EXCLUDED.session_share, hook_grace_ms=EXCLUDED.hook_grace_ms,
+       embedding_backfill_paused=EXCLUDED.embedding_backfill_paused,
        version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots),
-     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(pullTools), JSON.stringify(embeddingConfig), JSON.stringify(storagePolicy), actor ?? null, JSON.stringify(relayDecisions), JSON.stringify(sessionShare), hookGraceMs],
+     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(pullTools), JSON.stringify(embeddingConfig), JSON.stringify(storagePolicy), actor ?? null, JSON.stringify(relayDecisions), JSON.stringify(sessionShare), hookGraceMs, embeddingBackfillPaused],
   );
   // 저장 즉시 반영 — /readyz 임계치·로그 재니터가 캐시를 들고 있다(게이트웨이 재시작 없이 먹어야 한다).
   if (patch.storage_policy !== undefined) invalidateStoragePolicyCache();

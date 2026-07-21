@@ -551,6 +551,15 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS hook_grace_ms BIGINT DEFAULT NULL;
   `);
 
+  // ── org_runtime_config 확장: embedding_backfill_paused — 자동 임베딩 백필 스윕 일시중지(#1060). ──
+  //  자동 백필(부팅 30초·10분 주기·connector_sync 완료 후·쓰기 nudge)은 느린/CPU 임베딩 백엔드에서 게이트웨이 성능을
+  //  갉아먹을 수 있는데 종전엔 멈출 창구가 없었다. 이 플래그가 true 면 runAutoBackfillSweep 이 즉시 return(4개 트리거 전부
+  //  차단) + 실행 중 잡은 shouldStop 으로 협조적 중단. **DB 영속** — 재시작에도 유지되어 부팅 스윕이 이 상태를 존중한다
+  //  (성능 때문에 껐는데 재부팅으로 되살아나면 안 된다). 기본 false=평소대로 자동 백필. 관리탭 ▸ 의미 검색 에서 사람이 토글.
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS embedding_backfill_paused BOOLEAN NOT NULL DEFAULT false;
+  `);
+
   // ── org_hook 확장: health — 멤버별 마지막 훅 실행 실패 기록(#892 결함 C). ──
   // { "<member_id>": { at, reason, exit_code, stderr } } — 멤버 수로 자연히 유계라 별도 테이블·정리 불요.
   // 종전엔 훅이 죽어도 러너가 크래시를 삼켜(stdout "") '죽음'과 '결정 없음'이 구분 불가였고, 그래서 spec-blind
