@@ -96,10 +96,11 @@ function pjvSaveScopeView(k, v) { try {
 catch (_) { /* noop */ } }
 function pjvScopeIsFolder(k) { return typeof k === 'string' && k[0] === 'F'; }
 // 스코프 기본 뷰 — 폴더/스페이스=개요(Overview), 그 외(리스트/미분류/전체)=상태로 나누기.
-function pjvDefaultView(scopeKey) {
-    return pjvScopeIsFolder(scopeKey)
-        ? { overview: true, byStatus: false, kanban: false, savedViewId: null, savedViewName: '', savedViewSort: null }
-        : { overview: false, byStatus: true, kanban: false, savedViewId: null, savedViewName: '', savedViewSort: null };
+// 스코프 기본 뷰(#1067) — 폴더/스페이스도 '리스트 박스'로 연다(ClickUp 폴더 List 뷰).
+//  예전 기본이던 개요(요약 카드)는 프로젝트가 한 줄도 안 보여서, 폴더에서 필터·그룹을 걸어도 아무 반응이 없는 것처럼 보였다.
+//  개요는 없어지지 않고 톱니(보기 설정) → 보기 방식 → '개요' 로 언제든 돌아갈 수 있다.
+function pjvDefaultView(_scopeKey) {
+    return { overview: false, byStatus: true, kanban: false, savedViewId: null, savedViewName: '', savedViewSort: null };
 }
 function pjvSnapshotView() {
     return { kanban: !!pjvBoardView.kanban, byStatus: pjvBoardView.byStatus !== false, overview: !!pjvBoardView.overview,
@@ -548,15 +549,14 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     // 상태 그룹(원래 보드) — 할 일/진행 중/완료. 컬럼 헤더 한 번 + pjvProjGroup 재사용(Closed 반영). shown=이미 '내 할당만' 필터된 목록.
     //  그룹 내 순서는 수동/기본 비교자(#541 리뷰) — 드래그 재정렬 결과가 이 뷰에서도 유지돼 보이게(사이드바 뷰와 동형).
     const renderStatus = (shown) => {
-        const byCmp = (arr) => arr.slice().sort(pjvManualCmp);
-        const todo = byCmp(shown.filter((p) => p.status === 'todo'));
-        const inprog = byCmp(shown.filter((p) => p.status !== 'done' && p.status !== 'todo'));
-        const done = byCmp(shown.filter((p) => p.status === 'done'));
-        // 컬럼 라벨은 별도 헤더 행이 아니라 첫(맨 위) 그룹 '진행 중' 헤더에 합친다(withCols=true) — 별도 컬럼헤더 행이 어색(#470).
-        body.replaceChildren(pjvProjGroup('진행 중', 'in_progress', inprog, reload, null, canDelete, true, fields, anchorId, meId, taskCtx));
-        body.append(pjvProjGroup('할 일', 'todo', todo, reload, null, canDelete, false, fields, anchorId, meId, taskCtx));
-        if (pjvProjClosedView.done)
-            body.append(pjvProjGroup('완료', 'done', done, reload, null, canDelete, false, fields, anchorId, meId, taskCtx));
+        // 툴바의 그룹 기준을 따른다(#1067) — 상태(기본)면 3버킷, 담당자·우선순위·마감일·태그면 그 값으로 묶는다.
+        //  컬럼 라벨은 별도 헤더 행이 아니라 첫(맨 위) 그룹 헤더에 합쳐진다(#470 — pjvRenderStatusGroups 의 withCols).
+        body.replaceChildren();
+        pjvRenderStatusGroups(body, shown, null, {
+            reload, canDelete, fields, anchorId, meId, taskCtx,
+            mineOnly: pjvBoardMineOnly.on, listIdForAdd: null,
+            groupBy: (pjvGroupCtx && pjvGroupCtx.groupBy) || { field: 'status', dir: 1 },
+        });
     };
     // 평면 — 영역·상태 그룹 없이 한 목록. 컬럼 헤더 + 행들(진행 중→할 일→완료, 같은 상태면 최신순) + 인라인 추가행(미분류로 생성).
     //  저장 뷰 정렬(#541)이 적용돼 있으면 그 정렬이 우선(상태 rank 무시 — ClickUp 뷰 시맨틱).
@@ -784,12 +784,13 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         }
         // 그룹바이/컬럼 정렬 컨텍스트(#541) — ClickUp 뷰 기본값(view_grouping/view_sorting) + 리스트별 로컬 오버라이드.
         const cuData = (selList && pjvCuFieldsCache.get(selList.id)) || null;
-        const groupBy = pjvGetGroupBy(selList, cuData);
+        const groupBy = pjvGetGroupBy(selList, cuData, sel);
         const colSort = pjvGetColSort(selList, cuData);
         pjvSortCtx = selList ? { selList, colSort, rerender: render } : null;
-        pjvGroupCtx = { selList, groupBy, rerender: render, enabled: !!selList };
+        // 그룹은 어느 스코프에서든 바꿀 수 있다(#1067) — 폴더/스페이스면 각 리스트 박스 안에서 그 기준으로 묶인다.
+        pjvGroupCtx = { selList, groupBy, rerender: render, enabled: true, scopeKey: sel };
         if (groupBtn)
-            pjvSyncGroupBtn(groupBtn, groupBy, !!selList);
+            pjvSyncGroupBtn(groupBtn, groupBy, true);
         const main = el('div', { class: 'pjv-side-main' + (noNav ? ' pjv-side-main-nonav' : '') });
         // 셸의 우측 컬럼 상단에 페이지 크롬(제목·하위탭·보드헤드) + 툴바를 얹는다 — 사이드바는 좌측에서 y=64 부터 풀하이트(#607).
         //  noNav(#662)여도 같은 자리에 얹는다(#1067) — 사이드바를 접어도 '사이드바만 사라지고' 나머지는 그대로여야 한다.
@@ -866,10 +867,20 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
             main.append(pjvKanbanBoard(shownProjects, selList, { reload, canDelete, groupDir: groupBy.field === 'status' ? groupBy.dir : 1 }));
         }
         else if (selFolder) {
-            // 폴더/스페이스 뷰(#541) — 합집합 평탄 목록 대신 ClickUp 폴더 뷰처럼 **리스트별 접이식 그룹**.
-            //  트리 순서(직속 리스트 → 하위 폴더 리스트) 유지, 각 그룹은 리스트 자체 커스텀 상태로 하위그룹(byStatus 시).
-            boardBox.append(pjvListColHead(effFields, anchorId, reload, selList ? selList.id : null)); // #607/D 리스트별 필드 추가
+            // 폴더/스페이스 뷰(#1067) — ClickUp 폴더 List 뷰 파리티: **리스트마다 테두리 박스** 하나.
+            //  박스 헤더 위에 경로(스페이스 / 폴더)를 얹고, 박스 안에서 툴바의 그룹 기준으로 다시 묶는다.
+            //  공용 컬럼 헤더 행은 두지 않는다 — 각 박스의 첫 그룹 헤더가 컬럼 라벨을 겸하므로(#470) 중복이 된다.
             const scoped = folderListsDeep(selFolder.id);
+            // 이 리스트가 어디 있는지 — 조상 폴더 이름을 ' / ' 로 이어 준다(선택한 폴더 자신까지 포함).
+            const crumbOf = (l) => {
+                const names = [];
+                let f = l.folder_id != null ? folderAll.find((x) => String(x.id) === String(l.folder_id)) : null;
+                while (f) {
+                    names.unshift(f.name);
+                    f = f.parent_id != null ? folderAll.find((x) => String(x.id) === String(f.parent_id)) : null;
+                }
+                return names.join(' / ');
+            };
             let any = false;
             for (const l of scoped) {
                 const g = groupByList.get(l.id);
@@ -880,7 +891,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
                 any = true;
                 // 폴더를 명시 선택한 문맥 — 접힘 저장값이 없으면 기본 펼침(보드 기본값은 '내 리스트만 펼침'이라 여기선 부적합).
                 const og = pjvListOpen.has(g.key) ? g : { ...g, open: true };
-                boardBox.append(pjvListGroup(og, reload, canDelete, effFields, anchorId, meId, taskCtx, byStatus));
+                boardBox.append(pjvListGroup(og, reload, canDelete, effFields, anchorId, meId, taskCtx, true, false, { boxed: true, crumb: crumbOf(l), groupBy }));
             }
             if (!any)
                 boardBox.append(el('div', { class: 'pjv-proj-empty', text: scoped.length ? (mineOnly ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.') : '이 폴더에 리스트가 없습니다.' }));
@@ -889,18 +900,17 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
             // 리스트로 나누기(#756) — 사이드바를 닫지 않고(상태로·칸반과 동일하게 유지) 우측 컬럼에 '리스트별 접이식 그룹'으로.
             //  폴더 뷰(위 selFolder 분기)와 동형: 전체 스코프면 모든 리스트(+미분류), 단일 리스트 스코프면 그 리스트만.
             //  byStatus 는 false 라 리스트 안 상태 중첩 없음(순수 리스트 그룹).
-            boardBox.append(pjvListColHead(effFields, anchorId, reload, selList ? selList.id : null));
             const lgs = selList ? groups.filter((g) => g.list && g.list.id === selList.id) : groups.filter((g) => g.list);
             let anyL = false;
             for (const g of lgs) {
                 if (mineOnly && !visCount(g.projects))
                     continue;
                 anyL = true;
-                boardBox.append(pjvListGroup(pjvListOpen.has(g.key) ? g : { ...g, open: true }, reload, canDelete, effFields, anchorId, meId, taskCtx, byStatus));
+                boardBox.append(pjvListGroup(pjvListOpen.has(g.key) ? g : { ...g, open: true }, reload, canDelete, effFields, anchorId, meId, taskCtx, true, false, { boxed: true, groupBy }));
             }
             if (!selList && unGroup && visCount(unGroup.projects) > 0) {
                 anyL = true;
-                boardBox.append(pjvListGroup(pjvListOpen.has(unGroup.key) ? unGroup : { ...unGroup, open: true }, reload, canDelete, effFields, anchorId, meId, taskCtx, byStatus));
+                boardBox.append(pjvListGroup(pjvListOpen.has(unGroup.key) ? unGroup : { ...unGroup, open: true }, reload, canDelete, effFields, anchorId, meId, taskCtx, true, false, { boxed: true, groupBy }));
             }
             if (!anyL)
                 boardBox.append(el('div', { class: 'pjv-proj-empty', text: mineOnly ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.' }));
@@ -1365,21 +1375,25 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         const visCount = (arr) => pjvProjClosedView.done ? arr.length : arr.filter((p) => p.status !== 'done').length;
         // 실제 폴더는 비어도 노출(추가·드롭 타깃), '기타(미분류)'는 보일 게 있을 때만.
         const shown = groups.filter((g) => g.list || visCount(g.projects) > 0);
-        body.replaceChildren(pjvListColHead(fields, anchorId, reload));
+        body.replaceChildren();
         if (!shown.length) {
             body.append(el('div', { class: 'pjv-proj-empty', text: pjvBoardMineOnly.on ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.' }));
             return;
         }
+        // 리스트마다 박스(#1067) — 폴더 스코프와 같은 표기. 그룹 기준도 그대로 따른다.
+        const gb = (pjvGroupCtx && pjvGroupCtx.groupBy) || { field: 'status', dir: 1 };
         for (const g of shown)
-            body.append(pjvListGroup(g, reload, canDelete, fields, anchorId, meId, taskCtx, byStatus));
+            body.append(pjvListGroup(g, reload, canDelete, fields, anchorId, meId, taskCtx, true, false, { boxed: true, groupBy: gb }));
     };
     const render = () => {
         taskCtx.mode = pjvProjTaskMode.mode;
         // 정렬/그룹 컨텍스트 리셋(#541 리뷰) — 리스트 스코프(renderArea 의 selList)에서만 유효. 여기서 안 비우면
         //  다른 분기(상태/평면/폴더/칸반)와 상세 페이지의 헤더가 stale ctx 로 다른 리스트의 저장 정렬을 오염시킨다.
         pjvSortCtx = null;
-        pjvGroupCtx = null;
-        pjvSyncGroupBtn(groupBtn, { field: 'status', dir: 1 }, false);
+        // 전체 보기(스코프 없음)에서도 그룹은 쓸 수 있다(#1067) — renderArea 로 가면 그쪽이 스코프 기준으로 덮어쓴다.
+        const allGb = pjvGetGroupBy(null, null, '__all__');
+        pjvGroupCtx = { selList: null, groupBy: allGb, rerender: render, enabled: true, scopeKey: '__all__' };
+        pjvSyncGroupBtn(groupBtn, allGb, true);
         const byArea = pjvBoardView.byArea, byStatus = pjvBoardView.byStatus, byFolder = pjvBoardView.byFolder;
         syncScopeChip();
         syncCrumbs(); // 브레드크럼(#1067) — 현재 스코프를 위치로 표시
@@ -1665,7 +1679,7 @@ function pjvBuildListGroups(projects, lists, mineIds, meId) {
     return groups;
 }
 // 리스트 한 그룹(접이식) — 헤더(캐럿·색점·이름·개수·내리스트칩 | 멤버 페이스파일·⋯) + 프로젝트 행들 + 인라인 추가행.
-function pjvListGroup(g, reload, canDelete, fields, anchorId, meId, taskCtx, nested, bare) {
+function pjvListGroup(g, reload, canDelete, fields, anchorId, meId, taskCtx, nested, bare, opts) {
     const list = g.list; // null = 미분류('기타')
     const isUn = !list;
     const name = isUn ? '기타 (미분류)' : list.name;
@@ -1680,7 +1694,8 @@ function pjvListGroup(g, reload, canDelete, fields, anchorId, meId, taskCtx, nes
         // 리스트 › 상태 — 상태 하위그룹. 리스트가 커스텀 상태면 그 상태들로, 아니면 표준 3버킷(#475). 각 그룹에 추가행.
         const mineOnly = pjvBoardMineOnly.on;
         const before = bodyEl.childElementCount;
-        pjvRenderStatusGroups(bodyEl, g.projects, list, { reload, canDelete, fields, anchorId, meId, taskCtx, mineOnly, listIdForAdd });
+        // 그룹 기준(#1067) — 폴더/스페이스 스코프에서도 툴바에서 고른 기준(상태·담당자·우선순위·마감일·태그)으로 묶는다.
+        pjvRenderStatusGroups(bodyEl, g.projects, list, { reload, canDelete, fields, anchorId, meId, taskCtx, mineOnly, listIdForAdd, groupBy: opts && opts.groupBy });
         if (mineOnly && bodyEl.childElementCount === before)
             bodyEl.append(el('div', { class: 'pjv-proj-empty', text: emptyText }));
     }
@@ -1729,7 +1744,11 @@ function pjvListGroup(g, reload, canDelete, fields, anchorId, meId, taskCtx, nes
             return;
         setOpen(!open);
     });
-    const groupEl = el('div', { class: 'pjv-tgroup pjv-list-group', 'data-list-id': isUn ? '' : String(list.id), style: '--list-color:' + color }, headEl, bodyEl);
+    // 박스(#1067) — 폴더/스페이스를 열었을 때 리스트마다 테두리 카드로 감싼다(ClickUp 폴더 뷰). 헤더 위엔 그 리스트가
+    //  어디 있는지 알려주는 작은 경로(스페이스 / 폴더)를 얹는다 — 여러 리스트가 한 화면에 쌓이면 이름만으론 구분이 안 된다.
+    const boxed = !!(opts && opts.boxed);
+    const crumb = opts && opts.crumb ? el('div', { class: 'pjv-list-box-crumb', text: opts.crumb }) : null;
+    const groupEl = el('div', { class: 'pjv-tgroup pjv-list-group' + (boxed ? ' pjv-list-box' : ''), 'data-list-id': isUn ? '' : String(list.id), style: '--list-color:' + color }, ...(crumb ? [crumb] : []), headEl, bodyEl);
     // 이 폴더 구역 어디에 프로젝트를 놓아도 그 폴더로(미분류 그룹이면 null=미분류)(#454).
     pjvFolderDropTarget(groupEl, isUn ? null : list.id, reload);
     return groupEl;
@@ -3099,10 +3118,13 @@ const PJV_GROUPBY_FIELDS = [
     { key: 'priority', label: '우선순위' }, { key: 'due', label: '마감일' }, { key: 'tag', label: '태그' },
 ];
 const PJV_CU_GROUP_MAP = { status: 'status', assignee: 'assignee', assignees: 'assignee', priority: 'priority', dueDate: 'due', due_date: 'due', duedate: 'due', tag: 'tag', tags: 'tag' };
-function pjvGroupByStoreKey(listId) { return 'pjv:groupBy:' + (listId == null ? 'all' : listId); }
-function pjvGetGroupBy(selList, cu) {
+function pjvGroupByStoreKey(scope) { return 'pjv:groupBy:' + (scope == null || scope === '' ? 'all' : scope); }
+// 그룹 기준의 저장 스코프(#1067) — 리스트면 그 리스트 id(기존 키 그대로 유지), 아니면 스코프 키(F<id>/__all__/__none__).
+//  예전엔 리스트 스코프에서만 그룹을 바꿀 수 있어 폴더·스페이스에선 버튼이 죽어 있었다(ClickUp 은 폴더에서도 Group: Status).
+function pjvGroupScope(selList, scopeKey) { return selList ? String(selList.id) : (scopeKey || 'all'); }
+function pjvGetGroupBy(selList, cu, scopeKey) {
     try {
-        const v = JSON.parse(localStorage.getItem(pjvGroupByStoreKey(selList && selList.id)) || 'null');
+        const v = JSON.parse(localStorage.getItem(pjvGroupByStoreKey(pjvGroupScope(selList, scopeKey))) || 'null');
         if (v && v.field)
             return { field: v.field, dir: v.dir === -1 ? -1 : 1 };
     }
@@ -3113,12 +3135,13 @@ function pjvGetGroupBy(selList, cu) {
         return { field: f, dir: g.dir === -1 ? -1 : 1, fromView: true };
     return { field: 'status', dir: 1 };
 }
-function pjvSetGroupBy(selList, v) {
+function pjvSetGroupBy(selList, v, scopeKey) {
     try {
+        const k = pjvGroupByStoreKey(pjvGroupScope(selList, scopeKey));
         if (v == null)
-            localStorage.removeItem(pjvGroupByStoreKey(selList && selList.id));
+            localStorage.removeItem(k);
         else
-            localStorage.setItem(pjvGroupByStoreKey(selList && selList.id), JSON.stringify(v));
+            localStorage.setItem(k, JSON.stringify(v));
     }
     catch (_) { /* noop */ }
 }
@@ -3190,16 +3213,14 @@ function pjvSyncGroupBtn(btn, gb, enabled) {
     btn.disabled = false;
     btn.classList.toggle('is-off', !enabled);
     btn.setAttribute('aria-disabled', String(!enabled));
-    btn.title = enabled ? '그룹 — 필드와 방향으로 묶어 보기(ClickUp group by)' : '그룹 — 리스트를 하나 고른 화면에서만 바꿀 수 있어요 (지금은 폴더·전체 범위)';
+    btn.title = '그룹 — 필드와 방향으로 묶어 보기 (ClickUp group by)';
 }
 // '그룹' 팝오버(#1067 ClickUp Group by 파리티) — [기준 필드 ⌄] [오름/내림 ⌄] [🗑 기본값으로].
 //  한 줄 안에 필드·방향·해제를 나란히 둬서 '무엇으로 어떻게 묶는지'가 한눈에 보인다(예전엔 세로 메뉴 나열).
 function pjvGroupByMenu(anchor) {
     const ctx = pjvGroupCtx;
-    if (!ctx || !ctx.enabled) {
-        toast('그룹은 리스트 하나를 고른 화면에서 바꿀 수 있어요 — 사이드바에서 리스트를 선택해 보세요');
+    if (!ctx)
         return;
-    }
     const pop = el('div', { class: 'pjv-menu pjv-groupby-pop' });
     pjvPopover(anchor, pop);
     pop.append(el('div', { class: 'pjv-closed-pop-head', text: '그룹 기준' }));
@@ -3216,7 +3237,7 @@ function pjvGroupByMenu(anchor) {
         const close = pjvPopover(b, menu);
         for (const f of PJV_GROUPBY_FIELDS) {
             const it = el('button', { class: 'pjv-menu-item' + (cur().field === f.key ? ' sel' : ''), type: 'button' }, el('span', { text: f.label }), cur().field === f.key ? el('span', { class: 'pjv-menu-check', text: '✓' }) : el('span', {}));
-            it.onclick = (e) => { e.stopPropagation(); close(); pjvSetGroupBy(ctx.selList, { field: f.key, dir: cur().dir }); ctx.rerender(); };
+            it.onclick = (e) => { e.stopPropagation(); close(); pjvSetGroupBy(ctx.selList, { field: f.key, dir: cur().dir }, ctx.scopeKey); ctx.rerender(); };
             menu.append(it);
         }
     }));
@@ -3225,12 +3246,12 @@ function pjvGroupByMenu(anchor) {
         const close = pjvPopover(b, menu);
         for (const o of [{ d: 1, l: '오름차순' }, { d: -1, l: '내림차순' }]) {
             const it = el('button', { class: 'pjv-menu-item' + (cur().dir === o.d ? ' sel' : ''), type: 'button' }, el('span', { text: o.l }));
-            it.onclick = (e) => { e.stopPropagation(); close(); pjvSetGroupBy(ctx.selList, { field: cur().field, dir: o.d }); ctx.rerender(); };
+            it.onclick = (e) => { e.stopPropagation(); close(); pjvSetGroupBy(ctx.selList, { field: cur().field, dir: o.d }, ctx.scopeKey); ctx.rerender(); };
             menu.append(it);
         }
     }));
     const reset = el('button', { class: 'pjv-filter-del', type: 'button', title: '뷰 기본값으로 되돌리기', 'aria-label': '그룹 기준 초기화' }, pjvTbIcon('trash', 'sm'));
-    reset.onclick = (e) => { e.stopPropagation(); pjvSetGroupBy(ctx.selList, null); ctx.rerender(); };
+    reset.onclick = (e) => { e.stopPropagation(); pjvSetGroupBy(ctx.selList, null, ctx.scopeKey); ctx.rerender(); };
     line.append(reset);
     pop.append(line);
     pop.append(el('div', { class: 'pjv-menu-hint', text: '기본값 = 이 리스트의 뷰 설정(ClickUp 이관 포함)' }));
@@ -9032,7 +9053,7 @@ function pjvBoardSettingsPopover(anchor, ctx) {
     pop.append(el('div', { class: 'pjv-closed-pop-head', text: '보기 설정' }));
     // 보기 방식(상태/리스트/칸반) — 라디오. 예전 '필터' 버튼이 품고 있던 것.
     pop.append(el('div', { class: 'pjv-set-sec', text: '보기 방식' }));
-    const curMode = () => pjvBoardView.kanban ? 'kanban' : pjvBoardView.byFolder ? 'list' : 'status';
+    const curMode = () => pjvBoardView.overview ? 'overview' : pjvBoardView.kanban ? 'kanban' : pjvBoardView.byFolder ? 'list' : 'status';
     const syncs = [];
     const mkMode = (key, label, hint) => {
         const radio = el('span', { class: 'pjv-view-radio', 'aria-hidden': 'true' });
@@ -9044,8 +9065,8 @@ function pjvBoardSettingsPopover(anchor, ctx) {
                 return;
             pjvBoardView.kanban = key === 'kanban';
             pjvBoardView.byFolder = key === 'list';
-            pjvBoardView.byStatus = key === 'status';
-            pjvBoardView.overview = false;
+            pjvBoardView.byStatus = key === 'status' || key === 'list';
+            pjvBoardView.overview = key === 'overview';
             if (key === 'list' && !pjvBoardView.byArea) {
                 pjvSidebarSel.key = '__all__';
                 pjvSidebarSel.explicit = false;
@@ -9058,9 +9079,12 @@ function pjvBoardSettingsPopover(anchor, ctx) {
         syncs.push(sync);
         pop.append(item);
     };
-    mkMode('status', '상태로 나누기', '할 일 · 진행 중 · 완료로 나눠서');
-    mkMode('list', '리스트로 나누기', '리스트별로 묶어서');
+    mkMode('status', '그룹으로 나누기', '툴바의 그룹 기준(기본: 상태)으로');
+    mkMode('list', '리스트로 나누기', '리스트마다 박스 하나로');
     mkMode('kanban', '칸반 보드', '상태별 컬럼에 카드로 (드래그로 상태 변경)');
+    // 개요 — 폴더/스페이스에서 하위 폴더·리스트를 요약 카드로. 예전 폴더 기본 뷰(#1067 에서 기본 자리는 리스트 박스에 내줌).
+    if (pjvScopeIsFolder(pjvSidebarSel.key))
+        mkMode('overview', '개요', '하위 폴더·리스트를 요약 카드로');
     syncs.forEach((s) => s());
     // 열 정렬 — 값·헤더 가로 정렬(순수 CSS, 재렌더 없음).
     pop.append(el('div', { class: 'pjv-set-sec', text: '표' }));
