@@ -116,7 +116,23 @@ export async function refreshProxySnapshot(name: string, actor?: string): Promis
   } catch (err) {
     const code = (err as { code?: unknown }).code; // StreamableHTTPError.code = 상류 HTTP status(진단)
     const pfx = (typeof code === "number" || typeof code === "string") ? `[HTTP ${code}] ` : "";
-    throw new Error(redactSecret(pfx + (err as Error).message, gwSecret)); // 상류 에러 본문에 gateway 자격 에코 방지
+    // 진단(#746 gmail 403): SDK 는 403 의 WWW-Authenticate(구글이 요구하는 scope 등)를 삼킨다. 상류가 403 이고
+    //  토큰이 있으면 게이트웨이가 직접 tools/list 를 한 번 더 쳐서 그 응답 헤더/본문 앞부분을 캡처(원인 규명용).
+    let diag = "";
+    if (code === 403 && gwSecret) {
+      try {
+        const probe = makeSsrfFetch({ allowedInternalHosts: [], selfHosts: [], timeoutMs: CALL_TIMEOUT_MS });
+        const pr = await probe(server.url, {
+          method: "POST",
+          headers: { authorization: `Bearer ${gwSecret}`, "content-type": "application/json", accept: "application/json, text/event-stream" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+        });
+        const wa = pr.headers.get("www-authenticate");
+        const bodyHead = (await pr.text()).slice(0, 400);
+        diag = ` [probe status=${pr.status}${wa ? ` www-authenticate="${wa}"` : ""} body=${bodyHead}]`;
+      } catch (e) { diag = ` [probe 실패: ${(e as Error).message}]`; }
+    }
+    throw new Error(redactSecret(pfx + (err as Error).message + diag, gwSecret)); // 상류 에러 본문에 gateway 자격 에코 방지
   } finally {
     await client.close().catch(() => { /* */ });
   }
