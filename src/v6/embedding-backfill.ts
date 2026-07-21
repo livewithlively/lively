@@ -258,3 +258,45 @@ export async function runAutoBackfillSweep(): Promise<void> {
     sweepRunning = false;
   }
 }
+
+// ── 쓰기 경로 → pending 마킹(#1053) — 저장/수정 때 임베딩 HTTP(느린 CPU 백엔드는 건당 수십 초)를 인라인 호출하지 ──
+//  않는다. 대신 행의 벡터를 비워 'pending'(embedding_vector IS NULL) 풀로 되돌리고, 백그라운드 드레인
+//  (runAutoBackfillSweep)이 배치로 채운다 — 저장은 즉시 반환. 커넥터 미러의 knowledge 리셋 idiom(connector-mirror.ts)과 동형.
+//   · off/미설정: no-op(오늘의 embed*BestEffort 게이트와 동일 — 벡터 컬럼 부재 DB 의 헛 UPDATE 도 회피).
+//   · 신규 행: embedding_vector 가 이미 NULL(=pending) → 리셋 UPDATE 는 0행(IS NOT NULL 가드) + nudge 만.
+//   · 수정 행: 임베딩 입력 텍스트가 '실제로 바뀐' 경우에만 호출부가 부른다(무변경·facet-only 저장엔 헛임베딩·검색 공백 없음).
+//  내구성: pending 은 DB 에 남아 프로세스 재시작·엔드포인트 순단에도 부팅/주기 스윕이 반드시 흡수(재진입 안전).
+export async function markEmbeddingPending(
+  target: EmbeddingTarget,
+  id: string | number,
+  nudge = true,
+): Promise<void> {
+  // provider off 면 즉시 반환 — 리셋할 벡터도, 채울 스윕도 없다(오늘 동기 경로의 activeEmbeddingProvider 게이트와 동치 비용: 설정 1회 조회).
+  const cfg = await resolveConfigFromDb();
+  if (cfg.provider === "off") return;
+  try {
+    await itemsPool.query(
+      `UPDATE ${target.table} SET embedding_vector=NULL, embedding_model=NULL, embedding_updated_at=NULL
+         WHERE ${target.idCol}=$1 AND embedding_vector IS NOT NULL`,
+      [id],
+    );
+  } catch (e) {
+    // 벡터 컬럼 부재(임베딩 미도입 DB) 등 — 삼킨다(스윕이 스키마를 보장·수렴). 저장 자체는 이미 커밋됨.
+    console.warn(`[embeddings] pending 마킹 실패(best-effort, 스윕으로 보강) ${target.name}#${id}: ${(e as Error)?.message}`);
+  }
+  if (nudge) nudgeAutoBackfill();
+}
+
+// nudge — 방금 생긴 pending 을 10분 주기 스윕까지 안 기다리고 곧(디바운스) 드레인한다. arm-once(고정 지연):
+//  버스트(대량 저장·연속 편집)는 지연창 안에서 한 번의 스윕으로 합쳐지고, 스윕은 단일비행(sweepRunning)이라 겹치면
+//  자체 거부한다. 실행 중 스윕은 pending IS NULL 을 0행까지 재조회하므로 창 사이에 새로 생긴 pending 도 흡수한다.
+//  ⚠ 게이트웨이 프로세스 전용 실효 — run-sync 서브프로세스에서 스윕을 돌리지 않으려 그 경로(flushProjectEmbeds)는
+//   nudge=false 로 부른다(리셋만; 게이트웨이 post-sync 스윕이 드레인). unref 로 타이머가 프로세스를 붙잡지 않는다.
+let nudgeArmed = false;
+const NUDGE_DELAY_MS = 1000;
+export function nudgeAutoBackfill(): void {
+  if (nudgeArmed) return; // 이미 예약됨 — 합친다
+  nudgeArmed = true;
+  const t = setTimeout(() => { nudgeArmed = false; void runAutoBackfillSweep(); }, NUDGE_DELAY_MS);
+  t.unref?.();
+}

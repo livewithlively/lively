@@ -37,25 +37,23 @@ import { routeIngestV6, classifyIngest } from "../org/ingest-classify.js";
 import type { RawItem } from "../items/store.js";
 import { resolveIngestPolicy } from "../org/ingest-policy.js";
 import { getIngestPolicyRules } from "../org/ingest-policy-load.js";
-import { embedProjectBestEffort } from "./project-store.js";
+import { markProjectEmbeddingPending } from "./project-store.js";
 
 // ── #624 프로젝트 임베딩 재트리거(검색 #631) — 미러 sync 에서 이름/설명이 '실제로 바뀐' project 행 id 만 모았다가,
-//  배치(아이템별 BEGIN/COMMIT) 종료 후 run-sync 가 flushProjectEmbeds 로 일괄 재임베딩. 동기화 루프는 안 막고
-//  (커밋 후 별도), off/실패는 no-op. 단순 counter/`all` 백필과 달리 '텍스트 변경' 이벤트 게이트라 잦은 ClickUp
-//  싱크(상태·기간·담당자 변경, 무변경 재싱크)엔 재임베딩이 안 튄다 — #624 "뭘 트리거로" 의 답(클릭업 경로).
+//  배치(아이템별 BEGIN/COMMIT) 종료 후 run-sync 가 flushProjectEmbeds 로 일괄 pending 마킹. #1053: 서브프로세스에서
+//  인라인 임베딩(HTTP)을 하지 않고 벡터만 비운다(nudge=false) — 실제 임베딩은 게이트웨이의 post-sync 스윕이
+//  드레인한다(embedding-backfill.runAutoBackfillSweep; scheduler.ts·delivery.ts). 이로써 미러 sync 는 임베딩 부하를
+//  지지 않고(느린 CPU 백엔드가 sync 런을 붙들던 문제 해소), knowledge 미러의 '리셋만 하고 떠난다' idiom 과 통일된다.
+//  '텍스트 변경' 이벤트 게이트라 잦은 ClickUp 싱크(상태·기간·담당자 변경, 무변경 재싱크)엔 재임베딩이 안 튄다 — #624.
 const pendingProjectEmbeds = new Set<number>();
-export async function flushProjectEmbeds(pool: pg.Pool): Promise<void> {
+export async function flushProjectEmbeds(_pool: pg.Pool): Promise<void> {
   if (pendingProjectEmbeds.size === 0) return;
   const ids = [...pendingProjectEmbeds];
   pendingProjectEmbeds.clear();
+  // 벡터를 비워 pending 으로 되돌리기만 한다(nudge=false — run-sync 서브프로세스에서 스윕을 돌리지 않기 위함).
+  //  삭제된 행은 UPDATE 가 0행이라 무해. 실제 텍스트는 스윕이 임베딩 시점에 DB 에서 다시 읽는다(큐잉 시점이 아니라 — 정합).
   for (const id of ids) {
-    try {
-      // 커밋 후 DB 의 '현재' 값을 읽어 임베딩(큐잉 시점 텍스트가 아니라 — 롤백/후속 편집과 정합). 삭제됐으면 skip.
-      const r = await pool.query(`SELECT name, description FROM project WHERE id=$1`, [id]);
-      const row = r.rows[0] as { name: string; description: string | null } | undefined;
-      if (!row) continue;
-      await embedProjectBestEffort(id, { name: row.name, description: row.description });
-    } catch { /* best-effort — 개별 실패는 다음 편집/백필이 보강 */ }
+    try { await markProjectEmbeddingPending(id, { nudge: false }); } catch { /* best-effort — 다음 편집/스윕이 보강 */ }
   }
 }
 
@@ -1233,7 +1231,7 @@ async function mirrorProjectV6(client: pg.PoolClient, it: RawItem, system: strin
     await auditConnector(client, "project", String(id), isInsert ? "insert" : "update", beforeSnap, afterSnap, author);
   }
   // #624 재임베딩 트리거 — 이름/설명이 실제로 바뀐 미러 행만 큐잉(신규 포함). 상태·담당자·기간·무변경 재싱크엔 안 걸림.
-  //  실제 임베딩은 커밋 후 run-sync 가 flushProjectEmbeds 로 배치 처리(동기화 루프 비차단·best-effort).
+  //  커밋 후 run-sync 가 flushProjectEmbeds 로 pending 마킹(벡터 리셋)하고, 실제 임베딩은 게이트웨이 post-sync 스윕이 채운다(#1053).
   if (isInsert || appliedName !== prevRow!.name || (appliedDesc ?? null) !== (prevRow!.description ?? null)) {
     pendingProjectEmbeds.add(id);
   }

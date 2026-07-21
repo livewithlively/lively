@@ -5,6 +5,8 @@ import { itemsPool } from "../items/store.js";
 import { q, one } from "../domainmap/db.js";
 import { auditOrgContent, restoreSnapshot, type WriteCtx } from "../db/write.js";
 import { embeddingInputText, toVectorLiteral } from "./embedding-provider.js";
+// 쓰기 경로 임베딩 비동기화(#1053) — 저장 시 인라인 임베딩 대신 pending 마킹 후 백그라운드 스윕에 위임.
+import { markEmbeddingPending, KNOWLEDGE_TARGET } from "./embedding-backfill.js";
 // 검색 공용 유틸(#631 분리) — grep 매처·스니펫·RRF 상수·임베딩 provider 접근자를 project 와 공유.
 import {
   type GrepPlan, parseGrep, grepWhere, grepExec, grepSnippet, previewBody,
@@ -49,24 +51,8 @@ const auditKnowledge = (name: string, op: string, before: unknown, after: unknow
   auditOrgContent("knowledge", name, op, before, after, ctx);
 
 // activeEmbeddingProvider 는 search-util.ts 로 이동(#631, project 스토어와 공유).
-
-// 쓰기 경로 best-effort 임베딩 — provider on 일 때만. 실패는 삼킨다(지식은 이미 저장됨 → 백필로 보강). off=no-op.
-//  ⚠ 감사·커밋 이후 별도 UPDATE(임베딩 실패가 knowledge_save 를 깨지 않게). 차원 불일치 등은 endpoint 가 거부 → 경고만.
-async function embedKnowledgeBestEffort(name: string, fields: { title?: string | null; summary?: string | null; body_md?: string | null }): Promise<void> {
-  const provider = await activeEmbeddingProvider();
-  if (!provider) return;
-  try {
-    const text = embeddingInputText(fields);
-    if (!text) return;
-    const [vec] = await provider.embed([text]);
-    if (!vec || !vec.length) return;
-    await itemsPool.query(
-      `UPDATE knowledge SET embedding_vector=$2::vector, embedding_model=$3, embedding_updated_at=now() WHERE name=$1`,
-      [name, toVectorLiteral(vec), provider.model]);
-  } catch (e) {
-    console.warn(`[embeddings] '${name}' 임베딩 실패(best-effort, 백필로 보강): ${(e as Error)?.message}`);
-  }
-}
+// 쓰기 경로 임베딩은 #1053 에서 비동기로 분리 — upsert 는 pending 마킹(markEmbeddingPending)만 하고 백그라운드
+//  스윕이 채운다. 옛 동기 embedKnowledgeBestEffort(인라인 provider.embed HTTP)는 제거(저장 지연의 원인이었음).
 
 export interface KnowledgeFilter {
   space?: string; categoryId?: number; injection?: string; provenance?: string;
@@ -405,8 +391,15 @@ export async function upsertKnowledge(
   // #290 단일 카테고리: 첫 카테고리만 적용(linkKnowledgeCategory 가 replace). 2+ 전달은 정책상 경고하고 무시.
   if (catIds.length > 1) console.warn(`[knowledge] '${name}' 단일 카테고리 정책 — 첫 카테고리만 적용(${catIds.length}개 전달).`);
   if (catIds.length) await linkKnowledgeCategory(name, catIds[0], "confirmed", ctx);
-  // 벡터검색(#172) — 임베딩 on 이면 본문 임베딩 갱신(best-effort, off=no-op, 실패해도 저장 성공 보존).
-  await embedKnowledgeBestEffort(name, { title: input.title ?? (after?.title as string | null), summary, body_md: input.body_md });
+  // 벡터검색(#172)을 쓰기 경로에서 분리(#1053) — 저장은 즉시 반환하고, 임베딩은 백그라운드 스윕이 배치로 채운다.
+  //  신규 행은 embedding_vector 가 NULL(=pending)이라 그대로 스윕 대상. 수정은 임베딩 입력 텍스트(제목+요약+본문)가
+  //  '실제로 바뀐' 경우에만 벡터를 비워 pending 으로 되돌린다 — 무변경·facet-only(is_wiki·sort 등) 재저장엔 헛임베딩·
+  //  검색 공백이 없다(project-store updateProject/updateTask 의 before↔after 텍스트 비교 가드와 동형).
+  const newEmbedText = embeddingInputText({ title: input.title ?? (after?.title as string | null), summary, body_md: input.body_md });
+  const oldEmbedText = before
+    ? embeddingInputText({ title: before.title as string | null, summary: before.summary as string | null, body_md: before.body_md as string | null })
+    : "";
+  if (newEmbedText && (!before || newEmbedText !== oldEmbedText)) await markEmbeddingPending(KNOWLEDGE_TARGET, name);
   // #907 본문 [[…]] → 자동 엣지. 스토어 층에 두는 이유: 리비전 승인(knowledge-revision-store)·undo 등 **모든 upsert
   //  writer** 가 본문을 바꾸면 엣지도 따라가야 한다(capability 에만 두면 그 경로들이 조용히 어긋난다).
   //  미매칭은 예외가 아니라 경고다 — 호출부가 응답에 실어 붕 뜬 링크를 알린다(#907 목표2).
