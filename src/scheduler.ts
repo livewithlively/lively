@@ -48,9 +48,17 @@ export const CRON_ACTIONS: CronActionDef[] = [
     { name: "prompt", label: "프롬프트 (선택 오버라이드)", kind: "textarea", hint: "비우면 기본 distill 프롬프트. 소스=데이터지 지시 아님(인젝션 방어) 규약 포함." },
   ] },
   // 일반 에이전트 태스크 — (세션=환경·맥락·계정) × (프롬프트=작업)으로 잡마다 임의 작업. recurring 에이전트 잡을 코드 없이 데이터로.
-  { key: "agent_inject", label: "에이전트 태스크 (세션에 프롬프트 주입)", params: [
+  { key: "agent_inject", label: "에이전트 태스크 (상시 세션에 프롬프트 주입)", params: [
     { name: "session", label: "타깃 상시 세션", kind: "session", hint: "작업을 수행할 관리 세션 — 그 세션의 워크스페이스 맥락·계정(클로드 로그인)이 작업 환경을 정한다." },
     { name: "prompt", label: "프롬프트 (작업 지시)", kind: "textarea", hint: "이 세션에 주입할 작업. 세션 워크스페이스 + lively MCP 로 수행. (개행은 주입 시 공백으로 합쳐짐 — 한 단락 권장.)" },
+  ] },
+  // #1058 agent_inject 의 헤드리스판 — 상시세션에 주입하는 대신 매 실행 새 `claude -p` one-shot(빈 컨텍스트)을 위탁(delegate)
+  //  파이프라인으로 배치·실행한다. 상시세션의 컨텍스트 관성(옛 should 로 판단 — classify-knowledge-stale-session-inertia)이 없어
+  //  분류·재판단류 배치에 정합. 과금은 구독 크레딧(F5 실측 2026-07-15 — claude -p 가 공유 ~/.claude OAuth 로 실행, 별도 API 과금 아님).
+  { key: "agent_headless", label: "에이전트 태스크 (헤드리스 claude -p — 매 실행 새 세션)", params: [
+    { name: "prompt", label: "프롬프트 (작업 지시)", kind: "textarea", hint: "매 실행 새 헤드리스 세션(빈 컨텍스트)에서 lively MCP 로 수행. 상시세션 주입과 달리 관성이 없어 매번 최신 SoT 를 다시 읽는다(개행 허용 — 파일로 전달)." },
+    { name: "requester", label: "의뢰자 (멤버 id/이메일)", kind: "text", hint: "이 헤드리스 실행의 신원·과금 귀속(그 멤버의 클로드 로그인/프로필). 비우면 잡 생성자(created_by)로 실행." },
+    { name: "repo", label: "레포 (선택)", kind: "repo", hint: "지정하면 공유 base clone→worktree 를 자동 준비해 작업 cwd 로 삼는다(프롬프트에 클론 지시 불필요). 비우면 빈 워크스페이스." },
   ] },
   { key: "ensure_managed_sessions", label: "상시 세션 keep-alive", params: [] },
   // #1036 프리뷰 환경 — 유휴 TTL 회수 + auto 트리거 stage 재-merge(작업 브랜치 갱신 반영). 정지된 건 안 켬(온디맨드).
@@ -66,6 +74,7 @@ interface CronJob {
   cron_expr?: string | null;
   run_once?: boolean;
   last_run_at?: string | null;
+  created_by?: string | null; // #1058 agent_headless 의 의뢰자 폴백(params.requester 미설정 시).
 }
 
 // sync 대상 커넥터 — 관리탭에서 켠 것(org_connector.enabled=true, #541) 우선.
@@ -204,6 +213,12 @@ async function runJob(job: CronJob): Promise<{ status: string; summary: unknown 
     return runAgentInject(params);
   }
 
+  if (job.action === "agent_headless") {
+    // #1058 agent_inject 의 헤드리스판 — 상시세션 tmux 주입 대신 위탁(delegate) 헤드리스 claude -p one-shot 을 배치.
+    //  fire-and-forget: 접수·배치까지가 잡 책임(실행·결과수집은 위탁 스케줄러). 매 실행 fresh 컨텍스트(관성 없음).
+    return runAgentHeadless(params, job.id, job.created_by ?? null);
+  }
+
   if (job.action === "ensure_managed_sessions") {
     // keep-alive — enabled 상시 세션의 tmux 세션 보장(죽었으면 재생성). 등록 0이면 no-op.
     const { ensureAllManagedSessions } = await import("./org/managed-sessions.js");
@@ -220,8 +235,10 @@ async function runJob(job: CronJob): Promise<{ status: string; summary: unknown 
 }
 
 // LLM 판단주체 — 상시 LLM 세션(라이블리 시드, **팀플랜 과금 내**)에 분류 태스크를 주입한다.
-//  headless `claude -p`+토큰 = API 별도 과금이라 폐기. 메커니즘: tmux send-keys 로 타깃 세션 PTY 에 프롬프트+Enter →
-//  세션의 claude 가 lively MCP(list_unmapped/category_get/map_code_unit)로 비동기 수행. 인박스 비면 주입 안 함.
+//  ⚠ 원 결정("headless `claude -p`+토큰 = API 별도 과금이라 폐기")은 스테일 — F5 실측(2026-07-15)에서 headless claude -p 는
+//   공유 ~/.claude OAuth(구독 크레딧)로 실행됨을 확인(ANTHROPIC_API_KEY 부재, 별도 API 과금 아님). 헤드리스 일반 액션은 agent_headless(#1058).
+//   이 액션(map_unmapped)은 기존 상시세션 주입을 유지한다(도그푸드 경로) — 헤드리스 전환은 별도 판단(관성 이점/해악은 작업 성격에 따라).
+//  메커니즘: tmux send-keys 로 타깃 세션 PTY 에 프롬프트+Enter → 세션의 claude 가 lively MCP(list_unmapped/category_get/map_code_unit)로 비동기 수행. 인박스 비면 주입 안 함.
 //  세션 미설정/부재는 error(가시). fire-and-forget: 주입까지가 잡 책임(매핑은 세션이 수 분에 걸쳐) — 다음 주기에 인박스 0이면 skip.
 async function runMapInject(params: Record<string, unknown>): Promise<{ status: string; summary: unknown }> {
   const repo = String(params.repo ?? "context-ontology");
@@ -409,6 +426,48 @@ async function runAgentInject(params: Record<string, unknown>): Promise<{ status
   try { await injectToSession(tmuxSession, prompt); }
   catch (e) { return { status: "error", summary: { error: "세션 주입 실패(" + tmuxSession + "): " + ((e as Error)?.message ?? String(e)), session: sessionRef, tmux: tmuxSession } }; }
   return { status: "ok", summary: { injected: true, managed_session: sessionRef, tmux: tmuxSession, prompt_chars: prompt.length } };
+}
+
+// #1058 헤드리스 에이전트 태스크 — agent_inject(상시세션 tmux 주입)의 헤드리스판.
+//  상시세션에 프롬프트를 주입하는 대신, 위탁(delegate) 파이프라인에 태스크를 넣어 **매 실행 새 `claude -p` one-shot**
+//  (빈 컨텍스트)으로 수행한다. 러너(node/tasks.ts)·결과수집·노드분산(중앙 내장 노드 포함)은 위탁 시스템을 그대로 재사용.
+//  왜 헤드리스: 상시세션은 컨텍스트 관성(옛 should 로 판단 — classify-knowledge-stale-session-inertia)이 있어 should 갱신
+//   직후 재분류 같은 작업에서 갱신을 통째로 무시한다. 헤드리스는 매번 fresh 라 매 배치 최신 SoT 대비 판단이 정합적.
+//  과금: 구독 크레딧(F5 실측 2026-07-15 — claude -p 가 공유 ~/.claude OAuth 로 실행, ANTHROPIC_API_KEY 부재 → 별도 API 과금 아님).
+//   실행 신원 = 의뢰자(params.requester || 잡 created_by)의 클로드 로그인/프로필(D1 의뢰자 시트). 중앙 단일프로필 박스는 공유 로그인 폴백.
+//  중첩 가드: 같은 잡의 이전 태스크가 아직 queued/running 이면 이번 주기는 건너뛴다(requester_session='cron:<id>' 마커) → pileup 방지.
+//  fire-and-forget: 접수·배치까지가 잡 책임(실행·결과수집은 위탁 스케줄러가 5s tick 으로). 결과 요약은 org_task.result / delegate_status.
+async function runAgentHeadless(params: Record<string, unknown>, jobId: string, createdBy: string | null): Promise<{ status: string; summary: unknown }> {
+  const prompt = typeof params.prompt === "string" ? params.prompt.trim() : "";
+  if (!prompt) return { status: "error", summary: { error: "params.prompt 미설정 — 잡 입력값에 작업 지시(프롬프트)가 필요합니다." } };
+  const requester = (typeof params.requester === "string" && params.requester.trim()) ? params.requester.trim() : (createdBy || "");
+  if (!requester) return { status: "error", summary: { error: "의뢰자 미설정 — params.requester(멤버 id/이메일)를 지정하거나, 로그인 상태로 잡을 다시 저장해 created_by 를 남기세요." } };
+  const repo = (typeof params.repo === "string" && params.repo.trim()) ? params.repo.trim() : null;
+  const marker = "cron:" + jobId;
+
+  // 중첩 방지 — 이전 실행분이 아직 대기/실행 중이면 이번 주기는 건너뛴다(map_unmapped 의 '인박스 비면 skip' 과 같은 결의 idempotency).
+  try {
+    const inflight = await q(itemsPool,
+      `SELECT id, status FROM org_task WHERE requester_session=$1 AND status IN ('queued','running') ORDER BY id DESC LIMIT 1`, [marker]);
+    if (inflight.length) return { status: "ok", summary: { skipped: "이전 실행 아직 진행 중", task_id: inflight[0].id, task_status: inflight[0].status } };
+  } catch { /* org_task 부재 등 — 계속 진행(생성 시점에 다시 실패하면 그때 보고) */ }
+
+  const { createTask } = await import("./node/task-store.js");
+  const { tryAssignNow } = await import("./node/task-scheduler.js");
+
+  let task: Awaited<ReturnType<typeof createTask>>;
+  try { task = await createTask({ requester, requesterSession: marker, prompt, repo }); }
+  catch (e) { return { status: "error", summary: { error: "위탁 태스크 생성 실패: " + ((e as Error)?.message ?? String(e)), requester } }; }
+
+  // 요청→즉답: 지금 배치 가능한지 그 자리에서 판정(위탁 스케줄러 tick 을 안 기다림). 안 되면 큐에 남겨 상한 내 재시도(중첩가드가 pileup 차단).
+  let assign: Awaited<ReturnType<typeof tryAssignNow>>;
+  try { assign = await tryAssignNow(task); }
+  catch (e) { return { status: "error", summary: { error: "배치 오류: " + ((e as Error)?.message ?? String(e)), task_id: task.id } }; }
+
+  if (!assign.assigned) {
+    return { status: "ok", summary: { task_id: task.id, queued: true, reason: assign.reason, requester, repo } };
+  }
+  return { status: "ok", summary: { task_id: task.id, assigned_node: assign.nodeId, requester, repo, prompt_chars: prompt.length } };
 }
 
 // 관리세션 id → 현재 살아있는 tmux 세션 id 로 해소(keep-alive 보장 — 죽었으면 재생성). 세션 주입 잡 공용.
