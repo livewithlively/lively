@@ -597,6 +597,21 @@ function qHighlight(text, terms) {
         wrap.append(document.createTextNode(text.slice(pos)));
     return wrap;
 }
+// 긴 질문 접기 — 항목을 리스트에 붙인 '뒤에' 호출한다(DOM 에 있어야 높이를 잰다). 8줄을 넘으면 접고
+//  '더 보기' 토글을 단다. 넘지 않으면 clamp 를 떼고 아무것도 안 붙인다(짧은 질문은 그대로).
+function qClampText(item, textEl) {
+    textEl.classList.add('clamped');
+    if (textEl.scrollHeight - textEl.clientHeight < 8) {
+        textEl.classList.remove('clamped');
+        return;
+    }
+    const btn = el('button', { class: 'tsess-qmore', type: 'button', text: '더 보기' });
+    btn.onclick = (ev) => {
+        ev.stopPropagation(); // 통합검색 결과는 항목 자체가 '세션 열기' 버튼 — 펼치기가 새 탭을 열면 안 된다
+        btn.textContent = textEl.classList.toggle('clamped') ? '더 보기' : '접기';
+    };
+    item.append(btn);
+}
 // 한 세션 '내 질문' 팝아웃 — 상단 검색으로 그 세션 질문을 즉시 필터(클라이언트). 최신이 위, #N=시간순 번호.
 //  대시보드 '내 AI 세션' 카드의 ⋮ 메뉴도 이걸 그대로 재사용한다(#853) — 질문 보기 UI 를 두 벌 만들지 않는다.
 export async function openSessPrompts(s) {
@@ -620,7 +635,10 @@ export async function openSessPrompts(s) {
             if (!terms.length) { // 검색 없음 → 최신순 전체
                 cap.textContent = total + '개 질문 · 최근 순' + (total > prompts.length ? ' (최근 ' + prompts.length + '개)' : '');
                 prompts.slice().reverse().forEach((p) => {
-                    list.append(el('div', { class: 'tsess-qitem' }, el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + (prompts.indexOf(p) + 1) }), el('span', { class: 'tsess-qwhen', text: qWhen(p.ts) })), qHighlight(p.text, null)));
+                    const txt = qHighlight(p.text, null);
+                    const item = el('div', { class: 'tsess-qitem' }, el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + (prompts.indexOf(p) + 1) }), el('span', { class: 'tsess-qwhen', text: qWhen(p.ts) })), txt);
+                    list.append(item);
+                    qClampText(item, txt);
                 });
                 return;
             }
@@ -641,7 +659,10 @@ export async function openSessPrompts(s) {
                 return;
             }
             pool.forEach(({ p, chrono }) => {
-                list.append(el('div', { class: 'tsess-qitem' }, el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + chrono }), el('span', { class: 'tsess-qwhen', text: qWhen(p.ts) })), qHighlight(p.text, terms)));
+                const txt = qHighlight(p.text, terms);
+                const item = el('div', { class: 'tsess-qitem' }, el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + chrono }), el('span', { class: 'tsess-qwhen', text: qWhen(p.ts) })), txt);
+                list.append(item);
+                qClampText(item, txt);
             });
         };
         search.addEventListener('input', draw);
@@ -685,9 +706,11 @@ function openGlobalPromptSearch(ctx) {
             rows.forEach((r) => {
                 const pid = Number(r.projectId) || 0;
                 const meta = el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-gsess', title: r.label, text: r.label || r.sessionId }), pid ? el('span', { class: 'tsess-proj' + (myProjIds.has(pid) ? ' mine' : ''), title: (projName.get(pid) || ('#' + pid)), text: '🗂 ' + (projName.get(pid) || ('프로젝트 #' + pid)) }) : null, el('span', { text: qWhen(r.ts) }), el('span', { class: 'tsess-gopen', text: '열기 ↗' }));
-                const item = el('div', { class: 'tsess-qitem tsess-gitem', role: 'button', tabindex: '0', title: '이 세션 열기' }, meta, qHighlight(r.text, ql));
+                const txt = qHighlight(r.text, ql);
+                const item = el('div', { class: 'tsess-qitem tsess-gitem', role: 'button', tabindex: '0', title: '이 세션 열기' }, meta, txt);
                 item.onclick = () => window.open('/ui/terminal.html?session=' + encodeURIComponent(r.sessionId) + '&label=' + encodeURIComponent(r.label || ''), '_blank');
                 results.append(item);
+                qClampText(item, txt);
             });
         }
         catch (e) {
