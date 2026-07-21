@@ -10,6 +10,7 @@ import {
   listPreviewEnvs, getPreviewEnv, upsertPreviewEnv, deletePreviewEnv, ensurePreviewEnv, stopPreviewEnv, resolvePreviewId,
   listStackProfiles, upsertStackProfile, deleteStackProfile,
 } from "../org/preview-envs.js";
+import { listRepoBranches } from "../org/preview-stage.js";
 
 const ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 function pid(v: unknown): string {
@@ -122,6 +123,28 @@ const stop: Capability = {
   },
 };
 
+// ── 레포 브랜치 목록 — stage 의 '합쳐서 볼 작업'을 **타이핑이 아니라 고르게** 하기 위한 조회. ──
+//  base 클론에서 fetch 후 원격 브랜치를 최근 갱신순으로. 읽기 전용이고 브랜치명·커밋 제목만 나가므로 scope=code.
+const branchList: Capability = {
+  name: "repo_branch_list",
+  title: "레포 브랜치 목록",
+  description:
+    "등록된 레포의 원격 브랜치를 최근 갱신순으로 — [{name, updated_at, author, subject}]. " +
+    "stage 미리보기의 member_branches 나 base_ref 를 고를 때 쓴다(브랜치명을 외워서 적지 않게).",
+  scope: "code",
+  input: { repo: z.string().max(100), limit: z.number().int().min(1).max(1000).optional() },
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/repos/:repo/branches"], parse: (req) => ({ repo: req.params?.repo, limit: numOpt(req.query?.limit) }) }],
+  },
+  handler: async (input: any) => {
+    const repo = String(input.repo ?? "").trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(repo)) throw new HttpError(400, "레포 이름 형식이 올바르지 않습니다");
+    try { return { branches: await listRepoBranches(repo, input.limit ?? 300) }; }
+    catch (e) { throw new HttpError(400, (e as Error).message); }
+  },
+};
+
 // ── stack_profile (어떻게 띄우나 — throwaway backing 이 참조. 비개발자는 프리셋을 드롭다운으로 고른다) ──
 const spList: Capability = {
   name: "stack_profile_list",
@@ -179,4 +202,4 @@ const spDel: Capability = {
   handler: async (input: any) => deleteStackProfile(pid(input.id)),
 };
 
-export const previewEnvCapabilities: Capability[] = [list, set, del, ensure, stop, spList, spSet, spDel];
+export const previewEnvCapabilities: Capability[] = [list, set, del, ensure, stop, branchList, spList, spSet, spDel];

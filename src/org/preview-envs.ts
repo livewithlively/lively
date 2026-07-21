@@ -9,6 +9,9 @@ import { statSync } from "node:fs";
 import { itemsPool } from "../items/store.js";
 import { ensureStageWorktree } from "./preview-stage.js";
 import { ensureProjectWorktree, runBuild, buildFailureHint } from "./preview-prepare.js";
+// 공유 워크스페이스 루트 = project-fs 의 단일 정의(TERMINAL_ROOT_SHARED). 여기서 따로 계산하면 설치에 따라
+//  provision 이 만든 작업 폴더와 다른 자리를 가리켜 '방금 만든 워크트리를 못 찾는' 오진이 난다.
+import { PROJECT_SHARED_BASE as SHARED_BASE } from "../project-fs.js";
 import { logger } from "../log.js";
 
 export interface PreviewEnv {
@@ -27,7 +30,6 @@ export interface StackProfile {
   healthcheck_path: string | null; note: string | null; sort: number;
 }
 
-const SHARED_BASE = process.env.PROJECT_SHARED_BASE || path.join(process.env.HOME || "", ".openclaw", "workspace");
 
 // project_id + repo → 작업 폴더의 표준 자리(provisionProjectRepos 와 같은 곳: workspace/project/<id>/<repo>).
 export function canonicalWorktree(projectId: number | null | undefined, repo: string): string | null {
