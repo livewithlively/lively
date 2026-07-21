@@ -991,9 +991,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
                         else
                             pjvMoveListToFolder(lid, list.folder_id ?? null, reload);
                     },
-                    // 인라인 아웃덴트(#670) — 폴더 안 리스트를 왼쪽으로 끌면 최상위(folder_id null)로. 이미 최상위면 no-op(가드).
-                    onOutdent: (lid) => { const d = lists.find((x) => String(x.id) === String(lid)); if (d && d.folder_id != null)
-                        pjvMoveListToFolder(lid, null, reload); },
+                    // 아웃덴트(리스트를 최상위로) 폐지(#1067) — 리스트는 항상 스페이스 안에 있어야 한다. 옮기려면 ⋯ '폴더로 이동'.
+                    onOutdent: () => { toast('리스트는 스페이스 밖으로 뺄 수 없어요 — ⋯ ▸ 폴더로 이동 을 써 주세요'); },
                 });
             return it;
         };
@@ -1105,16 +1104,17 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         syncSearchOpen();
         const treeWrap = el('div', { class: 'pjv-side-tree' });
         navInner.append(treeWrap);
-        // 리스트를 빈 공간에 놓으면 최상위(폴더 밖)로 — 폴더/리스트 항목의 drop 은 stopPropagation 이라 '빈 곳' 드롭만 여기로.
+        // 빈 공간 드롭 = '최상위로 빼기' 였으나 폐지(#1067) — 리스트는 항상 스페이스 안에 있어야 한다.
+        //  드롭을 조용히 무시하면 '왜 안 옮겨지지?' 가 되므로, 어디로 옮기면 되는지 알려준다.
         treeWrap.addEventListener('dragover', (ev) => { if (pjvSideDrag.kind === 'list') {
             ev.preventDefault();
             try {
-                ev.dataTransfer.dropEffect = 'move';
+                ev.dataTransfer.dropEffect = 'none';
             }
             catch (_) { /* */ }
         } });
         treeWrap.addEventListener('drop', (ev) => { if (pjvSideDrag.kind !== 'list')
-            return; ev.preventDefault(); const lid = pjvSideDrag.id; pjvSideDrag.kind = null; pjvSideDrag.id = null; pjvMoveListToFolder(lid, null, reload); });
+            return; ev.preventDefault(); pjvSideDrag.kind = null; pjvSideDrag.id = null; toast('리스트는 스페이스·폴더 안에만 둘 수 있어요 — 스페이스나 폴더 위에 놓아 주세요'); });
         // 폴더들(캐럿+폴더아이콘) › (하위 폴더 재귀 #541) › 리스트(파일). '전체' 제거(#473 후속) — 기본은 맨 위 폴더 진입.
         //  폴더는 드래그로 재정렬·리스트 드롭 타깃. depth 는 들여쓰기(중첩 폴더 — ClickUp Space›Folder 이관 시 2층).
         const renderFolderNode = (f, depth) => {
@@ -1811,9 +1811,10 @@ function pjvListFolderSubmenu(menu, close, list, reload) {
             };
             return item;
         };
-        menu.append(mkItem('폴더 없음 (최상위)', null, null));
+        // '폴더 없음(최상위)' 선택지 폐지(#1067) — 리스트는 항상 어느 스페이스·폴더 안에 있어야 한다.
         for (const f of folders)
-            menu.append(mkItem(f.name, f.id, f.color || 'var(--muted-2)'));
+            if (!pjvFolderIsArchive(f))
+                menu.append(mkItem(f.name, f.id, f.color || 'var(--muted-2)'));
         const addNew = el('button', { class: 'pjv-menu-item pjv-sess-add', type: 'button' }, el('span', { class: 'pjv-sess-add-ico', text: '＋' }), el('span', { text: '새 폴더…' }));
         addNew.onclick = (e) => { e.stopPropagation(); close(); openFolderForm(reload); };
         menu.append(el('div', { class: 'pjv-bulk-sep-h' }), addNew);
@@ -2305,15 +2306,15 @@ function pjvFolderTreeMenu(menu, close, folder, reload) {
     if (isSpace)
         menu.append(mk('이 스페이스에 새 폴더', () => openFolderForm(reload, undefined, { parentId: folder.id }))); // #766 스페이스 하위 폴더 생성
     menu.append(mk('이 ' + kindLabel + '에 새 리스트', () => openListForm(reload, undefined, { folderId: folder.id })));
-    // #766 중첩 해제. 스페이스도 포함(#1067) — 아카이브에 치워둔 스페이스를 꺼내는 유일한 경로다(스페이스는 폴더 하위로
-    //  못 가지만 '최상위로'는 언제나 가능). 드래그로 못 꺼내는 상황(아카이브 안)에서 갇히지 않게.
-    if (folder.parent_id != null)
+    // '최상위로 빼기' 는 **스페이스에만** 남긴다(#1067) — 아카이브에 치워둔 스페이스를 꺼내는 유일한 경로라 없애면 갇힌다.
+    //  일반 폴더는 최상위로 나가면 '스페이스 미지정' 이 되므로 이 경로를 막았다(옮기려면 폴더 설정에서 상위 스페이스를 바꾼다).
+    if (folder.parent_id != null && isSpace)
         menu.append(mk('최상위로 빼기', () => pjvMoveFolderToParent(folder.id, null, reload)));
     menu.append(el('div', { class: 'pjv-bulk-sep-h' }));
     menu.append(mk(kindLabel + ' 삭제', () => pjvDeleteFolder(folder, reload), true));
 }
 function pjvDeleteFolder(folder, reload) {
-    if (!confirm('폴더 ‘' + folder.name + '’을(를) 삭제할까요?\n\n폴더만 사라지고, 속한 리스트는 ‘최상위(폴더 없음)’로 이동합니다(리스트·프로젝트는 보존).'))
+    if (!confirm('폴더 ‘' + folder.name + '’을(를) 삭제할까요?\n\n폴더만 사라지고, 속한 리스트는 보존됩니다(그 뒤 원하는 스페이스·폴더로 옮겨 주세요).'))
         return;
     (async () => {
         try {
@@ -2329,6 +2330,62 @@ function pjvDeleteFolder(folder, reload) {
 // 새 폴더/스페이스 · 폴더 수정 폼 — 이름·색(정리용, 멤버 없음).
 //  #766 opts.kind='space' → 스페이스 생성(최상위 구획). 일반 폴더는 '상위 스페이스' 선택으로 스페이스
 //  하위에 생성/이동(opts.parentId = 초기 상위). 수정 시 folder 가 스페이스면 상위 선택 숨김(최상위 전용).
+// ── 위치(스페이스 › 폴더) 선택 필드(#1067) ─────────────────────────────────
+//  불변식: **리스트·폴더는 반드시 어떤 스페이스 아래에 있다.** '최상위(스페이스 미지정)' 선택지를 없앤 이유 —
+//  스페이스 밖에 리스트가 쌓이면 사이드바에 소속 없는 덩어리가 생기고, 브레드크럼도 '프로젝트 / 리스트' 로 끊겨
+//  이 리스트가 어느 제품·조직의 것인지 화면에서 알 수 없다. (기존 최상위 리스트 11개는 #1067 에서 폴더로 정리했다.)
+//  옵션은 스페이스를 optgroup 으로, 그 안에 하위 폴더를 '└' 들여쓰기로. 아카이브는 후보에서 뺀다(치워두는 곳이지 만드는 곳이 아니다).
+function pjvLocationField(currentId, opts) {
+    opts = opts || {};
+    const sel = el('select', { class: 'pjv-cat-select', disabled: 'disabled' });
+    sel.append(el('option', { value: '', text: '불러오는 중…' }));
+    let loaded = false;
+    const setDefault = () => { if (!sel.value && sel.options.length)
+        sel.selectedIndex = 0; };
+    (async () => {
+        let folders = [];
+        try {
+            folders = await api('/api/ui/v6/project-folders').then((d) => (d && d.folders) || []);
+        }
+        catch (_) {
+            sel.replaceChildren(el('option', { value: '', text: '불러오지 못했어요 — 다시 시도해 주세요' }));
+            return;
+        }
+        const byParent = new Map();
+        for (const f of folders) {
+            const k = f.parent_id ?? null;
+            if (!byParent.has(k))
+                byParent.set(k, []);
+            byParent.get(k).push(f);
+        }
+        const roots = (byParent.get(null) || []).filter((f) => !pjvFolderIsArchive(f));
+        sel.replaceChildren();
+        const addUnder = (f, depth, group) => {
+            if (pjvFolderIsArchive(f))
+                return;
+            if (!(opts.excludeId != null && String(opts.excludeId) === String(f.id))) {
+                const o = el('option', { value: String(f.id), text: (depth ? '\u00a0\u00a0'.repeat(depth) + '└ ' : '') + f.name });
+                if (currentId != null && String(currentId) === String(f.id))
+                    o.selected = true;
+                (group || sel).append(o);
+            }
+            for (const c of (byParent.get(f.id) || []))
+                addUnder(c, depth + 1, group);
+        };
+        for (const r of roots) {
+            const og = el('optgroup', { label: r.name });
+            addUnder(r, 0, og);
+            sel.append(og);
+        }
+        if (!sel.options.length)
+            sel.append(el('option', { value: '', text: '스페이스가 없어요 — 먼저 스페이스를 만들어 주세요' }));
+        sel.disabled = false;
+        loaded = true;
+        setDefault();
+    })();
+    const row = el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: opts.label || '위치 (스페이스 · 폴더)' }), sel, el('div', { class: 'field-hint', text: opts.hint || '모든 리스트는 스페이스 안에 있어야 해요 — 어디에 둘지 골라 주세요.' }));
+    return { row, select: sel, ready: () => loaded, getSelected: () => { const v = sel.value; return v ? Number(v) : null; } };
+}
 function openFolderForm(reload, folder, opts) {
     opts = opts || {};
     const editing = !!folder;
@@ -2350,7 +2407,7 @@ function openFolderForm(reload, folder, opts) {
     // 상위 스페이스 선택(#766) — 일반 폴더만(스페이스는 최상위 전용이라 숨김). 스페이스 목록을 비동기 로드.
     const initialParent = editing ? (folder.parent_id ?? null) : (opts.parentId != null ? Number(opts.parentId) : null);
     const parentSel = el('select', { class: 'pjv-cat-select' });
-    const parentField = el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '상위 스페이스' }), parentSel, el('div', { class: 'field-hint', text: '스페이스를 고르면 그 안에 들어가요. ‘없음’이면 최상위.' }));
+    const parentField = el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '상위 스페이스' }), parentSel, el('div', { class: 'field-hint', text: '모든 폴더는 스페이스 안에 있어야 해요 — 어느 스페이스에 둘지 골라 주세요.' }));
     if (!isSpace) {
         parentSel.append(el('option', { value: '', text: '불러오는 중…' }));
         parentSel.disabled = true;
@@ -2360,13 +2417,17 @@ function openFolderForm(reload, folder, opts) {
                 folders = await api('/api/ui/v6/project-folders').then((d) => (d && d.folders) || []);
             }
             catch (_) {
-                parentSel.replaceChildren(el('option', { value: '', text: '없음 (최상위)' }));
-                parentSel.disabled = false;
+                parentSel.replaceChildren(el('option', { value: '', text: '불러오지 못했어요 — 다시 시도해 주세요' }));
                 return;
             }
             // 스페이스만 상위 후보(자기 자신 제외 — 편집 중 폴더는 스페이스가 아니므로 자동 제외됨).
-            const spaces = folders.filter(pjvFolderIsSpace);
-            parentSel.replaceChildren(el('option', { value: '', text: '없음 (최상위)' }), ...spaces.map((s) => { const o = el('option', { value: String(s.id), text: s.name }); if (initialParent != null && Number(initialParent) === Number(s.id))
+            //  '없음(최상위)' 선택지 폐지(#1067) — 폴더도 반드시 스페이스 안에 있어야 한다(스페이스 미지정 금지).
+            const spaces = folders.filter((f) => pjvFolderIsSpace(f) && !pjvFolderIsArchive(f));
+            if (!spaces.length) {
+                parentSel.replaceChildren(el('option', { value: '', text: '스페이스가 없어요 — 먼저 스페이스를 만들어 주세요' }));
+                return;
+            }
+            parentSel.replaceChildren(...spaces.map((s) => { const o = el('option', { value: String(s.id), text: s.name }); if (initialParent != null && Number(initialParent) === Number(s.id))
                 o.selected = true; return o; }));
             parentSel.disabled = false;
         })();
@@ -2385,7 +2446,13 @@ function openFolderForm(reload, folder, opts) {
             toast('이름을 입력하세요', true);
             return;
         }
-        const pid = isSpace ? null : (parentSel.value ? Number(parentSel.value) : null); // 폴더의 상위 스페이스(빈=최상위)
+        const pid = isSpace ? null : (parentSel.value ? Number(parentSel.value) : null); // 폴더의 상위 스페이스
+        // 스페이스 미지정 금지(#1067) — 폴더는 반드시 어느 스페이스 안에.
+        if (!isSpace && pid == null) {
+            toast('이 폴더를 둘 스페이스를 골라 주세요', true);
+            parentSel.focus();
+            return;
+        }
         busy = true;
         saveBtn.disabled = true;
         try {
@@ -2528,6 +2595,9 @@ function openListForm(reload, list, opts) {
     } });
     // 카테고리(도메인) 소유(#541 후속) — 리스트가 카테고리를 이고 소속 프로젝트가 상속(프로젝트 단위 지정 폐지).
     const catField = pjvListCategoryField(editing ? (list.category_id ?? null) : (opts.categoryId ?? null));
+    // 위치(#1067) — 새 리스트는 반드시 스페이스(또는 그 안 폴더) 안에. 폴더 메뉴에서 열었으면 그 폴더가 기본 선택.
+    //  수정 폼엔 두지 않는다 — 이동은 리스트 ⋯ '폴더로 이동' 이 담당(중복 진입점 방지).
+    const locField = editing ? null : pjvLocationField(opts.folderId ?? null);
     // 멤버 — 생성뿐 아니라 수정 때도 편집(만든 뒤에도 속성 수정). 수정이면 현재 멤버를 프리필.
     const picker = memberPicker(editing ? (list.members || []).map((m) => m.member_id) : [], { includeMe: !editing });
     // #729 새 리스트 상태 체계 — 스페이스 기본 상속(기본, 재생성 불필요) 또는 저장된 템플릿에서 시작.
@@ -2551,6 +2621,7 @@ function openListForm(reload, list, opts) {
         el('div', { class: 'field' }, el('label', { class: 'field-label', text: '이름' }), nameIn),
         el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '색' }), swatches),
         el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '아이콘' }), iconRow),
+        locField ? locField.row : null,
         catField.row,
         el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '참여 멤버' }), picker.box),
         statusTmplField,
@@ -2566,6 +2637,12 @@ function openListForm(reload, list, opts) {
         if (!nm) {
             nameIn.focus();
             toast('이름을 입력하세요', true);
+            return;
+        }
+        // 스페이스 미지정 금지(#1067) — 위치를 못 고른 채로는 만들지 않는다.
+        if (locField && locField.getSelected() == null) {
+            toast(locField.ready() ? '이 리스트를 둘 스페이스·폴더를 골라 주세요' : '위치를 불러오는 중이에요 — 잠시 후 다시 눌러 주세요', true);
+            locField.select.focus();
             return;
         }
         busy = true;
@@ -2591,8 +2668,9 @@ function openListForm(reload, list, opts) {
                         if (statuses.length)
                             await api('/api/ui/v6/project-lists/' + created.id + '/settings', { method: 'POST', body: JSON.stringify({ settings: { statusMode: 'custom', statuses } }) }).catch(() => { });
                     }
-                    if (opts.folderId != null)
-                        await api('/api/ui/v6/project-lists/' + created.id + '/folder', { method: 'POST', body: JSON.stringify({ folder_id: opts.folderId }) }).catch(() => { });
+                    const locId = locField ? locField.getSelected() : (opts.folderId ?? null);
+                    if (locId != null)
+                        await api('/api/ui/v6/project-lists/' + created.id + '/folder', { method: 'POST', body: JSON.stringify({ folder_id: locId }) }).catch(() => { });
                 }
                 if (opts.onCreated)
                     opts.onCreated(created);
