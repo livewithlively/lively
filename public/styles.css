@@ -3566,16 +3566,22 @@ body.pjv-side-resizing { cursor: col-resize; user-select: none; -webkit-user-sel
 /* 터치·펜 등 호버가 없는 환경에선 늘 보이게(호버 노출은 마우스 전제). */
 @media (hover: none) { .pjv-side-head-btn, .pjv-side-collapse { opacity: 1; } }
 .pjv-side-navitem { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; border: none; background: none; cursor: pointer; padding: 7px 10px; border-radius: 7px; font-size: 14px; font-weight: 600; color: var(--ink-sub); }
-/* 위계 세로선(#1067, 클릭업 파리티) — 항목의 깊이만큼 왼쪽에 얇은 세로선을 그어 '같은 위계'가 눈에 보이게.
+/* 위계 세로선(#1067, 클릭업 파리티) — 항목의 깊이만큼 왼쪽에 **헤어라인**을 그어 '같은 위계'가 눈에 보이게.
    트리는 중첩 DOM 이 아니라 평평한 목록(항목마다 padding-left 로 깊이 표현)이라, 조상 박스 테두리 대신
-   항목 자신의 배경 그라디언트로 긋는다: --pjv-guide-n = 조상 수, 선 x = 19 + k*14(부모 아이콘 중심선).
-   ⚠ 그래서 항목 배경색은 shorthand(background) 대신 background-color 로만 칠한다 — shorthand 는 이 선을 지운다.
+   항목 자신의 배경 그라디언트로 긋는다: --pjv-guide-n = 조상 수, 선 x = 19 + k*18(부모 아이콘 중심선).
+   격자(18px)는 JS 의 PJV_SIDE_STEP 과 **반드시 같은 값** — 어긋나면 선이 아이콘을 스치며 격자처럼 어색해진다
+   (실제로 14px 계단 + 리스트 .sub 30px 특례가 뒤섞여 그렇게 보였고, 한 격자로 통일해 고쳤다).
+   색은 본문 구분선보다 더 옅게(면이 아니라 '실'로 읽히게) — 짙으면 표처럼 보인다.
+   ⚠ 항목 배경색은 shorthand(background) 대신 background-color 로만 칠한다 — shorthand 는 이 선을 지운다.
    트리 gap 이 0 인 것도 이 때문(항목 사이가 벌어지면 선이 끊긴다). */
 .pjv-side-navitem, .pjv-side-navproj-more {
-  background-image: repeating-linear-gradient(to right, var(--line-soft, #e6e9ef) 0 1px, transparent 1px 14px);
+  --pjv-guide-color: color-mix(in srgb, var(--line, #dfe4ec) 55%, transparent);
+  background-image: repeating-linear-gradient(to right, var(--pjv-guide-color) 0 1px, transparent 1px 18px);
   background-repeat: no-repeat; background-position: 19px 0;
-  background-size: calc(var(--pjv-guide-n, 0) * 14px) 100%;
+  background-size: calc(var(--pjv-guide-n, 0) * 18px) 100%;
 }
+/* 선택된 행에선 선을 지운다 — 파란 알약 위를 실선이 가로지르면 지저분하다(위·아래 행이 이어 주므로 끊겨 보이지 않는다). */
+.pjv-side-navitem.active { background-image: none; }
 .pjv-side-navitem:hover { background-color: var(--bg-tint-2); color: var(--ink); }
 .pjv-side-navitem.active { background-color: var(--bg-sel); color: var(--ink); font-weight: 700; }
 .pjv-side-navlabel { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -3897,7 +3903,9 @@ body.pjv-folder-dragging .pjv-proj-wrap { cursor: grabbing; }
 .pjv-side-navfolder { font-weight: 700; color: var(--ink); }
 /* 폴더 ⋯ 는 우측 세모와 겹치지 않게 그 왼쪽으로(#508) — 세모(펼침/접힘)와 ⋯ 둘 다 보이고 클릭 가능. */
 .pjv-side-navfolder .pjv-side-navmore { right: 32px; }
-.pjv-side-navlist.sub { padding-left: 30px; }
+/* 폴더 안 리스트의 들여쓰기는 이제 JS 격자(PJV_SIDE_PAD + depth*PJV_SIDE_STEP)가 인라인으로 준다(#1067) —
+   여기 특례(30px)를 남겨두면 격자와 어긋나 세로선이 아이콘을 스친다. 폴백 값만 격자에 맞춰 둔다. */
+.pjv-side-navlist.sub { padding-left: 28px; }
 /* 사이드바 DnD — 드롭 타깃 하이라이트(리스트→폴더 '넣기'). 순서 재정렬은 아래 삽입선으로 구분. */
 .pjv-side-drop-over { background-color: var(--bg-tint) !important; box-shadow: inset 0 0 0 2px var(--blue); }
 /* 순서 재정렬 삽입선(#670) — 같은 형제끼리 재정렬 시 커서 위/아래 절반에 따라 항목 위/아래 가로 파란 기준선
@@ -3911,7 +3919,7 @@ body.pjv-folder-dragging .pjv-proj-wrap { cursor: grabbing; }
 /* 인라인 레벨(#670, VS Code식) — 삽입선의 왼쪽 들여쓰기가 '어느 레벨에 들어가는지'를 보여준다.
    폴더 안 리스트(sub) 위 삽입선은 들여쓴 위치에서 시작 = '폴더 안'. 최상위 리스트는 기본(왼쪽 끝). */
 .pjv-side-navlist.sub.pjv-side-drop-before::before,
-.pjv-side-navlist.sub.pjv-side-drop-after::after { left: 26px; }
+.pjv-side-navlist.sub.pjv-side-drop-after::after { left: 24px; }
 /* 아웃덴트 — 폴더 안 리스트를 왼쪽으로 끌면(pjv-side-drop-outdent) 삽입선을 최상위 들여쓰기(왼쪽 끝)로 당기고,
    항목 왼쪽 끝에 파란 세로 가이드 + 옅은 파란 배경으로 '폴더 밖 최상위로 나감'을 명확히. */
 .pjv-side-navitem.pjv-side-drop-outdent::before,

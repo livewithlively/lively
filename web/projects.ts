@@ -790,8 +790,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
       const it = el('div', { class: 'pjv-side-navitem pjv-side-navlist' + (sub ? ' sub' : '') + (active ? ' active' : '') + (favListIds.has(list.id) ? ' is-fav' : ''), role: 'button', tabindex: '0', 'aria-pressed': String(active), ...(noDrag ? {} : { draggable: 'true' }) },
         pjvListGlyph(list), el('span', { class: 'pjv-side-navlabel', text: list.name }), catBadge,
         el('span', { class: 'pjv-side-navcount', text: String(grp ? visCount(grp.projects) : 0) }));
-      if (depth > 1) it.style.paddingLeft = `${8 + depth * 14}px`; // 중첩 폴더(#541) — sub 기본 들여쓰기 위에 깊이만큼 추가
-      it.style.setProperty('--pjv-guide-n', String(sub ? Math.max(depth, 1) : 0)); // 위계 세로선 개수(#1067) — 조상 수
+      pjvSideIndent(it, sub ? Math.max(depth, 1) : 0); // 들여쓰기 격자 + 위계 세로선(#1067) — 폴더·리스트 한 격자
       const go = (e) => { e.stopPropagation(); selectArea(key); };
       it.addEventListener('click', go);
       it.addEventListener('keydown', (e: any) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(e); } });
@@ -925,8 +924,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         : pjvBundleIcon(f.color || 'var(--muted-2)');
       const fit = el('div', { class: 'pjv-side-navitem pjv-side-navfolder' + (isSpace ? ' pjv-side-navspace' : '') + (sel === fkey ? ' active' : ''), role: 'button', tabindex: '0', draggable: 'true' },
         glyph, el('span', { class: 'pjv-side-navlabel', text: f.name }), caret);
-      if (depth > 0) fit.style.paddingLeft = `${8 + depth * 14}px`;
-      fit.style.setProperty('--pjv-guide-n', String(depth)); // 위계 세로선 개수(#1067)
+      pjvSideIndent(fit, depth); // 들여쓰기 격자 + 위계 세로선(#1067)
       fit.addEventListener('click', (e) => { e.stopPropagation(); if (!isFolderOpen(f.id)) pjvFolderOpen.set(f.id, true); selectArea(fkey); });
       const fmore = el('button', { class: 'pjv-side-navmore', type: 'button', title: '폴더 설정', 'aria-label': '폴더 설정', text: '⋯' });
       fmore.addEventListener('click', (e) => { e.stopPropagation(); const menu = el('div', { class: 'pjv-menu' }); const close = pjvPopover(fmore, menu); pjvFolderTreeMenu(menu, close, f, reload); });
@@ -994,8 +992,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
       const ic = d ? pjvStatusIcon(d.category, d.color, d.frac, 'sm') : pjvStatusIconStd(p.status, 'sm');
       const it = el('div', { class: 'pjv-side-navitem pjv-side-navproj' + (p.status === 'done' ? ' done' : ''), role: 'link', tabindex: '0', title: p.name },
         ic, el('span', { class: 'pjv-side-navlabel', text: p.name }));
-      it.style.paddingLeft = `${8 + Math.max(depth, 1) * 14 + 6}px`;
-      it.style.setProperty('--pjv-guide-n', String(Math.max(depth, 1))); // 위계 세로선 개수(#1067)
+      pjvSideIndent(it, Math.max(depth, 1), 6); // 격자 + 세로선(#1067). 검색 결과 행은 6px 더 안쪽(리스트의 자식)
       const go = (e) => { e.stopPropagation(); location.hash = '#/projects2/p/' + p.id; };
       it.addEventListener('click', go);
       it.addEventListener('keydown', (e: any) => { if (e.key === 'Enter') { e.preventDefault(); go(e); } });
@@ -1614,6 +1611,15 @@ function pjvReorderFolders(orderedIds, reload) {
   api('/api/ui/v6/project-folders-reorder', { method: 'POST', body: JSON.stringify({ ids: orderedIds }) })
     .then(() => { if (reload) reload(); })
     .catch((e) => toast('폴더 순서 저장 실패 — ' + e.message, true));
+}
+// 사이드바 들여쓰기 격자(#1067) — 스페이스·폴더·리스트·검색결과가 **한 격자**를 쓴다(예전엔 폴더 14px 계단 +
+//  리스트 .sub 30px 특례로 단이 어긋나 위계 세로선이 격자처럼 어색했다). 깊이 d → 왼쪽 여백 PJV_SIDE_PAD + d*PJV_SIDE_STEP.
+//  같은 값으로 세로선 개수(--pjv-guide-n = 조상 수)도 실어 CSS 가 선을 긋는다(선 x = 부모 아이콘 중심).
+const PJV_SIDE_PAD = 10;   // 깊이 0 항목의 왼쪽 여백(= .pjv-side-navitem 기본 padding)
+const PJV_SIDE_STEP = 18;  // 한 단 들여쓰기 — 선(부모 아이콘 중심 19px)과 자식 아이콘 사이에 9px 숨통
+function pjvSideIndent(elm, depth, extra = 0) {
+  if (depth > 0 || extra) elm.style.paddingLeft = `${PJV_SIDE_PAD + depth * PJV_SIDE_STEP + extra}px`;
+  elm.style.setProperty('--pjv-guide-n', String(depth));
 }
 // 스페이스 판정(#766) — 커넥터 미러(external_id 'space:…', #541) 또는 네이티브(settings.kind==='space'). 백엔드 folderIsSpace 와 동형.
 function pjvFolderIsSpace(f): boolean {
