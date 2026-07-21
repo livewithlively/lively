@@ -156,11 +156,16 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
 
   app.get("/api/ui/terminal/sessions", auth, wrap(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
-    // 프로젝트 폴더 세션은 '프로젝트 공동 세션' — 터미널 탭에선 숨기고 프로젝트 페이지에서만 관리(팀원 전용).
+    // 프로젝트 폴더 세션은 '프로젝트 공동 세션'. 기본은 숨긴다 — 이 응답을 '내 세션'으로 쓰는 소비자
+    //  (대시보드 '내 AI 세션' 위젯 등)가 남의 세션까지 떠안지 않도록. includeProjects=1 을 준 호출자
+    //  (AI세션 탭)만 프로젝트 세션을 함께 받는다: 프로젝트 세션은 #452 로 로그인한 전원 공개라
+    //  listSessions 가 이미 소유·초대 필터를 건너뛰고 전부 돌려준다(여기서 더 좁히지 않는다).
+    const includeProjects = req.query.includeProjects === "1" || req.query.includeProjects === "true";
     const all = await listSessions(userOf(req));
     // 분산 노드(#869) — 원격 노드 세션 병합(node 필드로 구분). 가시성은 개인 세션 규칙(소유자+초대)로 게이트웨이가 판정.
     const remote = nodeSessionsFor(idOf(userOf(req)));
-    res.json({ sessions: [...all.filter((s) => !isProjectSessionDir(s.dir)), ...remote] });
+    const local = includeProjects ? all : all.filter((s) => !isProjectSessionDir(s.dir));
+    res.json({ sessions: [...local, ...remote] });
   }));
   // 단일 세션의 현재 이름 — 단독 터미널 페이지가 id 로 조회(프로젝트 세션은 목록에서 빠져 ?label= 폴백만 됐던 문제 해결).
   //  접근통제: canAttach(소유자·초대된 멤버, 프로젝트 세션은 전원 #452) — 입장 가능한 사람만 이름을 읽는다.
