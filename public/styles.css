@@ -403,6 +403,8 @@ label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; fo
 .unit-body-raw { margin-top: 0; }
 details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; color: var(--muted-head); margin-top: 20px; }
 .fields-table { margin-top: 8px; font-size: 12.5px; color: var(--ink-sub); border-collapse: collapse; }
+/* th 스타일이 없어 브라우저 기본(가운데·굵게)이 먹으면 헤더가 좌측정렬 내용과 어긋난다 → 열 라벨답게 좌측·muted 로 맞춤(#req) */
+.fields-table th { text-align: left; font-weight: 700; color: var(--muted-2); font-size: 11px; padding: 0 14px 7px 0; white-space: nowrap; }
 .fields-table td { padding: 3px 14px 3px 0; vertical-align: top; word-break: break-all; }
 .fields-table td:first-child { font-weight: 700; color: var(--muted-head); white-space: nowrap; }
 
@@ -578,6 +580,8 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 }
 .seg-tabs button:hover { color: var(--ink); }
 .seg-tabs button.on { color: var(--ink); border-bottom-color: var(--blue); } /* 화면당 1곳 채색 슬롯 */
+/* 탭 내용 — 구획(카드)들이 여백 없이 붙지 않게 세로 간격(구성원·AI 도구·스킬훅·자동화·감사 등 segTabs 본문 공통) */
+.seg-body { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
 
 /* 필터 탭(전체/확인 필요/이슈) — 무채 텍스트 토글 */
 .dm-filters { display: flex; gap: 4px; margin: 12px 0 0; }
@@ -789,6 +793,8 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 
 /* '이게 뭐예요?' 트리거 — 제목 옆에 밋밋한(덜 활성화) 회색 텍스트. 클릭 시 팝업으로 설명 노출 */
 .section-title { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
+/* 제목 블록 아래 일관 여백 — 설명 유무와 무관하게 제목→내용 간격을 맞춘다(설명 없으면 0px로 붙던 것 통일). hint(mb:12)와는 margin collapse → 12px. */
+.admin-sechead { margin-bottom: 12px; }
 .field-label-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px; }
 .field-label-row .field-label { margin-bottom: 0; }
 .meaning-trigger { display: inline-flex; align-items: center; gap: 4px; background: none; border: none; padding: 0; cursor: pointer; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: -0.2px; }
@@ -1136,6 +1142,8 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .admin-subhead { font-size: 15px; font-weight: 800; color: var(--ink); margin: 18px 0 6px; }
 /* 카드 첫 요소면 상단 여백은 카드 패딩이 맡는다 — 헤더(h2) 카드와 서브카드(h3) 상단 여백을 통일(#762). */
 .card > .admin-subhead:first-child { margin-top: 0; }
+/* 섹션 그룹 — 바깥 카드 없이 제목(subhead) + 구획 카드들을 묶는다(박스-속-박스 방지). 섹션 간격은 자체 margin-top. */
+.admin-section > .admin-subhead:first-child { margin-top: 0; }
 /* 토글 칩(git 인증 팝업 SSH/HTTPS 등) — 무스타일(브라우저 기본) 교체(#762). */
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { font: inherit; font-size: 12.5px; font-weight: 600; padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink-sub); cursor: pointer; transition: border-color .12s, color .12s, background .12s; }
@@ -7285,9 +7293,9 @@ a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; fo
 .md-fig-arline { display: inline-flex; align-items: center; width: 100%; min-width: 38px; height: 0;
   border-top: 2px solid var(--muted-2, #a6b2c8); position: relative; }
 /* 화살촉 — 폰트 독립 CSS 삼각형(선 중심 정렬). 옛 ▸ 글리프+top:-0.72em 은 폰트 메트릭 따라 선 아래로 처졌다(#1013). */
-.md-fig-arhead { position: absolute; right: -1px; top: 50%; transform: translateY(-50%);
+.md-fig-arhead { position: absolute; right: -5px; top: 50%; transform: translateY(-50%);
   width: 0; height: 0; font-size: 0; line-height: 0; color: var(--muted-2, #a6b2c8);
-  border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 8px solid currentColor; }
+  border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 9px solid currentColor; }
 /* 화살표 의미색 — 도메인맵 범례와 동일(ok=일치·긍정 파랑 / viol=빨강 / should=주황 점선 / pend=회색 점선 / x=차단) */
 .md-fig-ar.is-ok .md-fig-arline { border-top-color: var(--blue); } .md-fig-ar.is-ok .md-fig-arhead { color: var(--blue); }
 .md-fig-ar.is-viol .md-fig-arline { border-top-color: #b0503f; } .md-fig-ar.is-viol .md-fig-arhead { color: #b0503f; }

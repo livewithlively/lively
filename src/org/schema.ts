@@ -551,6 +551,15 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS hook_grace_ms BIGINT DEFAULT NULL;
   `);
 
+  // ── org_runtime_config 확장: embedding_backfill_paused — 자동 임베딩 백필 스윕 일시중지(#1060). ──
+  //  자동 백필(부팅 30초·10분 주기·connector_sync 완료 후·쓰기 nudge)은 느린/CPU 임베딩 백엔드에서 게이트웨이 성능을
+  //  갉아먹을 수 있는데 종전엔 멈출 창구가 없었다. 이 플래그가 true 면 runAutoBackfillSweep 이 즉시 return(4개 트리거 전부
+  //  차단) + 실행 중 잡은 shouldStop 으로 협조적 중단. **DB 영속** — 재시작에도 유지되어 부팅 스윕이 이 상태를 존중한다
+  //  (성능 때문에 껐는데 재부팅으로 되살아나면 안 된다). 기본 false=평소대로 자동 백필. 관리탭 ▸ 의미 검색 에서 사람이 토글.
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS embedding_backfill_paused BOOLEAN NOT NULL DEFAULT false;
+  `);
+
   // ── org_hook 확장: health — 멤버별 마지막 훅 실행 실패 기록(#892 결함 C). ──
   // { "<member_id>": { at, reason, exit_code, stderr } } — 멤버 수로 자연히 유계라 별도 테이블·정리 불요.
   // 종전엔 훅이 죽어도 러너가 크래시를 삼켜(stdout "") '죽음'과 '결정 없음'이 구분 불가였고, 그래서 spec-blind
@@ -774,7 +783,7 @@ export async function initOrgSchema(): Promise<void> {
       -- action allowlist — 확장 시 DROP+ADD(IF NOT EXISTS 만으론 라이브 제약이 안 바뀜).
       ALTER TABLE org_cron DROP CONSTRAINT IF EXISTS org_cron_action_chk;
       ALTER TABLE org_cron ADD CONSTRAINT org_cron_action_chk
-        CHECK (action IN ('refresh_all','refresh_repo','refresh_bases','connector_sync','connector_push','wiki_push','eval_domain_debt','map_unmapped','classify_knowledge','bootstrap_is','distill_sources','agent_inject','ensure_managed_sessions','wikilink_sweep','preview_reconcile'));
+        CHECK (action IN ('refresh_all','refresh_repo','refresh_bases','connector_sync','connector_push','wiki_push','eval_domain_debt','map_unmapped','map_unmapped_headless','classify_knowledge','classify_knowledge_headless','bootstrap_is','distill_sources','agent_inject','agent_headless','ensure_managed_sessions','wikilink_sweep','preview_reconcile'));
     END $$;
     -- cron_expr(절대 벽시계 스케줄, 5필드). NULL=interval_sec 상대 모드. 기존 테이블 비파괴 추가.
     ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS cron_expr TEXT;
@@ -877,6 +886,36 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_preview_env ADD COLUMN IF NOT EXISTS base_ref TEXT;
     ALTER TABLE org_preview_env ADD COLUMN IF NOT EXISTS merge_trigger TEXT NOT NULL DEFAULT 'manual';
     ALTER TABLE org_preview_env ADD COLUMN IF NOT EXISTS merge_status JSONB NOT NULL DEFAULT '{}'::jsonb;
+    ALTER TABLE org_preview_env ADD COLUMN IF NOT EXISTS port INT;          -- throwaway: 할당된 백엔드 포트
+    ALTER TABLE org_preview_env ADD COLUMN IF NOT EXISTS pid INT;           -- throwaway: 백엔드 프로세스 PID
+    ALTER TABLE org_preview_env ADD COLUMN IF NOT EXISTS stack_profile TEXT; -- 어떻게 띄우나(org_stack_profile.id) — throwaway 필수
+  `);
+  // #1036 3단계 — org_stack_profile: '어떻게 띄우나'(start_cmd·포트env·env·헬스체크)를 데이터로. throwaway backing 프로세스가 참조.
+  //  비개발자는 프리셋을 드롭다운으로 고르기만(제로 입력 회피). Heroku Procfile / devcontainer.json / .gitpod.yml 모델.
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_stack_profile(
+      id TEXT PRIMARY KEY,
+      label TEXT,
+      repo TEXT,
+      static_only BOOLEAN NOT NULL DEFAULT false,
+      start_cmd TEXT,
+      port_env TEXT NOT NULL DEFAULT 'PORT',
+      env_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      healthcheck_path TEXT,
+      note TEXT,
+      sort INT NOT NULL DEFAULT 0,
+      version INT NOT NULL DEFAULT 1,
+      created_by TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
+  `);
+  await itemsPool.query(`
+    INSERT INTO org_stack_profile(id,label,repo,static_only,start_cmd,port_env,env_json,healthcheck_path,note) VALUES
+      ('co-frontend','context-ontology 프론트 (정적·shared-proxy)','context-ontology',true,NULL,'PORT','{}'::jsonb,'/',
+       '프론트(public/)만 서빙 — /api 는 게이트웨이 자신. 별도 프로세스·포트 없음(가장 싸고 안전).'),
+      ('co-fullstack','context-ontology 풀스택 (throwaway 게이트웨이)','context-ontology',false,'node dist/index.js','PORT','{"LIVELY_NO_SCHEDULER":"1"}'::jsonb,'/healthz',
+       '자체 게이트웨이 프로세스를 워크트리에서 기동 — 백엔드 변경까지 격리 확인. dist 빌드 선행, DB 등 backing 은 env 로 지정(라이브 DB 쓰기 금지).')
+    ON CONFLICT (id) DO NOTHING;
   `);
 
   // ── org_node — 분산 노드 레지스트리(#869). 멤버 PC(member)/워커(worker)에 도는 노드 에이전트의 desired state. ──

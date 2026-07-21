@@ -29,6 +29,17 @@ const HOME = process.env.LIVELY_HOME || homedir();
 const LIVELY = join(HOME, ".lively");
 // 캐시 유효기간(grace)은 상수가 아니라 hooks-config.json 의 hook_grace_ms 에서 매번 읽는다(graceMs()) — 기본 무제한(#1008).
 const FETCH_MS = 3000;
+// SessionEnd 는 하네스가 이 훅을 AbortSignal.timeout(i) 로 끊는다 — Claude Code 2.1.215 실측:
+//  i = getSessionEndHookTimeoutMs() = max(1500, min(settings엔트리.timeout*1000, 60000)). 러너 엔트리에 timeout 이
+//  없으면 1500ms 바닥값. 오프라인(원격 게이트웨이 unreachable)이면 fetchHooks 가 FETCH_MS(3000ms) 블랙홀에 매달려
+//  1500ms 를 넘기고, 하네스가 종료하며 러너를 통째로 abort → "SessionEnd hook […] failed: Hook cancelled"(#1039/#1043).
+//  (로컬 미기동=ECONNREFUSED 는 ~20ms 즉시실패라 안 터지고 원격 unreachable 만 3초 매달려 터진다 — 실측.)
+//  #1043 은 settings 엔트리에 timeout:10 을 줘 바닥을 10s 로 올려 abort 를 막고, 여기서는 SessionEnd 의 블로킹 예산
+//  자체를 바닥 밑으로 줄인다 — 오프라인 세션종료가 3초 매달리지 않고 ~0.8s 에 캐시 폴백 후 exit 0(빠른 종료). 둘은
+//  상보적이다(floor 상향 + 러너 자체 단축). SessionEnd stdout 은 미소비(부수효과 전용)라 예산 축소로 잃는 기능 없음.
+const SESSIONEND = EVENT === "SessionEnd";
+const FETCH_MS_SESSIONEND = 800;   // 오프라인 fetch 상한(뒤엔 캐시 폴백). 온라인 정상 fetch(로컬~ms·원격 보통<0.5s)는 이 안.
+const STDIN_MS_SESSIONEND = 200;   // stdin 은 하네스가 즉시 닫아 몇 ms 로 끝나지만 hang-guard 도 바닥 밑으로.
 const REPORT_MS = 1500;   // 훅 실패 보고(fire-and-forget) 상한 — 세션을 절대 기다리게 하지 않는다.
 const REPORT_THROTTLE_MS = 10 * 60 * 1000; // 같은 훅 실패 재보고 최소 간격(툴콜마다 왕복하지 않기 위해).
 const STDERR_KEEP = 800;  // 보고에 싣는 stderr 꼬리 길이(진단엔 충분, 페이로드는 작게).
@@ -74,7 +85,7 @@ function readStdin(ms = 800) {
 async function fetchHooks() {
   if (!TOKEN) return null;
   const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), FETCH_MS);
+  const t = setTimeout(() => ctl.abort(), SESSIONEND ? FETCH_MS_SESSIONEND : FETCH_MS);
   try {
     const url = `${GW}/api/ui/org/runner/hooks?harness=${encodeURIComponent(HARNESS || "")}&event=${encodeURIComponent(EVENT)}`;
     const res = await fetch(url, { signal: ctl.signal, headers: { authorization: `Bearer ${TOKEN}` } });
@@ -329,7 +340,7 @@ function mergePreToolUse(outputs, relay) {
 
 async function main() {
   if (!EVENT) return;
-  const stdin = await readStdin();
+  const stdin = await readStdin(SESSIONEND ? STDIN_MS_SESSIONEND : undefined);
   let toolName = "";
   try { const o = JSON.parse(stdin || "{}"); toolName = o.tool_name || o.toolName || ""; } catch { /* */ }
 
