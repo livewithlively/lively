@@ -72,12 +72,15 @@ const winArg = (s) => {
   if (v && !/[\s"^&|<>()%!]/.test(v)) return v;
   return '"' + v.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, "$1$1") + '"';
 };
-function run(cmd, args, { allowFail = false, quiet = false, env } = {}) {
+// timeout(ms) 를 주면 spawnSync 가 그 시간 뒤 killSignal(SIGKILL)로 자식을 죽인다 — 외부 CLI(claude 등)가
+//  네트워크에 매달려 `lively status` 를 무한정 hang 시키지 않게 하는 하드 백스톱(#1043). 미지정이면 종전대로 무제한.
+function run(cmd, args, { allowFail = false, quiet = false, env, timeout } = {}) {
   const r = spawnSync(cmd, WIN ? args.map(winArg) : args, {
     stdio: quiet ? ["ignore", "pipe", "pipe"] : "inherit",
     env: { ...process.env, ...(env || {}) },
     encoding: "utf8",
     shell: WIN,
+    ...(timeout ? { timeout, killSignal: "SIGKILL" } : {}),
   });
   if (r.error && !allowFail) throw r.error;
   if (r.status !== 0 && !allowFail) {
@@ -986,7 +989,11 @@ async function gatherStatus() {
   try { st.harness.codex.wired = readFileSync(CODEX_CFG, "utf8").includes("lively-managed"); } catch { /* */ }
   try { st.hooks.installed = readdirSync(join(LIVELY, "hooks")).filter((f) => REQUIRED_HOOKS.includes(f)).length; } catch { /* */ }
   if (st.harness.claude.installed) {
-    const r = run("claude", ["mcp", "list"], { allowFail: true, quiet: true });
+    // ⚠ `claude mcp list` 는 등록된 MCP 서버를 **헬스체크(=연결)** 한다. lively(http) 서버가 게이트웨이에 못 붙으면
+    //  (게이트웨이 미도달) 그 연결이 무한정 매달려 `lively status` 전체가 hang 된다 — #1043 실측: MCP_TIMEOUT 없으면
+    //  10초+ 후에도 안 끝나 SIGKILL. MCP_TIMEOUT 으로 서버별 헬스체크를 bound 하면 다운 서버는 ~3s 뒤 ✘ 로 완료되고,
+    //  spawnSync timeout 은 그마저 안 먹힐 때의 하드 백스톱이다. 등록 여부(이름 매칭)는 헬스체크 성패와 무관하게 출력에 남는다.
+    const r = run("claude", ["mcp", "list"], { allowFail: true, quiet: true, timeout: 8000, env: { MCP_TIMEOUT: "3000" } });
     st.harness.claude.mcp = /(^|\s)lively\b/m.test(r.out + r.err);
   }
   if (!gw) { st.gateway.error = "게이트웨이 미설정"; return st; }
@@ -1013,7 +1020,7 @@ async function gatherStatus() {
 //  ⚠ 이 섹션의 진짜 값어치 = **sync 모드를 사람 눈에 보이게 하는 것**(#905 P1-②). 마커의 sync 는 "이 폴더에
 //   서버 공유파일을 써도 되는가"를 정하는데, 지금까지 그걸 볼 수 있는 표면이 **어디에도 없었다**. 안 보이는 게이트는
 //   틀렸을 때 아무도 모른다.
-async function gatherProjectStatus(cwd) {
+async function gatherProjectStatus(cwd, reachable = true) {
   const { findProjectMarkerUp, markerSyncMode } = await import(new URL("./repo-worktree-core.mjs", import.meta.url));
   const found = findProjectMarkerUp(cwd);
   if (!found) return null;
@@ -1026,6 +1033,10 @@ async function gatherProjectStatus(cwd) {
     shared: null,                                // {server_newest, server_count, pending, truncated} — 조회 실패 시 null
     error: null,
   };
+  // ⚠ 게이트웨이가 이미 '미도달'로 판정났으면 서버 왕복(프로젝트명·매니페스트)은 똑같이 타임아웃만 쌓는다(#1043 —
+  //  미도달 시 8초짜리 futile 호출 2회가 status 를 20초+로 늘렸다). 도달을 아는 마당에 다시 찔러보지 않고 로컬 마커만 렌더.
+  if (!reachable) { p.error = "게이트웨이 미도달"; }
+  else {
   try { p.name = (await api(`/api/ui/v6/projects/${p.id}`, { timeoutMs: 8000 }))?.project?.name ?? null; }
   catch (e) { p.error = e.message; }
   // 공유폴더 상태 — sync 가 none 이면 애초에 안 받으므로 조회하지 않는다(불필요한 왕복 + 오해 소지).
@@ -1043,6 +1054,7 @@ async function gatherProjectStatus(cwd) {
       p.shared = { server_newest: m.newest || 0, server_count: typeof m.count === "number" ? m.count : files.length, pending, truncated: !!m.truncated };
     } catch (e) { p.error = p.error || e.message; }
   }
+  } // end else(reachable) — 위 두 서버 왕복은 게이트웨이 도달 시에만
   // up-sync 결과(#905 C3) — 자동 up 은 확인할 사람이 없어(수동 업로드의 #877 confirm 과 다름) **기록이 유일한 표면**이다.
   //  충돌이 조용히 쌓이면 "왜 내 변경이 안 올라갔지"를 아무도 모른다. host-local(dotfile — 동기화 안 됨).
   try { p.up = JSON.parse(readFileSync(join(p.dir, ".lively", "sync-up.json"), "utf8")); } catch { p.up = null; }
@@ -1099,7 +1111,7 @@ function renderProjectStatus(p) {
 
 async function cmdStatus(opts) {
   const st = await gatherStatus();
-  st.project = await gatherProjectStatus(process.cwd()).catch(() => null); // 프로젝트 섹션은 부가 — 실패해도 status 는 유효
+  st.project = await gatherProjectStatus(process.cwd(), st.gateway.reachable).catch(() => null); // 프로젝트 섹션은 부가 — 실패해도 status 는 유효(미도달이면 서버 왕복 스킵, #1043)
   if (opts.json) { process.stdout.write(JSON.stringify(st, null, 2) + "\n"); return; }
   const mark = (b) => (b ? green("✓") : dim("–"));
   say(`\n${bold("라이블리")} ${dim("CLI " + st.cli)}\n`);

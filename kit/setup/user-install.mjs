@@ -85,12 +85,20 @@ function userLevelHooksBlock() {
 
 // 커스텀 훅 런너 — 이벤트당 고정 엔트리(런너가 런타임에 fetch·실행). 커스텀 훅 추가/삭제는 settings 재작성 불요.
 function runnerHooksBlock() {
-  const entry = (event, matcher) => matcher
-    ? { matcher, hooks: [{ type: "command", command: hookCmdRunner(event) }] }
-    : { hooks: [{ type: "command", command: hookCmdRunner(event) }] };
+  const entry = (event, matcher, timeout) => {
+    const hook = { type: "command", command: hookCmdRunner(event) };
+    if (timeout) hook.timeout = timeout;   // 초 단위(하네스 계약). 대부분 이벤트는 미지정=하네스 기본(60s)이면 충분.
+    return matcher ? { matcher, hooks: [hook] } : { hooks: [hook] };
+  };
   return {
     SessionStart: [entry("SessionStart", "startup|resume|clear")],
-    SessionEnd: [entry("SessionEnd")],
+    // ⚠ SessionEnd 만 명시 timeout — 종료(shutdown) 경로라 Claude Code 는 `timeout` 미선언 시 **floor 1500ms** 만 준다
+    //  (claude 2.1.x getSessionEndHookTimeoutMs: env CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS 없으면 max(1500, 설정훅 timeout)).
+    //  run-custom 은 SessionEnd 에서 게이트웨이 fetch(org 훅 조회)를 하는데 **원격 게이트웨이면 그 왕복이 1500ms 를 넘겨**
+    //  AbortSignal 로 잘리고 "SessionEnd hook … failed: Hook cancelled" 워닝이 뜬다(#1043). 명시 timeout 을 주면 그 값
+    //  (×1000ms, ≤60s ceiling)으로 상향된다. run-custom 은 자체 상한(fetch 3s·훅 SIGKILL·항상 process.exit)이 있어
+    //  실제로는 대개 <200ms 에 끝나므로 이 값을 키워도 종료가 느려지지 않는다(hang 방지가 아니라 조기 abort 방지가 목적).
+    SessionEnd: [entry("SessionEnd", null, 10)],
     UserPromptSubmit: [entry("UserPromptSubmit")],
     PreToolUse: [entry("PreToolUse", ".*")],
     PostToolUse: [entry("PostToolUse", ".*")],
@@ -169,23 +177,20 @@ function safeMergeUserSettings(blockHooks) {
     let arr = Array.isArray(cur.hooks[event]) ? cur.hooks[event] : [];
     for (const entry of entries) {
       const matcher = entry.matcher ?? null;
-      const cmds = new Set(entry.hooks.map((h) => h.command));
       const ids = new Set(entry.hooks.map((h) => kitHookId(h.command)).filter(Boolean));
-      // 구표기 회수 — 같은 (정체성, matcher)인데 command 표기만 다른 lively 항목 제거(아래에서 최신형이 자리를 차지).
+      // 회수 — 같은 (정체성, matcher)의 lively 항목을 **전문(command·timeout 등)이 최신과 다르면** 걷어내고
+      //  아래에서 최신형으로 교체한다. 종전엔 command **문자열**이 다를 때만 회수했는데(구표기 전용), 그러면
+      //  command 는 그대로고 timeout 만 바뀐 변경(#1043 — SessionEnd 조기 abort 방지용 timeout 추가)이 이미
+      //  설치된 멤버에게 영영 반영되지 않았다(같은 command → dup 로 스킵). 전문 비교로 넓힌다(멱등: 동일하면 유지).
       arr = arr.filter((e) => {
-        if (!same(e.matcher ?? null, matcher)) return true;
+        if (!same(e.matcher ?? null, matcher)) return true;              // matcher 다르면 사용자 항목 — 불변(테스트 ⑤)
         const hs = e.hooks ?? [];
         if (!hs.length) return true;
-        const stale = hs.every((h) => {
-          const id = kitHookId(h.command);
-          return id && ids.has(id) && !cmds.has(h.command);
-        });
-        return !stale;
+        const isKitEntry = hs.every((h) => { const id = kitHookId(h.command); return id && ids.has(id); });
+        if (!isKitEntry) return true;                                    // 우리 훅 아님(사용자 tmux 등)·정체성 불일치 — 보존
+        return same(e, entry);                                           // 우리 훅: 최신과 동일할 때만 유지, 다르면 회수
       });
-      const dup = arr.some(
-        (e) => (e.hooks ?? []).some((h) => cmds.has(h.command)) && same(e.matcher ?? null, matcher),
-      );
-      if (!dup) arr.push(entry);
+      if (!arr.some((e) => same(e, entry))) arr.push(entry);             // 동일본 없으면 최신형 배치
     }
     cur.hooks[event] = arr;
   }
