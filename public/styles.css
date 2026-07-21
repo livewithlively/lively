@@ -1638,9 +1638,7 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 /* 상태칩(=카운트 요약) + 우측 프로젝트필터/선택토글 */
 .tsess-controls { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 14px; }
 .tsess-controls-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.tsess-filter-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.tsess-filter-lbl { font-size: 11.5px; font-weight: 700; color: var(--ink-note); margin-left: 6px; }
-.tsess-filter-row > .tsess-filter-lbl:first-child { margin-left: 0; }
+/* (구 '소유' 필터 줄 .tsess-filter-row/-lbl 제거 — 필터를 목적별 뷰 한 줄로 합치면서 사라졌다, #1062) */
 .tsess-projfilter { position: relative; display: inline-flex; }
 .tsess-projfilter-btn { display: inline-flex; align-items: center; gap: 6px; font-family: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; cursor: pointer; max-width: 220px; }
 .tsess-projfilter-btn:hover { border-color: var(--muted-2); }
@@ -1669,11 +1667,10 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .tsess-card.tsess-busy { border-left-color: #f59e0b; }
 .tsess-card.tsess-waiting { border-left-color: var(--coral, #e5484d); }
 .tsess-card.tsess-idle { border-left-color: var(--mint-deep); }
-.tsess-card.tsess-offline { border-left-color: var(--muted-2); background: var(--bg); }
+.tsess-card.tsess-offline, .tsess-card.tsess-exited { border-left-color: var(--muted-2); background: var(--bg); }
 .tsess-card.attached { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mint-deep) 22%, transparent); }
-.tsess-card--sel { cursor: pointer; }
-.tsess-check { flex: none; display: flex; align-items: center; }
-.tsess-check input { width: 16px; height: 16px; cursor: pointer; margin: 0; }
+/* 구 선택 UI(카드 전체를 label 로 감싸고 span.tsess-check 안에 체크박스) 잔재 제거 —
+   이제 대시보드 '내 AI 세션'과 같은 슬라이드-인 체크박스를 쓴다(#1062, 규칙은 .dash-sess-checkwrap 쪽에 한 벌). */
 
 .tsess-info { flex: 1; min-width: 0; }
 .tsess-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 5px; min-width: 0; }
@@ -1684,6 +1681,10 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .tsess-dot-waiting { background: var(--coral, #e5484d); box-shadow: 0 0 0 3px color-mix(in srgb, var(--coral, #e5484d) 22%, transparent); }
 .tsess-dot-idle { background: var(--mint-deep); }
 .tsess-dot-offline { background: var(--muted-2); }
+/* #1015 E — '종료됨'(하네스 끝남)과 '연결 끊김'(원격 노드 미연결)은 성격이 달라 점도 구분한다:
+   종료됨 = 속 빈 회색 점(끝난 것) · 연결 끊김 = 점선 테두리(닿지 못하는 것). 살아있는 상태색(민트·주황·코랄)은 그대로. */
+.tsess-dot-exited { background: transparent; box-shadow: inset 0 0 0 2px var(--muted-2); }
+.tsess-dot-offline { background: transparent; box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--coral, #e5484d) 45%, var(--muted-2)); }
 .tsess-proj { display: inline-flex; align-items: center; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; font-weight: 700; color: var(--blue); background: var(--bg-punch); border: 1px solid color-mix(in srgb, var(--blue) 28%, var(--bg)); border-radius: 999px; padding: 2px 9px; }
 .tsess-proj.mine { color: var(--accent, #5b6cff); border-color: color-mix(in srgb, var(--accent, #5b6cff) 42%, var(--bg)); background: color-mix(in srgb, var(--accent, #5b6cff) 9%, transparent); }
 .tsess-badge { flex: none; font-size: 11px; font-weight: 700; color: var(--ink-sub); background: var(--bg-tint-2); border: 1px solid var(--line); border-radius: 999px; padding: 1.5px 8px; white-space: nowrap; }
@@ -3549,33 +3550,46 @@ body.pjv-side-resizing { cursor: col-resize; user-select: none; -webkit-user-sel
 .pjv-side-navproj-more { padding: 2px 10px 6px; font-size: 12px; color: var(--muted-2); }
 /* 사이드바를 열었을 때만 보이는 안내(#456 재작성). */
 .pjv-side-nav-hint { padding: 0 8px 11px; margin-top: 3px; font-size: 12px; line-height: 1.5; color: var(--ink-sub); }
-.pjv-side-collapse { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 11px; border-radius: 6px; padding: 0; }
+.pjv-side-collapse { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 15px; line-height: 1; border-radius: 6px; padding: 0 0 2px; }
 .pjv-side-collapse:hover { background: var(--bg-tint-2); color: var(--ink); }
-/* 헤더 줄 아이콘(#1067, 클릭업 파리티) — [🔍 검색] [＋ 새로 만들기] [◀ 접기]. 사이드바에 마우스를 올리면 나타난다
-   (평소엔 트리만 조용히 보이고, 필요할 때만 도구가 드러나는 클릭업 방식). 키보드 포커스·검색 열린 상태에서도 노출. */
+/* 헤더 줄 도구(#1067, 클릭업 파리티) — 두 부류로 나뉜다.
+   ① [🔍 검색] [◀ 접기] = 무지 아이콘, **호버로 드러난다**(평소엔 라벨만 조용히). 키보드 포커스·검색 열림에도 노출.
+   ② [＋ ⌄ 새로 만들기] = **항상 보이는 흰 알약**(테두리 + 얕은 그림자) — 클릭업도 이것만 상시 노출한다. */
 .pjv-side-head-btns { flex: none; display: inline-flex; align-items: center; gap: 1px; }
 .pjv-side-head-btn { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 1px; height: 22px; min-width: 22px; padding: 0 3px; border: none; background: none; cursor: pointer; color: var(--muted-2); border-radius: 6px; font-size: 12px; }
 .pjv-side-head-btn:hover { background: var(--bg-tint-2); color: var(--ink); }
 .pjv-side-head-btn.active { color: var(--blue); }
 .pjv-side-head-btn .pjv-side-search-ic { width: 14px; height: 14px; }
-.pjv-side-head-btn .pjv-view-btn-caret { margin-left: 0; }
 .pjv-side-head-btn, .pjv-side-collapse { opacity: 0; transition: opacity .12s ease, background .12s ease, color .12s ease; }
 .pjv-side-nav:hover .pjv-side-head-btn, .pjv-side-nav:hover .pjv-side-collapse,
 .pjv-side-nav-inner:focus-within .pjv-side-head-btn, .pjv-side-nav-inner:focus-within .pjv-side-collapse,
 .pjv-side-head-btn.active { opacity: 1; }
 /* 터치·펜 등 호버가 없는 환경에선 늘 보이게(호버 노출은 마우스 전제). */
 @media (hover: none) { .pjv-side-head-btn, .pjv-side-collapse { opacity: 1; } }
+/* ＋ 알약 — 상시 노출이라 호버 페이드 규칙에서 제외(위 셀렉터에 안 걸리게 클래스도 따로 쓴다). */
+.pjv-side-head-add { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 1px; height: 26px; padding: 0 4px 0 6px; margin-left: 3px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--bg); cursor: pointer; color: var(--ink);
+  box-shadow: 0 1px 2px rgba(20, 35, 59, .07); transition: background .12s ease, border-color .12s ease, box-shadow .12s ease; }
+.pjv-side-head-add:hover { background: var(--bg-tint); border-color: var(--line-strong, var(--muted-3, #c7cdd8)); box-shadow: 0 1px 3px rgba(20, 35, 59, .12); }
+.pjv-side-head-add:active { background: var(--bg-tint-2); box-shadow: none; }
+.pjv-side-head-add svg:last-child { color: var(--muted-2); }
 .pjv-side-navitem { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; border: none; background: none; cursor: pointer; padding: 7px 10px; border-radius: 7px; font-size: 14px; font-weight: 600; color: var(--ink-sub); }
-/* 위계 세로선(#1067, 클릭업 파리티) — 항목의 깊이만큼 왼쪽에 얇은 세로선을 그어 '같은 위계'가 눈에 보이게.
+/* 위계 세로선(#1067, 클릭업 파리티) — 항목의 깊이만큼 왼쪽에 **헤어라인**을 그어 '같은 위계'가 눈에 보이게.
    트리는 중첩 DOM 이 아니라 평평한 목록(항목마다 padding-left 로 깊이 표현)이라, 조상 박스 테두리 대신
-   항목 자신의 배경 그라디언트로 긋는다: --pjv-guide-n = 조상 수, 선 x = 19 + k*14(부모 아이콘 중심선).
-   ⚠ 그래서 항목 배경색은 shorthand(background) 대신 background-color 로만 칠한다 — shorthand 는 이 선을 지운다.
+   항목 자신의 배경 그라디언트로 긋는다: --pjv-guide-n = 조상 수, 선 x = 19 + k*18(부모 아이콘 중심선).
+   격자(18px)는 JS 의 PJV_SIDE_STEP 과 **반드시 같은 값** — 어긋나면 선이 아이콘을 스치며 격자처럼 어색해진다
+   (실제로 14px 계단 + 리스트 .sub 30px 특례가 뒤섞여 그렇게 보였고, 한 격자로 통일해 고쳤다).
+   색은 본문 구분선보다 더 옅게(면이 아니라 '실'로 읽히게) — 짙으면 표처럼 보인다.
+   ⚠ 항목 배경색은 shorthand(background) 대신 background-color 로만 칠한다 — shorthand 는 이 선을 지운다.
    트리 gap 이 0 인 것도 이 때문(항목 사이가 벌어지면 선이 끊긴다). */
 .pjv-side-navitem, .pjv-side-navproj-more {
-  background-image: repeating-linear-gradient(to right, var(--line-soft, #e6e9ef) 0 1px, transparent 1px 14px);
+  --pjv-guide-color: color-mix(in srgb, var(--line, #dfe4ec) 55%, transparent);
+  background-image: repeating-linear-gradient(to right, var(--pjv-guide-color) 0 1px, transparent 1px 18px);
   background-repeat: no-repeat; background-position: 19px 0;
-  background-size: calc(var(--pjv-guide-n, 0) * 14px) 100%;
+  background-size: calc(var(--pjv-guide-n, 0) * 18px) 100%;
 }
+/* 선택된 행에선 선을 지운다 — 파란 알약 위를 실선이 가로지르면 지저분하다(위·아래 행이 이어 주므로 끊겨 보이지 않는다). */
+.pjv-side-navitem.active { background-image: none; }
 .pjv-side-navitem:hover { background-color: var(--bg-tint-2); color: var(--ink); }
 .pjv-side-navitem.active { background-color: var(--bg-sel); color: var(--ink); font-weight: 700; }
 .pjv-side-navlabel { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -3612,7 +3626,9 @@ body.pjv-side-resizing { cursor: col-resize; user-select: none; -webkit-user-sel
    언핀 상태에서도 스크롤 박스가 뷰포트(64~100vh)에 딱 맞아 아래로 넘치지 않음 = #608 스크롤 트랩 해소. */
 .pjv-has-side .pjv-side-nav-inner { top: 64px; max-height: calc(100vh - 64px); padding: 20px 12px 28px 24px; }
 /* 우측 컬럼 — 제목·하위탭·툴바·보드가 자체 패딩 안에서(WIKI .kn-main 처럼). */
-.pjv-has-side .pjv-side-main { padding: 24px 32px 48px 28px; min-height: calc(100vh - 64px); }
+/* 위 여백 24→10 (#1067) — 브레드크럼 줄이 이미 자체 높이(38px)를 갖고 있어 위에 24px 를 더 두면
+   화면 맨 위가 허전하게 비었다. 사이드바 첫 항목과 눈높이도 이쪽이 더 맞는다. */
+.pjv-has-side .pjv-side-main { --pjv-main-padl: 28px; --pjv-main-padr: 32px; padding: 10px var(--pjv-main-padr) 48px var(--pjv-main-padl); min-height: calc(100vh - 64px); }
 .pjv-has-side .pjv-board-chrome { margin-bottom: 2px; }
 .pjv-has-side .pjv-board-toolbar { margin-bottom: 14px; }
 /* #req: 툴바가 좁아지면 버튼 라벨이 글자 단위로 세로로 접히던 문제 — 버튼은 안 찌그러지게(flex:none) +
@@ -3897,7 +3913,9 @@ body.pjv-folder-dragging .pjv-proj-wrap { cursor: grabbing; }
 .pjv-side-navfolder { font-weight: 700; color: var(--ink); }
 /* 폴더 ⋯ 는 우측 세모와 겹치지 않게 그 왼쪽으로(#508) — 세모(펼침/접힘)와 ⋯ 둘 다 보이고 클릭 가능. */
 .pjv-side-navfolder .pjv-side-navmore { right: 32px; }
-.pjv-side-navlist.sub { padding-left: 30px; }
+/* 폴더 안 리스트의 들여쓰기는 이제 JS 격자(PJV_SIDE_PAD + depth*PJV_SIDE_STEP)가 인라인으로 준다(#1067) —
+   여기 특례(30px)를 남겨두면 격자와 어긋나 세로선이 아이콘을 스친다. 폴백 값만 격자에 맞춰 둔다. */
+.pjv-side-navlist.sub { padding-left: 28px; }
 /* 사이드바 DnD — 드롭 타깃 하이라이트(리스트→폴더 '넣기'). 순서 재정렬은 아래 삽입선으로 구분. */
 .pjv-side-drop-over { background-color: var(--bg-tint) !important; box-shadow: inset 0 0 0 2px var(--blue); }
 /* 순서 재정렬 삽입선(#670) — 같은 형제끼리 재정렬 시 커서 위/아래 절반에 따라 항목 위/아래 가로 파란 기준선
@@ -3911,7 +3929,7 @@ body.pjv-folder-dragging .pjv-proj-wrap { cursor: grabbing; }
 /* 인라인 레벨(#670, VS Code식) — 삽입선의 왼쪽 들여쓰기가 '어느 레벨에 들어가는지'를 보여준다.
    폴더 안 리스트(sub) 위 삽입선은 들여쓴 위치에서 시작 = '폴더 안'. 최상위 리스트는 기본(왼쪽 끝). */
 .pjv-side-navlist.sub.pjv-side-drop-before::before,
-.pjv-side-navlist.sub.pjv-side-drop-after::after { left: 26px; }
+.pjv-side-navlist.sub.pjv-side-drop-after::after { left: 24px; }
 /* 아웃덴트 — 폴더 안 리스트를 왼쪽으로 끌면(pjv-side-drop-outdent) 삽입선을 최상위 들여쓰기(왼쪽 끝)로 당기고,
    항목 왼쪽 끝에 파란 세로 가이드 + 옅은 파란 배경으로 '폴더 밖 최상위로 나감'을 명확히. */
 .pjv-side-navitem.pjv-side-drop-outdent::before,
@@ -4921,9 +4939,9 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-scard.is-waiting::before { background: var(--coral, #e5484d); }
 .dash-scard.is-waiting { background: color-mix(in srgb, var(--coral, #e5484d) 7%, var(--bg)); border-color: color-mix(in srgb, var(--coral, #e5484d) 34%, var(--line)); }
 .dash-scard.is-idle::before { background: var(--mint-deep); }
-.dash-scard.is-offline::before { background: var(--muted-2); }
-.dash-scard.is-offline .dash-scard-name { color: var(--muted); font-weight: 600; } /* 오프라인은 덜 강조 */
-.dash-scard.sel { border-color: color-mix(in srgb, var(--accent, #5b6cff) 55%, var(--line)); background: color-mix(in srgb, var(--accent, #5b6cff) 7%, var(--bg)); }
+.dash-scard.is-exited::before, .dash-scard.is-offline::before { background: var(--muted-2); }
+.dash-scard.is-exited .dash-scard-name, .dash-scard.is-offline .dash-scard-name { color: var(--muted); font-weight: 600; } /* 오프라인은 덜 강조 */
+.dash-scard.sel, .tsess-card.sel { border-color: color-mix(in srgb, var(--accent, #5b6cff) 55%, var(--line)); background: color-mix(in srgb, var(--accent, #5b6cff) 7%, var(--bg)); }
 .dash-scard.sel::before { background: var(--accent, #5b6cff); }
 .dash-scard-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 /* #853 자세히 = [상태 · 제목] 한 줄(상태가 제목 앞에 붙어 '무슨 작업이 어떤 상태인지'를 한 눈에). */
@@ -4945,8 +4963,8 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-scard-status.is-waiting .dash-scard-dot { background: var(--coral, #e5484d); animation: dashPulse 1.1s ease-in-out infinite; }
 .dash-scard-status.is-idle { color: var(--mint-deep); }
 .dash-scard-status.is-idle .dash-scard-dot { background: var(--mint-deep); }
-.dash-scard-status.is-offline { color: var(--muted); }
-.dash-scard-status.is-offline .dash-scard-dot { background: var(--muted-2); }
+.dash-scard-status.is-exited, .dash-scard-status.is-offline { color: var(--muted); }
+.dash-scard-status.is-exited .dash-scard-dot, .dash-scard-status.is-offline .dash-scard-dot { background: var(--muted-2); }
 /* #853 프로젝트 뱃지 = 버튼(누르면 그 프로젝트 페이지로 이동 — 팝업 아님). 링크임을 밑줄 호버로 알린다. */
 .dash-scard-proj { min-width: 0; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; font-weight: 700; color: var(--blue); background: var(--bg-punch); border: 0; border-radius: 6px; padding: 1.5px 7px; font-family: inherit; cursor: pointer; }
 .dash-scard-proj:hover { text-decoration: underline; filter: brightness(.97); }
@@ -4978,13 +4996,18 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 /* #853 세션 선택 체크박스 — 평소엔 자리만 있고 안 보이다가, 카드에 호버하면 왼쪽에서 스르르 나타난다.
    ('선택' 버튼을 먼저 누를 필요 없음. 선택 모드이거나 이미 체크된 카드면 계속 보인다.)
    display:none 이 아니라 opacity/width 전환이라 카드 폭이 튀지 않는다. */
-.dash-sess-checkwrap { flex: none; display: flex; align-items: center; justify-content: center; width: 0; opacity: 0; overflow: visible; transition: width .14s ease, opacity .14s ease, margin-right .14s ease; }
+.dash-sess-checkwrap, .tsess-checkwrap { flex: none; display: flex; align-items: center; justify-content: center; width: 0; opacity: 0; overflow: visible; transition: width .14s ease, opacity .14s ease, margin-right .14s ease; }
 .dash-scard:hover .dash-sess-checkwrap,
 .dash-scard:focus-within .dash-sess-checkwrap,
 .dash-scard.sel .dash-sess-checkwrap,
-.dash-sess-list.selectmode .dash-sess-checkwrap { width: 18px; opacity: 1; margin-right: 4px; } /* #853 폭·여백 늘리고 overflow:visible + margin:0 → 체크박스 우측 안 잘림 */
-.dash-sess-check { width: 15px; height: 15px; flex: none; margin: 0; cursor: pointer; accent-color: var(--accent, #5b6cff); }
-@media (prefers-reduced-motion: reduce) { .dash-sess-checkwrap { transition: none; } }
+.dash-sess-list.selectmode .dash-sess-checkwrap,
+/* AI 세션 탭도 같은 동작 — 카드 호버/포커스/선택/선택모드에서 체크박스가 왼쪽에서 밀려 나온다(#1062: 두 화면 UI 통일). */
+.tsess-card:hover .tsess-checkwrap,
+.tsess-card:focus-within .tsess-checkwrap,
+.tsess-card.sel .tsess-checkwrap,
+.tsess-list.selectmode .tsess-checkwrap { width: 18px; opacity: 1; margin-right: 4px; } /* #853 폭·여백 늘리고 overflow:visible + margin:0 → 체크박스 우측 안 잘림 */
+.dash-sess-check, .tsess-check { width: 15px; height: 15px; flex: none; margin: 0; cursor: pointer; accent-color: var(--accent, #5b6cff); }
+@media (prefers-reduced-motion: reduce) { .dash-sess-checkwrap, .tsess-checkwrap { transition: none; } }
 /* #853 세션 이름 수정 팝업 — 브라우저 prompt() 대체. */
 .dash-rename { display: flex; flex-direction: column; gap: 8px; min-width: 340px; }
 .dash-rename-lbl { font-size: 12px; font-weight: 700; color: var(--ink-sub); }
@@ -5834,7 +5857,7 @@ main.doc-mode .kn-side-tools .kn-side-toolitem:hover { background: var(--bg-tint
   .pjv-side-nav-inner, .pjv-has-side .pjv-side-nav-inner {
     position: static; max-height: 40vh; overflow-y: auto; padding: 14px 14px 16px;
   }
-  .pjv-has-side .pjv-side-main { padding: 16px 14px 40px; min-height: 0; }
+  .pjv-has-side .pjv-side-main { --pjv-main-padl: 14px; --pjv-main-padr: 14px; padding: 8px var(--pjv-main-padr) 40px var(--pjv-main-padl); min-height: 0; }
   .pjv-side-resize { display: none; }                   /* 폭 조절 핸들(절대배치) — 스택 모드에선 뷰포트 밖으로 삐져나옴 */
   .pjv-side-rail { border-right: none; border-bottom: 1px solid var(--line); }
   .pjv-side-rail-inner { position: static; flex-direction: row; flex-wrap: wrap; padding: 6px 8px; }
@@ -7548,68 +7571,71 @@ input.emb-num { width: 120px; flex: none; }
 .pjv-board-header { display: flex; flex-direction: column; min-width: 0; }
 
 /* ── ① 브레드크럼 줄 ── */
-.pjv-crumbbar { display: flex; align-items: center; gap: 6px; min-height: 30px; margin-bottom: 4px; min-width: 0; }
+.pjv-crumbbar { display: flex; align-items: center; gap: 8px; min-height: 38px; margin-bottom: 0; min-width: 0; }
 .pjv-crumbs { display: flex; align-items: center; gap: 1px; flex-wrap: wrap; min-width: 0; }
-.pjv-crumb { display: inline-flex; align-items: center; gap: 5px; border: none; background: none; cursor: pointer; padding: 3px 6px; border-radius: 7px; font-size: 13px; font-weight: 600; color: var(--ink-sub); max-width: 260px; }
+.pjv-crumb { display: inline-flex; align-items: center; gap: 6px; border: none; background: none; cursor: pointer; padding: 4px 7px; border-radius: 7px; font-size: 13.5px; font-weight: 600; color: var(--ink-sub); max-width: 280px; }
 .pjv-crumb:hover { background: var(--bg-tint-2); color: var(--ink); }
 .pjv-crumb-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: -.1px; }
-.pjv-crumb.is-leaf { color: var(--ink); font-weight: 800; font-size: 14.5px; }
+.pjv-crumb.is-leaf { color: var(--ink); font-weight: 800; font-size: 15.5px; letter-spacing: -.3px; }
 .pjv-crumb > svg, .pjv-crumb > span.pjv-side-space-avatar { flex: none; }
-.pjv-crumb-sep { color: var(--muted-3, #aab1bd); font-size: 12.5px; padding: 0 1px; user-select: none; }
-.pjv-crumb-menu, .pjv-crumb-fav { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex: none; border: none; background: none; border-radius: 6px; cursor: pointer; color: var(--muted-2); padding: 0; }
+.pjv-crumb-sep { color: var(--muted-3, #aab1bd); font-size: 13px; padding: 0 2px; user-select: none; }
+.pjv-crumb-menu, .pjv-crumb-fav { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex: none; border: none; background: none; border-radius: 7px; cursor: pointer; color: var(--muted-2); padding: 0; margin-left: 1px; }
 .pjv-crumb-menu:hover, .pjv-crumb-fav:hover { background: var(--bg-tint-2); color: var(--ink); }
 .pjv-crumb-fav.on { color: #f0b429; }
-.pjv-crumb-fav .pjv-fstar-ic { width: 15px; height: 15px; }
+.pjv-crumb-fav .pjv-tb-ic { width: 16px; height: 16px; }
 
 /* ── ② 뷰 탭 줄 (기능은 별도 작업 — 지금은 버튼·아이콘만) ── */
-.pjv-vtabs { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
-.pjv-vtab { display: inline-flex; align-items: center; gap: 6px; flex: none; border: none; background: none; cursor: pointer; padding: 7px 9px 8px; margin-bottom: -1px; border-bottom: 2px solid transparent; font-size: 13px; font-weight: 700; color: var(--muted-2); letter-spacing: -.1px; }
+.pjv-vtabs { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin-bottom: 0;
+  /* 구분선 풀블리드 — 본문 컬럼 패딩만큼 밖으로 당기고 같은 값을 안쪽 패딩으로 되돌린다(탭 위치는 그대로, 선만 끝까지). */
+  margin-left: calc(var(--pjv-main-padl, 0px) * -1); margin-right: calc(var(--pjv-main-padr, 0px) * -1);
+  padding-left: var(--pjv-main-padl, 0px); padding-right: var(--pjv-main-padr, 0px); }
+.pjv-vtab { display: inline-flex; align-items: center; gap: 7px; flex: none; border: none; background: none; cursor: pointer; padding: 9px 11px 10px; margin-bottom: -1px; border-bottom: 2px solid transparent; font-size: 13.5px; font-weight: 700; color: var(--muted-2); letter-spacing: -.1px; }
 .pjv-vtab:hover { color: var(--ink); }
 .pjv-vtab.active { color: var(--ink); border-bottom-color: var(--ink); }
-.pjv-vtab-ic { width: 15px; height: 15px; flex: none; }
-.pjv-vtab-sep { width: 1px; height: 15px; background: var(--line); margin: 0 5px; flex: none; }
+.pjv-vtab-ic { width: 17px; height: 17px; flex: none; }
+.pjv-vtab-sep { width: 1px; height: 16px; background: var(--line); margin: 0 7px; flex: none; }
 .pjv-vtab-add { font-weight: 600; }
 
 /* ── ③ 툴바 ── */
-.pjv-board-toolbar { align-items: center; gap: 8px; }
-.pjv-board-toolbar .pjv-tasks-head-left { align-items: center; gap: 4px; }
-.pjv-board-toolbar .card-head-actions { gap: 2px; }
+.pjv-board-toolbar { align-items: center; gap: 10px; min-height: 46px; padding-top: 6px; }
+.pjv-board-toolbar .pjv-tasks-head-left { align-items: center; gap: 5px; }
+.pjv-board-toolbar .card-head-actions { gap: 3px; }
 /* 아이콘 전용 버튼(정사각) — 라벨 없이 아이콘만. 켜지면 파랑. */
-.pjv-tb-btn { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 5px; flex: none; width: 28px; height: 28px; box-sizing: border-box; padding: 0; border: none; background: none; border-radius: 7px; cursor: pointer; color: var(--ink-sub); }
+.pjv-tb-btn { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex: none; width: 30px; height: 30px; box-sizing: border-box; padding: 0; border: none; background: none; border-radius: 8px; cursor: pointer; color: var(--ink-sub); }
 .pjv-tb-btn:hover { background: var(--bg-tint-2); color: var(--ink); }
 .pjv-tb-btn.active { color: var(--blue); background: color-mix(in srgb, var(--blue) 10%, transparent); }
 .pjv-tb-btn[aria-disabled="true"], .pjv-tb-btn.is-off { opacity: .45; }
 .pjv-tb-btn.is-off:hover { background: none; color: var(--ink-sub); }
-.pjv-tb-ic { flex: none; }
-.pjv-tb-ic.sm { width: 14px; height: 14px; }
+.pjv-tb-ic { flex: none; width: 18px; height: 18px; }
+.pjv-tb-ic.sm { width: 15px; height: 15px; }
 /* 알약형(그룹) — 아이콘 + 기준 필드명. ClickUp 의 'Status' 알약. */
-.pjv-tb-pill { width: auto; padding: 0 9px 0 7px; height: 28px; border-radius: 999px; font-size: 12.5px; font-weight: 700; }
+.pjv-tb-pill { width: auto; padding: 0 12px 0 9px; height: 30px; border-radius: 999px; font-size: 13px; font-weight: 700; }
 .pjv-tb-pill .pjv-view-btn-label { white-space: nowrap; letter-spacing: -.1px; }
 /* 필터 개수 배지 — 조건이 2개 이상일 때만. */
-.pjv-tb-badge { position: absolute; top: 1px; right: 0; min-width: 13px; height: 13px; padding: 0 3px; box-sizing: border-box; border-radius: 999px; background: var(--blue); color: #fff; font-size: 9px; font-weight: 800; line-height: 13px; text-align: center; }
+.pjv-tb-badge { position: absolute; top: 0; right: -1px; min-width: 14px; height: 14px; padding: 0 3px; box-sizing: border-box; border-radius: 999px; background: var(--blue); color: #fff; font-size: 9.5px; font-weight: 800; line-height: 14px; text-align: center; }
 /* '나'(Me mode) — 내 아바타가 버튼. 켜지면 파란 링. */
-.pjv-mine-btn .pjv-ava { width: 20px; height: 20px; font-size: 9.5px; }
+.pjv-mine-btn .pjv-ava { width: 22px; height: 22px; font-size: 10px; }
 .pjv-mine-btn.active { background: none; box-shadow: 0 0 0 2px var(--blue); }
 /* 구분선 + 톱니·＋프로젝트 */
-.pjv-tb-sep { width: 1px; height: 18px; background: var(--line); margin: 0 5px; flex: none; }
-.pjv-tb-primary-group { display: inline-flex; align-items: stretch; flex: none; margin-left: 4px; border-radius: 8px; overflow: hidden; background: var(--ink); }
-.pjv-tb-primary, .pjv-tb-primary-more { display: inline-flex; align-items: center; gap: 5px; border: none; background: transparent; color: #fff; cursor: pointer; font-size: 12.5px; font-weight: 700; padding: 0 11px; height: 28px; }
-.pjv-tb-primary-more { padding: 0 6px; border-left: 1px solid rgba(255,255,255,.22); }
+.pjv-tb-sep { width: 1px; height: 20px; background: var(--line); margin: 0 6px; flex: none; }
+.pjv-tb-primary-group { display: inline-flex; align-items: stretch; flex: none; margin-left: 5px; border-radius: 8px; overflow: hidden; background: var(--ink); }
+.pjv-tb-primary, .pjv-tb-primary-more { display: inline-flex; align-items: center; gap: 6px; border: none; background: transparent; color: #fff; cursor: pointer; font-size: 13px; font-weight: 700; padding: 0 13px; height: 30px; letter-spacing: -.2px; }
+.pjv-tb-primary-more { padding: 0 7px; border-left: 1px solid rgba(255,255,255,.22); }
 .pjv-tb-primary:hover, .pjv-tb-primary-more:hover { background: rgba(255,255,255,.14); }
 /* 검색 — 아이콘만 있다가 펼치면 입력창이 자란다. */
 .pjv-tb-search { display: inline-flex; align-items: center; flex: none; }
-.pjv-tb-search-input { width: 0; padding: 0; border: none; background: none; font-size: 12.5px; color: var(--ink); transition: width .16s ease, padding .16s ease; min-width: 0; }
-.pjv-tb-search.open .pjv-tb-search-input { width: 150px; padding: 0 8px; height: 26px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); }
+.pjv-tb-search-input { display: none; width: 176px; padding: 0 10px; height: 30px; box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 13px; color: var(--ink); min-width: 0; margin-left: 3px; }
+.pjv-tb-search.open .pjv-tb-search-input { display: block; }
 .pjv-tb-search-input:focus { outline: none; border-color: var(--blue); }
 
 /* ── 팝오버: 필터 빌더 ── */
-.pjv-filter-pop { min-width: 380px; max-width: 520px; padding: 6px; gap: 4px; }
+.pjv-filter-pop { min-width: 452px; max-width: 560px; padding: 6px; gap: 4px; }
 .pjv-filter-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 6px 3px; }
 .pjv-filter-title { font-size: 12.5px; font-weight: 800; color: var(--ink); }
 .pjv-filter-clear { border: none; background: none; cursor: pointer; font-size: 11.5px; font-weight: 700; color: var(--muted-2); padding: 2px 5px; border-radius: 6px; }
 .pjv-filter-clear:hover { background: var(--bg-tint-2); color: var(--coral-text, var(--ink)); }
 .pjv-filter-rows { display: flex; flex-direction: column; gap: 5px; }
-.pjv-filter-row { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.pjv-filter-row { display: flex; align-items: center; gap: 5px; flex-wrap: nowrap; }
 .pjv-filter-lead { font-size: 11.5px; font-weight: 700; color: var(--muted-2); min-width: 54px; padding-left: 4px; }
 .pjv-filter-match { min-width: 54px; }
 .pjv-filter-sel { display: inline-flex; align-items: center; justify-content: space-between; gap: 5px; height: 30px; box-sizing: border-box; padding: 0 7px 0 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--ink); }
@@ -7618,8 +7644,8 @@ input.emb-num { width: 120px; flex: none; }
 .pjv-filter-sel .pjv-tb-ic { color: var(--muted-2); }
 .pjv-filter-field { min-width: 88px; }
 .pjv-filter-op { min-width: 74px; }
-.pjv-filter-val { flex: 1 1 130px; min-width: 120px; }
-.pjv-filter-text, .pjv-filter-date { flex: 1 1 130px; min-width: 110px; height: 30px; box-sizing: border-box; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 12.5px; color: var(--ink); }
+.pjv-filter-val { flex: 1 1 110px; min-width: 96px; }
+.pjv-filter-text, .pjv-filter-date { flex: 1 1 110px; min-width: 96px; height: 30px; box-sizing: border-box; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 12.5px; color: var(--ink); }
 .pjv-filter-text:focus, .pjv-filter-date:focus { outline: none; border-color: var(--blue); }
 .pjv-filter-del { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex: none; border: none; background: none; border-radius: 7px; cursor: pointer; color: var(--muted-2); padding: 0; }
 .pjv-filter-del:hover { background: color-mix(in srgb, var(--coral-text, #d9534f) 10%, transparent); color: var(--coral-text, #d9534f); }
@@ -7631,8 +7657,11 @@ input.emb-num { width: 120px; flex: none; }
 .pjv-multipick { min-width: 250px; max-width: 320px; padding: 5px; gap: 3px; }
 .pjv-multipick-searchwrap { display: flex; align-items: center; gap: 6px; padding: 0 8px; height: 32px; border: 1px solid var(--line); border-radius: 8px; margin: 2px 2px 4px; color: var(--muted-2); }
 .pjv-multipick-searchwrap:focus-within { border-color: var(--blue); }
-.pjv-multipick-search { flex: 1; min-width: 0; border: none; background: none; font-size: 12.5px; color: var(--ink); }
-.pjv-multipick-search:focus { outline: none; }
+.pjv-multipick .pjv-multipick-search { flex: 1; min-width: 0; height: 100%; padding: 0; border: none; box-shadow: none; background: transparent; font-size: 12.5px; color: var(--ink); }
+.pjv-multipick .pjv-multipick-search:focus { outline: none; border: none; box-shadow: none; }
+/* 보기 설정 라디오 — 선택된 항목에 파란 점(라벨 색만으로는 '고를 수 있는 것'인지 안 보인다). */
+.pjv-view-radio { flex: none; width: 15px; height: 15px; border-radius: 50%; border: 1.6px solid var(--muted-3, #aab1bd); box-sizing: border-box; }
+.pjv-view-item.on .pjv-view-radio { border-color: var(--blue); border-width: 4.5px; }
 .pjv-multipick-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 3px 8px 4px; }
 .pjv-multipick-title { font-size: 11.5px; font-weight: 800; color: var(--muted-2); letter-spacing: .2px; }
 .pjv-multipick-all { border: none; background: none; cursor: pointer; font-size: 11.5px; font-weight: 700; color: var(--blue); padding: 2px 5px; border-radius: 6px; }
@@ -7660,3 +7689,27 @@ input.emb-num { width: 120px; flex: none; }
 .pjv-groupby-line { display: flex; align-items: center; gap: 5px; padding: 2px 2px 4px; }
 .pjv-groupby-field { flex: 1 1 auto; }
 .pjv-groupby-dir { flex: none; }
+
+/* 사이드바 토글 — 브레드크럼 줄 맨 앞. 아이콘만 있는 버튼이라 좌우 여백을 붙이지 않는다. */
+.pjv-crumbbar .pjv-side-btn { width: 30px; height: 30px; }
+/* 툴바 줄 자체가 헤더의 마지막 층 — 보드와의 간격은 여기서 준다. */
+.pjv-has-side .pjv-board-toolbar { margin-bottom: 10px; }
+
+/* ── 리스트 박스(#1067) — 폴더/스페이스를 열면 리스트마다 테두리 카드 하나(ClickUp 폴더 List 뷰). ──
+   여러 리스트가 한 화면에 쌓이므로 경계가 없으면 어디까지가 한 리스트인지 안 보인다. */
+.pjv-list-box { position: relative; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); padding: 10px 0 4px; margin: 0 0 14px; overflow: hidden; }
+/* 왼쪽 컬러 띠 — 그 리스트의 색. 박스가 여러 개 쌓일 때 색으로 먼저 구분된다.
+   ⚠ 원색 그대로 4px 를 세우면 면적이 커서 상태 칩(작은 알약)보다 시각 무게가 앞선다 — 화면이 색에 끌려간다.
+   두 단계로 낮춘다: ① 상태 칩 '할 일'의 슬레이트(#94a3b8)를 섞어 **공통 회색 바탕**을 깔고(리스트마다 하늘색·
+   보라·분홍이어도 같은 가족으로 묶인다) ② 배경 쪽으로 한 번 더 섞어 밝기를 낮춘다. 폭도 3px.
+   결과: 리스트 구분은 되지만 진행 중(앰버)·할 일(슬레이트) 칩보다 뒤로 물러난다. */
+.pjv-list-box::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: color-mix(in srgb, color-mix(in srgb, var(--list-color, var(--line)) 62%, #94a3b8) 88%, var(--bg)); }
+.pjv-list-box:last-child { margin-bottom: 4px; }
+/* 박스 안 경로 — '어느 스페이스 / 어느 폴더의 리스트인지'. 이름만으론 같은 이름의 리스트를 구분 못 한다. */
+.pjv-list-box-crumb { padding: 0 16px 1px 17px; font-size: 11.5px; font-weight: 600; color: var(--muted-3, #aab1bd); letter-spacing: -.1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pjv-list-box > .pjv-list-head { padding: 2px 16px 6px 17px; }
+.pjv-list-box > .pjv-list-head .pjv-tgroup-label { font-size: 15px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
+/* 박스 안 그룹 헤더·행은 박스 안쪽 여백에 맞춘다(박스 밖 표와 같은 좌측 기준선). */
+.pjv-list-box > .pjv-tgroup-body { padding: 0 8px; }
+.pjv-board-scroll .pjv-list-box { min-width: min-content; }

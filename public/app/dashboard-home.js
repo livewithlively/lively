@@ -1249,7 +1249,7 @@ async function fillSessions(zone, onCount, projectsP) {
     let density = dashSessDensity(); // #758 full(자세히·기본) | compact(간략히) — 카드 한 줄로 접기
     const isProjClosed = (p) => !!p && (p.status === 'done' || p.status_category === 'done' || p.status_category === 'closed'); // 내 프로젝트 모달 isDone 과 동형
     const closedPids = new Set((projects || []).filter(isProjClosed).map((p) => p.id));
-    const isClosedProjSess = (s) => { const pid = Number(s.projectId) || 0; return pid > 0 && closedPids.has(pid) && dashSessState(s).key === 'offline'; }; // #853 살아있는 세션은 done 프로젝트여도 숨기지 않는다
+    const isClosedProjSess = (s) => { const pid = Number(s.projectId) || 0; return pid > 0 && closedPids.has(pid) && dashSessDead(s); }; // #853 살아있는 세션은 done 프로젝트여도 숨기지 않는다
     let selectMode = false; // #758 일괄 선택 모드 — 평소엔 체크박스 숨김, '선택' 버튼으로 켜야 노출.
     const setShowClosed = (v) => { showClosed = v; dashSaveSessShowClosed(v); draw(); };
     const setOnlineOnly = (v) => { onlineOnly = v; dashSaveSessOnlineOnly(v); draw(); };
@@ -1336,7 +1336,7 @@ async function fillSessions(zone, onCount, projectsP) {
         const hiddenClosed = showClosed ? 0 : base.filter(isClosedProjSess).length;
         const shownClosed = showClosed ? base : base.filter((s) => !isClosedProjSess(s));
         // #670 온라인 세션만 보기 토글 — 켜면 '오프라인'(에이전트 상태 offline) 세션 숨김. 작업중/대기중/확인필요만 표시. showClosed 위에 추가.
-        const isOnline = (s) => dashSessState(s).key !== 'offline';
+        const isOnline = (s) => !dashSessDead(s);
         const hiddenOffline = onlineOnly ? shownClosed.filter((s) => !isOnline(s)).length : 0;
         const shown = onlineOnly ? shownClosed.filter(isOnline) : shownClosed;
         // 필터 전환 시 안 보이게 된 선택은 해제(내 프로젝트 모달과 동형).
@@ -1536,10 +1536,14 @@ async function fillSessions(zone, onCount, projectsP) {
 // #req 세션 상태(4단계) → { key, label }. 서버가 CPU·pane 내용으로 판정한 s.agentState 를 그대로 매핑.
 //  busy=작업중(주황) / waiting=확인 필요(빨강, 사용자 선택·승인 대기) / idle=대기중(초록) / offline=오프라인(회색).
 function dashSessState(s) {
-    const map = { busy: '작업중', waiting: '확인 필요', idle: '대기중', offline: '오프라인' };
-    const k = (s && s.agentState) || 'offline';
-    return { key: k, label: map[k] || '오프라인' };
+    // #1015 E — '오프라인' 한 칸을 둘로 갈랐다: exited=하네스가 끝남(AI 더 안 돔) / offline=원격 노드 미연결.
+    //  미접속은 더 이상 오프라인이 아니다(세션은 서버에서 상시 돈다) → 백엔드가 idle 로 준다.
+    const map = { busy: '작업중', waiting: '확인 필요', idle: '대기중', exited: '종료됨', offline: '연결 끊김' };
+    const k = (s && s.agentState) || 'exited';
+    return { key: k, label: map[k] || '종료됨' };
 }
+// 'AI 가 더 안 도는' 세션인가 — 예전 key==='offline' 판정을 대체한다(exited·offline 둘 다 죽은 것).
+function dashSessDead(s) { const k = dashSessState(s).key; return k === 'exited' || k === 'offline'; }
 // 세션 이름 수정 팝업(#853) — 브라우저 기본 prompt() 대신 우리 UI. overlay = 다른 모달과 같은 프리미티브(admin.js).
 //  Enter=저장 / Esc=닫기(overlay 기본). 빈 이름·무변경이면 저장 비활성.
 function openSessRename(s, onChange) {
