@@ -4,7 +4,7 @@ import { z } from "zod";
 import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import {
-  listPreviewEnvs, getPreviewEnv, upsertPreviewEnv, deletePreviewEnv, ensurePreviewEnv, stopPreviewEnv,
+  listPreviewEnvs, getPreviewEnv, upsertPreviewEnv, deletePreviewEnv, ensurePreviewEnv, stopPreviewEnv, resolvePreviewId,
   listStackProfiles, upsertStackProfile, deleteStackProfile,
 } from "../org/preview-envs.js";
 
@@ -40,7 +40,7 @@ const set: Capability = {
     "throwaway 는 stack_profile 필수. project_id+repo 로 워크트리 특정(worktree_path 직접 가능). stage 는 member_branches/base_ref/merge_trigger.",
   scope: "admin",
   input: {
-    id: z.string(),
+    id: z.string().optional(), // 안 주면 같은 프로젝트·레포의 기존 미리보기를 재사용하거나 새로 만든다
     label: z.string().max(200).optional(),
     kind: z.enum(["work", "stage"]).optional(),
     owner_member: z.string().max(120).optional(),
@@ -74,7 +74,9 @@ const set: Capability = {
   },
   handler: async (input: any, user: any, ctx: any) => {
     const actor = ctx?.actor ?? user?.userId ?? null;
-    return { env: await upsertPreviewEnv({ ...input, id: pid(input.id) }, actor) };
+    // id 는 선택 — 안 주면 같은 프로젝트·레포의 기존 미리보기를 재사용하고, 없으면 읽을 만한 아이디를 만든다.
+    const id = input.id ? pid(input.id) : await resolvePreviewId(input);
+    return { env: await upsertPreviewEnv({ ...input, id }, actor) };
   },
 };
 
