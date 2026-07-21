@@ -7571,57 +7571,57 @@ input.emb-num { width: 120px; flex: none; }
 .pjv-board-header { display: flex; flex-direction: column; min-width: 0; }
 
 /* ── ① 브레드크럼 줄 ── */
-.pjv-crumbbar { display: flex; align-items: center; gap: 6px; min-height: 30px; margin-bottom: 4px; min-width: 0; }
+.pjv-crumbbar { display: flex; align-items: center; gap: 8px; min-height: 38px; margin-bottom: 0; min-width: 0; }
 .pjv-crumbs { display: flex; align-items: center; gap: 1px; flex-wrap: wrap; min-width: 0; }
-.pjv-crumb { display: inline-flex; align-items: center; gap: 5px; border: none; background: none; cursor: pointer; padding: 3px 6px; border-radius: 7px; font-size: 13px; font-weight: 600; color: var(--ink-sub); max-width: 260px; }
+.pjv-crumb { display: inline-flex; align-items: center; gap: 6px; border: none; background: none; cursor: pointer; padding: 4px 7px; border-radius: 7px; font-size: 13.5px; font-weight: 600; color: var(--ink-sub); max-width: 280px; }
 .pjv-crumb:hover { background: var(--bg-tint-2); color: var(--ink); }
 .pjv-crumb-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: -.1px; }
-.pjv-crumb.is-leaf { color: var(--ink); font-weight: 800; font-size: 14.5px; }
+.pjv-crumb.is-leaf { color: var(--ink); font-weight: 800; font-size: 15.5px; letter-spacing: -.3px; }
 .pjv-crumb > svg, .pjv-crumb > span.pjv-side-space-avatar { flex: none; }
-.pjv-crumb-sep { color: var(--muted-3, #aab1bd); font-size: 12.5px; padding: 0 1px; user-select: none; }
-.pjv-crumb-menu, .pjv-crumb-fav { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex: none; border: none; background: none; border-radius: 6px; cursor: pointer; color: var(--muted-2); padding: 0; }
+.pjv-crumb-sep { color: var(--muted-3, #aab1bd); font-size: 13px; padding: 0 2px; user-select: none; }
+.pjv-crumb-menu, .pjv-crumb-fav { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex: none; border: none; background: none; border-radius: 7px; cursor: pointer; color: var(--muted-2); padding: 0; margin-left: 1px; }
 .pjv-crumb-menu:hover, .pjv-crumb-fav:hover { background: var(--bg-tint-2); color: var(--ink); }
 .pjv-crumb-fav.on { color: #f0b429; }
-.pjv-crumb-fav .pjv-fstar-ic { width: 15px; height: 15px; }
+.pjv-crumb-fav .pjv-tb-ic { width: 16px; height: 16px; }
 
 /* ── ② 뷰 탭 줄 (기능은 별도 작업 — 지금은 버튼·아이콘만) ── */
-.pjv-vtabs { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
-.pjv-vtab { display: inline-flex; align-items: center; gap: 6px; flex: none; border: none; background: none; cursor: pointer; padding: 7px 9px 8px; margin-bottom: -1px; border-bottom: 2px solid transparent; font-size: 13px; font-weight: 700; color: var(--muted-2); letter-spacing: -.1px; }
+.pjv-vtabs { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin-bottom: 0; }
+.pjv-vtab { display: inline-flex; align-items: center; gap: 7px; flex: none; border: none; background: none; cursor: pointer; padding: 9px 11px 10px; margin-bottom: -1px; border-bottom: 2px solid transparent; font-size: 13.5px; font-weight: 700; color: var(--muted-2); letter-spacing: -.1px; }
 .pjv-vtab:hover { color: var(--ink); }
 .pjv-vtab.active { color: var(--ink); border-bottom-color: var(--ink); }
-.pjv-vtab-ic { width: 15px; height: 15px; flex: none; }
-.pjv-vtab-sep { width: 1px; height: 15px; background: var(--line); margin: 0 5px; flex: none; }
+.pjv-vtab-ic { width: 17px; height: 17px; flex: none; }
+.pjv-vtab-sep { width: 1px; height: 16px; background: var(--line); margin: 0 7px; flex: none; }
 .pjv-vtab-add { font-weight: 600; }
 
 /* ── ③ 툴바 ── */
-.pjv-board-toolbar { align-items: center; gap: 8px; }
-.pjv-board-toolbar .pjv-tasks-head-left { align-items: center; gap: 4px; }
-.pjv-board-toolbar .card-head-actions { gap: 2px; }
+.pjv-board-toolbar { align-items: center; gap: 10px; min-height: 46px; padding-top: 6px; }
+.pjv-board-toolbar .pjv-tasks-head-left { align-items: center; gap: 5px; }
+.pjv-board-toolbar .card-head-actions { gap: 3px; }
 /* 아이콘 전용 버튼(정사각) — 라벨 없이 아이콘만. 켜지면 파랑. */
-.pjv-tb-btn { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 5px; flex: none; width: 28px; height: 28px; box-sizing: border-box; padding: 0; border: none; background: none; border-radius: 7px; cursor: pointer; color: var(--ink-sub); }
+.pjv-tb-btn { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex: none; width: 30px; height: 30px; box-sizing: border-box; padding: 0; border: none; background: none; border-radius: 8px; cursor: pointer; color: var(--ink-sub); }
 .pjv-tb-btn:hover { background: var(--bg-tint-2); color: var(--ink); }
 .pjv-tb-btn.active { color: var(--blue); background: color-mix(in srgb, var(--blue) 10%, transparent); }
 .pjv-tb-btn[aria-disabled="true"], .pjv-tb-btn.is-off { opacity: .45; }
 .pjv-tb-btn.is-off:hover { background: none; color: var(--ink-sub); }
-.pjv-tb-ic { flex: none; }
-.pjv-tb-ic.sm { width: 14px; height: 14px; }
+.pjv-tb-ic { flex: none; width: 18px; height: 18px; }
+.pjv-tb-ic.sm { width: 15px; height: 15px; }
 /* 알약형(그룹) — 아이콘 + 기준 필드명. ClickUp 의 'Status' 알약. */
-.pjv-tb-pill { width: auto; padding: 0 9px 0 7px; height: 28px; border-radius: 999px; font-size: 12.5px; font-weight: 700; }
+.pjv-tb-pill { width: auto; padding: 0 12px 0 9px; height: 30px; border-radius: 999px; font-size: 13px; font-weight: 700; }
 .pjv-tb-pill .pjv-view-btn-label { white-space: nowrap; letter-spacing: -.1px; }
 /* 필터 개수 배지 — 조건이 2개 이상일 때만. */
-.pjv-tb-badge { position: absolute; top: 1px; right: 0; min-width: 13px; height: 13px; padding: 0 3px; box-sizing: border-box; border-radius: 999px; background: var(--blue); color: #fff; font-size: 9px; font-weight: 800; line-height: 13px; text-align: center; }
+.pjv-tb-badge { position: absolute; top: 0; right: -1px; min-width: 14px; height: 14px; padding: 0 3px; box-sizing: border-box; border-radius: 999px; background: var(--blue); color: #fff; font-size: 9.5px; font-weight: 800; line-height: 14px; text-align: center; }
 /* '나'(Me mode) — 내 아바타가 버튼. 켜지면 파란 링. */
-.pjv-mine-btn .pjv-ava { width: 20px; height: 20px; font-size: 9.5px; }
+.pjv-mine-btn .pjv-ava { width: 22px; height: 22px; font-size: 10px; }
 .pjv-mine-btn.active { background: none; box-shadow: 0 0 0 2px var(--blue); }
 /* 구분선 + 톱니·＋프로젝트 */
-.pjv-tb-sep { width: 1px; height: 18px; background: var(--line); margin: 0 5px; flex: none; }
-.pjv-tb-primary-group { display: inline-flex; align-items: stretch; flex: none; margin-left: 4px; border-radius: 8px; overflow: hidden; background: var(--ink); }
-.pjv-tb-primary, .pjv-tb-primary-more { display: inline-flex; align-items: center; gap: 5px; border: none; background: transparent; color: #fff; cursor: pointer; font-size: 12.5px; font-weight: 700; padding: 0 11px; height: 28px; }
-.pjv-tb-primary-more { padding: 0 6px; border-left: 1px solid rgba(255,255,255,.22); }
+.pjv-tb-sep { width: 1px; height: 20px; background: var(--line); margin: 0 6px; flex: none; }
+.pjv-tb-primary-group { display: inline-flex; align-items: stretch; flex: none; margin-left: 5px; border-radius: 8px; overflow: hidden; background: var(--ink); }
+.pjv-tb-primary, .pjv-tb-primary-more { display: inline-flex; align-items: center; gap: 6px; border: none; background: transparent; color: #fff; cursor: pointer; font-size: 13px; font-weight: 700; padding: 0 13px; height: 30px; letter-spacing: -.2px; }
+.pjv-tb-primary-more { padding: 0 7px; border-left: 1px solid rgba(255,255,255,.22); }
 .pjv-tb-primary:hover, .pjv-tb-primary-more:hover { background: rgba(255,255,255,.14); }
 /* 검색 — 아이콘만 있다가 펼치면 입력창이 자란다. */
 .pjv-tb-search { display: inline-flex; align-items: center; flex: none; }
-.pjv-tb-search-input { display: none; width: 150px; padding: 0 8px; height: 26px; box-sizing: border-box; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); font-size: 12.5px; color: var(--ink); min-width: 0; margin-left: 2px; }
+.pjv-tb-search-input { display: none; width: 176px; padding: 0 10px; height: 30px; box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 13px; color: var(--ink); min-width: 0; margin-left: 3px; }
 .pjv-tb-search.open .pjv-tb-search-input { display: block; }
 .pjv-tb-search-input:focus { outline: none; border-color: var(--blue); }
 
@@ -7686,3 +7686,8 @@ input.emb-num { width: 120px; flex: none; }
 .pjv-groupby-line { display: flex; align-items: center; gap: 5px; padding: 2px 2px 4px; }
 .pjv-groupby-field { flex: 1 1 auto; }
 .pjv-groupby-dir { flex: none; }
+
+/* 사이드바 토글 — 브레드크럼 줄 맨 앞. 아이콘만 있는 버튼이라 좌우 여백을 붙이지 않는다. */
+.pjv-crumbbar .pjv-side-btn { width: 30px; height: 30px; }
+/* 툴바 줄 자체가 헤더의 마지막 층 — 보드와의 간격은 여기서 준다. */
+.pjv-has-side .pjv-board-toolbar { margin-bottom: 10px; }

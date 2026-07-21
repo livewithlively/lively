@@ -385,12 +385,12 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
   //  아이콘 전용 버튼은 title + aria-label 로 이름을 준다(라벨 없이도 무엇인지 알 수 있게).
   const iconBtn = (cls, label, icon) => el('button', { class: 'pjv-tb-btn ' + cls, type: 'button', title: label, 'aria-label': label }, icon);
   // '하위 태스크' — 접힘/펼침/분리(ClickUp Subtasks).
-  const subtaskBtn = iconBtn('pjv-subtask-btn', '하위 태스크 표시 방식', pjvSubtaskIcon());
+  const subtaskBtn = iconBtn('pjv-subtask-btn', '하위 태스크 표시 방식', pjvTbIcon('subtask'));
   // '나' — 내가 만든·참여한 프로젝트만(ClickUp Me mode). 내 아바타가 곧 버튼.
   const mineBtn = el('button', { class: 'pjv-tb-btn pjv-mine-btn', type: 'button', title: '나 — 내가 만든·참여한 프로젝트만 보기', 'aria-label': '내 프로젝트만 보기' },
     personFace(meId, 'pjv-ava', '나'));
   // '완료 표시' — 닫힌(완료) 프로젝트/태스크 노출 스위치 팝오버.
-  const closedBtn = iconBtn('pjv-closed-btn', '완료된 항목 표시', pjvCheckCircle());
+  const closedBtn = iconBtn('pjv-closed-btn', '완료된 항목 표시', pjvTbIcon('check'));
   // '필터' — 필드 조건(상태·담당자·우선순위·태그·마감일·이름)으로 좁히기. 걸린 조건 수를 배지로.
   const filterBtn = iconBtn('pjv-filter-btn', '필터 — 조건으로 좁혀 보기', pjvTbIcon('filter'));
   const filterBadge = el('span', { class: 'pjv-tb-badge', 'aria-hidden': 'true' });
@@ -410,7 +410,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
   const addMoreBtn = el('button', { class: 'pjv-tb-primary-more', type: 'button', title: '더 만들기', 'aria-label': '새로 만들기 더보기' }, pjvTbIcon('caret', 'sm'));
   const addGroup = el('div', { class: 'pjv-tb-primary-group' }, addProjBtn, addMoreBtn);
   // '사이드바' — 스페이스·폴더·리스트 탐색 열기/닫기. 브레드크럼 줄 맨 앞(위치를 다루는 층).
-  const sideBtn = iconBtn('pjv-side-btn', '사이드바 열기/닫기', pjvSideToggleIcon());
+  const sideBtn = iconBtn('pjv-side-btn', '사이드바 열기/닫기', pjvTbIcon('sidebar'));
   // '뷰' — 저장된 뷰(ClickUp 이관 포함) 피커(#541). 설정 팝오버에서 진입(툴바 직접 노출은 폐지).
   const savedViewBtn = el('button', { class: 'pjv-view-btn pjv-savedview-btn', type: 'button', title: '뷰 — 저장된 보기(ClickUp 이관 포함)', style: 'display:none' },
     pjvViewIcon(), el('span', { class: 'pjv-view-btn-label', text: '뷰' }));
@@ -1278,7 +1278,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
       if (leafList) {
         const favIds = new Set<number>(((favData && favData.project_lists) || []).map((x: any) => Number(x)));
         const isFav = favIds.has(Number(leafList.id));
-        const star = el('button', { class: 'pjv-crumb-fav' + (isFav ? ' on' : ''), type: 'button', title: isFav ? '즐겨찾기 해제' : '즐겨찾기에 추가', 'aria-label': isFav ? '즐겨찾기 해제' : '즐겨찾기에 추가', 'aria-pressed': String(isFav) }, pjvStarGlyph(isFav));
+        const star = el('button', { class: 'pjv-crumb-fav' + (isFav ? ' on' : ''), type: 'button', title: isFav ? '즐겨찾기 해제' : '즐겨찾기에 추가', 'aria-label': isFav ? '즐겨찾기 해제' : '즐겨찾기에 추가', 'aria-pressed': String(isFav) }, pjvTbIcon(isFav ? 'star-on' : 'star'));
         star.onclick = async (e) => {
           e.stopPropagation();
           const next = !isFav;
@@ -7205,64 +7205,114 @@ function pjvSwitchRow(label, getOn, setOn, after) {
 //  아이콘은 우리 톤(단색 라인 · currentColor · 컬러 이모지 금지)으로 직접 제작 — 형태만 ClickUp 과 맞춘다.
 // ════════════════════════════════════════════════════════════════════════════
 
-// ── 툴바 라인 아이콘 ────────────────────────────────────────────────────────
+// ── 툴바 아이콘 (#1067) ─────────────────────────────────────────────────────
+//  세 가지를 통일해야 '우글거림'이 사라진다 — 손으로 좌표를 찍으면 미세 비대칭이 작은 크기에서 그대로 보인다.
+//   ① 광학 상자: 모든 아이콘 내용이 24 그리드의 3~21 안을 꽉 채운다(어떤 건 크고 어떤 건 작아 보이던 문제).
+//   ② 획: 1.6 단일 두께 · round cap/join(예전엔 1.7/1.8/1.9 가 섞여 굵기가 튀었다).
+//   ③ 대칭이 중요한 도형(톱니·별)은 **각도·반지름으로 계산**해서 만든다 — 손으로 쓴 베지어는 좌우가 미세하게 어긋난다.
+
+// 중심에서 반지름 목록대로 점을 찍어 만드는 폐곡선. spec[i] = i 번째 점의 반지름(각도는 균등 분할).
+//  rot 로 첫 점의 각도를 잡는다(기본 위쪽). 좌표는 소수 2자리로 굳혀 렌더마다 동일.
+function pjvRadialPath(spec: number[], rot: number, cx = 12, cy = 12) {
+  const n = spec.length;
+  const pts = spec.map((r, i) => {
+    const a = rot + (i * 2 * Math.PI) / n;
+    return (cx + r * Math.cos(a)).toFixed(2) + ' ' + (cy + r * Math.sin(a)).toFixed(2);
+  });
+  return 'M' + pts.join('L') + 'Z';
+}
+// 톱니 8개 기어 — 톱니마다 [윗면 시작·끝 / 골 시작·끝] 4점. 각 구간의 **각도 폭을 따로** 줘야
+//  톱니가 각지게(사다리꼴) 나온다. 균등분할이면 옆면이 완만해져 8각 별처럼 뾰족하게 읽힌다.
+function pjvGearPath(teeth: number, rOut: number, rIn: number, topDeg: number, valleyDeg: number) {
+  const step = 360 / teeth;
+  const rad = (d: number) => (d * Math.PI) / 180;
+  const pt = (r: number, deg: number) => (12 + r * Math.cos(rad(deg))).toFixed(2) + ' ' + (12 + r * Math.sin(rad(deg))).toFixed(2);
+  const out: string[] = [];
+  for (let i = 0; i < teeth; i++) {
+    const c = -90 + i * step;              // 이 톱니의 중심각(첫 톱니가 12시)
+    const v = c + step / 2;                // 다음 톱니와의 사이 골 중심각
+    out.push(pt(rOut, c - topDeg / 2), pt(rOut, c + topDeg / 2), pt(rIn, v - valleyDeg / 2), pt(rIn, v + valleyDeg / 2));
+  }
+  return 'M' + out.join('L') + 'Z';
+}
+const PJV_GEAR_PATH = pjvGearPath(8, 9.2, 6.6, 19, 19);
+// 5각 별 — 바깥/안쪽 반지름 교대. 꼭짓점이 12시.
+const PJV_STAR_PATH = pjvRadialPath(Array.from({ length: 10 }, (_, i) => (i % 2 === 0 ? 8.8 : 3.9)), -Math.PI / 2);
+
 function pjvTbIcon(kind, cls?) {
-  const n = sv('svg', { class: 'pjv-tb-ic' + (cls ? ' ' + cls : ''), viewBox: '0 0 24 24', width: 17, height: 17,
-    fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-  if (kind === 'group') { // 레이어(그룹) — 겹쳐 쌓은 판 3장
-    n.append(sv('path', { d: 'M12 3.4 3.6 7.6 12 11.8l8.4-4.2L12 3.4Z' }),
-      sv('path', { d: 'M3.6 12 12 16.2 20.4 12' }), sv('path', { d: 'M3.6 16.4 12 20.6l8.4-4.2' }));
+  const n = sv('svg', { class: 'pjv-tb-ic' + (cls ? ' ' + cls : ''), viewBox: '0 0 24 24',
+    fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  if (kind === 'group') { // 그룹 — 겹쳐 쌓은 판 3장(레이어)
+    n.append(sv('path', { d: 'M12 3.2 3 7.5l9 4.3 9-4.3-9-4.3Z' }),
+      sv('path', { d: 'M3 12.1 12 16.4l9-4.3' }), sv('path', { d: 'M3 16.6 12 20.9l9-4.3' }));
     return n;
   }
   if (kind === 'columns') { // 컬럼 — 세로 3분할 판
-    n.append(sv('rect', { x: 3.2, y: 5, width: 17.6, height: 14, rx: 2.4 }), sv('path', { d: 'M9.1 5v14M14.9 5v14' }));
+    n.append(sv('rect', { x: 3, y: 4.5, width: 18, height: 15, rx: 2.4 }), sv('path', { d: 'M9 4.5v15M15 4.5v15' }));
     return n;
   }
-  if (kind === 'filter') { // 필터 — 위에서 아래로 좁아지는 3선(깔때기)
-    n.append(sv('path', { d: 'M4 7.2h16' }), sv('path', { d: 'M7 12h10' }), sv('path', { d: 'M10 16.8h4' }));
+  if (kind === 'filter') { // 필터 — 아래로 좁아지는 3선(깔때기). 폭 18/10/4 로 확실히 좁아지게.
+    n.append(sv('path', { d: 'M3 6.5h18M7 12h10M10 17.5h4' }));
     return n;
   }
-  if (kind === 'people') { // 담당자 — 두 사람
-    n.append(sv('circle', { cx: 9.5, cy: 8.4, r: 3.1 }), sv('path', { d: 'M3.8 19a5.7 5.7 0 0 1 11.4 0' }),
-      sv('circle', { cx: 16.9, cy: 7.4, r: 2.2 }), sv('path', { d: 'M16.5 12.7c2.3 0 4.2 1.9 4.2 4.2' }));
+  if (kind === 'people') { // 담당자 — 두 사람(앞사람 온전 + 뒷사람 반쪽)
+    n.append(sv('circle', { cx: 9.6, cy: 8.2, r: 3.6 }),
+      sv('path', { d: 'M3 20.2v-1.1a4.4 4.4 0 0 1 4.4-4.4h4.4a4.4 4.4 0 0 1 4.4 4.4v1.1' }),
+      sv('path', { d: 'M17.2 4.9a3.6 3.6 0 0 1 0 6.6' }),
+      sv('path', { d: 'M21 20.2v-1.1a4.4 4.4 0 0 0-3.3-4.26' }));
     return n;
   }
-  if (kind === 'search') { n.append(sv('circle', { cx: 10.8, cy: 10.8, r: 6.2 }), sv('path', { d: 'M19.6 19.6 15.4 15.4' })); return n; }
-  if (kind === 'gear') { // 톱니 — 원 + 8각 톱니 윤곽(별·태양으로 안 읽히게 톱니를 '이'로 그린다)
-    n.append(sv('circle', { cx: 12, cy: 12, r: 3.05 }),
-      sv('path', { d: 'M10.55 3.3a1.1 1.1 0 0 1 1.1-.95h.7a1.1 1.1 0 0 1 1.1.95l.16 1.2c.5.15.97.35 1.4.6l.96-.73a1.1 1.1 0 0 1 1.45.1l.5.5a1.1 1.1 0 0 1 .1 1.44l-.74.97c.26.43.46.9.6 1.4l1.2.15a1.1 1.1 0 0 1 .96 1.1v.7a1.1 1.1 0 0 1-.95 1.1l-1.2.16c-.15.5-.35.96-.6 1.4l.73.96a1.1 1.1 0 0 1-.1 1.45l-.5.5a1.1 1.1 0 0 1-1.44.1l-.97-.74c-.43.26-.9.46-1.4.6l-.15 1.2a1.1 1.1 0 0 1-1.1.96h-.7a1.1 1.1 0 0 1-1.1-.95l-.16-1.2c-.5-.15-.96-.35-1.4-.6l-.96.73a1.1 1.1 0 0 1-1.45-.1l-.5-.5a1.1 1.1 0 0 1-.1-1.44l.74-.97c-.26-.43-.46-.9-.6-1.4l-1.2-.15a1.1 1.1 0 0 1-.96-1.1v-.7a1.1 1.1 0 0 1 .95-1.1l1.2-.16c.15-.5.35-.96.6-1.4l-.73-.96a1.1 1.1 0 0 1 .1-1.45l.5-.5a1.1 1.1 0 0 1 1.44-.1l.97.74c.43-.26.9-.46 1.4-.6l.15-1.2Z' }));
+  if (kind === 'search') { n.append(sv('circle', { cx: 10.6, cy: 10.6, r: 7 }), sv('path', { d: 'M21 21l-5.4-5.4' })); return n; }
+  if (kind === 'gear') { n.append(sv('path', { d: PJV_GEAR_PATH }), sv('circle', { cx: 12, cy: 12, r: 3.2 })); return n; }
+  if (kind === 'star' || kind === 'star-on') {
+    const p = sv('path', { d: PJV_STAR_PATH });
+    if (kind === 'star-on') p.setAttribute('fill', 'currentColor');
+    n.append(p);
     return n;
   }
-  if (kind === 'plus') { n.append(sv('path', { d: 'M12 5.2v13.6M5.2 12h13.6' })); return n; }
+  if (kind === 'check') { // 완료 — 원 + 체크(원이 3~21 을 채운다)
+    n.append(sv('circle', { cx: 12, cy: 12, r: 9 }), sv('path', { d: 'M8.1 12.2l2.7 2.7 5.1-5.6' }));
+    return n;
+  }
+  if (kind === 'subtask') { // 하위 태스크 — 부모 노드에서 꺾여 내려가는 가지
+    n.append(sv('circle', { cx: 6.4, cy: 5.6, r: 2.6 }), sv('circle', { cx: 17.6, cy: 18.4, r: 2.6 }),
+      sv('path', { d: 'M6.4 8.2v7A3.2 3.2 0 0 0 9.6 18.4h5.4' }));
+    return n;
+  }
+  if (kind === 'sidebar') { // 사이드바 — 좌측 패널이 붙은 판(폴더보다 '패널 여닫기'가 직관적)
+    n.append(sv('rect', { x: 3, y: 4.5, width: 18, height: 15, rx: 2.4 }), sv('path', { d: 'M9.6 4.5v15' }));
+    return n;
+  }
+  if (kind === 'plus') { n.append(sv('path', { d: 'M12 5v14M5 12h14' })); return n; }
   if (kind === 'trash') {
-    n.append(sv('path', { d: 'M4.6 6.8h14.8' }), sv('path', { d: 'M9.6 6.8V5.3c0-.72.58-1.3 1.3-1.3h2.2c.72 0 1.3.58 1.3 1.3v1.5' }),
-      sv('path', { d: 'M6.7 6.8l.85 12.05A1.35 1.35 0 0 0 8.9 20.1h6.2a1.35 1.35 0 0 0 1.35-1.25L17.3 6.8' }));
+    n.append(sv('path', { d: 'M4 6.6h16' }), sv('path', { d: 'M9.6 6.6V5c0-.83.67-1.5 1.5-1.5h1.8c.83 0 1.5.67 1.5 1.5v1.6' }),
+      sv('path', { d: 'M6.4 6.6l.83 12.5A1.5 1.5 0 0 0 8.72 20.5h6.56a1.5 1.5 0 0 0 1.5-1.4L17.6 6.6' }));
     return n;
   }
-  if (kind === 'x') { n.append(sv('path', { d: 'M6.6 6.6l10.8 10.8M17.4 6.6 6.6 17.4' })); return n; }
-  n.append(sv('path', { d: 'M6.8 9.6 12 14.8l5.2-5.2' })); // caret(기본)
+  if (kind === 'x') { n.append(sv('path', { d: 'M6.5 6.5l11 11M17.5 6.5l-11 11' })); return n; }
+  n.append(sv('path', { d: 'M6.5 9.5 12 15l5.5-5.5' })); // caret(기본)
   return n;
 }
-// ── 뷰 탭 아이콘(보드·타임라인·테이블·리스트) ──────────────────────────────
+// ── 뷰 탭 아이콘(보드·타임라인·테이블·리스트) — 같은 광학 상자·같은 획. ────────
 function pjvTabIcon(kind) {
-  const n = sv('svg', { class: 'pjv-vtab-ic', viewBox: '0 0 24 24', width: 16, height: 16,
-    fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-  if (kind === 'board') {
-    n.append(sv('rect', { x: 3.4, y: 4.6, width: 4.8, height: 14.8, rx: 1.6 }),
-      sv('rect', { x: 9.6, y: 4.6, width: 4.8, height: 9.6, rx: 1.6 }),
-      sv('rect', { x: 15.8, y: 4.6, width: 4.8, height: 12.4, rx: 1.6 }));
-  } else if (kind === 'timeline') {
-    n.append(sv('rect', { x: 3.2, y: 5, width: 10.5, height: 3.8, rx: 1.9 }),
-      sv('rect', { x: 7.4, y: 10.1, width: 13.4, height: 3.8, rx: 1.9 }),
-      sv('rect', { x: 5, y: 15.2, width: 9.2, height: 3.8, rx: 1.9 }));
-  } else if (kind === 'table') {
-    n.append(sv('rect', { x: 3.2, y: 4.8, width: 17.6, height: 14.4, rx: 2.2 }),
-      sv('path', { d: 'M3.2 9.6h17.6M9.6 9.6v9.6' }));
-  } else { // list
-    n.append(sv('circle', { cx: 5.2, cy: 7.2, r: 1.15, fill: 'currentColor', stroke: 'none' }),
-      sv('circle', { cx: 5.2, cy: 12, r: 1.15, fill: 'currentColor', stroke: 'none' }),
-      sv('circle', { cx: 5.2, cy: 16.8, r: 1.15, fill: 'currentColor', stroke: 'none' }),
-      sv('path', { d: 'M9 7.2h11M9 12h11M9 16.8h11' }));
+  const n = sv('svg', { class: 'pjv-vtab-ic', viewBox: '0 0 24 24',
+    fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  if (kind === 'board') { // 칸반 — 높이가 다른 세 컬럼
+    n.append(sv('rect', { x: 3, y: 4.5, width: 5, height: 15, rx: 1.6 }),
+      sv('rect', { x: 9.5, y: 4.5, width: 5, height: 9.5, rx: 1.6 }),
+      sv('rect', { x: 16, y: 4.5, width: 5, height: 12.5, rx: 1.6 }));
+  } else if (kind === 'timeline') { // 간트 — 어긋나게 쌓인 막대 3개
+    n.append(sv('rect', { x: 3, y: 5, width: 10, height: 4, rx: 2 }),
+      sv('rect', { x: 8, y: 10, width: 13, height: 4, rx: 2 }),
+      sv('rect', { x: 5, y: 15, width: 9, height: 4, rx: 2 }));
+  } else if (kind === 'table') { // 표 — 헤더행 + 첫 열 경계
+    n.append(sv('rect', { x: 3, y: 4.5, width: 18, height: 15, rx: 2.4 }),
+      sv('path', { d: 'M3 9.4h18M9.6 9.4v10.1' }));
+  } else { // 리스트 — 점 + 줄 3
+    n.append(sv('circle', { cx: 4.6, cy: 6.6, r: 1.3, fill: 'currentColor', stroke: 'none' }),
+      sv('circle', { cx: 4.6, cy: 12, r: 1.3, fill: 'currentColor', stroke: 'none' }),
+      sv('circle', { cx: 4.6, cy: 17.4, r: 1.3, fill: 'currentColor', stroke: 'none' }),
+      sv('path', { d: 'M8.8 6.6H21M8.8 12H21M8.8 17.4H21' }));
   }
   return n;
 }
