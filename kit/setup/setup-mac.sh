@@ -40,6 +40,7 @@ fi
 PATH_ORIG="$PATH"                       # PATH 변경 전 스냅샷(새-셸 PATH 프록시 — rc 중복 방지 판정용)
 NODE_BOOTSTRAPPED=0                      # 이번 실행에서 node 를 새로 설치했는지(마무리 재시작 안내 분기 — #355)
 NODE_FALLBACK_VERSION="v22.14.0"        # index.json 해석 실패 시 폴백(공식 LTS · 실재 확인됨)
+NODE_MIN_MAJOR=20                       # 최소 Node — package.json engines(">=20") · kit/cli/bootstrap.sh 와 같은 계약(#1068)
 LIVELY_NODE_DIR="$HOME/.lively/runtime" # 번들 Node 런타임 위치(~/.lively 하위 → 제거 시 함께 삭제)
 PATH_A_BEGIN="# >>> lively-managed (PATH: local-bin) >>>"   # claude 등 ~/.local/bin — 제거해도 보존(claude 소유)
 PATH_A_END="# <<< lively-managed (PATH: local-bin) <<<"
@@ -51,18 +52,37 @@ lively_node_bin() { [ -x "$LIVELY_NODE_DIR/current/bin/node" ] && { echo "$LIVEL
 
 # 최신 LTS 버전 해석(node 불필요 — curl/tr/grep/sed). 실패 시 폴백.
 resolve_node_version() {
-  local v
+  local v maj
   v="$(curl -fsSL --max-time 15 https://nodejs.org/dist/index.json 2>/dev/null \
       | tr '}' '\n' | grep -m1 '"lts":"' | sed -E 's/.*"version":"(v[0-9][0-9.]*)".*/\1/')" || true
-  case "$v" in v[0-9]*) printf '%s' "$v" ;; *) printf '%s' "$NODE_FALLBACK_VERSION" ;; esac
+  case "$v" in v[0-9]*) ;; *) v="$NODE_FALLBACK_VERSION" ;; esac
+  # 해석이 어긋나 최소 버전 미만을 집어오면 이 게이트가 통째로 무의미해진다 — 그 땐 폴백(고정 LTS)으로.
+  maj="${v#v}"; maj="${maj%%.*}"
+  case "$maj" in ''|*[!0-9]*) v="$NODE_FALLBACK_VERSION" ;; esac
+  [ "${maj:-0}" -ge "$NODE_MIN_MAJOR" ] 2>/dev/null || v="$NODE_FALLBACK_VERSION"
+  printf '%s' "$v"
 }
 
-# node 확보: 시스템 node 있으면 사용; 없으면 공식 tarball 을 ~/.lively/runtime 에 설치(무sudo·체크섬 검증). 성공 시 0.
+# 이 node 가 쓸 만한가 — **존재가 아니라 버전으로 판정한다**(#1068, kit/cli/bootstrap.sh 와 같은 계약).
+#  user-install.mjs 도 세션 훅도 전역 fetch(Node 18+)를 쓰므로, 구버전 node 를 채택하면 설치 한복판에서
+#  `fetch is not defined` 로 죽는다(실측: 시스템 v16.20.2). 못 쓸 버전은 **없는 것으로 취급**하고 우리 것을 깐다.
+node_usable() {
+  local exe="${1:-}" m
+  [ -n "$exe" ] && [ -x "$exe" ] || return 1
+  m="$("$exe" -p 'process.versions.node.split(".")[0]' 2>/dev/null || printf '0')"
+  case "$m" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$m" -ge "$NODE_MIN_MAJOR" ]
+}
+
+# node 확보: 시스템 node 가 쓸 만하면 사용; 아니면 공식 tarball 을 ~/.lively/runtime 에 설치(무sudo·체크섬 검증). 성공 시 0.
 #   opt-out: LIVELY_NO_NODE=1 · 무프롬프트 강제: LIVELY_AUTO_NODE=1(비대화형은 자동).
 ensure_node() {
-  command -v node >/dev/null 2>&1 && return 0
+  local sys; sys="$(command -v node 2>/dev/null || true)"
+  node_usable "$sys" && return 0
+  # 시스템 node 는 건드리지 않는다 — PATH 앞에 우리 런타임을 얹어 이 실행 안에서만 가린다.
+  [ -n "$sys" ] && echo "[1.5] 시스템 node($("$sys" -v 2>/dev/null || echo '버전 확인 실패')) 는 Node ${NODE_MIN_MAJOR} 미만 — 라이블리 전용 런타임을 씁니다(시스템 node 는 그대로)."
   local bin; bin="$(lively_node_bin || true)"
-  if [ -n "$bin" ]; then export PATH="$bin:$PATH"; hash -r; command -v node >/dev/null 2>&1 && { echo "[1.5] Node: 번들 런타임 재사용($(node -v))"; return 0; }; fi
+  if [ -n "$bin" ] && node_usable "$bin/node"; then export PATH="$bin:$PATH"; hash -r; echo "[1.5] Node: 번들 런타임 재사용($(node -v))"; return 0; fi
   if [ "${LIVELY_NO_NODE:-0}" = "1" ]; then echo "[1.5] Node: LIVELY_NO_NODE=1 — 자동설치 건너뜀."; return 1; fi
   if [ -t 0 ] && [ "${LIVELY_AUTO_NODE:-0}" != "1" ]; then
     echo "[1.5] Node.js 가 없습니다(user-level 설치·세션 훅에 필요)."

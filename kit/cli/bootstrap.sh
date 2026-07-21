@@ -21,6 +21,7 @@ GW="${GW%/}"
 LIVELY_DIR="${LIVELY_HOME:-$HOME}/.lively"
 NODE_DIR="$LIVELY_DIR/runtime"
 NODE_FALLBACK="v22.14.0"   # nodejs.org/dist/index.json 해석 실패 시 폴백(공식 LTS · 실재 확인됨)
+NODE_MIN_MAJOR=20          # CLI·훅이 요구하는 최소 Node — package.json engines(">=20") · lively.mjs 의 NODE_MIN_MAJOR 와 같은 계약.
 
 say()  { printf '%s\n' "$*" >&2; }
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$*" >&2; }
@@ -39,17 +40,40 @@ say ""
 # ── [1] Node 확보 ─────────────────────────────────────────────────────────────
 # CLI 도 훅도 전부 Node 다. 없으면 공식 tarball 을 **무sudo**로 ~/.lively/runtime 에 깐다(체크섬 검증).
 #  setup-mac.sh 의 ensure_node 와 같은 계약이되 Linux 까지 커버한다(박스·WSL·리눅스 노트북).
-lively_node() {
-  [ -x "$NODE_DIR/current/bin/node" ] && { printf '%s' "$NODE_DIR/current/bin/node"; return 0; }
-  return 1
+#
+# ⚠ **존재가 아니라 버전으로 판정한다**(#1068). 옛 코드는 `command -v node` 하나로 시스템 node 를 무조건
+#   채택해서, 구버전 박스에선 CLI 가 그 위에서 돌다 `fetch is not defined`(전역 fetch 는 Node 18+)로
+#   [1/3] 키트 내려받기에서 죽었다(실측: 시스템 v16.20.2). 아래 [2] 의 심은 번들 런타임을 우선하지만,
+#   **여기서 안 깔면 심이 쥘 게 없어** 결국 같은 구버전 node 로 폴백한다 — 그래서 심의 약속("시스템 node 가
+#   구버전이어도 CLI 는 항상 최신 런타임에서 돈다")을 실제로 성립시키는 건 이 블록이다.
+#   판정 규칙: **못 쓸 버전 = 없는 것**. 시스템 node 는 건드리지 않고 우리 것만 따로 깐다.
+node_usable() {
+  [ -n "${1:-}" ] && [ -x "$1" ] || return 1
+  m="$("$1" -p 'process.versions.node.split(".")[0]' 2>/dev/null || printf '0')"
+  case "$m" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$m" -ge "$NODE_MIN_MAJOR" ]
+}
+SYS_NODE="$(command -v node 2>/dev/null || true)"
+BUNDLED_NODE="$NODE_DIR/current/bin/node"
+# 구버전이라 못 쓰는 경우에만 안내한다(정상 경로는 조용히 지나간다).
+#  ⚠ `return 0` 은 장식이 아니다 — 이 함수는 `set -e` 아래에서 **맨몸으로 호출**된다. 마지막 명령이
+#    `[ -n "$SYS_NODE" ]` 로 끝나면 시스템 node 가 없는 박스(=신규 설치의 대다수)에서 함수가 non-zero 를
+#    반환하고, 셸이 거기서 스크립트를 통째로 끝낸다 — 배너만 찍고 **아무 말 없이 종료**된다(실측).
+#    AND-list(`a && b`)는 set -e 예외지만 **그걸 본문 끝에 둔 함수의 반환값은 예외가 아니다.**
+say_old_sys_node() {
+  [ -n "$SYS_NODE" ] && info "시스템 node($("$SYS_NODE" -v 2>/dev/null || echo '버전 확인 실패')) 는 Node ${NODE_MIN_MAJOR} 미만 — $1"
+  return 0
 }
 NODE=""
-if command -v node >/dev/null 2>&1; then
-  NODE="$(command -v node)"
+if node_usable "$SYS_NODE"; then
+  NODE="$SYS_NODE"
   ok "Node: 시스템 설치 사용 ($("$NODE" -v))"
-elif NODE="$(lively_node)"; then
+elif node_usable "$BUNDLED_NODE"; then
+  NODE="$BUNDLED_NODE"
+  say_old_sys_node "라이블리 전용 런타임을 씁니다(시스템 node 는 그대로 둡니다)."
   ok "Node: 번들 런타임 재사용 ($("$NODE" -v))"
 else
+  say_old_sys_node "라이블리 전용 런타임을 설치합니다(시스템 node 는 그대로 둡니다)."
   case "$(uname -s)" in
     Darwin) NOS="darwin" ;;
     Linux)  NOS="linux" ;;
@@ -63,6 +87,9 @@ else
   NVER="$(curl -fsSL --max-time 15 https://nodejs.org/dist/index.json 2>/dev/null \
         | tr '}' '\n' | grep -m1 '"lts":"' | sed -E 's/.*"version":"(v[0-9][0-9.]*)".*/\1/' || true)"
   case "${NVER:-}" in v[0-9]*) ;; *) NVER="$NODE_FALLBACK" ;; esac
+  # 해석이 어긋나 최소 버전 미만을 집어오면 이 수정이 통째로 무의미해진다 — 그 땐 폴백(고정 LTS)으로.
+  NMAJ="$(printf '%s' "${NVER#v}" | cut -d. -f1)"
+  if ! { [ -n "$NMAJ" ] && [ "$NMAJ" -ge "$NODE_MIN_MAJOR" ] 2>/dev/null; }; then NVER="$NODE_FALLBACK"; fi
   BASE="node-${NVER}-${NOS}-${NARCH}"
   TMP="$(mktemp -d)"
   trap 'rm -rf "$TMP"' EXIT INT TERM

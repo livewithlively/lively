@@ -58,6 +58,27 @@ const warn = (s) => say("  " + yellow("⚠") + " " + s);
 const fail = (s) => say("  " + red("✗") + " " + s);
 const die = (s, code = 1) => { say("\n" + red("✗ " + s)); process.exit(code); };
 
+// ── 1.5 Node 버전 게이트 (#1068) ────────────────────────────────────────────
+// 이 CLI 는 의존성 0 으로 **전역 fetch(Node 18+)** 등 최신 런타임 API 를 쓴다(맨 위 설계 원칙).
+//  구버전에서 돌면 증상이 `fetch is not defined` 로 `[1/3] 키트 내려받는 중…` 한복판에 터진다 —
+//  Node 얘기가 한 글자도 안 나와서 사람이 원인을 못 찾는다(실측: 시스템 node v16.20.2).
+//  그래서 **첫 줄에서, 무엇을 하면 되는지와 함께** 죽는다.
+//  정상 경로면 부트스트랩이 전용 런타임(~/.lively/runtime)을 깔아 여기 걸릴 일이 없다 — 걸렸다는 건
+//  그 런타임이 없어 심(~/.lively/bin/lively)이 시스템 node 로 폴백했다는 뜻이고, 그래서 재설치가 곧 해결이다.
+const NODE_MIN_MAJOR = 20;   // package.json engines(">=20") · bootstrap.sh/ps1 의 NODE_MIN_MAJOR 와 같은 계약.
+if (Number(process.versions.node.split(".")[0]) < NODE_MIN_MAJOR) {
+  let gw = "<게이트웨이>";
+  try { gw = readFileSync(join(LIVELY, "gateway-url"), "utf8").trim() || gw; } catch { /* 아직 없으면 자리표시자 */ }
+  say("");
+  fail(`Node ${process.versions.node} 에서 실행됐습니다 — 라이블리 CLI 는 Node ${NODE_MIN_MAJOR} 이상이 필요합니다.`);
+  info("라이블리 전용 런타임이 없어 시스템 node 로 폴백한 상태입니다.");
+  info("아래를 다시 실행하면 전용 런타임을 깔고 이어갑니다(시스템 node 는 그대로 둡니다).");
+  say("");
+  say(WIN ? `      irm ${gw}/cli.ps1 | iex` : `      curl -fsSL ${gw}/cli | sh`);
+  say("");
+  process.exit(1);
+}
+
 // ── 2. 자식 프로세스 ────────────────────────────────────────────────────────
 // Windows 의 claude/codex 는 .cmd/.ps1 셰임이라 shell 없이 spawn 하면 ENOENT(work.mjs:259 와 같은 이유).
 //  ⚠ 그런데 Node 는 shell:true 일 때 인자를 **자동 quote 하지 않는다** — 공백이 든 인자
@@ -1138,7 +1159,9 @@ async function cmdDoctor(opts) {
   const checks = [];
   const chk = (name, pass, detail, fix) => checks.push({ name, pass, detail, fix: fix || null });
 
-  chk("Node", true, `${process.version}`);
+  // 버전만이 아니라 **어느 런타임에서 도는지**를 말한다 — #1068 이 정확히 그 축에서 터졌고(시스템 구버전 node),
+  //  전용 런타임이 실제로 쓰이고 있는지는 여기 말고는 확인할 데가 없다.
+  chk("Node", true, `${process.version}  ${process.execPath.startsWith(join(LIVELY, "runtime")) ? "(라이블리 전용 런타임)" : "(시스템 node)"}`);
   chk("게이트웨이 설정", !!st.gateway.url, st.gateway.url || "~/.lively/gateway-url 없음", "lively login --gateway <url>");
   chk("게이트웨이 도달", st.gateway.reachable, st.gateway.reachable ? "OK" : (st.gateway.error || "실패"), "주소 · 네트워크 · VPN 확인");
   // 토큰의 **출처**를 사실대로 말한다 — 옛 코드는 출처와 무관하게 "~/.lively/token 있음"을 찍어서,
