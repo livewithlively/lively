@@ -5383,10 +5383,110 @@ async function renderProjectV2Detail(view, idStr) {
     projectCommentsSection(id, members),
     pjvTasksSection(id, p.tasks || [], members, reload, p.fields || []),
     projectFolderSection(id, V6_BASE),
+    projectPreviewSection(id, p),
     projectTerminalSection(id, members, meId, V6_BASE, p.name, p),
     projectTimelineSection(id, members, V6_BASE));
   // 인라인 편집 재렌더면 리빌 애니메이션 대신 스크롤 복원(전면 재애니메이션도 '새로고침'처럼 보임) (#358)
   if (keepY != null) pjvRestoreScroll(keepY); else applyReveal(Array.from(view.children).slice(1));
+}
+
+// ── 미리보기(#1036) — 작업 중인 화면을 운영 화면·남의 작업과 섞지 않고 이 프로젝트 몫으로 따로 띄워 본다. ──
+//  **자리**가 핵심이다: 관리탭에만 두면 정작 화면을 확인할 작업자가 만나지 못한다. 관리탭 ▸ 미리보기는 조직 전체
+//  목록(운영자 시야)이고, 여기는 '이 프로젝트의 것'만 — 작업자는 자기 프로젝트에서 버튼 하나로 만들고 연다.
+//  관련 레포가 없는 프로젝트(문서·기획 등)에는 아예 보이지 않는다(만들어 둔 미리보기가 있으면 그때만 나타난다).
+const PJV_PREVIEW_STATUS = { running: '실행 중', preparing: '준비 중…', error: '문제 있음', stopped: '꺼짐' };
+
+function projectPreviewSection(id, p) {
+  const repos = ((p && p.repos) || []).filter(Boolean);
+  const card = el('div', { class: 'card', style: 'margin-bottom:18px' });
+  const body = el('div', {});
+  const addBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 미리보기 만들기', onclick: () => pickRepoThenCreate() });
+  card.append(
+    el('div', { class: 'card-head' }, el('h3', { text: '미리보기' }),
+      el('div', { class: 'card-head-actions' }, addBtn)),
+    body);
+  if (!repos.length) card.hidden = true; // 코드가 걸려 있지 않은 프로젝트에는 숨긴다(아래 load 에서 있으면 다시 켬)
+  let timer: any = null;
+
+  async function load() {
+    if (timer) { clearTimeout(timer); timer = null; }
+    let envs: any[] = [];
+    try { const r = await api('/api/ui/preview-envs'); envs = ((r && r.envs) || []).filter((x) => Number(x.project_id) === Number(id)); }
+    catch (e) {
+      // 코드 권한이 없는 구성원에게는 이 섹션 자체가 쓸모없다 — 오류를 띄우는 대신 조용히 감춘다.
+      if (e.status === 403) { card.hidden = true; return; }
+      body.replaceChildren(el('p', { class: 'ps-block-hint', text: '미리보기를 불러오지 못했습니다 — ' + e.message })); return;
+    }
+    if (envs.length) card.hidden = false;
+    if (!envs.length) {
+      body.replaceChildren(el('p', { class: 'ps-block-hint', text: repos.length
+        ? '이 프로젝트의 화면을 운영 화면과 따로 띄워 확인할 수 있습니다. ‘＋ 미리보기 만들기’를 누르면 작업 폴더 준비·빌드까지 자동으로 하고 주소를 만들어 줍니다(그 주소를 팀원에게 보내 확인받을 수 있어요).'
+        : '이 프로젝트에는 연결된 코드 저장소가 없습니다.' }));
+      return;
+    }
+    const rows = envs.map((env) => {
+      const statusText = PJV_PREVIEW_STATUS[env.status] || (env.status || '알 수 없음');
+      const acts = [
+        env.status === 'running' ? el('a', { class: 'btn btn-primary btn-sm', href: '/preview/' + encodeURIComponent(env.id) + '/', target: '_blank', text: '화면 열기 ↗' }) : null,
+        env.status !== 'preparing' ? el('button', { class: 'btn btn-ghost btn-sm', text: env.status === 'running' ? '새로 만들기' : '띄우기', onclick: (e) => act(e.target, '/ensure', env.id) }) : null,
+        (env.status === 'running' || env.status === 'preparing') ? el('button', { class: 'btn btn-ghost btn-sm', text: '끄기', onclick: (e) => act(e.target, '/stop', env.id) }) : null,
+      ].filter(Boolean);
+      return el('div', { class: 'wikicat-row' },
+        el('div', { class: 'wikicat-row-main' },
+          el('span', { class: 'wikicat-name', text: env.label || env.id }),
+          el('span', { class: 'wikicat-key', text: [env.repo, env.kind === 'stage' ? '여러 작업을 합쳐서 봄' : null].filter(Boolean).join(' · ') }),
+          el('span', { class: 'dm-tag', text: env.enabled ? statusText : '꺼둠' }),
+          env.last_error ? el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '안내' }), env.last_error) : null),
+        el('div', { class: 'wikicat-row-acts' }, ...acts));
+    });
+    body.replaceChildren(el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-rows' }, ...rows)));
+    // 준비 중이면 사람이 새로고침하지 않아도 되게 잠시 뒤 다시 확인한다(화면을 떠나면 스스로 멈춤).
+    if (envs.some((x) => x.status === 'preparing')) timer = setTimeout(() => { if (document.body.contains(card)) load(); }, 5000);
+  }
+
+  async function act(btn, suffix, envId) {
+    if (btn) btn.disabled = true;
+    try {
+      const r = await api('/api/ui/preview-envs/' + encodeURIComponent(envId) + suffix, { method: 'POST' });
+      if (suffix === '/stop') toast('껐습니다');
+      else if (r && r.status === 'running') toast('준비됐습니다 — ‘화면 열기’로 확인하세요');
+      else if (r && r.status === 'preparing') toast('준비를 시작했습니다 — 끝나면 여기에 표시됩니다');
+      else toast((r && r.error) || '띄우지 못했습니다', true);
+    } catch (e) { toast('실패 — ' + e.message, true); }
+    load();
+  }
+
+  // 저장소가 하나면 묻지 않고 바로 만든다(작업자가 원하는 건 '지금 화면 보기'다). 여럿일 때만 고르게 한다.
+  function pickRepoThenCreate() {
+    if (!repos.length) { toast('먼저 ⚙ 프로젝트 세부 설정에서 관련 레포를 연결해 주세요', true); return; }
+    if (repos.length === 1) { create(repos[0]); return; }
+    const sel = el('select', { style: 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box' });
+    for (const n of repos) sel.append(el('option', { value: n, text: n }));
+    const ok = el('button', { class: 'btn btn-primary btn-sm', text: '만들고 띄우기' });
+    const back = overlayBox('미리보기 만들기',
+      el('div', { class: 'proj-settings' },
+        el('section', { class: 'ps-block' },
+          el('h3', { class: 'ps-block-title', text: '어느 코드 저장소를 볼까요?' }),
+          el('p', { class: 'ps-block-hint', text: '이 프로젝트에 연결된 저장소입니다.' }), sel),
+        el('div', { class: 'ps-rules-actions' }, ok)));
+    ok.onclick = () => { back.remove(); create(sel.value); };
+  }
+
+  async function create(repo) {
+    addBtn.disabled = true;
+    try {
+      const saved = await api('/api/ui/preview-envs', { method: 'POST', body: JSON.stringify({ project_id: id, repo, kind: 'work' }) });
+      const envId = saved && saved.env && saved.env.id;
+      if (envId) await api('/api/ui/preview-envs/' + encodeURIComponent(envId) + '/ensure', { method: 'POST' }).catch(() => { /* 목록에서 다시 시도할 수 있다 */ });
+      card.hidden = false;
+      toast('만들었습니다 — 화면을 준비하고 있습니다');
+    } catch (e) { toast('실패 — ' + e.message, true); }
+    addBtn.disabled = false;
+    load();
+  }
+
+  load();
+  return card;
 }
 
 // ── 세션 기록(#905 C1): 별도 섹션이 공간을 많이 먹어 → 터미널 섹션 헤더의 [📜 세션 기록] 버튼→모달로 이관

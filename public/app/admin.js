@@ -1448,15 +1448,96 @@ async function openPreviewEnvForm(p, reload) {
     const owner = memberCombo({ value: (p && p.owner_member) || '', placeholder: '구성원 선택 (선택 사항)' });
     const wtInp = el('input', { type: 'text', style: inputStyle, value: (p && p.worktree_path) || '', placeholder: '비워 두면 자동으로 만듭니다' });
     const ttlInp = el('input', { type: 'number', style: inputStyle, value: (p && p.ttl_idle_sec) || '', placeholder: '0 = 계속 켜둠' });
-    const branchesTa = el('textarea', { style: inputStyle + ';min-height:70px;resize:vertical' });
-    branchesTa.value = (p && Array.isArray(p.member_branches)) ? p.member_branches.join('\n') : '';
-    const baseRefInp = el('input', { type: 'text', style: inputStyle, value: (p && p.base_ref) || '', placeholder: 'origin/main' });
+    // 합쳐서 볼 작업(브랜치) — 외워서 타이핑하지 않고 **고른다**. 레포를 고르면 그 레포의 브랜치를 최근 순으로 읽어 온다.
+    const picked = new Set((p && Array.isArray(p.member_branches)) ? p.member_branches : []);
+    let branchOpts = [], branchState = 'idle', branchRepo = '';
+    const branchFilter = el('input', { type: 'search', style: inputStyle + ';margin-bottom:6px', placeholder: '브랜치 검색' });
+    const branchList = el('div', { style: 'max-height:210px;overflow:auto;border:1px solid rgba(127,127,127,.22);border-radius:6px;padding:4px' });
+    const baseRefSel = el('select', { style: inputStyle });
+    const hintRow = (t) => el('div', { class: 'ps-block-hint', style: 'padding:6px 4px', text: t });
+    function renderBranchList() {
+        const q = branchFilter.value.trim().toLowerCase();
+        if (!branchRepo) {
+            branchList.replaceChildren(hintRow('먼저 위에서 코드 저장소를 골라 주세요.'));
+            return;
+        }
+        if (branchState === 'loading') {
+            branchList.replaceChildren(hintRow('브랜치를 불러오는 중…'));
+            return;
+        }
+        if (branchState === 'error') {
+            branchList.replaceChildren(hintRow('브랜치를 불러오지 못했습니다 — 저장소 연결을 확인해 주세요.'));
+            return;
+        }
+        const names = branchOpts.map((b) => b.name);
+        const extra = [...picked].filter((n) => !names.includes(n)).map((n) => ({ name: n, missing: true })); // 저장돼 있지만 지금 목록에 없는 것
+        const rows = [...extra, ...branchOpts].filter((b) => !q || b.name.toLowerCase().includes(q));
+        if (!rows.length) {
+            branchList.replaceChildren(hintRow(q ? '검색 결과가 없습니다.' : '이 저장소에 브랜치가 없습니다.'));
+            return;
+        }
+        branchList.replaceChildren(...rows.slice(0, 300).map((b) => {
+            const cb = el('input', { type: 'checkbox', ...(picked.has(b.name) ? { checked: true } : {}) });
+            cb.onchange = () => { if (cb.checked)
+                picked.add(b.name);
+            else
+                picked.delete(b.name); };
+            const meta = [b.missing ? '지금 목록에 없음' : null, b.updated_at ? relTime(b.updated_at) : null, b.author].filter(Boolean).join(' · ');
+            return el('label', { class: 'inline', style: 'display:flex;gap:8px;align-items:center;padding:4px 6px;border-radius:4px;cursor:pointer' }, cb, el('span', { style: 'flex:1;min-width:0' }, el('span', { class: 'mono', style: 'font-size:12px', text: b.name }), meta ? el('span', { class: 'ps-block-hint', style: 'margin:0 0 0 8px;display:inline', text: meta }) : null));
+        }));
+    }
+    function renderBaseRef() {
+        const cur = baseRefSel.value || (p && p.base_ref) || '';
+        baseRefSel.replaceChildren(el('option', { value: '', text: '기본 — origin/main' }));
+        const seen = new Set(['']);
+        for (const b of branchOpts) {
+            const v = 'origin/' + b.name;
+            if (seen.has(v))
+                continue;
+            seen.add(v);
+            baseRefSel.append(el('option', { value: v, text: v }));
+        }
+        if (cur && !seen.has(cur))
+            baseRefSel.append(el('option', { value: cur, text: cur })); // 저장된 값이 목록에 없어도 유지
+        baseRefSel.value = cur;
+    }
+    async function loadBranches() {
+        const repo = repoSel.value.trim();
+        if (!repo || repo === branchRepo) {
+            renderBranchList();
+            return;
+        }
+        branchRepo = repo;
+        branchState = 'loading';
+        branchOpts = [];
+        renderBranchList();
+        try {
+            const r = await api('/api/ui/repos/' + encodeURIComponent(repo) + '/branches');
+            branchOpts = (r && r.branches) || [];
+            branchState = 'ok';
+        }
+        catch (_) {
+            branchState = 'error';
+        }
+        renderBranchList();
+        renderBaseRef();
+    }
+    branchFilter.addEventListener('input', renderBranchList);
+    // 브랜치는 '여러 작업을 합쳐서 본다'일 때만 필요하다 — 그때(또는 저장소를 바꿀 때)만 읽는다.
+    repoSel.addEventListener('change', () => { if (kindSel.value === 'stage')
+        void loadBranches(); });
+    kindSel.addEventListener('change', () => { if (kindSel.value === 'stage')
+        void loadBranches(); });
+    renderBranchList();
+    renderBaseRef();
+    if (p && p.kind === 'stage' && repoSel.value)
+        void loadBranches();
     const triggerSel = el('select', { style: inputStyle });
     for (const t of [['manual', '내가 누를 때만 다시 합친다 (기본)'], ['auto', '작업이 바뀌면 자동으로 다시 합친다']])
         triggerSel.append(el('option', { value: t[0], text: t[1], ...((p && p.merge_trigger === t[0]) ? { selected: true } : {}) }));
     const enabledChk = el('input', { type: 'checkbox', ...((p ? p.enabled : true) ? { checked: true } : {}) });
     const noteInp = el('input', { type: 'text', style: inputStyle, value: (p && p.note) || '' });
-    const advanced = el('details', { class: 'ps-block' }, el('summary', { style: 'cursor:pointer;font-weight:600;padding:6px 0', text: '고급 설정 — 보통은 그대로 두면 됩니다' }), block('보는 방식', '여러 사람의 작업을 한 화면에서 함께 보려면 바꾸세요.', kindSel), block('어떻게 띄울까', '기본은 화면만 따로 띄웁니다. 서버 동작까지 확인해야 하면 전용 서버를, 이미 띄워 둔 게 있으면 그 주소를 쓰세요.', backingSel), block('실행 설정', '‘전용 서버까지 새로 띄운다’일 때 어떤 방식으로 띄울지. 비우면 이 레포에 맞는 설정을 자동으로 씁니다.', stackSel), block('연결할 주소', '‘이미 떠 있는 주소로 연결한다’일 때만 씁니다.', backingRefInp), block('합쳐서 볼 작업들', '한 줄에 하나씩 적습니다(예: project/1030). 서로 충돌하는 작업은 자동으로 빼고 나머지를 합칩니다.', branchesTa), block('합치는 기준', '비우면 origin/main 을 씁니다.', baseRefInp), block('다시 합치는 시점', '', triggerSel), block('담당자', '이 미리보기의 주인(참고용).', owner.el), block('작업 폴더 경로', '직접 지정할 때만 씁니다. 비우면 프로젝트에 맞춰 자동으로 만듭니다.', wtInp), block('안 보면 자동으로 끄기 (초)', '이 시간 동안 아무도 열지 않으면 자동으로 끕니다. 0이면 계속 켜둡니다.', ttlInp), block('사용', '', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' 이 미리보기를 사용합니다' }))), block('메모', '', noteInp), ...(p ? [block('주소', '팀원에게 이 주소를 보내면 됩니다.', el('div', { class: 'mono', text: '/preview/' + p.id + '/' }))] : []));
+    const advanced = el('details', { class: 'ps-block' }, el('summary', { style: 'cursor:pointer;font-weight:600;padding:6px 0', text: '고급 설정 — 보통은 그대로 두면 됩니다' }), block('보는 방식', '여러 사람의 작업을 한 화면에서 함께 보려면 바꾸세요.', kindSel), block('어떻게 띄울까', '기본은 화면만 따로 띄웁니다. 서버 동작까지 확인해야 하면 전용 서버를, 이미 띄워 둔 게 있으면 그 주소를 쓰세요.', backingSel), block('실행 설정', '‘전용 서버까지 새로 띄운다’일 때 어떤 방식으로 띄울지. 비우면 이 레포에 맞는 설정을 자동으로 씁니다.', stackSel), block('연결할 주소', '‘이미 떠 있는 주소로 연결한다’일 때만 씁니다.', backingRefInp), block('합쳐서 볼 작업들', '이 저장소의 작업(브랜치) 중 함께 볼 것을 고르세요. 서로 충돌하는 작업은 자동으로 빼고 나머지를 합칩니다.', el('div', {}, branchFilter, branchList)), block('합치는 기준', '이 기준 위에 위에서 고른 작업들을 얹습니다.', baseRefSel), block('다시 합치는 시점', '', triggerSel), block('담당자', '이 미리보기의 주인(참고용).', owner.el), block('작업 폴더 경로', '직접 지정할 때만 씁니다. 비우면 프로젝트에 맞춰 자동으로 만듭니다.', wtInp), block('안 보면 자동으로 끄기 (초)', '이 시간 동안 아무도 열지 않으면 자동으로 끕니다. 0이면 계속 켜둡니다.', ttlInp), block('사용', '', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' 이 미리보기를 사용합니다' }))), block('메모', '', noteInp), ...(p ? [block('주소', '팀원에게 이 주소를 보내면 됩니다.', el('div', { class: 'mono', text: '/preview/' + p.id + '/' }))] : []));
     const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '만들고 띄우기' : '저장' });
     const form = el('div', { class: 'proj-settings' }, block('어떤 작업을 미리볼까요?', '작업 중인 프로젝트를 고르세요. 필요한 작업 폴더가 없으면 자동으로 만들어 줍니다.', projInp), projList, block('어느 코드 저장소인가요?', '', repoSel), block('이름 (선택)', '목록에서 알아보기 쉬운 이름. 비우면 자동으로 지어집니다.', labelInp), advanced, el('div', { class: 'ps-rules-actions' }, saveBtn));
     const back = overlayBox(isNew ? '미리보기 만들기' : '미리보기 설정', form);
@@ -1467,7 +1548,7 @@ async function openPreviewEnvForm(p, reload) {
         const kind = kindSel.value, backing_mode = backingSel.value;
         const repo = repoSel.value.trim();
         const project_id = pickProjectId();
-        const branches = kind === 'stage' ? branchesTa.value.split('\n').map((s) => s.trim()).filter(Boolean) : [];
+        const branches = kind === 'stage' ? [...picked] : [];
         if (!repo) {
             toast('어느 코드 저장소를 볼지 골라 주세요', true);
             return;
@@ -1477,7 +1558,7 @@ async function openPreviewEnvForm(p, reload) {
             return;
         }
         if (kind === 'stage' && !branches.length) {
-            toast('합쳐서 볼 작업을 한 개 이상 적어 주세요 (고급 설정)', true);
+            toast('합쳐서 볼 작업을 한 개 이상 골라 주세요 (고급 설정)', true);
             return;
         }
         if (kind === 'work' && backing_mode === 'existing-ref' && !backingRefInp.value.trim()) {
@@ -1490,7 +1571,7 @@ async function openPreviewEnvForm(p, reload) {
             worktree_path: wtInp.value.trim() || null, ttl_idle_sec: ttlInp.value ? Number(ttlInp.value) : null,
             enabled: enabledChk.checked, note: noteInp.value.trim() || null,
             stack_profile: stackSel.value || null, backing_ref: backingRefInp.value.trim() || null,
-            ...(kind === 'stage' ? { member_branches: branches, base_ref: baseRefInp.value.trim() || null, merge_trigger: triggerSel.value } : {}),
+            ...(kind === 'stage' ? { member_branches: branches, base_ref: baseRefSel.value.trim() || null, merge_trigger: triggerSel.value } : {}),
         };
         saveBtn.disabled = true;
         try {

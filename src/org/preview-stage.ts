@@ -7,9 +7,11 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { ensureProvisionBase } from "../project-provision.js";
+// 공유 워크스페이스 루트는 **project-fs 의 것 하나만** 쓴다 — 여기서 따로 계산하면(구 코드가 그랬다)
+//  TERMINAL_ROOT_SHARED 를 다르게 잡은 설치에서 base 클론은 A 에, stage 워크트리는 B 에 생겨 서로 못 찾는다.
+import { PROJECT_SHARED_BASE as SHARED_BASE } from "../project-fs.js";
 
 const GIT_TIMEOUT_MS = 180_000;
-const SHARED_BASE = process.env.PROJECT_SHARED_BASE || path.join(process.env.HOME || "", ".openclaw", "workspace");
 const BR_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/; // git 브랜치명(선두 특수문자 금지)
 
 function git(args: string[], cwd?: string, timeoutMs = GIT_TIMEOUT_MS): Promise<{ ok: boolean; out: string; err: string }> {
@@ -67,4 +69,32 @@ export async function ensureStageWorktree(id: string, repo: string, baseRef: str
   }
   const head = (await git(["rev-parse", "--short", "HEAD"], wt)).out.trim() || null;
   return { worktree_path: wt, merge_status, conflicts, head };
+}
+
+export interface RepoBranch { name: string; updated_at: string | null; author: string | null; subject: string | null; }
+
+// 레포의 원격 브랜치 목록(최근 갱신순) — '합쳐서 볼 작업'을 **타이핑이 아니라 고르게** 하기 위한 것.
+//  base 클론에서 fetch 한 뒤 refs/remotes/origin 을 읽는다(작업 워크트리 불필요). origin/ 접두사와 HEAD 는 떼고 돌려준다.
+export async function listRepoBranches(repo: string, limit = 300): Promise<RepoBranch[]> {
+  const base = await ensureProvisionBase(repo); // 없으면 clone, 있으면 fetch+FF
+  if (base.status === "error") throw new Error("레포를 확보하지 못했습니다(" + repo + "): " + (base.detail || "unknown"));
+  const repoPath = path.join(SHARED_BASE, "repos", repo);
+  const SEP = "\x1f";
+  const r = await git([
+    "for-each-ref", "--sort=-committerdate", "--count=" + Math.max(1, Math.min(1000, limit)),
+    "--format=%(refname:short)" + SEP + "%(committerdate:iso8601)" + SEP + "%(authorname)" + SEP + "%(contents:subject)",
+    "refs/remotes/origin",
+  ], repoPath, 60_000);
+  if (!r.ok) throw new Error("브랜치 목록을 읽지 못했습니다: " + r.err);
+  const out: RepoBranch[] = [];
+  for (const line of r.out.split("\n")) {
+    if (!line.trim()) continue;
+    const [refRaw, date, author, subject] = line.split(SEP);
+    const ref = String(refRaw || "").trim();
+    if (ref === "origin" || ref.endsWith("/HEAD")) continue; // refs/remotes/origin/HEAD 는 short 형이 'origin' — 브랜치가 아니다
+    const name = ref.replace(/^origin\//, "");
+    if (!name) continue;
+    out.push({ name, updated_at: date || null, author: author || null, subject: (subject || "").slice(0, 200) || null });
+  }
+  return out;
 }
