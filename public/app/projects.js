@@ -1683,7 +1683,7 @@ function pjvListGroup(g, reload, canDelete, fields, anchorId, meId, taskCtx, nes
     const list = g.list; // null = 미분류('기타')
     const isUn = !list;
     const name = isUn ? '기타 (미분류)' : list.name;
-    const color = isUn ? 'var(--line, #2a2a33)' : (list.color || avatarColor('list' + list.id));
+    const color = isUn ? 'var(--line, #2a2a33)' : pjvHarmonizeColor(list.color || pjvListAutoColor(list.id));
     const members = isUn ? [] : (list.members || []);
     const listIdForAdd = isUn ? null : list.id;
     const emptyText = pjvBoardMineOnly.on ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.';
@@ -1832,11 +1832,18 @@ function pjvListMore(list, reload) {
     return btn;
 }
 // 리스트 글리프(사이드바) — settings.icon 이모지가 있으면 그것, 없으면 리스트 색의 체크리스트 글리프(클릭업 List 아이콘).
+// 리스트 자동 색(#1067) — 색을 안 정한 리스트의 기본색. 예전 avatarColor 는 hsl(임의 hue, 50%, 60%) 라
+//  형광 연두·탁한 자주 같은 게 섞여 상태 칩(슬레이트·앰버·그린)과 나란히 두면 튀었다.
+//  이미 쓰고 있는 '차분한 톤' 팔레트(PJV_FIELD_PALETTE — 커스텀 필드 옵션 색)에서 id 로 결정적으로 고른다.
+function pjvListAutoColor(id) {
+    const n = Math.abs(Number(id) || 0);
+    return PJV_LIST_COLORS[n % PJV_LIST_COLORS.length];
+}
 function pjvListGlyph(list) {
     const emoji = list && list.settings && list.settings.icon;
     if (emoji)
         return el('span', { class: 'pjv-side-listemoji', text: String(emoji) });
-    const color = (list && list.color) || avatarColor('list' + (list ? list.id : ''));
+    const color = pjvHarmonizeColor((list && list.color) || pjvListAutoColor(list ? list.id : 0));
     const n = sv('svg', { class: 'pjv-side-listglyph', viewBox: '0 0 24 24', width: 16, height: 16, fill: 'none', stroke: color, 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
     n.append(sv('path', { d: 'M4 7l1.6 1.6L8.4 5.6' }), sv('path', { d: 'M11 7h9' }), sv('path', { d: 'M4 15l1.6 1.6L8.4 13.6' }), sv('path', { d: 'M11 15h9' }));
     return n;
@@ -2397,8 +2404,9 @@ function openFolderForm(reload, folder, opts) {
     const paintSw = () => {
         const none = el('button', { class: 'pjv-sw pjv-sw-none' + (color ? '' : ' on'), type: 'button', title: '자동(이름 해시색)', text: 'A' });
         none.onclick = () => { color = ''; paintSw(); };
+        const curSw = pjvHarmonizeColor(color); // 옛 고채도 값이 저장돼 있어도 대응 스와치가 선택돼 보이게
         swatches.replaceChildren(none, ...PJV_LIST_COLORS.map((c) => {
-            const s = el('button', { class: 'pjv-sw' + (color === c ? ' on' : ''), type: 'button', style: 'background:' + c, title: c });
+            const s = el('button', { class: 'pjv-sw' + (curSw === c ? ' on' : ''), type: 'button', style: 'background:' + c, title: c });
             s.onclick = () => { color = c; paintSw(); };
             return s;
         }));
@@ -2499,8 +2507,23 @@ function openFolderForm(reload, folder, opts) {
     } });
     return back;
 }
-// 리스트 색 팔레트(생성/수정 폼). 빈값='자동'(id 해시색).
-const PJV_LIST_COLORS = ['#6c8cff', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#06b6d4', '#ec4899', '#64748b'];
+// 리스트 색 팔레트(생성/수정 폼). 빈값='자동'(pjvListAutoColor).
+//  #1067 재조정 — 예전 팔레트는 Tailwind 500 급 고채도(#ec4899 핫핑크·#a855f7 바이올렛·#22c55e 형광초록)라
+//  상태 칩(진행 중 #f59e0b · 할 일 #94a3b8)과 나란히 두면 채도가 튀어 화면이 색에 끌려갔다.
+//  커스텀 필드 옵션에서 이미 쓰던 '차분한 톤' 팔레트(PJV_FIELD_PALETTE)와 같은 계열로 통일한다.
+//  (PJV_FIELD_PALETTE 와 같은 값 — 그 상수는 파일 뒤쪽에 선언돼 있어 여기서 참조하면 TDZ 라 값을 그대로 둔다.)
+const PJV_LIST_COLORS = ['#6b7cff', '#2bb3a3', '#e6913a', '#e0688e', '#9268d6', '#3f9ae0', '#56b877', '#dd6450', '#7f8aa3'];
+// 옛 고채도 값 → 같은 계열의 차분한 톤. 저장된 데이터는 그대로 두고 **그릴 때만** 바꿔 준다
+//  (색은 사람이 고른 것이라 DB 를 임의로 덮어쓰지 않는다 — 다시 고르면 새 팔레트 값이 저장된다).
+const PJV_LEGACY_LIST_COLORS = {
+    '#6c8cff': '#6b7cff', '#22c55e': '#56b877', '#f59e0b': '#e6913a', '#ef4444': '#dd6450',
+    '#a855f7': '#9268d6', '#06b6d4': '#3f9ae0', '#ec4899': '#e0688e', '#64748b': '#7f8aa3',
+};
+function pjvHarmonizeColor(c) {
+    if (!c)
+        return c;
+    return PJV_LEGACY_LIST_COLORS[String(c).toLowerCase()] || c;
+}
 // 새 리스트 / 리스트 수정 폼 — 이름·색 (+ 생성 시 참여 멤버). 저장 후 reload.
 //  opts.onCreated(list) — 생성(수정 아님) 성공 시 새로 만든 영역(서버 응답 { list })을 넘긴다.
 //  새 프로젝트 모달의 분류(영역) 피커가 인라인으로 영역을 만들고 곧장 선택하는 데 쓴다(#337).
