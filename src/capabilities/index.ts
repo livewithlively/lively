@@ -43,6 +43,7 @@ import { memberSecretCapabilities } from "./member-secret.js";
 import { awsCredentialCapabilities } from "./aws-credentials.js";
 import { oauthConnectCapabilities } from "./oauth-connect.js";
 import { brokerCapabilities } from "./broker.js";
+import { whoamiCapabilities } from "./whoami.js";
 import type { Capability, RestMount } from "./types.js";
 import { DB_TOOLS } from "../tools/db.js";
 import type { ToolCandidate } from "./mcp-surface.js";
@@ -50,6 +51,8 @@ import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
 // ── me — 토큰 게이트 확인(스코프 불요, REST 전용). 핸들러가 partial user 에서 null-default 구성. ──
+//  ⚠ MCP 로 열지 않는다(expose.mcp:false 유지) — 응답의 avatar 가 base64 data URL 이미지라 하네스 컨텍스트를 잡아먹는다.
+//   하네스용 신원 창구는 whoami(capabilities/whoami.ts, #1072) — 같은 사람 축을 텍스트 식별자만으로 반환한다.
 const me: Capability = {
   name: "me",
   title: "인증 확인",
@@ -87,7 +90,9 @@ const me: Capability = {
 };
 
 const all: Capability[] = [
-  me, ...contextCapabilities,
+  me,
+  ...whoamiCapabilities, // #1072: whoami — 현재 로그인 신원(member_id·외부계정·팀·이 세션의 하네스/모드). scope=null, MCP+REST(/api/ui/me/whoami). me(웹 게이트, avatar 포함)의 하네스용 짝.
+  ...contextCapabilities,
   ...domainmapCurationCapabilities, // propose_domain·domain_deprecate 만 expose.mcp=true(도메인 authoring), 나머지 REST 전용
   ...domainmapCrudCapabilities, // P-V3-4a: repo/domain 통제어휘 CRUD 5종 + hard-delete 2종(domain_delete·repo_delete) — 전부 expose.mcp=true(MCP+REST)
   ...domainmapIngestCapabilities, // 최초 is 부트스트랩 인제스트(POST /api/ui/domainmap/ingest, MCP domainmap_ingest) — payload 배치 write, insert-only·trust-first

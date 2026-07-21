@@ -273,12 +273,33 @@ async function buildSectionBlocks(opts: { team: string; categoryMap: any[]; wiki
 //  그래서 개인 규칙을 올릴 데가 없어 injection='always' 지식(=전원 공유)밖에 선택지가 없었다 — 남의 세션까지 오염.
 //  memberId 는 bearer 토큰 principal 이므로 본인 세션에만 실린다(남의 개인 규칙이 새지 않음). 조직·팀 층 **뒤**에 놓아
 //  개인 규칙이 조직 규칙을 덮어쓰는 것처럼 읽히지 않게 한다. fail-open — 개인 층 조회가 실패해도 조직 맥락은 나가야 한다.
-async function buildPersonalBlock(memberId: string): Promise<string> {
+//  나 층(#1072)도 같은 getMember 한 번으로 함께 만든다 — 이 세션의 **사람 식별자**(2줄). 주입 맥락엔 호칭·개인 규칙만 있고
+//  member_id 가 없어서, AI 가 "내가 맡은 프로젝트" 같은 요청에 쓸 조인 키를 몰라 추측하거나 되물어야 했다(#1072 의 계기).
+//  짧게 유지한다 — 상세 신원(외부계정·권한·팀·이 세션의 하네스/모드)은 whoami 툴이 SoT 이고 여기선 그 입구만 가리킨다.
+// 나 층 렌더(#1072) — 순수 포맷. 멤버 레코드가 없거나(정적 토큰) 이름/이메일이 비어도 **member_id 는 반드시** 나간다:
+//  주입의 목적이 "이 세션의 사람이 어느 키로 조인되는가"라서, 이름은 없어도 되지만 키가 없으면 블록이 무의미하다.
+export function renderMeBlock(
+  memberId: string,
+  member: { display_name?: string | null; email?: string | null } | null,
+): string {
+  if (!memberId) return ""; // 멤버 무관(정적) 경로 — 출력 불변
+  const bits = [`member_id \`${memberId}\``];
+  const email = member?.email?.trim();
+  if (email) bits.push(email);
+  return `## 나 (현재 로그인)\n- **${member?.display_name?.trim() || memberId}** · ${bits.join(" · ")}`
+    + " — 내가 맡은 프로젝트는 `project_list_v6 {mine:true}`, 상세 신원(외부계정·팀·권한)은 `whoami`.";
+}
+
+async function buildMemberBlocks(memberId: string): Promise<{ me: string; personal: string }> {
   try {
     const { getMember } = await import("./store.js");
-    const body = strip((await getMember(memberId))?.body_md || "");
-    return body ? `## 내 개인 규칙 (나에게만 적용 — 팀 공유 아님)\n\n${body}` : "";
-  } catch { return ""; }
+    const m = await getMember(memberId);
+    const body = strip(m?.body_md || "");
+    return {
+      me: renderMeBlock(memberId, m),
+      personal: body ? `## 내 개인 규칙 (나에게만 적용 — 팀 공유 아님)\n\n${body}` : "",
+    };
+  } catch { return { me: "", personal: "" }; }
 }
 
 export async function previewMemberContext(orgName: string, memberId?: string): Promise<string> {
@@ -295,8 +316,10 @@ export async function previewMemberContext(orgName: string, memberId?: string): 
   // 온보딩 baseline(#269) — 조직 미완이면 "남은 단계 + AI 지침"을 헤더보다 위에 주입(완료면 ""). SessionStart 훅의 live 소스.
   const { computeOnboardingStatus, renderOnboardingBlock } = await import("./onboarding.js");
   const onboarding = renderOnboardingBlock(await computeOnboardingStatus());
-  const personal = memberId ? await buildPersonalBlock(memberId) : ""; // 개인 층 — 본인 세션에만(조직·팀 층 뒤).
-  const parts = [onboarding, header, sectionsText, personal];
+  // 나 층·개인 층 — 본인 세션에만(memberId=bearer principal). memberId 없으면 둘 다 "" → 정적(멤버 무관) 출력 불변.
+  const { me, personal } = memberId ? await buildMemberBlocks(memberId) : { me: "", personal: "" };
+  // '나'는 헤더 직후(누구의 맥락인지 먼저), 개인 규칙은 조직·팀 층 뒤(조직 규칙을 덮어쓰는 것처럼 읽히지 않게).
+  const parts = [onboarding, header, me, sectionsText, personal];
   // H1-b 시크릿 출력게이트(v3 P-V3-1): 이 미리보기는 구성원 AI 가 매 세션 읽는 항상-주입 컨텍스트(=훅 fetchOrgContext live 소스).
   //  substituteBlocks 가 섹션마다 이미 마스킹하나, 레거시 섹션 본문의 평문 시크릿 대비 조립 후 한 번 더 redactString(fail-open).
   return redactString(parts.filter(Boolean).join("\n\n")) + "\n";
