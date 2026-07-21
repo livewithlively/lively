@@ -1713,15 +1713,21 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .tsess-qbody { min-width: min(560px, 84vw); max-width: 640px; }
 .tsess-qcap { margin-bottom: 10px; font-weight: 600; }
 .tsess-qlist { display: flex; flex-direction: column; gap: 9px; max-height: 62vh; overflow-y: auto; padding-right: 3px; }
-/* 질문 카드 — 왼쪽 색 레일 + 번호 알약 + 우측 시각. 호버 시 살짝 떠오르며 강조. */
-.tsess-qitem { position: relative; padding: 11px 13px 11px 15px; border: 1px solid var(--line); border-radius: 11px; background: var(--bg); overflow: hidden; transition: border-color .12s, box-shadow .12s, background .12s; }
+/* 질문 카드 — 왼쪽 색 레일 + 번호 알약 + 우측 시각. 호버 시 살짝 떠오르며 강조.
+   ⚠ flex: none 필수 — 부모(.tsess-qlist)가 max-height 를 가진 flex column 이라, 기본 flex-shrink:1 이면
+   항목이 스크롤되는 대신 짜부라진다(질문이 많을수록 심해져 45개 기준 69px→24px, overflow:hidden 이 본문을 잘라 '다 깨져' 보였다). */
+.tsess-qitem { flex: none; position: relative; padding: 11px 13px 11px 15px; border: 1px solid var(--line); border-radius: 11px; background: var(--bg); overflow: hidden; transition: border-color .12s, box-shadow .12s, background .12s; }
 .tsess-qitem::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: color-mix(in srgb, var(--blue) 35%, var(--line)); opacity: 0; transition: opacity .12s; }
 .tsess-qitem:hover { border-color: color-mix(in srgb, var(--blue) 30%, var(--line)); background: color-mix(in srgb, var(--blue) 4%, var(--bg)); box-shadow: 0 2px 8px rgba(21,35,59,.06); }
 .tsess-qitem:hover::before { opacity: 1; }
 .tsess-qmeta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .tsess-qnum { flex: none; font-size: 10.5px; font-weight: 800; color: var(--blue); background: color-mix(in srgb, var(--blue) 11%, transparent); border-radius: 999px; padding: 2px 8px; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
 .tsess-qwhen { flex: none; font-size: 11px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
-.tsess-qtext { font-size: 13px; line-height: 1.62; color: var(--ink); white-space: pre-wrap; word-break: break-word; }
+.tsess-qtext { font-size: 13.5px; line-height: 1.72; color: var(--ink); white-space: pre-wrap; word-break: break-word; }
+/* 긴 질문은 접어 둔다 — 한 질문이 목록을 다 잡아먹지 않게(펼침은 '더 보기'). */
+.tsess-qtext.clamped { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 8; overflow: hidden; }
+.tsess-qmore { margin-top: 7px; padding: 0; border: 0; background: none; font: inherit; font-size: 12px; font-weight: 700; color: var(--blue); cursor: pointer; }
+.tsess-qmore:hover { text-decoration: underline; }
 /* 리스트 스크롤바 — 얇고 은은하게. */
 .tsess-qlist::-webkit-scrollbar { width: 8px; }
 .tsess-qlist::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted-2) 45%, transparent); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
