@@ -1638,9 +1638,7 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 /* 상태칩(=카운트 요약) + 우측 프로젝트필터/선택토글 */
 .tsess-controls { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 14px; }
 .tsess-controls-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.tsess-filter-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.tsess-filter-lbl { font-size: 11.5px; font-weight: 700; color: var(--ink-note); margin-left: 6px; }
-.tsess-filter-row > .tsess-filter-lbl:first-child { margin-left: 0; }
+/* (구 '소유' 필터 줄 .tsess-filter-row/-lbl 제거 — 필터를 목적별 뷰 한 줄로 합치면서 사라졌다, #1062) */
 .tsess-projfilter { position: relative; display: inline-flex; }
 .tsess-projfilter-btn { display: inline-flex; align-items: center; gap: 6px; font-family: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; cursor: pointer; max-width: 220px; }
 .tsess-projfilter-btn:hover { border-color: var(--muted-2); }
