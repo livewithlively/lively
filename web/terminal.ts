@@ -114,22 +114,46 @@ function shortDir(d) {
   return segs.length <= 2 ? (d || '') : '…/' + segs.slice(-2).join('/');
 }
 // 상태 필터칩 겸 카운트 요약 — 색점 + 라벨 + 개수. (전체 칩은 색점 없음.)
-function tsessChip(label, count, cls, active, onClick) {
-  const c = el('button', { class: 'tsess-chip-btn' + (active ? ' active' : '') + (cls ? ' ' + cls : ''), type: 'button', onclick: onClick });
+function tsessChip(label, count, cls, active, onClick, hint?) {
+  const c = el('button', { class: 'tsess-chip-btn' + (active ? ' active' : '') + (cls ? ' ' + cls : ''), type: 'button', onclick: onClick, title: hint || label });
   if (cls) c.append(el('span', { class: 'tsess-dot tsess-dot-' + cls }));
   c.append(el('span', { class: 'tsess-chip-label', text: label }), el('span', { class: 'tsess-chip-n', text: String(count) }));
   return c;
 }
 
-// #1015 D — 필터 상태 영속(브라우저). 상태(다중 on/off)·소유. 프로젝트 필터는 세션마다 달라 안 남긴다.
-const TSESS_STATUSSET_KEY = 'lively_term_statusset_v1';
-function tsessStatusSet(): Set<string> { try { const r = localStorage.getItem(TSESS_STATUSSET_KEY); const a = r ? JSON.parse(r) : []; return new Set(Array.isArray(a) ? a.filter((x) => typeof x === 'string') : []); } catch { return new Set(); } }
-function saveTsessStatusSet(s: Set<string>) { try { localStorage.setItem(TSESS_STATUSSET_KEY, JSON.stringify([...s])); } catch { /* noop */ } }
-const TSESS_OWN_KEY = 'lively_term_own_filter_v1';
-function tsessOwnFilter(): string { try { const v = localStorage.getItem(TSESS_OWN_KEY); return ['all', 'mine', 'invited', 'project'].includes(v as string) ? (v as string) : 'all'; } catch { return 'all'; } }
-function saveTsessOwnFilter(v: string) { try { localStorage.setItem(TSESS_OWN_KEY, v); } catch { /* noop */ } }
-// 프로젝트 공동 세션인가 — 남의 세션이 보이는 사유가 '초대'(개인)냐 '프로젝트 공개'(#452)냐를 가른다.
-function tsessIsProject(s): boolean { return !!(Number(s.projectId) || 0); }
+// ── 필터 재설계(#1062) — '상태 다중토글 + 소유 3버킷'을 목적별 뷰 한 줄로 교체 ──
+//  왜: 실측(48세션)에서 상태는 대기중 42 / 작업중 3 / 확인필요 2 / 종료됨 1 로 88%가 한 칸이라 필터가 아니라
+//  장식이었고, 소유도 39:9 쏠림이라 칩 두 개를 쓸 값이 없었다. 반대로 사람이 실제로 나누고 싶어 하는 축
+//  —'지금 나를 기다리는 것 / 오늘 만진 것 / 몇 주째 방치된 것'— 은 아예 없었다(마지막 작업 경과 분포는
+//  오늘 11 · 1~7일 19 · 8~30일 18 로 잘 갈린다). 그래서 축을 '상태'가 아니라 **목적**으로 바꾼다.
+//  프로젝트(40개에 1~3개씩 분산)는 검색형 드롭다운이 맞으므로 그대로 직교 유지.
+const DAY = 86400;
+function sessAgeDays(s) { const t = Number(s.lastActive || s.created) || 0; return t ? (Date.now() / 1000 - t) / DAY : 999; }
+// '오늘'은 24시간이 아니라 **달력상 오늘**(자정 이후) — 라벨이 '오늘'인데 어젯밤 11시 작업이 빠지거나
+//  하루 종일 경계가 밀리면 읽는 사람의 '오늘'과 어긋난다.
+function sessSinceMidnight(s) {
+  const t = Number(s.lastActive || s.created) || 0;
+  if (!t) return false;
+  const d = new Date(); d.setHours(0, 0, 0, 0);
+  return t * 1000 >= d.getTime();
+}
+const TSESS_VIEWS: Array<{ key: string; label: string; cls?: string; hint: string; match: (s) => boolean }> = [
+  { key: 'all',     label: '전체',      hint: '모든 세션', match: () => true },
+  { key: 'waiting', label: '확인 필요', cls: 'waiting', hint: '내 승인·선택을 기다리는 세션 — 가장 먼저 볼 것', match: (s) => s._st === 'waiting' },
+  { key: 'busy',    label: '작업 중',   cls: 'busy',    hint: '지금 돌고 있는 세션', match: (s) => s._st === 'busy' },
+  { key: 'today',   label: '오늘',      hint: '오늘(자정 이후) 작업한 세션', match: (s) => sessSinceMidnight(s) },
+  { key: 'week',    label: '최근 7일',  hint: '이번 주에 작업한 세션', match: (s) => sessAgeDays(s) < 7 },
+  { key: 'stale',   label: '방치 7일+', hint: '일주일 넘게 아무 작업이 없는 세션 — 정리(종료) 후보', match: (s) => sessAgeDays(s) >= 7 && !sessDead(s) },
+  { key: 'ended',   label: '끝남',      cls: 'exited',  hint: 'AI 가 더 안 도는 세션(종료됨·연결 끊김)', match: (s) => sessDead(s) },
+];
+const TSESS_VIEW_KEY = 'lively_term_view_v2';
+function tsessView(): string { try { const v = localStorage.getItem(TSESS_VIEW_KEY) || 'all'; return TSESS_VIEWS.some((x) => x.key === v) ? v : 'all'; } catch { return 'all'; } }
+function saveTsessView(v: string) { try { localStorage.setItem(TSESS_VIEW_KEY, v); } catch { /* noop */ } }
+const TSESS_MINE_KEY = 'lively_term_mine_only_v2';
+function tsessMineOnly(): boolean { try { return localStorage.getItem(TSESS_MINE_KEY) === '1'; } catch { return false; } }
+function saveTsessMineOnly(v: boolean) { try { localStorage.setItem(TSESS_MINE_KEY, v ? '1' : '0'); } catch { /* noop */ } }
+// (구 상태·소유 필터 영속 키 lively_term_statusset_v1 / lively_term_own_filter_v1 은 뷰 전환과 함께 폐기 —
+//  브라우저에 남은 옛 값은 더 읽지 않는다. 새 키는 _v2.)
 
 // #1015 C — 검색형 프로젝트 필터(드롭다운 버튼 + 타이핑 검색). 값: 0=전체 · -1=개인 세션만 · -2=프로젝트 세션만 · >0=projectId.
 function buildSessProjFilter(projName: Map<any, string>, projIds: any[], current: number, onPick: (v: number) => void) {
@@ -196,8 +220,8 @@ async function renderTerminal(view) {
   // 관리(선택삭제) 가능 = 내 소유 세션. 서버도 소유자 아니면 403 재검증.
   const ownedSessions = sessions.filter((s) => s.owned);
   const sel: any = { mode: false, ids: new Set() };
-  let statusOn = tsessStatusSet();   // #1015 D 상태 필터(다중 on/off). 비어있으면 전체.
-  let ownF = tsessOwnFilter();        // 'all' | 'mine'(내 세션) | 'invited'(초대받은)
+  let viewF = tsessView();            // 목적별 뷰(단일 선택) — TSESS_VIEWS 의 key
+  let mineOnly = tsessMineOnly();     // 남의 세션(프로젝트 공동·초대) 숨기기 토글
   let projF = 0;                      // 0=전체 · -1=개인 세션만 · -2=프로젝트 세션만 · >0=projectId
 
   let shownNow: any[] = [];           // 지금 필터에 걸려 화면에 있는 세션 — 벌크바의 '보이는 것 전체 선택' 범위
@@ -256,24 +280,30 @@ async function renderTerminal(view) {
       : null;
     headActions.replaceChildren(...[tourBtn, logBtn, nodeBtn, newBtn].filter(Boolean));
 
-    // ── 1행: 상태 필터(다중 on/off — 색점·라벨 유지, 비어있으면 전체) + 우측 액션 ──
-    const counts: any = { waiting: 0, busy: 0, idle: 0, exited: 0, offline: 0 };
-    for (const s of sessions) counts[s._st]++;
-    const stChip = (key, label, cls) => tsessChip(label, counts[key], cls, statusOn.has(key), () => {
-      if (statusOn.has(key)) statusOn.delete(key); else statusOn.add(key);
-      saveTsessStatusSet(statusOn); draw();
-    });
-    const allChip = el('button', { class: 'tsess-chip-btn' + (statusOn.size === 0 ? ' active' : ''), type: 'button', title: '모든 상태',
-      onclick: () => { statusOn.clear(); saveTsessStatusSet(statusOn); draw(); } },
-      el('span', { class: 'tsess-chip-label', text: '전체' }), el('span', { class: 'tsess-chip-n', text: String(sessions.length) }));
-    // 상태 칩 — 5단계. 해당 세션이 0개인 상태는 칩을 숨긴다(빈 칩이 늘어나 필터 줄이 시끄러워지므로).
-    const chips = el('div', { class: 'tsess-chips' }, allChip,
-      ...([['waiting', '확인 필요'], ['busy', '작업 중'], ['idle', '대기 중'], ['exited', '종료됨'], ['offline', '연결 끊김']] as const)
-        .filter(([k]) => counts[k] > 0 || statusOn.has(k))
-        .map(([k, lbl]) => stChip(k, lbl, k)));
+    // ── 1행: 목적별 뷰(단일 선택) — '무슨 상태냐'가 아니라 '지금 뭘 보려느냐'로 나눈다.
+    //  소유 축은 여기 섞지 않고 우측 '내 것만' 토글 하나로(쏠림이 심해 칩을 쓸 값이 없다).
+    //  0건인 뷰는 숨긴다 — 단, 지금 고른 뷰는 0건이어도 남겨야 해제할 수 있다.
+    const pool = mineOnly ? sessions.filter((s) => s.owned) : sessions;   // 뷰 카운트는 '내 것만' 적용 뒤 기준(보이는 수와 일치)
+    const viewCount = (v) => pool.filter(v.match).length;
+    const chips = el('div', { class: 'tsess-chips' },
+      ...TSESS_VIEWS
+        .filter((v) => v.key === 'all' || v.key === viewF || viewCount(v) > 0)
+        .map((v) => tsessChip(v.label, viewCount(v), v.cls || '', viewF === v.key, () => {
+          viewF = viewF === v.key ? 'all' : v.key; saveTsessView(viewF); draw();
+        }, v.hint)));
 
-    // 우측 — 질문검색 + 프로젝트 필터(프로젝트 세션이 있을 때만) + 선택. (원래 한 줄 레이아웃 유지)
+    // 우측 — 내 것만 토글 + 질문검색 + 프로젝트 필터(프로젝트 세션이 있을 때만) + 선택. (한 줄 레이아웃)
     const right = el('div', { class: 'tsess-controls-right' });
+    // 소유 축은 칩 여러 개가 아니라 토글 하나 — 실측 39:9 쏠림이라 '남의 것만' 보는 수요는 사실상 없고,
+    //  필요한 건 '남의 것 빼고 내 것만 보기' 하나뿐이다. 남의 세션이 있을 때만 노출.
+    const othersCount = sessions.filter((s) => !s.owned).length;
+    if (mineOnly && !othersCount) mineOnly = false;   // 남의 세션이 없으면 토글이 사라지므로 갇히지 않게 해제
+    if (othersCount) {
+      right.append(el('button', { class: 'btn btn-ghost btn-sm tsess-gbtn' + (mineOnly ? ' active' : ''),
+        title: mineOnly ? '남의 세션(프로젝트 공동·초대)도 함께 보기' : '남의 세션 ' + othersCount + '개를 숨기고 내 세션만 보기',
+        text: mineOnly ? '✓ 내 것만' : '내 것만',
+        onclick: () => { mineOnly = !mineOnly; saveTsessMineOnly(mineOnly); draw(); } }));
+    }
     right.append(el('button', { class: 'btn btn-ghost btn-sm tsess-gbtn', text: '질문 검색', title: '여러 세션에서 내가 클로드에게 보낸 질문을 통합 검색하고 어느 세션인지 찾기', onclick: () => openGlobalPromptSearch(ctx) }));
     const projIds = [...new Set(sessions.map((s) => Number(s.projectId) || 0).filter(Boolean))];
     if (projIds.length) right.append(buildSessProjFilter(projName, projIds, projF, (v) => { projF = v; draw(); }));
@@ -282,34 +312,13 @@ async function renderTerminal(view) {
       : (sessions.length ? el('button', { class: 'btn btn-ghost btn-sm', text: '선택', title: '여러 세션을 골라 한 탭 그리드로 열거나 한 번에 종료', onclick: () => { sel.mode = true; draw(); } }) : null);
     if (selToggle) right.append(selToggle);
 
-    // ── 소유 필터(내 세션 / 초대받은 세션 / 남의 프로젝트 세션) — #1015 D.
-    //  남의 세션이 하나라도 있을 때만 별도 줄로 노출(전부 내 것이면 무의미하므로 숨김).
-    //  개인 세션은 초대로만 남의 것이 보이고(owner+invites), 프로젝트 세션은 초대 무관 전원 공개(#452) —
-    //  둘은 성격이 달라 한 칩으로 묶지 않는다.
-    const mineCount = sessions.filter((s) => s.owned).length;
-    const invitedCount = sessions.filter((s) => !s.owned && !tsessIsProject(s)).length;
-    const projCount = sessions.filter((s) => !s.owned && tsessIsProject(s)).length;
-    const othersCount = invitedCount + projCount;
-    if (ownF === 'invited' && !invitedCount) ownF = 'all';   // 해당 버킷이 비면 필터 해제(줄이 숨겨져 갇히지 않게)
-    if (ownF === 'project' && !projCount) ownF = 'all';
-    if (ownF === 'mine' && !othersCount) ownF = 'all';
-    const rows = [el('div', { class: 'tsess-controls-top' }, chips, right)];
-    if (othersCount) {
-      const ownChip = (key, label, cnt) => tsessChip(label, cnt, '', ownF === key, () => { ownF = ownF === key ? 'all' : key; saveTsessOwnFilter(ownF); draw(); });
-      rows.push(el('div', { class: 'tsess-filter-row' },
-        el('span', { class: 'tsess-filter-lbl', text: '소유' }),
-        ownChip('mine', '내 세션', mineCount),
-        ...(invitedCount ? [ownChip('invited', '초대받은 세션', invitedCount)] : []),
-        ...(projCount ? [ownChip('project', '남의 프로젝트 세션', projCount)] : [])));
-    }
-    controls.replaceChildren(...rows);
+    controls.replaceChildren(el('div', { class: 'tsess-controls-top' }, chips, right));
 
-    // 필터 적용(상태 다중 · 소유 · 프로젝트) + 정렬(작업중→대기→오프라인, 그 안에서 최근 활동순).
+    // 필터 적용(뷰 · 내 것만 · 프로젝트) + 정렬(확인필요→작업중→대기→끝남, 그 안에서 최근 작업순).
+    const activeView = TSESS_VIEWS.find((v) => v.key === viewF) || TSESS_VIEWS[0];
     const shown = sessions
-      .filter((s) => statusOn.size === 0 || statusOn.has(s._st))
-      .filter((s) => ownF === 'all' || (ownF === 'mine' && s.owned)
-        || (ownF === 'invited' && !s.owned && !tsessIsProject(s))
-        || (ownF === 'project' && !s.owned && tsessIsProject(s)))
+      .filter((s) => !mineOnly || s.owned)
+      .filter(activeView.match)
       .filter((s) => {
         if (projF === 0) return true;
         const pid = Number(s.projectId) || 0;
