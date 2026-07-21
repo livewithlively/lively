@@ -1393,6 +1393,13 @@ async function fillSessions(zone, onCount, projectsP) {
                     openBtn.textContent = '복원 중…';
                     try {
                         const r = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/restore', { method: 'POST', body: '{}' });
+                        // 라이브 경합(already) — 그새 다시 떠 있으면 새로 만들지 않고 그 세션을 그대로 연다(오success 방지).
+                        if (r && r.already) {
+                            window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank');
+                            toast('세션이 이미 살아있어 그대로 엽니다');
+                            reloadSessions && reloadSessions();
+                            return;
+                        }
                         const ns = r && r.session;
                         if (ns && ns.id)
                             window.open('/ui/terminal.html?session=' + encodeURIComponent(ns.id) + '&label=' + encodeURIComponent(ns.label || s.label || ''), '_blank');

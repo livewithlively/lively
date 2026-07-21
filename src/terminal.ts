@@ -300,6 +300,9 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
         return;
       }
     }
+    // ⚠ admin 회수는 reaper 와 달리 attached/busy/waiting 를 검사하지 않는다 — **의도된 긴급 override**(break-glass):
+    //  #1059 OOM 위기처럼 박스가 위태로우면 관리자가 작업 중·접속 중 세션도 즉시 회수해 메모리를 되찾아야 한다.
+    //  파괴적이지 않다 — preserveState 로 desired-state 를 남겨 restorable 로 복원 가능(자동 reaper 가 정당세션을 보호하는 것과 역할 분담).
     const admin = reclaim && !!u.scopes?.includes("admin");
     await killSession(u, req.params.id, { admin, preserveState: reclaim });
     res.json({ ok: true });
