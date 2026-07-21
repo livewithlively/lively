@@ -1039,15 +1039,19 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         });
         nav.append(sideResize);
         const navInner = el('div', { class: 'pjv-side-nav-inner' });
-        const collapseBtn = el('button', { class: 'pjv-side-collapse', type: 'button', title: '사이드바 닫기', 'aria-label': '사이드바 닫기', text: '◀' });
+        // 접기 글리프는 «(이중 꺾쇠) — 클릭업과 같은 기호. 채워진 ▲▼◀ 삼각형은 트리 캐럿(펼침/접힘) 몫이라 섞이면 헷갈린다.
+        const collapseBtn = el('button', { class: 'pjv-side-collapse', type: 'button', title: '사이드바 닫기', 'aria-label': '사이드바 닫기', text: '«' });
         // 세모(◀) 닫기 — 직접 고른 스코프(리스트/폴더)는 유지한 채 nav 만 닫는다(#662). 자동 선택 스코프면 예전처럼
         //  전체 보드로(뷰 리셋 pjvExitAreaMode — 안 하면 URL·잔존뷰가 스코프에 남는다).
         collapseBtn.onclick = (e) => { e.stopPropagation(); pjvBoardView.byArea = false; pjvKeepScopeOnCollapse(); pjvPersistSideOpen(); syncToggles(); render(); };
-        // ── 헤더 줄(#1067, 클릭업 파리티) — 라벨 + [🔍 검색] [＋ 추가] [◀ 접기]. 아이콘은 사이드바에 마우스를 올리면 나타난다.
+        // ── 헤더 줄(#1067, 클릭업 파리티) — 라벨 + [🔍 검색] [◀ 접기] + [＋ ⌄ 새로 만들기]. 두 부류가 다르다:
+        //  · 🔍·◀ = **호버로 드러나는** 무지 아이콘(평소엔 라벨만 보이게 조용히).
+        //  · ＋ = **항상 보이는 흰 알약**(테두리+얕은 그림자) — 클릭업도 이것만 상시 노출한다. 생성은 늘 손에 닿아야 하니까.
         //  검색창은 평소 접혀 있고 🔍 를 눌러야 펼쳐진다(트리에 세로 공간을 더 준다). 검색어가 있으면 계속 펼친 채.
-        //  ＋ 는 새 스페이스·폴더·리스트 메뉴 — 예전엔 트리 맨 아래 버튼 3개였는데 여기로 올렸다(맨 아래는 아카이브·휴지통 자리).
+        //  ＋ 메뉴는 예전 트리 맨 아래 버튼 3개를 대체한다(맨 아래는 아카이브·휴지통 자리).
         const searchToggle = el('button', { class: 'pjv-side-head-btn', type: 'button', title: '폴더·리스트·프로젝트 검색', 'aria-label': '검색' }, pjvSideSearchIcon());
-        const addBtn = el('button', { class: 'pjv-side-head-btn pjv-side-head-add', type: 'button', title: '새로 만들기 — 스페이스 · 폴더 · 리스트', 'aria-label': '새로 만들기' }, el('span', { class: 'pjv-newlist-plus', text: '＋' }), el('span', { class: 'pjv-view-btn-caret', 'aria-hidden': 'true', text: '▾' }));
+        const addGlyph = (d, w) => { const n = sv('svg', { viewBox: '0 0 24 24', width: w, height: w, fill: 'none', stroke: 'currentColor', 'stroke-width': 2.2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' }); n.append(sv('path', { d })); return n; };
+        const addBtn = el('button', { class: 'pjv-side-head-add', type: 'button', title: '새로 만들기 — 스페이스 · 폴더 · 리스트', 'aria-label': '새로 만들기' }, addGlyph('M12 5.5v13M5.5 12h13', 15), addGlyph('M6.5 10l5.5 5 5.5-5', 12));
         addBtn.onclick = (e) => {
             e.stopPropagation();
             const menu = el('div', { class: 'pjv-menu' });
@@ -1062,7 +1066,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
             menu.append(mk('새 폴더', '리스트를 묶는 정리용 폴더', () => openFolderForm(reload)));
             menu.append(mk('새 리스트', '프로젝트가 실제로 담기는 곳', () => openListForm(reload)));
         };
-        navInner.append(el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '폴더 · 리스트' }), el('span', { class: 'pjv-side-head-btns' }, searchToggle, addBtn, collapseBtn)));
+        navInner.append(el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '폴더 · 리스트' }), el('span', { class: 'pjv-side-head-btns' }, searchToggle, collapseBtn, addBtn)));
         // ── 폴더·리스트·프로젝트 검색(#req, #665) — 트리 위 검색창. 이름으로 폴더/리스트/프로젝트 필터, 매칭 폴더는 자동 펼침.
         //  매칭 프로젝트는 소속 리스트 아래 결과 행으로(클릭=상세). 트리만 다시 그려 포커스 유지. ──
         const searchInput = el('input', { class: 'pjv-side-search-input', type: 'text', placeholder: '폴더·리스트·프로젝트 검색', 'aria-label': '폴더·리스트·프로젝트 검색' });
