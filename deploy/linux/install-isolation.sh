@@ -53,6 +53,12 @@ echo "공유 워크스페이스 → $SHARED_DIR (root:lively-shared 2775 setgid)
 install -d -m 0755 /opt/lively/libexec
 install -m 0755 -o root -g root "$DIR/box-spawn" /opt/lively/libexec/box-spawn
 echo "box-spawn → /opt/lively/libexec/box-spawn (root:root 0755)"
+# ②-cg box-cgspawn wrapper(#1059 D — per-session cgroup 메모리 격리, root:root 0755) — 코드(terminal-isolation.ts
+#     BOX_CGSPAWN)·sudoers Cmnd 와 경로 일치. 게이트웨이가 root 로 이것만 호출해 systemd-run --scope 로 세션을
+#     MemoryHigh/Max scope 에 가둔다(비-root 는 polkit 때문에 cgroup 불가). systemd-run/cgroup2 부재 박스에선
+#     wrapper 내부가 runuser 폴백(무회귀). 파일은 어디에나 깔아도 무해 — 실제 사용은 게이트웨이 코드가 게이트.
+install -m 0755 -o root -g root "$DIR/box-cgspawn" /opt/lively/libexec/box-cgspawn
+echo "box-cgspawn → /opt/lively/libexec/box-cgspawn (root:root 0755, #1059 D per-session cgroup)"
 # ②-b provision-member(웹 프로비저닝용 root 스크립트) — deploy/provision-member.sh 의 root 소유본(게이트웨이 비쓰기).
 #     웹 관리탭 [OS 격리 유저 만들기] 가 게이트웨이→잠긴 sudo→이 스크립트로 useradd. 코드(PROVISION_BIN)와 경로 일치.
 install -m 0755 -o root -g root "$DIR/../provision-member.sh" /opt/lively/libexec/provision-member

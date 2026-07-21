@@ -23,7 +23,8 @@ import { assertDiskWritable } from "./disk-guard.js";
 import { orgTimezone } from "./org/timezone.js"; // #778 pane TZ = 조직 시간대
 import { SESSION_ID_RE } from "./org/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 import { DANGEROUS_SCOPES, isScope } from "./capabilities/scopes.js";
-import { resolveMemberOsUser, wrapAsMember, osUsername, isolationInfraReady, osUserExists } from "./terminal-isolation.js";
+import { resolveMemberOsUser, wrapAsMember, osUsername, isolationInfraReady, osUserExists, type CgroupLimit } from "./terminal-isolation.js";
+import { effectiveSessionMemoryPolicy } from "./org/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡
 import { memberMkdir } from "./terminal-member-fs.js";
 import { materializeMemberGit, ensureGitSafeDirectory } from "./org/git-credential-materialize.js";
 
@@ -591,7 +592,17 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   if (osUser) {
     // ⚠ tmux -c 를 안 쓴다: -c 는 게이트웨이 권한으로 chdir 해 멤버 700 홈에 못 들어간다('chdir(2) failed: Permission denied' 반복).
     //  대신 box-spawn 이 --cwd 로 멤버 uid 에서 cd 한다. cmd 빈 배열(셸)이어도 wrapper 가 로그인 셸을 띄운다.
-    args.push(...wrapAsMember(osUser, cmd, target));
+    // #1059 D — per-session cgroup 메모리 캡: 관리탭/env 로 캡이 설정된 경우에만 cg 를 넘긴다(→ wrapAsMember 가
+    //  box-cgspawn 경유로 systemd-run --scope 격리). 미설정(0/0)=cg undefined → 종전 sudo -u 경로(무회귀, cap-gated).
+    //  정책을 못 읽어도 세션 생성을 막지 않는다 — 메모리 캡은 방어책이지 세션 생성의 필수 전제가 아니다.
+    let cg: CgroupLimit | undefined;
+    try {
+      const mp = await effectiveSessionMemoryPolicy(() => getRuntimeConfig().then((c) => c.session_memory_policy));
+      if (mp.per_session_high_mb > 0 || mp.per_session_max_mb > 0) cg = { highMb: mp.per_session_high_mb, maxMb: mp.per_session_max_mb };
+    } catch (err) {
+      console.warn(`[terminal] 세션 메모리 정책 조회 생략(비치명): ${err instanceof Error ? err.message : String(err)}`);
+    }
+    args.push(...wrapAsMember(osUser, cmd, target, cg));
   } else {
     args.push("-c", target);
     // 멀티프로필(#346·#1014): 비격리 경로에서도 **항상 이 멤버 전용 CLAUDE_CONFIG_DIR** 을 준다(공유 폴백 폐기).

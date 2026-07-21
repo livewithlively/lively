@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# ─────────────────────────────────────────────────────────────────────────────
+# 중앙 박스 per-session cgroup 메모리 격리(#1059 D) — cgroup scope spawn 래퍼 (root 고정 진입점).
+#
+#  왜(#1059): claude 세션은 **네이티브 ELF**(V8 아님) → NODE_OPTIONS 힙제한이 안 통한다. 세션 메모리 폭주를
+#   막는 유일한 수단은 cgroup. 그런데 게이트웨이(비-root lively)는 cgroup 을 못 만든다(Delegate=no,
+#   비-root systemd-run 은 polkit "Interactive authentication required" 로 막힘). 그래서 이 래퍼가 **root 로**
+#   (잠긴 sudoers 로 이것만 허용) systemd-run --scope 를 띄워, 세션을 자기 transient scope 에 MemoryHigh/Max
+#   를 걸어 격리한다. 폭주 세션 하나만 그 scope 안에서 OOM-kill 되고 박스는 생존한다.
+#  부수효과(이득): 세션이 각자 transient scope(lively-sessions.slice)로 빠져나가 **게이트웨이 서비스 cgroup**
+#   (모든 세션이 KillMode=process 하에 눌러앉아 10GB 로 부풀던 그 cgroup) 팽창도 자동 해소된다.
+#
+#  호출(게이트웨이 → 잠긴 sudoers → 이 스크립트, terminal-isolation.ts wrapAsMember 가 argv 생성):
+#     sudo -n -- /opt/lively/libexec/box-cgspawn <osUser> <memHigh> <memMax> -- /opt/lively/libexec/box-spawn [--cwd DIR] [harness...]
+#   · <osUser>  = box_<slug> 또는 broker_<slug> (아래 정규식). root·임의유저 거부 → uid 상승 불가.
+#   · <memHigh> = MemoryHigh(소프트: 초과 시 강한 회수·스로틀, kill 아님) 예 "3072M", 또는 "0"/"infinity"=무제한(생략).
+#   · <memMax>  = MemoryMax(하드: 초과 시 그 scope 안에서 OOM-kill)  예 "4096M", 또는 "0"/"infinity"=무제한(생략).
+#   · '--' 뒤 첫 토큰은 **반드시 box-spawn 경로**(고정). 임의 바이너리 실행 봉쇄(방어).
+#
+#  이 래퍼가 하는 일(그 외 권한상승 없음): 인자 엄격검증 → systemd-run --scope(root 라 polkit 없이 cgroup 생성)
+#   -p MemoryHigh/Max=.. -- **setpriv**(uid 강하 + --init-groups 로 supplementary 그룹 초기화) -- box-spawn ... 를
+#   exec. ⚠ uid 강하를 systemd-run --uid 로 하지 않는 이유: scope 모드(client-side)라 initgroups 를 안 해 멤버
+#   그룹 누락 + 호출자(root) 그룹 잔류(실측). setpriv 는 PAM 을 안 거쳐 cgroup scope 재부모화 위험도 0(아래 상세).
+#   scope 는 이 래퍼의 env(=첫 sudo 의 env_reset+env_keep 로 이미 좁혀진 것)를 상속하므로 TZ/LIVELY_SESSION_ID/
+#   LIVELY_MODE 등이 setpriv 를 통과해 box-spawn 까지 흐른다(box-spawn 헤더 참조 — box-spawn 이 재-export 로 못박음).
+#
+#  ⚠ 설치/소유 불변식(이게 지켜져야 격리·비상승이 성립):
+#     · 경로 = sudoers 의 Cmnd 및 코드(terminal-isolation.ts BOX_CGSPAWN)와 **문자열 일치**: /opt/lively/libexec/box-cgspawn
+#     · 소유 root:root, 권한 0755 (멤버·게이트웨이 비쓰기 — 쓰기 가능하면 이 root 진입점을 바꿔 임의 root 실행 가능).
+#     · box-spawn 헤더의 불변식과 동일 계열. install-isolation.sh 가 설치.
+#  ⚠ 폴백: systemd-run/cgroup v2 부재(구 커널·일부 컨테이너)면 cgroup 없이 **setpriv(또는 runuser)로 uid 강하만**
+#     한다(무회귀 — 격리는 유지, 메모리 캡만 생략). 절대 uid 강하 없이 root 로 exec 하지 않는다.
+# ─────────────────────────────────────────────────────────────────────────────
+set -euo pipefail
+
+# root 로 도는 게 전제(sudoers 가 그렇게 부른다). PATH 를 결정적으로 고정(상속 PATH 불신 — 이 스크립트는 root).
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+die() { echo "box-cgspawn: $*" >&2; exit 2; }
+
+# ── 인자 파싱 ──
+osuser="${1:-}"; memhigh="${2:-}"; memmax="${3:-}"; sep="${4:-}"
+[ -n "$osuser" ] && [ -n "$memhigh" ] && [ -n "$memmax" ] \
+  || die "usage: box-cgspawn <osUser> <memHigh> <memMax> -- <cmd...>"
+[ "$sep" = "--" ] || die "missing '--' separator (got '${sep}')"
+shift 4
+[ "$#" -gt 0 ] || die "no command after '--'"
+
+# ── osUser 검증 — box_/broker_ + [a-z0-9-] 만(root·임의유저 거부 → uid 상승 불가). box-spawn/terminal-isolation 규칙 일치. ──
+[[ "$osuser" =~ ^(box|broker)_[a-z0-9-]+$ ]] || die "invalid osUser: ${osuser}"
+uid="$(id -u "$osuser" 2>/dev/null)" || die "unknown user: ${osuser}"
+gid="$(id -g "$osuser" 2>/dev/null)" || die "cannot resolve gid: ${osuser}"
+[ "$uid" != 0 ] || die "refusing uid 0 (${osuser})"   # 이중 안전: 접두사 규칙상 불가하지만 명시 거부
+
+# ── uid 강하 계층 — supplementary 그룹 **초기화 필수**. ⚠ systemd-run --scope --uid 는 scope 모드(client-side)라
+#   initgroups 를 안 해 gid 는 드롭돼도 supplementary 가 잘못된다: 멤버 그룹(box_members·lively-shared) 누락 +
+#   호출자(root) 그룹 0 잔류(공유워크스페이스 접근 불가 + 경미한 권한 누수 — EC2 실측 확인). 그래서 uid 강하는
+#   systemd-run 이 아니라 setpriv 로 한다: setpriv 는 **PAM 을 안 거쳐** cgroup scope 를 pam_systemd 가 user.slice 로
+#   재부모화할 위험이 0(메모리 캡이 반드시 유지돼야 함). --regid 필수(없으면 gid=root(0) 잔류 — 실측). setpriv 부재 시
+#   runuser 폴백(그 박스 /etc/pam.d/runuser 가 pam_systemd 없으면 안전), 둘 다 없으면 die(절대 root-exec 안 함).
+if command -v setpriv >/dev/null 2>&1; then
+  drop=( setpriv --reuid="$uid" --regid="$gid" --init-groups -- )
+elif command -v runuser >/dev/null 2>&1; then
+  drop=( runuser -u "$osuser" -- )
+else
+  die "neither setpriv nor runuser available — cannot drop privileges safely"
+fi
+
+# ── 메모리 값 검증 — 순수 정수(+선택 K/M/G) 또는 0/infinity 만. 공백·세미콜론·systemd 프로퍼티 인젝션 방어. ──
+mem_ok() { [[ "$1" =~ ^([0-9]+[KMG]?|0|infinity)$ ]]; }
+mem_ok "$memhigh" || die "invalid memHigh: ${memhigh}"
+mem_ok "$memmax"  || die "invalid memMax: ${memmax}"
+
+# ── '--' 뒤 명령의 첫 토큰은 반드시 box-spawn(고정 경로). 임의 바이너리 실행 봉쇄. ──
+BOX_SPAWN="${LIVELY_BOX_SPAWN:-/opt/lively/libexec/box-spawn}"
+[ "$1" = "$BOX_SPAWN" ] || die "command must be ${BOX_SPAWN} (got '$1')"
+
+# ── systemd-run --scope 로 실행 (root → polkit 불요로 cgroup 생성. uid 강하는 위 setpriv/runuser 가 scope 안에서). ──
+SLICE="${LIVELY_SESSIONS_SLICE:-lively-sessions.slice}"
+if command -v systemd-run >/dev/null 2>&1 && [ "$(stat -fc %T /sys/fs/cgroup 2>/dev/null)" = cgroup2fs ]; then
+  props=( --property=MemoryAccounting=yes )
+  [ "$memhigh" != 0 ] && [ "$memhigh" != infinity ] && props+=( --property=MemoryHigh="$memhigh" )
+  [ "$memmax"  != 0 ] && [ "$memmax"  != infinity ] && props+=( --property=MemoryMax="$memmax" )
+  # --expand-environment=no: systemd 254+ 에만 있는 옵션. argv 의 '$' 를 systemd 가 확장하지 않게(우리 argv 는
+  #  이미 화이트리스트지만 향후 기본동작 변경·경고 차단). 구 systemd 엔 없으니 지원할 때만 추가(portable).
+  expand=()
+  systemd-run --help 2>/dev/null | grep -q -- '--expand-environment' && expand=( --expand-environment=no )
+  exec systemd-run --scope --collect "${expand[@]}" \
+    --slice="$SLICE" \
+    --description="lively session (${osuser})" \
+    "${props[@]}" -- "${drop[@]}" "$@"
+fi
+
+# ── 폴백: systemd-run/cgroup v2 부재 → cgroup 없이 uid 강하만(무회귀·절대 root-exec 안 함). ──
+echo "box-cgspawn: systemd-run/cgroup2 unavailable — uid-drop only, NO memory cgroup (${osuser})" >&2
+exec "${drop[@]}" "$@"

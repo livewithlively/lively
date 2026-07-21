@@ -34,14 +34,48 @@ export function isolationEnabled(): boolean {
 //  sudoers 의 Cmnd 경로와 **문자열이 일치**해야 한다(불변식). 배포가 /opt/lively/libexec/box-spawn 로 설치.
 export const BOX_SPAWN = process.env.LIVELY_BOX_SPAWN || "/opt/lively/libexec/box-spawn";
 
+// per-session cgroup 메모리 격리(#1059 D)의 root wrapper. 게이트웨이가 root 로 이것만 호출해 systemd-run
+//  --scope 로 세션을 MemoryHigh/Max scope 에 가둔다(claude 는 네이티브라 힙제한 불가 → cgroup 이 유일 수단,
+//  비-root 게이트웨이는 polkit 때문에 cgroup 불가 → root wrapper). sudoers Cmnd·설치경로와 문자열 일치(불변식).
+export const BOX_CGSPAWN = process.env.LIVELY_BOX_CGSPAWN || "/opt/lively/libexec/box-cgspawn";
+
+// per-session 메모리 한도(#1059 D) — MemoryHigh/Max(MB). 0/미지정 = 그 축 무제한(box-cgspawn 이 생략).
+export interface CgroupLimit { highMb?: number; maxMb?: number; }
+
+// cgroup 인프라 준비됨? (활성 + Linux + box-cgspawn 설치). systemd-run/cgroup2 실제 가용성은 box-cgspawn 이
+//  런타임에 재확인(부재 시 runuser 폴백)하므로 여기선 wrapper 설치 여부만 본다(BOX_SPAWN 게이트와 동형).
+//  → 미설치 박스(구버전·업데이트만 한 박스)는 false → wrapAsMember 가 종전 sudo 경로로 폴백(무회귀).
+export function cgroupInfraReady(): boolean {
+  return isolationEnabled() && process.platform === "linux" && existsSync(BOX_CGSPAWN);
+}
+
+// 메모리 MB(양의 정수) → systemd 값 "<n>M". 0·미지정·비정상 → "0"(=무제한, box-cgspawn 이 그 축 생략).
+function memArg(mb?: number): string {
+  return typeof mb === "number" && Number.isFinite(mb) && mb > 0 ? `${Math.round(mb)}M` : "0";
+}
+
 // 하네스/셸 argv 를 그 멤버 OS 계정으로 내리는 drop-priv 래핑(**순수** — 테스트 대상).
-//  결과: ["sudo","-n","-u",osUser,"--",BOX_SPAWN, ("--cwd",cwd)?, ...argv]  (argv 빈 배열=셸 세션이면 wrapper 가 로그인 셸 실행).
+//  기본 결과: ["sudo","-n","-u",osUser,"--",BOX_SPAWN, ("--cwd",cwd)?, ...argv]  (argv 빈 배열=셸 세션이면 wrapper 가 로그인 셸 실행).
 //  cwd 를 주면 box-spawn 이 **멤버 uid 로 거기 cd** 한다(#524: tmux -c 는 게이트웨이 권한이라 멤버 700 홈 chdir 실패 → cwd 는 여기로).
 //  -n: 비대화(NOPASSWD 라 프롬프트 없음 — 행 방지). '--': sudo 옵션 종료(뒤 토큰이 옵션으로 안 새게).
 //  argv(하네스명·플래그)는 호출부에서 이미 화이트리스트(HARNESSES·SAFE_VALUE_RE)라 셸 인젝션 표면 없음.
-export function wrapAsMember(osUser: string, argv: string[], cwd?: string): string[] {
+//
+//  cg(#1059 D — 메모리 한도)가 주어지고 cgroup 인프라가 설치돼 있으면 **box-cgspawn 경유**로 바꾼다:
+//   ["sudo","-n","--",BOX_CGSPAWN, osUser, <high>, <max>, "--", BOX_SPAWN, ("--cwd",cwd)?, ...argv]
+//   → root box-cgspawn 이 systemd-run --scope --uid=osUser(uid 강하) 로 세션을 메모리 scope 에 가둔다.
+//   cg 없음(캡 미설정) 또는 인프라 미설치면 종전 sudo -u 경로 = **무회귀**(cap-gated — 운영자가 캡을 걸 때만 경유).
+export function wrapAsMember(osUser: string, argv: string[], cwd?: string, cg?: CgroupLimit): string[] {
+  if (cg && cgroupInfraReady()) return cgspawnArgv(osUser, argv, cwd, cg);
   const pre = cwd ? ["--cwd", cwd] : [];
   return ["sudo", "-n", "-u", osUser, "--", BOX_SPAWN, ...pre, ...argv];
+}
+
+// (순수 — 테스트 seam) box-cgspawn 경유 argv 조립. 게이트(cgroupInfraReady: platform·existsSync 의존)와 분리해
+//  shape 를 결정적으로 단위테스트한다. wrapAsMember 가 인프라 준비됐을 때만 이걸 쓴다.
+//  결과: ["sudo","-n","--",BOX_CGSPAWN, osUser, <high>, <max>, "--", BOX_SPAWN, ("--cwd",cwd)?, ...argv]
+export function cgspawnArgv(osUser: string, argv: string[], cwd: string | undefined, cg: CgroupLimit): string[] {
+  const pre = cwd ? ["--cwd", cwd] : [];
+  return ["sudo", "-n", "--", BOX_CGSPAWN, osUser, memArg(cg.highMb), memArg(cg.maxMb), "--", BOX_SPAWN, ...pre, ...argv];
 }
 
 // OS 유저 존재 확인(= 프로비저닝됨). Linux: `id -u <user>` 성공. 실패/미존재/비Linux(맥 등) → false(공유 폴백).

@@ -22,6 +22,7 @@ import { listLogs } from "../log-janitor.js";
 import { stateRoot, logRoot } from "../state-dir.js";
 import { ROOTS as TERMINAL_ROOTS, SHARED_ROOT as TERMINAL_SHARED_ROOT } from "../terminal-sessions.js";
 import { normalizeStoragePolicy, type StoragePolicyPatch } from "../org/storage-policy.js";
+import { normalizeSessionMemoryPolicy, SESSION_MEM_MB_MIN, SESSION_MEM_MB_MAX, type SessionMemoryPolicyPatch } from "../org/session-memory-policy.js"; // #1059 D
 import {
   type SessionSharePatch, SESSION_SHARE_SCOPES, SESSION_SHARE_STORES, SESSION_SHARE_VIEW_POLICIES,
   KNOWN_HARNESSES, RETENTION_MAX_DAYS,
@@ -50,7 +51,7 @@ import {
   listMembers, getMember, memberIdByEmail, upsertMember, removeMember, listMemory,
   mintToken, listTokens, revokeToken, memberHasActiveToken,
   listContentAudit, ADMIN_AUDIT_ENTITIES,
-  getRuntimeConfig, updateRuntimeConfig, getEmbeddingConfigSource, getStoragePolicySource, listMcpServers, upsertMcpServer, removeMcpServer,
+  getRuntimeConfig, updateRuntimeConfig, getEmbeddingConfigSource, getStoragePolicySource, getSessionMemoryPolicySource, listMcpServers, upsertMcpServer, removeMcpServer,
   listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook, recordHookFailures,
   HOOK_RELAY_DECISIONS, type HookRelayDecision,
   listOrgHarnessAssets, listEnabledAssets, upsertOrgHarnessAsset, removeOrgHarnessAsset, countMemberDraftAssets,
@@ -1238,6 +1239,7 @@ export const deliveryCapabilities: Capability[] = [
         allowed_db_secret_refs?: string[]; write_tools?: string[]; pull_tools?: string[];
         embedding_config?: EmbeddingConfigPatch;
         storage_policy?: StoragePolicyPatch;
+        session_memory_policy?: SessionMemoryPolicyPatch;
         hook_relay_decisions?: HookRelayDecision[];
         session_share?: SessionSharePatch;
         hook_grace_ms?: number | null;
@@ -1266,6 +1268,27 @@ export const deliveryCapabilities: Capability[] = [
           throw new HttpError(400, `경고 임계치(${patchIn.disk_warn_pct}%)는 위험 임계치(${merged.disk_critical_pct}%)보다 낮아야 합니다`);
         }
         patch.storage_policy = patchIn;
+      }
+      // per-session cgroup 메모리 정책(#1059 D) — 세션당 MemoryHigh/Max(MB). 0=무제한. 잡값·범위는 아래 + normalize 가 잡는다.
+      //  고객 박스는 .env 를 못 고치므로 여기(관리탭)가 유일한 조절 창구(storage_policy 와 동일 교리).
+      if (input.session_memory_policy !== undefined) {
+        const raw = input.session_memory_policy;
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "session_memory_policy 는 객체여야 합니다");
+        const s = raw as Record<string, unknown>;
+        const mb = (v: unknown, field: string): number => {
+          const n = Number(v);
+          if (!Number.isFinite(n) || n < SESSION_MEM_MB_MIN || n > SESSION_MEM_MB_MAX) throw new HttpError(400, `session_memory_policy.${field} 는 ${SESSION_MEM_MB_MIN}~${SESSION_MEM_MB_MAX} 정수(MB)여야 합니다 (0=무제한)`);
+          return Math.floor(n);
+        };
+        const patchIn: SessionMemoryPolicyPatch = {};
+        if (s.per_session_high_mb !== undefined) patchIn.per_session_high_mb = mb(s.per_session_high_mb, "per_session_high_mb");
+        if (s.per_session_max_mb !== undefined) patchIn.per_session_max_mb = mb(s.per_session_max_mb, "per_session_max_mb");
+        // high>max 는 무의미(하드 kill 전에 소프트 스로틀이 안 걸림) — 사용자 의도일 리 없으니 조용히 고치지 말고 알려준다.
+        const merged = normalizeSessionMemoryPolicy({ ...(await getRuntimeConfig()).session_memory_policy, ...patchIn });
+        if (patchIn.per_session_high_mb !== undefined && patchIn.per_session_high_mb > 0 && merged.per_session_max_mb > 0 && patchIn.per_session_high_mb > merged.per_session_max_mb) {
+          throw new HttpError(400, `MemoryHigh(${patchIn.per_session_high_mb}MB)는 MemoryMax(${merged.per_session_max_mb}MB) 이하여야 합니다`);
+        }
+        patch.session_memory_policy = patchIn;
       }
       if (input.hooks !== undefined) {
         const h = input.hooks;
@@ -1475,6 +1498,10 @@ export const deliveryCapabilities: Capability[] = [
         shared_cache_enabled: z.boolean().optional().describe("공유 캐시 사용"),
         shared_cache_relocate_home: z.boolean().optional().describe("홈 캐시를 공유 캐시로 재배치"),
       }).optional().describe("저장소 정책(#813) — 로그 상한·디스크 임계치. 고객 박스는 .env 를 못 고치므로 여기가 유일한 조절 창구"),
+      session_memory_policy: z.object({
+        per_session_high_mb: z.number().int().min(0).max(1_048_576).optional().describe("세션당 MemoryHigh(MB) — 초과 시 강한 회수·스로틀(kill 아님). 0=무제한"),
+        per_session_max_mb: z.number().int().min(0).max(1_048_576).optional().describe("세션당 MemoryMax(MB) — 초과 시 그 세션 scope 안에서 OOM-kill. 0=무제한. MemoryHigh 이상이어야"),
+      }).optional().describe("per-session cgroup 메모리 격리(#1059 D) — 세션당 MemoryHigh/Max(MB). 0=무제한(무회귀). 캡을 걸면 세션이 box-cgspawn scope 로 격리돼 폭주 세션만 OOM-kill·박스 생존"),
       embedding_config: z.object({
         provider: z.enum(["off", "http"]).optional().describe("off=끄기(#688 명시적 off 마커 — .env 시드로 부활 안 함) · http=외부 임베딩 API"),
         base_url: z.string().nullable().optional().describe("provider=http 일 때 임베딩 API 주소"),
@@ -1554,6 +1581,10 @@ export const deliveryCapabilities: Capability[] = [
       return {
         policy: p,
         policy_source: await getStoragePolicySource(), // db(관리탭) · env(.env 시드) · default(코드 기본값)
+        // per-session 메모리 캡(#1059 D) — 세션당 MemoryHigh/Max(MB, 0=무제한). 라이브 메모리 **사용량** status(available/Ollama/세션수)는
+        //  G1(#1064) 이 box-watch 로 여기 같은 ops 엔드포인트에 얹는다. 여기선 정책값·출처만 노출(설정은 org_runtime_update POST).
+        session_memory_policy: cfg.session_memory_policy,
+        session_memory_policy_source: await getSessionMemoryPolicySource(),
         disks,
         logs: {
           dir: logRoot(),

@@ -527,6 +527,15 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS storage_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
 
+  // ── org_runtime_config 확장: session_memory_policy — per-session cgroup 메모리 격리(#1059 D). 세션당 MemoryHigh/Max(MB). ──
+  // 기본 '{}' = 미설정 → env 시드(LIVELY_SESSION_MEM_HIGH_MB·_MAX_MB) → 0/0(무제한, 무회귀) 순으로 해석
+  //  (src/org/session-memory-policy.ts). claude 는 네이티브라 힙제한이 안 통해 cgroup 이 유일 수단 — box-cgspawn 이
+  //  systemd-run --scope 로 세션을 이 상한의 scope 에 가둬 폭주 세션 하나만 OOM-kill 되고 박스는 생존(#1059 어니스트 다운).
+  // **관리탭이 단일 창구**: 고객 박스는 SSH 로 못 들어가므로 .env 전용 정책은 사실상 아무도 못 바꾼다(storage_policy 와 동일 교리).
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS session_memory_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+  `);
+
   // ── org_runtime_config 확장: hook_relay_decisions — 러너가 PreToolUse 에서 하네스로 전파할 결정값(#892). ──
   // 기본 '["deny","ask","defer"]' = 제한적 결정만 전파. **'allow' 는 기본 제외**가 핵심: allow 는 멤버의 권한
   //  프롬프트(동의 UI)를 건너뛰므로, 관리자 훅이 조용히 그걸 없애는 걸 기본값으로 두지 않는다. 넓히려면 명시 opt-in.
