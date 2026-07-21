@@ -25,6 +25,7 @@ import { SESSION_ID_RE } from "./org/agent-identity.js"; // #852 세션 id 형�
 import { DANGEROUS_SCOPES, isScope } from "./capabilities/scopes.js";
 import { resolveMemberOsUser, wrapAsMember, osUsername, isolationInfraReady, osUserExists, type CgroupLimit } from "./terminal-isolation.js";
 import { effectiveSessionMemoryPolicy } from "./org/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡
+import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listSessionStatesForOwner } from "./org/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
 import { memberMkdir } from "./terminal-member-fs.js";
 import { materializeMemberGit, ensureGitSafeDirectory } from "./org/git-credential-materialize.js";
 
@@ -108,8 +109,13 @@ export interface SessionInfo {
   //  ⚠ '내가 열어본(브라우저 접속)' 시각은 섞지 않는다(#853) — 열어보기는 작업이 아니다.
   //  @box_last_busy(tmux 세션 옵션)로 영속 → 게이트웨이가 재기동해도 유지(tmux 서버가 더 오래 산다).
   lastActive?: number;
+  // #1059 E — 복원 가능(restorable): tmux 에 없고 DB desired-state(org_session_state)에만 있는 세션(재부팅으로 죽었거나
+  //  F reaper 가 회수). agentState 는 offline. 프론트가 이 배지를 보고 '열기=복원'(POST …/restore) 경로로 분기한다(attach 아님).
+  restorable?: boolean;
 }
-export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; resume?: string; readOnly?: boolean; incognito?: boolean; }
+export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; resume?: string; readOnly?: boolean; incognito?: boolean;
+  // #1059 E — 상시(managed) 세션은 desired-state DB 미러를 만들지 않는다(keep-alive 가 그 영속을 소유). ensureManagedSession 만 넘긴다.
+  managed?: boolean; }
 
 const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "user";
 const userSlug = (u: LivelyUser): string => slug(u.userId || u.email || "user");
@@ -368,6 +374,32 @@ export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
   return collectSessions(ownerId(user));
 }
 
+// 복원 가능(restorable) 세션(#1059 E) — DB desired-state 에는 있으나 지금 tmux 에 **없는** 이 사용자 소유 세션.
+//  = 재부팅으로 tmux 서버가 죽었거나 F(reaper)가 회수한 세션. 라이브 목록(liveIds)에 있는 건 제외(tmux 우선 — 이중표기 방지).
+//  호출자(terminal.ts GET /terminal/sessions)가 라이브 tmux + 노드 세션에 이걸 병합한다(노드 병합과 같은 패턴).
+//  ⚠ owner-scoped: 소유자만 자기 restorable 세션을 본다(초대·프로젝트 공유 복원목록은 후속 — 재부팅 생존의 핵심은 owner).
+//  DB 다운/오류면 빈 배열(복원목록은 최적화지 필수 기능이 아니다 — 라이브 세션 표시를 막지 않는다).
+export async function listRestorableSessions(user: LivelyUser, liveIds: Set<string>): Promise<SessionInfo[]> {
+  const me = ownerId(user);
+  if (!me) return [];
+  let states;
+  try { states = await listSessionStatesForOwner(me); } catch { return []; }
+  const out: SessionInfo[] = [];
+  for (const s of states) {
+    if (liveIds.has(s.id)) continue; // tmux 에 살아있음 → 라이브가 SoT
+    out.push({
+      id: s.id, label: s.label || s.id, harness: s.harness || "shell", dir: s.dir || "",
+      autoApprove: s.auto_approve, owner: s.owner, owned: s.owner === me,
+      created: s.created || 0, attached: false, invites: s.invites, flags: s.flags,
+      projectId: s.project_id || 0,
+      agentState: "offline", title: "",
+      lastActive: s.last_busy || undefined,
+      restorable: true,
+    });
+  }
+  return out;
+}
+
 // 노드 에이전트용(#869) — 뷰어 필터 없이 이 호스트의 전 box-* 세션+메타를 반환한다. 가시성 판정(정책)은
 //  게이트웨이가 소유하므로(F7 정책/실행 분리) 노드는 원자료만 상태 push 하고, 게이트웨이가 뷰어별로 거른다.
 //  게이트웨이 로컬 경로에선 쓰지 말 것 — listSessions(user)가 정문.
@@ -405,7 +437,10 @@ async function collectSessions(me: string | null): Promise<SessionInfo[]> {
     if (busy) {
       lastBusy = nowSec;
       lastBusyAt.set(name, nowSec);
-      if (nowSec - persisted >= 30) void tmuxQuiet(["set-option", "-t", name, "@box_last_busy", String(nowSec)]); // 30초 스로틀 — 폴링마다 쓰지 않는다
+      if (nowSec - persisted >= 30) {
+        void tmuxQuiet(["set-option", "-t", name, "@box_last_busy", String(nowSec)]); // 30초 스로틀 — 폴링마다 쓰지 않는다
+        void touchSessionBusy(name, nowSec).catch(() => { /* 비치명 — desired-state 없음(구 세션·노드)·DB 다운 */ }); // #1059 E — restorable 카드 시간표시 미러(같은 스로틀)
+      }
     }
     // 프로젝트 폴더 세션은 프로젝트 멤버십으로 게이트(소비자 측), 개인 세션은 소유자·초대자만.
     //  me=null(노드 raw 수집 #869)은 필터 없이 전부 — 가시성은 게이트웨이가 판정.
@@ -647,7 +682,24 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   await tmuxQuiet(["set-option", "-t", id, "mouse", "on"]);
   await tmuxQuiet(["set-window-option", "-t", id, "aggressive-resize", "off"]);
   await tmuxQuiet(["set-window-option", "-t", id, "window-size", "latest"]);
-  return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: Math.floor(Date.now() / 1000), attached: false, invites, flags: appliedFlags };
+  const createdSec = Math.floor(Date.now() / 1000);
+  // 세션 desired-state DB 미러(#1059 E) — 재부팅(tmux 사망)에도 복원 가능한 목록으로 남긴다. tmux @box_* 와 같은 값을 미러.
+  //  ⚠ best-effort: DB 가 죽어도 세션 생성은 이미 끝났다(위 tmux new-session) — upsert 실패로 세션을 되돌리지 않는다.
+  //  managed(상시) 세션은 skip — keep-alive(ensureAllManagedSessions)가 그 영속을 소유하므로 restorable 로 이중화하면
+  //   재부팅 후 keep-alive 재생성과 사용자 수동복원이 충돌한다(#1059 E 설계).
+  if (!input.managed) {
+    try {
+      await upsertSessionState({
+        id, owner: ownerId(user), label, harness: harness.key, dir: target,
+        root_key: input.rootKey || null, subpath: input.subpath || null,
+        flags: appliedFlags, auto_approve: !!input.autoApprove, invites,
+        project_id: input.projectId || null, project_src: input.projectId ? (input.projectSrc === "org" ? "org" : "v6") : null,
+        read_only: !!input.readOnly, incognito: !!input.incognito,
+        created: createdSec, last_busy: null,
+      });
+    } catch (e) { console.warn(`[terminal] 세션 desired-state 미러 실패(${id}) — 세션은 계속:`, (e as Error)?.message ?? e); }
+  }
+  return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: createdSec, attached: false, invites, flags: appliedFlags };
 }
 
 interface OwnerMeta { owner: string; invites: string[]; }
@@ -689,21 +741,40 @@ async function assertManage(user: LivelyUser, id: string): Promise<void> {
   const m = await ownerMeta(id);
   if (!m || m.owner !== ownerId(user)) throw new HttpError(403, "본인 세션이 아닙니다");
 }
-export async function killSession(user: LivelyUser, id: string): Promise<void> {
-  await assertManage(user, id);
+// tmux 세션만 종료(권한·DB desired-state 미터치) — 회수(reaper)·관리자 회수가 각자 정책 적용 후 부른다.
+async function tmuxKill(id: string): Promise<void> {
+  if (!ID_RE.test(id)) throw new HttpError(400, "세션 id 형식 오류");
   await tmux(["kill-session", "-t", id]);
+}
+// #1059 F — reaper 전용 중앙 세션 회수: tmux 만 죽이고 **desired-state 는 보존**(org_session_state 유지 → restorable
+//  로 남아 열 때 lazy resume). 노드 세션 회수는 게이트웨이 라우트의 relayNodeOp{op:'kill'} 이 담당(F 는 소스별 dispatch).
+export async function reapCentralSession(id: string): Promise<void> {
+  await tmuxKill(id);
+}
+// opts.admin: 소유자 확인을 건너뛴다(호출 라우트가 admin scope 를 이미 검증 — F4 관리자 수동 회수).
+// opts.preserveState: desired-state(org_session_state)를 지운다 vs 보존한다. 기본(미지정)=지움(사용자 명시 kill=복원 안 함).
+//  관리자 '회수'는 preserveState:true 로 불러 restorable 로 남긴다(reaper 와 동일 의미 — 메모리만 회수, 복원 가능).
+export async function killSession(user: LivelyUser, id: string, opts?: { admin?: boolean; preserveState?: boolean }): Promise<void> {
+  if (!opts?.admin) await assertManage(user, id);
+  await tmuxKill(id);
+  if (!opts?.preserveState) await deleteSessionState(id).catch((e) => console.warn(`[terminal] desired-state 삭제 실패(${id}):`, (e as Error)?.message ?? e));
 }
 export async function editSession(user: LivelyUser, id: string, patch: { label?: string; invites?: unknown }): Promise<void> {
   await assertManage(user, id);
+  const mirror: { label?: string; invites?: string[] } = {};
   if (patch.label !== undefined) {
     const clean = cleanLabel(patch.label);
     if (!clean) throw new HttpError(400, "이름이 필요합니다");
     await tmux(["set-option", "-t", id, "@box_label", clean]);
+    mirror.label = clean;
   }
   if (patch.invites !== undefined) {
     const invites = await validInvites(patch.invites, ownerId(user));
     await tmux(["set-option", "-t", id, "@box_invites", JSON.stringify(invites)]);
+    mirror.invites = invites;
   }
+  // desired-state 미러도 갱신(#1059 E) — 재부팅 후 복원본이 새 라벨·초대를 반영하도록. best-effort.
+  await updateSessionStateMeta(id, mirror).catch((e) => console.warn(`[terminal] desired-state 메타 갱신 실패(${id}):`, (e as Error)?.message ?? e));
 }
 
 // (#869 노드 에이전트 전용) 게이트웨이가 이미 구성원 디렉터리로 검증한 초대 목록을 그대로 기록한다.

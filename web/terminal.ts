@@ -83,12 +83,14 @@ function fmtTermDate(sec) {
 //  (초기엔 session_activity 로 파생했으나 스피너가 활동으로 안 잡혀 항상 stale → 백엔드 CPU 기반 agentState 로 대체.)
 //  waiting 을 맨 앞으로: 내 승인/선택을 기다리는 = 가장 먼저 처리할 것.
 const TSESS_STATUS: Record<string, { label: string; cls: string; rank: number }> = {
-  waiting: { label: '확인 필요', cls: 'waiting', rank: 0 },
-  busy:    { label: '작업 중',   cls: 'busy',    rank: 1 },
-  idle:    { label: '대기 중',   cls: 'idle',    rank: 2 },
-  offline: { label: '오프라인',  cls: 'offline', rank: 3 },
+  waiting:    { label: '확인 필요',   cls: 'waiting',    rank: 0 },
+  busy:       { label: '작업 중',     cls: 'busy',       rank: 1 },
+  idle:       { label: '대기 중',     cls: 'idle',       rank: 2 },
+  restorable: { label: '복원 가능',   cls: 'restorable', rank: 3 }, // #1059 E — 재부팅·회수로 꺼졌으나 복원 가능
+  offline:    { label: '오프라인',    cls: 'offline',    rank: 4 },
 };
-function sessState(s) { return TSESS_STATUS[s.agentState] ? s.agentState : 'offline'; }
+// #1059 E — restorable(desired-state 만 남고 tmux 는 죽음)을 offline 보다 먼저 판정.
+function sessState(s) { return s.restorable ? 'restorable' : (TSESS_STATUS[s.agentState] ? s.agentState : 'offline'); }
 // 상대 시각 — '방금 · 3분 전 · 2시간 전 · 5일 전'.
 function relAgo(sec) {
   const n = Number(sec) || 0; if (!n) return '';
@@ -386,15 +388,32 @@ function tsessCard(s, ctx) {
     return el('label', { class: 'tsess-card tsess-' + st.cls + ' tsess-card--sel' }, el('span', { class: 'tsess-check' }, cb), info);
   }
 
-  // 액션 — 열기(항상) + 내 질문(노드 세션도 트랜스크립트 릴레이 #875 ③) + 소유자면 수정·삭제.
-  const acts = el('div', { class: 'tsess-acts' },
-    el('button', { class: 'tsess-open', text: '열기', onclick: () => window.open(termUrl(s.id, s.label, s.node && s.node.id), '_blank') }));
+  // 액션 — 열기/복원(항상) + 내 질문(노드 세션도 트랜스크립트 릴레이 #875 ③) + 소유자면 수정·삭제.
+  const acts = el('div', { class: 'tsess-acts' });
+  if (s.restorable) {
+    // #1059 E — 복원: 재부팅·회수로 꺼진 세션을 저장된 desired-state 로 재생성(claude 는 대화 이어받기). 새 세션을 연다.
+    const rb = el('button', { class: 'tsess-open', text: '복원', title: '재부팅·회수로 꺼진 세션을 다시 엽니다 (같은 폴더·설정 + 대화 이어받기)' }) as HTMLButtonElement;
+    rb.onclick = async () => {
+      rb.disabled = true; rb.textContent = '복원 중…';
+      try {
+        const r: any = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/restore', { method: 'POST', body: '{}' });
+        const ns = r && r.session;
+        if (ns && ns.id) window.open(termUrl(ns.id, ns.label || s.label), '_blank');
+        toast('세션을 복원했어요'); reRender();
+      } catch (e: any) { toast('복원 실패 — ' + (e && e.message || e), true); rb.disabled = false; rb.textContent = '복원'; }
+    };
+    acts.append(rb);
+  } else {
+    acts.append(el('button', { class: 'tsess-open', text: '열기', onclick: () => window.open(termUrl(s.id, s.label, s.node && s.node.id), '_blank') }));
+  }
   acts.append(el('button', { class: 'tsess-icon tsess-q', title: '이 세션에서 클로드에게 보낸 내 질문만 순서대로 모아보기', text: '내 질문', onclick: () => openSessPrompts(s) }));
   if (s.owned) {
-    acts.append(el('button', { class: 'tsess-icon', title: '이름·초대 수정', text: '수정', onclick: () => openTermEdit(s, cfg, view) }));
-    acts.append(el('button', { class: 'tsess-icon danger', title: '세션 종료(삭제)', text: '삭제', onclick: async () => {
-      if (!confirm('세션 "' + s.label + '" 을(를) 종료할까요? 실행 중인 작업도 함께 종료됩니다.')) return;
-      try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' }); toast('세션 종료됨'); reRender(); }
+    if (!s.restorable) acts.append(el('button', { class: 'tsess-icon', title: '이름·초대 수정', text: '수정', onclick: () => openTermEdit(s, cfg, view) }));
+    // restorable 은 '복원 목록에서 제거'(desired-state 삭제), 라이브는 '삭제'(작업 종료). 둘 다 DELETE(백엔드가 gone→forget 처리).
+    acts.append(el('button', { class: 'tsess-icon danger', title: s.restorable ? '복원 목록에서 제거' : '세션 종료(삭제)', text: s.restorable ? '제거' : '삭제', onclick: async () => {
+      const msg = s.restorable ? '세션 "' + s.label + '" 을(를) 복원 목록에서 제거할까요? 더는 복원할 수 없어요.' : '세션 "' + s.label + '" 을(를) 종료할까요? 실행 중인 작업도 함께 종료됩니다.';
+      if (!confirm(msg)) return;
+      try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' }); toast(s.restorable ? '복원 목록에서 제거됨' : '세션 종료됨'); reRender(); }
       catch (e) { toast('실패 — ' + e.message, true); }
     } }));
   }

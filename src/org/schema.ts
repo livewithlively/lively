@@ -536,6 +536,15 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS session_memory_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
 
+  // ── org_runtime_config 확장: session_reclaim_policy — idle 세션 자동 회수(reaper) 정책(#1059 F). idle TTL(분). ──
+  // 기본 '{}' = 미설정 → env 시드(LIVELY_SESSION_IDLE_TTL_MIN) → 0(회수 끔, 무회귀) 순으로 해석
+  //  (src/org/session-reclaim-policy.ts). 켜면 그 시간 넘게 idle 인 세션을 reaper 가 회수하되 desired-state
+  //  (org_session_state)를 보존해 restorable 로 남긴다(#1059 E lazy resume). admission control 대신 채택된 근본대책.
+  // **관리탭이 단일 창구**: 고객 박스는 SSH 로 못 들어가므로 .env 전용 정책은 사실상 아무도 못 바꾼다(storage/session-memory 와 동일 교리).
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS session_reclaim_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+  `);
+
   // ── org_runtime_config 확장: hook_relay_decisions — 러너가 PreToolUse 에서 하네스로 전파할 결정값(#892). ──
   // 기본 '["deny","ask","defer"]' = 제한적 결정만 전파. **'allow' 는 기본 제외**가 핵심: allow 는 멤버의 권한
   //  프롬프트(동의 UI)를 건너뛰므로, 관리자 훅이 조용히 그걸 없애는 걸 기본값으로 두지 않는다. 넓히려면 명시 opt-in.
@@ -856,6 +865,41 @@ export async function initOrgSchema(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT);
   `);
+
+  // ── org_session_state — 웹터미널 세션의 desired-state DB 미러(#1059 E). ──
+  //  왜(#1059): 세션 메타(owner·label·harness·dir·flags·invites·project·mode)의 SoT 는 tmux @box_* user-option 인데
+  //   **재부팅 = tmux 서버 사망 = 그 메타 전부 증발** → 어떤 세션이 있었는지조차 알 수 없어 복원 진입점이 사라진다.
+  //   이 테이블이 그 desired-state 를 DB 에 미러해, 재부팅 후에도 세션이 '복원 가능(restorable)' 목록으로 살아남고,
+  //   사용자가 '열 때' lazy 하게 createSession(resume=<id>)로 재생성된다(부팅 시 전부 자동 spawn 은 OOM 재현이라 금물).
+  //  ⚠ **미러지 SoT 아님**(storage_policy 교리와 달리 여긴 tmux 가 SoT): tmux 가 살아있으면 tmux 가 진실,
+  //   DB 는 재부팅 백업 + F(reaper)의 desired-state 보존처. listSessions 병합이 tmux 우선(라이브)·DB 폴백(offline).
+  //  root_key/subpath = 재생성 좌표(createSession 입력). last_busy = F(reaper)의 idle 판정 기준(@box_last_busy 미러).
+  //  last_seen = 마지막으로 라이브(tmux)로 관측된 시각 — 오래 안 보이면 stale 정리 후보(도그푸드; 지금은 조회만).
+  //  managed 세션(org_managed_session)은 여기 넣지 않는다 — keep-alive 가 그 영속을 소유하므로(createSession managed 플래그가 upsert skip).
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_session_state(
+      id TEXT PRIMARY KEY,
+      owner TEXT NOT NULL,
+      label TEXT,
+      harness TEXT NOT NULL DEFAULT 'claude',
+      dir TEXT,
+      root_key TEXT,
+      subpath TEXT,
+      flags JSONB NOT NULL DEFAULT '{}'::jsonb,
+      auto_approve BOOLEAN NOT NULL DEFAULT false,
+      invites JSONB NOT NULL DEFAULT '[]'::jsonb,
+      project_id INT,
+      project_src TEXT,
+      read_only BOOLEAN NOT NULL DEFAULT false,
+      incognito BOOLEAN NOT NULL DEFAULT false,
+      created BIGINT,
+      last_busy BIGINT,
+      last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+  `);
+  // owner 로 자주 조회(복원 목록 = 이 사용자의 tmux 에 없는 레코드) — 인덱스로 스캔 회피.
+  await itemsPool.query(`CREATE INDEX IF NOT EXISTS org_session_state_owner_idx ON org_session_state(owner);`);
 
   // ── org_preview_env — 프리뷰 환경(작업자별 격리 미리보기)의 desired state (#1036). 관리탭 CRUD. ──
   //  kind=work: 작업 워크트리(project/<id>)를 게이트웨이가 /preview/<id>/ 서브패스로 정적 서빙(shared-proxy — /api 는 게이트웨이 자신).

@@ -1336,7 +1336,7 @@ async function fillSessions(zone, onCount, projectsP) {
         const hiddenClosed = showClosed ? 0 : base.filter(isClosedProjSess).length;
         const shownClosed = showClosed ? base : base.filter((s) => !isClosedProjSess(s));
         // #670 온라인 세션만 보기 토글 — 켜면 '오프라인'(에이전트 상태 offline) 세션 숨김. 작업중/대기중/확인필요만 표시. showClosed 위에 추가.
-        const isOnline = (s) => dashSessState(s).key !== 'offline';
+        const isOnline = (s) => { const k = dashSessState(s).key; return k !== 'offline' && k !== 'restorable'; }; // #1059 E — restorable(죽은 세션)은 온라인 아님
         const hiddenOffline = onlineOnly ? shownClosed.filter((s) => !isOnline(s)).length : 0;
         const shown = onlineOnly ? shownClosed.filter(isOnline) : shownClosed;
         // 필터 전환 시 안 보이게 된 선택은 해제(내 프로젝트 모달과 동형).
@@ -1384,8 +1384,31 @@ async function fillSessions(zone, onCount, projectsP) {
             // 우측 고정 시각열 — '마지막 작업'(클로드가 마지막으로 턴을 돌린/끝낸 때). 내가 열어본 시각과 무관(#853).
             const worked = Number(s.lastActive) || 0;
             const when = el('div', { class: 'dash-scard-when' + (worked ? '' : ' none'), title: worked ? '마지막 작업 — 클로드가 마지막으로 작업한 시각' : '아직 작업 기록이 없어요 (만든 시각)' }, density === 'compact' ? null : el('span', { class: 'dash-scard-when-lbl', text: worked ? '마지막 작업' : '만든 시각' }), el('span', { class: 'dash-scard-when-t', text: sessTime(worked || s.created) }));
-            const openBtn = el('button', { class: 'dash-scard-open', type: 'button', text: '열기' });
-            openBtn.onclick = () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || '') + (s.node ? '&node=' + encodeURIComponent(s.node.id) : ''), '_blank'); // #869 원격 노드면 node 파라미터
+            const openBtn = el('button', { class: 'dash-scard-open', type: 'button', text: s.restorable ? '복원' : '열기' });
+            if (s.restorable) {
+                // #1059 E — 복원: 재부팅·회수로 꺼진 세션을 저장된 desired-state 로 재생성(claude 는 대화 이어받기). 새 세션이 뜨면 그걸 연다.
+                openBtn.title = '재부팅·회수로 꺼진 세션을 다시 엽니다 (같은 폴더·설정 + 대화 이어받기)';
+                openBtn.onclick = async () => {
+                    openBtn.disabled = true;
+                    openBtn.textContent = '복원 중…';
+                    try {
+                        const r = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/restore', { method: 'POST', body: '{}' });
+                        const ns = r && r.session;
+                        if (ns && ns.id)
+                            window.open('/ui/terminal.html?session=' + encodeURIComponent(ns.id) + '&label=' + encodeURIComponent(ns.label || s.label || ''), '_blank');
+                        toast('세션을 복원했어요');
+                        reloadSessions && reloadSessions();
+                    }
+                    catch (e) {
+                        toast('복원 실패 — ' + (e && e.message || e), true);
+                        openBtn.disabled = false;
+                        openBtn.textContent = '복원';
+                    }
+                };
+            }
+            else {
+                openBtn.onclick = () => window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || '') + (s.node ? '&node=' + encodeURIComponent(s.node.id) : ''), '_blank'); // #869 원격 노드면 node 파라미터
+            }
             const moreBtn = el('button', { class: 'dash-scard-more', type: 'button', title: s.owned ? '세션 관리 (이름 수정·내 질문·삭제)' : '세션 (내 질문)', 'aria-label': '세션 관리', text: '⋮' });
             moreBtn.onclick = () => openSessMenu(moreBtn, s, reloadSessions); // 이름 수정·삭제는 소유자만 메뉴에 뜬다(서버도 403 재검증).
             const acts = el('div', { class: 'dash-scard-acts' }, openBtn, moreBtn);
@@ -1536,6 +1559,9 @@ async function fillSessions(zone, onCount, projectsP) {
 // #req 세션 상태(4단계) → { key, label }. 서버가 CPU·pane 내용으로 판정한 s.agentState 를 그대로 매핑.
 //  busy=작업중(주황) / waiting=확인 필요(빨강, 사용자 선택·승인 대기) / idle=대기중(초록) / offline=오프라인(회색).
 function dashSessState(s) {
+    // #1059 E — 복원 가능(restorable): 재부팅·회수로 tmux 에서 꺼졌으나 desired-state 가 DB 에 남은 세션. offline 보다 먼저 판정.
+    if (s && s.restorable)
+        return { key: 'restorable', label: '복원 가능' };
     const map = { busy: '작업중', waiting: '확인 필요', idle: '대기중', offline: '오프라인' };
     const k = (s && s.agentState) || 'offline';
     return { key: k, label: map[k] || '오프라인' };
@@ -1593,13 +1619,17 @@ function openSessMenu(anchor, s, onChange) {
     if (s.owned)
         item('이름 수정', null, false, () => openSessRename(s, onChange));
     item('내 질문 보기', '이 세션에서 클로드에게 보낸 질문만 모아보기', false, () => openSessPrompts(s));
+    // #1059 E — restorable(이미 꺼진) 세션은 '복원 목록에서 제거'(desired-state 삭제), 라이브 세션은 '삭제'(작업 종료).
     if (s.owned)
-        item('삭제', null, true, async () => {
-            if (!confirm('세션 ‘' + (s.label || '(이름 없음)') + '’을(를) 삭제할까요?\n실행 중인 작업도 함께 종료됩니다 (되돌릴 수 없어요).'))
+        item(s.restorable ? '복원 목록에서 제거' : '삭제', s.restorable ? '이 세션을 더는 복원하지 않습니다' : null, true, async () => {
+            const msg = s.restorable
+                ? '세션 ‘' + (s.label || '(이름 없음)') + '’을(를) 복원 목록에서 제거할까요?\n더는 복원할 수 없어요 (되돌릴 수 없어요).'
+                : '세션 ‘' + (s.label || '(이름 없음)') + '’을(를) 삭제할까요?\n실행 중인 작업도 함께 종료됩니다 (되돌릴 수 없어요).';
+            if (!confirm(msg))
                 return;
             try {
                 await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'DELETE' });
-                toast('세션을 삭제했어요');
+                toast(s.restorable ? '복원 목록에서 제거했어요' : '세션을 삭제했어요');
                 onChange && onChange();
             }
             catch (e) {
