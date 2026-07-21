@@ -114,7 +114,9 @@ export async function refreshProxySnapshot(name: string, actor?: string): Promis
     await setMcpToolsSnapshot(name, snap, actor);
     return { count: snap.length };
   } catch (err) {
-    throw new Error(redactSecret((err as Error).message, gwSecret)); // 상류 에러 본문에 gateway 자격 에코 방지
+    const code = (err as { code?: unknown }).code; // StreamableHTTPError.code = 상류 HTTP status(진단)
+    const pfx = (typeof code === "number" || typeof code === "string") ? `[HTTP ${code}] ` : "";
+    throw new Error(redactSecret(pfx + (err as Error).message, gwSecret)); // 상류 에러 본문에 gateway 자격 에코 방지
   } finally {
     await client.close().catch(() => { /* */ });
   }
@@ -164,7 +166,9 @@ async function callUpstream(server: McpServerRow, toolName: string, args: Record
     });
     return { content, isError: res.isError === true };
   } catch (err) {
-    throw new Error(redactSecret((err as Error).message, injectedSecret)); // 상류 에러 본문에 주입 자격 에코 방지(SDK 는 응답 body 를 에러메시지에 그대로 실음)
+    const code = (err as { code?: unknown }).code; // StreamableHTTPError.code = 상류 HTTP status(진단)
+    const pfx = (typeof code === "number" || typeof code === "string") ? `[HTTP ${code}] ` : "";
+    throw new Error(redactSecret(pfx + (err as Error).message, injectedSecret)); // 상류 에러 본문에 주입 자격 에코 방지(SDK 는 응답 body 를 에러메시지에 그대로 실음)
   } finally {
     await client.close().catch(() => { /* */ });
   }
