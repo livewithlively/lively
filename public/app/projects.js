@@ -689,6 +689,16 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         pjvApplyView(pjvLoadScopeView(sel) || pjvDefaultView(sel));
         byStatus = pjvBoardView.byStatus;
         pjvSyncUrl(sel, true); // 자동 해소된 스코프를 URL 에 replace(히스토리 오염 없이 새로고침 복원용)
+        syncCrumbs(); // 브레드크럼 재동기(#1067) — render() 시점엔 sel 이 '__all__' 일 수 있어, 자동 해소된 실제 스코프로 다시 그린다
+        // 필터·담당자 값 후보를 **이 스코프**로 재수집(#1067) — 전체 기준이면 "윤상민 216" 처럼 화면(59개)과 안 맞는
+        //  숫자가 나와 오해를 부른다. 툴바 필터가 걸리기 전(raw) 스코프 집합이 기준이라 후보가 자기 자신에 의해 줄지 않는다.
+        {
+            const inScope = sel[0] === 'F' ? new Set(folderListsDeep(Number(sel.slice(1))).map((l) => Number(l.id)))
+                : sel[0] === 'L' ? new Set([Number(sel.slice(1))]) : null;
+            const scoped = inScope ? projects.filter((p) => p.list_id != null && inScope.has(Number(p.list_id)))
+                : sel === '__none__' ? projects.filter((p) => p.list_id == null) : projects;
+            pjvSetFilterUniverse(scoped, lists);
+        }
         const selectArea = (key) => {
             // 스코프 전환 — URL push(뒤로가기 가능) + 인메모리 render(리페치 없음). 뷰 로드는 renderArea 재진입이 처리.
             pjvSidebarSel.key = key;
@@ -8548,8 +8558,8 @@ function pjvTbIcon(kind, cls) {
         n.append(sv('circle', { cx: 10.8, cy: 10.8, r: 6.2 }), sv('path', { d: 'M19.6 19.6 15.4 15.4' }));
         return n;
     }
-    if (kind === 'gear') {
-        n.append(sv('circle', { cx: 12, cy: 12, r: 3 }), sv('path', { d: 'M12 2.8v2.4M12 18.8v2.4M4.5 4.5l1.7 1.7M17.8 17.8l1.7 1.7M2.8 12h2.4M18.8 12h2.4M4.5 19.5l1.7-1.7M17.8 6.2l1.7-1.7' }));
+    if (kind === 'gear') { // 톱니 — 원 + 8각 톱니 윤곽(별·태양으로 안 읽히게 톱니를 '이'로 그린다)
+        n.append(sv('circle', { cx: 12, cy: 12, r: 3.05 }), sv('path', { d: 'M10.55 3.3a1.1 1.1 0 0 1 1.1-.95h.7a1.1 1.1 0 0 1 1.1.95l.16 1.2c.5.15.97.35 1.4.6l.96-.73a1.1 1.1 0 0 1 1.45.1l.5.5a1.1 1.1 0 0 1 .1 1.44l-.74.97c.26.43.46.9.6 1.4l1.2.15a1.1 1.1 0 0 1 .96 1.1v.7a1.1 1.1 0 0 1-.95 1.1l-1.2.16c-.15.5-.35.96-.6 1.4l.73.96a1.1 1.1 0 0 1-.1 1.45l-.5.5a1.1 1.1 0 0 1-1.44.1l-.97-.74c-.43.26-.9.46-1.4.6l-.15 1.2a1.1 1.1 0 0 1-1.1.96h-.7a1.1 1.1 0 0 1-1.1-.95l-.16-1.2c-.5-.15-.96-.35-1.4-.6l-.96.73a1.1 1.1 0 0 1-1.45-.1l-.5-.5a1.1 1.1 0 0 1-.1-1.44l.74-.97c-.26-.43-.46-.9-.6-1.4l-1.2-.15a1.1 1.1 0 0 1-.96-1.1v-.7a1.1 1.1 0 0 1 .95-1.1l1.2-.16c.15-.5.35-.96.6-1.4l-.73-.96a1.1 1.1 0 0 1 .1-1.45l.5-.5a1.1 1.1 0 0 1 1.44-.1l.97.74c.43-.26.9-.46 1.4-.6l.15-1.2Z' }));
         return n;
     }
     if (kind === 'plus') {
@@ -8624,7 +8634,9 @@ function pjvSetFilterUniverse(projects, _lists) {
     const members = new Map();
     const tags = new Map();
     const counts = { member: new Map(), none: 0 };
-    for (const p of projects || []) {
+    // 개수는 '지금 보이는 것' 기준 — 완료(done)는 Closed 를 켰을 때만 센다(사이드바 카운트·본문과 동형).
+    //  안 그러면 리스트에 59개가 보이는데 담당자 옆엔 211 이 떠 숫자가 화면과 안 맞는다.
+    for (const p of (projects || []).filter((x) => pjvProjClosedView.done || x.status !== 'done')) {
         const ms = p.members || [];
         if (!ms.length)
             counts.none++;
