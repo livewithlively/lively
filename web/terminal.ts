@@ -116,8 +116,10 @@ const TSESS_STATUSSET_KEY = 'lively_term_statusset_v1';
 function tsessStatusSet(): Set<string> { try { const r = localStorage.getItem(TSESS_STATUSSET_KEY); const a = r ? JSON.parse(r) : []; return new Set(Array.isArray(a) ? a.filter((x) => typeof x === 'string') : []); } catch { return new Set(); } }
 function saveTsessStatusSet(s: Set<string>) { try { localStorage.setItem(TSESS_STATUSSET_KEY, JSON.stringify([...s])); } catch { /* noop */ } }
 const TSESS_OWN_KEY = 'lively_term_own_filter_v1';
-function tsessOwnFilter(): string { try { const v = localStorage.getItem(TSESS_OWN_KEY); return ['all', 'mine', 'invited'].includes(v as string) ? (v as string) : 'all'; } catch { return 'all'; } }
+function tsessOwnFilter(): string { try { const v = localStorage.getItem(TSESS_OWN_KEY); return ['all', 'mine', 'invited', 'project'].includes(v as string) ? (v as string) : 'all'; } catch { return 'all'; } }
 function saveTsessOwnFilter(v: string) { try { localStorage.setItem(TSESS_OWN_KEY, v); } catch { /* noop */ } }
+// 프로젝트 공동 세션인가 — 남의 세션이 보이는 사유가 '초대'(개인)냐 '프로젝트 공개'(#452)냐를 가른다.
+function tsessIsProject(s): boolean { return !!(Number(s.projectId) || 0); }
 
 // #1015 C — 검색형 프로젝트 필터(드롭다운 버튼 + 타이핑 검색). 값: 0=전체 · -1=개인 세션만 · -2=프로젝트 세션만 · >0=projectId.
 function buildSessProjFilter(projName: Map<any, string>, projIds: any[], current: number, onPick: (v: number) => void) {
@@ -161,26 +163,23 @@ async function renderTerminal(view) {
   let data, cfg, projects;
   try {
     [data, cfg, projects] = await Promise.all([
-      api('/api/ui/terminal/sessions'),
+      // includeProjects=1 — 프로젝트 공동 세션(#452 로 로그인한 전원 공개)까지 서버가 함께 준다.
+      //  남이 만든 것도 포함: 이 탭은 '박스에서 지금 도는 AI 작업' 전체를 보는 미션컨트롤.
+      //  (기본값은 여전히 숨김이라 대시보드 '내 AI 세션' 위젯은 영향 없음.)
+      api('/api/ui/terminal/sessions?includeProjects=1'),
       api('/api/ui/terminal/config'),
-      // 프로젝트명 매핑 + '어떤 프로젝트 할당' 칩. 실패해도 세션 목록은 그대로 보인다.
-      api('/api/ui/v6/projects?mine=1').then((d) => (d && d.projects) || []).catch(() => []),
+      // 프로젝트명 매핑 + '어떤 프로젝트 할당' 칩. 남의 프로젝트 세션도 이름을 보여야 하므로 mine=1 이 아닌
+      //  전체 목록(공개범위는 서버가 시행). 실패해도 세션 목록은 그대로 보인다(칩은 '프로젝트 #id' 폴백).
+      api('/api/ui/v6/projects').then((d) => (d && d.projects) || []).catch(() => []),
     ]);
   } catch (e) { view.replaceChildren(errorNote(e, '세션을 불러오지 못했습니다')); return; }
   const sessions = (data && data.sessions) || [];
   const projName = new Map<any, string>((projects || []).map((p) => [p.id, p.name]));
-  const myProjIds = new Set<any>((projects || []).map((p) => p.id));
-  // 프로젝트 세션은 터미널 목록 API 가 숨기므로(터미널 탭 정책), 내 프로젝트별 /sessions 로 내가 소유한 세션을 합친다(대시보드와 동형).
-  //  → '어떤 프로젝트 할당인지' 를 이 탭에서 보이게(#745). 백엔드 무변경(프론트 병합) · id 중복 제거.
-  try {
-    const withSess = (projects || []).filter((p) => Number(p.my_session_count) > 0);
-    if (withSess.length) {
-      const lists = await Promise.all(withSess.map((p) =>
-        api('/api/ui/v6/projects/' + p.id + '/sessions').then((d) => (d && d.sessions) || []).catch(() => [])));
-      const seen = new Set(sessions.map((s) => s.id));
-      for (const arr of lists) for (const s of arr) if (s.owned && !seen.has(s.id)) { seen.add(s.id); sessions.push(s); }
-    }
-  } catch (_) { /* 병합 실패 → 개인 세션만 유지 */ }
+  // '내 프로젝트'(칩 강조용) = 서버 mine=1 과 같은 술어(생성자이거나 팀원)를 전체 목록에서 그대로 판정.
+  const meIdNow = (state.me && state.me.userId) || '';
+  const myProjIds = new Set<any>((projects || [])
+    .filter((p) => p.created_by === meIdNow || (p.members || []).some((m) => m.member_id === meIdNow))
+    .map((p) => p.id));
   for (const s of sessions) s._st = sessState(s); // 카드·정렬·카운트가 공유(백엔드 agentState)
   const reRender = () => renderTerminal(view);
 
@@ -250,23 +249,34 @@ async function renderTerminal(view) {
       : (sessions.length ? el('button', { class: 'btn btn-ghost btn-sm', text: '선택', title: '여러 세션을 골라 한 탭 그리드로 열거나 한 번에 삭제', onclick: () => { sel.mode = true; draw(); } }) : null);
     if (selToggle) right.append(selToggle);
 
-    // ── 소유 필터(내 세션 / 초대받은 세션) — #1015 D. 초대받은 세션이 있을 때만 별도 줄로 노출(전부 내 것이면 무의미하므로 숨김). ──
+    // ── 소유 필터(내 세션 / 초대받은 세션 / 남의 프로젝트 세션) — #1015 D.
+    //  남의 세션이 하나라도 있을 때만 별도 줄로 노출(전부 내 것이면 무의미하므로 숨김).
+    //  개인 세션은 초대로만 남의 것이 보이고(owner+invites), 프로젝트 세션은 초대 무관 전원 공개(#452) —
+    //  둘은 성격이 달라 한 칩으로 묶지 않는다.
     const mineCount = sessions.filter((s) => s.owned).length;
-    const invitedCount = sessions.length - mineCount;
-    if (ownF !== 'all' && !invitedCount) ownF = 'all'; // 초대 세션 0개면 소유 필터 무효(줄이 숨겨지므로 갇히지 않게)
+    const invitedCount = sessions.filter((s) => !s.owned && !tsessIsProject(s)).length;
+    const projCount = sessions.filter((s) => !s.owned && tsessIsProject(s)).length;
+    const othersCount = invitedCount + projCount;
+    if (ownF === 'invited' && !invitedCount) ownF = 'all';   // 해당 버킷이 비면 필터 해제(줄이 숨겨져 갇히지 않게)
+    if (ownF === 'project' && !projCount) ownF = 'all';
+    if (ownF === 'mine' && !othersCount) ownF = 'all';
     const rows = [el('div', { class: 'tsess-controls-top' }, chips, right)];
-    if (invitedCount) {
+    if (othersCount) {
       const ownChip = (key, label, cnt) => tsessChip(label, cnt, '', ownF === key, () => { ownF = ownF === key ? 'all' : key; saveTsessOwnFilter(ownF); draw(); });
       rows.push(el('div', { class: 'tsess-filter-row' },
         el('span', { class: 'tsess-filter-lbl', text: '소유' }),
-        ownChip('mine', '내 세션', mineCount), ownChip('invited', '초대받은 세션', invitedCount)));
+        ownChip('mine', '내 세션', mineCount),
+        ...(invitedCount ? [ownChip('invited', '초대받은 세션', invitedCount)] : []),
+        ...(projCount ? [ownChip('project', '남의 프로젝트 세션', projCount)] : [])));
     }
     controls.replaceChildren(...rows);
 
     // 필터 적용(상태 다중 · 소유 · 프로젝트) + 정렬(작업중→대기→오프라인, 그 안에서 최근 활동순).
     const shown = sessions
       .filter((s) => statusOn.size === 0 || statusOn.has(s._st))
-      .filter((s) => ownF === 'all' || (ownF === 'mine' && s.owned) || (ownF === 'invited' && !s.owned))
+      .filter((s) => ownF === 'all' || (ownF === 'mine' && s.owned)
+        || (ownF === 'invited' && !s.owned && !tsessIsProject(s))
+        || (ownF === 'project' && !s.owned && tsessIsProject(s)))
       .filter((s) => {
         if (projF === 0) return true;
         const pid = Number(s.projectId) || 0;
@@ -297,9 +307,14 @@ async function renderTerminal(view) {
   }
 
   async function bulkDelete(btn) {
-    const items: any[] = [...sel.ids].map((id) => sessions.find((s) => s.id === id)).filter(Boolean);
-    if (!items.length) return;
-    if (!confirm(items.length + '개 세션을 삭제할까요?\n\n실행 중인 작업도 함께 종료됩니다(되돌릴 수 없음).')) return;
+    const picked: any[] = [...sel.ids].map((id) => sessions.find((s) => s.id === id)).filter(Boolean);
+    // 삭제는 소유자만(서버가 403). 목록에 남의 세션(초대·프로젝트 공동)이 섞이므로 미리 걸러 안내한다
+    //  — 안 그러면 '전체 선택 → 삭제'가 대량 403 실패 토스트로 끝난다.
+    const items = picked.filter((s) => s.owned);
+    const skipped = picked.length - items.length;
+    if (!items.length) { toast(picked.length ? '내가 만든 세션만 삭제할 수 있습니다' : '', true); return; }
+    if (!confirm(items.length + '개 세션을 삭제할까요?\n\n실행 중인 작업도 함께 종료됩니다(되돌릴 수 없음).'
+      + (skipped ? '\n\n남의 세션 ' + skipped + '개는 제외됩니다(소유자만 삭제 가능).' : ''))) return;
     btn.disabled = true;
     // 병렬 삭제 — 일부 실패해도 나머지는 진행(성공/실패 건수 보고). 서버가 비소유분은 403. 노드 세션은 ?node= 로 위임(#869).
     const results = await Promise.allSettled(
@@ -344,7 +359,8 @@ function tsessCard(s, ctx) {
   if (s.autoApprove) title.append(el('span', { class: 'tsess-badge danger', text: '자동승인' }));
   // 분산 노드(#869) — 원격 노드에서 도는 세션 표시. 노드가 끊겨 있으면(꺼짐·절전) 위험 배지로 구분.
   if (s.node) title.append(el('span', { class: 'tsess-badge' + (s.node.online ? '' : ' danger'), title: '실행 노드: ' + (s.node.name || s.node.id) + (s.node.online ? '' : ' — 연결 끊김(꺼짐/절전)'), text: '🖥 ' + (s.node.name || s.node.id) + (s.node.online ? '' : ' · 끊김') }));
-  if (!s.owned) title.append(el('span', { class: 'tsess-badge', title: '소유: ' + owner, text: '👤 ' + owner + ' · 초대받음' }));
+  // 남의 세션이면 소유자 배지 — 보이는 사유를 정확히: 개인 세션은 '초대받음', 프로젝트 세션은 '공동'(초대 무관 전원 공개 #452).
+  if (!s.owned) title.append(el('span', { class: 'tsess-badge', title: '소유: ' + owner, text: '👤 ' + owner + (pid ? ' · 공동' : ' · 초대받음') }));
   else if ((s.invites || []).length) title.append(el('span', { class: 'tsess-badge', title: s.invites.map((id) => memberName(cfg, id)).join(', '), text: '초대 ' + s.invites.length + '명' }));
 
   // ── 2행(있으면): '지금 하는 일' 실시간 요약(백엔드 title = Claude Code pane 요약) — 라벨과 다를 때만 ──
@@ -460,6 +476,18 @@ function qHighlight(text, terms) {
   if (pos < text.length) wrap.append(document.createTextNode(text.slice(pos)));
   return wrap;
 }
+// 긴 질문 접기 — 항목을 리스트에 붙인 '뒤에' 호출한다(DOM 에 있어야 높이를 잰다). 8줄을 넘으면 접고
+//  '더 보기' 토글을 단다. 넘지 않으면 clamp 를 떼고 아무것도 안 붙인다(짧은 질문은 그대로).
+function qClampText(item, textEl) {
+  textEl.classList.add('clamped');
+  if (textEl.scrollHeight - textEl.clientHeight < 8) { textEl.classList.remove('clamped'); return; }
+  const btn = el('button', { class: 'tsess-qmore', type: 'button', text: '더 보기' });
+  btn.onclick = (ev) => {
+    ev.stopPropagation();  // 통합검색 결과는 항목 자체가 '세션 열기' 버튼 — 펼치기가 새 탭을 열면 안 된다
+    btn.textContent = textEl.classList.toggle('clamped') ? '더 보기' : '접기';
+  };
+  item.append(btn);
+}
 // 한 세션 '내 질문' 팝아웃 — 상단 검색으로 그 세션 질문을 즉시 필터(클라이언트). 최신이 위, #N=시간순 번호.
 //  대시보드 '내 AI 세션' 카드의 ⋮ 메뉴도 이걸 그대로 재사용한다(#853) — 질문 보기 UI 를 두 벌 만들지 않는다.
 export async function openSessPrompts(s) {
@@ -483,9 +511,12 @@ export async function openSessPrompts(s) {
       if (!terms.length) { // 검색 없음 → 최신순 전체
         cap.textContent = total + '개 질문 · 최근 순' + (total > prompts.length ? ' (최근 ' + prompts.length + '개)' : '');
         prompts.slice().reverse().forEach((p) => {
-          list.append(el('div', { class: 'tsess-qitem' },
+          const txt = qHighlight(p.text, null);
+          const item = el('div', { class: 'tsess-qitem' },
             el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + (prompts.indexOf(p) + 1) }), el('span', { class: 'tsess-qwhen', text: qWhen(p.ts) })),
-            qHighlight(p.text, null)));
+            txt);
+          list.append(item);
+          qClampText(item, txt);
         });
         return;
       }
@@ -499,9 +530,12 @@ export async function openSessPrompts(s) {
       cap.textContent = pool.length ? (pool.length + ' / ' + total + '개 일치 · 관련도순' + (isPartial ? ' (일부 단어)' : '')) : '';
       if (!pool.length) { list.append(el('div', { class: 'empty', text: '일치하는 질문이 없어요.' })); return; }
       pool.forEach(({ p, chrono }) => {
-        list.append(el('div', { class: 'tsess-qitem' },
+        const txt = qHighlight(p.text, terms);
+        const item = el('div', { class: 'tsess-qitem' },
           el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + chrono }), el('span', { class: 'tsess-qwhen', text: qWhen(p.ts) })),
-          qHighlight(p.text, terms)));
+          txt);
+        list.append(item);
+        qClampText(item, txt);
       });
     };
     search.addEventListener('input', draw);
@@ -540,9 +574,11 @@ function openGlobalPromptSearch(ctx) {
           pid ? el('span', { class: 'tsess-proj' + (myProjIds.has(pid) ? ' mine' : ''), title: (projName.get(pid) || ('#' + pid)), text: '🗂 ' + (projName.get(pid) || ('프로젝트 #' + pid)) }) : null,
           el('span', { text: qWhen(r.ts) }),
           el('span', { class: 'tsess-gopen', text: '열기 ↗' }));
-        const item = el('div', { class: 'tsess-qitem tsess-gitem', role: 'button', tabindex: '0', title: '이 세션 열기' }, meta, qHighlight(r.text, ql));
+        const txt = qHighlight(r.text, ql);
+        const item = el('div', { class: 'tsess-qitem tsess-gitem', role: 'button', tabindex: '0', title: '이 세션 열기' }, meta, txt);
         item.onclick = () => window.open('/ui/terminal.html?session=' + encodeURIComponent(r.sessionId) + '&label=' + encodeURIComponent(r.label || ''), '_blank');
         results.append(item);
+        qClampText(item, txt);
       });
     } catch (e) {
       if (input.value.trim() !== q) return;
