@@ -84,8 +84,9 @@ import { lookupDeviceAuth, approveDeviceAuth, denyDeviceAuth, checkDeviceRate } 
 import { startBackfillJob, getBackfillJob, countEmbeddingBacklog, runAutoBackfillSweep, PROJECT_TARGET, type BackfillMode } from "../v6/embedding-backfill.js";
 import type { EmbeddingConfigPatch } from "../v6/embedding-provider.js";
 import {
-  DEFAULT_EMBEDDING_BATCH_SIZE, DEFAULT_EMBEDDING_TIMEOUT_MS,
+  DEFAULT_EMBEDDING_BATCH_SIZE, DEFAULT_EMBEDDING_TIMEOUT_MS, DEFAULT_EMBEDDING_BACKFILL_MIN_MB,
   EMBEDDING_BATCH_MIN, EMBEDDING_BATCH_MAX, EMBEDDING_TIMEOUT_MIN_MS, EMBEDDING_TIMEOUT_MAX_MS,
+  EMBEDDING_BACKFILL_MIN_MB_MIN, EMBEDDING_BACKFILL_MIN_MB_MAX,
 } from "../v6/embedding-provider.js";
 import {
   GATEWAY_OWNER, memberOwner, listGitCredentialsPublic, setSshCredential, setHttpsCredential,
@@ -1392,6 +1393,13 @@ export const deliveryCapabilities: Capability[] = [
           if (!Number.isFinite(timeoutMs) || timeoutMs < EMBEDDING_TIMEOUT_MIN_MS || timeoutMs > EMBEDDING_TIMEOUT_MAX_MS) throw new HttpError(400, `embedding_config.request_timeout_ms 는 ${EMBEDDING_TIMEOUT_MIN_MS}~${EMBEDDING_TIMEOUT_MAX_MS}(ms) 정수여야 합니다`);
           timeoutMs = Math.floor(timeoutMs);
         }
+        // 백필 pre-flight 메모리 게이트(#1059) — 자동 백필이 임베딩 백엔드를 깨우기 전 최소 가용 메모리(MB). 0=비활성. 비우면 기본 0.
+        let backfillMinMb = DEFAULT_EMBEDDING_BACKFILL_MIN_MB;
+        if (e.backfill_min_available_mb !== undefined && e.backfill_min_available_mb !== null && e.backfill_min_available_mb !== "") {
+          backfillMinMb = Number(e.backfill_min_available_mb);
+          if (!Number.isFinite(backfillMinMb) || backfillMinMb < EMBEDDING_BACKFILL_MIN_MB_MIN || backfillMinMb > EMBEDDING_BACKFILL_MIN_MB_MAX) throw new HttpError(400, `embedding_config.backfill_min_available_mb 는 ${EMBEDDING_BACKFILL_MIN_MB_MIN}~${EMBEDDING_BACKFILL_MIN_MB_MAX} 정수여야 합니다`);
+          backfillMinMb = Math.floor(backfillMinMb);
+        }
         // #688 관리탭에서 끄기 저장 = '명시적 off' 마커 — .env(EMBEDDINGS_*) 시드로 부활하지 않는다(관리탭 > env).
         patch.embedding_config = provider === "off" ? { provider: "off", explicit: true } : {
           provider: "http",
@@ -1401,6 +1409,7 @@ export const deliveryCapabilities: Capability[] = [
           auth_env_ref: authRef,
           batch_size: batchSize,
           request_timeout_ms: timeoutMs,
+          backfill_min_available_mb: backfillMinMb,
         };
       }
       // 세션 공유(세션이력 캡처) 정책(#905 C1) — 관리탭 ▸ 세션 공유. 잡값·미지원 하네스·범위초과는 여기서 400,

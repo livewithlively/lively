@@ -131,6 +131,72 @@ render_service_unit() {
   esac
 }
 
+# ── 호스트 메모리 안전장치 (#1059 OOM 재발방지) — install·update 공유(단일 소스, render_service_unit 패턴). ──
+#  2026-07-21 어니스트 다운: claude 세션 baseline(~8GB) + Ollama 임베딩 3.3GB 스파이크가 스왑0 물리 초과 →
+#   스래싱 라이브락(쉘·게이트웨이 무응답 → 강제재부팅, global_oom 이 엉뚱하게 llama-server 만 반복 kill). swap 완충 +
+#   earlyoom(sshd 보호하며 폭주 프로세스 선제 kill)로 방어. Linux 전용(mac no-op — launchd 박스는 대상 아님).
+#  멱등·비파괴(delivery-install-invariants): 기존 swap/sysctl/earlyoom 설정을 덮지 않고 존중. sudo 필요(install·update 는 이미 sudo 사용).
+#  조정: LIVELY_SWAP_SIZE(기본 8G, 0=swap 생략) · LIVELY_MEM_SAFETY=off(전체 생략).
+ensure_host_memory_safety() {
+  [ "$(detect_os)" = linux ] || return 0
+  [ "${LIVELY_MEM_SAFETY:-on}" != off ] || { log "메모리 안전장치 — LIVELY_MEM_SAFETY=off, 생략"; return 0; }
+
+  # ① swap — 활성 swap 이 하나도 없을 때만 생성(기존 구성 존중). fallocate 실패(구 FS)면 dd 폴백.
+  local swap_size="${LIVELY_SWAP_SIZE:-8G}" swapfile="/swapfile"
+  if [ "$swap_size" = 0 ]; then
+    log "메모리: swap 생성 생략(LIVELY_SWAP_SIZE=0)"
+  elif [ -n "$(swapon --show=NAME --noheadings 2>/dev/null)" ]; then
+    ok "메모리: swap 이미 활성 — 존중(비파괴)"
+  else
+    log "메모리: swap 없음 → $swapfile ($swap_size) 생성"
+    if ! sudo fallocate -l "$swap_size" "$swapfile" 2>/dev/null; then
+      local mib; mib="$(numfmt --from=iec "$swap_size" 2>/dev/null || echo 8589934592)"; mib=$(( mib / 1048576 ))
+      sudo dd if=/dev/zero of="$swapfile" bs=1M count="$mib" status=none 2>/dev/null || true
+    fi
+    if sudo chmod 600 "$swapfile" 2>/dev/null && sudo mkswap "$swapfile" >/dev/null 2>&1 && sudo swapon "$swapfile" 2>/dev/null; then
+      grep -qE "^[[:space:]]*$swapfile[[:space:]]" /etc/fstab 2>/dev/null || echo "$swapfile none swap sw 0 0" | sudo tee -a /etc/fstab >/dev/null
+      ok "메모리: swap 활성화 $swapfile ($swap_size, /etc/fstab 등재)"
+    else
+      warn "메모리: swap 설정 실패(비치명) — 수동 확인: swapon --show"
+    fi
+  fi
+
+  # ② swappiness — lively 관리 sysctl 파일이 없을 때만 생성(고객 기존 튜닝 존중). 스왑 완충이 너무 늦지 않게 10.
+  local sysctl_f="/etc/sysctl.d/99-lively-mem.conf"
+  if [ -f "$sysctl_f" ]; then
+    log "메모리: $sysctl_f 이미 존재 — 존중(비파괴)"
+  else
+    printf '# lively(#1059) — 스왑 완충이 너무 늦지 않게. 조정/제거 자유.\nvm.swappiness=10\n' | sudo tee "$sysctl_f" >/dev/null \
+      && sudo sysctl -q -p "$sysctl_f" 2>/dev/null || true
+    ok "메모리: vm.swappiness=10 ($sysctl_f — lively 관리)"
+  fi
+
+  # ③ earlyoom — 물리 임계 도달 시 sshd 보호하며 폭주 프로세스 선제 kill. 커널 global_oom(최대 단일=엉뚱한 llama)보다 정밀.
+  #  -m/-s: RAM·swap 여유 %(둘 다 밑이어야 발동, 보수적). --avoid: 생명줄(sshd·systemd·tmux=세션컨테이너·docker=store·node=게이트웨이).
+  #  --prefer claude: 폭주 주범(세션은 E+F 가 lazy 복원하므로 잃어도 복구 가능). EARLYOOM_ARGS 만 우리 값으로(파일 내 다른 설정 보존).
+  if ! command -v earlyoom >/dev/null 2>&1; then
+    log "메모리: earlyoom 설치(apt)…"
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y earlyoom >/dev/null 2>&1 \
+      || warn "메모리: earlyoom 설치 실패(비치명 — swap 만으로도 완충). 수동: sudo apt-get install earlyoom"
+  fi
+  if command -v earlyoom >/dev/null 2>&1; then
+    local eo="/etc/default/earlyoom"
+    # ⚠ 정규식에 작은따옴표를 감싸지 않는다 — /etc/default/earlyoom 은 systemd EnvironmentFile 로 읽혀
+    #  $EARLYOOM_ARGS 가 word-split 되는데, 작은따옴표는 벗겨지지 않고 리터럴로 earlyoom 에 전달돼 정규식이 깨진다.
+    #  우리 패턴엔 공백이 없어 따옴표 없이 안전(공백 있는 패턴이면 이 방식 불가).
+    local args="-m 6 -s 6 -r 3600 --avoid (^|/)(sshd|systemd|systemd-.*|dbus.*|tmux.*|dockerd|containerd|node)$ --prefer (^|/)claude$"
+    sudo touch "$eo" 2>/dev/null || true
+    if sudo grep -qE '^EARLYOOM_ARGS=' "$eo" 2>/dev/null; then
+      sudo sed -i "s#^EARLYOOM_ARGS=.*#EARLYOOM_ARGS=\"$args\"#" "$eo"
+    else
+      echo "EARLYOOM_ARGS=\"$args\"" | sudo tee -a "$eo" >/dev/null
+    fi
+    sudo systemctl enable --now earlyoom >/dev/null 2>&1 || true
+    sudo systemctl try-restart earlyoom >/dev/null 2>&1 || true
+    ok "메모리: earlyoom 활성(sshd 보호·claude prefer)"
+  fi
+}
+
 require_cmd() { command -v "$1" >/dev/null 2>&1 || die "필요한 명령 없음: $1"; }
 
 # 시크릿 생성(hex — URL/compose/.env 어디서도 이스케이프 불필요).

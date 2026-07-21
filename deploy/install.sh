@@ -66,6 +66,7 @@ main() {
   # ⚠ 순서: 스키마는 게이트웨이가 '기동 시 listen 성공 후' 자가 마이그레이션한다 → 부트스트랩(테이블 필요)은
   #   반드시 서비스 기동·헬스체크 '뒤'에. (먼저 돌리면 org_member 테이블이 아직 없어 실패.)
   phase "5/7 게이트웨이 서비스 설치·기동 + 헬스체크(스키마 자가 마이그레이션) + TLS 프록시"
+  ensure_host_memory_safety   # #1059 OOM 재발방지 — swap 완충 + earlyoom(sshd 보호·폭주 kill). 서비스 기동 전. 비치명.
   os_install_service
   wait_healthz
   proxy_up   # LIVELY_DOMAIN 설정 시 Caddy 자동 HTTPS(미설정 시 no-op)
