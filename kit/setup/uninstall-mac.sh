@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# lively 컨텍스트 **제거** — Mac (setup-mac.sh 의 역연산)
+# lively 컨텍스트 **제거** — Mac (설치의 역연산). ⚠ 캐노니컬 제거기는 `lively uninstall`(user-uninstall.mjs) 이고
+#   이건 번들에 동봉되는 UX 래퍼다 — CLI 가 없거나 깨졌을 때의 경로.
 # ----------------------------------------------------------------
 # uninstall = 머신에서 lively 셋업을 **영구 제거**(오프보딩/정리/하드리셋).
 #   ≠ incognito(LIVELY_OFF=1): incognito 는 설치는 그대로, 훅만 일시 off. 언제든 복귀.
@@ -16,7 +17,7 @@ set -euo pipefail
 #   --purge              ~/.lively 를 휴지통 이동 대신 하드 삭제(백업 포함 완전 제거)
 #   --harness <h>        대상 하네스 한정(기본 all)
 #   --yes                확인 프롬프트 생략(스크립트/CI)
-# (setup-mac.sh --uninstall 로도 호출 가능 — 동일 동작.)
+# (설치 묶음 안에서 직접 실행한다.)
 
 DRY=0; PURGE=0; YES=0; HARNESS="all"
 PASS_ARGS=()
@@ -26,7 +27,7 @@ while [ $# -gt 0 ]; do
     --purge)   PURGE=1; PASS_ARGS+=("--purge"); shift ;;
     --yes|-y)  YES=1; shift ;;
     --harness) HARNESS="${2:-all}"; PASS_ARGS+=("--harness" "${2:-all}"); shift 2 ;;
-    --uninstall) shift ;;  # setup-mac.sh --uninstall 경유 시 흘러들어와도 무시
+    --uninstall) shift ;;  # 옛 설치기 경유 호출에서 흘러들어와도 무시(하위호환)
     -h|--help)
       echo "사용법: bash setup/uninstall-mac.sh [--dry-run] [--purge] [--harness claude|codex|all] [--yes]"
       exit 0 ;;

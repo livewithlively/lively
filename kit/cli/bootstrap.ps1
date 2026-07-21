@@ -33,6 +33,19 @@ Say ""
 
 # ── [1] Node 확보 ─────────────────────────────────────────────────────────────
 # win zip 은 node.exe 가 폴더 **루트**에 있다(POSIX 의 bin/ 이 아님) — 심(lively.cmd)이 그걸 전제한다.
+#
+# ⚠ **존재가 아니라 버전으로 판정한다**(#1068 — bootstrap.sh 와 같은 계약). 옛 코드는 `Get-Command node`
+#   하나로 시스템 node 를 무조건 채택해서, 구버전 박스에선 CLI 가 그 위에서 돌다 `fetch is not defined`
+#   (전역 fetch 는 Node 18+)로 [1/3] 키트 내려받기에서 죽었다. 아래 [2] 의 심(lively.cmd)은 번들 런타임을
+#   우선하지만 **여기서 안 깔면 심이 쥘 게 없어** 결국 같은 구버전 node 로 폴백한다.
+#   판정 규칙: **못 쓸 버전 = 없는 것**. 시스템 node 는 건드리지 않고 우리 것만 따로 깐다.
+$NODE_MIN_MAJOR = 20   # package.json engines(">=20") · bootstrap.sh · lively.mjs 와 같은 계약.
+function Test-NodeUsable($exe) {
+  if (-not $exe -or -not (Test-Path $exe)) { return $false }
+  try { $m = & $exe -p 'process.versions.node.split(".")[0]' 2>$null } catch { return $false }
+  if ($LASTEXITCODE -ne 0 -or -not ($m -match '^\d+$')) { return $false }
+  return ([int]$m -ge $NODE_MIN_MAJOR)
+}
 function Find-LivelyNode {
   $rt = Join-Path $LV "runtime"
   if (Test-Path $rt) {
@@ -44,20 +57,33 @@ function Find-LivelyNode {
   return $null
 }
 
+$SYS_NODE  = (Get-Command node -EA 0).Source
+$BUNDLED   = Find-LivelyNode
+# 구버전이라 못 쓰는 경우에만 안내한다(정상 경로는 조용히 지나간다).
+function Say-OldSysNode($what) {
+  if ($SYS_NODE) { Info "시스템 node($(& $SYS_NODE -v 2>$null)) 는 Node $NODE_MIN_MAJOR 미만 — $what" }
+}
 $NODE = $null
-if (Get-Command node -EA 0) {
-  $NODE = (Get-Command node).Source
+if (Test-NodeUsable $SYS_NODE) {
+  $NODE = $SYS_NODE
   OK "Node: 시스템 설치 사용 ($(& $NODE -v))"
-} elseif ($NODE = Find-LivelyNode) {
+} elseif (Test-NodeUsable $BUNDLED) {
+  $NODE = $BUNDLED
+  Say-OldSysNode "라이블리 전용 런타임을 씁니다(시스템 node 는 그대로 둡니다)."
   OK "Node: 번들 런타임 재사용 ($(& $NODE -v))"
 } else {
+  Say-OldSysNode "라이블리 전용 런타임을 설치합니다(시스템 node 는 그대로 둡니다)."
   $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
-  $ver = "v22.14.0"   # 폴백(공식 LTS)
+  $fallback = "v22.14.0"   # 폴백(공식 LTS · 실재 확인됨)
+  $ver = $fallback
   try {
     $idx = Invoke-RestMethod -UseBasicParsing -TimeoutSec 15 "https://nodejs.org/dist/index.json"
     $lts = $idx | Where-Object { $_.lts } | Select-Object -First 1
     if ($lts.version) { $ver = $lts.version }
   } catch { Info "Node 버전 목록 조회 실패 — 폴백 $ver 사용" }
+  # 해석이 어긋나 최소 버전 미만을 집어오면 이 수정이 통째로 무의미해진다 — 그 땐 폴백(고정 LTS)으로.
+  $vm = [regex]::Match([string]$ver, '^v(\d+)\.')
+  if (-not $vm.Success -or [int]$vm.Groups[1].Value -lt $NODE_MIN_MAJOR) { $ver = $fallback }
 
   $bname  = "node-$ver-win-$arch"
   $rt     = Join-Path $LV "runtime"

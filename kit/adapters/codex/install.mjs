@@ -14,7 +14,7 @@
 //
 // 사용법: node adapters/codex/install.mjs --org <org-content-dir> [--org-name <name>] [--work-root <abs>]…
 //        [--gateway-url <url>]  (미지정 시 ~/.lively/gateway-url, 그것도 없으면 http://localhost:8080)
-//   setup-mac.sh 가 토큰/게이트웨이 기록 후 이걸 호출한다(claude 어댑터와 병렬 — 둘 다 설치되면 둘 다).
+//   user-install.mjs 가 토큰/게이트웨이 기록 후 이걸 호출한다(claude 어댑터와 병렬 — 둘 다 설치되면 둘 다).
 //
 // Codex 0.138.0 계약(임베드 스키마 + developers.openai.com/codex 확인):
 //  - 훅 기본 활성([features] hooks = stable/true). 별도 enable 불요.

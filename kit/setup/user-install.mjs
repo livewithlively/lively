@@ -11,9 +11,9 @@
 //  (d) ~/.claude/settings.json ← SAFE-MERGE: user-level 절대경로 훅 블록 비파괴 머지(백업 먼저)
 //  (e) ~/.lively/work-roots   ← --work-root 시드(없을 때만, 기존 보존)
 //  (f) ~/.lively/lib+bin      ← lively CLI + 런처 심 + PATH rc 배선 (#864 — installCli)
-//  MCP 등록은 setup-mac.sh 의 register-clients.sh 또는 `lively install`(CLI) 이 담당(여기서 호출 안 함).
+//  MCP 등록은 `lively install`(CLI) 또는 박스의 register-clients.sh 가 담당(여기서 호출 안 함).
 //
-// 사용법(보통은 setup-mac.sh 가 호출): node setup/user-install.mjs [--harness claude|codex|claude,codex] [--work-root <abs>]…
+// 사용법(보통은 `lively install` 또는 deploy/install-kit.sh 가 호출): node setup/user-install.mjs [--harness claude|codex|claude,codex] [--work-root <abs>]…
 //   --clone-root <dir> 로 발행물 루트 지정(기본: 이 스크립트의 ../). --harness 미지정 시 claude.
 //   Codex(--harness codex): 같은 ~/.lively 자산 + ~/.codex/config.toml([hooks]+[mcp_servers.lively]) + ~/.codex/AGENTS.md.
 //     (어댑터 adapters/codex/install.mjs 와 동일 동작을 발행물 자산만으로 자체완결 재현 — generator 미의존.)
@@ -269,7 +269,7 @@ function wireCliPath() {
     let cur = "";
     try { cur = existsSync(rc) ? readFileSync(rc, "utf8") : ""; } catch { continue; }
     if (cur.includes(CLI_PATH_BEGIN)) { console.log(`  · ${rc.replace(HOME, "~")} (PATH 블록 기존 유지)`); continue; }
-    // 최초(pristine) 스냅샷만 보관 — 덮어쓰지 않는다(setup-mac.sh 의 _wire_rc_block 과 같은 규약).
+    // 최초(pristine) 스냅샷만 보관 — 덮어쓰지 않는다(kit/cli/bootstrap.sh 의 rc 센티넬과 같은 규약).
     const bakDir = join(LIVELY, "backups");
     mkdirSync(bakDir, { recursive: true });
     const bak = join(bakDir, `${rc.split("/").pop()}.path-cli.bak`);
@@ -649,7 +649,7 @@ async function main() {
   }
   if (harnesses.includes("codex")) {
     console.log("  ── Codex ──");
-    // 게이트웨이 URL: ~/.lively/gateway-url(setup-mac 이 기록) > 기본. /mcp 정규화.
+    // 게이트웨이 URL: ~/.lively/gateway-url(부트스트랩·CLI 가 기록) > 기본. /mcp 정규화.
     let gwBase = "http://localhost:8080";
     try { gwBase = (readFileSync(join(LIVELY, "gateway-url"), "utf8").trim() || gwBase); } catch { /* 기본 */ }
     gwBase = gwBase.replace(/\/+$/, "");

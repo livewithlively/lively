@@ -149,7 +149,7 @@ try {
     check("① 잘못된 토큰 거부 + 저장 안 함", r.code !== 0 && !saved, `code=${r.code} saved=${saved}`);
   }
 
-  // ② 로그인 성공 — 토큰 0600 + gateway-url 은 /mcp 없이 저장(setup-mac.sh 와 같은 계약).
+  // ② 로그인 성공 — 토큰 0600 + gateway-url 은 /mcp 없이 저장(user-install.mjs 와 같은 계약).
   const H = newHome("h-main");
   {
     const r = await lively(H, ["login", "--gateway", `${GW}/mcp`, "--token", TOKEN]);
@@ -177,7 +177,7 @@ try {
 
   // ④ **MCP 등록 인자** — 이 CLI(registerLivelyMcp)와 register-clients.sh(scripts/ 소스 + kit/setup/ 트윈)는
   //  **동일한 헤더 세트**여야 한다. register-clients.sh 는 죽은 코드가 아니라 fresh 설치·멤버 온보딩의 주 경로다
-  //  (deploy/install-kit.sh·provision-member.sh·setup-mac.sh 가 직접 호출) — 어느 한쪽만 헤더를 더하면 그 경로로 깐 세션은
+  //  (deploy/install-kit.sh·provision-member.sh 가 직접 호출) — 어느 한쪽만 헤더를 더하면 그 경로로 깐 세션은
   //  헤더가 빠져 기능이 조용히 죽는다(#1007 리뷰). 그래서 아래 두 축으로 못박는다: (a) 이 CLI argv 를 리터럴로,
   //  (b) register-clients.sh 파일이 실제로 같은 3헤더를 등록하는지(드리프트 가드 — 안전망이 CLI 만 보지 않게).
   {

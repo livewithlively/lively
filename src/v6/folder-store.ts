@@ -29,6 +29,13 @@ export function folderIsSpace(row: Pick<ProjectFolderRow, "external_id" | "setti
     || (!!row.settings && (row.settings as Record<string, unknown>).kind === "space");
 }
 
+// 아카이브 폴더 판정(#1067) — 사이드바 맨 아래 고정 폴더(settings.kind='archive'). 조직당 하나만 쓰되(프론트가 최소 id 채택),
+//  스키마는 그대로 — 스페이스 표식(kind='space')과 같은 자리에 다른 값을 넣는 방식. 아카이브는 최상위 전용이고,
+//  '지난 것을 치워두는 곳'이라 예외적으로 스페이스도 하위로 받는다(복원 = parent_id=null 로 다시 최상위 스페이스).
+export function folderIsArchive(row: Pick<ProjectFolderRow, "settings">): boolean {
+  return !!row.settings && (row.settings as Record<string, unknown>).kind === "archive";
+}
+
 // candidate 가 ancestorId 자신이거나 그 자손인지 — parent_id 부모 체인을 위로 훑어 확인(사이클 방지, #766).
 async function folderIsSelfOrDescendant(ancestorId: number, candidateId: number): Promise<boolean> {
   let cur: number | null = candidateId;
@@ -83,11 +90,13 @@ export async function createProjectFolder(
   ctx?: WriteCtx,
 ): Promise<ProjectFolderRow> {
   // #766 네이티브 스페이스/중첩: kind='space' 면 settings.kind='space' 로 표식(스키마 무변). 스페이스는 최상위 전용(부모 무시).
+  //  #1067 kind='archive' 도 같은 자리 표식 — 사이드바 고정 아카이브 폴더. 스페이스와 마찬가지로 최상위 전용.
   //  일반 폴더는 parent_id(스페이스/폴더) 하위로 둘 수 있다. 부모는 실재해야 한다.
   const isSpace = input.kind === "space";
-  const parentId = isSpace ? null : (input.parent_id ?? null);
+  const isArchive = input.kind === "archive";
+  const parentId = (isSpace || isArchive) ? null : (input.parent_id ?? null);
   if (parentId != null && !(await getProjectFolderRow(parentId))) throw new Error(`상위 폴더 #${parentId} 없음`);
-  const settings = isSpace ? '{"kind":"space"}' : "{}";
+  const settings = isSpace ? '{"kind":"space"}' : (isArchive ? '{"kind":"archive"}' : "{}");
   // 신규 폴더는 맨 뒤로(기존 최대 sort + 1) — 생성 순서 보존, 추후 재정렬 가능.
   const row: { id: number } = await one(itemsPool,
     `INSERT INTO project_folder(name, color, sort, parent_id, settings, created_by, created_at, updated_at)
@@ -117,8 +126,11 @@ export async function updateProjectFolder(
     const target = patch.parent_id;
     if (target != null) {
       // 메시지에 wrap() 인식 토큰(허용/없음)을 포함해야 사용자에게 400 으로 노출된다(rest-util.ts) — 아니면 internal_error.
-      if (folderIsSpace(before)) throw new Error("스페이스는 최상위만 허용됩니다 (다른 폴더/스페이스 하위로 이동 불가)");
-      if (!(await getProjectFolderRow(target))) throw new Error(`상위 폴더 #${target} 없음`);
+      if (folderIsArchive(before)) throw new Error("아카이브 폴더는 최상위 고정입니다 (다른 폴더 하위로 이동 불가)");
+      const targetRow = await getProjectFolderRow(target);
+      if (!targetRow) throw new Error(`상위 폴더 #${target} 없음`);
+      // #1067 스페이스는 여전히 최상위 전용 — 단 '아카이브에 치워두기'만 예외로 허용(복원 = parent_id=null).
+      if (folderIsSpace(before) && !folderIsArchive(targetRow)) throw new Error("스페이스는 최상위만 허용됩니다 (아카이브 폴더 외의 폴더/스페이스 하위로 이동 불가)");
       if (await folderIsSelfOrDescendant(id, target)) throw new Error("자기 자신·하위 폴더를 상위로 두는 순환은 허용되지 않습니다");
     }
     set("parent_id", target);

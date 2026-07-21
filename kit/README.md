@@ -27,7 +27,7 @@ workflow-std/
 │  ├─ claude/                     # Claude 어댑터(install.mjs) — user-level 설치, managed 예시 (v1)
 │  └─ codex/                      # Codex 어댑터(install.mjs) (v1) · openclaw/pi = TODO
 ├─ template-org/                  # 새 조직콘텐츠 1회성 INIT 소스(generic 골격, 라이블리 특정 내용 없음)
-├─ setup/                         # 멤버 설치(setup-mac.sh/ps1) + 가이드 + vendored register-clients.sh
+├─ setup/                         # 설치 엔진(user-install.mjs)·제거기 + 가이드 + vendored register-clients.sh
 └─ ORG-CONTENT-GUIDE.md           # 조직콘텐츠 각 파일 작성법 + 새 조직 부트스트랩 체크리스트
 ```
 
