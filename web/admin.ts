@@ -173,11 +173,14 @@ const SECTION_REMAP = {
 // 구 [검토 큐]는 관리탭을 떠나 WIKI 탭으로 갔다(#837) — 섹션 리맵이 아니라 탭 밖 리다이렉트라 따로 둔다.
 const SECTION_EXIT = { 'review-queue': '#/knowledge/review' };
 // admin 권한 전용(쓰기·인프라·감사). #318 호출통계·#549 변경감사는 전 구성원의 변경·before/after 를 노출하므로 admin.
-const ADMIN_ONLY = ['credentials', 'connectors', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'embeddings', 'automation', 'preview-envs', 'audit', 'ingest-policy', 'session-share'];
+const ADMIN_ONLY = ['credentials', 'connectors', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'embeddings', 'automation', 'audit', 'ingest-policy', 'session-share'];
 const RUNTIME_ONLY = ['agent-assets']; // runtime 권한 전용(멤버 머신에서 도는 것의 정의)
 // [도구]는 두 권한의 합집합 — 사내 API 도구·빌트인은 runtime, 외부 MCP 서버 등록은 admin. 둘 중 하나라도 있으면
 //  섹션을 보여주고, 안에서 각 서브탭을 권한별로 켠다(구조상 한 섹션=한 scope 전제가 깨지는 유일한 자리라 명시한다).
-const MIXED_SECTIONS = { tools: ['admin', 'runtime'] };
+//  [미리보기]도 합집합 — **쓰는 사람은 작업자(code)** 다. 관리자 전용으로 잠그면 정작 화면을 확인해야 할
+//   사람이 못 쓴다(실측: 활성 구성원 대다수는 items·context 뿐이고 code 는 개발 구성원에게 부여된다).
+//   단 '어떻게 띄울지'(스택 프로필)는 셸 명령을 담으므로 정의는 admin 만 — 사용은 code, 정의는 admin 으로 가른다.
+const MIXED_SECTIONS = { tools: ['admin', 'runtime'], 'preview-envs': ['code', 'admin'] };
 // V4-P5/J: 어휘(카테고리·레포·팀) CRUD = context 스코프(admin 완화). context 없는 사용자는 읽기 전용(섹션은 노출).
 const CONTEXT_EDIT = ['wiki-categories', 'repos', 'teams'];
 // 내 설정 — 권한 게이트 없음(전 구성원 노출·편집). 서버도 me/* 엔드포인트라 principal 로 강제된다.
