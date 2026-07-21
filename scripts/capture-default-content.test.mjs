@@ -2,7 +2,7 @@
 //  diffRows(추가/변경/제거 판정) · mergeSelective(선택 id 만 반영·나머지 현행 보존) · parseCaptureArgs · lineDiff.
 //  DB 불요(순수함수만 import — 모듈 하단 main 가드가 import 시 실행을 막는다).
 //  실행: node scripts/capture-default-content.test.mjs
-import { diffRows, mergeSelective, parseCaptureArgs, lineDiff } from "./capture-default-content.mjs";
+import { diffRows, mergeSelective, parseCaptureArgs, lineDiff, excludeInternalOnly } from "./capture-default-content.mjs";
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -40,6 +40,18 @@ eq("args --diff", parseCaptureArgs(["--diff"]).diff, true);
 eq("args --only csv → Set", [...parseCaptureArgs(["--only", "x,y"]).only].sort(), ["x", "y"]);
 eq("args --only= csv", [...parseCaptureArgs(["--only=p,q"]).only].sort(), ["p", "q"]);
 eq("args 기본 only=null(전체)", parseCaptureArgs([]).only, null);
+// excludeInternalOnly — frontmatter.internal_only=true 는 고객 시드에서 통째 제외(★ 내부 경로·포트·사내 히스토리 유출 차단)
+{
+  const rows = [
+    { id: "public-skill", frontmatter: {} },
+    { id: "internal-skill", frontmatter: { internal_only: true } },
+    { id: "no-frontmatter" },
+    { id: "falsy-flag", frontmatter: { internal_only: false } },
+  ];
+  const { kept, excluded } = excludeInternalOnly(rows);
+  eq("internal_only=true 만 제외", excluded.map((r) => r.id), ["internal-skill"]);
+  eq("나머지는 시드에 보존(플래그 없음·false 포함)", kept.map((r) => r.id), ["public-skill", "no-frontmatter", "falsy-flag"]);
+}
 // lineDiff — 공통 접두/접미 제외한 가운데만
 eq("lineDiff 가운데 블록만", lineDiff("a\nb\nc", "a\nX\nc"), "      - b\n      + X");
 
