@@ -1859,7 +1859,14 @@ export const deliveryCapabilities: Capability[] = [
     "proxy 모드 MCP 서버의 상류 tools/list 를 다시 캡처해 스냅샷(핀)으로 저장한다 — 버전업/새 툴 반영. 다음 세션부터 구성원에 전파(재설치 0).",
     [{ method: "POST", paths: ["/api/ui/org/mcp-server/refresh"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
-      const r = await refreshProxySnapshot(slug(input.name, "name"), actorOf(user));
+      let r: { count: number };
+      try {
+        r = await refreshProxySnapshot(slug(input.name, "name"), actorOf(user));
+      } catch (e) {
+        // 상류 연결/tools 캡처 실패를 실제 메시지로 노출한다(구: generic 500 "internal_error" 로 뭉개져 원인 불명이었음).
+        //  자격 리터럴은 refreshProxySnapshot 내부에서 이미 redact 됨.
+        throw new HttpError(502, `발행 실패(상류 tools/list): ${(e as Error)?.message ?? String(e)}`);
+      }
       // in-session push(#746 T5) — sessioned 클라들에 tools/list_changed 즉시 전파(무상태면 no-op). 발행=라이브 반영.
       const pushed = broadcastToolListChanged();
       return { ok: true, tool_count: r.count, live_pushed_sessions: pushed };
