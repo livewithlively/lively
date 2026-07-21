@@ -183,6 +183,27 @@ export async function runEmbeddingBackfill(opts: {
   }
 }
 
+// ── 자동 백필 일시중지(#1060) — 성능 이슈로 사람이 자동 임베딩 백필을 멈추고 재개하는 마스터 스위치. ──
+//  SoT = org_runtime_config.embedding_backfill_paused(DB, 영속 — 재시작에도 유지되어 부팅 스윕이 존중한다).
+//  인메모리 캐시(pausedCache)는 '동기' shouldStop 을 위한 라이브 신호다: runEmbeddingBackfill 의 배치 루프가 매 배치
+//  경계에서 shouldStop()(동기 시그니처)을 부르므로 DB(비동기)를 못 읽는다 → 캐시로 즉시 판정한다. 캐시 갱신 경로 둘:
+//   (a) REST 토글이 setBackfillPausedCache 로 즉시 반영(→ 실행 중 잡이 다음 배치에서 협조적 중단),
+//   (b) 스윕 진입의 refreshBackfillPausedFromDb 가 DB 로 재수화(부팅 스윕이 영속 상태를 픽업).
+//  게이트웨이는 단일 프로세스(스윕·REST 핸들러 동거)라 캐시가 정합적이다(스케줄러 게이트: LIVELY_NO_SCHEDULER).
+let pausedCache = false;
+export function isBackfillPaused(): boolean { return pausedCache; }
+export function setBackfillPausedCache(paused: boolean): void { pausedCache = paused; }
+// DB 의 일시중지 플래그를 읽어 캐시에 반영하고 반환. 컬럼/테이블 부재(구 DB)면 캐시 불변(기본 false=평소대로 자동 백필 — 하위호환).
+export async function refreshBackfillPausedFromDb(): Promise<boolean> {
+  try {
+    const r = await itemsPool.query(`SELECT embedding_backfill_paused FROM org_runtime_config WHERE id=1`);
+    pausedCache = (r.rows[0] as { embedding_backfill_paused?: unknown } | undefined)?.embedding_backfill_paused === true;
+  } catch {
+    /* 컬럼/테이블 부재(임베딩 미도입/구 DB) → 캐시 유지(기본 false). 스윕은 계속 돈다. */
+  }
+  return pausedCache;
+}
+
 // ── 인프로세스 백필 잡(웹 UI 트리거) — 게이트웨이 프로세스 내 단일 실행. 진행률은 폴링(GET /api/ui/org/embeddings 등). ──
 //  잡 유실(재시작)돼도 백필은 재진입 안전이라 다시 트리거하면 남은 것만 이어서. 동시 실행은 already-running 으로 거부.
 //  타깃별로 독립 잡(knowledge·project 를 동시에 돌릴 수 있다) — jobs Map 이 타깃명으로 보관.
@@ -220,6 +241,9 @@ export function startBackfillJob(
   void runEmbeddingBackfill({
     mode,
     onProgress: (p) => { job.total = p.total; job.done = p.done; },
+    // #1060 — 일시중지 토글 시 현재 배치를 끝내고 협조적 중단(재진입 안전: 채운 만큼 커밋됨, pending 은 재개 때 이어서).
+    //  자동 스윕 잡·수동 백필 잡 모두 이 게이트를 통과하므로, 일시중지는 어느 경로로 시작된 잡이든 멈춘다.
+    shouldStop: () => isBackfillPaused(),
   }, target)
     .then((res) => {
       job.embedded = res.embedded;
@@ -244,9 +268,13 @@ export async function runAutoBackfillSweep(): Promise<void> {
   if (sweepRunning) return;
   sweepRunning = true;
   try {
+    // #1060 — 일시중지면 스윕 자체가 no-op. DB 를 읽어 캐시 재수화(부팅 스윕이 영속 상태를 픽업) 후 게이트한다.
+    //  이 한 곳이 4개 자동 트리거(부팅 30초·10분 주기·connector_sync 완료 후·쓰기 nudge)의 공통 급소 — 전부 여기로 수렴한다.
+    if (await refreshBackfillPausedFromDb()) return;
     const provider = resolveEmbeddingProvider(await resolveConfigFromDb());
     if (!provider) return;
     for (const target of [KNOWLEDGE_TARGET, PROJECT_TARGET]) {
+      if (isBackfillPaused()) break; // 스윕 도중 일시중지되면 남은 타깃으로 넘어가지 않는다(실행 중 잡은 shouldStop 으로 이미 중단).
       let pending = 0;
       try { pending = (await countEmbeddingBacklog(target)).pending; } catch { continue; }
       if (pending === 0) continue;

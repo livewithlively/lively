@@ -3151,6 +3151,36 @@ function embeddingsEditor(detail, data) {
   const stopPoll = () => { if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; } };
   let projPollTimer: any = null;
   const stopProjPoll = () => { if (projPollTimer) { clearTimeout(projPollTimer); projPollTimer = null; } };
+  // #1060 자동 백필 일시중지 컨트롤 — knowledge·project 백필을 함께 지배하므로 두 섹션 위에 한 번만 둔다.
+  //  buildOnce 가 region 을 만들어 여기 담고, knowledge 폴링(updateStatus)이 최신 paused 로 재렌더해 상태를 항상 신선하게 유지.
+  let pauseRegion: any = null;
+
+  // 일시중지/재개 토글 + 상태 배너. paused=true 면 코랄 경고(자동·수동 백필 모두 멈춤), false 면 평상 힌트.
+  function renderPauseControl(paused, region) {
+    if (!region) return;
+    const btn = el('button', { class: 'btn btn-sm', text: paused ? '자동 백필 재개' : '자동 백필 일시중지' });
+    btn.disabled = !canEdit;
+    const note = el('div');
+    if (paused) {
+      note.className = 'admin-warn';
+      note.replaceChildren(
+        el('div', { text: '⏸ 자동 임베딩 백필이 일시중지되었습니다.' }),
+        el('div', { text: '자동 스윕(부팅·10분 주기·동기화 후·저장 시)과 수동 백필이 모두 멈춰 있습니다. 새로 쌓이는 미임베딩은 재개할 때까지 채워지지 않습니다(그동안 검색은 grep 폴백으로 동작). 재개하면 그동안 밀린 항목을 이어서 채웁니다. 이 설정은 게이트웨이 재시작 후에도 유지됩니다.' }));
+    } else {
+      note.className = 'admin-hint';
+      note.textContent = '자동 백필이 켜져 있습니다(정상 동작). 성능 등의 이유로 멈추려면 일시중지하세요 — 실행 중이던 백필도 곧 멈춥니다.';
+    }
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        await api('/api/ui/org/embeddings/backfill/pause', { method: 'POST', body: JSON.stringify({ paused: !paused }) });
+        toast(!paused ? '자동 백필을 일시중지했습니다.' : '자동 백필을 재개했습니다 — 밀린 항목을 채웁니다.');
+        load(); // paused 상태·양쪽 백필 버튼 게이트를 한번에 재계산
+      } catch (e: any) { toast(e.message, true); btn.disabled = false; }
+    });
+    region.replaceChildren(note,
+      canEdit ? el('div', { class: 'admin-actions' }, btn) : el('p', { class: 'admin-hint', text: '※ 편집은 관리자만 가능합니다.' }));
+  }
 
   async function load() {
     let st;
@@ -3215,6 +3245,7 @@ function embeddingsEditor(detail, data) {
 
     const statusRegion = el('div');
     const projectRegion = el('div');
+    pauseRegion = el('div'); // #1060 — updateStatus 가 st.backfill_paused 로 채운다(초기·폴링 공통)
     body.replaceChildren(
       ...(srcNote ? [srcNote] : []),
       field('벡터 임베딩', provSel),
@@ -3230,6 +3261,12 @@ function embeddingsEditor(detail, data) {
       field('요청 타임아웃 (ms)', timeoutIn),
       el('p', { class: 'admin-hint', text: '초과하면 배치를 반으로 줄여 재시도합니다(기본 300000).' }),
       canEdit ? el('div', { class: 'admin-actions' }, saveBtn, saveSt) : el('p', { class: 'admin-hint', text: '※ 편집은 관리자만 가능합니다.' }),
+      // #1060 자동 백필 일시중지 — knowledge·project 를 함께 지배하므로 두 백필 섹션 위에. 임베딩 켜진 경우에만 노출(꺼지면 백필 자체가 무의미).
+      ...(on ? [
+        el('div', { class: 'admin-subhead', text: '자동 임베딩 백필' }),
+        el('p', { class: 'admin-hint', text: '저장·수정·동기화, 그리고 부팅·10분 주기 스윕으로 쌓이는 미임베딩을 게이트웨이가 백그라운드에서 자동으로 채웁니다. 임베딩 백엔드가 느리거나(CPU) 성능에 영향을 줄 때는 아래에서 일시중지하세요 — 재개할 때까지 자동·수동 백필이 모두 멈추고, 재개하면 그동안 밀린 항목을 이어서 채웁니다.' }),
+        pauseRegion,
+      ] : []),
       el('div', { class: 'admin-subhead', text: '기존 지식 임베딩 (임베딩을 나중에 켠 경우)' }),
       el('p', { class: 'admin-hint', text: '임베딩을 켜도 이미 저장된 지식은 자동으로 임베딩되지 않습니다(켠 이후에 새로 만들거나 수정한 지식만 자동 처리). 기존 지식은 아래 버튼으로 일괄 임베딩하세요 — 중단하거나 다시 실행해도 안전합니다.' }),
       statusRegion,
@@ -3255,13 +3292,18 @@ function embeddingsEditor(detail, data) {
     const on = cfg.provider === 'http';
     const backlog = st.backlog || { total: 0, pending: 0 };
     const job = st.job;
+    const paused = !!st.backfill_paused; // #1060 — 일시중지면 수동 백필도 막고 배너를 띄운다
     const embedded = Math.max(0, (backlog.total || 0) - (backlog.pending || 0));
     const running = !!(job && job.running);
 
+    // #1060 — 일시중지 컨트롤을 최신 상태로(초기 렌더·폴링 공통). on 일 때만 pauseRegion 이 존재.
+    if (on) renderPauseControl(paused, pauseRegion);
+
     const bfBtn = el('button', { class: 'btn btn-sm', text: running ? '백필 진행 중…' : '기존 지식 임베딩(백필)' });
-    bfBtn.disabled = !canEdit || !on || running || (backlog.pending || 0) === 0;
+    bfBtn.disabled = !canEdit || !on || running || (backlog.pending || 0) === 0 || paused;
     const bfSt = el('span', { class: 'admin-status' });
     if (!on) bfSt.textContent = '먼저 임베딩을 켜고 저장하세요.';
+    else if (paused) bfSt.textContent = '일시중지됨 — 위 [자동 임베딩 백필]에서 재개한 뒤 실행하세요.';
     else if ((backlog.pending || 0) === 0 && !running) bfSt.textContent = '모두 임베딩됨 ✓';
     bfBtn.addEventListener('click', async () => {
       bfBtn.disabled = true;
@@ -3312,13 +3354,15 @@ function embeddingsEditor(detail, data) {
     const on = (st.config && st.config.provider) === 'http';
     const backlog = st.backlog || { total: 0, pending: 0 };
     const job = st.job;
+    const paused = !!st.backfill_paused; // #1060 — knowledge 와 공통 스위치(같은 flag). 일시중지면 프로젝트 백필도 막는다.
     const embedded = Math.max(0, (backlog.total || 0) - (backlog.pending || 0));
     const running = !!(job && job.running);
 
     const bfBtn = el('button', { class: 'btn btn-sm', text: running ? '프로젝트 백필 진행 중…' : '프로젝트 임베딩(백필)' });
-    bfBtn.disabled = !canEdit || !on || running || (backlog.pending || 0) === 0;
+    bfBtn.disabled = !canEdit || !on || running || (backlog.pending || 0) === 0 || paused;
     const bfSt = el('span', { class: 'admin-status' });
     if (!on) bfSt.textContent = '먼저 임베딩을 켜고 저장하세요.';
+    else if (paused) bfSt.textContent = '일시중지됨 — 위 [자동 임베딩 백필]에서 재개한 뒤 실행하세요.';
     else if ((backlog.pending || 0) === 0 && !running) bfSt.textContent = '모두 임베딩됨 ✓';
     bfBtn.addEventListener('click', async () => {
       bfBtn.disabled = true;
