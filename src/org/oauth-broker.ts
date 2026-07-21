@@ -15,6 +15,7 @@ import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.
 import type { OAuthTokens, OAuthClientMetadata, OAuthClientInformationMixed } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { getMemberSecret, setMemberSecret, deleteMemberSecret, memberOwner, GATEWAY_OWNER } from "./member-secret-store.js";
 import { getMcpServer, getRuntimeConfig, getOrgProfile } from "./store.js";
+import { presetOAuthScope } from "./mcp-server-presets.js";
 import { makeSsrfFetch } from "./mcp-ssrf-fetch.js";
 
 const STATE_KEY_ENV = "CONNECTOR_SECRET_KEY"; // 상태 서명키는 봉투암호화 키와 같은 마스터에서 도메인 분리 파생(신규 env 불요).
@@ -190,7 +191,8 @@ async function loadProxyServer(name: string): Promise<{ url: string; authKind: s
   if (!s || s.mode !== "proxy") throw new Error(`proxy MCP 서버 없음: ${name}`);
   if (!s.url) throw new Error("proxy url 미설정");
   if (!s.auth_kind) throw new Error(`'${name}' 은 auth_kind(OAuth) 설정이 없습니다`);
-  return { url: s.url, authKind: s.auth_kind, scopeKey: s.auth_scope_key ?? "", clientName: `Lively Gateway (${name})` };
+  // OAuth scope — 상류가 scopes_supported 를 요구할 때만 authorize 에 실린다(프리셋 default). 없으면 undefined=미요청(Notion·Linear 현행 유지).
+  return { url: s.url, authKind: s.auth_kind, scopeKey: s.auth_scope_key ?? "", scope: presetOAuthScope(s.auth_kind), clientName: `Lively Gateway (${name})` };
 }
 
 // 호출/새로고침 경로용 provider 팩토리 — 이미 서버 행을 쥔 호출자(mcp-proxy)가 DB 왕복 없이 provider 를 얻는다.
