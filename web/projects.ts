@@ -7672,6 +7672,44 @@ function pjvFilterOptsFor(field) {
   if (field === 'tag') return pjvFilterUniverse.tags.map((t) => ({ id: t.id, label: t.name, color: t.color }));
   return [];
 }
+// 필터 필드 아이콘 — 무엇으로 거는지 형태로 먼저 읽히게(ClickUp 도 필드마다 아이콘).
+function pjvFilterFieldIcon(key) {
+  if (key === 'assignee') return pjvTbIcon('people', 'sm');
+  if (key === 'priority') return pjvIcon('priority'); // 깃발 — 태그(라벨)와 겹치지 않게
+  if (key === 'due') return pjvFieldIcon('date', 'sm');
+  if (key === 'tag') return pjvFieldIcon('labels', 'sm');
+  if (key === 'name') return pjvFieldIcon('text', 'sm');
+  return pjvTbIcon('check', 'sm'); // 상태
+}
+// 필드 선택 드롭다운 — 검색 + 아이콘 목록. 필드가 늘어나도(커스텀 필드 등) 스크롤·검색으로 감당된다.
+function pjvFilterFieldMenu(anchor, current, onPick) {
+  const pop = el('div', { class: 'pjv-menu pjv-fieldpick' });
+  const close = pjvPopover(anchor, pop);
+  const search = el('input', { type: 'text', class: 'pjv-multipick-search', placeholder: '검색…' });
+  const listBox = el('div', { class: 'pjv-fieldpick-list' });
+  pop.append(el('div', { class: 'pjv-multipick-searchwrap' }, pjvTbIcon('search', 'sm'), search), listBox);
+  const paint = () => {
+    const q = search.value.trim().toLowerCase();
+    const cand = PJV_FILTER_FIELDS.filter((f) => !q || f.label.toLowerCase().includes(q));
+    if (!cand.length) { listBox.replaceChildren(el('div', { class: 'pjv-menu-empty', text: '일치하는 필드가 없어요.' })); return; }
+    listBox.replaceChildren(...cand.map((f) => {
+      const on = current === f.key;
+      const it = el('button', { class: 'pjv-menu-item' + (on ? ' sel' : ''), type: 'button' },
+        pjvFilterFieldIcon(f.key), el('span', { class: 'pjv-fieldpick-name', text: f.label }),
+        el('span', { class: 'pjv-menu-check', text: on ? '✓' : '' }));
+      it.onclick = (e) => { e.stopPropagation(); close(); onPick(f.key); };
+      return it;
+    }));
+  };
+  search.addEventListener('input', paint);
+  search.addEventListener('keydown', (e: any) => {
+    if (e.key !== 'Enter') return;                       // Enter = 첫 후보 선택(타이핑만으로 끝나게)
+    const first = listBox.querySelector('.pjv-menu-item') as HTMLElement | null;
+    if (first) { e.preventDefault(); first.click(); }
+  });
+  paint();
+  setTimeout(() => search.focus(), 0);
+}
 // ── '필터' 팝오버 — 조건행 목록 + 모두/아무 + 값 선택 + 삭제 + 조건 추가 + 전체 해제. ──
 function pjvFilterPopover(anchor, onChange) {
   const pop = el('div', { class: 'pjv-menu pjv-filter-pop' });
@@ -7682,8 +7720,15 @@ function pjvFilterPopover(anchor, onChange) {
   clearAll.onclick = (e) => { e.stopPropagation(); pjvFilterState.rows = []; paint(); onChange(); };
   head.append(clearAll);
   const addBtn = el('button', { class: 'pjv-filter-add', type: 'button' }, pjvTbIcon('plus', 'sm'), el('span', { text: '필터 추가' }));
-  addBtn.onclick = (e) => { e.stopPropagation(); pjvFilterState.rows.push({ field: 'status', op: 'is', values: [] }); paint(); onChange(); };
+  // 조건을 추가하면 곧바로 필드 드롭다운까지 연다 — 추가만 하고 멈추면 '빈 줄'만 생겨 한 번 더 눌러야 한다.
+  addBtn.onclick = (e) => { e.stopPropagation(); pjvFilterState.rows.push({ field: null, op: 'is', values: [] }); paint(); openFieldMenuFor(pjvFilterState.rows.length - 1); };
   pop.append(head, rowsBox, addBtn);
+  // 방금 그린 n번째 행의 필드 셀렉트를 눌러 준다(paint 직후라 DOM 이 이미 있다).
+  const openFieldMenuFor = (i) => setTimeout(() => {
+    const sels = rowsBox.querySelectorAll('.pjv-filter-field');
+    const b = sels[i] as HTMLElement | undefined;
+    if (b) b.click();
+  }, 0);
 
   const mkSelect = (label, cls, onOpen) => {
     const b = el('button', { class: 'pjv-filter-sel ' + cls, type: 'button' },
@@ -7726,21 +7771,24 @@ function pjvFilterPopover(anchor, onChange) {
         line.append(m);
       }
       const fdef = PJV_FILTER_FIELDS.find((f) => f.key === r.field);
-      line.append(mkSelect(fdef ? fdef.label : '필드', 'pjv-filter-field', (b) => {
-        const menu = el('div', { class: 'pjv-menu' });
-        const close = pjvPopover(b, menu);
-        for (const f of PJV_FILTER_FIELDS) {
-          const it = el('button', { class: 'pjv-menu-item' + (r.field === f.key ? ' sel' : ''), type: 'button' }, el('span', { text: f.label }));
-          it.onclick = (ev) => {
-            ev.stopPropagation(); close();
-            if (r.field === f.key) return;
-            r.field = f.key; r.values = [];
-            r.op = PJV_FILTER_OPS[pjvFilterKind(f.key)][0].key; // 필드가 바뀌면 연산자도 그 형의 기본으로
-            paint(); onChange();
-          };
-          menu.append(it);
-        }
-      }));
+      const fieldSel = mkSelect(fdef ? fdef.label : '필터 선택', 'pjv-filter-field' + (fdef ? '' : ' is-empty'), (b) => {
+        pjvFilterFieldMenu(b, r.field, (key) => {
+          if (r.field === key) return;
+          r.field = key; r.values = [];
+          r.op = PJV_FILTER_OPS[pjvFilterKind(key)][0].key; // 필드가 바뀌면 연산자도 그 형의 기본으로
+          paint(); onChange();
+        });
+      });
+      if (fdef) fieldSel.prepend(pjvFilterFieldIcon(r.field));
+      line.append(fieldSel);
+      // 필드를 아직 안 고른 행 — 연산자·값 칸을 그리지 않는다(고를 게 정해지지 않았다). 삭제만 가능.
+      if (!r.field) {
+        const del0 = el('button', { class: 'pjv-filter-del', type: 'button', title: '이 조건 삭제', 'aria-label': '이 조건 삭제' }, pjvTbIcon('trash', 'sm'));
+        del0.onclick = (e) => { e.stopPropagation(); pjvFilterState.rows.splice(i, 1); paint(); onChange(); };
+        line.append(del0);
+        nodes.push(line);
+        return;
+      }
       const ops = PJV_FILTER_OPS[kind];
       const odef = ops.find((o) => o.key === r.op) || ops[0];
       r.op = odef.key;
@@ -7783,7 +7831,13 @@ function pjvFilterPopover(anchor, onChange) {
     });
     rowsBox.replaceChildren(...nodes);
   }
+  // 열릴 때: 지난번에 필드를 안 고르고 닫은 빈 줄은 치우고, 조건이 하나도 없으면 **곧장** 한 줄 + 필드 드롭다운까지.
+  //  예전엔 [필터] → [필터 추가] → [필드] 세 번 눌러야 첫 조건을 골랐다(ClickUp 은 버튼 한 번).
+  pjvFilterState.rows = (pjvFilterState.rows || []).filter((r) => r && r.field);
+  const fresh = !pjvFilterState.rows.length;
+  if (fresh) pjvFilterState.rows.push({ field: null, op: 'is', values: [] });
   paint();
+  if (fresh) openFieldMenuFor(0);
 }
 // ── '담당자' 빠른필터 팝오버 — 검색 + 미지정 + 사람별 개수(ClickUp Assignees 파리티). ──
 function pjvAssigneePopover(anchor, onChange) {
@@ -7899,76 +7953,82 @@ const PJV_VIEW_TABS = [
 //  실적 바는 점선 테두리로 계획 바와 구분한다 — "이건 계획이 아니라 지나간 자취"라는 걸 화면이 스스로 말해야 한다.
 // ════════════════════════════════════════════════════════════════════════════
 const PJV_TL_DAY = 86400000;
-// 스케일 — 하루가 몇 px. 프로젝트는 보통 수개월이라 기본은 '주'.
+// 스케일 — 하루가 몇 px.
 const PJV_TL_SCALES = [
   { key: 'day', label: '일', px: 30 },
-  { key: 'week', label: '주', px: 9 },
-  { key: 'month', label: '월', px: 3 },
+  { key: 'week', label: '주', px: 10 },
+  { key: 'month', label: '월', px: 3.4 },
 ];
-const PJV_GT_SHEET_W = 300;   // 좌측 시트 폭(이름 + 기간)
-const PJV_GT_ROW_H = 36;      // 행 높이 — 바 28 + 상하 4 (ClickUp Gen-C 실측 비율)
-const pjvTlState = { scale: 'week', collapsed: new Set<string>() };
+const PJV_GT_SHEET_W = 300;   // 좌측 시트 폭
+const PJV_GT_ROW_H = 36;      // 행 높이 = 바 28 + 상하 4
+const PJV_GT_NEW_DAYS = 7;    // 캔버스를 클릭해 새로 잡는 일정의 기본 길이
+// showActual — 실적(지나간 자취) 띠를 겹쳐 볼지. **기본 꺼짐**: 간트는 과거 기록이 아니라 앞으로의 계획을 보는 도구다.
+const pjvTlState = { scale: 'week', collapsed: new Set<string>(), showActual: false };
 function pjvTlScale() { return PJV_TL_SCALES.find((s) => s.key === pjvTlState.scale) || PJV_TL_SCALES[1]; }
 function pjvTlDayStart(ms) { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); }
 function pjvTlFmt(ms) { const d = new Date(ms); return (d.getMonth() + 1) + '/' + d.getDate(); }
-
-// 한 프로젝트의 막대 구간.
-//  plan   = 사람이 정한 일정(start/due)
-//  actual = 실제로 살아 있던 기간(created ~ completed/오늘)
-// ★ 우리 데이터에서 start+due 를 둘 다 가진 프로젝트는 0개다(2026-07-21 실측 317건 중 계획 3 / 실적 314).
-//   계획축만 그리면 화면의 99% 가 빈 줄이 되므로 실적축으로 떨어뜨린다. 실적 바는 점선으로 형태를 달리해
-//   "이건 계획이 아니라 지나간 자취"임을 화면이 스스로 말하게 한다.
-function pjvTlSpan(p) {
+function pjvTlISO(ms) {
+  const d = new Date(ms);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+// 계획 구간 — start/due 가 실제로 있는 것만. 하나만 있으면 그날 하루로 본다.
+function pjvGtPlan(p) {
   const s = p.start_date ? Date.parse(p.start_date) : NaN;
   const d = p.due_date ? Date.parse(p.due_date) : NaN;
-  if (!isNaN(s) && !isNaN(d)) return { from: Math.min(s, d), to: Math.max(s, d), kind: 'plan' };
-  if (!isNaN(d)) return { from: d, to: d, kind: 'plan' };
-  if (!isNaN(s)) return { from: s, to: s, kind: 'plan' };
+  if (!isNaN(s) && !isNaN(d)) return { from: Math.min(s, d), to: Math.max(s, d) };
+  if (!isNaN(d)) return { from: d, to: d };
+  if (!isNaN(s)) return { from: s, to: s };
+  return null;
+}
+// 실적 구간 — 실제로 살아 있던 기간(참고용 배경 띠).
+function pjvGtActual(p) {
   const c = Date.parse(p.created_at || '');
   if (isNaN(c)) return null;
   const done = p.completed_at ? Date.parse(p.completed_at) : NaN;
-  return { from: c, to: Math.max(c, !isNaN(done) ? done : Date.now()), kind: 'actual' };
+  return { from: c, to: Math.max(c, !isNaN(done) ? done : Date.now()) };
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// 간트 차트(#1067) — 타임라인 탭의 본체.
+// 간트 차트(#1067) — 타임라인 탭.
 //
-// 간트가 '시간 띠'와 다른 점은 **좌측 시트(계층 + 필드 컬럼)와 우측 차트가 한 행을 공유**한다는 것이다.
-// 그래서 이 구현의 뼈대는 좌우 2단이고, 좌측은 sticky 로 붙어 가로 스크롤에도 남는다.
-//  ① 좌측 시트: 리스트 ▸ 프로젝트 트리(접기/펼치기) + 기간 컬럼
-//  ② 우측 차트: 2단 시간축(월 / 주·일) · 주말 음영 · 오늘 세로선
-//  ③ 롤업 바: 리스트 행은 자식들의 최소 start ~ 최대 due 범위에 진행률(완료수÷전체수)을 채운 바
-//  ④ 의존선: 선행 → 후속(project_edge follow_up) 을 직각 elbow + 화살촉으로
-//  ⑤ 마감 초과 표시: 오늘보다 due 가 이른 미완료 = 빨간 테두리
+// ★ 목적: **앞으로의 계획을 세우고 지연을 잡아내는 도구**다. 지나간 기록을 보는 화면이 아니다.
+//   그래서 이 구현의 세 가지 원칙:
+//   ① 축은 **오늘을 지나 미래까지** 항상 열려 있다(데이터가 과거뿐이어도 앞쪽 12주를 비워 둔다).
+//      — 오늘까지만 그리면 "무엇을 언제 할 것인가"를 볼 수 없어 간트가 아니라 로그가 된다.
+//   ② 일정이 없는 프로젝트는 **숨기지 않고 좌측 '일정 없음'에 쌓는다**. 우리 데이터는 317건 중 314건이
+//      날짜가 없다 — 이걸 과거 띠로 그려 화면을 채우면 '다 계획된 것처럼' 보여 거짓말이 된다.
+//   ③ **차트에서 일정을 만들 수 있다** — 빈 칸을 클릭하면 그 날짜로 일정이 잡히고, 바를 끌면 날짜가 바뀐다.
+//      읽기만 하는 간트는 생산성에 기여하지 않는다.
+//
+// 시각 규약은 ClickUp 현행(Gen-C): 바는 pill 아닌 radius 4px, 저채도, 라벨은 바 바깥, 차트에 가로 구분선 없음.
 // ════════════════════════════════════════════════════════════════════════════
 function pjvTimelineView(projects, ctx) {
   const wrap = el('div', { class: 'pjv-gt' });
   const lists = (ctx && ctx.lists) || [];
-  const edges = (ctx && ctx.edges) || [];
+  const reload = (ctx && ctx.reload) || (() => { /* noop */ });
   const rerender = (ctx && ctx.rerender) || (() => { /* noop */ });
 
-  const items = (projects || [])
-    .filter((p) => p.status !== 'done' || pjvProjClosedView.done)
-    .map((p) => ({ p, span: pjvTlSpan(p) }))
-    .filter((x) => x.span) as any[];
-  if (!items.length) {
+  const all = (projects || []).filter((p) => p.status !== 'done' || pjvProjClosedView.done);
+  if (!all.length) {
     wrap.append(el('div', { class: 'pjv-proj-empty', text: '타임라인에 그릴 프로젝트가 없습니다.' }));
     return wrap;
   }
+  const scheduled = all.filter((p) => pjvGtPlan(p));
+  const unscheduled = all.filter((p) => !pjvGtPlan(p));
 
-  // ── 리스트별로 묶는다(간트의 좌측 계층). 리스트 없는 건 '기타'로. ──
+  // ── 리스트별 그룹(간트 좌측 계층) — 일정이 있는 것만 차트 행이 된다. ──
   const listById = new Map(lists.map((l: any) => [String(l.id), l]));
   const groups: any[] = [];
   const gmap = new Map<string, any>();
-  for (const it of items) {
-    const key = it.p.list_id != null ? String(it.p.list_id) : '__none__';
+  for (const p of scheduled) {
+    const key = p.list_id != null ? String(p.list_id) : '__none__';
     let g = gmap.get(key);
     if (!g) {
       const l: any = listById.get(key);
       g = { key, name: l ? l.name : '기타 (미분류)', color: l ? (l.color || null) : null, rows: [] };
       gmap.set(key, g); groups.push(g);
     }
-    g.rows.push(it);
+    g.rows.push({ p, span: pjvGtPlan(p) });
   }
   for (const g of groups) {
     g.rows.sort((a, b) => a.span.from - b.span.from || String(a.p.name).localeCompare(String(b.p.name)));
@@ -7979,38 +8039,43 @@ function pjvTimelineView(projects, ctx) {
   }
   groups.sort((a, b) => a.from - b.from);
 
-  // ── 축 범위 — 데이터 전체 + 앞뒤 여유. 오늘이 밖이면 오늘까지 늘려 '지금'이 항상 축 안에 있게. ──
+  // ── ① 축 범위 — 오늘을 중심에 두고 **미래를 항상 확보**한다. ──
   const today = pjvTlDayStart(Date.now());
   const sc = pjvTlScale();
   const dayPx = sc.px;
-  let from = pjvTlDayStart(Math.min(...items.map((x) => x.span.from), today)) - 4 * PJV_TL_DAY;
-  const to = pjvTlDayStart(Math.max(...items.map((x) => x.span.to), today)) + 8 * PJV_TL_DAY;
+  const spans = scheduled.map((p) => pjvGtPlan(p)) as any[];
+  const dataMin = spans.length ? Math.min(...spans.map((s) => s.from)) : today;
+  const dataMax = spans.length ? Math.max(...spans.map((s) => s.to)) : today;
+  // 과거는 최소 3주, 미래는 최소 12주 — 계획을 '앞으로 끌어다 놓을 빈 캔버스'가 늘 있어야 한다.
+  const from = pjvTlDayStart(Math.min(dataMin, today - 21 * PJV_TL_DAY));
+  const to = pjvTlDayStart(Math.max(dataMax + 7 * PJV_TL_DAY, today + 84 * PJV_TL_DAY));
   const days = Math.max(1, Math.round((to - from) / PJV_TL_DAY) + 1);
   const trackW = Math.max(360, Math.round(days * dayPx));
   const xOf = (ms) => Math.round(((pjvTlDayStart(ms) - from) / PJV_TL_DAY) * dayPx);
-  const wOf = (a, b) => Math.max(Math.max(3, Math.round(dayPx)), xOf(b) - xOf(a) + Math.round(dayPx));
+  const wOf = (a, b) => Math.max(Math.max(6, Math.round(dayPx)), xOf(b) - xOf(a) + Math.round(dayPx));
+  const dayAt = (x) => pjvTlDayStart(from + Math.round(x / dayPx) * PJV_TL_DAY);
 
-  // ── 툴바 — 스케일 · 오늘 · 범례. 축이 계획인지 실적인지를 여기서 밝힌다. ──
-  const nPlan = items.filter((x) => x.span.kind === 'plan').length;
+  // ── 툴바 ──
   const scaleWrap = el('div', { class: 'pjv-gt-scales' });
   for (const s of PJV_TL_SCALES) {
     const b = el('button', { class: 'pjv-gt-scale' + (s.key === sc.key ? ' on' : ''), type: 'button', text: s.label });
     b.onclick = (e) => { e.stopPropagation(); if (pjvTlState.scale === s.key) return; pjvTlState.scale = s.key; rerender(); };
     scaleWrap.append(b);
   }
+  const actualBtn = el('button', { class: 'pjv-gt-toggle' + (pjvTlState.showActual ? ' on' : ''), type: 'button',
+    title: '실제로 진행된 기간을 흐린 띠로 겹쳐 봅니다', text: '실적 겹쳐보기' });
+  actualBtn.onclick = (e) => { e.stopPropagation(); pjvTlState.showActual = !pjvTlState.showActual; rerender(); };
   const todayBtn = el('button', { class: 'pjv-gt-todaybtn', type: 'button', text: '오늘' });
-  wrap.append(el('div', { class: 'pjv-gt-toolbar' }, scaleWrap,
+  wrap.append(el('div', { class: 'pjv-gt-toolbar' }, scaleWrap, actualBtn,
     el('span', { class: 'pjv-gt-legend' },
-      el('span', { class: 'pjv-gt-key plan' }), el('span', { text: '계획 ' + nPlan }),
-      el('span', { class: 'pjv-gt-key actual' }), el('span', { text: '실적 ' + (items.length - nPlan) }),
-      el('span', { class: 'pjv-gt-key roll' }), el('span', { text: '리스트 진행률' })),
+      el('span', { class: 'pjv-gt-key plan' }), el('span', { text: '일정 ' + scheduled.length }),
+      el('span', { class: 'pjv-gt-key none' }), el('span', { text: '미정 ' + unscheduled.length })),
     todayBtn));
 
-  // ── 셸: 하나의 스크롤 컨테이너 안에서 좌측 시트를 sticky 로 붙인다(가로 스크롤해도 이름은 남는다). ──
   const scroller = el('div', { class: 'pjv-gt-scroll' });
   const inner = el('div', { class: 'pjv-gt-inner', style: 'width:' + (PJV_GT_SHEET_W + trackW) + 'px' });
 
-  // ── 2단 시간축 헤더 ──
+  // ── 2단 시간축 ──
   const axis = el('div', { class: 'pjv-gt-axis', style: 'width:' + trackW + 'px' });
   const rowMon = el('div', { class: 'pjv-gt-mons' });
   const rowSub = el('div', { class: 'pjv-gt-subs' });
@@ -8041,14 +8106,58 @@ function pjvTimelineView(projects, ctx) {
       el('span', { class: 'pjv-gt-th name', text: '이름' }), el('span', { class: 'pjv-gt-th span', text: '기간' })),
     axis));
 
-  // ── 주말 음영 — '일' 스케일에서만(주·월에선 줄무늬가 돼 오히려 방해). 차트 전체 높이를 관통. ──
-  const bodyEl = el('div', { class: 'pjv-gt-body' });
-  const barPos = new Map<any, { x: number; w: number; y: number }>(); // 의존선 계산용
-  let y = 0;
+  // ── ③ 일정 저장 — 차트에서 만든 계획을 서버에 반영. 드래그·클릭 모두 이 한 곳을 지난다. ──
+  const saveSpan = (p, fromMs, toMs) => {
+    projPatch(p.id, { start_date: pjvTlISO(fromMs), due_date: pjvTlISO(toMs) }, reload);
+  };
 
+  // 바 드래그 — move(전체 이동) / l(시작일) / r(마감일). 하루 단위로 스냅하고, 놓을 때 저장한다.
+  const attachDrag = (bar, p, span, mode) => {
+    bar.addEventListener('pointerdown', (ev: any) => {
+      if (ev.button !== 0) return;
+      ev.preventDefault(); ev.stopPropagation();
+      const startX = ev.clientX;
+      const x0 = xOf(span.from), w0 = wOf(span.from, span.to);
+      let dFrom = span.from, dTo = span.to;
+      bar.setPointerCapture(ev.pointerId);
+      bar.classList.add('dragging');
+      const onMove = (mv: any) => {
+        const dx = mv.clientX - startX;
+        const dd = Math.round(dx / dayPx);
+        if (mode === 'move') { dFrom = span.from + dd * PJV_TL_DAY; dTo = span.to + dd * PJV_TL_DAY; bar.style.left = (x0 + dd * dayPx) + 'px'; }
+        else if (mode === 'l') { dFrom = Math.min(span.from + dd * PJV_TL_DAY, span.to); bar.style.left = xOf(dFrom) + 'px'; bar.style.width = wOf(dFrom, span.to) + 'px'; }
+        else { dTo = Math.max(span.to + dd * PJV_TL_DAY, span.from); bar.style.width = wOf(span.from, dTo) + 'px'; }
+      };
+      const onUp = () => {
+        bar.removeEventListener('pointermove', onMove);
+        bar.removeEventListener('pointerup', onUp);
+        bar.classList.remove('dragging');
+        if (dFrom !== span.from || dTo !== span.to) saveSpan(p, dFrom, dTo);
+      };
+      bar.addEventListener('pointermove', onMove);
+      bar.addEventListener('pointerup', onUp);
+    });
+  };
+
+  // 빈 트랙 클릭 → 그 날짜부터 기본 기간으로 일정 생성(ClickUp 의 Click to Schedule).
+  const makeTrack = (p, hint?) => {
+    const track = el('div', { class: 'pjv-gt-track' + (hint ? ' schedulable' : ''), style: 'width:' + trackW + 'px' });
+    if (hint) {
+      track.title = '클릭하면 그 날짜부터 ' + PJV_GT_NEW_DAYS + '일 일정이 잡힙니다';
+      track.onclick = (e: any) => {
+        const rect = track.getBoundingClientRect();
+        const d0 = dayAt(e.clientX - rect.left);
+        saveSpan(p, d0, d0 + (PJV_GT_NEW_DAYS - 1) * PJV_TL_DAY);
+      };
+    }
+    return track;
+  };
+
+  const bodyEl = el('div', { class: 'pjv-gt-body' });
+
+  // ── 차트 본문 — 일정이 있는 것들 ──
   for (const g of groups) {
     const collapsed = pjvTlState.collapsed.has(g.key);
-    // 리스트 행 — 좌측은 접기 캐럿 + 이름 + n/총, 우측은 롤업 바.
     const gr = el('div', { class: 'pjv-gt-row group' });
     const caret = el('button', { class: 'pjv-gt-caret' + (collapsed ? ' off' : ''), type: 'button', 'aria-label': '접기/펼치기', text: '▾' });
     caret.onclick = (e) => {
@@ -8063,36 +8172,44 @@ function pjvTimelineView(projects, ctx) {
       el('span', { class: 'pjv-gt-count', text: g.done + '/' + g.rows.length }),
       el('span', { class: 'pjv-gt-range', text: pjvTlFmt(g.from) + ' – ' + pjvTlFmt(g.to) })));
     const gtrack = el('div', { class: 'pjv-gt-track', style: 'width:' + trackW + 'px' });
-    const gx = xOf(g.from), gw = wOf(g.from, g.to);
-    const roll = el('div', { class: 'pjv-gt-roll', style: 'left:' + gx + 'px;width:' + gw + 'px',
+    const roll = el('div', { class: 'pjv-gt-roll', style: 'left:' + xOf(g.from) + 'px;width:' + wOf(g.from, g.to) + 'px',
       title: g.name + ' — ' + g.pct + '% (' + g.done + '/' + g.rows.length + ')' });
     roll.append(el('div', { class: 'pjv-gt-roll-fill', style: 'width:' + g.pct + '%' }));
     gtrack.append(roll);
     gr.append(gtrack);
     bodyEl.append(gr);
-    y += PJV_GT_ROW_H;
     if (collapsed) continue;
 
     for (const { p, span } of g.rows) {
       const r = el('div', { class: 'pjv-gt-row' });
       const overdue = p.due_date && p.status !== 'done' && Date.parse(p.due_date) < today;
       r.append(el('div', { class: 'pjv-gt-sheet', style: 'width:' + PJV_GT_SHEET_W + 'px' },
-        pjvStatusIconStd ? pjvStatusIconStd(p.status) : el('span'),
+        pjvStatusIconStd(p.status),
         el('span', { class: 'pjv-gt-name', text: p.name, title: p.name }),
         el('span', { class: 'pjv-gt-range' + (overdue ? ' overdue' : ''), text: pjvTlFmt(span.from) + ' – ' + pjvTlFmt(span.to) })));
-      const track = el('div', { class: 'pjv-gt-track', style: 'width:' + trackW + 'px' });
+      const track = makeTrack(p);
+      // 실적 띠(옵션) — 계획 뒤에 흐리게 깔아 '계획 대비 실제'를 대조한다.
+      if (pjvTlState.showActual) {
+        const a = pjvGtActual(p);
+        if (a) track.append(el('div', { class: 'pjv-gt-actual', style: 'left:' + xOf(a.from) + 'px;width:' + wOf(a.from, a.to) + 'px',
+          title: '실제 진행: ' + pjvTlFmt(a.from) + ' – ' + pjvTlFmt(a.to) }));
+      }
       const x = xOf(span.from), w = wOf(span.from, span.to);
       const bar = el('div', {
-        class: 'pjv-gt-bar ' + span.kind + (p.status === 'done' ? ' done' : '') + (overdue ? ' overdue' : ''),
-        style: 'left:' + x + 'px;width:' + w + 'px', role: 'link', tabindex: '0',
+        class: 'pjv-gt-bar' + (p.status === 'done' ? ' done' : '') + (overdue ? ' overdue' : ''),
+        style: 'left:' + x + 'px;width:' + w + 'px', tabindex: '0',
         title: p.name + '\n' + pjvTlFmt(span.from) + ' → ' + pjvTlFmt(span.to)
-          + ' (' + (Math.round((span.to - span.from) / PJV_TL_DAY) + 1) + '일'
-          + (span.kind === 'actual' ? ' · 실적' : '') + ')' + (overdue ? ' · 마감 초과' : ''),
+          + ' (' + (Math.round((span.to - span.from) / PJV_TL_DAY) + 1) + '일)'
+          + (overdue ? ' · 마감 초과' : '') + '\n끌어서 일정 변경 · 더블클릭으로 상세',
       });
-      const go = () => { location.hash = '#/projects2/p/' + p.id; };
-      bar.onclick = go;
-      bar.addEventListener('keydown', (ev: any) => { if (ev.key === 'Enter') go(); });
-      // 담당자 아바타는 바 **바깥 오른쪽**(Gen-C) — 바 안에 넣으면 짧은 바에서 잘린다.
+      bar.ondblclick = () => { location.hash = '#/projects2/p/' + p.id; };
+      bar.addEventListener('keydown', (ev: any) => { if (ev.key === 'Enter') location.hash = '#/projects2/p/' + p.id; });
+      const hl = el('div', { class: 'pjv-gt-handle l' });
+      const hr = el('div', { class: 'pjv-gt-handle r' });
+      bar.append(hl, hr);
+      attachDrag(bar, p, span, 'move');
+      attachDrag(hl, p, span, 'l');
+      attachDrag(hr, p, span, 'r');
       const asg = pjvAssignees(p).slice(0, 2);
       if (asg.length) {
         const faces = el('div', { class: 'pjv-gt-faces', style: 'left:' + (x + w + 6) + 'px' });
@@ -8102,49 +8219,55 @@ function pjvTimelineView(projects, ctx) {
       track.append(bar);
       r.append(track);
       bodyEl.append(r);
-      barPos.set(String(p.id), { x, w, y });
-      y += PJV_GT_ROW_H;
+    }
+  }
+
+  // ── ② 일정 없음 — 숨기지 않고 쌓아 둔다. 트랙을 클릭하면 그 자리에서 계획이 된다. ──
+  if (unscheduled.length) {
+    const key = '__unscheduled__';
+    const collapsed = pjvTlState.collapsed.has(key);
+    const hr = el('div', { class: 'pjv-gt-row group unsched' });
+    const caret = el('button', { class: 'pjv-gt-caret' + (collapsed ? ' off' : ''), type: 'button', text: '▾' });
+    caret.onclick = (e) => {
+      e.stopPropagation();
+      if (collapsed) pjvTlState.collapsed.delete(key); else pjvTlState.collapsed.add(key);
+      rerender();
+    };
+    hr.append(el('div', { class: 'pjv-gt-sheet', style: 'width:' + PJV_GT_SHEET_W + 'px' },
+      caret,
+      el('span', { class: 'pjv-gt-name group', text: '일정 없음' }),
+      el('span', { class: 'pjv-gt-count', text: String(unscheduled.length) })),
+      el('div', { class: 'pjv-gt-track', style: 'width:' + trackW + 'px' },
+        el('div', { class: 'pjv-gt-unsched-hint', text: '오른쪽 빈 칸을 클릭하면 그 날짜로 일정이 잡힙니다' })));
+    bodyEl.append(hr);
+    if (!collapsed) {
+      for (const p of unscheduled.slice(0, 200)) {
+        const r = el('div', { class: 'pjv-gt-row' });
+        r.append(el('div', { class: 'pjv-gt-sheet', style: 'width:' + PJV_GT_SHEET_W + 'px' },
+          pjvStatusIconStd(p.status),
+          el('span', { class: 'pjv-gt-name', text: p.name, title: p.name }),
+          el('span', { class: 'pjv-gt-range none', text: '미정' })));
+        r.append(makeTrack(p, true));
+        bodyEl.append(r);
+      }
+      if (unscheduled.length > 200) {
+        bodyEl.append(el('div', { class: 'pjv-gt-more', text: '외 ' + (unscheduled.length - 200) + '개 — 필터로 좁혀 보세요' }));
+      }
     }
   }
   inner.append(bodyEl);
 
-  // ── 의존선(#1067) — 선행 → 후속. 직각 elbow + 화살촉. 양쪽 바가 다 보일 때만 그린다. ──
-  if (edges.length) {
-    const svgNS = 'http://www.w3.org/2000/svg';
-    const link = document.createElementNS(svgNS, 'svg');
-    link.setAttribute('class', 'pjv-gt-links');
-    link.setAttribute('width', String(trackW));
-    link.setAttribute('height', String(y));
-    let drawn = 0;
-    for (const e of edges) {
-      const a = barPos.get(String(e.from_project_id)), b = barPos.get(String(e.to_project_id));
-      if (!a || !b || drawn > 300) continue;   // 상한 — 선이 수백 개면 차트가 아니라 실뭉치가 된다
-      const x1 = a.x + a.w, y1 = a.y + PJV_GT_ROW_H / 2;
-      const x2 = b.x, y2 = b.y + PJV_GT_ROW_H / 2;
-      const mid = x2 > x1 + 12 ? x1 + 8 : x1 + 8;
-      const path = document.createElementNS(svgNS, 'path');
-      path.setAttribute('d', 'M' + x1 + ' ' + y1 + ' H' + mid + ' V' + y2 + ' H' + (x2 - 5));
-      path.setAttribute('class', 'pjv-gt-link');
-      link.append(path);
-      const head = document.createElementNS(svgNS, 'path');
-      head.setAttribute('d', 'M' + (x2 - 5) + ' ' + (y2 - 3) + ' L' + x2 + ' ' + y2 + ' L' + (x2 - 5) + ' ' + (y2 + 3) + ' Z');
-      head.setAttribute('class', 'pjv-gt-arrow');
-      link.append(head);
-      drawn++;
-    }
-    if (drawn) { link.style.left = PJV_GT_SHEET_W + 'px'; inner.append(link); }
-  }
-
-  // ── 오늘 — 세로선 + 헤더 배지. 차트 전체를 관통하되 좌측 시트 아래로 깔린다. ──
+  // ── 오늘 — 세로선 + 배지 ──
   const tx = PJV_GT_SHEET_W + xOf(today);
   inner.append(el('div', { class: 'pjv-gt-todayline', style: 'left:' + tx + 'px' }));
   inner.append(el('div', { class: 'pjv-gt-todaybadge', style: 'left:' + tx + 'px', text: '오늘' }));
 
   scroller.append(inner);
   wrap.append(scroller);
-  const jumpToday = () => { scroller.scrollLeft = Math.max(0, xOf(today) - scroller.clientWidth / 3); };
+  // 처음 화면 = 오늘이 왼쪽 1/4 쯤. 간트는 '지금부터 앞으로'가 주 무대다.
+  const jumpToday = () => { scroller.scrollLeft = Math.max(0, xOf(today) - scroller.clientWidth / 4); };
   todayBtn.onclick = (e) => { e.stopPropagation(); jumpToday(); };
-  setTimeout(jumpToday, 0);   // 처음엔 오늘 근처 — 앞 여백부터 보여주면 대부분 빈 화면이라 길을 잃는다
+  setTimeout(jumpToday, 0);
   return wrap;
 }
 
