@@ -1152,16 +1152,22 @@ function infoPop(text) {
         }
         pop = el('div', { class: 'hint-pop', role: 'dialog' }, el('p', { class: 'hint-pop-text' }, ...inlineBold(text)));
         document.body.append(pop);
-        // 아이콘 아래에 띄우되 화면 밖으로 나가지 않게 가둔다. 자리가 없으면 위로 뒤집는다(고정 위치 = 카드 overflow 무관).
+        // 아이콘 **오른쪽**에 띄운다(사용자 요구) — 아래로 내리면 바로 밑 내용을 가려 읽던 자리를 잃는다.
+        //  오른쪽에 자리가 없으면 왼쪽, 그것도 없으면 아래로 떨어뜨린다. 세로는 아이콘에 맞추되 화면 안에 가둔다.
+        //  (position:fixed 라 카드 overflow·스크롤 컨테이너에 잘리지 않는다.)
         const r = btn.getBoundingClientRect();
         const w = Math.min(360, window.innerWidth - 24);
         pop.style.width = w + 'px';
-        pop.style.left = Math.round(Math.min(Math.max(12, r.left - 10), window.innerWidth - w - 12)) + 'px';
-        const below = window.innerHeight - r.bottom;
-        if (below < pop.offsetHeight + 20 && r.top > pop.offsetHeight + 20)
-            pop.style.top = Math.round(r.top - pop.offsetHeight - 8) + 'px';
+        const gap = 10;
+        if (r.right + gap + w + 12 <= window.innerWidth)
+            pop.style.left = Math.round(r.right + gap) + 'px';
+        else if (r.left - gap - w >= 12)
+            pop.style.left = Math.round(r.left - gap - w) + 'px';
         else
-            pop.style.top = Math.round(r.bottom + 8) + 'px';
+            pop.style.left = Math.round(Math.min(Math.max(12, r.left - 10), window.innerWidth - w - 12)) + 'px';
+        const h = pop.offsetHeight;
+        const wantTop = r.top - 8; // 아이콘 윗선에 살짝 걸치게
+        pop.style.top = Math.round(Math.min(Math.max(12, wantTop), Math.max(12, window.innerHeight - h - 12))) + 'px';
         btn.setAttribute('aria-expanded', 'true');
         document.addEventListener('mousedown', onDoc, true);
         document.addEventListener('keydown', onKey, true);

@@ -6386,7 +6386,7 @@ async function myLoginsSection(detail) {
     cardHead('서비스 로그인', 'AI 가 나를 대신해 이 서비스를 쓰려면 내 계정을 연결해야 합니다. 연결은 나에게만 적용되고, 토큰 값은 저장 후 다시 볼 수 없습니다.'),
     svcHost);
   const gitCard = el('div', { class: 'card' },
-    cardHead('리포지토리 접근', '코드 저장소(GitHub·GitLab)에서 클론·푸시할 때 쓰는 SSH 키·토큰입니다. 코드 작업을 하지 않으면 설정하지 않아도 됩니다.', el('span', { class: 'head-badge', text: '개발자용' })),
+    cardHead('리포지토리 접근', '코드 저장소(GitHub·GitLab)에서 클론·푸시할 때 쓰는 SSH 키·토큰입니다. 코드 작업을 하지 않으면 설정하지 않아도 됩니다.', el('span', { class: 'head-badge head-badge-aud', text: '개발자용' })),
     el('div', { class: 'admin-actions' },
       el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'git 인증 관리', onclick: () => openGitCredentialManager('me') })));
   detail.replaceChildren(

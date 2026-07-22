@@ -6796,7 +6796,7 @@ async function myLoginsSection(detail) {
     // 제목은 카드에 고정하고, 탭 본문만 안쪽 host 에 그린다 — renderServiceTabs 가 replaceChildren 이라 제목이 같이 지워지면 안 된다.
     const svcHost = el('div');
     const svcCard = el('div', { class: 'card' }, cardHead('서비스 로그인', 'AI 가 나를 대신해 이 서비스를 쓰려면 내 계정을 연결해야 합니다. 연결은 나에게만 적용되고, 토큰 값은 저장 후 다시 볼 수 없습니다.'), svcHost);
-    const gitCard = el('div', { class: 'card' }, cardHead('리포지토리 접근', '코드 저장소(GitHub·GitLab)에서 클론·푸시할 때 쓰는 SSH 키·토큰입니다. 코드 작업을 하지 않으면 설정하지 않아도 됩니다.', el('span', { class: 'head-badge', text: '개발자용' })), el('div', { class: 'admin-actions' }, el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'git 인증 관리', onclick: () => openGitCredentialManager('me') })));
+    const gitCard = el('div', { class: 'card' }, cardHead('리포지토리 접근', '코드 저장소(GitHub·GitLab)에서 클론·푸시할 때 쓰는 SSH 키·토큰입니다. 코드 작업을 하지 않으면 설정하지 않아도 됩니다.', el('span', { class: 'head-badge head-badge-aud', text: '개발자용' })), el('div', { class: 'admin-actions' }, el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'git 인증 관리', onclick: () => openGitCredentialManager('me') })));
     detail.replaceChildren(sectionHead('외부 서비스 로그인', 'AI가 내 계정으로 외부 서비스를 쓸 수 있게 미리 로그인해 둡니다. 여기에서 로그인해도 나에게만 적용되고 팀에는 공유되지 않습니다.'), el('div', { class: 'admin-stack' }, svcCard, gitCard));
     await renderServiceTabs(svcHost);
 }
