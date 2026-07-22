@@ -1177,9 +1177,10 @@ function infoPop(text) {
     return btn;
 }
 // 카드(박스) 섹션 제목 — 제목 + 오른쪽 ⓘ. 카드 안 설명도 회색 줄 대신 이 아이콘 뒤로 접는다(#1085).
-function cardHead(title, desc, badge) {
+function cardHead(title, desc, badge, action) {
     // badge — '(개발자용)' 처럼 괄호로 덧붙이던 부가 표시를 제목 옆 칩으로(#1085). 제목 자체는 무엇인지만 말한다.
-    return el('div', { class: 'card-head-row' }, el('h3', { text: title }), badge || null, infoPop(desc || null));
+    // action — 이 섹션의 주 동작(예: [+ 새 팀]). 목록 안에 끼워 두면 어디에 속한 버튼인지 안 읽혀서 제목 줄 오른쪽에 둔다.
+    return el('div', { class: 'card-head-row' }, el('h3', { text: title }), badge || null, infoPop(desc || null), action ? el('div', { class: 'card-head-act' }, action) : null);
 }
 // ── 공용: 즉시 표시 호버 툴팁 ──
 //  native title 은 지연(~1s)·발견성이 나쁘고, overflow:hidden 카드(.list-box)에선 CSS 말풍선이 잘린다.

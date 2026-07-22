@@ -671,7 +671,16 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .member-read-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
 .member-read-head h3 { margin: 0; }
 /* 구성원 추가 패널 — ①/② 단계 헤더 */
-.member-add-step { margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+/* 카드 안 소제목(#1085) — 카드 제목(16px)보다 **작아야** 한다. 예전엔 h3 UA 크기(≈17.5px)라
+   '접속 토큰 발급'이 카드 제목 '접속 토큰'보다 커 위계가 뒤집혀 있었다. */
+.member-add-step, .admin-subhead-2 { margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--line);
+  font-size: 13.5px; font-weight: 800; color: var(--ink); letter-spacing: -.1px; }
+/* 목록 머리 — 소제목 + 오른쪽 검색·개수 도구. */
+.tok-listhead { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.tok-listhead .admin-subhead-2 { flex: 1 1 auto; margin-bottom: 0; }
+.tok-tools { display: flex; align-items: center; gap: 8px; padding-bottom: 2px; }
+.tok-search { width: 200px; }
+.tok-per { width: auto; }
 
 /* 상세 박스 내부(목록·편집) 기본 = 세로 스택. 단독으로 쓰는 곳은 이제 없고,
    .admin-two-cols(마스터-디테일)의 좁은화면 폴백 겸 베이스로만 남는다.
@@ -1175,6 +1184,7 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 /* 카드 섹션 제목 줄 — 제목 + 오른쪽 ⓘ(#1085). 설명은 화면에 깔지 않고 아이콘 뒤 팝오버로. */
 .card-head-row { display: flex; align-items: center; gap: 6px; margin: 0 0 14px; }
 .card-head-row h3 { margin: 0; font-size: 16px; font-weight: 800; letter-spacing: -.2px; }
+.card-head-act { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 /* 내 스킬·훅(#1085) — 두 층 위계: hlayer(어디서 온 것: 조직 배포 / 내 컴퓨터) ▸ hgroup(종류: 스킬 / 훅).
    전에는 h4·h5 크기 차이만으로 눌러 담아 두 층이 안 읽혔다. 층은 위 여백+구분선으로, 종류는 접이식 머리로 만든다. */
 .hlayer { margin-top: 26px; }
