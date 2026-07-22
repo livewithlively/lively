@@ -100,7 +100,7 @@ process.env.LIVELY_MCP_CALL_TIMEOUT_MS = "1500";
 delete process.env.LIVELY_GATEWAY_URL;
 delete process.env.LIVELY_TOKEN;
 
-const { serveMcpGateway } = await import("./lively-mcp-gateway.mjs");
+const { serveMcpGateway, callTimeoutFor } = await import("./lively-mcp-gateway.mjs");
 
 try {
   setTok("tok-file");
@@ -340,6 +340,24 @@ try {
       !r1?.error && (r1?.result?.tools || []).length === 0 && r2?.result?.isError === true,
       `r1=${JSON.stringify(r1)} r2=${JSON.stringify(r2)}`);
     await p.end();
+  }
+
+  // E20~E23 — tools/call 상류 타임아웃은 **툴별**이다(#1080).
+  //  하네스가 주는 건 서버별 타임아웃뿐이지만(툴별 노브는 없다), 프록시는 우리 코드라
+  //  '오래 기다리는 게 정상인 툴'만 골라 늘릴 수 있다. 지금 그런 툴은 delegate_run 하나뿐 —
+  //  서버가 wait 모드에서 wait_sec 만큼 붙잡는다(src/capabilities/delegate.ts DEFAULT_WAIT_SEC=120).
+  //  나머지 라이블리 툴은 실측 0.03~0.36초라 기본값으로 충분하다.
+  {
+    const base = 1500;          // = 위에서 심은 LIVELY_MCP_CALL_TIMEOUT_MS
+    const slack = 30_000;       // 서버 wait 상한을 넘겨 끊지 않기 위한 왕복 여유
+    const call = (name, args) => callTimeoutFor(args === undefined ? { name } : { name, arguments: args });
+    check("E20 일반 툴 → 기본 CALL 타임아웃", call("whoami") === base, `got=${call("whoami")}`);
+    check("E21 delegate_run(wait_sec 미지정) → 서버 기본 120s + 여유",
+      call("delegate_run", {}) === 120_000 + slack, `got=${call("delegate_run", {})}`);
+    check("E22 delegate_run(wait_sec=600) → 600s + 여유",
+      call("delegate_run", { wait_sec: 600 }) === 600_000 + slack, `got=${call("delegate_run", { wait_sec: 600 })}`);
+    check("E23 delegate_run(wait=false, 즉시접수) → 기본 CALL 타임아웃(길게 줄 이유 없음)",
+      call("delegate_run", { wait: false, wait_sec: 600 }) === base, `got=${call("delegate_run", { wait: false, wait_sec: 600 })}`);
   }
 } finally {
   try { rmSync(HOME, { recursive: true, force: true }); } catch { /* */ }
