@@ -1064,7 +1064,9 @@ const fmtNum = (n) => Number(n || 0).toLocaleString('ko-KR');
 // ── 토스트 ──
 function toast(msg, isError, ms) {
     const box = document.getElementById('toasts');
-    const t = el('div', { class: 'toast' + (isError ? ' coral' : ''), text: msg });
+    // 메시지의 [버튼]·「옵션」도 화면과 같은 칩으로 — 안내문과 토스트가 서로 다른 표기를 쓰면 같은 버튼을 두 번 배운다.
+    //  .toast 는 flex 라 텍스트 노드가 여러 조각이면 각각 flex item 이 된다 → span 하나로 감싸 한 덩이로 흐르게 한다.
+    const t = el('div', { class: 'toast' + (isError ? ' coral' : '') }, el('span', {}, ...uiText(msg)));
     box.append(t);
     setTimeout(() => t.remove(), ms || 3600);
 }
@@ -1115,22 +1117,61 @@ function confidenceDot(confidence) {
         : (confidence === 'rule' || confidence === 'observed') ? 'st dim' : 'st';
     return el('span', { class: cls, text: CONFIDENCE_LABEL[confidence] || confidence });
 }
-// 설명 문자열의 **강조**만 인라인으로 살린다 — 그 외 마크다운은 안 쓴다(el 이 텍스트 노드로만 붙이므로 innerHTML 없음).
-//  안 그러면 화면에 별표가 그대로 보인다(실제로 [외부 자료 수집] 설명에 '**우리 DB 로 복사**'가 노출됐다).
-function inlineBold(text) {
+// 설명 문자열의 인라인 표기를 화면 언어로 승격한다 — **강조** · [버튼] · 「옵션·메뉴·상태」.
+//  왜: 안내문에 별표·대괄호·꺽쇠가 그대로 노출돼 읽기 나빴다(예전엔 [외부 자료 수집] 설명의 '**우리 DB 로 복사**'가
+//  별표째 보였고, 관리탭엔 '[저장]을 눌러야 반영'처럼 대괄호가 난무했다). #1013 에서 사용가이드 마크다운을
+//  칩으로 승격한 것과 **같은 시각언어**를 코드 하드코딩 문구(관리탭)에도 쓴다 — 스타일은 .md-uikey 하나로 공유.
+//  el() 이 텍스트 노드로만 붙이므로 innerHTML 주입 경로는 없다.
+function uiText(text) {
     const out = [];
-    const src = String(text);
+    const s = String(text == null ? '' : text);
+    let buf = '';
+    const flush = () => { if (buf) {
+        out.push(buf);
+        buf = '';
+    } };
+    const chip = (mod, label) => el('span', { class: 'md-uikey ' + mod }, ...uiText(label));
     let i = 0;
-    for (const m of src.matchAll(/\*\*(.+?)\*\*/g)) {
-        const at = m.index;
-        if (at > i)
-            out.push(src.slice(i, at));
-        out.push(el('b', { text: m[1] }));
-        i = at + m[0].length;
+    while (i < s.length) {
+        const ch = s[i];
+        if (ch === '*' && s[i + 1] === '*') {
+            const close = s.indexOf('**', i + 2);
+            if (close > i + 2) {
+                flush();
+                out.push(el('b', {}, ...uiText(s.slice(i + 2, close))));
+                i = close + 2;
+                continue;
+            }
+        }
+        if (ch === '[') {
+            const close = s.indexOf(']', i + 1);
+            // [x](url) 은 링크 문법이라 건드리지 않는다(설명문엔 거의 없지만 마크다운과 충돌 금지).
+            if (close > i + 1 && s[close + 1] !== '(' && uiKeyOk(s.slice(i + 1, close))) {
+                flush();
+                out.push(chip('md-uikey-btn', s.slice(i + 1, close)));
+                i = close + 1;
+                continue;
+            }
+        }
+        if (ch === '「') {
+            const close = s.indexOf('」', i + 1);
+            if (close > i + 1 && uiKeyOk(s.slice(i + 1, close))) {
+                flush();
+                out.push(chip('md-uikey-opt', s.slice(i + 1, close)));
+                i = close + 1;
+                continue;
+            }
+        }
+        buf += ch;
+        i++;
     }
-    if (i < src.length)
-        out.push(src.slice(i));
+    flush();
     return out;
+}
+// 칩으로 승격할 라벨인가 — UI 라벨은 짧고 따옴표·중괄호가 없다. JSON/코드 예시( ["Read","Grep"] 등)를
+//  버튼처럼 보이게 만들면 오히려 거짓말이 되므로 제외한다.
+function uiKeyOk(label) {
+    return !!label.trim() && label.length <= 40 && !/["'{}\n]/.test(label);
 }
 // ⓘ — 제목·라벨 오른쪽에 옅게 붙는 **아이콘 하나**. 누르면 그 자리에 팝오버로 설명이 뜬다(#1085).
 //  왜: 회색 설명문을 제목·필드마다 화면에 깔면 글이 화면을 덮어 정작 내용·입력칸이 안 읽힌다(윤상민 지적).
@@ -1163,7 +1204,7 @@ function infoPop(text) {
             close();
             return;
         }
-        pop = el('div', { class: 'hint-pop', role: 'dialog' }, el('p', { class: 'hint-pop-text' }, ...inlineBold(text)));
+        pop = el('div', { class: 'hint-pop', role: 'dialog' }, el('p', { class: 'hint-pop-text' }, ...uiText(text)));
         document.body.append(pop);
         // 아이콘 **오른쪽**에 띄운다(사용자 요구) — 아래로 내리면 바로 밑 내용을 가려 읽던 자리를 잃는다.
         //  오른쪽에 자리가 없으면 왼쪽, 그것도 없으면 아래로 떨어뜨린다. 세로는 아이콘에 맞추되 화면 안에 가둔다.
@@ -1364,4 +1405,4 @@ function personFace(id, cls, name) {
         loadPeopleAvatars().then(() => paintFace(wrap, id, name));
     return wrap;
 }
-export { apiUrl, cardHead, infoPop, inlineBold, avatarColor, initials, profileAvatar, personFace, loadPeopleAvatars, setPersonAvatar, $view, ACTIVITY_TYPE_LABEL, ACTIVITY_TYPE_ORDER, interleave, LIFECYCLE_LABEL, REF_REL_LABEL, REVIEW_LABEL, TOKEN_KEY, VOCAB_CRUD_DEFAULT_REPO, absTime, api, applyReveal, confidenceDot, withTip, el, errorNote, fmtNum, hideGate, lifecycleDot, loadRepos, logout, pageHead, reducedMotion, relTime, renderCollection, renderInline, renderMarkdown, safeHref, selectFilter, showGate, stat, state, sv, toast, };
+export { apiUrl, cardHead, infoPop, uiText, avatarColor, initials, profileAvatar, personFace, loadPeopleAvatars, setPersonAvatar, $view, ACTIVITY_TYPE_LABEL, ACTIVITY_TYPE_ORDER, interleave, LIFECYCLE_LABEL, REF_REL_LABEL, REVIEW_LABEL, TOKEN_KEY, VOCAB_CRUD_DEFAULT_REPO, absTime, api, applyReveal, confidenceDot, withTip, el, errorNote, fmtNum, hideGate, lifecycleDot, loadRepos, logout, pageHead, reducedMotion, relTime, renderCollection, renderInline, renderMarkdown, safeHref, selectFilter, showGate, stat, state, sv, toast, };

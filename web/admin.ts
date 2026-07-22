@@ -1,5 +1,5 @@
 // admin.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { absTime, api, applyReveal, cardHead, el, errorNote, fmtNum, logout, memberCombo, profileAvatar, relTime, renderMarkdown, selectFilter, setPersonAvatar, state, toast, withTip, infoPop, inlineBold } from './core.js';
+import { absTime, api, applyReveal, cardHead, el, errorNote, fmtNum, logout, memberCombo, profileAvatar, relTime, renderMarkdown, selectFilter, setPersonAvatar, state, toast, withTip, infoPop, uiText } from './core.js';
 import { SPACE_SUBS, openCategoryForm } from './category-form.js';   // #764 — knowledge.ts 해체로 이관
 import { overlayBox, skeleton } from './learn.js';
 import { ingestPolicyPanel, reviewNavBadge, reviewQueuePanel } from './review.js';   // #783 지식 검토 게이트 + 검토 큐 (+ #802 nav 대기 배지)
@@ -103,8 +103,8 @@ const ADMIN_SECTIONS = [
   // 구성원 — 구 [구성원 관리]+[구성원 추가]+[구성원 토큰 관리]+[중앙박스 계정] 4개 탭을 한 화면(서브탭)으로.
   //  넷 다 "한 사람에 대해 뭘 설정하나"였다. 갈라져 있던 탓에 '구성원 추가' 저장이 location.hash 로 토큰 탭에
   //  점프하고 state.admin.memberAddPreselect 로 선택을 실어 나르는 해킹이 필요했다(#837 에서 제거).
-  { key: 'members', label: '구성원', meaning: 'member', group: 'org' },
-  { key: 'teams', label: '팀', meaning: 'team', group: 'org' },
+  // 구성원 명부와 팀은 '누가 있고 어떻게 묶이나' 한 주제라 한 항목 안 가로탭으로 합친다(#1085 요구).
+  { key: 'members', label: '구성원 · 팀', meaning: 'member', group: 'org' },
   // 사람 관리의 '들이기'와 '권한 주기'를 [구성원](명부)에서 떼어 별도 화면으로(#1085 요구).
   //  둘 다 관리자 전용 — ADMIN_ONLY 에 넣어 비관리자에겐 숨고, 관리자에겐 '관리자' 배지가 붙는다.
   { key: 'member-add', label: '구성원 추가', meaning: null, group: 'org' },
@@ -170,7 +170,7 @@ const ADMIN_SECTIONS = [
 const SECTION_REMAP = {
   // #837 병합 — ⚠ 'member-add' 는 #1085 에서 **다시 독립 섹션**이 됐으므로 여기서 뺀다(리맵이 남아 있으면
   //  새 섹션이 영영 [구성원]으로 튕긴다). 구 URL 'tokens'·'profiles' 는 이제 [구성원 권한 관리]로 보낸다.
-  'tokens': 'member-access', 'profiles': 'member-access',
+  'tokens': 'member-access', 'profiles': 'member-access', 'teams': 'members',
   'mcp': 'tools',
   'custom-hooks': 'agent-assets', 'harness-assets': 'agent-assets',
   'cron': 'automation', 'managed-sessions': 'automation',
@@ -263,7 +263,7 @@ function sectionTitle(titleText, m) {
   const isText = typeof m === 'string';
   return el('div', {},
     el('div', { class: 'section-title' }, el('h2', { text: titleText })),
-    isText ? el('p', { class: 'admin-hint' }, ...inlineBold(m)) : null);
+    isText ? el('p', { class: 'admin-hint' }, ...uiText(m)) : null);
 }
 
 // System 탭 진입점(#/system) — 기존 관리(전달) 화면을 그대로 흡수 + 지식 종류 레지스트리.
@@ -429,18 +429,20 @@ function segTabs(sectionKey, tabs) {
 // 섹션 머리 — 제목 + 한 줄 설명 + '이게 뭐예요?'. 병합 섹션이 "여기 뭐가 들었나"를 먼저 말해준다.
 function sectionHead(title, hint, m?) {
   // admin-sechead: 제목 블록 아래 일관 여백. 페이지 설명(hint)은 종전대로 제목 아래 한 줄로 보인다.
-  return el('div', { class: 'admin-sechead' }, sectionTitle(title, m || null), hint ? el('p', { class: 'admin-hint', text: hint }) : null);
+  return el('div', { class: 'admin-sechead' }, sectionTitle(title, m || null), hint ? el('p', { class: 'admin-hint' }, ...uiText(hint)) : null);
 }
 
 // ── [구성원] — 구 [구성원 관리]+[구성원 추가]+[구성원 토큰 관리]+[중앙박스 계정] 4탭을 하나로. ──
 //  넷 다 "한 사람에 대해 뭘 설정하나"였다. 갈라진 탓에 '구성원 추가' 저장이 location.hash 로 토큰 탭에 점프하고
 //  state.admin.memberAddPreselect 로 선택을 실어 나르는 해킹이 필요했다 — 한 화면이 되면서 그 해킹이 사라졌다.
 function membersSection(detail, data) {
-  // 명부만 남긴다 — '들이기'는 [구성원 추가], '접속·실행 계정'은 [구성원 권한 관리]로 갈랐다(#1085).
+  // '들이기'는 [구성원 추가], '접속·실행 계정'은 [구성원 권한 관리]로 갈랐고(#1085), 여기엔 **명부와 팀**만 둔다.
   detail.replaceChildren(
-    sectionHead('구성원', '이 조직에 누가 있는지 보고, 각자의 이름·이메일·권한을 고칩니다.', data.meaning['member']),
-    el('div', { class: 'admin-body-inner' }));
-  membersEditor(detail.lastElementChild, data);
+    sectionHead('구성원 · 팀', '이 조직에 누가 있는지 보고 고치며, 팀으로 묶습니다.', data.meaning['member']),
+    segTabs('members', [
+      { key: 'list', label: '구성원', render: (h) => membersEditor(h, data) },
+      { key: 'teams', label: '팀', render: (h) => { void teamsPanel(h, data, { embedded: true }); } },
+    ]));
 }
 
 // ── [구성원 추가] — 사람을 조직에 들이는 한 흐름만 담는다(#1085). ──
@@ -830,8 +832,8 @@ async function toolUsagePanel(detail) {
   });
   const retBox = el('div', { class: 'admin-subcard', style: 'margin-top:22px' },
     el('div', { class: 'admin-subhead', text: '기록 보관 기간' }),
-    el('div', { class: 'admin-hint', text: '이 기간이 지난 호출 기록은 자동으로 지워집니다. 누가 언제 무엇을 했는지가 사람 단위로 남는 기록이라, 필요한 기간만 두는 편이 안전합니다. 0 을 넣으면 영구 보관합니다(권장하지 않음).' }),
-    el('div', { class: 'admin-actions' }, retIn, el('span', { class: 'caption', text: '일' }), retSave, retStatus,
+    el('div', { class: 'admin-hint' }, ...uiText('이 기간이 지난 호출 기록은 자동으로 지워집니다. 누가 언제 무엇을 했는지가 사람 단위로 남는 기록이라, 필요한 기간만 두는 편이 안전합니다. 0 을 넣으면 영구 보관합니다(권장하지 않음).')),
+    el('div', { class: 'admin-actions' }, retIn, el('span', { class: 'caption' }, ...uiText('일')), retSave, retStatus,
       el('span', { class: 'caption', text: '현재: ' + (RET_SRC[r.retention_source] || r.retention_source || '기본값') })));
 
   const card = el('div', { class: 'card' },
@@ -1095,7 +1097,7 @@ async function openCronForm(job, actions, reload, tz) {
   const inputStyle = 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box';
   const block = (title, hint, ctrl) => el('section', { class: 'ps-block' },
     el('h3', { class: 'ps-block-title', text: title }),
-    hint ? el('p', { class: 'ps-block-hint', text: hint }) : null, ctrl);
+    hint ? el('p', { class: 'ps-block-hint' }, ...uiText(hint)) : null, ctrl);
 
   const idInp = el('input', { type: 'text', style: inputStyle, value: job ? job.id : '', placeholder: 'my-job', ...(isNew ? {} : { disabled: true }) });
   const labelInp = el('input', { type: 'text', style: inputStyle, value: (job && job.label) || '', placeholder: '잡 이름' });
@@ -1227,7 +1229,7 @@ function openManagedSessionForm(m, reload) {
   const inputStyle = 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box';
   const block = (title, hint, ctrl) => el('section', { class: 'ps-block' },
     el('h3', { class: 'ps-block-title', text: title }),
-    hint ? el('p', { class: 'ps-block-hint', text: hint }) : null, ctrl);
+    hint ? el('p', { class: 'ps-block-hint' }, ...uiText(hint)) : null, ctrl);
   const idInp = el('input', { type: 'text', style: inputStyle, value: m ? m.id : '', placeholder: 'box-map-agent', ...(isNew ? {} : { disabled: true }) });
   const labelInp = el('input', { type: 'text', style: inputStyle, value: (m && m.label) || '', placeholder: '도메인 분류 배치 LLM' });
   const account = memberCombo({ value: (m && m.account) || '', placeholder: '구성원 id 선택/검색 (예: daon)' });
@@ -1350,7 +1352,7 @@ async function openPreviewEnvForm(p, reload) {
   const inputStyle = 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box';
   const block = (title, hint, ctrl) => el('section', { class: 'ps-block' },
     el('h3', { class: 'ps-block-title', text: title }),
-    hint ? el('p', { class: 'ps-block-hint', text: hint }) : null, ctrl);
+    hint ? el('p', { class: 'ps-block-hint' }, ...uiText(hint)) : null, ctrl);
   // 고를 것들을 미리 읽어 둔다 — 사용자가 아이디·경로를 '타이핑'하지 않아도 되게.
   let projects: any[] = [], repos: any[] = [], profiles: any[] = [];
   try { const r = await api('/api/ui/v6/projects'); projects = (r && r.projects) || []; } catch { /* 목록 못 읽어도 폼은 뜬다 */ }
@@ -1395,7 +1397,7 @@ async function openPreviewEnvForm(p, reload) {
   const branchFilter = el('input', { type: 'search', style: inputStyle + ';margin-bottom:6px', placeholder: '브랜치 검색' });
   const branchList = el('div', { style: 'max-height:210px;overflow:auto;border:1px solid rgba(127,127,127,.22);border-radius:6px;padding:4px' });
   const baseRefSel = el('select', { style: inputStyle });
-  const hintRow = (t) => el('div', { class: 'ps-block-hint', style: 'padding:6px 4px', text: t });
+  const hintRow = (t) => el('div', { class: 'ps-block-hint', style: 'padding:6px 4px' }, ...uiText(t));
   function renderBranchList() {
     const q = branchFilter.value.trim().toLowerCase();
     if (!branchRepo) { branchList.replaceChildren(hintRow('먼저 위에서 코드 저장소를 골라 주세요.')); return; }
@@ -1413,7 +1415,7 @@ async function openPreviewEnvForm(p, reload) {
         cb,
         el('span', { style: 'flex:1;min-width:0' },
           el('span', { class: 'mono', style: 'font-size:12px', text: b.name }),
-          meta ? el('span', { class: 'ps-block-hint', style: 'margin:0 0 0 8px;display:inline', text: meta }) : null));
+          meta ? el('span', { class: 'ps-block-hint', style: 'margin:0 0 0 8px;display:inline' }, ...uiText(meta)) : null));
     }));
   }
   function renderBaseRef() {
@@ -1614,7 +1616,7 @@ function openRepoForm(repo, reload) {
   const branchInp = el('input', { type: 'text', style: inputStyle, value: (repo && repo.default_branch) || 'main', placeholder: 'main' });
   const block = (title, hint, ctrl) => el('section', { class: 'ps-block' },
     el('h3', { class: 'ps-block-title', text: title }),
-    hint ? el('p', { class: 'ps-block-hint', text: hint }) : null, ctrl);
+    hint ? el('p', { class: 'ps-block-hint' }, ...uiText(hint)) : null, ctrl);
 
   // 선택한 레포를 3필드에 채운다. clone_url 은 서버가 그 호스트의 git 전송 방식(ssh/https)에 맞춰 고른 주소다
   //  — 목록은 API 토큰으로 조회하고 클론은 SSH 로 하는 조합(HTTPS 막힌 셀프호스팅)이 실제로 있기 때문.
@@ -1633,7 +1635,7 @@ function openRepoForm(repo, reload) {
     const url = urlInp.value.trim();
     if (!url) { toast('git 주소를 먼저 입력하세요', true); return; }
     checkBtn.disabled = true;
-    checkNote.replaceChildren(el('span', { class: 'admin-hint', text: '확인 중…' }));
+    checkNote.replaceChildren(el('span', { class: 'admin-hint' }, ...uiText('확인 중…')));
     try {
       const r = await api('/api/ui/repos/check', { method: 'POST', body: JSON.stringify({ git_url: url }) });
       if (r.ok) {
@@ -1681,13 +1683,13 @@ function openRepoForm(repo, reload) {
 // 레포 픽커(#825) — 저장된 토큰으로 조회한 레포 목록에서 고른다. 커넥터 스코프 픽커(#586)의 git 판.
 //  목록이 비어도(SSH 뿐인 호스트·토큰 없음) 실패가 아니다 — 사유(note)를 보여주고 텍스트 입력으로 돌려보낸다.
 async function openRepoPicker(onPick) {
-  const box = el('div', {}, el('p', { class: 'admin-hint', text: '등록된 git 자격으로 레포 목록을 조회하는 중…' }));
+  const box = el('div', {}, el('p', { class: 'admin-hint' }, ...uiText('등록된 git 자격으로 레포 목록을 조회하는 중…')));
   const back = overlay('레포 — 목록에서 선택', box);
   try {
     const r = await api('/api/ui/repos/discover', { method: 'POST', body: JSON.stringify({}) });
     const opts = r.options || [];
-    const noteEl = r.note ? el('p', { class: 'admin-hint', style: 'white-space:pre-line', text: r.note }) : null;
-    if (!opts.length) { box.replaceChildren(noteEl || el('p', { class: 'admin-hint', text: '고를 레포가 없습니다 — git 주소를 직접 입력하세요.' })); return; }
+    const noteEl = r.note ? el('p', { class: 'admin-hint', style: 'white-space:pre-line' }, ...uiText(r.note)) : null;
+    if (!opts.length) { box.replaceChildren(noteEl || el('p', { class: 'admin-hint' }, ...uiText('고를 레포가 없습니다 — git 주소를 직접 입력하세요.'))); return; }
 
     // 이미 등록된 레포는 회색 처리 — 중복 등록(409)을 누르기 전에 보이게.
     let existing = new Set();
@@ -1704,12 +1706,12 @@ async function openRepoPicker(onPick) {
           el('span', { text: o.private ? '🔒' : '🌐' }),
           el('span', { class: 'conn-pick-label', text: o.full_path }),
           el('span', { class: 'mini-meta mono', text: (o.default_branch || '?') + (dup ? ' · 이미 등록됨' : '') }));
-      }) : [el('p', { class: 'admin-hint', text: '검색 결과가 없습니다.' })]));
+      }) : [el('p', { class: 'admin-hint' }, ...uiText('검색 결과가 없습니다.'))]));
     };
     search.oninput = render;
     render();
     box.replaceChildren(noteEl, search, list,
-      el('p', { class: 'admin-hint', text: '고르면 이름·git 주소·기본 브랜치가 폼에 채워집니다(그대로 편집할 수 있어요). 목록에 없어도 주소를 직접 입력해 등록할 수 있습니다.' }));
+      el('p', { class: 'admin-hint' }, ...uiText('고르면 이름·git 주소·기본 브랜치가 폼에 채워집니다(그대로 편집할 수 있어요). 목록에 없어도 주소를 직접 입력해 등록할 수 있습니다.')));
   } catch (e) {
     box.replaceChildren(el('p', { class: 'admin-hint', text: '조회 실패: ' + e.message + ' — git 주소를 직접 입력하세요.' }));
   }
@@ -1776,7 +1778,7 @@ async function wikiCategoriesPanel(detail, data) {
               el('span', { class: 'wikicat-should-label', text: '정의·범위·규칙' }), should)
           : el('span', { class: 'wikicat-should wikicat-should-empty' },
               el('span', { class: 'wikicat-should-label', text: '정의·범위·규칙' }),
-              canEdit ? '미설정 — 오른쪽 [수정]에서 입력할 수 있어요' : '미설정');
+              canEdit ? uiText('미설정 — 오른쪽 [수정]에서 입력할 수 있어요') : '미설정');
         // 오너 팀 — 카테고리 소유(표면화·주입의 '우리 팀' 기준). canEdit 면 드롭다운(이양), 아니면 표시만. 오너십=우선순위, 접근제한 아님.
         let ownerEl: any = null;
         if (canEdit) {
@@ -1876,7 +1878,7 @@ async function profilesEditor(detail) {
       } }));
     }
     return el('div', { class: 'card' }, ...kids);
-  }) : [el('p', { class: 'caption', text: '구성원이 없습니다.' })];
+  }) : [el('p', { class: 'caption' }, ...uiText('구성원이 없습니다.'))];
   detail.replaceChildren(
     el('div', { class: 'card' },
       cardHead('AI 실행 계정 격리', '구성원마다 서버에 전용 OS 계정(box_<slug>, 홈 권한 700)이 만들어져 서로 완전히 분리됩니다. 구성원끼리는 Claude 자격증명(.credentials.json)을 열람할 수 없습니다. 격리 인프라(deploy/linux/install-isolation.sh)가 설치된 서버에서는 웹터미널 첫 세션을 열 때 전용 계정이 자동으로 만들어지고(별도 버튼 필요 없음), 그 세션부터 본인 Claude 로그인으로 실행됩니다. 아직 전용 계정이 없는 구성원은 기존과 같이 공유 계정으로 실행됩니다. 첫 세션 지연 없이 미리 만들려면 [지금 미리 만들기]를 누르고, 격리를 끄려면 게이트웨이 환경변수 LIVELY_MEMBER_ISOLATION=off 를 설정하세요.')),
@@ -2003,9 +2005,9 @@ function showInitialAccount(id, name, email, password, data) {
     el('p', { class: 'admin-hint', text: dn + ' 님의 로그인 계정 정보예요. 아래를 1:1로(슬랙·메신저 DM 등) 전달하세요 — 비밀번호는 지금만 보입니다.' }),
     field('로그인 주소', el('div', { class: 'admin-ro', text: webUrl })),
     field('이메일 (로그인 아이디)', el('div', { class: 'admin-ro', text: email || '⚠ 이메일 미설정 — 멤버에 이메일을 넣어야 로그인됩니다' })),
-    el('div', { class: 'deploy-head' }, el('span', { class: 'mini-meta', text: '임시 비밀번호' }), copyButton(() => password, '비밀번호 복사')),
+    el('div', { class: 'deploy-head' }, el('span', { class: 'mini-meta' }, ...uiText('임시 비밀번호')), copyButton(() => password, '비밀번호 복사')),
     el('pre', { class: 'admin-preview', text: password }),
-    el('p', { class: 'admin-hint', text: '받은 분은 위 주소에서 이메일+비밀번호로 로그인 → 첫 로그인 시 새 비밀번호를 설정하게 됩니다 → [사용 가이드 › 시작하기]에서 [설치 명령 만들기]로 설치하면 됩니다.' }));
+    el('p', { class: 'admin-hint' }, ...uiText('받은 분은 위 주소에서 이메일+비밀번호로 로그인 → 첫 로그인 시 새 비밀번호를 설정하게 됩니다 → [사용 가이드 › 시작하기]에서 [설치 명령 만들기]로 설치하면 됩니다.')));
 }
 
 // 외부 계정 연결(identities) 요약 — 읽기 전용 표시 + 매핑 화면 링크(#837).
@@ -2015,13 +2017,13 @@ function showInitialAccount(id, name, email, password, data) {
 function idnSummary(identities) {
   const wrap = el('div', { class: 'idn-wrap' });
   if (!identities.length) {
-    wrap.append(el('p', { class: 'admin-hint', style: 'margin:0 0 6px', text: '연결된 외부 계정이 없습니다.' }));
+    wrap.append(el('p', { class: 'admin-hint', style: 'margin:0 0 6px' }, ...uiText('연결된 외부 계정이 없습니다.')));
   } else {
     for (const idn of identities) {
       wrap.append(el('div', { class: 'idn-row idn-ro' },
         el('span', { class: 'pill', text: idn.system }),
         el('span', { class: 'mini-title', text: idn.external_id }),
-        idn.email ? el('span', { class: 'mini-meta', text: idn.email }) : null));
+        idn.email ? el('span', { class: 'mini-meta' }, ...uiText(idn.email)) : null));
     }
   }
   wrap.append(el('div', { class: 'admin-actions' },
@@ -2186,7 +2188,7 @@ const TEAM_ROLE_OPTS = [
 ];
 const TEAM_ROLE_LABEL = Object.fromEntries(TEAM_ROLE_OPTS);
 
-async function teamsPanel(detail, data) {
+async function teamsPanel(detail, data, opts: any = {}) {
   const canEdit = state.admin.canContext;
   detail.replaceChildren(el('div', { class: 'card' }, skeleton('팀을 불러오는 중')));
   let teams;
@@ -2200,11 +2202,11 @@ async function teamsPanel(detail, data) {
     onclick: () => { state.admin.teamSel = '__new__'; state.admin.teamEditing = true; teamsPanel(detail, data); } }) : null;
   for (const t of teams) {
     listCol.append(el('div', { class: 'mini-row' + (String(t.id) === String(sel) ? ' sel' : ''),
-      onclick: () => { state.admin.teamSel = t.id; state.admin.teamEditing = false; teamsPanel(detail, data); } },
+      onclick: () => { state.admin.teamSel = t.id; state.admin.teamEditing = false; teamsPanel(detail, data, opts); } },
       el('div', { class: 'mini-title', text: (t.name || t.key) }),
       el('div', { class: 'mini-meta', text: (t.member_count || 0) + '명 · 카테고리 ' + (t.category_count || 0) + '개' })));
   }
-  if (!teams.length) listCol.append(el('div', { class: 'mini-meta', text: '아직 팀이 없습니다.' }));
+  if (!teams.length) listCol.append(el('div', { class: 'mini-meta' }, ...uiText('아직 팀이 없습니다.')));
 
   const right = el('div', {});
   // 팀이 하나도 없으면(첫 사용) 바로 생성 폼을 연다 — 빈 패널에서 '구성원이 안 보인다'는 혼선 제거(팀원 picker 가 폼 안에 있으므로).
@@ -2215,21 +2217,25 @@ async function teamsPanel(detail, data) {
     right.append(skeleton('팀 정보를 불러오는 중'));
     api('/api/ui/teams/' + sel).then((r) => {
       const team = r && r.team;
-      if (!team) { right.replaceChildren(el('p', { class: 'admin-hint', text: '팀을 찾을 수 없습니다.' })); return; }
+      if (!team) { right.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('팀을 찾을 수 없습니다.'))); return; }
       if (state.admin.teamEditing && canEdit) teamForm(right, team, data, detail, false);
       else teamView(right, team, data, detail);
     }).catch((e) => right.replaceChildren(errorNote(e, '팀 정보를 불러오지 못했습니다')));
   } else {
     right.classList.add('admin-col-center');
-    right.append(el('p', { class: 'admin-hint', text: canEdit ? '왼쪽에서 팀을 고르거나 [+ 새 팀]을 누르세요.' : '읽기 전용 — 편집은 context 권한이 필요합니다.' }));
+    right.append(el('p', { class: 'admin-hint' }, ...uiText(canEdit ? '왼쪽에서 팀을 고르거나 [+ 새 팀]을 누르세요.' : '읽기 전용 — 편집은 context 권한이 필요합니다.')));
   }
 
   // 제목은 다른 탭과 같게 카드 밖 sectionHead 로(카드 안 sectionTitle 은 .card h2=17px 라 제목이 작아 보였다, #req).
-  detail.replaceChildren(
-    sectionHead('팀', '구성원을 팀으로 묶고, 팀이 맡는 카테고리를 정합니다. 팀이 맡은 카테고리는 팀원의 화면과 AI 세션에 먼저 나옵니다.', { key: 'team' }),
+  // ⚠ replaceChildren 에 null 을 그대로 넘기면 DOM 이 **"null" 글자**로 렌더한다(el 과 달리 안 걸러진다 —
+  //  wikiCategoriesPanel 에 같은 함정이 주석으로 남아 있다). 배열로 모아 filter(Boolean) 한다.
+  detail.replaceChildren(...[
+    // 합친 화면(구성원·팀)의 가로탭 안에서는 제목을 다시 그리지 않는다 — 페이지 제목이 이미 위에 있다(#1085).
+    opts.embedded ? null : sectionHead('팀', '구성원을 팀으로 묶고, 팀이 맡는 카테고리를 정합니다. 팀이 맡은 카테고리는 팀원의 화면과 AI 세션에 먼저 나옵니다.', { key: 'team' }),
     el('div', { class: 'card' },
-      cardHead('팀 목록과 담당 카테고리', null, null, newTeamBtn),
-      el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
+      cardHead('팀 목록과 담당 카테고리', '팀이 맡은 카테고리는 팀원의 화면과 AI 세션에 먼저 나옵니다.', null, newTeamBtn),
+      el('div', { class: 'admin-two admin-two-cols' }, listCol, right)),
+  ].filter(Boolean));
 }
 
 // 팀 보기(수정 전 읽기 요약).
@@ -2373,7 +2379,7 @@ function tokensPanel(detail, data) {
     return el('div', { class: 'token-row' + (isActive ? '' : ' token-revoked') },
       el('div', { class: 'token-main' },
         el('div', { class: 'token-label', text: t.label || t.user_id || '(무라벨)' }),
-        withTip(el('div', { class: 'mini-meta', text: meta }), sc.length ? '권한: ' + sc.join(' / ') : '권한 없음')),
+        withTip(el('div', { class: 'mini-meta' }, ...uiText(meta)), sc.length ? '권한: ' + sc.join(' / ') : '권한 없음')),
       right);
   };
   // 목록이 수십 줄로 길어져 한 화면을 넘겼다(사용자 지적) → **검색 + 페이지네이션**(페이지당 개수 선택).
@@ -2421,12 +2427,12 @@ function tokensPanel(detail, data) {
   drawList();
 
   const children = [
-    el('p', { class: 'admin-hint', text: '구성원이 라이블리 게이트웨이에 로그인할 때 쓰는 접속 토큰입니다.' }),
+    el('p', { class: 'admin-hint' }, ...uiText('구성원이 라이블리 게이트웨이에 로그인할 때 쓰는 접속 토큰입니다.')),
     installMinterBlock(data, gw, { title: '토큰 발급' }),
     el('div', { class: 'tok-listhead' },
       el('h4', { class: 'admin-subhead-2', text: '발급된 토큰' }),
       el('div', { class: 'tok-tools' }, q, perSel)),
-    el('p', { class: 'admin-hint', style: 'margin:0 0 8px', text: '지금 누가 게이트웨이에 접속할 수 있는지 보여줍니다. 퇴사·기기 분실처럼 접속을 끊어야 할 때 [접속 해제]를 누르면 그 즉시 막힙니다. 한 번 해제한 토큰은 다시 살릴 수 없고, 필요하면 새로 발급합니다.' }),
+    el('p', { class: 'admin-hint', style: 'margin:0 0 8px' }, ...uiText('지금 누가 게이트웨이에 접속할 수 있는지 보여줍니다. 퇴사·기기 분실처럼 접속을 끊어야 할 때 [접속 해제]를 누르면 그 즉시 막힙니다. 한 번 해제한 토큰은 다시 살릴 수 없고, 필요하면 새로 발급합니다.')),
     listBox,
   ];
   detail.replaceChildren(el('div', { class: 'card' }, cardHead('접속 토큰'), ...children));
@@ -2483,7 +2489,7 @@ function injectionMap(detail, data) {
       el('span', { class: 'inj-n', text: n }),
       el('div', { class: 'inj-piece-body' },
         el('div', { class: 'inj-piece-label', text: label }),
-        sub ? el('div', { class: 'admin-hint inj-sub', text: sub }) : null),
+        sub ? el('div', { class: 'admin-hint inj-sub' }, ...uiText(sub)) : null),
       editBtn || el('span', {}));
   }
 
@@ -2491,7 +2497,7 @@ function injectionMap(detail, data) {
   function customList(ev) {
     const list = customFor(ev);
     const wrap = el('div', { class: 'inj-custom' });
-    if (list.length) wrap.append(el('div', { class: 'admin-hint', text: '커스텀 훅' }));
+    if (list.length) wrap.append(el('div', { class: 'admin-hint' }, ...uiText('커스텀 훅')));
     for (const h of list) wrap.append(el('div', { class: 'inj-custom-row' },
       el('span', { class: 'mini-title', text: h.id }, h.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null),
       el('span', { class: 'mini-meta', text: (h.harness || 'all') + (h.matcher ? ' · ' + h.matcher : '') })));
@@ -2502,7 +2508,7 @@ function injectionMap(detail, data) {
   function momentBlock(title, when, toggleEl, ...children) {
     return el('div', { class: 'inj-moment' },
       el('div', { class: 'inj-moment-head' },
-        el('div', { class: 'inj-moment-h' }, el('h3', { class: 'inj-moment-title', text: title }), el('div', { class: 'admin-hint inj-sub', text: when })),
+        el('div', { class: 'inj-moment-h' }, el('h3', { class: 'inj-moment-title', text: title }), el('div', { class: 'admin-hint inj-sub' }, ...uiText(when))),
         toggleEl || el('span', {})),
       ...children.filter(Boolean));
   }
@@ -2518,7 +2524,7 @@ function injectionMap(detail, data) {
       catch (e) { toast(e.message, true); }
       btn.disabled = false;
     });
-    return field(labelText, el('div', {}, hint ? el('p', { class: 'admin-hint', style: 'margin:0 0 4px', text: hint }) : null, ta, el('div', { class: 'admin-actions' }, btn, st)));
+    return field(labelText, el('div', {}, hint ? el('p', { class: 'admin-hint', style: 'margin:0 0 4px' }, ...uiText(hint)) : null, ta, el('div', { class: 'admin-actions' }, btn, st)));
   }
 
   // #906/#959 pull_tools 전용 편집기 — 게이트웨이 프록시 MCP는 '+추가' 칩(org_mcp tools_snapshot에서 발견)으로,
@@ -2550,8 +2556,8 @@ function injectionMap(detail, data) {
     });
     return field('외부 인입 툴(pull_tools) — 외부 맥락을 가져온 세션에 기록 너지',
       el('div', {},
-        el('p', { class: 'admin-hint', style: 'margin:0 0 4px', text: '이 MCP 툴 prefix 로 시작하는 툴을 쓰면 "외부 맥락을 가져왔다"로 보고, 라이블리에 기록 없이 세션을 끝내면 너지합니다. 비우면 이 기능이 꺼집니다.' }),
-        canEdit ? el('p', { class: 'admin-hint', style: 'margin:0 0 4px', text: '아래 버튼으로 게이트웨이에 등록된 외부 MCP(프록시)를 추가하세요. 게이트웨이 밖의 자체설치 MCP(예: 구성원이 직접 붙인 Notion MCP)는 그 툴이름 prefix(예: mcp__notion__)를 아래 칸에 직접 적으면 세션 시작 훅이 자동으로 매처를 배선해 커버합니다(#959) — 게이트웨이에 다시 설치할 필요 없습니다.' }) : null,
+        el('p', { class: 'admin-hint', style: 'margin:0 0 4px' }, ...uiText('이 MCP 툴 prefix 로 시작하는 툴을 쓰면 "외부 맥락을 가져왔다"로 보고, 라이블리에 기록 없이 세션을 끝내면 너지합니다. 비우면 이 기능이 꺼집니다.')),
+        canEdit ? el('p', { class: 'admin-hint', style: 'margin:0 0 4px' }, ...uiText('아래 버튼으로 게이트웨이에 등록된 외부 MCP(프록시)를 추가하세요. 게이트웨이 밖의 자체설치 MCP(예: 구성원이 직접 붙인 Notion MCP)는 그 툴이름 prefix(예: mcp__notion__)를 아래 칸에 직접 적으면 세션 시작 훅이 자동으로 매처를 배선해 커버합니다(#959) — 게이트웨이에 다시 설치할 필요 없습니다.')) : null,
         canEdit ? chips : null, ta, el('div', { class: 'admin-actions' }, btn, st)));
   }
 
@@ -2564,7 +2570,7 @@ function injectionMap(detail, data) {
     const btn = el('button', { class: 'btn btn-primary btn-sm', text: '저장' }); if (!canEdit) btn.disabled = true;
     const resetBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '기본값으로 되돌리기' }); if (!canEdit) resetBtn.disabled = true;
     const st = el('span', { class: 'admin-status', text: cur ? '커스텀 너지 사용 중' : '기본값 사용 중' });
-    resetBtn.addEventListener('click', () => { ta.value = def; st.textContent = '기본값을 불러왔어요 — [저장]으로 확정'; });
+    resetBtn.addEventListener('click', () => { ta.value = def; st.replaceChildren(...uiText('기본값을 불러왔어요 — [저장]으로 확정')); });
     btn.addEventListener('click', async () => {
       btn.disabled = true;
       const v = ta.value.trim();
@@ -2585,13 +2591,13 @@ function injectionMap(detail, data) {
     btn.addEventListener('click', async () => {
       open = !open; box.style.display = open ? 'block' : 'none'; btn.textContent = open ? '미리보기 접기 ▴' : '실제 주입되는 전문 미리보기 ▾';
       if (open && !loaded) {
-        loaded = true; box.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+        loaded = true; box.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
         try {
           const r = await api('/api/ui/org/hooks/preview');
           const sp = ((r && r.hooks) || []).find((h) => h.id === 'session-preload');
           box.replaceChildren(sp && sp.message
             ? el('div', { class: 'md-rendered admin-md-box', style: 'max-height:340px; overflow:auto' }, renderMarkdown(sp.message))
-            : el('p', { class: 'admin-hint', text: '미리볼 내용이 없습니다.' }));
+            : el('p', { class: 'admin-hint' }, ...uiText('미리볼 내용이 없습니다.')));
         } catch (e) { box.replaceChildren(errorNote(e, '미리보기를 불러오지 못했습니다(서버 재시작 후 제공)')); }
       }
     });
@@ -2610,7 +2616,7 @@ function injectionMap(detail, data) {
     el('code', { class: 'inj-token', text: token }),
     el('div', { class: 'inj-piece-body' },
       el('div', { class: 'inj-piece-label', text: label }),
-      sub ? el('div', { class: 'admin-hint inj-sub', text: sub }) : null),
+      sub ? el('div', { class: 'admin-hint inj-sub' }, ...uiText(sub)) : null),
     btn || el('span', {}));
 
   // 섹션 본문 편집/생성 모달 — overlay + textarea. 저장 → POST /api/ui/org/section.
@@ -2626,7 +2632,7 @@ function injectionMap(detail, data) {
     const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
     const root = el('div', { class: 'mem-modal' },
       isNew ? field('섹션 키', nameIn) : null,
-      name === guideKey ? el('p', { class: 'admin-hint', text: '⚠ 시스템 가이드 — LLM 이 라이블리 사용법을 이해하는 핵심 문서입니다. 대폭 수정·삭제 시 AI 가 시스템 사용법을 잃을 수 있어요.' }) : null,
+      name === guideKey ? el('p', { class: 'admin-hint' }, ...uiText('⚠ 시스템 가이드 — LLM 이 라이블리 사용법을 이해하는 핵심 문서입니다. 대폭 수정·삭제 시 AI 가 시스템 사용법을 잃을 수 있어요.')) : null,
       field('본문 (markdown)', ta),
       el('div', { class: 'admin-actions' }, saveBtn, st));
     const back = overlay(isNew ? '섹션 추가' : ('섹션 편집 · ' + name), root);
@@ -2686,7 +2692,7 @@ function injectionMap(detail, data) {
       ...rows,
       canEdit ? el('div', { class: 'admin-actions inj-add' }, el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 새 섹션 추가', onclick: () => openSectionEditor('', { isNew: true }) })) : el('span', {}),
       el('div', { class: 'inj-subpieces' },
-        el('div', { class: 'admin-hint inj-sub', text: '└ 각 섹션 본문의 ${ } 자리에 매 세션 실제 데이터로 자동 채워짐(편집 불가):' }),
+        el('div', { class: 'admin-hint inj-sub' }, ...uiText('└ 각 섹션 본문의 ${ } 자리에 매 세션 실제 데이터로 자동 채워짐(편집 불가):')),
         subPieceRow('${team}', '우리 팀', '보는 구성원의 팀·소유 카테고리 프리앰블 — 자동', null),
         subPieceRow('${categories}', '카테고리 지도', '전 카테고리(주제) 목록 — 자동', null),
         subPieceRow('${wiki}', 'WIKI 인덱스 핀', '핀(is_wiki)한 지식의 제목·소환키만(본문 제외) — 자동', jump('WIKI 인덱스 →', '#/knowledge?indexed=1'))));
@@ -2717,14 +2723,14 @@ function injectionMap(detail, data) {
   const updBlock = momentBlock('키트 자동 업데이트 — SessionStart(백그라운드)',
     '구성원 컴퓨터의 라이블리 키트(훅 코드·연결 설정)를 게이트웨이 최신본과 동기화합니다. 세션 시작 시 버전만 비교하고, 다르면 백그라운드로 내려받아 재설치합니다 → 다음 세션부터 적용(현재 세션은 방해하지 않음). 회사 맥락·스킬은 이 토글과 무관하게 매 세션 자동으로 적용됩니다.',
     momentToggle('self_update', ' 자동 업데이트 켜기', '자동 업데이트 켜짐 — 구성원 다음 세션부터', '자동 업데이트 꺼짐 — 구성원이 직접 업데이트 명령을 실행해야 합니다'),
-    el('p', { class: 'admin-hint inj-sub', text: '끄면 훅 코드·연결 설정 변경이 구성원에게 전달되지 않습니다(구성원이 [내 AI 세션 생성] 화면의 업데이트 명령을 직접 실행해야 함). 구성원 개인이 끄려면 환경변수 LIVELY_NO_AUTO_UPDATE=1 을 설정합니다.' }));
+    el('p', { class: 'admin-hint inj-sub' }, ...uiText('끄면 훅 코드·연결 설정 변경이 구성원에게 전달되지 않습니다(구성원이 [내 AI 세션 생성] 화면의 업데이트 명령을 직접 실행해야 함). 구성원 개인이 끄려면 환경변수 LIVELY_NO_AUTO_UPDATE=1 을 설정합니다.')));
 
   // 기타 이벤트 — 위 3시점 외 커스텀 훅.
   const otherHooks = orgHooks.filter((h) => !HANDLED.includes(h.event));
   const otherBlock = el('div', { class: 'inj-moment' },
     el('div', { class: 'inj-moment-head' }, el('div', { class: 'inj-moment-h' },
       el('h3', { class: 'inj-moment-title', text: '기타 이벤트' }),
-      el('div', { class: 'admin-hint inj-sub', text: 'UserPromptSubmit · Pre/PostToolUse 매처 · SubagentStop · Notification 등 — 코드로 정의하는 커스텀 훅.' }))),
+      el('div', { class: 'admin-hint inj-sub' }, ...uiText('UserPromptSubmit · Pre/PostToolUse 매처 · SubagentStop · Notification 등 — 코드로 정의하는 커스텀 훅.')))),
     otherHooks.length
       ? el('div', { class: 'inj-custom' }, ...otherHooks.map((h) => el('div', { class: 'inj-custom-row' },
           el('span', { class: 'mini-title', text: h.id }, h.enabled === false ? el('span', { class: 'pill', text: '비활성' }) : null),
@@ -2737,7 +2743,7 @@ function injectionMap(detail, data) {
   detail.replaceChildren(
     sectionHead('세션 주입', '이 조직의 AI가 매 세션을 시작할 때 무엇을 자동으로 읽는지 정합니다.'),
     el('div', { class: 'admin-stack' },
-      !rc ? el('p', { class: 'admin-hint', text: '※ 주입 시점 ON/OFF·너지 편집은 관리자만 가능합니다. 아래는 보기 전용 + 편집 위치로의 이동만 동작합니다.' }) : null,
+      !rc ? el('p', { class: 'admin-hint' }, ...uiText('※ 주입 시점 ON/OFF·너지 편집은 관리자만 가능합니다. 아래는 보기 전용 + 편집 위치로의 이동만 동작합니다.')) : null,
       el('div', { class: 'inj-moments' }, ssBlock, ptuBlock, stopBlock, updBlock, otherBlock)));
 }
 
@@ -2751,7 +2757,7 @@ function allowlistCard(data, title, intro, fields) {
   for (const f of fields) {
     const ta = el('textarea', { rows: '3', placeholder: f.placeholder || '' }); ta.value = (f.initial || []).join('\n'); ta.disabled = !canEdit;
     tas[f.key] = ta;
-    rows.push(field(f.label, el('div', {}, f.hint ? el('p', { class: 'admin-hint', style: 'margin:0 0 4px', text: f.hint }) : null, ta)));
+    rows.push(field(f.label, el('div', {}, f.hint ? el('p', { class: 'admin-hint', style: 'margin:0 0 4px' }, ...uiText(f.hint)) : null, ta)));
   }
   if (canEdit) {
     const btn = el('button', { class: 'btn btn-primary btn-sm', text: '안전범위 저장' });
@@ -2788,7 +2794,7 @@ function storageEditor(detail, data) {
   detail.replaceChildren(
     sectionHead('저장소 · 로그', '이 서버의 디스크가 얼마나 찼는지 보고, 로그가 무한히 쌓이지 않도록 상한을 정합니다. 디스크가 가득 차면 로그인을 포함한 모든 기능이 멈추므로 미리 확인하는 화면입니다.'),
     el('div', { class: 'card' }, cardHead('디스크 사용량과 로그 보관'), body));
-  body.append(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+  body.append(el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
 
   async function load() {
     let st;
@@ -2806,7 +2812,7 @@ function storageEditor(detail, data) {
     const banner = worst && worst.level === 'critical'
       ? el('div', { class: 'storage-banner storage-banner-critical' },
         el('strong', { text: `⚠ 디스크 위험 (${worst.usedPct}%) — 새 세션 · 레포 클론 · 파일 업로드가 차단되고 있습니다.` }),
-        el('p', { text: '아래 워크스페이스에서 [분석] → [정리]로 공간을 확보하세요. 100%에 닿으면 DB가 중단되어 로그인을 포함한 모든 기능이 멈추고, 공간을 비워도 수동 재시작이 필요합니다.' }))
+        el('p', {}, ...uiText('아래 워크스페이스에서 [분석] → [정리]로 공간을 확보하세요. 100%에 닿으면 DB가 중단되어 로그인을 포함한 모든 기능이 멈추고, 공간을 비워도 수동 재시작이 필요합니다.')))
       : worst && worst.level === 'warn'
         ? el('div', { class: 'storage-banner storage-banner-warn' },
           el('strong', { text: `디스크 경고 (${worst.usedPct}%) — 아직 정상 동작하지만 정리가 필요합니다.` }),
@@ -2826,7 +2832,7 @@ function storageEditor(detail, data) {
         el('div', { class: 'gauge' }, fill),
         el('p', { class: 'storage-calc', text: `전체 ${fmtBytes(d.totalBytes)} 중 ${fmtBytes(d.availBytes)} 남음` }));
     });
-    if (!diskRows.length) diskRows.push(el('p', { class: 'admin-hint', text: '디스크 정보를 읽지 못했습니다.' }));
+    if (!diskRows.length) diskRows.push(el('p', { class: 'admin-hint' }, ...uiText('디스크 정보를 읽지 못했습니다.')));
 
     // ── ① 지금 상태 — 메모리 게이지(#1059 G1) ── 만성(세션 baseline)·급성(Ollama 스파이크)을 한 눈에.
     const mem = st.memory || null;
@@ -2897,16 +2903,16 @@ function storageEditor(detail, data) {
 
     // 설정 출처 안내 — .env 시드로 도는지, 관리탭 저장값인지(혼동 방지, #688 임베딩과 같은 관례).
     const srcNote = st.policy_source === 'env'
-      ? el('p', { class: 'admin-hint', text: '현재 값은 서버 환경변수(.env) 시드입니다 — 여기서 저장하면 관리탭 설정이 우선합니다.' })
+      ? el('p', { class: 'admin-hint' }, ...uiText('현재 값은 서버 환경변수(.env) 시드입니다 — 여기서 저장하면 관리탭 설정이 우선합니다.'))
       : st.policy_source === 'default'
-        ? el('p', { class: 'admin-hint', text: '아직 설정한 적이 없어 기본값으로 동작 중입니다.' })
+        ? el('p', { class: 'admin-hint' }, ...uiText('아직 설정한 적이 없어 기본값으로 동작 중입니다.'))
         : null;
 
     // 정책 출처 한 줄(#688 관례) — db(관리탭)·env(.env 시드)·default(기본값).
     const srcHint = (source: string): any => source === 'env'
-      ? el('p', { class: 'admin-hint', text: '현재 값은 서버 환경변수(.env) 시드입니다 — 여기서 저장하면 관리탭 설정이 우선합니다.' })
+      ? el('p', { class: 'admin-hint' }, ...uiText('현재 값은 서버 환경변수(.env) 시드입니다 — 여기서 저장하면 관리탭 설정이 우선합니다.'))
       : source === 'default'
-        ? el('p', { class: 'admin-hint', text: '아직 설정한 적이 없어 기본값으로 동작 중입니다.' })
+        ? el('p', { class: 'admin-hint' }, ...uiText('아직 설정한 적이 없어 기본값으로 동작 중입니다.'))
         : null;
 
     // ── ② 정책 — 세션 메모리 상한(#1059 D) ── per-session cgroup(box-cgspawn) 캡. 0=무제한(무회귀). 배포+캡 설정 시 세션이 scope 격리.
@@ -2951,8 +2957,8 @@ function storageEditor(detail, data) {
       el('h3', { class: 'storage-h', text: '지금 상태' }),
       ...(memBlock
         ? [el('div', { class: 'storage-block' }, memBlock,
-          el('p', { class: 'admin-hint', text: '가용 = 회수 가능한 캐시 포함(지금 새 작업에 내줄 수 있는 양). #1059 다운은 만성(세션 baseline)+급성(Ollama 임베딩 스파이크)이 겹쳐 물리 초과로 일어났습니다 — 세션 수와 Ollama 로드를 함께 봅니다.' }))]
-        : [el('div', { class: 'storage-block' }, el('p', { class: 'admin-hint', text: '메모리 정보를 읽지 못했습니다.' }))]),
+          el('p', { class: 'admin-hint' }, ...uiText('가용 = 회수 가능한 캐시 포함(지금 새 작업에 내줄 수 있는 양). #1059 다운은 만성(세션 baseline)+급성(Ollama 임베딩 스파이크)이 겹쳐 물리 초과로 일어났습니다 — 세션 수와 Ollama 로드를 함께 봅니다.')))]
+        : [el('div', { class: 'storage-block' }, el('p', { class: 'admin-hint' }, ...uiText('메모리 정보를 읽지 못했습니다.')))]),
 
       el('h3', { class: 'storage-h', text: '메모리 경보' }),
       el('div', { class: 'storage-block' },
@@ -2961,7 +2967,7 @@ function storageEditor(detail, data) {
           el('label', {}, el('span', { text: '경고 임계(사용%, 0=끔)' }), memWarnIn),
           el('label', {}, el('span', { text: '위험 임계(사용%, 0=끔)' }), memCritIn)),
         el('p', { class: 'storage-calc', text: '디스크처럼, 메모리 사용%가 이 값을 넘으면 경보 웹훅으로 알립니다(OOM 임박 사전 경고). 위험 임계는 경고보다 커야 합니다. 0=끔. 제안: 경고 85 · 위험 95.' }),
-        el('p', { class: 'admin-hint', text: '경보를 받을 웹훅 채널은 [저장소] 탭 ▸ 경보 알림 에서 설정합니다(디스크·DB·메모리 공용). 위 게이지의 현재 사용%를 보고 임계를 정하세요.' }),
+        el('p', { class: 'admin-hint' }, ...uiText('경보를 받을 웹훅 채널은 [저장소] 탭 ▸ 경보 알림 에서 설정합니다(디스크·DB·메모리 공용). 위 게이지의 현재 사용%를 보고 임계를 정하세요.')),
         el('div', { class: 'storage-actions' }, memAlertBtn)),
 
       // ── 세션 메모리·회수(#1059) — 박스 다운(OOM) 재발 방지의 두 축을 관리탭에서 조절 ──
@@ -2973,7 +2979,7 @@ function storageEditor(detail, data) {
           el('label', {}, el('span', { text: 'MemoryHigh(MB, 0=무제한)' }), memHighIn),
           el('label', {}, el('span', { text: 'MemoryMax(MB, 0=무제한)' }), memMaxIn)),
         el('p', { class: 'storage-calc', text: 'MemoryMax 를 넘은 세션은 그 세션 안에서만 OOM-kill 되고 박스는 생존합니다(폭주 1개만 죽음). MemoryHigh 는 그 아래 소프트 스로틀. High ≤ Max.' }),
-        el('p', { class: 'admin-hint', text: 'claude 는 네이티브라 힙제한이 안 통해 cgroup 이 유일 수단입니다. 0/0=무제한(무회귀). 캡을 걸면 새 세션이 격리 scope 로 뜹니다(박스에 격리 인프라 배포 필요 — 미설치면 종전대로 무제한). 예: 16GB 박스 High 3072 · Max 4096.' }),
+        el('p', { class: 'admin-hint' }, ...uiText('claude 는 네이티브라 힙제한이 안 통해 cgroup 이 유일 수단입니다. 0/0=무제한(무회귀). 캡을 걸면 새 세션이 격리 scope 로 뜹니다(박스에 격리 인프라 배포 필요 — 미설치면 종전대로 무제한). 예: 16GB 박스 High 3072 · Max 4096.')),
         el('div', { class: 'storage-actions' }, memPolBtn)),
       el('div', { class: 'storage-block' },
         el('strong', { text: 'idle 세션 자동 회수' }),
@@ -2981,7 +2987,7 @@ function storageEditor(detail, data) {
         el('div', { class: 'storage-fields' },
           el('label', {}, el('span', { text: 'idle 임계(분, 0=끔)' }), idleTtlIn)),
         el('p', { class: 'storage-calc', text: '이 시간 넘게 idle 인 세션을 5분 주기로 회수합니다. 작업내용(대화·설정)은 보존돼 목록에 “복원 가능”으로 남고, 열면 이어집니다(admission control 대신 채택).' }),
-        el('p', { class: 'admin-hint', text: '0=끔(무회귀, 기본). 상시(managed)·접속 중·작업 중·확인 대기 세션은 절대 회수하지 않습니다. 예: 16GB 박스 180~1440분.' }),
+        el('p', { class: 'admin-hint' }, ...uiText('0=끔(무회귀, 기본). 상시(managed)·접속 중·작업 중·확인 대기 세션은 절대 회수하지 않습니다. 예: 16GB 박스 180~1440분.')),
         el('div', { class: 'storage-actions' }, reclaimBtn)),
     );
 
@@ -2999,16 +3005,16 @@ function storageEditor(detail, data) {
             el('label', {}, el('span', { text: '경고 임계(%)' }), warnIn),
             el('label', {}, el('span', { text: '위험 임계(%)' }), critIn)),
           el('p', { class: 'storage-calc', text: '경고 → /readyz 가 degraded 로 알립니다(서비스는 정상 동작). 위험 → 신규 세션·클론을 막습니다.' }),
-          el('p', { class: 'admin-hint', text: '경고 임계는 위험 임계보다 낮아야 합니다.' })),
+          el('p', { class: 'admin-hint' }, ...uiText('경고 임계는 위험 임계보다 낮아야 합니다.'))),
         el('div', { class: 'storage-block' },
           el('strong', { text: '공유 빌드 캐시' }),
           el('label', { class: 'storage-toggle' }, cacheChk,
             el('span', { text: ' 의존성 캐시를 서버의 공유 위치 한 곳에 모읍니다 (권장)' })),
           cacheState,
-          el('p', { class: 'admin-hint', text: 'npm·pnpm·pip·uv·Go·Maven·Yarn·NuGet·Composer 의 다운로드 캐시를 세션마다 따로 받지 않고 공유합니다. 빌드가 빨라지고, 나중에 프로젝트의 빌드 산출물을 정리해도 금방 복구됩니다. 새로 만드는 세션부터 적용됩니다.' }),
+          el('p', { class: 'admin-hint' }, ...uiText('npm·pnpm·pip·uv·Go·Maven·Yarn·NuGet·Composer 의 다운로드 캐시를 세션마다 따로 받지 않고 공유합니다. 빌드가 빨라지고, 나중에 프로젝트의 빌드 산출물을 정리해도 금방 복구됩니다. 새로 만드는 세션부터 적용됩니다.')),
           el('label', { class: 'storage-toggle' }, homeChk,
             el('span', { text: ' Gradle · Cargo 홈까지 공유 (주의)' })),
-          el('p', { class: 'admin-hint storage-warn', text: '⚠ 이 옵션을 켜면 캐시뿐 아니라 설정·자격증명도 공유 위치로 옮겨갑니다 — ~/.gradle/gradle.properties(서명키·저장소 인증)와 ~/.cargo/credentials.toml(레지스트리 토큰)이 무시됩니다. 그 파일에 의존하는 빌드가 실패할 수 있으니, 해당 파일을 쓰지 않는 것이 확실할 때만 켜세요.' }),
+          el('p', { class: 'admin-hint storage-warn' }, ...uiText('⚠ 이 옵션을 켜면 캐시뿐 아니라 설정·자격증명도 공유 위치로 옮겨갑니다 — ~/.gradle/gradle.properties(서명키·저장소 인증)와 ~/.cargo/credentials.toml(레지스트리 토큰)이 무시됩니다. 그 파일에 의존하는 빌드가 실패할 수 있으니, 해당 파일을 쓰지 않는 것이 확실할 때만 켜세요.')),
           el('div', { class: 'storage-actions' }, saveBtn)),
 
         el('h3', { class: 'storage-h', text: '경보 알림' }),
@@ -3034,7 +3040,7 @@ function storageEditor(detail, data) {
   const alertRegion = el('div');
   let alertPolicy: any = {};
   async function loadAlert() {
-    alertRegion.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+    alertRegion.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
     let a;
     try { a = await api('/api/ui/org/alert'); }
     catch (e: any) { alertRegion.replaceChildren(el('p', { class: 'admin-hint', text: '불러오지 못했습니다: ' + e.message })); return; }
@@ -3094,7 +3100,7 @@ function storageEditor(detail, data) {
       : el('p', { class: 'storage-calc storage-warn', text: '⚠ 미설정 — 디스크가 위험 단계에 들어가거나 DB가 중단되어도 알림이 전송되지 않습니다(로그와 이 화면에서만 확인할 수 있습니다).' });
 
     const keyNote = a.encryption_ready ? null
-      : el('p', { class: 'admin-hint storage-warn', text: '⚠ 시크릿 암호화 키(CONNECTOR_SECRET_KEY)가 설정되지 않아 웹훅을 저장할 수 없습니다. 웹훅 주소는 그 URL만 알면 누구나 글을 쓸 수 있어 평문으로 저장하지 않습니다.' });
+      : el('p', { class: 'admin-hint storage-warn' }, ...uiText('⚠ 시크릿 암호화 키(CONNECTOR_SECRET_KEY)가 설정되지 않아 웹훅을 저장할 수 없습니다. 웹훅 주소는 그 URL만 알면 누구나 글을 쓸 수 있어 평문으로 저장하지 않습니다.'));
 
     alertRegion.replaceChildren(
       el('div', { class: 'storage-block' },
@@ -3104,7 +3110,7 @@ function storageEditor(detail, data) {
           el('label', { style: 'flex:1 1 320px' }, el('span', { text: '웹훅 주소' }), urlIn),
           el('label', {}, el('span', { text: '알림 기준' }), minSel),
           el('label', {}, el('span', { text: '이름(선택)' }), labelIn)),
-        el('p', { class: 'admin-hint', text: '슬랙·디스코드의 incoming webhook 주소를 그대로 넣으면 됩니다. 전송되는 알림: 디스크 경고/위험 진입, DB 연결 불가, 그리고 각각의 복구. 저장된 주소는 암호화되어 다시 표시되지 않습니다(변경할 때만 다시 입력).' }),
+        el('p', { class: 'admin-hint' }, ...uiText('슬랙·디스코드의 incoming webhook 주소를 그대로 넣으면 됩니다. 전송되는 알림: 디스크 경고/위험 진입, DB 연결 불가, 그리고 각각의 복구. 저장된 주소는 암호화되어 다시 표시되지 않습니다(변경할 때만 다시 입력).')),
         el('div', { class: 'ws-actions' }, a.configured ? el('span', {}, testA, ' ', delA) : el('span', {}), saveA)),
     );
   }
@@ -3142,7 +3148,7 @@ function storageEditor(detail, data) {
   }
 
   async function loadWorkspace() {
-    wsRegion.replaceChildren(el('p', { class: 'admin-hint', text: '워크스페이스 계산 중… (프로젝트가 많으면 몇 초 걸립니다)' }));
+    wsRegion.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('워크스페이스 계산 중… (프로젝트가 많으면 몇 초 걸립니다)')));
     analyzed.clear(); selected.clear();
     try { wsList = await api('/api/ui/org/workspace'); }
     catch (e: any) { wsRegion.replaceChildren(el('p', { class: 'admin-hint', text: '불러오지 못했습니다: ' + e.message })); return; }
@@ -3267,8 +3273,8 @@ function storageEditor(detail, data) {
     wsRegion.replaceChildren(
       el('p', { class: 'storage-calc', text: `${all.length}개 폴더 · 합계 ${fmtBytes(wsList.total_bytes)} — ${wsList.root}` }),
       el('div', { class: 'ws-actions' }, analyzeAllBtn, reclaimSelBtn, progress),
-      el('p', { class: 'admin-hint', text: '[전체 분석]은 아무것도 지우지 않습니다 — 무엇을 정리할 수 있는지만 계산합니다. 정리 대상은 다시 만들 수 있는 것뿐입니다(node_modules·빌드 산출물 등). 소스·커밋·설정(.env)·데이터는 절대 지우지 않고, 워크트리도 유지합니다. 작업 중인 세션이 있는 프로젝트는 선택되지 않습니다.' }),
-      ...(rows.length ? rows : [el('p', { class: 'admin-hint', text: '정리할 워크트리가 있는 프로젝트가 없습니다.' })]),
+      el('p', { class: 'admin-hint' }, ...uiText('[전체 분석]은 아무것도 지우지 않습니다 — 무엇을 정리할 수 있는지만 계산합니다. 정리 대상은 다시 만들 수 있는 것뿐입니다(node_modules·빌드 산출물 등). 소스·커밋·설정(.env)·데이터는 절대 지우지 않고, 워크트리도 유지합니다. 작업 중인 세션이 있는 프로젝트는 선택되지 않습니다.')),
+      ...(rows.length ? rows : [el('p', { class: 'admin-hint' }, ...uiText('정리할 워크트리가 있는 프로젝트가 없습니다.'))]),
       ...(empties.length ? [
         el('p', { class: 'admin-hint', text: `아래는 git 레포(워크트리)가 없는 폴더입니다 — 정리할 파생물이 없어 정상이며, 지울 것도 없습니다(대부분 12KB 안팎).` }),
         emptyToggle, emptyBox,
@@ -3286,7 +3292,7 @@ function logsEditor(detail, data) {
   detail.replaceChildren(
     sectionHead('로그', '게이트웨이 로그 파일이 얼마나 쌓였는지 확인하고, 무한히 자라지 않도록 회전(보관) 상한을 정합니다. 저장하면 즉시 반영됩니다(재시작 불필요).'),
     el('div', { class: 'card' }, body));
-  body.append(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+  body.append(el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
 
   async function load() {
     let st;
@@ -3339,9 +3345,9 @@ function logsEditor(detail, data) {
     });
 
     const srcNote = st.policy_source === 'env'
-      ? el('p', { class: 'admin-hint', text: '현재 값은 서버 환경변수(.env) 시드입니다 — 여기서 저장하면 관리탭 설정이 우선합니다.' })
+      ? el('p', { class: 'admin-hint' }, ...uiText('현재 값은 서버 환경변수(.env) 시드입니다 — 여기서 저장하면 관리탭 설정이 우선합니다.'))
       : st.policy_source === 'default'
-        ? el('p', { class: 'admin-hint', text: '아직 설정한 적이 없어 기본값으로 동작 중입니다.' })
+        ? el('p', { class: 'admin-hint' }, ...uiText('아직 설정한 적이 없어 기본값으로 동작 중입니다.'))
         : null;
 
     body.replaceChildren(
@@ -3359,7 +3365,7 @@ function logsEditor(detail, data) {
           el('label', {}, el('span', { text: '파일 1개 최대(MB)' }), logMaxIn),
           el('label', {}, el('span', { text: '보관 개수' }), logKeepIn)),
         logCalc,
-        el('p', { class: 'admin-hint', text: '상한을 넘으면 자동으로 회전합니다(내용은 보관본으로 넘기고 현재 파일은 비웁니다). 서비스는 멈추지 않습니다.' }),
+        el('p', { class: 'admin-hint' }, ...uiText('상한을 넘으면 자동으로 회전합니다(내용은 보관본으로 넘기고 현재 파일은 비웁니다). 서비스는 멈추지 않습니다.')),
         el('div', { class: 'storage-actions' }, saveBtn)),
     );
   }
@@ -3376,7 +3382,7 @@ function sessionsAdminEditor(detail, data) {
   detail.replaceChildren(
     sectionHead('세션', '이 박스에서 지금 도는 모든 AI 세션입니다. 안 쓰는 세션이 쌓이면 메모리가 말라 박스가 멈출 수 있어요(#1059) — 여기서 보고 오래 쉬는 세션을 회수하세요. 회수해도 대화·설정은 보존돼 사용자가 다시 열 수 있습니다(파괴적 삭제 아님).'),
     el('div', { class: 'card' }, body));
-  body.append(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+  body.append(el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
 
   const memberName = (id) => { const m = (data.members || []).find((x) => x.id === id); return m ? (m.display_name || m.id) : (id || '?'); };
   const shortDir = (d) => { if (!d) return '—'; const parts = String(d).split('/').filter(Boolean); return parts.length > 2 ? '…/' + parts.slice(-2).join('/') : d; };
@@ -3397,7 +3403,7 @@ function sessionsAdminEditor(detail, data) {
     const summary = el('p', { class: 'admin-hint', text: `총 ${sessions.length}개 · 접속 중 ${sessions.filter((s) => s.attached).length}개 · 상시 ${sessions.filter((s) => s.managed).length}개. 회수는 tmux 만 종료하고 대화·설정을 보존합니다(사용자가 “복원 가능”으로 다시 엶).` });
 
     const list = el('div', { class: 'sess-admin-list' });
-    if (!rows.length) list.append(el('p', { class: 'admin-hint', text: '지금 도는 세션이 없습니다.' }));
+    if (!rows.length) list.append(el('p', { class: 'admin-hint' }, ...uiText('지금 도는 세션이 없습니다.')));
     for (const s of rows) {
       const [lbl, cls] = STMAP[s.agentState] || STMAP.offline;
       const headline = (s.title && s.title !== s.label ? s.title : s.label) || '(이름 없음)';
@@ -3439,7 +3445,7 @@ function sessionShareEditor(detail, data) {
   detail.replaceChildren(
     sectionHead('세션 공유', '구성원의 AI 대화 기록을 중앙에 모아, 다른 컴퓨터·다른 사람이 이어서 보고 이어받게 합니다. 대화 전문이 저장되므로 기본은 꺼져 있습니다.'),
     el('div', { class: 'card' }, cardHead('세션 공유 설정'), body));
-  if (!rc) { body.append(el('p', { class: 'admin-hint', text: '이 설정은 관리자(admin)만 볼 수 있습니다.' })); return; }
+  if (!rc) { body.append(el('p', { class: 'admin-hint' }, ...uiText('이 설정은 관리자(admin)만 볼 수 있습니다.'))); return; }
   build();
 
   function build() {
@@ -3478,7 +3484,7 @@ function sessionShareEditor(detail, data) {
 
     const field = (label, ctrl, hint) => el('div', { class: 'admin-field' },
       el('label', { class: 'admin-field-label', text: label }), ctrl,
-      hint ? el('p', { class: 'admin-hint', text: hint }) : null);
+      hint ? el('p', { class: 'admin-hint' }, ...uiText(hint)) : null);
 
     const saveBtn = el('button', { class: 'btn btn-primary', text: '저장', disabled: !canEdit });
     saveBtn.addEventListener('click', async () => {
@@ -3507,7 +3513,7 @@ function sessionShareEditor(detail, data) {
       field('보존 기간(일)', retIn, '0 = 무제한(디스크 주의). 지난 기록은 자동 정리됩니다.'),
       field('기록 열람 권한', viewSel, '중앙에 모인 대화를 누가 열람·이어받을 수 있는지.'),
       canEdit ? el('div', { class: 'admin-actions' }, saveBtn)
-        : el('p', { class: 'admin-hint', text: '읽기 전용 — 변경은 관리자(admin) 권한이 필요합니다.' }));
+        : el('p', { class: 'admin-hint' }, ...uiText('읽기 전용 — 변경은 관리자(admin) 권한이 필요합니다.')));
   }
 }
 
@@ -3517,7 +3523,7 @@ function embeddingsEditor(detail, data) {
   detail.replaceChildren(
     sectionHead('의미 검색 (임베딩)', 'AI와 사람이 지식을 단어가 아니라 뜻으로 찾게 합니다. 꺼 두면 단어가 그대로 들어간 지식만 찾습니다.'),
     el('div', { class: 'card' }, cardHead('의미 검색 상태와 설정'), body));
-  body.append(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+  body.append(el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
 
   let pollTimer: any = null;
   const stopPoll = () => { if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; } };
@@ -3551,7 +3557,7 @@ function embeddingsEditor(detail, data) {
       } catch (e: any) { toast(e.message, true); btn.disabled = false; }
     });
     region.replaceChildren(note,
-      canEdit ? el('div', { class: 'admin-actions' }, btn) : el('p', { class: 'admin-hint', text: '※ 편집은 관리자만 가능합니다.' }));
+      canEdit ? el('div', { class: 'admin-actions' }, btn) : el('p', { class: 'admin-hint' }, ...uiText('※ 편집은 관리자만 가능합니다.')));
   }
 
   async function load() {
@@ -3614,9 +3620,9 @@ function embeddingsEditor(detail, data) {
 
     // #688 설정 출처 안내 — env 시드로 도는지 / 명시적 off 인지(관리탭 저장과 .env 의 우선순위 혼동 방지).
     const srcNote = st.config_source === 'env'
-      ? el('p', { class: 'admin-hint', text: '현재 설정은 서버 환경변수(.env EMBEDDINGS_*) 시드로 동작 중입니다 — 여기서 저장하면 관리탭(DB) 설정이 우선하게 됩니다.' })
+      ? el('p', { class: 'admin-hint' }, ...uiText('현재 설정은 서버 환경변수(.env EMBEDDINGS_*) 시드로 동작 중입니다 — 여기서 저장하면 관리탭(DB) 설정이 우선하게 됩니다.'))
       : st.config_source === 'db-off'
-        ? el('p', { class: 'admin-hint', text: '관리탭에서 명시적으로 꺼둔 상태입니다 — 서버 .env 의 EMBEDDINGS_* 시드는 무시됩니다(다시 켜려면 여기서 켜기 저장).' })
+        ? el('p', { class: 'admin-hint' }, ...uiText('관리탭에서 명시적으로 꺼둔 상태입니다 — 서버 .env 의 EMBEDDINGS_* 시드는 무시됩니다(다시 켜려면 여기서 켜기 저장).'))
         : null;
 
     const statusRegion = el('div');
@@ -3626,30 +3632,30 @@ function embeddingsEditor(detail, data) {
       ...(srcNote ? [srcNote] : []),
       field('벡터 임베딩', provSel),
       field('엔드포인트 base_url', baseIn),
-      el('p', { class: 'admin-hint', text: '로컬 사이드카 또는 외부 API 주소입니다. 경로 /v1/embeddings 는 자동으로 붙습니다.' }),
+      el('p', { class: 'admin-hint' }, ...uiText('로컬 사이드카 또는 외부 API 주소입니다. 경로 /v1/embeddings 는 자동으로 붙습니다.')),
       field('모델', modelIn),
       field('차원', dimIn),
-      el('p', { class: 'admin-hint', text: '모델의 출력 차원과 일치해야 합니다. 변경하면 전체 재임베딩이 필요합니다.' }),
+      el('p', { class: 'admin-hint' }, ...uiText('모델의 출력 차원과 일치해야 합니다. 변경하면 전체 재임베딩이 필요합니다.')),
       field('인증 환경변수 이름 (선택 · 외부 API 용)', authIn),
-      el('p', { class: 'admin-hint', text: '키 값이 아니라 키를 담은 환경변수의 이름을 입력합니다.' }),
+      el('p', { class: 'admin-hint' }, ...uiText('키 값이 아니라 키를 담은 환경변수의 이름을 입력합니다.')),
       field('배치 크기', batchIn),
-      el('p', { class: 'admin-hint', text: '요청당 보내는 텍스트 수입니다. 느린 백엔드나 CPU 백엔드에서는 낮추면 타임아웃을 피할 수 있습니다(기본 8).' }),
+      el('p', { class: 'admin-hint' }, ...uiText('요청당 보내는 텍스트 수입니다. 느린 백엔드나 CPU 백엔드에서는 낮추면 타임아웃을 피할 수 있습니다(기본 8).')),
       field('요청 타임아웃 (ms)', timeoutIn),
-      el('p', { class: 'admin-hint', text: '초과하면 배치를 반으로 줄여 재시도합니다(기본 300000).' }),
+      el('p', { class: 'admin-hint' }, ...uiText('초과하면 배치를 반으로 줄여 재시도합니다(기본 300000).')),
       field('백필 메모리 게이트 (MB, 0=끔)', backfillMinIn),
-      el('p', { class: 'admin-hint', text: '#1059 — 자동 백필이 임베딩 모델(예: Ollama)을 호출하기 전 가용 메모리를 확인해, 이 값 미만이면 이번 스윕을 건너뜁니다(다음 주기 재시도, 밀린 항목 유실 없음). 모델 로드 스파이크가 세션 baseline 과 겹쳐 박스가 OOM 나는 걸 예방합니다. 0=끔(무회귀). 16GB 박스 권장 4096~5000. 수동 백필 버튼은 게이트하지 않습니다.' }),
-      canEdit ? el('div', { class: 'admin-actions' }, saveBtn, saveSt) : el('p', { class: 'admin-hint', text: '※ 편집은 관리자만 가능합니다.' }),
+      el('p', { class: 'admin-hint' }, ...uiText('#1059 — 자동 백필이 임베딩 모델(예: Ollama)을 호출하기 전 가용 메모리를 확인해, 이 값 미만이면 이번 스윕을 건너뜁니다(다음 주기 재시도, 밀린 항목 유실 없음). 모델 로드 스파이크가 세션 baseline 과 겹쳐 박스가 OOM 나는 걸 예방합니다. 0=끔(무회귀). 16GB 박스 권장 4096~5000. 수동 백필 버튼은 게이트하지 않습니다.')),
+      canEdit ? el('div', { class: 'admin-actions' }, saveBtn, saveSt) : el('p', { class: 'admin-hint' }, ...uiText('※ 편집은 관리자만 가능합니다.')),
       // #1060 자동 백필 일시중지 — knowledge·project 를 함께 지배하므로 두 백필 섹션 위에. 임베딩 켜진 경우에만 노출(꺼지면 백필 자체가 무의미).
       ...(on ? [
         el('div', { class: 'admin-subhead', text: '자동 임베딩 백필' }),
-        el('p', { class: 'admin-hint', text: '저장·수정·동기화, 그리고 부팅·10분 주기 스윕으로 쌓이는 미임베딩을 게이트웨이가 백그라운드에서 자동으로 채웁니다. 임베딩 백엔드가 느리거나(CPU) 성능에 영향을 줄 때는 아래에서 일시중지하세요 — 재개할 때까지 자동·수동 백필이 모두 멈추고, 재개하면 그동안 밀린 항목을 이어서 채웁니다.' }),
+        el('p', { class: 'admin-hint' }, ...uiText('저장·수정·동기화, 그리고 부팅·10분 주기 스윕으로 쌓이는 미임베딩을 게이트웨이가 백그라운드에서 자동으로 채웁니다. 임베딩 백엔드가 느리거나(CPU) 성능에 영향을 줄 때는 아래에서 일시중지하세요 — 재개할 때까지 자동·수동 백필이 모두 멈추고, 재개하면 그동안 밀린 항목을 이어서 채웁니다.')),
         pauseRegion,
       ] : []),
       el('div', { class: 'admin-subhead', text: '기존 지식 임베딩 (임베딩을 나중에 켠 경우)' }),
-      el('p', { class: 'admin-hint', text: '임베딩을 켜도 이미 저장된 지식은 자동으로 임베딩되지 않습니다(켠 이후에 새로 만들거나 수정한 지식만 자동 처리). 기존 지식은 아래 버튼으로 일괄 임베딩하세요 — 중단하거나 다시 실행해도 안전합니다.' }),
+      el('p', { class: 'admin-hint' }, ...uiText('임베딩을 켜도 이미 저장된 지식은 자동으로 임베딩되지 않습니다(켠 이후에 새로 만들거나 수정한 지식만 자동 처리). 기존 지식은 아래 버튼으로 일괄 임베딩하세요 — 중단하거나 다시 실행해도 안전합니다.')),
       statusRegion,
       el('div', { class: 'admin-subhead', text: '프로젝트 임베딩 (프로젝트·태스크·서브태스크 검색용)' }),
-      el('p', { class: 'admin-hint', text: '프로젝트·태스크·서브태스크의 이름/설명을 임베딩합니다. 임베딩을 켠 이후에 생성·수정·동기화된 항목은 텍스트가 실제로 바뀔 때만 자동으로 임베딩되고, 기존 항목은 아래 버튼으로 일괄 임베딩합니다. 지식과 같은 임베딩 설정을 사용합니다.' }),
+      el('p', { class: 'admin-hint' }, ...uiText('프로젝트·태스크·서브태스크의 이름/설명을 임베딩합니다. 임베딩을 켠 이후에 생성·수정·동기화된 항목은 텍스트가 실제로 바뀔 때만 자동으로 임베딩되고, 기존 항목은 아래 버튼으로 일괄 임베딩합니다. 지식과 같은 임베딩 설정을 사용합니다.')),
       projectRegion);
     updateStatus(st, statusRegion);
     loadProjectStatus(projectRegion);
@@ -3681,7 +3687,7 @@ function embeddingsEditor(detail, data) {
     bfBtn.disabled = !canEdit || !on || running || (backlog.pending || 0) === 0 || paused;
     const bfSt = el('span', { class: 'admin-status' });
     if (!on) bfSt.textContent = '먼저 임베딩을 켜고 저장하세요.';
-    else if (paused) bfSt.textContent = '일시중지됨 — 위 [자동 임베딩 백필]에서 재개한 뒤 실행하세요.';
+    else if (paused) bfSt.replaceChildren(...uiText('일시중지됨 — 위 [자동 임베딩 백필]에서 재개한 뒤 실행하세요.'));
     else if ((backlog.pending || 0) === 0 && !running) bfSt.textContent = '모두 임베딩됨 ✓';
     bfBtn.addEventListener('click', async () => {
       bfBtn.disabled = true;
@@ -3740,7 +3746,7 @@ function embeddingsEditor(detail, data) {
     bfBtn.disabled = !canEdit || !on || running || (backlog.pending || 0) === 0 || paused;
     const bfSt = el('span', { class: 'admin-status' });
     if (!on) bfSt.textContent = '먼저 임베딩을 켜고 저장하세요.';
-    else if (paused) bfSt.textContent = '일시중지됨 — 위 [자동 임베딩 백필]에서 재개한 뒤 실행하세요.';
+    else if (paused) bfSt.replaceChildren(...uiText('일시중지됨 — 위 [자동 임베딩 백필]에서 재개한 뒤 실행하세요.'));
     else if ((backlog.pending || 0) === 0 && !running) bfSt.textContent = '모두 임베딩됨 ✓';
     bfBtn.addEventListener('click', async () => {
       bfBtn.disabled = true;
@@ -3809,7 +3815,7 @@ function mcpEditor(detail, data) {
   const right = el('div', {});
   const editing = sel === '__new__' ? { name: '', transport: 'http', url: '', command: '', auth_env: '', note: '', enabled: true } : servers.find((s) => s.name === sel);
   if (editing) mcpForm(right, editing, data, detail, sel === '__new__');
-  else right.append(el('p', { class: 'admin-hint', text: 'lively 게이트웨이는 기본으로 등록되어 있습니다. 추가로 쓸 외부 도구 서버(MCP)를 여기서 등록합니다. 인증은 환경변수 이름만 적습니다(시크릿 값 입력 금지).' }));
+  else right.append(el('p', { class: 'admin-hint' }, ...uiText('lively 게이트웨이는 기본으로 등록되어 있습니다. 추가로 쓸 외부 도구 서버(MCP)를 여기서 등록합니다. 인증은 환경변수 이름만 적습니다(시크릿 값 입력 금지).')));
   // 내부 MCP 안전범위(#837) — `allowed_internal_hosts` 는 서버·스키마·감사까지 다 있는데 **편집 UI 만 없었다.**
   //  runtime_config 1행을 5개 화면이 나눠 쓰는데 아무도 그 행 전체를 소유하지 않아 필드 하나가 통째로 샜다.
   //  증상: 내부 MCP 를 등록하면 SSRF 가드에 조용히 막히고, 에러가 "allowed_internal_hosts 등록 필요" 라며
@@ -3878,8 +3884,8 @@ function mcpForm(root, s, data, detail, isNew) {
     try { const r = await api('/api/ui/org/mcp-server/refresh', { method: 'POST', body: JSON.stringify({ name: s.name }) }); toast(`발행됨 — 툴 ${r.tool_count}개`); await loadAdmin(true); renderAdminDetail(detail, 'mcp', state.admin.data); }
     catch (e) { toast(e.message, true); refreshBtn.disabled = false; }
   });
-  const oauthHint = el('div', { class: 'admin-hint', text: 'OAuth: 구성원이 각자 [자격] 화면(또는 me_oauth_connect)에서 [연결]로 브라우저 인증합니다. 게이트웨이가 토큰을 구성원별로 보관·자동 갱신합니다.' });
-  const sigv4Hint = el('div', { class: 'admin-hint', text: 'AWS(sigv4): 자격 종류는 aws_role_arn 으로 두세요. 실제 역할(role ARN·리전·service)과 구성원별 오버라이드는 [자격] 탭 ▸ "AWS 역할"에서 등록·할당합니다. 툴 등급은 자동(describe=조회 / put·delete=집행 컨펌).' });
+  const oauthHint = el('div', { class: 'admin-hint' }, ...uiText('OAuth: 구성원이 각자 [자격] 화면(또는 me_oauth_connect)에서 [연결]로 브라우저 인증합니다. 게이트웨이가 토큰을 구성원별로 보관·자동 갱신합니다.'));
+  const sigv4Hint = el('div', { class: 'admin-hint' }, ...uiText('AWS(sigv4): 자격 종류는 aws_role_arn 으로 두세요. 실제 역할(role ARN·리전·service)과 구성원별 오버라이드는 [자격] 탭 ▸ "AWS 역할"에서 등록·할당합니다. 툴 등급은 자동(describe=조회 / put·delete=집행 컨펌).'));
   // OAuth 클라이언트(선택) — 상류가 자동등록(DCR)을 지원하면 비워둠(게이트웨이가 자동 등록). Google·Slack 등 콘솔 앱은 사전등록 client 를 입력.
   //  저장 시 (gateway,auth_kind,'oauth:client') 슬롯에 시딩 → SDK 가 client_secret 유무로 confidential/public 자동 판정. 비우면 기존 유지.
   const oauthClientIdIn = el('input', { type: 'text', value: '', placeholder: '비우면 자동등록(DCR). Google·Slack 등은 콘솔 client_id 입력' });
@@ -3887,7 +3893,7 @@ function mcpForm(root, s, data, detail, isNew) {
   const oauthCallback = ((data && data.profile && data.profile.gateway_url) || location.origin).replace(/\/mcp$/, '').replace(/\/$/, '') + '/oauth/callback';
   const oauthClientBox = el('div', { class: 'admin-subcard', style: 'margin-top:8px' },
     el('div', { class: 'admin-subhead', text: 'OAuth 클라이언트 (선택 — 자동등록 미지원 상류만)' }),
-    el('div', { class: 'admin-hint', text: '상류 MCP 가 동적 클라이언트 등록(DCR)을 지원하면 비워두세요 — 게이트웨이가 자동 등록합니다. Google·Slack처럼 콘솔에서 앱을 미리 만들어야 하는 상류만 그 client_id/secret 을 입력하고, 콘솔의 redirect URI 에 아래 콜백을 등록하세요. (설정/변경 시 client_id 를 입력 — 비우면 기존 유지)' }),
+    el('div', { class: 'admin-hint' }, ...uiText('상류 MCP 가 동적 클라이언트 등록(DCR)을 지원하면 비워두세요 — 게이트웨이가 자동 등록합니다. Google·Slack처럼 콘솔에서 앱을 미리 만들어야 하는 상류만 그 client_id/secret 을 입력하고, 콘솔의 redirect URI 에 아래 콜백을 등록하세요. (설정/변경 시 client_id 를 입력 — 비우면 기존 유지)')),
     field('client_id', oauthClientIdIn),
     field('client_secret', oauthClientSecretIn),
     el('div', { class: 'admin-hint', text: `redirect URI(콜백): ${oauthCallback}  — 이 값을 상류 콘솔(Google/Slack 등)의 허용 redirect URI 에 그대로 등록하세요.` }));
@@ -3901,9 +3907,9 @@ function mcpForm(root, s, data, detail, isNew) {
     field('자격 대상 구분 (선택)', authScopeIn),
     el('label', { class: 'admin-check' }, piiChk, ' 응답 PII 마스킹(비정형 텍스트)'),
     el('label', { class: 'admin-check' }, logArgsChk, ' 호출 인자 값 기록(감사로그)'),
-    el('div', { class: 'admin-hint', text: '평소엔 꺼두세요. 이 서버로 보낸 내용(메시지 본문·메일 내용 등)이 감사로그에 그대로 남습니다 — 비밀 채널이나 DM 이면 그 내용까지 관리자에게 보입니다. 꺼져 있어도 "누가·언제·어떤 도구를 썼는지"는 남으니 감사에는 지장이 없습니다. 켤 만한 경우: 개인 통신이 오가지 않는 내부 전용 서버라 인자를 봐야 디버깅이 되는 때.' }),
+    el('div', { class: 'admin-hint' }, ...uiText('평소엔 꺼두세요. 이 서버로 보낸 내용(메시지 본문·메일 내용 등)이 감사로그에 그대로 남습니다 — 비밀 채널이나 DM 이면 그 내용까지 관리자에게 보입니다. 꺼져 있어도 "누가·언제·어떤 도구를 썼는지"는 남으니 감사에는 지장이 없습니다. 켤 만한 경우: 개인 통신이 오가지 않는 내부 전용 서버라 인자를 봐야 디버깅이 되는 때.')),
     oauthHint, oauthClientBox, sigv4Hint,
-    isNew ? el('div', { class: 'caption', text: '저장 후 [발행]으로 상류 툴을 캡처하세요.' }) : el('div', { class: 'admin-actions' }, refreshBtn, snapInfo));
+    isNew ? el('div', { class: 'caption' }, ...uiText('저장 후 [발행]으로 상류 툴을 캡처하세요.')) : el('div', { class: 'admin-actions' }, refreshBtn, snapInfo));
 
   const syncTransport = () => { urlField.style.display = transSel.value === 'http' ? '' : 'none'; cmdField.style.display = transSel.value === 'stdio' ? '' : 'none'; };
   const syncMode = () => {
@@ -3993,9 +3999,9 @@ function mcpForm(root, s, data, detail, isNew) {
           el('li', { text: '필요한 스코프 추가(아래 note 참조)' }),
           el('li', {}, '승인된 redirect URI 에 게이트웨이 콜백 등록 → ', el('code', { text: cb })),
           el('li', {}, '발급된 client_id/secret 를 아래 ', el('b', { text: 'OAuth 클라이언트' }), ' 필드에 입력'),
-          el('li', { text: '저장 → [발행]로 연결 스모크(막히면 스코프/콜백 재확인)' })));
+          el('li', {}, ...uiText('저장 → [발행]로 연결 스모크(막히면 스코프/콜백 재확인)'))));
     }
-    if (c.note) presetHint.append(el('div', { class: 'caption', style: 'margin-top:4px', text: c.note }));
+    if (c.note) presetHint.append(el('div', { class: 'caption', style: 'margin-top:4px' }, ...uiText(c.note)));
     presetHint.style.display = '';
   });
   const presetField = field('프리셋(기본 카탈로그)', el('div', {}, presetSel, presetHint));
@@ -4033,7 +4039,7 @@ function connectorEditor(detail, data) {
   if (editing) {
     connectorStatusCard(right, editing);
     connectorForm(right, editing, data, detail);
-  } else right.append(el('p', { class: 'admin-hint', text: '수집할 외부 소스를 선택하세요.' }));
+  } else right.append(el('p', { class: 'admin-hint' }, ...uiText('수집할 외부 소스를 선택하세요.')));
   // 사람 매핑 패널(#541 → #837 일반화) — 커넥터가 사용자 목록을 줄 수 있으면 붙인다.
   //  서버가 supported:false 로 답하면 패널이 스스로 사라진다(gmail·gdrive 는 개인 OAuth 라 '멤버' 개념이 없다).
   if (editing && editing.system && editing.system !== '__new__') {
@@ -4042,7 +4048,7 @@ function connectorEditor(detail, data) {
     void renderConnectorMemberPanel(panel, editing.system);
   }
   const banner = (editing && editing.secrets_enabled === false)
-    ? el('div', { class: 'admin-hint', text: '⚠ CONNECTOR_SECRET_KEY 미설정 — 토큰 암호화 저장이 비활성입니다. 게이트웨이 .env 에 CONNECTOR_SECRET_KEY(openssl rand -hex 32)를 설정하면 여기서 토큰을 저장할 수 있습니다(그 전엔 .env 폴백만 동작).' })
+    ? el('div', { class: 'admin-hint' }, ...uiText('⚠ CONNECTOR_SECRET_KEY 미설정 — 토큰 암호화 저장이 비활성입니다. 게이트웨이 .env 에 CONNECTOR_SECRET_KEY(openssl rand -hex 32)를 설정하면 여기서 토큰을 저장할 수 있습니다(그 전엔 .env 폴백만 동작).'))
     : null;
   detail.replaceChildren(
     sectionHead('외부 자료 수집', '슬랙·노션·클릭업 같은 외부 도구의 자료를 주기적으로 가져옵니다.', data.meaning && data.meaning['connector']),
@@ -4066,7 +4072,7 @@ function connectorStatusCard(root, c) {
         ? ` · ${Math.max(1, Math.round((c.sync_job.interval_sec || 600) / 60))}분마다 자동 실행`
         : ' · 저장하면 자동 싱크가 등록됩니다')
     : ' · 켜고 저장하면 10분 주기 자동 싱크가 시작됩니다';
-  const lastLine = el('div', { class: 'admin-hint', text: '실행 이력 확인 중…' });
+  const lastLine = el('div', { class: 'admin-hint' }, ...uiText('실행 이력 확인 중…'));
   const syncBtn = el('button', { class: 'btn btn-primary btn-sm', text: '지금 싱크',
     title: '백그라운드로 즉시 실행 — 로그 창이 열립니다', onclick: () => startSyncRun(c.system, false) });
   const fullBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '전체 다시 싱크',
@@ -4074,14 +4080,14 @@ function connectorStatusCard(root, c) {
     onclick: () => { if (confirm('전체를 다시 수집할까요? 원본 규모에 따라 몇 분~수십 분 걸립니다(백그라운드 실행).')) startSyncRun(c.system, true); } });
   const runsBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '실행 기록', onclick: () => openConnectorRuns(c) });
   root.append(el('div', { class: 'conn-status' },
-    el('div', { class: 'conn-status-line' }, dot, el('span', { class: 'mini-meta', text: jobText })),
+    el('div', { class: 'conn-status-line' }, dot, el('span', { class: 'mini-meta' }, ...uiText(jobText))),
     lastLine,
     el('div', { class: 'admin-actions conn-status-actions' }, syncBtn, fullBtn, runsBtn)));
   (async () => {
     try {
       const r = await api('/api/ui/org/connector/runs?' + new URLSearchParams({ system: c.system, limit: '1' }));
       const run = (r.runs || [])[0];
-      if (!run) { lastLine.textContent = '아직 실행 이력이 없습니다 — 토큰 저장 후 [지금 싱크]로 시작하세요.'; return; }
+      if (!run) { lastLine.replaceChildren(...uiText('아직 실행 이력이 없습니다 — 토큰 저장 후 [지금 싱크]로 시작하세요.')); return; }
       lastLine.replaceChildren(
         el('span', { text: `최근 실행: ${runStatusLabel(run.status)}${run.stale ? ' ⚠ 추적 끊김' : ''} · ${run.mode === 'full' ? '전체' : '증분'} · ${relTime(run.started_at)}` +
           (run.finished_at ? ` · ${runDurLabel(run.started_at, run.finished_at)}` : '') }),
@@ -4102,12 +4108,12 @@ async function startSyncRun(system, full) {
 
 // 실행 기록(#586) — 최근 20건. 행 클릭 = 로그.
 async function openConnectorRuns(c) {
-  const listBox = el('div', { class: 'run-list' }, el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+  const listBox = el('div', { class: 'run-list' }, el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
   overlay(`실행 기록 · ${c.label}`, listBox);
   try {
     const r = await api('/api/ui/org/connector/runs?' + new URLSearchParams({ system: c.system, limit: '20' }));
     const runs = r.runs || [];
-    if (!runs.length) { listBox.replaceChildren(el('p', { class: 'admin-hint', text: '실행 이력이 없습니다.' })); return; }
+    if (!runs.length) { listBox.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('실행 이력이 없습니다.'))); return; }
     listBox.replaceChildren(...runs.map((run) => el('div', { class: 'mini-row', onclick: () => openRunLog(c.system, run.id) },
       el('div', { class: 'mini-title', text: `${runStatusLabel(run.status)}${run.stale ? ' ⚠ 추적 끊김' : ''}  ${run.mode === 'full' ? '전체' : '증분'} · ${run.trigger === 'manual' ? '수동' : '자동'}` }),
       el('div', { class: 'mini-meta', text: `${relTime(run.started_at)}${run.finished_at ? ` · ${runDurLabel(run.started_at, run.finished_at)}` : ' · 진행 중'} · run #${run.id}` }))));
@@ -4116,7 +4122,7 @@ async function openConnectorRuns(c) {
 
 // run 로그 뷰(#586) — 진행 중이면 2초 폴링으로 청크를 이어붙인다(창 닫으면 중단).
 async function openRunLog(system, runId) {
-  const status = el('div', { class: 'admin-hint', text: '불러오는 중…' });
+  const status = el('div', { class: 'admin-hint' }, ...uiText('불러오는 중…'));
   const cancelBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '⏹ 중지', style: 'display:none', onclick: async () => {
     if (!confirm('이 실행을 중지할까요? 커서가 전진하지 않아 데이터 손실은 없고, 다음 실행이 이어서 재수집합니다.')) return;
     try { const r = await api(`/api/ui/org/connector/runs/${runId}/cancel`, { method: 'POST', body: '{}' }); toast(r.message || (r.ok === false ? '중지 실패' : '중지 요청됨'), r.ok === false); }
@@ -4161,7 +4167,7 @@ async function openScopePicker(c, f, inp) {
   try {
     const r = await api('/api/ui/org/connector/discover', { method: 'POST', body: JSON.stringify({ system: c.system }) });
     const opts = (r.fields && r.fields[f.key]) || [];
-    if (!opts.length) { box.replaceChildren(el('p', { class: 'admin-hint', text: r.note || '고를 항목이 없습니다 — 값을 직접 입력하세요.' })); return; }
+    if (!opts.length) { box.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText(r.note || '고를 항목이 없습니다 — 값을 직접 입력하세요.'))); return; }
     const multi = f.key !== 'container_list_id'; // 컨테이너는 1개(라디오)
     // 기존 입력값(URL/슬러그/id 혼재 가능)과 옵션 id 매칭 — 끝 32hex 정규화 비교(노션), 그 외 원문 비교.
     const normId = (v) => { const h = String(v).toLowerCase().replace(/[^0-9a-f]/g, ''); return h.length >= 32 ? h.slice(-32) : String(v).trim(); };
@@ -4183,7 +4189,7 @@ async function openScopePicker(c, f, inp) {
       toast(ids.length ? `${ids.length}개 선택됨 — [저장]을 눌러야 반영됩니다` : '선택을 비웠습니다 — [저장]을 눌러야 반영됩니다');
     } });
     box.replaceChildren(
-      r.note ? el('p', { class: 'admin-hint', text: r.note }) : null,
+      r.note ? el('p', { class: 'admin-hint' }, ...uiText(r.note)) : null,
       el('div', { class: 'conn-pick-list' }, ...rows),
       el('div', { class: 'admin-actions' }, apply));
   } catch (e) { box.replaceChildren(el('p', { class: 'admin-hint', text: '조회 실패: ' + e.message })); }
@@ -4215,7 +4221,7 @@ function connectorForm(root, c, data, detail) {
   if (c.guide && (c.guide.steps || []).length) {
     guideEl = el('details', { class: 'conn-guide', ...(Object.values(c.secretsSet || {}).some(Boolean) ? {} : { open: '' }) },
       el('summary', { text: `🔑 ${c.label} 토큰 발급 방법` }));
-    if (c.guide.intro) guideEl.append(el('p', { class: 'admin-hint', text: c.guide.intro }));
+    if (c.guide.intro) guideEl.append(el('p', { class: 'admin-hint' }, ...uiText(c.guide.intro)));
     const ol = el('ol', { class: 'conn-guide-steps' });
     for (const st of (c.guide.steps || [])) ol.append(el('li', { text: st }));
     guideEl.append(ol);
@@ -4253,7 +4259,7 @@ function connectorForm(root, c, data, detail) {
     el('label', { class: 'admin-check' }, enChk, ' 싱크 활성 — 저장하면 10분 주기 자동 싱크가 등록됩니다'),
     ...fieldEls,
     field('메모', noteIn),
-    el('p', { class: 'admin-hint', text: '🔒 토큰은 게이트웨이 키로 암호화되어 저장됩니다. 값을 비워두면 기존 토큰이 유지됩니다.' }),
+    el('p', { class: 'admin-hint' }, ...uiText('🔒 토큰은 게이트웨이 키로 암호화되어 저장됩니다. 값을 비워두면 기존 토큰이 유지됩니다.')),
     actions);
 }
 
@@ -4356,7 +4362,7 @@ async function renderConnectorMemberPanel(panel, system) {
 //  전용 GET /api/ui/feed-targets 로 자체 조회(연결 패널처럼) — /api/ui/org 페이로드 오염 안 시킴.
 async function feedTargetsEditor(detail, data) {
   const meaning = data.meaning && data.meaning['feed-targets'];
-  detail.replaceChildren(sectionHead('위키 아웃바운드(피드)', '우리 위키의 지식을 외부 도구로 내보냅니다. 어떤 카테고리를 어디로 보낼지 정합니다.', meaning), el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '피드 목적지 불러오는 중…' })));
+  detail.replaceChildren(sectionHead('위키 아웃바운드(피드)', '우리 위키의 지식을 외부 도구로 내보냅니다. 어떤 카테고리를 어디로 보낼지 정합니다.', meaning), el('div', { class: 'card' }, el('p', { class: 'admin-hint' }, ...uiText('피드 목적지 불러오는 중…'))));
   let res;
   try { res = await api('/api/ui/feed-targets'); }
   catch (e) { detail.replaceChildren(sectionHead('위키 아웃바운드(피드)', '우리 위키의 지식을 외부 도구로 내보냅니다. 어떤 카테고리를 어디로 보낼지 정합니다.', meaning), el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '로드 실패: ' + e.message }))); return; }
@@ -4378,7 +4384,7 @@ async function feedTargetsEditor(detail, data) {
     el('span', { text: '우리 정본 지식(authored)을 노션 등 외부 ‘지식 피드’ DB에 카드로 투영합니다. 읽기전용·단방향 — 전체 내용은 Lively가 정본. 사람 페이지는 건드리지 않고 전용 피드 DB에만 카드를 올립니다. ' }),
     el('span', { text: '상시 갱신은 스케줄러 잡 ' }), el('b', { text: 'push-wiki-notion' }), el('span', { text: '(관리탭 ▸ 자동화)에서 켭니다.  ' }), drainAll));
 
-  if (!targets.length) body.append(el('p', { class: 'admin-hint', text: '아직 등록된 피드가 없습니다. 아래에서 새 피드를 만드세요.' }));
+  if (!targets.length) body.append(el('p', { class: 'admin-hint' }, ...uiText('아직 등록된 피드가 없습니다. 아래에서 새 피드를 만드세요.')));
   for (const t of targets) body.append(feedTargetCard(t, categories, rerender));
   body.append(newFeedForm(rerender));
 
@@ -4471,7 +4477,7 @@ function newFeedForm(rerender) {
 async function projectOutboundEditor(detail, data) {
   const meaning = data.meaning && data.meaning['project-outbound'];
   const canEdit = !!data.canEdit;
-  detail.replaceChildren(sectionHead('프로젝트 아웃바운드', '우리 프로젝트와 과업의 변경을 외부 협업 도구로 내보냅니다.', meaning), el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '불러오는 중…' })));
+  detail.replaceChildren(sectionHead('프로젝트 아웃바운드', '우리 프로젝트와 과업의 변경을 외부 협업 도구로 내보냅니다.', meaning), el('div', { class: 'card' }, el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…'))));
   let jobs: any[] = [];
   try { const cron = await api('/api/ui/cron'); jobs = (cron && cron.jobs) || []; } catch (e) { /* 크론 로드 실패 — 빈 목록으로 진행 */ }
   const pushClickup = jobs.find((j) => j.id === 'push-clickup');
@@ -4480,7 +4486,7 @@ async function projectOutboundEditor(detail, data) {
   const rerender = () => { void projectOutboundEditor(detail, data); };
 
   const body = el('div', {});
-  body.append(el('p', { class: 'admin-hint', text: '우리 프로젝트·과업 편집(라이블리 웹/MCP)을 외부 PM 도구에 미러로 반영합니다(아웃바운드 push). 커넥터(인바운드 싱크)의 역방향 — 우리 DB가 master, 외부는 미러. 소스별로 켜고 끕니다.' }));
+  body.append(el('p', { class: 'admin-hint' }, ...uiText('우리 프로젝트·과업 편집(라이블리 웹/MCP)을 외부 PM 도구에 미러로 반영합니다(아웃바운드 push). 커넥터(인바운드 싱크)의 역방향 — 우리 DB가 master, 외부는 미러. 소스별로 켜고 끕니다.')));
 
   const table = el('table', { class: 'fields-table' });
   table.append(el('tr', {}, el('th', { text: '소스' }), el('th', { text: '상태' }), el('th', { text: '설정' })));
@@ -4509,10 +4515,10 @@ async function projectOutboundEditor(detail, data) {
     table.append(el('tr', {},
       el('td', {}, el('span', { class: 'mini-title', text: s })),
       el('td', {}, el('span', { class: 'pill', text: '미구현' })),
-      el('td', {}, el('span', { class: 'mini-meta', text: '아웃바운드 어댑터 예정 (#975) — SPI write method + 소스별 매핑' }))));
+      el('td', {}, el('span', { class: 'mini-meta' }, ...uiText('아웃바운드 어댑터 예정 (#975) — SPI write method + 소스별 매핑')))));
   }
   body.append(table);
-  body.append(el('p', { class: 'admin-hint', style: 'margin-top:10px', text: '※ 인바운드 싱크(외부→우리)와 토큰·컨테이너 설정은 [외부 자료 수집] 탭에 있습니다. 여기는 아웃바운드(우리→외부) on/off 전용입니다.' }));
+  body.append(el('p', { class: 'admin-hint', style: 'margin-top:10px' }, ...uiText('※ 인바운드 싱크(외부→우리)와 토큰·컨테이너 설정은 [외부 자료 수집] 탭에 있습니다. 여기는 아웃바운드(우리→외부) on/off 전용입니다.')));
 
   detail.replaceChildren(sectionHead('프로젝트 아웃바운드', '우리 프로젝트와 과업의 변경을 외부 협업 도구로 내보냅니다.', meaning), el('div', { class: 'card' }, cardHead('내보내는 항목'), body));
 }
@@ -4542,7 +4548,7 @@ function dbSourceEditor(detail, data) {
     : sources.find((s) => s.name === sel);
   if (editing) dbSourceForm(right, editing, data, detail, sel === '__new__');
   else right.append(
-    el('p', { class: 'admin-hint', text: 'db_query/db_schema 가 조회하는 외부 운영 DB 목록입니다. 읽기 전용 role(RLS 적용)로 접속하는 것을 전제로 하며, 접속 비밀번호는 값을 저장하지 않고 환경변수 이름(auth_ref)만 저장합니다. 왼쪽에서 소스를 선택하면 테이블 정책·컬럼 마스킹, 원본 열람 권한, 감사 대상 식별자 설정이 함께 열립니다. .env 로 등록한 소스는 「env」 표시가 붙으며 이 화면에서는 수정할 수 없습니다.' }));
+    el('p', { class: 'admin-hint' }, ...uiText('db_query/db_schema 가 조회하는 외부 운영 DB 목록입니다. 읽기 전용 role(RLS 적용)로 접속하는 것을 전제로 하며, 접속 비밀번호는 값을 저장하지 않고 환경변수 이름(auth_ref)만 저장합니다. 왼쪽에서 소스를 선택하면 테이블 정책·컬럼 마스킹, 원본 열람 권한, 감사 대상 식별자 설정이 함께 열립니다. .env 로 등록한 소스는 「env」 표시가 붙으며 이 화면에서는 수정할 수 없습니다.')));
   // 등록된 소스를 고르면 그 소스의 **설정** 3종이 따라 붙는다(라이브 스키마 오버레이, 무재시작):
   //  ① 테이블 정책·컬럼 마스킹 ② 원본 개인정보 열람 권한(unmask grant) ③ 감사 대상 식별자 컬럼(subject-key).
   //  ③은 구 [DB 접근 감사] 화면에 꽂혀 있었지만 그건 **감사가 아니라 설정**이고, 서버도 /org/db-source/subject-key(s)
@@ -4648,7 +4654,7 @@ function dbSourceForm(root, s, data, detail, isNew) {
 
 // ── 테이블 정책 · 컬럼 마스킹 패널(#186) — 라이브 스키마 오버레이. 고객 DB 무수정, 게이트웨이 집행. ──
 async function renderDbPolicyPanel(panel, source) {
-  panel.replaceChildren(el('p', { class: 'admin-hint', text: '스키마 불러오는 중…' }));
+  panel.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('스키마 불러오는 중…')));
   let ov;
   try { ov = await api('/api/ui/org/db-source/schema?source=' + encodeURIComponent(source)); }
   catch (e) { panel.replaceChildren(el('p', { class: 'admin-hint', text: '스키마 로드 실패: ' + e.message })); return; }
@@ -4688,7 +4694,7 @@ async function renderDbPolicyPanel(panel, source) {
 }
 
 async function renderColumnMasks(cell, panel, source, table) {
-  cell.replaceChildren(el('span', { class: 'admin-hint', text: '컬럼 불러오는 중…' }));
+  cell.replaceChildren(el('span', { class: 'admin-hint' }, ...uiText('컬럼 불러오는 중…')));
   let ov;
   try { ov = await api('/api/ui/org/db-source/schema?source=' + encodeURIComponent(source) + '&table=' + encodeURIComponent(table)); }
   catch (e) { cell.replaceChildren(el('span', { class: 'admin-hint', text: '컬럼 로드 실패: ' + e.message })); return; }
@@ -4775,9 +4781,9 @@ function targetMembersField(targetKind, item, isNew) {
       b.classList.toggle('on', b.dataset.m === mode);
       b.setAttribute('aria-pressed', String(b.dataset.m === mode));
     }
-    modeHint.replaceChildren(...inlineBold((MODES.find((m) => m[0] === mode) as any)[2]));
+    modeHint.replaceChildren(...uiText((MODES.find((m) => m[0] === mode) as any)[2]));
     targetRow.style.display = mode === 'some' ? '' : 'none';
-    staleNote.textContent = dirty() ? '정책을 바꿨습니다 — [저장] 해야 구성원별 실효 상태에 반영됩니다.' : '';
+    staleNote.replaceChildren(...uiText(dirty() ? '정책을 바꿨습니다 — [저장] 해야 구성원별 실효 상태에 반영됩니다.' : ''));
     staleNote.style.display = dirty() ? '' : 'none';
     if (listHost?.isConnected) listHost.classList.toggle('tm-list-stale', dirty());
   };
@@ -4853,7 +4859,7 @@ function targetMembersField(targetKind, item, isNew) {
         seg);
     };
     listHost.replaceChildren(
-      ...(shown.length ? shown.map(node) : [el('p', { class: 'admin-hint', text: '검색 결과가 없습니다.' })]));
+      ...(shown.length ? shown.map(node) : [el('p', { class: 'admin-hint' }, ...uiText('검색 결과가 없습니다.'))]));
   };
 
   // 구성원별 예외는 **모달**로 — 폼에 인라인으로 깔면 구성원 수만큼 길어져(현재 42명) [저장] 이 화면 밖으로 밀린다.
@@ -4867,7 +4873,7 @@ function targetMembersField(targetKind, item, isNew) {
       ? el('div', { class: 'tm-stale', text: '정책이 저장 전입니다 — 아래 실효 상태는 아직 옛 정책 기준이에요.' }) : null;
     overlay(`구성원별 예외 — ${item.label || item.id}`,
       el('p', { class: 'admin-hint', style: 'margin:0 0 10px' },
-        ...inlineBold('**클릭 즉시 반영**됩니다(구성원 다음 세션부터). 예외를 두지 않으면 위 정책 기본값을 따릅니다.')),
+        ...uiText('**클릭 즉시 반영**됩니다(구성원 다음 세션부터). 예외를 두지 않으면 위 정책 기본값을 따릅니다.')),
       el('div', { class: 'tm-members-head' }, searchIn,
         el('span', { class: 'tm-when', style: 'margin-left:auto', text: '클릭 즉시 반영' })),
       note, listHost);
@@ -4883,7 +4889,7 @@ function targetMembersField(targetKind, item, isNew) {
   });
 
   const membersCard = isNew
-    ? el('p', { class: 'admin-hint', style: 'margin:10px 0 0', text: '먼저 저장하면 구성원별로 예외(강제 켬/끔)를 둘 수 있어요.' })
+    ? el('p', { class: 'admin-hint', style: 'margin:10px 0 0' }, ...uiText('먼저 저장하면 구성원별로 예외(강제 켬/끔)를 둘 수 있어요.'))
     : el('div', { class: 'tm-members' }, countEl, openBtn, clearBtn);
   if (!isNew) { countEl.textContent = '불러오는 중…'; openBtn.disabled = clearBtn.disabled = true; void reload(); }
 
@@ -4892,7 +4898,7 @@ function targetMembersField(targetKind, item, isNew) {
     node: el('div', { class: 'tm' },
       el('div', { class: 'tm-policy' },
         el('div', { class: 'tm-members-head' }, el('b', { text: '전원 (정책 기본값)' }),
-          el('span', { class: 'tm-when', text: '[저장] 을 눌러야 반영' })),
+          el('span', { class: 'tm-when' }, ...uiText('[저장] 을 눌러야 반영'))),
         segBar, modeHint, targetRow),
       staleNote, membersCard),
     enabled: enabledNow,
@@ -4926,7 +4932,7 @@ function customHookEditor(detail, data) {
   if (editing) hookForm(right, editing, data, detail, sel === '__new__');
   else right.append(
     // origin/main(#968 계열)의 개선된 안내 문구 + #892 의 정책 카드 — 둘 다 유지.
-    el('p', { class: 'admin-hint', text: '구성원 머신에서 특정 시점에 자동 실행되는 코드입니다. 본문은 구성원 디스크에 저장되지 않고 매 세션 게이트웨이에서 받아 실행됩니다(비활성화하면 다음 세션부터 실행되지 않습니다). 왼쪽 목록에서 항목을 선택하면 내용을 보고 편집할 수 있습니다.' }),
+    el('p', { class: 'admin-hint' }, ...uiText('구성원 머신에서 특정 시점에 자동 실행되는 코드입니다. 본문은 구성원 디스크에 저장되지 않고 매 세션 게이트웨이에서 받아 실행됩니다(비활성화하면 다음 세션부터 실행되지 않습니다). 왼쪽 목록에서 항목을 선택하면 내용을 보고 편집할 수 있습니다.')),
     relayPolicyCard(data, detail),
     gracePolicyCard(data, detail));
   detail.replaceChildren(el('div', { class: 'card' }, cardHead('커스텀 훅'), el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
@@ -4968,7 +4974,7 @@ function relayPolicyCard(data, detail) {
   });
   return el('div', { class: 'admin-subcard' },
     el('h4', { text: '도구 게이트 정책 (PreToolUse)' }),
-    el('p', { class: 'admin-hint', text: 'PreToolUse 훅이 내리는 결정 중 러너가 하네스로 실제 전달할 값입니다. 체크 해제하면 그 결정은 무시됩니다(훅은 돌지만 효과 없음). 기본값은 deny·ask·defer — allow 는 구성원의 동의 화면을 없애므로 기본에서 빠져 있습니다.' }),
+    el('p', { class: 'admin-hint' }, ...uiText('PreToolUse 훅이 내리는 결정 중 러너가 하네스로 실제 전달할 값입니다. 체크 해제하면 그 결정은 무시됩니다(훅은 돌지만 효과 없음). 기본값은 deny·ask·defer — allow 는 구성원의 동의 화면을 없애므로 기본에서 빠져 있습니다.')),
     ...boxes,
     el('div', { class: 'admin-actions' }, save));
 }
@@ -5004,7 +5010,7 @@ function gracePolicyCard(data, detail) {
   });
   return el('div', { class: 'admin-subcard' },
     el('h4', { text: '오프라인 캐시 유효기간 (게이트웨이 미연결 시)' }),
-    el('p', { class: 'admin-hint', text: '게이트웨이에 연결되지 않는 동안, 마지막으로 받은 커스텀 훅을 얼마나 오래 계속 실행할지입니다. 무제한(기본)이면 마지막 접속 기준으로 계속 실행됩니다 — 게이트웨이 없이 동작하는 로컬 훅(스킬 라우터·품질 게이트 등)이 오프라인에서도 유지됩니다. 기간을 정하면 그 시간이 지난 뒤 커스텀 훅 실행을 멈춥니다(제거한 훅의 회수 목적). 어느 경우든 훅 본문 무결성(content_hash)은 캐시에서도 검증되고, 재연결 시 즉시 갱신·회수됩니다.' }),
+    el('p', { class: 'admin-hint' }, ...uiText('게이트웨이에 연결되지 않는 동안, 마지막으로 받은 커스텀 훅을 얼마나 오래 계속 실행할지입니다. 무제한(기본)이면 마지막 접속 기준으로 계속 실행됩니다 — 게이트웨이 없이 동작하는 로컬 훅(스킬 라우터·품질 게이트 등)이 오프라인에서도 유지됩니다. 기간을 정하면 그 시간이 지난 뒤 커스텀 훅 실행을 멈춥니다(제거한 훅의 회수 목적). 어느 경우든 훅 본문 무결성(content_hash)은 캐시에서도 검증되고, 재연결 시 즉시 갱신·회수됩니다.')),
     field('연결 끊긴 뒤 유지 기간', sel),
     el('div', { class: 'admin-actions' }, save));
 }
@@ -5069,7 +5075,7 @@ function hookHealthCard(h) {
   };
   return el('div', { class: 'admin-subcard warn-badge-soft' },
     el('h4', { text: '⚠ 이 훅이 구성원 컴퓨터에서 실패하고 있습니다 (' + ids.length + '대)' }),
-    el('p', { class: 'admin-hint', text: '실패한 훅은 아무 효과가 없습니다 — 화면상 "활성"이어도 실제로는 동작하지 않습니다.' }),
+    el('p', { class: 'admin-hint' }, ...uiText('실패한 훅은 아무 효과가 없습니다 — 화면상 "활성"이어도 실제로는 동작하지 않습니다.')),
     ...ids.map((m) => {
       const e = health[m] || {};
       return el('div', { class: 'mini-row' },
@@ -5105,7 +5111,7 @@ function harnessAssetEditor(detail, data) {
     ? { id: '', kind: 'skill', label: '', harness: 'all', description: '', body: '', frontmatter: {}, target_members: null, paired_hook_id: '', enabled: true }
     : assets.find((a) => a.id === sel);
   if (editing) assetForm(right, editing, data, detail, sel === '__new__');
-  else right.append(el('p', { class: 'admin-hint', text: '스킬(작업 방법서)·서브에이전트(보조 AI)·슬래시커맨드(단축 명령)를 정의해 구성원 하네스에 배포합니다. 저장하면 구성원 세션 시작 때 디스크에 동기화되며, 스킬·커맨드는 진행 중인 세션에도 즉시 반영됩니다. 왼쪽 목록에서 항목을 선택하면 내용을 보고 편집할 수 있습니다.' }));
+  else right.append(el('p', { class: 'admin-hint' }, ...uiText('스킬(작업 방법서)·서브에이전트(보조 AI)·슬래시커맨드(단축 명령)를 정의해 구성원 하네스에 배포합니다. 저장하면 구성원 세션 시작 때 디스크에 동기화되며, 스킬·커맨드는 진행 중인 세션에도 즉시 반영됩니다. 왼쪽 목록에서 항목을 선택하면 내용을 보고 편집할 수 있습니다.')));
   detail.replaceChildren(el('div', { class: 'card' }, cardHead('스킬 · 서브에이전트 · 커맨드'), el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
 }
 
@@ -5185,7 +5191,7 @@ function toolsEditor(detail, data) {
   const listCol = el('div', { class: 'admin-sublist' });
   listCol.append(el('button', { class: 'btn btn-ghost btn-sm admin-add', text: '+ 도구 추가',
     onclick: () => { state.admin.toolSel = '__new__'; renderAdminDetail(detail, 'tools-proxy', data); } }));
-  if (!proxyTools.length) listCol.append(el('p', { class: 'admin-hint', text: '아직 등록된 사내 API 도구가 없습니다 — [+ 도구 추가]로 첫 도구를 등록하세요.' }));
+  if (!proxyTools.length) listCol.append(el('p', { class: 'admin-hint' }, ...uiText('아직 등록된 사내 API 도구가 없습니다 — [+ 도구 추가]로 첫 도구를 등록하세요.')));
   for (const t of proxyTools) {
     listCol.append(el('div', { class: 'mini-row' + (t.name === sel ? ' sel' : ''),
       onclick: () => { state.admin.toolSel = t.name; renderAdminDetail(detail, 'tools-proxy', data); } },
@@ -5201,7 +5207,7 @@ function toolsEditor(detail, data) {
   if (editing) toolForm(right, editing, data, detail, sel === '__new__');
   // 빌트인 토글은 #837 에서 [기본 제공 도구] 서브탭으로 분리 — 여기서 또 그리면 같은 화면에 두 번 나온다.
   else right.append(
-    el('p', { class: 'admin-hint', text: '사내 API를 AI가 호출할 수 있는 도구로 등록합니다. 저장 즉시(재설치 없이) 구성원 AI가 쓸 수 있습니다. 호출은 아래 [외부 호출 안전범위]에 등록한 호스트로만 나가고, 인증은 환경변수 이름으로만 지정합니다.' }));
+    el('p', { class: 'admin-hint' }, ...uiText('사내 API를 AI가 호출할 수 있는 도구로 등록합니다. 저장 즉시(재설치 없이) 구성원 AI가 쓸 수 있습니다. 호출은 아래 [외부 호출 안전범위]에 등록한 호스트로만 나가고, 인증은 환경변수 이름으로만 지정합니다.')));
   const pol = data.toolPolicy || { url_allowlist: [], allowed_auth_envs: [] };
   const toolsSafety = allowlistCard(data, '외부 호출 안전범위 (allowlist)',
     '사내 API 도구가 호출할 수 있는 외부 호스트 범위 — 이 목록 밖은 차단됩니다(SSRF 방어). 사내 API 도구를 안 쓰면 비워둬도 됩니다.',
@@ -5219,7 +5225,7 @@ function mcpFieldsEl(schema) {
   const props = (schema && schema.properties) || {};
   const req = (schema && schema.required) || [];
   const keys = Object.keys(props);
-  if (!keys.length) return el('div', { class: 'admin-hint', text: '입력 필드 없음' });
+  if (!keys.length) return el('div', { class: 'admin-hint' }, ...uiText('입력 필드 없음'));
   return el('ul', { style: 'margin:2px 0; padding-left:18px' }, ...keys.map((k) => {
     const p = props[k] || {};
     let t = p.type || (p.anyOf || p.oneOf ? 'union' : '?');
@@ -5232,7 +5238,7 @@ function mcpFieldsEl(schema) {
     return el('li', {},
       el('code', { text: k }),
       el('span', { class: 'mini-meta', text: ' : ' + t + (req.includes(k) ? ' · 필수' : ' · 선택') + (c.length ? ' · ' + c.join(', ') : '') }),
-      p.description ? el('div', { class: 'admin-hint', style: 'margin:0', text: p.description }) : null);
+      p.description ? el('div', { class: 'admin-hint', style: 'margin:0' }, ...uiText(p.description)) : null);
   }));
 }
 
@@ -5240,8 +5246,8 @@ function builtinToggles(data) {
   const byName = {}; for (const t of (data.tools || [])) if (t.kind === 'builtin') byName[t.name] = t;
   const wrap = el('div', { class: 'builtin-toggles' },
     el('div', { class: 'admin-subhead', text: '기본 제공 도구 (MCP 노출)' }),
-    el('p', { class: 'admin-hint', text: '게이트웨이 MCP 도구의 노출을 켜고 끕니다(저장 즉시 반영). 코드 기본값을 덮어쓰므로 「기본 미노출」 도구도 여기서 켤 수 있습니다. 자동승인을 켜면 구성원 AI가 이 도구를 실행할 때 매번 묻는 확인 없이 바로 실행합니다.' }),
-    el('p', { class: 'admin-hint', text: '‘주입’: Claude Code가 이 도구를 세션 시작에 미리 로드할지(항상), 필요할 때 검색해 로드할지(deferred) 정합니다 — Claude Code 전용입니다(Codex는 모든 MCP 도구를 항상 미리 로드합니다).' }));
+    el('p', { class: 'admin-hint' }, ...uiText('게이트웨이 MCP 도구의 노출을 켜고 끕니다(저장 즉시 반영). 코드 기본값을 덮어쓰므로 「기본 미노출」 도구도 여기서 켤 수 있습니다. 자동승인을 켜면 구성원 AI가 이 도구를 실행할 때 매번 묻는 확인 없이 바로 실행합니다.')),
+    el('p', { class: 'admin-hint' }, ...uiText('‘주입’: Claude Code가 이 도구를 세션 시작에 미리 로드할지(항상), 필요할 때 검색해 로드할지(deferred) 정합니다 — Claude Code 전용입니다(Codex는 모든 MCP 도구를 항상 미리 로드합니다).')));
   // 노출 정렬: 기본 노출 먼저, 기본 미노출(켤 수 있는 후보)을 아래로. 같은 그룹은 이름순.
   const cands = (data.builtins || []).map((c) => (typeof c === 'string' ? { name: c, title: '', defaultExposed: true } : c))
     .slice().sort((a, b) => (a.defaultExposed === b.defaultExposed ? a.name.localeCompare(b.name) : (a.defaultExposed ? -1 : 1)));
@@ -5266,7 +5272,7 @@ function builtinToggles(data) {
     enChk.addEventListener('change', save); aaChk.addEventListener('change', save); alSel.addEventListener('change', save);
     // MCP 상세 — 하네스가 보는 description + inputSchema(필드). 접힘 기본, 클릭 시 펼침.
     const detail = el('div', { style: 'display:none; margin:2px 0 8px 14px; padding:6px 10px; border-left:2px solid var(--border, #ddd)' },
-      cand.description ? el('p', { class: 'admin-hint', style: 'white-space:pre-wrap; margin:0 0 6px', text: cand.description }) : null,
+      cand.description ? el('p', { class: 'admin-hint', style: 'white-space:pre-wrap; margin:0 0 6px' }, ...uiText(cand.description)) : null,
       el('div', { class: 'admin-subhead', text: '입력 필드 (MCP inputSchema)' }),
       mcpFieldsEl(cand.inputSchema));
     const expand = el('button', { class: 'btn btn-ghost btn-sm', text: 'MCP 상세 ▾',
@@ -5304,7 +5310,7 @@ function toolForm(root, t, data, detail, isNew) {
   // ── 인증 방식(#746 P1) — 조직 공용(환경변수) vs 구성원 개인 자격(vault). 드롭다운으로 전환. ──
   const authEnvSel = policy.allowed_auth_envs.length
     ? el('select', {}, el('option', { value: '', text: '(선택)' }), ...policy.allowed_auth_envs.map((e) => el('option', { value: e, text: e })))
-    : el('input', { type: 'text', placeholder: '아래 「외부 호출 안전범위」에 allowed_auth_envs 를 먼저 등록', disabled: '' });
+    : el('input', { type: 'text', placeholder: '아래 외부 호출 안전범위에 allowed_auth_envs 를 먼저 등록하세요', disabled: '' });
   if ((authEnvSel as any).tagName === 'SELECT') (authEnvSel as any).value = t.auth_env || '';
   const authKindSel = el('select', {}, ...CRED_KINDS.map((k) => el('option', { value: k.kind, text: k.label })));
   if (t.auth_kind) authKindSel.value = t.auth_kind;
@@ -5317,7 +5323,7 @@ function toolForm(root, t, data, detail, isNew) {
   authModeSel.value = initialMode;
   const envField = field('공용 자격 (auth_env)', authEnvSel);
   const kindField = field('개인 자격 종류 (auth_kind)', el('div', {}, authKindSel,
-    el('p', { class: 'admin-hint', style: 'margin:4px 0 0', text: 'L2(집행)면 개인 자격이 필수예요. L0/L1(읽기·제안)이면 개인 자격이 없을 때 「통합 자격」으로 대신 로그인해요. 구성원은 [내 설정 ▸ 외부 서비스 로그인]에서 자기 로그인을 넣습니다.' })));
+    el('p', { class: 'admin-hint', style: 'margin:4px 0 0' }, ...uiText('L2(집행)면 개인 자격이 필수예요. L0/L1(읽기·제안)이면 개인 자격이 없을 때 「통합 자격」으로 대신 로그인해요. 구성원은 [내 설정 ▸ 외부 서비스 로그인]에서 자기 로그인을 넣습니다.'))));
   const kindScopeField = field('개인 자격 대상(선택)', authScopeIn);
   const syncAuthMode = () => {
     const m = authModeSel.value;
@@ -5332,7 +5338,7 @@ function toolForm(root, t, data, detail, isNew) {
   const aaChk = el('input', { type: 'checkbox' }); aaChk.checked = !!t.auto_approve;
   const piiChk = el('input', { type: 'checkbox' }); piiChk.checked = !!t.pii_scrub;
   const logArgsChk = el('input', { type: 'checkbox' }); logArgsChk.checked = !!t.log_args; // #1082 — 기본 꺼짐(인자 값 미저장)
-  const hostHint = el('p', { class: 'admin-hint', text: policy.url_allowlist.length ? '허용 호스트: ' + policy.url_allowlist.join(', ') : '⚠ 허용 호스트가 없습니다 — 아래 「외부 호출 안전범위」의 url_allowlist 에 먼저 추가해야 호출됩니다.' });
+  const hostHint = el('p', { class: 'admin-hint' }, ...uiText(policy.url_allowlist.length ? '허용 호스트: ' + policy.url_allowlist.join(', ') : '⚠ 허용 호스트가 없습니다 — 아래 「외부 호출 안전범위」의 url_allowlist 에 먼저 추가해야 호출됩니다.'));
   const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
   const status = el('span', { class: 'admin-status' });
   saveBtn.addEventListener('click', async () => {
@@ -5370,7 +5376,7 @@ function toolForm(root, t, data, detail, isNew) {
     field('인증 방식', authModeSel), envField, kindField, kindScopeField,
     el('label', { class: 'admin-check' }, piiChk, ' 응답에서 개인정보(PII) 자동 가리기'),
     el('label', { class: 'admin-check' }, logArgsChk, ' 호출 인자 값 기록(감사로그)'),
-    el('p', { class: 'admin-hint', text: '평소엔 꺼두세요. 이 도구로 보낸 내용이 감사로그에 그대로 남습니다. 꺼져 있어도 "누가·언제 이 도구를 썼는지"는 남습니다.' }),
+    el('p', { class: 'admin-hint' }, ...uiText('평소엔 꺼두세요. 이 도구로 보낸 내용이 감사로그에 그대로 남습니다. 꺼져 있어도 "누가·언제 이 도구를 썼는지"는 남습니다.')),
     field('입력 스키마 (JSON Schema, 선택)', schemaTa),
     el('label', { class: 'admin-check' }, enChk, ' 활성'),
     el('label', { class: 'admin-check' }, aaChk, ' 자동 승인 (구성원 확인 없이 실행 — 주의)'),
@@ -5410,14 +5416,14 @@ function installMinterBlock(data, gw, opts: any = {}) {
       result.replaceChildren(
         el('p', { class: 'install-ok', text: '✓ ' + name + ' 님 접속 토큰이 발급됐어요 (권한: ' + r.scopes.join('/') + ').' }),
         el('p', { class: 'admin-hint', text: '아래 토큰을 ' + name + ' 님에게 1:1로 전달하세요. 받은 분의 AI·lively 명령이 이 토큰으로 게이트웨이에 접속합니다.' }),
-        el('div', { class: 'deploy-head' }, el('span', { class: 'mini-meta', text: '발급된 토큰' }), copyButton(() => r.token, '토큰 복사')),
+        el('div', { class: 'deploy-head' }, el('span', { class: 'mini-meta' }, ...uiText('발급된 토큰')), copyButton(() => r.token, '토큰 복사')),
         el('pre', { class: 'admin-preview', text: r.token }),
         el('ol', { class: 'minter-steps' },
-          el('li', {}, el('b', { text: '[토큰 복사]' }), ' 버튼으로 토큰을 복사하세요.'),
+          el('li', {}, ...uiText('[토큰 복사]'), ' 버튼으로 토큰을 복사하세요.'),
           el('li', {}, name + ' 님에게 ', el('b', { text: '1:1로(슬랙·메신저 DM 등) 전달' }), '하세요 — 토큰은 비밀번호 같은 거라 공개 채널·단톡방엔 올리지 마세요.'),
-          el('li', {}, name + ' 님은 ', el('a', { href: webUrl, target: '_blank', rel: 'noopener', text: webUrl }), ' 로그인 화면에서 ', el('b', { text: '[토큰으로 로그인]' }), ' 을 눌러 이 토큰을 붙여넣으면 들어옵니다. 이메일·비밀번호 계정을 이미 받았다면 그대로 로그인해도 됩니다.')),
-        el('p', { class: 'admin-hint', text: '⚠ 이 토큰은 지금 이 화면에서만 보여요 — 닫으면 다시 볼 수 없습니다(잃어버리면 다시 발급하면 돼요).' }),
-        el('p', { class: 'admin-hint', text: '내 컴퓨터 터미널(Claude Code·Codex)에서 직접 쓰실 분은 — 같은 토큰으로 [사용 가이드 › 시작하기] 안내를 따르면 됩니다.' }));
+          el('li', {}, name + ' 님은 ', el('a', { href: webUrl, target: '_blank', rel: 'noopener', text: webUrl }), ' 로그인 화면에서 ', ...uiText('[토큰으로 로그인]'), ' 을 눌러 이 토큰을 붙여넣으면 들어옵니다. 이메일·비밀번호 계정을 이미 받았다면 그대로 로그인해도 됩니다.')),
+        el('p', { class: 'admin-hint' }, ...uiText('⚠ 이 토큰은 지금 이 화면에서만 보여요 — 닫으면 다시 볼 수 없습니다(잃어버리면 다시 발급하면 돼요).')),
+        el('p', { class: 'admin-hint' }, ...uiText('내 컴퓨터 터미널(Claude Code·Codex)에서 직접 쓰실 분은 — 같은 토큰으로 [사용 가이드 › 시작하기] 안내를 따르면 됩니다.')));
       await loadAdmin(true);
     } catch (e) { toast(e.message, true); }
     go.disabled = false;
@@ -5427,7 +5433,7 @@ function installMinterBlock(data, gw, opts: any = {}) {
     // ⚠ 사실 확인(#1085): 최초 웹 로그인은 **이메일 + 임시 비밀번호**다(deploy/bootstrap-admin.mjs 가 첫 관리자에게,
     //  [구성원] 추가가 팀원에게 임시 비밀번호를 1회 발급). 토큰은 웹 로그인 필수물이 아니라 **AI·CLI 접속용 열쇠**다
     //  — 한때 '최초 1회 로그인 시 필요'라고 적었다가 코드로 확인해 바로잡았다.
-    el('p', { class: 'admin-hint', text: '구성원을 고르고 [토큰 발급]을 누르면 그 사람 전용 토큰이 만들어집니다. 구성원의 AI(Claude Code·Codex)와 lively 명령이 라이블리에 접속할 때 필요합니다. 토큰을 발급해 해당 구성원에게 전달해주세요. (웹 로그인은 이메일·비밀번호로 하며 토큰이 없어도 됩니다.)' }),
+    el('p', { class: 'admin-hint' }, ...uiText('구성원을 고르고 [토큰 발급]을 누르면 그 사람 전용 토큰이 만들어집니다. 구성원의 AI(Claude Code·Codex)와 lively 명령이 라이블리에 접속할 때 필요합니다. 토큰을 발급해 해당 구성원에게 전달해주세요. (웹 로그인은 이메일·비밀번호로 하며 토큰이 없어도 됩니다.)')),
     el('div', { class: 'install-minter' }, sel, go),
     result);
 }
@@ -5606,7 +5612,7 @@ function changePasswordModal(o?: { forced?: boolean; currentPrefill?: string | n
   const showErr = (m) => { err.textContent = m; (err as any).hidden = false; };
 
   const rows: any[] = [];
-  if (forced) rows.push(el('p', { class: 'admin-hint', text: '임시 비밀번호로 로그인했습니다. 계속하려면 새 비밀번호를 설정하세요.' }));
+  if (forced) rows.push(el('p', { class: 'admin-hint' }, ...uiText('임시 비밀번호로 로그인했습니다. 계속하려면 새 비밀번호를 설정하세요.')));
   else rows.push(pwFieldRow('현재 비밀번호', curIn));
   rows.push(pwFieldRow('새 비밀번호', nextIn), pwFieldRow('새 비밀번호 확인', confIn));
 
@@ -5660,7 +5666,7 @@ function openGitCredentialManager(scope: 'me' | 'gateway') {
   const credRow = (c: any) => {
     const head = el('div', { style: 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;' },
       el('span', { class: 'pill pill-ok', text: String(c.kind || '').toUpperCase() }),
-      el('span', { class: 'mini-meta', text: c.host }),
+      el('span', { class: 'mini-meta' }, ...uiText(c.host)),
       c.kind === 'ssh' && c.ssh_public_key ? copyButton(() => c.ssh_public_key, '공개키 복사') : null,
       el('button', {
         class: 'btn btn-ghost btn-sm', text: '삭제',
@@ -5673,7 +5679,7 @@ function openGitCredentialManager(scope: 'me' | 'gateway') {
     const box = el('div', { class: 'card', style: 'padding:10px 12px; margin:6px 0;' }, head);
     if (c.kind === 'ssh' && c.ssh_public_key) {
       box.append(el('pre', { class: 'admin-preview', style: 'white-space:pre-wrap; word-break:break-all; margin:8px 0 0; font-size:11.5px;', text: c.ssh_public_key }));
-      box.append(el('p', { class: 'admin-hint', style: 'margin:6px 0 0', text: '이 공개키를 호스트에 등록하세요 — GitHub: 레포 Settings ▸ Deploy keys · GitLab: 레포 Settings ▸ Repository ▸ Deploy keys(또는 계정 ▸ SSH keys). 셀프호스팅 GitLab 도 동일.' }));
+      box.append(el('p', { class: 'admin-hint', style: 'margin:6px 0 0' }, ...uiText('이 공개키를 호스트에 등록하세요 — GitHub: 레포 Settings ▸ Deploy keys · GitLab: 레포 Settings ▸ Repository ▸ Deploy keys(또는 계정 ▸ SSH keys). 셀프호스팅 GitLab 도 동일.')));
     }
     return box;
   };
@@ -5687,13 +5693,13 @@ function openGitCredentialManager(scope: 'me' | 'gateway') {
 
     const creds = (data.credentials || []) as any[];
     if (creds.length) rows.push(...creds.map(credRow));
-    else rows.push(el('p', { class: 'admin-hint', text: '등록된 자격이 없습니다.' }));
+    else rows.push(el('p', { class: 'admin-hint' }, ...uiText('등록된 자격이 없습니다.')));
 
     // ── 새 자격 추가 ──
     rows.push(el('div', { style: 'border-top:1px solid var(--line); margin:14px 0 10px;' }));
     const hostIn = el('input', { type: 'text', value: 'github.com', placeholder: 'github.com' });
     const kindSel = { v: 'ssh' as 'ssh' | 'https' };
-    const sshBox = el('div', {}, el('p', { class: 'admin-hint', style: 'margin:0', text: '박스가 ed25519 키페어를 생성합니다. 생성 후 공개키를 호스트(GitHub·GitLab 등)에 Deploy key 로 등록하세요.' }));
+    const sshBox = el('div', {}, el('p', { class: 'admin-hint', style: 'margin:0' }, ...uiText('박스가 ed25519 키페어를 생성합니다. 생성 후 공개키를 호스트(GitHub·GitLab 등)에 Deploy key 로 등록하세요.')));
     const userIn = el('input', { type: 'text', placeholder: '사용자명(선택 — GitHub PAT 는 비워도 됨, GitLab 은 보통 계정명/oauth2)' });
     const tokenIn = el('input', { type: 'password', placeholder: 'HTTPS 토큰 / PAT', autocomplete: 'off' });
     const httpsBox = el('div', { style: 'display:none' }, field('사용자명(선택)', userIn), field('토큰', tokenIn));
@@ -5728,7 +5734,7 @@ function openGitCredentialManager(scope: 'me' | 'gateway') {
     });
     rows.push(el('div', { class: 'card', style: 'padding:12px;' },
       el('div', { class: 'field-label', style: 'margin-bottom:8px', text: '새 자격 추가' }),
-      kindChips, field('호스트', el('div', {}, hostIn, el('p', { class: 'admin-hint', style: 'margin:4px 0 0', text: 'GitHub·GitLab·셀프호스팅(예: git.honestfund.kr) 모두 지원 — 레포 호스트를 정확히 입력. HTTPS 가 막힌 호스트는 SSH 로 등록하세요.' }))), sshBox, httpsBox,
+      kindChips, field('호스트', el('div', {}, hostIn, el('p', { class: 'admin-hint', style: 'margin:4px 0 0' }, ...uiText('GitHub·GitLab·셀프호스팅(예: git.honestfund.kr) 모두 지원 — 레포 호스트를 정확히 입력. HTTPS 가 막힌 호스트는 SSH 로 등록하세요.')))), sshBox, httpsBox,
       el('div', { class: 'admin-actions', style: 'margin-top:10px' }, submit, status)));
 
     body.replaceChildren(...rows);
@@ -5772,13 +5778,13 @@ function oauthConnectorsCard(conns, reload) {
     return el('div', { class: 'svc-item' },
       el('div', { class: 'svc-item-main' },
         el('div', { class: 'mini-title', text: c.server }, status),
-        c.note ? el('div', { class: 'mini-meta', text: c.note }) : null),
+        c.note ? el('div', { class: 'mini-meta' }, ...uiText(c.note)) : null),
       el('div', { class: 'svc-item-actions' }, connectBtn, discBtn));
   });
   // #762 me-logins 정돈 — '토큰·API 키' 카드(credVaultCard)와 heading·행 스타일을 맞춘다(둘 다 admin-subhead 서브카드 + svc-item 행).
   return el('div', { class: 'card' },
     el('h3', { class: 'admin-subhead', text: 'OAuth 로그인' }),
-    el('p', { class: 'admin-hint', style: 'margin:0 0 12px', text: 'Notion·Slack·Google 처럼 OAuth 로그인이 필요한 외부 도구 서버예요. [연결]을 누르면 새 탭에서 로그인·동의하고, 그 뒤 AI가 나로서 그 서비스를 씁니다(토큰은 게이트웨이가 안전 보관·자동 갱신).' }),
+    el('p', { class: 'admin-hint', style: 'margin:0 0 12px' }, ...uiText('Notion·Slack·Google 처럼 OAuth 로그인이 필요한 외부 도구 서버예요. [연결]을 누르면 새 탭에서 로그인·동의하고, 그 뒤 AI가 나로서 그 서비스를 씁니다(토큰은 게이트웨이가 안전 보관·자동 갱신).')),
     el('div', { class: 'svc-list' }, ...rows),
     el('div', { class: 'admin-actions', style: 'margin:12px 0 0' }, el('button', { class: 'btn btn-ghost btn-sm', text: '새로고침', onclick: reload })));
 }
@@ -5796,9 +5802,9 @@ function catalogStatusCard(catalog: any[], servers: any[]) {
     rows.push(el('div', { class: 'card', style: 'padding:9px 12px;margin:6px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap' },
       el('span', { style: 'font-weight:650;min-width:150px', text: c.label }),
       chip,
-      el('span', { class: 'mini-meta', text: hint })));
+      el('span', { class: 'mini-meta' }, ...uiText(hint))));
   }
-  if (!(catalog || []).length) rows.push(el('p', { class: 'admin-hint', text: '프리셋을 불러오지 못했습니다.' }));
+  if (!(catalog || []).length) rows.push(el('p', { class: 'admin-hint' }, ...uiText('프리셋을 불러오지 못했습니다.')));
   // 외부 도구 서버(MCP) 기본 프리셋 현황 — org_connector(외부 자료 수집)와 무관하다(#837 에서 엔드포인트도 개명).
   return el('div', { class: 'admin-section', style: 'margin-top:18px' }, el('h3', { class: 'admin-subhead', text: '외부 도구 서버 현황 (기본 프리셋)' }), ...rows);
 }
@@ -5853,7 +5859,7 @@ const LOGIN_SERVICES: Array<{ key: string; label: string; icon: string; oauth?: 
 ];
 
 async function renderServiceTabs(host: any) {
-  host.replaceChildren(el('p', { class: 'admin-hint', style: 'margin:0', text: '불러오는 중…' }));
+  host.replaceChildren(el('p', { class: 'admin-hint', style: 'margin:0' }, ...uiText('불러오는 중…')));
   let creds: any = { credentials: [] }, oauth: any = { connectors: [] };
   try {
     creds = await api('/api/ui/me/credentials');
@@ -5869,7 +5875,7 @@ async function renderServiceTabs(host: any) {
 
   if (!tabs.length) {
     host.replaceChildren(
-      el('p', { class: 'admin-hint', style: 'margin:0 0 12px', text: '아직 연결한 서비스가 없어요. 아래에서 골라 연결해요.' }),
+      el('p', { class: 'admin-hint', style: 'margin:0 0 12px' }, ...uiText('아직 연결한 서비스가 없어요. 아래에서 골라 연결해요.')),
       addPanel(addable, reload));
     return;
   }
@@ -5906,7 +5912,7 @@ function servicePanel(svc: any, oauthMap: Map<string, any>, credMap: Map<string,
       el('span', { class: 'svc-panel-ic', text: svc.icon }),
       el('span', { class: 'svc-panel-nm', text: svc.label }),
       el('span', { class: 'pill' + (on ? ' pill-ok' : ''), text: on ? '연결됨 ✓' : '미연결' })),
-    el('p', { class: 'admin-hint', style: 'margin:6px 0 14px', text: svc.blurb }));
+    el('p', { class: 'admin-hint', style: 'margin:6px 0 14px' }, ...uiText(svc.blurb)));
   if (oc) {
     const connectBtn = el('button', { class: 'btn btn-sm ' + (oc.connected ? 'btn-ghost' : 'btn-primary'), text: oc.connected ? '다시 연결' : '연결',
       onclick: async () => {
@@ -5936,13 +5942,13 @@ function servicePanel(svc: any, oauthMap: Map<string, any>, credMap: Map<string,
 // 추가 패널 — 지원하지만 아직 연결 안 한 서비스. [연결] 시 그 서비스 토큰 폼을 인라인으로 편다.
 function addPanel(addable: any[], reload: () => void) {
   const wrap = el('div', {});
-  if (!addable.length) { wrap.append(el('p', { class: 'admin-hint', style: 'margin:0', text: '추가로 연결할 서비스가 없어요.' })); return wrap; }
+  if (!addable.length) { wrap.append(el('p', { class: 'admin-hint', style: 'margin:0' }, ...uiText('추가로 연결할 서비스가 없어요.'))); return wrap; }
   const list = el('div', { class: 'svc-list' });
   addable.forEach((s) => {
     const btn = el('button', { class: 'btn btn-primary btn-sm', text: '연결' });
     const row = el('div', { class: 'svc-item' },
       el('span', { class: 'svc-panel-ic', style: 'font-size:19px', text: s.icon }),
-      el('span', { class: 'svc-item-main' }, el('span', { class: 'mini-title', text: s.label }), el('span', { class: 'mini-meta', text: s.blurb })),
+      el('span', { class: 'svc-item-main' }, el('span', { class: 'mini-title', text: s.label }), el('span', { class: 'mini-meta' }, ...uiText(s.blurb))),
       el('span', { class: 'svc-item-actions' }, btn));
     btn.onclick = () => {
       const next = row.nextElementSibling as HTMLElement | null;
@@ -5952,7 +5958,7 @@ function addPanel(addable: any[], reload: () => void) {
     list.append(row);
   });
   wrap.append(list);
-  wrap.append(el('p', { class: 'admin-hint', style: 'margin:12px 0 0', text: 'Google 등 OAuth로만 연결되는 서비스는 관리자가 조직에 등록하면 위 탭에 떠요.' }));
+  wrap.append(el('p', { class: 'admin-hint', style: 'margin:12px 0 0' }, ...uiText('Google 등 OAuth로만 연결되는 서비스는 관리자가 조직에 등록하면 위 탭에 떠요.')));
   return wrap;
 }
 
@@ -5976,7 +5982,7 @@ function svcTokenForm(kind: string, reload: () => void) {
   return el('div', { class: 'card', style: 'padding:14px' },
     spec.scope ? field(spec.scope + '(선택)', scopeIn) : null,
     field(spec.secretLabel, secretIn),
-    spec.help ? el('p', { class: 'admin-hint', style: 'margin:2px 0 0', text: spec.help }) : null,
+    spec.help ? el('p', { class: 'admin-hint', style: 'margin:2px 0 0' }, ...uiText(spec.help)) : null,
     spec.docUrl ? el('a', { class: 'admin-hint', href: spec.docUrl, target: '_blank', rel: 'noopener', style: 'display:inline-block; margin:6px 0 0', text: '토큰 발급 페이지 열기 ↗' }) : null,
     el('div', { class: 'admin-actions', style: 'margin-top:10px' }, submit, status));
 }
@@ -5993,7 +5999,7 @@ function credVaultCard(owner: 'me' | 'org', title: string, intro: string, creds:
     for (const c of creds) {
       list.append(el('div', { class: 'svc-item' },
         el('span', { class: 'pill pill-ok', text: kindLabel(c.kind) }),
-        c.scope_key ? el('span', { class: 'mini-meta', text: c.scope_key }) : null,
+        c.scope_key ? el('span', { class: 'mini-meta' }, ...uiText(c.scope_key)) : null,
         el('span', { class: 'mini-meta', text: c.has_secret ? '토큰 등록됨 ✓' : '토큰 없음' }),
         el('span', { class: 'svc-item-actions' }, el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: async () => {
           if (!confirm(`${kindLabel(c.kind)}${c.scope_key ? ' (' + c.scope_key + ')' : ''} 자격을 삭제할까요?`)) return;
@@ -6002,7 +6008,7 @@ function credVaultCard(owner: 'me' | 'org', title: string, intro: string, creds:
         } }))));
     }
     rows.push(list);
-  } else rows.push(el('p', { class: 'admin-hint', style: 'margin:0', text: '등록된 자격이 없습니다.' }));
+  } else rows.push(el('p', { class: 'admin-hint', style: 'margin:0' }, ...uiText('등록된 자격이 없습니다.')));
 
   // ── 추가 폼 — kind 드롭다운 → 필요한 필드만 노출 ──
   const kindSel = el('select', {}, ...CRED_KINDS.map((k) => el('option', { value: k.kind, text: k.label })));
@@ -6062,7 +6068,7 @@ function awsRoleCard(creds: any[], reload: () => void) {
     rows.push(el('div', { class: 'card', style: 'padding:9px 12px; margin:6px 0; display:flex; gap:10px; align-items:center; flex-wrap:wrap;' },
       el('span', { class: mem ? 'pill' : 'pill pill-ok', text: mem ? '오버라이드' : '전원 기본' }),
       el('span', { class: 'mini-meta', text: ownerLabel(c.owner) }),
-      c.scope_key ? el('span', { class: 'mini-meta', text: c.scope_key }) : null,
+      c.scope_key ? el('span', { class: 'mini-meta' }, ...uiText(c.scope_key)) : null,
       el('span', { class: 'mini-meta', text: (m.role_arn || '(role_arn 미설정)') + (m.region ? ' · ' + m.region : '') + (m.service ? ' · ' + m.service : '') }),
       el('button', { class: 'btn btn-ghost btn-sm', style: 'margin-left:auto', text: '삭제', onclick: async () => {
         if (!confirm(ownerLabel(c.owner) + ' AWS 역할 자격을 삭제할까요?')) return;
@@ -6072,7 +6078,7 @@ function awsRoleCard(creds: any[], reload: () => void) {
         catch (e: any) { toast((e && e.message) || '삭제 실패', true); }
       } })));
   }
-  if (!creds.length) rows.push(el('p', { class: 'admin-hint', text: '등록된 AWS 역할이 없습니다.' }));
+  if (!creds.length) rows.push(el('p', { class: 'admin-hint' }, ...uiText('등록된 AWS 역할이 없습니다.')));
 
   // ── 추가/오버라이드 폼 ──
   const targetSel = el('select', {},
@@ -6160,7 +6166,7 @@ async function dbAuditEditor(detail, data) {
 }
 
 async function loadAuditRows(body, f) {
-  body.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+  body.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
   const qs = new URLSearchParams({ limit: '100' });
   if (f.source) qs.set('source', f.source);
   if (f.op) qs.set('op', f.op);
@@ -6172,7 +6178,7 @@ async function loadAuditRows(body, f) {
   try { r = await api('/api/ui/db-audit?' + qs.toString()); }
   catch (e: any) { body.replaceChildren(errorNote(e, '감사 기록을 불러오지 못했습니다')); return; }
   const rows = r.rows || [];
-  if (!rows.length) { body.replaceChildren(el('p', { class: 'admin-hint', text: '해당 조건의 조회 기록이 없습니다.' })); return; }
+  if (!rows.length) { body.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('해당 조건의 조회 기록이 없습니다.'))); return; }
   const tbl = el('table', { class: 'audit-table' });
   tbl.append(el('tr', {}, ...['시각', '조회자', '구분', '소스', '테이블', '마스킹', '열람(raw)', '행', '결과'].map((h) => el('th', { text: h }))));
   for (const row of rows) {
@@ -6186,7 +6192,7 @@ async function loadAuditRows(body, f) {
       el('td', { text: row.source || '-' }),
       el('td', { class: 'audit-tables' }, (row.tables || []).join(', ') || '-', subj ? el('span', { class: 'mini-meta', text: ` · 대상 ${subj}` }) : null),
       el('td', { text: masked.length ? String(masked.length) : '-' }),
-      el('td', {}, unmasked.length ? el('span', { class: 'pill pill-warn', text: unmasked.join(', ') }) : el('span', { class: 'mini-meta', text: '-' })),
+      el('td', {}, unmasked.length ? el('span', { class: 'pill pill-warn', text: unmasked.join(', ') }) : el('span', { class: 'mini-meta' }, ...uiText('-'))),
       el('td', { class: 'audit-num', text: row.ok ? String(row.row_count) : '-' }),
       el('td', {}, row.ok ? el('span', { class: 'audit-ok', text: '성공' }) : withTip(el('span', { class: 'audit-bad', text: '차단' }), row.error || '차단됨'))));
   }
@@ -6196,7 +6202,7 @@ async function loadAuditRows(body, f) {
 }
 
 async function renderSubjectKeyPanel(panel, source, data) {
-  panel.replaceChildren(el('p', { class: 'admin-hint', text: '식별자 설정 불러오는 중…' }));
+  panel.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('식별자 설정 불러오는 중…')));
   let keys: any[] = [];
   let schema: any = null;
   try {
@@ -6216,7 +6222,7 @@ async function renderSubjectKeyPanel(panel, source, data) {
           catch (e: any) { toast(e.message, true); }
         } })));
     }
-  } else rows.push(el('p', { class: 'admin-hint', text: '지정된 식별자 컬럼이 없습니다.' }));
+  } else rows.push(el('p', { class: 'admin-hint' }, ...uiText('지정된 식별자 컬럼이 없습니다.')));
   const tables = schema && schema.tables ? schema.tables.filter((t: any) => t.mode === 'allow' && !t.system).map((t: any) => t.name) : [];
   const tableSel = tables.length ? selectFilter([['', '테이블 선택'], ...tables.map((t: string) => [t, t] as [string, string])], '') : el('input', { type: 'text', placeholder: '테이블명' });
   const colInput = el('input', { type: 'text', placeholder: '컬럼명 (예: customer_id)' });
@@ -6236,7 +6242,7 @@ async function renderSubjectKeyPanel(panel, source, data) {
 //  직무상 raw PII 가 필요한 사람(심사역·CS 등)용. 만료(JIT) 드롭다운·승인자 기록(maker-checker). 텍스트 최소.
 const GRANT_EXPIRY: Array<[string, string]> = [['72h', '3일 (권장)'], ['24h', '1일'], ['7d', '7일'], ['30d', '30일'], ['', '무기한 (지양)']];
 async function renderUnmaskGrantPanel(panel, source, data) {
-  panel.replaceChildren(el('p', { class: 'admin-hint', text: '언마스크 권한 불러오는 중…' }));
+  panel.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('언마스크 권한 불러오는 중…')));
   let grants: any[] = [];
   let schema: any = null;
   try {
@@ -6253,7 +6259,7 @@ async function renderUnmaskGrantPanel(panel, source, data) {
       rows.push(el('div', { class: 'item' },
         el('span', { class: 'pill pill-warn', text: g.member_id }),
         el('span', { class: 'mini-meta', text: g.table_name + '.' + g.column_name }),
-        el('span', { class: 'mini-meta', text: exp }),
+        el('span', { class: 'mini-meta' }, ...uiText(exp)),
         g.reason ? el('span', { class: 'mini-meta', text: '· ' + g.reason }) : null,
         el('button', { class: 'btn btn-ghost btn-sm spacer', text: '권한 해제', onclick: async () => {
           if (!confirm(`${g.member_id} 의 ${g.table_name}.${g.column_name} 언마스크 권한을 해제할까요?`)) return;
@@ -6261,7 +6267,7 @@ async function renderUnmaskGrantPanel(panel, source, data) {
           catch (e: any) { toast(e.message, true); }
         } })));
     }
-  } else rows.push(el('p', { class: 'admin-hint', text: '부여된 언마스크 권한이 없습니다 (전원 마스킹).' }));
+  } else rows.push(el('p', { class: 'admin-hint' }, ...uiText('부여된 언마스크 권한이 없습니다 (전원 마스킹).')));
 
   // 추가 — 구성원(드롭다운)·테이블(마스킹 있는 테이블 드롭다운)·컬럼(그 테이블 마스킹 컬럼 드롭다운, * 포함)·만료·승인자·사유
   const memberC = memberCombo({ placeholder: '구성원 선택' });
@@ -6349,10 +6355,10 @@ function avatarEditor(data, nameInput) {
   const node = el('div', {},
     el('div', { class: 'prof-ava-row' }, preview,
       el('div', { class: 'prof-ava-actions' }, fileIn, uploadBtn, removeBtn,
-        el('p', { class: 'prof-hint', style: 'margin:0', text: '정사각형 이미지를 권장해요. 안 올리면 아래 글자·색(또는 이름 이니셜)으로 자동 생성됩니다.' }))),
+        el('p', { class: 'prof-hint', style: 'margin:0' }, ...uiText('정사각형 이미지를 권장해요. 안 올리면 아래 글자·색(또는 이름 이니셜)으로 자동 생성됩니다.')))),
     el('div', { class: 'prof-ava-cc', style: 'margin-top:12px' },
       el('div', { style: 'display:flex; align-items:center; gap:12px; flex-wrap:wrap' }, charIn, colorRow),
-      el('p', { class: 'prof-hint', style: 'margin:6px 0 0', text: '사진이 없을 때 아바타에 쓸 글자(비우면 이니셜)와 배경색이에요.' })));
+      el('p', { class: 'prof-hint', style: 'margin:6px 0 0' }, ...uiText('사진이 없을 때 아바타에 쓸 글자(비우면 이니셜)와 배경색이에요.'))));
   const payload = () => {
     const out: any = { avatar_char: charState.trim() || null, avatar_color: colorState || null };
     if (avatarState !== undefined) out.avatar = avatarState;   // 미변경이면 아예 안 보낸다 → 서버 보존
@@ -6407,14 +6413,14 @@ export async function openMyProfileModal(): Promise<void> {
   });
 
   bodyWrap.replaceChildren(
-    el('p', { class: 'admin-hint', style: 'margin:0 0 14px', text: '이름·사진은 프로젝트·작업 기록·팀 화면 어디에서나 나를 가리키는 얼굴이에요.' }),
+    el('p', { class: 'admin-hint', style: 'margin:0 0 14px' }, ...uiText('이름·사진은 프로젝트·작업 기록·팀 화면 어디에서나 나를 가리키는 얼굴이에요.')),
     field('프로필 사진', ava.node),
     field('이름', nameIn),
     field('닉네임 (활동 로그 등에 표시)', nickIn),
     data.email ? field('이메일 (로그인 아이디 · 변경은 관리자)', el('div', { class: 'admin-ro', text: data.email })) : null,
     data.email ? field('비밀번호', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' },
       el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '비밀번호 변경', onclick: () => changePasswordModal() }),
-      el('span', { class: 'admin-hint', style: 'margin:0', text: '현재 비밀번호를 확인한 뒤 새 비밀번호로 바꿔요.' }))) : null,
+      el('span', { class: 'admin-hint', style: 'margin:0' }, ...uiText('현재 비밀번호를 확인한 뒤 새 비밀번호로 바꿔요.')))) : null,
     el('div', { class: 'admin-actions' }, saveBtn, status));
 }
 
@@ -6485,7 +6491,7 @@ function myAiAccountsCard() {
     cardHead('연결된 AI 계정', '내 AI 세션이 이 계정으로 실행됩니다. 계정이 구성원별로 갈리지 않는 서버에서는 \'서버 공용\' 표시가 붙습니다.'),
     body);
   const load = async () => {
-    body.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+    body.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
     try {
       // 세션은 실패해도 계정 카드는 보여준다(개수는 부가정보) — 터미널이 없는 배포에서도 로그인 상태는 유효하다.
       const [acc, ses] = await Promise.all([
@@ -6498,7 +6504,7 @@ function myAiAccountsCard() {
       // 공용 계정이라는 사실은 행의 '서버 공용' 배지(+툴팁)로 충분하다 — 같은 말을 배너로 또 적지 않는다(사용자 요구).
       body.replaceChildren(...(accounts.length
         ? accounts.map((a) => aiAccountRow(a, mine, load))
-        : [el('p', { class: 'admin-hint', text: '이 서버에 로그인이 필요한 AI 가 없습니다.' })]));
+        : [el('p', { class: 'admin-hint' }, ...uiText('이 서버에 로그인이 필요한 AI 가 없습니다.'))]));
     } catch (e) { body.replaceChildren(errorNote(e, '내 AI 계정 상태를 불러오지 못했습니다')); }
   };
   void load();
@@ -6588,9 +6594,9 @@ async function myAiSection(detail) {
         // 직접 입력칸은 칩과 **같은 줄**에 칩 모양으로 붙인다(#1085) — '한국어·English·…' 다음에 오는
         //  또 하나의 선택지지, 아래 딸린 별개 입력이 아니다. 실제 배치는 profChips 가 wrap 안에 넣어 준다.
         field('사용 언어 (AI가 답하는 언어)', el('div', {}, langChips,
-          el('p', { class: 'prof-hint', text: '고르거나 직접 적은 언어로 내 AI가 답해요. 비우면 조직 기본값(주로 한국어)을 따릅니다.' }))),
+          el('p', { class: 'prof-hint' }, ...uiText('고르거나 직접 적은 언어로 내 AI가 답해요. 비우면 조직 기본값(주로 한국어)을 따릅니다.')))),
         field('추가 메모', el('div', {}, memoTa,
-          el('p', { class: 'prof-hint', text: '비밀번호·API 키·개인키 같은 비밀값은 적지 마세요. 토큰으로 보이는 값이 들어 있으면 저장되지 않고 오류로 알려드립니다.' }))),
+          el('p', { class: 'prof-hint' }, ...uiText('비밀번호·API 키·개인키 같은 비밀값은 적지 마세요. 토큰으로 보이는 값이 들어 있으면 저장되지 않고 오류로 알려드립니다.')))),
         el('div', { class: 'admin-actions' }, saveBtn, status))));
 }
 
@@ -6620,14 +6626,14 @@ const HARNESS_KIND_LABEL: Record<string, string> = { skill: '스킬', subagent: 
 async function showHarnessDetail(kind: string, id: string, name: string) {
   const box = overlay(name || id);
   const body = box.querySelector('.ov-box');
-  const slot = el('div', { class: 'md-rendered admin-md-box', style: 'max-height:60vh; overflow:auto; margin-top:8px' }, el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+  const slot = el('div', { class: 'md-rendered admin-md-box', style: 'max-height:60vh; overflow:auto; margin-top:8px' }, el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
   body?.append(slot);
   try {
     const d: any = await api(`/api/ui/me/harness/detail?kind=${encodeURIComponent(kind)}&id=${encodeURIComponent(id)}`);
     const parts: any[] = [];
     if (d.description) parts.push(el('p', { style: 'color:var(--ink-sub); margin:0 0 10px', text: d.description }));
     if (d.body) parts.push(el('div', { class: 'md md-rendered' }, renderMarkdown(String(d.body))));
-    if (!parts.length) parts.push(el('p', { class: 'admin-hint', text: '(본문이 없습니다)' }));
+    if (!parts.length) parts.push(el('p', { class: 'admin-hint' }, ...uiText('(본문이 없습니다)')));
     slot.replaceChildren(...parts);
   } catch (e: any) { slot.replaceChildren(el('p', { class: 'admin-hint', text: '불러오지 못했습니다 — ' + ((e && e.message) || '') })); }
 }
@@ -6639,7 +6645,7 @@ async function myAssetsSection(detail) {
     el('div', { class: 'card' }, cardHead('설치 상태'), bodyBox));
 
   const reload = async () => {
-    bodyBox.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+    bodyBox.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
     let d: any;
     try { d = await api('/api/ui/me/harness'); }
     catch (e: any) { bodyBox.replaceChildren(el('p', { class: 'admin-hint', text: (e && e.message) || '불러오지 못했습니다' })); return; }
@@ -6657,7 +6663,7 @@ async function myAssetsSection(detail) {
     const pcChips = (it: any, kind: string): { row: any; missing: boolean } => {
       let missing = false;
       if (!it.effective) return { row: el('span', { class: 'pc-chip muted', text: '꺼짐 · 어느 PC에도 적용 안 함' }), missing };
-      if (!machines.length) return { row: el('span', { class: 'admin-hint', text: '아직 관측된 PC 없음' }), missing };
+      if (!machines.length) return { row: el('span', { class: 'admin-hint' }, ...uiText('아직 관측된 PC 없음')), missing };
       const chips: any[] = [];
       for (const { m, map } of mIndex) {
         const nm = machineName(m);
@@ -6667,7 +6673,7 @@ async function myAssetsSection(detail) {
         else if (hit && hit.overlap === 'shadow') chips.push(el('span', { class: 'pc-chip warn', text: nm + ' · 로컬이 가림' }));
         else if (compat(it.harness || 'all', m.harness)) { chips.push(el('span', { class: 'pc-chip warn', text: nm + ' · 미설치' })); missing = true; }
       }
-      if (!chips.length) return { row: el('span', { class: 'admin-hint', text: '적용되는 PC 없음' }), missing };
+      if (!chips.length) return { row: el('span', { class: 'admin-hint' }, ...uiText('적용되는 PC 없음')), missing };
       return { row: el('div', { class: 'pc-chips' }, ...chips), missing };
     };
 
@@ -6712,7 +6718,7 @@ async function myAssetsSection(detail) {
       return el('div', { class: 'hrow-act' },
         el('div', { class: 'sw-labels' },
           el('span', { class: 'sw-state' + (on ? ' on' : ''), text: on ? '켜짐' : '꺼짐' }),
-          el('span', { class: 'sw-note', text: note })),
+          el('span', { class: 'sw-note' }, ...uiText(note))),
         sw);
     };
     const livelyRow = (targetKind: string, it: any, kind: string): { node: any; missing: boolean } => {
@@ -6765,8 +6771,8 @@ async function myAssetsSection(detail) {
       el('div', { class: 'hlayer-head' },
         el('h4', { class: 'hlayer-title', text: '라이블리 스킬 · 훅' }),
         infoPop('라이블리가 팀 전체에 배포한 스킬·훅입니다. 내 세션에 적용할지 여기서 켜고 끌 수 있고, 끄면 나에게만 적용되지 않습니다.')),
-      group('스킬', skillNodes.length, skillNodes.length ? skillNodes : [el('p', { class: 'admin-hint', text: '배포된 스킬이 없습니다.' })]),
-      group('커스텀 훅', hookNodes.length, hookNodes.length ? hookNodes : [el('p', { class: 'admin-hint', text: '배포된 커스텀 훅이 없습니다.' })])));
+      group('스킬', skillNodes.length, skillNodes.length ? skillNodes : [el('p', { class: 'admin-hint' }, ...uiText('배포된 스킬이 없습니다.'))]),
+      group('커스텀 훅', hookNodes.length, hookNodes.length ? hookNodes : [el('p', { class: 'admin-hint' }, ...uiText('배포된 커스텀 훅이 없습니다.'))])));
     if (anyMissing) rows.unshift(el('div', { class: 'sync-warn' }, el('b', { text: '켜져 있지만 아직 설치되지 않은 PC(‘미설치’ 표시)가 있습니다. ' }), '그 PC에서 claude(또는 codex) 세션을 한 번 열면 자동으로 설치됩니다.'));
 
     // ── 내 컴퓨터별: 내가 직접 만든 로컬 스킬·훅만 (라이블리가 준 건 위에서 PC 칩으로 봤어요). ──
@@ -6799,7 +6805,7 @@ async function myAssetsSection(detail) {
         head.append(del);
         myLayer.append(head);
         const own = (m.assets || []).filter((a: any) => a.overlap === 'local-only');
-        if (!own.length) { myLayer.append(el('p', { class: 'admin-hint', text: '이 컴퓨터에 직접 만든 스킬·훅은 없습니다(라이블리 배포분만 있습니다).' })); continue; }
+        if (!own.length) { myLayer.append(el('p', { class: 'admin-hint' }, ...uiText('이 컴퓨터에 직접 만든 스킬·훅은 없습니다(라이블리 배포분만 있습니다).'))); continue; }
         const byKind: Record<string, any[]> = {};
         for (const a of own) {
           const isHook = a.kind === 'hook'; // 훅은 settings.json 항목(파일 아님) — 비파괴 토글 불가라 여기선 표시만.
@@ -6815,7 +6821,7 @@ async function myAssetsSection(detail) {
           }
           (byKind[a.kind] ||= []).push(el('div', { class: 'mini-row hrow' },
             el('div', { style: 'flex:1; min-width:0;' }, el('span', { class: 'mini-title', text: a.id }),
-              el('div', { class: 'mini-meta', text: meta })),
+              el('div', { class: 'mini-meta' }, ...uiText(meta))),
             el('div', { class: 'hrow-act' }, tb)));
         }
         for (const [k, list] of Object.entries(byKind)) myLayer.append(group(HARNESS_KIND_LABEL[k] || k, list.length, list));
@@ -6823,7 +6829,7 @@ async function myAssetsSection(detail) {
     } else {
       rows.push(el('div', { class: 'hlayer' },
         el('div', { class: 'hlayer-head' }, el('h4', { class: 'hlayer-title', text: '내 로컬 스킬 · 훅' })),
-        el('p', { class: 'admin-hint', text: '아직 내 컴퓨터의 하네스를 확인하지 못했습니다. 내 컴퓨터에서 claude(또는 codex)를 한 번 켜면 다음 세션에 자동으로 나타납니다. 컴퓨터가 여러 대면 각각 따로 보입니다. (웹 [AI 세션]은 회사 서버에서 돌아 로컬이 보이지 않습니다.)' })));
+        el('p', { class: 'admin-hint' }, ...uiText('아직 내 컴퓨터의 하네스를 확인하지 못했습니다. 내 컴퓨터에서 claude(또는 codex)를 한 번 켜면 다음 세션에 자동으로 나타납니다. 컴퓨터가 여러 대면 각각 따로 보입니다. (웹 [AI 세션]은 회사 서버에서 돌아 로컬이 보이지 않습니다.)'))));
     }
     bodyBox.replaceChildren(...rows);
   };
@@ -6844,7 +6850,7 @@ function confirmDialog(opts: {
     const body = el('div', { class: 'ov-confirm-body' });
     if (opts.message) body.append(el('p', { class: 'ov-confirm-msg', text: opts.message }));
     for (const l of opts.lines || []) body.append(el('p', { class: 'ov-confirm-line', text: l }));
-    if (opts.note) body.append(el('p', { class: 'ov-confirm-note', text: opts.note }));
+    if (opts.note) body.append(el('p', { class: 'ov-confirm-note' }, ...uiText(opts.note)));
     const cancel = el('button', { class: 'btn btn-ghost', type: 'button', text: opts.cancelText || '취소', onclick: () => finish(false) });
     const ok = el('button', { class: 'btn ' + (opts.danger ? 'btn-danger' : 'btn-primary'), type: 'button', text: opts.confirmText || '확인', onclick: () => finish(true) });
     const box = el('div', { class: 'ov-box ov-confirm' + (opts.danger ? ' danger' : '') },
