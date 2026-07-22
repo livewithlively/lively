@@ -31,9 +31,15 @@ async function transcriptRoots(): Promise<Array<{ dir: string; author: string }>
   // 격리 ON 박스(멤버별 OS 유저·홈 700)에서는 기록이 그 홈에 떨어질 수 있다 → 후보에만 넣는다.
   //  ⚠ 홈이 700 이면 게이트웨이가 못 읽고 조용히 건너뛴다(권한 상승은 하지 않는다 — 그 경우 이 경로의 질문은
   //   여전히 안 보이며, 해결하려면 drop-priv 읽기가 필요하다. 여기선 '읽을 수 있으면 포함'까지만).
-  let homes: string[] = [];
-  try { homes = (await fsp.readdir(MEMBER_HOME_BASE)).filter((h) => h.startsWith("box_")); } catch { /* 격리 미사용·접근 불가 */ }
-  for (const h of homes) roots.push({ dir: path.join(MEMBER_HOME_BASE, h, ".claude", "projects"), author: h.replace(/^box_/, "") });
+  //  ⚠⚠ 리눅스(또는 경로를 명시한 박스)에서만 훑는다 — macOS 의 /home 은 autofs 자동마운트 지점이라
+  //   서비스 프로세스에서 readdir 하면 automountd 응답을 기다리며 **요청이 통째로 멈춘다**(실측: dev :8080 에서
+  //   /prompts 가 20초+ 무응답. CLI 로는 즉시 0건이라 재현이 안 돼 오진하기 쉽다). 격리는 리눅스 전용 기능이다.
+  const scanMemberHomes = process.platform === "linux" || !!process.env.LIVELY_MEMBER_HOME_BASE;
+  if (scanMemberHomes) {
+    let homes: string[] = [];
+    try { homes = (await fsp.readdir(MEMBER_HOME_BASE)).filter((h) => h.startsWith("box_")); } catch { /* 격리 미사용·접근 불가 */ }
+    for (const h of homes) roots.push({ dir: path.join(MEMBER_HOME_BASE, h, ".claude", "projects"), author: h.replace(/^box_/, "") });
+  }
   return roots;
 }
 
