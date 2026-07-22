@@ -498,24 +498,42 @@ function setupClipboard() {
     if (k === 'v') {
       // 붙여넣기는 네이티브 paste 이벤트(setupPaste)가 처리한다 — 이미지 업로드+경로, 여러 줄은 bracketed paste.
       //  Mac Cmd+V 는 그대로 흘려 paste 이벤트가 뜨게 한다(xterm 은 Cmd 키로 셸에 아무 것도 안 보냄).
-      //  Ctrl+V 는 xterm 이 \x16(SYN)을 셸로 보내는 걸 막아야 해서 가로채고, 보안 컨텍스트면 클립보드 API 로 직접 처리.
+      //  Ctrl+V 는 xterm 이 \x16(SYN)을 셸로 보내는 걸 막아야 해서 가로채되(return false), 붙여넣기 자체는
+      //  역시 네이티브 paste 에 맡기고 클립보드 API 는 '폴백'으로만 쓴다 — 이유는 schedulePasteFallback 주석(#1084).
       if (e.metaKey && !e.ctrlKey) return true;
-      if (navigator.clipboard && navigator.clipboard.read && window.isSecureContext) {
-        navigator.clipboard.read().then(async (its) => {
-          for (const it of its) {
-            const t = (it.types || []).find((x) => x.startsWith('image/'));
-            if (t) await dropFileToAgent(new File([await it.getType(t)], 'pasted.' + (t.split('/')[1] || 'png'), { type: t }));
-            else if ((it.types || []).includes('text/plain')) pasteText(await (await it.getType('text/plain')).text());
-          }
-        }).catch(() => navigator.clipboard.readText().then((t) => pasteText(t)).catch(() => { /* noop */ }));
-      }
+      schedulePasteFallback();
       return false;
     }
     return true;
   });
 }
+// [#1084] Ctrl+V 붙여넣기 경로는 '둘'이 될 수 있다 → 그래서 폴백은 '예약'하고 네이티브가 뜨면 취소한다.
+//  ① 네이티브 paste 이벤트(setupPaste) ② 클립보드 API 직접 읽기. keydown 에서 return false 는 xterm '자체' 처리만
+//  막을 뿐 브라우저 기본동작은 안 막으므로(#633 실측 — preventDefault 를 해야 막힌다), Ctrl+V 가 OS 붙여넣기
+//  단축키인 윈도우에선 ①이 그대로 뜬다 → 예전처럼 ②를 keydown 에서 즉시 실행하면 **두 번 붙여넣어졌다**(사용자 신고).
+//  맥은 Ctrl+V 가 OS 붙여넣기가 아니라 ①이 안 떠서 증상이 없었고(그래서 맥 Ctrl+V 는 ②가 유일한 경로 — 없애면 회귀).
+//  → ②를 한 틱 미뤄 예약하고, ①이 실제로 처리하면 취소한다. 어느 플랫폼이든 정확히 한 번. (지연은 ①이 keydown
+//   기본동작으로 즉시 디스패치되므로 사실상 체감 0 — 폴백이 실제로 도는 맥 Ctrl+V 에서만 60ms 늦다.)
+let pasteFallbackTimer = null;
+function cancelPasteFallback() { if (pasteFallbackTimer) { clearTimeout(pasteFallbackTimer); pasteFallbackTimer = null; } }
+function schedulePasteFallback() {
+  cancelPasteFallback();
+  if (!(navigator.clipboard && navigator.clipboard.read && window.isSecureContext)) return; // 비보안 origin — 네이티브 paste 만이 경로
+  pasteFallbackTimer = setTimeout(() => {
+    pasteFallbackTimer = null;
+    navigator.clipboard.read().then(async (its) => {
+      let textDone = false; // 클립보드가 항목을 여러 개로 쪼개 줘도 텍스트는 한 번만 붙인다(중복 방지)
+      for (const it of its) {
+        const t = (it.types || []).find((x) => x.startsWith('image/'));
+        if (t) await dropFileToAgent(new File([await it.getType(t)], 'pasted.' + (t.split('/')[1] || 'png'), { type: t }));
+        else if (!textDone && (it.types || []).includes('text/plain')) { textDone = true; pasteText(await (await it.getType('text/plain')).text()); }
+      }
+    }).catch(() => navigator.clipboard.readText().then((t) => pasteText(t)).catch(() => { /* noop */ }));
+  }, 60);
+}
 // 붙여넣기(이미지·텍스트)를 네이티브 paste 이벤트로 처리 — 보안 컨텍스트 불문·권한 프롬프트 없이 동작(GitHub·Slack 방식).
 //  capture 단계에서 xterm 텍스트영역보다 먼저 잡아 기본 붙여넣기를 막고 우리가 처리(중복 방지). 이미지=업로드+경로, 텍스트=bracketed.
+//  실제로 처리한 분기에서만 폴백을 취소한다 — 내용이 비어 우리가 아무것도 못 한 paste 는 폴백이 이어받게(#1084).
 function setupPaste() {
   const dz = panesEl || document.body;
   dz.addEventListener('paste', (e) => {
@@ -525,11 +543,11 @@ function setupPaste() {
     if (img) {
       e.preventDefault(); e.stopImmediatePropagation();
       const blob = img.getAsFile();
-      if (blob) dropFileToAgent(blob);
+      if (blob) { cancelPasteFallback(); dropFileToAgent(blob); }
       return;
     }
     const text = dt.getData('text/plain') || dt.getData('text') || '';
-    if (text) { e.preventDefault(); e.stopImmediatePropagation(); pasteText(text); }
+    if (text) { e.preventDefault(); e.stopImmediatePropagation(); cancelPasteFallback(); pasteText(text); }
   }, true);
 }
 
