@@ -1,5 +1,5 @@
 // admin.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { absTime, api, applyReveal, el, errorNote, fmtNum, logout, memberCombo, profileAvatar, relTime, renderMarkdown, selectFilter, setPersonAvatar, state, toast, withTip } from './core.js';
+import { absTime, api, applyReveal, cardHead, el, errorNote, fmtNum, logout, memberCombo, profileAvatar, relTime, renderMarkdown, selectFilter, setPersonAvatar, state, toast, withTip, infoPop, inlineBold } from './core.js';
 import { SPACE_SUBS, openCategoryForm } from './category-form.js';   // #764 — knowledge.ts 해체로 이관
 import { overlayBox, skeleton } from './learn.js';
 import { ingestPolicyPanel, reviewNavBadge, reviewQueuePanel } from './review.js';   // #783 지식 검토 게이트 + 검토 큐 (+ #802 nav 대기 배지)
@@ -232,63 +232,7 @@ function meaningRow(k, v) {
 //  팝업(overlay)으로 전체 설명(요약·누가/언제/어디·예시)을 보여준다. 예전엔 항상-펼침(이후 한 줄 요약+토글)
 //  이라 9개 섹션마다 같은 골격이 반복돼 화면이 무거웠다(윤상민 06-22 지적: "반복·둥둥 뜸"). 단일 함수라
 //  모든 섹션에 일괄 적용. tone 색·카피는 팝업 안에서 그대로 보존.
-// ⓘ — 제목·라벨 오른쪽에 옅게 붙는 **아이콘 하나**. 누르면 그 자리에 팝오버로 설명이 뜬다(#1085).
-//  왜: 회색 설명문을 제목·필드마다 화면에 깔면 글이 화면을 덮어 정작 내용·입력칸이 안 읽힌다(윤상민 지적).
-//  '이게 뭐예요?' 팝업(구 meaningCard — '구성원에게 미치는 효과' 카드)은 **통째로 폐기**했다(사용자 요구:
-//  "문구만 지우지 말고 팝업까지 날려버려"). 그래서 이 팝오버가 싣는 건 설명 문자열 하나뿐이다(**강조** 지원).
-function infoPop(text) {
-  if (!text) return null;
-  const btn = el('button', { class: 'hint-i', type: 'button', 'aria-haspopup': 'dialog', 'aria-label': '설명 보기', title: '설명 보기' },
-    el('span', { 'aria-hidden': 'true', text: 'ⓘ' }));
-  let pop: any = null;
-  const close = () => {
-    if (!pop) return;
-    pop.remove(); pop = null;
-    btn.setAttribute('aria-expanded', 'false');
-    document.removeEventListener('mousedown', onDoc, true);
-    document.removeEventListener('keydown', onKey, true);
-    window.removeEventListener('resize', close);
-    window.removeEventListener('scroll', close, true);
-  };
-  const onDoc = (e) => { if (pop && !pop.contains(e.target) && !btn.contains(e.target)) close(); };
-  const onKey = (e) => { if (e.key === 'Escape') { close(); btn.focus(); } };
-  btn.addEventListener('click', () => {
-    if (pop) { close(); return; }
-    pop = el('div', { class: 'hint-pop', role: 'dialog' }, el('p', { class: 'hint-pop-text' }, ...inlineBold(text)));
-    document.body.append(pop);
-    // 아이콘 아래에 띄우되 화면 밖으로 나가지 않게 가둔다. 자리가 없으면 위로 뒤집는다(고정 위치 = 카드 overflow 무관).
-    const r = btn.getBoundingClientRect();
-    const w = Math.min(360, window.innerWidth - 24);
-    pop.style.width = w + 'px';
-    pop.style.left = Math.round(Math.min(Math.max(12, r.left - 10), window.innerWidth - w - 12)) + 'px';
-    const below = window.innerHeight - r.bottom;
-    if (below < pop.offsetHeight + 20 && r.top > pop.offsetHeight + 20) pop.style.top = Math.round(r.top - pop.offsetHeight - 8) + 'px';
-    else pop.style.top = Math.round(r.bottom + 8) + 'px';
-    btn.setAttribute('aria-expanded', 'true');
-    document.addEventListener('mousedown', onDoc, true);
-    document.addEventListener('keydown', onKey, true);
-    window.addEventListener('resize', close);
-    window.addEventListener('scroll', close, true);
-  });
-  return btn;
-}
 
-
-// 설명 문자열의 **강조**만 인라인으로 살린다 — 그 외 마크다운은 안 쓴다(el 이 텍스트 노드로만 붙이므로 innerHTML 없음).
-//  안 그러면 화면에 별표가 그대로 보인다(실제로 [외부 자료 수집] 설명에 '**우리 DB 로 복사**'가 노출됐다).
-function inlineBold(text) {
-  const out: any[] = [];
-  const src = String(text);
-  let i = 0;
-  for (const m of src.matchAll(/\*\*(.+?)\*\*/g)) {
-    const at = m.index as number;
-    if (at > i) out.push(src.slice(i, at));
-    out.push(el('b', { text: m[1] }));
-    i = at + m[0].length;
-  }
-  if (i < src.length) out.push(src.slice(i));
-  return out;
-}
 // 두 번째 인자(m)는 옛 meaning 객체 또는 설명 문자열이다. **객체(효과 카드)는 폐기됐으므로 무시**하고,
 //  문자열일 때만 설명으로 쓴다(호출부를 한꺼번에 고치지 않아도 되게 인자 자리는 남겨 둔다).
 //  ⚠ **페이지 제목의 설명은 ⓘ 로 접지 않는다** — 한 페이지가 무엇을 하는 곳인지는 들어오자마자 보여야 한다
@@ -458,10 +402,6 @@ function segTabs(sectionKey, tabs) {
 function sectionHead(title, hint, m?) {
   // admin-sechead: 제목 블록 아래 일관 여백. 페이지 설명(hint)은 종전대로 제목 아래 한 줄로 보인다.
   return el('div', { class: 'admin-sechead' }, sectionTitle(title, m || null), hint ? el('p', { class: 'admin-hint', text: hint }) : null);
-}
-// 카드(박스) 섹션 제목 — 제목 + 오른쪽 ⓘ. 카드 안 설명도 회색 줄 대신 이 아이콘 뒤로 접는다(#1085).
-function cardHead(title, desc?) {
-  return el('div', { class: 'card-head-row' }, el('h3', { text: title }), infoPop(desc || null));
 }
 
 // ── [구성원] — 구 [구성원 관리]+[구성원 추가]+[구성원 토큰 관리]+[중앙박스 계정] 4탭을 하나로. ──
@@ -805,7 +745,7 @@ async function toolUsagePanel(detail) {
   }
 
   const card = el('div', { class: 'card' },
-    el('p', { class: 'admin-hint', text: '하네스(Claude·Codex 등)가 어떤 MCP 툴을 어떤 인자로 얼마나 자주 호출했는지 보여줍니다. 모든 호출이 기록되며(시크릿은 마스킹, 큰 값은 잘라 저장), AI에게 묻거나 db_query 로 mcp_call_log 를 직접 조회할 수도 있습니다.' }),
+    cardHead('툴 호출 기록', '하네스(Claude·Codex 등)가 어떤 MCP 툴을 어떤 인자로 얼마나 자주 호출했는지 보여줍니다. 모든 호출이 기록되며(시크릿은 마스킹, 큰 값은 잘라 저장), AI에게 묻거나 db_query 로 mcp_call_log 를 직접 조회할 수도 있습니다.'),
     controls,
     stats,
     daysEl,
@@ -995,7 +935,7 @@ async function orgAuditPanel(detail) {
   }
 
   const card = el('div', { class: 'card' },
-    el('p', { class: 'admin-hint', text: '구성원·접속 토큰·런타임·외부 자료 수집·DB 소스·훅·도구 등 관리 항목이 누구에 의해(사람/AI) 어떤 경로(웹/MCP)로 언제 어떻게 바뀌었는지 기록합니다. 각 줄을 펼치면 바뀐 필드의 이전→이후를 볼 수 있습니다(시크릿은 마스킹). AI에게 묻거나 org_audit_list(MCP)로도 조회할 수 있습니다.' }),
+    cardHead('관리 변경 이력', '구성원·접속 토큰·런타임·외부 자료 수집·DB 소스·훅·도구 등 관리 항목이 누구에 의해(사람/AI) 어떤 경로(웹/MCP)로 언제 어떻게 바뀌었는지 기록합니다. 각 줄을 펼치면 바뀐 필드의 이전→이후를 볼 수 있습니다(시크릿은 마스킹). AI에게 묻거나 org_audit_list(MCP)로도 조회할 수 있습니다.'),
     controls,
     el('div', { class: 'oa-sub', text: '변경 이력' + (total ? ' (' + total.toLocaleString() + ')' : '') }),
     list, pagerBox);
@@ -1050,8 +990,7 @@ async function cronPanel(detail, data) {
     el('span', { class: 'wikicat-groupcount', text: String(jobs.length) }),
     el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 잡 추가', onclick: () => openCronForm(null, actions, reload, tz) }));
   const card = el('div', { class: 'card' },
-    el('p', { class: 'admin-hint', text: '게이트웨이가 정해진 주기마다 실행하는 잡입니다. 실제 코드 의존(is) 최신화(refresh), 미매핑 코드 유닛 LLM 분류(map_unmapped — 타깃 상시 에이전트에 주입, 팀플랜 과금), 외부 자료 수집 싱크 등이 있습니다. 주기는 초 단위 간격 또는 cron식으로 지정합니다.' }),
-    el('p', { class: 'admin-hint', text: 'cron식의 시각은 ' + tz + ' 기준입니다(서버 머신의 OS 시간대와 무관 — [조직 · 연결] ▸ 조직 시간대에서 바꿉니다).' }),
+    cardHead('정기 실행 잡', '게이트웨이가 정해진 주기마다 실행하는 잡입니다. 실제 코드 의존(is) 최신화(refresh), 미매핑 코드 유닛 LLM 분류(map_unmapped — 타깃 상시 에이전트에 주입, 팀플랜 과금), 외부 자료 수집 싱크 등이 있습니다. 주기는 초 단위 간격 또는 cron식으로 지정합니다. cron식의 시각은 '),
     el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
   detail.replaceChildren(card);
 }
@@ -1187,7 +1126,7 @@ async function managedSessionsPanel(detail, data) {
     el('span', { class: 'wikicat-groupcount', text: String(sessions.length) }),
     el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 상시 에이전트 추가', onclick: () => openManagedSessionForm(null, reload) }));
   const card = el('div', { class: 'card' },
-    el('p', { class: 'admin-hint', text: '항상 실행 상태로 유지되는 에이전트 세션입니다. 격리 워크스페이스(공유폴더)에서 실행되며, keep-alive 점검에서 세션이 없으면 자동으로 다시 만듭니다. 크론 잡(미매핑 분류 등)이 이 세션에 작업을 전달합니다 — 팀플랜 과금. account 는 이 세션을 실행할 라이블리 계정(클로드 로그인)입니다.' }),
+    cardHead('상시 실행 에이전트', '항상 실행 상태로 유지되는 에이전트 세션입니다. 격리 워크스페이스(공유폴더)에서 실행되며, keep-alive 점검에서 세션이 없으면 자동으로 다시 만듭니다. 크론 잡(미매핑 분류 등)이 이 세션에 작업을 전달합니다 — 팀플랜 과금. account 는 이 세션을 실행할 라이블리 계정(클로드 로그인)입니다.'),
     el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
   detail.replaceChildren(card);
 }
@@ -1303,6 +1242,7 @@ async function previewEnvsPanel(detail, data) {
     el('span', { class: 'wikicat-groupcount', text: String(envs.length) }),
     el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 미리보기 만들기', onclick: () => openPreviewEnvForm(null, reload) }));
   const card = el('div', { class: 'card' },
+    cardHead('만들어 둔 미리보기'),
     el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
   // 제목·설명은 card 밖 상단으로 — 관리탭 다른 섹션과 같은 자리(#1010).
   detail.replaceChildren(
@@ -1905,6 +1845,7 @@ function membersEditor(detail, data) {
   const bar = el('div', { class: 'admin-member-searchbar' }, members.length ? searchInp : el('span', {}), addBtn);
 
   detail.replaceChildren(el('div', { class: 'card' },
+    cardHead('구성원 목록'),
     (members.length || canEdit) ? bar : null,
     listCol));
 }
@@ -2194,6 +2135,7 @@ async function teamsPanel(detail, data) {
   detail.replaceChildren(
     sectionHead('팀', '구성원을 팀으로 묶고, 팀이 맡는 카테고리를 정합니다. 팀이 맡은 카테고리는 팀원의 화면과 AI 세션에 먼저 나옵니다.', { key: 'team' }),
     el('div', { class: 'card' },
+      cardHead('팀 목록과 담당 카테고리'),
       el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
 }
 
@@ -2309,7 +2251,7 @@ function profileEditor(detail, data) {
   }
   detail.replaceChildren(
     sectionHead('조직 정보', '조직 이름·접속 주소·시간대처럼 이 조직 전체에 적용되는 기본 정보를 정합니다.'),
-    el('div', { class: 'card admin-form-narrow' }, ...body));
+    el('div', { class: 'card admin-form-narrow' }, cardHead('조직 기본 정보'), ...body));
 }
 
 // ── 구성원 토큰 관리 — 접속 열쇠(토큰) 발급 + 발급 현황 보기 + 접속 해제. admin 전용. (발급 블록은 [구성원 추가]에서 이관 #613 후속) ──
@@ -2348,7 +2290,7 @@ function tokensPanel(detail, data) {
   if (active.length) children.push(el('div', { class: 'token-section' }, el('div', { class: 'token-section-h', text: '사용 중 (' + active.length + ')' }), ...active.map((t) => tokenRow(t, true))));
   else children.push(el('p', { class: 'admin-hint', text: '아직 발급된 접속 토큰이 없습니다 — 위에서 구성원을 골라 발급하세요.' }));
   if (revoked.length) children.push(el('div', { class: 'token-section' }, el('div', { class: 'token-section-h', text: '해제됨 (' + revoked.length + ')' }), ...revoked.map((t) => tokenRow(t, false))));
-  detail.replaceChildren(el('div', { class: 'card' }, ...children));
+  detail.replaceChildren(el('div', { class: 'card' }, cardHead('접속 토큰'), ...children));
 }
 
 // ── 런타임 · 훅 (훅 on/off · work-roots · 너지 문구) — admin 전용 ──
@@ -2666,7 +2608,7 @@ function allowlistCard(data, title, intro, fields) {
   const canEdit = !!data.canEdit;
   const tas = {};
   // fix#96: 형제 카드(DB 데이터소스 등)와 같은 h2 위계로 — admin-subhead 는 하위 섹션처럼 보였다.
-  const rows = [sectionTitle(title, intro)];
+  const rows = [cardHead(title, intro)];
   for (const f of fields) {
     const ta = el('textarea', { rows: '3', placeholder: f.placeholder || '' }); ta.value = (f.initial || []).join('\n'); ta.disabled = !canEdit;
     tas[f.key] = ta;
@@ -2706,7 +2648,7 @@ function storageEditor(detail, data) {
   const body = el('div');
   detail.replaceChildren(
     sectionHead('저장소 · 로그', '이 서버의 디스크가 얼마나 찼는지 보고, 로그가 무한히 쌓이지 않도록 상한을 정합니다. 디스크가 가득 차면 로그인을 포함한 모든 기능이 멈추므로 미리 확인하는 화면입니다.'),
-    el('div', { class: 'card' }, body));
+    el('div', { class: 'card' }, cardHead('디스크 사용량과 로그 보관'), body));
   body.append(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
 
   async function load() {
@@ -3211,7 +3153,7 @@ function sessionShareEditor(detail, data) {
   const body = el('div');
   detail.replaceChildren(
     sectionHead('세션 공유', '구성원의 AI 대화 기록을 중앙에 모아, 다른 컴퓨터·다른 사람이 이어서 보고 이어받게 합니다. 대화 전문이 저장되므로 기본은 꺼져 있습니다.'),
-    el('div', { class: 'card' }, body));
+    el('div', { class: 'card' }, cardHead('세션 공유 설정'), body));
   if (!rc) { body.append(el('p', { class: 'admin-hint', text: '이 설정은 관리자(admin)만 볼 수 있습니다.' })); return; }
   build();
 
@@ -3289,7 +3231,7 @@ function embeddingsEditor(detail, data) {
   const body = el('div');
   detail.replaceChildren(
     sectionHead('의미 검색 (임베딩)', 'AI와 사람이 지식을 단어가 아니라 뜻으로 찾게 합니다. 꺼 두면 단어가 그대로 들어간 지식만 찾습니다.'),
-    el('div', { class: 'card' }, body));
+    el('div', { class: 'card' }, cardHead('의미 검색 상태와 설정'), body));
   body.append(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
 
   let pollTimer: any = null;
@@ -3595,8 +3537,7 @@ function mcpEditor(detail, data) {
         placeholder: 'localhost\nmcp.internal.acme.com\n줄당 호스트 한 개(포트·경로 없이)' },
     ]);
   detail.replaceChildren(el('div', { class: 'card' },
-    // '외부 도구 서버'는 '외부 자료 수집'(미러)과 **정반대 축**이라, 그 자리에서 구분을 읽을 수 있게 meaning 을 단다(#837).
-    sectionTitle('외부 도구 서버 (MCP)', data.meaning && data.meaning['mcp-server']),
+    cardHead('등록된 외부 도구 서버', '하네스가 호출할 수 있는 외부 MCP 서버입니다. 자료를 우리 DB 로 가져오는 [외부 자료 수집]과 반대로, 여기 등록된 서버는 세션에서 그때그때 호출됩니다.'),
     el('div', { class: 'admin-two admin-two-cols' }, listCol, right)),
     mcpSafety);
 }
@@ -3815,6 +3756,7 @@ function connectorEditor(detail, data) {
   detail.replaceChildren(
     sectionHead('외부 자료 수집', '슬랙·노션·클릭업 같은 외부 도구의 자료를 주기적으로 가져옵니다.', data.meaning && data.meaning['connector']),
     el('div', { class: 'card' }, banner,
+      cardHead('연결된 외부 도구'),
       el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
 }
 
@@ -4205,7 +4147,7 @@ function feedTargetCard(t, categories, rerender) {
 
 // 새 피드 만들기 — 부모 페이지 하위에 DB 생성(부트스트랩) 또는 기존 노션 DB id 등록. 둘 다 exclude_pages 자동 등록.
 function newFeedForm(rerender) {
-  const wrap = el('div', { class: 'card', style: 'margin-top:14px' });
+  const wrap = el('div', { class: 'card', style: 'margin-top:14px' }, cardHead('새 피드 만들기'));
   const titleIn = el('input', { class: 'input', type: 'text', value: 'Lively 지식 피드' });
   const parentIn = el('input', { class: 'input', type: 'text', placeholder: '노션 부모 페이지 URL 또는 id — 여기 하위에 피드 DB 생성' });
   const dbIn = el('input', { class: 'input', type: 'text', placeholder: '또는: 이미 만든 노션 DB id 를 등록' });
@@ -4281,7 +4223,7 @@ async function projectOutboundEditor(detail, data) {
   body.append(table);
   body.append(el('p', { class: 'admin-hint', style: 'margin-top:10px', text: '※ 인바운드 싱크(외부→우리)와 토큰·컨테이너 설정은 [외부 자료 수집] 탭에 있습니다. 여기는 아웃바운드(우리→외부) on/off 전용입니다.' }));
 
-  detail.replaceChildren(sectionHead('프로젝트 아웃바운드', '우리 프로젝트와 과업의 변경을 외부 협업 도구로 내보냅니다.', meaning), el('div', { class: 'card' }, body));
+  detail.replaceChildren(sectionHead('프로젝트 아웃바운드', '우리 프로젝트와 과업의 변경을 외부 협업 도구로 내보냅니다.', meaning), el('div', { class: 'card' }, cardHead('내보내는 항목'), body));
 }
 
 function dbSourceEditor(detail, data) {
@@ -4338,7 +4280,7 @@ function dbSourceEditor(detail, data) {
   detail.replaceChildren(
     sectionHead('DB 데이터소스', 'AI가 조회할 수 있는 데이터베이스를 등록하고, 어느 테이블까지 어떻게 보여줄지 정합니다.', data.meaning['db-source']),
     el('div', { class: 'admin-stack' },
-      el('div', { class: 'card' }, el('div', { class: 'admin-two admin-two-cols' }, listCol, right)),
+      el('div', { class: 'card' }, cardHead('등록된 DB 소스'), el('div', { class: 'admin-two admin-two-cols' }, listCol, right)),
       dbSafety));
 }
 
@@ -4696,7 +4638,7 @@ function customHookEditor(detail, data) {
     el('p', { class: 'admin-hint', text: '구성원 머신에서 특정 시점에 자동 실행되는 코드입니다. 본문은 구성원 디스크에 저장되지 않고 매 세션 게이트웨이에서 받아 실행됩니다(비활성화하면 다음 세션부터 실행되지 않습니다). 왼쪽 목록에서 항목을 선택하면 내용을 보고 편집할 수 있습니다.' }),
     relayPolicyCard(data, detail),
     gracePolicyCard(data, detail));
-  detail.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
+  detail.replaceChildren(el('div', { class: 'card' }, cardHead('커스텀 훅'), el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
 }
 
 // PreToolUse 결정 전파 정책(#892) — 러너가 훅의 permissionDecision 중 무엇을 하네스로 넘길지.
@@ -4870,7 +4812,7 @@ function harnessAssetEditor(detail, data) {
     : assets.find((a) => a.id === sel);
   if (editing) assetForm(right, editing, data, detail, sel === '__new__');
   else right.append(el('p', { class: 'admin-hint', text: '스킬(작업 방법서)·서브에이전트(보조 AI)·슬래시커맨드(단축 명령)를 정의해 구성원 하네스에 배포합니다. 저장하면 구성원 세션 시작 때 디스크에 동기화되며, 스킬·커맨드는 진행 중인 세션에도 즉시 반영됩니다. 왼쪽 목록에서 항목을 선택하면 내용을 보고 편집할 수 있습니다.' }));
-  detail.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
+  detail.replaceChildren(el('div', { class: 'card' }, cardHead('스킬 · 서브에이전트 · 커맨드'), el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
 }
 
 function assetForm(root, a, data, detail, isNew) {
@@ -4971,7 +4913,7 @@ function toolsEditor(detail, data) {
       { key: 'allowed_auth_envs', label: '허용 인증 환경변수 이름 (allowed_auth_envs)', initial: pol.allowed_auth_envs, placeholder: 'ACME_API_TOKEN\n줄당 환경변수 이름(값 아님)' },
     ]);
   detail.replaceChildren(
-    el('div', { class: 'card' }, el('div', { class: 'admin-two admin-two-cols' }, listCol, right)),
+    el('div', { class: 'card' }, cardHead('등록된 AI 도구'), el('div', { class: 'admin-two admin-two-cols' }, listCol, right)),
     toolsSafety);
 }
 
@@ -5541,7 +5483,7 @@ function oauthConnectorsCard(conns, reload) {
 // 커넥터 현황(#746 imp#4·#5) — 기본 카탈로그 각 커넥터의 등록/설정 상태 개관(관리자 온보딩 지도).
 function catalogStatusCard(catalog: any[], servers: any[]) {
   const byName = new Map((servers || []).map((s: any) => [s.name, s]));
-  const rows: any[] = [el('p', { class: 'admin-hint', style: 'margin:0 0 8px', text: '기본 제공되는 외부 도구 서버(MCP) 프리셋의 현재 상태입니다 — 외부 자료 수집(미러)과는 별개 항목입니다. 추가·발행은 [AI 도구 ▸ 외부 도구 서버]에서 하고, 구성원은 각자 [연결]에서 자기 계정을 연결합니다.' })];
+  const rows: any[] = [cardHead('기본 제공 도구 서버 상태', '기본 제공되는 외부 도구 서버(MCP) 프리셋의 현재 상태입니다 — 외부 자료 수집(미러)과는 별개 항목입니다. 추가·발행은 [AI 도구 ▸ 외부 도구 서버]에서 하고, 구성원은 각자 [연결]에서 자기 계정을 연결합니다.')];
   for (const c of (catalog || [])) {
     const s = byName.get(c.name);
     let chip: any; let hint = '';
@@ -5739,7 +5681,7 @@ function svcTokenForm(kind: string, reload: () => void) {
 function credVaultCard(owner: 'me' | 'org', title: string, intro: string, creds: any[], encReady: boolean, reload: () => void) {
   const base = owner === 'me' ? '/api/ui/me/credential' : '/api/ui/org/credential';
   const kindLabel = (k: string) => (CRED_KINDS.find((x) => x.kind === k)?.label || k);
-  const rows: any[] = [el('p', { class: 'admin-hint', style: 'margin:0 0 12px', text: intro })];
+  const rows: any[] = [cardHead(title, intro)];
 
   // 등록된 자격 — 균일 보더 행(svc-item). 칩 + scope_key + 삭제(값 비노출).
   if (creds.length) {
@@ -5795,7 +5737,7 @@ function credVaultCard(owner: 'me' | 'org', title: string, intro: string, creds:
   });
 
   rows.push(el('div', { class: 'card', style: 'padding:12px; margin-top:10px;' },
-    el('div', { class: 'admin-subhead', style: 'margin-bottom:8px', text: '새 자격 추가' }),
+    cardHead('새 자격 추가'),
     field('서비스', kindSel), scopeField, secretField, helpP, docLink,
     el('div', { class: 'admin-actions', style: 'margin-top:10px' }, submit, status)));
 
@@ -5807,7 +5749,7 @@ function credVaultCard(owner: 'me' | 'org', title: string, intro: string, creds:
 function awsRoleCard(creds: any[], reload: () => void) {
   const ownerLabel = (o: string) => (o && o.startsWith('member:') ? '구성원 ' + o.slice(7) : '전원 기본');
   const ownerMember = (o: string) => (o && o.startsWith('member:') ? o.slice(7) : ''); // '' = 조직 통합
-  const rows: any[] = [el('p', { class: 'admin-hint', style: 'margin:0 0 6px', text: 'AWS 는 토큰 대신 "역할(role)"을 등록합니다. 게이트웨이가 이 역할을 각 구성원 이름으로 가정(assume)해 15분 동안 유효한 단기 자격을 발급합니다 — 장기 키를 저장하지 않으므로 유출 위험이 없고, 누가 무엇을 했는지 AWS CloudTrail 에 기록됩니다. "전원 기본"은 조회(readonly) 역할로 두고, 쓰기가 필요한 구성원만 개별 오버라이드하세요. (역할·신뢰관계는 AWS 관리자가 먼저 만들어야 합니다.)' })];
+  const rows: any[] = [cardHead('AWS 역할', 'AWS 는 토큰 대신 "역할(role)"을 등록합니다. 게이트웨이가 이 역할을 각 구성원 이름으로 가정(assume)해 15분 동안 유효한 단기 자격을 발급합니다 — 장기 키를 저장하지 않으므로 유출 위험이 없고, 누가 무엇을 했는지 AWS CloudTrail 에 기록됩니다. "전원 기본"은 조회(readonly) 역할로 두고, 쓰기가 필요한 구성원만 개별 오버라이드하세요. (역할·신뢰관계는 AWS 관리자가 먼저 만들어야 합니다.)')];
   // owner 정렬: 전원 기본(gateway) 먼저, 그 다음 구성원 오버라이드.
   const sorted = [...creds].sort((a, b) => (ownerMember(a.owner) ? 1 : 0) - (ownerMember(b.owner) ? 1 : 0) || String(a.owner).localeCompare(String(b.owner)));
   for (const c of sorted) {
@@ -5861,7 +5803,7 @@ function awsRoleCard(creds: any[], reload: () => void) {
     } catch (e: any) { status.textContent = ''; (submit as any).disabled = false; toast((e && e.message) || '저장 실패', true); }
   });
   rows.push(el('div', { class: 'card', style: 'padding:12px; margin-top:10px;' },
-    el('div', { class: 'admin-subhead', style: 'margin-bottom:8px', text: 'AWS 역할 등록 · 오버라이드' }),
+    cardHead('AWS 역할 등록 · 오버라이드'),
     field('적용 대상', targetSel), memberField,
     field('역할 ARN (role ARN)', arnIn), field('리전 (region)', regionSel),
     field('서명 서비스 (선택 · 기본 execute-api)', serviceIn), field('ExternalId (선택)', extIn), field('구분 이름 (선택)', scopeIn),
@@ -5906,7 +5848,7 @@ async function dbAuditEditor(detail, data) {
   } });
   bar.append(el('div', { class: 'audit-verify' }, verifyBtn, verifyOut));
   const card = el('div', { class: 'card' },
-    sectionTitle('DB 조회 기록', "구성원(과 그들의 AI)이 db_query·db_schema 로 어떤 데이터를 조회했는지 전부 기록됩니다 — 조회자·시각·소스·테이블·마스킹/열람 컬럼·대상 식별자. 기록은 해시체인으로 위변조를 방지하며, 신용정보법상 조회 기록 보존에 사용합니다. '누구의 정보인지'를 남길 식별자 컬럼은 [데이터 연결 ▸ DB 데이터소스]에서 지정합니다."),
+    cardHead('DB 조회 기록', "구성원(과 그들의 AI)이 db_query·db_schema 로 어떤 데이터를 조회했는지 전부 기록됩니다 — 조회자·시각·소스·테이블·마스킹/열람 컬럼·대상 식별자. 기록은 해시체인으로 위변조를 방지하며, 신용정보법상 조회 기록 보존에 사용합니다. '누구의 정보인지'를 남길 식별자 컬럼은 [데이터 연결 ▸ DB 데이터소스]에서 지정합니다."),
     bar,
     body);
   detail.replaceChildren(card);
@@ -6333,7 +6275,7 @@ async function myAiSection(detail) {
       el('div', { class: 'card admin-form-narrow' },
         // 섹션 제목은 서술문('~할 것')이 아니라 **명사구**로 — 관리탭 다른 섹션(구성원·조직 정보·세션 주입)과 같은 규격.
         //  설명 한 줄은 위 [AI 계정 연결] 박스와 같은 자리(.caption)에 둔다: 박스마다 [제목 · 한 줄 설명 · 내용].
-        cardHead('AI 개인 규칙', '내 역할·호칭·말투·사용 언어입니다. 내 AI 가 매 세션을 시작할 때 이 내용을 읽고 따릅니다 — 나에게만 적용되고 팀에는 공유되지 않습니다. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).'),
+        cardHead('AI 개인 규칙', '내 역할·호칭·말투·사용 언어입니다. 내 AI 가 매 세션을 시작할 때 이 내용을 읽고 따릅니다 — 나에게만 적용되고 팀에는 공유되지 않습니다.'),
         // 필드는 종전 그대로 — 라벨 + 입력칸 + 회색 힌트(사용자: "필드들은 ⓘ 규격 바꾸지 말고 이전 유지").
         field('역할', roleIn),
         field('개발 이해도', el('div', {}, devChips, devHint)),
@@ -6351,16 +6293,19 @@ async function myAiSection(detail) {
 // ── [내 설정 ▸ 내 서비스 로그인] — member_secret vault + OAuth 연결 + git 인증 ──
 async function myLoginsSection(detail) {
   // #762 서비스별 탭 재설계 — 헤더 + [서비스 로그인(탭)] + [레포 접근(개발자용)]. 방식(OAuth/토큰) 노출 안 함.
-  const svcCard = el('div', { class: 'card' });   // 서비스별 탭이 여기 그려짐
+  // 제목은 카드에 고정하고, 탭 본문만 안쪽 host 에 그린다 — renderServiceTabs 가 replaceChildren 이라 제목이 같이 지워지면 안 된다.
+  const svcHost = el('div');
+  const svcCard = el('div', { class: 'card' },
+    cardHead('서비스 로그인', 'AI 가 나를 대신해 이 서비스를 쓰려면 내 계정을 연결해야 합니다. 연결은 나에게만 적용되고, 토큰 값은 저장 후 다시 볼 수 없습니다.'),
+    svcHost);
   const gitCard = el('div', { class: 'card' },
-    el('h3', { class: 'admin-subhead', text: '레포 접근 (개발자용)' }),
-    el('p', { class: 'admin-hint', style: 'margin:0 0 10px', text: '코드 저장소(GitHub·GitLab)에서 클론·푸시할 때 쓰는 SSH 키/토큰이에요. 코드 작업을 하지 않는다면 설정하지 않아도 돼요.' }),
+    cardHead('코드 저장소 접근', '코드 저장소(GitHub·GitLab)에서 클론·푸시할 때 쓰는 SSH 키·토큰입니다. 코드 작업을 하지 않으면 설정하지 않아도 됩니다.'),
     el('div', { class: 'admin-actions' },
       el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'git 인증 관리', onclick: () => openGitCredentialManager('me') })));
   detail.replaceChildren(
     sectionHead('내 서비스 로그인', 'AI가 내 계정으로 외부 서비스를 쓸 수 있게 미리 로그인해 둡니다. 여기 로그인은 나에게만 적용되고 팀에는 공유되지 않습니다.'),
     el('div', { class: 'admin-stack' }, svcCard, gitCard));
-  await renderServiceTabs(svcCard);
+  await renderServiceTabs(svcHost);
 }
 
 // ── [내 설정 ▸ 내 스킬·훅] — 라이블리 배포분 opt-on/off(#699) + 내 컴퓨터별 로컬 하네스 조회·토글(#891/893). ──
@@ -6387,7 +6332,7 @@ async function myAssetsSection(detail) {
   const bodyBox = el('div', {});
   detail.replaceChildren(
     sectionHead('내 스킬 · 훅', '내 AI가 쓰는 스킬·훅이 어느 컴퓨터에 설치됐는지 보고, 켜고 끕니다. 켜고 끈 변경은 다음 세션부터 적용됩니다.'),
-    el('div', { class: 'card' }, bodyBox));
+    el('div', { class: 'card' }, cardHead('설치 상태'), bodyBox));
 
   const reload = async () => {
     bodyBox.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));

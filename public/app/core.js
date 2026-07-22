@@ -1102,6 +1102,78 @@ function confidenceDot(confidence) {
         : (confidence === 'rule' || confidence === 'observed') ? 'st dim' : 'st';
     return el('span', { class: cls, text: CONFIDENCE_LABEL[confidence] || confidence });
 }
+// 설명 문자열의 **강조**만 인라인으로 살린다 — 그 외 마크다운은 안 쓴다(el 이 텍스트 노드로만 붙이므로 innerHTML 없음).
+//  안 그러면 화면에 별표가 그대로 보인다(실제로 [외부 자료 수집] 설명에 '**우리 DB 로 복사**'가 노출됐다).
+function inlineBold(text) {
+    const out = [];
+    const src = String(text);
+    let i = 0;
+    for (const m of src.matchAll(/\*\*(.+?)\*\*/g)) {
+        const at = m.index;
+        if (at > i)
+            out.push(src.slice(i, at));
+        out.push(el('b', { text: m[1] }));
+        i = at + m[0].length;
+    }
+    if (i < src.length)
+        out.push(src.slice(i));
+    return out;
+}
+// ⓘ — 제목·라벨 오른쪽에 옅게 붙는 **아이콘 하나**. 누르면 그 자리에 팝오버로 설명이 뜬다(#1085).
+//  왜: 회색 설명문을 제목·필드마다 화면에 깔면 글이 화면을 덮어 정작 내용·입력칸이 안 읽힌다(윤상민 지적).
+//  '이게 뭐예요?' 팝업(구 meaningCard — '구성원에게 미치는 효과' 카드)은 **통째로 폐기**했다(사용자 요구:
+//  "문구만 지우지 말고 팝업까지 날려버려"). 그래서 이 팝오버가 싣는 건 설명 문자열 하나뿐이다(**강조** 지원).
+function infoPop(text) {
+    if (!text)
+        return null;
+    const btn = el('button', { class: 'hint-i', type: 'button', 'aria-haspopup': 'dialog', 'aria-label': '설명 보기', title: '설명 보기' }, el('span', { 'aria-hidden': 'true', text: 'ⓘ' }));
+    let pop = null;
+    const close = () => {
+        if (!pop)
+            return;
+        pop.remove();
+        pop = null;
+        btn.setAttribute('aria-expanded', 'false');
+        document.removeEventListener('mousedown', onDoc, true);
+        document.removeEventListener('keydown', onKey, true);
+        window.removeEventListener('resize', close);
+        window.removeEventListener('scroll', close, true);
+    };
+    const onDoc = (e) => { if (pop && !pop.contains(e.target) && !btn.contains(e.target))
+        close(); };
+    const onKey = (e) => { if (e.key === 'Escape') {
+        close();
+        btn.focus();
+    } };
+    btn.addEventListener('click', () => {
+        if (pop) {
+            close();
+            return;
+        }
+        pop = el('div', { class: 'hint-pop', role: 'dialog' }, el('p', { class: 'hint-pop-text' }, ...inlineBold(text)));
+        document.body.append(pop);
+        // 아이콘 아래에 띄우되 화면 밖으로 나가지 않게 가둔다. 자리가 없으면 위로 뒤집는다(고정 위치 = 카드 overflow 무관).
+        const r = btn.getBoundingClientRect();
+        const w = Math.min(360, window.innerWidth - 24);
+        pop.style.width = w + 'px';
+        pop.style.left = Math.round(Math.min(Math.max(12, r.left - 10), window.innerWidth - w - 12)) + 'px';
+        const below = window.innerHeight - r.bottom;
+        if (below < pop.offsetHeight + 20 && r.top > pop.offsetHeight + 20)
+            pop.style.top = Math.round(r.top - pop.offsetHeight - 8) + 'px';
+        else
+            pop.style.top = Math.round(r.bottom + 8) + 'px';
+        btn.setAttribute('aria-expanded', 'true');
+        document.addEventListener('mousedown', onDoc, true);
+        document.addEventListener('keydown', onKey, true);
+        window.addEventListener('resize', close);
+        window.addEventListener('scroll', close, true);
+    });
+    return btn;
+}
+// 카드(박스) 섹션 제목 — 제목 + 오른쪽 ⓘ. 카드 안 설명도 회색 줄 대신 이 아이콘 뒤로 접는다(#1085).
+function cardHead(title, desc) {
+    return el('div', { class: 'card-head-row' }, el('h3', { text: title }), infoPop(desc || null));
+}
 // ── 공용: 즉시 표시 호버 툴팁 ──
 //  native title 은 지연(~1s)·발견성이 나쁘고, overflow:hidden 카드(.list-box)에선 CSS 말풍선이 잘린다.
 //  → fixed 포지션 말풍선을 body 에 붙여 클립·지연 없이 즉시 보여준다(마우스 hover + 키보드 focus). 접근성은 aria-label.
@@ -1271,4 +1343,4 @@ function personFace(id, cls, name) {
         loadPeopleAvatars().then(() => paintFace(wrap, id, name));
     return wrap;
 }
-export { avatarColor, initials, profileAvatar, personFace, loadPeopleAvatars, setPersonAvatar, $view, ACTIVITY_TYPE_LABEL, ACTIVITY_TYPE_ORDER, interleave, LIFECYCLE_LABEL, REF_REL_LABEL, REVIEW_LABEL, TOKEN_KEY, VOCAB_CRUD_DEFAULT_REPO, absTime, api, applyReveal, confidenceDot, withTip, el, errorNote, fmtNum, hideGate, lifecycleDot, loadRepos, logout, pageHead, reducedMotion, relTime, renderCollection, renderInline, renderMarkdown, safeHref, selectFilter, showGate, stat, state, sv, toast, };
+export { cardHead, infoPop, inlineBold, avatarColor, initials, profileAvatar, personFace, loadPeopleAvatars, setPersonAvatar, $view, ACTIVITY_TYPE_LABEL, ACTIVITY_TYPE_ORDER, interleave, LIFECYCLE_LABEL, REF_REL_LABEL, REVIEW_LABEL, TOKEN_KEY, VOCAB_CRUD_DEFAULT_REPO, absTime, api, applyReveal, confidenceDot, withTip, el, errorNote, fmtNum, hideGate, lifecycleDot, loadRepos, logout, pageHead, reducedMotion, relTime, renderCollection, renderInline, renderMarkdown, safeHref, selectFilter, showGate, stat, state, sv, toast, };
