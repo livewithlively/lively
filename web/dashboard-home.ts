@@ -1194,7 +1194,7 @@ function dashSessState(s): { key: string; label: string } {
   if (s && s.restorable) return { key: 'restorable', label: '복원 가능' };
   // #1015 E — '오프라인' 한 칸을 둘로 갈랐다: exited=하네스가 끝남(AI 더 안 돔) / offline=원격 노드 미연결.
   //  미접속은 더 이상 오프라인이 아니다(세션은 서버에서 상시 돈다) → 백엔드가 idle 로 준다.
-  const map = { busy: '작업중', waiting: '확인 필요', idle: '대기중', exited: '종료됨', offline: '연결 끊김' };
+  const map = { busy: '작업중', waiting: '확인 필요', idle: '대기중', exited: '종료됨', offline: '오프라인' };
   const k = (s && s.agentState) || 'exited';
   return { key: k, label: map[k] || '종료됨' };
 }

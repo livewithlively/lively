@@ -101,22 +101,23 @@ function fmtTermDate(sec) {
 //  ⚠ '대기 중'은 브라우저 접속 여부와 무관하다 — 세션은 게이트웨이/노드에서 상시 돌고, 아무도 안 보고 있다고
 //   꺼진 게 아니다. 예전엔 미접속을 전부 '오프라인'으로 칠해 살아 있는 세션이 꺼진 것처럼 보였다(#1015 E).
 //  title = Claude Code 가 pane 에 써두는 '지금 하는 일' 요약(백엔드 제공) → 카드에 그대로 노출(= '지금 무슨 작업').
-//  waiting 을 맨 앞으로: 내 승인/선택을 기다리는 = 가장 먼저 처리할 것. 끝난 세션(exited)·못 닿는 세션(offline)은 맨 뒤.
+//  waiting 을 맨 앞으로: 내 승인/선택을 기다리는 = 가장 먼저 처리할 것. 아무도 안 보는 세션(offline)·끝난 세션(exited)은 뒤로.
 const TSESS_STATUS = {
     waiting: { label: '확인 필요', cls: 'waiting', rank: 0 },
     busy: { label: '작업 중', cls: 'busy', rank: 1 },
     idle: { label: '대기 중', cls: 'idle', rank: 2 },
     restorable: { label: '복원 가능', cls: 'restorable', rank: 3 }, // #1059 E — 재부팅·회수로 꺼졌으나 복원 가능
     exited: { label: '종료됨', cls: 'exited', rank: 4 },
-    offline: { label: '연결 끊김', cls: 'offline', rank: 5 },
+    offline: { label: '오프라인', cls: 'offline', rank: 5 }, // 미접속(아무도 안 보는 중) 또는 노드 미연결
 };
 // 종료 확인 문구 — 카드/일괄 공통. '삭제'가 아니라 '끝내기'이고 대화록은 남는다는 걸 확인창에서 못 박는다.
 function TSESS_END_CONFIRM(n, head) {
     return head + '\n\n실행 중인 작업이 있으면 함께 중단됩니다.\n대화록은 지워지지 않아요 — 📜 세션 기록에 남고, 거기서 “💬 이어 질문하기”로 이어받을 수 있습니다'
         + (n > 1 ? '.' : '.');
 }
-// 세션이 '이제 AI 가 안 도는' 상태인가 — 일괄 종료 대상 안내·정렬에 쓴다. exited·offline·restorable(#1059 E) 모두.
-function sessDead(s) { const k = sessState(s); return k === 'exited' || k === 'offline' || k === 'restorable'; }
+// 세션이 '이제 AI 가 안 도는' 상태인가 — 일괄 종료 대상·'끝남' 뷰 판정. exited(셸만 남음)·restorable(#1059 E, tmux 죽음).
+//  ⚠ offline 은 제외한다 — 그건 '아무도 안 보는 중'이지 끝난 게 아니다(프로세스는 대개 살아 있다).
+function sessDead(s) { const k = sessState(s); return k === 'exited' || k === 'restorable'; }
 // #1059 E — restorable(desired-state 만 남고 tmux 는 죽음)을 먼저 판정, 그 외는 백엔드 agentState(없으면 exited).
 function sessState(s) { return s.restorable ? 'restorable' : (TSESS_STATUS[s.agentState] ? s.agentState : 'exited'); }
 // 상대 시각 — '방금 · 3분 전 · 2시간 전 · 5일 전'.
@@ -170,8 +171,8 @@ const TSESS_VIEWS = [
     { key: 'busy', label: '작업 중', cls: 'busy', hint: '지금 돌고 있는 세션', match: (s) => s._st === 'busy' },
     { key: 'today', label: '오늘', hint: '오늘(자정 이후) 작업한 세션', match: (s) => sessSinceMidnight(s) },
     { key: 'week', label: '최근 7일', hint: '이번 주에 작업한 세션', match: (s) => sessAgeDays(s) < 7 },
-    { key: 'stale', label: '방치 7일+', hint: '일주일 넘게 아무 작업이 없는 세션 — 정리(종료) 후보', match: (s) => sessAgeDays(s) >= 7 && !sessDead(s) },
-    { key: 'ended', label: '끝남', cls: 'exited', hint: 'AI 가 더 안 도는 세션(종료됨·연결 끊김)', match: (s) => sessDead(s) },
+    { key: 'stale', label: '방치 7일+', hint: '일주일 넘게 아무 작업이 없는 세션(오프라인 포함) — 정리(종료) 후보', match: (s) => sessAgeDays(s) >= 7 && !sessDead(s) },
+    { key: 'ended', label: '끝남', cls: 'exited', hint: 'AI 가 더 안 도는 세션(종료됨·복원 가능) — 정리 대상', match: (s) => sessDead(s) },
 ];
 const TSESS_VIEW_KEY = 'lively_term_view_v2';
 function tsessView() { try {
