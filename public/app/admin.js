@@ -152,9 +152,11 @@ const ADMIN_SECTIONS = [
     // 감사 로그 — 구 [MCP 호출 통계]+[변경 감사 로그]+[DB 접근 감사]. 셋 다 "무슨 일이 있었나"를 묻는 읽기전용
     //  대시보드이고 UI 골격도 이미 동형이었다(oa-* 는 tu-* 복제). 백엔드는 각각 다르므로 서브탭으로만 묶는다.
     { key: 'audit', label: '감사 로그', meaning: null, group: 'ops' },
-    // 저장소·로그(#813) — 디스크가 100% 면 DB 가 죽어 전 기능이 500 이 된다(2026-07-13 사고). 고객 박스는 SSH 로
-    //  못 들어가므로 **여기가 유일한 관측·조절 창구**다.
-    { key: 'storage', label: '저장소 · 로그', meaning: null, group: 'ops' },
+    // 컴퓨팅 리소스(#813·#1059) — 메모리·저장소(디스크). 서브탭으로 메모리/저장소를 가른다. 디스크가 100% 면 DB 가
+    //  죽어 전 기능 500(2026-07-13 사고), 메모리가 마르면 OOM(2026-07 #1059). 고객 박스는 SSH 불가 → 여기가 유일 관측·조절 창구.
+    { key: 'storage', label: '컴퓨팅 리소스', meaning: null, group: 'ops' },
+    // #1059 — 로그(회전·보관)는 별도 메뉴. 컴퓨팅 리소스(메모리·저장소)와 성격이 달라 분리(사용자 피드백).
+    { key: 'logs', label: '로그', meaning: null, group: 'ops' },
 ];
 // 구 URL → 새 섹션. 북마크·내부 링크·문서 링크를 깨지 않는다(#837 병합 + 과거 흡수분).
 const SECTION_REMAP = {
@@ -171,7 +173,7 @@ const SECTION_REMAP = {
 // 구 [검토 큐]는 관리탭을 떠나 WIKI 탭으로 갔다(#837) — 섹션 리맵이 아니라 탭 밖 리다이렉트라 따로 둔다.
 const SECTION_EXIT = { 'review-queue': '#/knowledge/review' };
 // admin 권한 전용(쓰기·인프라·감사). #318 호출통계·#549 변경감사는 전 구성원의 변경·before/after 를 노출하므로 admin.
-const ADMIN_ONLY = ['credentials', 'connectors', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'embeddings', 'automation', 'audit', 'ingest-policy', 'session-share'];
+const ADMIN_ONLY = ['credentials', 'connectors', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'logs', 'embeddings', 'automation', 'audit', 'ingest-policy', 'session-share'];
 const RUNTIME_ONLY = ['agent-assets']; // runtime 권한 전용(멤버 머신에서 도는 것의 정의)
 // [도구]는 두 권한의 합집합 — 사내 API 도구·빌트인은 runtime, 외부 MCP 서버 등록은 admin. 둘 중 하나라도 있으면
 //  섹션을 보여주고, 안에서 각 서브탭을 권한별로 켠다(구조상 한 섹션=한 scope 전제가 깨지는 유일한 자리라 명시한다).
@@ -360,6 +362,8 @@ function renderAdminDetail(detail, sel, data) {
         return credentialsEditor(detail);
     if (sel === 'storage')
         return storageEditor(detail, data);
+    if (sel === 'logs')
+        return logsEditor(detail, data);
     if (sel === 'session-share')
         return sessionShareEditor(detail, data);
     if (sel === 'embeddings')
@@ -2879,39 +2883,15 @@ function storageEditor(detail, data) {
                 : '';
             memBlock = el('div', { class: 'storage-item' }, el('div', { class: 'storage-head' }, el('strong', { text: '메모리' }), el('span', { class: 'storage-lv storage-lv-' + mlvKey, text: '사용 ' + usedPct + '% · ' + mlvLabel })), el('div', { class: 'gauge' }, mfill), el('p', { class: 'storage-calc', text: `전체 ${fmtBytes((mem.total_mb || 0) * 1024 * 1024)} 중 ${fmtBytes((mem.available_mb || 0) * 1024 * 1024)} 가용 · 세션 ${mem.session_count ?? 0}개${ollLine ? ' · ' + ollLine : ''}` }));
         }
-        // ── ① 지금 상태 — 로그 ──
-        const logs = st.logs || { files: [], totalBytes: 0, capBytes: 0, dir: '' };
-        const current = (logs.files || []).filter((f) => !f.rotated);
-        const kept = (logs.files || []).filter((f) => f.rotated);
-        const logLine = logs.capBytes > 0
-            ? `현재 ${fmtBytes(logs.totalBytes)} — 정책상 최대 ${fmtBytes(logs.capBytes)}로 제한됩니다`
-            : `현재 ${fmtBytes(logs.totalBytes)} — ⚠ 회전이 꺼져 있어 상한이 없습니다`;
-        const logDetail = (logs.files || []).length
-            ? el('p', { class: 'storage-calc', text: `현재 로그 ${current.length}개 · 보관본 ${kept.length}개 (${(logs.files || []).slice(0, 4).map((f) => f.name + ' ' + fmtBytes(f.bytes)).join(' · ')})` })
-            : el('p', { class: 'storage-calc', text: '로그 파일 없음' });
-        // ── ② 정책 ──
+        // ── ② 정책 ── (로그 status·보관정책은 별도 '로그' 메뉴 = logsEditor 로 분리 — #1059 사용자 피드백)
         const numIn = (val, min, max) => {
             const i = el('input', { class: 'input input-num', type: 'number', min: String(min), max: String(max) });
             i.value = String(val);
             i.disabled = !canEdit;
             return i;
         };
-        const logMaxIn = numIn(p.log_max_mb ?? 50, 0, 10000);
-        const logKeepIn = numIn(p.log_keep ?? 3, 0, 50);
         const warnIn = numIn(p.disk_warn_pct ?? 85, 1, 99);
         const critIn = numIn(p.disk_critical_pct ?? 95, 1, 100);
-        // 설정값의 '뜻'을 즉시 계산해 보여준다 — 숫자만 놓으면 이게 무슨 의미인지 아무도 모른다.
-        const logCalc = el('p', { class: 'storage-calc' });
-        const recalc = () => {
-            const mb = Number(logMaxIn.value) || 0;
-            const keep = Number(logKeepIn.value) || 0;
-            logCalc.textContent = mb <= 0
-                ? '⚠ 0 = 회전 끔 — 로그가 무한히 쌓입니다(권장하지 않음).'
-                : `→ 로그가 차지할 수 있는 최대 용량: ${fmtBytes(mb * 1024 * 1024 * (keep + 1))} (${mb}MB 씩 현재 1개 + 보관 ${keep}개)`;
-        };
-        logMaxIn.addEventListener('input', recalc);
-        logKeepIn.addEventListener('input', recalc);
-        recalc();
         // ── ② 정책 — 공유 빌드 캐시(#813 T3) ──
         const cache = st.cache || { root: '', vars: [], bytes: 0, partial: false };
         const cacheChk = el('input', { type: 'checkbox' });
@@ -2934,9 +2914,9 @@ function storageEditor(detail, data) {
         saveBtn.addEventListener('click', async () => {
             saveBtn.disabled = true;
             try {
+                // 저장소 정책 = 디스크 임계 + 공유 캐시만. 로그(로그 메뉴)·메모리 임계(메모리 탭)는 각자 저장 —
+                //  updateRuntimeConfig 가 storage_policy 를 **병합**하므로 여기서 안 보낸 필드(log_*·mem_*)는 보존된다.
                 const storage_policy = {
-                    log_max_mb: Number(logMaxIn.value),
-                    log_keep: Number(logKeepIn.value),
                     disk_warn_pct: Number(warnIn.value),
                     disk_critical_pct: Number(critIn.value),
                     shared_cache_enabled: cacheChk.checked,
@@ -2998,13 +2978,38 @@ function storageEditor(detail, data) {
                 reclaimBtn.disabled = false;
             }
         });
-        body.replaceChildren(...(banner ? [banner] : []), el('h3', { class: 'storage-h', text: '지금 상태' }), el('div', { class: 'storage-block' }, ...diskRows), ...(memBlock ? [el('div', { class: 'storage-block' }, memBlock, el('p', { class: 'admin-hint', text: '가용 = 회수 가능한 캐시 포함(지금 새 작업에 내줄 수 있는 양). #1059 다운은 만성(세션 baseline)+급성(Ollama 임베딩 스파이크)이 겹쳐 물리 초과로 일어났습니다 — 세션 수와 Ollama 로드를 함께 봅니다.' }))] : []), el('div', { class: 'storage-block' }, el('div', { class: 'storage-head' }, el('strong', { text: '로그' })), el('p', { class: 'storage-calc' }, el('code', { text: logs.dir || '' })), el('p', { class: 'storage-calc', text: logLine }), logDetail), el('h3', { class: 'storage-h', text: '정책' }), ...(srcNote ? [srcNote] : []), el('div', { class: 'storage-block' }, el('strong', { text: '로그 보관' }), el('div', { class: 'storage-fields' }, el('label', {}, el('span', { text: '파일 1개 최대(MB)' }), logMaxIn), el('label', {}, el('span', { text: '보관 개수' }), logKeepIn)), logCalc, el('p', { class: 'admin-hint', text: '상한을 넘으면 자동으로 회전합니다(내용은 보관본으로 넘기고 현재 파일은 비웁니다). 서비스는 멈추지 않습니다.' })), el('div', { class: 'storage-block' }, el('strong', { text: '디스크 경고' }), el('div', { class: 'storage-fields' }, el('label', {}, el('span', { text: '경고 임계(%)' }), warnIn), el('label', {}, el('span', { text: '위험 임계(%)' }), critIn)), el('p', { class: 'storage-calc', text: '경고 → /readyz 가 degraded 로 알립니다(서비스는 정상 동작). 위험 → 신규 세션·클론을 막습니다.' }), el('p', { class: 'admin-hint', text: '경고 임계는 위험 임계보다 낮아야 합니다.' })), 
+        // ── 메모리 경보 임계(#1059) — 디스크처럼 사용%가 임계 넘으면 경보 웹훅. 0=끔. 채널은 저장소 탭 ▸ 경보 알림 공용. ──
+        const memWarnIn = numIn(p.mem_warn_pct ?? 0, 0, 99);
+        const memCritIn = numIn(p.mem_critical_pct ?? 0, 0, 100);
+        const memAlertBtn = el('button', { class: 'btn btn-primary btn-sm', text: '메모리 경보 임계 저장' });
+        memAlertBtn.disabled = !canEdit;
+        memAlertBtn.addEventListener('click', async () => {
+            memAlertBtn.disabled = true;
+            try {
+                await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ storage_policy: { mem_warn_pct: Number(memWarnIn.value), mem_critical_pct: Number(memCritIn.value) } }) });
+                toast('저장됨 — 다음 감시 주기(5분)부터 적용됩니다.');
+                load();
+            }
+            catch (e) {
+                toast(e.message, true);
+                memAlertBtn.disabled = false;
+            }
+        });
+        // ── 서브탭: [메모리] · [저장소] (#1059 — 메모리를 저장소 하위에서 꺼내 대등한 탭으로) ──
+        const memoryTab = (host) => host.replaceChildren(el('h3', { class: 'storage-h', text: '지금 상태' }), ...(memBlock
+            ? [el('div', { class: 'storage-block' }, memBlock, el('p', { class: 'admin-hint', text: '가용 = 회수 가능한 캐시 포함(지금 새 작업에 내줄 수 있는 양). #1059 다운은 만성(세션 baseline)+급성(Ollama 임베딩 스파이크)이 겹쳐 물리 초과로 일어났습니다 — 세션 수와 Ollama 로드를 함께 봅니다.' }))]
+            : [el('div', { class: 'storage-block' }, el('p', { class: 'admin-hint', text: '메모리 정보를 읽지 못했습니다.' }))]), el('h3', { class: 'storage-h', text: '메모리 경보' }), el('div', { class: 'storage-block' }, el('strong', { text: '메모리 경보 임계' }), el('div', { class: 'storage-fields' }, el('label', {}, el('span', { text: '경고 임계(사용%, 0=끔)' }), memWarnIn), el('label', {}, el('span', { text: '위험 임계(사용%, 0=끔)' }), memCritIn)), el('p', { class: 'storage-calc', text: '디스크처럼, 메모리 사용%가 이 값을 넘으면 경보 웹훅으로 알립니다(OOM 임박 사전 경고). 위험 임계는 경고보다 커야 합니다. 0=끔. 제안: 경고 85 · 위험 95.' }), el('p', { class: 'admin-hint', text: '경보를 받을 웹훅 채널은 [저장소] 탭 ▸ 경보 알림 에서 설정합니다(디스크·DB·메모리 공용). 위 게이지의 현재 사용%를 보고 임계를 정하세요.' }), el('div', { class: 'storage-actions' }, memAlertBtn)), 
         // ── 세션 메모리·회수(#1059) — 박스 다운(OOM) 재발 방지의 두 축을 관리탭에서 조절 ──
-        el('h3', { class: 'storage-h', text: '세션 메모리 · 회수' }), el('div', { class: 'storage-block' }, el('strong', { text: '세션 메모리 상한 (per-session)' }), ...(srcHint(st.session_memory_policy_source) ? [srcHint(st.session_memory_policy_source)] : []), el('div', { class: 'storage-fields' }, el('label', {}, el('span', { text: 'MemoryHigh(MB, 0=무제한)' }), memHighIn), el('label', {}, el('span', { text: 'MemoryMax(MB, 0=무제한)' }), memMaxIn)), el('p', { class: 'storage-calc', text: 'MemoryMax 를 넘은 세션은 그 세션 안에서만 OOM-kill 되고 박스는 생존합니다(폭주 1개만 죽음). MemoryHigh 는 그 아래 소프트 스로틀. High ≤ Max.' }), el('p', { class: 'admin-hint', text: 'claude 는 네이티브라 힙제한이 안 통해 cgroup 이 유일 수단입니다. 0/0=무제한(무회귀). 캡을 걸면 새 세션이 격리 scope 로 뜹니다(박스에 격리 인프라 배포 필요 — 미설치면 종전대로 무제한). 예: 16GB 박스 High 3072 · Max 4096.' }), el('div', { class: 'storage-actions' }, memPolBtn)), el('div', { class: 'storage-block' }, el('strong', { text: 'idle 세션 자동 회수' }), ...(srcHint(st.session_reclaim_policy_source) ? [srcHint(st.session_reclaim_policy_source)] : []), el('div', { class: 'storage-fields' }, el('label', {}, el('span', { text: 'idle 임계(분, 0=끔)' }), idleTtlIn)), el('p', { class: 'storage-calc', text: '이 시간 넘게 idle 인 세션을 5분 주기로 회수합니다. 작업내용(대화·설정)은 보존돼 목록에 “복원 가능”으로 남고, 열면 이어집니다(admission control 대신 채택).' }), el('p', { class: 'admin-hint', text: '0=끔(무회귀, 기본). 상시(managed)·접속 중·작업 중·확인 대기 세션은 절대 회수하지 않습니다. 예: 16GB 박스 180~1440분.' }), el('div', { class: 'storage-actions' }, reclaimBtn)), el('div', { class: 'storage-block' }, el('strong', { text: '공유 빌드 캐시' }), el('label', { class: 'storage-toggle' }, cacheChk, el('span', { text: ' 의존성 캐시를 서버의 공유 위치 한 곳에 모읍니다 (권장)' })), cacheState, el('p', { class: 'admin-hint', text: 'npm·pnpm·pip·uv·Go·Maven·Yarn·NuGet·Composer 의 다운로드 캐시를 세션마다 따로 받지 않고 공유합니다. 빌드가 빨라지고, 나중에 프로젝트의 빌드 산출물을 정리해도 금방 복구됩니다. 새로 만드는 세션부터 적용됩니다.' }), el('label', { class: 'storage-toggle' }, homeChk, el('span', { text: ' Gradle · Cargo 홈까지 공유 (주의)' })), el('p', { class: 'admin-hint storage-warn', text: '⚠ 이 옵션을 켜면 캐시뿐 아니라 설정·자격증명도 공유 위치로 옮겨갑니다 — ~/.gradle/gradle.properties(서명키·저장소 인증)와 ~/.cargo/credentials.toml(레지스트리 토큰)이 무시됩니다. 그 파일에 의존하는 빌드가 실패할 수 있으니, 해당 파일을 쓰지 않는 것이 확실할 때만 켜세요.' }), 
-        // fix#103: 저장 버튼을 정책 마지막 카드 안으로 — '경보 알림' 사이에 홀로 떠서 저장 범위가 안 읽히던 문제.
-        el('div', { class: 'storage-actions' }, saveBtn)), el('h3', { class: 'storage-h', text: '경보 알림' }), alertRegion, el('h3', { class: 'storage-h', text: '워크스페이스' }), wsRegion);
-        loadAlert();
-        loadWorkspace();
+        el('h3', { class: 'storage-h', text: '세션 메모리 · 회수' }), el('div', { class: 'storage-block' }, el('strong', { text: '세션 메모리 상한 (per-session)' }), ...(srcHint(st.session_memory_policy_source) ? [srcHint(st.session_memory_policy_source)] : []), el('div', { class: 'storage-fields' }, el('label', {}, el('span', { text: 'MemoryHigh(MB, 0=무제한)' }), memHighIn), el('label', {}, el('span', { text: 'MemoryMax(MB, 0=무제한)' }), memMaxIn)), el('p', { class: 'storage-calc', text: 'MemoryMax 를 넘은 세션은 그 세션 안에서만 OOM-kill 되고 박스는 생존합니다(폭주 1개만 죽음). MemoryHigh 는 그 아래 소프트 스로틀. High ≤ Max.' }), el('p', { class: 'admin-hint', text: 'claude 는 네이티브라 힙제한이 안 통해 cgroup 이 유일 수단입니다. 0/0=무제한(무회귀). 캡을 걸면 새 세션이 격리 scope 로 뜹니다(박스에 격리 인프라 배포 필요 — 미설치면 종전대로 무제한). 예: 16GB 박스 High 3072 · Max 4096.' }), el('div', { class: 'storage-actions' }, memPolBtn)), el('div', { class: 'storage-block' }, el('strong', { text: 'idle 세션 자동 회수' }), ...(srcHint(st.session_reclaim_policy_source) ? [srcHint(st.session_reclaim_policy_source)] : []), el('div', { class: 'storage-fields' }, el('label', {}, el('span', { text: 'idle 임계(분, 0=끔)' }), idleTtlIn)), el('p', { class: 'storage-calc', text: '이 시간 넘게 idle 인 세션을 5분 주기로 회수합니다. 작업내용(대화·설정)은 보존돼 목록에 “복원 가능”으로 남고, 열면 이어집니다(admission control 대신 채택).' }), el('p', { class: 'admin-hint', text: '0=끔(무회귀, 기본). 상시(managed)·접속 중·작업 중·확인 대기 세션은 절대 회수하지 않습니다. 예: 16GB 박스 180~1440분.' }), el('div', { class: 'storage-actions' }, reclaimBtn)));
+        const storageTab = (host) => {
+            host.replaceChildren(...(banner ? [banner] : []), el('h3', { class: 'storage-h', text: '지금 상태' }), el('div', { class: 'storage-block' }, ...diskRows), el('h3', { class: 'storage-h', text: '정책' }), ...(srcNote ? [srcNote] : []), el('div', { class: 'storage-block' }, el('strong', { text: '디스크 경고' }), el('div', { class: 'storage-fields' }, el('label', {}, el('span', { text: '경고 임계(%)' }), warnIn), el('label', {}, el('span', { text: '위험 임계(%)' }), critIn)), el('p', { class: 'storage-calc', text: '경고 → /readyz 가 degraded 로 알립니다(서비스는 정상 동작). 위험 → 신규 세션·클론을 막습니다.' }), el('p', { class: 'admin-hint', text: '경고 임계는 위험 임계보다 낮아야 합니다.' })), el('div', { class: 'storage-block' }, el('strong', { text: '공유 빌드 캐시' }), el('label', { class: 'storage-toggle' }, cacheChk, el('span', { text: ' 의존성 캐시를 서버의 공유 위치 한 곳에 모읍니다 (권장)' })), cacheState, el('p', { class: 'admin-hint', text: 'npm·pnpm·pip·uv·Go·Maven·Yarn·NuGet·Composer 의 다운로드 캐시를 세션마다 따로 받지 않고 공유합니다. 빌드가 빨라지고, 나중에 프로젝트의 빌드 산출물을 정리해도 금방 복구됩니다. 새로 만드는 세션부터 적용됩니다.' }), el('label', { class: 'storage-toggle' }, homeChk, el('span', { text: ' Gradle · Cargo 홈까지 공유 (주의)' })), el('p', { class: 'admin-hint storage-warn', text: '⚠ 이 옵션을 켜면 캐시뿐 아니라 설정·자격증명도 공유 위치로 옮겨갑니다 — ~/.gradle/gradle.properties(서명키·저장소 인증)와 ~/.cargo/credentials.toml(레지스트리 토큰)이 무시됩니다. 그 파일에 의존하는 빌드가 실패할 수 있으니, 해당 파일을 쓰지 않는 것이 확실할 때만 켜세요.' }), el('div', { class: 'storage-actions' }, saveBtn)), el('h3', { class: 'storage-h', text: '경보 알림' }), alertRegion, el('h3', { class: 'storage-h', text: '워크스페이스' }), wsRegion);
+            loadAlert();
+            loadWorkspace();
+        };
+        body.replaceChildren(segTabs('storage', [
+            { key: 'memory', label: '메모리', render: memoryTab },
+            { key: 'storage', label: '저장소', render: storageTab },
+        ]));
     }
     // ── 경보 알림(#813) ──
     // 2026-07-13 사고의 본질은 "디스크가 찼다"가 아니라 **"아무도 몰랐다"** 였다. 가드가 있어도 사람에게 닿지 않으면
@@ -3253,6 +3258,78 @@ function storageEditor(detail, data) {
             el('p', { class: 'admin-hint', text: `아래는 git 레포(워크트리)가 없는 폴더입니다 — 정리할 파생물이 없어 정상이며, 지울 것도 없습니다(대부분 12KB 안팎).` }),
             emptyToggle, emptyBox,
         ] : []));
+    }
+    load();
+}
+// 로그(#1059 — '컴퓨팅 리소스'에서 분리한 별도 메뉴). 게이트웨이 로그 파일 크기 + 회전(보관) 정책.
+//  데이터 출처는 저장소와 같은 /api/ui/org/storage(logs·policy.log_*). 저장은 storage_policy 의 log 필드만(병합 — 디스크·메모리 보존).
+function logsEditor(detail, data) {
+    const canEdit = !!data.canEdit;
+    const body = el('div');
+    detail.replaceChildren(sectionHead('로그', '게이트웨이 로그 파일이 얼마나 쌓였는지 확인하고, 무한히 자라지 않도록 회전(보관) 상한을 정합니다. 저장하면 즉시 반영됩니다(재시작 불필요).'), el('div', { class: 'card' }, body));
+    body.append(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+    async function load() {
+        let st;
+        try {
+            st = await api('/api/ui/org/storage');
+        }
+        catch (e) {
+            body.replaceChildren(el('p', { class: 'admin-hint', text: '상태를 불러오지 못했습니다: ' + e.message }));
+            return;
+        }
+        build(st);
+    }
+    function build(st) {
+        const p = st.policy || {};
+        const logs = st.logs || { files: [], totalBytes: 0, capBytes: 0, dir: '' };
+        const current = (logs.files || []).filter((f) => !f.rotated);
+        const kept = (logs.files || []).filter((f) => f.rotated);
+        const logLine = logs.capBytes > 0
+            ? `현재 ${fmtBytes(logs.totalBytes)} — 정책상 최대 ${fmtBytes(logs.capBytes)}로 제한됩니다`
+            : `현재 ${fmtBytes(logs.totalBytes)} — ⚠ 회전이 꺼져 있어 상한이 없습니다`;
+        const logDetail = (logs.files || []).length
+            ? el('p', { class: 'storage-calc', text: `현재 로그 ${current.length}개 · 보관본 ${kept.length}개 (${(logs.files || []).slice(0, 4).map((f) => f.name + ' ' + fmtBytes(f.bytes)).join(' · ')})` })
+            : el('p', { class: 'storage-calc', text: '로그 파일 없음' });
+        const numIn = (val, min, max) => {
+            const i = el('input', { class: 'input input-num', type: 'number', min: String(min), max: String(max) });
+            i.value = String(val);
+            i.disabled = !canEdit;
+            return i;
+        };
+        const logMaxIn = numIn(p.log_max_mb ?? 50, 0, 10000);
+        const logKeepIn = numIn(p.log_keep ?? 3, 0, 50);
+        const logCalc = el('p', { class: 'storage-calc' });
+        const recalc = () => {
+            const mb = Number(logMaxIn.value) || 0;
+            const keep = Number(logKeepIn.value) || 0;
+            logCalc.textContent = mb <= 0
+                ? '⚠ 0 = 회전 끔 — 로그가 무한히 쌓입니다(권장하지 않음).'
+                : `→ 로그가 차지할 수 있는 최대 용량: ${fmtBytes(mb * 1024 * 1024 * (keep + 1))} (${mb}MB 씩 현재 1개 + 보관 ${keep}개)`;
+        };
+        logMaxIn.addEventListener('input', recalc);
+        logKeepIn.addEventListener('input', recalc);
+        recalc();
+        const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: '정책 저장' });
+        saveBtn.disabled = !canEdit;
+        saveBtn.addEventListener('click', async () => {
+            saveBtn.disabled = true;
+            try {
+                // storage_policy 병합 저장 — log 필드만 보낸다(디스크·메모리 임계는 컴퓨팅 리소스 탭에서 관리, 서버가 보존).
+                await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ storage_policy: { log_max_mb: Number(logMaxIn.value), log_keep: Number(logKeepIn.value) } }) });
+                toast('저장됨 — 즉시 반영됩니다(재시작 불필요).');
+                load();
+            }
+            catch (e) {
+                toast(e.message, true);
+                saveBtn.disabled = false;
+            }
+        });
+        const srcNote = st.policy_source === 'env'
+            ? el('p', { class: 'admin-hint', text: '현재 값은 서버 환경변수(.env) 시드입니다 — 여기서 저장하면 관리탭 설정이 우선합니다.' })
+            : st.policy_source === 'default'
+                ? el('p', { class: 'admin-hint', text: '아직 설정한 적이 없어 기본값으로 동작 중입니다.' })
+                : null;
+        body.replaceChildren(el('h3', { class: 'storage-h', text: '지금 상태' }), el('div', { class: 'storage-block' }, el('div', { class: 'storage-head' }, el('strong', { text: '로그' })), el('p', { class: 'storage-calc' }, el('code', { text: logs.dir || '' })), el('p', { class: 'storage-calc', text: logLine }), logDetail), el('h3', { class: 'storage-h', text: '정책' }), ...(srcNote ? [srcNote] : []), el('div', { class: 'storage-block' }, el('strong', { text: '로그 보관' }), el('div', { class: 'storage-fields' }, el('label', {}, el('span', { text: '파일 1개 최대(MB)' }), logMaxIn), el('label', {}, el('span', { text: '보관 개수' }), logKeepIn)), logCalc, el('p', { class: 'admin-hint', text: '상한을 넘으면 자동으로 회전합니다(내용은 보관본으로 넘기고 현재 파일은 비웁니다). 서비스는 멈추지 않습니다.' }), el('div', { class: 'storage-actions' }, saveBtn)));
     }
     load();
 }
