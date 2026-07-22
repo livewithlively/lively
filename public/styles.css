@@ -2618,6 +2618,8 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .proj-person-status.filled.me:hover { background: var(--bg-tint-2); }
 .proj-status-pen { color: var(--muted-2); font-size: 10px; }
 .proj-person-status.filled.me:hover .proj-status-pen { color: var(--blue); }
+/* 팀원은 아니지만 이 프로젝트에서 세션을 연 사람(#1088) — 프로필은 뜨되 팀원과 헷갈리지 않게 옅게 표시 */
+.proj-person-status.guest { color: var(--muted-2); font-size: 11.5px; font-weight: 600; }
 .proj-people-panel { margin-top: 0; }
 .proj-people-panel:empty { display: none; }
 .proj-panel-head { display: flex; align-items: center; gap: 4px; font-size: 13.5px; color: var(--ink); padding: 6px 2px 10px; border-top: 1px solid var(--line); margin-top: 0; }

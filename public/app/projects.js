@@ -13078,8 +13078,25 @@ function projectTerminalSection(id, members, meId, base, projectName, project) {
     let sessions = [];
     let selected = null;
     let dragId = null;
-    const ppl = () => (members && members.length ? members : []);
-    const ownerName = (oid) => { const m = ppl().find((x) => x.member_id === oid); return (m && m.display_name) || oid; };
+    let autoPicked = false; // '내 세션 펼침'은 첫 렌더 1회만 — 사용자가 접으면 그 뜻을 존중한다
+    const guestNames = {}; // 팀원 아닌 세션 주인의 표시명(구성원 디렉터리에서)
+    const team = () => (members && members.length ? members : []);
+    // 이 섹션에 그릴 사람 = 팀원 ∪ 세션 주인(#1088).
+    //  프로젝트 세션은 팀원 배정과 무관하게 로그인한 전원이 열고 볼 수 있는데(#452), 예전엔 그리드를 **팀원으로만**
+    //  그려서 (a) 팀원이 한 명도 없는 프로젝트에선 세션이 통째로 안 보이고, (b) 팀원 아닌 사람이 연 세션은
+    //  어느 칸에도 안 잡혀 목록에서 사라졌다. 세션 주인을 뒤에 붙여 '연 사람은 반드시 보이게' 한다.
+    const ppl = () => {
+        const seen = new Set(team().map((x) => x.member_id));
+        const guests = [];
+        for (const s of sessions) {
+            if (!s.owner || seen.has(s.owner))
+                continue;
+            seen.add(s.owner);
+            guests.push({ member_id: s.owner, display_name: guestNames[s.owner] || s.owner, guest: true });
+        }
+        return [...team(), ...guests];
+    };
+    const ownerName = (oid) => { const m = team().find((x) => x.member_id === oid); return (m && m.display_name) || guestNames[oid] || oid; };
     load();
     return card;
     async function load() {
@@ -13091,14 +13108,33 @@ function projectTerminalSection(id, members, meId, base, projectName, project) {
             body.replaceChildren(errorNote(e, '세션을 불러오지 못했습니다'));
             return;
         }
+        // 팀원 아닌 주인이 섞여 있으면 이름을 구성원 디렉터리에서 채운다(1회 캐시). 실패해도 id 로 그린다.
+        const known = new Set(team().map((x) => x.member_id));
+        if (sessions.some((s) => s.owner && !known.has(s.owner))) {
+            try {
+                for (const m of await pjvMemberDirectory())
+                    if (m && m.id)
+                        guestNames[m.id] = m.display_name || m.id;
+            }
+            catch (_) { /* 디렉터리 조회 실패 — id 로 표시 */ }
+        }
         render();
     }
     function render() {
-        if (!ppl().length) {
-            body.replaceChildren(el('div', { class: 'empty', text: '팀원이 없습니다. 위 ‘팀원 수정’으로 추가하면 여기에 프로필이 생깁니다.' }));
+        const people = ppl();
+        if (!people.length) {
+            body.replaceChildren(el('div', { class: 'empty', text: '아직 이 프로젝트의 세션이 없습니다. 위 ‘＋ 새 세션’으로 시작하면 여기에 프로필이 생깁니다.' }));
             return;
         }
-        const grid = el('div', { class: 'proj-people-grid' }, ...ppl().map(personCircle));
+        if (selected && !people.some((x) => x.member_id === selected))
+            selected = null; // 펼쳐둔 사람이 사라짐(세션 종료·팀원 제외) → 빈 패널 대신 접는다
+        // 내가 연 세션이 있으면 첫 렌더에서 내 칸을 펼쳐 준다 — '열었는데 목록이 안 보인다'의 마지막 한 클릭(#1088).
+        if (!autoPicked) {
+            autoPicked = true;
+            if (!selected && sessions.some((s) => s.owner === meId))
+                selected = meId;
+        }
+        const grid = el('div', { class: 'proj-people-grid' }, ...people.map(personCircle));
         const panel = el('div', { class: 'proj-people-panel' });
         if (selected)
             renderPanel(panel);
@@ -13110,35 +13146,40 @@ function projectTerminalSection(id, members, meId, base, projectName, project) {
         const avatar = personFace(m.member_id, 'proj-avatar', m.display_name || m.member_id);
         if (cnt)
             avatar.append(el('span', { class: 'proj-avatar-badge', text: String(cnt) }));
-        const hasStatus = !!m.status_message;
-        const status = el('div', { class: 'proj-person-status' + (isMe ? ' me' : '') + (hasStatus ? ' filled' : ' empty'),
-            text: hasStatus ? m.status_message : (isMe ? '✎ 상태 남기기' : '') });
-        if (isMe && hasStatus)
+        const hasStatus = !m.guest && !!m.status_message;
+        // 상태 메시지는 팀원만(비팀원은 서버가 403) — 대신 '팀원 아님'을 적어 팀에 추가된 것처럼 읽히지 않게 한다.
+        const canEditStatus = isMe && !m.guest;
+        const status = el('div', { class: 'proj-person-status' + (canEditStatus ? ' me' : '') + (m.guest ? ' guest' : hasStatus ? ' filled' : ' empty'),
+            text: m.guest ? '팀원 아님' : hasStatus ? m.status_message : (canEditStatus ? '✎ 상태 남기기' : '') });
+        if (canEditStatus && hasStatus)
             status.append(el('span', { class: 'proj-status-pen', text: ' ✎' }));
-        if (isMe) {
+        if (canEditStatus) {
             status.title = '클릭해서 상태 메시지 수정';
             status.onclick = (ev) => { ev.stopPropagation(); editStatus(m); };
         }
         const wrap = el('div', { class: 'proj-person' + (selected === m.member_id ? ' active' : '') }, avatar, el('div', { class: 'proj-person-name', text: m.display_name || m.member_id }), status);
         wrap.onclick = () => { selected = (selected === m.member_id ? null : m.member_id); render(); };
-        // 드래그앤드롭으로 진열 순서 조절(짧게 누르면 선택, 끌면 재배치).
-        wrap.draggable = true;
-        wrap.addEventListener('dragstart', (ev) => { dragId = m.member_id; wrap.classList.add('dragging'); ev.dataTransfer.effectAllowed = 'move'; try {
-            ev.dataTransfer.setData('text/plain', m.member_id);
+        // 드래그앤드롭으로 진열 순서 조절(짧게 누르면 선택, 끌면 재배치). 순서는 팀원 명단이라 비팀원 칸은 제외한다
+        //  (끌어서 놓으면 팀원으로 저장돼 버린다 — 보기만 하는 칸이 팀 편집을 유발하면 안 된다).
+        wrap.draggable = !m.guest;
+        if (!m.guest) {
+            wrap.addEventListener('dragstart', (ev) => { dragId = m.member_id; wrap.classList.add('dragging'); ev.dataTransfer.effectAllowed = 'move'; try {
+                ev.dataTransfer.setData('text/plain', m.member_id);
+            }
+            catch (_) { /* */ } });
+            wrap.addEventListener('dragend', () => { dragId = null; wrap.classList.remove('dragging'); });
+            wrap.addEventListener('dragover', (ev) => { if (dragId && dragId !== m.member_id) {
+                ev.preventDefault();
+                wrap.classList.add('drop-target');
+            } });
+            wrap.addEventListener('dragleave', () => wrap.classList.remove('drop-target'));
+            wrap.addEventListener('drop', (ev) => { ev.preventDefault(); wrap.classList.remove('drop-target'); if (dragId && dragId !== m.member_id)
+                reorder(dragId, m.member_id); });
         }
-        catch (_) { /* */ } });
-        wrap.addEventListener('dragend', () => { dragId = null; wrap.classList.remove('dragging'); });
-        wrap.addEventListener('dragover', (ev) => { if (dragId && dragId !== m.member_id) {
-            ev.preventDefault();
-            wrap.classList.add('drop-target');
-        } });
-        wrap.addEventListener('dragleave', () => wrap.classList.remove('drop-target'));
-        wrap.addEventListener('drop', (ev) => { ev.preventDefault(); wrap.classList.remove('drop-target'); if (dragId && dragId !== m.member_id)
-            reorder(dragId, m.member_id); });
         return wrap;
     }
     function reorder(fromId, toId) {
-        const list = ppl();
+        const list = team();
         const fromIdx = list.findIndex((x) => x.member_id === fromId);
         const toIdx = list.findIndex((x) => x.member_id === toId);
         if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx)
