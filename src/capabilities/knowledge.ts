@@ -75,6 +75,7 @@ const knowledgeList: Capability = {
     space: z.string().optional(),
     categoryId: z.number().int().positive().optional(),
     uncategorized: z.boolean().optional().describe("true 면 미분류(rejected 아닌 카테고리 매핑이 0건)인 지식만 — space/categoryId 와 배타(#1091). 본문 포함 목록이라 인박스 포인터만 필요하면 knowledge_unmapped."),
+    light: z.boolean().optional().describe("true 면 본문(body_md)을 뺀 경량 행 — 제목·메타만 필요한 목록/트리용(#1091). 본문이 필요하면 knowledge_get."),
     injection: z.enum(["always", "recalled"]).optional(),
     provenance: z.enum(["authored", "observed"]).optional(),
     type: z.enum(["decision", "concept", "how-to", "reference", "research", "entity"]).optional(),
@@ -104,6 +105,7 @@ const knowledgeList: Capability = {
           q: query.q ? String(query.q) : undefined,
           orderBy: query.orderBy ? String(query.orderBy) : undefined,
           is_wiki: query.is_wiki != null ? (String(query.is_wiki) === "true" || String(query.is_wiki) === "1") : undefined,
+          light: query.light != null ? (String(query.light) === "true" || String(query.light) === "1") : undefined,
           limit: query.limit ? Number(query.limit) : undefined,
           offset: query.offset ? Number(query.offset) : undefined,
         };

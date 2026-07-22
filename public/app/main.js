@@ -1,5 +1,5 @@
 // main.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { $view, TOKEN_KEY, api, el, errorNote, hideGate, loadPeopleAvatars, profileAvatar, showGate, state } from './core.js';
+import { $view, TOKEN_KEY, api, apiUrl, el, errorNote, hideGate, loadPeopleAvatars, profileAvatar, showGate, state } from './core.js';
 import { renderDomainmap } from './domainmap.js';
 import { renderWiki, renderWikiTrash } from './wiki.js'; // #764 WIKI 탭 전면 재구축(사이드바 유지)
 import { refreshWiki2NavBadge, renderWiki2 } from './wiki2.js'; // #968 WIKI2 — 검증·기록(변화의 관제실)
@@ -292,7 +292,7 @@ async function boot() {
         return;
     btn.addEventListener('click', async () => {
         try {
-            await fetch('/api/ui/logout', { method: 'POST' });
+            await fetch(apiUrl('/api/ui/logout'), { method: 'POST' });
         }
         catch (_) { /* noop */ }
         localStorage.removeItem(TOKEN_KEY);
@@ -336,7 +336,7 @@ document.getElementById('gate-form').addEventListener('submit', async (ev) => {
     try {
         if (tokenVal) {
             // 고급: 토큰 로그인 — /api/ui/me 로 검증 후 localStorage 저장(bearer, 에이전트/서비스용).
-            const res = await fetch('/api/ui/me', { headers: { Authorization: 'Bearer ' + tokenVal } });
+            const res = await fetch(apiUrl('/api/ui/me'), { headers: { Authorization: 'Bearer ' + tokenVal } });
             if (!res.ok) {
                 err.textContent = '토큰이 유효하지 않습니다.';
                 err.hidden = false;
@@ -353,7 +353,7 @@ document.getElementById('gate-form').addEventListener('submit', async (ev) => {
                 err.hidden = false;
                 return;
             }
-            const res = await fetch('/api/ui/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+            const res = await fetch(apiUrl('/api/ui/login'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
             const data = await res.json().catch(() => null);
             if (!res.ok) {
                 err.textContent = (data && data.error) || '로그인에 실패했습니다.';

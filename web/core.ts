@@ -14,6 +14,20 @@
 const TOKEN_KEY = 'lively_ui_token';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
+// ── API 베이스(#1091) — 프리뷰 서브패스(/preview/<id>/, #1036)에서 뜬 화면은 API 도 그 프리뷰로 가야 한다. ──
+//  루트 절대경로(fetch('/api/…'))는 오리진 루트 = **라이브 게이트웨이**로 새어, throwaway 프리뷰가
+//  '새 프론트 + 구 백엔드'를 보여줬다(프론트 변경만 반영돼 잘못된 초록불이 난다). 그래서 화면이 놓인
+//  경로에서 접두사를 유도해 붙인다. 프론트 전용(shared-proxy) 프리뷰에선 서버가 /preview/<id>/api/… 를
+//  307 로 게이트웨이 본체에 돌려주므로(preview-routes.ts) 같은 코드가 양쪽에서 맞는다.
+const API_PREFIX = (() => {
+  const m = /^(\/preview\/[A-Za-z0-9][A-Za-z0-9._-]*)\//.exec(location.pathname);
+  return m ? m[1] : '';
+})();
+// 루트 절대경로만 접두사를 받는다(상대·절대URL·blob/data 는 그대로).
+function apiUrl(path: string): string {
+  return API_PREFIX && String(path).charAt(0) === '/' ? API_PREFIX + path : path;
+}
+
 // 출처(provenance) 라벨 — ai=AI 에이전트 생성, human=사람 저작/승인, rule=시스템 결정론 파생, observed=외부 시스템 미러(커넥터 원천).
 //  V4-C: 'confidence' 컬럼/enum 은 물리적으로 불변 — UI 라벨만 '출처(provenance)'로 의미를 명확히 한다(출처는 채널이
 //  기계로 박는 사실이지 신뢰도·가치가 아니다). observed 는 외부 *살아있는 미러* — 진실·편집은 외부에 있다.
@@ -149,7 +163,7 @@ function mdImage(src, alt) {
   img.dataset.mdSrc = String(src);   // #657 블록 에디터 직렬화용 원본 src 보존(blob URL 로 바뀌어도 md 는 원본 유지)
   if (!String(src).startsWith('/api/ui/')) { img.setAttribute('src', src); return img; }
   const token = localStorage.getItem(TOKEN_KEY);
-  fetch(src, { headers: token ? { Authorization: 'Bearer ' + token } : {} })
+  fetch(apiUrl(src), { headers: token ? { Authorization: 'Bearer ' + token } : {} })
     .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.blob(); })
     .then((b) => { img.src = URL.createObjectURL(b); })
     .catch(() => { img.classList.add('md-img-missing'); img.alt = (alt || '이미지') + ' (불러오기 실패)'; });
@@ -916,7 +930,7 @@ async function api(path: string, opts: any = {}): Promise<any> {
   const headers: any = Object.assign({}, opts.headers);
   if (token) headers['Authorization'] = 'Bearer ' + token;
   if (opts.body) headers['Content-Type'] = 'application/json';
-  const res = await fetch(path, Object.assign({}, opts, { headers }));
+  const res = await fetch(apiUrl(path), Object.assign({}, opts, { headers }));
   if (res.status === 401) {
     localStorage.removeItem(TOKEN_KEY);
     state.me = null;
@@ -980,7 +994,7 @@ function hideGate() {
 
 // ── 로그아웃 — 세션 회수 + 로컬 토큰 제거 → 게이트. (헤더 버튼·강제 비번변경 모달 공용) ──
 async function logout(message?: any) {
-  try { await fetch('/api/ui/logout', { method: 'POST' }); } catch (_) { /* noop */ }
+  try { await fetch(apiUrl('/api/ui/logout'), { method: 'POST' }); } catch (_) { /* noop */ }
   localStorage.removeItem(TOKEN_KEY);
   state.me = null;
   const lb = document.getElementById('logout-btn'); if (lb) (lb as any).hidden = true;
@@ -1225,6 +1239,7 @@ function personFace(id, cls, name?) {
 }
 
 export {
+  apiUrl,
   cardHead,
   infoPop,
   inlineBold,

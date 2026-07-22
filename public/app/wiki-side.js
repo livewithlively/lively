@@ -4,7 +4,7 @@
 //  콘텐츠와의 접점은 3개뿐: ① [data-cat-val] 클릭 위임(onSelect) ② 문서 열기(onOpen) ③ rebuild().
 import { api, el, state, sv } from './core.js';
 import { reviewNavBadge } from './review.js'; // #837 검토 대기 배지(대기 0이면 안 그려진다)
-import { isCategoryHomeDoc, KN_UNCAT, knFetchAuthoredTree, knFetchCategoryRows, knFetchUncategorizedCount, knFolderFirstSort, knPageIcon, SPACE_LABEL } from './wiki-data.js';
+import { isCategoryHomeDoc, KN_UNCAT, knFetchAuthoredTree, knFetchCategoryIndex, knFetchUncategorizedCount, knFolderFirstSort, knPageIcon, SPACE_LABEL } from './wiki-data.js';
 // WIKI 인덱스(#336) — '전체' 하위 '인덱스(핀)' 필터의 가짜 카테고리 센티넬. data-cat-val 위임에 실린다.
 const KN_INDEXED = '__indexed__';
 // ── 데이터 ──
@@ -73,7 +73,7 @@ function knNavCatNode(c, on, onOpen, isMine, favOpts) {
             return;
         kids.replaceChildren(el('div', { class: 'kn-nav-note', text: '불러오는 중…' }));
         try {
-            const rows = await knFetchCategoryRows(c.id);
+            const rows = await knFetchCategoryIndex(c.id);
             const names = new Set(rows.map((r) => r.name));
             const tops = rows.filter((r) => !(r.parent_name && names.has(r.parent_name)))
                 .filter((r) => !isCategoryHomeDoc(r.name)) // 대문 문서 숨김
@@ -224,7 +224,7 @@ async function knSideFilterNav(nav, q) {
             return;
         let rows = [];
         try {
-            rows = await knFetchCategoryRows(catId);
+            rows = await knFetchCategoryIndex(catId);
         }
         catch {
             return;

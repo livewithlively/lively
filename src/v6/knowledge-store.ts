@@ -21,6 +21,9 @@ const K_COLS =
    external_system, external_instance, external_id, external_url, occurred_at, last_synced_at,
    as_of, parent_name, summary, author, source_ref, sort, is_wiki, type, is_folder, version, created_at, updated_at, updated_by`;
 const K_SEL = K_COLS.split(",").map((c) => "k." + c.trim()).join(", ");
+// 목록 전용 경량 SELECT(#1091) — body_md 만 뺀다. 사이드바 트리·검색·홈 카드 보강은 본문을 한 글자도 안 쓰는데,
+//  전량(수백 건 × 평균 8KB)을 실어 나르고 있었다(위키 홈 첫 화면 ~4MB). 발췌(deck)를 그리는 화면만 full 을 쓴다.
+const K_SEL_LIGHT = K_COLS.split(",").map((c) => c.trim()).filter((c) => c !== "body_md").map((c) => "k." + c).join(", ");
 
 export interface KnowledgeRow {
   name: string; title: string | null; body_md: string;
@@ -57,6 +60,7 @@ const auditKnowledge = (name: string, op: string, before: unknown, after: unknow
 export interface KnowledgeFilter {
   space?: string; categoryId?: number; uncategorized?: boolean; injection?: string; provenance?: string;
   lifecycle?: string; q?: string; limit?: number; offset?: number; orderBy?: string; is_wiki?: boolean; type?: string;
+  light?: boolean;   // #1091 본문(body_md) 제외 — 트리·검색·카드 보강처럼 발췌를 안 그리는 소비자용
 }
 
 // listKnowledge / countKnowledge 공유 필터 — JOIN·WHERE·params 를 한 곳에서 조립(목록과 총계가 항상 같은 조건).
@@ -117,7 +121,7 @@ export async function listKnowledge(f: KnowledgeFilter = {}): Promise<KnowledgeR
   // category_key/name(#783) — 목록 행에 소속 도메인 표시(검토 큐가 도메인별로 묶고, 에이전트도 목록에서 분류를 본다).
   //  단일 카테고리 정책(#290)이라 LATERAL LIMIT 1 — 행 증식 없음(DISTINCT 와도 무해).
   return q(itemsPool,
-    `SELECT DISTINCT ${K_SEL}, ${K_ICON_EXPR}, k.props_ui->>'cover' AS cover,
+    `SELECT DISTINCT ${f.light ? K_SEL_LIGHT : K_SEL}, ${K_ICON_EXPR}, k.props_ui->>'cover' AS cover,
             cat.key AS category_key, cat.name AS category_name
      FROM knowledge k ${join}
      LEFT JOIN LATERAL (
