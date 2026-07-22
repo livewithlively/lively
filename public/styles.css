@@ -1180,14 +1180,18 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .hint-pop-text b { color: var(--ink); }
 .hint-pop .meaning-pop { margin-top: 12px; }
 .hint-pop-text:only-child { margin: 0; }
-/* 폼 카드 안 항목 리듬(#1085) — 항목 **사이** 여백(12px)이 항목 **안** 여백(라벨 5px·힌트 7px)과 비슷해
-   어디서 한 항목이 끝나는지 안 보였다("여백이 어색해 가독성 부족"). 바깥은 넉넉히·안은 촘촘히로 위계를 준다. */
-.admin-body .card .field { margin: 0 0 20px; }
-.admin-body .card .field:last-of-type { margin-bottom: 0; }
-.admin-body .card .field-label { margin-bottom: 7px; }
+/* 폼 카드 안 항목 위계(#1085) — 라벨이 12.5px 회색이라 아래 힌트와 **같은 급**으로 읽혀 '이게 소제목'이라는
+   신호가 없었다. 두 가지로 세운다: ① 라벨을 잉크색 13.5px 로 올려 힌트(12.5px 회색)와 층을 가르고,
+   ② 항목마다 윗줄 헤어라인으로 '한 항목 = 한 행'을 만든다(관리탭 목록 문법 재사용).
+   카드의 **직계** .field 만 — 그리드·인라인 묶음 안의 필드에는 구분선이 어울리지 않는다. */
+.admin-body .card > .field { margin: 0; padding: 15px 0; border-top: 1px solid var(--line-row); }
+.admin-body .card > .field:first-of-type { border-top: 0; padding-top: 2px; }   /* 제목 바로 아래엔 선 없이 */
+.admin-body .card > .field-label { margin-bottom: 8px; }
+.admin-body .card > .field > .field-label,
+.admin-body .card > .field > .field-label-row .field-label { font-size: 13.5px; font-weight: 700; color: var(--ink); margin-bottom: 8px; }
 .admin-body .card .prof-chips { margin-top: 0; }
 .admin-body .card .prof-hint { margin-top: 8px; }
-.admin-body .card .field + .admin-actions { margin-top: 22px; }
+.admin-body .card > .field + .admin-actions { margin-top: 20px; }
 /* 내 AI 계정(#1085) — AI 한 줄 = [이름 · 상태 배지] + [한 줄 부제] | 오른쪽 [동작].
    제약(공용 계정·맥 키체인)은 길어서 본문에 풀면 회색 문단이 카드를 덮는다 → 배지 툴팁으로 접는다. */
 .aiacct { display: flex; align-items: center; gap: 14px; padding: 13px 0; border-top: 1px solid var(--line); }

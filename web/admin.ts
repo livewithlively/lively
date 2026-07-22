@@ -227,97 +227,17 @@ function meaningRow(k, v) {
     el('span', { class: 'meaning-k', text: k }),
     el('span', { class: 'meaning-v', text: v }));
 }
-// 비개발자용 카드 카피 — 서버 MEANING(기술적·장황) 위에 클라에서 덮어쓴다(즉시 반복, 서버 재시작 불요).
-//  키 = 섹션 meaning 키. 없는 키(고급 훅·MCP·DB·툴 등)는 서버 카피로 폴백.
-const MEANING_KO = {
-  'org-defaults': {
-    label: '회사 소개·규칙·AI 성격',
-    what: '회사가 어떤 곳인지, AI가 무조건 지킬 규칙, 어떤 성격·말투로 일하는지, 우리 팀이 일하는 방식이에요. (구 ‘AI 필수 규칙’이 여기로 합쳐졌어요.)',
-    reach: '모든 구성원과 그들이 쓰는 AI',
-    when: '대화를 시작할 때 가장 먼저 자동으로 깔려요',
-    where: 'AI가 답할 때 바탕에 깔리는 기본 규칙·분위기예요',
-    example: "'고객 개인정보는 절대 보여주지 않기', '근거 없이 단정하지 않기'를 넣으면, 그때부터 모두의 AI가 그렇게 해요.",
-  },
-  'memory': {
-    label: 'WIKI 인덱스',
-    what: '팀이 함께 쌓는 위키(지식)예요. AI가 필요할 때 꺼내 봅니다. 📌 핀한 항목은 제목·분류가 매 대화 첫머리에 깔려요.',
-    reach: '모든 구성원과 그들이 쓰는 AI',
-    when: '제목은 늘 보이고, 자세한 내용은 AI가 필요할 때 찾아봐요',
-    where: "AI가 '우리 팀이 전에 이렇게 정했지'를 떠올려야 할 때 참고해요",
-    example: '새로 내린 결정을 메모로 올리면, 모두의 AI가 그 결정을 알고 일관되게 답해요.',
-  },
-  'member': {
-    label: '구성원 정보',
-    what: '한 사람(또는 AI·시스템)이 누구인지, 어떤 계정(이메일·슬랙 등)을 쓰는지예요.',
-    reach: '그 사람 + 전체 검색·연결',
-    when: '저장하면 바로 반영돼요',
-    where: "AI가 사람을 찾거나 '담당자에게 맡기기' 할 때 쓰는 정보예요",
-    example: '어떤 사람의 슬랙 계정을 연결하면, AI가 그 사람의 슬랙 활동을 한 사람으로 묶어 봐요.',
-  },
-  'team': {
-    label: '팀',
-    what: '구성원을 팀(스쿼드)으로 묶고, 팀이 어떤 카테고리(도메인·주제)를 맡는지 정해요. 오너십은 권한 차단이 아니라 우선순위예요.',
-    reach: '팀원과 그들이 쓰는 AI',
-    when: '팀/오너십을 바꾸면 다음 세션부터 반영돼요',
-    where: "프로젝트·위키 탭에서 '우리 팀' 카테고리가 먼저 보이고, AI 세션 첫머리에 '우리 팀' 맥락이 우선 주입돼요",
-    example: "어떤 팀이 'agent-gateway' 카테고리를 소유하면, 그 팀원의 화면·AI에 그 도메인의 지식·프로젝트가 먼저 떠요. (다른 팀 맥락도 여전히 다 볼 수 있어요.)",
-  },
-  'gateway-url': {
-    label: '게이트웨이 주소',
-    what: '구성원의 AI가 라이브 현황을 받아오는 우리 회사 서버 주소예요.',
-    reach: '모든 구성원의 AI',
-    when: '구성원이 다시 설치한 다음부터 새 주소를 써요',
-    where: "대화 첫머리의 '라이브 현황'을 어디서 가져올지 정해요",
-    example: '서버를 옮겨 주소를 바꾸면, 재설치 후부터 새 주소에서 현황을 받아요. (연결이 안 되면 기본 내용만 보여서 안전해요.)',
-  },
-  'display_name': {
-    label: '조직 표시명',
-    what: '이 팀(조직)의 이름이에요.',
-    reach: '모든 구성원과 그들이 쓰는 AI',
-    when: '구성원이 다시 설치한 다음부터 반영돼요',
-    where: '대화 맨 앞 머리말과 현황 제목에 나와요',
-    example: '이름을 바꾸면 모두의 대화 머리말이 그 이름으로 바뀌어요.',
-  },
-  'timezone': {
-    label: '조직 시간대',
-    what: '예약 작업(cron)과 세션·통계의 시각 표시가 따르는 기준 시간대예요(IANA 존 — 예: Asia/Seoul). 서버 머신의 OS 시간대와 무관하게 여기서 정해요.',
-    reach: '스케줄러(자동화) 잡 · 웹터미널 세션 · 일자별 통계',
-    when: '스케줄러는 즉시, 웹터미널 세션은 새로 만든 세션부터 반영돼요(이미 떠 있는 세션은 재생성해야 해요)',
-    where: "cron 식('0 9 * * *' = 아침 9시)이 어느 시간대의 9시인지, 세션 안 클로드코드가 크레딧 리셋 시각을 몇 시로 보여줄지를 정해요",
-    example: "서버 머신의 시간대가 UTC 여도 여기를 Asia/Seoul 로 두면, '0 9 * * *' 잡은 (UTC 09시가 아니라) 한국 시간 09시에 돌고 세션 안 시각도 한국 시간으로 떠요.",
-  },
-};
-function meaningOf(m) { return (m && MEANING_KO[m.key]) ? { ...m, ...MEANING_KO[m.key] } : m; }
 
 // '이게 뭐예요?' — 기본은 화면에 설명을 깔지 않고 작은 트리거 하나만 둔다. 궁금한 사람이 누르면
 //  팝업(overlay)으로 전체 설명(요약·누가/언제/어디·예시)을 보여준다. 예전엔 항상-펼침(이후 한 줄 요약+토글)
 //  이라 9개 섹션마다 같은 골격이 반복돼 화면이 무거웠다(윤상민 06-22 지적: "반복·둥둥 뜸"). 단일 함수라
 //  모든 섹션에 일괄 적용. tone 색·카피는 팝업 안에서 그대로 보존.
-//  설명 본문(트리거 없이) — 아래 infoPop 이 팝오버 안에 그대로 싣는다.
-function meaningBody(m0) {
-  const m = meaningOf(m0);
-  const tag = { critical: '꼭 지킴', identity: '신원', infra: '연결', normal: '' }[m.tone] || '';
-  return el('div', { class: 'meaning meaning-' + m.tone + ' meaning-pop' },
-    el('div', { class: 'meaning-head' },
-      el('span', { class: 'meaning-dot', 'aria-hidden': 'true' }),
-      el('span', { class: 'meaning-title', text: '구성원에게 미치는 효과' }),
-      tag ? el('span', { class: 'meaning-tag', text: tag }) : null),
-    el('p', { class: 'meaning-what', text: m.what }),
-    el('div', { class: 'meaning-grid' },
-      meaningRow('누가 보나', m.reach),
-      meaningRow('언제 적용되나', m.when),
-      meaningRow('어디에 쓰이나', m.where)),
-    el('div', { class: 'meaning-ex' },
-      el('span', { class: 'meaning-ex-label', text: '예를 들면' }),
-      el('span', { text: m.example })));
-}
-
 // ⓘ — 제목·라벨 오른쪽에 옅게 붙는 **아이콘 하나**. 누르면 그 자리에 팝오버로 설명이 뜬다(#1085).
 //  왜: 회색 설명문을 제목·필드마다 화면에 깔면 글이 화면을 덮어 정작 내용·입력칸이 안 읽힌다(윤상민 지적).
-//  '이게 뭐예요?' 같은 말은 붙이지 않는다 — 아이콘만("너무 웃겨").
-//  text(문자열, **강조** 지원) 와 meaning 객체 중 있는 것만 싣는다. 둘 다 있으면 한 팝오버에 순서대로.
-function infoPop(text, m?) {
-  if (!text && !m) return null;
+//  '이게 뭐예요?' 팝업(구 meaningCard — '구성원에게 미치는 효과' 카드)은 **통째로 폐기**했다(사용자 요구:
+//  "문구만 지우지 말고 팝업까지 날려버려"). 그래서 이 팝오버가 싣는 건 설명 문자열 하나뿐이다(**강조** 지원).
+function infoPop(text) {
+  if (!text) return null;
   const btn = el('button', { class: 'hint-i', type: 'button', 'aria-haspopup': 'dialog', 'aria-label': '설명 보기', title: '설명 보기' },
     el('span', { 'aria-hidden': 'true', text: 'ⓘ' }));
   let pop: any = null;
@@ -334,9 +254,7 @@ function infoPop(text, m?) {
   const onKey = (e) => { if (e.key === 'Escape') { close(); btn.focus(); } };
   btn.addEventListener('click', () => {
     if (pop) { close(); return; }
-    pop = el('div', { class: 'hint-pop', role: 'dialog' },
-      text ? el('p', { class: 'hint-pop-text' }, ...inlineBold(text)) : null,
-      m ? meaningBody(m) : null);
+    pop = el('div', { class: 'hint-pop', role: 'dialog' }, el('p', { class: 'hint-pop-text' }, ...inlineBold(text)));
     document.body.append(pop);
     // 아이콘 아래에 띄우되 화면 밖으로 나가지 않게 가둔다. 자리가 없으면 위로 뒤집는다(고정 위치 = 카드 overflow 무관).
     const r = btn.getBoundingClientRect();
@@ -354,9 +272,8 @@ function infoPop(text, m?) {
   });
   return btn;
 }
-function meaningCard(m0) { return m0 ? infoPop(null, m0) : null; }
 
-// 섹션 제목 + 바로 옆 '이게 뭐예요?' 트리거(meaningCard 가 트리거 노드를 돌려준다). 제목 우측에 밋밋하게 붙는다.
+
 // 설명 문자열의 **강조**만 인라인으로 살린다 — 그 외 마크다운은 안 쓴다(el 이 텍스트 노드로만 붙이므로 innerHTML 없음).
 //  안 그러면 화면에 별표가 그대로 보인다(실제로 [외부 자료 수집] 설명에 '**우리 DB 로 복사**'가 노출됐다).
 function inlineBold(text) {
@@ -372,15 +289,15 @@ function inlineBold(text) {
   if (i < src.length) out.push(src.slice(i));
   return out;
 }
-// 두 번째 인자는 meaning 객체(→ '이게 뭐예요?' 팝업) 또는 그냥 설명 문자열이다.
-//  문자열을 meaningCard 에 넘기면 m.what/m.reach 가 undefined 라 **빈 팝업**이 떴다(호출부 6곳). 문자열이면 설명 줄로 렌더한다.
-function sectionTitle(titleText, m, hint?) {
+// 두 번째 인자(m)는 옛 meaning 객체 또는 설명 문자열이다. **객체(효과 카드)는 폐기됐으므로 무시**하고,
+//  문자열일 때만 설명으로 쓴다(호출부를 한꺼번에 고치지 않아도 되게 인자 자리는 남겨 둔다).
+//  ⚠ **페이지 제목의 설명은 ⓘ 로 접지 않는다** — 한 페이지가 무엇을 하는 곳인지는 들어오자마자 보여야 한다
+//   (사용자 요구: 큰 페이지 설명은 이전대로). ⓘ 는 박스(카드) 안 섹션 제목 전용(cardHead).
+function sectionTitle(titleText, m) {
   const isText = typeof m === 'string';
-  // 설명은 화면에 깔지 않고 제목 오른쪽 ⓘ 하나로 모은다(#1085) — hint(짧은 설명) + meaning(효과 카드)이
-  //  둘 다 있어도 아이콘은 하나다(둘이 나란히 뜨면 뭐가 뭔지 모른다).
-  return el('div', { class: 'section-title' },
-    el('h2', { text: titleText }),
-    infoPop(hint || (isText ? m : null), isText ? null : m));
+  return el('div', {},
+    el('div', { class: 'section-title' }, el('h2', { text: titleText })),
+    isText ? el('p', { class: 'admin-hint' }, ...inlineBold(m)) : null);
 }
 
 // System 탭 진입점(#/system) — 기존 관리(전달) 화면을 그대로 흡수 + 지식 종류 레지스트리.
@@ -539,8 +456,8 @@ function segTabs(sectionKey, tabs) {
 
 // 섹션 머리 — 제목 + 한 줄 설명 + '이게 뭐예요?'. 병합 섹션이 "여기 뭐가 들었나"를 먼저 말해준다.
 function sectionHead(title, hint, m?) {
-  // admin-sechead: 제목 블록 아래 일관 여백. 설명(hint)은 더 이상 회색 줄로 깔지 않고 제목 옆 ⓘ 로 들어간다(#1085).
-  return el('div', { class: 'admin-sechead' }, sectionTitle(title, m || null, hint || null));
+  // admin-sechead: 제목 블록 아래 일관 여백. 페이지 설명(hint)은 종전대로 제목 아래 한 줄로 보인다.
+  return el('div', { class: 'admin-sechead' }, sectionTitle(title, m || null), hint ? el('p', { class: 'admin-hint', text: hint }) : null);
 }
 // 카드(박스) 섹션 제목 — 제목 + 오른쪽 ⓘ. 카드 안 설명도 회색 줄 대신 이 아이콘 뒤로 접는다(#1085).
 function cardHead(title, desc?) {
@@ -5305,7 +5222,7 @@ function field(label, control) {
 // 필드 라벨 바로 옆에 '이게 뭐예요?' 트리거를 붙이는 변형(필드 단위 설명용).
 function fieldWithHelp(label, control, m) {
   return el('div', { class: 'field' },
-    el('div', { class: 'field-label-row' }, el('label', { class: 'field-label', text: label }), meaningCard(m)),
+    el('div', { class: 'field-label-row' }, el('label', { class: 'field-label', text: label })),
     control);
 }
 // 클립보드 복사 — navigator.clipboard 는 보안 컨텍스트(https/localhost)에서만 동작한다.
