@@ -1,5 +1,5 @@
 // admin.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { absTime, api, applyReveal, cardHead, el, errorNote, fmtNum, logout, memberCombo, profileAvatar, relTime, renderMarkdown, selectFilter, setPersonAvatar, state, toast, withTip, inlineBold } from './core.js';
+import { absTime, api, applyReveal, cardHead, el, errorNote, fmtNum, logout, memberCombo, profileAvatar, relTime, renderMarkdown, selectFilter, setPersonAvatar, state, toast, withTip, infoPop, inlineBold } from './core.js';
 import { SPACE_SUBS, openCategoryForm } from './category-form.js'; // #764 — knowledge.ts 해체로 이관
 import { overlayBox, skeleton } from './learn.js';
 import { ingestPolicyPanel, reviewNavBadge } from './review.js'; // #783 지식 검토 게이트 + 검토 큐 (+ #802 nav 대기 배지)
@@ -94,7 +94,7 @@ const ADMIN_SECTIONS = [
     //  전 구성원 노출·전 구성원 편집 가능(내 것이니까) — 아래 어떤 권한 게이트에도 걸지 않는다.
     // '내 정보'(프사·이름·닉네임·비번)는 관리에서 분리 — 우측 상단 프로필 클릭 시 팝업(openMyProfileModal, #762). 여기 nav엔 두지 않는다.
     { key: 'me-ai', label: '내 AI 설정', meaning: null, group: 'me' },
-    { key: 'me-logins', label: '내 서비스 로그인', meaning: null, group: 'me' },
+    { key: 'me-logins', label: '외부 서비스 로그인', meaning: null, group: 'me' },
     { key: 'me-assets', label: '내 스킬 · 훅', meaning: null, group: 'me' },
     // ── 조직 ──
     { key: 'profile', label: '조직 정보', meaning: 'gateway-url', group: 'org' },
@@ -5340,7 +5340,7 @@ function toolForm(root, t, data, detail, isNew) {
     const authModeSel = el('select', {}, el('option', { value: 'none', text: '인증 없음 (공개 API)' }), el('option', { value: 'env', text: '조직 공용 (환경변수) — 전원 같은 자격' }), el('option', { value: 'kind', text: '구성원 개인 자격 (요청자별)' }));
     authModeSel.value = initialMode;
     const envField = field('공용 자격 (auth_env)', authEnvSel);
-    const kindField = field('개인 자격 종류 (auth_kind)', el('div', {}, authKindSel, el('p', { class: 'admin-hint', style: 'margin:4px 0 0', text: 'L2(집행)면 개인 자격이 필수예요. L0/L1(읽기·제안)이면 개인 자격이 없을 때 「통합 자격」으로 대신 로그인해요. 구성원은 우측 상단 [내 프로필 ▸ 내 서비스 로그인]에서 자기 로그인을 넣어요.' })));
+    const kindField = field('개인 자격 종류 (auth_kind)', el('div', {}, authKindSel, el('p', { class: 'admin-hint', style: 'margin:4px 0 0', text: 'L2(집행)면 개인 자격이 필수예요. L0/L1(읽기·제안)이면 개인 자격이 없을 때 「통합 자격」으로 대신 로그인해요. 구성원은 [내 설정 ▸ 외부 서비스 로그인]에서 자기 로그인을 넣습니다.' })));
     const kindScopeField = field('개인 자격 대상(선택)', authScopeIn);
     const syncAuthMode = () => {
         const m = authModeSel.value;
@@ -5911,7 +5911,7 @@ async function credentialsEditor(detail) {
     }
     const encReady = mine.encryption_ready !== false;
     const cards = [
-        sectionHead('서비스 로그인 (조직)', 'AI가 외부 서비스를 조직 공용 계정으로 쓸 수 있게 미리 로그인해 둡니다. 개인 계정으로 쓰게 하려면 각자 [내 서비스 로그인]에서 넣습니다.'),
+        sectionHead('서비스 로그인 (조직)', 'AI가 외부 서비스를 조직 공용 계정으로 쓸 수 있게 미리 로그인해 둡니다. 개인 계정으로 쓰게 하려면 각자 [외부 서비스 로그인]에서 넣습니다.'),
         encReady ? null : el('p', { class: 'gate-error', text: '⚠ 서버에 암호화 키(CONNECTOR_SECRET_KEY)가 없어 자격을 저장할 수 없습니다 — 관리자에게 요청하세요.' }),
         catalogStatusCard(catalog.catalog || [], mcpServers.servers || []),
         credVaultCard('org', '통합 자격', '개인 로그인이 없는 구성원이 조회(비-PII read)할 때 공용으로 쓰는 로그인입니다. 쓰기·외부 발신·민감정보 접근에는 쓰이지 않습니다 — 이 작업들에는 개인 로그인이 필요합니다.', (org.credentials || []).filter((c) => c.kind !== 'aws_role_arn'), encReady, () => credentialsEditor(detail)),
@@ -6796,8 +6796,8 @@ async function myLoginsSection(detail) {
     // 제목은 카드에 고정하고, 탭 본문만 안쪽 host 에 그린다 — renderServiceTabs 가 replaceChildren 이라 제목이 같이 지워지면 안 된다.
     const svcHost = el('div');
     const svcCard = el('div', { class: 'card' }, cardHead('서비스 로그인', 'AI 가 나를 대신해 이 서비스를 쓰려면 내 계정을 연결해야 합니다. 연결은 나에게만 적용되고, 토큰 값은 저장 후 다시 볼 수 없습니다.'), svcHost);
-    const gitCard = el('div', { class: 'card' }, cardHead('코드 저장소 접근', '코드 저장소(GitHub·GitLab)에서 클론·푸시할 때 쓰는 SSH 키·토큰입니다. 코드 작업을 하지 않으면 설정하지 않아도 됩니다.'), el('div', { class: 'admin-actions' }, el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'git 인증 관리', onclick: () => openGitCredentialManager('me') })));
-    detail.replaceChildren(sectionHead('내 서비스 로그인', 'AI가 내 계정으로 외부 서비스를 쓸 수 있게 미리 로그인해 둡니다. 여기 로그인은 나에게만 적용되고 팀에는 공유되지 않습니다.'), el('div', { class: 'admin-stack' }, svcCard, gitCard));
+    const gitCard = el('div', { class: 'card' }, cardHead('리포지토리 접근', '코드 저장소(GitHub·GitLab)에서 클론·푸시할 때 쓰는 SSH 키·토큰입니다. 코드 작업을 하지 않으면 설정하지 않아도 됩니다.', el('span', { class: 'head-badge', text: '개발자용' })), el('div', { class: 'admin-actions' }, el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'git 인증 관리', onclick: () => openGitCredentialManager('me') })));
+    detail.replaceChildren(sectionHead('외부 서비스 로그인', 'AI가 내 계정으로 외부 서비스를 쓸 수 있게 미리 로그인해 둡니다. 여기에서 로그인해도 나에게만 적용되고 팀에는 공유되지 않습니다.'), el('div', { class: 'admin-stack' }, svcCard, gitCard));
     await renderServiceTabs(svcHost);
 }
 // ── [내 설정 ▸ 내 스킬·훅] — 라이블리 배포분 opt-on/off(#699) + 내 컴퓨터별 로컬 하네스 조회·토글(#891/893). ──
@@ -6876,57 +6876,85 @@ async function myAssetsSection(detail) {
                 return { row: el('span', { class: 'admin-hint', text: '적용되는 PC 없음' }), missing };
             return { row: el('div', { class: 'pc-chips' }, ...chips), missing };
         };
-        // 라이블리 배포분 행 — 3버튼 opt(기본/켜기/끄기, 멤버 단위) + 상세 + 설치된 PC 칩.
-        const livelyRow = (targetKind, it, kind) => {
-            const stateNow = it.override === null ? 'default' : (it.override ? 'on' : 'off');
-            const seg = el('div', { style: 'display:flex; gap:4px; flex-shrink:0;' });
-            const opt = (v, label) => {
-                const b = el('button', { type: 'button', class: 'btn btn-sm ' + (stateNow === v ? 'btn-primary' : 'btn-ghost'), text: label });
-                b.addEventListener('click', async () => {
-                    try {
-                        const b2 = { target_kind: targetKind, ref_id: it.id };
-                        if (v === 'default')
-                            b2.clear = true;
-                        else
-                            b2.state = (v === 'on');
-                        await api('/api/ui/me/asset-pref', { method: 'POST', body: JSON.stringify(b2) });
-                        await reload();
-                    }
-                    catch (e) {
-                        toast((e && e.message) || '실패', true);
-                    }
-                });
+        // 항목 한 줄 — [이름 · 상태] + [용도 한 줄] + [설치된 PC 칩] | 오른쪽 [켜기/끄기].
+        //  회색 줄에 본문 앞부분을 그대로 잘라 넣었더니 무슨 용도인지가 안 읽혔다(사용자 지적) → **첫 문장만**
+        //  요약으로 쓰고 전문은 눌렀을 때 뜨는 팝업에 맡긴다. 종류(스킬/훅)는 이제 그룹 제목이 말하므로 뺀다.
+        const summarize = (raw) => {
+            const t = String(raw || '').replace(/\s+/g, ' ').trim();
+            if (!t)
+                return '';
+            const cut = t.search(/[.。!?]\s|—|\s·\s/); // 첫 문장·첫 구획까지만
+            const head = (cut > 12 ? t.slice(0, cut) : t).trim();
+            return head.length > 64 ? head.slice(0, 64) + '…' : head;
+        };
+        // 켜기/끄기 2버튼. 조직 기본값을 따르는 중이면 '기본' 배지로 알리고, 내가 바꿔 둔 상태면 되돌릴 링크를 준다
+        //  (버튼 3개는 과했다 — 사용자 지적).
+        const onOffSeg = (targetKind, it) => {
+            const following = it.override === null || it.override === undefined;
+            const on = following ? !!it.byDefault : !!it.override;
+            const set = async (v) => {
+                try {
+                    const b = { target_kind: targetKind, ref_id: it.id };
+                    if (v === null)
+                        b.clear = true;
+                    else
+                        b.state = v;
+                    await api('/api/ui/me/asset-pref', { method: 'POST', body: JSON.stringify(b) });
+                    await reload();
+                }
+                catch (e) {
+                    toast((e && e.message) || '실패', true);
+                }
+            };
+            const btn = (v, label) => {
+                const b = el('button', { type: 'button', class: 'btn btn-sm ' + (on === v ? 'btn-primary' : 'btn-ghost'), text: label });
+                b.addEventListener('click', () => { if (on !== v)
+                    void set(v); });
                 return b;
             };
-            seg.append(opt('default', '기본' + (it.byDefault ? '(켬)' : '(끔)')), opt('on', '켜기'), opt('off', '끄기'));
-            const kindLabel = HARNESS_KIND_LABEL[kind] || kind;
-            const desc = String(it.description || '');
-            const titleEl = el('span', { class: 'mini-title' }, el('span', { text: it.label || it.id }), el('span', { class: 'pill', text: it.effective ? '적용 중' : '미적용' }));
-            const { row: chipRow, missing } = pcChips(it, kind);
-            // 카드 내용 영역(제목·설명·칩) 전체가 클릭 대상 — 제목 글자만이 아니라. 오른쪽 버튼(seg)은 별개라 모달 안 뜸.
-            const left = el('div', { class: 'harness-click', style: 'flex:1; min-width:0;', title: '눌러서 내용 보기' }, titleEl, el('div', { class: 'mini-meta', text: kindLabel + ' · ' + (desc ? (desc.length > 90 ? desc.slice(0, 90) + '…' : desc) : '설명 없음 — 눌러서 정의 보기') }), el('div', { style: 'margin-top:6px' }, chipRow));
-            left.addEventListener('click', () => showHarnessDetail(kind, it.id, it.label || it.id));
-            return { node: el('div', { class: 'mini-row', style: 'display:flex; align-items:flex-start; gap:12px;' }, left, seg), missing };
+            const wrap = el('div', { class: 'hrow-act' }, btn(true, '켜기'), btn(false, '끄기'));
+            if (following)
+                wrap.append(withTip(el('span', { class: 'head-badge', text: '기본' }), '조직 기본값(' + (it.byDefault ? '켬' : '끔') + ')을 따르는 중입니다.'));
+            else
+                wrap.append(el('button', { type: 'button', class: 'btn-text', text: '기본값으로', onclick: () => void set(null) }));
+            return wrap;
         };
+        const livelyRow = (targetKind, it, kind) => {
+            const titleEl = el('span', { class: 'mini-title' }, el('span', { text: it.label || it.id }), el('span', { class: 'pill' + (it.effective ? ' pill-ok' : ''), text: it.effective ? '적용 중' : '미적용' }));
+            const { row: chipRow, missing } = pcChips(it, kind);
+            const sum = summarize(it.description);
+            const left = el('div', { class: 'harness-click', style: 'flex:1; min-width:0;', title: '눌러서 내용 보기' }, titleEl, el('div', { class: 'mini-meta', text: sum || '눌러서 내용 보기' }), el('div', { style: 'margin-top:6px' }, chipRow));
+            left.addEventListener('click', () => showHarnessDetail(kind, it.id, it.label || it.id));
+            return { node: el('div', { class: 'mini-row hrow' }, left, onOffSeg(targetKind, it)), missing };
+        };
+        // 접이식 그룹 — 목록이 길어 한 화면에 안 들어오던 걸, 제목·개수만 먼저 보이고 눌러서 펼치게(사용자 요구).
+        const group = (title, count, items, openByDefault = false) => {
+            const bodyEl = el('div', { class: 'hgroup-body' }, ...items);
+            bodyEl.style.display = openByDefault ? 'block' : 'none';
+            const caret = el('span', { class: 'hgroup-caret', text: openByDefault ? '▾' : '▸' });
+            const head = el('button', { type: 'button', class: 'hgroup-head' }, caret, el('span', { class: 'hgroup-title', text: title }), el('span', { class: 'hgroup-count', text: String(count) }));
+            head.addEventListener('click', () => {
+                const open = bodyEl.style.display === 'none';
+                bodyEl.style.display = open ? 'block' : 'none';
+                caret.textContent = open ? '▾' : '▸';
+            });
+            return el('div', { class: 'hgroup' }, head, bodyEl);
+        };
+        // 위계는 두 층이다: **위 = 어디서 온 것인가**(조직 배포 / 내 컴퓨터), **아래 = 종류**(스킬 · 커스텀 훅).
+        //  전에는 h4/h5 크기 차이만으로 눌러 담아 두 층이 안 읽혔다(사용자 지적) → 층마다 자기 머리를 갖게 한다.
         const rows = [];
-        rows.push(el('h4', { style: 'margin:4px 0 6px', text: '라이블리가 배포한 것' }));
         const lskills = d.lively?.skills || [];
         const lhooks = d.lively?.hooks || [];
         let anyMissing = false;
-        rows.push(el('h5', { style: 'margin:8px 0 6px 8px; font-size:13px; color:var(--ink-sub)', text: '스킬' }));
-        if (lskills.length)
-            lskills.forEach((sk) => { const r = livelyRow('harness_asset', sk, sk.kind || 'skill'); anyMissing = anyMissing || r.missing; rows.push(r.node); });
-        else
-            rows.push(el('p', { class: 'admin-hint', text: '배포된 스킬이 없어요.' }));
-        if (lhooks.length) {
-            rows.push(el('h5', { style: 'margin:14px 0 6px 8px; font-size:13px; color:var(--ink-sub)', text: '커스텀 훅' }));
-            lhooks.forEach((h) => rows.push(livelyRow('org_hook', h, 'hook').node));
-        }
+        const skillNodes = lskills.map((sk) => { const r = livelyRow('harness_asset', sk, sk.kind || 'skill'); anyMissing = anyMissing || r.missing; return r.node; });
+        const hookNodes = lhooks.map((h) => livelyRow('org_hook', h, 'hook').node);
+        rows.push(el('div', { class: 'hlayer' }, el('div', { class: 'hlayer-head' }, el('h4', { class: 'hlayer-title', text: '조직 배포' }), infoPop('관리자가 팀 전체에 배포한 스킬·훅입니다. 내 세션에 적용할지 여기서 켜고 끌 수 있고, 끄면 나에게만 적용되지 않습니다.')), group('스킬', skillNodes.length, skillNodes.length ? skillNodes : [el('p', { class: 'admin-hint', text: '배포된 스킬이 없습니다.' })]), group('커스텀 훅', hookNodes.length, hookNodes.length ? hookNodes : [el('p', { class: 'admin-hint', text: '배포된 커스텀 훅이 없습니다.' })])));
         if (anyMissing)
-            rows.unshift(el('div', { class: 'sync-warn' }, el('b', { text: '켜져 있지만 아직 설치되지 않은 PC(‘미설치’ 표시)가 있어요. ' }), '그 PC에서 claude(또는 codex) 세션을 한 번 열면 자동으로 설치돼요.'));
+            rows.unshift(el('div', { class: 'sync-warn' }, el('b', { text: '켜져 있지만 아직 설치되지 않은 PC(‘미설치’ 표시)가 있습니다. ' }), '그 PC에서 claude(또는 codex) 세션을 한 번 열면 자동으로 설치됩니다.'));
         // ── 내 컴퓨터별: 내가 직접 만든 로컬 스킬·훅만 (라이블리가 준 건 위에서 PC 칩으로 봤어요). ──
         if (machines.length) {
-            rows.push(el('h4', { style: 'margin:20px 0 6px', text: '내 컴퓨터 (직접 만든 로컬 하네스)' }));
+            const myLayer = el('div', { class: 'hlayer' }, el('div', { class: 'hlayer-head' }, el('h4', { class: 'hlayer-title', text: '내 컴퓨터' }), infoPop('내가 각 컴퓨터에 직접 만들어 둔 스킬·훅입니다(조직 배포분은 위 목록에서 PC 칩으로 확인합니다). 컴퓨터마다 따로 보입니다.')));
+            rows.push(myLayer);
             for (const m of machines) {
                 const nm = machineName(m);
                 const head = el('div', { style: 'display:flex; align-items:center; gap:8px; margin:14px 0 6px; flex-wrap:wrap' }, el('h5', { style: 'margin:0; font-size:14px', text: nm }));
@@ -6937,7 +6965,7 @@ async function myAssetsSection(detail) {
                         return;
                     try {
                         await api('/api/ui/me/harness/machine-alias', { method: 'POST', body: JSON.stringify({ machine_id: m.machine_id, alias: v }) });
-                        toast('이름을 바꿨어요');
+                        toast('이름을 바꿨습니다');
                         await reload();
                     }
                     catch (e) {
@@ -6955,7 +6983,7 @@ async function myAssetsSection(detail) {
                         return;
                     try {
                         await api('/api/ui/me/harness/machine-remove', { method: 'POST', body: JSON.stringify({ machine_id: m.machine_id }) });
-                        toast('지웠어요');
+                        toast('지웠습니다');
                         await reload();
                     }
                     catch (e) {
@@ -6963,23 +6991,24 @@ async function myAssetsSection(detail) {
                     }
                 });
                 head.append(del);
-                rows.push(head);
+                myLayer.append(head);
                 const own = (m.assets || []).filter((a) => a.overlap === 'local-only');
                 if (!own.length) {
-                    rows.push(el('p', { class: 'admin-hint', text: '내가 직접 만든 로컬 스킬·훅은 없어요(라이블리가 배포한 것만 있어요).' }));
+                    myLayer.append(el('p', { class: 'admin-hint', text: '이 컴퓨터에 직접 만든 스킬·훅은 없습니다(조직 배포분만 있습니다).' }));
                     continue;
                 }
+                const byKind = {};
                 for (const a of own) {
-                    const kindLabel = HARNESS_KIND_LABEL[a.kind] || a.kind;
                     const isHook = a.kind === 'hook'; // 훅은 settings.json 항목(파일 아님) — 비파괴 토글 불가라 여기선 표시만.
-                    const meta = kindLabel + ' · ' + (isHook ? 'settings.json 에 직접 추가한 훅 — 여기서는 켜고 끌 수 없어요.' : '내가 만든 것' + (a.disabled ? ' · 꺼짐' : ''));
+                    // 종류(스킬/훅)는 이제 그룹 제목이 말한다 — 줄마다 다시 붙이지 않는다.
+                    const meta = isHook ? 'settings.json 에 직접 추가한 훅 — 여기서는 켜고 끌 수 없습니다.' : ('내가 이 컴퓨터에서 만든 것' + (a.disabled ? ' · 꺼둠' : ''));
                     let tb = null;
                     if (!isHook) {
                         tb = el('button', { type: 'button', class: 'btn btn-sm btn-ghost', style: 'flex-shrink:0', text: a.disabled ? '켜기' : '끄기' });
                         tb.addEventListener('click', async () => {
                             try {
                                 await api('/api/ui/me/harness-local-pref', { method: 'POST', body: JSON.stringify({ machine_id: m.machine_id, kind: a.kind, id: a.id, disabled: !a.disabled }) });
-                                toast(a.disabled ? '켜기로 표시 — 다음 세션에 복원' : '끄기로 표시 — 다음 세션에 반영');
+                                toast(a.disabled ? '켬 — 다음 세션부터 적용됩니다' : '끔 — 다음 세션부터 적용됩니다');
                                 await reload();
                             }
                             catch (e) {
@@ -6987,13 +7016,14 @@ async function myAssetsSection(detail) {
                             }
                         });
                     }
-                    rows.push(el('div', { class: 'mini-row', style: 'display:flex; align-items:center; gap:12px;' }, el('div', { style: 'flex:1; min-width:0;' }, el('span', { class: 'mini-title', text: a.id }), el('div', { class: 'mini-meta', text: meta })), tb));
+                    (byKind[a.kind] ||= []).push(el('div', { class: 'mini-row hrow' }, el('div', { style: 'flex:1; min-width:0;' }, el('span', { class: 'mini-title', text: a.id }), el('div', { class: 'mini-meta', text: meta })), el('div', { class: 'hrow-act' }, tb)));
                 }
+                for (const [k, list] of Object.entries(byKind))
+                    myLayer.append(group(HARNESS_KIND_LABEL[k] || k, list.length, list));
             }
         }
         else {
-            rows.push(el('h4', { style: 'margin:20px 0 6px', text: '내 컴퓨터' }));
-            rows.push(el('p', { class: 'admin-hint', text: '아직 내 컴퓨터의 하네스를 못 봤어요. 내 컴퓨터에서 claude(또는 codex)를 한 번 켜면 다음 세션에 자동으로 나타나요. 컴퓨터가 여러 대면 각각 따로 보여요. (웹 [터미널] 세션은 회사 서버라 로컬이 안 보입니다.)' }));
+            rows.push(el('div', { class: 'hlayer' }, el('div', { class: 'hlayer-head' }, el('h4', { class: 'hlayer-title', text: '내 컴퓨터' })), el('p', { class: 'admin-hint', text: '아직 내 컴퓨터의 하네스를 확인하지 못했습니다. 내 컴퓨터에서 claude(또는 codex)를 한 번 켜면 다음 세션에 자동으로 나타납니다. 컴퓨터가 여러 대면 각각 따로 보입니다. (웹 [AI 세션]은 회사 서버에서 돌아 로컬이 보이지 않습니다.)' })));
         }
         bodyBox.replaceChildren(...rows);
     };
