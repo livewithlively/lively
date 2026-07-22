@@ -6278,7 +6278,10 @@ async function myAiSection(detail) {
 
   const roleIn = el('input', { type: 'text', value: pr.role, placeholder: '예: 라이블리 공동대표 / 백엔드 개발 / 디자이너' });
   const addressIn = el('input', { type: 'text', value: pr.address, placeholder: '예: 상민님 / 대표님' });
-  const memoTa = el('textarea', { class: 'admin-ta admin-ta-prose', rows: '5', placeholder: 'AI가 알아두면 좋은 내용을 자유롭게 적어주세요 — 나만의 규칙·선호·맥락. 비밀번호·토큰은 넣지 마세요(자동 차단).' });
+  // 플레이스홀더는 **넣을 것만** 말한다 — 넣지 말 것(시크릿)은 아래 힌트로 따로 뗀다. 한 문장에 뭉쳐 놓으니
+  //  '나만의 규칙·선호·맥락(도) 넣지 마세요'로 읽혔다(사용자 지적).
+  const memoTa = el('textarea', { class: 'admin-ta admin-ta-prose', rows: '5',
+    placeholder: '내 AI 가 알아두면 좋은 규칙·선호·맥락을 자유롭게 적어주세요.\n예: 금액은 항상 원 단위로 / 보고는 결론부터 / 화요일 오전엔 회의라 답이 늦어요' });
   memoTa.value = pr.memo;
 
   const devSel = { v: pr.dev };
@@ -6296,33 +6299,6 @@ async function myAiSection(detail) {
   const langChips = profChips(PROF_LANG.map((t) => ({ v: t })), langSel, (o) => o.v, (o) => o.v, () => { langCustom.value = ''; });
   langChips.append(langCustom);   // 칩 wrap(.prof-chips) 안 — 폭이 좁아지면 자연히 다음 줄로 넘어간다
   langCustom.addEventListener('input', () => { langSel.v = langCustom.value.trim(); (langChips as any).repaint(); });
-
-  // 실제 주입 전문 미리보기 — [세션 주입]의 것과 같은 관례지만 **개인 레이어까지 반영된** 내 컨텍스트다.
-  //  /api/ui/org/preview 는 bearer principal 기준(previewMemberContext(orgName, memberId)) 이라, 지금 로그인한
-  //  나의 팀 층 + 개인 층이 그대로 들어간 전문이 온다. 저장 후 다시 열면 방금 저장한 내용이 보인다.
-  function previewExpander() {
-    const box = el('div', { class: 'inj-preview' }); box.style.display = 'none';
-    const btn = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '실제 주입되는 전문 미리보기 ▾' });
-    let open = false;
-    btn.addEventListener('click', async () => {
-      open = !open;
-      box.style.display = open ? 'block' : 'none';
-      btn.textContent = open ? '미리보기 접기 ▴' : '실제 주입되는 전문 미리보기 ▾';
-      if (!open) return;
-      box.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));   // 열 때마다 새로 — 방금 저장한 게 보이게
-      try {
-        const r = await api('/api/ui/org/preview');
-        const ctx = (r && r.context) || '';
-        box.replaceChildren(
-          el('p', { class: 'admin-hint', style: 'margin:0 0 8px' },
-            ...inlineBold('내 AI 가 매 세션 첫머리에 **실제로 읽는 전문**입니다 — 조직 맥락 + 우리 팀 + 아래 개인 규칙. 다른 구성원에겐 그 사람의 개인 규칙이 실립니다.')),
-          ctx
-            ? el('div', { class: 'md-rendered admin-md-box', style: 'max-height:420px; overflow:auto' }, renderMarkdown(ctx))
-            : el('p', { class: 'admin-hint', text: '미리볼 내용이 없습니다.' }));
-      } catch (e) { box.replaceChildren(errorNote(e, '미리보기를 불러오지 못했습니다')); }
-    });
-    return { btn, box };
-  }
 
   const saveBtn = el('button', { type: 'button', class: 'btn btn-primary', text: '저장' });
   const status = el('span', { class: 'admin-status' });
@@ -6347,7 +6323,6 @@ async function myAiSection(detail) {
     saveBtn.disabled = false;
   });
 
-  const pv = previewExpander();
   detail.replaceChildren(
     // 페이지 제목 = 이 화면 전체(계정 + 개인 규칙). 개별 박스 설명은 각 박스의 .caption 이 맡는다.
     //  (설명은 hint 한 줄만 — meaning 인자도 화면에 한 줄로 깔려서 둘 다 주면 같은 말이 두 줄로 겹친다.)
@@ -6368,9 +6343,9 @@ async function myAiSection(detail) {
         //  또 하나의 선택지지, 아래 딸린 별개 입력이 아니다. 실제 배치는 profChips 가 wrap 안에 넣어 준다.
         field('사용 언어 (AI가 답하는 언어)', el('div', {}, langChips,
           el('p', { class: 'prof-hint', text: '고르거나 직접 적은 언어로 내 AI가 답해요. 비우면 조직 기본값(주로 한국어)을 따릅니다.' }))),
-        field('추가 메모', memoTa),
-        el('div', { class: 'admin-actions' }, saveBtn, status, pv.btn),
-        pv.box)));
+        field('추가 메모', el('div', {}, memoTa,
+          el('p', { class: 'prof-hint', text: '비밀번호·API 키·개인키 같은 비밀값은 적지 마세요. 토큰으로 보이는 값이 들어 있으면 저장되지 않고 오류로 알려드립니다.' }))),
+        el('div', { class: 'admin-actions' }, saveBtn, status))));
 }
 
 // ── [내 설정 ▸ 내 서비스 로그인] — member_secret vault + OAuth 연결 + git 인증 ──
