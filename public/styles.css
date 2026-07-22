@@ -1156,10 +1156,15 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .svc-item-actions { flex: none; display: flex; align-items: center; gap: 8px; margin-left: auto; }
 /* 카드 세로 스택 — 서브카드 사이 여백을 균일하게(개별 카드 인라인 margin 의존 제거, #762). */
 .admin-stack { display: flex; flex-direction: column; gap: 14px; }
+/* 섹션 제목(카드 첫 줄 h3) — UA 기본 margin(≈17px)이 카드 패딩 24px 에 더해져 제목이 박스 위에서 40px 넘게
+   떨어져 있었다(#1085 지적). 제목은 카드 패딩 자리에 딱 붙이고, 아래 설명(.caption)과의 간격만 준다.
+   :first-child 로 좁혀 카드 중간에 오는 h3(위 여백이 필요한 자리)는 건드리지 않는다. */
+.admin-body .card > h3:first-child { margin: 0; font-size: 16px; font-weight: 800; letter-spacing: -.2px; }
+.admin-body .card > h3:first-child + .caption { display: block; margin: 5px 0 0; line-height: 1.5; }
 /* 내 AI 계정(#1085) — AI 한 줄 = [이름 · 상태 배지] + [한 줄 부제] | 오른쪽 [동작].
    제약(공용 계정·맥 키체인)은 길어서 본문에 풀면 회색 문단이 카드를 덮는다 → 배지 툴팁으로 접는다. */
 .aiacct { display: flex; align-items: center; gap: 14px; padding: 13px 0; border-top: 1px solid var(--line); }
-.aiacct:first-child { border-top: 0; padding-top: 4px; }
+.aiacct:first-child { border-top: 0; padding-top: 14px; }   /* 설명(.caption) 과 첫 행 사이 숨 — 제목 여백을 줄인 만큼 여기서 준다 */
 .aiacct:last-child { padding-bottom: 0; }
 .aiacct-txt { flex: 1; min-width: 0; }
 .aiacct-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
