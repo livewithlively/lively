@@ -6811,10 +6811,16 @@ async function myAiSection(detail) {
         saveBtn.disabled = false;
     });
     const pv = previewExpander();
-    detail.replaceChildren(sectionHead('내 AI 설정', null, '여기 입력·선택한 내용은 **내** AI가 매 세션을 시작할 때 \'내 개인 규칙\'으로 읽습니다 — 나에게만 적용되고 팀에는 공유되지 않아요. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).'), 
+    detail.replaceChildren(
+    // 페이지 제목 = 이 화면 전체(계정 + 개인 규칙). 개별 박스 설명은 각 박스의 .caption 이 맡는다.
+    //  (설명은 hint 한 줄만 — meaning 인자도 화면에 한 줄로 깔려서 둘 다 주면 같은 말이 두 줄로 겹친다.)
+    sectionHead('내 AI 설정', '내 AI 세션이 어떤 계정으로 실행되는지, 그리고 내 AI 가 나에 대해 무엇을 알고 일할지 정합니다. 여기 설정은 나에게만 적용되고 팀에는 공유되지 않습니다.'), 
     // 두 박스는 성격이 다르다 — 붙여 놓으면 한 덩어리로 읽힌다. .admin-stack 으로 간격을 준다(관리탭 공용 규약).
     el('div', { class: 'admin-stack' }, myAiAccountsCard(), // 위 박스 = 내 AI 가 '무엇으로·누구 계정으로' 도는가(#1085)
-    el('div', { class: 'card admin-form-narrow' }, el('h3', { text: '내 AI 에게 알려줄 것' }), field('역할', roleIn), field('개발 이해도', el('div', {}, devChips, devHint)), field('호칭 (AI가 나를 부르는 말)', addressIn), field('말투', toneChips), field('사용 언어 (AI가 답하는 언어)', el('div', {}, langChips, el('div', { style: 'margin-top:8px' }, langCustom), el('p', { class: 'prof-hint', text: '고르거나 직접 적은 언어로 내 AI가 답해요. 비우면 조직 기본값(주로 한국어)을 따릅니다.' }))), field('추가 메모', memoTa), el('div', { class: 'admin-actions' }, saveBtn, status, pv.btn), pv.box)));
+    el('div', { class: 'card admin-form-narrow' }, 
+    // 섹션 제목은 서술문('~할 것')이 아니라 **명사구**로 — 관리탭 다른 섹션(구성원·조직 정보·세션 주입)과 같은 규격.
+    //  설명 한 줄은 위 [AI 계정 연결] 박스와 같은 자리(.caption)에 둔다: 박스마다 [제목 · 한 줄 설명 · 내용].
+    el('h3', { text: 'AI 개인 규칙' }), el('p', { class: 'caption', text: '내 역할·호칭·말투·사용 언어입니다. 내 AI 가 매 세션을 시작할 때 이 내용을 읽고 따릅니다 — 나에게만 적용되고 팀에는 공유되지 않습니다.' }), field('역할', roleIn), field('개발 이해도', el('div', {}, devChips, devHint)), field('호칭 (AI가 나를 부르는 말)', addressIn), field('말투', toneChips), field('사용 언어 (AI가 답하는 언어)', el('div', {}, langChips, el('div', { style: 'margin-top:8px' }, langCustom), el('p', { class: 'prof-hint', text: '고르거나 직접 적은 언어로 내 AI가 답해요. 비우면 조직 기본값(주로 한국어)을 따릅니다.' }))), field('추가 메모', memoTa), el('div', { class: 'admin-actions' }, saveBtn, status, pv.btn), pv.box)));
 }
 // ── [내 설정 ▸ 내 서비스 로그인] — member_secret vault + OAuth 연결 + git 인증 ──
 async function myLoginsSection(detail) {
