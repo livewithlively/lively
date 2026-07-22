@@ -802,7 +802,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         // 그룹은 어느 스코프에서든 바꿀 수 있다(#1067) — 폴더/스페이스면 각 리스트 박스 안에서 그 기준으로 묶인다.
         pjvGroupCtx = { selList, groupBy, rerender: render, enabled: true, scopeKey: sel };
         if (groupBtn)
-            pjvSyncGroupBtn(groupBtn, groupBy, true);
+            pjvSyncGroupBtn(groupBtn, groupBy, true, sel);
         const main = el('div', { class: 'pjv-side-main' + (noNav ? ' pjv-side-main-nonav' : '') + (pjvBoardView.table ? ' pjv-table-mode' : '') });
         // 셸의 우측 컬럼 상단에 페이지 크롬(제목·하위탭·보드헤드) + 툴바를 얹는다 — 사이드바는 좌측에서 y=64 부터 풀하이트(#607).
         //  noNav(#662)여도 같은 자리에 얹는다(#1067) — 사이드바를 접어도 '사이드바만 사라지고' 나머지는 그대로여야 한다.
@@ -891,6 +891,12 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
             if (!trows.length)
                 tbody.append(el('div', { class: 'pjv-proj-empty', text: '표시할 프로젝트가 없습니다.' }));
             main.append(pjvListColHead(fields, anchorId, reload, selList ? selList.id : undefined), tbody);
+        }
+        else if (selFolder && !pjvGetAlsoList(sel)) {
+            // #req '리스트로도 묶기'를 끈 폴더/스페이스 — 리스트 경계를 지우고 이 폴더 아래 전체를 한 덩어리로.
+            //  그룹 기준(상태·담당자 등)만 남는다. 리스트 스코프에서 쓰는 것과 같은 렌더 경로라 행·컬럼 모습은 그대로.
+            //  selList=null 이므로 표준 3버킷(커스텀 상태는 리스트마다 달라 폴더 단위로는 합칠 수 없다).
+            pjvRenderStatusGroups(boardBox, shownProjects, null, { reload, canDelete, fields: effFields, anchorId, meId, taskCtx, mineOnly, listIdForAdd: null, noAdd: true, groupBy, colSort });
         }
         else if (selFolder) {
             // 폴더/스페이스 뷰(#1067) — ClickUp 폴더 List 뷰 파리티: **리스트마다 테두리 박스** 하나.
@@ -1419,7 +1425,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         // 전체 보기(스코프 없음)에서도 그룹은 쓸 수 있다(#1067) — renderArea 로 가면 그쪽이 스코프 기준으로 덮어쓴다.
         const allGb = pjvGetGroupBy(null, null, '__all__');
         pjvGroupCtx = { selList: null, groupBy: allGb, rerender: render, enabled: true, scopeKey: '__all__' };
-        pjvSyncGroupBtn(groupBtn, allGb, true);
+        pjvSyncGroupBtn(groupBtn, allGb, true, '__all__'); // 전체 보기 — 폴더 스코프가 아니라 '리스트로도 묶기'는 해당 없음
         const byArea = pjvBoardView.byArea, byStatus = pjvBoardView.byStatus, byFolder = pjvBoardView.byFolder;
         syncScopeChip();
         syncCrumbs(); // 브레드크럼(#1067) — 현재 스코프를 위치로 표시
@@ -2611,7 +2617,8 @@ function pjvListCategoryField(currentId) {
 function openListForm(reload, list, opts) {
     opts = opts || {};
     const editing = !!list;
-    const nameIn = el('input', { type: 'text', value: editing ? list.name : '', placeholder: '리스트 이름 (예: 컨텍스트 저장소)', maxlength: '120' });
+    // opts.name = 다른 화면(대시보드 '+ 새 리스트' 인라인 입력)에서 이미 친 이름 — 두 번 타이핑하지 않게 프리필.
+    const nameIn = el('input', { type: 'text', value: editing ? list.name : (opts.name || ''), placeholder: '리스트 이름 (예: 컨텍스트 저장소)', maxlength: '120' });
     let color = editing ? (list.color || '') : '';
     const swatches = el('div', { class: 'pjv-color-swatches' });
     const paintSw = () => {
@@ -3285,6 +3292,27 @@ function pjvSetGroupBy(selList, v, scopeKey) {
     }
     catch (_) { /* noop */ }
 }
+// '리스트로도 묶기'(#req, ClickUp 'Also group by List' 파리티) — 폴더·스페이스 스코프에서만 의미가 있다.
+//  켬(기본) = 리스트마다 테두리 박스, 그 안에서 그룹 기준으로 다시 묶음. 끔 = 리스트 경계를 지우고
+//  스코프 전체를 한 덩어리로 그룹 기준(상태 등)으로만 묶음. 폴더로 묶는 옵션은 두지 않는다(사용자 결정 — 불필요).
+//  스코프별 저장(F<id>) — 폴더마다 보는 방식이 다를 수 있어서.
+function pjvAlsoListKey(scopeKey) { return 'pjv:alsoList:' + (scopeKey || 'all'); }
+function pjvGetAlsoList(scopeKey) { try {
+    return localStorage.getItem(pjvAlsoListKey(scopeKey)) !== '0';
+}
+catch (_) {
+    return true;
+} }
+function pjvSetAlsoList(scopeKey, on) {
+    try {
+        const k = pjvAlsoListKey(scopeKey);
+        if (on)
+            localStorage.removeItem(k);
+        else
+            localStorage.setItem(k, '0');
+    }
+    catch (_) { /* noop */ }
+}
 // 상태(그룹) 접힘 상태 저장(#req) — 리스트+그룹 단위로 localStorage 에 저장해 새로고침에도 유지된다.
 //  기본은 펼침(키 없음); 접으면 '0' 을 저장하고, 다시 펼치면 키를 지워 기본(펼침)으로 되돌린다(저장소 정리).
 //  gid = 커스텀 상태 key | 기본 3버킷 statusKey('in_progress'|'todo'|'done') | (필드 그룹) 라벨.
@@ -3341,13 +3369,16 @@ let pjvSortCtx = null;
 // 현재 렌더 스코프의 그룹바이 컨텍스트 — 툴바 '그룹' 버튼이 사용(renderArea 가 갱신).
 let pjvGroupCtx = null;
 // '그룹' 버튼 라벨/강조 동기 — 그룹: <필드> (↑/↓). 리스트 미선택 스코프에선 비활성 표시.
-function pjvSyncGroupBtn(btn, gb, enabled) {
+function pjvSyncGroupBtn(btn, gb, enabled, scopeKey) {
     const lbl = btn.querySelector('.pjv-view-btn-label');
     const f = PJV_GROUPBY_FIELDS.find((x) => x.key === gb.field);
+    // #req 폴더·스페이스에서 '리스트로도 묶기'를 끄면 라벨에 그 사실을 붙인다 — 팝오버를 열지 않아도
+    //  리스트 박스가 사라진 이유가 보이게(안 그러면 '왜 리스트가 안 나뉘지?'가 된다).
+    const noList = pjvScopeIsFolder(scopeKey) && !pjvGetAlsoList(scopeKey);
     // ClickUp 파리티 — 알약 버튼에 그룹 기준 필드명만(방향은 화살표로). '그룹:' 접두어는 아이콘이 대신한다.
     if (lbl)
-        lbl.textContent = (f ? f.label : '상태') + (gb.dir === -1 ? ' ↓' : '');
-    btn.classList.toggle('active', !!(enabled && (gb.field !== 'status' || gb.dir === -1)));
+        lbl.textContent = (f ? f.label : '상태') + (gb.dir === -1 ? ' ↓' : '') + (noList ? ' · 리스트 안 나눔' : '');
+    btn.classList.toggle('active', !!(enabled && (gb.field !== 'status' || gb.dir === -1 || noList)));
     // 쓸 수 없는 스코프(폴더·전체)에선 disabled 대신 '흐리게 + aria-disabled'(#1067) — 진짜 disabled 면 클릭이
     //  이벤트조차 안 나서 '눌러도 아무 일이 없다'로만 보인다. 눌리면 왜 못 쓰는지 토스트로 알려준다.
     btn.disabled = false;
@@ -3365,6 +3396,12 @@ function pjvGroupByMenu(anchor) {
     pjvPopover(anchor, pop);
     const line = el('div', { class: 'pjv-groupby-line' });
     pop.append(el('div', { class: 'pjv-closed-pop-head', text: '그룹 기준' }), line, el('div', { class: 'pjv-menu-hint', text: '기본값 = 이 리스트의 뷰 설정(ClickUp 이관 포함)' }));
+    // #req 폴더·스페이스에서만 '리스트로도 묶기'(ClickUp Also group by List). 끄면 리스트 박스가 사라지고
+    //  이 폴더 아래 프로젝트가 한 덩어리로 위 그룹 기준으로만 묶인다.
+    if (pjvScopeIsFolder(ctx.scopeKey)) { // 폴더·스페이스(F…)일 때만 — 리스트 스코프는 이미 그 리스트 하나뿐이라 무의미
+        pop.append(el('div', { class: 'pjv-groupby-sep' }));
+        pop.append(pjvSwitchRow('리스트로도 묶기', () => pjvGetAlsoList(ctx.scopeKey), (v) => pjvSetAlsoList(ctx.scopeKey, v), () => ctx.rerender()));
+    }
     const mkSel = (label, cls, onOpen) => {
         const b = el('button', { class: 'pjv-filter-sel ' + cls, type: 'button' }, el('span', { class: 'pjv-filter-sel-label', text: label }), pjvTbIcon('caret', 'sm'));
         b.onclick = (e) => { e.stopPropagation(); onOpen(b); };
@@ -3520,7 +3557,10 @@ function pjvHeadSortable(labelEl, colKey) {
     });
 }
 function pjvRenderStatusGroups(main, shownProjects, selList, opts) {
-    const { reload, canDelete, fields, anchorId, meId, taskCtx, mineOnly, listIdForAdd } = opts;
+    const { reload, canDelete, fields, anchorId, meId, taskCtx, listIdForAdd } = opts;
+    // 추가행을 뺄 조건 — '내 할당만'(예전부터) 또는 opts.noAdd(#req 폴더에서 리스트 그룹을 끈 경우:
+    //  어느 리스트로 만들지 정할 수 없으니 만들기를 열어 두면 폴더 밖 '미분류'로 새는 프로젝트가 생긴다).
+    const mineOnly = opts.mineOnly || opts.noAdd;
     const gb = opts.groupBy || { field: 'status', dir: 1 };
     const sortArr = (arr) => pjvSortProjects(arr, opts.colSort);
     // 첫(맨 위) 그룹 헤더에 컬럼 라벨을 합친다(별도 컬럼헤더 행 없음, #470). 실제로 그려지는 첫 그룹에만 withCols.
@@ -13450,4 +13490,4 @@ function projectTimelineSection(id, members, base) {
     };
     pjvTaskRow.__cfDblWrapped = true;
 })();
-export { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, UP_CONFIRM, authDownload, authUpload, authUploadProgress, avatarColor, buildWysiwygToolbar, companyTimelineSection, debounce, fileIconSvg, fmtDateTime, fmtFileDate, fmtFileDateFull, fmtSize, initials, mdFromDom, mountBodyEditor, openFileViewer, uploadBodyFile, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFieldControl, pjvFmtDate, pjvFolderIsArchive, pjvFolderIsSpace, pjvGridTemplate, pjvIsOverdue, pjvCloseProjectModalOnRoute, pjvOpenProjectModal, pjvProjectModalOpen, pjvProjectModalRefreshIfRoute, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskModalStatusField, pjvTaskRow, renderProjectV2Detail, renderProjectsV2, upControl, upDropZone, upIsAbort, upPrecheckOverwrite, upProgress, upSend, upToast, };
+export { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, UP_CONFIRM, authDownload, authUpload, authUploadProgress, avatarColor, buildWysiwygToolbar, companyTimelineSection, debounce, fileIconSvg, fmtDateTime, fmtFileDate, fmtFileDateFull, fmtSize, initials, mdFromDom, mountBodyEditor, openFileViewer, openListForm, uploadBodyFile, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFieldControl, pjvFmtDate, pjvFolderIsArchive, pjvFolderIsSpace, pjvGridTemplate, pjvIsOverdue, pjvCloseProjectModalOnRoute, pjvOpenProjectModal, pjvProjectModalOpen, pjvProjectModalRefreshIfRoute, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskModalStatusField, pjvTaskRow, renderProjectV2Detail, renderProjectsV2, upControl, upDropZone, upIsAbort, upPrecheckOverwrite, upProgress, upSend, upToast, };
