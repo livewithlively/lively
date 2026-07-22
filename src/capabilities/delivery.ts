@@ -2473,26 +2473,30 @@ export const deliveryCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/org/harness-asset"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       const id = assertAssetId(input.id);
-      const kind = str(input.kind ?? "skill", "kind", 12);
-      if (!HARNESS_ASSET_KINDS.has(kind)) throw new HttpError(400, `kind 는 ${[...HARNESS_ASSET_KINDS].join("|")} 만 허용됩니다`);
-      const harness = input.harness === undefined ? "all" : str(input.harness, "harness", 12);
-      if (!HOOK_HARNESSES.has(harness)) throw new HttpError(400, "harness 는 claude|codex|openclaw|all");
-      const description = str(input.description ?? "", "description", 2000);
+      // 미전송 = 기존 유지(부분수정 안전). 전송했을 때만 검증한다.
+      const kind = input.kind === undefined ? undefined : str(input.kind, "kind", 12);
+      if (kind !== undefined && !HARNESS_ASSET_KINDS.has(kind)) throw new HttpError(400, `kind 는 ${[...HARNESS_ASSET_KINDS].join("|")} 만 허용됩니다`);
+      const harness = input.harness === undefined ? undefined : str(input.harness, "harness", 12);
+      if (harness !== undefined && !HOOK_HARNESSES.has(harness)) throw new HttpError(400, "harness 는 claude|codex|openclaw|all");
+      // ⚠ 부분수정 보존 — 미전송 필드는 **undefined 로 넘겨 기존 값을 지킨다**. 예전엔 `input.x ?? ""` 라
+      //  summary 만 고치려고 id+summary 만 보내면 description·body 가 빈 문자열로 덮여 **본문이 날아갔다**.
+      //  (store 의 `a.field ?? before.field` 는 undefined 일 때만 보존한다.)
+      const description = input.description === undefined ? undefined : str(input.description, "description", 2000);
       // summary — 관리탭·구성원 화면에 보이는 '쉬운 한 줄'(#1085). description(하네스가 언제 쓸지 판단하는
-      //  트리거 문장)을 그대로 보여주면 무슨 기능인지 안 읽혀서 표시용을 따로 받는다. 미전송이면 기존 값 보존.
+      //  트리거 문장)을 그대로 보여주면 무슨 기능인지 안 읽혀서 표시용을 따로 받는다.
       const summary = input.summary === undefined ? undefined : str(input.summary, "summary", 300);
-      const body = str(input.body ?? "", "body", 262144);
-      const frontmatter = parseAssetFrontmatter(input.frontmatter);
-      assertNoHardSecrets(description, "description");
-      assertNoHardSecrets(body, "body"); // 자산 본문도 멤버 디스크로 나가므로 평문 시크릿 hard-block
-      assertNoHardSecrets(JSON.stringify(frontmatter), "frontmatter");
-      const targetMembers = parseTargetMembers(input.target_members);
-      const pairedHookId = (input.paired_hook_id === undefined || input.paired_hook_id === null || input.paired_hook_id === "")
-        ? null : assertHookId(input.paired_hook_id);
+      const body = input.body === undefined ? undefined : str(input.body, "body", 262144);
+      const frontmatter = input.frontmatter === undefined ? undefined : parseAssetFrontmatter(input.frontmatter);
+      if (description !== undefined) assertNoHardSecrets(description, "description");
+      if (body !== undefined) assertNoHardSecrets(body, "body"); // 자산 본문도 멤버 디스크로 나가므로 평문 시크릿 hard-block
+      if (frontmatter !== undefined) assertNoHardSecrets(JSON.stringify(frontmatter), "frontmatter");
+      const targetMembers = input.target_members === undefined ? undefined : parseTargetMembers(input.target_members);
+      const pairedHookId = input.paired_hook_id === undefined ? undefined
+        : ((input.paired_hook_id === null || input.paired_hook_id === "") ? null : assertHookId(input.paired_hook_id));
       const asset = await upsertOrgHarnessAsset({
-        id, kind: kind as AssetKind,
+        id, kind: kind as AssetKind | undefined,
         label: input.label == null ? undefined : str(input.label, "label", 200).trim(),
-        harness: harness as HookHarness, description, summary, body, frontmatter,
+        harness: harness as HookHarness | undefined, description, summary, body, frontmatter,
         target_members: targetMembers, paired_hook_id: pairedHookId,
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
