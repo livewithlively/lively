@@ -902,6 +902,10 @@ export async function initOrgSchema(): Promise<void> {
   `);
   // owner 로 자주 조회(복원 목록 = 이 사용자의 tmux 에 없는 레코드) — 인덱스로 스캔 회피.
   await itemsPool.query(`CREATE INDEX IF NOT EXISTS org_session_state_owner_idx ON org_session_state(owner);`);
+  // #1059 정밀 복원 — 이 box 세션이 **현재 도는 claude 자신의 세션 UUID**(box-id ≠ claude UUID). work-flag 훅이 세션
+  //  활동 시 (box-id, claude session_id)를 보고해 last-write-wins 로 갱신(한 box 안에서 branch·resume·/clear 로 UUID 가
+  //  바뀔 수 있으므로 최신만 유지). 복원 시 이 값으로 `claude --resume <uuid>` 정밀 이어받기. null=미상(셸·코덱스·미보고)→picker 폴백.
+  await itemsPool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS claude_session_id TEXT;`);
 
   // ── org_preview_env — 프리뷰 환경(작업자별 격리 미리보기)의 desired state (#1036). 관리탭 CRUD. ──
   //  kind=work: 작업 워크트리(project/<id>)를 게이트웨이가 /preview/<id>/ 서브패스로 정적 서빙(shared-proxy — /api 는 게이트웨이 자신).
