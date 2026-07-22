@@ -13,7 +13,7 @@ import { openSessPrompts } from './terminal.js'; // 세션 '내 질문' 팝업 �
 // 작업 로그 전체 보기 팝업 = 회사 활동 피드 재사용. authDownload·fmtSize = 공유 폴더 브라우저(#672)의 검증된 파일 프리미티브 재사용.
 //  업로드 프리미티브(upControl/upDropZone/UP_CONFIRM)도 프로젝트 공유 폴더(#781)에서 검증된 것을 그대로 재사용 — 폴더 업로드 + 드래그앤드롭(#795·#796).
 //  전송 루프·진행바·취소(upSend/upProgress/upToast)도 마찬가지 — 취소를 화면마다 따로 만들지 않는다(#797).
-import { UP_CONFIRM, authDownload, companyTimelineSection, fmtFileDate, fmtFileDateFull, fmtSize, openProjectV2Form, pjvOpenProjectModal, upControl, upDropZone, upPrecheckOverwrite, upProgress, upSend, upToast, type UpItem } from './projects.js';
+import { UP_CONFIRM, authDownload, avatarColor, companyTimelineSection, fmtFileDate, fmtFileDateFull, fmtSize, openProjectV2Form, pjvFolderIsArchive, pjvFolderIsSpace, pjvOpenProjectModal, upControl, upDropZone, upPrecheckOverwrite, upProgress, upSend, upToast, type UpItem } from './projects.js';
 import { openGridPicker, openTermCreateForm, startTerminalTour, termAutoApprovePref } from './terminal.js'; // 세션 생성 팝업·따라하기 투어·그리드 열기(#870)를 대시보드에서 그대로 재사용(#req). 자동 승인 기본값은 #782.
 
 // 하네스 라벨 폴백(terminal config 의 harnesses 와 동일 키) — cfg 로드 실패 시에도 읽히게.
@@ -238,6 +238,37 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
   // #req ⚙ 팝오버에서 즐겨찾기 리스트를 상단에 — 백그라운드 로드(지연/실패 시 빈 집합, 무해).
   let favLists = new Set<number>();
   api('/api/ui/v6/favorites').then((d) => { favLists = new Set(((d && d.project_lists) || []).map((x) => Number(x))); }).catch(() => { /* 무시 */ });
+  // #req ⚙ 팝오버의 리스트 고르기는 **조직의 모든 리스트**를 스페이스›폴더 트리로 훑는다 — 폴더는 백그라운드 로드.
+  //  팝오버를 열 때까지 필요 없으므로 렌더를 막지 않는다(실패해도 트리 없이 평면 목록으로 폴백).
+  let folders: any[] = [];
+  let foldersLoaded = false;
+  const ovOpen = new Set<number>(); // ⚙ 트리에서 펼쳐 둔 폴더(팝오버를 닫았다 열어도 유지). 최초 1회 '켜진 리스트의 조상'을 펼친다.
+  const foldersP = api('/api/ui/v6/project-folders')
+    .then((d) => { folders = (d && d.folders) || []; foldersLoaded = true; return folders; })
+    .catch(() => { foldersLoaded = true; return folders; }); // 실패해도 트리 자리에 '폴더에 없는 리스트'로 평면 표시
+  // 지금 요약 카드에 떠 있는 리스트가 들어 있는 폴더는 처음부터 펼쳐 둔다 — 내 리스트가 접힌 폴더에 숨지 않게.
+  //  팝오버를 처음 그릴 때 1회만(그 시점엔 draw() 가 끝나 autoIds 가 채워져 있다). 이후 펼침은 사람이 정한 대로 둔다.
+  let ovSeeded = false;
+  const seedOvOpen = () => {
+    const parentOf = new Map<number, any>(folders.map((f) => [Number(f.id), f.parent_id]));
+    const shownIds = new Set<number>([...autoIds, ...dashOvPinned()]);
+    for (const l of lists) {
+      if (l.folder_id == null || !shownIds.has(Number(l.id))) continue;
+      let fid: any = Number(l.folder_id);
+      for (let i = 0; fid != null && i < 20; i++) { ovOpen.add(Number(fid)); fid = parentOf.get(Number(fid)); }
+    }
+  };
+  // #req 추가로 고른 리스트(pinned)는 '내 프로젝트'가 아닐 수 있다 — 그 카드/목록은 mine 필터 없이 **리스트 전체**를 보여준다.
+  //  조직 전체 프로젝트는 무거우니 pinned 가 실제로 있을 때만 한 번 받아 캐시(reloadAll 에서 무효화).
+  let allProjects: any[] | null = null;
+  let allLoading = false;
+  const ensureAllProjects = () => {
+    if (allProjects || allLoading || !dashOvPinned().size) return;
+    allLoading = true;
+    api('/api/ui/v6/projects')
+      .then((d) => { allProjects = (d && d.projects) || []; allLoading = false; draw(); })
+      .catch(() => { allLoading = false; /* 실패 시 내 프로젝트 기준으로만 표시 */ });
+  };
   // 상태 묶음(개요 미니바) — 프로젝트 탭 개요의 brk 와 동일 3버킷(할일·진행·완료).
   const brk = (arr) => ({ total: arr.length, done: arr.filter(isDone).length,
     prog: arr.filter((p) => !isDone(p) && p.status !== 'todo').length, todo: arr.filter((p) => p.status === 'todo').length });
@@ -311,11 +342,11 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
     collapse();
     return row;
   };
-  const dashProjGroup = (listId, l, arr) => {
+  //  rawArr = 필터 이전의 이 리스트 프로젝트 전체. 리스트별 필터는 그룹이 스스로 적용하고 body 만 다시 그린다
+  //  (필터를 만질 때 draw() 로 위젯을 통째로 다시 그리면 팝오버가 붙어 있던 헤더 버튼이 사라져 위치가 튄다).
+  const dashProjGroup = (listId, l, rawArr) => {
     const isUn = !listId;
     const body = el('div', { class: 'pjv-tgroup-body' });
-    for (const p of arr) body.append(dashProjRow(p));
-    body.append(dashInlineAdd(listId)); // 맨 밑 인라인 추가행
     let open = true;
     const caret = el('button', { class: 'pjv-tgroup-caret', type: 'button', text: '▾', 'aria-expanded': 'true' });
     const setOpen = (o) => { open = o; caret.textContent = o ? '▾' : '▸'; caret.setAttribute('aria-expanded', String(o)); body.hidden = !o; };
@@ -323,12 +354,60 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
     const dot = isUn
       ? el('span', { class: 'pjv-list-dot', style: 'background:' + ((l && l.color) || 'var(--muted-3)'), 'aria-hidden': 'true' })
       : el('span', { class: 'pjv-list-headglyph', 'aria-hidden': 'true' }, dashListGlyph(l));
+    // #req 리스트 헤더 우측 필터 버튼 — 위젯 헤더의 [⚙][→] 와 같은 아이콘버튼(dash-wh-btn) 톤을 그대로 쓴다.
+    //  직접 고른 리스트는 남의 프로젝트까지 들어와 목록이 길어지므로, 그 자리에서 담당·이름으로 좁힌다.
+    const fBtn = el('button', { class: 'dash-wh-btn dash-lh-filter', type: 'button',
+      title: '이 리스트 목록 거르기', 'aria-label': ((l && l.name) || '미분류') + ' 목록 거르기' }, dashFilterIcon());
+    const countEl = el('span', { class: 'pjv-tgroup-count' });
+    // 필터 적용 + 헤더 표식 갱신. 걸린 필터가 있으면 버튼 on + 개수를 '보이는 수/전체 수'로 바꿔 가려진 게 있음을 드러낸다.
+    const paint = () => {
+      const lf = dashListFilter(listId);
+      const q = (lf.q || '').trim().toLowerCase();
+      const arr = rawArr.filter((p) => (lf.who !== 'mine' || mineIds.has(Number(p.id)))
+        && (!q || String(p.name || '').toLowerCase().includes(q)));
+      body.replaceChildren(...arr.map(dashProjRow), dashInlineAdd(listId)); // 맨 밑 인라인 추가행
+      const on = lf.who === 'mine' || !!q;
+      fBtn.classList.toggle('on', on);
+      countEl.textContent = (on && arr.length !== rawArr.length) ? arr.length + '/' + rawArr.length : String(arr.length);
+      if (on && !arr.length) body.prepend(dashEmpty('필터에 걸리는 프로젝트가 없어요.'));
+    };
+    fBtn.onclick = (e: any) => { e.stopPropagation(); openListFilter(fBtn, listId, paint); };
+    paint();
     const head = el('div', { class: 'pjv-tgroup-head pjv-list-head' + (isUn ? ' pjv-list-head-un' : '') },
       el('div', { class: 'pjv-list-head-main' }, caret, dot,
-        el('span', { class: 'pjv-tgroup-label', text: (l && l.name) || '미분류' }),
-        el('span', { class: 'pjv-tgroup-count', text: String(arr.length) })));
+        el('span', { class: 'pjv-tgroup-label', text: (l && l.name) || '미분류' }), countEl),
+      el('div', { class: 'dash-lh-ctl' }, fBtn));
     head.addEventListener('click', (e: any) => { if (e.target.closest('button')) return; setOpen(!open); });
     return el('div', { class: 'pjv-tgroup pjv-list-group' }, head, body);
+  };
+  // 리스트별 필터 팝오버 — 담당(전체/내 것만) + 이름 검색. ⚙ 개인화 팝오버(dash-pop-*)와 같은 프리미티브를 그대로 쓴다.
+  //  onChange = 그룹 body 만 다시 그리는 콜백(위젯 전체 재렌더 금지 — 팝오버가 붙은 버튼이 살아 있어야 한다).
+  const openListFilter = (anchor, listId, onChange) => {
+    const cur = dashListFilter(listId);
+    const panel = el('div', { class: 'dash-pop-panel' });
+    panel.append(el('div', { class: 'dash-pop-head' },
+      el('strong', { text: '목록 거르기' }),
+      el('span', { class: 'dash-pop-sub', text: '이 기기에 저장돼요' })));
+    panel.append(el('div', { class: 'dash-pop-gh', text: '담당' }));
+    const segRow = el('div', { class: 'dash-pop-seg' });
+    for (const [k, label] of [['all', '전체'], ['mine', '내 프로젝트만']]) {
+      const b = el('button', { class: 'dash-pop-segbtn' + (k === cur.who ? ' on' : ''), type: 'button', text: label });
+      b.onclick = () => { dashSaveListFilter(listId, { ...dashListFilter(listId), who: k }); onChange(); openListFilter(anchor, listId, onChange); };
+      segRow.append(b);
+    }
+    panel.append(segRow);
+    panel.append(el('div', { class: 'dash-pop-gh', text: '이름으로 찾기' }));
+    const qIn: any = el('input', { class: 'dash-pop-search', type: 'text', placeholder: '프로젝트 이름…', 'aria-label': '프로젝트 이름으로 거르기', value: cur.q || '' });
+    // 입력마다 목록만 갱신 — 팝오버는 다시 만들지 않는다(포커스·커서 유지).
+    qIn.addEventListener('input', () => { dashSaveListFilter(listId, { ...dashListFilter(listId), q: qIn.value }); onChange(); });
+    panel.append(qIn);
+    if (cur.who !== 'all' || (cur.q || '').trim()) {
+      const clear = el('button', { class: 'dash-pop-reset', type: 'button', text: '필터 지우기' });
+      clear.onclick = () => { dashSaveListFilter(listId, null); onChange(); openListFilter(anchor, listId, onChange); };
+      panel.append(el('div', { class: 'dash-pop-foot' }, clear));
+    }
+    dashPopover(anchor, panel);
+    qIn.focus();
   };
 
   // 리스트 블럭 카드 — pjv-overview 의 ovCard 와 동일 마크업. 클릭=이 리스트 '선택'(아래 목록을 그 리스트만으로 필터),
@@ -375,7 +454,7 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
     // 이 개요 카드 숨기기(#671) — hover ✕. 기기별 저장·즉시 재렌더. 카드 선택/드래그로 새지 않게 이벤트 격리.
     const hideBtn = el('button', { class: 'dash-ov-hide', type: 'button', title: '이 카드 숨기기', 'aria-label': name + ' 개요 카드 숨기기', text: '✕' });
     hideBtn.addEventListener('mousedown', (e: any) => e.stopPropagation()); // 드래그 시작 방지
-    hideBtn.addEventListener('click', (e: any) => { e.stopPropagation(); e.preventDefault(); const h = dashOvHidden(); h.add(Number(listId)); dashSaveOvHidden(h); draw(); });
+    hideBtn.addEventListener('click', (e: any) => { e.stopPropagation(); e.preventDefault(); setListShown(Number(listId), false); draw(); });
     card.append(hideBtn);
     return card;
   };
@@ -383,25 +462,45 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
   let mode = dashProjFilterDefault(); // 진행 중 | 전체 — 완료 프로젝트 포함 여부(기본값 ⚙ 개인화).
   let selectedListId: any;      // 선택된 리스트(아래 목록 필터). 기본=첫 리스트.
   let currentOrder: any[] = []; // 현재 표시 중인 리스트 순서(드래그 재정렬 기준).
+  let autoIds = new Set<number>(); // 내 프로젝트가 있어 '자동으로' 뜨는 리스트(체크 해제 시에만 hidden 에 기록).
+  let mineIds = new Set<number>(); // 내가 멤버인 프로젝트 id — 리스트별 필터의 '내 프로젝트만' 판정용.
   const justCreated = new Set<number>(); // 이 화면에서 방금 만든 리스트 — 비어도 개요에 뜨게(#762 '만들었는데 안 보임' 방지).
+  // 요약 카드 표시/숨김 단일 토글 — 자동 후보는 hidden(블랙리스트)으로, 직접 고른 리스트는 pinned(화이트리스트)로 관리한다.
+  //  두 저장소를 한 함수로 묶어 '카드 ✕'와 '⚙ 트리 체크박스'가 항상 같은 결과를 내게 한다.
+  const setListShown = (id, on) => {
+    const h = dashOvHidden(); const p = dashOvPinned(); const n = Number(id);
+    if (on) { h.delete(n); if (!autoIds.has(n)) p.add(n); }
+    else { p.delete(n); if (autoIds.has(n)) h.add(n); }
+    dashSaveOvHidden(h); dashSaveOvPinned(p);
+  };
   const draw = () => {
-    const shown = mode === 'active' ? projects.filter((p) => !isDone(p)) : projects;
-    zone.countEl.textContent = String(shown.length);
+    ensureAllProjects(); // pinned 가 있으면 조직 전체 프로젝트를 한 번 확보(도착하면 스스로 재렌더)
+    const pinned = dashOvPinned();
+    const byMode = (arr) => (mode === 'active' ? arr.filter((p) => !isDone(p)) : arr);
+    const shown = byMode(projects);
+    zone.countEl.textContent = String(shown.length); // 위젯 헤더 개수는 언제나 '내' 프로젝트 기준
     dashChips(zone.chipsEl, [['all', '전체'], ['active', '진행 중']], mode, (k) => { mode = k; draw(); });
-    if (!shown.length) { zone.body.replaceChildren(dashEmpty(mode === 'active' ? '진행 중인 내 프로젝트가 없어요.' : '내가 참여한 프로젝트가 없어요.')); return; }
+    if (!shown.length && !pinned.size) { zone.body.replaceChildren(dashEmpty(mode === 'active' ? '진행 중인 내 프로젝트가 없어요.' : '내가 참여한 프로젝트가 없어요.')); return; }
     // 리스트별 묶음, 미분류(list_id 없음)는 맨 뒤 → 저장된 개요 순서 적용.
     const byList = new Map();
     for (const p of shown) { const k = p.list_id || 0; if (!byList.has(k)) byList.set(k, []); byList.get(k).push(p); }
-    // '내 프로젝트' 개요는 **내 프로젝트가 있는 리스트만** — 전체 조직 리스트를 다 노출하던 버그 수정.
-    //  (예전 #req '빈 리스트도 노출'이 lists 전체에 과적용돼, 내 프로젝트 1개만 생겨도 관여 안 한 모든 열린 리스트가 카드로 떴다.
-    //   새/빈 리스트는 프로젝트를 추가하면 byList 에 들어와 자동 등장하고, '＋ 새 리스트' 카드로 만들 수 있다.)
-    // 내 프로젝트 있는 리스트(byList) + 이 화면에서 방금 만든 리스트(justCreated) — 새 리스트가 비어도 개요에 뜨게(#762).
-    const base = [...lists.filter((l) => byList.has(l.id) || justCreated.has(l.id)).map((l) => l.id), ...(byList.has(0) ? [0] : [])];
+    // 자동 후보는 상태 필터와 **무관하게** 판정한다 — '진행 중' 필터를 켰다고 리스트가 통째로 사라지면 안 되므로.
+    //  list_id 없는 프로젝트는 0(미분류) — 미분류도 자동 후보라 pinned 가 아니라 hidden 으로만 토글된다.
+    autoIds = new Set(projects.map((p) => Number(p.list_id) || 0));
+    mineIds = new Set(projects.map((p) => Number(p.id))); // 리스트 필터 '내 것만' 판정 — projects 는 mine=1 결과.
+    // #req 직접 고른 리스트(pinned)는 내가 관여하지 않았을 수 있다 → mine 필터를 풀고 **그 리스트 전체**를 채운다.
+    //  (mine=1 그대로면 '0개 프로젝트' 빈 카드가 떠 고른 의미가 없어진다.) 전체 목록 도착 전에는 빈 채로 두고 도착 시 재렌더.
+    if (allProjects) {
+      for (const id of pinned) { if (Number(id) > 0) byList.set(Number(id), []); } // 0(미분류)은 pinned 대상이 아니다 — 내 미분류 묶음을 덮지 않게
+      for (const p of byMode(allProjects)) { const k = Number(p.list_id || 0); if (k > 0 && pinned.has(k)) byList.get(k)!.push(p); }
+    }
+    // 개요 카드 후보 = 내 프로젝트가 있는 리스트 + 직접 고른 리스트(pinned) + 이 화면에서 방금 만든 리스트(#762).
+    //  조직의 모든 리스트를 무조건 늘어놓지는 않는다 — 그건 ⚙ 트리에서 사람이 고른다.
+    const base = [...lists.filter((l) => byList.has(l.id) || pinned.has(Number(l.id)) || justCreated.has(l.id)).map((l) => l.id), ...(byList.has(0) ? [0] : [])];
     currentOrder = dashApplyListOrder(base);
     // 숨긴 개요 카드 제외(#671). 선택된 리스트가 숨겨졌거나 사라졌으면 보이는 첫 카드로 폴백.
     const hiddenOv = dashOvHidden();
-    const hideEmpty = dashHideEmptyLists(); // #req 빈 리스트(프로젝트 0개) 개요 카드 숨김 옵션 — 단, 방금 만든 리스트는 예외.
-    const visibleOrder = currentOrder.filter((id) => !hiddenOv.has(Number(id)) && !(hideEmpty && !byList.has(id) && !justCreated.has(Number(id))));
+    const visibleOrder = currentOrder.filter((id) => !hiddenOv.has(Number(id)));
     // 선택 리스트가 '보이는 목록'에 없을 때만 첫 카드로 폴백(방금 만든 빈 리스트 선택 유지).
     if (selectedListId === undefined || !visibleOrder.some((id) => Number(id) === Number(selectedListId))) {
       selectedListId = visibleOrder.length ? visibleOrder[0] : currentOrder[0];
@@ -419,9 +518,10 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
     }
     // 선택된 리스트의 프로젝트만 — 프로젝트 탭과 동일한 리스트 그룹(헤더+행). 강조된 카드가 곧 선택 표시.
     //  생성순(id 오름차순) — 새로 만든 프로젝트가 목록 '맨 아래'(추가행 바로 위)에 자연스럽게 붙게(#670). 예전 updated_at 내림차순은 새 프로젝트를 맨 위로 튀게 했음.
-    const arr = (byList.get(selectedListId) || []).slice().sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
+    const rawArr = (byList.get(selectedListId) || []).slice().sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
     // #req R11.1/R19 — '+ 새 프로젝트'는 리스트 그룹 맨 밑 인라인 행(dashInlineAdd)으로 이동(프로젝트 탭과 동일).
-    const listEl = el('div', { class: 'dash-projlist' }, dashProjGroup(selectedListId, listById.get(selectedListId), arr));
+    //  리스트별 필터(헤더 우측 버튼)는 그룹이 스스로 적용·갱신한다 — 필터를 만질 때 위젯 전체를 다시 그리지 않으려고.
+    const listEl = el('div', { class: 'dash-projlist' }, dashProjGroup(selectedListId, listById.get(selectedListId), rawArr));
     // #req 리스트 카드(개요) ↔ 프로젝트 목록 사이 높이 조절 핸들 — 위젯 사이 리사이즈와 동일 UI(fr·기기별 저장). 기본은 개요 auto(현재 모습), 드래그하면 fr 전환.
     const split = el('div', { class: 'dash-proj-split' }, gridEl, listEl);
     zone.body.replaceChildren(split);
@@ -436,6 +536,7 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
       ]);
       projects = pd; lists = ld;
       listById.clear(); for (const l of lists) listById.set(l.id, l); // 리스트 추가/변경 반영(같은 Map 참조 유지)
+      allProjects = null; // 직접 고른 리스트용 전체 목록도 무효화 — 다음 draw() 에서 다시 받는다
       onCount(projects.filter((p) => !isDone(p)).length);
     } catch { /* 실패 시 기존 데이터 유지 */ }
     draw();
@@ -488,39 +589,107 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
     };
     seg('태스크 수 표시', [['active', '진행 중만'], ['all', '전체'], ['progress', '완료·전체']], dashTaskCountMode(), (k) => dashSaveTaskCountMode(k));
     seg('기본 상태 필터', [['active', '진행 중'], ['all', '전체']], dashProjFilterDefault(), (k) => { dashSaveProjFilterDefault(k); mode = k; });
-    // #req 소제목을 이해되는 워딩으로 — 이 섹션은 '위 요약 카드에 어떤 리스트를 보일지' 고르는 곳.
+    // #req 요약 카드에 올릴 리스트는 **조직의 모든 리스트**에서 고른다 — 다만 평면 목록이면 너무 많으므로,
+    //  우리가 실제로 리스트를 정리하는 방식 그대로 **스페이스 › 폴더 › 리스트** 트리로 훑고, 검색으로 바로 찾는다.
     panel.append(el('div', { class: 'dash-pop-gh', text: '위에 요약 카드로 표시할 리스트' }));
-    const heCb = el('input', { type: 'checkbox' }); heCb.checked = dashHideEmptyLists();
-    heCb.onchange = () => { dashSaveHideEmptyLists(heCb.checked); draw(); };
-    panel.append(el('label', { class: 'dash-pop-row' }, heCb, el('span', { class: 'dash-pop-txt' }, el('span', { class: 'dash-pop-name', text: '빈 리스트(프로젝트 0개) 숨기기' }))));
-    // #req 리스트 검색 + 즐겨찾기(⭐) 상단 정렬.
-    const search = el('input', { class: 'dash-pop-search', type: 'text', placeholder: '리스트 검색…', 'aria-label': '리스트 검색' });
-    const rowsWrap = el('div', { class: 'dash-pop-listrows' });
-    const renderRows = () => {
+    const search = el('input', { class: 'dash-pop-search', type: 'text', placeholder: '리스트·폴더 검색…', 'aria-label': '리스트·폴더 검색' });
+    const rowsWrap = el('div', { class: 'dash-pop-listrows dash-pop-tree' });
+    panel.append(search, rowsWrap);
+    const footEl = el('div', { class: 'dash-pop-foot' });
+    panel.append(footEl);
+
+    const renderTree = () => {
+      if (foldersLoaded && !ovSeeded) { ovSeeded = true; seedOvOpen(); }
       const q = (search.value || '').trim().toLowerCase();
-      const hidden = dashOvHidden();
-      const ordered = currentOrder.slice().sort((a, b) => (favLists.has(Number(b)) ? 1 : 0) - (favLists.has(Number(a)) ? 1 : 0)); // 즐겨찾기 먼저(안정정렬로 원래 순서 유지)
-      const items = ordered.filter((id) => !q || (((listById.get(id) || {}).name || '미분류').toLowerCase().includes(q)));
+      const hidden = dashOvHidden(); const pinned = dashOvPinned();
+      // 지금 요약 카드에 떠 있는지 = (자동 후보 | 직접 고름 | 방금 만듦) 이면서 숨기지 않음.
+      const isOn = (id) => !hidden.has(Number(id)) && (autoIds.has(Number(id)) || pinned.has(Number(id)) || justCreated.has(Number(id)));
+      const hit = (s) => !q || String(s || '').toLowerCase().includes(q);
+      // 폴더 트리 인덱스 — 부모별 하위 폴더 · 폴더별 리스트 · 폴더 밖 리스트.
+      const byParent = new Map<any, any[]>(); const byFolder = new Map<number, any[]>(); const looseLists: any[] = [];
+      for (const f of folders) { const k = f.parent_id ?? null; if (!byParent.has(k)) byParent.set(k, []); byParent.get(k)!.push(f); }
+      for (const l of lists) {
+        if (l.folder_id == null) { looseLists.push(l); continue; }
+        const k = Number(l.folder_id); if (!byFolder.has(k)) byFolder.set(k, []); byFolder.get(k)!.push(l);
+      }
+      // 즐겨찾기(⭐) 먼저 — 같은 폴더 안에서만 끌어올린다(폴더 구조는 그대로 유지).
+      const byFav = (a, b) => (favLists.has(Number(b.id)) ? 1 : 0) - (favLists.has(Number(a.id)) ? 1 : 0);
+      const listRow = (l, depth) => {
+        const id = Number(l.id);
+        const cb: any = el('input', { type: 'checkbox' }); cb.checked = isOn(id);
+        cb.onchange = () => { setListShown(id, cb.checked); draw(); renderTree(); };
+        const nm = el('span', { class: 'dash-pop-name' },
+          favLists.has(id) ? el('span', { class: 'dash-pop-fav', title: '즐겨찾기', text: '⭐ ' }) : null, l.name || '(이름 없음)');
+        return el('label', { class: 'dash-pop-row dash-pop-lrow', style: 'padding-left:' + (8 + depth * 15) + 'px' },
+          cb, el('span', { class: 'dash-pop-txt' }, nm));
+      };
+      // 폴더 서브트리 렌더 — 보일 리스트가 하나도 없으면 통째로 생략(빈 폴더로 트리를 채우지 않는다).
+      //  forced = 상위 폴더 이름이 검색어에 걸림 → 그 아래는 전부 보여준다.
+      const folderNode = (f, depth, forced) => {
+        const all = forced || hit(f.name);
+        const subs = (byParent.get(f.id) || []).slice().sort((a, b) => (pjvFolderIsArchive(a) ? 1 : 0) - (pjvFolderIsArchive(b) ? 1 : 0));
+        const kidNodes = subs.map((c) => folderNode(c, depth + 1, all)).filter(Boolean) as any[];
+        const own = (byFolder.get(Number(f.id)) || []).filter((l) => all || hit(l.name)).sort(byFav);
+        if (!kidNodes.length && !own.length) return null;
+        const total = own.length + kidNodes.reduce((n, k) => n + k.total, 0);
+        const on = own.filter((l) => isOn(l.id)).length + kidNodes.reduce((n, k) => n + k.on, 0);
+        // 검색 중에는 강제로 펼친다(찾은 결과가 접힌 폴더에 숨지 않게).
+        const opened = !!q || ovOpen.has(Number(f.id));
+        const isSpace = pjvFolderIsSpace(f);
+        const car = el('span', { class: 'dash-pop-caret', text: opened ? '▾' : '▸', 'aria-hidden': 'true' });
+        const icon = isSpace
+          ? el('span', { class: 'pjv-side-space-avatar dash-pop-spaceav', text: (String(f.name || 'S').trim()[0] || 'S').toUpperCase(), style: 'background:' + (f.color || avatarColor('space' + f.id)) })
+          : el('span', { class: 'dash-pop-foldico' }, dashFolderThumb());
+        const head = el('div', { class: 'dash-pop-row dash-pop-frow' + (isSpace ? ' is-space' : ''), role: 'button', tabindex: '0',
+          style: 'padding-left:' + (8 + depth * 15) + 'px' },
+          car, icon, el('span', { class: 'dash-pop-txt' }, el('span', { class: 'dash-pop-name', text: f.name || '(이름 없음)' })),
+          el('span', { class: 'dash-pop-fcount', text: on + '/' + total }));
+        const toggle = () => { if (q) return; if (ovOpen.has(Number(f.id))) ovOpen.delete(Number(f.id)); else ovOpen.add(Number(f.id)); renderTree(); };
+        head.addEventListener('click', toggle);
+        head.addEventListener('keydown', (e: any) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+        const nodes: any[] = [head];
+        if (opened) { for (const l of own) nodes.push(listRow(l, depth + 1)); for (const k of kidNodes) nodes.push(...k.nodes); }
+        return { nodes, total, on };
+      };
+
       rowsWrap.replaceChildren();
-      if (!currentOrder.length) { rowsWrap.append(el('div', { class: 'dash-pop-row', style: 'cursor:default' }, el('span', { class: 'dash-pop-desc', text: '표시할 리스트가 없어요.' }))); return; }
-      if (!items.length) { rowsWrap.append(el('div', { class: 'dash-pop-row', style: 'cursor:default' }, el('span', { class: 'dash-pop-desc', text: '검색 결과가 없어요.' }))); return; }
-      for (const id of items) {
-        const l = listById.get(id);
-        const cb = el('input', { type: 'checkbox' }); cb.checked = !hidden.has(Number(id));
-        cb.onchange = () => { const h = dashOvHidden(); if (cb.checked) h.delete(Number(id)); else h.add(Number(id)); dashSaveOvHidden(h); draw(); };
-        const nm = el('span', { class: 'dash-pop-name' }, favLists.has(Number(id)) ? el('span', { class: 'dash-pop-fav', title: '즐겨찾기', text: '⭐ ' }) : null, (l && l.name) || '미분류');
-        rowsWrap.append(el('label', { class: 'dash-pop-row' }, cb, el('span', { class: 'dash-pop-txt' }, nm)));
+      if (!foldersLoaded) { rowsWrap.append(el('div', { class: 'dash-pop-row', style: 'cursor:default' }, el('span', { class: 'dash-pop-desc', text: '불러오는 중…' }))); return; }
+      const out: any[] = [];
+      // 최상위 = 스페이스(+ 스페이스가 아닌 최상위 폴더도 그대로). 아카이브는 맨 뒤.
+      const roots = (byParent.get(null) || []).slice().sort((a, b) => (pjvFolderIsArchive(a) ? 1 : 0) - (pjvFolderIsArchive(b) ? 1 : 0));
+      for (const r of roots) { const n = folderNode(r, 0, false); if (n) out.push(...n.nodes); }
+      // 폴더에 안 들어간 리스트 + 미분류(리스트 없는 내 프로젝트) — 트리 맨 아래 평평하게.
+      const loose = looseLists.filter((l) => hit(l.name)).sort(byFav);
+      if (loose.length) {
+        out.push(el('div', { class: 'dash-pop-gh dash-pop-treegh', text: '폴더에 없는 리스트' }));
+        for (const l of loose) out.push(listRow(l, 0));
+      }
+      if (currentOrder.some((id) => Number(id) === 0) && hit('미분류')) {
+        const cb: any = el('input', { type: 'checkbox' }); cb.checked = isOn(0);
+        cb.onchange = () => { setListShown(0, cb.checked); draw(); renderTree(); };
+        out.push(el('label', { class: 'dash-pop-row dash-pop-lrow', style: 'padding-left:8px' },
+          cb, el('span', { class: 'dash-pop-txt' }, el('span', { class: 'dash-pop-name', text: '미분류' }))));
+      }
+      if (!out.length) { rowsWrap.append(el('div', { class: 'dash-pop-row', style: 'cursor:default' }, el('span', { class: 'dash-pop-desc', text: q ? '검색 결과가 없어요.' : '리스트가 없어요.' }))); }
+      else rowsWrap.append(...out);
+
+      // 푸터 — 숨긴 카드 되돌리기 / 직접 고른 리스트 일괄 해제.
+      footEl.replaceChildren();
+      if (hidden.size) {
+        const b = el('button', { class: 'dash-pop-reset', type: 'button', text: '숨긴 카드 모두 표시' });
+        b.onclick = () => { dashSaveOvHidden(new Set()); draw(); renderTree(); };
+        footEl.append(b);
+      }
+      if (pinned.size) {
+        const b = el('button', { class: 'dash-pop-reset', type: 'button', text: '직접 고른 ' + pinned.size + '개 빼기' });
+        b.onclick = () => { dashSaveOvPinned(new Set()); draw(); renderTree(); };
+        footEl.append(b);
       }
     };
-    search.addEventListener('input', renderRows);
-    if (currentOrder.length > 6) panel.append(search); // 리스트 많을 때만 검색 노출
-    panel.append(rowsWrap);
-    renderRows();
-    if (currentOrder.length) {
-      const resetBtn = el('button', { class: 'dash-pop-reset', type: 'button', text: '모두 표시' });
-      resetBtn.onclick = () => { dashSaveOvHidden(new Set()); draw(); openOvPrefs(anchor); };
-      panel.append(el('div', { class: 'dash-pop-foot' }, resetBtn));
-    }
+    search.addEventListener('input', renderTree);
+    renderTree();
+    // 폴더가 아직 안 왔으면 도착 후 다시 그린다(팝오버는 열린 채로).
+    if (!foldersLoaded) foldersP.then(() => { foldersLoaded = true; if (rowsWrap.isConnected) renderTree(); });
     dashPopover(anchor, panel);
   };
   dashCtl(zone, { gear: { title: '내 프로젝트 설정', open: openOvPrefs }, action: { href: '#/projects2', title: '프로젝트 탭으로' } });
@@ -698,16 +867,39 @@ function dashOvHidden(): Set<number> {
   catch { return new Set(); }
 }
 function dashSaveOvHidden(set: Set<number>) { try { localStorage.setItem(DASH_OV_HIDDEN_KEY, JSON.stringify([...set])); } catch { /* 저장 실패 무시 */ } }
-// ── #req 내 프로젝트 위젯 개인화(기기별) — 태스크 수 표시 방식 · 기본 상태 필터 · 빈 리스트 숨김. ⚙ 팝오버에서 선택. ──
+// ── #req 직접 고른 리스트(화이트리스트) — ⚙ 스페이스›폴더 트리에서 체크한, 내 프로젝트가 없는 리스트. ──
+//  hidden(블랙리스트)과 짝이다: 자동 후보는 hidden 으로 빼고, 그 밖의 리스트는 pinned 로 넣는다.
+//  pinned 리스트는 mine 필터 없이 '리스트 전체'를 보여준다(그렇지 않으면 0개 빈 카드가 된다).
+const DASH_OV_PINNED_KEY = 'dash_ov_pinned_v1';
+function dashOvPinned(): Set<number> {
+  try { const a = JSON.parse(localStorage.getItem(DASH_OV_PINNED_KEY) || '[]'); return new Set(Array.isArray(a) ? a.map(Number).filter((n) => n > 0) : []); }
+  catch { return new Set(); }
+}
+function dashSaveOvPinned(set: Set<number>) { try { localStorage.setItem(DASH_OV_PINNED_KEY, JSON.stringify([...set])); } catch { /* 저장 실패 무시 */ } }
+// ── #req 리스트별 목록 필터(기기별) — 리스트 헤더 우측 필터 버튼. { who:'all'|'mine', q:string } 를 리스트 id 별로. ──
+//  직접 고른 리스트는 남의 프로젝트까지 들어와 길어지므로, 요약 카드는 그대로 두고 아래 목록만 좁힌다.
+const DASH_LISTFILTER_KEY = 'dash_list_filter_v1';
+function dashListFilterAll(): any {
+  try { const o = JSON.parse(localStorage.getItem(DASH_LISTFILTER_KEY) || '{}'); return (o && typeof o === 'object') ? o : {}; }
+  catch { return {}; }
+}
+function dashListFilter(listId): { who: string; q: string } {
+  const v = dashListFilterAll()[String(Number(listId) || 0)] || {};
+  return { who: v.who === 'mine' ? 'mine' : 'all', q: typeof v.q === 'string' ? v.q : '' };
+}
+function dashSaveListFilter(listId, v) {
+  const all = dashListFilterAll(); const k = String(Number(listId) || 0);
+  if (!v || (v.who !== 'mine' && !String(v.q || '').trim())) delete all[k]; // 기본값이면 항목째 지워 저장소를 깨끗이
+  else all[k] = { who: v.who === 'mine' ? 'mine' : 'all', q: String(v.q || '') };
+  try { localStorage.setItem(DASH_LISTFILTER_KEY, JSON.stringify(all)); } catch { /* 무시 */ }
+}
+// ── #req 내 프로젝트 위젯 개인화(기기별) — 태스크 수 표시 방식 · 기본 상태 필터. ⚙ 팝오버에서 선택. ──
 const DASH_TASKCOUNT_KEY = 'dash_taskcount_v1';   // 'active'(진행 중만·기본) | 'all'(전체) | 'progress'(완료/전체)
 const DASH_PROJFILTER_KEY = 'dash_projfilter_v1'; // 'active'(진행 중·기본) | 'all'(전체) — 첫 진입 기본 필터
-const DASH_HIDEEMPTY_KEY = 'dash_hide_empty_lists_v1'; // '1' 이면 프로젝트 0개 리스트 개요 카드 숨김
 function dashTaskCountMode() { try { const v = localStorage.getItem(DASH_TASKCOUNT_KEY); return (v === 'all' || v === 'progress') ? v : 'active'; } catch { return 'active'; } }
 function dashSaveTaskCountMode(v) { try { localStorage.setItem(DASH_TASKCOUNT_KEY, v); } catch { /* 무시 */ } }
 function dashProjFilterDefault() { try { return localStorage.getItem(DASH_PROJFILTER_KEY) === 'all' ? 'all' : 'active'; } catch { return 'active'; } }
 function dashSaveProjFilterDefault(v) { try { localStorage.setItem(DASH_PROJFILTER_KEY, v); } catch { /* 무시 */ } }
-function dashHideEmptyLists() { try { return localStorage.getItem(DASH_HIDEEMPTY_KEY) === '1'; } catch { return false; } }
-function dashSaveHideEmptyLists(on) { try { localStorage.setItem(DASH_HIDEEMPTY_KEY, on ? '1' : ''); } catch { /* 무시 */ } }
 // 프로젝트 행 태스크 칩 텍스트/표시여부 — active=진행 중 태스크(전체−완료; 완료·닫힘은 native done 으로 집계됨).
 function dashTaskChip(p) {
   const total = Number(p.task_count) || 0, done = Number(p.task_done_count) || 0, active = Math.max(0, total - done);
@@ -1306,6 +1498,7 @@ async function fillFolders(zone) {
         card.addEventListener('keydown', (e: any) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openBrowser(name); } });
         grid.append(card);
       }
+      wheelToHorizontal(grid);   // 아이콘 뷰는 한 줄 가로 목록 — 마우스 세로 휠로도 옆으로 굴러가게(#req)
       zone.body.replaceChildren(grid);
     }
   };
@@ -1356,6 +1549,21 @@ async function fillFolders(zone) {
   upDropZone(zone.box, zone.box, (items, emptyDirs) => uploadItems(items, emptyDirs));   // 박스가 곧 드롭존 + 하이라이트(.dash-zone.drop-active)
 
   await reload();
+}
+// 가로 목록 위에서 세로 휠 → 가로 스크롤(#req). 마우스 휠은 deltaY 만 나오는데 가로 목록은 세로로 넘칠 게 없어
+//  '호버해도 아무 일도 안 일어나던' 문제. 가로로 더 굴러갈 여지가 있을 때만 가로채고(preventDefault), 끝에 닿았거나
+//  트랙패드 가로 제스처(|deltaX| 우세)면 그대로 흘려보내 페이지 세로 스크롤을 막지 않는다.
+function wheelToHorizontal(elm: HTMLElement) {
+  elm.addEventListener('wheel', (e: WheelEvent) => {
+    if (!e.deltaY || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+    const max = elm.scrollWidth - elm.clientWidth;
+    if (max <= 1) return;                                   // 넘칠 게 없다 → 페이지 스크롤 그대로
+    const unit = e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? elm.clientWidth : 1);   // line/page 모드 휠 보정
+    const next = Math.max(0, Math.min(max, elm.scrollLeft + e.deltaY * unit));
+    if (Math.abs(next - elm.scrollLeft) < 0.5) return;      // 이미 양 끝 → 세로 스크롤을 가로채지 않는다
+    e.preventDefault();
+    elm.scrollLeft = next;
+  }, { passive: false });
 }
 // 공유 폴더 목록 행(#670) — 아이콘 카드 대신 컴팩트 리스트. 폴더 아이콘 + 굵은 이름 + hover 시 슬라이드 셰브런.
 function dashFolderRow(name, onOpen) {
@@ -2303,6 +2511,12 @@ async function openListProjectsModal(listId, listById, onChanged) {
 function dashArrowIcon() {
   const n = sv('svg', { viewBox: '0 0 24 24', width: 15, height: 15, fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
   n.append(sv('path', { d: 'M5 12h13' }), sv('path', { d: 'M13 6l6 6-6 6' }));
+  return n;
+}
+// 필터(깔때기) 아이콘 — 리스트 헤더 우측 목록 거르기 버튼(#req). 헤더 ⚙·→ 와 같은 15px 라인 아이콘 톤.
+function dashFilterIcon() {
+  const n = sv('svg', { viewBox: '0 0 24 24', width: 15, height: 15, fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+  n.append(sv('path', { d: 'M4 5h16l-6.2 7.4V19l-3.6-2v-4.6z' }));
   return n;
 }
 // 확장(⤢) 아이콘 — 헤더 통일 액션버튼(모달 '전체 보기').

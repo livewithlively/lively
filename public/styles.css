@@ -5136,9 +5136,31 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-ov-allhidden { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 14px 10px; font-size: 12.5px; color: var(--muted-2); }
 .dash-ov-restore { font-size: 12.5px; font-weight: 700; color: var(--blue); background: none; border: 1px solid color-mix(in srgb, var(--blue) 32%, var(--bg)); border-radius: 7px; padding: 4px 11px; cursor: pointer; font-family: inherit; }
 .dash-ov-restore:hover { background: var(--bg-punch); }
-.dash-pop-foot { display: flex; justify-content: flex-end; padding: 6px 4px 2px; margin-top: 4px; border-top: 1px solid var(--line-soft, var(--bg-tint-2)); }
+.dash-pop-foot { display: flex; justify-content: flex-end; gap: 2px; padding: 6px 4px 2px; margin-top: 4px; border-top: 1px solid var(--line-soft, var(--bg-tint-2)); }
+.dash-pop-foot:empty { display: none; } /* 되돌릴 게 없으면 구분선까지 없앤다 */
 .dash-pop-reset { font-size: 12px; font-weight: 700; color: var(--blue); background: none; border: none; cursor: pointer; font-family: inherit; padding: 4px 8px; border-radius: 6px; }
 .dash-pop-reset:hover { background: var(--bg-punch); }
+
+/* #req ⚙ '요약 카드로 표시할 리스트' — 조직의 **모든** 리스트를 스페이스 › 폴더 › 리스트 트리로 훑어 고른다(+검색).
+   평면 목록이면 리스트가 수십 개로 불어나 못 찾으므로, 우리가 실제로 정리하는 구조 그대로 접었다 편다. */
+.dash-pop-tree { max-height: 300px; }
+.dash-pop-tree .dash-pop-row { align-items: center; gap: 7px; padding-top: 5px; padding-bottom: 5px; }
+.dash-pop-frow { user-select: none; }
+.dash-pop-frow .dash-pop-name { font-weight: 700; }
+.dash-pop-frow.is-space .dash-pop-name { font-size: 12.5px; letter-spacing: .01em; }
+.dash-pop-caret { flex: none; width: 11px; font-size: 9px; color: var(--muted-2); text-align: center; }
+.dash-pop-foldico { flex: none; display: inline-flex; align-items: center; }
+.dash-pop-foldico .ft-folder { width: 17px; height: auto; }
+.dash-pop-spaceav { flex: none; width: 17px; height: 17px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; font-size: 9.5px; font-weight: 800; color: #fff; }
+.dash-pop-fcount { margin-left: auto; flex: none; font-size: 10.5px; font-weight: 700; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+.dash-pop-lrow .dash-pop-name { font-weight: 600; }
+.dash-pop-treegh { padding-top: 10px; }
+
+/* #req 리스트 헤더 우측 목록 필터 버튼 — 위젯 헤더 [⚙][→] 와 같은 아이콘버튼. 평소 옅게, 헤더 hover 시 또렷하게. */
+.dash-lh-ctl { margin-left: auto; align-self: center; display: inline-flex; align-items: center; gap: 6px; flex: none; padding-left: 8px; }
+.dash-lh-filter { width: 24px; height: 22px; opacity: .55; transition: opacity .12s ease; }
+.pjv-list-head:hover .dash-lh-filter, .dash-lh-filter:focus-visible { opacity: 1; }
+.dash-lh-filter.on { opacity: 1; color: var(--blue); border-color: color-mix(in srgb, var(--blue) 42%, var(--bg)); background: var(--bg-punch); }
 
 /* 공유 폴더 브라우저(#672) — 전체 보기 모달 안의 파일 탐색기: 브레드크럼 · 도구모음 · 파일 카드 CRUD(hover 액션). */
 .dash-modal--wide { width: min(720px, 94vw); }

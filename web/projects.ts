@@ -11052,6 +11052,8 @@ export {
   pjvDueControl,
   pjvFieldControl,
   pjvFmtDate,
+  pjvFolderIsArchive,
+  pjvFolderIsSpace,
   pjvGridTemplate,
   pjvIsOverdue,
   pjvCloseProjectModalOnRoute,
