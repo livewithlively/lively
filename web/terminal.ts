@@ -441,7 +441,7 @@ function tsessCard(s, ctx) {
         if (r && r.already) { window.open(termUrl(s.id, s.label, s.node && s.node.id), '_blank'); toast('세션이 이미 살아있어 그대로 엽니다'); reRender(); return; }
         const ns = r && r.session;
         if (ns && ns.id) window.open(termUrl(ns.id, ns.label || s.label), '_blank');
-        toast('세션을 복원했어요'); reRender();
+        toast('복원했어요 — 새 터미널에서 이어볼 대화를 고르세요(claude 이어보기 목록).'); reRender();
       } catch (e: any) { toast('복원 실패 — ' + (e && e.message || e), true); rb.disabled = false; rb.textContent = '복원'; }
     };
     acts.append(rb);
