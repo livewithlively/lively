@@ -102,8 +102,19 @@ const winArg = (s) => {
 };
 // timeout(ms) 를 주면 spawnSync 가 그 시간 뒤 killSignal(SIGKILL)로 자식을 죽인다 — 외부 CLI(claude 등)가
 //  네트워크에 매달려 `lively status` 를 무한정 hang 시키지 않게 하는 하드 백스톱(#1043). 미지정이면 종전대로 무제한.
+// Windows 셸 경유 스폰용 인자 조립 — **명령 자체도 인용한다.**
+//  ⚠ Node 는 shell:true 일 때 `[cmd, ...args]` 를 공백으로 이어 `cmd.exe /d /s /c "…"` 에 넘길 뿐,
+//   **어느 쪽도 quote 하지 않는다.** 종전 코드는 args 에만 winArg 를 걸어서, 명령 경로에 공백이 있으면
+//   그 자리에서 두 토막 났다(실측 #1087):
+//     ✗ 'C:\Program'은(는) 내부 또는 외부 명령… ← C:\Program Files\nodejs\node.exe
+//   이 버그는 **오래 잠복해 있었다** — 종전엔 부트스트랩이 늘 번들 런타임(~/.lively/runtime/… · 공백 없음)을
+//   깔아 그걸 썼기 때문이다. Node 버전 판정을 고쳐 **시스템 node 를 제대로 채택**하자마자 드러났다.
+//  캡슐화한 이유: 호출부마다 "cmd 도 winArg 해야 한다"를 기억해야 하면 다음 사람이 또 빠뜨린다.
+const winSpawnArgs = (cmd, args) => [winArg(cmd), args.map(winArg)];
+
 function run(cmd, args, { allowFail = false, quiet = false, env, timeout } = {}) {
-  const r = spawnSync(cmd, WIN ? args.map(winArg) : args, {
+  const [c, a] = WIN ? winSpawnArgs(cmd, args) : [cmd, args];
+  const r = spawnSync(c, a, {
     stdio: quiet ? ["ignore", "pipe", "pipe"] : "inherit",
     env: { ...process.env, ...(env || {}) },
     encoding: "utf8",
@@ -1268,7 +1279,9 @@ function cmdRun(rest0) {
   for (let i = 0; i < rest.length; i++) { if (rest[i] === "--harness") harness = rest[++i] || harness; else args.push(rest[i]); }
   if (!has(harness)) die(`${harness} 이(가) 설치돼 있지 않습니다.`, 2);
   say(dim(`${harness} 실행`) + badge);
-  onExit(spawn(harness, args, { stdio: "inherit", env, ...(WIN ? { shell: true } : {}) })); // WIN: .cmd 셰임이라 shell 필요(work.mjs:259 동형)
+  // WIN: .cmd 셰임이라 shell 필요(work.mjs:259 동형) — 셸 경유이므로 명령·인자를 **둘 다** 인용한다(#1087).
+  const [hc, ha] = WIN ? winSpawnArgs(harness, args) : [harness, args];
+  onExit(spawn(hc, ha, { stdio: "inherit", env, ...(WIN ? { shell: true } : {}) }));
 }
 
 // `lively mode [normal|readonly|incognito]` — 디폴트 실행 모드 조회/설정(~/.lively/mode). lively run 이 --mode 없을 때 이걸 읽는다.
@@ -1795,5 +1808,5 @@ const DIRECT_RUN = (() => {
 })();
 if (DIRECT_RUN) main().catch((e) => die(e?.message || String(e)));
 
-export { parse, detectHarnesses, verifyBundle, normGw, gatherStatus, registerClaudeMcp, backupUserMcp, winArg, loginEscapeToken, REQUIRED_HOOKS, CLI_VERSION };
+export { parse, detectHarnesses, verifyBundle, normGw, gatherStatus, registerClaudeMcp, backupUserMcp, winArg, winSpawnArgs, loginEscapeToken, REQUIRED_HOOKS, CLI_VERSION };
 export { MODES, extractMode, modeEnv, defaultMode }; // #1007+ 실행 모드(normal|readonly|incognito) — 테스트용

@@ -1,5 +1,5 @@
 // admin.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { absTime, api, applyReveal, el, errorNote, fmtNum, logout, memberCombo, profileAvatar, relTime, renderMarkdown, selectFilter, setPersonAvatar, state, toast, withTip } from './core.js';
+import { absTime, api, applyReveal, cardHead, el, errorNote, fmtNum, logout, memberCombo, profileAvatar, relTime, renderMarkdown, selectFilter, setPersonAvatar, state, toast, withTip, infoPop, inlineBold } from './core.js';
 import { SPACE_SUBS, openCategoryForm } from './category-form.js';   // #764 — knowledge.ts 해체로 이관
 import { overlayBox, skeleton } from './learn.js';
 import { ingestPolicyPanel, reviewNavBadge, reviewQueuePanel } from './review.js';   // #783 지식 검토 게이트 + 검토 큐 (+ #802 nav 대기 배지)
@@ -96,7 +96,7 @@ const ADMIN_SECTIONS = [
   //  전 구성원 노출·전 구성원 편집 가능(내 것이니까) — 아래 어떤 권한 게이트에도 걸지 않는다.
   // '내 정보'(프사·이름·닉네임·비번)는 관리에서 분리 — 우측 상단 프로필 클릭 시 팝업(openMyProfileModal, #762). 여기 nav엔 두지 않는다.
   { key: 'me-ai', label: '내 AI 설정', meaning: null, group: 'me' },
-  { key: 'me-logins', label: '내 서비스 로그인', meaning: null, group: 'me' },
+  { key: 'me-logins', label: '외부 서비스 로그인', meaning: null, group: 'me' },
   { key: 'me-assets', label: '내 스킬 · 훅', meaning: null, group: 'me' },
   // ── 조직 ──
   { key: 'profile', label: '조직 정보', meaning: 'gateway-url', group: 'org' },
@@ -236,63 +236,7 @@ function meaningRow(k, v) {
 //  팝업(overlay)으로 전체 설명(요약·누가/언제/어디·예시)을 보여준다. 예전엔 항상-펼침(이후 한 줄 요약+토글)
 //  이라 9개 섹션마다 같은 골격이 반복돼 화면이 무거웠다(윤상민 06-22 지적: "반복·둥둥 뜸"). 단일 함수라
 //  모든 섹션에 일괄 적용. tone 색·카피는 팝업 안에서 그대로 보존.
-// ⓘ — 제목·라벨 오른쪽에 옅게 붙는 **아이콘 하나**. 누르면 그 자리에 팝오버로 설명이 뜬다(#1085).
-//  왜: 회색 설명문을 제목·필드마다 화면에 깔면 글이 화면을 덮어 정작 내용·입력칸이 안 읽힌다(윤상민 지적).
-//  '이게 뭐예요?' 팝업(구 meaningCard — '구성원에게 미치는 효과' 카드)은 **통째로 폐기**했다(사용자 요구:
-//  "문구만 지우지 말고 팝업까지 날려버려"). 그래서 이 팝오버가 싣는 건 설명 문자열 하나뿐이다(**강조** 지원).
-function infoPop(text) {
-  if (!text) return null;
-  const btn = el('button', { class: 'hint-i', type: 'button', 'aria-haspopup': 'dialog', 'aria-label': '설명 보기', title: '설명 보기' },
-    el('span', { 'aria-hidden': 'true', text: 'ⓘ' }));
-  let pop: any = null;
-  const close = () => {
-    if (!pop) return;
-    pop.remove(); pop = null;
-    btn.setAttribute('aria-expanded', 'false');
-    document.removeEventListener('mousedown', onDoc, true);
-    document.removeEventListener('keydown', onKey, true);
-    window.removeEventListener('resize', close);
-    window.removeEventListener('scroll', close, true);
-  };
-  const onDoc = (e) => { if (pop && !pop.contains(e.target) && !btn.contains(e.target)) close(); };
-  const onKey = (e) => { if (e.key === 'Escape') { close(); btn.focus(); } };
-  btn.addEventListener('click', () => {
-    if (pop) { close(); return; }
-    pop = el('div', { class: 'hint-pop', role: 'dialog' }, el('p', { class: 'hint-pop-text' }, ...inlineBold(text)));
-    document.body.append(pop);
-    // 아이콘 아래에 띄우되 화면 밖으로 나가지 않게 가둔다. 자리가 없으면 위로 뒤집는다(고정 위치 = 카드 overflow 무관).
-    const r = btn.getBoundingClientRect();
-    const w = Math.min(360, window.innerWidth - 24);
-    pop.style.width = w + 'px';
-    pop.style.left = Math.round(Math.min(Math.max(12, r.left - 10), window.innerWidth - w - 12)) + 'px';
-    const below = window.innerHeight - r.bottom;
-    if (below < pop.offsetHeight + 20 && r.top > pop.offsetHeight + 20) pop.style.top = Math.round(r.top - pop.offsetHeight - 8) + 'px';
-    else pop.style.top = Math.round(r.bottom + 8) + 'px';
-    btn.setAttribute('aria-expanded', 'true');
-    document.addEventListener('mousedown', onDoc, true);
-    document.addEventListener('keydown', onKey, true);
-    window.addEventListener('resize', close);
-    window.addEventListener('scroll', close, true);
-  });
-  return btn;
-}
 
-
-// 설명 문자열의 **강조**만 인라인으로 살린다 — 그 외 마크다운은 안 쓴다(el 이 텍스트 노드로만 붙이므로 innerHTML 없음).
-//  안 그러면 화면에 별표가 그대로 보인다(실제로 [외부 자료 수집] 설명에 '**우리 DB 로 복사**'가 노출됐다).
-function inlineBold(text) {
-  const out: any[] = [];
-  const src = String(text);
-  let i = 0;
-  for (const m of src.matchAll(/\*\*(.+?)\*\*/g)) {
-    const at = m.index as number;
-    if (at > i) out.push(src.slice(i, at));
-    out.push(el('b', { text: m[1] }));
-    i = at + m[0].length;
-  }
-  if (i < src.length) out.push(src.slice(i));
-  return out;
-}
 // 두 번째 인자(m)는 옛 meaning 객체 또는 설명 문자열이다. **객체(효과 카드)는 폐기됐으므로 무시**하고,
 //  문자열일 때만 설명으로 쓴다(호출부를 한꺼번에 고치지 않아도 되게 인자 자리는 남겨 둔다).
 //  ⚠ **페이지 제목의 설명은 ⓘ 로 접지 않는다** — 한 페이지가 무엇을 하는 곳인지는 들어오자마자 보여야 한다
@@ -464,10 +408,6 @@ function segTabs(sectionKey, tabs) {
 function sectionHead(title, hint, m?) {
   // admin-sechead: 제목 블록 아래 일관 여백. 페이지 설명(hint)은 종전대로 제목 아래 한 줄로 보인다.
   return el('div', { class: 'admin-sechead' }, sectionTitle(title, m || null), hint ? el('p', { class: 'admin-hint', text: hint }) : null);
-}
-// 카드(박스) 섹션 제목 — 제목 + 오른쪽 ⓘ. 카드 안 설명도 회색 줄 대신 이 아이콘 뒤로 접는다(#1085).
-function cardHead(title, desc?) {
-  return el('div', { class: 'card-head-row' }, el('h3', { text: title }), infoPop(desc || null));
 }
 
 // ── [구성원] — 구 [구성원 관리]+[구성원 추가]+[구성원 토큰 관리]+[중앙박스 계정] 4탭을 하나로. ──
@@ -811,7 +751,7 @@ async function toolUsagePanel(detail) {
   }
 
   const card = el('div', { class: 'card' },
-    el('p', { class: 'admin-hint', text: '하네스(Claude·Codex 등)가 어떤 MCP 툴을 어떤 인자로 얼마나 자주 호출했는지 보여줍니다. 모든 호출이 기록되며(시크릿은 마스킹, 큰 값은 잘라 저장), AI에게 묻거나 db_query 로 mcp_call_log 를 직접 조회할 수도 있습니다.' }),
+    cardHead('툴 호출 기록', '하네스(Claude·Codex 등)가 어떤 MCP 툴을 어떤 인자로 얼마나 자주 호출했는지 보여줍니다. 모든 호출이 기록되며(시크릿은 마스킹, 큰 값은 잘라 저장), AI에게 묻거나 db_query 로 mcp_call_log 를 직접 조회할 수도 있습니다.'),
     controls,
     stats,
     daysEl,
@@ -1001,7 +941,7 @@ async function orgAuditPanel(detail) {
   }
 
   const card = el('div', { class: 'card' },
-    el('p', { class: 'admin-hint', text: '구성원·접속 토큰·런타임·외부 자료 수집·DB 소스·훅·도구 등 관리 항목이 누구에 의해(사람/AI) 어떤 경로(웹/MCP)로 언제 어떻게 바뀌었는지 기록합니다. 각 줄을 펼치면 바뀐 필드의 이전→이후를 볼 수 있습니다(시크릿은 마스킹). AI에게 묻거나 org_audit_list(MCP)로도 조회할 수 있습니다.' }),
+    cardHead('관리 변경 이력', '구성원·접속 토큰·런타임·외부 자료 수집·DB 소스·훅·도구 등 관리 항목이 누구에 의해(사람/AI) 어떤 경로(웹/MCP)로 언제 어떻게 바뀌었는지 기록합니다. 각 줄을 펼치면 바뀐 필드의 이전→이후를 볼 수 있습니다(시크릿은 마스킹). AI에게 묻거나 org_audit_list(MCP)로도 조회할 수 있습니다.'),
     controls,
     el('div', { class: 'oa-sub', text: '변경 이력' + (total ? ' (' + total.toLocaleString() + ')' : '') }),
     list, pagerBox);
@@ -1056,8 +996,7 @@ async function cronPanel(detail, data) {
     el('span', { class: 'wikicat-groupcount', text: String(jobs.length) }),
     el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 잡 추가', onclick: () => openCronForm(null, actions, reload, tz) }));
   const card = el('div', { class: 'card' },
-    el('p', { class: 'admin-hint', text: '게이트웨이가 정해진 주기마다 실행하는 잡입니다. 실제 코드 의존(is) 최신화(refresh), 미매핑 코드 유닛 LLM 분류(map_unmapped — 타깃 상시 에이전트에 주입, 팀플랜 과금), 외부 자료 수집 싱크 등이 있습니다. 주기는 초 단위 간격 또는 cron식으로 지정합니다.' }),
-    el('p', { class: 'admin-hint', text: 'cron식의 시각은 ' + tz + ' 기준입니다(서버 머신의 OS 시간대와 무관 — [조직 · 연결] ▸ 조직 시간대에서 바꿉니다).' }),
+    cardHead('정기 실행 잡', '게이트웨이가 정해진 주기마다 실행하는 잡입니다. 실제 코드 의존(is) 최신화(refresh), 미매핑 코드 유닛 LLM 분류(map_unmapped — 타깃 상시 에이전트에 주입, 팀플랜 과금), 외부 자료 수집 싱크 등이 있습니다. 주기는 초 단위 간격 또는 cron식으로 지정합니다. cron식의 시각은 '),
     el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
   detail.replaceChildren(card);
 }
@@ -1193,7 +1132,7 @@ async function managedSessionsPanel(detail, data) {
     el('span', { class: 'wikicat-groupcount', text: String(sessions.length) }),
     el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 상시 에이전트 추가', onclick: () => openManagedSessionForm(null, reload) }));
   const card = el('div', { class: 'card' },
-    el('p', { class: 'admin-hint', text: '항상 실행 상태로 유지되는 에이전트 세션입니다. 격리 워크스페이스(공유폴더)에서 실행되며, keep-alive 점검에서 세션이 없으면 자동으로 다시 만듭니다. 크론 잡(미매핑 분류 등)이 이 세션에 작업을 전달합니다 — 팀플랜 과금. account 는 이 세션을 실행할 라이블리 계정(클로드 로그인)입니다.' }),
+    cardHead('상시 실행 에이전트', '항상 실행 상태로 유지되는 에이전트 세션입니다. 격리 워크스페이스(공유폴더)에서 실행되며, keep-alive 점검에서 세션이 없으면 자동으로 다시 만듭니다. 크론 잡(미매핑 분류 등)이 이 세션에 작업을 전달합니다 — 팀플랜 과금. account 는 이 세션을 실행할 라이블리 계정(클로드 로그인)입니다.'),
     el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
   detail.replaceChildren(card);
 }
@@ -1309,6 +1248,7 @@ async function previewEnvsPanel(detail, data) {
     el('span', { class: 'wikicat-groupcount', text: String(envs.length) }),
     el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 미리보기 만들기', onclick: () => openPreviewEnvForm(null, reload) }));
   const card = el('div', { class: 'card' },
+    cardHead('만들어 둔 미리보기'),
     el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
   // 제목·설명은 card 밖 상단으로 — 관리탭 다른 섹션과 같은 자리(#1010).
   detail.replaceChildren(
@@ -1911,6 +1851,7 @@ function membersEditor(detail, data) {
   const bar = el('div', { class: 'admin-member-searchbar' }, members.length ? searchInp : el('span', {}), addBtn);
 
   detail.replaceChildren(el('div', { class: 'card' },
+    cardHead('구성원 목록'),
     (members.length || canEdit) ? bar : null,
     listCol));
 }
@@ -2200,6 +2141,7 @@ async function teamsPanel(detail, data) {
   detail.replaceChildren(
     sectionHead('팀', '구성원을 팀으로 묶고, 팀이 맡는 카테고리를 정합니다. 팀이 맡은 카테고리는 팀원의 화면과 AI 세션에 먼저 나옵니다.', { key: 'team' }),
     el('div', { class: 'card' },
+      cardHead('팀 목록과 담당 카테고리'),
       el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
 }
 
@@ -2315,7 +2257,7 @@ function profileEditor(detail, data) {
   }
   detail.replaceChildren(
     sectionHead('조직 정보', '조직 이름·접속 주소·시간대처럼 이 조직 전체에 적용되는 기본 정보를 정합니다.'),
-    el('div', { class: 'card admin-form-narrow' }, ...body));
+    el('div', { class: 'card admin-form-narrow' }, cardHead('조직 기본 정보'), ...body));
 }
 
 // ── 구성원 토큰 관리 — 접속 열쇠(토큰) 발급 + 발급 현황 보기 + 접속 해제. admin 전용. (발급 블록은 [구성원 추가]에서 이관 #613 후속) ──
@@ -2354,7 +2296,7 @@ function tokensPanel(detail, data) {
   if (active.length) children.push(el('div', { class: 'token-section' }, el('div', { class: 'token-section-h', text: '사용 중 (' + active.length + ')' }), ...active.map((t) => tokenRow(t, true))));
   else children.push(el('p', { class: 'admin-hint', text: '아직 발급된 접속 토큰이 없습니다 — 위에서 구성원을 골라 발급하세요.' }));
   if (revoked.length) children.push(el('div', { class: 'token-section' }, el('div', { class: 'token-section-h', text: '해제됨 (' + revoked.length + ')' }), ...revoked.map((t) => tokenRow(t, false))));
-  detail.replaceChildren(el('div', { class: 'card' }, ...children));
+  detail.replaceChildren(el('div', { class: 'card' }, cardHead('접속 토큰'), ...children));
 }
 
 // ── 런타임 · 훅 (훅 on/off · work-roots · 너지 문구) — admin 전용 ──
@@ -2672,7 +2614,7 @@ function allowlistCard(data, title, intro, fields) {
   const canEdit = !!data.canEdit;
   const tas = {};
   // fix#96: 형제 카드(DB 데이터소스 등)와 같은 h2 위계로 — admin-subhead 는 하위 섹션처럼 보였다.
-  const rows = [sectionTitle(title, intro)];
+  const rows = [cardHead(title, intro)];
   for (const f of fields) {
     const ta = el('textarea', { rows: '3', placeholder: f.placeholder || '' }); ta.value = (f.initial || []).join('\n'); ta.disabled = !canEdit;
     tas[f.key] = ta;
@@ -2712,7 +2654,7 @@ function storageEditor(detail, data) {
   const body = el('div');
   detail.replaceChildren(
     sectionHead('저장소 · 로그', '이 서버의 디스크가 얼마나 찼는지 보고, 로그가 무한히 쌓이지 않도록 상한을 정합니다. 디스크가 가득 차면 로그인을 포함한 모든 기능이 멈추므로 미리 확인하는 화면입니다.'),
-    el('div', { class: 'card' }, body));
+    el('div', { class: 'card' }, cardHead('디스크 사용량과 로그 보관'), body));
   body.append(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
 
   async function load() {
@@ -3363,7 +3305,7 @@ function sessionShareEditor(detail, data) {
   const body = el('div');
   detail.replaceChildren(
     sectionHead('세션 공유', '구성원의 AI 대화 기록을 중앙에 모아, 다른 컴퓨터·다른 사람이 이어서 보고 이어받게 합니다. 대화 전문이 저장되므로 기본은 꺼져 있습니다.'),
-    el('div', { class: 'card' }, body));
+    el('div', { class: 'card' }, cardHead('세션 공유 설정'), body));
   if (!rc) { body.append(el('p', { class: 'admin-hint', text: '이 설정은 관리자(admin)만 볼 수 있습니다.' })); return; }
   build();
 
@@ -3441,7 +3383,7 @@ function embeddingsEditor(detail, data) {
   const body = el('div');
   detail.replaceChildren(
     sectionHead('의미 검색 (임베딩)', 'AI와 사람이 지식을 단어가 아니라 뜻으로 찾게 합니다. 꺼 두면 단어가 그대로 들어간 지식만 찾습니다.'),
-    el('div', { class: 'card' }, body));
+    el('div', { class: 'card' }, cardHead('의미 검색 상태와 설정'), body));
   body.append(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
 
   let pollTimer: any = null;
@@ -3747,8 +3689,7 @@ function mcpEditor(detail, data) {
         placeholder: 'localhost\nmcp.internal.acme.com\n줄당 호스트 한 개(포트·경로 없이)' },
     ]);
   detail.replaceChildren(el('div', { class: 'card' },
-    // '외부 도구 서버'는 '외부 자료 수집'(미러)과 **정반대 축**이라, 그 자리에서 구분을 읽을 수 있게 meaning 을 단다(#837).
-    sectionTitle('외부 도구 서버 (MCP)', data.meaning && data.meaning['mcp-server']),
+    cardHead('등록된 외부 도구 서버', '하네스가 호출할 수 있는 외부 MCP 서버입니다. 자료를 우리 DB 로 가져오는 [외부 자료 수집]과 반대로, 여기 등록된 서버는 세션에서 그때그때 호출됩니다.'),
     el('div', { class: 'admin-two admin-two-cols' }, listCol, right)),
     mcpSafety);
 }
@@ -3967,6 +3908,7 @@ function connectorEditor(detail, data) {
   detail.replaceChildren(
     sectionHead('외부 자료 수집', '슬랙·노션·클릭업 같은 외부 도구의 자료를 주기적으로 가져옵니다.', data.meaning && data.meaning['connector']),
     el('div', { class: 'card' }, banner,
+      cardHead('연결된 외부 도구'),
       el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
 }
 
@@ -4357,7 +4299,7 @@ function feedTargetCard(t, categories, rerender) {
 
 // 새 피드 만들기 — 부모 페이지 하위에 DB 생성(부트스트랩) 또는 기존 노션 DB id 등록. 둘 다 exclude_pages 자동 등록.
 function newFeedForm(rerender) {
-  const wrap = el('div', { class: 'card', style: 'margin-top:14px' });
+  const wrap = el('div', { class: 'card', style: 'margin-top:14px' }, cardHead('새 피드 만들기'));
   const titleIn = el('input', { class: 'input', type: 'text', value: 'Lively 지식 피드' });
   const parentIn = el('input', { class: 'input', type: 'text', placeholder: '노션 부모 페이지 URL 또는 id — 여기 하위에 피드 DB 생성' });
   const dbIn = el('input', { class: 'input', type: 'text', placeholder: '또는: 이미 만든 노션 DB id 를 등록' });
@@ -4433,7 +4375,7 @@ async function projectOutboundEditor(detail, data) {
   body.append(table);
   body.append(el('p', { class: 'admin-hint', style: 'margin-top:10px', text: '※ 인바운드 싱크(외부→우리)와 토큰·컨테이너 설정은 [외부 자료 수집] 탭에 있습니다. 여기는 아웃바운드(우리→외부) on/off 전용입니다.' }));
 
-  detail.replaceChildren(sectionHead('프로젝트 아웃바운드', '우리 프로젝트와 과업의 변경을 외부 협업 도구로 내보냅니다.', meaning), el('div', { class: 'card' }, body));
+  detail.replaceChildren(sectionHead('프로젝트 아웃바운드', '우리 프로젝트와 과업의 변경을 외부 협업 도구로 내보냅니다.', meaning), el('div', { class: 'card' }, cardHead('내보내는 항목'), body));
 }
 
 function dbSourceEditor(detail, data) {
@@ -4490,7 +4432,7 @@ function dbSourceEditor(detail, data) {
   detail.replaceChildren(
     sectionHead('DB 데이터소스', 'AI가 조회할 수 있는 데이터베이스를 등록하고, 어느 테이블까지 어떻게 보여줄지 정합니다.', data.meaning['db-source']),
     el('div', { class: 'admin-stack' },
-      el('div', { class: 'card' }, el('div', { class: 'admin-two admin-two-cols' }, listCol, right)),
+      el('div', { class: 'card' }, cardHead('등록된 DB 소스'), el('div', { class: 'admin-two admin-two-cols' }, listCol, right)),
       dbSafety));
 }
 
@@ -4848,7 +4790,7 @@ function customHookEditor(detail, data) {
     el('p', { class: 'admin-hint', text: '구성원 머신에서 특정 시점에 자동 실행되는 코드입니다. 본문은 구성원 디스크에 저장되지 않고 매 세션 게이트웨이에서 받아 실행됩니다(비활성화하면 다음 세션부터 실행되지 않습니다). 왼쪽 목록에서 항목을 선택하면 내용을 보고 편집할 수 있습니다.' }),
     relayPolicyCard(data, detail),
     gracePolicyCard(data, detail));
-  detail.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
+  detail.replaceChildren(el('div', { class: 'card' }, cardHead('커스텀 훅'), el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
 }
 
 // PreToolUse 결정 전파 정책(#892) — 러너가 훅의 permissionDecision 중 무엇을 하네스로 넘길지.
@@ -5022,7 +4964,7 @@ function harnessAssetEditor(detail, data) {
     : assets.find((a) => a.id === sel);
   if (editing) assetForm(right, editing, data, detail, sel === '__new__');
   else right.append(el('p', { class: 'admin-hint', text: '스킬(작업 방법서)·서브에이전트(보조 AI)·슬래시커맨드(단축 명령)를 정의해 구성원 하네스에 배포합니다. 저장하면 구성원 세션 시작 때 디스크에 동기화되며, 스킬·커맨드는 진행 중인 세션에도 즉시 반영됩니다. 왼쪽 목록에서 항목을 선택하면 내용을 보고 편집할 수 있습니다.' }));
-  detail.replaceChildren(el('div', { class: 'card' }, el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
+  detail.replaceChildren(el('div', { class: 'card' }, cardHead('스킬 · 서브에이전트 · 커맨드'), el('div', { class: 'admin-two admin-two-cols' }, listCol, right)));
 }
 
 function assetForm(root, a, data, detail, isNew) {
@@ -5123,7 +5065,7 @@ function toolsEditor(detail, data) {
       { key: 'allowed_auth_envs', label: '허용 인증 환경변수 이름 (allowed_auth_envs)', initial: pol.allowed_auth_envs, placeholder: 'ACME_API_TOKEN\n줄당 환경변수 이름(값 아님)' },
     ]);
   detail.replaceChildren(
-    el('div', { class: 'card' }, el('div', { class: 'admin-two admin-two-cols' }, listCol, right)),
+    el('div', { class: 'card' }, cardHead('등록된 AI 도구'), el('div', { class: 'admin-two admin-two-cols' }, listCol, right)),
     toolsSafety);
 }
 
@@ -5230,7 +5172,7 @@ function toolForm(root, t, data, detail, isNew) {
   authModeSel.value = initialMode;
   const envField = field('공용 자격 (auth_env)', authEnvSel);
   const kindField = field('개인 자격 종류 (auth_kind)', el('div', {}, authKindSel,
-    el('p', { class: 'admin-hint', style: 'margin:4px 0 0', text: 'L2(집행)면 개인 자격이 필수예요. L0/L1(읽기·제안)이면 개인 자격이 없을 때 「통합 자격」으로 대신 로그인해요. 구성원은 우측 상단 [내 프로필 ▸ 내 서비스 로그인]에서 자기 로그인을 넣어요.' })));
+    el('p', { class: 'admin-hint', style: 'margin:4px 0 0', text: 'L2(집행)면 개인 자격이 필수예요. L0/L1(읽기·제안)이면 개인 자격이 없을 때 「통합 자격」으로 대신 로그인해요. 구성원은 [내 설정 ▸ 외부 서비스 로그인]에서 자기 로그인을 넣습니다.' })));
   const kindScopeField = field('개인 자격 대상(선택)', authScopeIn);
   const syncAuthMode = () => {
     const m = authModeSel.value;
@@ -5693,7 +5635,7 @@ function oauthConnectorsCard(conns, reload) {
 // 커넥터 현황(#746 imp#4·#5) — 기본 카탈로그 각 커넥터의 등록/설정 상태 개관(관리자 온보딩 지도).
 function catalogStatusCard(catalog: any[], servers: any[]) {
   const byName = new Map((servers || []).map((s: any) => [s.name, s]));
-  const rows: any[] = [el('p', { class: 'admin-hint', style: 'margin:0 0 8px', text: '기본 제공되는 외부 도구 서버(MCP) 프리셋의 현재 상태입니다 — 외부 자료 수집(미러)과는 별개 항목입니다. 추가·발행은 [AI 도구 ▸ 외부 도구 서버]에서 하고, 구성원은 각자 [연결]에서 자기 계정을 연결합니다.' })];
+  const rows: any[] = [cardHead('기본 제공 도구 서버 상태', '기본 제공되는 외부 도구 서버(MCP) 프리셋의 현재 상태입니다 — 외부 자료 수집(미러)과는 별개 항목입니다. 추가·발행은 [AI 도구 ▸ 외부 도구 서버]에서 하고, 구성원은 각자 [연결]에서 자기 계정을 연결합니다.')];
   for (const c of (catalog || [])) {
     const s = byName.get(c.name);
     let chip: any; let hint = '';
@@ -5733,7 +5675,7 @@ async function credentialsEditor(detail) {
 
   const encReady = mine.encryption_ready !== false;
   const cards: any[] = [
-    sectionHead('서비스 로그인 (조직)', 'AI가 외부 서비스를 조직 공용 계정으로 쓸 수 있게 미리 로그인해 둡니다. 개인 계정으로 쓰게 하려면 각자 [내 서비스 로그인]에서 넣습니다.'),
+    sectionHead('서비스 로그인 (조직)', 'AI가 외부 서비스를 조직 공용 계정으로 쓸 수 있게 미리 로그인해 둡니다. 개인 계정으로 쓰게 하려면 각자 [외부 서비스 로그인]에서 넣습니다.'),
     encReady ? null : el('p', { class: 'gate-error', text: '⚠ 서버에 암호화 키(CONNECTOR_SECRET_KEY)가 없어 자격을 저장할 수 없습니다 — 관리자에게 요청하세요.' }),
     catalogStatusCard(catalog.catalog || [], mcpServers.servers || []),
     credVaultCard('org', '통합 자격', '개인 로그인이 없는 구성원이 조회(비-PII read)할 때 공용으로 쓰는 로그인입니다. 쓰기·외부 발신·민감정보 접근에는 쓰이지 않습니다 — 이 작업들에는 개인 로그인이 필요합니다.', (org.credentials || []).filter((c: any) => c.kind !== 'aws_role_arn'), encReady, () => credentialsEditor(detail)),
@@ -5891,7 +5833,7 @@ function svcTokenForm(kind: string, reload: () => void) {
 function credVaultCard(owner: 'me' | 'org', title: string, intro: string, creds: any[], encReady: boolean, reload: () => void) {
   const base = owner === 'me' ? '/api/ui/me/credential' : '/api/ui/org/credential';
   const kindLabel = (k: string) => (CRED_KINDS.find((x) => x.kind === k)?.label || k);
-  const rows: any[] = [el('p', { class: 'admin-hint', style: 'margin:0 0 12px', text: intro })];
+  const rows: any[] = [cardHead(title, intro)];
 
   // 등록된 자격 — 균일 보더 행(svc-item). 칩 + scope_key + 삭제(값 비노출).
   if (creds.length) {
@@ -5947,7 +5889,7 @@ function credVaultCard(owner: 'me' | 'org', title: string, intro: string, creds:
   });
 
   rows.push(el('div', { class: 'card', style: 'padding:12px; margin-top:10px;' },
-    el('div', { class: 'admin-subhead', style: 'margin-bottom:8px', text: '새 자격 추가' }),
+    cardHead('새 자격 추가'),
     field('서비스', kindSel), scopeField, secretField, helpP, docLink,
     el('div', { class: 'admin-actions', style: 'margin-top:10px' }, submit, status)));
 
@@ -5959,7 +5901,7 @@ function credVaultCard(owner: 'me' | 'org', title: string, intro: string, creds:
 function awsRoleCard(creds: any[], reload: () => void) {
   const ownerLabel = (o: string) => (o && o.startsWith('member:') ? '구성원 ' + o.slice(7) : '전원 기본');
   const ownerMember = (o: string) => (o && o.startsWith('member:') ? o.slice(7) : ''); // '' = 조직 통합
-  const rows: any[] = [el('p', { class: 'admin-hint', style: 'margin:0 0 6px', text: 'AWS 는 토큰 대신 "역할(role)"을 등록합니다. 게이트웨이가 이 역할을 각 구성원 이름으로 가정(assume)해 15분 동안 유효한 단기 자격을 발급합니다 — 장기 키를 저장하지 않으므로 유출 위험이 없고, 누가 무엇을 했는지 AWS CloudTrail 에 기록됩니다. "전원 기본"은 조회(readonly) 역할로 두고, 쓰기가 필요한 구성원만 개별 오버라이드하세요. (역할·신뢰관계는 AWS 관리자가 먼저 만들어야 합니다.)' })];
+  const rows: any[] = [cardHead('AWS 역할', 'AWS 는 토큰 대신 "역할(role)"을 등록합니다. 게이트웨이가 이 역할을 각 구성원 이름으로 가정(assume)해 15분 동안 유효한 단기 자격을 발급합니다 — 장기 키를 저장하지 않으므로 유출 위험이 없고, 누가 무엇을 했는지 AWS CloudTrail 에 기록됩니다. "전원 기본"은 조회(readonly) 역할로 두고, 쓰기가 필요한 구성원만 개별 오버라이드하세요. (역할·신뢰관계는 AWS 관리자가 먼저 만들어야 합니다.)')];
   // owner 정렬: 전원 기본(gateway) 먼저, 그 다음 구성원 오버라이드.
   const sorted = [...creds].sort((a, b) => (ownerMember(a.owner) ? 1 : 0) - (ownerMember(b.owner) ? 1 : 0) || String(a.owner).localeCompare(String(b.owner)));
   for (const c of sorted) {
@@ -6013,7 +5955,7 @@ function awsRoleCard(creds: any[], reload: () => void) {
     } catch (e: any) { status.textContent = ''; (submit as any).disabled = false; toast((e && e.message) || '저장 실패', true); }
   });
   rows.push(el('div', { class: 'card', style: 'padding:12px; margin-top:10px;' },
-    el('div', { class: 'admin-subhead', style: 'margin-bottom:8px', text: 'AWS 역할 등록 · 오버라이드' }),
+    cardHead('AWS 역할 등록 · 오버라이드'),
     field('적용 대상', targetSel), memberField,
     field('역할 ARN (role ARN)', arnIn), field('리전 (region)', regionSel),
     field('서명 서비스 (선택 · 기본 execute-api)', serviceIn), field('ExternalId (선택)', extIn), field('구분 이름 (선택)', scopeIn),
@@ -6058,7 +6000,7 @@ async function dbAuditEditor(detail, data) {
   } });
   bar.append(el('div', { class: 'audit-verify' }, verifyBtn, verifyOut));
   const card = el('div', { class: 'card' },
-    sectionTitle('DB 조회 기록', "구성원(과 그들의 AI)이 db_query·db_schema 로 어떤 데이터를 조회했는지 전부 기록됩니다 — 조회자·시각·소스·테이블·마스킹/열람 컬럼·대상 식별자. 기록은 해시체인으로 위변조를 방지하며, 신용정보법상 조회 기록 보존에 사용합니다. '누구의 정보인지'를 남길 식별자 컬럼은 [데이터 연결 ▸ DB 데이터소스]에서 지정합니다."),
+    cardHead('DB 조회 기록', "구성원(과 그들의 AI)이 db_query·db_schema 로 어떤 데이터를 조회했는지 전부 기록됩니다 — 조회자·시각·소스·테이블·마스킹/열람 컬럼·대상 식별자. 기록은 해시체인으로 위변조를 방지하며, 신용정보법상 조회 기록 보존에 사용합니다. '누구의 정보인지'를 남길 식별자 컬럼은 [데이터 연결 ▸ DB 데이터소스]에서 지정합니다."),
     bar,
     body);
   detail.replaceChildren(card);
@@ -6485,7 +6427,7 @@ async function myAiSection(detail) {
       el('div', { class: 'card admin-form-narrow' },
         // 섹션 제목은 서술문('~할 것')이 아니라 **명사구**로 — 관리탭 다른 섹션(구성원·조직 정보·세션 주입)과 같은 규격.
         //  설명 한 줄은 위 [AI 계정 연결] 박스와 같은 자리(.caption)에 둔다: 박스마다 [제목 · 한 줄 설명 · 내용].
-        cardHead('AI 개인 규칙', '내 역할·호칭·말투·사용 언어입니다. 내 AI 가 매 세션을 시작할 때 이 내용을 읽고 따릅니다 — 나에게만 적용되고 팀에는 공유되지 않습니다. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).'),
+        cardHead('AI 개인 규칙', '내 역할·호칭·말투·사용 언어입니다. 내 AI 가 매 세션을 시작할 때 이 내용을 읽고 따릅니다 — 나에게만 적용되고 팀에는 공유되지 않습니다.'),
         // 필드는 종전 그대로 — 라벨 + 입력칸 + 회색 힌트(사용자: "필드들은 ⓘ 규격 바꾸지 말고 이전 유지").
         field('역할', roleIn),
         field('개발 이해도', el('div', {}, devChips, devHint)),
@@ -6503,16 +6445,19 @@ async function myAiSection(detail) {
 // ── [내 설정 ▸ 내 서비스 로그인] — member_secret vault + OAuth 연결 + git 인증 ──
 async function myLoginsSection(detail) {
   // #762 서비스별 탭 재설계 — 헤더 + [서비스 로그인(탭)] + [레포 접근(개발자용)]. 방식(OAuth/토큰) 노출 안 함.
-  const svcCard = el('div', { class: 'card' });   // 서비스별 탭이 여기 그려짐
+  // 제목은 카드에 고정하고, 탭 본문만 안쪽 host 에 그린다 — renderServiceTabs 가 replaceChildren 이라 제목이 같이 지워지면 안 된다.
+  const svcHost = el('div');
+  const svcCard = el('div', { class: 'card' },
+    cardHead('서비스 로그인', 'AI 가 나를 대신해 이 서비스를 쓰려면 내 계정을 연결해야 합니다. 연결은 나에게만 적용되고, 토큰 값은 저장 후 다시 볼 수 없습니다.'),
+    svcHost);
   const gitCard = el('div', { class: 'card' },
-    el('h3', { class: 'admin-subhead', text: '레포 접근 (개발자용)' }),
-    el('p', { class: 'admin-hint', style: 'margin:0 0 10px', text: '코드 저장소(GitHub·GitLab)에서 클론·푸시할 때 쓰는 SSH 키/토큰이에요. 코드 작업을 하지 않는다면 설정하지 않아도 돼요.' }),
+    cardHead('리포지토리 접근', '코드 저장소(GitHub·GitLab)에서 클론·푸시할 때 쓰는 SSH 키·토큰입니다. 코드 작업을 하지 않으면 설정하지 않아도 됩니다.', el('span', { class: 'head-badge head-badge-aud', text: '개발자용' })),
     el('div', { class: 'admin-actions' },
       el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'git 인증 관리', onclick: () => openGitCredentialManager('me') })));
   detail.replaceChildren(
-    sectionHead('내 서비스 로그인', 'AI가 내 계정으로 외부 서비스를 쓸 수 있게 미리 로그인해 둡니다. 여기 로그인은 나에게만 적용되고 팀에는 공유되지 않습니다.'),
+    sectionHead('외부 서비스 로그인', 'AI가 내 계정으로 외부 서비스를 쓸 수 있게 미리 로그인해 둡니다. 여기에서 로그인해도 나에게만 적용되고 팀에는 공유되지 않습니다.'),
     el('div', { class: 'admin-stack' }, svcCard, gitCard));
-  await renderServiceTabs(svcCard);
+  await renderServiceTabs(svcHost);
 }
 
 // ── [내 설정 ▸ 내 스킬·훅] — 라이블리 배포분 opt-on/off(#699) + 내 컴퓨터별 로컬 하네스 조회·토글(#891/893). ──
@@ -6539,7 +6484,7 @@ async function myAssetsSection(detail) {
   const bodyBox = el('div', {});
   detail.replaceChildren(
     sectionHead('내 스킬 · 훅', '내 AI가 쓰는 스킬·훅이 어느 컴퓨터에 설치됐는지 보고, 켜고 끕니다. 켜고 끈 변경은 다음 세션부터 적용됩니다.'),
-    el('div', { class: 'card' }, bodyBox));
+    el('div', { class: 'card' }, cardHead('설치 상태'), bodyBox));
 
   const reload = async () => {
     bodyBox.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
@@ -6574,49 +6519,88 @@ async function myAssetsSection(detail) {
       return { row: el('div', { class: 'pc-chips' }, ...chips), missing };
     };
 
-    // 라이블리 배포분 행 — 3버튼 opt(기본/켜기/끄기, 멤버 단위) + 상세 + 설치된 PC 칩.
-    const livelyRow = (targetKind: string, it: any, kind: string): { node: any; missing: boolean } => {
-      const stateNow = it.override === null ? 'default' : (it.override ? 'on' : 'off');
-      const seg = el('div', { style: 'display:flex; gap:4px; flex-shrink:0;' });
-      const opt = (v: string, label: string) => {
-        const b = el('button', { type: 'button', class: 'btn btn-sm ' + (stateNow === v ? 'btn-primary' : 'btn-ghost'), text: label });
-        b.addEventListener('click', async () => {
-          try {
-            const b2 = { target_kind: targetKind, ref_id: it.id } as any;
-            if (v === 'default') b2.clear = true; else b2.state = (v === 'on');
-            await api('/api/ui/me/asset-pref', { method: 'POST', body: JSON.stringify(b2) });
-            await reload();
-          } catch (e: any) { toast((e && e.message) || '실패', true); }
-        });
+    // 항목 한 줄 — [이름 · 상태] + [용도 한 줄] + [설치된 PC 칩] | 오른쪽 [켜기/끄기].
+    //  회색 줄에 본문 앞부분을 그대로 잘라 넣었더니 무슨 용도인지가 안 읽혔다(사용자 지적) → **첫 문장만**
+    //  요약으로 쓰고 전문은 눌렀을 때 뜨는 팝업에 맡긴다. 종류(스킬/훅)는 이제 그룹 제목이 말하므로 뺀다.
+    const summarize = (raw: string): string => {
+      const t = String(raw || '').replace(/\s+/g, ' ').trim();
+      if (!t) return '';
+      const cut = t.search(/[.。!?]\s|—|\s·\s/);           // 첫 문장·첫 구획까지만
+      const head = (cut > 12 ? t.slice(0, cut) : t).trim();
+      return head.length > 64 ? head.slice(0, 64) + '…' : head;
+    };
+    // 켜기/끄기 2버튼. 조직 기본값을 따르는 중이면 '기본' 배지로 알리고, 내가 바꿔 둔 상태면 되돌릴 링크를 준다
+    //  (버튼 3개는 과했다 — 사용자 지적).
+    const onOffSeg = (targetKind: string, it: any) => {
+      const following = it.override === null || it.override === undefined;
+      const on = following ? !!it.byDefault : !!it.override;
+      const set = async (v: boolean | null) => {
+        try {
+          const b: any = { target_kind: targetKind, ref_id: it.id };
+          if (v === null) b.clear = true; else b.state = v;
+          await api('/api/ui/me/asset-pref', { method: 'POST', body: JSON.stringify(b) });
+          await reload();
+        } catch (e: any) { toast((e && e.message) || '실패', true); }
+      };
+      const btn = (v: boolean, label: string) => {
+        const b = el('button', { type: 'button', class: 'btn btn-sm ' + (on === v ? 'btn-primary' : 'btn-ghost'), text: label });
+        b.addEventListener('click', () => { if (on !== v) void set(v); });
         return b;
       };
-      seg.append(opt('default', '기본' + (it.byDefault ? '(켬)' : '(끔)')), opt('on', '켜기'), opt('off', '끄기'));
-      const kindLabel = HARNESS_KIND_LABEL[kind] || kind;
-      const desc = String(it.description || '');
+      const wrap = el('div', { class: 'hrow-act' }, btn(true, '켜기'), btn(false, '끄기'));
+      if (following) wrap.append(withTip(el('span', { class: 'head-badge', text: '기본' }), '조직 기본값(' + (it.byDefault ? '켬' : '끔') + ')을 따르는 중입니다.'));
+      else wrap.append(el('button', { type: 'button', class: 'btn-text', text: '기본값으로', onclick: () => void set(null) }));
+      return wrap;
+    };
+    const livelyRow = (targetKind: string, it: any, kind: string): { node: any; missing: boolean } => {
       const titleEl = el('span', { class: 'mini-title' }, el('span', { text: it.label || it.id }),
-        el('span', { class: 'pill', text: it.effective ? '적용 중' : '미적용' }));
+        el('span', { class: 'pill' + (it.effective ? ' pill-ok' : ''), text: it.effective ? '적용 중' : '미적용' }));
       const { row: chipRow, missing } = pcChips(it, kind);
-      // 카드 내용 영역(제목·설명·칩) 전체가 클릭 대상 — 제목 글자만이 아니라. 오른쪽 버튼(seg)은 별개라 모달 안 뜸.
+      const sum = summarize(it.description);
       const left = el('div', { class: 'harness-click', style: 'flex:1; min-width:0;', title: '눌러서 내용 보기' }, titleEl,
-        el('div', { class: 'mini-meta', text: kindLabel + ' · ' + (desc ? (desc.length > 90 ? desc.slice(0, 90) + '…' : desc) : '설명 없음 — 눌러서 정의 보기') }),
+        el('div', { class: 'mini-meta', text: sum || '눌러서 내용 보기' }),
         el('div', { style: 'margin-top:6px' }, chipRow));
       left.addEventListener('click', () => showHarnessDetail(kind, it.id, it.label || it.id));
-      return { node: el('div', { class: 'mini-row', style: 'display:flex; align-items:flex-start; gap:12px;' }, left, seg), missing };
+      return { node: el('div', { class: 'mini-row hrow' }, left, onOffSeg(targetKind, it)), missing };
+    };
+    // 접이식 그룹 — 목록이 길어 한 화면에 안 들어오던 걸, 제목·개수만 먼저 보이고 눌러서 펼치게(사용자 요구).
+    const group = (title: string, count: number, items: any[], openByDefault = false) => {
+      const bodyEl = el('div', { class: 'hgroup-body' }, ...items);
+      bodyEl.style.display = openByDefault ? 'block' : 'none';
+      const caret = el('span', { class: 'hgroup-caret', text: openByDefault ? '▾' : '▸' });
+      const head = el('button', { type: 'button', class: 'hgroup-head' }, caret,
+        el('span', { class: 'hgroup-title', text: title }),
+        el('span', { class: 'hgroup-count', text: String(count) }));
+      head.addEventListener('click', () => {
+        const open = bodyEl.style.display === 'none';
+        bodyEl.style.display = open ? 'block' : 'none';
+        caret.textContent = open ? '▾' : '▸';
+      });
+      return el('div', { class: 'hgroup' }, head, bodyEl);
     };
 
+    // 위계는 두 층이다: **위 = 어디서 온 것인가**(조직 배포 / 내 컴퓨터), **아래 = 종류**(스킬 · 커스텀 훅).
+    //  전에는 h4/h5 크기 차이만으로 눌러 담아 두 층이 안 읽혔다(사용자 지적) → 층마다 자기 머리를 갖게 한다.
     const rows: any[] = [];
-    rows.push(el('h4', { style: 'margin:4px 0 6px', text: '라이블리가 배포한 것' }));
     const lskills = d.lively?.skills || []; const lhooks = d.lively?.hooks || [];
     let anyMissing = false;
-    rows.push(el('h5', { style: 'margin:8px 0 6px 8px; font-size:13px; color:var(--ink-sub)', text: '스킬' }));
-    if (lskills.length) lskills.forEach((sk: any) => { const r = livelyRow('harness_asset', sk, sk.kind || 'skill'); anyMissing = anyMissing || r.missing; rows.push(r.node); });
-    else rows.push(el('p', { class: 'admin-hint', text: '배포된 스킬이 없어요.' }));
-    if (lhooks.length) { rows.push(el('h5', { style: 'margin:14px 0 6px 8px; font-size:13px; color:var(--ink-sub)', text: '커스텀 훅' })); lhooks.forEach((h: any) => rows.push(livelyRow('org_hook', h, 'hook').node)); }
-    if (anyMissing) rows.unshift(el('div', { class: 'sync-warn' }, el('b', { text: '켜져 있지만 아직 설치되지 않은 PC(‘미설치’ 표시)가 있어요. ' }), '그 PC에서 claude(또는 codex) 세션을 한 번 열면 자동으로 설치돼요.'));
+    const skillNodes = lskills.map((sk: any) => { const r = livelyRow('harness_asset', sk, sk.kind || 'skill'); anyMissing = anyMissing || r.missing; return r.node; });
+    const hookNodes = lhooks.map((h: any) => livelyRow('org_hook', h, 'hook').node);
+    rows.push(el('div', { class: 'hlayer' },
+      el('div', { class: 'hlayer-head' },
+        el('h4', { class: 'hlayer-title', text: '조직 배포' }),
+        infoPop('관리자가 팀 전체에 배포한 스킬·훅입니다. 내 세션에 적용할지 여기서 켜고 끌 수 있고, 끄면 나에게만 적용되지 않습니다.')),
+      group('스킬', skillNodes.length, skillNodes.length ? skillNodes : [el('p', { class: 'admin-hint', text: '배포된 스킬이 없습니다.' })]),
+      group('커스텀 훅', hookNodes.length, hookNodes.length ? hookNodes : [el('p', { class: 'admin-hint', text: '배포된 커스텀 훅이 없습니다.' })])));
+    if (anyMissing) rows.unshift(el('div', { class: 'sync-warn' }, el('b', { text: '켜져 있지만 아직 설치되지 않은 PC(‘미설치’ 표시)가 있습니다. ' }), '그 PC에서 claude(또는 codex) 세션을 한 번 열면 자동으로 설치됩니다.'));
 
     // ── 내 컴퓨터별: 내가 직접 만든 로컬 스킬·훅만 (라이블리가 준 건 위에서 PC 칩으로 봤어요). ──
     if (machines.length) {
-      rows.push(el('h4', { style: 'margin:20px 0 6px', text: '내 컴퓨터 (직접 만든 로컬 하네스)' }));
+      const myLayer = el('div', { class: 'hlayer' },
+        el('div', { class: 'hlayer-head' },
+          el('h4', { class: 'hlayer-title', text: '내 컴퓨터' }),
+          infoPop('내가 각 컴퓨터에 직접 만들어 둔 스킬·훅입니다(조직 배포분은 위 목록에서 PC 칩으로 확인합니다). 컴퓨터마다 따로 보입니다.')));
+      rows.push(myLayer);
       for (const m of machines) {
         const nm = machineName(m);
         const head = el('div', { style: 'display:flex; align-items:center; gap:8px; margin:14px 0 6px; flex-wrap:wrap' },
@@ -6625,7 +6609,7 @@ async function myAssetsSection(detail) {
         editName.addEventListener('click', async () => {
           const v = prompt(`이 컴퓨터의 별명 (비우면 해제). 관측된 호스트명: ${m.host || '?'}`, m.alias || '');
           if (v === null) return;
-          try { await api('/api/ui/me/harness/machine-alias', { method: 'POST', body: JSON.stringify({ machine_id: m.machine_id, alias: v }) }); toast('이름을 바꿨어요'); await reload(); }
+          try { await api('/api/ui/me/harness/machine-alias', { method: 'POST', body: JSON.stringify({ machine_id: m.machine_id, alias: v }) }); toast('이름을 바꿨습니다'); await reload(); }
           catch (e: any) { toast((e && e.message) || '실패', true); }
         });
         head.append(editName);
@@ -6634,38 +6618,74 @@ async function myAssetsSection(detail) {
         const del = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', style: 'margin-left:auto', text: '이 컴퓨터 지우기' });
         del.addEventListener('click', async () => {
           if (!confirm(`'${nm}' 의 하네스 관측을 목록에서 지울까요? (그 컴퓨터에서 다시 세션을 열면 자동으로 다시 나타납니다.)`)) return;
-          try { await api('/api/ui/me/harness/machine-remove', { method: 'POST', body: JSON.stringify({ machine_id: m.machine_id }) }); toast('지웠어요'); await reload(); }
+          try { await api('/api/ui/me/harness/machine-remove', { method: 'POST', body: JSON.stringify({ machine_id: m.machine_id }) }); toast('지웠습니다'); await reload(); }
           catch (e: any) { toast((e && e.message) || '실패', true); }
         });
         head.append(del);
-        rows.push(head);
+        myLayer.append(head);
         const own = (m.assets || []).filter((a: any) => a.overlap === 'local-only');
-        if (!own.length) { rows.push(el('p', { class: 'admin-hint', text: '내가 직접 만든 로컬 스킬·훅은 없어요(라이블리가 배포한 것만 있어요).' })); continue; }
+        if (!own.length) { myLayer.append(el('p', { class: 'admin-hint', text: '이 컴퓨터에 직접 만든 스킬·훅은 없습니다(조직 배포분만 있습니다).' })); continue; }
+        const byKind: Record<string, any[]> = {};
         for (const a of own) {
-          const kindLabel = HARNESS_KIND_LABEL[a.kind] || a.kind;
           const isHook = a.kind === 'hook'; // 훅은 settings.json 항목(파일 아님) — 비파괴 토글 불가라 여기선 표시만.
-          const meta = kindLabel + ' · ' + (isHook ? 'settings.json 에 직접 추가한 훅 — 여기서는 켜고 끌 수 없어요.' : '내가 만든 것' + (a.disabled ? ' · 꺼짐' : ''));
+          // 종류(스킬/훅)는 이제 그룹 제목이 말한다 — 줄마다 다시 붙이지 않는다.
+          const meta = isHook ? 'settings.json 에 직접 추가한 훅 — 여기서는 켜고 끌 수 없습니다.' : ('내가 이 컴퓨터에서 만든 것' + (a.disabled ? ' · 꺼둠' : ''));
           let tb: any = null;
           if (!isHook) {
             tb = el('button', { type: 'button', class: 'btn btn-sm btn-ghost', style: 'flex-shrink:0', text: a.disabled ? '켜기' : '끄기' });
             tb.addEventListener('click', async () => {
-              try { await api('/api/ui/me/harness-local-pref', { method: 'POST', body: JSON.stringify({ machine_id: m.machine_id, kind: a.kind, id: a.id, disabled: !a.disabled }) }); toast(a.disabled ? '켜기로 표시 — 다음 세션에 복원' : '끄기로 표시 — 다음 세션에 반영'); await reload(); }
+              try { await api('/api/ui/me/harness-local-pref', { method: 'POST', body: JSON.stringify({ machine_id: m.machine_id, kind: a.kind, id: a.id, disabled: !a.disabled }) }); toast(a.disabled ? '켬 — 다음 세션부터 적용됩니다' : '끔 — 다음 세션부터 적용됩니다'); await reload(); }
               catch (e: any) { toast((e && e.message) || '실패', true); }
             });
           }
-          rows.push(el('div', { class: 'mini-row', style: 'display:flex; align-items:center; gap:12px;' },
+          (byKind[a.kind] ||= []).push(el('div', { class: 'mini-row hrow' },
             el('div', { style: 'flex:1; min-width:0;' }, el('span', { class: 'mini-title', text: a.id }),
               el('div', { class: 'mini-meta', text: meta })),
-            tb));
+            el('div', { class: 'hrow-act' }, tb)));
         }
+        for (const [k, list] of Object.entries(byKind)) myLayer.append(group(HARNESS_KIND_LABEL[k] || k, list.length, list));
       }
     } else {
-      rows.push(el('h4', { style: 'margin:20px 0 6px', text: '내 컴퓨터' }));
-      rows.push(el('p', { class: 'admin-hint', text: '아직 내 컴퓨터의 하네스를 못 봤어요. 내 컴퓨터에서 claude(또는 codex)를 한 번 켜면 다음 세션에 자동으로 나타나요. 컴퓨터가 여러 대면 각각 따로 보여요. (웹 [터미널] 세션은 회사 서버라 로컬이 안 보입니다.)' }));
+      rows.push(el('div', { class: 'hlayer' },
+        el('div', { class: 'hlayer-head' }, el('h4', { class: 'hlayer-title', text: '내 컴퓨터' })),
+        el('p', { class: 'admin-hint', text: '아직 내 컴퓨터의 하네스를 확인하지 못했습니다. 내 컴퓨터에서 claude(또는 codex)를 한 번 켜면 다음 세션에 자동으로 나타납니다. 컴퓨터가 여러 대면 각각 따로 보입니다. (웹 [AI 세션]은 회사 서버에서 돌아 로컬이 보이지 않습니다.)' })));
     }
     bodyBox.replaceChildren(...rows);
   };
   await reload();
+}
+
+// 라이블리 확인 다이얼로그 — 브라우저 confirm() 대체(#1062). 파괴적 동작(종료·삭제) 확인은 전부 이걸 쓴다.
+//  왜: 브라우저 기본 confirm 은 디자인시스템 밖이고(OS 팝업), 줄바꿈·강조·위험도 표현이 안 되며,
+//   포커스가 확인 버튼에 잡혀 엔터 연타로 실수하기 쉽다. 여기선 기본 포커스를 '취소'에 둔다.
+//  반환: Promise<boolean> — 확인=true, 취소·Esc·바깥클릭=false. 호출부는 `if (!await confirmDialog(...)) return;`.
+function confirmDialog(opts: {
+  title: string; message?: string; lines?: string[]; note?: string;
+  confirmText?: string; cancelText?: string; danger?: boolean;
+}): Promise<boolean> {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v: boolean) => { if (done) return; done = true; back.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
+    const body = el('div', { class: 'ov-confirm-body' });
+    if (opts.message) body.append(el('p', { class: 'ov-confirm-msg', text: opts.message }));
+    for (const l of opts.lines || []) body.append(el('p', { class: 'ov-confirm-line', text: l }));
+    if (opts.note) body.append(el('p', { class: 'ov-confirm-note', text: opts.note }));
+    const cancel = el('button', { class: 'btn btn-ghost', type: 'button', text: opts.cancelText || '취소', onclick: () => finish(false) });
+    const ok = el('button', { class: 'btn ' + (opts.danger ? 'btn-danger' : 'btn-primary'), type: 'button', text: opts.confirmText || '확인', onclick: () => finish(true) });
+    const box = el('div', { class: 'ov-box ov-confirm' + (opts.danger ? ' danger' : '') },
+      el('div', { class: 'ov-head' }, el('h3', { text: opts.title })),
+      body, el('div', { class: 'ov-confirm-acts' }, cancel, ok));
+    const back = el('div', { class: 'ov-back ov-confirm-back' }, box);
+    back.addEventListener('click', (e) => { if (e.target === back) finish(false); });
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') finish(false);
+      // 엔터는 '포커스된 버튼'을 누른다 — 기본 포커스가 취소라, 무심코 엔터를 쳐도 파괴적 동작이 안 일어난다.
+      if (ev.key === 'Enter' && document.activeElement === ok) finish(true);
+    };
+    document.addEventListener('keydown', onKey);
+    document.body.append(back);
+    cancel.focus();
+  });
 }
 
 function overlay(title, ...content) {
@@ -6697,5 +6717,6 @@ export {
   installCmd,
   loadAdmin,
   overlay,
+  confirmDialog,
   renderSystem,
 };

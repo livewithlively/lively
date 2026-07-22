@@ -2,7 +2,7 @@
 import { api, el, errorNote, pageHead, personFace, state, toast } from './core.js';
 import { openMySessionsModal } from './sessions.js';   // #905 C1 — 터미널 탭 '내 세션 기록' 버튼→모달
 import { checklist, skeleton } from './learn.js';
-import { field, overlay } from './admin.js';
+import { field, overlay, confirmDialog } from './admin.js';
 import { startTour, isTourActive } from './tour.js';
 
 
@@ -87,15 +87,20 @@ function fmtTermDate(sec) {
 const TSESS_STATUS: Record<string, { label: string; cls: string; rank: number }> = {
   waiting:    { label: '확인 필요',  cls: 'waiting',    rank: 0 },
   busy:       { label: '작업 중',    cls: 'busy',       rank: 1 },
-  idle:       { label: '대기 중',    cls: 'idle',       rank: 2 },
+  idle:       { label: '대기 중',    cls: 'idle',       rank: 2 },   // 최근 48시간 내 작업이 있었던 살아있는 세션
   restorable: { label: '복원 가능',  cls: 'restorable', rank: 3 }, // #1059 E — 재부팅·회수로 꺼졌으나 복원 가능
   exited:     { label: '종료됨',     cls: 'exited',     rank: 4 },
-  offline:    { label: '오프라인',   cls: 'offline',    rank: 5 },   // 미접속(아무도 안 보는 중) 또는 노드 미연결
+  offline:    { label: '오프라인',   cls: 'offline',    rank: 5 },   // 48시간+ 방치(탭 열림 여부 무관) 또는 노드 미연결
 };
-// 종료 확인 문구 — 카드/일괄 공통. '삭제'가 아니라 '끝내기'이고 대화록은 남는다는 걸 확인창에서 못 박는다.
-function TSESS_END_CONFIRM(n, head) {
-  return head + '\n\n실행 중인 작업이 있으면 함께 중단됩니다.\n대화록은 지워지지 않아요 — 📜 세션 기록에 남고, 거기서 “💬 이어 질문하기”로 이어받을 수 있습니다'
-    + (n > 1 ? '.' : '.');
+// 종료 확인 다이얼로그 — 카드/일괄 공통. 브라우저 confirm 대신 라이블리 확인 모달(#1062).
+//  '삭제'가 아니라 '끝내기'이고 대화록은 남는다는 걸 여기서 못 박는다.
+function tsessConfirmEnd(title, extraLines: string[] = []) {
+  return confirmDialog({
+    title, danger: true, confirmText: '종료', cancelText: '취소',
+    message: '실행 중인 작업이 있으면 함께 중단됩니다.',
+    lines: extraLines,
+    note: '대화록은 지워지지 않아요 — 📜 세션 기록에 남고, 거기서 “💬 이어 질문하기”로 이어받을 수 있습니다.',
+  });
 }
 // 세션이 '이제 AI 가 안 도는' 상태인가 — 일괄 종료 대상·'끝남' 뷰 판정. exited(셸만 남음)·restorable(#1059 E, tmux 죽음).
 //  ⚠ offline 은 제외한다 — 그건 '아무도 안 보는 중'이지 끝난 게 아니다(프로세스는 대개 살아 있다).
@@ -243,19 +248,21 @@ async function renderTerminal(view) {
     //  목록에 남의 세션까지 들어오면서 '전부'는 종료할 수도 없는 것까지 담게 됐다.
     //  (상태칩 '종료됨' → 전체 선택 → 선택 종료 가 정리 동선.)
     const scope = (shownNow.length ? shownNow : sessions).filter((s) => s.owned);
-    const allOn = scope.length > 0 && scope.every((s) => sel.ids.has(s.id));
-    const allBtn = scope.length
-      ? el('button', { class: 'dash-bulkbar-btn', type: 'button', text: allOn ? '전체 해제' : '보이는 것 전체 (' + scope.length + ')',
-          title: '지금 필터에 걸린 내 세션만 선택합니다',
-          onclick: () => { if (allOn) scope.forEach((s) => sel.ids.delete(s.id)); else scope.forEach((s) => sel.ids.add(s.id)); draw(); } })
-      : null;
-    // 정리 단축키 — 내가 만든 세션 중 이미 끝난 것(종료됨·연결 끊김)만 한 번에 고른다.
-    const deadMine = sessions.filter((s) => s.owned && sessDead(s));
-    const deadBtn = deadMine.length
-      ? el('button', { class: 'dash-bulkbar-btn', type: 'button', text: '끝난 세션 (' + deadMine.length + ')',
-          title: 'AI 가 더 안 도는 내 세션(종료됨·연결 끊김)을 골라 한 번에 정리하세요',
-          onclick: () => { deadMine.forEach((s) => sel.ids.add(s.id)); draw(); } })
-      : null;
+    // 빠른 선택 — 전체 / 온라인 / 오프라인. 세 묶음 다 '지금 화면에 보이는 내 세션' 안에서 고른다
+    //  (필터를 무시하고 안 보이는 것까지 담으면, 고른 개수와 화면이 어긋나 종료 대상이 불투명해진다).
+    //  온라인 = AI 가 살아 움직이는 것(작업 중·확인 필요·대기 중) · 오프라인 = 방치·종료됨·복원 가능.
+    const isOnline = (x) => { const k = sessState(x); return k === 'busy' || k === 'waiting' || k === 'idle'; };
+    const groups = [
+      { key: 'all', label: '전체', items: scope, hint: '보이는 내 세션 전부 선택' },
+      { key: 'on', label: '온라인', items: scope.filter(isOnline), hint: 'AI 가 살아 움직이는 세션(작업 중·확인 필요·대기 중)만 선택' },
+      { key: 'off', label: '오프라인', items: scope.filter((x) => !isOnline(x)), hint: '48시간+ 방치·종료됨·복원 가능 세션만 선택 — 한 번에 정리할 때' },
+    ].filter((g) => g.items.length);
+    const pickBtns = groups.map((g) => {
+      const on = g.items.every((x) => sel.ids.has(x.id));   // 이미 그 묶음이 다 선택돼 있으면 토글로 해제
+      return el('button', { class: 'dash-bulkbar-btn' + (on ? ' on' : ''), type: 'button',
+        text: (on ? '✓ ' : '') + g.label + ' (' + g.items.length + ')', title: g.hint,
+        onclick: () => { g.items.forEach((x) => on ? sel.ids.delete(x.id) : sel.ids.add(x.id)); draw(); } });
+    });
     const openBtn: any = el('button', { class: 'dash-bulkbar-btn primary dash-bulkbar-push', type: 'button',
       title: '고른 세션들을 한 탭 그리드로 동시에 열기', text: '그리드로 열기' + (n ? ' (' + n + ')' : ''), onclick: () => bulkOpen() });
     openBtn.disabled = n === 0;
@@ -264,7 +271,7 @@ async function renderTerminal(view) {
     endBtn.disabled = n === 0;
     bulkBar.replaceChildren(
       el('span', { class: 'dash-bulkbar-n', text: n ? (n + '개 선택') : '세션을 골라 그리드로 열거나 종료하세요' }),
-      ...[allBtn, deadBtn].filter(Boolean), openBtn, endBtn,
+      ...pickBtns, openBtn, endBtn,
       el('button', { class: 'dash-bulkbar-btn', type: 'button', title: sel.mode ? '선택 모드 종료' : '선택 해제', text: '완료',
         onclick: () => { sel.mode = false; sel.ids.clear(); draw(); } }));
   }
@@ -362,9 +369,10 @@ async function renderTerminal(view) {
     const skipped = picked.length - items.length;
     if (!items.length) { toast(picked.length ? '내가 만든 세션만 종료할 수 있습니다' : '', true); return; }
     const live = items.filter((s) => !sessDead(s)).length;   // 아직 도는 세션은 따로 경고(진행 중 작업이 끊긴다)
-    if (!confirm(TSESS_END_CONFIRM(items.length, items.length + '개 세션을 종료할까요?')
-      + (live ? '\n\n⚠ 이 중 ' + live + '개는 아직 도는 세션입니다.' : '')
-      + (skipped ? '\n남의 세션 ' + skipped + '개는 제외됩니다(소유자만 종료 가능).' : ''))) return;
+    const lines: string[] = [];
+    if (live) lines.push('⚠ 이 중 ' + live + '개는 아직 도는 세션입니다.');
+    if (skipped) lines.push('남의 세션 ' + skipped + '개는 제외됩니다(소유자만 종료 가능).');
+    if (!await tsessConfirmEnd(items.length + '개 세션을 종료할까요?', lines)) return;
     btn.disabled = true;
     // 병렬 종료 — 일부 실패해도 나머지는 진행(성공/실패 건수 보고). 노드 세션은 ?node= 로 위임(#869).
     const results = await Promise.allSettled(
@@ -453,8 +461,11 @@ function tsessCard(s, ctx) {
     if (!s.restorable) acts.append(el('button', { class: 'tsess-icon', title: '이름·초대 수정', text: '수정', onclick: () => openTermEdit(s, cfg, view) }));
     // restorable 은 '복원 목록에서 제거'(desired-state 삭제), 라이브는 '종료'(tmux 종료, 대화록은 세션 기록에 남아 이어받기 가능). 둘 다 DELETE(백엔드가 gone→forget 처리).
     acts.append(el('button', { class: 'tsess-icon danger', title: s.restorable ? '복원 목록에서 제거' : '이 세션을 끝낸다(대화록은 세션 기록에 남아 나중에 이어받을 수 있음)', text: s.restorable ? '제거' : '종료', onclick: async () => {
-      const msg = s.restorable ? '세션 "' + s.label + '" 을(를) 복원 목록에서 제거할까요? 더는 복원할 수 없어요.' : TSESS_END_CONFIRM(1, '세션 "' + s.label + '" 을(를) 종료할까요?');
-      if (!confirm(msg)) return;
+      const ok = s.restorable
+        ? await confirmDialog({ title: '‘' + (s.label || '이름 없음') + '’ 을(를) 복원 목록에서 제거할까요?', danger: true,
+            confirmText: '제거', cancelText: '취소', message: '더는 이 세션을 복원할 수 없어요.' })
+        : await tsessConfirmEnd('‘' + (s.label || '이름 없음') + '’ 세션을 종료할까요?');
+      if (!ok) return;
       try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' }); toast(s.restorable ? '복원 목록에서 제거됨' : '세션을 종료했습니다 — 대화록은 📜 세션 기록에 남아 있어요'); reRender(); }
       catch (e) { toast('실패 — ' + e.message, true); }
     } }));
