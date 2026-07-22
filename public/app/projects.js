@@ -13501,18 +13501,23 @@ async function removeSession(s, reload) {
         toast('실패 — ' + e.message, true);
     }
 }
-// ── 상세 ③ 작업 타임라인 — 팀원 activity + 사람별 필터(전체/팀원 칩). ──
+// ── 상세 ③ 작업 타임라인 — 이 프로젝트의 activity + 사람별 필터(전체 + 사람 칩). ──
+//  사람 축은 터미널 세션 섹션과 같다(#1088): 팀원 명단이 아니라 **실제로 이 프로젝트에 작업을 남긴 사람**.
+//  팀원 아닌 사람의 작업도 목록엔 있었지만 이름이 표시명 대신 id('jang')로 뜨고 칩으로 좁힐 수도 없었다.
 function projectTimelineSection(id, members, base) {
     const B = base || '/api/ui/projects/';
     const card = el('div', { class: 'card', style: 'margin-bottom:18px' });
     const body = el('div', {});
     const st = { person: '' };
-    const nameOf = (pid) => { const m = (members || []).find((x) => x.member_id === pid); return (m && m.display_name) || pid || '—'; };
+    const guestNames = {}; // 팀원 아닌 작성자의 표시명(구성원 디렉터리에서)
+    let guests = []; // 이 타임라인에 실제로 등장한 팀원 아닌 사람
+    const team = () => members || [];
+    const nameOf = (pid) => { const m = team().find((x) => x.member_id === pid); return (m && m.display_name) || guestNames[pid] || pid || '—'; };
     const chipsBar = el('div', { class: 'proj-tl-filter' });
     function paintChips() {
         const mk = (label, person) => el('button', { class: 'proj-tl-chip' + (st.person === person ? ' active' : ''), text: label,
             onclick: () => { st.person = person; paintChips(); load(); } });
-        chipsBar.replaceChildren(mk('전체', ''), ...(members || []).map((m) => mk(m.display_name || m.member_id, m.member_id)));
+        chipsBar.replaceChildren(mk('전체', ''), ...team().map((m) => mk(m.display_name || m.member_id, m.member_id)), ...guests.map((p) => mk(nameOf(p), p)));
     }
     paintChips();
     card.append(el('div', { class: 'card-head' }, el('h3', { text: '작업 타임라인' })), el('p', { class: 'proj-tl-note' }, el('span', { class: 'proj-tl-note-ic', text: 'ⓘ' }), el('span', {}, '여기엔 ', el('b', { text: '이 프로젝트에 연결된 작업' }), '이 모여요 — 이 프로젝트의 터미널 세션에서 AI와 함께 진행했거나, 이 프로젝트로 직접 기록된 작업입니다(다른 프로젝트의 작업은 섞이지 않아요). ', el('b', { text: '확실하게 진행이 된 일을 위주로' }), ' 프로젝트 진행의 큰 맥락을 확인하는 용도로 사용해주세요.')), chipsBar, body);
@@ -13523,8 +13528,11 @@ function projectTimelineSection(id, members, base) {
         try {
             const qs = st.person ? ('?author_person=' + encodeURIComponent(st.person)) : '';
             const acts = await api(B + id + '/activity' + qs).then((d) => (d && d.activities) || []);
+            // 사람 칩은 **전체 목록**일 때만 다시 만든다 — 필터 결과로 칩을 깎으면 한 사람을 고른 순간 나머지가 사라진다.
+            if (!st.person)
+                await syncGuests(acts);
             if (!acts.length) {
-                body.replaceChildren(el('div', { class: 'empty', text: st.person ? '이 팀원의 작업 기록이 없습니다.' : '아직 이 프로젝트 팀원의 작업 기록이 없습니다.' }));
+                body.replaceChildren(el('div', { class: 'empty', text: st.person ? '이 사람의 작업 기록이 없습니다.' : '아직 이 프로젝트의 작업 기록이 없습니다.' }));
                 return;
             }
             renderActs(acts);
@@ -13532,6 +13540,28 @@ function projectTimelineSection(id, members, base) {
         catch (e) {
             body.replaceChildren(errorNote(e, '타임라인을 불러오지 못했습니다'));
         }
+    }
+    // 팀원 아닌 작성자를 추려 칩에 세운다. 이름은 구성원 디렉터리(1회 캐시)에서, 없으면 id 그대로.
+    async function syncGuests(acts) {
+        const known = new Set(team().map((x) => x.member_id));
+        const found = [];
+        for (const a of acts) {
+            const p = a.author_person;
+            if (p && !known.has(p)) {
+                known.add(p);
+                found.push(p);
+            }
+        }
+        if (found.some((p) => !guestNames[p])) {
+            try {
+                for (const m of await pjvMemberDirectory())
+                    if (m && m.id)
+                        guestNames[m.id] = m.display_name || m.id;
+            }
+            catch (_) { /* 디렉터리 조회 실패 — id 로 표시 */ }
+        }
+        guests = found;
+        paintChips();
     }
     // 5개까지 보이고 나머지는 '더 보기'로 펼침(끝없이 길어지지 않게).
     function renderActs(acts) {
