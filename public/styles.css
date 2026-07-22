@@ -675,12 +675,20 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
    '접속 토큰 발급'이 카드 제목 '접속 토큰'보다 커 위계가 뒤집혀 있었다. */
 .member-add-step, .admin-subhead-2 { margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--line);
   font-size: 13.5px; font-weight: 800; color: var(--ink); letter-spacing: -.1px; }
-/* 목록 머리 — 소제목 + 오른쪽 검색·개수 도구. */
-.tok-listhead { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.tok-listhead .admin-subhead-2 { flex: 1 1 auto; margin-bottom: 0; }
-.tok-tools { display: flex; align-items: center; gap: 8px; padding-bottom: 2px; }
-.tok-search { width: 200px; }
+/* 목록 머리 — 소제목 + 오른쪽 검색·개수 도구.
+   ⚠ 구분선은 **머리 줄 전체**가 가져야 한다. 제목(h4)에만 border-top 을 두면 선이 검색창 앞에서 뚝 끊겨
+   화면이 깨져 보였다(#1085 사용자 지적). */
+.tok-listhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+.tok-listhead .admin-subhead-2 { flex: 1 1 auto; margin: 0; padding-top: 0; border-top: 0; }
+.tok-tools { display: flex; align-items: center; gap: 8px; }
+.tok-search { width: 210px; }
 .tok-per { width: auto; }
+/* 토큰 행 — 이름/메타(왼쪽) + 동작(오른쪽). 권한 목록이 길어 메타가 넘치지 않게 한 줄로 자른다. */
+.token-row { padding-left: 8px; padding-right: 8px; margin: 0 -8px; border-radius: 8px; }
+.token-row:hover { background: var(--bg-tint); }
+.token-main { flex: 1 1 auto; }
+.token-main .mini-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* 상세 박스 내부(목록·편집) 기본 = 세로 스택. 단독으로 쓰는 곳은 이제 없고,
    .admin-two-cols(마스터-디테일)의 좁은화면 폴백 겸 베이스로만 남는다.

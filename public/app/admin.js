@@ -2429,7 +2429,10 @@ function tokensPanel(detail, data) {
     const active = tokens.filter((t) => !t.revoked_at);
     const revoked = tokens.filter((t) => t.revoked_at);
     const tokenRow = (t, isActive) => {
-        const meta = (t.user_id || '') + ((t.scopes || []).length ? ' · ' + (t.scopes || []).join('/') : '')
+        // 권한이 7개까지 붙어 메타가 화면을 넘겼다 → 앞 3개만 보이고 나머지는 +N(전체는 마우스 올리면).
+        const sc = t.scopes || [];
+        const scText = sc.length ? (sc.length > 3 ? sc.slice(0, 3).join('/') + ' +' + (sc.length - 3) : sc.join('/')) : '';
+        const meta = (t.user_id || '') + (scText ? ' · ' + scText : '')
             + ' · 발급 ' + (t.created_at ? t.created_at.slice(0, 10) : '?')
             + (t.last_used_at ? ' · 마지막 ' + relTime(t.last_used_at) : ' · 미사용');
         const right = isActive
@@ -2449,7 +2452,7 @@ function tokensPanel(detail, data) {
                     }
                 } })
             : el('span', { class: 'pill', text: t.revoked_at ? '해제 ' + String(t.revoked_at).slice(0, 10) : '해제됨' });
-        return el('div', { class: 'token-row' + (isActive ? '' : ' token-revoked') }, el('div', { class: 'token-main' }, el('div', { class: 'token-label', text: t.label || t.user_id || '(무라벨)' }), el('div', { class: 'mini-meta', text: meta })), right);
+        return el('div', { class: 'token-row' + (isActive ? '' : ' token-revoked') }, el('div', { class: 'token-main' }, el('div', { class: 'token-label', text: t.label || t.user_id || '(무라벨)' }), withTip(el('div', { class: 'mini-meta', text: meta }), sc.length ? '권한: ' + sc.join(' / ') : '권한 없음')), right);
     };
     // 목록이 수십 줄로 길어져 한 화면을 넘겼다(사용자 지적) → **검색 + 페이지네이션**(페이지당 개수 선택).
     //  발급 폼과 목록은 소제목으로 구분한다 — 전에는 둘이 붙어 어디부터 목록인지 안 보였다.
