@@ -122,17 +122,20 @@ export async function refreshProxySnapshot(name: string, actor?: string): Promis
     if (code === 403 && gwSecret) {
       try {
         const probe = makeSsrfFetch({ allowedInternalHosts: [], selfHosts: [], timeoutMs: CALL_TIMEOUT_MS });
+        // dummy cookie 로 makeSsrfFetch 의 403+Set-Cookie 재시도를 회피 → gmail 의 첫 403 원문(구글 error/reason)을
+        //  그대로 캡처한다(재시도 후 응답은 tools result 로 덮여 reason 이 안 보였음). 구글 SERVICE_DISABLED vs PERMISSION_DENIED 판별용.
         const pr = await probe(server.url, {
           method: "POST",
-          headers: { authorization: `Bearer ${gwSecret}`, "content-type": "application/json", accept: "application/json, text/event-stream" },
+          headers: { authorization: `Bearer ${gwSecret}`, "content-type": "application/json", accept: "application/json, text/event-stream", cookie: "probe=1" },
           body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
         });
-        const hdrs = Array.from(pr.headers.entries()).filter(([k]) => k !== "authorization").map(([k, v]) => `${k}:${v}`).join(" | ");
         const body = await pr.text();
-        let jsonErr = "(none)";
-        try { const j = JSON.parse(body) as { error?: unknown; result?: unknown }; jsonErr = j?.error ? JSON.stringify(j.error) : (j?.result ? "result-present-no-error" : "neither"); }
-        catch { jsonErr = "non-json"; }
-        diag = ` [probe status=${pr.status} bodyLen=${body.length} json=${jsonErr} headers={${hdrs}} bodyTail=${body.slice(-250)}]`;
+        let parsed = "non-json";
+        try {
+          const j = JSON.parse(body) as { error?: unknown; result?: unknown };
+          parsed = j?.error ? ("error=" + JSON.stringify(j.error).slice(0, 600)) : (j?.result ? "result(tools)-no-error" : "neither");
+        } catch { /* non-json */ }
+        diag = ` [probe status=${pr.status} bodyLen=${body.length} ${parsed} | bodyHead=${body.slice(0, 500)}]`;
       } catch (e) { diag = ` [probe 실패: ${(e as Error).message}]`; }
     }
     throw new Error(redactSecret(pfx + (err as Error).message + diag, gwSecret)); // 상류 에러 본문에 gateway 자격 에코 방지

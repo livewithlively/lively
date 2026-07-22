@@ -89,16 +89,19 @@ function pjvScopeIsFolder(k) { return typeof k === 'string' && k[0] === 'F'; }
 //  예전 기본이던 개요(요약 카드)는 프로젝트가 한 줄도 안 보여서, 폴더에서 필터·그룹을 걸어도 아무 반응이 없는 것처럼 보였다.
 //  개요는 없어지지 않고 톱니(보기 설정) → 보기 방식 → '개요' 로 언제든 돌아갈 수 있다.
 function pjvDefaultView(_scopeKey) {
-  return { overview: false, byStatus: true, kanban: false, savedViewId: null, savedViewName: '', savedViewSort: null };
+  return { overview: false, byStatus: true, kanban: false, table: false, timeline: false, savedViewId: null, savedViewName: '', savedViewSort: null };
 }
 function pjvSnapshotView() {
   return { kanban: !!pjvBoardView.kanban, byStatus: pjvBoardView.byStatus !== false, overview: !!pjvBoardView.overview,
+    table: !!pjvBoardView.table, timeline: !!pjvBoardView.timeline,
     savedViewId: pjvSavedView.id, savedViewName: pjvSavedView.name, savedViewSort: pjvSavedView.sort };
 }
 function pjvApplyView(v) {
   pjvBoardView.kanban = !!(v && v.kanban);
   pjvBoardView.byStatus = !v || v.byStatus !== false;
   pjvBoardView.overview = !!(v && v.overview);
+  pjvBoardView.table = !!(v && v.table);
+  pjvBoardView.timeline = !!(v && v.timeline);
   pjvSavedView.id = (v && v.savedViewId) != null ? v.savedViewId : null;
   pjvSavedView.name = (v && v.savedViewName) || '';
   pjvSavedView.sort = (v && v.savedViewSort) || null;
@@ -193,6 +196,8 @@ async function pjvSavedViewMenu(anchor, rerender) {
       // board 타입 → 칸반, location_overview → 개요(#541), 그 외(list 등)=평면/리스트묶음.
       const vt = String(v.type);
       pjvBoardView.kanban = vt === 'board';
+      // ClickUp 저장뷰의 table/timeline 타입은 아직 우리 렌더에 매핑하지 않는다 — 평면으로 폴백(#1067).
+      pjvBoardView.table = false; pjvBoardView.timeline = false;
       // 개요(location_overview)는 폴더/스페이스 스코프에서만 유효(렌더 브랜치가 selFolder 필요) — 리스트/미분류에선 평면 폴백(#541 리뷰).
       pjvBoardView.overview = vt === 'location_overview' && selKey[0] === 'F';
       pjvBoardView.byStatus = false;
@@ -380,7 +385,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     taskCache.set(projId, pr);
     return pr;
   };
-  const taskCtx: any = { mode: pjvProjTaskMode.mode, fetchProjTasks, invalidate: (id) => taskCache.delete(id) };
+  const taskCtx: any = { mode: pjvProjTaskMode.mode, meId, fetchProjTasks, invalidate: (id) => taskCache.delete(id) };
 
   // ── 툴바 버튼(#1067 ClickUp 파리티) — 좌: 그룹·하위태스크·컬럼 / 우: 필터·완료·담당자·나·검색 | 설정·＋프로젝트 ──
   //  아이콘 전용 버튼은 title + aria-label 로 이름을 준다(라벨 없이도 무엇인지 알 수 있게).
@@ -388,8 +393,9 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
   // '하위 태스크' — 접힘/펼침/분리(ClickUp Subtasks).
   const subtaskBtn = iconBtn('pjv-subtask-btn', '하위 태스크 표시 방식', pjvTbIcon('subtask'));
   // '나' — 내가 만든·참여한 프로젝트만(ClickUp Me mode). 내 아바타가 곧 버튼.
-  const mineBtn = el('button', { class: 'pjv-tb-btn pjv-mine-btn', type: 'button', title: '나 — 내가 만든·참여한 프로젝트만 보기', 'aria-label': '내 프로젝트만 보기' },
-    personFace(meId, 'pjv-ava', '나'));
+  // 'Me mode'(#1067) — 내 아바타가 버튼. 누르면 프로젝트/태스크 스위치 팝오버, 켜지면 알약으로 늘어나 라벨이 붙는다(ClickUp 동형).
+  const mineBtn = el('button', { class: 'pjv-tb-btn pjv-mine-btn', type: 'button', title: '내가 맡은 것만 보기', 'aria-label': '내가 맡은 것만 보기' },
+    personFace(meId, 'pjv-ava', '나'), el('span', { class: 'pjv-mine-btn-label', text: '내 항목' }));
   // '완료 표시' — 닫힌(완료) 프로젝트/태스크 노출 스위치 팝오버.
   const closedBtn = iconBtn('pjv-closed-btn', '완료된 항목 표시', pjvTbIcon('check'));
   // '필터' — 필드 조건(상태·담당자·우선순위·태그·마감일·이름)으로 좁히기. 걸린 조건 수를 배지로.
@@ -441,8 +447,9 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     subtaskBtn.classList.toggle('active', pjvProjTaskMode.mode !== 'collapsed');
     subtaskBtn.title = '하위 태스크 표시 — ' + PJV_SUBTASK_BTNLABEL[pjvProjTaskMode.mode];
     closedBtn.classList.toggle('active', pjvProjClosedView.done || pjvClosedView.tasks);
-    mineBtn.classList.toggle('active', pjvBoardMineOnly.on);
-    mineBtn.setAttribute('aria-pressed', String(pjvBoardMineOnly.on));
+    const meOn = pjvMeModeOn();
+    mineBtn.classList.toggle('active', meOn);
+    mineBtn.setAttribute('aria-pressed', String(meOn));
     // '필터' — 조건이 하나라도 걸리면 강조 + 개수 배지.
     const fc = pjvFilterCount();
     filterBtn.classList.toggle('active', fc > 0);
@@ -476,6 +483,10 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
       groupBy: (pjvGroupCtx && pjvGroupCtx.groupBy) || { field: 'status', dir: 1 },
     });
   };
+
+  // 테이블(#1067) — 평면과 같은 행·컬럼을 쓰되 스프레드시트 껍데기(세로 격자선·행번호·고정 행높이)를 CSS 로 입힌다.
+  //  ClickUp Table 뷰의 성격이 '그룹 없는 고정 높이 표'라 평면과 데이터 경로가 같다 — 행 컴포넌트를 새로 만들지 않는다.
+  const renderTable = (shown) => renderFlat(shown);
 
   // 평면 — 영역·상태 그룹 없이 한 목록. 컬럼 헤더 + 행들(진행 중→할 일→완료, 같은 상태면 최신순) + 인라인 추가행(미분류로 생성).
   //  저장 뷰 정렬(#541)이 적용돼 있으면 그 정렬이 우선(상태 rank 무시 — ClickUp 뷰 시맨틱).
@@ -577,6 +588,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     byStatus = pjvBoardView.byStatus;
     pjvSyncUrl(sel, true); // 자동 해소된 스코프를 URL 에 replace(히스토리 오염 없이 새로고침 복원용)
     syncCrumbs(); // 브레드크럼 재동기(#1067) — render() 시점엔 sel 이 '__all__' 일 수 있어, 자동 해소된 실제 스코프로 다시 그린다
+    (viewTabs as any)._sync(); // 뷰 탭도 재동기 — 위 pjvApplyView 가 스코프 저장뷰(칸반 등)로 갈아탔을 수 있다
     // 필터·담당자 값 후보를 **이 스코프**로 재수집(#1067) — 전체 기준이면 "윤상민 216" 처럼 화면(59개)과 안 맞는
     //  숫자가 나와 오해를 부른다. 툴바 필터가 걸리기 전(raw) 스코프 집합이 기준이라 후보가 자기 자신에 의해 줄지 않는다.
     {
@@ -667,7 +679,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     pjvGroupCtx = { selList, groupBy, rerender: render, enabled: true, scopeKey: sel };
     if (groupBtn) pjvSyncGroupBtn(groupBtn, groupBy, true);
 
-    const main = el('div', { class: 'pjv-side-main' + (noNav ? ' pjv-side-main-nonav' : '') });
+    const main = el('div', { class: 'pjv-side-main' + (noNav ? ' pjv-side-main-nonav' : '') + (pjvBoardView.table ? ' pjv-table-mode' : '') });
     // 셸의 우측 컬럼 상단에 페이지 크롬(제목·하위탭·보드헤드) + 툴바를 얹는다 — 사이드바는 좌측에서 y=64 부터 풀하이트(#607).
     //  noNav(#662)여도 같은 자리에 얹는다(#1067) — 사이드바를 접어도 '사이드바만 사라지고' 나머지는 그대로여야 한다.
     if (pageChrome) main.append(pageChrome);
@@ -725,6 +737,16 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     } else if (pjvBoardView.kanban) {
       // 칸반 보드(#541) — 선택 리스트의 커스텀 상태 컬럼(없으면 표준 3버킷)에 카드. 그룹 방향(dir=-1)이면 컬럼 역순.
       main.append(pjvKanbanBoard(shownProjects, selList, { reload, canDelete, groupDir: groupBy.field === 'status' ? groupBy.dir : 1 }));
+    } else if (pjvBoardView.timeline) {
+      // 타임라인(#1067) — 스코프 안 프로젝트를 시간축에. 그룹 없이 한 행 = 한 프로젝트.
+      main.append(pjvTimelineView(shownProjects, { reload, rerender: () => renderArea(byStatus, noNav), lists }));
+    } else if (pjvBoardView.table) {
+      // 테이블(#1067) — 그룹 없는 평면 표(껍데기는 .pjv-table-mode CSS). 컬럼 헤더 + 행.
+      const tbody = el('div', { class: 'pjv-tgroup-body pjv-flat-body' });
+      const trows = shownProjects.filter((p) => p.status !== 'done' || pjvProjClosedView.done).slice().sort(pjvSavedSortCmp() || pjvTableDefaultCmp);
+      for (const p of trows) tbody.append(pjvProjRow(p, reload, null, canDelete, fields, anchorId, taskCtx));
+      if (!trows.length) tbody.append(el('div', { class: 'pjv-proj-empty', text: '표시할 프로젝트가 없습니다.' }));
+      main.append(pjvListColHead(fields, anchorId, reload, selList ? selList.id : undefined), tbody);
     } else if (selFolder) {
       // 폴더/스페이스 뷰(#1067) — ClickUp 폴더 List 뷰 파리티: **리스트마다 테두리 박스** 하나.
       //  박스 헤더 위에 경로(스페이스 / 폴더)를 얹고, 박스 안에서 툴바의 그룹 기준으로 다시 묶는다.
@@ -1143,6 +1165,9 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     const byArea = pjvBoardView.byArea, byStatus = pjvBoardView.byStatus, byFolder = pjvBoardView.byFolder;
     syncScopeChip();
     syncCrumbs();   // 브레드크럼(#1067) — 현재 스코프를 위치로 표시
+    (viewTabs as any)._sync();  // 뷰 탭 활성 표시(#1067) — 설정 팝오버로 바꿔도 탭이 따라온다
+    // 테이블 껍데기는 CSS 모드 하나로 — 어느 렌더 경로로 가든 여기서 한 번만 정한다(다른 뷰로 나갈 때 확실히 벗겨진다).
+    body.classList.toggle('pjv-table-mode', !!pjvBoardView.table);
     pjvSetFilterUniverse(projects, lists); // 필터·담당자 팝오버의 값 후보(상태·사람·태그)를 현재 데이터로 갱신
     // WIKI 형 풀블리드 셸(#607)은 사이드바 여닫이와 무관하게 항상(#1067) — 접으면 '사이드바만' 사라지고
     //  제목·툴바·보드가 시작하는 y 는 그대로다. (예전엔 접을 때 카드형 배치로 갈아타 높이가 튀고 여백이 달라졌다.)
@@ -1163,6 +1188,8 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     // 툴바 좁히기(#1067 필터·담당자·검색)는 '내 할당만' 과 같은 자리에서 한 번에 — 모든 하위 뷰가 같은 목록을 본다.
     const shown = pjvApplyToolbarFilters(pjvBoardMineOnly.on ? base.filter((p) => mineIds.has(p.id)) : base);
     if (pjvBoardView.kanban) { body.replaceChildren(pjvKanbanBoard(shown, null, { reload, canDelete })); return; } // 칸반(#541) — 전체 스코프는 표준 3버킷
+    if (pjvBoardView.timeline) { body.replaceChildren(pjvTimelineView(shown, { reload, rerender: render, lists })); return; } // 타임라인(#1067)
+    if (pjvBoardView.table) { renderTable(shown); return; }                                          // 테이블(#1067)
     if (byStatus) { renderStatus(shown); return; }
     renderFlat(shown);
   };
@@ -1193,7 +1220,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
   //  닫을 때 직접 고른 스코프(리스트/폴더)는 유지(#662) — 아니면 뷰 리셋(pjvExitAreaMode, #541 잔존뷰 누수 방지).
   sideBtn.onclick = (e) => { e.stopPropagation(); pjvBoardView.byArea = !pjvBoardView.byArea; if (pjvBoardView.byArea) { pjvBoardView.byFolder = false; } else { pjvKeepScopeOnCollapse(); } pjvPersistSideOpen(); syncToggles(); render(); };
   subtaskBtn.onclick = (e) => { e.stopPropagation(); pjvProjTaskMenu(subtaskBtn, () => { syncToggles(); render(); }); };
-  mineBtn.onclick = (e) => { e.stopPropagation(); pjvBoardMineOnly.on = !pjvBoardMineOnly.on; syncToggles(); render(); };
+  mineBtn.onclick = (e) => { e.stopPropagation(); pjvMeModePopover(mineBtn, () => { syncToggles(); render(); }); };
   // 완료 표시 — 팝오버(프로젝트/태스크 각각). 예전의 '한 번 누르면 켜짐' 직접 토글은 ClickUp 파리티로 팝오버화.
   closedBtn.onclick = (e) => { e.stopPropagation(); pjvClosedPopover(closedBtn, () => { syncToggles(); render(); }); };
   filterBtn.onclick = (e) => { e.stopPropagation(); pjvFilterPopover(filterBtn, () => { syncToggles(); render(); }); };
@@ -1314,7 +1341,9 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     el('div', { class: 'card-head-actions' }, filterBtn, closedBtn, asgBtn, mineBtn, searchBox,
       el('span', { class: 'pjv-tb-sep', 'aria-hidden': 'true' }), gearBtn, savedViewBtn, addGroup));
   // 상단 헤더 스택 — ① 브레드크럼 ② 뷰 탭 ③ 툴바.
-  const headerStack = el('div', { class: 'pjv-board-header' }, crumbBar, pjvViewTabsRow(), toolbar);
+  //  뷰 탭은 rerenderScoped 로 전환한다(설정 팝오버의 '보기 방식'과 같은 경로 — 스코프별 뷰 영속 포함).
+  const viewTabs = pjvViewTabsRow({ onView: () => rerenderScoped() });
+  const headerStack = el('div', { class: 'pjv-board-header' }, crumbBar, viewTabs, toolbar);
   card.append(shellHost);
   render();
   return wrapper;
@@ -2776,39 +2805,48 @@ function pjvGroupByMenu(anchor) {
   if (!ctx) return;
   const pop = el('div', { class: 'pjv-menu pjv-groupby-pop' });
   pjvPopover(anchor, pop);
-  pop.append(el('div', { class: 'pjv-closed-pop-head', text: '그룹 기준' }));
   const line = el('div', { class: 'pjv-groupby-line' });
+  pop.append(el('div', { class: 'pjv-closed-pop-head', text: '그룹 기준' }), line,
+    el('div', { class: 'pjv-menu-hint', text: '기본값 = 이 리스트의 뷰 설정(ClickUp 이관 포함)' }));
   const mkSel = (label, cls, onOpen) => {
     const b = el('button', { class: 'pjv-filter-sel ' + cls, type: 'button' }, el('span', { class: 'pjv-filter-sel-label', text: label }), pjvTbIcon('caret', 'sm'));
     b.onclick = (e) => { e.stopPropagation(); onOpen(b); };
     return b;
   };
   const cur = () => (pjvGroupCtx && pjvGroupCtx.groupBy) || ctx.groupBy;
-  const fLabel = () => { const f = PJV_GROUPBY_FIELDS.find((x) => x.key === cur().field); return f ? f.label : '상태'; };
-  line.append(mkSel(fLabel(), 'pjv-groupby-field', (b) => {
-    const menu = el('div', { class: 'pjv-menu' });
-    const close = pjvPopover(b, menu);
-    for (const f of PJV_GROUPBY_FIELDS) {
-      const it = el('button', { class: 'pjv-menu-item' + (cur().field === f.key ? ' sel' : ''), type: 'button' },
-        el('span', { text: f.label }), cur().field === f.key ? el('span', { class: 'pjv-menu-check', text: '✓' }) : el('span', {}));
-      it.onclick = (e) => { e.stopPropagation(); close(); pjvSetGroupBy(ctx.selList, { field: f.key, dir: cur().dir }, ctx.scopeKey); ctx.rerender(); };
-      menu.append(it);
-    }
-  }));
-  line.append(mkSel(cur().dir === -1 ? '내림차순' : '오름차순', 'pjv-groupby-dir', (b) => {
-    const menu = el('div', { class: 'pjv-menu' });
-    const close = pjvPopover(b, menu);
-    for (const o of [{ d: 1, l: '오름차순' }, { d: -1, l: '내림차순' }]) {
-      const it = el('button', { class: 'pjv-menu-item' + (cur().dir === o.d ? ' sel' : ''), type: 'button' }, el('span', { text: o.l }));
-      it.onclick = (e) => { e.stopPropagation(); close(); pjvSetGroupBy(ctx.selList, { field: cur().field, dir: o.d }, ctx.scopeKey); ctx.rerender(); };
-      menu.append(it);
-    }
-  }));
-  const reset = el('button', { class: 'pjv-filter-del', type: 'button', title: '뷰 기본값으로 되돌리기', 'aria-label': '그룹 기준 초기화' }, pjvTbIcon('trash', 'sm'));
-  reset.onclick = (e) => { e.stopPropagation(); pjvSetGroupBy(ctx.selList, null, ctx.scopeKey); ctx.rerender(); };
-  line.append(reset);
-  pop.append(line);
-  pop.append(el('div', { class: 'pjv-menu-hint', text: '기본값 = 이 리스트의 뷰 설정(ClickUp 이관 포함)' }));
+  // 고르면 보드만 다시 그리는 게 아니라 **이 팝오버도 다시 그린다** — 안 그러면 기준을 바꿔도
+  //  팝오버 라벨이 옛 값 그대로라 '눌러도 안 바뀐다'로 보인다. 팝오버는 열어 둔 채 연속 조작(ClickUp 동형).
+  const apply = (v) => { pjvSetGroupBy(ctx.selList, v, ctx.scopeKey); ctx.rerender(); paint(); };
+  function paint() {
+    line.replaceChildren();
+    const f = PJV_GROUPBY_FIELDS.find((x) => x.key === cur().field);
+    line.append(mkSel(f ? f.label : '상태', 'pjv-groupby-field', (b) => {
+      const menu = el('div', { class: 'pjv-menu' });
+      const close = pjvPopover(b, menu);
+      for (const o of PJV_GROUPBY_FIELDS) {
+        const on = cur().field === o.key;
+        const it = el('button', { class: 'pjv-menu-item' + (on ? ' sel' : ''), type: 'button' },
+          el('span', { text: o.label }), el('span', { class: 'pjv-menu-check', text: on ? '✓' : '' }));
+        it.onclick = (e) => { e.stopPropagation(); close(); apply({ field: o.key, dir: cur().dir }); };
+        menu.append(it);
+      }
+    }));
+    line.append(mkSel(cur().dir === -1 ? '내림차순' : '오름차순', 'pjv-groupby-dir', (b) => {
+      const menu = el('div', { class: 'pjv-menu' });
+      const close = pjvPopover(b, menu);
+      for (const o of [{ d: 1, l: '오름차순' }, { d: -1, l: '내림차순' }]) {
+        const on = cur().dir === o.d;
+        const it = el('button', { class: 'pjv-menu-item' + (on ? ' sel' : ''), type: 'button' },
+          el('span', { text: o.l }), el('span', { class: 'pjv-menu-check', text: on ? '✓' : '' }));
+        it.onclick = (e) => { e.stopPropagation(); close(); apply({ field: cur().field, dir: o.d }); };
+        menu.append(it);
+      }
+    }));
+    const reset = el('button', { class: 'pjv-filter-del', type: 'button', title: '뷰 기본값으로 되돌리기', 'aria-label': '그룹 기준 초기화' }, pjvTbIcon('trash', 'sm'));
+    reset.onclick = (e) => { e.stopPropagation(); apply(null); };
+    line.append(reset);
+  }
+  paint();
 }
 
 // 리스트/폴더 표시 순서 비교자(#541 사이드바 파리티) — sort 오름차순(0 포함 — 구 0-based 재정렬 데이터의 0-top 보존,
@@ -4117,9 +4155,11 @@ function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
       subBox.replaceChildren(el('div', { class: 'pjv-proj-subnote', text: '태스크 불러오는 중…' }));
       try {
         const d = await taskCtx.fetchProjTasks(p.id);
-        const tasks = (d && d.tasks) || [];
+        const all = (d && d.tasks) || [];
+        // Me mode(#1067) — '태스크' 스위치가 켜져 있으면 내가 담당인 태스크만. 담당자 없는 태스크도 빠진다(내 것이 아니므로).
+        const tasks = pjvMeMode.tasks ? all.filter((t) => pjvTaskIsMine(t, taskCtx.meId)) : all;
         subBox.replaceChildren();
-        if (!tasks.length) subBox.append(el('div', { class: 'pjv-proj-subnote', text: '태스크가 없습니다.' }));
+        if (!tasks.length) subBox.append(el('div', { class: 'pjv-proj-subnote', text: pjvMeMode.tasks && all.length ? '내가 담당인 태스크가 없습니다.' : '태스크가 없습니다.' }));
         else for (const t of tasks) subBox.append(pjvProjTaskRow(p.id, t, d.members, localReload, 1, fields));
         loaded = true;
       } catch (e) { subBox.replaceChildren(el('div', { class: 'pjv-proj-subnote', text: '태스크를 불러오지 못했습니다 — ' + e.message })); }
@@ -5504,7 +5544,6 @@ async function renderProjectV2Detail(view, idStr) {
     projectCommentsSection(id, members),
     pjvTasksSection(id, p.tasks || [], members, reload, p.fields || []),
     projectFolderSection(id, V6_BASE),
-    projectPreviewSection(id, p),
     projectTerminalSection(id, members, meId, V6_BASE, p.name, p),
     projectTimelineSection(id, members, V6_BASE));
   // 인라인 편집 재렌더면 리빌 애니메이션 대신 스크롤 복원(전면 재애니메이션도 '새로고침'처럼 보임) (#358)
@@ -5512,21 +5551,24 @@ async function renderProjectV2Detail(view, idStr) {
 }
 
 // ── 미리보기(#1036) — 작업 중인 화면을 운영 화면·남의 작업과 섞지 않고 이 프로젝트 몫으로 따로 띄워 본다. ──
-//  **자리**가 핵심이다: 관리탭에만 두면 정작 화면을 확인할 작업자가 만나지 못한다. 관리탭 ▸ 미리보기는 조직 전체
-//  목록(운영자 시야)이고, 여기는 '이 프로젝트의 것'만 — 작업자는 자기 프로젝트에서 버튼 하나로 만들고 연다.
-//  관련 레포가 없는 프로젝트(문서·기획 등)에는 아예 보이지 않는다(만들어 둔 미리보기가 있으면 그때만 나타난다).
+//  **자리**: 관리탭에만 두면 정작 화면을 확인할 작업자가 만나지 못한다. 그렇다고 프로젝트 상세에 섹션을 하나 더
+//  붙이면 그 페이지가 이미 너무 길다 → 터미널 세션 섹션 헤더의 [🖥 미리보기] 버튼 → 모달(세션 기록 #905 C1 과 같은 형태).
+//  관리탭 ▸ 미리보기는 조직 전체 목록(운영자 시야)으로 그대로 두고, 이 모달은 '이 프로젝트의 것'만 다룬다.
 const PJV_PREVIEW_STATUS = { running: '실행 중', preparing: '준비 중…', error: '문제 있음', stopped: '꺼짐' };
 
-function projectPreviewSection(id, p) {
-  const repos = ((p && p.repos) || []).filter(Boolean);
-  const card = el('div', { class: 'card', style: 'margin-bottom:18px' });
+function openProjectPreviewModal(id, projectName, repos0) {
+  const repos = (repos0 || []).filter(Boolean);
   const body = el('div', {});
-  const addBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 미리보기 만들기', onclick: () => pickRepoThenCreate() });
-  card.append(
-    el('div', { class: 'card-head' }, el('h3', { text: '미리보기' }),
-      el('div', { class: 'card-head-actions' }, addBtn)),
-    body);
-  if (!repos.length) card.hidden = true; // 코드가 걸려 있지 않은 프로젝트에는 숨긴다(아래 load 에서 있으면 다시 켬)
+  const addBtn = el('button', { class: 'btn btn-primary btn-sm', text: '＋ 미리보기 만들기', onclick: () => pickRepoThenCreate() });
+  // 저장소가 여럿이면 어느 것을 볼지 고르게 한다(하나면 묻지 않는다 — 작업자가 원하는 건 '지금 화면 보기'다).
+  const repoSel = repos.length > 1 ? el('select', { style: 'padding:6px 8px;font:inherit;max-width:220px' }) : null;
+  if (repoSel) for (const n of repos) repoSel.append(el('option', { value: n, text: n }));
+  const back = overlayBox('미리보기' + (projectName ? ' — ' + projectName : ''),
+    el('div', { class: 'proj-settings' },
+      el('section', { class: 'ps-block' },
+        el('p', { class: 'ps-block-hint', text: '작업 중인 화면을 운영 화면이나 다른 사람 작업에 영향 없이 따로 띄워 봅니다. 만들면 주소가 나오고, 그 주소를 팀원에게 보내 확인받을 수 있어요.' }),
+        body),
+      el('div', { class: 'ps-rules-actions' }, ...(repoSel ? [repoSel] : []), addBtn)));
   let timer: any = null;
 
   async function load() {
@@ -5534,15 +5576,16 @@ function projectPreviewSection(id, p) {
     let envs: any[] = [];
     try { const r = await api('/api/ui/preview-envs'); envs = ((r && r.envs) || []).filter((x) => Number(x.project_id) === Number(id)); }
     catch (e) {
-      // 코드 권한이 없는 구성원에게는 이 섹션 자체가 쓸모없다 — 오류를 띄우는 대신 조용히 감춘다.
-      if (e.status === 403) { card.hidden = true; return; }
-      body.replaceChildren(el('p', { class: 'ps-block-hint', text: '미리보기를 불러오지 못했습니다 — ' + e.message })); return;
+      body.replaceChildren(el('p', { class: 'ps-block-hint', text: e.status === 403
+        ? '이 기능을 쓸 권한이 없습니다 — 관리자에게 코드 권한을 요청하세요.'
+        : '미리보기를 불러오지 못했습니다 — ' + e.message }));
+      addBtn.disabled = true; return;
     }
-    if (envs.length) card.hidden = false;
     if (!envs.length) {
       body.replaceChildren(el('p', { class: 'ps-block-hint', text: repos.length
-        ? '이 프로젝트의 화면을 운영 화면과 따로 띄워 확인할 수 있습니다. ‘＋ 미리보기 만들기’를 누르면 작업 폴더 준비·빌드까지 자동으로 하고 주소를 만들어 줍니다(그 주소를 팀원에게 보내 확인받을 수 있어요).'
-        : '이 프로젝트에는 연결된 코드 저장소가 없습니다.' }));
+        ? '아직 만든 미리보기가 없습니다. 아래 ‘＋ 미리보기 만들기’를 누르면 작업 폴더 준비·빌드까지 자동으로 끝내고 주소를 만들어 줍니다.'
+        : '이 프로젝트에는 연결된 코드 저장소가 없습니다 — ⚙ 프로젝트 세부 설정에서 관련 레포를 먼저 연결해 주세요.' }));
+      if (!repos.length) addBtn.disabled = true;
       return;
     }
     const rows = envs.map((env) => {
@@ -5561,8 +5604,8 @@ function projectPreviewSection(id, p) {
         el('div', { class: 'wikicat-row-acts' }, ...acts));
     });
     body.replaceChildren(el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-rows' }, ...rows)));
-    // 준비 중이면 사람이 새로고침하지 않아도 되게 잠시 뒤 다시 확인한다(화면을 떠나면 스스로 멈춤).
-    if (envs.some((x) => x.status === 'preparing')) timer = setTimeout(() => { if (document.body.contains(card)) load(); }, 5000);
+    // 준비 중이면 사람이 새로고침하지 않아도 되게 잠시 뒤 다시 확인한다(모달을 닫으면 스스로 멈춤).
+    if (envs.some((x) => x.status === 'preparing')) timer = setTimeout(() => { if (document.body.contains(back)) load(); }, 5000);
   }
 
   async function act(btn, suffix, envId) {
@@ -5577,20 +5620,9 @@ function projectPreviewSection(id, p) {
     load();
   }
 
-  // 저장소가 하나면 묻지 않고 바로 만든다(작업자가 원하는 건 '지금 화면 보기'다). 여럿일 때만 고르게 한다.
   function pickRepoThenCreate() {
     if (!repos.length) { toast('먼저 ⚙ 프로젝트 세부 설정에서 관련 레포를 연결해 주세요', true); return; }
-    if (repos.length === 1) { create(repos[0]); return; }
-    const sel = el('select', { style: 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box' });
-    for (const n of repos) sel.append(el('option', { value: n, text: n }));
-    const ok = el('button', { class: 'btn btn-primary btn-sm', text: '만들고 띄우기' });
-    const back = overlayBox('미리보기 만들기',
-      el('div', { class: 'proj-settings' },
-        el('section', { class: 'ps-block' },
-          el('h3', { class: 'ps-block-title', text: '어느 코드 저장소를 볼까요?' }),
-          el('p', { class: 'ps-block-hint', text: '이 프로젝트에 연결된 저장소입니다.' }), sel),
-        el('div', { class: 'ps-rules-actions' }, ok)));
-    ok.onclick = () => { back.remove(); create(sel.value); };
+    create(repoSel ? repoSel.value : repos[0]);
   }
 
   async function create(repo) {
@@ -5599,15 +5631,15 @@ function projectPreviewSection(id, p) {
       const saved = await api('/api/ui/preview-envs', { method: 'POST', body: JSON.stringify({ project_id: id, repo, kind: 'work' }) });
       const envId = saved && saved.env && saved.env.id;
       if (envId) await api('/api/ui/preview-envs/' + encodeURIComponent(envId) + '/ensure', { method: 'POST' }).catch(() => { /* 목록에서 다시 시도할 수 있다 */ });
-      card.hidden = false;
       toast('만들었습니다 — 화면을 준비하고 있습니다');
     } catch (e) { toast('실패 — ' + e.message, true); }
     addBtn.disabled = false;
     load();
   }
 
+  body.replaceChildren(el('p', { class: 'ps-block-hint', text: '불러오는 중…' }));
   load();
-  return card;
+  return back;
 }
 
 // ── 세션 기록(#905 C1): 별도 섹션이 공간을 많이 먹어 → 터미널 섹션 헤더의 [📜 세션 기록] 버튼→모달로 이관
@@ -6990,8 +7022,18 @@ function pjvTodayStr() {
 function pjvIsOverdue(t) { return t.due_date && t.status !== 'done' && t.due_date < pjvTodayStr(); }
 
 // 인라인 편집용 경량 팝오버 — 앵커 아래 위치, 바깥클릭/ESC 로 닫힘. body 에 1개만(기존 것 제거). 닫기함수 반환.
+// 열린 팝오버 스택(#1067) — 팝오버 **안의** 드롭다운(필터의 필드/연산자/값, 그룹의 기준/방향)을 지원한다.
+//  예전엔 pjvPopover 가 열릴 때 '.pjv-pop 전부 제거' 였다 → 안쪽 드롭다운을 누르는 순간 부모 팝오버가 사라지고,
+//  그 안에 있던 앵커까지 DOM 에서 떨어져 place() 가 조기 반환 → "눌러도 아무 일 없이 팝오버만 꺼진다"로 보였다.
+//  이제 새 팝오버의 앵커를 품은 팝오버(=부모)는 남기고 그 위에 쌓인 것만 닫는다.
+const pjvPopStack: any[] = [];
 function pjvPopover(anchor, content, opts?) {
-  document.querySelectorAll('.pjv-pop').forEach((n) => n.remove());
+  // 부모 체인은 유지 — 앵커를 품지 않는(형제·이전) 팝오버만 위에서부터 닫는다.
+  while (pjvPopStack.length) {
+    const top = pjvPopStack[pjvPopStack.length - 1];
+    if (top.pop.contains(anchor)) break;
+    top.close();
+  }
   const pop = el('div', { class: 'pjv-pop' }, content);
   document.body.append(pop);
   // 위치 — 기본 앵커 아래, 아래 공간 부족하고 위가 더 넓으면 위로 뒤집음(하단 일괄 바 등). 콘텐츠가 나중에
@@ -7014,14 +7056,36 @@ function pjvPopover(anchor, content, opts?) {
   place();
   const ro = (typeof ResizeObserver !== 'undefined') ? new ResizeObserver(() => place()) : null;
   if (ro) ro.observe(pop);
+  const entry: any = { pop, anchor };
   const close = () => {
+    const i = pjvPopStack.indexOf(entry);
+    if (i >= 0) {
+      // 내 위에 쌓인 자식 팝오버부터 닫는다(부모가 사라지는데 자식만 떠 있으면 앵커 없는 유령이 된다).
+      for (const child of pjvPopStack.splice(i + 1)) child.close();
+      pjvPopStack.splice(i, 1);
+    }
     if (ro) ro.disconnect();
     pop.remove();
     document.removeEventListener('mousedown', onDoc, true);
     document.removeEventListener('keydown', onKey, true);
   };
-  const onDoc = (e) => { if (!pop.contains(e.target) && !anchor.contains(e.target)) close(); };
-  const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  entry.close = close;
+  // 바깥 클릭 판정 — 나와 **내 위에 쌓인 자식들** 안의 클릭은 바깥이 아니다.
+  //  (자식 팝오버는 body 직속이라 pop.contains 로는 안 잡힌다 — 이 검사가 없으면 자식을 누를 때 부모가 닫힌다.)
+  const onDoc = (e) => {
+    const i = pjvPopStack.indexOf(entry);
+    const mine = i >= 0 ? pjvPopStack.slice(i) : [entry];
+    if (mine.some((x) => x.pop.contains(e.target) || (x.anchor && x.anchor.contains(e.target)))) return;
+    close();
+  };
+  // Esc 는 맨 위 팝오버 하나만 닫는다(중첩 드롭다운에서 한 단계씩 빠져나오게).
+  const onKey = (e) => {
+    if (e.key !== 'Escape') return;
+    if (pjvPopStack[pjvPopStack.length - 1] !== entry) return;
+    e.stopPropagation();
+    close();
+  };
+  pjvPopStack.push(entry);
   setTimeout(() => {
     document.addEventListener('mousedown', onDoc, true);
     document.addEventListener('keydown', onKey, true);
@@ -7280,7 +7344,7 @@ const pjvBoardMineOnly = { on: false };
 //  byFolder=폴더로 나누기(본문에 폴더별 접이식 구역들을 인라인으로 쌓아 한눈에, 필터 팝오버 토글, #455) /
 //  byStatus=상태(할 일·진행 중·완료)로 나누기(기본 켜짐; byFolder 와 겹치면 폴더 › 상태 중첩). 세션 유지.
 //  byArea(사이드바)와 byFolder(인라인)는 같은 '폴더로 보기'의 두 방식이라 상호배타 — 한쪽을 켜면 다른쪽을 끈다.
-const pjvBoardView = { byArea: true, byStatus: true, byFolder: false, kanban: false, overview: false };
+const pjvBoardView = { byArea: true, byStatus: true, byFolder: false, kanban: false, overview: false, table: false, timeline: false };
 // 프로젝트 → 폴더 드래그(#454) 진행 상태. dragstart 에서 프로젝트 id(+이름 #1020)를 담고, 폴더(사이드바 항목·인라인 그룹 헤더)·휴지통이 드롭 타깃.
 const pjvFolderDrag: any = { id: null, name: null };
 // 사이드바 내부 드래그(#473 후속) — kind:'list'(리스트를 폴더로 넣기/빼기) | 'folder'(폴더 순서 재정렬). id=끌고 있는 대상 id.
@@ -7452,7 +7516,8 @@ function pjvTbIcon(kind, cls?) {
     n.append(sv('rect', { x: 3, y: 4.5, width: 18, height: 15, rx: 2.4 }), sv('path', { d: 'M9 4.5v15M15 4.5v15' }));
     return n;
   }
-  if (kind === 'filter') { // 필터 — 아래로 좁아지는 3선(깔때기). 폭 18/10/4 로 확실히 좁아지게.
+  if (kind === 'filter') { // 필터 — 아래로 좁아지는 3선. 폭 18/10/4 로 확실히 좁아지게.
+    //  ⚠ 이게 우리 서비스의 **유일한 필터 아이콘**이다(깔때기 도형 금지 — #req). 다른 화면도 같은 d 를 쓴다(예 dashFilterIcon).
     n.append(sv('path', { d: 'M3 6.5h18M7 12h10M10 17.5h4' }));
     return n;
   }
@@ -7539,6 +7604,16 @@ const PJV_FILTER_OPS: any = {
 function pjvFilterKind(field) { return field === 'due' ? 'date' : field === 'name' ? 'text' : 'multi'; }
 const pjvFilterState: any = { rows: [], match: 'and' };      // rows: {field, op, values[]}
 const pjvAsgFilter: any = { ids: new Set<string>(), none: false }; // 담당자 빠른필터(우측 사람 아이콘)
+// Me mode(#1067, ClickUp 아바타 버튼) — '내가 맡은 것만'. 프로젝트/태스크 각각 따로 끌 수 있다.
+//  projects: 내가 만든·참여한 프로젝트만(기존 pjvBoardMineOnly 를 이 스위치가 대신 조종한다)
+//  tasks: 프로젝트를 펼쳤을 때 나오는 태스크 중 내가 담당인 것만
+const pjvMeMode = { tasks: false };
+function pjvMeModeOn() { return pjvBoardMineOnly.on || pjvMeMode.tasks; }
+// 이 태스크가 나에게 할당됐나 — 다중 담당자(pjvAssignees) 기준. meId 는 state.me 에서.
+function pjvTaskIsMine(t, meId) {
+  if (!meId) return true;
+  return pjvAssignees(t).some((x) => String(x) === String(meId));
+}
 const pjvBoardSearch = { q: '' };                              // 뷰 내 검색(돋보기)
 // 필터 값 후보 — 보드 렌더마다 현재 데이터에서 수집(상태·담당자·태그). 카운트는 ClickUp 처럼 옆에 숫자로.
 let pjvFilterUniverse: any = { statuses: [], members: [], tags: [], counts: { member: new Map(), none: 0 } };
@@ -7817,6 +7892,16 @@ function pjvAssigneePopover(anchor, onChange) {
     onChange();
   });
 }
+// ── 'Me mode' 팝오버(#1067) — 내 아바타를 누르면 뜬다. ClickUp 은 Comments/Subtasks/Checklists 지만
+//  우리 보드의 단위는 프로젝트와 태스크라 그 둘로 옮겼다(없는 개념을 흉내내면 눌러도 아무 일이 안 생긴다).
+function pjvMeModePopover(anchor, onChange) {
+  const pop = el('div', { class: 'pjv-menu pjv-closed-pop' });
+  pjvPopover(anchor, pop, { align: 'right' });
+  pop.append(el('div', { class: 'pjv-closed-pop-head', text: '내가 맡은 것만 보기' }));
+  pop.append(pjvSwitchRow('프로젝트', () => pjvBoardMineOnly.on, (v) => { pjvBoardMineOnly.on = v; }, onChange));
+  pop.append(pjvSwitchRow('태스크', () => pjvMeMode.tasks, (v) => { pjvMeMode.tasks = v; }, onChange));
+  pop.append(el('div', { class: 'pjv-menu-hint', text: '프로젝트 = 내가 만들었거나 팀원인 것 · 태스크 = 내가 담당인 것' }));
+}
 // ── '완료 표시' 팝오버 — 프로젝트/태스크 각각의 닫힌 항목 노출 스위치(ClickUp Tasks·Subtasks 파리티). ──
 function pjvClosedPopover(anchor, onChange) {
   const pop = el('div', { class: 'pjv-menu pjv-closed-pop' });
@@ -7841,7 +7926,9 @@ function pjvBoardSettingsPopover(anchor, ctx) {
   pop.append(el('div', { class: 'pjv-closed-pop-head', text: '보기 설정' }));
   // 보기 방식(상태/리스트/칸반) — 라디오. 예전 '필터' 버튼이 품고 있던 것.
   pop.append(el('div', { class: 'pjv-set-sec', text: '보기 방식' }));
-  const curMode = () => pjvBoardView.overview ? 'overview' : pjvBoardView.kanban ? 'kanban' : pjvBoardView.byFolder ? 'list' : 'status';
+  //  뷰 탭(테이블·타임라인)에 있을 땐 여기 라디오 넷 중 어느 것도 켜지 않는다 — 켜면 실제 화면과 다른 걸 가리킨다.
+  const curMode = () => pjvBoardView.table ? 'table' : pjvBoardView.timeline ? 'timeline'
+    : pjvBoardView.overview ? 'overview' : pjvBoardView.kanban ? 'kanban' : pjvBoardView.byFolder ? 'list' : 'status';
   const syncs: any[] = [];
   const mkMode = (key, label, hint) => {
     const radio = el('span', { class: 'pjv-view-radio', 'aria-hidden': 'true' });
@@ -7852,6 +7939,7 @@ function pjvBoardSettingsPopover(anchor, ctx) {
       e.stopPropagation();
       if (curMode() === key) return;
       pjvBoardView.kanban = key === 'kanban';
+      pjvBoardView.table = false; pjvBoardView.timeline = false; // 보기 방식은 뷰 탭과 상호배타(#1067)
       pjvBoardView.byFolder = key === 'list';
       pjvBoardView.byStatus = key === 'status' || key === 'list';
       pjvBoardView.overview = key === 'overview';
@@ -7883,26 +7971,325 @@ function pjvBoardSettingsPopover(anchor, ctx) {
   sv2.onclick = (e) => { e.stopPropagation(); close(); pjvSavedViewMenu(anchor, ctx.onView); };
   pop.append(el('div', { class: 'pjv-set-sec', text: '뷰' }), sv2);
 }
-// ── 뷰 탭 줄(#1067) — 보드·타임라인·테이블·리스트 + ＋뷰. **지금은 버튼·아이콘만**(기능은 별도 작업). ──
-//  누르면 무엇이 준비 중인지 알려준다 — 아무 반응 없는 죽은 버튼은 '고장'으로 읽힌다.
+// ── 뷰 탭 줄(#1067) — 보드·타임라인·테이블·리스트 + ＋뷰. ──
+//  보드/리스트는 이미 있는 렌더에 연결(칸반 #541 / 상태그룹). 테이블·타임라인은 아직 없어 준비 중 토스트.
+//  ⚠ 설정(톱니) 팝오버의 '보기 방식' 라디오와 **같은 상태**(pjvBoardView)를 본다 — 두 곳이 항상 일치해야 한다.
 const PJV_VIEW_TABS = [
   { key: 'board', label: '보드' },
   { key: 'timeline', label: '타임라인' },
   { key: 'table', label: '테이블' },
   { key: 'list', label: '리스트' },
 ];
-function pjvViewTabsRow() {
+
+// ════════════════════════════════════════════════════════════════════════════
+// 타임라인 뷰(#1067) — 시간축 × 프로젝트. ClickUp Gantt 의 **현행(Gen-C)** 시각 규약을 따른다:
+//  바는 pill 이 아니라 radius 4px, 저채도 단색, 이름·아바타는 **바 바깥**, 가로 행 구분선 없음, 주말 음영.
+//  (헬프센터에 남아 있는 구세대 스샷의 '원색 pill + 바 안 흰 글씨'는 2019~2020 디자인이라 따르지 않는다.)
+//
+// ★ 축 선택 — 우리 데이터의 현실에 맞춘 핵심 설계:
+//  프로젝트 304개 중 start+due 를 **둘 다** 가진 건 0개, 태스크도 1개뿐이다(2026-07-21 실측).
+//  계획축만 쓰면 화면의 99% 가 빈 줄이 되므로, 계획 날짜가 없으면 **실적축(created_at ~ completed_at/오늘)** 으로 그린다.
+//  실적 바는 점선 테두리로 계획 바와 구분한다 — "이건 계획이 아니라 지나간 자취"라는 걸 화면이 스스로 말해야 한다.
+// ════════════════════════════════════════════════════════════════════════════
+const PJV_TL_DAY = 86400000;
+// 스케일 — 하루가 몇 px. 프로젝트는 보통 수개월이라 기본은 '주'.
+const PJV_TL_SCALES = [
+  { key: 'day', label: '일', px: 30 },
+  { key: 'week', label: '주', px: 9 },
+  { key: 'month', label: '월', px: 3 },
+];
+const PJV_GT_SHEET_W = 300;   // 좌측 시트 폭(이름 + 기간)
+const PJV_GT_ROW_H = 36;      // 행 높이 — 바 28 + 상하 4 (ClickUp Gen-C 실측 비율)
+const pjvTlState = { scale: 'week', collapsed: new Set<string>() };
+function pjvTlScale() { return PJV_TL_SCALES.find((s) => s.key === pjvTlState.scale) || PJV_TL_SCALES[1]; }
+function pjvTlDayStart(ms) { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); }
+function pjvTlFmt(ms) { const d = new Date(ms); return (d.getMonth() + 1) + '/' + d.getDate(); }
+
+// 한 프로젝트의 막대 구간.
+//  plan   = 사람이 정한 일정(start/due)
+//  actual = 실제로 살아 있던 기간(created ~ completed/오늘)
+// ★ 우리 데이터에서 start+due 를 둘 다 가진 프로젝트는 0개다(2026-07-21 실측 317건 중 계획 3 / 실적 314).
+//   계획축만 그리면 화면의 99% 가 빈 줄이 되므로 실적축으로 떨어뜨린다. 실적 바는 점선으로 형태를 달리해
+//   "이건 계획이 아니라 지나간 자취"임을 화면이 스스로 말하게 한다.
+function pjvTlSpan(p) {
+  const s = p.start_date ? Date.parse(p.start_date) : NaN;
+  const d = p.due_date ? Date.parse(p.due_date) : NaN;
+  if (!isNaN(s) && !isNaN(d)) return { from: Math.min(s, d), to: Math.max(s, d), kind: 'plan' };
+  if (!isNaN(d)) return { from: d, to: d, kind: 'plan' };
+  if (!isNaN(s)) return { from: s, to: s, kind: 'plan' };
+  const c = Date.parse(p.created_at || '');
+  if (isNaN(c)) return null;
+  const done = p.completed_at ? Date.parse(p.completed_at) : NaN;
+  return { from: c, to: Math.max(c, !isNaN(done) ? done : Date.now()), kind: 'actual' };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 간트 차트(#1067) — 타임라인 탭의 본체.
+//
+// 간트가 '시간 띠'와 다른 점은 **좌측 시트(계층 + 필드 컬럼)와 우측 차트가 한 행을 공유**한다는 것이다.
+// 그래서 이 구현의 뼈대는 좌우 2단이고, 좌측은 sticky 로 붙어 가로 스크롤에도 남는다.
+//  ① 좌측 시트: 리스트 ▸ 프로젝트 트리(접기/펼치기) + 기간 컬럼
+//  ② 우측 차트: 2단 시간축(월 / 주·일) · 주말 음영 · 오늘 세로선
+//  ③ 롤업 바: 리스트 행은 자식들의 최소 start ~ 최대 due 범위에 진행률(완료수÷전체수)을 채운 바
+//  ④ 의존선: 선행 → 후속(project_edge follow_up) 을 직각 elbow + 화살촉으로
+//  ⑤ 마감 초과 표시: 오늘보다 due 가 이른 미완료 = 빨간 테두리
+// ════════════════════════════════════════════════════════════════════════════
+function pjvTimelineView(projects, ctx) {
+  const wrap = el('div', { class: 'pjv-gt' });
+  const lists = (ctx && ctx.lists) || [];
+  const edges = (ctx && ctx.edges) || [];
+  const rerender = (ctx && ctx.rerender) || (() => { /* noop */ });
+
+  const items = (projects || [])
+    .filter((p) => p.status !== 'done' || pjvProjClosedView.done)
+    .map((p) => ({ p, span: pjvTlSpan(p) }))
+    .filter((x) => x.span) as any[];
+  if (!items.length) {
+    wrap.append(el('div', { class: 'pjv-proj-empty', text: '타임라인에 그릴 프로젝트가 없습니다.' }));
+    return wrap;
+  }
+
+  // ── 리스트별로 묶는다(간트의 좌측 계층). 리스트 없는 건 '기타'로. ──
+  const listById = new Map(lists.map((l: any) => [String(l.id), l]));
+  const groups: any[] = [];
+  const gmap = new Map<string, any>();
+  for (const it of items) {
+    const key = it.p.list_id != null ? String(it.p.list_id) : '__none__';
+    let g = gmap.get(key);
+    if (!g) {
+      const l: any = listById.get(key);
+      g = { key, name: l ? l.name : '기타 (미분류)', color: l ? (l.color || null) : null, rows: [] };
+      gmap.set(key, g); groups.push(g);
+    }
+    g.rows.push(it);
+  }
+  for (const g of groups) {
+    g.rows.sort((a, b) => a.span.from - b.span.from || String(a.p.name).localeCompare(String(b.p.name)));
+    g.from = Math.min(...g.rows.map((r) => r.span.from));
+    g.to = Math.max(...g.rows.map((r) => r.span.to));
+    g.done = g.rows.filter((r) => r.p.status === 'done').length;
+    g.pct = Math.round((g.done / g.rows.length) * 100);
+  }
+  groups.sort((a, b) => a.from - b.from);
+
+  // ── 축 범위 — 데이터 전체 + 앞뒤 여유. 오늘이 밖이면 오늘까지 늘려 '지금'이 항상 축 안에 있게. ──
+  const today = pjvTlDayStart(Date.now());
+  const sc = pjvTlScale();
+  const dayPx = sc.px;
+  let from = pjvTlDayStart(Math.min(...items.map((x) => x.span.from), today)) - 4 * PJV_TL_DAY;
+  const to = pjvTlDayStart(Math.max(...items.map((x) => x.span.to), today)) + 8 * PJV_TL_DAY;
+  const days = Math.max(1, Math.round((to - from) / PJV_TL_DAY) + 1);
+  const trackW = Math.max(360, Math.round(days * dayPx));
+  const xOf = (ms) => Math.round(((pjvTlDayStart(ms) - from) / PJV_TL_DAY) * dayPx);
+  const wOf = (a, b) => Math.max(Math.max(3, Math.round(dayPx)), xOf(b) - xOf(a) + Math.round(dayPx));
+
+  // ── 툴바 — 스케일 · 오늘 · 범례. 축이 계획인지 실적인지를 여기서 밝힌다. ──
+  const nPlan = items.filter((x) => x.span.kind === 'plan').length;
+  const scaleWrap = el('div', { class: 'pjv-gt-scales' });
+  for (const s of PJV_TL_SCALES) {
+    const b = el('button', { class: 'pjv-gt-scale' + (s.key === sc.key ? ' on' : ''), type: 'button', text: s.label });
+    b.onclick = (e) => { e.stopPropagation(); if (pjvTlState.scale === s.key) return; pjvTlState.scale = s.key; rerender(); };
+    scaleWrap.append(b);
+  }
+  const todayBtn = el('button', { class: 'pjv-gt-todaybtn', type: 'button', text: '오늘' });
+  wrap.append(el('div', { class: 'pjv-gt-toolbar' }, scaleWrap,
+    el('span', { class: 'pjv-gt-legend' },
+      el('span', { class: 'pjv-gt-key plan' }), el('span', { text: '계획 ' + nPlan }),
+      el('span', { class: 'pjv-gt-key actual' }), el('span', { text: '실적 ' + (items.length - nPlan) }),
+      el('span', { class: 'pjv-gt-key roll' }), el('span', { text: '리스트 진행률' })),
+    todayBtn));
+
+  // ── 셸: 하나의 스크롤 컨테이너 안에서 좌측 시트를 sticky 로 붙인다(가로 스크롤해도 이름은 남는다). ──
+  const scroller = el('div', { class: 'pjv-gt-scroll' });
+  const inner = el('div', { class: 'pjv-gt-inner', style: 'width:' + (PJV_GT_SHEET_W + trackW) + 'px' });
+
+  // ── 2단 시간축 헤더 ──
+  const axis = el('div', { class: 'pjv-gt-axis', style: 'width:' + trackW + 'px' });
+  const rowMon = el('div', { class: 'pjv-gt-mons' });
+  const rowSub = el('div', { class: 'pjv-gt-subs' });
+  {
+    let cur = from;
+    while (cur <= to) {
+      const d = new Date(cur);
+      const monEnd = new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime();
+      const segTo = Math.min(monEnd - PJV_TL_DAY, to);
+      rowMon.append(el('div', { class: 'pjv-gt-mon', style: 'left:' + xOf(cur) + 'px;width:' + (xOf(segTo) - xOf(cur) + dayPx) + 'px',
+        text: (d.getMonth() === 0 || cur === from ? d.getFullYear() + '. ' : '') + (d.getMonth() + 1) + '월' }));
+      cur = monEnd;
+    }
+    const step = sc.key === 'day' ? 1 : 7;
+    for (let i = 0; i < days; i += step) {
+      const ms = from + i * PJV_TL_DAY;
+      const d = new Date(ms);
+      const wknd = d.getDay() === 0 || d.getDay() === 6;
+      const cell = el('div', { class: 'pjv-gt-sub' + (wknd && sc.key === 'day' ? ' wknd' : ''),
+        style: 'left:' + xOf(ms) + 'px;width:' + Math.round(step * dayPx) + 'px' });
+      if (sc.key !== 'month') cell.append(el('span', { text: sc.key === 'day' ? String(d.getDate()) : pjvTlFmt(ms) }));
+      rowSub.append(cell);
+    }
+  }
+  axis.append(rowMon, rowSub);
+  inner.append(el('div', { class: 'pjv-gt-headrow' },
+    el('div', { class: 'pjv-gt-sheethead', style: 'width:' + PJV_GT_SHEET_W + 'px' },
+      el('span', { class: 'pjv-gt-th name', text: '이름' }), el('span', { class: 'pjv-gt-th span', text: '기간' })),
+    axis));
+
+  // ── 주말 음영 — '일' 스케일에서만(주·월에선 줄무늬가 돼 오히려 방해). 차트 전체 높이를 관통. ──
+  const bodyEl = el('div', { class: 'pjv-gt-body' });
+  const barPos = new Map<any, { x: number; w: number; y: number }>(); // 의존선 계산용
+  let y = 0;
+
+  for (const g of groups) {
+    const collapsed = pjvTlState.collapsed.has(g.key);
+    // 리스트 행 — 좌측은 접기 캐럿 + 이름 + n/총, 우측은 롤업 바.
+    const gr = el('div', { class: 'pjv-gt-row group' });
+    const caret = el('button', { class: 'pjv-gt-caret' + (collapsed ? ' off' : ''), type: 'button', 'aria-label': '접기/펼치기', text: '▾' });
+    caret.onclick = (e) => {
+      e.stopPropagation();
+      if (collapsed) pjvTlState.collapsed.delete(g.key); else pjvTlState.collapsed.add(g.key);
+      rerender();
+    };
+    gr.append(el('div', { class: 'pjv-gt-sheet', style: 'width:' + PJV_GT_SHEET_W + 'px' },
+      caret,
+      el('span', { class: 'pjv-gt-dot', style: g.color ? ('background:' + g.color) : '' }),
+      el('span', { class: 'pjv-gt-name group', text: g.name }),
+      el('span', { class: 'pjv-gt-count', text: g.done + '/' + g.rows.length }),
+      el('span', { class: 'pjv-gt-range', text: pjvTlFmt(g.from) + ' – ' + pjvTlFmt(g.to) })));
+    const gtrack = el('div', { class: 'pjv-gt-track', style: 'width:' + trackW + 'px' });
+    const gx = xOf(g.from), gw = wOf(g.from, g.to);
+    const roll = el('div', { class: 'pjv-gt-roll', style: 'left:' + gx + 'px;width:' + gw + 'px',
+      title: g.name + ' — ' + g.pct + '% (' + g.done + '/' + g.rows.length + ')' });
+    roll.append(el('div', { class: 'pjv-gt-roll-fill', style: 'width:' + g.pct + '%' }));
+    gtrack.append(roll);
+    gr.append(gtrack);
+    bodyEl.append(gr);
+    y += PJV_GT_ROW_H;
+    if (collapsed) continue;
+
+    for (const { p, span } of g.rows) {
+      const r = el('div', { class: 'pjv-gt-row' });
+      const overdue = p.due_date && p.status !== 'done' && Date.parse(p.due_date) < today;
+      r.append(el('div', { class: 'pjv-gt-sheet', style: 'width:' + PJV_GT_SHEET_W + 'px' },
+        pjvStatusIconStd ? pjvStatusIconStd(p.status) : el('span'),
+        el('span', { class: 'pjv-gt-name', text: p.name, title: p.name }),
+        el('span', { class: 'pjv-gt-range' + (overdue ? ' overdue' : ''), text: pjvTlFmt(span.from) + ' – ' + pjvTlFmt(span.to) })));
+      const track = el('div', { class: 'pjv-gt-track', style: 'width:' + trackW + 'px' });
+      const x = xOf(span.from), w = wOf(span.from, span.to);
+      const bar = el('div', {
+        class: 'pjv-gt-bar ' + span.kind + (p.status === 'done' ? ' done' : '') + (overdue ? ' overdue' : ''),
+        style: 'left:' + x + 'px;width:' + w + 'px', role: 'link', tabindex: '0',
+        title: p.name + '\n' + pjvTlFmt(span.from) + ' → ' + pjvTlFmt(span.to)
+          + ' (' + (Math.round((span.to - span.from) / PJV_TL_DAY) + 1) + '일'
+          + (span.kind === 'actual' ? ' · 실적' : '') + ')' + (overdue ? ' · 마감 초과' : ''),
+      });
+      const go = () => { location.hash = '#/projects2/p/' + p.id; };
+      bar.onclick = go;
+      bar.addEventListener('keydown', (ev: any) => { if (ev.key === 'Enter') go(); });
+      // 담당자 아바타는 바 **바깥 오른쪽**(Gen-C) — 바 안에 넣으면 짧은 바에서 잘린다.
+      const asg = pjvAssignees(p).slice(0, 2);
+      if (asg.length) {
+        const faces = el('div', { class: 'pjv-gt-faces', style: 'left:' + (x + w + 6) + 'px' });
+        for (const id of asg) faces.append(personFace(id, 'pjv-ava', id));
+        track.append(faces);
+      }
+      track.append(bar);
+      r.append(track);
+      bodyEl.append(r);
+      barPos.set(String(p.id), { x, w, y });
+      y += PJV_GT_ROW_H;
+    }
+  }
+  inner.append(bodyEl);
+
+  // ── 의존선(#1067) — 선행 → 후속. 직각 elbow + 화살촉. 양쪽 바가 다 보일 때만 그린다. ──
+  if (edges.length) {
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const link = document.createElementNS(svgNS, 'svg');
+    link.setAttribute('class', 'pjv-gt-links');
+    link.setAttribute('width', String(trackW));
+    link.setAttribute('height', String(y));
+    let drawn = 0;
+    for (const e of edges) {
+      const a = barPos.get(String(e.from_project_id)), b = barPos.get(String(e.to_project_id));
+      if (!a || !b || drawn > 300) continue;   // 상한 — 선이 수백 개면 차트가 아니라 실뭉치가 된다
+      const x1 = a.x + a.w, y1 = a.y + PJV_GT_ROW_H / 2;
+      const x2 = b.x, y2 = b.y + PJV_GT_ROW_H / 2;
+      const mid = x2 > x1 + 12 ? x1 + 8 : x1 + 8;
+      const path = document.createElementNS(svgNS, 'path');
+      path.setAttribute('d', 'M' + x1 + ' ' + y1 + ' H' + mid + ' V' + y2 + ' H' + (x2 - 5));
+      path.setAttribute('class', 'pjv-gt-link');
+      link.append(path);
+      const head = document.createElementNS(svgNS, 'path');
+      head.setAttribute('d', 'M' + (x2 - 5) + ' ' + (y2 - 3) + ' L' + x2 + ' ' + y2 + ' L' + (x2 - 5) + ' ' + (y2 + 3) + ' Z');
+      head.setAttribute('class', 'pjv-gt-arrow');
+      link.append(head);
+      drawn++;
+    }
+    if (drawn) { link.style.left = PJV_GT_SHEET_W + 'px'; inner.append(link); }
+  }
+
+  // ── 오늘 — 세로선 + 헤더 배지. 차트 전체를 관통하되 좌측 시트 아래로 깔린다. ──
+  const tx = PJV_GT_SHEET_W + xOf(today);
+  inner.append(el('div', { class: 'pjv-gt-todayline', style: 'left:' + tx + 'px' }));
+  inner.append(el('div', { class: 'pjv-gt-todaybadge', style: 'left:' + tx + 'px', text: '오늘' }));
+
+  scroller.append(inner);
+  wrap.append(scroller);
+  const jumpToday = () => { scroller.scrollLeft = Math.max(0, xOf(today) - scroller.clientWidth / 3); };
+  todayBtn.onclick = (e) => { e.stopPropagation(); jumpToday(); };
+  setTimeout(jumpToday, 0);   // 처음엔 오늘 근처 — 앞 여백부터 보여주면 대부분 빈 화면이라 길을 잃는다
+  return wrap;
+}
+
+// 테이블 기본 정렬 — 평면과 같은 규칙(진행 중 → 할 일 → 완료, 같으면 최신 갱신순).
+function pjvTableDefaultCmp(a, b) {
+  const rank = (p) => p.status === 'done' ? 2 : (p.status === 'todo' ? 1 : 0);
+  return rank(a) - rank(b) || (Date.parse(b.updated_at || 0) - Date.parse(a.updated_at || 0));
+}
+// 현재 보기 → 탭 키. 칸반=보드 / 표=테이블 / 타임라인 / 나머지(상태그룹·리스트박스·개요)는 리스트 계열.
+function pjvCurrentViewTab() {
+  if (pjvBoardView.kanban) return 'board';
+  if (pjvBoardView.table) return 'table';
+  if (pjvBoardView.timeline) return 'timeline';
+  return 'list';
+}
+// 탭 하나만 켜고 나머지 보기 플래그는 끈다(상호배타).
+function pjvSetViewTab(key) {
+  pjvBoardView.kanban = key === 'board';
+  pjvBoardView.table = key === 'table';
+  pjvBoardView.timeline = key === 'timeline';
+  if (key !== 'list') { pjvBoardView.overview = false; return; }
+  pjvBoardView.overview = false;
+  if (!pjvBoardView.byFolder) pjvBoardView.byStatus = true;
+}
+// ctx.onView() = 뷰 전환 후 재렌더(스코프별 뷰 영속 포함). 없으면 탭은 표시 전용.
+function pjvViewTabsRow(ctx?) {
   const row = el('div', { class: 'pjv-vtabs', role: 'tablist', 'aria-label': '뷰' });
+  const syncs: any[] = [];
   for (const t of PJV_VIEW_TABS) {
-    const on = t.key === 'list'; // 기본 활성 탭 표시(현재 보드가 리스트형)
-    const b = el('button', { class: 'pjv-vtab' + (on ? ' active' : ''), type: 'button', role: 'tab', 'aria-selected': String(on) },
+    const b = el('button', { class: 'pjv-vtab', type: 'button', role: 'tab' },
       pjvTabIcon(t.key), el('span', { class: 'pjv-vtab-label', text: t.label }));
-    b.onclick = (e) => { e.stopPropagation(); toast(t.label + ' 뷰는 준비 중이에요 — 곧 열립니다'); };
+    const sync = () => {
+      const on = pjvCurrentViewTab() === t.key;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', String(on));
+    };
+    syncs.push(sync);
+    b.onclick = (e) => {
+      e.stopPropagation();
+      if (pjvCurrentViewTab() === t.key) return;
+      pjvSetViewTab(t.key);
+      syncs.forEach((s) => s());
+      if (ctx && ctx.onView) ctx.onView();
+    };
     row.append(b);
   }
   const add = el('button', { class: 'pjv-vtab pjv-vtab-add', type: 'button', title: '뷰 추가' }, pjvTbIcon('plus', 'sm'), el('span', { class: 'pjv-vtab-label', text: '뷰' }));
   add.onclick = (e) => { e.stopPropagation(); toast('뷰 추가는 준비 중이에요'); };
   row.append(el('span', { class: 'pjv-vtab-sep' }), add);
+  syncs.forEach((s) => s());
+  // render() 가 뷰를 바꿔도 탭이 따라오게 — 헤더는 한 번만 만들어지므로 sync 를 걸어둔다.
+  (row as any)._sync = () => syncs.forEach((s) => s());
   return row;
 }
 
@@ -8018,7 +8405,10 @@ function pjvProjGridTemplate(fields) {
   //  컬럼 순서(#611): 저장된 열 순서(기본 키 + 커스텀 'f:id')대로 트랙을 깐다. 시작일·생성일·갱신일은 기본 폭 0(숨김).
   const order = pjvColOrderList('proj', fields);
   const tracks = order.map((k) => pjvColTrackFor(k, fields)).join(' ');
-  return 'minmax(var(--pjv-name-min, 240px), 1fr) ' + (tracks ? tracks + ' ' : '') + '34px';
+  // 테이블 뷰(#1067)는 맨 앞에 **행 번호 컬럼**을 하나 더 깐다 — ClickUp Table 의 number row.
+  //  행/헤더 모두 이 함수를 쓰므로 트랙만 늘리면 정렬이 저절로 맞는다(행 컴포넌트는 안 건드림 — 번호 칸은 CSS ::before).
+  const num = pjvBoardView.table ? '38px ' : '';
+  return num + 'minmax(var(--pjv-name-min, 240px), 1fr) ' + (tracks ? tracks + ' ' : '') + '34px';
 }
 
 // ── 열 순서 드래그 재정렬(#611) — 컬럼 헤더를 잡아 좌우로 끌어 순서를 바꾼다. 기본 열(팀원·마감·…)·커스텀 필드 모두 대상. ──
@@ -10557,7 +10947,13 @@ function projectTerminalSection(id, members, meId, base, projectName, project?) 
   // 세션 기록(#905 C1) — 끝난 세션 포함 중앙 대화록. 공간 아끼려 섹션 대신 여기 버튼→모달.
   const sessLogBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '📜 세션 기록' });
   sessLogBtn.addEventListener('click', () => openProjectSessionsModal(id, projectName));
-  card.append(el('div', { class: 'card-head' }, el('h3', { text: '터미널 세션' }), el('div', { class: 'card-head-actions' }, sessLogBtn, newBtn)));
+  // 미리보기(#1036) — 작업 화면을 따로 띄워 본다. 세션 기록과 같은 이유로 섹션이 아니라 버튼→모달
+  //  (상세 페이지는 이미 길다). 관련 레포가 없는 프로젝트에는 아예 두지 않는다.
+  const previewBtn = projectRepos.length
+    ? el('button', { class: 'btn btn-ghost btn-sm', title: '작업 중인 화면을 따로 띄워 확인', text: '🖥 미리보기' }) : null;
+  if (previewBtn) previewBtn.addEventListener('click', () => openProjectPreviewModal(id, projectName, projectRepos));
+  card.append(el('div', { class: 'card-head' }, el('h3', { text: '터미널 세션' }),
+    el('div', { class: 'card-head-actions' }, ...(previewBtn ? [previewBtn] : []), sessLogBtn, newBtn)));
   card.append(body);
   let sessions: any[] = [];
   let selected: any = null;
@@ -11054,6 +11450,8 @@ export {
   pjvDueControl,
   pjvFieldControl,
   pjvFmtDate,
+  pjvFolderIsArchive,
+  pjvFolderIsSpace,
   pjvGridTemplate,
   pjvIsOverdue,
   pjvCloseProjectModalOnRoute,

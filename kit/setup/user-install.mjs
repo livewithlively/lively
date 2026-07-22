@@ -297,6 +297,11 @@ function installCli() {
   //  번들에 없으면(구버전) 조용히 건너뜀 — 그럼 mcp-local 서브커맨드만 미동작(하위호환).
   const mcpLocal = cloneAbs(join("cli", "lively-mcp-local.mjs"));
   if (existsSync(mcpLocal)) { copyFileSync(mcpLocal, join(lib, "lively-mcp-local.mjs")); chmodSync(join(lib, "lively-mcp-local.mjs"), 0o755); }
+  // 게이트웨이 stdio 프록시(#1079) — `lively mcp` 가 import 해 실행. lively.mjs 옆에 둔다.
+  //  ⚠ 이게 빠지면 `lively mcp` 가 못 떠서 **lively MCP 자체가 안 붙는다**(http 직결과 달리 로컬 파일이 필수).
+  //   구버전 번들(파일 없음)이면 조용히 건너뛴다 — 그 경우 등록도 여전히 http 라 짝이 맞는다.
+  const mcpGw = cloneAbs(join("cli", "lively-mcp-gateway.mjs"));
+  if (existsSync(mcpGw)) { copyFileSync(mcpGw, join(lib, "lively-mcp-gateway.mjs")); chmodSync(join(lib, "lively-mcp-gateway.mjs"), 0o755); }
   // 워크트리 셀프서비스 코어(#900) — lively.mjs·lively-mcp-local.mjs 가 import 한다. 둘 옆(lib/)에 둔다(구버전 번들엔 없으면 스킵).
   const repoCore = cloneAbs(join("cli", "repo-worktree-core.mjs"));
   if (existsSync(repoCore)) { copyFileSync(repoCore, join(lib, "repo-worktree-core.mjs")); chmodSync(join(lib, "repo-worktree-core.mjs"), 0o755); }

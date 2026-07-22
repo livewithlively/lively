@@ -93,7 +93,7 @@ const ADMIN_SECTIONS = [
     //  서버 me_profile_update 가 **부분 갱신(patch)** 이라(미전송 필드 보존) 화면을 쪼개도 한쪽이 다른쪽을 안 지운다.
     //  전 구성원 노출·전 구성원 편집 가능(내 것이니까) — 아래 어떤 권한 게이트에도 걸지 않는다.
     // '내 정보'(프사·이름·닉네임·비번)는 관리에서 분리 — 우측 상단 프로필 클릭 시 팝업(openMyProfileModal, #762). 여기 nav엔 두지 않는다.
-    { key: 'me-ai', label: 'AI 개인화', meaning: null, group: 'me' },
+    { key: 'me-ai', label: '내 AI 설정', meaning: null, group: 'me' },
     { key: 'me-logins', label: '내 서비스 로그인', meaning: null, group: 'me' },
     { key: 'me-assets', label: '내 스킬 · 훅', meaning: null, group: 'me' },
     // ── 조직 ──
@@ -6603,7 +6603,7 @@ export async function openMyProfileModal() {
     const status = el('span', { class: 'admin-status' });
     saveBtn.addEventListener('click', async () => {
         saveBtn.disabled = true;
-        // body_md 는 **안 보낸다** — 서버가 미전송 필드를 보존하므로 [AI 개인화]가 지워지지 않는다.
+        // body_md 는 **안 보낸다** — 서버가 미전송 필드를 보존하므로 [내 AI 설정]이 지워지지 않는다.
         const payload = { display_name: nameIn.value.trim(), nickname: nickIn.value.trim(), ...ava.payload() };
         try {
             const res = await api('/api/ui/me/profile', { method: 'POST', body: JSON.stringify(payload) });
@@ -6618,7 +6618,7 @@ export async function openMyProfileModal() {
     });
     bodyWrap.replaceChildren(el('p', { class: 'admin-hint', style: 'margin:0 0 14px', text: '이름·사진은 프로젝트·작업 기록·팀 화면 어디에서나 나를 가리키는 얼굴이에요.' }), field('프로필 사진', ava.node), field('이름', nameIn), field('닉네임 (활동 로그 등에 표시)', nickIn), data.email ? field('이메일 (로그인 아이디 · 변경은 관리자)', el('div', { class: 'admin-ro', text: data.email })) : null, data.email ? field('비밀번호', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' }, el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '비밀번호 변경', onclick: () => changePasswordModal() }), el('span', { class: 'admin-hint', style: 'margin:0', text: '현재 비밀번호를 확인한 뒤 새 비밀번호로 바꿔요.' }))) : null, el('div', { class: 'admin-actions' }, saveBtn, status));
 }
-// ── [내 설정 ▸ AI 개인화] — 개인 레이어(org_member.body_md). ──
+// ── [내 설정 ▸ 내 AI 설정] — 개인 레이어(org_member.body_md). ──
 //  #846 이 배선을 완성했다: previewMemberContext 가 `## 내 개인 규칙 (나에게만 적용 — 팀 공유 아님)` 블록으로
 //  **본인 세션에만** 싣는다(memberId = bearer principal — 남의 개인 규칙이 새지 않는다). 그 전엔 저장은 됐지만
 //  **어떤 주입 경로도 읽지 않았다** — 그래서 개인 규칙을 올릴 데가 없어 injection='always' 지식(=전원 공유)
@@ -6629,7 +6629,7 @@ export async function openMyProfileModal() {
 //   · 담당 영역 — 팀·카테고리 오너십(${team})이 이미 주입한다(중복).
 //   · 자주 쓰는 도구·레포 — 세션이 열린 폴더·레포가 말해 준다(중복).
 async function myAiSection(detail) {
-    detail.replaceChildren(el('div', { class: 'card' }, skeleton('AI 개인화를 불러오는 중')));
+    detail.replaceChildren(el('div', { class: 'card' }, skeleton('내 AI 설정을 불러오는 중')));
     let data;
     try {
         data = await api('/api/ui/me/profile');
@@ -6718,7 +6718,7 @@ async function myAiSection(detail) {
         saveBtn.disabled = false;
     });
     const pv = previewExpander();
-    detail.replaceChildren(sectionHead('AI 개인화', null, '여기 입력·선택한 내용은 **내** AI가 매 세션을 시작할 때 \'내 개인 규칙\'으로 읽습니다 — 나에게만 적용되고 팀에는 공유되지 않아요. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).'), el('div', { class: 'card admin-form-narrow' }, field('역할', roleIn), field('개발 이해도', el('div', {}, devChips, devHint)), field('호칭 (AI가 나를 부르는 말)', addressIn), field('말투', toneChips), field('사용 언어 (AI가 답하는 언어)', el('div', {}, langChips, el('div', { style: 'margin-top:8px' }, langCustom), el('p', { class: 'prof-hint', text: '고르거나 직접 적은 언어로 내 AI가 답해요. 비우면 조직 기본값(주로 한국어)을 따릅니다.' }))), field('추가 메모', memoTa), el('div', { class: 'admin-actions' }, saveBtn, status, pv.btn), pv.box));
+    detail.replaceChildren(sectionHead('내 AI 설정', null, '여기 입력·선택한 내용은 **내** AI가 매 세션을 시작할 때 \'내 개인 규칙\'으로 읽습니다 — 나에게만 적용되고 팀에는 공유되지 않아요. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).'), el('div', { class: 'card admin-form-narrow' }, field('역할', roleIn), field('개발 이해도', el('div', {}, devChips, devHint)), field('호칭 (AI가 나를 부르는 말)', addressIn), field('말투', toneChips), field('사용 언어 (AI가 답하는 언어)', el('div', {}, langChips, el('div', { style: 'margin-top:8px' }, langCustom), el('p', { class: 'prof-hint', text: '고르거나 직접 적은 언어로 내 AI가 답해요. 비우면 조직 기본값(주로 한국어)을 따릅니다.' }))), field('추가 메모', memoTa), el('div', { class: 'admin-actions' }, saveBtn, status, pv.btn), pv.box));
 }
 // ── [내 설정 ▸ 내 서비스 로그인] — member_secret vault + OAuth 연결 + git 인증 ──
 async function myLoginsSection(detail) {

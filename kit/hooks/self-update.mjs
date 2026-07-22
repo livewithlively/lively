@@ -183,14 +183,24 @@ function reconcileClaudeMcp(gw, token) {
   if (!conf || typeof conf !== "object" || Array.isArray(conf)) return;
   const servers = (conf.mcpServers && typeof conf.mcpServers === "object" && !Array.isArray(conf.mcpServers)) ? conf.mcpServers : {};
   const shim = join(LIVELY, "bin", process.platform === "win32" ? "lively.cmd" : "lively");
+  // #1079 — lively 본체는 **로컬 stdio 프록시**(`lively mcp`)로 붙인다. http 직결이면 세션 시작 때 게이트웨이에
+  //  못 닿을 경우(사내 게이트웨이 + VPN 미접속) 하네스가 failed 로 마킹하고 그 세션 내내 복구하지 않기 때문이다.
+  //  프록시로 갈 수 있는 조건 — 둘 다 만족해야 한다(하나라도 아니면 종전 http 유지 = 무회귀):
+  //   (a) 프록시 본체가 실제로 설치돼 있다(구버전 번들엔 없다. 없는데 stdio 로 등록하면 lively 가 통째로 안 뜬다)
+  //   (b) 롤백 스위치가 꺼져 있다 — `echo http > ~/.lively/mcp-transport` 로 언제든 종전 방식으로 되돌린다
+  const proxyPath = join(LIVELY, "lib", "lively-mcp-gateway.mjs");
+  const canProxy = existsSync(proxyPath) && readL("mcp-transport") !== "http";
   const want = {};
   // ⚠ 헤더 세트는 register-clients.sh(scripts/·kit/setup/)·kit/cli/lively.mjs 와 **동일하게 유지**(lively.test.mjs ④ 가 4곳 parity 강제).
   //  값은 정적 리터럴(${LIVELY_*:-}, 비밀 아님) — 접속 시 하네스가 제 env 로 확장. Authorization(토큰)만 멤버 값이라 아래 reconcile 이 안 건드린다.
-  want["lively"] = { type: "http", url: `${gw}/mcp`, headers: {
-    Authorization: `Bearer ${token}`,
-    "x-lively-session": "${LIVELY_SESSION_ID:-}",  // #852
-    "x-lively-mode": "${LIVELY_MODE:-}",           // #1007+ 단일 실행모드 헤더(readonly|incognito) — 미래 모드도 재등록 불요
-  } };
+  //  (stdio 프록시로 가면 이 헤더들은 프록시가 상류 호출에 붙인다 — 같은 이름·같은 값, 출처만 설정→env/토큰파일.)
+  want["lively"] = canProxy
+    ? { type: "stdio", command: shim, args: ["mcp"], env: {} }
+    : { type: "http", url: `${gw}/mcp`, headers: {
+        Authorization: `Bearer ${token}`,
+        "x-lively-session": "${LIVELY_SESSION_ID:-}",  // #852
+        "x-lively-mode": "${LIVELY_MODE:-}",           // #1007+ 단일 실행모드 헤더(readonly|incognito) — 미래 모드도 재등록 불요
+      } };
   want["lively-local"] = { type: "stdio", command: shim, args: ["mcp-local"], env: {} };
   // 조직 추가 MCP 서버(mcp-servers.json) — [] 또는 {servers:[]} 양식 모두 허용. enabled·name 있는 것만, additive.
   try {
@@ -211,6 +221,14 @@ function reconcileClaudeMcp(gw, token) {
   for (const [name, entry] of Object.entries(want)) {
     const cur = servers[name];
     if (!cur) { servers[name] = entry; added++; log(`MCP additive 등록: ${name}`); continue; } // 없는 서버 = 통째로 add(종전)
+    // #1079 — additive 무손실의 **유일한 예외**: 이미 있는 lively 를 http 직결 → stdio 프록시로 옮긴다.
+    //  이건 '멤버 값 덮어쓰기'가 아니라 **우리가 심은 항목의 전송방식 교정**이다(같은 게이트웨이·같은 신원·같은 툴 이름).
+    //  토큰은 설정에서 사라지고 ~/.lively/token 으로만 남는다(시크릿 노출면 축소). 되돌리려면 롤백 스위치(위 canProxy).
+    if (name === "lively" && canProxy && cur.type !== "stdio") {
+      servers[name] = entry; added++;
+      log("MCP transport 마이그레이션: lively http 직결 → stdio 프록시(#1079, 다음 세션 적용)");
+      continue;
+    }
     // 이미 등록됨 — URL·토큰·기존 헤더는 **불변**(멤버 값 보존). 다만 **빠진 헤더 키만** 더한다(모드 헤더 등 새 배선을 재등록 없이 전파, 1세션 지연).
     //  remove/overwrite 를 안 하므로 무손실 불변식 유지. Authorization(토큰)은 절대 안 건드린다(멤버 값 — 값 변경은 명시적 lively update 몫).
     if (entry.headers && cur.headers && typeof cur.headers === "object" && !Array.isArray(cur.headers)) {
@@ -238,9 +256,21 @@ async function main() {
   if (!target) return;                               // 게이트웨이가 버전을 안 줌(구버전/장애) → 무동작(fail-safe)
   const local = readL("kit-version");
   const forced = process.argv.includes("--force");
-  if (!forced && local === target) return;           // 최신
-
   const harnesses = installedHarnesses();
+
+  // 최신이어도 **MCP 등록 정합은 맞춘다**(#1079 실측 결함).
+  //  새 배선이 담긴 버전을 설치하는 실행은 언제나 **구버전 코드**가 수행한다 → 그 배선(#862 additive 등록,
+  //  #1079 transport 마이그레이션)은 그 실행에서 못 하고 '다음 실행' 몫이 된다. 그런데 다음 실행은 여기서
+  //  local===target 이라 곧장 빠져나가므로, **버전이 그대로인 한 영영 반영되지 않는다.**
+  //  실측(2026-07-22): 프록시 본체는 lib/ 에 깔렸는데 .claude.json 은 http 그대로였다.
+  //  비용은 사실상 0 — 파일을 읽어 비교하고 바꿀 게 없으면 쓰지 않는다(reconcile 의 `if (!added) return`).
+  if (!forced && local === target) {
+    if (harnesses.includes("claude")) {
+      try { reconcileClaudeMcp(gw, token); } catch (e) { log(`MCP reconcile 예외(무시): ${(e && e.message) || e}`); }
+    }
+    return;
+  }
+
   if (!harnesses.length) { log("설치된 하네스 배선을 못 찾음 — 건너뜀"); return; }
 
   // 백오프 — 같은 버전으로 최근에 실패했으면 쉬어간다(매 세션 다운로드 재시도로 게이트웨이를 두들기지 않게).

@@ -623,23 +623,29 @@ function backupUserMcp(name) {
   try { writeFileSync(p, JSON.stringify(bak, null, 2) + "\n", { mode: 0o600 }); } catch { /* best-effort — 백업 실패해도 등록은 진행 */ }
 }
 
-// lively 본체 등록 — **토큰을 담은 유일한 MCP 항목**이라 로그인(신원 교체)도 이것만 다시 굽는다.
+// lively 본체 등록 — **로컬 stdio 프록시**(`lively mcp`)로 등록한다(#1079).
 //  remove 후 add(재실행 안전). remove 실패는 정상(미등록 상태). 호출 전에 has("claude") 를 확인할 것.
 //  ⚠ 위치는 claude 가 정한다(--scope user → CLAUDE_CONFIG_DIR 존중, deploy/provision-profile.sh:37) —
 //   .claude.json 을 우리가 직접 읽어 판단하지 않는다(프로필 격리 #346 에서 엉뚱한 파일을 보게 된다).
-//  ⚠ **헤더는 반드시 register-clients.sh 와 같은 세트**(그쪽이 번들 캐노니컬). x-lively-session(#852)을 빠뜨리면
-//   remove→add 가 **기존 세션 헤더를 지워** 그 세션의 작업 귀속이 끊긴다 — 프로비저닝된 멤버(provision-member.sh:122)가
-//   재로그인·재설치할 때 실제로 발생한다. 값은 **리터럴로** 넘긴다: 확장은 접속 시 하네스가 제 env 로 한다.
-//   `:-` 기본값이 없으면 세션 밖(랩탑)에서 "Missing environment variables" 경고가 뜬다(register-clients.sh 실측).
-//   x-lively-mode(#1007+): 세션을 LIVELY_MODE=readonly|incognito 로 실행하면 그 세션만 그 모드(게이트웨이 강제). 미설정=빈 값=normal. 단일 헤더라 미래 모드도 재등록 불요.
-function registerLivelyMcp(gw, tok) {
+//
+//  ⚠ **왜 http 직결이 아닌가(#1079).** 직결이면 세션이 뜨는 순간 게이트웨이에 못 닿을 때(사내 게이트웨이 +
+//   VPN 미접속) 하네스가 그 서버를 failed 로 마킹하고 **그 세션 내내 복구하지 않는다** — 도중에 VPN 을 붙여도
+//   사람이 `/mcp reconnect lively` 를 직접 쳐야 했다. stdio 프록시는 로컬 프로세스라 항상 connected 이고,
+//   상류가 살아나면 tools/list_changed 로 목록을 되살린다(lib/lively-mcp-gateway.mjs).
+//
+//  종전 http 등록이 헤더로 싣던 것은 이제 **프록시가 상류 호출에 붙인다**(같은 의미·같은 이름):
+//   Authorization ← ~/.lively/token (설정 파일에서 평문 토큰이 사라진다) · x-lively-session ← LIVELY_SESSION_ID(#852)
+//   · x-lively-mode ← LIVELY_MODE(#1007+) · x-lively-harness ← 명시 stamp(프록시를 거치면 UA 가 우리 것이 되므로 필수).
+//   env 는 하네스가 spawn 할 때 그대로 상속되므로 종전과 같은 값이 실린다.
+//
+//  코드 자동 업뎃(#858)에 무임승차: command(심 절대경로)만 등록하고 서버 코드는 lib/lively-mcp-gateway.mjs 로
+//   매 세션 최신 → 코드가 바뀌어도 재등록 불필요.
+function registerLivelyMcp(gw, _tok) {
   run("claude", ["mcp", "remove", "lively"], { allowFail: true, quiet: true });
   try {
-    run("claude", ["mcp", "add", "--transport", "http", "--scope", "user", "lively", `${gw}/mcp`,
-      "--header", `Authorization: Bearer ${tok}`,
-      "--header", "x-lively-session: ${LIVELY_SESSION_ID:-}",
-      "--header", "x-lively-mode: ${LIVELY_MODE:-}"], { quiet: true });
-    ok(`MCP 등록: lively → ${gw}/mcp`);
+    const shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively");
+    run("claude", ["mcp", "add", "--transport", "stdio", "--scope", "user", "lively", shim, "mcp"], { quiet: true });
+    ok(`MCP 등록: lively (stdio 프록시 → ${gw}/mcp)`);
     return true;
   } catch (e) { fail(`MCP 등록 실패(lively): ${e.message}`); return false; }
 }
@@ -1281,6 +1287,15 @@ async function cmdMcpLocal() {
   await serveMcpLocal();
 }
 
+// `lively mcp` — 게이트웨이 MCP 의 로컬 stdio 프록시(#1079). 하네스가 매 세션 spawn 한다.
+//  http 직결이 아니라 이걸 거치는 이유: 세션 시작 때 게이트웨이에 못 닿아도(VPN 미접속 등)
+//  하네스에겐 항상 connected 로 보이고, 상류가 살아나면 그 세션에서 그대로 복구되기 때문이다.
+//  본체는 lib/lively-mcp-gateway.mjs (여긴 위임만) — lively-mcp-local 과 같은 레일.
+async function cmdMcpGateway() {
+  const { serveMcpGateway } = await import(new URL("./lively-mcp-gateway.mjs", import.meta.url));
+  await serveMcpGateway();
+}
+
 // `lively init` — 이 폴더를 라이블리 프로젝트로(사람 표면). MCP 툴 lively_local_project_init 과 **같은 코어**를 쓴다
 //  (project-init-core.mjs — 드리프트 0). D8: 사람이 촉발해야 자연스러운 것은 사람 표면으로.
 //  기본은 **제안만**(무변경) — 사람이 보고 --create / --bind <id> 로 확정한다. '알아서 만들기'를 기본으로 두지 않는 이유:
@@ -1726,6 +1741,8 @@ async function main() {
     case "node": return cmdNode(argv.slice(argv.indexOf("node") + 1));
     // mcp-local — 로컬 조작 stdio MCP 서버(하네스가 spawn). stdin 이 닫힐 때까지 블로킹.
     case "mcp-local": return cmdMcpLocal();
+    // mcp — 게이트웨이 MCP 의 로컬 stdio 프록시(하네스가 spawn, #1079). 마찬가지로 블로킹.
+    case "mcp": return cmdMcpGateway();
     // repo — 워크트리 셀프서비스(list/worktree). MCP 툴과 같은 코어. 나머지 인자 원형 보존.
     case "repo": return cmdRepo(argv.slice(argv.indexOf("repo") + 1));
     // resume — 다른 환경에서 내 세션 이어받기(#905 C1). 중앙 트랜스크립트를 이 PC 로 내려 claude --resume.

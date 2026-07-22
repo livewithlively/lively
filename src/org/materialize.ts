@@ -315,12 +315,12 @@ export async function materializeOrgContent(): Promise<Materialized> {
   // members/_template.md — 개인 레이어 견본(발행물에 복사됨). 실제 멤버 파일도 함께 쓰되(게이트웨이 신원용)
   //  publish 는 _template 만 아티팩트에 포함하고 실제 멤버 파일은 제외한다(프라이버시).
   // ⚠ 구 견본은 "members/local.md 로 복사해 채우세요" 였는데 **local.md 를 읽는 코드가 없다**(#837).
-  //  개인 레이어의 진실 출처는 org_member.body_md 하나뿐 — 관리탭 [내 설정 › AI 개인화]가 쓰고,
+  //  개인 레이어의 진실 출처는 org_member.body_md 하나뿐 — 관리탭 [내 설정 › 내 AI 설정]이 쓰고,
   //  buildPersonalBlock() 이 읽어 매 세션 주입한다. 그래서 견본은 파일이 아니라 그 화면을 가리킨다.
   //  (담당 영역은 팀·카테고리 오너십이 이미 주입해 중복이라 #837 에서 뺐다.)
   await writeFile(join(dir, "members", "_template.md"),
     "# 개인 레이어 (견본 — 이 파일을 편집하지 마세요)\n\n"
-    + "개인 규칙은 관리탭 **[내 설정 › AI 개인화]** 에서 저장합니다. 저장하면 내 AI 세션 첫머리에 자동으로 실립니다.\n"
+    + "개인 규칙은 관리탭 **[내 설정 › 내 AI 설정]** 에서 저장합니다. 저장하면 내 AI 세션 첫머리에 자동으로 실립니다.\n"
     + "(이 폴더의 `<멤버id>.md` 는 게이트웨이가 신원용으로 내보낸 사본입니다 — 손으로 고쳐도 반영되지 않습니다.)\n\n"
     + "담는 것 — 역할 / 호칭·말투 선호 / 그 밖에 나에게만 적용할 규칙\n");
   for (const m of await listMembers()) {
