@@ -6927,6 +6927,40 @@ async function myAssetsSection(detail) {
     };
     await reload();
 }
+// 라이블리 확인 다이얼로그 — 브라우저 confirm() 대체(#1062). 파괴적 동작(종료·삭제) 확인은 전부 이걸 쓴다.
+//  왜: 브라우저 기본 confirm 은 디자인시스템 밖이고(OS 팝업), 줄바꿈·강조·위험도 표현이 안 되며,
+//   포커스가 확인 버튼에 잡혀 엔터 연타로 실수하기 쉽다. 여기선 기본 포커스를 '취소'에 둔다.
+//  반환: Promise<boolean> — 확인=true, 취소·Esc·바깥클릭=false. 호출부는 `if (!await confirmDialog(...)) return;`.
+function confirmDialog(opts) {
+    return new Promise((resolve) => {
+        let done = false;
+        const finish = (v) => { if (done)
+            return; done = true; back.remove(); document.removeEventListener('keydown', onKey); resolve(v); };
+        const body = el('div', { class: 'ov-confirm-body' });
+        if (opts.message)
+            body.append(el('p', { class: 'ov-confirm-msg', text: opts.message }));
+        for (const l of opts.lines || [])
+            body.append(el('p', { class: 'ov-confirm-line', text: l }));
+        if (opts.note)
+            body.append(el('p', { class: 'ov-confirm-note', text: opts.note }));
+        const cancel = el('button', { class: 'btn btn-ghost', type: 'button', text: opts.cancelText || '취소', onclick: () => finish(false) });
+        const ok = el('button', { class: 'btn ' + (opts.danger ? 'btn-danger' : 'btn-primary'), type: 'button', text: opts.confirmText || '확인', onclick: () => finish(true) });
+        const box = el('div', { class: 'ov-box ov-confirm' + (opts.danger ? ' danger' : '') }, el('div', { class: 'ov-head' }, el('h3', { text: opts.title })), body, el('div', { class: 'ov-confirm-acts' }, cancel, ok));
+        const back = el('div', { class: 'ov-back ov-confirm-back' }, box);
+        back.addEventListener('click', (e) => { if (e.target === back)
+            finish(false); });
+        const onKey = (ev) => {
+            if (ev.key === 'Escape')
+                finish(false);
+            // 엔터는 '포커스된 버튼'을 누른다 — 기본 포커스가 취소라, 무심코 엔터를 쳐도 파괴적 동작이 안 일어난다.
+            if (ev.key === 'Enter' && document.activeElement === ok)
+                finish(true);
+        };
+        document.addEventListener('keydown', onKey);
+        document.body.append(back);
+        cancel.focus();
+    });
+}
 function overlay(title, ...content) {
     const close = el('button', { class: 'btn btn-ghost btn-sm', text: '닫기' });
     const box = el('div', { class: 'ov-box' }, el('div', { class: 'ov-head' }, el('h3', { text: title }), close), ...content);
@@ -6949,4 +6983,4 @@ function overlay(title, ...content) {
 //  데이터: GET /api/ui/v6/tasks/:id/detail 1회 페치, 각 편집은 전용 엔드포인트 패치 후 모달만 refresh.
 //  닫을 때 변경 있었으면 페이지 reload() 로 리스트 반영. 보안: el()/textContent/renderMarkdown 만.
 // ════════════════════════════════════════════
-export { changePasswordModal, copyButton, deployCommands, field, hasScope, installCmd, loadAdmin, overlay, renderSystem, };
+export { changePasswordModal, copyButton, deployCommands, field, hasScope, installCmd, loadAdmin, overlay, confirmDialog, renderSystem, };
