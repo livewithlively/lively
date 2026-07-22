@@ -662,7 +662,11 @@ async function main() {
     installCodex(ctx, mcpUrl);
   }
 
-  console.log("  · MCP 등록(Claude)은 setup 의 register-clients.sh 가 담당. Codex MCP 는 위 config.toml 에 포함.");
+  // ⚠ 문구는 **실제 동작과 일치해야 한다**(#1087). 종전엔 "setup 의 register-clients.sh 가 담당" 이라 했는데,
+  //  `lively install` 경로에선 바로 다음 단계인 CLI 의 [3/3] 이 등록한다 — 화면상 이 줄 **바로 아래**에서
+  //  "✓ MCP 등록: lively" 가 뜨므로 사용자는 서로 모순된 두 문장을 연달아 읽었다. 게다가 윈도우 사용자에겐
+  //  실행조차 못 하는 `.sh` 를 가리켰다. 설치 화면의 거짓 안내는 장애 진단을 통째로 헛돌게 만든다.
+  console.log("  · Claude MCP 등록은 여기서 하지 않습니다 — 이어지는 `lively install` 단계(또는 박스 프로비저닝)가 처리합니다. Codex MCP 는 위 config.toml 에 포함.");
   console.log("✓ user-level 설치 완료 — 다음 세션부터 적용(현 세션은 안전).");
 }
 
