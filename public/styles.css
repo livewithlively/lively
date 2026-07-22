@@ -5301,6 +5301,21 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-pop-lrow .dash-pop-name { font-weight: 600; }
 .dash-pop-treegh { padding-top: 10px; }
 
+/* #req 그룹 팝오버 '리스트로도 묶기'(ClickUp Also group by List) — 그룹 기준 줄과 토글 사이 구분선. */
+.pjv-groupby-sep { height: 1px; background: var(--line); margin: 8px 2px 2px; }
+.pjv-groupby-pop .pjv-closed-row { padding: 6px 4px 2px; }
+
+/* #req 개요 '+ 리스트' 카드의 찾기/만들기 드롭다운 — 위=이미 있는 리스트 검색, 맨 아래=새로 만들기(스페이스·폴더 지정 팝업). */
+.dash-addpop { width: 300px; }
+.dash-addpop-row { align-items: center; gap: 8px; }
+.dash-addpop-row.active { background: var(--bg-punch); }
+.dash-addpop-row .dash-pop-txt { flex: 1; min-width: 0; }
+.dash-addpop-row .dash-pop-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-addpop-badge { flex: none; font-size: 10.5px; font-weight: 700; color: var(--muted-2); border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; }
+.dash-addpop-badge.is-add { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 36%, var(--bg)); }
+.dash-addpop-sep { height: 1px; background: var(--line); margin: 5px 4px; }
+.dash-addpop-create .dash-pop-name { color: var(--blue); }
+
 /* #req 리스트 헤더 우측 목록 필터 버튼 — 위젯 헤더 [⚙][→] 와 같은 아이콘버튼. 평소 옅게, 헤더 hover 시 또렷하게. */
 .dash-lh-ctl { margin-left: auto; align-self: center; display: inline-flex; align-items: center; gap: 6px; flex: none; padding-left: 8px; }
 .dash-lh-filter { width: 24px; height: 22px; opacity: .55; transition: opacity .12s ease; }
