@@ -30,10 +30,12 @@ export interface SessionState {
   created: number | null;     // session_created(epoch초)
   last_busy: number | null;   // @box_last_busy(마지막 작업 epoch초) — restorable 카드 시간표시용
   last_seen: string | null;   // 마지막 라이브(tmux) 관측 시각(진단용)
+  claude_session_id: string | null; // #1059 정밀복원 — 이 box 가 현재 도는 claude 세션 UUID(work-flag 훅 보고, last-write-wins). null=미상→picker.
 }
 
-// createSession 이 넘기는 desired-state(생성/재생성 시 upsert). DB 컬럼과 1:1.
-export type SessionStateInput = Omit<SessionState, "last_seen">;
+// createSession 이 넘기는 desired-state(생성/재생성 시 upsert). last_seen 은 서버가 now(), claude_session_id 는
+//  생성 시점엔 미상(work-flag 훅이 세션 활동 때 사후 setClaudeSessionId 로 채움) — 둘 다 입력에서 제외.
+export type SessionStateInput = Omit<SessionState, "last_seen" | "claude_session_id">;
 
 function rowToState(r: Record<string, any>): SessionState {
   return {
@@ -48,7 +50,19 @@ function rowToState(r: Record<string, any>): SessionState {
     created: r.created != null ? Number(r.created) : null,
     last_busy: r.last_busy != null ? Number(r.last_busy) : null,
     last_seen: r.last_seen ? new Date(r.last_seen).toISOString() : null,
+    claude_session_id: r.claude_session_id ?? null,
   };
+}
+
+// #1059 정밀복원 — work-flag 훅이 (box-id, claude session UUID)를 보고. **owner-gated**(호출자가 그 box 소유자일 때만) +
+//  레코드 존재 시에만 갱신(UPDATE, INSERT 안 함 — 미러 없는 세션엔 안 만든다). last-write-wins(UUID 변경 시 최신으로).
+//  반환 rowCount>0 = 갱신됨(권한·존재 확인 결과). best-effort 호출(실패 무해).
+export async function setClaudeSessionId(id: string, claudeUuid: string, owner: string): Promise<boolean> {
+  const r = await itemsPool.query(
+    "UPDATE org_session_state SET claude_session_id=$2, updated_at=now() WHERE id=$1 AND owner=$3",
+    [id, claudeUuid, owner],
+  );
+  return (r.rowCount ?? 0) > 0;
 }
 
 export async function getSessionState(id: string): Promise<SessionState | undefined> {

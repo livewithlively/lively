@@ -11,7 +11,7 @@
 // 페일오픈: 어떤 실패든 무출력 exit 0. 비활성화(incognito): LIVELY_OFF=1 (구 LIVELY_HOOKS_OFF — alias)
 // ⚠ argv 는 안 본다 — session-preload 가 자체설치 MCP 커버용 엔트리를 `work-flag.mjs --ext-pull` 로 배선하는데(#959),
 //  그 sentinel 인자는 settings 엔트리를 회수-교체하기 위한 **정체성 discriminator**일 뿐 이 스크립트는 무시한다(판정 동일).
-import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 
@@ -121,5 +121,34 @@ try {
     mkdirSync(FLAG_DIR, { recursive: true, mode: 0o700 });
     for (const flag of flags) writeFileSync(join(FLAG_DIR, `${sid}.${flag}`), "");
   }
+
+  // #1059 정밀 복원 — 이 box 세션이 지금 도는 **claude 자신의 세션 UUID(sid)**를 게이트웨이에 보고한다. box-id(LIVELY_SESSION_ID)
+  //  ≠ claude UUID 라, 복원(restore)이 정확히 이어받으려면(--resume <uuid>) 이 매핑이 필요하다(box-id 를 주면 "검색 결과 없음").
+  //  UUID 당 1회만 보고(dedup `<sid>.mapped`) — 첫 툴사용 때만 fetch, 이후엔 stat 만(핫패스 부담 최소). branch·resume·/clear 로
+  //  UUID 가 바뀌면 새 sid → 새 보고(게이트웨이가 last-write-wins 로 최신 유지). fail-open·시도 1회(게이트웨이 다운 시 매 툴 스톨 방지).
+  //  ⚠ 토큰은 env/파일에서만 읽고 argv·로그에 절대 안 싣는다. 셸·코덱스 box 는 restore 가 claude 하네스에서만 --resume 하므로 무해.
+  try {
+    const boxId = (process.env.LIVELY_SESSION_ID || "").trim();
+    const mappedFlag = join(FLAG_DIR, `${sid}.mapped`);
+    if (boxId && /^box-/.test(boxId) && !existsSync(mappedFlag)) {
+      const readCfg = (rel) => { try { return readFileSync(join(homedir(), ".lively", rel), "utf8").trim(); } catch { return ""; } };
+      const token = (process.env.LIVELY_TOKEN || "").trim() || readCfg("token");
+      const gw = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readCfg("gateway-url") || "http://localhost:8080").replace(/\/$/, "");
+      if (token) {
+        mkdirSync(FLAG_DIR, { recursive: true, mode: 0o700 });
+        writeFileSync(mappedFlag, ""); // 시도 1회 표시(성공·실패 무관 — 게이트웨이 다운 시 매 PostToolUse 스톨 방지)
+        const ctl = new AbortController();
+        const to = setTimeout(() => ctl.abort(), 1200);
+        try {
+          await fetch(`${gw}/api/ui/terminal/sessions/${encodeURIComponent(boxId)}/claude-uuid`, {
+            method: "POST", signal: ctl.signal,
+            headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+            body: JSON.stringify({ uuid: sid }),
+          });
+        } catch { /* fail-open — 미보고 시 복원은 picker 로 폴백 */ }
+        finally { clearTimeout(to); }
+      }
+    }
+  } catch { /* fail-open */ }
 } catch { /* fail-open */ }
 process.exit(0);

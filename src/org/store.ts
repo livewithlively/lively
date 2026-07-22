@@ -25,6 +25,10 @@ import {
   type StoragePolicy, type StoragePolicyPatch, resolveStoragePolicy, normalizeStoragePolicy,
   storagePolicySource, invalidateStoragePolicyCache,
 } from "./storage-policy.js";
+// MCP 호출 감사로그 보관 정책(#1082) — 보존일수. storage_policy 와 같은 seam(env 시드 + DB 우선).
+import {
+  type CallLogPolicy, type CallLogPolicyPatch, resolveCallLogPolicy, normalizeCallLogPolicy, callLogPolicySource,
+} from "./call-log-policy.js";
 // 세션 공유(세션이력 캡처) 정책(#905 C1) — 관리탭 ▸ 세션 공유. storage_policy 와 같은 seam(DB 우선, 비면 기본값).
 import { type SessionShareConfig, type SessionSharePatch, resolveSessionShare, normalizeSessionShare } from "./session-share.js";
 // per-session cgroup 메모리 격리 정책(#1059 D) — 세션당 MemoryHigh/Max(MB). storage_policy 와 같은 seam(DB 우선, 비면 env 시드).
@@ -761,6 +765,7 @@ export interface OrgRuntimeConfig {
   pull_tools: string[]; // work-flag 가 '외부 맥락 인입'으로 볼 MCP 툴 이름 prefix 목록(#906) — write_tools 와 달리 **비면 끔**
   embedding_config: EmbeddingConfig; // 벡터검색(#172) 추론 seam 설정 — 기본 off(현행 grep/ILIKE). DB 우선, 비면 env(EMBEDDINGS_*) 시드
   storage_policy: StoragePolicy; // 박스 저장소 정책(#813) — 로그 상한·디스크 임계치. DB 우선, 비면 env 시드 → 기본값
+  call_log_policy: CallLogPolicy; // MCP 호출 감사로그 보관(#1082) — 보존일수. DB 우선, 비면 env 시드 → 90일. 0=무기한
   session_memory_policy: SessionMemoryPolicy; // per-session cgroup 메모리 격리(#1059 D) — 세션당 MemoryHigh/Max(MB). 0=무제한(무회귀). DB 우선, 비면 env 시드
   session_reclaim_policy: SessionReclaimPolicy; // idle 세션 자동 회수(#1059 F) — idle TTL(분). 0=끔(무회귀). DB 우선, 비면 env 시드
   hook_relay_decisions: HookRelayDecision[]; // 러너가 PreToolUse 에서 전파할 결정(#892). 기본 deny/ask/defer — allow 는 명시 opt-in
@@ -795,7 +800,7 @@ const graceMsSafe = (v: unknown): number | null => {
 
 export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
   const r = await itemsPool.query(
-    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, session_memory_policy, session_reclaim_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, version, updated_at, updated_by
+    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, version, updated_at, updated_by
        FROM org_runtime_config WHERE id=1`,
   );
   const row = r.rows[0] as Record<string, unknown> | undefined;
@@ -820,6 +825,7 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
     pull_tools: strArrSafe(row?.pull_tools),
     embedding_config: resolveEmbeddingConfig(row?.embedding_config), // DB 우선, off/미설정이면 env(EMBEDDINGS_*) 시드
     storage_policy: resolveStoragePolicy(row?.storage_policy), // DB 우선, 비면 env 시드 → 코드 기본값(#813)
+    call_log_policy: resolveCallLogPolicy(row?.call_log_policy), // #1082 — 구 DB(컬럼 부재)면 기본값(90일)
     session_memory_policy: resolveSessionMemoryPolicy(row?.session_memory_policy), // #1059 D — DB 우선, 비면 env 시드 → 0/0(무제한, 무회귀)
     session_reclaim_policy: resolveSessionReclaimPolicy(row?.session_reclaim_policy), // #1059 F — DB 우선, 비면 env 시드 → 0(회수 끔, 무회귀)
     hook_relay_decisions: relayDecisionsSafe(row?.hook_relay_decisions), // #892 — 구 DB(컬럼 부재)면 기본값
@@ -846,6 +852,7 @@ export async function updateRuntimeConfig(
     pull_tools?: string[];
     embedding_config?: EmbeddingConfigPatch;
     storage_policy?: StoragePolicyPatch;
+    call_log_policy?: CallLogPolicyPatch;
     session_memory_policy?: SessionMemoryPolicyPatch;
     session_reclaim_policy?: SessionReclaimPolicyPatch;
     hook_relay_decisions?: HookRelayDecision[];
@@ -897,6 +904,14 @@ export async function updateRuntimeConfig(
     const raw = await itemsPool.query(`SELECT storage_policy FROM org_runtime_config WHERE id=1`);
     storagePolicy = (raw.rows[0] as { storage_policy?: unknown } | undefined)?.storage_policy ?? {};
   }
+  // 호출 감사로그 보관 정책(#1082) — storage_policy 와 동일 규칙: **안 건드린 저장은 DB 원본을 그대로 둔다**(before 되쓰기 금지).
+  let callLogPolicy: unknown;
+  if (patch.call_log_policy !== undefined) {
+    callLogPolicy = normalizeCallLogPolicy({ ...before.call_log_policy, ...patch.call_log_policy });
+  } else {
+    const raw = await itemsPool.query(`SELECT call_log_policy FROM org_runtime_config WHERE id=1`);
+    callLogPolicy = (raw.rows[0] as { call_log_policy?: unknown } | undefined)?.call_log_policy ?? {};
+  }
   // per-session 메모리 정책(#1059 D) — storage_policy 와 동일 규칙: **안 건드린 저장은 DB 원본을 그대로 둔다**
   //  (before(resolved) 되쓰면 env 시드/기본값이 DB 로 굳어 '미설정' 이 사라진다 — #688 함정).
   let sessionMemoryPolicy: unknown;
@@ -924,19 +939,20 @@ export async function updateRuntimeConfig(
     sessionShare = (raw.rows[0] as { session_share?: unknown } | undefined)?.session_share ?? null;
   }
   await itemsPool.query(
-    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, session_memory_policy, session_reclaim_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, version, updated_at, updated_by)
-       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$18::jsonb,$19::jsonb,$14::jsonb,$15::jsonb,$16,$17,1,now(),$13)
+    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, version, updated_at, updated_by)
+       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$20::jsonb,$18::jsonb,$19::jsonb,$14::jsonb,$15::jsonb,$16,$17,1,now(),$13)
      ON CONFLICT (id) DO UPDATE SET hooks=EXCLUDED.hooks, writeback_notice=EXCLUDED.writeback_notice,
        work_roots=EXCLUDED.work_roots, allowed_auth_envs=EXCLUDED.allowed_auth_envs, url_allowlist=EXCLUDED.url_allowlist,
        allowed_db_secret_refs=EXCLUDED.allowed_db_secret_refs, allowed_db_hosts=EXCLUDED.allowed_db_hosts,
        allowed_internal_hosts=EXCLUDED.allowed_internal_hosts,
        write_tools=EXCLUDED.write_tools, pull_tools=EXCLUDED.pull_tools, embedding_config=EXCLUDED.embedding_config,
-       storage_policy=EXCLUDED.storage_policy, session_memory_policy=EXCLUDED.session_memory_policy, session_reclaim_policy=EXCLUDED.session_reclaim_policy, hook_relay_decisions=EXCLUDED.hook_relay_decisions,
+       storage_policy=EXCLUDED.storage_policy, call_log_policy=EXCLUDED.call_log_policy,
+       session_memory_policy=EXCLUDED.session_memory_policy, session_reclaim_policy=EXCLUDED.session_reclaim_policy, hook_relay_decisions=EXCLUDED.hook_relay_decisions,
        session_share=EXCLUDED.session_share, hook_grace_ms=EXCLUDED.hook_grace_ms,
        embedding_backfill_paused=EXCLUDED.embedding_backfill_paused,
        version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots),
-     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(pullTools), JSON.stringify(embeddingConfig), JSON.stringify(storagePolicy), actor ?? null, JSON.stringify(relayDecisions), JSON.stringify(sessionShare), hookGraceMs, embeddingBackfillPaused, JSON.stringify(sessionMemoryPolicy), JSON.stringify(sessionReclaimPolicy)],
+     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(pullTools), JSON.stringify(embeddingConfig), JSON.stringify(storagePolicy), actor ?? null, JSON.stringify(relayDecisions), JSON.stringify(sessionShare), hookGraceMs, embeddingBackfillPaused, JSON.stringify(sessionMemoryPolicy), JSON.stringify(sessionReclaimPolicy), JSON.stringify(callLogPolicy)],
   );
   // 저장 즉시 반영 — /readyz 임계치·로그 재니터가 캐시를 들고 있다(게이트웨이 재시작 없이 먹어야 한다).
   if (patch.storage_policy !== undefined) invalidateStoragePolicyCache();
@@ -966,6 +982,16 @@ export async function getStoragePolicySource(): Promise<"db" | "env" | "default"
     return storagePolicySource((r.rows[0] as { storage_policy?: unknown } | undefined)?.storage_policy ?? null);
   } catch {
     return storagePolicySource(null); // 테이블 부재(부트스트랩 전)
+  }
+}
+
+// 호출 감사로그 보관 정책(#1082)의 출처(관리 UI 안내) — db(관리탭 저장)·env(.env 시드)·default(코드 기본값 90일).
+export async function getCallLogPolicySource(): Promise<"db" | "env" | "default"> {
+  try {
+    const r = await itemsPool.query(`SELECT call_log_policy FROM org_runtime_config WHERE id=1`);
+    return callLogPolicySource((r.rows[0] as { call_log_policy?: unknown } | undefined)?.call_log_policy ?? null);
+  } catch {
+    return callLogPolicySource(null); // 테이블 부재(부트스트랩 전)
   }
 }
 
@@ -1009,6 +1035,9 @@ export interface McpServer {
   scope: string | null;
   level: "L0" | "L1" | "L2" | null;
   pii_scrub: boolean;
+  // log_args(#1082): 이 서버 프록시 툴의 호출 '인자 값'을 감사로그에 남길지. 기본 false — 프록시 인자에는 조직 밖으로
+  //  나가는 본문(슬랙 DM·메일)이 실리므로 값은 안 남기고 호출 사실(누가·언제·어떤 툴)만 남긴다.
+  log_args: boolean;
   auth_kind: string | null;
   auth_scope_key: string | null;
   auth_mode: "bearer" | "oauth" | "sigv4" | null; // null/bearer=정적토큰, oauth=per-member OAuth(T2), sigv4=AWS 요청서명(#746)
@@ -1033,13 +1062,14 @@ function mapMcp(row: Record<string, unknown>): McpServer {
     scope: (row.scope as string) ?? null,
     level: (row.level as McpServer["level"]) ?? null,
     pii_scrub: row.pii_scrub === true,
+    log_args: row.log_args === true, // #1082 — 컬럼 부재(구 DB)면 undefined → false(안전측: 값 미저장)
     auth_kind: (row.auth_kind as string) ?? null,
     auth_scope_key: (row.auth_scope_key as string) ?? null,
     auth_mode: (row.auth_mode as McpServer["auth_mode"]) ?? null,
   };
 }
 
-const MCP_COLS = "name, transport, url, command, auth_env, note, enabled, sort, version, updated_at, updated_by, mode, tools_snapshot, snapshot_at, scope, level, pii_scrub, auth_kind, auth_scope_key, auth_mode";
+const MCP_COLS = "name, transport, url, command, auth_env, note, enabled, sort, version, updated_at, updated_by, mode, tools_snapshot, snapshot_at, scope, level, pii_scrub, log_args, auth_kind, auth_scope_key, auth_mode";
 
 export async function listMcpServers(): Promise<McpServer[]> {
   const r = await itemsPool.query(`SELECT ${MCP_COLS} FROM org_mcp_server ORDER BY sort, name`);
@@ -1064,6 +1094,7 @@ export interface McpServerInput {
   scope?: string | null;
   level?: "L0" | "L1" | "L2" | null;
   pii_scrub?: boolean;
+  log_args?: boolean; // #1082 인자 값 저장 허용(기본 false)
   auth_kind?: string | null;
   auth_scope_key?: string | null;
   auth_mode?: "bearer" | "oauth" | "sigv4" | null;
@@ -1083,12 +1114,13 @@ export async function upsertMcpServer(m: McpServerInput, actor?: string, source?
   // auth_mode=oauth 는 auth_kind(vault 토큰 슬롯 kind) 필수(#746 리뷰 #3) — 없으면 연결/호출 시점까지 오류가 늦어진다.
   if (authMode === "oauth" && !authKind) throw new Error("auth_mode=oauth 는 auth_kind(자격 종류)가 필요합니다");
   await itemsPool.query(
-    `INSERT INTO org_mcp_server(name, transport, url, command, auth_env, note, enabled, sort, mode, scope, level, pii_scrub, auth_kind, auth_scope_key, auth_mode, version, updated_at, updated_by)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,1,now(),$16)
+    `INSERT INTO org_mcp_server(name, transport, url, command, auth_env, note, enabled, sort, mode, scope, level, pii_scrub, log_args, auth_kind, auth_scope_key, auth_mode, version, updated_at, updated_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,1,now(),$17)
      ON CONFLICT (name) DO UPDATE SET
        transport=EXCLUDED.transport, url=EXCLUDED.url, command=EXCLUDED.command, auth_env=EXCLUDED.auth_env,
        note=EXCLUDED.note, enabled=EXCLUDED.enabled, sort=EXCLUDED.sort,
        mode=EXCLUDED.mode, scope=EXCLUDED.scope, level=EXCLUDED.level, pii_scrub=EXCLUDED.pii_scrub,
+       log_args=EXCLUDED.log_args,
        auth_kind=EXCLUDED.auth_kind, auth_scope_key=EXCLUDED.auth_scope_key, auth_mode=EXCLUDED.auth_mode,
        version=org_mcp_server.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [m.name, transport, url, command,
@@ -1097,6 +1129,7 @@ export async function upsertMcpServer(m: McpServerInput, actor?: string, source?
      mode, m.scope !== undefined ? m.scope : (before?.scope ?? null),
      m.level !== undefined ? m.level : (before?.level ?? null),
      m.pii_scrub !== undefined ? !!m.pii_scrub : (before?.pii_scrub ?? false),
+     m.log_args !== undefined ? !!m.log_args : (before?.log_args ?? false), // #1082 — 미지정이면 기존값, 신규는 false(안전측)
      authKind, m.auth_scope_key !== undefined ? (m.auth_scope_key || null) : (before?.auth_scope_key ?? null),
      authMode,
      actor ?? null],
@@ -1881,6 +1914,7 @@ export interface OrgTool {
   auth_kind: string | null; // P1(#746): 설정 시 http_proxy 가 member_secret(호출자 개인 자격 우선)로 인증. null=auth_env(조직 공용) 사용.
   auth_scope_key: string | null; // vault 조회 scope_key(예 host)
   pii_scrub: boolean; // P3(#746): true 면 응답 본문(문자열)에 scrubPii(비정형 PII 마스킹)
+  log_args: boolean; // #1082: 호출 '인자 값'을 감사로그에 남길지. 기본 false — http_proxy 도 조직 밖으로 나가는 통신이다.
   note: string | null;
   sort: number;
   version: number;
@@ -1908,6 +1942,7 @@ function mapTool(row: Record<string, unknown>): OrgTool {
     auth_kind: (row.auth_kind as string) ?? null,
     auth_scope_key: (row.auth_scope_key as string) ?? null,
     pii_scrub: row.pii_scrub === true,
+    log_args: row.log_args === true, // #1082 — 컬럼 부재(구 DB)면 undefined → false(안전측: 값 미저장)
     note: (row.note as string) ?? null,
     sort: (row.sort as number) ?? 0,
     version: (row.version as number) ?? 1,
@@ -1916,7 +1951,7 @@ function mapTool(row: Record<string, unknown>): OrgTool {
   };
 }
 
-const TOOL_COLS = "name, kind, enabled, title, description, scope, input_schema, method, url, auth_env, auto_approve, always_load, level, auth_kind, auth_scope_key, pii_scrub, note, sort, version, updated_at, updated_by";
+const TOOL_COLS = "name, kind, enabled, title, description, scope, input_schema, method, url, auth_env, auto_approve, always_load, level, auth_kind, auth_scope_key, pii_scrub, log_args, note, sort, version, updated_at, updated_by";
 
 export async function listTools(): Promise<OrgTool[]> {
   const r = await itemsPool.query(`SELECT ${TOOL_COLS} FROM org_tool ORDER BY sort, name`);
@@ -1987,6 +2022,7 @@ export interface OrgToolInput {
   auth_kind?: string | null; // P1(#746) vault 인증 kind: undefined=유지, null/""=env 사용, 값=member_secret 해소.
   auth_scope_key?: string | null;
   pii_scrub?: boolean; // P3(#746) 응답 PII 마스킹
+  log_args?: boolean; // #1082 인자 값 저장 허용(기본 false)
   note?: string | null;
   sort?: number;
 }
@@ -2009,18 +2045,21 @@ export async function upsertTool(t: OrgToolInput, ctx: WriteCtx = {}): Promise<O
   const authEnv = isProxy ? (authKind ? null : (t.auth_env ?? before?.auth_env ?? null)) : null;
   const authScopeKey = isProxy ? (t.auth_scope_key !== undefined ? (t.auth_scope_key || null) : (before?.auth_scope_key ?? null)) : null;
   const piiScrub = isProxy ? (t.pii_scrub !== undefined ? !!t.pii_scrub : (before?.pii_scrub ?? false)) : false;
+  // #1082 — 인자 값 저장 허용. 프록시(외부 통신) 툴에만 의미가 있고, 빌트인은 애초에 이 정책의 대상이 아니라 false.
+  const logArgs = isProxy ? (t.log_args !== undefined ? !!t.log_args : (before?.log_args ?? false)) : false;
   await itemsPool.query(
-    `INSERT INTO org_tool(name,kind,enabled,title,description,scope,input_schema,method,url,auth_env,auto_approve,always_load,level,auth_kind,auth_scope_key,pii_scrub,note,sort,version,updated_at,updated_by)
-       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,1,now(),$19)
+    `INSERT INTO org_tool(name,kind,enabled,title,description,scope,input_schema,method,url,auth_env,auto_approve,always_load,level,auth_kind,auth_scope_key,pii_scrub,log_args,note,sort,version,updated_at,updated_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,1,now(),$20)
      ON CONFLICT (name) DO UPDATE SET
        kind=EXCLUDED.kind, enabled=EXCLUDED.enabled, title=EXCLUDED.title, description=EXCLUDED.description,
        scope=EXCLUDED.scope, input_schema=EXCLUDED.input_schema, method=EXCLUDED.method, url=EXCLUDED.url,
        auth_env=EXCLUDED.auth_env, auto_approve=EXCLUDED.auto_approve, always_load=EXCLUDED.always_load, level=EXCLUDED.level,
-       auth_kind=EXCLUDED.auth_kind, auth_scope_key=EXCLUDED.auth_scope_key, pii_scrub=EXCLUDED.pii_scrub, note=EXCLUDED.note, sort=EXCLUDED.sort,
+       auth_kind=EXCLUDED.auth_kind, auth_scope_key=EXCLUDED.auth_scope_key, pii_scrub=EXCLUDED.pii_scrub,
+       log_args=EXCLUDED.log_args, note=EXCLUDED.note, sort=EXCLUDED.sort,
        version=org_tool.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [t.name, kind, t.enabled ?? before?.enabled ?? true, t.title ?? before?.title ?? null,
      t.description ?? before?.description ?? "", scope, JSON.stringify(inputSchema), method, url, authEnv,
-     t.auto_approve ?? before?.auto_approve ?? false, alwaysLoad, level, authKind, authScopeKey, piiScrub,
+     t.auto_approve ?? before?.auto_approve ?? false, alwaysLoad, level, authKind, authScopeKey, piiScrub, logArgs,
      t.note ?? before?.note ?? null, t.sort ?? before?.sort ?? 0, ctx.actor ?? null],
   );
   const after = await getTool(t.name);

@@ -675,12 +675,28 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
    '접속 토큰 발급'이 카드 제목 '접속 토큰'보다 커 위계가 뒤집혀 있었다. */
 .member-add-step, .admin-subhead-2 { margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--line);
   font-size: 13.5px; font-weight: 800; color: var(--ink); letter-spacing: -.1px; }
-/* 목록 머리 — 소제목 + 오른쪽 검색·개수 도구. */
-.tok-listhead { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.tok-listhead .admin-subhead-2 { flex: 1 1 auto; margin-bottom: 0; }
-.tok-tools { display: flex; align-items: center; gap: 8px; padding-bottom: 2px; }
-.tok-search { width: 200px; }
+/* 목록 머리 — 소제목 + 오른쪽 검색·개수 도구.
+   ⚠ 구분선은 **머리 줄 전체**가 가져야 한다. 제목(h4)에만 border-top 을 두면 선이 검색창 앞에서 뚝 끊겨
+   화면이 깨져 보였다(#1085 사용자 지적). */
+.tok-listhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+.tok-listhead .admin-subhead-2 { flex: 1 1 auto; margin: 0; padding-top: 0; border-top: 0; }
+.tok-tools { display: flex; align-items: center; gap: 8px; }
+.tok-search { width: 210px; }
 .tok-per { width: auto; }
+/* 토큰 행 — 이름/메타(왼쪽) + 동작(오른쪽). 권한 목록이 길어 메타가 넘치지 않게 한 줄로 자른다.
+   ⚠ 행 좌우에 음수 마진을 줬더니 **행만 8px 왼쪽으로 튀어나와** 제목·설명·페이저(카드 기준선)와 어긋나 보였다
+   (#1085 '들여쓰기가 이상'). 정렬이 우선 — 배경 강조는 box-shadow 로 좌우만 넓힌다(레이아웃 불변). */
+.token-row { padding: 11px 0; margin: 0; }
+.token-row:hover { background: var(--bg-tint); box-shadow: -8px 0 0 var(--bg-tint), 8px 0 0 var(--bg-tint); }
+.token-main { flex: 1 1 auto; }
+.token-main .mini-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 목록 구분 머리(사용 중 / 해제됨) — 위 목록과 붙지 않게. */
+.token-section-h { margin: 16px 0 2px; }
+.token-section-h:first-child { margin-top: 6px; }
+/* 페이저 — 숫자 버튼과 '53개 중 1–10' 이 붙어 한 덩어리로 읽혔다. 간격을 벌리고 위 목록과도 띄운다. */
+.oa-pager { margin-top: 16px; }
+.oa-pg-info { margin-left: 14px; }
 
 /* 상세 박스 내부(목록·편집) 기본 = 세로 스택. 단독으로 쓰는 곳은 이제 없고,
    .admin-two-cols(마스터-디테일)의 좁은화면 폴백 겸 베이스로만 남는다.
@@ -5292,6 +5308,21 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-pop-fcount { margin-left: auto; flex: none; font-size: 10.5px; font-weight: 700; color: var(--muted-2); font-variant-numeric: tabular-nums; }
 .dash-pop-lrow .dash-pop-name { font-weight: 600; }
 .dash-pop-treegh { padding-top: 10px; }
+
+/* #req 그룹 팝오버 '리스트로도 묶기'(ClickUp Also group by List) — 그룹 기준 줄과 토글 사이 구분선. */
+.pjv-groupby-sep { height: 1px; background: var(--line); margin: 8px 2px 2px; }
+.pjv-groupby-pop .pjv-closed-row { padding: 6px 4px 2px; }
+
+/* #req 개요 '+ 리스트' 카드의 찾기/만들기 드롭다운 — 위=이미 있는 리스트 검색, 맨 아래=새로 만들기(스페이스·폴더 지정 팝업). */
+.dash-addpop { width: 300px; }
+.dash-addpop-row { align-items: center; gap: 8px; }
+.dash-addpop-row.active { background: var(--bg-punch); }
+.dash-addpop-row .dash-pop-txt { flex: 1; min-width: 0; }
+.dash-addpop-row .dash-pop-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-addpop-badge { flex: none; font-size: 10.5px; font-weight: 700; color: var(--muted-2); border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; }
+.dash-addpop-badge.is-add { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 36%, var(--bg)); }
+.dash-addpop-sep { height: 1px; background: var(--line); margin: 5px 4px; }
+.dash-addpop-create .dash-pop-name { color: var(--blue); }
 
 /* #req 리스트 헤더 우측 목록 필터 버튼 — 위젯 헤더 [⚙][→] 와 같은 아이콘버튼. 평소 옅게, 헤더 hover 시 또렷하게. */
 .dash-lh-ctl { margin-left: auto; align-self: center; display: inline-flex; align-items: center; gap: 6px; flex: none; padding-left: 8px; }

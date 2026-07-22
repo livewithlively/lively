@@ -13,7 +13,7 @@ import { openSessPrompts } from './terminal.js'; // 세션 '내 질문' 팝업 �
 // 작업 로그 전체 보기 팝업 = 회사 활동 피드 재사용. authDownload·fmtSize = 공유 폴더 브라우저(#672)의 검증된 파일 프리미티브 재사용.
 //  업로드 프리미티브(upControl/upDropZone/UP_CONFIRM)도 프로젝트 공유 폴더(#781)에서 검증된 것을 그대로 재사용 — 폴더 업로드 + 드래그앤드롭(#795·#796).
 //  전송 루프·진행바·취소(upSend/upProgress/upToast)도 마찬가지 — 취소를 화면마다 따로 만들지 않는다(#797).
-import { UP_CONFIRM, authDownload, avatarColor, companyTimelineSection, fmtFileDate, fmtFileDateFull, fmtSize, openProjectV2Form, pjvFolderIsArchive, pjvFolderIsSpace, pjvOpenProjectModal, upControl, upDropZone, upPrecheckOverwrite, upProgress, upSend, upToast } from './projects.js';
+import { UP_CONFIRM, authDownload, avatarColor, companyTimelineSection, fmtFileDate, fmtFileDateFull, fmtSize, openListForm, openProjectV2Form, pjvFolderIsArchive, pjvFolderIsSpace, pjvOpenProjectModal, upControl, upDropZone, upPrecheckOverwrite, upProgress, upSend, upToast } from './projects.js';
 import { openGridPicker, openTermCreateForm, startTerminalTour, termAutoApprovePref } from './terminal.js'; // 세션 생성 팝업·따라하기 투어·그리드 열기(#870)를 대시보드에서 그대로 재사용(#req). 자동 승인 기본값은 #782.
 // 하네스 라벨 폴백(terminal config 의 harnesses 와 동일 키) — cfg 로드 실패 시에도 읽히게.
 const DASH_HARNESS_LABEL = { claude: 'Claude Code', codex: 'Codex' };
@@ -428,7 +428,7 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
     };
     // 리스트별 필터 팝오버 — 담당(전체/내 것만) + 이름 검색. ⚙ 개인화 팝오버(dash-pop-*)와 같은 프리미티브를 그대로 쓴다.
     //  onChange = 그룹 body 만 다시 그리는 콜백(위젯 전체 재렌더 금지 — 팝오버가 붙은 버튼이 살아 있어야 한다).
-    const openListFilter = (anchor, listId, onChange) => {
+    const openListFilter = (anchor, listId, onChange, keepFocus) => {
         const cur = dashListFilter(listId);
         const panel = el('div', { class: 'dash-pop-panel' });
         panel.append(el('div', { class: 'dash-pop-head' }, el('strong', { text: '목록 거르기' }), el('span', { class: 'dash-pop-sub', text: '이 기기에 저장돼요' })));
@@ -436,7 +436,7 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
         const segRow = el('div', { class: 'dash-pop-seg' });
         for (const [k, label] of [['all', '전체'], ['mine', '내 프로젝트만']]) {
             const b = el('button', { class: 'dash-pop-segbtn' + (k === cur.who ? ' on' : ''), type: 'button', text: label });
-            b.onclick = () => { dashSaveListFilter(listId, { ...dashListFilter(listId), who: k }); onChange(); openListFilter(anchor, listId, onChange); };
+            b.onclick = () => { dashSaveListFilter(listId, { ...dashListFilter(listId), who: k }); onChange(); openListFilter(anchor, listId, onChange, true); };
             segRow.append(b);
         }
         panel.append(segRow);
@@ -447,11 +447,12 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
         panel.append(qIn);
         if (cur.who !== 'all' || (cur.q || '').trim()) {
             const clear = el('button', { class: 'dash-pop-reset', type: 'button', text: '필터 지우기' });
-            clear.onclick = () => { dashSaveListFilter(listId, null); onChange(); openListFilter(anchor, listId, onChange); };
+            clear.onclick = () => { dashSaveListFilter(listId, null); onChange(); openListFilter(anchor, listId, onChange, true); };
             panel.append(el('div', { class: 'dash-pop-foot' }, clear));
         }
         dashPopover(anchor, panel);
-        qIn.focus();
+        if (!keepFocus)
+            qIn.focus(); // 담당 세그먼트를 눌러 다시 그린 경우엔 포커스를 뺏지 않는다
     };
     // 리스트 블럭 카드 — pjv-overview 의 ovCard 와 동일 마크업. 클릭=이 리스트 '선택'(아래 목록을 그 리스트만으로 필터),
     //  드래그=개요 순서 변경(대시보드-로컬 저장). 선택된 카드는 강조(파란 링).
@@ -633,52 +634,109 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
         catch { /* 실패 시 기존 데이터 유지 */ }
         draw();
     };
-    // #req R20 — 개요 그리드 맨 끝 '+ 새 리스트' 카드: 클릭→그 자리 입력, Enter→리스트 생성(POST /project-lists) 후 새로고침.
+    // #req R20 — 개요 그리드 맨 끝 '+ 리스트' 카드. 클릭하면 한 칸짜리 입력이 뜨고, 타이핑에 따라 **두 갈래**로 갈린다:
+    //   ① 이미 있는 리스트를 찾아 요약 카드로 **불러오기**(아래 제안 목록에서 선택) — 조직의 모든 리스트가 대상.
+    //   ② Enter = **새로 만들기** → 리스트 설정 팝업(openListForm)을 연다. 여기서 스페이스·폴더를 반드시 고르게 된다(#1067).
+    //  예전엔 Enter 가 POST /project-lists 를 곧장 때려 **스페이스 밖에 뜬 리스트**가 만들어졌다 — 그 경로를 없앴다.
     const dashListAddCard = () => {
-        const card = el('div', { class: 'pjv-ov-card dash-ov-addcard', role: 'button', tabindex: '0', title: '새 리스트 추가' });
-        const showBtn = () => card.replaceChildren(el('span', { class: 'dash-ov-add-plus', text: '+' }), el('span', { class: 'dash-ov-add-lbl', text: '새 리스트' }));
+        const card = el('div', { class: 'pjv-ov-card dash-ov-addcard', role: 'button', tabindex: '0', title: '리스트 추가·불러오기' });
+        const showBtn = () => card.replaceChildren(el('span', { class: 'dash-ov-add-plus', text: '+' }), el('span', { class: 'dash-ov-add-lbl', text: '리스트' }));
         const showInput = () => {
-            let busy = false;
-            const input = el('input', { class: 'dash-ov-add-input', type: 'text', placeholder: '리스트 이름 후 Enter', 'aria-label': '새 리스트 이름' });
-            const submit = async () => {
+            const input = el('input', { class: 'dash-ov-add-input', type: 'text', placeholder: '리스트 찾기 · Enter로 새로 만들기', 'aria-label': '리스트 이름 검색 또는 새 리스트 이름' });
+            let panel = null;
+            let closePop = null;
+            let opts = []; // 제안 항목 [{ id, run() }] — 마지막 항목은 항상 '새로 만들기'
+            let active = -1; // 활성 제안(-1 = 없음 → Enter 는 새로 만들기)
+            const done = () => { if (closePop)
+                closePop(); closePop = null; panel = null; showBtn(); };
+            // 새로 만들기 — 이름을 넘겨 리스트 설정 팝업을 연다(스페이스·폴더 지정은 그 폼이 강제한다).
+            const create = () => {
                 const name = (input.value || '').trim();
-                if (busy)
-                    return;
-                if (!name) {
-                    showBtn();
-                    return;
-                }
-                busy = true;
-                input.disabled = true;
-                try {
-                    const r = await api('/api/ui/v6/project-lists', { method: 'POST', body: JSON.stringify({ name }) });
-                    const newId = Number((r && (r.id || (r.list && r.list.id) || r.list_id)) || 0);
-                    if (newId) {
-                        justCreated.add(newId);
-                        selectedListId = newId;
-                    } // 방금 만든 리스트를 개요에 띄우고 선택(비어도)
-                    toast('리스트를 추가했어요');
-                    await reloadAll();
-                }
-                catch (e) {
-                    toast('실패 — ' + (e && e.message || e), true);
-                    busy = false;
-                    input.disabled = false;
-                    input.focus();
-                }
+                done();
+                openListForm(reloadAll, undefined, { name, onCreated: (created) => {
+                        const id = Number(created && created.id);
+                        if (id) {
+                            justCreated.add(id);
+                            selectedListId = id;
+                        } // 방금 만든 리스트를 개요에 띄우고 선택(비어도)
+                    } });
             };
-            input.addEventListener('keydown', (e) => { if (e.key === 'Enter') {
-                e.preventDefault();
-                submit();
-            }
-            else if (e.key === 'Escape') {
-                e.preventDefault();
-                showBtn();
-            } });
-            input.addEventListener('blur', () => { if (!busy && !(input.value || '').trim())
-                showBtn(); });
+            // 기존 리스트 불러오기 — 요약 카드에 올리고(직접 고름=pinned) 그 리스트를 선택 상태로.
+            const pick = (l) => { const id = Number(l.id); setListShown(id, true); selectedListId = id; done(); draw(); };
+            const renderSug = () => {
+                const q = (input.value || '').trim().toLowerCase();
+                if (!panel) {
+                    panel = el('div', { class: 'dash-pop-panel dash-addpop' });
+                    closePop = dashPopover(card, panel);
+                }
+                const hidden = dashOvHidden();
+                const pinned = dashOvPinned();
+                const isOn = (id) => !hidden.has(Number(id)) && (autoIds.has(Number(id)) || pinned.has(Number(id)) || justCreated.has(Number(id)));
+                const found = q ? lists.filter((l) => String(l.name || '').toLowerCase().includes(q)).slice(0, 8) : [];
+                opts = [];
+                active = -1;
+                const rows = [];
+                if (q && found.length) {
+                    rows.push(el('div', { class: 'dash-pop-gh', text: '이미 있는 리스트' }));
+                    for (const l of found) {
+                        const on = isOn(l.id);
+                        const row = el('div', { class: 'dash-pop-row dash-addpop-row', role: 'button', tabindex: '-1' }, el('span', { class: 'dash-pop-txt' }, el('span', { class: 'dash-pop-name' }, favLists.has(Number(l.id)) ? el('span', { class: 'dash-pop-fav', title: '즐겨찾기', text: '⭐ ' }) : null, l.name || '(이름 없음)')), on ? el('span', { class: 'dash-addpop-badge', text: '표시 중' }) : el('span', { class: 'dash-addpop-badge is-add', text: '＋ 불러오기' }));
+                        const run = () => (on ? (() => { selectedListId = Number(l.id); done(); draw(); })() : pick(l));
+                        row.addEventListener('mousedown', (e) => e.preventDefault()); // blur 로 입력이 접히기 전에 클릭이 먹게
+                        row.addEventListener('click', run);
+                        opts.push({ el: row, run });
+                        rows.push(row);
+                    }
+                }
+                else if (q) {
+                    rows.push(el('div', { class: 'dash-pop-row', style: 'cursor:default' }, el('span', { class: 'dash-pop-desc', text: '같은 이름의 리스트가 없어요.' })));
+                }
+                else {
+                    rows.push(el('div', { class: 'dash-pop-row', style: 'cursor:default' }, el('span', { class: 'dash-pop-desc', text: '이름을 입력하면 이미 있는 리스트를 찾아드려요.' })));
+                }
+                // 맨 아래 = 새로 만들기(Enter 기본 동작). 이름이 없으면 팝업이 빈 이름으로 열린다(거기서 입력해도 된다).
+                const mk = el('div', { class: 'dash-pop-row dash-addpop-row dash-addpop-create', role: 'button', tabindex: '-1' }, el('span', { class: 'dash-pop-txt' }, el('span', { class: 'dash-pop-name', text: q ? '＋ ‘' + (input.value || '').trim() + '’ 새로 만들기' : '＋ 새 리스트 만들기' }), el('span', { class: 'dash-pop-desc', text: '스페이스·폴더를 고르는 설정 창이 열려요' })));
+                mk.addEventListener('mousedown', (e) => e.preventDefault());
+                mk.addEventListener('click', create);
+                opts.push({ el: mk, run: create });
+                rows.push(el('div', { class: 'dash-addpop-sep' }), mk);
+                panel.replaceChildren(...rows);
+            };
+            const setActive = (i) => {
+                active = i;
+                opts.forEach((o, k) => o.el.classList.toggle('active', k === i));
+                if (i >= 0)
+                    opts[i].el.scrollIntoView({ block: 'nearest' });
+            };
+            input.addEventListener('input', renderSug);
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    setActive(active + 1 >= opts.length ? 0 : active + 1);
+                }
+                else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    setActive(active - 1 < 0 ? opts.length - 1 : active - 1);
+                }
+                // Enter — 활성 제안이 있으면 그것, 없으면 새로 만들기(요청대로 '엔터 = 어디로 보낼지 고르는 팝업').
+                else if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
+                    e.preventDefault();
+                    if (active >= 0 && opts[active])
+                        opts[active].run();
+                    else
+                        create();
+                }
+                else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    done();
+                }
+            });
+            // 팝오버 안을 누를 땐 mousedown 을 막아 두었으므로 여기로 오지 않는다(진짜 바깥 클릭일 때만 접힘).
+            input.addEventListener('blur', () => { setTimeout(() => { if (!card.contains(document.activeElement))
+                done(); }, 0); });
             card.replaceChildren(input);
             input.focus();
+            renderSug();
         };
         card.addEventListener('click', (e) => { if (e.target.closest('input'))
             return; showInput(); });
