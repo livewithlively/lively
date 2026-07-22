@@ -36,7 +36,8 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { PROJECT_SHARED_BASE, PROJECT_SUBDIR, LEGACY_SUBDIR, projectAbsPath } from "../project-fs.js";
 import { dirSizesFast, isInside, reposIn, planReclaim, applyReclaim, baseRepoOf } from "../workspace-reclaim.js";
-import { listSessions } from "../terminal-sessions.js";
+import { listSessions, listSessionsRaw } from "../terminal-sessions.js";
+import { memAvailableMb, memTotalMb } from "../host-mem.js"; // #1059 G1 — 박스 메모리 status
 import { isValidTimezone, DEFAULT_TZ } from "../org/timezone.js"; // #778 조직 시간대 검증·기본값
 import { previewMemberContext, kitVersion } from "../org/publish.js";
 import { GUIDE_SECTION_DEFAULTS } from "../org/materialize.js";
@@ -412,6 +413,28 @@ const workspaceBatchCapabilities = (): Capability[] => [
       remove_worktree: z.boolean().optional().describe("워크트리까지 제거(푸시 완료·클린일 때만 — 아니면 유지하고 이유를 남긴다)"),
     }),
 ];
+
+// #1059 G1 — Ollama 로드 모델 프로브(best-effort). 급성 스파이크(임베딩 모델 3.3GB)의 가시화용.
+//  임베딩 provider 가 http 이고 base_url 이 있을 때만, 그 host 의 /api/ps(Ollama 전용)를 짧게 찔러 로드 모델·용량을 본다.
+//  Ollama 가 아니거나(404 등)·미도달·타임아웃이면 null(무해) — 메모리 available 숫자 자체가 이미 스파이크를 반영하므로 부가정보.
+//  base_url 은 관리자 설정(신뢰) 이라 직접 fetch(사용자 입력 SSRF 아님). 응답 파싱은 방어적.
+async function probeOllama(baseUrl: string | null | undefined): Promise<{ loaded: boolean; models: string[]; mb: number } | null> {
+  if (!baseUrl) return null;
+  let origin: string;
+  try { const u = new URL(baseUrl); origin = `${u.protocol}//${u.host}`; } catch { return null; }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 2000);
+  try {
+    const res = await fetch(`${origin}/api/ps`, { signal: ctrl.signal });
+    if (!res.ok) return null;
+    const j = await res.json() as { models?: Array<{ name?: unknown; model?: unknown; size?: unknown }> };
+    const models = Array.isArray(j?.models) ? j.models : [];
+    const names = models.map((m) => (typeof m.name === "string" ? m.name : typeof m.model === "string" ? m.model : "")).filter(Boolean);
+    const mb = Math.round(models.reduce((s, m) => s + (Number(m.size) || 0), 0) / 1048576);
+    return { loaded: models.length > 0, models: names, mb };
+  } catch { return null; }
+  finally { clearTimeout(timer); }
+}
 
 export const deliveryCapabilities: Capability[] = [
   // ── 단일 로드: 관리 화면 전체 상태 + 의미 가이드 ──
@@ -1531,6 +1554,7 @@ export const deliveryCapabilities: Capability[] = [
         auth_env_ref: z.string().nullable().optional().describe("인증에 쓸 환경변수 **이름**(시크릿 값 금지)"),
         batch_size: z.number().int().optional().describe("배치 크기(#602 — 느린/CPU 백엔드 대응). 비우면 기본값"),
         request_timeout_ms: z.number().int().optional().describe("요청 타임아웃 ms. 비우면 기본값"),
+        backfill_min_available_mb: z.number().int().min(0).max(1_048_576).optional().describe("#1059 G2/G3 — 자동 백필 pre-flight 메모리 게이트: 가용 메모리가 이 MB 미만이면 이번 스윕을 건너뛴다(다음 주기 재시도, pending 유실 없음). 0=끔(무회귀). Ollama 모델 로드 스파이크가 세션 baseline 과 겹쳐 OOM 나는 걸 예방(예: 16GB 박스 4096~5000)"),
       }).optional().describe("임베딩 설정 — knowledge/project 백필과 검색이 공유"),
     }),
 
@@ -1586,7 +1610,7 @@ export const deliveryCapabilities: Capability[] = [
     }),
 
   restOnly("org_storage_status", "저장소·로그 상태",
-    "박스 디스크 사용률(경고/위험 판정 포함) + 로그 파일 크기 + 저장소 정책(로그 상한·디스크 임계치) + per-session 메모리 캡 정책(#1059 D)과 각 출처. admin 전용.",
+    "박스 디스크 사용률(경고/위험 판정 포함) + 로그 파일 크기 + 저장소 정책(로그 상한·디스크 임계치) + per-session 메모리 캡 정책(#1059 D)·idle 회수 정책(#1059 F)과 각 출처 + 라이브 메모리 status(#1059 G1 — available/total·세션수·Ollama). admin 전용.",
     [{ method: "GET", paths: ["/api/ui/org/storage"], parse: () => ({}) }],
     async () => {
       const cfg = await getRuntimeConfig();
@@ -1599,11 +1623,25 @@ export const deliveryCapabilities: Capability[] = [
       // 공유 빌드 캐시(#813 T3) — 지금 얼마나 쌓였나 + 어떤 env 를 세션에 주입 중인가(관리자가 눈으로 확인).
       const cacheOpts = { enabled: p.shared_cache_enabled, relocateHome: p.shared_cache_relocate_home };
       const cacheRoot = sharedCacheRoot(TERMINAL_SHARED_ROOT.base);
+      // #1059 G1 — 박스 메모리 status(가시화). #1059 다운의 두 축(만성 세션 baseline·급성 Ollama 스파이크)을 한 화면에.
+      //  available/total = OOM 근접도(회수 가능 캐시 포함, host-mem) · session_count = baseline 드라이버(중앙 세션 수) ·
+      //  ollama = 급성 스파이크(로드 모델·용량, best-effort). 전부 비파괴 조회. 실패해도 status 전체를 막지 않게 방어.
+      const availMb = await memAvailableMb().catch(() => 0);
+      const totalMb = memTotalMb();
+      const sessionCount = (await listSessionsRaw().catch(() => [])).length;
+      const ollama = cfg.embedding_config.provider === "http" ? await probeOllama(cfg.embedding_config.base_url).catch(() => null) : null;
       return {
         policy: p,
         policy_source: await getStoragePolicySource(), // db(관리탭) · env(.env 시드) · default(코드 기본값)
-        // per-session 메모리 캡(#1059 D) — 세션당 MemoryHigh/Max(MB, 0=무제한). 라이브 메모리 **사용량** status(available/Ollama/세션수)는
-        //  G1(#1064) 이 box-watch 로 여기 같은 ops 엔드포인트에 얹는다. 여기선 정책값·출처만 노출(설정은 org_runtime_update POST).
+        // #1059 G1 — 라이브 메모리 사용량. 관리탭이 저장소(디스크) status 와 나란히 '박스 운영 대시보드'로.
+        memory: {
+          available_mb: availMb,
+          total_mb: totalMb,
+          used_pct: totalMb > 0 ? Math.round(((totalMb - availMb) / totalMb) * 100) : 0,
+          session_count: sessionCount,
+          ollama, // {loaded, models, mb} | null(비-Ollama·미도달)
+        },
+        // per-session 메모리 캡(#1059 D) — 세션당 MemoryHigh/Max(MB, 0=무제한). 정책값·출처 노출(설정은 org_runtime_update POST).
         session_memory_policy: cfg.session_memory_policy,
         session_memory_policy_source: await getSessionMemoryPolicySource(),
         // idle 세션 자동 회수 정책(#1059 F) — idle TTL(분, 0=끔). 라이브 세션 수·메모리 status(G1)는 후속(#1064)이 얹는다.
