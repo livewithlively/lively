@@ -14,7 +14,34 @@ function projectDirFor(cwd: string): string {
   return path.join(CLAUDE_PROJECTS, cwd.replace(/[/.]/g, "-"));
 }
 
-export interface Prompt { text: string; ts: string; }
+export interface Prompt { text: string; ts: string; author?: string; }
+
+// 대화 기록이 실제로 쌓이는 뿌리들 — 공유 ~/.claude + **멤버별 프로필**(#1014 이후 웹터미널 세션은 항상
+//  CLAUDE_CONFIG_DIR=<PROFILES_ROOT>/<슬러그>/claude 로 실행된다). 예전엔 공유 하나만 봐서, 세션에서 오간
+//  질문 대부분이(특히 남이 던진 것) 팝업에 아예 안 떴다 — 실측: project/1045 는 공유 7 + yoon 프로필 3 = 대화
+//  10개인데 공유의 최신 1개만 읽고 있었다.
+const PROFILES_ROOT = process.env.LIVELY_PROFILES_ROOT || path.join(os.homedir(), ".lively", "profiles");
+const MAX_TRANSCRIPT_FILES = 20;   // 한 세션(cwd)당 읽을 대화 파일 상한 — 최근 수정순. 통합검색이 전 세션을 훑으므로 상한을 둔다.
+const MEMBER_HOME_BASE = process.env.LIVELY_MEMBER_HOME_BASE || "/home";   // 격리 ON(리눅스): useradd -m -d /home/box_<slug>
+async function transcriptRoots(): Promise<Array<{ dir: string; author: string }>> {
+  const roots = [{ dir: CLAUDE_PROJECTS, author: "" }];   // author='' = 공유(누구 프로필인지 알 수 없음)
+  let slugs: string[] = [];
+  try { slugs = await fsp.readdir(PROFILES_ROOT); } catch { /* 프로필 루트 없음(단일 프로필 박스) */ }
+  for (const slug of slugs) roots.push({ dir: path.join(PROFILES_ROOT, slug, "claude", "projects"), author: slug });
+  // 격리 ON 박스(멤버별 OS 유저·홈 700)에서는 기록이 그 홈에 떨어질 수 있다 → 후보에만 넣는다.
+  //  ⚠ 홈이 700 이면 게이트웨이가 못 읽고 조용히 건너뛴다(권한 상승은 하지 않는다 — 그 경우 이 경로의 질문은
+  //   여전히 안 보이며, 해결하려면 drop-priv 읽기가 필요하다. 여기선 '읽을 수 있으면 포함'까지만).
+  //  ⚠⚠ 리눅스(또는 경로를 명시한 박스)에서만 훑는다 — macOS 의 /home 은 autofs 자동마운트 지점이라
+  //   서비스 프로세스에서 readdir 하면 automountd 응답을 기다리며 **요청이 통째로 멈춘다**(실측: dev :8080 에서
+  //   /prompts 가 20초+ 무응답. CLI 로는 즉시 0건이라 재현이 안 돼 오진하기 쉽다). 격리는 리눅스 전용 기능이다.
+  const scanMemberHomes = process.platform === "linux" || !!process.env.LIVELY_MEMBER_HOME_BASE;
+  if (scanMemberHomes) {
+    let homes: string[] = [];
+    try { homes = (await fsp.readdir(MEMBER_HOME_BASE)).filter((h) => h.startsWith("box_")); } catch { /* 격리 미사용·접근 불가 */ }
+    for (const h of homes) roots.push({ dir: path.join(MEMBER_HOME_BASE, h, ".claude", "projects"), author: h.replace(/^box_/, "") });
+  }
+  return roots;
+}
 
 // 트랜스크립트 원문에서 **첫 cwd**(세션이 실행된 절대경로)를 뽑는다 — 이어받기(#905 C1)에서 그 경로로 세션을 열어야
 //  claude --resume 이 로컬 jsonl(경로=cwd 인코딩)을 찾는다. 세션 row 엔 cwd 가 없어 본문에서 회수한다.
@@ -45,39 +72,57 @@ const INJECTED_RE = /^\s*(<command-name|<local-command-|<command-message|<comman
 // 사용자가 보내고 esc 로 취소한 표식('[Request interrupted by user]' / '...for tool use'). 그 앞 턴을 폐기하는 신호.
 const INTERRUPT_RE = /^\s*\[Request interrupted/;
 
-// 한 세션(cwd)의 사용자 프롬프트를 시간순(오래된→최신)으로. '이 세션의 현재 대화' = 가장 최근 수정된 jsonl 기준.
-//  접근통제는 라우트(canAttach)에서 — 여기선 파일만 읽는다. 실패·미격리불가 = 빈 결과(비치명).
+// 한 세션(폴더)에서 **사람이 AI 에게 던진 질문 전부**를 시간순(오래된→최신)으로.
+//  이전엔 '공유 ~/.claude 의 최신 jsonl 하나' = 그 폴더의 마지막 대화, 그것도 공유 트리에 있는 것만이라
+//  같은 세션에서 오간 질문의 대부분이 누락됐다. 이제 (1) 공유 + 멤버 프로필 트리를 모두 훑고
+//  (2) 그 폴더의 대화 파일을 전부 합친다. 각 질문엔 어느 프로필에서 왔는지(author=멤버 슬러그)를 달아
+//  프론트가 '누가 물었는지'를 보여줄 수 있게 한다(공유 트리 출처는 author='').
+//  접근통제는 라우트(canAttach)에서 — 여기선 파일만 읽는다. 실패·읽기불가 = 빈 결과(비치명).
 export async function sessionPrompts(cwd: string, limit = 300): Promise<{ prompts: Prompt[]; total: number; found: boolean }> {
   if (!cwd) return { prompts: [], total: 0, found: false };
-  const dir = projectDirFor(cwd);
-  let files: string[];
-  try { files = (await fsp.readdir(dir)).filter((f) => f.endsWith(".jsonl")); }
-  catch { return { prompts: [], total: 0, found: false }; }   // 프로젝트 디렉토리 없음(대화 기록 없음)
-  if (!files.length) return { prompts: [], total: 0, found: false };
-  // 최신 대화 = 가장 최근 수정된 jsonl.
-  let newest = ""; let newestMt = -1;
-  for (const f of files) {
-    try { const st = await fsp.stat(path.join(dir, f)); if (st.mtimeMs > newestMt) { newestMt = st.mtimeMs; newest = f; } }
-    catch { /* skip */ }
+  const enc = path.basename(projectDirFor(cwd));
+  // 후보 파일 수집(뿌리 × 그 폴더의 모든 jsonl) → 최근 수정순 상한.
+  const cands: Array<{ file: string; author: string; mt: number }> = [];
+  for (const root of await transcriptRoots()) {
+    const dir = path.join(root.dir, enc);
+    let names: string[];
+    try { names = (await fsp.readdir(dir)).filter((f) => f.endsWith(".jsonl")); }
+    catch { continue; }   // 이 뿌리엔 이 폴더의 대화가 없음
+    for (const f of names) {
+      try { const st = await fsp.stat(path.join(dir, f)); cands.push({ file: path.join(dir, f), author: root.author, mt: st.mtimeMs }); }
+      catch { /* skip */ }
+    }
   }
-  if (!newest) return { prompts: [], total: 0, found: false };
-  let raw: string;
-  try { raw = await fsp.readFile(path.join(dir, newest), "utf8"); }
-  catch { return { prompts: [], total: 0, found: true }; }
+  if (!cands.length) return { prompts: [], total: 0, found: false };
+  cands.sort((a, b) => b.mt - a.mt);
+  const files = cands.slice(0, MAX_TRANSCRIPT_FILES);
   const out: Prompt[] = [];
-  for (const line of raw.split("\n")) {
-    if (!line) continue;
-    let o: any;
-    try { o = JSON.parse(line); } catch { continue; }
-    if (!o || o.type !== "user" || o.isMeta || o.isSidechain) continue;
-    const c = o.message && o.message.content;
-    let text = "";
-    if (typeof c === "string") text = c;
-    else if (Array.isArray(c)) text = c.filter((x: any) => x && x.type === "text").map((x: any) => x.text || "").join("\n");
-    text = (text || "").trim();
-    if (!text || INJECTED_RE.test(text)) continue;   // 툴결과·주입 메시지 제외 → 사람이 친 질문만
-    out.push({ text, ts: o.timestamp || "" });
+  //  같은 대화가 두 뿌리에 있을 수 있다(이어받기 물질화 materializeTranscriptIfMissing) → (시각+본문)으로 중복 제거.
+  const seen = new Set<string>();
+  for (const f of files) {
+    let raw: string;
+    try { raw = await fsp.readFile(f.file, "utf8"); }
+    catch { continue; }
+    for (const line of raw.split("\n")) {
+      if (!line) continue;
+      let o: any;
+      try { o = JSON.parse(line); } catch { continue; }
+      if (!o || o.type !== "user" || o.isMeta || o.isSidechain) continue;
+      const c = o.message && o.message.content;
+      let text = "";
+      if (typeof c === "string") text = c;
+      else if (Array.isArray(c)) text = c.filter((x: any) => x && x.type === "text").map((x: any) => x.text || "").join("\n");
+      text = (text || "").trim();
+      if (!text || INJECTED_RE.test(text)) continue;   // 툴결과·주입 메시지 제외 → 사람이 친 질문만
+      const ts = o.timestamp || "";
+      const key = ts + "\u0000" + text;   // 리터럴 NUL 금지 — git 이 바이너리 취급하고 grep 이 파일을 통째로 건너뛴다
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ text, ts, author: f.author });
+    }
   }
+  // 파일을 가로질러 합쳤으므로 시간순으로 다시 세운다(빈 timestamp 는 맨 앞).
+  out.sort((a, b) => (Date.parse(a.ts) || 0) - (Date.parse(b.ts) || 0));
   const total = out.length;
   return { prompts: out.slice(-limit), total, found: true };
 }
