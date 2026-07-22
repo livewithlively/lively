@@ -6539,29 +6539,32 @@ async function myAssetsSection(detail) {
     };
     // 켜기/끄기 2버튼. 조직 기본값을 따르는 중이면 '기본' 배지로 알리고, 내가 바꿔 둔 상태면 되돌릴 링크를 준다
     //  (버튼 3개는 과했다 — 사용자 지적).
-    // 켬/끔 컨트롤 — 버튼 두 개 + '기본' 배지로는 **지금 켜진 건지, 무엇이 기본인지**가 안 읽혔다(사용자 지적).
-    //  그래서 ① 스위치가 **현재 상태**를 형태로 말하고(켜짐=파랑·오른쪽), ② 옆 글이 **기본값과 내 변경 여부**를
-    //  문장으로 말한다. 되돌리기는 내가 바꿔 둔 항목에만 나온다.
+    // 켬/끔 컨트롤 — 스위치가 **현재 상태**를, 옆 작은 글이 **그게 기본값인지**를 말한다.
+    //  ⚠ 껐다가 다시 켜면 '내가 바꿈'이 남아 원래 상태로 안 돌아간 것처럼 보였다(사용자 지적) →
+    //   **기본값과 같은 값으로 되돌리면 개인 설정을 지운다**(clear). 그래서 '되돌리기' 버튼도 필요 없다.
     const onOffSeg = (targetKind: string, it: any) => {
+      const def = !!it.byDefault;
       const following = it.override === null || it.override === undefined;
-      const on = following ? !!it.byDefault : !!it.override;
-      const set = async (v: boolean | null) => {
+      const on = following ? def : !!it.override;
+      const set = async (v: boolean) => {
         try {
           const b: any = { target_kind: targetKind, ref_id: it.id };
-          if (v === null) b.clear = true; else b.state = v;
+          if (v === def) b.clear = true;    // 기본값과 같아짐 = 개인 설정 해제(자동)
+          else b.state = v;
           await api('/api/ui/me/asset-pref', { method: 'POST', body: JSON.stringify(b) });
           await reload();
         } catch (e: any) { toast((e && e.message) || '실패', true); }
       };
       const sw = el('button', { type: 'button', class: 'sw' + (on ? ' on' : ''), role: 'switch',
         'aria-checked': on ? 'true' : 'false', 'aria-label': on ? '켜짐 — 누르면 끕니다' : '꺼짐 — 누르면 켭니다' });
-      sw.addEventListener('click', () => void set(on ? false : true));
-      const state = el('span', { class: 'sw-state' + (on ? ' on' : ''), text: on ? '켜짐' : '꺼짐' });
-      const note = following
-        ? el('span', { class: 'sw-note', text: '기본값 그대로' })
-        : el('span', { class: 'sw-note' }, el('span', { text: '내가 바꿈 · 기본값은 ' + (it.byDefault ? '켬' : '끔') }),
-            el('button', { type: 'button', class: 'btn-text sw-reset', text: '되돌리기', onclick: () => void set(null) }));
-      return el('div', { class: 'hrow-act' }, sw, el('div', { class: 'sw-labels' }, state, note));
+      sw.addEventListener('click', () => void set(!on));
+      // 기본값과 같으면 '기본값', 다르면 기본이 무엇인지만 짧게 알린다(길게 쓰면 과하다는 지적).
+      const note = on === def ? '기본값' : (def ? '기본값 켬' : '기본값 끔');
+      return el('div', { class: 'hrow-act' },
+        el('div', { class: 'sw-labels' },
+          el('span', { class: 'sw-state' + (on ? ' on' : ''), text: on ? '켜짐' : '꺼짐' }),
+          el('span', { class: 'sw-note', text: note })),
+        sw);
     };
     const livelyRow = (targetKind: string, it: any, kind: string): { node: any; missing: boolean } => {
       const titleEl = el('span', { class: 'mini-title' }, el('span', { text: it.label || it.id }),

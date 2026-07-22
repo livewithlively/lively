@@ -1197,14 +1197,15 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
   background: #fff; box-shadow: 0 1px 2px rgba(21, 35, 59, .25); transition: transform .15s ease; }
 .sw.on::after { transform: translateX(17px); }
 .sw:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-.sw-labels { display: flex; flex-direction: column; gap: 1px; min-width: 96px; }
+/* 라벨은 스위치 **왼쪽**에서 오른쪽 정렬 — 스위치가 항상 행의 같은 자리(맨 오른쪽)에 서서, 글자 길이에
+   따라 좌우로 밀리지 않는다(사용자 지적). */
+.sw-labels { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
 .sw-state { font-size: 12.5px; font-weight: 700; color: var(--muted-head); }
 .sw-state.on { color: var(--blue); }
-.sw-note { font-size: 11.5px; color: var(--muted-2); display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
-.sw-reset { padding: 0; font-size: 11.5px; }
+.sw-note { font-size: 11px; color: var(--muted-2); white-space: nowrap; }
 /* 항목 한 줄 — 왼쪽 내용(제목·요약·PC 칩) + 오른쪽 켬/끔. 왼쪽이 여러 줄이어도 컨트롤은 세로 가운데. */
 .hrow { display: flex; align-items: center; gap: 14px; }
-.hrow-act { display: flex; align-items: center; gap: 10px; flex: none; }
+.hrow-act { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex: none; }
 
 /* 제목 옆 부가 표시(#1085) — '(개발자용)' 처럼 괄호로 붙이던 것을 칩으로. 제목보다 작고 조용하게. */
 .head-badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px;
