@@ -684,11 +684,19 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .tok-tools { display: flex; align-items: center; gap: 8px; }
 .tok-search { width: 210px; }
 .tok-per { width: auto; }
-/* 토큰 행 — 이름/메타(왼쪽) + 동작(오른쪽). 권한 목록이 길어 메타가 넘치지 않게 한 줄로 자른다. */
-.token-row { padding-left: 8px; padding-right: 8px; margin: 0 -8px; border-radius: 8px; }
-.token-row:hover { background: var(--bg-tint); }
+/* 토큰 행 — 이름/메타(왼쪽) + 동작(오른쪽). 권한 목록이 길어 메타가 넘치지 않게 한 줄로 자른다.
+   ⚠ 행 좌우에 음수 마진을 줬더니 **행만 8px 왼쪽으로 튀어나와** 제목·설명·페이저(카드 기준선)와 어긋나 보였다
+   (#1085 '들여쓰기가 이상'). 정렬이 우선 — 배경 강조는 box-shadow 로 좌우만 넓힌다(레이아웃 불변). */
+.token-row { padding: 11px 0; margin: 0; }
+.token-row:hover { background: var(--bg-tint); box-shadow: -8px 0 0 var(--bg-tint), 8px 0 0 var(--bg-tint); }
 .token-main { flex: 1 1 auto; }
 .token-main .mini-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 목록 구분 머리(사용 중 / 해제됨) — 위 목록과 붙지 않게. */
+.token-section-h { margin: 16px 0 2px; }
+.token-section-h:first-child { margin-top: 6px; }
+/* 페이저 — 숫자 버튼과 '53개 중 1–10' 이 붙어 한 덩어리로 읽혔다. 간격을 벌리고 위 목록과도 띄운다. */
+.oa-pager { margin-top: 16px; }
+.oa-pg-info { margin-left: 14px; }
 
 /* 상세 박스 내부(목록·편집) 기본 = 세로 스택. 단독으로 쓰는 곳은 이제 없고,
    .admin-two-cols(마스터-디테일)의 좁은화면 폴백 겸 베이스로만 남는다.
