@@ -13,6 +13,7 @@ import { toClientBundleServers } from "./mcp-client-bundle.js";
 // (#335) getSection 직접호출 폐기 — 섹션은 listSections 로 동적 조립(buildSectionBlocks).
 import { DEFAULT_WRITEBACK_NOTICE } from "./hook-defaults.js";
 import { redactString } from "./redact.js";
+import { installBundleTarArgs } from "./bundle-tar.js";
 import { logger } from "../log.js";
 
 // generator 의 buildStaticContext 를 in-process import — DB 진실원천을 stale 파일기반 lively-org 대신
@@ -169,7 +170,8 @@ export async function buildInstallBundle(harness = "claude"): Promise<{ buffer: 
     //  `.claude/hooks/._run-custom.mjs` 같은 쓰레기가 생겨 self-update 의 `node --check` 검증이 전체를 막았다.
     //  이 env 가 macOS tar 의 AppleDouble 생성을 끈다(리눅스 GNU tar 는 무시 — 무해, 크로스플랫폼 안전).
     const buf = await new Promise<Buffer>((resolve, reject) => {
-      const child = spawn("tar", ["-czf", "-", "-C", stage, "."], { env: { ...process.env, COPYFILE_DISABLE: "1" } });
+      //  ⚠ 인자는 bundle-tar.ts 가 소유한다 — **pax 포맷 강제**(비-ASCII 경로가 윈도우에서 깨지던 #1087).
+      const child = spawn("tar", installBundleTarArgs(stage), { env: { ...process.env, COPYFILE_DISABLE: "1" } });
       const chunks: Buffer[] = [];
       let err = "";
       child.stdout.on("data", (d) => chunks.push(d as Buffer));
