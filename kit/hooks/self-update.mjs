@@ -163,21 +163,37 @@ function verifyBundle(root) {
 }
 
 // #862 — claude mcp --scope user 가 쓰는 유저 설정 파일(mcpServers 를 담는 그 파일)을 찾는다.
-//  CLAUDE_CONFIG_DIR 가 있으면 그 밑, 없으면 $HOME/.claude.json. 존재하는 것만 반환(없으면 null=미설치/타구조 → skip).
-function claudeUserConfigPath() {
+//  CLAUDE_CONFIG_DIR 가 있으면 그 밑, 없으면 $HOME/.claude.json.
+//  ⚠ #1079 — **존재하는 것을 전부** 반환한다(종전엔 첫 번째 하나만). 훅과 클로드 코드가 **서로 다른 파일**을
+//   볼 수 있기 때문이다: 프로필 격리(#346)에서 훅 프로세스엔 CLAUDE_CONFIG_DIR 이 상속되는데 그 세션의
+//   클코 본체는 홈 설정을 쓰는(또는 그 반대) 조합이 실측으로 관찰됐다 — 하나만 고치면 "로그는 고쳤다는데
+//   화면은 그대로"가 된다. 둘 다 우리가 심은 항목이라 양쪽을 같은 값으로 맞추는 것이 안전하고 멱등하다.
+function claudeUserConfigPaths() {
   const cands = [];
   if (process.env.CLAUDE_CONFIG_DIR) cands.push(join(process.env.CLAUDE_CONFIG_DIR, ".claude.json"));
   cands.push(join(HOME, ".claude.json"));
-  for (const c of cands) { try { if (existsSync(c)) return c; } catch { /* */ } }
-  return null;
+  const seen = new Set();
+  return cands.filter((c) => {
+    if (seen.has(c)) return false;
+    seen.add(c);
+    try { return existsSync(c); } catch { return false; }
+  });
 }
 
 // #862 — Claude MCP 등록 ADDITIVE reconcile. 누락된 기대 서버만 ~/.claude.json 의 mcpServers 에 직접 추가한다.
 //  ⚠ 절대 remove/overwrite 안 함: 있으면 손대지 않고(URL·토큰 변경은 명시적 lively update 몫), 없는 것만 add →
 //   중간 실패로도 기존 등록 무손실(self-update 불변식). registerClaudeMcp(CLI)와 같은 서버 집합(lively·lively-local·org).
 function reconcileClaudeMcp(gw, token) {
-  const cj = claudeUserConfigPath();
-  if (!cj) return; // claude 유저 설정 없음 — 손대지 않음
+  const paths = claudeUserConfigPaths();
+  if (!paths.length) return;            // claude 유저 설정 없음 — 손대지 않음
+  // #1079 — 존재하는 설정 파일을 **전부** 같은 값으로 맞춘다(훅과 클코가 다른 파일을 볼 수 있으므로).
+  for (const cj of paths) {
+    try { reconcileOneClaudeConfig(cj, gw, token); }
+    catch (e) { log(`MCP reconcile 예외(${cj}): ${(e && e.message) || e}`); }
+  }
+}
+
+function reconcileOneClaudeConfig(cj, gw, token) {
   let conf;
   try { conf = JSON.parse(readFileSync(cj, "utf8")); } catch { return; } // 파손/못읽음 → 안전 skip(덮어쓰지 않음)
   if (!conf || typeof conf !== "object" || Array.isArray(conf)) return;
@@ -240,8 +256,22 @@ function reconcileClaudeMcp(gw, token) {
   }
   if (!added) return; // 누락 0 → 파일 미변경(정상 세션 비용 0)
   conf.mcpServers = servers;
-  try { writeFileSync(cj, JSON.stringify(conf, null, 2) + "\n"); log(`✓ claude MCP additive reconcile — ${added}건 (다음 세션 적용)`); }
-  catch (e) { log(`MCP reconcile 쓰기 실패(무시): ${(e && e.message) || e}`); }
+  try { writeFileSync(cj, JSON.stringify(conf, null, 2) + "\n"); }
+  catch (e) { log(`MCP reconcile 쓰기 실패(무시) ${cj}: ${(e && e.message) || e}`); return; }
+  // #1079 — **쓴 뒤 되읽어 확인한다.** "로그는 고쳤다는데 화면은 그대로"였던 실측 사고 때, 로그만으로는
+  //  무엇이 잘못됐는지(다른 파일을 고쳤나·되돌려졌나) 구분할 수 없었다. 여기서 확인하면 다음 진단이 한 줄로 끝난다.
+  //  실패해도 예외를 던지지 않는다(fail-open) — 다음 세션이 어차피 다시 시도한다.
+  let verified = false;
+  try {
+    const back = JSON.parse(readFileSync(cj, "utf8"));
+    verified = Object.entries(want).every(([n, e]) => {
+      const got = back && back.mcpServers && back.mcpServers[n];
+      return got && (e.type !== "stdio" || (got.type === "stdio" && JSON.stringify(got.args) === JSON.stringify(e.args)));
+    });
+  } catch { /* 되읽기 실패 = 미검증 */ }
+  log(verified
+    ? `✓ claude MCP reconcile — ${added}건 · 검증됨 ${cj} (다음 세션 적용)`
+    : `⚠ claude MCP reconcile — ${added}건 썼으나 **되읽기 검증 실패** ${cj} (다른 주체가 되돌렸거나 클코가 다른 파일을 봄 — 다음 세션 재시도)`);
 }
 
 async function main() {

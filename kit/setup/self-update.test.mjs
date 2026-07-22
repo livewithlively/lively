@@ -430,6 +430,35 @@ try {
         : bad("⑮f-b 최신 경로 멱등", "파일이 또 변경됨");
     }
 
+    // ⑮g #1079 — **훅과 클로드 코드가 서로 다른 설정 파일을 볼 수 있다**(프로필 격리 #346).
+    //  종전엔 '존재하는 첫 번째'만 고쳐서, 훅이 프로필 파일을 고치는 동안 클코가 읽는 홈 파일은 http 로 남았다
+    //  ("로그는 마이그레이션했다는데 화면은 그대로" 실측 사고). 존재하는 파일은 **전부** 같은 값으로 맞춘다.
+    {
+      const h5 = freshHome("v-mcp");                    // 최신 경로(재설치 없이 reconcile 만)
+      const prof = join(h5, "profile-claude");
+      mkdirSync(prof, { recursive: true });
+      // 프로필 격리에선 settings.json 도 그 안에 있다 — 하네스 판정(installedHarnesses)이 여기를 본다.
+      writeFileSync(join(prof, "settings.json"), JSON.stringify({
+        hooks: { SessionStart: [{ matcher: "startup", hooks: [{ type: "command", command: `"node" "$HOME/.lively/hooks/session-preload.mjs"` }] }] },
+      }, null, 2) + "\n");
+      mkdirSync(join(h5, ".lively", "lib"), { recursive: true });
+      writeFileSync(join(h5, ".lively", "lib", "lively-mcp-gateway.mjs"), "// proxy stub\n");
+      const httpConf = JSON.stringify({
+        mcpServers: { lively: { type: "http", url: `${GW}/mcp`, headers: { Authorization: "Bearer test-token" } } },
+      }, null, 2) + "\n";
+      writeFileSync(join(h5, ".claude.json"), httpConf);     // 클코가 읽는 홈 설정
+      writeFileSync(join(prof, ".claude.json"), httpConf);   // 훅이 먼저 보게 될 프로필 설정
+      await runUpdater(h5, { CLAUDE_CONFIG_DIR: prof });
+      const readType = (p) => {
+        try { return (JSON.parse(readFileSync(p, "utf8")).mcpServers || {}).lively?.type; } catch { return "(읽기실패)"; }
+      };
+      const tHome = readType(join(h5, ".claude.json"));
+      const tProf = readType(join(prof, ".claude.json"));
+      (tHome === "stdio" && tProf === "stdio")
+        ? ok("⑮g 존재하는 설정 파일을 전부 교정 — 프로필·홈 어느 쪽을 클코가 읽든 stdio")
+        : bad("⑮g 복수 설정 경로", `home=${tHome} profile=${tProf} — 한쪽만 고치면 클코가 보는 쪽이 안 바뀐다`);
+    }
+
     // ⑮e #1079 — **프록시 본체가 없는 구버전 번들**이면 마이그레이션하지 않는다.
     //  (stdio 로 바꿔 놓고 실행할 파일이 없으면 lively 가 통째로 안 뜬다 — #905 와 같은 부류의 사고.)
     {
