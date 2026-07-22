@@ -2659,6 +2659,12 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 /* 컬럼 헤더(커스텀) */
 /* 커스텀 필드 헤더를 표준 헤더(.pjv-colhead: 13px·600·muted)와 동일한 폰트/색으로 — 타입 아이콘은 표준처럼 숨김. */
 .pjv-thcol { gap: 5px; min-width: 0; font-size: 13px; font-weight: 600; color: var(--muted); letter-spacing: .2px; }
+/* 숨긴 열(폭 0)은 경계선도 없어야 한다(#1067) — 셀 안으로 들어온 핸들이 폭 0 셀에선 이웃 위로 삐져나와
+   구분선이 겹쳐 보였다(‖). 헤더 셀에 overflow:hidden 을 주면 폭 0 셀의 핸들·선이 함께 잘린다. */
+.pjv-tgroup-head-cols > .pjv-tcell, .pjv-list-colhead > .pjv-tcell { overflow: hidden; }
+/* ⚠ 헤더 셀에 좌우 패딩을 주지 마라(#1067) — 숨긴 열은 그리드 트랙이 0px 인데 패딩은 트랙을 넘겨 상자를 20px 로
+   되살린다. 그러면 안 보여야 할 열이 자리를 먹고 구분선이 이웃과 겹쳐 ‖ 로 보인다(실제로 한 번 냈던 회귀).
+   라벨은 가운데 정렬이라 경계선과 자연히 떨어진다 — 숨통이 더 필요하면 열 폭(--pjv-w-*) 을 키울 것. */
 .pjv-thcol-ic { display: none; }
 .pjv-thcol-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pjv-thcol-menu { flex: none; border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 15px; line-height: 1; padding: 0 2px; border-radius: 5px; opacity: 0; transition: opacity .12s ease; }
@@ -3277,8 +3283,17 @@ body.pjv-dragging .pjv-row-check { opacity: 1; }
 .pjv-col-resize { position: absolute; top: 0; right: -4px; width: 10px; height: 100%; cursor: col-resize; z-index: 4; }
 /* 모든 컬럼 폭 핸들(#666) — 기본/커스텀 컬럼 헤더 셀에도 이름칸과 같은 핸들. 셀이 앵커가 되도록 relative. */
 .pjv-tcell.pjv-colhead, .pjv-tcell.pjv-thcol { position: relative; }
-.pjv-col-resize-col { right: -5px; }
+/* ⚠ 핸들은 **셀 안에** 둔다(#1067) — 예전처럼 right:-5px 로 셀 밖으로 내밀면 DOM 상 뒤에 오는 옆 컬럼 헤더 셀이
+   그 위를 덮어(둘 다 position:relative 라 나중 요소가 위) 실제 마우스가 핸들에 닿지 않는다. 그러면 폭 조절 대신
+   열 순서 드래그(.pjv-col-draggable)가 걸려 "폭 조절 기능이 사라졌다"로 보인다(합성 이벤트로는 통과해 못 잡던 버그).
+   제목 열만 멀쩡했던 건 그 셀이 sticky+z-index 라 옆 셀보다 위에 그려졌기 때문. 선 위치(경계)는 그대로 유지. */
+.pjv-col-resize-col { right: 0; }
+.pjv-col-resize-col::after { right: 0; }
 .pjv-col-resize::after { content: ''; position: absolute; top: 3px; bottom: 3px; right: 4px; width: 2px; border-radius: 2px; background: transparent; transition: background-color .12s ease; }
+/* 컬럼 경계선은 **헤더에서 늘 얕게 보인다**(#1067) — 이게 '여기를 잡으면 열 폭이 바뀐다'는 유일한 단서다.
+   예전처럼 호버할 때만 나타나면 기능이 통째로 사라진 것으로 읽힌다(실제 사용자 신고: "드래그 기능 없어짐?").
+   덤으로 열과 열 사이에 리듬이 생겨 라벨이 다닥다닥 붙어 보이던 것도 해소된다. 호버=진하게, 잡는 중=파랑. */
+.pjv-tgroup-head-cols .pjv-col-resize::after, .pjv-list-colhead .pjv-col-resize::after { background: var(--line-soft, #e9ecf1); }
 .pjv-tgroup-head-cols:hover .pjv-col-resize::after, .pjv-list-colhead:hover .pjv-col-resize::after, .pjv-col-resize:hover::after,
 body.pjv-col-resizing .pjv-col-resize::after { background: var(--line-net); }
 .pjv-col-resize:hover::after, body.pjv-col-resizing .pjv-col-resize::after { background: var(--blue); }
