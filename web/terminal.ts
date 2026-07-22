@@ -2,7 +2,7 @@
 import { api, el, errorNote, pageHead, personFace, state, toast } from './core.js';
 import { openMySessionsModal } from './sessions.js';   // #905 C1 — 터미널 탭 '내 세션 기록' 버튼→모달
 import { checklist, skeleton } from './learn.js';
-import { field, overlay } from './admin.js';
+import { field, overlay, confirmDialog } from './admin.js';
 import { startTour, isTourActive } from './tour.js';
 
 
@@ -83,22 +83,28 @@ function fmtTermDate(sec) {
 //  ⚠ '대기 중'은 브라우저 접속 여부와 무관하다 — 세션은 게이트웨이/노드에서 상시 돌고, 아무도 안 보고 있다고
 //   꺼진 게 아니다. 예전엔 미접속을 전부 '오프라인'으로 칠해 살아 있는 세션이 꺼진 것처럼 보였다(#1015 E).
 //  title = Claude Code 가 pane 에 써두는 '지금 하는 일' 요약(백엔드 제공) → 카드에 그대로 노출(= '지금 무슨 작업').
-//  waiting 을 맨 앞으로: 내 승인/선택을 기다리는 = 가장 먼저 처리할 것. 끝난 세션(exited)·못 닿는 세션(offline)은 맨 뒤.
+//  waiting 을 맨 앞으로: 내 승인/선택을 기다리는 = 가장 먼저 처리할 것. 아무도 안 보는 세션(offline)·끝난 세션(exited)은 뒤로.
 const TSESS_STATUS: Record<string, { label: string; cls: string; rank: number }> = {
   waiting:    { label: '확인 필요',  cls: 'waiting',    rank: 0 },
   busy:       { label: '작업 중',    cls: 'busy',       rank: 1 },
-  idle:       { label: '대기 중',    cls: 'idle',       rank: 2 },
+  idle:       { label: '대기 중',    cls: 'idle',       rank: 2 },   // 최근 48시간 내 작업이 있었던 살아있는 세션
   restorable: { label: '복원 가능',  cls: 'restorable', rank: 3 }, // #1059 E — 재부팅·회수로 꺼졌으나 복원 가능
   exited:     { label: '종료됨',     cls: 'exited',     rank: 4 },
-  offline:    { label: '연결 끊김',  cls: 'offline',    rank: 5 },
+  offline:    { label: '오프라인',   cls: 'offline',    rank: 5 },   // 48시간+ 방치(탭 열림 여부 무관) 또는 노드 미연결
 };
-// 종료 확인 문구 — 카드/일괄 공통. '삭제'가 아니라 '끝내기'이고 대화록은 남는다는 걸 확인창에서 못 박는다.
-function TSESS_END_CONFIRM(n, head) {
-  return head + '\n\n실행 중인 작업이 있으면 함께 중단됩니다.\n대화록은 지워지지 않아요 — 📜 세션 기록에 남고, 거기서 “💬 이어 질문하기”로 이어받을 수 있습니다'
-    + (n > 1 ? '.' : '.');
+// 종료 확인 다이얼로그 — 카드/일괄 공통. 브라우저 confirm 대신 라이블리 확인 모달(#1062).
+//  '삭제'가 아니라 '끝내기'이고 대화록은 남는다는 걸 여기서 못 박는다.
+function tsessConfirmEnd(title, extraLines: string[] = []) {
+  return confirmDialog({
+    title, danger: true, confirmText: '종료', cancelText: '취소',
+    message: '실행 중인 작업이 있으면 함께 중단됩니다.',
+    lines: extraLines,
+    note: '대화록은 지워지지 않아요 — 📜 세션 기록에 남고, 거기서 “💬 이어 질문하기”로 이어받을 수 있습니다.',
+  });
 }
-// 세션이 '이제 AI 가 안 도는' 상태인가 — 일괄 종료 대상 안내·정렬에 쓴다. exited·offline·restorable(#1059 E) 모두.
-function sessDead(s) { const k = sessState(s); return k === 'exited' || k === 'offline' || k === 'restorable'; }
+// 세션이 '이제 AI 가 안 도는' 상태인가 — 일괄 종료 대상·'끝남' 뷰 판정. exited(셸만 남음)·restorable(#1059 E, tmux 죽음).
+//  ⚠ offline 은 제외한다 — 그건 '아무도 안 보는 중'이지 끝난 게 아니다(프로세스는 대개 살아 있다).
+function sessDead(s) { const k = sessState(s); return k === 'exited' || k === 'restorable'; }
 // #1059 E — restorable(desired-state 만 남고 tmux 는 죽음)을 먼저 판정, 그 외는 백엔드 agentState(없으면 exited).
 function sessState(s) { return s.restorable ? 'restorable' : (TSESS_STATUS[s.agentState] ? s.agentState : 'exited'); }
 // 상대 시각 — '방금 · 3분 전 · 2시간 전 · 5일 전'.
@@ -145,8 +151,8 @@ const TSESS_VIEWS: Array<{ key: string; label: string; cls?: string; hint: strin
   { key: 'busy',    label: '작업 중',   cls: 'busy',    hint: '지금 돌고 있는 세션', match: (s) => s._st === 'busy' },
   { key: 'today',   label: '오늘',      hint: '오늘(자정 이후) 작업한 세션', match: (s) => sessSinceMidnight(s) },
   { key: 'week',    label: '최근 7일',  hint: '이번 주에 작업한 세션', match: (s) => sessAgeDays(s) < 7 },
-  { key: 'stale',   label: '방치 7일+', hint: '일주일 넘게 아무 작업이 없는 세션 — 정리(종료) 후보', match: (s) => sessAgeDays(s) >= 7 && !sessDead(s) },
-  { key: 'ended',   label: '끝남',      cls: 'exited',  hint: 'AI 가 더 안 도는 세션(종료됨·연결 끊김)', match: (s) => sessDead(s) },
+  { key: 'stale',   label: '방치 7일+', hint: '일주일 넘게 아무 작업이 없는 세션(오프라인 포함) — 정리(종료) 후보', match: (s) => sessAgeDays(s) >= 7 && !sessDead(s) },
+  { key: 'ended',   label: '끝남',      cls: 'exited',  hint: 'AI 가 더 안 도는 세션(종료됨·복원 가능) — 정리 대상', match: (s) => sessDead(s) },
 ];
 const TSESS_VIEW_KEY = 'lively_term_view_v2';
 function tsessView(): string { try { const v = localStorage.getItem(TSESS_VIEW_KEY) || 'all'; return TSESS_VIEWS.some((x) => x.key === v) ? v : 'all'; } catch { return 'all'; } }
@@ -242,19 +248,21 @@ async function renderTerminal(view) {
     //  목록에 남의 세션까지 들어오면서 '전부'는 종료할 수도 없는 것까지 담게 됐다.
     //  (상태칩 '종료됨' → 전체 선택 → 선택 종료 가 정리 동선.)
     const scope = (shownNow.length ? shownNow : sessions).filter((s) => s.owned);
-    const allOn = scope.length > 0 && scope.every((s) => sel.ids.has(s.id));
-    const allBtn = scope.length
-      ? el('button', { class: 'dash-bulkbar-btn', type: 'button', text: allOn ? '전체 해제' : '보이는 것 전체 (' + scope.length + ')',
-          title: '지금 필터에 걸린 내 세션만 선택합니다',
-          onclick: () => { if (allOn) scope.forEach((s) => sel.ids.delete(s.id)); else scope.forEach((s) => sel.ids.add(s.id)); draw(); } })
-      : null;
-    // 정리 단축키 — 내가 만든 세션 중 이미 끝난 것(종료됨·연결 끊김)만 한 번에 고른다.
-    const deadMine = sessions.filter((s) => s.owned && sessDead(s));
-    const deadBtn = deadMine.length
-      ? el('button', { class: 'dash-bulkbar-btn', type: 'button', text: '끝난 세션 (' + deadMine.length + ')',
-          title: 'AI 가 더 안 도는 내 세션(종료됨·연결 끊김)을 골라 한 번에 정리하세요',
-          onclick: () => { deadMine.forEach((s) => sel.ids.add(s.id)); draw(); } })
-      : null;
+    // 빠른 선택 — 전체 / 온라인 / 오프라인. 세 묶음 다 '지금 화면에 보이는 내 세션' 안에서 고른다
+    //  (필터를 무시하고 안 보이는 것까지 담으면, 고른 개수와 화면이 어긋나 종료 대상이 불투명해진다).
+    //  온라인 = AI 가 살아 움직이는 것(작업 중·확인 필요·대기 중) · 오프라인 = 방치·종료됨·복원 가능.
+    const isOnline = (x) => { const k = sessState(x); return k === 'busy' || k === 'waiting' || k === 'idle'; };
+    const groups = [
+      { key: 'all', label: '전체', items: scope, hint: '보이는 내 세션 전부 선택' },
+      { key: 'on', label: '온라인', items: scope.filter(isOnline), hint: 'AI 가 살아 움직이는 세션(작업 중·확인 필요·대기 중)만 선택' },
+      { key: 'off', label: '오프라인', items: scope.filter((x) => !isOnline(x)), hint: '48시간+ 방치·종료됨·복원 가능 세션만 선택 — 한 번에 정리할 때' },
+    ].filter((g) => g.items.length);
+    const pickBtns = groups.map((g) => {
+      const on = g.items.every((x) => sel.ids.has(x.id));   // 이미 그 묶음이 다 선택돼 있으면 토글로 해제
+      return el('button', { class: 'dash-bulkbar-btn' + (on ? ' on' : ''), type: 'button',
+        text: (on ? '✓ ' : '') + g.label + ' (' + g.items.length + ')', title: g.hint,
+        onclick: () => { g.items.forEach((x) => on ? sel.ids.delete(x.id) : sel.ids.add(x.id)); draw(); } });
+    });
     const openBtn: any = el('button', { class: 'dash-bulkbar-btn primary dash-bulkbar-push', type: 'button',
       title: '고른 세션들을 한 탭 그리드로 동시에 열기', text: '그리드로 열기' + (n ? ' (' + n + ')' : ''), onclick: () => bulkOpen() });
     openBtn.disabled = n === 0;
@@ -263,7 +271,7 @@ async function renderTerminal(view) {
     endBtn.disabled = n === 0;
     bulkBar.replaceChildren(
       el('span', { class: 'dash-bulkbar-n', text: n ? (n + '개 선택') : '세션을 골라 그리드로 열거나 종료하세요' }),
-      ...[allBtn, deadBtn].filter(Boolean), openBtn, endBtn,
+      ...pickBtns, openBtn, endBtn,
       el('button', { class: 'dash-bulkbar-btn', type: 'button', title: sel.mode ? '선택 모드 종료' : '선택 해제', text: '완료',
         onclick: () => { sel.mode = false; sel.ids.clear(); draw(); } }));
   }
@@ -361,9 +369,10 @@ async function renderTerminal(view) {
     const skipped = picked.length - items.length;
     if (!items.length) { toast(picked.length ? '내가 만든 세션만 종료할 수 있습니다' : '', true); return; }
     const live = items.filter((s) => !sessDead(s)).length;   // 아직 도는 세션은 따로 경고(진행 중 작업이 끊긴다)
-    if (!confirm(TSESS_END_CONFIRM(items.length, items.length + '개 세션을 종료할까요?')
-      + (live ? '\n\n⚠ 이 중 ' + live + '개는 아직 도는 세션입니다.' : '')
-      + (skipped ? '\n남의 세션 ' + skipped + '개는 제외됩니다(소유자만 종료 가능).' : ''))) return;
+    const lines: string[] = [];
+    if (live) lines.push('⚠ 이 중 ' + live + '개는 아직 도는 세션입니다.');
+    if (skipped) lines.push('남의 세션 ' + skipped + '개는 제외됩니다(소유자만 종료 가능).');
+    if (!await tsessConfirmEnd(items.length + '개 세션을 종료할까요?', lines)) return;
     btn.disabled = true;
     // 병렬 종료 — 일부 실패해도 나머지는 진행(성공/실패 건수 보고). 노드 세션은 ?node= 로 위임(#869).
     const results = await Promise.allSettled(
@@ -440,20 +449,23 @@ function tsessCard(s, ctx) {
         if (r && r.already) { window.open(termUrl(s.id, s.label, s.node && s.node.id), '_blank'); toast('세션이 이미 살아있어 그대로 엽니다'); reRender(); return; }
         const ns = r && r.session;
         if (ns && ns.id) window.open(termUrl(ns.id, ns.label || s.label), '_blank');
-        toast('세션을 복원했어요'); reRender();
+        toast('복원했어요 — 새 터미널에서 이어볼 대화를 고르세요(claude 이어보기 목록).'); reRender();
       } catch (e: any) { toast('복원 실패 — ' + (e && e.message || e), true); rb.disabled = false; rb.textContent = '복원'; }
     };
     acts.append(rb);
   } else {
     acts.append(el('button', { class: 'tsess-open', text: '열기', onclick: () => window.open(termUrl(s.id, s.label, s.node && s.node.id), '_blank') }));
   }
-  acts.append(el('button', { class: 'tsess-icon tsess-q', title: '이 세션에서 클로드에게 보낸 내 질문만 순서대로 모아보기', text: '내 질문', onclick: () => openSessPrompts(s) }));
+  acts.append(el('button', { class: 'tsess-icon tsess-q', title: '이 세션에서 AI 에게 보낸 질문 전부(누가 보냈든) 순서대로 모아보기', text: '질문', onclick: () => openSessPrompts(s) }));
   if (s.owned) {
     if (!s.restorable) acts.append(el('button', { class: 'tsess-icon', title: '이름·초대 수정', text: '수정', onclick: () => openTermEdit(s, cfg, view) }));
     // restorable 은 '복원 목록에서 제거'(desired-state 삭제), 라이브는 '종료'(tmux 종료, 대화록은 세션 기록에 남아 이어받기 가능). 둘 다 DELETE(백엔드가 gone→forget 처리).
     acts.append(el('button', { class: 'tsess-icon danger', title: s.restorable ? '복원 목록에서 제거' : '이 세션을 끝낸다(대화록은 세션 기록에 남아 나중에 이어받을 수 있음)', text: s.restorable ? '제거' : '종료', onclick: async () => {
-      const msg = s.restorable ? '세션 "' + s.label + '" 을(를) 복원 목록에서 제거할까요? 더는 복원할 수 없어요.' : TSESS_END_CONFIRM(1, '세션 "' + s.label + '" 을(를) 종료할까요?');
-      if (!confirm(msg)) return;
+      const ok = s.restorable
+        ? await confirmDialog({ title: '‘' + (s.label || '이름 없음') + '’ 을(를) 복원 목록에서 제거할까요?', danger: true,
+            confirmText: '제거', cancelText: '취소', message: '더는 이 세션을 복원할 수 없어요.' })
+        : await tsessConfirmEnd('‘' + (s.label || '이름 없음') + '’ 세션을 종료할까요?');
+      if (!ok) return;
       try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' }); toast(s.restorable ? '복원 목록에서 제거됨' : '세션을 종료했습니다 — 대화록은 📜 세션 기록에 남아 있어요'); reRender(); }
       catch (e) { toast('실패 — ' + e.message, true); }
     } }));
@@ -554,6 +566,20 @@ function qHighlight(text, terms) {
   if (pos < text.length) wrap.append(document.createTextNode(text.slice(pos)));
   return wrap;
 }
+// 질문 작성자 배지 — 백엔드가 준 author(멤버 슬러그, 공유 트리 출처는 빈 값)를 사람 이름으로.
+//  이름은 /terminal/config 의 members 로 한 번만 조회해 캐시(팝업이 대시보드에서도 열리므로 cfg 를 못 받는다).
+let _qMembers: any[] | null = null;
+async function qMemberName(slug) {
+  if (!slug) return '';
+  if (_qMembers === null) { try { const c = await api('/api/ui/terminal/config'); _qMembers = (c && c.members) || []; } catch { _qMembers = []; } }
+  const m = (_qMembers || []).find((x) => x.id === slug || String(x.id || '').toLowerCase() === slug);
+  return (m && (m.name || m.id)) || slug;
+}
+// 작성자가 둘 이상일 때만 배지를 단다 — 혼자 쓴 세션에 배지를 붙이면 소음이다.
+function qAuthorBadge(author, names) {
+  if (!author || !names) return null;
+  return el('span', { class: 'tsess-qwho', title: '이 질문을 보낸 사람', text: names.get(author) || author });
+}
 // 긴 질문 접기 — 항목을 리스트에 붙인 '뒤에' 호출한다(DOM 에 있어야 높이를 잰다). 8줄을 넘으면 접고
 //  '더 보기' 토글을 단다. 넘지 않으면 clamp 를 떼고 아무것도 안 붙인다(짧은 질문은 그대로).
 function qClampText(item, textEl) {
@@ -570,7 +596,9 @@ function qClampText(item, textEl) {
 //  대시보드 '내 AI 세션' 카드의 ⋮ 메뉴도 이걸 그대로 재사용한다(#853) — 질문 보기 UI 를 두 벌 만들지 않는다.
 export async function openSessPrompts(s) {
   const body = el('div', { class: 'tsess-qbody' }, el('div', { class: 'caption', text: '질문을 불러오는 중…' }));
-  overlay('💬 내 질문 · ' + (s.label || '(이름 없음)'), body);
+  // '내 질문'이 아니라 '이 세션의 질문' — 백엔드가 이 세션 폴더의 모든 대화(공유 + 멤버별 프로필)를 합쳐
+  //  누가 던졌든 사람 질문 전부를 준다. 여러 사람이 물었으면 항목에 작성자 배지가 붙는다.
+  overlay('💬 이 세션의 질문 · ' + (s.label || '(이름 없음)'), body);
   try {
     const d = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/prompts' + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''));
     const prompts = (d && d.prompts) || [];
@@ -578,6 +606,12 @@ export async function openSessPrompts(s) {
     if (!prompts.length) {
       body.replaceChildren(el('div', { class: 'empty', text: (d && d.found) ? '이 세션에서 보낸 질문이 아직 없어요.' : '이 세션의 대화 기록을 찾지 못했어요.' }));
       return;
+    }
+    // 작성자가 2명 이상이면 이름 맵을 만들어 배지를 단다(1명이면 null → 배지 없음).
+    const authors = [...new Set(prompts.map((p) => p.author).filter(Boolean))];
+    let authorNames: Map<string, string> | null = null;
+    if (authors.length > 1) {
+      authorNames = new Map(await Promise.all(authors.map(async (a2) => [a2, await qMemberName(a2)] as [string, string])));
     }
     const search = el('input', { class: 'tsess-qsearch', type: 'search', placeholder: '이 세션의 질문 검색…' });
     const cap = el('div', { class: 'caption tsess-qcap' });
@@ -591,7 +625,8 @@ export async function openSessPrompts(s) {
         prompts.slice().reverse().forEach((p) => {
           const txt = qHighlight(p.text, null);
           const item = el('div', { class: 'tsess-qitem' },
-            el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + (prompts.indexOf(p) + 1) }), el('span', { class: 'tsess-qwhen', text: qWhen(p.ts) })),
+            el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + (prompts.indexOf(p) + 1) }),
+              ...[qAuthorBadge(p.author, authorNames)].filter(Boolean), el('span', { class: 'tsess-qwhen', text: qWhen(p.ts) })),
             txt);
           list.append(item);
           qClampText(item, txt);
@@ -610,7 +645,8 @@ export async function openSessPrompts(s) {
       pool.forEach(({ p, chrono }) => {
         const txt = qHighlight(p.text, terms);
         const item = el('div', { class: 'tsess-qitem' },
-          el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + chrono }), el('span', { class: 'tsess-qwhen', text: qWhen(p.ts) })),
+          el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + chrono }),
+            ...[qAuthorBadge(p.author, authorNames)].filter(Boolean), el('span', { class: 'tsess-qwhen', text: qWhen(p.ts) })),
           txt);
         list.append(item);
         qClampText(item, txt);

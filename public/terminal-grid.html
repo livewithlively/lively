@@ -107,7 +107,7 @@
     <span class="lay-val" id="lay-val">—</span>
     <button id="lay-inc" title="열 수 늘리기 (가로로 넓게)">＋</button>
   </span>
-  <button id="btn-qsearch" title="그리드의 모든 세션에서 내가 보낸 질문을 통합 검색 — 어느 터미널에 했는지 찾아 바로 이동">🔎 내 질문</button>
+  <button id="btn-qsearch" title="그리드의 모든 세션에서 내가 보낸 질문을 통합 검색 — 어느 터미널에 했는지 찾아 바로 이동">🔎 질문 검색</button>
   <button id="btn-reload" title="모든 셀 새로고침">↻ 새로고침</button>
   <button id="btn-close" title="이 탭 닫기">닫기</button>
 </div>
@@ -352,7 +352,7 @@
     var box = document.createElement('div'); box.id = 'qs-box';
     box.innerHTML =
       '<button class="qs-x" title="닫기">✕</button>'
-      + '<div id="qs-head"><h2>💬 내 질문 — 그리드 전체 검색</h2>'
+      + '<div id="qs-head"><h2>💬 질문 검색 — 그리드 전체</h2>'
       + '<p>이 그리드의 모든 세션에서 내가 보낸 질문을 한데 모아 찾습니다. 누르면 그 세션(터미널)으로 이동해요.</p></div>'
       + '<input id="qs-search" type="search" placeholder="질문 검색 — 여러 단어는 모두 포함(AND). 세션 이름으로도 찾을 수 있어요…" autocomplete="off">'
       + '<div id="qs-cap">불러오는 중…</div><div id="qs-list"></div>';

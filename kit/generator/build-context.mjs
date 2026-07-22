@@ -559,6 +559,9 @@ export function buildKitBundle(target, { orgName = "조직", orgLabel = "org", h
   // 로컬조작 stdio MCP 서버(#899) — lively.mjs 가 import. 번들 동봉 → kit_version 지문 포함 → 자동 업뎃(#858)이 함께 갱신.
   copyMjsWithHeader(kitAbs("cli/lively-mcp-local.mjs"), join(target, "cli", "lively-mcp-local.mjs"), "kit/cli/lively-mcp-local.mjs", orgLabel);
   copied.push("cli/lively-mcp-local.mjs");
+  // 게이트웨이 stdio 프록시(#1079) — `lively mcp` 가 import. 번들 동봉(lively.mjs 옆에 둬야 import 해결).
+  copyMjsWithHeader(kitAbs("cli/lively-mcp-gateway.mjs"), join(target, "cli", "lively-mcp-gateway.mjs"), "kit/cli/lively-mcp-gateway.mjs", orgLabel);
+  copied.push("cli/lively-mcp-gateway.mjs");
   // 워크트리 셀프서비스 코어(#900) — lively.mjs·lively-mcp-local.mjs 가 import. 번들 동봉(둘 옆에 둬야 import 해결).
   copyMjsWithHeader(kitAbs("cli/repo-worktree-core.mjs"), join(target, "cli", "repo-worktree-core.mjs"), "kit/cli/repo-worktree-core.mjs", orgLabel);
   copied.push("cli/repo-worktree-core.mjs");

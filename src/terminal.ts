@@ -10,8 +10,9 @@ import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { logger } from "./log.js";
-import { ROOTS, HARNESSES, listSessions, listRestorableSessions, createSession, killSession, editSession, canAttach, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
+import { ROOTS, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
 import { getSessionState, deleteSessionState } from "./org/session-state.js"; // #1059 E — restorable 세션 복원
+import { listManagedSessions } from "./org/managed-sessions.js"; // #1059 F — 관리탭 세션목록에서 managed 표시(회수 제외)
 import { sessionPrompts, searchPrompts, searchPromptsHybrid } from "./terminal-transcript.js";
 import { activeEmbeddingProvider } from "./v6/search-util.js";
 import { setupPtyUpgrade, type TicketLookup } from "./terminal-pty.js";
@@ -110,6 +111,21 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
           .map((n) => ({ id: n.id, name: n.name, kind: n.kind, online: live.get(n.id) ?? false }));
       })(),
     });
+  }));
+
+  // ── 내 AI 계정(#1085) — 관리탭 [내 설정 ▸ 내 AI 설정] 상단 카드가 읽고 쓴다. **본인 것만**: 경로에 멤버 id 가
+  //  없고 principal(userOf) 로만 대상이 정해진다 → 남의 계정을 조회·로그아웃할 표면이 아예 없다(admin 도 마찬가지).
+  app.get("/api/ui/me/ai-accounts", auth, wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ accounts: await aiAccountStatus(userOf(req)) });
+  }));
+  // 로그아웃 = 내 자격증명 파일 삭제(재로그인으로 복구 가능). 공유 계정(비격리 codex 등)은 서비스가 409 로 막는다.
+  app.post("/api/ui/me/ai-accounts/logout", auth, wrap(async (req, res) => {
+    const harness = String(((req.body ?? {}) as Record<string, unknown>).harness ?? "").trim();
+    if (!harness) throw new HttpError(400, "harness(AI 키)가 필요합니다");
+    await aiAccountLogout(userOf(req), harness);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, accounts: await aiAccountStatus(userOf(req)) });
   }));
 
   // ── 멀티프로필 프로비저닝(#442) — 관리탭 전용(admin scope). 로그인(OAuth)은 멤버가 웹터미널에서 셀프서비스. ──
@@ -331,10 +347,27 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
       invites: st.invites, projectId: st.project_id || undefined,
       projectSrc: st.project_src === "org" ? "org" : "v6",
       readOnly: st.read_only, incognito: st.incognito,
-      resume: id, // claude 하네스에 한해 createSession 이 --resume <id> 적용(비-claude 는 무시)
+      // #1059 — box-id 는 claude 세션 UUID 가 아니라 --resume 인자로 주면 "검색 결과 없음"에 빠진다(사용자 신고). 대신
+      //  resumePick 으로 인자 없는 --resume(후보 picker)를 띄워 이 작업폴더의 실제 대화에서 고르게 한다. claude 하네스만 적용.
+      resumePick: true,
     });
     await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 desired-state 정리 실패(비치명)"));
     res.json({ ok: true, session });
+  }));
+
+  // #1059 F(b) — 관리자 전용 **전 세션 메타뷰**. 뷰어 필터 없이 이 박스의 모든 중앙 세션(listSessionsRaw)을 반환한다
+  //  (owner·dir·harness·lastActive·attached·agentState·projectId — 대화 내용은 없음). 운영자가 '무엇이 떠 있나'를 보고
+  //  수동 회수(F(c): DELETE ?reclaim=1)의 대상을 고른다. 노드 세션은 멤버 자기 PC 라 중앙 박스 회수 범위 밖(제외 — reaper 와 동일).
+  //  managed(상시)·attached·busy·waiting 는 회수해도 무의미/부적절 → 각 항목에 managed/attached/agentState 를 실어 프론트가 회수 버튼을 게이트한다.
+  app.get("/api/ui/terminal/admin/sessions", auth, wrap(async (req, res) => {
+    if (!userOf(req).scopes?.includes("admin")) throw new HttpError(403, "admin 권한이 필요합니다");
+    res.setHeader("Cache-Control", "no-store");
+    const [central, managed] = await Promise.all([
+      listSessionsRaw(),
+      listManagedSessions().catch(() => [] as Array<{ session_id: string | null }>),
+    ]);
+    const managedIds = new Set(managed.map((m) => m.session_id).filter((x): x is string => !!x));
+    res.json({ sessions: central.map((s) => ({ ...s, managed: managedIds.has(s.id) })) });
   }));
 
   registerTerminalFiles(app, verifier);

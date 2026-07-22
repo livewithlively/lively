@@ -9,7 +9,7 @@
 //   · 도메인별로 묶는다 — 자기 도메인만 훑고 나가는 게 가장 빠른 검토다(#638: 워킹레벨이 오너보다 잘 검토).
 //   · 손이 안 떠난다 — j/k 이동 · Enter 펼침 · a 승인 · r 반려 · x 선택 → 일괄 승인.
 //   · 되돌릴 수 있다 — 신규 반려=휴지통(복원 가능) · 수정 반려=수정 전으로 되돌리기.
-import { api, el, errorNote, relTime, renderMarkdown, state, toast } from './core.js';
+import { api, cardHead, el, errorNote, relTime, renderMarkdown, state, toast } from './core.js';
 import { overlayBox, skeleton } from './learn.js';
 import { SPACE_SUBS } from './category-form.js';
 
@@ -167,9 +167,9 @@ export async function ingestPolicyPanel(detail, data): Promise<void> {
   detail.replaceChildren(
     el('div', {},
       el('div', { class: 'section-title' }, el('h2', { text: '지식 검토 정책' })),
-      el('p', { class: 'admin-hint', text: '에이전트(AI)가 기록한 지식을 사람이 확인한 뒤에 유효해지도록 할지 정합니다. 기본값은 “즉시 반영”(게이트 꺼짐)이므로 켜지 않으면 지금과 동일하게 동작합니다.' })),
+      el('p', { class: 'admin-hint', text: 'AI가 기록한 지식을 사람이 확인한 뒤에 유효해지도록 할지 정합니다.' })),
     el('div', { class: 'card' },
-      el('p', { class: 'admin-hint rq-intro', text: '켜면 에이전트가 기록한 지식은 [WIKI ▸ 검토 대기]로 이동하고, 승인 전까지는 검색·세션주입·목록에 표시되지 않습니다. 사람이 웹에서 직접 쓴 지식은 영향을 받지 않습니다.' }),
+      cardHead('검토 게이트', '켜면 에이전트가 기록한 지식은 [WIKI ▸ 검토 대기]로 이동하고, 승인 전까지는 검색·세션주입·목록에 표시되지 않습니다. 사람이 웹에서 직접 쓴 지식은 영향을 받지 않습니다.'),
       gateCard(preset, obs, reload),
       rulesSection(rules, reload)));
 }
@@ -514,8 +514,7 @@ export async function reviewQueuePanel(detail, data?): Promise<void> {
     : null;
 
   const card = el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h2', { text: '검토 대기' })),
-    el('p', { class: 'admin-hint', text: '사람이 확인해야 지식이 됩니다. 신규는 승인 전까지 검색·세션주입·목록에서 빠져 있고, 수정은 반영본과 이전본의 차이를 보고 확인하거나 되돌릴 수 있습니다. 반려한 신규 지식은 휴지통으로 갑니다(복원 가능). 승인·반려는 변경 감사에 기록됩니다.' }),
+    cardHead('검토 대기 목록', '사람이 확인해야 지식이 됩니다. 신규는 승인 전까지 검색·세션주입·목록에서 빠져 있고, 수정은 반영본과 이전본의 차이를 보고 확인하거나 되돌릴 수 있습니다. 반려한 신규 지식은 휴지통으로 갑니다(복원 가능). 승인·반려는 변경 감사에 기록됩니다.'),
     banner,
     stats,
     el('div', { class: 'rq-bar' }, chips, catSel, whoSel,

@@ -16,6 +16,7 @@
 // ⚠ 알림 실패가 게이트웨이를 죽이면 안 된다 — 전부 best-effort(throw 금지, 로그만).
 import { pingDb, type QueryablePool, type Level, type Thresholds } from "./health.js";
 import { diskState, invalidateDiskState, type DiskState } from "./disk-guard.js";
+import { memAvailableMb, memTotalMb } from "./host-mem.js"; // #1059 — 메모리 경보(디스크와 대칭)
 import { logger } from "./log.js";
 
 /** 알림 한 건 — 채널(웹훅 등)에 실어 보낼 내용. 채널 구현은 alerts.ts 가 맡는다(여기선 '무엇을 알릴지'만). */
@@ -41,6 +42,8 @@ let lastDbOk: boolean | null = null;
 //   (예: min_severity=critical 인데 디스크가 warn→ok 로 갔을 때. warn 은 안 보냈으니 해제도 보내면 안 된다.)
 let diskProblemSent = false;
 let dbProblemSent = false;
+let lastMem: Level | null = null;     // #1059 메모리 전이 감지
+let memProblemSent = false;
 let timer: NodeJS.Timeout | null = null;
 
 const fmtBytes = (b: number): string =>
@@ -57,7 +60,7 @@ export function diskAlertFor(prev: Level | null, cur: Level, st: DiskState): Box
       title: `⚠ 디스크 위험 — ${st.usedPct}% 사용`,
       text: `새 세션 · 레포 클론 · 파일 업로드가 **차단되고 있습니다**. 남은 공간 ${fmtBytes(st.availBytes)}.\n`
         + `100%에 닿으면 DB가 죽어 로그인을 포함한 모든 기능이 멈추고, 공간을 비워도 수동 재시작이 필요합니다.\n`
-        + `→ 관리 ▸ 저장소·로그 에서 프로젝트 워크스페이스를 회수하세요.`,
+        + `→ 관리 ▸ 컴퓨팅 리소스 ▸ 저장소 에서 프로젝트 워크스페이스를 회수하세요.`,
       detail,
     };
   }
@@ -66,7 +69,7 @@ export function diskAlertFor(prev: Level | null, cur: Level, st: DiskState): Box
       severity: "warn",
       title: `디스크 경고 — ${st.usedPct}% 사용`,
       text: `아직 정상 동작하지만 정리가 필요합니다. 남은 공간 ${fmtBytes(st.availBytes)}.\n`
-        + `→ 관리 ▸ 저장소·로그 에서 회수 가능한 용량을 확인하세요.`,
+        + `→ 관리 ▸ 컴퓨팅 리소스 ▸ 저장소 에서 회수 가능한 용량을 확인하세요.`,
       detail,
     };
   }
@@ -95,10 +98,56 @@ export function dbAlertFor(prev: boolean | null, ok: boolean, err?: string): Box
   return { severity: "ok", title: "✅ DB 연결 복구", text: "게이트웨이가 다시 DB에 닿습니다.", detail: {} };
 }
 
+// ── 메모리 경보(#1059) — 디스크와 대칭. OOM 은 #1059 다운의 원인이라 디스크풀만큼 치명적이지만, 사용%는 박스마다
+//  정상범위가 달라 기본 끔(0)이고 운영자가 켠다. used% = (전체-가용)/전체, 가용은 회수 가능 캐시 포함(host-mem). ──
+export interface MemThresholds { warnPct: number; criticalPct: number }   // 0 = 그 단계 끔
+export interface MemState { usedPct: number; availableMb: number; totalMb: number }
+
+/** 메모리 사용% → 경보 단계. 0 임계 = 그 단계 끔. 디스크와 같은 방향(used% 클수록 나쁨). 순수 함수. */
+export function memLevelOf(usedPct: number, t: MemThresholds): Level {
+  if (t.criticalPct > 0 && usedPct >= t.criticalPct) return "critical";
+  if (t.warnPct > 0 && usedPct >= t.warnPct) return "warn";
+  return "ok";
+}
+
+/** 메모리 전이 → 알릴 내용(없으면 null). 순수 함수 — 전이 규칙을 테스트가 직접 못 박는다(diskAlertFor 와 동형). */
+export function memAlertFor(prev: Level | null, cur: Level, st: MemState): BoxAlert | null {
+  if (prev === cur) return null;                    // 상태 그대로 → 침묵
+  if (prev === null && cur === "ok") return null;   // 부팅 시 정상 → 침묵
+  const detail = { usedPct: st.usedPct, availableMb: st.availableMb, totalMb: st.totalMb, from: prev, to: cur };
+  if (cur === "critical") {
+    return {
+      severity: "critical",
+      title: `⚠ 메모리 위험 — 사용 ${st.usedPct}% (가용 ${st.availableMb}MB)`,
+      text: `가용 메모리가 위험 수준입니다(${st.availableMb}MB). 세션 누적(baseline)에 임베딩(Ollama) 스파이크가 겹치면 `
+        + `OOM 으로 박스가 멈출 수 있습니다 — 2026-07 #1059 다운의 그 상태입니다.\n`
+        + `→ 관리 ▸ 컴퓨팅 리소스 ▸ 메모리 에서 idle 세션 회수·세션 메모리 상한을 확인하세요.`,
+      detail,
+    };
+  }
+  if (cur === "warn") {
+    return {
+      severity: "warn",
+      title: `메모리 경고 — 사용 ${st.usedPct}% (가용 ${st.availableMb}MB)`,
+      text: `메모리 여유가 줄고 있습니다(가용 ${st.availableMb}MB). 아직 정상이나 idle 세션 회수·임베딩 백필 게이트를 점검하세요.\n`
+        + `→ 관리 ▸ 컴퓨팅 리소스 ▸ 메모리.`,
+      detail,
+    };
+  }
+  return {
+    severity: "ok",
+    title: `메모리 정상 복귀 — 사용 ${st.usedPct}% (가용 ${st.availableMb}MB)`,
+    text: `메모리 여유가 확보됐습니다(가용 ${st.availableMb}MB).`,
+    detail,
+  };
+}
+
 export interface BoxWatchDeps {
   pool: QueryablePool;
   paths: () => string[];
   loadThresholds: () => Promise<Thresholds>;
+  /** #1059 — 메모리 경보 임계(사용%). 0/0 = 끔(감시 skip). 없으면 메모리 감시 안 함(구 배선 호환). */
+  loadMemThresholds?: () => Promise<MemThresholds>;
   /** 알림 전송(채널 미설정이면 no-op). 실패해도 throw 하지 않아야 한다. */
   send: AlertSender;
   dbTimeoutMs?: number;
@@ -148,6 +197,28 @@ async function tick(deps: BoxWatchDeps): Promise<void> {
   } catch (err) {
     logger.warn({ err }, "박스 감시 — 디스크 확인 실패");
   }
+
+  // ── 메모리(#1059) ── OOM 예방 push 경보. 임계 미설정(0/0)이거나 deps 미배선이면 감시 skip.
+  try {
+    const mt = deps.loadMemThresholds ? await deps.loadMemThresholds() : null;
+    if (mt && (mt.warnPct > 0 || mt.criticalPct > 0)) {
+      const availableMb = await memAvailableMb();
+      const totalMb = memTotalMb();
+      const usedPct = totalMb > 0 ? Math.round(((totalMb - availableMb) / totalMb) * 100) : 0;
+      const level = memLevelOf(usedPct, mt);
+      const a = memAlertFor(lastMem, level, { usedPct, availableMb, totalMb });
+      lastMem = level;
+      if (a) {
+        const sent = await emit(a, memProblemSent, deps.send);
+        memProblemSent = a.severity === "ok" ? false : (sent || memProblemSent);
+      }
+    } else {
+      // 껐거나 미배선 → 전이 상태 리셋(다시 켰을 때 옛 상태로 오탐하지 않게).
+      lastMem = null; memProblemSent = false;
+    }
+  } catch (err) {
+    logger.warn({ err }, "박스 감시 — 메모리 확인 실패");
+  }
 }
 
 export function startBoxWatch(deps: BoxWatchDeps): void {
@@ -163,6 +234,8 @@ export function stopBoxWatch(): void {
   lastDbOk = null;
   diskProblemSent = false;
   dbProblemSent = false;
+  lastMem = null;
+  memProblemSent = false;
 }
 
 /** 테스트 전용 — 한 tick 을 즉시 돌린다(주기를 기다리지 않고 전이 규칙을 검증). */

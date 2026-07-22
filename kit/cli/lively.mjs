@@ -34,6 +34,13 @@ import crypto from "node:crypto";
 // ── 0. 상수 · 경로 ──────────────────────────────────────────────────────────
 const CLI_VERSION = "1.0.0";
 const WIN = process.platform === "win32";
+// 셸 env(LIVELY_TOKEN·PATH)를 새로 읽게 하는 방법은 OS 마다 다르다 — 윈도우에 `source ~/.zshrc` 를 안내하면
+//  사용자는 실행조차 못 한다(#1087 실측: 윈도우 설치 화면에 그대로 나갔다).
+const RELOAD_SHELL_HINT = WIN ? "새 PowerShell 창을 여세요" : "새 터미널을 열거나  source ~/.zshrc";
+// 사용자용 CLI 다 — Node 내부 경고(예: DEP0190 shell 옵션)를 설치 화면에 흘리지 않는다.
+//  우리 코드는 shell:true 경로에서 winArg 로 직접 이스케이프하므로 그 경고는 우리에게 버그 신호가 아니다.
+//  개발자는 LIVELY_DEBUG=1 로 되살릴 수 있다(경고를 영영 못 보게 만들지 않는다).
+if (!process.env.LIVELY_DEBUG) process.noDeprecation = true;
 const HOME = process.env.LIVELY_HOME || homedir();
 const LIVELY = join(HOME, ".lively");
 const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || join(HOME, ".claude");
@@ -95,8 +102,19 @@ const winArg = (s) => {
 };
 // timeout(ms) 를 주면 spawnSync 가 그 시간 뒤 killSignal(SIGKILL)로 자식을 죽인다 — 외부 CLI(claude 등)가
 //  네트워크에 매달려 `lively status` 를 무한정 hang 시키지 않게 하는 하드 백스톱(#1043). 미지정이면 종전대로 무제한.
+// Windows 셸 경유 스폰용 인자 조립 — **명령 자체도 인용한다.**
+//  ⚠ Node 는 shell:true 일 때 `[cmd, ...args]` 를 공백으로 이어 `cmd.exe /d /s /c "…"` 에 넘길 뿐,
+//   **어느 쪽도 quote 하지 않는다.** 종전 코드는 args 에만 winArg 를 걸어서, 명령 경로에 공백이 있으면
+//   그 자리에서 두 토막 났다(실측 #1087):
+//     ✗ 'C:\Program'은(는) 내부 또는 외부 명령… ← C:\Program Files\nodejs\node.exe
+//   이 버그는 **오래 잠복해 있었다** — 종전엔 부트스트랩이 늘 번들 런타임(~/.lively/runtime/… · 공백 없음)을
+//   깔아 그걸 썼기 때문이다. Node 버전 판정을 고쳐 **시스템 node 를 제대로 채택**하자마자 드러났다.
+//  캡슐화한 이유: 호출부마다 "cmd 도 winArg 해야 한다"를 기억해야 하면 다음 사람이 또 빠뜨린다.
+const winSpawnArgs = (cmd, args) => [winArg(cmd), args.map(winArg)];
+
 function run(cmd, args, { allowFail = false, quiet = false, env, timeout } = {}) {
-  const r = spawnSync(cmd, WIN ? args.map(winArg) : args, {
+  const [c, a] = WIN ? winSpawnArgs(cmd, args) : [cmd, args];
+  const r = spawnSync(c, a, {
     stdio: quiet ? ["ignore", "pipe", "pipe"] : "inherit",
     env: { ...process.env, ...(env || {}) },
     encoding: "utf8",
@@ -623,23 +641,29 @@ function backupUserMcp(name) {
   try { writeFileSync(p, JSON.stringify(bak, null, 2) + "\n", { mode: 0o600 }); } catch { /* best-effort — 백업 실패해도 등록은 진행 */ }
 }
 
-// lively 본체 등록 — **토큰을 담은 유일한 MCP 항목**이라 로그인(신원 교체)도 이것만 다시 굽는다.
+// lively 본체 등록 — **로컬 stdio 프록시**(`lively mcp`)로 등록한다(#1079).
 //  remove 후 add(재실행 안전). remove 실패는 정상(미등록 상태). 호출 전에 has("claude") 를 확인할 것.
 //  ⚠ 위치는 claude 가 정한다(--scope user → CLAUDE_CONFIG_DIR 존중, deploy/provision-profile.sh:37) —
 //   .claude.json 을 우리가 직접 읽어 판단하지 않는다(프로필 격리 #346 에서 엉뚱한 파일을 보게 된다).
-//  ⚠ **헤더는 반드시 register-clients.sh 와 같은 세트**(그쪽이 번들 캐노니컬). x-lively-session(#852)을 빠뜨리면
-//   remove→add 가 **기존 세션 헤더를 지워** 그 세션의 작업 귀속이 끊긴다 — 프로비저닝된 멤버(provision-member.sh:122)가
-//   재로그인·재설치할 때 실제로 발생한다. 값은 **리터럴로** 넘긴다: 확장은 접속 시 하네스가 제 env 로 한다.
-//   `:-` 기본값이 없으면 세션 밖(랩탑)에서 "Missing environment variables" 경고가 뜬다(register-clients.sh 실측).
-//   x-lively-mode(#1007+): 세션을 LIVELY_MODE=readonly|incognito 로 실행하면 그 세션만 그 모드(게이트웨이 강제). 미설정=빈 값=normal. 단일 헤더라 미래 모드도 재등록 불요.
-function registerLivelyMcp(gw, tok) {
+//
+//  ⚠ **왜 http 직결이 아닌가(#1079).** 직결이면 세션이 뜨는 순간 게이트웨이에 못 닿을 때(사내 게이트웨이 +
+//   VPN 미접속) 하네스가 그 서버를 failed 로 마킹하고 **그 세션 내내 복구하지 않는다** — 도중에 VPN 을 붙여도
+//   사람이 `/mcp reconnect lively` 를 직접 쳐야 했다. stdio 프록시는 로컬 프로세스라 항상 connected 이고,
+//   상류가 살아나면 tools/list_changed 로 목록을 되살린다(lib/lively-mcp-gateway.mjs).
+//
+//  종전 http 등록이 헤더로 싣던 것은 이제 **프록시가 상류 호출에 붙인다**(같은 의미·같은 이름):
+//   Authorization ← ~/.lively/token (설정 파일에서 평문 토큰이 사라진다) · x-lively-session ← LIVELY_SESSION_ID(#852)
+//   · x-lively-mode ← LIVELY_MODE(#1007+) · x-lively-harness ← 명시 stamp(프록시를 거치면 UA 가 우리 것이 되므로 필수).
+//   env 는 하네스가 spawn 할 때 그대로 상속되므로 종전과 같은 값이 실린다.
+//
+//  코드 자동 업뎃(#858)에 무임승차: command(심 절대경로)만 등록하고 서버 코드는 lib/lively-mcp-gateway.mjs 로
+//   매 세션 최신 → 코드가 바뀌어도 재등록 불필요.
+function registerLivelyMcp(gw, _tok) {
   run("claude", ["mcp", "remove", "lively"], { allowFail: true, quiet: true });
   try {
-    run("claude", ["mcp", "add", "--transport", "http", "--scope", "user", "lively", `${gw}/mcp`,
-      "--header", `Authorization: Bearer ${tok}`,
-      "--header", "x-lively-session: ${LIVELY_SESSION_ID:-}",
-      "--header", "x-lively-mode: ${LIVELY_MODE:-}"], { quiet: true });
-    ok(`MCP 등록: lively → ${gw}/mcp`);
+    const shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively");
+    run("claude", ["mcp", "add", "--transport", "stdio", "--scope", "user", "lively", shim, "mcp"], { quiet: true });
+    ok(`MCP 등록: lively (stdio 프록시 → ${gw}/mcp)`);
     return true;
   } catch (e) { fail(`MCP 등록 실패(lively): ${e.message}`); return false; }
 }
@@ -892,7 +916,7 @@ function afterLogin(gw, tok) {
   // codex 는 토큰을 config.toml 에 안 굽고 LIVELY_TOKEN 을 읽으므로(bearer_token_env_var) 재등록할 게 없다.
   //  대신 **이 셸의 env 는 우리가 못 고친다**(자식이 부모 셸을 못 바꾼다) → 조용히 두지 말고 사실대로 알린다.
   if (ENV_TOKEN_AT_START && ENV_TOKEN_AT_START !== tok) {
-    warn("이 셸의 LIVELY_TOKEN 은 아직 이전 토큰입니다 — 새 터미널을 열거나 `source ~/.zshrc` 후 codex 를 쓰세요.");
+    warn(`이 셸의 LIVELY_TOKEN 은 아직 이전 토큰입니다 — ${RELOAD_SHELL_HINT} 뒤에 codex 를 쓰세요.`);
   }
 }
 
@@ -1177,7 +1201,7 @@ async function cmdDoctor(opts) {
     const same = ENV_TOKEN_AT_START === tokFile;
     chk("신원 일치(이 셸 env ↔ 파일)", same,
       same ? "일치" : "이 셸의 LIVELY_TOKEN 이 ~/.lively/token 과 다릅니다 — codex 는 옛 신원으로 붙습니다",
-      "새 터미널을 열거나  source ~/.zshrc");
+      RELOAD_SHELL_HINT);
   }
   chk("Claude Code", st.harness.claude.installed, st.harness.claude.installed ? "PATH 에 있음" : "미설치 또는 PATH 밖", "curl -fsSL https://claude.ai/install.sh | bash");
   chk("훅 파일", st.hooks.installed === st.hooks.expected, `${st.hooks.installed}/${st.hooks.expected} (~/.lively/hooks)`, "lively install");
@@ -1186,7 +1210,7 @@ async function cmdDoctor(opts) {
   if (st.harness.codex.installed) chk("Codex 배선", st.harness.codex.wired, st.harness.codex.wired ? "config.toml OK" : "미배선", "lively install");
   if (st.kit.remote) chk("키트 최신", st.kit.current, st.kit.current ? String(st.kit.local) : `${st.kit.local || "(미설치)"} → ${st.kit.remote}`, "lively update");
   // 새 터미널에서 `lively` 가 잡히는지 — rc 배선이 안 됐으면 다음 창에서 못 찾는다.
-  chk("lively PATH", has("lively"), has("lively") ? "OK" : "현 셸의 PATH 밖", "새 터미널을 열거나  source ~/.zshrc");
+  chk("lively PATH", has("lively"), has("lively") ? "OK" : "현 셸의 PATH 밖", RELOAD_SHELL_HINT);
 
   if (opts.json) { process.stdout.write(JSON.stringify({ status: st, checks }, null, 2) + "\n"); return; }
   say(`\n${bold("라이블리 진단")}\n`);
@@ -1255,7 +1279,9 @@ function cmdRun(rest0) {
   for (let i = 0; i < rest.length; i++) { if (rest[i] === "--harness") harness = rest[++i] || harness; else args.push(rest[i]); }
   if (!has(harness)) die(`${harness} 이(가) 설치돼 있지 않습니다.`, 2);
   say(dim(`${harness} 실행`) + badge);
-  onExit(spawn(harness, args, { stdio: "inherit", env, ...(WIN ? { shell: true } : {}) })); // WIN: .cmd 셰임이라 shell 필요(work.mjs:259 동형)
+  // WIN: .cmd 셰임이라 shell 필요(work.mjs:259 동형) — 셸 경유이므로 명령·인자를 **둘 다** 인용한다(#1087).
+  const [hc, ha] = WIN ? winSpawnArgs(harness, args) : [harness, args];
+  onExit(spawn(hc, ha, { stdio: "inherit", env, ...(WIN ? { shell: true } : {}) }));
 }
 
 // `lively mode [normal|readonly|incognito]` — 디폴트 실행 모드 조회/설정(~/.lively/mode). lively run 이 --mode 없을 때 이걸 읽는다.
@@ -1279,6 +1305,15 @@ function cmdMode(rest) {
 async function cmdMcpLocal() {
   const { serveMcpLocal } = await import(new URL("./lively-mcp-local.mjs", import.meta.url));
   await serveMcpLocal();
+}
+
+// `lively mcp` — 게이트웨이 MCP 의 로컬 stdio 프록시(#1079). 하네스가 매 세션 spawn 한다.
+//  http 직결이 아니라 이걸 거치는 이유: 세션 시작 때 게이트웨이에 못 닿아도(VPN 미접속 등)
+//  하네스에겐 항상 connected 로 보이고, 상류가 살아나면 그 세션에서 그대로 복구되기 때문이다.
+//  본체는 lib/lively-mcp-gateway.mjs (여긴 위임만) — lively-mcp-local 과 같은 레일.
+async function cmdMcpGateway() {
+  const { serveMcpGateway } = await import(new URL("./lively-mcp-gateway.mjs", import.meta.url));
+  await serveMcpGateway();
 }
 
 // `lively init` — 이 폴더를 라이블리 프로젝트로(사람 표면). MCP 툴 lively_local_project_init 과 **같은 코어**를 쓴다
@@ -1395,9 +1430,30 @@ async function cmdRepo(rest) {
 }
 
 // 부트스트랩(curl … | sh)이 곧장 부르는 대화형 첫 설치 — 로그인 + 설치를 한 흐름으로.
+// 토큰이 지금 이 게이트웨이에서 **실제로 먹히는지** 확인한다(죽지 않는다).
+//  true=먹힌다 · false=거부됐다(재로그인 필요) · null=판정 불가(네트워크·게이트웨이 이상).
+//  ⚠ null 을 false 로 뭉개면 잠깐의 네트워크 끊김이 멀쩡한 사용자를 재로그인시킨다 → 셋으로 구분한다.
+async function tokenAccepted(gw, tok) {
+  if (!gw || !tok) return false;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 10000);
+  try {
+    const res = await fetch(gw + "/api/ui/me/profile", { signal: ctl.signal, headers: { authorization: `Bearer ${tok}` } });
+    if (res.status === 401 || res.status === 403) return false;
+    return res.ok ? true : null;
+  } catch { return null; } finally { clearTimeout(timer); }
+}
+
 async function cmdSetup() {
   say(`\n${bold("라이블리 설치를 시작합니다.")}`);
-  if (token() && gateway()) info("이미 로그인돼 있습니다 — 설치만 진행합니다.");
+  // ⚠ 토큰이 **있는지**가 아니라 **먹히는지**를 본다(#1087). token() 은 파일 다음에 LIVELY_TOKEN 환경변수도
+  //  보므로, 만료·회수된 토큰이나 셸에 남아 있던 옛 env 값이 로그인을 건너뛰게 만들었다. 그러면 설치는
+  //  한참 뒤 [1/3] 키트 내려받기에서 401 로 죽고, 그 지점의 메시지만으론 사용자가 뭘 해야 할지 알 수 없다
+  //  (실측: "이미 로그인돼 있습니다" → "✗ 토큰이 유효하지 않습니다" 로 설치 실패).
+  //  같은 계열의 stale-토큰 shadow 사고가 프로비저닝 셸에서도 있었다 — 그 불변식과 짝이다.
+  const accepted = await tokenAccepted(gateway(), token());
+  if (accepted === true) info("이미 로그인돼 있습니다 — 설치만 진행합니다.");
+  else if (accepted === null) info("로그인 상태를 확인하지 못했습니다(네트워크?) — 그대로 설치를 시도합니다.");
   else await cmdLogin({});
   await cmdInstall();
   // 설치 완료 → 온보딩 안내(정적 문구만 · #1024). 자동 실행·Y/n 프롬프트 없음 — 대화형/비대화형 모두 안전.
@@ -1726,6 +1782,8 @@ async function main() {
     case "node": return cmdNode(argv.slice(argv.indexOf("node") + 1));
     // mcp-local — 로컬 조작 stdio MCP 서버(하네스가 spawn). stdin 이 닫힐 때까지 블로킹.
     case "mcp-local": return cmdMcpLocal();
+    // mcp — 게이트웨이 MCP 의 로컬 stdio 프록시(하네스가 spawn, #1079). 마찬가지로 블로킹.
+    case "mcp": return cmdMcpGateway();
     // repo — 워크트리 셀프서비스(list/worktree). MCP 툴과 같은 코어. 나머지 인자 원형 보존.
     case "repo": return cmdRepo(argv.slice(argv.indexOf("repo") + 1));
     // resume — 다른 환경에서 내 세션 이어받기(#905 C1). 중앙 트랜스크립트를 이 PC 로 내려 claude --resume.
@@ -1750,5 +1808,5 @@ const DIRECT_RUN = (() => {
 })();
 if (DIRECT_RUN) main().catch((e) => die(e?.message || String(e)));
 
-export { parse, detectHarnesses, verifyBundle, normGw, gatherStatus, registerClaudeMcp, backupUserMcp, winArg, loginEscapeToken, REQUIRED_HOOKS, CLI_VERSION };
+export { parse, detectHarnesses, verifyBundle, normGw, gatherStatus, registerClaudeMcp, backupUserMcp, winArg, winSpawnArgs, loginEscapeToken, REQUIRED_HOOKS, CLI_VERSION };
 export { MODES, extractMode, modeEnv, defaultMode }; // #1007+ 실행 모드(normal|readonly|incognito) — 테스트용

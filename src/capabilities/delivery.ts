@@ -37,7 +37,8 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { PROJECT_SHARED_BASE, PROJECT_SUBDIR, LEGACY_SUBDIR, projectAbsPath } from "../project-fs.js";
 import { dirSizesFast, isInside, reposIn, planReclaim, applyReclaim, baseRepoOf } from "../workspace-reclaim.js";
-import { listSessions } from "../terminal-sessions.js";
+import { listSessions, listSessionsRaw } from "../terminal-sessions.js";
+import { memAvailableMb, memTotalMb } from "../host-mem.js"; // #1059 G1 — 박스 메모리 status
 import { isValidTimezone, DEFAULT_TZ } from "../org/timezone.js"; // #778 조직 시간대 검증·기본값
 import { previewMemberContext, kitVersion } from "../org/publish.js";
 import { GUIDE_SECTION_DEFAULTS } from "../org/materialize.js";
@@ -433,6 +434,28 @@ const workspaceBatchCapabilities = (): Capability[] => [
       remove_worktree: z.boolean().optional().describe("워크트리까지 제거(푸시 완료·클린일 때만 — 아니면 유지하고 이유를 남긴다)"),
     }),
 ];
+
+// #1059 G1 — Ollama 로드 모델 프로브(best-effort). 급성 스파이크(임베딩 모델 3.3GB)의 가시화용.
+//  임베딩 provider 가 http 이고 base_url 이 있을 때만, 그 host 의 /api/ps(Ollama 전용)를 짧게 찔러 로드 모델·용량을 본다.
+//  Ollama 가 아니거나(404 등)·미도달·타임아웃이면 null(무해) — 메모리 available 숫자 자체가 이미 스파이크를 반영하므로 부가정보.
+//  base_url 은 관리자 설정(신뢰) 이라 직접 fetch(사용자 입력 SSRF 아님). 응답 파싱은 방어적.
+async function probeOllama(baseUrl: string | null | undefined): Promise<{ loaded: boolean; models: string[]; mb: number } | null> {
+  if (!baseUrl) return null;
+  let origin: string;
+  try { const u = new URL(baseUrl); origin = `${u.protocol}//${u.host}`; } catch { return null; }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 2000);
+  try {
+    const res = await fetch(`${origin}/api/ps`, { signal: ctrl.signal });
+    if (!res.ok) return null;
+    const j = await res.json() as { models?: Array<{ name?: unknown; model?: unknown; size?: unknown }> };
+    const models = Array.isArray(j?.models) ? j.models : [];
+    const names = models.map((m) => (typeof m.name === "string" ? m.name : typeof m.model === "string" ? m.model : "")).filter(Boolean);
+    const mb = Math.round(models.reduce((s, m) => s + (Number(m.size) || 0), 0) / 1048576);
+    return { loaded: models.length > 0, models: names, mb };
+  } catch { return null; }
+  finally { clearTimeout(timer); }
+}
 
 export const deliveryCapabilities: Capability[] = [
   // ── 단일 로드: 관리 화면 전체 상태 + 의미 가이드 ──
@@ -1060,8 +1083,9 @@ export const deliveryCapabilities: Capability[] = [
         return { override, byDefault: targetsMember(targetMembers, userId), effective: effectiveVisible({ enabled: true, targetMembers, memberId: userId, override }) };
       };
       const lively = {
-        skills: assets.filter((a) => a.enabled).map((a) => ({ id: a.id, kind: a.kind, label: a.label, description: a.description, harness: a.harness, ...meta("harness_asset", a.id, a.target_members) })),
-        hooks: hooks.filter((h) => h.enabled).map((h) => ({ id: h.id, label: h.label, event: h.event, harness: h.harness, ...meta("org_hook", h.id, h.target_members) })),
+        // summary — 화면에 보이는 '쉬운 한 줄'(#1085). description(하네스 트리거 문장)과 별개다.
+        skills: assets.filter((a) => a.enabled).map((a) => ({ id: a.id, kind: a.kind, label: a.label, description: a.description, summary: a.summary, harness: a.harness, ...meta("harness_asset", a.id, a.target_members) })),
+        hooks: hooks.filter((h) => h.enabled).map((h) => ({ id: h.id, label: h.label, event: h.event, note: h.note, summary: h.summary, harness: h.harness, ...meta("org_hook", h.id, h.target_members) })),
       };
       const livelyIds = new Set<string>([...lively.skills, ...lively.hooks].map((x) => x.id));
       // 머신별로 라이블리 자산과 대조 + 그 머신의 로컬 토글 지시(disabled) 반영.
@@ -1303,6 +1327,8 @@ export const deliveryCapabilities: Capability[] = [
         if (s.log_keep !== undefined) patchIn.log_keep = num(s.log_keep, "log_keep", 0, 50);
         if (s.disk_warn_pct !== undefined) patchIn.disk_warn_pct = num(s.disk_warn_pct, "disk_warn_pct", 1, 99);
         if (s.disk_critical_pct !== undefined) patchIn.disk_critical_pct = num(s.disk_critical_pct, "disk_critical_pct", 1, 100);
+        if (s.mem_warn_pct !== undefined) patchIn.mem_warn_pct = num(s.mem_warn_pct, "mem_warn_pct", 0, 99);       // #1059 0=끔
+        if (s.mem_critical_pct !== undefined) patchIn.mem_critical_pct = num(s.mem_critical_pct, "mem_critical_pct", 0, 100); // #1059 0=끔
         if (s.shared_cache_enabled !== undefined) patchIn.shared_cache_enabled = Boolean(s.shared_cache_enabled);
         if (s.shared_cache_relocate_home !== undefined) patchIn.shared_cache_relocate_home = Boolean(s.shared_cache_relocate_home);
         // 경고 ≥ 위험은 사용자가 의도한 설정일 리 없다 — 조용히 고치지 말고 왜 안 되는지 알려준다.
@@ -1568,6 +1594,8 @@ export const deliveryCapabilities: Capability[] = [
         log_keep: z.number().int().min(0).max(50).optional().describe("보관할 로그 파일 수"),
         disk_warn_pct: z.number().int().min(1).max(99).optional().describe("디스크 경고 임계치(%) — 위험 임계치보다 낮아야 한다"),
         disk_critical_pct: z.number().int().min(1).max(100).optional().describe("디스크 위험 임계치(%)"),
+        mem_warn_pct: z.number().int().min(0).max(99).optional().describe("#1059 메모리 경고 임계(사용%, 0=끔) — box-watch 가 경보 웹훅 발송(디스크와 대칭)"),
+        mem_critical_pct: z.number().int().min(0).max(100).optional().describe("#1059 메모리 위험 임계(사용%, 0=끔) — OOM 임박 경보. warn 보다 커야"),
         shared_cache_enabled: z.boolean().optional().describe("공유 캐시 사용"),
         shared_cache_relocate_home: z.boolean().optional().describe("홈 캐시를 공유 캐시로 재배치"),
       }).optional().describe("저장소 정책(#813) — 로그 상한·디스크 임계치. 고객 박스는 .env 를 못 고치므로 여기가 유일한 조절 창구"),
@@ -1589,6 +1617,7 @@ export const deliveryCapabilities: Capability[] = [
         auth_env_ref: z.string().nullable().optional().describe("인증에 쓸 환경변수 **이름**(시크릿 값 금지)"),
         batch_size: z.number().int().optional().describe("배치 크기(#602 — 느린/CPU 백엔드 대응). 비우면 기본값"),
         request_timeout_ms: z.number().int().optional().describe("요청 타임아웃 ms. 비우면 기본값"),
+        backfill_min_available_mb: z.number().int().min(0).max(1_048_576).optional().describe("#1059 G2/G3 — 자동 백필 pre-flight 메모리 게이트: 가용 메모리가 이 MB 미만이면 이번 스윕을 건너뛴다(다음 주기 재시도, pending 유실 없음). 0=끔(무회귀). Ollama 모델 로드 스파이크가 세션 baseline 과 겹쳐 OOM 나는 걸 예방(예: 16GB 박스 4096~5000)"),
       }).optional().describe("임베딩 설정 — knowledge/project 백필과 검색이 공유"),
     }),
 
@@ -1644,7 +1673,7 @@ export const deliveryCapabilities: Capability[] = [
     }),
 
   restOnly("org_storage_status", "저장소·로그 상태",
-    "박스 디스크 사용률(경고/위험 판정 포함) + 로그 파일 크기 + 저장소 정책(로그 상한·디스크 임계치) + per-session 메모리 캡 정책(#1059 D)과 각 출처. admin 전용.",
+    "박스 디스크 사용률(경고/위험 판정 포함) + 로그 파일 크기 + 저장소 정책(로그 상한·디스크 임계치) + per-session 메모리 캡 정책(#1059 D)·idle 회수 정책(#1059 F)과 각 출처 + 라이브 메모리 status(#1059 G1 — available/total·세션수·Ollama). admin 전용.",
     [{ method: "GET", paths: ["/api/ui/org/storage"], parse: () => ({}) }],
     async () => {
       const cfg = await getRuntimeConfig();
@@ -1657,11 +1686,25 @@ export const deliveryCapabilities: Capability[] = [
       // 공유 빌드 캐시(#813 T3) — 지금 얼마나 쌓였나 + 어떤 env 를 세션에 주입 중인가(관리자가 눈으로 확인).
       const cacheOpts = { enabled: p.shared_cache_enabled, relocateHome: p.shared_cache_relocate_home };
       const cacheRoot = sharedCacheRoot(TERMINAL_SHARED_ROOT.base);
+      // #1059 G1 — 박스 메모리 status(가시화). #1059 다운의 두 축(만성 세션 baseline·급성 Ollama 스파이크)을 한 화면에.
+      //  available/total = OOM 근접도(회수 가능 캐시 포함, host-mem) · session_count = baseline 드라이버(중앙 세션 수) ·
+      //  ollama = 급성 스파이크(로드 모델·용량, best-effort). 전부 비파괴 조회. 실패해도 status 전체를 막지 않게 방어.
+      const availMb = await memAvailableMb().catch(() => 0);
+      const totalMb = memTotalMb();
+      const sessionCount = (await listSessionsRaw().catch(() => [])).length;
+      const ollama = cfg.embedding_config.provider === "http" ? await probeOllama(cfg.embedding_config.base_url).catch(() => null) : null;
       return {
         policy: p,
         policy_source: await getStoragePolicySource(), // db(관리탭) · env(.env 시드) · default(코드 기본값)
-        // per-session 메모리 캡(#1059 D) — 세션당 MemoryHigh/Max(MB, 0=무제한). 라이브 메모리 **사용량** status(available/Ollama/세션수)는
-        //  G1(#1064) 이 box-watch 로 여기 같은 ops 엔드포인트에 얹는다. 여기선 정책값·출처만 노출(설정은 org_runtime_update POST).
+        // #1059 G1 — 라이브 메모리 사용량. 관리탭이 저장소(디스크) status 와 나란히 '박스 운영 대시보드'로.
+        memory: {
+          available_mb: availMb,
+          total_mb: totalMb,
+          used_pct: totalMb > 0 ? Math.round(((totalMb - availMb) / totalMb) * 100) : 0,
+          session_count: sessionCount,
+          ollama, // {loaded, models, mb} | null(비-Ollama·미도달)
+        },
+        // per-session 메모리 캡(#1059 D) — 세션당 MemoryHigh/Max(MB, 0=무제한). 정책값·출처 노출(설정은 org_runtime_update POST).
         session_memory_policy: cfg.session_memory_policy,
         session_memory_policy_source: await getSessionMemoryPolicySource(),
         // idle 세션 자동 회수 정책(#1059 F) — idle TTL(분, 0=끔). 라이브 세션 수·메모리 status(G1)는 후속(#1064)이 얹는다.
@@ -2239,6 +2282,8 @@ export const deliveryCapabilities: Capability[] = [
         harness: harness as HookHarness | undefined, event, matcher, source_code: sourceCode,
         timeout_sec: timeout === undefined ? undefined : Math.floor(timeout),
         note: input.note == null ? undefined : str(input.note, "note", 500),
+        // summary — 구성원 화면([내 스킬·훅])에 보이는 '쉬운 한 줄'(#1085). note(운영 메모)와 별개.
+        summary: input.summary === undefined ? undefined : str(input.summary, "summary", 300),
         target_members: targetMembers,
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
@@ -2256,6 +2301,7 @@ export const deliveryCapabilities: Capability[] = [
       target_members: z.array(z.string()).nullable().optional().describe("이 훅을 받을 멤버 id 배열. null/빈=전원, 미전송=기존 유지(#699)"),
       label: z.string().optional().describe("훅 라벨(표시명)"),
       note: z.string().optional().describe("메모"),
+      summary: z.string().optional().describe("구성원 화면에 보이는 쉬운 한 줄 설명(무슨 일을 하는 훅인지)"),
       enabled: z.boolean().optional().describe("활성 여부"),
       sort: z.number().optional().describe("정렬 순서"),
     }),
@@ -2453,23 +2499,30 @@ export const deliveryCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/org/harness-asset"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       const id = assertAssetId(input.id);
-      const kind = str(input.kind ?? "skill", "kind", 12);
-      if (!HARNESS_ASSET_KINDS.has(kind)) throw new HttpError(400, `kind 는 ${[...HARNESS_ASSET_KINDS].join("|")} 만 허용됩니다`);
-      const harness = input.harness === undefined ? "all" : str(input.harness, "harness", 12);
-      if (!HOOK_HARNESSES.has(harness)) throw new HttpError(400, "harness 는 claude|codex|openclaw|all");
-      const description = str(input.description ?? "", "description", 2000);
-      const body = str(input.body ?? "", "body", 262144);
-      const frontmatter = parseAssetFrontmatter(input.frontmatter);
-      assertNoHardSecrets(description, "description");
-      assertNoHardSecrets(body, "body"); // 자산 본문도 멤버 디스크로 나가므로 평문 시크릿 hard-block
-      assertNoHardSecrets(JSON.stringify(frontmatter), "frontmatter");
-      const targetMembers = parseTargetMembers(input.target_members);
-      const pairedHookId = (input.paired_hook_id === undefined || input.paired_hook_id === null || input.paired_hook_id === "")
-        ? null : assertHookId(input.paired_hook_id);
+      // 미전송 = 기존 유지(부분수정 안전). 전송했을 때만 검증한다.
+      const kind = input.kind === undefined ? undefined : str(input.kind, "kind", 12);
+      if (kind !== undefined && !HARNESS_ASSET_KINDS.has(kind)) throw new HttpError(400, `kind 는 ${[...HARNESS_ASSET_KINDS].join("|")} 만 허용됩니다`);
+      const harness = input.harness === undefined ? undefined : str(input.harness, "harness", 12);
+      if (harness !== undefined && !HOOK_HARNESSES.has(harness)) throw new HttpError(400, "harness 는 claude|codex|openclaw|all");
+      // ⚠ 부분수정 보존 — 미전송 필드는 **undefined 로 넘겨 기존 값을 지킨다**. 예전엔 `input.x ?? ""` 라
+      //  summary 만 고치려고 id+summary 만 보내면 description·body 가 빈 문자열로 덮여 **본문이 날아갔다**.
+      //  (store 의 `a.field ?? before.field` 는 undefined 일 때만 보존한다.)
+      const description = input.description === undefined ? undefined : str(input.description, "description", 2000);
+      // summary — 관리탭·구성원 화면에 보이는 '쉬운 한 줄'(#1085). description(하네스가 언제 쓸지 판단하는
+      //  트리거 문장)을 그대로 보여주면 무슨 기능인지 안 읽혀서 표시용을 따로 받는다.
+      const summary = input.summary === undefined ? undefined : str(input.summary, "summary", 300);
+      const body = input.body === undefined ? undefined : str(input.body, "body", 262144);
+      const frontmatter = input.frontmatter === undefined ? undefined : parseAssetFrontmatter(input.frontmatter);
+      if (description !== undefined) assertNoHardSecrets(description, "description");
+      if (body !== undefined) assertNoHardSecrets(body, "body"); // 자산 본문도 멤버 디스크로 나가므로 평문 시크릿 hard-block
+      if (frontmatter !== undefined) assertNoHardSecrets(JSON.stringify(frontmatter), "frontmatter");
+      const targetMembers = input.target_members === undefined ? undefined : parseTargetMembers(input.target_members);
+      const pairedHookId = input.paired_hook_id === undefined ? undefined
+        : ((input.paired_hook_id === null || input.paired_hook_id === "") ? null : assertHookId(input.paired_hook_id));
       const asset = await upsertOrgHarnessAsset({
-        id, kind: kind as AssetKind,
+        id, kind: kind as AssetKind | undefined,
         label: input.label == null ? undefined : str(input.label, "label", 200).trim(),
-        harness: harness as HookHarness, description, body, frontmatter,
+        harness: harness as HookHarness | undefined, description, summary, body, frontmatter,
         target_members: targetMembers, paired_hook_id: pairedHookId,
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
@@ -2477,6 +2530,7 @@ export const deliveryCapabilities: Capability[] = [
       return { asset, ...seedAssetSyncWarning(id) };
     }, {
       id: z.string().describe("자산 id(슬러그) — 있으면 수정, 없으면 생성. 스킬이면 이 id 가 스킬 이름이 된다"),
+      summary: z.string().optional().describe("화면에 보이는 쉬운 한 줄 설명(무슨 기능인지). 비우면 description 첫 문장으로 폴백"),
       kind: z.enum(["skill", "subagent", "command"]).optional().describe("자산 종류(기본 skill)"),
       body: z.string().optional().describe("자산 본문 — 멤버 디스크에 파일로 materialize 된다. 평문 시크릿 hard-block"),
       description: z.string().optional().describe("자산 설명(하네스가 소환 판단에 쓴다)"),

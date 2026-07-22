@@ -297,6 +297,11 @@ function installCli() {
   //  번들에 없으면(구버전) 조용히 건너뜀 — 그럼 mcp-local 서브커맨드만 미동작(하위호환).
   const mcpLocal = cloneAbs(join("cli", "lively-mcp-local.mjs"));
   if (existsSync(mcpLocal)) { copyFileSync(mcpLocal, join(lib, "lively-mcp-local.mjs")); chmodSync(join(lib, "lively-mcp-local.mjs"), 0o755); }
+  // 게이트웨이 stdio 프록시(#1079) — `lively mcp` 가 import 해 실행. lively.mjs 옆에 둔다.
+  //  ⚠ 이게 빠지면 `lively mcp` 가 못 떠서 **lively MCP 자체가 안 붙는다**(http 직결과 달리 로컬 파일이 필수).
+  //   구버전 번들(파일 없음)이면 조용히 건너뛴다 — 그 경우 등록도 여전히 http 라 짝이 맞는다.
+  const mcpGw = cloneAbs(join("cli", "lively-mcp-gateway.mjs"));
+  if (existsSync(mcpGw)) { copyFileSync(mcpGw, join(lib, "lively-mcp-gateway.mjs")); chmodSync(join(lib, "lively-mcp-gateway.mjs"), 0o755); }
   // 워크트리 셀프서비스 코어(#900) — lively.mjs·lively-mcp-local.mjs 가 import 한다. 둘 옆(lib/)에 둔다(구버전 번들엔 없으면 스킵).
   const repoCore = cloneAbs(join("cli", "repo-worktree-core.mjs"));
   if (existsSync(repoCore)) { copyFileSync(repoCore, join(lib, "repo-worktree-core.mjs")); chmodSync(join(lib, "repo-worktree-core.mjs"), 0o755); }
@@ -657,7 +662,11 @@ async function main() {
     installCodex(ctx, mcpUrl);
   }
 
-  console.log("  · MCP 등록(Claude)은 setup 의 register-clients.sh 가 담당. Codex MCP 는 위 config.toml 에 포함.");
+  // ⚠ 문구는 **실제 동작과 일치해야 한다**(#1087). 종전엔 "setup 의 register-clients.sh 가 담당" 이라 했는데,
+  //  `lively install` 경로에선 바로 다음 단계인 CLI 의 [3/3] 이 등록한다 — 화면상 이 줄 **바로 아래**에서
+  //  "✓ MCP 등록: lively" 가 뜨므로 사용자는 서로 모순된 두 문장을 연달아 읽었다. 게다가 윈도우 사용자에겐
+  //  실행조차 못 하는 `.sh` 를 가리켰다. 설치 화면의 거짓 안내는 장애 진단을 통째로 헛돌게 만든다.
+  console.log("  · Claude MCP 등록은 여기서 하지 않습니다 — 이어지는 `lively install` 단계(또는 박스 프로비저닝)가 처리합니다. Codex MCP 는 위 config.toml 에 포함.");
   console.log("✓ user-level 설치 완료 — 다음 세션부터 적용(현 세션은 안전).");
 }
 
