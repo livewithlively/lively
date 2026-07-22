@@ -1,4 +1,4 @@
-﻿# lively 부트스트랩 (Windows / PowerShell) — bootstrap.sh 와 역할이 정확히 대칭 (#864)
+# lively 부트스트랩 (Windows / PowerShell) — bootstrap.sh 와 역할이 정확히 대칭 (#864)
 #
 #   irm https://<게이트웨이>/cli.ps1 | iex
 #
