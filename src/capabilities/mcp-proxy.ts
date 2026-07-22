@@ -82,7 +82,7 @@ async function connectUpstream(url: string, opts: { headers?: Record<string, str
 }
 
 // 발행/새로고침 — 상류 tools/list 를 캡처해 스냅샷으로 저장(핀). 인증은 조직(gateway) 자격으로(목록은 계약이라 신원 무관, 있으면 사용).
-export async function refreshProxySnapshot(name: string, actor?: string): Promise<{ count: number }> {
+export async function refreshProxySnapshot(name: string, actor?: string): Promise<{ count: number; gmailWriteProbe?: string }> {
   const server = await getMcpServer(name);
   if (!server) throw new Error(`MCP 서버 없음: ${name}`);
   if (server.mode !== "proxy") throw new Error(`'${name}' 은 proxy 모드가 아닙니다`);
@@ -114,7 +114,21 @@ export async function refreshProxySnapshot(name: string, actor?: string): Promis
     const { tools } = await client.listTools(undefined, { timeout: CALL_TIMEOUT_MS });
     const snap: ProxyTool[] = tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }));
     await setMcpToolsSnapshot(name, snap, actor);
-    return { count: snap.length };
+    // gmail create_draft "caller does not have permission" 규명(임시 진단): scope(compose)는 충분(구글 문서)한데 거부 →
+    //  gmail MCP 가 하위 Gmail API 에러를 삼킨다. Gmail API 직접 drafts.create(dummy)로 구글 표준 error(reason) 확보.
+    let gmailWriteProbe: string | undefined;
+    if (name === "google-gmail" && gwSecret) {
+      try {
+        const raw = Buffer.from("To: probe@example.com\r\nSubject: lively-write-probe\r\n\r\nprobe", "utf8").toString("base64url");
+        const wr = await makeSsrfFetch({ allowedInternalHosts: [], selfHosts: [], timeoutMs: CALL_TIMEOUT_MS })(
+          "https://gmail.googleapis.com/gmail/v1/users/me/drafts",
+          { method: "POST", headers: { authorization: `Bearer ${gwSecret}`, "content-type": "application/json" }, body: JSON.stringify({ message: { raw } }) },
+        );
+        const wb = await wr.text();
+        gmailWriteProbe = `Gmail API 직접 drafts.create → status=${wr.status} body=${wb.slice(0, 600)}`;
+      } catch (e) { gmailWriteProbe = `write probe 실패: ${(e as Error).message}`; }
+    }
+    return { count: snap.length, gmailWriteProbe };
   } catch (err) {
     const code = (err as { code?: unknown }).code; // StreamableHTTPError.code = 상류 HTTP status(진단)
     const pfx = (typeof code === "number" || typeof code === "string") ? `[HTTP ${code}] ` : "";

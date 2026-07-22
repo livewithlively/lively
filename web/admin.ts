@@ -5372,7 +5372,10 @@ function installMinterBlock(data, gw, opts: any = {}) {
   });
   return el('div', { class: 'deploy-block' },
     el('h3', { class: 'member-add-step', text: opts.title || '토큰 발급 (새 팀원 추가)' }),
-    el('p', { class: 'admin-hint', text: '구성원을 고르고 [토큰 발급]을 누르면 그 사람 전용 토큰이 만들어집니다. 이 토큰은 그 구성원의 AI(Claude Code·Codex)와 lively 명령이 라이블리 게이트웨이에 접속할 때 쓰는 열쇠입니다. 최초 1회 라이블리에 로그인 시 필요합니다. 토큰을 발급하고 해당 구성원에게 전달해주세요.' }),
+    // ⚠ 사실 확인(#1085): 최초 웹 로그인은 **이메일 + 임시 비밀번호**다(deploy/bootstrap-admin.mjs 가 첫 관리자에게,
+    //  [구성원] 추가가 팀원에게 임시 비밀번호를 1회 발급). 토큰은 웹 로그인 필수물이 아니라 **AI·CLI 접속용 열쇠**다
+    //  — 한때 '최초 1회 로그인 시 필요'라고 적었다가 코드로 확인해 바로잡았다.
+    el('p', { class: 'admin-hint', text: '구성원을 고르고 [토큰 발급]을 누르면 그 사람 전용 토큰이 만들어집니다. 구성원의 AI(Claude Code·Codex)와 lively 명령이 라이블리에 접속할 때 필요합니다. 토큰을 발급해 해당 구성원에게 전달해주세요. (웹 로그인은 이메일·비밀번호로 하며 토큰이 없어도 됩니다.)' }),
     el('div', { class: 'install-minter' }, sel, go),
     result);
 }

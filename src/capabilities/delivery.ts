@@ -1983,7 +1983,7 @@ export const deliveryCapabilities: Capability[] = [
     "proxy 모드 MCP 서버의 상류 tools/list 를 다시 캡처해 스냅샷(핀)으로 저장한다 — 버전업/새 툴 반영. 다음 세션부터 구성원에 전파(재설치 0).",
     [{ method: "POST", paths: ["/api/ui/org/mcp-server/refresh"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
-      let r: { count: number };
+      let r: { count: number; gmailWriteProbe?: string };
       try {
         r = await refreshProxySnapshot(slug(input.name, "name"), actorOf(user));
       } catch (e) {
@@ -1993,7 +1993,7 @@ export const deliveryCapabilities: Capability[] = [
       }
       // in-session push(#746 T5) — sessioned 클라들에 tools/list_changed 즉시 전파(무상태면 no-op). 발행=라이브 반영.
       const pushed = broadcastToolListChanged();
-      return { ok: true, tool_count: r.count, live_pushed_sessions: pushed };
+      return { ok: true, tool_count: r.count, live_pushed_sessions: pushed, ...(r.gmailWriteProbe ? { gmail_write_probe: r.gmailWriteProbe } : {}) };
     }, {
       name: z.string().describe("스냅샷을 다시 뜰 proxy 모드 MCP 서버 이름"),
     }),
