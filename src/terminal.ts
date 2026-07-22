@@ -11,7 +11,7 @@ import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { logger } from "./log.js";
 import { ROOTS, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
-import { getSessionState, deleteSessionState } from "./org/session-state.js"; // #1059 E — restorable 세션 복원
+import { getSessionState, deleteSessionState, setClaudeSessionId } from "./org/session-state.js"; // #1059 E — restorable 세션 복원(+정밀 UUID 매핑)
 import { listManagedSessions } from "./org/managed-sessions.js"; // #1059 F — 관리탭 세션목록에서 managed 표시(회수 제외)
 import { sessionPrompts, searchPrompts, searchPromptsHybrid } from "./terminal-transcript.js";
 import { activeEmbeddingProvider } from "./v6/search-util.js";
@@ -347,9 +347,10 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
       invites: st.invites, projectId: st.project_id || undefined,
       projectSrc: st.project_src === "org" ? "org" : "v6",
       readOnly: st.read_only, incognito: st.incognito,
-      // #1059 — box-id 는 claude 세션 UUID 가 아니라 --resume 인자로 주면 "검색 결과 없음"에 빠진다(사용자 신고). 대신
-      //  resumePick 으로 인자 없는 --resume(후보 picker)를 띄워 이 작업폴더의 실제 대화에서 고르게 한다. claude 하네스만 적용.
-      resumePick: true,
+      // #1059 정밀 복원 — work-flag 훅이 보고한 claude UUID 가 있으면 그걸로 정확히 이어받는다(--resume <uuid>). 없으면
+      //  (셸·코덱스·미보고=세션공유/훅 off) box-id 는 claude UUID 가 아니므로 인자 없는 --resume(후보 picker)로 폴백한다.
+      //  createSession 이 claude 하네스에서만 적용(resume 우선 · 없으면 resumePick).
+      ...(st.claude_session_id ? { resume: st.claude_session_id } : { resumePick: true }),
     });
     await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 desired-state 정리 실패(비치명)"));
     res.json({ ok: true, session });
@@ -368,6 +369,19 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     ]);
     const managedIds = new Set(managed.map((m) => m.session_id).filter((x): x is string => !!x));
     res.json({ sessions: central.map((s) => ({ ...s, managed: managedIds.has(s.id) })) });
+  }));
+
+  // #1059 정밀 복원 — work-flag 훅이 세션 활동 시 (box-id, **claude 자신의 세션 UUID**)를 보고한다. box-id ≠ claude UUID
+  //  라(claude 는 자체 UUID 생성) restore 가 --resume 에 box-id 를 주면 "검색 결과 없음"이 됐다(사용자 신고). 이 매핑으로
+  //  restore 가 정확한 UUID 로 이어받는다. 한 box 안에서 branch·resume·/clear 로 UUID 가 바뀌므로 매 보고가 최신으로 덮는다(last-write-wins).
+  //  owner-gated: setClaudeSessionId 가 org_session_state.owner==호출자일 때만 갱신(남의 세션 오염 차단). best-effort — 훅은 fire-and-forget.
+  app.post("/api/ui/terminal/sessions/:id/claude-uuid", auth, wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const uuid = String(((req.body ?? {}) as Record<string, unknown>).uuid ?? "").trim();
+    // claude 세션 UUID 형식(표준 uuid 또는 안전 문자셋) — 경로/주입 방어.
+    if (!uuid || uuid.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(uuid)) throw new HttpError(400, "uuid 형식 오류");
+    const ok = await setClaudeSessionId(req.params.id, uuid, idOf(userOf(req)));
+    res.json({ ok }); // ok=false: 그 box 의 소유자가 아니거나 desired-state 레코드 없음(무해)
   }));
 
   registerTerminalFiles(app, verifier);
