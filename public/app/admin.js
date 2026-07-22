@@ -493,10 +493,9 @@ function memberAddSection(detail, data) {
         });
     };
     draw();
-    const recent = ((data.members || []).filter((m) => m.kind !== 'system')).slice(-5).reverse();
-    detail.replaceChildren(sectionHead('구성원 추가', '새 팀원을 조직에 등록합니다. 등록하면 로그인용 임시 비밀번호가 한 번 표시되니 그 자리에서 전달하세요.'), el('div', { class: 'admin-stack' }, el('div', { class: 'card' }, cardHead('새 구성원 등록', '이름·이메일·권한을 정해 등록합니다. 아이디는 이메일에서 자동으로 만들어집니다. 등록 직후 임시 비밀번호가 한 번만 보이고, 받은 사람은 첫 로그인에서 새 비밀번호를 정합니다.'), formBox), el('div', { class: 'card' }, cardHead('등록 다음에 할 일', '웹만 쓸 사람은 여기서 끝입니다. 그 사람의 AI(Claude Code·Codex)나 lively 명령까지 붙이려면 접속 토큰이 필요합니다.'), el('ol', { class: 'minter-steps' }, el('li', {}, '임시 비밀번호를 1:1로(슬랙·메신저 DM 등) 전달합니다.'), el('li', {}, '받은 사람이 로그인하면 새 비밀번호를 정합니다.'), el('li', {}, '그 사람의 AI·CLI 도 쓰려면 ', el('b', { text: '[구성원 권한 관리 ▸ 접속 토큰]' }), ' 에서 토큰을 발급해 전달합니다.')), el('div', { class: 'admin-actions' }, el('button', { class: 'btn btn-ghost btn-sm', text: '구성원 권한 관리로 이동',
-        onclick: () => { location.hash = '#/system/member-access'; } }), el('button', { class: 'btn btn-ghost btn-sm', text: '구성원 명부 보기',
-        onclick: () => { location.hash = '#/system/members'; } }))), recent.length ? el('div', { class: 'card' }, cardHead('최근 등록'), ...recent.map((m) => el('div', { class: 'token-row' }, el('div', { class: 'token-main' }, el('div', { class: 'token-label', text: m.display_name || m.id }), el('div', { class: 'mini-meta', text: (m.email || '이메일 없음') + ' · ' + ((m.scopes || []).join('/') || '권한 없음') })), el('button', { class: 'btn btn-ghost btn-sm', text: '열기', onclick: () => openMemberModal(m, data, detail) })))) : null));
+    // 화면은 등록 폼 하나로 끝낸다(#1085) — '등록 다음에 할 일'·'최근 등록' 카드는 사용자 요구로 뺐다.
+    //  절차 안내는 등록 직후 뜨는 계정 발급 팝업(showInitialAccount)이 이미 한다, 명부는 [구성원] 화면이 맡는다.
+    detail.replaceChildren(sectionHead('구성원 추가', '새 팀원을 조직에 등록합니다. 등록하면 로그인용 임시 비밀번호가 한 번 표시되니 그 자리에서 전달하세요.'), el('div', { class: 'card' }, cardHead('새 구성원 등록', '이름·이메일·권한을 정해 등록합니다. 아이디는 이메일에서 자동으로 만들어집니다. 등록 직후 임시 비밀번호가 한 번만 보이고, 받은 사람은 첫 로그인에서 새 비밀번호를 정합니다. 그 사람의 AI·CLI 까지 붙이려면 [구성원 권한 관리 ▸ 접속 토큰]에서 토큰을 발급해 전달합니다.'), formBox));
 }
 // ── [구성원 권한 관리] — 접속 토큰 + AI 실행 계정(구 [구성원] 서브탭 둘을 그대로 옮김, #1085). ──
 function memberAccessSection(detail, data) {
