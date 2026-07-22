@@ -1156,6 +1156,16 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .svc-item-actions { flex: none; display: flex; align-items: center; gap: 8px; margin-left: auto; }
 /* 카드 세로 스택 — 서브카드 사이 여백을 균일하게(개별 카드 인라인 margin 의존 제거, #762). */
 .admin-stack { display: flex; flex-direction: column; gap: 14px; }
+/* 내 AI 계정(#1085) — AI 한 줄 = [이름 · 상태 배지] + [한 줄 부제] | 오른쪽 [동작].
+   제약(공용 계정·맥 키체인)은 길어서 본문에 풀면 회색 문단이 카드를 덮는다 → 배지 툴팁으로 접는다. */
+.aiacct { display: flex; align-items: center; gap: 14px; padding: 13px 0; border-top: 1px solid var(--line); }
+.aiacct:first-child { border-top: 0; padding-top: 4px; }
+.aiacct:last-child { padding-bottom: 0; }
+.aiacct-txt { flex: 1; min-width: 0; }
+.aiacct-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.aiacct-name { font-size: 14.5px; font-weight: 700; color: var(--ink); }
+.aiacct-sub { margin-top: 3px; font-size: 12.5px; color: var(--muted-head); }
+.aiacct-act { flex: none; display: flex; gap: 8px; align-items: center; }
 /* 서비스별 탭(내 서비스 로그인, #762) — .chip 재사용한 탭 바 + 선택 서비스 패널. */
 .svc-tabs { margin-bottom: 16px; }
 .svc-tab { gap: 6px; }
@@ -6891,7 +6901,10 @@ body[data-route="learn"] main,
 body[data-route="start"] main,
 body[data-route="install"] main,
 body[data-route="onboarding"] main { max-width: none; }
-.admin-body { flex: 1; min-width: 0; padding-bottom: 48px; }
+/* 본문 읽기 폭(#1085) — 관리탭은 전폭이라 27인치에서 카드 한 줄이 너무 길어 한눈에 안 들어온다는 지적.
+   사이드바는 좌측 그대로 두고(레이아웃은 그대로) **본문에만** 상한을 걸어 오른쪽을 비운다(.docs-body 와 같은 수법,
+   단 관리는 표·그리드가 있어 문서(920px)보다 넉넉한 1160px). 좁은 화면에선 flex 가 알아서 줄인다. */
+.admin-body { flex: 1; min-width: 0; max-width: 1160px; padding-bottom: 48px; }
 /* 페이지 머리는 #837 에서 폐지 — 상단 탭 + 사이드바가 이미 위치를 말한다(화면마다 반복될 이유 없음).
    '읽기 전용'은 전역 배지(사이드바)가 아니라 **그 섹션이 실제로 나에게 읽기 전용일 때만** 본문 위에 붙인다:
    admin 이 없어도 카테고리·레포·팀은 context 권한으로 편집된다 — 전역 배지는 거짓말이었다. */

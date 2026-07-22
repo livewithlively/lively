@@ -6632,13 +6632,16 @@ const AI_LOGIN_HINT = {
 function aiAccountRow(a, mySessions, reload) {
     const mine = (mySessions || []).filter((s) => s.harness === a.key);
     const live = mine.filter((s) => s.agentState && s.agentState !== 'exited' && s.agentState !== 'offline');
-    // loggedIn 은 3-상태다: true=로그인 확정 · false=미로그인 확정 · null=서버가 알 수 없음(맥 키체인).
-    //  null 을 '로그인 전'으로 칠하면 거짓말이 되므로 따로 표시한다.
-    const badge = a.loggedIn === true ? el('span', { class: 'pill pill-ok', text: '로그인됨' })
-        : a.loggedIn === false ? el('span', { class: 'pill', text: '로그인 전' })
-            : el('span', { class: 'pill', text: '상태 확인 불가' });
     // 공유 계정 = 이 서버의 호스트 홈 자격을 전 구성원이 함께 쓰는 상태. 로그아웃하면 남의 세션까지 끊기므로 잠근다.
     const shared = a.scope === 'shared';
+    // 상태는 3-상태다(true/false/null). **배지는 짧게, 사연은 툴팁으로** — 제약 설명(공유 계정·맥 키체인)을
+    //  본문에 풀어 쓰면 두세 줄짜리 회색 문단이 되어 정작 '연결됐나?'가 안 읽힌다(사용자 지적).
+    const st = a.loggedIn === true
+        ? { text: '연결됨', cls: 'pill pill-ok', tip: '이 서버에 내 로그인 자격이 저장돼 있습니다 — ' + a.where }
+        : a.loggedIn === false
+            ? { text: '로그인 필요', cls: 'pill', tip: '아직 로그인하지 않았습니다. [로그인] 을 누르면 이 AI 로 세션이 하나 열리고, 거기서 한 번만 로그인하면 됩니다.' }
+            : { text: '확인 불가', cls: 'pill', tip: '이 서버(macOS)는 로그인 자격을 키체인에 보관해서, 서버가 로그인 여부를 알 수 없습니다. 세션이 잘 돌고 있으면 로그인된 것이고, 아니라면 [로그인] 을 누르세요.' };
+    const badge = withTip(el('span', { class: st.cls, text: st.text }), st.tip);
     const openLogin = async (ev) => {
         const btn = ev.currentTarget;
         btn.disabled = true;
@@ -6669,18 +6672,16 @@ function aiAccountRow(a, mySessions, reload) {
         }
         void reload();
     };
-    return el('div', { class: 'storage-item' }, el('div', { class: 'storage-head' }, el('strong', { text: a.label }), badge, el('span', { class: 'admin-hint', text: live.length ? `지금 내 세션 ${live.length}개가 이걸로 실행 중` : (mine.length ? `내 세션 ${mine.length}개(실행 종료)` : '지금 이걸로 뜬 내 세션 없음') })), el('div', { class: 'admin-actions', style: 'margin-top:6px' }, 
-    // 로그인 버튼은 '로그인 확정'일 때만 감춘다 — 확인 불가(null)에서도 다시 로그인은 언제나 해가 없다.
-    a.loggedIn === true ? null : el('button', { type: 'button', class: 'btn btn-primary btn-sm', text: '🔑 로그인', onclick: openLogin }), a.canLogout ? el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '로그아웃', onclick: logout }) : null, 
-    // 안내는 겹칠 수 있다(공유 계정 + 키체인). 하나만 고르지 말고 해당되는 걸 모두 잇는다.
-    el('span', { class: 'admin-hint', text: [
-            a.loggedIn === null ? '이 서버(macOS)에서는 자격증명이 키체인에 저장돼 서버가 로그인 여부를 알 수 없습니다 — 로그아웃은 세션에서 ' + a.key + ' 실행 후 /logout.' : null,
-            shared ? '이 서버는 구성원 격리가 없어 이 AI 는 모든 구성원이 같은 계정으로 실행됩니다 — 로그아웃하면 다른 구성원 세션까지 끊겨 잠가 두었습니다.' : '자격증명 위치: ' + a.where,
-        ].filter(Boolean).join(' ') })));
+    // 부제는 **한 줄**만 — 지금 이 AI 로 도는 내 세션이 몇 개인지(이 화면에서 사람이 실제로 궁금해하는 것).
+    //  공유 계정 같은 단서는 짧은 꼬리표로만 붙이고 사연은 툴팁에 둔다.
+    const sub = live.length ? `내 세션 ${live.length}개가 이 AI로 실행 중` : '이 AI로 실행 중인 내 세션 없음';
+    return el('div', { class: 'aiacct' }, el('div', { class: 'aiacct-txt' }, el('div', { class: 'aiacct-head' }, el('span', { class: 'aiacct-name', text: a.label }), badge, shared ? withTip(el('span', { class: 'pill', text: '공용 계정' }), '이 서버는 구성원별 계정 격리가 없어 모든 구성원이 이 AI 를 같은 계정으로 씁니다 — 로그아웃하면 다른 구성원 세션까지 끊기므로 잠가 두었습니다.') : null), el('div', { class: 'aiacct-sub', text: sub })), el('div', { class: 'aiacct-act' }, 
+    // 로그인 버튼은 '연결 확정'일 때만 감춘다 — 확인 불가에서도 다시 로그인은 언제나 해가 없다.
+    a.loggedIn === true ? null : el('button', { type: 'button', class: 'btn btn-primary btn-sm', text: '로그인', onclick: openLogin }), a.canLogout ? el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '로그아웃', onclick: logout }) : null));
 }
 function myAiAccountsCard() {
     const body = el('div');
-    const card = el('div', { class: 'card' }, el('h3', { text: '내 AI 계정' }), el('p', { class: 'caption', text: '내 AI 세션이 어떤 AI(Claude Code · Codex)로, 어느 계정으로 실행되는지입니다. 로그인은 처음 한 번만 하면 이후 내가 만드는 세션이 그 계정으로 뜹니다.' }), body);
+    const card = el('div', { class: 'card' }, el('h3', { text: '내 AI 계정' }), el('p', { class: 'caption', text: '내 AI 세션을 실제로 실행하는 AI와, 거기에 연결된 내 계정입니다. 로그인은 처음 한 번만 하면 됩니다.' }), body);
     const load = async () => {
         body.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
         try {
@@ -6803,8 +6804,10 @@ async function myAiSection(detail) {
         saveBtn.disabled = false;
     });
     const pv = previewExpander();
-    detail.replaceChildren(sectionHead('내 AI 설정', null, '여기 입력·선택한 내용은 **내** AI가 매 세션을 시작할 때 \'내 개인 규칙\'으로 읽습니다 — 나에게만 적용되고 팀에는 공유되지 않아요. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).'), myAiAccountsCard(), // 위 박스 = 내 AI 가 '무엇으로·누구 계정으로' 도는가(#1085)
-    el('div', { class: 'card admin-form-narrow' }, el('h3', { text: '내 AI 에게 알려줄 것' }), field('역할', roleIn), field('개발 이해도', el('div', {}, devChips, devHint)), field('호칭 (AI가 나를 부르는 말)', addressIn), field('말투', toneChips), field('사용 언어 (AI가 답하는 언어)', el('div', {}, langChips, el('div', { style: 'margin-top:8px' }, langCustom), el('p', { class: 'prof-hint', text: '고르거나 직접 적은 언어로 내 AI가 답해요. 비우면 조직 기본값(주로 한국어)을 따릅니다.' }))), field('추가 메모', memoTa), el('div', { class: 'admin-actions' }, saveBtn, status, pv.btn), pv.box));
+    detail.replaceChildren(sectionHead('내 AI 설정', null, '여기 입력·선택한 내용은 **내** AI가 매 세션을 시작할 때 \'내 개인 규칙\'으로 읽습니다 — 나에게만 적용되고 팀에는 공유되지 않아요. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).'), 
+    // 두 박스는 성격이 다르다 — 붙여 놓으면 한 덩어리로 읽힌다. .admin-stack 으로 간격을 준다(관리탭 공용 규약).
+    el('div', { class: 'admin-stack' }, myAiAccountsCard(), // 위 박스 = 내 AI 가 '무엇으로·누구 계정으로' 도는가(#1085)
+    el('div', { class: 'card admin-form-narrow' }, el('h3', { text: '내 AI 에게 알려줄 것' }), field('역할', roleIn), field('개발 이해도', el('div', {}, devChips, devHint)), field('호칭 (AI가 나를 부르는 말)', addressIn), field('말투', toneChips), field('사용 언어 (AI가 답하는 언어)', el('div', {}, langChips, el('div', { style: 'margin-top:8px' }, langCustom), el('p', { class: 'prof-hint', text: '고르거나 직접 적은 언어로 내 AI가 답해요. 비우면 조직 기본값(주로 한국어)을 따릅니다.' }))), field('추가 메모', memoTa), el('div', { class: 'admin-actions' }, saveBtn, status, pv.btn), pv.box)));
 }
 // ── [내 설정 ▸ 내 서비스 로그인] — member_secret vault + OAuth 연결 + git 인증 ──
 async function myLoginsSection(detail) {
