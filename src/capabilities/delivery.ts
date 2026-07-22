@@ -23,6 +23,7 @@ import { stateRoot, logRoot } from "../state-dir.js";
 import { ROOTS as TERMINAL_ROOTS, SHARED_ROOT as TERMINAL_SHARED_ROOT } from "../terminal-sessions.js";
 import { normalizeStoragePolicy, type StoragePolicyPatch } from "../org/storage-policy.js";
 import { normalizeSessionMemoryPolicy, SESSION_MEM_MB_MIN, SESSION_MEM_MB_MAX, type SessionMemoryPolicyPatch } from "../org/session-memory-policy.js"; // #1059 D
+import { RECLAIM_TTL_MIN_MIN, RECLAIM_TTL_MIN_MAX, type SessionReclaimPolicyPatch } from "../org/session-reclaim-policy.js"; // #1059 F
 import {
   type SessionSharePatch, SESSION_SHARE_SCOPES, SESSION_SHARE_STORES, SESSION_SHARE_VIEW_POLICIES,
   KNOWN_HARNESSES, RETENTION_MAX_DAYS,
@@ -35,7 +36,8 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { PROJECT_SHARED_BASE, PROJECT_SUBDIR, LEGACY_SUBDIR, projectAbsPath } from "../project-fs.js";
 import { dirSizesFast, isInside, reposIn, planReclaim, applyReclaim, baseRepoOf } from "../workspace-reclaim.js";
-import { listSessions } from "../terminal-sessions.js";
+import { listSessions, listSessionsRaw } from "../terminal-sessions.js";
+import { memAvailableMb, memTotalMb } from "../host-mem.js"; // #1059 G1 — 박스 메모리 status
 import { isValidTimezone, DEFAULT_TZ } from "../org/timezone.js"; // #778 조직 시간대 검증·기본값
 import { previewMemberContext, kitVersion } from "../org/publish.js";
 import { GUIDE_SECTION_DEFAULTS } from "../org/materialize.js";
@@ -51,7 +53,7 @@ import {
   listMembers, getMember, memberIdByEmail, upsertMember, removeMember, listMemory,
   mintToken, listTokens, revokeToken, memberHasActiveToken,
   listContentAudit, ADMIN_AUDIT_ENTITIES,
-  getRuntimeConfig, updateRuntimeConfig, getEmbeddingConfigSource, getStoragePolicySource, getSessionMemoryPolicySource, listMcpServers, upsertMcpServer, removeMcpServer,
+  getRuntimeConfig, updateRuntimeConfig, getEmbeddingConfigSource, getStoragePolicySource, getSessionMemoryPolicySource, getSessionReclaimPolicySource, listMcpServers, upsertMcpServer, removeMcpServer,
   listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook, recordHookFailures,
   HOOK_RELAY_DECISIONS, type HookRelayDecision,
   listOrgHarnessAssets, listEnabledAssets, upsertOrgHarnessAsset, removeOrgHarnessAsset, countMemberDraftAssets,
@@ -93,6 +95,9 @@ import {
   GATEWAY_OWNER, memberOwner, listGitCredentialsPublic, setSshCredential, setHttpsCredential,
   deleteGitCredential, generateSshKeypair, type GitCredentialPublic,
 } from "../org/git-credential-store.js";
+// #1077 등록 직후 홈 즉시 반영 — materialize(홈 쓰기) + 그 멤버의 격리 계정 해소(ready·provisioned·osUser).
+import { materializeMemberGit } from "../org/git-credential-materialize.js";
+import { memberOsStatus } from "../terminal-sessions.js";
 import { secretsEnabled } from "../org/secret-box.js";
 // #586 커넥터 UX — 비동기 실행(run 엔티티)·스코프 발견.
 import { startConnectorRun, listConnectorRuns, getConnectorRun, cancelConnectorRun } from "../connectors/run-tracker.js";
@@ -225,6 +230,23 @@ async function applyGitCredential(owner: string, input: Record<string, unknown>,
     return { credential };
   }
   throw new HttpError(400, "kind 는 ssh|https 여야 합니다");
+}
+
+// 등록·삭제 직후 그 멤버의 격리 홈에 즉시 반영(#1077). materialize 는 세션이 아니라 **홈**(~/.ssh·~/.lively)에 쓰고
+//  그 멤버의 모든 세션이 같은 홈을 보므로, 이미 열려 있는 세션에서도 다음 git 호출부터 바로 먹는다(재접속 불요).
+//  createSession 에도 같은 호출이 있다(세션 시작 시 최신 DB 상태로 재생성) — 여기는 세션이 떠 있는 동안의 변경을 메운다.
+//  best-effort: 격리 미준비(비-Linux 개발박스 등)·미프로비저닝 멤버면 조용히 건너뛴다. 실패해도 DB 등록 자체는 성립하고
+//  다음 세션에서 어차피 반영되므로, 여기서 던져 등록을 실패로 만들지 않는다.
+//  evenIfEmpty: 삭제 경로에서만 true — 마지막 자격을 지웠을 때도 홈에 뿌려둔 키를 거두기 위해서다(자격 0건이면
+//  materialize 가 기본적으로 no-op 이라, 안 주면 "지웠는데 홈에선 계속 쓸 수 있는" 상태가 남는다).
+async function syncMemberGitHome(memberId: string, evenIfEmpty = false): Promise<void> {
+  try {
+    const st = await memberOsStatus(memberId);
+    if (!st.ready || !st.provisioned) return;
+    await materializeMemberGit(st.osUser, memberId, { evenIfEmpty });
+  } catch (e) {
+    console.warn(`[git-credential] 홈 즉시 반영 실패(${memberId}) — 등록은 성립, 다음 세션에서 반영됨:`, (e as Error)?.message ?? e);
+  }
 }
 
 // 하네스 자산 target_members — null/빈=전원, 배열=그 멤버 id 만(per-member 타깃팅). 멤버 id 슬러그 검증.
@@ -411,6 +433,28 @@ const workspaceBatchCapabilities = (): Capability[] => [
       remove_worktree: z.boolean().optional().describe("워크트리까지 제거(푸시 완료·클린일 때만 — 아니면 유지하고 이유를 남긴다)"),
     }),
 ];
+
+// #1059 G1 — Ollama 로드 모델 프로브(best-effort). 급성 스파이크(임베딩 모델 3.3GB)의 가시화용.
+//  임베딩 provider 가 http 이고 base_url 이 있을 때만, 그 host 의 /api/ps(Ollama 전용)를 짧게 찔러 로드 모델·용량을 본다.
+//  Ollama 가 아니거나(404 등)·미도달·타임아웃이면 null(무해) — 메모리 available 숫자 자체가 이미 스파이크를 반영하므로 부가정보.
+//  base_url 은 관리자 설정(신뢰) 이라 직접 fetch(사용자 입력 SSRF 아님). 응답 파싱은 방어적.
+async function probeOllama(baseUrl: string | null | undefined): Promise<{ loaded: boolean; models: string[]; mb: number } | null> {
+  if (!baseUrl) return null;
+  let origin: string;
+  try { const u = new URL(baseUrl); origin = `${u.protocol}//${u.host}`; } catch { return null; }
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 2000);
+  try {
+    const res = await fetch(`${origin}/api/ps`, { signal: ctrl.signal });
+    if (!res.ok) return null;
+    const j = await res.json() as { models?: Array<{ name?: unknown; model?: unknown; size?: unknown }> };
+    const models = Array.isArray(j?.models) ? j.models : [];
+    const names = models.map((m) => (typeof m.name === "string" ? m.name : typeof m.model === "string" ? m.model : "")).filter(Boolean);
+    const mb = Math.round(models.reduce((s, m) => s + (Number(m.size) || 0), 0) / 1048576);
+    return { loaded: models.length > 0, models: names, mb };
+  } catch { return null; }
+  finally { clearTimeout(timer); }
+}
 
 export const deliveryCapabilities: Capability[] = [
   // ── 단일 로드: 관리 화면 전체 상태 + 의미 가이드 ──
@@ -1144,6 +1188,11 @@ export const deliveryCapabilities: Capability[] = [
 
   // ── git 자격(#540) — 레포 클론·세션 git 용 SSH/HTTPS 자격. 본인 자가등록(me/*, 인증만) + 게이트웨이 머신계정(org/*, admin). ──
   //  provision 클론은 요청 멤버 자격(없으면 gateway)을 주입, 세션 안 git 은 멤버 자격을 멤버 홈에 materialize(Slice 2).
+  //  #1077: me_* 를 MCP 에도 노출(mcp=true) + 등록·삭제 직후 즉시 materialize.
+  //   그 전엔 웹 UI 가 유일한 표면이라, 세션 안에서 클론이 막힌 사람은 브라우저로 나가 등록하고 **세션을 새로 떠야** 했다
+  //   (materialize 가 createSession 에만 있었으므로). 그 왕복 때문에 실사용에선 셸 `ssh-keygen` 으로 홈에 키를 직접
+  //   만드는 우회가 나왔고 — 되긴 되지만 자격이 DB 밖이라 관리탭·회수·재프로비저닝 복원에서 전부 빠졌다.
+  //   → 에이전트가 세션 안에서 대행하고 그 자리에서 반영되게 한다. input 스키마는 #923 규약(helper 통째전달은 손선언).
   restRead("me_git_credential_get", "내 git 인증 조회",
     "현재 로그인한 구성원의 등록된 git 자격(호스트·종류·SSH 공개키·존재 플래그)을 반환한다 — 시크릿(개인키·토큰)은 절대 반환하지 않는다.",
     [{ method: "GET", paths: ["/api/ui/me/git-credential"], parse: () => ({}) }],
@@ -1151,22 +1200,36 @@ export const deliveryCapabilities: Capability[] = [
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
       return { credentials: await listGitCredentialsPublic(memberOwner(userId)), encryption_ready: secretsEnabled() };
-    }),
+    }, true),
   restRead("me_git_credential_set", "내 git 인증 등록",
-    "본인 git 자격을 등록한다. kind=ssh 면 박스가 키페어를 생성해 공개키를 반환(개인키는 박스밖 유출 없음), kind=https 면 토큰을 저장. host 기본 github.com.",
+    "본인 git 자격을 등록한다. kind=ssh 면 박스가 키페어를 생성해 공개키를 반환(개인키는 박스밖 유출 없음), kind=https 면 토큰을 저장. host 기본 github.com. " +
+    "격리 박스면 등록 즉시 내 홈에 반영되어 이미 열려 있는 세션에서도 바로 쓰인다 — ⚠ kind=ssh 는 새 키페어라, 반환된 공개키를 그 호스트(GitHub·GitLab) 계정에 등록해야 인증이 선다.",
     [{ method: "POST", paths: ["/api/ui/me/git-credential"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
-      return applyGitCredential(memberOwner(userId), input, actorOf(user));
+      const res = await applyGitCredential(memberOwner(userId), input, actorOf(user));
+      await syncMemberGitHome(userId);
+      return res;
+    }, true, {
+      // 필드는 applyGitCredential/parseGitHost 가 읽는다(핸들러가 input 을 통째로 넘김) — 거기 바뀌면 여기도 같이(#923 규약4).
+      kind: z.enum(["ssh", "https"]).describe("ssh=박스가 ed25519 키페어 생성·공개키 반환(개인키는 박스 밖으로 안 나감) / https=토큰 저장"),
+      host: z.string().optional().describe("git 호스트(기본 github.com) — 예: git.honestfund.kr"),
+      label: z.string().optional().describe("자격 라벨(메모용)"),
+      token: z.string().optional().describe("kind=https 일 때 필수 — 개인 액세스 토큰(봉투 암호화 저장)"),
+      username: z.string().optional().describe("kind=https 일 때 사용자명(선택)"),
     }),
   restRead("me_git_credential_delete", "내 git 인증 삭제",
-    "본인 git 자격을 삭제한다(host 지정, 기본 github.com).",
+    "본인 git 자격을 삭제한다(host 지정, 기본 github.com). 격리 박스면 내 홈의 그 자격도 즉시 회수된다.",
     [{ method: "POST", paths: ["/api/ui/me/git-credential/delete"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const userId = user?.userId;
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
-      return { deleted: await deleteGitCredential(memberOwner(userId), parseGitHost(input)) };
+      const deleted = await deleteGitCredential(memberOwner(userId), parseGitHost(input));
+      await syncMemberGitHome(userId, true); // 마지막 한 건을 지운 경우까지 홈에서 거둔다
+      return { deleted };
+    }, true, {
+      host: z.string().optional().describe("삭제할 자격의 git 호스트(기본 github.com) — parseGitHost 가 읽는다"),
     }),
   restOnly("org_git_credential_get", "게이트웨이 git 계정 조회",
     "게이트웨이(조직 머신 계정) git 자격을 조회한다 — provision 클론에서 멤버 자격이 없을 때 폴백으로 쓰인다. 시크릿은 반환하지 않는다.",
@@ -1240,6 +1303,7 @@ export const deliveryCapabilities: Capability[] = [
         embedding_config?: EmbeddingConfigPatch;
         storage_policy?: StoragePolicyPatch;
         session_memory_policy?: SessionMemoryPolicyPatch;
+        session_reclaim_policy?: SessionReclaimPolicyPatch;
         hook_relay_decisions?: HookRelayDecision[];
         session_share?: SessionSharePatch;
         hook_grace_ms?: number | null;
@@ -1292,6 +1356,19 @@ export const deliveryCapabilities: Capability[] = [
           throw new HttpError(400, `MemoryHigh(${patchIn.per_session_high_mb}MB)는 MemoryMax(${merged.per_session_max_mb}MB) 이하여야 합니다`);
         }
         patch.session_memory_policy = patchIn;
+      }
+      // idle 세션 자동 회수 정책(#1059 F) — idle TTL(분). 0=끔(무회귀). 고객 박스는 .env 를 못 고치므로 여기가 유일한 조절 창구.
+      if (input.session_reclaim_policy !== undefined) {
+        const raw = input.session_reclaim_policy;
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "session_reclaim_policy 는 객체여야 합니다");
+        const s = raw as Record<string, unknown>;
+        const patchIn: SessionReclaimPolicyPatch = {};
+        if (s.idle_ttl_minutes !== undefined) {
+          const n = Number(s.idle_ttl_minutes);
+          if (!Number.isFinite(n) || n < RECLAIM_TTL_MIN_MIN || n > RECLAIM_TTL_MIN_MAX) throw new HttpError(400, `session_reclaim_policy.idle_ttl_minutes 는 ${RECLAIM_TTL_MIN_MIN}~${RECLAIM_TTL_MIN_MAX} 정수(분)여야 합니다 (0=회수 끔)`);
+          patchIn.idle_ttl_minutes = Math.floor(n);
+        }
+        patch.session_reclaim_policy = patchIn;
       }
       if (input.hooks !== undefined) {
         const h = input.hooks;
@@ -1505,6 +1582,9 @@ export const deliveryCapabilities: Capability[] = [
         per_session_high_mb: z.number().int().min(0).max(1_048_576).optional().describe("세션당 MemoryHigh(MB) — 초과 시 강한 회수·스로틀(kill 아님). 0=무제한"),
         per_session_max_mb: z.number().int().min(0).max(1_048_576).optional().describe("세션당 MemoryMax(MB) — 초과 시 그 세션 scope 안에서 OOM-kill. 0=무제한. MemoryHigh 이상이어야"),
       }).optional().describe("per-session cgroup 메모리 격리(#1059 D) — 세션당 MemoryHigh/Max(MB). 0=무제한(무회귀). 캡을 걸면 세션이 box-cgspawn scope 로 격리돼 폭주 세션만 OOM-kill·박스 생존"),
+      session_reclaim_policy: z.object({
+        idle_ttl_minutes: z.number().int().min(0).max(43_200).optional().describe("이 분(minute)을 넘게 idle 인 세션을 자동 회수. 0=끔(무회귀). managed·attached·busy·waiting 은 항상 제외"),
+      }).optional().describe("idle 세션 자동 회수(#1059 F) — idle TTL(분). 0=끔. 켜면 오래 idle 인 세션을 회수하되 desired-state 보존→열 때 lazy resume(admission control 대신 채택)"),
       embedding_config: z.object({
         provider: z.enum(["off", "http"]).optional().describe("off=끄기(#688 명시적 off 마커 — .env 시드로 부활 안 함) · http=외부 임베딩 API"),
         base_url: z.string().nullable().optional().describe("provider=http 일 때 임베딩 API 주소"),
@@ -1513,6 +1593,7 @@ export const deliveryCapabilities: Capability[] = [
         auth_env_ref: z.string().nullable().optional().describe("인증에 쓸 환경변수 **이름**(시크릿 값 금지)"),
         batch_size: z.number().int().optional().describe("배치 크기(#602 — 느린/CPU 백엔드 대응). 비우면 기본값"),
         request_timeout_ms: z.number().int().optional().describe("요청 타임아웃 ms. 비우면 기본값"),
+        backfill_min_available_mb: z.number().int().min(0).max(1_048_576).optional().describe("#1059 G2/G3 — 자동 백필 pre-flight 메모리 게이트: 가용 메모리가 이 MB 미만이면 이번 스윕을 건너뛴다(다음 주기 재시도, pending 유실 없음). 0=끔(무회귀). Ollama 모델 로드 스파이크가 세션 baseline 과 겹쳐 OOM 나는 걸 예방(예: 16GB 박스 4096~5000)"),
       }).optional().describe("임베딩 설정 — knowledge/project 백필과 검색이 공유"),
     }),
 
@@ -1568,7 +1649,7 @@ export const deliveryCapabilities: Capability[] = [
     }),
 
   restOnly("org_storage_status", "저장소·로그 상태",
-    "박스 디스크 사용률(경고/위험 판정 포함) + 로그 파일 크기 + 저장소 정책(로그 상한·디스크 임계치) + per-session 메모리 캡 정책(#1059 D)과 각 출처. admin 전용.",
+    "박스 디스크 사용률(경고/위험 판정 포함) + 로그 파일 크기 + 저장소 정책(로그 상한·디스크 임계치) + per-session 메모리 캡 정책(#1059 D)·idle 회수 정책(#1059 F)과 각 출처 + 라이브 메모리 status(#1059 G1 — available/total·세션수·Ollama). admin 전용.",
     [{ method: "GET", paths: ["/api/ui/org/storage"], parse: () => ({}) }],
     async () => {
       const cfg = await getRuntimeConfig();
@@ -1581,13 +1662,30 @@ export const deliveryCapabilities: Capability[] = [
       // 공유 빌드 캐시(#813 T3) — 지금 얼마나 쌓였나 + 어떤 env 를 세션에 주입 중인가(관리자가 눈으로 확인).
       const cacheOpts = { enabled: p.shared_cache_enabled, relocateHome: p.shared_cache_relocate_home };
       const cacheRoot = sharedCacheRoot(TERMINAL_SHARED_ROOT.base);
+      // #1059 G1 — 박스 메모리 status(가시화). #1059 다운의 두 축(만성 세션 baseline·급성 Ollama 스파이크)을 한 화면에.
+      //  available/total = OOM 근접도(회수 가능 캐시 포함, host-mem) · session_count = baseline 드라이버(중앙 세션 수) ·
+      //  ollama = 급성 스파이크(로드 모델·용량, best-effort). 전부 비파괴 조회. 실패해도 status 전체를 막지 않게 방어.
+      const availMb = await memAvailableMb().catch(() => 0);
+      const totalMb = memTotalMb();
+      const sessionCount = (await listSessionsRaw().catch(() => [])).length;
+      const ollama = cfg.embedding_config.provider === "http" ? await probeOllama(cfg.embedding_config.base_url).catch(() => null) : null;
       return {
         policy: p,
         policy_source: await getStoragePolicySource(), // db(관리탭) · env(.env 시드) · default(코드 기본값)
-        // per-session 메모리 캡(#1059 D) — 세션당 MemoryHigh/Max(MB, 0=무제한). 라이브 메모리 **사용량** status(available/Ollama/세션수)는
-        //  G1(#1064) 이 box-watch 로 여기 같은 ops 엔드포인트에 얹는다. 여기선 정책값·출처만 노출(설정은 org_runtime_update POST).
+        // #1059 G1 — 라이브 메모리 사용량. 관리탭이 저장소(디스크) status 와 나란히 '박스 운영 대시보드'로.
+        memory: {
+          available_mb: availMb,
+          total_mb: totalMb,
+          used_pct: totalMb > 0 ? Math.round(((totalMb - availMb) / totalMb) * 100) : 0,
+          session_count: sessionCount,
+          ollama, // {loaded, models, mb} | null(비-Ollama·미도달)
+        },
+        // per-session 메모리 캡(#1059 D) — 세션당 MemoryHigh/Max(MB, 0=무제한). 정책값·출처 노출(설정은 org_runtime_update POST).
         session_memory_policy: cfg.session_memory_policy,
         session_memory_policy_source: await getSessionMemoryPolicySource(),
+        // idle 세션 자동 회수 정책(#1059 F) — idle TTL(분, 0=끔). 라이브 세션 수·메모리 status(G1)는 후속(#1064)이 얹는다.
+        session_reclaim_policy: cfg.session_reclaim_policy,
+        session_reclaim_policy_source: await getSessionReclaimPolicySource(),
         disks,
         logs: {
           dir: logRoot(),
@@ -1859,7 +1957,14 @@ export const deliveryCapabilities: Capability[] = [
     "proxy 모드 MCP 서버의 상류 tools/list 를 다시 캡처해 스냅샷(핀)으로 저장한다 — 버전업/새 툴 반영. 다음 세션부터 구성원에 전파(재설치 0).",
     [{ method: "POST", paths: ["/api/ui/org/mcp-server/refresh"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
-      const r = await refreshProxySnapshot(slug(input.name, "name"), actorOf(user));
+      let r: { count: number };
+      try {
+        r = await refreshProxySnapshot(slug(input.name, "name"), actorOf(user));
+      } catch (e) {
+        // 상류 연결/tools 캡처 실패를 실제 메시지로 노출한다(구: generic 500 "internal_error" 로 뭉개져 원인 불명이었음).
+        //  자격 리터럴은 refreshProxySnapshot 내부에서 이미 redact 됨.
+        throw new HttpError(502, `발행 실패(상류 tools/list): ${(e as Error)?.message ?? String(e)}`);
+      }
       // in-session push(#746 T5) — sessioned 클라들에 tools/list_changed 즉시 전파(무상태면 no-op). 발행=라이브 반영.
       const pushed = broadcastToolListChanged();
       return { ok: true, tool_count: r.count, live_pushed_sessions: pushed };

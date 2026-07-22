@@ -40,6 +40,7 @@ import { startLogJanitor } from "./log-janitor.js";
 import { effectiveStoragePolicy } from "./org/storage-policy.js";
 import { getRuntimeConfig } from "./org/store.js";
 import { reapSessionLogs, backfillSessionTitles } from "./v6/session-log-store.js";
+import { reapIdleSessions } from "./session-reaper.js"; // #1059 F — idle 세션 자동 회수(정책 0=끔 기본)
 import { ensureSharedCache } from "./session-cache.js";
 import { startBoxWatch } from "./box-watch.js";
 import { sendBoxAlert } from "./alerts.js";
@@ -341,6 +342,10 @@ const server = app.listen(PORT, () => {
         }, 6 * 60 * 60_000).unref();
         // #905 C1 — 제목 컬럼 도입(슬⑤b) 전 캡처/백필된 세션의 title 소급 채움(부팅 35초 후 1회, 멱등). 다 채우면 no-op.
         setTimeout(() => { void backfillSessionTitles().catch(() => { /* best-effort */ }); }, 35_000).unref();
+        // #1059 F — idle 세션 자동 회수(reaper). 정책(session_reclaim_policy) 0=끔이 기본이라 켜기 전엔 no-op.
+        //  5분 주기(회수는 tmux kill 로 싸다). 켜지면 오래 idle 인 세션을 desired-state 보존하며 회수 → restorable(E lazy resume).
+        //  ⚠ 부팅 직후 즉시 돌리지 않는다 — 재부팅 복원(E)과 겹쳐 갓 뜬 세션을 오판하지 않게 첫 tick 은 주기 뒤.
+        setInterval(() => { void reapIdleSessions().catch((err) => logger.warn({ err }, "session-reaper tick 실패")); }, 5 * 60_000).unref();
       })
       .catch((err) => logger.error({ err }, "schema init failed"));
   }

@@ -32,6 +32,11 @@ import {
   type SessionMemoryPolicy, type SessionMemoryPolicyPatch, resolveSessionMemoryPolicy, normalizeSessionMemoryPolicy,
   sessionMemoryPolicySource, invalidateSessionMemoryPolicyCache,
 } from "./session-memory-policy.js";
+// idle 세션 자동 회수(reaper) 정책(#1059 F) — idle TTL(분). storage/session-memory 와 같은 seam(DB 우선, 비면 env 시드).
+import {
+  type SessionReclaimPolicy, type SessionReclaimPolicyPatch, resolveSessionReclaimPolicy, normalizeSessionReclaimPolicy,
+  sessionReclaimPolicySource, invalidateSessionReclaimPolicyCache,
+} from "./session-reclaim-policy.js";
 
 // 쓰기 호출 맥락 — 감사 보강(누가/어느 토큰/어디서). delivery 핸들러가 web.ts 의 ctx 에서 구성해 전달.
 export interface WriteCtx { actor?: string; source?: string; tokenHashPrefix?: string | null; ip?: string | null }
@@ -757,6 +762,7 @@ export interface OrgRuntimeConfig {
   embedding_config: EmbeddingConfig; // 벡터검색(#172) 추론 seam 설정 — 기본 off(현행 grep/ILIKE). DB 우선, 비면 env(EMBEDDINGS_*) 시드
   storage_policy: StoragePolicy; // 박스 저장소 정책(#813) — 로그 상한·디스크 임계치. DB 우선, 비면 env 시드 → 기본값
   session_memory_policy: SessionMemoryPolicy; // per-session cgroup 메모리 격리(#1059 D) — 세션당 MemoryHigh/Max(MB). 0=무제한(무회귀). DB 우선, 비면 env 시드
+  session_reclaim_policy: SessionReclaimPolicy; // idle 세션 자동 회수(#1059 F) — idle TTL(분). 0=끔(무회귀). DB 우선, 비면 env 시드
   hook_relay_decisions: HookRelayDecision[]; // 러너가 PreToolUse 에서 전파할 결정(#892). 기본 deny/ask/defer — allow 는 명시 opt-in
   session_share: SessionShareConfig; // 세션이력 캡처 정책(#905 C1). 기본 enabled=false(롤아웃 꺼둠). 관리탭 ▸ 세션 공유.
   hook_grace_ms: number | null; // #1008 — run-custom 이 게이트웨이 미도달 시 최근 캐시를 쓸 유효기간(ms). NULL=무제한(기본). 양수=그 ms 후 fail-CLOSED.
@@ -789,7 +795,7 @@ const graceMsSafe = (v: unknown): number | null => {
 
 export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
   const r = await itemsPool.query(
-    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, session_memory_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, version, updated_at, updated_by
+    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, session_memory_policy, session_reclaim_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, version, updated_at, updated_by
        FROM org_runtime_config WHERE id=1`,
   );
   const row = r.rows[0] as Record<string, unknown> | undefined;
@@ -815,6 +821,7 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
     embedding_config: resolveEmbeddingConfig(row?.embedding_config), // DB 우선, off/미설정이면 env(EMBEDDINGS_*) 시드
     storage_policy: resolveStoragePolicy(row?.storage_policy), // DB 우선, 비면 env 시드 → 코드 기본값(#813)
     session_memory_policy: resolveSessionMemoryPolicy(row?.session_memory_policy), // #1059 D — DB 우선, 비면 env 시드 → 0/0(무제한, 무회귀)
+    session_reclaim_policy: resolveSessionReclaimPolicy(row?.session_reclaim_policy), // #1059 F — DB 우선, 비면 env 시드 → 0(회수 끔, 무회귀)
     hook_relay_decisions: relayDecisionsSafe(row?.hook_relay_decisions), // #892 — 구 DB(컬럼 부재)면 기본값
     session_share: resolveSessionShare(row?.session_share), // #905 C1 — 구 DB(컬럼 부재)면 기본값(enabled=false)
     hook_grace_ms: graceMsSafe(row?.hook_grace_ms), // #1008 — 컬럼 부재/NULL 이면 null(무제한)
@@ -840,6 +847,7 @@ export async function updateRuntimeConfig(
     embedding_config?: EmbeddingConfigPatch;
     storage_policy?: StoragePolicyPatch;
     session_memory_policy?: SessionMemoryPolicyPatch;
+    session_reclaim_policy?: SessionReclaimPolicyPatch;
     hook_relay_decisions?: HookRelayDecision[];
     session_share?: SessionSharePatch;
     hook_grace_ms?: number | null;
@@ -898,6 +906,14 @@ export async function updateRuntimeConfig(
     const raw = await itemsPool.query(`SELECT session_memory_policy FROM org_runtime_config WHERE id=1`);
     sessionMemoryPolicy = (raw.rows[0] as { session_memory_policy?: unknown } | undefined)?.session_memory_policy ?? {};
   }
+  // idle 회수 정책(#1059 F) — storage/session-memory 와 동일 규칙: **안 건드린 저장은 DB 원본을 그대로 둔다**(before 되쓰기 금지).
+  let sessionReclaimPolicy: unknown;
+  if (patch.session_reclaim_policy !== undefined) {
+    sessionReclaimPolicy = normalizeSessionReclaimPolicy({ ...before.session_reclaim_policy, ...patch.session_reclaim_policy });
+  } else {
+    const raw = await itemsPool.query(`SELECT session_reclaim_policy FROM org_runtime_config WHERE id=1`);
+    sessionReclaimPolicy = (raw.rows[0] as { session_reclaim_policy?: unknown } | undefined)?.session_reclaim_policy ?? {};
+  }
   // 세션 공유(#905 C1) — storage_policy 와 동일 규칙: **안 건드린 저장은 DB 원본을 그대로 둔다**(before 되쓰기 금지).
   //  건드리면 before(resolved) 위에 patch 를 얹어 정규화(잡값·미지원 하네스·범위초과 방어).
   let sessionShare: unknown;
@@ -908,23 +924,24 @@ export async function updateRuntimeConfig(
     sessionShare = (raw.rows[0] as { session_share?: unknown } | undefined)?.session_share ?? null;
   }
   await itemsPool.query(
-    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, session_memory_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, version, updated_at, updated_by)
-       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$18::jsonb,$14::jsonb,$15::jsonb,$16,$17,1,now(),$13)
+    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, session_memory_policy, session_reclaim_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, version, updated_at, updated_by)
+       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$18::jsonb,$19::jsonb,$14::jsonb,$15::jsonb,$16,$17,1,now(),$13)
      ON CONFLICT (id) DO UPDATE SET hooks=EXCLUDED.hooks, writeback_notice=EXCLUDED.writeback_notice,
        work_roots=EXCLUDED.work_roots, allowed_auth_envs=EXCLUDED.allowed_auth_envs, url_allowlist=EXCLUDED.url_allowlist,
        allowed_db_secret_refs=EXCLUDED.allowed_db_secret_refs, allowed_db_hosts=EXCLUDED.allowed_db_hosts,
        allowed_internal_hosts=EXCLUDED.allowed_internal_hosts,
        write_tools=EXCLUDED.write_tools, pull_tools=EXCLUDED.pull_tools, embedding_config=EXCLUDED.embedding_config,
-       storage_policy=EXCLUDED.storage_policy, session_memory_policy=EXCLUDED.session_memory_policy, hook_relay_decisions=EXCLUDED.hook_relay_decisions,
+       storage_policy=EXCLUDED.storage_policy, session_memory_policy=EXCLUDED.session_memory_policy, session_reclaim_policy=EXCLUDED.session_reclaim_policy, hook_relay_decisions=EXCLUDED.hook_relay_decisions,
        session_share=EXCLUDED.session_share, hook_grace_ms=EXCLUDED.hook_grace_ms,
        embedding_backfill_paused=EXCLUDED.embedding_backfill_paused,
        version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots),
-     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(pullTools), JSON.stringify(embeddingConfig), JSON.stringify(storagePolicy), actor ?? null, JSON.stringify(relayDecisions), JSON.stringify(sessionShare), hookGraceMs, embeddingBackfillPaused, JSON.stringify(sessionMemoryPolicy)],
+     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(pullTools), JSON.stringify(embeddingConfig), JSON.stringify(storagePolicy), actor ?? null, JSON.stringify(relayDecisions), JSON.stringify(sessionShare), hookGraceMs, embeddingBackfillPaused, JSON.stringify(sessionMemoryPolicy), JSON.stringify(sessionReclaimPolicy)],
   );
   // 저장 즉시 반영 — /readyz 임계치·로그 재니터가 캐시를 들고 있다(게이트웨이 재시작 없이 먹어야 한다).
   if (patch.storage_policy !== undefined) invalidateStoragePolicyCache();
   if (patch.session_memory_policy !== undefined) invalidateSessionMemoryPolicyCache(); // #1059 D — 저장 즉시 다음 세션 생성이 새 캡을 본다
+  if (patch.session_reclaim_policy !== undefined) invalidateSessionReclaimPolicyCache(); // #1059 F — 저장 즉시 다음 reaper tick 이 새 TTL 을 본다
   const after = await getRuntimeConfig();
   await audit("org_runtime_config", "1", "update", before, after, actor, source, meta);
   return after;
@@ -959,6 +976,16 @@ export async function getSessionMemoryPolicySource(): Promise<"db" | "env" | "de
     return sessionMemoryPolicySource((r.rows[0] as { session_memory_policy?: unknown } | undefined)?.session_memory_policy ?? null);
   } catch {
     return sessionMemoryPolicySource(null); // 테이블 부재(부트스트랩 전)
+  }
+}
+
+// idle 회수 정책(#1059 F)의 출처(관리 UI 안내) — db(관리탭 저장)·env(.env 시드)·default(코드 기본값).
+export async function getSessionReclaimPolicySource(): Promise<"db" | "env" | "default"> {
+  try {
+    const r = await itemsPool.query(`SELECT session_reclaim_policy FROM org_runtime_config WHERE id=1`);
+    return sessionReclaimPolicySource((r.rows[0] as { session_reclaim_policy?: unknown } | undefined)?.session_reclaim_policy ?? null);
+  } catch {
+    return sessionReclaimPolicySource(null); // 테이블 부재(부트스트랩 전)
   }
 }
 

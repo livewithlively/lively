@@ -62,6 +62,9 @@ export async function ensureManagedSession(m: ManagedSession): Promise<{ id: str
   const created = await createSession(user, {
     label: m.label || m.id, rootKey: "shared", subpath: m.workspace_subpath || ("managed/" + m.id),
     harness: m.harness || "claude", flags: (m.flags || {}) as Record<string, unknown>, autoApprove: !!m.auto_approve,
+    // #1059 E — 상시 세션은 desired-state DB 미러 skip: keep-alive(ensureAllManagedSessions)가 영속을 소유하므로
+    //  restorable 로 이중화하면 재부팅 후 keep-alive 재생성과 사용자 수동복원이 충돌한다.
+    managed: true,
   });
   await itemsPool.query("UPDATE org_managed_session SET session_id=$1, updated_at=now() WHERE id=$2", [created.id, m.id]);
   return { id: m.id, session_id: created.id, action: "created" };

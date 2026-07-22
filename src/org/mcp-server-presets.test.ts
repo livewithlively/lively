@@ -1,7 +1,7 @@
 // 커넥터 카탈로그 OAuth scope 결정(#746) 순수 단위 체크 — DB/네트워크 불요.
 // 실행: npm run build && node dist/org/mcp-server-presets.test.js
-//  커버: Slack scope(비어있지 않음·지원목록 부분집합·필수포함·민감제외) / Notion·Linear undefined /
-//        미등록·null·undefined·빈문자열 undefined / 카탈로그 불변식(scope 지정은 slack 하나뿐).
+//  커버: Slack scope(부분집합·필수포함·민감제외) / Google gmail·drive·calendar(URL형식·readonly 최소권한) /
+//        Notion·Linear·미등록·null·빈문자열 undefined / 불변식(DCR 상류=scope없음, 비-DCR=scope있음).
 import assert from "node:assert/strict";
 import { MCP_SERVER_PRESETS, presetOAuthScope } from "./mcp-server-presets.js";
 
@@ -70,13 +70,34 @@ t("MCP_SERVER_PRESETS: 비어있지 않은 배열, 각 엔트리에 name·auth_k
     assert.equal(typeof c.auth_kind, "string");
   }
 });
-t("MCP_SERVER_PRESETS: scope 를 지정한 커넥터는 slack_oauth 하나뿐, 나머지는 미지정", () => {
-  const withScope = MCP_SERVER_PRESETS.filter((c) => typeof c.oauth_scope === "string" && c.oauth_scope.length > 0);
-  assert.equal(withScope.length, 1);                    // 딱 하나만 scope 지정
-  assert.equal(withScope[0].auth_kind, "slack_oauth");  // 그게 slack
-  for (const c of MCP_SERVER_PRESETS) {                  // 나머지는 전부 미지정(빈문자열/undefined)
-    if (c.auth_kind !== "slack_oauth") assert.ok(!c.oauth_scope, `${c.name} 에 예기치 않은 scope: ${c.oauth_scope}`);
+t("MCP_SERVER_PRESETS: DCR 상류(notion·linear)는 oauth_scope 미지정, 비-DCR(slack·google)은 지정", () => {
+  for (const c of MCP_SERVER_PRESETS) {
+    if (c.dcr) assert.ok(!c.oauth_scope, `DCR 상류 ${c.name} 에 예기치 않은 scope(넣으면 깨짐): ${c.oauth_scope}`);
+    else assert.ok(c.oauth_scope && c.oauth_scope.length > 0, `비-DCR 상류 ${c.name} 에 scope 누락(authorize 가 거부됨)`);
   }
+});
+
+// ── Google (비-DCR, scope 요구; 인가서버 accounts.google.com) ──
+t("presetOAuthScope: google gmail/drive/calendar → 비어있지 않은 구글 API scope(URL 형식)", () => {
+  for (const k of ["google_gmail_oauth", "google_drive_oauth", "google_calendar_oauth"]) {
+    const toks = scopeTokens(presetOAuthScope(k));
+    assert.ok(toks.length > 0, `${k} scope 누락`);
+    for (const tok of toks) assert.ok(/^https:\/\//.test(tok), `구글 scope 는 URL 형식이어야: ${tok}`);
+  }
+});
+t("presetOAuthScope: gmail 최소권한 — readonly 포함, 전체(mail.google.com)·수정(gmail.modify) 제외", () => {
+  const toks = new Set(scopeTokens(presetOAuthScope("google_gmail_oauth")));
+  assert.ok(toks.has("https://www.googleapis.com/auth/gmail.readonly"), "gmail.readonly 누락");
+  assert.ok(!toks.has("https://mail.google.com/"), "전체 접근 scope(mail.google.com) 포함됨");
+  assert.ok(!toks.has("https://www.googleapis.com/auth/gmail.modify"), "수정/삭제 scope(gmail.modify) 포함됨");
+});
+t("presetOAuthScope: drive·calendar 최소권한 — readonly, 전체 쓰기 scope 제외", () => {
+  const d = new Set(scopeTokens(presetOAuthScope("google_drive_oauth")));
+  assert.ok(d.has("https://www.googleapis.com/auth/drive.readonly"), "drive.readonly 누락");
+  assert.ok(!d.has("https://www.googleapis.com/auth/drive"), "drive 전체 scope 포함됨");
+  const c = new Set(scopeTokens(presetOAuthScope("google_calendar_oauth")));
+  assert.ok(c.has("https://www.googleapis.com/auth/calendar.readonly"), "calendar.readonly 누락");
+  assert.ok(!c.has("https://www.googleapis.com/auth/calendar"), "calendar 전체 scope 포함됨");
 });
 
 console.log(`\nmcp-server-presets tests: ${pass} passed`);

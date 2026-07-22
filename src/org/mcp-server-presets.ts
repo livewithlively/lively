@@ -56,18 +56,25 @@ export const MCP_SERVER_PRESETS: McpServerPreset[] = [
     name: "google-gmail", label: "Google Gmail", url: "https://gmailmcp.googleapis.com/mcp/v1",
     auth_kind: "google_gmail_oauth", scope: "items", level: "L0", pii_scrub: true,
     dcr: false, seed: false,
+    // scopes_supported(gmailmcp .well-known/oauth-protected-resource/mcp/v1 실측)에서 read + 초안작성만.
+    //  gmail.modify(수정/삭제)·mail.google.com(전체)는 제외(최소권한). 순수 send scope 는 상류 미노출(compose=초안까지).
+    oauth_scope: "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose",
     note: "Google 공식 MCP. Web앱 OAuth client(콘솔) 필요 — 승인 redirect 에 게이트웨이 /oauth/callback 등록. scope gmail.readonly(+compose).",
   },
   {
     name: "google-drive", label: "Google Drive", url: "https://drivemcp.googleapis.com/mcp/v1",
     auth_kind: "google_drive_oauth", scope: "items", level: "L0", pii_scrub: true,
     dcr: false, seed: false,
+    // scopes_supported 실측(drive / drive.readonly / drive.file)에서 읽기만 — drive(전체)·drive.file(쓰기)는 후속.
+    oauth_scope: "https://www.googleapis.com/auth/drive.readonly",
     note: "Google 공식 MCP. Web앱 OAuth client 필요. scope drive.readonly(+drive.file).",
   },
   {
     name: "google-calendar", label: "Google Calendar", url: "https://calendarmcp.googleapis.com/mcp/v1",
     auth_kind: "google_calendar_oauth", scope: "items", level: "L0", pii_scrub: false,
     dcr: false, seed: false,
+    // scopes_supported 실측(calendar 전체·events·readonly 등 12종)에서 읽기만 — 이벤트 쓰기 등은 후속(L2).
+    oauth_scope: "https://www.googleapis.com/auth/calendar.readonly",
     note: "Google 공식 MCP. Web앱 OAuth client 필요. scope calendar.events.readonly 등.",
   },
 ];

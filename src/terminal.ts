@@ -10,7 +10,8 @@ import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { logger } from "./log.js";
-import { ROOTS, HARNESSES, listSessions, createSession, killSession, editSession, canAttach, getSessionLabel, getSessionProject, sessionDir, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
+import { ROOTS, HARNESSES, listSessions, listRestorableSessions, createSession, killSession, editSession, canAttach, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
+import { getSessionState, deleteSessionState } from "./org/session-state.js"; // #1059 E — restorable 세션 복원
 import { sessionPrompts, searchPrompts, searchPromptsHybrid } from "./terminal-transcript.js";
 import { activeEmbeddingProvider } from "./v6/search-util.js";
 import { setupPtyUpgrade, type TicketLookup } from "./terminal-pty.js";
@@ -162,10 +163,14 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     //  listSessions 가 이미 소유·초대 필터를 건너뛰고 전부 돌려준다(여기서 더 좁히지 않는다).
     const includeProjects = req.query.includeProjects === "1" || req.query.includeProjects === "true";
     const all = await listSessions(userOf(req));
+    // 복원 가능(#1059 E) — DB desired-state 에만 있고 지금 tmux 에 없는 세션(재부팅 사망·reaper 회수). 라이브 우선(이중표기 방지).
+    const restorable = await listRestorableSessions(userOf(req), new Set(all.map((s) => s.id)));
     // 분산 노드(#869) — 원격 노드 세션 병합(node 필드로 구분). 가시성은 개인 세션 규칙(소유자+초대)로 게이트웨이가 판정.
     const remote = nodeSessionsFor(idOf(userOf(req)));
-    const local = includeProjects ? all : all.filter((s) => !isProjectSessionDir(s.dir));
-    res.json({ sessions: [...local, ...remote] });
+    const proj = (s: SessionInfo): boolean => isProjectSessionDir(s.dir);
+    const local = includeProjects ? all : all.filter((s) => !proj(s));
+    const localRestorable = includeProjects ? restorable : restorable.filter((s) => !proj(s));
+    res.json({ sessions: [...local, ...localRestorable, ...remote] });
   }));
   // 단일 세션의 현재 이름 — 단독 터미널 페이지가 id 로 조회(프로젝트 세션은 목록에서 빠져 ?label= 폴백만 됐던 문제 해결).
   //  접근통제: canAttach(소유자·초대된 멤버, 프로젝트 세션은 전원 #452) — 입장 가능한 사람만 이름을 읽는다.
@@ -279,8 +284,57 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
       res.json({ ok: true });
       return;
     }
-    await killSession(userOf(req), req.params.id);
+    // #1059 F — 회수(reclaim=1): desired-state 를 보존해 restorable 로 남긴다(vs 기본 = 완전 삭제·복원 안 함).
+    //  admin bypass 는 **회수에만** 허용한다(복원 가능한 안전 동작) — 남의 세션을 파괴적으로 삭제하는 건 admin 도 못 하고 소유자만.
+    const u = userOf(req);
+    const reclaim = req.query.reclaim === "1" || req.query.reclaim === "true";
+    // #1059 E — restorable(이미 tmux 에서 죽은) 세션의 '삭제' = desired-state 레코드 제거(복원 목록에서 지움).
+    //  killSession 의 assertManage 는 tmux @box_owner 메타를 읽는데 세션이 gone 이면 그 메타가 없어 403 이 된다.
+    //  그래서 gone + DB 레코드 존재 시엔 DB 레코드의 owner 로 권한을 확인하고 레코드만 지운다(멱등).
+    if (!reclaim && await sessionGone(req.params.id)) {
+      const st = await getSessionState(req.params.id);
+      if (st) {
+        if (st.owner !== idOf(u) && !u.scopes?.includes("admin")) throw new HttpError(403, "본인 세션이 아닙니다");
+        await deleteSessionState(req.params.id);
+        res.json({ ok: true, forgot: true });
+        return;
+      }
+    }
+    // ⚠ admin 회수는 reaper 와 달리 attached/busy/waiting 를 검사하지 않는다 — **의도된 긴급 override**(break-glass):
+    //  #1059 OOM 위기처럼 박스가 위태로우면 관리자가 작업 중·접속 중 세션도 즉시 회수해 메모리를 되찾아야 한다.
+    //  파괴적이지 않다 — preserveState 로 desired-state 를 남겨 restorable 로 복원 가능(자동 reaper 가 정당세션을 보호하는 것과 역할 분담).
+    const admin = reclaim && !!u.scopes?.includes("admin");
+    await killSession(u, req.params.id, { admin, preserveState: reclaim });
     res.json({ ok: true });
+  }));
+
+  // 복원(#1059 E) — restorable(재부팅/reaper 로 tmux 에서 사라졌으나 desired-state 가 DB 에 남은) 세션을 lazy 재생성한다.
+  //  저장된 desired-state(rootKey·subpath·harness·flags·invites·mode)로 createSession 하고, claude 하네스는 resume=<옛 id>
+  //  로 대화를 잇는다 — 로컬 트랜스크립트(~/.claude/…/<id>.jsonl)는 재부팅에도 디스크에 살아남아 claude --resume 이 찾는다
+  //  (전부 자동 spawn 이 아니라 '열 때만' 재생성 = 재부팅 직후 OOM 재현 방지, #1059 E). 소유자 또는 admin 만.
+  //  원 소유자 신원으로 재생성해야 격리(box_owner)·CLAUDE_CONFIG_DIR·git 자격이 원 세션과 같다. 새 tmux id 를 얻으므로
+  //  옛 desired-state 레코드는 지운다(새 세션이 자기 레코드를 가짐 → restorable 카드가 라이브 세션으로 교체된다).
+  app.post("/api/ui/terminal/sessions/:id/restore", auth, wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const id = req.params.id;
+    const st = await getSessionState(id);
+    if (!st) throw new HttpError(404, "복원할 세션 상태가 없습니다");
+    const u = userOf(req);
+    const me = idOf(u);
+    if (st.owner !== me && !u.scopes?.includes("admin")) throw new HttpError(403, "이 세션을 복원할 수 없습니다(소유자만 가능).");
+    // 라이브 경합 방어 — 그새 다시 떠 있으면 복원 대신 그대로 안내(라이브가 SoT).
+    if (!(await sessionGone(id))) { res.json({ ok: true, already: true, id }); return; }
+    const owner = { userId: st.owner } as LivelyUser;
+    const session = await createSession(owner, {
+      label: st.label || id, rootKey: st.root_key || "shared", subpath: st.subpath || "",
+      harness: st.harness || "claude", flags: st.flags || {}, autoApprove: st.auto_approve,
+      invites: st.invites, projectId: st.project_id || undefined,
+      projectSrc: st.project_src === "org" ? "org" : "v6",
+      readOnly: st.read_only, incognito: st.incognito,
+      resume: id, // claude 하네스에 한해 createSession 이 --resume <id> 적용(비-claude 는 무시)
+    });
+    await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 desired-state 정리 실패(비치명)"));
+    res.json({ ok: true, session });
   }));
 
   registerTerminalFiles(app, verifier);

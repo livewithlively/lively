@@ -12,7 +12,7 @@ import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { projectAbsPath } from "./project-fs.js";
-import { listSessions, createSession, validateInvites, type CreateInput } from "./terminal-sessions.js";
+import { listSessions, listRestorableSessions, createSession, validateInvites, type CreateInput } from "./terminal-sessions.js";
 import { ensureAgentsMd, readProjectAgentsMd } from "./v6/agents-md.js";
 import { provisionProjectRepos } from "./project-provision.js";
 import { provisionProjectOnNode, createProjectSessionOnNode, nodeProjectSessions } from "./node/provision-remote.js";
@@ -238,11 +238,14 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const { base } = await projBase(Number(req.params.id));
     res.setHeader("Cache-Control", "no-store");
     const all = await listSessions(userOf(req));
-    const local = all.filter((s) => s.dir && (s.dir === base || s.dir.startsWith(base + path.sep)));
+    const underBase = (s: { dir?: string }): boolean => !!s.dir && (s.dir === base || s.dir.startsWith(base + path.sep));
+    const local = all.filter(underBase);
+    // 복원 가능(#1059 E) — 재부팅·회수로 죽었으나 desired-state 가 남은 이 프로젝트 폴더의 세션(라이브 우선, 이중표기 방지).
+    const restorable = (await listRestorableSessions(userOf(req), new Set(all.map((s) => s.id)))).filter(underBase);
     // 노드 프로젝트 세션(#905 C4) 병합 — 노드에서 연 이 프로젝트 세션도 목록에 보이게(가시성=invites 스냅샷 판정).
     //  각 항목의 .node 로 프론트가 &node= 입장/삭제를 릴레이한다. 로컬은 dir 로, 노드는 projectId 로 좁힌다.
     const remote = nodeProjectSessions(idOf(userOf(req)), Number(req.params.id));
-    res.json({ sessions: [...local, ...remote] });
+    res.json({ sessions: [...local, ...restorable, ...remote] });
   }));
   app.post(`${prefix}/:id/sessions`, auth, wrap(async (req, res) => {
     const { project } = await projBase(Number(req.params.id));

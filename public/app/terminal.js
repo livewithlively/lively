@@ -106,17 +106,19 @@ const TSESS_STATUS = {
     waiting: { label: '확인 필요', cls: 'waiting', rank: 0 },
     busy: { label: '작업 중', cls: 'busy', rank: 1 },
     idle: { label: '대기 중', cls: 'idle', rank: 2 },
-    exited: { label: '종료됨', cls: 'exited', rank: 3 },
-    offline: { label: '연결 끊김', cls: 'offline', rank: 4 },
+    restorable: { label: '복원 가능', cls: 'restorable', rank: 3 }, // #1059 E — 재부팅·회수로 꺼졌으나 복원 가능
+    exited: { label: '종료됨', cls: 'exited', rank: 4 },
+    offline: { label: '연결 끊김', cls: 'offline', rank: 5 },
 };
 // 종료 확인 문구 — 카드/일괄 공통. '삭제'가 아니라 '끝내기'이고 대화록은 남는다는 걸 확인창에서 못 박는다.
 function TSESS_END_CONFIRM(n, head) {
     return head + '\n\n실행 중인 작업이 있으면 함께 중단됩니다.\n대화록은 지워지지 않아요 — 📜 세션 기록에 남고, 거기서 “💬 이어 질문하기”로 이어받을 수 있습니다'
         + (n > 1 ? '.' : '.');
 }
-// 세션이 '이제 AI 가 안 도는' 상태인가 — 일괄 종료 대상 안내·정렬에 쓴다.
-function sessDead(s) { const k = sessState(s); return k === 'exited' || k === 'offline'; }
-function sessState(s) { return TSESS_STATUS[s.agentState] ? s.agentState : 'exited'; }
+// 세션이 '이제 AI 가 안 도는' 상태인가 — 일괄 종료 대상 안내·정렬에 쓴다. exited·offline·restorable(#1059 E) 모두.
+function sessDead(s) { const k = sessState(s); return k === 'exited' || k === 'offline' || k === 'restorable'; }
+// #1059 E — restorable(desired-state 만 남고 tmux 는 죽음)을 먼저 판정, 그 외는 백엔드 agentState(없으면 exited).
+function sessState(s) { return s.restorable ? 'restorable' : (TSESS_STATUS[s.agentState] ? s.agentState : 'exited'); }
 // 상대 시각 — '방금 · 3분 전 · 2시간 전 · 5일 전'.
 function relAgo(sec) {
     const n = Number(sec) || 0;
@@ -489,19 +491,52 @@ function tsessCard(s, ctx) {
     bits.forEach((b, i) => { if (i)
         meta.append(el('span', { class: 'tsess-sep', text: '·' })); meta.append(b); });
     const info = el('div', { class: 'tsess-info' }, ...[title, workTitle, meta].filter(Boolean));
-    // 액션 — 열기(항상) + 내 질문(노드 세션도 트랜스크립트 릴레이 #875 ③) + 소유자면 수정·종료.
-    const acts = el('div', { class: 'tsess-acts' }, el('button', { class: 'tsess-open', text: '열기', onclick: () => window.open(termUrl(s.id, s.label, s.node && s.node.id), '_blank') }));
+    // 액션 — 열기/복원(항상) + 내 질문(노드 세션도 트랜스크립트 릴레이 #875 ③) + 소유자면 수정·종료/제거.
+    const acts = el('div', { class: 'tsess-acts' });
+    if (s.restorable) {
+        // #1059 E — 복원: 재부팅·회수로 꺼진 세션을 저장된 desired-state 로 재생성(claude 는 대화 이어받기). 새 세션을 연다.
+        const rb = el('button', { class: 'tsess-open', text: '복원', title: '재부팅·회수로 꺼진 세션을 다시 엽니다 (같은 폴더·설정 + 대화 이어받기)' });
+        rb.onclick = async () => {
+            rb.disabled = true;
+            rb.textContent = '복원 중…';
+            try {
+                const r = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/restore', { method: 'POST', body: '{}' });
+                // 라이브 경합(already) — 그새 다시 떠 있으면 새로 만들지 않고 그 세션을 그대로 연다(오success 방지).
+                if (r && r.already) {
+                    window.open(termUrl(s.id, s.label, s.node && s.node.id), '_blank');
+                    toast('세션이 이미 살아있어 그대로 엽니다');
+                    reRender();
+                    return;
+                }
+                const ns = r && r.session;
+                if (ns && ns.id)
+                    window.open(termUrl(ns.id, ns.label || s.label), '_blank');
+                toast('세션을 복원했어요');
+                reRender();
+            }
+            catch (e) {
+                toast('복원 실패 — ' + (e && e.message || e), true);
+                rb.disabled = false;
+                rb.textContent = '복원';
+            }
+        };
+        acts.append(rb);
+    }
+    else {
+        acts.append(el('button', { class: 'tsess-open', text: '열기', onclick: () => window.open(termUrl(s.id, s.label, s.node && s.node.id), '_blank') }));
+    }
     acts.append(el('button', { class: 'tsess-icon tsess-q', title: '이 세션에서 클로드에게 보낸 내 질문만 순서대로 모아보기', text: '내 질문', onclick: () => openSessPrompts(s) }));
     if (s.owned) {
-        acts.append(el('button', { class: 'tsess-icon', title: '이름·초대 수정', text: '수정', onclick: () => openTermEdit(s, cfg, view) }));
-        // '삭제'가 아니라 '종료' — 실제로 하는 일은 tmux 세션을 끝내는 것이고, 대화록(중앙 세션 기록)은 남아
-        //  '📜 세션 기록 → 💬 이어 질문하기'로 되살릴 수 있다. 이름이 '삭제'라 기록까지 지우는 걸로 오해됐다.
-        acts.append(el('button', { class: 'tsess-icon danger', title: '이 세션을 끝낸다(대화록은 세션 기록에 남아 나중에 이어받을 수 있음)', text: '종료', onclick: async () => {
-                if (!confirm(TSESS_END_CONFIRM(1, '세션 "' + s.label + '" 을(를) 종료할까요?')))
+        if (!s.restorable)
+            acts.append(el('button', { class: 'tsess-icon', title: '이름·초대 수정', text: '수정', onclick: () => openTermEdit(s, cfg, view) }));
+        // restorable 은 '복원 목록에서 제거'(desired-state 삭제), 라이브는 '종료'(tmux 종료, 대화록은 세션 기록에 남아 이어받기 가능). 둘 다 DELETE(백엔드가 gone→forget 처리).
+        acts.append(el('button', { class: 'tsess-icon danger', title: s.restorable ? '복원 목록에서 제거' : '이 세션을 끝낸다(대화록은 세션 기록에 남아 나중에 이어받을 수 있음)', text: s.restorable ? '제거' : '종료', onclick: async () => {
+                const msg = s.restorable ? '세션 "' + s.label + '" 을(를) 복원 목록에서 제거할까요? 더는 복원할 수 없어요.' : TSESS_END_CONFIRM(1, '세션 "' + s.label + '" 을(를) 종료할까요?');
+                if (!confirm(msg))
                     return;
                 try {
                     await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' });
-                    toast('세션을 종료했습니다 — 대화록은 📜 세션 기록에 남아 있어요');
+                    toast(s.restorable ? '복원 목록에서 제거됨' : '세션을 종료했습니다 — 대화록은 📜 세션 기록에 남아 있어요');
                     reRender();
                 }
                 catch (e) {
