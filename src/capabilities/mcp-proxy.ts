@@ -122,20 +122,29 @@ export async function refreshProxySnapshot(name: string, actor?: string): Promis
     if (code === 403 && gwSecret) {
       try {
         const probe = makeSsrfFetch({ allowedInternalHosts: [], selfHosts: [], timeoutMs: CALL_TIMEOUT_MS });
-        // dummy cookie 로 makeSsrfFetch 의 403+Set-Cookie 재시도를 회피 → gmail 의 첫 403 원문(구글 error/reason)을
-        //  그대로 캡처한다(재시도 후 응답은 tools result 로 덮여 reason 이 안 보였음). 구글 SERVICE_DISABLED vs PERMISSION_DENIED 판별용.
-        const pr = await probe(server.url, {
-          method: "POST",
-          headers: { authorization: `Bearer ${gwSecret}`, "content-type": "application/json", accept: "application/json, text/event-stream", cookie: "probe=1" },
-          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
-        });
-        const body = await pr.text();
-        let parsed = "non-json";
-        try {
-          const j = JSON.parse(body) as { error?: unknown; result?: unknown };
-          parsed = j?.error ? ("error=" + JSON.stringify(j.error).slice(0, 600)) : (j?.result ? "result(tools)-no-error" : "neither");
-        } catch { /* non-json */ }
-        diag = ` [probe status=${pr.status} bodyLen=${body.length} ${parsed} | bodyHead=${body.slice(0, 500)}]`;
+        if (name === "google-gmail") {
+          // gmail MCP 껍데기는 하위 Gmail API 에러를 표준 error 로 안 노출(tools result + status 만) →
+          //  Gmail API(gmail.googleapis.com) 를 게이트웨이 토큰으로 직접 호출해 구글 표준 error 원문을 확보한다.
+          //  reason=SERVICE_DISABLED(프로젝트 API 미활성) vs PERMISSION_DENIED(org 정책) 판별용.
+          const pr = await probe("https://gmail.googleapis.com/gmail/v1/users/me/profile", {
+            method: "GET", headers: { authorization: `Bearer ${gwSecret}`, accept: "application/json" },
+          });
+          const body = await pr.text();
+          diag = ` [Gmail API 직접(users.getProfile) status=${pr.status} body=${body.slice(0, 800)}]`;
+        } else {
+          const pr = await probe(server.url, {
+            method: "POST",
+            headers: { authorization: `Bearer ${gwSecret}`, "content-type": "application/json", accept: "application/json, text/event-stream", cookie: "probe=1" },
+            body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+          });
+          const body = await pr.text();
+          let parsed = "non-json";
+          try {
+            const j = JSON.parse(body) as { error?: unknown; result?: unknown };
+            parsed = j?.error ? ("error=" + JSON.stringify(j.error).slice(0, 600)) : (j?.result ? "result(tools)-no-error" : "neither");
+          } catch { /* non-json */ }
+          diag = ` [probe status=${pr.status} bodyLen=${body.length} ${parsed} | bodyHead=${body.slice(0, 400)}]`;
+        }
       } catch (e) { diag = ` [probe 실패: ${(e as Error).message}]`; }
     }
     throw new Error(redactSecret(pfx + (err as Error).message + diag, gwSecret)); // 상류 에러 본문에 gateway 자격 에코 방지
