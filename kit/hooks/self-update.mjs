@@ -256,9 +256,21 @@ async function main() {
   if (!target) return;                               // 게이트웨이가 버전을 안 줌(구버전/장애) → 무동작(fail-safe)
   const local = readL("kit-version");
   const forced = process.argv.includes("--force");
-  if (!forced && local === target) return;           // 최신
-
   const harnesses = installedHarnesses();
+
+  // 최신이어도 **MCP 등록 정합은 맞춘다**(#1079 실측 결함).
+  //  새 배선이 담긴 버전을 설치하는 실행은 언제나 **구버전 코드**가 수행한다 → 그 배선(#862 additive 등록,
+  //  #1079 transport 마이그레이션)은 그 실행에서 못 하고 '다음 실행' 몫이 된다. 그런데 다음 실행은 여기서
+  //  local===target 이라 곧장 빠져나가므로, **버전이 그대로인 한 영영 반영되지 않는다.**
+  //  실측(2026-07-22): 프록시 본체는 lib/ 에 깔렸는데 .claude.json 은 http 그대로였다.
+  //  비용은 사실상 0 — 파일을 읽어 비교하고 바꿀 게 없으면 쓰지 않는다(reconcile 의 `if (!added) return`).
+  if (!forced && local === target) {
+    if (harnesses.includes("claude")) {
+      try { reconcileClaudeMcp(gw, token); } catch (e) { log(`MCP reconcile 예외(무시): ${(e && e.message) || e}`); }
+    }
+    return;
+  }
+
   if (!harnesses.length) { log("설치된 하네스 배선을 못 찾음 — 건너뜀"); return; }
 
   // 백오프 — 같은 버전으로 최근에 실패했으면 쉬어간다(매 세션 다운로드 재시도로 게이트웨이를 두들기지 않게).

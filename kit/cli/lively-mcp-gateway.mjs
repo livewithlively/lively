@@ -40,10 +40,18 @@ const HOME = process.env.LIVELY_HOME || homedir();
 const LIVELY = join(HOME, ".lively");
 const CACHE_FILE = join(LIVELY, "mcp-tools-cache.json");
 
-// 상류 타임아웃 — tools/list 는 짧게(부팅을 오래 붙잡지 않는다), tools/call 은 넉넉히
-//  (종전 http 직결에선 하네스 설정이 상한이었다 — 여기서 더 짧게 잡으면 그게 회귀다).
+// 상류 타임아웃 — tools/list 는 짧게(부팅을 오래 붙잡지 않는다).
+//  tools/call 기본 60초의 근거(#1080 실측): 라이블리 툴의 실제 소요는 0.03~0.36초다
+//  (tools/list 0.025 · db_query 0.051 · project_list_v6 0.122 · whoami 0.127 · knowledge_search 0.355)
+//  → 60초면 150배 이상 여유다. 종전 600초는 "http 직결의 하네스 상한보다 짧으면 회귀"라는 판단이었는데,
+//  그 상한은 실측상 **무응답 300초 · 끊김 120초**여서 600초는 오히려 종전보다 길었다 —
+//  게이트웨이가 멎으면 10분을 매단다. 짧게 잡되, 오래 걸리는 게 정상인 툴은 아래 callTimeoutFor 가 예외로 뺀다.
 const LIST_TIMEOUT_MS = Number(process.env.LIVELY_MCP_LIST_TIMEOUT_MS || 8_000);
-const CALL_TIMEOUT_MS = Number(process.env.LIVELY_MCP_CALL_TIMEOUT_MS || 600_000);
+const CALL_TIMEOUT_MS = Number(process.env.LIVELY_MCP_CALL_TIMEOUT_MS || 60_000);
+// delegate_run 전용 — 서버가 wait 모드에서 wait_sec 만큼 붙잡는다(src/capabilities/delegate.ts).
+//  그 상한을 넘겨 우리가 먼저 끊으면 '완주한 위탁의 결과를 잃는' 회귀가 되므로 여유를 얹어 맞춘다.
+const DELEGATE_DEFAULT_WAIT_SEC = 120;   // = delegate.ts DEFAULT_WAIT_SEC
+const DELEGATE_SLACK_MS = 30_000;        // 서버 wait 상한 + 왕복 여유
 const PROBE_TIMEOUT_MS = Number(process.env.LIVELY_MCP_PROBE_TIMEOUT_MS || 4_000);
 // 상류 복구 감시 주기 — 상류가 죽어 있을 때만 돈다. 테스트가 짧게 줄여 쓴다.
 const WATCH_INTERVAL_MS = Number(process.env.LIVELY_MCP_WATCH_MS || 20_000);
@@ -150,6 +158,19 @@ async function fetchUpstreamTools(timeoutMs) {
   return r.message.result.tools;
 }
 
+// tools/call 의 상류 타임아웃 — **툴별**로 고른다.
+//  하네스가 주는 노브는 서버별 하나뿐이라(툴별은 없다 — #1080 실측), 거기선 "가장 오래 걸리는 툴"에
+//  전체를 맞출 수밖에 없었다. 프록시는 우리 코드라 그 트레이드오프를 풀 수 있다 —
+//  기본은 짧게(끊기거나 멎은 게이트웨이를 오래 붙잡지 않는다), 오래 기다리는 게 정상인 툴만 길게.
+//  지금 그런 툴은 delegate_run 뿐이다(무거운 작업 위탁 — 서버가 wait_sec 만큼 붙잡는다).
+export function callTimeoutFor(params) {
+  if (!params || params.name !== "delegate_run") return CALL_TIMEOUT_MS;
+  const a = params.arguments || {};
+  if (a.wait === false) return CALL_TIMEOUT_MS;   // 즉시 접수 모드 — 길게 줄 이유가 없다
+  const sec = Number(a.wait_sec);
+  return (Number.isFinite(sec) && sec > 0 ? sec : DELEGATE_DEFAULT_WAIT_SEC) * 1000 + DELEGATE_SLACK_MS;
+}
+
 const toolKey = (tools) => tools.map((t) => t && t.name).sort().join(" ");
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -231,7 +252,7 @@ export function serveMcpGateway({ input = process.stdin, output = process.stdout
       }
 
       if (method === "tools/call") {
-        const r = await callUpstream({ jsonrpc: "2.0", id: id ?? "gw-call", method: "tools/call", params }, CALL_TIMEOUT_MS);
+        const r = await callUpstream({ jsonrpc: "2.0", id: id ?? "gw-call", method: "tools/call", params }, callTimeoutFor(params));
         if (r.ok && r.message) {
           upstreamDown = false;
           if (r.message.error) { okr(id, { content: [{ type: "text", text: `오류: ${r.message.error.message || "게이트웨이 오류"}` }], isError: true }); return; }

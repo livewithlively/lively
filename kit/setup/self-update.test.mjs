@@ -403,6 +403,33 @@ try {
         : bad("⑮d 롤백 스위치", `stayed=${stayed} hdrOk=${hdrOk} entry=${JSON.stringify(e2)}`);
     }
 
+    // ⑮f #1079 — **최신(local===target)이어도 MCP 등록 정합은 맞춘다.**
+    //  새 배선이 담긴 버전을 설치하는 실행은 언제나 '구버전 코드'가 수행한다 → 배선 반영은 다음 실행 몫인데,
+    //  그 다음 실행이 "최신이니 할 일 없음"으로 빠져나가면 **버전이 그대로인 한 영영 반영되지 않는다.**
+    //  (실측 회귀 2026-07-22: 프록시 본체는 lib/ 에 깔렸는데 .claude.json 은 http 그대로였다.)
+    {
+      const h4 = freshHome("v-mcp");                       // 스탬프 = 서빙 버전 → '최신' 경로
+      mkdirSync(join(h4, ".lively", "lib"), { recursive: true });
+      writeFileSync(join(h4, ".lively", "lib", "lively-mcp-gateway.mjs"), "// proxy stub\n");
+      writeFileSync(join(h4, ".claude.json"), JSON.stringify({
+        mcpServers: { lively: { type: "http", url: `${GW}/mcp`, headers: { Authorization: "Bearer test-token" } } },
+      }, null, 2) + "\n");
+      await runUpdater(h4);
+      const e4 = (JSON.parse(readFileSync(join(h4, ".claude.json"), "utf8")).mcpServers || {}).lively || {};
+      // 설치는 일어나지 않아야 한다(최신이므로) — 훅 파일이 안 깔린 것으로 확인.
+      const noReinstall = !existsSync(join(h4, ".lively", "hooks", "session-preload.mjs"));
+      (e4.type === "stdio" && Array.isArray(e4.args) && e4.args[0] === "mcp" && noReinstall)
+        ? ok("⑮f 최신이어도 등록 정합 교정 — 재설치 없이 http→stdio 마이그레이션")
+        : bad("⑮f 최신 경로 reconcile", `entry=${JSON.stringify(e4)} noReinstall=${noReinstall}`);
+
+      // 그리고 **멱등** — 이미 stdio 면 최신 경로에서 파일을 건드리지 않는다(정상 세션 비용 0).
+      const before4 = readFileSync(join(h4, ".claude.json"), "utf8");
+      await runUpdater(h4);
+      (readFileSync(join(h4, ".claude.json"), "utf8") === before4)
+        ? ok("⑮f-b 최신 경로 멱등 — 이미 stdio 면 파일 미변경")
+        : bad("⑮f-b 최신 경로 멱등", "파일이 또 변경됨");
+    }
+
     // ⑮e #1079 — **프록시 본체가 없는 구버전 번들**이면 마이그레이션하지 않는다.
     //  (stdio 로 바꿔 놓고 실행할 파일이 없으면 lively 가 통째로 안 뜬다 — #905 와 같은 부류의 사고.)
     {
