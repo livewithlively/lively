@@ -1,5 +1,5 @@
 // 프리뷰 서브패스 서빙 — /preview/:id/* (#1036). backing_mode 별:
-//  shared-proxy(work) · stage : 워크트리 public/ 정적 서빙(/api 는 게이트웨이 자신; 프론트가 root-relative 로 부름).
+//  shared-proxy(work) · stage : 워크트리 public/ 정적 서빙(/api 는 게이트웨이 자신 — /preview/<id>/api/… 는 307 로 본체에 넘긴다).
 //  throwaway : 게이트웨이가 spawn 한 백엔드 포트로 HTTP 프록시.  existing-ref : 등록된 기존 인스턴스 URL 로 프록시.
 //  페이지가 /preview/<id>/ 기준으로 로드되므로 상대경로 asset/import 가 서브패스로 해소된다(→ /preview/<id> 는 슬래시로 정규화).
 //  인증: sessionOrBearer(세션 쿠키 우선) — 브라우저 subresource 는 Authorization 헤더를 못 실으니 로그인 세션 쿠키에 의존.
@@ -77,6 +77,10 @@ export function registerPreviewRoutes(app: express.Express, verifier: BearerVeri
 
     // 정적 서빙 — stage(merge 워크트리) 또는 work+shared-proxy
     if (p.kind === "stage" || p.backing_mode === "shared-proxy") {
+      // /preview/<id>/api/… → 게이트웨이 본체로 307(#1091). 프론트는 프리뷰 아래에서 API 도 접두사를 붙여 부르는데
+      //  (core.ts apiUrl — throwaway 를 제 백엔드로 보내기 위해 필요하다), 정적 프리뷰엔 백엔드가 없다.
+      //  307 은 메소드·바디를 보존하고 동일 오리진이라 Authorization 헤더도 그대로 따라간다.
+      if (/^api\//.test(rest)) { res.redirect(307, req.originalUrl.slice(("/preview/" + id).length)); return; }
       if (req.method !== "GET" && req.method !== "HEAD") { res.status(405).type("text/plain; charset=utf-8").send("정적 프리뷰는 GET 만 지원(API 는 게이트웨이 본체로 직접 호출)."); return; }
       if (!p.worktree_path) { res.status(409).type("text/plain; charset=utf-8").send("워크트리가 지정되지 않은 프리뷰입니다."); return; }
       serveStatic(path.join(p.worktree_path, "public"), rest, res); return;

@@ -21,6 +21,9 @@ const K_COLS =
    external_system, external_instance, external_id, external_url, occurred_at, last_synced_at,
    as_of, parent_name, summary, author, source_ref, sort, is_wiki, type, is_folder, version, created_at, updated_at, updated_by`;
 const K_SEL = K_COLS.split(",").map((c) => "k." + c.trim()).join(", ");
+// 목록 전용 경량 SELECT(#1091) — body_md 만 뺀다. 사이드바 트리·검색·홈 카드 보강은 본문을 한 글자도 안 쓰는데,
+//  전량(수백 건 × 평균 8KB)을 실어 나르고 있었다(위키 홈 첫 화면 ~4MB). 발췌(deck)를 그리는 화면만 full 을 쓴다.
+const K_SEL_LIGHT = K_COLS.split(",").map((c) => c.trim()).filter((c) => c !== "body_md").map((c) => "k." + c).join(", ");
 
 export interface KnowledgeRow {
   name: string; title: string | null; body_md: string;
@@ -55,24 +58,32 @@ const auditKnowledge = (name: string, op: string, before: unknown, after: unknow
 //  스윕이 채운다. 옛 동기 embedKnowledgeBestEffort(인라인 provider.embed HTTP)는 제거(저장 지연의 원인이었음).
 
 export interface KnowledgeFilter {
-  space?: string; categoryId?: number; injection?: string; provenance?: string;
+  space?: string; categoryId?: number; uncategorized?: boolean; injection?: string; provenance?: string;
   lifecycle?: string; q?: string; limit?: number; offset?: number; orderBy?: string; is_wiki?: boolean; type?: string;
+  light?: boolean;   // #1091 본문(body_md) 제외 — 트리·검색·카드 보강처럼 발췌를 안 그리는 소비자용
 }
 
 // listKnowledge / countKnowledge 공유 필터 — JOIN·WHERE·params 를 한 곳에서 조립(목록과 총계가 항상 같은 조건).
-function knowledgeListFilter(f: KnowledgeFilter): { join: string; where: string; params: unknown[] } {
+//  export = 단위 테스트용(순수 문자열 조립) — 미분류 축(#1091)이 조용히 무력화되면 '전체가 다 나오는' 오답이
+//  에러 없이 나오므로(빈 필터 = no-op) 테스트로 잠근다. knowledge-store.test.ts 참조.
+export function knowledgeListFilter(f: KnowledgeFilter): { join: string; where: string; params: unknown[] } {
   const params: unknown[] = [];
   let join = "";
+  // 미분류(#1091) — 어느 카테고리에도 안 뜨는 지식. categoryId/space 와 배타(그건 '어느 카테고리냐'를 묻는 축이다).
+  const uncategorized = !!f.uncategorized && f.categoryId == null;
   // 카테고리/스페이스 필터 = knowledge_category 조인(rejected 매핑 제외).
   if (f.categoryId != null) {
     params.push(f.categoryId);
     join = `JOIN knowledge_category kc ON kc.name=k.name AND kc.category_id=$${params.length} AND kc.state<>'rejected'`;
-  } else if (f.space) {
+  } else if (f.space && !uncategorized) {
     params.push(f.space);
     join = `JOIN knowledge_category kc ON kc.name=k.name AND kc.state<>'rejected'
             JOIN category c ON c.id=kc.category_id AND c.space=$${params.length}`;
   }
   const wh: string[] = [];
+  // 기준은 소비쿼리와 같은 state<>'rejected' — knowledge_unmapped('빈 자리인가' = NOT EXISTS any)와 다르다.
+  //  rejected 매핑만 남은 지식은 어느 카테고리 목록에도 안 뜨므로 사람 눈엔 미분류다(사이드바가 보여줘야 할 대상).
+  if (uncategorized) wh.push(`NOT EXISTS (SELECT 1 FROM knowledge_category kcu WHERE kcu.name=k.name AND kcu.state<>'rejected')`);
   if (f.injection) { params.push(f.injection); wh.push(`k.injection=$${params.length}`); }
   if (f.provenance) { params.push(f.provenance); wh.push(`k.provenance=$${params.length}`); }
   if (f.type) { params.push(f.type); wh.push(`k.type=$${params.length}`); }   // #290 page-type 필터
@@ -100,7 +111,9 @@ function knowledgePage(f: KnowledgeFilter): { limit: number; offset: number } {
 
 export async function listKnowledge(f: KnowledgeFilter = {}): Promise<KnowledgeRow[]> {
   const { join, where, params } = knowledgeListFilter(f);
-  const order = f.orderBy === "name" ? "k.name" : "k.updated_at DESC";
+  // updated_at 동률에 k.name 타이브레이커(#1091) — 미러 인입분은 updated_at 이 날짜 단위로 뭉쳐 동률이 흔한데,
+  //  전순서가 없으면 LIMIT/OFFSET 페이지 경계에서 같은 행이 중복되거나 빠진다(#709 페이지네이션의 전제).
+  const order = f.orderBy === "name" ? "k.name" : "k.updated_at DESC, k.name";
   const { limit, offset } = knowledgePage(f);
   params.push(limit); const limP = `$${params.length}`;
   params.push(offset); const offP = `$${params.length}`;
@@ -108,7 +121,7 @@ export async function listKnowledge(f: KnowledgeFilter = {}): Promise<KnowledgeR
   // category_key/name(#783) — 목록 행에 소속 도메인 표시(검토 큐가 도메인별로 묶고, 에이전트도 목록에서 분류를 본다).
   //  단일 카테고리 정책(#290)이라 LATERAL LIMIT 1 — 행 증식 없음(DISTINCT 와도 무해).
   return q(itemsPool,
-    `SELECT DISTINCT ${K_SEL}, ${K_ICON_EXPR}, k.props_ui->>'cover' AS cover,
+    `SELECT DISTINCT ${f.light ? K_SEL_LIGHT : K_SEL}, ${K_ICON_EXPR}, k.props_ui->>'cover' AS cover,
             cat.key AS category_key, cat.name AS category_name
      FROM knowledge k ${join}
      LEFT JOIN LATERAL (
