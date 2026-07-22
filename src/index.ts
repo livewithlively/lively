@@ -322,6 +322,11 @@ const server = app.listen(PORT, () => {
             const sp = await effectiveStoragePolicy(loadStoragePolicy);
             return { warnPct: sp.disk_warn_pct, criticalPct: sp.disk_critical_pct };
           },
+          // #1059 — 메모리 경보 임계(사용%, 0=끔). box-watch 가 디스크와 같은 채널로 push.
+          loadMemThresholds: async () => {
+            const sp = await effectiveStoragePolicy(loadStoragePolicy);
+            return { warnPct: sp.mem_warn_pct, criticalPct: sp.mem_critical_pct };
+          },
           send: async (a) => (await sendBoxAlert(a)).sent,
         });
       })

@@ -9,7 +9,7 @@
 //   · 도메인별로 묶는다 — 자기 도메인만 훑고 나가는 게 가장 빠른 검토다(#638: 워킹레벨이 오너보다 잘 검토).
 //   · 손이 안 떠난다 — j/k 이동 · Enter 펼침 · a 승인 · r 반려 · x 선택 → 일괄 승인.
 //   · 되돌릴 수 있다 — 신규 반려=휴지통(복원 가능) · 수정 반려=수정 전으로 되돌리기.
-import { api, el, errorNote, relTime, renderMarkdown, state, toast } from './core.js';
+import { api, cardHead, el, errorNote, relTime, renderMarkdown, state, toast } from './core.js';
 import { overlayBox, skeleton } from './learn.js';
 import { SPACE_SUBS } from './category-form.js';
 // 관리탭 스위치가 관리하는 규칙의 표식 — 사람이 손으로 만든 세부 규칙과 구분(서버 org_ingest_policy.preset).
@@ -175,7 +175,7 @@ export async function ingestPolicyPanel(detail, data) {
     const preset = policies.find((p) => p.preset === GATE_PRESET) || null;
     const rules = policies.filter((p) => p.preset !== GATE_PRESET); // 프리셋은 위 스위치가 관리 — 목록에서 제외(두 곳 편집 방지)
     //  #1010 최상위 제목은 card 밖으로(관리탭 이중 박스 제거). sectionHead 는 admin.ts 로컬이라 여기선 section-title DOM 을 inline 복제.
-    detail.replaceChildren(el('div', {}, el('div', { class: 'section-title' }, el('h2', { text: '지식 검토 정책' })), el('p', { class: 'admin-hint', text: 'AI가 기록한 지식을 사람이 확인한 뒤에 유효해지도록 할지 정합니다.' })), el('div', { class: 'card' }, el('p', { class: 'admin-hint rq-intro', text: '켜면 에이전트가 기록한 지식은 [WIKI ▸ 검토 대기]로 이동하고, 승인 전까지는 검색·세션주입·목록에 표시되지 않습니다. 사람이 웹에서 직접 쓴 지식은 영향을 받지 않습니다.' }), gateCard(preset, obs, reload), rulesSection(rules, reload)));
+    detail.replaceChildren(el('div', {}, el('div', { class: 'section-title' }, el('h2', { text: '지식 검토 정책' })), el('p', { class: 'admin-hint', text: 'AI가 기록한 지식을 사람이 확인한 뒤에 유효해지도록 할지 정합니다.' })), el('div', { class: 'card' }, cardHead('검토 게이트', '켜면 에이전트가 기록한 지식은 [WIKI ▸ 검토 대기]로 이동하고, 승인 전까지는 검색·세션주입·목록에 표시되지 않습니다. 사람이 웹에서 직접 쓴 지식은 영향을 받지 않습니다.'), gateCard(preset, obs, reload), rulesSection(rules, reload)));
 }
 // 프리셋 카드 — "에이전트가 기록한 지식" 한 덩어리. 스위치 + 신규/수정 액션 선택.
 function gateCard(preset, obs, reload) {
@@ -492,7 +492,7 @@ export async function reviewQueuePanel(detail, data) {
     const banner = (gateOn === false)
         ? el('div', { class: 'rq-dup', style: 'display:flex;align-items:center;gap:10px' }, el('span', { style: 'flex:1', text: '지식 검토 정책가 꺼져 있습니다 — 에이전트가 쓴 지식이 사람 확인 없이 곧바로 유효해집니다.' }), el('a', { class: 'btn btn-ghost btn-sm', href: '#/system/ingest-policy', text: '게이트 설정' }))
         : null;
-    const card = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '검토 대기' })), el('p', { class: 'admin-hint', text: '사람이 확인해야 지식이 됩니다. 신규는 승인 전까지 검색·세션주입·목록에서 빠져 있고, 수정은 반영본과 이전본의 차이를 보고 확인하거나 되돌릴 수 있습니다. 반려한 신규 지식은 휴지통으로 갑니다(복원 가능). 승인·반려는 변경 감사에 기록됩니다.' }), banner, stats, el('div', { class: 'rq-bar' }, chips, catSel, whoSel, el('span', { class: 'rq-kbd' }, el('b', { text: 'j/k' }), el('span', { text: ' 이동 · ' }), el('b', { text: 'Enter' }), el('span', { text: ' 펼침 · ' }), el('b', { text: 'a' }), el('span', { text: ' 승인 · ' }), el('b', { text: 'r' }), el('span', { text: ' 반려 · ' }), el('b', { text: 'x' }), el('span', { text: ' 선택' }))), listBox, bulkBox);
+    const card = el('div', { class: 'card' }, cardHead('검토 대기 목록', '사람이 확인해야 지식이 됩니다. 신규는 승인 전까지 검색·세션주입·목록에서 빠져 있고, 수정은 반영본과 이전본의 차이를 보고 확인하거나 되돌릴 수 있습니다. 반려한 신규 지식은 휴지통으로 갑니다(복원 가능). 승인·반려는 변경 감사에 기록됩니다.'), banner, stats, el('div', { class: 'rq-bar' }, chips, catSel, whoSel, el('span', { class: 'rq-kbd' }, el('b', { text: 'j/k' }), el('span', { text: ' 이동 · ' }), el('b', { text: 'Enter' }), el('span', { text: ' 펼침 · ' }), el('b', { text: 'a' }), el('span', { text: ' 승인 · ' }), el('b', { text: 'r' }), el('span', { text: ' 반려 · ' }), el('b', { text: 'x' }), el('span', { text: ' 선택' }))), listBox, bulkBox);
     detail.replaceChildren(card);
     paint();
     installKeys(listBox, visible, paint, drop);
