@@ -5999,17 +5999,18 @@ async function credentialsEditor(detail) {
 // ── 내 서비스 로그인 — 서비스별 탭(#762). 방식(OAuth/토큰) 대신 '어떤 서비스'로 묶어 비개발자도 직관적으로. ──
 //  탭 = 조직에 등록/연결된 서비스. [＋ 서비스 연결]에서 토큰형 서비스를 셀프 추가(OAuth 미등록 서비스는 관리자 몫).
 const LOGIN_SERVICES = [
-    { key: 'notion', label: 'Notion', icon: '📔', oauth: 'notion', blurb: 'AI가 나로서 Notion 문서를 읽고 써요.' },
-    { key: 'linear', label: 'Linear', icon: '📐', oauth: 'linear', blurb: 'AI가 나로서 Linear 이슈를 보고 만들어요.' },
-    { key: 'slack', label: 'Slack', icon: '💬', oauth: 'slack', token: 'slack_user_token', blurb: 'AI가 나로서 Slack 메시지를 검색·전송해요.' },
-    { key: 'google-gmail', label: 'Gmail', icon: '✉️', oauth: 'google-gmail', blurb: 'AI가 나로서 Gmail을 읽고 보내요.' },
-    { key: 'google-drive', label: 'Google Drive', icon: '📁', oauth: 'google-drive', blurb: 'AI가 나로서 Google Drive 파일을 읽어요.' },
-    { key: 'google-calendar', label: 'Google 캘린더', icon: '📅', oauth: 'google-calendar', blurb: 'AI가 나로서 일정을 봐요.' },
-    { key: 'github', label: 'GitHub', icon: '🐙', token: 'github_pat', blurb: 'AI가 나로서 GitHub 이슈·PR·레포를 다뤄요.' },
-    { key: 'gitlab', label: 'GitLab', icon: '🦊', token: 'gitlab_pat', blurb: 'AI가 나로서 GitLab MR·레포를 다뤄요.' },
-    { key: 'clickup', label: 'ClickUp', icon: '🗂️', token: 'clickup_token', blurb: 'AI가 나로서 ClickUp 작업을 봐요.' },
-    { key: 'figma', label: 'Figma', icon: '🎨', token: 'figma_token', blurb: 'AI가 나로서 Figma 디자인을 읽어요.' },
-    { key: 'prometheus', label: 'Prometheus', icon: '📊', token: 'prometheus_bearer', blurb: 'AI가 나로서 Prometheus 지표를 조회해요.' },
+    // blurb — '무엇을 허용하는 것인지'를 그대로 말한다(#1085). '나로서 …해요' 는 무슨 일이 벌어지는지 모호했다.
+    { key: 'notion', label: 'Notion', icon: '📔', oauth: 'notion', blurb: 'AI가 내 Notion 계정에 로그인해서 직접 문서를 읽고 작성할 수 있습니다.' },
+    { key: 'linear', label: 'Linear', icon: '📐', oauth: 'linear', blurb: 'AI가 내 Linear 계정에 로그인해서 직접 이슈를 보고 만들 수 있습니다.' },
+    { key: 'slack', label: 'Slack', icon: '💬', oauth: 'slack', token: 'slack_user_token', blurb: 'AI가 내 Slack 계정에 로그인해서 직접 메시지를 검색하고 보낼 수 있습니다.' },
+    { key: 'google-gmail', label: 'Gmail', icon: '✉️', oauth: 'google-gmail', blurb: 'AI가 내 Gmail 계정에 로그인해서 직접 메일을 읽고 보낼 수 있습니다.' },
+    { key: 'google-drive', label: 'Google Drive', icon: '📁', oauth: 'google-drive', blurb: 'AI가 내 Google Drive 계정에 로그인해서 직접 파일을 읽을 수 있습니다.' },
+    { key: 'google-calendar', label: 'Google 캘린더', icon: '📅', oauth: 'google-calendar', blurb: 'AI가 내 Google 캘린더 계정에 로그인해서 직접 일정을 확인할 수 있습니다.' },
+    { key: 'github', label: 'GitHub', icon: '🐙', token: 'github_pat', blurb: 'AI가 내 GitHub 계정에 로그인해서 직접 이슈·PR·저장소를 다룰 수 있습니다.' },
+    { key: 'gitlab', label: 'GitLab', icon: '🦊', token: 'gitlab_pat', blurb: 'AI가 내 GitLab 계정에 로그인해서 직접 MR·저장소를 다룰 수 있습니다.' },
+    { key: 'clickup', label: 'ClickUp', icon: '🗂️', token: 'clickup_token', blurb: 'AI가 내 ClickUp 계정에 로그인해서 직접 작업을 확인할 수 있습니다.' },
+    { key: 'figma', label: 'Figma', icon: '🎨', token: 'figma_token', blurb: 'AI가 내 Figma 계정에 로그인해서 직접 디자인을 읽을 수 있습니다.' },
+    { key: 'prometheus', label: 'Prometheus', icon: '📊', token: 'prometheus_bearer', blurb: 'AI가 내 Prometheus 계정에 로그인해서 직접 지표를 조회할 수 있습니다.' },
 ];
 async function renderServiceTabs(host) {
     host.replaceChildren(el('p', { class: 'admin-hint', style: 'margin:0', text: '불러오는 중…' }));
