@@ -87,10 +87,10 @@ function fmtTermDate(sec) {
 const TSESS_STATUS: Record<string, { label: string; cls: string; rank: number }> = {
   waiting:    { label: '확인 필요',  cls: 'waiting',    rank: 0 },
   busy:       { label: '작업 중',    cls: 'busy',       rank: 1 },
-  idle:       { label: '대기 중',    cls: 'idle',       rank: 2 },
+  idle:       { label: '대기 중',    cls: 'idle',       rank: 2 },   // 최근 48시간 내 작업이 있었던 살아있는 세션
   restorable: { label: '복원 가능',  cls: 'restorable', rank: 3 }, // #1059 E — 재부팅·회수로 꺼졌으나 복원 가능
   exited:     { label: '종료됨',     cls: 'exited',     rank: 4 },
-  offline:    { label: '오프라인',   cls: 'offline',    rank: 5 },   // 미접속(아무도 안 보는 중) 또는 노드 미연결
+  offline:    { label: '오프라인',   cls: 'offline',    rank: 5 },   // 48시간+ 방치(탭 열림 여부 무관) 또는 노드 미연결
 };
 // 종료 확인 문구 — 카드/일괄 공통. '삭제'가 아니라 '끝내기'이고 대화록은 남는다는 걸 확인창에서 못 박는다.
 function TSESS_END_CONFIRM(n, head) {
