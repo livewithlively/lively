@@ -1698,10 +1698,10 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .tsess-dot-idle { background: var(--mint-deep); }
 .tsess-dot-restorable { background: var(--accent, #5b6cff); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #5b6cff) 20%, transparent); } /* #1059 E */
 .tsess-dot-offline { background: var(--muted-2); }
-/* #1015 E — '종료됨'(하네스 끝남)과 '연결 끊김'(원격 노드 미연결)은 성격이 달라 점도 구분한다:
-   종료됨 = 속 빈 회색 점(끝난 것) · 연결 끊김 = 점선 테두리(닿지 못하는 것). 살아있는 상태색(민트·주황·코랄)은 그대로. */
+/* 회색 계열 둘 — 오프라인(아무도 안 보는 중) = 꽉 찬 회색 점 · 종료됨(하네스가 끝나 셸만 남음) = 속 빈 회색 점.
+   살아있고 누군가 보고 있는 상태색(민트·주황·코랄)은 그대로. */
 .tsess-dot-exited { background: transparent; box-shadow: inset 0 0 0 2px var(--muted-2); }
-.tsess-dot-offline { background: transparent; box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--coral, #e5484d) 45%, var(--muted-2)); }
+.tsess-dot-offline { background: var(--muted-2); }   /* 오프라인(아무도 안 보는 중·노드 미연결) = 회색 점 */
 .tsess-proj { display: inline-flex; align-items: center; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; font-weight: 700; color: var(--blue); background: var(--bg-punch); border: 1px solid color-mix(in srgb, var(--blue) 28%, var(--bg)); border-radius: 999px; padding: 2px 9px; }
 .tsess-proj.mine { color: var(--accent, #5b6cff); border-color: color-mix(in srgb, var(--accent, #5b6cff) 42%, var(--bg)); background: color-mix(in srgb, var(--accent, #5b6cff) 9%, transparent); }
 .tsess-badge { flex: none; font-size: 11px; font-weight: 700; color: var(--ink-sub); background: var(--bg-tint-2); border: 1px solid var(--line); border-radius: 999px; padding: 1.5px 8px; white-space: nowrap; }

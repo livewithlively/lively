@@ -100,12 +100,14 @@ export interface SessionInfo {
   invites: string[]; // 초대된 멤버 id(@box_invites). 빈 배열 = 비공개(소유자만 보기·열기).
   flags: Record<string, string>; // 생성 시 적용된 하네스 플래그(@box_flags, 예: {"--model":"opus"}). 수정 팝업의 비활성 표시용.
   projectId?: number; // 프로젝트 세션이면 그 프로젝트 id(@box_project). 보드의 '내 세션' 칼럼 활성 판단용.
-  // 에이전트 실행 상태(#1015 E 로 5단계 — '오프라인' 한 칸에 성격이 다른 둘이 섞여 있던 걸 갈랐다):
-  //  busy=스피너 관측(작업중, 접속 무관) · waiting=화면에 사용자 선택/승인 대기(확인 필요, 접속 무관)
-  //  idle=에이전트가 살아 있고 안 바쁨(대기중) — ⚠ 브라우저 접속 여부와 무관하다. 세션은 게이트웨이/노드에서
-  //   상시 돌고 attached 는 '지금 누가 보고 있나'일 뿐이라, 아무도 안 보고 있다고 꺼진 게 아니다(그 오해가 E 의 계기).
-  //  exited=하네스가 끝나 포그라운드가 셸(= 이 세션에서 AI 는 더 안 돈다. tmux 세션 껍데기만 남음)
-  //  offline=실행 호스트에 닿지 못함 — 원격 노드가 끊긴 경우만(node/registry.ts 가 강제). 로컬 세션엔 안 쓰인다.
+  // 에이전트 실행 상태(#1015 E 에서 '오프라인' 한 칸에 섞여 있던 '셸로 빠짐'을 exited 로 분리):
+  //  busy=스피너 관측(작업중) · waiting=화면에 사용자 선택/승인 대기(확인 필요) — 이 둘은 **접속 무관**.
+  //   탭을 닫아도 AI 는 계속 일하고, waiting 은 사용자 결정을 기다리는 알림이라 회색으로 덮으면 놓친다.
+  //  idle=에이전트가 살아 있고 안 바쁨 + **지금 누군가 보고 있음**(attached>0) = '대기 중'
+  //  offline=아무도 안 보고 있음(미접속) 또는 원격 노드에 못 닿음(node/registry.ts 가 강제) = '오프라인'
+  //   ⚠ 미접속 세션도 프로세스는 대개 살아 있다. 그래도 오프라인으로 칠하는 건 제품 판단이다(2026-07-22 상민님):
+  //    창을 끄면 실질적으로 비활성이고, '돌긴 도는데 아무도 안 보는 중'을 사용자에게 이해시킬 필요가 없다.
+  //  exited=하네스가 끝나 포그라운드가 셸(= 이 세션에서 AI 는 더 안 돈다. tmux 껍데기만 남음)
   agentState?: "busy" | "waiting" | "idle" | "exited" | "offline";
   // 실시간 작업 요약(#req) — Claude Code 가 pane_title 에 써두는 '지금 하는 일' 요약(상태 글리프 제거). 없으면 빈 문자열 → 프론트가 label 로 폴백.
   title?: string;
@@ -554,15 +556,19 @@ async function collectSessions(me: string | null): Promise<SessionInfo[]> {
   for (const r of rows) {
     let flags: Record<string, string> = {};
     try { if (r.flagsRaw) flags = JSON.parse(r.flagsRaw) as Record<string, string>; } catch { /* 구버전 세션 — 플래그 메타 없음 */ }
-    // 우선순위: 하네스 종료(셸) > 작업중 > 확인필요(접속 무관 — 사용자 결정 대기 알림) > 대기중.
-    //  ⚠ #1015 E 로 '미접속 = 오프라인' 규칙을 없앴다. 미접속은 '아무도 안 보고 있다'일 뿐 에이전트는 살아
-    //   있으므로 idle(대기중)이다. 꺼진 것처럼 보이던 오해(실측: 프로젝트 세션 45개 전부 '에이전트 살아있음·
-    //   미접속'인데 화면엔 '오프라인')를 여기서 끊는다. 진짜 못 닿는 경우(원격 노드 끊김)만 offline 이고,
-    //   그건 nodeSessionsFor 가 스냅샷에 덮어쓴다.
+    // 우선순위: 하네스 종료(셸) > 작업중 > 확인필요 > 접속중이면 대기중 > 미접속이면 오프라인.
+    //  ⚠ 여기서 '오프라인'은 **아무도 안 보고 있다**는 뜻이다(프로세스는 대개 살아 있다). #1015 E 에서
+    //   "미접속도 살아 있으니 대기중" 으로 바꿨다가, 상민님 판단으로 되돌렸다(2026-07-22): 하다가 창을 끄면
+    //   실질적으로 비활성이고, '돌긴 도는데 아무도 안 보는 중'을 사용자에게 이해시킬 필요가 없다.
+    //   #1015 E 의 본래 가치(=셸로 빠진 것과 유휴가 한 칸에 섞임)는 exited 를 따로 뺀 것으로 이미 유지된다.
+    //  ⚠⚠ busy·waiting 은 **접속 여부와 무관하게** 그대로 둔다 — 탭을 닫아도 AI 는 백그라운드로 계속 일하고,
+    //   'waiting(확인 필요)'은 사용자 결정을 기다리는 알림이다. 이 둘을 회색으로 덮으면 일하는 세션을 꺼진 걸로
+    //   오인하고 승인 대기를 놓친다.
     const state: SessionInfo["agentState"] = r.offline ? "exited"
       : r.busy ? "busy"
       : waitingIds.has(r.name) ? "waiting"
-      : "idle";
+      : Number(r.attached) > 0 ? "idle"
+      : "offline";
     sessions.push({
       id: r.name, label: (r.labelParts.join("\t") || r.name), harness: r.harness || "shell", dir: r.dir || "",
       autoApprove: r.auto === "1", owner: r.owner || "", owned: r.owned,
