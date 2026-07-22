@@ -323,7 +323,7 @@ function renderInline(text, opts?: { noAutolink?: boolean }) {
         const label = s.slice(i + 1, close);
         if (label.trim() && label.indexOf('\n') < 0) {
           flush();
-          out.push(el('span', { class: 'md-uikey md-uikey-btn' }, ...renderInline(label)));
+          out.push(el('span', { class: uiKeyCls('md-uikey-btn', label) }, ...renderInline(label)));
           i = close + 1;
           continue;
         }
@@ -336,7 +336,7 @@ function renderInline(text, opts?: { noAutolink?: boolean }) {
         const label = s.slice(i + 1, close);
         if (label.trim() && label.indexOf('\n') < 0) {
           flush();
-          out.push(el('span', { class: 'md-uikey md-uikey-opt' }, ...renderInline(label)));
+          out.push(el('span', { class: uiKeyCls('md-uikey-opt', label) }, ...renderInline(label)));
           i = close + 1;
           continue;
         }
@@ -1034,7 +1034,7 @@ function uiText(text) {
   const s = String(text == null ? '' : text);
   let buf = '';
   const flush = () => { if (buf) { out.push(buf); buf = ''; } };
-  const chip = (mod, label) => el('span', { class: 'md-uikey ' + mod }, ...uiText(label));
+  const chip = (mod, label) => el('span', { class: uiKeyCls(mod, label) }, ...uiText(label));
   let i = 0;
   while (i < s.length) {
     const ch = s[i];
@@ -1044,8 +1044,9 @@ function uiText(text) {
     }
     if (ch === '[') {
       const close = s.indexOf(']', i + 1);
-      // [x](url) 은 링크 문법이라 건드리지 않는다(설명문엔 거의 없지만 마크다운과 충돌 금지).
-      if (close > i + 1 && s[close + 1] !== '(' && uiKeyOk(s.slice(i + 1, close))) {
+      // [x](url) 은 링크 문법이라 건드리지 않는다. 단 **주소일 때만** — '[끄기](주소는 남고 프로세스만 내려감)'
+      //  처럼 버튼 뒤에 괄호 설명이 붙는 문장이 실제로 흔해서, 괄호만 보고 링크로 넘기면 그 버튼이 칩을 못 받는다.
+      if (close > i + 1 && !MD_LINK_AT.test(s.slice(close + 1)) && uiKeyOk(s.slice(i + 1, close))) {
         flush(); out.push(chip('md-uikey-btn', s.slice(i + 1, close))); i = close + 1; continue;
       }
     }
@@ -1061,6 +1062,14 @@ function uiText(text) {
   flush();
   return out;
 }
+// 칩 클래스 — 라벨이 한 덩어리(공백 없음)면 nowrap 을 걸어 '연결·데이/터'처럼 이름이 잘리는 걸 막는다.
+//  (한국어는 중점·조사 경계에서 줄바꿈이 일어나 word-break:keep-all 만으로는 안 막힌다.)
+//  공백이 있는 긴 라벨은 어절 단위로 흐르게 둔다 — 안 그러면 좁은 팝오버에서 칩이 통째로 넘친다.
+function uiKeyCls(mod, label) {
+  return 'md-uikey ' + mod + (/\s/.test(String(label).trim()) ? '' : ' md-uikey-solid');
+}
+// ']' 바로 뒤가 마크다운 링크의 (주소) 인가 — 프로토콜·라우트로 시작하고 공백 없이 닫히는 것만 링크로 본다.
+const MD_LINK_AT = /^\((?:https?:\/\/|mailto:|#|\/)[^)\s]*\)/;
 // 칩으로 승격할 라벨인가 — UI 라벨은 짧고 따옴표·중괄호가 없다. JSON/코드 예시( ["Read","Grep"] 등)를
 //  버튼처럼 보이게 만들면 오히려 거짓말이 되므로 제외한다.
 function uiKeyOk(label) {
