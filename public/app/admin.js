@@ -208,14 +208,6 @@ function sectionCanEdit(key, data) {
         return any.some((sc) => (sc === 'admin' ? data.canEdit : sc === 'runtime' ? data.canRuntime : hasScope(sc)));
     return !!data.canEdit;
 }
-// 편집하려면 어떤 권한이 필요한지 — 배지 문구에 그대로 쓴다("관리자만"이라고 뭉뚱그리지 않는다).
-function sectionNeedScope(key) {
-    if (CONTEXT_EDIT.includes(key))
-        return '컨텍스트(context)';
-    if (RUNTIME_ONLY.includes(key))
-        return '런타임(runtime)';
-    return '관리자(admin)';
-}
 // 사이드바 권한 배지 — 숨김 규칙(sectionHidden)과 **같은 표에서** 문구를 만든다.
 //  숨는 조건이 곧 배지의 뜻이다: 그 권한이 없으면 이 항목은 목록에 아예 안 나온다.
 function navPermBadge(key) {
@@ -327,11 +319,9 @@ async function renderAdmin(view, sub) {
     renderAdminDetail(detail, sel, data);
     // 페이지 머리('관리' + 부제 + 조직명)는 폐지(#837) — 상단 탭이 이미 '관리'를 켜 두었고 사이드바가 지금 어느
     //  화면인지 말해 준다. 그 위에 화면마다 같은 제목·부제가 반복되면 본문만 아래로 밀린다.
-    //  '읽기 전용'은 **이 섹션이 실제로 나에게 읽기 전용일 때만** 붙인다(섹션별 — 위 sectionCanEdit 주석 참조).
-    const ro = !sectionCanEdit(sel, data)
-        ? el('div', { class: 'admin-ro-note' }, el('span', { class: 'pill', text: '읽기 전용' }), el('span', { text: '이 화면을 편집하려면 ' + sectionNeedScope(sel) + ' 권한이 필요합니다 — 관리자에게 요청하세요.' }))
-        : null;
-    const body = el('div', { class: 'admin-body' }, ro, detail);
+    //  '읽기 전용 · 편집하려면 …' 배너도 폐지(#1085) — 편집 못 하는 사람에겐 애초에 편집 버튼·입력칸이 안 보이고,
+    //  화면마다 같은 안내가 맨 위를 차지했다. 권한 요건은 사이드바 배지(navPermBadge)가 이미 말한다.
+    const body = el('div', { class: 'admin-body' }, detail);
     view.replaceChildren(el('div', { class: 'docs-layout admin-layout' }, side, body));
     applyReveal([body]);
 }
