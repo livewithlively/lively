@@ -5,10 +5,50 @@
 //
 //  인자(args) 가공: redactDeep(시크릿 패턴 마스킹) → 큰 문자열 절단(MAX_STR) → 총 JSON 크기 캡(MAX_JSON).
 //   knowledge_save body_md 같은 대형 페이로드는 잘려 들어가(통계용엔 충분), 시크릿 평문은 마스킹된다.
+//
+//  ⚠ 외부 통신 툴은 인자 '값'을 저장하지 않는다(#1082) — 아래 '외부 통신 툴 레지스트리' 참조.
 import { itemsPool } from "../items/store.js";
 import { redactDeep } from "./redact.js";
 import { scrubSqlLiterals } from "../db/sql-scrub.js";
 import { logger } from "../log.js";
+
+// ── 외부 통신 툴 레지스트리(#1082) ──────────────────────────────────────────────────────────
+//  문제: 프록시 툴 인자에는 **조직 밖으로 나가는 본문**이 실린다(슬랙 DM 메시지, 메일 본문, 노션 페이지 내용).
+//   redactDeep 은 토큰·키만 가리므로 그 본문은 평문으로 mcp_call_log 에 무기한 남고, admin 이면 관리탭에서 전부 읽혔다.
+//   응답(상류에서 읽어온 것)은 pii_scrub 로 가리면서 요청(우리가 보낸 것)은 영구보관하던 비대칭을 없앤다.
+//
+//  왜 '필드 이름'으로 가리지 않는가 — 처음 안은 message·text 같은 본문성 키를 목록으로 관리하는 것이었으나 기각했다:
+//   ① 같은 이름의 뜻이 툴마다 다르다(query 가 어떤 툴엔 식별자, 어떤 툴엔 사용자가 친 문장 그대로).
+//   ② 목록 유지보수가 상류 릴리스 일정에 묶인다 — 상류가 스키마를 바꾼 뒤 우리가 따라잡기 전까지가 곧 유출 기간.
+//   즉 **정책의 정확도를 외부가 정하는 값에 의존시키는 구조 자체**가 틀렸다. 그래서 인자를 해석하지 않는다.
+//
+//  대신 판정 근거는 우리가 정한 것만 쓴다 — 등록 경로가 자기 툴을 여기 직접 신고한다(mcp-proxy·dynamic-tools).
+//   상류가 필드를 어떻게 바꾸든 정책은 그대로 선다. 예외(값도 저장)는 MCP 서버/툴 단위 토글이며, 그 단위 역시
+//   우리가 등록한 것이라 외부 변경에 무효화되지 않는다.
+export const EXT_PREFIX = "ext__"; // 프록시 툴 네임스페이스(SoT) — mcp-proxy.ts 의 NS 가 이 값을 쓴다.
+
+const EXTERNAL_TOOLS = new Map<string, boolean>(); // 툴 이름 → logArgs(인자 값 저장 허용 여부)
+
+/** 외부 통신 툴로 등록 — logArgs=false(기본)면 인자 값을 저장하지 않는다. 등록 경로가 서버/툴 설정을 그대로 넘긴다. */
+export function markExternalTool(tool: string, logArgs: boolean): void {
+  EXTERNAL_TOOLS.set(tool, logArgs);
+}
+
+/** 테스트 전용 — 레지스트리 초기화. */
+export function resetExternalTools(): void {
+  EXTERNAL_TOOLS.clear();
+}
+
+/**
+ * 이 툴의 인자 값을 남길지 판정. "omit"=값 제거, "log"=값 저장(서버 토글 ON), null=외부 툴 아님(빌트인, 현행 유지).
+ *  미등록 ext__* 를 omit 으로 접는 건 **백스톱**이다 — 등록 순서·경로 변경으로 신고가 빠져도 fail-closed 로 남게.
+ *  (ext__ 접두는 상류가 아니라 우리가 붙이는 값이라, 이 백스톱은 외부 의존이 아니다.)
+ */
+export function externalArgsPolicy(tool: string): "log" | "omit" | null {
+  const known = EXTERNAL_TOOLS.get(tool);
+  if (known !== undefined) return known ? "log" : "omit";
+  return tool.startsWith(EXT_PREFIX) ? "omit" : null;
+}
 
 export interface ToolCallRecord {
   tool: string;
@@ -23,6 +63,28 @@ export interface ToolCallRecord {
 const MAX_STR = 500; // 인자 내 개별 문자열 값의 보존 상한(초과분은 절단 + 잔여 길이 표기)
 const MAX_JSON = 16_384; // 가공 후 args JSON 직렬화 총 상한(초과 시 키 목록만 남기는 요약으로 대체)
 const MAX_ERR = 2_000; // error 메시지 보존 상한
+const MAX_KEYS = 50; // 값 미저장 시 남기는 최상위 키 개수 상한
+const MAX_KEY_LEN = 64; // 키 이름 하나의 보존 상한(상류가 비정상적으로 긴 키를 쓰는 경우 방어)
+
+/**
+ * 값 없는 인자 요약(#1082) — 외부 통신 툴의 인자에서 **값을 일절 남기지 않는다.** 최상위 키 이름과 총 바이트만.
+ *  중첩 객체·배열은 최상위 키만 남기므로 안쪽 값은 자동으로 전부 사라진다({payload:{text:"..."}} → keys:["payload"]).
+ *  키 이름은 상류가 정하지만 **정책 판정에 쓰지 않는 단순 관측치**라, 이름이 바뀌어도 무효화될 정책이 없다.
+ *  bytes 는 원본 기준(가공 전) — "얼마나 큰 걸 보냈나"는 남기되 "무엇을 보냈나"는 남기지 않는다.
+ */
+export function omitArgValues(raw: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = { __omitted: "external_tool_args" };
+  try {
+    out.bytes = Buffer.byteLength(JSON.stringify(raw ?? {}) ?? "", "utf8");
+  } catch {
+    // 순환참조 등 직렬화 불가 — 크기 표기를 포기하고 키만 남긴다.
+  }
+  if (Array.isArray(raw)) out.items = raw.length;
+  else if (raw && typeof raw === "object") {
+    out.keys = Object.keys(raw as Record<string, unknown>).slice(0, MAX_KEYS).map((k) => k.slice(0, MAX_KEY_LEN));
+  }
+  return out;
+}
 
 // 깊은 순회로 긴 문자열만 절단(redactDeep 이 이미 시크릿은 마스킹했다 가정). 구조(키/형태)는 보존한다.
 function truncateStrings(v: unknown): unknown {
@@ -61,16 +123,27 @@ export function capArgs(raw: unknown): unknown {
 }
 
 // 한 건 적재(비동기, 호출자는 await 하지 않는다). 실패는 warn 로그만 남기고 삼킨다 — 통계 누락 ≠ 호출 실패.
-export function logToolCall(rec: ToolCallRecord): void {
-  // db_query 는 SQL 에 PII 리터럴이 박힐 수 있어 값 스크럽(#705) — redactDeep(시크릿)만으론 PII 미포착.
-  let args = rec.args;
-  if (rec.tool === "db_query" && args && typeof args === "object" && !Array.isArray(args)
+/**
+ * 이 툴 호출에 대해 **실제로 저장될 args 값**. 저장 직전 형태라 여기가 정책의 최종 관문이다(테스트 지점).
+ *  · 외부 통신 툴 → 값 없는 요약. capArgs(절단·redact)를 태우지 않는 이유는 그 경로가 값을 '보존'하기 때문 —
+ *    여기선 애초에 보존할 값이 없다. 남는 건 누가·언제·어떤 툴·성공여부(호출 행 자체)로 충분하다.
+ *  · db_query → SQL 리터럴 스크럽(#705) 후 통상 가공. redactDeep(시크릿)만으론 PII 미포착이라 별도 처리.
+ *  · 그 외(빌트인) → 현행 그대로(시크릿 마스킹 + 절단 + 총량 캡).
+ */
+export function argsForLog(tool: string, raw: unknown): unknown {
+  if (externalArgsPolicy(tool) === "omit") return omitArgValues(raw);
+  let args = raw;
+  if (tool === "db_query" && args && typeof args === "object" && !Array.isArray(args)
       && typeof (args as Record<string, unknown>).sql === "string") {
     args = { ...(args as Record<string, unknown>), sql: scrubSqlLiterals((args as Record<string, unknown>).sql as string) };
   }
+  return capArgs(args);
+}
+
+export function logToolCall(rec: ToolCallRecord): void {
   let argsJson: string;
   try {
-    argsJson = JSON.stringify(capArgs(args));
+    argsJson = JSON.stringify(argsForLog(rec.tool, rec.args));
   } catch {
     argsJson = "{}";
   }

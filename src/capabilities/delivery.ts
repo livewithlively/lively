@@ -22,6 +22,7 @@ import { listLogs } from "../log-janitor.js";
 import { stateRoot, logRoot } from "../state-dir.js";
 import { ROOTS as TERMINAL_ROOTS, SHARED_ROOT as TERMINAL_SHARED_ROOT } from "../terminal-sessions.js";
 import { normalizeStoragePolicy, type StoragePolicyPatch } from "../org/storage-policy.js";
+import { type CallLogPolicyPatch } from "../org/call-log-policy.js"; // #1082 호출 감사로그 보존기간
 import { normalizeSessionMemoryPolicy, SESSION_MEM_MB_MIN, SESSION_MEM_MB_MAX, type SessionMemoryPolicyPatch } from "../org/session-memory-policy.js"; // #1059 D
 import { RECLAIM_TTL_MIN_MIN, RECLAIM_TTL_MIN_MAX, type SessionReclaimPolicyPatch } from "../org/session-reclaim-policy.js"; // #1059 F
 import {
@@ -1279,6 +1280,7 @@ export const deliveryCapabilities: Capability[] = [
         allowed_db_secret_refs?: string[]; write_tools?: string[]; pull_tools?: string[];
         embedding_config?: EmbeddingConfigPatch;
         storage_policy?: StoragePolicyPatch;
+        call_log_policy?: CallLogPolicyPatch;
         session_memory_policy?: SessionMemoryPolicyPatch;
         session_reclaim_policy?: SessionReclaimPolicyPatch;
         hook_relay_decisions?: HookRelayDecision[];
@@ -1309,6 +1311,20 @@ export const deliveryCapabilities: Capability[] = [
           throw new HttpError(400, `경고 임계치(${patchIn.disk_warn_pct}%)는 위험 임계치(${merged.disk_critical_pct}%)보다 낮아야 합니다`);
         }
         patch.storage_policy = patchIn;
+      }
+      // 호출 감사로그 보관 정책(#1082) — mcp_call_log 보존일수. 0=무기한(구동작). 고객 박스는 .env 를 못 고치므로
+      //  여기(관리탭)가 유일한 조절 창구다(storage_policy 와 동일 교리).
+      if (input.call_log_policy !== undefined) {
+        const raw = input.call_log_policy;
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "call_log_policy 는 객체여야 합니다");
+        const s = raw as Record<string, unknown>;
+        const patchIn: CallLogPolicyPatch = {};
+        if (s.retention_days !== undefined) {
+          const n = Number(s.retention_days);
+          if (!Number.isFinite(n) || n < 0 || n > 3650) throw new HttpError(400, "call_log_policy.retention_days 는 0~3650 정수여야 합니다(0=무기한 보관)");
+          patchIn.retention_days = Math.floor(n);
+        }
+        patch.call_log_policy = patchIn;
       }
       // per-session cgroup 메모리 정책(#1059 D) — 세션당 MemoryHigh/Max(MB). 0=무제한. 잡값·범위는 아래 + normalize 가 잡는다.
       //  고객 박스는 .env 를 못 고치므로 여기(관리탭)가 유일한 조절 창구(storage_policy 와 동일 교리).
@@ -1555,6 +1571,9 @@ export const deliveryCapabilities: Capability[] = [
         shared_cache_enabled: z.boolean().optional().describe("공유 캐시 사용"),
         shared_cache_relocate_home: z.boolean().optional().describe("홈 캐시를 공유 캐시로 재배치"),
       }).optional().describe("저장소 정책(#813) — 로그 상한·디스크 임계치. 고객 박스는 .env 를 못 고치므로 여기가 유일한 조절 창구"),
+      call_log_policy: z.object({
+        retention_days: z.number().int().min(0).max(3650).optional().describe("MCP 호출 감사로그 보존일수 — 이보다 오래된 기록은 삭제. 0=무기한 보관"),
+      }).optional().describe("호출 감사로그 보관 정책(#1082) — mcp_call_log 는 도입 이래 무기한 쌓였다. 누가 언제 무슨 툴을 썼는지가 사람 단위로 남는 표라 보관기간을 둔다(기본 90일)"),
       session_memory_policy: z.object({
         per_session_high_mb: z.number().int().min(0).max(1_048_576).optional().describe("세션당 MemoryHigh(MB) — 초과 시 강한 회수·스로틀(kill 아님). 0=무제한"),
         per_session_max_mb: z.number().int().min(0).max(1_048_576).optional().describe("세션당 MemoryMax(MB) — 초과 시 그 세션 scope 안에서 OOM-kill. 0=무제한. MemoryHigh 이상이어야"),
@@ -1888,6 +1907,7 @@ export const deliveryCapabilities: Capability[] = [
         scope: input.scope === undefined ? undefined : (input.scope === null || input.scope === "" ? null : str(input.scope, "scope", 20)),
         level,
         pii_scrub: input.pii_scrub === undefined ? undefined : Boolean(input.pii_scrub),
+        log_args: input.log_args === undefined ? undefined : Boolean(input.log_args),
         auth_kind: authKind,
         auth_scope_key: input.auth_scope_key === undefined ? undefined : (input.auth_scope_key === null || input.auth_scope_key === "" ? null : str(input.auth_scope_key, "auth_scope_key", 120).trim()),
         auth_mode: input.auth_mode === undefined ? undefined : ((): "bearer" | "oauth" | "sigv4" | null => {
@@ -1911,6 +1931,7 @@ export const deliveryCapabilities: Capability[] = [
       scope: z.string().nullable().optional().describe("proxy 툴 접근 scope(items|context|db|memory|code)"),
       level: z.enum(["L0", "L1", "L2"]).nullable().optional(),
       pii_scrub: z.boolean().optional(),
+      log_args: z.boolean().optional().describe("#1082 — 이 서버 프록시 툴의 호출 인자 '값'을 감사로그에 저장할지. 기본 false(값 미저장: 슬랙 DM·메일 본문 등이 남지 않게). 끈 상태에서도 호출 사실은 남는다"),
       auth_kind: z.string().nullable().optional().describe("proxy per-member vault 인증 kind"),
       auth_scope_key: z.string().nullable().optional(),
       auth_mode: z.enum(["bearer", "oauth", "sigv4"]).nullable().optional().describe("bearer=정적토큰(기본) / oauth=per-member OAuth(T2) / sigv4=AWS 요청서명(#746)"),
@@ -2384,6 +2405,7 @@ export const deliveryCapabilities: Capability[] = [
           base.auth_kind = null; base.auth_scope_key = null;
         }
         if (input.pii_scrub !== undefined) base.pii_scrub = Boolean(input.pii_scrub);
+        if (input.log_args !== undefined) base.log_args = Boolean(input.log_args); // #1082
       }
       return { tool: await upsertTool(base, wctx(user, ctx)) };
     }, {
@@ -2406,6 +2428,7 @@ export const deliveryCapabilities: Capability[] = [
       auth_kind: z.string().nullable().optional().describe("P1 per-user vault 인증 종류(소문자·숫자·_ 1~40자) — 지정 시 auth_env 대신 요청자 개인 자격으로 해소"),
       auth_scope_key: z.string().nullable().optional().describe("auth_kind 의 스코프 키(선택)"),
       pii_scrub: z.boolean().optional().describe("응답 PII 스크럽 여부"),
+      log_args: z.boolean().optional().describe("#1082 — 호출 인자 '값'을 감사로그에 저장할지. 기본 false(값 미저장). 끈 상태에서도 호출 사실은 남는다"),
     }),
   restRuntime("org_tool_remove", "AI 도구 제거",
     "조직 MCP 툴을 제거한다(http_proxy=즉시 노출 중단, builtin 게이팅 행 제거=기본값 복귀).",

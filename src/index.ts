@@ -37,6 +37,7 @@ import { ensureStateDirs, stateRoot } from "./state-dir.js";
 import { ROOTS, SHARED_ROOT } from "./terminal-sessions.js";
 import { readyReport } from "./health.js";
 import { startLogJanitor } from "./log-janitor.js";
+import { startCallLogPrune } from "./org/call-log-prune.js";
 import { effectiveStoragePolicy } from "./org/storage-policy.js";
 import { getRuntimeConfig } from "./org/store.js";
 import { reapSessionLogs, backfillSessionTitles } from "./v6/session-log-store.js";
@@ -86,6 +87,7 @@ app.get("/healthz", (_req, res) => {
 //  못 들어가므로 env 전용이면 아무도 못 바꾼다). effectiveStoragePolicy 는 짧게 캐시하고 **DB 가 죽어도 throw 하지
 //  않는다** — /readyz 가 가장 필요한 순간이 바로 DB 다운이라 그때도 디스크 판정은 나와야 한다.
 const loadStoragePolicy = () => getRuntimeConfig().then((c) => c.storage_policy);
+const loadCallLogPolicy = () => getRuntimeConfig().then((c) => c.call_log_policy); // #1082 감사로그 보존기간
 
 // readiness — '실제로 서비스가 되나'(#813 T2). DB 도달 + 디스크 여유. **모니터·알림은 healthz 가 아니라 이걸 봐야 한다.**
 //  2026-07-13: 디스크풀 → Postgres recovery mode → 모든 로그인 500 인데도 /healthz 는 초록이라 아무도 몰랐다.
@@ -300,6 +302,9 @@ const server = app.listen(PORT, () => {
       //  유닛이 append 로 무한히 쓰는 구조라(systemd StandardOutput=append) 이게 없으면 상한이 없다.
       //  스케줄러와 같은 게이트: 하우스키핑은 단일 프로세스 전제 — 두 인스턴스가 같은 파일을 동시에 copytruncate 하면 꼬인다.
       .then(() => { if (process.env.LIVELY_NO_SCHEDULER !== "1") startLogJanitor(loadStoragePolicy); })
+      // 호출 감사로그 prune(#1082) — mcp_call_log 를 보존기간(관리탭) 밖까지만 남긴다. 도입 이래 무기한 쌓이던 표라
+      //  기간 정책이 없으면 개인 단위 활동 기록이 박스 수명 내내 축적된다. 같은 단일 프로세스 게이트(중복 DELETE 방지).
+      .then(() => { if (process.env.LIVELY_NO_SCHEDULER !== "1") startCallLogPrune(loadCallLogPolicy); })
       // 공유 빌드 캐시(#813 T3) — 세션이 쓸 캐시 디렉터리를 그룹쓰기(2775)로 미리 보장한다.
       //  멤버별 격리 OS 유저(#524)들이 같은 캐시를 써야 하므로 권한이 중요하다. 비치명(툴이 각자 만들기도 한다).
       .then(async () => {

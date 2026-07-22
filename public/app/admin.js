@@ -843,7 +843,31 @@ async function toolUsagePanel(detail) {
         pagerBox.append(pgBtn('›', cur + 1, cur >= totalPages ? 'off' : undefined));
         pagerBox.append(el('span', { class: 'tu-pg-info', text: cur + ' / ' + totalPages + ' 페이지' }));
     }
-    const card = el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '하네스(Claude·Codex 등)가 어떤 MCP 툴을 어떤 인자로 얼마나 자주 호출했는지 보여줍니다. 모든 호출이 기록되며(시크릿은 마스킹, 큰 값은 잘라 저장), AI에게 묻거나 db_query 로 mcp_call_log 를 직접 조회할 수도 있습니다.' }), controls, stats, daysEl, el('div', { class: 'tu-sub', text: '툴별 호출' }), toolTable, byHarness.length ? el('div', { class: 'tu-sub', text: '하네스별' }) : null, byHarness.length ? harnessChips : null, el('div', { class: 'tu-sub', text: '최근 호출' + (total ? ' (' + total.toLocaleString() + ')' : '') }), calls, pagerBox);
+    // ── 보관 기간(#1082) — 이 화면이 곧 이 데이터의 설정 창구다. 0 = 무기한(권장하지 않음).
+    const retDays = (r.retention && typeof r.retention.retention_days === 'number') ? r.retention.retention_days : 90;
+    const retIn = el('input', { type: 'number', min: '0', max: '3650', step: '1', class: 'tu-sel', style: 'width:90px', value: String(retDays) });
+    const retSave = el('button', { class: 'btn btn-ghost btn-sm', text: '저장' });
+    const retStatus = el('span', { class: 'admin-status' });
+    const RET_SRC = { db: '관리탭에서 설정한 값', env: '설치 시 .env 값', default: '기본값' };
+    retSave.addEventListener('click', async () => {
+        const n = Number(retIn.value);
+        if (!Number.isFinite(n) || n < 0 || n > 3650) {
+            toast('0~3650 사이 숫자여야 합니다', true);
+            return;
+        }
+        retSave.disabled = true;
+        try {
+            await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ call_log_policy: { retention_days: Math.floor(n) } }) });
+            toast(n === 0 ? '무기한 보관으로 저장됨' : `${Math.floor(n)}일 보관으로 저장됨`);
+            reload();
+        }
+        catch (e) {
+            toast(e.message, true);
+            retSave.disabled = false;
+        }
+    });
+    const retBox = el('div', { class: 'admin-subcard', style: 'margin-top:22px' }, el('div', { class: 'admin-subhead', text: '기록 보관 기간' }), el('div', { class: 'admin-hint', text: '이 기간이 지난 호출 기록은 자동으로 지워집니다. 누가 언제 무엇을 했는지가 사람 단위로 남는 기록이라, 필요한 기간만 두는 편이 안전합니다. 0 을 넣으면 영구 보관합니다(권장하지 않음).' }), el('div', { class: 'admin-actions' }, retIn, el('span', { class: 'caption', text: '일' }), retSave, retStatus, el('span', { class: 'caption', text: '현재: ' + (RET_SRC[r.retention_source] || r.retention_source || '기본값') })));
+    const card = el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '하네스(Claude·Codex 등)가 어떤 MCP 툴을 얼마나 자주 호출했는지 보여줍니다. 모든 호출이 기록되며(시크릿은 마스킹, 큰 값은 잘라 저장), AI에게 묻거나 db_query 로 mcp_call_log 를 직접 조회할 수도 있습니다. 외부 서비스로 나가는 도구(슬랙·메일·노션 등)는 보낸 내용을 남기지 않고 호출 사실만 기록합니다 — 서버별로 「연결·데이터」 탭에서 켤 수 있습니다.' }), controls, stats, daysEl, el('div', { class: 'tu-sub', text: '툴별 호출' }), toolTable, byHarness.length ? el('div', { class: 'tu-sub', text: '하네스별' }) : null, byHarness.length ? harnessChips : null, el('div', { class: 'tu-sub', text: '최근 호출' + (total ? ' (' + total.toLocaleString() + ')' : '') }), calls, pagerBox, retBox);
     detail.replaceChildren(card);
 }
 // ════════ 조직 변경 감사 로그(#549) — 누가(사람/AI)·언제·무엇을·어디서(mcp/web) 바꿨는지 + before→after ════════
@@ -3715,6 +3739,9 @@ function mcpForm(root, s, data, detail, isNew) {
     const authScopeIn = el('input', { type: 'text', value: s.auth_scope_key || '', placeholder: '대상 구분(선택 · 예 워크스페이스)' });
     const piiChk = el('input', { type: 'checkbox' });
     piiChk.checked = !!s.pii_scrub;
+    // #1082 — 호출 인자 값 저장. 기본 꺼짐(값 미저장): 프록시 인자에는 조직 밖으로 나가는 본문(슬랙 DM·메일)이 실린다.
+    const logArgsChk = el('input', { type: 'checkbox' });
+    logArgsChk.checked = !!s.log_args;
     // 발행/새로고침 — 상류 tools/list 캡처(핀). 저장된 proxy 서버만.
     const snapN = (s.tools_snapshot && s.tools_snapshot.length) || 0;
     const snapInfo = el('div', { class: 'caption', text: snapN
@@ -3743,7 +3770,7 @@ function mcpForm(root, s, data, detail, isNew) {
     const oauthCallback = ((data && data.profile && data.profile.gateway_url) || location.origin).replace(/\/mcp$/, '').replace(/\/$/, '') + '/oauth/callback';
     const oauthClientBox = el('div', { class: 'admin-subcard', style: 'margin-top:8px' }, el('div', { class: 'admin-subhead', text: 'OAuth 클라이언트 (선택 — 자동등록 미지원 상류만)' }), el('div', { class: 'admin-hint', text: '상류 MCP 가 동적 클라이언트 등록(DCR)을 지원하면 비워두세요 — 게이트웨이가 자동 등록합니다. Google·Slack처럼 콘솔에서 앱을 미리 만들어야 하는 상류만 그 client_id/secret 을 입력하고, 콘솔의 redirect URI 에 아래 콜백을 등록하세요. (설정/변경 시 client_id 를 입력 — 비우면 기존 유지)' }), field('client_id', oauthClientIdIn), field('client_secret', oauthClientSecretIn), el('div', { class: 'admin-hint', text: `redirect URI(콜백): ${oauthCallback}  — 이 값을 상류 콘솔(Google/Slack 등)의 허용 redirect URI 에 그대로 등록하세요.` }));
     const authEnvField = field('인증 환경변수 이름 (auth_env)', authIn);
-    const proxyBox = el('div', { class: 'admin-subcard' }, el('div', { class: 'admin-subhead', text: '프록시 통제(#746)' }), field('접근 권한 scope', scopeSel), field('권한 등급(기본 · 툴별 자동분류)', levelSel), field('인증 방식', authModeSel), field('자격 종류 (auth_kind)', el('div', {}, authKindIn, kindsList)), field('자격 대상 구분 (선택)', authScopeIn), el('label', { class: 'admin-check' }, piiChk, ' 응답 PII 마스킹(비정형 텍스트)'), oauthHint, oauthClientBox, sigv4Hint, isNew ? el('div', { class: 'caption', text: '저장 후 [발행]으로 상류 툴을 캡처하세요.' }) : el('div', { class: 'admin-actions' }, refreshBtn, snapInfo));
+    const proxyBox = el('div', { class: 'admin-subcard' }, el('div', { class: 'admin-subhead', text: '프록시 통제(#746)' }), field('접근 권한 scope', scopeSel), field('권한 등급(기본 · 툴별 자동분류)', levelSel), field('인증 방식', authModeSel), field('자격 종류 (auth_kind)', el('div', {}, authKindIn, kindsList)), field('자격 대상 구분 (선택)', authScopeIn), el('label', { class: 'admin-check' }, piiChk, ' 응답 PII 마스킹(비정형 텍스트)'), el('label', { class: 'admin-check' }, logArgsChk, ' 호출 인자 값 기록(감사로그)'), el('div', { class: 'admin-hint', text: '평소엔 꺼두세요. 이 서버로 보낸 내용(메시지 본문·메일 내용 등)이 감사로그에 그대로 남습니다 — 비밀 채널이나 DM 이면 그 내용까지 관리자에게 보입니다. 꺼져 있어도 "누가·언제·어떤 도구를 썼는지"는 남으니 감사에는 지장이 없습니다. 켤 만한 경우: 개인 통신이 오가지 않는 내부 전용 서버라 인자를 봐야 디버깅이 되는 때.' }), oauthHint, oauthClientBox, sigv4Hint, isNew ? el('div', { class: 'caption', text: '저장 후 [발행]으로 상류 툴을 캡처하세요.' }) : el('div', { class: 'admin-actions' }, refreshBtn, snapInfo));
     const syncTransport = () => { urlField.style.display = transSel.value === 'http' ? '' : 'none'; cmdField.style.display = transSel.value === 'stdio' ? '' : 'none'; };
     const syncMode = () => {
         const proxy = modeSel.value === 'proxy';
@@ -3782,6 +3809,7 @@ function mcpForm(root, s, data, detail, isNew) {
                 auth_kind: proxy ? (authKindIn.value.trim() || null) : null,
                 auth_scope_key: proxy ? (authScopeIn.value.trim() || null) : null,
                 pii_scrub: proxy ? piiChk.checked : false,
+                log_args: proxy ? logArgsChk.checked : false, // #1082
             };
             await api('/api/ui/org/mcp-server', { method: 'POST', body: JSON.stringify(payload) });
             // OAuth 클라이언트(선택) — client_id 입력 시 (gateway,auth_kind,'oauth:client') 슬롯에 시딩. 비우면 기존 유지(DCR 상류는 불요).
@@ -3850,6 +3878,7 @@ function mcpForm(root, s, data, detail, isNew) {
         scopeSel.value = c.scope;
         levelSel.value = c.level;
         piiChk.checked = !!c.pii_scrub;
+        logArgsChk.checked = false; // #1082 — 프리셋은 전부 외부 SaaS(슬랙·노션·리니어…). 인자 값 기록은 항상 꺼진 상태로 시작한다.
         syncTransport();
         syncMode();
         // 셋업 위저드(imp#1) — DCR이면 0세팅, 아니면 provider 콘솔 체크리스트 + 정확한 콜백 URL.
@@ -5305,6 +5334,8 @@ function toolForm(root, t, data, detail, isNew) {
     aaChk.checked = !!t.auto_approve;
     const piiChk = el('input', { type: 'checkbox' });
     piiChk.checked = !!t.pii_scrub;
+    const logArgsChk = el('input', { type: 'checkbox' });
+    logArgsChk.checked = !!t.log_args; // #1082 — 기본 꺼짐(인자 값 미저장)
     const hostHint = el('p', { class: 'admin-hint', text: policy.url_allowlist.length ? '허용 호스트: ' + policy.url_allowlist.join(', ') : '⚠ 허용 호스트가 없습니다 — 아래 「외부 호출 안전범위」의 url_allowlist 에 먼저 추가해야 호출됩니다.' });
     const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
     const status = el('span', { class: 'admin-status' });
@@ -5330,7 +5361,7 @@ function toolForm(root, t, data, detail, isNew) {
                 name: nameIn.value.trim(), kind: 'http_proxy', enabled: enChk.checked, auto_approve: aaChk.checked,
                 title: titleIn.value.trim() || null, description: descTa.value.trim(), scope: scopeSel.value,
                 method: methodSel.value, url: urlIn.value.trim(), input_schema: schema,
-                level: levelSel.value, pii_scrub: piiChk.checked,
+                level: levelSel.value, pii_scrub: piiChk.checked, log_args: logArgsChk.checked,
                 // 인증 방식 — 배타(서버도 강제). env 모드면 auth_env, kind 모드면 auth_kind(+scope), none 이면 둘 다 비움.
                 auth_env: mode === 'env' ? (authEnvSel.value || '').trim() || null : null,
                 auth_kind: mode === 'kind' ? authKindSel.value : null,
@@ -5363,7 +5394,7 @@ function toolForm(root, t, data, detail, isNew) {
                     toast(e.message, true);
                 }
             } }));
-    root.replaceChildren(field('이름', nameIn), field('표시 이름', titleIn), field('설명 (AI용)', descTa), field('권한 (이 도구를 쓸 수 있는 scope)', scopeSel), field('등급 (하는 일의 성격)', levelSel), field('HTTP 메서드', methodSel), field('URL (https)', urlIn), hostHint, field('인증 방식', authModeSel), envField, kindField, kindScopeField, el('label', { class: 'admin-check' }, piiChk, ' 응답에서 개인정보(PII) 자동 가리기'), field('입력 스키마 (JSON Schema, 선택)', schemaTa), el('label', { class: 'admin-check' }, enChk, ' 활성'), el('label', { class: 'admin-check' }, aaChk, ' 자동 승인 (구성원 확인 없이 실행 — 주의)'), actions);
+    root.replaceChildren(field('이름', nameIn), field('표시 이름', titleIn), field('설명 (AI용)', descTa), field('권한 (이 도구를 쓸 수 있는 scope)', scopeSel), field('등급 (하는 일의 성격)', levelSel), field('HTTP 메서드', methodSel), field('URL (https)', urlIn), hostHint, field('인증 방식', authModeSel), envField, kindField, kindScopeField, el('label', { class: 'admin-check' }, piiChk, ' 응답에서 개인정보(PII) 자동 가리기'), el('label', { class: 'admin-check' }, logArgsChk, ' 호출 인자 값 기록(감사로그)'), el('p', { class: 'admin-hint', text: '평소엔 꺼두세요. 이 도구로 보낸 내용이 감사로그에 그대로 남습니다. 꺼져 있어도 "누가·언제 이 도구를 썼는지"는 남습니다.' }), field('입력 스키마 (JSON Schema, 선택)', schemaTa), el('label', { class: 'admin-check' }, enChk, ' 활성'), el('label', { class: 'admin-check' }, aaChk, ' 자동 승인 (구성원 확인 없이 실행 — 주의)'), actions);
 }
 // 설치 한 줄 명령(OS별) — #864 부터 **lively CLI 부트스트랩**이다. 사용 가이드(web/learn.ts)가 쓴다.
 //

@@ -32,6 +32,7 @@ const srv = (over: Partial<McpServer>): McpServer => ({
   scope: null,
   level: null,
   pii_scrub: false,
+  log_args: false, // #1082 — 인자 값 미저장이 기본
   auth_kind: null,
   auth_scope_key: null,
   auth_mode: null,

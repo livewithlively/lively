@@ -5,6 +5,7 @@
 import type { Capability } from "./types.js";
 import { itemsPool } from "../items/store.js";
 import { orgTimezone } from "../org/timezone.js"; // #778 일자 버킷 = 조직 시간대
+import { getRuntimeConfig, getCallLogPolicySource } from "../org/store.js"; // #1082 감사로그 보관 정책
 
 // 조회 윈도(상대 기간) — 값=postgres interval 문자열, null=전체(무제한).
 const WINDOWS: Record<string, string | null> = {
@@ -85,6 +86,7 @@ const toolUsage: Capability = {
     const pBase: unknown[] = [interval, harness, errorsOnly];
     const p: unknown[] = [interval, harness, errorsOnly, tool];
     const tz = await orgTimezone(); // #778 일자 버킷 기준. Promise.all **밖**에서 — 안에서 await 하면 뒤 쿼리들이 직렬화된다.
+    const cfg = await getRuntimeConfig(); // #1082 보관 정책(보존일수) — 이 화면이 설정 창구라 현재값을 같이 준다.
 
     const [summary, byTool, byHarness, byDay, recent, toolOptions] = await Promise.all([
       itemsPool.query(
@@ -158,6 +160,9 @@ const toolUsage: Capability = {
       byDay: byDay.rows,
       recent: recent.rows,
       toolOptions: toolOptions.rows,
+      // 보관 정책(#1082) — 이 화면이 곧 이 데이터의 설정 창구다. 보존일수·출처를 같이 실어 관리탭이 현재값을 보여준다.
+      retention: cfg.call_log_policy,
+      retention_source: await getCallLogPolicySource(), // db(관리탭) · env(.env 시드) · default(코드 기본값 90일)
     };
   },
 };

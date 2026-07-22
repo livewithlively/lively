@@ -9,6 +9,7 @@ import { listEnabledProxyTools, getRuntimeConfig, getOrgProfile, type OrgTool } 
 import { safeFetch, SsrfError } from "../org/ssrf.js";
 import { redactDeep } from "../org/redact.js";
 import { scrubPii } from "../org/pii-scrub.js";
+import { markExternalTool } from "../org/tool-log.js";
 import { resolveMemberSecret } from "../org/member-secret-store.js";
 import { resolveUser, requireScope, type LivelyUser } from "../context.js";
 import { HttpError } from "./rest-util.js";
@@ -161,6 +162,9 @@ export async function registerDynamicTools(server: McpServer): Promise<void> {
     }
     const callScope = sc;
     const shape = jsonSchemaToZodShape(tool.input_schema);
+    // 감사로그 인자 정책 신고(#1082) — http_proxy 도 조직 밖으로 나가는 통신이다. 프록시 MCP 와 달리 툴 이름이 관리자
+    //  지정(임의)이라 ext__ 접두 백스톱이 안 걸린다 → **이 신고가 유일한 경로**다. 등록 경로를 바꿀 때 같이 옮겨야 한다.
+    markExternalTool(tool.name, tool.log_args);
     server.registerTool(
       tool.name,
       { title: tool.title || tool.name, description: tool.description || "", inputSchema: shape },

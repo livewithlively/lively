@@ -207,6 +207,10 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS pii_scrub BOOLEAN NOT NULL DEFAULT false;
     ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS auth_kind TEXT;
     ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS auth_scope_key TEXT;
+    -- log_args(#1082): 이 서버 프록시 툴의 호출 '인자 값'을 감사로그(mcp_call_log)에 저장할지. 기본 false = 저장 안 함.
+    --  프록시 인자에는 조직 밖으로 나가는 본문(슬랙 DM·메일 본문 등)이 실려 개인정보가 무기한 남았다 → 기본 미저장으로 뒤집는다.
+    --  켤 만한 경우: 내부 전용 MCP 라 인자에 개인 통신이 없고 디버깅 가치가 큰 서버. 끈 상태에서도 호출 행(누가·언제·어떤 툴)은 남는다.
+    ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS log_args BOOLEAN NOT NULL DEFAULT false;
     -- auth_mode(#746 T2): 'bearer'(정적토큰, 기본) | 'oauth'(per-member OAuth 브로커 — 토큰 생명주기·refresh 를 게이트웨이가 관리).
     ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS auth_mode TEXT;
     DO $$ BEGIN
@@ -328,6 +332,8 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_tool ADD COLUMN IF NOT EXISTS auth_kind TEXT;
     ALTER TABLE org_tool ADD COLUMN IF NOT EXISTS auth_scope_key TEXT;
     ALTER TABLE org_tool ADD COLUMN IF NOT EXISTS pii_scrub BOOLEAN NOT NULL DEFAULT false;
+    -- log_args(#1082): http_proxy 툴도 조직 밖으로 나가는 통신이라 org_mcp_server 와 같은 규칙 — 인자 값 기본 미저장.
+    ALTER TABLE org_tool ADD COLUMN IF NOT EXISTS log_args BOOLEAN NOT NULL DEFAULT false;
   `);
 
   // ── org_harness_asset — 조직 하네스 자산(스킬·서브에이전트·슬래시커맨드, 관리자 정의). org_hook 과 같은 runtime ──
@@ -527,6 +533,15 @@ export async function initOrgSchema(): Promise<void> {
   // **관리탭이 단일 창구**: 고객 박스는 우리가 SSH 로 못 들어가므로 .env 전용 정책은 사실상 아무도 못 바꾼다.
   await itemsPool.query(`
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS storage_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+  `);
+
+  // ── org_runtime_config 확장: call_log_policy — MCP 호출 감사로그 보관 정책(#1082). 보존일수. ──
+  // 기존엔 mcp_call_log 가 **무기한** 쌓였다(schema 주석에 'prune 은 성장 시 추가' 로 예고만 되고 미구현).
+  //  호출 로그엔 누가 언제 무엇을 했는지가 사람 단위로 남으므로, 보관기간 없는 축적은 개인정보 최소보관 원칙에 어긋난다.
+  // 기본 '{}' = 미설정 → env 시드(MCP_CALL_LOG_RETENTION_DAYS) → 코드 기본값(90일) 순(src/org/call-log-policy.ts).
+  // **관리탭이 단일 창구**: 고객 박스는 SSH 로 못 들어가므로 .env 전용 정책은 사실상 아무도 못 바꾼다(storage_policy 와 동일 교리).
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS call_log_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
 
   // ── org_runtime_config 확장: session_memory_policy — per-session cgroup 메모리 격리(#1059 D). 세션당 MemoryHigh/Max(MB). ──

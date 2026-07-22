@@ -20,12 +20,14 @@ import { assumeMemberRole } from "../org/aws-resolve.js";
 import { providerForServer } from "../org/oauth-broker.js";
 import type { AwsCreds } from "../org/aws-sigv4.js";
 import { scrubPii } from "../org/pii-scrub.js";
+import { EXT_PREFIX, markExternalTool } from "../org/tool-log.js";
 import { resolveUser, requireScope } from "../context.js";
 import { isScope } from "./scopes.js";
 import { jsonSchemaToZodShape, buildProxyAuthHeaders, proxyAuthFallback, CALLABLE_SCOPES } from "./dynamic-tools.js";
 import { logger } from "../log.js";
 
-const NS = "ext__"; // 프록시 툴 네임스페이스 접두 — ext__<server>__<tool>. 빌트인·http_proxy 이름과 충돌 방지.
+const NS = EXT_PREFIX; // 프록시 툴 네임스페이스 접두 — ext__<server>__<tool>. 빌트인·http_proxy 이름과 충돌 방지.
+                       //  SoT 는 tool-log.ts — 감사로그가 같은 접두로 '외부 통신 툴' 백스톱을 건다(#1082).
 const CALL_TIMEOUT_MS = 15000;
 
 export interface ProxyTool { name: string; description?: string; inputSchema?: unknown }
@@ -218,6 +220,9 @@ export async function registerProxiedMcpTools(server: McpServer): Promise<void> 
       const toolName = proxyToolName(srv.name, tool.name);
       const shape = jsonSchemaToZodShape(tool.inputSchema);
       const toolLevel = classifyToolLevel(tool.name, serverDefault); // per-tool 등급(휴리스틱)
+      // 감사로그 인자 정책 신고(#1082) — 이 툴은 조직 밖으로 나간다. 등록 실패해도 신고는 남는데(아래 catch),
+      //  그 방향이 '값 미저장' 이라 안전측이다. 등급(classifyToolLevel)처럼 상류 이름을 추측하지 않고 서버 설정을 그대로 쓴다.
+      markExternalTool(toolName, srv.log_args);
       try {
         server.registerTool(
           toolName,
