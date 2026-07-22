@@ -1227,7 +1227,7 @@ function openSessMenu(anchor, s, onChange) {
     b.onclick = () => { close(); fn(); }; panel.append(b);
   };
   if (s.owned) item('이름 수정', null, false, () => openSessRename(s, onChange));
-  item('내 질문 보기', '이 세션에서 클로드에게 보낸 질문만 모아보기', false, () => openSessPrompts(s));
+  item('질문 보기', '이 세션에서 AI 에게 보낸 질문 전부(누가 보냈든) 모아보기', false, () => openSessPrompts(s));
   if (s.owned) item('삭제', null, true, async () => {
     if (!confirm('세션 ‘' + (s.label || '(이름 없음)') + '’을(를) 삭제할까요?\n실행 중인 작업도 함께 종료됩니다 (되돌릴 수 없어요).')) return;
     try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'DELETE' }); toast('세션을 삭제했어요'); onChange && onChange(); }

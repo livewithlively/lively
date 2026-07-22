@@ -1723,6 +1723,8 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .tsess-qitem:hover::before { opacity: 1; }
 .tsess-qmeta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .tsess-qnum { flex: none; font-size: 10.5px; font-weight: 800; color: var(--blue); background: color-mix(in srgb, var(--blue) 11%, transparent); border-radius: 999px; padding: 2px 8px; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+/* 질문 작성자 배지 — 여러 사람이 물은 세션에서만 노출(#1062). */
+.tsess-qwho { flex: none; font-size: 10.5px; font-weight: 700; color: var(--muted); background: color-mix(in srgb, var(--muted-2) 16%, transparent); border-radius: 999px; padding: 1px 7px; }
 .tsess-qwhen { flex: none; font-size: 11px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
 .tsess-qtext { font-size: 13.5px; line-height: 1.72; color: var(--ink); white-space: pre-wrap; word-break: break-word; }
 /* 긴 질문은 접어 둔다 — 한 질문이 목록을 다 잡아먹지 않게(펼침은 '더 보기'). */

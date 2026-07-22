@@ -898,8 +898,7 @@ function openHelp() {
         kb(['Shift 드래그'], 'Claude 안에서는 Shift 누른 채 드래그로 선택'),
         kb(['Claude 복사'], 'Claude 가 복사한 내용은 맥북 클립보드에도 자동으로 올라가요')),
       sec('도구 (오른쪽 위 버튼)',
-        // #1018 '내 질문' 상단 버튼 임시 숨김에 맞춰 사용법 안내에서도 숨김 — 부활 시 아래 줄 주석 해제.
-        // tool('내 질문', '이 세션에서 보낸 질문 목록 — 클릭하면 그 위치로 이동'),
+        tool('질문', '이 세션에서 AI 에게 보낸 질문 전부 — 클릭하면 그 위치로 이동'),
         tool('파일 탐색기', '파일 업로드·다운로드 (끌어다 놓아도 됨)'),
         tool('화면 복구', '화면이 깨지거나 스크롤이 안 될 때 재연결로 복구'),
         tool('환경 설정', '글꼴·크기·테마·커서·스크롤 속도')),
@@ -1030,8 +1029,8 @@ window.livelyJumpToPrompt = function (text) { try { jumpToPrompt(String(text || 
 //  복사는 항목의 '복사' 버튼(명시적 클릭)으로만 — 위 클립보드 불변식과 일관.
 function openMyPrompts() {
   const head = el('div', { class: 'help-head' },
-    el('h3', { text: '💬 내 질문' }),
-    el('p', { class: 'help-intro', text: '이 세션에서 내가 보낸 질문을 최신 순으로. 클릭하면 그 질문 위치로 이동해요.' }));
+    el('h3', { text: '💬 이 세션의 질문' }),
+    el('p', { class: 'help-intro', text: '이 세션에서 AI 에게 보낸 질문을 누가 보냈든 최신 순으로. 클릭하면 그 질문 위치로 이동해요.' }));
   const body = el('div', { class: 'help-body' }, el('div', { class: 'q-empty', text: '불러오는 중…' }));
   const pop = el('div', { class: 'pop pop-help' },
     el('button', { class: 'help-x', title: '닫기', text: '✕', onclick: () => back.remove() }),
@@ -1057,6 +1056,7 @@ function openMyPrompts() {
       body.replaceChildren(el('div', { class: 'q-empty', text: (d && d.found) ? '이 세션에서 보낸 질문이 아직 없어요.' : '이 세션의 대화 기록을 찾지 못했어요.' }));
       return;
     }
+    const multiAuthor = new Set(prompts.map((p) => p.author).filter(Boolean)).size > 1;
     const search = el('input', { class: 'q-search', type: 'search', placeholder: '이 세션의 질문 검색…' });
     const cap = el('div', { class: 'q-cap' });
     const list = el('div', { class: 'q-list' });
@@ -1071,9 +1071,11 @@ function openMyPrompts() {
       list.replaceChildren();
       if (!shown.length) { list.append(el('div', { class: 'q-empty', text: '일치하는 질문이 없어요.' })); return; }
       shown.forEach((x) => {
+        // 작성자 배지 — 이 세션에 질문한 사람이 둘 이상일 때만(혼자 쓴 세션엔 소음).
+        const who = multiAuthor && x.p.author ? el('span', { class: 'q-who', title: '이 질문을 보낸 사람', text: x.p.author }) : null;
         list.append(el('div', { class: 'q-item', title: '클릭하면 터미널에서 이 질문 위치로 이동', onclick: () => { back.remove(); jumpToPrompt(x.p.text); } },
           el('div', { class: 'q-meta' },
-            el('span', { class: 'q-num', text: '#' + x.num }), el('span', { class: 'q-when', text: fmtWhen(x.p.ts) }),
+            el('span', { class: 'q-num', text: '#' + x.num }), ...(who ? [who] : []), el('span', { class: 'q-when', text: fmtWhen(x.p.ts) }),
             el('span', { class: 'q-spacer' }),
             el('button', { class: 'q-copy', title: '이 질문 텍스트 복사', text: '복사', onclick: (e) => { e.stopPropagation(); copyText(x.p.text); } })),
           el('div', { class: 'q-text', text: x.p.text })));
@@ -1157,9 +1159,12 @@ async function boot() {
     el('button', { class: 'tbtn', text: '📁 파일 탐색기', title: '파일 탐색기 열기/닫기 (업로드·다운로드)', onclick: toggleExplorer }),
     projectBtnEl, titleEl,
     el('span', { class: 'spacer' }), statusEl,
-    // #1018 '내 질문' 상단 버튼 임시 숨김(상민님 요청, 2026-07-20) — 아직 제대로 작동하지 않아 버튼만 억제.
-    //  기능(openMyPrompts·#967 구현·서버 /prompts)은 그대로 보존 — 부활 시 아래 줄 주석 해제.
-    // el('button', { class: 'tbtn', text: '💬 내 질문', title: '이 세션에서 클로드에게 보낸 질문 목록 — 클릭하면 그 위치로 이동', onclick: openMyPrompts }),
+    // #1018 로 임시로 숨겼던 버튼을 #1062 에서 되살렸다 — 당시 '제대로 작동하지 않던' 원인은 목록 수집이었다:
+    //  서버가 공유 ~/.claude 의 **최신 대화 파일 하나**만 읽어, 멤버 프로필(#1014 이후 세션의 실제 기록 위치)과
+    //  같은 폴더의 다른 대화가 통째로 빠졌다. 이제 전부 합쳐 준다(src/terminal-transcript.ts).
+    //  '그 위치로 이동'은 여전히 화면 탐색 휴리스틱이라 못 찾을 수 있는데, 그 경우엔 조용히 실패하지 않고 토스트로 알린다.
+    //  ⚠ 이 버튼은 그리드 각 셀(iframe=이 페이지)마다 하나씩 있어야 한다 — 그리드 상단 통합검색은 대체재가 아니다.
+    el('button', { class: 'tbtn', text: '💬 질문', title: '이 세션에서 AI 에게 보낸 질문 전부(누가 보냈든) — 클릭하면 그 위치로 이동', onclick: openMyPrompts }),
     el('button', { class: 'tbtn', text: '⟳ 화면 복구', title: '화면이 깨지거나 어긋났을 때 재연결로 복구(소프트 새로고침)', onclick: softReconnect }),
     el('button', { class: 'tbtn', text: '⚙ 환경 설정', onclick: openSettings }),
     el('button', { class: 'tbtn', text: 'ⓘ 사용법 안내', title: '터미널·단축키 간단 사용법', onclick: openHelp }));

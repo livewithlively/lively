@@ -491,7 +491,7 @@ function tsessCard(s, ctx) {
     const info = el('div', { class: 'tsess-info' }, ...[title, workTitle, meta].filter(Boolean));
     // 액션 — 열기(항상) + 내 질문(노드 세션도 트랜스크립트 릴레이 #875 ③) + 소유자면 수정·종료.
     const acts = el('div', { class: 'tsess-acts' }, el('button', { class: 'tsess-open', text: '열기', onclick: () => window.open(termUrl(s.id, s.label, s.node && s.node.id), '_blank') }));
-    acts.append(el('button', { class: 'tsess-icon tsess-q', title: '이 세션에서 클로드에게 보낸 내 질문만 순서대로 모아보기', text: '내 질문', onclick: () => openSessPrompts(s) }));
+    acts.append(el('button', { class: 'tsess-icon tsess-q', title: '이 세션에서 AI 에게 보낸 질문 전부(누가 보냈든) 순서대로 모아보기', text: '질문', onclick: () => openSessPrompts(s) }));
     if (s.owned) {
         acts.append(el('button', { class: 'tsess-icon', title: '이름·초대 수정', text: '수정', onclick: () => openTermEdit(s, cfg, view) }));
         // '삭제'가 아니라 '종료' — 실제로 하는 일은 tmux 세션을 끝내는 것이고, 대화록(중앙 세션 기록)은 남아
@@ -657,6 +657,30 @@ function qHighlight(text, terms) {
         wrap.append(document.createTextNode(text.slice(pos)));
     return wrap;
 }
+// 질문 작성자 배지 — 백엔드가 준 author(멤버 슬러그, 공유 트리 출처는 빈 값)를 사람 이름으로.
+//  이름은 /terminal/config 의 members 로 한 번만 조회해 캐시(팝업이 대시보드에서도 열리므로 cfg 를 못 받는다).
+let _qMembers = null;
+async function qMemberName(slug) {
+    if (!slug)
+        return '';
+    if (_qMembers === null) {
+        try {
+            const c = await api('/api/ui/terminal/config');
+            _qMembers = (c && c.members) || [];
+        }
+        catch {
+            _qMembers = [];
+        }
+    }
+    const m = (_qMembers || []).find((x) => x.id === slug || String(x.id || '').toLowerCase() === slug);
+    return (m && (m.name || m.id)) || slug;
+}
+// 작성자가 둘 이상일 때만 배지를 단다 — 혼자 쓴 세션에 배지를 붙이면 소음이다.
+function qAuthorBadge(author, names) {
+    if (!author || !names)
+        return null;
+    return el('span', { class: 'tsess-qwho', title: '이 질문을 보낸 사람', text: names.get(author) || author });
+}
 // 긴 질문 접기 — 항목을 리스트에 붙인 '뒤에' 호출한다(DOM 에 있어야 높이를 잰다). 8줄을 넘으면 접고
 //  '더 보기' 토글을 단다. 넘지 않으면 clamp 를 떼고 아무것도 안 붙인다(짧은 질문은 그대로).
 function qClampText(item, textEl) {
@@ -676,7 +700,9 @@ function qClampText(item, textEl) {
 //  대시보드 '내 AI 세션' 카드의 ⋮ 메뉴도 이걸 그대로 재사용한다(#853) — 질문 보기 UI 를 두 벌 만들지 않는다.
 export async function openSessPrompts(s) {
     const body = el('div', { class: 'tsess-qbody' }, el('div', { class: 'caption', text: '질문을 불러오는 중…' }));
-    overlay('💬 내 질문 · ' + (s.label || '(이름 없음)'), body);
+    // '내 질문'이 아니라 '이 세션의 질문' — 백엔드가 이 세션 폴더의 모든 대화(공유 + 멤버별 프로필)를 합쳐
+    //  누가 던졌든 사람 질문 전부를 준다. 여러 사람이 물었으면 항목에 작성자 배지가 붙는다.
+    overlay('💬 이 세션의 질문 · ' + (s.label || '(이름 없음)'), body);
     try {
         const d = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/prompts' + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''));
         const prompts = (d && d.prompts) || [];
@@ -684,6 +710,12 @@ export async function openSessPrompts(s) {
         if (!prompts.length) {
             body.replaceChildren(el('div', { class: 'empty', text: (d && d.found) ? '이 세션에서 보낸 질문이 아직 없어요.' : '이 세션의 대화 기록을 찾지 못했어요.' }));
             return;
+        }
+        // 작성자가 2명 이상이면 이름 맵을 만들어 배지를 단다(1명이면 null → 배지 없음).
+        const authors = [...new Set(prompts.map((p) => p.author).filter(Boolean))];
+        let authorNames = null;
+        if (authors.length > 1) {
+            authorNames = new Map(await Promise.all(authors.map(async (a2) => [a2, await qMemberName(a2)])));
         }
         const search = el('input', { class: 'tsess-qsearch', type: 'search', placeholder: '이 세션의 질문 검색…' });
         const cap = el('div', { class: 'caption tsess-qcap' });
@@ -696,7 +728,7 @@ export async function openSessPrompts(s) {
                 cap.textContent = total + '개 질문 · 최근 순' + (total > prompts.length ? ' (최근 ' + prompts.length + '개)' : '');
                 prompts.slice().reverse().forEach((p) => {
                     const txt = qHighlight(p.text, null);
-                    const item = el('div', { class: 'tsess-qitem' }, el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + (prompts.indexOf(p) + 1) }), el('span', { class: 'tsess-qwhen', text: qWhen(p.ts) })), txt);
+                    const item = el('div', { class: 'tsess-qitem' }, el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + (prompts.indexOf(p) + 1) }), ...[qAuthorBadge(p.author, authorNames)].filter(Boolean), el('span', { class: 'tsess-qwhen', text: qWhen(p.ts) })), txt);
                     list.append(item);
                     qClampText(item, txt);
                 });
@@ -720,7 +752,7 @@ export async function openSessPrompts(s) {
             }
             pool.forEach(({ p, chrono }) => {
                 const txt = qHighlight(p.text, terms);
-                const item = el('div', { class: 'tsess-qitem' }, el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + chrono }), el('span', { class: 'tsess-qwhen', text: qWhen(p.ts) })), txt);
+                const item = el('div', { class: 'tsess-qitem' }, el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + chrono }), ...[qAuthorBadge(p.author, authorNames)].filter(Boolean), el('span', { class: 'tsess-qwhen', text: qWhen(p.ts) })), txt);
                 list.append(item);
                 qClampText(item, txt);
             });
