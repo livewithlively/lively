@@ -5628,7 +5628,7 @@ function installMinterBlock(data, gw, opts = {}) {
         }
         go.disabled = false;
     });
-    return el('div', { class: 'deploy-block' }, el('h3', { class: 'member-add-step', text: opts.title || '토큰 발급 (새 팀원 추가)' }), el('p', { class: 'admin-hint', text: '구성원을 고르고 [토큰 발급]을 누르면 그 사람 전용 토큰이 만들어집니다. 이 토큰은 그 구성원의 AI(Claude Code·Codex)와 lively 명령이 라이블리 게이트웨이에 접속할 때 쓰는 열쇠입니다. 웹에서도 로그인 화면 아래 [토큰으로 로그인]에 붙여넣어 들어올 수 있습니다 — 평소 웹 로그인은 이메일과 비밀번호로 합니다.' }), el('div', { class: 'install-minter' }, sel, go), result);
+    return el('div', { class: 'deploy-block' }, el('h3', { class: 'member-add-step', text: opts.title || '토큰 발급 (새 팀원 추가)' }), el('p', { class: 'admin-hint', text: '구성원을 고르고 [토큰 발급]을 누르면 그 사람 전용 토큰이 만들어집니다. 이 토큰은 그 구성원의 AI(Claude Code·Codex)와 lively 명령이 라이블리 게이트웨이에 접속할 때 쓰는 열쇠입니다. 최초 1회 라이블리에 로그인 시 필요합니다. 토큰을 발급하고 해당 구성원에게 전달해주세요.' }), el('div', { class: 'install-minter' }, sel, go), result);
 }
 // 유지보수 명령 — #864 부터 **OS 무관**이다(lively CLI 가 mac/win 을 흡수). gw/os 는 부트스트랩 폴백 안내에만 쓴다.
 //  종전엔 여기 OS별로 갈라진 1,400자 PowerShell 과 sed 범벅 bash 가 각각 들어 있었다.
