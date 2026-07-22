@@ -110,13 +110,20 @@ render_service_unit() {
   case "$(detect_os)" in
     linux)
       local unit="/etc/systemd/system/context-ontology-gateway.service"
+      # #1059 B — 게이트웨이 서비스 cgroup 소프트 상한. GATEWAY_MEMORY_HIGH_MB(양의 정수) 설정 시에만 MemoryHigh 줄을 채운다.
+      #  비었거나 0/비정수면 빈 줄 = 무제한 = **무회귀**(대다수 박스는 안 걸어도 됨 — D per-session 캡이 근본, 이건 보조).
+      local mem_high_line=""
+      if [ -n "${GATEWAY_MEMORY_HIGH_MB:-}" ] && printf '%s' "${GATEWAY_MEMORY_HIGH_MB}" | grep -qE '^[0-9]+$' && [ "${GATEWAY_MEMORY_HIGH_MB}" -gt 0 ]; then
+        mem_high_line="MemoryHigh=${GATEWAY_MEMORY_HIGH_MB}M"
+      fi
       sed -e "s#@APP_DIR@#$APP_DIR#g" \
           -e "s#@APP_USER@#$svc_user#g" \
           -e "s#@NODE_BIN@#$node_bin#g" \
+          -e "s#@MEMORY_HIGH_LINE@#$mem_high_line#g" \
           -e "s#@PATH@#$node_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$svc_home/.npm-global/bin#g" \
           "$DEPLOY_DIR/linux/context-ontology-gateway.service" | sudo tee "$unit" >/dev/null
       sudo systemctl daemon-reload
-      ok "systemd 유닛 렌더: $unit (User=$svc_user)"
+      ok "systemd 유닛 렌더: $unit (User=$svc_user${mem_high_line:+, $mem_high_line})"
       ;;
     mac)
       local plist="$HOME/Library/LaunchAgents/io.lvly.context-ontology.plist"
