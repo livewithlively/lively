@@ -1166,9 +1166,6 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .aiacct-name { font-size: 14.5px; font-weight: 700; color: var(--ink); }
 .aiacct-sub { margin-top: 3px; font-size: 12.5px; color: var(--muted-head); }
 .aiacct-act { flex: none; display: flex; gap: 8px; align-items: center; }
-/* '서버 공용 계정' 안내 — 아래 상태가 내 것이 아닐 수 있음을 목록 **위에서** 먼저 알린다(#1085 오해 수정). */
-.aiacct-note { margin: 0 0 4px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px;
-  background: var(--bg-tint); font-size: 12.5px; line-height: 1.55; color: var(--ink-sub); }
 /* 서비스별 탭(내 서비스 로그인, #762) — .chip 재사용한 탭 바 + 선택 서비스 패널. */
 .svc-tabs { margin-bottom: 16px; }
 .svc-tab { gap: 6px; }

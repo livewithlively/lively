@@ -6289,14 +6289,10 @@ function myAiAccountsCard() {
       const meId = (state.me && (state.me.userId || state.me.email)) || '';
       const mine = (((ses || {}) as any).sessions || []).filter((s) => s.owner === meId);   // 프로젝트 세션은 전원 공개라 소유자로 좁힌다
       const accounts = ((acc || {}) as any).accounts || [];
-      // 공용 계정이 하나라도 있으면 **먼저** 알린다 — 그걸 모르면 아래 '연결됨'을 자기가 연결한 것으로 오해한다.
-      const anyShared = accounts.some((a) => a.scope === 'shared');
-      body.replaceChildren(
-        anyShared ? el('p', { class: 'aiacct-note' },
-          ...inlineBold('이 서버는 구성원별 AI 계정 격리가 없습니다 — 아래 **‘서버 공용’ 표시가 붙은 AI 는 서버 전체가 같은 계정**을 씁니다. 내가 연결한 것이 아닐 수 있고, 여기서 로그인하면 다른 구성원에게도 그대로 적용됩니다.')) : null,
-        ...(accounts.length
-          ? accounts.map((a) => aiAccountRow(a, mine, load))
-          : [el('p', { class: 'admin-hint', text: '이 서버에 로그인이 필요한 AI 가 없습니다.' })]));
+      // 공용 계정이라는 사실은 행의 '서버 공용' 배지(+툴팁)로 충분하다 — 같은 말을 배너로 또 적지 않는다(사용자 요구).
+      body.replaceChildren(...(accounts.length
+        ? accounts.map((a) => aiAccountRow(a, mine, load))
+        : [el('p', { class: 'admin-hint', text: '이 서버에 로그인이 필요한 AI 가 없습니다.' })]));
     } catch (e) { body.replaceChildren(errorNote(e, '내 AI 계정 상태를 불러오지 못했습니다')); }
   };
   void load();
