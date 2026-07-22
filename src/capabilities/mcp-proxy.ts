@@ -120,9 +120,11 @@ export async function refreshProxySnapshot(name: string, actor?: string): Promis
     if (name === "google-gmail" && gwSecret) {
       try {
         const raw = Buffer.from("To: probe@example.com\r\nSubject: lively-write-probe\r\n\r\nprobe", "utf8").toString("base64url");
+        // gwSecret 은 auth() 갱신 전 캡처본(만료 가능 → 401 오염) → listTools 로 auth() 가 갱신한 vault 토큰을 다시 읽어 프로빙.
+        const freshTok = (await authProvider?.tokens())?.access_token ?? gwSecret;
         const wr = await makeSsrfFetch({ allowedInternalHosts: [], selfHosts: [], timeoutMs: CALL_TIMEOUT_MS })(
           "https://gmail.googleapis.com/gmail/v1/users/me/drafts",
-          { method: "POST", headers: { authorization: `Bearer ${gwSecret}`, "content-type": "application/json" }, body: JSON.stringify({ message: { raw } }) },
+          { method: "POST", headers: { authorization: `Bearer ${freshTok}`, "content-type": "application/json" }, body: JSON.stringify({ message: { raw } }) },
         );
         const wb = await wr.text();
         gmailWriteProbe = `Gmail API 직접 drafts.create → status=${wr.status} body=${wb.slice(0, 600)}`;
