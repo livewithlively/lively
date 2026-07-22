@@ -1082,8 +1082,9 @@ export const deliveryCapabilities: Capability[] = [
         return { override, byDefault: targetsMember(targetMembers, userId), effective: effectiveVisible({ enabled: true, targetMembers, memberId: userId, override }) };
       };
       const lively = {
-        skills: assets.filter((a) => a.enabled).map((a) => ({ id: a.id, kind: a.kind, label: a.label, description: a.description, harness: a.harness, ...meta("harness_asset", a.id, a.target_members) })),
-        hooks: hooks.filter((h) => h.enabled).map((h) => ({ id: h.id, label: h.label, event: h.event, harness: h.harness, ...meta("org_hook", h.id, h.target_members) })),
+        // summary — 화면에 보이는 '쉬운 한 줄'(#1085). description(하네스 트리거 문장)과 별개다.
+        skills: assets.filter((a) => a.enabled).map((a) => ({ id: a.id, kind: a.kind, label: a.label, description: a.description, summary: a.summary, harness: a.harness, ...meta("harness_asset", a.id, a.target_members) })),
+        hooks: hooks.filter((h) => h.enabled).map((h) => ({ id: h.id, label: h.label, event: h.event, note: h.note, summary: h.summary, harness: h.harness, ...meta("org_hook", h.id, h.target_members) })),
       };
       const livelyIds = new Set<string>([...lively.skills, ...lively.hooks].map((x) => x.id));
       // 머신별로 라이블리 자산과 대조 + 그 머신의 로컬 토글 지시(disabled) 반영.
@@ -1961,7 +1962,7 @@ export const deliveryCapabilities: Capability[] = [
     "proxy 모드 MCP 서버의 상류 tools/list 를 다시 캡처해 스냅샷(핀)으로 저장한다 — 버전업/새 툴 반영. 다음 세션부터 구성원에 전파(재설치 0).",
     [{ method: "POST", paths: ["/api/ui/org/mcp-server/refresh"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
-      let r: { count: number };
+      let r: { count: number; gmailWriteProbe?: string };
       try {
         r = await refreshProxySnapshot(slug(input.name, "name"), actorOf(user));
       } catch (e) {
@@ -1971,7 +1972,7 @@ export const deliveryCapabilities: Capability[] = [
       }
       // in-session push(#746 T5) — sessioned 클라들에 tools/list_changed 즉시 전파(무상태면 no-op). 발행=라이브 반영.
       const pushed = broadcastToolListChanged();
-      return { ok: true, tool_count: r.count, live_pushed_sessions: pushed };
+      return { ok: true, tool_count: r.count, live_pushed_sessions: pushed, ...(r.gmailWriteProbe ? { gmail_write_probe: r.gmailWriteProbe } : {}) };
     }, {
       name: z.string().describe("스냅샷을 다시 뜰 proxy 모드 MCP 서버 이름"),
     }),
@@ -2260,6 +2261,8 @@ export const deliveryCapabilities: Capability[] = [
         harness: harness as HookHarness | undefined, event, matcher, source_code: sourceCode,
         timeout_sec: timeout === undefined ? undefined : Math.floor(timeout),
         note: input.note == null ? undefined : str(input.note, "note", 500),
+        // summary — 구성원 화면([내 스킬·훅])에 보이는 '쉬운 한 줄'(#1085). note(운영 메모)와 별개.
+        summary: input.summary === undefined ? undefined : str(input.summary, "summary", 300),
         target_members: targetMembers,
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
@@ -2277,6 +2280,7 @@ export const deliveryCapabilities: Capability[] = [
       target_members: z.array(z.string()).nullable().optional().describe("이 훅을 받을 멤버 id 배열. null/빈=전원, 미전송=기존 유지(#699)"),
       label: z.string().optional().describe("훅 라벨(표시명)"),
       note: z.string().optional().describe("메모"),
+      summary: z.string().optional().describe("구성원 화면에 보이는 쉬운 한 줄 설명(무슨 일을 하는 훅인지)"),
       enabled: z.boolean().optional().describe("활성 여부"),
       sort: z.number().optional().describe("정렬 순서"),
     }),
@@ -2472,23 +2476,30 @@ export const deliveryCapabilities: Capability[] = [
     [{ method: "POST", paths: ["/api/ui/org/harness-asset"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       const id = assertAssetId(input.id);
-      const kind = str(input.kind ?? "skill", "kind", 12);
-      if (!HARNESS_ASSET_KINDS.has(kind)) throw new HttpError(400, `kind 는 ${[...HARNESS_ASSET_KINDS].join("|")} 만 허용됩니다`);
-      const harness = input.harness === undefined ? "all" : str(input.harness, "harness", 12);
-      if (!HOOK_HARNESSES.has(harness)) throw new HttpError(400, "harness 는 claude|codex|openclaw|all");
-      const description = str(input.description ?? "", "description", 2000);
-      const body = str(input.body ?? "", "body", 262144);
-      const frontmatter = parseAssetFrontmatter(input.frontmatter);
-      assertNoHardSecrets(description, "description");
-      assertNoHardSecrets(body, "body"); // 자산 본문도 멤버 디스크로 나가므로 평문 시크릿 hard-block
-      assertNoHardSecrets(JSON.stringify(frontmatter), "frontmatter");
-      const targetMembers = parseTargetMembers(input.target_members);
-      const pairedHookId = (input.paired_hook_id === undefined || input.paired_hook_id === null || input.paired_hook_id === "")
-        ? null : assertHookId(input.paired_hook_id);
+      // 미전송 = 기존 유지(부분수정 안전). 전송했을 때만 검증한다.
+      const kind = input.kind === undefined ? undefined : str(input.kind, "kind", 12);
+      if (kind !== undefined && !HARNESS_ASSET_KINDS.has(kind)) throw new HttpError(400, `kind 는 ${[...HARNESS_ASSET_KINDS].join("|")} 만 허용됩니다`);
+      const harness = input.harness === undefined ? undefined : str(input.harness, "harness", 12);
+      if (harness !== undefined && !HOOK_HARNESSES.has(harness)) throw new HttpError(400, "harness 는 claude|codex|openclaw|all");
+      // ⚠ 부분수정 보존 — 미전송 필드는 **undefined 로 넘겨 기존 값을 지킨다**. 예전엔 `input.x ?? ""` 라
+      //  summary 만 고치려고 id+summary 만 보내면 description·body 가 빈 문자열로 덮여 **본문이 날아갔다**.
+      //  (store 의 `a.field ?? before.field` 는 undefined 일 때만 보존한다.)
+      const description = input.description === undefined ? undefined : str(input.description, "description", 2000);
+      // summary — 관리탭·구성원 화면에 보이는 '쉬운 한 줄'(#1085). description(하네스가 언제 쓸지 판단하는
+      //  트리거 문장)을 그대로 보여주면 무슨 기능인지 안 읽혀서 표시용을 따로 받는다.
+      const summary = input.summary === undefined ? undefined : str(input.summary, "summary", 300);
+      const body = input.body === undefined ? undefined : str(input.body, "body", 262144);
+      const frontmatter = input.frontmatter === undefined ? undefined : parseAssetFrontmatter(input.frontmatter);
+      if (description !== undefined) assertNoHardSecrets(description, "description");
+      if (body !== undefined) assertNoHardSecrets(body, "body"); // 자산 본문도 멤버 디스크로 나가므로 평문 시크릿 hard-block
+      if (frontmatter !== undefined) assertNoHardSecrets(JSON.stringify(frontmatter), "frontmatter");
+      const targetMembers = input.target_members === undefined ? undefined : parseTargetMembers(input.target_members);
+      const pairedHookId = input.paired_hook_id === undefined ? undefined
+        : ((input.paired_hook_id === null || input.paired_hook_id === "") ? null : assertHookId(input.paired_hook_id));
       const asset = await upsertOrgHarnessAsset({
-        id, kind: kind as AssetKind,
+        id, kind: kind as AssetKind | undefined,
         label: input.label == null ? undefined : str(input.label, "label", 200).trim(),
-        harness: harness as HookHarness, description, body, frontmatter,
+        harness: harness as HookHarness | undefined, description, summary, body, frontmatter,
         target_members: targetMembers, paired_hook_id: pairedHookId,
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
@@ -2496,6 +2507,7 @@ export const deliveryCapabilities: Capability[] = [
       return { asset, ...seedAssetSyncWarning(id) };
     }, {
       id: z.string().describe("자산 id(슬러그) — 있으면 수정, 없으면 생성. 스킬이면 이 id 가 스킬 이름이 된다"),
+      summary: z.string().optional().describe("화면에 보이는 쉬운 한 줄 설명(무슨 기능인지). 비우면 description 첫 문장으로 폴백"),
       kind: z.enum(["skill", "subagent", "command"]).optional().describe("자산 종류(기본 skill)"),
       body: z.string().optional().describe("자산 본문 — 멤버 디스크에 파일로 materialize 된다. 평문 시크릿 hard-block"),
       description: z.string().optional().describe("자산 설명(하네스가 소환 판단에 쓴다)"),

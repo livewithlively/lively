@@ -671,7 +671,24 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .member-read-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
 .member-read-head h3 { margin: 0; }
 /* 구성원 추가 패널 — ①/② 단계 헤더 */
-.member-add-step { margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+/* 카드 안 소제목(#1085) — 카드 제목(16px)보다 **작아야** 한다. 예전엔 h3 UA 크기(≈17.5px)라
+   '접속 토큰 발급'이 카드 제목 '접속 토큰'보다 커 위계가 뒤집혀 있었다. */
+.member-add-step, .admin-subhead-2 { margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--line);
+  font-size: 13.5px; font-weight: 800; color: var(--ink); letter-spacing: -.1px; }
+/* 목록 머리 — 소제목 + 오른쪽 검색·개수 도구.
+   ⚠ 구분선은 **머리 줄 전체**가 가져야 한다. 제목(h4)에만 border-top 을 두면 선이 검색창 앞에서 뚝 끊겨
+   화면이 깨져 보였다(#1085 사용자 지적). */
+.tok-listhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+.tok-listhead .admin-subhead-2 { flex: 1 1 auto; margin: 0; padding-top: 0; border-top: 0; }
+.tok-tools { display: flex; align-items: center; gap: 8px; }
+.tok-search { width: 210px; }
+.tok-per { width: auto; }
+/* 토큰 행 — 이름/메타(왼쪽) + 동작(오른쪽). 권한 목록이 길어 메타가 넘치지 않게 한 줄로 자른다. */
+.token-row { padding-left: 8px; padding-right: 8px; margin: 0 -8px; border-radius: 8px; }
+.token-row:hover { background: var(--bg-tint); }
+.token-main { flex: 1 1 auto; }
+.token-main .mini-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* 상세 박스 내부(목록·편집) 기본 = 세로 스택. 단독으로 쓰는 곳은 이제 없고,
    .admin-two-cols(마스터-디테일)의 좁은화면 폴백 겸 베이스로만 남는다.
@@ -1175,25 +1192,38 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 /* 카드 섹션 제목 줄 — 제목 + 오른쪽 ⓘ(#1085). 설명은 화면에 깔지 않고 아이콘 뒤 팝오버로. */
 .card-head-row { display: flex; align-items: center; gap: 6px; margin: 0 0 14px; }
 .card-head-row h3 { margin: 0; font-size: 16px; font-weight: 800; letter-spacing: -.2px; }
+.card-head-act { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 /* 내 스킬·훅(#1085) — 두 층 위계: hlayer(어디서 온 것: 조직 배포 / 내 컴퓨터) ▸ hgroup(종류: 스킬 / 훅).
    전에는 h4·h5 크기 차이만으로 눌러 담아 두 층이 안 읽혔다. 층은 위 여백+구분선으로, 종류는 접이식 머리로 만든다. */
 .hlayer { margin-top: 26px; }
 .hlayer:first-child { margin-top: 4px; }
 .hlayer-head { display: flex; align-items: center; gap: 6px; padding-bottom: 8px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
 .hlayer-title { margin: 0; font-size: 14.5px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
-.hgroup { border-bottom: 1px solid var(--line-row); }
+.hgroup { border-bottom: 1px solid var(--line-row); padding-bottom: 4px; }
 .hgroup:last-child { border-bottom: 0; }
-.hgroup-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 11px 2px; background: none; border: 0;
-  cursor: pointer; text-align: left; font-family: inherit; }
-.hgroup-head:hover .hgroup-title { color: var(--blue); }
-.hgroup-caret { width: 12px; flex: none; color: var(--muted-2); font-size: 11px; }
+.hgroup-head-row { display: flex; align-items: center; gap: 8px; padding: 12px 2px 6px; }
 .hgroup-title { font-size: 13.5px; font-weight: 700; color: var(--ink); }
 .hgroup-count { display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 999px;
   background: var(--bg-tint-2); color: var(--muted-head); font-size: 11.5px; font-weight: 700; }
-.hgroup-body { padding: 2px 0 12px 20px; }
-/* 항목 한 줄 — 내용(왼쪽) + 켜기/끄기(오른쪽). */
-.hrow { display: flex; align-items: flex-start; gap: 12px; }
-.hrow-act { display: flex; align-items: center; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+.hgroup-body { padding: 0 0 4px; }
+.hgroup-more { padding: 2px 0 10px; }
+/* 켬/끔 스위치 — 현재 상태는 형태로(파랑·오른쪽=켜짐), 기본값·내 변경 여부는 옆 글이 말한다(#1085). */
+.sw { position: relative; flex: none; width: 40px; height: 23px; padding: 0; border: 0; border-radius: 999px;
+  background: var(--muted-3); cursor: pointer; transition: background .15s ease; }
+.sw.on { background: var(--blue); }
+.sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 17px; height: 17px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgba(21, 35, 59, .25); transition: transform .15s ease; }
+.sw.on::after { transform: translateX(17px); }
+.sw:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+/* 라벨은 스위치 **왼쪽**에서 오른쪽 정렬 — 스위치가 항상 행의 같은 자리(맨 오른쪽)에 서서, 글자 길이에
+   따라 좌우로 밀리지 않는다(사용자 지적). */
+.sw-labels { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+.sw-state { font-size: 12.5px; font-weight: 700; color: var(--muted-head); }
+.sw-state.on { color: var(--blue); }
+.sw-note { font-size: 11px; color: var(--muted-2); white-space: nowrap; }
+/* 항목 한 줄 — 왼쪽 내용(제목·요약·PC 칩) + 오른쪽 켬/끔. 왼쪽이 여러 줄이어도 컨트롤은 세로 가운데. */
+.hrow { display: flex; align-items: center; gap: 14px; }
+.hrow-act { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex: none; }
 
 /* 제목 옆 부가 표시(#1085) — '(개발자용)' 처럼 괄호로 붙이던 것을 칩으로. 제목보다 작고 조용하게. */
 .head-badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px;
@@ -2596,6 +2626,8 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .proj-person-status.filled.me:hover { background: var(--bg-tint-2); }
 .proj-status-pen { color: var(--muted-2); font-size: 10px; }
 .proj-person-status.filled.me:hover .proj-status-pen { color: var(--blue); }
+/* 팀원은 아니지만 이 프로젝트에서 세션을 연 사람(#1088) — 프로필은 뜨되 팀원과 헷갈리지 않게 옅게 표시 */
+.proj-person-status.guest { color: var(--muted-2); font-size: 11.5px; font-weight: 600; }
 .proj-people-panel { margin-top: 0; }
 .proj-people-panel:empty { display: none; }
 .proj-panel-head { display: flex; align-items: center; gap: 4px; font-size: 13.5px; color: var(--ink); padding: 6px 2px 10px; border-top: 1px solid var(--line); margin-top: 0; }
