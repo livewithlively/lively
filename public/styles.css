@@ -1471,6 +1471,14 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .prof-chip { padding: 6px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--ink-sub); font-size: 13px; font-weight: 600; cursor: pointer; transition: border-color .12s, color .12s, background .12s; }
 .prof-chip:hover { border-color: var(--blue); color: var(--ink); }
 .prof-chip.on { background: var(--blue); border-color: var(--blue); color: #fff; }
+/* 칩 줄에 이어 붙는 '직접 입력' 칸(#1085) — 프리셋 칩 다음에 오는 또 하나의 선택지라 같은 알약 모양·높이로.
+   폭은 내용에 관계없이 고정(칩들과 한 줄), 좁아지면 wrap 이 알아서 다음 줄로 넘긴다. */
+.field input.prof-chip-input, .prof-chip-input { padding: 6px 14px; width: 190px; max-width: 100%; box-sizing: border-box;
+  border: 1px dashed var(--line-net); border-radius: 999px; background: var(--bg); color: var(--ink);
+  font-size: 13px; font-weight: 600; line-height: 1.35; }
+.prof-chip-input::placeholder { color: var(--muted-2); font-weight: 500; }
+.prof-chip-input:hover { border-color: var(--blue); }
+.prof-chip-input:focus { outline: none; border-style: solid; border-color: var(--blue); background: var(--bg-tint); }
 
 /* ③ 작업 타임라인(펼침형) */
 .dash-feed .act-card { border-bottom: 1px solid var(--line-row); }
