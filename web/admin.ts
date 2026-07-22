@@ -6211,6 +6211,85 @@ export async function openMyProfileModal(): Promise<void> {
     el('div', { class: 'admin-actions' }, saveBtn, status));
 }
 
+// ── [내 설정 ▸ 내 AI 설정] 상단 박스 — 내 AI 계정(#1085). ──
+//  아래 박스가 '내 AI 에게 무엇을 알려줄까'(개인 규칙)라면, 이 박스는 '내 AI 가 **무엇으로, 누구 계정으로** 도는가'다.
+//  성격이 달라 한 박스에 섞지 않고 위에 별도 카드로 둔다(사용자 요구).
+//  · 무엇으로 — 하네스(Claude Code · Codex). 지금 내 세션이 실제로 어느 것으로 떠 있는지 개수로 보여준다.
+//  · 누구 계정으로 — 서버가 보는 자격증명 존재 여부(scope=isolated/profile/shared, /api/ui/me/ai-accounts).
+//  로그인은 그 AI 를 띄운 **개인 세션**을 새 탭으로 열어 사람이 직접 한다(OAuth 는 브라우저 흐름이라 대행 불가) —
+//  AI세션 탭의 [내 계정 로그인]과 같은 경로(loginProfile)를 재사용한다.
+const AI_LOGIN_HINT: Record<string, string> = {
+  claude: '열린 세션의 claude 에서 /login 을 실행하세요.',
+  codex: '열린 세션에서 codex 를 실행하면 로그인 안내가 나옵니다.',
+};
+function aiAccountRow(a, mySessions, reload) {
+  const mine = (mySessions || []).filter((s) => s.harness === a.key);
+  const live = mine.filter((s) => s.agentState && s.agentState !== 'exited' && s.agentState !== 'offline');
+  // loggedIn 은 3-상태다: true=로그인 확정 · false=미로그인 확정 · null=서버가 알 수 없음(맥 키체인).
+  //  null 을 '로그인 전'으로 칠하면 거짓말이 되므로 따로 표시한다.
+  const badge = a.loggedIn === true ? el('span', { class: 'pill pill-ok', text: '로그인됨' })
+    : a.loggedIn === false ? el('span', { class: 'pill', text: '로그인 전' })
+      : el('span', { class: 'pill', text: '상태 확인 불가' });
+  // 공유 계정 = 이 서버의 호스트 홈 자격을 전 구성원이 함께 쓰는 상태. 로그아웃하면 남의 세션까지 끊기므로 잠근다.
+  const shared = a.scope === 'shared';
+  const openLogin = async (ev) => {
+    const btn = ev.currentTarget; btn.disabled = true;
+    try {
+      const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify({
+        label: '내 계정 로그인 (' + a.label + ')', rootKey: 'personal', subpath: '', harness: a.key, flags: {}, autoApprove: false, loginProfile: true,
+      }) });
+      toast('로그인용 세션을 열었습니다 — ' + (AI_LOGIN_HINT[a.key] || '그 세션에서 로그인하세요.'));
+      if (out && out.session) window.open('/ui/terminal.html?session=' + encodeURIComponent(out.session.id) + '&label=' + encodeURIComponent(out.session.label || ''), '_blank');
+    } catch (e: any) { toast('로그인 세션을 열지 못했습니다 — ' + ((e && e.message) || e), true); }
+    btn.disabled = false;
+  };
+  const logout = async (ev) => {
+    if (!confirm(a.label + ' 에서 로그아웃할까요?\n\n내 자격증명만 지웁니다(다시 로그인하면 복구됩니다). 이미 떠 있는 세션의 AI 는 그 자리에서 끊기지 않고, 다음 로그인부터 적용됩니다.')) return;
+    const btn = ev.currentTarget; btn.disabled = true;
+    try { await api('/api/ui/me/ai-accounts/logout', { method: 'POST', body: JSON.stringify({ harness: a.key }) }); toast(a.label + ' 로그아웃됨'); }
+    catch (e: any) { toast('로그아웃하지 못했습니다 — ' + ((e && e.message) || e), true); }
+    void reload();
+  };
+  return el('div', { class: 'storage-item' },
+    el('div', { class: 'storage-head' },
+      el('strong', { text: a.label }), badge,
+      el('span', { class: 'admin-hint', text: live.length ? `지금 내 세션 ${live.length}개가 이걸로 실행 중` : (mine.length ? `내 세션 ${mine.length}개(실행 종료)` : '지금 이걸로 뜬 내 세션 없음') })),
+    el('div', { class: 'admin-actions', style: 'margin-top:6px' },
+      // 로그인 버튼은 '로그인 확정'일 때만 감춘다 — 확인 불가(null)에서도 다시 로그인은 언제나 해가 없다.
+      a.loggedIn === true ? null : el('button', { type: 'button', class: 'btn btn-primary btn-sm', text: '🔑 로그인', onclick: openLogin }),
+      a.canLogout ? el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '로그아웃', onclick: logout }) : null,
+      // 안내는 겹칠 수 있다(공유 계정 + 키체인). 하나만 고르지 말고 해당되는 걸 모두 잇는다.
+      el('span', { class: 'admin-hint', text: [
+        a.loggedIn === null ? '이 서버(macOS)에서는 자격증명이 키체인에 저장돼 서버가 로그인 여부를 알 수 없습니다 — 로그아웃은 세션에서 ' + a.key + ' 실행 후 /logout.' : null,
+        shared ? '이 서버는 구성원 격리가 없어 이 AI 는 모든 구성원이 같은 계정으로 실행됩니다 — 로그아웃하면 다른 구성원 세션까지 끊겨 잠가 두었습니다.' : '자격증명 위치: ' + a.where,
+      ].filter(Boolean).join(' ') })));
+}
+function myAiAccountsCard() {
+  const body = el('div');
+  const card = el('div', { class: 'card' },
+    el('h3', { text: '내 AI 계정' }),
+    el('p', { class: 'caption', text: '내 AI 세션이 어떤 AI(Claude Code · Codex)로, 어느 계정으로 실행되는지입니다. 로그인은 처음 한 번만 하면 이후 내가 만드는 세션이 그 계정으로 뜹니다.' }),
+    body);
+  const load = async () => {
+    body.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+    try {
+      // 세션은 실패해도 계정 카드는 보여준다(개수는 부가정보) — 터미널이 없는 배포에서도 로그인 상태는 유효하다.
+      const [acc, ses] = await Promise.all([
+        api('/api/ui/me/ai-accounts'),
+        api('/api/ui/terminal/sessions?includeProjects=1').catch(() => ({ sessions: [] })),
+      ]);
+      const meId = (state.me && (state.me.userId || state.me.email)) || '';
+      const mine = (((ses || {}) as any).sessions || []).filter((s) => s.owner === meId);   // 프로젝트 세션은 전원 공개라 소유자로 좁힌다
+      const accounts = ((acc || {}) as any).accounts || [];
+      body.replaceChildren(...(accounts.length
+        ? accounts.map((a) => aiAccountRow(a, mine, load))
+        : [el('p', { class: 'admin-hint', text: '이 서버에 로그인이 필요한 AI 가 없습니다.' })]));
+    } catch (e) { body.replaceChildren(errorNote(e, '내 AI 계정 상태를 불러오지 못했습니다')); }
+  };
+  void load();
+  return card;
+}
+
 // ── [내 설정 ▸ 내 AI 설정] — 개인 레이어(org_member.body_md). ──
 //  #846 이 배선을 완성했다: previewMemberContext 가 `## 내 개인 규칙 (나에게만 적용 — 팀 공유 아님)` 블록으로
 //  **본인 세션에만** 싣는다(memberId = bearer principal — 남의 개인 규칙이 새지 않는다). 그 전엔 저장은 됐지만
@@ -6300,7 +6379,9 @@ async function myAiSection(detail) {
   const pv = previewExpander();
   detail.replaceChildren(
     sectionHead('내 AI 설정', null, '여기 입력·선택한 내용은 **내** AI가 매 세션을 시작할 때 \'내 개인 규칙\'으로 읽습니다 — 나에게만 적용되고 팀에는 공유되지 않아요. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).'),
+    myAiAccountsCard(),   // 위 박스 = 내 AI 가 '무엇으로·누구 계정으로' 도는가(#1085)
     el('div', { class: 'card admin-form-narrow' },
+      el('h3', { text: '내 AI 에게 알려줄 것' }),
       field('역할', roleIn),
       field('개발 이해도', el('div', {}, devChips, devHint)),
       field('호칭 (AI가 나를 부르는 말)', addressIn),

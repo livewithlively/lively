@@ -284,14 +284,30 @@ export async function provisionMemberOs(memberId: string, opts?: { includeContro
   return { slug, osUser: osUsername(slug) };
 }
 
-// box_ claude 로그인 여부 — ⚠ 게이트웨이(lively)는 멤버 700 홈을 '읽지' 못한다(격리의 본질). 대신 box_ 로 drop-priv 해서
-//  creds 파일 '존재'만 확인(내용은 안 봄). exit0=있음=로그인됨. 미프로비저닝/에러=false. UI 로그인 배너 숨김 판정용.
-async function memberClaudeLoggedIn(osUser: string): Promise<boolean> {
+// 하네스별 자격증명 파일(홈 기준 상대경로) — 로그인 여부 판정·로그아웃 대상의 단일 출처.
+//  ⚠ 값은 이 상수에서만 온다(사용자 입력이 셸 문자열에 들어가지 않는다).
+const HARNESS_CRED: Record<string, string> = {
+  claude: ".claude/.credentials.json",
+  codex: ".codex/auth.json",
+};
+
+// box_ 홈의 파일 존재 — ⚠ 게이트웨이(lively)는 멤버 700 홈을 '읽지' 못한다(격리의 본질). 대신 box_ 로 drop-priv 해서
+//  '존재'만 확인(내용은 안 봄). exit0=있음. 미프로비저닝/에러=false.
+async function memberFileExists(osUser: string, rel: string): Promise<boolean> {
   try {
-    const w = wrapAsMember(osUser, ["sh", "-c", 'test -f "$HOME/.claude/.credentials.json"']);
+    const w = wrapAsMember(osUser, ["sh", "-c", `test -f "$HOME/${rel}"`]);
     await execFileAsync(w[0], w.slice(1), { timeout: 5000 });
     return true;
   } catch { return false; }
+}
+// box_ 홈의 파일 삭제(로그아웃) — 같은 drop-priv 경계. rm -f 라 없는 파일에도 성공(멱등).
+async function memberFileRemove(osUser: string, rel: string): Promise<void> {
+  const w = wrapAsMember(osUser, ["sh", "-c", `rm -f "$HOME/${rel}"`]);
+  await execFileAsync(w[0], w.slice(1), { timeout: 5000 });
+}
+// UI 로그인 배너 숨김 판정용(claude 전용 축약 — 기존 호출부 유지).
+async function memberClaudeLoggedIn(osUser: string): Promise<boolean> {
+  return memberFileExists(osUser, HARNESS_CRED.claude);
 }
 // OS 격리 상태(#524) — UI 표시용. ready=인프라 준비(활성+Linux+box-spawn), provisioned=이 멤버 box_<slug> 존재,
 //  loggedIn=box_ 홈에 claude 자격증명 있음(drop-priv 확인). loggedIn 이면 UI 로그인 버튼 숨김.
@@ -299,6 +315,77 @@ export async function memberOsStatus(memberId: string): Promise<{ ready: boolean
   const osUser = osUsername(userSlug({ userId: memberId } as LivelyUser));
   const provisioned = await osUserExists(osUser);
   return { ready: isolationInfraReady(), provisioned, osUser, loggedIn: provisioned ? await memberClaudeLoggedIn(osUser) : false };
+}
+
+// ── 내 AI 계정(#1085) — 관리탭 [내 설정 ▸ 내 AI 설정] 상단 카드. "내 AI 세션이 어느 AI(Claude Code·Codex)로,
+//  누구 계정으로 뜨나" 를 한 자리에서 보고 로그인/로그아웃한다. 자격증명이 **어디 사는지**(scope)가 셋으로 갈리고,
+//  로그아웃 가능 여부는 전적으로 거기서 결정된다:
+//   · isolated — 멤버 OS 계정(box_) 홈(#524). 게이트웨이는 700 홈을 못 읽으니 drop-priv 로 존재확인·삭제만 한다.
+//   · profile  — 비격리 박스의 멤버별 dir(~/.lively/profiles/<slug>/claude, #346·#1014). 게이트웨이 소유 → 직접.
+//   · shared   — 호스트 공유 홈. **다른 구성원 세션이 쓰는 바로 그 자격**이라 로그아웃을 막는다(남의 세션이 끊긴다).
+//  ⚠ Codex 는 비격리 경로에 멤버별 홈 주입(CODEX_HOME)이 없다 — claude 의 CLAUDE_CONFIG_DIR(#1014) 에 해당하는 게
+//   아직 없어서다. 그래서 그 박스에서는 shared 로 **정직하게** 표시하고 로그아웃을 잠근다(있는 척하지 않는다).
+export interface AiAccountStatus {
+  key: string; label: string;
+  scope: "isolated" | "profile" | "shared";
+  loggedIn: boolean | null;   // null = **알 수 없음**(아래 키체인 한계). false 는 '확실히 미로그인'일 때만.
+  canLogout: boolean;
+  where: string;   // 자격증명이 사는 자리(사람이 읽는 설명)
+}
+// 자격증명 탐지의 한계(macOS) — Claude Code 는 **맥에서 자격을 키체인**("Claude Code-credentials")에 넣는다.
+//  홈에 .credentials.json 이 안 생기므로 '파일 없음 = 로그아웃'으로 읽으면 거짓말이 된다(맥 게이트웨이에서
+//  실측: 키체인엔 로그인돼 있는데 파일은 없음). 그래서 파일이 **있으면 로그인 확정**, 없으면 리눅스는 미로그인,
+//  맥은 알 수 없음(null)으로 둔다. 로그아웃도 파일 삭제로는 안 지워지므로 그 경우 잠근다(아래 canLogout).
+//  ※ Codex 는 맥에서도 ~/.codex/auth.json 파일을 쓴다(실측) — 이 한계는 claude 전용이다.
+function credVerdict(exists: boolean, key: string): boolean | null {
+  if (exists) return true;
+  return (key === "claude" && process.platform === "darwin") ? null : false;
+}
+export async function aiAccountStatus(user: LivelyUser): Promise<AiAccountStatus[]> {
+  const osSt = await memberOsStatus(ownerId(user));
+  const isolated = osSt.ready && osSt.provisioned;
+  const out: AiAccountStatus[] = [];
+  for (const h of HARNESSES) {
+    const rel = HARNESS_CRED[h.key];
+    if (!rel) continue;   // 셸 등 — 로그인 개념이 없는 하네스
+    let scope: AiAccountStatus["scope"]; let where: string; let exists: boolean;
+    if (isolated) {
+      scope = "isolated"; where = `내 격리 계정(${osSt.osUser}) 홈의 ${rel}`;
+      exists = await memberFileExists(osSt.osUser, rel);
+    } else if (h.key === "claude" && process.env.LIVELY_MULTIPROFILE !== "0") {
+      const file = path.join(profileConfigDir(user), ".credentials.json");
+      scope = "profile"; where = file;
+      exists = await fsp.access(file).then(() => true, () => false);
+    } else {
+      const file = path.join(os.homedir(), rel);
+      scope = "shared"; where = file;
+      exists = await fsp.access(file).then(() => true, () => false);
+    }
+    const loggedIn = credVerdict(exists, h.key);
+    // 지울 수 있을 때만 로그아웃을 연다 — 공유 계정(남의 세션까지 끊김)·미로그인·탐지불가(키체인)는 잠근다.
+    out.push({ key: h.key, label: h.label, scope, where, loggedIn, canLogout: loggedIn === true && scope !== "shared" });
+  }
+  return out;
+}
+
+// 로그아웃 = 자격증명 파일 삭제(재로그인으로 되돌릴 수 있다). **본인 것만** — 호출자(라우트)가 principal 을 넘긴다.
+//  ⚠ 이미 떠 있는 세션의 하네스는 메모리에 인증을 들고 있을 수 있어 그 자리에서 끊기지 않는다(다음 로그인부터 적용).
+export async function aiAccountLogout(user: LivelyUser, key: string): Promise<void> {
+  const acct = (await aiAccountStatus(user)).find((a) => a.key === key);
+  if (!acct) throw new HttpError(404, `모르는 AI: ${key}`);
+  if (acct.loggedIn === false) throw new HttpError(409, `${acct.label} 은(는) 이미 로그인 전입니다.`);
+  if (acct.loggedIn === null) {
+    throw new HttpError(409, `${acct.label} 의 자격증명이 이 서버(macOS)의 키체인에 있어 서버가 지울 수 없습니다 — 세션에서 claude 를 실행해 /logout 하세요.`);
+  }
+  if (!acct.canLogout) {
+    throw new HttpError(409, `${acct.label} 은(는) 이 서버의 공유 계정으로 실행됩니다 — 로그아웃하면 다른 구성원의 세션까지 끊깁니다. 구성원 격리를 설치하면 계정이 분리됩니다.`);
+  }
+  const rel = HARNESS_CRED[key];
+  if (acct.scope === "isolated") {
+    await memberFileRemove(osUsername(userSlug(user)), rel);
+    return;
+  }
+  await fsp.rm(path.join(profileConfigDir(user), ".credentials.json"), { force: true });
 }
 
 async function tmux(args: string[]): Promise<string> {

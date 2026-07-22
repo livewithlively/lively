@@ -10,7 +10,7 @@ import type { BearerVerifier } from "./auth/bearer.js";
 import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { logger } from "./log.js";
-import { ROOTS, HARNESSES, listSessions, listRestorableSessions, createSession, killSession, editSession, canAttach, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
+import { ROOTS, HARNESSES, listSessions, listRestorableSessions, createSession, killSession, editSession, canAttach, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
 import { getSessionState, deleteSessionState } from "./org/session-state.js"; // #1059 E — restorable 세션 복원
 import { sessionPrompts, searchPrompts, searchPromptsHybrid } from "./terminal-transcript.js";
 import { activeEmbeddingProvider } from "./v6/search-util.js";
@@ -110,6 +110,21 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
           .map((n) => ({ id: n.id, name: n.name, kind: n.kind, online: live.get(n.id) ?? false }));
       })(),
     });
+  }));
+
+  // ── 내 AI 계정(#1085) — 관리탭 [내 설정 ▸ 내 AI 설정] 상단 카드가 읽고 쓴다. **본인 것만**: 경로에 멤버 id 가
+  //  없고 principal(userOf) 로만 대상이 정해진다 → 남의 계정을 조회·로그아웃할 표면이 아예 없다(admin 도 마찬가지).
+  app.get("/api/ui/me/ai-accounts", auth, wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ accounts: await aiAccountStatus(userOf(req)) });
+  }));
+  // 로그아웃 = 내 자격증명 파일 삭제(재로그인으로 복구 가능). 공유 계정(비격리 codex 등)은 서비스가 409 로 막는다.
+  app.post("/api/ui/me/ai-accounts/logout", auth, wrap(async (req, res) => {
+    const harness = String(((req.body ?? {}) as Record<string, unknown>).harness ?? "").trim();
+    if (!harness) throw new HttpError(400, "harness(AI 키)가 필요합니다");
+    await aiAccountLogout(userOf(req), harness);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, accounts: await aiAccountStatus(userOf(req)) });
   }));
 
   // ── 멀티프로필 프로비저닝(#442) — 관리탭 전용(admin scope). 로그인(OAuth)은 멤버가 웹터미널에서 셀프서비스. ──
