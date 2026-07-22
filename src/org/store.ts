@@ -2041,6 +2041,10 @@ export interface OrgHarnessAsset {
   label: string | null;
   harness: HookHarness;
   description: string;
+  // summary — 화면에 보이는 '쉬운 한 줄'(#1085). description 은 **하네스가 언제 이 스킬을 쓸지 판단하는 트리거
+  //  문장**이라 길고 기술적이다. 그걸 그대로 사용자 화면에 깔면 무슨 기능인지 안 읽혀서, 표시용 문장을 따로 둔다.
+  //  비어 있으면 화면이 description 첫 문장으로 폴백한다(지식의 summary 와 같은 관례).
+  summary: string;
   body: string;
   frontmatter: Record<string, unknown>;
   target_members: string[] | null;
@@ -2063,6 +2067,7 @@ function mapAsset(row: Record<string, unknown>): OrgHarnessAsset {
     label: (row.label as string) ?? null,
     harness: row.harness as HookHarness,
     description: (row.description as string) ?? "",
+    summary: (row.summary as string) ?? "",
     body: (row.body as string) ?? "",
     frontmatter: fm && typeof fm === "object" && !Array.isArray(fm) ? (fm as Record<string, unknown>) : {},
     target_members: Array.isArray(tm) ? (tm as string[]) : null,
@@ -2078,7 +2083,7 @@ function mapAsset(row: Record<string, unknown>): OrgHarnessAsset {
 }
 
 const ASSET_COLS =
-  "id, kind, label, harness, description, body, frontmatter, target_members, paired_hook_id, enabled, sort, version, content_hash, created_by, updated_at, updated_by";
+  "id, kind, label, harness, description, summary, body, frontmatter, target_members, paired_hook_id, enabled, sort, version, content_hash, created_by, updated_at, updated_by";
 const ASSET_COLS_Q = ASSET_COLS.split(", ").map((c) => "a." + c).join(", "); // JOIN 용 정규화(updated_at/updated_by 모호성 회피, #699)
 
 // content_hash — materialize 결과에 영향 주는 필드만 정규화 해시(클라 변경감지=재작성 skip). 관리메타(label·sort·enabled)는 제외.
@@ -2131,6 +2136,7 @@ export interface OrgHarnessAssetInput {
   label?: string | null;
   harness?: HookHarness;
   description?: string;
+  summary?: string;            // 표시용 한 줄(#1085) — 미전송=보존
   body?: string;
   frontmatter?: Record<string, unknown>;
   target_members?: string[] | null;
@@ -2144,23 +2150,24 @@ export async function upsertOrgHarnessAsset(a: OrgHarnessAssetInput, ctx: WriteC
   const kind = a.kind ?? before?.kind ?? "skill";
   const harness = a.harness ?? before?.harness ?? "all";
   const description = a.description ?? before?.description ?? "";
+  const summary = a.summary ?? before?.summary ?? "";   // 표시용 한 줄(#1085) — 미전송이면 보존
   const body = a.body ?? before?.body ?? "";
   const frontmatter = a.frontmatter ?? before?.frontmatter ?? {};
   const targetMembers = a.target_members === undefined ? (before?.target_members ?? null) : a.target_members;
   const contentHash = assetContentHash({ kind, harness, description, body, frontmatter });
   await itemsPool.query(
-    `INSERT INTO org_harness_asset(id,kind,label,harness,description,body,frontmatter,target_members,paired_hook_id,enabled,sort,version,content_hash,created_by,updated_at,updated_by)
-       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11,1,$12,$13,now(),$14)
+    `INSERT INTO org_harness_asset(id,kind,label,harness,description,summary,body,frontmatter,target_members,paired_hook_id,enabled,sort,version,content_hash,created_by,updated_at,updated_by)
+       VALUES($1,$2,$3,$4,$5,$15,$6,$7::jsonb,$8::jsonb,$9,$10,$11,1,$12,$13,now(),$14)
      ON CONFLICT (id) DO UPDATE SET
        kind=EXCLUDED.kind, label=EXCLUDED.label, harness=EXCLUDED.harness, description=EXCLUDED.description,
-       body=EXCLUDED.body, frontmatter=EXCLUDED.frontmatter, target_members=EXCLUDED.target_members,
+       summary=EXCLUDED.summary, body=EXCLUDED.body, frontmatter=EXCLUDED.frontmatter, target_members=EXCLUDED.target_members,
        paired_hook_id=EXCLUDED.paired_hook_id, enabled=EXCLUDED.enabled, sort=EXCLUDED.sort,
        content_hash=EXCLUDED.content_hash, version=org_harness_asset.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [a.id, kind, a.label ?? before?.label ?? null, harness, description, body,
      JSON.stringify(frontmatter), targetMembers === null ? null : JSON.stringify(targetMembers),
      a.paired_hook_id === undefined ? (before?.paired_hook_id ?? null) : a.paired_hook_id,
      a.enabled ?? before?.enabled ?? true, a.sort ?? before?.sort ?? 0, contentHash,
-     before?.created_by ?? ctx.actor ?? null, ctx.actor ?? null],
+     before?.created_by ?? ctx.actor ?? null, ctx.actor ?? null, summary],
   );
   const after = await getOrgHarnessAsset(a.id);
   await audit("org_harness_asset", a.id, before ? "update" : "insert", before, after, ctx.actor, ctx.source, ctx);

@@ -345,6 +345,7 @@ export async function initOrgSchema(): Promise<void> {
       label TEXT,
       harness TEXT NOT NULL DEFAULT 'all',
       description TEXT NOT NULL DEFAULT '',
+      summary TEXT NOT NULL DEFAULT '',
       body TEXT NOT NULL DEFAULT '',
       frontmatter JSONB NOT NULL DEFAULT '{}'::jsonb,
       target_members JSONB,
@@ -356,6 +357,7 @@ export async function initOrgSchema(): Promise<void> {
       created_by TEXT,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT);
+    ALTER TABLE org_harness_asset ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT '';
     DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_constraint
                      WHERE conrelid='org_harness_asset'::regclass AND conname='org_harness_asset_kind_chk') THEN

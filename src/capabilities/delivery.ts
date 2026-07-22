@@ -1082,8 +1082,9 @@ export const deliveryCapabilities: Capability[] = [
         return { override, byDefault: targetsMember(targetMembers, userId), effective: effectiveVisible({ enabled: true, targetMembers, memberId: userId, override }) };
       };
       const lively = {
-        skills: assets.filter((a) => a.enabled).map((a) => ({ id: a.id, kind: a.kind, label: a.label, description: a.description, harness: a.harness, ...meta("harness_asset", a.id, a.target_members) })),
-        hooks: hooks.filter((h) => h.enabled).map((h) => ({ id: h.id, label: h.label, event: h.event, harness: h.harness, ...meta("org_hook", h.id, h.target_members) })),
+        // summary — 화면에 보이는 '쉬운 한 줄'(#1085). description(하네스 트리거 문장)과 별개다.
+        skills: assets.filter((a) => a.enabled).map((a) => ({ id: a.id, kind: a.kind, label: a.label, description: a.description, summary: a.summary, harness: a.harness, ...meta("harness_asset", a.id, a.target_members) })),
+        hooks: hooks.filter((h) => h.enabled).map((h) => ({ id: h.id, label: h.label, event: h.event, note: h.note, harness: h.harness, ...meta("org_hook", h.id, h.target_members) })),
       };
       const livelyIds = new Set<string>([...lively.skills, ...lively.hooks].map((x) => x.id));
       // 머신별로 라이블리 자산과 대조 + 그 머신의 로컬 토글 지시(disabled) 반영.
@@ -2477,6 +2478,9 @@ export const deliveryCapabilities: Capability[] = [
       const harness = input.harness === undefined ? "all" : str(input.harness, "harness", 12);
       if (!HOOK_HARNESSES.has(harness)) throw new HttpError(400, "harness 는 claude|codex|openclaw|all");
       const description = str(input.description ?? "", "description", 2000);
+      // summary — 관리탭·구성원 화면에 보이는 '쉬운 한 줄'(#1085). description(하네스가 언제 쓸지 판단하는
+      //  트리거 문장)을 그대로 보여주면 무슨 기능인지 안 읽혀서 표시용을 따로 받는다. 미전송이면 기존 값 보존.
+      const summary = input.summary === undefined ? undefined : str(input.summary, "summary", 300);
       const body = str(input.body ?? "", "body", 262144);
       const frontmatter = parseAssetFrontmatter(input.frontmatter);
       assertNoHardSecrets(description, "description");
@@ -2488,7 +2492,7 @@ export const deliveryCapabilities: Capability[] = [
       const asset = await upsertOrgHarnessAsset({
         id, kind: kind as AssetKind,
         label: input.label == null ? undefined : str(input.label, "label", 200).trim(),
-        harness: harness as HookHarness, description, body, frontmatter,
+        harness: harness as HookHarness, description, summary, body, frontmatter,
         target_members: targetMembers, paired_hook_id: pairedHookId,
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
@@ -2496,6 +2500,7 @@ export const deliveryCapabilities: Capability[] = [
       return { asset, ...seedAssetSyncWarning(id) };
     }, {
       id: z.string().describe("자산 id(슬러그) — 있으면 수정, 없으면 생성. 스킬이면 이 id 가 스킬 이름이 된다"),
+      summary: z.string().optional().describe("화면에 보이는 쉬운 한 줄 설명(무슨 기능인지). 비우면 description 첫 문장으로 폴백"),
       kind: z.enum(["skill", "subagent", "command"]).optional().describe("자산 종류(기본 skill)"),
       body: z.string().optional().describe("자산 본문 — 멤버 디스크에 파일로 materialize 된다. 평문 시크릿 hard-block"),
       description: z.string().optional().describe("자산 설명(하네스가 소환 판단에 쓴다)"),

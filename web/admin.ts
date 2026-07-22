@@ -4910,6 +4910,8 @@ function assetForm(root, a, data, detail, isNew) {
   const harnessSel = el('select', {}, ...['all', 'claude', 'codex'].map((x) => el('option', { value: x, text: x })));
   harnessSel.value = a.harness || 'all';
   const descIn = el('input', { type: 'text', value: a.description || '', placeholder: 'AI가 이것을 언제 쓸지 판단하는 한 줄 설명(상시 노출)' });
+  // 표시용 한 줄(#1085) — 위 '설명'은 AI 트리거 문장이라 길고 기술적이다. 사람 화면([내 스킬·훅])에는 이걸 보여준다.
+  const sumIn = el('input', { type: 'text', value: a.summary || '', placeholder: '예: 코드 변경만 보고 기능을 유추해 문서화 품질을 점검합니다' });
   const bodyTa = el('textarea', { rows: '12', class: 'admin-ta', placeholder: '본문(마크다운) — 스킬 방법서 / 에이전트 시스템 프롬프트 / 커맨드 프롬프트' });
   bodyTa.value = a.body || '';
   const fmTa = el('textarea', { rows: '4', class: 'admin-ta', placeholder: '추가 frontmatter(JSON, 선택) — 예: {"model":"opus","allowed-tools":["Read","Grep"]}' });
@@ -4931,7 +4933,7 @@ function assetForm(root, a, data, detail, isNew) {
     saveBtn.disabled = true;
     try {
       const payload = { id: idIn.value.trim(), kind: kindSel.value, label: labelIn.value.trim() || null, harness: harnessSel.value,
-        description: descIn.value, body: bodyTa.value, frontmatter: fm,
+        description: descIn.value, summary: sumIn.value, body: bodyTa.value, frontmatter: fm,
         target_members: tm.targetMembers(), paired_hook_id: pairedIn.value.trim() || null, enabled: tm.enabled() };
       await api('/api/ui/org/harness-asset', { method: 'POST', body: JSON.stringify(payload) });
       await loadAdmin(true); state.admin.assetSel = payload.id; toast('저장됨 — 구성원 다음 세션부터'); renderAdminDetail(detail, 'harness-assets', state.admin.data);
@@ -4961,6 +4963,7 @@ function assetForm(root, a, data, detail, isNew) {
     field('종류', kindSel), field('하네스', harnessSel),
     codexNote,
     field('설명(AI가 언제 쓸지 판단 — 상시 노출)', descIn),
+    field('쉬운 한 줄 (구성원 화면에 보이는 말)', sumIn),
     field('본문(마크다운)', bodyTa),
     field('추가 frontmatter (JSON, 선택)', fmTa),
     field('연결 훅 id(선택 — 위험 통제)', pairedIn),
@@ -6457,8 +6460,13 @@ async function myAssetsSection(detail) {
     // 항목 한 줄 — [이름 · 상태] + [용도 한 줄] + [설치된 PC 칩] | 오른쪽 [켜기/끄기].
     //  회색 줄에 본문 앞부분을 그대로 잘라 넣었더니 무슨 용도인지가 안 읽혔다(사용자 지적) → **첫 문장만**
     //  요약으로 쓰고 전문은 눌렀을 때 뜨는 팝업에 맡긴다. 종류(스킬/훅)는 이제 그룹 제목이 말하므로 뺀다.
-    const summarize = (raw: string): string => {
-      const t = String(raw || '').replace(/\s+/g, ' ').trim();
+    //  1순위 = summary(관리자가 쓴 '무슨 기능인지' 한 줄, [AI 능력 ▸ 스킬…]에서 편집).
+    //  2순위 = description 첫 문장. description 은 하네스가 '언제 이 스킬을 쓸지' 판단하는 트리거 문장이라
+    //   길고 기술적이다 — 그대로 깔면 무슨 기능인지 안 읽힌다(사용자 지적). 전문은 눌렀을 때 팝업에서 본다.
+    const summarize = (it: any): string => {
+      const sum = String(it.summary || '').trim();
+      if (sum) return sum;
+      const t = String(it.description || it.note || '').replace(/\s+/g, ' ').trim();
       if (!t) return '';
       const cut = t.search(/[.。!?]\s|—|\s·\s/);           // 첫 문장·첫 구획까지만
       const head = (cut > 12 ? t.slice(0, cut) : t).trim();
@@ -6466,6 +6474,9 @@ async function myAssetsSection(detail) {
     };
     // 켜기/끄기 2버튼. 조직 기본값을 따르는 중이면 '기본' 배지로 알리고, 내가 바꿔 둔 상태면 되돌릴 링크를 준다
     //  (버튼 3개는 과했다 — 사용자 지적).
+    // 켬/끔 컨트롤 — 버튼 두 개 + '기본' 배지로는 **지금 켜진 건지, 무엇이 기본인지**가 안 읽혔다(사용자 지적).
+    //  그래서 ① 스위치가 **현재 상태**를 형태로 말하고(켜짐=파랑·오른쪽), ② 옆 글이 **기본값과 내 변경 여부**를
+    //  문장으로 말한다. 되돌리기는 내가 바꿔 둔 항목에만 나온다.
     const onOffSeg = (targetKind: string, it: any) => {
       const following = it.override === null || it.override === undefined;
       const on = following ? !!it.byDefault : !!it.override;
@@ -6477,21 +6488,21 @@ async function myAssetsSection(detail) {
           await reload();
         } catch (e: any) { toast((e && e.message) || '실패', true); }
       };
-      const btn = (v: boolean, label: string) => {
-        const b = el('button', { type: 'button', class: 'btn btn-sm ' + (on === v ? 'btn-primary' : 'btn-ghost'), text: label });
-        b.addEventListener('click', () => { if (on !== v) void set(v); });
-        return b;
-      };
-      const wrap = el('div', { class: 'hrow-act' }, btn(true, '켜기'), btn(false, '끄기'));
-      if (following) wrap.append(withTip(el('span', { class: 'head-badge', text: '기본' }), '조직 기본값(' + (it.byDefault ? '켬' : '끔') + ')을 따르는 중입니다.'));
-      else wrap.append(el('button', { type: 'button', class: 'btn-text', text: '기본값으로', onclick: () => void set(null) }));
-      return wrap;
+      const sw = el('button', { type: 'button', class: 'sw' + (on ? ' on' : ''), role: 'switch',
+        'aria-checked': on ? 'true' : 'false', 'aria-label': on ? '켜짐 — 누르면 끕니다' : '꺼짐 — 누르면 켭니다' });
+      sw.addEventListener('click', () => void set(on ? false : true));
+      const state = el('span', { class: 'sw-state' + (on ? ' on' : ''), text: on ? '켜짐' : '꺼짐' });
+      const note = following
+        ? el('span', { class: 'sw-note', text: '기본값 그대로' })
+        : el('span', { class: 'sw-note' }, el('span', { text: '내가 바꿈 · 기본값은 ' + (it.byDefault ? '켬' : '끔') }),
+            el('button', { type: 'button', class: 'btn-text sw-reset', text: '되돌리기', onclick: () => void set(null) }));
+      return el('div', { class: 'hrow-act' }, sw, el('div', { class: 'sw-labels' }, state, note));
     };
     const livelyRow = (targetKind: string, it: any, kind: string): { node: any; missing: boolean } => {
       const titleEl = el('span', { class: 'mini-title' }, el('span', { text: it.label || it.id }),
         el('span', { class: 'pill' + (it.effective ? ' pill-ok' : ''), text: it.effective ? '적용 중' : '미적용' }));
       const { row: chipRow, missing } = pcChips(it, kind);
-      const sum = summarize(it.description);
+      const sum = summarize(it);
       const left = el('div', { class: 'harness-click', style: 'flex:1; min-width:0;', title: '눌러서 내용 보기' }, titleEl,
         el('div', { class: 'mini-meta', text: sum || '눌러서 내용 보기' }),
         el('div', { style: 'margin-top:6px' }, chipRow));
@@ -6499,19 +6510,31 @@ async function myAssetsSection(detail) {
       return { node: el('div', { class: 'mini-row hrow' }, left, onOffSeg(targetKind, it)), missing };
     };
     // 접이식 그룹 — 목록이 길어 한 화면에 안 들어오던 걸, 제목·개수만 먼저 보이고 눌러서 펼치게(사용자 요구).
-    const group = (title: string, count: number, items: any[], openByDefault = false) => {
-      const bodyEl = el('div', { class: 'hgroup-body' }, ...items);
-      bodyEl.style.display = openByDefault ? 'block' : 'none';
-      const caret = el('span', { class: 'hgroup-caret', text: openByDefault ? '▾' : '▸' });
-      const head = el('button', { type: 'button', class: 'hgroup-head' }, caret,
+    // 그룹 — 통째로 감추면 뭐가 있는지 모른다(사용자 요구: 프로젝트 탭 '연결된 지식'처럼 몇 개는 보이고
+    //  나머지는 [더 보기]). 앞 PEEK 개는 항상 보이고, 넘치는 만큼만 접어 둔다.
+    const PEEK = 3;
+    const group = (title: string, count: number, items: any[]) => {
+      const head = el('div', { class: 'hgroup-head-row' },
         el('span', { class: 'hgroup-title', text: title }),
         el('span', { class: 'hgroup-count', text: String(count) }));
-      head.addEventListener('click', () => {
-        const open = bodyEl.style.display === 'none';
-        bodyEl.style.display = open ? 'block' : 'none';
-        caret.textContent = open ? '▾' : '▸';
-      });
-      return el('div', { class: 'hgroup' }, head, bodyEl);
+      const shown = items.slice(0, PEEK);
+      const rest = items.slice(PEEK);
+      const restBox = el('div', { class: 'hgroup-rest' }, ...rest);
+      restBox.style.display = 'none';
+      const kids: any[] = [head, el('div', { class: 'hgroup-body' }, ...shown, restBox)];
+      if (rest.length) {
+        const lbl = el('span', { class: 'lbl', text: '더 보기 ' + rest.length + '개' });
+        const caret = el('span', { class: 'caret', text: '⌄' });
+        const btn = el('button', { type: 'button', class: 'proj-detail-body-expand' }, lbl, caret);
+        btn.addEventListener('click', () => {
+          const open = restBox.style.display === 'none';
+          restBox.style.display = open ? 'block' : 'none';
+          lbl.textContent = open ? '접기' : '더 보기 ' + rest.length + '개';
+          caret.textContent = open ? '⌃' : '⌄';
+        });
+        kids.push(el('div', { class: 'hgroup-more' }, btn));
+      }
+      return el('div', { class: 'hgroup' }, ...kids);
     };
 
     // 위계는 두 층이다: **위 = 어디서 온 것인가**(조직 배포 / 내 컴퓨터), **아래 = 종류**(스킬 · 커스텀 훅).
