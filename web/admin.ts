@@ -293,31 +293,68 @@ function meaningOf(m) { return (m && MEANING_KO[m.key]) ? { ...m, ...MEANING_KO[
 //  팝업(overlay)으로 전체 설명(요약·누가/언제/어디·예시)을 보여준다. 예전엔 항상-펼침(이후 한 줄 요약+토글)
 //  이라 9개 섹션마다 같은 골격이 반복돼 화면이 무거웠다(윤상민 06-22 지적: "반복·둥둥 뜸"). 단일 함수라
 //  모든 섹션에 일괄 적용. tone 색·카피는 팝업 안에서 그대로 보존.
-function meaningCard(m0) {
-  if (!m0) return null;
+//  설명 본문(트리거 없이) — 아래 infoPop 이 팝오버 안에 그대로 싣는다.
+function meaningBody(m0) {
   const m = meaningOf(m0);
   const tag = { critical: '꼭 지킴', identity: '신원', infra: '연결', normal: '' }[m.tone] || '';
-  const trigger = el('button', { class: 'meaning-trigger', type: 'button', 'aria-haspopup': 'dialog' },
-    el('span', { class: 'meaning-trigger-icon', 'aria-hidden': 'true', text: 'ⓘ' }),
-    el('span', { text: '이게 뭐예요?' }));
-  trigger.addEventListener('click', () => {
-    overlay(m.label || '이게 뭐예요?',
-      el('div', { class: 'meaning meaning-' + m.tone + ' meaning-pop' },
-        el('div', { class: 'meaning-head' },
-          el('span', { class: 'meaning-dot', 'aria-hidden': 'true' }),
-          el('span', { class: 'meaning-title', text: '구성원에게 미치는 효과' }),
-          tag ? el('span', { class: 'meaning-tag', text: tag }) : null),
-        el('p', { class: 'meaning-what', text: m.what }),
-        el('div', { class: 'meaning-grid' },
-          meaningRow('누가 보나', m.reach),
-          meaningRow('언제 적용되나', m.when),
-          meaningRow('어디에 쓰이나', m.where)),
-        el('div', { class: 'meaning-ex' },
-          el('span', { class: 'meaning-ex-label', text: '예를 들면' }),
-          el('span', { text: m.example }))));
-  });
-  return trigger;
+  return el('div', { class: 'meaning meaning-' + m.tone + ' meaning-pop' },
+    el('div', { class: 'meaning-head' },
+      el('span', { class: 'meaning-dot', 'aria-hidden': 'true' }),
+      el('span', { class: 'meaning-title', text: '구성원에게 미치는 효과' }),
+      tag ? el('span', { class: 'meaning-tag', text: tag }) : null),
+    el('p', { class: 'meaning-what', text: m.what }),
+    el('div', { class: 'meaning-grid' },
+      meaningRow('누가 보나', m.reach),
+      meaningRow('언제 적용되나', m.when),
+      meaningRow('어디에 쓰이나', m.where)),
+    el('div', { class: 'meaning-ex' },
+      el('span', { class: 'meaning-ex-label', text: '예를 들면' }),
+      el('span', { text: m.example })));
 }
+
+// ⓘ — 제목·라벨 오른쪽에 옅게 붙는 **아이콘 하나**. 누르면 그 자리에 팝오버로 설명이 뜬다(#1085).
+//  왜: 회색 설명문을 제목·필드마다 화면에 깔면 글이 화면을 덮어 정작 내용·입력칸이 안 읽힌다(윤상민 지적).
+//  '이게 뭐예요?' 같은 말은 붙이지 않는다 — 아이콘만("너무 웃겨").
+//  text(문자열, **강조** 지원) 와 meaning 객체 중 있는 것만 싣는다. 둘 다 있으면 한 팝오버에 순서대로.
+function infoPop(text, m?) {
+  if (!text && !m) return null;
+  const btn = el('button', { class: 'hint-i', type: 'button', 'aria-haspopup': 'dialog', 'aria-label': '설명 보기', title: '설명 보기' },
+    el('span', { 'aria-hidden': 'true', text: 'ⓘ' }));
+  let pop: any = null;
+  const close = () => {
+    if (!pop) return;
+    pop.remove(); pop = null;
+    btn.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('mousedown', onDoc, true);
+    document.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('resize', close);
+    window.removeEventListener('scroll', close, true);
+  };
+  const onDoc = (e) => { if (pop && !pop.contains(e.target) && !btn.contains(e.target)) close(); };
+  const onKey = (e) => { if (e.key === 'Escape') { close(); btn.focus(); } };
+  btn.addEventListener('click', () => {
+    if (pop) { close(); return; }
+    pop = el('div', { class: 'hint-pop', role: 'dialog' },
+      text ? el('p', { class: 'hint-pop-text' }, ...inlineBold(text)) : null,
+      m ? meaningBody(m) : null);
+    document.body.append(pop);
+    // 아이콘 아래에 띄우되 화면 밖으로 나가지 않게 가둔다. 자리가 없으면 위로 뒤집는다(고정 위치 = 카드 overflow 무관).
+    const r = btn.getBoundingClientRect();
+    const w = Math.min(360, window.innerWidth - 24);
+    pop.style.width = w + 'px';
+    pop.style.left = Math.round(Math.min(Math.max(12, r.left - 10), window.innerWidth - w - 12)) + 'px';
+    const below = window.innerHeight - r.bottom;
+    if (below < pop.offsetHeight + 20 && r.top > pop.offsetHeight + 20) pop.style.top = Math.round(r.top - pop.offsetHeight - 8) + 'px';
+    else pop.style.top = Math.round(r.bottom + 8) + 'px';
+    btn.setAttribute('aria-expanded', 'true');
+    document.addEventListener('mousedown', onDoc, true);
+    document.addEventListener('keydown', onKey, true);
+    window.addEventListener('resize', close);
+    window.addEventListener('scroll', close, true);
+  });
+  return btn;
+}
+function meaningCard(m0) { return m0 ? infoPop(null, m0) : null; }
 
 // 섹션 제목 + 바로 옆 '이게 뭐예요?' 트리거(meaningCard 가 트리거 노드를 돌려준다). 제목 우측에 밋밋하게 붙는다.
 // 설명 문자열의 **강조**만 인라인으로 살린다 — 그 외 마크다운은 안 쓴다(el 이 텍스트 노드로만 붙이므로 innerHTML 없음).
@@ -337,11 +374,13 @@ function inlineBold(text) {
 }
 // 두 번째 인자는 meaning 객체(→ '이게 뭐예요?' 팝업) 또는 그냥 설명 문자열이다.
 //  문자열을 meaningCard 에 넘기면 m.what/m.reach 가 undefined 라 **빈 팝업**이 떴다(호출부 6곳). 문자열이면 설명 줄로 렌더한다.
-function sectionTitle(titleText, m) {
+function sectionTitle(titleText, m, hint?) {
   const isText = typeof m === 'string';
-  return el('div', {},
-    el('div', { class: 'section-title' }, el('h2', { text: titleText }), isText ? null : meaningCard(m)),
-    isText ? el('p', { class: 'admin-hint' }, ...inlineBold(m)) : null);
+  // 설명은 화면에 깔지 않고 제목 오른쪽 ⓘ 하나로 모은다(#1085) — hint(짧은 설명) + meaning(효과 카드)이
+  //  둘 다 있어도 아이콘은 하나다(둘이 나란히 뜨면 뭐가 뭔지 모른다).
+  return el('div', { class: 'section-title' },
+    el('h2', { text: titleText }),
+    infoPop(hint || (isText ? m : null), isText ? null : m));
 }
 
 // System 탭 진입점(#/system) — 기존 관리(전달) 화면을 그대로 흡수 + 지식 종류 레지스트리.
@@ -500,8 +539,12 @@ function segTabs(sectionKey, tabs) {
 
 // 섹션 머리 — 제목 + 한 줄 설명 + '이게 뭐예요?'. 병합 섹션이 "여기 뭐가 들었나"를 먼저 말해준다.
 function sectionHead(title, hint, m?) {
-  // admin-sechead: 제목 블록 아래 일관 여백. 설명(hint)이 없는 페이지는 제목이 카드에 0px로 붙던 것 방지(#req).
-  return el('div', { class: 'admin-sechead' }, sectionTitle(title, m || null), hint ? el('p', { class: 'admin-hint', text: hint }) : null);
+  // admin-sechead: 제목 블록 아래 일관 여백. 설명(hint)은 더 이상 회색 줄로 깔지 않고 제목 옆 ⓘ 로 들어간다(#1085).
+  return el('div', { class: 'admin-sechead' }, sectionTitle(title, m || null, hint || null));
+}
+// 카드(박스) 섹션 제목 — 제목 + 오른쪽 ⓘ. 카드 안 설명도 회색 줄 대신 이 아이콘 뒤로 접는다(#1085).
+function cardHead(title, desc?) {
+  return el('div', { class: 'card-head-row' }, el('h3', { text: title }), infoPop(desc || null));
 }
 
 // ── [구성원] — 구 [구성원 관리]+[구성원 추가]+[구성원 토큰 관리]+[중앙박스 계정] 4탭을 하나로. ──
@@ -1888,8 +1931,7 @@ async function profilesEditor(detail) {
   }) : [el('p', { class: 'caption', text: '구성원이 없습니다.' })];
   detail.replaceChildren(
     el('div', { class: 'card' },
-      el('h3', { text: 'AI 실행 계정 격리' }),
-      el('p', { class: 'caption', text: '구성원마다 서버에 전용 OS 계정(box_<slug>, 홈 권한 700)이 만들어져 서로 완전히 분리됩니다. 구성원끼리는 Claude 자격증명(.credentials.json)을 열람할 수 없습니다. 격리 인프라(deploy/linux/install-isolation.sh)가 설치된 서버에서는 웹터미널 첫 세션을 열 때 전용 계정이 자동으로 만들어지고(별도 버튼 필요 없음), 그 세션부터 본인 Claude 로그인으로 실행됩니다. 아직 전용 계정이 없는 구성원은 기존과 같이 공유 계정으로 실행됩니다. 첫 세션 지연 없이 미리 만들려면 [지금 미리 만들기]를 누르고, 격리를 끄려면 게이트웨이 환경변수 LIVELY_MEMBER_ISOLATION=off 를 설정하세요.' })),
+      cardHead('AI 실행 계정 격리', '구성원마다 서버에 전용 OS 계정(box_<slug>, 홈 권한 700)이 만들어져 서로 완전히 분리됩니다. 구성원끼리는 Claude 자격증명(.credentials.json)을 열람할 수 없습니다. 격리 인프라(deploy/linux/install-isolation.sh)가 설치된 서버에서는 웹터미널 첫 세션을 열 때 전용 계정이 자동으로 만들어지고(별도 버튼 필요 없음), 그 세션부터 본인 Claude 로그인으로 실행됩니다. 아직 전용 계정이 없는 구성원은 기존과 같이 공유 계정으로 실행됩니다. 첫 세션 지연 없이 미리 만들려면 [지금 미리 만들기]를 누르고, 격리를 끄려면 게이트웨이 환경변수 LIVELY_MEMBER_ISOLATION=off 를 설정하세요.')),
     ...items);
 }
 
@@ -6277,8 +6319,7 @@ function myAiAccountsCard() {
   // 제목이 '내 AI 계정'이면 거짓말이 될 수 있다 — 구성원별 격리가 없는 서버에서는 아래 상태가 **서버 공용 계정**의
   //  것이고 내가 연결한 게 아니다(사용자 지적: "Codex는 내가 연결한 적 없"). 중립 제목 + 상황별 배너로 바로잡는다.
   const card = el('div', { class: 'card' },
-    el('h3', { text: '연결된 AI 계정' }),
-    el('p', { class: 'caption', text: '내 AI 세션이 이 계정으로 실행됩니다.' }),
+    cardHead('연결된 AI 계정', '내 AI 세션이 이 계정으로 실행됩니다. 계정이 구성원별로 갈리지 않는 서버에서는 \'서버 공용\' 표시가 붙습니다.'),
     body);
   const load = async () => {
     body.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
@@ -6398,8 +6439,8 @@ async function myAiSection(detail) {
       el('div', { class: 'card admin-form-narrow' },
         // 섹션 제목은 서술문('~할 것')이 아니라 **명사구**로 — 관리탭 다른 섹션(구성원·조직 정보·세션 주입)과 같은 규격.
         //  설명 한 줄은 위 [AI 계정 연결] 박스와 같은 자리(.caption)에 둔다: 박스마다 [제목 · 한 줄 설명 · 내용].
-        el('h3', { text: 'AI 개인 규칙' }),
-        el('p', { class: 'caption', text: '내 역할·호칭·말투·사용 언어입니다. 내 AI 가 매 세션을 시작할 때 이 내용을 읽고 따릅니다 — 나에게만 적용되고 팀에는 공유되지 않습니다.' }),
+        cardHead('AI 개인 규칙', '내 역할·호칭·말투·사용 언어입니다. 내 AI 가 매 세션을 시작할 때 이 내용을 읽고 따릅니다 — 나에게만 적용되고 팀에는 공유되지 않습니다. 비밀번호·토큰 같은 시크릿은 넣지 마세요(자동 차단).'),
+        // 필드는 종전 그대로 — 라벨 + 입력칸 + 회색 힌트(사용자: "필드들은 ⓘ 규격 바꾸지 말고 이전 유지").
         field('역할', roleIn),
         field('개발 이해도', el('div', {}, devChips, devHint)),
         field('호칭 (AI가 나를 부르는 말)', addressIn),

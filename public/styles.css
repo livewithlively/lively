@@ -1161,6 +1161,33 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
    :first-child 로 좁혀 카드 중간에 오는 h3(위 여백이 필요한 자리)는 건드리지 않는다. */
 .admin-body .card > h3:first-child { margin: 0; font-size: 16px; font-weight: 800; letter-spacing: -.2px; }
 .admin-body .card > h3:first-child + .caption { display: block; margin: 5px 0 0; line-height: 1.5; }
+/* 카드 섹션 제목 줄 — 제목 + 오른쪽 ⓘ(#1085). 설명은 화면에 깔지 않고 아이콘 뒤 팝오버로. */
+.card-head-row { display: flex; align-items: center; gap: 6px; margin: 0 0 14px; }
+.card-head-row h3 { margin: 0; font-size: 16px; font-weight: 800; letter-spacing: -.2px; }
+/* ⓘ 트리거 — 제목 옆에 '옅게'. 텍스트 라벨 없이 아이콘만(사용자 요구). */
+.hint-i { display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 20px; height: 20px; padding: 0; border: 0; background: none; cursor: pointer;
+  color: var(--muted-2); font-size: 13px; line-height: 1; border-radius: 50%;
+  transition: color .12s ease, background-color .12s ease; }
+.hint-i:hover { color: var(--blue); background: var(--bg-tint-2); }
+.hint-i[aria-expanded="true"] { color: var(--blue); background: var(--bg-tint-2); }
+.hint-i:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+/* 팝오버 — body 에 fixed 로 붙어 카드 overflow·스크롤 컨테이너에 잘리지 않는다. */
+.hint-pop { position: fixed; z-index: 90; box-sizing: border-box; max-height: 70vh; overflow-y: auto;
+  padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg);
+  box-shadow: 0 12px 32px rgba(21, 35, 59, .13); }
+.hint-pop-text { margin: 0; font-size: 13px; line-height: 1.62; color: var(--ink-sub); white-space: pre-line; }
+.hint-pop-text b { color: var(--ink); }
+.hint-pop .meaning-pop { margin-top: 12px; }
+.hint-pop-text:only-child { margin: 0; }
+/* 폼 카드 안 항목 리듬(#1085) — 항목 **사이** 여백(12px)이 항목 **안** 여백(라벨 5px·힌트 7px)과 비슷해
+   어디서 한 항목이 끝나는지 안 보였다("여백이 어색해 가독성 부족"). 바깥은 넉넉히·안은 촘촘히로 위계를 준다. */
+.admin-body .card .field { margin: 0 0 20px; }
+.admin-body .card .field:last-of-type { margin-bottom: 0; }
+.admin-body .card .field-label { margin-bottom: 7px; }
+.admin-body .card .prof-chips { margin-top: 0; }
+.admin-body .card .prof-hint { margin-top: 8px; }
+.admin-body .card .field + .admin-actions { margin-top: 22px; }
 /* 내 AI 계정(#1085) — AI 한 줄 = [이름 · 상태 배지] + [한 줄 부제] | 오른쪽 [동작].
    제약(공용 계정·맥 키체인)은 길어서 본문에 풀면 회색 문단이 카드를 덮는다 → 배지 툴팁으로 접는다. */
 .aiacct { display: flex; align-items: center; gap: 14px; padding: 13px 0; border-top: 1px solid var(--line); }
