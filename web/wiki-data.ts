@@ -153,20 +153,46 @@ function knFetchAuthoredTree(): Promise<any[]> {
   return knAuthoredTreePromise;
 }
 
+// 미분류 센티널(#1091) — 카테고리 축의 '카테고리 없음' 값. 사이드바 catVal · URL(?category=none) ·
+//  REST(/api/ui/knowledge?category=none)가 전부 이 한 문자열을 쓴다(분기 없이 카테고리와 같은 경로를 탄다).
+const KN_UNCAT = 'none';
+
 // 카테고리 지식 rows(폴더 포함, recalled 전용 — 지식탭과 동일 축) — 사이드바 펼침·이동 피커 공용.
 //  #783 lifecycle=active,pending — 검토 대기 지식도 트리엔 띄우되 '검토' 배지로 구분한다(wiki-side knNavDocNode).
 //   · 안 띄우면: 폴더 하위 pending 은 보이고(트리 API 는 lifecycle 필터가 없다) 최상위 pending 은 안 보이는 불일치가 난다.
 //   · 띄워도 격리는 안 깨진다 — 검색·grep·벡터·similar·recall·항상주입은 여전히 active 전용(거긴 lifecycle 미전달).
+//  #1091 전량 적재 — 구 limit=200 하드캡은 200건이 넘는 카테고리(컨텍스트 저장소 278건)의 오래된 지식을
+//   사이드바 트리에서도 사이드바 검색에서도 통째로 지웠다("검색해도 안 나온다"의 실제 원인). has_more 를 따라 이어 받는다.
+const KN_ROWS_PAGE = 500;    // 서버 상한(#709 limit ≤ 500)
+const KN_ROWS_MAX = 5000;    // 폭주 방어 — 이 위로는 사이드바가 다룰 규모가 아니다
 function knFetchCategoryRows(catId): Promise<any[]> {
   const key = String(catId);
   let p = knCatRowsCache.get(key);
   if (!p) {
-    p = api('/api/ui/knowledge?' + new URLSearchParams({ category: key, limit: '200', orderBy: 'updated_at', injection: 'recalled', lifecycle: 'active,pending' }))
-      .then((r) => (r && r.entries) || [])
-      .catch((e) => { knCatRowsCache.delete(key); throw e; });
+    p = knLoadCategoryRows(key).catch((e) => { knCatRowsCache.delete(key); throw e; });
     knCatRowsCache.set(key, p);
   }
   return p;
+}
+async function knLoadCategoryRows(key: string): Promise<any[]> {
+  const out: any[] = [];
+  while (out.length < KN_ROWS_MAX) {
+    const r = await api('/api/ui/knowledge?' + new URLSearchParams({
+      category: key, limit: String(KN_ROWS_PAGE), offset: String(out.length),
+      orderBy: 'updated_at', injection: 'recalled', lifecycle: 'active,pending' }));
+    const entries = (r && r.entries) || [];
+    out.push(...entries);
+    if (!entries.length || !(r && r.has_more)) break;
+  }
+  return out;
+}
+
+// 미분류 지식 수 — 사이드바가 '미분류' 노드를 띄울지(0이면 안 띄운다) 정하는 값. 세는 조건은
+//  knLoadCategoryRows 와 같게 맞춘다 — 배지 숫자와 펼쳤을 때 나오는 행 수가 어긋나지 않도록.
+async function knFetchUncategorizedCount(): Promise<number> {
+  const r = await api('/api/ui/knowledge?' + new URLSearchParams({
+    category: KN_UNCAT, limit: '1', injection: 'recalled', lifecycle: 'active,pending' }));
+  return Number(r && r.total) || 0;
 }
 
 function knInvalidateTreeCaches() { knAuthoredTreePromise = null; knCatRowsCache.clear(); }
@@ -959,6 +985,7 @@ function knPageIcon(e) {
 
 export {
   HOME_EMPTY,
+  KN_UNCAT,
   SPACE_LABEL,
   KN_INJECTION_LABEL,
   KN_INJECTION_HINT,
@@ -985,6 +1012,7 @@ export {
   knEffectiveVisible,
   knFetchAuthoredTree,
   knFetchCategoryRows,
+  knFetchUncategorizedCount,
   knFolderChildrenBlock,
   knFolderFirstSort,
   knInjectChip,

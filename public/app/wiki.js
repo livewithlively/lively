@@ -5,7 +5,7 @@
 //  (?tab= 은 #657 대문/문서 탭의 잔재 — 파싱 시 무시한다. 탭이라는 모드 자체를 폐지했다.)
 import { api, el, errorNote, relTime, selectFilter, state, toast } from './core.js';
 import { skeleton, skeletonRows } from './learn.js';
-import { KN_TYPE_LABEL, SOURCE_KIND_LABEL, isCategoryHomeDoc, knInvalidateTreeCaches, openSourceDetail } from './wiki-data.js';
+import { KN_TYPE_LABEL, KN_UNCAT, SOURCE_KIND_LABEL, isCategoryHomeDoc, knInvalidateTreeCaches, openSourceDetail } from './wiki-data.js';
 import { KN_INDEXED, createWikiSide, knApplySideW, knSideResizeHandle } from './wiki-side.js';
 import { wkDayLabel, wkEmpty, wkRow, wkSection } from './wiki-ui.js';
 import { openWikiPeek, reanchorWikiPeek, renderWikiDraft, setWikiPeekList } from './wiki-doc.js';
@@ -113,6 +113,7 @@ async function renderWikiSpace(view, params) {
         onSelect: (v) => selectCategory(v),
         onOpen: (name) => { setWikiPeekList(null); openWikiPeek(name, { onRefresh: repaint }); },
         tools: true,
+        uncategorized: true,
     });
     const ctx = {
         f,
@@ -146,7 +147,8 @@ async function renderWikiSpace(view, params) {
         const box = el('div', { class: 'wk-surface' });
         main.replaceChildren(box);
         // type 이 category 와 함께면 카테고리 페이지의 인라인 필터가 처리 — 단독 딥링크만 목록으로.
-        if (f.q || f.all || f.indexed || (f.type && !f.category))
+        //  미분류(#1091)는 대문·폴더가 있을 수 없는 '남은 것' 묶음이라 카테고리 페이지가 아니라 평면 목록으로 간다.
+        if (f.q || f.all || f.indexed || f.category === KN_UNCAT || (f.type && !f.category))
             return renderFilterList(box, ctx);
         if (f.category) {
             const cat = sideCtl.findCat(f.category);
@@ -197,8 +199,12 @@ async function renderFilterList(box, ctx) {
         box.replaceChildren(errorNote(e, '목록을 불러오지 못했습니다'));
         return;
     }
-    const title = f.indexed ? '인덱스' : (f.q ? '검색' : '전체 지식');
+    const uncat = f.category === KN_UNCAT && !f.indexed;
+    const title = f.indexed ? '인덱스' : (f.q ? '검색' : uncat ? '미분류' : '전체 지식');
     const clearBits = [];
+    if (uncat)
+        clearBits.push(el('button', { class: 'wk-filter-chip', type: 'button', title: '미분류 필터 지우기', text: '미분류 ×',
+            onclick: () => { f.category = ''; f.folder = ''; ctx.syncHash(); ctx.repaint(); } }));
     if (f.q)
         clearBits.push(el('button', { class: 'wk-filter-chip', type: 'button', title: '검색 지우기', text: '"' + f.q + '" ×',
             onclick: () => { f.q = ''; ctx.syncHash(); ctx.repaint(); } }));
@@ -211,7 +217,9 @@ async function renderFilterList(box, ctx) {
             onclick: () => { f.category = ''; f.folder = ''; ctx.syncHash(); ctx.repaint(); } }));
     const sec = wkSection(title, {
         count: entries.length,
-        hint: f.indexed ? '매 대화 첫머리에 항상 깔리는 핀 문서' : (f.q ? '제목·본문 일치(정확 검색) — 의미로 찾으려면 ⌘K' : null),
+        hint: f.indexed ? '매 대화 첫머리에 항상 깔리는 핀 문서'
+            : (f.q ? '제목·본문 일치(정확 검색) — 의미로 찾으려면 ⌘K'
+                : uncat ? '카테고리가 없어 소환(recall)에 안 잡히는 지식 — 문서를 열어 분류를 지정하세요' : null),
         actions: clearBits,
     });
     const names = entries.map((e) => e.name);

@@ -6,7 +6,7 @@
 //  편집하면 is_wiki 가 false 로 떨어져 매 세션 WIKI 인덱스에서 소리없이 빠짐 → 발견·소환 트리거 상실.
 //  불변식: "명시(undefined 아님) 우선 → 없으면 기존(before) 보존 → 신규(before=null)면 기본값".
 import assert from "node:assert/strict";
-import { resolveUpsertFacets, resolveWikiLinkTargets, appendBody, isDuplicateAppend } from "./knowledge-store.js";
+import { resolveUpsertFacets, resolveWikiLinkTargets, appendBody, isDuplicateAppend, knowledgeListFilter } from "./knowledge-store.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => {
@@ -198,6 +198,53 @@ t("#921: 꼬리가 아니라 중간에 같은 내용이 있는 건 중복 아님
 });
 t("#921: 빈 조각은 중복 판정 대상 아님", () => {
   assert.equal(isDuplicateAppend("# 런북", "\n\n  "), false);
+});
+
+// ── #1091 카테고리 축 — 특정 카테고리 | 스페이스 | **미분류**(어느 카테고리 목록에도 안 뜨는 지식) 셋 중 하나.
+//  WIKI 사이드바의 '미분류' 노드·검색이 이 축에 기댄다. 이 축이 조용히 무력화되면 필터가 no-op 이 되어
+//  **에러 없이 '전체가 다 나오는'** 오답이 된다(빈 화면이 아니라 그럴듯한 오답이라 눈으로 못 잡는다).
+//  또 축을 겹쳐 적용하면(카테고리 지정 + 미분류) 결과가 항상 0건 — 이것도 조용하다. 그래서 조립 결과를 직접 잠근다.
+const uncatWhere = /NOT EXISTS \(SELECT 1 FROM knowledge_category kcu WHERE kcu\.name=k\.name AND kcu\.state<>'rejected'\)/;
+const catJoin = /JOIN knowledge_category/;
+
+t("#1091 ①: 미분류만 → 미분류 술어 O · 카테고리 조인 X · 파라미터 없음", () => {
+  const r = knowledgeListFilter({ uncategorized: true });
+  assert.match(r.where, uncatWhere, "술어가 빠지면 필터가 no-op — 전체가 미분류로 나온다");
+  assert.doesNotMatch(r.join, catJoin, "조인하면 정의상 0건이 된다");
+  assert.deepEqual(r.params, []);
+});
+t("#1091 ②: 미분류 + 카테고리 → 카테고리가 이긴다(겹쳐 걸면 항상 0건)", () => {
+  const r = knowledgeListFilter({ uncategorized: true, categoryId: 22 });
+  assert.doesNotMatch(r.where, uncatWhere);
+  assert.match(r.join, catJoin);
+  assert.deepEqual(r.params, [22]);
+});
+t("#1091 ③: 미분류 + 스페이스 → 스페이스 조인이 통째로 빠지고 그 파라미터도 안 남는다", () => {
+  const r = knowledgeListFilter({ uncategorized: true, space: "product" });
+  assert.match(r.where, uncatWhere);
+  assert.doesNotMatch(r.join, catJoin, "스페이스 조인이 남으면 '카테고리 있는 지식'만 남아 항상 0건");
+  assert.deepEqual(r.params, [], "조인만 빼고 파라미터를 남기면 이후 $n 자리번호가 밀려 엉뚱한 값에 바인딩된다");
+});
+t("#1091 ④: 축 미지정 → 미분류 술어 없음(전체 조회가 미분류로 좁혀지면 안 된다)", () => {
+  assert.doesNotMatch(knowledgeListFilter({}).where, uncatWhere);
+});
+t("#1091 ⑤: 카테고리만 → 종전 그대로(미분류 술어 없음)", () => {
+  const r = knowledgeListFilter({ categoryId: 22 });
+  assert.doesNotMatch(r.where, uncatWhere);
+  assert.match(r.join, catJoin);
+  assert.deepEqual(r.params, [22]);
+});
+t("#1091 ⑥: 스페이스만 → 종전 그대로(스페이스 조인 유지)", () => {
+  const r = knowledgeListFilter({ space: "product" });
+  assert.doesNotMatch(r.where, uncatWhere);
+  assert.match(r.join, /JOIN category c ON c\.id=kc\.category_id AND c\.space=\$1/);
+  assert.deepEqual(r.params, ["product"]);
+});
+t("#1091 ⑦: 미분류 + 다른 조건 → 둘 다 걸리고, 미분류 술어는 파라미터를 안 먹는다($1 유지)", () => {
+  const r = knowledgeListFilter({ uncategorized: true, injection: "recalled" });
+  assert.match(r.where, uncatWhere);
+  assert.match(r.where, /k\.injection=\$1/, "미분류 술어가 파라미터를 먹으면 뒤 조건의 자리번호가 밀린다");
+  assert.deepEqual(r.params, ["recalled"]);
 });
 
 console.log(`\n${pass} passed`);

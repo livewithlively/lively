@@ -732,6 +732,7 @@ async function renderWikiDocPage(view, name) {
     onSelect: (v) => {
       location.hash = v === KN_INDEXED ? '#/knowledge?indexed=1' : (v ? '#/knowledge?category=' + encodeURIComponent(v) : '#/knowledge');
     },
+    uncategorized: true,
     collapsible: true,
   });
   const canvas = el('article', { class: 'wk-doc' });
@@ -759,6 +760,7 @@ async function renderWikiDraft(view, params) {
     onSelect: (v) => {
       location.hash = v === KN_INDEXED ? '#/knowledge?indexed=1' : (v ? '#/knowledge?category=' + encodeURIComponent(v) : '#/knowledge');
     },
+    uncategorized: true,
     collapsible: true,
   });
   const canvas = el('article', { class: 'wk-doc wk-doc-page wk-doc-draft' });
