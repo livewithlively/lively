@@ -121,7 +121,9 @@ export interface SessionInfo {
 }
 export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; resume?: string; readOnly?: boolean; incognito?: boolean;
   // #1059 E — 상시(managed) 세션은 desired-state DB 미러를 만들지 않는다(keep-alive 가 그 영속을 소유). ensureManagedSession 만 넘긴다.
-  managed?: boolean; }
+  managed?: boolean;
+  // #1059 — claude UUID 를 모를 때 인자 없는 --resume 로 후보 picker 를 띄운다(restorable 복원. resume 과 배타 — resume 우선).
+  resumePick?: boolean; }
 
 const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "user";
 const userSlug = (u: LivelyUser): string => slug(u.userId || u.email || "user");
@@ -678,9 +680,16 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   if (harness.bin) {
     cmd.push(harness.bin);
     // 이어받기(#905 C1) — claude 하네스에 한해 --resume <sid> 주입(그 세션 대화를 이어서 연다). sid 형식 검증.
+    //  ⚠ 여기의 <sid> 는 **claude 자신의 세션 UUID** 여야 한다(세션이력 캡처가 claude session_id 로 키잉 — #905).
+    //   tmux box-id 를 주면 claude 가 못 찾아 검색-결과없음 picker 가 뜬다(#1059 사용자 신고). 그 경우엔 resumePick 을 쓴다.
     if (input.resume && harness.key === "claude") {
       if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(input.resume)) throw new HttpError(400, "resume 세션 id 형식이 잘못되었습니다");
       cmd.push("--resume", input.resume);
+    } else if (input.resumePick && harness.key === "claude") {
+      // #1059 — 정확한 claude UUID 를 모를 때(예: restorable 복원, box-id 만 있음): 인자 없는 --resume 로 **후보 picker** 를
+      //  바로 띄운다. box-id 를 넘겨 "검색 결과 없음"에 빠뜨리는 대신, 이 작업폴더의 실제 대화 후보에서 사용자가 고른다.
+      //  (제로클릭 정밀 복원은 box-id↔claude-UUID 매핑 저장이 선행 — 후속.)
+      cmd.push("--resume");
     }
     for (const def of harness.flags) {
       const raw = input.flags?.[def.name];

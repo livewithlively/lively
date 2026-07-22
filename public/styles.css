@@ -7238,6 +7238,23 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .storage-actions { margin-top: 14px; }
 .storage-toggle { display: flex; align-items: center; gap: 8px; margin: 8px 0 2px; font-size: 13px; cursor: pointer; }
 .storage-toggle input { margin: 0; }
+/* #1059 F — 관리탭 세션목록(세션 섹션). 스캔 가능한 한 줄 행: 상태점 · 제목/부제 · 상태 · 시각 · 회수. */
+.sess-admin-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 4px; }
+.sess-admin-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint); }
+.sess-admin-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--muted-2); }
+.sess-admin-dot-busy { background: #f59e0b; }
+.sess-admin-dot-waiting { background: var(--coral, #e5484d); }
+.sess-admin-dot-idle { background: var(--mint-deep); }
+.sess-admin-dot-exited, .sess-admin-dot-offline { background: var(--muted-2); }
+.sess-admin-main { flex: 1; min-width: 0; }
+.sess-admin-title { font-size: 13.5px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess-admin-meta { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess-admin-st { flex: none; font-size: 11.5px; font-weight: 700; min-width: 52px; text-align: right; }
+.sess-admin-st-busy { color: #d97706; }
+.sess-admin-st-waiting { color: var(--coral, #e5484d); }
+.sess-admin-st-idle { color: var(--mint-deep); }
+.sess-admin-st-exited, .sess-admin-st-offline { color: var(--muted); }
+.sess-admin-when { flex: none; font-size: 11.5px; color: var(--muted); white-space: nowrap; min-width: 68px; text-align: right; }
 .storage-warn { border-left: 3px solid #f59e0b; padding-left: 9px; }
 .ws-badges { display: flex; align-items: center; gap: 6px; }
 .ws-plan { margin: 6px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--bg-tint, #f6f7f9); }

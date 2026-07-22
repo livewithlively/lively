@@ -157,6 +157,8 @@ const ADMIN_SECTIONS = [
     { key: 'storage', label: '컴퓨팅 리소스', meaning: null, group: 'ops' },
     // #1059 — 로그(회전·보관)는 별도 메뉴. 컴퓨팅 리소스(메모리·저장소)와 성격이 달라 분리(사용자 피드백).
     { key: 'logs', label: '로그', meaning: null, group: 'ops' },
+    // #1059 F — 세션: 이 박스에서 도는 전 AI 세션 메타뷰 + 수동 회수(idle 누적이 OOM 의 만성 원인. 여기서 보고 회수).
+    { key: 'sessions', label: '세션', meaning: null, group: 'ops' },
 ];
 // 구 URL → 새 섹션. 북마크·내부 링크·문서 링크를 깨지 않는다(#837 병합 + 과거 흡수분).
 const SECTION_REMAP = {
@@ -173,7 +175,7 @@ const SECTION_REMAP = {
 // 구 [검토 큐]는 관리탭을 떠나 WIKI 탭으로 갔다(#837) — 섹션 리맵이 아니라 탭 밖 리다이렉트라 따로 둔다.
 const SECTION_EXIT = { 'review-queue': '#/knowledge/review' };
 // admin 권한 전용(쓰기·인프라·감사). #318 호출통계·#549 변경감사는 전 구성원의 변경·before/after 를 노출하므로 admin.
-const ADMIN_ONLY = ['credentials', 'connectors', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'logs', 'embeddings', 'automation', 'audit', 'ingest-policy', 'session-share'];
+const ADMIN_ONLY = ['credentials', 'connectors', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'logs', 'sessions', 'embeddings', 'automation', 'audit', 'ingest-policy', 'session-share'];
 const RUNTIME_ONLY = ['agent-assets']; // runtime 권한 전용(멤버 머신에서 도는 것의 정의)
 // [도구]는 두 권한의 합집합 — 사내 API 도구·빌트인은 runtime, 외부 MCP 서버 등록은 admin. 둘 중 하나라도 있으면
 //  섹션을 보여주고, 안에서 각 서브탭을 권한별로 켠다(구조상 한 섹션=한 scope 전제가 깨지는 유일한 자리라 명시한다).
@@ -364,6 +366,8 @@ function renderAdminDetail(detail, sel, data) {
         return storageEditor(detail, data);
     if (sel === 'logs')
         return logsEditor(detail, data);
+    if (sel === 'sessions')
+        return sessionsAdminEditor(detail, data);
     if (sel === 'session-share')
         return sessionShareEditor(detail, data);
     if (sel === 'embeddings')
@@ -3330,6 +3334,75 @@ function logsEditor(detail, data) {
                 ? el('p', { class: 'admin-hint', text: '아직 설정한 적이 없어 기본값으로 동작 중입니다.' })
                 : null;
         body.replaceChildren(el('h3', { class: 'storage-h', text: '지금 상태' }), el('div', { class: 'storage-block' }, el('div', { class: 'storage-head' }, el('strong', { text: '로그' })), el('p', { class: 'storage-calc' }, el('code', { text: logs.dir || '' })), el('p', { class: 'storage-calc', text: logLine }), logDetail), el('h3', { class: 'storage-h', text: '정책' }), ...(srcNote ? [srcNote] : []), el('div', { class: 'storage-block' }, el('strong', { text: '로그 보관' }), el('div', { class: 'storage-fields' }, el('label', {}, el('span', { text: '파일 1개 최대(MB)' }), logMaxIn), el('label', {}, el('span', { text: '보관 개수' }), logKeepIn)), logCalc, el('p', { class: 'admin-hint', text: '상한을 넘으면 자동으로 회전합니다(내용은 보관본으로 넘기고 현재 파일은 비웁니다). 서비스는 멈추지 않습니다.' }), el('div', { class: 'storage-actions' }, saveBtn)));
+    }
+    load();
+}
+// 세션(#1059 F b/c) — 이 박스의 전 중앙 세션 메타뷰 + 수동 회수. admin 전용(/api/ui/terminal/admin/sessions).
+//  회수(reclaim=1)는 tmux 만 종료하고 desired-state 를 보존 → 사용자가 목록에서 '복원 가능'으로 다시 연다(파괴적 삭제 아님).
+//  managed(상시)는 keep-alive 가 되살리므로 회수 버튼을 막고, 접속중·작업중 세션은 admin 이 회수 가능하나(긴급 override) 확인창으로 한번 더.
+function sessionsAdminEditor(detail, data) {
+    const canEdit = !!data.canEdit; // admin scope
+    const body = el('div');
+    detail.replaceChildren(sectionHead('세션', '이 박스에서 지금 도는 모든 AI 세션입니다. 안 쓰는 세션이 쌓이면 메모리가 말라 박스가 멈출 수 있어요(#1059) — 여기서 보고 오래 쉬는 세션을 회수하세요. 회수해도 대화·설정은 보존돼 사용자가 다시 열 수 있습니다(파괴적 삭제 아님).'), el('div', { class: 'card' }, body));
+    body.append(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
+    const memberName = (id) => { const m = (data.members || []).find((x) => x.id === id); return m ? (m.display_name || m.id) : (id || '?'); };
+    const shortDir = (d) => { if (!d)
+        return '—'; const parts = String(d).split('/').filter(Boolean); return parts.length > 2 ? '…/' + parts.slice(-2).join('/') : d; };
+    const STMAP = { busy: ['작업 중', 'busy'], waiting: ['확인 필요', 'waiting'], idle: ['대기 중', 'idle'], exited: ['종료됨', 'exited'], offline: ['연결 끊김', 'offline'] };
+    const agoText = (sec) => { if (!sec)
+        return '기록 없음'; const dd = Math.floor(Date.now() / 1000) - Number(sec); if (dd < 60)
+        return '방금'; if (dd < 3600)
+        return Math.floor(dd / 60) + '분 전'; if (dd < 86400)
+        return Math.floor(dd / 3600) + '시간 전'; return Math.floor(dd / 86400) + '일 전'; };
+    async function load() {
+        let d;
+        try {
+            d = await api('/api/ui/terminal/admin/sessions');
+        }
+        catch (e) {
+            body.replaceChildren(el('p', { class: 'admin-hint', text: '불러오지 못했습니다: ' + e.message }));
+            return;
+        }
+        build((d && d.sessions) || []);
+    }
+    function build(sessions) {
+        // 상태 우선 정렬(작업중·확인필요 = 건드리면 안 되는 것을 위로 인지) → 그 안에서 최근 작업순.
+        const rank = { busy: 0, waiting: 1, idle: 2, exited: 3, offline: 4 };
+        const rows = [...sessions].sort((a, b) => (rank[a.agentState] ?? 9) - (rank[b.agentState] ?? 9) || (Number(b.lastActive) || 0) - (Number(a.lastActive) || 0));
+        const summary = el('p', { class: 'admin-hint', text: `총 ${sessions.length}개 · 접속 중 ${sessions.filter((s) => s.attached).length}개 · 상시 ${sessions.filter((s) => s.managed).length}개. 회수는 tmux 만 종료하고 대화·설정을 보존합니다(사용자가 “복원 가능”으로 다시 엶).` });
+        const list = el('div', { class: 'sess-admin-list' });
+        if (!rows.length)
+            list.append(el('p', { class: 'admin-hint', text: '지금 도는 세션이 없습니다.' }));
+        for (const s of rows) {
+            const [lbl, cls] = STMAP[s.agentState] || STMAP.offline;
+            const headline = (s.title && s.title !== s.label ? s.title : s.label) || '(이름 없음)';
+            const reclaimBtn = el('button', { class: 'btn btn-sm btn-danger', text: '회수' });
+            reclaimBtn.disabled = !canEdit || !!s.managed;
+            if (s.managed)
+                reclaimBtn.title = '상시(managed) 세션은 keep-alive 가 되살리므로 회수 대상이 아닙니다.';
+            reclaimBtn.addEventListener('click', async () => {
+                const inUse = s.attached || s.agentState === 'busy' || s.agentState === 'waiting';
+                const warn = inUse ? '\n\n⚠ 지금 사용 중(접속/작업/대기)입니다 — 회수하면 진행 화면이 끊깁니다(대화는 보존, 다시 열 수 있음).' : '';
+                if (!confirm(`세션 “${s.label || s.id}”을(를) 회수할까요?\n메모리를 되찾고 “복원 가능” 목록에 남습니다(대화·설정 보존).${warn}`))
+                    return;
+                reclaimBtn.disabled = true;
+                reclaimBtn.textContent = '회수 중…';
+                try {
+                    await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '?reclaim=1', { method: 'DELETE' });
+                    toast('회수했어요 — 복원 가능 목록에 남습니다.');
+                    load();
+                }
+                catch (e) {
+                    toast(e.message, true);
+                    reclaimBtn.disabled = false;
+                    reclaimBtn.textContent = '회수';
+                }
+            });
+            list.append(el('div', { class: 'sess-admin-row' }, el('span', { class: 'sess-admin-dot sess-admin-dot-' + cls, title: lbl }), el('div', { class: 'sess-admin-main' }, el('div', { class: 'sess-admin-title', title: headline, text: headline }), el('div', { class: 'sess-admin-meta', text: `${memberName(s.owner)} · ${s.harness || 'shell'}${s.projectId ? ' · 프로젝트 #' + s.projectId : ''}${s.managed ? ' · 상시' : ''} · 📁 ${shortDir(s.dir)}` })), el('span', { class: 'sess-admin-st sess-admin-st-' + cls, text: lbl }), el('span', { class: 'sess-admin-when', text: (s.attached ? '접속 중 · ' : '') + agoText(s.lastActive) }), reclaimBtn));
+        }
+        const refresh = el('button', { class: 'btn btn-sm', text: '새로고침' });
+        refresh.addEventListener('click', load);
+        body.replaceChildren(summary, list, el('div', { class: 'storage-actions' }, refresh));
     }
     load();
 }

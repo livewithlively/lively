@@ -1238,7 +1238,7 @@ async function fillSessions(zone, onCount, projectsP?) {
             if (r && r.already) { window.open('/ui/terminal.html?session=' + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || ''), '_blank'); toast('세션이 이미 살아있어 그대로 엽니다'); reloadSessions && reloadSessions(); return; }
             const ns = r && r.session;
             if (ns && ns.id) window.open('/ui/terminal.html?session=' + encodeURIComponent(ns.id) + '&label=' + encodeURIComponent(ns.label || s.label || ''), '_blank');
-            toast('세션을 복원했어요'); reloadSessions && reloadSessions();
+            toast('복원했어요 — 새 터미널에서 이어볼 대화를 고르세요(claude 이어보기 목록).'); reloadSessions && reloadSessions();
           } catch (e: any) { toast('복원 실패 — ' + (e && e.message || e), true); openBtn.disabled = false; openBtn.textContent = '복원'; }
         };
       } else {
