@@ -1282,11 +1282,11 @@ async function previewEnvsPanel(detail, data) {
     el('span', { class: 'wikicat-groupcount', text: String(envs.length) }),
     el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 미리보기 만들기', onclick: () => openPreviewEnvForm(null, reload) }));
   const card = el('div', { class: 'card' },
-    cardHead('만들어 둔 미리보기'),
+    cardHead('만들어 둔 미리보기', '항목 하나 = 작업 브랜치 하나를 따로 띄운 화면입니다. AI 세션이 화면 확인이 필요할 때 스스로 만들기도 합니다. [띄우기]로 켜고 [화면 열기]로 보며, 다 봤으면 [끄기](주소는 남고 프로세스만 내려감) 또는 [삭제]. 운영 화면(:8080)에는 영향을 주지 않습니다.'),
     el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
   // 제목·설명은 card 밖 상단으로 — 관리탭 다른 섹션과 같은 자리(#1010).
   detail.replaceChildren(
-    sectionHead('미리보기', '작업 중인 화면을 운영 화면과 따로 띄워 봅니다. 만들어진 주소를 팀원에게 보내 확인받을 수 있습니다.'),
+    sectionHead('미리보기', '아직 반영하지 않은 작업 화면을 운영 화면과 따로 띄워 확인하는 곳입니다. 항목 하나가 작업 하나이고, 만들어진 주소를 팀원에게 보내 확인받을 수 있습니다.'),
     card);
   // 준비 중인 게 있으면 잠시 뒤 자동으로 다시 확인한다(사람이 새로고침하지 않아도 되게).
   if (envs.some((x) => x.status === 'preparing')) {
