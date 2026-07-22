@@ -167,7 +167,7 @@ export async function ingestPolicyPanel(detail, data): Promise<void> {
   detail.replaceChildren(
     el('div', {},
       el('div', { class: 'section-title' }, el('h2', { text: '지식 검토 정책' })),
-      el('p', { class: 'admin-hint', text: '에이전트(AI)가 기록한 지식을 사람이 확인한 뒤에 유효해지도록 할지 정합니다. 기본값은 “즉시 반영”(게이트 꺼짐)이므로 켜지 않으면 지금과 동일하게 동작합니다.' })),
+      el('p', { class: 'admin-hint', text: 'AI가 기록한 지식을 사람이 확인한 뒤에 유효해지도록 할지 정합니다.' })),
     el('div', { class: 'card' },
       el('p', { class: 'admin-hint rq-intro', text: '켜면 에이전트가 기록한 지식은 [WIKI ▸ 검토 대기]로 이동하고, 승인 전까지는 검색·세션주입·목록에 표시되지 않습니다. 사람이 웹에서 직접 쓴 지식은 영향을 받지 않습니다.' }),
       gateCard(preset, obs, reload),
