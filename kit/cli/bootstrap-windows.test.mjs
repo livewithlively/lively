@@ -87,6 +87,45 @@ check("④ 판정 불가와 구버전을 구분해 안내한다", /버전 확인
     /RELOAD_SHELL_HINT\s*=\s*WIN\s*\?/.test(code), "RELOAD_SHELL_HINT 가 플랫폼 분기가 아니다");
 }
 
+// ⑤-b mjs — **셸 경유 스폰은 명령까지 인용한다**(#1087: `C:\Program Files\nodejs\node.exe` 가 두 토막 났다)
+//   Node 는 shell:true 에서 `[cmd, ...args]` 를 공백으로 이어 cmd.exe 에 넘길 뿐 **어느 쪽도 quote 하지 않는다.**
+//   POSIX CI 에선 WIN=false 라 이 코드가 한 번도 실행되지 않으므로 순수함수로 직접 못박는다.
+{
+  // ⚠ 헬퍼가 없어도 **크래시로 죽지 않는다** — 한 섹션의 예외가 뒤 검사(⑥⑦⑧)를 통째로 가리면
+  //   "몇 개가 통과했나"가 거짓이 되고, 진짜 회귀가 그 뒤에 숨는다.
+  const { winSpawnArgs } = await import(join(HERE, "lively.mjs")).catch(() => ({}));
+  if (typeof winSpawnArgs !== "function") {
+    bad("⑤-b 셸 스폰 인자 조립 헬퍼(winSpawnArgs)가 없다", "명령 인용이 호출부에 흩어져 있으면 또 빠뜨린다");
+  } else {
+    // 현장에서 죽은 바로 그 경로 — 인용이 빠지면 cmd.exe 가 'C:\Program' 을 명령으로 본다.
+    const [c, a] = winSpawnArgs("C:\\Program Files\\nodejs\\node.exe", ["C:\\a b\\user-install.mjs", "--harness", "claude"]);
+    check("⑤-b 공백 든 명령 경로가 인용된다 (안 하면 'C:\\Program' 으로 두 토막)",
+      c === '"C:\\Program Files\\nodejs\\node.exe"', `got=${c}`);
+    check("⑤-b 공백 든 인자도 인용된다",
+      a[0] === '"C:\\a b\\user-install.mjs"', `got=${a[0]}`);
+    check("⑤-b 평범한 명령·인자는 원형 보존(과잉 인용 금지)",
+      winSpawnArgs("claude", ["mcp", "add"])[0] === "claude" && winSpawnArgs("claude", ["mcp"])[1][0] === "mcp",
+      "불필요한 인용이 붙었다");
+  }
+
+  // 배선 — 셸 경유 스폰이 전부 이 헬퍼를 거치는가. 한 군데라도 raw 로 남으면 같은 버그가 되살아난다.
+  //  ⚠ 창을 넉넉히 잡는다. 옵션 객체가 여러 줄이면 `shell: WIN` 이 스폰 줄에서 4~5줄 아래에 온다 —
+  //   좁은 창으로는 **정작 이 버그가 난 run() 을 못 잡았다**(작성 중 실측). 검사가 진짜 지점을 덮는지
+  //   fail-first 로 확인할 것: 수정 전 코드에서 run()·harness 스폰 **둘 다** 빨간불이어야 한다.
+  //  ⚠ 창은 **다음 스폰 호출 앞에서 끊는다.** 안 그러면 shell 을 안 쓰는 스폰이 바로 아래 스폰의
+  //   `shell: true` 를 삼켜 오탐이 난다(작성 중 실측: 1263행이 1271행 것에 걸렸다).
+  const lines = MJS.split("\n");
+  const isSpawn = (l) => /(spawnSync|spawn)\(/.test(l) && !/^\s*\/\//.test(l);
+  const spawnLines = lines.map((l, i) => [i + 1, l]).filter(([, l]) => isSpawn(l));
+  const raw = spawnLines.filter(([n], i) => {
+    const end = Math.min(spawnLines[i + 1]?.[0] - 1 || lines.length, n + 9);
+    const near = lines.slice(Math.max(0, n - 3), end).join("\n");
+    return /shell:\s*(WIN|true)/.test(near) && !/winSpawnArgs/.test(near);
+  });
+  check("⑤-b 셸 경유 스폰이 전부 winSpawnArgs 를 거친다",
+    raw.length === 0, `raw 스폰: ${raw.map(([n, l]) => `${n}행 "${l.trim()}"`).join(" / ")}`);
+}
+
 // ⑥ mjs — setup 은 토큰의 **존재**가 아니라 **수용 여부**로 로그인을 건너뛴다
 check("⑥ cmdSetup 이 토큰 유효성을 확인한다 (존재만 보면 401 로 [1/3] 에서 죽는다)",
   /tokenAccepted\(gateway\(\), token\(\)\)/.test(MJS) && !/if \(token\(\) && gateway\(\)\) info\("이미 로그인/.test(MJS),
