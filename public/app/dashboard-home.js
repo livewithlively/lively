@@ -1629,7 +1629,7 @@ function openSessMenu(anchor, s, onChange) {
     };
     if (s.owned)
         item('이름 수정', null, false, () => openSessRename(s, onChange));
-    item('내 질문 보기', '이 세션에서 클로드에게 보낸 질문만 모아보기', false, () => openSessPrompts(s));
+    item('질문 보기', '이 세션에서 AI 에게 보낸 질문 전부(누가 보냈든) 모아보기', false, () => openSessPrompts(s));
     // #1059 E — restorable(이미 꺼진) 세션은 '복원 목록에서 제거'(desired-state 삭제), 라이브 세션은 '삭제'(작업 종료).
     if (s.owned)
         item(s.restorable ? '복원 목록에서 제거' : '삭제', s.restorable ? '이 세션을 더는 복원하지 않습니다' : null, true, async () => {
