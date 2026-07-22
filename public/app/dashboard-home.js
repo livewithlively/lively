@@ -3174,10 +3174,11 @@ function dashArrowIcon() {
     n.append(sv('path', { d: 'M5 12h13' }), sv('path', { d: 'M13 6l6 6-6 6' }));
     return n;
 }
-// 필터(깔때기) 아이콘 — 리스트 헤더 우측 목록 거르기 버튼(#req). 헤더 ⚙·→ 와 같은 15px 라인 아이콘 톤.
+// 필터 아이콘 — 아래로 좁아지는 3선. 프로젝트 탭 툴바(pjvTbIcon('filter'))와 **같은 도형**을 쓴다:
+//  우리 서비스의 필터 표시는 이 3선 하나로 통일한다(깔때기 도형은 쓰지 않는다 — #req).
 function dashFilterIcon() {
-    const n = sv('svg', { viewBox: '0 0 24 24', width: 15, height: 15, fill: 'none', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
-    n.append(sv('path', { d: 'M4 5h16l-6.2 7.4V19l-3.6-2v-4.6z' }));
+    const n = sv('svg', { viewBox: '0 0 24 24', width: 15, height: 15, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true' });
+    n.append(sv('path', { d: 'M3 6.5h18M7 12h10M10 17.5h4' }));
     return n;
 }
 // 확장(⤢) 아이콘 — 헤더 통일 액션버튼(모달 '전체 보기').

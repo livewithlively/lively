@@ -7516,7 +7516,8 @@ function pjvTbIcon(kind, cls?) {
     n.append(sv('rect', { x: 3, y: 4.5, width: 18, height: 15, rx: 2.4 }), sv('path', { d: 'M9 4.5v15M15 4.5v15' }));
     return n;
   }
-  if (kind === 'filter') { // 필터 — 아래로 좁아지는 3선(깔때기). 폭 18/10/4 로 확실히 좁아지게.
+  if (kind === 'filter') { // 필터 — 아래로 좁아지는 3선. 폭 18/10/4 로 확실히 좁아지게.
+    //  ⚠ 이게 우리 서비스의 **유일한 필터 아이콘**이다(깔때기 도형 금지 — #req). 다른 화면도 같은 d 를 쓴다(예 dashFilterIcon).
     n.append(sv('path', { d: 'M3 6.5h18M7 12h10M10 17.5h4' }));
     return n;
   }
