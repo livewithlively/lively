@@ -807,6 +807,17 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .ov-box { background: var(--bg); border-radius: 16px; box-shadow: 0 24px 64px rgba(21,35,59,.28); max-width: 760px; width: 100%; padding: 22px 24px; }
 .ov-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .ov-head h3 { margin: 0; font-size: 17px; font-weight: 800; color: var(--ink); }
+/* 확인 다이얼로그(#1062) — 브라우저 confirm 대체. 짧은 팝업이라 화면 중앙, 좁게, 액션은 우하단.
+   위험(danger)일 때만 제목 왼쪽에 코랄 레일을 둬 '되돌리기 어려운 동작'임을 시각적으로 못 박는다. */
+.ov-back.ov-confirm-back { align-items: center; }
+.ov-box.ov-confirm { max-width: 440px; padding: 20px 22px; }
+.ov-box.ov-confirm .ov-head { margin-bottom: 10px; }
+.ov-box.ov-confirm.danger .ov-head h3 { border-left: 3px solid var(--coral, #e5484d); padding-left: 10px; }
+.ov-confirm-body { display: flex; flex-direction: column; gap: 7px; }
+.ov-confirm-msg { margin: 0; font-size: 14px; line-height: 1.6; color: var(--ink); }
+.ov-confirm-line { margin: 0; font-size: 13px; line-height: 1.6; color: var(--ink-note, var(--muted)); }
+.ov-confirm-note { margin: 2px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); background: var(--bg-tint, rgba(127,127,127,.07)); border-radius: 8px; padding: 8px 10px; }
+.ov-confirm-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 /* ── 세션 대화록(#905 C1) — 사이드바 네비 + 10줄 하드 캡 + 줄단위 링크 ── */
 .sess-layout { display: flex; gap: 20px; align-items: flex-start; }
 .sess-side { position: sticky; top: 12px; flex: 0 0 240px; width: 240px; max-height: calc(100vh - 40px); overflow: auto; border-right: 1px solid rgba(127,127,127,.15); padding-right: 10px; }
