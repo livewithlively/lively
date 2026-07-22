@@ -105,6 +105,10 @@ const ADMIN_SECTIONS = [
   //  점프하고 state.admin.memberAddPreselect 로 선택을 실어 나르는 해킹이 필요했다(#837 에서 제거).
   { key: 'members', label: '구성원', meaning: 'member', group: 'org' },
   { key: 'teams', label: '팀', meaning: 'team', group: 'org' },
+  // 사람 관리의 '들이기'와 '권한 주기'를 [구성원](명부)에서 떼어 별도 화면으로(#1085 요구).
+  //  둘 다 관리자 전용 — ADMIN_ONLY 에 넣어 비관리자에겐 숨고, 관리자에겐 '관리자' 배지가 붙는다.
+  { key: 'member-add', label: '구성원 추가', meaning: null, group: 'org' },
+  { key: 'member-access', label: '구성원 권한 관리', meaning: null, group: 'org' },
   // ── AI 맥락 ──
   //  항상-주입 섹션 문서(injection=always)는 지도에서 직접 추가/편집/삭제/재정렬한다(#335).
   { key: 'injection-map', label: '세션 주입', meaning: null, group: 'context' },
@@ -164,8 +168,9 @@ const ADMIN_SECTIONS = [
 ];
 // 구 URL → 새 섹션. 북마크·내부 링크·문서 링크를 깨지 않는다(#837 병합 + 과거 흡수분).
 const SECTION_REMAP = {
-  // #837 병합
-  'member-add': 'members', 'tokens': 'members', 'profiles': 'members',
+  // #837 병합 — ⚠ 'member-add' 는 #1085 에서 **다시 독립 섹션**이 됐으므로 여기서 뺀다(리맵이 남아 있으면
+  //  새 섹션이 영영 [구성원]으로 튕긴다). 구 URL 'tokens'·'profiles' 는 이제 [구성원 권한 관리]로 보낸다.
+  'tokens': 'member-access', 'profiles': 'member-access',
   'mcp': 'tools',
   'custom-hooks': 'agent-assets', 'harness-assets': 'agent-assets',
   'cron': 'automation', 'managed-sessions': 'automation',
@@ -177,7 +182,7 @@ const SECTION_REMAP = {
 // 구 [검토 큐]는 관리탭을 떠나 WIKI 탭으로 갔다(#837) — 섹션 리맵이 아니라 탭 밖 리다이렉트라 따로 둔다.
 const SECTION_EXIT = { 'review-queue': '#/knowledge/review' };
 // admin 권한 전용(쓰기·인프라·감사). #318 호출통계·#549 변경감사는 전 구성원의 변경·before/after 를 노출하므로 admin.
-const ADMIN_ONLY = ['credentials', 'connectors', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'logs', 'sessions', 'embeddings', 'automation', 'audit', 'ingest-policy', 'session-share'];
+const ADMIN_ONLY = ['member-add', 'member-access', 'credentials', 'connectors', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'logs', 'sessions', 'embeddings', 'automation', 'audit', 'ingest-policy', 'session-share'];
 const RUNTIME_ONLY = ['agent-assets']; // runtime 권한 전용(멤버 머신에서 도는 것의 정의)
 // [도구]는 두 권한의 합집합 — 사내 API 도구·빌트인은 runtime, 외부 MCP 서버 등록은 admin. 둘 중 하나라도 있으면
 //  섹션을 보여주고, 안에서 각 서브탭을 권한별로 켠다(구조상 한 섹션=한 scope 전제가 깨지는 유일한 자리라 명시한다).
@@ -330,6 +335,10 @@ function renderAdminDetail(detail, sel, data) {
   if (sel === 'me-ai') return void myAiSection(detail);
   if (sel === 'me-logins') return void myLoginsSection(detail);
   if (sel === 'me-assets') return void myAssetsSection(detail);
+  if (sel === 'member-add')
+    return memberAddSection(detail, data);
+  if (sel === 'member-access')
+    return memberAccessSection(detail, data);
   if (sel === 'wiki-categories') return wikiCategoriesPanel(detail, data);
   if (sel === 'members') return membersSection(detail, data);
   if (sel === 'teams') return teamsPanel(detail, data);
@@ -414,15 +423,62 @@ function sectionHead(title, hint, m?) {
 //  넷 다 "한 사람에 대해 뭘 설정하나"였다. 갈라진 탓에 '구성원 추가' 저장이 location.hash 로 토큰 탭에 점프하고
 //  state.admin.memberAddPreselect 로 선택을 실어 나르는 해킹이 필요했다 — 한 화면이 되면서 그 해킹이 사라졌다.
 function membersSection(detail, data) {
-  const admin = !!state.admin.canEdit;
+  // 명부만 남긴다 — '들이기'는 [구성원 추가], '접속·실행 계정'은 [구성원 권한 관리]로 갈랐다(#1085).
   detail.replaceChildren(
-    sectionHead('구성원', '이 조직을 누가 쓰는지, 각자 무엇으로 접속하는지, AI를 어떤 계정으로 실행하는지 정합니다.', data.meaning['member']),
-    segTabs('members', [
-      { key: 'list', label: '구성원', render: (h) => membersEditor(h, data) },
-      // 접속 열쇠 = 우리 게이트웨이에 접속하는 bearer 토큰(auth_token). 외부 서비스 로그인과 다른 것 — 용어 사전 참조.
-      { key: 'tokens', label: '접속 토큰', show: admin, render: (h) => tokensPanel(h, data) },
+    sectionHead('구성원', '이 조직에 누가 있는지 보고, 각자의 이름·이메일·권한을 고칩니다.', data.meaning['member']),
+    el('div', { class: 'admin-body-inner' }));
+  membersEditor(detail.lastElementChild, data);
+}
+
+// ── [구성원 추가] — 사람을 조직에 들이는 한 흐름만 담는다(#1085). ──
+//  명부(구성원)에 섞여 있던 [＋ 구성원 추가] 버튼 → 모달 흐름을 화면으로 폈다. 등록하면 임시 비밀번호가 1회
+//  뜨고(showInitialAccount), 그 사람이 AI·CLI 도 쓰려면 [구성원 권한 관리 ▸ 접속 토큰]에서 토큰을 발급한다.
+function memberAddSection(detail, data) {
+  const formBox = el('div', { class: 'admin-form-narrow' });
+  const draw = () => {
+    const blank = { id: '', kind: 'human', display_name: '', email: '', identities: [], body_md: '', state: 'active', scopes: ['items', 'context'] };
+    memberForm(formBox, blank, data, detail, true, {
+      saveLabel: '구성원 등록', showCancel: false, showRemove: false,
+      onSaved: () => { toast('구성원이 등록됐습니다 — 임시 비밀번호를 전달하세요'); draw(); },
+    });
+  };
+  draw();
+  const recent = ((data.members || []).filter((m) => m.kind !== 'system')).slice(-5).reverse();
+  detail.replaceChildren(
+    sectionHead('구성원 추가', '새 팀원을 조직에 등록합니다. 등록하면 로그인용 임시 비밀번호가 한 번 표시되니 그 자리에서 전달하세요.'),
+    el('div', { class: 'admin-stack' },
+      el('div', { class: 'card' },
+        cardHead('새 구성원 등록', '이름·이메일·권한을 정해 등록합니다. 아이디는 이메일에서 자동으로 만들어집니다. 등록 직후 임시 비밀번호가 한 번만 보이고, 받은 사람은 첫 로그인에서 새 비밀번호를 정합니다.'),
+        formBox),
+      el('div', { class: 'card' },
+        cardHead('등록 다음에 할 일', '웹만 쓸 사람은 여기서 끝입니다. 그 사람의 AI(Claude Code·Codex)나 lively 명령까지 붙이려면 접속 토큰이 필요합니다.'),
+        el('ol', { class: 'minter-steps' },
+          el('li', {}, '임시 비밀번호를 1:1로(슬랙·메신저 DM 등) 전달합니다.'),
+          el('li', {}, '받은 사람이 로그인하면 새 비밀번호를 정합니다.'),
+          el('li', {}, '그 사람의 AI·CLI 도 쓰려면 ', el('b', { text: '[구성원 권한 관리 ▸ 접속 토큰]' }), ' 에서 토큰을 발급해 전달합니다.')),
+        el('div', { class: 'admin-actions' },
+          el('button', { class: 'btn btn-ghost btn-sm', text: '구성원 권한 관리로 이동',
+            onclick: () => { location.hash = '#/system/member-access'; } }),
+          el('button', { class: 'btn btn-ghost btn-sm', text: '구성원 명부 보기',
+            onclick: () => { location.hash = '#/system/members'; } }))),
+      recent.length ? el('div', { class: 'card' },
+        cardHead('최근 등록'),
+        ...recent.map((m) => el('div', { class: 'token-row' },
+          el('div', { class: 'token-main' },
+            el('div', { class: 'token-label', text: m.display_name || m.id }),
+            el('div', { class: 'mini-meta', text: (m.email || '이메일 없음') + ' · ' + ((m.scopes || []).join('/') || '권한 없음') })),
+          el('button', { class: 'btn btn-ghost btn-sm', text: '열기', onclick: () => openMemberModal(m, data, detail) })))) : null));
+}
+
+// ── [구성원 권한 관리] — 접속 토큰 + AI 실행 계정(구 [구성원] 서브탭 둘을 그대로 옮김, #1085). ──
+function memberAccessSection(detail, data) {
+  detail.replaceChildren(
+    sectionHead('구성원 권한 관리', '구성원이 무엇으로 라이블리에 접속하는지, 그 사람의 AI가 어느 계정으로 실행되는지 관리합니다.'),
+    segTabs('member-access', [
+      // 접속 토큰 = 우리 게이트웨이에 접속하는 bearer 토큰(auth_token). 외부 서비스 로그인과 다른 것 — 용어 사전 참조.
+      { key: 'tokens', label: '접속 토큰', render: (h) => tokensPanel(h, data) },
       // 'AI 실행 계정' — 구 '중앙박스 계정(프로필)'. '프로필'은 우상단 [내 프로필]과 겹쳐 버렸다(#524 에서 개념도 은퇴).
-      { key: 'accounts', label: 'AI 실행 계정', show: admin, render: (h) => { void profilesEditor(h); } },
+      { key: 'accounts', label: 'AI 실행 계정', render: (h) => { void profilesEditor(h); } },
     ]));
 }
 
@@ -1880,8 +1936,9 @@ function membersEditor(detail, data) {
   // ＋ 추가 — 구 [구성원 추가] 탭을 대신한다(#837). 다른 모든 목록 화면과 같은 관례(＋ 버튼 → 폼)로 통일.
   //  구 탭은 저장 후 location.hash 로 [토큰] 탭에 점프하고 state.admin.memberAddPreselect 로 선택을 실어 날랐다.
   //  이제 같은 화면 안이라 그냥 서브탭을 넘기면 된다 — 전역 상태로 탭 사이를 꿰맬 이유가 없다.
-  const addBtn = canEdit ? el('button', { class: 'btn btn-primary btn-sm', text: '＋ 구성원 추가',
-    onclick: () => openMemberModal(null, data, detail) }) : null;
+  // ＋ 추가 버튼은 [구성원 추가] 화면으로 옮겼다(#1085) — 여기 명부는 '보고 고치는 곳'이다.
+  const addBtn = canEdit ? el('button', { class: 'btn btn-ghost btn-sm', text: '구성원 추가 →',
+    onclick: () => { location.hash = '#/system/member-add'; } }) : null;
   const bar = el('div', { class: 'admin-member-searchbar' }, members.length ? searchInp : el('span', {}), addBtn);
 
   detail.replaceChildren(el('div', { class: 'card' },
