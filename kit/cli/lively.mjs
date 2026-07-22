@@ -34,6 +34,13 @@ import crypto from "node:crypto";
 // ── 0. 상수 · 경로 ──────────────────────────────────────────────────────────
 const CLI_VERSION = "1.0.0";
 const WIN = process.platform === "win32";
+// 셸 env(LIVELY_TOKEN·PATH)를 새로 읽게 하는 방법은 OS 마다 다르다 — 윈도우에 `source ~/.zshrc` 를 안내하면
+//  사용자는 실행조차 못 한다(#1087 실측: 윈도우 설치 화면에 그대로 나갔다).
+const RELOAD_SHELL_HINT = WIN ? "새 PowerShell 창을 여세요" : "새 터미널을 열거나  source ~/.zshrc";
+// 사용자용 CLI 다 — Node 내부 경고(예: DEP0190 shell 옵션)를 설치 화면에 흘리지 않는다.
+//  우리 코드는 shell:true 경로에서 winArg 로 직접 이스케이프하므로 그 경고는 우리에게 버그 신호가 아니다.
+//  개발자는 LIVELY_DEBUG=1 로 되살릴 수 있다(경고를 영영 못 보게 만들지 않는다).
+if (!process.env.LIVELY_DEBUG) process.noDeprecation = true;
 const HOME = process.env.LIVELY_HOME || homedir();
 const LIVELY = join(HOME, ".lively");
 const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || join(HOME, ".claude");
@@ -898,7 +905,7 @@ function afterLogin(gw, tok) {
   // codex 는 토큰을 config.toml 에 안 굽고 LIVELY_TOKEN 을 읽으므로(bearer_token_env_var) 재등록할 게 없다.
   //  대신 **이 셸의 env 는 우리가 못 고친다**(자식이 부모 셸을 못 바꾼다) → 조용히 두지 말고 사실대로 알린다.
   if (ENV_TOKEN_AT_START && ENV_TOKEN_AT_START !== tok) {
-    warn("이 셸의 LIVELY_TOKEN 은 아직 이전 토큰입니다 — 새 터미널을 열거나 `source ~/.zshrc` 후 codex 를 쓰세요.");
+    warn(`이 셸의 LIVELY_TOKEN 은 아직 이전 토큰입니다 — ${RELOAD_SHELL_HINT} 뒤에 codex 를 쓰세요.`);
   }
 }
 
@@ -1183,7 +1190,7 @@ async function cmdDoctor(opts) {
     const same = ENV_TOKEN_AT_START === tokFile;
     chk("신원 일치(이 셸 env ↔ 파일)", same,
       same ? "일치" : "이 셸의 LIVELY_TOKEN 이 ~/.lively/token 과 다릅니다 — codex 는 옛 신원으로 붙습니다",
-      "새 터미널을 열거나  source ~/.zshrc");
+      RELOAD_SHELL_HINT);
   }
   chk("Claude Code", st.harness.claude.installed, st.harness.claude.installed ? "PATH 에 있음" : "미설치 또는 PATH 밖", "curl -fsSL https://claude.ai/install.sh | bash");
   chk("훅 파일", st.hooks.installed === st.hooks.expected, `${st.hooks.installed}/${st.hooks.expected} (~/.lively/hooks)`, "lively install");
@@ -1192,7 +1199,7 @@ async function cmdDoctor(opts) {
   if (st.harness.codex.installed) chk("Codex 배선", st.harness.codex.wired, st.harness.codex.wired ? "config.toml OK" : "미배선", "lively install");
   if (st.kit.remote) chk("키트 최신", st.kit.current, st.kit.current ? String(st.kit.local) : `${st.kit.local || "(미설치)"} → ${st.kit.remote}`, "lively update");
   // 새 터미널에서 `lively` 가 잡히는지 — rc 배선이 안 됐으면 다음 창에서 못 찾는다.
-  chk("lively PATH", has("lively"), has("lively") ? "OK" : "현 셸의 PATH 밖", "새 터미널을 열거나  source ~/.zshrc");
+  chk("lively PATH", has("lively"), has("lively") ? "OK" : "현 셸의 PATH 밖", RELOAD_SHELL_HINT);
 
   if (opts.json) { process.stdout.write(JSON.stringify({ status: st, checks }, null, 2) + "\n"); return; }
   say(`\n${bold("라이블리 진단")}\n`);
@@ -1410,9 +1417,30 @@ async function cmdRepo(rest) {
 }
 
 // 부트스트랩(curl … | sh)이 곧장 부르는 대화형 첫 설치 — 로그인 + 설치를 한 흐름으로.
+// 토큰이 지금 이 게이트웨이에서 **실제로 먹히는지** 확인한다(죽지 않는다).
+//  true=먹힌다 · false=거부됐다(재로그인 필요) · null=판정 불가(네트워크·게이트웨이 이상).
+//  ⚠ null 을 false 로 뭉개면 잠깐의 네트워크 끊김이 멀쩡한 사용자를 재로그인시킨다 → 셋으로 구분한다.
+async function tokenAccepted(gw, tok) {
+  if (!gw || !tok) return false;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 10000);
+  try {
+    const res = await fetch(gw + "/api/ui/me/profile", { signal: ctl.signal, headers: { authorization: `Bearer ${tok}` } });
+    if (res.status === 401 || res.status === 403) return false;
+    return res.ok ? true : null;
+  } catch { return null; } finally { clearTimeout(timer); }
+}
+
 async function cmdSetup() {
   say(`\n${bold("라이블리 설치를 시작합니다.")}`);
-  if (token() && gateway()) info("이미 로그인돼 있습니다 — 설치만 진행합니다.");
+  // ⚠ 토큰이 **있는지**가 아니라 **먹히는지**를 본다(#1087). token() 은 파일 다음에 LIVELY_TOKEN 환경변수도
+  //  보므로, 만료·회수된 토큰이나 셸에 남아 있던 옛 env 값이 로그인을 건너뛰게 만들었다. 그러면 설치는
+  //  한참 뒤 [1/3] 키트 내려받기에서 401 로 죽고, 그 지점의 메시지만으론 사용자가 뭘 해야 할지 알 수 없다
+  //  (실측: "이미 로그인돼 있습니다" → "✗ 토큰이 유효하지 않습니다" 로 설치 실패).
+  //  같은 계열의 stale-토큰 shadow 사고가 프로비저닝 셸에서도 있었다 — 그 불변식과 짝이다.
+  const accepted = await tokenAccepted(gateway(), token());
+  if (accepted === true) info("이미 로그인돼 있습니다 — 설치만 진행합니다.");
+  else if (accepted === null) info("로그인 상태를 확인하지 못했습니다(네트워크?) — 그대로 설치를 시도합니다.");
   else await cmdLogin({});
   await cmdInstall();
   // 설치 완료 → 온보딩 안내(정적 문구만 · #1024). 자동 실행·Y/n 프롬프트 없음 — 대화형/비대화형 모두 안전.

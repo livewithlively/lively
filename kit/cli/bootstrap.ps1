@@ -18,7 +18,12 @@ $GW = $GW.TrimEnd('/')
 function Say($m, $c = "Gray") { Write-Host $m -ForegroundColor $c }
 function OK($m)   { Write-Host "  * $m" -ForegroundColor Green }
 function Info($m) { Write-Host "  · $m" -ForegroundColor DarkGray }
-function Die($m)  { Write-Host "`n✗ $m" -ForegroundColor Red; exit 1 }
+# ⚠ **exit 금지**(#1087) — `irm … | iex` 는 사용자의 **현재 PowerShell 세션 안에서** 돈다. 여기서 exit 를 부르면
+#  스크립트가 아니라 **사용자 창이 닫히고**, 방금 찍은 에러 메시지가 통째로 증발한다 → 사용자도 우리도 원인을
+#  못 본다(실측: `iex 'Write-Host A; exit 3'` 은 A 만 찍고 세션을 종료시킨다. 실제로 그 사고가 났다).
+#  대신 PipelineStoppedException(Ctrl+C 와 같은 취급)으로 **스크립트만** 멈춘다 — 추가 에러 덤프도 안 뜬다.
+#  bootstrap.sh 는 `curl | sh` 라 자식 셸에서 죽으므로 이 제약이 없다 — 두 부트스트랩이 갈리는 유일한 지점이다.
+function Die($m)  { Write-Host "`n✗ $m" -ForegroundColor Red; throw [System.Management.Automation.PipelineStoppedException]::new() }
 
 if ($GW -notmatch '^https?://') { Die "게이트웨이 주소가 올바르지 않습니다: '$GW'" }
 
@@ -40,11 +45,26 @@ Say ""
 #   우선하지만 **여기서 안 깔면 심이 쥘 게 없어** 결국 같은 구버전 node 로 폴백한다.
 #   판정 규칙: **못 쓸 버전 = 없는 것**. 시스템 node 는 건드리지 않고 우리 것만 따로 깐다.
 $NODE_MIN_MAJOR = 20   # package.json engines(">=20") · bootstrap.sh · lively.mjs 와 같은 계약.
+# ⚠ **node 를 eval(-p/-e)로 부르지 마라 — 인자 안의 `"` 가 Windows PowerShell 5.1 에서 벗겨진다**(#1087).
+#  PS 5.1 은 네이티브 명령에 인자를 넘길 때 인자 **안**의 큰따옴표를 이스케이프하지 않는다. 그래서 옛 코드의
+#  `-p 'process.versions.node.split(".")[0]'` 은 node 에 `process.versions.node.split(.)[0]` 로 도착해
+#  SyntaxError 로 죽었고(실측 확인), 이 함수는 **멀쩡한 Node 를 '못 쓴다'고 판정**했다(v22.15.0·v24.18.0 둘 다).
+#  피해는 조용했다 — 박스마다 30MB 런타임을 매번 새로 받고(이미 받아둔 것도 재사용 못 함), 사용자에겐
+#  "Node 20 미만"이라는 **거짓** 안내가 나갔다. #1068 이 세운 버전 게이트가 Windows 에서만 통째로 무효였다.
+#  → 판정은 **인자가 없는 `-v`** 로만 한다(문자열 인자 자체가 없으니 이스케이프 문제가 성립하지 않는다).
+function Get-NodeMajor($exe) {
+  $out = ""
+  try { $out = [string](& $exe -v 2>$null) } catch { return $null }
+  if ($LASTEXITCODE -ne 0) { return $null }
+  $m = [regex]::Match($out.Trim(), '^v(\d+)\.')
+  if (-not $m.Success) { return $null }   # 못 읽음 = 판정 불가(구버전이라는 뜻이 아니다)
+  return [int]$m.Groups[1].Value
+}
 function Test-NodeUsable($exe) {
   if (-not $exe -or -not (Test-Path $exe)) { return $false }
-  try { $m = & $exe -p 'process.versions.node.split(".")[0]' 2>$null } catch { return $false }
-  if ($LASTEXITCODE -ne 0 -or -not ($m -match '^\d+$')) { return $false }
-  return ([int]$m -ge $NODE_MIN_MAJOR)
+  $mj = Get-NodeMajor $exe
+  if ($null -eq $mj) { return $false }
+  return ($mj -ge $NODE_MIN_MAJOR)
 }
 function Find-LivelyNode {
   $rt = Join-Path $LV "runtime"
@@ -59,9 +79,15 @@ function Find-LivelyNode {
 
 $SYS_NODE  = (Get-Command node -EA 0).Source
 $BUNDLED   = Find-LivelyNode
-# 구버전이라 못 쓰는 경우에만 안내한다(정상 경로는 조용히 지나간다).
+# 시스템 node 를 안 쓰기로 했을 때만 안내한다(정상 경로는 조용히 지나간다).
+#  ⚠ **"미만"이라고 단정하지 않는다** — 버전을 못 읽어서 못 쓰는 경우도 있고, 그 때 거짓말을 하면 사용자가
+#   엉뚱한 곳(노드 업그레이드)을 파게 된다. #1087 에서 실제로 v22.15.0 을 "Node 20 미만"이라고 안내했다.
 function Say-OldSysNode($what) {
-  if ($SYS_NODE) { Info "시스템 node($(& $SYS_NODE -v 2>$null)) 는 Node $NODE_MIN_MAJOR 미만 — $what" }
+  if (-not $SYS_NODE) { return }
+  $ver = ""
+  try { $ver = ([string](& $SYS_NODE -v 2>$null)).Trim() } catch { }
+  $why = if ($null -eq (Get-NodeMajor $SYS_NODE)) { "버전 확인 실패" } else { "Node $NODE_MIN_MAJOR 미만" }
+  Info "시스템 node($ver) 는 쓰지 않습니다($why) — $what"
 }
 $NODE = $null
 if (Test-NodeUsable $SYS_NODE) {
@@ -187,7 +213,13 @@ try { $canPrompt = [Environment]::UserInteractive -and -not [Console]::IsInputRe
 
 if ($canPrompt) {
   & $NODE $cliPath setup
-  exit $LASTEXITCODE
+  # ⚠ 여기서도 exit 금지(위 Die 주석과 같은 이유) — 실패했으면 **사실대로 알리고** 스크립트만 끝낸다.
+  #  종전엔 `exit $LASTEXITCODE` 라서, 설치가 실패한 바로 그 순간 사용자 창이 닫혀 에러를 아무도 못 읽었다.
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "`n✗ 설치를 끝내지 못했습니다 (종료코드 $LASTEXITCODE)." -ForegroundColor Red
+    Write-Host "  이 창은 그대로 두고, 위 메시지를 확인한 뒤 다시 시도하세요:  lively login  →  lively install" -ForegroundColor DarkGray
+  }
+  return
 }
 
 Say ""
