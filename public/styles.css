@@ -7623,9 +7623,12 @@ input.emb-num { width: 120px; flex: none; }
 .pjv-tb-pill .pjv-view-btn-label { white-space: nowrap; letter-spacing: -.1px; }
 /* 필터 개수 배지 — 조건이 2개 이상일 때만. */
 .pjv-tb-badge { position: absolute; top: 0; right: -1px; min-width: 14px; height: 14px; padding: 0 3px; box-sizing: border-box; border-radius: 999px; background: var(--blue); color: #fff; font-size: 9.5px; font-weight: 800; line-height: 14px; text-align: center; }
-/* '나'(Me mode) — 내 아바타가 버튼. 켜지면 파란 링. */
-.pjv-mine-btn .pjv-ava { width: 22px; height: 22px; font-size: 10px; }
-.pjv-mine-btn.active { background: none; box-shadow: 0 0 0 2px var(--blue); }
+/* 'Me mode' — 내 아바타가 버튼. 꺼지면 아바타만(정사각), 켜지면 알약으로 늘어나 라벨이 붙는다(ClickUp 동형). */
+.pjv-mine-btn { gap: 6px; }
+.pjv-mine-btn .pjv-ava { width: 22px; height: 22px; font-size: 10px; flex: none; }
+.pjv-mine-btn-label { display: none; font-size: 12.5px; font-weight: 700; letter-spacing: -.1px; white-space: nowrap; }
+.pjv-mine-btn.active { width: auto; padding: 0 11px 0 4px; border-radius: 999px; background: color-mix(in srgb, var(--blue) 10%, transparent); color: var(--blue); }
+.pjv-mine-btn.active .pjv-mine-btn-label { display: inline; }
 /* 구분선 + 톱니·＋프로젝트 */
 .pjv-tb-sep { width: 1px; height: 20px; background: var(--line); margin: 0 6px; flex: none; }
 .pjv-tb-primary-group { display: inline-flex; align-items: stretch; flex: none; margin-left: 5px; border-radius: 8px; overflow: hidden; background: var(--ink); }
