@@ -5311,13 +5311,13 @@ function installMinterBlock(data, gw, opts: any = {}) {
       const webUrl = gw + '/ui/';
       result.replaceChildren(
         el('p', { class: 'install-ok', text: '✓ ' + name + ' 님 접속 토큰이 발급됐어요 (권한: ' + r.scopes.join('/') + ').' }),
-        el('p', { class: 'admin-hint', text: '아래 토큰을 ' + name + ' 님에게 전달하면 끝이에요 — 받은 분은 이 토큰으로 바로 로그인합니다(설치·명령어 필요 없음).' }),
+        el('p', { class: 'admin-hint', text: '아래 토큰을 ' + name + ' 님에게 1:1로 전달하세요. 받은 분의 AI·lively 명령이 이 토큰으로 게이트웨이에 접속합니다.' }),
         el('div', { class: 'deploy-head' }, el('span', { class: 'mini-meta', text: '발급된 토큰' }), copyButton(() => r.token, '토큰 복사')),
         el('pre', { class: 'admin-preview', text: r.token }),
         el('ol', { class: 'minter-steps' },
           el('li', {}, el('b', { text: '[토큰 복사]' }), ' 버튼으로 토큰을 복사하세요.'),
           el('li', {}, name + ' 님에게 ', el('b', { text: '1:1로(슬랙·메신저 DM 등) 전달' }), '하세요 — 토큰은 비밀번호 같은 거라 공개 채널·단톡방엔 올리지 마세요.'),
-          el('li', {}, name + ' 님은 ', el('a', { href: webUrl, target: '_blank', rel: 'noopener', text: webUrl }), ' 에 접속해 ', el('b', { text: '첫 화면에 이 토큰을 붙여넣고 로그인' }), '하면 바로 시작합니다.')),
+          el('li', {}, name + ' 님은 ', el('a', { href: webUrl, target: '_blank', rel: 'noopener', text: webUrl }), ' 로그인 화면에서 ', el('b', { text: '[토큰으로 로그인]' }), ' 을 눌러 이 토큰을 붙여넣으면 들어옵니다. 이메일·비밀번호 계정을 이미 받았다면 그대로 로그인해도 됩니다.')),
         el('p', { class: 'admin-hint', text: '⚠ 이 토큰은 지금 이 화면에서만 보여요 — 닫으면 다시 볼 수 없습니다(잃어버리면 다시 발급하면 돼요).' }),
         el('p', { class: 'admin-hint', text: '내 컴퓨터 터미널(Claude Code·Codex)에서 직접 쓰실 분은 — 같은 토큰으로 [사용 가이드 › 시작하기] 안내를 따르면 됩니다.' }));
       await loadAdmin(true);
@@ -5326,7 +5326,7 @@ function installMinterBlock(data, gw, opts: any = {}) {
   });
   return el('div', { class: 'deploy-block' },
     el('h3', { class: 'member-add-step', text: opts.title || '토큰 발급 (새 팀원 추가)' }),
-    el('p', { class: 'admin-hint', text: '구성원을 고르고 [토큰 발급]을 누르면 그 사람 전용 토큰이 만들어집니다. 토큰을 전달받은 구성원이 로그인 화면에 붙여넣으면 바로 로그인됩니다(설치·명령어 불필요).' }),
+    el('p', { class: 'admin-hint', text: '구성원을 고르고 [토큰 발급]을 누르면 그 사람 전용 토큰이 만들어집니다. 이 토큰은 그 구성원의 AI(Claude Code·Codex)와 lively 명령이 라이블리 게이트웨이에 접속할 때 쓰는 열쇠입니다. 웹에서도 로그인 화면 아래 [토큰으로 로그인]에 붙여넣어 들어올 수 있습니다 — 평소 웹 로그인은 이메일과 비밀번호로 합니다.' }),
     el('div', { class: 'install-minter' }, sel, go),
     result);
 }
