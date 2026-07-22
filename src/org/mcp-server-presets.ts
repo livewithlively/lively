@@ -56,9 +56,9 @@ export const MCP_SERVER_PRESETS: McpServerPreset[] = [
     name: "google-gmail", label: "Google Gmail", url: "https://gmailmcp.googleapis.com/mcp/v1",
     auth_kind: "google_gmail_oauth", scope: "items", level: "L0", pii_scrub: true,
     dcr: false, seed: false,
-    // scopes_supported(gmailmcp .well-known/oauth-protected-resource/mcp/v1 실측)에서 read + 초안작성만.
-    //  gmail.modify(수정/삭제)·mail.google.com(전체)는 제외(최소권한). 순수 send scope 는 상류 미노출(compose=초안까지).
-    oauth_scope: "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose",
+    // gmail MCP(gmailmcp) 의 create_draft 는 Gmail API 직접호출은 gmail.compose 로 200 인데도 MCP 계층에서 permission 거부 →
+    //  gmailmcp 이 쓰기 tool 에 gmail.modify 를 요구(실측 규명). 그래서 readonly+compose+modify. mail.google.com(전체·영구삭제)만 제외.
+    oauth_scope: "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/gmail.modify",
     note: "Google 공식 MCP. Web앱 OAuth client(콘솔) 필요 — 승인 redirect 에 게이트웨이 /oauth/callback 등록. scope gmail.readonly(+compose).",
   },
   {

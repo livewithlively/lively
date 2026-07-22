@@ -85,11 +85,12 @@ t("presetOAuthScope: google gmail/drive/calendar → 비어있지 않은 구글 
     for (const tok of toks) assert.ok(/^https:\/\//.test(tok), `구글 scope 는 URL 형식이어야: ${tok}`);
   }
 });
-t("presetOAuthScope: gmail 최소권한 — readonly 포함, 전체(mail.google.com)·수정(gmail.modify) 제외", () => {
+t("presetOAuthScope: gmail scope — readonly·compose·modify 포함(gmailmcp create_draft 가 modify 요구), 전체(mail.google.com)만 제외", () => {
   const toks = new Set(scopeTokens(presetOAuthScope("google_gmail_oauth")));
   assert.ok(toks.has("https://www.googleapis.com/auth/gmail.readonly"), "gmail.readonly 누락");
+  assert.ok(toks.has("https://www.googleapis.com/auth/gmail.compose"), "gmail.compose 누락");
+  assert.ok(toks.has("https://www.googleapis.com/auth/gmail.modify"), "gmail.modify 누락(gmailmcp create_draft 가 요구)");
   assert.ok(!toks.has("https://mail.google.com/"), "전체 접근 scope(mail.google.com) 포함됨");
-  assert.ok(!toks.has("https://www.googleapis.com/auth/gmail.modify"), "수정/삭제 scope(gmail.modify) 포함됨");
 });
 t("presetOAuthScope: drive·calendar 최소권한 — readonly, 전체 쓰기 scope 제외", () => {
   const d = new Set(scopeTokens(presetOAuthScope("google_drive_oauth")));
