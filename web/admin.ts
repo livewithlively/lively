@@ -6227,15 +6227,17 @@ function aiAccountRow(a, mySessions, reload) {
   const live = mine.filter((s) => s.agentState && s.agentState !== 'exited' && s.agentState !== 'offline');
   // 공유 계정 = 이 서버의 호스트 홈 자격을 전 구성원이 함께 쓰는 상태. 로그아웃하면 남의 세션까지 끊기므로 잠근다.
   const shared = a.scope === 'shared';
-  // 상태는 3-상태다(true/false/null). **배지는 짧게, 사연은 툴팁으로** — 제약 설명(공유 계정·맥 키체인)을
+  // 상태는 3-상태다(true/false/null). **배지는 짧게, 사연은 툴팁으로** — 제약 설명(공용 계정·맥 키체인)을
   //  본문에 풀어 쓰면 두세 줄짜리 회색 문단이 되어 정작 '연결됐나?'가 안 읽힌다(사용자 지적).
   const st = a.loggedIn === true
-    ? { text: '연결됨', cls: 'pill pill-ok', tip: '이 서버에 내 로그인 자격이 저장돼 있습니다 — ' + a.where }
+    ? { text: '연결됨', cls: 'pill pill-ok', tip: (shared ? '이 서버 공용 계정으로 연결돼 있습니다' : '내 계정으로 연결돼 있습니다') + ' — ' + a.where }
     : a.loggedIn === false
-      ? { text: '로그인 필요', cls: 'pill', tip: '아직 로그인하지 않았습니다. [로그인] 을 누르면 이 AI 로 세션이 하나 열리고, 거기서 한 번만 로그인하면 됩니다.' }
-      : { text: '확인 불가', cls: 'pill', tip: '이 서버(macOS)는 로그인 자격을 키체인에 보관해서, 서버가 로그인 여부를 알 수 없습니다. 세션이 잘 돌고 있으면 로그인된 것이고, 아니라면 [로그인] 을 누르세요.' };
+      ? { text: '연결 안 됨', cls: 'pill', tip: '아직 로그인하지 않았습니다. [로그인] 을 누르면 이 AI 로 세션이 하나 열리고, 거기서 한 번만 로그인하면 됩니다.' }
+      : { text: '확인 불가', cls: 'pill', tip: '이 서버가 로그인 여부를 확인하지 못했습니다(자격이 키체인에 있거나 접근할 수 없음). 세션이 잘 돌고 있으면 연결된 것입니다.' };
   const badge = withTip(el('span', { class: st.cls, text: st.text }), st.tip);
   const openLogin = async (ev) => {
+    // 공용 계정에서의 로그인은 **남의 것까지 바꾼다** — 이 서버의 그 AI 계정이 통째로 바뀌므로 먼저 알린다.
+    if (shared && !confirm(a.label + ' 로그인 세션을 열까요?\n\n이 서버는 구성원별 계정 격리가 없어, 여기서 로그인하면 이 서버의 ' + a.label + ' 계정이 통째로 바뀝니다 — 다른 구성원의 세션도 그 계정을 쓰게 됩니다.')) return;
     const btn = ev.currentTarget; btn.disabled = true;
     try {
       const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify({
@@ -6260,8 +6262,8 @@ function aiAccountRow(a, mySessions, reload) {
     el('div', { class: 'aiacct-txt' },
       el('div', { class: 'aiacct-head' },
         el('span', { class: 'aiacct-name', text: a.label }), badge,
-        shared ? withTip(el('span', { class: 'pill', text: '공용 계정' }),
-          '이 서버는 구성원별 계정 격리가 없어 모든 구성원이 이 AI 를 같은 계정으로 씁니다 — 로그아웃하면 다른 구성원 세션까지 끊기므로 잠가 두었습니다.') : null),
+        shared ? withTip(el('span', { class: 'pill', text: '서버 공용' }),
+          '이 AI 의 계정은 이 서버 전체가 함께 씁니다 — 내가 연결한 것이 아닐 수 있고, 로그아웃하면 다른 구성원 세션까지 끊기므로 잠가 두었습니다.') : null),
       el('div', { class: 'aiacct-sub', text: sub })),
     el('div', { class: 'aiacct-act' },
       // 로그인 버튼은 '연결 확정'일 때만 감춘다 — 확인 불가에서도 다시 로그인은 언제나 해가 없다.
@@ -6270,9 +6272,11 @@ function aiAccountRow(a, mySessions, reload) {
 }
 function myAiAccountsCard() {
   const body = el('div');
+  // 제목이 '내 AI 계정'이면 거짓말이 될 수 있다 — 구성원별 격리가 없는 서버에서는 아래 상태가 **서버 공용 계정**의
+  //  것이고 내가 연결한 게 아니다(사용자 지적: "Codex는 내가 연결한 적 없"). 중립 제목 + 상황별 배너로 바로잡는다.
   const card = el('div', { class: 'card' },
-    el('h3', { text: '내 AI 계정' }),
-    el('p', { class: 'caption', text: '내 AI 세션을 실제로 실행하는 AI와, 거기에 연결된 내 계정입니다. 로그인은 처음 한 번만 하면 됩니다.' }),
+    el('h3', { text: 'AI 계정 연결' }),
+    el('p', { class: 'caption', text: '내 AI 세션을 실행하는 AI와, 그 AI 에 연결된 계정 상태입니다.' }),
     body);
   const load = async () => {
     body.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
@@ -6285,9 +6289,14 @@ function myAiAccountsCard() {
       const meId = (state.me && (state.me.userId || state.me.email)) || '';
       const mine = (((ses || {}) as any).sessions || []).filter((s) => s.owner === meId);   // 프로젝트 세션은 전원 공개라 소유자로 좁힌다
       const accounts = ((acc || {}) as any).accounts || [];
-      body.replaceChildren(...(accounts.length
-        ? accounts.map((a) => aiAccountRow(a, mine, load))
-        : [el('p', { class: 'admin-hint', text: '이 서버에 로그인이 필요한 AI 가 없습니다.' })]));
+      // 공용 계정이 하나라도 있으면 **먼저** 알린다 — 그걸 모르면 아래 '연결됨'을 자기가 연결한 것으로 오해한다.
+      const anyShared = accounts.some((a) => a.scope === 'shared');
+      body.replaceChildren(
+        anyShared ? el('p', { class: 'aiacct-note' },
+          ...inlineBold('이 서버는 구성원별 AI 계정 격리가 없습니다 — 아래 **‘서버 공용’ 표시가 붙은 AI 는 서버 전체가 같은 계정**을 씁니다. 내가 연결한 것이 아닐 수 있고, 여기서 로그인하면 다른 구성원에게도 그대로 적용됩니다.')) : null,
+        ...(accounts.length
+          ? accounts.map((a) => aiAccountRow(a, mine, load))
+          : [el('p', { class: 'admin-hint', text: '이 서버에 로그인이 필요한 AI 가 없습니다.' })]));
     } catch (e) { body.replaceChildren(errorNote(e, '내 AI 계정 상태를 불러오지 못했습니다')); }
   };
   void load();

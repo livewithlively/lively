@@ -332,37 +332,46 @@ export interface AiAccountStatus {
   canLogout: boolean;
   where: string;   // 자격증명이 사는 자리(사람이 읽는 설명)
 }
-// 자격증명 탐지의 한계(macOS) — Claude Code 는 **맥에서 자격을 키체인**("Claude Code-credentials")에 넣는다.
-//  홈에 .credentials.json 이 안 생기므로 '파일 없음 = 로그아웃'으로 읽으면 거짓말이 된다(맥 게이트웨이에서
-//  실측: 키체인엔 로그인돼 있는데 파일은 없음). 그래서 파일이 **있으면 로그인 확정**, 없으면 리눅스는 미로그인,
-//  맥은 알 수 없음(null)으로 둔다. 로그아웃도 파일 삭제로는 안 지워지므로 그 경우 잠근다(아래 canLogout).
-//  ※ Codex 는 맥에서도 ~/.codex/auth.json 파일을 쓴다(실측) — 이 한계는 claude 전용이다.
-function credVerdict(exists: boolean, key: string): boolean | null {
-  if (exists) return true;
-  return (key === "claude" && process.platform === "darwin") ? null : false;
+// macOS 키체인의 Claude 자격 존재 확인 — Claude Code 는 **맥에서 자격을 파일이 아니라 키체인**
+//  ("Claude Code-credentials")에 넣는다. 그래서 `.credentials.json` 부재를 '미로그인'으로 읽으면 거짓말이 된다
+//  (실측: 키체인엔 로그인돼 있는데 파일은 없음 → 화면이 '연결 안 됨'으로 나와 사용자가 바로 잡아냈다).
+//  ⚠ **비밀은 읽지 않는다** — `-g`(비밀 출력) 없이 항목 존재만 exit code 로 본다(토큰이 로그·응답에 안 실린다).
+//  ⚠ 키체인은 **OS 유저 단위**다 → 프로필 dir(CLAUDE_CONFIG_DIR)로 갈리지 않는다. 그래서 맥에서 claude 는
+//   구조적으로 '이 서버 공용'이다(아래 scope='shared' 강제). launchd 처럼 키체인에 못 닿는 맥락이면 실패 →
+//   그 땐 알 수 없음(null)으로 남는다(종전 동작, 무회귀).
+async function macClaudeKeychainHas(): Promise<boolean> {
+  try {
+    await execFileAsync("security", ["find-generic-password", "-s", "Claude Code-credentials"], { timeout: 5000 });
+    return true;
+  } catch { return false; }
 }
 export async function aiAccountStatus(user: LivelyUser): Promise<AiAccountStatus[]> {
   const osSt = await memberOsStatus(ownerId(user));
   const isolated = osSt.ready && osSt.provisioned;
+  const darwin = process.platform === "darwin";
   const out: AiAccountStatus[] = [];
   for (const h of HARNESSES) {
     const rel = HARNESS_CRED[h.key];
     if (!rel) continue;   // 셸 등 — 로그인 개념이 없는 하네스
-    let scope: AiAccountStatus["scope"]; let where: string; let exists: boolean;
+    let scope: AiAccountStatus["scope"]; let where: string;
+    let loggedIn: boolean | null;
     if (isolated) {
       scope = "isolated"; where = `내 격리 계정(${osSt.osUser}) 홈의 ${rel}`;
-      exists = await memberFileExists(osSt.osUser, rel);
+      loggedIn = await memberFileExists(osSt.osUser, rel);
+    } else if (h.key === "claude" && darwin) {
+      // 맥 = 키체인(OS 유저 단위) → 멤버별로 갈릴 수 없다. 공용으로 **정직하게** 표시한다.
+      scope = "shared"; where = "이 서버 macOS 키체인(Claude Code-credentials)";
+      loggedIn = await macClaudeKeychainHas() ? true : null;   // 못 찾음 = 미로그인일 수도, 키체인 접근 불가일 수도
     } else if (h.key === "claude" && process.env.LIVELY_MULTIPROFILE !== "0") {
       const file = path.join(profileConfigDir(user), ".credentials.json");
       scope = "profile"; where = file;
-      exists = await fsp.access(file).then(() => true, () => false);
+      loggedIn = await fsp.access(file).then(() => true, () => false);
     } else {
       const file = path.join(os.homedir(), rel);
       scope = "shared"; where = file;
-      exists = await fsp.access(file).then(() => true, () => false);
+      loggedIn = await fsp.access(file).then(() => true, () => false);
     }
-    const loggedIn = credVerdict(exists, h.key);
-    // 지울 수 있을 때만 로그아웃을 연다 — 공유 계정(남의 세션까지 끊김)·미로그인·탐지불가(키체인)는 잠근다.
+    // 지울 수 있을 때만 로그아웃을 연다 — 공용 계정(남의 세션까지 끊김)·미로그인·탐지불가는 잠근다.
     out.push({ key: h.key, label: h.label, scope, where, loggedIn, canLogout: loggedIn === true && scope !== "shared" });
   }
   return out;
@@ -375,7 +384,7 @@ export async function aiAccountLogout(user: LivelyUser, key: string): Promise<vo
   if (!acct) throw new HttpError(404, `모르는 AI: ${key}`);
   if (acct.loggedIn === false) throw new HttpError(409, `${acct.label} 은(는) 이미 로그인 전입니다.`);
   if (acct.loggedIn === null) {
-    throw new HttpError(409, `${acct.label} 의 자격증명이 이 서버(macOS)의 키체인에 있어 서버가 지울 수 없습니다 — 세션에서 claude 를 실행해 /logout 하세요.`);
+    throw new HttpError(409, `${acct.label} 의 로그인 상태를 서버가 확인할 수 없습니다(자격이 이 서버 키체인에 있음) — 세션에서 ${key} 를 실행해 직접 로그아웃하세요.`);
   }
   if (!acct.canLogout) {
     throw new HttpError(409, `${acct.label} 은(는) 이 서버의 공유 계정으로 실행됩니다 — 로그아웃하면 다른 구성원의 세션까지 끊깁니다. 구성원 격리를 설치하면 계정이 분리됩니다.`);
