@@ -255,6 +255,7 @@ export async function initOrgSchema(): Promise<void> {
       source_code TEXT NOT NULL DEFAULT '',
       timeout_sec INT NOT NULL DEFAULT 10,
       note TEXT,
+      summary TEXT NOT NULL DEFAULT '',
       enabled BOOLEAN NOT NULL DEFAULT true,
       sort INT NOT NULL DEFAULT 0,
       version INT NOT NULL DEFAULT 1,
@@ -358,6 +359,7 @@ export async function initOrgSchema(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT);
     ALTER TABLE org_harness_asset ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT '';
+    ALTER TABLE org_hook ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT '';
     DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_constraint
                      WHERE conrelid='org_harness_asset'::regclass AND conname='org_harness_asset_kind_chk') THEN

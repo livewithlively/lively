@@ -1084,7 +1084,7 @@ export const deliveryCapabilities: Capability[] = [
       const lively = {
         // summary — 화면에 보이는 '쉬운 한 줄'(#1085). description(하네스 트리거 문장)과 별개다.
         skills: assets.filter((a) => a.enabled).map((a) => ({ id: a.id, kind: a.kind, label: a.label, description: a.description, summary: a.summary, harness: a.harness, ...meta("harness_asset", a.id, a.target_members) })),
-        hooks: hooks.filter((h) => h.enabled).map((h) => ({ id: h.id, label: h.label, event: h.event, note: h.note, harness: h.harness, ...meta("org_hook", h.id, h.target_members) })),
+        hooks: hooks.filter((h) => h.enabled).map((h) => ({ id: h.id, label: h.label, event: h.event, note: h.note, summary: h.summary, harness: h.harness, ...meta("org_hook", h.id, h.target_members) })),
       };
       const livelyIds = new Set<string>([...lively.skills, ...lively.hooks].map((x) => x.id));
       // 머신별로 라이블리 자산과 대조 + 그 머신의 로컬 토글 지시(disabled) 반영.
@@ -2261,6 +2261,8 @@ export const deliveryCapabilities: Capability[] = [
         harness: harness as HookHarness | undefined, event, matcher, source_code: sourceCode,
         timeout_sec: timeout === undefined ? undefined : Math.floor(timeout),
         note: input.note == null ? undefined : str(input.note, "note", 500),
+        // summary — 구성원 화면([내 스킬·훅])에 보이는 '쉬운 한 줄'(#1085). note(운영 메모)와 별개.
+        summary: input.summary === undefined ? undefined : str(input.summary, "summary", 300),
         target_members: targetMembers,
         enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
         sort: input.sort === undefined ? undefined : Number(input.sort) || 0,
@@ -2278,6 +2280,7 @@ export const deliveryCapabilities: Capability[] = [
       target_members: z.array(z.string()).nullable().optional().describe("이 훅을 받을 멤버 id 배열. null/빈=전원, 미전송=기존 유지(#699)"),
       label: z.string().optional().describe("훅 라벨(표시명)"),
       note: z.string().optional().describe("메모"),
+      summary: z.string().optional().describe("구성원 화면에 보이는 쉬운 한 줄 설명(무슨 일을 하는 훅인지)"),
       enabled: z.boolean().optional().describe("활성 여부"),
       sort: z.number().optional().describe("정렬 순서"),
     }),

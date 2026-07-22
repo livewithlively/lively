@@ -4873,6 +4873,8 @@ function gracePolicyCard(data, detail) {
 function hookForm(root, h, data, detail, isNew) {
   const idIn = el('input', { type: 'text', value: h.id, placeholder: '훅 id (소문자/숫자/_-)', disabled: isNew ? null : '' });
   const labelIn = el('input', { type: 'text', value: h.label || '', placeholder: '표시 이름(선택)' });
+  // 구성원 화면([내 스킬·훅])에 보이는 쉬운 한 줄(#1085) — 스킬과 같은 규격.
+  const hSumIn = el('input', { type: 'text', value: h.summary || '', placeholder: '예: 세션이 끝날 때 기록을 남겼는지 점검합니다' });
   const harnessSel = el('select', {}, ...['all', 'claude', 'codex', 'openclaw'].map((x) => el('option', { value: x, text: x })));
   harnessSel.value = h.harness || 'all';
   const eventSel = el('select', {}, ...['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop', 'Notification'].map((x) => el('option', { value: x, text: x })));
@@ -4890,7 +4892,7 @@ function hookForm(root, h, data, detail, isNew) {
     if (!confirm('이 코드는 구성원 컴퓨터에서 그들의 권한으로 실제 실행됩니다. 저장할까요?')) return;
     saveBtn.disabled = true;
     try {
-      const payload = { id: idIn.value.trim(), label: labelIn.value.trim() || null, harness: harnessSel.value, event: eventSel.value, matcher: matcherIn.value.trim() || null, source_code: codeTa.value, timeout_sec: Number(timeoutIn.value) || 10, target_members: tm.targetMembers(), enabled: tm.enabled() };
+      const payload = { id: idIn.value.trim(), label: labelIn.value.trim() || null, harness: harnessSel.value, event: eventSel.value, matcher: matcherIn.value.trim() || null, source_code: codeTa.value, timeout_sec: Number(timeoutIn.value) || 10, summary: hSumIn.value, target_members: tm.targetMembers(), enabled: tm.enabled() };
       await api('/api/ui/org/hook', { method: 'POST', body: JSON.stringify(payload) });
       await loadAdmin(true); state.admin.hookSel = payload.id; toast('저장됨 — 구성원 다음 세션부터'); renderAdminDetail(detail, 'custom-hooks', state.admin.data);
     } catch (e) { toast(e.message, true); saveBtn.disabled = false; }
@@ -4905,6 +4907,7 @@ function hookForm(root, h, data, detail, isNew) {
     el('div', { class: 'warn-badge', text: '⚠ 이 코드는 구성원 컴퓨터에서 그들의 권한으로 실제 실행됩니다.' }),
     hookHealthCard(h),
     field('id', idIn), field('표시 이름', labelIn),
+    field('쉬운 한 줄 (구성원 화면에 보이는 말)', hSumIn),
     field('하네스', harnessSel), field('이벤트(실행 시점)', eventSel),
     field('매처(선택 — PreToolUse/PostToolUse 의 도구명)', matcherIn),
     field('코드 (Node.js)', codeTa),
@@ -6614,8 +6617,8 @@ async function myAssetsSection(detail) {
     const hookNodes = lhooks.map((h: any) => livelyRow('org_hook', h, 'hook').node);
     rows.push(el('div', { class: 'hlayer' },
       el('div', { class: 'hlayer-head' },
-        el('h4', { class: 'hlayer-title', text: '조직 배포' }),
-        infoPop('관리자가 팀 전체에 배포한 스킬·훅입니다. 내 세션에 적용할지 여기서 켜고 끌 수 있고, 끄면 나에게만 적용되지 않습니다.')),
+        el('h4', { class: 'hlayer-title', text: '라이블리 스킬 · 훅' }),
+        infoPop('라이블리가 팀 전체에 배포한 스킬·훅입니다. 내 세션에 적용할지 여기서 켜고 끌 수 있고, 끄면 나에게만 적용되지 않습니다.')),
       group('스킬', skillNodes.length, skillNodes.length ? skillNodes : [el('p', { class: 'admin-hint', text: '배포된 스킬이 없습니다.' })]),
       group('커스텀 훅', hookNodes.length, hookNodes.length ? hookNodes : [el('p', { class: 'admin-hint', text: '배포된 커스텀 훅이 없습니다.' })])));
     if (anyMissing) rows.unshift(el('div', { class: 'sync-warn' }, el('b', { text: '켜져 있지만 아직 설치되지 않은 PC(‘미설치’ 표시)가 있습니다. ' }), '그 PC에서 claude(또는 codex) 세션을 한 번 열면 자동으로 설치됩니다.'));
@@ -6624,8 +6627,8 @@ async function myAssetsSection(detail) {
     if (machines.length) {
       const myLayer = el('div', { class: 'hlayer' },
         el('div', { class: 'hlayer-head' },
-          el('h4', { class: 'hlayer-title', text: '내 컴퓨터' }),
-          infoPop('내가 각 컴퓨터에 직접 만들어 둔 스킬·훅입니다(조직 배포분은 위 목록에서 PC 칩으로 확인합니다). 컴퓨터마다 따로 보입니다.')));
+          el('h4', { class: 'hlayer-title', text: '내 로컬 스킬 · 훅' }),
+          infoPop('내가 각 컴퓨터에 직접 만들어 둔 스킬·훅입니다(라이블리 배포분은 위 목록에서 PC 칩으로 확인합니다). 컴퓨터마다 따로 보입니다.')));
       rows.push(myLayer);
       for (const m of machines) {
         const nm = machineName(m);
@@ -6650,7 +6653,7 @@ async function myAssetsSection(detail) {
         head.append(del);
         myLayer.append(head);
         const own = (m.assets || []).filter((a: any) => a.overlap === 'local-only');
-        if (!own.length) { myLayer.append(el('p', { class: 'admin-hint', text: '이 컴퓨터에 직접 만든 스킬·훅은 없습니다(조직 배포분만 있습니다).' })); continue; }
+        if (!own.length) { myLayer.append(el('p', { class: 'admin-hint', text: '이 컴퓨터에 직접 만든 스킬·훅은 없습니다(라이블리 배포분만 있습니다).' })); continue; }
         const byKind: Record<string, any[]> = {};
         for (const a of own) {
           const isHook = a.kind === 'hook'; // 훅은 settings.json 항목(파일 아님) — 비파괴 토글 불가라 여기선 표시만.
@@ -6673,7 +6676,7 @@ async function myAssetsSection(detail) {
       }
     } else {
       rows.push(el('div', { class: 'hlayer' },
-        el('div', { class: 'hlayer-head' }, el('h4', { class: 'hlayer-title', text: '내 컴퓨터' })),
+        el('div', { class: 'hlayer-head' }, el('h4', { class: 'hlayer-title', text: '내 로컬 스킬 · 훅' })),
         el('p', { class: 'admin-hint', text: '아직 내 컴퓨터의 하네스를 확인하지 못했습니다. 내 컴퓨터에서 claude(또는 codex)를 한 번 켜면 다음 세션에 자동으로 나타납니다. 컴퓨터가 여러 대면 각각 따로 보입니다. (웹 [AI 세션]은 회사 서버에서 돌아 로컬이 보이지 않습니다.)' })));
     }
     bodyBox.replaceChildren(...rows);
