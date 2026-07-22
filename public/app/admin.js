@@ -6687,7 +6687,7 @@ function myAiAccountsCard() {
     const body = el('div');
     // 제목이 '내 AI 계정'이면 거짓말이 될 수 있다 — 구성원별 격리가 없는 서버에서는 아래 상태가 **서버 공용 계정**의
     //  것이고 내가 연결한 게 아니다(사용자 지적: "Codex는 내가 연결한 적 없"). 중립 제목 + 상황별 배너로 바로잡는다.
-    const card = el('div', { class: 'card' }, el('h3', { text: 'AI 계정 연결' }), el('p', { class: 'caption', text: '내 AI 세션을 실행하는 AI와, 그 AI 에 연결된 계정 상태입니다.' }), body);
+    const card = el('div', { class: 'card' }, el('h3', { text: '연결된 AI 계정' }), el('p', { class: 'caption', text: '내 AI 세션이 이 계정으로 실행됩니다.' }), body);
     const load = async () => {
         body.replaceChildren(el('p', { class: 'admin-hint', text: '불러오는 중…' }));
         try {
