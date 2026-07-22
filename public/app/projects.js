@@ -458,14 +458,15 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         taskCache.set(projId, pr);
         return pr;
     };
-    const taskCtx = { mode: pjvProjTaskMode.mode, fetchProjTasks, invalidate: (id) => taskCache.delete(id) };
+    const taskCtx = { mode: pjvProjTaskMode.mode, meId, fetchProjTasks, invalidate: (id) => taskCache.delete(id) };
     // ── 툴바 버튼(#1067 ClickUp 파리티) — 좌: 그룹·하위태스크·컬럼 / 우: 필터·완료·담당자·나·검색 | 설정·＋프로젝트 ──
     //  아이콘 전용 버튼은 title + aria-label 로 이름을 준다(라벨 없이도 무엇인지 알 수 있게).
     const iconBtn = (cls, label, icon) => el('button', { class: 'pjv-tb-btn ' + cls, type: 'button', title: label, 'aria-label': label }, icon);
     // '하위 태스크' — 접힘/펼침/분리(ClickUp Subtasks).
     const subtaskBtn = iconBtn('pjv-subtask-btn', '하위 태스크 표시 방식', pjvTbIcon('subtask'));
     // '나' — 내가 만든·참여한 프로젝트만(ClickUp Me mode). 내 아바타가 곧 버튼.
-    const mineBtn = el('button', { class: 'pjv-tb-btn pjv-mine-btn', type: 'button', title: '나 — 내가 만든·참여한 프로젝트만 보기', 'aria-label': '내 프로젝트만 보기' }, personFace(meId, 'pjv-ava', '나'));
+    // 'Me mode'(#1067) — 내 아바타가 버튼. 누르면 프로젝트/태스크 스위치 팝오버, 켜지면 알약으로 늘어나 라벨이 붙는다(ClickUp 동형).
+    const mineBtn = el('button', { class: 'pjv-tb-btn pjv-mine-btn', type: 'button', title: '내가 맡은 것만 보기', 'aria-label': '내가 맡은 것만 보기' }, personFace(meId, 'pjv-ava', '나'), el('span', { class: 'pjv-mine-btn-label', text: '내 항목' }));
     // '완료 표시' — 닫힌(완료) 프로젝트/태스크 노출 스위치 팝오버.
     const closedBtn = iconBtn('pjv-closed-btn', '완료된 항목 표시', pjvTbIcon('check'));
     // '필터' — 필드 조건(상태·담당자·우선순위·태그·마감일·이름)으로 좁히기. 걸린 조건 수를 배지로.
@@ -521,8 +522,9 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         subtaskBtn.classList.toggle('active', pjvProjTaskMode.mode !== 'collapsed');
         subtaskBtn.title = '하위 태스크 표시 — ' + PJV_SUBTASK_BTNLABEL[pjvProjTaskMode.mode];
         closedBtn.classList.toggle('active', pjvProjClosedView.done || pjvClosedView.tasks);
-        mineBtn.classList.toggle('active', pjvBoardMineOnly.on);
-        mineBtn.setAttribute('aria-pressed', String(pjvBoardMineOnly.on));
+        const meOn = pjvMeModeOn();
+        mineBtn.classList.toggle('active', meOn);
+        mineBtn.setAttribute('aria-pressed', String(meOn));
         // '필터' — 조건이 하나라도 걸리면 강조 + 개수 배지.
         const fc = pjvFilterCount();
         filterBtn.classList.toggle('active', fc > 0);
@@ -690,6 +692,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         byStatus = pjvBoardView.byStatus;
         pjvSyncUrl(sel, true); // 자동 해소된 스코프를 URL 에 replace(히스토리 오염 없이 새로고침 복원용)
         syncCrumbs(); // 브레드크럼 재동기(#1067) — render() 시점엔 sel 이 '__all__' 일 수 있어, 자동 해소된 실제 스코프로 다시 그린다
+        viewTabs._sync(); // 뷰 탭도 재동기 — 위 pjvApplyView 가 스코프 저장뷰(칸반 등)로 갈아탔을 수 있다
         // 필터·담당자 값 후보를 **이 스코프**로 재수집(#1067) — 전체 기준이면 "윤상민 216" 처럼 화면(59개)과 안 맞는
         //  숫자가 나와 오해를 부른다. 툴바 필터가 걸리기 전(raw) 스코프 집합이 기준이라 후보가 자기 자신에 의해 줄지 않는다.
         {
@@ -1397,6 +1400,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         const byArea = pjvBoardView.byArea, byStatus = pjvBoardView.byStatus, byFolder = pjvBoardView.byFolder;
         syncScopeChip();
         syncCrumbs(); // 브레드크럼(#1067) — 현재 스코프를 위치로 표시
+        viewTabs._sync(); // 뷰 탭 활성 표시(#1067) — 설정 팝오버로 바꿔도 탭이 따라온다
         pjvSetFilterUniverse(projects, lists); // 필터·담당자 팝오버의 값 후보(상태·사람·태그)를 현재 데이터로 갱신
         // WIKI 형 풀블리드 셸(#607)은 사이드바 여닫이와 무관하게 항상(#1067) — 접으면 '사이드바만' 사라지고
         //  제목·툴바·보드가 시작하는 y 는 그대로다. (예전엔 접을 때 카드형 배치로 갈아타 높이가 튀고 여백이 달라졌다.)
@@ -1475,7 +1479,7 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
         pjvKeepScopeOnCollapse();
     } pjvPersistSideOpen(); syncToggles(); render(); };
     subtaskBtn.onclick = (e) => { e.stopPropagation(); pjvProjTaskMenu(subtaskBtn, () => { syncToggles(); render(); }); };
-    mineBtn.onclick = (e) => { e.stopPropagation(); pjvBoardMineOnly.on = !pjvBoardMineOnly.on; syncToggles(); render(); };
+    mineBtn.onclick = (e) => { e.stopPropagation(); pjvMeModePopover(mineBtn, () => { syncToggles(); render(); }); };
     // 완료 표시 — 팝오버(프로젝트/태스크 각각). 예전의 '한 번 누르면 켜짐' 직접 토글은 ClickUp 파리티로 팝오버화.
     closedBtn.onclick = (e) => { e.stopPropagation(); pjvClosedPopover(closedBtn, () => { syncToggles(); render(); }); };
     filterBtn.onclick = (e) => { e.stopPropagation(); pjvFilterPopover(filterBtn, () => { syncToggles(); render(); }); };
@@ -1628,7 +1632,9 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     //  좌(데이터 구조: 그룹·계층·열) / 우(데이터 좁히기 + 생성) 로 역할을 가른다.
     const toolbar = el('div', { class: 'card-head pjv-board-toolbar' }, el('div', { class: 'pjv-tasks-head-left' }, groupBtn, subtaskBtn, colsBtn, scopeChip), el('div', { class: 'card-head-actions' }, filterBtn, closedBtn, asgBtn, mineBtn, searchBox, el('span', { class: 'pjv-tb-sep', 'aria-hidden': 'true' }), gearBtn, savedViewBtn, addGroup));
     // 상단 헤더 스택 — ① 브레드크럼 ② 뷰 탭 ③ 툴바.
-    const headerStack = el('div', { class: 'pjv-board-header' }, crumbBar, pjvViewTabsRow(), toolbar);
+    //  뷰 탭은 rerenderScoped 로 전환한다(설정 팝오버의 '보기 방식'과 같은 경로 — 스코프별 뷰 영속 포함).
+    const viewTabs = pjvViewTabsRow({ onView: () => rerenderScoped() });
+    const headerStack = el('div', { class: 'pjv-board-header' }, crumbBar, viewTabs, toolbar);
     card.append(shellHost);
     render();
     return wrapper;
@@ -4963,10 +4969,12 @@ function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
             subBox.replaceChildren(el('div', { class: 'pjv-proj-subnote', text: '태스크 불러오는 중…' }));
             try {
                 const d = await taskCtx.fetchProjTasks(p.id);
-                const tasks = (d && d.tasks) || [];
+                const all = (d && d.tasks) || [];
+                // Me mode(#1067) — '태스크' 스위치가 켜져 있으면 내가 담당인 태스크만. 담당자 없는 태스크도 빠진다(내 것이 아니므로).
+                const tasks = pjvMeMode.tasks ? all.filter((t) => pjvTaskIsMine(t, taskCtx.meId)) : all;
                 subBox.replaceChildren();
                 if (!tasks.length)
-                    subBox.append(el('div', { class: 'pjv-proj-subnote', text: '태스크가 없습니다.' }));
+                    subBox.append(el('div', { class: 'pjv-proj-subnote', text: pjvMeMode.tasks && all.length ? '내가 담당인 태스크가 없습니다.' : '태스크가 없습니다.' }));
                 else
                     for (const t of tasks)
                         subBox.append(pjvProjTaskRow(p.id, t, d.members, localReload, 1, fields));
@@ -8797,6 +8805,17 @@ const PJV_FILTER_OPS = {
 function pjvFilterKind(field) { return field === 'due' ? 'date' : field === 'name' ? 'text' : 'multi'; }
 const pjvFilterState = { rows: [], match: 'and' }; // rows: {field, op, values[]}
 const pjvAsgFilter = { ids: new Set(), none: false }; // 담당자 빠른필터(우측 사람 아이콘)
+// Me mode(#1067, ClickUp 아바타 버튼) — '내가 맡은 것만'. 프로젝트/태스크 각각 따로 끌 수 있다.
+//  projects: 내가 만든·참여한 프로젝트만(기존 pjvBoardMineOnly 를 이 스위치가 대신 조종한다)
+//  tasks: 프로젝트를 펼쳤을 때 나오는 태스크 중 내가 담당인 것만
+const pjvMeMode = { tasks: false };
+function pjvMeModeOn() { return pjvBoardMineOnly.on || pjvMeMode.tasks; }
+// 이 태스크가 나에게 할당됐나 — 다중 담당자(pjvAssignees) 기준. meId 는 state.me 에서.
+function pjvTaskIsMine(t, meId) {
+    if (!meId)
+        return true;
+    return pjvAssignees(t).some((x) => String(x) === String(meId));
+}
 const pjvBoardSearch = { q: '' }; // 뷰 내 검색(돋보기)
 // 필터 값 후보 — 보드 렌더마다 현재 데이터에서 수집(상태·담당자·태그). 카운트는 ClickUp 처럼 옆에 숫자로.
 let pjvFilterUniverse = { statuses: [], members: [], tags: [], counts: { member: new Map(), none: 0 } };
@@ -9129,6 +9148,16 @@ function pjvAssigneePopover(anchor, onChange) {
         onChange();
     });
 }
+// ── 'Me mode' 팝오버(#1067) — 내 아바타를 누르면 뜬다. ClickUp 은 Comments/Subtasks/Checklists 지만
+//  우리 보드의 단위는 프로젝트와 태스크라 그 둘로 옮겼다(없는 개념을 흉내내면 눌러도 아무 일이 안 생긴다).
+function pjvMeModePopover(anchor, onChange) {
+    const pop = el('div', { class: 'pjv-menu pjv-closed-pop' });
+    pjvPopover(anchor, pop, { align: 'right' });
+    pop.append(el('div', { class: 'pjv-closed-pop-head', text: '내가 맡은 것만 보기' }));
+    pop.append(pjvSwitchRow('프로젝트', () => pjvBoardMineOnly.on, (v) => { pjvBoardMineOnly.on = v; }, onChange));
+    pop.append(pjvSwitchRow('태스크', () => pjvMeMode.tasks, (v) => { pjvMeMode.tasks = v; }, onChange));
+    pop.append(el('div', { class: 'pjv-menu-hint', text: '프로젝트 = 내가 만들었거나 팀원인 것 · 태스크 = 내가 담당인 것' }));
+}
 // ── '완료 표시' 팝오버 — 프로젝트/태스크 각각의 닫힌 항목 노출 스위치(ClickUp Tasks·Subtasks 파리티). ──
 function pjvClosedPopover(anchor, onChange) {
     const pop = el('div', { class: 'pjv-menu pjv-closed-pop' });
@@ -9203,25 +9232,60 @@ function pjvBoardSettingsPopover(anchor, ctx) {
     sv2.onclick = (e) => { e.stopPropagation(); close(); pjvSavedViewMenu(anchor, ctx.onView); };
     pop.append(el('div', { class: 'pjv-set-sec', text: '뷰' }), sv2);
 }
-// ── 뷰 탭 줄(#1067) — 보드·타임라인·테이블·리스트 + ＋뷰. **지금은 버튼·아이콘만**(기능은 별도 작업). ──
-//  누르면 무엇이 준비 중인지 알려준다 — 아무 반응 없는 죽은 버튼은 '고장'으로 읽힌다.
+// ── 뷰 탭 줄(#1067) — 보드·타임라인·테이블·리스트 + ＋뷰. ──
+//  보드/리스트는 이미 있는 렌더에 연결(칸반 #541 / 상태그룹). 테이블·타임라인은 아직 없어 준비 중 토스트.
+//  ⚠ 설정(톱니) 팝오버의 '보기 방식' 라디오와 **같은 상태**(pjvBoardView)를 본다 — 두 곳이 항상 일치해야 한다.
 const PJV_VIEW_TABS = [
     { key: 'board', label: '보드' },
     { key: 'timeline', label: '타임라인' },
     { key: 'table', label: '테이블' },
     { key: 'list', label: '리스트' },
 ];
-function pjvViewTabsRow() {
+// 현재 보기 → 탭 키. 칸반만 '보드'고 나머지(상태그룹·리스트박스·개요)는 전부 리스트 계열이다.
+function pjvCurrentViewTab() { return pjvBoardView.kanban ? 'board' : 'list'; }
+// ctx.onView() = 뷰 전환 후 재렌더(스코프별 뷰 영속 포함). 없으면 탭은 표시 전용.
+function pjvViewTabsRow(ctx) {
     const row = el('div', { class: 'pjv-vtabs', role: 'tablist', 'aria-label': '뷰' });
+    const syncs = [];
     for (const t of PJV_VIEW_TABS) {
-        const on = t.key === 'list'; // 기본 활성 탭 표시(현재 보드가 리스트형)
-        const b = el('button', { class: 'pjv-vtab' + (on ? ' active' : ''), type: 'button', role: 'tab', 'aria-selected': String(on) }, pjvTabIcon(t.key), el('span', { class: 'pjv-vtab-label', text: t.label }));
-        b.onclick = (e) => { e.stopPropagation(); toast(t.label + ' 뷰는 준비 중이에요 — 곧 열립니다'); };
+        const b = el('button', { class: 'pjv-vtab', type: 'button', role: 'tab' }, pjvTabIcon(t.key), el('span', { class: 'pjv-vtab-label', text: t.label }));
+        const sync = () => {
+            const on = pjvCurrentViewTab() === t.key;
+            b.classList.toggle('active', on);
+            b.setAttribute('aria-selected', String(on));
+        };
+        syncs.push(sync);
+        b.onclick = (e) => {
+            e.stopPropagation();
+            if (t.key === 'table' || t.key === 'timeline') {
+                toast(t.label + ' 뷰는 준비 중이에요 — 곧 열립니다');
+                return;
+            }
+            if (pjvCurrentViewTab() === t.key)
+                return;
+            if (t.key === 'board') {
+                pjvBoardView.kanban = true;
+                pjvBoardView.byFolder = false;
+                pjvBoardView.overview = false;
+            }
+            else {
+                pjvBoardView.kanban = false;
+                pjvBoardView.overview = false;
+                if (!pjvBoardView.byFolder)
+                    pjvBoardView.byStatus = true;
+            }
+            syncs.forEach((s) => s());
+            if (ctx && ctx.onView)
+                ctx.onView();
+        };
         row.append(b);
     }
     const add = el('button', { class: 'pjv-vtab pjv-vtab-add', type: 'button', title: '뷰 추가' }, pjvTbIcon('plus', 'sm'), el('span', { class: 'pjv-vtab-label', text: '뷰' }));
     add.onclick = (e) => { e.stopPropagation(); toast('뷰 추가는 준비 중이에요'); };
     row.append(el('span', { class: 'pjv-vtab-sep' }), add);
+    syncs.forEach((s) => s());
+    // render() 가 뷰를 바꿔도 탭이 따라오게 — 헤더는 한 번만 만들어지므로 sync 를 걸어둔다.
+    row._sync = () => syncs.forEach((s) => s());
     return row;
 }
 // ════════════════════════════════════════════════════════════════════════════
