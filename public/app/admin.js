@@ -536,20 +536,78 @@ function auditSection(detail, data) {
         { key: 'tools', label: 'AI 도구 호출', render: (h) => { void toolUsagePanel(h); } },
     ]));
 }
+// ── 감사 로그 3탭 공용 컨트롤(#1085) ─────────────────────────────────────────
+//  세 탭이 각자 필터바·페이저를 복제해 갖고 있었고(oa-* / audit-bar / tu-*), 라벨 유무·컨트롤 높이·
+//  모서리·글자 크기가 전부 달랐다. 마크업 생성기를 하나로 모으고 스타일은 styles.css 의 .aud-* 로 통일한다.
+// 한 페이지에 몇 줄을 볼지 — 기본 10줄(첫 화면이 스크롤 없이 들어오는 크기). 서버 상한이 500 이라
+//  '전체'는 500줄이 사실상의 최대다(그 이상은 페이지를 넘겨야 한다 — 있는 그대로 라벨에 쓴다).
+const AUD_PAGE_SIZES = [[10, '10줄'], [25, '25줄'], [50, '50줄'], [100, '100줄'], [500, '500줄']];
+const AUD_PAGE_SIZE_DEFAULT = 10;
+// 개인 설정이라 서버에 안 남긴다 — 이 브라우저에만 기억한다.
+function audPageSize(key) {
+    try {
+        const v = Number(localStorage.getItem('lively_audit_rows_' + key));
+        if (AUD_PAGE_SIZES.some(([n]) => n === v))
+            return v;
+    }
+    catch { /* localStorage 불가 환경 — 기본값 */ }
+    return AUD_PAGE_SIZE_DEFAULT;
+}
+function audSetPageSize(key, n) {
+    try {
+        localStorage.setItem('lively_audit_rows_' + key, String(n));
+    }
+    catch { /* 무시 */ }
+}
+function audField(labelText, control) {
+    return el('div', { class: 'aud-f' }, el('label', { text: labelText }), control);
+}
+// opts = [[value, label], …]. 값이 목록에 없으면(서버가 안 준 필터값) 그대로 한 항목 추가해 선택을 잃지 않는다.
+function audSelect(opts, value, onchange) {
+    const sel = el('select', { class: 'aud-sel' });
+    for (const [v, label] of opts)
+        sel.append(el('option', { value: v, text: label }));
+    if (value && !opts.some(([v]) => v === value))
+        sel.append(el('option', { value, text: value }));
+    sel.value = value || '';
+    sel.onchange = () => onchange(sel.value);
+    return sel;
+}
+function audPageSizeField(key, onchange) {
+    return audField('표시 줄 수', audSelect(AUD_PAGE_SIZES.map(([n, label]) => [String(n), label]), String(audPageSize(key)), (v) => { audSetPageSize(key, Number(v)); onchange(Number(v)); }));
+}
+// ‹ 1 … 4 5 6 … 20 › + 'n / m 페이지'. 페이지가 하나뿐이면 빈 상자를 돌려준다(자리만 차지하지 않게).
+function audPager(page, totalPages, go) {
+    const box = el('div', { class: 'aud-pager' });
+    if (totalPages <= 1)
+        return box;
+    const cur = Math.min(Math.max(1, page), totalPages);
+    const pgBtn = (label, n, kind) => el('button', {
+        class: 'aud-pg' + (kind === 'on' ? ' aud-pg-on' : '') + (kind === 'off' ? ' aud-pg-off' : ''),
+        text: String(label), ...(kind ? {} : { onclick: () => go(n) })
+    });
+    box.append(pgBtn('‹', cur - 1, cur <= 1 ? 'off' : undefined));
+    for (const pn of tuPageNumbers(cur, totalPages)) {
+        if (pn === '…')
+            box.append(el('span', { class: 'aud-pg-gap', text: '…' }));
+        else
+            box.append(pgBtn(pn, pn, pn === cur ? 'on' : undefined));
+    }
+    box.append(pgBtn('›', cur + 1, cur >= totalPages ? 'off' : undefined));
+    box.append(el('span', { class: 'aud-pg-info', text: cur + ' / ' + totalPages + ' 페이지' }));
+    return box;
+}
 // ════════ MCP 호출 통계(#318) — 하네스가 어떤 MCP 툴을 어떤 인자로 어느 빈도로 호출했는지 ════════
 //  읽기 전용 대시보드(admin). 백엔드=/api/ui/tool-usage(src/capabilities/tool-usage.ts → mcp_call_log 집계).
 //  "직접/LLM 쿼리"는 db_query 로 mcp_call_log 를 SELECT(이 화면=사람용 집계 편의 표면). 새 서브탭일 뿐 기존 도구 화면 불변.
-const TOOL_USAGE_STATE = { window: '7d', harness: '', tool: '', errorsOnly: false, page: 1 };
+const TOOL_USAGE_STATE = { window: '7d', harness: '', tool: '', errorsOnly: false, page: 1, allTools: false };
 const TU_WINDOW_LABELS = { '1h': '최근 1시간', '24h': '최근 24시간', '7d': '최근 7일', '30d': '최근 30일', '90d': '최근 90일', 'all': '전체 기간' };
-// 스타일 1회 주입(테마 토큰 사용 → 라이트/다크 자동 적응). innerHTML 없음 — textContent 로만 CSS 삽입(보안 불변식 준수).
+// 스타일 1회 주입(테마 토큰 사용). innerHTML 없음 — textContent 로만 CSS 삽입(보안 불변식 준수).
+//  ⚠ 필터바·페이저는 여기 없다 — 3탭 공용 .aud-* (styles.css, #1085). 여긴 이 탭 고유의 스탯·차트·표만.
 function tuEnsureStyles() {
     if (document.getElementById('tu-styles'))
         return;
     document.head.appendChild(el('style', { id: 'tu-styles', text: `
-.tu-controls{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin:2px 0 18px}
-.tu-field{display:flex;flex-direction:column;gap:4px}
-.tu-field>label{font-size:11px;font-weight:700;color:var(--muted)}
-.tu-sel,.tu-inp{padding:6px 9px;font:inherit;color:var(--ink);border:1px solid var(--line);border-radius:7px;background:var(--bg)}
 .tu-stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px}
 .tu-stat{flex:1 1 120px;min-width:104px;padding:12px 14px;border:1px solid var(--line);border-radius:11px;background:var(--bg-tint)}
 .tu-stat b{display:block;font-size:23px;font-weight:800;line-height:1.15;color:var(--ink);font-variant-numeric:tabular-nums}
@@ -586,13 +644,6 @@ function tuEnsureStyles() {
 .tu-cbad{color:var(--coral);font-size:11px;font-weight:700}
 .tu-args{background:var(--bg-tint);border:1px solid var(--line);padding:9px 11px;border-radius:7px;font-size:12px;line-height:1.5;color:var(--ink);overflow:auto;max-height:340px;white-space:pre-wrap;word-break:break-word;margin:7px 0 2px}
 .tu-empty{color:var(--muted);font-size:13px;padding:18px 4px}
-.tu-pager{display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-top:14px}
-.tu-pg{min-width:30px;height:30px;padding:0 9px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--ink);font:inherit;font-size:12.5px;cursor:pointer;font-variant-numeric:tabular-nums}
-.tu-pg:hover{background:var(--bg-tint)}
-.tu-pg-on{background:var(--blue);border-color:var(--blue);color:#fff;cursor:default}
-.tu-pg-off{opacity:.38;cursor:default}
-.tu-pg-gap{color:var(--muted);padding:0 2px}
-.tu-pg-info{color:var(--muted);font-size:11.5px;margin-left:8px}
 ` }));
 }
 function tuPretty(v) {
@@ -602,7 +653,7 @@ function tuPretty(v) {
     //  "왜 값이 없지 / 버그인가" 로 읽히므로, 무엇이 왜 없는지 사람 말로 풀어 준다.
     if (v && typeof v === 'object' && v.__omitted === 'external_tool_args') {
         const keys = Array.isArray(v.keys) ? v.keys : null;
-        const parts = ['보낸 내용은 기록하지 않았습니다 (외부 서비스로 나가는 도구)'];
+        const parts = ['보낸 내용은 기록하지 않았습니다 — 외부 서비스로 나가는 도구입니다.'];
         if (keys)
             parts.push('전달한 항목: ' + (keys.length ? keys.join(', ') : '없음'));
         else if (typeof v.items === 'number')
@@ -652,7 +703,7 @@ function tuPageNumbers(cur, total) {
 async function toolUsagePanel(detail) {
     tuEnsureStyles();
     const reload = () => toolUsagePanel(detail);
-    const PAGE_SIZE = 50;
+    const PAGE_SIZE = audPageSize('tools'); // 개인이 고르는 값 — 기본 10줄(#1085)
     // 현재 필터 → 쿼리스트링(+추가 파라미터). 페이지 이동·CSV·재조회가 공유.
     const filterQs = (extra) => {
         const q = new URLSearchParams({ window: TOOL_USAGE_STATE.window });
@@ -683,37 +734,15 @@ async function toolUsagePanel(detail) {
     const recent = r.recent || [];
     const total = sum.total || 0;
     const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-    // ── 컨트롤(기간·하네스·툴·결과 필터) — 필터 변경 시 page=1 리셋 ──
-    const winSel = el('select', { class: 'tu-sel' });
-    for (const w of (r.windows || Object.keys(TU_WINDOW_LABELS)))
-        winSel.append(el('option', { value: w, text: TU_WINDOW_LABELS[w] || w }));
-    winSel.value = r.window || TOOL_USAGE_STATE.window;
-    winSel.onchange = () => { TOOL_USAGE_STATE.window = winSel.value; TOOL_USAGE_STATE.page = 1; reload(); };
-    const harnessSel = el('select', { class: 'tu-sel' });
-    harnessSel.append(el('option', { value: '', text: '모든 하네스' }));
+    // ── 컨트롤(기간·하네스·도구·결과 필터) — 필터 변경 시 page=1 리셋 ──
+    const winSel = audSelect((r.windows || Object.keys(TU_WINDOW_LABELS)).map((w) => [w, TU_WINDOW_LABELS[w] || w]), r.window || TOOL_USAGE_STATE.window, (v) => { TOOL_USAGE_STATE.window = v; TOOL_USAGE_STATE.page = 1; reload(); });
     const harnessVals = byHarness.map((h) => h.harness).filter((h) => h && h !== '(미상)');
-    if (TOOL_USAGE_STATE.harness && !harnessVals.includes(TOOL_USAGE_STATE.harness))
-        harnessVals.push(TOOL_USAGE_STATE.harness);
-    for (const h of harnessVals)
-        harnessSel.append(el('option', { value: h, text: h }));
-    harnessSel.value = TOOL_USAGE_STATE.harness;
-    harnessSel.onchange = () => { TOOL_USAGE_STATE.harness = harnessSel.value; TOOL_USAGE_STATE.page = 1; reload(); };
-    // 툴 필터 = 드롭다운(현재 기간+하네스 내 실제 툴 목록 + 호출수). 이름 타이핑 대신 선택.
-    const toolSel = el('select', { class: 'tu-sel' });
-    toolSel.append(el('option', { value: '', text: '모든 툴' }));
+    const harnessSel = audSelect([['', '모든 하네스'], ...harnessVals.map((h) => [h, h])], TOOL_USAGE_STATE.harness, (v) => { TOOL_USAGE_STATE.harness = v; TOOL_USAGE_STATE.page = 1; reload(); });
+    // 도구 필터 = 드롭다운(현재 기간+하네스 내 실제 도구 목록 + 호출수). 이름 타이핑 대신 선택.
     const toolOpts = r.toolOptions || [];
-    for (const t of toolOpts)
-        toolSel.append(el('option', { value: t.tool, text: t.tool + ' (' + (t.calls || 0).toLocaleString() + ')' }));
-    if (TOOL_USAGE_STATE.tool && !toolOpts.some((t) => t.tool === TOOL_USAGE_STATE.tool))
-        toolSel.append(el('option', { value: TOOL_USAGE_STATE.tool, text: TOOL_USAGE_STATE.tool }));
-    toolSel.value = TOOL_USAGE_STATE.tool;
-    toolSel.onchange = () => { TOOL_USAGE_STATE.tool = toolSel.value; TOOL_USAGE_STATE.page = 1; reload(); };
+    const toolSel = audSelect([['', '모든 도구'], ...toolOpts.map((t) => [t.tool, t.tool + ' · ' + (t.calls || 0).toLocaleString() + '회'])], TOOL_USAGE_STATE.tool, (v) => { TOOL_USAGE_STATE.tool = v; TOOL_USAGE_STATE.page = 1; reload(); });
     // 결과 필터(전체/오류만)
-    const errSel = el('select', { class: 'tu-sel' });
-    errSel.append(el('option', { value: '', text: '전체' }));
-    errSel.append(el('option', { value: '1', text: '오류만' }));
-    errSel.value = TOOL_USAGE_STATE.errorsOnly ? '1' : '';
-    errSel.onchange = () => { TOOL_USAGE_STATE.errorsOnly = errSel.value === '1'; TOOL_USAGE_STATE.page = 1; reload(); };
+    const errSel = audSelect([['', '전체'], ['1', '오류만']], TOOL_USAGE_STATE.errorsOnly ? '1' : '', (v) => { TOOL_USAGE_STATE.errorsOnly = v === '1'; TOOL_USAGE_STATE.page = 1; reload(); });
     // CSV(엑셀) 다운로드 — 현재 필터 전체를 페이지 루프로 모아 CSV(Excel 한글 BOM). 상한 5000행.
     const exportCsv = async () => {
         toast('CSV 준비 중…');
@@ -750,12 +779,12 @@ async function toolUsagePanel(detail) {
         setTimeout(() => URL.revokeObjectURL(url), 2000);
         toast(rows.length.toLocaleString() + '행 내려받음' + (rows.length >= CAP ? ' (상한 ' + CAP + ')' : ''));
     };
-    const controls = el('div', { class: 'tu-controls' }, el('div', { class: 'tu-field' }, el('label', { text: '기간' }), winSel), el('div', { class: 'tu-field' }, el('label', { text: '하네스' }), harnessSel), el('div', { class: 'tu-field' }, el('label', { text: '툴' }), toolSel), el('div', { class: 'tu-field' }, el('label', { text: '결과' }), errSel), el('button', { class: 'btn btn-ghost btn-sm', text: '새로고침', onclick: reload }), el('button', { class: 'btn btn-ghost btn-sm', text: 'CSV 다운로드', onclick: exportCsv }), (TOOL_USAGE_STATE.harness || TOOL_USAGE_STATE.tool || TOOL_USAGE_STATE.errorsOnly)
+    const controls = el('div', { class: 'aud-filters' }, audField('기간', winSel), audField('하네스', harnessSel), audField('도구', toolSel), audField('결과', errSel), audPageSizeField('tools', () => { TOOL_USAGE_STATE.page = 1; reload(); }), el('div', { class: 'aud-right' }, (TOOL_USAGE_STATE.harness || TOOL_USAGE_STATE.tool || TOOL_USAGE_STATE.errorsOnly)
         ? el('button', { class: 'btn btn-ghost btn-sm', text: '필터 해제', onclick: () => { TOOL_USAGE_STATE.harness = ''; TOOL_USAGE_STATE.tool = ''; TOOL_USAGE_STATE.errorsOnly = false; TOOL_USAGE_STATE.page = 1; reload(); } })
-        : null);
+        : null, el('button', { class: 'btn btn-ghost btn-sm', text: 'CSV 다운로드', onclick: exportCsv }), el('button', { class: 'btn btn-ghost btn-sm', text: '새로고침', onclick: reload })));
     // ── 요약 스탯 ──
     const stat = (label, value, bad) => el('div', { class: 'tu-stat' + (bad ? ' tu-bad' : '') }, el('b', { text: String(value) }), el('span', { text: label }));
-    const stats = el('div', { class: 'tu-stats' }, stat('총 호출', (sum.total || 0).toLocaleString()), stat('툴 종류', sum.tools || 0), stat('하네스', sum.harnesses || 0), stat('오류', (sum.errors || 0).toLocaleString(), (sum.errors || 0) > 0), stat('마지막 호출', sum.last_at ? relTime(sum.last_at) : '—'));
+    const stats = el('div', { class: 'tu-stats' }, stat('총 호출', (sum.total || 0).toLocaleString()), stat('도구 종류', sum.tools || 0), stat('하네스', sum.harnesses || 0), stat('오류', (sum.errors || 0).toLocaleString(), (sum.errors || 0) > 0), stat('마지막 호출', sum.last_at ? relTime(sum.last_at) : '—'));
     // ── 일별 막대(KST) ──
     let daysEl = null;
     if (byDay.length) {
@@ -768,18 +797,25 @@ async function toolUsagePanel(detail) {
             bars.append(el('div', { class: 'tu-day' }, el('i', { class: allErr ? 'tu-allerr' : '', style: 'height:' + h + '%', title: d.day + ' · ' + d.calls + '회' + (d.errors ? ' (오류 ' + d.errors + ')' : '') })));
             labels.append(el('span', { text: String(d.day).slice(5) }));
         }
-        daysEl = el('div', {}, el('div', { class: 'tu-sub', text: '일별 호출 (KST)' }), bars, labels);
+        daysEl = el('div', {}, el('div', { class: 'tu-sub', text: '일별 호출 · KST 기준' }), bars, labels);
     }
-    // ── 툴별 표 ──
+    // ── 도구별 표 ── 서버가 최대 200종을 주므로 그대로 그리면 이 표 하나가 화면 몇 개 길이가 된다(#1085).
+    //  기본은 [표시 줄 수]만큼만 보여주고 나머지는 접는다 — 상위 몇 개가 대부분을 차지하는 분포라 그것으로 충분하다.
     const maxToolCalls = Math.max(...byTool.map((t) => t.calls), 1);
+    const toolShown = TOOL_USAGE_STATE.allTools ? byTool : byTool.slice(0, PAGE_SIZE);
     const toolBody = el('tbody');
-    for (const t of byTool) {
+    for (const t of toolShown) {
         const frac = Math.round((t.calls / maxToolCalls) * 100);
         toolBody.append(el('tr', {}, el('td', { class: 'tu-namecell' }, el('span', { class: 'tu-bar', style: 'width:' + frac + '%' }), el('span', { class: 'tu-name mono', text: t.tool })), el('td', { class: 'tu-num', text: (t.calls || 0).toLocaleString() }), el('td', { class: 'tu-num', text: t.errors ? String(t.errors) : '–' }), el('td', { class: 'tu-num', text: t.avg_ms != null ? tuFmtDur(t.avg_ms) : '–' }), el('td', { class: 'tu-num', text: t.max_ms != null ? tuFmtDur(t.max_ms) : '–' }), el('td', { class: 'tu-num', text: t.last_at ? relTime(t.last_at) : '–' })));
     }
     const toolTable = byTool.length
-        ? el('table', { class: 'tu-table' }, el('thead', {}, el('tr', {}, el('th', { text: '툴' }), el('th', { class: 'tu-num', text: '호출' }), el('th', { class: 'tu-num', text: '오류' }), el('th', { class: 'tu-num', text: '평균' }), el('th', { class: 'tu-num', text: '최대' }), el('th', { class: 'tu-num', text: '마지막' }))), toolBody)
+        ? el('table', { class: 'tu-table' }, el('thead', {}, el('tr', {}, el('th', { text: '도구' }), el('th', { class: 'tu-num', text: '호출' }), el('th', { class: 'tu-num', text: '오류' }), el('th', { class: 'tu-num', text: '평균' }), el('th', { class: 'tu-num', text: '최대' }), el('th', { class: 'tu-num', text: '마지막' }))), toolBody)
         : el('div', { class: 'tu-empty', text: '이 조건에 기록된 호출이 없습니다.' });
+    const toolMore = byTool.length > PAGE_SIZE
+        ? el('div', { class: 'aud-pager' }, el('button', { class: 'btn btn-ghost btn-sm',
+            text: TOOL_USAGE_STATE.allTools ? '상위 ' + PAGE_SIZE + '개만 보기' : '나머지 ' + (byTool.length - PAGE_SIZE) + '개 도구 더 보기',
+            onclick: () => { TOOL_USAGE_STATE.allTools = !TOOL_USAGE_STATE.allTools; reload(); } }))
+        : null;
     // ── 하네스별 칩 ──
     const harnessChips = el('div', { class: 'tu-harness' });
     for (const h of byHarness)
@@ -792,26 +828,10 @@ async function toolUsagePanel(detail) {
     for (const c of recent)
         calls.append(renderCall(c));
     // 번호 페이지네이션 — 페이지 클릭 시 page 갱신 후 reload(필터·집계 유지). ‹ 1 … 4 5 6 … 20 ›
-    const pagerBox = el('div', { class: 'tu-pager' });
-    if (totalPages > 1) {
-        const cur = Math.min(page, totalPages);
-        const pgBtn = (label, n, kind) => el('button', {
-            class: 'tu-pg' + (kind === 'on' ? ' tu-pg-on' : '') + (kind === 'off' ? ' tu-pg-off' : ''),
-            text: String(label), ...(kind ? {} : { onclick: () => { TOOL_USAGE_STATE.page = n; reload(); } })
-        });
-        pagerBox.append(pgBtn('‹', cur - 1, cur <= 1 ? 'off' : undefined));
-        for (const pn of tuPageNumbers(cur, totalPages)) {
-            if (pn === '…')
-                pagerBox.append(el('span', { class: 'tu-pg-gap', text: '…' }));
-            else
-                pagerBox.append(pgBtn(pn, pn, pn === cur ? 'on' : undefined));
-        }
-        pagerBox.append(pgBtn('›', cur + 1, cur >= totalPages ? 'off' : undefined));
-        pagerBox.append(el('span', { class: 'tu-pg-info', text: cur + ' / ' + totalPages + ' 페이지' }));
-    }
+    const pagerBox = audPager(page, totalPages, (n) => { TOOL_USAGE_STATE.page = n; reload(); });
     // ── 보관 기간(#1082) — 이 화면이 곧 이 데이터의 설정 창구다. 0 = 무기한(권장하지 않음).
     const retDays = (r.retention && typeof r.retention.retention_days === 'number') ? r.retention.retention_days : 90;
-    const retIn = el('input', { type: 'number', min: '0', max: '3650', step: '1', class: 'tu-sel', style: 'width:90px', value: String(retDays) });
+    const retIn = el('input', { type: 'number', min: '0', max: '3650', step: '1', class: 'aud-inp', style: 'width:90px;min-width:0', value: String(retDays) });
     const retSave = el('button', { class: 'btn btn-ghost btn-sm', text: '저장' });
     const retStatus = el('span', { class: 'admin-status' });
     const RET_SRC = { db: '관리탭에서 설정한 값', env: '설치 시 .env 값', default: '기본값' };
@@ -832,8 +852,11 @@ async function toolUsagePanel(detail) {
             retSave.disabled = false;
         }
     });
-    const retBox = el('div', { class: 'admin-subcard', style: 'margin-top:22px' }, el('div', { class: 'admin-subhead', text: '기록 보관 기간' }), el('div', { class: 'admin-hint' }, ...uiText('이 기간이 지난 호출 기록은 자동으로 지워집니다. 누가 언제 무엇을 했는지가 사람 단위로 남는 기록이라, 필요한 기간만 두는 편이 안전합니다. 0 을 넣으면 영구 보관합니다(권장하지 않음).')), el('div', { class: 'admin-actions' }, retIn, el('span', { class: 'caption' }, ...uiText('일')), retSave, retStatus, el('span', { class: 'caption', text: '현재: ' + (RET_SRC[r.retention_source] || r.retention_source || '기본값') })));
-    const card = el('div', { class: 'card' }, cardHead('툴 호출 기록', '하네스(Claude·Codex 등)가 어떤 MCP 툴을 얼마나 자주 호출했는지 보여줍니다. 모든 호출이 기록되며(시크릿은 마스킹, 큰 값은 잘라 저장), AI에게 묻거나 db_query 로 mcp_call_log 를 직접 조회할 수도 있습니다. 외부 서비스로 나가는 도구(슬랙·메일·노션 등)는 보낸 내용을 남기지 않고 호출 사실만 기록합니다 — 서버별로 「연결·데이터」 탭에서 켤 수 있습니다.'), controls, stats, daysEl, el('div', { class: 'tu-sub', text: '툴별 호출' }), toolTable, byHarness.length ? el('div', { class: 'tu-sub', text: '하네스별' }) : null, byHarness.length ? harnessChips : null, el('div', { class: 'tu-sub', text: '최근 호출' + (total ? ' (' + total.toLocaleString() + ')' : '') }), calls, pagerBox, retBox);
+    const retBox = el('div', { class: 'admin-subcard', style: 'margin-top:22px' }, el('div', { class: 'admin-subhead', text: '기록 보관 기간' }), el('div', { class: 'admin-hint' }, ...uiText('이 기간이 지난 호출 기록은 자동으로 지워집니다. 누가 언제 무엇을 했는지가 사람 단위로 남는 기록이라, 필요한 기간만 두는 편이 안전합니다. 0 을 넣으면 영구 보관하는데, 권장하지 않습니다.')), el('div', { class: 'admin-actions' }, retIn, el('span', { class: 'caption' }, ...uiText('일')), retSave, retStatus, el('span', { class: 'caption', text: '현재: ' + (RET_SRC[r.retention_source] || r.retention_source || '기본값') })));
+    const shown = recent.length
+        ? `${total.toLocaleString()}건 중 ${((Math.min(page, totalPages) - 1) * PAGE_SIZE + 1).toLocaleString()}–${((Math.min(page, totalPages) - 1) * PAGE_SIZE + recent.length).toLocaleString()}번째`
+        : '';
+    const card = el('div', { class: 'card' }, cardHead('AI 도구 호출 기록', 'Claude·Codex 같은 하네스가 어떤 MCP 도구를 얼마나 자주 호출했는지 보여줍니다. 모든 호출이 기록되며 시크릿 값은 마스킹하고 큰 값은 잘라 보관합니다. AI에게 물어보거나 db_query 로 mcp_call_log 를 직접 조회할 수도 있습니다. 슬랙·메일·노션처럼 외부 서비스로 나가는 도구는 보낸 내용을 남기지 않고 호출 사실만 기록합니다. 이 기록은 서버마다 「연결·데이터」 탭에서 켤 수 있습니다.'), controls, stats, daysEl, el('div', { class: 'tu-sub', text: '도구별 호출' }), toolTable, toolMore, byHarness.length ? el('div', { class: 'tu-sub', text: '하네스별' }) : null, byHarness.length ? harnessChips : null, el('div', { class: 'tu-sub', text: '최근 호출' }), shown ? el('div', { class: 'aud-count', text: shown }) : null, calls, pagerBox, retBox);
     detail.replaceChildren(card);
 }
 // ════════ 조직 변경 감사 로그(#549) — 누가(사람/AI)·언제·무엇을·어디서(mcp/web) 바꿨는지 + before→after ════════
@@ -851,18 +874,14 @@ const OA_ENTITY_LABELS = {
 const OA_OP_LABELS = { insert: '생성', update: '수정', delete: '삭제', revoke: '접속 해제', mint: '발급', reorder: '순서변경' };
 const OA_CHANNEL_LABELS = { mcp: '에이전트(MCP)', web: '웹 관리탭', connector: '자료 수집기', cli: 'CLI', migration: '마이그레이션', unknown: '미상' };
 const OA_KIND_LABELS = { human: '사람', ai: 'AI', system: '시스템', connector: '자료 수집기', unknown: '미상' };
-// 스타일 1회 주입(테마 토큰 — 라이트/다크 자동). textContent 로만 삽입(보안 불변식). tool-usage 의 tu-* 를 oa-* 로 복제.
+// 스타일 1회 주입(테마 토큰). textContent 로만 삽입(보안 불변식).
+//  ⚠ 필터바·페이저는 여기 없다 — 3탭 공용 .aud-* (styles.css, #1085). 여긴 이 탭 고유의 행·diff 표현만.
 function oaEnsureStyles() {
     if (document.getElementById('oa-styles'))
         return;
     document.head.appendChild(el('style', { id: 'oa-styles', text: `
-.oa-controls{display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin:2px 0 18px}
-.oa-field{display:flex;flex-direction:column;gap:4px}
-.oa-field>label{font-size:11px;font-weight:700;color:var(--muted)}
-.oa-sel{padding:6px 9px;font:inherit;color:var(--ink);border:1px solid var(--line);border-radius:7px;background:var(--bg)}
-.oa-sub{font-weight:800;font-size:13px;color:var(--ink);margin:22px 0 9px}
 .oa-rows{margin-top:4px}
-.oa-row{border-bottom:1px solid var(--line);padding:9px 4px}
+.oa-row{border-bottom:1px solid var(--line);padding:7px 4px}
 .oa-row>summary{display:flex;gap:10px;align-items:center;cursor:pointer;list-style:none;flex-wrap:wrap}
 .oa-row>summary::-webkit-details-marker{display:none}
 .oa-row>summary:hover{background:var(--bg-tint)}
@@ -886,13 +905,6 @@ function oaEnsureStyles() {
 .oa-v-was{color:var(--coral)}
 .oa-v-now{color:var(--ink)}
 .oa-empty{color:var(--muted);font-size:13px;padding:18px 4px}
-.oa-pager{display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-top:14px}
-.oa-pg{min-width:30px;height:30px;padding:0 9px;border:1px solid var(--line);border-radius:7px;background:var(--bg);color:var(--ink);font:inherit;font-size:12.5px;cursor:pointer;font-variant-numeric:tabular-nums}
-.oa-pg:hover{background:var(--bg-tint)}
-.oa-pg-on{background:var(--blue);border-color:var(--blue);color:#fff;cursor:default}
-.oa-pg-off{opacity:.38;cursor:default}
-.oa-pg-gap{color:var(--muted);padding:0 2px}
-.oa-pg-info{color:var(--muted);font-size:11.5px;margin-left:8px}
 ` }));
 }
 // before/after → 변경된 최상위 필드만(값은 JSON 비교). insert=신규(after만), delete=삭제(before만), update=바뀐 키.
@@ -926,7 +938,7 @@ function oaVal(v) {
 async function orgAuditPanel(detail) {
     oaEnsureStyles();
     const reload = () => orgAuditPanel(detail);
-    const PAGE_SIZE = 50;
+    const PAGE_SIZE = audPageSize('org'); // 개인이 고르는 값 — 기본 10줄(#1085)
     const filterQs = (extra) => {
         const q = new URLSearchParams();
         if (ORG_AUDIT_STATE.scope)
@@ -957,27 +969,15 @@ async function orgAuditPanel(detail) {
     const total = r.total || 0;
     const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     // ── 필터 컨트롤 — 변경 시 page=1 리셋 ──
-    const mkSel = (labelText, stateKey, opts, allLabel) => {
-        const sel = el('select', { class: 'oa-sel' });
-        sel.append(el('option', { value: '', text: allLabel }));
-        for (const o of opts)
-            sel.append(el('option', { value: o.val, text: o.label }));
-        sel.value = ORG_AUDIT_STATE[stateKey] || '';
-        sel.onchange = () => { ORG_AUDIT_STATE[stateKey] = sel.value; ORG_AUDIT_STATE.page = 1; reload(); };
-        return el('div', { class: 'oa-field' }, el('label', { text: labelText }), sel);
-    };
+    const mkSel = (labelText, stateKey, opts, allLabel) => audField(labelText, audSelect([['', allLabel], ...opts.map((o) => [o.val, o.label])], ORG_AUDIT_STATE[stateKey] || '', (v) => { ORG_AUDIT_STATE[stateKey] = v; ORG_AUDIT_STATE.page = 1; reload(); }));
     const entityOpts = (r.entityOptions || []).map((e) => ({ val: e, label: OA_ENTITY_LABELS[e] || e }));
     const kindOpts = (r.actorKindOptions || []).map((k) => ({ val: k, label: OA_KIND_LABELS[k] || k }));
     const chanOpts = (r.channelOptions || []).map((c) => ({ val: c, label: OA_CHANNEL_LABELS[c] || c }));
     const opOpts = (r.opOptions || []).map((o) => ({ val: o, label: OA_OP_LABELS[o] || o }));
-    const scopeSel = el('select', { class: 'oa-sel' });
-    scopeSel.append(el('option', { value: 'admin', text: '관리 항목만' }));
-    scopeSel.append(el('option', { value: 'all', text: '전체(지식·프로젝트 포함)' }));
-    scopeSel.value = ORG_AUDIT_STATE.scope || 'admin';
-    scopeSel.onchange = () => { ORG_AUDIT_STATE.scope = scopeSel.value; ORG_AUDIT_STATE.page = 1; reload(); };
+    const scopeSel = audSelect([['admin', '관리 항목만'], ['all', '전체 · 지식·프로젝트 포함']], ORG_AUDIT_STATE.scope || 'admin', (v) => { ORG_AUDIT_STATE.scope = v; ORG_AUDIT_STATE.page = 1; reload(); });
     const anyFilter = ORG_AUDIT_STATE.entity || ORG_AUDIT_STATE.actor_kind || ORG_AUDIT_STATE.channel || ORG_AUDIT_STATE.op;
-    const controls = el('div', { class: 'oa-controls' }, el('div', { class: 'oa-field' }, el('label', { text: '범위' }), scopeSel), mkSel('종류', 'entity', entityOpts, '모든 종류'), mkSel('행위자', 'actor_kind', kindOpts, '사람·AI 전체'), mkSel('경로', 'channel', chanOpts, '모든 경로'), mkSel('작업', 'op', opOpts, '모든 작업'), el('button', { class: 'btn btn-ghost btn-sm', text: '새로고침', onclick: reload }), anyFilter ? el('button', { class: 'btn btn-ghost btn-sm', text: '필터 해제',
-        onclick: () => { ORG_AUDIT_STATE.entity = ''; ORG_AUDIT_STATE.actor_kind = ''; ORG_AUDIT_STATE.channel = ''; ORG_AUDIT_STATE.op = ''; ORG_AUDIT_STATE.page = 1; reload(); } }) : null);
+    const controls = el('div', { class: 'aud-filters' }, audField('범위', scopeSel), mkSel('종류', 'entity', entityOpts, '모든 종류'), mkSel('행위자', 'actor_kind', kindOpts, '사람·AI 전체'), mkSel('경로', 'channel', chanOpts, '모든 경로'), mkSel('작업', 'op', opOpts, '모든 작업'), audPageSizeField('org', () => { ORG_AUDIT_STATE.page = 1; reload(); }), el('div', { class: 'aud-right' }, anyFilter ? el('button', { class: 'btn btn-ghost btn-sm', text: '필터 해제',
+        onclick: () => { ORG_AUDIT_STATE.entity = ''; ORG_AUDIT_STATE.actor_kind = ''; ORG_AUDIT_STATE.channel = ''; ORG_AUDIT_STATE.op = ''; ORG_AUDIT_STATE.page = 1; reload(); } }) : null, el('button', { class: 'btn btn-ghost btn-sm', text: '새로고침', onclick: reload })));
     // ── 행 리스트(펼치면 필드별 이전→이후) ──
     const list = el('div', { class: 'oa-rows' });
     const renderRow = (c) => {
@@ -988,32 +988,18 @@ async function orgAuditPanel(detail) {
             diffBody.append(el('tr', {}, el('td', { class: 'oa-f', text: d.key }), el('td', {}, el('div', { class: 'oa-v oa-v-was', text: d.hadBefore ? oaVal(d.before) : '—' })), el('td', {}, el('div', { class: 'oa-v oa-v-now', text: d.hasAfter ? oaVal(d.after) : '(삭제됨)' }))));
         const diffTable = diff.length
             ? el('table', { class: 'oa-diff' }, el('thead', {}, el('tr', {}, el('th', { text: '필드' }), el('th', { text: '이전' }), el('th', { text: '이후' }))), diffBody)
-            : el('div', { class: 'oa-empty', text: '내용 변화 없음(메타만).' });
+            : el('div', { class: 'oa-empty', text: '바뀐 내용이 없습니다 — 메타 정보만 갱신됐습니다.' });
         return el('details', { class: 'oa-row' }, el('summary', {}, el('span', { class: 'oa-time', text: relTime(c.at) }), el('span', { class: 'oa-kind oa-kind-' + kind, text: OA_KIND_LABELS[kind] || kind }), el('span', { class: 'oa-actor', text: c.actor_display || c.actor || '—' }), el('span', { class: 'oa-ent', text: OA_ENTITY_LABELS[c.entity] || c.entity }), c.entity_key ? el('span', { class: 'oa-key', text: c.entity_key, title: c.entity_key }) : null, el('span', { class: 'oa-badge oa-op-' + c.op, text: OA_OP_LABELS[c.op] || c.op }), el('span', { class: 'oa-chan', text: OA_CHANNEL_LABELS[c.channel] || c.channel || '' })), diffTable);
     };
     if (!rows.length)
         list.append(el('div', { class: 'oa-empty', text: '이 조건의 변경 이력이 없습니다.' }));
     for (const c of rows)
         list.append(renderRow(c));
-    // ── 페이지네이션(tuPageNumbers 재사용) ──
-    const pagerBox = el('div', { class: 'oa-pager' });
-    if (totalPages > 1) {
-        const cur = Math.min(page, totalPages);
-        const pgBtn = (label, n, kind) => el('button', {
-            class: 'oa-pg' + (kind === 'on' ? ' oa-pg-on' : '') + (kind === 'off' ? ' oa-pg-off' : ''),
-            text: String(label), ...(kind ? {} : { onclick: () => { ORG_AUDIT_STATE.page = n; reload(); } })
-        });
-        pagerBox.append(pgBtn('‹', cur - 1, cur <= 1 ? 'off' : undefined));
-        for (const pn of tuPageNumbers(cur, totalPages)) {
-            if (pn === '…')
-                pagerBox.append(el('span', { class: 'oa-pg-gap', text: '…' }));
-            else
-                pagerBox.append(pgBtn(pn, pn, pn === cur ? 'on' : undefined));
-        }
-        pagerBox.append(pgBtn('›', cur + 1, cur >= totalPages ? 'off' : undefined));
-        pagerBox.append(el('span', { class: 'oa-pg-info', text: cur + ' / ' + totalPages + ' 페이지' }));
-    }
-    const card = el('div', { class: 'card' }, cardHead('관리 변경 이력', '구성원·접속 토큰·런타임·외부 자료 수집·DB 소스·훅·도구 등 관리 항목이 누구에 의해(사람/AI) 어떤 경로(웹/MCP)로 언제 어떻게 바뀌었는지 기록합니다. 각 줄을 펼치면 바뀐 필드의 이전→이후를 볼 수 있습니다(시크릿은 마스킹). AI에게 묻거나 org_audit_list(MCP)로도 조회할 수 있습니다.'), controls, el('div', { class: 'oa-sub', text: '변경 이력' + (total ? ' (' + total.toLocaleString() + ')' : '') }), list, pagerBox);
+    const pagerBox = audPager(page, totalPages, (n) => { ORG_AUDIT_STATE.page = n; reload(); });
+    const shown = rows.length
+        ? `${total.toLocaleString()}건 중 ${((Math.min(page, totalPages) - 1) * PAGE_SIZE + 1).toLocaleString()}–${((Math.min(page, totalPages) - 1) * PAGE_SIZE + rows.length).toLocaleString()}번째`
+        : '';
+    const card = el('div', { class: 'card' }, cardHead('관리 변경 이력', '구성원·접속 토큰·런타임·외부 자료 수집·DB 소스·훅·도구 등 관리 항목이 언제 누구에 의해 어떤 경로로 바뀌었는지 기록합니다. 각 줄을 펼치면 바뀐 필드의 이전과 이후를 볼 수 있습니다. 시크릿 값은 마스킹해 보관합니다. AI에게 물어보거나 MCP 도구 org_audit_list 로도 조회할 수 있습니다.'), controls, shown ? el('div', { class: 'aud-count', text: shown }) : null, list, pagerBox);
     detail.replaceChildren(card);
 }
 // ── 스케줄러(자동화) — org_cron 잡 관리(admin). is 신선화·미매핑 LLM 분류(세션 주입)·sync 를 주기 실행. ──
@@ -6475,49 +6461,48 @@ function auditSince(period) {
     return ms ? new Date(now - ms).toISOString() : null;
 }
 async function dbAuditEditor(detail, data) {
-    const f = state.admin.dbAuditFilter || (state.admin.dbAuditFilter = { source: '', op: '', result: '', period: '7d', user: '', table: '' });
-    const sources = (data.dbSources || []).map((s) => s.name);
-    const srcSel = selectFilter([['', '모든 소스'], ...sources.map((n) => [n, n])], f.source);
-    const opSel = selectFilter([['', '쿼리+스키마'], ['query', '쿼리(db_query)'], ['schema', '스키마(db_schema)']], f.op);
-    const resSel = selectFilter([['', '성공+차단'], ['errors', '차단만']], f.result);
-    const perSel = selectFilter(AUDIT_PERIODS, f.period);
-    const userIn = el('input', { type: 'text', value: f.user || '', placeholder: '조회자 id(선택)', style: 'max-width:150px' });
-    const tableIn = el('input', { type: 'text', value: f.table || '', placeholder: '테이블명(선택)', style: 'max-width:150px' });
+    // page 는 #1085 에서 추가 — 그 전엔 최근 100건을 한 번에 쏟아내 화면이 끝없이 길었다.
+    const f = state.admin.dbAuditFilter || (state.admin.dbAuditFilter = { source: '', op: '', result: '', period: '7d', user: '', table: '', page: 1 });
     const body = el('div', {});
-    const apply = () => {
-        f.source = srcSel.value;
-        f.op = opSel.value;
-        f.result = resSel.value;
-        f.period = perSel.value;
-        f.user = userIn.value.trim();
-        f.table = tableIn.value.trim();
-        void loadAuditRows(body, f);
-    };
-    for (const c of [srcSel, opSel, resSel, perSel])
-        c.addEventListener('change', apply);
-    const searchBtn = el('button', { class: 'btn btn-sm', text: '조회', onclick: apply });
-    const bar = el('div', { class: 'audit-bar' }, srcSel, opSel, resSel, perSel, userIn, tableIn, searchBtn);
+    const reload = () => { void loadAuditRows(body, f, reload); };
+    const sources = (data.dbSources || []).map((s) => s.name);
+    // 필터가 바뀌면 1페이지로 — 5페이지를 보다 조건을 좁히면 빈 페이지가 뜨던 것 방지.
+    const onFilter = (key) => (v) => { f[key] = v; f.page = 1; reload(); };
+    const srcSel = audSelect([['', '모든 소스'], ...sources.map((n) => [n, n])], f.source, onFilter('source'));
+    const opSel = audSelect([['', '쿼리+스키마'], ['query', '쿼리 db_query'], ['schema', '스키마 db_schema']], f.op, onFilter('op'));
+    const resSel = audSelect([['', '성공+차단'], ['errors', '차단만']], f.result, onFilter('result'));
+    const perSel = audSelect(AUDIT_PERIODS, f.period, onFilter('period'));
+    const userIn = el('input', { class: 'aud-inp', type: 'text', value: f.user || '', placeholder: '전체' });
+    const tableIn = el('input', { class: 'aud-inp', type: 'text', value: f.table || '', placeholder: '전체' });
+    const applyText = () => { f.user = userIn.value.trim(); f.table = tableIn.value.trim(); f.page = 1; reload(); };
+    for (const inp of [userIn, tableIn])
+        inp.addEventListener('keydown', (e) => { if (e.key === 'Enter')
+            applyText(); });
     const verifyOut = el('span', { class: 'admin-status' });
-    const verifyBtn = el('button', { class: 'btn btn-sm', text: '위변조 검증', onclick: async () => {
+    const verifyBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '위변조 검증', onclick: async () => {
             verifyOut.textContent = '검증 중…';
             try {
                 const r = await api('/api/ui/db-audit/verify');
                 verifyOut.replaceChildren(r.ok
-                    ? el('span', { class: 'audit-ok', text: `✓ 무결 (${r.checked}건 검증)` })
-                    : el('span', { class: 'audit-bad', text: `⚠ 위변조 의심 — id ${r.broken?.id} (${r.broken?.reason})` }));
+                    ? el('span', { class: 'audit-ok', text: `✓ 무결 · ${r.checked}건 검증` })
+                    : el('span', { class: 'audit-bad', text: `⚠ 위변조 의심 — id ${r.broken?.id} · ${r.broken?.reason}` }));
             }
             catch (e) {
                 verifyOut.replaceChildren(el('span', { class: 'audit-bad', text: e.message }));
             }
         } });
-    bar.append(el('div', { class: 'audit-verify' }, verifyBtn, verifyOut));
-    const card = el('div', { class: 'card' }, cardHead('DB 조회 기록', "구성원(과 그들의 AI)이 db_query·db_schema 로 어떤 데이터를 조회했는지 전부 기록됩니다 — 조회자·시각·소스·테이블·마스킹/열람 컬럼·대상 식별자. 기록은 해시체인으로 위변조를 방지하며, 신용정보법상 조회 기록 보존에 사용합니다. '누구의 정보인지'를 남길 식별자 컬럼은 [데이터 연결 ▸ DB 데이터소스]에서 지정합니다."), bar, body);
+    const bar = el('div', { class: 'aud-filters' }, audField('기간', perSel), audField('소스', srcSel), audField('종류', opSel), audField('결과', resSel), audField('조회자', userIn), audField('테이블', tableIn), audPageSizeField('db', () => { f.page = 1; reload(); }), el('div', { class: 'aud-right' }, el('button', { class: 'btn btn-ghost btn-sm', text: '조회', onclick: applyText })));
+    const card = el('div', { class: 'card' }, cardHead('DB 조회 기록', "구성원과 그 구성원의 AI가 db_query·db_schema 로 어떤 데이터를 조회했는지 전부 기록합니다 — 조회자·시각·소스·테이블·마스킹 컬럼·원본 열람 컬럼·대상 식별자. 기록은 해시체인으로 위변조를 막으며 신용정보법상 조회 기록 보존에 씁니다. '누구의 정보인지'를 남길 식별자 컬럼은 [데이터 연결 ▸ DB 데이터소스]에서 지정합니다."), bar, 
+    // 위변조 검증은 필터가 아니라 '기록 전체'에 거는 행위라 필터바에서 뺐다 — 결과 문구도 여기 붙는다.
+    el('div', { class: 'audit-verify' }, verifyBtn, verifyOut), body);
     detail.replaceChildren(card);
-    void loadAuditRows(body, f);
+    reload();
 }
-async function loadAuditRows(body, f) {
+async function loadAuditRows(body, f, reload) {
     body.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
-    const qs = new URLSearchParams({ limit: '100' });
+    const pageSize = audPageSize('db');
+    const page = Math.max(1, f.page || 1);
+    const qs = new URLSearchParams({ limit: String(pageSize), offset: String((page - 1) * pageSize) });
     if (f.source)
         qs.set('source', f.source);
     if (f.op)
@@ -6540,19 +6525,27 @@ async function loadAuditRows(body, f) {
         return;
     }
     const rows = r.rows || [];
+    const total = r.total || 0;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    // 필터를 좁혀 페이지 수가 줄면 현재 페이지가 범위를 벗어난다 — 마지막 페이지로 당겨 다시 부른다.
+    if (!rows.length && page > totalPages) {
+        f.page = totalPages;
+        reload();
+        return;
+    }
     if (!rows.length) {
         body.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('해당 조건의 조회 기록이 없습니다.')));
         return;
     }
     const tbl = el('table', { class: 'audit-table' });
-    tbl.append(el('tr', {}, ...['시각', '조회자', '구분', '소스', '테이블', '마스킹', '열람(raw)', '행', '결과'].map((h) => el('th', { text: h }))));
+    tbl.append(el('tr', {}, ...['시각', '조회자', '구분', '소스', '테이블', '마스킹', '원본 열람', '행', '결과'].map((h) => el('th', { text: h }))));
     for (const row of rows) {
         const unmasked = (row.unmasked_columns || []);
         const masked = (row.masked_columns || []);
         const subj = row.subject_keys ? Object.keys(row.subject_keys).length : 0;
         tbl.append(el('tr', { class: row.ok ? '' : 'audit-row-bad' }, el('td', { class: 'audit-time', text: relTime(row.at) }), el('td', {}, row.user_id || '-', row.harness ? el('span', { class: 'mini-meta', text: ' · ' + row.harness }) : null), el('td', { text: row.op === 'schema' ? '스키마' : '쿼리' }), el('td', { text: row.source || '-' }), el('td', { class: 'audit-tables' }, (row.tables || []).join(', ') || '-', subj ? el('span', { class: 'mini-meta', text: ` · 대상 ${subj}` }) : null), el('td', { text: masked.length ? String(masked.length) : '-' }), el('td', {}, unmasked.length ? el('span', { class: 'pill pill-warn', text: unmasked.join(', ') }) : el('span', { class: 'mini-meta' }, ...uiText('-'))), el('td', { class: 'audit-num', text: row.ok ? String(row.row_count) : '-' }), el('td', {}, row.ok ? el('span', { class: 'audit-ok', text: '성공' }) : withTip(el('span', { class: 'audit-bad', text: '차단' }), row.error || '차단됨'))));
     }
-    body.replaceChildren(el('p', { class: 'admin-hint', text: `${rows.length}건${r.total > rows.length ? ` (전체 ${r.total}건 중 최근 100건)` : ''} · '열람(raw)' 열은 마스킹을 우회해 원본 값을 조회한 컬럼입니다. 붉은 행은 차단된 조회입니다.` }), el('div', { class: 'audit-scroll' }, tbl));
+    body.replaceChildren(el('div', { class: 'aud-count', text: `${total.toLocaleString()}건 중 ${((page - 1) * pageSize + 1).toLocaleString()}–${((page - 1) * pageSize + rows.length).toLocaleString()}번째` }), el('div', { class: 'audit-scroll' }, tbl), el('p', { class: 'admin-hint', style: 'margin:6px 0 0' }, ...uiText("'원본 열람' 열은 마스킹을 우회해 원본 값을 조회한 컬럼입니다. 붉은 행은 차단된 조회입니다.")), audPager(page, totalPages, (n) => { f.page = n; reload(); }));
 }
 async function renderSubjectKeyPanel(panel, source, data) {
     panel.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('식별자 설정 불러오는 중…')));

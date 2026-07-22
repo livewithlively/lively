@@ -6107,13 +6107,14 @@ main.doc-mode .kn-side-tools .kn-side-toolitem:hover { background: var(--bg-tint
 /* ── #746 자격 vault · DB 접근 감사 뷰 (드롭다운 위주 관리 UI) ── */
 .item { display:flex; align-items:center; gap:10px; flex-wrap:wrap; border:1px solid var(--line); border-radius:8px; padding:9px 12px; margin:7px 0; background:var(--bg); }
 .addbox { border:1px solid var(--line); border-radius:8px; padding:14px; background:var(--bg-tint); }
-.audit-bar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:10px 0; }
-.audit-bar select, .audit-bar input { font:inherit; font-size:13px; padding:6px 9px; border:1px solid var(--line); border-radius:7px; background:var(--bg); color:var(--ink); }
 .audit-verify { display:flex; align-items:center; gap:10px; margin:0 0 12px; }
 .audit-scroll { overflow-x:auto; }
-.audit-table { width:100%; border-collapse:collapse; font-size:12.5px; }
+/* min-width 가 없으면 .audit-scroll 이 있어도 표가 통째로 쪼그라들어 '구 리'·'성 공' 처럼 두 글자가
+   세로로 접힌다(#1085 좁은 화면 실측) — 가로 스크롤로 넘기고 셀은 안 부순다. */
+.audit-table { width:100%; min-width:860px; border-collapse:collapse; font-size:12.5px; }
+.audit-table td:nth-child(1), .audit-table td:nth-child(3), .audit-table td:nth-child(4), .audit-table td:last-child { white-space:nowrap; }
 .audit-table th { text-align:left; padding:6px 9px; font-size:11px; font-weight:700; color:var(--muted); border-bottom:1px solid var(--line); white-space:nowrap; }
-.audit-table td { padding:6px 9px; border-bottom:1px solid var(--line); color:var(--ink); vertical-align:top; }
+.audit-table td { padding:5px 9px; border-bottom:1px solid var(--line); color:var(--ink); vertical-align:top; }
 .audit-table tr:hover td { background:var(--bg-tint); }
 .audit-row-bad td { background:#FEF4F4; }
 .audit-row-bad:hover td { background:#FDEBEB; }
@@ -6123,6 +6124,51 @@ main.doc-mode .kn-side-tools .kn-side-toolitem:hover { background: var(--bg-tint
 .audit-ok { color:var(--mint-deep); font-weight:600; }
 .audit-bad { color:#C0392B; font-weight:600; }
 .addbox-h { font-size:12.5px; font-weight:700; color:var(--ink); margin-bottom:10px; }
+
+/* ══ 감사 로그 3탭 공용 컨트롤 (#1085) ══════════════════════════════════════
+   [관리 변경]·[DB 조회]·[AI 도구 호출] 이 각자 필터바를 갖고 있었다 — oa-controls(라벨 있음,
+   radius 7) · audit-bar(라벨 없음, 높이 다름) · tu-controls(또 다른 복제). 같은 화면의 세 탭인데
+   글자 크기·컨트롤 높이·모서리가 전부 달라 탭을 옮길 때마다 다른 제품처럼 보였다.
+   여기 하나로 합치고 셋 다 이걸 쓴다. 새 팔레트·새 토큰 없음 — 기존 폼 요소 규격에 맞춘 것뿐이다. */
+.aud-filters { display:flex; flex-wrap:wrap; align-items:flex-end; gap:9px 12px; margin:14px 0 13px; }
+.aud-f { display:flex; flex-direction:column; gap:5px; min-width:0; }
+.aud-f > label { font-size:11px; font-weight:700; letter-spacing:.01em; color:var(--muted-head); padding-left:1px; }
+/* 컨트롤·버튼 높이를 34px 로 통일 — 셀렉트(31px)와 btn-sm(27px)이 섞여 아랫줄이 들쭉날쭉했다. */
+.aud-sel, .aud-inp {
+  height:34px; box-sizing:border-box; padding:0 11px; font-size:13.5px; font-weight:500;
+  color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:9px;
+}
+/* 네이티브 화살표(OS마다 다른 모양·굵기) 대신 우리 헤어라인 셰브런. */
+select.aud-sel {
+  appearance:none; -webkit-appearance:none; padding-right:29px; cursor:pointer;
+  background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238A99B5' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:right 10px center;
+  /* 옵션 문자열이 길어도(툴 이름 등) 바가 통째로 늘어나지 않게 상한을 둔다 — 이게 없으면
+     [AI 도구 호출]의 '툴' 셀렉트 하나가 400px 를 먹고 나머지 필드를 다음 줄로 밀어냈다. */
+  min-width:112px; max-width:208px; text-overflow:ellipsis;
+}
+.aud-inp { min-width:112px; max-width:156px; }
+.aud-sel:hover, .aud-inp:hover { border-color:var(--muted-3); }
+.aud-sel:focus, .aud-inp:focus { outline:none; border-color:var(--blue); }
+.aud-filters .btn { height:34px; border-radius:9px; }
+/* 오른쪽으로 미는 그룹(위변조 검증 등) — 필터가 줄바꿈되면 auto 여백이 죽으므로 flex-wrap 안에서만 쓴다. */
+.aud-right { display:flex; align-items:flex-end; gap:9px; margin-left:auto; }
+.aud-count { font-size:12.5px; color:var(--ink-sub); margin:0 0 8px; }
+
+/* 페이지네이션 — oa-pager/tu-pager 복제본을 하나로. */
+.aud-pager { display:flex; gap:5px; align-items:center; flex-wrap:wrap; margin-top:12px; }
+.aud-pg { min-width:32px; height:32px; padding:0 10px; border:1px solid var(--line); border-radius:9px; background:var(--bg); color:var(--ink); font:inherit; font-size:12.5px; font-weight:600; cursor:pointer; font-variant-numeric:tabular-nums; }
+.aud-pg:hover { border-color:var(--blue); }
+.aud-pg-on { background:var(--blue); border-color:var(--blue); color:#fff; cursor:default; }
+.aud-pg-on:hover { border-color:var(--blue); }
+.aud-pg-off { opacity:.38; cursor:default; }
+.aud-pg-off:hover { border-color:var(--line); }
+.aud-pg-gap { color:var(--muted); padding:0 2px; }
+.aud-pg-info { color:var(--muted); font-size:12px; margin-left:8px; }
+@media (max-width: 760px) {
+  .aud-right { margin-left:0; }
+  .aud-sel, .aud-inp { max-width:none; }
+}
 
 /* ════════════════════════════════════════════════════════════════════════════
    #764 WIKI 재구축 — "위키에는 페이지와, 페이지를 찾는 팝업뿐이다."
@@ -7682,8 +7728,7 @@ a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; fo
 /* fix: 96 용어집 등 docs 표 안 인라인 코드 칩(.env) — 상하 패딩 제거로 베이스라인·행간 정렬 */
 .docs-md table .md-code, .docs-body table .md-code { padding: 0 5px; line-height: inherit; vertical-align: baseline; }
 
-/* fix: 111 위변조 검증 버튼을 필터 바 우측 끝으로(같은 줄에 결과 표시) */
-.audit-bar .audit-verify { margin: 0 0 0 auto; }
+/* fix: 111 위변조 검증 버튼을 필터 바 우측 끝으로(같은 줄에 결과 표시) — #1085 에서 .aud-right 로 대체 */
 
 /* fix: 119·121 설정 폼 카드(AI 개인화·조직 정보) 읽기 줄 길이·입력폭 제한 */
 .admin-form-narrow p.admin-hint { max-width: 72ch; }
