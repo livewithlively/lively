@@ -213,6 +213,19 @@ function sectionNeedScope(key) {
   return '관리자(admin)';
 }
 
+// 사이드바 권한 배지 — 숨김 규칙(sectionHidden)과 **같은 표에서** 문구를 만든다.
+//  숨는 조건이 곧 배지의 뜻이다: 그 권한이 없으면 이 항목은 목록에 아예 안 나온다.
+function navPermBadge(key) {
+  const label = ADMIN_ONLY.includes(key) ? '관리자'
+    : RUNTIME_ONLY.includes(key) ? '런타임'
+      : MIXED_SECTIONS[key] ? MIXED_SECTIONS[key].map((s) => ({ admin: '관리자', runtime: '런타임', code: '코드' }[s] || s)).join('·')
+        : null;
+  if (!label) return null;
+  const tip = label === '관리자' ? '관리자(admin) 권한이 있어야 보고 편집할 수 있는 항목입니다.'
+    : label === '런타임' ? '런타임(runtime) 권한이 있어야 보고 편집할 수 있는 항목입니다 — 구성원 머신에서 도는 것의 정의라 권한을 따로 둡니다.'
+      : '이 권한 중 하나가 있어야 보이는 항목입니다: ' + label + '.';
+  return el('span', { class: 'admin-only-badge', text: label, title: tip });
+}
 function sectionHidden(key, data) {
   if (ADMIN_ONLY.includes(key) && !data.canEdit) return true;
   if (RUNTIME_ONLY.includes(key) && !data.canRuntime) return true;
@@ -299,9 +312,9 @@ async function renderAdmin(view, sub) {
       box.append(el('a', { class: 'docs-item' + (s.key === sel ? ' active' : ''), href: '#/system/' + s.key,
         'aria-current': s.key === sel ? 'page' : null },
         el('span', { text: s.label }),
-        ADMIN_ONLY.includes(s.key)
-          ? el('span', { class: 'admin-only-badge', text: '관리자', title: '관리자(admin) 권한이 있어야 보고 편집할 수 있는 항목입니다.' })
-          : null,
+        // 배지 = **이 항목을 보려면 필요한 권한**. 전엔 ADMIN_ONLY 에만 달려서, 같은 '권한 없으면 아예 안 보이는'
+        //  항목인데도 [스킬 · 훅](runtime 전용)·[AI 도구]·[미리보기](합집합)엔 아무 신호가 없었다(#1085 지적).
+        navPermBadge(s.key),
         s.key === 'ingest-policy' ? reviewNavBadge() : null));
     }
     side.append(box);
