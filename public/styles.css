@@ -7704,3 +7704,135 @@ input.emb-num { width: 120px; flex: none; }
 /* 박스 안 그룹 헤더·행은 박스 안쪽 여백에 맞춘다(박스 밖 표와 같은 좌측 기준선). */
 .pjv-list-box > .pjv-tgroup-body { padding: 0 8px; }
 .pjv-board-scroll .pjv-list-box { min-width: min-content; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   #1067 뷰: 테이블 · 타임라인
+   - ClickUp 현행(Gen-C) 규약 참조: 바는 pill 아님(radius 4px), 저채도 단색,
+     라벨은 바 바깥, 차트 영역엔 가로 행 구분선 없음.
+   - DESIGN-GUIDE §0.5(calm) 준수: 채운 원색 금지 → 틴트 + 잉크. 컬러는 '오늘'과 상태 점에만.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 테이블 모드 — ClickUp Table 파리티. List 와 갈리는 건 정보량이 아니라 **표의 구조**다:
+      ① 행 번호가 별도 컬럼  ② 컬럼마다 세로 격자선(헤더까지 관통)  ③ 고정 행 높이  ④ 빈 셀은 비워 둔다. ── */
+/* ① 행 번호 = 그리드의 첫 칸. ::before 가 그리드 아이템이 되므로 행 컴포넌트를 건드리지 않고 컬럼이 하나 생긴다
+      (트랙은 pjvProjGridTemplate 이 테이블 모드일 때 38px 를 앞에 깐다). */
+.pjv-table-mode .pjv-flat-body { counter-reset: pjvtblrow; }
+.pjv-table-mode .pjv-flat-body > .pjv-trow-wrap { counter-increment: pjvtblrow; }
+.pjv-table-mode .pjv-flat-body > .pjv-trow-wrap > .pjv-trow::before {
+  content: counter(pjvtblrow); order: -1;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11.5px; font-weight: 500; color: var(--muted-2); font-variant-numeric: tabular-nums;
+  border-right: 1px solid var(--line-row); align-self: stretch;
+}
+/* 헤더에도 같은 자리에 빈 칸을 둬야 컬럼이 어긋나지 않는다. */
+.pjv-table-mode .pjv-list-colhead::before { content: ''; order: -1; border-right: 1px solid var(--line-row); }
+
+/* ② 세로 격자선 — 셀·헤더 오른쪽 헤어라인. List 는 가로선만, Table 은 가로+세로. */
+.pjv-table-mode .pjv-trow > .pjv-tcell,
+.pjv-table-mode .pjv-trow > .pjv-trow-title-cell,
+.pjv-table-mode .pjv-list-colhead > .pjv-tcell,
+.pjv-table-mode .pjv-list-colhead > .pjv-colhead,
+.pjv-table-mode .pjv-list-colhead > .pjv-trow-title-cell { border-right: 1px solid var(--line-row); }
+.pjv-table-mode .pjv-trow > .pjv-tcell-add,
+.pjv-table-mode .pjv-list-colhead > *:last-child { border-right: 0; }
+
+/* ③ 고정 행 높이 32px — '모든 행이 같은 높이'가 Table 의 정체성(실사용 스샷 실측값). */
+.pjv-table-mode .pjv-trow { min-height: 32px; height: 32px; align-items: stretch; }
+.pjv-table-mode .pjv-trow > .pjv-tcell,
+.pjv-table-mode .pjv-trow > .pjv-trow-title-cell { display: flex; align-items: center; }
+.pjv-table-mode .pjv-trow:hover { background: var(--bg-tint); }
+/* 헤더 — 회색 regular 좌측 정렬(대문자 아님). */
+.pjv-table-mode .pjv-list-colhead { height: 30px; align-items: stretch; background: var(--bg); }
+.pjv-table-mode .pjv-list-colhead .pjv-colhead-label,
+.pjv-table-mode .pjv-list-colhead .pjv-list-colhead-name { font-weight: 500; color: var(--muted-head); }
+
+/* ④ 빈 셀은 비워 둔다 — 리스트는 고스트 아이콘(사람＋·달력＋)으로 채우지만, 표에서 그러면 '값이 있는 것처럼' 보여
+      한 화면에 300개 행이 깔릴 때 시각적 잡음이 된다. 행에 호버할 때만 드러낸다(입력은 그대로 가능). */
+.pjv-table-mode .pjv-tcell .pjv-cell-btn.empty { opacity: 0; transition: opacity .12s; }
+.pjv-table-mode .pjv-trow:hover .pjv-cell-btn.empty,
+.pjv-table-mode .pjv-cell-btn.empty:focus-visible { opacity: 1; }
+
+/* ── 간트 차트 — 좌측 시트(계층+기간) × 우측 시간축. 좌측은 sticky 라 가로 스크롤에도 남는다. ── */
+.pjv-gt { display: flex; flex-direction: column; min-width: 0; }
+.pjv-gt-toolbar { display: flex; align-items: center; gap: 12px; padding: 6px 12px 8px; flex-wrap: wrap; }
+.pjv-gt-scales { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.pjv-gt-scale { border: 0; border-right: 1px solid var(--line); background: var(--bg); color: var(--ink-sub);
+  font-size: 12px; font-weight: 600; padding: 4px 12px; cursor: pointer; }
+.pjv-gt-scale:last-child { border-right: 0; }
+.pjv-gt-scale:hover { background: var(--bg-tint); }
+.pjv-gt-scale.on { background: var(--bg-tint-2); color: var(--blue); }
+.pjv-gt-todaybtn { margin-left: auto; border: 1px solid var(--line); background: var(--bg); color: var(--ink-sub);
+  font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 9px; cursor: pointer; }
+.pjv-gt-todaybtn:hover { border-color: var(--blue); color: var(--blue); }
+.pjv-gt-legend { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+.pjv-gt-key { width: 14px; height: 8px; border-radius: 3px; display: inline-block; }
+.pjv-gt-key.plan { background: color-mix(in srgb, var(--blue) 30%, var(--bg)); }
+.pjv-gt-key.actual { background: color-mix(in srgb, var(--muted-2) 26%, var(--bg)); border: 1px dashed var(--muted-2); }
+.pjv-gt-key.roll { background: color-mix(in srgb, var(--mint) 40%, var(--bg)); }
+
+.pjv-gt-scroll { overflow: auto; max-height: calc(100vh - 260px); border-top: 1px solid var(--line); }
+.pjv-gt-inner { position: relative; }
+
+/* 헤더 — 위로 붙는다(sticky). 좌측 시트 머리는 좌우 양쪽으로 붙어 교차점을 덮는다. */
+.pjv-gt-headrow { position: sticky; top: 0; z-index: 5; display: flex; background: var(--bg); }
+.pjv-gt-sheethead { position: sticky; left: 0; z-index: 6; flex: 0 0 auto; display: flex; align-items: flex-end; gap: 8px;
+  padding: 0 10px 4px; height: 44px; background: var(--bg);
+  border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.pjv-gt-th { font-size: 11.5px; font-weight: 500; color: var(--muted-head); }
+.pjv-gt-th.span { margin-left: auto; }
+.pjv-gt-axis { position: relative; flex: 0 0 auto; height: 44px; border-bottom: 1px solid var(--line); }
+.pjv-gt-mons, .pjv-gt-subs { position: relative; height: 22px; }
+.pjv-gt-mon { position: absolute; top: 0; height: 22px; display: flex; align-items: center; padding-left: 6px;
+  font-size: 12px; font-weight: 700; color: var(--ink); border-left: 1px solid var(--line); box-sizing: border-box; }
+.pjv-gt-sub { position: absolute; top: 0; height: 22px; display: flex; align-items: center; justify-content: center;
+  font-size: 10px; color: var(--muted-2); border-left: 1px solid var(--line-row); box-sizing: border-box; }
+.pjv-gt-sub.wknd { background: var(--bg-tint); }
+
+/* 행 — 좌측 시트 + 우측 트랙. 차트엔 가로 구분선을 두지 않는다(선이 많으면 바가 안 읽힌다). */
+.pjv-gt-body { position: relative; }
+.pjv-gt-row { display: flex; height: 36px; }
+.pjv-gt-row:hover { background: var(--bg-tint); }
+.pjv-gt-sheet { position: sticky; left: 0; z-index: 3; flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+  padding: 0 10px; background: var(--bg); border-right: 1px solid var(--line); box-sizing: border-box; }
+.pjv-gt-row:hover .pjv-gt-sheet { background: var(--bg-tint); }
+.pjv-gt-row.group .pjv-gt-sheet { background: var(--bg-tint); }
+.pjv-gt-caret { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 10px;
+  padding: 2px; line-height: 1; transition: transform .12s; }
+.pjv-gt-caret.off { transform: rotate(-90deg); }
+.pjv-gt-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted-3); flex: 0 0 auto; }
+.pjv-gt-name { font-size: 12.5px; color: var(--ink-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pjv-gt-name.group { font-weight: 700; color: var(--ink); }
+.pjv-gt-count { font-size: 11px; color: var(--muted-2); flex: 0 0 auto; }
+.pjv-gt-range { margin-left: auto; font-size: 11px; color: var(--muted-2); flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.pjv-gt-range.overdue { color: var(--coral-text); font-weight: 600; }
+.pjv-gt-track { position: relative; flex: 0 0 auto; }
+
+/* 바 — pill 아님(radius 4px), 저채도 단색. 원색 pill + 바 안 흰 글씨는 ClickUp 구세대(2019~20) 디자인이라 따르지 않는다. */
+.pjv-gt-bar { position: absolute; top: 4px; height: 28px; border-radius: 4px; cursor: pointer; box-sizing: border-box;
+  background: color-mix(in srgb, var(--blue) 30%, var(--bg)); }
+.pjv-gt-bar:hover { background: color-mix(in srgb, var(--blue) 42%, var(--bg)); }
+.pjv-gt-bar.done { background: color-mix(in srgb, var(--mint) 32%, var(--bg)); }
+.pjv-gt-bar.done:hover { background: color-mix(in srgb, var(--mint) 44%, var(--bg)); }
+/* 실적 바 = 점선 — '계획이 아니라 지나간 자취'임을 형태로 구분한다. */
+.pjv-gt-bar.actual { background: color-mix(in srgb, var(--muted-2) 22%, var(--bg)); border: 1px dashed var(--muted-2); }
+.pjv-gt-bar.actual:hover { background: color-mix(in srgb, var(--muted-2) 34%, var(--bg)); }
+.pjv-gt-bar.overdue { box-shadow: inset 0 0 0 1.5px var(--coral); }
+.pjv-gt-bar:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.pjv-gt-faces { position: absolute; top: 9px; display: flex; gap: 2px; pointer-events: none; }
+.pjv-gt-faces .pjv-ava { width: 18px; height: 18px; font-size: 9px; }
+
+/* 롤업 바 — 리스트 단위. 완료 비율만큼 채운다(ClickUp: 완료 태스크 ÷ 전체). 태스크 바보다 얇아 위계가 보인다. */
+.pjv-gt-roll { position: absolute; top: 14px; height: 8px; border-radius: 4px; overflow: hidden;
+  background: color-mix(in srgb, var(--muted-3) 45%, var(--bg)); }
+.pjv-gt-roll-fill { height: 100%; background: color-mix(in srgb, var(--mint) 55%, var(--bg)); }
+
+/* 의존선 — 직각 elbow + 화살촉. 데이터가 있을 때만 그린다. */
+.pjv-gt-links { position: absolute; top: 44px; pointer-events: none; z-index: 1; }
+.pjv-gt-link { fill: none; stroke: var(--muted-3); stroke-width: 1; }
+.pjv-gt-arrow { fill: var(--muted-3); }
+
+/* 오늘 — 세로선 + 배지. 좌측 시트(z-index 3)보다 아래로 깔려 시트를 뚫지 않는다. */
+.pjv-gt-todayline { position: absolute; top: 44px; bottom: 0; width: 1px; background: var(--blue); opacity: .5; z-index: 2; }
+.pjv-gt-todaybadge { position: absolute; top: 26px; transform: translateX(-1px); z-index: 7;
+  background: var(--blue); color: #fff; font-size: 10px; font-weight: 700; line-height: 1;
+  padding: 3px 5px; border-radius: 3px; white-space: nowrap; }
