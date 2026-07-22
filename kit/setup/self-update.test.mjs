@@ -30,7 +30,7 @@ const cleanup = () => { try { rmSync(BOX, { recursive: true, force: true }); } c
 // ── 번들 만들기 — 게이트웨이(buildInstallBundle)가 하는 일을 그대로: kit 조립 + .lively 런타임자산 + 버전 스탬프.
 //  appledouble=true: macOS 게이트웨이 번들 재현(#858 회귀) — bsdtar 가 xattr 을 `._<name>` 파일로 굽는 걸,
 //   러너마다 `._name.mjs`(구문 불가한 바이너리 쓰레기)를 심어 리눅스에서도 결정적으로 재현한다.
-function makeBundle(version, { corrupt = false, appledouble = false } = {}) {
+function makeBundle(version, { corrupt = false, appledouble = false, noProxy = false } = {}) {
   const stage = mkdtempSync(join(BOX, "stage-"));
   buildKitBundle(stage, { orgName: "테스트조직", orgLabel: "test", harness: "claude" });
   const lv = join(stage, ".lively");
@@ -42,6 +42,9 @@ function makeBundle(version, { corrupt = false, appledouble = false } = {}) {
   writeFileSync(join(lv, "kit-version"), version + "\n");
   // 손상 번들 — 훅 하나에 구문 오류를 심는다(검증 게이트가 이걸 잡아야 한다).
   if (corrupt) writeFileSync(join(stage, ".claude", "hooks", "session-preload.mjs"), "export const x = (((;\n");
+  // 구버전 번들 흉내(#1079) — stdio 프록시 본체가 없는 번들. 이걸로 설치하면 lib/ 에도 안 생기므로
+  //  reconcile 이 stdio 마이그레이션을 **하면 안 된다**(하면 lively 가 통째로 안 뜬다).
+  if (noProxy) rmSync(join(stage, "cli", "lively-mcp-gateway.mjs"), { force: true });
   // AppleDouble 쓰레기 — 각 러너 옆에 `._name.mjs`(구문 불가). 정상 러너는 그대로 두고 검증이 이 쓰레기에
   //  걸리면 안 된다(설치기가 명시 이름만 복사하므로 배포조차 안 됨).
   if (appledouble) {
@@ -364,25 +367,58 @@ try {
     const ll = conf.mcpServers && conf.mcpServers["lively-local"];
     const llOk = !!(ll && ll.type === "stdio" && Array.isArray(ll.args) && ll.args[0] === "mcp-local" && String(ll.command).endsWith("/bin/lively"));
     const userKept = !!(conf.mcpServers && conf.mcpServers.other && conf.projects && conf.projects["/some/path"]);
-    const livelyKept = !!(conf.mcpServers && conf.mcpServers.lively && conf.mcpServers.lively.url === `${GW}/mcp`);
-    (llOk && userKept && livelyKept)
-      ? ok("⑮ MCP additive reconcile — lively-local 자동 추가 + lively·유저 항목 불변")
-      : bad("⑮ MCP reconcile", `llOk=${llOk} userKept=${userKept} livelyKept=${livelyKept} ll=${JSON.stringify(ll)}`);
-
-    // ⑮c #1007+ — 헤더 additive: 기존 lively 항목에 **빠진 모드 헤더만** 더한다(재등록 없이 전파, 1세션 지연). 토큰(Authorization)은 불변(멤버 값 보존).
-    //  초기 lively 엔트리는 Authorization 만 있었으므로(위 셋업) reconcile 이 x-lively-session·x-lively-mode 를 더해야 한다.
-    const h = (conf.mcpServers && conf.mcpServers.lively && conf.mcpServers.lively.headers) || {};
-    const hdrOk = h.Authorization === "Bearer test-token"          // 토큰 안 건드림
-      && h["x-lively-session"] === "${LIVELY_SESSION_ID:-}"
-      && h["x-lively-mode"] === "${LIVELY_MODE:-}";
-    hdrOk ? ok("⑮c 헤더 additive — 기존 lively 에 모드 헤더 추가 + 토큰 불변")
-      : bad("⑮c 헤더 additive", `headers=${JSON.stringify(h)}`);
+    // #1079 — additive 무손실의 **유일한 예외**: 우리가 심은 lively 항목을 http 직결 → stdio 프록시로 교정한다.
+    //  (http 직결은 VPN 미접속 세션에서 그 세션 내내 죽는다.) 유저 항목·claude 상태는 여전히 불변이어야 한다.
+    const lvEntry = (conf.mcpServers && conf.mcpServers.lively) || {};
+    const migrated = lvEntry.type === "stdio" && Array.isArray(lvEntry.args) && lvEntry.args[0] === "mcp"
+      && String(lvEntry.command).endsWith("/bin/lively");
+    // 부수 이득 — 설정 파일에서 평문 토큰이 사라진다(신원은 런타임에 ~/.lively/token 에서 읽는다).
+    const tokenGone = !JSON.stringify(lvEntry).includes("test-token");
+    (llOk && userKept && migrated && tokenGone)
+      ? ok("⑮ MCP reconcile — lively-local 추가 + lively 를 stdio 프록시로 마이그레이션(평문 토큰 제거) + 유저 항목 불변")
+      : bad("⑮ MCP reconcile", `llOk=${llOk} userKept=${userKept} migrated=${migrated} tokenGone=${tokenGone} lively=${JSON.stringify(lvEntry)}`);
 
     // ⑮b 멱등 — 이미 등록됐으면 재실행해도 파일을 안 건드린다(additive no-op).
     rmSync(lv(home, "kit-version"), { force: true }); // 같은 버전 강제 재설치
     const before = readFileSync(cj, "utf8");
     await runUpdater(home);
     (readFileSync(cj, "utf8") === before) ? ok("⑮b reconcile 멱등 — 이미 있으면 파일 미변경") : bad("⑮b 멱등", "파일이 변경됨");
+
+    // ⑮d #1079 — **롤백 스위치**: ~/.lively/mcp-transport=http 면 마이그레이션하지 않는다.
+    //  그때는 종전 계약이 그대로 살아 있어야 한다(헤더 additive — #1007+ 모드 헤더 전파, 토큰 불변).
+    {
+      const h2 = freshHome(null);
+      writeFileSync(lv(h2, "mcp-transport"), "http\n");
+      writeFileSync(join(h2, ".claude.json"), JSON.stringify({
+        mcpServers: { lively: { type: "http", url: `${GW}/mcp`, headers: { Authorization: "Bearer test-token" } } },
+      }, null, 2) + "\n");
+      await runUpdater(h2);
+      const e2 = (JSON.parse(readFileSync(join(h2, ".claude.json"), "utf8")).mcpServers || {}).lively || {};
+      const stayed = e2.type === "http" && e2.url === `${GW}/mcp`;
+      const hdrOk = e2.headers && e2.headers.Authorization === "Bearer test-token"
+        && e2.headers["x-lively-session"] === "${LIVELY_SESSION_ID:-}"
+        && e2.headers["x-lively-mode"] === "${LIVELY_MODE:-}";
+      (stayed && hdrOk)
+        ? ok("⑮d 롤백 스위치(mcp-transport=http) — 마이그레이션 안 함 + 헤더 additive 종전대로")
+        : bad("⑮d 롤백 스위치", `stayed=${stayed} hdrOk=${hdrOk} entry=${JSON.stringify(e2)}`);
+    }
+
+    // ⑮e #1079 — **프록시 본체가 없는 구버전 번들**이면 마이그레이션하지 않는다.
+    //  (stdio 로 바꿔 놓고 실행할 파일이 없으면 lively 가 통째로 안 뜬다 — #905 와 같은 부류의 사고.)
+    {
+      serving.body = makeBundle("v-noproxy", { noProxy: true }); serving.version = "v-noproxy";
+      const h3 = freshHome(null);
+      writeFileSync(join(h3, ".claude.json"), JSON.stringify({
+        mcpServers: { lively: { type: "http", url: `${GW}/mcp`, headers: { Authorization: "Bearer test-token" } } },
+      }, null, 2) + "\n");
+      await runUpdater(h3);
+      const e3 = (JSON.parse(readFileSync(join(h3, ".claude.json"), "utf8")).mcpServers || {}).lively || {};
+      const proxyAbsent = !existsSync(join(h3, ".lively", "lib", "lively-mcp-gateway.mjs"));
+      (proxyAbsent && e3.type === "http")
+        ? ok("⑮e 프록시 미동봉(구번들) — 마이그레이션 안 함, http 유지")
+        : bad("⑮e 구번들 가드", `proxyAbsent=${proxyAbsent} entry=${JSON.stringify(e3)}`);
+      serving.body = makeBundle("v-mcp"); serving.version = "v-mcp";   // 원복
+    }
 
     // ⑮c ~/.claude.json 이 없는 멤버는 생성하지 않는다(무접촉 — 기존 테스트들이 reconcile 로 오염되지 않는 근거).
     const bare = freshHome(null);

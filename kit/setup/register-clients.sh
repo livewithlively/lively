@@ -9,14 +9,28 @@ STORE_URL="${STORE_URL:-http://localhost:8080/mcp}"
 
 echo "▶ Claude Code"
 claude mcp remove "$MCP_LABEL" 2>/dev/null || true
-# x-lively-session(#852)·x-lively-mode(#1007+) — kit/cli/lively.mjs registerLivelyMcp 와 **같은 헤더 세트를 유지할 것**
-#  (kit/cli/lively.test.mjs ④ 가 그 CLI argv 를 이 3개 헤더로 못박는다). 작은따옴표 = 셸 확장 금지(설정엔 리터럴, Claude Code 가 연결 시 제 env 로 확장).
-#  `:-` 기본값이 필수 — 없으면 세션 밖(랩탑)에서 "Missing environment variables" 경고가 뜬다(실측 2.1.209).
-#  x-lively-mode: 세션을 LIVELY_MODE=readonly|incognito 로 실행하면 그 세션만 그 모드(게이트웨이 강제) — 미설정이면 빈 값=normal(#1007+). 단일 헤더라 미래 모드도 재등록 불요.
-claude mcp add --transport http --scope user "$MCP_LABEL" "$STORE_URL" \
-  --header "Authorization: Bearer ${LIVELY_TOKEN}" \
-  --header 'x-lively-session: ${LIVELY_SESSION_ID:-}' \
-  --header 'x-lively-mode: ${LIVELY_MODE:-}'
+# #1079 — lively 본체는 **로컬 stdio 프록시**(`lively mcp`)로 등록한다. http 직결이면 세션이 뜨는 순간
+#  게이트웨이에 못 닿을 때(사내 게이트웨이 + VPN 미접속) Claude Code 가 그 서버를 failed 로 마킹하고
+#  **그 세션 내내 복구하지 않는다** — 사람이 `/mcp reconnect lively` 를 직접 쳐야 했다.
+#  stdio 는 로컬 프로세스라 항상 connected 이고, 상류가 살아나면 tools/list_changed 로 되살아난다.
+#  종전 헤더(Authorization·x-lively-session#852·x-lively-mode#1007+)는 사라진 게 아니라 **프록시가
+#  ~/.lively/token 과 세션 env 에서 읽어 상류 호출에 붙인다**(kit/cli/lively-mcp-gateway.mjs).
+#  ⚠ kit/cli/lively.mjs registerLivelyMcp 와 **같은 transport 를 유지할 것**(lively.test.mjs ④ 가 두 트윈을 함께 못박는다).
+LIVELY_SHIM="${LIVELY_SHIM:-$HOME/.lively/bin/lively}"
+if [ -x "$LIVELY_SHIM" ] && [ -f "$HOME/.lively/lib/lively-mcp-gateway.mjs" ] \
+   && [ "$(cat "$HOME/.lively/mcp-transport" 2>/dev/null || true)" != "http" ]; then
+  claude mcp add --transport stdio --scope user "$MCP_LABEL" "$LIVELY_SHIM" mcp
+  echo "  ✓ ${MCP_LABEL} (stdio 프록시 → ${STORE_URL})"
+else
+  # 폴백 — 프록시 미설치(CLI 설치 전·구버전 번들)이거나 롤백 스위치(~/.lively/mcp-transport=http)면 종전 http 직결.
+  #  작은따옴표 = 셸 확장 금지(설정엔 리터럴, Claude Code 가 연결 시 제 env 로 확장).
+  #  `:-` 기본값이 필수 — 없으면 세션 밖(랩탑)에서 "Missing environment variables" 경고가 뜬다(실측 2.1.209).
+  claude mcp add --transport http --scope user "$MCP_LABEL" "$STORE_URL" \
+    --header "Authorization: Bearer ${LIVELY_TOKEN}" \
+    --header 'x-lively-session: ${LIVELY_SESSION_ID:-}' \
+    --header 'x-lively-mode: ${LIVELY_MODE:-}'
+  echo "  ✓ ${MCP_LABEL} (http 직결 — 프록시 미설치/롤백)"
+fi
 
 # ── 추가 MCP 서버(org_mcp_server) — mcp-servers.json 순회 등록(claude). lively 는 위에서 등록됨. ──
 #  소스 우선순위: MCP_SERVERS_FILE env > 번들 ../.lively/mcp-servers.json > ~/.lively/mcp-servers.json.

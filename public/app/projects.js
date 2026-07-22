@@ -6574,7 +6574,7 @@ async function renderProjectV2Detail(view, idStr) {
     //  터미널 세션 · 작업 타임라인(org #/projects 템플릿과 동형, v6 데이터·라우트). 모든 섹션 v6 API base 연결.
     //  '필요/산출 지식'은 본문 바로 아래 '지식 흐름' 섹션으로 분리(#245) — 세부 설정 팝업에서 이관.
     // 후속/선행 프로젝트는 별도 박스(projectEdgesSection)를 없애고 상단 프로퍼티(pjvProjMetaPanel)로 이관(#359).
-    view.replaceChildren(head, projectBodySection(id, p, reload), projectKnowledgeSection(id, p, reload), projectCommentsSection(id, members), pjvTasksSection(id, p.tasks || [], members, reload, p.fields || []), projectFolderSection(id, V6_BASE), projectPreviewSection(id, p), projectTerminalSection(id, members, meId, V6_BASE, p.name, p), projectTimelineSection(id, members, V6_BASE));
+    view.replaceChildren(head, projectBodySection(id, p, reload), projectKnowledgeSection(id, p, reload), projectCommentsSection(id, members), pjvTasksSection(id, p.tasks || [], members, reload, p.fields || []), projectFolderSection(id, V6_BASE), projectTerminalSection(id, members, meId, V6_BASE, p.name, p), projectTimelineSection(id, members, V6_BASE));
     // 인라인 편집 재렌더면 리빌 애니메이션 대신 스크롤 복원(전면 재애니메이션도 '새로고침'처럼 보임) (#358)
     if (keepY != null)
         pjvRestoreScroll(keepY);
@@ -6582,18 +6582,20 @@ async function renderProjectV2Detail(view, idStr) {
         applyReveal(Array.from(view.children).slice(1));
 }
 // ── 미리보기(#1036) — 작업 중인 화면을 운영 화면·남의 작업과 섞지 않고 이 프로젝트 몫으로 따로 띄워 본다. ──
-//  **자리**가 핵심이다: 관리탭에만 두면 정작 화면을 확인할 작업자가 만나지 못한다. 관리탭 ▸ 미리보기는 조직 전체
-//  목록(운영자 시야)이고, 여기는 '이 프로젝트의 것'만 — 작업자는 자기 프로젝트에서 버튼 하나로 만들고 연다.
-//  관련 레포가 없는 프로젝트(문서·기획 등)에는 아예 보이지 않는다(만들어 둔 미리보기가 있으면 그때만 나타난다).
+//  **자리**: 관리탭에만 두면 정작 화면을 확인할 작업자가 만나지 못한다. 그렇다고 프로젝트 상세에 섹션을 하나 더
+//  붙이면 그 페이지가 이미 너무 길다 → 터미널 세션 섹션 헤더의 [🖥 미리보기] 버튼 → 모달(세션 기록 #905 C1 과 같은 형태).
+//  관리탭 ▸ 미리보기는 조직 전체 목록(운영자 시야)으로 그대로 두고, 이 모달은 '이 프로젝트의 것'만 다룬다.
 const PJV_PREVIEW_STATUS = { running: '실행 중', preparing: '준비 중…', error: '문제 있음', stopped: '꺼짐' };
-function projectPreviewSection(id, p) {
-    const repos = ((p && p.repos) || []).filter(Boolean);
-    const card = el('div', { class: 'card', style: 'margin-bottom:18px' });
+function openProjectPreviewModal(id, projectName, repos0) {
+    const repos = (repos0 || []).filter(Boolean);
     const body = el('div', {});
-    const addBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 미리보기 만들기', onclick: () => pickRepoThenCreate() });
-    card.append(el('div', { class: 'card-head' }, el('h3', { text: '미리보기' }), el('div', { class: 'card-head-actions' }, addBtn)), body);
-    if (!repos.length)
-        card.hidden = true; // 코드가 걸려 있지 않은 프로젝트에는 숨긴다(아래 load 에서 있으면 다시 켬)
+    const addBtn = el('button', { class: 'btn btn-primary btn-sm', text: '＋ 미리보기 만들기', onclick: () => pickRepoThenCreate() });
+    // 저장소가 여럿이면 어느 것을 볼지 고르게 한다(하나면 묻지 않는다 — 작업자가 원하는 건 '지금 화면 보기'다).
+    const repoSel = repos.length > 1 ? el('select', { style: 'padding:6px 8px;font:inherit;max-width:220px' }) : null;
+    if (repoSel)
+        for (const n of repos)
+            repoSel.append(el('option', { value: n, text: n }));
+    const back = overlayBox('미리보기' + (projectName ? ' — ' + projectName : ''), el('div', { class: 'proj-settings' }, el('section', { class: 'ps-block' }, el('p', { class: 'ps-block-hint', text: '작업 중인 화면을 운영 화면이나 다른 사람 작업에 영향 없이 따로 띄워 봅니다. 만들면 주소가 나오고, 그 주소를 팀원에게 보내 확인받을 수 있어요.' }), body), el('div', { class: 'ps-rules-actions' }, ...(repoSel ? [repoSel] : []), addBtn)));
     let timer = null;
     async function load() {
         if (timer) {
@@ -6606,20 +6608,18 @@ function projectPreviewSection(id, p) {
             envs = ((r && r.envs) || []).filter((x) => Number(x.project_id) === Number(id));
         }
         catch (e) {
-            // 코드 권한이 없는 구성원에게는 이 섹션 자체가 쓸모없다 — 오류를 띄우는 대신 조용히 감춘다.
-            if (e.status === 403) {
-                card.hidden = true;
-                return;
-            }
-            body.replaceChildren(el('p', { class: 'ps-block-hint', text: '미리보기를 불러오지 못했습니다 — ' + e.message }));
+            body.replaceChildren(el('p', { class: 'ps-block-hint', text: e.status === 403
+                    ? '이 기능을 쓸 권한이 없습니다 — 관리자에게 코드 권한을 요청하세요.'
+                    : '미리보기를 불러오지 못했습니다 — ' + e.message }));
+            addBtn.disabled = true;
             return;
         }
-        if (envs.length)
-            card.hidden = false;
         if (!envs.length) {
             body.replaceChildren(el('p', { class: 'ps-block-hint', text: repos.length
-                    ? '이 프로젝트의 화면을 운영 화면과 따로 띄워 확인할 수 있습니다. ‘＋ 미리보기 만들기’를 누르면 작업 폴더 준비·빌드까지 자동으로 하고 주소를 만들어 줍니다(그 주소를 팀원에게 보내 확인받을 수 있어요).'
-                    : '이 프로젝트에는 연결된 코드 저장소가 없습니다.' }));
+                    ? '아직 만든 미리보기가 없습니다. 아래 ‘＋ 미리보기 만들기’를 누르면 작업 폴더 준비·빌드까지 자동으로 끝내고 주소를 만들어 줍니다.'
+                    : '이 프로젝트에는 연결된 코드 저장소가 없습니다 — ⚙ 프로젝트 세부 설정에서 관련 레포를 먼저 연결해 주세요.' }));
+            if (!repos.length)
+                addBtn.disabled = true;
             return;
         }
         const rows = envs.map((env) => {
@@ -6632,9 +6632,9 @@ function projectPreviewSection(id, p) {
             return el('div', { class: 'wikicat-row' }, el('div', { class: 'wikicat-row-main' }, el('span', { class: 'wikicat-name', text: env.label || env.id }), el('span', { class: 'wikicat-key', text: [env.repo, env.kind === 'stage' ? '여러 작업을 합쳐서 봄' : null].filter(Boolean).join(' · ') }), el('span', { class: 'dm-tag', text: env.enabled ? statusText : '꺼둠' }), env.last_error ? el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '안내' }), env.last_error) : null), el('div', { class: 'wikicat-row-acts' }, ...acts));
         });
         body.replaceChildren(el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-rows' }, ...rows)));
-        // 준비 중이면 사람이 새로고침하지 않아도 되게 잠시 뒤 다시 확인한다(화면을 떠나면 스스로 멈춤).
+        // 준비 중이면 사람이 새로고침하지 않아도 되게 잠시 뒤 다시 확인한다(모달을 닫으면 스스로 멈춤).
         if (envs.some((x) => x.status === 'preparing'))
-            timer = setTimeout(() => { if (document.body.contains(card))
+            timer = setTimeout(() => { if (document.body.contains(back))
                 load(); }, 5000);
     }
     async function act(btn, suffix, envId) {
@@ -6656,22 +6656,12 @@ function projectPreviewSection(id, p) {
         }
         load();
     }
-    // 저장소가 하나면 묻지 않고 바로 만든다(작업자가 원하는 건 '지금 화면 보기'다). 여럿일 때만 고르게 한다.
     function pickRepoThenCreate() {
         if (!repos.length) {
             toast('먼저 ⚙ 프로젝트 세부 설정에서 관련 레포를 연결해 주세요', true);
             return;
         }
-        if (repos.length === 1) {
-            create(repos[0]);
-            return;
-        }
-        const sel = el('select', { style: 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box' });
-        for (const n of repos)
-            sel.append(el('option', { value: n, text: n }));
-        const ok = el('button', { class: 'btn btn-primary btn-sm', text: '만들고 띄우기' });
-        const back = overlayBox('미리보기 만들기', el('div', { class: 'proj-settings' }, el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: '어느 코드 저장소를 볼까요?' }), el('p', { class: 'ps-block-hint', text: '이 프로젝트에 연결된 저장소입니다.' }), sel), el('div', { class: 'ps-rules-actions' }, ok)));
-        ok.onclick = () => { back.remove(); create(sel.value); };
+        create(repoSel ? repoSel.value : repos[0]);
     }
     async function create(repo) {
         addBtn.disabled = true;
@@ -6680,7 +6670,6 @@ function projectPreviewSection(id, p) {
             const envId = saved && saved.env && saved.env.id;
             if (envId)
                 await api('/api/ui/preview-envs/' + encodeURIComponent(envId) + '/ensure', { method: 'POST' }).catch(() => { });
-            card.hidden = false;
             toast('만들었습니다 — 화면을 준비하고 있습니다');
         }
         catch (e) {
@@ -6689,8 +6678,9 @@ function projectPreviewSection(id, p) {
         addBtn.disabled = false;
         load();
     }
+    body.replaceChildren(el('p', { class: 'ps-block-hint', text: '불러오는 중…' }));
     load();
-    return card;
+    return back;
 }
 // ── 세션 기록(#905 C1): 별도 섹션이 공간을 많이 먹어 → 터미널 섹션 헤더의 [📜 세션 기록] 버튼→모달로 이관
 //  (openProjectSessionsModal, sessions.ts). 끝난 세션까지 남는 '이력', 인가는 서버(프로젝트 멤버). ──
@@ -12597,7 +12587,13 @@ function projectTerminalSection(id, members, meId, base, projectName, project) {
     // 세션 기록(#905 C1) — 끝난 세션 포함 중앙 대화록. 공간 아끼려 섹션 대신 여기 버튼→모달.
     const sessLogBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '📜 세션 기록' });
     sessLogBtn.addEventListener('click', () => openProjectSessionsModal(id, projectName));
-    card.append(el('div', { class: 'card-head' }, el('h3', { text: '터미널 세션' }), el('div', { class: 'card-head-actions' }, sessLogBtn, newBtn)));
+    // 미리보기(#1036) — 작업 화면을 따로 띄워 본다. 세션 기록과 같은 이유로 섹션이 아니라 버튼→모달
+    //  (상세 페이지는 이미 길다). 관련 레포가 없는 프로젝트에는 아예 두지 않는다.
+    const previewBtn = projectRepos.length
+        ? el('button', { class: 'btn btn-ghost btn-sm', title: '작업 중인 화면을 따로 띄워 확인', text: '🖥 미리보기' }) : null;
+    if (previewBtn)
+        previewBtn.addEventListener('click', () => openProjectPreviewModal(id, projectName, projectRepos));
+    card.append(el('div', { class: 'card-head' }, el('h3', { text: '터미널 세션' }), el('div', { class: 'card-head-actions' }, ...(previewBtn ? [previewBtn] : []), sessLogBtn, newBtn)));
     card.append(body);
     let sessions = [];
     let selected = null;

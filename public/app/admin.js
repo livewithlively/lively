@@ -2949,6 +2949,23 @@ function storageEditor(detail, data) {
         });
         if (!diskRows.length)
             diskRows.push(el('p', { class: 'admin-hint', text: '디스크 정보를 읽지 못했습니다.' }));
+        // ── ① 지금 상태 — 메모리 게이지(#1059 G1) ── 만성(세션 baseline)·급성(Ollama 스파이크)을 한 눈에.
+        const mem = st.memory || null;
+        let memBlock = null;
+        if (mem) {
+            const usedPct = Math.min(100, Math.max(0, Number(mem.used_pct) || 0));
+            const mlvKey = usedPct >= 90 ? 'critical' : usedPct >= 75 ? 'warn' : 'ok';
+            const mlvLabel = mlvKey === 'critical' ? '위험' : mlvKey === 'warn' ? '경고' : '여유';
+            const mfill = el('div', { class: 'gauge-fill gauge-' + mlvKey });
+            mfill.style.width = Math.min(100, Math.max(2, usedPct)) + '%';
+            const oll = mem.ollama;
+            const ollLine = oll
+                ? (oll.loaded
+                    ? `Ollama 로드 ${oll.mb ? fmtBytes(oll.mb * 1024 * 1024) : ''}${(oll.models || []).length ? ' (' + oll.models.slice(0, 3).join(', ') + ')' : ''}`
+                    : 'Ollama 로드 모델 없음')
+                : '';
+            memBlock = el('div', { class: 'storage-item' }, el('div', { class: 'storage-head' }, el('strong', { text: '메모리' }), el('span', { class: 'storage-lv storage-lv-' + mlvKey, text: '사용 ' + usedPct + '% · ' + mlvLabel })), el('div', { class: 'gauge' }, mfill), el('p', { class: 'storage-calc', text: `전체 ${fmtBytes((mem.total_mb || 0) * 1024 * 1024)} 중 ${fmtBytes((mem.available_mb || 0) * 1024 * 1024)} 가용 · 세션 ${mem.session_count ?? 0}개${ollLine ? ' · ' + ollLine : ''}` }));
+        }
         // ── ① 지금 상태 — 로그 ──
         const logs = st.logs || { files: [], totalBytes: 0, capBytes: 0, dir: '' };
         const current = (logs.files || []).filter((f) => !f.rotated);
@@ -3027,7 +3044,50 @@ function storageEditor(detail, data) {
             : st.policy_source === 'default'
                 ? el('p', { class: 'admin-hint', text: '아직 설정한 적이 없어 기본값으로 동작 중입니다.' })
                 : null;
-        body.replaceChildren(...(banner ? [banner] : []), el('h3', { class: 'storage-h', text: '지금 상태' }), el('div', { class: 'storage-block' }, ...diskRows), el('div', { class: 'storage-block' }, el('div', { class: 'storage-head' }, el('strong', { text: '로그' })), el('p', { class: 'storage-calc' }, el('code', { text: logs.dir || '' })), el('p', { class: 'storage-calc', text: logLine }), logDetail), el('h3', { class: 'storage-h', text: '정책' }), ...(srcNote ? [srcNote] : []), el('div', { class: 'storage-block' }, el('strong', { text: '로그 보관' }), el('div', { class: 'storage-fields' }, el('label', {}, el('span', { text: '파일 1개 최대(MB)' }), logMaxIn), el('label', {}, el('span', { text: '보관 개수' }), logKeepIn)), logCalc, el('p', { class: 'admin-hint', text: '상한을 넘으면 자동으로 회전합니다(내용은 보관본으로 넘기고 현재 파일은 비웁니다). 서비스는 멈추지 않습니다.' })), el('div', { class: 'storage-block' }, el('strong', { text: '디스크 경고' }), el('div', { class: 'storage-fields' }, el('label', {}, el('span', { text: '경고 임계(%)' }), warnIn), el('label', {}, el('span', { text: '위험 임계(%)' }), critIn)), el('p', { class: 'storage-calc', text: '경고 → /readyz 가 degraded 로 알립니다(서비스는 정상 동작). 위험 → 신규 세션·클론을 막습니다.' }), el('p', { class: 'admin-hint', text: '경고 임계는 위험 임계보다 낮아야 합니다.' })), el('div', { class: 'storage-block' }, el('strong', { text: '공유 빌드 캐시' }), el('label', { class: 'storage-toggle' }, cacheChk, el('span', { text: ' 의존성 캐시를 서버의 공유 위치 한 곳에 모읍니다 (권장)' })), cacheState, el('p', { class: 'admin-hint', text: 'npm·pnpm·pip·uv·Go·Maven·Yarn·NuGet·Composer 의 다운로드 캐시를 세션마다 따로 받지 않고 공유합니다. 빌드가 빨라지고, 나중에 프로젝트의 빌드 산출물을 정리해도 금방 복구됩니다. 새로 만드는 세션부터 적용됩니다.' }), el('label', { class: 'storage-toggle' }, homeChk, el('span', { text: ' Gradle · Cargo 홈까지 공유 (주의)' })), el('p', { class: 'admin-hint storage-warn', text: '⚠ 이 옵션을 켜면 캐시뿐 아니라 설정·자격증명도 공유 위치로 옮겨갑니다 — ~/.gradle/gradle.properties(서명키·저장소 인증)와 ~/.cargo/credentials.toml(레지스트리 토큰)이 무시됩니다. 그 파일에 의존하는 빌드가 실패할 수 있으니, 해당 파일을 쓰지 않는 것이 확실할 때만 켜세요.' }), 
+        // 정책 출처 한 줄(#688 관례) — db(관리탭)·env(.env 시드)·default(기본값).
+        const srcHint = (source) => source === 'env'
+            ? el('p', { class: 'admin-hint', text: '현재 값은 서버 환경변수(.env) 시드입니다 — 여기서 저장하면 관리탭 설정이 우선합니다.' })
+            : source === 'default'
+                ? el('p', { class: 'admin-hint', text: '아직 설정한 적이 없어 기본값으로 동작 중입니다.' })
+                : null;
+        // ── ② 정책 — 세션 메모리 상한(#1059 D) ── per-session cgroup(box-cgspawn) 캡. 0=무제한(무회귀). 배포+캡 설정 시 세션이 scope 격리.
+        const smp = st.session_memory_policy || {};
+        const memHighIn = numIn(smp.per_session_high_mb ?? 0, 0, 1048576);
+        const memMaxIn = numIn(smp.per_session_max_mb ?? 0, 0, 1048576);
+        const memPolBtn = el('button', { class: 'btn btn-primary btn-sm', text: '세션 메모리 정책 저장' });
+        memPolBtn.disabled = !canEdit;
+        memPolBtn.addEventListener('click', async () => {
+            memPolBtn.disabled = true;
+            try {
+                await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ session_memory_policy: { per_session_high_mb: Number(memHighIn.value), per_session_max_mb: Number(memMaxIn.value) } }) });
+                toast('저장됨 — 새 세션부터 적용됩니다(기존 세션은 재생성 시).');
+                load();
+            }
+            catch (e) {
+                toast(e.message, true);
+                memPolBtn.disabled = false;
+            }
+        });
+        // ── ② 정책 — idle 세션 자동 회수(#1059 F) ── 그 시간 넘게 idle 인 세션을 회수(desired-state 보존→복원 가능). 0=끔(무회귀).
+        const srp = st.session_reclaim_policy || {};
+        const idleTtlIn = numIn(srp.idle_ttl_minutes ?? 0, 0, 43200);
+        const reclaimBtn = el('button', { class: 'btn btn-primary btn-sm', text: 'idle 회수 정책 저장' });
+        reclaimBtn.disabled = !canEdit;
+        reclaimBtn.addEventListener('click', async () => {
+            reclaimBtn.disabled = true;
+            try {
+                await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ session_reclaim_policy: { idle_ttl_minutes: Number(idleTtlIn.value) } }) });
+                toast('저장됨 — 다음 회수 주기(5분)부터 적용됩니다.');
+                load();
+            }
+            catch (e) {
+                toast(e.message, true);
+                reclaimBtn.disabled = false;
+            }
+        });
+        body.replaceChildren(...(banner ? [banner] : []), el('h3', { class: 'storage-h', text: '지금 상태' }), el('div', { class: 'storage-block' }, ...diskRows), ...(memBlock ? [el('div', { class: 'storage-block' }, memBlock, el('p', { class: 'admin-hint', text: '가용 = 회수 가능한 캐시 포함(지금 새 작업에 내줄 수 있는 양). #1059 다운은 만성(세션 baseline)+급성(Ollama 임베딩 스파이크)이 겹쳐 물리 초과로 일어났습니다 — 세션 수와 Ollama 로드를 함께 봅니다.' }))] : []), el('div', { class: 'storage-block' }, el('div', { class: 'storage-head' }, el('strong', { text: '로그' })), el('p', { class: 'storage-calc' }, el('code', { text: logs.dir || '' })), el('p', { class: 'storage-calc', text: logLine }), logDetail), el('h3', { class: 'storage-h', text: '정책' }), ...(srcNote ? [srcNote] : []), el('div', { class: 'storage-block' }, el('strong', { text: '로그 보관' }), el('div', { class: 'storage-fields' }, el('label', {}, el('span', { text: '파일 1개 최대(MB)' }), logMaxIn), el('label', {}, el('span', { text: '보관 개수' }), logKeepIn)), logCalc, el('p', { class: 'admin-hint', text: '상한을 넘으면 자동으로 회전합니다(내용은 보관본으로 넘기고 현재 파일은 비웁니다). 서비스는 멈추지 않습니다.' })), el('div', { class: 'storage-block' }, el('strong', { text: '디스크 경고' }), el('div', { class: 'storage-fields' }, el('label', {}, el('span', { text: '경고 임계(%)' }), warnIn), el('label', {}, el('span', { text: '위험 임계(%)' }), critIn)), el('p', { class: 'storage-calc', text: '경고 → /readyz 가 degraded 로 알립니다(서비스는 정상 동작). 위험 → 신규 세션·클론을 막습니다.' }), el('p', { class: 'admin-hint', text: '경고 임계는 위험 임계보다 낮아야 합니다.' })), 
+        // ── 세션 메모리·회수(#1059) — 박스 다운(OOM) 재발 방지의 두 축을 관리탭에서 조절 ──
+        el('h3', { class: 'storage-h', text: '세션 메모리 · 회수' }), el('div', { class: 'storage-block' }, el('strong', { text: '세션 메모리 상한 (per-session)' }), ...(srcHint(st.session_memory_policy_source) ? [srcHint(st.session_memory_policy_source)] : []), el('div', { class: 'storage-fields' }, el('label', {}, el('span', { text: 'MemoryHigh(MB, 0=무제한)' }), memHighIn), el('label', {}, el('span', { text: 'MemoryMax(MB, 0=무제한)' }), memMaxIn)), el('p', { class: 'storage-calc', text: 'MemoryMax 를 넘은 세션은 그 세션 안에서만 OOM-kill 되고 박스는 생존합니다(폭주 1개만 죽음). MemoryHigh 는 그 아래 소프트 스로틀. High ≤ Max.' }), el('p', { class: 'admin-hint', text: 'claude 는 네이티브라 힙제한이 안 통해 cgroup 이 유일 수단입니다. 0/0=무제한(무회귀). 캡을 걸면 새 세션이 격리 scope 로 뜹니다(박스에 격리 인프라 배포 필요 — 미설치면 종전대로 무제한). 예: 16GB 박스 High 3072 · Max 4096.' }), el('div', { class: 'storage-actions' }, memPolBtn)), el('div', { class: 'storage-block' }, el('strong', { text: 'idle 세션 자동 회수' }), ...(srcHint(st.session_reclaim_policy_source) ? [srcHint(st.session_reclaim_policy_source)] : []), el('div', { class: 'storage-fields' }, el('label', {}, el('span', { text: 'idle 임계(분, 0=끔)' }), idleTtlIn)), el('p', { class: 'storage-calc', text: '이 시간 넘게 idle 인 세션을 5분 주기로 회수합니다. 작업내용(대화·설정)은 보존돼 목록에 “복원 가능”으로 남고, 열면 이어집니다(admission control 대신 채택).' }), el('p', { class: 'admin-hint', text: '0=끔(무회귀, 기본). 상시(managed)·접속 중·작업 중·확인 대기 세션은 절대 회수하지 않습니다. 예: 16GB 박스 180~1440분.' }), el('div', { class: 'storage-actions' }, reclaimBtn)), el('div', { class: 'storage-block' }, el('strong', { text: '공유 빌드 캐시' }), el('label', { class: 'storage-toggle' }, cacheChk, el('span', { text: ' 의존성 캐시를 서버의 공유 위치 한 곳에 모읍니다 (권장)' })), cacheState, el('p', { class: 'admin-hint', text: 'npm·pnpm·pip·uv·Go·Maven·Yarn·NuGet·Composer 의 다운로드 캐시를 세션마다 따로 받지 않고 공유합니다. 빌드가 빨라지고, 나중에 프로젝트의 빌드 산출물을 정리해도 금방 복구됩니다. 새로 만드는 세션부터 적용됩니다.' }), el('label', { class: 'storage-toggle' }, homeChk, el('span', { text: ' Gradle · Cargo 홈까지 공유 (주의)' })), el('p', { class: 'admin-hint storage-warn', text: '⚠ 이 옵션을 켜면 캐시뿐 아니라 설정·자격증명도 공유 위치로 옮겨갑니다 — ~/.gradle/gradle.properties(서명키·저장소 인증)와 ~/.cargo/credentials.toml(레지스트리 토큰)이 무시됩니다. 그 파일에 의존하는 빌드가 실패할 수 있으니, 해당 파일을 쓰지 않는 것이 확실할 때만 켜세요.' }), 
         // fix#103: 저장 버튼을 정책 마지막 카드 안으로 — '경보 알림' 사이에 홀로 떠서 저장 범위가 안 읽히던 문제.
         el('div', { class: 'storage-actions' }, saveBtn)), el('h3', { class: 'storage-h', text: '경보 알림' }), alertRegion, el('h3', { class: 'storage-h', text: '워크스페이스' }), wsRegion);
         loadAlert();
@@ -3450,6 +3510,10 @@ function embeddingsEditor(detail, data) {
         const timeoutIn = el('input', { class: 'input emb-num', type: 'number', min: '1000', max: '3600000', placeholder: '300000  (요청당 ms)' });
         timeoutIn.value = String(cfg.request_timeout_ms || 300000);
         timeoutIn.disabled = !canEdit;
+        // #1059 G3 — 백필 pre-flight 메모리 게이트: 가용 메모리가 이 값 미만이면 자동 백필 스윕을 건너뛴다(0=끔).
+        const backfillMinIn = el('input', { class: 'input emb-num', type: 'number', min: '0', max: '1048576', placeholder: '0  (끔; 16GB 박스 권장 4096~5000)' });
+        backfillMinIn.value = String(cfg.backfill_min_available_mb || 0);
+        backfillMinIn.disabled = !canEdit;
         const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: '설정 저장' });
         saveBtn.disabled = !canEdit;
         const saveSt = el('span', { class: 'admin-status' });
@@ -3466,6 +3530,7 @@ function embeddingsEditor(detail, data) {
                     auth_env_ref: authIn.value.trim() || null,
                     batch_size: Number(batchIn.value) || 8,
                     request_timeout_ms: Number(timeoutIn.value) || 300000,
+                    backfill_min_available_mb: Number(backfillMinIn.value) || 0, // #1059 G3 — 백필 pre-flight 메모리 게이트(0=끔)
                 };
                 const r = await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ embedding_config }) });
                 if (r && r.runtimeConfig)
@@ -3487,7 +3552,7 @@ function embeddingsEditor(detail, data) {
         const statusRegion = el('div');
         const projectRegion = el('div');
         pauseRegion = el('div'); // #1060 — updateStatus 가 st.backfill_paused 로 채운다(초기·폴링 공통)
-        body.replaceChildren(...(srcNote ? [srcNote] : []), field('벡터 임베딩', provSel), field('엔드포인트 base_url', baseIn), el('p', { class: 'admin-hint', text: '로컬 사이드카 또는 외부 API 주소입니다. 경로 /v1/embeddings 는 자동으로 붙습니다.' }), field('모델', modelIn), field('차원', dimIn), el('p', { class: 'admin-hint', text: '모델의 출력 차원과 일치해야 합니다. 변경하면 전체 재임베딩이 필요합니다.' }), field('인증 환경변수 이름 (선택 · 외부 API 용)', authIn), el('p', { class: 'admin-hint', text: '키 값이 아니라 키를 담은 환경변수의 이름을 입력합니다.' }), field('배치 크기', batchIn), el('p', { class: 'admin-hint', text: '요청당 보내는 텍스트 수입니다. 느린 백엔드나 CPU 백엔드에서는 낮추면 타임아웃을 피할 수 있습니다(기본 8).' }), field('요청 타임아웃 (ms)', timeoutIn), el('p', { class: 'admin-hint', text: '초과하면 배치를 반으로 줄여 재시도합니다(기본 300000).' }), canEdit ? el('div', { class: 'admin-actions' }, saveBtn, saveSt) : el('p', { class: 'admin-hint', text: '※ 편집은 관리자만 가능합니다.' }), 
+        body.replaceChildren(...(srcNote ? [srcNote] : []), field('벡터 임베딩', provSel), field('엔드포인트 base_url', baseIn), el('p', { class: 'admin-hint', text: '로컬 사이드카 또는 외부 API 주소입니다. 경로 /v1/embeddings 는 자동으로 붙습니다.' }), field('모델', modelIn), field('차원', dimIn), el('p', { class: 'admin-hint', text: '모델의 출력 차원과 일치해야 합니다. 변경하면 전체 재임베딩이 필요합니다.' }), field('인증 환경변수 이름 (선택 · 외부 API 용)', authIn), el('p', { class: 'admin-hint', text: '키 값이 아니라 키를 담은 환경변수의 이름을 입력합니다.' }), field('배치 크기', batchIn), el('p', { class: 'admin-hint', text: '요청당 보내는 텍스트 수입니다. 느린 백엔드나 CPU 백엔드에서는 낮추면 타임아웃을 피할 수 있습니다(기본 8).' }), field('요청 타임아웃 (ms)', timeoutIn), el('p', { class: 'admin-hint', text: '초과하면 배치를 반으로 줄여 재시도합니다(기본 300000).' }), field('백필 메모리 게이트 (MB, 0=끔)', backfillMinIn), el('p', { class: 'admin-hint', text: '#1059 — 자동 백필이 임베딩 모델(예: Ollama)을 호출하기 전 가용 메모리를 확인해, 이 값 미만이면 이번 스윕을 건너뜁니다(다음 주기 재시도, 밀린 항목 유실 없음). 모델 로드 스파이크가 세션 baseline 과 겹쳐 박스가 OOM 나는 걸 예방합니다. 0=끔(무회귀). 16GB 박스 권장 4096~5000. 수동 백필 버튼은 게이트하지 않습니다.' }), canEdit ? el('div', { class: 'admin-actions' }, saveBtn, saveSt) : el('p', { class: 'admin-hint', text: '※ 편집은 관리자만 가능합니다.' }), 
         // #1060 자동 백필 일시중지 — knowledge·project 를 함께 지배하므로 두 백필 섹션 위에. 임베딩 켜진 경우에만 노출(꺼지면 백필 자체가 무의미).
         ...(on ? [
             el('div', { class: 'admin-subhead', text: '자동 임베딩 백필' }),

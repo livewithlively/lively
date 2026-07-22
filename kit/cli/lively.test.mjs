@@ -182,27 +182,33 @@ try {
   //  (b) register-clients.sh 파일이 실제로 같은 3헤더를 등록하는지(드리프트 가드 — 안전망이 CLI 만 보지 않게).
   {
     const adds = H.argv().filter((l) => l.startsWith("mcp add"));
-    // ⚠ 헤더 **3개**(토큰 + 세션귀속#852 + 실행모드#1007+). 예전 want 는 x-lively-session 이 빠진 드리프트를 못박고 있었다
-    //  (= 테스트가 버그를 고정). 이게 빠지면 remove→add 가 세션 헤더를 지워 그 세션의 작업 귀속이 끊긴다.
-    //  x-lively-mode(#1007+)는 세션별 실행모드 단일 신호(LIVELY_MODE=readonly|incognito 로 실행 시 그 세션만 게이트웨이가 강제). 값은 리터럴 — 확장은 접속 시 하네스가 제 env 로.
-    const want = `mcp add --transport http --scope user lively ${GW}/mcp `
-      + `--header Authorization: Bearer ${TOKEN} --header x-lively-session: \${LIVELY_SESSION_ID:-}`
-      + ` --header x-lively-mode: \${LIVELY_MODE:-}`;
-    check("④ claude MCP 등록 argv 못박기(헤더 3개 — 토큰 + 세션귀속 + 실행모드)",
+    // (a) #1079 — lively 는 **stdio 프록시**로 등록한다(http 직결은 VPN 미접속 세션에서 그 세션 내내 죽는다).
+    //  종전 3헤더(토큰·세션귀속#852·실행모드#1007+)는 사라진 게 아니라 **프록시가 상류 호출에 붙인다** —
+    //  그 계약은 lively-mcp-gateway.test.mjs(E11 파일토큰 우선 · E15 하네스 stamp)가 못박는다.
+    const shimPath = join(H.home, ".lively", "bin", "lively");
+    const want = `mcp add --transport stdio --scope user lively ${shimPath} mcp`;
+    check("④ claude MCP 등록 argv 못박기(#1079 — lively = stdio 프록시)",
       adds.some((l) => l === want), `got=${JSON.stringify(adds)}\nwant=${JSON.stringify(want)}`);
-    // (b) register-clients.sh parity — 파일을 읽어 같은 3헤더를 실제로 등록하는지 확인(이게 빠지면 위 (a) 만으론 gap 을 못 잡는다).
-    const regSh = readFileSync(join(REPO, "scripts", "register-clients.sh"), "utf8");
-    check("④ register-clients.sh 가 CLI 와 동일한 3헤더 등록(parity — 헤더 하나라도 빠지면 그 설치 경로서 모드가 조용히 죽음)",
-      /--header +["']?Authorization: Bearer/.test(regSh)
-        && regSh.includes("x-lively-session: ${LIVELY_SESSION_ID:-}")
-        && regSh.includes("x-lively-mode: ${LIVELY_MODE:-}"),
-      "register-clients.sh 에 3헤더(Authorization+session+mode) 중 일부 누락 — CLI 와 drift");
-    // (c) self-update.mjs(자동 업데이터 헤더 additive reconcile, #1007+) 도 같은 모드 헤더를 알아야 기존 멤버가 재등록 없이 받는다 — 4번째 동기화 지점 drift 가드.
+    check("④ 설정에 평문 토큰이 실리지 않는다(#1079 — 신원은 런타임 토큰파일)",
+      !adds.some((l) => l.includes("Bearer")), `got=${JSON.stringify(adds)}`);
+    // (b) register-clients.sh parity — fresh 설치·멤버 온보딩의 주 경로다(deploy/install-kit.sh·provision-member.sh 가
+    //  직접 호출). 여기가 CLI 와 다른 transport 로 등록하면 **그 경로로 깐 첫 세션은 여전히 http** 라 #1079 가 그대로 남는다.
+    //  두 트윈(scripts/ 소스 · kit/setup/) 모두 본다 — 한쪽만 고치는 드리프트가 실제로 있었다.
+    for (const rel of [["scripts", "register-clients.sh"], ["kit", "setup", "register-clients.sh"]]) {
+      const p = join(REPO, ...rel);
+      const sh = readFileSync(p, "utf8");
+      check(`④ ${rel.join("/")} 가 CLI 와 같은 transport 로 lively 등록(parity)`,
+        /--transport +stdio +--scope +user +"?\$\{?MCP_LABEL/.test(sh) || /lively["']? +mcp\b/.test(sh),
+        `${rel.join("/")} 가 아직 http 직결로 lively 를 등록한다 — 이 경로로 깐 첫 세션은 #1079 를 그대로 겪는다(CLI·self-update 와 drift)`);
+    }
+    // (c) self-update.mjs — 기존 멤버를 재설치 없이 옮기는 4번째 동기화 지점. stdio 마이그레이션과,
+    //  롤백 시 살아나는 종전 헤더 계약을 **둘 다** 알고 있어야 한다.
     const selfUp = readFileSync(join(REPO, "kit", "hooks", "self-update.mjs"), "utf8");
-    check("④ self-update.mjs 가 같은 x-lively-mode 헤더로 additive reconcile(register-clients·CLI 와 parity)",
-      selfUp.includes('"x-lively-session": "${LIVELY_SESSION_ID:-}"')
+    check("④ self-update.mjs 가 stdio 마이그레이션 + 롤백용 헤더 계약을 모두 안다(parity)",
+      /args:\s*\["mcp"\]/.test(selfUp)
+        && selfUp.includes('"x-lively-session": "${LIVELY_SESSION_ID:-}"')
         && selfUp.includes('"x-lively-mode": "${LIVELY_MODE:-}"'),
-      "self-update.mjs 에 x-lively-mode 헤더 누락 — 기존 멤버가 재등록 없이 못 받음(drift)");
+      "self-update.mjs 가 stdio 마이그레이션 또는 헤더 계약 중 하나를 모른다(drift)");
     check("④ remove → add 순서(재실행 안전)",
       H.argv().indexOf("mcp remove lively") < H.argv().findIndex((l) => l.startsWith("mcp add")),
       JSON.stringify(H.argv()));
@@ -473,10 +479,14 @@ try {
     await lively(h, ["login", "--gateway", GW, "--token", TOKEN]);          // 파일 = 새 토큰
     await lively(h, ["install"], { env: { LIVELY_TOKEN: OLD_TOKEN } });     // 셸 env = 스테일 옛 토큰
     const adds = h.argv().filter((l) => l.startsWith("mcp add"));
-    const baked = adds.filter((l) => l.includes(" lively ") && l.includes("Bearer "));
-    check("⑱ #916 — install 이 스테일 env 를 무시하고 파일(새) 토큰을 굽는다",
-      baked.length > 0 && baked.every((l) => l.includes(`Bearer ${TOKEN}`)) && !baked.some((l) => l.includes(`Bearer ${OLD_TOKEN}`)),
-      `got=${JSON.stringify(baked)}`);
+    // #1079 로 이 버그의 표면이 바뀌었다 — lively 는 **stdio 프록시**라 설정에 토큰이 아예 안 들어간다.
+    //  그래서 "어느 토큰이 구워졌나"가 아니라 "**어떤 토큰도 안 구워진다**"가 종결 조건이다(신원 선택은
+    //  런타임으로 이동했고, 거기서도 파일이 env 를 이긴다 — lively-mcp-gateway.test.mjs E11 이 못박는다).
+    const livelyAdd = adds.filter((l) => /\slively\s/.test(l));
+    const leaked = adds.filter((l) => l.includes(TOKEN) || l.includes(OLD_TOKEN));
+    check("⑱ #916/#1079 — install 이 .claude.json 에 토큰을 굽지 않는다(lively=stdio 프록시)",
+      livelyAdd.length > 0 && livelyAdd.every((l) => l.includes("--transport stdio")) && leaked.length === 0,
+      `lively=${JSON.stringify(livelyAdd)} leaked=${JSON.stringify(leaked)}`);
   }
 
   // ⑲ **#916 — 로그인 탈출구 분기표**(loginEscapeToken). 이 분기는 **제어단말(/dev/tty)이 있어야** 밟히는데
