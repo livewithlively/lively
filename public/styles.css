@@ -7710,8 +7710,8 @@ input.emb-num { width: 120px; flex: none; }
 .pjv-multipick { min-width: 250px; max-width: 320px; padding: 5px; gap: 3px; }
 .pjv-multipick-searchwrap { display: flex; align-items: center; gap: 6px; padding: 0 8px; height: 32px; border: 1px solid var(--line); border-radius: 8px; margin: 2px 2px 4px; color: var(--muted-2); }
 .pjv-multipick-searchwrap:focus-within { border-color: var(--blue); }
-.pjv-multipick .pjv-multipick-search { flex: 1; min-width: 0; height: 100%; padding: 0; border: none; box-shadow: none; background: transparent; font-size: 12.5px; color: var(--ink); }
-.pjv-multipick .pjv-multipick-search:focus { outline: none; border: none; box-shadow: none; }
+.pjv-multipick .pjv-multipick-search, .pjv-fieldpick .pjv-multipick-search { flex: 1; min-width: 0; height: 100%; padding: 0; border: none; box-shadow: none; background: transparent; font-size: 12.5px; color: var(--ink); }
+.pjv-multipick .pjv-multipick-search:focus, .pjv-fieldpick .pjv-multipick-search:focus { outline: none; border: none; box-shadow: none; }
 /* 보기 설정 라디오 — 선택된 항목에 파란 점(라벨 색만으로는 '고를 수 있는 것'인지 안 보인다). */
 .pjv-view-radio { flex: none; width: 15px; height: 15px; border-radius: 50%; border: 1.6px solid var(--muted-3, #aab1bd); box-sizing: border-box; }
 .pjv-view-item.on .pjv-view-radio { border-color: var(--blue); border-width: 4.5px; }
@@ -7829,8 +7829,7 @@ input.emb-num { width: 120px; flex: none; }
 .pjv-gt-legend { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
 .pjv-gt-key { width: 14px; height: 8px; border-radius: 3px; display: inline-block; }
 .pjv-gt-key.plan { background: color-mix(in srgb, var(--blue) 30%, var(--bg)); }
-.pjv-gt-key.actual { background: color-mix(in srgb, var(--muted-2) 26%, var(--bg)); border: 1px dashed var(--muted-2); }
-.pjv-gt-key.roll { background: color-mix(in srgb, var(--mint) 40%, var(--bg)); }
+.pjv-gt-key.none { background: repeating-linear-gradient(45deg, var(--line) 0 3px, transparent 3px 6px); border: 1px solid var(--line-net); }
 
 .pjv-gt-scroll { overflow: auto; max-height: calc(100vh - 260px); border-top: 1px solid var(--line); }
 .pjv-gt-inner { position: relative; }
@@ -7898,3 +7897,46 @@ input.emb-num { width: 120px; flex: none; }
 .pjv-gt-todaybadge { position: absolute; top: 26px; transform: translateX(-1px); z-index: 7;
   background: var(--blue); color: #fff; font-size: 10px; font-weight: 700; line-height: 1;
   padding: 3px 5px; border-radius: 3px; white-space: nowrap; }
+
+/* ── 간트: 계획을 '만드는' 부분 (#1067) ── */
+/* 실적 겹쳐보기 토글 — 기본 꺼짐. 간트의 주 무대는 과거가 아니라 앞으로다. */
+.pjv-gt-toggle { border: 1px solid var(--line); background: var(--bg); color: var(--ink-sub);
+  font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 9px; cursor: pointer; }
+.pjv-gt-toggle:hover { background: var(--bg-tint); }
+.pjv-gt-toggle.on { background: var(--bg-tint-2); color: var(--blue); border-color: var(--line-net-2); }
+
+/* 바 = 끌 수 있는 것. 잡는 순간 커서와 그림자로 '움직인다'를 알린다. */
+.pjv-gt-bar { cursor: grab; touch-action: none; }
+.pjv-gt-bar.dragging { cursor: grabbing; box-shadow: 0 2px 8px rgba(21, 35, 59, .18); opacity: .9; }
+/* 양 끝 리사이즈 핸들 — 바 안쪽에 얇게. 평소엔 숨고 호버 때만 드러난다(ClickUp Gen-C 동일). */
+.pjv-gt-handle { position: absolute; top: 4px; bottom: 4px; width: 7px; cursor: ew-resize;
+  border-radius: 2px; background: rgba(255, 255, 255, .75); opacity: 0; transition: opacity .1s; }
+.pjv-gt-handle.l { left: 2px; }
+.pjv-gt-handle.r { right: 2px; }
+.pjv-gt-bar:hover .pjv-gt-handle { opacity: 1; }
+
+/* 실적 띠 — 계획 뒤에 흐리게. 계획 대비 실제를 대조하는 참고선이지 주인공이 아니다. */
+.pjv-gt-actual { position: absolute; top: 13px; height: 10px; border-radius: 3px;
+  background: color-mix(in srgb, var(--muted-2) 18%, var(--bg)); border: 1px dashed var(--muted-3); }
+
+/* 일정 없는 행의 트랙 — 클릭하면 그 날짜로 일정이 잡힌다. 호버로 '여기 놓을 수 있다'를 알린다. */
+.pjv-gt-track.schedulable { cursor: copy; }
+.pjv-gt-track.schedulable:hover { background: color-mix(in srgb, var(--blue) 5%, transparent); }
+.pjv-gt-row.group.unsched .pjv-gt-sheet { background: var(--bg-tint-2); }
+.pjv-gt-unsched-hint { position: sticky; left: 8px; display: inline-block; margin-top: 9px;
+  font-size: 11.5px; color: var(--muted-2); }
+.pjv-gt-range.none { color: var(--muted-3); }
+.pjv-gt-more { padding: 8px 12px; font-size: 12px; color: var(--muted-2); position: sticky; left: 0; }
+
+/* ── 필터 필드 선택 드롭다운(#1067) — ClickUp 'Select filter'. 검색 + 아이콘 목록. ── */
+.pjv-fieldpick { min-width: 224px; max-width: 300px; padding: 5px; gap: 3px; }
+.pjv-fieldpick-list { display: flex; flex-direction: column; gap: 1px; max-height: 300px; overflow: auto; }
+.pjv-fieldpick .pjv-menu-item { gap: 9px; }
+.pjv-fieldpick .pjv-menu-item > svg { width: 16px; height: 16px; flex: none; color: var(--muted-2); }
+.pjv-fieldpick .pjv-menu-item.sel > svg { color: var(--blue); }
+.pjv-fieldpick-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 아직 필드를 안 고른 조건 — 무엇을 눌러야 하는지 보이게 점선 + 흐린 라벨(빈 칸처럼 보이면 그냥 지나친다). */
+.pjv-filter-sel.is-empty { border-style: dashed; color: var(--muted-2); }
+.pjv-filter-sel.is-empty:hover { border-style: solid; border-color: var(--blue); color: var(--ink); }
+/* 필드 아이콘이 셀렉트 안에도 붙는다(무슨 조건인지 아이콘으로 먼저 읽히게). */
+.pjv-filter-sel > svg:first-child { width: 15px; height: 15px; flex: none; color: var(--muted-2); }
