@@ -13,7 +13,14 @@
 - `lively_local_repo_list` — 이 머신에서 워크트리를 뜰 수 있는 등록 레포 + 로컬 base 상태(clone 여부·현재 브랜치·원격 대비 최신).
 - `lively_local_repo_worktree {repo, path?, branch?, ref?}` — base 를 확보(로컬에 없으면 clone·있으면 fetch)한 뒤 **cwd(기본) 또는 지정 경로에 격리 브랜치 워크트리**를 만든다. base 워킹트리는 건드리지 않고 원격 최신(origin/<ref>)에서 분기한다. 프로젝트 세션이면 브랜치 기본값은 그 프로젝트 브랜치이고, 아니면 `wt/<repo>`. → **반환된 워크트리 경로에서** 편집·커밋·빌드하라.
 - `lively_local_repo_worktree_remove {repo, path?, force?}` — 워크트리 제거(base·다른 워크트리 무영향).
-- lively 가 그 머신의 base 위치·격리·git 자격을 알아서 해석하므로 하네스는 실행 환경을 몰라도 된다.
+- lively 가 그 머신의 base 위치·격리를 알아서 해석하므로 하네스는 실행 환경을 몰라도 된다.
+
+## private 레포에서 클론이 막히면 — git 자격은 라이블리에 등록한다
+워크트리 툴은 **실행 계정의 git 자격을 그대로 쓴다**(자격을 스스로 만들지 않는다). private 레포에서 `Permission denied (publickey)`·`could not read Username` 이 나면 그 계정에 자격이 없는 것이다.
+
+**정규 경로는 하나다 — `me_git_credential_set {kind:"ssh", host:"<git 호스트>"}`.** 박스가 키페어를 만들어 개인키는 암호화해 DB에 두고 **공개키만 돌려준다**. 그 공개키를 해당 호스트(GitHub·GitLab) 계정에 등록하면 끝이고, 격리 박스면 등록 즉시 홈에 반영되어 **열려 있는 세션에서도 바로** 쓰인다(세션 재접속 불요). 웹으로는 [내 설정 ▸ 레포 접근 ▸ git 인증 관리]가 같은 일을 한다.
+
+⚠ **셸에서 `ssh-keygen` 으로 홈에 키를 직접 만들지 마라.** 당장은 되지만 그 키는 라이블리가 모른다 — 관리탭에 안 보이고, 오프보딩 때 회수되지 않고, 홈이 재생성되면 유실되며, 나중에 정규 등록을 하는 순간 `IdentitiesOnly` 때문에 조용히 무시된다.
 - **발견성:** 위 `_list`·`_worktree` **두 개만** 스키마가 항상 세션에 실린다 — MCP 서버가 `_meta["anthropic/alwaysLoad"]` 를 선언한다(코드 작업의 진입점이라 발견을 운에 맡기지 않는다). 나머지 로컬 툴(핀 계열 등)은 하네스의 tool search 대상이라 **이름만** 실리고 스키마는 쓸 때 로드된다 — "모든 툴 스키마가 자동 주입된다"고 전제하지 마라.
 
 ## 왜 base 직접작업을 피하나

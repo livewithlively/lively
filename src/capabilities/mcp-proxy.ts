@@ -114,7 +114,28 @@ export async function refreshProxySnapshot(name: string, actor?: string): Promis
     await setMcpToolsSnapshot(name, snap, actor);
     return { count: snap.length };
   } catch (err) {
-    throw new Error(redactSecret((err as Error).message, gwSecret)); // 상류 에러 본문에 gateway 자격 에코 방지
+    const code = (err as { code?: unknown }).code; // StreamableHTTPError.code = 상류 HTTP status(진단)
+    const pfx = (typeof code === "number" || typeof code === "string") ? `[HTTP ${code}] ` : "";
+    // 진단(#746 gmail 403): SDK 는 403 의 WWW-Authenticate(구글이 요구하는 scope 등)를 삼킨다. 상류가 403 이고
+    //  토큰이 있으면 게이트웨이가 직접 tools/list 를 한 번 더 쳐서 그 응답 헤더/본문 앞부분을 캡처(원인 규명용).
+    let diag = "";
+    if (code === 403 && gwSecret) {
+      try {
+        const probe = makeSsrfFetch({ allowedInternalHosts: [], selfHosts: [], timeoutMs: CALL_TIMEOUT_MS });
+        const pr = await probe(server.url, {
+          method: "POST",
+          headers: { authorization: `Bearer ${gwSecret}`, "content-type": "application/json", accept: "application/json, text/event-stream" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+        });
+        const hdrs = Array.from(pr.headers.entries()).filter(([k]) => k !== "authorization").map(([k, v]) => `${k}:${v}`).join(" | ");
+        const body = await pr.text();
+        let jsonErr = "(none)";
+        try { const j = JSON.parse(body) as { error?: unknown; result?: unknown }; jsonErr = j?.error ? JSON.stringify(j.error) : (j?.result ? "result-present-no-error" : "neither"); }
+        catch { jsonErr = "non-json"; }
+        diag = ` [probe status=${pr.status} bodyLen=${body.length} json=${jsonErr} headers={${hdrs}} bodyTail=${body.slice(-250)}]`;
+      } catch (e) { diag = ` [probe 실패: ${(e as Error).message}]`; }
+    }
+    throw new Error(redactSecret(pfx + (err as Error).message + diag, gwSecret)); // 상류 에러 본문에 gateway 자격 에코 방지
   } finally {
     await client.close().catch(() => { /* */ });
   }
@@ -164,7 +185,9 @@ async function callUpstream(server: McpServerRow, toolName: string, args: Record
     });
     return { content, isError: res.isError === true };
   } catch (err) {
-    throw new Error(redactSecret((err as Error).message, injectedSecret)); // 상류 에러 본문에 주입 자격 에코 방지(SDK 는 응답 body 를 에러메시지에 그대로 실음)
+    const code = (err as { code?: unknown }).code; // StreamableHTTPError.code = 상류 HTTP status(진단)
+    const pfx = (typeof code === "number" || typeof code === "string") ? `[HTTP ${code}] ` : "";
+    throw new Error(redactSecret(pfx + (err as Error).message, injectedSecret)); // 상류 에러 본문에 주입 자격 에코 방지(SDK 는 응답 body 를 에러메시지에 그대로 실음)
   } finally {
     await client.close().catch(() => { /* */ });
   }

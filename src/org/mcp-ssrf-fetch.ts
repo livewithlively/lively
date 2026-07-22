@@ -108,9 +108,10 @@ export function makeSsrfFetch(opts: SsrfFetchOpts): FetchLike {
     const bodyStr = typeof init?.body === "string" ? init.body : (init?.body == null ? undefined : String(init.body));
     const signal = init?.signal as AbortSignal | undefined | null;
 
-    const nodeRes = await new Promise<http.IncomingMessage>((resolve, reject) => {
+    const doRequest = (cookieHeader?: string): Promise<http.IncomingMessage> => new Promise<http.IncomingMessage>((resolve, reject) => {
+      const h = cookieHeader ? { ...headers, cookie: cookieHeader } : headers;
       const req = lib.request(
-        { host: pinnedIp, port, method, path: url.pathname + url.search, headers, servername: isHttps ? host : undefined, timeout: timeoutMs },
+        { host: pinnedIp, port, method, path: url.pathname + url.search, headers: h, servername: isHttps ? host : undefined, timeout: timeoutMs },
         resolve,
       );
       req.on("error", (e) => reject(e instanceof SsrfError ? e : new SsrfError(`상류 연결 오류: ${e.message}`)));
@@ -122,6 +123,15 @@ export function makeSsrfFetch(opts: SsrfFetchOpts): FetchLike {
       if (bodyStr) req.write(bodyStr);
       req.end();
     });
+    let nodeRes = await doRequest();
+    // 세션 쿠키 상류(일부 구글 Workspace MCP: 인증 첫 요청에 403 + Set-Cookie=COMPASS 로 세션 발급) —
+    //  쿠키를 실어 1회 재시도한다. 이미 cookie 를 넣었거나(재시도/호출자 지정) 403 이 아니면 재시도 안 함(무한루프·타 상류 무영향).
+    const firstSetCookie = nodeRes.headers["set-cookie"];
+    if (nodeRes.statusCode === 403 && firstSetCookie && !headers["cookie"]) {
+      const cookie = (Array.isArray(firstSetCookie) ? firstSetCookie : [firstSetCookie])
+        .map((c) => String(c).split(";")[0].trim()).filter(Boolean).join("; ");
+      if (cookie) { nodeRes.resume(); nodeRes = await doRequest(cookie); } // 첫 응답 본문 버리고 쿠키로 재요청
+    }
 
     const status = nodeRes.statusCode ?? 502;
     const resHeaders = new Headers();

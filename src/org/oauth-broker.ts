@@ -153,7 +153,16 @@ export class VaultOAuthProvider implements OAuthClientProvider {
       { secret: encodeTokenBlob(tokens), meta: tokenMeta(tokens) }, this.o.actor ?? "oauth");
   }
 
-  redirectToAuthorization(authorizationUrl: URL): void { this.authorizationUrl = authorizationUrl; } // 헤드리스: 캡처만
+  redirectToAuthorization(authorizationUrl: URL): void { // 헤드리스: 캡처만
+    // 구글은 refresh_token 을 access_type=offline (+ prompt=consent) 일 때만 발급한다(표준 OAuth2.1 밖 파라미터라 SDK 가 안 넣음).
+    //  없으면 access_token(1h) 만 받아 만료 후 자동갱신 불가 → 구글 커넥터(gmail·drive·calendar) 전체가 1시간마다 재연결해야 함.
+    //  prompt=consent 로 재연결 시에도 refresh_token 을 확실히 재발급(구글은 기존 grant 있으면 consent 없이는 refresh_token 생략).
+    if (authorizationUrl.hostname === "accounts.google.com") {
+      authorizationUrl.searchParams.set("access_type", "offline");
+      authorizationUrl.searchParams.set("prompt", "consent");
+    }
+    this.authorizationUrl = authorizationUrl;
+  }
   async saveCodeVerifier(codeVerifier: string): Promise<void> {
     await setMemberSecret(this.owner(), this.o.authKind, PKCE_SCOPE, { secret: codeVerifier }, this.o.actor ?? "oauth");
   }

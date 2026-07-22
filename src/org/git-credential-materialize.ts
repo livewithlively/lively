@@ -43,11 +43,17 @@ export async function ensureGitSafeDirectory(osUser: string): Promise<void> {
   );
 }
 
-// 멤버의 등록 자격(SSH/HTTPS)을 홈에 반영. 등록 자격이 없으면 no-op(쓰기 안 함).
-export async function materializeMemberGit(osUser: string, memberId: string): Promise<void> {
+// 멤버의 등록 자격(SSH/HTTPS)을 홈에 반영. 등록 자격이 없으면 기본 no-op(쓰기 안 함).
+//  evenIfEmpty(#1077): 자격이 0건이어도 아래 ①③④(우리가 뿌린 것 회수)를 끝까지 돌린다. **회수 경로 전용**이다 —
+//   자격 삭제(me_git_credential_delete)는 "홈에 뿌려둔 키도 함께 거둔다"가 계약인데, 마지막 한 건을 지우면
+//   pubs 가 비어 early return 에 걸려 홈의 id_lively_* 가 남았다(= 지웠는데 계속 쓸 수 있는 상태). 오프보딩·회수가
+//   이 자격 모델의 핵심 명분이라 그 구멍은 그냥 둘 수 없다.
+//  세션 시작(createSession) 경로는 기본값 그대로 no-op 을 유지한다 — 자격을 한 번도 등록 안 한 멤버의 홈은
+//   건드리지 않는다는 보수성(#524 격리 정신)이 거기선 여전히 옳고, 매 세션 불필요한 memberSh 왕복도 없다.
+export async function materializeMemberGit(osUser: string, memberId: string, opts: { evenIfEmpty?: boolean } = {}): Promise<void> {
   const owner = memberOwner(memberId);
   const pubs = await listGitCredentialsPublic(owner);
-  if (!pubs.length) return; // 등록 자격 없음 → 손대지 않음(과쓰기 방지)
+  if (!pubs.length && !opts.evenIfEmpty) return; // 등록 자격 없음 → 손대지 않음(과쓰기 방지)
 
   const secrets = (await Promise.all(pubs.map((p) => getGitSecret(owner, p.host)))).filter((s): s is NonNullable<typeof s> => !!s);
   const ssh = secrets.filter((s) => s.kind === "ssh" && s.ssh_private_key);
