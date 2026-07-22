@@ -1324,6 +1324,8 @@ export const deliveryCapabilities: Capability[] = [
         if (s.log_keep !== undefined) patchIn.log_keep = num(s.log_keep, "log_keep", 0, 50);
         if (s.disk_warn_pct !== undefined) patchIn.disk_warn_pct = num(s.disk_warn_pct, "disk_warn_pct", 1, 99);
         if (s.disk_critical_pct !== undefined) patchIn.disk_critical_pct = num(s.disk_critical_pct, "disk_critical_pct", 1, 100);
+        if (s.mem_warn_pct !== undefined) patchIn.mem_warn_pct = num(s.mem_warn_pct, "mem_warn_pct", 0, 99);       // #1059 0=끔
+        if (s.mem_critical_pct !== undefined) patchIn.mem_critical_pct = num(s.mem_critical_pct, "mem_critical_pct", 0, 100); // #1059 0=끔
         if (s.shared_cache_enabled !== undefined) patchIn.shared_cache_enabled = Boolean(s.shared_cache_enabled);
         if (s.shared_cache_relocate_home !== undefined) patchIn.shared_cache_relocate_home = Boolean(s.shared_cache_relocate_home);
         // 경고 ≥ 위험은 사용자가 의도한 설정일 리 없다 — 조용히 고치지 말고 왜 안 되는지 알려준다.
@@ -1575,6 +1577,8 @@ export const deliveryCapabilities: Capability[] = [
         log_keep: z.number().int().min(0).max(50).optional().describe("보관할 로그 파일 수"),
         disk_warn_pct: z.number().int().min(1).max(99).optional().describe("디스크 경고 임계치(%) — 위험 임계치보다 낮아야 한다"),
         disk_critical_pct: z.number().int().min(1).max(100).optional().describe("디스크 위험 임계치(%)"),
+        mem_warn_pct: z.number().int().min(0).max(99).optional().describe("#1059 메모리 경고 임계(사용%, 0=끔) — box-watch 가 경보 웹훅 발송(디스크와 대칭)"),
+        mem_critical_pct: z.number().int().min(0).max(100).optional().describe("#1059 메모리 위험 임계(사용%, 0=끔) — OOM 임박 경보. warn 보다 커야"),
         shared_cache_enabled: z.boolean().optional().describe("공유 캐시 사용"),
         shared_cache_relocate_home: z.boolean().optional().describe("홈 캐시를 공유 캐시로 재배치"),
       }).optional().describe("저장소 정책(#813) — 로그 상한·디스크 임계치. 고객 박스는 .env 를 못 고치므로 여기가 유일한 조절 창구"),

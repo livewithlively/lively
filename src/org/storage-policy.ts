@@ -19,6 +19,10 @@ export interface StoragePolicy {
   disk_warn_pct: number;
   /** 디스크 위험 임계(%) — 신규 세션·클론 차단 대상(T5). */
   disk_critical_pct: number;
+  /** #1059 — 메모리 경고 임계(사용%). 0 = 끔(경보 안 함). box-watch 가 이 이상이면 warn 경보(디스크와 대칭). */
+  mem_warn_pct: number;
+  /** #1059 — 메모리 위험 임계(사용%). 0 = 끔. 이 이상이면 critical 경보(OOM 임박 — 디스크풀만큼 치명적). warn 보다 커야. */
+  mem_critical_pct: number;
   /** 세션 공유 빌드 캐시(#813 T3) — 다운로드/의존성 캐시를 박스 한 곳으로. 기본 켜짐(순수 캐시만 이동 = 안전). */
   shared_cache_enabled: boolean;
   /** ⚠ gradle/cargo **홈**까지 공유(기본 꺼짐) — 캐시뿐 아니라 설정·자격증명(gradle.properties·credentials.toml)도
@@ -34,6 +38,10 @@ export const DEFAULT_STORAGE_POLICY: StoragePolicy = {
   log_keep: 3,
   disk_warn_pct: 85,
   disk_critical_pct: 95,
+  // #1059 — 메모리 경보는 기본 끔(0). 디스크풀과 달리 메모리 사용%는 박스마다 정상범위가 달라(캐시 등) 기본 임계가 오탐이 되기 쉽다
+  //  → 운영자가 박스 상황(메모리 카드의 현재 사용%)을 보고 켠다. 관리탭이 85/95 를 제안값으로 안내(디스크와 대칭).
+  mem_warn_pct: 0,
+  mem_critical_pct: 0,
   shared_cache_enabled: true, // 순수 캐시만 이동 — 위험 없고 빌드가 빨라진다
   shared_cache_relocate_home: false, // 자격증명이 딸려가므로 관리자가 명시적으로 켜야 한다
 };
@@ -54,6 +62,8 @@ function envSeed(): StoragePolicyPatch {
   if (process.env.LOG_KEEP) p.log_keep = clampInt(process.env.LOG_KEEP, 0, 50, DEFAULT_STORAGE_POLICY.log_keep);
   if (process.env.DISK_WARN_PCT) p.disk_warn_pct = clampInt(process.env.DISK_WARN_PCT, 1, 99, DEFAULT_STORAGE_POLICY.disk_warn_pct);
   if (process.env.DISK_CRITICAL_PCT) p.disk_critical_pct = clampInt(process.env.DISK_CRITICAL_PCT, 1, 100, DEFAULT_STORAGE_POLICY.disk_critical_pct);
+  if (process.env.MEM_WARN_PCT) p.mem_warn_pct = clampInt(process.env.MEM_WARN_PCT, 0, 99, DEFAULT_STORAGE_POLICY.mem_warn_pct);
+  if (process.env.MEM_CRITICAL_PCT) p.mem_critical_pct = clampInt(process.env.MEM_CRITICAL_PCT, 0, 100, DEFAULT_STORAGE_POLICY.mem_critical_pct);
   const sc = envBool(process.env.SHARED_CACHE);
   if (sc !== undefined) p.shared_cache_enabled = sc;
   const rh = envBool(process.env.SHARED_CACHE_RELOCATE_HOME);
@@ -70,11 +80,17 @@ export function normalizeStoragePolicy(raw: unknown): StoragePolicy {
     log_keep: r.log_keep !== undefined ? clampInt(r.log_keep, 0, 50, base.log_keep) : base.log_keep,
     disk_warn_pct: r.disk_warn_pct !== undefined ? clampInt(r.disk_warn_pct, 1, 99, base.disk_warn_pct) : base.disk_warn_pct,
     disk_critical_pct: r.disk_critical_pct !== undefined ? clampInt(r.disk_critical_pct, 1, 100, base.disk_critical_pct) : base.disk_critical_pct,
+    mem_warn_pct: r.mem_warn_pct !== undefined ? clampInt(r.mem_warn_pct, 0, 99, base.mem_warn_pct) : base.mem_warn_pct,
+    mem_critical_pct: r.mem_critical_pct !== undefined ? clampInt(r.mem_critical_pct, 0, 100, base.mem_critical_pct) : base.mem_critical_pct,
     shared_cache_enabled: r.shared_cache_enabled !== undefined ? Boolean(r.shared_cache_enabled) : base.shared_cache_enabled,
     shared_cache_relocate_home: r.shared_cache_relocate_home !== undefined ? Boolean(r.shared_cache_relocate_home) : base.shared_cache_relocate_home,
   };
   // 경고 ≥ 위험이면 뒤집힌 설정 — 경고를 위험 바로 아래로 끌어내린다(경고 없이 위험만 뜨는 사고 방지).
   if (out.disk_warn_pct >= out.disk_critical_pct) out.disk_warn_pct = Math.max(1, out.disk_critical_pct - 1);
+  // #1059 메모리도 동일 불변식 — 단 0=끔이므로 **둘 다 켜졌을 때만** 강제(한쪽만 켜면 그 한 단계만 동작).
+  if (out.mem_warn_pct > 0 && out.mem_critical_pct > 0 && out.mem_warn_pct >= out.mem_critical_pct) {
+    out.mem_warn_pct = Math.max(1, out.mem_critical_pct - 1);
+  }
   return out;
 }
 
