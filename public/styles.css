@@ -2591,9 +2591,15 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .proj-file-lnm { flex: 1; min-width: 0; font-size: 13.5px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .proj-file-lnm.is-dir { font-weight: 600; }
 .proj-file-lsz { flex: none; min-width: 62px; text-align: right; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.proj-file-ldt { flex: none; min-width: 88px; text-align: right; font-size: 11.5px; color: var(--muted-2); font-variant-numeric: tabular-nums; } /* 파일 수정일 열(#877) */
-.proj-file-lacts { flex: none; display: flex; gap: 2px; opacity: 0; transition: opacity .12s ease; margin-left: 2px; }
+.proj-file-ldt { flex: none; min-width: 118px; text-align: right; font-size: 11.5px; color: var(--muted-2); font-variant-numeric: tabular-nums; } /* 파일 수정 일시 열 — 항상 풀 일시(#1118, 구 컴팩트 #877) */
+.proj-file-lacts { flex: none; display: flex; gap: 2px; opacity: 0; transition: opacity .12s ease; margin-left: 2px; width: 88px; justify-content: flex-end; } /* 고정폭(버튼 3개) — 폴더(2개)·파일(3개) 행의 날짜 열을 맞춘다(#1118) */
 .proj-file-lrow:hover .proj-file-lacts { opacity: 1; }
+/* 열 머리글(#1118) — 이름/크기/수정 일시 이름표 + 클릭 정렬. 스크롤 시 상단 고정. */
+.proj-file-lhead { position: sticky; top: 0; z-index: 2; background: var(--bg); cursor: default; padding-top: 2px; padding-bottom: 5px; border-bottom: 1px solid var(--line); }
+.proj-file-lhead:hover { background: var(--bg); }
+.file-sort-btn { border: none; background: none; padding: 0; font-family: inherit; font-size: 11.5px; font-weight: 700; color: var(--muted); cursor: pointer; }
+.file-sort-btn:hover, .file-sort-btn.on { color: var(--ink); }
+.file-sort-arrow { font-size: 8px; margin-left: 2px; vertical-align: 1px; }
 /* 단색 라인 아이콘 — currentColor 상속, 획굵기만 여기서. (.proj-file-lic / .proj-file-card-ic 가 크기·색 지정) */
 .fic { display: block; stroke-width: 1.6px; }
 .proj-file-iconbtn { width: 28px; height: 28px; border: none; background: none; border-radius: 7px; cursor: pointer; color: var(--muted); font-size: 14px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
@@ -5373,11 +5379,16 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-fb-row-nm { flex: 1; min-width: 0; font-size: 13.5px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dash-fb-row.is-dir .dash-fb-row-nm { font-weight: 600; }
 .dash-fb-row-sz { flex: none; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
-.dash-fb-row-dt { flex: none; font-size: 11.5px; color: var(--muted-2); font-variant-numeric: tabular-nums; min-width: 84px; text-align: right; } /* 파일 수정일 열(#877) */
-.dash-fb-row .dash-fb-actions { position: static; opacity: 0; margin-left: 4px; }
+.dash-fb-row-dt { flex: none; font-size: 11.5px; color: var(--muted-2); font-variant-numeric: tabular-nums; min-width: 118px; text-align: right; } /* 파일 수정 일시 열 — 항상 풀 일시(#1118, 구 컴팩트 #877) */
+.dash-fb-row .dash-fb-actions { position: static; opacity: 0; margin-left: 4px; width: 78px; justify-content: flex-end; } /* 고정폭(버튼 3개) — 폴더(2개)·파일(3개) 행의 날짜 열을 맞춘다(#1118) */
 .dash-fb-row:hover .dash-fb-actions, .dash-fb-row:focus-within .dash-fb-actions { opacity: 1; }
+/* 열 머리글(#1118) — 목록 뷰 상단, 클릭 정렬. 스크롤 시 상단 고정. */
+.dash-fb-head { position: sticky; top: 0; z-index: 2; background: var(--bg); cursor: default; border-radius: 0; border-bottom: 1px solid var(--line); padding-top: 2px; padding-bottom: 5px; }
+.dash-fb-head:hover { background: var(--bg); }
+.dash-fb-sortsel { padding: 4px 6px; } /* 아이콘 뷰 정렬 셀렉트 — dash-fb-btn 톤 그대로, select 기본 패딩만 보정 */
 /* 폴더 행 우측 셰브런(#670) — 반복되던 '폴더' 텍스트 대신 '열기' 어포던스. hover 시 나타나 살짝 밀림. */
 .dash-fb-row-go, .dash-fold-row-go { flex: none; color: var(--muted-2); font-size: 17px; line-height: 1; opacity: 0; transition: opacity .12s, transform .12s; }
+.dash-fb-row .dash-fb-row-go { min-width: 56px; text-align: right; } /* 크기 열 폭과 동일 — 폴더·파일 행의 날짜 열 정렬(#1118) */
 .dash-fb-row:hover .dash-fb-row-go, .dash-fold-row:hover .dash-fold-row-go, .dash-fold-row:focus-within .dash-fold-row-go { opacity: 1; transform: translateX(2px); }
 /* ── 팀 공유 폴더 — 파일·폴더 드래그앤드롭 업로드(#795). 프로젝트 공유 폴더(.card/.ov-box.drop-active)와 같은 점선 하이라이트. ── */
 /*  드롭존은 모달 오버레이 전체(배경 낙하 사고 방지)라, 하이라이트는 그 안의 모달 박스에 준다. */

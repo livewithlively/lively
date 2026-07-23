@@ -12026,7 +12026,7 @@ function fmtFileDate(ms) {
         return (d.getMonth() + 1) + '/' + d.getDate();
     return (d.getFullYear() % 100) + '/' + (d.getMonth() + 1) + '/' + d.getDate();
 }
-// 전체 일시(툴팁) — 컴팩트 표기 위에 커서를 올리면 정확한 날짜·시각을 본다.
+// 전체 일시 — 모달 목록(#1118)은 항상 이 풀 표기(연-월-일 시:분)로 보여 '뭐가 마지막 버전인지' 바로 식별한다. 카드 툴팁도 공용.
 function fmtFileDateFull(ms) {
     const n = Number(ms) || 0;
     if (!n)
@@ -12035,7 +12035,42 @@ function fmtFileDateFull(ms) {
     if (Number.isNaN(d.getTime()))
         return '';
     const p = (x) => String(x).padStart(2, '0');
-    return d.getFullYear() + '. ' + (d.getMonth() + 1) + '. ' + d.getDate() + '. ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+// ── 파일 목록 정렬(#1118) — 탐색기 톤: 폴더 우선 고정 + 이름/크기/수정 일시 열 정렬. 기기별 저장, 두 모달(프로젝트 '전체 보기'·홈 팀 공유 폴더) 공유. ──
+const FILE_SORT_KEY = 'livelyFileSort';
+function fileSortLoad() {
+    try {
+        const v = JSON.parse(localStorage.getItem(FILE_SORT_KEY) || '');
+        if (v && ['name', 'size', 'mtime'].includes(v.key) && (v.dir === 1 || v.dir === -1))
+            return v;
+    }
+    catch (_) { /* 기본값 */ }
+    return { key: 'name', dir: 1 };
+}
+function fileSortSave(s) { try {
+    localStorage.setItem(FILE_SORT_KEY, JSON.stringify(s));
+}
+catch (_) { /* private 모드 등 */ } }
+function fileSortApply(items, s) {
+    const byName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko', { numeric: true, sensitivity: 'base' });
+    const num = (it) => s.key === 'size' ? (it.type === 'dir' ? -1 : (Number(it.size) || 0)) : (Number(it.mtime) || 0);
+    return [...(items || [])].sort((a, b) => {
+        const d = (a.type === 'dir' ? 0 : 1) - (b.type === 'dir' ? 0 : 1);
+        if (d)
+            return d; // 폴더 우선 — 방향과 무관(탐색기 기본)
+        if (s.key === 'name')
+            return s.dir * byName(a, b);
+        const r = num(a) - num(b);
+        return r ? s.dir * r : byName(a, b); // 동률은 이름 오름차순
+    });
+}
+// 열 머리글 버튼 — 클릭 시 그 열로 정렬(첫 클릭 기본 방향: 이름 ↑ · 크기/수정 일시 ↓, 재클릭 반전).
+function fileSortBtn(label, key, sort, onSort) {
+    const on = sort.key === key;
+    const b = el('button', { class: 'file-sort-btn' + (on ? ' on' : ''), type: 'button', title: '‘' + label + '’ 기준 정렬' }, label, on ? el('span', { class: 'file-sort-arrow', text: sort.dir === 1 ? '▲' : '▼' }) : null);
+    b.onclick = (ev) => { ev.stopPropagation(); onSort(on ? { key, dir: -sort.dir } : { key, dir: key === 'name' ? 1 : -1 }); };
+    return b;
 }
 function fileExt(name) { const i = String(name || '').lastIndexOf('.'); return i >= 0 ? name.slice(i + 1).toLowerCase() : ''; }
 // 클립보드 붙여넣기 이미지 → 업로드용 File(고유 이름). File.name 은 read-only 라 새 File 로 감싼다.
@@ -12369,7 +12404,8 @@ function projFileRowEl(id, it, rel, onDir, reload, base) {
     const B = base || '/api/ui/projects/';
     const isDir = it.type === 'dir';
     const acts = el('div', { class: 'proj-file-lacts' }, fileIconBtn('✎', '이름변경', (ev) => { ev.stopPropagation(); renameEntry(id, rel, it.name, isDir, reload, B); }), isDir ? null : fileIconBtn('↓', '다운로드', (ev) => { ev.stopPropagation(); authDownload(B + id + '/file?download=1&path=' + encodeURIComponent(rel), it.name); }), fileIconBtn('✕', '삭제', (ev) => { ev.stopPropagation(); deleteEntry(id, rel, it.name, isDir, reload, B); }, true));
-    const row = el('div', { class: 'proj-file-lrow' }, el('span', { class: 'proj-file-lic' }, fileThumb(id, it, rel, B)), el('span', { class: 'proj-file-lnm' + (isDir ? ' is-dir' : ''), text: it.name, title: it.name }), el('span', { class: 'proj-file-lsz', text: isDir ? '' : fmtSize(it.size) }), el('span', { class: 'proj-file-ldt', text: fmtFileDate(it.mtime), title: fmtFileDateFull(it.mtime) }), acts);
+    const row = el('div', { class: 'proj-file-lrow' }, el('span', { class: 'proj-file-lic' }, fileThumb(id, it, rel, B)), el('span', { class: 'proj-file-lnm' + (isDir ? ' is-dir' : ''), text: it.name, title: it.name }), el('span', { class: 'proj-file-lsz', text: isDir ? '' : fmtSize(it.size) }), el('span', { class: 'proj-file-ldt', text: fmtFileDateFull(it.mtime) }), // #1118 — 항상 풀 일시(오늘/어제 축약 X)
+    acts);
     row.onclick = isDir ? () => onDir(rel) : () => openFileViewer(id, rel, it.name, reload, B);
     return row;
 }
@@ -12701,6 +12737,10 @@ function openFolderGrid(id, startPath, base) {
     const B = base || '/api/ui/projects/';
     const st = { path: startPath || '', q: '' };
     let lastFolderItems = []; // 현재 폴더(검색결과 아님) 목록 — 업로드 덮어쓰기 사전확인용(#877). 검색 중이어도 실제 업로드 대상 폴더 기준으로 판정.
+    let lastData = null; // 마지막 응답 — 정렬 변경 시 재요청 없이 재렌더(#1118)
+    let sort = fileSortLoad(); // 열 정렬 상태(#1118) — 기기별 저장, 홈 팀 공유 폴더 모달과 공유
+    const setSort = (s) => { sort = s; fileSortSave(s); if (lastData)
+        render(lastData); };
     const searchIn = el('input', { type: 'search', class: 'proj-file-search', placeholder: '파일 검색…' });
     searchIn.addEventListener('input', debounce(() => { st.q = searchIn.value.trim(); load(); }, 300));
     const up = upControl((items) => uploadHere(items, []));
@@ -12787,19 +12827,27 @@ function openFolderGrid(id, startPath, base) {
         }
         if (data.search === undefined)
             lastFolderItems = data.items || []; // 검색 응답은 무시 — 폴더 목록일 때만 갱신
+        lastData = data;
+        render(data);
+    }
+    // 정렬 변경은 재요청 없이 마지막 데이터로 즉시 재렌더(#1118).
+    function render(data) {
+        const items = fileSortApply(data.items || [], sort);
+        // 열 머리글 — 어떤 필드인지(이름/크기/수정 일시) 이름표 + 클릭 정렬. 스크롤 시 상단 고정.
+        const head = el('div', { class: 'proj-file-lrow proj-file-lhead' }, el('span', { class: 'proj-file-lic' }), el('span', { class: 'proj-file-lnm' }, fileSortBtn('이름', 'name', sort, setSort)), el('span', { class: 'proj-file-lsz' }, fileSortBtn('크기', 'size', sort, setSort)), el('span', { class: 'proj-file-ldt' }, fileSortBtn('수정 일시', 'mtime', sort, setSort)), el('span', { class: 'proj-file-lacts' }));
         if (data.search !== undefined) {
-            crumb.replaceChildren(el('span', { text: '“' + data.search + '” 검색 — ' + data.items.length + '건' }));
-            const rows = (data.items || []).map((it) => projFileRowEl(id, it, it.path, (t) => { st.q = ''; searchIn.value = ''; st.path = t; load(); }, load, B));
-            listBox.replaceChildren(...(rows.length ? rows : [el('div', { class: 'empty', text: '일치하는 파일이 없어요.' })]));
+            crumb.replaceChildren(el('span', { text: '“' + data.search + '” 검색 — ' + items.length + '건' }));
+            const rows = items.map((it) => projFileRowEl(id, it, it.path, (t) => { st.q = ''; searchIn.value = ''; st.path = t; load(); }, load, B));
+            listBox.replaceChildren(head, ...(rows.length ? rows : [el('div', { class: 'empty', text: '일치하는 파일이 없어요.' })]));
             return;
         }
-        crumb.replaceChildren(el('span', { class: 'proj-crumb-link', text: '⌂ 루트', onclick: () => { st.path = ''; load(); } }), data.path ? el('span', { text: ' / ' + data.path }) : null);
+        crumb.replaceChildren(el('span', { class: 'proj-crumb-link', text: '⌂ 루트', onclick: () => { st.path = ''; load(); } }), ...(data.path ? [el('span', { text: ' / ' + data.path })] : [])); // replaceChildren 은 null 을 'null' 텍스트로 넣는다 — 루트에서 'null' 노출 버그 수정
         const rows = [];
         if (data.path)
             rows.push(el('div', { class: 'proj-file-lrow', onclick: () => { st.path = data.parent || ''; load(); } }, el('span', { class: 'proj-file-lic', text: '↩' }), el('span', { class: 'proj-file-lnm', text: '상위 폴더' }), el('span', { class: 'proj-file-lsz' }), el('span', { class: 'proj-file-ldt' }), el('span', { class: 'proj-file-lacts' })));
-        for (const it of (data.items || []))
+        for (const it of items)
             rows.push(projFileRowEl(id, it, join(st.path, it.name), (t) => { st.path = t; load(); }, load, B));
-        listBox.replaceChildren(...(rows.length ? rows : [el('div', { class: 'empty', text: '빈 폴더입니다.' })]));
+        listBox.replaceChildren(head, ...(rows.length ? rows : [el('div', { class: 'empty', text: '빈 폴더입니다.' })]));
     }
 }
 function debounce(fn, ms) { let t; return function () { clearTimeout(t); t = setTimeout(fn, ms); }; }
@@ -13705,4 +13753,4 @@ function projectTimelineSection(id, members, base) {
     };
     pjvTaskRow.__cfDblWrapped = true;
 })();
-export { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, UP_CONFIRM, authDownload, authUpload, authUploadProgress, avatarColor, buildWysiwygToolbar, companyTimelineSection, debounce, fileIconSvg, fmtDateTime, fmtFileDate, fmtFileDateFull, fmtSize, initials, mdFromDom, mountBodyEditor, openFileViewer, openListForm, uploadBodyFile, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFieldControl, pjvFmtDate, pjvFolderIsArchive, pjvFolderIsSpace, pjvGridTemplate, pjvIsOverdue, pjvCloseProjectModalOnRoute, pjvOpenProjectModal, pjvProjectModalOpen, pjvProjectModalRefreshIfRoute, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskModalStatusField, pjvTaskRow, renderProjectV2Detail, renderProjectsV2, upControl, upDropZone, upIsAbort, upPrecheckOverwrite, upProgress, upSend, upToast, };
+export { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, UP_CONFIRM, authDownload, authUpload, authUploadProgress, avatarColor, buildWysiwygToolbar, companyTimelineSection, debounce, fileIconSvg, fileSortApply, fileSortBtn, fileSortLoad, fileSortSave, fmtDateTime, fmtFileDate, fmtFileDateFull, fmtSize, initials, mdFromDom, mountBodyEditor, openFileViewer, openListForm, uploadBodyFile, pjvAssigneeControl, pjvAssignees, pjvAssigneeWrite, pjvCheckMini, pjvDueControl, pjvFieldControl, pjvFmtDate, pjvFolderIsArchive, pjvFolderIsSpace, pjvGridTemplate, pjvIsOverdue, pjvCloseProjectModalOnRoute, pjvOpenProjectModal, pjvProjectModalOpen, pjvProjectModalRefreshIfRoute, pjvPatchTask, pjvPopover, pjvPriorityControl, pjvSaveTask, pjvStatusIconStd, pjvStatusMeta, pjvTaskModalStatusField, pjvTaskRow, renderProjectV2Detail, renderProjectsV2, upControl, upDropZone, upIsAbort, upPrecheckOverwrite, upProgress, upSend, upToast, };

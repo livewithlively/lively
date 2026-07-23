@@ -13,7 +13,7 @@ import { openSessPrompts } from './terminal.js'; // 세션 '내 질문' 팝업 �
 // 작업 로그 전체 보기 팝업 = 회사 활동 피드 재사용. authDownload·fmtSize = 공유 폴더 브라우저(#672)의 검증된 파일 프리미티브 재사용.
 //  업로드 프리미티브(upControl/upDropZone/UP_CONFIRM)도 프로젝트 공유 폴더(#781)에서 검증된 것을 그대로 재사용 — 폴더 업로드 + 드래그앤드롭(#795·#796).
 //  전송 루프·진행바·취소(upSend/upProgress/upToast)도 마찬가지 — 취소를 화면마다 따로 만들지 않는다(#797).
-import { UP_CONFIRM, authDownload, avatarColor, companyTimelineSection, fmtFileDate, fmtFileDateFull, fmtSize, openListForm, openProjectV2Form, pjvFolderIsArchive, pjvFolderIsSpace, pjvOpenProjectModal, upControl, upDropZone, upPrecheckOverwrite, upProgress, upSend, upToast, type UpItem } from './projects.js';
+import { UP_CONFIRM, authDownload, avatarColor, companyTimelineSection, fileSortApply, fileSortBtn, fileSortLoad, fileSortSave, fmtFileDateFull, fmtSize, openListForm, openProjectV2Form, pjvFolderIsArchive, pjvFolderIsSpace, pjvOpenProjectModal, upControl, upDropZone, upPrecheckOverwrite, upProgress, upSend, upToast, type UpItem } from './projects.js';
 import { openGridPicker, openTermCreateForm, startTerminalTour, termAutoApprovePref } from './terminal.js'; // 세션 생성 팝업·따라하기 투어·그리드 열기(#870)를 대시보드에서 그대로 재사용(#req). 자동 승인 기본값은 #782.
 
 // 하네스 라벨 폴백(terminal config 의 harnesses 와 동일 키) — cfg 로드 실패 시에도 읽히게.
@@ -1828,7 +1828,7 @@ function dashFolderBrowser(root, startPath) {
       el('div', { class: 'proj-file-card-ic' }, isDir ? dashFolderThumb() : dashFileThumb(it.name)),
       el('div', { class: 'proj-file-card-nm', text: it.name }),
       el('div', { class: 'proj-file-card-sz', text: isDir ? '폴더' : fmtSize(it.size) }),
-      it.mtime ? el('div', { class: 'proj-file-card-dt', text: fmtFileDate(it.mtime), title: fmtFileDateFull(it.mtime) }) : null);
+      it.mtime ? el('div', { class: 'proj-file-card-dt', text: fmtFileDateFull(it.mtime) }) : null);   // #1118 — 항상 풀 일시
     card.addEventListener('click', (e: any) => { if (e.target.closest('.dash-fb-actions')) return; openItem(it, isDir); });
     card.addEventListener('keydown', (e: any) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openItem(it, isDir); } });
     card.append(mkActions(it, isDir));
@@ -1842,7 +1842,7 @@ function dashFolderBrowser(root, startPath) {
       el('span', { class: 'dash-fb-row-nm', text: it.name }),
       // 폴더는 반복되던 '폴더' 텍스트 대신 hover 셰브런(열기), 파일은 크기(#670).
       isDir ? el('span', { class: 'dash-fb-row-go', 'aria-hidden': 'true', text: '›' }) : el('span', { class: 'dash-fb-row-sz', text: fmtSize(it.size) }),
-      el('span', { class: 'dash-fb-row-dt', text: fmtFileDate(it.mtime), title: fmtFileDateFull(it.mtime) }),
+      el('span', { class: 'dash-fb-row-dt', text: fmtFileDateFull(it.mtime) }),   // #1118 — 항상 풀 일시(오늘/어제 축약 X)
       mkActions(it, isDir));
     row.addEventListener('click', (e: any) => { if (e.target.closest('.dash-fb-actions')) return; openItem(it, isDir); });
     row.addEventListener('keydown', (e: any) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openItem(it, isDir); } });
@@ -1850,6 +1850,8 @@ function dashFolderBrowser(root, startPath) {
   };
   let viewMode = dashFoldView(); // 'icon' | 'list' — 기기별 저장(⚙ 폴더 기본 뷰와 공유).
   let curData: any = null;       // 마지막 로드 데이터(뷰 토글 시 재요청 없이 재렌더).
+  let sort = fileSortLoad();     // 열 정렬 상태(#1118) — 기기별 저장, 프로젝트 '전체 보기' 모달과 공유
+  const setSort = (s) => { sort = s; fileSortSave(s); render(null); };
   const render = (data) => {
     if (data) curData = data;
     data = curData || { items: [] };
@@ -1869,19 +1871,39 @@ function dashFolderBrowser(root, startPath) {
     };
     const viewSeg = el('div', { class: 'dash-fb-viewseg', role: 'group', 'aria-label': '보기 방식' },
       mkSeg('icon', '아이콘 보기', dashViewIconIcon()), mkSeg('list', '목록 보기', dashViewListIcon()));
-    // 도구모음 — [뷰토글] · 상위로 · (스페이서) · 새 폴더 · 업로드(파일/폴더 메뉴, #795).
+    // 아이콘 뷰 정렬 셀렉트(#1118) — 목록 뷰는 열 머리글 클릭이 담당하니 아이콘 뷰에서만 노출.
+    let sortSel: any = null;
+    if (viewMode === 'icon') {
+      sortSel = el('select', { class: 'dash-fb-btn dash-fb-sortsel', title: '정렬 기준', 'aria-label': '정렬 기준' },
+        ...[['name:1', '이름 ↑'], ['name:-1', '이름 ↓'], ['size:-1', '크기 큰순'], ['size:1', '크기 작은순'], ['mtime:-1', '최근 수정순'], ['mtime:1', '오래된 수정순']]
+          .map(([v, t]) => el('option', { value: v, text: t })));
+      sortSel.value = sort.key + ':' + sort.dir;
+      sortSel.onchange = () => { const [k, dd] = sortSel.value.split(':'); setSort({ key: k, dir: Number(dd) }); };
+    }
+    // 도구모음 — [뷰토글] · 정렬(아이콘 뷰) · 상위로 · (스페이서) · 새 폴더 · 업로드(파일/폴더 메뉴, #795).
     //  up.btn·up.fileIn·up.dirIn 은 매 렌더 같은 노드를 다시 넣는다 — append 는 복제가 아니라 '이동'이라 리스너·선택상태가 유지된다.
     const tools = el('div', { class: 'dash-fb-tools' },
       viewSeg,
+      sortSel,
       (curPath ? el('button', { class: 'dash-fb-btn', type: 'button', text: '⬆ 상위', onclick: () => { curPath = data.parent || ''; load(); } }) : null),
       el('span', { class: 'dash-fb-spacer' }),
       el('button', { class: 'dash-fb-btn', type: 'button', text: '＋ 새 폴더', onclick: newFolder }),
       up.btn, up.fileIn, up.dirIn);
-    const items = (data.items || []);
+    const items = fileSortApply(data.items || [], sort);   // #1118 — 열 정렬(폴더 우선)
     let body;
     if (prog) { body = prog.row; }   // 업로드 중 — 목록 대신 진행·취소 바(같은 노드를 다시 넣는다 = 이동이라 리스너 유지)
     else if (!items.length) { body = el('div', { class: 'proj-file-grid dash-fb-grid' }, dashEmpty('이 폴더가 비어 있어요. ‘⬆ 업로드’를 누르거나, 파일·폴더를 끌어다 놓으세요.')); }
-    else if (viewMode === 'list') { body = el('div', { class: 'dash-fb-list' }); for (const it of items) body.append(fbRow(it)); }
+    else if (viewMode === 'list') {
+      body = el('div', { class: 'dash-fb-list' });
+      // 열 머리글(#1118) — 어떤 필드인지(이름/크기/수정 일시) 이름표 + 클릭 정렬. 스크롤 시 상단 고정.
+      body.append(el('div', { class: 'dash-fb-row dash-fb-head' },
+        el('span', { class: 'dash-fb-row-ic' }),
+        el('span', { class: 'dash-fb-row-nm' }, fileSortBtn('이름', 'name', sort, setSort)),
+        el('span', { class: 'dash-fb-row-sz' }, fileSortBtn('크기', 'size', sort, setSort)),
+        el('span', { class: 'dash-fb-row-dt' }, fileSortBtn('수정 일시', 'mtime', sort, setSort)),
+        el('span', { class: 'dash-fb-actions' })));
+      for (const it of items) body.append(fbRow(it));
+    }
     else { body = el('div', { class: 'proj-file-grid dash-fb-grid' }); for (const it of items) body.append(fbCard(it)); }
     container.replaceChildren(crumb, tools, body);
   };
