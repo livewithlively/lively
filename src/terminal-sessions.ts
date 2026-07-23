@@ -103,10 +103,10 @@ export interface SessionInfo {
   // 에이전트 실행 상태(#1015 E 에서 '오프라인' 한 칸에 섞여 있던 '셸로 빠짐'을 exited 로 분리):
   //  busy=스피너 관측(작업중) · waiting=화면에 사용자 선택/승인 대기(확인 필요) — 이 둘은 **접속 무관**.
   //   탭을 닫아도 AI 는 계속 일하고, waiting 은 사용자 결정을 기다리는 알림이라 회색으로 덮으면 놓친다.
-  //  idle=살아 있고 안 바쁨 + **최근(기본 48시간 내) 작업이 있었음** = '대기 중'
-  //  offline=그 시간 넘게 아무 작업 없음(방치) 또는 원격 노드에 못 닿음(node/registry.ts 가 강제) = '오프라인'
-  //   ⚠ 판정에 attached(접속 여부)를 쓰지 않는다 — 배경 탭 하나만 열려 있어도 '접속중'이 되고 게이트웨이가
-  //    재시작하면 그 탭들이 일제히 재연결해, 며칠째 방치된 세션이 전부 '접속중'으로 되살아났다(2026-07-22 실측).
+  //  idle=탭에 열려 있고(attached>0) 안 바쁨 = '대기 중'
+  //  offline=탭에 안 열려 있음(attached==0) 또는 원격 노드에 못 닿음(node/registry.ts 가 강제) = '오프라인'
+  //   ⚠ busy·waiting 도 탭이 없으면 offline 이다(탭=온라인 규칙, 2026-07-23 상민님 확정). 탭이 붙어 있을 때만
+  //    작업중·확인필요를 색으로 구분한다.
   //  exited=하네스가 끝나 포그라운드가 셸(= 이 세션에서 AI 는 더 안 돈다. tmux 껍데기만 남음)
   agentState?: "busy" | "waiting" | "idle" | "exited" | "offline";
   // 실시간 작업 요약(#req) — Claude Code 가 pane_title 에 써두는 '지금 하는 일' 요약(상태 글리프 제거). 없으면 빈 문자열 → 프론트가 label 로 폴백.
@@ -443,9 +443,6 @@ function isAgentOffline(harness: string, paneCmd: string): boolean {
 }
 // 세션별 마지막 'busy(작업중)' 관측 시각(epoch초). 폴링 관측 기반 — '최근 작업순' 정렬용. 서버 재기동 시 리셋(도그푸드 OK).
 const lastBusyAt = new Map<string, number>();
-// 이 시간 넘게 아무 작업이 없으면 카드를 회색(오프라인)으로 — 상민님 지정 48시간(2026-07-22).
-//  '접속 여부'가 아니라 '얼마나 방치됐나'가 사람이 실제로 구분하고 싶어 하는 축이다.
-const STALE_IDLE_SEC = Number(process.env.LIVELY_SESSION_STALE_HOURS || 48) * 3600;
 // pane 화면 내용으로 '사용자 선택/승인 대기'(확인 필요) 감지. 2.5초 캐시(폴링 버스트 공유).
 //
 // ⚠ 화면 전체를 grep 하면 안 된다(#853 오탐). Claude Code 는 **과거 사용자 메시지도 '❯ ' 프리픽스로**
@@ -565,23 +562,19 @@ async function collectSessions(me: string | null): Promise<SessionInfo[]> {
   for (const r of rows) {
     let flags: Record<string, string> = {};
     try { if (r.flagsRaw) flags = JSON.parse(r.flagsRaw) as Record<string, string>; } catch { /* 구버전 세션 — 플래그 메타 없음 */ }
-    // 우선순위: 하네스 종료(셸) > 작업중 > 확인필요 > 최근 작업 있으면 대기중 > 오래 방치면 오프라인.
-    //  ⚠ 여기서 '오프라인'은 **아무도 안 보고 있다**는 뜻이다(프로세스는 대개 살아 있다). #1015 E 에서
-    //   "미접속도 살아 있으니 대기중" 으로 바꿨다가, 상민님 판단으로 되돌렸다(2026-07-22): 하다가 창을 끄면
-    //   실질적으로 비활성이고, '돌긴 도는데 아무도 안 보는 중'을 사용자에게 이해시킬 필요가 없다.
-    //   #1015 E 의 본래 가치(=셸로 빠진 것과 유휴가 한 칸에 섞임)는 exited 를 따로 뺀 것으로 이미 유지된다.
-    //  ⚠⚠ busy·waiting 은 **접속 여부와 무관하게** 그대로 둔다 — 탭을 닫아도 AI 는 백그라운드로 계속 일하고,
-    //   'waiting(확인 필요)'은 사용자 결정을 기다리는 알림이다. 이 둘을 회색으로 덮으면 일하는 세션을 꺼진 걸로
-    //   오인하고 승인 대기를 놓친다.
-    //  회색(오프라인) 판정 기준 = **마지막 작업 경과**. attached 는 쓰지 않는다 — 그건 '누가 보고 있다'가 아니라
-    //   '어떤 탭이 WS 를 붙들고 있다'라서(배경 탭·다른 기기·그리드 셀·게이트웨이 재시작 후 자동 재연결까지 포함)
-    //   사람의 직관과 어긋났다(실측: 마지막 작업이 147시간 전인 세션이 '접속중'으로 잡힘).
-    const lastSeen = Number(r.lastBusy) || Number(r.created) || 0;
-    const staleIdle = !lastSeen || (nowSec - lastSeen) >= STALE_IDLE_SEC;
+    // 온라인/오프라인 판정 = **지금 브라우저 탭에 열려 있나**(attached). 상민님 확정(2026-07-23):
+    //  "나·누군가의 PC 어딘가에 탭으로 열려 있는 세션만 온라인, 나머지는 다 오프라인(회색)".
+    //  attached 는 그 뜻을 정확히 준다 — 탭이 WS 로 tmux 클라이언트를 붙이고(terminal-pty), 탭을 닫으면
+    //  그 클라이언트가 죽는다(cleanup). 반쯤 끊긴 소켓은 #687 heartbeat 가 정리한다. 배경 탭이 살아 있으면
+    //  '누군가 어딘가에 열어 둔' 것이므로 온라인이 맞다(사용자 정의와 일치). 이전엔 마지막 작업 경과(48h)로
+    //  판정했으나, 재부팅으로 탭을 다 닫았는데도 예전 세션이 온라인으로 남던 문제로 이 규칙으로 되돌린다.
+    //  ⚠ 결과: 탭 없이 백그라운드로 도는(busy) 세션이나 승인 대기(waiting) 세션도 탭이 없으면 오프라인이다.
+    //   그 세부 상태는 탭이 붙어 있을 때만 색으로 구분한다(busy=작업중·waiting=확인필요·그 외 idle=대기중).
+    //  하네스가 끝나 셸만 남은 건(exited) 탭 유무와 무관하게 '종료됨'(AI 가 아예 없음).
     const state: SessionInfo["agentState"] = r.offline ? "exited"
+      : Number(r.attached) <= 0 ? "offline"
       : r.busy ? "busy"
       : waitingIds.has(r.name) ? "waiting"
-      : staleIdle ? "offline"
       : "idle";
     sessions.push({
       id: r.name, label: (r.labelParts.join("\t") || r.name), harness: r.harness || "shell", dir: r.dir || "",
