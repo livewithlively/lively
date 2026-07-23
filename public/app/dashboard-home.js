@@ -1302,15 +1302,19 @@ function dashSaveLogType(v) { try {
 catch { /* 무시 */ } }
 // 폴더 기본 뷰 설정 팝오버(⚙) — 브라우저 열 때 initial 뷰가 됨.
 // ── 열 폭 사용자화(#req) — .dash-zones 3열 사이 드래그 핸들 2개(fr 비율 기기별 저장). 반응형 스택 시 CSS 가 인라인 grid 무시. ──
-const DASH_COLS_KEY = 'dash_cols_v1';
-const DASH_COLS_DEFAULT = [5, 4, 3];
-function dashCols() {
+// v2 — 예전 저장값(v1)은 1열이 fr([5,4,3])이라 넓은 화면에서 4·5열로 벌어졌다. 키를 올려 그 stale 값을 버리고
+//  모두가 새 기본(1열 500px = 오버뷰 3열-최소)을 받게 한다. 다시 드래그하면 v2 로 저장된다.
+const DASH_COLS_KEY = 'dash_cols_v2';
+// 1열(내 프로젝트) 기본 폭은 CSS(.dash-zones)가 px 로 준다 — '리스트 오버뷰 카드가 3열로 정렬되는 최소 폭'(500px).
+//  예전 fr 기본([5,4,3])은 화면이 넓을수록 1열이 같이 넓어져(→ 4·5열) 사람마다 너무 넓던 문제(#req). px 고정이면 화면 폭과
+//  무관하게 항상 딱 3열. 저장값이 있으면 그 fr 을 쓰고, 없으면 CSS px 기본을 유지하다 첫 드래그 때 captureFr 로 fr 전환(아래).
+function dashColsSaved() {
     try {
         const a = JSON.parse(localStorage.getItem(DASH_COLS_KEY) || 'null');
-        return Array.isArray(a) && a.length === 3 && a.every((n) => typeof n === 'number' && n > 0.5) ? a : DASH_COLS_DEFAULT.slice();
+        return Array.isArray(a) && a.length === 3 && a.every((n) => typeof n === 'number' && n > 0.5) ? a : null;
     }
     catch {
-        return DASH_COLS_DEFAULT.slice();
+        return null;
     }
 }
 function dashSaveCols(a) { try {
@@ -1318,12 +1322,24 @@ function dashSaveCols(a) { try {
 }
 catch { /* 무시 */ } }
 function dashInitColResize(zonesEl) {
-    const cols = dashCols();
+    const saved = dashColsSaved();
+    const cols = saved ? saved.slice() : [5, 4, 3]; // saved 없으면 이 값은 CSS px 기본을 안 덮음(frMode=false) — 첫 드래그 때 captureFr 가 실제 px→fr 로 대체.
+    let frMode = !!saved; // false = CSS px 기본(1열 3열-최소 폭) 유지 상태.
     const HANDLE = 16, MIN_FR = 1.2; // 핸들 트랙 폭(px) · 열 최소 폭(fr, 붕괴 방지).
-    // #758 1열 px 하드 최소(500px) 제거 — 이게 있으면 1열이 그 밑으로 안 줄고, 그 하한을 넘겨 끌면 그리드가 부족분을
-    //   먼 3열에서 뺏어와(px 하한 vs fr 클램프 불일치) 멀쩡한 3열이 같이 줄던 버그. minmax(0,fr)로 fr 보존이 유일 기준.
+    // #758 1열 px 하드 최소(minmax 의 px 하한)는 두지 않는다 — 드래그 중 1열이 그 밑으로 안 줄어 부족분을 먼 3열에서 뺏어오던 버그
+    //   (px 하한 vs fr 클램프 불일치). 여기 px 는 '기본 초기값'일 뿐, 드래그하면 captureFr 로 전 열을 fr 로 바꿔 apply() 는 minmax(0,fr)만
+    //   쓴다 — px 하한이 드래그와 싸우지 않는다. (행 높이 리사이즈의 autoDefault/captureFr 패턴과 동형.)
     const apply = () => { zonesEl.style.gridTemplateColumns = `minmax(0,${cols[0]}fr) ${HANDLE}px minmax(0,${cols[1]}fr) ${HANDLE}px minmax(0,${cols[2]}fr)`; };
     const kids = Array.from(zonesEl.children); // 스냅샷 [col0, col1, col2]
+    // 현재(CSS px) 열 폭을 fr 비율로 캡처 → 드래그 시작점(레이아웃 안 튀게). 이후엔 순수 fr.
+    const captureFr = () => {
+        const w = kids.map((k) => Math.max(1, k.offsetWidth || 100));
+        const s = 12 / (w[0] + w[1] + w[2]);
+        cols[0] = w[0] * s;
+        cols[1] = w[1] * s;
+        cols[2] = w[2] * s;
+        frMode = true;
+    };
     const mkHandle = (idx) => {
         const h = el('div', { class: 'dash-col-handle', role: 'separator', 'aria-orientation': 'vertical', title: '열 폭 조절 (더블클릭=기본, ←/→ 미세조절)', tabindex: '0' }, el('span', { class: 'dash-col-grip' }));
         let startX = 0, w0 = 0, w1 = 0, dragging = false;
@@ -1349,13 +1365,19 @@ function dashInitColResize(zonesEl) {
         };
         const onUp = () => { if (!dragging)
             return; dragging = false; document.removeEventListener('pointermove', onMove); document.removeEventListener('pointerup', onUp); document.body.classList.remove('dash-col-resizing'); dashSaveCols(cols); };
-        h.addEventListener('pointerdown', (e) => { e.preventDefault(); dragging = true; startX = e.clientX; w0 = cols[idx]; w1 = cols[idx + 1]; document.body.classList.add('dash-col-resizing'); document.addEventListener('pointermove', onMove); document.addEventListener('pointerup', onUp); });
-        h.addEventListener('dblclick', () => { cols[0] = DASH_COLS_DEFAULT[0]; cols[1] = DASH_COLS_DEFAULT[1]; cols[2] = DASH_COLS_DEFAULT[2]; apply(); dashSaveCols(cols); });
+        h.addEventListener('pointerdown', (e) => { e.preventDefault(); if (!frMode)
+            captureFr(); dragging = true; startX = e.clientX; w0 = cols[idx]; w1 = cols[idx + 1]; document.body.classList.add('dash-col-resizing'); document.addEventListener('pointermove', onMove); document.addEventListener('pointerup', onUp); apply(); });
+        h.addEventListener('dblclick', () => { try {
+            localStorage.removeItem(DASH_COLS_KEY);
+        }
+        catch { /* */ } frMode = false; zonesEl.style.gridTemplateColumns = ''; }); // 기본(CSS px 3열-최소)으로 복귀
         h.addEventListener('keydown', (e) => {
             const step = e.key === 'ArrowLeft' ? -0.3 : e.key === 'ArrowRight' ? 0.3 : 0;
             if (!step)
                 return;
             e.preventDefault();
+            if (!frMode)
+                captureFr();
             const a = cols[idx] + step, b = cols[idx + 1] - step;
             if (a >= MIN_FR && b >= MIN_FR) {
                 cols[idx] = a;
@@ -1368,7 +1390,8 @@ function dashInitColResize(zonesEl) {
     };
     zonesEl.insertBefore(mkHandle(0), kids[1]); // col0 | H0 | col1 ...
     zonesEl.insertBefore(mkHandle(1), kids[2]); // ... col1 | H1 | col2
-    apply();
+    if (frMode)
+        apply(); // 저장값 있으면 즉시 fr; 없으면 CSS px 기본 유지
 }
 // ── 박스 행 높이 사용자화(#req R13) — 한 열(2박스) 사이 세로 드래그 핸들 1개. 열 폭 리사이즈와 동일 UI(fr 비율·기기별 저장). ──
 function dashPair(key, def) { try {
