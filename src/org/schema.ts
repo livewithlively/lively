@@ -207,6 +207,10 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS pii_scrub BOOLEAN NOT NULL DEFAULT false;
     ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS auth_kind TEXT;
     ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS auth_scope_key TEXT;
+    -- log_args(#1082): 이 서버 프록시 툴의 호출 '인자 값'을 감사로그(mcp_call_log)에 저장할지. 기본 false = 저장 안 함.
+    --  프록시 인자에는 조직 밖으로 나가는 본문(슬랙 DM·메일 본문 등)이 실려 개인정보가 무기한 남았다 → 기본 미저장으로 뒤집는다.
+    --  켤 만한 경우: 내부 전용 MCP 라 인자에 개인 통신이 없고 디버깅 가치가 큰 서버. 끈 상태에서도 호출 행(누가·언제·어떤 툴)은 남는다.
+    ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS log_args BOOLEAN NOT NULL DEFAULT false;
     -- auth_mode(#746 T2): 'bearer'(정적토큰, 기본) | 'oauth'(per-member OAuth 브로커 — 토큰 생명주기·refresh 를 게이트웨이가 관리).
     ALTER TABLE org_mcp_server ADD COLUMN IF NOT EXISTS auth_mode TEXT;
     DO $$ BEGIN
@@ -255,6 +259,7 @@ export async function initOrgSchema(): Promise<void> {
       source_code TEXT NOT NULL DEFAULT '',
       timeout_sec INT NOT NULL DEFAULT 10,
       note TEXT,
+      summary TEXT NOT NULL DEFAULT '',
       enabled BOOLEAN NOT NULL DEFAULT true,
       sort INT NOT NULL DEFAULT 0,
       version INT NOT NULL DEFAULT 1,
@@ -328,6 +333,8 @@ export async function initOrgSchema(): Promise<void> {
     ALTER TABLE org_tool ADD COLUMN IF NOT EXISTS auth_kind TEXT;
     ALTER TABLE org_tool ADD COLUMN IF NOT EXISTS auth_scope_key TEXT;
     ALTER TABLE org_tool ADD COLUMN IF NOT EXISTS pii_scrub BOOLEAN NOT NULL DEFAULT false;
+    -- log_args(#1082): http_proxy 툴도 조직 밖으로 나가는 통신이라 org_mcp_server 와 같은 규칙 — 인자 값 기본 미저장.
+    ALTER TABLE org_tool ADD COLUMN IF NOT EXISTS log_args BOOLEAN NOT NULL DEFAULT false;
   `);
 
   // ── org_harness_asset — 조직 하네스 자산(스킬·서브에이전트·슬래시커맨드, 관리자 정의). org_hook 과 같은 runtime ──
@@ -345,6 +352,7 @@ export async function initOrgSchema(): Promise<void> {
       label TEXT,
       harness TEXT NOT NULL DEFAULT 'all',
       description TEXT NOT NULL DEFAULT '',
+      summary TEXT NOT NULL DEFAULT '',
       body TEXT NOT NULL DEFAULT '',
       frontmatter JSONB NOT NULL DEFAULT '{}'::jsonb,
       target_members JSONB,
@@ -356,6 +364,8 @@ export async function initOrgSchema(): Promise<void> {
       created_by TEXT,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT);
+    ALTER TABLE org_harness_asset ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT '';
+    ALTER TABLE org_hook ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT '';
     DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_constraint
                      WHERE conrelid='org_harness_asset'::regclass AND conname='org_harness_asset_kind_chk') THEN
@@ -466,7 +476,9 @@ export async function initOrgSchema(): Promise<void> {
       ('source_get','builtin',true,true),
       ('source_save','builtin',true,true),
       ('source_link_knowledge','builtin',true,true),
-      ('source_delete','builtin',true,true)
+      ('source_delete','builtin',true,true),
+      -- #1072 whoami: 자기 신원 조회(읽기·인자 없음·부작용 0). 상시로드 툴이라 매 호출 컨펌은 순수 마찰 → 자동승인.
+      ('whoami','builtin',true,true)
     ON CONFLICT (name) DO NOTHING;
   `);
 
@@ -525,6 +537,33 @@ export async function initOrgSchema(): Promise<void> {
   // **관리탭이 단일 창구**: 고객 박스는 우리가 SSH 로 못 들어가므로 .env 전용 정책은 사실상 아무도 못 바꾼다.
   await itemsPool.query(`
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS storage_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+  `);
+
+  // ── org_runtime_config 확장: call_log_policy — MCP 호출 감사로그 보관 정책(#1082). 보존일수. ──
+  // 기존엔 mcp_call_log 가 **무기한** 쌓였다(schema 주석에 'prune 은 성장 시 추가' 로 예고만 되고 미구현).
+  //  호출 로그엔 누가 언제 무엇을 했는지가 사람 단위로 남으므로, 보관기간 없는 축적은 개인정보 최소보관 원칙에 어긋난다.
+  // 기본 '{}' = 미설정 → env 시드(MCP_CALL_LOG_RETENTION_DAYS) → 코드 기본값(90일) 순(src/org/call-log-policy.ts).
+  // **관리탭이 단일 창구**: 고객 박스는 SSH 로 못 들어가므로 .env 전용 정책은 사실상 아무도 못 바꾼다(storage_policy 와 동일 교리).
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS call_log_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+  `);
+
+  // ── org_runtime_config 확장: session_memory_policy — per-session cgroup 메모리 격리(#1059 D). 세션당 MemoryHigh/Max(MB). ──
+  // 기본 '{}' = 미설정 → env 시드(LIVELY_SESSION_MEM_HIGH_MB·_MAX_MB) → 0/0(무제한, 무회귀) 순으로 해석
+  //  (src/org/session-memory-policy.ts). claude 는 네이티브라 힙제한이 안 통해 cgroup 이 유일 수단 — box-cgspawn 이
+  //  systemd-run --scope 로 세션을 이 상한의 scope 에 가둬 폭주 세션 하나만 OOM-kill 되고 박스는 생존(#1059 어니스트 다운).
+  // **관리탭이 단일 창구**: 고객 박스는 SSH 로 못 들어가므로 .env 전용 정책은 사실상 아무도 못 바꾼다(storage_policy 와 동일 교리).
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS session_memory_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
+  `);
+
+  // ── org_runtime_config 확장: session_reclaim_policy — idle 세션 자동 회수(reaper) 정책(#1059 F). idle TTL(분). ──
+  // 기본 '{}' = 미설정 → env 시드(LIVELY_SESSION_IDLE_TTL_MIN) → 0(회수 끔, 무회귀) 순으로 해석
+  //  (src/org/session-reclaim-policy.ts). 켜면 그 시간 넘게 idle 인 세션을 reaper 가 회수하되 desired-state
+  //  (org_session_state)를 보존해 restorable 로 남긴다(#1059 E lazy resume). admission control 대신 채택된 근본대책.
+  // **관리탭이 단일 창구**: 고객 박스는 SSH 로 못 들어가므로 .env 전용 정책은 사실상 아무도 못 바꾼다(storage/session-memory 와 동일 교리).
+  await itemsPool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS session_reclaim_policy JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
 
   // ── org_runtime_config 확장: hook_relay_decisions — 러너가 PreToolUse 에서 하네스로 전파할 결정값(#892). ──
@@ -848,6 +887,45 @@ export async function initOrgSchema(): Promise<void> {
       updated_by TEXT);
   `);
 
+  // ── org_session_state — 웹터미널 세션의 desired-state DB 미러(#1059 E). ──
+  //  왜(#1059): 세션 메타(owner·label·harness·dir·flags·invites·project·mode)의 SoT 는 tmux @box_* user-option 인데
+  //   **재부팅 = tmux 서버 사망 = 그 메타 전부 증발** → 어떤 세션이 있었는지조차 알 수 없어 복원 진입점이 사라진다.
+  //   이 테이블이 그 desired-state 를 DB 에 미러해, 재부팅 후에도 세션이 '복원 가능(restorable)' 목록으로 살아남고,
+  //   사용자가 '열 때' lazy 하게 createSession(resume=<id>)로 재생성된다(부팅 시 전부 자동 spawn 은 OOM 재현이라 금물).
+  //  ⚠ **미러지 SoT 아님**(storage_policy 교리와 달리 여긴 tmux 가 SoT): tmux 가 살아있으면 tmux 가 진실,
+  //   DB 는 재부팅 백업 + F(reaper)의 desired-state 보존처. listSessions 병합이 tmux 우선(라이브)·DB 폴백(offline).
+  //  root_key/subpath = 재생성 좌표(createSession 입력). last_busy = F(reaper)의 idle 판정 기준(@box_last_busy 미러).
+  //  last_seen = 마지막으로 라이브(tmux)로 관측된 시각 — 오래 안 보이면 stale 정리 후보(도그푸드; 지금은 조회만).
+  //  managed 세션(org_managed_session)은 여기 넣지 않는다 — keep-alive 가 그 영속을 소유하므로(createSession managed 플래그가 upsert skip).
+  await itemsPool.query(`
+    CREATE TABLE IF NOT EXISTS org_session_state(
+      id TEXT PRIMARY KEY,
+      owner TEXT NOT NULL,
+      label TEXT,
+      harness TEXT NOT NULL DEFAULT 'claude',
+      dir TEXT,
+      root_key TEXT,
+      subpath TEXT,
+      flags JSONB NOT NULL DEFAULT '{}'::jsonb,
+      auto_approve BOOLEAN NOT NULL DEFAULT false,
+      invites JSONB NOT NULL DEFAULT '[]'::jsonb,
+      project_id INT,
+      project_src TEXT,
+      read_only BOOLEAN NOT NULL DEFAULT false,
+      incognito BOOLEAN NOT NULL DEFAULT false,
+      created BIGINT,
+      last_busy BIGINT,
+      last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+  `);
+  // owner 로 자주 조회(복원 목록 = 이 사용자의 tmux 에 없는 레코드) — 인덱스로 스캔 회피.
+  await itemsPool.query(`CREATE INDEX IF NOT EXISTS org_session_state_owner_idx ON org_session_state(owner);`);
+  // #1059 정밀 복원 — 이 box 세션이 **현재 도는 claude 자신의 세션 UUID**(box-id ≠ claude UUID). work-flag 훅이 세션
+  //  활동 시 (box-id, claude session_id)를 보고해 last-write-wins 로 갱신(한 box 안에서 branch·resume·/clear 로 UUID 가
+  //  바뀔 수 있으므로 최신만 유지). 복원 시 이 값으로 `claude --resume <uuid>` 정밀 이어받기. null=미상(셸·코덱스·미보고)→picker 폴백.
+  await itemsPool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS claude_session_id TEXT;`);
+
   // ── org_preview_env — 프리뷰 환경(작업자별 격리 미리보기)의 desired state (#1036). 관리탭 CRUD. ──
   //  kind=work: 작업 워크트리(project/<id>)를 게이트웨이가 /preview/<id>/ 서브패스로 정적 서빙(shared-proxy — /api 는 게이트웨이 자신).
   //   프론트가 API 를 root-relative(/api/ui)로 부르므로 페이지가 서브패스에서 로드돼도 진짜 API 로 간다 → 별도 프로세스·포트·프록시 불필요.
@@ -909,13 +987,21 @@ export async function initOrgSchema(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT);
   `);
+  // build_cmd — 미리보기를 띄우기 전에 워크트리에서 실행할 빌드(예: 프론트 번들). 사람이 터미널을 안 열어도 되게 하는 핵심.
+  await itemsPool.query(`ALTER TABLE org_stack_profile ADD COLUMN IF NOT EXISTS build_cmd TEXT;`);
   await itemsPool.query(`
-    INSERT INTO org_stack_profile(id,label,repo,static_only,start_cmd,port_env,env_json,healthcheck_path,note) VALUES
-      ('co-frontend','context-ontology 프론트 (정적·shared-proxy)','context-ontology',true,NULL,'PORT','{}'::jsonb,'/',
+    INSERT INTO org_stack_profile(id,label,repo,static_only,start_cmd,build_cmd,port_env,env_json,healthcheck_path,note) VALUES
+      ('co-frontend','context-ontology 프론트 (정적·shared-proxy)','context-ontology',true,NULL,'npm run build:web','PORT','{}'::jsonb,'/',
        '프론트(public/)만 서빙 — /api 는 게이트웨이 자신. 별도 프로세스·포트 없음(가장 싸고 안전).'),
-      ('co-fullstack','context-ontology 풀스택 (throwaway 게이트웨이)','context-ontology',false,'node dist/index.js','PORT','{"LIVELY_NO_SCHEDULER":"1"}'::jsonb,'/healthz',
-       '자체 게이트웨이 프로세스를 워크트리에서 기동 — 백엔드 변경까지 격리 확인. dist 빌드 선행, DB 등 backing 은 env 로 지정(라이브 DB 쓰기 금지).')
+      ('co-fullstack','context-ontology 풀스택 (throwaway 게이트웨이)','context-ontology',false,'node dist/index.js','npm run build','PORT','{"LIVELY_NO_SCHEDULER":"1"}'::jsonb,'/healthz',
+       '자체 게이트웨이 프로세스를 워크트리에서 기동 — 백엔드 변경까지 격리 확인. DB 등 backing 은 env 로 지정(라이브 DB 쓰기 금지).')
     ON CONFLICT (id) DO NOTHING;
+  `);
+  // 기존 프리셋 보정 — 위 INSERT 는 ON CONFLICT DO NOTHING 이라 이미 있던 행엔 build_cmd 가 안 들어간다.
+  //  운영자가 직접 채운 값은 건드리지 않는다(IS NULL 조건).
+  await itemsPool.query(`
+    UPDATE org_stack_profile SET build_cmd='npm run build:web' WHERE id='co-frontend' AND build_cmd IS NULL;
+    UPDATE org_stack_profile SET build_cmd='npm run build'     WHERE id='co-fullstack' AND build_cmd IS NULL;
   `);
 
   // ── org_node — 분산 노드 레지스트리(#869). 멤버 PC(member)/워커(worker)에 도는 노드 에이전트의 desired state. ──

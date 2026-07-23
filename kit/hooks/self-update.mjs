@@ -163,34 +163,60 @@ function verifyBundle(root) {
 }
 
 // #862 — claude mcp --scope user 가 쓰는 유저 설정 파일(mcpServers 를 담는 그 파일)을 찾는다.
-//  CLAUDE_CONFIG_DIR 가 있으면 그 밑, 없으면 $HOME/.claude.json. 존재하는 것만 반환(없으면 null=미설치/타구조 → skip).
-function claudeUserConfigPath() {
+//  CLAUDE_CONFIG_DIR 가 있으면 그 밑, 없으면 $HOME/.claude.json.
+//  ⚠ #1079 — **존재하는 것을 전부** 반환한다(종전엔 첫 번째 하나만). 훅과 클로드 코드가 **서로 다른 파일**을
+//   볼 수 있기 때문이다: 프로필 격리(#346)에서 훅 프로세스엔 CLAUDE_CONFIG_DIR 이 상속되는데 그 세션의
+//   클코 본체는 홈 설정을 쓰는(또는 그 반대) 조합이 실측으로 관찰됐다 — 하나만 고치면 "로그는 고쳤다는데
+//   화면은 그대로"가 된다. 둘 다 우리가 심은 항목이라 양쪽을 같은 값으로 맞추는 것이 안전하고 멱등하다.
+function claudeUserConfigPaths() {
   const cands = [];
   if (process.env.CLAUDE_CONFIG_DIR) cands.push(join(process.env.CLAUDE_CONFIG_DIR, ".claude.json"));
   cands.push(join(HOME, ".claude.json"));
-  for (const c of cands) { try { if (existsSync(c)) return c; } catch { /* */ } }
-  return null;
+  const seen = new Set();
+  return cands.filter((c) => {
+    if (seen.has(c)) return false;
+    seen.add(c);
+    try { return existsSync(c); } catch { return false; }
+  });
 }
 
 // #862 — Claude MCP 등록 ADDITIVE reconcile. 누락된 기대 서버만 ~/.claude.json 의 mcpServers 에 직접 추가한다.
 //  ⚠ 절대 remove/overwrite 안 함: 있으면 손대지 않고(URL·토큰 변경은 명시적 lively update 몫), 없는 것만 add →
 //   중간 실패로도 기존 등록 무손실(self-update 불변식). registerClaudeMcp(CLI)와 같은 서버 집합(lively·lively-local·org).
 function reconcileClaudeMcp(gw, token) {
-  const cj = claudeUserConfigPath();
-  if (!cj) return; // claude 유저 설정 없음 — 손대지 않음
+  const paths = claudeUserConfigPaths();
+  if (!paths.length) return;            // claude 유저 설정 없음 — 손대지 않음
+  // #1079 — 존재하는 설정 파일을 **전부** 같은 값으로 맞춘다(훅과 클코가 다른 파일을 볼 수 있으므로).
+  for (const cj of paths) {
+    try { reconcileOneClaudeConfig(cj, gw, token); }
+    catch (e) { log(`MCP reconcile 예외(${cj}): ${(e && e.message) || e}`); }
+  }
+}
+
+function reconcileOneClaudeConfig(cj, gw, token) {
   let conf;
   try { conf = JSON.parse(readFileSync(cj, "utf8")); } catch { return; } // 파손/못읽음 → 안전 skip(덮어쓰지 않음)
   if (!conf || typeof conf !== "object" || Array.isArray(conf)) return;
   const servers = (conf.mcpServers && typeof conf.mcpServers === "object" && !Array.isArray(conf.mcpServers)) ? conf.mcpServers : {};
   const shim = join(LIVELY, "bin", process.platform === "win32" ? "lively.cmd" : "lively");
+  // #1079 — lively 본체는 **로컬 stdio 프록시**(`lively mcp`)로 붙인다. http 직결이면 세션 시작 때 게이트웨이에
+  //  못 닿을 경우(사내 게이트웨이 + VPN 미접속) 하네스가 failed 로 마킹하고 그 세션 내내 복구하지 않기 때문이다.
+  //  프록시로 갈 수 있는 조건 — 둘 다 만족해야 한다(하나라도 아니면 종전 http 유지 = 무회귀):
+  //   (a) 프록시 본체가 실제로 설치돼 있다(구버전 번들엔 없다. 없는데 stdio 로 등록하면 lively 가 통째로 안 뜬다)
+  //   (b) 롤백 스위치가 꺼져 있다 — `echo http > ~/.lively/mcp-transport` 로 언제든 종전 방식으로 되돌린다
+  const proxyPath = join(LIVELY, "lib", "lively-mcp-gateway.mjs");
+  const canProxy = existsSync(proxyPath) && readL("mcp-transport") !== "http";
   const want = {};
   // ⚠ 헤더 세트는 register-clients.sh(scripts/·kit/setup/)·kit/cli/lively.mjs 와 **동일하게 유지**(lively.test.mjs ④ 가 4곳 parity 강제).
   //  값은 정적 리터럴(${LIVELY_*:-}, 비밀 아님) — 접속 시 하네스가 제 env 로 확장. Authorization(토큰)만 멤버 값이라 아래 reconcile 이 안 건드린다.
-  want["lively"] = { type: "http", url: `${gw}/mcp`, headers: {
-    Authorization: `Bearer ${token}`,
-    "x-lively-session": "${LIVELY_SESSION_ID:-}",  // #852
-    "x-lively-mode": "${LIVELY_MODE:-}",           // #1007+ 단일 실행모드 헤더(readonly|incognito) — 미래 모드도 재등록 불요
-  } };
+  //  (stdio 프록시로 가면 이 헤더들은 프록시가 상류 호출에 붙인다 — 같은 이름·같은 값, 출처만 설정→env/토큰파일.)
+  want["lively"] = canProxy
+    ? { type: "stdio", command: shim, args: ["mcp"], env: {} }
+    : { type: "http", url: `${gw}/mcp`, headers: {
+        Authorization: `Bearer ${token}`,
+        "x-lively-session": "${LIVELY_SESSION_ID:-}",  // #852
+        "x-lively-mode": "${LIVELY_MODE:-}",           // #1007+ 단일 실행모드 헤더(readonly|incognito) — 미래 모드도 재등록 불요
+      } };
   want["lively-local"] = { type: "stdio", command: shim, args: ["mcp-local"], env: {} };
   // 조직 추가 MCP 서버(mcp-servers.json) — [] 또는 {servers:[]} 양식 모두 허용. enabled·name 있는 것만, additive.
   try {
@@ -211,6 +237,14 @@ function reconcileClaudeMcp(gw, token) {
   for (const [name, entry] of Object.entries(want)) {
     const cur = servers[name];
     if (!cur) { servers[name] = entry; added++; log(`MCP additive 등록: ${name}`); continue; } // 없는 서버 = 통째로 add(종전)
+    // #1079 — additive 무손실의 **유일한 예외**: 이미 있는 lively 를 http 직결 → stdio 프록시로 옮긴다.
+    //  이건 '멤버 값 덮어쓰기'가 아니라 **우리가 심은 항목의 전송방식 교정**이다(같은 게이트웨이·같은 신원·같은 툴 이름).
+    //  토큰은 설정에서 사라지고 ~/.lively/token 으로만 남는다(시크릿 노출면 축소). 되돌리려면 롤백 스위치(위 canProxy).
+    if (name === "lively" && canProxy && cur.type !== "stdio") {
+      servers[name] = entry; added++;
+      log("MCP transport 마이그레이션: lively http 직결 → stdio 프록시(#1079, 다음 세션 적용)");
+      continue;
+    }
     // 이미 등록됨 — URL·토큰·기존 헤더는 **불변**(멤버 값 보존). 다만 **빠진 헤더 키만** 더한다(모드 헤더 등 새 배선을 재등록 없이 전파, 1세션 지연).
     //  remove/overwrite 를 안 하므로 무손실 불변식 유지. Authorization(토큰)은 절대 안 건드린다(멤버 값 — 값 변경은 명시적 lively update 몫).
     if (entry.headers && cur.headers && typeof cur.headers === "object" && !Array.isArray(cur.headers)) {
@@ -222,8 +256,22 @@ function reconcileClaudeMcp(gw, token) {
   }
   if (!added) return; // 누락 0 → 파일 미변경(정상 세션 비용 0)
   conf.mcpServers = servers;
-  try { writeFileSync(cj, JSON.stringify(conf, null, 2) + "\n"); log(`✓ claude MCP additive reconcile — ${added}건 (다음 세션 적용)`); }
-  catch (e) { log(`MCP reconcile 쓰기 실패(무시): ${(e && e.message) || e}`); }
+  try { writeFileSync(cj, JSON.stringify(conf, null, 2) + "\n"); }
+  catch (e) { log(`MCP reconcile 쓰기 실패(무시) ${cj}: ${(e && e.message) || e}`); return; }
+  // #1079 — **쓴 뒤 되읽어 확인한다.** "로그는 고쳤다는데 화면은 그대로"였던 실측 사고 때, 로그만으로는
+  //  무엇이 잘못됐는지(다른 파일을 고쳤나·되돌려졌나) 구분할 수 없었다. 여기서 확인하면 다음 진단이 한 줄로 끝난다.
+  //  실패해도 예외를 던지지 않는다(fail-open) — 다음 세션이 어차피 다시 시도한다.
+  let verified = false;
+  try {
+    const back = JSON.parse(readFileSync(cj, "utf8"));
+    verified = Object.entries(want).every(([n, e]) => {
+      const got = back && back.mcpServers && back.mcpServers[n];
+      return got && (e.type !== "stdio" || (got.type === "stdio" && JSON.stringify(got.args) === JSON.stringify(e.args)));
+    });
+  } catch { /* 되읽기 실패 = 미검증 */ }
+  log(verified
+    ? `✓ claude MCP reconcile — ${added}건 · 검증됨 ${cj} (다음 세션 적용)`
+    : `⚠ claude MCP reconcile — ${added}건 썼으나 **되읽기 검증 실패** ${cj} (다른 주체가 되돌렸거나 클코가 다른 파일을 봄 — 다음 세션 재시도)`);
 }
 
 async function main() {
@@ -238,9 +286,21 @@ async function main() {
   if (!target) return;                               // 게이트웨이가 버전을 안 줌(구버전/장애) → 무동작(fail-safe)
   const local = readL("kit-version");
   const forced = process.argv.includes("--force");
-  if (!forced && local === target) return;           // 최신
-
   const harnesses = installedHarnesses();
+
+  // 최신이어도 **MCP 등록 정합은 맞춘다**(#1079 실측 결함).
+  //  새 배선이 담긴 버전을 설치하는 실행은 언제나 **구버전 코드**가 수행한다 → 그 배선(#862 additive 등록,
+  //  #1079 transport 마이그레이션)은 그 실행에서 못 하고 '다음 실행' 몫이 된다. 그런데 다음 실행은 여기서
+  //  local===target 이라 곧장 빠져나가므로, **버전이 그대로인 한 영영 반영되지 않는다.**
+  //  실측(2026-07-22): 프록시 본체는 lib/ 에 깔렸는데 .claude.json 은 http 그대로였다.
+  //  비용은 사실상 0 — 파일을 읽어 비교하고 바꿀 게 없으면 쓰지 않는다(reconcile 의 `if (!added) return`).
+  if (!forced && local === target) {
+    if (harnesses.includes("claude")) {
+      try { reconcileClaudeMcp(gw, token); } catch (e) { log(`MCP reconcile 예외(무시): ${(e && e.message) || e}`); }
+    }
+    return;
+  }
+
   if (!harnesses.length) { log("설치된 하네스 배선을 못 찾음 — 건너뜀"); return; }
 
   // 백오프 — 같은 버전으로 최근에 실패했으면 쉬어간다(매 세션 다운로드 재시도로 게이트웨이를 두들기지 않게).

@@ -258,7 +258,7 @@ function emitHooks(targetDir, orgLabel) {
 
 const teamReadme = (publishLabel, orgLabel, orgName) => `# ${orgName} 팀 컨텍스트 (설치 묶음)
 
-${orgName} 팀 컨텍스트 **설치 묶음**입니다. 게이트웨이 토큰게이트 \`/install\` 에서 받아 \`setup\` 을 한 번 돌리면(user-level 설치),
+${orgName} 팀 컨텍스트 **설치 묶음**입니다. 설치 한 줄(\`/cli\`)을 한 번 돌리면(user-level 설치),
 이후 **어느 폴더에서든** 하네스(Claude Code · Codex · openclaw)가 조직 컨텍스트+리플렉스를 받습니다.
 (조직 맥락은 설치 시 1회 + 매 세션 게이트웨이에서 **라이브로** 받습니다 — 번들에 정적 콘텐츠를 굽지 않습니다.)
 
@@ -267,15 +267,19 @@ ${orgName} 팀 컨텍스트 **설치 묶음**입니다. 게이트웨이 토큰�
 
 ## 사용법
 
-가장 쉬운 길: 관리 페이지 \`[설치]\` 탭에서 본인 토큰을 발급하면 나오는 **한 줄 설치 명령**을 그대로 실행하세요(Mac/Windows 동일).
+설치는 **한 줄뿐**입니다(재실행 안전). 관리 페이지 \`[설치]\` 탭에도 같은 줄이 있습니다.
 
-직접 받은 이 묶음으로 설치할 때:
-1. 셋업 (한 번만, 재실행 안전 — user-level 설치):
-   - **Mac:** 이 폴더에서 \`bash setup/setup-mac.sh\`
-   - **Windows:** \`setup/setup-windows.ps1\` 우클릭 → "PowerShell에서 실행"
-2. 이후 **자기 코드 레포 등 아무 폴더**에서 \`claude\` 실행 — 회사 맥락을 아는 상태로 시작됩니다.
+- **Mac / Linux:** \`curl -fsSL <게이트웨이 주소>/cli | sh\`
+- **Windows(PowerShell):** \`irm <게이트웨이 주소>/cli.ps1 | iex\`
 
-업데이트는 설치/업데이트 명령 재실행(최신 묶음을 받음 — Mac \`[설치]\` 탭 / Windows \`setup/update-windows.ps1\`). 라이브 현황은 세션마다 자동 갱신됩니다.
+토큰은 명령줄에 넣지 않습니다 — 실행하면 화면에 안 보이는 가림 입력으로 받습니다.
+설치 후 **자기 코드 레포 등 아무 폴더**에서 \`claude\` 를 실행하면 회사 맥락을 아는 상태로 시작됩니다.
+
+업데이트는 **자동**입니다(다음 세션에 스스로 최신화). 지금 당장 맞추려면 \`lively update\`,
+상태 확인은 \`lively status\` / \`lively doctor\`. 라이브 현황은 세션마다 자동 갱신됩니다.
+
+> 이 묶음 안의 \`setup/\` 에는 제거기(\`uninstall-mac.sh\`)만 들어 있습니다 — 설치·업데이트용 셸 스크립트는
+> \`lively\` CLI 로 일원화되면서 없앴습니다(각자 따로 굳어 서로 다르게 동작하던 문제).
 
 ## 개인 레이어 (선택)
 
@@ -327,7 +331,7 @@ function emitClaudeArtifact({ target, orgLabel, copied }) {
 }
 
 // Codex(R2): user-level 전달.
-//  - kit-안 경로: adapters/codex/install.mjs (generator 의 buildStaticContext 사용) — setup-mac.sh 가 호출.
+//  - kit-안 경로: adapters/codex/install.mjs (generator 의 buildStaticContext 사용) — user-install.mjs 가 호출.
 //  - 번들-안(발행물) 경로: 발행물 동봉 setup/user-install.mjs 가 --harness codex 로 호출되면 Codex 도 설치한다
 //    (자체완결 — generator 미의존, 발행물 AGENTS.md + .claude/hooks/*.mjs 자산만으로 ~/.codex 설정).
 //    → 별도 codex 어댑터를 발행물에 vendoring 하지 않는다(generator import 깨짐 방지). user-install.mjs 단일.
@@ -425,24 +429,15 @@ function publish(orgRoot, target, harness, orgName) {
   // setup/ — 전부 '생성물' 헤더 부착 복사 (소스=KIT_ROOT, 단일 출처 유지)
   const setupDir = join(target, "setup");
   mkdirSync(setupDir, { recursive: true });
-  copyShWithHeader(kitAbs("setup/setup-mac.sh"), join(setupDir, "setup-mac.sh"), "workflow-std/setup/setup-mac.sh", orgLabel);
-  copied.push("setup/setup-mac.sh");
-  // 제거기 UX 래퍼(install 의 setup-mac.sh 와 대칭) — 발행물(번들)에선 self-contained user-uninstall.mjs 를 부른다.
+  // ⚠ 설치·업데이트 셸 스크립트는 더 이상 동봉하지 않는다(#1068). 설치·업데이트의 유일한 표면은
+  //  `curl -fsSL <게이트웨이>/cli | sh` → `lively` CLI 이고(#864), 업데이트는 자가 업데이트(#858)가 한다.
+  //  옛 setup-mac.sh/setup-windows.ps1/update-* 는 아무도 호출하지 않으면서 설치 불변식만 N벌로 늘렸고
+  //  (실제로 #1068 Node 버전 게이트를 3벌 구현해야 했다), 테스트도 없어 조용히 썩었다.
+  // 제거기 UX 래퍼는 남긴다 — 발행물(번들)에선 self-contained user-uninstall.mjs 를 부른다.
   //  (user-uninstall.mjs 자체는 emitClaudeArtifact 에서 vendoring — user-install.mjs 와 대칭.)
   copyShWithHeader(kitAbs("setup/uninstall-mac.sh"), join(setupDir, "uninstall-mac.sh"), "workflow-std/setup/uninstall-mac.sh", orgLabel);
   copied.push("setup/uninstall-mac.sh");
-  // 업데이트 UX 래퍼(install/uninstall 과 대칭, self-contained — 설치된 토큰으로 재페치·멱등 재설치).
-  copyShWithHeader(kitAbs("setup/update-mac.sh"), join(setupDir, "update-mac.sh"), "workflow-std/setup/update-mac.sh", orgLabel);
-  copied.push("setup/update-mac.sh");
-  copyPs1WithHeader(
-    kitAbs("setup/setup-windows.ps1"),
-    join(setupDir, "setup-windows.ps1"),
-    "workflow-std/setup/setup-windows.ps1",
-    orgLabel,
-  );
-  copied.push("setup/setup-windows.ps1");
-  // Windows 업데이트·제거(self-contained, ⚠ 미검증) — install/uninstall 대칭.
-  for (const ps of ["update-windows.ps1", "uninstall-windows.ps1"]) {
+  for (const ps of ["uninstall-windows.ps1"]) {
     const src = kitAbs("setup/" + ps);
     if (!existsSync(src)) continue;
     copyPs1WithHeader(src, join(setupDir, ps), "workflow-std/setup/" + ps, orgLabel);
@@ -530,11 +525,9 @@ export function buildKitBundle(target, { orgName = "조직", orgLabel = "org", h
 
   // setup/ 부트스트랩 스크립트(생성물 헤더, 소스=KIT_ROOT)
   const setupDir = join(target, "setup"); mkdirSync(setupDir, { recursive: true });
-  copyShWithHeader(kitAbs("setup/setup-mac.sh"), join(setupDir, "setup-mac.sh"), "kit/setup/setup-mac.sh", orgLabel); copied.push("setup/setup-mac.sh");
+  // ⚠ 설치·업데이트 셸 스크립트 미동봉(#1068) — 위 emitStaticContext 와 같은 이유. 설치는 `/cli` → lively CLI 뿐.
   copyShWithHeader(kitAbs("setup/uninstall-mac.sh"), join(setupDir, "uninstall-mac.sh"), "kit/setup/uninstall-mac.sh", orgLabel); copied.push("setup/uninstall-mac.sh");
-  copyShWithHeader(kitAbs("setup/update-mac.sh"), join(setupDir, "update-mac.sh"), "kit/setup/update-mac.sh", orgLabel); copied.push("setup/update-mac.sh");
-  copyPs1WithHeader(kitAbs("setup/setup-windows.ps1"), join(setupDir, "setup-windows.ps1"), "kit/setup/setup-windows.ps1", orgLabel); copied.push("setup/setup-windows.ps1");
-  for (const ps of ["update-windows.ps1", "uninstall-windows.ps1"]) {
+  for (const ps of ["uninstall-windows.ps1"]) {
     const src = kitAbs("setup/" + ps); if (!existsSync(src)) continue;
     copyPs1WithHeader(src, join(setupDir, ps), "kit/setup/" + ps, orgLabel); copied.push("setup/" + ps);
   }
@@ -566,6 +559,9 @@ export function buildKitBundle(target, { orgName = "조직", orgLabel = "org", h
   // 로컬조작 stdio MCP 서버(#899) — lively.mjs 가 import. 번들 동봉 → kit_version 지문 포함 → 자동 업뎃(#858)이 함께 갱신.
   copyMjsWithHeader(kitAbs("cli/lively-mcp-local.mjs"), join(target, "cli", "lively-mcp-local.mjs"), "kit/cli/lively-mcp-local.mjs", orgLabel);
   copied.push("cli/lively-mcp-local.mjs");
+  // 게이트웨이 stdio 프록시(#1079) — `lively mcp` 가 import. 번들 동봉(lively.mjs 옆에 둬야 import 해결).
+  copyMjsWithHeader(kitAbs("cli/lively-mcp-gateway.mjs"), join(target, "cli", "lively-mcp-gateway.mjs"), "kit/cli/lively-mcp-gateway.mjs", orgLabel);
+  copied.push("cli/lively-mcp-gateway.mjs");
   // 워크트리 셀프서비스 코어(#900) — lively.mjs·lively-mcp-local.mjs 가 import. 번들 동봉(둘 옆에 둬야 import 해결).
   copyMjsWithHeader(kitAbs("cli/repo-worktree-core.mjs"), join(target, "cli", "repo-worktree-core.mjs"), "kit/cli/repo-worktree-core.mjs", orgLabel);
   copied.push("cli/repo-worktree-core.mjs");

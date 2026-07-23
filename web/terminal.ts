@@ -2,7 +2,7 @@
 import { api, el, errorNote, pageHead, personFace, state, toast } from './core.js';
 import { openMySessionsModal } from './sessions.js';   // #905 C1 — 터미널 탭 '내 세션 기록' 버튼→모달
 import { checklist, skeleton } from './learn.js';
-import { field, overlay } from './admin.js';
+import { field, overlay, confirmDialog } from './admin.js';
 import { startTour, isTourActive } from './tour.js';
 
 
@@ -77,18 +77,36 @@ function fmtTermDate(sec) {
   return (d.getMonth() + 1) + '월 ' + d.getDate() + '일 ' + p(d.getHours()) + ':' + p(d.getMinutes());
 }
 
-// ── 세션 라이브 상태(#745) — 게이트웨이 백엔드의 agentState 를 그대로 쓴다. ──
-//  busy=작업 중(프로세스그룹 CPU 큼) · waiting=확인 필요(승인·선택 대기) · idle=대기 중(접속중·유휴) · offline(미접속 또는 셸=하네스 종료).
+// ── 세션 라이브 상태(#745, #1015 E 로 5단계) — 게이트웨이 백엔드의 agentState 를 그대로 쓴다. ──
+//  busy=작업 중(스피너 관측) · waiting=확인 필요(승인·선택 대기) · idle=대기 중(에이전트 살아있음)
+//  exited=종료됨(하네스가 끝나 셸만 남음 — 이 세션에선 AI 가 더 안 돈다) · offline=연결 끊김(원격 노드 미연결).
+//  ⚠ '대기 중'은 브라우저 접속 여부와 무관하다 — 세션은 게이트웨이/노드에서 상시 돌고, 아무도 안 보고 있다고
+//   꺼진 게 아니다. 예전엔 미접속을 전부 '오프라인'으로 칠해 살아 있는 세션이 꺼진 것처럼 보였다(#1015 E).
 //  title = Claude Code 가 pane 에 써두는 '지금 하는 일' 요약(백엔드 제공) → 카드에 그대로 노출(= '지금 무슨 작업').
-//  (초기엔 session_activity 로 파생했으나 스피너가 활동으로 안 잡혀 항상 stale → 백엔드 CPU 기반 agentState 로 대체.)
-//  waiting 을 맨 앞으로: 내 승인/선택을 기다리는 = 가장 먼저 처리할 것.
+//  waiting 을 맨 앞으로: 내 승인/선택을 기다리는 = 가장 먼저 처리할 것. 아무도 안 보는 세션(offline)·끝난 세션(exited)은 뒤로.
 const TSESS_STATUS: Record<string, { label: string; cls: string; rank: number }> = {
-  waiting: { label: '확인 필요', cls: 'waiting', rank: 0 },
-  busy:    { label: '작업 중',   cls: 'busy',    rank: 1 },
-  idle:    { label: '대기 중',   cls: 'idle',    rank: 2 },
-  offline: { label: '오프라인',  cls: 'offline', rank: 3 },
+  waiting:    { label: '확인 필요',  cls: 'waiting',    rank: 0 },
+  busy:       { label: '작업 중',    cls: 'busy',       rank: 1 },
+  idle:       { label: '대기 중',    cls: 'idle',       rank: 2 },   // 최근 48시간 내 작업이 있었던 살아있는 세션
+  restorable: { label: '복원 가능',  cls: 'restorable', rank: 3 }, // #1059 E — 재부팅·회수로 꺼졌으나 복원 가능
+  exited:     { label: '종료됨',     cls: 'exited',     rank: 4 },
+  offline:    { label: '오프라인',   cls: 'offline',    rank: 5 },   // 48시간+ 방치(탭 열림 여부 무관) 또는 노드 미연결
 };
-function sessState(s) { return TSESS_STATUS[s.agentState] ? s.agentState : 'offline'; }
+// 종료 확인 다이얼로그 — 카드/일괄 공통. 브라우저 confirm 대신 라이블리 확인 모달(#1062).
+//  '삭제'가 아니라 '끝내기'이고 대화록은 남는다는 걸 여기서 못 박는다.
+function tsessConfirmEnd(title, extraLines: string[] = []) {
+  return confirmDialog({
+    title, danger: true, confirmText: '종료', cancelText: '취소',
+    message: '실행 중인 작업이 있으면 함께 중단됩니다.',
+    lines: extraLines,
+    note: '대화록은 지워지지 않아요 — 📜 세션 기록에 남고, 거기서 “💬 이어 질문하기”로 이어받을 수 있습니다.',
+  });
+}
+// 세션이 '이제 AI 가 안 도는' 상태인가 — 일괄 종료 대상·'끝남' 뷰 판정. exited(셸만 남음)·restorable(#1059 E, tmux 죽음).
+//  ⚠ offline 은 제외한다 — 그건 '아무도 안 보는 중'이지 끝난 게 아니다(프로세스는 대개 살아 있다).
+function sessDead(s) { const k = sessState(s); return k === 'exited' || k === 'restorable'; }
+// #1059 E — restorable(desired-state 만 남고 tmux 는 죽음)을 먼저 판정, 그 외는 백엔드 agentState(없으면 exited).
+function sessState(s) { return s.restorable ? 'restorable' : (TSESS_STATUS[s.agentState] ? s.agentState : 'exited'); }
 // 상대 시각 — '방금 · 3분 전 · 2시간 전 · 5일 전'.
 function relAgo(sec) {
   const n = Number(sec) || 0; if (!n) return '';
@@ -104,20 +122,46 @@ function shortDir(d) {
   return segs.length <= 2 ? (d || '') : '…/' + segs.slice(-2).join('/');
 }
 // 상태 필터칩 겸 카운트 요약 — 색점 + 라벨 + 개수. (전체 칩은 색점 없음.)
-function tsessChip(label, count, cls, active, onClick) {
-  const c = el('button', { class: 'tsess-chip-btn' + (active ? ' active' : '') + (cls ? ' ' + cls : ''), type: 'button', onclick: onClick });
+function tsessChip(label, count, cls, active, onClick, hint?) {
+  const c = el('button', { class: 'tsess-chip-btn' + (active ? ' active' : '') + (cls ? ' ' + cls : ''), type: 'button', onclick: onClick, title: hint || label });
   if (cls) c.append(el('span', { class: 'tsess-dot tsess-dot-' + cls }));
   c.append(el('span', { class: 'tsess-chip-label', text: label }), el('span', { class: 'tsess-chip-n', text: String(count) }));
   return c;
 }
 
-// #1015 D — 필터 상태 영속(브라우저). 상태(다중 on/off)·소유. 프로젝트 필터는 세션마다 달라 안 남긴다.
-const TSESS_STATUSSET_KEY = 'lively_term_statusset_v1';
-function tsessStatusSet(): Set<string> { try { const r = localStorage.getItem(TSESS_STATUSSET_KEY); const a = r ? JSON.parse(r) : []; return new Set(Array.isArray(a) ? a.filter((x) => typeof x === 'string') : []); } catch { return new Set(); } }
-function saveTsessStatusSet(s: Set<string>) { try { localStorage.setItem(TSESS_STATUSSET_KEY, JSON.stringify([...s])); } catch { /* noop */ } }
-const TSESS_OWN_KEY = 'lively_term_own_filter_v1';
-function tsessOwnFilter(): string { try { const v = localStorage.getItem(TSESS_OWN_KEY); return ['all', 'mine', 'invited'].includes(v as string) ? (v as string) : 'all'; } catch { return 'all'; } }
-function saveTsessOwnFilter(v: string) { try { localStorage.setItem(TSESS_OWN_KEY, v); } catch { /* noop */ } }
+// ── 필터 재설계(#1062) — '상태 다중토글 + 소유 3버킷'을 목적별 뷰 한 줄로 교체 ──
+//  왜: 실측(48세션)에서 상태는 대기중 42 / 작업중 3 / 확인필요 2 / 종료됨 1 로 88%가 한 칸이라 필터가 아니라
+//  장식이었고, 소유도 39:9 쏠림이라 칩 두 개를 쓸 값이 없었다. 반대로 사람이 실제로 나누고 싶어 하는 축
+//  —'지금 나를 기다리는 것 / 오늘 만진 것 / 몇 주째 방치된 것'— 은 아예 없었다(마지막 작업 경과 분포는
+//  오늘 11 · 1~7일 19 · 8~30일 18 로 잘 갈린다). 그래서 축을 '상태'가 아니라 **목적**으로 바꾼다.
+//  프로젝트(40개에 1~3개씩 분산)는 검색형 드롭다운이 맞으므로 그대로 직교 유지.
+const DAY = 86400;
+function sessAgeDays(s) { const t = Number(s.lastActive || s.created) || 0; return t ? (Date.now() / 1000 - t) / DAY : 999; }
+// '오늘'은 24시간이 아니라 **달력상 오늘**(자정 이후) — 라벨이 '오늘'인데 어젯밤 11시 작업이 빠지거나
+//  하루 종일 경계가 밀리면 읽는 사람의 '오늘'과 어긋난다.
+function sessSinceMidnight(s) {
+  const t = Number(s.lastActive || s.created) || 0;
+  if (!t) return false;
+  const d = new Date(); d.setHours(0, 0, 0, 0);
+  return t * 1000 >= d.getTime();
+}
+const TSESS_VIEWS: Array<{ key: string; label: string; cls?: string; hint: string; match: (s) => boolean }> = [
+  { key: 'all',     label: '전체',      hint: '모든 세션', match: () => true },
+  { key: 'waiting', label: '확인 필요', cls: 'waiting', hint: '내 승인·선택을 기다리는 세션 — 가장 먼저 볼 것', match: (s) => s._st === 'waiting' },
+  { key: 'busy',    label: '작업 중',   cls: 'busy',    hint: '지금 돌고 있는 세션', match: (s) => s._st === 'busy' },
+  { key: 'today',   label: '오늘',      hint: '오늘(자정 이후) 작업한 세션', match: (s) => sessSinceMidnight(s) },
+  { key: 'week',    label: '최근 7일',  hint: '이번 주에 작업한 세션', match: (s) => sessAgeDays(s) < 7 },
+  { key: 'stale',   label: '방치 7일+', hint: '일주일 넘게 아무 작업이 없는 세션(오프라인 포함) — 정리(종료) 후보', match: (s) => sessAgeDays(s) >= 7 && !sessDead(s) },
+  { key: 'ended',   label: '끝남',      cls: 'exited',  hint: 'AI 가 더 안 도는 세션(종료됨·복원 가능) — 정리 대상', match: (s) => sessDead(s) },
+];
+const TSESS_VIEW_KEY = 'lively_term_view_v2';
+function tsessView(): string { try { const v = localStorage.getItem(TSESS_VIEW_KEY) || 'all'; return TSESS_VIEWS.some((x) => x.key === v) ? v : 'all'; } catch { return 'all'; } }
+function saveTsessView(v: string) { try { localStorage.setItem(TSESS_VIEW_KEY, v); } catch { /* noop */ } }
+const TSESS_MINE_KEY = 'lively_term_mine_only_v2';
+function tsessMineOnly(): boolean { try { return localStorage.getItem(TSESS_MINE_KEY) === '1'; } catch { return false; } }
+function saveTsessMineOnly(v: boolean) { try { localStorage.setItem(TSESS_MINE_KEY, v ? '1' : '0'); } catch { /* noop */ } }
+// (구 상태·소유 필터 영속 키 lively_term_statusset_v1 / lively_term_own_filter_v1 은 뷰 전환과 함께 폐기 —
+//  브라우저에 남은 옛 값은 더 읽지 않는다. 새 키는 _v2.)
 
 // #1015 C — 검색형 프로젝트 필터(드롭다운 버튼 + 타이핑 검색). 값: 0=전체 · -1=개인 세션만 · -2=프로젝트 세션만 · >0=projectId.
 function buildSessProjFilter(projName: Map<any, string>, projIds: any[], current: number, onPick: (v: number) => void) {
@@ -161,55 +205,75 @@ async function renderTerminal(view) {
   let data, cfg, projects;
   try {
     [data, cfg, projects] = await Promise.all([
-      api('/api/ui/terminal/sessions'),
+      // includeProjects=1 — 프로젝트 공동 세션(#452 로 로그인한 전원 공개)까지 서버가 함께 준다.
+      //  남이 만든 것도 포함: 이 탭은 '박스에서 지금 도는 AI 작업' 전체를 보는 미션컨트롤.
+      //  (기본값은 여전히 숨김이라 대시보드 '내 AI 세션' 위젯은 영향 없음.)
+      api('/api/ui/terminal/sessions?includeProjects=1'),
       api('/api/ui/terminal/config'),
-      // 프로젝트명 매핑 + '어떤 프로젝트 할당' 칩. 실패해도 세션 목록은 그대로 보인다.
-      api('/api/ui/v6/projects?mine=1').then((d) => (d && d.projects) || []).catch(() => []),
+      // 프로젝트명 매핑 + '어떤 프로젝트 할당' 칩. 남의 프로젝트 세션도 이름을 보여야 하므로 mine=1 이 아닌
+      //  전체 목록(공개범위는 서버가 시행). 실패해도 세션 목록은 그대로 보인다(칩은 '프로젝트 #id' 폴백).
+      api('/api/ui/v6/projects').then((d) => (d && d.projects) || []).catch(() => []),
     ]);
   } catch (e) { view.replaceChildren(errorNote(e, '세션을 불러오지 못했습니다')); return; }
   const sessions = (data && data.sessions) || [];
   const projName = new Map<any, string>((projects || []).map((p) => [p.id, p.name]));
-  const myProjIds = new Set<any>((projects || []).map((p) => p.id));
-  // 프로젝트 세션은 터미널 목록 API 가 숨기므로(터미널 탭 정책), 내 프로젝트별 /sessions 로 내가 소유한 세션을 합친다(대시보드와 동형).
-  //  → '어떤 프로젝트 할당인지' 를 이 탭에서 보이게(#745). 백엔드 무변경(프론트 병합) · id 중복 제거.
-  try {
-    const withSess = (projects || []).filter((p) => Number(p.my_session_count) > 0);
-    if (withSess.length) {
-      const lists = await Promise.all(withSess.map((p) =>
-        api('/api/ui/v6/projects/' + p.id + '/sessions').then((d) => (d && d.sessions) || []).catch(() => [])));
-      const seen = new Set(sessions.map((s) => s.id));
-      for (const arr of lists) for (const s of arr) if (s.owned && !seen.has(s.id)) { seen.add(s.id); sessions.push(s); }
-    }
-  } catch (_) { /* 병합 실패 → 개인 세션만 유지 */ }
+  // '내 프로젝트'(칩 강조용) = 서버 mine=1 과 같은 술어(생성자이거나 팀원)를 전체 목록에서 그대로 판정.
+  const meIdNow = (state.me && state.me.userId) || '';
+  const myProjIds = new Set<any>((projects || [])
+    .filter((p) => p.created_by === meIdNow || (p.members || []).some((m) => m.member_id === meIdNow))
+    .map((p) => p.id));
   for (const s of sessions) s._st = sessState(s); // 카드·정렬·카운트가 공유(백엔드 agentState)
   const reRender = () => renderTerminal(view);
 
   // 관리(선택삭제) 가능 = 내 소유 세션. 서버도 소유자 아니면 403 재검증.
   const ownedSessions = sessions.filter((s) => s.owned);
   const sel: any = { mode: false, ids: new Set() };
-  let statusOn = tsessStatusSet();   // #1015 D 상태 필터(다중 on/off). 비어있으면 전체.
-  let ownF = tsessOwnFilter();        // 'all' | 'mine'(내 세션) | 'invited'(초대받은)
+  let viewF = tsessView();            // 목적별 뷰(단일 선택) — TSESS_VIEWS 의 key
+  let mineOnly = tsessMineOnly();     // 남의 세션(프로젝트 공동·초대) 숨기기 토글
   let projF = 0;                      // 0=전체 · -1=개인 세션만 · -2=프로젝트 세션만 · >0=projectId
 
+  let shownNow: any[] = [];           // 지금 필터에 걸려 화면에 있는 세션 — 벌크바의 '보이는 것 전체 선택' 범위
   const headActions = el('div', { class: 'term-head-actions' });
-  const bulkBar = el('div', { class: 'bulk-bar', hidden: true });
+  const bulkBar = el('div', { class: 'dash-bulkbar dash-bulkbar--sess', hidden: true });
   const controls = el('div', { class: 'tsess-controls' });
   const listWrap = el('div', {});
 
+  // 하단 플로팅 바 — 대시보드 '내 AI 세션'과 같은 컴포넌트(.dash-bulkbar, 스타일 한 벌 공유).
+  //  표시 조건도 동일: 선택이 하나라도 있거나 '선택' 모드일 때. 다 풀면 자동으로 사라진다.
   function repaintBulk() {
-    if (!sel.mode) { bulkBar.hidden = true; bulkBar.replaceChildren(); return; }
     const n = sel.ids.size;
-    const allOn = sessions.length > 0 && sessions.every((s) => sel.ids.has(s.id));
-    const allBtn = el('button', { class: 'btn btn-ghost btn-sm', text: allOn ? '전체 해제' : '전체 선택',
-      onclick: () => { if (allOn) sel.ids.clear(); else sessions.forEach((s) => sel.ids.add(s.id)); draw(); } });
-    const openBtn = el('button', { class: 'btn btn-primary btn-sm', text: '선택 열기', disabled: n === 0, title: '고른 세션들을 한 탭 그리드로 동시에 열기',
-      onclick: () => bulkOpen() });
-    const delBtn = el('button', { class: 'btn btn-sm btn-danger', text: '선택 삭제', disabled: n === 0,
-      onclick: () => bulkDelete(delBtn) });
-    bulkBar.hidden = false;
+    bulkBar.hidden = !sel.mode && n === 0;
+    if (bulkBar.hidden) { bulkBar.replaceChildren(); return; }
+    // 선택 대상은 소유 세션만(체크박스가 소유 카드에만 붙는다). '전체 선택'은 지금 필터로 보이는 것 기준 —
+    //  목록에 남의 세션까지 들어오면서 '전부'는 종료할 수도 없는 것까지 담게 됐다.
+    //  (상태칩 '종료됨' → 전체 선택 → 선택 종료 가 정리 동선.)
+    const scope = (shownNow.length ? shownNow : sessions).filter((s) => s.owned);
+    // 빠른 선택 — 전체 / 온라인 / 오프라인. 세 묶음 다 '지금 화면에 보이는 내 세션' 안에서 고른다
+    //  (필터를 무시하고 안 보이는 것까지 담으면, 고른 개수와 화면이 어긋나 종료 대상이 불투명해진다).
+    //  온라인 = AI 가 살아 움직이는 것(작업 중·확인 필요·대기 중) · 오프라인 = 방치·종료됨·복원 가능.
+    const isOnline = (x) => { const k = sessState(x); return k === 'busy' || k === 'waiting' || k === 'idle'; };
+    const groups = [
+      { key: 'all', label: '전체', items: scope, hint: '보이는 내 세션 전부 선택' },
+      { key: 'on', label: '온라인', items: scope.filter(isOnline), hint: 'AI 가 살아 움직이는 세션(작업 중·확인 필요·대기 중)만 선택' },
+      { key: 'off', label: '오프라인', items: scope.filter((x) => !isOnline(x)), hint: '48시간+ 방치·종료됨·복원 가능 세션만 선택 — 한 번에 정리할 때' },
+    ].filter((g) => g.items.length);
+    const pickBtns = groups.map((g) => {
+      const on = g.items.every((x) => sel.ids.has(x.id));   // 이미 그 묶음이 다 선택돼 있으면 토글로 해제
+      return el('button', { class: 'dash-bulkbar-btn' + (on ? ' on' : ''), type: 'button',
+        text: (on ? '✓ ' : '') + g.label + ' (' + g.items.length + ')', title: g.hint,
+        onclick: () => { g.items.forEach((x) => on ? sel.ids.delete(x.id) : sel.ids.add(x.id)); draw(); } });
+    });
+    const openBtn: any = el('button', { class: 'dash-bulkbar-btn primary dash-bulkbar-push', type: 'button',
+      title: '고른 세션들을 한 탭 그리드로 동시에 열기', text: '그리드로 열기' + (n ? ' (' + n + ')' : ''), onclick: () => bulkOpen() });
+    openBtn.disabled = n === 0;
+    const endBtn: any = el('button', { class: 'dash-bulkbar-btn danger', type: 'button',
+      title: '고른 세션을 끝냅니다 — 대화록은 세션 기록에 남습니다', text: '종료' + (n ? ' (' + n + ')' : ''), onclick: () => bulkEnd(endBtn) });
+    endBtn.disabled = n === 0;
     bulkBar.replaceChildren(
-      el('span', { class: 'bulk-bar-count', text: n ? n + '개 선택됨' : '세션을 골라 한 탭에 열거나 삭제하세요' }),
-      el('div', { class: 'bulk-bar-actions' }, allBtn, openBtn, delBtn));
+      el('span', { class: 'dash-bulkbar-n', text: n ? (n + '개 선택') : '세션을 골라 그리드로 열거나 종료하세요' }),
+      ...pickBtns, openBtn, endBtn,
+      el('button', { class: 'dash-bulkbar-btn', type: 'button', title: sel.mode ? '선택 모드 종료' : '선택 해제', text: '완료',
+        onclick: () => { sel.mode = false; sel.ids.clear(); draw(); } }));
   }
   sel.onToggle = repaintBulk; // 카드 체크박스 토글 시 bulkBar 카운트만 갱신(전체 재렌더 없이)
 
@@ -226,47 +290,45 @@ async function renderTerminal(view) {
       : null;
     headActions.replaceChildren(...[tourBtn, logBtn, nodeBtn, newBtn].filter(Boolean));
 
-    // ── 1행: 상태 필터(다중 on/off — 색점·라벨 유지, 비어있으면 전체) + 우측 액션 ──
-    const counts: any = { waiting: 0, busy: 0, idle: 0, offline: 0 };
-    for (const s of sessions) counts[s._st]++;
-    const stChip = (key, label, cls) => tsessChip(label, counts[key], cls, statusOn.has(key), () => {
-      if (statusOn.has(key)) statusOn.delete(key); else statusOn.add(key);
-      saveTsessStatusSet(statusOn); draw();
-    });
-    const allChip = el('button', { class: 'tsess-chip-btn' + (statusOn.size === 0 ? ' active' : ''), type: 'button', title: '모든 상태',
-      onclick: () => { statusOn.clear(); saveTsessStatusSet(statusOn); draw(); } },
-      el('span', { class: 'tsess-chip-label', text: '전체' }), el('span', { class: 'tsess-chip-n', text: String(sessions.length) }));
-    const chips = el('div', { class: 'tsess-chips' }, allChip,
-      stChip('waiting', '확인 필요', 'waiting'), stChip('busy', '작업 중', 'busy'),
-      stChip('idle', '대기', 'idle'), stChip('offline', '오프라인', 'offline'));
+    // ── 1행: 목적별 뷰(단일 선택) — '무슨 상태냐'가 아니라 '지금 뭘 보려느냐'로 나눈다.
+    //  소유 축은 여기 섞지 않고 우측 '내 것만' 토글 하나로(쏠림이 심해 칩을 쓸 값이 없다).
+    //  0건인 뷰는 숨긴다 — 단, 지금 고른 뷰는 0건이어도 남겨야 해제할 수 있다.
+    const pool = mineOnly ? sessions.filter((s) => s.owned) : sessions;   // 뷰 카운트는 '내 것만' 적용 뒤 기준(보이는 수와 일치)
+    const viewCount = (v) => pool.filter(v.match).length;
+    const chips = el('div', { class: 'tsess-chips' },
+      ...TSESS_VIEWS
+        .filter((v) => v.key === 'all' || v.key === viewF || viewCount(v) > 0)
+        .map((v) => tsessChip(v.label, viewCount(v), v.cls || '', viewF === v.key, () => {
+          viewF = viewF === v.key ? 'all' : v.key; saveTsessView(viewF); draw();
+        }, v.hint)));
 
-    // 우측 — 질문검색 + 프로젝트 필터(프로젝트 세션이 있을 때만) + 선택. (원래 한 줄 레이아웃 유지)
+    // 우측 — 내 것만 토글 + 질문검색 + 프로젝트 필터(프로젝트 세션이 있을 때만) + 선택. (한 줄 레이아웃)
     const right = el('div', { class: 'tsess-controls-right' });
+    // 소유 축은 칩 여러 개가 아니라 토글 하나 — 실측 39:9 쏠림이라 '남의 것만' 보는 수요는 사실상 없고,
+    //  필요한 건 '남의 것 빼고 내 것만 보기' 하나뿐이다. 남의 세션이 있을 때만 노출.
+    const othersCount = sessions.filter((s) => !s.owned).length;
+    if (mineOnly && !othersCount) mineOnly = false;   // 남의 세션이 없으면 토글이 사라지므로 갇히지 않게 해제
+    if (othersCount) {
+      right.append(el('button', { class: 'btn btn-ghost btn-sm tsess-gbtn' + (mineOnly ? ' active' : ''),
+        title: mineOnly ? '남의 세션(프로젝트 공동·초대)도 함께 보기' : '남의 세션 ' + othersCount + '개를 숨기고 내 세션만 보기',
+        text: mineOnly ? '✓ 내 것만' : '내 것만',
+        onclick: () => { mineOnly = !mineOnly; saveTsessMineOnly(mineOnly); draw(); } }));
+    }
     right.append(el('button', { class: 'btn btn-ghost btn-sm tsess-gbtn', text: '질문 검색', title: '여러 세션에서 내가 클로드에게 보낸 질문을 통합 검색하고 어느 세션인지 찾기', onclick: () => openGlobalPromptSearch(ctx) }));
     const projIds = [...new Set(sessions.map((s) => Number(s.projectId) || 0).filter(Boolean))];
     if (projIds.length) right.append(buildSessProjFilter(projName, projIds, projF, (v) => { projF = v; draw(); }));
     const selToggle = sel.mode
       ? el('button', { class: 'btn btn-ghost btn-sm', text: '취소', onclick: () => { sel.mode = false; sel.ids.clear(); draw(); } })
-      : (sessions.length ? el('button', { class: 'btn btn-ghost btn-sm', text: '선택', title: '여러 세션을 골라 한 탭 그리드로 열거나 한 번에 삭제', onclick: () => { sel.mode = true; draw(); } }) : null);
+      : (sessions.length ? el('button', { class: 'btn btn-ghost btn-sm', text: '선택', title: '여러 세션을 골라 한 탭 그리드로 열거나 한 번에 종료', onclick: () => { sel.mode = true; draw(); } }) : null);
     if (selToggle) right.append(selToggle);
 
-    // ── 소유 필터(내 세션 / 초대받은 세션) — #1015 D. 초대받은 세션이 있을 때만 별도 줄로 노출(전부 내 것이면 무의미하므로 숨김). ──
-    const mineCount = sessions.filter((s) => s.owned).length;
-    const invitedCount = sessions.length - mineCount;
-    if (ownF !== 'all' && !invitedCount) ownF = 'all'; // 초대 세션 0개면 소유 필터 무효(줄이 숨겨지므로 갇히지 않게)
-    const rows = [el('div', { class: 'tsess-controls-top' }, chips, right)];
-    if (invitedCount) {
-      const ownChip = (key, label, cnt) => tsessChip(label, cnt, '', ownF === key, () => { ownF = ownF === key ? 'all' : key; saveTsessOwnFilter(ownF); draw(); });
-      rows.push(el('div', { class: 'tsess-filter-row' },
-        el('span', { class: 'tsess-filter-lbl', text: '소유' }),
-        ownChip('mine', '내 세션', mineCount), ownChip('invited', '초대받은 세션', invitedCount)));
-    }
-    controls.replaceChildren(...rows);
+    controls.replaceChildren(el('div', { class: 'tsess-controls-top' }, chips, right));
 
-    // 필터 적용(상태 다중 · 소유 · 프로젝트) + 정렬(작업중→대기→오프라인, 그 안에서 최근 활동순).
+    // 필터 적용(뷰 · 내 것만 · 프로젝트) + 정렬(확인필요→작업중→대기→끝남, 그 안에서 최근 작업순).
+    const activeView = TSESS_VIEWS.find((v) => v.key === viewF) || TSESS_VIEWS[0];
     const shown = sessions
-      .filter((s) => statusOn.size === 0 || statusOn.has(s._st))
-      .filter((s) => ownF === 'all' || (ownF === 'mine' && s.owned) || (ownF === 'invited' && !s.owned))
+      .filter((s) => !mineOnly || s.owned)
+      .filter(activeView.match)
       .filter((s) => {
         if (projF === 0) return true;
         const pid = Number(s.projectId) || 0;
@@ -276,10 +338,12 @@ async function renderTerminal(view) {
       })
       .sort((a, b) => TSESS_STATUS[a._st].rank - TSESS_STATUS[b._st].rank
         || (Number(b.lastActive || b.created) || 0) - (Number(a.lastActive || a.created) || 0));
+    shownNow = shown;   // 벌크바 '보이는 것 전체 선택' 범위(필터 결과와 항상 일치)
 
     if (!sessions.length) { listWrap.replaceChildren(el('div', { class: 'empty', text: '아직 세션이 없습니다. "+ 새 세션"으로 만드세요.' })); repaintBulk(); return; }
     if (!shown.length) { listWrap.replaceChildren(el('div', { class: 'empty', text: '이 필터에 해당하는 세션이 없습니다.' })); repaintBulk(); return; }
-    const list = el('div', { class: 'tsess-list' });
+    const list = el('div', { class: 'tsess-list' + (sel.mode ? ' selectmode' : '') + (sel.ids.size ? ' has-sel' : '') });
+    sel.listEl = list;   // 카드 체크박스가 has-sel 을 갱신할 대상
     for (const s of shown) list.append(tsessCard(s, ctx));
     listWrap.replaceChildren(list);
     repaintBulk();
@@ -296,23 +360,32 @@ async function renderTerminal(view) {
     openGridPicker(items);
   }
 
-  async function bulkDelete(btn) {
-    const items: any[] = [...sel.ids].map((id) => sessions.find((s) => s.id === id)).filter(Boolean);
-    if (!items.length) return;
-    if (!confirm(items.length + '개 세션을 삭제할까요?\n\n실행 중인 작업도 함께 종료됩니다(되돌릴 수 없음).')) return;
+  // 일괄 종료 — 고른 세션을 끝낸다(대화록은 중앙 세션 기록에 남아 '이어 질문하기'로 되살릴 수 있다).
+  async function bulkEnd(btn) {
+    const picked: any[] = [...sel.ids].map((id) => sessions.find((s) => s.id === id)).filter(Boolean);
+    // 종료는 소유자만(서버가 403). 목록에 남의 세션(초대·프로젝트 공동)이 섞이므로 미리 걸러 안내한다
+    //  — 안 그러면 '전체 선택 → 종료'가 대량 403 실패 토스트로 끝난다.
+    const items = picked.filter((s) => s.owned);
+    const skipped = picked.length - items.length;
+    if (!items.length) { toast(picked.length ? '내가 만든 세션만 종료할 수 있습니다' : '', true); return; }
+    const live = items.filter((s) => !sessDead(s)).length;   // 아직 도는 세션은 따로 경고(진행 중 작업이 끊긴다)
+    const lines: string[] = [];
+    if (live) lines.push('⚠ 이 중 ' + live + '개는 아직 도는 세션입니다.');
+    if (skipped) lines.push('남의 세션 ' + skipped + '개는 제외됩니다(소유자만 종료 가능).');
+    if (!await tsessConfirmEnd(items.length + '개 세션을 종료할까요?', lines)) return;
     btn.disabled = true;
-    // 병렬 삭제 — 일부 실패해도 나머지는 진행(성공/실패 건수 보고). 서버가 비소유분은 403. 노드 세션은 ?node= 로 위임(#869).
+    // 병렬 종료 — 일부 실패해도 나머지는 진행(성공/실패 건수 보고). 노드 세션은 ?node= 로 위임(#869).
     const results = await Promise.allSettled(
       items.map((s) => api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' })));
     const ok = results.filter((r) => r.status === 'fulfilled').length;
     const fail = results.length - ok;
-    toast(fail ? (ok + '개 삭제 · ' + fail + '개 실패') : (ok + '개 세션을 삭제했습니다'), fail > 0);
+    toast(fail ? (ok + '개 종료 · ' + fail + '개 실패') : (ok + '개 세션을 종료했습니다 — 대화록은 📜 세션 기록에 남아 있어요'), fail > 0);
     sel.mode = false; sel.ids.clear();
     reRender();
   }
 
-  const head = pageHead('AI 세션', 'AI 세션이 지금 무슨 작업을 하는지 · 어떤 프로젝트 할당인지 · 어떤 게 오프라인인지 한눈에.', [headActions], '세션');
-  view.replaceChildren(...[loginBannerEl(cfg, view), head, bulkBar, controls, listWrap].filter(Boolean));
+  const head = pageHead('AI 세션', 'AI 세션이 지금 무슨 작업을 하는지 · 어떤 프로젝트 할당인지 · 어떤 게 끝났는지 한눈에.', [headActions], '세션');
+  view.replaceChildren(...[loginBannerEl(cfg, view), head, controls, listWrap, bulkBar].filter(Boolean));  // 바는 맨 아래 — sticky bottom 플로팅(대시보드와 동일)
   draw();
 }
 
@@ -344,7 +417,8 @@ function tsessCard(s, ctx) {
   if (s.autoApprove) title.append(el('span', { class: 'tsess-badge danger', text: '자동승인' }));
   // 분산 노드(#869) — 원격 노드에서 도는 세션 표시. 노드가 끊겨 있으면(꺼짐·절전) 위험 배지로 구분.
   if (s.node) title.append(el('span', { class: 'tsess-badge' + (s.node.online ? '' : ' danger'), title: '실행 노드: ' + (s.node.name || s.node.id) + (s.node.online ? '' : ' — 연결 끊김(꺼짐/절전)'), text: '🖥 ' + (s.node.name || s.node.id) + (s.node.online ? '' : ' · 끊김') }));
-  if (!s.owned) title.append(el('span', { class: 'tsess-badge', title: '소유: ' + owner, text: '👤 ' + owner + ' · 초대받음' }));
+  // 남의 세션이면 소유자 배지 — 보이는 사유를 정확히: 개인 세션은 '초대받음', 프로젝트 세션은 '공동'(초대 무관 전원 공개 #452).
+  if (!s.owned) title.append(el('span', { class: 'tsess-badge', title: '소유: ' + owner, text: '👤 ' + owner + (pid ? ' · 공동' : ' · 초대받음') }));
   else if ((s.invites || []).length) title.append(el('span', { class: 'tsess-badge', title: s.invites.map((id) => memberName(cfg, id)).join(', '), text: '초대 ' + s.invites.length + '명' }));
 
   // ── 2행(있으면): '지금 하는 일' 실시간 요약(백엔드 title = Claude Code pane 요약) — 라벨과 다를 때만 ──
@@ -362,27 +436,59 @@ function tsessCard(s, ctx) {
 
   const info = el('div', { class: 'tsess-info' }, ...[title, workTitle, meta].filter(Boolean));
 
-  // 선택 모드 — 모든 카드에 체크박스(카드 전체 토글). 골라서 한 탭 그리드로 '열기' 또는 '삭제'(삭제는 서버가 소유자만 허용).
-  if (sel && sel.mode) {
-    const cb = el('input', { type: 'checkbox' });
-    cb.checked = sel.ids.has(s.id);
-    cb.addEventListener('change', () => { if (cb.checked) sel.ids.add(s.id); else sel.ids.delete(s.id); if (sel.onToggle) sel.onToggle(); });
-    return el('label', { class: 'tsess-card tsess-' + st.cls + ' tsess-card--sel' }, el('span', { class: 'tsess-check' }, cb), info);
+  // 액션 — 열기/복원(항상) + 내 질문(노드 세션도 트랜스크립트 릴레이 #875 ③) + 소유자면 수정·종료/제거.
+  const acts = el('div', { class: 'tsess-acts' });
+  if (s.restorable) {
+    // #1059 E — 복원: 재부팅·회수로 꺼진 세션을 저장된 desired-state 로 재생성(claude 는 대화 이어받기). 새 세션을 연다.
+    const rb = el('button', { class: 'tsess-open', text: '복원', title: '재부팅·회수로 꺼진 세션을 다시 엽니다 (같은 폴더·설정 + 대화 이어받기)' }) as HTMLButtonElement;
+    rb.onclick = async () => {
+      rb.disabled = true; rb.textContent = '복원 중…';
+      try {
+        const r: any = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/restore', { method: 'POST', body: '{}' });
+        // 라이브 경합(already) — 그새 다시 떠 있으면 새로 만들지 않고 그 세션을 그대로 연다(오success 방지).
+        if (r && r.already) { window.open(termUrl(s.id, s.label, s.node && s.node.id), '_blank'); toast('세션이 이미 살아있어 그대로 엽니다'); reRender(); return; }
+        const ns = r && r.session;
+        if (ns && ns.id) window.open(termUrl(ns.id, ns.label || s.label), '_blank');
+        toast('복원했어요 — 새 터미널에서 이어볼 대화를 고르세요(claude 이어보기 목록).'); reRender();
+      } catch (e: any) { toast('복원 실패 — ' + (e && e.message || e), true); rb.disabled = false; rb.textContent = '복원'; }
+    };
+    acts.append(rb);
+  } else {
+    acts.append(el('button', { class: 'tsess-open', text: '열기', onclick: () => window.open(termUrl(s.id, s.label, s.node && s.node.id), '_blank') }));
   }
-
-  // 액션 — 열기(항상) + 내 질문(노드 세션도 트랜스크립트 릴레이 #875 ③) + 소유자면 수정·삭제.
-  const acts = el('div', { class: 'tsess-acts' },
-    el('button', { class: 'tsess-open', text: '열기', onclick: () => window.open(termUrl(s.id, s.label, s.node && s.node.id), '_blank') }));
-  acts.append(el('button', { class: 'tsess-icon tsess-q', title: '이 세션에서 클로드에게 보낸 내 질문만 순서대로 모아보기', text: '내 질문', onclick: () => openSessPrompts(s) }));
+  acts.append(el('button', { class: 'tsess-icon tsess-q', title: '이 세션에서 AI 에게 보낸 질문 전부(누가 보냈든) 순서대로 모아보기', text: '질문', onclick: () => openSessPrompts(s) }));
   if (s.owned) {
-    acts.append(el('button', { class: 'tsess-icon', title: '이름·초대 수정', text: '수정', onclick: () => openTermEdit(s, cfg, view) }));
-    acts.append(el('button', { class: 'tsess-icon danger', title: '세션 종료(삭제)', text: '삭제', onclick: async () => {
-      if (!confirm('세션 "' + s.label + '" 을(를) 종료할까요? 실행 중인 작업도 함께 종료됩니다.')) return;
-      try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' }); toast('세션 종료됨'); reRender(); }
+    if (!s.restorable) acts.append(el('button', { class: 'tsess-icon', title: '이름·초대 수정', text: '수정', onclick: () => openTermEdit(s, cfg, view) }));
+    // restorable 은 '복원 목록에서 제거'(desired-state 삭제), 라이브는 '종료'(tmux 종료, 대화록은 세션 기록에 남아 이어받기 가능). 둘 다 DELETE(백엔드가 gone→forget 처리).
+    acts.append(el('button', { class: 'tsess-icon danger', title: s.restorable ? '복원 목록에서 제거' : '이 세션을 끝낸다(대화록은 세션 기록에 남아 나중에 이어받을 수 있음)', text: s.restorable ? '제거' : '종료', onclick: async () => {
+      const ok = s.restorable
+        ? await confirmDialog({ title: '‘' + (s.label || '이름 없음') + '’ 을(를) 복원 목록에서 제거할까요?', danger: true,
+            confirmText: '제거', cancelText: '취소', message: '더는 이 세션을 복원할 수 없어요.' })
+        : await tsessConfirmEnd('‘' + (s.label || '이름 없음') + '’ 세션을 종료할까요?');
+      if (!ok) return;
+      try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' }); toast(s.restorable ? '복원 목록에서 제거됨' : '세션을 종료했습니다 — 대화록은 📜 세션 기록에 남아 있어요'); reRender(); }
       catch (e) { toast('실패 — ' + e.message, true); }
     } }));
   }
-  return el('div', { class: 'tsess-card tsess-' + st.cls + (s.attached ? ' attached' : '') }, info, acts);
+  const box = el('div', { class: 'tsess-card tsess-' + st.cls + (s.attached ? ' attached' : '') + (sel && sel.ids.has(s.id) ? ' sel' : '') }, info, acts);
+  // 선택 체크박스 — 대시보드 '내 AI 세션'과 같은 방식(#853 패턴, CSS도 한 벌을 공유):
+  //  평소엔 폭 0 으로 숨어 있다가 카드에 호버(또는 포커스·선택됨·선택모드)하면 왼쪽에서 밀려 나온다.
+  //  체크 하나만 해도 하단 플로팅 바가 뜨고, 다 풀면 사라진다 — '선택' 모드로 먼저 들어갈 필요가 없다.
+  //  소유 세션만 — 종료는 소유자만 되므로(서버 403) 남의 카드엔 체크박스를 안 단다.
+  if (sel && s.owned) {
+    const cb: any = el('input', { type: 'checkbox', class: 'tsess-check dash-sess-check', 'aria-label': (s.label || '세션') + ' 선택' });
+    cb.checked = sel.ids.has(s.id);
+    cb.addEventListener('change', () => {
+      if (cb.checked) sel.ids.add(s.id); else sel.ids.delete(s.id);
+      box.classList.toggle('sel', cb.checked);
+      if (sel.listEl) sel.listEl.classList.toggle('has-sel', sel.ids.size > 0);
+      if (sel.onToggle) sel.onToggle();
+    });
+    const wrap = el('label', { class: 'tsess-checkwrap', title: '선택 — 여러 개 골라 한 번에 종료하거나 그리드로 열기' }, cb);
+    wrap.addEventListener('click', (ev) => ev.stopPropagation());
+    box.prepend(wrap);
+  }
+  return box;
 }
 
 // 카드 '내 질문' 팝아웃(#745) — 이 세션에서 클로드에게 보낸 사용자 질문(프롬프트)만 시간순으로 모아 본다(위=최근).
@@ -460,11 +566,39 @@ function qHighlight(text, terms) {
   if (pos < text.length) wrap.append(document.createTextNode(text.slice(pos)));
   return wrap;
 }
+// 질문 작성자 배지 — 백엔드가 준 author(멤버 슬러그, 공유 트리 출처는 빈 값)를 사람 이름으로.
+//  이름은 /terminal/config 의 members 로 한 번만 조회해 캐시(팝업이 대시보드에서도 열리므로 cfg 를 못 받는다).
+let _qMembers: any[] | null = null;
+async function qMemberName(slug) {
+  if (!slug) return '';
+  if (_qMembers === null) { try { const c = await api('/api/ui/terminal/config'); _qMembers = (c && c.members) || []; } catch { _qMembers = []; } }
+  const m = (_qMembers || []).find((x) => x.id === slug || String(x.id || '').toLowerCase() === slug);
+  return (m && (m.name || m.id)) || slug;
+}
+// 작성자가 둘 이상일 때만 배지를 단다 — 혼자 쓴 세션에 배지를 붙이면 소음이다.
+function qAuthorBadge(author, names) {
+  if (!author || !names) return null;
+  return el('span', { class: 'tsess-qwho', title: '이 질문을 보낸 사람', text: names.get(author) || author });
+}
+// 긴 질문 접기 — 항목을 리스트에 붙인 '뒤에' 호출한다(DOM 에 있어야 높이를 잰다). 8줄을 넘으면 접고
+//  '더 보기' 토글을 단다. 넘지 않으면 clamp 를 떼고 아무것도 안 붙인다(짧은 질문은 그대로).
+function qClampText(item, textEl) {
+  textEl.classList.add('clamped');
+  if (textEl.scrollHeight - textEl.clientHeight < 8) { textEl.classList.remove('clamped'); return; }
+  const btn = el('button', { class: 'tsess-qmore', type: 'button', text: '더 보기' });
+  btn.onclick = (ev) => {
+    ev.stopPropagation();  // 통합검색 결과는 항목 자체가 '세션 열기' 버튼 — 펼치기가 새 탭을 열면 안 된다
+    btn.textContent = textEl.classList.toggle('clamped') ? '더 보기' : '접기';
+  };
+  item.append(btn);
+}
 // 한 세션 '내 질문' 팝아웃 — 상단 검색으로 그 세션 질문을 즉시 필터(클라이언트). 최신이 위, #N=시간순 번호.
 //  대시보드 '내 AI 세션' 카드의 ⋮ 메뉴도 이걸 그대로 재사용한다(#853) — 질문 보기 UI 를 두 벌 만들지 않는다.
 export async function openSessPrompts(s) {
   const body = el('div', { class: 'tsess-qbody' }, el('div', { class: 'caption', text: '질문을 불러오는 중…' }));
-  overlay('💬 내 질문 · ' + (s.label || '(이름 없음)'), body);
+  // '내 질문'이 아니라 '이 세션의 질문' — 백엔드가 이 세션 폴더의 모든 대화(공유 + 멤버별 프로필)를 합쳐
+  //  누가 던졌든 사람 질문 전부를 준다. 여러 사람이 물었으면 항목에 작성자 배지가 붙는다.
+  overlay('💬 이 세션의 질문 · ' + (s.label || '(이름 없음)'), body);
   try {
     const d = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/prompts' + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''));
     const prompts = (d && d.prompts) || [];
@@ -472,6 +606,12 @@ export async function openSessPrompts(s) {
     if (!prompts.length) {
       body.replaceChildren(el('div', { class: 'empty', text: (d && d.found) ? '이 세션에서 보낸 질문이 아직 없어요.' : '이 세션의 대화 기록을 찾지 못했어요.' }));
       return;
+    }
+    // 작성자가 2명 이상이면 이름 맵을 만들어 배지를 단다(1명이면 null → 배지 없음).
+    const authors = [...new Set(prompts.map((p) => p.author).filter(Boolean))];
+    let authorNames: Map<string, string> | null = null;
+    if (authors.length > 1) {
+      authorNames = new Map(await Promise.all(authors.map(async (a2) => [a2, await qMemberName(a2)] as [string, string])));
     }
     const search = el('input', { class: 'tsess-qsearch', type: 'search', placeholder: '이 세션의 질문 검색…' });
     const cap = el('div', { class: 'caption tsess-qcap' });
@@ -483,9 +623,13 @@ export async function openSessPrompts(s) {
       if (!terms.length) { // 검색 없음 → 최신순 전체
         cap.textContent = total + '개 질문 · 최근 순' + (total > prompts.length ? ' (최근 ' + prompts.length + '개)' : '');
         prompts.slice().reverse().forEach((p) => {
-          list.append(el('div', { class: 'tsess-qitem' },
-            el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + (prompts.indexOf(p) + 1) }), el('span', { class: 'tsess-qwhen', text: qWhen(p.ts) })),
-            qHighlight(p.text, null)));
+          const txt = qHighlight(p.text, null);
+          const item = el('div', { class: 'tsess-qitem' },
+            el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + (prompts.indexOf(p) + 1) }),
+              ...[qAuthorBadge(p.author, authorNames)].filter(Boolean), el('span', { class: 'tsess-qwhen', text: qWhen(p.ts) })),
+            txt);
+          list.append(item);
+          qClampText(item, txt);
         });
         return;
       }
@@ -499,9 +643,13 @@ export async function openSessPrompts(s) {
       cap.textContent = pool.length ? (pool.length + ' / ' + total + '개 일치 · 관련도순' + (isPartial ? ' (일부 단어)' : '')) : '';
       if (!pool.length) { list.append(el('div', { class: 'empty', text: '일치하는 질문이 없어요.' })); return; }
       pool.forEach(({ p, chrono }) => {
-        list.append(el('div', { class: 'tsess-qitem' },
-          el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + chrono }), el('span', { class: 'tsess-qwhen', text: qWhen(p.ts) })),
-          qHighlight(p.text, terms)));
+        const txt = qHighlight(p.text, terms);
+        const item = el('div', { class: 'tsess-qitem' },
+          el('div', { class: 'tsess-qmeta' }, el('span', { class: 'tsess-qnum', text: '#' + chrono }),
+            ...[qAuthorBadge(p.author, authorNames)].filter(Boolean), el('span', { class: 'tsess-qwhen', text: qWhen(p.ts) })),
+          txt);
+        list.append(item);
+        qClampText(item, txt);
       });
     };
     search.addEventListener('input', draw);
@@ -540,9 +688,11 @@ function openGlobalPromptSearch(ctx) {
           pid ? el('span', { class: 'tsess-proj' + (myProjIds.has(pid) ? ' mine' : ''), title: (projName.get(pid) || ('#' + pid)), text: '🗂 ' + (projName.get(pid) || ('프로젝트 #' + pid)) }) : null,
           el('span', { text: qWhen(r.ts) }),
           el('span', { class: 'tsess-gopen', text: '열기 ↗' }));
-        const item = el('div', { class: 'tsess-qitem tsess-gitem', role: 'button', tabindex: '0', title: '이 세션 열기' }, meta, qHighlight(r.text, ql));
+        const txt = qHighlight(r.text, ql);
+        const item = el('div', { class: 'tsess-qitem tsess-gitem', role: 'button', tabindex: '0', title: '이 세션 열기' }, meta, txt);
         item.onclick = () => window.open('/ui/terminal.html?session=' + encodeURIComponent(r.sessionId) + '&label=' + encodeURIComponent(r.label || ''), '_blank');
         results.append(item);
+        qClampText(item, txt);
       });
     } catch (e) {
       if (input.value.trim() !== q) return;

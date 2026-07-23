@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// lively 공통 **제거** 오케스트레이터 — install(setup-mac.sh + adapters/*/install.mjs)의 역연산.
+// lively 공통 **제거** 오케스트레이터 — install(user-install.mjs + adapters/*/install.mjs)의 역연산.
 // uninstall = 머신에서 lively 셋업을 **영구 제거**(오프보딩/정리/하드리셋).
 //   ≠ incognito(LIVELY_OFF=1): incognito 는 설치는 그대로 두고 훅만 일시 no-op(클린룸). 언제든 되돌아옴.
 //   uninstall 은 훅 항목/센티넬 블록/~/.lively 자산을 실제로 떼어낸다(기본은 되돌릴 수 있게 휴지통 이동).
@@ -27,7 +27,7 @@ import { uninstallClaude } from "../adapters/claude/uninstall.mjs";
 import { uninstallCodex } from "../adapters/codex/uninstall.mjs";
 
 // kit 안 오케스트레이터 — 하네스별 어댑터(adapters/claude·codex/uninstall.mjs)를 import 해 dispatch 한다.
-//  (install 의 setup-mac.sh → adapters/*/install.mjs 와 같은 미러 관계.)
+//  (install 의 user-install.mjs → adapters/*/install.mjs 와 같은 미러 관계.)
 //  발행물(번들)에는 adapters/ 가 없으므로, 멤버용 self-contained 제거기는 별도(setup/user-uninstall.mjs)다.
 //  단일 출처 동기화: 어댑터·user-uninstall.mjs 와 동일 알고리즘을 유지할 것.
 

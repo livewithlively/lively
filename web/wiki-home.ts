@@ -5,7 +5,7 @@
 //  시각 재료는 전부 UI 가 생성한다(오로라·워터마크·아이콘) — 사진 업로드 없음.
 import { api, el, errorNote, relTime, state } from './core.js';
 import { skeletonRows } from './learn.js';
-import { hasMemoryScope, isCategoryHomeDoc, knFetchCategoryRows } from './wiki-data.js';
+import { hasMemoryScope, isCategoryHomeDoc, knFetchCategoryIndex } from './wiki-data.js';
 import { wkAurora, wkDayLabel, wkDocCard, wkEmpty, wkReadVisits, wkSection } from './wiki-ui.js';
 import { openWikiPeek, openWikiSearch, setWikiPeekList } from './wiki-doc.js';
 
@@ -269,7 +269,7 @@ async function renderHomeSurface(box: HTMLElement, ctx: any) {
     }
   }
   for (const c of allCats) {
-    knFetchCategoryRows(c.id).then((rows) => {
+    knFetchCategoryIndex(c.id).then((rows) => {
       const homeDoc = rows.find((r) => isCategoryHomeDoc(r.name));
       const latest = rows.filter((r) => !isCategoryHomeDoc(r.name))
         .reduce((m, r) => (String(r.updated_at || '') > m ? String(r.updated_at) : m), '');

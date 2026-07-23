@@ -141,7 +141,8 @@ function knTreeIcon(kind) {
 //  폴더 생성/이동/삭제 등 트리 변형 후엔 knInvalidateTreeCaches() 로 무효화(다음 펼침에서 재적재).
 // ════════════════════════════════════════════
 let knAuthoredTreePromise: Promise<any[]> | null = null;
-const knCatRowsCache = new Map<string, Promise<any[]>>();
+const knCatRowsCache = new Map<string, Promise<any[]>>();    // 전량(본문 포함)
+const knCatIndexCache = new Map<string, Promise<any[]>>();   // 경량(본문 제외, #1091)
 
 // 저작 지식 트리 스켈레톤(name/title/parent_name/sort/lifecycle/is_folder) — 폴더 자식 해소용. 실패 시 캐시 비움(재시도 가능).
 function knFetchAuthoredTree(): Promise<any[]> {
@@ -153,23 +154,55 @@ function knFetchAuthoredTree(): Promise<any[]> {
   return knAuthoredTreePromise;
 }
 
+// 미분류 센티널(#1091) — 카테고리 축의 '카테고리 없음' 값. 사이드바 catVal · URL(?category=none) ·
+//  REST(/api/ui/knowledge?category=none)가 전부 이 한 문자열을 쓴다(분기 없이 카테고리와 같은 경로를 탄다).
+const KN_UNCAT = 'none';
+
 // 카테고리 지식 rows(폴더 포함, recalled 전용 — 지식탭과 동일 축) — 사이드바 펼침·이동 피커 공용.
 //  #783 lifecycle=active,pending — 검토 대기 지식도 트리엔 띄우되 '검토' 배지로 구분한다(wiki-side knNavDocNode).
 //   · 안 띄우면: 폴더 하위 pending 은 보이고(트리 API 는 lifecycle 필터가 없다) 최상위 pending 은 안 보이는 불일치가 난다.
 //   · 띄워도 격리는 안 깨진다 — 검색·grep·벡터·similar·recall·항상주입은 여전히 active 전용(거긴 lifecycle 미전달).
-function knFetchCategoryRows(catId): Promise<any[]> {
-  const key = String(catId);
-  let p = knCatRowsCache.get(key);
+//  #1091 전량 적재 — 구 limit=200 하드캡은 200건이 넘는 카테고리(컨텍스트 저장소 278건)의 오래된 지식을
+//   사이드바 트리에서도 사이드바 검색에서도 통째로 지웠다("검색해도 안 나온다"의 실제 원인). has_more 를 따라 이어 받는다.
+//  #1091 본문 유무로 두 갈래 — 같은 rows 지만 발췌(deck)를 그리는 화면만 body_md 를 받는다.
+//   knFetchCategoryIndex(경량, light=1) : 사이드바 트리·검색·홈 카드 보강·폴더 피커 — 본문을 한 글자도 안 쓴다.
+//   knFetchCategoryRows(전량)           : 카테고리 페이지 — 행마다 본문 발췌를 그린다.
+//   구조상 위키 홈이 전 카테고리의 본문(수백 건 × 평균 8KB ≈ 4MB)을 첫 화면에 내려받고 있었다.
+const KN_ROWS_PAGE = 500;    // 서버 상한(#709 limit ≤ 500)
+const KN_ROWS_MAX = 5000;    // 폭주 방어 — 이 위로는 사이드바가 다룰 규모가 아니다
+function knFetchCategoryIndex(catId): Promise<any[]> { return knCachedCatRows(knCatIndexCache, String(catId), true); }
+function knFetchCategoryRows(catId): Promise<any[]> { return knCachedCatRows(knCatRowsCache, String(catId), false); }
+function knCachedCatRows(cache: Map<string, Promise<any[]>>, key: string, light: boolean): Promise<any[]> {
+  let p = cache.get(key);
   if (!p) {
-    p = api('/api/ui/knowledge?' + new URLSearchParams({ category: key, limit: '200', orderBy: 'updated_at', injection: 'recalled', lifecycle: 'active,pending' }))
-      .then((r) => (r && r.entries) || [])
-      .catch((e) => { knCatRowsCache.delete(key); throw e; });
-    knCatRowsCache.set(key, p);
+    p = knLoadCategoryRows(key, light).catch((e) => { cache.delete(key); throw e; });
+    cache.set(key, p);
   }
   return p;
 }
+async function knLoadCategoryRows(key: string, light: boolean): Promise<any[]> {
+  const out: any[] = [];
+  while (out.length < KN_ROWS_MAX) {
+    const p = new URLSearchParams({ category: key, limit: String(KN_ROWS_PAGE), offset: String(out.length),
+      orderBy: 'updated_at', injection: 'recalled', lifecycle: 'active,pending' });
+    if (light) p.set('light', '1');
+    const r = await api('/api/ui/knowledge?' + p);
+    const entries = (r && r.entries) || [];
+    out.push(...entries);
+    if (!entries.length || !(r && r.has_more)) break;
+  }
+  return out;
+}
 
-function knInvalidateTreeCaches() { knAuthoredTreePromise = null; knCatRowsCache.clear(); }
+// 미분류 지식 수 — 사이드바가 '미분류' 노드를 띄울지(0이면 안 띄운다) 정하는 값. 세는 조건은
+//  knLoadCategoryRows 와 같게 맞춘다 — 배지 숫자와 펼쳤을 때 나오는 행 수가 어긋나지 않도록.
+async function knFetchUncategorizedCount(): Promise<number> {
+  const r = await api('/api/ui/knowledge?' + new URLSearchParams({
+    category: KN_UNCAT, limit: '1', light: '1', injection: 'recalled', lifecycle: 'active,pending' }));
+  return Number(r && r.total) || 0;
+}
+
+function knInvalidateTreeCaches() { knAuthoredTreePromise = null; knCatRowsCache.clear(); knCatIndexCache.clear(); }
 
 // 폴더 우선 → sort → 제목순 — 사이드바 트리·폴더 드릴다운 공용 정렬(§3).
 function knFolderFirstSort(a, b) {
@@ -772,7 +805,7 @@ function openKnowledgeMoveTo(k, reload) {
   (async () => {
     let folders: any[] = [];
     if (catId != null) {
-      try { folders = (await knFetchCategoryRows(catId)).filter((r) => r.is_folder && r.name !== k.name); }
+      try { folders = (await knFetchCategoryIndex(catId)).filter((r) => r.is_folder && r.name !== k.name); }
       catch (_) { /* 폴더 목록 실패 — (최상위)만 제공 */ }
     }
     folders.sort(knFolderFirstSort);
@@ -959,6 +992,7 @@ function knPageIcon(e) {
 
 export {
   HOME_EMPTY,
+  KN_UNCAT,
   SPACE_LABEL,
   KN_INJECTION_LABEL,
   KN_INJECTION_HINT,
@@ -984,7 +1018,9 @@ export {
   knDelete,
   knEffectiveVisible,
   knFetchAuthoredTree,
+  knFetchCategoryIndex,
   knFetchCategoryRows,
+  knFetchUncategorizedCount,
   knFolderChildrenBlock,
   knFolderFirstSort,
   knInjectChip,

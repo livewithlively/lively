@@ -4,7 +4,7 @@
 //  콘텐츠와의 접점은 3개뿐: ① [data-cat-val] 클릭 위임(onSelect) ② 문서 열기(onOpen) ③ rebuild().
 import { api, el, state, sv } from './core.js';
 import { reviewNavBadge } from './review.js';   // #837 검토 대기 배지(대기 0이면 안 그려진다)
-import { isCategoryHomeDoc, knFetchAuthoredTree, knFetchCategoryRows, knFolderFirstSort, knPageIcon, SPACE_LABEL } from './wiki-data.js';
+import { isCategoryHomeDoc, KN_UNCAT, knFetchAuthoredTree, knFetchCategoryIndex, knFetchUncategorizedCount, knFolderFirstSort, knPageIcon, SPACE_LABEL } from './wiki-data.js';
 
 // WIKI 인덱스(#336) — '전체' 하위 '인덱스(핀)' 필터의 가짜 카테고리 센티넬. data-cat-val 위임에 실린다.
 const KN_INDEXED = '__indexed__';
@@ -72,7 +72,7 @@ function knNavCatNode(c, on, onOpen, isMine?: boolean, favOpts?: any) {
   const isFav = favCatIds.has(String(c.id));
   const row = el('a', { class: 'pjv-side-navitem kn-side-item kn-side-item-sub kn-nav-cat' + (on ? ' active' : '') + (isFav ? ' is-fav' : ''), href: '#',
     'data-cat-val': String(c.id), role: 'button', tabindex: '0',
-    ...(isMine ? { title: '내 소유 카테고리 — ' + (c.name || c.key) } : {}) },
+    ...(c.hint ? { title: c.hint } : isMine ? { title: '내 소유 카테고리 — ' + (c.name || c.key) } : {}) },
     tw,
     isMine ? knTeamChip() : null,
     el('span', { class: 'pjv-side-navlabel', text: c.name || c.key }),
@@ -90,7 +90,7 @@ function knNavCatNode(c, on, onOpen, isMine?: boolean, favOpts?: any) {
     if (!opened || loaded) return;
     kids.replaceChildren(el('div', { class: 'kn-nav-note', text: '불러오는 중…' }));
     try {
-      const rows = await knFetchCategoryRows(c.id);
+      const rows = await knFetchCategoryIndex(c.id);
       const names = new Set(rows.map((r) => r.name));
       const tops = rows.filter((r) => !(r.parent_name && names.has(r.parent_name)))
         .filter((r) => !isCategoryHomeDoc(r.name))   // 대문 문서 숨김
@@ -187,6 +187,16 @@ function buildKnowledgeNav(nav, bySpace, selected, myIds: Set<string>, opts) {
     for (const c of cats) grp.append(knNavCatNode(c, String(selected) === String(c.id), onOpen, false, favOpts));
     nav.append(grp);
   }
+  // 미분류(#1091) — 어느 카테고리에도 안 걸린 지식. 트리 맨 아래(프로젝트 탭 '기타 (미분류)'와 같은 자리).
+  //  카테고리 노드와 **같은 모양**(.kn-nav-catwrap + [data-cat-val])이라 사이드바 검색(knSideFilterNav)이
+  //  분기 없이 그대로 훑는다 — 예전엔 이 노드가 없어서 미분류 지식이 검색에 영영 안 잡혔다.
+  //  0건이면 안 그린다(= '분류가 다 됐다'는 뜻이라 빈 줄을 낭비하지 않는다).
+  const uncat = Number(opts && opts.uncatCount) || 0;
+  if (uncat > 0) {
+    nav.append(knNavCatNode({ id: KN_UNCAT, name: '미분류', knowledge_count: uncat,
+      hint: '카테고리가 없는 지식 — 소환(recall)에 안 잡히니 문서를 열어 분류해 주세요' },
+    String(selected) === KN_UNCAT, onOpen));
+  }
 }
 
 // ── 사이드바 분류 검색 — 카테고리 이름 즉시 필터 + 문서 제목 매칭 결과 행(카테고리당 캡 8). ──
@@ -216,7 +226,7 @@ async function knSideFilterNav(nav: any, q: string) {
     const catId = (w.querySelector('[data-cat-val]') as any)?.dataset?.catVal;
     if (!catId) return;
     let rows: any[] = [];
-    try { rows = await knFetchCategoryRows(catId); } catch { return; }
+    try { rows = await knFetchCategoryIndex(catId); } catch { return; }
     if (seq !== knSideFilterSeq) return;   // 그 사이 검색어가 바뀜 — 이 결과는 폐기
     const hits = rows.filter((r) => !r.is_folder && !isCategoryHomeDoc(r.name)
       && (String(r.title || '').toLowerCase().includes(query) || String(r.name || '').toLowerCase().includes(query)));
@@ -315,10 +325,12 @@ function knApplySideW(shell: HTMLElement) {
 
 // ════════════════════════════════════════════
 // createWikiSide — 사이드바 팩토리(콘텐츠 접점 3개를 opts 로 주입).
-//  opts: { selected: () => string      현재 선택 catVal(''=전체, KN_INDEXED, 카테고리 id)
-//          onSelect: (catVal) => void  카테고리/전체/인덱스 클릭
+//  opts: { selected: () => string      현재 선택 catVal(''=전체, KN_INDEXED, KN_UNCAT, 카테고리 id)
+//          onSelect: (catVal) => void  카테고리/전체/인덱스/미분류 클릭
 //          onOpen: (name) => void      트리·검색결과의 문서 클릭(미전달 = #/k 이동)
 //          tools?: boolean             도구 섹션(그래프·자료·휴지통 — 목록 셸 전용)
+//          uncategorized?: boolean     '미분류' 노드(#1091) — 카테고리 축으로 지식을 훑는 셸(WIKI 목록·문서)만 켠다.
+//                                       wiki2(담당 카테고리별 검증 보드)는 미분류를 다루는 화면이 아니라 끈다.
 //          collapsible?: boolean       접기 버튼(문서 셸 전용 — localStorage 'kn-doc-side-collapsed') }
 //  반환: { side, reopenBtn, ready, rebuild, findCat, bySpace }
 // ════════════════════════════════════════════
@@ -329,6 +341,7 @@ function createWikiSide(opts: any) {
   const sideState = { q: '' };
   const myIds = myCatIdSet();
   let bySpace: any = { business: [], product: [], system: [] };
+  let uncatCount = 0;   // 미분류 지식 수(#1091) — 0 이면 '미분류' 노드를 안 그린다
   const favCatIds = new Set<string>();
 
   const toggleCatFav = async (id: string, next: boolean) => {
@@ -349,7 +362,7 @@ function createWikiSide(opts: any) {
 
   function buildSide() {
     buildKnowledgeNav(nav, bySpace, opts.selected ? opts.selected() : '', myIds,
-      { indexed: true, onOpen: opts.onOpen, favCatIds, onToggleFav: toggleCatFav });
+      { indexed: true, onOpen: opts.onOpen, favCatIds, onToggleFav: toggleCatFav, uncatCount });
     side.replaceChildren(...[
       el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '지식 카테고리' }), collapseBtn),
       knMakeSideSearch(nav, sideState), nav,
@@ -368,6 +381,9 @@ function createWikiSide(opts: any) {
 
   const ready = (async () => {
     try { bySpace = await fetchAllSpaceCats(); } catch (_) { /* graceful: 사이드바 생략(콘텐츠는 계속) */ }
+    if (opts.uncategorized) {
+      try { uncatCount = await knFetchUncategorizedCount(); } catch (_) { /* graceful: '미분류' 노드만 생략 */ }
+    }
     try { const fd = await api('/api/ui/v6/favorites'); for (const id of ((fd && fd.categories) || [])) favCatIds.add(String(id)); } catch (_) { /* 비로그인/실패 */ }
     buildSide();
   })();

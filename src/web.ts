@@ -24,6 +24,7 @@ import {
 import { verifyLogin, verifyOwnPassword, setMemberPassword } from "./auth/local-accounts.js";
 import { getOrgProfile } from "./org/store.js";
 import { startDeviceAuth, pollDeviceAuth } from "./org/device-auth.js";
+import { bootstrapBody } from "./bootstrap-asset.js";
 
 // req.auth.extra 에 심긴 LivelyUser 를 꺼낸다(세션·bearer 공통 — 둘 다 이 형태로 채운다).
 const userOf = (req: express.Request): LivelyUser =>
@@ -190,10 +191,12 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     if (SAFE_URL.test(guess)) return guess;
     throw new HttpError(500, "게이트웨이 주소를 확정할 수 없습니다 — 관리탭에서 게이트웨이 주소를 설정하세요.");
   };
+  // 본문 변환(**선행 BOM 제거** + 게이트웨이 주소 굽기)은 bootstrap-asset.ts 가 소유한다 — 사연·불변식은 거기 주석.
+  //  요지: 이 둘은 파일이 아니라 **문자열**로 인터프리터에 들어가서(`| iex` · `| sh`) BOM 이 파서까지 간다(#1087).
   const serveBootstrap = (file: string): express.RequestHandler => wrap(async (req, res) => {
     const src = readFileSync(path.join(kitCliDir, file), "utf8");
     res.setHeader("Cache-Control", "no-store"); // 게이트웨이 주소가 바뀔 수 있다 — 부트스트랩은 항상 최신
-    res.type("text/plain; charset=utf-8").send(src.replaceAll("__LIVELY_GATEWAY__", await selfUrl(req)));
+    res.type("text/plain; charset=utf-8").send(bootstrapBody(src, await selfUrl(req)));
   });
   app.get("/cli", serveBootstrap("bootstrap.sh"));
   app.get("/cli.ps1", serveBootstrap("bootstrap.ps1"));

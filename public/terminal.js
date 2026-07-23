@@ -498,24 +498,42 @@ function setupClipboard() {
     if (k === 'v') {
       // 붙여넣기는 네이티브 paste 이벤트(setupPaste)가 처리한다 — 이미지 업로드+경로, 여러 줄은 bracketed paste.
       //  Mac Cmd+V 는 그대로 흘려 paste 이벤트가 뜨게 한다(xterm 은 Cmd 키로 셸에 아무 것도 안 보냄).
-      //  Ctrl+V 는 xterm 이 \x16(SYN)을 셸로 보내는 걸 막아야 해서 가로채고, 보안 컨텍스트면 클립보드 API 로 직접 처리.
+      //  Ctrl+V 는 xterm 이 \x16(SYN)을 셸로 보내는 걸 막아야 해서 가로채되(return false), 붙여넣기 자체는
+      //  역시 네이티브 paste 에 맡기고 클립보드 API 는 '폴백'으로만 쓴다 — 이유는 schedulePasteFallback 주석(#1084).
       if (e.metaKey && !e.ctrlKey) return true;
-      if (navigator.clipboard && navigator.clipboard.read && window.isSecureContext) {
-        navigator.clipboard.read().then(async (its) => {
-          for (const it of its) {
-            const t = (it.types || []).find((x) => x.startsWith('image/'));
-            if (t) await dropFileToAgent(new File([await it.getType(t)], 'pasted.' + (t.split('/')[1] || 'png'), { type: t }));
-            else if ((it.types || []).includes('text/plain')) pasteText(await (await it.getType('text/plain')).text());
-          }
-        }).catch(() => navigator.clipboard.readText().then((t) => pasteText(t)).catch(() => { /* noop */ }));
-      }
+      schedulePasteFallback();
       return false;
     }
     return true;
   });
 }
+// [#1084] Ctrl+V 붙여넣기 경로는 '둘'이 될 수 있다 → 그래서 폴백은 '예약'하고 네이티브가 뜨면 취소한다.
+//  ① 네이티브 paste 이벤트(setupPaste) ② 클립보드 API 직접 읽기. keydown 에서 return false 는 xterm '자체' 처리만
+//  막을 뿐 브라우저 기본동작은 안 막으므로(#633 실측 — preventDefault 를 해야 막힌다), Ctrl+V 가 OS 붙여넣기
+//  단축키인 윈도우에선 ①이 그대로 뜬다 → 예전처럼 ②를 keydown 에서 즉시 실행하면 **두 번 붙여넣어졌다**(사용자 신고).
+//  맥은 Ctrl+V 가 OS 붙여넣기가 아니라 ①이 안 떠서 증상이 없었고(그래서 맥 Ctrl+V 는 ②가 유일한 경로 — 없애면 회귀).
+//  → ②를 한 틱 미뤄 예약하고, ①이 실제로 처리하면 취소한다. 어느 플랫폼이든 정확히 한 번. (지연은 ①이 keydown
+//   기본동작으로 즉시 디스패치되므로 사실상 체감 0 — 폴백이 실제로 도는 맥 Ctrl+V 에서만 60ms 늦다.)
+let pasteFallbackTimer = null;
+function cancelPasteFallback() { if (pasteFallbackTimer) { clearTimeout(pasteFallbackTimer); pasteFallbackTimer = null; } }
+function schedulePasteFallback() {
+  cancelPasteFallback();
+  if (!(navigator.clipboard && navigator.clipboard.read && window.isSecureContext)) return; // 비보안 origin — 네이티브 paste 만이 경로
+  pasteFallbackTimer = setTimeout(() => {
+    pasteFallbackTimer = null;
+    navigator.clipboard.read().then(async (its) => {
+      let textDone = false; // 클립보드가 항목을 여러 개로 쪼개 줘도 텍스트는 한 번만 붙인다(중복 방지)
+      for (const it of its) {
+        const t = (it.types || []).find((x) => x.startsWith('image/'));
+        if (t) await dropFileToAgent(new File([await it.getType(t)], 'pasted.' + (t.split('/')[1] || 'png'), { type: t }));
+        else if (!textDone && (it.types || []).includes('text/plain')) { textDone = true; pasteText(await (await it.getType('text/plain')).text()); }
+      }
+    }).catch(() => navigator.clipboard.readText().then((t) => pasteText(t)).catch(() => { /* noop */ }));
+  }, 60);
+}
 // 붙여넣기(이미지·텍스트)를 네이티브 paste 이벤트로 처리 — 보안 컨텍스트 불문·권한 프롬프트 없이 동작(GitHub·Slack 방식).
 //  capture 단계에서 xterm 텍스트영역보다 먼저 잡아 기본 붙여넣기를 막고 우리가 처리(중복 방지). 이미지=업로드+경로, 텍스트=bracketed.
+//  실제로 처리한 분기에서만 폴백을 취소한다 — 내용이 비어 우리가 아무것도 못 한 paste 는 폴백이 이어받게(#1084).
 function setupPaste() {
   const dz = panesEl || document.body;
   dz.addEventListener('paste', (e) => {
@@ -525,11 +543,11 @@ function setupPaste() {
     if (img) {
       e.preventDefault(); e.stopImmediatePropagation();
       const blob = img.getAsFile();
-      if (blob) dropFileToAgent(blob);
+      if (blob) { cancelPasteFallback(); dropFileToAgent(blob); }
       return;
     }
     const text = dt.getData('text/plain') || dt.getData('text') || '';
-    if (text) { e.preventDefault(); e.stopImmediatePropagation(); pasteText(text); }
+    if (text) { e.preventDefault(); e.stopImmediatePropagation(); cancelPasteFallback(); pasteText(text); }
   }, true);
 }
 
@@ -898,8 +916,7 @@ function openHelp() {
         kb(['Shift 드래그'], 'Claude 안에서는 Shift 누른 채 드래그로 선택'),
         kb(['Claude 복사'], 'Claude 가 복사한 내용은 맥북 클립보드에도 자동으로 올라가요')),
       sec('도구 (오른쪽 위 버튼)',
-        // #1018 '내 질문' 상단 버튼 임시 숨김에 맞춰 사용법 안내에서도 숨김 — 부활 시 아래 줄 주석 해제.
-        // tool('내 질문', '이 세션에서 보낸 질문 목록 — 클릭하면 그 위치로 이동'),
+        tool('질문', '이 세션에서 AI 에게 보낸 질문 전부 — 클릭하면 그 위치로 이동'),
         tool('파일 탐색기', '파일 업로드·다운로드 (끌어다 놓아도 됨)'),
         tool('화면 복구', '화면이 깨지거나 스크롤이 안 될 때 재연결로 복구'),
         tool('환경 설정', '글꼴·크기·테마·커서·스크롤 속도')),
@@ -1030,8 +1047,8 @@ window.livelyJumpToPrompt = function (text) { try { jumpToPrompt(String(text || 
 //  복사는 항목의 '복사' 버튼(명시적 클릭)으로만 — 위 클립보드 불변식과 일관.
 function openMyPrompts() {
   const head = el('div', { class: 'help-head' },
-    el('h3', { text: '💬 내 질문' }),
-    el('p', { class: 'help-intro', text: '이 세션에서 내가 보낸 질문을 최신 순으로. 클릭하면 그 질문 위치로 이동해요.' }));
+    el('h3', { text: '💬 이 세션의 질문' }),
+    el('p', { class: 'help-intro', text: '이 세션에서 AI 에게 보낸 질문을 누가 보냈든 최신 순으로. 클릭하면 그 질문 위치로 이동해요.' }));
   const body = el('div', { class: 'help-body' }, el('div', { class: 'q-empty', text: '불러오는 중…' }));
   const pop = el('div', { class: 'pop pop-help' },
     el('button', { class: 'help-x', title: '닫기', text: '✕', onclick: () => back.remove() }),
@@ -1057,6 +1074,7 @@ function openMyPrompts() {
       body.replaceChildren(el('div', { class: 'q-empty', text: (d && d.found) ? '이 세션에서 보낸 질문이 아직 없어요.' : '이 세션의 대화 기록을 찾지 못했어요.' }));
       return;
     }
+    const multiAuthor = new Set(prompts.map((p) => p.author).filter(Boolean)).size > 1;
     const search = el('input', { class: 'q-search', type: 'search', placeholder: '이 세션의 질문 검색…' });
     const cap = el('div', { class: 'q-cap' });
     const list = el('div', { class: 'q-list' });
@@ -1071,9 +1089,11 @@ function openMyPrompts() {
       list.replaceChildren();
       if (!shown.length) { list.append(el('div', { class: 'q-empty', text: '일치하는 질문이 없어요.' })); return; }
       shown.forEach((x) => {
+        // 작성자 배지 — 이 세션에 질문한 사람이 둘 이상일 때만(혼자 쓴 세션엔 소음).
+        const who = multiAuthor && x.p.author ? el('span', { class: 'q-who', title: '이 질문을 보낸 사람', text: x.p.author }) : null;
         list.append(el('div', { class: 'q-item', title: '클릭하면 터미널에서 이 질문 위치로 이동', onclick: () => { back.remove(); jumpToPrompt(x.p.text); } },
           el('div', { class: 'q-meta' },
-            el('span', { class: 'q-num', text: '#' + x.num }), el('span', { class: 'q-when', text: fmtWhen(x.p.ts) }),
+            el('span', { class: 'q-num', text: '#' + x.num }), ...(who ? [who] : []), el('span', { class: 'q-when', text: fmtWhen(x.p.ts) }),
             el('span', { class: 'q-spacer' }),
             el('button', { class: 'q-copy', title: '이 질문 텍스트 복사', text: '복사', onclick: (e) => { e.stopPropagation(); copyText(x.p.text); } })),
           el('div', { class: 'q-text', text: x.p.text })));
@@ -1157,9 +1177,12 @@ async function boot() {
     el('button', { class: 'tbtn', text: '📁 파일 탐색기', title: '파일 탐색기 열기/닫기 (업로드·다운로드)', onclick: toggleExplorer }),
     projectBtnEl, titleEl,
     el('span', { class: 'spacer' }), statusEl,
-    // #1018 '내 질문' 상단 버튼 임시 숨김(상민님 요청, 2026-07-20) — 아직 제대로 작동하지 않아 버튼만 억제.
-    //  기능(openMyPrompts·#967 구현·서버 /prompts)은 그대로 보존 — 부활 시 아래 줄 주석 해제.
-    // el('button', { class: 'tbtn', text: '💬 내 질문', title: '이 세션에서 클로드에게 보낸 질문 목록 — 클릭하면 그 위치로 이동', onclick: openMyPrompts }),
+    // #1018 로 임시로 숨겼던 버튼을 #1062 에서 되살렸다 — 당시 '제대로 작동하지 않던' 원인은 목록 수집이었다:
+    //  서버가 공유 ~/.claude 의 **최신 대화 파일 하나**만 읽어, 멤버 프로필(#1014 이후 세션의 실제 기록 위치)과
+    //  같은 폴더의 다른 대화가 통째로 빠졌다. 이제 전부 합쳐 준다(src/terminal-transcript.ts).
+    //  '그 위치로 이동'은 여전히 화면 탐색 휴리스틱이라 못 찾을 수 있는데, 그 경우엔 조용히 실패하지 않고 토스트로 알린다.
+    //  ⚠ 이 버튼은 그리드 각 셀(iframe=이 페이지)마다 하나씩 있어야 한다 — 그리드 상단 통합검색은 대체재가 아니다.
+    el('button', { class: 'tbtn', text: '💬 질문', title: '이 세션에서 AI 에게 보낸 질문 전부(누가 보냈든) — 클릭하면 그 위치로 이동', onclick: openMyPrompts }),
     el('button', { class: 'tbtn', text: '⟳ 화면 복구', title: '화면이 깨지거나 어긋났을 때 재연결로 복구(소프트 새로고침)', onclick: softReconnect }),
     el('button', { class: 'tbtn', text: '⚙ 환경 설정', onclick: openSettings }),
     el('button', { class: 'tbtn', text: 'ⓘ 사용법 안내', title: '터미널·단축키 간단 사용법', onclick: openHelp }));

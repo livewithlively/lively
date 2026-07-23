@@ -6,7 +6,7 @@
 //  그래서 **상태가 바뀔 때만** 보내고, **복구도 반드시 알린다**(해제가 안 오면 경보를 못 믿는다).
 import assert from "node:assert/strict";
 import os from "node:os";
-import { diskAlertFor, dbAlertFor, tickOnce, stopBoxWatch, type BoxAlert } from "./box-watch.js";
+import { diskAlertFor, dbAlertFor, memAlertFor, memLevelOf, tickOnce, stopBoxWatch, type BoxAlert } from "./box-watch.js";
 import type { DiskState } from "./disk-guard.js";
 import type { QueryablePool } from "./health.js";
 
@@ -35,7 +35,7 @@ const st = (usedPct: number, level: DiskState["level"]): DiskState =>
   assert.equal(a.severity, "critical");
   assert.match(a.title, /97/, "몇 % 인지");
   assert.match(a.text, /차단/, "지금 무엇이 막히는지");
-  assert.match(a.text, /저장소·로그/, "무엇을 해야 하는지");
+  assert.match(a.text, /저장소/, "무엇을 해야 하는지(관리 ▸ 컴퓨팅 리소스 ▸ 저장소)");
   assert.match(a.text, /수동 재시작/, "방치하면 어떻게 되는지(공간만 비워선 안 산다)");
   assert.equal(a.detail.from, "warn");
   assert.equal(a.detail.to, "critical");
@@ -119,4 +119,44 @@ const st = (usedPct: number, level: DiskState["level"]): DiskState =>
   stopBoxWatch();
 }
 
-console.log("box-watch.test.ts ok — 전이 시에만 통지(늑대소년 방지) · 보낸 문제만 해제 통지 · 부팅 정상은 침묵 · DB 다운은 최우선");
+// ── 메모리(#1059): 단계 판정 — 0 임계는 그 단계 끔, 나머지는 디스크와 같은 방향(used% 클수록 나쁨) ──
+{
+  // 0/0 = 완전 끔 → 아무리 높아도 ok(경보 안 함).
+  assert.equal(memLevelOf(99, { warnPct: 0, criticalPct: 0 }), "ok", "0/0 = 끔 → 항상 ok");
+  // 경계값(>=): 정확히 임계면 그 단계.
+  assert.equal(memLevelOf(85, { warnPct: 85, criticalPct: 95 }), "warn", "정확히 warn 임계 → warn");
+  assert.equal(memLevelOf(84, { warnPct: 85, criticalPct: 95 }), "ok", "warn 임계 미만 → ok");
+  assert.equal(memLevelOf(95, { warnPct: 85, criticalPct: 95 }), "critical", "정확히 critical 임계 → critical");
+  assert.equal(memLevelOf(94, { warnPct: 85, criticalPct: 95 }), "warn", "critical 미만·warn 이상 → warn");
+  // 한쪽만 켠 경우: critical 만(warn=0) → warn 단계는 안 뜨고 critical 만.
+  assert.equal(memLevelOf(90, { warnPct: 0, criticalPct: 95 }), "ok", "warn 끔·critical 미만 → ok");
+  assert.equal(memLevelOf(96, { warnPct: 0, criticalPct: 95 }), "critical", "warn 끔이어도 critical 은 동작");
+  // warn 만(critical=0) → critical 단계는 안 뜸.
+  assert.equal(memLevelOf(99, { warnPct: 85, criticalPct: 0 }), "warn", "critical 끔이면 아무리 높아도 warn 까지만");
+}
+
+// ── 메모리: 전이 규칙(디스크와 동형) — 같은상태 침묵 · 부팅정상 침묵 · 악화 알림 · 복구 알림 ──
+{
+  const ms = (usedPct: number, availableMb: number) => ({ usedPct, availableMb, totalMb: 16000 });
+  assert.equal(memAlertFor("warn", "warn", ms(88, 1900)), null, "경고 유지 → 침묵(늑대소년 방지)");
+  assert.equal(memAlertFor("critical", "critical", ms(97, 400)), null, "위험 유지 → 침묵");
+  assert.equal(memAlertFor(null, "ok", ms(40, 9000)), null, "부팅 시 정상 → 침묵");
+  assert.ok(memAlertFor(null, "critical", ms(97, 400)), "첫 관측이 위험이면 알린다(위험 상태로 뜬 박스 방치 금지)");
+
+  const a = memAlertFor("warn", "critical", ms(97, 400));
+  assert.ok(a);
+  assert.equal(a.severity, "critical");
+  assert.match(a.title, /97|400/, "몇 %·가용 몇 MB 인지");
+  assert.match(a.text, /OOM/, "OOM 위험임을 명시(#1059 다운의 그 상태)");
+  assert.match(a.text, /메모리/, "무엇을 해야 하는지(관리 ▸ 컴퓨팅 리소스 ▸ 메모리)");
+  assert.equal(a.detail.from, "warn");
+  assert.equal(a.detail.to, "critical");
+
+  const w = memAlertFor("ok", "warn", ms(88, 1900));
+  assert.ok(w); assert.equal(w.severity, "warn");
+
+  const r = memAlertFor("critical", "ok", ms(40, 9000));
+  assert.ok(r, "위험 → 정상 복귀는 반드시 알린다"); assert.equal(r.severity, "ok");
+}
+
+console.log("box-watch.test.ts ok — 전이 시에만 통지(늑대소년 방지) · 보낸 문제만 해제 통지 · 부팅 정상은 침묵 · DB 다운은 최우선 · 메모리 경보(#1059) 단계·전이");

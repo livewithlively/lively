@@ -37,9 +37,11 @@ import { ensureStateDirs, stateRoot } from "./state-dir.js";
 import { ROOTS, SHARED_ROOT } from "./terminal-sessions.js";
 import { readyReport } from "./health.js";
 import { startLogJanitor } from "./log-janitor.js";
+import { startCallLogPrune } from "./org/call-log-prune.js";
 import { effectiveStoragePolicy } from "./org/storage-policy.js";
 import { getRuntimeConfig } from "./org/store.js";
 import { reapSessionLogs, backfillSessionTitles } from "./v6/session-log-store.js";
+import { reapIdleSessions } from "./session-reaper.js"; // #1059 F — idle 세션 자동 회수(정책 0=끔 기본)
 import { ensureSharedCache } from "./session-cache.js";
 import { startBoxWatch } from "./box-watch.js";
 import { sendBoxAlert } from "./alerts.js";
@@ -85,6 +87,7 @@ app.get("/healthz", (_req, res) => {
 //  못 들어가므로 env 전용이면 아무도 못 바꾼다). effectiveStoragePolicy 는 짧게 캐시하고 **DB 가 죽어도 throw 하지
 //  않는다** — /readyz 가 가장 필요한 순간이 바로 DB 다운이라 그때도 디스크 판정은 나와야 한다.
 const loadStoragePolicy = () => getRuntimeConfig().then((c) => c.storage_policy);
+const loadCallLogPolicy = () => getRuntimeConfig().then((c) => c.call_log_policy); // #1082 감사로그 보존기간
 
 // readiness — '실제로 서비스가 되나'(#813 T2). DB 도달 + 디스크 여유. **모니터·알림은 healthz 가 아니라 이걸 봐야 한다.**
 //  2026-07-13: 디스크풀 → Postgres recovery mode → 모든 로그인 500 인데도 /healthz 는 초록이라 아무도 몰랐다.
@@ -189,7 +192,7 @@ app.delete("/mcp", auth, async (req, res) => {
 
 // 멤버 설치 — 토큰게이트 curl 모델(git clone 대체). 인증된 멤버 토큰이면 그 조직의 발행 아티팩트를
 //  tar.gz 로 동적 생성해 스트림한다(DB→materialize→generator→tar). 설치 한 줄:
-//    curl -fsSL -H "Authorization: Bearer <TOKEN>" <GW>/install | tar -xz -C <dir> && bash <dir>/setup/setup-mac.sh
+//    curl -fsSL <GW>/cli | sh          (→ lively CLI 가 /install 번들을 받아 설치)
 //  격리 모델: **조직당 1 게이트웨이+DB 인스턴스**(배포 유형화 T1~T5, 멀티테넌트 SaaS 제외). 따라서 org-content
 //  테이블에 org_id 컬럼이 없고 모든 멤버 토큰이 그 단일 조직 묶음을 받는다 — 이건 설계상 의도다.
 //  ⚠️ 만약 한 게이트웨이를 여러 조직이 공유하도록 바꾼다면 org_id 격리(스키마+모든 쿼리 필터)가 선행 필수.
@@ -299,6 +302,9 @@ const server = app.listen(PORT, () => {
       //  유닛이 append 로 무한히 쓰는 구조라(systemd StandardOutput=append) 이게 없으면 상한이 없다.
       //  스케줄러와 같은 게이트: 하우스키핑은 단일 프로세스 전제 — 두 인스턴스가 같은 파일을 동시에 copytruncate 하면 꼬인다.
       .then(() => { if (process.env.LIVELY_NO_SCHEDULER !== "1") startLogJanitor(loadStoragePolicy); })
+      // 호출 감사로그 prune(#1082) — mcp_call_log 를 보존기간(관리탭) 밖까지만 남긴다. 도입 이래 무기한 쌓이던 표라
+      //  기간 정책이 없으면 개인 단위 활동 기록이 박스 수명 내내 축적된다. 같은 단일 프로세스 게이트(중복 DELETE 방지).
+      .then(() => { if (process.env.LIVELY_NO_SCHEDULER !== "1") startCallLogPrune(loadCallLogPolicy); })
       // 공유 빌드 캐시(#813 T3) — 세션이 쓸 캐시 디렉터리를 그룹쓰기(2775)로 미리 보장한다.
       //  멤버별 격리 OS 유저(#524)들이 같은 캐시를 써야 하므로 권한이 중요하다. 비치명(툴이 각자 만들기도 한다).
       .then(async () => {
@@ -321,6 +327,11 @@ const server = app.listen(PORT, () => {
             const sp = await effectiveStoragePolicy(loadStoragePolicy);
             return { warnPct: sp.disk_warn_pct, criticalPct: sp.disk_critical_pct };
           },
+          // #1059 — 메모리 경보 임계(사용%, 0=끔). box-watch 가 디스크와 같은 채널로 push.
+          loadMemThresholds: async () => {
+            const sp = await effectiveStoragePolicy(loadStoragePolicy);
+            return { warnPct: sp.mem_warn_pct, criticalPct: sp.mem_critical_pct };
+          },
           send: async (a) => (await sendBoxAlert(a)).sent,
         });
       })
@@ -341,6 +352,10 @@ const server = app.listen(PORT, () => {
         }, 6 * 60 * 60_000).unref();
         // #905 C1 — 제목 컬럼 도입(슬⑤b) 전 캡처/백필된 세션의 title 소급 채움(부팅 35초 후 1회, 멱등). 다 채우면 no-op.
         setTimeout(() => { void backfillSessionTitles().catch(() => { /* best-effort */ }); }, 35_000).unref();
+        // #1059 F — idle 세션 자동 회수(reaper). 정책(session_reclaim_policy) 0=끔이 기본이라 켜기 전엔 no-op.
+        //  5분 주기(회수는 tmux kill 로 싸다). 켜지면 오래 idle 인 세션을 desired-state 보존하며 회수 → restorable(E lazy resume).
+        //  ⚠ 부팅 직후 즉시 돌리지 않는다 — 재부팅 복원(E)과 겹쳐 갓 뜬 세션을 오판하지 않게 첫 tick 은 주기 뒤.
+        setInterval(() => { void reapIdleSessions().catch((err) => logger.warn({ err }, "session-reaper tick 실패")); }, 5 * 60_000).unref();
       })
       .catch((err) => logger.error({ err }, "schema init failed"));
   }

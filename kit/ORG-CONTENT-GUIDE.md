@@ -56,7 +56,7 @@ init → fill → set gateway-url → check → publish → distribute
    node workflow-std/generator/build-context.mjs --org ../acme-org --publish ../acme-context-setup --harness claude
    # 다중 하네스:  --harness claude,codex
    ```
-6. **distribute** — 발행물 레포를 멤버가 clone → `bash setup/setup-mac.sh`(또는 windows ps1) 1회 → 어느 폴더에서 켜든 컨텍스트+리플렉스 수령. 토큰은 관리자가 안전 채널로 개별 전달.
+6. **distribute** — 멤버가 설치 한 줄(`curl -fsSL <게이트웨이>/cli | sh`) 1회 → 어느 폴더에서 켜든 컨텍스트+리플렉스 수령. 토큰은 그 자리에서 가림 입력으로 받는다(명령줄에 안 실린다).
 
 > git init/remote/commit 은 생성기가 하지 않습니다 — 오퍼레이터가 조직콘텐츠·발행물을 각각 독립 레포로 만듭니다.
 

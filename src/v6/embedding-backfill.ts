@@ -16,6 +16,7 @@ import {
   embeddingInputText,
   toVectorLiteral,
 } from "./embedding-provider.js";
+import { memAvailableMb } from "../host-mem.js"; // #1059 백필 pre-flight 메모리 게이트
 
 export type BackfillMode = "pending" | "model-changed" | "all";
 //  pending      = embedding_vector IS NULL 인 active 행만(신규/미임베딩 보강 — 처음 켤 때).
@@ -271,8 +272,21 @@ export async function runAutoBackfillSweep(): Promise<void> {
     // #1060 — 일시중지면 스윕 자체가 no-op. DB 를 읽어 캐시 재수화(부팅 스윕이 영속 상태를 픽업) 후 게이트한다.
     //  이 한 곳이 4개 자동 트리거(부팅 30초·10분 주기·connector_sync 완료 후·쓰기 nudge)의 공통 급소 — 전부 여기로 수렴한다.
     if (await refreshBackfillPausedFromDb()) return;
-    const provider = resolveEmbeddingProvider(await resolveConfigFromDb());
+    const cfg = await resolveConfigFromDb();   // #1059 메모리 게이트가 cfg.backfill_min_available_mb 를 읽으므로 변수로 보관
+    const provider = resolveEmbeddingProvider(cfg);
     if (!provider) return;
+    // G2(#1059) 백필 pre-flight 메모리 게이트 — 임베딩 백엔드 로드(예: Ollama bge-m3 ~3.3GB)가 세션 baseline 과
+    //  겹쳐 물리 초과→OOM 스래싱 되던 것(어니스트 2026-07-21)을 사전 회피. 가용 메모리가 임계 미만이면 이번 스윕을
+    //  건너뛴다 — pending 은 DB 에 남아(embedding_vector IS NULL) 다음 주기(10분)·nudge 스윕이 여유 생기면 흡수(재진입 안전).
+    //  0=비활성(무회귀). 수동 백필(startBackfillJob = 관리탭 버튼)은 사용자 명시 의도라 게이트하지 않는다 — 자동 스윕만.
+    const minMb = cfg.backfill_min_available_mb;
+    if (minMb > 0) {
+      const availMb = await memAvailableMb();
+      if (availMb < minMb) {
+        console.warn(`[embedding] 자동 백필 스윕 보류 — 가용메모리 ${availMb}MB < 임계 ${minMb}MB (pending 유지, 다음 주기 재시도)`);
+        return;
+      }
+    }
     for (const target of [KNOWLEDGE_TARGET, PROJECT_TARGET]) {
       if (isBackfillPaused()) break; // 스윕 도중 일시중지되면 남은 타깃으로 넘어가지 않는다(실행 중 잡은 shouldStop 으로 이미 중단).
       let pending = 0;

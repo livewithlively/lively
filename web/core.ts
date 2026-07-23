@@ -14,6 +14,20 @@
 const TOKEN_KEY = 'lively_ui_token';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
+// ── API 베이스(#1091) — 프리뷰 서브패스(/preview/<id>/, #1036)에서 뜬 화면은 API 도 그 프리뷰로 가야 한다. ──
+//  루트 절대경로(fetch('/api/…'))는 오리진 루트 = **라이브 게이트웨이**로 새어, throwaway 프리뷰가
+//  '새 프론트 + 구 백엔드'를 보여줬다(프론트 변경만 반영돼 잘못된 초록불이 난다). 그래서 화면이 놓인
+//  경로에서 접두사를 유도해 붙인다. 프론트 전용(shared-proxy) 프리뷰에선 서버가 /preview/<id>/api/… 를
+//  307 로 게이트웨이 본체에 돌려주므로(preview-routes.ts) 같은 코드가 양쪽에서 맞는다.
+const API_PREFIX = (() => {
+  const m = /^(\/preview\/[A-Za-z0-9][A-Za-z0-9._-]*)\//.exec(location.pathname);
+  return m ? m[1] : '';
+})();
+// 루트 절대경로만 접두사를 받는다(상대·절대URL·blob/data 는 그대로).
+function apiUrl(path: string): string {
+  return API_PREFIX && String(path).charAt(0) === '/' ? API_PREFIX + path : path;
+}
+
 // 출처(provenance) 라벨 — ai=AI 에이전트 생성, human=사람 저작/승인, rule=시스템 결정론 파생, observed=외부 시스템 미러(커넥터 원천).
 //  V4-C: 'confidence' 컬럼/enum 은 물리적으로 불변 — UI 라벨만 '출처(provenance)'로 의미를 명확히 한다(출처는 채널이
 //  기계로 박는 사실이지 신뢰도·가치가 아니다). observed 는 외부 *살아있는 미러* — 진실·편집은 외부에 있다.
@@ -149,7 +163,7 @@ function mdImage(src, alt) {
   img.dataset.mdSrc = String(src);   // #657 블록 에디터 직렬화용 원본 src 보존(blob URL 로 바뀌어도 md 는 원본 유지)
   if (!String(src).startsWith('/api/ui/')) { img.setAttribute('src', src); return img; }
   const token = localStorage.getItem(TOKEN_KEY);
-  fetch(src, { headers: token ? { Authorization: 'Bearer ' + token } : {} })
+  fetch(apiUrl(src), { headers: token ? { Authorization: 'Bearer ' + token } : {} })
     .then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.blob(); })
     .then((b) => { img.src = URL.createObjectURL(b); })
     .catch(() => { img.classList.add('md-img-missing'); img.alt = (alt || '이미지') + ' (불러오기 실패)'; });
@@ -309,7 +323,7 @@ function renderInline(text, opts?: { noAutolink?: boolean }) {
         const label = s.slice(i + 1, close);
         if (label.trim() && label.indexOf('\n') < 0) {
           flush();
-          out.push(el('span', { class: 'md-uikey md-uikey-btn' }, ...renderInline(label)));
+          out.push(el('span', { class: uiKeyCls('md-uikey-btn', label) }, ...renderInline(label)));
           i = close + 1;
           continue;
         }
@@ -322,7 +336,7 @@ function renderInline(text, opts?: { noAutolink?: boolean }) {
         const label = s.slice(i + 1, close);
         if (label.trim() && label.indexOf('\n') < 0) {
           flush();
-          out.push(el('span', { class: 'md-uikey md-uikey-opt' }, ...renderInline(label)));
+          out.push(el('span', { class: uiKeyCls('md-uikey-opt', label) }, ...renderInline(label)));
           i = close + 1;
           continue;
         }
@@ -916,7 +930,7 @@ async function api(path: string, opts: any = {}): Promise<any> {
   const headers: any = Object.assign({}, opts.headers);
   if (token) headers['Authorization'] = 'Bearer ' + token;
   if (opts.body) headers['Content-Type'] = 'application/json';
-  const res = await fetch(path, Object.assign({}, opts, { headers }));
+  const res = await fetch(apiUrl(path), Object.assign({}, opts, { headers }));
   if (res.status === 401) {
     localStorage.removeItem(TOKEN_KEY);
     state.me = null;
@@ -958,7 +972,9 @@ const fmtNum = (n) => Number(n || 0).toLocaleString('ko-KR');
 // ── 토스트 ──
 function toast(msg: any, isError?: any, ms?: number) {
   const box = document.getElementById('toasts')!;
-  const t = el('div', { class: 'toast' + (isError ? ' coral' : ''), text: msg });
+  // 메시지의 [버튼]·「옵션」도 화면과 같은 칩으로 — 안내문과 토스트가 서로 다른 표기를 쓰면 같은 버튼을 두 번 배운다.
+  //  .toast 는 flex 라 텍스트 노드가 여러 조각이면 각각 flex item 이 된다 → span 하나로 감싸 한 덩이로 흐르게 한다.
+  const t = el('div', { class: 'toast' + (isError ? ' coral' : '') }, el('span', {}, ...uiText(msg)));
   box.append(t);
   setTimeout(() => t.remove(), ms || 3600);
 }
@@ -980,7 +996,7 @@ function hideGate() {
 
 // ── 로그아웃 — 세션 회수 + 로컬 토큰 제거 → 게이트. (헤더 버튼·강제 비번변경 모달 공용) ──
 async function logout(message?: any) {
-  try { await fetch('/api/ui/logout', { method: 'POST' }); } catch (_) { /* noop */ }
+  try { await fetch(apiUrl('/api/ui/logout'), { method: 'POST' }); } catch (_) { /* noop */ }
   localStorage.removeItem(TOKEN_KEY);
   state.me = null;
   const lb = document.getElementById('logout-btn'); if (lb) (lb as any).hidden = true;
@@ -1006,6 +1022,111 @@ function confidenceDot(confidence) {
   const cls = confidence === 'human' ? 'st ok'
     : (confidence === 'rule' || confidence === 'observed') ? 'st dim' : 'st';
   return el('span', { class: cls, text: CONFIDENCE_LABEL[confidence] || confidence });
+}
+
+// 설명 문자열의 인라인 표기를 화면 언어로 승격한다 — **강조** · [버튼] · 「옵션·메뉴·상태」.
+//  왜: 안내문에 별표·대괄호·꺽쇠가 그대로 노출돼 읽기 나빴다(예전엔 [외부 자료 수집] 설명의 '**우리 DB 로 복사**'가
+//  별표째 보였고, 관리탭엔 '[저장]을 눌러야 반영'처럼 대괄호가 난무했다). #1013 에서 사용가이드 마크다운을
+//  칩으로 승격한 것과 **같은 시각언어**를 코드 하드코딩 문구(관리탭)에도 쓴다 — 스타일은 .md-uikey 하나로 공유.
+//  el() 이 텍스트 노드로만 붙이므로 innerHTML 주입 경로는 없다.
+function uiText(text) {
+  const out: any[] = [];
+  const s = String(text == null ? '' : text);
+  let buf = '';
+  const flush = () => { if (buf) { out.push(buf); buf = ''; } };
+  const chip = (mod, label) => el('span', { class: uiKeyCls(mod, label) }, ...uiText(label));
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    if (ch === '*' && s[i + 1] === '*') {
+      const close = s.indexOf('**', i + 2);
+      if (close > i + 2) { flush(); out.push(el('b', {}, ...uiText(s.slice(i + 2, close)))); i = close + 2; continue; }
+    }
+    if (ch === '[') {
+      const close = s.indexOf(']', i + 1);
+      // [x](url) 은 링크 문법이라 건드리지 않는다. 단 **주소일 때만** — '[끄기](주소는 남고 프로세스만 내려감)'
+      //  처럼 버튼 뒤에 괄호 설명이 붙는 문장이 실제로 흔해서, 괄호만 보고 링크로 넘기면 그 버튼이 칩을 못 받는다.
+      if (close > i + 1 && !MD_LINK_AT.test(s.slice(close + 1)) && uiKeyOk(s.slice(i + 1, close))) {
+        flush(); out.push(chip('md-uikey-btn', s.slice(i + 1, close))); i = close + 1; continue;
+      }
+    }
+    if (ch === '「') {
+      const close = s.indexOf('」', i + 1);
+      if (close > i + 1 && uiKeyOk(s.slice(i + 1, close))) {
+        flush(); out.push(chip('md-uikey-opt', s.slice(i + 1, close))); i = close + 1; continue;
+      }
+    }
+    buf += ch;
+    i++;
+  }
+  flush();
+  return out;
+}
+// 칩 클래스 — 라벨이 한 덩어리(공백 없음)면 nowrap 을 걸어 '연결·데이/터'처럼 이름이 잘리는 걸 막는다.
+//  (한국어는 중점·조사 경계에서 줄바꿈이 일어나 word-break:keep-all 만으로는 안 막힌다.)
+//  공백이 있는 긴 라벨은 어절 단위로 흐르게 둔다 — 안 그러면 좁은 팝오버에서 칩이 통째로 넘친다.
+function uiKeyCls(mod, label) {
+  return 'md-uikey ' + mod + (/\s/.test(String(label).trim()) ? '' : ' md-uikey-solid');
+}
+// ']' 바로 뒤가 마크다운 링크의 (주소) 인가 — 프로토콜·라우트로 시작하고 공백 없이 닫히는 것만 링크로 본다.
+const MD_LINK_AT = /^\((?:https?:\/\/|mailto:|#|\/)[^)\s]*\)/;
+// 칩으로 승격할 라벨인가 — UI 라벨은 짧고 따옴표·중괄호가 없다. JSON/코드 예시( ["Read","Grep"] 등)를
+//  버튼처럼 보이게 만들면 오히려 거짓말이 되므로 제외한다.
+function uiKeyOk(label) {
+  return !!label.trim() && label.length <= 40 && !/["'{}\n]/.test(label);
+}
+// ⓘ — 제목·라벨 오른쪽에 옅게 붙는 **아이콘 하나**. 누르면 그 자리에 팝오버로 설명이 뜬다(#1085).
+//  왜: 회색 설명문을 제목·필드마다 화면에 깔면 글이 화면을 덮어 정작 내용·입력칸이 안 읽힌다(윤상민 지적).
+//  '이게 뭐예요?' 팝업(구 meaningCard — '구성원에게 미치는 효과' 카드)은 **통째로 폐기**했다(사용자 요구:
+//  "문구만 지우지 말고 팝업까지 날려버려"). 그래서 이 팝오버가 싣는 건 설명 문자열 하나뿐이다(**강조** 지원).
+function infoPop(text) {
+  if (!text) return null;
+  const btn = el('button', { class: 'hint-i', type: 'button', 'aria-haspopup': 'dialog', 'aria-label': '설명 보기', title: '설명 보기' },
+    el('span', { 'aria-hidden': 'true', text: 'ⓘ' }));
+  let pop: any = null;
+  const close = () => {
+    if (!pop) return;
+    pop.remove(); pop = null;
+    btn.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('mousedown', onDoc, true);
+    document.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('resize', close);
+    window.removeEventListener('scroll', close, true);
+  };
+  const onDoc = (e) => { if (pop && !pop.contains(e.target) && !btn.contains(e.target)) close(); };
+  const onKey = (e) => { if (e.key === 'Escape') { close(); btn.focus(); } };
+  btn.addEventListener('click', () => {
+    if (pop) { close(); return; }
+    pop = el('div', { class: 'hint-pop', role: 'dialog' }, el('p', { class: 'hint-pop-text' }, ...uiText(text)));
+    document.body.append(pop);
+    // 아이콘 **오른쪽**에 띄운다(사용자 요구) — 아래로 내리면 바로 밑 내용을 가려 읽던 자리를 잃는다.
+    //  오른쪽에 자리가 없으면 왼쪽, 그것도 없으면 아래로 떨어뜨린다. 세로는 아이콘에 맞추되 화면 안에 가둔다.
+    //  (position:fixed 라 카드 overflow·스크롤 컨테이너에 잘리지 않는다.)
+    const r = btn.getBoundingClientRect();
+    const w = Math.min(360, window.innerWidth - 24);
+    pop.style.width = w + 'px';
+    const gap = 10;
+    if (r.right + gap + w + 12 <= window.innerWidth) pop.style.left = Math.round(r.right + gap) + 'px';
+    else if (r.left - gap - w >= 12) pop.style.left = Math.round(r.left - gap - w) + 'px';
+    else pop.style.left = Math.round(Math.min(Math.max(12, r.left - 10), window.innerWidth - w - 12)) + 'px';
+    const h = pop.offsetHeight;
+    const wantTop = r.top - 8;                                  // 아이콘 윗선에 살짝 걸치게
+    pop.style.top = Math.round(Math.min(Math.max(12, wantTop), Math.max(12, window.innerHeight - h - 12))) + 'px';
+    btn.setAttribute('aria-expanded', 'true');
+    document.addEventListener('mousedown', onDoc, true);
+    document.addEventListener('keydown', onKey, true);
+    window.addEventListener('resize', close);
+    window.addEventListener('scroll', close, true);
+  });
+  return btn;
+}
+
+// 카드(박스) 섹션 제목 — 제목 + 오른쪽 ⓘ. 카드 안 설명도 회색 줄 대신 이 아이콘 뒤로 접는다(#1085).
+function cardHead(title, desc?, badge?, action?) {
+  // badge — '(개발자용)' 처럼 괄호로 덧붙이던 부가 표시를 제목 옆 칩으로(#1085). 제목 자체는 무엇인지만 말한다.
+  // action — 이 섹션의 주 동작(예: [+ 새 팀]). 목록 안에 끼워 두면 어디에 속한 버튼인지 안 읽혀서 제목 줄 오른쪽에 둔다.
+  return el('div', { class: 'card-head-row' }, el('h3', { text: title }), badge || null, infoPop(desc || null),
+    action ? el('div', { class: 'card-head-act' }, action) : null);
 }
 
 // ── 공용: 즉시 표시 호버 툴팁 ──
@@ -1156,6 +1277,10 @@ function personFace(id, cls, name?) {
 }
 
 export {
+  apiUrl,
+  cardHead,
+  infoPop,
+  uiText,
   avatarColor,
   initials,
   profileAvatar,

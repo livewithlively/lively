@@ -1,5 +1,5 @@
 // main.ts — split from app.js (ESM, behavior-preserving). DO NOT add logic; moved verbatim.
-import { $view, TOKEN_KEY, api, el, errorNote, hideGate, loadPeopleAvatars, profileAvatar, showGate, state } from './core.js';
+import { $view, TOKEN_KEY, api, apiUrl, el, errorNote, hideGate, loadPeopleAvatars, profileAvatar, showGate, state } from './core.js';
 import { renderDomainmap } from './domainmap.js';
 import { renderWiki, renderWikiTrash } from './wiki.js';   // #764 WIKI 탭 전면 재구축(사이드바 유지)
 import { refreshWiki2NavBadge, renderWiki2 } from './wiki2.js';   // #968 WIKI2 — 검증·기록(변화의 관제실)
@@ -230,7 +230,7 @@ async function boot() {
   const btn = document.getElementById('logout-btn');
   if (!btn) return;
   btn.addEventListener('click', async () => {
-    try { await fetch('/api/ui/logout', { method: 'POST' }); } catch (_) { /* noop */ }
+    try { await fetch(apiUrl('/api/ui/logout'), { method: 'POST' }); } catch (_) { /* noop */ }
     localStorage.removeItem(TOKEN_KEY);
     state.me = null;
     btn.hidden = true;
@@ -251,11 +251,22 @@ document.getElementById('skip-link')!.addEventListener('click', (ev) => {
   const v = $view();
   if (v) { v.setAttribute('tabindex', '-1'); v.focus(); }
 });
-// 토큰 로그인(고급) 토글 — 클릭 시 토큰 입력칸을 보였다 숨긴다.
-document.getElementById('gate-token-toggle')!.addEventListener('click', () => {
+// 토큰 로그인(고급) 토글 — **입력 방식 전환**이다(#1085). 예전엔 토큰칸만 덧붙이고 이메일·비밀번호 칸을
+//  그대로 뒀는데, 토큰 모드에서 그 칸들은 제출 시 무시된다(아래 submit: 토큰이 보이고 값이 있으면 토큰이 이긴다)
+//  — 안 쓰는 칸이 남아 '토큰도 넣고 비밀번호도 넣으라는 건가?'로 읽혔다(사용자 지적). 한 번에 한 방식만 보인다.
+const gateToggle = document.getElementById('gate-token-toggle')!;
+gateToggle.addEventListener('click', () => {
   const t = document.getElementById('gate-input') as any;
-  t.hidden = !t.hidden;
-  if (!t.hidden) t.focus();
+  const email = document.getElementById('gate-email') as any;
+  const pw = document.getElementById('gate-password') as any;
+  const copy = document.querySelector('.gate-copy') as any;
+  const toToken = t.hidden;                 // 지금 숨어 있으면 → 토큰 모드로 전환
+  t.hidden = !toToken;
+  email.hidden = toToken; pw.hidden = toToken;
+  if (toToken) { email.value = ''; pw.value = ''; } else { t.value = ''; }
+  if (copy) copy.textContent = toToken ? '발급받은 접속 토큰을 붙여넣으세요.' : '회사 계정으로 로그인하세요.';
+  gateToggle.textContent = toToken ? '← 이메일·비밀번호로 로그인' : '토큰으로 로그인 (고급)';
+  (toToken ? t : email).focus();
 });
 document.getElementById('gate-form')!.addEventListener('submit', async (ev) => {
   ev.preventDefault();
@@ -266,7 +277,7 @@ document.getElementById('gate-form')!.addEventListener('submit', async (ev) => {
   try {
     if (tokenVal) {
       // 고급: 토큰 로그인 — /api/ui/me 로 검증 후 localStorage 저장(bearer, 에이전트/서비스용).
-      const res = await fetch('/api/ui/me', { headers: { Authorization: 'Bearer ' + tokenVal } });
+      const res = await fetch(apiUrl('/api/ui/me'), { headers: { Authorization: 'Bearer ' + tokenVal } });
       if (!res.ok) { err.textContent = '토큰이 유효하지 않습니다.'; err.hidden = false; return; }
       localStorage.setItem(TOKEN_KEY, tokenVal);
     } else {
@@ -274,7 +285,7 @@ document.getElementById('gate-form')!.addEventListener('submit', async (ev) => {
       const email = (document.getElementById('gate-email') as any).value.trim();
       const password = (document.getElementById('gate-password') as any).value;
       if (!email || !password) { err.textContent = '이메일과 비밀번호를 입력하세요.'; err.hidden = false; return; }
-      const res = await fetch('/api/ui/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+      const res = await fetch(apiUrl('/api/ui/login'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
       const data = await res.json().catch(() => null);
       if (!res.ok) { err.textContent = (data && data.error) || '로그인에 실패했습니다.'; err.hidden = false; return; }
       localStorage.removeItem(TOKEN_KEY); // 세션 쿠키 사용 — 토큰 불필요

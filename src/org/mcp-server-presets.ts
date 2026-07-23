@@ -23,6 +23,8 @@ export interface McpServerPreset {
   pii_scrub: boolean;      // 응답 비정형 PII 마스킹
   dcr: boolean;            // 상류가 동적 클라이언트 등록(RFC7591) 지원 여부
   seed: boolean;           // 배포 시 자동 등록 대상(=DCR 이라 무시크릿; 사전등록 client 필요분은 false)
+  oauth_scope?: string;    // authorize 에 실을 OAuth scope(공백구분). 상류가 scopes_supported 를 명시·요구할 때만(예 Slack).
+                           //  비우면 미요청 — Notion·Linear 처럼 scopes_supported 가 없는 상류는 scope 를 넣으면 오히려 깨지므로 넣지 않는다.
   note: string;
 }
 
@@ -45,24 +47,42 @@ export const MCP_SERVER_PRESETS: McpServerPreset[] = [
     name: "slack", label: "Slack", url: "https://mcp.slack.com/mcp",
     auth_kind: "slack_oauth", scope: "items", level: "L0", pii_scrub: true,
     dcr: false, seed: false,
+    // scopes_supported(mcp.slack.com/.well-known/oauth-protected-resource 실측)에서 read/search + 전송(chat:write)만.
+    //  users:read.email(PII)·canvases·기타 *:write(파괴)는 제외 — 최소권한, #746 사양=read/search+send(L2 컨펌). 조정은 후속(서버별 override).
+    oauth_scope: "search:read.public search:read.private search:read.mpim search:read.im search:read.files search:read.users channels:history groups:history im:history mpim:history channels:read groups:read mpim:read users:read files:read reactions:read emoji:read chat:write",
     note: "Slack 공식 MCP 는 DCR 미지원(사전등록 client 필요). 대안: 정적 사용자토큰 xoxp(slack_user_token) — search.messages 는 봇 불가.",
   },
   {
     name: "google-gmail", label: "Google Gmail", url: "https://gmailmcp.googleapis.com/mcp/v1",
     auth_kind: "google_gmail_oauth", scope: "items", level: "L0", pii_scrub: true,
     dcr: false, seed: false,
+    // gmail MCP(gmailmcp) 의 create_draft 는 Gmail API 직접호출은 gmail.compose 로 200 인데도 MCP 계층에서 permission 거부 →
+    //  gmailmcp 이 쓰기 tool 에 gmail.modify 를 요구(실측 규명). 그래서 readonly+compose+modify. mail.google.com(전체·영구삭제)만 제외.
+    oauth_scope: "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/gmail.modify",
     note: "Google 공식 MCP. Web앱 OAuth client(콘솔) 필요 — 승인 redirect 에 게이트웨이 /oauth/callback 등록. scope gmail.readonly(+compose).",
   },
   {
     name: "google-drive", label: "Google Drive", url: "https://drivemcp.googleapis.com/mcp/v1",
     auth_kind: "google_drive_oauth", scope: "items", level: "L0", pii_scrub: true,
     dcr: false, seed: false,
+    // scopes_supported 실측(drive / drive.readonly / drive.file)에서 읽기만 — drive(전체)·drive.file(쓰기)는 후속.
+    oauth_scope: "https://www.googleapis.com/auth/drive.readonly",
     note: "Google 공식 MCP. Web앱 OAuth client 필요. scope drive.readonly(+drive.file).",
   },
   {
     name: "google-calendar", label: "Google Calendar", url: "https://calendarmcp.googleapis.com/mcp/v1",
     auth_kind: "google_calendar_oauth", scope: "items", level: "L0", pii_scrub: false,
     dcr: false, seed: false,
+    // scopes_supported 실측(calendar 전체·events·readonly 등 12종)에서 읽기만 — 이벤트 쓰기 등은 후속(L2).
+    oauth_scope: "https://www.googleapis.com/auth/calendar.readonly",
     note: "Google 공식 MCP. Web앱 OAuth client 필요. scope calendar.events.readonly 등.",
   },
 ];
+
+// 상류 auth_kind 로 프리셋의 OAuth scope 를 찾는다(authorize 에 실을 값). 없으면 undefined = scope 미요청.
+//  broker(loadProxyServer)가 이 값을 authorize 에 싣는다 — scopes_supported 를 요구하는 상류(Slack)만 채워지고,
+//  scopes_supported 가 없는 상류(Notion·Linear)는 undefined 라 현행(무-scope)대로 동작한다.
+export function presetOAuthScope(authKind: string | null | undefined): string | undefined {
+  if (!authKind) return undefined;
+  return MCP_SERVER_PRESETS.find((c) => c.auth_kind === authKind)?.oauth_scope;
+}

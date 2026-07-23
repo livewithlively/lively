@@ -25,8 +25,22 @@ import {
   type StoragePolicy, type StoragePolicyPatch, resolveStoragePolicy, normalizeStoragePolicy,
   storagePolicySource, invalidateStoragePolicyCache,
 } from "./storage-policy.js";
+// MCP 호출 감사로그 보관 정책(#1082) — 보존일수. storage_policy 와 같은 seam(env 시드 + DB 우선).
+import {
+  type CallLogPolicy, type CallLogPolicyPatch, resolveCallLogPolicy, normalizeCallLogPolicy, callLogPolicySource,
+} from "./call-log-policy.js";
 // 세션 공유(세션이력 캡처) 정책(#905 C1) — 관리탭 ▸ 세션 공유. storage_policy 와 같은 seam(DB 우선, 비면 기본값).
 import { type SessionShareConfig, type SessionSharePatch, resolveSessionShare, normalizeSessionShare } from "./session-share.js";
+// per-session cgroup 메모리 격리 정책(#1059 D) — 세션당 MemoryHigh/Max(MB). storage_policy 와 같은 seam(DB 우선, 비면 env 시드).
+import {
+  type SessionMemoryPolicy, type SessionMemoryPolicyPatch, resolveSessionMemoryPolicy, normalizeSessionMemoryPolicy,
+  sessionMemoryPolicySource, invalidateSessionMemoryPolicyCache,
+} from "./session-memory-policy.js";
+// idle 세션 자동 회수(reaper) 정책(#1059 F) — idle TTL(분). storage/session-memory 와 같은 seam(DB 우선, 비면 env 시드).
+import {
+  type SessionReclaimPolicy, type SessionReclaimPolicyPatch, resolveSessionReclaimPolicy, normalizeSessionReclaimPolicy,
+  sessionReclaimPolicySource, invalidateSessionReclaimPolicyCache,
+} from "./session-reclaim-policy.js";
 
 // 쓰기 호출 맥락 — 감사 보강(누가/어느 토큰/어디서). delivery 핸들러가 web.ts 의 ctx 에서 구성해 전달.
 export interface WriteCtx { actor?: string; source?: string; tokenHashPrefix?: string | null; ip?: string | null }
@@ -751,6 +765,9 @@ export interface OrgRuntimeConfig {
   pull_tools: string[]; // work-flag 가 '외부 맥락 인입'으로 볼 MCP 툴 이름 prefix 목록(#906) — write_tools 와 달리 **비면 끔**
   embedding_config: EmbeddingConfig; // 벡터검색(#172) 추론 seam 설정 — 기본 off(현행 grep/ILIKE). DB 우선, 비면 env(EMBEDDINGS_*) 시드
   storage_policy: StoragePolicy; // 박스 저장소 정책(#813) — 로그 상한·디스크 임계치. DB 우선, 비면 env 시드 → 기본값
+  call_log_policy: CallLogPolicy; // MCP 호출 감사로그 보관(#1082) — 보존일수. DB 우선, 비면 env 시드 → 90일. 0=무기한
+  session_memory_policy: SessionMemoryPolicy; // per-session cgroup 메모리 격리(#1059 D) — 세션당 MemoryHigh/Max(MB). 0=무제한(무회귀). DB 우선, 비면 env 시드
+  session_reclaim_policy: SessionReclaimPolicy; // idle 세션 자동 회수(#1059 F) — idle TTL(분). 0=끔(무회귀). DB 우선, 비면 env 시드
   hook_relay_decisions: HookRelayDecision[]; // 러너가 PreToolUse 에서 전파할 결정(#892). 기본 deny/ask/defer — allow 는 명시 opt-in
   session_share: SessionShareConfig; // 세션이력 캡처 정책(#905 C1). 기본 enabled=false(롤아웃 꺼둠). 관리탭 ▸ 세션 공유.
   hook_grace_ms: number | null; // #1008 — run-custom 이 게이트웨이 미도달 시 최근 캐시를 쓸 유효기간(ms). NULL=무제한(기본). 양수=그 ms 후 fail-CLOSED.
@@ -783,7 +800,7 @@ const graceMsSafe = (v: unknown): number | null => {
 
 export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
   const r = await itemsPool.query(
-    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, version, updated_at, updated_by
+    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, version, updated_at, updated_by
        FROM org_runtime_config WHERE id=1`,
   );
   const row = r.rows[0] as Record<string, unknown> | undefined;
@@ -808,6 +825,9 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
     pull_tools: strArrSafe(row?.pull_tools),
     embedding_config: resolveEmbeddingConfig(row?.embedding_config), // DB 우선, off/미설정이면 env(EMBEDDINGS_*) 시드
     storage_policy: resolveStoragePolicy(row?.storage_policy), // DB 우선, 비면 env 시드 → 코드 기본값(#813)
+    call_log_policy: resolveCallLogPolicy(row?.call_log_policy), // #1082 — 구 DB(컬럼 부재)면 기본값(90일)
+    session_memory_policy: resolveSessionMemoryPolicy(row?.session_memory_policy), // #1059 D — DB 우선, 비면 env 시드 → 0/0(무제한, 무회귀)
+    session_reclaim_policy: resolveSessionReclaimPolicy(row?.session_reclaim_policy), // #1059 F — DB 우선, 비면 env 시드 → 0(회수 끔, 무회귀)
     hook_relay_decisions: relayDecisionsSafe(row?.hook_relay_decisions), // #892 — 구 DB(컬럼 부재)면 기본값
     session_share: resolveSessionShare(row?.session_share), // #905 C1 — 구 DB(컬럼 부재)면 기본값(enabled=false)
     hook_grace_ms: graceMsSafe(row?.hook_grace_ms), // #1008 — 컬럼 부재/NULL 이면 null(무제한)
@@ -832,6 +852,9 @@ export async function updateRuntimeConfig(
     pull_tools?: string[];
     embedding_config?: EmbeddingConfigPatch;
     storage_policy?: StoragePolicyPatch;
+    call_log_policy?: CallLogPolicyPatch;
+    session_memory_policy?: SessionMemoryPolicyPatch;
+    session_reclaim_policy?: SessionReclaimPolicyPatch;
     hook_relay_decisions?: HookRelayDecision[];
     session_share?: SessionSharePatch;
     hook_grace_ms?: number | null;
@@ -881,6 +904,31 @@ export async function updateRuntimeConfig(
     const raw = await itemsPool.query(`SELECT storage_policy FROM org_runtime_config WHERE id=1`);
     storagePolicy = (raw.rows[0] as { storage_policy?: unknown } | undefined)?.storage_policy ?? {};
   }
+  // 호출 감사로그 보관 정책(#1082) — storage_policy 와 동일 규칙: **안 건드린 저장은 DB 원본을 그대로 둔다**(before 되쓰기 금지).
+  let callLogPolicy: unknown;
+  if (patch.call_log_policy !== undefined) {
+    callLogPolicy = normalizeCallLogPolicy({ ...before.call_log_policy, ...patch.call_log_policy });
+  } else {
+    const raw = await itemsPool.query(`SELECT call_log_policy FROM org_runtime_config WHERE id=1`);
+    callLogPolicy = (raw.rows[0] as { call_log_policy?: unknown } | undefined)?.call_log_policy ?? {};
+  }
+  // per-session 메모리 정책(#1059 D) — storage_policy 와 동일 규칙: **안 건드린 저장은 DB 원본을 그대로 둔다**
+  //  (before(resolved) 되쓰면 env 시드/기본값이 DB 로 굳어 '미설정' 이 사라진다 — #688 함정).
+  let sessionMemoryPolicy: unknown;
+  if (patch.session_memory_policy !== undefined) {
+    sessionMemoryPolicy = normalizeSessionMemoryPolicy({ ...before.session_memory_policy, ...patch.session_memory_policy });
+  } else {
+    const raw = await itemsPool.query(`SELECT session_memory_policy FROM org_runtime_config WHERE id=1`);
+    sessionMemoryPolicy = (raw.rows[0] as { session_memory_policy?: unknown } | undefined)?.session_memory_policy ?? {};
+  }
+  // idle 회수 정책(#1059 F) — storage/session-memory 와 동일 규칙: **안 건드린 저장은 DB 원본을 그대로 둔다**(before 되쓰기 금지).
+  let sessionReclaimPolicy: unknown;
+  if (patch.session_reclaim_policy !== undefined) {
+    sessionReclaimPolicy = normalizeSessionReclaimPolicy({ ...before.session_reclaim_policy, ...patch.session_reclaim_policy });
+  } else {
+    const raw = await itemsPool.query(`SELECT session_reclaim_policy FROM org_runtime_config WHERE id=1`);
+    sessionReclaimPolicy = (raw.rows[0] as { session_reclaim_policy?: unknown } | undefined)?.session_reclaim_policy ?? {};
+  }
   // 세션 공유(#905 C1) — storage_policy 와 동일 규칙: **안 건드린 저장은 DB 원본을 그대로 둔다**(before 되쓰기 금지).
   //  건드리면 before(resolved) 위에 patch 를 얹어 정규화(잡값·미지원 하네스·범위초과 방어).
   let sessionShare: unknown;
@@ -891,22 +939,25 @@ export async function updateRuntimeConfig(
     sessionShare = (raw.rows[0] as { session_share?: unknown } | undefined)?.session_share ?? null;
   }
   await itemsPool.query(
-    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, version, updated_at, updated_by)
-       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$14::jsonb,$15::jsonb,$16,$17,1,now(),$13)
+    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, version, updated_at, updated_by)
+       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$20::jsonb,$18::jsonb,$19::jsonb,$14::jsonb,$15::jsonb,$16,$17,1,now(),$13)
      ON CONFLICT (id) DO UPDATE SET hooks=EXCLUDED.hooks, writeback_notice=EXCLUDED.writeback_notice,
        work_roots=EXCLUDED.work_roots, allowed_auth_envs=EXCLUDED.allowed_auth_envs, url_allowlist=EXCLUDED.url_allowlist,
        allowed_db_secret_refs=EXCLUDED.allowed_db_secret_refs, allowed_db_hosts=EXCLUDED.allowed_db_hosts,
        allowed_internal_hosts=EXCLUDED.allowed_internal_hosts,
        write_tools=EXCLUDED.write_tools, pull_tools=EXCLUDED.pull_tools, embedding_config=EXCLUDED.embedding_config,
-       storage_policy=EXCLUDED.storage_policy, hook_relay_decisions=EXCLUDED.hook_relay_decisions,
+       storage_policy=EXCLUDED.storage_policy, call_log_policy=EXCLUDED.call_log_policy,
+       session_memory_policy=EXCLUDED.session_memory_policy, session_reclaim_policy=EXCLUDED.session_reclaim_policy, hook_relay_decisions=EXCLUDED.hook_relay_decisions,
        session_share=EXCLUDED.session_share, hook_grace_ms=EXCLUDED.hook_grace_ms,
        embedding_backfill_paused=EXCLUDED.embedding_backfill_paused,
        version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots),
-     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(pullTools), JSON.stringify(embeddingConfig), JSON.stringify(storagePolicy), actor ?? null, JSON.stringify(relayDecisions), JSON.stringify(sessionShare), hookGraceMs, embeddingBackfillPaused],
+     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(pullTools), JSON.stringify(embeddingConfig), JSON.stringify(storagePolicy), actor ?? null, JSON.stringify(relayDecisions), JSON.stringify(sessionShare), hookGraceMs, embeddingBackfillPaused, JSON.stringify(sessionMemoryPolicy), JSON.stringify(sessionReclaimPolicy), JSON.stringify(callLogPolicy)],
   );
   // 저장 즉시 반영 — /readyz 임계치·로그 재니터가 캐시를 들고 있다(게이트웨이 재시작 없이 먹어야 한다).
   if (patch.storage_policy !== undefined) invalidateStoragePolicyCache();
+  if (patch.session_memory_policy !== undefined) invalidateSessionMemoryPolicyCache(); // #1059 D — 저장 즉시 다음 세션 생성이 새 캡을 본다
+  if (patch.session_reclaim_policy !== undefined) invalidateSessionReclaimPolicyCache(); // #1059 F — 저장 즉시 다음 reaper tick 이 새 TTL 을 본다
   const after = await getRuntimeConfig();
   await audit("org_runtime_config", "1", "update", before, after, actor, source, meta);
   return after;
@@ -934,6 +985,36 @@ export async function getStoragePolicySource(): Promise<"db" | "env" | "default"
   }
 }
 
+// 호출 감사로그 보관 정책(#1082)의 출처(관리 UI 안내) — db(관리탭 저장)·env(.env 시드)·default(코드 기본값 90일).
+export async function getCallLogPolicySource(): Promise<"db" | "env" | "default"> {
+  try {
+    const r = await itemsPool.query(`SELECT call_log_policy FROM org_runtime_config WHERE id=1`);
+    return callLogPolicySource((r.rows[0] as { call_log_policy?: unknown } | undefined)?.call_log_policy ?? null);
+  } catch {
+    return callLogPolicySource(null); // 테이블 부재(부트스트랩 전)
+  }
+}
+
+// per-session 메모리 정책(#1059 D)의 출처(관리 UI 안내) — db(관리탭 저장)·env(.env 시드)·default(코드 기본값).
+export async function getSessionMemoryPolicySource(): Promise<"db" | "env" | "default"> {
+  try {
+    const r = await itemsPool.query(`SELECT session_memory_policy FROM org_runtime_config WHERE id=1`);
+    return sessionMemoryPolicySource((r.rows[0] as { session_memory_policy?: unknown } | undefined)?.session_memory_policy ?? null);
+  } catch {
+    return sessionMemoryPolicySource(null); // 테이블 부재(부트스트랩 전)
+  }
+}
+
+// idle 회수 정책(#1059 F)의 출처(관리 UI 안내) — db(관리탭 저장)·env(.env 시드)·default(코드 기본값).
+export async function getSessionReclaimPolicySource(): Promise<"db" | "env" | "default"> {
+  try {
+    const r = await itemsPool.query(`SELECT session_reclaim_policy FROM org_runtime_config WHERE id=1`);
+    return sessionReclaimPolicySource((r.rows[0] as { session_reclaim_policy?: unknown } | undefined)?.session_reclaim_policy ?? null);
+  } catch {
+    return sessionReclaimPolicySource(null); // 테이블 부재(부트스트랩 전)
+  }
+}
+
 // ════════ MCP 서버 레지스트리 — org_mcp_server ════════
 export interface McpServer {
   name: string;
@@ -954,6 +1035,9 @@ export interface McpServer {
   scope: string | null;
   level: "L0" | "L1" | "L2" | null;
   pii_scrub: boolean;
+  // log_args(#1082): 이 서버 프록시 툴의 호출 '인자 값'을 감사로그에 남길지. 기본 false — 프록시 인자에는 조직 밖으로
+  //  나가는 본문(슬랙 DM·메일)이 실리므로 값은 안 남기고 호출 사실(누가·언제·어떤 툴)만 남긴다.
+  log_args: boolean;
   auth_kind: string | null;
   auth_scope_key: string | null;
   auth_mode: "bearer" | "oauth" | "sigv4" | null; // null/bearer=정적토큰, oauth=per-member OAuth(T2), sigv4=AWS 요청서명(#746)
@@ -978,13 +1062,14 @@ function mapMcp(row: Record<string, unknown>): McpServer {
     scope: (row.scope as string) ?? null,
     level: (row.level as McpServer["level"]) ?? null,
     pii_scrub: row.pii_scrub === true,
+    log_args: row.log_args === true, // #1082 — 컬럼 부재(구 DB)면 undefined → false(안전측: 값 미저장)
     auth_kind: (row.auth_kind as string) ?? null,
     auth_scope_key: (row.auth_scope_key as string) ?? null,
     auth_mode: (row.auth_mode as McpServer["auth_mode"]) ?? null,
   };
 }
 
-const MCP_COLS = "name, transport, url, command, auth_env, note, enabled, sort, version, updated_at, updated_by, mode, tools_snapshot, snapshot_at, scope, level, pii_scrub, auth_kind, auth_scope_key, auth_mode";
+const MCP_COLS = "name, transport, url, command, auth_env, note, enabled, sort, version, updated_at, updated_by, mode, tools_snapshot, snapshot_at, scope, level, pii_scrub, log_args, auth_kind, auth_scope_key, auth_mode";
 
 export async function listMcpServers(): Promise<McpServer[]> {
   const r = await itemsPool.query(`SELECT ${MCP_COLS} FROM org_mcp_server ORDER BY sort, name`);
@@ -1009,6 +1094,7 @@ export interface McpServerInput {
   scope?: string | null;
   level?: "L0" | "L1" | "L2" | null;
   pii_scrub?: boolean;
+  log_args?: boolean; // #1082 인자 값 저장 허용(기본 false)
   auth_kind?: string | null;
   auth_scope_key?: string | null;
   auth_mode?: "bearer" | "oauth" | "sigv4" | null;
@@ -1028,12 +1114,13 @@ export async function upsertMcpServer(m: McpServerInput, actor?: string, source?
   // auth_mode=oauth 는 auth_kind(vault 토큰 슬롯 kind) 필수(#746 리뷰 #3) — 없으면 연결/호출 시점까지 오류가 늦어진다.
   if (authMode === "oauth" && !authKind) throw new Error("auth_mode=oauth 는 auth_kind(자격 종류)가 필요합니다");
   await itemsPool.query(
-    `INSERT INTO org_mcp_server(name, transport, url, command, auth_env, note, enabled, sort, mode, scope, level, pii_scrub, auth_kind, auth_scope_key, auth_mode, version, updated_at, updated_by)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,1,now(),$16)
+    `INSERT INTO org_mcp_server(name, transport, url, command, auth_env, note, enabled, sort, mode, scope, level, pii_scrub, log_args, auth_kind, auth_scope_key, auth_mode, version, updated_at, updated_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,1,now(),$17)
      ON CONFLICT (name) DO UPDATE SET
        transport=EXCLUDED.transport, url=EXCLUDED.url, command=EXCLUDED.command, auth_env=EXCLUDED.auth_env,
        note=EXCLUDED.note, enabled=EXCLUDED.enabled, sort=EXCLUDED.sort,
        mode=EXCLUDED.mode, scope=EXCLUDED.scope, level=EXCLUDED.level, pii_scrub=EXCLUDED.pii_scrub,
+       log_args=EXCLUDED.log_args,
        auth_kind=EXCLUDED.auth_kind, auth_scope_key=EXCLUDED.auth_scope_key, auth_mode=EXCLUDED.auth_mode,
        version=org_mcp_server.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [m.name, transport, url, command,
@@ -1042,6 +1129,7 @@ export async function upsertMcpServer(m: McpServerInput, actor?: string, source?
      mode, m.scope !== undefined ? m.scope : (before?.scope ?? null),
      m.level !== undefined ? m.level : (before?.level ?? null),
      m.pii_scrub !== undefined ? !!m.pii_scrub : (before?.pii_scrub ?? false),
+     m.log_args !== undefined ? !!m.log_args : (before?.log_args ?? false), // #1082 — 미지정이면 기존값, 신규는 false(안전측)
      authKind, m.auth_scope_key !== undefined ? (m.auth_scope_key || null) : (before?.auth_scope_key ?? null),
      authMode,
      actor ?? null],
@@ -1655,6 +1743,7 @@ export interface OrgHook {
   source_code: string;
   timeout_sec: number;
   note: string | null;
+  summary: string;             // 화면에 보이는 '쉬운 한 줄'(#1085) — note(운영 메모)와 별개
   target_members: string[] | null; // #699: NULL/빈=전원, 배열=그 멤버만(org_harness_asset 와 대칭)
   enabled: boolean;
   sort: number;
@@ -1685,6 +1774,7 @@ function mapHook(row: Record<string, unknown>): OrgHook {
     source_code: (row.source_code as string) ?? "",
     timeout_sec: (row.timeout_sec as number) ?? 10,
     note: (row.note as string) ?? null,
+    summary: (row.summary as string) ?? "",
     target_members: Array.isArray(tm) ? (tm as string[]) : null,
     enabled: row.enabled !== false,
     sort: (row.sort as number) ?? 0,
@@ -1698,7 +1788,7 @@ function mapHook(row: Record<string, unknown>): OrgHook {
   };
 }
 
-const HOOK_COLS = "id, label, harness, event, matcher, source_code, timeout_sec, note, target_members, enabled, sort, version, content_hash, health, created_by, updated_at, updated_by";
+const HOOK_COLS = "id, label, harness, event, matcher, source_code, timeout_sec, note, summary, target_members, enabled, sort, version, content_hash, health, created_by, updated_at, updated_by";
 const HOOK_COLS_Q = HOOK_COLS.split(", ").map((c) => "h." + c).join(", "); // JOIN 용 정규화(updated_at/updated_by 모호성 회피, #699)
 
 export async function listOrgHooks(): Promise<OrgHook[]> {
@@ -1758,6 +1848,7 @@ export interface OrgHookInput {
   source_code?: string;
   timeout_sec?: number;
   note?: string | null;
+  summary?: string;            // 표시용 한 줄(#1085) — 미전송=보존
   target_members?: string[] | null; // #699: undefined=보존, null/빈=전원, 배열=지정
   enabled?: boolean;
   sort?: number;
@@ -1774,12 +1865,13 @@ export async function upsertOrgHook(h: OrgHookInput, ctx: WriteCtx = {}): Promis
   // matcher — target_members 와 동형(#970): null 은 '전체 매칭'이라는 의미 있는 값이라 `?? before`(nullish 보존)로는
   //  '명시적 전체매칭'과 '미지정'을 못 가른다. undefined(미지정)만 보존, null/문자열은 그 값을 그대로 쓴다.
   const matcher = h.matcher === undefined ? (before?.matcher ?? null) : h.matcher;
+  const summary = h.summary ?? before?.summary ?? "";
   await itemsPool.query(
-    `INSERT INTO org_hook(id,label,harness,event,matcher,source_code,timeout_sec,note,target_members,enabled,sort,version,content_hash,created_by,updated_at,updated_by)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$14,$9,$10,1,$11,$12,now(),$13)
+    `INSERT INTO org_hook(id,label,harness,event,matcher,source_code,timeout_sec,note,summary,target_members,enabled,sort,version,content_hash,created_by,updated_at,updated_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$15,$14,$9,$10,1,$11,$12,now(),$13)
      ON CONFLICT (id) DO UPDATE SET
        label=EXCLUDED.label, harness=EXCLUDED.harness, event=EXCLUDED.event, matcher=EXCLUDED.matcher,
-       source_code=EXCLUDED.source_code, timeout_sec=EXCLUDED.timeout_sec, note=EXCLUDED.note,
+       source_code=EXCLUDED.source_code, timeout_sec=EXCLUDED.timeout_sec, note=EXCLUDED.note, summary=EXCLUDED.summary,
        target_members=EXCLUDED.target_members, enabled=EXCLUDED.enabled, sort=EXCLUDED.sort, content_hash=EXCLUDED.content_hash,
        -- 본문이 바뀌면 건강 기록을 비운다(#892): 옛 본문의 실패는 새 본문과 무관한데, 안 지우면 고친 뒤에도
        -- '⚠ 실패' 배지가 영영 남아 지표를 못 믿게 된다(경보 피로). 본문이 그대로면(토글·라벨만 수정) 유지.
@@ -1789,7 +1881,7 @@ export async function upsertOrgHook(h: OrgHookInput, ctx: WriteCtx = {}): Promis
      sourceCode, h.timeout_sec ?? before?.timeout_sec ?? 10, h.note ?? before?.note ?? null,
      h.enabled ?? before?.enabled ?? true, h.sort ?? before?.sort ?? 0, contentHash,
      before?.created_by ?? ctx.actor ?? null, ctx.actor ?? null,
-     targetMembers === null ? null : JSON.stringify(targetMembers)],
+     targetMembers === null ? null : JSON.stringify(targetMembers), summary],
   );
   const after = await getOrgHook(h.id);
   await audit("org_hook", h.id, before ? "update" : "insert", before, after, ctx.actor, ctx.source, ctx);
@@ -1822,6 +1914,7 @@ export interface OrgTool {
   auth_kind: string | null; // P1(#746): 설정 시 http_proxy 가 member_secret(호출자 개인 자격 우선)로 인증. null=auth_env(조직 공용) 사용.
   auth_scope_key: string | null; // vault 조회 scope_key(예 host)
   pii_scrub: boolean; // P3(#746): true 면 응답 본문(문자열)에 scrubPii(비정형 PII 마스킹)
+  log_args: boolean; // #1082: 호출 '인자 값'을 감사로그에 남길지. 기본 false — http_proxy 도 조직 밖으로 나가는 통신이다.
   note: string | null;
   sort: number;
   version: number;
@@ -1849,6 +1942,7 @@ function mapTool(row: Record<string, unknown>): OrgTool {
     auth_kind: (row.auth_kind as string) ?? null,
     auth_scope_key: (row.auth_scope_key as string) ?? null,
     pii_scrub: row.pii_scrub === true,
+    log_args: row.log_args === true, // #1082 — 컬럼 부재(구 DB)면 undefined → false(안전측: 값 미저장)
     note: (row.note as string) ?? null,
     sort: (row.sort as number) ?? 0,
     version: (row.version as number) ?? 1,
@@ -1857,7 +1951,7 @@ function mapTool(row: Record<string, unknown>): OrgTool {
   };
 }
 
-const TOOL_COLS = "name, kind, enabled, title, description, scope, input_schema, method, url, auth_env, auto_approve, always_load, level, auth_kind, auth_scope_key, pii_scrub, note, sort, version, updated_at, updated_by";
+const TOOL_COLS = "name, kind, enabled, title, description, scope, input_schema, method, url, auth_env, auto_approve, always_load, level, auth_kind, auth_scope_key, pii_scrub, log_args, note, sort, version, updated_at, updated_by";
 
 export async function listTools(): Promise<OrgTool[]> {
   const r = await itemsPool.query(`SELECT ${TOOL_COLS} FROM org_tool ORDER BY sort, name`);
@@ -1928,6 +2022,7 @@ export interface OrgToolInput {
   auth_kind?: string | null; // P1(#746) vault 인증 kind: undefined=유지, null/""=env 사용, 값=member_secret 해소.
   auth_scope_key?: string | null;
   pii_scrub?: boolean; // P3(#746) 응답 PII 마스킹
+  log_args?: boolean; // #1082 인자 값 저장 허용(기본 false)
   note?: string | null;
   sort?: number;
 }
@@ -1950,18 +2045,21 @@ export async function upsertTool(t: OrgToolInput, ctx: WriteCtx = {}): Promise<O
   const authEnv = isProxy ? (authKind ? null : (t.auth_env ?? before?.auth_env ?? null)) : null;
   const authScopeKey = isProxy ? (t.auth_scope_key !== undefined ? (t.auth_scope_key || null) : (before?.auth_scope_key ?? null)) : null;
   const piiScrub = isProxy ? (t.pii_scrub !== undefined ? !!t.pii_scrub : (before?.pii_scrub ?? false)) : false;
+  // #1082 — 인자 값 저장 허용. 프록시(외부 통신) 툴에만 의미가 있고, 빌트인은 애초에 이 정책의 대상이 아니라 false.
+  const logArgs = isProxy ? (t.log_args !== undefined ? !!t.log_args : (before?.log_args ?? false)) : false;
   await itemsPool.query(
-    `INSERT INTO org_tool(name,kind,enabled,title,description,scope,input_schema,method,url,auth_env,auto_approve,always_load,level,auth_kind,auth_scope_key,pii_scrub,note,sort,version,updated_at,updated_by)
-       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,1,now(),$19)
+    `INSERT INTO org_tool(name,kind,enabled,title,description,scope,input_schema,method,url,auth_env,auto_approve,always_load,level,auth_kind,auth_scope_key,pii_scrub,log_args,note,sort,version,updated_at,updated_by)
+       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,1,now(),$20)
      ON CONFLICT (name) DO UPDATE SET
        kind=EXCLUDED.kind, enabled=EXCLUDED.enabled, title=EXCLUDED.title, description=EXCLUDED.description,
        scope=EXCLUDED.scope, input_schema=EXCLUDED.input_schema, method=EXCLUDED.method, url=EXCLUDED.url,
        auth_env=EXCLUDED.auth_env, auto_approve=EXCLUDED.auto_approve, always_load=EXCLUDED.always_load, level=EXCLUDED.level,
-       auth_kind=EXCLUDED.auth_kind, auth_scope_key=EXCLUDED.auth_scope_key, pii_scrub=EXCLUDED.pii_scrub, note=EXCLUDED.note, sort=EXCLUDED.sort,
+       auth_kind=EXCLUDED.auth_kind, auth_scope_key=EXCLUDED.auth_scope_key, pii_scrub=EXCLUDED.pii_scrub,
+       log_args=EXCLUDED.log_args, note=EXCLUDED.note, sort=EXCLUDED.sort,
        version=org_tool.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [t.name, kind, t.enabled ?? before?.enabled ?? true, t.title ?? before?.title ?? null,
      t.description ?? before?.description ?? "", scope, JSON.stringify(inputSchema), method, url, authEnv,
-     t.auto_approve ?? before?.auto_approve ?? false, alwaysLoad, level, authKind, authScopeKey, piiScrub,
+     t.auto_approve ?? before?.auto_approve ?? false, alwaysLoad, level, authKind, authScopeKey, piiScrub, logArgs,
      t.note ?? before?.note ?? null, t.sort ?? before?.sort ?? 0, ctx.actor ?? null],
   );
   const after = await getTool(t.name);
@@ -1986,6 +2084,10 @@ export interface OrgHarnessAsset {
   label: string | null;
   harness: HookHarness;
   description: string;
+  // summary — 화면에 보이는 '쉬운 한 줄'(#1085). description 은 **하네스가 언제 이 스킬을 쓸지 판단하는 트리거
+  //  문장**이라 길고 기술적이다. 그걸 그대로 사용자 화면에 깔면 무슨 기능인지 안 읽혀서, 표시용 문장을 따로 둔다.
+  //  비어 있으면 화면이 description 첫 문장으로 폴백한다(지식의 summary 와 같은 관례).
+  summary: string;
   body: string;
   frontmatter: Record<string, unknown>;
   target_members: string[] | null;
@@ -2008,6 +2110,7 @@ function mapAsset(row: Record<string, unknown>): OrgHarnessAsset {
     label: (row.label as string) ?? null,
     harness: row.harness as HookHarness,
     description: (row.description as string) ?? "",
+    summary: (row.summary as string) ?? "",
     body: (row.body as string) ?? "",
     frontmatter: fm && typeof fm === "object" && !Array.isArray(fm) ? (fm as Record<string, unknown>) : {},
     target_members: Array.isArray(tm) ? (tm as string[]) : null,
@@ -2023,7 +2126,7 @@ function mapAsset(row: Record<string, unknown>): OrgHarnessAsset {
 }
 
 const ASSET_COLS =
-  "id, kind, label, harness, description, body, frontmatter, target_members, paired_hook_id, enabled, sort, version, content_hash, created_by, updated_at, updated_by";
+  "id, kind, label, harness, description, summary, body, frontmatter, target_members, paired_hook_id, enabled, sort, version, content_hash, created_by, updated_at, updated_by";
 const ASSET_COLS_Q = ASSET_COLS.split(", ").map((c) => "a." + c).join(", "); // JOIN 용 정규화(updated_at/updated_by 모호성 회피, #699)
 
 // content_hash — materialize 결과에 영향 주는 필드만 정규화 해시(클라 변경감지=재작성 skip). 관리메타(label·sort·enabled)는 제외.
@@ -2076,6 +2179,7 @@ export interface OrgHarnessAssetInput {
   label?: string | null;
   harness?: HookHarness;
   description?: string;
+  summary?: string;            // 표시용 한 줄(#1085) — 미전송=보존
   body?: string;
   frontmatter?: Record<string, unknown>;
   target_members?: string[] | null;
@@ -2089,23 +2193,24 @@ export async function upsertOrgHarnessAsset(a: OrgHarnessAssetInput, ctx: WriteC
   const kind = a.kind ?? before?.kind ?? "skill";
   const harness = a.harness ?? before?.harness ?? "all";
   const description = a.description ?? before?.description ?? "";
+  const summary = a.summary ?? before?.summary ?? "";   // 표시용 한 줄(#1085) — 미전송이면 보존
   const body = a.body ?? before?.body ?? "";
   const frontmatter = a.frontmatter ?? before?.frontmatter ?? {};
   const targetMembers = a.target_members === undefined ? (before?.target_members ?? null) : a.target_members;
   const contentHash = assetContentHash({ kind, harness, description, body, frontmatter });
   await itemsPool.query(
-    `INSERT INTO org_harness_asset(id,kind,label,harness,description,body,frontmatter,target_members,paired_hook_id,enabled,sort,version,content_hash,created_by,updated_at,updated_by)
-       VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11,1,$12,$13,now(),$14)
+    `INSERT INTO org_harness_asset(id,kind,label,harness,description,summary,body,frontmatter,target_members,paired_hook_id,enabled,sort,version,content_hash,created_by,updated_at,updated_by)
+       VALUES($1,$2,$3,$4,$5,$15,$6,$7::jsonb,$8::jsonb,$9,$10,$11,1,$12,$13,now(),$14)
      ON CONFLICT (id) DO UPDATE SET
        kind=EXCLUDED.kind, label=EXCLUDED.label, harness=EXCLUDED.harness, description=EXCLUDED.description,
-       body=EXCLUDED.body, frontmatter=EXCLUDED.frontmatter, target_members=EXCLUDED.target_members,
+       summary=EXCLUDED.summary, body=EXCLUDED.body, frontmatter=EXCLUDED.frontmatter, target_members=EXCLUDED.target_members,
        paired_hook_id=EXCLUDED.paired_hook_id, enabled=EXCLUDED.enabled, sort=EXCLUDED.sort,
        content_hash=EXCLUDED.content_hash, version=org_harness_asset.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [a.id, kind, a.label ?? before?.label ?? null, harness, description, body,
      JSON.stringify(frontmatter), targetMembers === null ? null : JSON.stringify(targetMembers),
      a.paired_hook_id === undefined ? (before?.paired_hook_id ?? null) : a.paired_hook_id,
      a.enabled ?? before?.enabled ?? true, a.sort ?? before?.sort ?? 0, contentHash,
-     before?.created_by ?? ctx.actor ?? null, ctx.actor ?? null],
+     before?.created_by ?? ctx.actor ?? null, ctx.actor ?? null, summary],
   );
   const after = await getOrgHarnessAsset(a.id);
   await audit("org_harness_asset", a.id, before ? "update" : "insert", before, after, ctx.actor, ctx.source, ctx);

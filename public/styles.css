@@ -671,7 +671,32 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .member-read-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
 .member-read-head h3 { margin: 0; }
 /* 구성원 추가 패널 — ①/② 단계 헤더 */
-.member-add-step { margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+/* 카드 안 소제목(#1085) — 카드 제목(16px)보다 **작아야** 한다. 예전엔 h3 UA 크기(≈17.5px)라
+   '접속 토큰 발급'이 카드 제목 '접속 토큰'보다 커 위계가 뒤집혀 있었다. */
+.member-add-step, .admin-subhead-2 { margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--line);
+  font-size: 13.5px; font-weight: 800; color: var(--ink); letter-spacing: -.1px; }
+/* 목록 머리 — 소제목 + 오른쪽 검색·개수 도구.
+   ⚠ 구분선은 **머리 줄 전체**가 가져야 한다. 제목(h4)에만 border-top 을 두면 선이 검색창 앞에서 뚝 끊겨
+   화면이 깨져 보였다(#1085 사용자 지적). */
+.tok-listhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  margin: 18px 0 8px; padding-top: 14px; border-top: 1px solid var(--line); }
+.tok-listhead .admin-subhead-2 { flex: 1 1 auto; margin: 0; padding-top: 0; border-top: 0; }
+.tok-tools { display: flex; align-items: center; gap: 8px; }
+.tok-search { width: 210px; }
+.tok-per { width: auto; }
+/* 토큰 행 — 이름/메타(왼쪽) + 동작(오른쪽). 권한 목록이 길어 메타가 넘치지 않게 한 줄로 자른다.
+   ⚠ 행 좌우에 음수 마진을 줬더니 **행만 8px 왼쪽으로 튀어나와** 제목·설명·페이저(카드 기준선)와 어긋나 보였다
+   (#1085 '들여쓰기가 이상'). 정렬이 우선 — 배경 강조는 box-shadow 로 좌우만 넓힌다(레이아웃 불변). */
+.token-row { padding: 11px 0; margin: 0; }
+.token-row:hover { background: var(--bg-tint); box-shadow: -8px 0 0 var(--bg-tint), 8px 0 0 var(--bg-tint); }
+.token-main { flex: 1 1 auto; }
+.token-main .mini-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 목록 구분 머리(사용 중 / 해제됨) — 위 목록과 붙지 않게. */
+.token-section-h { margin: 16px 0 2px; }
+.token-section-h:first-child { margin-top: 6px; }
+/* 페이저 — 숫자 버튼과 '53개 중 1–10' 이 붙어 한 덩어리로 읽혔다. 간격을 벌리고 위 목록과도 띄운다. */
+.oa-pager { margin-top: 16px; }
+.oa-pg-info { margin-left: 14px; }
 
 /* 상세 박스 내부(목록·편집) 기본 = 세로 스택. 단독으로 쓰는 곳은 이제 없고,
    .admin-two-cols(마스터-디테일)의 좁은화면 폴백 겸 베이스로만 남는다.
@@ -807,6 +832,17 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .ov-box { background: var(--bg); border-radius: 16px; box-shadow: 0 24px 64px rgba(21,35,59,.28); max-width: 760px; width: 100%; padding: 22px 24px; }
 .ov-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .ov-head h3 { margin: 0; font-size: 17px; font-weight: 800; color: var(--ink); }
+/* 확인 다이얼로그(#1062) — 브라우저 confirm 대체. 짧은 팝업이라 화면 중앙, 좁게, 액션은 우하단.
+   위험(danger)일 때만 제목 왼쪽에 코랄 레일을 둬 '되돌리기 어려운 동작'임을 시각적으로 못 박는다. */
+.ov-back.ov-confirm-back { align-items: center; }
+.ov-box.ov-confirm { max-width: 440px; padding: 20px 22px; }
+.ov-box.ov-confirm .ov-head { margin-bottom: 10px; }
+.ov-box.ov-confirm.danger .ov-head h3 { border-left: 3px solid var(--coral, #e5484d); padding-left: 10px; }
+.ov-confirm-body { display: flex; flex-direction: column; gap: 7px; }
+.ov-confirm-msg { margin: 0; font-size: 14px; line-height: 1.6; color: var(--ink); }
+.ov-confirm-line { margin: 0; font-size: 13px; line-height: 1.6; color: var(--ink-note, var(--muted)); }
+.ov-confirm-note { margin: 2px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); background: var(--bg-tint, rgba(127,127,127,.07)); border-radius: 8px; padding: 8px 10px; }
+.ov-confirm-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 /* ── 세션 대화록(#905 C1) — 사이드바 네비 + 10줄 하드 캡 + 줄단위 링크 ── */
 .sess-layout { display: flex; gap: 20px; align-items: flex-start; }
 .sess-side { position: sticky; top: 12px; flex: 0 0 240px; width: 240px; max-height: calc(100vh - 40px); overflow: auto; border-right: 1px solid rgba(127,127,127,.15); padding-right: 10px; }
@@ -1156,8 +1192,98 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .svc-item-actions { flex: none; display: flex; align-items: center; gap: 8px; margin-left: auto; }
 /* 카드 세로 스택 — 서브카드 사이 여백을 균일하게(개별 카드 인라인 margin 의존 제거, #762). */
 .admin-stack { display: flex; flex-direction: column; gap: 14px; }
+/* 섹션 제목(카드 첫 줄 h3) — UA 기본 margin(≈17px)이 카드 패딩 24px 에 더해져 제목이 박스 위에서 40px 넘게
+   떨어져 있었다(#1085 지적). 제목은 카드 패딩 자리에 딱 붙이고, 아래 설명(.caption)과의 간격만 준다.
+   :first-child 로 좁혀 카드 중간에 오는 h3(위 여백이 필요한 자리)는 건드리지 않는다. */
+.admin-body .card > h3:first-child { margin: 0; font-size: 16px; font-weight: 800; letter-spacing: -.2px; }
+.admin-body .card > h3:first-child + .caption { display: block; margin: 5px 0 0; line-height: 1.5; }
+/* 카드 섹션 제목 줄 — 제목 + 오른쪽 ⓘ(#1085). 설명은 화면에 깔지 않고 아이콘 뒤 팝오버로. */
+.card-head-row { display: flex; align-items: center; gap: 6px; margin: 0 0 14px; }
+.card-head-row h3 { margin: 0; font-size: 16px; font-weight: 800; letter-spacing: -.2px; }
+.card-head-act { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+/* 내 스킬·훅(#1085) — 두 층 위계: hlayer(어디서 온 것: 조직 배포 / 내 컴퓨터) ▸ hgroup(종류: 스킬 / 훅).
+   전에는 h4·h5 크기 차이만으로 눌러 담아 두 층이 안 읽혔다. 층은 위 여백+구분선으로, 종류는 접이식 머리로 만든다. */
+.hlayer { margin-top: 26px; }
+.hlayer:first-child { margin-top: 4px; }
+.hlayer-head { display: flex; align-items: center; gap: 6px; padding-bottom: 8px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.hlayer-title { margin: 0; font-size: 14.5px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
+.hgroup { border-bottom: 1px solid var(--line-row); padding-bottom: 4px; }
+.hgroup:last-child { border-bottom: 0; }
+.hgroup-head-row { display: flex; align-items: center; gap: 8px; padding: 12px 2px 6px; }
+.hgroup-title { font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.hgroup-count { display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 999px;
+  background: var(--bg-tint-2); color: var(--muted-head); font-size: 11.5px; font-weight: 700; }
+.hgroup-body { padding: 0 0 4px; }
+.hgroup-more { padding: 2px 0 10px; }
+/* 켬/끔 스위치 — 현재 상태는 형태로(파랑·오른쪽=켜짐), 기본값·내 변경 여부는 옆 글이 말한다(#1085). */
+.sw { position: relative; flex: none; width: 40px; height: 23px; padding: 0; border: 0; border-radius: 999px;
+  background: var(--muted-3); cursor: pointer; transition: background .15s ease; }
+.sw.on { background: var(--blue); }
+.sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 17px; height: 17px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgba(21, 35, 59, .25); transition: transform .15s ease; }
+.sw.on::after { transform: translateX(17px); }
+.sw:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+/* 라벨은 스위치 **왼쪽**에서 오른쪽 정렬 — 스위치가 항상 행의 같은 자리(맨 오른쪽)에 서서, 글자 길이에
+   따라 좌우로 밀리지 않는다(사용자 지적). */
+.sw-labels { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+.sw-state { font-size: 12.5px; font-weight: 700; color: var(--muted-head); }
+.sw-state.on { color: var(--blue); }
+.sw-note { font-size: 11px; color: var(--muted-2); white-space: nowrap; }
+/* 항목 한 줄 — 왼쪽 내용(제목·요약·PC 칩) + 오른쪽 켬/끔. 왼쪽이 여러 줄이어도 컨트롤은 세로 가운데. */
+.hrow { display: flex; align-items: center; gap: 14px; }
+.hrow-act { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex: none; }
+
+/* 제목 옆 부가 표시(#1085) — '(개발자용)' 처럼 괄호로 붙이던 것을 칩으로. 제목보다 작고 조용하게. */
+.head-badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px;
+  background: var(--bg-tint-2); color: var(--muted-head); font-size: 11.5px; font-weight: 700; line-height: 1.6; white-space: nowrap; }
+/* '대상 독자' 표시(개발자용 등) — 상태 배지(연결됨·미연결)와 **같은 옷을 입으면 안 된다**(사용자 지적).
+   상태 칩이 채운 알약이라면 이건 테두리만 있는 태그 + 다른 색(teal)으로, '상태가 아니라 꼬리표'임을 형태로 구분한다. */
+.head-badge-aud { background: transparent; border: 1px solid #9FD9DA; color: #12797B; border-radius: 6px;
+  padding: 1px 7px; font-size: 11px; letter-spacing: .2px; }
+/* ⓘ 트리거 — 제목 옆에 '옅게'. 텍스트 라벨 없이 아이콘만(사용자 요구). */
+.hint-i { display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 20px; height: 20px; padding: 0; border: 0; background: none; cursor: pointer;
+  color: var(--muted-2); font-size: 13px; line-height: 1; border-radius: 50%;
+  transition: color .12s ease, background-color .12s ease; }
+.hint-i:hover { color: var(--blue); background: var(--bg-tint-2); }
+.hint-i[aria-expanded="true"] { color: var(--blue); background: var(--bg-tint-2); }
+.hint-i:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+/* 팝오버 — body 에 fixed 로 붙어 카드 overflow·스크롤 컨테이너에 잘리지 않는다. */
+.hint-pop { position: fixed; z-index: 90; box-sizing: border-box; max-height: 70vh; overflow-y: auto;
+  padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg);
+  box-shadow: 0 12px 32px rgba(21, 35, 59, .13); }
+.hint-pop-text { margin: 0; font-size: 13px; line-height: 1.62; color: var(--ink-sub); white-space: pre-line; }
+.hint-pop-text b { color: var(--ink); }
+.hint-pop .meaning-pop { margin-top: 12px; }
+.hint-pop-text:only-child { margin: 0; }
+/* 폼 카드 안 항목 위계(#1085) — 라벨이 12.5px 회색이라 아래 힌트와 **같은 급**으로 읽혀 '이게 소제목'이라는
+   신호가 없었다. 라벨을 잉크색 13.5px 로 올려 힌트(12.5px 회색)와 층을 가르고, 항목 사이를 넉넉히(26px)
+   벌려 경계를 만든다.
+   ⚠ 항목마다 헤어라인을 깔아 봤다가 걷어냈다 — 입력칸 테두리·칩 외곽선·버튼이 이미 가로선을 잔뜩 만들어
+    구분선이 하나 더 붙으면 선이 겹쳐 눈이 피로하다(사용자 지적). 폼에서는 **선이 아니라 여백**이 답이다. */
+.admin-body .card > .field { margin: 0 0 26px; padding: 0; border-top: 0; }
+.admin-body .card > .field:last-of-type { margin-bottom: 0; }
+.admin-body .card > .field-label { margin-bottom: 8px; }
+.admin-body .card > .field > .field-label,
+.admin-body .card > .field > .field-label-row .field-label { font-size: 13.5px; font-weight: 700; color: var(--ink); margin-bottom: 8px; }
+.admin-body .card .prof-chips { margin-top: 0; }
+.admin-body .card .prof-hint { margin-top: 8px; }
+.admin-body .card > .field + .admin-actions { margin-top: 20px; }
+/* 내 AI 계정(#1085) — AI 한 줄 = [이름 · 상태 배지] + [한 줄 부제] | 오른쪽 [동작].
+   제약(공용 계정·맥 키체인)은 길어서 본문에 풀면 회색 문단이 카드를 덮는다 → 배지 툴팁으로 접는다. */
+.aiacct { display: flex; align-items: center; gap: 14px; padding: 13px 0; border-top: 1px solid var(--line); }
+.aiacct:first-child { border-top: 0; padding-top: 14px; }   /* 설명(.caption) 과 첫 행 사이 숨 — 제목 여백을 줄인 만큼 여기서 준다 */
+.aiacct:last-child { padding-bottom: 0; }
+.aiacct-txt { flex: 1; min-width: 0; }
+.aiacct-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.aiacct-name { font-size: 14.5px; font-weight: 700; color: var(--ink); }
+.aiacct-sub { margin-top: 3px; font-size: 12.5px; color: var(--muted-head); }
+.aiacct-act { flex: none; display: flex; gap: 8px; align-items: center; }
 /* 서비스별 탭(내 서비스 로그인, #762) — .chip 재사용한 탭 바 + 선택 서비스 패널. */
-.svc-tabs { margin-bottom: 16px; }
+/* 탭 줄 ↔ 상세 패널(#1085) — 같은 흰 면에 붙어 어디까지가 탭 줄인지 안 읽혔다. 선을 긋는 대신
+   상세를 **한 단 낮은 면**(연한 틴트 + 안쪽 여백)으로 내려 층으로 가른다. 안의 항목 카드는 흰색이라 층이 3단으로 읽힌다. */
+.svc-tabs { margin-bottom: 12px; }
+.svc-tab-body { padding: 16px 18px; border: 1px solid var(--line-row); border-radius: 12px; background: var(--bg-tint); }
 .svc-tab { gap: 6px; }
 .svc-tab-ic { font-size: 15px; line-height: 1; }
 .svc-tab-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--mint, #16C79A); }
@@ -1424,6 +1550,14 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .prof-chip { padding: 6px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--ink-sub); font-size: 13px; font-weight: 600; cursor: pointer; transition: border-color .12s, color .12s, background .12s; }
 .prof-chip:hover { border-color: var(--blue); color: var(--ink); }
 .prof-chip.on { background: var(--blue); border-color: var(--blue); color: #fff; }
+/* 칩 줄에 이어 붙는 '직접 입력' 칸(#1085) — 프리셋 칩 다음에 오는 또 하나의 선택지라 같은 알약 모양·높이로.
+   폭은 내용에 관계없이 고정(칩들과 한 줄), 좁아지면 wrap 이 알아서 다음 줄로 넘긴다. */
+.field input.prof-chip-input, .prof-chip-input { padding: 6px 14px; width: 190px; max-width: 100%; box-sizing: border-box;
+  border: 1px dashed var(--line-net); border-radius: 999px; background: var(--bg); color: var(--ink);
+  font-size: 13px; font-weight: 600; line-height: 1.35; }
+.prof-chip-input::placeholder { color: var(--muted-2); font-weight: 500; }
+.prof-chip-input:hover { border-color: var(--blue); }
+.prof-chip-input:focus { outline: none; border-style: solid; border-color: var(--blue); background: var(--bg-tint); }
 
 /* ③ 작업 타임라인(펼침형) */
 .dash-feed .act-card { border-bottom: 1px solid var(--line-row); }
@@ -1638,9 +1772,7 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 /* 상태칩(=카운트 요약) + 우측 프로젝트필터/선택토글 */
 .tsess-controls { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 14px; }
 .tsess-controls-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.tsess-filter-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.tsess-filter-lbl { font-size: 11.5px; font-weight: 700; color: var(--ink-note); margin-left: 6px; }
-.tsess-filter-row > .tsess-filter-lbl:first-child { margin-left: 0; }
+/* (구 '소유' 필터 줄 .tsess-filter-row/-lbl 제거 — 필터를 목적별 뷰 한 줄로 합치면서 사라졌다, #1062) */
 .tsess-projfilter { position: relative; display: inline-flex; }
 .tsess-projfilter-btn { display: inline-flex; align-items: center; gap: 6px; font-family: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; cursor: pointer; max-width: 220px; }
 .tsess-projfilter-btn:hover { border-color: var(--muted-2); }
@@ -1669,11 +1801,11 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .tsess-card.tsess-busy { border-left-color: #f59e0b; }
 .tsess-card.tsess-waiting { border-left-color: var(--coral, #e5484d); }
 .tsess-card.tsess-idle { border-left-color: var(--mint-deep); }
-.tsess-card.tsess-offline { border-left-color: var(--muted-2); background: var(--bg); }
+.tsess-card.tsess-restorable { border-left-color: var(--accent, #5b6cff); background: color-mix(in srgb, var(--accent, #5b6cff) 4%, var(--bg)); } /* #1059 E 복원 가능 */
+.tsess-card.tsess-offline, .tsess-card.tsess-exited { border-left-color: var(--muted-2); background: var(--bg); }
 .tsess-card.attached { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mint-deep) 22%, transparent); }
-.tsess-card--sel { cursor: pointer; }
-.tsess-check { flex: none; display: flex; align-items: center; }
-.tsess-check input { width: 16px; height: 16px; cursor: pointer; margin: 0; }
+/* 구 선택 UI(카드 전체를 label 로 감싸고 span.tsess-check 안에 체크박스) 잔재 제거 —
+   이제 대시보드 '내 AI 세션'과 같은 슬라이드-인 체크박스를 쓴다(#1062, 규칙은 .dash-sess-checkwrap 쪽에 한 벌). */
 
 .tsess-info { flex: 1; min-width: 0; }
 .tsess-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 5px; min-width: 0; }
@@ -1683,7 +1815,12 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .tsess-dot-busy { background: #f59e0b; box-shadow: 0 0 0 3px color-mix(in srgb, #f59e0b 22%, transparent); }
 .tsess-dot-waiting { background: var(--coral, #e5484d); box-shadow: 0 0 0 3px color-mix(in srgb, var(--coral, #e5484d) 22%, transparent); }
 .tsess-dot-idle { background: var(--mint-deep); }
+.tsess-dot-restorable { background: var(--accent, #5b6cff); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #5b6cff) 20%, transparent); } /* #1059 E */
 .tsess-dot-offline { background: var(--muted-2); }
+/* 회색 계열 둘 — 오프라인(아무도 안 보는 중) = 꽉 찬 회색 점 · 종료됨(하네스가 끝나 셸만 남음) = 속 빈 회색 점.
+   살아있고 누군가 보고 있는 상태색(민트·주황·코랄)은 그대로. */
+.tsess-dot-exited { background: transparent; box-shadow: inset 0 0 0 2px var(--muted-2); }
+.tsess-dot-offline { background: var(--muted-2); }   /* 오프라인(아무도 안 보는 중·노드 미연결) = 회색 점 */
 .tsess-proj { display: inline-flex; align-items: center; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; font-weight: 700; color: var(--blue); background: var(--bg-punch); border: 1px solid color-mix(in srgb, var(--blue) 28%, var(--bg)); border-radius: 999px; padding: 2px 9px; }
 .tsess-proj.mine { color: var(--accent, #5b6cff); border-color: color-mix(in srgb, var(--accent, #5b6cff) 42%, var(--bg)); background: color-mix(in srgb, var(--accent, #5b6cff) 9%, transparent); }
 .tsess-badge { flex: none; font-size: 11px; font-weight: 700; color: var(--ink-sub); background: var(--bg-tint-2); border: 1px solid var(--line); border-radius: 999px; padding: 1.5px 8px; white-space: nowrap; }
@@ -1697,6 +1834,7 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .tsess-stat-busy { color: #d97706; }
 .tsess-stat-waiting { color: var(--coral, #e5484d); }
 .tsess-stat-idle { color: var(--mint-deep); }
+.tsess-stat-restorable { color: var(--accent, #5b6cff); } /* #1059 E */
 .tsess-stat-offline { color: var(--muted); }
 /* '지금 하는 일' 실시간 요약(백엔드 title) — 라벨 아래 한 줄. */
 .tsess-worktitle { margin-top: 4px; font-size: 12.5px; font-weight: 600; color: var(--ink-note); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 620px; }
@@ -1713,15 +1851,23 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .tsess-qbody { min-width: min(560px, 84vw); max-width: 640px; }
 .tsess-qcap { margin-bottom: 10px; font-weight: 600; }
 .tsess-qlist { display: flex; flex-direction: column; gap: 9px; max-height: 62vh; overflow-y: auto; padding-right: 3px; }
-/* 질문 카드 — 왼쪽 색 레일 + 번호 알약 + 우측 시각. 호버 시 살짝 떠오르며 강조. */
-.tsess-qitem { position: relative; padding: 11px 13px 11px 15px; border: 1px solid var(--line); border-radius: 11px; background: var(--bg); overflow: hidden; transition: border-color .12s, box-shadow .12s, background .12s; }
+/* 질문 카드 — 왼쪽 색 레일 + 번호 알약 + 우측 시각. 호버 시 살짝 떠오르며 강조.
+   ⚠ flex: none 필수 — 부모(.tsess-qlist)가 max-height 를 가진 flex column 이라, 기본 flex-shrink:1 이면
+   항목이 스크롤되는 대신 짜부라진다(질문이 많을수록 심해져 45개 기준 69px→24px, overflow:hidden 이 본문을 잘라 '다 깨져' 보였다). */
+.tsess-qitem { flex: none; position: relative; padding: 11px 13px 11px 15px; border: 1px solid var(--line); border-radius: 11px; background: var(--bg); overflow: hidden; transition: border-color .12s, box-shadow .12s, background .12s; }
 .tsess-qitem::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: color-mix(in srgb, var(--blue) 35%, var(--line)); opacity: 0; transition: opacity .12s; }
 .tsess-qitem:hover { border-color: color-mix(in srgb, var(--blue) 30%, var(--line)); background: color-mix(in srgb, var(--blue) 4%, var(--bg)); box-shadow: 0 2px 8px rgba(21,35,59,.06); }
 .tsess-qitem:hover::before { opacity: 1; }
 .tsess-qmeta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .tsess-qnum { flex: none; font-size: 10.5px; font-weight: 800; color: var(--blue); background: color-mix(in srgb, var(--blue) 11%, transparent); border-radius: 999px; padding: 2px 8px; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+/* 질문 작성자 배지 — 여러 사람이 물은 세션에서만 노출(#1062). */
+.tsess-qwho { flex: none; font-size: 10.5px; font-weight: 700; color: var(--muted); background: color-mix(in srgb, var(--muted-2) 16%, transparent); border-radius: 999px; padding: 1px 7px; }
 .tsess-qwhen { flex: none; font-size: 11px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
-.tsess-qtext { font-size: 13px; line-height: 1.62; color: var(--ink); white-space: pre-wrap; word-break: break-word; }
+.tsess-qtext { font-size: 13.5px; line-height: 1.72; color: var(--ink); white-space: pre-wrap; word-break: break-word; }
+/* 긴 질문은 접어 둔다 — 한 질문이 목록을 다 잡아먹지 않게(펼침은 '더 보기'). */
+.tsess-qtext.clamped { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 8; overflow: hidden; }
+.tsess-qmore { margin-top: 7px; padding: 0; border: 0; background: none; font: inherit; font-size: 12px; font-weight: 700; color: var(--blue); cursor: pointer; }
+.tsess-qmore:hover { text-decoration: underline; }
 /* 리스트 스크롤바 — 얇고 은은하게. */
 .tsess-qlist::-webkit-scrollbar { width: 8px; }
 .tsess-qlist::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted-2) 45%, transparent); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
@@ -2488,6 +2634,8 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .proj-person-status.filled.me:hover { background: var(--bg-tint-2); }
 .proj-status-pen { color: var(--muted-2); font-size: 10px; }
 .proj-person-status.filled.me:hover .proj-status-pen { color: var(--blue); }
+/* 팀원은 아니지만 이 프로젝트에서 세션을 연 사람(#1088) — 프로필은 뜨되 팀원과 헷갈리지 않게 옅게 표시 */
+.proj-person-status.guest { color: var(--muted-2); font-size: 11.5px; font-weight: 600; }
 .proj-people-panel { margin-top: 0; }
 .proj-people-panel:empty { display: none; }
 .proj-panel-head { display: flex; align-items: center; gap: 4px; font-size: 13.5px; color: var(--ink); padding: 6px 2px 10px; border-top: 1px solid var(--line); margin-top: 0; }
@@ -4947,9 +5095,12 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-scard.is-waiting::before { background: var(--coral, #e5484d); }
 .dash-scard.is-waiting { background: color-mix(in srgb, var(--coral, #e5484d) 7%, var(--bg)); border-color: color-mix(in srgb, var(--coral, #e5484d) 34%, var(--line)); }
 .dash-scard.is-idle::before { background: var(--mint-deep); }
-.dash-scard.is-offline::before { background: var(--muted-2); }
-.dash-scard.is-offline .dash-scard-name { color: var(--muted); font-weight: 600; } /* 오프라인은 덜 강조 */
-.dash-scard.sel { border-color: color-mix(in srgb, var(--accent, #5b6cff) 55%, var(--line)); background: color-mix(in srgb, var(--accent, #5b6cff) 7%, var(--bg)); }
+.dash-scard.is-exited::before, .dash-scard.is-offline::before { background: var(--muted-2); }
+.dash-scard.is-exited .dash-scard-name, .dash-scard.is-offline .dash-scard-name { color: var(--muted); font-weight: 600; } /* 오프라인은 덜 강조 */
+/* #1059 E — 복원 가능(restorable): 재부팅·회수로 꺼졌지만 다시 열 수 있음 → 오프라인(회색)과 달리 '되살릴 수 있다'는 accent 신호 */
+.dash-scard.is-restorable::before { background: var(--accent, #5b6cff); }
+.dash-scard.is-restorable { background: color-mix(in srgb, var(--accent, #5b6cff) 5%, var(--bg)); border-color: color-mix(in srgb, var(--accent, #5b6cff) 26%, var(--line)); }
+.dash-scard.sel, .tsess-card.sel { border-color: color-mix(in srgb, var(--accent, #5b6cff) 55%, var(--line)); background: color-mix(in srgb, var(--accent, #5b6cff) 7%, var(--bg)); }
 .dash-scard.sel::before { background: var(--accent, #5b6cff); }
 .dash-scard-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 /* #853 자세히 = [상태 · 제목] 한 줄(상태가 제목 앞에 붙어 '무슨 작업이 어떤 상태인지'를 한 눈에). */
@@ -4971,8 +5122,10 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-scard-status.is-waiting .dash-scard-dot { background: var(--coral, #e5484d); animation: dashPulse 1.1s ease-in-out infinite; }
 .dash-scard-status.is-idle { color: var(--mint-deep); }
 .dash-scard-status.is-idle .dash-scard-dot { background: var(--mint-deep); }
-.dash-scard-status.is-offline { color: var(--muted); }
-.dash-scard-status.is-offline .dash-scard-dot { background: var(--muted-2); }
+.dash-scard-status.is-exited, .dash-scard-status.is-offline { color: var(--muted); }
+.dash-scard-status.is-exited .dash-scard-dot, .dash-scard-status.is-offline .dash-scard-dot { background: var(--muted-2); }
+.dash-scard-status.is-restorable { color: var(--accent, #5b6cff); } /* #1059 E 복원 가능 */
+.dash-scard-status.is-restorable .dash-scard-dot { background: var(--accent, #5b6cff); }
 /* #853 프로젝트 뱃지 = 버튼(누르면 그 프로젝트 페이지로 이동 — 팝업 아님). 링크임을 밑줄 호버로 알린다. */
 .dash-scard-proj { min-width: 0; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; font-weight: 700; color: var(--blue); background: var(--bg-punch); border: 0; border-radius: 6px; padding: 1.5px 7px; font-family: inherit; cursor: pointer; }
 .dash-scard-proj:hover { text-decoration: underline; filter: brightness(.97); }
@@ -5004,13 +5157,18 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 /* #853 세션 선택 체크박스 — 평소엔 자리만 있고 안 보이다가, 카드에 호버하면 왼쪽에서 스르르 나타난다.
    ('선택' 버튼을 먼저 누를 필요 없음. 선택 모드이거나 이미 체크된 카드면 계속 보인다.)
    display:none 이 아니라 opacity/width 전환이라 카드 폭이 튀지 않는다. */
-.dash-sess-checkwrap { flex: none; display: flex; align-items: center; justify-content: center; width: 0; opacity: 0; overflow: visible; transition: width .14s ease, opacity .14s ease, margin-right .14s ease; }
+.dash-sess-checkwrap, .tsess-checkwrap { flex: none; display: flex; align-items: center; justify-content: center; width: 0; opacity: 0; overflow: visible; transition: width .14s ease, opacity .14s ease, margin-right .14s ease; }
 .dash-scard:hover .dash-sess-checkwrap,
 .dash-scard:focus-within .dash-sess-checkwrap,
 .dash-scard.sel .dash-sess-checkwrap,
-.dash-sess-list.selectmode .dash-sess-checkwrap { width: 18px; opacity: 1; margin-right: 4px; } /* #853 폭·여백 늘리고 overflow:visible + margin:0 → 체크박스 우측 안 잘림 */
-.dash-sess-check { width: 15px; height: 15px; flex: none; margin: 0; cursor: pointer; accent-color: var(--accent, #5b6cff); }
-@media (prefers-reduced-motion: reduce) { .dash-sess-checkwrap { transition: none; } }
+.dash-sess-list.selectmode .dash-sess-checkwrap,
+/* AI 세션 탭도 같은 동작 — 카드 호버/포커스/선택/선택모드에서 체크박스가 왼쪽에서 밀려 나온다(#1062: 두 화면 UI 통일). */
+.tsess-card:hover .tsess-checkwrap,
+.tsess-card:focus-within .tsess-checkwrap,
+.tsess-card.sel .tsess-checkwrap,
+.tsess-list.selectmode .tsess-checkwrap { width: 18px; opacity: 1; margin-right: 4px; } /* #853 폭·여백 늘리고 overflow:visible + margin:0 → 체크박스 우측 안 잘림 */
+.dash-sess-check, .tsess-check { width: 15px; height: 15px; flex: none; margin: 0; cursor: pointer; accent-color: var(--accent, #5b6cff); }
+@media (prefers-reduced-motion: reduce) { .dash-sess-checkwrap, .tsess-checkwrap { transition: none; } }
 /* #853 세션 이름 수정 팝업 — 브라우저 prompt() 대체. */
 .dash-rename { display: flex; flex-direction: column; gap: 8px; min-width: 340px; }
 .dash-rename-lbl { font-size: 12px; font-weight: 700; color: var(--ink-sub); }
@@ -5131,9 +5289,46 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-ov-allhidden { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 14px 10px; font-size: 12.5px; color: var(--muted-2); }
 .dash-ov-restore { font-size: 12.5px; font-weight: 700; color: var(--blue); background: none; border: 1px solid color-mix(in srgb, var(--blue) 32%, var(--bg)); border-radius: 7px; padding: 4px 11px; cursor: pointer; font-family: inherit; }
 .dash-ov-restore:hover { background: var(--bg-punch); }
-.dash-pop-foot { display: flex; justify-content: flex-end; padding: 6px 4px 2px; margin-top: 4px; border-top: 1px solid var(--line-soft, var(--bg-tint-2)); }
+.dash-pop-foot { display: flex; justify-content: flex-end; gap: 2px; padding: 6px 4px 2px; margin-top: 4px; border-top: 1px solid var(--line-soft, var(--bg-tint-2)); }
+.dash-pop-foot:empty { display: none; } /* 되돌릴 게 없으면 구분선까지 없앤다 */
 .dash-pop-reset { font-size: 12px; font-weight: 700; color: var(--blue); background: none; border: none; cursor: pointer; font-family: inherit; padding: 4px 8px; border-radius: 6px; }
 .dash-pop-reset:hover { background: var(--bg-punch); }
+
+/* #req ⚙ '요약 카드로 표시할 리스트' — 조직의 **모든** 리스트를 스페이스 › 폴더 › 리스트 트리로 훑어 고른다(+검색).
+   평면 목록이면 리스트가 수십 개로 불어나 못 찾으므로, 우리가 실제로 정리하는 구조 그대로 접었다 편다. */
+.dash-pop-tree { max-height: 300px; }
+.dash-pop-tree .dash-pop-row { align-items: center; gap: 7px; padding-top: 5px; padding-bottom: 5px; }
+.dash-pop-frow { user-select: none; }
+.dash-pop-frow .dash-pop-name { font-weight: 700; }
+.dash-pop-frow.is-space .dash-pop-name { font-size: 12.5px; letter-spacing: .01em; }
+.dash-pop-caret { flex: none; width: 11px; font-size: 9px; color: var(--muted-2); text-align: center; }
+.dash-pop-foldico { flex: none; display: inline-flex; align-items: center; }
+.dash-pop-foldico .ft-folder { width: 17px; height: auto; }
+.dash-pop-spaceav { flex: none; width: 17px; height: 17px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; font-size: 9.5px; font-weight: 800; color: #fff; }
+.dash-pop-fcount { margin-left: auto; flex: none; font-size: 10.5px; font-weight: 700; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+.dash-pop-lrow .dash-pop-name { font-weight: 600; }
+.dash-pop-treegh { padding-top: 10px; }
+
+/* #req 그룹 팝오버 '리스트로도 묶기'(ClickUp Also group by List) — 그룹 기준 줄과 토글 사이 구분선. */
+.pjv-groupby-sep { height: 1px; background: var(--line); margin: 8px 2px 2px; }
+.pjv-groupby-pop .pjv-closed-row { padding: 6px 4px 2px; }
+
+/* #req 개요 '+ 리스트' 카드의 찾기/만들기 드롭다운 — 위=이미 있는 리스트 검색, 맨 아래=새로 만들기(스페이스·폴더 지정 팝업). */
+.dash-addpop { width: 300px; }
+.dash-addpop-row { align-items: center; gap: 8px; }
+.dash-addpop-row.active { background: var(--bg-punch); }
+.dash-addpop-row .dash-pop-txt { flex: 1; min-width: 0; }
+.dash-addpop-row .dash-pop-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dash-addpop-badge { flex: none; font-size: 10.5px; font-weight: 700; color: var(--muted-2); border: 1px solid var(--line); border-radius: 999px; padding: 1px 7px; }
+.dash-addpop-badge.is-add { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 36%, var(--bg)); }
+.dash-addpop-sep { height: 1px; background: var(--line); margin: 5px 4px; }
+.dash-addpop-create .dash-pop-name { color: var(--blue); }
+
+/* #req 리스트 헤더 우측 목록 필터 버튼 — 위젯 헤더 [⚙][→] 와 같은 아이콘버튼. 평소 옅게, 헤더 hover 시 또렷하게. */
+.dash-lh-ctl { margin-left: auto; align-self: center; display: inline-flex; align-items: center; gap: 6px; flex: none; padding-left: 8px; }
+.dash-lh-filter { width: 24px; height: 22px; opacity: .55; transition: opacity .12s ease; }
+.pjv-list-head:hover .dash-lh-filter, .dash-lh-filter:focus-visible { opacity: 1; }
+.dash-lh-filter.on { opacity: 1; color: var(--blue); border-color: color-mix(in srgb, var(--blue) 42%, var(--bg)); background: var(--bg-punch); }
 
 /* 공유 폴더 브라우저(#672) — 전체 보기 모달 안의 파일 탐색기: 브레드크럼 · 도구모음 · 파일 카드 CRUD(hover 액션). */
 .dash-modal--wide { width: min(720px, 94vw); }
@@ -5912,13 +6107,14 @@ main.doc-mode .kn-side-tools .kn-side-toolitem:hover { background: var(--bg-tint
 /* ── #746 자격 vault · DB 접근 감사 뷰 (드롭다운 위주 관리 UI) ── */
 .item { display:flex; align-items:center; gap:10px; flex-wrap:wrap; border:1px solid var(--line); border-radius:8px; padding:9px 12px; margin:7px 0; background:var(--bg); }
 .addbox { border:1px solid var(--line); border-radius:8px; padding:14px; background:var(--bg-tint); }
-.audit-bar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:10px 0; }
-.audit-bar select, .audit-bar input { font:inherit; font-size:13px; padding:6px 9px; border:1px solid var(--line); border-radius:7px; background:var(--bg); color:var(--ink); }
 .audit-verify { display:flex; align-items:center; gap:10px; margin:0 0 12px; }
 .audit-scroll { overflow-x:auto; }
-.audit-table { width:100%; border-collapse:collapse; font-size:12.5px; }
+/* min-width 가 없으면 .audit-scroll 이 있어도 표가 통째로 쪼그라들어 '구 리'·'성 공' 처럼 두 글자가
+   세로로 접힌다(#1085 좁은 화면 실측) — 가로 스크롤로 넘기고 셀은 안 부순다. */
+.audit-table { width:100%; min-width:860px; border-collapse:collapse; font-size:12.5px; }
+.audit-table td:nth-child(1), .audit-table td:nth-child(3), .audit-table td:nth-child(4), .audit-table td:last-child { white-space:nowrap; }
 .audit-table th { text-align:left; padding:6px 9px; font-size:11px; font-weight:700; color:var(--muted); border-bottom:1px solid var(--line); white-space:nowrap; }
-.audit-table td { padding:6px 9px; border-bottom:1px solid var(--line); color:var(--ink); vertical-align:top; }
+.audit-table td { padding:5px 9px; border-bottom:1px solid var(--line); color:var(--ink); vertical-align:top; }
 .audit-table tr:hover td { background:var(--bg-tint); }
 .audit-row-bad td { background:#FEF4F4; }
 .audit-row-bad:hover td { background:#FDEBEB; }
@@ -5928,6 +6124,51 @@ main.doc-mode .kn-side-tools .kn-side-toolitem:hover { background: var(--bg-tint
 .audit-ok { color:var(--mint-deep); font-weight:600; }
 .audit-bad { color:#C0392B; font-weight:600; }
 .addbox-h { font-size:12.5px; font-weight:700; color:var(--ink); margin-bottom:10px; }
+
+/* ══ 감사 로그 3탭 공용 컨트롤 (#1085) ══════════════════════════════════════
+   [관리 변경]·[DB 조회]·[AI 도구 호출] 이 각자 필터바를 갖고 있었다 — oa-controls(라벨 있음,
+   radius 7) · audit-bar(라벨 없음, 높이 다름) · tu-controls(또 다른 복제). 같은 화면의 세 탭인데
+   글자 크기·컨트롤 높이·모서리가 전부 달라 탭을 옮길 때마다 다른 제품처럼 보였다.
+   여기 하나로 합치고 셋 다 이걸 쓴다. 새 팔레트·새 토큰 없음 — 기존 폼 요소 규격에 맞춘 것뿐이다. */
+.aud-filters { display:flex; flex-wrap:wrap; align-items:flex-end; gap:9px 12px; margin:14px 0 13px; }
+.aud-f { display:flex; flex-direction:column; gap:5px; min-width:0; }
+.aud-f > label { font-size:11px; font-weight:700; letter-spacing:.01em; color:var(--muted-head); padding-left:1px; }
+/* 컨트롤·버튼 높이를 34px 로 통일 — 셀렉트(31px)와 btn-sm(27px)이 섞여 아랫줄이 들쭉날쭉했다. */
+.aud-sel, .aud-inp {
+  height:34px; box-sizing:border-box; padding:0 11px; font-size:13.5px; font-weight:500;
+  color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:9px;
+}
+/* 네이티브 화살표(OS마다 다른 모양·굵기) 대신 우리 헤어라인 셰브런. */
+select.aud-sel {
+  appearance:none; -webkit-appearance:none; padding-right:29px; cursor:pointer;
+  background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238A99B5' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:right 10px center;
+  /* 옵션 문자열이 길어도(툴 이름 등) 바가 통째로 늘어나지 않게 상한을 둔다 — 이게 없으면
+     [AI 도구 호출]의 '툴' 셀렉트 하나가 400px 를 먹고 나머지 필드를 다음 줄로 밀어냈다. */
+  min-width:112px; max-width:208px; text-overflow:ellipsis;
+}
+.aud-inp { min-width:112px; max-width:156px; }
+.aud-sel:hover, .aud-inp:hover { border-color:var(--muted-3); }
+.aud-sel:focus, .aud-inp:focus { outline:none; border-color:var(--blue); }
+.aud-filters .btn { height:34px; border-radius:9px; }
+/* 오른쪽으로 미는 그룹(위변조 검증 등) — 필터가 줄바꿈되면 auto 여백이 죽으므로 flex-wrap 안에서만 쓴다. */
+.aud-right { display:flex; align-items:flex-end; gap:9px; margin-left:auto; }
+.aud-count { font-size:12.5px; color:var(--ink-sub); margin:0 0 8px; }
+
+/* 페이지네이션 — oa-pager/tu-pager 복제본을 하나로. */
+.aud-pager { display:flex; gap:5px; align-items:center; flex-wrap:wrap; margin-top:12px; }
+.aud-pg { min-width:32px; height:32px; padding:0 10px; border:1px solid var(--line); border-radius:9px; background:var(--bg); color:var(--ink); font:inherit; font-size:12.5px; font-weight:600; cursor:pointer; font-variant-numeric:tabular-nums; }
+.aud-pg:hover { border-color:var(--blue); }
+.aud-pg-on { background:var(--blue); border-color:var(--blue); color:#fff; cursor:default; }
+.aud-pg-on:hover { border-color:var(--blue); }
+.aud-pg-off { opacity:.38; cursor:default; }
+.aud-pg-off:hover { border-color:var(--line); }
+.aud-pg-gap { color:var(--muted); padding:0 2px; }
+.aud-pg-info { color:var(--muted); font-size:12px; margin-left:8px; }
+@media (max-width: 760px) {
+  .aud-right { margin-left:0; }
+  .aud-sel, .aud-inp { max-width:none; }
+}
 
 /* ════════════════════════════════════════════════════════════════════════════
    #764 WIKI 재구축 — "위키에는 페이지와, 페이지를 찾는 팝업뿐이다."
@@ -6862,7 +7103,10 @@ body[data-route="learn"] main,
 body[data-route="start"] main,
 body[data-route="install"] main,
 body[data-route="onboarding"] main { max-width: none; }
-.admin-body { flex: 1; min-width: 0; padding-bottom: 48px; }
+/* 본문 읽기 폭(#1085) — 관리탭은 전폭이라 27인치에서 카드 한 줄이 너무 길어 한눈에 안 들어온다는 지적.
+   사이드바는 좌측 그대로 두고(레이아웃은 그대로) **본문에만** 상한을 걸어 오른쪽을 비운다(.docs-body 와 같은 수법,
+   단 관리는 표·그리드가 있어 문서(920px)보다 넉넉한 1160px). 좁은 화면에선 flex 가 알아서 줄인다. */
+.admin-body { flex: 1; min-width: 0; max-width: 1160px; padding-bottom: 48px; }
 /* 페이지 머리는 #837 에서 폐지 — 상단 탭 + 사이드바가 이미 위치를 말한다(화면마다 반복될 이유 없음).
    '읽기 전용'은 전역 배지(사이드바)가 아니라 **그 섹션이 실제로 나에게 읽기 전용일 때만** 본문 위에 붙인다:
    admin 이 없어도 카테고리·레포·팀은 context 권한으로 편집된다 — 전역 배지는 거짓말이었다. */
@@ -6927,20 +7171,30 @@ body[data-route="onboarding"] main { max-width: none; }
 .docs-md .md-pre { padding: 13px 15px; margin: 2px 0 14px; border-radius: 11px; border-color: var(--line-net); }
 .docs-md .md-pre code { font-size: 12.5px; line-height: 1.6; }
 
-/* 사용가이드 인라인 UI 참조 칩(#1013) — 대괄호·꺽쇠 노이즈를 제거해 가독성↑.
+/* 인라인 UI 참조 칩 — 대괄호·꺽쇠 노이즈를 제거해 가독성↑.
    [버튼]=아웃라인+두꺼운 밑선(눌리는 버튼 느낌, .kbd 시각언어), 「옵션·메뉴·상태」=틴트 채움 태그.
-   display:inline + box-decoration-break:clone → 긴 라벨이 줄바꿈돼도 배경·테두리·패딩이 조각마다 유지된다. */
-.docs-md .md-uikey, .docs-lead .md-uikey {
+   display:inline + box-decoration-break:clone → 긴 라벨이 줄바꿈돼도 배경·테두리·패딩이 조각마다 유지된다.
+   #1013 사용가이드 마크다운(renderMarkdown uiChips)에서 시작해 #1085 에서 관리탭 설명문(uiText)까지 확장 —
+   그래서 셀렉터를 docs 한정에서 **전역**으로 올렸다. 크기는 em 상대라 13px 안내문 안에서도 알아서 작아진다. */
+.md-uikey {
   display: inline; -webkit-box-decoration-break: clone; box-decoration-break: clone;
   font-size: 0.86em; font-weight: 700; line-height: 1.3; letter-spacing: -0.1px;
   border-radius: 6px; padding: 1px 6px; margin: 0 1.5px; white-space: normal;
+  /* CJK 는 기본이 '아무 글자에서나 줄바꿈'이라 좁은 팝오버에서 「연결·데이/터」처럼 라벨이 잘려 읽힌다.
+     keep-all 로 어절 단위에서만 끊어, 한 단어짜리 버튼 이름은 통째로 유지한다. */
+  word-break: keep-all;
 }
-.docs-md .md-uikey-btn, .docs-lead .md-uikey-btn {
+.md-uikey-btn {
   color: var(--ink); background: var(--bg); border: 1px solid var(--line-net); border-bottom-width: 2px;
 }
-.docs-md .md-uikey-opt, .docs-lead .md-uikey-opt {
+.md-uikey-opt {
   color: var(--ink-note); background: var(--bg-tint-2);
 }
+/* 공백 없는 한 덩어리 라벨은 통째로 유지 — 버튼 이름이 두 줄로 잘리면 무엇을 누르라는 건지 안 읽힌다. */
+.md-uikey-solid { white-space: nowrap; }
+/* 칩이 회색 안내문 안에 있으면 본문보다 진해 눈이 먼저 간다 — 그게 노림수다(어디를 누르라는 지시).
+   단, 이미 색이 있는 문맥(경고·강조 배지 안)에서는 색을 물려받아 튀지 않게 한다. */
+.pill .md-uikey, .st .md-uikey, .badge .md-uikey { color: inherit; background: transparent; border: none; padding: 0; font-weight: 700; }
 
 /* 피처 카드 — '**굵은 제목** — 설명' 목록. 지식 축 옵션(kn-axis-opt)과 같은 틴트 박스. */
 .docs-featgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 4px 0 6px; }
@@ -7086,6 +7340,23 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .storage-actions { margin-top: 14px; }
 .storage-toggle { display: flex; align-items: center; gap: 8px; margin: 8px 0 2px; font-size: 13px; cursor: pointer; }
 .storage-toggle input { margin: 0; }
+/* #1059 F — 관리탭 세션목록(세션 섹션). 스캔 가능한 한 줄 행: 상태점 · 제목/부제 · 상태 · 시각 · 회수. */
+.sess-admin-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 4px; }
+.sess-admin-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint); }
+.sess-admin-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--muted-2); }
+.sess-admin-dot-busy { background: #f59e0b; }
+.sess-admin-dot-waiting { background: var(--coral, #e5484d); }
+.sess-admin-dot-idle { background: var(--mint-deep); }
+.sess-admin-dot-exited, .sess-admin-dot-offline { background: var(--muted-2); }
+.sess-admin-main { flex: 1; min-width: 0; }
+.sess-admin-title { font-size: 13.5px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess-admin-meta { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess-admin-st { flex: none; font-size: 11.5px; font-weight: 700; min-width: 52px; text-align: right; }
+.sess-admin-st-busy { color: #d97706; }
+.sess-admin-st-waiting { color: var(--coral, #e5484d); }
+.sess-admin-st-idle { color: var(--mint-deep); }
+.sess-admin-st-exited, .sess-admin-st-offline { color: var(--muted); }
+.sess-admin-when { flex: none; font-size: 11.5px; color: var(--muted); white-space: nowrap; min-width: 68px; text-align: right; }
 .storage-warn { border-left: 3px solid #f59e0b; padding-left: 9px; }
 .ws-badges { display: flex; align-items: center; gap: 6px; }
 .ws-plan { margin: 6px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--bg-tint, #f6f7f9); }
@@ -7457,8 +7728,7 @@ a.ob-banner .ob-banner-go { flex: none; color: var(--blue); font-weight: 700; fo
 /* fix: 96 용어집 등 docs 표 안 인라인 코드 칩(.env) — 상하 패딩 제거로 베이스라인·행간 정렬 */
 .docs-md table .md-code, .docs-body table .md-code { padding: 0 5px; line-height: inherit; vertical-align: baseline; }
 
-/* fix: 111 위변조 검증 버튼을 필터 바 우측 끝으로(같은 줄에 결과 표시) */
-.audit-bar .audit-verify { margin: 0 0 0 auto; }
+/* fix: 111 위변조 검증 버튼을 필터 바 우측 끝으로(같은 줄에 결과 표시) — #1085 에서 .aud-right 로 대체 */
 
 /* fix: 119·121 설정 폼 카드(AI 개인화·조직 정보) 읽기 줄 길이·입력폭 제한 */
 .admin-form-narrow p.admin-hint { max-width: 72ch; }

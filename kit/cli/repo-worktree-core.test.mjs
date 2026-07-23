@@ -34,7 +34,7 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   process.env.LIVELY_REPOS_DIR = SB;                     // reposDir() → SB ⇒ base = SB/base
   process.env.TMPDIR = join(SB, "ostmp");                // os.tmpdir() → SB/ostmp (핀 기본경로를 샌드박스 안으로 — 실제 tmp 오염 방지)
   mkdirSync(join(SB, "ostmp"), { recursive: true });
-  const { repoWorktree, repoPin, repoPinRemove, REPO_NAME_RE } = await import(join(HERE, "repo-worktree-core.mjs"));
+  const { repoWorktree, repoPin, repoPinRemove, REPO_NAME_RE, authNote, gitHostOf } = await import(join(HERE, "repo-worktree-core.mjs"));
 
   // ── 0) REPO_NAME_RE — 레포명은 경로 컴포넌트라 점세그먼트(traversal) 거부, 이름 속 점은 허용(#932 후속) ──
   check("REPO_NAME_RE: '..' 거부(traversal)", REPO_NAME_RE.test("..") === false, "'..' 통과");
@@ -143,6 +143,55 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   check("TTL 넘긴 오래된 핀은 다음 핀 때 청소됨", !existsSync(pOld.pin), `pOld 아직 남음: ${pOld.pin}`);
   check("갓 만든 핀은 스윕 안 됨(keepSha 보호)", existsSync(pNew.pin), `pNew 없음: ${pNew.pin}`);
   check("TTL 미만 핀(p1, fresh)은 스윕 대상 아님", existsSync(p1.pin), "p1 이 과잉삭제됨");
+
+  // ── 12) 클론 인증 실패 안내(#1077) ──
+  //  사양: 클론이 **자격 부재/거부**로 막히면 실패 메시지에 정규 등록 경로(me_git_credential_set)와 대상 호스트를
+  //   덧붙인다. 자격과 무관한 실패엔 아무것도 안 붙인다(모든 실패에 붙는 안내는 노이즈가 되어 안 읽힌다).
+  //   셸 ssh-keygen 우회는 명시적으로 말린다 — 되긴 하지만 그 자격은 라이블리 밖이라 관리탭 가시성·오프보딩
+  //   회수·재프로비저닝 복원에서 전부 빠지고, 안내가 '되는 방법'만 주면 사람은 더 쉬운 우회를 계속 고른다.
+  //  판정은 stderr 문자열이라 느슨하다(호스트마다 문구가 다르다) — 오탐의 대가가 안내 한 줄이라 넓게 잡되,
+  //   무관 실패까지 걸리면 안 되므로 그 경계를 아래 표로 고정한다.
+  check("① 공개키 거부 + scp형 → 안내와 호스트",
+    /me_git_credential_set/.test(authNote("git@git.honestfund.kr: Permission denied (publickey).", "git@git.honestfund.kr:hf-dev/honest-one.git"))
+    && authNote("Permission denied (publickey).", "git@git.honestfund.kr:hf-dev/honest-one.git").includes("git.honestfund.kr"), "미탐");
+  check("① 안내는 셸 ssh-keygen 우회를 말린다",
+    /ssh-keygen/.test(authNote("Permission denied (publickey).", "git@h.kr:o/r.git")), "우회 경고 없음");
+  check("② Username 못 읽음(HTTPS) → 안내와 호스트",
+    /me_git_credential_set/.test(authNote("fatal: could not read Username for 'https://git.x.kr': terminal prompts disabled", "https://git.x.kr/o/r.git"))
+    && gitHostOf("https://git.x.kr/o/r.git") === "git.x.kr", "미탐");
+  check("③ 자격·포트 포함 https 에서 호스트만 추출",
+    gitHostOf("https://user@git.example.com:443/o/r.git") === "git.example.com", gitHostOf("https://user@git.example.com:443/o/r.git"));
+  check("④ 자격과 무관한 실패엔 안 붙는다",
+    authNote("fatal: destination path 'x' already exists and is not an empty directory.", "https://github.com/o/r.git") === "", "오탐");
+  {
+    const n = authNote("Permission denied (publickey).", "");   // 주소 파싱 불가
+    check("⑤ 호스트 미상이어도 안내는 나온다", /me_git_credential_set/.test(n) && n.includes("그 호스트"), n);
+    check("⑤ 빈 호스트가 안내에 새지 않는다", !/host:\s*""/.test(n), n);
+  }
+  check("⑥ 실패 원문이 비었거나 부재면 안 붙고 깨지지도 않는다",
+    authNote("", "https://github.com/o/r.git") === "" && authNote(undefined, undefined) === "" && gitHostOf(undefined) === "", "빈/부재 처리 실패");
+  check("⑦ 토큰 만료 계열도 자격 문제로 본다(공개키 거부만 잡으면 안 됨)",
+    /me_git_credential_set/.test(authNote("fatal: Authentication failed for 'https://git.x.kr/o/r.git'", "https://git.x.kr/o/r.git")), "미탐");
+  {
+    // ⑧ 배선 — 안내를 만드는 능력이 있어도 **실패 지점에서 안 불리면 없는 것과 같다**. 실제 클론 경로로 태운다.
+    const calls = [];
+    const authCtx = {
+      cwd: SB,
+      sh: (cmd, args = []) => {
+        calls.push([cmd, ...args].join(" "));
+        return args[0] === "clone"
+          ? { stdout: "", stderr: "Cloning into '/x'...\ngit@git.honestfund.kr: Permission denied (publickey).\nfatal: Could not read from remote repository.", code: 128 }
+          : { stdout: "", stderr: "", code: 0 };
+      },
+      api: async () => ({ domainmapRepos: [{ name: "privaterepo", clone_url: "git@git.honestfund.kr:hf-dev/honest-one.git" }] }),
+    };
+    let msg = "";
+    try { await repoWorktree(authCtx, { repo: "privaterepo" }); } catch (e) { msg = String(e?.message ?? e); }
+    check("⑧ 배선: 실제 클론 인증 실패가 안내를 달고 나온다",
+      /me_git_credential_set/.test(msg) && msg.includes("git.honestfund.kr"), msg || "throw 하지 않음");
+    check("⑧ 배선: 클론이 실제로 시도됐다(관측 장치 생존)",
+      calls.some((c) => c.startsWith("git clone")), calls.join(" | ") || "sh 호출 0건");
+  }
 
   rmSync(SB, { recursive: true, force: true });
   console.error(`\n${pass} passed, ${fail} failed`);

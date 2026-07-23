@@ -101,6 +101,30 @@ function gitFail(stderr) {
   return lines.find((l) => /^(fatal|error):/i.test(l)) || lines[lines.length - 1] || "(원인 미상)";
 }
 
+// 인증 실패 안내(#1077) — git 은 'Permission denied (publickey)' / 'could not read Username' 까지만 말하고
+//  **이 박스에서 그걸 어떻게 푸는지**는 말해주지 않는다. 라이블리엔 정규 경로(자격을 DB에 두고 세션 홈에
+//  materialize)가 있는데 실패 지점에서 아무도 그리로 안내하지 않아, 실사용에선 세션 셸에서 ssh-keygen 으로
+//  홈에 키를 직접 만드는 우회가 나왔다 — 되긴 하지만 자격이 라이블리 밖이라 관리탭 가시성·오프보딩 회수·
+//  재프로비저닝 복원에서 전부 빠진다. 그래서 실패 그 자리에서 정규 경로를 알려준다.
+//  ⚠ 판정은 stderr 문자열이라 느슨하다(호스트마다 문구가 다르다). 오탐해도 손해는 안내 한 줄이라 넓게 잡는다.
+const AUTH_FAIL_RE = /permission denied|could not read username|authentication failed|access denied|repository not found|invalid username or token/i;
+export function gitHostOf(url) {          // export=테스트용·순수
+  const s = String(url || "");
+  const scp = s.match(/^[^/]+@([^:]+):/);                 // scp 형 git@host:path
+  if (scp) return scp[1];
+  const m = s.match(/^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]+@)?([^/:]+)/i); // scheme://[user@]host
+  return m ? m[1] : "";
+}
+export function authNote(stderr, url) {   // export=테스트용·순수
+  if (!AUTH_FAIL_RE.test(stderr || "")) return "";
+  const host = gitHostOf(url);
+  const h = host || "그 호스트";
+  return ` — 이 계정에 ${h} git 자격이 없어 보입니다.`
+    + ` \`me_git_credential_set {kind:"ssh"${host ? `, host:"${host}"` : ""}}\` 로 등록하면(웹은 [내 설정 ▸ 레포 접근 ▸ git 인증 관리])`
+    + ` 공개키가 나옵니다 — 그 공개키를 ${h} 계정에 등록하면 바로 됩니다.`
+    + ` (셸에서 ssh-keygen 으로 직접 만들지 마세요 — 그 키는 라이블리가 모르니 회수·복원이 안 됩니다.)`;
+}
+
 // 실패 안내 — git 의 fatal 은 점유자 경로까지만 알려준다. **왜** 안 되는지(브랜치 1개 = 워크트리 1개)와
 //  **어떻게 빠져나오는지**(그 워크트리에서 작업 / branch 인자)는 말해주지 않아 사람이 매번 다시 알아내야 한다(#932).
 //  게다가 3단 폴백의 마지막 실패가 -b 라 fatal 이 'already exists' 로 끝나 점유 사실 자체가 안 보인다.
@@ -152,7 +176,7 @@ async function ensureBase(ctx, repo, base) {
     if (!url) throw new Error(`레포 '${repo}' 가 이 머신에 없고 등록된 clone 주소도 없습니다 — 관리탭 ▸ 레포에서 git 주소를 연결하세요.`);
     mkdirSync(dirname(base), { recursive: true });
     const c = ctx.sh("git", ["clone", url, base], { allowFail: true });
-    if (c.code !== 0) throw new Error(`git clone 실패(${repo}): ${gitFail(c.stderr)}`);
+    if (c.code !== 0) throw new Error(`git clone 실패(${repo}): ${gitFail(c.stderr)}${authNote(c.stderr, url)}`);
   } else {
     ctx.sh("git", ["-C", base, "fetch", "origin"], { allowFail: true }); // best-effort(오프라인 무시)
   }

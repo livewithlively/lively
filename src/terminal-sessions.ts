@@ -23,7 +23,9 @@ import { assertDiskWritable } from "./disk-guard.js";
 import { orgTimezone } from "./org/timezone.js"; // #778 pane TZ = 조직 시간대
 import { SESSION_ID_RE } from "./org/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 import { DANGEROUS_SCOPES, isScope } from "./capabilities/scopes.js";
-import { resolveMemberOsUser, wrapAsMember, osUsername, isolationInfraReady, osUserExists } from "./terminal-isolation.js";
+import { resolveMemberOsUser, wrapAsMember, osUsername, isolationInfraReady, osUserExists, type CgroupLimit } from "./terminal-isolation.js";
+import { effectiveSessionMemoryPolicy } from "./org/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡
+import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listSessionStatesForOwner } from "./org/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
 import { memberMkdir } from "./terminal-member-fs.js";
 import { materializeMemberGit, ensureGitSafeDirectory } from "./org/git-credential-materialize.js";
 
@@ -98,17 +100,30 @@ export interface SessionInfo {
   invites: string[]; // 초대된 멤버 id(@box_invites). 빈 배열 = 비공개(소유자만 보기·열기).
   flags: Record<string, string>; // 생성 시 적용된 하네스 플래그(@box_flags, 예: {"--model":"opus"}). 수정 팝업의 비활성 표시용.
   projectId?: number; // 프로젝트 세션이면 그 프로젝트 id(@box_project). 보드의 '내 세션' 칼럼 활성 판단용.
-  // 에이전트 실행 상태(#req 4단계) — busy=프로세스그룹 CPU 큼(작업중, 접속 무관), waiting=접속중+화면에 사용자 선택/승인 대기(확인 필요),
-  //  idle=접속중+CPU~0+대기프롬프트없음(대기중), offline=브라우저 미접속(유휴) 또는 포그라운드가 셸(하네스 종료).
-  agentState?: "busy" | "waiting" | "idle" | "offline";
+  // 에이전트 실행 상태(#1015 E 에서 '오프라인' 한 칸에 섞여 있던 '셸로 빠짐'을 exited 로 분리):
+  //  busy=스피너 관측(작업중) · waiting=화면에 사용자 선택/승인 대기(확인 필요) — 이 둘은 **접속 무관**.
+  //   탭을 닫아도 AI 는 계속 일하고, waiting 은 사용자 결정을 기다리는 알림이라 회색으로 덮으면 놓친다.
+  //  idle=살아 있고 안 바쁨 + **최근(기본 48시간 내) 작업이 있었음** = '대기 중'
+  //  offline=그 시간 넘게 아무 작업 없음(방치) 또는 원격 노드에 못 닿음(node/registry.ts 가 강제) = '오프라인'
+  //   ⚠ 판정에 attached(접속 여부)를 쓰지 않는다 — 배경 탭 하나만 열려 있어도 '접속중'이 되고 게이트웨이가
+  //    재시작하면 그 탭들이 일제히 재연결해, 며칠째 방치된 세션이 전부 '접속중'으로 되살아났다(2026-07-22 실측).
+  //  exited=하네스가 끝나 포그라운드가 셸(= 이 세션에서 AI 는 더 안 돈다. tmux 껍데기만 남음)
+  agentState?: "busy" | "waiting" | "idle" | "exited" | "offline";
   // 실시간 작업 요약(#req) — Claude Code 가 pane_title 에 써두는 '지금 하는 일' 요약(상태 글리프 제거). 없으면 빈 문자열 → 프론트가 label 로 폴백.
   title?: string;
   // 마지막 '작업(busy)' 시각(epoch초) — 클로드가 마지막으로 턴을 돌리고 있던(또는 끝낸) 때. 정렬·카드 시간 표시용.
   //  ⚠ '내가 열어본(브라우저 접속)' 시각은 섞지 않는다(#853) — 열어보기는 작업이 아니다.
   //  @box_last_busy(tmux 세션 옵션)로 영속 → 게이트웨이가 재기동해도 유지(tmux 서버가 더 오래 산다).
   lastActive?: number;
+  // #1059 E — 복원 가능(restorable): tmux 에 없고 DB desired-state(org_session_state)에만 있는 세션(재부팅으로 죽었거나
+  //  F reaper 가 회수). agentState 는 offline. 프론트가 이 배지를 보고 '열기=복원'(POST …/restore) 경로로 분기한다(attach 아님).
+  restorable?: boolean;
 }
-export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; resume?: string; readOnly?: boolean; incognito?: boolean; }
+export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; resume?: string; readOnly?: boolean; incognito?: boolean;
+  // #1059 E — 상시(managed) 세션은 desired-state DB 미러를 만들지 않는다(keep-alive 가 그 영속을 소유). ensureManagedSession 만 넘긴다.
+  managed?: boolean;
+  // #1059 — claude UUID 를 모를 때 인자 없는 --resume 로 후보 picker 를 띄운다(restorable 복원. resume 과 배타 — resume 우선).
+  resumePick?: boolean; }
 
 const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "user";
 const userSlug = (u: LivelyUser): string => slug(u.userId || u.email || "user");
@@ -273,14 +288,30 @@ export async function provisionMemberOs(memberId: string, opts?: { includeContro
   return { slug, osUser: osUsername(slug) };
 }
 
-// box_ claude 로그인 여부 — ⚠ 게이트웨이(lively)는 멤버 700 홈을 '읽지' 못한다(격리의 본질). 대신 box_ 로 drop-priv 해서
-//  creds 파일 '존재'만 확인(내용은 안 봄). exit0=있음=로그인됨. 미프로비저닝/에러=false. UI 로그인 배너 숨김 판정용.
-async function memberClaudeLoggedIn(osUser: string): Promise<boolean> {
+// 하네스별 자격증명 파일(홈 기준 상대경로) — 로그인 여부 판정·로그아웃 대상의 단일 출처.
+//  ⚠ 값은 이 상수에서만 온다(사용자 입력이 셸 문자열에 들어가지 않는다).
+const HARNESS_CRED: Record<string, string> = {
+  claude: ".claude/.credentials.json",
+  codex: ".codex/auth.json",
+};
+
+// box_ 홈의 파일 존재 — ⚠ 게이트웨이(lively)는 멤버 700 홈을 '읽지' 못한다(격리의 본질). 대신 box_ 로 drop-priv 해서
+//  '존재'만 확인(내용은 안 봄). exit0=있음. 미프로비저닝/에러=false.
+async function memberFileExists(osUser: string, rel: string): Promise<boolean> {
   try {
-    const w = wrapAsMember(osUser, ["sh", "-c", 'test -f "$HOME/.claude/.credentials.json"']);
+    const w = wrapAsMember(osUser, ["sh", "-c", `test -f "$HOME/${rel}"`]);
     await execFileAsync(w[0], w.slice(1), { timeout: 5000 });
     return true;
   } catch { return false; }
+}
+// box_ 홈의 파일 삭제(로그아웃) — 같은 drop-priv 경계. rm -f 라 없는 파일에도 성공(멱등).
+async function memberFileRemove(osUser: string, rel: string): Promise<void> {
+  const w = wrapAsMember(osUser, ["sh", "-c", `rm -f "$HOME/${rel}"`]);
+  await execFileAsync(w[0], w.slice(1), { timeout: 5000 });
+}
+// UI 로그인 배너 숨김 판정용(claude 전용 축약 — 기존 호출부 유지).
+async function memberClaudeLoggedIn(osUser: string): Promise<boolean> {
+  return memberFileExists(osUser, HARNESS_CRED.claude);
 }
 // OS 격리 상태(#524) — UI 표시용. ready=인프라 준비(활성+Linux+box-spawn), provisioned=이 멤버 box_<slug> 존재,
 //  loggedIn=box_ 홈에 claude 자격증명 있음(drop-priv 확인). loggedIn 이면 UI 로그인 버튼 숨김.
@@ -288,6 +319,86 @@ export async function memberOsStatus(memberId: string): Promise<{ ready: boolean
   const osUser = osUsername(userSlug({ userId: memberId } as LivelyUser));
   const provisioned = await osUserExists(osUser);
   return { ready: isolationInfraReady(), provisioned, osUser, loggedIn: provisioned ? await memberClaudeLoggedIn(osUser) : false };
+}
+
+// ── 내 AI 계정(#1085) — 관리탭 [내 설정 ▸ 내 AI 설정] 상단 카드. "내 AI 세션이 어느 AI(Claude Code·Codex)로,
+//  누구 계정으로 뜨나" 를 한 자리에서 보고 로그인/로그아웃한다. 자격증명이 **어디 사는지**(scope)가 셋으로 갈리고,
+//  로그아웃 가능 여부는 전적으로 거기서 결정된다:
+//   · isolated — 멤버 OS 계정(box_) 홈(#524). 게이트웨이는 700 홈을 못 읽으니 drop-priv 로 존재확인·삭제만 한다.
+//   · profile  — 비격리 박스의 멤버별 dir(~/.lively/profiles/<slug>/claude, #346·#1014). 게이트웨이 소유 → 직접.
+//   · shared   — 호스트 공유 홈. **다른 구성원 세션이 쓰는 바로 그 자격**이라 로그아웃을 막는다(남의 세션이 끊긴다).
+//  ⚠ Codex 는 비격리 경로에 멤버별 홈 주입(CODEX_HOME)이 없다 — claude 의 CLAUDE_CONFIG_DIR(#1014) 에 해당하는 게
+//   아직 없어서다. 그래서 그 박스에서는 shared 로 **정직하게** 표시하고 로그아웃을 잠근다(있는 척하지 않는다).
+export interface AiAccountStatus {
+  key: string; label: string;
+  scope: "isolated" | "profile" | "shared";
+  loggedIn: boolean | null;   // null = **알 수 없음**(아래 키체인 한계). false 는 '확실히 미로그인'일 때만.
+  canLogout: boolean;
+  where: string;   // 자격증명이 사는 자리(사람이 읽는 설명)
+}
+// macOS 키체인의 Claude 자격 존재 확인 — Claude Code 는 **맥에서 자격을 파일이 아니라 키체인**
+//  ("Claude Code-credentials")에 넣는다. 그래서 `.credentials.json` 부재를 '미로그인'으로 읽으면 거짓말이 된다
+//  (실측: 키체인엔 로그인돼 있는데 파일은 없음 → 화면이 '연결 안 됨'으로 나와 사용자가 바로 잡아냈다).
+//  ⚠ **비밀은 읽지 않는다** — `-g`(비밀 출력) 없이 항목 존재만 exit code 로 본다(토큰이 로그·응답에 안 실린다).
+//  ⚠ 키체인은 **OS 유저 단위**다 → 프로필 dir(CLAUDE_CONFIG_DIR)로 갈리지 않는다. 그래서 맥에서 claude 는
+//   구조적으로 '이 서버 공용'이다(아래 scope='shared' 강제). launchd 처럼 키체인에 못 닿는 맥락이면 실패 →
+//   그 땐 알 수 없음(null)으로 남는다(종전 동작, 무회귀).
+async function macClaudeKeychainHas(): Promise<boolean> {
+  try {
+    await execFileAsync("security", ["find-generic-password", "-s", "Claude Code-credentials"], { timeout: 5000 });
+    return true;
+  } catch { return false; }
+}
+export async function aiAccountStatus(user: LivelyUser): Promise<AiAccountStatus[]> {
+  const osSt = await memberOsStatus(ownerId(user));
+  const isolated = osSt.ready && osSt.provisioned;
+  const darwin = process.platform === "darwin";
+  const out: AiAccountStatus[] = [];
+  for (const h of HARNESSES) {
+    const rel = HARNESS_CRED[h.key];
+    if (!rel) continue;   // 셸 등 — 로그인 개념이 없는 하네스
+    let scope: AiAccountStatus["scope"]; let where: string;
+    let loggedIn: boolean | null;
+    if (isolated) {
+      scope = "isolated"; where = `내 격리 계정(${osSt.osUser}) 홈의 ${rel}`;
+      loggedIn = await memberFileExists(osSt.osUser, rel);
+    } else if (h.key === "claude" && darwin) {
+      // 맥 = 키체인(OS 유저 단위) → 멤버별로 갈릴 수 없다. 공용으로 **정직하게** 표시한다.
+      scope = "shared"; where = "이 서버 macOS 키체인(Claude Code-credentials)";
+      loggedIn = await macClaudeKeychainHas() ? true : null;   // 못 찾음 = 미로그인일 수도, 키체인 접근 불가일 수도
+    } else if (h.key === "claude" && process.env.LIVELY_MULTIPROFILE !== "0") {
+      const file = path.join(profileConfigDir(user), ".credentials.json");
+      scope = "profile"; where = file;
+      loggedIn = await fsp.access(file).then(() => true, () => false);
+    } else {
+      const file = path.join(os.homedir(), rel);
+      scope = "shared"; where = file;
+      loggedIn = await fsp.access(file).then(() => true, () => false);
+    }
+    // 지울 수 있을 때만 로그아웃을 연다 — 공용 계정(남의 세션까지 끊김)·미로그인·탐지불가는 잠근다.
+    out.push({ key: h.key, label: h.label, scope, where, loggedIn, canLogout: loggedIn === true && scope !== "shared" });
+  }
+  return out;
+}
+
+// 로그아웃 = 자격증명 파일 삭제(재로그인으로 되돌릴 수 있다). **본인 것만** — 호출자(라우트)가 principal 을 넘긴다.
+//  ⚠ 이미 떠 있는 세션의 하네스는 메모리에 인증을 들고 있을 수 있어 그 자리에서 끊기지 않는다(다음 로그인부터 적용).
+export async function aiAccountLogout(user: LivelyUser, key: string): Promise<void> {
+  const acct = (await aiAccountStatus(user)).find((a) => a.key === key);
+  if (!acct) throw new HttpError(404, `모르는 AI: ${key}`);
+  if (acct.loggedIn === false) throw new HttpError(409, `${acct.label} 은(는) 이미 로그인 전입니다.`);
+  if (acct.loggedIn === null) {
+    throw new HttpError(409, `${acct.label} 의 로그인 상태를 서버가 확인할 수 없습니다(자격이 이 서버 키체인에 있음) — 세션에서 ${key} 를 실행해 직접 로그아웃하세요.`);
+  }
+  if (!acct.canLogout) {
+    throw new HttpError(409, `${acct.label} 은(는) 이 서버의 공유 계정으로 실행됩니다 — 로그아웃하면 다른 구성원의 세션까지 끊깁니다. 구성원 격리를 설치하면 계정이 분리됩니다.`);
+  }
+  const rel = HARNESS_CRED[key];
+  if (acct.scope === "isolated") {
+    await memberFileRemove(osUsername(userSlug(user)), rel);
+    return;
+  }
+  await fsp.rm(path.join(profileConfigDir(user), ".credentials.json"), { force: true });
 }
 
 async function tmux(args: string[]): Promise<string> {
@@ -329,6 +440,9 @@ function isAgentOffline(harness: string, paneCmd: string): boolean {
 }
 // 세션별 마지막 'busy(작업중)' 관측 시각(epoch초). 폴링 관측 기반 — '최근 작업순' 정렬용. 서버 재기동 시 리셋(도그푸드 OK).
 const lastBusyAt = new Map<string, number>();
+// 이 시간 넘게 아무 작업이 없으면 카드를 회색(오프라인)으로 — 상민님 지정 48시간(2026-07-22).
+//  '접속 여부'가 아니라 '얼마나 방치됐나'가 사람이 실제로 구분하고 싶어 하는 축이다.
+const STALE_IDLE_SEC = Number(process.env.LIVELY_SESSION_STALE_HOURS || 48) * 3600;
 // pane 화면 내용으로 '사용자 선택/승인 대기'(확인 필요) 감지. 2.5초 캐시(폴링 버스트 공유).
 //
 // ⚠ 화면 전체를 grep 하면 안 된다(#853 오탐). Claude Code 는 **과거 사용자 메시지도 '❯ ' 프리픽스로**
@@ -365,6 +479,32 @@ async function paneAwaitingInput(sessionId: string): Promise<boolean> {
 
 export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
   return collectSessions(ownerId(user));
+}
+
+// 복원 가능(restorable) 세션(#1059 E) — DB desired-state 에는 있으나 지금 tmux 에 **없는** 이 사용자 소유 세션.
+//  = 재부팅으로 tmux 서버가 죽었거나 F(reaper)가 회수한 세션. 라이브 목록(liveIds)에 있는 건 제외(tmux 우선 — 이중표기 방지).
+//  호출자(terminal.ts GET /terminal/sessions)가 라이브 tmux + 노드 세션에 이걸 병합한다(노드 병합과 같은 패턴).
+//  ⚠ owner-scoped: 소유자만 자기 restorable 세션을 본다(초대·프로젝트 공유 복원목록은 후속 — 재부팅 생존의 핵심은 owner).
+//  DB 다운/오류면 빈 배열(복원목록은 최적화지 필수 기능이 아니다 — 라이브 세션 표시를 막지 않는다).
+export async function listRestorableSessions(user: LivelyUser, liveIds: Set<string>): Promise<SessionInfo[]> {
+  const me = ownerId(user);
+  if (!me) return [];
+  let states;
+  try { states = await listSessionStatesForOwner(me); } catch { return []; }
+  const out: SessionInfo[] = [];
+  for (const s of states) {
+    if (liveIds.has(s.id)) continue; // tmux 에 살아있음 → 라이브가 SoT
+    out.push({
+      id: s.id, label: s.label || s.id, harness: s.harness || "shell", dir: s.dir || "",
+      autoApprove: s.auto_approve, owner: s.owner, owned: s.owner === me,
+      created: s.created || 0, attached: false, invites: s.invites, flags: s.flags,
+      projectId: s.project_id || 0,
+      agentState: "offline", title: "",
+      lastActive: s.last_busy || undefined,
+      restorable: true,
+    });
+  }
+  return out;
 }
 
 // 노드 에이전트용(#869) — 뷰어 필터 없이 이 호스트의 전 box-* 세션+메타를 반환한다. 가시성 판정(정책)은
@@ -404,7 +544,10 @@ async function collectSessions(me: string | null): Promise<SessionInfo[]> {
     if (busy) {
       lastBusy = nowSec;
       lastBusyAt.set(name, nowSec);
-      if (nowSec - persisted >= 30) void tmuxQuiet(["set-option", "-t", name, "@box_last_busy", String(nowSec)]); // 30초 스로틀 — 폴링마다 쓰지 않는다
+      if (nowSec - persisted >= 30) {
+        void tmuxQuiet(["set-option", "-t", name, "@box_last_busy", String(nowSec)]); // 30초 스로틀 — 폴링마다 쓰지 않는다
+        void touchSessionBusy(name, nowSec).catch(() => { /* 비치명 — desired-state 없음(구 세션·노드)·DB 다운 */ }); // #1059 E — restorable 카드 시간표시 미러(같은 스로틀)
+      }
     }
     // 프로젝트 폴더 세션은 프로젝트 멤버십으로 게이트(소비자 측), 개인 세션은 소유자·초대자만.
     //  me=null(노드 raw 수집 #869)은 필터 없이 전부 — 가시성은 게이트웨이가 판정.
@@ -418,12 +561,24 @@ async function collectSessions(me: string | null): Promise<SessionInfo[]> {
   for (const r of rows) {
     let flags: Record<string, string> = {};
     try { if (r.flagsRaw) flags = JSON.parse(r.flagsRaw) as Record<string, string>; } catch { /* 구버전 세션 — 플래그 메타 없음 */ }
-    // #req 우선순위: 셸종료 > 작업중 > 확인필요(접속 무관 — 사용자 결정 대기 알림) > 접속중이면 대기중 > 미접속이면 오프라인.
-    const state: SessionInfo["agentState"] = r.offline ? "offline"
+    // 우선순위: 하네스 종료(셸) > 작업중 > 확인필요 > 최근 작업 있으면 대기중 > 오래 방치면 오프라인.
+    //  ⚠ 여기서 '오프라인'은 **아무도 안 보고 있다**는 뜻이다(프로세스는 대개 살아 있다). #1015 E 에서
+    //   "미접속도 살아 있으니 대기중" 으로 바꿨다가, 상민님 판단으로 되돌렸다(2026-07-22): 하다가 창을 끄면
+    //   실질적으로 비활성이고, '돌긴 도는데 아무도 안 보는 중'을 사용자에게 이해시킬 필요가 없다.
+    //   #1015 E 의 본래 가치(=셸로 빠진 것과 유휴가 한 칸에 섞임)는 exited 를 따로 뺀 것으로 이미 유지된다.
+    //  ⚠⚠ busy·waiting 은 **접속 여부와 무관하게** 그대로 둔다 — 탭을 닫아도 AI 는 백그라운드로 계속 일하고,
+    //   'waiting(확인 필요)'은 사용자 결정을 기다리는 알림이다. 이 둘을 회색으로 덮으면 일하는 세션을 꺼진 걸로
+    //   오인하고 승인 대기를 놓친다.
+    //  회색(오프라인) 판정 기준 = **마지막 작업 경과**. attached 는 쓰지 않는다 — 그건 '누가 보고 있다'가 아니라
+    //   '어떤 탭이 WS 를 붙들고 있다'라서(배경 탭·다른 기기·그리드 셀·게이트웨이 재시작 후 자동 재연결까지 포함)
+    //   사람의 직관과 어긋났다(실측: 마지막 작업이 147시간 전인 세션이 '접속중'으로 잡힘).
+    const lastSeen = Number(r.lastBusy) || Number(r.created) || 0;
+    const staleIdle = !lastSeen || (nowSec - lastSeen) >= STALE_IDLE_SEC;
+    const state: SessionInfo["agentState"] = r.offline ? "exited"
       : r.busy ? "busy"
       : waitingIds.has(r.name) ? "waiting"
-      : Number(r.attached) > 0 ? "idle"
-      : "offline";
+      : staleIdle ? "offline"
+      : "idle";
     sessions.push({
       id: r.name, label: (r.labelParts.join("\t") || r.name), harness: r.harness || "shell", dir: r.dir || "",
       autoApprove: r.auto === "1", owner: r.owner || "", owned: r.owned,
@@ -525,9 +680,16 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   if (harness.bin) {
     cmd.push(harness.bin);
     // 이어받기(#905 C1) — claude 하네스에 한해 --resume <sid> 주입(그 세션 대화를 이어서 연다). sid 형식 검증.
+    //  ⚠ 여기의 <sid> 는 **claude 자신의 세션 UUID** 여야 한다(세션이력 캡처가 claude session_id 로 키잉 — #905).
+    //   tmux box-id 를 주면 claude 가 못 찾아 검색-결과없음 picker 가 뜬다(#1059 사용자 신고). 그 경우엔 resumePick 을 쓴다.
     if (input.resume && harness.key === "claude") {
       if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(input.resume)) throw new HttpError(400, "resume 세션 id 형식이 잘못되었습니다");
       cmd.push("--resume", input.resume);
+    } else if (input.resumePick && harness.key === "claude") {
+      // #1059 — 정확한 claude UUID 를 모를 때(예: restorable 복원, box-id 만 있음): 인자 없는 --resume 로 **후보 picker** 를
+      //  바로 띄운다. box-id 를 넘겨 "검색 결과 없음"에 빠뜨리는 대신, 이 작업폴더의 실제 대화 후보에서 사용자가 고른다.
+      //  (제로클릭 정밀 복원은 box-id↔claude-UUID 매핑 저장이 선행 — 후속.)
+      cmd.push("--resume");
     }
     for (const def of harness.flags) {
       const raw = input.flags?.[def.name];
@@ -591,7 +753,17 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   if (osUser) {
     // ⚠ tmux -c 를 안 쓴다: -c 는 게이트웨이 권한으로 chdir 해 멤버 700 홈에 못 들어간다('chdir(2) failed: Permission denied' 반복).
     //  대신 box-spawn 이 --cwd 로 멤버 uid 에서 cd 한다. cmd 빈 배열(셸)이어도 wrapper 가 로그인 셸을 띄운다.
-    args.push(...wrapAsMember(osUser, cmd, target));
+    // #1059 D — per-session cgroup 메모리 캡: 관리탭/env 로 캡이 설정된 경우에만 cg 를 넘긴다(→ wrapAsMember 가
+    //  box-cgspawn 경유로 systemd-run --scope 격리). 미설정(0/0)=cg undefined → 종전 sudo -u 경로(무회귀, cap-gated).
+    //  정책을 못 읽어도 세션 생성을 막지 않는다 — 메모리 캡은 방어책이지 세션 생성의 필수 전제가 아니다.
+    let cg: CgroupLimit | undefined;
+    try {
+      const mp = await effectiveSessionMemoryPolicy(() => getRuntimeConfig().then((c) => c.session_memory_policy));
+      if (mp.per_session_high_mb > 0 || mp.per_session_max_mb > 0) cg = { highMb: mp.per_session_high_mb, maxMb: mp.per_session_max_mb };
+    } catch (err) {
+      console.warn(`[terminal] 세션 메모리 정책 조회 생략(비치명): ${err instanceof Error ? err.message : String(err)}`);
+    }
+    args.push(...wrapAsMember(osUser, cmd, target, cg));
   } else {
     args.push("-c", target);
     // 멀티프로필(#346·#1014): 비격리 경로에서도 **항상 이 멤버 전용 CLAUDE_CONFIG_DIR** 을 준다(공유 폴백 폐기).
@@ -636,7 +808,24 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   await tmuxQuiet(["set-option", "-t", id, "mouse", "on"]);
   await tmuxQuiet(["set-window-option", "-t", id, "aggressive-resize", "off"]);
   await tmuxQuiet(["set-window-option", "-t", id, "window-size", "latest"]);
-  return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: Math.floor(Date.now() / 1000), attached: false, invites, flags: appliedFlags };
+  const createdSec = Math.floor(Date.now() / 1000);
+  // 세션 desired-state DB 미러(#1059 E) — 재부팅(tmux 사망)에도 복원 가능한 목록으로 남긴다. tmux @box_* 와 같은 값을 미러.
+  //  ⚠ best-effort: DB 가 죽어도 세션 생성은 이미 끝났다(위 tmux new-session) — upsert 실패로 세션을 되돌리지 않는다.
+  //  managed(상시) 세션은 skip — keep-alive(ensureAllManagedSessions)가 그 영속을 소유하므로 restorable 로 이중화하면
+  //   재부팅 후 keep-alive 재생성과 사용자 수동복원이 충돌한다(#1059 E 설계).
+  if (!input.managed) {
+    try {
+      await upsertSessionState({
+        id, owner: ownerId(user), label, harness: harness.key, dir: target,
+        root_key: input.rootKey || null, subpath: input.subpath || null,
+        flags: appliedFlags, auto_approve: !!input.autoApprove, invites,
+        project_id: input.projectId || null, project_src: input.projectId ? (input.projectSrc === "org" ? "org" : "v6") : null,
+        read_only: !!input.readOnly, incognito: !!input.incognito,
+        created: createdSec, last_busy: null,
+      });
+    } catch (e) { console.warn(`[terminal] 세션 desired-state 미러 실패(${id}) — 세션은 계속:`, (e as Error)?.message ?? e); }
+  }
+  return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: createdSec, attached: false, invites, flags: appliedFlags };
 }
 
 interface OwnerMeta { owner: string; invites: string[]; }
@@ -678,21 +867,40 @@ async function assertManage(user: LivelyUser, id: string): Promise<void> {
   const m = await ownerMeta(id);
   if (!m || m.owner !== ownerId(user)) throw new HttpError(403, "본인 세션이 아닙니다");
 }
-export async function killSession(user: LivelyUser, id: string): Promise<void> {
-  await assertManage(user, id);
+// tmux 세션만 종료(권한·DB desired-state 미터치) — 회수(reaper)·관리자 회수가 각자 정책 적용 후 부른다.
+async function tmuxKill(id: string): Promise<void> {
+  if (!ID_RE.test(id)) throw new HttpError(400, "세션 id 형식 오류");
   await tmux(["kill-session", "-t", id]);
+}
+// #1059 F — reaper 전용 중앙 세션 회수: tmux 만 죽이고 **desired-state 는 보존**(org_session_state 유지 → restorable
+//  로 남아 열 때 lazy resume). 노드 세션 회수는 게이트웨이 라우트의 relayNodeOp{op:'kill'} 이 담당(F 는 소스별 dispatch).
+export async function reapCentralSession(id: string): Promise<void> {
+  await tmuxKill(id);
+}
+// opts.admin: 소유자 확인을 건너뛴다(호출 라우트가 admin scope 를 이미 검증 — F4 관리자 수동 회수).
+// opts.preserveState: desired-state(org_session_state)를 지운다 vs 보존한다. 기본(미지정)=지움(사용자 명시 kill=복원 안 함).
+//  관리자 '회수'는 preserveState:true 로 불러 restorable 로 남긴다(reaper 와 동일 의미 — 메모리만 회수, 복원 가능).
+export async function killSession(user: LivelyUser, id: string, opts?: { admin?: boolean; preserveState?: boolean }): Promise<void> {
+  if (!opts?.admin) await assertManage(user, id);
+  await tmuxKill(id);
+  if (!opts?.preserveState) await deleteSessionState(id).catch((e) => console.warn(`[terminal] desired-state 삭제 실패(${id}):`, (e as Error)?.message ?? e));
 }
 export async function editSession(user: LivelyUser, id: string, patch: { label?: string; invites?: unknown }): Promise<void> {
   await assertManage(user, id);
+  const mirror: { label?: string; invites?: string[] } = {};
   if (patch.label !== undefined) {
     const clean = cleanLabel(patch.label);
     if (!clean) throw new HttpError(400, "이름이 필요합니다");
     await tmux(["set-option", "-t", id, "@box_label", clean]);
+    mirror.label = clean;
   }
   if (patch.invites !== undefined) {
     const invites = await validInvites(patch.invites, ownerId(user));
     await tmux(["set-option", "-t", id, "@box_invites", JSON.stringify(invites)]);
+    mirror.invites = invites;
   }
+  // desired-state 미러도 갱신(#1059 E) — 재부팅 후 복원본이 새 라벨·초대를 반영하도록. best-effort.
+  await updateSessionStateMeta(id, mirror).catch((e) => console.warn(`[terminal] desired-state 메타 갱신 실패(${id}):`, (e as Error)?.message ?? e));
 }
 
 // (#869 노드 에이전트 전용) 게이트웨이가 이미 구성원 디렉터리로 검증한 초대 목록을 그대로 기록한다.
