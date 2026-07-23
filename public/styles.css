@@ -4848,8 +4848,10 @@ body[data-route="dashboard"] .app-foot { display: none; } /* 코크핏에선 우
 .dash-ob-fill { display: block; height: 100%; background: var(--mint-deep); }
 
 /* 3열 프리셋: (내 프로젝트 8 + 팀 공유 폴더 4) 5 / (최신 알림 7 + 내 AI 세션 5) 4 / 작업 로그 3 — minmax(0,)로 말줄임 보장 */
-/* gap:0 — 열 사이 간격은 드래그 핸들(16px 트랙)이 담당(#req 열 폭 사용자화). grid-template-columns 는 JS(dashInitColResize)가 인라인 설정. */
-.dash-zones { flex: 1; min-height: 0; display: grid; gap: 0; grid-template-columns: minmax(0, 5fr) 16px minmax(0, 4fr) 16px minmax(0, 3fr); }
+/* gap:0 — 열 사이 간격은 드래그 핸들(16px 트랙)이 담당(#req 열 폭 사용자화). 저장값이 있으면 JS(dashInitColResize)가 fr 로 덮는다. */
+/* 1열 기본 = '리스트 오버뷰 카드가 3열로 정렬되는 최소 폭'을 px 로 고정(#req) — 카드 minmax 148 · gap 8(3열=460) + 크롬 26 = 486, 스크롤바·반올림 여유로 500px.
+   예전엔 1열도 fr(5fr)이라 화면이 넓을수록 같이 넓어져(→ 4·5열) 사람마다 너무 넓던 문제. px 고정이면 화면 폭과 무관하게 항상 딱 3열. 2·3열은 fr 로 나머지를 나눔. */
+.dash-zones { flex: 1; min-height: 0; display: grid; gap: 0; grid-template-columns: 500px 16px minmax(0, 4fr) 16px minmax(0, 3fr); }
 /* 열 폭 드래그 핸들 — 16px 트랙 안 얇은 그립. */
 .dash-col-handle { align-self: stretch; display: flex; align-items: center; justify-content: center; cursor: col-resize; }
 .dash-col-grip { width: 3px; height: 42px; max-height: 40%; border-radius: 3px; background: var(--line); transition: background .12s, height .12s; }
