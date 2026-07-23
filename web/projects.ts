@@ -1844,6 +1844,11 @@ function pjvSideNavDrop(elm, handlers) {
   const over = (ev) => {
     if (!pjvSideDrag.kind) return;
     ev.preventDefault();
+    // ⚠ 이 항목이 유효한 드롭 타깃이므로 컨테이너(treeWrap)의 dragover 로 **버블링을 막는다**(#1067 버그 수정).
+    //  treeWrap 은 '빈 곳에 리스트 드롭'을 막으려고 리스트 드래그 중 dropEffect='none' 을 거는데, 버블링 순서상
+    //  자식보다 **나중에** 실행돼 여기서 세운 'move' 를 덮어쓴다. 그러면 브라우저가 드롭을 불허해 네이티브 drop 이벤트가
+    //  아예 안 떠 폴더 넣기·재정렬이 '반영 안 됨'으로 보였다(합성 이벤트는 이 판정을 안 거쳐 통과했다).
+    ev.stopPropagation();
     try { ev.dataTransfer.dropEffect = 'move'; } catch (_) { /* */ }
     const id = pjvSideDrag.id;
     const canReorder = pjvSideDrag.kind === 'list' ? !!(handlers.reorderList && handlers.reorderList(id))
