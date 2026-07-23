@@ -2228,6 +2228,11 @@ function pjvSideNavDrop(elm, handlers) {
         if (!pjvSideDrag.kind)
             return;
         ev.preventDefault();
+        // ⚠ 이 항목이 유효한 드롭 타깃이므로 컨테이너(treeWrap)의 dragover 로 **버블링을 막는다**(#1067 버그 수정).
+        //  treeWrap 은 '빈 곳에 리스트 드롭'을 막으려고 리스트 드래그 중 dropEffect='none' 을 거는데, 버블링 순서상
+        //  자식보다 **나중에** 실행돼 여기서 세운 'move' 를 덮어쓴다. 그러면 브라우저가 드롭을 불허해 네이티브 drop 이벤트가
+        //  아예 안 떠 폴더 넣기·재정렬이 '반영 안 됨'으로 보였다(합성 이벤트는 이 판정을 안 거쳐 통과했다).
+        ev.stopPropagation();
         try {
             ev.dataTransfer.dropEffect = 'move';
         }
@@ -5309,50 +5314,84 @@ function pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDele
             busyTask = false;
         }
     };
-    // Enter / 바깥클릭(blur) 모두 → 바로 생성하지 않고 '프로젝트 설정 팝업'을 띄운다(이름 + 그룹 상태 + 인라인 드래프트[팀원·마감·우선순위] 프리필).
-    //  팝업 뜰 때 인라인 행은 접지 않고 입력을 유지(목록에서 이름이 사라지지 않게), 팝업이 닫히면(생성 후 이동 or 취소) 정리.
-    //  단, Tab 들여쓰기 상태(#663)면 팝업 대신 위 프로젝트의 태스크로 즉시 생성.
-    let modalOpen = false;
-    const openSettingsPopup = () => {
+    // Enter / 바깥클릭(blur) → **설정 팝업 없이 바로 생성**(#1067). 프리필(이름 + 그룹 상태 + 인라인 드래프트[팀원·마감·우선순위])
+    //  대로 만들고, 태스크 추가행(pjvAddRow)과 똑같이 새 행을 그 자리에 끼운 뒤 입력을 열어 둬(keepOpen) 다음 프로젝트를
+    //  바로 이어서 만들 수 있게 한다. 자세한 설정(설명·레포·태스크 등)이 필요하면 트리거 옆 '자세히'(pjvProjAddMenu)에서.
+    //  Tab 들여쓰기 상태(#663)면 위 프로젝트의 태스크로 즉시 생성(종전과 동일).
+    let busy = false;
+    const commit = async (keepOpen) => {
         if (indentParent) {
             commitAsTask();
             return;
         }
-        if (modalOpen)
+        if (busy)
             return;
         const name = input.value.trim();
         if (!name) {
-            collapse();
+            if (!keepOpen)
+                collapse();
             return;
         }
-        modalOpen = true; // blur 가 떠도(팝업으로 포커스 이동) 인라인 행 유지
-        const back = openProjectV2Form(reload, {
-            name, status: statusKey, status_raw: statusDef ? statusDef.key : null, listId,
-            memberIds: draft.memberIds, due_date: draft.due_date, priority: draft.priority,
-        });
-        if (back && typeof MutationObserver !== 'undefined') {
-            const obs = new MutationObserver(() => { if (!back.isConnected) {
-                obs.disconnect();
-                modalOpen = false;
+        busy = true;
+        input.disabled = true;
+        try {
+            // 생성 — 이름·팀원·리스트를 한 번에. (커스텀/비-진행중 상태·마감·우선순위는 생성 직후 패치.)
+            const np = await api('/api/ui/v6/projects', { method: 'POST', body: JSON.stringify({
+                    name, members: draft.memberIds && draft.memberIds.length ? draft.memberIds : undefined,
+                    list_id: listId != null ? listId : undefined,
+                }) }).then((d) => (d && d.project) || d);
+            const nativeStatus = statusDef ? pjvNativeStatusOf(statusDef.category) : (statusKey === 'todo' ? 'todo' : statusKey === 'done' ? 'done' : 'in_progress');
+            if (np && np.id && (statusDef || nativeStatus !== 'in_progress')) {
+                await api('/api/ui/v6/projects/' + np.id + '/status', { method: 'POST', body: JSON.stringify({ status: nativeStatus, status_raw: statusDef ? statusDef.key : null }) }).catch(() => { });
+            }
+            const patch = {};
+            if (draft.due_date)
+                patch.due_date = draft.due_date;
+            if (draft.priority)
+                patch.priority = draft.priority;
+            if (np && np.id && Object.keys(patch).length)
+                await api('/api/ui/v6/projects/' + np.id, { method: 'POST', body: JSON.stringify(patch) }).catch(() => { });
+            // 새 프로젝트 행을 그 자리에 인라인 삽입(리로드 없이 흐름 유지). 멤버 facepile 은 draft ids 로 임시 구성(다음 렌더에 정식화).
+            const memberRows = (draft.memberIds || []).map((id) => ({ member_id: id }));
+            const p = Object.assign({ priority: null, due_date: null, start_date: null, task_count: 0, field_values: {}, tags: [] }, np, patch, {
+                status: nativeStatus, status_raw: statusDef ? statusDef.key : null, list_id: listId ?? (np && np.list_id) ?? null, members: memberRows,
+            });
+            body.insertBefore(pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx), row);
+            if (countEl)
+                countEl.textContent = String((parseInt(countEl.textContent, 10) || 0) + 1);
+            const emptyEl = body.querySelector('.pjv-proj-empty');
+            if (emptyEl)
+                emptyEl.remove();
+            input.value = '';
+            input.disabled = false;
+            busy = false;
+            draft.memberIds = [];
+            draft.due_date = draft.priority = null;
+            paintDateCells();
+            if (keepOpen)
+                input.focus();
+            else
                 collapse();
-            } });
-            obs.observe(document.body, { childList: true });
         }
-        else {
-            modalOpen = false;
+        catch (err) {
+            toast('프로젝트 생성 실패 — ' + (err.message || err), true);
+            input.disabled = false;
+            busy = false;
         }
     };
-    // 바깥클릭 — 셀 팝오버(.pjv-pop, 드래프트 지정 중)거나 행 내부 포커스면 보류. 이름 있으면 설정 팝업, 없으면 접기.
+    // 바깥클릭 — 드래프트 셀 팝오버가 열려 있거나 행 내부 포커스면 보류. 이름 있으면 생성(접기), 없으면 접기.
+    //  ⚠ 팀원·마감·우선순위 팝오버는 `.pjv-pop` 이 아니라 `.pjv-menu`(마감=`.pjv-date-pop`) 를 쓴다 — `.pjv-pop` 만
+    //   보면 그 셀을 여는 순간 blur 가 조기 생성해 **프로젝트가 두 개** 만들어졌다(#1067). 둘 다 가드한다.
     input.addEventListener('blur', () => {
         setTimeout(() => {
-            if (modalOpen || !row.classList.contains('editing'))
+            if (busy || !row.classList.contains('editing'))
                 return;
-            if (document.querySelector('.pjv-pop'))
+            if (document.querySelector('.pjv-pop, .pjv-menu'))
                 return;
             if (row.contains(document.activeElement))
                 return;
             if (input.value.trim())
-                openSettingsPopup();
+                commit(false);
             else
                 collapse();
         }, 130);
@@ -5385,9 +5424,10 @@ function pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDele
             return;
         }
         // 한글(IME) 조합 중 Enter 는 글자 확정용 — 그때 커밋하면 마지막 글자가 중복된 이름이 만들어진다(#293 동형).
+        //  Enter=연속 추가(keepOpen) — 만들고 입력을 열어 둬 다음 프로젝트를 바로 잇는다(태스크 추가행과 동형).
         if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
             e.preventDefault();
-            openSettingsPopup();
+            commit(true);
         }
     });
     collapse();

@@ -2167,7 +2167,8 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .pjv-addrow-input::placeholder { color: var(--muted-2); }
 
 /* 인라인 팝오버 + 메뉴 */
-.pjv-pop { position: absolute; z-index: 1000; background: var(--bg); border: 1px solid var(--line-net); border-radius: 10px; box-shadow: 0 8px 28px rgba(20,35,59,.13); padding: 5px; min-width: 150px; }
+/* z-index 1500 = 모달(.ov-back 1450, #764) 위 — 팝오버는 body 직속이라 모달 안에서 여는 드롭다운(레포·팀원·상태 등)이 모달 뒤로 가려지지 않으려면 .ov-back 보다 높아야 한다(#1093 회귀 수정). 전역 피드백인 토스트(2000)·투어(2100) 보다는 아래. */
+.pjv-pop { position: absolute; z-index: 1500; background: var(--bg); border: 1px solid var(--line-net); border-radius: 10px; box-shadow: 0 8px 28px rgba(20,35,59,.13); padding: 5px; min-width: 150px; }
 .pjv-menu { display: flex; flex-direction: column; gap: 1px; max-height: 280px; overflow: auto; }
 .pjv-menu-item { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: none; background: none; cursor: pointer; padding: 7px 9px; border-radius: 7px; font-size: 13px; color: var(--ink); }
 .pjv-menu-item:hover { background: var(--bg-tint-2); }

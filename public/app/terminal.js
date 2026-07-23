@@ -105,10 +105,10 @@ function fmtTermDate(sec) {
 const TSESS_STATUS = {
     waiting: { label: '확인 필요', cls: 'waiting', rank: 0 },
     busy: { label: '작업 중', cls: 'busy', rank: 1 },
-    idle: { label: '대기 중', cls: 'idle', rank: 2 }, // 최근 48시간 내 작업이 있었던 살아있는 세션
+    idle: { label: '대기 중', cls: 'idle', rank: 2 }, // 탭에 열려 있고 안 바쁨(온라인)
     restorable: { label: '복원 가능', cls: 'restorable', rank: 3 }, // #1059 E — 재부팅·회수로 꺼졌으나 복원 가능
     exited: { label: '종료됨', cls: 'exited', rank: 4 },
-    offline: { label: '오프라인', cls: 'offline', rank: 5 }, // 48시간+ 방치(탭 열림 여부 무관) 또는 노드 미연결
+    offline: { label: '오프라인', cls: 'offline', rank: 5 }, // 어느 탭에도 안 열려 있음 또는 노드 미연결
 };
 // 종료 확인 다이얼로그 — 카드/일괄 공통. 브라우저 confirm 대신 라이블리 확인 모달(#1062).
 //  '삭제'가 아니라 '끝내기'이고 대화록은 남는다는 걸 여기서 못 박는다.
@@ -301,12 +301,12 @@ async function renderTerminal(view) {
         const scope = (shownNow.length ? shownNow : sessions).filter((s) => s.owned);
         // 빠른 선택 — 전체 / 온라인 / 오프라인. 세 묶음 다 '지금 화면에 보이는 내 세션' 안에서 고른다
         //  (필터를 무시하고 안 보이는 것까지 담으면, 고른 개수와 화면이 어긋나 종료 대상이 불투명해진다).
-        //  온라인 = AI 가 살아 움직이는 것(작업 중·확인 필요·대기 중) · 오프라인 = 방치·종료됨·복원 가능.
+        //  온라인 = 지금 어느 탭에 열려 있는 세션(작업 중·확인 필요·대기 중) · 오프라인 = 안 열린·종료됨·복원 가능.
         const isOnline = (x) => { const k = sessState(x); return k === 'busy' || k === 'waiting' || k === 'idle'; };
         const groups = [
             { key: 'all', label: '전체', items: scope, hint: '보이는 내 세션 전부 선택' },
-            { key: 'on', label: '온라인', items: scope.filter(isOnline), hint: 'AI 가 살아 움직이는 세션(작업 중·확인 필요·대기 중)만 선택' },
-            { key: 'off', label: '오프라인', items: scope.filter((x) => !isOnline(x)), hint: '48시간+ 방치·종료됨·복원 가능 세션만 선택 — 한 번에 정리할 때' },
+            { key: 'on', label: '온라인', items: scope.filter(isOnline), hint: '지금 탭에 열려 있는 세션(작업 중·확인 필요·대기 중)만 선택' },
+            { key: 'off', label: '오프라인', items: scope.filter((x) => !isOnline(x)), hint: '어느 탭에도 안 열린·종료됨·복원 가능 세션만 선택 — 한 번에 정리할 때' },
         ].filter((g) => g.items.length);
         const pickBtns = groups.map((g) => {
             const on = g.items.every((x) => sel.ids.has(x.id)); // 이미 그 묶음이 다 선택돼 있으면 토글로 해제
