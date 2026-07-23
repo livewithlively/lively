@@ -11,7 +11,7 @@ import type { LivelyUser } from "./context.js";
 import { wrap, HttpError } from "./capabilities/rest-util.js";
 import { logger } from "./log.js";
 import { ROOTS, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, validateInvites, type SessionInfo, type CreateInput } from "./terminal-sessions.js";
-import { getSessionState, deleteSessionState, setClaudeSessionId } from "./org/session-state.js"; // #1059 E — restorable 세션 복원(+정밀 UUID 매핑)
+import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited } from "./org/session-state.js"; // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
 import { listManagedSessions } from "./org/managed-sessions.js"; // #1059 F — 관리탭 세션목록에서 managed 표시(회수 제외)
 import { sessionPrompts, searchPrompts, searchPromptsHybrid } from "./terminal-transcript.js";
 import { activeEmbeddingProvider } from "./v6/search-util.js";
@@ -381,6 +381,16 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
     // claude 세션 UUID 형식(표준 uuid 또는 안전 문자셋) — 경로/주입 방어.
     if (!uuid || uuid.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(uuid)) throw new HttpError(400, "uuid 형식 오류");
     const ok = await setClaudeSessionId(req.params.id, uuid, idOf(userOf(req)));
+    res.json({ ok }); // ok=false: 그 box 의 소유자가 아니거나 desired-state 레코드 없음(무해)
+  }));
+
+  // #1059 — claude SessionEnd 훅이 **사용자 정상 종료**(/exit·Ctrl-D=prompt_input_exit, logout)를 보고한다. 이 표시가 찍힌
+  //  세션은 tmux 에서 사라진 뒤 복원목록에서 '종료됨(대화 이어보기)'으로 뜬다(재부팅·강제kill·reaper 회수는 훅이 프로세스
+  //  사망으로 못 떠 표시 없음 → '복원 가능·중단됨'). owner-gated(markSessionExited) — 남의 세션엔 못 찍는다. best-effort(fire-and-forget).
+  app.post("/api/ui/terminal/sessions/:id/exited", auth, wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const reason = String(((req.body ?? {}) as Record<string, unknown>).reason ?? "").trim().slice(0, 64);
+    const ok = await markSessionExited(req.params.id, idOf(userOf(req)), reason);
     res.json({ ok }); // ok=false: 그 box 의 소유자가 아니거나 desired-state 레코드 없음(무해)
   }));
 

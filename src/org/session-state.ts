@@ -31,11 +31,13 @@ export interface SessionState {
   last_busy: number | null;   // @box_last_busy(마지막 작업 epoch초) — restorable 카드 시간표시용
   last_seen: string | null;   // 마지막 라이브(tmux) 관측 시각(진단용)
   claude_session_id: string | null; // #1059 정밀복원 — 이 box 가 현재 도는 claude 세션 UUID(work-flag 훅 보고, last-write-wins). null=미상→picker.
+  exited_at: string | null;   // #1059 — 사용자 정상 종료(/exit·logout) 표시. null=재부팅·회수(중단됨). 복원목록 라벨 구분용.
+  exit_reason: string | null; // #1059 — 종료 사유(prompt_input_exit·logout, 진단용).
 }
 
-// createSession 이 넘기는 desired-state(생성/재생성 시 upsert). last_seen 은 서버가 now(), claude_session_id 는
-//  생성 시점엔 미상(work-flag 훅이 세션 활동 때 사후 setClaudeSessionId 로 채움) — 둘 다 입력에서 제외.
-export type SessionStateInput = Omit<SessionState, "last_seen" | "claude_session_id">;
+// createSession 이 넘기는 desired-state(생성/재생성 시 upsert). last_seen 은 서버가 now(), claude_session_id·exited_at·
+//  exit_reason 은 생성 시점엔 미상(훅이 세션 시작/종료 때 사후 채움) — 전부 입력에서 제외(생성 시 NULL).
+export type SessionStateInput = Omit<SessionState, "last_seen" | "claude_session_id" | "exited_at" | "exit_reason">;
 
 function rowToState(r: Record<string, any>): SessionState {
   return {
@@ -51,6 +53,8 @@ function rowToState(r: Record<string, any>): SessionState {
     last_busy: r.last_busy != null ? Number(r.last_busy) : null,
     last_seen: r.last_seen ? new Date(r.last_seen).toISOString() : null,
     claude_session_id: r.claude_session_id ?? null,
+    exited_at: r.exited_at ? new Date(r.exited_at).toISOString() : null,
+    exit_reason: r.exit_reason ?? null,
   };
 }
 
@@ -61,6 +65,17 @@ export async function setClaudeSessionId(id: string, claudeUuid: string, owner: 
   const r = await itemsPool.query(
     "UPDATE org_session_state SET claude_session_id=$2, updated_at=now() WHERE id=$1 AND owner=$3",
     [id, claudeUuid, owner],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+// #1059 — 사용자 **정상 종료** 표시(claude SessionEnd 훅 보고). setClaudeSessionId 와 **동형**: owner-gated(호출자가 그
+//  box 소유자일 때만) + 레코드 존재 시에만 UPDATE(INSERT 안 함). 재부팅·강제kill·reaper 는 훅이 못 떠서 안 찍히고(중단됨),
+//  이건 사용자가 명시적으로 나간 것만 찍힌다(→ 복원목록에서 '종료됨'으로 구분). 반환 rowCount>0 = 찍힘. best-effort(실패 무해).
+export async function markSessionExited(id: string, owner: string, reason: string): Promise<boolean> {
+  const r = await itemsPool.query(
+    "UPDATE org_session_state SET exited_at=now(), exit_reason=$3, updated_at=now() WHERE id=$1 AND owner=$2",
+    [id, owner, reason || null],
   );
   return (r.rowCount ?? 0) > 0;
 }

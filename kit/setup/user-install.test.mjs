@@ -17,7 +17,7 @@ const SP = join(process.env.CLAUDE_CONFIG_DIR, "settings.json");
 const readS = () => JSON.parse(readFileSync(SP, "utf8"));
 const countHooks = (s) => Object.values(s.hooks || {}).reduce((n, arr) => n + arr.reduce((m, e) => m + (e.hooks || []).length, 0), 0);
 const FULL = () => mergeBlocks(userLevelHooksBlock(), runnerHooksBlock());
-const FULL_N = countHooks({ hooks: FULL() }); // 현행 kit 풀세트 크기(전용 5 + run-custom 이벤트 러너)
+const FULL_N = countHooks({ hooks: FULL() }); // 현행 kit 풀세트 크기(전용 7 = session-preload·sync·work-flag×PostToolUse2·SessionStart·SessionEnd·stop-gate + run-custom 이벤트 러너)
 
 let pass = 0, fail = 0;
 const ok = (name) => { pass++; console.log(`ok  ${name}`); };
@@ -142,9 +142,28 @@ bashKept ? ok("⑤ 다른 matcher 의 동일 스크립트 항목 보존") : bad(
   safeMergeUserSettings(full);
   s = readS();
   const seHooks = (s.hooks.SessionEnd || []).flatMap((e) => e.hooks || []);
-  const seOk = seHooks.length === 1 && seHooks[0].timeout === full.SessionEnd[0].hooks[0].timeout;
+  // #1059: SessionEnd 는 여러 엔트리(run-custom + work-flag)일 수 있다 — 개수 고정이 아니라 '원하는 것 전부가 timeout 까지 일치'로 본다.
+  const wantSE = full.SessionEnd.flatMap((e) => e.hooks || []);
+  const seOk = seHooks.length === wantSE.length
+    && wantSE.every((wh) => seHooks.some((h) => h.command === wh.command && h.timeout === wh.timeout));
   seOk ? ok("⑨ timeout 만 바뀐 구엔트리도 최신형으로 회수·교체(+중복 없음)")
-    : bad("⑨ timeout 회수", `SessionEnd hooks=${JSON.stringify(seHooks)}`);
+    : bad("⑨ timeout 회수", `SessionEnd hooks=${JSON.stringify(seHooks)} want=${JSON.stringify(wantSE)}`);
+}
+
+// ⑩⑪⑫ #1059 — 세션 라이프사이클 배선이 user-level 블록에 있어야 한다(정밀복원 UUID + 정상종료 표시).
+{
+  const blk = userLevelHooksBlock();
+  const wf = (entries) => (entries || []).filter((e) => (e.hooks || []).some((h) => typeof h.command === "string" && h.command.includes("work-flag.mjs")));
+  const ssWF = wf(blk.SessionStart);
+  const seWF = wf(blk.SessionEnd);
+  ssWF.length ? ok("⑩ SessionStart 에 work-flag 배선(편집·MCP 없는 대화도 UUID 매핑 → 정밀복원)")
+    : bad("⑩ SessionStart work-flag", "배선 없음 — 대화만 한 세션은 복원이 picker 로 폴백");
+  seWF.length ? ok("⑪ SessionEnd 에 work-flag 배선(정상종료 → '종료됨' 구분)")
+    : bad("⑪ SessionEnd work-flag", "배선 없음 — /exit 이 재부팅 중단과 구분 안 됨");
+  // 종료 경로라 timeout 명시 필수(미지정 시 floor 1500ms 로 잘려 fetch 조기 abort — #1043 주석).
+  const seTimeoutOk = seWF.length > 0 && seWF.every((e) => (e.hooks || []).every((h) => !(h.command || "").includes("work-flag.mjs") || (typeof h.timeout === "number" && h.timeout > 0)));
+  seTimeoutOk ? ok("⑫ SessionEnd work-flag timeout 명시")
+    : bad("⑫ SessionEnd timeout", "미지정 — 종료 경로에서 floor 1500ms 로 fetch 조기 abort");
 }
 
 rmSync(SANDBOX, { recursive: true, force: true });

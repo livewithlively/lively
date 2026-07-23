@@ -12,7 +12,7 @@
 | 훅 | 이벤트/매처 | stdin | stdout/exit |
 |---|---|---|---|
 | `session-preload.mjs` | SessionStart, matcher `startup\|resume\|clear` (compact 는 재주입 노이즈로 의도적 제외) | 읽지 않음(hang 차단) | 성공 시 한국어 현황 블록 + exit 0 → 세션 컨텍스트로 주입. 실패는 전부 무출력 exit 0 |
-| `work-flag.mjs` | PostToolUse ×2 — `mcp__lively__(curate_item_mapping\|propose_domain\|domain_deprecate\|pm_task_.*)` 와 `Edit\|Write\|MultiEdit\|NotebookEdit` | hook-input JSON (session_id, tool_name …) | 출력 없음, 항상 exit 0. 플래그 파일만 touch |
+| `work-flag.mjs` | PostToolUse ×2 (`mcp__lively__.*`, `Edit\|Write\|MultiEdit\|NotebookEdit`) + **SessionStart**(`startup\|resume\|clear`) + **SessionEnd** — #1059 | hook-input JSON (session_id, tool_name, hook_event_name, reason …) | 출력 없음, 항상 exit 0. PostToolUse=플래그 touch. SessionStart=claude UUID 매핑 보고(정밀복원). SessionEnd(reason=prompt_input_exit\|logout)=정상종료 보고(복원목록 '종료됨') |
 | `stop-writeback-gate.mjs` | Stop (matcher 없음) | hook-input JSON (`stop_hook_active` 포함) | 차단 시에만 `{"decision":"block","reason":…}` + exit 0 (동일 라이브 세션 재가동). 그 외 무출력 exit 0 |
 
 > **memory_save 는 work-flag 에서 의도적 제외** — 06-16 부터 MCP 표면(24툴)에 라이브(org_memory 영속, memory scope).

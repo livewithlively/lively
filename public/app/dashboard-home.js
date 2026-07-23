@@ -1714,13 +1714,16 @@ async function fillSessions(zone, onCount, projectsP) {
             // 우측 고정 시각열 — '마지막 작업'(클로드가 마지막으로 턴을 돌린/끝낸 때). 내가 열어본 시각과 무관(#853).
             const worked = Number(s.lastActive) || 0;
             const when = el('div', { class: 'dash-scard-when' + (worked ? '' : ' none'), title: worked ? '마지막 작업 — 클로드가 마지막으로 작업한 시각' : '아직 작업 기록이 없어요 (만든 시각)' }, density === 'compact' ? null : el('span', { class: 'dash-scard-when-lbl', text: worked ? '마지막 작업' : '만든 시각' }), el('span', { class: 'dash-scard-when-t', text: sessTime(worked || s.created) }));
-            const openBtn = el('button', { class: 'dash-scard-open', type: 'button', text: s.restorable ? '복원' : '열기' });
+            // #1059 — 사용자 정상 종료(/exit)로 생긴 복원카드는 '이어보기'로 구분(재부팅·회수 중단은 '복원').
+            const dExitedByUser = !!(s.restorable && s.exitedByUser);
+            const dRestoreVerb = dExitedByUser ? '이어보기' : '복원';
+            const openBtn = el('button', { class: 'dash-scard-open', type: 'button', text: s.restorable ? dRestoreVerb : '열기' });
             if (s.restorable) {
                 // #1059 E — 복원: 재부팅·회수로 꺼진 세션을 저장된 desired-state 로 재생성(claude 는 대화 이어받기). 새 세션이 뜨면 그걸 연다.
-                openBtn.title = '재부팅·회수로 꺼진 세션을 다시 엽니다 (같은 폴더·설정 + 대화 이어받기)';
+                openBtn.title = dExitedByUser ? '내가 종료한 세션 — 저장된 대화를 이어서 엽니다 (같은 폴더·설정)' : '재부팅·자동회수로 중단된 세션을 다시 엽니다 (같은 폴더·설정 + 대화 이어받기)';
                 openBtn.onclick = async () => {
                     openBtn.disabled = true;
-                    openBtn.textContent = '복원 중…';
+                    openBtn.textContent = dRestoreVerb + ' 중…';
                     try {
                         const r = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/restore', { method: 'POST', body: '{}' });
                         // 라이브 경합(already) — 그새 다시 떠 있으면 새로 만들지 않고 그 세션을 그대로 연다(오success 방지).
@@ -1733,13 +1736,13 @@ async function fillSessions(zone, onCount, projectsP) {
                         const ns = r && r.session;
                         if (ns && ns.id)
                             window.open('/ui/terminal.html?session=' + encodeURIComponent(ns.id) + '&label=' + encodeURIComponent(ns.label || s.label || ''), '_blank');
-                        toast('복원했어요 — 새 터미널에서 이어볼 대화를 고르세요(claude 이어보기 목록).');
+                        toast(dRestoreVerb + ' 완료 — 새 터미널에서 대화를 이어받아요(정확한 대화를 못 찾으면 이어보기 목록에서 고르세요).');
                         reloadSessions && reloadSessions();
                     }
                     catch (e) {
-                        toast('복원 실패 — ' + (e && e.message || e), true);
+                        toast(dRestoreVerb + ' 실패 — ' + (e && e.message || e), true);
                         openBtn.disabled = false;
-                        openBtn.textContent = '복원';
+                        openBtn.textContent = dRestoreVerb;
                     }
                 };
             }
@@ -1897,8 +1900,9 @@ async function fillSessions(zone, onCount, projectsP) {
 //  busy=작업중(주황) / waiting=확인 필요(빨강, 사용자 선택·승인 대기) / idle=대기중(초록) / offline=오프라인(회색).
 function dashSessState(s) {
     // #1059 E — 복원 가능(restorable): 재부팅·회수로 tmux 에서 꺼졌으나 desired-state 가 DB 에 남은 세션. 상태 판정 맨 앞.
+    //  사용자 정상 종료(/exit)로 생긴 건 '종료됨'으로 구분(#1059 — 재부팅 중단과 다르게 표시).
     if (s && s.restorable)
-        return { key: 'restorable', label: '복원 가능' };
+        return { key: 'restorable', label: s.exitedByUser ? '종료됨' : '복원 가능' };
     // #1015 E — '오프라인' 한 칸을 둘로 갈랐다: exited=하네스가 끝남(AI 더 안 돔) / offline=원격 노드 미연결.
     //  미접속은 더 이상 오프라인이 아니다(세션은 서버에서 상시 돈다) → 백엔드가 idle 로 준다.
     const map = { busy: '작업중', waiting: '확인 필요', idle: '대기중', exited: '종료됨', offline: '오프라인' };

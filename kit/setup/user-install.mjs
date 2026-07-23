@@ -68,6 +68,14 @@ function userLevelHooksBlock() {
     SessionStart: [
       { matcher: "startup|resume|clear", hooks: [{ type: "command", command: hookCmd("session-preload.mjs") }] },
       { matcher: "startup|resume|clear", hooks: [{ type: "command", command: hookCmd("sync-harness-assets.mjs") }] },
+      // #1059 정밀복원 — claude 세션 UUID 를 **세션 시작마다** 게이트웨이에 매핑(box-id↔UUID). PostToolUse(편집·MCP)만으론
+      //  편집·MCP 없는 대화가 UUID 를 못 보고해 복원이 picker 로 폴백했다 → 시작 이벤트에서 툴 무관하게 보고(work-flag 의 UUID 블록).
+      { matcher: "startup|resume|clear", hooks: [{ type: "command", command: hookCmd("work-flag.mjs") }] },
+    ],
+    // #1059 — 사용자 정상 종료(/exit·logout)를 게이트웨이에 알려 복원목록에서 '종료됨'으로 구분. ⚠ timeout 명시(5s): SessionEnd 는
+    //  종료 경로라 미선언 시 floor 1500ms 로 잘려(#1043 주석 참조) fetch 가 조기 abort 될 수 있다.
+    SessionEnd: [
+      { hooks: [{ type: "command", command: hookCmd("work-flag.mjs"), timeout: 5 }] },
     ],
     PostToolUse: [
       // 우리 서버 한정 유지(#906) — ext__ 프록시는 mcp__lively__ext__… 라 이 matcher 로 이미 잡힌다.

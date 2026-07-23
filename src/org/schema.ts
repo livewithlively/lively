@@ -925,6 +925,11 @@ export async function initOrgSchema(): Promise<void> {
   //  활동 시 (box-id, claude session_id)를 보고해 last-write-wins 로 갱신(한 box 안에서 branch·resume·/clear 로 UUID 가
   //  바뀔 수 있으므로 최신만 유지). 복원 시 이 값으로 `claude --resume <uuid>` 정밀 이어받기. null=미상(셸·코덱스·미보고)→picker 폴백.
   await itemsPool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS claude_session_id TEXT;`);
+  // #1059 — **사용자 정상 종료** 표시(exited_at). claude SessionEnd 훅이 reason=prompt_input_exit(/exit·Ctrl-D)·logout
+  //  일 때 보고 → 이 box 가 tmux 에서 사라진 뒤 복원목록에서 '종료됨(대화 이어보기)'으로 뜬다. NULL 이면(재부팅·강제kill·
+  //  reaper 회수 — 훅이 프로세스 사망으로 못 뜸) '복원 가능(중단됨)'. exit_reason 은 진단용(어떤 사유였나).
+  await itemsPool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS exited_at TIMESTAMPTZ;`);
+  await itemsPool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS exit_reason TEXT;`);
 
   // ── org_preview_env — 프리뷰 환경(작업자별 격리 미리보기)의 desired state (#1036). 관리탭 CRUD. ──
   //  kind=work: 작업 워크트리(project/<id>)를 게이트웨이가 /preview/<id>/ 서브패스로 정적 서빙(shared-proxy — /api 는 게이트웨이 자신).

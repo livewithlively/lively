@@ -1,5 +1,11 @@
 #!/usr/bin/env node
-// PostToolUse 훅 — 세션별 작업 플래그를 플래그 디렉토리에 기록한다(차단 불가 이벤트, 판단 없음).
+// 다중 이벤트 훅 — 배선(user-install)에 따라 PostToolUse·SessionStart·SessionEnd 로 불린다. 이벤트별 동작:
+//  - SessionEnd (#1059)  → reason 이 **사용자 정상 종료**(prompt_input_exit=/exit·Ctrl-D, logout)면 게이트웨이에
+//      POST …/exited 로 보고 → 복원목록에서 '종료됨(대화 이어보기)'으로 구분(재부팅·강제kill 은 훅이 못 떠 미보고=중단됨).
+//      여기서 조기 종료(flag·UUID 로직 무관).
+//  - SessionStart/PostToolUse → 아래 플래그 기록 + claude UUID 매핑(#1059 정밀복원). SessionStart 에도 매핑을 붙인 건
+//      PostToolUse(편집·MCP 툴)만으론 **편집·MCP 없는 대화**가 UUID 를 못 보고해 복원이 picker 로 폴백했기 때문.
+// PostToolUse 세션별 작업 플래그를 플래그 디렉토리에 기록한다(차단 불가 이벤트, 판단 없음).
 //  - Edit/Write 류 툴       → <session_id>.worked   (이 세션에서 의미있는 파일 작업을 했다)
 //  - lively MCP 쓰기 툴     → <session_id>.writeback (이미 컨텍스트 스토어에 기록했다)
 //  - lively MCP 아무 툴      → <session_id>.lively    (이 세션은 'lively work' 세션 — 자가 게이팅 신호, 읽기/쓰기 무관)
@@ -97,6 +103,40 @@ try {
   let input;
   try { input = JSON.parse(raw); } catch { process.exit(0); }
   const sid = String(input?.session_id ?? "");
+  const event = String(input?.hook_event_name ?? "");
+
+  // #1059 — SessionEnd(정상 종료) → 이 box 세션을 '사용자 종료'로 게이트웨이에 표시(복원목록 '종료됨' 구분). reason 이
+  //  사용자 종료(prompt_input_exit=/exit·Ctrl-D, logout)일 때만 — clear·compact·resume 등은 세션이 이어지므로 제외.
+  //  재부팅·강제kill·reaper 회수는 이 훅이 못 떠서(프로세스 사망) 미보고 → '복원 가능(중단됨)'으로 남는다(의도).
+  //  ⚠ 토큰은 env/파일에서만(argv·로그 금지). fail-open·1.2s 타임박스(종료 경로 스톨 방지). flag/UUID 로직과 무관 → 여기서 종료.
+  //  ⚠ SID_RE 게이트 **앞**에서 처리한다 — 이 분기는 sid 를 쓰지 않는다(경로=boxId, 인증=토큰, 본문=reason). claude 가
+  //   비정형 session_id 를 SessionEnd 에 실어 보내도 정상종료 보고가 막히지 않게(sid 검증은 아래 flag/UUID 경로에만 필요).
+  if (event === "SessionEnd") {
+    try {
+      const reason = String(input?.reason ?? "");
+      const boxId = (process.env.LIVELY_SESSION_ID || "").trim();
+      if ((reason === "prompt_input_exit" || reason === "logout") && boxId && /^box-/.test(boxId)) {
+        const readCfg = (rel) => { try { return readFileSync(join(homedir(), ".lively", rel), "utf8").trim(); } catch { return ""; } };
+        const token = (process.env.LIVELY_TOKEN || "").trim() || readCfg("token");
+        const gw = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readCfg("gateway-url") || "http://localhost:8080").replace(/\/$/, "");
+        if (token) {
+          const ctl = new AbortController();
+          const to = setTimeout(() => ctl.abort(), 1200);
+          try {
+            await fetch(`${gw}/api/ui/terminal/sessions/${encodeURIComponent(boxId)}/exited`, {
+              method: "POST", signal: ctl.signal,
+              headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+              body: JSON.stringify({ reason }),
+            });
+          } catch { /* fail-open — 미보고 시 복원목록에 '복원 가능(중단됨)'으로 남을 뿐(무해) */ }
+          finally { clearTimeout(to); }
+        }
+      }
+    } catch { /* fail-open */ }
+    process.exit(0);
+  }
+
+  // 이하 flag 기록 + claude UUID 매핑(SessionStart·PostToolUse) — 여기서부터는 sid 를 쓰므로 형식 검증 후 진행.
   if (!SID_RE.test(sid)) process.exit(0);
   const tool = String(input?.tool_name ?? "");
 

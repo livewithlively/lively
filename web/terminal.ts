@@ -400,6 +400,11 @@ function termUrl(id, label, nodeId?, extra?) {
 function tsessCard(s, ctx) {
   const { cfg, view, projName, myProjIds, reRender, sel } = ctx;
   const st = TSESS_STATUS[s._st] || TSESS_STATUS.offline;
+  // #1059 — restorable 이 '사용자 정상 종료(/exit)'로 생긴 경우 라벨·버튼을 구분한다('종료됨 · 대화 이어보기').
+  //  재부팅·자동회수로 중단된 것은 기존대로 '복원 가능'. 복원(POST …/restore) 경로 자체는 둘 다 동일.
+  const exitedByUser = !!(s.restorable && s.exitedByUser);
+  const stLabel = exitedByUser ? '종료됨' : st.label;
+  const restoreVerb = exitedByUser ? '이어보기' : '복원';
   const harnessLabel = ((cfg.harnesses || []).find((h) => h.key === s.harness) || {}).label || s.harness || '셸';
   const model = (s.flags && s.flags['--model']) || '';
   const owner = memberName(cfg, s.owner) || s.owner || '?';
@@ -407,7 +412,7 @@ function tsessCard(s, ctx) {
 
   // ── 1행: 상태점 + 이름 + 프로젝트 칩 + 배지 ──
   const title = el('div', { class: 'tsess-title' },
-    el('span', { class: 'tsess-dot tsess-dot-' + st.cls, title: st.label }),
+    el('span', { class: 'tsess-dot tsess-dot-' + st.cls, title: stLabel }),
     el('span', { class: 'tsess-name', title: s.label, text: s.label || '(이름 없음)' }));
   if (pid) {
     const mine = myProjIds.has(pid);
@@ -426,7 +431,7 @@ function tsessCard(s, ctx) {
 
   // ── 3행: 상태 · 시각 · 하네스·모델 · 폴더 ──
   const bits: any[] = [];
-  bits.push(el('span', { class: 'tsess-stat tsess-stat-' + st.cls, text: st.label }));
+  bits.push(el('span', { class: 'tsess-stat tsess-stat-' + st.cls, text: stLabel }));
   const when = relAgo(s.lastActive || s.created);
   if (when) bits.push(el('span', { text: (s.lastActive ? '작업 ' : '') + when }));
   bits.push(el('span', { text: harnessLabel + (model ? '·' + model : '') }));
@@ -440,17 +445,18 @@ function tsessCard(s, ctx) {
   const acts = el('div', { class: 'tsess-acts' });
   if (s.restorable) {
     // #1059 E — 복원: 재부팅·회수로 꺼진 세션을 저장된 desired-state 로 재생성(claude 는 대화 이어받기). 새 세션을 연다.
-    const rb = el('button', { class: 'tsess-open', text: '복원', title: '재부팅·회수로 꺼진 세션을 다시 엽니다 (같은 폴더·설정 + 대화 이어받기)' }) as HTMLButtonElement;
+    const rb = el('button', { class: 'tsess-open', text: restoreVerb, title: exitedByUser ? '내가 종료한 세션 — 저장된 대화를 이어서 엽니다 (같은 폴더·설정)' : '재부팅·자동회수로 중단된 세션을 다시 엽니다 (같은 폴더·설정 + 대화 이어받기)' }) as HTMLButtonElement;
     rb.onclick = async () => {
-      rb.disabled = true; rb.textContent = '복원 중…';
+      rb.disabled = true; rb.textContent = restoreVerb + ' 중…';
       try {
         const r: any = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/restore', { method: 'POST', body: '{}' });
         // 라이브 경합(already) — 그새 다시 떠 있으면 새로 만들지 않고 그 세션을 그대로 연다(오success 방지).
         if (r && r.already) { window.open(termUrl(s.id, s.label, s.node && s.node.id), '_blank'); toast('세션이 이미 살아있어 그대로 엽니다'); reRender(); return; }
         const ns = r && r.session;
         if (ns && ns.id) window.open(termUrl(ns.id, ns.label || s.label), '_blank');
-        toast('복원했어요 — 새 터미널에서 이어볼 대화를 고르세요(claude 이어보기 목록).'); reRender();
-      } catch (e: any) { toast('복원 실패 — ' + (e && e.message || e), true); rb.disabled = false; rb.textContent = '복원'; }
+        // 정밀복원(UUID 매핑 有)이면 바로 그 대화로 이어지고, 미상이면 이어보기 목록이 뜬다 — 둘 다 안내.
+        toast(restoreVerb + ' 완료 — 새 터미널에서 대화를 이어받아요(정확한 대화를 못 찾으면 이어보기 목록에서 고르세요).'); reRender();
+      } catch (e: any) { toast(restoreVerb + ' 실패 — ' + (e && e.message || e), true); rb.disabled = false; rb.textContent = restoreVerb; }
     };
     acts.append(rb);
   } else {
