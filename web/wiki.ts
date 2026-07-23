@@ -11,6 +11,7 @@ import { wkDayLabel, wkEmpty, wkRow, wkSection } from './wiki-ui.js';
 import { openWikiPeek, reanchorWikiPeek, renderWikiDraft, setWikiPeekList } from './wiki-doc.js';
 import { renderCategorySurface } from './wiki-category.js';
 import { reviewQueuePanel } from './review.js';   // #837 검토 큐 — 관리탭에서 이관(지식의 대기열이니 집은 WIKI)
+import { renderClassificationReview } from './classifications.js';   // #1102 분류 검토 대기 — 분류기 제안 확정/재분류/반려
 import { renderHomeSurface } from './wiki-home.js';
 
 // ── 라우터 진입 — sub ∈ { ''|new|pinned|sources|review|기타(구 space URL — 무시) } ──
@@ -19,6 +20,7 @@ async function renderWiki(view, sub, params) {
   if (sub === 'pinned') { location.replace('#/knowledge?indexed=1'); return; }   // 구 링크 보존
   if (sub === 'sources') return renderSources(view);
   if (sub === 'review') return renderReviewQueue(view);   // #837 검토 대기 — 구 #/system/review-queue
+  if (sub === 'classifications') return renderClassificationReview(view);   // #1102 분류 검토 대기(분류기 제안 검토)
   return renderWikiSpace(view, params);
 }
 

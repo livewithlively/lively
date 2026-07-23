@@ -6,7 +6,7 @@ import { HttpError, clampPage } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import {
   listKnowledge, countKnowledge, getKnowledge, upsertKnowledge, setKnowledgeLifecycle, getKnowledgeLifecycle, setKnowledgeWiki, deleteKnowledge,
-  linkKnowledgeCategory, unlinkKnowledgeCategory, listUnmappedKnowledge, proposeKnowledgeCategory, searchKnowledge, countKnowledgeGrep, hybridSearchKnowledge,
+  linkKnowledgeCategory, unlinkKnowledgeCategory, listUnmappedKnowledge, listProposedClassifications, proposeKnowledgeCategory, searchKnowledge, countKnowledgeGrep, hybridSearchKnowledge,
   findSimilarKnowledge, linkKnowledge, unlinkKnowledge, knowledgeGraphData, knowledgeTreeData,
   setKnowledgePropsUi, moveKnowledge, type WikiLinkResult, appendBody, isDuplicateAppend,
   listKnowledgeFeed,
@@ -532,6 +532,22 @@ const knowledgeUnmapped: Capability = {
       parse: (req) => ({ limit: req.query?.limit ? Number(req.query.limit) : undefined }) }],
   },
   handler: async (input: any) => ({ entries: await listUnmappedKnowledge(input.limit ?? 50) }),
+};
+
+// ── proposed 분류 검토 인박스(#1102) — 분류기가 건 mapped_by='llm'·state='proposed' 제안 목록(confidence 낮은 순). ──
+//  미분류 인박스(knowledge_unmapped)의 다음 단계: 검토 UI(#/knowledge/classifications)가 읽어 확정/재분류/반려. 각 항목에 제안 카테고리·confidence·evidence(본문 미포함).
+const knowledgeClassifications: Capability = {
+  name: "knowledge_classifications",
+  title: "proposed 분류 검토 인박스",
+  description: "분류기(knowledge_propose_category)가 제안한 mapped_by='llm'·state='proposed' 카테고리 분류 목록(confidence 낮은 순 — 가장 검토 필요한 것 먼저, NULL 최우선). 각 항목에 제안 카테고리(space·key·이름)·confidence·evidence 포함(본문 미포함, 포인터). 사람이 한 화면에서 확정(knowledge_link_category state=confirmed)·재분류(다른 카테고리)·반려(unlink→미분류 복귀)하는 검토 큐. 미분류 인박스(knowledge_unmapped)의 다음 단계.",
+  scope: "memory",
+  input: { limit: z.number().int().positive().max(500).optional() },
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/knowledge/classifications"],
+      parse: (req) => ({ limit: req.query?.limit ? Number(req.query.limit) : undefined }) }],
+  },
+  handler: async (input: any) => ({ entries: await listProposedClassifications(input.limit ?? 200) }),
 };
 
 // ── LLM 분류 제안(#982, map_code_unit 의 지식판) — 미분류 지식에 카테고리를 mapped_by='llm'+evidence 로 제안. ──
@@ -1130,6 +1146,7 @@ export const knowledgeCapabilities: Capability[] = [
   reviewQueueSummary,   // #802 검토 대기 카운트(/review-queue/summary — 대시보드·nav 배지)
   wiki2Feed,            // #968 WIKI2 기록 피드(/wiki2/feed — 정적 경로, :name 과 무충돌)
   knowledgeUnmapped,    // #982 미분류 지식 인박스(/knowledge/unmapped — 정적, :name 보다 먼저)
+  knowledgeClassifications,   // #1102 proposed 분류 검토 인박스(/knowledge/classifications — 정적, :name 보다 먼저)
   knowledgeGet,
   knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeLinkCategory, knowledgeProposeCategory, knowledgeLink,
   knowledgePropsUi, knowledgeComments, knowledgeCommentPost, knowledgeMove,   // #592 :name 하위 경로(깊이 상이 — 순서 무관)

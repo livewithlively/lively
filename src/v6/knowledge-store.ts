@@ -790,6 +790,36 @@ export async function listUnmappedKnowledge(limit = 50): Promise<Array<{ name: s
   return rows.map((r) => ({ name: r.name as string, title: (r.title ?? null) as string | null, type: (r.type ?? null) as string | null, provenance: r.provenance as string }));
 }
 
+export interface ProposedClassification {
+  name: string; title: string | null; type: string | null; provenance: string; updated_at: string;
+  category_id: number; category_key: string; category_name: string | null; space: string;
+  confidence: number | null; evidence: string | null; created_at: string;
+}
+// ── proposed 분류 검토 인박스(#1102) — 분류기(proposeKnowledgeCategory)가 mapped_by='llm'·state='proposed' 로 건 제안 목록. ──
+//  미분류 인박스(listUnmappedKnowledge)의 '다음 단계': 자리는 찼지만 아직 사람 확정 전. confidence 낮은 순(가장 검토 필요한 것 먼저), NULL 최우선.
+//  검토 UI(#/knowledge/classifications)가 여기서 읽어 확정(→confirmed)·재분류·반려(unlink). 확정 전이라 recall 소환엔 이미 잡힌다(state<>'rejected').
+export async function listProposedClassifications(limit = 200): Promise<ProposedClassification[]> {
+  const lim = Math.min(Math.max(limit, 1), 500);
+  const rows = await q(itemsPool, `
+    SELECT k.name, k.title, k.type, k.provenance, k.updated_at,
+           kc.category_id, kc.confidence, kc.evidence, kc.created_at,
+           c.key AS category_key, c.name AS category_name, c.space
+    FROM knowledge_category kc
+    JOIN knowledge k ON k.name = kc.name AND k.lifecycle='active'
+    JOIN category   c ON c.id  = kc.category_id
+    WHERE kc.state='proposed' AND kc.mapped_by='llm'
+    ORDER BY kc.confidence ASC NULLS FIRST, kc.created_at DESC
+    LIMIT $1`, [lim]);
+  return rows.map((r) => ({
+    name: r.name as string, title: (r.title ?? null) as string | null, type: (r.type ?? null) as string | null,
+    provenance: r.provenance as string, updated_at: String(r.updated_at),
+    category_id: Number(r.category_id), category_key: r.category_key as string,
+    category_name: (r.category_name ?? null) as string | null, space: r.space as string,
+    confidence: r.confidence != null ? Number(r.confidence) : null,
+    evidence: (r.evidence ?? null) as string | null, created_at: String(r.created_at),
+  }));
+}
+
 // ── LLM 분류 제안(#982, map_code_unit 의 지식판) — 미분류 지식에 카테고리를 mapped_by='llm'+evidence 로 건다. ──
 //  linkKnowledgeCategory 와 결정적 차이 3가지: ① DELETE 안 함(replace 아님 — 사람 분류 불가침) ② mapped_by='llm' ③ **이미 카테고리 행이 있으면 no-op**.
 //  state: 명시하면 그대로, 아니면 confidence≥0.8 → 'confirmed' 아니면 'proposed'. 소비쿼리는 state<>'rejected' 라 proposed 만으로 즉시 발견된다.
