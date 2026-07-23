@@ -2,7 +2,7 @@
 //  + '세션 종료 확답' 판정(#835).
 // 실행: npm run build && node dist/terminal-pty.test.js
 import assert from "node:assert/strict";
-import { inputToSendKeys, resizeToRefresh, captureCmd } from "./terminal-pty.js";
+import { inputToSendKeys, resizeToRefresh, captureCmd, stateCmd, STATE_MARKER, handleControlMsg } from "./terminal-pty.js";
 import { isSessionGoneError } from "./terminal-sessions.js";
 
 let pass = 0;
@@ -54,6 +54,54 @@ t("백필 → capture-pane(-N 줄끝 보존), 0..100000 클램프 + 비정상 �
   assert.equal(captureCmd(-1), "capture-pane -peqN -S -0 -E -");
   assert.equal(captureCmd(1e9), "capture-pane -peqN -S -100000 -E -");
   assert.equal(captureCmd(NaN), "capture-pane -peqN -S -0 -E -");
+});
+
+t("상태질의 → display-message(마커 + alt/mouse/cursor 포맷변수, 단일 -p 라인)", () => {
+  const cmd = stateCmd();
+  // 마커로 시작해야 클라 파서가 '캡처 백필'과 구분한다.
+  assert.ok(cmd.startsWith(`display-message -p '${STATE_MARKER} `));
+  // 클라가 파싱하는 키(alt/any/btn/std/sgr/cx/cy) 전부 tmux 포맷변수로 존재.
+  for (const [key, fmt] of [["alt", "alternate_on"], ["any", "mouse_any_flag"], ["btn", "mouse_button_flag"],
+    ["std", "mouse_standard_flag"], ["sgr", "mouse_sgr_flag"], ["cx", "cursor_x"], ["cy", "cursor_y"]] as const) {
+    assert.ok(cmd.includes(`${key}=#{${fmt}}`), `${key} 포맷 누락`);
+  }
+  // 단일 라인(개행 인젝션 없음) — control-mode 는 개행 = 명령 구분자.
+  assert.ok(!cmd.includes("\n"));
+});
+
+// 디스패치 시퀀스 — 상태 동기화의 핵심 행위: cap 은 '상태→capture' 순서, st 는 상태만, i/r 은 상태 미첨부.
+//  (변경 전 코드에선 cap→[capture]뿐·st 미처리라 이 표가 red 가 된다 = fail-first.)
+const seqOf = (msg: any): string[] => { const out: string[] = []; handleControlMsg((l) => out.push(l), msg); return out; };
+
+t("cap+st → 상태질의를 capture '앞'에 보낸다(클라가 렌더 전 alt/mouse 동기화·렌더 후 커서 복원)", () => {
+  assert.deepEqual(seqOf({ t: "cap", n: 600, st: 1 }), [stateCmd(), captureCmd(600)]);
+  // 순서가 핵심 — 상태가 반드시 capture 앞.
+  assert.equal(seqOf({ t: "cap", n: 600, st: 1 }).indexOf(stateCmd()), 0);
+  // n 부재도 방어(0 강제) + 상태는 여전히 앞.
+  assert.deepEqual(seqOf({ t: "cap", st: 1 }), [stateCmd(), captureCmd(0)]);
+});
+
+t("cap(st 플래그 없음) → 상태 없이 capture 만(옛 클라 버전 스큐 안전: 마커 출력 회귀 방지)", () => {
+  assert.deepEqual(seqOf({ t: "cap", n: 600 }), [captureCmd(600)]);
+  // 옛 클라(st 미첨부)는 상태 블록을 못 받아 __LTSTATE__ 를 화면에 찍지 않는다.
+  assert.ok(!seqOf({ t: "cap", n: 600 }).some((l) => l.includes(STATE_MARKER)));
+});
+
+t("st → 상태질의만(capture 없음) — 재접속 시 스크롤백 truncate 없이 stuck 해소", () => {
+  assert.deepEqual(seqOf({ t: "st" }), [stateCmd()]);
+});
+
+t("i/r → 상태질의를 첨부하지 않는다(입력·리사이즈는 순수 번역)", () => {
+  assert.deepEqual(seqOf({ t: "i", d: "ls\r" }), ["send-keys -H 6c 73 0d"]);
+  assert.deepEqual(seqOf({ t: "r", c: 80, r: 24 }), ["refresh-client -C 80x24"]);
+  // 상태 마커가 새지 않는다(입력/리사이즈 경로엔 stateCmd 없음).
+  assert.ok(!seqOf({ t: "i", d: "x" }).some((l) => l.includes(STATE_MARKER)));
+});
+
+t("미지/불완전 메시지 → 명령 없음(비정수 리사이즈 가드 포함)", () => {
+  assert.deepEqual(seqOf({ t: "zzz" }), []);
+  assert.deepEqual(seqOf({ t: "r", c: 1.5, r: 24 }), []); // Number.isInteger 가드
+  assert.deepEqual(seqOf({}), []);
 });
 
 // ── 세션 종료 확답 판정(#835) ──

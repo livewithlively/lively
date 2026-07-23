@@ -120,14 +120,29 @@ export function captureCmd(n: number): string {
   const nn = Math.min(Math.max(0, Math.trunc(Number(n) || 0)), 100000);
   return `capture-pane -peqN -S -${nn} -E -`;
 }
+// pane 실상태 질의 — capture-pane 백필은 '화면 텍스트'만 담고 DECSET(alt-screen 1049h·마우스모드 1003h)·커서위치는
+//  담지 못한다. 그래서 클라(xterm)는 앱이 지금 alt-screen 인지·마우스모드인지·커서가 어디인지 '추측'할 수밖에 없어,
+//  재접속 갭이나 다중 클라에서 앱의 mouse-off(1003l)·alt-off(1049l)를 놓치면 마우스가 stuck(이동마다 셸에 키 주입)
+//  되거나 화면/커서가 어긋난다. tmux 는 pane 의 진짜 상태를 포맷 변수로 안다 → 마커 한 줄로 회수해 클라가 추측 대신
+//  '동기화'하게 한다. 마커 프리픽스는 클라 control 파서가 '캡처 백필 블록'과 '상태 블록'을 구분하는 신호(화면 좌상단이
+//  이 문자열로 시작할 확률=사실상 0). 출력 예: `__LTSTATE__ alt=1 any=1 btn=0 std=0 sgr=1 cx=39 cy=0`.
+export const STATE_MARKER = "__LTSTATE__";
+export function stateCmd(): string {
+  return `display-message -p '${STATE_MARKER} alt=#{alternate_on} any=#{mouse_any_flag} btn=#{mouse_button_flag} std=#{mouse_standard_flag} sgr=#{mouse_sgr_flag} cx=#{cursor_x} cy=#{cursor_y}'`;
+}
 
-function handleControlMsg(send: SendCmd, msg: { t?: string; d?: unknown; c?: unknown; r?: unknown; n?: unknown }): void {
+export function handleControlMsg(send: SendCmd, msg: { t?: string; d?: unknown; c?: unknown; r?: unknown; n?: unknown; st?: unknown }): void {
   if (msg.t === "i" && typeof msg.d === "string") {
     for (const cmd of inputToSendKeys(msg.d)) send(cmd);
   } else if (msg.t === "r" && Number.isInteger(msg.c) && Number.isInteger(msg.r)) {
     send(resizeToRefresh(msg.c as number, msg.r as number));
   } else if (msg.t === "cap") {
+    // 상태 블록은 '클라가 요청할 때만'(msg.st) 백필 직전에 보낸다. 옛 클라(캐시된 terminal.js)는 st 를 안 실어
+    //  보내므로 상태 블록을 못 받고 → 마커(__LTSTATE__)를 화면에 출력하는 회귀가 없다(신·구 클라 버전 스큐 안전).
+    if (msg.st) send(stateCmd());      // pane 실상태(alt/mouse/cursor) → 클라가 동기화 후 렌더
     send(captureCmd(Number(msg.n)));
+  } else if (msg.t === "st") {
+    send(stateCmd());                  // 상태만 동기화(재접속 시 — 스크롤백 truncate 없이 마우스/alt stuck·커서 어긋남 해소). 옛 클라는 st 를 안 보냄.
   }
 }
 

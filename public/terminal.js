@@ -92,11 +92,15 @@ let shiftEnterPending = false; // Shift+Enter → 이 keydown 이 곧 낼 '\r'(o
 // 서버가 `tmux -CC` 로 붙으면 스트림은 화면 그림이 아니라 텍스트 프로토콜이다:
 //  `\x1bP1000p` 도입자 → CRLF 줄 단위로 %output / %begin..%end / 각종 %알림.
 //  %output %<pane> <value> : value 는 비출력문자·백슬래시를 8진(\ooo)으로 이스케이프 → 바이트 복원해 xterm 에 write.
-//  %begin <t> <num> <flags> … %end/%error(같은 num) = 명령 응답 블록. 내용 있는 블록 = capture-pane 백필
-//   (서버는 capture 외엔 '내용 있는' 명령을 내지 않는다 — send-keys/refresh-client 는 빈 응답).
+//  %begin <t> <num> <flags> … %end/%error(같은 num) = 명령 응답 블록. 내용 있는 블록은 둘: ① capture-pane 백필,
+//   ② pane 실상태(STATE_MARKER 로 시작, 아래 참조 — 화면에 안 쓰고 상태 동기화로 라우팅). send-keys/refresh-client 는 빈 응답.
 // 옛 방식(plain attach)도 같은 코드로 받게: 도입자가 없으면 raw 모드로 자동 폴백(그대로 term.write).
 const DCS_BYTES = [0x1b, 0x50, 0x31, 0x30, 0x30, 0x30, 0x70]; // 도입자 \x1bP1000p (바이트)
 const BACKFILL_LINES = 600; // 첫 연결 시 capture-pane 로 회수할 히스토리 줄 수(현재 화면+모듈러 스크롤백 복원)
+// 서버가 백필 '직전'에 보내는 pane 실상태 블록의 마커(= src/terminal-pty.ts stateCmd 과 일치). capture-pane 백필은
+//  화면 텍스트만 담고 DECSET(alt-screen·마우스모드)·커서위치는 못 담아 클라가 '추측'할 수밖에 없다 → 마우스 stuck·
+//  커서 어긋남의 근원. 이 마커로 시작하는 블록은 화면에 쓰지 않고 상태 동기화로 라우팅한다(applyPaneState).
+const STATE_MARKER = '__LTSTATE__';
 // control-mode 파서는 '바이트 레벨'로 동작한다(서버가 raw 바이너리로 보냄). 이유: tmux 는 멀티바이트 UTF-8
 //  문자를 %output 알림 '경계'에서 쪼갤 수 있는데(문자의 앞바이트가 한 %output 끝, 뒷바이트가 다음 %output
 //  시작 — 사이에 `\n%output %<pane> ` 프레이밍이 끼어듦), 스트림을 문자열로 먼저 디코드하면 그 자리가 깨진다(�).
@@ -140,6 +144,8 @@ function makeControl(opts) {
         for (let k = 0; k < blockParts.length; k++) { if (k) { for (let z = 0; z < SEP.length; z++) merged[off++] = SEP[z]; } merged.set(blockParts[k], off); off += blockParts[k].length; }
         blockParts = [];
         const text = new TextDecoder('utf-8').decode(merged);
+        // 상태 블록(서버가 백필 직전에 보낸 pane 실상태) = 화면에 쓰지 않고 상태 동기화로 라우팅.
+        if (text.startsWith(STATE_MARKER)) { if (opts.state) opts.state(text); return; }
         if (text.length) opts.backfill(text);
         return;
       }
@@ -182,6 +188,61 @@ function makeControl(opts) {
   return { feed, isControl: () => mode === 'control' };
 }
 let ctrl = null, didBackfill = false; // didBackfill: 페이지 로드 후 첫 control 연결만 백필(재연결 중복 방지)
+let syncedThisConn = false;           // 이 연결에서 재접속 상태동기(t:'st')를 이미 보냈나(연결마다 1회)
+// ── pane 실상태 동기화(#1092) ──
+// 서버가 백필 직전에 보낸 `__LTSTATE__ alt=.. any=.. btn=.. std=.. sgr=.. cx=.. cy=..` 한 줄을 파싱한다.
+//  capture 텍스트엔 없는 '앱의 진짜 상태'(tmux 가 아는) — 클라 xterm 을 이 진실에 맞춰 alt-screen·마우스모드·
+//  커서를 동기화한다(추측이 아니라). 다음 백필의 커서 복원용으로 pendingPaneState 에 담아둔다.
+// ⚠ 불변식(반드시 유지): capture(백필)를 트리거하는 모든 곳은 `{t:'cap', …, st:1}` 로 보내야 한다 — 그래야 서버가
+//  상태 블록을 capture '바로 앞'에 실어 pendingPaneState 가 그 백필의 실커서로 갱신된 뒤 소비된다. 만약 st:1 없이
+//  cap 을 보내면(옛 서버로의 degrade 는 예외 — 그땐 상태 자체가 안 옴), state-only(t:'st')가 남긴 stale 커서가
+//  엉뚱한 백필에 적용돼 이 버그(커서 desync)가 재발한다. 새 cap 송신부를 추가하면 st:1 을 반드시 함께.
+let pendingPaneState = null;
+function parsePaneState(line) {
+  const m = {};
+  for (const tok of String(line).trim().split(/\s+/)) { const i = tok.indexOf('='); if (i > 0) m[tok.slice(0, i)] = tok.slice(i + 1); }
+  const num = (k) => { const n = parseInt(m[k], 10); return Number.isFinite(n) ? n : null; };
+  const any = num('any'), btn = num('btn'), std = num('std'), sgr = num('sgr'), cx = num('cx'), cy = num('cy');
+  return {
+    alt: num('alt') === 1,
+    mouseOn: any === 1 || btn === 1 || std === 1,   // 1003/1002/1000 중 하나라도 = 앱이 마우스 리포트를 원함
+    any: any === 1, btn: btn === 1, std: std === 1, sgr: sgr === 1,
+    cx, cy, hasCursor: cx !== null && cy !== null,
+  };
+}
+// 클라 xterm 상태를 tmux pane 실상태에 맞춘다. 모든 쓰기는 '실제 불일치일 때만'(가드) — 일치하면 no-op.
+function applyPaneState(st) {
+  if (!term || !st) return;
+  pendingPaneState = st; // 바로 뒤따르는 백필의 커서 복원용
+  // alt-screen 동기화 — 추측(옛 #252)이 아니라 tmux 실상태로. 앱 alt인데 클라 normal → 진입(#252 재접속 보정),
+  //  앱 normal인데 클라 alt(stuck) → 복귀(프롬프트/입력 위·아래 어긋남 = 버그2 계열의 한 원인).
+  try {
+    const isAlt = !!(term.buffer && term.buffer.active && term.buffer.active.type === 'alternate');
+    if (st.alt && !isAlt) term.write('\x1b[?1049h');
+    else if (!st.alt && isAlt) term.write('\x1b[?1049l');
+  } catch (_) { /* noop */ }
+  // 마우스모드 동기화 — 앱이 mouse-off 했는데(재접속 갭에 1003l 놓침) 클라가 ON으로 굳으면 마우스 이동마다 셸에
+  //  SGR 리포트가 주입돼 `;EB1` 류 garbage(버그1). tmux 실상태의 '트래킹 모드'(any>drag>std 우선)로 정확히 맞춘다 —
+  //  단순 on↔off 뿐 아니라 '서브모드 불일치'(예: 클라 drag인데 앱 any)까지 교정하고, 이미 같은 모드면 no-op(flicker 없음).
+  try {
+    let xtMode = 'none';
+    try { xtMode = (term.modes && term.modes.mouseTrackingMode) || 'none'; } catch (_) { /* noop */ }
+    const xtOn = xtMode !== 'none';
+    // tmux flag → 기대 xterm mouseTrackingMode. std=1000='vt200', btn=1002='drag', any=1003='any'(상위모드 우선).
+    const wantMode = st.any ? 'any' : st.btn ? 'drag' : st.std ? 'vt200' : 'none';
+    if (wantMode === 'none') {
+      if (xtOn) term.write('\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l'); // 앱 off → 전 모드 해제
+    } else if (wantMode !== xtMode) {
+      // 앱이 원하는 모드로 정확히 맞춘다(꺼져있었거나 다른 서브모드였거나). 다른 트래킹이 켜져있었으면 먼저 정리.
+      let seq = xtOn ? '\x1b[?1000l\x1b[?1002l\x1b[?1003l' : '';
+      if (st.std) seq += '\x1b[?1000h';
+      if (st.btn) seq += '\x1b[?1002h';
+      if (st.any) seq += '\x1b[?1003h';
+      if (st.sgr) seq += '\x1b[?1006h';
+      term.write(seq);
+    }
+  } catch (_) { /* noop */ }
+}
 // fit 후 '크기가 실제로 바뀐 경우에만' pty resize 전송 — 불필요한 SIGWINCH(→ 쉘 프롬프트 재출력이
 //  tmux 히스토리에 중복으로 쌓이는 원인) 제거.
 function applyFit() {
@@ -203,7 +264,7 @@ function forceRedraw() {
   if (ws && ws.readyState === 1) {
     lastCols = term.cols; lastRows = term.rows;
     try { ws.send(JSON.stringify({ t: 'r', c: term.cols, r: term.rows })); } catch (_) { /* noop */ }
-    if (ctrl && ctrl.isControl()) { try { ws.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES })); } catch (_) { /* noop */ } } // 깨끗이 재캡처
+    if (ctrl && ctrl.isControl()) { try { ws.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES, st: 1 })); } catch (_) { /* noop */ } } // 깨끗이 재캡처(+상태 동기화)
   }
   try { term.refresh(0, term.rows - 1); } catch (_) { /* noop */ }
 }
@@ -1318,20 +1379,24 @@ async function connectNow() {
   // 연결마다 새 control 파서(각 tmux -CC 스트림은 자기 도입자로 시작). 도입자 없으면 raw 모드로 자동 폴백.
   ctrl = makeControl({
     write: (str) => { try { term.write(str); } catch (_) { /* noop */ } },
+    // 상태 블록(백필 직전) — tmux pane 실상태로 alt-screen·마우스모드를 '지금' 동기화하고, 커서 좌표를 백필용으로 담아둠(#1092).
+    state: (line) => { try { applyPaneState(parsePaneState(line)); } catch (_) { /* noop */ } },
     // 백필(capture 스냅샷)은 '현재 화면 전체'다 → 쓰기 전 화면+스크롤백을 비워(\e[H\e[2J\e[3J) 첫 연결 중
     //  attach~capture 사이에 먼저 흘러든 라이브 %output 과 겹쳐 줄이 중복되는 것을 막는다. 이후 라이브는 그대로 append.
     backfill: (text) => {
       try {
-        // [#252] 재접속 alt-screen 보정. Claude Code 등 풀스크린 TUI 는 alt-screen + 마우스모드(1003/1006)인데,
-        //  '이미 실행 중인' 세션에 나중에 붙은 클라는 최초의 alt-screen 진입(\e[?1049h)을 스트림에서 못 받아
-        //  normal buffer 로 남는다(마우스모드는 재렌더로 받아 mouseTrackingMode 는 켜짐). 그러면 휠이 앱으로
-        //  전달되지 않고 빈 로컬 스크롤백만 긁어 '스크롤이 안 되는' #252 증상. 앱이 마우스모드인데 클라가 normal
-        //  이면 alt-screen 으로 맞춰준다(이미 alt 인 신선한 클라·마우스 안 쓰는 셸엔 영향 없음 — 조건 가드).
-        if (term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none'
+        const st = pendingPaneState; pendingPaneState = null;
+        // 상태 블록을 받았으면 alt/mouse 는 applyPaneState 가 이미 진실로 동기화함(이 백필 직전). 못 받은 경우(구 서버)만
+        //  옛 #252 추측 폴백: 마우스모드 ON + normal buffer 면 alt-screen 진입 보정(신선 클라·셸엔 무영향, 가드).
+        if (!st && term.modes && term.modes.mouseTrackingMode && term.modes.mouseTrackingMode !== 'none'
             && term.buffer && term.buffer.active && term.buffer.active.type !== 'alternate') {
           term.write('\x1b[?1049h');
         }
         term.write('\x1b[H\x1b[2J\x1b[3J\x1b[0m'); term.write(text);
+        // 커서 복원(#1092 버그2·3) — capture 텍스트엔 최종 커서위치가 없고, capture 는 pane 높이만큼(빈 줄 포함) 그려
+        //  커서가 '쓴 마지막 줄'(대개 화면 맨 아래)에 남는다 → 프롬프트는 위, 입력/커서는 아래로 어긋남. tmux 실커서로 되돌린다.
+        //  (cx/cy 는 0-based·가시영역 기준 → xterm CUP 은 1-based.)
+        if (st && st.hasCursor) term.write('\x1b[' + (st.cy + 1) + ';' + (st.cx + 1) + 'H');
       } catch (_) { /* noop */ }
     },
     // tmux control 스트림의 %exit — 이 attach 클라가 끝났다는 뜻일 뿐, '세션이 죽었다'는 뜻은 아니다
@@ -1341,6 +1406,7 @@ async function connectNow() {
   });
   sock.onopen = () => {
     connecting = false; wasConnected = true; reconnectDelay = 1500; denyRetries = 0; attempts = 0; // 붙었으면 입장 허용 확정 → 거부 카운트 리셋
+    syncedThisConn = false; // 이 연결에서 재접속 상태동기(t:'st')를 아직 안 보냄
     statusEl.textContent = '연결됨'; statusEl.className = 'status ok';
     lastCols = 0; lastRows = 0; // 재attach 후 사이즈 강제 재동기화(→ control mode: refresh-client -C 재전송)
     applyFit(); setTimeout(applyFit, 350);
@@ -1353,8 +1419,12 @@ async function connectNow() {
     if (!bytes) return;
     ctrl.feed(bytes);
     if (AUTOSEND && !autosendDone) autosendLastOut = Date.now();
-    // control mode 로 확인되면 페이지 로드 후 첫 연결에 한 번만 현재 화면+스크롤백 백필(재연결 시엔 생략 — 중복 방지).
-    if (!didBackfill && ctrl.isControl()) { didBackfill = true; try { sock.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES })); } catch (_) { /* noop */ } }
+    if (ctrl.isControl()) {
+      // 첫 연결: 현재 화면+스크롤백 백필(상태 포함). 재연결: 백필은 생략(스크롤백 truncate 방지 — 중복 방지)하되
+      //  상태만(t:'st') 1회 동기화해 재접속 갭에 놓친 마우스-off/alt-off 로 인한 stuck 을 해소(#1092 버그1).
+      if (!didBackfill) { didBackfill = true; try { sock.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES, st: 1 })); } catch (_) { /* noop */ } }
+      else if (!syncedThisConn) { syncedThisConn = true; try { sock.send(JSON.stringify({ t: 'st' })); } catch (_) { /* noop */ } }
+    }
   };
   sock.onclose = (e) => {
     if (ws !== sock) return; // 교체된 옛 소켓의 close 는 무시
