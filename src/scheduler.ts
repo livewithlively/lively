@@ -18,9 +18,14 @@ const running = new Set<string>();  // 잡당 인메모리 락 — 느린 잡이
 // ── 액션 레지스트리(단일 진실원천) — 각 액션의 label + 필요 params 를 데이터로 선언. ──
 //  프론트(크론 폼)가 이걸 읽어 드롭다운·파라미터 필드를 동적 생성(하드코딩 syncVis 제거). cron_set 검증도 여기서.
 //  새 액션 추가 = 여기 1줄 + runJob 핸들러 1개(행동은 코드라 불가피 — 임의 데이터 CRUD 아님=보안경계). 스키마 CHECK 도 갱신.
-//  param kind: 'session'(상시 세션 피커) · 'repo'/'system'/'text'(텍스트). 비-필수는 비워도 됨.
-export interface CronActionParam { name: string; label: string; kind: "session" | "repo" | "system" | "text" | "textarea"; hint?: string }
+//  param kind: 'session'(상시 세션 피커) · 'repo'/'system'/'text'(텍스트) · 'textarea' · 'select'(choices 드롭다운). 비-필수는 비워도 됨.
+export interface CronActionParam { name: string; label: string; kind: "session" | "repo" | "system" | "text" | "textarea" | "select"; choices?: string[]; hint?: string }
 export interface CronActionDef { key: string; label: string; params: CronActionParam[] }
+// 헤드리스(claude -p) 실행 모델·추론강도 — claude 하네스 플래그(--model/--effort)와 동일 choices(terminal-sessions.ts HARNESSES).
+//  비우면 계정 기본 모델(관리세션의 sonnet/xhigh 같은 설정이 헤드리스엔 전달 안 돼 기본으로 떨어지던 #1101 갭을 메움).
+//  런타임 값은 tasks.ts FLAG_WHITELIST 가 한 번 더 화이트리스트 검증하므로 여기 choices 가 UI 가드, 그쪽이 실행 가드다.
+const HEADLESS_MODEL_PARAM: CronActionParam = { name: "model", label: "모델", kind: "select", choices: ["", "opus", "sonnet", "haiku"], hint: "헤드리스 claude -p 실행 모델. 비우면 계정 기본. 분류·판단 무거운 배치는 sonnet+ 권장." };
+const HEADLESS_EFFORT_PARAM: CronActionParam = { name: "effort", label: "effort(추론 강도)", kind: "select", choices: ["", "low", "medium", "high", "xhigh", "max"], hint: "비우면 기본. 분류·부트스트랩 등 판단 무거운 배치는 high+ 권장." };
 export const CRON_ACTIONS: CronActionDef[] = [
   { key: "refresh_all", label: "전 repo is 신선화", params: [] },
   { key: "refresh_repo", label: "한 repo is 신선화", params: [{ name: "repo", label: "repo", kind: "repo", hint: "context-ontology" }] },
@@ -40,6 +45,7 @@ export const CRON_ACTIONS: CronActionDef[] = [
     { name: "repo", label: "repo", kind: "repo", hint: "분류 대상 레포(비우면 context-ontology). 지정 레포의 base clone→worktree 를 작업 cwd 로 자동 준비 → 코드를 Read/Grep 할 수 있다." },
     { name: "requester", label: "의뢰자 (멤버 id/이메일)", kind: "text", hint: "헤드리스 실행 신원·과금 귀속(그 멤버의 클로드 로그인/프로필). 비우면 잡 생성자(created_by)." },
     { name: "prompt", label: "프롬프트 (선택 오버라이드)", kind: "textarea", hint: "비우면 기본 분류 프롬프트. 인박스 비면 접수 안 함." },
+    HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,
   ] },
   // #982 미분류 지식 분류 — map_unmapped 의 지식판. 카테고리 0건 지식(노션 미러 등)을 상시세션에 주입해 분류. 인박스 있을 때만 주입.
   { key: "classify_knowledge", label: "미분류 지식 LLM 분류 (세션 주입)", params: [{ name: "session", label: "타깃 상시 세션", kind: "session", hint: "‘상시 세션’ 탭에서 등록한 관리 세션(map_unmapped 와 공용 가능)." }] },
@@ -47,6 +53,7 @@ export const CRON_ACTIONS: CronActionDef[] = [
   { key: "classify_knowledge_headless", label: "미분류 지식 LLM 분류 (헤드리스 — 매 배치 새 세션)", params: [
     { name: "requester", label: "의뢰자 (멤버 id/이메일)", kind: "text", hint: "헤드리스 실행 신원·과금 귀속(그 멤버의 클로드 로그인/프로필). 비우면 잡 생성자(created_by)." },
     { name: "prompt", label: "프롬프트 (선택 오버라이드)", kind: "textarea", hint: "비우면 기본 분류 프롬프트(관성 대응 — 매 배치 should 재조회·근거 인용 강제 포함). 인박스 비면 접수 안 함." },
+    HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,
   ] },
   // 최초 is 부트스트랩 — 결정론 사실(dm scan)을 파일로 뽑고 runbook-bootstrap-domains 를 세션에 주입(map_unmapped 동형). 유닛 0 인 신규 레포 콜드스타트용.
   { key: "bootstrap_is", label: "레포 is 최초 부트스트랩 (세션 주입)", params: [
@@ -70,6 +77,7 @@ export const CRON_ACTIONS: CronActionDef[] = [
     { name: "prompt", label: "프롬프트 (작업 지시)", kind: "textarea", hint: "매 실행 새 헤드리스 세션(빈 컨텍스트)에서 lively MCP 로 수행. 상시세션 주입과 달리 관성이 없어 매번 최신 SoT 를 다시 읽는다(개행 허용 — 파일로 전달)." },
     { name: "requester", label: "의뢰자 (멤버 id/이메일)", kind: "text", hint: "이 헤드리스 실행의 신원·과금 귀속(그 멤버의 클로드 로그인/프로필). 비우면 잡 생성자(created_by)로 실행." },
     { name: "repo", label: "레포 (선택)", kind: "repo", hint: "지정하면 공유 base clone→worktree 를 자동 준비해 작업 cwd 로 삼는다(프롬프트에 클론 지시 불필요). 비우면 빈 워크스페이스." },
+    HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,
   ] },
   { key: "ensure_managed_sessions", label: "상시 세션 keep-alive", params: [] },
   // #1036 프리뷰 환경 — 유휴 TTL 회수 + auto 트리거 stage 재-merge(작업 브랜치 갱신 반영). 정지된 건 안 켬(온디맨드).
@@ -455,6 +463,18 @@ function headlessRequester(params: Record<string, unknown>, createdBy: string | 
 }
 const HEADLESS_REQUESTER_MISSING = { status: "error" as const, summary: { error: "의뢰자 미설정 — params.requester(멤버 id/이메일)를 지정하거나, 로그인 상태로 잡을 다시 저장해 created_by 를 남기세요." } };
 
+// #1101 헤드리스 실행 모델·추론강도 — 잡 params(model/effort)를 claude 하네스 플래그(--model/--effort)로 변환.
+//  세션 주입판은 관리세션 flags 가 모델을 정하지만, 헤드리스엔 이 경로가 없어 계정 기본모델로 떨어지던 갭(관리세션 sonnet/xhigh 무시).
+//  빈 값은 생략(계정 기본). 값 검증은 실행 직전 tasks.ts spawnTaskSession 의 FLAG_WHITELIST 가 한 번 더 한다(choices 밖이면 무시).
+function headlessFlags(params: Record<string, unknown>): Record<string, string> {
+  const f: Record<string, string> = {};
+  const model = typeof params.model === "string" ? params.model.trim() : "";
+  const effort = typeof params.effort === "string" ? params.effort.trim() : "";
+  if (model) f["--model"] = model;
+  if (effort) f["--effort"] = effort;
+  return f;
+}
+
 // #1058/#1061 헤드리스 위탁 접수 — 세션 주입 대신 위탁(delegate) 파이프라인에 태스크를 넣어 **매 실행 새 `claude -p` one-shot**
 //  (빈 컨텍스트)으로 수행한다. agent_headless·map_unmapped_headless·classify_knowledge_headless 공용.
 //  러너(node/tasks.ts)·결과수집·노드분산(중앙 내장 노드 포함)은 위탁 시스템을 그대로 재사용.
@@ -464,7 +484,7 @@ const HEADLESS_REQUESTER_MISSING = { status: "error" as const, summary: { error:
 //   실행 신원 = 의뢰자(headlessRequester)의 클로드 로그인/프로필. 중앙 단일프로필 박스는 공유 로그인 폴백.
 //  중첩 가드: 같은 잡의 이전 태스크가 아직 queued/running 이면 이번 주기는 건너뛴다(requester_session='cron:<id>' 마커) → pileup 방지.
 //  fire-and-forget: 접수·배치까지가 잡 책임(실행·결과수집은 위탁 스케줄러가 5s tick 으로). 결과 요약은 org_task.result / delegate_status.
-async function enqueueHeadlessTask(o: { prompt: string; requester: string; jobId: string; repo?: string | null; extra?: Record<string, unknown> }): Promise<{ status: string; summary: unknown }> {
+async function enqueueHeadlessTask(o: { prompt: string; requester: string; jobId: string; repo?: string | null; flags?: Record<string, string>; extra?: Record<string, unknown> }): Promise<{ status: string; summary: unknown }> {
   const marker = "cron:" + o.jobId;
   const extra = o.extra ?? {};
   // 중첩 방지 — 이전 실행분이 아직 대기/실행 중이면 이번 주기는 건너뛴다(분류의 '인박스 비면 skip' 과 같은 결의 idempotency).
@@ -478,7 +498,7 @@ async function enqueueHeadlessTask(o: { prompt: string; requester: string; jobId
   const { tryAssignNow } = await import("./node/task-scheduler.js");
 
   let task: Awaited<ReturnType<typeof createTask>>;
-  try { task = await createTask({ requester: o.requester, requesterSession: marker, prompt: o.prompt, repo: o.repo ?? null }); }
+  try { task = await createTask({ requester: o.requester, requesterSession: marker, prompt: o.prompt, repo: o.repo ?? null, flags: o.flags ?? {} }); }
   catch (e) { return { status: "error", summary: { error: "위탁 태스크 생성 실패: " + ((e as Error)?.message ?? String(e)), requester: o.requester } }; }
 
   // 요청→즉답: 지금 배치 가능한지 그 자리에서 판정(위탁 스케줄러 tick 을 안 기다림). 안 되면 큐에 남겨 상한 내 재시도(중첩가드가 pileup 차단).
@@ -497,7 +517,7 @@ async function runAgentHeadless(params: Record<string, unknown>, jobId: string, 
   const requester = headlessRequester(params, createdBy);
   if (!requester) return HEADLESS_REQUESTER_MISSING;
   const repo = (typeof params.repo === "string" && params.repo.trim()) ? params.repo.trim() : null;
-  return enqueueHeadlessTask({ prompt, requester, jobId, repo, extra: { repo, prompt_chars: prompt.length } });
+  return enqueueHeadlessTask({ prompt, requester, jobId, repo, flags: headlessFlags(params), extra: { repo, prompt_chars: prompt.length } });
 }
 
 // #1061 map_unmapped 의 헤드리스판 — 인박스(미매핑 코드유닛) 있을 때만 헤드리스 claude -p 로 분류. buildMapPrompt(세션판과 동일) 재사용.
@@ -512,7 +532,7 @@ async function runMapHeadless(params: Record<string, unknown>, jobId: string, cr
   catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e), repo } }; }
   if (!inbox.length) return { status: "ok", summary: { skipped: "인박스 비어있음", unmapped: 0, repo } };
   const prompt = (typeof params.prompt === "string" && params.prompt.trim()) ? params.prompt.trim() : buildMapPrompt(repo, inbox.length);
-  return enqueueHeadlessTask({ prompt, requester, jobId, repo, extra: { unmapped: inbox.length, repo } });
+  return enqueueHeadlessTask({ prompt, requester, jobId, repo, flags: headlessFlags(params), extra: { unmapped: inbox.length, repo } });
 }
 
 // #1061 classify_knowledge 의 헤드리스판 — 인박스(미분류 지식) 있을 때만, 매 배치 fresh claude -p 로 분류(관성 회피).
@@ -526,7 +546,7 @@ async function runClassifyKnowledgeHeadless(params: Record<string, unknown>, job
   catch (e) { return { status: "error", summary: { error: (e as Error)?.message ?? String(e) } }; }
   if (!inbox.length) return { status: "ok", summary: { skipped: "미분류 지식 없음", unmapped: 0 } };
   const prompt = (typeof params.prompt === "string" && params.prompt.trim()) ? params.prompt.trim() : buildClassifyKnowledgePrompt(inbox.length);
-  return enqueueHeadlessTask({ prompt, requester, jobId, extra: { unmapped: inbox.length } });
+  return enqueueHeadlessTask({ prompt, requester, jobId, flags: headlessFlags(params), extra: { unmapped: inbox.length } });
 }
 
 // 관리세션 id → 현재 살아있는 tmux 세션 id 로 해소(keep-alive 보장 — 죽었으면 재생성). 세션 주입 잡 공용.

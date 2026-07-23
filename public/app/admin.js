@@ -1099,6 +1099,14 @@ async function openCronForm(job, actions, reload, tz) {
                 if (jp[p.name])
                     inp.value = jp[p.name];
             }
+            else if (p.kind === 'select') {
+                // #1101 정적 choices 드롭다운(헤드리스 모델·effort 등) — 값은 CronActionParam.choices(서버 레지스트리)에서 온다.
+                inp = el('select', { style: inputStyle });
+                for (const c of (p.choices || []))
+                    inp.append(el('option', { value: c, text: c || '(기본)' }));
+                if (jp[p.name])
+                    inp.value = jp[p.name];
+            }
             else if (p.kind === 'textarea') {
                 // 긴 작업 프롬프트 — 멀티라인 입력(주입 시 백엔드가 개행→공백 평탄화). value 는 속성 아닌 프로퍼티로 설정.
                 inp = el('textarea', { style: inputStyle + ';min-height:96px;resize:vertical', placeholder: p.hint || '', rows: '5' });
