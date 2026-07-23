@@ -7792,7 +7792,9 @@ function pjvFilterPopover(anchor, onChange) {
       const ops = PJV_FILTER_OPS[kind];
       const odef = ops.find((o) => o.key === r.op) || ops[0];
       r.op = odef.key;
-      line.append(mkSelect(odef.label, 'pjv-filter-op', (b) => {
+      // 한국어 어순(#1067) — [필터 항목][값][이다/아니다]. 연산자(술어)가 맨 뒤로 온다: "우선순위 · 높음 · 이다".
+      //  그래서 연산자 셀렉트는 만들어만 두고, 값 칸을 먼저 붙인 **뒤** 맨 끝에 붙인다.
+      const opSel = mkSelect(odef.label, 'pjv-filter-op', (b) => {
         const menu = el('div', { class: 'pjv-menu' });
         const close = pjvPopover(b, menu);
         for (const o of ops) {
@@ -7800,8 +7802,8 @@ function pjvFilterPopover(anchor, onChange) {
           it.onclick = (ev) => { ev.stopPropagation(); close(); r.op = o.key; paint(); onChange(); };
           menu.append(it);
         }
-      }));
-      // 값 — '있음/없음'은 값이 필요 없다(ClickUp 동형: 값칸 자체를 안 그림).
+      });
+      // 값 — '있음/없음'은 값이 필요 없다(ClickUp 동형: 값칸 자체를 안 그림) → 그땐 [필터 항목][있음]만.
       if (r.op !== 'set' && r.op !== 'unset') {
         if (kind === 'text') {
           const inp = el('input', { type: 'text', class: 'pjv-filter-text', placeholder: '텍스트', value: (r.values || [])[0] || '' });
@@ -7824,6 +7826,7 @@ function pjvFilterPopover(anchor, onChange) {
           }));
         }
       }
+      line.append(opSel); // 술어(이다/아니다/있음/없음)는 맨 끝 — 한국어 어순
       const del = el('button', { class: 'pjv-filter-del', type: 'button', title: '이 조건 삭제', 'aria-label': '이 조건 삭제' }, pjvTbIcon('trash', 'sm'));
       del.onclick = (e) => { e.stopPropagation(); pjvFilterState.rows.splice(i, 1); paint(); onChange(); };
       line.append(del);
@@ -7936,10 +7939,10 @@ function pjvBoardSettingsPopover(anchor, ctx) {
 //  보드/리스트는 이미 있는 렌더에 연결(칸반 #541 / 상태그룹). 테이블·타임라인은 아직 없어 준비 중 토스트.
 //  ⚠ 설정(톱니) 팝오버의 '보기 방식' 라디오와 **같은 상태**(pjvBoardView)를 본다 — 두 곳이 항상 일치해야 한다.
 const PJV_VIEW_TABS = [
-  { key: 'board', label: '보드' },
-  { key: 'timeline', label: '타임라인' },
-  { key: 'table', label: '테이블' },
   { key: 'list', label: '리스트' },
+  { key: 'board', label: '보드' },
+  { key: 'table', label: '테이블' },
+  { key: 'timeline', label: '타임라인' },
 ];
 
 // ════════════════════════════════════════════════════════════════════════════
