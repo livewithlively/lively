@@ -905,7 +905,9 @@ async function fillProjects(zone, onCount, projectsP, listsP) {
         dashPopover(anchor, panel);
     };
     dashCtl(zone, { gear: { title: '내 프로젝트 설정', open: openOvPrefs }, action: { href: '#/projects2', title: '프로젝트 탭으로' } });
-    draw();
+    draw(); // 먼저 localStorage 캐시로 즉시 렌더(네트워크 대기 없이)
+    dashPrefsSync().then((changed) => { if (changed && zone.body.isConnected)
+        draw(); }); // #1129 서버(계정) 정본 반영 → 필요 시 재렌더
 }
 // 리스트 글리프 — 프로젝트 탭 사이드바(pjvListGlyph)와 동일: 이모지 아이콘 or 체크리스트 라인 아이콘.
 function dashListGlyph(list) {
@@ -1078,7 +1080,7 @@ catch {
 function dashSaveListOrder(order) { try {
     localStorage.setItem(DASH_LIST_ORDER_KEY, JSON.stringify(order));
 }
-catch { /* 저장 실패 무시 */ } }
+catch { /* 저장 실패 무시 */ } dashPrefsPush(); }
 // 저장된 순서를 현재 리스트 집합(base)에 적용 — 저장분 먼저(그 순서대로), 새 리스트는 뒤에.
 function dashApplyListOrder(base) {
     const saved = dashListOrderSaved();
@@ -1110,7 +1112,7 @@ function dashOvHidden() {
 function dashSaveOvHidden(set) { try {
     localStorage.setItem(DASH_OV_HIDDEN_KEY, JSON.stringify([...set]));
 }
-catch { /* 저장 실패 무시 */ } }
+catch { /* 저장 실패 무시 */ } dashPrefsPush(); }
 // ── #req 직접 고른 리스트(화이트리스트) — ⚙ 스페이스›폴더 트리에서 체크한, 내 프로젝트가 없는 리스트. ──
 //  hidden(블랙리스트)과 짝이다: 자동 후보는 hidden 으로 빼고, 그 밖의 리스트는 pinned 로 넣는다.
 //  pinned 리스트는 mine 필터 없이 '리스트 전체'를 보여준다(그렇지 않으면 0개 빈 카드가 된다).
@@ -1127,7 +1129,48 @@ function dashOvPinned() {
 function dashSaveOvPinned(set) { try {
     localStorage.setItem(DASH_OV_PINNED_KEY, JSON.stringify([...set]));
 }
-catch { /* 저장 실패 무시 */ } }
+catch { /* 저장 실패 무시 */ } dashPrefsPush(); }
+// ── #1129 개요 정리(순서·숨김·핀) 멤버별 서버 저장 — 위 localStorage(기기별) 3키를 계정에 묶어 어느 기기/브라우저로 ──
+//  들어와도 유지한다. localStorage 는 '빠른 캐시'로 남기고(동기 리더 전부 그대로), 변경 시 서버로 write-through(디바운스),
+//  진입 시 서버가 정본이면 캐시를 갈아끼운다. 서버 저장 실패는 조용히 무시(캐시엔 이미 반영 — 즐겨찾기와 같은 개인 UI 상태).
+const DASH_PREFS_API = '/api/ui/v6/dash-prefs';
+function dashPrefsBody() { return { list_order: dashListOrderSaved(), ov_hidden: [...dashOvHidden()], ov_pinned: [...dashOvPinned()] }; }
+function dashPrefsPost() { return api(DASH_PREFS_API, { method: 'POST', body: JSON.stringify(dashPrefsBody()) }).catch(() => { }); }
+let dashPrefsTimer = null;
+function dashPrefsPush() {
+    if (dashPrefsTimer)
+        clearTimeout(dashPrefsTimer);
+    dashPrefsTimer = setTimeout(() => { dashPrefsTimer = null; dashPrefsPost(); }, 400);
+}
+// 서버 값으로 localStorage 캐시 seed — 이후 모든 동기 리더가 서버 정본을 읽게 된다.
+function dashPrefsSeedLocal(p) {
+    const arr = (v) => JSON.stringify(Array.isArray(v) ? v : []);
+    try {
+        localStorage.setItem(DASH_LIST_ORDER_KEY, arr(p.list_order));
+        localStorage.setItem(DASH_OV_HIDDEN_KEY, arr(p.ov_hidden));
+        localStorage.setItem(DASH_OV_PINNED_KEY, arr(p.ov_pinned));
+    }
+    catch { /* 무시 */ }
+}
+// 진입 시 서버 개인화를 반영. 서버에 저장 이력(saved)이 있으면 그게 정본 → 캐시 갈아끼우고 재렌더가 필요하면 true.
+//  저장 이력이 없으면(첫 사용) 이 브라우저의 기존 localStorage 정리를 1회 서버로 이관한다(기존 사용자 보존).
+async function dashPrefsSync() {
+    let server = null;
+    try {
+        server = await api(DASH_PREFS_API);
+    }
+    catch {
+        return false;
+    } // 실패 시 캐시 그대로(무해)
+    if (server && server.saved) {
+        dashPrefsSeedLocal(server);
+        return true;
+    }
+    const hasLocal = dashListOrderSaved().length || dashOvHidden().size || dashOvPinned().size;
+    if (hasLocal)
+        dashPrefsPost(); // 서버 미저장 + 로컬 정리 있음 → 즉시 이관(디바운스 없이)
+    return false; // 캐시(로컬)가 이미 화면과 일치 — 재렌더 불필요
+}
 // ── #req 리스트별 목록 필터(기기별) — 리스트 헤더 우측 필터 버튼. { who:'all'|'mine', q:string } 를 리스트 id 별로. ──
 //  직접 고른 리스트는 남의 프로젝트까지 들어와 길어지므로, 요약 카드는 그대로 두고 아래 목록만 좁힌다.
 const DASH_LISTFILTER_KEY = 'dash_list_filter_v1';

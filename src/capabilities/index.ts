@@ -20,6 +20,7 @@ import { projectV6Capabilities } from "./projects-v6.js";
 import { listV6Capabilities } from "./lists-v6.js";
 import { statusTemplateV6Capabilities } from "./status-templates-v6.js";
 import { favoritesCapabilities } from "./favorites.js";
+import { dashPrefsCapabilities } from "./dash-prefs.js";
 import { folderV6Capabilities } from "./folders-v6.js";
 import { viewV6Capabilities } from "./views-v6.js";
 import { taskDetailV6Capabilities } from "./task-detail-v6.js";
@@ -107,6 +108,7 @@ const all: Capability[] = [
   ...listV6Capabilities, // v6: 프로젝트 묶음(리스트=클릭업 List층) CRUD·멤버·프로젝트 소속 — scope=memory(/api/ui/v6/project-lists + /projects/:id/list). 네이티브 전용(외부 미러 없음). 전부 expose.mcp:true+REST.
   ...statusTemplateV6Capabilities, // v6(#729): 상태 체계 템플릿 — 스페이스 기본 + 이름있는 재사용 템플릿(/api/ui/v6/status-templates). inherit 리스트가 기본을 상속. 전부 expose.mcp:true+REST.
   ...favoritesCapabilities, // #670: 멤버별 즐겨찾기(리스트·카테고리 사이드바 핀) — scope=null(인증만), REST 전용(/api/ui/v6/favorites GET·POST).
+  ...dashPrefsCapabilities, // #1129: 멤버별 대시보드 '내 프로젝트' 위젯 개인화(개요 리스트 순서·숨김·핀) — scope=null(인증만), REST 전용(/api/ui/v6/dash-prefs GET·POST). 기존 localStorage(기기별) 대체.
   ...folderV6Capabilities, // v6(#475): 폴더(=클릭업 Folder층) CRUD + 리스트 소속 — scope=memory(/api/ui/v6/project-folders + /project-lists/:id/folder). 폴더는 정리용(멤버·권한 없음). 전부 expose.mcp:true+REST.
   ...viewV6Capabilities, // v6(#541): 저장 뷰 조회(ClickUp 이관 뷰 — /api/ui/v6/project-views). 보드 '뷰' 피커 소비.
   ...taskDetailV6Capabilities, // v6: 태스크 상세 모달(클릭업형) — 태그·시간추적·체크리스트·의존성·댓글/활동피드. scope=memory. expose.mcp:true(자동등록)+REST(/api/ui/v6/tasks/:id/*).

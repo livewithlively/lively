@@ -1212,5 +1212,15 @@ export async function initV6Schema(): Promise<string> {
     CREATE INDEX IF NOT EXISTS member_favorite_member_idx ON member_favorite(member_id);
   `);
 
+  // ── 멤버 대시보드 개인화(#1129) — '내 프로젝트' 위젯 개요 카드 정리(리스트 순서·숨김·직접추가 핀)를 멤버별 서버 저장.
+  //  즐겨찾기(member_favorite)와 같은 개인 UI 상태(감사 대상 아님). 기존엔 localStorage(기기별)라 다른 기기/브라우저로
+  //  들어오면 정리가 사라졌다 — 계정에 묶어 어디서 들어와도 유지. prefs=JSON 한 덩어리(멤버당 1행, upsert).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS member_dash_pref(
+      member_id TEXT PRIMARY KEY,
+      prefs JSONB NOT NULL DEFAULT '{}'::jsonb,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+  `);
+
   return "initialized v6 schema";
 }
