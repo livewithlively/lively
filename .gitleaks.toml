@@ -1,0 +1,21 @@
+# gitleaks 설정 — CI(.github/workflows/secret-scan.yml)와 로컬이 같은 규칙을 쓴다.
+#
+# 원칙: **파일 단위로 통째 제외하지 않는다.** 파일을 allowlist 에 넣으면 그 파일에 언젠가 들어올
+#  진짜 자격증명까지 조용히 통과한다. 그래서 아래는 '명백히 더미임이 값 자체로 드러나는 패턴'만 뺀다.
+title = "Lively"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "테스트 픽스처 — 값 자체가 더미임을 드러내는 패턴만 제외(파일 단위 제외 금지)"
+regexes = [
+  # 키트 CLI 테스트가 쓰는 가짜 라이블리 토큰. 실제 토큰은 lvk_ 뒤에 test_ 가 붙지 않는다.
+  '''lvk_test_[A-Za-z0-9_-]+''',
+  # 통합 테스트 픽스처의 가짜 GitLab PAT — 'SECRET' 리터럴이 박혀 있어 실값과 구분된다.
+  '''glpat-SECRET-[A-Za-z0-9_-]+''',
+  # AWS 공식 문서 예시 키(코드 주석·테스트에서 '이런 형태'를 보일 때 쓴다).
+  '''AKIAIOSFODNN7EXAMPLE''',
+  # 문서·예시의 자리표시자.
+  '''<openssl-rand-hex-32-[AB]>''',
+]
