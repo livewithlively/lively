@@ -96,7 +96,7 @@ node --env-file-if-exists=.env dist/connectors/run-sync.js clickup --full
 또는 crontab 주석 예시(직접 설치는 운영자 판단 — 2~3분보다 타이트하게 잡지 말 것, 한도 100/min 공유):
 
 ```cron
-# */10 * * * * cd /Users/lively/.openclaw/workspace/productivity/context-ontology && node --env-file-if-exists=.env dist/connectors/run-sync.js clickup >> /tmp/clickup-sync.log 2>&1
+# */10 * * * * cd <게이트웨이 설치 경로> && node --env-file-if-exists=.env dist/connectors/run-sync.js clickup >> /tmp/clickup-sync.log 2>&1
 ```
 
 ## 5. 트러블슈팅

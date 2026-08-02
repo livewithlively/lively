@@ -10,14 +10,16 @@ set -euo pipefail
 # 사용:  scripts/restart-gateway.sh            # 빌드 + 재기동 + 검증
 #        scripts/restart-gateway.sh --no-build  # 빌드 생략(plist/env 만 반영)
 #
-# launchd: io.lvly.context-ontology (KeepAlive=죽으면 자동 재기동). 이 스크립트는 plist 를
+# launchd: io.lvly.lively (KeepAlive=죽으면 자동 재기동). 이 스크립트는 plist 를
 #   bootout→bootstrap 으로 다시 읽어 EnvironmentVariables(LANG 등) 변경까지 반영한다.
 # ⚠ 로케일: 게이트웨이는 UTF-8 로케일(LANG/LC_*)이 반드시 있어야 한다. 없으면 tmux 가
 #   `list-sessions -F "...\t..."` 출력의 탭·한글을 '_' 로 치환해 세션 파싱이 깨진다(웹터미널 입장 불가).
 #   코드(terminal-sessions.tmux())와 plist 양쪽에서 강제하며, 아래 검증이 살아있는 프로세스에서 재확인한다.
 # ─────────────────────────────────────────────────────────────────────────────
 
-LABEL="io.lvly.context-ontology"
+# ⚠ 레포명 전환(context-ontology → lively)으로 label 도 바뀌었다. 구 label 로 돌던 박스는
+#   deploy/update.sh 가 1회 정리하므로, 여기서는 새 label 만 본다.
+LABEL="io.lvly.lively"
 PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
 # APP_DIR = launchd 가 실제 게이트웨이를 띄우는 위치 = plist 의 WorkingDirectory(단일 출처 — 하드코딩 금지).
 #   LIVELY_APP_DIR 로 오버라이드 가능(deploy/bootstrap.sh 관례와 동형).
