@@ -47,13 +47,16 @@ chk("★ 긴급열람 이력은 비-admin 에게 닫힘", bgOut.status === 403 |
 
 // ── #1291 v4 자료 공개범위 패널이 부르는 경로 ──
 //  화면은 부팅 때 목록을 부르고, 소급 적용은 **미리보기부터** 띄운다(대량 변경이라 확인을 먼저 받는다).
-const svp = await hit("in", "/api/ui/source-vis-policy");
+//  ⚠ admin 전용 화면이라 admin 토큰으로 부른다 — 비-admin 으로 403 을 받고 "안 서빙된다"고 오진하지 않게.
+const svpDenied = await hit("in", "/api/ui/source-vis-policy");
+chk("  비-admin 에겐 닫혀 있다", svpDenied.status === 403 || svpDenied.status === 401, `status=${svpDenied.status}`);
+const svp = await hit("admin", "/api/ui/source-vis-policy");
 chk("★ 자료 공개범위 목록이 서빙된다", svp.status === 200 && Array.isArray(svp.body?.rules),
   `status=${svp.status} keys=${Object.keys(svp.body || {})}`);
 chk("  화면이 '축이 꺼짐' 경고를 띄울 근거를 준다", typeof svp.body?.axis_on === "boolean",
   JSON.stringify(svp.body)?.slice(0, 120));
 
-const dryUi = await hit("in", "/api/ui/source-vis-policy/backfill", { method: "POST", body: "{}" });
+const dryUi = await hit("admin", "/api/ui/source-vis-policy/backfill", { method: "POST", body: "{}" });
 chk("★ 소급 적용 미리보기가 서빙된다(기본 dry_run)",
   dryUi.status === 400 || (dryUi.status === 200 && dryUi.body?.dry_run === true),
   `status=${dryUi.status} ${JSON.stringify(dryUi.body)?.slice(0, 140)}`);
