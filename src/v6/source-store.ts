@@ -11,11 +11,19 @@ import { knowledgeVisWhere } from "./knowledge-store.js";
 // 자료 1건의 가시성 술어(#1291) — 's' 별칭 기준. 지식(knowledgeVisSql)과 같은 모양이되 **컨테이너 참조 grant 가 없다**:
 //  자료는 프로젝트가 아니라 외부 원본(슬랙·노션·전사록)에서 들어오므로 리스트에 매달 자연스러운 좌표가 없다.
 //  → 대상 지정은 멤버·팀 직접 grant(source_member)뿐. 기본값은 'open' 이라 아무도 안 잠근 조직에선 항상 통과한다.
-const sourceVisSql = (p: number) => `(s.visibility IS DISTINCT FROM 'members'
+export const sourceVisSql = (p: number) => `(s.visibility IS DISTINCT FROM 'members'
   OR EXISTS(SELECT 1 FROM source_member sm WHERE sm.source_id=s.id
              AND ((sm.subject_kind='member' AND sm.member_id=$${p})
                OR (sm.subject_kind='team' AND EXISTS(SELECT 1 FROM team_member tm
                      WHERE tm.team_id::text=sm.member_id AND tm.member_id=$${p})))))`;
+
+/** 이 뷰어로 자료를 필터해야 하나 — 필터가 필요 없으면 null(축 꺼짐·특권·긴급열람 전체 스코프).
+ *  자기 Params 를 쓰는 쿼리 빌더(증류 인박스)가 **동기로** 술어를 끼워 넣을 수 있게 판정만 분리한 것이다. */
+export async function resolveSourceViewer(viewer: Viewer | undefined): Promise<string | null> {
+  if (!(await axisOn("source"))) return null;
+  if (viewer === undefined) return null;
+  return await effectiveViewer(viewer);
+}
 
 /** 자료 읽기 쿼리에 이어붙일 술어. 규약은 knowledgeVisWhere 와 동일(undefined=미배선·null=특권·"TRUE" 반환 가능). */
 export async function sourceVisWhere(viewer: Viewer | undefined, params: unknown[]): Promise<string> {

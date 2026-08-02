@@ -63,6 +63,11 @@ try {
   const sub = await one(`INSERT INTO project(level, parent_id, name, status, status_category)
       VALUES('subtask',$1,'VIS_SUBTASK_LOCKED','todo','unstarted') RETURNING id`, [task.id]);
 
+  // #1291 v4 — 증류 상속 테스트에 필요한 분류축(지식 저장은 category 필수).
+  const cat = await one(`INSERT INTO category(key, name, space, state)
+      VALUES('vis-e2e','가시성 e2e','product','confirmed')
+      ON CONFLICT (key) DO UPDATE SET name=EXCLUDED.name RETURNING id, key`);
+
   // #1291 v4 — 커넥터 수집물 흉내. mirrorSourceV6 가 넣는 모양 그대로(external_system + fields.container_*)라
   //  백필·정책 매칭이 실제 데이터에서 도는지 볼 수 있다.
   const srcEng = await one(`INSERT INTO source(kind, title, body_md, provenance, external_system, external_instance, external_id, fields)
@@ -73,7 +78,7 @@ try {
              '{"container_ref":"C-GEN","container_name":"general"}'::jsonb) RETURNING id`);
 
   Object.assign(out, {
-    v4SrcEngId: srcEng.id, v4SrcGenId: srcGen.id,
+    v4SrcEngId: srcEng.id, v4SrcGenId: srcGen.id, v4Category: cat.key,
     lockedListId: lockedList.id, openListId: openList.id, spaceLockedListId: spaceLockedList.id,
     lockedProjectId: lockedProject.id, openProjectId: openProject.id,
     lockedTaskId: task.id, lockedSubtaskId: sub.id,

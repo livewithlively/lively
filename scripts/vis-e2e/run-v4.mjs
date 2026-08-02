@@ -80,11 +80,11 @@ const seesKn = async (who, name) => !(await mcp(who, "knowledge_get", { name }))
   const kName = "v4-derived-src";
   const kn = await mcp("admin", "knowledge_save", {
     name: kName, title: "V4 증류물", body_md: "eng 채널 원문에서 증류",
-    category: "canonical-context-store", type: "reference" });
+    category: SEED.v4Category || "vis-e2e", type: "reference" });
   chk("[준비] 지식 생성", !kn.isError, JSON.stringify(kn.payload)?.slice(0, 160));
   chk("  증류 전엔 누구에게나 보인다", await seesKn("in", kName));
 
-  const link = await mcp("admin", "source_link_knowledge", { name: kName, source_id: engId, relation: "derived_from" });
+  const link = await mcp("out", "source_link_knowledge", { name: kName, source_id: engId, relation: "derived_from" });
   chk("[준비] derived_from 링크", !link.isError, JSON.stringify(link.payload)?.slice(0, 160));
 
   const kOut = await seesKn("out", kName), kIn = await seesKn("in", kName);
@@ -93,11 +93,19 @@ const seesKn = async (who, name) => !(await mcp(who, "knowledge_get", { name }))
   // ── ⑤ cites 는 안 물려받는다 — 인용했다는 이유로 공개 지식이 잠기면 사고다 ──
   const kName2 = "v4-cited-src";
   await mcp("admin", "knowledge_save", { name: kName2, title: "V4 인용물", body_md: "참조만",
-    category: "canonical-context-store", type: "reference" });
-  await mcp("admin", "source_link_knowledge", { name: kName2, source_id: engId, relation: "cites" });
+    category: SEED.v4Category || "vis-e2e", type: "reference" });
+  await mcp("out", "source_link_knowledge", { name: kName2, source_id: engId, relation: "cites" });
   chk("★ cites 는 상속하지 않는다(공개 지식이 링크 하나로 잠기지 않게)", await seesKn("in", kName2));
 
-  // ── ⑥ 권한 ──
+  // ── ⑥ 증류기 인박스가 요청자 신원을 본다 — 이 쿼리 결과가 그대로 프롬프트 본문이 되고, 그 프롬프트는
+  //     requester 로 도는 헤드리스 세션에 들어간다. 필터가 없으면 대상이 아닌 사람의 세션에 잠긴 원문이
+  //     흘러들고 그 세션이 공개 지식으로 되뱉는다(v2 에서 admin 우회를 없앤 바로 그 위험).
+  const inboxIn = await mcp("in", "source_undistilled", { limit: 50 });
+  const inboxIds = (inboxIn.payload?.entries || inboxIn.payload || []).map?.((x) => x.id) || [];
+  chk("★ 증류 인박스에 남의 잠긴 자료가 안 실린다(vis_in 에겐 eng 가 안 보인다)",
+    !inboxIds.includes(engId), `ids=${JSON.stringify(inboxIds).slice(0, 120)}`);
+
+  // ── ⑦ 권한 ──
   const notAdmin = await rest("out", "/api/ui/source-vis-policy", { method: "POST",
     body: JSON.stringify({ match_system: "slack", visibility: "open" }) });
   chk("★ 비-admin 은 정책을 못 만진다", notAdmin.status === 403 || notAdmin.status === 401, `status=${notAdmin.status}`);
