@@ -105,7 +105,24 @@ const seesKn = async (who, name) => !(await mcp(who, "knowledge_get", { name }))
   chk("★ 증류 인박스에 남의 잠긴 자료가 안 실린다(vis_in 에겐 eng 가 안 보인다)",
     !inboxIds.includes(engId), `ids=${JSON.stringify(inboxIds).slice(0, 120)}`);
 
-  // ── ⑦ 권한 ──
+  // ── ⑦ 정책 편집 = 권한 편집 — 잠긴 규칙을 **넓히려면** 그 자료를 볼 수 있어야 한다.
+  //     아니면 admin 이 자기를 대상에 끼워 넣어 못 보던 내용을 보게 된다(셀프가입).
+  //     v2 에서 팀 편집에 같은 이유로 건 제약과 같다.
+  const engRuleId = r2.body?.id;
+  const widen = await setRule({ id: engRuleId, match_system: "slack", match_channel: "eng-only",
+    visibility: "members", members: [{ member_id: "vis_out" }, { member_id: "vis_admin" }] });
+  chk("★ 대상 아닌 admin 은 규칙을 넓힐 수 없다(셀프가입 차단)", widen.status === 403,
+    `status=${widen.status} ${JSON.stringify(widen.body)?.slice(0, 140)}`);
+  chk("  거절 후에도 여전히 못 본다", !(await seesSrc("admin", engId)));
+
+  const narrow = await setRule({ id: engRuleId, match_system: "slack", match_channel: "eng-only",
+    visibility: "members", members: [{ member_id: "vis_out" }] });
+  chk("★ 좁히는 변경은 대상이 아니어도 가능(새로 얻는 게 없다)", narrow.status === 200, `status=${narrow.status}`);
+
+  const toOpen = await setRule({ id: engRuleId, match_system: "slack", match_channel: "eng-only", visibility: "open" });
+  chk("★ members → open(전원 공개)도 넓히기라 막힌다", toOpen.status === 403, `status=${toOpen.status}`);
+
+  // ── ⑧ 권한 ──
   const notAdmin = await rest("out", "/api/ui/source-vis-policy", { method: "POST",
     body: JSON.stringify({ match_system: "slack", visibility: "open" }) });
   chk("★ 비-admin 은 정책을 못 만진다", notAdmin.status === 403 || notAdmin.status === 401, `status=${notAdmin.status}`);

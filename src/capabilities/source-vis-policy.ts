@@ -12,11 +12,39 @@ import {
   sourceVisRules, invalidateSourceVisRules, pickRule, applyVisibility,
 } from "../v6/source-vis-policy.js";
 import { axisOn } from "../v6/visibility-axes.js";
+import { effectiveViewer } from "../v6/visibility.js";
 
 const MEMBERS = z.array(z.object({
   subject_kind: z.enum(["member", "team"]).optional(),
   member_id: z.string().min(1),
 })).max(500);
+
+
+/**
+ * 이 사람이 그 규칙의 현재 대상인가 — **정책 편집 = 권한 편집**이라 필요한 판정.
+ *  잠긴 채널의 정책을 고쳐 자기를 대상에 넣으면 못 보던 내용을 보게 된다(셀프가입).
+ *  v2 에서 팀 편집에 같은 이유로 건 제약과 같은 것이다.
+ */
+async function inAudience(editor: string, members: Array<{ subject_kind: string; member_id: string }>): Promise<boolean> {
+  if (members.some((m) => m.subject_kind === "member" && m.member_id === editor)) return true;
+  const teams = members.filter((m) => m.subject_kind === "team").map((m) => m.member_id);
+  if (!teams.length) return false;
+  const { rows } = await itemsPool.query(
+    `SELECT 1 FROM team_member WHERE member_id=$1 AND team_id::text = ANY($2::text[]) LIMIT 1`, [editor, teams]);
+  return rows.length > 0;
+}
+
+/**
+ * 정책 변경이 **넓히는 방향**인지 — 넓히면 그 자료를 이미 볼 수 있는 사람만 할 수 있다.
+ *  좁히는 변경(대상 부분집합, open→members)은 새로 얻는 게 없으므로 누구나(admin) 가능하다.
+ */
+function widens(cur: { visibility: string; members: Array<{ subject_kind: string; member_id: string }> },
+                next: { visibility: string; members: Array<{ subject_kind: string; member_id: string }> }): boolean {
+  if (cur.visibility !== "members") return false;      // 아직 안 잠김 = 모두가 봄 = 넓힐 것이 없다
+  if (next.visibility !== "members") return true;      // members → open = 전원 공개, 가장 넓힘
+  const curSet = new Set(cur.members.map((m) => `${m.subject_kind}:${m.member_id}`));
+  return next.members.some((m) => !curSet.has(`${m.subject_kind}:${m.member_id}`));   // 대상 추가 = 넓힘
+}
 
 const listPolicies: Capability = {
   name: "source_vis_policy_list",
@@ -63,6 +91,22 @@ const setPolicy: Capability = {
     //  (의도적으로 전면 차단하려면 커넥터를 끄는 게 맞다.)
     if (input.visibility === "members" && !members.length) {
       throw new HttpError(400, "대상이 비어 있습니다 — 이 규칙이 적용되면 그 자료를 아무도 볼 수 없게 됩니다. 대상을 지정하거나 커넥터를 끄세요.");
+    }
+    // ⚠ 정책 편집 = 권한 편집(#1291 v4). 이미 잠긴 규칙을 **넓히려면** 그 자료를 볼 수 있는 사람이어야 한다 —
+    //  아니면 admin 이 자기를 대상에 끼워 넣어 못 보던 내용을 보게 된다(셀프가입). 좁히는 변경은 자유다.
+    //  긴급열람 중이면 통과한다(사유·통지·감사가 남는 정당한 복구 경로 — 대상자 전원 퇴사 같은 경우).
+    if (input.id) {
+      const cur = (await sourceVisRules()).find((r) => r.id === Number(input.id));
+      if (cur && widens(cur, { visibility: input.visibility, members })) {
+        const editor = user?.userId ?? "";
+        const eff = await effectiveViewer(editor);
+        const privileged = eff === null;   // 전체 스코프 긴급열람
+        if (!privileged && !(await inAudience(editor, cur.members))) {
+          throw new HttpError(403,
+            "이 규칙의 대상을 넓히려면 그 자료를 볼 수 있어야 합니다 — 지금 대상이 아니면 좁히는 변경만 가능합니다. " +
+            "정당한 사유가 있으면 긴급 열람(vis_break_glass_start)을 열고 다시 시도하세요.");
+        }
+      }
     }
     const row = input.id
       ? await itemsPool.query(
