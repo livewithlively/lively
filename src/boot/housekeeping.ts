@@ -34,6 +34,7 @@ import { ensureSharedCache } from "../ops/build-cache.js";
 import { startBoxWatch } from "../ops/box-watch.js";
 import { sendBoxAlert } from "../ops/alerts.js";
 import { recoverOrphanConnectorRuns } from "../connectors/run-tracker.js";
+import { migrateConnectorsToCollectors } from "../org/store/collectors.js"; // #1419 T1 — 레거시 커넥터 → 수집기 승격(멱등)
 import { logger } from "../log.js";
 
 // 스케줄러 게이트 단일 판정(#1313 R17) — 종전 인라인 `process.env.LIVELY_NO_SCHEDULER !== "1"` 6곳을 한 곳으로.
@@ -93,6 +94,13 @@ export const DB_BOOT_STEPS: BootStep[] = [
   // 부팅 스윕(#586) — 재시작으로 추적이 끊긴 connector_run 잔재 정리(유령 running 이 새 싱크를 막지 않게).
   //  스케줄러 기동 **전**에 — 크론 첫 tick 이 유령 행에 막히지 않도록.
   { name: "orphan-connector-run-sweep", gate: "always", run: () => recoverOrphanConnectorRuns().catch((err) => logger.warn({ err }, "부팅 스윕 실패(비치명) — 유령 run 은 하트비트 정리로 수렴")) },
+  // 수집기 마이그레이션(#1419 T1) — 레거시 org_connector 1행/시스템을 org_collector 기본 인스턴스로 승격.
+  //  멱등(이미 있으면 no-op)이라 매 부팅 돌아도 안전하고, 원본 행은 지우지 않아 롤백 가능하다.
+  //  ⚠ **스케줄러 기동 전**에 — 크론 첫 tick 이 구 잡(sync-<system>)과 새 잡(collector-<id>)을 동시에 보면
+  //   같은 소스를 두 번 긁는다. 마이그레이션이 구 잡을 끄고 나서 스케줄러가 떠야 그 창이 없다.
+  { name: "collector-migration", gate: "always", run: () => migrateConnectorsToCollectors()
+      .then((r) => { if (r.migrated.length) logger.info({ migrated: r.migrated }, "레거시 커넥터 → 수집기 마이그레이션 완료"); })
+      .catch((err) => logger.warn({ err }, "수집기 마이그레이션 실패(비치명) — 레거시 커넥터 경로로 계속 동작")) },
   // 스키마 직렬 체인 완료 후 인프로세스 스케줄러 기동(org_cron 테이블 보장됨) — 서버사이드 cron 트리거.
   //  ⚠ 스케줄러는 단일 프로세스 전제(리더선출 없음) — 보조/검증 인스턴스는 LIVELY_NO_SCHEDULER=1 로 꺼서
   //   라이브 게이트웨이와 org_cron tick 이 중복(동일 잡 동시 실행)되지 않게 한다. 같은 DB 를 공유하는 스모크용.

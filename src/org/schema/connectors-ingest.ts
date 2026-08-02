@@ -27,6 +27,59 @@ export async function initConnectorRegistry(pool: Pool): Promise<void> {
   `);
 }
 
+export async function initCollectorRegistry(pool: Pool): Promise<void> {
+  // ── org_collector — **수집기 인스턴스**(#1419 T1). org_connector 의 'system PK = 종류당 1개' 제약을 푼다. ──
+  //  왜(요구 원문): "지금 채널 당 하나씩 밖에 못 만드는데, 구조를 바꿔서 그냥 수집기를 n 개 만들 수 있는데,
+  //   프리셋으로 슬랙·노션 등을 설정할 수 있는 거고, 거기에 커스텀하게 프리셋을 추가할 수 있게."
+  //   실제로 막히는 것: 워크스페이스가 둘인 슬랙, 루트가 다른 노션 트리 두 벌, 채널 그룹마다 다른 주기·산출정책.
+  //   종전 구조에선 그 어느 것도 표현할 데가 없었다(org_connector.system 이 PK라 행이 하나).
+  //
+  //  ⚠ org_connector 를 **지우지 않는다**. 그 테이블은 이제 '각 프리셋의 레거시 기본 인스턴스'로 남고,
+  //   마이그레이션(migrateConnectorsToCollectors)이 그 행을 여기로 복사한다. env 폴백도 그대로 산다 —
+  //   커넥터 해소(connectors/config.ts)가 collector → org_connector → env 순으로 떨어지므로, 이 테이블이
+  //   비어 있는 배포(마이그레이션 전·설치 직후)도 종전과 **정확히 같게** 동작한다(무중단이 이 설계의 제1계약).
+  //
+  //  축의 의미:
+  //   · preset_key = 이 수집기가 무엇으로 동작하나. 내장 프리셋(slack·notion·…, CONNECTOR_SPECS) 또는
+  //     커스텀 프리셋(org_collector_preset, T2). 여러 수집기가 같은 preset_key 를 공유할 수 있다 — 그게 요점이다.
+  //   · instance_key = 이 수집기의 **커서·미러 네임스페이스**. connector_state(system, instance) 의 instance 로
+  //     그대로 들어간다(그 PK 는 이미 2축이라 스키마 변경 0). 인스턴스끼리 커서를 밟지 않게 하는 유일한 열쇠라
+  //     한 번 정하면 바꾸지 않는다(바꾸면 그 수집기는 커서를 잃고 전체 재수집한다).
+  //     레거시 기본 인스턴스는 '_' 를 그대로 물려받는다 — 그래야 마이그레이션이 커서를 승계한다.
+  //   · output_mode = 수집 결과를 자료로 둘지 지식으로 올릴지(T3 가 실제 배선. 여기선 열만 미리 둔다 —
+  //     한 테이블을 두 번 ALTER 하지 않으려고).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_collector(
+      id BIGSERIAL PRIMARY KEY,
+      key TEXT NOT NULL,
+      preset_key TEXT NOT NULL,
+      instance_key TEXT NOT NULL DEFAULT '_',
+      label TEXT,
+      enabled BOOLEAN NOT NULL DEFAULT false,
+      config JSONB NOT NULL DEFAULT '{}'::jsonb,
+      secrets JSONB NOT NULL DEFAULT '{}'::jsonb,
+      sync_interval_sec INT NOT NULL DEFAULT 600,
+      output_mode TEXT NOT NULL DEFAULT 'preset',
+      output_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+      sort INT NOT NULL DEFAULT 0,
+      note TEXT,
+      version INT NOT NULL DEFAULT 1,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
+    ${ensureCheck("org_collector", {
+      // 'preset' = 프리셋 코드가 정하던 기존 동작 그대로(무중단 기본값). T3 가 나머지 셋을 배선한다.
+      org_collector_output_chk: "output_mode IN ('preset','source','knowledge','both')",
+      org_collector_interval_chk: "sync_interval_sec BETWEEN 60 AND 604800",
+    })}
+    CREATE UNIQUE INDEX IF NOT EXISTS org_collector_key_uq ON org_collector(key);
+    -- 같은 프리셋의 두 수집기가 같은 커서 네임스페이스를 쓰면 서로의 진행을 덮어쓴다 — DB가 막는다.
+    CREATE UNIQUE INDEX IF NOT EXISTS org_collector_instance_uq ON org_collector(preset_key, instance_key);
+    CREATE INDEX IF NOT EXISTS org_collector_enabled_idx ON org_collector(enabled, preset_key);
+  `);
+}
+
 export async function initIngestPolicyAndDistillers(pool: Pool): Promise<void> {
   // ── org_ingest_policy — 지식 인입 허용선 정책(#638, #783 확장). 오너가 관리탭에서 조절하는 자동화 게이트. ──
   //  매치 규칙 0개면 디폴트 auto(현행 무변 — 오너가 켠 만큼만 gate). 평가 = resolveIngestPolicy(src/org/ingest/ingest-policy.ts).

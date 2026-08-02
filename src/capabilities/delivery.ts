@@ -15,6 +15,7 @@ import { orgContentReadCapabilities, orgContentCapabilities } from "./delivery/o
 import { membersReadCapabilities, membersCapabilities } from "./delivery/members.js";
 import { tokensReadCapabilities, tokenMintCapabilities, deviceAuthCapabilities, tokenRevokeCapabilities } from "./delivery/tokens-devices.js";
 import { connectorsReadCapabilities, connectorsCapabilities, connectorMembersCapabilities } from "./delivery/connectors.js";
+import { collectorsReadCapabilities, collectorsCapabilities } from "./delivery/collectors.js"; // #1419 T1 — 수집기 n개 축
 import { meProfileCapabilities, meSelfCapabilities } from "./delivery/me-self.js";
 import { gitCredentialCapabilities } from "./delivery/git-credentials.js";
 import { runtimeConfigCapabilities } from "./delivery/runtime-config.js";
@@ -36,6 +37,7 @@ export const deliveryCapabilities: Capability[] = [
   ...membersReadCapabilities,
   ...tokensReadCapabilities,
   ...connectorsReadCapabilities,
+  ...collectorsReadCapabilities,
   ...orgContentCapabilities,
   ...membersCapabilities,
   ...tokenMintCapabilities,
@@ -50,6 +52,7 @@ export const deliveryCapabilities: Capability[] = [
   ...embeddingsCapabilities,
   ...mcpServersCapabilities,
   ...connectorsCapabilities,
+  ...collectorsCapabilities,
   ...ingestDistillersCapabilities,
   ...connectorMembersCapabilities,
   ...hooksCapabilities,

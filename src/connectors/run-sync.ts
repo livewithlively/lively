@@ -25,14 +25,18 @@ import { initAllSchemas } from "../boot/schemas.js";
 import { connectors } from "./index.js";
 import { runClickupSync } from "./clickup/sync.js";
 import { CURSOR_EPSILON_MS, planCursorWrite } from "./sync-cursor.js";
+import { bindCollector, collectorInstanceKey } from "./config.js";
 import { logger } from "../log.js";
 
 const name = process.argv[2];
 const fullFlag = process.argv.includes("--full");
+// --collector <id> (#1419 T1) — 이 실행이 대리하는 수집기 인스턴스. 없으면 레거시 단일 인스턴스 모드.
+const collectorArgIdx = process.argv.indexOf("--collector");
+const collectorId = collectorArgIdx >= 0 ? Number(process.argv[collectorArgIdx + 1]) : 0;
 
 if (!name || (name !== "clickup" && !connectors[name])) {
   const known = ["clickup", ...Object.keys(connectors).filter((k) => k !== "clickup")];
-  logger.error(`사용: run-sync <${known.join("|")}> [--full]`);
+  logger.error(`사용: run-sync <${known.join("|")}> [--collector <id>] [--full]`);
   process.exit(1);
 }
 
@@ -41,6 +45,22 @@ if (!name || (name !== "clickup" && !connectors[name])) {
 //   ALTER/FK 선행 의존 · v6: 미러 수용 테이블 project/knowledge/source + PM 계층 #541). quiet — CLI 는 종전대로 무로그.
 await initAllSchemas({ quiet: true });
 
+// ── 수집기 바인딩(#1419 T1) — **첫 설정 해소보다 먼저.** 이 뒤로 모든 resolveConnectorConfig 는 이 인스턴스의
+//  config/secrets 를 본다(커넥터 모듈은 그 사실을 모른 채 종전 코드 그대로 돈다). 바인딩 실패는 치명이다 —
+//  엉뚱한(레거시) 설정으로 남의 워크스페이스를 긁어 커서를 오염시키느니 실행을 접는 편이 안전하다.
+if (collectorId) {
+  const cr = await itemsPool.query<{ preset_key: string; instance_key: string; enabled: boolean }>(
+    `SELECT preset_key, instance_key, enabled FROM org_collector WHERE id=$1`, [collectorId]);
+  const row = cr.rows[0];
+  if (!row) { logger.error({ collectorId }, "수집기를 찾을 수 없습니다 — 삭제됐거나 잘못된 id"); process.exit(1); }
+  if (row.preset_key !== name) {
+    logger.error({ collectorId, expected: row.preset_key, got: name }, "수집기 프리셋과 실행 대상이 다릅니다");
+    process.exit(1);
+  }
+  bindCollector({ id: collectorId, presetKey: row.preset_key, instanceKey: row.instance_key });
+  logger.info({ collectorId, preset: row.preset_key, instance: row.instance_key }, "수집기 인스턴스 바인딩");
+}
+
 // ⚠ 남은 커넥터 이름 분기 1건(#1313 R44 1단계 잔류) — clickup 만 커서 shape(instance=teamId·tasks_max_updated_ms·
 //  lossless_full_done)과 전진 조건(fetch 실패 집계·full 승격)이 generic 시간커서와 달라 훅으로 흡수하지 않았다.
 //  구현은 커넥터 모듈(clickup/sync.ts)에 있으므로 '커넥터 추가=모듈 1개'는 성립 — 여기 남은 건 이 진입 한 줄뿐이다.
@@ -48,11 +68,14 @@ const failed = name === "clickup" ? await runClickupSync({ fullFlag }) : await r
 process.exit(failed ? 1 : 0);
 
 // ── generic 증분 — clickup 외 모든 커넥터(slack/discord/notion/…). 커넥터 SPI backfill({since}) 를 커서로 몰아 증분화. ──
-//  instance='_' : 단일테넌트(조직당 1 게이트웨이·DB)라 system 단위 시간커서. (per-instance 분리는 멀티인스턴스 필요 시.)
+//  instance = 수집기 인스턴스의 커서 네임스페이스(#1419 T1). 바인딩이 없으면 종전 그대로 '_'(레거시 단일).
+//   수집기가 여럿이면 여기서 갈린다 — 같은 슬랙이라도 인스턴스마다 자기 커서를 갖는다. 갈라 두지 않으면
+//   워크스페이스 A 의 진행이 B 의 커서를 앞당겨 **B 가 그 구간을 영영 안 읽는다**(조용한 유실).
+//   마이그레이션된 기본 수집기는 instance_key='_' 를 물려받아 종전 커서를 그대로 이어 쓴다(재수집 없음).
 //  커서 max_updated_iso = 이번 run 이 관측한 아이템 updated_at(없으면 occurred_at)의 최대. 성공 후에만 전진.
 async function runGenericSync(system: string): Promise<boolean> {
   const conn = connectors[system];
-  const instance = "_";
+  const instance = collectorInstanceKey();
   const cursor = await getConnectorState(system, instance);
   const prevIso = (cursor as { max_updated_iso?: unknown } | null)?.max_updated_iso;
   const prevMs = typeof prevIso === "string" && prevIso ? Date.parse(prevIso) : 0;
