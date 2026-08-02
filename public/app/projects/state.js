@@ -2,7 +2,7 @@
 //  프로젝트 화면의 **세션 상태 싱글턴**과 그 영속 계층 —
 //   보기 모드(pjvBoardView·pjvSavedView) · 스코프 선택(pjvSidebarSel) · Closed/내할당 · 하위태스크 표시 모드 ·
 //   스코프별 뷰 저장(localStorage) · 사이드바 열림(pjvListOpen·pjvFolderOpen + member_side_pref 영속) ·
-//   인라인 편집 재렌더용 스크롤/라우트 신호 · 정렬/그룹 컨텍스트.
+//   인라인 편집 재렌더용 스크롤/라우트 신호 · 정렬/그룹 컨텍스트 · 드래그 진행 상태(pjvFolderDrag·pjvSideDrag).
 //  ⚠ 이 모듈이 값을 **단독 소유**한다. ESM import 바인딩은 재할당할 수 없으므로, 밖에서 값을 바꾸는 경로는
 //   반드시 아래 세터를 거친다: consumeKeepScroll() · setSortCtx() · setGroupCtx() · clearSortCtx().
 //   (객체·Map 싱글턴은 프로퍼티 변형이라 세터가 필요 없다 — pjvBoardView.kanban = … 등은 그대로.)
@@ -329,4 +329,13 @@ function consumeKeepScroll() {
 function setSortCtx(v) { pjvSortCtx = v; }
 function setGroupCtx(v) { pjvGroupCtx = v; }
 function clearSortCtx() { pjvSortCtx = null; pjvGroupCtx = null; }
-export { clearSortCtx, consumeKeepScroll, PJV_SIDE_PREFS_API, pjvApplyView, pjvBoardMineOnly, pjvBoardView, pjvClosedView, pjvConsumeSkipRouteRender, pjvDefaultView, pjvExitAreaMode, pjvFolderOpen, pjvGroupCtx, pjvIsFolderOpen, pjvKeepScopeOnCollapse, pjvKeepScrollForNextRender, pjvKnownFolderIds, pjvListOpen, pjvLoadScopeView, pjvLocalSortOverride, pjvPersistSideOpen, pjvProjClosedView, pjvProjTaskMode, pjvReloadKeepScroll, pjvRestoreScroll, pjvSavedView, pjvSaveScopeView, pjvScopeHash, pjvScopeIsFolder, pjvScopeKept, pjvScopeViewKey, pjvScrollHost, pjvScrollSet, pjvScrollTop, pjvScrollTopNow, pjvSetFolderOpen, pjvSidebarSel, pjvSidePrefsApply, pjvSidePrefsBody, pjvSidePrefsCacheKey, pjvSidePrefsCacheLoad, pjvSidePrefsCacheSave, pjvSidePrefsEnsure, pjvSidePrefsLoad, pjvSidePrefsPush, pjvSkipNextRouteRender, pjvSnapshotView, pjvSortCtx, pjvSubtaskMode, pjvSyncUrl, setGroupCtx, setSortCtx, };
+// ── 드래그 진행 상태(#1404) — 보드·사이드바·행·다중선택 넷이 함께 읽는 세션 싱글턴. ──
+//  소유는 R36 까지 projects/board.ts 였고, 읽는 쪽 셋(sidebar·rows·selection)이 배럴(../projects.js)을 되짚어
+//  받느라 sidebar→projects back-edge 를 지탱했다. 읽는 쪽이 셋이라 '소비자에게 내려보내기'가 성립하지 않는
+//  대신, 값 자체가 **보기 상태 싱글턴**이라 이 모듈이 원래 집이다. 네 소비자 모두 이미 여기를 직결하므로
+//  간선은 하나도 늘지 않는다(드래그 중 상태일 뿐 렌더 로직이 아니라 리프에 두기에 적합).
+// 프로젝트 → 폴더 드래그(#454) 진행 상태. dragstart 에서 프로젝트 id(+이름 #1020)를 담고, 폴더(사이드바 항목·인라인 그룹 헤더)·휴지통이 드롭 타깃.
+const pjvFolderDrag = { id: null, name: null };
+// 사이드바 내부 드래그(#473 후속) — kind:'list'(리스트를 폴더로 넣기/빼기) | 'folder'(폴더 순서 재정렬). id=끌고 있는 대상 id.
+const pjvSideDrag = { kind: null, id: null, folderId: null };
+export { clearSortCtx, consumeKeepScroll, PJV_SIDE_PREFS_API, pjvApplyView, pjvBoardMineOnly, pjvBoardView, pjvClosedView, pjvConsumeSkipRouteRender, pjvDefaultView, pjvExitAreaMode, pjvFolderDrag, pjvFolderOpen, pjvGroupCtx, pjvIsFolderOpen, pjvKeepScopeOnCollapse, pjvKeepScrollForNextRender, pjvKnownFolderIds, pjvListOpen, pjvLoadScopeView, pjvLocalSortOverride, pjvPersistSideOpen, pjvProjClosedView, pjvProjTaskMode, pjvReloadKeepScroll, pjvRestoreScroll, pjvSavedView, pjvSaveScopeView, pjvScopeHash, pjvScopeIsFolder, pjvScopeKept, pjvScopeViewKey, pjvScrollHost, pjvScrollSet, pjvScrollTop, pjvScrollTopNow, pjvSetFolderOpen, pjvSidebarSel, pjvSideDrag, pjvSidePrefsApply, pjvSidePrefsBody, pjvSidePrefsCacheKey, pjvSidePrefsCacheLoad, pjvSidePrefsCacheSave, pjvSidePrefsEnsure, pjvSidePrefsLoad, pjvSidePrefsPush, pjvSkipNextRouteRender, pjvSnapshotView, pjvSortCtx, pjvSubtaskMode, pjvSyncUrl, setGroupCtx, setSortCtx, };

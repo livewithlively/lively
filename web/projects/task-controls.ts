@@ -1,6 +1,7 @@
 // projects/task-controls.ts — #1313 R31: web/projects.ts 분해 ②.
 //  태스크 행·모달의 **인라인 편집 컨트롤** — 상태(커스텀/네이티브) · 담당자(다중) · 마감일 · 우선순위 와
-//  그 저장 경로(pjvPatchTask=재페인트 / pjvSaveTask=조용히), 그리고 전체 구성원 디렉터리 1회 캐시.
+//  그 저장 경로(pjvPatchTask=재페인트 / pjvSaveTask=조용히), 프로젝트 팀원 저장(pjvSaveProjMembers),
+//  그리고 전체 구성원 디렉터리 1회 캐시.
 //  ⚠ _pjvMemDir(디렉터리 캐시)는 이 모듈이 **단독 소유**한다 — 사본이 생기면 팝오버마다 따로 fetch 한다.
 import { api, el, personFace, toast } from '../core.js';
 import { pjvIcon } from './icons.js';
@@ -183,6 +184,15 @@ function pjvPriorityControl(t, apply) {
   return btn;
 }
 
+// ── 프로젝트 팀원 저장(#1404) — 세 면(벌크바·프로젝트 행·상세 메타패널)이 같은 저장 경로를 쓴다. ──
+//  소유는 R36 까지 projects/board.ts 였지만 board 는 이걸 **호출하지 않았다**(정의·재수출만). 읽는 쪽 셋이
+//  배럴(../projects.js)을 되짚는 사유로만 남아 있던 셈이다. 본문이 api+toast 뿐인 저장 경로라 인라인 편집의
+//  저장 경로(pjvPatchTask·pjvSaveTask)와 같은 자리가 맞고, 소비자 셋 모두 이미 이 모듈을 직결하므로 새 간선은 0.
+function pjvSaveProjMembers(id, ids) {
+  return api('/api/ui/v6/projects/' + id + '/members', { method: 'POST', body: JSON.stringify({ members: ids }) })
+    .catch((e) => toast('팀원 저장 실패 — ' + e.message, true));
+}
+
 export {
   pjvAssigneeControl,
   pjvAssignees,
@@ -191,6 +201,7 @@ export {
   pjvMemberDirectory,
   pjvPatchTask,
   pjvPriorityControl,
+  pjvSaveProjMembers,
   pjvSaveTask,
   pjvStatusControl,
 };

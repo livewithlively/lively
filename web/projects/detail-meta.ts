@@ -4,11 +4,11 @@
 //   · 리스트 필드(pjvProjListField) · 조립자(pjvProjMetaPanel) · 선행/후속 엣지(pjvProjEdgesField·pjvProjEdgePicker)
 //  ⚠ 모달 싱글턴 _pjvPmOpen 은 **소유 모듈(detail.ts)에서 import 바인딩으로 읽는다** — 엣지 칩 드릴인(#804)이
 //   '지금 열린 모달'을 알아야 해서다. 사본을 두면 이미 닫힌 모달을 붙잡는다(live binding 유지).
-//  ⚠ PJV_TAG_NONE 은 배럴(../projects.js) 경유로 받는다 — R33 과 같은 이유(projects↔taskmodal 순환에 새 가지 금지).
+//  ⚠ PJV_TAG_NONE 은 taskmodal 소유지만 **실체 리프 직결**로 받는다(#1404) — 금지된 건 배럴 '../taskmodal.js'
+//   직결(그건 projects↔taskmodal 순환에 가지를 늘린다)이고, taskmodal/tags.ts 는 projects 를 되짚지 않는
+//   리프라 간선을 하나 깔아도 순환이 생기지 않는다. R56 이 반대 방향(tags→projects/popover)에 쓴 것과 같은 수다.
 import { api, el, toast } from '../core.js';
-// 배럴 경유(../projects.js) — PJV_TAG_NONE 은 taskmodal 소유, pjvSaveProjMembers 는 세 면(벌크바·행·상세 메타패널)이
-//  공유하는 쓰기 경로라 #1313 R36 이후 projects/board.ts 소유다. 둘 다 배럴을 거쳐야 순환이 늘지 않는다.
-import { PJV_TAG_NONE, pjvSaveProjMembers } from '../projects.js';
+import { PJV_TAG_NONE } from '../taskmodal/tags.js';
 import { _pjvPmOpen, pjvOpenProjectModal } from './detail.js';
 import { pjvFieldControl } from './fields.js';
 import { avatarColor } from './files.js';
@@ -19,7 +19,7 @@ import { openProjectV2Form } from './project-form.js';
 import { pjvProjTeamControl, pjvSetProjStatus, projPatch } from './rows.js';
 import { pjvReloadKeepScroll } from './state.js';
 import { pjvFmtDate, pjvIsOverdue, pjvProjStatusMeta, pjvStatusIconStd } from './status.js';
-import { pjvPriorityControl } from './task-controls.js';
+import { pjvPriorityControl, pjvSaveProjMembers } from './task-controls.js';
 
 // ── 프로젝트 클릭업식 메타데이터 패널 (상세 헤더, 이름 아래) — 태스크 모달의 pjv-tm-fields 동형 ──
 //  상태·담당자·기간·우선순위는 /api/ui/v6/projects/:id(updateProject) 로, 태그·시간추적은 /tasks/:id/(tags|time) 를

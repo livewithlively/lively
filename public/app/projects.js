@@ -16,9 +16,9 @@
 //   통로일 뿐이라, 그 줄들을 소유처 직결로 바꾸면 순환이 오히려 늘어난다(실측). scripts/check-imports.mjs
 //   ALLOWED_CYCLES 주석에 실측치와 근거가 있다.
 // ── R36: 보드 조립부 ──────────────────────────────────────────────────────────
-//  renderProjectsV2 = 라우터 진입(web/main.ts). 나머지는 projects/{columns,filters,sidebar,rows,selection,
-//  detail-meta,detail-tasks}.ts 와 taskmodal/fields.ts 가 되짚어 받는 보드 소유 심볼이다.
-export { PJV_SUBTASK_BTNLABEL, pjvFolderDrag, pjvSaveProjMembers, pjvSavedViewMenu, pjvSetProjStatusCustom, pjvSideDrag, pjvSubtaskMenu, pjvSwitchRow, pjvTaskModalStatusField, renderProjectsV2, } from './projects/board.js';
+//  renderProjectsV2 = 라우터 진입(web/main.ts). 나머지는 projects/{rows,selection,detail-meta,detail-tasks}.ts 와
+//  taskmodal/fields.ts 가 되짚어 받는 보드 소유 심볼이다(#1404 에서 filters·sidebar 가 이 목록을 떠났다).
+export { PJV_SUBTASK_BTNLABEL, pjvSetProjStatusCustom, pjvSubtaskMenu, renderProjectsV2, } from './projects/board.js';
 // ── R35: 프로젝트 상세·모달 계열 ─────────────────────────────────────────────
 //  ⚠ 문 하나로만 통한다: 상세 계열의 **입구인 projects/detail.ts 만** 물고 나머지 넷은 detail.ts 가 중계한다.
 //   넷을 각각 물면 projects→(상세 4모듈)→projects/{rows,columns,fields,selection}→projects 경로가 문 수만큼
@@ -31,13 +31,23 @@ export { PJV_TAG_NONE, pjvOpenTaskModal, pjvtmComposerToolbar } from './taskmoda
 // ── R30~R33: 리프·상태·컬럼 계열의 공개분 ────────────────────────────────────
 //  공개범위 폼 프리미티브(compactPicker·memberPicker, #1291)는 리스트·스페이스와 **같은 컨트롤**을 공유폴더
 //  모달(dashboard-home)이 쓴다 — 같은 개념(누가 보나)이 화면마다 다르게 생기면 규칙을 두 번 배워야 한다.
-export { compactPicker, pjvPopover } from './projects/popover.js';
+// pjvSwitchRow 는 #1404 에서 board.js → popover.js 로 내려갔다(도메인을 모르는 표시 프리미티브). 이 배럴은
+//  popover.js 를 이미 물고 있어 재수출 자리만 옮기면 되고, 공개 표면은 그대로다.
+// ⚠ 같은 라운드에 내려간 pjvSavedViewMenu(→ projects/filters.ts)는 **의도적으로 여기서 뺐다** — 재수출하려면
+//  배럴이 filters.js 를 직접 물어야 하는데, 그 간선은 projects → filters → timeline → projects 경로를 새로
+//  깔아 순환을 늘린다(이 파일 위 ⚠ 와 같은 함정). 외부 소비자가 0 이라 공개 표면 손실도 없다.
+export { compactPicker, pjvPopover, pjvSwitchRow } from './projects/popover.js';
 export { pjvCheckMini } from './projects/icons.js';
 export { UP_CONFIRM, authDownload, authUpload, authUploadProgress, avatarColor, debounce, fileIconSvg, fileSortApply, fileSortBtn, fileSortLoad, fileSortSave, fmtDateTime, fmtFileDate, fmtFileDateFull, fmtSize, initials, memberPicker, openFileViewer, upControl, upDropZone, upIsAbort, upPrecheckOverwrite, upProgress, upSend, upToast, } from './projects/files.js';
 // 태스크 모달이 닫히며 뒤 화면(프로젝트 상세)이 다시 그려질 때 보던 자리를 지키기 위한 것(#1233-1 · taskmodal closeModal).
-export { pjvConsumeSkipRouteRender, pjvKeepScrollForNextRender, pjvReloadKeepScroll, pjvRestoreScroll, pjvScrollTopNow, pjvSkipNextRouteRender, } from './projects/state.js';
+// 드래그 싱글턴(pjvFolderDrag·pjvSideDrag)은 #1404 에서 board.js → state.js 로 내려갔다 — 읽는 쪽이 넷
+//  (board·sidebar·rows·selection)이라 소비자 하강이 성립하지 않는 대신, 값이 보기 상태 싱글턴이라 그 리프가
+//  원래 집이다. 소비자 셋이 여기를 되짚을 이유가 사라져 sidebar→projects back-edge 가 끊겼다. 공개 표면은 불변.
+export { pjvConsumeSkipRouteRender, pjvFolderDrag, pjvKeepScrollForNextRender, pjvReloadKeepScroll, pjvRestoreScroll, pjvScrollTopNow, pjvSideDrag, pjvSkipNextRouteRender, } from './projects/state.js';
 export { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_ORDER, PJV_TASK_STATUS, pjvFmtDate, pjvIsOverdue, pjvStatusIconStd, pjvStatusMeta, } from './projects/status.js';
-export { pjvAssigneeControl, pjvAssigneeWrite, pjvAssignees, pjvDueControl, pjvPatchTask, pjvPriorityControl, pjvSaveTask, } from './projects/task-controls.js';
+// pjvSaveProjMembers 는 #1404 에서 board.js → task-controls.js 로 내려갔다(팀원 저장 = 인라인 편집의 저장
+//  경로와 같은 자리). 이 배럴은 task-controls.js 를 이미 물고 있어 재수출 자리만 옮겼다 — 공개 표면 불변.
+export { pjvAssigneeControl, pjvAssigneeWrite, pjvAssignees, pjvDueControl, pjvPatchTask, pjvPriorityControl, pjvSaveProjMembers, pjvSaveTask, } from './projects/task-controls.js';
 // pjvBoardFieldsCur·pjvHeadSortable 은 #1313 R36 에서 projects/columns.ts 로 내려갔다(읽는 쪽이 컬럼 헤더뿐이라
 //  columns·fields 가 이 배럴을 되짚을 이유가 사라졌다). 외부 공개 표면은 그대로 유지한다.
 export { pjvBoardFieldsCur, pjvGridTemplate, pjvHeadSortable } from './projects/columns.js';

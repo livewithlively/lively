@@ -5,16 +5,16 @@
 //   (ESM import 바인딩은 재할당 불가. 호출부는 보드 렌더 2곳 — 스코프 보드 · 전체 보드).
 //  ⚠ 보기 상태(pjvBoardView·pjvSidebarSel·pjvClosedView 등)의 소유는 projects/state.js(#1313 R31) — 여기선 그 객체를
 //   직접 import 해 읽고 프로퍼티만 바꾼다(재할당 아님). 배럴(projects.ts)을 거치지 않으므로 역방향 엣지가 생기지 않는다.
-// ⚠ 저장뷰 메뉴·설정 스위치 행 — 소유는 #1313 R36 이후 projects/board.ts 이고 여기선 **배럴 경유**로 받는다
-//  (직결로 바꾸면 filters↔board 로 경로가 곱해져 순환이 늘어난다 — check-imports.mjs 주석의 실측 참조).
-//  filters→projects 역방향 엣지의 유일한 잔여 사유다.
-import { el, toast } from '../core.js';
-import { pjvPopover } from './popover.js';
+// (#1404 — 저장뷰 메뉴·설정 스위치 행을 배럴(../projects.js) 경유로 받던 줄이 여기 있었다. pjvSavedViewMenu 는
+//  읽는 쪽이 이 모듈의 설정 팝오버 하나뿐이라 아래로 내려왔고, pjvSwitchRow 는 도메인을 모르는 표시
+//  프리미티브라 popover.ts 리프로 내려갔다. 그 둘이 filters→projects 역방향 엣지의 전부였으므로,
+//  이 모듈은 이제 배럴을 되짚지 않는다.)
+import { api, el, toast } from '../core.js';
+import { pjvPopover, pjvSwitchRow } from './popover.js';
 import { pjvTabIcon, pjvTbIcon } from './icons.js';
 import { pjvCustomColsSection, pjvDefaultColsSection } from './columns.js';
-import { pjvBoardMineOnly, pjvBoardView, pjvClosedView, pjvExitAreaMode, pjvKeepScopeOnCollapse, pjvPersistSideOpen, pjvProjClosedView, pjvSavedView, pjvScopeIsFolder, pjvSidebarSel } from './state.js';
+import { pjvApplyView, pjvBoardMineOnly, pjvBoardView, pjvClosedView, pjvDefaultView, pjvExitAreaMode, pjvKeepScopeOnCollapse, pjvPersistSideOpen, pjvProjClosedView, pjvSavedView, pjvScopeIsFolder, pjvSidebarSel } from './state.js';
 import { pjvTlClearTasks } from './timeline.js'; // #1313 R33 — 타임라인 캐시는 timeline.ts 소유(적출 완료). 배럴 우회 = 역방향 엣지 아님
-import { pjvSavedViewMenu, pjvSwitchRow } from '../projects.js';
 import { pjvMeMode } from './filters-state.js';
 // ── 'Me mode' 팝오버(#1067) — 내 아바타를 누르면 뜬다. ClickUp 은 Comments/Subtasks/Checklists 지만
 //  우리 보드의 단위는 프로젝트와 태스크라 그 둘로 옮겼다(없는 개념을 흉내내면 눌러도 아무 일이 안 생긴다).
@@ -43,6 +43,91 @@ function pjvColumnsPopover(anchor, card, reload) {
     const custom = pjvCustomColsSection(card, reload);
     if (custom)
         pop.append(custom);
+}
+// ── 저장 뷰(#541) — #1404 에서 projects/board.ts 에서 내려왔다(읽는 쪽은 바로 아래 설정 팝오버뿐). ──
+// ClickUp view.sorting.fields[].field → 우리 정렬 필드(지원분만 — 나머지는 null=미적용).
+function pjvMapClickUpSortField(f) {
+    const m = { dueDate: 'due_date', due_date: 'due_date', startDate: 'start_date', start_date: 'start_date',
+        priority: 'priority', name: 'name', dateCreated: 'created_at', date_created: 'created_at',
+        dateUpdated: 'updated_at', date_updated: 'updated_at' };
+    return m[f] || null;
+}
+// '뷰' 팝오버 — 현재 사이드바 스코프(리스트/폴더)의 저장 뷰 나열 + 적용/해제. lazy fetch(보드 로드 비용 0).
+async function pjvSavedViewMenu(anchor, rerender) {
+    const menu = el('div', { class: 'pjv-menu pjv-view-pop pjv-savedview-pop' });
+    const close = pjvPopover(anchor, menu);
+    menu.append(el('div', { class: 'pjv-menu-head', text: '저장된 뷰' }));
+    const loading = el('div', { class: 'pjv-menu-item', text: '불러오는 중…' });
+    menu.append(loading);
+    const selKey = String(pjvSidebarSel.key || '');
+    let qs = '';
+    if (selKey[0] === 'L')
+        qs = '?list_id=' + selKey.slice(1);
+    else if (selKey[0] === 'F')
+        qs = '?folder_id=' + selKey.slice(1);
+    let views = [];
+    try {
+        const d = await api('/api/ui/v6/project-views' + qs);
+        views = (d && d.views) || [];
+    }
+    catch (_) {
+        loading.textContent = '뷰를 불러오지 못했습니다';
+        return;
+    }
+    loading.remove();
+    const mkPlain = (label, on, sel) => { const it = el('div', { class: 'pjv-menu-item' + (sel ? ' sel' : ''), role: 'button', tabindex: '0', text: label }); it.onclick = on; return it; };
+    const isFolder = selKey[0] === 'F';
+    if (isFolder) {
+        // 폴더/스페이스(#541) — 개요/리스트묶음 전환. 개요=폴더 진입 기본(하위 요약 카드).
+        menu.append(mkPlain('개요 (Overview)', () => { pjvApplyView({ overview: true, byStatus: false, kanban: false }); close(); rerender(); }, pjvBoardView.overview));
+        menu.append(mkPlain('리스트 묶음', () => { pjvApplyView({ overview: false, byStatus: false, kanban: false }); close(); rerender(); }, !pjvBoardView.overview && !pjvBoardView.kanban && pjvSavedView.id == null));
+    }
+    else {
+        menu.append(mkPlain('기본 보기', () => { pjvApplyView(pjvDefaultView(selKey)); close(); rerender(); }, pjvSavedView.id == null && !pjvBoardView.kanban && !pjvBoardView.overview));
+    }
+    if (!views.length) {
+        if (!isFolder)
+            menu.append(el('div', { class: 'pjv-menu-item pjv-savedview-empty', text: qs ? '이 스코프에 저장된 뷰가 없습니다' : '저장된 뷰가 없습니다' }));
+        return;
+    }
+    for (const v of views) {
+        const row = el('div', { class: 'pjv-menu-item pjv-savedview-item' + (pjvSavedView.id === v.id ? ' sel' : ''), role: 'button', tabindex: '0' });
+        row.append(el('span', { class: 'pjv-savedview-name', text: v.name }));
+        row.append(el('span', { class: 'pjv-savedview-type', text: String(v.type || 'list') }));
+        if (v.external_system)
+            row.append(el('span', { class: 'pjv-savedview-src', text: 'ClickUp' }));
+        const cfg = v.config || {};
+        const sf = cfg.sorting && Array.isArray(cfg.sorting.fields) ? cfg.sorting.fields[0] : null;
+        const bits = [];
+        if (cfg.grouping && cfg.grouping.field)
+            bits.push('그룹: ' + cfg.grouping.field);
+        if (sf)
+            bits.push('정렬: ' + sf.field + (Number(sf.dir) === -1 ? ' ↓' : ' ↑'));
+        const fc = cfg.filters && Array.isArray(cfg.filters.fields) ? cfg.filters.fields.length : 0;
+        if (fc)
+            bits.push('필터 ' + fc + '개');
+        if (bits.length)
+            row.title = bits.join(' · ');
+        row.onclick = () => {
+            pjvSavedView.id = v.id;
+            pjvSavedView.name = String(v.name || '');
+            // board 타입 → 칸반, location_overview → 개요(#541), 그 외(list 등)=평면/리스트묶음.
+            const vt = String(v.type);
+            pjvBoardView.kanban = vt === 'board';
+            // ClickUp 저장뷰의 table/timeline 타입은 아직 우리 렌더에 매핑하지 않는다 — 평면으로 폴백(#1067).
+            pjvBoardView.table = false;
+            pjvBoardView.timeline = false;
+            // 개요(location_overview)는 폴더/스페이스 스코프에서만 유효(렌더 브랜치가 selFolder 필요) — 리스트/미분류에선 평면 폴백(#541 리뷰).
+            pjvBoardView.overview = vt === 'location_overview' && selKey[0] === 'F';
+            pjvBoardView.byStatus = false;
+            const mapped = sf ? pjvMapClickUpSortField(String(sf.field)) : null;
+            pjvSavedView.sort = mapped ? { field: mapped, dir: Number(sf && sf.dir) === -1 ? -1 : 1 } : null;
+            close();
+            rerender();
+            toast('뷰 적용: ' + v.name + (fc ? ' — 필터 조건은 보존만 되고 아직 적용되지 않아요' : ''));
+        };
+        menu.append(row);
+    }
 }
 // ── '설정'(톱니) 팝오버 — 보기 방식 · 열 정렬 · 저장된 뷰 · 사이드바. 툴바에서 뺀 옵션들의 집(누락 없음). ──
 function pjvBoardSettingsPopover(anchor, ctx) {
@@ -170,6 +255,6 @@ function pjvViewTabsRow(ctx) {
     row._sync = () => syncs.forEach((s) => s());
     return row;
 }
-export { pjvBoardSettingsPopover, pjvClosedPopover, pjvColumnsPopover, pjvMeModePopover, pjvViewTabsRow, };
+export { pjvBoardSettingsPopover, pjvClosedPopover, pjvColumnsPopover, pjvMeModePopover, pjvSavedViewMenu, pjvViewTabsRow, };
 export { pjvApplyToolbarFilters, pjvAsgFilter, pjvBoardSearch, pjvFilterCount, pjvMeMode, pjvMeModeOn, pjvSetFilterUniverse, pjvTaskIsMine } from './filters-state.js';
 export { pjvAssigneePopover, pjvFilterPopover } from './filters-popover.js';

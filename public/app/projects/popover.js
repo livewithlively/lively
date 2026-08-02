@@ -1,5 +1,5 @@
 // projects/popover.ts — #1313 R30: web/projects.ts 분해 ① 리프.
-//  인라인 편집 팝오버 프리미티브(pjvPopover)와 그 위에 세운 컴팩트 피커(compactPicker).
+//  인라인 편집 팝오버 프리미티브(pjvPopover)와 그 위에 세운 컴팩트 피커(compactPicker)·토글 스위치 행(pjvSwitchRow).
 //  ⚠ 열린 팝오버 스택(pjvPopStack)과 document 레벨 리스너(mousedown/keydown)는 이 모듈이 **단독 소유**한다 —
 //   중첩 팝오버의 부모/자식 판정이 한 배열에 의존하므로 사본이 생기면 즉시 깨진다(#1067).
 import { el } from '../core.js';
@@ -113,4 +113,13 @@ function compactPicker(label, makePicker, opts) {
     // trigger 도 함께 돌려준다 — cf-row(가로 라벨) 대신 세로 스택 .field 안에 넣어 쓰는 폼(리스트 만들기/설정 #1128)이 있다.
     return { row, trigger, getSelected: () => picker.getSelected(), getSelectedLabels: () => (picker.getSelectedLabels ? picker.getSelectedLabels() : []) };
 }
-export { compactPicker, pjvPopover };
+// ── 토글 스위치 행(라벨 + iOS식 스위치). after() = 상태 반영 후 재렌더. ──
+//  #1404 에서 projects/board.ts 에서 내려왔다 — 팝오버 안에 놓이는 순수 표시 프리미티브(상태를 게터/세터로만
+//  주고받고 도메인을 모른다)라 이 리프가 원래 집이다. 읽는 쪽은 filters(완료·나·설정 팝오버)와 board 둘인데,
+//  둘 다 이미 여기를 직결하므로 filters 가 배럴을 되짚을 이유가 사라졌다.
+function pjvSwitchRow(label, getOn, setOn, after) {
+    const sw = el('button', { class: 'pjv-switch' + (getOn() ? ' on' : ''), type: 'button', role: 'switch', 'aria-checked': getOn() ? 'true' : 'false' }, el('span', { class: 'pjv-switch-knob' }));
+    sw.onclick = (e) => { e.stopPropagation(); const nv = !getOn(); setOn(nv); sw.classList.toggle('on', nv); sw.setAttribute('aria-checked', nv ? 'true' : 'false'); after(); };
+    return el('div', { class: 'pjv-closed-row' }, el('span', { class: 'pjv-closed-row-label', text: label }), sw);
+}
+export { compactPicker, pjvPopover, pjvSwitchRow };

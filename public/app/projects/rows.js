@@ -11,7 +11,7 @@
 //  ⚠ pjvOpenTaskModal 은 **배럴(../projects.js) 경유**로 받는다 — 기존 projects↔taskmodal 순환을 새 직접
 //   엣지(rows→taskmodal)로 늘리지 않기 위해서다(순환 축소는 R56 소관).
 import { api, appUrl, el, personFace, toast } from '../core.js';
-import { openProjectSessionForm, pjvAddTask, pjvFolderDrag, pjvOpenTaskModal, pjvRowMore, pjvSaveProjMembers, pjvSetProjStatusCustom, } from '../projects.js';
+import { openProjectSessionForm, pjvAddTask, pjvOpenTaskModal, pjvRowMore, pjvSetProjStatusCustom, } from '../projects.js';
 import { pjvIcon, pjvSubtaskIcon } from './icons.js';
 import { pjvPopover } from './popover.js';
 // #1313 R32 — 컬럼 시스템·커스텀 필드·필터는 projects/{columns,fields,filters}.ts 소유. 배럴(../projects.js)을
@@ -22,9 +22,9 @@ import { pjvMeMode, pjvTaskIsMine } from './filters.js';
 // #1313 R34 — '리스트 이동' 팝오버는 projects/list-forms.ts 소유가 됐다(같은 이유로 직결).
 import { pjvMoveProjectList } from './list-forms.js';
 import { pjvGroupCheck, pjvGroupReorderTarget, pjvRowActions, pjvRowCheck, pjvRowGrip, pjvRowTagsEl, pjvTagPopover } from './selection.js';
-import { pjvLocalSortOverride, pjvProjClosedView, pjvReloadKeepScroll } from './state.js';
+import { pjvFolderDrag, pjvLocalSortOverride, pjvProjClosedView, pjvReloadKeepScroll } from './state.js';
 import { PJV_STATUS_CATS, pjvCatMeta, pjvCustomStatusDot, pjvFmtDate, pjvListIsCustomStatus, pjvListStatusDefs, pjvNativeStatusColor, pjvNativeStatusOf, pjvProjStatusMeta, pjvRegisterProjList, pjvResolveProjStatus, pjvStatusIcon, pjvStatusIconBtn, pjvStatusIconStd, pjvStatusReg } from './status.js';
-import { pjvAssigneeControl, pjvDueControl, pjvMemberDirectory, pjvPatchTask, pjvPriorityControl, pjvSaveTask, pjvStatusControl } from './task-controls.js';
+import { pjvAssigneeControl, pjvDueControl, pjvMemberDirectory, pjvPatchTask, pjvPriorityControl, pjvSaveProjMembers, pjvSaveTask, pjvStatusControl } from './task-controls.js';
 // 상태 그룹 렌더(사이드바 본문) — 단일 리스트 선택이고 커스텀 상태면 각 상태를 그룹으로(스크린샷),
 //  아니면(전체/폴더/미분류/기본 리스트) 표준 3버킷. #475.
 // ── 그룹바이 파리티(#541) — ClickUp 뷰의 group by(field+dir)를 기본값으로, 리스트별 로컬 오버라이드 저장. ──

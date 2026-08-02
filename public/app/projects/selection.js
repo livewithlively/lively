@@ -10,17 +10,19 @@
 //   따라서 플래그(pjvDrag·pjvReorder·pjvBulkBarEl)와 그 init 함수는 절대 갈라놓지 않는다.
 import { api, appUrl, el, personFace, state, sv, toast } from '../core.js';
 import { overlayBox } from '../learn.js';
-//  ⚠ 배럴(../projects.js) 경유 — PJV_TAG_NONE 은 taskmodal.ts 소유다. 여기서 '../taskmodal.js' 를 직접 물면
-//   projects↔taskmodal 순환에 새 가지가 생긴다. 나머지 넷의 소유는 이미 옮겨갔다 — copyText·openLocalWorkModal 은
-//   projects/detail-sections.ts(R35), pjvFolderDrag·pjvSaveProjMembers 는 projects/board.ts(R36). 그래도 배럴을
-//   거치는 건 직결이 경로 수를 곱해 순환을 늘리기 때문이다(scripts/check-imports.mjs 실측 참조).
-import { PJV_TAG_NONE, copyText, openLocalWorkModal, pjvFolderDrag, pjvSaveProjMembers } from '../projects.js';
+//  ⚠ 배럴(../projects.js) 경유 — copyText·openLocalWorkModal 의 소유는 projects/detail-sections.ts(R35) 지만
+//   그쪽은 detail.ts 를 되짚는 상세 서브트리라, 직결하면 selection→detail-sections→detail→selection 순환이
+//   새로 생긴다. 그래서 이 둘만은 배럴을 거친다(scripts/check-imports.mjs 실측 참조).
+//   (#1404 로 셋이 이 줄을 떠났다 — pjvFolderDrag→state.js · pjvSaveProjMembers→task-controls.js ·
+//    PJV_TAG_NONE→taskmodal/tags.js. 셋 다 되짚지 않는 리프라 직결해도 순환이 늘지 않는다.)
+import { copyText, openLocalWorkModal } from '../projects.js';
+import { PJV_TAG_NONE } from '../taskmodal/tags.js';
 import { avatarColor } from './files.js';
 import { pjvIcon } from './icons.js';
 import { pjvPopover } from './popover.js';
-import { pjvLocalSortOverride, pjvSortCtx } from './state.js';
+import { pjvFolderDrag, pjvLocalSortOverride, pjvSortCtx } from './state.js';
 import { PJV_PRIORITY, PJV_PRIORITY_ORDER, pjvStatusIconStd } from './status.js';
-import { pjvAssigneeWrite } from './task-controls.js';
+import { pjvAssigneeWrite, pjvSaveProjMembers } from './task-controls.js';
 import { termAutoApprovePref } from '../terminal.js';
 // ════════════════════════════════════════════════════════════════════════════
 // 클릭업식 다중선택 — 행 호버 시 좌측 체크박스 + 제목 우측 아이콘 3개(추가·태그·이름변경),

@@ -1,16 +1,18 @@
 // projects/board.ts — #1313 R36: web/projects.ts 분해 ⑦(캠페인 최종) — 프로젝트 보드 조립부.
 //  #/projects2 라우터 진입(renderProjectsV2)부터 스코프/전체 보드(renderProjectV2Board) · 칸반(pjvKanbanBoard) ·
-//  저장뷰 메뉴(pjvSavedViewMenu) · 리스트 보드 대형 클로저(pjvProjectListBoard — 사이드바 트리 조립 buildTree +
+//  리스트 보드 대형 클로저(pjvProjectListBoard — 사이드바 트리 조립 buildTree +
 //  본문 영역 렌더 renderArea + 3층 헤더)까지 '화면 한 장을 조립하는' 층 전부. 12,607줄 projects.ts 의 마지막 덩어리다.
 //  ⚠ 레지스트리·상태 세터를 호출하는 **유일한 자리**다 — pjvSidePrefsEnsure · setBoardFieldsCur · setFavListCache ·
 //   pjvSetStatusRegistry · pjvSetListRegistry · pjvSetFilterUniverse · setSortCtx · setGroupCtx · consumeKeepScroll.
 //   ESM import 바인딩은 재할당할 수 없으므로 각 상태의 소유 모듈이 낸 세터로만 바꾼다(#1313 R31 규약).
 //   호출의 **위치와 횟수**가 곧 동작이다(보드 렌더 진입마다 1회) — 옮기거나 합치지 말 것.
-//  ⚠ 드래그 싱글턴(pjvSideDrag·pjvFolderDrag)·표시모드 메뉴 3종·저장뷰 메뉴·스위치 행은 이 모듈이 **단독 소유**한다.
-//   projects/{filters,sidebar,rows,selection,detail-*}.ts 는 이들을 배럴(../projects.js) 경유로 받는다 —
+//  ⚠ 표시모드 메뉴 3종·팀원 저장·커스텀 상태 저장은 이 모듈이 **단독 소유**한다.
+//   projects/{rows,selection,detail-*}.ts 는 이들을 배럴(../projects.js) 경유로 받는다 —
 //   소비자 import 무변경이 이 캠페인의 계약이고, 직결 전환은 실측상 순환을 되레 늘린다(834건, check-imports 주석 참조).
 //   반대로 **읽는 쪽이 하나뿐이던** pjvBoardFieldsCur·pjvHeadSortable 은 그 소비자(projects/columns.ts)로 내려보냈다
 //   — 배럴을 되짚을 이유 자체를 없앤 것이라 순환이 117→60 으로 줄었다.
+//   #1404 는 같은 판정을 이어 저장뷰 메뉴를 filters 로, 스위치 행을 popover 리프로, 드래그 싱글턴 둘을 state
+//   리프로 내려보냈다(60→48). 읽는 쪽이 여럿이어도 **값이 리프의 것이면** 내려보낼 수 있다는 게 이때 추가된 판정이다.
 //  ※ 이 파일은 web/projects.ts 를 import 하지 않는다(단방향). 배럴은 이제 재수출만 하는 통로다.
 // ════════════════════════════════════════════════════════════════════════════
 // 프로젝트 보드 상단 헤더(#1067) — ClickUp 파리티 3층 구조.
@@ -25,16 +27,16 @@
 // ════════════════════════════════════════════════════════════════════════════
 import { api, el, errorNote, personFace, state, sv, toast } from '../core.js';
 import { skeleton } from '../learn.js';
-import { pjvPopover } from './popover.js';
+import { pjvPopover, pjvSwitchRow } from './popover.js';
 import { pjvBundleIcon, pjvSideSearchIcon, pjvTbIcon, pjvViewIcon } from './icons.js';
 import { avatarColor } from './files.js';
 // ⚠ 보기 상태 싱글턴은 projects/state.ts 소유(#1313 R31) — 여기선 읽고 프로퍼티만 바꾸며, 통째 교체는 세터 경유.
-import { consumeKeepScroll, pjvApplyView, pjvBoardMineOnly, pjvBoardView, pjvClosedView, pjvDefaultView, pjvExitAreaMode, pjvGroupCtx, pjvIsFolderOpen, pjvKeepScopeOnCollapse, pjvKnownFolderIds, pjvListOpen, pjvLoadScopeView, pjvPersistSideOpen, pjvProjClosedView, pjvProjTaskMode, pjvReloadKeepScroll, pjvRestoreScroll, pjvSaveScopeView, pjvSavedView, pjvScopeIsFolder, pjvScopeKept, pjvSetFolderOpen, pjvSidePrefsEnsure, pjvSidebarSel, pjvSnapshotView, pjvSubtaskMode, pjvSyncUrl, setGroupCtx, setSortCtx } from './state.js';
-import { PJV_DEFAULT_STATUS_DEFS, PJV_PRIORITY, PJV_STATUS_CATS, PJV_STATUS_ORDER, PJV_TASK_STATUS, pjvCatMeta, pjvCustomStatusDot, pjvFmtDate, pjvIsOverdue, pjvListIsCustomStatus, pjvListStatusDefs, pjvLoadStatusTemplates, pjvNativeStatusOf, pjvResolveProjStatus, pjvResolveStatusDef, pjvSetStatusRegistry, pjvStatusIcon, pjvStatusIconStd, pjvStatusMeta } from './status.js';
+import { consumeKeepScroll, pjvApplyView, pjvBoardMineOnly, pjvBoardView, pjvClosedView, pjvDefaultView, pjvExitAreaMode, pjvFolderDrag, pjvGroupCtx, pjvIsFolderOpen, pjvKeepScopeOnCollapse, pjvKnownFolderIds, pjvListOpen, pjvLoadScopeView, pjvPersistSideOpen, pjvProjClosedView, pjvProjTaskMode, pjvReloadKeepScroll, pjvRestoreScroll, pjvSaveScopeView, pjvSavedView, pjvScopeIsFolder, pjvScopeKept, pjvSetFolderOpen, pjvSideDrag, pjvSidePrefsEnsure, pjvSidebarSel, pjvSnapshotView, pjvSubtaskMode, pjvSyncUrl, setGroupCtx, setSortCtx } from './state.js';
+import { PJV_DEFAULT_STATUS_DEFS, PJV_PRIORITY, pjvFmtDate, pjvIsOverdue, pjvListIsCustomStatus, pjvListStatusDefs, pjvLoadStatusTemplates, pjvNativeStatusOf, pjvResolveProjStatus, pjvSetStatusRegistry, pjvStatusIcon, pjvStatusIconStd } from './status.js';
 import { pjvAssignees } from './task-controls.js';
 import { PJV_STD_COLS, PJV_STD_COL_VAR, PJV_STD_COL_W, pjvApplyColOrder, pjvApplyColWidths, pjvApplyHiddenCols, pjvFieldsForList, pjvGetColSort, pjvGetShownCols, pjvInitNameResize, pjvNameResizeHandle, pjvProjGridTemplate, pjvSetListRegistry, pjvStdColHead, pjvWireColReorder, setBoardFieldsCur } from './columns.js';
 import { pjvAddColumnButton, pjvColumnHead } from './fields.js';
-import { pjvApplyToolbarFilters, pjvAsgFilter, pjvAssigneePopover, pjvBoardSearch, pjvBoardSettingsPopover, pjvClosedPopover, pjvColumnsPopover, pjvFilterCount, pjvFilterPopover, pjvMeModeOn, pjvMeModePopover, pjvSetFilterUniverse, pjvViewTabsRow } from './filters.js';
+import { pjvApplyToolbarFilters, pjvAsgFilter, pjvAssigneePopover, pjvBoardSearch, pjvBoardSettingsPopover, pjvClosedPopover, pjvColumnsPopover, pjvFilterCount, pjvFilterPopover, pjvMeModeOn, pjvMeModePopover, pjvSavedViewMenu, pjvSetFilterUniverse, pjvViewTabsRow } from './filters.js';
 import { pjvSelReset } from './selection.js';
 import { PJV_GROUPBY_FIELDS, pjvColSortCmp, pjvContainerCmp, pjvGetAlsoList, pjvGetGroupBy, pjvManualCmp, pjvProjAddRow, pjvProjRow, pjvRenderStatusGroups, pjvSetAlsoList, pjvSetGroupBy } from './rows.js';
 import { pjvTableDefaultCmp, pjvTimelineView } from './timeline.js';
@@ -90,69 +92,8 @@ function pjvSavedSortCmp() {
   };
   return (a, b) => { const x = val(a), y = val(b); return x < y ? -dir : x > y ? dir : 0; };
 }
-// ClickUp view.sorting.fields[].field → 우리 정렬 필드(지원분만 — 나머지는 null=미적용).
-function pjvMapClickUpSortField(f) {
-  const m = { dueDate: 'due_date', due_date: 'due_date', startDate: 'start_date', start_date: 'start_date',
-    priority: 'priority', name: 'name', dateCreated: 'created_at', date_created: 'created_at',
-    dateUpdated: 'updated_at', date_updated: 'updated_at' };
-  return m[f] || null;
-}
-// '뷰' 팝오버 — 현재 사이드바 스코프(리스트/폴더)의 저장 뷰 나열 + 적용/해제. lazy fetch(보드 로드 비용 0).
-async function pjvSavedViewMenu(anchor, rerender) {
-  const menu = el('div', { class: 'pjv-menu pjv-view-pop pjv-savedview-pop' });
-  const close = pjvPopover(anchor, menu);
-  menu.append(el('div', { class: 'pjv-menu-head', text: '저장된 뷰' }));
-  const loading = el('div', { class: 'pjv-menu-item', text: '불러오는 중…' });
-  menu.append(loading);
-  const selKey = String(pjvSidebarSel.key || '');
-  let qs = '';
-  if (selKey[0] === 'L') qs = '?list_id=' + selKey.slice(1);
-  else if (selKey[0] === 'F') qs = '?folder_id=' + selKey.slice(1);
-  let views: any[] = [];
-  try { const d = await api('/api/ui/v6/project-views' + qs); views = (d && d.views) || []; }
-  catch (_) { loading.textContent = '뷰를 불러오지 못했습니다'; return; }
-  loading.remove();
-  const mkPlain = (label, on, sel) => { const it = el('div', { class: 'pjv-menu-item' + (sel ? ' sel' : ''), role: 'button', tabindex: '0', text: label }); it.onclick = on; return it; };
-  const isFolder = selKey[0] === 'F';
-  if (isFolder) {
-    // 폴더/스페이스(#541) — 개요/리스트묶음 전환. 개요=폴더 진입 기본(하위 요약 카드).
-    menu.append(mkPlain('개요 (Overview)', () => { pjvApplyView({ overview: true, byStatus: false, kanban: false }); close(); rerender(); }, pjvBoardView.overview));
-    menu.append(mkPlain('리스트 묶음', () => { pjvApplyView({ overview: false, byStatus: false, kanban: false }); close(); rerender(); }, !pjvBoardView.overview && !pjvBoardView.kanban && pjvSavedView.id == null));
-  } else {
-    menu.append(mkPlain('기본 보기', () => { pjvApplyView(pjvDefaultView(selKey)); close(); rerender(); }, pjvSavedView.id == null && !pjvBoardView.kanban && !pjvBoardView.overview));
-  }
-  if (!views.length) { if (!isFolder) menu.append(el('div', { class: 'pjv-menu-item pjv-savedview-empty', text: qs ? '이 스코프에 저장된 뷰가 없습니다' : '저장된 뷰가 없습니다' })); return; }
-  for (const v of views) {
-    const row = el('div', { class: 'pjv-menu-item pjv-savedview-item' + (pjvSavedView.id === v.id ? ' sel' : ''), role: 'button', tabindex: '0' });
-    row.append(el('span', { class: 'pjv-savedview-name', text: v.name }));
-    row.append(el('span', { class: 'pjv-savedview-type', text: String(v.type || 'list') }));
-    if (v.external_system) row.append(el('span', { class: 'pjv-savedview-src', text: 'ClickUp' }));
-    const cfg = v.config || {};
-    const sf = cfg.sorting && Array.isArray(cfg.sorting.fields) ? cfg.sorting.fields[0] : null;
-    const bits: string[] = [];
-    if (cfg.grouping && cfg.grouping.field) bits.push('그룹: ' + cfg.grouping.field);
-    if (sf) bits.push('정렬: ' + sf.field + (Number(sf.dir) === -1 ? ' ↓' : ' ↑'));
-    const fc = cfg.filters && Array.isArray(cfg.filters.fields) ? cfg.filters.fields.length : 0;
-    if (fc) bits.push('필터 ' + fc + '개');
-    if (bits.length) row.title = bits.join(' · ');
-    row.onclick = () => {
-      pjvSavedView.id = v.id; pjvSavedView.name = String(v.name || '');
-      // board 타입 → 칸반, location_overview → 개요(#541), 그 외(list 등)=평면/리스트묶음.
-      const vt = String(v.type);
-      pjvBoardView.kanban = vt === 'board';
-      // ClickUp 저장뷰의 table/timeline 타입은 아직 우리 렌더에 매핑하지 않는다 — 평면으로 폴백(#1067).
-      pjvBoardView.table = false; pjvBoardView.timeline = false;
-      // 개요(location_overview)는 폴더/스페이스 스코프에서만 유효(렌더 브랜치가 selFolder 필요) — 리스트/미분류에선 평면 폴백(#541 리뷰).
-      pjvBoardView.overview = vt === 'location_overview' && selKey[0] === 'F';
-      pjvBoardView.byStatus = false;
-      const mapped = sf ? pjvMapClickUpSortField(String(sf.field)) : null;
-      pjvSavedView.sort = mapped ? { field: mapped, dir: Number(sf && sf.dir) === -1 ? -1 : 1 } : null;
-      close(); rerender();
-      toast('뷰 적용: ' + v.name + (fc ? ' — 필터 조건은 보존만 되고 아직 적용되지 않아요' : ''));
-    };
-    menu.append(row);
-  }
-}
+// (저장뷰 메뉴 pjvSavedViewMenu 와 그 전용 헬퍼 pjvMapClickUpSortField 는 #1404 에서 projects/filters.ts 로
+//  내려갔다 — 읽는 쪽이 그 모듈의 설정 팝오버 하나뿐이었다. 여기선 아래 './filters.js' 로 직결해 받는다.)
 
 // ── ClickUp 리스트 컬럼 캐시(#541) — 리스트별 이관 커스텀필드(정의·값·행별 내부 id). undefined=미조회, null=조회중. ──
 const pjvCuFieldsCache = new Map<number, any>();
@@ -1516,10 +1457,8 @@ function pjvGroupByMenu(anchor) {
 //  #1313 R33 — 옆의 행 인라인 컨트롤(pjvProjTeamControl·projPatch…)은 projects/rows.ts 로 갔지만 이 한 줄은
 //  남겼다: 세 면(벌크바=selection.ts · 행=rows.ts · 상세 메타패널=이 파일)이 공유하는 쓰기 경로라, rows.ts 에
 //  두면 selection→rows 역참조가 생겨 순환이 2건 더 늘어난다(위 배럴 중계로 두 모듈 모두 여기서 받는다).
-function pjvSaveProjMembers(id, ids) {
-  return api('/api/ui/v6/projects/' + id + '/members', { method: 'POST', body: JSON.stringify({ members: ids }) })
-    .catch((e) => toast('팀원 저장 실패 — ' + e.message, true));
-}
+// (팀원 저장 pjvSaveProjMembers 는 #1404 에서 projects/task-controls.ts 로 내려갔다 — 이 모듈은 정의·재수출만
+//  했을 뿐 호출하지 않았고, 읽는 쪽 셋(rows·selection·detail-meta)이 배럴을 되짚는 사유로만 남아 있었다.)
 
 // ════════════════════════════════════════════
 // 태스크(클릭업형 리스트뷰) — 상태 그룹(할 일/진행 중/완료) + 컬럼(담당자·마감일·우선순위) + 인라인 편집.
@@ -1528,58 +1467,14 @@ function pjvSaveProjMembers(id, ids) {
 //  ※ 표준 상수·날짜 헬퍼는 projects/status.ts, 인라인 컨트롤(상태·담당자·마감일·우선순위)은
 //   projects/task-controls.ts 로 이관 — 이 파일엔 행·그룹·추가행 등 '리스트 조립'만 남는다(#1313 R31).
 // ════════════════════════════════════════════
-// #731 태스크 모달 상태 pill(라벨) — 리스트 커스텀 상태가 있으면 그 상태들(색·이름·아이콘), 아니면 네이티브 3단계.
-//  listStatus = task_detail 의 d.list ({id, statusMode, statuses[]}) | null. onPick(patch) 로 저장(패치={status, status_raw}).
-function pjvTaskModalStatusField(t, listStatus, onPick) {
-  let defs: any = null;
-  if (listStatus && listStatus.statusMode === 'custom' && Array.isArray(listStatus.statuses) && listStatus.statuses.length) {
-    defs = pjvListStatusDefs({ settings: { statusMode: 'custom', statuses: listStatus.statuses } });
-  }
-  if (defs) {
-    const cur = pjvResolveStatusDef(t.status_raw, t.status, defs) || defs[0];
-    const btn = el('button', { class: 'pjv-tm-statuspill ' + pjvCatMeta(cur.category).cls, type: 'button' },
-      pjvStatusIcon(cur.category, cur.color, cur.frac), el('span', { text: cur.label }));
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      const menu = el('div', { class: 'pjv-menu' });
-      const close = pjvPopover(btn, menu);
-      for (const cat of PJV_STATUS_CATS) {
-        for (const d of defs.filter((x) => x.category === cat.key)) {
-          const isCur = d.key === cur.key;
-          const item = el('button', { class: 'pjv-menu-item' + (isCur ? ' sel' : ''), type: 'button' },
-            pjvCustomStatusDot(d, 'sm'), el('span', { text: d.label }));
-          item.onclick = () => { close(); if (!isCur) onPick({ status: pjvNativeStatusOf(d.category), status_raw: d.key }); };
-          menu.append(item);
-        }
-      }
-    };
-    return btn;
-  }
-  const meta = pjvStatusMeta(t.status);
-  const btn = el('button', { class: 'pjv-tm-statuspill ' + meta.cls, type: 'button' },
-    pjvStatusIconStd(meta.bucket, 'sm'), el('span', { text: meta.label.toUpperCase() }));
-  btn.onclick = (e) => {
-    e.stopPropagation();
-    const menu = el('div', { class: 'pjv-menu' });
-    const close = pjvPopover(btn, menu);
-    for (const key of PJV_STATUS_ORDER) {
-      const m = PJV_TASK_STATUS[key];
-      const sel = meta.bucket === key;
-      const item = el('button', { class: 'pjv-menu-item' + (sel ? ' sel' : ''), type: 'button' },
-        pjvStatusIconStd(key, 'sm'), el('span', { text: m.label }));
-      item.onclick = () => { close(); if (!sel) onPick({ status: key, status_raw: null }); };
-      menu.append(item);
-    }
-  };
-  return btn;
-}
+// (태스크 모달 상태 pill pjvTaskModalStatusField 는 #1404 에서 taskmodal/fields.ts 로 내려갔다 — 읽는 쪽이
+//  거기 하나뿐이었고 이 모듈은 정의·재수출만 했지 호출하지 않았다. 그걸로 taskmodal/fields 가 배럴을 되짚을
+//  마지막 사유가 사라졌다.)
 
 // (현재 보드의 커스텀 필드 pjvBoardFieldsCur 는 #1313 R36 에서 **읽는 쪽인** projects/columns.ts 로 내렸다 —
-//  여기선 세터 setBoardFieldsCur 로 값만 세운다. 드래그 싱글턴 둘은 사이드바 조립이 여기 있는 동안 이 모듈 소유.)
-// 프로젝트 → 폴더 드래그(#454) 진행 상태. dragstart 에서 프로젝트 id(+이름 #1020)를 담고, 폴더(사이드바 항목·인라인 그룹 헤더)·휴지통이 드롭 타깃.
-const pjvFolderDrag: any = { id: null, name: null };
-// 사이드바 내부 드래그(#473 후속) — kind:'list'(리스트를 폴더로 넣기/빼기) | 'folder'(폴더 순서 재정렬). id=끌고 있는 대상 id.
-const pjvSideDrag: any = { kind: null, id: null, folderId: null };
+//  여기선 세터 setBoardFieldsCur 로 값만 세운다. 드래그 싱글턴 둘(pjvFolderDrag·pjvSideDrag)은 #1404 에서
+//  projects/state.ts 로 내려갔다 — 읽는 쪽이 넷(여기·sidebar·rows·selection)이라 소비자 하강이 성립하지 않고,
+//  값 자체가 보기 상태 싱글턴이라 그 리프가 원래 집이다. 그걸로 sidebar→projects 되짚기가 사라졌다.)
 
 // 하위 태스크 표시 모드 메뉴 — 모드 싱글턴(pjvSubtaskMode·pjvProjTaskMode) 자체는 projects/state.ts (#1313 R31).
 const PJV_SUBTASK_OPTS = [
@@ -1621,12 +1516,8 @@ function pjvProjTaskMenu(anchor, onChange) {
   }
 }
 
-// 토글 스위치 행(라벨 + iOS식 스위치). after() = 상태 반영 후 재렌더.
-function pjvSwitchRow(label, getOn, setOn, after) {
-  const sw = el('button', { class: 'pjv-switch' + (getOn() ? ' on' : ''), type: 'button', role: 'switch', 'aria-checked': getOn() ? 'true' : 'false' }, el('span', { class: 'pjv-switch-knob' }));
-  sw.onclick = (e) => { e.stopPropagation(); const nv = !getOn(); setOn(nv); sw.classList.toggle('on', nv); sw.setAttribute('aria-checked', nv ? 'true' : 'false'); after(); };
-  return el('div', { class: 'pjv-closed-row' }, el('span', { class: 'pjv-closed-row-label', text: label }), sw);
-}
+// (토글 스위치 행 pjvSwitchRow 는 #1404 에서 projects/popover.ts 리프로 내려갔다 — 도메인을 모르는 표시
+//  프리미티브라 그쪽이 집이고, 그 덕에 filters 가 이 모듈을 배럴로 되짚을 이유가 사라졌다.)
 
 // ════════════════════════════════════════════════════════════════════════════
 // 프로젝트 보드 상단 헤더(#1067) — ClickUp 파리티 3층 구조.
@@ -1642,20 +1533,17 @@ function pjvSwitchRow(label, getOn, setOn, after) {
 
 // ── 공개 심볼 ──
 //  · 라우터 진입: renderProjectsV2 (web/main.ts 가 배럴 web/projects.js 로 받는다)
-//  · 배럴이 되짚어 중계하는 소유분: 저장뷰 메뉴 · 스위치 행 · 드래그 싱글턴 · 표시모드 메뉴
-//    (PJV_SUBTASK_BTNLABEL·pjvSubtaskMenu) · 팀원 저장 · 커스텀 상태 저장 · 태스크 모달 상태 pill.
+//  · 배럴이 되짚어 중계하는 소유분: 표시모드 메뉴(PJV_SUBTASK_BTNLABEL·pjvSubtaskMenu) · 팀원 저장 ·
+//    커스텀 상태 저장 · 태스크 모달 상태 pill.
+//  ※ #1404 에서 넷이 여기를 떠났다 — 저장뷰 메뉴(→filters) · 스위치 행(→popover) · 드래그 싱글턴 둘(→state).
+//   읽는 쪽이 하나뿐이거나(저장뷰) 도메인을 모르는 값·프리미티브(나머지)라 그 집이 따로 있었고, 옮기고 나니
+//   filters·sidebar 가 배럴을 되짚을 이유가 사라졌다(순환 60 → 실측 갱신은 check-imports.mjs 주석 참조).
 //  ※ 나머지(projectPageHead·pjvKanbanBoard·pjvProjectListBoard·pjvListColHead·pjvGroupByMenu·pjvSyncGroupBtn·
-//   pjvSavedSortCmp·pjvMapClickUpSortField·pjvCuFieldsCache·setBoardFieldsCur·PJV_SUBTASK_OPTS·pjvProjTaskMenu)는
+//   pjvSavedSortCmp·pjvCuFieldsCache·setBoardFieldsCur·PJV_SUBTASK_OPTS·pjvProjTaskMenu)는
 //   이 모듈 내부용이다 — 밖에서 부르는 곳이 없다(noUnusedLocals 가 잔재 0 을 지킨다).
 export {
   PJV_SUBTASK_BTNLABEL,
-  pjvFolderDrag,
-  pjvSaveProjMembers,
-  pjvSavedViewMenu,
   pjvSetProjStatusCustom,
-  pjvSideDrag,
   pjvSubtaskMenu,
-  pjvSwitchRow,
-  pjvTaskModalStatusField,
   renderProjectsV2,
 };

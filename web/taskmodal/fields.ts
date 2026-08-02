@@ -1,10 +1,14 @@
 // taskmodal/fields.ts — #1313 R56: web/taskmodal.ts 섹션 분할 ④(필드 영역).
 //  필드 행 셸 · 상태 · 커스텀 필드(#541) · 담당자 · 기간 · 우선순위 · 시간추적(+엔트리 팝오버).
-//  ⚠ 커스텀 필드 셀 컨트롤(pjvFieldControl)은 R32 이전 (PJ as any) **런타임 지연 조회**였다. R56 에서 정적
-//   import 로 환원 — 배럴(../projects.js) 경유다. 소유처(projects/fields.js) 직결은 projects/fields → projects
-//   역방향 엣지(pjvHeadSortable) 때문에 순환이 더 늘어 택하지 않았다(실측 근거는 커밋 메시지·보고 참조).
+//  ⚠ 이 모듈은 projects 배럴(../projects.js)을 **더 이상 물지 않는다**(#1404) — 필요한 심볼을 전부 소유처에
+//   직결한다. R56 이 배럴 경유를 택했던 근거(projects/fields → projects 역방향 엣지 pjvHeadSortable)는 R36 이
+//   그 심볼을 projects/columns.ts 로 내리면서 **소멸했다** — 지금 projects/{fields,status,task-controls,popover}
+//   넷 다 배럴을 되짚지 않는다. 그래서 직결이 간선을 늘리지 않고, 되레 taskmodal→projects 되짚기가 사라진다.
 import { api, el, personFace, toast } from '../core.js';
-import { PJV_PRIORITY, PJV_PRIORITY_ORDER, pjvAssignees, pjvAssigneeWrite, pjvFieldControl, pjvFmtDate, pjvIsOverdue, pjvPatchTask, pjvPopover, pjvSaveTask, pjvStatusMeta, pjvTaskModalStatusField } from '../projects.js';
+import { pjvFieldControl } from '../projects/fields.js';
+import { pjvPopover } from '../projects/popover.js';
+import { PJV_PRIORITY, PJV_PRIORITY_ORDER, PJV_STATUS_CATS, PJV_STATUS_ORDER, PJV_TASK_STATUS, pjvCatMeta, pjvCustomStatusDot, pjvFmtDate, pjvIsOverdue, pjvListStatusDefs, pjvNativeStatusOf, pjvResolveStatusDef, pjvStatusIcon, pjvStatusIconStd, pjvStatusMeta } from '../projects/status.js';
+import { pjvAssigneeWrite, pjvAssignees, pjvPatchTask, pjvSaveTask } from '../projects/task-controls.js';
 import { pjvFmtClock, pjvFmtDuration } from './util.js';
 
 function pjvtmFieldRow(glyph, label, control) {
@@ -16,6 +20,54 @@ function pjvtmFieldRow(glyph, label, control) {
 
 // 상태 — #731 프로젝트/행과 동일한 디자인으로 통일. 소속 리스트가 커스텀 상태면 그 상태들(색·이름)을 pill+메뉴로,
 //  아니면 네이티브 3단계. d.list(리스트 상태 체계)로 판단. onPick 은 status(네이티브 투영)+status_raw(커스텀 키)를 함께 저장.
+// #731 태스크 모달 상태 pill(라벨) — 리스트 커스텀 상태가 있으면 그 상태들(색·이름·아이콘), 아니면 네이티브 3단계.
+//  listStatus = task_detail 의 d.list ({id, statusMode, statuses[]}) | null. onPick(patch) 로 저장(패치={status, status_raw}).
+//  #1404 에서 projects/board.ts 에서 내려왔다 — 읽는 쪽은 바로 아래 pjvtmStatusField 하나뿐이었고, board 는
+//  정의·재수출만 했지 호출하지 않았다. 쓰는 심볼도 전부 projects/{status,popover} 리프라 여기 두는 게 맞다.
+function pjvTaskModalStatusField(t, listStatus, onPick) {
+  let defs: any = null;
+  if (listStatus && listStatus.statusMode === 'custom' && Array.isArray(listStatus.statuses) && listStatus.statuses.length) {
+    defs = pjvListStatusDefs({ settings: { statusMode: 'custom', statuses: listStatus.statuses } });
+  }
+  if (defs) {
+    const cur = pjvResolveStatusDef(t.status_raw, t.status, defs) || defs[0];
+    const btn = el('button', { class: 'pjv-tm-statuspill ' + pjvCatMeta(cur.category).cls, type: 'button' },
+      pjvStatusIcon(cur.category, cur.color, cur.frac), el('span', { text: cur.label }));
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const menu = el('div', { class: 'pjv-menu' });
+      const close = pjvPopover(btn, menu);
+      for (const cat of PJV_STATUS_CATS) {
+        for (const d of defs.filter((x) => x.category === cat.key)) {
+          const isCur = d.key === cur.key;
+          const item = el('button', { class: 'pjv-menu-item' + (isCur ? ' sel' : ''), type: 'button' },
+            pjvCustomStatusDot(d, 'sm'), el('span', { text: d.label }));
+          item.onclick = () => { close(); if (!isCur) onPick({ status: pjvNativeStatusOf(d.category), status_raw: d.key }); };
+          menu.append(item);
+        }
+      }
+    };
+    return btn;
+  }
+  const meta = pjvStatusMeta(t.status);
+  const btn = el('button', { class: 'pjv-tm-statuspill ' + meta.cls, type: 'button' },
+    pjvStatusIconStd(meta.bucket, 'sm'), el('span', { text: meta.label.toUpperCase() }));
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    const menu = el('div', { class: 'pjv-menu' });
+    const close = pjvPopover(btn, menu);
+    for (const key of PJV_STATUS_ORDER) {
+      const m = PJV_TASK_STATUS[key];
+      const sel = meta.bucket === key;
+      const item = el('button', { class: 'pjv-menu-item' + (sel ? ' sel' : ''), type: 'button' },
+        pjvStatusIconStd(key, 'sm'), el('span', { text: m.label }));
+      item.onclick = () => { close(); if (!sel) onPick({ status: key, status_raw: null }); };
+      menu.append(item);
+    }
+  };
+  return btn;
+}
+
 function pjvtmStatusField(t, refresh, listStatus?) {
   const ctrl = pjvTaskModalStatusField(t, listStatus, (patch) => pjvPatchTask(t.id, patch, refresh));
   // 원문 상태 칩(#541 무손실) — 커스텀 리스트면 raw 가 곧 커스텀 상태라 병기 불필요. 네이티브 리스트인데 이관 raw 가

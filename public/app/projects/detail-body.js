@@ -7,10 +7,13 @@
 //   · 코멘트 섹션(projectCommentsSection) + 코멘트 드로어(openProjectComments)
 //  ⚠ mountBodyEditor 의 **1.2s 디바운스 자동저장 타이머**(saveTimer·doSave·flush)는 이 모듈과 동거한다 —
 //   타이머를 쥔 클로저가 소유 모듈 밖으로 새면 flush 시점(닫힘·언마운트)이 갈라져 미저장분이 사라진다.
-//  ⚠ pjvtmComposerToolbar 는 배럴(../projects.js) 경유 — R33 과 같은 이유(taskmodal 직접 엣지 금지).
+//  ⚠ pjvtmComposerToolbar 는 소유 모듈(taskmodal/composer.ts)을 **실체 직결**한다(#1404). R33 이 금지한 건
+//   배럴 '../taskmodal.js' 직결(그건 projects↔taskmodal 에 가지를 늘린다)이고, composer.ts 는 projects 배럴을
+//   되짚지 않는 리프라 간선을 깔아도 순환이 0 이다.
+//   이 한 줄이 detail-body→projects 역방향 엣지의 전부였으므로, 이 모듈은 이제 배럴을 되짚지 않는다.
 import { api, el, personFace, relTime, renderMarkdown, state, sv, toast } from '../core.js';
 import { createBlockEditor } from '../block-editor.js';
-import { pjvtmComposerToolbar } from '../projects.js'; // 배럴 경유(taskmodal 직접 엣지 금지 — R33 과 같은 이유)
+import { pjvtmComposerToolbar } from '../taskmodal/composer.js';
 import { authUpload } from './files.js';
 import { pjvPopover } from './popover.js';
 // ── 본문 섹션 — 태스크 위, 다른 섹션(공유 폴더·터미널 세션·작업 타임라인)과 동일 위계·디자인(.card + .card-head). ──

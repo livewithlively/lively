@@ -24,7 +24,8 @@ const ALLOWED_CYCLES = new Set([
   "src/domainmap/core/changelog.ts -> src/domainmap/core/repos.ts",
   //  (R25 착지: capabilities 조립자 역-import 허브 4건 소멸 — index↔lists-v6·trash·projects-v6·tools/db.
   //   3줄 신원 판정 viewerOf/isAdmin 을 capabilities/principal.ts[import 0 leaf]로 분리해 소비자를 직결시켰다.)
-  // ── web (2026-08-01 실측 60건 — R36 착지로 117 → 60, **-57건 / -48.7%**) ──
+  // ── web (2026-08-02 실측 40건 — #1404 착지로 54 → 40, **-14건 / -25.9%**. 그 전이 R36 의 117 → 60,
+  //  #1405 의 500줄 2차 분할이 60 → 54) ──
   //  (R40 착지: admin↔learn 계열 4건 소멸 — admin.ts 가 재수출 배럴이 되고 learn 이 copyButton·deployCommands·
   //   installCmd·loadAdmin 을 실체 모듈(ui-primitives·admin-install·admin-rerender)에서 직접 받으면서
   //   learn -> admin -> review/visibility-axes -> learn 되돌이가 끊겼다.)
@@ -40,54 +41,84 @@ const ALLOWED_CYCLES = new Set([
   //  ⚠ 반대 방향(남은 back-edge 를 실체 모듈 직결로 바꾸기)은 **하면 안 된다** — 실측 834건으로 폭증한다.
   //   배럴 경유는 되짚는 모듈이 하나의 노드(projects.ts)만 보게 하지만, 직결은 되짚는 모듈마다 실체 모듈로 가는
   //   간선을 새로 깔아 경로 수가 곱해진다. R35 의 '문 하나로만 통한다'(detail.ts 단일 입구)와 같은 원리다.
-  //  남은 back-edge 6갈래(= 아래 60건 전부의 뿌리)와 각각을 끊었을 때의 실측 잔여치:
-  //   · filters   → projects : pjvSavedViewMenu · pjvSwitchRow            (끊으면 49건)
-  //   · timeline  → projects : pjvOpenTaskModal(taskmodal 중계)           (끊으면 48건)
-  //   · sidebar   → projects : pjvSideDrag · pjvFolderDrag                (끊으면 59건)
-  //   · rows      → projects : openProjectSessionForm·pjvAddTask·pjvRowMore·pjvFolderDrag·pjvSaveProjMembers·
-  //                            pjvSetProjStatusCustom·pjvOpenTaskModal
-  //   · selection → projects : PJV_TAG_NONE·copyText·openLocalWorkModal·pjvFolderDrag·pjvSaveProjMembers
-  //   · detail-{meta,tasks,body} → projects : PJV_TAG_NONE·pjvSaveProjMembers·PJV_SUBTASK_BTNLABEL·
-  //                            pjvSubtaskMenu·pjvOpenTaskModal·pjvtmComposerToolbar
-  //   후속 소관: taskmodal 중계 3종(PJV_TAG_NONE·pjvOpenTaskModal·pjvtmComposerToolbar)은 projects↔taskmodal
-  //   순환을 늘리지 않으려 일부러 배럴을 거친다 — 이건 유지한다. 나머지는 '읽는 쪽이 하나뿐인가'로 판정해
-  //   위와 같은 방식(소비자에게 내려보내기)으로만 끊는다.
+  //  ⭐ #1404 착지(back-edge 5갈래 하강) — sidebar·filters·detail-meta·detail-body·taskmodal/fields 가 배럴을
+  //   되짚을 이유를 없앴다(54 → 40).
+  //   ⭐ 이 라운드가 R36 의 판정에 **한 줄을 더했다**: '읽는 쪽이 하나뿐인가' 는 하강의 **충분조건일 뿐**이고,
+  //   진짜 기준은 **"그 심볼의 집이 되짚지 않는 리프인가"** 다. 읽는 쪽이 셋·넷이어도 소비자가 이미 그 리프를
+  //   물고 있으면 간선이 하나도 안 늘어난다. 반대로 읽는 쪽이 하나여도 그 집이 되짚는 서브트리면 직결이
+  //   순환을 새로 만든다 — selection 의 copyText·openLocalWorkModal 이 배럴에 남은 이유가 그것이다.
+  //    · pjvFolderDrag·pjvSideDrag — 읽는 쪽 넷(board·sidebar·rows·selection)이지만 값이 보기 상태 싱글턴이라
+  //      projects/state.ts 리프가 원래 집. 넷 다 이미 state.js 를 직결해 **새 간선 0**.
+  //    · pjvSavedViewMenu(+전용 헬퍼 pjvMapClickUpSortField) — 읽는 곳은 filters 의 설정 팝오버뿐 → filters.ts.
+  //    · pjvSwitchRow — 도메인을 모르는 표시 프리미티브(게터/세터만 받는다) → popover.ts 리프.
+  //    · pjvSaveProjMembers — 읽는 쪽 셋인데 소유 모듈 board 가 **호출조차 안 했다**(정의·재수출만). 본문이
+  //      api+toast 뿐이라 인라인 편집 저장 경로가 사는 task-controls.ts 로. → **'소유 모듈이 안 쓰는 심볼'은
+  //      하강 후보의 강한 신호다.**
+  //    · PJV_TAG_NONE(색 상수)·pjvtmComposerToolbar — selection·detail-meta·detail-body 가 taskmodal/
+  //      {tags,composer}.js 를 **실체 직결**. 금지된 건 배럴 '../taskmodal.js' 직결(그건 projects↔taskmodal 에
+  //      가지를 늘린다)이지 실체 모듈 직결이 아니다. 둘 다 projects 를 되짚지 않는 리프라 순환 0 —
+  //      R56 이 반대 방향(tags→projects/popover)에 쓴 수와 같다.
+  //    · pjvTaskModalStatusField — 읽는 쪽이 taskmodal/fields.ts 하나뿐이고 board 는 호출조차 안 했다. 그
+  //      소비자로 내리자 **taskmodal/fields 가 배럴을 놓았다**(taskmodal→projects 되짚기 하나 소멸).
+  //      ⚠ 이때 R56 이 배럴 경유를 택했던 근거("projects/fields→projects 역방향 엣지 pjvHeadSortable")가
+  //       R36 의 하강으로 이미 **소멸해 있었다** — 옛 실측 근거는 반드시 지금 그래프로 재확인할 것.
+  //  ⚠ 배럴 재수출의 함정 — 심볼을 내린 뒤 공개 표면을 지키려 재수출하면 배럴이 그 새 모듈을 물어야 하고,
+  //   그 간선이 순환을 늘릴 수 있다. pjvSavedViewMenu 는 그래서 배럴 재수출에서 **뺐다**(projects→filters
+  //   간선이 projects→filters→timeline→projects 를 새로 깐다. 외부 소비자 0 이라 표면 손실 없음).
+  //   나머지는 배럴이 착지 모듈을 이미 물고 있어 재수출 자리만 옮겼다(표면 불변·간선 비용 0).
+  //  남은 back-edge 4갈래(= 아래 40건 전부의 뿌리)와 각 갈래가 **왜 지금 방식으론 안 끊기는지**:
+  //   · timeline    → projects : pjvOpenTaskModal                        ← 중계뿐.
+  //   · detail-tasks→ projects : pjvOpenTaskModal(중계) · PJV_SUBTASK_BTNLABEL · pjvSubtaskMenu
+  //        뒤 둘은 board 소유인데 board 가 detail-tasks 를 물지 않아 소비자 하강이 안 된다(리프로는 가능하나
+  //        중계가 남아 실익 0 — 순환은 갈래가 **완전히** 끊길 때만 줄어든다).
+  //   · rows        → projects : pjvOpenTaskModal(중계) · pjvSetProjStatusCustom(읽는 쪽 rows 뿐 → 하강
+  //        가능하나 중계가 남아 실익 0) · openProjectSessionForm·pjvAddTask·pjvRowMore(상세 계열 소유)
+  //   · selection   → projects : copyText·openLocalWorkModal (둘 다 상세 계열 소유)
+  //        상세 서브트리는 detail.ts 로만 통하는 단일 입구고 detail 은 selection 을 문다 — 직결하면
+  //        selection→detail-*→detail→selection 이 새로 생긴다. 배럴 경유가 정답인 자리다.
+  //   + taskmodal/shell → projects(위 ① 1건) : 셸이 pjvTaskRow·renderProjectV2Detail·mountBodyEditor 를 받는다.
+  //  ⚠⚠ #1404 가 **중계 걷어내기를 시도해 확인한 한계** — 남은 40건의 진짜 뿌리는 중계가 아니라 **두 쌍의
+  //   구조적 상호 의존**이고, 심볼 하강으로는 풀 수 없다:
+  //    ① taskmodal/shell ↔ projects/detail-tasks — 셸이 태스크 행(pjvTaskRow)을 그리고, 그 행이 다시 모달을
+  //      연다(pjvOpenTaskModal). 진짜 양방향이라 어느 쪽을 내려도 반대쪽 간선이 남는다. pjvOpenTaskModal 은
+  //      셸의 클로저(dirty·closeModal·pasteCtx·bodyEditor)를 쥐고 있어 리프로 분리조차 안 된다. 게다가
+  //      pjvTaskRow 는 몽키패치 IIFE 대상이라 배럴의 `export … from` 체인이 **깨지면 안 된다**
+  //      (scripts/pjv-taskrow-monkeypatch.test.mjs 가드).
+  //    ② 상세 계열 ↔ rows/selection — 상세가 행·선택을 쓰고, 행·선택이 상세의 모달·폼을 연다. 이것도
+  //      양방향이라 직결하면 경로가 곱해진다(위 ⚠ 834건 폭증의 그 구조).
+  //   배럴은 이 얽힘을 **노드 하나로 흡수**해 경로 폭발을 막는 장치다 — 지금 40건은 그 대가이고, 그래서
+  //   여기서 더 내리는 건 심볼 이동이 아니라 **상호 의존 자체를 끊는 재설계**(모달↔행 사이에 이벤트/등록
+  //   레이어를 두는 등) 소관이다. 그건 런타임 동작을 바꾸므로 별도 항목으로 다룬다.
+  //   (런타임 지연조회 `(PJ as any)` 는 답이 아니다 — R56 이 그 해킹을 정적 import 로 **환원**했다. 게이트에서
+  //    순환을 숨길 뿐 모듈 의존은 그대로고 타입 안전성만 잃는다.)
   // ── ① 기저 2갈래 — dashboard(활동 피드 행)·taskmodal(모달 표면). R49 개명·taskmodal 후속 소관.
   "web/activity-view.ts -> web/projects.ts -> web/projects/detail.ts -> web/projects/detail-sections.ts",
   "web/projects.ts -> web/taskmodal.ts -> web/taskmodal/shell.ts",
-  "web/projects.ts -> web/taskmodal.ts -> web/taskmodal/shell.ts -> web/taskmodal/fields.ts",
   // ── ② projects/{columns,fields} 내부 결합 — 그리드 트랙이 필드 타입 폭(PJV_FIELD_BY_KEY)을, 필드 컬럼 헤더가
   //  폭 핸들·숨김 토글을 서로 필요로 하는 **양방향 도메인 결합**. 타입 정의를 리프로 더 내려야 끊긴다.
   "web/projects.ts -> web/projects/project-form.ts -> web/projects/rows.ts",
-  "web/projects.ts -> web/projects/project-form.ts -> web/projects/rows.ts -> web/projects/filters.ts",
   "web/projects.ts -> web/projects/project-form.ts -> web/projects/rows.ts -> web/projects/filters.ts -> web/projects/timeline.ts",
   "web/projects.ts -> web/projects/project-form.ts -> web/projects/rows.ts -> web/projects/selection.ts",
   "web/projects.ts -> web/projects/project-form.ts -> web/projects/selection.ts",
   "web/projects/columns.ts -> web/projects/fields.ts",
   // ── ③ R35 분해 ⑥(상세 계열)의 잔여 — 상세 4모듈이 rows/selection/project-form 을 거쳐 배럴로 되돌아온다.
   //  detail.ts 는 상세 서브트리의 단일 입구라 detail-{meta,sections}→detail 은 그 안의 정상 왕복이다.
-  "web/projects.ts -> web/projects/detail.ts -> web/projects/detail-body.ts",
   //  (#1405 착지: detail-body → project-form 5건 소멸 — '지식 흐름' 섹션이 쓰던 openKnowledgePicker 를
   //   projects/knowledge-picker.ts 잎으로 내렸다. project-form 안에서는 아무도 그걸 쓰지 않았고
   //   읽는 쪽이 detail-knowledge 하나뿐이라 §1 판정 기준에 그대로 맞았다.)
-  "web/projects.ts -> web/projects/detail.ts -> web/projects/detail-meta.ts",
   "web/projects.ts -> web/projects/detail.ts -> web/projects/detail-meta.ts -> web/projects/project-form.ts -> web/projects/rows.ts",
-  "web/projects.ts -> web/projects/detail.ts -> web/projects/detail-meta.ts -> web/projects/project-form.ts -> web/projects/rows.ts -> web/projects/filters.ts",
   "web/projects.ts -> web/projects/detail.ts -> web/projects/detail-meta.ts -> web/projects/project-form.ts -> web/projects/rows.ts -> web/projects/filters.ts -> web/projects/timeline.ts",
   "web/projects.ts -> web/projects/detail.ts -> web/projects/detail-meta.ts -> web/projects/project-form.ts -> web/projects/rows.ts -> web/projects/selection.ts",
   "web/projects.ts -> web/projects/detail.ts -> web/projects/detail-meta.ts -> web/projects/project-form.ts -> web/projects/selection.ts",
   "web/projects.ts -> web/projects/detail.ts -> web/projects/detail-meta.ts -> web/projects/rows.ts",
-  "web/projects.ts -> web/projects/detail.ts -> web/projects/detail-meta.ts -> web/projects/rows.ts -> web/projects/filters.ts",
   "web/projects.ts -> web/projects/detail.ts -> web/projects/detail-meta.ts -> web/projects/rows.ts -> web/projects/filters.ts -> web/projects/timeline.ts",
   "web/projects.ts -> web/projects/detail.ts -> web/projects/detail-meta.ts -> web/projects/rows.ts -> web/projects/selection.ts",
   "web/projects.ts -> web/projects/detail.ts -> web/projects/detail-sections.ts -> web/projects/project-form.ts -> web/projects/rows.ts",
-  "web/projects.ts -> web/projects/detail.ts -> web/projects/detail-sections.ts -> web/projects/project-form.ts -> web/projects/rows.ts -> web/projects/filters.ts",
   "web/projects.ts -> web/projects/detail.ts -> web/projects/detail-sections.ts -> web/projects/project-form.ts -> web/projects/rows.ts -> web/projects/filters.ts -> web/projects/timeline.ts",
   "web/projects.ts -> web/projects/detail.ts -> web/projects/detail-sections.ts -> web/projects/project-form.ts -> web/projects/rows.ts -> web/projects/selection.ts",
   "web/projects.ts -> web/projects/detail.ts -> web/projects/detail-sections.ts -> web/projects/project-form.ts -> web/projects/selection.ts",
   "web/projects.ts -> web/projects/detail.ts -> web/projects/detail-tasks.ts",
   "web/projects.ts -> web/projects/detail.ts -> web/projects/detail-tasks.ts -> web/projects/rows.ts",
-  "web/projects.ts -> web/projects/detail.ts -> web/projects/detail-tasks.ts -> web/projects/rows.ts -> web/projects/filters.ts",
   "web/projects.ts -> web/projects/detail.ts -> web/projects/detail-tasks.ts -> web/projects/rows.ts -> web/projects/filters.ts -> web/projects/timeline.ts",
   "web/projects.ts -> web/projects/detail.ts -> web/projects/detail-tasks.ts -> web/projects/rows.ts -> web/projects/selection.ts",
   "web/projects.ts -> web/projects/detail.ts -> web/projects/detail-tasks.ts -> web/projects/selection.ts",
@@ -97,23 +128,17 @@ const ALLOWED_CYCLES = new Set([
   //   projects/detail-preview.ts 잎으로 내려 상세 입구를 되짚지 않게 했다.)
   // ── ④ R36 분해 ⑦(보드 조립)의 대가 — 배럴이 projects/board.ts 를 물면서 생긴 병렬 경로. board.ts 는
   //  projects.ts 를 되짚지 않는다(단방향) — 위 back-edge 가 걷히면 아래 20건도 함께 사라진다.
-  "web/projects.ts -> web/projects/board.ts -> web/projects/filters.ts",
   "web/projects.ts -> web/projects/board.ts -> web/projects/filters.ts -> web/projects/timeline.ts",
   "web/projects.ts -> web/projects/board.ts -> web/projects/project-form.ts -> web/projects/rows.ts",
-  "web/projects.ts -> web/projects/board.ts -> web/projects/project-form.ts -> web/projects/rows.ts -> web/projects/filters.ts",
   "web/projects.ts -> web/projects/board.ts -> web/projects/project-form.ts -> web/projects/rows.ts -> web/projects/filters.ts -> web/projects/timeline.ts",
   "web/projects.ts -> web/projects/board.ts -> web/projects/project-form.ts -> web/projects/rows.ts -> web/projects/selection.ts",
   "web/projects.ts -> web/projects/board.ts -> web/projects/project-form.ts -> web/projects/selection.ts",
   "web/projects.ts -> web/projects/board.ts -> web/projects/rows.ts",
-  "web/projects.ts -> web/projects/board.ts -> web/projects/rows.ts -> web/projects/filters.ts",
   "web/projects.ts -> web/projects/board.ts -> web/projects/rows.ts -> web/projects/filters.ts -> web/projects/timeline.ts",
   "web/projects.ts -> web/projects/board.ts -> web/projects/rows.ts -> web/projects/selection.ts",
   "web/projects.ts -> web/projects/board.ts -> web/projects/selection.ts",
-  "web/projects.ts -> web/projects/board.ts -> web/projects/sidebar.ts",
-  "web/projects.ts -> web/projects/board.ts -> web/projects/sidebar.ts -> web/projects/filters.ts",
   "web/projects.ts -> web/projects/board.ts -> web/projects/sidebar.ts -> web/projects/filters.ts -> web/projects/timeline.ts",
   "web/projects.ts -> web/projects/board.ts -> web/projects/sidebar.ts -> web/projects/rows.ts",
-  "web/projects.ts -> web/projects/board.ts -> web/projects/sidebar.ts -> web/projects/rows.ts -> web/projects/filters.ts",
   "web/projects.ts -> web/projects/board.ts -> web/projects/sidebar.ts -> web/projects/rows.ts -> web/projects/filters.ts -> web/projects/timeline.ts",
   "web/projects.ts -> web/projects/board.ts -> web/projects/sidebar.ts -> web/projects/rows.ts -> web/projects/selection.ts",
   "web/projects.ts -> web/projects/board.ts -> web/projects/timeline.ts",

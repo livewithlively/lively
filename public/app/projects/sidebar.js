@@ -8,18 +8,16 @@
 //  ※ 보드 조립부(pjvProjectListBoard 클로저의 buildTree/renderArea)는 #1313 R36 에서 projects/board.ts 로 나갔다 —
 //   행·그룹 렌더러(pjvProjRow·pjvProjAddRow·pjvRenderStatusGroups·pjvProjTeamControl·pjvProjDelete·
 //   pjvContainerCmp)는 R33 이 projects/rows.ts 로 가져갔으므로 **직결**로 받는다(배럴 경유 금지).
-//   드래그 싱글턴(pjvSideDrag·pjvFolderDrag)의 소유는 R36 이후 projects/board.ts 지만, 여기선 **배럴을 되짚어**
-//   받는다 — 직결로 바꾸면 sidebar↔board 로 경로가 곱해져 순환이 늘어난다(scripts/check-imports.mjs 실측 참조).
+//   드래그 싱글턴(pjvSideDrag·pjvFolderDrag)은 #1404 에서 projects/state.ts 로 내려갔다 — 여기·board·rows·
+//   selection 넷이 함께 읽는 **보기 상태**라 리프가 원래 집이고, 그 덕에 이 모듈의 배럴 되짚기가 사라졌다.
 import { api, el, sv, toast, visAxisOn } from '../core.js';
 import { overlayBox } from '../learn.js';
-// ⚠ 아래 한 줄은 projects.ts 배럴로 되돌아가는 참조다(드래그 싱글턴 잔류분) — ALLOWED_CYCLES 등록분.
-import { pjvFolderDrag, pjvSideDrag } from '../projects.js';
 import { pjvApplyToolbarFilters } from './filters.js';
 import { pjvBundleIcon } from './icons.js';
 import { PJV_LIST_COLORS, openFolderForm, openListForm, pjvFolderIsArchive, pjvFolderIsSpace, pjvHarmonizeColor, pjvListStatusEditor, pjvSaveListMembers } from './list-forms.js';
 import { pjvPopover } from './popover.js';
 import { pjvContainerCmp, pjvProjAddRow, pjvProjDelete, pjvProjRow, pjvProjTeamControl, pjvRenderStatusGroups } from './rows.js';
-import { pjvBoardMineOnly, pjvListOpen, pjvProjClosedView } from './state.js';
+import { pjvBoardMineOnly, pjvFolderDrag, pjvListOpen, pjvProjClosedView, pjvSideDrag } from './state.js';
 // 그룹 빌드 — 내 리스트(펼침) → 그 외 리스트(접힘) → 미분류('기타'). '내 할당만' 이면 내 프로젝트만 남기고 빈 그룹은 숨김.
 function pjvBuildListGroups(projects, lists, mineIds, meId) {
     const byList = new Map();

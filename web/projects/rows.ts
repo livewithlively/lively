@@ -12,8 +12,8 @@
 //   엣지(rows→taskmodal)로 늘리지 않기 위해서다(순환 축소는 R56 소관).
 import { api, appUrl, el, personFace, toast } from '../core.js';
 import {
-  openProjectSessionForm, pjvAddTask, pjvFolderDrag, pjvOpenTaskModal,
-  pjvRowMore, pjvSaveProjMembers, pjvSetProjStatusCustom,
+  openProjectSessionForm, pjvAddTask, pjvOpenTaskModal,
+  pjvRowMore, pjvSetProjStatusCustom,
 } from '../projects.js';
 import { pjvIcon, pjvSubtaskIcon } from './icons.js';
 import { pjvPopover } from './popover.js';
@@ -25,9 +25,9 @@ import { pjvMeMode, pjvTaskIsMine } from './filters.js';
 // #1313 R34 — '리스트 이동' 팝오버는 projects/list-forms.ts 소유가 됐다(같은 이유로 직결).
 import { pjvMoveProjectList } from './list-forms.js';
 import { pjvGroupCheck, pjvGroupReorderTarget, pjvRowActions, pjvRowCheck, pjvRowGrip, pjvRowTagsEl, pjvTagPopover } from './selection.js';
-import { pjvLocalSortOverride, pjvProjClosedView, pjvReloadKeepScroll } from './state.js';
+import { pjvFolderDrag, pjvLocalSortOverride, pjvProjClosedView, pjvReloadKeepScroll } from './state.js';
 import { PJV_STATUS_CATS, pjvCatMeta, pjvCustomStatusDot, pjvFmtDate, pjvListIsCustomStatus, pjvListStatusDefs, pjvNativeStatusColor, pjvNativeStatusOf, pjvProjStatusMeta, pjvRegisterProjList, pjvResolveProjStatus, pjvStatusIcon, pjvStatusIconBtn, pjvStatusIconStd, pjvStatusReg } from './status.js';
-import { pjvAssigneeControl, pjvDueControl, pjvMemberDirectory, pjvPatchTask, pjvPriorityControl, pjvSaveTask, pjvStatusControl } from './task-controls.js';
+import { pjvAssigneeControl, pjvDueControl, pjvMemberDirectory, pjvPatchTask, pjvPriorityControl, pjvSaveProjMembers, pjvSaveTask, pjvStatusControl } from './task-controls.js';
 
 // 상태 그룹 렌더(사이드바 본문) — 단일 리스트 선택이고 커스텀 상태면 각 상태를 그룹으로(스크린샷),
 //  아니면(전체/폴더/미분류/기본 리스트) 표준 3버킷. #475.
