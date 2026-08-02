@@ -30,6 +30,8 @@ set -euo pipefail
 #   scripts/restage.sh --allow-orphans # ①을 경고로 낮춤 — 백업 태그를 확인하고 정말 버릴 때만
 #
 # 작업은 임시 워크트리에서 한다 — 당신이 지금 체크아웃해 둔 브랜치를 건드리지 않는다.
+# 환경변수: RESTAGE_REMOTE(기본 origin) · RESTAGE_BASE(main) · RESTAGE_STAGE(stage)
+#           RESTAGE_KEEP_BACKUPS(10) — 남겨둘 백업 태그 개수. 0 이면 정리 안 함.
 # ─────────────────────────────────────────────────────────────────────────────
 
 REMOTE="${RESTAGE_REMOTE:-origin}"
@@ -223,7 +225,7 @@ say "▸ 재조립 계획"
 say "    바닥:   ${REMOTE}/${BASE}  (${BASE_SHA:0:8})"
 say "    현재:   ${REMOTE}/${STAGE} (${STAGE_SHA:0:8})"
 if [[ ${#TARGETS[@]} -eq 0 ]]; then
-  say "    다시 머지할 브랜치: 없음 — ${STAGE} 를 ${BASE} 로 되돌리기만 합니다."
+  say "    다시 머지할 브랜치: 없음 — ${STAGE} 를 ${BASE} 기준으로 되돌리기만 합니다."
 else
   say "    다시 머지할 브랜치(${#TARGETS[@]}개):"
   for t in "${TARGETS[@]}"; do say "      - ${t}"; done
@@ -246,6 +248,24 @@ say "▸ 백업 태그 ${TAG} → ${STAGE_SHA:0:8}"
 git tag -f "$TAG" "$STAGE_SHA"
 git push --quiet "$REMOTE" "refs/tags/${TAG}"
 say "  복구가 필요하면: git push --force ${REMOTE} ${TAG}^{commit}:${STAGE}"
+
+# 오래된 백업 태그 정리 — 공개 레포의 태그 목록은 사람이 보는 표면이라, 안 지우면
+# stage-backup-* 이 릴리스 태그를 파묻는다. 이름이 시간순 정렬되므로 최근 N개만 남긴다.
+# N=10 이면 10번 전 재조립까지 되돌릴 수 있다(그보다 옛 stage 를 복구할 일은 없다).
+KEEP_TAGS="${RESTAGE_KEEP_BACKUPS:-10}"
+ALL_TAGS="$(git ls-remote --tags "$REMOTE" 'refs/tags/stage-backup-*' 2>/dev/null \
+             | sed 's|.*refs/tags/||' | grep -v '\^{}$' | sort || true)"
+N_TAGS="$(printf '%s' "$ALL_TAGS" | grep -c . || true)"
+if [[ "$KEEP_TAGS" -gt 0 && "${N_TAGS:-0}" -gt "$KEEP_TAGS" ]]; then
+  # head -n -N 은 GNU 전용이라 macOS 에서 안 된다 — 지울 개수를 직접 세서 앞에서 자른다.
+  DROP="$(printf '%s\n' "$ALL_TAGS" | head -n "$((N_TAGS - KEEP_TAGS))")"
+  say "  오래된 백업 태그 $((N_TAGS - KEEP_TAGS))개 정리(최근 ${KEEP_TAGS}개 유지)"
+  while read -r t; do
+    [[ -n "$t" ]] || continue
+    git push --quiet "$REMOTE" --delete "refs/tags/${t}" 2>/dev/null || true
+    git tag -d "$t" >/dev/null 2>&1 || true
+  done <<< "$DROP"
+fi
 
 # ── §5. 임시 워크트리에서 재조립 ─────────────────────────────────────────────
 # 당신이 체크아웃해 둔 브랜치를 건드리지 않기 위해 별도 워크트리를 쓴다.
