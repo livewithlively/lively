@@ -83,12 +83,17 @@ const sees = async (who, id) =>
   //  ⚠ 배선 — 목록 자체가 안 오면 아래 "늘었나"가 0 vs 0 으로 공허하게 통과한다(실제로 404 로 그랬다).
   chk("[배선] 작업기록 목록이 실제로 온다", beforeLog.status === 200 && Array.isArray(rowsOf(beforeLog.body)),
     `status=${beforeLog.status} keys=${Object.keys(beforeLog.body || {})}`);
-  const cnt0 = rowsOf(beforeLog.body).filter((a) => String(a.title || "").includes("공개범위 사용")).length;
-  await setAxis("project", false, true);
+  //  ⚠ 개수 증가로 판정하면 안 된다 — 반복 실행으로 최근 N건이 이미 '공개범위 사용' 으로 포화되면
+  //   새 기록이 생겨도 창 안의 개수는 그대로다(실제로 before=28 after=28 로 거짓 실패했다).
+  //   이번 실행만의 사유를 심고 **그게 실려 있는지**로 본다.
+  const mark = "e2e-axes-" + Date.now();
+  await rest("admin", "/api/ui/vis/axes", { method: "POST",
+    body: JSON.stringify({ axis: "project", on: false, confirm: true, reason: mark }) });
   const afterLog = await rest("admin", "/api/ui/activity/list?limit=30");
   const hits = rowsOf(afterLog.body).filter((a) => String(a.title || "").includes("공개범위 사용"));
-  chk("★ 축을 끄면 작업기록이 실제로 남는다", hits.length > cnt0,
-    `before=${cnt0} after=${hits.length} status=${afterLog.status}`);
+  const mine = hits.filter((a) => String(a.summary || "").includes(mark));
+  chk("★ 축을 끄면 작업기록이 실제로 남는다", mine.length === 1,
+    `mark=${mark} matched=${mine.length} status=${afterLog.status}`);
   chk("  그 기록이 무엇이 공개됐는지 말해 준다", String(hits[0]?.title || "").includes("전원 공개"),
     JSON.stringify(hits[0]?.title));
   await setAxis("project", true);
