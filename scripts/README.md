@@ -18,6 +18,7 @@
 - `run-tests.mjs` — 유닛 체인 러너(위 ①·②)
 - `build-node-agent.mjs` — 워커 노드 에이전트 esbuild 번들
 - `restart-gateway.sh` — 라이브 박스 게이트웨이 빌드·재기동(빌드 성공 시에만 재시작)
+- `restage.sh` — `stage` 브랜치 재조립(main 을 새 바닥으로 깔고 얹혀 있던 브랜치 재머지). **손으로 `reset --hard` 하지 말 것** — PR 없는 브랜치·stage 직접 커밋이 조용히 사라진다. 이 스크립트는 그걸 검사해 막고, 백업 태그를 남긴다
 - `check-css-drops.mjs` — CSS 셀렉터 유실 가드(#317)
 - `register-*.mjs|sh` — 클라이언트/훅 등록 일회 도구
 - `seed-notion-fixture.mjs` — 커넥터 픽스처 시드
