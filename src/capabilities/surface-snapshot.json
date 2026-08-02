@@ -2666,6 +2666,46 @@
   "input_hash": "6cf966c863571d19"
  },
  {
+  "name": "source_vis_policy_list",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/source-vis-policy"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "source_vis_policy_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/source-vis-policy"
+  ],
+  "input_hash": "25a8d520f092b10d"
+ },
+ {
+  "name": "source_vis_policy_delete",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/source-vis-policy/delete"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "source_vis_policy_backfill",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/source-vis-policy/backfill"
+  ],
+  "input_hash": "a3ca2db962674078"
+ },
+ {
   "name": "vis_axis_list",
   "scope": "admin",
   "mcp": true,
