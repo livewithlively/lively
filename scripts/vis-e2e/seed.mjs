@@ -63,7 +63,17 @@ try {
   const sub = await one(`INSERT INTO project(level, parent_id, name, status, status_category)
       VALUES('subtask',$1,'VIS_SUBTASK_LOCKED','todo','unstarted') RETURNING id`, [task.id]);
 
+  // #1291 v4 — 커넥터 수집물 흉내. mirrorSourceV6 가 넣는 모양 그대로(external_system + fields.container_*)라
+  //  백필·정책 매칭이 실제 데이터에서 도는지 볼 수 있다.
+  const srcEng = await one(`INSERT INTO source(kind, title, body_md, provenance, external_system, external_instance, external_id, fields)
+      VALUES('message','V4_SRC_ENG','엔지니어 채널 원문','observed','slack','t1','v4-eng-1',
+             '{"container_ref":"C-ENG","container_name":"eng-only"}'::jsonb) RETURNING id`);
+  const srcGen = await one(`INSERT INTO source(kind, title, body_md, provenance, external_system, external_instance, external_id, fields)
+      VALUES('message','V4_SRC_GEN','일반 채널 원문','observed','slack','t1','v4-gen-1',
+             '{"container_ref":"C-GEN","container_name":"general"}'::jsonb) RETURNING id`);
+
   Object.assign(out, {
+    v4SrcEngId: srcEng.id, v4SrcGenId: srcGen.id,
     lockedListId: lockedList.id, openListId: openList.id, spaceLockedListId: spaceLockedList.id,
     lockedProjectId: lockedProject.id, openProjectId: openProject.id,
     lockedTaskId: task.id, lockedSubtaskId: sub.id,

@@ -9,6 +9,8 @@ import { type WriteCtx } from "./content-audit.js";
 import { extractWikiLinkTargets } from "./wikilink.js";   // #907 본문 [[…]] → 자동 엣지(문법층은 순수 함수로 분리)
 import { visibleListIds, type Viewer } from "./visibility.js";
 import { knowledgeVisSql, knowledgeVisWhere, slugify, auditKnowledge } from "./knowledge-common.js";
+import { inheritSourceVisibility, type InheritResult } from "./source-vis-policy.js";
+import { logger } from "../log.js";
 
 // ════════ #290 지식↔지식 링크(knowledge_link) — 빠진 1급 프리미티브. 단방향 1행 저장 + 역방향 쿼리로 백링크(MediaWiki/Obsidian 모델). ════════
 //  relation=related(대칭)|refines|contradicts|depends_on. FK 가 양 끝 지식 존재를 보장(없으면 INSERT 거부 → capability 에서 클린 에러).
@@ -169,12 +171,18 @@ export async function sweepWikiLinks(): Promise<{ docs: number; scanned: number;
 }
 
 // 지식→자료 인용(knowledge_source). relation=derived_from(증류)|cites(참조).
-export async function linkKnowledgeSource(name: string, sourceId: number, relation = "derived_from", ctx?: WriteCtx): Promise<void> {
+export async function linkKnowledgeSource(name: string, sourceId: number, relation = "derived_from", ctx?: WriteCtx): Promise<InheritResult | null> {
   await itemsPool.query(
     `INSERT INTO knowledge_source(name, source_id, relation, created_at)
      VALUES($1,$2,$3,now()) ON CONFLICT (name, source_id, relation) DO NOTHING`,
     [name, sourceId, relation]);
   await auditKnowledge(name, "link_source", null, { source_id: sourceId, relation }, ctx);
+  // 증류물은 원본의 공개범위를 물려받는다(#1291 v4) — 'cites'(단순 참조)는 제외한다: 인용했다는 이유로
+  //  참조한 쪽까지 잠그면 공개 지식이 링크 하나로 잠기는 사고가 난다. 파생(derived_from)만 내용이 흘러든다.
+  if (relation !== "derived_from") return null;
+  const inherited = await inheritSourceVisibility(name, sourceId)
+    .catch((e) => { logger.warn({ name, sourceId, err: (e as Error)?.message }, "[source-vis] 상속 실패"); return null; });
+  return inherited;
 }
 export async function unlinkKnowledgeSource(name: string, sourceId: number, relation: string, ctx?: WriteCtx): Promise<void> {
   await itemsPool.query(`DELETE FROM knowledge_source WHERE name=$1 AND source_id=$2 AND relation=$3`, [name, sourceId, relation]);

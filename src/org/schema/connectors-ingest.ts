@@ -27,6 +27,37 @@ export async function initConnectorRegistry(pool: Pool): Promise<void> {
   `);
 }
 
+// #1291 v4 — 커넥터별 자료 공개범위 정책. 수집물이 태어날 때의 공개범위를 커넥터(+채널)별로 정한다.
+//  자료의 생산자는 사람이 아니라 커넥터라 개별 잠금이 현실적이지 않다(슬랙만 1만건 규모) → 생산 지점에 정책.
+//  org_ingest_policy(무엇을 들일까)와 직교: 여기는 **들어온 것을 누가 보나**. 매칭 축이 같아 나란히 읽힌다.
+export async function initSourceVisPolicy(pool: Pool): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_source_vis_policy(
+      id BIGSERIAL PRIMARY KEY,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      match_system  TEXT NOT NULL,
+      match_channel TEXT,
+      visibility TEXT NOT NULL DEFAULT 'open',
+      priority INT NOT NULL DEFAULT 0,
+      note TEXT,
+      created_by TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
+    ${ensureCheck("org_source_vis_policy", {
+      org_source_vis_policy_visibility_chk: "visibility IN ('open','members')",
+    })}
+    CREATE INDEX IF NOT EXISTS org_source_vis_policy_system_idx ON org_source_vis_policy(match_system) WHERE enabled;
+    CREATE TABLE IF NOT EXISTS org_source_vis_policy_member(
+      policy_id BIGINT NOT NULL REFERENCES org_source_vis_policy(id) ON DELETE CASCADE,
+      subject_kind TEXT NOT NULL DEFAULT 'member',
+      member_id TEXT NOT NULL,
+      PRIMARY KEY (policy_id, subject_kind, member_id));
+    ${ensureCheck("org_source_vis_policy_member", {
+      org_source_vis_policy_member_kind_chk: "subject_kind IN ('member','team')",
+    })}
+  `);
+}
+
 export async function initIngestPolicyAndDistillers(pool: Pool): Promise<void> {
   // ── org_ingest_policy — 지식 인입 허용선 정책(#638, #783 확장). 오너가 관리탭에서 조절하는 자동화 게이트. ──
   //  매치 규칙 0개면 디폴트 auto(현행 무변 — 오너가 켠 만큼만 gate). 평가 = resolveIngestPolicy(src/org/ingest/ingest-policy.ts).
