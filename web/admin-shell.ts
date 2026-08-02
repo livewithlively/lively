@@ -10,7 +10,8 @@
 import { applyReveal, cardHead, el, errorNote, hasScope, state, toast } from './core.js';
 import { skeleton } from './ui-primitives.js';
 import { ingestPolicyPanel, reviewNavBadge } from './review.js';
-import { visibilityAxesPanel } from './visibility-axes.js';   // #1291 맥락 유형별 공개범위 켜기/끄기   // #783 지식 검토 게이트 + 검토 큐 (+ #802 nav 대기 배지)
+import { visibilityAxesPanel } from './visibility-axes.js';
+import { sourceVisPolicyPanel } from './source-vis-policy.js';   // #1291 맥락 유형별 공개범위 켜기/끄기   // #783 지식 검토 게이트 + 검토 큐 (+ #802 nav 대기 배지)
 import { distillersPanel } from './distillers.js';                                    // #1289 자료 증류기(source→지식 생산 라인) 설정
 import { loadAdmin, registerPanel, rerenderPanel } from './admin-rerender.js';         // 패널 재렌더 레지스트리(셸↔패널 순환 절단)
 import { sectionHead, segTabs } from './admin-widgets.js';
@@ -149,6 +150,9 @@ const ADMIN_SECTIONS = [
   //  여기선 축 자체를 켜고 끈다. 축이 5개(프로젝트·지식·자료·공유폴더·세션 기록범위)로 늘면서 전부가
   //  필요하지 않은 조직엔 정보 흐름만 복잡해지기 때문이다.
   { key: 'visibility-axes', label: '맥락 공개범위', meaning: null, group: 'context' },
+  // 자료 공개범위(#1291 v4) — 커넥터로 수집되는 자료를 누가 보나. [맥락 공개범위]가 '이 축을 쓸지'라면
+  //  여기는 '자료 축을 실제로 어떻게 가를지'다. 생산자가 커넥터라 개별 잠금이 현실적이지 않아 생산 지점에 건다.
+  { key: 'source-vis-policy', label: '자료 공개범위', meaning: null, group: 'context' },
   // #1153 — 카테고리(분류축) CRUD 는 [분류체계] 탭(#/categories)으로 이관됐다. #837 은 정의·범위의 주인을
   //  관리탭으로 일원화했었지만, 분류체계 정립·재정립은 조직 '설정'이 아니라 상시 업무라 탭이 제 자리다.
   //  구 딥링크(#/system/wiki-categories)는 SECTION_EXIT 가 그 탭으로 보낸다.
@@ -226,7 +230,7 @@ const SECTION_EXIT = { 'review-queue': '#/knowledge/review', 'wiki-categories': 
 // admin 권한 전용(쓰기·인프라·감사). #318 호출통계·#549 변경감사는 전 구성원의 변경·before/after 를 노출하므로 admin.
 // #1289 'distillers' 는 **관리자 전용이 아니다** — 서버가 memory(워킹레벨) scope 를 요구한다. 팀이 자기 채널의
 //  증류 기준을 직접 조절하는 게 이 기능의 취지라, admin 을 요구하면 실무자가 관리자를 기다려야 한다.
-const ADMIN_ONLY = ['member-add', 'member-access', 'credentials', 'connectors', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'logs', 'sessions', 'embeddings', 'automation', 'audit', 'ingest-policy', 'session-share', 'visibility-axes'];
+const ADMIN_ONLY = ['member-add', 'member-access', 'credentials', 'connectors', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'logs', 'sessions', 'embeddings', 'automation', 'audit', 'ingest-policy', 'session-share', 'visibility-axes', 'source-vis-policy'];
 const RUNTIME_ONLY = ['agent-assets']; // runtime 권한 전용(멤버 머신에서 도는 것의 정의)
 // [도구]는 두 권한의 합집합 — 사내 API 도구·빌트인은 runtime, 외부 MCP 서버 등록은 admin. 둘 중 하나라도 있으면
 //  섹션을 보여주고, 안에서 각 서브탭을 권한별로 켠다(구조상 한 섹션=한 scope 전제가 깨지는 유일한 자리라 명시한다).
@@ -354,6 +358,7 @@ registerPanel('session-share', (detail, data) => sessionShareEditor(detail, data
 registerPanel('embeddings', (detail, data) => embeddingsEditor(detail, data));
 registerPanel('repos', (detail, data) => reposPanel(detail, data));
 registerPanel('visibility-axes', (detail) => visibilityAxesPanel(detail));
+registerPanel('source-vis-policy', (detail) => sourceVisPolicyPanel(detail));
 registerPanel('ingest-policy', (detail, data) => ingestPolicyPanel(detail, data));
 registerPanel('distillers', (detail, data) => void distillersPanel(detail, data));
 // ── ② 서브패널 제자리 재렌더 ──
