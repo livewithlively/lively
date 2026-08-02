@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- 템플릿: deploy/mac/provision.sh 가 @APP_DIR@/@NODE_BIN@/@PATH@ 치환 후 ~/Library/LaunchAgents/ 에 설치. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>io.lvly.lively</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>@NODE_BIN@</string>
+    <string>--env-file-if-exists=.env</string>
+    <string>dist/index.js</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>@APP_DIR@</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- 터미널 세션이 spawn 하는 claude/codex/bash/git PATH. -->
+    <key>PATH</key>
+    <string>@PATH@</string>
+    <!-- ⚠ UTF-8 로케일 필수 — 없으면 tmux 세션 파싱이 깨져 웹터미널 입장 불가. -->
+    <key>LANG</key>
+    <string>en_US.UTF-8</string>
+    <key>LC_ALL</key>
+    <string>en_US.UTF-8</string>
+    <key>LC_CTYPE</key>
+    <string>en_US.UTF-8</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+    <key>NetworkState</key>
+    <true/>
+  </dict>
+
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>@APP_DIR@/logs/gateway.log</string>
+  <key>StandardErrorPath</key>
+  <string>@APP_DIR@/logs/gateway.log</string>
+
+  <key>ProcessType</key>
+  <string>Interactive</string>
+
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key>
+    <integer>8192</integer>
+  </dict>
+</dict>
+</plist>

@@ -1,0 +1,206 @@
+// HMAC fail-closed 웹훅 라우터 — 구 domain-map/server.mjs 의 handleWebhook 이식.
+// POST /api/webhook/:provider (github|gitlab 외 404). bearer 인증 밖(자체 fail-closed 인증):
+// 503(secret 미설정) → 401(서명 불일치) → ping 200 → 검증 후에만 JSON.parse → ignored 200 들
+// → ensureClone(git execFile argv, 토큰/URL 절대 비로깅) → git diff 파싱 → core.refresh.
+// raw bytes 가 HMAC 의 대상이므로 express.raw 를 이 라우터 안에서 마운트한다 — index.ts 는
+// 이 라우터를 전역 express.json() '이전'에 mount 해야 한다(스트림 선소비 방지).
+import express from "express";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import { httpErr } from "./core/types.js";
+import { findRepoByNames } from "./core/repos.js";
+import { refresh } from "./core/refresh.js";
+import { isAuthError, describeGitError, hostOf } from "../org/credentials/git-credential-store.js";
+import { git as gitExec, ensureClone as ensureCloneRaw, sanitizeName, parseDiff } from "./git-sync.js";
+
+// sanitizeName 은 구 webhook.ts 표면(테스트·소비자) — 구현은 git-sync 단일 출처, 여기선 재수출로 표면 유지.
+export { sanitizeName };
+
+const WEBHOOK_BODY_CAP = "2mb";               // 구 2MB cap → express.raw limit (초과 = 413)
+const GIT_TIMEOUT_MS = 60_000;
+const ZERO_SHA = /^0{40}$/;                   // git "all zeros" => no parent (new branch / first push)
+const SHA_RE = /^[0-9a-f]{7,40}$/;
+
+// 웹훅 예산(60s)을 묶은 git 실행기 — 구 로컬 git() 과 동일 시그니처라 호출부 무변경.
+const git = (args: string[], cwd?: string, extraEnv?: Record<string, string>) =>
+  gitExec(args, cwd, extraEnv, { timeoutMs: GIT_TIMEOUT_MS });
+
+// Constant-time compare of two utf8 strings (length-guarded so timingSafeEqual
+// never throws on a length mismatch — and the guard itself doesn't early-return
+// on a content difference).
+function safeEqualStr(a: unknown, b: unknown): boolean {
+  const ab = Buffer.from(String(a), "utf8");
+  const bb = Buffer.from(String(b), "utf8");
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
+
+// Verify the request signature. Returns true/false; never throws, never logs
+// secret material. Mismatch/missing => caller returns 401 with no detail.
+export function verifyWebhook(provider: string, secret: string, rawBody: Buffer, headers: Record<string, unknown>): boolean {
+  if (provider === "github") {
+    const sig = (headers["x-hub-signature-256"] || "").toString();
+    if (!sig.startsWith("sha256=")) return false;
+    const expected = "sha256=" + createHmac("sha256", secret).update(rawBody).digest("hex");
+    return safeEqualStr(sig, expected);
+  }
+  if (provider === "gitlab") {
+    const token = (headers["x-gitlab-token"] || "").toString();
+    if (!token) return false;
+    // HMAC both sides → equal length always, removes the secret-length side channel.
+    const h = (v: string) => createHmac("sha256", secret).update(v).digest("hex");
+    return safeEqualStr(h(token), h(secret));
+  }
+  return false;
+}
+
+// Extract the branch from a ref like 'refs/heads/main' -> 'main'. Tags / other
+// refs (refs/tags/*) yield null so they're treated as non-default-branch.
+export function branchFromRef(ref: unknown): string | null {
+  const m = /^refs\/heads\/(.+)$/.exec(String(ref ?? ""));
+  return m ? m[1] : null;
+}
+
+// Normalize a push event across providers into {ref, before, after, names[]}.
+// `names` lists candidate identifiers (full + short) to match a repo row by.
+export function parsePushEvent(provider: string, body: any): { ref: unknown; before: unknown; after: unknown; names: string[] } {
+  if (provider === "github") {
+    const repo = body.repository ?? {};
+    const names = [repo.full_name, repo.name].filter(Boolean).map(String);
+    return { ref: body.ref, before: body.before, after: body.after, names };
+  }
+  // gitlab push hook
+  const proj = body.project ?? {};
+  const names = [proj.path_with_namespace, proj.name].filter(Boolean).map(String);
+  return { ref: body.ref, before: body.before, after: body.after, names };
+}
+
+// 클론 보장 + **웹훅 고유 에러 번역** — 구현은 git-sync.ensureClone 단일 출처, 401/502 httpErr 번역만 여기 잔류
+//  (호출부 의미 보존: 미검증/인증실패는 401 안내, 그 외 clone/fetch 실패는 502. git_url(토큰 포함 가능) 절대 비노출).
+//  ⚠ 번역 스코프는 clone/fetch 만(onGitError) — 이름 검증 400 은 그 앞, prepareGitAuth 실패는 종전대로 raw 전파.
+async function ensureClone(repoName: string, gitUrl: string): Promise<string> {
+  if (!sanitizeName(repoName)) throw httpErr(400, "invalid repo name for clone dir");
+  return ensureCloneRaw(repoName, gitUrl, {
+    timeoutMs: GIT_TIMEOUT_MS,
+    onGitError: (e) => {
+      // Scrub: git errors can echo the remote URL (token) → git_url 절대 비노출. 인증계열은 401 안내로만 분류.
+      if (isAuthError((e as { stderr?: unknown })?.stderr ?? (e as Error)?.message ?? e)) {
+        throw httpErr(401, `git 인증 실패 — 호스트 '${hostOf(gitUrl) ?? "?"}' 게이트웨이 SSH 키 미등록/불일치(관리탭 ▸ 게이트웨이 git 계정)`);
+      }
+      throw httpErr(502, "git clone/fetch 실패: " + describeGitError(e, gitUrl));
+    },
+  });
+}
+
+async function handleWebhook(req: express.Request, res: express.Response, provider: string): Promise<void> {
+  if (provider !== "github" && provider !== "gitlab") { res.status(404).json({ error: "unknown provider" }); return; }
+
+  // express.raw 가 채워준 raw bytes (HMAC 의 대상 — 전역 JSON 파서보다 먼저 마운트돼야 함).
+  const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+
+  // Secret required (fail-closed): unconfigured => 503, not 401.
+  const secret = (process.env.WEBHOOK_SECRET || "").toString();
+  if (!secret) { res.status(503).json({ error: "webhook not configured" }); return; }
+
+  // Verify signature/token (constant-time). Any failure => 401, no detail.
+  if (!verifyWebhook(provider, secret, raw, req.headers as Record<string, unknown>)) {
+    res.status(401).json({ error: "unauthorized" }); return;
+  }
+
+  // GitHub ping (and other non-push events) => ack without acting.
+  const ghEvent = (req.headers["x-github-event"] || "").toString().toLowerCase();
+  if (provider === "github" && ghEvent === "ping") { res.status(200).json({ ok: true }); return; }
+
+  // Parse JSON only AFTER verification.
+  let body: any;
+  try { body = JSON.parse(raw.toString("utf8") || "{}"); }
+  catch { res.status(400).json({ error: "invalid JSON body" }); return; }
+  if (!body || typeof body !== "object" || Array.isArray(body)) { res.status(400).json({ error: "JSON body must be an object" }); return; }
+
+  // GitHub sends events other than push to the same URL; only act on push.
+  if (provider === "github" && ghEvent && ghEvent !== "push") { res.status(200).json({ ignored: "non-push event" }); return; }
+  // GitLab object_kind guard (push / tag_push); ignore anything else.
+  if (provider === "gitlab" && body.object_kind && body.object_kind !== "push") { res.status(200).json({ ignored: "non-push event" }); return; }
+
+  const ev = parsePushEvent(provider, body);
+  const branch = branchFromRef(ev.ref);
+  if (!branch) { res.status(200).json({ ignored: "non-default branch" }); return; } // tags/other refs
+
+  // Match a repo row by any candidate name (full + short).
+  const repo = await findRepoByNames(ev.names);
+  if (!repo) { res.status(200).json({ ignored: "unknown repo" }); return; }
+
+  // Only act on the repo's default branch.
+  const defaultBranch = repo.default_branch || "main";
+  if (branch !== defaultBranch) { res.status(200).json({ ignored: "non-default branch" }); return; }
+
+  if (!repo.git_url) { res.status(200).json({ ignored: "no git_url configured" }); return; }
+
+  // Sync the local clone, then diff before..after.
+  const cloneDir = await ensureClone(repo.name, repo.git_url);
+
+  // Validate SHAs BEFORE handing to git (defense-in-depth; argv already prevents
+  // shell injection, but garbage refs must not reach git as a range).
+  const after = String(ev.after ?? "");
+  if (!SHA_RE.test(after)) { res.status(400).json({ error: "invalid after sha" }); return; }
+
+  let before = String(ev.before ?? "");
+  let baseNote: string | undefined;
+  if (!before || ZERO_SHA.test(before) || !SHA_RE.test(before)) {
+    // New branch / first push (all-zeros) or garbage: fall back to the last
+    // refreshed sha if we have one; else skip diffing against garbage.
+    if (repo.last_refreshed_sha && SHA_RE.test(repo.last_refreshed_sha)) {
+      before = repo.last_refreshed_sha;
+      baseNote = "before was zero/invalid; fell back to last_refreshed_sha";
+    } else {
+      res.status(200).json({ ignored: "no usable base sha (new branch / first push)", head: after }); return;
+    }
+  }
+
+  let diffOut: string;
+  try {
+    const r = await git(["-C", cloneDir, "diff", "--name-status", "-M50", before, after]);
+    diffOut = r.stdout || "";
+  } catch {
+    // before/after may not be in the local clone yet (force-push / stale). Don't 502
+    // (provider retry storms) — ack and let the next push / scheduled refresh reconcile.
+    res.status(200).json({ ignored: "sha not in clone yet, will resync", base: before, head: after }); return;
+  }
+
+  const changes = parseDiff(diffOut);
+
+  // Apply via the existing audited + transactional deterministic refresh.
+  // granularity:'file' — git diff speaks FILE paths but our code_units are
+  // module-level; the store aggregates these file changes onto the existing
+  // code_unit granularity (longest-prefix ownership; dir-move = file-rename cluster
+  // → module rename; new dir = candidate unit; add/modify/delete inside an existing
+  // module = no-op) BEFORE the deterministic refresh applies them.
+  const result = await refresh(
+    repo.name,
+    { base: before, head: after, changes, granularity: "file" },
+    { type: "agent", id: "webhook:" + provider },
+  );
+  // note 가 undefined 면 JSON 직렬화에서 키 생략 — 구 응답과 동일.
+  res.status(200).json({ tally: result.tally, base: before, head: after, changes: changes.length, note: baseNote });
+}
+
+export function domainmapWebhookRouter(): express.Router {
+  const router = express.Router();
+  // raw bytes 필수: HMAC 은 정확한 원문 바이트 대상. 초과(2MB)는 body-parser 가 413 throw.
+  router.use(express.raw({ type: () => true, limit: WEBHOOK_BODY_CAP }));
+  router.post("/:provider", (req, res, next) => {
+    handleWebhook(req, res, req.params.provider).catch(next);
+  });
+  // 구 server.mjs 의 비매칭 응답 동결: GET /api/webhook/* ·다세그 POST 등은 게이트웨이 인증/404
+  // 스택으로 흘리지 않고(이미 express.raw 가 body 를 소비한 뒤다) 구와 동일한 404 를 직접 반환.
+  router.all("*", (_req, res) => { res.status(404).json({ error: "unknown endpoint" }); });
+  // 에러 번역 — 구 server.mjs sendErr 와 동일 응답: {error: message} + e.status(기본 500).
+  // body-parser 의 entity.too.large 는 구 readRawBody 의 413 'payload too large' 문구로 번역.
+  router.use(((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    if (res.headersSent) return;
+    if (err?.type === "entity.too.large" || err?.status === 413) {
+      res.status(413).json({ error: "payload too large" }); return;
+    }
+    res.status(err?.status ?? 500).json({ error: err?.message ?? String(err) });
+  }) as express.ErrorRequestHandler);
+  return router;
+}

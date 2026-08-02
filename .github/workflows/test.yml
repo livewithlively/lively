@@ -1,0 +1,58 @@
+name: test
+# 테스트 CI (#880) — 종전엔 release.yml(태그 빌드)뿐이라 테스트가 CI 에서 안 돌았다.
+#  ① 목 유닛 체인(npm test, DB 불요)  ② **device-auth PG 통합 테스트**(실제 Postgres 필요 — 원자적 발급·
+#     slow_down·ON-CONFLICT·DB시각 만료는 목 pg 로 검증 불가, #880 설계 R2-NEW2).
+#  ⚠ items DB 는 pgvector 이미지여야 한다(items-db-pgvector-image-invariant, #172) — plain postgres 금지.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: lively_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm run build
+      # 산출물 신선도 게이트(#1313 R4) — public/app 은 web/*.ts 의 tsc 산출물을 **커밋하는 관례**다
+      #  (라이브 박스가 working tree 를 정적 서빙 → git pull 만으로 프론트 갱신). 소스만 고치고 재빌드를
+      #  빠뜨린 커밋은 방금 빌드한 산출물과 어긋나 여기서 실패한다 — 관례를 기계로 강제.
+      - name: 산출물 신선도 (public/app 드리프트 0)
+        run: git diff --exit-code -- public/app
+      # ① 전체 유닛 체인(#1313 R4) — scripts/run-tests.mjs 가 소스 글롭으로 자동 발견(145+건, 실 DB 불요:
+      #    DB 필요한 것은 *.itest.mjs/*.pg-test.mjs 로 제외 관례, static-context 는 env 없으면 자체 skip).
+      #    종전엔 케이스 ⑨(detached 훅) flaky 우려로 device-auth+CLI 2건만 돌렸으나(#880 주석), 그 테스트에는
+      #    폴링 대기 하드닝(waitFor 60s — kit/setup/self-update.test.mjs ⑨ 주석)이 들어가 전체를 승격한다.
+      - name: 전체 유닛 테스트 (run-tests 러너)
+        run: node scripts/run-tests.mjs
+      # ② 테스트 DB 스키마 자가마이그레이션 — **initAllSchemas 전체 체인**(item→org→domainmap→v6, 부팅과 동일
+      #    단일 출처 boot/schemas.ts 경유, #1313 R19a). 종전엔 item+org 2계열만 돌아, 시드 한 줄이 제약을 어겨
+      #    뒤 계열(v6 ALTER)이 통째로 안 도는 회귀(2026-07-20 실사고 계열)를 CI 가 못 잡았다. 신규 DB init 스모크 겸용.
+      #    ITEMS_DATABASE_URL 은 이 스텝부터. (services.postgres 가 pgvector 이미지라 v6 임베딩 스키마도 실경로로 돈다.)
+      - name: 스키마 마이그레이션 (테스트 Postgres · initAllSchemas 전체 체인)
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: >-
+          node --input-type=module -e "
+          import('./dist/boot/schemas.js').then(m => m.initAllSchemas())
+            .then(() => { console.log('schema ready'); process.exit(0); })
+            .catch(e => { console.error(e); process.exit(1); });"
+      # ③ device-auth PG 통합(실 트랜잭션·now()·RETURNING rowCount) — 두 HIGH 통제(원자성·PKCE 바인딩) 검증.
+      - name: device-auth PG 통합 테스트
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/auth/device-auth.pg-test.mjs

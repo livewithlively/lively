@@ -1,0 +1,47 @@
+{
+  "name": "lively",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted MCP gateway — one governed source of organizational context for every AI agent your team runs",
+  "license": "AGPL-3.0-only",
+  "//license": "Per-directory: kit/ is Apache-2.0, src/ee/ is the Lively Enterprise License. See LICENSING.md.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p web/tsconfig.json && tsc -p web/standalone/tsconfig.json && node scripts/build-node-agent.mjs && node scripts/build-standalone.mjs",
+    "build:web": "tsc -p web/tsconfig.json",
+    "start": "node --env-file-if-exists=.env dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit && npm run typecheck:web && npm run typecheck:standalone",
+    "typecheck:web": "tsc -p web/tsconfig.json --noEmit",
+    "typecheck:standalone": "tsc -p web/standalone/tsconfig.json --noEmit",
+    "test": "npm run build && node scripts/run-tests.mjs",
+    "test:itest": "npm run build && node scripts/run-tests.mjs --itest",
+    "dm": "node --env-file-if-exists=.env dist/domainmap/cli.js",
+    "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.19.0",
+    "aws-ssl-profiles": "^1.1.2",
+    "express": "^4.19.2",
+    "mysql2": "^3.22.6",
+    "node-pty": "1.2.0-beta.14",
+    "node-sql-parser": "^5.3.0",
+    "pg": "^8.13.1",
+    "pg-connection-string": "^2.13.0",
+    "pino": "^9.5.0",
+    "ws": "^8.21.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.9.0",
+    "@types/pg": "^8.11.10",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}

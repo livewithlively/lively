@@ -1,0 +1,41 @@
+# CLA 서명 게이트 — 첫 PR 에서 봇이 서명을 요구하고, 서명 전까지 머지를 막는다.
+#  문안은 CLA.md, 서명 기록은 별도 브랜치(cla-signatures)의 JSON 에 누적된다.
+#
+# ⚠ 공개 전 설정 필요:
+#   1) 서명 기록 브랜치(cla-signatures)를 레포에 만들어 둘 것(빈 orphan 브랜치면 충분)
+#   2) 서명 기록 브랜치에 쓸 PAT 를 secrets.CLA_SIGNATURES_TOKEN 으로 등록(repo scope)
+#      — 기본 GITHUB_TOKEN 은 워크플로 파일이 있는 브랜치 밖으로 커밋할 수 없어 별도 토큰이 필요하다.
+name: CLA
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: write
+  statuses: write
+
+jobs:
+  cla:
+    runs-on: ubuntu-latest
+    steps:
+      - name: CLA 서명 확인
+        if: (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'
+        uses: contributor-assistant/github-action@v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_SIGNATURES_TOKEN }}
+        with:
+          path-to-signatures: 'signatures/version1/cla.json'
+          path-to-document: 'https://github.com/livewithlively/lively/blob/main/CLA.md'
+          branch: 'cla-signatures'
+          allowlist: dependabot[bot],renovate[bot],*[bot]
+          custom-notsigned-prcomment: |
+            이 프로젝트는 기여 전 짧은 CLA 서명이 필요합니다 — [CLA.md](CLA.md) 를 읽고,
+            아래 문장을 이 PR 에 댓글로 남겨주세요:
+          custom-pr-sign-comment: 'I have read the CLA Document and I hereby sign the CLA'
+          custom-allsigned-prcomment: 'CLA 서명이 확인되었습니다. 감사합니다.'

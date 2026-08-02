@@ -1,0 +1,630 @@
+/* ── 커스텀 필드(클릭업형 "+ 컬럼 추가") — 우리 톤(단색 라인 아이콘·차분한 칩). 끝에 append. ── */
+.pjv-ficon { width: 16px; height: 16px; flex: none; color: var(--ink-sub); }
+
+/* 셀 래퍼 + 표시값 */
+/* 커스텀 필드 래퍼도 셀을 꽉 채워야(width/height:100%) 안의 .pjv-cell-btn 이 셀 전체로 퍼져 호버·클릭이 표 칸처럼 동작. */
+.pjv-fcell-wrap { display: flex; width: 100%; height: 100%; align-items: center; min-width: 0; }
+.pjv-fval { font-size: 13.5px; color: var(--ink-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.pjv-flink { color: var(--blue); }
+.pjv-flabels { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; overflow: hidden; }
+
+/* 옵션 칩(드롭다운/라벨) */
+.pjv-fopt { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-width: 0;
+  font-size: 12.5px; font-weight: 600; color: var(--ink); background: color-mix(in srgb, var(--opt) 14%, #fff);
+  border: 1px solid color-mix(in srgb, var(--opt) 34%, #fff); border-radius: 999px; padding: 1px 9px 1px 7px; }
+.pjv-fopt-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--opt); }
+.pjv-fopt-label { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 체크박스 셀 */
+.pjv-fcheck { border: none; background: none; cursor: pointer; padding: 3px; border-radius: 6px; color: var(--muted-3); display: inline-flex; }
+.pjv-fcheck:hover { background: var(--bg-tint-2); color: var(--muted); }
+.pjv-fcheck.on { color: var(--mint); }
+.pjv-fcheck-ic { width: 18px; height: 18px; }
+
+/* 별점 셀 */
+.pjv-frating { display: inline-flex; align-items: center; gap: 1px; }
+.pjv-fstar { border: none; background: none; cursor: pointer; padding: 1px; border-radius: 4px; color: var(--muted-3); display: inline-flex; }
+.pjv-fstar:hover { color: #E0A93B; }
+.pjv-fstar.on { color: #E8B23E; }
+.pjv-fstar-ic { width: 16px; height: 16px; }
+
+/* 진행률 셀 */
+.pjv-fprog { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+.pjv-fprog-track { width: 56px; height: 6px; border-radius: 999px; background: var(--bg-tint-2); overflow: hidden; flex: none; }
+.pjv-fprog-fill { display: block; height: 100%; border-radius: 999px; background: var(--blue); }
+.pjv-fprog-num { font-size: 12px; font-weight: 600; color: var(--ink-sub); font-variant-numeric: tabular-nums; }
+
+/* 티셔츠 사이즈 칩 */
+.pjv-fsize { display: inline-flex; align-items: center; justify-content: center; min-width: 26px; padding: 1px 7px;
+  font-size: 12px; font-weight: 700; color: var(--ink-sub); background: var(--bg-tint-2); border-radius: 6px; letter-spacing: .2px; }
+
+/* 값 편집기(팝오버 안) */
+.pjv-field-editor { display: flex; flex-direction: column; gap: 8px; padding: 4px; min-width: 200px; }
+.pjv-field-editor.wide { min-width: 280px; }
+.pjv-field-input { width: 100%; box-sizing: border-box; font-size: 13.5px; padding: 7px 10px; border: 1px solid var(--line-net); border-radius: 8px; color: var(--ink); font-family: inherit; outline: none; }
+.pjv-field-input:focus { border-color: var(--blue); }
+.pjv-field-textarea { width: 100%; box-sizing: border-box; font-size: 13.5px; line-height: 1.5; padding: 8px 10px; border: 1px solid var(--line-net); border-radius: 8px; color: var(--ink); font-family: inherit; outline: none; resize: vertical; }
+.pjv-field-textarea:focus { border-color: var(--blue); }
+.pjv-fe-actions { display: flex; align-items: center; gap: 6px; }
+.pjv-fe-btn { font-size: 12.5px; font-weight: 600; padding: 6px 12px; border-radius: 7px; border: 1px solid var(--line-net); background: var(--bg); color: var(--ink-sub); cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; }
+.pjv-fe-btn:hover { background: var(--bg-tint-2); }
+.pjv-fe-btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+.pjv-fe-btn.primary:hover { filter: brightness(1.05); background: var(--blue); }
+.pjv-fe-btn.danger { color: var(--coral-text); border-color: transparent; margin-left: auto; }
+.pjv-fe-btn.danger:hover { background: var(--bg-tint-2); }
+
+/* 진행률 편집기 */
+.pjv-prog-editor { min-width: 240px; }
+.pjv-prog-row { display: flex; align-items: center; gap: 12px; }
+.pjv-prog-range { flex: 1; accent-color: var(--blue); }
+.pjv-prog-pct { display: inline-flex; align-items: center; gap: 2px; font-size: 13px; font-weight: 600; color: var(--ink-sub); }
+.pjv-prog-num-input { width: 46px; font-size: 13px; padding: 4px 6px; border: 1px solid var(--line-net); border-radius: 6px; color: var(--ink); font-family: inherit; text-align: right; }
+
+/* 즉석 옵션 추가 행(드롭다운/라벨 편집기 하단) */
+.pjv-opt-add { padding: 3px 2px 1px; border-top: 1px solid var(--line-row); margin-top: 2px; }
+.pjv-opt-add-input { width: 100%; box-sizing: border-box; font-size: 12.5px; padding: 6px 9px; border: 1px dashed var(--line-net); border-radius: 7px; color: var(--ink); font-family: inherit; outline: none; }
+.pjv-opt-add-input:focus { border-color: var(--blue); border-style: solid; }
+
+/* 라벨 체크 미니 */
+.pjv-check-mini { width: 16px; height: 16px; flex: none; color: var(--muted-3); }
+.pjv-check-mini.on { color: var(--blue); }
+
+/* 컬럼 헤더(커스텀) */
+/* 커스텀 필드 헤더를 표준 헤더(.pjv-colhead: 13px·600·muted)와 동일한 폰트/색으로 — 타입 아이콘은 표준처럼 숨김. */
+.pjv-thcol { gap: 5px; min-width: 0; font-size: 13px; font-weight: 600; color: var(--muted); letter-spacing: .2px; }
+/* 숨긴 열(폭 0)은 경계선도 없어야 한다(#1067) — 셀 안으로 들어온 핸들이 폭 0 셀에선 이웃 위로 삐져나와
+   구분선이 겹쳐 보였다(‖). 헤더 셀에 overflow:hidden 을 주면 폭 0 셀의 핸들·선이 함께 잘린다. */
+.pjv-tgroup-head-cols > .pjv-tcell, .pjv-list-colhead > .pjv-tcell { overflow: hidden; }
+/* ⚠ 헤더 셀에 좌우 패딩을 주지 마라(#1067) — 숨긴 열은 그리드 트랙이 0px 인데 패딩은 트랙을 넘겨 상자를 20px 로
+   되살린다. 그러면 안 보여야 할 열이 자리를 먹고 구분선이 이웃과 겹쳐 ‖ 로 보인다(실제로 한 번 냈던 회귀).
+   라벨은 가운데 정렬이라 경계선과 자연히 떨어진다 — 숨통이 더 필요하면 열 폭(--pjv-w-*) 을 키울 것. */
+.pjv-thcol-ic { display: none; }
+.pjv-thcol-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pjv-thcol-menu { flex: none; border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 15px; line-height: 1; padding: 0 2px; border-radius: 5px; opacity: 0; transition: opacity .12s ease; }
+.pjv-thcol:hover .pjv-thcol-menu { opacity: 1; }
+/* #611 필드 열 순서 드래그 — 컬럼 헤더를 잡아 좌우로 끌어 재정렬. 드롭 위치는 대상 헤더 좌/우 세로선으로 표시. */
+.pjv-col-draggable { cursor: grab; }
+.pjv-col-draggable:active { cursor: grabbing; }
+.pjv-col-drag-src { opacity: .45; }
+.pjv-col-drop-before::after, .pjv-col-drop-after::after {
+  content: ''; position: absolute; top: 2px; bottom: 2px; width: 2px; background: var(--blue, #2d6bf0);
+  border-radius: 2px; box-shadow: 0 0 0 1px rgba(45,107,240,.25); pointer-events: none; z-index: 2; }
+.pjv-col-drop-before::after { left: -1px; }
+.pjv-col-drop-after::after { right: -1px; }
+.pjv-thcol-menu:hover { color: var(--ink); background: var(--bg-tint-2); }
+
+/* (+) 컬럼 추가 버튼 */
+.pjv-addcol-btn { border: none; background: none; cursor: pointer; color: var(--muted-2); padding: 3px; border-radius: 6px; display: inline-flex; }
+.pjv-addcol-btn:hover { color: var(--blue); background: var(--bg-tint-2); }
+.pjv-addcol-ic { width: 18px; height: 18px; }
+
+/* Fields 패널 */
+.pjv-fields-panel { width: 280px; max-height: min(70vh, 540px); display: flex; flex-direction: column; }
+.pjv-fields-head { padding: 4px 6px 8px; }
+.pjv-fields-title { font-size: 14px; font-weight: 800; color: var(--ink); }
+.pjv-fields-search { width: 100%; box-sizing: border-box; font-size: 13px; padding: 8px 11px; border: 1px solid var(--line-net); border-radius: 8px; color: var(--ink); font-family: inherit; outline: none; margin-bottom: 8px; }
+.pjv-fields-search:focus { border-color: var(--blue); }
+.pjv-fields-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
+.pjv-fields-tab { border: none; background: none; cursor: pointer; font-size: 13px; font-weight: 700; color: var(--muted); padding: 6px 8px; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.pjv-fields-tab:hover { color: var(--ink-sub); }
+.pjv-fields-tab.on { color: var(--blue); border-bottom-color: var(--blue); }
+.pjv-fields-list { overflow-y: auto; display: flex; flex-direction: column; gap: 1px; padding-right: 2px; }
+.pjv-fields-sec { font-size: 11px; font-weight: 700; color: var(--muted-2); letter-spacing: .3px; padding: 6px 8px 3px; }
+.pjv-fields-empty { font-size: 12.5px; color: var(--muted-2); padding: 14px 8px; text-align: center; }
+/* Fields 패널 '기본 컬럼' 섹션 — 각 기본 컬럼 보임/숨김 토글(#req). */
+.pjv-fields-defcols { border-bottom: 1px solid var(--line); padding-bottom: 6px; margin-bottom: 4px; }
+.pjv-defcol-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; border: none; background: none; cursor: pointer; padding: 6px 9px; border-radius: 8px; }
+.pjv-defcol-row:hover { background: var(--bg-tint-2); }
+.pjv-defcol-name { font-size: 13.5px; color: var(--ink); }
+.pjv-defcol-toggle { flex: none; position: relative; width: 30px; height: 18px; border-radius: 999px; background: var(--muted-3); transition: background-color .14s ease; }
+.pjv-defcol-toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform .14s ease; }
+.pjv-defcol-toggle.on { background: var(--blue); }
+.pjv-defcol-toggle.on::after { transform: translateX(12px); }
+.pjv-menu-hint { font-size: 11.5px; color: var(--muted-3); padding: 5px 10px 3px; line-height: 1.4; }
+.pjv-field-opt { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; border: none; background: none; cursor: pointer; padding: 8px 9px; border-radius: 8px; }
+.pjv-field-opt:hover { background: var(--bg-tint-2); }
+.pjv-field-opt-ic { flex: none; width: 26px; height: 26px; border-radius: 7px; background: var(--bg-tint); display: inline-flex; align-items: center; justify-content: center; color: var(--ink-sub); }
+.pjv-field-opt-ic .pjv-ficon { width: 16px; height: 16px; }
+.pjv-field-opt-tx { display: flex; flex-direction: column; min-width: 0; }
+.pjv-field-opt-name { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.pjv-field-opt-desc { font-size: 11.5px; color: var(--muted-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 형식 설정 폼 */
+.pjv-fcfg { width: 280px; display: flex; flex-direction: column; gap: 7px; padding: 2px; }
+.pjv-fcfg-head { display: flex; align-items: center; gap: 8px; padding: 2px 0 4px; }
+.pjv-fcfg-back { border: none; background: none; cursor: pointer; font-size: 16px; color: var(--muted); padding: 2px 6px; border-radius: 6px; }
+.pjv-fcfg-back:hover { color: var(--ink); background: var(--bg-tint-2); }
+.pjv-fcfg-ic { flex: none; width: 24px; height: 24px; border-radius: 6px; background: var(--bg-tint); display: inline-flex; align-items: center; justify-content: center; color: var(--ink-sub); }
+.pjv-fcfg-ic .pjv-ficon { width: 15px; height: 15px; }
+.pjv-fcfg-title { font-size: 14px; font-weight: 800; color: var(--ink); }
+.pjv-fcfg-lbl { font-size: 11.5px; font-weight: 700; color: var(--muted); letter-spacing: .2px; margin-top: 2px; }
+.pjv-fcfg-name, .pjv-fcfg-sel { width: 100%; box-sizing: border-box; font-size: 13.5px; padding: 8px 10px; border: 1px solid var(--line-net); border-radius: 8px; color: var(--ink); font-family: inherit; outline: none; background: var(--bg); }
+.pjv-fcfg-name:focus, .pjv-fcfg-sel:focus { border-color: var(--blue); }
+.pjv-fcfg-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.pjv-fcfg-create { flex: 1; font-size: 13px; font-weight: 700; padding: 9px; border-radius: 8px; border: none; background: var(--blue); color: #fff; cursor: pointer; }
+.pjv-fcfg-create:hover { filter: brightness(1.05); }
+.pjv-fcfg-cancel { font-size: 13px; font-weight: 600; padding: 9px 14px; border-radius: 8px; border: 1px solid var(--line-net); background: var(--bg); color: var(--ink-sub); cursor: pointer; }
+.pjv-fcfg-cancel:hover { background: var(--bg-tint-2); }
+
+/* 옵션 빌더(생성/편집 공용) */
+.pjv-optb { display: flex; flex-direction: column; gap: 6px; }
+.pjv-optb-rows { display: flex; flex-direction: column; gap: 6px; }
+.pjv-optb-row { display: flex; align-items: center; gap: 8px; }
+.pjv-optb-dot { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 2px solid #fff; background: var(--opt); box-shadow: 0 0 0 1px var(--line-net); cursor: pointer; padding: 0; }
+.pjv-optb-input { flex: 1; min-width: 0; font-size: 13px; padding: 7px 10px; border: 1px solid var(--line-net); border-radius: 7px; color: var(--ink); font-family: inherit; outline: none; }
+.pjv-optb-input:focus { border-color: var(--blue); }
+.pjv-optb-rm { flex: none; border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 13px; padding: 4px 6px; border-radius: 6px; }
+.pjv-optb-rm:hover { color: var(--coral-text); background: var(--bg-tint-2); }
+.pjv-optb-add { align-self: flex-start; border: none; background: none; cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--blue); padding: 4px 6px; border-radius: 6px; }
+.pjv-optb-add:hover { background: var(--bg-tint-2); }
+
+/* 더블클릭 → 하위 태스크 인라인 추가 입력 */
+.pjv-subadd { padding: 6px 6px 6px 28px; }
+
+/* ── 태스크 상세 모달(클릭업형 팝업) #/projects2 ── */
+body.pjv-tm-open { overflow: hidden; }
+.pjv-tm-back { position: fixed; inset: 0; background: rgba(21,35,59,.5); display: flex; align-items: center; justify-content: center; padding: 4vh 20px; z-index: 210; }
+.pjv-tm { display: flex; width: min(1180px, 96vw); height: min(90vh, 920px); background: var(--bg); border: 1px solid var(--line-net); border-radius: 14px; box-shadow: 0 24px 70px rgba(20,35,59,.30); overflow: hidden; }
+.pjv-tm-loading { padding: 40px; color: var(--muted-2); font-size: 14px; display: flex; flex-direction: column; gap: 14px; align-items: flex-start; }
+
+/* 좌측(상세) */
+.pjv-tm-main { flex: 1 1 auto; min-width: 320px; overflow-y: auto; padding: 0 28px 40px; }
+/* 상단바(브레드크럼 + [✕])는 스크롤해도 제자리(#1233-3) — 아래로 내려가면 닫으려고 맨 위까지 되돌아와야 했다.
+   스크롤 주체는 .pjv-tm-main 이라 여기 sticky. main 의 위 패딩(18px)은 이 바가 대신 갖고(그래야 붙었을 때 여백이
+   남지 않는다), 좌우는 음수 마진으로 패딩 밖까지 넓혀 내용이 옆으로 비쳐 지나가지 않게 한다. */
+.pjv-tm-top { position: sticky; top: 0; z-index: 4; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: 0 -28px 12px; padding: 14px 28px 10px; background: var(--bg); border-bottom: 1px solid var(--line-row); }
+.pjv-tm-crumb { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted-2); min-width: 0; }
+.pjv-tm-crumb-link { color: var(--ink-sub); font-weight: 600; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pjv-tm-crumb-link:hover { color: var(--blue); }
+.pjv-tm-x { border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 16px; width: 30px; height: 30px; border-radius: 8px; flex: none; }
+.pjv-tm-x:hover { background: var(--bg-tint-2); color: var(--ink); }
+.pjv-tm-typebar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.pjv-tm-typepill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px; font-size: 13px; font-weight: 700; color: var(--ink-sub); }
+.pjv-tm-typedot { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--muted-3); }
+.pjv-tm-subcount { font-size: 12.5px; color: var(--muted-2); }
+.pjv-tm-title { width: 100%; border: none; resize: none; overflow: hidden; font-size: 26px; font-weight: 800; line-height: 1.3; letter-spacing: -0.5px; color: var(--ink); background: none; padding: 4px 0; margin-bottom: 8px; font-family: inherit; }
+.pjv-tm-title:focus { outline: none; background: var(--bg-tint); border-radius: 6px; }
+
+/* 필드 그리드(2열) */
+.pjv-tm-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 28px; padding: 8px 0 14px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+.pjv-tm-field { display: grid; grid-template-columns: 18px 96px 1fr; align-items: center; gap: 8px; min-height: 36px; }
+.pjv-tm-field-ico { font-size: 13px; color: var(--muted-2); text-align: center; filter: grayscale(1); opacity: .7; }
+.pjv-tm-field-label { font-size: 13.5px; color: var(--muted-2); font-weight: 600; }
+.pjv-tm-field-val { min-width: 0; }
+.pjv-tm-valbtn { display: inline-flex; align-items: center; gap: 6px; border: none; background: none; cursor: pointer; font-size: 13.5px; color: var(--ink); padding: 4px 8px; border-radius: 7px; max-width: 100%; }
+.pjv-tm-valbtn:hover { background: var(--bg-tint-2); }
+.pjv-tm-valbtn.empty { color: var(--muted-3); }
+.pjv-tm-valtext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 상태 배지 — 통일 아이콘 칩(#499 후속): 라이트 배경 + 상태색 라벨 + SVG 아이콘 */
+.pjv-tm-statuspill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-net, #d9dee6); cursor: pointer; font-size: 12px; font-weight: 800; letter-spacing: .4px; color: var(--ink); background: var(--bg); padding: 4px 11px 4px 7px; border-radius: 7px; transition: border-color .13s ease; }
+.pjv-tm-statuspill:hover { border-color: var(--blue); }
+.pjv-tm-statuspill.todo { color: var(--muted); }
+.pjv-tm-statuspill.inprog { color: var(--blue); }
+.pjv-tm-statuspill.done { color: #1F9D6B; }
+.pjv-tm-dates { display: inline-flex; align-items: center; gap: 4px; }
+.pjv-tm-datebtn { border: none; background: none; cursor: pointer; font-size: 13.5px; color: var(--ink); padding: 4px 8px; border-radius: 7px; }
+.pjv-tm-datebtn:hover { background: var(--bg-tint-2); }
+.pjv-tm-datebtn.empty { color: var(--muted-3); }
+.pjv-tm-datebtn.overdue { color: var(--coral-text); font-weight: 700; }
+.pjv-tm-datearrow { color: var(--muted-3); font-size: 12px; }
+/* 프로젝트 상세 헤더의 메타 패널 — 모달과 동일 결, 팀원 칩 아래 간격. 태그 피커 팝오버. */
+.pjv-proj-meta { margin-top: 14px; }
+/* 메타 패널 안의 보드 셀 컨트롤(우선순위 등)을 태그 'Empty'처럼 — 값셀 전체폭/가운데정렬이 아니라 좌측 컴팩트 + 태그형 호버.
+   (보드 표의 .pjv-cell-btn 은 그대로; 여기 메타 안에서만 좁힌다.) */
+.pjv-proj-meta .pjv-tm-field-val .pjv-cell-btn { width: auto; height: auto; justify-content: flex-start; padding: 4px 8px; border-radius: 7px; box-shadow: none; gap: 6px; }
+/* 전역 `.empty svg { margin:0 auto 14px }` 의 14px 하단 여백 누수 차단 — 빈 우선순위 깃발 등 메타 아이콘이 위로 떠 보이던 문제. */
+.pjv-proj-meta .pjv-cell-ico { margin: 0; }
+.pjv-proj-meta .pjv-tm-field-val .pjv-cell-btn:hover { box-shadow: none; background: var(--bg-tint-2); }
+
+/* ── 메타 값 통일(#473 후속) — 값마다 폰트(12~15px)·높이(24~34px)·크롬(상태만 테두리 pill)이 제각각이라 산란해 보이던 것 정리.
+   값 '표시 방식'은 유지하고, 크기·정렬·크롬만 한 결로: 13.5px · 좌측정렬 · 동일 높이 · 단일값은 테두리 없는 투명 셀 + hover 배경. ── */
+.pjv-proj-meta .pjv-tm-field-val { font-size: 13.5px; }
+/* 단일값 클릭 컨트롤(상태 pill·리스트·우선순위·날짜)을 같은 결로 통일 — 상태 pill 의 흰 배경+테두리 제거해 리스트/우선순위와 동일하게. */
+.pjv-proj-meta .pjv-tm-statuspill,
+.pjv-proj-meta .pjv-tm-field-val .pjv-cell-btn,
+.pjv-proj-meta .pjv-tm-datebtn,
+.pjv-proj-meta .pjv-tm-valbtn {
+  font-size: 13.5px; font-weight: 600; letter-spacing: 0; min-height: 28px; padding: 4px 8px;
+  border: none; border-radius: 7px; background: transparent; box-shadow: none; justify-content: flex-start; gap: 6px;
+}
+.pjv-proj-meta .pjv-tm-statuspill:hover,
+.pjv-proj-meta .pjv-tm-datebtn:hover,
+.pjv-proj-meta .pjv-tm-valbtn:hover { background: var(--bg-tint-2); border: none; }
+/* placeholder(미분류·Empty·Start/Due) 동일 크기·색으로. */
+.pjv-proj-meta .pjv-cell-ph { font-size: 13.5px; line-height: 1.4; }
+/* 팀원 아바타 값 — 다른 값 높이에 맞춰 축소(행 높이 튐 제거). */
+.pjv-proj-meta .pjv-tm-field-val .pjv-ava { width: 20px; height: 20px; font-size: 10px; }
+/* 선행/후속 링크·'+' — 파란 카드/대시 테두리를 제거해 다른 값처럼 투명·borderless 로(리스트 값과 동일 폰트·굵기·색). 태그칩은 색이 태그 정체성이라 유지. */
+.pjv-proj-meta .pjv-edge-chip { background: transparent; border: none; padding: 0 2px 0 0; }
+.pjv-proj-meta .pjv-edge-chip-link { font-size: 13.5px; font-weight: 600; color: var(--ink-sub); }
+.pjv-proj-meta .pjv-edge-add { border: none; background: transparent; font-size: 13.5px; font-weight: 600; color: var(--muted-2); padding: 4px 6px; }
+.pjv-proj-meta .pjv-edge-add:hover { background: var(--bg-tint-2); border: none; color: var(--blue); }
+/* 선행/후속 값 시작 위치를 다른 값(버튼 안쪽 8px)과 맞춤 — 링크가 8px 왼쪽으로 튀어나오던 것 정렬. */
+.pjv-proj-meta .pjv-proj-edges { min-height: 28px; padding-left: 8px; }
+.pjv-proj-meta .pjv-tm-tags { min-height: 28px; }
+.pjv-proj-tagpicker { min-width: 244px; padding: 8px; }
+.pjv-proj-tagpicker-list { margin-top: 6px; max-height: 280px; overflow: auto; }
+.pjv-tm-time { display: inline-flex; align-items: center; gap: 8px; }
+.pjv-tm-timebtn { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line); background: var(--bg); cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); padding: 3px 9px; border-radius: 999px; }
+.pjv-tm-timebtn:hover { border-color: var(--blue); color: var(--blue); }
+.pjv-tm-timebtn.on { border-color: var(--coral-text); color: var(--coral-text); }
+.pjv-tm-timer-live { font-size: 13px; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
+.pjv-tm-timemore { border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 15px; padding: 0 6px; border-radius: 6px; }
+.pjv-tm-timemore:hover { background: var(--bg-tint-2); color: var(--ink); }
+.pjv-tm-timepop { min-width: 240px; padding: 10px; gap: 8px; }
+.pjv-tm-tmanual { display: flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--muted-2); flex-wrap: wrap; }
+.pjv-tm-tnum { width: 46px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; font-size: 13px; }
+.pjv-tm-tentries { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
+.pjv-tm-tentry { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-sub); }
+.pjv-tm-tentry-src { color: var(--muted-3); font-size: 11px; }
+.pjv-tm-tentry-x { margin-left: auto; border: none; background: none; cursor: pointer; color: var(--muted-3); font-size: 11px; }
+.pjv-tm-tentry-x:hover { color: var(--coral-text); }
+
+/* 태그 */
+.pjv-tm-tags { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.pjv-tm-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; color: var(--tag, var(--blue)); background: color-mix(in srgb, var(--tag, var(--blue)) 14%, transparent); border-radius: 6px; padding: 2px 4px 2px 8px; }
+.pjv-tm-tag-x { border: none; background: none; cursor: pointer; color: inherit; opacity: .55; font-size: 10px; }
+.pjv-tm-tag-x:hover { opacity: 1; }
+.pjv-tm-tagadd { border: 1px dashed var(--line-net); background: none; cursor: pointer; color: var(--muted-2); font-size: 12px; padding: 2px 9px; border-radius: 6px; }
+.pjv-tm-tagadd.empty { border: none; color: var(--muted-3); padding: 4px 8px; }
+.pjv-tm-tagadd:hover { color: var(--blue); border-color: var(--blue); }
+.pjv-tm-tagpop, .pjv-tm-linkpop { min-width: 230px; padding: 8px; gap: 6px; }
+.pjv-tm-taginput { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; font-size: 13px; }
+.pjv-tm-tagresults { display: flex; flex-direction: column; gap: 1px; max-height: 200px; overflow: auto; }
+.pjv-tm-tagdot { width: 10px; height: 10px; border-radius: 3px; background: var(--blue); flex: none; }
+.pjv-tm-linktype-sel { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; font-size: 13px; }
+
+/* 설명 */
+.pjv-tm-desc { margin-bottom: 18px; }
+.pjv-tm-desc-body { font-size: 14px; color: var(--ink-sub); line-height: 1.6; cursor: text; border-radius: 8px; padding: 6px 8px; margin: -6px -8px; }
+.pjv-tm-desc-body:hover { background: var(--bg-tint); }
+.pjv-tm-desc-add { border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 13.5px; padding: 8px 0; }
+.pjv-tm-desc-add:hover { color: var(--blue); }
+.pjv-tm-desc-ta { width: 100%; border: 1px solid var(--line-net); border-radius: 8px; padding: 10px 12px; font-size: 14px; line-height: 1.6; resize: vertical; font-family: inherit; }
+.pjv-tm-desc-acts { display: flex; gap: 6px; margin-top: 8px; }
+
+/* 블록(하위·의존성·체크리스트) */
+.pjv-tm-block { padding: 14px 0; border-top: 1px solid var(--line); }
+.pjv-tm-block-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.pjv-tm-block-title { font-size: 14px; font-weight: 800; color: var(--ink); }
+.pjv-tm-block-count { font-size: 12px; color: var(--muted-2); }
+.pjv-tm-block-add { border: none; background: none; cursor: pointer; color: var(--ink-sub); font-size: 13px; padding: 7px 0; display: block; }
+.pjv-tm-block-add:hover { color: var(--blue); }
+/* 태스크 모달 안 하위태스크 표(#497) — 모달은 우측 Activity 패널 탓에 폭이 좁다. 담당자·마감일·우선순위 칸을
+   기본(96/92/112)보다 좁히고 이름칸 floor 를 키워(220px) 하위태스크 이름이 잘리지 않게 한다.
+   (pjvGridTemplate 이 이 CSS 변수를 읽어 grid-template-columns 를 만든다.) */
+.pjv-tm-subtasks { --pjv-name-min: 220px; --pjv-w-assignee: 68px; --pjv-w-due: 82px; --pjv-w-priority: 84px; }
+.pjv-tm-sub-head { display: grid; grid-template-columns: minmax(0,1fr) 88px 92px 92px; gap: 8px; font-size: 11.5px; color: var(--muted-3); padding: 4px 6px; border-bottom: 1px solid var(--line); }
+.pjv-tm-sub-row { display: grid; grid-template-columns: minmax(0,1fr) 88px 92px 92px; gap: 8px; align-items: center; padding: 3px 6px; border-bottom: 1px solid var(--line); }
+.pjv-tm-sub-name { display: flex; align-items: center; gap: 8px; border: none; background: none; cursor: pointer; font-size: 13.5px; color: var(--ink); text-align: left; padding: 4px 0; }
+.pjv-tm-sub-name:hover { color: var(--blue); }
+.pjv-tm-sub-name .done { text-decoration: line-through; color: var(--muted-3); }
+.pjv-tm-sub-cell { display: flex; align-items: center; }
+.pjv-tm-sub-add, .pjv-tm-cl-add { width: 100%; border: none; border-bottom: 1px dashed transparent; background: none; font-size: 13px; padding: 7px 6px; color: var(--ink); }
+.pjv-tm-sub-add::placeholder, .pjv-tm-cl-add::placeholder { color: var(--muted-3); }
+.pjv-tm-sub-add:focus, .pjv-tm-cl-add:focus { outline: none; border-bottom-color: var(--blue); }
+.pjv-tm-link-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; font-size: 13.5px; }
+.pjv-tm-link-type { font-size: 11px; font-weight: 700; border-radius: 5px; padding: 2px 7px; }
+.pjv-tm-link-type.blocking { color: var(--coral-text); background: color-mix(in srgb, var(--coral-text) 13%, transparent); }
+.pjv-tm-link-type.waiting_on { color: #E08A2B; background: color-mix(in srgb, #E08A2B 14%, transparent); }
+.pjv-tm-link-type.linked { color: var(--muted-2); background: var(--bg-tint-2); }
+.pjv-tm-link-name { border: none; background: none; cursor: pointer; color: var(--ink); font-size: 13.5px; text-align: left; }
+.pjv-tm-link-name:hover { color: var(--blue); }
+.pjv-tm-link-x, .pjv-tm-cl-x { margin-left: auto; border: none; background: none; cursor: pointer; color: var(--muted-3); font-size: 11px; }
+.pjv-tm-link-x:hover, .pjv-tm-cl-x:hover { color: var(--coral-text); }
+.pjv-tm-cl { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+.pjv-tm-cl-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.pjv-tm-cl-name { font-size: 13.5px; font-weight: 700; color: var(--ink); cursor: text; border-radius: 4px; padding: 1px 4px; margin-left: -4px; }
+.pjv-tm-cl-name:hover { background: var(--bg-tint-2); }
+.pjv-tm-cl-nameedit { font-size: 13.5px; font-weight: 700; color: var(--ink); font-family: inherit; border: 1px solid var(--blue); border-radius: 5px; padding: 1px 5px; outline: none; background: var(--bg); }
+.pjv-tm-cl-prog { font-size: 12px; color: var(--muted-2); }
+.pjv-tm-cl-item { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
+.pjv-tm-cl-check { width: 18px; height: 18px; border: 1.6px solid var(--muted-3); border-radius: 5px; background: var(--bg); cursor: pointer; color: #fff; font-size: 11px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.pjv-tm-cl-check.on { background: var(--mint); border-color: var(--mint); }
+.pjv-tm-cl-itemname { font-size: 13.5px; color: var(--ink); }
+.pjv-tm-cl-itemname.done { text-decoration: line-through; color: var(--muted-3); }
+
+/* 우측(Activity) */
+/* Activity 패널 폭은 CSS 변수 — 본문↔Activity 경계(.pjv-tm-resizer) 드래그로 조절(#496). 기본 400px. */
+.pjv-tm-side { flex: 0 0 var(--pjv-side-w, 400px); min-width: 300px; max-width: 720px; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--bg-tint); }
+/* 본문↔Activity 경계 드래그 핸들(#496) — 두 패널 사이 얇은 세로 바. 호버/드래그 시 파란 강조. */
+.pjv-tm-resizer { flex: none; width: 7px; margin: 0 -3px; cursor: col-resize; position: relative; z-index: 6; }
+.pjv-tm-resizer::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: transparent; transition: background-color .12s ease; }
+.pjv-tm:hover .pjv-tm-resizer::after { background: var(--line); }
+.pjv-tm-resizer:hover::after, body.pjv-tm-resizing .pjv-tm-resizer::after { background: var(--blue); }
+body.pjv-tm-resizing { cursor: col-resize; user-select: none; -webkit-user-select: none; }
+.pjv-tm-side-head { padding: 16px 20px; font-size: 15px; font-weight: 800; color: var(--ink); border-bottom: 1px solid var(--line); }
+.pjv-tm-feed { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; }
+.pjv-tm-feed-empty { color: var(--muted-3); font-size: 13px; text-align: center; margin-top: 30px; }
+.pjv-tm-c { display: flex; gap: 9px; }
+.pjv-tm-c-body { min-width: 0; flex: 1; }
+.pjv-tm-c-meta { display: flex; align-items: baseline; gap: 4px; margin-bottom: 2px; }
+.pjv-tm-c-who { font-size: 13px; font-weight: 700; color: var(--ink); }
+.pjv-tm-c-time { font-size: 11.5px; color: var(--muted-3); }
+.pjv-tm-c-text { font-size: 13.5px; color: var(--ink-sub); line-height: 1.55; background: var(--bg); border: 1px solid var(--line); border-radius: 0 10px 10px 10px; padding: 8px 11px; }
+.pjv-tm-ev { font-size: 12.5px; color: var(--muted-2); line-height: 1.5; }
+.pjv-tm-ev-dot { color: var(--muted-3); margin-right: 4px; }
+.pjv-tm-ev-who { font-weight: 600; color: var(--ink-sub); }
+.pjv-tm-ev-time { color: var(--muted-3); }
+.pjv-tm-composer-wrap { display: flex; align-items: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); background: var(--bg); }
+.pjv-tm-composer { flex: 1; border: 1px solid var(--line-net); border-radius: 10px; padding: 9px 12px; font-size: 13.5px; line-height: 1.5; resize: none; font-family: inherit; max-height: 160px; }
+.pjv-tm-composer:focus { outline: none; border-color: var(--blue); }
+.pjv-tm-send { border: none; background: var(--blue); color: #fff; cursor: pointer; width: 34px; height: 34px; border-radius: 9px; font-size: 14px; flex: none; }
+.pjv-tm-send:disabled { opacity: .5; }
+
+/* 클릭 가능 태스크 행(리스트뷰) — 제목에 hover 강조 */
+.pjv-trow-title.clickable { cursor: pointer; }
+.pjv-trow-title.clickable:hover { color: var(--blue); text-decoration: underline; text-underline-offset: 2px; }
+
+@media (max-width: 860px) {
+  .pjv-tm { flex-direction: column; height: 94vh; }
+  /* 세로 스택에선 폭 조절 불가 — flex-basis(가로폭 조절용) 해제하고 경계 핸들 숨김. */
+  .pjv-tm-side { flex: none; max-width: none; border-left: none; border-top: 1px solid var(--line); min-height: 240px; }
+  .pjv-tm-resizer { display: none; }
+}
+
+/* 태스크 모달 — 첨부 파일 블록(의존성/체크리스트와 동일 레벨) */
+.pjv-tm-att-list { display: flex; flex-direction: column; gap: 1px; margin-bottom: 4px; }
+.pjv-tm-att { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 7px; }
+.pjv-tm-att:hover { background: var(--bg-tint-2); }
+.pjv-tm-att-ico { font-size: 13px; filter: grayscale(1); opacity: .6; flex: none; }
+.pjv-tm-att-name { border: none; background: none; cursor: pointer; color: var(--ink); font-size: 13.5px; text-align: left; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; }
+.pjv-tm-att-name:hover { color: var(--blue); text-decoration: underline; }
+.pjv-tm-att-size { font-size: 11.5px; color: var(--muted-3); flex: none; }
+.pjv-tm-att-act { border: none; background: none; cursor: pointer; color: var(--muted-3); font-size: 12px; flex: none; padding: 2px 5px; border-radius: 5px; }
+.pjv-tm-att-act:hover { color: var(--blue); background: var(--bg-tint); }
+.pjv-tm-att-act.danger:hover { color: var(--coral-text); }
+/* 클립보드 붙여넣기 안내 힌트 */
+.pjv-tm-att-hint { display: flex; align-items: flex-start; gap: 6px; margin-top: 6px; font-size: 12px; line-height: 1.5; color: var(--muted-head); }
+.pjv-tm-att-hint-ic { flex: none; filter: grayscale(1); opacity: .7; }
+.pjv-tm-att-hint b { color: var(--ink-sub); font-weight: 700; }
+/* 클립보드 이미지 붙여넣기 다이얼로그(모달 위 미니 모달) */
+.pjv-tm-paste-back { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center;
+  padding: 20px; background: rgba(21,35,59,.45); }
+.pjv-tm-paste-card { background: var(--bg); border-radius: 16px; padding: 20px; width: min(440px, 92vw);
+  box-shadow: 0 24px 64px rgba(21,35,59,.32); display: flex; flex-direction: column; gap: 12px; }
+.pjv-tm-paste-title { font-size: 16px; font-weight: 800; color: var(--ink); }
+.pjv-tm-paste-preview { max-width: 100%; max-height: 280px; object-fit: contain; align-self: center;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint); }
+.pjv-tm-paste-label { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; font-weight: 700; color: var(--muted-head); }
+.pjv-tm-paste-name { padding: 9px 11px; border: 1px solid var(--line-net); border-radius: 9px; font: inherit; font-size: 14px;
+  color: var(--ink); background: var(--bg); box-sizing: border-box; width: 100%; }
+.pjv-tm-paste-name:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.12); }
+.pjv-tm-paste-err { font-size: 13px; font-weight: 600; color: var(--coral-text); }
+.pjv-tm-paste-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+
+/* ── 2차 필드: 파일(공유폴더 선택)·관계(태스크 연결)·진행률(자동) ── */
+.pjv-ffiles { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--ink-sub); }
+.pjv-fmini { width: 14px; height: 14px; flex: none; }
+.pjv-frel { display: inline-flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; }
+.pjv-rel-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 120px; font-size: 12px; font-weight: 600; color: var(--ink); background: var(--bg-tint-2); border: 1px solid var(--line-net); border-radius: 6px; padding: 1px 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pjv-rel-chip.removable { padding-right: 2px; }
+.pjv-rel-more { font-size: 11.5px; font-weight: 700; color: var(--muted-2); }
+.pjv-rel-x { border: none; background: none; cursor: pointer; color: var(--muted-2); font-size: 12px; line-height: 1; padding: 1px 4px; border-radius: 4px; }
+.pjv-rel-x:hover { color: var(--coral-text); background: var(--bg-tint); }
+.pjv-chip-dl { border: none; background: none; cursor: pointer; color: var(--blue); font-size: 12px; line-height: 1; padding: 1px 3px; border-radius: 4px; }
+.pjv-chip-dl:hover { background: var(--bg-tint); }
+
+/* 파일 선택 편집기(공유 폴더 브라우저) */
+.pjv-files-editor { min-width: 300px; max-width: 340px; gap: 7px; }
+.pjv-files-head2 { font-size: 12.5px; font-weight: 700; color: var(--ink); }
+.pjv-files-selected { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.pjv-files-sel-label { font-size: 11.5px; font-weight: 700; color: var(--muted); }
+.pjv-files-crumb { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; font-size: 12px; }
+.pjv-files-crumb-btn { border: none; background: none; cursor: pointer; color: var(--blue); font-size: 12px; padding: 2px 5px; border-radius: 5px; }
+.pjv-files-crumb-btn:hover { background: var(--bg-tint-2); }
+.pjv-files-crumb-sep { color: var(--muted-3); }
+.pjv-files-browser { display: flex; flex-direction: column; gap: 1px; max-height: 240px; overflow-y: auto; border: 1px solid var(--line-row); border-radius: 8px; padding: 4px; }
+.pjv-files-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: none; background: none; cursor: pointer; padding: 6px 8px; border-radius: 6px; font-size: 13px; color: var(--ink); }
+.pjv-files-row:hover { background: var(--bg-tint-2); }
+.pjv-files-row.on { background: var(--bg-sel); }
+.pjv-files-row .fic, .pjv-files-row .ft { width: 18px; height: 18px; flex: none; color: var(--muted); }
+.pjv-files-row .pjv-check-mini { flex: none; }
+.pjv-files-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pjv-files-size { flex: none; font-size: 11.5px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+.pjv-files-chev { flex: none; color: var(--muted-3); font-size: 15px; }
+.pjv-files-empty { font-size: 12.5px; color: var(--muted-2); padding: 12px 8px; text-align: center; }
+
+/* 관계(태스크 연결) 편집기 */
+.pjv-rel-editor { min-width: 280px; gap: 8px; }
+.pjv-rel-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.pjv-rel-results { display: flex; flex-direction: column; gap: 1px; max-height: 220px; overflow-y: auto; }
+.pjv-rel-result { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; text-align: left; border: none; background: none; cursor: pointer; padding: 7px 9px; border-radius: 7px; font-size: 13px; color: var(--ink); }
+.pjv-rel-result:hover { background: var(--bg-tint-2); }
+.pjv-rel-result-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pjv-rel-add { flex: none; font-size: 11.5px; font-weight: 700; color: var(--blue); }
+
+/* pjv 인라인 이름 입력 — 박스 제거: 전역 input[type=text](테두리·배경·라운드)를 같은 specificity+후순위로 무력화.
+   (하위)태스크·체크리스트 이름 타이핑을 클릭업식 매끄러운 인라인 텍스트로(박스 없음).
+   #320: 글로벌 input[type=text] 가 font-size:14px 로 덮어써 타이핑 글자가 14px 였고(확정 제목 .pjv-trow-title 는 15px),
+   좌측 padding 8px 때문에 글자가 확정 제목보다 8px 오른쪽에서 시작 → 확정 순간 크기·위치가 튀어 어색.
+   여기서 font-size 15px(+weight 500)로 맞추고 좌우 padding 0 으로 — 타이핑 글자가 .pjv-trow-title 와 픽셀 일치. */
+input.pjv-addrow-input { border: none; background: transparent; border-radius: 0; box-shadow: none; outline: none; padding: 9px 0; font-size: 15px; font-weight: 500; }
+input.pjv-addrow-input:focus { border: none; background: transparent; box-shadow: none; outline: none; }
+input.pjv-tm-sub-add, input.pjv-tm-cl-add { border: none; background: transparent; border-radius: 0; box-shadow: none; outline: none; padding: 7px 6px; }
+input.pjv-tm-sub-add:focus, input.pjv-tm-cl-add:focus { border: none; background: transparent; box-shadow: none; outline: none; }
+
+/* ── 태스크 모달 Activity — 클릭업식 댓글 카드·반응·작성기 툴바 ── */
+.pjv-tm-c-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 5px; min-height: 24px; }
+.pjv-tm-c-react { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+.pjv-tm-react-chip { display: inline-flex; align-items: center; gap: 3px; border: 1px solid var(--line-net); background: var(--bg); border-radius: 999px; padding: 1px 8px; font-size: 12px; cursor: pointer; color: var(--ink-sub); }
+.pjv-tm-react-chip:hover { border-color: var(--line-net-2); }
+.pjv-tm-react-chip.mine { background: var(--bg-sel); border-color: var(--blue); color: var(--blue); }
+.pjv-tm-react-n { font-weight: 700; font-variant-numeric: tabular-nums; }
+.pjv-tm-c-act { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: none; background: none; cursor: pointer; color: var(--muted-2); border-radius: 6px; padding: 0; opacity: 0; transition: opacity .12s ease; }
+.pjv-tm-c:hover .pjv-tm-c-act, .pjv-tm-c:focus-within .pjv-tm-c-act { opacity: 1; }
+.pjv-tm-c-act:hover { color: var(--blue); background: var(--bg-tint-2); }
+.pjv-tm-c-act .pjv-tm-ic { width: 15px; height: 15px; }
+.pjv-tm-c-reply { border: none; background: none; cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--muted-2); padding: 2px 6px; border-radius: 6px; opacity: 0; transition: opacity .12s ease; }
+.pjv-tm-c:hover .pjv-tm-c-reply, .pjv-tm-c:focus-within .pjv-tm-c-reply { opacity: 1; }
+.pjv-tm-c-reply:hover { color: var(--blue); background: var(--bg-tint-2); }
+.pjv-tm-filelink { color: var(--blue); text-decoration: none; font-weight: 600; }
+.pjv-tm-filelink:hover { text-decoration: underline; }
+
+/* 시스템 이벤트 — 좌(불릿·텍스트) / 우(시간) */
+.pjv-tm-ev { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.pjv-tm-ev-main { min-width: 0; }
+.pjv-tm-ev-time { flex: none; white-space: nowrap; }
+
+/* 작성기 박스 + 툴바 */
+.pjv-tm-composer-box { display: flex; flex-direction: column; margin: 12px 16px; border: 1px solid var(--line-net); border-radius: 12px; background: var(--bg); overflow: hidden; }
+.pjv-tm-composer-box:focus-within { border-color: var(--blue); }
+.pjv-tm-composer-box .pjv-tm-composer { border: none; border-radius: 0; padding: 11px 12px 6px; }
+.pjv-tm-composer-box .pjv-tm-composer:focus { border: none; outline: none; }
+.pjv-tm-toolbar { display: flex; align-items: center; gap: 1px; padding: 5px 7px; border-top: 1px solid var(--line-row); }
+.pjv-tm-tool { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: none; background: none; cursor: pointer; color: var(--muted); border-radius: 7px; padding: 0; }
+.pjv-tm-tool:hover { color: var(--ink-sub); background: var(--bg-tint-2); }
+.pjv-tm-tool.soon { color: var(--muted-3); }
+.pjv-tm-ic { width: 17px; height: 17px; }
+.pjv-tm-ctypepill { display: inline-flex; align-items: center; gap: 2px; border: 1px solid var(--line-net); background: var(--bg); cursor: pointer; border-radius: 7px; padding: 3px 8px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); margin: 0 3px; }
+.pjv-tm-ctypepill:hover { background: var(--bg-tint-2); }
+.pjv-tm-type-caret { font-size: 9px; color: var(--muted-2); }
+.pjv-tm-tool-sep { width: 1px; height: 18px; background: var(--line); margin: 0 4px; flex: none; }
+.pjv-tm-tool-spacer { flex: 1; }
+.pjv-tm-toolbar .pjv-tm-send { width: 30px; height: 30px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; }
+.pjv-tm-toolbar .pjv-tm-send .pjv-tm-ic { width: 16px; height: 16px; }
+
+/* 이모지 그리드 */
+.pjv-tm-emoji-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 1px; max-width: 288px; }
+.pjv-tm-emoji { border: none; background: none; cursor: pointer; font-size: 19px; line-height: 1; padding: 5px; border-radius: 7px; }
+.pjv-tm-emoji:hover { background: var(--bg-tint-2); }
+
+/* 태스크 컬럼 정렬·크기 보정 (담당자·마감일·우선순위) — 헤더 글자 중앙 아래로 아이콘 정렬 + 폰트/아이콘 확대 (사용자 요청) */
+/* 헤더 라벨: 더 크고 또렷하게 + 컬럼 중앙 정렬 */
+.pjv-colhead { font-size: 13px; font-weight: 600; color: var(--muted); justify-content: center; text-align: center; padding-left: 0; }
+/* 헤더 트랙과 행 트랙 정렬 — 그룹 헤더 가로 패딩을 행(6px)에 맞춤 */
+.pjv-tgroup-head { padding-left: 6px; padding-right: 6px; }
+/* 값 셀(담당자·마감일·우선순위) 중앙 정렬 → 헤더 글자 중앙 아래 */
+.pjv-trow > .pjv-tcell:nth-child(2),
+.pjv-trow > .pjv-tcell:nth-child(3),
+.pjv-trow > .pjv-tcell:nth-child(4),
+.pjv-addrow.editing > .pjv-tcell:nth-child(2),
+.pjv-addrow.editing > .pjv-tcell:nth-child(3),
+.pjv-addrow.editing > .pjv-tcell:nth-child(4) { justify-content: center; }
+/* 커스텀 필드 값 셀(라벨·체크박스·긴텍스트 등)·'내 세션' 셀도 표준 메타 컬럼처럼 가운데 정렬 —
+   필드 종류마다 좌/우 정렬이 달라 여백이 들쭉날쭉하던 어색함 제거(#487). 헤더(.pjv-colhead/.pjv-thcol)와 축 일치.
+   실제 내용 정렬은 셀을 꽉 채우는 .pjv-fcell-wrap 에서 결정(안의 .pjv-cell-btn 이 justify-content:inherit). */
+.pjv-trow > .pjv-fcell,
+.pjv-trow > .pjv-sess-cell,
+.pjv-addrow.editing > .pjv-fcell { justify-content: center; }
+.pjv-fcell-wrap { justify-content: center; }
+/* 커스텀 필드 헤더(.pjv-thcol) + 기본 컬럼 헤더(.pjv-colhead.pjv-stdcol) — 이름은 정확히 가운데.
+   ⋯(옵션) 버튼은 평소 폭 0 으로 접어(제목이 정중앙) 헤더에 호버하면 '제목 바로 옆'에 펼쳐진다.
+   (예전엔 셀 우측 끝에 절대배치라 제목과 너무 멀었음 — 위치 보정.) */
+.pjv-thcol, .pjv-colhead.pjv-stdcol { position: relative; justify-content: center; text-align: center; gap: 3px; }
+.pjv-thcol .pjv-thcol-name, .pjv-colhead.pjv-stdcol .pjv-thcol-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: center; }
+.pjv-thcol-menu { flex: none; width: 0; padding: 0; overflow: hidden; opacity: 0; transition: opacity .12s ease, width .1s ease; }
+.pjv-thcol:hover .pjv-thcol-menu, .pjv-colhead.pjv-stdcol:hover .pjv-thcol-menu { width: 15px; padding: 0 1px; opacity: 1; }
+/* 값 폰트·아이콘 확대 */
+.pjv-cell-btn { font-size: 15px; }
+.pjv-ava { width: 26px; height: 26px; font-size: 12px; }
+.pjv-tasks-card .pjv-cell-ico { width: 20px; height: 20px; }
+.pjv-due-text { font-size: 15px; }
+.pjv-flag-glyph { font-size: 18px; }
+.pjv-flag-label { font-size: 15px; }
+/* 담당자 다중 — 페이스파일(겹친 아바타, 흰 링) + 메뉴 토글 체크 */
+.pjv-asg-faces { display: inline-flex; align-items: center; }
+.pjv-asg-faces .pjv-ava { box-shadow: 0 0 0 2px var(--bg); }
+.pjv-asg-faces .pjv-ava + .pjv-ava { margin-left: -9px; }
+.pjv-ava-more { background: var(--muted-2); color: #fff; }
+.pjv-asg-menu .pjv-asg-mname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pjv-asg-check { flex: none; margin-left: 6px; width: 14px; text-align: center; color: var(--blue); font-weight: 800; }
+/* 팀원 셀 팝오버 — 전체 구성원 검색 + 다중토글(프로젝트 '담당자' 대체). */
+.pjv-team-menu { min-width: 240px; }
+.pjv-team-searchwrap { padding: 2px 4px 6px; }
+.pjv-team-search { width: 100%; }
+.pjv-team-list { max-height: 240px; overflow: auto; }
+.pjv-cell-ph { font-size: 19px; }
+.pjv-tasks-card .pjv-cell-btn { height: 100%; }
+
+/* 댓글 컴포저 입력 영역 확대 — 기본 1행(37px)은 너무 작아서 불편. 기본 ~4행, 최대 220px(grow JS와 일치). */
+.pjv-tm-composer { min-height: 88px; max-height: 220px; }
+/* 첨부 파일 미리보기 등 오버레이(.ov-back)가 태스크 모달(z 210) 위에 뜨도록 — 기존 z 200 이면 모달 뒤로 가려져 잘림. */
+.ov-back { z-index: 300; }
+
+/* 액티비티 헤더 도구 + 댓글 푸터 항상 표시(클릭업식) */
+.pjv-tm-side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pjv-tm-side-tools { display: inline-flex; align-items: center; gap: 2px; }
+.pjv-tm-side-icon { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border: none; background: none; cursor: pointer; color: var(--muted-2); border-radius: 7px; padding: 0; }
+.pjv-tm-side-icon:hover { background: var(--bg-tint-2); color: var(--ink); }
+.pjv-tm-side-icon.on { color: var(--blue); }
+.pjv-tm-side-icon .pjv-tm-ic { width: 17px; height: 17px; }
+.pjv-tm-search { padding: 10px 16px 0; }
+.pjv-tm-search-in { width: 100%; box-sizing: border-box; }
+/* 댓글 푸터: 좋아요/이모지/Reply 항상 보이게(기존 hover-only opacity:0 override) */
+.pjv-tm-c-act, .pjv-tm-c-reply { opacity: 1; }
+
+/* ── 태그 피커(클릭업식): 검색·생성·색 선택기 ── */
+.pjv-tm-tagpop { min-width: 256px; max-width: 300px; padding: 8px; gap: 0; }
+.pjv-tm-tagpop-top { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; border: 1px solid var(--line-net); border-radius: 9px; padding: 5px 7px; }
+.pjv-tm-tagpop-top:focus-within { border-color: var(--blue); }
+/* 선택된 태그 칩들 사이 간격 — 서로 붙지 않게. */
+.pjv-tm-tagpop-chips { display: flex; flex-wrap: wrap; gap: 6px; width: 100%; }
+.pjv-tm-tagpop-chips:empty { display: none; }
+.pjv-tm-tagpop .pjv-tm-taginput { flex: 1; min-width: 90px; border: none; padding: 3px 2px; font-size: 13px; outline: none; background: none; }
+.pjv-tm-tagpop-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 4px 4px; font-size: 12px; color: var(--muted-2); }
+.pjv-tm-tagresults { display: flex; flex-direction: column; gap: 1px; max-height: 248px; overflow-y: auto; }
+.pjv-tm-tagrow { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: none; background: none; cursor: pointer; padding: 7px 8px; border-radius: 7px; font-size: 13px; color: var(--ink); }
+/* 태그 popover 하단 '모든 태그 관리' 진입 버튼 + 관리뷰 제목 */
+.pjv-tm-tagmanage-btn { display: flex; align-items: center; gap: 7px; width: 100%; border: none; border-top: 1px solid var(--line-row); background: none; cursor: pointer; padding: 9px 8px 4px; margin-top: 4px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); }
+.pjv-tm-tagmanage-btn:hover { color: var(--blue); }
+.pjv-tm-tagmanage-title { font-size: 13px; font-weight: 700; color: var(--ink); }
+.pjv-tm-tagrow:hover { background: var(--bg-tint-2); }
+.pjv-tm-tagrow-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pjv-tm-tagrow-gear { flex: none; border: none; background: none; cursor: pointer; color: var(--muted-2); padding: 2px; border-radius: 5px; opacity: 0; display: inline-flex; }
+.pjv-tm-tagrow:hover .pjv-tm-tagrow-gear { opacity: 1; }
+.pjv-tm-tagrow-gear:hover { color: var(--ink); background: var(--bg-tint); }
+.pjv-tm-tagrow-gear .pjv-tm-ic { width: 15px; height: 15px; }
+.pjv-tm-tagcreate .pjv-tm-tagcreate-label { color: var(--muted-2); font-size: 12.5px; flex: none; }
+.pjv-tm-tagcreate-enter { margin-left: auto; color: var(--muted-3); font-size: 13px; }
+/* 색/이름/삭제 뷰 */
+.pjv-tm-tagcolor-top { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.pjv-tm-tagcolor-back { flex: none; border: none; background: none; cursor: pointer; color: var(--muted); padding: 3px; border-radius: 6px; display: inline-flex; }
+.pjv-tm-tagcolor-back:hover { color: var(--ink); background: var(--bg-tint-2); }
+.pjv-tm-tagcolor-back .pjv-tm-ic { width: 18px; height: 18px; }
+.pjv-tm-tagcolor-name { flex: 1; min-width: 0; border: 1px solid var(--ink); border-radius: 8px; padding: 7px 10px; font-size: 13.5px; outline: none; font-weight: 600; color: var(--ink); }
+.pjv-tm-tagcolor-name:focus { border-color: var(--blue); }
+.pjv-tm-tagcolor-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 9px; padding: 4px 2px; justify-items: center; }
+.pjv-tm-swatch { width: 28px; height: 28px; border-radius: 50%; border: 2px solid #fff; cursor: pointer; box-shadow: 0 0 0 1px var(--line-net); padding: 0; transition: transform .1s ease; }
+.pjv-tm-swatch:hover { transform: scale(1.1); }
+.pjv-tm-swatch.sel { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px currentColor; }
+.pjv-tm-swatch.none { background: var(--bg); color: var(--muted-2); display: inline-flex; align-items: center; justify-content: center; }
+.pjv-tm-swatch.none.sel { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--muted); }
+.pjv-tm-swatch.none .pjv-tm-ic { width: 18px; height: 18px; }
+.pjv-tm-tagcolor-sep { height: 1px; background: var(--line); margin: 9px 0; }
+.pjv-tm-tagdelete { display: flex; align-items: center; gap: 8px; width: 100%; border: none; background: none; cursor: pointer; padding: 7px 6px; border-radius: 7px; font-size: 13px; color: var(--ink-sub); }
+.pjv-tm-tagdelete:hover { background: var(--bg-tint-2); color: var(--coral-text); }
+.pjv-tm-tagdelete .pjv-tm-ic { width: 16px; height: 16px; }
+
+.pjv-tm-tagrow .pjv-check-mini { width: 16px; height: 16px; flex: none; color: var(--muted-3); }
+.pjv-tm-tagrow.sel .pjv-check-mini { color: var(--blue); }
+.pjv-tm-tagrow.sel { background: var(--bg-sel); }
+.pjv-tm-tagrow.sel:hover { background: var(--bg-sel); }
+
+/* ── 좌상단 하위 태스크(Subtasks) 버튼 — 접힘/펼침/분리 (Closed 와 대칭, 좌측) ── */
+.pjv-tasks-head-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.pjv-tasks-head-left h2 { margin: 0; }
+.pjv-subtask-btn { display: inline-flex; align-items: center; gap: 4px; height: 26px; box-sizing: border-box; line-height: 1; border: 1px solid var(--line); background: var(--bg); cursor: pointer; padding: 0 8px 0 7px; border-radius: 7px; font-size: 12px; font-weight: 600; color: var(--ink-sub); }
+.pjv-subtask-btn:hover { background: var(--bg-tint); color: var(--ink); }
+.pjv-subtask-btn.active { color: var(--blue); border-color: var(--blue); background: var(--bg-tint); }
+.pjv-subtask-ic { width: 13px; height: 13px; }
+.pjv-subtask-pop { min-width: 210px; padding: 4px; }
+.pjv-subtask-pop-head { font-size: 11.5px; font-weight: 700; color: var(--muted-2); padding: 6px 9px 4px; letter-spacing: .2px; }
+.pjv-subtask-item { justify-content: space-between; gap: 10px; }
+.pjv-subtask-item-main { display: flex; flex-direction: column; min-width: 0; }
+.pjv-subtask-item-label { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.pjv-subtask-item-hint { font-size: 11.5px; color: var(--muted-2); }
+.pjv-subtask-item.sel .pjv-subtask-item-label { color: var(--blue); }
+.pjv-subtask-check { flex: none; color: var(--blue); font-size: 13px; font-weight: 700; }
+
+/* 댓글 밀도 — 클릭업처럼 촘촘하게(글자·줄간격·패딩·모서리·간격 축소, 말풍선→균일 카드) */
+.pjv-tm-feed { gap: 9px; padding: 12px 16px; }
+.pjv-tm-c { gap: 8px; }
+.pjv-tm-c .pjv-ava { width: 24px; height: 24px; font-size: 10.5px; }
+.pjv-tm-c-who { font-size: 12.5px; }
+.pjv-tm-c-time { font-size: 11px; }
+.pjv-tm-c-text { font-size: 12.5px; line-height: 1.5; padding: 6px 10px; border-radius: 7px; }
+.pjv-tm-c-foot { margin-top: 2px; min-height: 20px; }
+.pjv-tm-ev { font-size: 12px; }
+

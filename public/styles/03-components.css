@@ -1,0 +1,425 @@
+/* ── §4 카드 — §0.5 calm: 화이트 + 헤어라인만(컬러 탑보더 금지, 선택/활성만 블루 보더) ── */
+.card {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 16px;
+  padding: 24px;
+}
+.card h2 { margin: 0 0 14px; font-size: 17px; font-weight: 800; color: var(--ink); }
+/* 섹션 제목(h3) 기본 margin 제거 — UA 기본 margin-block 이 카드 상단 패딩에 더해져 '위쪽 패딩 너무 큼'(본문·지식 등 #254). WIP styles.css 에서 유실됐던 것 복원(2026-06-30). */
+.card-head h3 { margin: 0; }
+.card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.card-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+/* 화이트 패널(필터 바 등) */
+.panel { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+
+/* ── 페이지 헤더 — §0.5: 제품 화면에 그라데이션 히어로 금지. 조용한 숫자+여백이 위계. ── */
+.page-head { padding: 8px 0 4px; }
+.page-head h1 { margin: 0 0 8px; font-size: 28px; font-weight: 800; line-height: 1.3; letter-spacing: -0.8px; color: var(--ink); }
+.page-head .sub { margin: 0 0 22px; font-size: 14.5px; color: var(--ink-sub); }
+/* 제목 + 우측 액션(예: 🗑 휴지통)을 한 줄에 — 제목은 좌, 액션은 우 끝. */
+.page-head-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 8px; }
+.page-head-row h1 { margin: 0; }
+/* 제목 오른쪽 액션 묶음(#367 공용 헤더) — + 추가·선택·🗑 휴지통 등. */
+.page-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: wrap; }
+/* 제목 없는 헤더(#req) — 큰 제목·부제 제거, 액션만 우측 정렬 툴바로. */
+.page-head-noheading { padding: 4px 0 0; }
+.page-head-noheading .page-head-row { justify-content: flex-end; margin-bottom: 6px; }
+.eyebrow { font-size: 13px; font-weight: 700; letter-spacing: 2px; color: var(--muted-head); text-transform: uppercase; margin: 0 0 10px; }
+.accent { color: var(--blue); }
+.stat-row { display: flex; gap: 32px; flex-wrap: wrap; }
+/* §2 num 토큰(44px 기준, 웹 0.85~1배) — 숫자 800/-1.5px + 단위 small 600 --muted-2 분리 */
+.stat .num { font-size: 40px; font-weight: 800; letter-spacing: -1.5px; color: var(--ink); line-height: 1.1; }
+.stat .num small { font-size: 16px; font-weight: 600; color: var(--muted-2); letter-spacing: 0; margin-left: 3px; }
+.stat .lbl { font-size: 12.5px; font-weight: 600; color: var(--muted-2); margin-top: 2px; }
+
+/* ── 그리드 ── */
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px; }
+.grid-2 > * { min-width: 0; } /* nowrap 제목이 1fr 칼럼을 밀어내지 않게 */
+@media (max-width: 960px) {
+  .grid-2 { grid-template-columns: 1fr; }
+}
+
+/* ── 입장 모션(§6) — 부팅 1회만 ── */
+.reveal { animation: reveal 250ms ease-out backwards; }
+@keyframes reveal {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* 상태 변경 민트 플래시 1회 */
+.flash { animation: mintflash 600ms ease-out; }
+@keyframes mintflash { from { background-color: var(--bg-success); } }
+
+/* ── 필/배지 — §0.5: 채운 컬러 필 금지. 키/슬러그 = 뉴트럴 모노 칩, 상태 = 점+무채 라벨. ── */
+.pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  border-radius: 10px; padding: 2px 9px;
+  font-size: 12px; font-weight: 700; line-height: 1.6; white-space: nowrap;
+}
+/* 키 칩 — 화이트 + 헤어라인 + 잉크, 모노스페이스(키=코드 의미론, 구 domain-map UI 매력) */
+.pill-domain, .pill-project {
+  background: var(--bg); border: 1px solid var(--line); color: var(--ink);
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 12px; font-weight: 500;
+}
+/* 상태 = 6px 점 + 무채 텍스트 라벨(채움/보더 없음) */
+.pill-state {
+  background: none; border: none; padding: 1px 2px; gap: 6px;
+  font-size: 12.5px; font-weight: 600; color: var(--ink-sub);
+}
+.pill-state::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--muted-2); flex: none; }
+.pill-state.confirmed::before { background: var(--mint); }
+.pill-state.proposed::before { background: var(--muted-2); }
+.pill-state.rejected { color: var(--muted-2); }
+.pill-state.rejected::before { background: var(--muted-3); }
+.pill-more { background: var(--bg); border: 1px solid var(--line); color: var(--muted-head); }
+.chip-by {
+  display: inline-flex; border: 1px solid var(--line); background: var(--bg);
+  color: var(--ink-sub); font-size: 12px; font-weight: 700;
+  border-radius: 9px; padding: 1px 7px;
+}
+.badge-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 7px; }
+
+/* ── 배너(§4 note) ── */
+.note {
+  background: var(--bg-note); border: 1px solid var(--line-note); color: var(--ink-note);
+  border-radius: 12px; padding: 13px 18px; font-size: 14px;
+}
+.note.coral { color: var(--coral-text); }
+
+/* ── 버튼 ── */
+.btn {
+  /* a·button·label 어디에 붙든 같은 높이·정렬로 렌더(#363) — inline-flex + line-height 고정으로
+     '<a class=btn>' 와 '<button class=btn>' 의 높이 불일치(선택 27px vs 추가/휴지통 32px)를 제거. */
+  display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; line-height: 1.15;
+  border: 1px solid transparent; cursor: pointer; font-weight: 700; border-radius: 11px; text-decoration: none;
+  padding: 9px 18px; font-size: 14px; white-space: nowrap; transition: background-color 150ms ease, border-color 150ms ease;
+}
+/* §0.5 예산: 채운 블루 primary 는 화면당 1개만 — 나머지는 전부 btn-ghost(화이트+헤어라인+잉크) */
+.btn-primary { background: var(--blue); color: #fff; }
+.btn-primary:hover { background: var(--blue-deep); }
+.btn-ghost { background: var(--bg); border: 1px solid var(--line); color: var(--ink); }
+.btn-ghost:hover { border-color: var(--blue); }
+.btn-sm { padding: 5px 13px; font-size: 13px; border-radius: 9px; }
+.btn-text { background: none; border: none; color: var(--ink-sub); font-weight: 600; font-size: 13px; cursor: pointer; padding: 4px 6px; }
+.btn-text:hover { color: var(--blue); }
+.btn:disabled { opacity: .55; cursor: not-allowed; }
+
+/* ── 폼 요소 ── */
+input[type="text"], input[type="password"], input[type="email"], input[type="search"], input[type="date"],
+input[type="number"], select, textarea {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 9px;
+  padding: 7px 11px; color: var(--ink); font-size: 14px; font-weight: 500;
+}
+input::placeholder, textarea::placeholder { color: var(--muted-2); }
+select:disabled { color: var(--muted-2); background: var(--bg-tint); }
+textarea { resize: vertical; }
+
+/* ── 시크릿 입력칸(#1250) ── */
+/*  토큰·client_secret·웹훅 URL 은 계정 비밀번호가 아니다. type=password 로 두면 크롬이 그 폼을 로그인 폼으로
+    오인해 앞 텍스트칸에 저장된 이메일을 채우고 제출 때 "비밀번호를 저장할까요?"를 띄운다(비번칸의
+    autocomplete=off 는 크롬이 무시). 그래서 텍스트칸으로 두고 가림은 여기 CSS 로만 한다.
+    ⚠ 이 속성 미지원 브라우저에서는 core.ts 가 type=password 로 되돌린다(평문 노출 방지). */
+.secret-input { -webkit-text-security: disc; }
+.secret-input.is-shown { -webkit-text-security: none; }
+.secret-row { display: flex; gap: 6px; align-items: center; }
+.secret-row > .secret-input { flex: 1; min-width: 0; }
+.secret-toggle { flex: none; }
+label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted-head); }
+
+/* ── 필터 바 ── */
+.filter-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.filter-bar input[type="search"] { flex: 1; min-width: 180px; }
+
+/* ── 리스트 행(테이블풍) ── */
+.list-box { background: var(--bg); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; margin-top: 12px; }
+.row { padding: 14px 16px; border-bottom: 1px solid var(--line-row); cursor: pointer; }
+.row:last-child { border-bottom: none; }
+.row:hover { background: var(--bg-tint); }
+.row.sel { background: var(--bg-sel); box-shadow: inset 3px 0 0 var(--blue); }
+.row-title {
+  font-size: 15px; font-weight: 700; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.row-meta { font-size: 12.5px; font-weight: 600; color: var(--muted-2); margin-top: 3px; }
+.row-meta .thread-mark { color: var(--muted-head); }
+.list-foot { display: flex; align-items: center; gap: 14px; padding: 12px 4px; }
+.caption { font-size: 12.5px; font-weight: 600; color: var(--muted-2); }
+
+/* ── 디테일 페인 ── */
+.detail-card { background: var(--bg); border: 1px solid var(--line); border-radius: 16px; padding: 24px; }
+.detail-title { font-size: 20px; font-weight: 800; color: var(--ink); margin: 0 0 6px; line-height: 1.35; }
+.detail-meta { font-size: 13px; font-weight: 600; color: var(--muted-2); display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.sec-label { font-size: 13px; font-weight: 700; color: var(--muted-head); margin: 22px 0 8px; }
+.sec-label-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.body-text {
+  white-space: pre-wrap; word-break: break-word;
+  font-size: 15px; line-height: 1.55; color: var(--ink-sub); margin: 0;
+  font-family: inherit;
+}
+
+/* ── 렌더된 마크다운 본문 — DESIGN 절제(기존 토큰만, 새 컬러 없음). ── */
+.md-rendered { font-size: 15px; line-height: 1.6; color: var(--ink-sub); word-break: break-word; }
+.md-rendered > .md > :first-child { margin-top: 0; }
+.md-rendered > .md > :last-child { margin-bottom: 0; }
+/* 내 스킬·훅 — 라이블리 자산이 깔린 PC 칩 + sync 경고 (#893 후속) */
+.pc-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.pc-chip { display: inline-flex; align-items: center; font-size: 11.5px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint, #F1F5FC); border: 1px solid var(--line-net); border-radius: 999px; padding: 2px 9px; white-space: nowrap; }
+.pc-chip.warn { color: #8a5a00; background: #fff6e6; border-color: #f0d59a; }
+.pc-chip.muted { background: transparent; border-style: dashed; opacity: .75; }
+.sync-warn { padding: 10px 12px; background: #fff6e6; border: 1px solid #f0d59a; border-radius: 8px; margin-bottom: 10px; font-size: 13px; color: #6b4e00; line-height: 1.5; }
+/* 관리탭 [스킬·훅 ▸ 대상 구성원] — 정책(전원 켬/끔/지정) + 구성원별 예외 표 (#860) */
+.tm-policy { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--bg-tint, #F1F5FC); }
+.tm-members-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+/* 저장 시점이 다른 두 레이어(정책=[저장] 후 / 예외=즉시)를 각 상자 머리에 못박는 라벨 */
+.tm-when { margin-left: auto; font-size: 11.5px; font-weight: 700; color: var(--muted-2); white-space: nowrap; }
+.tm-seg { display: inline-flex; gap: 2px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 2px; }
+.tm-seg-btn { font: inherit; font-size: 12.5px; font-weight: 700; color: var(--ink-sub); background: transparent; border: 0; border-radius: 6px; padding: 5px 11px; cursor: pointer; white-space: nowrap; }
+.tm-seg-btn:hover { background: var(--bg-tint, #F1F5FC); }
+.tm-seg-btn.on { background: var(--blue); color: #fff; }
+.tm-hint { font-size: 12.5px; color: var(--ink-sub); line-height: 1.5; margin: 8px 0 0; }
+/* 폼에 남는 요약 한 줄 — 구성원 표 자체는 모달로 뺐다(42명을 인라인으로 깔면 [저장]이 화면 밖으로 밀린다) */
+.tm-members { margin-top: 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tm-members .tm-count { margin-right: auto; }
+.tm-list { max-height: 52vh; overflow-y: auto; }
+.tm-count { font-size: 12.5px; font-weight: 700; color: var(--muted-head); }
+.tm-search { font: inherit; font-size: 12.5px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 7px; width: 150px; }
+.tm-stale { padding: 8px 10px; background: #fff6e6; border: 1px solid #f0d59a; border-radius: 8px; margin-bottom: 8px; font-size: 12.5px; font-weight: 600; color: #6b4e00; }
+/* 정책이 '저장 전'이면 아래 실효 상태는 아직 옛 정책 기준 — 흐리게 해서 화면이 거짓말하지 않게 */
+.tm-list-stale { opacity: .55; }
+.tm-row { display: flex; align-items: center; gap: 12px; padding: 7px 4px; border-top: 1px solid var(--line); }
+.tm-row.exc { background: var(--bg-tint, #F1F5FC); }
+/* 비활성 구성원 — 인증부터 막혀 아무것도 못 받는다. 예외 설정은 남기되 '살아있는 대상'으로 보이지 않게. */
+.tm-row.dead .tm-name, .tm-row.dead .tm-id { color: var(--muted-2); text-decoration: line-through; }
+.tm-who { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; }
+.tm-name { font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.tm-id { font-size: 11.5px; font-weight: 600; color: var(--muted-2); }
+.tm-state { flex: 0 0 116px; display: flex; flex-direction: column; gap: 2px; }
+.tm-state .pill.tm-on { color: #1b6b3a; background: #e8f7ee; border-color: #a9dcbf; }
+.tm-why { font-size: 11px; font-weight: 600; color: var(--muted-2); }
+.tm-seg-row { flex: none; }
+@media (max-width: 640px) {
+  .tm-row { flex-wrap: wrap; }
+  .tm-state { flex-basis: auto; flex-direction: row; align-items: center; gap: 6px; }
+}
+.harness-click { cursor: pointer; border-radius: 8px; margin: -4px -6px; padding: 4px 6px; transition: background .12s; }
+.harness-click:hover { background: var(--bg-tint, #F1F5FC); }
+.harness-click:hover .mini-title { text-decoration: underline; text-decoration-color: var(--line-net-2); text-underline-offset: 3px; }
+.md-p { margin: 0 0 12px; }
+.md-h { color: var(--ink); font-weight: 800; line-height: 1.35; margin: 22px 0 8px; }
+.md-h1 { font-size: 19px; }
+.md-h2 { font-size: 17px; }
+.md-h3 { font-size: 15.5px; }
+.md-h4, .md-h5, .md-h6 { font-size: 14px; color: var(--ink-sub); }
+.md-rendered strong { font-weight: 800; color: var(--ink); }
+.md-rendered em { font-style: italic; }
+.md-code {
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.88em; background: var(--bg-tint); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; word-break: break-all;
+}
+.md-pre {
+  background: var(--bg-tint); border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px 14px; margin: 0 0 12px; overflow: auto; white-space: pre;
+}
+.md-pre code {
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12.5px; line-height: 1.55; color: var(--ink); background: none; border: 0; padding: 0;
+}
+.md-list { margin: 0 0 12px; padding-left: 22px; }
+.md-list li { margin: 2px 0; }
+.md-list .md-list { margin-bottom: 0; }
+.md-quote {
+  margin: 0 0 12px; padding: 4px 14px; border-left: 3px solid var(--line-note);
+  color: var(--ink-sub); background: var(--bg-note); border-radius: 0 8px 8px 0;
+}
+.md-quote > :last-child { margin-bottom: 0; }
+.md-hr { border: 0; border-top: 1px solid var(--line); margin: 18px 0; }
+.md-link { color: var(--blue); text-decoration: underline; word-break: break-all; }
+.md-link:hover { color: var(--blue-deep); }
+/* 본문 속 지식 링크 언펄(#317) — 위키 지식임을 작은 문서 글리프로 표시. URL 대신 제목이라 단어 단위 줄바꿈. */
+.md-link.kn-unfurl { word-break: normal; }
+.md-link.kn-unfurl::before { content: '📄'; margin-right: 3px; font-size: .9em; opacity: .75; }
+.md-table { border-collapse: collapse; margin: 0 0 12px; font-size: 13.5px; display: block; overflow-x: auto; }
+.md-table th, .md-table td { border: 1px solid var(--line); padding: 6px 11px; text-align: left; vertical-align: top; }
+.md-table th { background: var(--bg-tint); font-weight: 700; color: var(--ink); }
+.md-raw-toggle { flex: none; }
+.unit-body-raw { margin-top: 0; }
+details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; color: var(--muted-head); margin-top: 20px; }
+.fields-table { margin-top: 8px; font-size: 12.5px; color: var(--ink-sub); border-collapse: collapse; }
+/* th 스타일이 없어 브라우저 기본(가운데·굵게)이 먹으면 헤더가 좌측정렬 내용과 어긋난다 → 열 라벨답게 좌측·muted 로 맞춤(#req) */
+.fields-table th { text-align: left; font-weight: 700; color: var(--muted-2); font-size: 11px; padding: 0 14px 7px 0; white-space: nowrap; }
+.fields-table td { padding: 3px 14px 3px 0; vertical-align: top; word-break: break-all; }
+.fields-table td:first-child { font-weight: 700; color: var(--muted-head); white-space: nowrap; }
+
+/* WIKI 카테고리 설정 — calm 리스트(무채·헤어라인·아웃라인, domain-map 톤). 표 대신 균일 단일행 + space 그룹. */
+.wikicat { display: flex; flex-direction: column; gap: 18px; margin-top: 14px; }
+.wikicat-grouphead { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.wikicat-grouptitle { font-size: 13px; font-weight: 800; color: var(--ink); }
+.wikicat-groupcount { font-size: 12px; font-weight: 700; color: var(--muted-2); }
+.wikicat-add { margin-left: auto; }
+.wikicat-rows { border: 1px solid var(--line); border-radius: 12px; background: var(--bg); overflow: hidden; }
+.wikicat-row { display: flex; align-items: center; gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--line-row); }
+.wikicat-row:last-child { border-bottom: none; }
+.wikicat-row:hover { background: var(--bg-tint); }
+.wikicat-row-main { min-width: 0; flex: 1; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.wikicat-name { font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.wikicat-key { font-size: 11.5px; color: var(--muted-head); }
+.wikicat-should { width: 100%; font-size: 12.5px; line-height: 1.5; color: var(--ink-sub);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wikicat-should-label { font-style: normal; font-size: 10.5px; font-weight: 700; color: var(--muted-2);
+  margin-right: 6px; text-transform: none; }
+.wikicat-should-empty { color: var(--muted-2); font-style: italic; }
+.wikicat-row-acts { display: flex; gap: 6px; flex-shrink: 0; opacity: .55; transition: opacity .12s; }
+.wikicat-row:hover .wikicat-row-acts, .wikicat-row:focus-within .wikicat-row-acts { opacity: 1; }
+.wikicat-empty { padding: 12px 14px; color: var(--muted-2); font-size: 12.5px; }
+/* #1153 분류체계 탭 — 표류 요약 배너 + 행 배지(연결 레포·정의 표류). 색은 기존 .pill/.pill-warn 조합 재사용. */
+.wikicat-summary { margin: 14px 0 2px; }
+.wikicat-summary-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-tint); }
+.wikicat-summary-txt { font-size: 12.5px; line-height: 1.5; color: var(--ink-sub); }
+.wikicat-drift { display: inline-flex; align-items: baseline; gap: 6px; font-size: 11.5px; color: var(--muted-head); }
+.wikicat-drift-date { font-weight: 700; }
+.wikicat-drift-n { color: var(--ink-sub); }
+.wikicat-repos { display: inline-flex; align-items: baseline; gap: 5px; font-size: 12px; min-width: 0; }
+.wikicat-repos-label { font-size: 10.5px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; color: var(--muted-2); }
+.wikicat-repos-v { color: var(--ink-sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 어긋난 지식 펼침 — 행 아래 붙는 구획(행 테두리와 이어지게 위쪽 선만). */
+.wikicat-rowwrap { border-bottom: 1px solid var(--line-row); }
+.wikicat-rowwrap:last-child { border-bottom: none; }
+.wikicat-rowwrap .wikicat-row { border-bottom: none; }
+.wikicat-mismatch { padding: 10px 14px 14px; background: var(--bg-tint); }
+.wikicat-mismatch-loading { font-size: 12.5px; color: var(--muted-2); }
+.wikicat-mismatch-list { display: flex; flex-direction: column; gap: 4px; }
+.wikicat-mismatch-row { display: flex; align-items: baseline; gap: 10px; font-size: 12.5px; }
+.wikicat-mismatch-t { color: var(--ink-sub); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wikicat-mismatch-t:hover { color: var(--blue); text-decoration: underline; }
+.wikicat-mismatch-to { flex: none; font-size: 11.5px; font-weight: 700; color: var(--ink-sub); }
+.wikicat-mismatch-d { margin-left: auto; flex: none; font-size: 11.5px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+/* 분류 폼의 연결 레포 체크박스 — 레포 수가 소수라 나열이 다중선택 <select> 보다 읽기 쉽다. */
+.catform-repos { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+.catform-repo { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-sub); cursor: pointer; }
+
+/* ── 스레드(대화형) ── */
+.thread { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.bubble {
+  background: var(--bg); border-radius: 12px; padding: 10px 14px; cursor: pointer;
+  border: 1px solid var(--line-row);
+}
+.bubble:hover { border-color: var(--line-net-2); }
+.bubble.current { background: var(--bg-sel); box-shadow: inset 3px 0 0 var(--blue); cursor: default; }
+.bubble.child { margin-left: 16px; }
+.bubble-head { font-size: 12.5px; font-weight: 700; color: var(--ink-sub); display: flex; gap: 8px; align-items: baseline; }
+.bubble-head .when { font-weight: 600; color: var(--muted-2); }
+.bubble-body { font-size: 14px; color: var(--ink-sub); margin-top: 3px; word-break: break-word; }
+
+/* ── 매핑/근거 ── */
+.map-row { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; padding: 8px 0; }
+.map-row .caption { margin-left: 2px; }
+.evidence {
+  border-left: 3px solid var(--line); background: var(--bg);
+  padding: 10px 14px; font-size: 13.5px; color: var(--ink-sub);
+  border-radius: 0 9px 9px 0; margin: 2px 0 8px; word-break: break-word; white-space: pre-wrap;
+}
+.inline-note { font-size: 13px; font-weight: 600; color: var(--coral-text); margin-top: 6px; }
+
+/* ── 제안 폼 ── */
+.propose-form { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-top: 10px; display: flex; flex-direction: column; gap: 10px; }
+.propose-form .form-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.kind-toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.kind-toggle button { border: none; background: var(--bg); padding: 6px 14px; font-size: 13px; font-weight: 700; color: var(--ink-sub); cursor: pointer; }
+.kind-toggle button.on { background: var(--bg); color: var(--ink); box-shadow: inset 0 -2px 0 var(--blue); } /* 선택=블루 언더라인(채움 금지) */
+
+/* ── 큐레이션 카드 ── */
+.inbox-grid { display: flex; flex-direction: column; gap: 16px; margin-top: 16px; }
+.inbox-card { padding: 24px; }
+.inbox-head { display: flex; justify-content: space-between; gap: 14px; align-items: baseline; }
+.inbox-title { font-size: 16px; font-weight: 700; color: var(--ink); margin: 0; }
+.inbox-title a:hover { color: var(--blue); }
+.inbox-detail-link { font-size: 13px; font-weight: 600; color: var(--ink-sub); white-space: nowrap; }
+.inbox-detail-link:hover { color: var(--blue); }
+.snippet-2l {
+  font-size: 14px; color: var(--ink-sub); margin: 8px 0 0;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  word-break: break-word;
+}
+.curation-strip { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; margin-top: 16px; }
+@media (max-width: 960px) { .curation-strip { grid-template-columns: minmax(0, 1fr); } }
+.mini-form { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.mini-form .mf-title { font-size: 12.5px; font-weight: 700; color: var(--muted-head); }
+.mini-form .mf-row { display: flex; gap: 8px; }
+.mini-form select, .mini-form input { flex: 1; min-width: 0; }
+/* §2 num 토큰 — 숫자만 크게, 라벨('미매핑')·단위('건')는 small 로 분리 */
+.num-big { font-size: 38px; font-weight: 800; letter-spacing: -1.5px; color: var(--ink); line-height: 1.1; white-space: nowrap; }
+.num-big small { font-size: 15px; font-weight: 600; color: var(--muted-2); letter-spacing: 0; margin: 0 3px; }
+
+/* ── 커버리지 ── */
+.cov-repo { margin-bottom: 16px; }
+.cov-repo:last-child { margin-bottom: 0; }
+.cov-name { font-size: 14px; font-weight: 700; color: var(--ink); margin-bottom: 6px; }
+.cov-line { display: grid; grid-template-columns: 58px 1fr auto; gap: 10px; align-items: center; margin-bottom: 6px; }
+.cov-lbl { font-size: 13px; font-weight: 600; color: var(--ink-sub); }
+/* §0.5: 커버리지 바 무채 + 우단 민트 끝점(살아있음 신호만 컬러) */
+.track { height: 6px; background: var(--line); border-radius: 3px; }
+.fill { height: 6px; background: var(--muted-3); border-radius: 3px; position: relative; min-width: 4px; }
+.fill::after { content: ""; position: absolute; right: 0; top: 0; width: 4px; height: 6px; border-radius: 2px; background: var(--mint); }
+.cov-stat { font-size: 12px; font-weight: 600; color: var(--muted-2); white-space: nowrap; }
+.cov-stat .ok { color: var(--mint-deep); font-weight: 700; }
+
+/* ── 최근 유입 미니 바 ── */
+.bars { display: flex; gap: 3px; align-items: flex-end; height: 36px; margin-top: 6px; }
+.bar { width: 10px; background: var(--muted-3); border-radius: 2px; min-height: 2px; }
+.bar.today { background: var(--mint); } /* '오늘=살아있음' 끝점 의미 — 유지 */
+
+/* ── 도메인 페이지 ── */
+.repo-pills { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.repo-pill {
+  border-radius: 18px; padding: 6px 16px; font-size: 14px; font-weight: 700; cursor: pointer;
+  background: var(--bg); border: 1px solid var(--line); color: var(--ink-sub);
+}
+.repo-pill.on { background: var(--bg); border: 1px solid var(--blue); color: var(--ink); } /* 선택=블루 보더(채움 금지) */
+/* (구 도메인 카드 그리드 규칙 제거 — 큐레이션 two-pane 으로 대체, 아래 '도메인 큐레이션' 블록 참조) */
+
+/* ── 스켈레톤(정적 — 쉬머 금지) ── */
+.skel { background: var(--bg-tint); border: 1px solid var(--line); border-radius: 12px; min-height: 88px; }
+.skel-stack { display: flex; flex-direction: column; gap: 12px; }
+.loading-caption { font-size: 13px; font-weight: 600; color: var(--muted-2); margin: 10px 0; }
+
+/* ── 빈 상태 ── */
+.empty { text-align: center; padding: 44px 20px; color: var(--ink-sub); font-size: 14px; }
+.empty svg { display: block; margin: 0 auto 14px; }
+
+/* ── 토큰 게이트 ── */
+#gate {
+  position: fixed; inset: 0; background: var(--bg); z-index: 100;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.gate-card {
+  background: var(--bg); border: 1px solid var(--line); border-radius: 16px;
+  width: 100%; max-width: 380px; padding: 32px;
+}
+.gate-mark { font-size: 22px; margin-bottom: 14px; }
+/* #req 로그인 창에서만 'for <조직명>' 태그라인을 조금 키움(헤더는 그대로 15px). */
+.gate-mark .wordmark-sub { font-size: 17.5px; }
+.gate-copy { font-size: 14px; color: var(--ink-sub); margin: 0 0 18px; }
+#gate-form { display: flex; flex-direction: column; gap: 10px; }
+#gate-input, #gate-email, #gate-password { width: 100%; }
+.gate-error { font-size: 13px; font-weight: 600; color: var(--coral-text); margin: 0; }
+.gate-btn { width: 100%; }
+.gate-token-toggle { background: none; border: 0; color: var(--muted-2); font-size: 12.5px; cursor: pointer; padding: 4px; text-decoration: underline; align-self: center; }
+.gate-token-toggle:hover { color: var(--ink-sub); }
+
+/* ── 토스트 — 헤어라인 보더 + 선두 6px 점(성공=민트·에러=코랄) ── */
+/* z-index 는 모든 모달/오버레이/드로어 위여야 한다(현 최대 .cmt-backdrop=1300). 토스트는 전역 피드백이라
+   모달이 떠 있어도 항상 보여야 함 — 이 값을 1300 이하로 낮추면 우하단 카드가 모달 뒤로 숨는다(#343). */
+#toasts { position: fixed; bottom: 24px; right: 24px; display: flex; flex-direction: column; gap: 8px; z-index: 2000; }
+.toast {
+  display: flex; align-items: center; gap: 9px;
+  background: var(--bg); border: 1px solid var(--line);
+  border-radius: 11px; padding: 10px 16px; font-size: 14px; font-weight: 600; color: var(--ink);
+  box-shadow: 0 8px 30px rgba(20, 35, 60, .12);
+}
+.toast::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--mint); flex: none; }
+.toast.coral { color: var(--coral-text); }
+.toast.coral::before { background: var(--coral); }
+.toast .btn-text { padding: 0 2px; color: var(--blue); }
+

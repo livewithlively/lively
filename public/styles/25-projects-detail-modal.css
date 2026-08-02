@@ -1,0 +1,26 @@
+/* ============================================================
+   프로젝트 상세 팝업(.pjv-pm) — 대시보드 '내 프로젝트' 행 클릭 시.
+   상세 페이지를 그대로 모달에 렌더하고 모달 안에서 스크롤. 태스크 팝업(.pjv-tm)과 동일한 셸.
+   ============================================================ */
+body.pjv-pm-open { overflow: hidden; }
+.pjv-pm-back { position: fixed; inset: 0; background: rgba(21,35,59,.5); display: flex; align-items: center; justify-content: center; padding: 4vh 20px; z-index: 210; }
+.pjv-pm { display: flex; flex-direction: column; width: min(1100px, 96vw); height: min(90vh, 940px); background: var(--bg); border: 1px solid var(--line-net); border-radius: 14px; box-shadow: 0 24px 64px rgba(20,35,59,.28); overflow: hidden; }
+.pjv-pm-head { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 9px 12px 9px 16px; border-bottom: 1px solid var(--line); }
+.pjv-pm-x { flex: none; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; cursor: pointer; color: var(--muted); font-size: 14px; border-radius: 7px; padding: 0; }
+.pjv-pm-x:hover { background: var(--bg-tint-2); color: var(--ink); }
+/* 내부 스크롤 — 상세 내용이 길어도 모달 안에서만 스크롤(페이지는 고정). */
+.pjv-pm-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 6px 26px 34px; }
+/* 페이지용 '← 프로젝트' 백링크는 모달에선 불필요(✕·Esc·배경클릭으로 닫음) — 눌러서 이탈하는 사고 방지. */
+.pjv-pm .proj-detail-back { justify-content: flex-end; margin-bottom: 8px; }
+.pjv-pm .proj-detail-backlink { display: none; }
+.pjv-pm .page-head { margin-top: 0; }
+
+/* WIKI 사이드바 — 즐겨찾기(★)된 카테고리도 '지식 개수'를 보여준다.
+   (구 전역 즐겨찾기 행 개수 숨김 규칙은 #1115 로 삭제 — opacity:1 은 이제 방어용.) WIKI 는 파란 별을 행에 상시표시하므로
+   별은 우측 절대배치(right:30px)이고, 개수를 그만큼 왼쪽으로 물려 겹치지 않게 노출한다.
+   호버 시엔 기존 동작 유지(개수 감추고 ★·⋯ 노출) — 전역 :hover 규칙과 동일. */
+/* 별은 right:30px + 폭 21px → 행 우측 51px 를 차지. 개수가 그 앞에서 끝나도록 물린다(겹침 0). */
+.kn-nav-cat.is-fav .pjv-side-navcount { opacity: 1; margin-right: 46px; }
+.kn-nav-cat.is-fav:hover .pjv-side-navcount { opacity: 0; }
+.wk-cat-v6 .wk-lib-sec .wk-cat-library { margin-top: 8px; }
+

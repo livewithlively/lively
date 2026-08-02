@@ -1,0 +1,94 @@
+/* ════════ 도메인 큐레이션(domainmap 흡수) — §0.5 calm 등급 ════════ */
+/* 모노스페이스 — 슬러그/경로/키(코드 의미론, 구 domain-map UI 매력) */
+.mono { font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: var(--muted); word-break: break-all; }
+
+/* 라벨 없는 상태 점(6px) — 목록 행 선두용(이름이 곧 라벨) */
+.dot6 { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--muted-2); flex: none; align-self: center; }
+.dot6.ok { background: var(--mint); }
+
+/* 상태 점 + 무채 라벨(6px) — domainmap status/debt status 공용 */
+.st { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); white-space: nowrap; }
+.st::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--muted-2); flex: none; }
+.st.ok::before { background: var(--mint); }       /* 확정/해결됨 */
+.st.dim { color: var(--muted-2); }
+.st.dim::before { background: var(--muted-3); }    /* 기각/무시됨 */
+.st.warn::before { background: var(--coral); }     /* 열린 이슈 */
+
+/* 인페이지 섹션 탭(언더라인 세그먼트 — 전역 내비 아님) */
+/* 화면 내 서브탭 — #837 에서 관리탭 병합 섹션(구성원·AI 도구·스킬·훅·자동화·감사 로그)이 되살려 쓴다. */
+.seg-tabs { display: flex; gap: 2px; flex-wrap: wrap; border-bottom: 1px solid var(--line); margin: 4px 0 0; }
+.seg-tabs button {
+  border: none; background: none; cursor: pointer; padding: 9px 14px;
+  font-size: 14px; font-weight: 700; color: var(--ink-sub);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.seg-tabs button:hover { color: var(--ink); }
+.seg-tabs button.on { color: var(--ink); border-bottom-color: var(--blue); } /* 화면당 1곳 채색 슬롯 */
+/* 탭 내용 — 구획(카드)들이 여백 없이 붙지 않게 세로 간격(구성원·AI 도구·스킬훅·자동화·감사 등 segTabs 본문 공통) */
+.seg-body { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
+
+/* 필터 탭(전체/확인 필요/이슈) — 무채 텍스트 토글 */
+.dm-filters { display: flex; gap: 4px; margin: 12px 0 0; }
+.dm-filters button {
+  border: 1px solid transparent; background: none; cursor: pointer; border-radius: 9px;
+  padding: 4px 10px; font-size: 13px; font-weight: 600; color: var(--ink-sub);
+}
+.dm-filters button:hover { color: var(--ink); }
+.dm-filters button.on { border-color: var(--line); color: var(--ink); background: var(--bg); }
+
+/* 영역 목록 */
+.dm-group-head { font-size: 12px; font-weight: 700; color: var(--muted-head); letter-spacing: 1px; padding: 12px 16px 4px; }
+.dm-row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.dm-row .nm { font-size: 14.5px; font-weight: 700; color: var(--ink); }
+.dm-counts { font-size: 12px; font-weight: 600; color: var(--ink-sub); font-variant-numeric: tabular-nums; margin-top: 2px; }
+
+/* 상세 — 매핑 행 */
+.map-sec { margin-top: 6px; }
+.maprow {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 9px 10px; border-bottom: 1px solid var(--line-row); border-left: 3px solid transparent;
+}
+.maprow:last-child { border-bottom: none; }
+.maprow .mono { flex: 1; min-width: 160px; color: var(--ink); }
+.maprow .meta { font-size: 12px; font-weight: 600; color: var(--muted-2); white-space: nowrap; }
+.maprow .conf { font-size: 12px; font-weight: 600; color: var(--ink-sub); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.maprow.removed .mono { text-decoration: line-through; color: var(--muted-2); }
+.maprow.cur { background: var(--bg-sel); border-left-color: var(--blue); } /* 키보드 커서 = 블루 인셋(.row.sel 문법) */
+.maprow select { font-size: 12.5px; padding: 4px 8px; }
+
+/* 이슈(debt) 행 */
+.debt-row { padding: 13px 16px; border-bottom: 1px solid var(--line-row); }
+.debt-row:last-child { border-bottom: none; }
+.debt-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.debt-title { font-size: 14.5px; font-weight: 700; color: var(--ink); flex: 1; min-width: 200px; }
+.debt-detail { font-size: 13.5px; color: var(--ink-sub); margin: 5px 0 0; word-break: break-word; }
+.debt-refs { margin-top: 5px; display: flex; flex-direction: column; gap: 2px; }
+
+/* 변경 이력 스트림 */
+.hist-row { padding: 12px 16px; border-bottom: 1px solid var(--line-row); }
+.hist-row:last-child { border-bottom: none; }
+.hist-head { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; font-size: 13.5px; }
+.hist-head .when { font-size: 12px; font-weight: 600; color: var(--muted-2); white-space: nowrap; }
+.hist-head .who { font-weight: 700; color: var(--ink); }
+.hist-head .op { font-weight: 600; color: var(--ink-sub); }
+.hist-note { font-size: 12.5px; color: var(--muted); margin-top: 3px; word-break: break-word; }
+.hist-diff { margin-top: 5px; display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; color: var(--ink-sub); }
+.hist-diff .k { font-weight: 700; color: var(--muted-head); }
+.hist-diff .arrow { color: var(--muted-2); }
+
+/* 인라인 수정 폼(영역) */
+.dm-edit { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; }
+.dm-edit input[type="text"], .dm-edit textarea { width: 100%; box-sizing: border-box; }
+.dm-edit .frow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+/* 액션 바 */
+.dm-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+
+/* 키보드 도움말 힌트 */
+.kbd-hint { font-size: 12px; font-weight: 600; color: var(--muted-2); padding: 10px 4px; }
+
+/* ── §6 절제: prefers-reduced-motion 이면 펄스·리빌·플래시 전부 끔 ── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+

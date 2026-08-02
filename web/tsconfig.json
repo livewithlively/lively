@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noImplicitAny": false,
+    "noUnusedLocals": true,
+    "useUnknownInCatchVariables": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "rootDir": ".",
+    "outDir": "../public/app",
+    "incremental": true,
+    "tsBuildInfoFile": "../.tsbuildinfo-web"
+  },
+  // standalone/ 은 별도 프로젝트(web/standalone/tsconfig.json) — 단독 페이지(클래식 script)용 소스라
+  //  산출 위치(dist/standalone)·컴파일러 옵션(strict off)이 다르다. SPA 번들(public/app)에 섞이면 안 된다.
+  "include": ["./**/*.ts"],
+  "exclude": ["./standalone/**"]
+}

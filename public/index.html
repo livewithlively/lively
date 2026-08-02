@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lively Context</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='5' fill='%2316C79A'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@latest/dist/web/static/pretendard.min.css">
+<!-- 스타일시트 — 옛 단일 public/styles.css(8,600줄)를 섹션 주석 경계에서 화면별로 분할한 것(#1313 R50).
+     ⚠ 이 <link> 나열 **순서가 곧 계약**이다: 파일 순서대로 이어붙인 합본이 옛 styles.css 와 byte 동일하며,
+     CSS 캐스케이드(뒤가 앞을 override)가 그 순서에 의존한다. 줄을 옮기면 화면이 깨진다 — 추가는 항상 끝(또는
+     해당 화면 파일 안)에, 재정렬 금지. 파일명 숫자 접두사는 이 순서를 보존하기 위한 것이다. -->
+<link rel="stylesheet" href="./styles/01-base.css">
+<link rel="stylesheet" href="./styles/02-shell.css">
+<link rel="stylesheet" href="./styles/03-components.css">
+<link rel="stylesheet" href="./styles/04-domain-curation.css">
+<link rel="stylesheet" href="./styles/05-admin.css">
+<link rel="stylesheet" href="./styles/06-learn.css">
+<link rel="stylesheet" href="./styles/07-knowledge-map.css">
+<link rel="stylesheet" href="./styles/08-activity.css">
+<link rel="stylesheet" href="./styles/09-screens-batch.css">
+<link rel="stylesheet" href="./styles/10-terminal.css">
+<link rel="stylesheet" href="./styles/11-domainmap.css">
+<link rel="stylesheet" href="./styles/12-categories.css">
+<link rel="stylesheet" href="./styles/13-projects.css">
+<link rel="stylesheet" href="./styles/14-files-upload.css">
+<link rel="stylesheet" href="./styles/15-projects-task-modal.css">
+<link rel="stylesheet" href="./styles/16-projects-board.css">
+<link rel="stylesheet" href="./styles/17-projects-board-ext.css">
+<link rel="stylesheet" href="./styles/18-notion-mirror.css">
+<link rel="stylesheet" href="./styles/19-connectors.css">
+<link rel="stylesheet" href="./styles/20-dashboard.css">
+<link rel="stylesheet" href="./styles/21-wiki-notion.css">
+<link rel="stylesheet" href="./styles/22-responsive.css">
+<link rel="stylesheet" href="./styles/23-projects-editor-status.css">
+<link rel="stylesheet" href="./styles/24-wiki-redesign.css">
+<link rel="stylesheet" href="./styles/25-projects-detail-modal.css">
+<link rel="stylesheet" href="./styles/26-docs-guide.css">
+<link rel="stylesheet" href="./styles/27-start-onboarding.css">
+<link rel="stylesheet" href="./styles/28-guide-diagrams.css">
+<link rel="stylesheet" href="./styles/29-projects-board-header.css">
+<link rel="stylesheet" href="./styles/30-projects-views.css">
+<style>
+  /* 한글 코딩 글꼴 D2Coding — 자체호스팅(public/fonts, OFL). #279 한글 가독성 (터미널 탭) */
+  @font-face { font-family: 'D2Coding'; src: url('fonts/D2Coding.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: swap; }
+  @font-face { font-family: 'D2Coding'; src: url('fonts/D2Coding-Bold.woff2') format('woff2'); font-weight: 700; font-style: normal; font-display: swap; }
+  /* 터미널 세션 매니저 — 도그푸드 스코프 스타일 */
+  .term-list { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+  .term-row { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 12px 14px; border: 1px solid var(--border, #e5e7eb); border-radius: 12px; background: var(--bg-tint, #fafafa); }
+  .term-row-title { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+  .term-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .term-badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--bg, #eee); color: var(--fg-muted, #555); border: 1px solid var(--border, #ddd); }
+  .term-badge.danger { background: #fdecec; color: #c0392b; border-color: #f5c6c6; }
+  .term-badge.author { background: var(--bg-tint, #f6faff); color: var(--muted-head, #7a88a3); border-color: var(--line, #e6ecf5); }
+  .term-row-name { flex: 0 0 200px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .term-fold { display: flex; align-items: center; gap: 5px; width: 100%; margin-top: 10px; padding: 8px 12px;
+    background: var(--bg-tint, #f6faff); border: 1px solid var(--line, #e6ecf5); border-radius: 10px;
+    font: inherit; font-size: 13px; font-weight: 600; color: var(--ink-sub, #5a6b85); cursor: pointer; text-align: left; }
+  .term-fold:hover { border-color: var(--blue, #2d6bf0); color: var(--ink, #15233b); }
+  .term-fold-caret { font-size: 10px; width: 12px; }
+  .term-section { margin-top: 18px; }
+  .term-section--div { border-top: 1px solid var(--line, #e6ecf5); padding-top: 18px; }
+  .term-section .term-section-title { margin: 0 0 4px; }
+  .term-section-desc { font-size: 13.5px; margin: 0; }
+  .term-lock-note { display: flex; gap: 7px; align-items: flex-start; margin: 4px 0 2px; padding: 10px 12px;
+    font-size: 13.5px; line-height: 1.5; color: var(--ink-sub, #5a6b85); background: var(--bg-tint, #f6faff);
+    border: 1px solid var(--line, #e6ecf5); border-radius: 9px; }
+  .term-input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--border, #ccc);
+    border-radius: 8px; font: inherit; background: var(--bg, #fff); color: inherit; }
+  .term-flags { display: flex; flex-direction: column; gap: 8px; }
+  .term-picker { display: flex; flex-direction: column; gap: 5px; }
+  .term-crumb { font-size: 12px; }
+  .term-crumb .crumb { color: var(--accent, #16a37f); cursor: pointer; }
+  .term-crumb .crumb:hover { text-decoration: underline; }
+  .term-crumb .crumb-sep { color: var(--fg-muted, #999); }
+  .term-auto { display: flex; gap: 8px; align-items: flex-start; margin-top: 6px; font-size: 13.5px; color: #b04a3a; line-height: 1.45; }
+  .term-wrap { display: flex; flex-direction: column; height: calc(100vh - 120px); min-height: 360px; }
+  .term-bar { display: flex; align-items: center; gap: 10px; padding: 6px 0 10px; }
+  .term-bar-id { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--fg-muted, #777); }
+  .term-host { flex: 1; min-height: 0; background: #1e1e2e; border-radius: 10px; padding: 8px; overflow: hidden; }
+</style>
+</head>
+<body>
+
+<!-- 스킵 링크 — 해시 라우터와 충돌하지 않게 JS 가 포커스만 이동(app.js) -->
+<a id="skip-link" class="skip-link" href="#/knowledge">본문 바로가기</a>
+
+<!-- 로그인 게이트 — 미인증(세션·토큰 없음)이거나 401 시 표시 -->
+<section id="gate" hidden>
+  <div class="gate-card">
+    <!-- 로그인 화면엔 조직명을 쓰지 않는다 — 미인증 상태라 값을 가져올 수 없고, 조직명은 로그인 전 노출할 정보가 아니다. -->
+    <div class="wordmark gate-mark">Lively<span class="pulse-dot" aria-hidden="true"></span></div>
+    <p class="gate-copy">회사 계정으로 로그인하세요.</p>
+    <form id="gate-form">
+      <input id="gate-email" type="email" autocomplete="username" placeholder="이메일" aria-label="이메일">
+      <input id="gate-password" type="password" autocomplete="current-password" placeholder="비밀번호" aria-label="비밀번호">
+      <input id="gate-input" type="password" autocomplete="off" placeholder="액세스 토큰" aria-label="액세스 토큰" hidden>
+      <p id="gate-error" class="gate-error" hidden></p>
+      <button type="submit" class="btn btn-primary gate-btn">로그인</button>
+      <button type="button" id="gate-token-toggle" class="gate-token-toggle">토큰으로 로그인 (고급)</button>
+    </form>
+  </div>
+</section>
+
+<!-- 앱 셸 -->
+<div id="app" hidden>
+  <header class="topbar">
+    <!-- 태그라인은 boot() 가 /api/ui/me 의 org_name 으로 채운다(관리탭 [조직 정보] 미설정이면 숨김 유지). -->
+    <a class="wordmark" href="#/dashboard">Lively<span class="pulse-dot" aria-hidden="true"></span><span class="wordmark-sub" id="org-tagline" hidden></span></a>
+    <nav class="tabs" aria-label="주 메뉴">
+      <a href="#/dashboard" data-tab="dashboard">홈</a>
+      <a href="#/terminal" data-tab="terminal">AI 세션</a>
+      <a href="#/projects2" data-tab="projects2">프로젝트</a>
+      <a href="#/categories" data-tab="categories">분류체계</a>
+      <a href="#/knowledge" data-tab="knowledge">WIKI</a>
+      <a href="#/system" data-tab="system" id="system-tab" hidden>관리</a>
+    </nav>
+    <div class="topbar-right">
+      <a class="help-link" href="#/learn" data-tab="learn">사용 가이드</a>
+      <button type="button" class="user-email" id="user-email" hidden aria-haspopup="dialog" title="내 프로필 — 표시 이름·개인 레이어 편집"></button>
+      <button type="button" id="logout-btn" class="logout-btn" hidden>로그아웃</button>
+    </div>
+  </header>
+  <main id="view"></main>
+  <footer class="app-foot"></footer>
+</div>
+
+<div id="toasts" aria-live="polite"></div>
+
+<script type="module" src="./app/main.js"></script>
+<!-- 페이지 오버레이 스크롤바(#756) — 네이티브 루트 스크롤바를 숨기고 겹쳐 뜨는 얇은 막대로 대체(빌드 불필요, 순수 JS) -->
+<script defer src="./page-scrollbar.js"></script>
+</body>
+</html>

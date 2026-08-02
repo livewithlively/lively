@@ -1,0 +1,254 @@
+/* 터미널 — 팀 폴더 / 헤더 액션 / 팀원 체크리스트 */
+.term-head-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+.term-section-title { font-size: 15px; font-weight: 700; color: var(--ink-sub); margin: 20px 0 8px; }
+/* 섹션 헤더 한 줄 — 제목 좌, (있으면) 토글 우. 제목 마진은 행으로 이관해 정렬 유지. */
+.term-section-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 20px 0 8px; }
+.term-section-row .term-section-title { margin: 0; }
+.term-sel-toggle { flex: none; }
+/* 초대 피커는 프로젝트 팀원 피커(.proj-mp)와 UI 통일(#617) — 옛 .term-checklist/.term-check 제거. */
+.term-input:disabled { background: var(--bg-soft, #f4f4f6); color: var(--ink-sub); cursor: default; }
+/* #853 작업 위치 세그먼트 토글(공유/개인 2택) + 그 안 폴더를 한 블록으로 — '이 폴더에서 AI 실행' 직관. */
+/* 작업 위치 2택 — .mode-card 선택 카드 언어(연한 강조·라디오 점). 진한 파란블록 금지(§0.5). */
+.term-loc { display: flex; flex-direction: column; gap: 10px; }
+.term-seg { display: flex; gap: 9px; }
+@media (max-width: 560px) { .term-seg { flex-direction: column; } }
+.term-seg-btn { flex: 1; display: flex; align-items: center; gap: 10px; padding: 12px 13px; border: 1.5px solid var(--line-net); border-radius: 11px; background: var(--bg); color: var(--ink); cursor: pointer; font-family: inherit; text-align: left; transition: border-color .14s ease, background-color .14s ease, box-shadow .14s ease; }
+.term-seg-btn:hover { border-color: var(--line-net-2); background: var(--bg-tint); }
+.term-seg-btn.active { border-color: var(--blue); background: var(--bg-tint); box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
+.term-seg-ico { flex: none; font-size: 18px; line-height: 1.15; }
+.term-seg-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.term-seg-lbl { font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.term-seg-btn.active .term-seg-lbl { color: var(--blue-deep); }
+.term-seg-sub { font-size: 11.5px; font-weight: 500; color: var(--muted-head); }
+.term-seg-check { flex: none; width: 17px; height: 17px; border-radius: 999px; border: 2px solid var(--line-net-2); background: var(--bg); }
+.term-seg-btn.active .term-seg-check { border-color: var(--blue); box-shadow: inset 0 0 0 3px var(--bg), inset 0 0 0 9px var(--blue); }
+.term-loc-folder { border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint); padding: 10px 12px; }
+.term-loc-folder .term-crumb { margin-bottom: 6px; }
+/* '이 폴더에서 AI 실행' 배너 — 지금 고른 위치/폴더에서 세션이 시작됨을 명시. */
+.term-runhere { display: flex; align-items: center; gap: 7px; margin-top: 8px; padding: 6px 10px; font-size: 12px; color: var(--ink-sub); background: color-mix(in srgb, var(--blue) 8%, var(--bg)); border: 1px solid color-mix(in srgb, var(--blue) 22%, var(--line)); border-radius: 7px; }
+.term-runhere-ic { flex: none; font-size: 9px; color: var(--blue); }
+.term-runhere-txt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.term-runhere-txt b { color: var(--ink); }
+/* 배지 — 팀원·세션 메타(공개/비공개·작성자·자동승인 등) 공통 알약형 */
+.term-members { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 12px; }
+.term-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; white-space: nowrap; }
+.term-badge.author { color: var(--ink-note); background: var(--bg-tint-2); }
+.term-badge.owner { color: var(--ink-note); background: var(--bg-tint-2); border-color: var(--line-note); }
+.term-badge.danger { color: #9A5B2E; background: #FBF1E7; border-color: #F0DCC4; }
+/* ════ 터미널 탭 세션 보드(#745) — 라이브 상태(작업중/대기/오프라인) + 프로젝트 할당 미션컨트롤 ════ */
+/* 상태칩(=카운트 요약) + 우측 프로젝트필터/선택토글 */
+.tsess-controls { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 14px; }
+.tsess-controls-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+/* (구 '소유' 필터 줄 .tsess-filter-row/-lbl 제거 — 필터를 목적별 뷰 한 줄로 합치면서 사라졌다, #1062) */
+.tsess-projfilter { position: relative; display: inline-flex; }
+.tsess-projfilter-btn { display: inline-flex; align-items: center; gap: 6px; font-family: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; cursor: pointer; max-width: 220px; }
+.tsess-projfilter-btn:hover { border-color: var(--muted-2); }
+.tsess-projfilter-btn.active { color: var(--ink); background: var(--bg-sel); border-color: var(--line-net-2); }
+.tsess-projfilter-btn > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tsess-projfilter-chev { color: var(--ink-note); font-size: 10px; }
+.tsess-projfilter-dd { position: absolute; top: calc(100% + 4px); right: 0; z-index: 30; width: 230px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,0.12); padding: 6px; }
+.tsess-projfilter-search { width: 100%; box-sizing: border-box; font-family: inherit; font-size: 12.5px; color: var(--ink); background: var(--bg-subtle, var(--bg)); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; margin-bottom: 4px; }
+.tsess-projfilter-search:focus { outline: none; border-color: var(--line-net-2); }
+.tsess-projfilter-list { max-height: 260px; overflow-y: auto; }
+/* #1098 프로젝트 필터 — 뷰 토글(리스트별/최신순) + 리스트 그룹 헤더. 검색은 그대로 위에 남는다. */
+.tsess-projview-seg { display: flex; gap: 4px; padding: 4px 2px 7px; border-bottom: 1px solid var(--line); margin-bottom: 5px; }
+.tsess-projview-btn {
+  font-family: inherit; font-size: 11.5px; font-weight: 600; color: var(--ink-sub); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; cursor: pointer;
+}
+.tsess-projview-btn:hover { border-color: var(--line-net); color: var(--ink); }
+.tsess-projview-btn.on { color: var(--blue); border-color: var(--blue); background: var(--bg-punch); }
+/* 폴더 트리 행 — 사이드바와 같은 읽기(캐럿 + 아이콘 + 이름 + 개수). 눌러서 여닫는다. */
+.tsess-tree-node {
+  display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; font-family: inherit;
+  font-size: 12.5px; font-weight: 700; color: var(--ink-sub); background: none; border: none; border-radius: 6px;
+  padding: 6px 8px; cursor: pointer;
+}
+.tsess-tree-node:hover { background: var(--bg-sel); color: var(--ink); }
+.tsess-tree-node.open { color: var(--ink); }
+.tsess-tree-caret { flex: none; width: 10px; font-size: 9px; color: var(--muted-2); }
+/* 종류는 아이콘이 아니라 **글자 무게·색**으로 구분한다 — 줄마다 이모지가 붙으면 목록이 시끄럽다.
+   폴더(스페이스 포함)는 진하게, 리스트는 한 톤 낮게. */
+.tsess-tree-folder .tsess-tree-name { font-weight: 800; color: var(--ink); letter-spacing: -.01em; }
+.tsess-tree-list .tsess-tree-name { font-weight: 600; color: var(--ink-sub); }
+.tsess-tree-node.open .tsess-tree-caret { color: var(--muted); }
+.tsess-tree-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tsess-tree-n { flex: none; font-size: 11px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+.tsess-tree-proj { font-size: 12.5px; }
+.tsess-opt-meta { flex: none; font-size: 10.5px; color: var(--muted-2); max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tsess-projfilter-none { padding: 10px 8px; font-size: 12px; color: var(--muted); }
+.tsess-projfilter-opt { display: block; width: 100%; text-align: left; font-family: inherit; font-size: 12.5px; color: var(--ink-sub); background: none; border: none; border-radius: 6px; padding: 6px 10px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tsess-projfilter-opt:hover { background: var(--bg-sel); color: var(--ink); }
+.tsess-projfilter-opt.active { color: var(--ink); font-weight: 700; background: var(--bg-sel); }
+/* #1098 축 드롭다운(출처·기간) — 라벨 + 우측 카운트. 0건 항목도 숨기지 않고 흐리게 남긴다. */
+.tsess-projfilter-opt:has(.tsess-opt-n), .tsess-projfilter-opt:has(.tsess-opt-meta) { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.tsess-opt-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tsess-opt-n { flex: none; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tsess-projfilter-opt.active .tsess-opt-n { color: var(--ink-sub); }
+.tsess-projfilter-opt.zero .tsess-opt-name, .tsess-projfilter-opt.zero .tsess-opt-n { color: var(--muted-2); }
+/* #1098 기간 '직접 고르기' — 프리셋 목록 아래 하루 단위 시작~끝 + 기준(마지막 작업/만든 날). */
+.tsess-period-custom { border-top: 1px solid var(--line); margin-top: 6px; padding: 8px 6px 4px; display: flex; flex-direction: column; gap: 7px; }
+.tsess-period-h { font-size: 10.5px; font-weight: 800; letter-spacing: .06em; color: var(--muted-2); }
+.tsess-period-row { display: flex; align-items: center; gap: 5px; }
+.tsess-period-date { flex: 1; min-width: 0; font-size: 12px; padding: 4px 6px; }
+.tsess-period-tilde { flex: none; color: var(--muted-2); font-size: 12px; }
+.tsess-period-clear { align-self: flex-start; font-size: 11px; font-family: inherit; color: var(--blue); background: none; border: 0; padding: 0; cursor: pointer; font-weight: 700; }
+.tsess-period-clear:hover { text-decoration: underline; }
+/* 기준은 드롭다운 맨 위(목록 위) — 프리셋·직접 고르기 둘 다에 걸리는 설정이라 위에서 먼저 읽혀야 한다. */
+.tsess-period-basis { display: flex; align-items: center; gap: 4px; padding: 2px 6px 8px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
+.tsess-period-basis-lbl { font-size: 11px; color: var(--muted); margin-right: 2px; }
+.tsess-period-basisbtn {
+  font-family: inherit; font-size: 11.5px; font-weight: 600; color: var(--ink-sub); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px; cursor: pointer;
+}
+.tsess-period-basisbtn:hover { border-color: var(--line-net); color: var(--ink); }
+.tsess-period-basisbtn.on { color: var(--blue); border-color: var(--blue); background: var(--bg-punch); }
+/* #1238 다중 축(상태·소속) 헤더 — 고른 칸 수 + 「초기화」. '전체' 행을 없앤 대신 여기서 한 번에 되돌린다.
+   체크박스(.dash-pop-box)·초기화(.dash-pop-clear)는 대시보드 팝오버와 CSS 한 벌을 공유한다(새 클래스 X). */
+.tsess-projfilter-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 3px 10px 6px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.tsess-projfilter-headn { font-size: 11px; color: var(--muted); }
+/* 상태 칩 줄(.tsess-chips/.tsess-chip-*)은 드롭다운으로 대체돼 제거했다(2026-07-28) — 상태가 8개로 늘며 한 줄을 다 먹었다. */
+.tsess-controls-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tsess-projsel { font-family: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; cursor: pointer; max-width: 220px; }
+
+.tsess-list { display: flex; flex-direction: column; gap: 8px; }
+/* #1229 소유 섹션 — '내가 만든 세션' / '남이 만든 세션'. 헤더 전체가 접기 버튼(제목만 누르게 하면 표적이 너무 작다). */
+.tsess-sects { display: flex; flex-direction: column; gap: 18px; }
+.tsess-sect { display: flex; flex-direction: column; gap: 8px; }
+.tsess-sect-head { display: flex; align-items: center; gap: 7px; width: 100%; font-family: inherit; font-size: 12.5px; font-weight: 700; color: var(--ink-sub); background: none; border: none; padding: 2px 2px 0; cursor: pointer; text-align: left; }
+.tsess-sect-head:hover { color: var(--ink); }
+.tsess-sect-chev { color: var(--ink-note); font-size: 10px; transition: transform 0.12s ease; }
+.tsess-sect-chev.off { transform: rotate(-90deg); }
+.tsess-sect-n { font-weight: 600; color: var(--ink-note); font-variant-numeric: tabular-nums; }
+/* 카드 = 좌측 상태색 바 + 정보(2행) + 우측 액션. 오프라인은 옅게(흰 배경). 접속중은 민트 인셋. */
+.tsess-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--muted-3); border-radius: 12px; background: var(--bg-tint); }
+.tsess-card.tsess-busy { border-left-color: #f59e0b; }
+.tsess-card.tsess-waiting { border-left-color: var(--coral, #e5484d); }
+.tsess-card.tsess-idle { border-left-color: var(--mint-deep); }
+.tsess-card.tsess-restorable { border-left-color: var(--accent, #5b6cff); background: color-mix(in srgb, var(--accent, #5b6cff) 4%, var(--bg)); } /* #1059 E 복원 가능 */
+.tsess-card.tsess-offline, .tsess-card.tsess-exited { border-left-color: var(--muted-2); background: var(--bg); }
+.tsess-card.attached { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mint-deep) 22%, transparent); }
+/* 구 선택 UI(카드 전체를 label 로 감싸고 span.tsess-check 안에 체크박스) 잔재 제거 —
+   이제 대시보드 '내 AI 세션'과 같은 슬라이드-인 체크박스를 쓴다(#1062, 규칙은 .dash-sess-checkwrap 쪽에 한 벌). */
+
+.tsess-info { flex: 1; min-width: 0; }
+.tsess-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 5px; min-width: 0; }
+.tsess-name { font-size: 14.5px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px; }
+.tsess-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--muted-2); }
+/* 상태 포인트 컬러 = 대시보드 '내 AI 세션'(dash-scard)과 통일: busy=주황·waiting=코랄·idle=민트·offline=회색. */
+.tsess-dot-busy { background: #f59e0b; box-shadow: 0 0 0 3px color-mix(in srgb, #f59e0b 22%, transparent); }
+.tsess-dot-waiting { background: var(--coral, #e5484d); box-shadow: 0 0 0 3px color-mix(in srgb, var(--coral, #e5484d) 22%, transparent); }
+.tsess-dot-idle { background: var(--mint-deep); }
+.tsess-dot-restorable { background: var(--accent, #5b6cff); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #5b6cff) 20%, transparent); } /* #1059 E */
+.tsess-dot-offline { background: var(--muted-2); }
+/* 회색 계열 둘 — 오프라인(아무도 안 보는 중) = 꽉 찬 회색 점 · 종료됨(하네스가 끝나 셸만 남음) = 속 빈 회색 점.
+   살아있고 누군가 보고 있는 상태색(민트·주황·코랄)은 그대로. */
+.tsess-dot-exited { background: transparent; box-shadow: inset 0 0 0 2px var(--muted-2); }
+/* #1059 P1 — 셸 세션: '종료됨'(회색 빈 점)과 달리 **살아 있는 정상 상태**라 채운 중립색을 준다. */
+.tsess-dot-shell { background: var(--muted-head, #8b93a7); }
+/* 내가 exit 한 세션: 복원 가능계(강조색)와 같은 뿌리지만 테두리만 — '내가 끝냈다'를 조용히 표시. */
+.tsess-dot-exited-user { background: transparent; box-shadow: inset 0 0 0 2px var(--accent, #5b6cff); }
+/* #1251 — 메모리 부족: 빈 점(복원 가능계와 같은 형태)이되 경고색으로 구분. */
+.tsess-dot-oom-killed { background: transparent; box-shadow: inset 0 0 0 2px #9A5B2E; }
+.tsess-dot-offline { background: var(--muted-2); }   /* 오프라인(아무도 안 보는 중·노드 미연결) = 회색 점 */
+.tsess-proj { display: inline-flex; align-items: center; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; font-weight: 700; color: var(--blue); background: var(--bg-punch); border: 1px solid color-mix(in srgb, var(--blue) 28%, var(--bg)); border-radius: 999px; padding: 2px 9px; }
+.tsess-proj.mine { color: var(--accent, #5b6cff); border-color: color-mix(in srgb, var(--accent, #5b6cff) 42%, var(--bg)); background: color-mix(in srgb, var(--accent, #5b6cff) 9%, transparent); }
+.tsess-badge { flex: none; font-size: 11px; font-weight: 700; color: var(--ink-sub); background: var(--bg-tint-2); border: 1px solid var(--line); border-radius: 999px; padding: 1.5px 8px; white-space: nowrap; }
+.tsess-badge.live { color: var(--mint-deep); background: var(--bg-success); border-color: color-mix(in srgb, var(--mint-deep) 35%, var(--bg)); }
+.tsess-badge.live::before { content: "●"; font-size: 8px; margin-right: 3px; vertical-align: 1px; }
+.tsess-badge.danger { color: #9A5B2E; background: #FBF1E7; border-color: #F0DCC4; }
+.tsess-meta { margin-top: 5px; display: flex; align-items: center; flex-wrap: wrap; gap: 5px; font-size: 12px; color: var(--muted); min-width: 0; }
+.tsess-meta .tsess-dir { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
+.tsess-sep { color: var(--muted-3); }
+.tsess-stat { font-weight: 800; }
+.tsess-stat-busy { color: #d97706; }
+.tsess-stat-waiting { color: var(--coral, #e5484d); }
+.tsess-stat-idle { color: var(--mint-deep); }
+.tsess-stat-restorable { color: var(--accent, #5b6cff); } /* #1059 E */
+.tsess-stat-offline { color: var(--muted); }
+.tsess-stat-shell { color: var(--muted-head, #8b93a7); }        /* #1059 P1 셸 = 중립(죽음 아님) */
+.tsess-stat-exited-user { color: var(--accent, #5b6cff); }      /* 내가 exit = 복원 가능계 */
+/* #1251 — 메모리 부족(OS 강제 종료). '중단됨'(재부팅·회수, 강조색)과 **다른 사실**이라 색을 가른다:
+   저건 시스템 사정이고 이건 사용자가 당한 사고다. danger 배지와 같은 경고 톤을 쓴다. */
+.tsess-stat-oom-killed { color: #9A5B2E; }
+/* '지금 하는 일' 실시간 요약(백엔드 title) — 라벨 아래 한 줄. */
+.tsess-worktitle { margin-top: 4px; font-size: 12.5px; font-weight: 600; color: var(--ink-note); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 620px; }
+
+.tsess-acts { flex: none; display: flex; align-items: center; gap: 6px; }
+.tsess-open { font-size: 12.5px; font-weight: 700; color: var(--blue); border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--bg)); border-radius: 8px; padding: 6px 15px; background: var(--bg); cursor: pointer; font-family: inherit; }
+.tsess-open:hover { background: var(--bg-punch); }
+.tsess-icon { font-size: 12.5px; font-weight: 600; color: var(--ink-sub); border: 1px solid var(--line); border-radius: 8px; padding: 6px 11px; background: var(--bg); cursor: pointer; font-family: inherit; }
+.tsess-icon:hover { color: var(--ink); border-color: var(--muted-2); background: var(--bg-tint); }
+.tsess-icon.danger { color: var(--coral-text); border-color: #F0DCC4; }
+.tsess-icon.danger:hover { background: #FBF1E7; }
+.tsess-icon.tsess-q { white-space: nowrap; }
+/* '내 질문' 팝아웃(#745) — 이 세션에 보낸 질문만 시간순(위=최근). #853 뷰티파이. */
+.tsess-qbody { min-width: min(560px, 84vw); max-width: 640px; }
+.tsess-qcap { margin-bottom: 10px; font-weight: 600; }
+.tsess-qlist { display: flex; flex-direction: column; gap: 9px; max-height: 62vh; overflow-y: auto; padding-right: 3px; }
+/* 질문 카드 — 왼쪽 색 레일 + 번호 알약 + 우측 시각. 호버 시 살짝 떠오르며 강조.
+   ⚠ flex: none 필수 — 부모(.tsess-qlist)가 max-height 를 가진 flex column 이라, 기본 flex-shrink:1 이면
+   항목이 스크롤되는 대신 짜부라진다(질문이 많을수록 심해져 45개 기준 69px→24px, overflow:hidden 이 본문을 잘라 '다 깨져' 보였다). */
+.tsess-qitem { flex: none; position: relative; padding: 11px 13px 11px 15px; border: 1px solid var(--line); border-radius: 11px; background: var(--bg); overflow: hidden; transition: border-color .12s, box-shadow .12s, background .12s; }
+.tsess-qitem::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: color-mix(in srgb, var(--blue) 35%, var(--line)); opacity: 0; transition: opacity .12s; }
+.tsess-qitem:hover { border-color: color-mix(in srgb, var(--blue) 30%, var(--line)); background: color-mix(in srgb, var(--blue) 4%, var(--bg)); box-shadow: 0 2px 8px rgba(21,35,59,.06); }
+.tsess-qitem:hover::before { opacity: 1; }
+.tsess-qmeta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.tsess-qnum { flex: none; font-size: 10.5px; font-weight: 800; color: var(--blue); background: color-mix(in srgb, var(--blue) 11%, transparent); border-radius: 999px; padding: 2px 8px; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+/* 질문 작성자 배지 — 여러 사람이 물은 세션에서만 노출(#1062). */
+.tsess-qwho { flex: none; font-size: 10.5px; font-weight: 700; color: var(--muted); background: color-mix(in srgb, var(--muted-2) 16%, transparent); border-radius: 999px; padding: 1px 7px; }
+.tsess-qwhen { flex: none; font-size: 11px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+.tsess-qtext { font-size: 13.5px; line-height: 1.72; color: var(--ink); white-space: pre-wrap; word-break: break-word; }
+/* 긴 질문은 접어 둔다 — 한 질문이 목록을 다 잡아먹지 않게(펼침은 '더 보기'). */
+.tsess-qtext.clamped { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 8; overflow: hidden; }
+.tsess-qmore { margin-top: 7px; padding: 0; border: 0; background: none; font: inherit; font-size: 12px; font-weight: 700; color: var(--blue); cursor: pointer; }
+.tsess-qmore:hover { text-decoration: underline; }
+/* 리스트 스크롤바 — 얇고 은은하게. */
+.tsess-qlist::-webkit-scrollbar { width: 8px; }
+.tsess-qlist::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted-2) 45%, transparent); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+.tsess-qlist::-webkit-scrollbar-thumb:hover { background: var(--muted-2); background-clip: padding-box; }
+/* 질문 검색(팝아웃 내 + 전체 통합) */
+.tsess-qsearch, .tsess-gsearch { width: 100%; box-sizing: border-box; padding: 8px 11px; border: 1px solid var(--line); border-radius: 9px; font: inherit; font-size: 13px; background: var(--bg); color: var(--ink); margin-bottom: 8px; }
+.tsess-qsearch:focus, .tsess-gsearch:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 12%, transparent); }
+.tsess-qmark { background: color-mix(in srgb, #F5C518 55%, transparent); color: inherit; border-radius: 3px; padding: 0 1px; }
+.tsess-gbody { min-width: min(620px, 88vw); }
+.tsess-gresults { max-height: 64vh; }
+.tsess-gitem { cursor: pointer; }
+.tsess-gitem:hover { border-color: var(--blue); background: var(--bg-punch); }
+.tsess-gsess { font-weight: 700; color: var(--ink-sub); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tsess-gopen { margin-left: auto; color: var(--blue); font-weight: 700; }
+/* 여러 세션 한 탭 그리드 — 배치 선택 팝업(#745) */
+/* #1150 조건으로 선택 팝오버 — 하단 플로팅 바에서 상태·시간·범위로 한 번에 고르기(두 화면 공용). */
+.selpick .selpick-segrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 8px 6px; }
+.selpick-seglbl { font-size: 11.5px; font-weight: 700; color: var(--muted); }
+.selpick-seg { display: flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.selpick-segbtn { padding: 4px 9px; font-family: inherit; font-size: 11.5px; font-weight: 700; color: var(--muted); background: var(--bg); border: none; cursor: pointer; }
+.selpick-segbtn + .selpick-segbtn { border-left: 1px solid var(--line); }
+.selpick-segbtn.on { background: color-mix(in srgb, var(--blue) 14%, var(--bg)); color: var(--blue); }
+.selpick-n { display: flex; align-items: center; gap: 5px; flex: none; font-size: 12px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* #1146 열기 방식 선택 — '따로(탭 여러 개)' / '함께(한 탭 배치)' 두 묶음. */
+.tgrid-pick { display: flex; flex-direction: column; gap: 8px; }
+.tgrid-gh { font-size: 12px; font-weight: 700; color: var(--muted); margin-top: 2px; }
+.tgrid-gh + .tgrid-opts { margin-bottom: 4px; }
+/* 탭 도식 — 위 탭 스트립 + 아래 본문(브라우저 창 하나에 탭 여러 개). 그리드 미리보기와 같은 박스 크기. */
+/* ⚠ .tgrid-prev(display:grid)가 아래에 있어 같은 특이성으론 진다 → 두 클래스를 겹쳐 특이성을 올린다. */
+.tgrid-prev.tgrid-prev--tabs { display: flex; flex-direction: column; gap: 0; }
+.tgrid-tabbar { display: flex; gap: 2px; height: 14px; flex: none; }
+/* 열리는 탭은 전부 파랗게(우리가 여는 것들), 맨 앞만 진하게 = 지금 보이는 탭. */
+.tgrid-tab { flex: 1; background: color-mix(in srgb, var(--blue) 22%, var(--bg)); border-radius: 3px 3px 0 0; }
+.tgrid-tab.on { background: color-mix(in srgb, var(--blue) 55%, var(--bg)); }
+.tgrid-tabbody { flex: 1; background: color-mix(in srgb, var(--blue) 55%, var(--bg)); border-radius: 0 3px 3px 3px; }
+.tgrid-opts { display: flex; gap: 12px; flex-wrap: wrap; }
+.tgrid-opt { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 13px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); cursor: pointer; font-family: inherit; min-width: 100px; }
+.tgrid-opt:hover { border-color: var(--blue); background: var(--bg-punch); }
+.tgrid-prev { display: grid; gap: 3px; width: 78px; height: 58px; }
+.tgrid-prev-cell { background: var(--line); border-radius: 3px; }
+.tgrid-prev-cell.on { background: color-mix(in srgb, var(--blue) 55%, var(--bg)); }
+.tgrid-opt-lbl { font-size: 13px; font-weight: 700; color: var(--ink); }
+.tgrid-opt-dim { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+@media (max-width: 720px) {
+  .tsess-card { flex-wrap: wrap; }
+  .tsess-acts { flex-wrap: wrap; }
+  .tsess-name { max-width: 200px; }
+}
+

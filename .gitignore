@@ -1,0 +1,26 @@
+node_modules
+dist
+.env
+*.log
+
+# 에디터 스왑/임시 (vim 등) — 시크릿 유출 방지
+*.swp
+*.swo
+*.sw?
+*~
+
+# domainmap 웹훅 클론 캐시
+var/repos/
+
+# Playwright MCP 산출물 캐시(스크린샷·트레이스 등) — 커밋 금지
+.playwright-mcp/
+
+# 시크릿·로컬 백업·DB 덤프·로그 — 커밋 금지(2026-06-24)
+.env.bak*
+*.predropbak.*
+/logs/
+/backups/
+
+# 노션 자산 미러(#551) — 커넥터가 다운로드한 이미지/파일(만료 URL 의 영구 사본). 레포에 커밋 금지.
+data/
+.tsbuildinfo*

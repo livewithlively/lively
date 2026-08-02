@@ -1,0 +1,29 @@
+[
+  {
+    "name": "code-work-in-worktree-selfservice",
+    "title": "코드 작업은 워크트리에서 — lively_local_repo_worktree 셀프서비스 (base 직접작업 금지)",
+    "injection": "recalled",
+    "provenance": "authored",
+    "lifecycle": "active",
+    "is_wiki": false,
+    "type": "how-to"
+  },
+  {
+    "name": "domainmap-is-bootstrap-runbook",
+    "title": "도메인맵 부트스트랩 도구 보강 — 결정론 사실 helper(dm scan)·MCP/REST write 경로(domainmap_ingest)·토큰규율 (runbook-bootstrap-domains 동반)",
+    "injection": "recalled",
+    "provenance": "authored",
+    "lifecycle": "active",
+    "is_wiki": false,
+    "type": "how-to"
+  },
+  {
+    "name": "runbook-bootstrap-domains",
+    "title": "runbook: bootstrap-domains — 도메인 taxonomy 추출 + 매핑 + 부채 1패스",
+    "injection": "recalled",
+    "provenance": "authored",
+    "lifecycle": "active",
+    "is_wiki": false,
+    "type": "how-to"
+  }
+]

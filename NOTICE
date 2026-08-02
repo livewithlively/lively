@@ -1,0 +1,16 @@
+Lively
+Copyright (c) 2026 윤상민 (Sangmin Yoon), 장원준 (Wonjun Jang)
+
+This product is licensed per-directory. See LICENSING.md for the authoritative
+map, summarised here:
+
+  - kit/      — Apache License 2.0            (kit/LICENSE)
+  - src/ee/   — Lively Enterprise License     (src/ee/LICENSE)
+  - all else  — GNU Affero General Public License v3.0 only (LICENSE)
+
+"Lively" and associated logos are trademarks of the copyright holders and are
+not licensed under the terms above. See TRADEMARK.md.
+
+This product includes third-party software. Each such component remains under
+the license provided by its own copyright holder; see package.json and the
+respective packages under node_modules/ for details.

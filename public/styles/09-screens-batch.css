@@ -1,0 +1,79 @@
+/* ════════ 신규(8개 화면 개선) ════════ */
+
+/* (1) 지식 편집 페이지 #/u/<name>/edit — split view(좌 에디터 | 우 실시간 프리뷰) */
+.edit-meta-bar { display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: flex-end; margin: 6px 0 16px; }
+.edit-meta-bar .field { margin: 0; flex: 1; min-width: 180px; }
+.edit-meta-static { flex: 1; min-width: 180px; }
+.edit-static-val { display: block; font-size: 13px; color: var(--ink-sub); padding: 7px 0; word-break: break-all; }
+.edit-split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: stretch; }
+.edit-pane { display: flex; flex-direction: column; min-width: 0; }
+.edit-pane-label { font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--muted-head); margin-bottom: 6px; }
+.edit-editor {
+  width: 100%; min-height: 60vh; resize: vertical; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 13.5px; line-height: 1.6; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--bg); color: var(--ink); tab-size: 2;
+}
+.edit-editor:focus { outline: none; border-color: var(--blue); }
+.edit-preview {
+  min-height: 60vh; max-height: 78vh; overflow: auto; padding: 14px 18px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--bg-tint);
+}
+.edit-preview > .md > :first-child { margin-top: 0; }
+.edit-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 18px 0 8px; }
+@media (max-width: 820px) { .edit-split { grid-template-columns: 1fr; } .edit-editor, .edit-preview { min-height: 42vh; } }
+
+/* (v5b) 유닛 상세 — 단일 컬럼. 메타는 상단 가로 바, 본문은 가독폭. 우측 절반 패널 폐기. */
+.unit-card { width: 100%; }
+/* 메타 바 — 라벨:값 카드. 와이드에서 auto-fill 로 여러 열을 채워 가로 공간 활용. */
+.unit-metabar { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 20px; margin: 4px 0 6px; }
+.umeta { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.umeta-k { font-size: 11px; color: var(--muted); letter-spacing: .01em; }
+.umeta-v { font-size: 13px; color: var(--ink); word-break: break-word; }
+/* 값 옆 ⓘ 설명 점 — 긴 주입/출처 설명을 호버·클릭 팝오버로 분리(인라인 길이 축소). */
+.umeta-v-info { display: inline-flex; align-items: center; gap: 5px; }
+.info-dot { position: relative; flex: none; width: 15px; height: 15px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: none; border-radius: 50%; background: none; color: var(--muted-2); font-size: 12px; line-height: 1; cursor: pointer; }
+.info-dot:hover, .info-dot.open { color: var(--blue); }
+.info-pop { position: absolute; left: 0; top: calc(100% + 6px); z-index: 50; display: none; width: max-content; max-width: 260px; padding: 7px 10px; text-align: left; white-space: normal; font-size: 12px; font-weight: 500; line-height: 1.45; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line-net); border-radius: 8px; box-shadow: 0 4px 16px rgba(21, 35, 59, .12); pointer-events: none; }
+.info-dot:hover .info-pop, .info-dot:focus-visible .info-pop, .info-dot.open .info-pop { display: block; }
+/* withTip — fixed 포지션 즉시 호버 툴팁(overflow:hidden 카드에도 안 잘림). .info-pop 과 같은 톤. body 에 직접 붙는다. */
+.hover-tip { position: fixed; z-index: 200; width: max-content; max-width: 260px; padding: 7px 10px; text-align: left; white-space: normal; font-size: 12px; font-weight: 500; line-height: 1.45; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line-net); border-radius: 8px; box-shadow: 0 4px 16px rgba(21, 35, 59, .12); pointer-events: none; }
+.unit-meta-details, .unit-history-details { width: 100%; margin: 8px 0; border-top: 1px solid var(--line); padding-top: 8px; }
+.unit-meta-summary { cursor: pointer; font-size: 12px; font-weight: 700; color: var(--muted-head); list-style: none; padding: 2px 0; }
+.unit-meta-summary::-webkit-details-marker { display: none; }
+.unit-meta-summary::before { content: '▾ '; color: var(--muted); }
+.unit-meta-details:not([open]) .unit-meta-summary::before, .unit-history-details:not([open]) .unit-meta-summary::before { content: '▸ '; }
+/* 본문 폭 — 카드 전체너비를 채운다(우측 여백 없이). 가독폭 제한(78ch)은 윤상민 요청으로 해제(2026-06-24). */
+.unit-card .unit-body, .unit-card .md-rendered { max-width: none; }
+.unit-card .md-rendered .unit-body { max-width: none; }
+
+/* (4) 좌측 주제(space>domain) 위계 */
+.area-tree { margin-bottom: 6px; }
+.area-tree .area-space { font-weight: 700; margin-top: 4px; }
+.area-tree .area-space .tree-label { font-weight: 700; color: var(--ink); }
+.area-tree .area-domain { padding-left: 22px; }
+.area-tree .area-domain .tree-label { font-weight: 600; }
+.area-tree .area-domain .tree-glyph { width: 16px; height: 16px; font-size: 10px; }
+
+/* (6) 관리 헤더 + 반응형(우 섹션 wrap 방지) */
+.admin-head-l { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.admin-head-l h2 { margin: 0; }
+/* '훅' 개요 — 3 하위(런타임·커스텀·미리보기)로 가는 안내 카드. */
+.hooks-ov-list { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+.hooks-ov-card { display: block; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; }
+.hooks-ov-card:hover { background: var(--bg-tint); }
+.hooks-ov-title { font-size: 14.5px; font-weight: 700; color: var(--ink); }
+.hooks-ov-desc { font-size: 13px; color: var(--ink-sub); margin-top: 4px; line-height: 1.5; }
+/* admin-two(좌 목록·우 편집) 가 좁은 화면에서 wrap 되지 않게 — 기존 760 breakpoint 보강 */
+.admin-two { flex-wrap: nowrap; }
+@media (max-width: 760px) { .admin-two { flex-wrap: wrap; } }
+
+/* (7) 영구삭제(hard-delete) 위험 버튼 + 행 액션 묶음 */
+.btn-text-danger { color: var(--coral-text); }
+.btn-text-danger:hover { color: var(--coral); }
+.row-actions { white-space: nowrap; }
+.row-actions .btn-text { padding: 4px 6px; }
+
+/* (검토) 정렬 필터 바 */
+.review-filter { margin: 0 0 12px; align-items: center; }
+.review-filter .field-label { margin: 0; }
+

@@ -1,0 +1,75 @@
+/* ── 상단바 ── */
+.topbar {
+  position: sticky; top: 0; z-index: 20;
+  height: 64px; display: flex; align-items: center; gap: 36px;
+  padding: 0 24px; background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+.wordmark {
+  display: inline-flex; align-items: baseline; gap: 10px;
+  font-size: 20px; font-weight: 800; color: var(--ink); letter-spacing: -0.4px;
+}
+/* 'for <조직명>' — 우아한 세리프 이탤릭 태그라인. 굵은 지오메트릭 산세(Lively)와 대비돼 '같은 글씨'가 아니고,
+   손글씨 스크립트 같은 과함도 없다(#673 후속). Mac=Baskerville, 폴백 Hoefler/Garamond/serif. */
+/* 아주 약간만 더 볼드(#670): Baskerville 은 정적 폰트라 font-weight 500 이 400 으로 스냅되고 600 은 semibold 로 과함 →
+   text-stroke 로 획만 미세하게 두껍게(자간·너비 불변, subtle). */
+.wordmark-sub { font-family: Baskerville, "Hoefler Text", "Baskerville Old Face", Garamond, "Times New Roman", serif; font-style: italic; font-size: 15px; font-weight: 400; letter-spacing: .2px; color: var(--ink-sub); white-space: nowrap; -webkit-text-stroke: 0.3px currentColor; }
+.pulse-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--mint);
+  align-self: center;
+  box-shadow: 0 0 0 3px rgba(22, 199, 154, .16);
+  animation: breathe 2.8s ease-in-out infinite;
+}
+/* Lively · (초록 점) · for <조직명> 사이 여백 정돈: gap 을 10px 로 키우고, 숨쉬는 후광의 peak 를 5px 로 줄여
+   pulse 가 커질 때 후광이 'Lively'·'for <조직명>' 글자에 부딪히지 않게(=여백이 부자연스럽던 원인 제거). */
+@keyframes breathe {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(22, 199, 154, .18); }
+  50%      { box-shadow: 0 0 0 5px rgba(22, 199, 154, .07); }
+}
+/* #req 좁아지면(반쪽 창) 탭 라벨이 글자 단위로 세로로 접히던 문제 — 탭은 안 찌그러지게(flex:none) + 라벨 nowrap,
+   다 못 담으면 네비 자체가 가로 스크롤(스크롤바 숨김). 워드마크·우측은 안 밀리게 flex:none. */
+.tabs { display: flex; gap: 4px; height: 100%; margin: 0 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tabs a {
+  flex: none; white-space: nowrap;
+  display: flex; align-items: center; padding: 0 16px;
+  font-size: 15px; font-weight: 700; color: var(--ink-sub);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tabs a:hover { color: var(--ink); }
+.tabs a.active { color: var(--blue); border-bottom-color: var(--blue); }
+.wordmark { flex: none; white-space: nowrap; }
+.topbar-right { flex: none; }
+/* 좁은 창 — 탭 여백·상단바 간격을 줄여 스크롤 없이도 최대한 담는다. */
+@media (max-width: 760px) {
+  .topbar { gap: 14px; padding: 0 14px; }
+  .tabs a { padding: 0 10px; font-size: 14px; }
+}
+.topbar-right { display: flex; align-items: center; gap: 8px; }
+.sync-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--ink-sub); }
+.dot-static { width: 6px; height: 6px; border-radius: 50%; background: var(--mint); }
+/* 마지막 갱신(liveness) — 헤더 우측에서 빼 화면 좌하단 구석에 조용히. 우하단 toasts 와 안 겹침, 클릭은 통과(pointer-events:none). */
+.app-foot { position: fixed; left: 16px; bottom: 12px; z-index: 10; pointer-events: none; }
+.app-foot .sync-chip { font-size: 11.5px; color: var(--muted-2); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px 3px 9px; box-shadow: 0 2px 8px rgba(21, 35, 59, .05); }
+/* 우측 상단 보조 유틸 3종 통일 — 같은 알약형(헤어라인 + 무채): [사용 가이드] · [내 프로필] · [로그아웃] */
+.help-link, .user-email, .logout-btn {
+  display: inline-flex; align-items: center; height: 30px; box-sizing: border-box;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 999px;
+  font-family: inherit; font-size: 12.5px; font-weight: 600; color: var(--muted-2);
+  cursor: pointer; white-space: nowrap; text-decoration: none;
+  transition: color .12s ease, border-color .12s ease, background-color .12s ease;
+}
+.help-link { padding: 0 13px; }
+.logout-btn { padding: 0 13px; }
+.user-email { padding: 0 12px 0 4px; gap: 7px; } /* 왼쪽은 아바타 들어갈 자리라 좁게 */
+.help-link:hover, .user-email:hover, .logout-btn:hover { color: var(--ink-sub); border-color: var(--line-net); background: var(--bg-tint); }
+.help-link.active { color: var(--ink-sub); border-color: var(--line-net); background: var(--bg-tint); }
+/* 상단바 아바타 — 작은 원형 이니셜(#361). .pava(28px) 를 이기도록 .pava.topbar-ava 로 특이도 확보 —
+   30px 알약 안에 22px 원이 위아래 4px 여백으로 정확히 들어간다(이전엔 .pava 28px 가 이겨 알약을 꽉 채움). */
+.pava.topbar-ava { width: 22px; height: 22px; flex: none; border-radius: 999px; display: inline-flex;
+  align-items: center; justify-content: center; font-size: 11px; font-weight: 700; line-height: 1; color: #fff; overflow: hidden; }
+.topbar-ava img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* ── 본문 셸 ── */
+main { max-width: 1200px; margin: 0 auto; padding: 32px 24px 64px; }
+

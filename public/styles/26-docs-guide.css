@@ -1,0 +1,233 @@
+/* ══════════════════════════════════════════════════════════════════
+   사용 가이드 = 문서 사이트(#780) — 히어로(guide-hero)의 디자인 언어로 통일:
+   아이브로(12px/자간2px/uppercase) · 리드(15px/1.75 ink-sub) · 틴트 박스(line-net) 안
+   화이트 카드 중첩(tabchapter↔tabguide-card 문법) · 파란 포인트는 아껴서(§0.5).
+   ══════════════════════════════════════════════════════════════════ */
+.docs-layout { display: flex; align-items: flex-start; gap: 40px; }
+.docs-side { flex: 0 0 var(--pjv-side-w, 240px); position: sticky; top: 74px; max-height: calc(100vh - 96px); overflow-y: auto;
+  padding: 10px 18px 32px 2px; border-right: 1px solid var(--line); }
+.docs-side-group { margin: 0 0 24px; }
+.docs-side-group:last-child { margin-bottom: 0; }
+/* 중분류(그룹) — 한국어라 uppercase·자간 트릭이 무효 → 제품 사이드바 문법(굵은 잉크 + 항목 들여쓰기)으로 위계.
+   그룹이 항목보다 크고 진하다: 14.5/800 잉크 vs 14/500 ink-sub. */
+.docs-side-title { font-size: 14.5px; font-weight: 800; letter-spacing: -.2px;
+  color: var(--ink); margin: 0 0 5px; padding: 0 11px; }
+.docs-side a.docs-item { display: block; padding: 5.5px 11px 5.5px 22px; border-radius: 9px; font-size: 14px;
+  font-weight: 500; line-height: 1.5; color: var(--ink-sub); text-decoration: none;
+  transition: background .12s ease, color .12s ease; }
+.docs-side a.docs-item:hover { background: var(--bg-tint); color: var(--ink); }
+.docs-side a.docs-item.active { background: var(--bg-punch); color: var(--blue); font-weight: 700; }
+.docs-side a.docs-item:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+/* 관리자 전용 섹션 표식(#1010) — 비관리자에겐 sectionHidden 으로 아예 안 보이는 섹션(ADMIN_ONLY)임을,
+   관리자가 볼 때 라벨 옆 배지로 알린다(#837 이 그룹 아래 회색 힌트를 걷어낸 자리에 항목 단위 권한 신호만 남긴다). */
+.docs-side a.docs-item .admin-only-badge { display: inline-block; margin-left: 7px; padding: 0 6px;
+  border-radius: 999px; font-size: 10px; font-weight: 700; line-height: 16px; vertical-align: middle;
+  white-space: nowrap; background: var(--bg-tint-2); color: var(--muted-head); border: 1px solid var(--line); }
+.docs-side a.docs-item.active .admin-only-badge { background: var(--bg); border-color: var(--blue); color: var(--blue); }
+.docs-body { flex: 1; min-width: 0; max-width: 920px; padding-bottom: 72px; }   /* 전 페이지 동일한 읽기 폭 — 사이드바(좌측 고정)에 붙고 오른쪽은 균일하게 비운다(#780). 목차 방식은 일부 페이지만 걸려 들쭉날쭉해 폐기, 통일성 우선. */
+.docs-body > .page-head { margin-bottom: 8px; padding-top: 0; }
+/* 섹션 앵커로 스크롤할 때 상단 고정 헤더에 가리지 않게 */
+.docs-body .card, .docs-body h2[id] { scroll-margin-top: 82px; }
+
+/* 관리(#/system, #827) — 사이드바는 위 문서 사이드바(.docs-side)를 그대로 쓰고, 본문만 다르다:
+   문서는 읽기 폭(800px) 컬럼이지만 관리는 표·그리드·에디터라 전폭(main 의 1200px 상한도 푼다). */
+body[data-route="system"] main { max-width: none; }
+/* 사용 가이드 계열(#/learn·#/start·#/install·#/onboarding)도 다른 탭(프로젝트·위키·관리)처럼 전폭(#780) —
+   main 의 1200px 상한만 해제한다. .docs-body 는 읽기 폭을 유지하므로 사이드바가 좌측에 붙고 본문은 가독 컬럼으로 남는다. */
+body[data-route="learn"] main,
+body[data-route="start"] main,
+body[data-route="install"] main,
+body[data-route="onboarding"] main { max-width: none; }
+/* 본문 읽기 폭(#1085) — 관리탭은 전폭이라 27인치에서 카드 한 줄이 너무 길어 한눈에 안 들어온다는 지적.
+   사이드바는 좌측 그대로 두고(레이아웃은 그대로) **본문에만** 상한을 걸어 오른쪽을 비운다(.docs-body 와 같은 수법,
+   단 관리는 표·그리드가 있어 문서(920px)보다 넉넉한 1160px). 좁은 화면에선 flex 가 알아서 줄인다. */
+.admin-body { flex: 1; min-width: 0; max-width: 1160px; padding-bottom: 48px; }
+/* 페이지 머리는 #837 에서 폐지 — 상단 탭 + 사이드바가 이미 위치를 말한다(화면마다 반복될 이유 없음).
+   '읽기 전용'은 전역 배지(사이드바)가 아니라 **그 섹션이 실제로 나에게 읽기 전용일 때만** 본문 위에 붙인다:
+   admin 이 없어도 카테고리·레포·팀은 context 권한으로 편집된다 — 전역 배지는 거짓말이었다. */
+.admin-ro-note { display: flex; align-items: center; gap: 9px; margin: 0 0 14px; padding: 9px 13px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint);
+  font-size: 13px; color: var(--ink-sub); }
+.admin-ro-note .pill { flex: none; }
+/* 사이드바가 본문과 같은 높이에서 시작하게 — 머리글이 사라진 만큼 위 여백을 맞춘다. */
+.admin-body { padding-top: 4px; }
+/* 섹션 항목 안의 대기 배지(검토 큐, #802) — 라벨 오른쪽 끝에 붙인다. */
+.admin-side a.docs-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* 그룹 머리글 아래 한 줄 힌트(#837) — "누가 쓰나"·"AI에게 뭘 가르치나"…. 새 분류축이 무엇인지
+   그룹 이름만으로는 안 읽혀서 붙였다. 머리글보다 작고 흐리게, 굵기 대비로 위계를 준다. */
+.docs-side-hint { display: block; font-size: 11.5px; font-weight: 500; color: var(--muted-2);
+  letter-spacing: 0; margin-top: 1px; }
+/* 배지가 붙는 항목은 라벨이 남는 폭을 다 먹게(배지는 오른쪽 끝) — 위 justify-content 와 짝. */
+.admin-side a.docs-item > span:first-child { min-width: 0; }
+/* 세로 스택(사이드바가 위로)될 땐 폭을 명시한다 — .docs-layout 의 align-items:flex-start 가 세로 모드에선
+   '내용 폭'으로 줄여, 표·그리드가 넓은 관리 본문이 화면 밖으로 삐져나온다(문서 본문은 max-width 800px 이라 안 겪던 문제). */
+@media (max-width: 960px) { .admin-body { width: 100%; } }
+
+/* 문서 페이지 머리 — 아이브로(그룹명) + 제목: guide-hero-eyebrow/-title 과 같은 문법 */
+.docs-eyebrow { font-size: 12px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase;
+  color: var(--muted-head); margin: 8px 0 10px; }
+.docs-title { font-size: 27px; font-weight: 800; letter-spacing: -0.6px; line-height: 1.35;
+  color: var(--ink); margin: 0 0 14px; }
+
+/* ── 문서 = 가이드 카드의 연속 ──────────────────────────────────────
+   ## 섹션 하나 = .card 하나(제품 가이드 카드와 같은 박스). 카드 안은 흘러가는 글이 아니라
+   구조화된 조각들: 리드(guide-lead) · 피처 카드(kn-axis-opt) · 번호 단계(guide-path) ·
+   이동 카드(tabguide-card) · 콜아웃(guide-remember) · 탭(tabchapter). */
+/* 한국어 줄바꿈 — 상위 .md-rendered 의 break-word(글자 단위 절단) 대신 어절 단위(keep-all).
+   좁은 칸에서 한글이 한 글자씩 세로로 쪼개지는 것을 막는다. 문서 셸 전체(설치 가이드·투어 랜딩 포함)에 적용.
+   코드·명령·URL 만 강제 개행 유지(길어도 잘라야 하므로). */
+.docs-body { word-break: keep-all; overflow-wrap: break-word; }
+.docs-body code, .docs-body pre, .docs-body .md-code, .docs-body .md-pre,
+.docs-body .admin-preview, .docs-body .install-cmd-slot { word-break: break-all; }
+.docs-lead { font-size: 15.5px; line-height: 1.8; color: var(--ink-sub); margin: -2px 0 4px; max-width: 780px; }
+.docs-lead .md-p { margin: 0 0 10px; }
+.docs-lead .md-p:last-child { margin-bottom: 0; }
+.docs-lead .md-quote { background: none; border: 0; padding: 0; margin: 0 0 10px; color: var(--ink-sub); }
+.docs-lead strong, .docs-lead b { color: var(--ink); }
+.docs-lead a { color: var(--blue); text-decoration: none; font-weight: 600; }
+.docs-lead a:hover { text-decoration: underline; }
+
+.docs-card { padding: 22px 24px 24px; }
+.docs-card .card-head { margin-bottom: 12px; }
+.docs-md { font-size: 14.5px; line-height: 1.7; color: var(--ink-sub); }
+.docs-md > .md > :last-child { margin-bottom: 0; }
+.docs-md .md-p { margin: 0 0 12px; }
+.docs-md .guide-lead { font-size: 14.5px; line-height: 1.7; color: var(--ink); margin: 0 0 14px; }
+.docs-md strong, .docs-md b { color: var(--ink); font-weight: 700; }
+.docs-md .md-h3 { font-size: 15px; font-weight: 800; color: var(--ink); margin: 22px 0 8px; letter-spacing: -.2px; }
+.docs-md .md-h4 { font-size: 14px; font-weight: 800; color: var(--ink); margin: 16px 0 6px; }
+.docs-md a { color: var(--blue); text-decoration: none; font-weight: 600; }
+.docs-md a:hover { text-decoration: underline; }
+.docs-md .md-list { margin: 0 0 12px; padding-left: 20px; }
+.docs-md .md-list li { margin: 5px 0; }
+.docs-md .md-list li::marker { color: var(--muted-2); }
+.docs-md .md-hr { margin: 22px 0; }
+.docs-md .md-code { font-size: 12.5px; border-color: var(--line-net); border-radius: 6px; padding: 1.5px 6px; }
+.docs-md .md-pre { padding: 13px 15px; margin: 2px 0 14px; border-radius: 11px; border-color: var(--line-net); }
+.docs-md .md-pre code { font-size: 12.5px; line-height: 1.6; }
+
+/* 인라인 UI 참조 칩 — 대괄호·꺽쇠 노이즈를 제거해 가독성↑.
+   [버튼]=아웃라인+두꺼운 밑선(눌리는 버튼 느낌, .kbd 시각언어), 「옵션·메뉴·상태」=틴트 채움 태그.
+   display:inline + box-decoration-break:clone → 긴 라벨이 줄바꿈돼도 배경·테두리·패딩이 조각마다 유지된다.
+   #1013 사용가이드 마크다운(renderMarkdown uiChips)에서 시작해 #1085 에서 관리탭 설명문(uiText)까지 확장 —
+   그래서 셀렉터를 docs 한정에서 **전역**으로 올렸다. 크기는 em 상대라 13px 안내문 안에서도 알아서 작아진다. */
+.md-uikey {
+  display: inline; -webkit-box-decoration-break: clone; box-decoration-break: clone;
+  font-size: 0.86em; font-weight: 700; line-height: 1.3; letter-spacing: -0.1px;
+  border-radius: 6px; padding: 1px 6px; margin: 0 1.5px; white-space: normal;
+  /* CJK 는 기본이 '아무 글자에서나 줄바꿈'이라 좁은 팝오버에서 「연결·데이/터」처럼 라벨이 잘려 읽힌다.
+     keep-all 로 어절 단위에서만 끊어, 한 단어짜리 버튼 이름은 통째로 유지한다. */
+  word-break: keep-all;
+}
+.md-uikey-btn {
+  color: var(--ink); background: var(--bg); border: 1px solid var(--line-net); border-bottom-width: 2px;
+}
+.md-uikey-opt {
+  color: var(--ink-note); background: var(--bg-tint-2);
+}
+/* 공백 없는 한 덩어리 라벨은 통째로 유지 — 버튼 이름이 두 줄로 잘리면 무엇을 누르라는 건지 안 읽힌다. */
+.md-uikey-solid { white-space: nowrap; }
+/* 칩이 회색 안내문 안에 있으면 본문보다 진해 눈이 먼저 간다 — 그게 노림수다(어디를 누르라는 지시).
+   단, 이미 색이 있는 문맥(경고·강조 배지 안)에서는 색을 물려받아 튀지 않게 한다. */
+.pill .md-uikey, .st .md-uikey, .badge .md-uikey { color: inherit; background: transparent; border: none; padding: 0; font-weight: 700; }
+
+/* 피처 카드 — '**굵은 제목** — 설명' 목록. 지식 축 옵션(kn-axis-opt)과 같은 틴트 박스. */
+.docs-featgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 4px 0 6px; }
+.docs-feat { background: var(--bg-tint); border: 1px solid var(--line-net); border-radius: 12px; padding: 13px 15px; }
+.docs-feat-t { font-size: 14.5px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; margin-bottom: 4px; }
+.docs-feat-d { font-size: 13.5px; line-height: 1.6; color: var(--ink-sub); }
+.docs-feat-d strong, .docs-feat-d b { color: var(--ink); }
+
+/* 번호 단계 — 순서 목록. 둘러보기 코스(guide-path)·챕터 번호(tabchapter-num)와 같은 뱃지. */
+.docs-steps { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 12px; }
+.docs-step { display: flex; align-items: flex-start; gap: 11px; }
+.docs-step-num { flex: none; width: 23px; height: 23px; margin-top: 1px; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12.5px; font-weight: 800; color: var(--blue); background: var(--bg-punch);
+  border: 1px solid var(--line-net-2); border-radius: 8px; }
+.docs-step-body { flex: 1; min-width: 0; font-size: 14px; line-height: 1.65; color: var(--ink-sub); padding-top: 1px; }
+.docs-step-body strong { color: var(--ink); }
+
+/* 이동 카드 — 문서 끝 '다음 단계'. 메뉴 카드(tabguide-card)와 같은 호버·화살표. */
+.docs-linkgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 2px 0 2px; }
+a.docs-linkcard { display: block; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--bg); text-decoration: none; color: inherit;
+  transition: border-color .14s ease, box-shadow .14s ease, transform .14s ease; }
+a.docs-linkcard:hover { border-color: var(--line-net-2); box-shadow: 0 6px 20px rgba(21,35,59,.07); transform: translateY(-2px); text-decoration: none; }
+a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.docs-linkcard-t { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 14.5px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
+.docs-linkcard-arrow { flex: none; color: var(--blue); font-weight: 700; }
+.docs-linkcard-d { display: block; margin-top: 4px; font-size: 13px; line-height: 1.55; color: var(--ink-sub); }
+
+/* 콜아웃 — 팁·알아두기. '딱 한 줄'(guide-remember)과 같은 파란 틴트 박스. */
+.docs-md .md-quote { background: rgba(45,107,240,.05); border: 1px solid var(--line-note);
+  border-radius: 12px; padding: 12px 15px; margin: 14px 0; color: var(--ink-sub); font-size: 14px; line-height: 1.65; }
+.docs-md .md-quote .md-p { margin: 0; }
+.docs-md .md-quote strong { color: var(--ink); }
+
+/* 표 — 카드 폭을 꽉 채우는 조용한 그리드. 기본 .md-table 은 display:block(내용폭)이라 오른쪽이 텅 비고
+   정렬이 어긋난다 → 래퍼(.docs-tablewrap)가 가로 스크롤을 맡고, 표는 display:table + width:100% 로 폭을 채운다.
+   ⚠ 열 폭을 %/1% 로 고정하지 말 것 — 한국어는 글자 단위로 끊겨 첫 열이 세로 한 줄로 쪼개진다(#780 실측 사고).
+   대신 ①어절 단위 줄바꿈(keep-all) ②이름표 열 최소폭 ③자동 배분(table-layout:auto) 셋으로 잡는다. */
+.docs-tablewrap { overflow-x: auto; margin: 4px 0 14px; border: 1px solid var(--line); border-radius: 12px; }
+.docs-md .docs-tablewrap .md-table { display: table; table-layout: auto; width: 100%; margin: 0; border: 0; font-size: 13.5px; }
+.docs-md .md-table th, .docs-md .md-table td { border: 0; border-bottom: 1px solid var(--line);
+  padding: 10px 14px; line-height: 1.6; vertical-align: top; text-align: left;
+  word-break: keep-all; overflow-wrap: break-word; }
+.docs-md .md-table th { background: var(--bg-tint); color: var(--ink); font-weight: 700; white-space: nowrap; }
+.docs-md .md-table tr:last-child td { border-bottom: 0; }
+.docs-md .md-table tbody tr:hover td { background: var(--bg-tint); }
+/* 첫 열 = 행의 이름표 — 잉크색·굵게로 왼쪽 기둥을 세우되, 좁아져 쪼개지지 않게 최소폭을 준다. */
+.docs-md .md-table td:first-child { color: var(--ink); font-weight: 600; min-width: 9.5em; }
+.docs-md .md-table td:last-child, .docs-md .md-table th:last-child { padding-right: 16px; }
+
+/* 프롬프트 예시 — AI에게 실제로 시켜 볼 말(:::prompt). 명령어 코드블록·콜아웃과 구분되는 '대화 예시' 카드.
+   #780 뷰티파이: 납작한 틴트 박스 → 아이콘 타일 + 부드러운 그림자 카드(호버 시 살짝 뜸). 아래 콜아웃(.md-quote)과 뚜렷이 구분. */
+.md-prompt { display: flex; align-items: flex-start; gap: 12px; position: relative;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; margin: 10px 0;
+  box-shadow: 0 1px 2px rgba(21,35,59,.04); transition: border-color .14s, box-shadow .14s, transform .14s; }
+.md-prompt:hover { border-color: color-mix(in srgb, var(--blue) 42%, var(--line));
+  box-shadow: 0 6px 18px rgba(21,35,59,.08); transform: translateY(-1px); }
+.md-prompt::before { content: '💬'; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 9px; margin-top: 1px; font-size: 15px; line-height: 1;
+  background: color-mix(in srgb, var(--blue) 9%, var(--bg-punch)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 14%, transparent); }
+.md-prompt .md-p { flex: 1; min-width: 0; margin: 0; font-size: 14.5px; line-height: 1.7; font-weight: 500; color: var(--ink); }
+.md-prompt + .md-prompt { margin-top: 10px; }
+
+@media (max-width: 720px) {
+  .docs-featgrid, .docs-linkgrid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 960px) {
+  .docs-layout { flex-direction: column; gap: 16px; }
+  .docs-side { position: static; flex: none; width: 100%; max-height: none; border-right: 0;
+    border-bottom: 1px solid var(--line); padding: 0 0 14px; display: flex; flex-wrap: wrap; gap: 2px 26px; }
+  .docs-side-group { margin: 0; }
+}
+
+/* ── 전환형 탭(:::tabs — core.renderMarkdown, #780) — 틴트 박스 안 화이트 카드(tabchapter 문법) ── */
+.md-tabs { margin: 10px 0 4px; background: var(--bg-tint); border: 1px solid var(--line-net); border-radius: 14px; padding: 10px; }
+.md-tabs-bar { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 2px 10px; }
+.md-tab-btn { appearance: none; border: 1px solid transparent; background: none; padding: 7px 13px;
+  font-size: 13.5px; font-weight: 700; color: var(--ink-sub); cursor: pointer; border-radius: 9px;
+  transition: background .12s ease, color .12s ease, border-color .12s ease; }
+.md-tab-btn:hover { color: var(--ink); background: rgba(255,255,255,.75); }
+.md-tab-btn.active { background: var(--bg); color: var(--blue); border-color: var(--line-net-2);
+  box-shadow: 0 1px 4px rgba(21,35,59,.06); }
+.md-tab-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.md-tabs-body { background: var(--bg); border: 1px solid var(--line-net); border-radius: 10px; padding: 16px 18px 8px; }
+.md-tabs-body .md-tabpane > :last-child { margin-bottom: 8px; }
+@media (prefers-reduced-motion: reduce) { .docs-side a.docs-item, .md-tab-btn { transition: none; } }
+/* :::tabs hue — 색상 구분 가로 탭: 스크린샷 ①~⑥ 구역 색(is-cN·--sc)과 1:1 연결 (#1013 홈 가이드) */
+.md-tabs--hue .md-tab-btn { display: inline-flex; align-items: center; gap: 7px;
+  border-color: color-mix(in srgb, var(--sc) 28%, transparent); }
+.md-tabs--hue .md-tab-btn::before { content: ''; width: 10px; height: 10px; flex: none;
+  border-radius: 4px 1.5px 4px 1.5px; background: var(--sc);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--sc) 40%, transparent); }
+.md-tabs--hue .md-tab-btn:hover { color: var(--ink);
+  background: color-mix(in srgb, var(--sc) 9%, transparent);
+  border-color: color-mix(in srgb, var(--sc) 45%, transparent); }
+.md-tabs--hue .md-tab-btn.active { color: var(--sc);
+  background: color-mix(in srgb, var(--sc) 12%, var(--bg));
+  border-color: var(--sc); box-shadow: 0 1px 5px color-mix(in srgb, var(--sc) 24%, transparent); }
+

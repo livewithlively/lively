@@ -1,0 +1,58 @@
+name: release
+# 태그 푸쉬(vX.Y.Z) → 빌드 → GitHub Release + 설치 번들(lively.tgz) 발행.
+#  번들 = dist + public + kit + deploy + package*.json + scripts/{backfill-embeddings,normalize-shared-filenames}.mjs
+#   (node_modules 미포함 = arch 무관). 운영자가 박스에서 바로 돌려야 하는 1회성 도구는 여기 넣는다.
+#  박스에선 bootstrap.sh 가 이 에셋을 받아 install.sh 실행 → npm ci --omit=dev 로 deps(node-pty) 설치.
+#  설치: curl -fsSL <bootstrap-url> | LIVELY_VERSION=latest PUBLIC_URL=… BOOTSTRAP_ADMIN_EMAIL=… sh
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # 릴리스 생성·에셋 업로드
+  id-token: write   # OIDC — AWS 롤 assume(S3 tokenless 업로드). 장기키 없음.
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm run build          # dist/ + public/app/ (arch 무관 JS)
+      # 산출물 신선도 게이트(#1313 R4) — 스테일 public/app 이 릴리스 번들에 실리는 것을 차단(test.yml 과 동일).
+      - name: 산출물 신선도 (public/app 드리프트 0)
+        run: git diff --exit-code -- public/app
+      - name: 설치 번들 패키징 (node_modules 미포함 — 박스에서 npm ci 로 받음)
+        run: |
+          tar -czf lively.tgz \
+            dist public kit deploy docker-compose.yml package.json package-lock.json README.md \
+            LICENSE LICENSING.md NOTICE \
+            scripts/backfill-embeddings.mjs scripts/normalize-shared-filenames.mjs
+          ls -la lively.tgz
+      - name: GitHub Release 발행 + 에셋 업로드
+        uses: softprops/action-gh-release@v2
+        with:
+          files: lively.tgz
+          generate_release_notes: true
+
+      # ── (선택) 같은 tgz 를 private S3 에도 올린다 — 상용 배포 채널용, OIDC 라 장기 AWS 키 없음. ──
+      #  포크·커뮤니티 빌드에는 해당 없음: 아래 리포지토리 변수(vars)가 비어 있으면 두 스텝 모두 건너뛴다.
+      #  쓰려면 Settings ▸ Secrets and variables ▸ Actions ▸ Variables 에 등록:
+      #    AWS_RELEASE_ROLE_ARN  — assume 할 IAM 롤 ARN
+      #    AWS_RELEASE_BUCKET    — 업로드 대상 S3 버킷
+      #    AWS_RELEASE_REGION    — (선택) 기본 ap-northeast-2
+      - name: AWS 자격증명 (OIDC)
+        if: vars.AWS_RELEASE_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_RELEASE_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_RELEASE_REGION || 'ap-northeast-2' }}
+      - name: 릴리스 번들 S3 업로드 (tokenless 전달)
+        if: vars.AWS_RELEASE_ROLE_ARN != ''
+        run: |
+          DEST="s3://${{ vars.AWS_RELEASE_BUCKET }}/lively/${GITHUB_REF_NAME}/lively.tgz"
+          aws s3 cp lively.tgz "$DEST"
+          echo "→ $DEST"

@@ -1,0 +1,3178 @@
+[
+ {
+  "name": "me",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "whoami",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/whoami"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "repo_list",
+  "scope": "context",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/repos"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "repo_refresh",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/repos/:name/refresh"
+  ],
+  "input_hash": "f643b4209cecfdc1"
+ },
+ {
+  "name": "repo_discover",
+  "scope": "context",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/repos/discover"
+  ],
+  "input_hash": "2c33cb6c1f905b2f"
+ },
+ {
+  "name": "repo_check",
+  "scope": "context",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/repos/check"
+  ],
+  "input_hash": "2414ec34d67562ed"
+ },
+ {
+  "name": "context_overview",
+  "scope": "context",
+  "mcp": true,
+  "mutates": false,
+  "rest": [],
+  "input_hash": "b8189bda9a570da3"
+ },
+ {
+  "name": "debt_list",
+  "scope": "context",
+  "mcp": true,
+  "mutates": false,
+  "rest": [],
+  "input_hash": "b8189bda9a570da3"
+ },
+ {
+  "name": "domainmap_proxy",
+  "scope": "context",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/domainmap/:repo/:kind"
+  ],
+  "input_hash": "91e85f2c5696ee5f"
+ },
+ {
+  "name": "dm_domain_detail",
+  "scope": "context",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/domainmap/:repo/domain/:id"
+  ],
+  "input_hash": "e5b3761dc726f264"
+ },
+ {
+  "name": "dm_debt_list",
+  "scope": "context",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/domainmap/debts"
+  ],
+  "input_hash": "5e693cebf8a2f6a5"
+ },
+ {
+  "name": "dm_history",
+  "scope": "context",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/domainmap/history"
+  ],
+  "input_hash": "f16e823c583b4130"
+ },
+ {
+  "name": "dm_domainmap_view",
+  "scope": "context",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/domainmap/map"
+  ],
+  "input_hash": "4d88a8557cce0590"
+ },
+ {
+  "name": "dm_mapping_confirm",
+  "scope": "context",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/domainmap/mapping/:id/confirm"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "dm_mapping_reject",
+  "scope": "context",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/domainmap/mapping/:id/reject"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "dm_mapping_move",
+  "scope": "context",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/domainmap/mapping/:id/move"
+  ],
+  "input_hash": "d499491b074f64ec"
+ },
+ {
+  "name": "dm_debt_status",
+  "scope": "context",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/domainmap/debt/:id/status"
+  ],
+  "input_hash": "5e64d032b17a18b3"
+ },
+ {
+  "name": "dm_restore",
+  "scope": "context",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/domainmap/restore/:changeId"
+  ],
+  "input_hash": "8e9d41cecdbb04c2"
+ },
+ {
+  "name": "dm_layout_save",
+  "scope": "context",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/domainmap/layout"
+  ],
+  "input_hash": "2b412d2440e40ee1"
+ },
+ {
+  "name": "repo_create",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/domainmap/repo/create"
+  ],
+  "input_hash": "9584ae03d2739f24"
+ },
+ {
+  "name": "repo_rename",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/domainmap/repo/rename"
+  ],
+  "input_hash": "42423743281b841a"
+ },
+ {
+  "name": "repo_set_source",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/domainmap/repo/source"
+  ],
+  "input_hash": "1a789129c53c774f"
+ },
+ {
+  "name": "repo_deprecate",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/domainmap/repo/deprecate"
+  ],
+  "input_hash": "1aa3da5cc5e6a6c7"
+ },
+ {
+  "name": "repo_delete",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/domainmap/repo/delete"
+  ],
+  "input_hash": "6b5397ee3b87d462"
+ },
+ {
+  "name": "domainmap_ingest",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/domainmap/ingest"
+  ],
+  "input_hash": "900ce0a7c5212396"
+ },
+ {
+  "name": "org_overview",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_profile",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/profile"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_sections",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/sections"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_members",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/members"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_tokens",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/tokens"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_connectors",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/connectors"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_preview",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/preview"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_onboarding",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/onboarding"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_guide_preview",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/org/guide-preview"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "learn",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/learn"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_update_profile",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/profile"
+  ],
+  "input_hash": "4d6d9f703db51f62"
+ },
+ {
+  "name": "org_update_section",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/section"
+  ],
+  "input_hash": "46c209cc31e6c67b"
+ },
+ {
+  "name": "org_delete_section",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/section/delete"
+  ],
+  "input_hash": "8bdc87b5fb8dd436"
+ },
+ {
+  "name": "org_reorder_sections",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/sections/order"
+  ],
+  "input_hash": "e96131b4521b4022"
+ },
+ {
+  "name": "org_member_upsert",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/member"
+  ],
+  "input_hash": "ecdfe30c90cb0004"
+ },
+ {
+  "name": "org_member_reset_password",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/member/reset-password"
+  ],
+  "input_hash": "4ed624ebe4f60b35"
+ },
+ {
+  "name": "org_member_remove",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/member/remove"
+  ],
+  "input_hash": "c2d73309f5cb5490"
+ },
+ {
+  "name": "org_token_mint",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/token"
+  ],
+  "input_hash": "fb87b54b720db2ca"
+ },
+ {
+  "name": "org_token_mint_self",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/token/self"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_profile_get",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/profile"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_profile_update",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/profile"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "device_lookup",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/cli/device/lookup"
+  ],
+  "input_hash": "65301a93a1f6deca"
+ },
+ {
+  "name": "device_approve",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/cli/device/approve"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "device_deny",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/cli/device/deny"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_onboarding_get",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/onboarding"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_onboarding_set",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/onboarding"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_assets_get",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/assets"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_asset_pref_set",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/asset-pref"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_harness_asset_draft",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/harness-asset"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_harness_report",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/harness-report"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_harness_get",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/harness"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_harness_local_pref",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/harness-local-pref"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_harness_local_pref_plan",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/harness-local-pref/plan"
+  ],
+  "input_hash": "47124ddf6bd11a3a"
+ },
+ {
+  "name": "me_harness_detail",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/harness/detail"
+  ],
+  "input_hash": "eb94f3d0a5c876ca"
+ },
+ {
+  "name": "me_harness_machine_remove",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/harness/machine-remove"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_harness_machine_alias",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/harness/machine-alias"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_git_credential_get",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/git-credential"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_git_credential_set",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/git-credential"
+  ],
+  "input_hash": "dd4db9b9891773aa"
+ },
+ {
+  "name": "me_git_credential_delete",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/git-credential/delete"
+  ],
+  "input_hash": "ba298ea24243d08f"
+ },
+ {
+  "name": "org_git_credential_get",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/git-credential"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_git_credential_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/git-credential"
+  ],
+  "input_hash": "681bbcda737325a0"
+ },
+ {
+  "name": "org_git_credential_delete",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/git-credential/delete"
+  ],
+  "input_hash": "ba298ea24243d08f"
+ },
+ {
+  "name": "org_token_revoke",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/token/revoke"
+  ],
+  "input_hash": "bba13b8183929248"
+ },
+ {
+  "name": "org_runtime_config",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/runtime-config"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_runtime_update",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/runtime-config"
+  ],
+  "input_hash": "030a5ebd2c5cbbcc"
+ },
+ {
+  "name": "org_alert_status",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/alert"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_alert_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/alert"
+  ],
+  "input_hash": "e6867eb880d36a75"
+ },
+ {
+  "name": "org_alert_delete",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/alert/delete"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_alert_test",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/alert/test"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_storage_status",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/storage"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_workspace_status",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/workspace"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_workspace_analyze",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/workspace/analyze"
+  ],
+  "input_hash": "556061feaff0a5df"
+ },
+ {
+  "name": "org_workspace_reclaim",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/workspace/reclaim"
+  ],
+  "input_hash": "a6cd4ff2107bc073"
+ },
+ {
+  "name": "org_embeddings_status",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/embeddings"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_embeddings_backfill",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/embeddings/backfill"
+  ],
+  "input_hash": "b5f29f0ac664efc0"
+ },
+ {
+  "name": "org_project_embeddings_status",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/project-embeddings"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_project_embeddings_backfill",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/project-embeddings/backfill"
+  ],
+  "input_hash": "eaa779ca15b4613f"
+ },
+ {
+  "name": "org_embeddings_backfill_pause",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/embeddings/backfill/pause"
+  ],
+  "input_hash": "5a5bfb491e88557b"
+ },
+ {
+  "name": "org_mcp_servers",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/mcp-servers"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_mcp_server_presets",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/mcp-server-presets",
+   "GET /api/ui/org/connector-catalog"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_mcp_upsert",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/mcp-server"
+  ],
+  "input_hash": "622063d96d6c6100"
+ },
+ {
+  "name": "org_mcp_refresh",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/mcp-server/refresh"
+  ],
+  "input_hash": "ea36c15815c56282"
+ },
+ {
+  "name": "org_mcp_remove",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/mcp-server/remove"
+  ],
+  "input_hash": "9339b78ec138614f"
+ },
+ {
+  "name": "org_connector_upsert",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/connector"
+  ],
+  "input_hash": "c94c1d8d87830418"
+ },
+ {
+  "name": "org_connector_sync_run",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/connector/sync"
+  ],
+  "input_hash": "0680d81673322ca5"
+ },
+ {
+  "name": "org_connector_runs",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/connector/runs"
+  ],
+  "input_hash": "bffcd05b8b89f913"
+ },
+ {
+  "name": "org_connector_run_log",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/connector/runs/:id"
+  ],
+  "input_hash": "bb196d079413487d"
+ },
+ {
+  "name": "org_connector_run_cancel",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/connector/runs/:id/cancel"
+  ],
+  "input_hash": "4811fd99ec7aaf81"
+ },
+ {
+  "name": "org_connector_discover",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/connector/discover"
+  ],
+  "input_hash": "f90c834960190e8f"
+ },
+ {
+  "name": "org_connector_remove",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/connector/remove"
+  ],
+  "input_hash": "0a76d1b13dc892cc"
+ },
+ {
+  "name": "org_ingest_policy_list",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/ingest-policy"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_ingest_policy_upsert",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/ingest-policy"
+  ],
+  "input_hash": "0b043449c0caab69"
+ },
+ {
+  "name": "org_ingest_policy_remove",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/ingest-policy/remove"
+  ],
+  "input_hash": "578fedfe556d0678"
+ },
+ {
+  "name": "org_ingest_observability",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/ingest-observability"
+  ],
+  "input_hash": "49bfc7529d2ed5f4"
+ },
+ {
+  "name": "org_distiller_list",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/distillers"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_distiller_upsert",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/distillers"
+  ],
+  "input_hash": "14b5a84e40429f33"
+ },
+ {
+  "name": "org_distiller_remove",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/distillers/remove"
+  ],
+  "input_hash": "8280322bfa676096"
+ },
+ {
+  "name": "org_distiller_preview",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/distillers/preview"
+  ],
+  "input_hash": "59db3abd71a66417"
+ },
+ {
+  "name": "org_distiller_tune",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/distillers/tune"
+  ],
+  "input_hash": "bdebee72196a940a"
+ },
+ {
+  "name": "org_source_channels",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/source-channels"
+  ],
+  "input_hash": "7d3b26cb0b2c2ce3"
+ },
+ {
+  "name": "org_connector_members",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/connector/:system/members",
+   "GET /api/ui/org/connector/clickup/members"
+  ],
+  "input_hash": "f4aee872ab673c7d"
+ },
+ {
+  "name": "org_hooks",
+  "scope": "runtime",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/hooks"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_hook_upsert",
+  "scope": "runtime",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/hook"
+  ],
+  "input_hash": "f2a46f63144984ec"
+ },
+ {
+  "name": "org_hook_remove",
+  "scope": "runtime",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/hook/remove"
+  ],
+  "input_hash": "c255411949aa4860"
+ },
+ {
+  "name": "org_hooks_preview",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/hooks/preview"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_runner_hooks",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/runner/hooks"
+  ],
+  "input_hash": "ed84f4810c28c92e"
+ },
+ {
+  "name": "org_runner_hook_report",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/runner/hook-report"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_tools",
+  "scope": "runtime",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/tools"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_tool_upsert",
+  "scope": "runtime",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/tool"
+  ],
+  "input_hash": "01ca33da965f9838"
+ },
+ {
+  "name": "org_tool_remove",
+  "scope": "runtime",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/tool/remove"
+  ],
+  "input_hash": "28bad6be76e14faa"
+ },
+ {
+  "name": "org_harness_assets",
+  "scope": "runtime",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/harness-assets"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_harness_asset_upsert",
+  "scope": "runtime",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/harness-asset"
+  ],
+  "input_hash": "249bcfb54fd37a9e"
+ },
+ {
+  "name": "org_harness_asset_remove",
+  "scope": "runtime",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/harness-asset/remove"
+  ],
+  "input_hash": "40010c461eaef553"
+ },
+ {
+  "name": "org_harness_asset_adopt",
+  "scope": "runtime",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/harness-asset/adopt"
+  ],
+  "input_hash": "b5850843d5e5421c"
+ },
+ {
+  "name": "org_runner_assets",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/runner/assets"
+  ],
+  "input_hash": "0cc7df9176327d71"
+ },
+ {
+  "name": "org_asset_prefs",
+  "scope": "runtime",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/asset-prefs"
+  ],
+  "input_hash": "3fe48e7f7c500e43"
+ },
+ {
+  "name": "org_asset_pref_set",
+  "scope": "runtime",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/asset-pref"
+  ],
+  "input_hash": "3f695e2f0c203cb0"
+ },
+ {
+  "name": "org_asset_members",
+  "scope": "runtime",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/asset-members"
+  ],
+  "input_hash": "acff347746cf97ed"
+ },
+ {
+  "name": "org_asset_prefs_clear",
+  "scope": "runtime",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/asset-prefs/clear"
+  ],
+  "input_hash": "acff347746cf97ed"
+ },
+ {
+  "name": "org_db_sources",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/db-sources"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_db_source_upsert",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/db-source"
+  ],
+  "input_hash": "563effaca62b4530"
+ },
+ {
+  "name": "org_db_source_remove",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/db-source/remove"
+  ],
+  "input_hash": "a8eb10483e8fed17"
+ },
+ {
+  "name": "org_db_source_schema",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/db-source/schema"
+  ],
+  "input_hash": "5f1fe306f307ffd1"
+ },
+ {
+  "name": "org_db_table_policy_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/db-source/table-policy"
+  ],
+  "input_hash": "be44856d6973076f"
+ },
+ {
+  "name": "org_db_column_mask_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/db-source/column-mask"
+  ],
+  "input_hash": "2bd3edc094df3ee8"
+ },
+ {
+  "name": "org_audit_list",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/audit"
+  ],
+  "input_hash": "acead7e7cbdb6c82"
+ },
+ {
+  "name": "activity_log",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/activity"
+  ],
+  "input_hash": "9b251166c2858b6e"
+ },
+ {
+  "name": "activity_list",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/activity/list"
+  ],
+  "input_hash": "40c703c9eca6db14"
+ },
+ {
+  "name": "dash_people",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/dash/people"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "dash_members",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/dash/members"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "dash_watch_get",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/dash/watch"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "dash_watch_set",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/dash/watch"
+  ],
+  "input_hash": "d1e3ddc65e8416ca"
+ },
+ {
+  "name": "category_list",
+  "scope": "context",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/categories"
+  ],
+  "input_hash": "8267442e26753e4f"
+ },
+ {
+  "name": "category_get",
+  "scope": "context",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/categories/:id"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "category_create",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/categories"
+  ],
+  "input_hash": "bee986d6e21cabcc"
+ },
+ {
+  "name": "category_update",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/categories/:id"
+  ],
+  "input_hash": "38a618c7a3efdbdb"
+ },
+ {
+  "name": "category_view_set",
+  "scope": "context",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/categories/:id/view"
+  ],
+  "input_hash": "7c0fe279412ba65d"
+ },
+ {
+  "name": "category_delete",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/categories/:id/delete"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "category_set_repos",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/categories/:id/repos"
+  ],
+  "input_hash": "5b32506f6a62c36e"
+ },
+ {
+  "name": "category_edge_list",
+  "scope": "context",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/category-edges"
+  ],
+  "input_hash": "a7d1f66615385981"
+ },
+ {
+  "name": "category_edge_set",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/category-edges"
+  ],
+  "input_hash": "1d885419ac7132a0"
+ },
+ {
+  "name": "category_edge_remove",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/category-edges/:id/delete"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "team_list",
+  "scope": "context",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/teams"
+  ],
+  "input_hash": "e81650bcc565c023"
+ },
+ {
+  "name": "team_get",
+  "scope": "context",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/teams/:id"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "team_create",
+  "scope": "context",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/teams"
+  ],
+  "input_hash": "874a95199b9c7766"
+ },
+ {
+  "name": "team_update",
+  "scope": "context",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/teams/:id"
+  ],
+  "input_hash": "3b2300f7e686b895"
+ },
+ {
+  "name": "team_delete",
+  "scope": "context",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/teams/:id/delete"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "team_set_members",
+  "scope": "context",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/teams/:id/members"
+  ],
+  "input_hash": "ef68179e23272c44"
+ },
+ {
+  "name": "team_set_category",
+  "scope": "context",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/teams/:id/categories"
+  ],
+  "input_hash": "a710cb1279b1d0cc"
+ },
+ {
+  "name": "category_set_owner",
+  "scope": "context",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/categories/:id/owner"
+  ],
+  "input_hash": "92f43a6e7b930f71"
+ },
+ {
+  "name": "knowledge_list",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/knowledge"
+  ],
+  "input_hash": "d5d8814340d4262c"
+ },
+ {
+  "name": "knowledge_grep",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/knowledge/search"
+  ],
+  "input_hash": "9d9097a1eeec9aac"
+ },
+ {
+  "name": "knowledge_search",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/knowledge/semantic"
+  ],
+  "input_hash": "9a231ea401b34de9"
+ },
+ {
+  "name": "knowledge_similar",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/knowledge/similar"
+  ],
+  "input_hash": "f1c8d76f08ce08db"
+ },
+ {
+  "name": "knowledge_graph",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/knowledge-graph"
+  ],
+  "input_hash": "f8d6adb6f418b4ee"
+ },
+ {
+  "name": "knowledge_tree",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/knowledge-tree"
+  ],
+  "input_hash": "1f1430ede859f49e"
+ },
+ {
+  "name": "knowledge_view_get",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/knowledge-view-config"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "knowledge_view_set",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/knowledge-view-config"
+  ],
+  "input_hash": "6ff8efb191c22cd6"
+ },
+ {
+  "name": "knowledge_comment_reaction",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/knowledge-comments/:id/reactions"
+  ],
+  "input_hash": "bfcd3095e373025c"
+ },
+ {
+  "name": "knowledge_revisions",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/knowledge-revisions"
+  ],
+  "input_hash": "991a5b195a916752"
+ },
+ {
+  "name": "knowledge_revision_get",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/knowledge-revisions/:id"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "knowledge_revision_review",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/knowledge-revisions/:id/review"
+  ],
+  "input_hash": "506dd5f406adefed"
+ },
+ {
+  "name": "review_queue_summary",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/review-queue/summary"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "knowledge_unmapped",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/knowledge/unmapped"
+  ],
+  "input_hash": "36dba86f7f96ed3d"
+ },
+ {
+  "name": "knowledge_classifications",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/knowledge/classifications"
+  ],
+  "input_hash": "88f2284243fe50f5"
+ },
+ {
+  "name": "knowledge_get",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/knowledge/:name"
+  ],
+  "input_hash": "342ffcb65e87c3b9"
+ },
+ {
+  "name": "knowledge_save",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/knowledge"
+  ],
+  "input_hash": "fb3f01ef2616f593"
+ },
+ {
+  "name": "knowledge_set_lifecycle",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/knowledge/:name/lifecycle"
+  ],
+  "input_hash": "df042d210dae62bf"
+ },
+ {
+  "name": "knowledge_set_wiki",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/knowledge/:name/wiki"
+  ],
+  "input_hash": "cf3a82ebd6e746e0"
+ },
+ {
+  "name": "knowledge_delete",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/knowledge/:name/delete"
+  ],
+  "input_hash": "4a8417658cc910a2"
+ },
+ {
+  "name": "knowledge_link_category",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/knowledge/:name/category"
+  ],
+  "input_hash": "c2d2ff19f441d33f"
+ },
+ {
+  "name": "knowledge_propose_category",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/knowledge/:name/propose-category"
+  ],
+  "input_hash": "86f6478d1640f0df"
+ },
+ {
+  "name": "knowledge_link",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/knowledge/:name/link"
+  ],
+  "input_hash": "3fe0d8d153cb29d2"
+ },
+ {
+  "name": "knowledge_props_ui",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/knowledge/:name/props-ui"
+  ],
+  "input_hash": "e4a4c031aa84568b"
+ },
+ {
+  "name": "knowledge_comments",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/knowledge/:name/comments"
+  ],
+  "input_hash": "4a8417658cc910a2"
+ },
+ {
+  "name": "knowledge_comment_post",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/knowledge/:name/comments"
+  ],
+  "input_hash": "bf879c6a35eec07e"
+ },
+ {
+  "name": "knowledge_move",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/knowledge/:name/move"
+  ],
+  "input_hash": "bf29abfbe3d6ab53"
+ },
+ {
+  "name": "source_list",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/sources"
+  ],
+  "input_hash": "14d61751ca713e02"
+ },
+ {
+  "name": "source_undistilled",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/sources/undistilled"
+  ],
+  "input_hash": "88f2284243fe50f5"
+ },
+ {
+  "name": "source_get",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/sources/:id"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "source_save",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/sources"
+  ],
+  "input_hash": "ccb77cff6227ad73"
+ },
+ {
+  "name": "source_link_knowledge",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/sources/:id/knowledge"
+  ],
+  "input_hash": "4d0bf8d565bd7411"
+ },
+ {
+  "name": "source_delete",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/sources/:id/delete"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "source_artifact",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [],
+  "input_hash": "8eb98c3baa73c9cb"
+ },
+ {
+  "name": "workspace_reclaim",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/reclaim"
+  ],
+  "input_hash": "209c0ac0782c04aa"
+ },
+ {
+  "name": "project_find_by_origin_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/v6/projects/find-by-origin"
+  ],
+  "input_hash": "52e1c767451ff2fb"
+ },
+ {
+  "name": "project_bind_folder_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/folder-binding"
+  ],
+  "input_hash": "61cffcc59a3f5983"
+ },
+ {
+  "name": "my_tasks_v6",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/my-tasks"
+  ],
+  "input_hash": "69afd23134fb988b"
+ },
+ {
+  "name": "project_tasks_v6",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/project-tasks"
+  ],
+  "input_hash": "5e9412e9cefcd75e"
+ },
+ {
+  "name": "project_list_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/projects"
+  ],
+  "input_hash": "2234c00a4e11657b"
+ },
+ {
+  "name": "project_grep",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/projects/search"
+  ],
+  "input_hash": "42b5c71f8eecdcfc"
+ },
+ {
+  "name": "project_search",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/projects/semantic"
+  ],
+  "input_hash": "00961fd848a14658"
+ },
+ {
+  "name": "project_get_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/projects/:id"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "project_create_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects"
+  ],
+  "input_hash": "815bc2aa24bca756"
+ },
+ {
+  "name": "project_update_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id"
+  ],
+  "input_hash": "dcd98f3b595ef870"
+ },
+ {
+  "name": "project_set_repos_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/repos"
+  ],
+  "input_hash": "f529395e0d685170"
+ },
+ {
+  "name": "project_set_categories_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/categories"
+  ],
+  "input_hash": "5f707007b7c6b27f"
+ },
+ {
+  "name": "project_delete_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/delete"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "project_set_status_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/status"
+  ],
+  "input_hash": "27e5ef225edfec2d"
+ },
+ {
+  "name": "project_set_members_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/members"
+  ],
+  "input_hash": "af199f2ad48bf3c8"
+ },
+ {
+  "name": "project_my_status_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/my-status"
+  ],
+  "input_hash": "cef8aa186e239bf9"
+ },
+ {
+  "name": "project_link_category_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/category"
+  ],
+  "input_hash": "4eba2ac47238614b"
+ },
+ {
+  "name": "project_link_knowledge_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/knowledge"
+  ],
+  "input_hash": "83727642aacba9ee"
+ },
+ {
+  "name": "project_link_project_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/link"
+  ],
+  "input_hash": "713e8d9c165cdf80"
+ },
+ {
+  "name": "project_recommend_knowledge_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/projects/:id/recommend-knowledge"
+  ],
+  "input_hash": "fd6fad2ac4593a9a"
+ },
+ {
+  "name": "knowledge_projects_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/knowledge/:name/projects"
+  ],
+  "input_hash": "4a8417658cc910a2"
+ },
+ {
+  "name": "task_create_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/tasks"
+  ],
+  "input_hash": "e175e5b8ae19f5d8"
+ },
+ {
+  "name": "task_set_status_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/tasks/:id/status"
+  ],
+  "input_hash": "12fe6034a0f13338"
+ },
+ {
+  "name": "task_update_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/tasks/:id"
+  ],
+  "input_hash": "c18c9554b868dc72"
+ },
+ {
+  "name": "task_reorder_v6",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/tasks-reorder"
+  ],
+  "input_hash": "f714fbb8d47ffd8c"
+ },
+ {
+  "name": "project_reorder_v6",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects-reorder"
+  ],
+  "input_hash": "52a846f19ce11ee2"
+ },
+ {
+  "name": "task_delete_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/tasks/:id/delete"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "board_fields_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/board-fields"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "project_list_set_teams_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/project-lists/:id/teams"
+  ],
+  "input_hash": "988fa1488995dbea"
+ },
+ {
+  "name": "project_list_index_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/project-lists"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "project_list_create_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/project-lists"
+  ],
+  "input_hash": "5197212eb3b405a4"
+ },
+ {
+  "name": "project_list_update_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/project-lists/:id"
+  ],
+  "input_hash": "78826fa011243db3"
+ },
+ {
+  "name": "project_list_delete_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/project-lists/:id/delete"
+  ],
+  "input_hash": "663a78e687f71442"
+ },
+ {
+  "name": "project_list_set_members_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/project-lists/:id/members"
+  ],
+  "input_hash": "af199f2ad48bf3c8"
+ },
+ {
+  "name": "project_set_list_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/list"
+  ],
+  "input_hash": "97b6a284efd403f5"
+ },
+ {
+  "name": "project_list_set_settings_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/project-lists/:id/settings"
+  ],
+  "input_hash": "46c007659149dd81"
+ },
+ {
+  "name": "project_list_clickup_fields_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/project-lists/:id/clickup-fields"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "project_list_reorder_v6",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/project-lists-reorder"
+  ],
+  "input_hash": "f714fbb8d47ffd8c"
+ },
+ {
+  "name": "project_status_template_index_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/status-templates"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "project_status_template_create_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/status-templates"
+  ],
+  "input_hash": "c1d69d7da7004e68"
+ },
+ {
+  "name": "project_status_template_update_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/status-templates/:id"
+  ],
+  "input_hash": "4b8f16b290a5358a"
+ },
+ {
+  "name": "project_status_template_delete_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/status-templates/:id/delete"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "project_status_template_set_default_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/status-templates/set-default"
+  ],
+  "input_hash": "bb6f6d0bea40cd91"
+ },
+ {
+  "name": "favorites_index",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/favorites"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "favorites_set",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/favorites"
+  ],
+  "input_hash": "5f63b32abc5a02c2"
+ },
+ {
+  "name": "dash_prefs_index",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/dash-prefs"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "dash_prefs_set",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/dash-prefs"
+  ],
+  "input_hash": "3e44435a861c0899"
+ },
+ {
+  "name": "side_prefs_index",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/side-prefs"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "side_prefs_set",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/side-prefs"
+  ],
+  "input_hash": "5cdd6ee705f0914b"
+ },
+ {
+  "name": "project_folder_index_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/project-folders"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "project_folder_create_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/project-folders"
+  ],
+  "input_hash": "31a06857d6c4be5b"
+ },
+ {
+  "name": "project_folder_update_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/project-folders/:id"
+  ],
+  "input_hash": "7ea69084af6d862b"
+ },
+ {
+  "name": "project_folder_delete_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/project-folders/:id/delete"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "project_list_set_folder_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/project-lists/:id/folder"
+  ],
+  "input_hash": "aef562acefac71cc"
+ },
+ {
+  "name": "project_folder_reorder_v6",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/project-folders-reorder"
+  ],
+  "input_hash": "f714fbb8d47ffd8c"
+ },
+ {
+  "name": "shared_folder_acl_get",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/terminal/browse/acl"
+  ],
+  "input_hash": "b1e5ded4ba7542c1"
+ },
+ {
+  "name": "shared_folder_acl_set",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/terminal/browse/acl"
+  ],
+  "input_hash": "2d6cdb7b7dd84589"
+ },
+ {
+  "name": "project_view_index_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/project-views"
+  ],
+  "input_hash": "4a938946df7558f9"
+ },
+ {
+  "name": "task_detail_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/tasks/:id/detail"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "task_tag_list_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/tags"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "task_tags_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/tasks/:id/tags"
+  ],
+  "input_hash": "509637d686169caa"
+ },
+ {
+  "name": "task_tag_update_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/tags/:id"
+  ],
+  "input_hash": "05796e0a6f069564"
+ },
+ {
+  "name": "task_tag_delete_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/tags/:id/delete"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "task_time_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/tasks/:id/time"
+  ],
+  "input_hash": "e24e319e7dee5396"
+ },
+ {
+  "name": "task_checklist_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/tasks/:id/checklists"
+  ],
+  "input_hash": "4f5c66f225ad99b9"
+ },
+ {
+  "name": "task_links_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/tasks/:id/links"
+  ],
+  "input_hash": "7223c1368abd6ce2"
+ },
+ {
+  "name": "task_link_targets_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/projects/:id/link-targets"
+  ],
+  "input_hash": "dd6be79b3f7993e5"
+ },
+ {
+  "name": "task_comment_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/tasks/:id/comments"
+  ],
+  "input_hash": "0971f6b0d1c9e710"
+ },
+ {
+  "name": "task_comment_reaction_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/comments/:id/reactions"
+  ],
+  "input_hash": "bfcd3095e373025c"
+ },
+ {
+  "name": "project_comments_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/projects/:id/comments"
+  ],
+  "input_hash": "cff82a5b7bd78ee1"
+ },
+ {
+  "name": "task_field_create_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/projects/:id/fields"
+  ],
+  "input_hash": "59959d34889c3716"
+ },
+ {
+  "name": "task_field_update_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/fields/:fieldId"
+  ],
+  "input_hash": "352da1fd39e4e5cc"
+ },
+ {
+  "name": "task_field_delete_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/fields/:fieldId/delete"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "task_field_value_set_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/v6/tasks/:id/fields/:fieldId"
+  ],
+  "input_hash": "29889c36a411b2ac"
+ },
+ {
+  "name": "task_field_catalog_v6",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/projects/:id/field-catalog"
+  ],
+  "input_hash": "ab0be547d188ccc5"
+ },
+ {
+  "name": "deleted_list",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/deleted"
+  ],
+  "input_hash": "4df1c7851376a241"
+ },
+ {
+  "name": "content_restore",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/deleted/restore"
+  ],
+  "input_hash": "6cf966c863571d19"
+ },
+ {
+  "name": "vis_axis_list",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/vis/axes"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "vis_axis_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/vis/axes"
+  ],
+  "input_hash": "1ad1ce61e6e6e384"
+ },
+ {
+  "name": "vis_break_glass_start",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/vis/break-glass"
+  ],
+  "input_hash": "8a0e49aa8e26aac4"
+ },
+ {
+  "name": "vis_break_glass_end",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/vis/break-glass/end"
+  ],
+  "input_hash": "fee9bce64a33c0f5"
+ },
+ {
+  "name": "vis_break_glass_list",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/vis/break-glass"
+  ],
+  "input_hash": "2d8947daaba55c08"
+ },
+ {
+  "name": "content_undo",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/undo"
+  ],
+  "input_hash": "e69e726970911cdd"
+ },
+ {
+  "name": "feed_target_list",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/feed-targets"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "feed_target_create",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/feed-targets"
+  ],
+  "input_hash": "fd3d0d02bfb143e5"
+ },
+ {
+  "name": "feed_target_update",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/feed-targets/:id"
+  ],
+  "input_hash": "489bca842ede4f49"
+ },
+ {
+  "name": "feed_target_delete",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/feed-targets/:id/delete"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "feed_target_set_categories",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/feed-targets/:id/categories"
+  ],
+  "input_hash": "4419d1b448f36ddf"
+ },
+ {
+  "name": "feed_target_drain",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/feed-targets/drain"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "cron_list",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/cron"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "cron_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/cron"
+  ],
+  "input_hash": "d2d671f0d76c545f"
+ },
+ {
+  "name": "cron_delete",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/cron/:id/delete"
+  ],
+  "input_hash": "e9f5a6623f0f7ef5"
+ },
+ {
+  "name": "cron_run_now",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/cron/:id/run"
+  ],
+  "input_hash": "e9f5a6623f0f7ef5"
+ },
+ {
+  "name": "list_unmapped",
+  "scope": "context",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/domainmap/unmapped"
+  ],
+  "input_hash": "b8189bda9a570da3"
+ },
+ {
+  "name": "map_code_unit",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/domainmap/map-unit"
+  ],
+  "input_hash": "eff2f6e4ea764a33"
+ },
+ {
+  "name": "managed_session_list",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/managed-sessions"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "managed_session_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/managed-sessions"
+  ],
+  "input_hash": "27949a7bd16a4414"
+ },
+ {
+  "name": "managed_session_delete",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/managed-sessions/:id/delete"
+  ],
+  "input_hash": "e9f5a6623f0f7ef5"
+ },
+ {
+  "name": "managed_session_ensure",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/managed-sessions/:id/ensure"
+  ],
+  "input_hash": "e9f5a6623f0f7ef5"
+ },
+ {
+  "name": "preview_env_list",
+  "scope": "code",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/preview-envs"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "preview_env_set",
+  "scope": "code",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/preview-envs"
+  ],
+  "input_hash": "b466d46063eda306"
+ },
+ {
+  "name": "preview_env_delete",
+  "scope": "code",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/preview-envs/:id/delete"
+  ],
+  "input_hash": "e9f5a6623f0f7ef5"
+ },
+ {
+  "name": "preview_env_ensure",
+  "scope": "code",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/preview-envs/:id/ensure"
+  ],
+  "input_hash": "e9f5a6623f0f7ef5"
+ },
+ {
+  "name": "preview_env_stop",
+  "scope": "code",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/preview-envs/:id/stop"
+  ],
+  "input_hash": "e9f5a6623f0f7ef5"
+ },
+ {
+  "name": "repo_branch_list",
+  "scope": "code",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/repos/:repo/branches"
+  ],
+  "input_hash": "57db86da49b40ff6"
+ },
+ {
+  "name": "stack_profile_list",
+  "scope": "code",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/stack-profiles"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "stack_profile_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/stack-profiles"
+  ],
+  "input_hash": "db31880d68201eb9"
+ },
+ {
+  "name": "stack_profile_delete",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/stack-profiles/:id/delete"
+  ],
+  "input_hash": "e9f5a6623f0f7ef5"
+ },
+ {
+  "name": "delegate_run",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/delegate"
+  ],
+  "input_hash": "6dd39bac3d57de58"
+ },
+ {
+  "name": "delegate_status",
+  "scope": "context",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/delegate/:id"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "delegate_list",
+  "scope": "context",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/delegate"
+  ],
+  "input_hash": "b2df2ea12d63e940"
+ },
+ {
+  "name": "delegate_logs",
+  "scope": "context",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/delegate/:id/logs"
+  ],
+  "input_hash": "8428c77e1c3c70c7"
+ },
+ {
+  "name": "delegate_cancel",
+  "scope": "context",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/delegate/:id/cancel"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
+  "name": "tool_usage_stats",
+  "scope": "admin",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/tool-usage"
+  ],
+  "input_hash": "1849d1b4b11d0a84"
+ },
+ {
+  "name": "recall_route",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "POST /api/ui/recall/route"
+  ],
+  "input_hash": "0ada1cb252b03de4"
+ },
+ {
+  "name": "me_credentials",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/credentials"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_credential_set",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/credential"
+  ],
+  "input_hash": "fa5bf8dd3c9d34f1"
+ },
+ {
+  "name": "me_credential_delete",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/credential/delete"
+  ],
+  "input_hash": "beaaea6ecc43e453"
+ },
+ {
+  "name": "org_credentials",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/credentials"
+  ],
+  "input_hash": "239d82b3ff5cb01b"
+ },
+ {
+  "name": "org_credential_set",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/credential"
+  ],
+  "input_hash": "dbfc46d1e610ee4f"
+ },
+ {
+  "name": "org_credential_delete",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/credential/delete"
+  ],
+  "input_hash": "91c5cf81eb08e0a7"
+ },
+ {
+  "name": "me_aws_credentials",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/aws-credentials"
+  ],
+  "input_hash": "73a5d4440f4b8e1e"
+ },
+ {
+  "name": "me_oauth_connect",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/oauth/connect"
+  ],
+  "input_hash": "8b4298f89945f6eb"
+ },
+ {
+  "name": "me_oauth_disconnect",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/oauth/disconnect"
+  ],
+  "input_hash": "d65aad7e49909454"
+ },
+ {
+  "name": "me_oauth_connectors",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/oauth/connectors"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_slack_channels",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/slack/channels"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_channel_policy_set",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/channel-policy"
+  ],
+  "input_hash": "dac1a4c9957b56d6"
+ },
+ {
+  "name": "broker_run",
+  "scope": "code",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/broker/run"
+  ],
+  "input_hash": "3c4d513a6fa4e750"
+ }
+]

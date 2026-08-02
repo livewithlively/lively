@@ -1,0 +1,43 @@
+[Unit]
+Description=Lively gateway (MCP + web UI + central-box runner)
+Documentation=file://@APP_DIR@/deploy/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# ⚠ KillMode=process — 중앙박스 세션은 게이트웨이(node)가 spawn 한 tmux 서버가 붙든다. 기본값(control-group)이면
+#   systemctl restart/stop 이 서비스 cgroup 전체(=tmux 서버까지) SIGTERM → 모든 웹터미널 세션이 죽는다.
+#   process 로 main PID(게이트웨이)만 재시작하고 tmux 는 살려, 재시작 뒤 tmux 에서 세션을 그대로 re-attach 한다.
+#   (설계 불변식: persistent tmux · 재기동 생존 — src/terminal/terminal-sessions.ts 메타를 tmux user-option 에 저장.)
+KillMode=process
+# #1059 B — 게이트웨이 서비스 cgroup 메모리 회계·상한. MemoryAccounting 은 항상 켠다(cgroup 메모리 status 정확 —
+#   #1059 G1 관리탭 메모리 카드가 이 회계에 기댈 수 있게; 오버헤드 무시가능). MemoryHigh(소프트 상한)는 opt-in:
+#   render_service_unit 이 GATEWAY_MEMORY_HIGH_MB env 로 아래 자리(MemoryHigh 줄)를 채우고, 비면 빈 줄 = 무제한 = **무회귀**.
+#   ⚠ MemoryHigh(소프트=스로틀·회수, kill 아님)만 쓴다 — 게이트웨이를 OOM-kill 하면 전 기능이 죽으므로 MemoryMax(하드) 금지.
+#   ⚠ 이 상한은 서비스 cgroup 전체(게이트웨이 node + tmux 서버 + **per-session 캡 미설정 세션**)에 걸린다. #1059 D 로
+#     per-session 메모리 캡을 켜면 세션은 lively-sessions.slice 로 빠져 여기서 제외된다(그때 이 상한은 게이트웨이+tmux 만 조인다).
+#   ⚠ Ollama(llama-server)는 게이트웨이가 spawn 하지 않는다(외부 HTTP 백엔드) → 별도 서비스/도커면 이 cgroup 밖이라 무관.
+#     단 터미널 세션에서 `ollama serve` 로 띄웠다면 세션 cgroup(캡 미설정 시 이 서비스 cgroup)에 들어가 조여질 수 있으니,
+#     상한을 걸기 전 박스에서 Ollama 가 자체 서비스/도커인지 확인할 것(#1059 B 활성 선행조건).
+MemoryAccounting=yes
+@MEMORY_HIGH_LINE@
+User=@APP_USER@
+WorkingDirectory=@APP_DIR@
+ExecStart=@NODE_BIN@ --env-file-if-exists=.env dist/index.js
+Restart=always
+RestartSec=10
+LimitNOFILE=8192
+# ⚠ UTF-8 로케일 불변식 — 없으면 tmux 가 list-sessions 출력의 탭·한글을 '_' 로 치환 → 웹터미널 입장 불가.
+#   코드(src/terminal/terminal-sessions.ts)에서도 강제하지만 게이트웨이 전체 안전을 위해 여기서도 박는다.
+Environment=LANG=C.UTF-8
+Environment=LC_ALL=C.UTF-8
+Environment=LC_CTYPE=C.UTF-8
+# 터미널 세션이 spawn 하는 claude/codex/git/tmux 를 찾도록 넉넉한 PATH(install-linux 가 치환).
+Environment=PATH=@PATH@
+# 로그 = 리포 내 내구 위치(+ journald). /tmp 금지(재부팅 증발).
+StandardOutput=append:@APP_DIR@/logs/gateway.log
+StandardError=append:@APP_DIR@/logs/gateway.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,121 @@
+# Lively 배포 스택.
+#
+# 기본 토폴로지 = Option 2 (배포 설계 결정):
+#   · store(pgvector) = 도커(이 compose)
+#   · gateway(게이트웨이 = 컨트롤플레인 + 중앙박스 러너) = 호스트 네이티브(systemd/launchd, deploy/ 참조)
+#   네이티브 게이트웨이가 호스트 docker 를 그대로 쓰므로 중앙박스(웹터미널) 세션의 DinD 함정을 피한다.
+#   (근거: knowledge_get central-box-design)
+#
+# 사용:
+#   docker compose up -d                        # items-db(pgvector) 만 = Option 2 의 도커 파트
+#   docker compose --profile embeddings up -d   # + Ollama 임베딩 사이드카(#172, 4GB 박스엔 비권장 — t4g.large+)
+#   docker compose --profile gateway up -d      # + 게이트웨이까지 컨테이너로(full-docker / Option 1 미리보기)
+#
+# 시크릿은 .env(PGPASSWORD 등)에서 읽는다. deploy/install.sh 가 .env 를 생성한다(deploy/lib/common.sh).
+
+# ⚠ compose 프로젝트명은 레포명과 별개로 고정한다 — 바꾸면 named volume 이름(items-db-data)이 달라져
+#   기존 박스의 DB 가 빈 볼륨으로 새로 생성된다(데이터 유실). 레포명이 lively 로 바뀐 뒤에도 이 값은 유지.
+name: context-ontology
+
+# ⚠ 컨테이너 로그 상한(#813) — 도커 기본 json-file 드라이버는 **상한이 없다**(무제한 증가).
+#  박스 수명은 수년이고 고객 박스는 우리가 들여다보지 못하므로, 방치하면 로그만으로 디스크가 찬다
+#  (디스크가 차면 Postgres 가 죽어 전 기능이 500 — 2026-07-13 사고). 모든 서비스에 앵커로 상속시킨다.
+#  게이트웨이 자신의 로그(logs/gateway.log)는 in-process 재니터가 관리한다(관리탭 '저장소·로그').
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: ${DOCKER_LOG_MAX_SIZE:-10m}
+    max-file: "${DOCKER_LOG_MAX_FILE:-3}"
+
+services:
+  # ── store: 조직 지식(knowledge)·v6·도메인맵·임베딩이 사는 쓰기 DB. ──
+  #  ⚠ 불변식: 이미지는 반드시 pgvector/pgvector — plain postgres 로 재생성 금지(#172 벡터검색).
+  #     (knowledge_get items-db-pgvector-image-invariant)
+  items-db:
+    image: pgvector/pgvector:pg18
+    environment:
+      POSTGRES_USER: ${PGUSER:-lively}
+      POSTGRES_PASSWORD: ${PGPASSWORD:?PGPASSWORD 를 .env 에 설정하세요 (deploy/install.sh 가 생성)}
+      POSTGRES_DB: ${PGDATABASE:-items}
+    ports:
+      # ⚠ 127.0.0.1 바인딩 — DB 를 외부에 노출하지 않는다(네이티브 게이트웨이가 localhost 로 접근).
+      - "127.0.0.1:${ITEMS_DB_PORT:-5432}:5432"
+    volumes:
+      # ⚠ pg18+ 이미지는 단일 마운트 /var/lib/postgresql (데이터는 그 아래 버전 서브디렉). /data 마운트는 거부됨.
+      - items-db-data:/var/lib/postgresql
+      - ./deploy/initdb:/docker-entrypoint-initdb.d:ro   # 최초 init 1회: domainmap DB 생성
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGUSER:-lively} -d ${PGDATABASE:-items}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    logging: *default-logging
+    restart: unless-stopped
+
+  # ── 임베딩 사이드카(선택, profile=embeddings) — OpenAI-compatible /v1/embeddings(Ollama, CPU). ──
+  #  스왑: 다른 모델=EMBEDDINGS_MODEL + ollama pull; 다른 런타임/외부 API=EMBEDDINGS_BASE_URL 교체.
+  embeddings:
+    image: ollama/ollama:latest
+    profiles: ["embeddings"]
+    ports:
+      - "127.0.0.1:${EMBEDDINGS_PORT:-11434}:11434"   # 네이티브 게이트웨이가 localhost 로 접근
+    volumes:
+      - ollama-models:/root/.ollama
+    logging: *default-logging
+    restart: unless-stopped
+
+  embeddings-init:   # 최초 1회 모델 pull(멱등). store 의 임베딩 호출 전에 모델 준비.
+    image: ollama/ollama:latest
+    profiles: ["embeddings"]
+    depends_on: [embeddings]
+    environment:
+      OLLAMA_HOST: embeddings:11434
+    entrypoint: ["/bin/sh","-c","until ollama list >/dev/null 2>&1; do sleep 1; done; ollama pull ${EMBEDDINGS_MODEL:-bge-m3}"]
+    logging: *default-logging
+    restart: "no"
+
+  # ── gateway(선택, profile=gateway) — full-docker(Option 1) 미리보기. 파일럿(Option 2)은 미사용. ──
+  #  ⚠ 컨테이너 안에서 중앙박스 세션을 띄우면 DinD 함정. 중앙박스(웹터미널)를 쓸 거면 네이티브로(deploy/).
+  gateway:
+    build: .
+    profiles: ["gateway"]
+    env_file: [.env]
+    environment:
+      # 컨테이너 네트워크 안에서는 호스트가 'items-db'. (네이티브 경로의 localhost 와 분리)
+      ITEMS_DATABASE_URL: postgres://${PGUSER:-lively}:${PGPASSWORD}@items-db:5432/${PGDATABASE:-items}
+      DOMAINMAP_DATABASE_URL: postgres://${PGUSER:-lively}:${PGPASSWORD}@items-db:5432/domainmap
+      EMBEDDINGS_BASE_URL: ${EMBEDDINGS_BASE_URL_COMPOSE:-http://embeddings:11434}
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+    depends_on:
+      items-db:
+        condition: service_healthy
+    ports:
+      - "${PORT:-8080}:8080"
+    logging: *default-logging
+    restart: unless-stopped
+
+  # ── caddy(선택, profile=proxy) — 자동 HTTPS 리버스 프록시(Let's Encrypt). TLS 종단 → localhost:8080. ──
+  #  network_mode: host → 호스트 80/443 바인딩 + 네이티브 게이트웨이(localhost:8080)로 프록시. WS Upgrade 자동 통과.
+  #  도메인 필요(LIVELY_DOMAIN — A레코드가 이 호스트를 향해야 인증서 발급). 인증서는 caddy-data 볼륨에 영속.
+  caddy:
+    image: caddy:2
+    profiles: ["proxy"]
+    network_mode: host
+    logging: *default-logging
+    restart: unless-stopped
+    environment:
+      # 기본 빈 값(:-) — 프로필 미지정(items-db/gateway) up 시에도 파싱되게. compose 는 프로필 필터 전에
+      # 파일 전체를 interpolate 하므로 :? 면 TLS 안 쓰는 설치도 막힌다. 도메인 검증은 proxy_up(common.sh).
+      LIVELY_DOMAIN: ${LIVELY_DOMAIN:-}
+      LIVELY_UPSTREAM: ${LIVELY_UPSTREAM:-localhost:8080}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  items-db-data:   # ⚠ 조직 지식 전체. 백업 대상(pg_dump / 볼륨 스냅샷). -v 로 날리지 말 것.
+  ollama-models:
+  caddy-data:      # ⚠ TLS 인증서·ACME 계정. 삭제 시 재발급(LE rate-limit 주의).
+  caddy-config:

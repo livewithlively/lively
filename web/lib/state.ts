@@ -1,0 +1,48 @@
+// lib/state.ts — 앱 전역 상태 싱글턴(#1313 R29b). core.ts 에서 **verbatim 이동**(로직 변경 0).
+//  ⚠ state 는 **모듈 전역 mutable 싱글턴**이다 — 모든 화면이 같은 바인딩을 봐야 하므로 소유 모듈은 하나뿐이고
+//   여기서만 산다(ESM import 바인딩은 소비 측에서 재할당 불가 — 값 변경은 state 의 속성으로만).
+//  의존 0(leaf) — state 를 읽는 판정 헬퍼(hasScope·visAxisOn)도 여기 동거시켜 표면마다 사본이 생기는 걸 막는다.
+//  소비 파일은 종전대로 './core.js' 에서 받는다(core 의 배럴 재수출).
+
+interface AppState {
+  me: any;
+  knowledge: any;
+  reviewOrderBy: string;
+  admin: any;
+  start: any;
+  domains: any;
+  allDomains: any;
+  [k: string]: any;
+}
+const state: AppState = {
+  me: null,
+  knowledge: { space: 'business', category: '', injection: '', provenance: '', q: '' }, // 지식 탭(#/knowledge) 필터 상태(2분할 뷰)
+  reviewOrderBy: 'updated_at', // 검토 피드 정렬(기본 최신순)
+  admin: { data: null, sel: null, tab: {}, memberSel: null, memberEditing: false, memberSearch: '', memorySel: null, repoSel: null, navCollapsed: false }, // 관리 페이지 상태 (tab = 섹션별 서브탭 선택, #837)
+  start: { mode: 'web', os: 'mac', token: null }, // '시작하기 > 설치' 온보딩 상태(쓰는곳 web|local + 선택 OS + 자가발급 토큰 1회 캐시)
+  domains: {},           // P-V3-4a: repo별 도메인 통제어휘 캐시 { [repo]: {list, repos, loaded, error} }
+  allDomains: null,      // V5 탈-repo: 전 repo + business 통합 통제어휘 캐시(저장/필터 드롭다운) {list, loaded, error}
+};
+
+// 현재 토큰이 가진 scope 보유 여부(/api/ui/me 의 scopes). 어휘 CRUD 권한(context) 판정에 쓴다.
+//  state 소유자인 여기에 둔다(#1313 R27 — 구 admin.ts 홈스테드. admin.ts 가 재수출하므로 호출부 무변경).
+export function hasScope(s) {
+  return !!(state.me && Array.isArray(state.me.scopes) && state.me.scopes.includes(s));
+}
+
+// 맥락 공개범위 축(#1291) — 이 축이 켜져 있나. **화면이 설정 UI·자물쇠를 그릴지 판단하는 단일 규칙**이다.
+//  축이 꺼졌는데 폼을 계속 그리면 "설정했는데 안 걸린다", 자물쇠를 계속 그리면 "잠긴 줄 알았는데 전원이 본다" —
+//  둘 다 화면이 거짓말하는 것이라 강제를 끄는 것만으론 부족하다.
+//  ⚠ 표면마다 state.me.vis_axes 를 직접 뒤지지 마라. 그 순간 사본이 생기고 한쪽만 고쳐진다.
+//  값을 못 받았으면(구 서버·조회 실패) **켜짐으로 본다** — 종전 화면 그대로가 안전한 쪽이다.
+function visAxisOn(axis: string): boolean {
+  const ax = state.me && (state.me as any).vis_axes;
+  if (!ax) return true;
+  return ax[axis] !== false;
+}
+
+export type { AppState };
+export {
+  state,
+  visAxisOn,
+};

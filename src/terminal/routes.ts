@@ -1,0 +1,516 @@
+// 중앙 박스 — 터미널 세션 매니저 정문. ([[central-box-design]] 경로 D: ttyd 대신 xterm.js+node-pty 깊은 통합)
+// REST(/api/ui/terminal/*, Bearer) = 세션 목록·생성·이름변경·삭제 + 설정(루트·하네스 카탈로그).
+// WS(/terminal/ws, ticket 쿠키) = PTY 스트림(terminal-pty.ts). 브라우저는 Authorization 헤더를 WS/네비에
+// 못 실으므로, Bearer 로 인증된 멤버에게 HttpOnly 티켓 쿠키(userId 보유)를 발급해 WS 소유권 판정에 쓴다.
+import type express from "express";
+import type { Server } from "node:http";
+import crypto from "node:crypto";
+import { sessionOrBearer } from "../auth/http-auth.js";
+import type { BearerVerifier } from "../auth/bearer.js";
+import type { LivelyUser } from "../context.js";
+import { wrap, HttpError } from "../http/rest-util.js";
+import { logger } from "../log.js";
+import { ROOTS, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, validateInvites, type SessionInfo, type CreateInput, normalizeCap } from "./terminal-sessions.js";
+import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited } from "../sessions/session-state.js"; // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
+import { listManagedSessions } from "../sessions/managed-sessions.js"; // #1059 F — 관리탭 세션목록에서 managed 표시(회수 제외)
+import { sessionPrompts, searchPrompts, searchPromptsHybrid, transcriptExists } from "./terminal-transcript.js";
+import { activeEmbeddingProvider } from "../v6/search-util.js";
+import { setupPtyUpgrade, type TicketLookup } from "./terminal-pty.js";
+import { registerTerminalFiles } from "./terminal-files.js";
+import { listMembers } from "../org/store.js";
+import { isProjectSessionDir } from "../project/project-fs.js";
+// 분산 노드(#869) — 원격 노드 세션의 목록 병합·CRUD 위임. 정책(소유·초대 검증)은 여기, 실행은 노드(F7).
+import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, liveNodes } from "../node/registry.js";
+import type { NodeOp } from "../node/protocol.js";
+import { getNode, listNodes } from "../node/store.js";
+import { translateNodeRpcError } from "../node/rpc-error.js";
+import { registerNodeRoutes } from "../node/routes.js";
+
+// 노드 op 실패를 사용자에게 그대로 보여준다 — 노드측 예외(예: tmux 미설치 → spawn ENOENT)가 generic 500("internal_error")
+//  으로 묻히면 원인 진단이 불가능하다(#869 haru 사례: 세션 생성 500 의 진짜 원인이 로그에만 있고 응답엔 안 나왔다).
+//  오프라인·타임아웃은 전용 상태코드로, 그 외 노드측 오류는 502 로 메시지를 붙여 표면화한다.
+//  (#1313 R46) 분기 캐스케이드는 node/rpc-error 의 translateNodeRpcError 로 수렴 — 이 사이트의 offline 판정은
+//  **msg 동등성만**이다(provision-remote 쪽의 `|| !nodeOnline(nodeId)` 추가조건 없음). 상태코드·문구는 원문 그대로.
+async function relayNodeOp<T>(nodeId: string, op: NodeOp, args: Record<string, unknown>): Promise<T> {
+  try {
+    return await nodeRpc<T>(nodeId, op, args);
+  } catch (e) {
+    const msg = (e as Error)?.message ?? String(e);
+    throw translateNodeRpcError(msg, {
+      offline: "노드가 오프라인입니다 — 그 PC 의 lively 노드 연결을 확인하세요.",
+      timeout: "노드 응답 시간 초과",
+      // 미지원(#905 C4) — **실행 실패가 아니다.** 502 "노드에서 실행 실패"로 뭉개면 사용자는 뭔가 터진 줄 알고
+      //  재시도하는데, 실제로는 그 노드 에이전트가 낡아 그 기능 자체가 없는 것이다. 할 일이 완전히 다르다.
+      unsupported: (unsupportedOp) => `이 노드의 에이전트가 낡아 '${unsupportedOp}' 를 지원하지 않습니다 — 그 PC 에서 노드를 다시 설치·업데이트하세요.`,
+      failed: (m) => `노드에서 실행 실패: ${m}`,
+    });
+  }
+}
+
+const COOKIE = "lively_term";
+const PREFIX = "/terminal";
+const TICKET_TTL_MS = 12 * 60 * 60 * 1000; // 12h
+
+// 인메모리 티켓 — 재기동 시 비워짐(도그푸드 OK). ticket -> { userId, exp(epoch ms) }.
+const tickets = new Map<string, { userId: string; exp: number }>();
+function issueTicket(userId: string): string {
+  const t = crypto.randomBytes(18).toString("hex");
+  tickets.set(t, { userId, exp: Date.now() + TICKET_TTL_MS });
+  return t;
+}
+const lookupTicket: TicketLookup = (cookieHeader) => {
+  if (!cookieHeader) return null;
+  for (const part of cookieHeader.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq < 0 || part.slice(0, eq).trim() !== COOKIE) continue;
+    const key = part.slice(eq + 1).trim();
+    const rec = tickets.get(key);
+    if (rec && rec.exp > Date.now()) return { userId: rec.userId };
+    if (rec) tickets.delete(key);
+  }
+  return null;
+};
+
+const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
+const idOf = (u: LivelyUser): string => u.userId || u.email || "";
+
+export function registerTerminal(app: express.Express, server: Server, verifier: BearerVerifier): void {
+  // 도그푸드: 인증만(authOnly) — 모든 멤버가 터미널 사용 가능. 정식화 시 'code'/'terminal' scope 게이트로 좁힌다.
+  const auth = sessionOrBearer(verifier); // 세션 쿠키(웹 로그인) OR bearer(에이전트) — 둘 다 수용
+
+  // #1313 R15 — 19개 라우트를 관심사 3그룹의 내부 함수로 나눠 등록한다(registerTerminalFiles 선례와 같은 꼴).
+  //  ⚠ 등록 순서는 분할 전과 **동일**해야 한다(Express 는 등록순 매칭 — 특히 /sessions 와 /sessions/:id 계열이 겹친다).
+  //   그래서 그룹은 '원래 등록 순서의 연속 구간'으로만 자른다 — transcript 검색(prompts*)이 세션 CRUD 사이에
+  //   끼어 있던 원 배치 그대로 ② 그룹에 속한다(순서 보존이 의미 그룹핑보다 우선).
+  registerTicketProfileRoutes(app, auth);
+  registerSessionCrudRoutes(app, auth);
+  registerRestoreReportRoutes(app, auth);
+
+  registerTerminalFiles(app, verifier);
+  registerNodeRoutes(app, verifier); // 분산 노드(#869) — /api/ui/nodes* (등록·회전·활성·삭제·현황)
+  setupPtyUpgrade(server, lookupTicket);
+  logger.info("terminal session manager mounted (/api/ui/terminal/*, ws /terminal/ws, files, nodes)");
+}
+
+// ── ① 티켓 발급 + 생성폼 설정 + AI 계정(#1085) + 프로필/OS 프로비저닝(#442·#524) ──
+//  WS 자체(upgrade 핸들러)는 라우트가 아니라 setupPtyUpgrade(registerTerminal 말미)가 붙인다 — 여기는 그 티켓 발급만.
+function registerTicketProfileRoutes(app: express.Express, auth: express.RequestHandler): void {
+  // 티켓 발급 — WS 가 쓸 HttpOnly 쿠키(userId 바인딩).
+  app.post("/api/ui/terminal/ticket", auth, (req, res) => {
+    const uid = idOf(userOf(req));
+    if (!uid) { res.status(403).json({ error: "no user identity" }); return; }
+    const t = issueTicket(uid);
+    res.setHeader("Set-Cookie", `${COOKIE}=${t}; HttpOnly; Path=${PREFIX}; SameSite=Lax; Max-Age=${Math.floor(TICKET_TTL_MS / 1000)}`);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true });
+  });
+
+  // 생성폼 설정 — 허용 루트 + 하네스/플래그 카탈로그 + 초대 후보(구성원 디렉터리).
+  app.get("/api/ui/terminal/config", auth, wrap(async (req, res) => {
+    // 초대 후보 = 활성 구성원(시스템 계정 제외). 세션 owner id = org_member.id 라 그대로 매칭됨.
+    const members = (await listMembers().catch(() => []))
+      .filter((m) => m.state !== "inactive" && m.kind !== "system")
+      .map((m) => ({ id: m.id, name: m.display_name || m.id, kind: m.kind }));
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      roots: ROOTS.map((r) => ({ key: r.key, label: r.label })),
+      harnesses: HARNESSES.map((h) => ({ key: h.key, label: h.label, hasAutoApprove: !!h.autoApproveFlag, flags: h.flags })),
+      members,
+      // 멀티프로필(#346): 이 세션이 '내 계정'(프로필 로그인됨)으로 뜰지, '공유 계정'으로 폴백할지 UI 표시.(레거시 폴백)
+      profile: await profileStatus(userOf(req)),
+      // 구성원 격리(#524): 이 세션이 '내 격리 OS 계정(box_)'으로 뜨는지 안내 — box_ 격리가 #346 프로필을 대체.
+      //  {ready:인프라설치, provisioned:box_존재, osUser}. 미프로비저닝이어도 첫 세션에 자동 생성(lazy)됨.
+      os: await memberOsStatus(userOf(req).userId),
+      // 분산 노드(#869): 생성폼 실행 위치 피커 — 내 노드(admin 은 전체)만. online 이어야 생성 가능(폼이 비활성 표시).
+      nodes: await (async () => {
+        const me = idOf(userOf(req));
+        const admin = !!userOf(req).scopes?.includes("admin");
+        const live = new Map(liveNodes().map((n) => [n.id, n.online]));
+        return (await listNodes().catch(() => []))
+          .filter((n) => n.enabled && (admin || n.owner_member === me))
+          .map((n) => ({ id: n.id, name: n.name, kind: n.kind, online: live.get(n.id) ?? false }));
+      })(),
+    });
+  }));
+
+  // ── 내 AI 계정(#1085) — 관리탭 [내 설정 ▸ 내 AI 설정] 상단 카드가 읽고 쓴다. **본인 것만**: 경로에 멤버 id 가
+  //  없고 principal(userOf) 로만 대상이 정해진다 → 남의 계정을 조회·로그아웃할 표면이 아예 없다(admin 도 마찬가지).
+  app.get("/api/ui/me/ai-accounts", auth, wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ accounts: await aiAccountStatus(userOf(req)) });
+  }));
+  // 로그아웃 = 내 자격증명 파일 삭제(재로그인으로 복구 가능). 공유 계정(비격리 codex 등)은 서비스가 409 로 막는다.
+  app.post("/api/ui/me/ai-accounts/logout", auth, wrap(async (req, res) => {
+    const harness = String(((req.body ?? {}) as Record<string, unknown>).harness ?? "").trim();
+    if (!harness) throw new HttpError(400, "harness(AI 키)가 필요합니다");
+    await aiAccountLogout(userOf(req), harness);
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, accounts: await aiAccountStatus(userOf(req)) });
+  }));
+
+  // ── 멀티프로필 프로비저닝(#442) — 관리탭 전용(admin scope). 로그인(OAuth)은 멤버가 웹터미널에서 셀프서비스. ──
+  const requireAdmin = (req: express.Request): void => {
+    if (!userOf(req).scopes?.includes("admin")) throw new HttpError(403, "admin 권한이 필요합니다");
+  };
+  // 멤버별 프로필 상태 목록 — 관리탭이 '누가 프로비저닝/로그인됐나' 표로 보여준다.
+  app.get("/api/ui/terminal/profiles", auth, wrap(async (req, res) => {
+    requireAdmin(req);
+    const members = (await listMembers().catch(() => []))
+      .filter((m) => m.state !== "inactive" && m.kind !== "system");
+    const profiles = [];
+    for (const m of members) profiles.push({ id: m.id, name: m.display_name || m.id, kind: m.kind, scopes: m.scopes || [], status: await profileStatusFor(m.id), os: await memberOsStatus(m.id) });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ profiles });
+  }));
+  // 프로필 프로비저닝 — dir + 키트(settings·MCP). 실재 구성원만. 로그인은 별도(응답의 loginHint 로 안내).
+  app.post("/api/ui/terminal/profiles/provision", auth, wrap(async (req, res) => {
+    requireAdmin(req);
+    const member = String((req.body ?? {} as Record<string, unknown>).member ?? "").trim();
+    if (!member) throw new HttpError(400, "member(구성원 id)가 필요합니다");
+    if (!(await listMembers().catch(() => [])).some((m) => m.id === member)) throw new HttpError(400, "존재하지 않는 구성원입니다");
+    // #549 후속: admin 이 명시 opt-in(includeControlPlane) 하면 관리 권한(admin/runtime)도 프로필 토큰에 싣는다(멤버 scope 가 상한).
+    const includeControlPlane = !!((req.body ?? {}) as Record<string, unknown>).includeControlPlane;
+    const { slug, dir } = await provisionProfile(member, { includeControlPlane });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, member, slug, dir, status: await profileStatusFor(member),
+      loginHint: `로그인(그 멤버 계정): 웹터미널에서 'CLAUDE_CONFIG_DIR=${dir} claude' 실행 후 /login` });
+  }));
+  // OS-유저 프로비저닝(#524) — 구성원별 OS 계정(box_<slug>) 생성(홈700·격리). root 스크립트를 잠긴 sudo 로.
+  //  격리는 secure-by-default: 인프라 설치됨 + 이 멤버 provision 되면 자동 적용(별도 켜기 불요, =off 만 하드 비활성).
+  app.post("/api/ui/terminal/members/provision-os", auth, wrap(async (req, res) => {
+    requireAdmin(req);
+    const member = String((req.body ?? {} as Record<string, unknown>).member ?? "").trim();
+    if (!member) throw new HttpError(400, "member(구성원 id)가 필요합니다");
+    if (!(await listMembers().catch(() => [])).some((m) => m.id === member)) throw new HttpError(400, "존재하지 않는 구성원입니다");
+    const os = await memberOsStatus(member);
+    if (!os.ready) throw new HttpError(409, "격리 인프라 미설치 — 박스에서 install-isolation.sh 를 먼저 실행하세요(box-spawn·sudoers·그룹).");
+    const includeControlPlane = !!((req.body ?? {}) as Record<string, unknown>).includeControlPlane;
+    const { slug, osUser } = await provisionMemberOs(member, { includeControlPlane });
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true, member, slug, osUser, os: await memberOsStatus(member),
+      loginHint: `이제 이 멤버가 자기 새 세션에서 'claude' → /login 하면 자격증명이 /home/${osUser}/.claude(700)에 격리 저장됩니다.` });
+  }));
+}
+
+// ── ② 세션 목록·단건 조회 + '내 질문'(transcript) 검색(#745) + 생성·수정·삭제(CRUD) ──
+//  prompts* 두 라우트가 CRUD 사이에 끼어 있는 건 원래 등록 순서다(위 registerTerminal 주석 — 순서 보존 우선).
+function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHandler): void {
+  app.get("/api/ui/terminal/sessions", auth, wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    // 프로젝트 폴더 세션은 '프로젝트 공동 세션'. 기본은 숨긴다 — 이 응답을 '내 세션'으로 쓰는 소비자
+    //  (대시보드 '내 AI 세션' 위젯 등)가 남의 세션까지 떠안지 않도록. includeProjects=1 을 준 호출자
+    //  (AI세션 탭)만 프로젝트 세션을 함께 받는다: 프로젝트 세션은 #452 로 로그인한 전원 공개라
+    //  listSessions 가 이미 소유·초대 필터를 건너뛰고 전부 돌려준다(여기서 더 좁히지 않는다).
+    //  includeProjects=owned(#1139) — '내가 만든 프로젝트 세션까지'(남의 것은 제외). 대시보드 '내 AI 세션'용:
+    //   그 위젯은 지금까지 프로젝트별 /projects/:id/sessions 를 덧붙여 프로젝트 세션을 채웠는데, 그 대상이
+    //   my_session_count(라이브 tmux 세션 수)>0 인 프로젝트뿐이라 **세션이 전부 복원 가능(tmux 죽음)인 프로젝트는
+    //   통째로 빠졌다** → 대시보드에 복원 가능 세션이 안 보였다. 서버가 owned 필터로 한 번에 주면 그 구멍이 없다.
+    const ipRaw = String(req.query.includeProjects ?? "").trim().toLowerCase();
+    const includeProjects = ipRaw === "1" || ipRaw === "true";
+    const ownedProjectsOnly = ipRaw === "owned" || ipRaw === "mine";
+    const all = await listSessions(userOf(req));
+    // 복원 가능(#1059 E) — DB desired-state 에만 있고 지금 tmux 에 없는 세션(재부팅 사망·reaper 회수). 라이브 우선(이중표기 방지).
+    const restorable = await listRestorableSessions(userOf(req), new Set(all.map((s) => s.id)));
+    // 분산 노드(#869) — 원격 노드 세션 병합(node 필드로 구분). 가시성은 개인 세션 규칙(소유자+초대)로 게이트웨이가 판정.
+    const remote = nodeSessionsFor(idOf(userOf(req)));
+    const proj = (s: SessionInfo): boolean => isProjectSessionDir(s.dir);
+    const keep = (s: SessionInfo): boolean => includeProjects || !proj(s) || (ownedProjectsOnly && !!s.owned);
+    const local = all.filter(keep);
+    const localRestorable = restorable.filter(keep);
+    res.json({ sessions: [...local, ...localRestorable, ...remote] });
+  }));
+  // 단일 세션의 현재 이름 — 단독 터미널 페이지가 id 로 조회(프로젝트 세션은 목록에서 빠져 ?label= 폴백만 됐던 문제 해결).
+  //  접근통제: canAttach(소유자·초대된 멤버, 프로젝트 세션은 전원 #452) — 입장 가능한 사람만 이름을 읽는다.
+  app.get("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
+    const uid = idOf(userOf(req));
+    res.setHeader("Cache-Control", "no-store");
+    // 노드 세션(#869) — 마지막 상태 스냅샷에서 가시성 판정 후 라벨 반환(노드 오프라인이어도 표시 가능).
+    const nodeId = String(req.query.node ?? "").trim();
+    if (nodeId) {
+      const s = nodeSessionsFor(uid).find((x) => x.node.id === nodeId && x.id === req.params.id);
+      if (!s) throw new HttpError(403, "세션에 접근할 수 없습니다");
+      res.json({ id: s.id, label: s.label, projectId: s.projectId || 0 });
+      return;
+    }
+    if (!(await canAttach(req.params.id, uid))) {
+      // #1059 E — tmux 에 없어도(재부팅·회수·정상종료) desired-state 가 남아 있으면 '복원 가능'으로 알린다.
+      //  canAttach 는 tmux 메타(ownerMeta)에 기대므로 죽은 세션은 무조건 false 라, 종전엔 세션 링크로 바로 들어온
+      //  사람이 라벨조차 못 받고 '종료됨' 배너로 끝났다 — 그 자리에서 복원할 길이 없었다(E 의 '열 때 lazy resume'
+      //  이 목록 카드의 [복원] 버튼에만 붙어 있던 갭). 터미널 페이지가 이 신호로 자동 복원한다.
+      //  노출 범위는 복원 권한과 같게: 소유자·admin 만 desired-state 를 보고 되살릴 수 있고(canRestore),
+      //  프로젝트 세션은 #452 로 전원 공개라 라벨까지는 보이되 복원은 소유자 몫으로 둔다.
+      const st = await getSessionState(req.params.id);
+      const mine = !!st && (st.owner === uid || !!userOf(req).scopes?.includes("admin"));
+      if (st && (mine || (st.project_id ?? 0) > 0)) {
+        res.json({
+          id: req.params.id, label: st.label || req.params.id, projectId: st.project_id || 0,
+          restorable: true, canRestore: mine, exitedByUser: !!st.exited_at,
+          // #1251 — 딥링크로 바로 들어온 경우에도 왜 사라졌는지 알 수 있게(사용자 종료가 있으면 그쪽이 이긴다).
+          oomKilled: !st.exited_at && st.exit_reason === "oom",
+          // harness 를 실어 준다 — 프론트가 **자동 복원 여부**를 여기서 가른다. claude 가 아닌 세션(셸·코덱스)은
+          //  ① 이어받을 대화가 없어 복원의 이득이 없고 ② claude 훅이 없어 `exited_at`(사용자가 끝냈다)을 원리적으로
+          //  기록할 수 없다 → 자동 복원하면 셸에서 `exit` 한 것을 무조건 되살려 **exit 가 안 먹히는** UX 가 된다
+          //  (2026-07-28 실측 신고: 셸에서 exit 했는데 자동 복원됨. 그 세션의 exited_at·uuid 가 둘 다 null 인 게 증거).
+          harness: st.harness || "shell",
+        });
+        return;
+      }
+      throw new HttpError(403, "세션에 접근할 수 없습니다");
+    }
+    // 라벨 + 프로젝트 id 를 함께 반환 — 프로젝트 세션이면 프론트가 상단 '프로젝트 페이지 열기' 버튼을 켠다(개인 세션은 0 → 숨김).
+    const [label, projectId] = await Promise.all([
+      getSessionLabel(req.params.id),
+      getSessionProject(req.params.id),
+    ]);
+    res.json({ id: req.params.id, label, projectId });
+  }));
+  // 이 세션에서 사용자가 클로드에게 보낸 질문(프롬프트)만 모아 시간순 반환(#745 카드 '내 질문' 팝아웃).
+  //  접근통제: canAttach(입장 가능한 사람 = 대화도 볼 수 있음, 프로젝트 세션은 전원 #452). 대화 기록 = ~/.claude 트랜스크립트.
+  app.get("/api/ui/terminal/sessions/:id/prompts", auth, wrap(async (req, res) => {
+    const uid = idOf(userOf(req));
+    const nodeId = String(req.query.node ?? "").trim();
+    if (nodeId) { // 노드 세션(#875 ③) — 인가(nodeCanAttach) 후 노드 트랜스크립트 릴레이.
+      const v = await nodeCanAttach(nodeId, req.params.id, uid);
+      if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
+      const out = await relayNodeOp(nodeId, "prompts", { id: req.params.id, user: { userId: uid } });
+      res.setHeader("Cache-Control", "no-store"); res.json(out); return;
+    }
+    if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    const out = await sessionPrompts(await sessionDir(req.params.id));
+    res.setHeader("Cache-Control", "no-store");
+    res.json(out);
+  }));
+  // 여러 세션 통합 '내 질문' 검색(#745) — 내가 접근 가능한 세션(개인 소유/초대 + 내 프로젝트 세션)의 질문을 grep, 어느 세션인지와 함께.
+  app.get("/api/ui/terminal/prompts/search", auth, wrap(async (req, res) => {
+    const q = String((req.query.q ?? "") as string);
+    const all = await listSessions(userOf(req));
+    const sessions = all
+      .filter((s) => !isProjectSessionDir(s.dir) || s.owned)   // 개인(소유/초대) + 내가 만든 프로젝트 세션만(남의 비공개 미검색)
+      .map((s) => ({ id: s.id, label: s.label, dir: s.dir, projectId: s.projectId }));
+    // 임베딩 provider 켜져 있으면 의미(하이브리드) 검색, 아니면 렉시컬(토큰 AND+랭킹). 하이브리드 실패 시 렉시컬 폴백.
+    const provider = await activeEmbeddingProvider().catch(() => null);
+    let out;
+    if (provider) { try { out = await searchPromptsHybrid(sessions, q, provider); } catch { out = await searchPrompts(sessions, q); } }
+    else out = await searchPrompts(sessions, q);
+    res.setHeader("Cache-Control", "no-store");
+    res.json(out);
+  }));
+  // 노드 세션 생성 게이트(#869) — 노드 실재·활성·연결 + 소유자(또는 admin)만. 초대는 여기서 구성원 디렉터리로
+  //  검증해 노드엔 '검증된 목록'만 넘긴다(노드는 DB 가 없어 스스로 검증 불가 — F7 정책/실행 분리).
+  const requireCreatableNode = async (req: express.Request, nodeId: string): Promise<void> => {
+    const n = await getNode(nodeId);
+    if (!n || !n.enabled) throw new HttpError(404, `노드 없음: ${nodeId}`);
+    const u = userOf(req);
+    if (n.owner_member !== idOf(u) && !u.scopes?.includes("admin")) throw new HttpError(403, "본인 노드가 아닙니다");
+    if (!nodeOnline(nodeId)) throw new HttpError(409, "노드가 오프라인입니다(에이전트 연결 대기)");
+  };
+
+  app.post("/api/ui/terminal/sessions", auth, wrap(async (req, res) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const input: CreateInput = {
+      label: String(b.label ?? ""), rootKey: String(b.rootKey ?? ""), subpath: String(b.subpath ?? ""),
+      harness: String(b.harness ?? ""), flags: (b.flags && typeof b.flags === "object") ? b.flags as Record<string, unknown> : {},
+      autoApprove: !!b.autoApprove, invites: b.invites, loginProfile: !!b.loginProfile,
+      readOnly: !!b.readOnly, // #1007 — 이 세션만 읽기전용(컨텍스트 스토어 쓰기 소거). 노드 세션도 아래 relay 가 input 스프레드로 전파.
+      incognito: !!b.incognito, // #1007+ — 이 세션만 인코그니토(lively 전체 차단 + 훅 off). readOnly 보다 우선.
+      // #1291 v2 — 새 세션 폼의 '기록 범위'. 안 읽으면 폼이 조용히 무시되고 사용자는 고른 대로 됐다고 믿는다.
+      //  normalizeCap 이 모르는 값을 null 로 접어 미지정(폴더 파생)으로 되돌린다.
+      writeVis: normalizeCap(b.writeVis as string) ?? undefined,
+    };
+    const nodeId = String(b.node ?? "").trim();
+    res.setHeader("Cache-Control", "no-store");
+    if (nodeId) {
+      await requireCreatableNode(req, nodeId);
+      const me = idOf(userOf(req));
+      const invites = await validateInvites(b.invites, me);
+      const session = await relayNodeOp<SessionInfo>(nodeId, "create", { user: { userId: me }, input: { ...input, invites: [] }, invites });
+      res.json({ session: { ...session, node: { id: nodeId, online: true } } });
+      return;
+    }
+    const session = await createSession(userOf(req), input);
+    res.json({ session });
+  }));
+  // 세션 수정 — 이름·초대 멤버 변경. 소유자만(서버가 강제 — 노드 세션은 노드측 assertManage 가 같은 규칙으로 강제).
+  app.post("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const nodeId = String(b.node ?? req.query.node ?? "").trim();
+    if (nodeId) {
+      const me = idOf(userOf(req));
+      const invites = b.invites !== undefined ? await validateInvites(b.invites, me) : undefined;
+      await relayNodeOp(nodeId, "edit", {
+        user: { userId: me }, id: req.params.id,
+        patch: { label: b.label !== undefined ? String(b.label) : undefined },
+        ...(invites !== undefined ? { invites } : {}),
+      });
+      res.json({ ok: true });
+      return;
+    }
+    await editSession(userOf(req), req.params.id, {
+      label: b.label !== undefined ? String(b.label) : undefined,
+      invites: b.invites,
+    });
+    res.json({ ok: true });
+  }));
+  app.delete("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
+    const nodeId = String(req.query.node ?? "").trim();
+    if (nodeId) {
+      await relayNodeOp(nodeId, "kill", { user: { userId: idOf(userOf(req)) }, id: req.params.id });
+      res.json({ ok: true });
+      return;
+    }
+    // #1059 F — 회수(reclaim=1): desired-state 를 보존해 restorable 로 남긴다(vs 기본 = 완전 삭제·복원 안 함).
+    //  admin bypass 는 **회수에만** 허용한다(복원 가능한 안전 동작) — 남의 세션을 파괴적으로 삭제하는 건 admin 도 못 하고 소유자만.
+    const u = userOf(req);
+    const reclaim = req.query.reclaim === "1" || req.query.reclaim === "true";
+    // #1059 E — restorable(이미 tmux 에서 죽은) 세션의 '삭제' = desired-state 레코드 제거(복원 목록에서 지움).
+    //  killSession 의 assertManage 는 tmux @box_owner 메타를 읽는데 세션이 gone 이면 그 메타가 없어 403 이 된다.
+    //  그래서 gone + DB 레코드 존재 시엔 DB 레코드의 owner 로 권한을 확인하고 레코드만 지운다(멱등).
+    if (!reclaim && await sessionGone(req.params.id)) {
+      const st = await getSessionState(req.params.id);
+      if (st) {
+        if (st.owner !== idOf(u) && !u.scopes?.includes("admin")) throw new HttpError(403, "본인 세션이 아닙니다");
+        await deleteSessionState(req.params.id);
+        res.json({ ok: true, forgot: true });
+        return;
+      }
+    }
+    // ⚠ admin 회수는 reaper 와 달리 attached/busy/waiting 를 검사하지 않는다 — **의도된 긴급 override**(break-glass):
+    //  #1059 OOM 위기처럼 박스가 위태로우면 관리자가 작업 중·접속 중 세션도 즉시 회수해 메모리를 되찾아야 한다.
+    //  파괴적이지 않다 — preserveState 로 desired-state 를 남겨 restorable 로 복원 가능(자동 reaper 가 정당세션을 보호하는 것과 역할 분담).
+    const admin = reclaim && !!u.scopes?.includes("admin");
+    await killSession(u, req.params.id, { admin, preserveState: reclaim });
+    res.json({ ok: true });
+  }));
+}
+
+// ── ③ 복원(#1059 E) + 하네스 훅 보고(active·claude-uuid·exited, #1221) + 관리자 전 세션 메타뷰(#1059 F) ──
+function registerRestoreReportRoutes(app: express.Express, auth: express.RequestHandler): void {
+  // 복원(#1059 E) — restorable(재부팅/reaper 로 tmux 에서 사라졌으나 desired-state 가 DB 에 남은) 세션을 lazy 재생성한다.
+  //  저장된 desired-state(rootKey·subpath·harness·flags·invites·mode)로 createSession 하고, claude 하네스는 resume=<옛 id>
+  //  로 대화를 잇는다 — 로컬 트랜스크립트(~/.claude/…/<id>.jsonl)는 재부팅에도 디스크에 살아남아 claude --resume 이 찾는다
+  //  (전부 자동 spawn 이 아니라 '열 때만' 재생성 = 재부팅 직후 OOM 재현 방지, #1059 E). 소유자 또는 admin 만.
+  //  원 소유자 신원으로 재생성해야 격리(box_owner)·CLAUDE_CONFIG_DIR·git 자격이 원 세션과 같다. 새 tmux id 를 얻으므로
+  //  옛 desired-state 레코드는 지운다(새 세션이 자기 레코드를 가짐 → restorable 카드가 라이브 세션으로 교체된다).
+  app.post("/api/ui/terminal/sessions/:id/restore", auth, wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const id = req.params.id;
+    const st = await getSessionState(id);
+    if (!st) throw new HttpError(404, "복원할 세션 상태가 없습니다");
+    const u = userOf(req);
+    const me = idOf(u);
+    if (st.owner !== me && !u.scopes?.includes("admin")) throw new HttpError(403, "이 세션을 복원할 수 없습니다(소유자만 가능).");
+    // 라이브 경합 방어 — 그새 다시 떠 있으면 복원 대신 그대로 안내(라이브가 SoT).
+    if (!(await sessionGone(id))) { res.json({ ok: true, already: true, id }); return; }
+    const owner = { userId: st.owner } as LivelyUser;
+    // 이어받을 대화 UUID — **훅이 보고한 매핑만** 쓴다(그 대화 파일이 그 소유자 홈에 실제로 있을 때만).
+    //  없으면 인자 없는 --resume = 후보 picker 로, **사용자가 눈으로 고른다.**
+    //  ⚠ '그 폴더의 가장 최근 대화'를 추측하는 폴백을 넣었다가 뺐다(2026-07-28): ① 격리(#524)에서는 멤버마다
+    //   홈이 따로라 남의 홈 대화를 집을 수 있고, 그러면 그 세션은 못 읽어 claude 가 "No conversation found" 로
+    //   즉시 죽는다(마이크 실측 사고) ② 소유자로 스코프해도 **같은 폴더의 다른 대화**를 '최신'이라며 집을 수 있다
+    //   — 그럴싸하게 틀리는 쪽이 picker 한 번 고르는 것보다 나쁘다(상민님 판단). 추측하지 않는다.
+    //  claude 하네스에만 해당한다(셸·코덱스는 --resume 이 무의미).
+    const resumeUuid = st.harness === "claude" && st.claude_session_id
+      && await transcriptExists(st.dir || "", st.claude_session_id, st.owner).catch(() => false)
+      ? st.claude_session_id : null;
+    const precise = !!resumeUuid;
+    const session = await createSession(owner, {
+      label: st.label || id, rootKey: st.root_key || "shared", subpath: st.subpath || "",
+      harness: st.harness || "claude", flags: st.flags || {}, autoApprove: st.auto_approve,
+      invites: st.invites, projectId: st.project_id || undefined,
+      projectSrc: st.project_src === "org" ? "org" : "v6",
+      readOnly: st.read_only, incognito: st.incognito,
+      // #1059 정밀 복원 — work-flag 훅이 보고한 claude UUID 가 있고 **그 대화 기록이 실제로 있으면** 그걸로 정확히
+      //  이어받는다(--resume <uuid>). 없으면(셸·코덱스·미보고·기록 없음) 인자 없는 --resume(후보 picker)로 폴백한다.
+      //  ⚠ 기록 확인이 필수다: 없는 UUID 로 resume 하면 claude 가 즉시 종료되고 box-spawn 이 exec 라 tmux 세션도
+      //   사라져 웹터미널이 4410 → 자동 복원 → 또 즉사 로 **복원 루프**를 돈다(실측 신고). 매핑이 있어도 대화가
+      //   없을 수 있다 — SessionStart 훅은 한 줄도 쌓이기 전에 UUID 를 보고한다.
+      //  createSession 이 claude 하네스에서만 적용(resume 우선 · 없으면 resumePick).
+      ...(precise ? { resume: resumeUuid as string } : { resumePick: true }),
+    });
+    // #1059 — 매핑 승계: 새 세션 레코드에 옛 claude UUID 를 물려준다. 이 대화를 `--resume <uuid>` 로 이어받았으니 같은
+    //  UUID 를 계속 쓰는데, 새 레코드는 훅이 보고할 때까지 비어 있어 **그 사이에 또 복원하면 picker 로 떨어졌다**
+    //  (2026-07-28 상민님 신고 — 정밀 복원이 한 번만 되는 증상의 절반. 나머지 절반은 훅 dedup 키에 box-id 부재였다).
+    //  훅이 새 UUID 를 보고하면 last-write-wins 로 갱신되므로 이 승계는 '보고 전 공백'만 메운다. best-effort.
+    if (st.claude_session_id) {
+      await setClaudeSessionId(session.id, st.claude_session_id, st.owner)
+        .catch((e) => logger.warn({ err: e, id: session.id }, "restore: claude UUID 승계 실패(비치명 — 다음 복원은 picker)"));
+    }
+    await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 desired-state 정리 실패(비치명)"));
+    res.json({ ok: true, session });
+  }));
+
+  // #1059 — 하네스 훅(work-flag)이 **"이 세션 지금 활동했다"**를 보고한다. 회수(F)가 이 시각을 본다.
+  //  왜: 종전 활동 관측은 게이트웨이가 5분마다 pane 제목 스피너를 훔쳐보는 방식이라 tick 사이에 짧게 끝나는
+  //   작업을 놓쳤고(그 세션이 회수될 수 있었다), 화면 스크래핑이라 UI 변경에 깨진다. 훅은 툴 사용마다 실제로
+  //   실행되므로 추측이 아니다. 훅이 60초 스로틀을 걸어 핫패스 부담을 억제한다.
+  //  owner-gated: setClaudeSessionId 와 동형 — desired-state 레코드가 있고 그 소유자일 때만(남의 세션 시각을
+  //   조작하면 회수 판정을 흔들 수 있다). 레코드가 없으면 404 — 백필이 곧 만든다.
+  //  #1221 — 같은 경로로 **실행 단계**(state: busy·waiting·idle)까지 받는다. 새 엔드포인트를 따로 두지 않은 이유는
+  //   훅과 게이트웨이가 **따로 업데이트되기 때문**이다: 새 훅 + 구 게이트웨이는 모르는 필드를 무시하고 활동 보고만
+  //   되고(무회귀), 구 훅 + 새 게이트웨이는 state 없이 종전대로 동작한다. 새 경로였다면 앞 조합이 404 로 죽는다.
+  app.post("/api/ui/terminal/sessions/:id/active", auth, wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const id = req.params.id;
+    const raw = ((req.body ?? {}) as Record<string, unknown>).state;
+    const phase = isReportedPhase(raw) ? raw : undefined;   // 모르는 값은 조용히 무시(활동 보고만) — 훅이 앞서갈 수 있다
+    const me = idOf(userOf(req));
+    const st = await getSessionState(id);
+    if (st) {
+      if (st.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
+      await markSessionActive(id, phase).catch((e) => logger.warn({ err: e, id }, "활동 시각 기록 실패(비치명)"));
+      res.json({ ok: true });
+      return;
+    }
+    // 노드 세션(#869) — 중앙 DB 에 desired-state 가 없다(노드엔 DB 가 없어 레코드를 안 만든다). 그 세션의 tmux 는
+    //  멤버 PC 에 있어 게이트웨이가 직접 못 쓰므로 **소유자 확인 후 노드로 릴레이**한다(정책=게이트웨이, 실행=노드 F7).
+    //  이게 없으면 노드 세션은 훅을 배선해도 영영 404 라 화면 스크래핑에 묶인다 — 하네스 보고가 중앙에서만 되면
+    //  같은 세션이 어디서 도느냐에 따라 상태 품질이 갈린다.
+    const ns = nodeSessionsFor(me).find((x) => x.id === id);
+    if (!ns) throw new HttpError(404, "세션 상태 기록이 없습니다");
+    if (ns.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
+    // 구 노드(caps 미선언)는 이 op 를 모른다 → 보내지 않는다. 그 노드 세션은 종전대로 자기 tmux 스크래핑으로 판정된다(무회귀).
+    if (nodeSupports(ns.node.id, "markActive")) {
+      await nodeRpc(ns.node.id, "markActive", { id, state: phase })
+        .catch((e) => logger.warn({ err: e, id }, "노드 활동 보고 릴레이 실패(비치명)"));
+    }
+    res.json({ ok: true });
+  }));
+
+  // #1059 F(b) — 관리자 전용 **전 세션 메타뷰**. 뷰어 필터 없이 이 박스의 모든 중앙 세션(listSessionsRaw)을 반환한다
+  //  (owner·dir·harness·lastActive·attached·agentState·projectId — 대화 내용은 없음). 운영자가 '무엇이 떠 있나'를 보고
+  //  수동 회수(F(c): DELETE ?reclaim=1)의 대상을 고른다. 노드 세션은 멤버 자기 PC 라 중앙 박스 회수 범위 밖(제외 — reaper 와 동일).
+  //  managed(상시)·attached·busy·waiting 는 회수해도 무의미/부적절 → 각 항목에 managed/attached/agentState 를 실어 프론트가 회수 버튼을 게이트한다.
+  app.get("/api/ui/terminal/admin/sessions", auth, wrap(async (req, res) => {
+    if (!userOf(req).scopes?.includes("admin")) throw new HttpError(403, "admin 권한이 필요합니다");
+    res.setHeader("Cache-Control", "no-store");
+    const [central, managed] = await Promise.all([
+      listSessionsRaw(),
+      listManagedSessions().catch(() => [] as Array<{ session_id: string | null }>),
+    ]);
+    const managedIds = new Set(managed.map((m) => m.session_id).filter((x): x is string => !!x));
+    res.json({ sessions: central.map((s) => ({ ...s, managed: managedIds.has(s.id) })) });
+  }));
+
+  // #1059 정밀 복원 — work-flag 훅이 세션 활동 시 (box-id, **claude 자신의 세션 UUID**)를 보고한다. box-id ≠ claude UUID
+  //  라(claude 는 자체 UUID 생성) restore 가 --resume 에 box-id 를 주면 "검색 결과 없음"이 됐다(사용자 신고). 이 매핑으로
+  //  restore 가 정확한 UUID 로 이어받는다. 한 box 안에서 branch·resume·/clear 로 UUID 가 바뀌므로 매 보고가 최신으로 덮는다(last-write-wins).
+  //  owner-gated: setClaudeSessionId 가 org_session_state.owner==호출자일 때만 갱신(남의 세션 오염 차단). best-effort — 훅은 fire-and-forget.
+  app.post("/api/ui/terminal/sessions/:id/claude-uuid", auth, wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const uuid = String(((req.body ?? {}) as Record<string, unknown>).uuid ?? "").trim();
+    // claude 세션 UUID 형식(표준 uuid 또는 안전 문자셋) — 경로/주입 방어.
+    if (!uuid || uuid.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(uuid)) throw new HttpError(400, "uuid 형식 오류");
+    const ok = await setClaudeSessionId(req.params.id, uuid, idOf(userOf(req)));
+    res.json({ ok }); // ok=false: 그 box 의 소유자가 아니거나 desired-state 레코드 없음(무해)
+  }));
+
+  // #1059 — claude SessionEnd 훅이 **사용자 정상 종료**(/exit·Ctrl-D=prompt_input_exit, logout)를 보고한다. 이 표시가 찍힌
+  //  세션은 tmux 에서 사라진 뒤 복원목록에서 '종료됨(대화 이어보기)'으로 뜬다(재부팅·강제kill·reaper 회수는 훅이 프로세스
+  //  사망으로 못 떠 표시 없음 → '복원 가능·중단됨'). owner-gated(markSessionExited) — 남의 세션엔 못 찍는다. best-effort(fire-and-forget).
+  app.post("/api/ui/terminal/sessions/:id/exited", auth, wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const reason = String(((req.body ?? {}) as Record<string, unknown>).reason ?? "").trim().slice(0, 64);
+    const ok = await markSessionExited(req.params.id, idOf(userOf(req)), reason);
+    res.json({ ok }); // ok=false: 그 box 의 소유자가 아니거나 desired-state 레코드 없음(무해)
+  }));
+}

@@ -1,0 +1,243 @@
+// context 그룹 capability — domainmap(canonical 맵) 읽기 + repo/통계 통합 op.
+// Stage⑥: 엔진 흡수 — 구 HTTP 프록시(dmGet) 대신 리더 함수(현재 v6/domainmap-store) 직결.
+// 응답 shape 는 byte-compat(직렬화 표면 동일 — pg Date 는 res.json/MCP JSON.stringify 에서 동일 ISO).
+// 에러 표면도 dmRead 가 구 dmGet 엔벨로프('domainmap <status> <path>: …')를 재현 — 미검증 repo 등
+// 기존 502 표면화 거동 불변. 큐레이션(제안→확정, 부채 상태변경 등)은 domainmap-curation 그룹.
+import { z } from "zod";
+import { dmRead } from "./domainmap-compat.js";
+import { resolveRepo } from "../domainmap/core/types.js";
+// v6: 레포-스코프 도메인 읽기(context_overview·domain_list·domain_get·debt_list)는 repo-free category 리더로 cutover.
+//  레거시 queries.ts(overview/listDomainsApi/domainDetail/listDebts)는 골든리드 핀이라 무변형 — 소비자만 v6 로 repoint.
+//  listRepos/listAllDomains/listEntitiesApi 는 아직 레거시(repo_list·all_domains·domainmap_proxy — 후속 슬라이스).
+import { productOverview, listProductDomains, listProductDebts, listProductEntities, listReposV6 } from "../v6/domainmap-store.js";
+import { uiStats } from "../items/store.js";
+import type { Capability } from "./types.js";
+import { DM_KINDS, HttpError } from "./rest-util.js";
+import { refreshSharedRepo, checkGitRemote } from "../project/project-provision.js";
+import { discoverRepos } from "../org/repo-discover.js";
+import { listRepoBranches } from "../preview/preview-stage.js";
+
+const enc = encodeURIComponent;
+
+// 쿼리스트링 숫자 파싱(빈 문자열·비숫자는 undefined = 미지정) — REST parse 가 zod 로 넘기기 전 정규화.
+function numOpt(v: unknown): number | undefined {
+  if (typeof v === "number") return v;
+  if (typeof v === "string" && v.trim() !== "" && !isNaN(Number(v))) return Number(v);
+  return undefined;
+}
+
+// repo 목록 — 모든 repo 셀렉터의 단일 소스(domainmap ∪ 매핑테이블, 하드코딩 금지).
+// domainmap DB 가 죽어도 매핑테이블 쪽 repo 로 동작하도록 부분 성공을 허용(에러는 필드로 노출).
+// canonical = 기존 REST union shape — MCP 도 raw 배열이 아니라 이 객체를 반환한다(THE source).
+const repoList: Capability = {
+  name: "repo_list",
+  title: "매핑된 레포 목록",
+  description:
+    "레포 목록의 union — domainmap 에 매핑된 레포(domainmapRepos) ∪ item 매핑테이블에 등장하는 레포(mappingRepos), " +
+    "합집합은 repos. domainmap 다운 시에도 부분 성공(domainmapError 필드). 다른 도메인/프로젝트 툴의 repo 이름을 찾을 때 먼저 호출. " +
+    "각 domainmapRepos 항목은 clone_url(자격증명 제거된 git clone 주소, 미설정 시 null) 을 포함 — 소스가 로컬에 없으면 이 주소로 클론한다(접근 인증은 멤버 본인의 GitHub 자격증명).",
+  scope: "context",
+  input: {},
+  expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/repos"], parse: () => ({}) }] },
+  handler: async () => {
+    let domainmapRepos: unknown[] = [];
+    let domainmapError: string | null = null;
+    try {
+      // pg status 에러는 dmRead 가 구 dmGet 엔벨로프로 감싼다 — domainmapError 필드 거동 보존.
+      const raw = await dmRead("/api/repos", () => listReposV6()); // v6: domains 카운트=category-도달
+      domainmapRepos = Array.isArray(raw) ? raw : [];
+    } catch (err) {
+      domainmapError = `domainmap 에 연결하지 못했습니다 — ${(err as Error).message}`;
+    }
+    const mappingRepos: string[] = []; // v6: category=repo-free — 매핑 repo 개념 소멸(repo 목록은 listReposV6 단일 소스)
+    const names = new Set<string>(mappingRepos);
+    for (const r of domainmapRepos) {
+      if (typeof r === "string") names.add(r);
+      else if (r && typeof (r as { name?: unknown }).name === "string") names.add((r as { name: string }).name);
+    }
+    return { domainmapRepos, mappingRepos, repos: [...names].sort(), domainmapError };
+  },
+};
+
+// 레포 공유 베이스 최신화(#660 RO) — 공유 클론 워킹트리를 upstream 으로 fast-forward.
+//  게이트웨이(클론 소유자)가 실행 → 멤버는 group-write 없이 최신 코드를 '읽게' 되고, 공유 실행코드를 멤버가 못 고쳐 OS uid 격리 유지.
+//  scope=context: repo_list 를 볼 수 있는 멤버라면 누구나 트리거(웹 '코드 최신화' 버튼). fetch 인증은 요청멤버→게이트웨이 자격 폴백.
+const repoRefresh: Capability = {
+  name: "repo_refresh",
+  title: "레포 공유 베이스 최신화(fetch + fast-forward)",
+  description:
+    "공유 베이스 클론(workspace/repos/<name>)의 워킹트리를 upstream 으로 fast-forward 한다(#660 RO 모델). " +
+    "게이트웨이(클론 소유자)가 실행하므로 멤버는 group-write 없이도 최신 코드를 읽게 되고, 공유 실행코드(하네스·플러그인·스킬)를 " +
+    "멤버가 변조할 수 없어 OS uid 격리가 유지된다. fetch 는 요청 멤버(없으면 게이트웨이) git 자격으로 인증한다. " +
+    "비파괴 — dirty/갈라짐이면 건드리지 않고 사유(status: ok|up-to-date|dirty|no-clone|no-upstream|error)를 반환한다. " +
+    "웹 도메인맵 탭 '코드 최신화' 버튼과 공용 진입.",
+  scope: "context",
+  input: { name: z.string() },
+  expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/repos/:name/refresh"], parse: (req) => ({ name: String(req.params.name) }) }] },
+  handler: async (input: { name: string }, user) => refreshSharedRepo(input.name, user?.userId ?? null),
+};
+
+// 레포 개요 — domainmap overview 에 items-store 통계를 'items' 필드로 흡수(MCP 단일 진입).
+// REST 는 byte-compat 제약(/api/ui/stats 의 top-level UiStats shape) 때문에 subset 필드 items 를
+// items_stats op 로 따로 서빙 — 파리티는 context_overview.items ≡ GET /api/ui/stats 로 검증.
+// 주의: domainmap overview 가 미래에 'items' 필드를 추가하면 충돌(낮은 확률 — 그때 필드명 협상).
+const contextOverview: Capability = {
+  name: "context_overview",
+  mutates: false, // 읽기전용(#1007): MCP전용 읽기 — REST 메서드 파생 신호가 없어 명시(없으면 fail-closed=쓰기 오판 → 읽기전용서 숨겨짐).
+  title: "레포 도메인 개요 + 아이템 통계",
+  description:
+    "레포의 도메인·프로젝트·부채 요약(domainmap overview) + items 필드로 아이템 스토어 통계" +
+    "(소스/타입별 카운트, repo 별 매핑 커버리지, 최근 14일 KST 일별, 마지막 싱크). 코드베이스 맥락을 처음 잡을 때 먼저 호출하라.",
+  scope: "context",
+  input: { repo: z.string().optional() },
+  expose: { mcp: true, rest: false },
+  handler: async (input: { repo?: string }, user) => {
+    const r = resolveRepo(input.repo);
+    // items 통계는 'items' 스코프 보유자에게만(없으면 items:null) — 같은 데이터가 REST
+    // /api/ui/stats 에선 items 스코프를 요구하므로 표면 간 인가 비대칭 제거(co-exposed 일관성).
+    const wantItems = (user.scopes ?? []).includes("items");
+    // domainmap 다운 시 throw 유지(코어 데이터) — repo_list 와 달리 부분 성공 없음.
+    const [ov, items] = await Promise.all([
+      dmRead(`/api/repo/${enc(r)}/overview`, () => productOverview()), // v6: repo-free(category 전체) — repo 파람 무시
+      wantItems ? uiStats() : Promise.resolve(null),
+    ]);
+    return { ...(ov as Record<string, unknown>), items };
+  },
+};
+
+// v6 은퇴(2026-06-24): items_stats(REST /api/ui/stats — 웹 미사용, observed 통계는 context_overview.items 가 MCP 노출)
+//  + all_domains(REST /api/ui/domains — 웹 도메인 드롭다운 폐기로 소비자 0)는 제거. category 목록은 category_list 가 단일 표면.
+const debtList: Capability = {
+  name: "debt_list",
+  mutates: false, // 읽기전용(#1007): MCP전용 읽기 — REST 메서드 파생 신호 부재라 명시(fail-closed 오판 방지).
+  title: "도메인 부채 목록",
+  description: "도메인 부채(debt) 항목과 상태.",
+  scope: "context",
+  input: { repo: z.string().optional() },
+  expose: { mcp: true, rest: false },
+  handler: async (input: { repo?: string }) => {
+    const r = resolveRepo(input.repo);
+    return dmRead(`/api/repo/${enc(r)}/debts`, () => listProductDebts()); // v6: repo-free category 부채
+  },
+};
+
+// domainmap 읽기 — kind 화이트리스트(구 프록시 시절 오픈 프록시 차단 규약 유지). UI 전용(REST only).
+// 화이트리스트에 debts 없음(기존 그대로 — 표면 동결, 추가 금지).
+const DM_KIND_FN: Record<string, (repo: string) => Promise<unknown>> = {
+  domains: () => listProductDomains(), // v6: repo-free
+  entities: () => listProductEntities(), // v6: data_entity + best category
+  overview: () => productOverview(),   // v6: repo-free
+};
+// code 는 DM_KINDS 밖(표면 동결) — 구 queue/code 리더는 v6 드랍(2026-06-24)으로 제거돼 더는 없다.
+
+const domainmapProxy: Capability = {
+  name: "domainmap_proxy",
+  title: "domainmap 읽기 프록시",
+  description: "domainmap repo/:kind 읽기 (kind ∈ domains|entities|overview) — 웹 UI 전용.",
+  scope: "context",
+  input: { repo: z.string(), kind: z.string() },
+  expose: {
+    mcp: false,
+    rest: [{
+      method: "GET",
+      paths: ["/api/ui/domainmap/:repo/:kind"],
+      parse: (req) => {
+        const { repo, kind } = req.params;
+        if (!DM_KINDS.has(kind)) throw new HttpError(400, `kind 는 ${[...DM_KINDS].join("|")} 만 허용됩니다`);
+        // repo 는 기존대로 raw passthrough — 미검증 repo 는 dmRead 엔벨로프('domainmap 404 …')로
+        // 기존과 동일하게 502 표면화. TODO(표면 동결 해제 시): parseRepo(REPO_RE)로 잠가 신구 검증 일치.
+        return { repo, kind };
+      },
+    }],
+  },
+  handler: async (input: { repo: string; kind: string }) => {
+    const fn = DM_KIND_FN[input.kind];
+    if (!fn) throw new HttpError(400, `kind 는 ${[...DM_KINDS].join("|")} 만 허용됩니다`);
+    return dmRead(`/api/repo/${enc(input.repo)}/${input.kind}`, () => fn(input.repo));
+  },
+};
+
+// 레포 발견(#825) — 관리탭 '레포 추가' 드롭다운. 저장된 토큰(API 전용 토큰 → git HTTPS 자격 순)으로 호스트가
+//  가진 레포를 조회한다. 커넥터 스코프 픽커(#586)의 git 판 — id/URL 복붙을 없앤다. 미지원 호스트(SSH 뿐 등)는
+//  빈 목록 + note 로 안내하고 폼은 텍스트 입력으로 그대로 동작한다(드롭다운은 제안이지 제약이 아니다).
+//  scope=context: 레포 편집 권한(관리탭 CONTEXT_EDIT)과 같은 게이트 — 픽커만 admin 이면 편집 가능한 사람이 403 을 본다.
+const repoDiscover: Capability = {
+  name: "repo_discover",
+  mutates: false, // 읽기전용(#1007): POST 지만 읽기 — git 호스트 레포 목록 조회(스토어 쓰기 없음). 파생 오판 방지.
+  title: "레포 목록 조회(픽커)",
+  description:
+    "저장된 자격으로 git 호스트가 가진 레포 목록을 조회한다 — 관리탭 '레포 추가' 드롭다운용. 조회 토큰은 " +
+    "member_secret(gitlab_pat|github_pat, scope_key=host) 우선, 없으면 git_credential 의 HTTPS 토큰을 재사용한다. " +
+    "⚠ SSH 자격뿐인 호스트는 목록 조회가 원천적으로 불가능하다(SSH 키를 받는 REST API 가 없다) — 빈 목록 + 안내를 반환하니 " +
+    "git 주소를 직접 입력하면 된다. 반환 {options:[{host,name,full_path,http_url,ssh_url,default_branch,private}],hosts,note}.",
+  scope: "context",
+  input: { host: z.string().trim().max(253).optional().describe("특정 호스트만 조회(생략하면 자격이 있는 전 호스트)") },
+  expose: {
+    mcp: true,
+    rest: [{
+      method: "POST",
+      paths: ["/api/ui/repos/discover"],
+      parse: (req) => {
+        const h = (req.body ?? {}).host;
+        return h ? { host: String(h).trim() } : {};
+      },
+    }],
+  },
+  handler: async (input: { host?: string }, user) => discoverRepos(user?.userId ?? null, input.host ?? null),
+};
+
+// git 주소 연결 확인(#825) — 저장 전에 ls-remote 로 접근 가능 여부 + 실제 기본 브랜치를 확인한다.
+//  드롭다운이 못 덮는 구간(SSH 전송·API 토큰 없는 셀프호스팅)을 메꾼다.
+//  mcp:false — repo_set_source 와 같은 스탠스(레포 큐레이션은 사람의 웹 표면). 임의 URL 로 git 을 spawn 하므로
+//  에이전트에게 열지 않는다(같은 URL 을 등록하면 스캐너가 어차피 클론하니 새 위협은 아니지만, 표면은 좁게).
+const repoCheck: Capability = {
+  name: "repo_check",
+  mutates: false, // 읽기전용(#1007): POST 지만 읽기 — ls-remote 연결 확인(클론·스토어 쓰기 없음). 파생 오판 방지.
+  title: "레포 git 주소 연결 확인",
+  description:
+    "git 주소에 ls-remote 를 걸어 실제로 접근되는지와 원격의 실제 기본 브랜치를 확인한다(클론 없이). " +
+    "자격 해소는 클론과 동일 체인(요청 멤버 → 게이트웨이 폴백)이라 여기서 통과하면 provision 클론도 통과한다. " +
+    "반환 {ok,host,default_branch,branches,auth_error,detail} — 시크릿·원격 URL 은 응답에 싣지 않는다.",
+  scope: "context",
+  input: { git_url: z.string().trim().min(1).max(500) },
+  expose: {
+    mcp: false,
+    rest: [{
+      method: "POST",
+      paths: ["/api/ui/repos/check"],
+      parse: (req) => ({ git_url: String((req.body ?? {}).git_url ?? "").trim() }),
+    }],
+  },
+  handler: async (input: { git_url: string }, user) => checkGitRemote(input.git_url, user?.userId ?? null),
+};
+
+// ── 레포 브랜치 목록 — stage 의 '합쳐서 볼 작업'을 **타이핑이 아니라 고르게** 하기 위한 조회. ──
+//  base 클론에서 fetch 후 원격 브랜치를 최근 갱신순으로. 읽기 전용이고 브랜치명·커밋 제목만 나가므로 scope=code.
+//  #1313 R25: preview-env.ts 에 있던 것을 repo_* 군집인 여기로 옮겼다(등록 자리는 index.ts 가 유지 — 표면 순서 불변).
+const branchList: Capability = {
+  name: "repo_branch_list",
+  title: "레포 브랜치 목록",
+  description:
+    "등록된 레포의 원격 브랜치를 최근 갱신순으로 — [{name, updated_at, author, subject}]. " +
+    "stage 미리보기의 member_branches 나 base_ref 를 고를 때 쓴다(브랜치명을 외워서 적지 않게).",
+  scope: "code",
+  input: { repo: z.string().max(100), limit: z.number().int().min(1).max(1000).optional() },
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/repos/:repo/branches"], parse: (req) => ({ repo: req.params?.repo, limit: numOpt(req.query?.limit) }) }],
+  },
+  handler: async (input: any) => {
+    const repo = String(input.repo ?? "").trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(repo)) throw new HttpError(400, "레포 이름 형식이 올바르지 않습니다");
+    try { return { branches: await listRepoBranches(repo, input.limit ?? 300) }; }
+    catch (e) { throw new HttpError(400, (e as Error).message); }
+  },
+};
+
+export const contextCapabilities: Capability[] = [
+  repoList, repoRefresh, repoDiscover, repoCheck, contextOverview, debtList, domainmapProxy,
+];
+
+// ⚠ 별도 배열 — 등록 자리가 contextCapabilities 옆이 아니라 preview_env_* 다음이다(표면 스냅샷 순서 = tools/list 순서).
+//  정의는 repo_* 와 함께 두고, 자리만 index.ts 가 지킨다.
+export const repoBranchCapabilities: Capability[] = [branchList];

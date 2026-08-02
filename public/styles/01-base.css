@@ -1,0 +1,93 @@
+/* Lively Context — DESIGN-GUIDE.md 토큰/컴포넌트/모션 적용 (덱 deck.html 실측 기준) */
+
+/* ── §1 컬러 토큰 ── */
+:root {
+  /* 베이스 */
+  --bg:            #FFFFFF;
+  --bg-tint:       #F6FAFF;
+  --bg-tint-2:     #EEF5FF;
+  --bg-punch:      #EEF4FF;
+  --bg-note:       #F0F5FF;
+  --bg-success:    #F3FBF8;
+  --bg-sel:        #F4F8FF;  /* 선택/키보드 커서 행 배경 (가이드 §4 강조 열) */
+  --canvas:        #E6EBF3;
+
+  /* 브랜드 */
+  --blue:          #2D6BF0;
+  --blue-deep:     #1E54CC;
+  --mint:          #16C79A;
+  --mint-deep:     #0FA37E;
+  --mint-bright:   #36E0A8;
+  --teal:          #1BAEB0;
+  --coral:         #E4756B;
+  --coral-text:    #B84E44; /* 텍스트 전용 코랄 — 백색/틴트 위 4.5:1 이상(에러 카피 가독) */
+
+  /* 텍스트 */
+  --ink:           #15233B;
+  --ink-sub:       #5A6B85;
+  --ink-note:      #2D4A7A;
+  --muted:         #8A99B5;
+  --muted-2:       #A6B2C8;
+  --muted-3:       #C2CCDD;
+  --muted-head:    #7A88A3;
+
+  /* 라인/보더 */
+  --line:          #E6ECF5;
+  --line-row:      #EDF1F8;
+  --line-net:      #DCE6F5;
+  --line-net-2:    #CFE0F7;
+  --line-note:     #D6E4FF;
+
+  /* 네트워크 보조 노드 */
+  --node-blue-soft:#9DBDF2;
+  --node-mint-soft:#7FE0C4;
+
+  /* 다크(클로징/푸터 액센트 전용 — 기본 배경 금지) */
+  --dark-1:        #15233B;
+  --dark-2:        #1C3962;
+  --dark-sub:      #AEBFD8;
+  --dark-foot:     #7C8DA8;
+}
+
+/* ── §2 베이스 타이포 ── */
+* { box-sizing: border-box; }
+[hidden] { display: none !important; } /* display 지정 요소(#gate 등)에서도 hidden 속성이 이기도록 */
+html, body { margin: 0; padding: 0; }
+/* 페이지(루트) 세로 스크롤바를 레이아웃에서 완전히 빼고(자리 안 먹음 → 밀림 0), 콘텐츠 위에 '겹쳐 뜨는'
+   얇은 오버레이 막대로 대체한다(#756). 이렇게 하면 스크롤 없는 탭(홈·관리)과 스크롤 탭(프로젝트·도메인맵·
+   위키)을 오가도 뷰포트 가로폭이 불변 → 중앙정렬 상단탭·본문이 안 밀린다. 홈은 이전처럼 전폭 유지(거터 예약 X).
+   실제 막대는 page-scrollbar.js 가 그린다. 내부 스크롤러(사이드바·모달 등)는 자체 스크롤바를 그대로 둔다. */
+html { scrollbar-width: none; }                                    /* Firefox — 루트 스크롤바 숨김(공간 0) */
+html::-webkit-scrollbar, body::-webkit-scrollbar { width: 0; height: 0; display: none; } /* Blink/WebKit 루트 */
+/* 오버레이 스크롤바 — 우측 끝에 겹쳐 뜨는 얇은 막대. 스크롤 가능할 때만(.on) 은은히, 스크롤 중·호버 시(.act) 진하게. */
+.page-scroll { position: fixed; right: 2px; width: 12px; z-index: 60; pointer-events: none; }
+.page-scroll-thumb { position: absolute; right: 2px; top: 0; width: 6px; border-radius: 999px;
+  background: var(--muted-3, #aab3c0); opacity: 0; pointer-events: auto; cursor: default;
+  transition: opacity .35s ease, width .12s ease, background .12s ease; }
+.page-scroll.on .page-scroll-thumb { opacity: .26; }
+.page-scroll.on.act .page-scroll-thumb { opacity: .82; }
+.page-scroll-thumb:hover, .page-scroll-thumb:active { width: 9px; background: var(--muted-2, #8a94a4); opacity: .95; }
+body {
+  font-family: "Pretendard", -apple-system, "Apple SD Gothic Neo", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.55;
+}
+b, strong { font-weight: 700; color: var(--ink); }
+a { color: inherit; text-decoration: none; }
+button, input, select, textarea { font-family: inherit; font-size: inherit; }
+
+/* §8 포커스 링 */
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+/* 스킵 링크 — 포커스 시에만 노출(§8 키보드 탐색) */
+.skip-link {
+  position: absolute; left: -9999px; top: 0; z-index: 300;
+  background: var(--bg); color: var(--blue); font-size: 14px; font-weight: 700;
+  padding: 10px 16px; border: 1px solid var(--line); border-radius: 0 0 11px 0;
+}
+.skip-link:focus { left: 0; }
+

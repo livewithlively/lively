@@ -1,0 +1,22 @@
+// 단독 페이지(클래식 <script> 로 로드되는 화면) 소스 — #1313 R51 로 TS 파이프라인에 편입.
+//  ⚠ web/tsconfig.json(SPA)과 **분리**한 이유: 이 파일들은 무타입 손편집 JS 를 verbatim 이관한 것이라
+//   strict/noUnusedLocals 를 그대로 걸면 로직을 고쳐야 한다(이 항목의 목적은 파이프라인 편입이지 타입 강화가 아니다).
+//   타입 강화는 후속 항목에서 이 옵션들을 하나씩 켜며 진행한다.
+//  산출: dist/standalone/**(모듈 형태 — 테스트가 직접 import). 브라우저 산출물은 esbuild 가 만든다
+//   (scripts/build-standalone.mjs → public/terminal.js·md.js·page-scrollbar.js, 경로 불변).
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": false,
+    "noImplicitAny": false,
+    "useUnknownInCatchVariables": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "rootDir": ".",
+    "outDir": "../../dist/standalone"
+  },
+  "include": ["./**/*.ts"]
+}

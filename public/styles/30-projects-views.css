@@ -1,0 +1,273 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   #1067 뷰: 테이블 · 타임라인
+   - ClickUp 현행(Gen-C) 규약 참조: 바는 pill 아님(radius 4px), 저채도 단색,
+     라벨은 바 바깥, 차트 영역엔 가로 행 구분선 없음.
+   - DESIGN-GUIDE §0.5(calm) 준수: 채운 원색 금지 → 틴트 + 잉크. 컬러는 '오늘'과 상태 점에만.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 테이블 모드 — ClickUp Table 파리티. List 와 갈리는 건 정보량이 아니라 **표의 구조**다:
+      ① 행 번호가 별도 컬럼  ② 컬럼마다 세로 격자선(헤더까지 관통)  ③ 고정 행 높이  ④ 빈 셀은 비워 둔다. ── */
+/* ① 행 번호 = 그리드의 첫 칸. ::before 가 그리드 아이템이 되므로 행 컴포넌트를 건드리지 않고 컬럼이 하나 생긴다
+      (트랙은 pjvProjGridTemplate 이 테이블 모드일 때 38px 를 앞에 깐다). */
+.pjv-table-mode .pjv-flat-body { counter-reset: pjvtblrow; }
+.pjv-table-mode .pjv-flat-body > .pjv-trow-wrap { counter-increment: pjvtblrow; }
+.pjv-table-mode .pjv-flat-body > .pjv-trow-wrap > .pjv-trow::before {
+  content: counter(pjvtblrow); order: -1;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11.5px; font-weight: 500; color: var(--muted-2); font-variant-numeric: tabular-nums;
+  border-right: 1px solid var(--line-row); align-self: stretch;
+}
+/* 헤더에도 같은 자리에 빈 칸을 둬야 컬럼이 어긋나지 않는다. */
+.pjv-table-mode .pjv-list-colhead::before { content: ''; order: -1; border-right: 1px solid var(--line-row); }
+
+/* ② 세로 격자선 — 셀·헤더 오른쪽 헤어라인. List 는 가로선만, Table 은 가로+세로. */
+.pjv-table-mode .pjv-trow > .pjv-tcell,
+.pjv-table-mode .pjv-trow > .pjv-trow-title-cell,
+.pjv-table-mode .pjv-list-colhead > .pjv-tcell,
+.pjv-table-mode .pjv-list-colhead > .pjv-colhead,
+.pjv-table-mode .pjv-list-colhead > .pjv-trow-title-cell { border-right: 1px solid var(--line-row); }
+.pjv-table-mode .pjv-trow > .pjv-tcell-add,
+.pjv-table-mode .pjv-list-colhead > *:last-child { border-right: 0; }
+
+/* ③ 고정 행 높이 32px — '모든 행이 같은 높이'가 Table 의 정체성(실사용 스샷 실측값). */
+.pjv-table-mode .pjv-trow { min-height: 32px; height: 32px; align-items: stretch; }
+.pjv-table-mode .pjv-trow > .pjv-tcell,
+.pjv-table-mode .pjv-trow > .pjv-trow-title-cell { display: flex; align-items: center; }
+.pjv-table-mode .pjv-trow:hover { background: var(--bg-tint); }
+/* 헤더 — 회색 regular 좌측 정렬(대문자 아님). */
+.pjv-table-mode .pjv-list-colhead { height: 30px; align-items: stretch; background: var(--bg); }
+.pjv-table-mode .pjv-list-colhead .pjv-colhead-label,
+.pjv-table-mode .pjv-list-colhead .pjv-list-colhead-name { font-weight: 500; color: var(--muted-head); }
+
+/* ④ 빈 셀은 비워 둔다 — 리스트는 고스트 아이콘(사람＋·달력＋)으로 채우지만, 표에서 그러면 '값이 있는 것처럼' 보여
+      한 화면에 300개 행이 깔릴 때 시각적 잡음이 된다. 행에 호버할 때만 드러낸다(입력은 그대로 가능). */
+.pjv-table-mode .pjv-tcell .pjv-cell-btn.empty { opacity: 0; transition: opacity .12s; }
+.pjv-table-mode .pjv-trow:hover .pjv-cell-btn.empty,
+.pjv-table-mode .pjv-cell-btn.empty:focus-visible { opacity: 1; }
+
+/* ── 간트 차트 — 좌측 시트(계층+기간) × 우측 시간축. 좌측은 sticky 라 가로 스크롤에도 남는다. ── */
+.pjv-gt { display: flex; flex-direction: column; min-width: 0; }
+.pjv-gt-toolbar { display: flex; align-items: center; gap: 12px; padding: 6px 12px 8px; flex-wrap: wrap; }
+.pjv-gt-scales { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.pjv-gt-scale { border: 0; border-right: 1px solid var(--line); background: var(--bg); color: var(--ink-sub);
+  font-size: 12px; font-weight: 600; padding: 4px 12px; cursor: pointer; }
+.pjv-gt-scale:last-child { border-right: 0; }
+.pjv-gt-scale:hover { background: var(--bg-tint); }
+.pjv-gt-scale.on { background: var(--bg-tint-2); color: var(--blue); }
+.pjv-gt-todaybtn { margin-left: auto; border: 1px solid var(--line); background: var(--bg); color: var(--ink-sub);
+  font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 9px; cursor: pointer; }
+.pjv-gt-todaybtn:hover { border-color: var(--blue); color: var(--blue); }
+.pjv-gt-legend { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+.pjv-gt-key { width: 14px; height: 8px; border-radius: 3px; display: inline-block; }
+.pjv-gt-key.plan { background: color-mix(in srgb, var(--blue) 30%, var(--bg)); }
+.pjv-gt-key.none { background: repeating-linear-gradient(45deg, var(--line) 0 3px, transparent 3px 6px); border: 1px solid var(--line-net); }
+
+.pjv-gt-scroll { overflow: auto; max-height: calc(100vh - 260px); border-top: 1px solid var(--line); }
+.pjv-gt-inner { position: relative; }
+
+/* 헤더 — 위로 붙는다(sticky). 좌측 시트 머리는 좌우 양쪽으로 붙어 교차점을 덮는다. */
+.pjv-gt-headrow { position: sticky; top: 0; z-index: 5; display: flex; background: var(--bg); }
+.pjv-gt-sheethead { position: sticky; left: 0; z-index: 6; flex: 0 0 auto; display: flex; align-items: flex-end; gap: 8px;
+  padding: 0 10px 4px; height: 44px; background: var(--bg);
+  border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.pjv-gt-th { font-size: 11.5px; font-weight: 500; color: var(--muted-head); }
+.pjv-gt-th.span { margin-left: auto; }
+.pjv-gt-axis { position: relative; flex: 0 0 auto; height: 44px; border-bottom: 1px solid var(--line); }
+.pjv-gt-mons, .pjv-gt-subs { position: relative; height: 22px; }
+.pjv-gt-mon { position: absolute; top: 0; height: 22px; display: flex; align-items: center; padding-left: 6px;
+  font-size: 12px; font-weight: 700; color: var(--ink); border-left: 1px solid var(--line); box-sizing: border-box; }
+.pjv-gt-sub { position: absolute; top: 0; height: 22px; display: flex; align-items: center; justify-content: center;
+  font-size: 10px; color: var(--muted-2); border-left: 1px solid var(--line-row); box-sizing: border-box; }
+.pjv-gt-sub.wknd { background: var(--bg-tint); }
+
+/* 행 — 좌측 시트 + 우측 트랙. 차트엔 가로 구분선을 두지 않는다(선이 많으면 바가 안 읽힌다). */
+.pjv-gt-body { position: relative; }
+.pjv-gt-row { display: flex; height: 36px; }
+.pjv-gt-row:hover { background: var(--bg-tint); }
+.pjv-gt-sheet { position: sticky; left: 0; z-index: 3; flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+  padding: 0 10px; background: var(--bg); border-right: 1px solid var(--line); box-sizing: border-box; }
+.pjv-gt-row:hover .pjv-gt-sheet { background: var(--bg-tint); }
+.pjv-gt-row.group .pjv-gt-sheet { background: var(--bg-tint); }
+.pjv-gt-caret { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 10px;
+  padding: 2px; line-height: 1; transition: transform .12s; }
+.pjv-gt-caret.off { transform: rotate(-90deg); }
+.pjv-gt-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted-3); flex: 0 0 auto; }
+.pjv-gt-name { font-size: 12.5px; color: var(--ink-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pjv-gt-name.group { font-weight: 700; color: var(--ink); }
+.pjv-gt-count { font-size: 11px; color: var(--muted-2); flex: 0 0 auto; }
+.pjv-gt-range { margin-left: auto; font-size: 11px; color: var(--muted-2); flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.pjv-gt-range.overdue { color: var(--coral-text); font-weight: 600; }
+.pjv-gt-track { position: relative; flex: 0 0 auto; }
+
+/* 바 — pill 아님(radius 4px), 저채도 단색. 원색 pill + 바 안 흰 글씨는 ClickUp 구세대(2019~20) 디자인이라 따르지 않는다. */
+.pjv-gt-bar { position: absolute; top: 4px; height: 28px; border-radius: 4px; cursor: pointer; box-sizing: border-box;
+  background: color-mix(in srgb, var(--blue) 30%, var(--bg)); }
+.pjv-gt-bar:hover { background: color-mix(in srgb, var(--blue) 42%, var(--bg)); }
+.pjv-gt-bar.done { background: color-mix(in srgb, var(--mint) 32%, var(--bg)); }
+.pjv-gt-bar.done:hover { background: color-mix(in srgb, var(--mint) 44%, var(--bg)); }
+/* 실적 바 = 점선 — '계획이 아니라 지나간 자취'임을 형태로 구분한다. */
+.pjv-gt-bar.actual { background: color-mix(in srgb, var(--muted-2) 22%, var(--bg)); border: 1px dashed var(--muted-2); }
+.pjv-gt-bar.actual:hover { background: color-mix(in srgb, var(--muted-2) 34%, var(--bg)); }
+.pjv-gt-bar.overdue { box-shadow: inset 0 0 0 1.5px var(--coral); }
+.pjv-gt-bar:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.pjv-gt-faces { position: absolute; top: 9px; display: flex; gap: 2px; pointer-events: none; }
+.pjv-gt-faces .pjv-ava { width: 18px; height: 18px; font-size: 9px; }
+
+/* 롤업 바 — 리스트 단위. 완료 비율만큼 채운다(ClickUp: 완료 태스크 ÷ 전체). 태스크 바보다 얇아 위계가 보인다. */
+.pjv-gt-roll { position: absolute; top: 14px; height: 8px; border-radius: 4px; overflow: hidden;
+  background: color-mix(in srgb, var(--muted-3) 45%, var(--bg)); }
+.pjv-gt-roll-fill { height: 100%; background: color-mix(in srgb, var(--mint) 55%, var(--bg)); }
+
+/* 의존선 — 직각 elbow + 화살촉. 데이터가 있을 때만 그린다. */
+.pjv-gt-links { position: absolute; top: 44px; pointer-events: none; z-index: 1; }
+.pjv-gt-link { fill: none; stroke: var(--muted-3); stroke-width: 1; }
+.pjv-gt-arrow { fill: var(--muted-3); }
+
+/* 오늘 — 세로선 + 배지. 좌측 시트(z-index 3)보다 아래로 깔려 시트를 뚫지 않는다. */
+.pjv-gt-todayline { position: absolute; top: 44px; bottom: 0; width: 1px; background: var(--blue); opacity: .5; z-index: 2; }
+.pjv-gt-todaybadge { position: absolute; top: 26px; transform: translateX(-1px); z-index: 7;
+  background: var(--blue); color: #fff; font-size: 10px; font-weight: 700; line-height: 1;
+  padding: 3px 5px; border-radius: 3px; white-space: nowrap; }
+
+/* ── 간트: 계획을 '만드는' 부분 (#1067) ── */
+/* 실적 겹쳐보기 토글 — 기본 꺼짐. 간트의 주 무대는 과거가 아니라 앞으로다. */
+.pjv-gt-toggle { border: 1px solid var(--line); background: var(--bg); color: var(--ink-sub);
+  font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 9px; cursor: pointer; }
+.pjv-gt-toggle:hover { background: var(--bg-tint); }
+.pjv-gt-toggle.on { background: var(--bg-tint-2); color: var(--blue); border-color: var(--line-net-2); }
+
+/* 바 = 끌 수 있는 것. 잡는 순간 커서와 그림자로 '움직인다'를 알린다. */
+.pjv-gt-bar { cursor: grab; touch-action: none; }
+.pjv-gt-bar.dragging { cursor: grabbing; box-shadow: 0 2px 8px rgba(21, 35, 59, .18); opacity: .9; }
+/* 양 끝 리사이즈 핸들 — 바 안쪽에 얇게. 평소엔 숨고 호버 때만 드러난다(ClickUp Gen-C 동일). */
+.pjv-gt-handle { position: absolute; top: 4px; bottom: 4px; width: 7px; cursor: ew-resize;
+  border-radius: 2px; background: rgba(255, 255, 255, .75); opacity: 0; transition: opacity .1s;
+  touch-action: none; }
+.pjv-gt-handle.l { left: 2px; }
+.pjv-gt-handle.r { right: 2px; }
+.pjv-gt-bar:hover .pjv-gt-handle { opacity: 1; }
+/* 끄는 동안의 날짜 배지 — 커서를 따라오며 '지금 놓으면 며칠짜리'를 읽어준다. 행(36px) 안에 머물러야
+   가로 스크롤러에 잘리지 않으므로 바 위가 아니라 바에 겹쳐 띄운다. */
+.pjv-gt-dragtip { position: absolute; top: 50%; transform: translate(-50%, -50%); z-index: 8;
+  pointer-events: none; background: var(--ink); color: var(--bg); font-size: 11px; font-weight: 700;
+  line-height: 1; padding: 4px 7px; border-radius: 4px; white-space: nowrap;
+  font-variant-numeric: tabular-nums; box-shadow: 0 2px 8px rgba(21, 35, 59, .22); }
+
+/* 우클릭 메뉴 앵커 — 커서 자리를 잡아주는 1px 자리표시자(보이지 않고 잡히지도 않는다). */
+.pjv-cursor-spot { position: fixed; width: 1px; height: 1px; pointer-events: none; opacity: 0; }
+
+/* 실적 띠 — 계획 뒤에 흐리게. 계획 대비 실제를 대조하는 참고선이지 주인공이 아니다. */
+.pjv-gt-actual { position: absolute; top: 13px; height: 10px; border-radius: 3px;
+  background: color-mix(in srgb, var(--muted-2) 18%, var(--bg)); border: 1px dashed var(--muted-3); }
+
+/* 일정 없는 행의 트랙 — 클릭하면 그 날짜로 일정이 잡힌다. 호버로 '여기 놓을 수 있다'를 알린다. */
+.pjv-gt-track.schedulable { cursor: copy; }
+.pjv-gt-track.schedulable:hover { background: color-mix(in srgb, var(--blue) 5%, transparent); }
+.pjv-gt-row.group.unsched .pjv-gt-sheet { background: var(--bg-tint-2); }
+.pjv-gt-unsched-hint { position: sticky; left: 8px; display: inline-block; margin-top: 9px;
+  font-size: 11.5px; color: var(--muted-2); }
+.pjv-gt-range.none { color: var(--muted-3); }
+.pjv-gt-more { padding: 8px 12px; font-size: 12px; color: var(--muted-2); position: sticky; left: 0; }
+
+/* ── 계층(#1305) — 프로젝트 ▸ 태스크 ▸ 하위 태스크. 위계는 들여쓰기와 바 두께로만 준다.
+   색은 이미 상태 축이 쓰고 있어(진행=파랑/완료=민트/지연=코랄) 위계에 또 쓰면 둘 다 안 읽힌다. ── */
+.pjv-gt-caret { min-width: 14px; text-align: center; flex: 0 0 auto; }
+/* 하위가 없는 행의 caret 자리 — 비워 두어야 층마다 이름 시작선이 흔들리지 않는다. */
+.pjv-gt-caret.ghost { cursor: default; }
+/* 이름 클릭 = 상세. 바가 없는 행(미정·롤업만)을 여는 유일한 손잡이라 눌리는 티가 나야 한다. */
+.pjv-gt-name.link { cursor: pointer; }
+.pjv-gt-name.link:hover { color: var(--blue); text-decoration: underline; }
+.pjv-gt-name.task { font-size: 12px; }
+.pjv-gt-bar.lv1 { top: 7px; height: 22px; }
+.pjv-gt-bar.lv2 { top: 9px; height: 18px; }
+/* 노드 롤업 — 자기 계획은 없고 하위에만 있는 행. 접힌 채로도 '그 안의 일정'을 보여주는 요약 띠.
+   클릭은 트랙으로 흘려보낸다(이 자리를 눌러 자기 일정을 잡을 수 있어야 한다). */
+.pjv-gt-roll.node { pointer-events: none; background: color-mix(in srgb, var(--blue) 14%, var(--bg)); }
+.pjv-gt-range.roll { color: var(--muted-3); }
+.pjv-gt-key.task { width: 10px; height: 5px; background: color-mix(in srgb, var(--blue) 30%, var(--bg)); }
+/* 깊이 세그먼트 — 스케일과 같은 모양이라 붙어 보이지 않게 사이를 벌린다. */
+.pjv-gt-depths { margin-left: 2px; }
+
+/* ── 의존선(#1308) ──────────────────────────────────────────────────────── */
+/* connector 노드 — 바 **바깥** 양 끝의 원. 리사이즈 핸들(바 안쪽 그립)과 자리가 겹치지 않아야
+   '늘리기'와 '잇기'가 헷갈리지 않는다. 평소엔 숨고 바에 호버할 때만 드러난다(핸들과 같은 규칙). */
+.pjv-gt-node { position: absolute; top: 50%; width: 9px; height: 9px; margin-top: -4.5px;
+  border-radius: 50%; background: var(--bg); border: 1.5px solid var(--blue);
+  opacity: 0; transition: opacity .1s; cursor: crosshair; touch-action: none; z-index: 2; }
+.pjv-gt-node.l { left: -13px; }
+.pjv-gt-node.r { right: -13px; }
+.pjv-gt-bar:hover .pjv-gt-node, .pjv-gt-node:hover { opacity: 1; }
+/* 끄는 동안의 고스트 — 커서까지 이어지는 점선. 회전 기준점이 왼쪽 끝이어야 노드에서 뻗어 나간다. */
+.pjv-gt-linkghost { position: fixed; height: 0; border-top: 1.5px dashed var(--blue);
+  transform-origin: 0 0; pointer-events: none; z-index: 9999; }
+/* 1px 선은 손으로 못 누른다 — 굵고 투명한 히트 경로를 겹쳐 둔다(svg 는 pointer-events:none 이라 여기서만 켠다). */
+.pjv-gt-link-hit { fill: none; stroke: transparent; stroke-width: 11; pointer-events: stroke; cursor: pointer; }
+.pjv-gt-link-hit:hover { stroke: color-mix(in srgb, var(--blue) 18%, transparent); }
+/* 부모 범위 이탈 경고 — 하위 일정이 부모 기간 밖으로 나갔다. 지연(코랄)과 같은 색 축으로 읽힌다. */
+.pjv-gt-warn { flex: 0 0 auto; font-size: 11px; color: var(--coral-text); cursor: help; }
+/* 의존 대상 피커 — 스크롤 밖 작업은 끌어다 놓을 수 없으므로 이름으로 좁혀 고르는 경로가 따로 필요하다. */
+.pjv-gt-deppick { min-width: 260px; max-width: 340px; padding: 6px; }
+.pjv-gt-deplist { max-height: 260px; overflow: auto; margin-top: 4px; }
+.pjv-gt-depname { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── 필터 필드 선택 드롭다운(#1067) — ClickUp 'Select filter'. 검색 + 아이콘 목록. ── */
+.pjv-fieldpick { min-width: 224px; max-width: 300px; padding: 5px; gap: 3px; }
+.pjv-fieldpick-list { display: flex; flex-direction: column; gap: 1px; max-height: 300px; overflow: auto; }
+.pjv-fieldpick .pjv-menu-item { gap: 9px; }
+.pjv-fieldpick .pjv-menu-item > svg { width: 16px; height: 16px; flex: none; color: var(--muted-2); }
+.pjv-fieldpick .pjv-menu-item.sel > svg { color: var(--blue); }
+.pjv-fieldpick-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 아직 필드를 안 고른 조건 — 무엇을 눌러야 하는지 보이게 점선 + 흐린 라벨(빈 칸처럼 보이면 그냥 지나친다). */
+.pjv-filter-sel.is-empty { border-style: dashed; color: var(--muted-2); }
+.pjv-filter-sel.is-empty:hover { border-style: solid; border-color: var(--blue); color: var(--ink); }
+/* 필드 아이콘이 셀렉트 안에도 붙는다(무슨 조건인지 아이콘으로 먼저 읽히게). */
+.pjv-filter-sel > svg:first-child { width: 15px; height: 15px; flex: none; color: var(--muted-2); }
+
+/* #1291 공개범위 배지 — 대상이 제한된 리스트·스페이스에 붙는 자물쇠.
+   글자 크기를 라벨보다 한 단계 낮추고 여백만 줘, 이름 옆에 조용히 붙되 목록 리듬은 흔들지 않는다. */
+.pjv-side-lock { flex: none; margin-left: 4px; font-size: 10.5px; line-height: 1; opacity: .75; cursor: default; }
+.pjv-side-navitem:hover .pjv-side-lock { opacity: 1; }
+/* 내용 비공개(#1291 v2) — 관리자에게만 오는 행. 존재는 보이지만 내용은 안 보인다는 걸 자물쇠만으로는
+   구분할 수 없어(대상 제한 자물쇠와 같은 글리프) 행 자체를 흐리게 해 "여긴 안 채워진다"를 드러낸다. */
+.pjv-side-lock-hidden { opacity: 1; filter: grayscale(1); }
+.pjv-side-navitem:has(.pjv-side-lock-hidden) .pjv-side-navlabel { opacity: .55; font-style: italic; }
+
+/* ── #1291 공유폴더 공개범위 — 🔒 배지 + 설정 모달 (자기완결 블록, 기존 규칙 수정 없음) ──
+   왜 배지가 필요한가: 공유 워크스페이스는 지금까지 '항상 전원 공개'였다. 일부만 잠기기 시작하면
+   똑같이 생긴 폴더가 어떤 건 전체공개, 어떤 건 아니게 되는데 그 차이가 안 보이면 "전체공개인 줄 알고"
+   파일을 올리는 사고가 난다. 리스트·스페이스의 .pjv-side-lock 과 같은 톤으로 맞춘다. */
+.dash-lock-badge { flex: none; font-size: 10.5px; line-height: 1; opacity: .75; cursor: default; }
+/* 카드(아이콘 뷰)에선 모서리 배지 — 이름은 2줄에서 잘리므로 이름 옆에 두면 긴 이름에서 배지가 사라진다.
+   .dash-fb-actions 는 top-right 에 있으므로 겹치지 않게 왼쪽 위로. */
+.proj-file-card > .dash-lock-badge { position: absolute; top: 5px; left: 6px; z-index: 1; opacity: .9; }
+/* 목록(행) 뷰 — 이름 칸을 flex 로 바꿔 이름만 말줄임되고 배지는 항상 남게 한다(nowrap+ellipsis 는 뒤 요소를 삼킨다). */
+.dash-fb-row-nm, .dash-fold-row-nm { display: flex; align-items: center; gap: 4px; }
+.dash-fb-row-nm > span:first-child,
+.dash-fold-row-nm > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 공개범위 모달 — 대상 경로(어느 폴더를 잠그는지 오해 없게 전체 경로를 보여 준다) + 안내 노트. */
+.dash-fbvis-path { font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 12px;
+  color: var(--muted); background: var(--bg-2, var(--bg)); border: 1px solid var(--line); border-radius: 6px;
+  padding: 6px 8px; word-break: break-all; }
+/* 상속·프로젝트 상속 안내 — 경고가 아니라 '왜 여기선 이렇게 되나'의 설명이라 무채 톤으로 조용히. */
+.dash-fbvis-note { margin-top: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px;
+  background: var(--bg-2, var(--bg)); display: flex; flex-direction: column; gap: 3px; }
+.dash-fbvis-note > b { font-size: 12.5px; color: var(--ink); font-weight: 600; }
+.dash-fbvis-note > span { font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+/* #1291 관리탭 ▸ 맥락 공개범위 — 유형별 켜기/끄기 */
+.vax-list { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; }
+.vax-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 8px; }
+.vax-row + .vax-row { border-top: 1px solid var(--line, rgba(128,128,128,.18)); }
+.vax-row:hover { background: var(--hover, rgba(128,128,128,.06)); }
+.vax-row.off .vax-label { opacity: .6; }
+.vax-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.vax-label { font-weight: 600; }
+.vax-locked { font-size: 12px; color: var(--warn-fg, #b26a00); }
+.vax-none, .vax-off { font-size: 12px; opacity: .6; }
+/* 끄기 확인 — 경고는 눈에 띄어야 하지만 겁주는 색만으로는 부족해 무엇이 열리는지 이름을 함께 준다. */
+.vax-warn { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 8px;
+  background: var(--warn-bg, rgba(255,176,32,.12)); border: 1px solid var(--warn-line, rgba(255,176,32,.35)); }
+.vax-warn span { font-size: 13px; opacity: .85; }
+.vax-samples { margin: 10px 0 0; padding-left: 20px; font-size: 13px; max-height: 180px; overflow-y: auto; }
+.vax-samples li { margin: 2px 0; }
