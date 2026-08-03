@@ -50,6 +50,22 @@ function classifyHealth(s: any): Health {
   }
   const j = jobHealth(s.job, '분류');
   if (j) return { ...j, line: j.line + (s.backlog ? ` 미분류 지식 ${fmtNum(s.backlog)}건이 그대로 남습니다.` : '') };
+  const rest = s.backlog ? ` 미분류 지식 ${fmtNum(s.backlog)}건 대기 중입니다.` : '';
+  // ⚠ 분류기 대수를 여기서 말해야 한다 — 이 두 줄이 없어서 개요는 "분류 1시간마다 · 23분 전"이라 하고
+  //  분류 탭은 "아직 분류기가 없습니다"라고 했다. 둘 다 사실인데 합쳐 읽으면 모순이다(어니스트 실박스 지적).
+  //  payload 는 configured·enabled 를 처음부터 담고 있었는데 이 함수만 안 읽었다(manageHealth 는 읽는다).
+  if (!s.configured) {
+    // 분류기 0개는 '고장'이 아니다 — 전역 기본 분류로 떨어지는 게 설계된 폴백이다(무중단 계약 ④).
+    //  그래서 warn 이 아니라 note 로, 그리고 **지금 무엇이 돌고 있는지**를 문장으로 말한다.
+    return { level: 'note',
+      line: `분류기가 없어 전역 기본 분류가 돌고 있습니다 — 전 미분류 지식을 한 기준으로 봅니다.` +
+        ` 팀·도메인별로 기준을 나누려면 분류기를 만드세요.${rest}` };
+  }
+  if (!s.enabled) {
+    // 만들어 두고 다 꺼 둔 상태 — 잡은 도는데 아무 분류기도 대상을 안 집는다(가장 헷갈리는 상태다).
+    return { level: 'off',
+      line: `분류기 ${s.configured}개가 모두 꺼져 있습니다 — 잡은 돌지만 아무 분류기도 대상을 집지 않습니다.${rest}` };
+  }
   if (s.uncovered) return { level: 'warn', line: `어느 분류기도 안 집는 지식이 ${fmtNum(s.uncovered)}건 있습니다 — 이대로면 영영 분류되지 않습니다.` };
   if (s.backlog) return { level: 'note', line: `미분류 지식 ${fmtNum(s.backlog)}건이 대기 중입니다.` };
   return { level: 'ok', line: '미분류 지식이 없습니다.' };

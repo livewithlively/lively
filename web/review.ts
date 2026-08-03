@@ -152,7 +152,13 @@ export async function ingestPolicyPanel(detail, data): Promise<void> {
   const reload = () => ingestPolicyPanel(detail, data);
   detail.replaceChildren(el('div', { class: 'card' }, skeleton('검토 게이트 설정을 불러오는 중')));
   let policies: any[];
-  try { const r = await api('/api/ui/org/ingest-policy'); policies = (r && r.policies) || []; }
+  let canEdit = false;
+  try {
+    const r = await api('/api/ui/org/ingest-policy');
+    policies = (r && r.policies) || [];
+    // 편집 가능 여부는 서버 판정을 그대로 받는다 — 프론트가 scope 를 재해석하면 '눌러도 403' 이 난다(#1419).
+    canEdit = !!(r && r.canEdit);
+  }
   catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '검토 게이트 설정을 불러오지 못했습니다'))); return; }
   let obs: any = null;
   try { obs = await api('/api/ui/org/ingest-observability?days=30'); } catch { obs = null; }
@@ -161,14 +167,64 @@ export async function ingestPolicyPanel(detail, data): Promise<void> {
   const rules = policies.filter((p) => p.preset !== GATE_PRESET);   // 프리셋은 위 스위치가 관리 — 목록에서 제외(두 곳 편집 방지)
 
   //  #1010 최상위 제목은 card 밖으로(관리탭 이중 박스 제거). sectionHead 는 admin.ts 로컬이라 여기선 section-title DOM 을 inline 복제.
+  //  권한 안내는 **모두에게** 보인다(관리자에게도) — 비관리자에게만 보이면 관리자는 남의 화면이 다른 걸 모른다(#1419).
   detail.replaceChildren(
     el('div', {},
       el('div', { class: 'section-title' }, el('h2', { text: '지식 검토 정책' })),
-      el('p', { class: 'admin-hint', text: 'AI가 기록한 지식을 사람이 확인한 뒤에 유효해지도록 할지 정합니다.' })),
+      el('p', { class: 'admin-hint', text: 'AI가 기록한 지식을 사람이 확인한 뒤에 유효해지도록 할지 정합니다.' }),
+      el('p', { class: 'admin-hint ctx-perm-line' },
+        canEdit ? null : el('span', { class: 'pill', text: '읽기 전용' }),
+        el('span', { class: 'admin-only-badge', text: '관리자' }),
+        ' 이 정책을 바꾸는 일은 관리자 전용입니다 — 조직 전체의 지식 인입 게이트라, 규칙 하나가 모든 구성원의 기록에 걸립니다. ',
+        canEdit ? '설정 내용은 모든 구성원이 볼 수 있습니다.'
+                : '지금 어떤 규칙이 걸려 있는지는 아래에서 그대로 보실 수 있습니다 — 내 지식이 왜 검토 대기로 갔는지 확인할 수 있습니다.')),
     el('div', { class: 'card' },
       cardHead('검토 게이트', '켜면 에이전트가 기록한 지식은 [WIKI ▸ 검토 대기]로 이동하고, 승인 전까지는 검색·세션주입·목록에 표시되지 않습니다. 사람이 웹에서 직접 쓴 지식은 영향을 받지 않습니다.'),
-      gateCard(preset, obs, reload),
-      rulesSection(rules, reload)));
+      // 비-admin 에겐 읽기 전용 요약만 — 누를 수 없는 스위치·버튼은 안내가 아니라 미끼다(#1419).
+      canEdit ? gateCard(preset, obs, reload) : gateSummaryReadonly(preset),
+      canEdit ? rulesSection(rules, reload) : rulesSummaryReadonly(rules)));
+}
+
+/** 게이트 상태 읽기 전용 — 스위치 없이 '지금 켜져 있나'만. */
+function gateSummaryReadonly(preset: any) {
+  const on = !!(preset && preset.enabled);
+  return el('div', { class: 'mini-meta' },
+    el('span', { class: 'pill' + (on ? ' pill-ok' : ''), text: on ? '켜짐' : '꺼짐' }),
+    el('span', { text: on
+      ? '  에이전트가 기록한 지식은 승인 전까지 검색·세션주입에 나오지 않습니다.'
+      : '  에이전트가 기록한 지식이 곧바로 유효해집니다.' }));
+}
+
+/** 세부 규칙 읽기 전용 — 무엇이 걸려 있는지만(편집·추가 없음). */
+function rulesSummaryReadonly(rules: any[]) {
+  const box = el('div', { style: 'margin-top:12px' },
+    el('div', { class: 'section-title' }, el('h2', { text: '세부 규칙' })));
+  if (!rules.length) {
+    box.append(el('p', { class: 'admin-hint', text: '세부 규칙이 없습니다 — 위 게이트 설정만 적용됩니다.' }));
+    return box;
+  }
+  for (const p of rules) {
+    box.append(el('div', { class: 'mini-meta' },
+      el('span', { class: 'pill' + (p.enabled ? ' pill-ok' : ''), text: p.enabled ? '켜짐' : '꺼짐' }),
+      el('span', { class: 'pill', text: '신규 ' + (p.action || 'auto') }),
+      el('span', { class: 'pill', text: '수정 ' + (p.action_update || 'auto') }),
+      el('span', { text: '  ' + (p.note || describeMatch(p)) })));
+  }
+  return box;
+}
+
+/** 규칙의 매칭 조건을 한 줄 문장으로 — note 가 비었을 때 '무엇에 걸리는 규칙인지'를 보여준다. */
+function describeMatch(p: any): string {
+  const bits: string[] = [];
+  if (p.match_category) bits.push(`분류 ${p.match_category}`);
+  if (p.match_system) bits.push(`출처 ${p.match_system}`);
+  if (p.match_channel) bits.push(`채널 ${p.match_channel}`);
+  if (p.match_actor_kind) bits.push(p.match_actor_kind === 'ai' ? 'AI 작성' : '사람 작성');
+  if (p.match_agent) bits.push(`하네스 ${p.match_agent}`);
+  if (p.match_type) bits.push(`종류 ${p.match_type}`);
+  if (p.match_provenance) bits.push(`출처유형 ${p.match_provenance}`);
+  if (p.match_sensitive) bits.push(`민감 ${p.match_sensitive}`);
+  return bits.length ? bits.join(' · ') : '모든 지식';
 }
 
 // 프리셋 카드 — "에이전트가 기록한 지식" 한 덩어리. 스위치 + 신규/수정 액션 선택.
