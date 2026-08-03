@@ -82,6 +82,13 @@ export {
 } from "./store/classifiers.js";
 export type { ClassifierRow, ClassifierUpsertInput } from "./store/classifiers.js";
 
+// ── org_manager(+finding — 관리기 4종. #1419 T5) ──
+export {
+  listManagers, getManager, upsertManager, removeManager, listFindings, upsertFinding,
+  resolveFinding, recordManagerRun, managerOverview, needsLlm, MANAGER_KIND_LABEL,
+} from "./store/managers.js";
+export type { ManagerRow, ManagerKind, ManagerUpsertInput, FindingRow } from "./store/managers.js";
+
 // ── 자동 인입 라인(org_ingest_policy · org_distiller · 게이트 관측) ──
 export {
   listIngestPolicies, upsertIngestPolicy, removeIngestPolicy,

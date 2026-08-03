@@ -8,12 +8,13 @@
 import { runRefreshAll, runRefreshRepo, runRefreshBases } from "./actions/repo-refresh.js";
 import { runConnectorSync, runConnectorPush, runWikiPush } from "./actions/connector.js";
 import { runWikilinkSweep, runEvalDomainDebt, runEnsureManagedSessions, runPreviewReconcile } from "./actions/maintenance.js";
+import { runManagers } from "./actions/manage.js"; // #1419 T5 관리기
 import { runMapInject, runMapHeadless, runBootstrapInject } from "./actions/map-bootstrap.js";
 import { runClassifyKnowledgeInject, runClassifyKnowledgeHeadless } from "./actions/classify.js";
 import { runDistillInject, runDistillHeadless } from "./actions/distill.js";
 import { runAgentInject, runAgentHeadless } from "./actions/agent.js";
 
-export interface CronActionParam { name: string; label: string; kind: "session" | "repo" | "system" | "text" | "textarea" | "select" | "distiller" | "classifier"; choices?: string[]; hint?: string }
+export interface CronActionParam { name: string; label: string; kind: "session" | "repo" | "system" | "text" | "textarea" | "select" | "distiller" | "classifier" | "manager"; choices?: string[]; hint?: string }
 export interface CronActionDef { key: string; label: string; params: CronActionParam[]; run: CronActionRun }
 
 export interface CronJob {
@@ -44,6 +45,13 @@ export const CRON_ACTIONS: CronActionDef[] = [
   // #976 위키 아웃바운드 — 등록 노션 feed_target(카테고리 N:M 매핑)로 정본 지식을 피드 카드로 투영. connector_push(프로젝트)의 위키판. 옵트인(매핑 없으면 무동작).
   { key: "wiki_push", label: "위키 push (산출 지식 → 노션 피드)", params: [], run: runWikiPush },
   { key: "eval_domain_debt", label: "도메인 부채 평가", params: [], run: runEvalDomainDebt },
+  // #1419 T5 관리기 — 쌓인 지식을 계속 옳게 유지(분류 어긋남·아웃데이티드·모순·지식↔코드).
+  //  결정적 종류(어긋남·아웃데이티드)는 이 틱 안에서 끝나고(LLM 비용 0), 판단이 필요한 종류만 배치로 나간다.
+  { key: "run_managers", label: "관리기 실행 (지식 유지보수 — 어긋남·아웃데이티드·모순·코드괴리)", params: [
+    { name: "manager", label: "관리기 (선택)", kind: "manager", hint: "[맥락 관리 ▸ 관리기]에서 등록한 관리기. 비우면 **켜진 관리기 전부**를 순서대로 실행." },
+    { name: "requester", label: "의뢰자 (멤버 id/이메일)", kind: "text", hint: "모순·코드괴리 판정에만 필요(그 멤버의 AI 계정으로 실행·과금). 어긋남·아웃데이티드만 쓰면 비워도 된다." },
+    HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,
+  ], run: (p, job) => runManagers(p, job.id, job.created_by ?? null) },
   // #907 본문 [[위키링크]] → 지식 엣지 수렴. 저장 시 그 문서는 이미 수렴하니 이 잡의 값어치는 **시간이 푸는 것들**이다:
   //  붕 뜬 링크의 대상이 나중에 생기거나(그때 저장을 다시 하지 않는다), 대상이 지워졌다 되살아나거나, 저장 중
   //  best-effort 로 흘린 실패를 되잡는다. 전수 재계산(수렴형)이라 몇 번을 돌려도 같은 결과다.

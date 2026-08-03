@@ -14,7 +14,7 @@ import { itemsPool } from "../db/client.js";
 import { initOrgCore, initOrgCoreLateAdditions } from "./schema/core.js";
 import { initRuntimeConfigTable, initRuntimeConfigPolicyColumns } from "./schema/runtime-config.js";
 import { initMcpServerRegistry, initToolAndAssetRegistry, initOrgHookHealthColumn } from "./schema/mcp-tools.js";
-import { initConnectorRegistry, initCollectorRegistry, initCollectorPresets, initClassifierRegistry, initIngestPolicyAndDistillers } from "./schema/connectors-ingest.js";
+import { initConnectorRegistry, initCollectorRegistry, initCollectorPresets, initClassifierRegistry, initManagerRegistry, initIngestPolicyAndDistillers } from "./schema/connectors-ingest.js";
 import { initDbAccessPolicies } from "./schema/db-access.js";
 import { initSessionsInfra } from "./schema/sessions-infra.js";
 import { initGroundTruthRegistries } from "./schema/registry.js";
@@ -40,5 +40,6 @@ export async function initOrgSchema(): Promise<void> {
   await initCollectorRegistry(itemsPool);          // org_collector(수집기 인스턴스 n개 — org_connector 의 system PK 해체)
   await initCollectorPresets(itemsPool);           // org_collector_preset(커스텀 프리셋)·collector_webhook_event(웹훅 수신함)
   await initClassifierRegistry(itemsPool);         // org_classifier(+seen — 분류기 n개. 증류기의 분류판)
+  await initManagerRegistry(itemsPool);            // org_manager(+finding — 관리기 4종: 어긋남·아웃데이티드·모순·코드괴리)
   // (org_memory/org_content → knowledge_unit 1회복사 폐기 2026-06-24 — 원본 DROP, 복사 완료·v6 컷오버.)
 }

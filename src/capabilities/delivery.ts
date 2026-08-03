@@ -17,6 +17,7 @@ import { tokensReadCapabilities, tokenMintCapabilities, deviceAuthCapabilities, 
 import { connectorsReadCapabilities, connectorsCapabilities, connectorMembersCapabilities } from "./delivery/connectors.js";
 import { collectorsReadCapabilities, collectorsCapabilities } from "./delivery/collectors.js"; // #1419 T1 — 수집기 n개 축
 import { classifiersCapabilities } from "./delivery/classifiers.js"; // #1419 T4 — 분류기 n개 축
+import { managersCapabilities } from "./delivery/managers.js"; // #1419 T5 — 관리기 4종 + 발견 큐
 import { meProfileCapabilities, meSelfCapabilities } from "./delivery/me-self.js";
 import { gitCredentialCapabilities } from "./delivery/git-credentials.js";
 import { runtimeConfigCapabilities } from "./delivery/runtime-config.js";
@@ -56,6 +57,7 @@ export const deliveryCapabilities: Capability[] = [
   ...collectorsCapabilities,
   ...ingestDistillersCapabilities,
   ...classifiersCapabilities,
+  ...managersCapabilities,
   ...connectorMembersCapabilities,
   ...hooksCapabilities,
   ...toolsCapabilities,

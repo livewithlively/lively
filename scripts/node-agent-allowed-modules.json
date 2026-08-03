@@ -39,6 +39,7 @@
  "dist/org/store/harness-assets.js",
  "dist/org/store/hooks.js",
  "dist/org/store/ingest.js",
+ "dist/org/store/managers.js",
  "dist/org/store/mcp-servers.js",
  "dist/org/store/members.js",
  "dist/org/store/profile.js",

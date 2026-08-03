@@ -1167,6 +1167,76 @@
   "input_hash": "2aa5d51896628e35"
  },
  {
+  "name": "org_manager_list",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/managers"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_manager_upsert",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/managers"
+  ],
+  "input_hash": "01b7bed06326289a"
+ },
+ {
+  "name": "org_manager_run",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/managers/run"
+  ],
+  "input_hash": "8280322bfa676096"
+ },
+ {
+  "name": "org_manager_findings",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/manager-findings"
+  ],
+  "input_hash": "847a88aaac11e5b2"
+ },
+ {
+  "name": "org_manager_finding_resolve",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/manager-findings/:id/resolve"
+  ],
+  "input_hash": "ae82583fc4be8620"
+ },
+ {
+  "name": "org_manager_finding_report",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/manager-findings"
+  ],
+  "input_hash": "b6787edc57665d13"
+ },
+ {
+  "name": "org_manager_remove",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/managers/remove"
+  ],
+  "input_hash": "4dc36ab67eecb455"
+ },
+ {
   "name": "org_connector_members",
   "scope": "admin",
   "mcp": true,

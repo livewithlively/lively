@@ -223,6 +223,103 @@ export async function initClassifierRegistry(pool: Pool): Promise<void> {
   `);
 }
 
+export async function initManagerRegistry(pool: Pool): Promise<void> {
+  // ── org_manager — **관리기**(#1419 T5). 파이프라인의 마지막 단계: 쌓인 지식을 계속 옳게 유지한다. ──
+  //  요구 원문: "자동으로 분류 어긋남 보정 및 지식 아웃데이티드 및 지식 간 모순, 지식-코드 간 비교 등
+  //   관리기 라는 개념도 일급화해서 여기서 관리하게."
+  //
+  //  수집·증류·분류가 **만드는** 단계라면 관리는 **썩지 않게 하는** 단계다. 지금까지 이 일은 흩어져 있었다 —
+  //   분류 어긋남은 분류체계 탭의 읽기전용 배지, 코드 괴리는 eval_domain_debt 크론, 나머지 둘은 아예 없었다.
+  //   배지는 세기만 하고 고치지 않았고, 크론은 화면이 없어 무슨 일이 있었는지 볼 수 없었다.
+  //
+  //  4종(kind) — **판정 방식이 둘로 갈린다.** 이 구분이 설계의 핵심이다:
+  //   · mismatch(분류 어긋남) · outdated(아웃데이티드) → **결정적 SQL**. LLM 없이 즉시·무료로 돈다.
+  //     이미 있는 재료를 쓴다(정의 벡터 거리 · 자료 갱신시각). 매 주기 전수 판정해도 부담이 없다.
+  //   · contradiction(지식 간 모순) · code_drift(지식↔코드) → **2단**. SQL 로 후보를 좁히고 LLM 이 판정한다.
+  //     "이 둘이 실제로 상충하나", "이 정의와 저 코드가 어긋나나"는 의미 판단이라 SQL 로는 못 낸다.
+  //     후보 좁히기를 안 하면 전 지식 쌍(n²)을 LLM 에 먹이게 된다 — 증류에서 이미 배운 비용 구조다(#1289).
+  //
+  //  action_level — 관리기가 발견한 뒤 **어디까지 하나**:
+  //   · report(기본) = 목록에 쌓기만 · propose = 조치안을 만들어 사람 승인 대기 · auto = 즉시 적용
+  //   기본이 report 인 이유: 관리기는 '이미 사람이 정리해 둔 것'을 건드리므로, 오탐 한 번의 반경이 크다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_manager(
+      id BIGSERIAL PRIMARY KEY,
+      key   TEXT NOT NULL,
+      label TEXT,
+      kind  TEXT NOT NULL,
+      enabled  BOOLEAN NOT NULL DEFAULT false,
+      priority INT NOT NULL DEFAULT 0,
+      -- ① 스코프: 무엇을 검사하나
+      match_spaces     TEXT[],
+      match_categories TEXT[],
+      match_types      TEXT[],
+      match_provenance TEXT,
+      exclude_names    TEXT[],
+      lookback_days    INT,
+      -- ② 민감도: 무엇을 '문제'로 볼 것인가 (kind 마다 의미가 다르다 — 화면이 kind 별 라벨을 붙인다)
+      --   mismatch: 정의 거리 마진(기본 0.1) · outdated: 자료가 지식보다 며칠 앞서면(기본 30)
+      --   contradiction: 후보로 볼 의미 유사도(기본 0.85) · code_drift: 미사용
+      threshold REAL,
+      stale_days INT,
+      -- ③ 조치
+      action_level TEXT NOT NULL DEFAULT 'report',
+      criteria_md TEXT,
+      -- ④ 실행(LLM 판정이 필요한 kind 만 씀)
+      batch_size INT NOT NULL DEFAULT 20,
+      model TEXT, effort TEXT, requester TEXT,
+      -- ⑤ 관측
+      last_run_at TIMESTAMPTZ, last_status TEXT, last_summary JSONB,
+      note TEXT,
+      version INT NOT NULL DEFAULT 1,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
+    ${ensureCheck("org_manager", {
+      org_manager_kind_chk: "kind IN ('mismatch','outdated','contradiction','code_drift')",
+      org_manager_action_chk: "action_level IN ('report','propose','auto')",
+      org_manager_batch_chk: "batch_size BETWEEN 1 AND 200",
+    })}
+    CREATE UNIQUE INDEX IF NOT EXISTS org_manager_key_uq ON org_manager(key);
+    CREATE INDEX IF NOT EXISTS org_manager_enabled_idx ON org_manager(enabled, priority DESC, id);
+  `);
+
+  // ── org_manager_finding — 관리기가 낸 **발견**. 사람이 처리하는 일감 큐. ──
+  //  ⚠ 멱등이 이 테이블의 생명이다. 관리기는 주기적으로 도는데 같은 문제는 매번 다시 발견된다 —
+  //   그때마다 새 행을 만들면 큐가 같은 항목의 사본으로 뒤덮여 아무도 안 본다(그리고 '반려'가 무의미해진다).
+  //   그래서 (manager_id, target_ref, dedup_key) 유니크로 **같은 발견은 한 행**이고, 재발견은 seen_count 를
+  //   올리고 last_seen_at 만 갱신한다. 사람이 반려(rejected)한 것은 다시 열지 않는다(그 판단이 최신이다).
+  //  dedup_key = kind 별로 '같은 문제'를 정의하는 값(모순이면 상대 지식 이름 등). 단일 대상이면 빈 문자열.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_manager_finding(
+      id BIGSERIAL PRIMARY KEY,
+      manager_id BIGINT NOT NULL REFERENCES org_manager(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      target_kind TEXT NOT NULL DEFAULT 'knowledge',
+      target_ref  TEXT NOT NULL,
+      dedup_key   TEXT NOT NULL DEFAULT '',
+      severity TEXT NOT NULL DEFAULT 'note',
+      summary TEXT NOT NULL,
+      evidence TEXT,
+      proposed_action JSONB,
+      state TEXT NOT NULL DEFAULT 'open',
+      seen_count INT NOT NULL DEFAULT 1,
+      first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+      resolved_at TIMESTAMPTZ, resolved_by TEXT, resolution TEXT);
+    ${ensureCheck("org_manager_finding", {
+      org_manager_finding_state_chk: "state IN ('open','accepted','rejected','resolved')",
+      org_manager_finding_sev_chk: "severity IN ('note','warn','high')",
+    })}
+    CREATE UNIQUE INDEX IF NOT EXISTS org_manager_finding_uq
+      ON org_manager_finding(manager_id, target_ref, dedup_key);
+    CREATE INDEX IF NOT EXISTS org_manager_finding_open_idx
+      ON org_manager_finding(state, severity, last_seen_at DESC) WHERE state='open';
+    CREATE INDEX IF NOT EXISTS org_manager_finding_target_idx ON org_manager_finding(target_kind, target_ref);
+  `);
+}
+
 export async function initIngestPolicyAndDistillers(pool: Pool): Promise<void> {
   // ── org_ingest_policy — 지식 인입 허용선 정책(#638, #783 확장). 오너가 관리탭에서 조절하는 자동화 게이트. ──
   //  매치 규칙 0개면 디폴트 auto(현행 무변 — 오너가 켠 만큼만 gate). 평가 = resolveIngestPolicy(src/org/ingest/ingest-policy.ts).

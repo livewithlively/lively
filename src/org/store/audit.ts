@@ -63,7 +63,7 @@ export async function audit(
 //  before/after 는 저장 시 이미 redactDeep(시크릿 마스킹)된 스냅샷 — 조회는 admin 전용(delivery.ts org_audit_list).
 export const ADMIN_AUDIT_ENTITIES = [
   "org_member", "auth_token", "org_profile", "org_section",
-  "org_runtime_config", "org_connector", "org_collector", "org_collector_preset", "org_classifier", "org_mcp_server", "org_hook", "org_tool", "org_harness_asset", "org_asset_pref",
+  "org_runtime_config", "org_connector", "org_collector", "org_collector_preset", "org_classifier", "org_manager", "org_mcp_server", "org_hook", "org_tool", "org_harness_asset", "org_asset_pref",
   "org_db_source", "org_db_table_policy", "org_db_column_mask",
 ] as const;
 

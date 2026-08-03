@@ -80,6 +80,7 @@ async function openCronForm(job, actions, reload, tz) {
   let managedSessions: any[] | null = null;
   let distillers: any[] | null = null;   // #1289 증류기 피커 — 한 번만 받아 재사용(액션 전환 시 재요청 안 함)
   let classifiers: any[] | null = null;  // #1419 T4 분류기 피커 — 같은 캐시 규칙
+  let managers: any[] | null = null;     // #1419 T5 관리기 피커 — 같은 캐시 규칙
   async function renderParams() {
     const a = (actions || []).find((x) => x.key === actionSel.value);
     paramsWrap.replaceChildren();
@@ -112,6 +113,16 @@ async function openCronForm(job, actions, reload, tz) {
         for (const c of (classifiers || [])) inp.append(el('option', { value: c.key, text: (c.label || c.key) + (c.enabled ? '' : ' (꺼짐)') }));
         // 지워진 분류기를 가리키던 잡이 조용히 '전체'로 확대되지 않게 — 없어졌다고 말해 준다.
         if (jp[p.name] && !(classifiers || []).some((c) => c.key === jp[p.name])) {
+          inp.append(el('option', { value: jp[p.name], text: jp[p.name] + ' (등록되지 않음 — 확인 필요)' }));
+        }
+        if (jp[p.name]) inp.value = jp[p.name];
+      } else if (p.kind === 'manager') {
+        // #1419 T5 관리기 피커 — 증류기·분류기 피커와 같은 규칙.
+        inp = el('select', { style: psInputStyle });
+        inp.append(el('option', { value: '', text: '(비움 — 켜진 관리기 전체)' }));
+        if (managers == null) { try { const r = await api('/api/ui/org/managers'); managers = (r && r.managers) || []; } catch { managers = []; } }
+        for (const g of (managers || [])) inp.append(el('option', { value: g.key, text: (g.label || g.key) + ' · ' + g.kind + (g.enabled ? '' : ' (꺼짐)') }));
+        if (jp[p.name] && !(managers || []).some((g) => g.key === jp[p.name])) {
           inp.append(el('option', { value: jp[p.name], text: jp[p.name] + ' (등록되지 않음 — 확인 필요)' }));
         }
         if (jp[p.name]) inp.value = jp[p.name];
