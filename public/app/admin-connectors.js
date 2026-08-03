@@ -351,6 +351,34 @@ async function renderConnectorMemberPanel(panel, system) {
         await api('/api/ui/org/member', { method: 'POST', body: JSON.stringify({ id: m.id, identities }) });
         await loadAdmin(true); // members(identities) 최신화 — 패널 재조회 전 로컬 데이터 동기
     };
+    // 이메일이 일치하는 사람을 **한 번에** 연결(#1291 v4) — 슬랙은 사용자가 69명 규모라 하나씩 누르는 건 현실적이지
+    //  않다. 새로 연결할 것(suggested_member_id)만 고르고, 이미 연결된 사람은 건드리지 않는다.
+    //  ⚠ 저장은 반드시 postIdentities 를 태운다 — 그래야 #697 소급 재해소 훅이 함께 돌아 매핑 이전에 raw 로
+    //   굳은 미러 데이터까지 되돌려 고친다(직접 POST 하면 그게 빠진다).
+    const suggested = users.filter((r) => r.suggested_member_id && r.mapped_via !== 'identity');
+    const bulkBar = suggested.length ? (() => {
+        const btn = el('button', { class: 'btn btn-primary btn-sm', text: `이메일이 같은 ${suggested.length}명 한 번에 연결` });
+        btn.addEventListener('click', async () => {
+            if (!confirm(`이메일이 일치하는 ${suggested.length}명을 구성원과 연결할까요?\n\n연결된 사람은 그대로 두고 새로 연결할 것만 추가합니다.`))
+                return;
+            btn.disabled = true;
+            let ok = 0;
+            const failed = [];
+            for (const r of suggested) {
+                try {
+                    await postIdentities(r.suggested_member_id, r.user || {}, true);
+                    ok++;
+                }
+                catch (e) {
+                    failed.push(`${(r.user || {}).name || (r.user || {}).id}: ${e.message}`);
+                }
+            }
+            // 실패를 숨기지 않는다 — 부분 성공이면 무엇이 안 됐는지 말해야 사람이 고칠 수 있다.
+            toast(failed.length ? `${ok}명 연결 · ${failed.length}명 실패 (${failed[0]})` : `${ok}명 연결됨 — 다음 싱크부터 반영`, failed.length > 0);
+            void renderConnectorMemberPanel(panel, system);
+        });
+        return el('div', { class: 'cu-map-bulk' }, btn, el('span', { class: 'admin-hint', text: ' 이메일이 정확히 같은 사람만 대상이에요.' }));
+    })() : null;
     const tbl = el('table', { class: 'fields-table cu-map-table' });
     tbl.append(el('tr', {}, el('th', { text: label + ' 사용자' }), el('th', { text: '연결된 구성원' }), el('th', {})));
     for (const r of users) {
@@ -404,6 +432,6 @@ async function renderConnectorMemberPanel(panel, system) {
             tbl.append(el('tr', {}, userCell, el('td', {}, r.mapped_via === 'email' ? el('span', { class: 'pill', text: '이메일 자동매치' }) : null, ' ', selBox), el('td', {}, saveB)));
         }
     }
-    panel.replaceChildren(head, tbl);
+    panel.replaceChildren(head, bulkBar, tbl);
 }
 export { connectorEditor, renderConnectorMemberPanel, };

@@ -330,19 +330,22 @@ interface SearchResp extends SlackEnvelope {
 }
 
 // 모든 워크스페이스 사용자 끌어와 user id → SlackUser 맵 구성(작성자 해소 캐시).
-async function loadUserMap(token: string): Promise<Map<string, SlackUser>> {
+async function fetchUserMap(token: string): Promise<Map<string, SlackUser>> {
   const map = new Map<string, SlackUser>();
-  try {
-    for await (const u of paginate<UsersListResp, "members">("users.list", token, "members", {
-      limit: 200,
-    })) {
-      if (u?.id) map.set(u.id, u);
-    }
-  } catch (err) {
-    // 작성자 해소는 보조 — 실패해도 백필 자체는 진행(표시이름만 비게 됨).
-    console.warn(`slack users.list 실패(작성자 해소 생략): ${(err as Error).message}`);
+  for await (const u of paginate<UsersListResp, "members">("users.list", token, "members", { limit: 200 })) {
+    if (u?.id) map.set(u.id, u);
   }
   return map;
+}
+
+// 백필의 작성자 해소용 — **보조**라 실패해도 수집 자체는 진행한다(표시이름만 비게 됨).
+async function loadUserMap(token: string): Promise<Map<string, SlackUser>> {
+  try {
+    return await fetchUserMap(token);
+  } catch (err) {
+    console.warn(`slack users.list 실패(작성자 해소 생략): ${(err as Error).message}`);
+    return new Map();
+  }
 }
 
 // auth.test 로 team 식별자/딥링크 도메인 확보. instance = team_id 우선.
@@ -704,7 +707,17 @@ export const slackConnector: Connector = {
     const cfg = await resolveConnectorConfig("slack");
     const token = cfg.user_token;
     if (!token) throw new Error("Slack user_token 이 없습니다 — [외부 자료 수집]에서 토큰을 등록하세요");
-    const map = await loadUserMap(token);
+    // ⚠ 여기선 실패를 **삼키지 않는다**. 멤버 매핑 화면의 주역이라, 빈 맵을 돌려주면 화면이 "사용자 0명"으로
+    //  보여 원인을 못 찾는다(어니스트에서 실제로 그랬다 — 슬랙 매핑 0명의 정체가 이 조용한 실패였다).
+    //  users.list 는 `users:read`(+이메일까지 받으려면 `users:read.email`) 스코프가 필요하다.
+    let map: Map<string, SlackUser>;
+    try { map = await fetchUserMap(token); }
+    catch (err) {
+      const m = (err as Error).message ?? String(err);
+      throw new Error(/missing_scope|not_allowed|invalid_auth/i.test(m)
+        ? `Slack 사용자 목록 권한이 없습니다(${m}) — 토큰에 users:read 와 users:read.email 스코프를 추가하고 재발급하세요. 이메일이 없으면 구성원 자동 매칭이 불가능합니다.`
+        : `Slack 사용자 목록을 불러오지 못했습니다: ${m}`);
+    }
     return [...map.values()]
       .filter((u) => !u.is_bot)
       .map((u) => ({
