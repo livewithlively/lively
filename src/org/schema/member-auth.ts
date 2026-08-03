@@ -1,6 +1,6 @@
 // org 스키마 조각 — member-auth: 사람/멤버 자격 축. member_credential(로컬 로그인)·member_secret(자격 vault)·
 //  member_channel_policy/meta(대화 열람·발송 통제)·web_session(웹 세션)·git_credential(git 자격)·
-//  pending_device_auth(CLI 디바이스 로그인) + 멤버 이메일 유일성 인덱스.
+//  pending_device_auth(CLI 디바이스 로그인)·pending_session_mint(세션 SSO 브리지) + 멤버 이메일 유일성 인덱스.
 // #1313 R19b: 구 단일 initOrgSchema(org/schema.ts, ~1,500줄)에서 **verbatim 이동**한 조각 — DDL·시드 SQL 무변경.
 //  실행(await) 순서는 org/schema.ts 오케스트레이터가 소유한다(분할 전 시퀀스 그대로 — SCHEMA_SQL_LOG
 //  스냅샷 diff 0 이 계약, scripts/schema-init.itest.mjs 헤더 참조). 블록을 옮기려면 그 증명을 다시 떠라.
@@ -177,4 +177,20 @@ export async function initMemberAuth(pool: Pool): Promise<void> {
   await softUniqueIndex(pool,
     `CREATE UNIQUE INDEX IF NOT EXISTS pending_device_user_code_idx ON pending_device_auth(user_code) WHERE status='pending'`,
     "[org schema] pending_device_auth user_code 유니크 인덱스 보류");
+
+  // ── pending_session_mint — 컨트롤플레인 → 테넌트 세션 SSO 브리지(#1454 S1). 관리자(컨트롤플레인)가
+  //  org_session_mint 로 1회용 코드를 발급하고, 사용자의 브라우저가 GET /api/ui/session/exchange?code= 로
+  //  교환해 웹 세션 쿠키를 받는다(자동 로그인). pending_device_auth 와 동형 관례: 평문 코드는 저장하지 않고
+  //  sha256 만(code_hash PK), TTL 60초(도메인 간 리다이렉트 한 홉이면 충분 — 길수록 코드 유출 창만 넓어진다),
+  //  used_at 으로 1회성 강제(교환은 원자적 UPDATE … WHERE used_at IS NULL). GC 는 교환 시 lazy delete(만료분).
+  //  셀프호스트 무해: 테이블만 생기고 발급 창구(org_session_mint, admin scope)를 쓰지 않으면 영원히 빈 표다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pending_session_mint(
+      code_hash TEXT PRIMARY KEY,
+      member_id TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ,
+      created_by TEXT);
+  `);
 }

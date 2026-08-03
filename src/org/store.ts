@@ -43,14 +43,17 @@ export {
 } from "./store/tokens.js";
 export type { TokenMeta } from "./store/tokens.js";
 
+// ── pending_session_mint(세션 SSO 브리지 #1454 S1 — 1회용 코드 발급·교환) ──
+export { mintSessionCode, exchangeSessionCode, SESSION_MINT_TTL_MS } from "./store/session-mint.js";
+
 // ── org_runtime_config(런타임 설정 단일행 + 정책 seam 출처 판정) ──
 export {
   HOOK_RELAY_DECISIONS, DEFAULT_HOOK_RELAY_DECISIONS,
-  getRuntimeConfig, updateRuntimeConfig,
+  getRuntimeConfig, updateRuntimeConfig, getUiSurface,
   getEmbeddingConfigSource, getStoragePolicySource, getCallLogPolicySource,
   getSessionMemoryPolicySource, getSessionReclaimPolicySource, getDelegatePolicySource,
 } from "./store/runtime-config.js";
-export type { OrgRuntimeConfig, HookRelayDecision } from "./store/runtime-config.js";
+export type { OrgRuntimeConfig, HookRelayDecision, UiNavConfig, UiAnnouncement, UiProfile, UiSurfaceConfig } from "./store/runtime-config.js";
 
 // ── org_mcp_server(MCP 서버 레지스트리 + 프록시 스냅샷) ──
 export {

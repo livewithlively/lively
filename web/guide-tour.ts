@@ -5,7 +5,7 @@
 //  장면 전환 자체가 '실제 상단 탭을 직접 누르기'라, 투어가 끝나면 이동법이 몸에 남는다.
 //  막다른 길 0 원칙: 단계 목록은 장면 시작 시점의 실제 DOM 을 보고 만든다(build) — 행/노드가 없으면 그 단계를
 //  빼고, 예상 밖 화면으로 가면(딤 밖은 안 눌리므로 피크 [전체 화면]·뒤로가기 정도) 플랜을 조용히 접는다.
-import { el, toast } from './core.js';
+import { el, navOn, toast } from './core.js';
 import { isTourActive, startTour } from './tour.js';
 
 const PLAN_KEY = 'lively_gtour_plan_v1'; // sessionStorage — 진행 중 플랜(새로고침에도 이어짐, 탭 단위)
@@ -416,11 +416,22 @@ async function waitFor(fn: () => any, ms: number) {
   }
 }
 
+// ui_nav 게이팅(#1454 S2) — 씬의 탭이 꺼져 있으면 그 씬은 플랜에서 뺀다. 씬 전환이 '실제 상단 탭 누르기'라
+//  숨은 탭의 씬을 남기면 navStep 이 hidden 링크를 스포트라이트하는 막다른 길이 된다.
+//  씬 tab → 상단 탭(data-tab) 매핑: 'categories'(구 도메인 맵 씬)는 #/categories 가 #/context 로 리다이렉트되므로
+//  context 탭을 따른다. 목록에 없는 tab 은 그대로 navOn 에 묻는다(모르는 값 = 켜짐 — navOn 의 기본 규약).
+const NAV_TAB_OF: any = { categories: 'context', domainmap: 'context' };
+function sceneNavOn(key: string): boolean {
+  const sc = sceneByKey(key);
+  if (!sc) return true; // 정의 없는 씬 키(구 플랜 잔재)는 종전처럼 보존 — resume 스캔이 어차피 건너뛴다
+  return navOn(NAV_TAB_OF[sc.tab] || sc.tab);
+}
+
 // ── 시작(랜딩 버튼) — 플랜 저장 후 첫 스텝(첫 코스의 상단 탭 스포트라이트)만 즉시 띄운다. ──
 //  이후 진행은 사용자의 실제 탭 클릭 → 라우팅 → resumeGuideTour 가 이어받는다.
 function startGuideTour(courseKeys?: string[]) {
   const courses = courseKeys && courseKeys.length ? COURSES.filter((c) => courseKeys.includes(c.key)) : COURSES;
-  const keys = courses.flatMap((c) => c.scenes);
+  const keys = courses.flatMap((c) => c.scenes).filter(sceneNavOn); // 꺼진 탭 씬 스킵(#1454 S2 — ui_nav {} 면 전부 통과)
   if (!keys.length) return;
   savePlan({ v: 1, keys, i: -1, courses: courses.map((c) => c.key) });
   const first = sceneByKey(keys[0]);

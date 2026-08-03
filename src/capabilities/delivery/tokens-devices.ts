@@ -1,10 +1,11 @@
-// delivery ▸ tokens-devices — 접속 열쇠(auth_token) 목록·발급·회수 + CLI 디바이스 로그인 승인(#880).
-import type { Capability } from "../types.js";
+// delivery ▸ tokens-devices — 접속 열쇠(auth_token) 목록·발급·회수 + CLI 디바이스 로그인 승인(#880)
+//  + 세션 SSO 브리지 코드 발급(#1454 S1).
+import type { Capability, CapabilityCtx } from "../types.js";
 import { z } from "zod";
 import { HttpError } from "../rest-util.js";
 import { SCOPES_ALLOWED, DANGEROUS_SCOPES, type Scope } from "../scopes.js";
 import type { LivelyUser } from "../../context.js";
-import { getMember, mintToken, listTokens, revokeToken } from "../../org/store.js";
+import { getMember, mintToken, listTokens, revokeToken, mintSessionCode } from "../../org/store.js";
 import { hasCredential, verifyOwnPassword } from "../../auth/local-accounts.js";
 import { lookupDeviceAuth, approveDeviceAuth, denyDeviceAuth, checkDeviceRate } from "../../org/auth/device-auth.js";
 import { actorOf, restOnly, restRead, slug, str } from "./shared.js";
@@ -44,6 +45,34 @@ export const tokenMintCapabilities: Capability[] = [
       scopes: z.array(z.string()).optional().describe("토큰 scope(생략 시 멤버 scope): items|context|memory|db|code|admin|runtime"),
       label: z.string().optional().describe("토큰 라벨(용도 메모)"),
     }),
+
+  // ── 세션 SSO 브리지 코드 발급(#1454 S1) — 컨트롤플레인이 테넌트 자동 로그인용 1회용 코드를 만든다. ──
+  //  브라우저가 GET /api/ui/session/exchange?code= 로 교환하면 그 멤버의 웹 세션 쿠키가 심긴다(web.ts).
+  //  org_token_mint 와 같은 성격의 자격 발급이라 여기 동거하되, **MCP 로는 열지 않는다**(mcp:false) —
+  //  이 창구의 소비자는 컨트롤플레인 서버(REST)뿐이고, 에이전트가 임의 멤버의 로그인 코드를 뽑을 이유가 없다.
+  //  (scope=admin + web.ts B5 게이트가 정적 토큰을 거부하므로 회수 가능한 자격으로만 발급된다.)
+  {
+    name: "org_session_mint",
+    title: "구성원 세션 코드 발급",
+    description:
+      "구성원의 웹 자동 로그인용 1회용 코드를 발급한다(평문은 이 응답에서만 — 저장은 sha256). TTL 60초·1회용. " +
+      "브라우저를 GET /api/ui/session/exchange?code=<code> 로 보내면 세션 쿠키를 심고 /ui/ 로 리다이렉트한다.",
+    scope: "admin",
+    // #1403 input 규약 — mcp:false 여도 parse 산출(memberId)을 선언한다(device_lookup 과 동일 관례).
+    input: { memberId: z.string().describe("세션을 만들 대상 멤버 id(kind=human·active 만)") },
+    expose: { mcp: false, rest: [{ method: "POST", paths: ["/api/ui/org/session-mint"], parse: (req) => req.body ?? {} }] },
+    handler: async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
+      const memberId = slug(input.memberId, "memberId");
+      // 대상 검증 — 세션은 사람 본인 행위(auth/sessions.ts)라 human·active 에게만 발급한다.
+      //  agent/system 멤버의 웹 세션은 존재 자체가 버그고, 비활성 멤버는 교환 시점에도 다시 걸러진다(이중 방어).
+      const mem = await getMember(memberId);
+      if (!mem) throw new HttpError(404, `구성원을 찾을 수 없습니다: ${memberId}`);
+      if (mem.kind !== "human") throw new HttpError(400, "세션 코드는 kind=human 구성원에게만 발급할 수 있습니다");
+      if (mem.state !== "active") throw new HttpError(400, "비활성 구성원에게는 세션 코드를 발급할 수 없습니다");
+      const { code, expiresAt } = await mintSessionCode(memberId, actorOf(user), ctx?.source ?? "web");
+      return { code, memberId, expires_at: expiresAt.toISOString() }; // 평문 code 는 이 응답에서만
+    },
+  },
 
   // ── 본인 토큰 자가발급(설치 탭) — 인증된 구성원이 자기 토큰을 만든다. admin 불요. ──
   // userId 는 principal 에서 강제(타인 발급 불가), scope 는 본인 member.scopes(없으면 현재 scope) — 상승 불가.
