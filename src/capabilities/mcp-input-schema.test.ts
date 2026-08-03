@@ -39,12 +39,25 @@
 //       ⚠ 검증에 걸려 throw 한 시도는 버린다: 관측된 키만 근거로 삼으므로 **오탐 0**, 못 태운 분기는 조용히
 //        통과(fail-open·미탐 허용). mcp:false 는 애초에 대상 밖이다 — isToolExposed 가 org_tool override 로도
 //        못 켜게 fail-closed 로 막아 zod strip 경로 자체가 없다(그래서 그쪽 input:{} 는 부채가 아니라 정상).
+//   R5) heavy payload 툴(대형 본문을 받는 툴)의 **짧은 메타 필드에 zod 하드 상한**이 걸려 있다 → 그 한 필드의
+//       초과가 같은 호출에 실린 본문 전체를 무효로 만든다. R3 와 같은 판(SDK 가 핸들러 앞에서 거부)인데
+//       무효화되는 게 '그 필드'가 아니라 **호출 전체**여서 대가가 다르다: knowledge_save 는 body_md 를
+//       200,000자(≈50k 토큰)까지 받는데 title 200자 초과 하나로 그 본문이 통째로 버려지고, 호출자는 같은
+//       본문을 다시 실어 재시도한다. 게다가 그 실패는 registerTool wrap(server.ts instrument) **앞**에서
+//       터지므로 mcp_call_log 에 흔적이 없다 — 사람은 반복 실패를 체감하는데 서버는 모르는 실패다(#1442).
+//       그래서 heavy 툴의 짧은 문자열 필드는 **분류가 선언돼 있어야** 한다(soft-cap.ts):
+//        · SOFT_CAPS — 상한을 zod 에서 떼고 핸들러가 조정(clamp/drop/note) + 응답 capped 로 보고.
+//        · HARD_CAP_OK — 기계값(해시·경로·ISO 시각·외부 좌표)이라 자르면 뜻이 깨지므로 거부가 맞다는 판단.
+//       R5a 선언된 소프트캡 필드에 zod max 가 (되)붙었다 = 선언만 남고 효력이 사라진 회귀.
+//       R5b heavy 툴에 분류 없는 하드캡 짧은 필드가 있다 = 새 필드를 넣을 때 사람이 판단하도록 강제.
+//       R5c 선언된 필드가 스키마에 없다 = rename·삭제 뒤 남은 죽은 선언(표가 거짓이 된다).
 //  핸들러의 수동검증은 방어심층으로 유지 — 스키마의 목적은 *하네스가 무엇을 보낼지 알게* 하는 것.
 //  입력을 안 쓰는 capability(파라미터 없음 / `_input` 미사용)는 빈 input 이 정상 — 예외목록 불요.
 import assert from "node:assert/strict";
 import { z } from "zod";
 import { registry } from "./index.js";
 import type { Capability, RestMount } from "./types.js";
+import { SOFT_CAPS, HARD_CAP_OK, HEAVY_PAYLOAD_CHARS } from "./soft-cap.js";
 
 /** 소스 위생 — 주석은 항상 제거(문자열 안의 '//' 는 보존해야 하므로 문자열 인식이 필요).
  *  keepStrings=false 면 문자열 내용도 지운다: '식별자 사용' 판정이 주석("// input 검증")·문자열("input 오류")에 오탐하지 않게.
@@ -179,6 +192,33 @@ export function parseEmittedKeys(cap: Capability, rounds = 10): string[] {
   return [...keys];
 }
 
+/** R5 표본 — zod 타입이 문자열이면 그 상한을, 아니면 null. max 없는 문자열은 `{ max: null }`(= 하드 상한 없음).
+ *  optional/nullable/default/effects 래핑은 sampleOf 와 같은 규율로 벗긴다(선언 순서에 판정이 흔들리지 않게). */
+export function stringCap(zt: unknown): { max: number | null } | null {
+  let def = (zt as { _def?: Record<string, unknown> } | null | undefined)?._def;
+  while (def && ["ZodOptional", "ZodNullable", "ZodDefault", "ZodEffects"].includes(def.typeName as string)) {
+    def = ((def.innerType ?? def.schema) as { _def?: Record<string, unknown> } | undefined)?._def;
+  }
+  if (def?.typeName !== "ZodString") return null;
+  const max = ((def.checks ?? []) as Array<{ kind: string; value?: number }>).find((c) => c.kind === "max");
+  return { max: typeof max?.value === "number" ? max.value : null };
+}
+
+/** R5c 의 툴 단위 판 — 선언 표(soft-cap.ts)의 **툴 이름**이 드리프트하면(툴 rename·삭제) 그 표는 아무 필드도
+ *  지키지 못하고 조용히 무효가 된다. capability 순회로는 볼 수 없는 자리다(없는 이름은 순회에 안 나온다). */
+export function declaredToolDrift(existing: readonly string[]): string[] {
+  const have = new Set(existing);
+  const out: string[] = [];
+  for (const [label, table] of [["SOFT_CAPS", SOFT_CAPS], ["HARD_CAP_OK", HARD_CAP_OK]] as const) {
+    for (const tool of Object.keys(table)) {
+      if (!have.has(tool)) {
+        out.push(`R5c ${tool} — soft-cap.ts ${label} 에 선언됐는데 그 이름의 capability 가 없다(툴 rename·삭제 뒤 남은 죽은 선언)`);
+      }
+    }
+  }
+  return out;
+}
+
 /** 스키마가 이 필드의 **누락**(키 부재)을 받아주는가 = z.object 가 거부 안 하는가(MCP 호출자가 뺄 수 있는가).
  *  .optional()/.default() → true · required → false · .nullable() 단독(=required-nullable, null 은 되나
  *  누락은 거부) → false · .nullable().optional() → true. zod isOptional() 을 단일 진실원천으로 신뢰. */
@@ -189,7 +229,11 @@ function mcpOptional(zt: unknown): boolean {
 
 /** 한 capability 의 R1/R2/R3 위반 메시지(없으면 []). 메인 루프와 합성-capability 회귀테스트가 **같은 배선**을 공유한다
  *  — 회귀는 이 함수 하나에 고정되고(#970 event 부류), 루프는 registry 순회만 한다. */
-export function checkCapability(cap: Capability): string[] {
+//  tables — R5 의 선언 표를 주입(자기검증 전용). 미지정이면 실제 soft-cap.ts 표를 cap.name 으로 찾는다(본 검사 경로).
+export function checkCapability(
+  cap: Capability,
+  tables?: { soft?: Readonly<Record<string, { limit: number }>>; hardOk?: readonly string[] },
+): string[] {
   const declared = new Set(Object.keys(cap.input ?? {}));
   const { uses, fields } = inputUsage(cap.handler);
   const out: string[] = [];
@@ -215,6 +259,37 @@ export function checkCapability(cap: Capability): string[] {
   // R4 — 어댑터(REST parse)가 **싣는** 키 기준. 핸들러 쪽 신호(R2)가 없는 읽기 방식이어도 여기서 잡힌다.
   //  ⚠ mcp:false 도 검사한다(#1403): input 은 expose.mcp 와 무관하게 parse 산출을 선언하는 게 규약이고
   //   (types.ts), 어긋난 채로 mcp:true 로 여는 순간 그 필드가 조용히 strip 되기 때문이다.
+  // R5 — #1442 소프트캡 정합. 대상은 **스키마 자체**(핸들러 소스가 아니다)라 mcp:false 여부와 무관하게 검사한다:
+  //  REST 경로는 zod 를 안 타므로 지금은 무해하지만, 같은 스키마를 mcp:true 로 여는 순간 하드 리젝트가 산다.
+  const strFields = Object.entries(cap.input ?? {})
+    .map(([f, zt]) => [f, stringCap(zt)] as const)
+    .filter((e): e is readonly [string, { max: number | null }] => e[1] !== null);
+  const soft = tables?.soft ?? SOFT_CAPS[cap.name] ?? {};
+  const hardOk = new Set(tables?.hardOk ?? HARD_CAP_OK[cap.name] ?? []);
+  // R5a/R5c — 선언(soft-cap.ts 표)과 스키마의 정합. 선언한 쪽이 거짓이 되는 두 방향을 각각 본다.
+  for (const [f, spec] of Object.entries(soft)) {
+    const found = strFields.find(([k]) => k === f)?.[1];
+    if (!found) {
+      out.push(`R5c ${cap.name} — SOFT_CAPS 에 선언된 ${f} 가 스키마에 문자열 필드로 없다(rename·삭제 뒤 남은 죽은 선언 — 표가 거짓이 된다)`);
+      continue;
+    }
+    if (found.max !== null) {
+      out.push(`R5a ${cap.name} — 소프트캡 필드 ${f} 에 zod .max(${found.max}) 가 붙어 있다(선언만 남고 효력 소멸: SDK 가 핸들러 앞에서 거부해 본문 전체가 함께 튕긴다 — ${spec.limit}자 상한은 describe+applySoftCaps 로만)`);
+    }
+  }
+  for (const f of hardOk) {
+    if (!strFields.some(([k]) => k === f)) {
+      out.push(`R5c ${cap.name} — HARD_CAP_OK 에 선언된 ${f} 가 스키마에 문자열 필드로 없다(죽은 선언)`);
+    }
+  }
+  // R5b — heavy 툴(대형 본문을 받는 툴)의 짧은 하드캡 필드는 분류 선언이 있어야 한다.
+  if (strFields.some(([, c]) => c.max !== null && c.max >= HEAVY_PAYLOAD_CHARS)) {
+    for (const [f, c] of strFields) {
+      if (c.max === null || c.max >= HEAVY_PAYLOAD_CHARS) continue;   // 상한 없음 / 본문급 필드는 대상 밖
+      if (f in soft || hardOk.has(f)) continue;                       // 이미 분류됨
+      out.push(`R5b ${cap.name} — heavy payload 툴인데 ${f}=max(${c.max}) 가 분류되지 않았다(이 한 필드의 초과가 본문 전체를 튕기고 그 실패는 mcp_call_log 에도 안 남는다) → soft-cap.ts 의 SOFT_CAPS(조정) 또는 HARD_CAP_OK(기계값이라 거부가 맞다)에 선언하라`);
+    }
+  }
   const emitted = parseEmittedKeys(cap).filter((f) => !declared.has(f));
   if (emitted.length) {
     const impact = cap.expose.mcp
@@ -228,6 +303,7 @@ export function checkCapability(cap: Capability): string[] {
 // ── 본 검사 — 레지스트리(= MCP 어댑터가 실제로 등록하는 그 객체들)를 그대로 순회 ──
 const offenders: string[] = [];
 for (const cap of registry.values()) offenders.push(...checkCapability(cap));
+offenders.push(...declaredToolDrift([...registry.values()].map((c) => c.name)));
 assert.equal(offenders.length, 0,
   `#923 — MCP 로 호출 불가/부분불통인 capability ${offenders.length}종:\n` +
   offenders.map((o) => "    " + o).join("\n") +
@@ -235,7 +311,10 @@ assert.equal(offenders.length, 0,
   "\n    zod 는 미선언 키를 strip 하므로 빠뜨린 필드는 계속 하네스에서 안 보인다). 입력을 안 쓰는 핸들러면 파라미터를 지우거나 `_input` 으로 표시하라." +
   "\n  → R3: 핸들러가 생략을 보존(preserve)으로 지원하면 스키마 필드에 .optional() 을 붙여라(안 붙이면 SDK 가 누락을 먼저 거부해 MCP 로 부분수정 불가)." +
   "\n  → R4: REST mount.parse 가 싣는 키를 input 스키마에도 선언하라. 그 필드가 REST 전용이 맞다면 parse 에서 빼라 —" +
-  "\n    둘 중 하나를 하지 않으면 description 의 restEquivHint('REST body = 이 입력 스키마와 동일 필드')가 거짓이 된다.");
+  "\n    둘 중 하나를 하지 않으면 description 의 restEquivHint('REST body = 이 입력 스키마와 동일 필드')가 거짓이 된다." +
+  "\n  → R5(#1442): heavy payload 툴의 짧은 문자열 필드는 zod .max() 로 막지 말고 soft-cap.ts 에 분류를 선언하라 —" +
+  "\n    SOFT_CAPS(핸들러가 조정 + 응답 capped 로 보고) 또는 HARD_CAP_OK(기계값이라 거부가 맞다는 판단, 이유를 주석으로)." +
+  "\n    하드 상한을 두면 그 한 필드 때문에 본문 전체가 튕기고(SDK 는 핸들러 앞에서 검증) 그 실패는 mcp_call_log 에도 안 남는다.");
 
 // ── 자기검증 — 가드가 '무력화'되지 않았음을 known-bad 로 증명(#923 이전엔 35종이 다 통과했었다) ──
 let pass = 0;
@@ -500,6 +579,94 @@ t("R4 (13) 선택지가 라운드보다 많아 미도달 분기가 남아도 통
     (req) => (String(req.body?.pick) === "a11" ? { id: 1, pick: "a11", rare: 1 } : { id: 1, pick: "a0" }),
   );
   assert.deepEqual(checkCapability(cap), []);
+});
+
+// ── R5(#1442 소프트캡 정합) 자기검증 — 사양(spec) C 표 전수. 선언 표를 **주입**해(tables) 합성 cap 으로
+//  known-bad 를 만든다: 실제 SOFT_CAPS 를 건드리지 않고 '가드가 red 를 낼 수 있는가'를 증명하고, 그 반대편
+//  green 을 대칭으로 고정한다(복원 대칭이 없으면 red 만 보고 '고쳤다'고 착각할 수 있다). ──
+const capOf = (input: z.ZodRawShape): Capability => ({
+  name: "synthetic_soft_cap", title: "t", description: "d", scope: null, input,
+  expose: { mcp: true, rest: false },
+  handler: ((i: Record<string, unknown>) => ({ ok: i.body_md })) as unknown as Capability["handler"],
+});
+const r5 = (input: z.ZodRawShape, tables?: Parameters<typeof checkCapability>[1]): string[] =>
+  checkCapability(capOf(input), tables).filter((m) => m.startsWith("R5"));
+const HEAVY_BODY = z.string().max(200_000);
+
+t("R5 C1 known-bad: heavy 본문 + 분류 없는 짧은 하드캡 필드 → red", () => {
+  const found = r5({ body_md: HEAVY_BODY, title: z.string().max(200).optional() });
+  assert.equal(found.length, 1);
+  assert.match(found[0], /^R5b synthetic_soft_cap\b/);
+  assert.match(found[0], /title=max\(200\)/);
+});
+t("R5 C2 (복원 대칭) 그 필드를 '의도적 거부'로 분류하면 green", () => {
+  assert.deepEqual(r5({ body_md: HEAVY_BODY, title: z.string().max(200).optional() }, { hardOk: ["title"] }), []);
+});
+t("R5 C3 (복원 대칭) 하드 상한을 떼고 '조정'으로 분류하면 green — #1442 의 목표 형태", () => {
+  assert.deepEqual(r5({ body_md: HEAVY_BODY, title: z.string().optional() }, { soft: { title: { limit: 200 } } }), []);
+});
+t("R5 C4: heavy 필드가 없는 툴은 대상 밖 — 재전송 비용이 없는 자리는 건드리지 않는다", () => {
+  assert.deepEqual(r5({ description: z.string().max(4_000), title: z.string().max(200).optional() }), []);
+});
+t("R5 C5 경계: 본문 필드가 임계 미만이면 heavy 가 아니다", () => {
+  assert.deepEqual(r5({ body_md: z.string().max(HEAVY_PAYLOAD_CHARS - 1), title: z.string().max(200).optional() }), []);
+});
+t("R5 C6 경계: 본문 필드가 임계와 같으면 heavy 다", () => {
+  assert.equal(r5({ body_md: z.string().max(HEAVY_PAYLOAD_CHARS), title: z.string().max(200).optional() }).length, 1);
+});
+t("R5 C7: 상한 없는 짧은 필드는 위반이 아니다(하드 리젝트를 만들지 않으므로)", () => {
+  assert.deepEqual(r5({ body_md: HEAVY_BODY, note: z.string().optional() }), []);
+});
+t("R5 C8: 문자열이 아닌 필드는 대상 밖(숫자·열거·불리언)", () => {
+  assert.deepEqual(r5({ body_md: HEAVY_BODY, n: z.number().int(), e: z.enum(["a", "b"]), b: z.boolean() }), []);
+});
+t("R5 C9 known-bad: '조정' 선언 필드에 하드 상한이 (되)붙으면 red — 선언만 남고 효력 소멸", () => {
+  const found = r5({ body_md: HEAVY_BODY, title: z.string().max(200).optional() }, { soft: { title: { limit: 200 } } });
+  assert.equal(found.length, 1);
+  assert.match(found[0], /^R5a synthetic_soft_cap\b/);
+  assert.match(found[0], /\.max\(200\)/);
+});
+t("R5 C10: 래핑(선택·널·기본값) 안쪽의 상한도 찾아낸다 — 선언 순서로 가드를 피할 수 없다", () => {
+  for (const zt of [z.string().max(200).nullable().optional(), z.string().max(200).default("x"), z.string().max(200).nullable()]) {
+    assert.equal(r5({ body_md: HEAVY_BODY, title: zt }, { soft: { title: { limit: 200 } } }).length, 1);
+  }
+});
+t("R5 C11 known-bad: '조정' 선언 필드가 스키마에 없으면 red(rename·삭제 뒤 남은 죽은 선언)", () => {
+  const found = r5({ body_md: HEAVY_BODY }, { soft: { headline: { limit: 200 } } });
+  assert.equal(found.length, 1);
+  assert.match(found[0], /^R5c synthetic_soft_cap\b/);
+  assert.match(found[0], /headline/);
+});
+t("R5 C12 known-bad: '의도적 거부' 쪽 죽은 선언도 잡는다", () => {
+  const found = r5({ body_md: HEAVY_BODY }, { hardOk: ["gone_field"] });
+  assert.equal(found.length, 1);
+  assert.match(found[0], /^R5c /);
+  assert.match(found[0], /gone_field/);
+});
+t("R5 C13: 선언된 이름이 문자열 아닌 필드면 죽은 선언으로 본다(문자열 상한은 문자열에만 의미가 있다)", () => {
+  assert.match(r5({ body_md: HEAVY_BODY, n: z.number() }, { soft: { n: { limit: 200 } } })[0], /^R5c /);
+});
+t("R5 C14 실배선(회귀): 실제 knowledge_save 는 R5 위반 0이고 다섯 필드에 하드 상한이 없다 — #1442 재발 시 red", () => {
+  const cap = [...registry.values()].find((c) => c.name === "knowledge_save");
+  assert.ok(cap, "knowledge_save capability 가 있어야 한다");
+  assert.deepEqual(checkCapability(cap!).filter((m) => m.startsWith("R5")), []);
+  for (const f of ["title", "name", "supersedes", "parent_name", "change_note"]) {
+    assert.equal(stringCap(cap!.input[f])?.max, null, `knowledge_save.${f} 에 zod .max() 가 붙으면 본문 전체가 튕긴다`);
+  }
+});
+t("R5 C15: 선언 표의 툴 이름이 존재하지 않으면 red(툴 단위 죽은 선언) / 존재하면 green", () => {
+  const drift = declaredToolDrift(["knowledge_save"]);          // source_save·activity_log·delegate_run 이 없는 세계
+  assert.ok(drift.length >= 2, "없는 툴 이름들이 보고돼야 한다");
+  assert.ok(drift.every((m) => m.startsWith("R5c ")));
+  assert.deepEqual(declaredToolDrift([...registry.values()].map((c) => c.name)), []);   // 실배선은 드리프트 0
+});
+t("R5 C16 표본(stringCap): 문자열 아님→null · 상한 없는 문자열→{max:null} · 상한 있음→그 값", () => {
+  assert.equal(stringCap(z.number()), null);
+  assert.equal(stringCap(z.enum(["a"])), null);
+  assert.equal(stringCap(undefined), null);
+  assert.deepEqual(stringCap(z.string()), { max: null });
+  assert.deepEqual(stringCap(z.string().min(1).optional()), { max: null });
+  assert.deepEqual(stringCap(z.string().max(7)), { max: 7 });
 });
 
 const exposed = [...registry.values()].filter((c) => c.expose.mcp).length;

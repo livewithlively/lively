@@ -8,6 +8,8 @@ import type { LivelyUser } from "../context.js";
 import { listSources, countSources, getSource, upsertSource, deleteSource, listUndistilledSources, canSeeSource } from "../v6/source-store.js";
 import { linkKnowledgeSource, unlinkKnowledgeSource } from "../v6/knowledge-store.js";
 import { canSeeKnowledge, type Viewer } from "../v6/visibility.js";
+// #1442 소프트캡 — 짧은 메타 필드의 길이 초과가 원문(body_md) 전체를 튕기지 않게 한다.
+import { SOFT_CAPS, applySoftCaps, softCapHint } from "./soft-cap.js";
 
 // 공개범위(#1291) — 안 보이는 자료는 고칠 수도, 지울 수도, 원본을 받을 수도 없다. 문구는 없는 자료와 동일(존재 은닉).
 //  지식(assertKnowledgeWritable)과 같은 규율: id 를 아는 것만으로 비가시 본문을 덮어쓰거나 파일로 빼내지 못하게.
@@ -80,11 +82,14 @@ const sourceGet: Capability = {
   },
 };
 
+// #1442 소프트캡 — name·title 에 zod .max() 를 두지 않는다(SDK 가 핸들러 앞에서 검증해 body_md 200,000자까지
+//  함께 튕기고, 그 실패는 mcp_call_log 에도 안 남는다). 상한은 describe 로 광고하고 조정은 핸들러가 한다.
+const CAPS = SOFT_CAPS.source_save;
 const sourceSaveInput = {
   id: z.number().int().positive().optional(),
-  name: z.string().max(64).optional(),
+  name: z.string().optional().describe(`자료 이름(슬러그) — 없으면 자동 생성. ${softCapHint(CAPS.name)}`),
   kind: z.enum(SOURCE_KINDS).optional(),
-  title: z.string().max(200).optional(),
+  title: z.string().optional().describe(`표시 제목 — 한 줄 라벨(원문 전체는 body_md 에). ${softCapHint(CAPS.title)}`),
   body_md: z.string().max(200000).optional(),
   provenance: z.enum(["authored", "observed"]).optional(),
   occurred_at: z.string().optional().describe("발생 시각(ISO) — 회의·메일 시각"),
@@ -95,7 +100,8 @@ const sourceSave: Capability = {
   title: "자료 저장",
   description:
     "자료(raw)를 저장/수정한다(id 주면 수정). kind=transcript|minutes|email|slack|notion_doc|clickup_doc|other. provenance=authored(우리 캡처)|observed(외부 미러). " +
-    "정제해서 지식을 만들려면 knowledge_save 로 지식을 쓰고 source_link_knowledge 로 이 자료를 인용(derived_from) 잇는다.",
+    "정제해서 지식을 만들려면 knowledge_save 로 지식을 쓰고 source_link_knowledge 로 이 자료를 인용(derived_from) 잇는다. " +
+    "**길이 상한(#1442): name·title(64·200자)을 넘겨도 이 호출은 실패하지 않는다** — 서버가 그 필드만 자르고 원문(body_md)은 그대로 저장한 뒤 응답 capped 로 알린다. 원문을 다시 실어 재시도하지 마라.",
   scope: "memory",
   input: sourceSaveInput,
   expose: {
@@ -115,10 +121,12 @@ const sourceSave: Capability = {
       } }],
   },
   handler: async (input: SourceSaveInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    // #1442 짧은 메타 필드 조정 — store 에 넘기기 전에. 조정 보고(capped)는 응답에 실어 호출자가 알게 한다.
+    const capped = applySoftCaps("source_save", input, CAPS);
     // 공개범위(#1291) — 기존 자료를 고치는 경우만 막는다(신규 저장은 그대로). 지식 저장과 같은 규율.
     if (input.id) await assertSourceVisible(input.id, ctx?.viewer ?? null);
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
-    return { source: await upsertSource(input, writeCtx) };
+    return { source: await upsertSource(input, writeCtx), ...capped };
   },
 };
 
