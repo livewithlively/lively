@@ -48,8 +48,10 @@ export interface SoftCapReport {
 //  만들고(softCapHint) 핸들러에서 같은 표로 조정한다(applySoftCaps). #1442 가드가 읽는 표도 이것이다.
 export const SOFT_CAPS: Readonly<Record<string, Readonly<Record<string, SoftCapSpec>>>> = {
   knowledge_save: {
+    // ⚠ 안내는 **실제로 존재하는 싼 경로**를 가리켜야 한다: knowledge_save 는 body_md 가 필수라 "title 만 다시
+    //  보내라"가 성립하지 않는다(전문 재전송 = 이 정책이 없애려던 바로 그 낭비). 그래서 knowledge_set_title 을 뒀다.
     title: { limit: 200, policy: "clamp",
-      effect: "제목이 상한을 넘어 앞부분만 남기고 잘라 저장했습니다. 제목을 다시 정하려면 title 만 다시 보내면 됩니다(본문 재전송 불요)." },
+      effect: "제목이 상한을 넘어 앞부분만 남기고 잘라 저장했습니다. 제목을 고치려면 knowledge_set_title(name+title)로 갱신하세요 — 본문을 다시 보낼 필요가 없습니다." },
     change_note: { limit: 600, policy: "clamp",
       effect: "변경 요약이 상한을 넘어 잘라 기록했습니다(1~2문장이면 충분합니다)." },
     // note — 값을 여기서 자르지 않는다. 핸들러가 곧바로 slugify 로 정규화·절단하고(store 와 같은 함수) 그
@@ -60,6 +62,14 @@ export const SOFT_CAPS: Readonly<Record<string, Readonly<Record<string, SoftCapS
       effect: "그 길이의 지식 이름은 존재할 수 없어(이름 상한 64자) 대체 관계를 걸지 않고 저장했습니다 — 필요하면 올바른 이름으로 다시 지정하세요." },
     parent_name: { limit: 64, policy: "drop",
       effect: "그 길이의 지식 이름은 존재할 수 없어(이름 상한 64자) 트리 배치를 생략하고 저장했습니다 — 위치는 knowledge_move 로 지정하세요." },
+  },
+  // heavy payload 툴이 아니다(본문을 안 받는다) — 그래도 같은 필드의 상한이 툴마다 다른 방식으로 강제되면
+  //  혼란스러우므로 knowledge_save.title 과 같은 200자 · 같은 clamp 로 맞춘다(R5a 가 max 되붙기를 막는다).
+  knowledge_set_title: {
+    title: { limit: 200, policy: "clamp",
+      effect: "제목이 상한을 넘어 앞부분만 남기고 잘라 저장했습니다(제목은 한 줄 라벨입니다 — 긴 설명은 본문 첫 헤딩으로)." },
+    change_note: { limit: 600, policy: "clamp",
+      effect: "변경 요약이 상한을 넘어 잘라 기록했습니다(1~2문장이면 충분합니다)." },
   },
   source_save: {
     title: { limit: 200, policy: "clamp",

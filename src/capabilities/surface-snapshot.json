@@ -1958,6 +1958,16 @@
   "input_hash": "4a8417658cc910a2"
  },
  {
+  "name": "knowledge_set_title",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/knowledge/:name/title"
+  ],
+  "input_hash": "3f9f3b9278775b20"
+ },
+ {
   "name": "knowledge_link_category",
   "scope": "memory",
   "mcp": true,

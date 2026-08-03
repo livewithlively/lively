@@ -8,6 +8,7 @@ import type { LivelyUser } from "../../context.js";
 import {
   upsertKnowledge, setKnowledgeLifecycle, getKnowledgeLifecycle, setKnowledgeWiki, deleteKnowledge,
   findSimilarKnowledge, moveKnowledge, appendBody, isDuplicateAppend, stampSessionVisibility, slugify,
+  setKnowledgeTitle,
 } from "../../v6/knowledge-store.js";
 // #783 인입 허용선 게이트 — 에이전트(MCP) 저작 지식의 자동 검토대기 + 기존 지식 수정 검토 큐.
 import { resolveKnowledgeGate } from "../../v6/knowledge-gate.js";
@@ -73,7 +74,7 @@ export const knowledgeSave: Capability = {
     "**변경 요약(#968): 기존 지식을 고칠 땐 change_note(무엇을·왜 — 1~2문장)를 함께 보내라** — 검토 카드와 변화 기록에 그 문장이 그대로 표시된다. " +
     "**길이 상한(#1442): 짧은 필드(title 200 · name/supersedes/parent_name 64 · change_note 600자)를 넘겨도 이 호출은 실패하지 않는다** — " +
     "서버가 그 필드만 조정(자르기/참조 무시)하고 본문은 그대로 저장한 뒤 응답 capped 로 무엇을 어떻게 조정했는지 알려준다. " +
-    "그러니 **본문을 다시 실어 재시도하지 마라**(capped 가 왔다고 저장이 실패한 게 아니다). 애초에 제목은 한 줄로 짧게 쓰고, 긴 설명은 본문 첫 헤딩으로 내려라.",
+    "그러니 **본문을 다시 실어 재시도하지 마라**(capped 가 왔다고 저장이 실패한 게 아니다). 잘린 제목을 고치려면 **knowledge_set_title**(name+title — 본문 불요)을 쓰고, 애초에 제목은 한 줄로 짧게 쓰고 긴 설명은 본문 첫 헤딩으로 내려라.",
   scope: "memory",
   input: knowledgeSaveInput,
   expose: {
@@ -324,6 +325,93 @@ export const knowledgeSetLifecycle: Capability = {
   },
 };
 
+// 제목만 갱신(#1442) — knowledge_save 는 body_md 가 필수라 제목 한 줄을 고치는 데도 전문을 되보내야 했다.
+//  그건 소프트캡이 없애려던 바로 그 재전송이라(제목이 잘렸다고 알려주면서 고치는 길은 전문 재전송뿐인 모순)
+//  set_lifecycle·set_wiki·move 와 같은 경량 메타 툴로 뒀다.
+//  ⚠ 그 둘과 달리 **인입 허용선 게이트(#783)를 탄다.** title 은 사람이 읽고 검색·주입에 나가는 내용이라,
+//   게이트를 안 태우면 "본문 수정은 검토 대기인데 제목은 자유롭게 바꿈"이라는 우회로가 생긴다.
+//   stage 일 때 제안의 next.body_md 는 **서버가 DB 에서 읽어** 채운다 — 호출자가 전문을 실을 이유가 없다(이 툴의 존재 이유).
+const KSET_CAPS = SOFT_CAPS.knowledge_set_title;
+const knowledgeSetTitleInput = {
+  name: z.string().min(1).max(64).describe("제목을 고칠 지식 이름"),
+  title: z.string().min(1).describe(`새 제목 — 한 줄 라벨(문서의 논지·범위를 담되 문단이 아니다). ${softCapHint(KSET_CAPS.title)}`),
+  change_note: z.string().optional()
+    .describe(`#968 변경 요약 — 무엇을·왜 바꾸는지 1~2문장(검토 카드·변화 기록에 그대로 표시된다). ${softCapHint(KSET_CAPS.change_note)}`),
+};
+type KnowledgeSetTitleInput = z.infer<z.ZodObject<typeof knowledgeSetTitleInput>>;
+export const knowledgeSetTitle: Capability = {
+  name: "knowledge_set_title",
+  title: "지식 제목 갱신",
+  description:
+    "기존 지식의 **제목만** 바꾼다(본문 불변). knowledge_save 는 body_md 가 필수라 제목 한 줄을 고치려면 전문을 되보내야 하는데, " +
+    "이 툴은 name+title 만 받으므로 본문을 컨텍스트에 실을 필요가 없다 — **knowledge_save 응답에 capped(제목이 잘렸다)가 왔을 때 쓰라고 만든 경로다**(#1442). " +
+    "제목은 검색·주입에 나가는 내용이라 version 이 올라가고 임베딩도 다시 계산된다(뷰 설정 토글과 다른 클래스). " +
+    "조직이 '에이전트 지식 검토'를 켜 두면 이 변경도 게이트를 탄다 — 응답 gate 가 결과를 알려준다(pending 제안 접수 / 반영 후 사후검토). " +
+    "제목을 아예 비우거나 본문·분류를 함께 고치려면 knowledge_save 를 쓰라.",
+  scope: "memory",
+  input: knowledgeSetTitleInput,
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/knowledge/:name/title"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const title = String(b.title ?? "").trim();
+        if (!title) throw new HttpError(400, "title 이(가) 필요합니다");
+        return {
+          name: String(req.params?.name ?? ""), title,
+          change_note: b.change_note ? String(b.change_note) : undefined,
+        };
+      } }],
+  },
+  handler: async (input: KnowledgeSetTitleInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    const capped = applySoftCaps("knowledge_set_title", input, KSET_CAPS);
+    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    // 게이트는 knowledge_save 와 같은 함수로 판정한다(같은 '기존 지식 수정'이므로 같은 규칙을 받아야 한다).
+    const gate = await resolveKnowledgeGate({ name: input.name }, ctx);
+    if (gate.isCreate || !gate.before) {
+      throw new HttpError(404, `지식 '${input.name}' 없음 — 제목 갱신은 기존 지식에만 됩니다(신규는 knowledge_save).`);
+    }
+    if (gate.update === "drop") {
+      throw new HttpError(403, "인입 허용선 정책상 이 지식은 수정할 수 없습니다(drop) — 관리탭 '인입 허용선'에서 규칙을 확인하세요.");
+    }
+    // 검토 대기(staged) 제안이 있으면 거부 — 라이브 제목을 지금 바꿔도 그 제안이 승인되는 순간 제안의 제목으로
+    //  덮여 사라진다(조용한 유실). append 가 같은 이유로 409 하는 것과 동형 가드.
+    const staged = await pendingStagedRevisionId(gate.before.name);
+    if (staged) {
+      throw new HttpError(409, `이 지식엔 검토 대기 중인 수정 제안(#${staged})이 있어 제목 갱신이 허용되지 않습니다 — 사람이 승인/반려한 뒤 다시 시도하세요(지금 바꾸면 검토 결과에 덮여 사라집니다).`);
+    }
+    const before = gate.before;
+    const revisionInput = {
+      name: before.name,
+      base: { version: before.version, title: before.title, body_md: before.body_md, confidence: before.confidence },
+      // 본문은 그대로 유지된다 — before.body_md(서버가 DB 에서 읽은 값)를 그대로 next 로 넘긴다.
+      //  승인 시 applyRevisionBody 가 전문 교체라, 여기에 빈 값이나 조각을 넣으면 문서가 날아간다.
+      next: { title: input.title, body_md: before.body_md ?? "", summary: null, type: before.type ?? null },
+      proposed_by: ctx?.actor ?? user?.userId ?? null, actor_kind: gate.actor_kind, agent: gate.agent, rule_id: gate.rule_id,
+      note: input.change_note ?? null,
+    };
+    if (gate.update === "stage") {
+      const revision = await proposeRevision({ ...revisionInput, mode: "staged" });
+      return {
+        knowledge: null, ...capped,
+        gate: { action: "stage", state: "proposed", revision_id: revision.id, rule_id: gate.rule_id,
+          note: "제목 변경이 수정 제안으로 접수됐습니다 — 라이브 제목은 아직 그대로입니다(사람이 승인해야 반영)." },
+      };
+    }
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    const knowledge = await setKnowledgeTitle(before.name, input.title, writeCtx);
+    if (gate.update === "review") {
+      const revision = await proposeRevision({ ...revisionInput, mode: "applied" });
+      return {
+        knowledge, ...capped,
+        gate: { action: "review", state: "applied_pending_review", revision_id: revision.id, rule_id: gate.rule_id,
+          note: "제목이 반영됐고(라이브), 사람 검토 큐에 diff 가 적재됐습니다 — 검토에서 되돌려질 수 있습니다." },
+      };
+    }
+    return { knowledge, ...capped };
+  },
+};
+
 // WIKI 핀 토글 — is_wiki 만 갱신. 핀된 지식의 제목+메타가 가이드 ${wiki} 로 매 세션 항상-주입(본문 제외).
 const knowledgeSetWikiInput = {
   name: z.string().min(1).max(64),
@@ -420,7 +508,9 @@ export const knowledgeMove: Capability = {
 };
 
 export const authoringCapabilities: Capability[] = [
-  knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete,
+  // #1442 knowledgeSetTitle 은 **맨 뒤**에 붙인다 — 앞에 끼우면 기존 op 들의 등록 순서(= tools/list 순 ·
+  //  REST 마운트 순 · 표면 스냅샷)가 통째로 밀린다. 새 op 추가만이 표면 변화이도록 자리를 고른다.
+  knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeSetTitle,
 ];
 // #592 트리 이동 — 원본 등록 배열에서 **맨 뒤**(다른 :name 하위 경로들 뒤)였다. 도메인은 저작이지만
 //  등록 순서(= tools/list 순 · REST 마운트 순 · 표면 스냅샷)를 바꾸지 않으려 자리를 지켜 따로 내보낸다.

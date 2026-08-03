@@ -167,6 +167,26 @@ await t("B5 activity_log: title 은 여전히 **필수**다 — 상한만 뗐고
   assert.equal((await shape.safeParseAsync({ type: "feature", title: "제목" })).success, true);
 });
 
+await t("B6 knowledge_set_title: 제목만 갱신하는 경로가 실재하고 body_md 를 요구하지 않는다 — capped 안내가 가리키는 그 툴", async () => {
+  const shape = shapeOf("knowledge_set_title");
+  assert.equal("body_md" in shape, false, "본문을 요구하면 이 툴의 존재 이유가 사라진다(재전송 회피)");
+  const ok = await z.object(shape).safeParseAsync({ name: "some-doc", title: "새 제목" });
+  assert.equal(ok.success, true);
+  // 제목이 잘리는 상황에서도 호출은 통과해야 한다(같은 소프트캡 정책 — 여기서 하드 리젝트하면 안내가 막힌다)
+  assert.equal((await z.object(shape).safeParseAsync({ name: "some-doc", title: "가".repeat(201) })).success, true);
+  // name 은 필수, 빈 제목은 거부(제목 제거는 knowledge_save 경로)
+  assert.equal((await z.object(shape).safeParseAsync({ title: "제목만" })).success, false);
+  assert.equal((await z.object(shape).safeParseAsync({ name: "some-doc", title: "" })).success, false);
+});
+
+await t("B7 capped 안내가 실제로 존재하는 툴을 가리킨다 — 없는 경로를 안내하면 그게 곧 토큰 낭비다", () => {
+  const names = new Set([...registry.values()].map((c) => c.name));
+  const effect = SOFT_CAPS.knowledge_save.title.effect;
+  const mentioned = [...effect.matchAll(/knowledge_[a-z_]+/g)].map((m) => m[0]);
+  assert.ok(mentioned.length > 0, "제목이 잘렸을 때 어디로 고치라는 안내가 있어야 한다");
+  for (const tool of mentioned) assert.ok(names.has(tool), `${tool} 은 존재하지 않는 툴이다(거짓 안내)`);
+});
+
 await t("B(배선) 선언 표의 모든 툴이 실재하고, 조정 대상 필드가 실제 스키마에 있다", () => {
   const names = new Set([...registry.values()].map((c) => c.name));
   for (const tool of [...Object.keys(SOFT_CAPS), ...Object.keys(HARD_CAP_OK)]) {
