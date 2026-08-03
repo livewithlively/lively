@@ -9,6 +9,28 @@ import type { RawItem } from "../../items/store.js";
 import { resolveIngestPolicy } from "../../org/ingest/ingest-policy.js";
 import { getIngestPolicyRules } from "../../org/ingest/ingest-policy-load.js";
 import { auditConnector } from "./mirror-common.js";
+import { boundCollector } from "../../connectors/config.js";
+
+/**
+ * 수집기 '지식 직행'의 대상 분류 적용(#1419 T3) — output_config.target_category.
+ *
+ *  ⚠ **신규 삽입에만** 건다. 이 파일의 오랜 불변식이 "재싱크는 사람이 부여한 분류·핀을 지우지 않는다"이고,
+ *   매 싱크마다 분류를 다시 박으면 사람이 옮겨 놓은 지식이 다음 싱크에 원위치로 끌려간다.
+ *  mapped_by='rule'(사람도 LLM도 아닌 설정에서 온 것) · state='confirmed'(관리자가 명시한 값이라 제안이 아니다).
+ *  분류 key 가 실재하지 않으면 조용히 넘어간다 — 오타 하나로 수집 전체를 멈추게 하지 않는다.
+ */
+async function applyCollectorTargetCategory(client: pg.PoolClient, name: string, isInsert: boolean): Promise<void> {
+  if (!isInsert) return;
+  const cfg = boundCollector()?.outputConfig;
+  const key = typeof cfg?.target_category === "string" ? cfg.target_category.trim() : "";
+  if (!key) return;
+  try {
+    await client.query(
+      `INSERT INTO knowledge_category(name, category_id, mapped_by, state)
+         SELECT $1, c.id, 'rule', 'confirmed' FROM category c WHERE c.key = $2
+       ON CONFLICT (name, category_id) DO NOTHING`, [name, key]);
+  } catch { /* 분류 연결 실패는 비치명 — 지식 자체는 이미 적재됐다(분류는 분류기가 나중에 붙일 수 있다) */ }
+}
 
 // notion(및 K류) → knowledge(observed) 멱등 upsert. 본문 실변경 시에만 audit. true=적재, false=skip.
 //  #638 lifecycle: 신규는 인입정책(auto→active | confirm→pending | drop→skip), 재싱크는 사람 검토상태 보존(archived 전파만).
@@ -103,6 +125,7 @@ export async function mirrorKnowledgeV6(client: pg.PoolClient, it: RawItem, syst
      lifecycle, sort, contentChanged],
   );
   const finalName = (r.rows[0] as { name: string }).name;
+  await applyCollectorTargetCategory(client, finalName, isInsert);
 
   if (contentChanged) {
     const beforeSnap = isInsert ? null : { name: finalName, title: prevRow!.title, body_md: prevRow!.body_md };
@@ -167,6 +190,7 @@ export async function mirrorKnowledgeByNameV6(client: pg.PoolClient, it: RawItem
      author, sort, contentChanged],
   );
   const finalName = (r.rows[0] as { name: string }).name;
+  await applyCollectorTargetCategory(client, finalName, isInsert);
   if (contentChanged) {
     const beforeSnap = isInsert ? null : { name: finalName, title: prevRow!.title, body_md: prevRow!.body_md };
     const afterSnap = { name: finalName, title, body_md: body, provenance: "observed", confidence: "observed", source: system, author, lifecycle: "active" };

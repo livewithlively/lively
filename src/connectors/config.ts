@@ -203,7 +203,19 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
 import { AsyncLocalStorage } from "node:async_hooks";
 
 /** 수집기 바인딩 — 어느 인스턴스로 해소할 것인가. */
-export interface CollectorBinding { id: number; presetKey: string; instanceKey: string }
+export interface CollectorBinding {
+  id: number;
+  presetKey: string;
+  instanceKey: string;
+  /**
+   * 산출 정책(#1419 T3) — 이 수집기의 결과를 자료로 둘지 지식으로 올릴지. 미러가 라우팅에 쓴다.
+   *  바인딩에 실어 나르는 이유: 미러(v6/connector-mirror)는 항목 단위로 불리는데 그때마다 DB 를 되묻으면
+   *  항목당 쿼리 한 번이 붙는다. 프로세스가 곧 수집기 하나라 시작할 때 한 번 읽어 들고 다니는 게 맞다.
+   */
+  outputMode?: import("../org/ingest/ingest-classify.js").CollectorOutputMode;
+  /** 지식 직행 시 적용할 규칙(대상 분류·기본 유형·이름 접두어). output_config 원문. */
+  outputConfig?: Record<string, unknown>;
+}
 
 // ── 해소 캐시 ──
 //  ⚠ 키에 **수집기 id 가 반드시 들어간다**(`<collectorId|_>:<system>`). system 만으로 키를 잡으면 게이트웨이에서

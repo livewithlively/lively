@@ -52,16 +52,23 @@ await initAllSchemas({ quiet: true });
 //  config/secrets 를 본다(커넥터 모듈은 그 사실을 모른 채 종전 코드 그대로 돈다). 바인딩 실패는 치명이다 —
 //  엉뚱한(레거시) 설정으로 남의 워크스페이스를 긁어 커서를 오염시키느니 실행을 접는 편이 안전하다.
 if (collectorId) {
-  const cr = await itemsPool.query<{ preset_key: string; instance_key: string; enabled: boolean }>(
-    `SELECT preset_key, instance_key, enabled FROM org_collector WHERE id=$1`, [collectorId]);
+  const cr = await itemsPool.query<{
+    preset_key: string; instance_key: string; enabled: boolean;
+    output_mode: string; output_config: Record<string, unknown> | null;
+  }>(`SELECT preset_key, instance_key, enabled, output_mode, output_config FROM org_collector WHERE id=$1`, [collectorId]);
   const row = cr.rows[0];
   if (!row) { logger.error({ collectorId }, "수집기를 찾을 수 없습니다 — 삭제됐거나 잘못된 id"); process.exit(1); }
   if (row.preset_key !== name) {
     logger.error({ collectorId, expected: row.preset_key, got: name }, "수집기 프리셋과 실행 대상이 다릅니다");
     process.exit(1);
   }
-  bindCollector({ id: collectorId, presetKey: row.preset_key, instanceKey: row.instance_key });
-  logger.info({ collectorId, preset: row.preset_key, instance: row.instance_key }, "수집기 인스턴스 바인딩");
+  bindCollector({
+    id: collectorId, presetKey: row.preset_key, instanceKey: row.instance_key,
+    outputMode: (row.output_mode ?? "preset") as never,
+    outputConfig: row.output_config ?? {},
+  });
+  logger.info({ collectorId, preset: row.preset_key, instance: row.instance_key, output: row.output_mode },
+    "수집기 인스턴스 바인딩");
 }
 
 // ── 이 실행이 쓸 커넥터 해소(#1419 T2) ──
