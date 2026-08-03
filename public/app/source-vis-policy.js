@@ -17,9 +17,9 @@ export async function sourceVisPolicyPanel(detail) {
     const reload = () => sourceVisPolicyPanel(detail);
     const head = () => sectionHead('자료 공개범위', '슬랙·지메일 같은 커넥터로 수집되는 자료를 누가 볼 수 있는지 정합니다. 채널별로 예외를 둘 수 있어요.');
     detail.replaceChildren(el('div', {}, head(), el('div', { class: 'card' }, skeleton('정책을 불러오는 중'))));
-    let data;
+    let data, targets;
     try {
-        data = await api('/api/ui/source-vis-policy');
+        [data, targets] = await Promise.all([api('/api/ui/source-vis-policy'), api('/api/ui/source-vis-policy/targets')]);
     }
     catch (e) {
         detail.replaceChildren(el('div', {}, head(), el('div', { class: 'card' }, errorNote(e, '정책을 불러오지 못했습니다'))));
@@ -30,14 +30,14 @@ export async function sourceVisPolicyPanel(detail) {
     // 축이 꺼져 있으면 여기서 정한 규칙이 강제되지 않는다 — 설정만 남고 안 걸리는 상태를 만들지 않게 먼저 말한다.
     const axisWarn = axisOn ? null : el('div', { class: 'svp-warn' }, el('b', { text: '자료 공개범위가 꺼져 있어요' }), el('span', { text: '여기서 규칙을 만들어도 지금은 강제되지 않습니다. [맥락 공개범위]에서 자료 축을 먼저 켜세요.' }));
     const addBtn = el('button', { class: 'btn btn-primary', type: 'button', text: '+ 규칙 추가' });
-    addBtn.onclick = () => openRuleForm(null, reload);
+    addBtn.onclick = () => openRuleForm(null, targets, reload);
     const backfillBtn = el('button', { class: 'btn', type: 'button', text: '기존 자료에 소급 적용' });
     backfillBtn.onclick = () => openBackfill(reload);
     detail.replaceChildren(el('div', {}, head(), el('div', { class: 'card' }, axisWarn, el('p', { class: 'muted', text: '규칙은 앞으로 수집되는 자료에 적용됩니다. 채널을 지정한 규칙이 커넥터 전체 규칙보다 우선해요. ' +
-            '이미 쌓인 자료에도 적용하려면 [기존 자료에 소급 적용]을 누르세요.' }), rules.length ? el('div', { class: 'svp-list' }, ...rules.map((r) => ruleRow(r, reload)))
+            '이미 쌓인 자료에도 적용하려면 [기존 자료에 소급 적용]을 누르세요.' }), rules.length ? el('div', { class: 'svp-list' }, ...rules.map((r) => ruleRow(r, targets, reload)))
         : el('p', { class: 'admin-hint', text: '아직 규칙이 없어요 — 모든 수집 자료가 전원에게 공개됩니다.' }), el('div', { class: 'svp-actions' }, addBtn, backfillBtn))));
 }
-function ruleRow(r, reload) {
+function ruleRow(r, targets, reload) {
     const scope = r.match_channel
         ? el('span', { class: 'svp-scope' }, el('b', { text: r.match_system }), el('span', { text: ' ▸ ' + r.match_channel }))
         : el('span', { class: 'svp-scope' }, el('b', { text: r.match_system }), el('span', { class: 'muted', text: ' 전체' }));
@@ -45,7 +45,7 @@ function ruleRow(r, reload) {
         ? el('span', { class: 'svp-who' }, '🔒 ' + (r.members || []).length + '명/팀만')
         : el('span', { class: 'svp-who svp-open', text: '전원 공개' });
     const edit = el('button', { class: 'btn-text', type: 'button', text: '수정' });
-    edit.onclick = () => openRuleForm(r, reload);
+    edit.onclick = () => openRuleForm(r, targets, reload);
     const del = el('button', { class: 'btn-text', type: 'button', text: '삭제' });
     del.onclick = async () => {
         if (!confirm(`이 규칙을 지울까요?\n\n이미 잠긴 자료의 공개범위는 그대로 남고, 앞으로 수집되는 것만 달라집니다.`))
@@ -58,12 +58,43 @@ function ruleRow(r, reload) {
             toast('지우지 못했습니다 — ' + e.message, true);
         }
     };
-    return el('div', { class: 'svp-row' + (r.visibility === 'members' ? ' locked' : '') }, el('div', { class: 'svp-main' }, scope, who), el('div', { class: 'svp-row-actions' }, edit, del));
+    // 이 규칙이 지금 몇 건에 걸리나 — 0건이면 잠근 줄 알았는데 아무것도 안 잠긴 상태다(조용한 무효).
+    const hits = typeof r.matches === 'number'
+        ? (r.matches > 0
+            ? el('span', { class: 'svp-hits', text: `자료 ${r.matches}건` })
+            : el('span', { class: 'svp-hits svp-zero', title: '이 조건에 맞는 자료가 없어요 — 채널명이 다르거나 아직 수집되지 않았을 수 있어요',
+                text: '⚠ 걸리는 자료 0건' }))
+        : null;
+    return el('div', { class: 'svp-row' + (r.visibility === 'members' ? ' locked' : '') }, el('div', { class: 'svp-main' }, scope, who, hits), el('div', { class: 'svp-row-actions' }, edit, del));
 }
-function openRuleForm(r, reload) {
+function openRuleForm(r, targets, reload) {
     const editing = !!r;
-    const sysIn = el('input', { class: 'inp', type: 'text', placeholder: 'slack · gmail · discord …', value: r?.match_system || '' });
-    const chIn = el('input', { class: 'inp', type: 'text', placeholder: '비우면 이 커넥터 전체', value: r?.match_channel || '' });
+    const systems = (targets && targets.systems) || [];
+    // ⚠ 커넥터·채널을 타이핑하게 두지 않는다. 오타 한 글자면 규칙이 **아무것도 안 걸리는데** 화면은 저장됐다고
+    //  말한다 — 권한 기능에서 가장 나쁜 실패(조용한 무효)다. 실제 수집된 값에서만 고르게 하고 건수를 함께 보여준다.
+    const sysIn = el('select', { class: 'inp' });
+    const chIn = el('select', { class: 'inp' });
+    const paintSystems = () => {
+        sysIn.replaceChildren(el('option', { value: '', text: systems.length ? '— 커넥터 선택 —' : '수집된 자료가 없어요' }), ...systems.map((sv) => el('option', { value: sv.system, text: `${sv.system} (자료 ${sv.n}건)` })));
+        if (r?.match_system)
+            sysIn.value = r.match_system;
+    };
+    const paintChannels = () => {
+        const sv = systems.find((x) => x.system === sysIn.value);
+        const chans = (sv && sv.channels) || [];
+        chIn.replaceChildren(el('option', { value: '', text: '이 커넥터 전체' }), ...chans.map((c) => el('option', { value: c.name, text: `${c.name} (${c.n}건)` })));
+        if (r?.match_channel) {
+            // 저장된 채널이 지금 목록에 없을 수 있다(수집이 멈췄거나 이름이 바뀜) — 값을 잃지 않게 그대로 살려 둔다.
+            if (!chans.some((c) => c.name === r.match_channel)) {
+                chIn.append(el('option', { value: r.match_channel, text: `${r.match_channel} (지금은 자료 없음)` }));
+            }
+            chIn.value = r.match_channel;
+        }
+        chIn.disabled = !sysIn.value;
+    };
+    paintSystems();
+    paintChannels();
+    sysIn.onchange = () => paintChannels();
     let vis = r?.visibility === 'members' ? 'members' : 'open';
     const sw = el('span', { class: 'pjv-switch' + (vis === 'members' ? ' on' : '') }, el('span', { class: 'pjv-switch-knob' }));
     const visRow = el('div', { class: 'pjv-visrow' + (vis === 'members' ? ' on' : ''), role: 'switch', tabindex: '0',
@@ -90,7 +121,7 @@ function openRuleForm(r, reload) {
     } });
     const save = el('button', { class: 'btn btn-primary', type: 'button', text: '저장' });
     const cancel = el('button', { class: 'btn', type: 'button', text: '취소' });
-    const back = overlayBox(editing ? '규칙 수정' : '새 규칙', el('div', { class: 'field' }, el('label', { class: 'field-label', text: '커넥터' }), sysIn), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '채널 (선택)' }), chIn), el('div', { class: 'field', style: 'margin-top:12px' }, visRow), audField, el('div', { class: 'ov-actions' }, save, cancel));
+    const back = overlayBox(editing ? '규칙 수정' : '새 규칙', el('div', { class: 'field' }, el('label', { class: 'field-label', text: '커넥터' }), sysIn), el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '채널 (선택 — 비우면 커넥터 전체)' }), chIn), el('div', { class: 'field', style: 'margin-top:12px' }, visRow), audField, el('div', { class: 'ov-actions' }, save, cancel));
     cancel.onclick = () => back.remove();
     save.onclick = async () => {
         const body = {
@@ -100,14 +131,17 @@ function openRuleForm(r, reload) {
             members: vis === 'members' ? picker.getSelected().map((id) => ({ member_id: id })) : [],
         };
         if (!body.match_system) {
-            toast('커넥터를 입력하세요', true);
+            toast('커넥터를 고르세요', true);
             return;
         }
         save.disabled = true;
         try {
-            await api('/api/ui/source-vis-policy', { method: 'POST', body: JSON.stringify(body) });
+            const res = await api('/api/ui/source-vis-policy', { method: 'POST', body: JSON.stringify(body) });
             back.remove();
             reload();
+            // 저장은 됐지만 걸리는 자료가 0건이면 조용히 넘어가지 않는다 — 잠근 줄 알고 끝내는 게 제일 위험하다.
+            if (res && res.matches === 0)
+                toast('저장했지만 지금 이 조건에 맞는 자료가 0건이에요 — 채널 이름을 확인하세요', true);
         }
         catch (e) {
             save.disabled = false;

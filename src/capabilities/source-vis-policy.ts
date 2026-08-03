@@ -55,10 +55,61 @@ const listPolicies: Capability = {
   scope: "admin",
   input: {},
   expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/source-vis-policy"], parse: () => ({}) }] },
-  handler: async () => ({
-    axis_on: await axisOn("source"),
-    rules: await sourceVisRules().catch(() => []),
-  }),
+  handler: async () => {
+    const rules = await sourceVisRules().catch(() => []);
+    // 각 규칙이 **지금 실제로 몇 건에 걸리나** — 0건이면 오타이거나 아직 안 들어온 채널이다.
+    //  이걸 안 보여주면 "규칙은 저장됐는데 아무것도 안 잠긴" 상태를 아무도 눈치채지 못한다.
+    const { rows } = await itemsPool.query(`
+      SELECT external_system AS system,
+             COALESCE(NULLIF(fields->>'container_name',''), fields->>'container_ref') AS channel,
+             count(*)::int AS n
+        FROM source WHERE external_system IS NOT NULL AND lifecycle='active' GROUP BY 1,2`).catch(() => ({ rows: [] }));
+    const withCount = rules.map((r) => ({
+      ...r,
+      matches: (rows as any[]).filter((x) =>
+        String(x.system) === r.match_system && (!r.match_channel || String(x.channel ?? "") === r.match_channel))
+        .reduce((a, x) => a + Number(x.n), 0),
+    }));
+    return { axis_on: await axisOn("source"), rules: withCount };
+  },
+};
+
+
+/**
+ * 정책을 걸 수 있는 **실제 커넥터·채널 목록**(수집된 자료에서 뽑는다).
+ *
+ *  왜 필요한가: 커넥터 키와 채널명을 사람이 타이핑하게 두면 오타 한 글자에 규칙이 **아무것도 안 걸린다** —
+ *  그런데 화면은 "규칙 저장됨"이라 잠근 줄 안다. 권한 기능에서 가장 나쁜 실패(조용한 무효)라, 고를 수 있는
+ *  것만 고르게 한다. 건수를 함께 주는 이유도 같다 — 0건짜리를 고르면 눈에 보인다.
+ */
+const listTargets: Capability = {
+  name: "source_vis_policy_targets",
+  title: "자료 공개범위 — 정책 대상 후보(커넥터·채널)",
+  description:
+    "수집된 자료에 실제로 존재하는 커넥터와 채널을 자료 건수와 함께 돌려준다. 정책의 match_system·match_channel 은 " +
+    "여기 있는 값이어야 실제로 걸린다(오타는 조용히 아무것도 안 걸린다).",
+  scope: "admin",
+  input: {},
+  expose: { mcp: true, rest: [{ method: "GET", paths: ["/api/ui/source-vis-policy/targets"], parse: () => ({}) }] },
+  handler: async () => {
+    const { rows } = await itemsPool.query(`
+      SELECT external_system AS system,
+             COALESCE(NULLIF(fields->>'container_name',''), fields->>'container_ref') AS channel,
+             count(*)::int AS n
+        FROM source
+       WHERE external_system IS NOT NULL AND lifecycle='active'
+       GROUP BY 1, 2
+       ORDER BY 1, 3 DESC`);
+    const bySystem = new Map<string, { system: string; n: number; channels: Array<{ name: string; n: number }> }>();
+    for (const r of rows as any[]) {
+      const sys = String(r.system);
+      if (!bySystem.has(sys)) bySystem.set(sys, { system: sys, n: 0, channels: [] });
+      const e = bySystem.get(sys)!;
+      e.n += Number(r.n);
+      if (r.channel) e.channels.push({ name: String(r.channel), n: Number(r.n) });
+    }
+    return { systems: [...bySystem.values()].sort((a, b) => b.n - a.n) };
+  },
 };
 
 const setPolicy: Capability = {
@@ -92,6 +143,17 @@ const setPolicy: Capability = {
     if (input.visibility === "members" && !members.length) {
       throw new HttpError(400, "대상이 비어 있습니다 — 이 규칙이 적용되면 그 자료를 아무도 볼 수 없게 됩니다. 대상을 지정하거나 커넥터를 끄세요.");
     }
+    // ⚠ 존재하지 않는 커넥터·채널로 규칙을 만들면 **아무것도 안 걸리는데 저장은 성공**한다 — 잠근 줄 알고
+    //  넘어가는 게 이 기능에서 제일 나쁜 실패다(조용한 무효). 화면은 목록에서 고르게 하고, 경계는 여기서 지킨다.
+    //  ⚠ 다만 거절하지는 않는다: 아직 수집 전인 채널에 미리 규칙을 걸어 두는 건 정당한 용법이고, 오히려
+    //   "들어오기 전에 잠가 두기"가 더 안전하다. 대신 **무엇에도 안 걸린다는 사실을 응답에 실어** 알린다.
+    const inv = await itemsPool.query(`
+      SELECT count(*)::int AS n FROM source
+       WHERE external_system = $1 AND lifecycle='active'
+         AND ($2::text IS NULL OR COALESCE(NULLIF(fields->>'container_name',''), fields->>'container_ref') = $2)`,
+      [input.match_system, input.match_channel ?? null]).catch(() => ({ rows: [{ n: null }] }));
+    const matches = (inv.rows[0] as any)?.n;
+
     // ⚠ 정책 편집 = 권한 편집(#1291 v4). 이미 잠긴 규칙을 **넓히려면** 그 자료를 볼 수 있는 사람이어야 한다 —
     //  아니면 admin 이 자기를 대상에 끼워 넣어 못 보던 내용을 보게 된다(셀프가입). 좁히는 변경은 자유다.
     //  긴급열람 중이면 통과한다(사유·통지·감사가 남는 정당한 복구 경로 — 대상자 전원 퇴사 같은 경우).
@@ -131,7 +193,14 @@ const setPolicy: Capability = {
         [id, members.map((m: any) => m.subject_kind), members.map((m: any) => m.member_id)]);
     }
     invalidateSourceVisRules();
-    return { id, rules: await sourceVisRules() };
+    return {
+      id, matches,
+      warning: matches === 0
+        ? "이 조건에 맞는 자료가 지금은 0건입니다 — 커넥터·채널 이름을 확인하세요(아직 수집 전이면 정상입니다). "
+          + "실제 후보는 source_vis_policy_targets 로 확인할 수 있습니다."
+        : undefined,
+      rules: await sourceVisRules(),
+    };
   },
 };
 
@@ -204,4 +273,4 @@ const backfill: Capability = {
   },
 };
 
-export const sourceVisPolicyCapabilities: Capability[] = [listPolicies, setPolicy, deletePolicy, backfill];
+export const sourceVisPolicyCapabilities: Capability[] = [listPolicies, listTargets, setPolicy, deletePolicy, backfill];

@@ -105,6 +105,31 @@ const seesKn = async (who, name) => !(await mcp(who, "knowledge_get", { name }))
   chk("★ 증류 인박스에 남의 잠긴 자료가 안 실린다(vis_in 에겐 eng 가 안 보인다)",
     !inboxIds.includes(engId), `ids=${JSON.stringify(inboxIds).slice(0, 120)}`);
 
+  // ── ⑥-b 오타로 아무것도 안 걸리는 규칙을 조용히 넘기지 않는다 ──
+  //    커넥터·채널을 사람이 타이핑하면 오타 한 글자에 규칙이 무효가 되는데 저장은 성공한다.
+  //    화면은 실제 목록에서 고르게 하고(targets), 서버는 0건이면 그 사실을 응답에 실어 알린다.
+  const tg = await rest("admin", "/api/ui/source-vis-policy/targets");
+  chk("★ 정책 대상 후보(커넥터·채널)를 실제 자료에서 준다", tg.status === 200 && Array.isArray(tg.body?.systems),
+    `status=${tg.status} ${JSON.stringify(tg.body)?.slice(0, 140)}`);
+  const slackTg = (tg.body?.systems || []).find((x) => x.system === "slack");
+  chk("  건수와 채널 목록이 함께 온다(0건짜리를 눈으로 거를 수 있게)",
+    !!slackTg && slackTg.n >= 2 && (slackTg.channels || []).some((c) => c.name === "eng-only"),
+    JSON.stringify(slackTg)?.slice(0, 160));
+
+  const typo = await setRule({ match_system: "slack", match_channel: "eng-onlyy", visibility: "members",
+    members: [{ member_id: "vis_in" }] });
+  chk("★ 오타 규칙은 저장되되 '걸리는 자료 0건'을 알려준다",
+    typo.status === 200 && typo.body?.matches === 0 && !!typo.body?.warning,
+    `status=${typo.status} ${JSON.stringify(typo.body)?.slice(0, 160)}`);
+  const real2 = await setRule({ match_system: "slack", match_channel: "eng-only", visibility: "members",
+    members: [{ member_id: "vis_out" }] });
+  chk("  올바른 채널이면 건수가 붙는다", real2.body?.matches >= 1 && !real2.body?.warning,
+    JSON.stringify(real2.body)?.slice(0, 140));
+  const rulesNow = (await rest("admin", "/api/ui/source-vis-policy")).body?.rules || [];
+  chk("  목록도 규칙별 매칭 건수를 준다(화면이 ⚠0건을 그릴 근거)",
+    rulesNow.every((x) => typeof x.matches === "number"), JSON.stringify(rulesNow.map((x) => x.matches)));
+  await rest("admin", "/api/ui/source-vis-policy/delete", { method: "POST", body: JSON.stringify({ id: typo.body.id }) });
+
   // ── ⑦ 정책 편집 = 권한 편집 — 잠긴 규칙을 **넓히려면** 그 자료를 볼 수 있어야 한다.
   //     아니면 admin 이 자기를 대상에 끼워 넣어 못 보던 내용을 보게 된다(셀프가입).
   //     v2 에서 팀 편집에 같은 이유로 건 제약과 같다.
