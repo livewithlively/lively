@@ -66,11 +66,17 @@ export async function mirrorSourceV6(client: pg.PoolClient, it: RawItem, system:
         kind=EXCLUDED.kind, title=EXCLUDED.title, body_md=EXCLUDED.body_md, raw=EXCLUDED.raw,
         fields=EXCLUDED.fields, parent_external_id=EXCLUDED.parent_external_id,
         external_url=EXCLUDED.external_url, occurred_at=EXCLUDED.occurred_at,
-        last_synced_at=now(), updated_at=now(), updated_by=EXCLUDED.updated_by
+        last_synced_at=now(),
+        -- ⚠ updated_at 은 **내용이 바뀐 시각**이다 — "마지막 동기화 시각"은 last_synced_at 이 맡는다.
+        --  무조건 now() 로 밀면 일일 full 스윕이 전 자료의 updated_at 을 갱신하고, 이걸 재판정 신호로 쓰는
+        --  증류 인박스가 **매일 전량을 다시 증류한다**(#1289). 제목·본문이 실제로 달라졌을 때만 전진시킨다.
+        updated_at=CASE WHEN $13::boolean THEN now() ELSE source.updated_at END,
+        updated_by=EXCLUDED.updated_by
      RETURNING id`,
     [kind, title, body, raw == null ? null : JSON.stringify(raw),
      system, instance, externalId, it.provenance.external_url ?? null,
-     it.occurred_at ?? null, author, JSON.stringify(fields), it.parent_external_id ?? null],
+     it.occurred_at ?? null, author, JSON.stringify(fields), it.parent_external_id ?? null,
+     contentChanged],
   );
   const id = (r.rows[0] as { id: number }).id;
 
