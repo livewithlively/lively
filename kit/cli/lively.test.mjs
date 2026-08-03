@@ -101,10 +101,21 @@ function newHome(name) {
   writeFileSync(join(bin, "claude"), [
     "#!/bin/sh",
     `printf '%s\\n' "$*" >> ${JSON.stringify(log)}`,
-    // `claude mcp list` 는 등록된 걸 되돌려준다(status/doctor 가 이걸 읽는다).
+    // `claude mcp list` 는 등록된 걸 되돌려준다(구 status 판정 경로 — 남겨둔다).
     'if [ "$1" = "mcp" ] && [ "$2" = "list" ]; then',
     `  grep -q "mcp add .*lively " ${JSON.stringify(log)} 2>/dev/null && echo "lively: ${GW}/mcp (HTTP)"`,
     "  exit 0",
+    "fi",
+    // `claude mcp get <name>` — #1431 부터 status/doctor 가 **이걸** 쓴다(우리 서버 하나만 헬스체크).
+    //  실물 형식을 그대로 흉내낸다: 등록됐으면 Scope:/Status: 두 줄, 아니면 rc=1 + "No MCP server named".
+    'if [ "$1" = "mcp" ] && [ "$2" = "get" ]; then',
+    `  if grep -q "mcp add .*$3 " ${JSON.stringify(log)} 2>/dev/null; then`,
+    '    echo "Scope: User config (available in all your projects)"',
+    '    echo "Status: ✔ Connected"',
+    "    exit 0",
+    "  fi",
+    '  echo "No MCP server named \\"$3\\"." >&2',
+    "  exit 1",
     "fi",
     "exit 0",
   ].join("\n"));
@@ -221,6 +232,9 @@ try {
     check("⑤ status: 인증 · 최신 · MCP 등록 감지",
       st.account.authenticated && st.kit.current && st.kit.local === "v-aaa" && st.harness.claude.mcp,
       JSON.stringify(st, null, 2).slice(0, 500));
+    // #1431 — 등록과 별개로 **연결 상태**도 값으로 담는다(스텁이 `mcp get` 에 Status: ✔ 를 준다).
+    check("⑤ status: MCP 연결 상태도 값으로 담는다(mcp get 의 Status 반영)",
+      st.harness.claude.mcpConnected === true, JSON.stringify(st.harness, null, 2));
     check("⑤ status --json 은 stdout, 사람 출력은 stderr(파이프 안전)",
       r.out.trim().startsWith("{"), r.out.slice(0, 80));
   }
