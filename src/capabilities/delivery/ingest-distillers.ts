@@ -10,6 +10,7 @@ import {
 // #1289 자료 증류기 — 스코프(배타 배정)·커버리지·프롬프트 조립. CRUD 는 store, 이건 읽기·판정 계층.
 import {
   listDistillers, getDistiller, listDistillerInbox, countDistillerBacklog, distillerCoverage, listSourceChannels, buildDistillerPrompt,
+  distillerSectionViews,
   describeScope, clearDistillerSeen, countDistillerSeen, prefilterCurve, prefilterThresholds, DEFAULT_DECISIVE_KEYWORDS, tuneDistiller
 } from "../../org/distill/distiller.js";
 import { actorOf, restOnly, restWork } from "./shared.js";
@@ -136,6 +137,8 @@ export const ingestDistillersCapabilities: Capability[] = [
       thread_aware: z.boolean().optional().describe("스레드(부모·답글)를 묶어 하나의 지식으로(기본 true)."),
       prefilter_level: z.number().optional().describe("사전 필터 레버(0~100). LLM 에 먹이기 전 서버가 스레드를 거른다 — 올릴수록 빡빡. 0=끔(전부 통과) · 50=기본(결정성1·참여자2·메시지3|400자) · 100=매우 엄격. 토큰이 자료수에 O(n²) 이라 여기서 거르면 비용이 급감한다."),
       prefilter_rules: z.record(z.any()).nullable().optional().describe("레버가 정한 임계값의 축별 덮어쓰기(부분 지정 가능): {min_decisive,min_authors,min_msgs,min_chars,keywords[],match:'all'|'any'}. 지정 안 한 축은 레버 파생값 유지."),
+
+      prompt_sections: z.record(z.string()).nullable().optional().describe("프롬프트 조각 덮어쓰기 — {intro,criteria,format,thread,procedure} 중 지정한 것만 대체한다. 미지정=코드 기본값(제품 개선이 계속 흘러든다) · 빈 문자열=그 조각을 뺀다. 대상 지정·안전 문구는 불변이라 여기로 덮을 수 없다."),
       batch_size: z.number().optional().describe("한 배치 **스레드 수**(1~200, 기본 3). 자료 건수가 아니다 — 배치는 스레드 단위로 자른다(스레드를 쪼개면 대화가 끊겨 증류가 안 된다)."),
       batch_max_msgs: z.number().optional().describe("한 배치 메시지 상한(1~2000, 기본 20). 스레드를 최근순으로 누적하다 이 값을 넘으면 멈춘다. ⚠ 첫 스레드는 예외 — 상한을 넘어도 통째로 담는다(171메시지 스레드는 그것 하나만 처리)."),
       mode: z.enum(["headless", "session"]).optional(),
@@ -188,6 +191,9 @@ export const ingestDistillersCapabilities: Capability[] = [
         })),
         // 실제로 나갈 프롬프트(허용선 문구는 실행 시점 정책으로 다시 조립되니 여기선 자리표시).
         prompt: buildDistillerPrompt({ distiller: d, rows: sample, policySummary: "(실행 시점의 인입 허용선 정책이 여기 들어갑니다)" }),
+        // 조각별 기본값·현재 덮어쓴 값(#1419-B) — 관리탭이 "무엇을 덮어쓰는지"를 보여줄 재료.
+        //  조립은 buildDistillerPrompt 한 곳에서만 한다(B7: 미리보기와 실제 배치가 갈리면 미리보기가 거짓이 된다).
+        sections: distillerSectionViews(d, { count: sample.length, policySummary: "(실행 시점의 인입 허용선 정책이 여기 들어갑니다)" }),
       };
     }, {
       key: z.string().describe("증류기 key"),
