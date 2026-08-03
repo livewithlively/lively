@@ -5,7 +5,7 @@
 //  실행(await) 순서는 org/schema.ts 오케스트레이터가 소유한다(분할 전 시퀀스 그대로 — SCHEMA_SQL_LOG
 //  스냅샷 diff 0 이 계약, scripts/schema-init.itest.mjs 헤더 참조). 블록을 옮기려면 그 증명을 다시 떠라.
 import type { Pool } from "pg";
-import { ensureCheck } from "./ddl-util.js";
+import { ensureCheck, redefineCheck } from "./ddl-util.js";
 
 export async function initConnectorRegistry(pool: Pool): Promise<void> {
   // ── org_connector — 커넥터별 설정/토큰 레지스트리 (프로젝트 #541). system PK = 1행/커넥터(단일테넌트). ──
@@ -308,10 +308,16 @@ export async function initManagerRegistry(pool: Pool): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT);
     ${ensureCheck("org_manager", {
-      org_manager_kind_chk: "kind IN ('mismatch','outdated','stale_ref','contradiction','code_drift')",
       org_manager_action_chk: "action_level IN ('report','propose','auto')",
       org_manager_batch_chk: "batch_size BETWEEN 1 AND 200",
     })}
+    -- ⚠ kind 만 redefineCheck(DROP+ADD)다. ensureCheck 는 프로브형이라 **제약이 이미 있으면 안 바꾼다** —
+    --  #1419 에서 stale_ref 를 추가하고 ensureCheck 안의 문자열만 고쳤더니 신규 배포에만 반영되고
+    --  라이브 DB 는 구 4종 그대로여서, 화면·MCP 는 새 종류를 제공하는데 저장이 제약 위반으로 실패했다
+    --  (ddl-util.ts 가 주석으로 이미 경고해 둔 함정을 그대로 밟았다).
+    --  enum 은 앞으로도 늘어난다 — 확장은 안전하다(기존 행이 새 expr 를 어기지 않는다).
+    ${redefineCheck("org_manager", "org_manager_kind_chk",
+      "kind IN ('mismatch','outdated','stale_ref','contradiction','code_drift')")}
     CREATE UNIQUE INDEX IF NOT EXISTS org_manager_key_uq ON org_manager(key);
     CREATE INDEX IF NOT EXISTS org_manager_enabled_idx ON org_manager(enabled, priority DESC, id);
   `);
