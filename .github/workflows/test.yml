@@ -28,22 +28,29 @@ jobs:
           node-version: '22'
       - run: npm ci
       - run: npm run build
+      # ⚠ 아래 검증 스텝은 전부 `if: !cancelled()` 다(#1431) — GitHub 기본은 `success()` 라서 앞 스텝이 하나
+      #  깨지면 뒤가 통째로 skip 된다. 실제로 가장 흔한 케이스(산출물 재빌드 누락 → 신선도 게이트 실패)에서
+      #  테스트 160건이 한 건도 안 돌아, 고치고 push 하고 또 기다리는 왕복이 반복됐다. 한 번의 CI 런에서
+      #  모든 실패를 보게 한다(취소는 예외 — cancelled() 면 안 돈다). 러너 자체도 같은 원칙으로 끝까지 돈다.
       # 산출물 신선도 게이트(#1313 R4) — public/app 은 web/*.ts 의 tsc 산출물을 **커밋하는 관례**다
       #  (라이브 박스가 working tree 를 정적 서빙 → git pull 만으로 프론트 갱신). 소스만 고치고 재빌드를
       #  빠뜨린 커밋은 방금 빌드한 산출물과 어긋나 여기서 실패한다 — 관례를 기계로 강제.
       - name: 산출물 신선도 (public/app 드리프트 0)
+        if: ${{ !cancelled() }}
         run: git diff --exit-code -- public/app
       # ① 전체 유닛 체인(#1313 R4) — scripts/run-tests.mjs 가 소스 글롭으로 자동 발견(145+건, 실 DB 불요:
       #    DB 필요한 것은 *.itest.mjs/*.pg-test.mjs 로 제외 관례, static-context 는 env 없으면 자체 skip).
       #    종전엔 케이스 ⑨(detached 훅) flaky 우려로 device-auth+CLI 2건만 돌렸으나(#880 주석), 그 테스트에는
       #    폴링 대기 하드닝(waitFor 60s — kit/setup/self-update.test.mjs ⑨ 주석)이 들어가 전체를 승격한다.
       - name: 전체 유닛 테스트 (run-tests 러너)
+        if: ${{ !cancelled() }}
         run: node scripts/run-tests.mjs
       # ② 테스트 DB 스키마 자가마이그레이션 — **initAllSchemas 전체 체인**(item→org→domainmap→v6, 부팅과 동일
       #    단일 출처 boot/schemas.ts 경유, #1313 R19a). 종전엔 item+org 2계열만 돌아, 시드 한 줄이 제약을 어겨
       #    뒤 계열(v6 ALTER)이 통째로 안 도는 회귀(2026-07-20 실사고 계열)를 CI 가 못 잡았다. 신규 DB init 스모크 겸용.
       #    ITEMS_DATABASE_URL 은 이 스텝부터. (services.postgres 가 pgvector 이미지라 v6 임베딩 스키마도 실경로로 돈다.)
       - name: 스키마 마이그레이션 (테스트 Postgres · initAllSchemas 전체 체인)
+        if: ${{ !cancelled() }}
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: >-
@@ -53,6 +60,7 @@ jobs:
             .catch(e => { console.error(e); process.exit(1); });"
       # ③ device-auth PG 통합(실 트랜잭션·now()·RETURNING rowCount) — 두 HIGH 통제(원자성·PKCE 바인딩) 검증.
       - name: device-auth PG 통합 테스트
+        if: ${{ !cancelled() }}
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/auth/device-auth.pg-test.mjs

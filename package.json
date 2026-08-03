@@ -17,8 +17,8 @@
     "typecheck": "tsc --noEmit && npm run typecheck:web && npm run typecheck:standalone",
     "typecheck:web": "tsc -p web/tsconfig.json --noEmit",
     "typecheck:standalone": "tsc -p web/standalone/tsconfig.json --noEmit",
-    "test": "npm run build && node scripts/run-tests.mjs",
-    "test:itest": "npm run build && node scripts/run-tests.mjs --itest",
+    "test": "node scripts/run-tests.mjs --build",
+    "test:itest": "node scripts/run-tests.mjs --build --itest",
     "dm": "node --env-file-if-exists=.env dist/domainmap/cli.js",
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-*/spawn-helper 2>/dev/null || true"
   },
