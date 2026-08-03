@@ -8,7 +8,7 @@
 import type { Capability } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { HttpError } from "./rest-util.js";
-import { getMember, getOrgProfile } from "../org/store.js";
+import { getMember, getOrgProfile, getUiSurface } from "../org/store.js";
 import { gatewayUrl } from "../gateway-url.js";
 import { memberTeams, memberCategories, memberCategoryIds } from "../v6/team-store.js";
 import { visAxes } from "../v6/visibility-axes.js";
@@ -29,14 +29,15 @@ const me: Capability = {
     const memberId = u.userId ?? "";
     // 소속 팀 + '우리 팀' 카테고리 id(소유 ∪ 이해관계) — 프론트 사이드바 '우리 팀' 우선노출의 단일 소스.
     //  실패해도 게이트 확인은 막지 않는다(팀 미설정/스키마 초기 등 — 빈 배열 폴백).
-    const [teams, cats, member, org] = memberId
+    const [teams, cats, member, org, ui] = memberId
       ? await Promise.all([
           memberTeams(memberId).catch(() => []),
           memberCategoryIds(memberId).catch(() => ({ all: [], owner: [] })),
           getMember(memberId).catch(() => null), // 표시 이름 — 우측 상단 '내 프로필' 라벨(이메일보다 우선)
           getOrgProfile().catch(() => null),     // 상단 워드마크 태그라인('for <조직명>') — 미설정이면 태그라인 자체를 숨긴다
+          getUiSurface(),                        // #1454 S2~S5 — 매니지드 표면 노브 4종(자체 fail-open: 실패=기본값)
         ])
-      : [[], { all: [], owner: [] }, null, null];
+      : [[], { all: [], owner: [] }, null, null, null];
     return {
       userId: u.userId ?? null, email: u.email ?? null, scopes: u.scopes ?? [],
       display_name: member?.display_name ?? null,
@@ -55,6 +56,12 @@ const me: Capability = {
       //  계속 그리면 "설정했는데 안 걸린다" / "자물쇠가 붙었는데 전원이 본다"가 된다(둘 다 화면이 거짓말하는 것).
       //  모든 화면이 부팅 때 me 를 부르므로 여기 실어 보내면 축마다 별도 조회가 필요 없다.
       vis_axes: await visAxes().catch(() => null),
+      // 매니지드 표면 노브(#1454 S2~S5) — vis_axes 와 같은 이유로 me 에 동승(부팅 1회 수신, 별도 조회 0).
+      //  ui 미조회(비인증·조회실패)면 전부 기본값 = 기존 동작(전탭 노출·배너 없음·full·칩 없음).
+      ui_nav: ui?.ui_nav ?? {},               // S2 — 상단 탭 게이팅(web/lib/state.ts navOn 이 해석)
+      announcement: ui?.announcement ?? null, // S3 — 조직 공지 배너 {text, href?, tone}
+      ui_profile: ui?.ui_profile ?? "full",   // S4 — 관리탭 프로파일(admin-shell sectionHidden 이 해석)
+      usage_url: ui?.usage_url ?? null,       // S5 — 상단바 '사용량' 칩 링크
       incognito: ctx?.incognito ?? false,
     };
   },

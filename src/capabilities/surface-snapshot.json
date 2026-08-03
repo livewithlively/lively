@@ -436,6 +436,16 @@
   "input_hash": "fb87b54b720db2ca"
  },
  {
+  "name": "org_session_mint",
+  "scope": "admin",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/session-mint"
+  ],
+  "input_hash": "f3f4ab127b5ea055"
+ },
+ {
   "name": "org_token_mint_self",
   "scope": null,
   "mcp": false,
@@ -703,7 +713,7 @@
   "rest": [
    "POST /api/ui/org/runtime-config"
   ],
-  "input_hash": "030a5ebd2c5cbbcc"
+  "input_hash": "4d45ee728b83642d"
  },
  {
   "name": "org_alert_status",
