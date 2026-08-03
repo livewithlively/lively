@@ -19,7 +19,7 @@ import { startConnectorRun } from "../../connectors/run-tracker.js";
 import { discoverConnectorScope } from "../../connectors/discover.js";
 import { runAutoBackfillSweep } from "../../v6/embedding-backfill.js";
 import { itemsPool } from "../../db/client.js";
-import { actorOf, restOnly, str } from "./shared.js";
+import { actorOf, restOnly, restRead, str } from "./shared.js";
 
 /** 수집기 1건 조회 + 바인딩 정보 — 실행·discover 가 공용으로 쓴다. */
 async function loadBinding(id: number): Promise<{ id: number; presetKey: string; instanceKey: string }> {
@@ -31,12 +31,26 @@ async function loadBinding(id: number): Promise<{ id: number; presetKey: string;
 }
 
 export const collectorsReadCapabilities: Capability[] = [
-  restOnly("org_collectors", "수집기 목록",
+  // ── 목록은 **인증만**(scope null), 편집은 admin. ──
+  //  왜 갈랐나: [맥락 관리] 탭은 전 구성원에게 보이는데 목록 조회까지 admin 이면 비-admin 이 [수집] 을 열
+  //  때마다 403 카드만 본다 — 탭이 있는데 안이 통째로 에러인 상태가 되고, 그건 "권한이 없다"가 아니라
+  //  "고장났다"로 읽힌다. 파이프라인 화면의 목적(어디가 막혔나를 모두가 본다)과도 정면으로 어긋난다.
+  //  ⚠ 안전한 이유: listCollectors 는 시크릿 **값**을 애초에 담지 않는다 — 프리셋의 secret:true 항목은
+  //   secretsSet(설정 여부 boolean)으로만 나가고, config 에는 non-secret 항목만 담긴다. 즉 이 응답에는
+  //   비-admin 에게 가리고 말고 할 자격 정보가 없다(그래서 여기선 redact 가 아니라 scope 만 내린다).
+  //  canEdit 을 함께 준다 — 화면이 '버튼을 그릴지'를 서버 판정 하나로 정하게. 프론트가 scope 를 자체
+  //   해석하면 서버 게이트와 어긋나 '눌러도 403' 이 난다(#1419 T9 에서 같은 종류의 드리프트를 겪었다).
+  restRead("org_collectors", "수집기 목록",
     "등록된 **수집기 인스턴스** 목록 + 고를 수 있는 프리셋 카탈로그(#1419). 한 프리셋(슬랙·노션 등)으로 수집기를 여러 개 만들 수 있다 — " +
     "워크스페이스가 둘이거나, 채널 그룹마다 주기·산출정책을 달리할 때. 시크릿 값은 담기지 않는다(설정 여부만). " +
+    "조회는 전 구성원, 생성·수정·삭제·실행은 admin(응답의 canEdit 이 그 판정). " +
     "⚠ 구 org_connectors(system 당 1개)의 후계 — 구 도구는 레거시 축으로 계속 동작하나 새 작업은 이걸 쓴다.",
     [{ method: "GET", paths: ["/api/ui/org/collectors"], parse: () => ({}) }],
-    async () => ({ collectors: await listCollectors(), presets: await collectorPresetCatalog(), meaning: MEANING["connector"] })),
+    async (_input: unknown, user: LivelyUser) => ({
+      collectors: await listCollectors(), presets: await collectorPresetCatalog(),
+      canEdit: !!(user?.scopes && user.scopes.includes("admin")),
+      meaning: MEANING["connector"],
+    }), true),
 ];
 
 export const collectorsCapabilities: Capability[] = [

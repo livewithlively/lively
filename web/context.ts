@@ -24,7 +24,10 @@ import { loadAdmin } from './admin-rerender.js';
 /** 서브탭 정의 — key 가 곧 URL(#/context/<key>). */
 const TABS = [
   { key: 'overview', label: '개요', hint: '수집부터 관리까지 흐름 전체를 한눈에 보고, 막힌 곳을 찾습니다.' },
-  { key: 'collect', label: '수집', hint: '외부 도구의 내용을 가져오는 수집기를 만들고 관리합니다.' },
+  // adminEdit — '보는 건 누구나, 고치는 건 관리자'인 단계. 네 단계 중 수집만 그렇다(외부 서비스 토큰을 다룬다).
+  //  이걸 **탭에서** 알리는 이유: 들어가서 버튼이 없는 걸 보고 유추하게 두면 "나만 안 보이나"가 되고,
+  //  관리자는 자기 화면과 남의 화면이 다르다는 사실 자체를 모른다. 배지는 권한과 무관하게 늘 붙인다.
+  { key: 'collect', label: '수집', adminEdit: true, hint: '외부 도구의 내용을 가져오는 수집기를 만들고 관리합니다. 만들고 고치는 일은 관리자 전용이며, 무엇이 언제 수집되는지는 모두가 봅니다.' },
   { key: 'distill', label: '증류', hint: '모인 원본에서 무엇을 어떤 형식의 지식으로 만들지 정합니다.' },
   { key: 'classify', label: '분류', hint: '지식이 어느 갈래에 속하는지 정하는 규칙과 분류축을 관리합니다.' },
   { key: 'manage', label: '관리', hint: '쌓인 지식이 낡거나 어긋나지 않게 살피고, 찾아낸 것을 처리합니다.' },
@@ -47,7 +50,13 @@ export async function renderContext(view: HTMLElement, sub?: string | null): Pro
       class: 'ctx-nav-item' + (t.key === sel ? ' active' : ''),
       href: '#/context/' + t.key,
       'aria-current': t.key === sel ? 'page' : null,
-    }, el('span', { text: t.label })));
+    }, el('span', { text: t.label }),
+       // 배지 문구는 '관리자' 하나로 통일한다(#1085) — admin·memory 같은 내부 scope 이름은 보는 사람에게
+       //  아무 뜻이 아니고, 실제로 그 자리를 고칠 수 있는 사람은 관리 권한을 받은 사람이다.
+       (t as { adminEdit?: boolean }).adminEdit
+         ? el('span', { class: 'admin-only-badge', text: '관리자',
+             title: '보는 것은 모든 구성원이 할 수 있고, 만들고 고치는 것은 관리자만 할 수 있는 단계입니다.' })
+         : null));
     if (t.key === 'overview') nav.append(el('span', { class: 'ctx-nav-sep', 'aria-hidden': 'true' }));
   }
 

@@ -307,7 +307,7 @@
  },
  {
   "name": "org_collectors",
-  "scope": "admin",
+  "scope": null,
   "mcp": true,
   "mutates": false,
   "rest": [

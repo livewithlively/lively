@@ -254,3 +254,23 @@ a.ctx-preview-t:hover { color: var(--blue); }
 .ctx-bulk-t { font-size: 13px; font-weight: 700; color: var(--ink-note); }
 .ctx-bulk-d { font-size: 13px; color: var(--ink-sub); flex: 1; min-width: 200px; }
 .ctx-tag-ready { background: var(--bg-punch); color: var(--ink-note); }
+
+/* ── 관리자 전용 표식(#1419) — '보는 건 누구나, 고치는 건 관리자'인 단계를 권한과 무관하게 늘 알린다. ──
+   왜 늘 보이나: 배지를 비관리자에게만 보이면 관리자는 자기 화면과 남의 화면이 다르다는 걸 모른 채
+   "그냥 만드세요"라고 말하게 되고, 아예 안 보이면 막힌 사람이 "나만 고장났나"로 읽는다.
+   문구는 '관리자' 하나로 통일한다(#1085) — admin·memory 같은 내부 scope 이름은 보는 사람에게 뜻이 없다. */
+.ctx-nav-item .admin-only-badge {
+  padding: 0 6px; border-radius: 999px;
+  font-size: 10px; font-weight: 700; line-height: 15px; white-space: nowrap;
+  background: var(--bg-tint-2); color: var(--muted-head); border: 1px solid var(--line);
+}
+.ctx-nav-item.active .admin-only-badge { background: var(--bg); border-color: var(--blue); color: var(--blue); }
+
+/* 단계 본문 첫 줄의 권한 안내 — 배지·[읽기 전용] pill 과 설명이 한 줄에서 끝나게(줄바꿈되면 두 조각으로 읽힌다). */
+.ctx-perm-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }
+.ctx-perm-line .admin-only-badge {
+  padding: 0 6px; border-radius: 999px; flex: none;
+  font-size: 10px; font-weight: 700; line-height: 16px; white-space: nowrap;
+  background: var(--bg-tint-2); color: var(--muted-head); border: 1px solid var(--line);
+}
+.ctx-perm-line .pill { flex: none; }

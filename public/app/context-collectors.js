@@ -25,16 +25,32 @@ export async function renderCollectors(host) {
     }
     const collectors = d.collectors || [];
     const presets = (d.presets || []).filter((p) => p.enabled !== false);
+    // 편집 가능 여부는 **서버 판정을 그대로 받는다**(scope 를 프론트가 재해석하지 않는다) — 어긋나면
+    //  버튼은 있는데 눌러야 403 이 나고, 사용자는 '고장'으로 읽는다.
+    const canEdit = !!d.canEdit;
     const reload = () => { void renderCollectors(host); };
     const body = el('div', {});
     body.append(el('p', { class: 'admin-hint' }, ...uiText('슬랙·노션 같은 외부 도구의 내용을 주기적으로 가져옵니다. 같은 종류로 여러 개를 만들 수 있습니다 — 워크스페이스가 둘이거나, 채널 그룹마다 주기·산출 방식을 다르게 하고 싶을 때 나눠서 만드세요.')));
+    // 권한 안내는 **모두에게** 보인다(관리자에게도). 관리자만 보이는 안내는 정작 막힌 사람에게 안 닿고,
+    //  비-admin 에게만 보이면 관리자는 자기 화면과 남의 화면이 다르다는 걸 모른 채 "그냥 만드세요"라고 말한다.
+    //  비-admin 에겐 여기에 [읽기 전용] 표식이 더 붙는다(무엇이 다른지가 한 줄 안에서 끝나게).
+    body.append(el('p', { class: 'admin-hint ctx-perm-line' }, canEdit ? null : el('span', { class: 'pill', text: '읽기 전용' }), el('span', { class: 'admin-only-badge', text: '관리자' }), ' 수집기를 만들고 고치고 삭제하는 일과 [지금 수집]은 관리자 전용입니다 — 외부 서비스의 접속 토큰을 다루기 때문입니다. ', canEdit ? '무엇이 언제 수집되는지는 모든 구성원이 볼 수 있습니다.'
+        : '무엇이 언제 수집되는지는 아래에서 그대로 보실 수 있습니다.'));
     if (!collectors.length && !creatingPreset && !choosingPreset) {
-        body.append(el('div', { class: 'card ctx-empty' }, el('p', { class: 'ctx-empty-t', text: '아직 수집기가 없습니다' }), el('p', { class: 'admin-hint', text: '외부 도구를 연결하면 그 내용이 자료로 쌓이고, 다음 단계(증류)가 그중 남길 가치가 있는 것을 지식으로 만듭니다.' })));
+        body.append(el('div', { class: 'card ctx-empty' }, el('p', { class: 'ctx-empty-t', text: '아직 수집기가 없습니다' }), el('p', { class: 'admin-hint', text: canEdit
+                ? '외부 도구를 연결하면 그 내용이 자료로 쌓이고, 다음 단계(증류)가 그중 남길 가치가 있는 것을 지식으로 만듭니다.'
+                : '외부 도구가 아직 연결되지 않았습니다. 연결은 관리자가 합니다 — 필요한 도구가 있으면 관리자에게 요청하세요.' })));
     }
     for (const c of collectors) {
-        body.append(editingId === c.id
+        body.append(canEdit && editingId === c.id
             ? collectorEditor(c, presets, reload)
-            : collectorSummary(c, reload));
+            : collectorSummary(c, reload, canEdit));
+    }
+    // 편집 UI(프리셋 고르기·에디터·만들기 버튼)는 admin 에게만. 위 안내가 '왜 없는지'를 이미 말했으므로
+    //  여기서 또 비활성 버튼을 그리지 않는다 — 누를 수 없는 버튼은 안내가 아니라 미끼다.
+    if (!canEdit) {
+        host.replaceChildren(body);
+        return;
     }
     if (choosingPreset)
         body.append(presetChooser(presets, reload));
@@ -49,8 +65,8 @@ export async function renderCollectors(host) {
     }
     host.replaceChildren(body);
 }
-/** 접힌 카드 — 무엇을·어디서·어떻게 내보내는지 한 줄로. */
-function collectorSummary(c, reload) {
+/** 접힌 카드 — 무엇을·어디서·어떻게 내보내는지 한 줄로. canEdit=false 면 상태만 보이고 액션 줄은 없다. */
+function collectorSummary(c, reload, canEdit = true) {
     const card = el('div', { class: 'card ctx-row' });
     const outLabel = c.output_mode === 'source' ? '자료로 저장'
         : c.output_mode === 'knowledge' ? '지식 직행'
@@ -69,6 +85,9 @@ function collectorSummary(c, reload) {
     else
         meta.push('아직 실행된 적 없음');
     card.append(el('div', { class: 'ctx-row-meta', text: meta.join(' · ') }));
+    // 읽는 사람에게는 여기서 끝 — 상태·주기·최근 실행까지가 '무엇이 언제 수집되나'의 전부다.
+    if (!canEdit)
+        return card;
     const acts = el('div', { class: 'ctx-row-acts' });
     const toggle = el('button', { class: 'btn btn-ghost btn-sm', text: c.enabled ? '끄기' : '켜기' });
     toggle.addEventListener('click', async () => {
