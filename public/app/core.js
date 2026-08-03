@@ -56,7 +56,7 @@ export { TOKEN_KEY, api, apiUrl, appUrl } from './lib/net.js';
 //  DOM 프리미티브 — el/sv 로만 화면을 짓는다(innerHTML 금지 불변식의 물리적 근거).
 export { $view, applyReveal, el, interleave, reducedMotion, sv } from './lib/dom.js';
 //  전역 상태 싱글턴 + 그 위의 판정 헬퍼.
-export { hasScope, state, visAxisOn } from './lib/state.js';
+export { hasScope, navOn, state, visAxisOn } from './lib/state.js';
 //  시간·숫자 표기(core 소유분).
 export { absTime, fmtNum, relTime } from './lib/format.js';
 //  안내문 인라인 표기 → 화면 칩.

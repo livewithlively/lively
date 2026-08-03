@@ -5,7 +5,7 @@
 //  import 방향: main → 각 탭 모듈(단방향). **역으로 어떤 모듈도 main 을 import 하지 않는다** — 그러면
 //   모듈 평가만으로 boot()·전역 리스너 등록이 재실행된다. 새 탭은 아래 route() 에 분기를 더해 붙인다.
 //  ⚠ 실행 순서가 계약이다: 아래 setUnauthorizedHandler 가 이 파일의 첫 실행문이어야 하고, boot() 는 맨 끝이다.
-import { $view, TOKEN_KEY, api, apiUrl, el, errorNote, hideGate, loadPeopleAvatars, markSecretInput, profileAvatar, showGate, state } from './core.js';
+import { $view, TOKEN_KEY, api, apiUrl, el, errorNote, hideGate, loadPeopleAvatars, markSecretInput, navOn, profileAvatar, showGate, state } from './core.js';
 import { renderContext } from './context.js';   // #1419 T6 맥락 관리 — 수집·증류·분류·관리 파이프라인
 import { renderWiki, renderWikiTrash } from './wiki.js';   // #764 WIKI 탭 전면 재구축(사이드바 유지)
 import { consumeWikiPeekGuard, dismissWikiPeek, renderWikiDocPage } from './wiki-doc.js';
@@ -54,6 +54,16 @@ function setActiveTab(name) {
   }
 }
 
+// UI 내비 게이팅(#1454 S2) — 라우트(page 첫 세그먼트) → 상단 탭 매핑. 탭을 숨겨도(boot) 주소창 직접 입력·
+//  북마크·리다이렉트 잔재로는 들어와지므로, route() 가 이 표로 '꺼진 탭의 라우트'를 홈으로 돌린다.
+//  탭의 하위 뷰(k·k-edit·trash = knowledge 계열)도 같은 탭으로 접는다. dashboard 는 폴백 자체라 게이트
+//  대상이 아니다(홈까지 끄면 갈 곳이 없어 무한 리다이렉트 — ui_nav 로 홈은 끌 수 없다는 것이 계약).
+const NAV_PAGE_TAB = {
+  terminal: 'terminal', projects2: 'projects2',
+  knowledge: 'knowledge', trash: 'knowledge', k: 'knowledge', 'k-edit': 'knowledge',
+  context: 'context', system: 'system',
+};
+
 async function route() {
   // #592 피크 패널 — 뒤/앞으로가기가 peek 파라미터만 바꾼 이동이면 패널이 스스로 개폐를 끝냈다(가드) —
   //  본문 전체 재렌더를 생략해 목록 스크롤·상태를 보존. 그 외 라우팅은 남은 피크를 정리(전체화면 이동·탭 전환 등).
@@ -80,6 +90,10 @@ async function route() {
   const { segs, params } = parseHash();
   const view = $view();
   const page = segs[0] || 'dashboard'; // 홈(빈 해시·로고) = 대시보드(#617 — 옛 기본값 install 에서 개편)
+  // 꺼진 탭 라우트 직접 진입 가드(#1454 S2) — ui_nav 로 숨긴 탭은 딥링크·북마크로도 못 들어간다.
+  //  리다이렉트 라우트(#/domainmap→#/context 등)는 replace 가 route() 를 재발화하므로 최종 목적지에서 걸린다.
+  const navTab = NAV_PAGE_TAB[page];
+  if (navTab && !navOn(navTab)) { location.replace('#/dashboard'); return; }
   document.body.dataset.route = page; // 라우트별 레이아웃 훅(#541 — 프로젝트 보드 풀스크린 등). projects2 는 아래서 세분화.
   // #592 doc-mode — 지식 계열 라우트(목록·문서·편집·휴지통)는 main 을 전폭 캔버스로(패딩 0).
   //  셸(.kn-shell)/래퍼(.kn-plain)가 자체 패딩·사이드바 폭을 가진다. 그 외 탭은 기존 중앙 정렬 유지.
@@ -239,11 +253,51 @@ async function boot() {
   // '관리' 탭은 모든 인증 사용자에게 — admin 은 편집, 그 외는 읽기 전용(서버가 쓰기를 강제 차단).
   const sysTab = document.getElementById('system-tab');
   if (sysTab) sysTab.hidden = false;
+  // UI 내비 게이팅(#1454 S2) — ui_nav 에서 명시적으로 끈 탭만 숨긴다({} = 전부 노출·종전 그대로).
+  //  system-tab 해제(위) '뒤'에 돌아야 ui_nav 가 system 도 끌 수 있다. 숨긴 탭의 딥링크는 route() 가드가 막는다.
+  for (const a of document.querySelectorAll<any>('.tabs a[data-tab]')) {
+    a.hidden = !navOn(a.dataset.tab || '');
+  }
   // 상단 워드마크 태그라인 — 관리탭 [조직 정보] 의 표시명이 있으면 'for <조직명>'. 미설정이면 아예 렌더하지 않는다
   //  (기본 배포에 특정 조직명이 박혀 나가지 않게 — 값은 /api/ui/me 의 org_name 한 곳에서만 온다).
   const tagline = document.getElementById('org-tagline');
   const orgName = String(state.me.org_name || '').trim();
   if (tagline && orgName) { tagline.textContent = `for ${orgName}`; tagline.hidden = false; }
+  // 공지 배너(#1454 S3) — 관리자가 runtime config(announcement)로 거는 조직 공지 한 줄(베타 고지 등).
+  //  기본 null = 미표시(종전 그대로). **textContent 만 쓴다**(el 의 text/기성 앵커 — innerHTML 금지, XSS 차단).
+  //  링크는 상대(#·/)면 같은 탭, 외부(http)면 새 탭+noopener. 톤은 info(기본)/warn 두 단계.
+  //  ⚠ 셸 밖 3페이지(public/terminal.html·terminal-grid.html·graph.html)는 이번엔 생략 — me 를 이 경로로
+  //   읽지 않는 독립 페이지라 배선이 달라 별도 후속으로 다룬다(#1454 S3 스코프 결정).
+  const banner = document.getElementById('org-banner');
+  if (banner) {
+    const ann = state.me.announcement;
+    const annText = (ann && typeof ann === 'object') ? String(ann.text || '').trim() : '';
+    if (annText) {
+      banner.classList.toggle('warn', ann.tone === 'warn');
+      const kids = [el('span', { class: 'org-banner-txt', text: annText })];
+      const href = String(ann.href || '').trim();
+      // 스킴 화이트리스트는 서버(org_runtime_update)가 1차 방어 — 여기는 표시 직전 이중 방어(javascript: 류 차단).
+      if (/^(https?:\/\/|\/|#)/.test(href)) {
+        const external = /^https?:\/\//.test(href);
+        kids.push(el('a', {
+          class: 'org-banner-link', href, text: '자세히 →',
+          target: external ? '_blank' : null, rel: external ? 'noopener' : null,
+        }));
+      }
+      banner.replaceChildren(...kids);
+      banner.hidden = false;
+    } else {
+      banner.hidden = true; // 재부팅(재로그인) 시 내려간 공지가 남지 않게 — 대칭 처리
+    }
+  }
+  // 사용량 칩(#1454 S5) — usage_url 설정 시에만 상단바에 노출(기본 null = 종전 그대로 칩 없음).
+  const usageChip = document.getElementById('usage-chip') as any;
+  if (usageChip) {
+    const usageUrl = String(state.me.usage_url || '').trim();
+    const okUrl = /^(https?:\/\/|\/|#)/.test(usageUrl); // 서버 검증의 이중 방어(스킴 화이트리스트)
+    if (okUrl) usageChip.href = usageUrl;
+    usageChip.hidden = !okUrl;
+  }
   const logoutBtn = document.getElementById('logout-btn');
   if (logoutBtn) logoutBtn.hidden = false;
   route();

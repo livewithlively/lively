@@ -18,7 +18,10 @@ import {
 } from "../../sessions/session-share.js";
 import { kitVersion } from "../../org/delivery/publish.js";
 import { DEFAULT_WRITEBACK_NOTICE } from "../../org/delivery/hook-defaults.js";
-import { getRuntimeConfig, updateRuntimeConfig, HOOK_RELAY_DECISIONS, type HookRelayDecision, listAutoApproveTools } from "../../org/store.js";
+import {
+  getRuntimeConfig, updateRuntimeConfig, HOOK_RELAY_DECISIONS, type HookRelayDecision, listAutoApproveTools,
+  type UiNavConfig, type UiAnnouncement, type UiProfile, // #1454 S2~S5 — 매니지드 표면 노브
+} from "../../org/store.js";
 import {
   type EmbeddingConfigPatch, DEFAULT_EMBEDDING_BATCH_SIZE, DEFAULT_EMBEDDING_TIMEOUT_MS, DEFAULT_EMBEDDING_BACKFILL_MIN_MB,
   EMBEDDING_BATCH_MIN, EMBEDDING_BATCH_MAX, EMBEDDING_TIMEOUT_MIN_MS, EMBEDDING_TIMEOUT_MAX_MS, EMBEDDING_BACKFILL_MIN_MB_MIN,
@@ -81,6 +84,10 @@ export const runtimeConfigCapabilities: Capability[] = [
         session_share?: SessionSharePatch;
         hook_grace_ms?: number | null;
         inject_ontology_guide?: boolean;
+        ui_nav?: UiNavConfig;
+        announcement?: UiAnnouncement | null;
+        ui_profile?: UiProfile;
+        usage_url?: string | null;
       } = {};
       // 저장소 정책(#813) — 로그 상한·디스크 임계치. 잡값·뒤집힌 임계치(경고≥위험)는 normalize 가 잡는다.
       //  고객 박스는 .env 를 못 고치므로 **여기(관리탭)가 유일한 조절 창구**다.
@@ -197,6 +204,65 @@ export const runtimeConfigCapabilities: Capability[] = [
       }
       // (#1245) 온톨로지 가이드(제품 소유 섹션) 주입 토글 — 본문은 코드 단일 출처(편집 불가), org 는 이것만 정한다.
       if (input.inject_ontology_guide !== undefined) patch.inject_ontology_guide = Boolean(input.inject_ontology_guide);
+      // ── 매니지드 표면 노브(#1454 S2~S5) — 전부 기본값이 '기존 동작 불변'(ui_nav {} = 전탭 노출 ·
+      //  announcement/usage_url null = 미표시 · ui_profile 'full' = 현행). 셀프호스트는 안 건드리면 무변화.
+      // ui_nav(S2): {tabs:{<탭>:false}} 로 **명시적 false 인 탭만** 숨긴다(프론트 web/lib/state.ts navOn 이 해석).
+      if (input.ui_nav !== undefined) {
+        const raw = input.ui_nav;
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "ui_nav 는 객체여야 합니다");
+        const src = raw as Record<string, unknown>;
+        for (const k of Object.keys(src)) if (k !== "tabs") throw new HttpError(400, `ui_nav 키 '${k}' 는 지원되지 않습니다(tabs 만)`);
+        const out: UiNavConfig = {};
+        if (src.tabs !== undefined) {
+          if (src.tabs === null || typeof src.tabs !== "object" || Array.isArray(src.tabs)) throw new HttpError(400, "ui_nav.tabs 는 객체여야 합니다");
+          const tabsRaw = src.tabs as Record<string, unknown>;
+          const keys = Object.keys(tabsRaw);
+          if (keys.length > 32) throw new HttpError(400, "ui_nav.tabs 가 너무 많습니다(32개 이하)");
+          const tabs: Record<string, boolean> = {};
+          for (const k of keys) {
+            // 탭 이름은 index.html data-tab 슬러그(dashboard·terminal·projects2·knowledge·context·system…) — 형식만 강제.
+            if (!/^[a-z][a-z0-9_-]{0,32}$/.test(k)) throw new HttpError(400, `ui_nav.tabs 키 '${k}' 는 탭 이름 형식이어야 합니다(소문자/숫자/_/-)`);
+            tabs[k] = Boolean(tabsRaw[k]);
+          }
+          out.tabs = tabs;
+        }
+        patch.ui_nav = out;
+      }
+      // announcement(S3): null = 배너 내리기. 렌더는 textContent 전용(XSS 불가)이지만 href 는 스킴을 여기서도 제한
+      //  (javascript: 류 차단 — 저장 경계에서 막아야 다른 소비 표면이 생겨도 안전).
+      if (input.announcement !== undefined) {
+        if (input.announcement === null) patch.announcement = null;
+        else {
+          const raw = input.announcement;
+          if (typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "announcement 는 객체 또는 null 이어야 합니다");
+          const a = raw as Record<string, unknown>;
+          const text = str(a.text, "announcement.text", 500).trim();
+          if (!text) throw new HttpError(400, "announcement.text 는 비울 수 없습니다 — 배너를 내리려면 announcement 에 null 을 보내세요");
+          let href: string | null = null;
+          if (a.href !== undefined && a.href !== null && a.href !== "") {
+            href = str(a.href, "announcement.href", 500).trim();
+            if (!/^(https?:\/\/|\/|#)/.test(href)) throw new HttpError(400, "announcement.href 는 http(s):// 또는 상대경로(/·#)여야 합니다");
+          }
+          const tone = (a.tone === undefined || a.tone === null || a.tone === "") ? "info" : String(a.tone);
+          if (tone !== "info" && tone !== "warn") throw new HttpError(400, "announcement.tone 은 info|warn 만 허용됩니다");
+          patch.announcement = { text, href, tone };
+        }
+      }
+      // ui_profile(S4): 관리탭 프로파일 — 'personal' 이면 조직 운영 섹션을 숨긴다(web/admin-shell.ts sectionHidden).
+      if (input.ui_profile !== undefined) {
+        const p = String(input.ui_profile);
+        if (p !== "full" && p !== "personal") throw new HttpError(400, "ui_profile 은 full|personal 만 허용됩니다");
+        patch.ui_profile = p;
+      }
+      // usage_url(S5): 상단바 '사용량' 칩 링크. null/'' = 칩 내리기. href 와 같은 스킴 제한.
+      if (input.usage_url !== undefined) {
+        if (input.usage_url === null || input.usage_url === "") patch.usage_url = null;
+        else {
+          const u = str(input.usage_url, "usage_url", 500).trim();
+          if (!/^(https?:\/\/|\/|#)/.test(u)) throw new HttpError(400, "usage_url 은 http(s):// 또는 상대경로(/·#)여야 합니다");
+          patch.usage_url = u;
+        }
+      }
       if (input.writeback_notice !== undefined) {
         patch.writeback_notice = (input.writeback_notice === null || input.writeback_notice === "")
           ? null : str(input.writeback_notice, "writeback_notice", 2000);
@@ -372,6 +438,16 @@ export const runtimeConfigCapabilities: Capability[] = [
     }, {
       hooks: z.object({ session_preload: z.boolean(), work_flag: z.boolean(), stop_writeback_gate: z.boolean(), self_update: z.boolean() }).partial().optional().describe("세션 훅 on/off (self_update=키트 자동 업데이트)"),
       inject_ontology_guide: z.boolean().optional().describe("#1245 온톨로지 가이드(제품 소유 섹션) 주입 on/off — 본문은 코드 단일 출처라 편집 불가, 주입 여부만 제어"),
+      // ── 매니지드 표면 노브(#1454 S2~S5) — 기본값 = 기존 동작 불변. 셀프호스트는 안 건드리면 무변화. ──
+      ui_nav: z.object({ tabs: z.record(z.boolean()).optional().describe("탭 슬러그(data-tab) → 노출 여부. **명시적 false 만** 숨김") })
+        .optional().describe("S2 상단 탭 게이팅 — {} = 전부 노출(현행). 예 {tabs:{context:false}} = 맥락 관리 탭 숨김"),
+      announcement: z.object({
+        text: z.string().describe("배너 문구(필수, 500자 이하)"),
+        href: z.string().nullable().optional().describe("자세히 링크 — http(s):// 또는 상대경로(/·#)"),
+        tone: z.enum(["info", "warn"]).optional().describe("배너 톤(기본 info)"),
+      }).nullable().optional().describe("S3 조직 공지 배너 — null 로 내림(기본 null = 미표시)"),
+      ui_profile: z.enum(["full", "personal"]).optional().describe("S4 관리탭 프로파일 — personal 이면 조직 운영 섹션 숨김(기본 full = 현행)"),
+      usage_url: z.string().nullable().optional().describe("S5 상단바 '사용량' 칩 링크 — null/'' 로 내림(기본 null = 미노출)"),
       writeback_notice: z.string().nullable().optional().describe("세션종료 너지 문구(null=기본값)"),
       work_roots: z.array(z.string()).optional().describe("작업 루트 디렉토리"),
       allowed_auth_envs: z.array(z.string()).optional().describe("http_proxy 참조 가능 env 이름 화이트리스트"),

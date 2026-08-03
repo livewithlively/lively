@@ -5,7 +5,7 @@
 //  ⚠ 재수출(하위호환): skeleton·skeletonRows·overlayBox 는 **이 파일 소유가 아니다** — ui-primitives.ts 가 소유하고
 //   여기서 그대로 재수출할 뿐이다(#1313 R27). 18개 파일이 옛 경로 './learn.js' 로 가져가고 있어 남겨 뒀다.
 //   새 소비자는 ui-primitives.ts 에서 직접 받아라 — 이 배럴 몫은 줄어드는 방향으로만 간다.
-import { api, el, errorNote, pageHead, renderMarkdown, state, sv } from './core.js';
+import { api, el, errorNote, navOn, pageHead, renderMarkdown, state, sv } from './core.js';
 // 관리탭 조각 4개를 **실체 모듈에서 직접** 받는다(#1313 R40). 종전엔 넷 다 './admin.js' 배럴 경유였고,
 //  admin.ts 가 review/visibility-axes 를 import 하는 한 그 배럴이 learn 으로 되돌아오는 순환 4건을 만들었다
 //  (check-imports 의 ALLOWED_CYCLES 에 'R37/R40 이 나가면 사라진다'로 예약돼 있던 바로 그것).
@@ -336,35 +336,37 @@ function flowArrow() { return el('div', { class: 'guide-flow-arrow', 'aria-hidde
 //  ① 시작(홈=대시보드) ② 실무=AI로 직접 일하기(터미널·프로젝트) ③ 저장소=회사 지식·코드 데이터(WIKI·도메인 맵) ④ 설정·도움말(관리·사용가이드).
 //  #617 이후 IA: 터미널(AI 세션)은 상단 탭이 아니라 '홈'에서 열고, 옛 상단 '시작하기'는 사용 가이드 서브탭(#/learn/install)으로 이동.
 //  탭 객체: [아이콘, 이름, 태그, 강조색, 강조배경, 한줄요약, 친절설명, 링크, 링크라벨, 현재페이지?].
+//  nav(#1454 S2): 이 카드가 속한 상단 탭(data-tab) — ui_nav 로 꺼진 탭의 카드는 tabsGuideCard 가 걸러낸다
+//  (숨긴 탭을 가이드가 계속 소개하면 '있다는데 없는' 화면이 된다). nav 없는 카드(사용 가이드)는 항상 노출.
 const GUIDE_CHAPTERS = [
     { num: '1', title: '시작', sub: '로그인하면 처음 만나는 내 화면', tabs: [
-            { icon: 'home', name: '홈', tag: '로그인 후 첫 화면', hue: '#2D6BF0', bg: '#EEF4FF',
+            { icon: 'home', name: '홈', tag: '로그인 후 첫 화면', hue: '#2D6BF0', bg: '#EEF4FF', nav: 'dashboard',
                 summary: '내 일과 팀 소식을 한눈에 모은 대시보드',
                 desc: '라이블리에 들어오면 가장 먼저 만나는 나만의 화면이에요. 내가 맡은 프로젝트, 팀이 공유하는 폴더, 최신 알림, 내가 켜 둔 AI 세션, 팀의 작업 기록을 한 화면에 모아 보여줍니다. 여기 ‘내 AI 세션’에서 [+ 새 세션]을 누르면 곧바로 AI와 대화를 시작할 수 있어요.',
                 href: '#/dashboard', link: '홈 열기' },
         ] },
     { num: '2', title: '실무', sub: 'AI로 직접 일하고, 진행 상황을 관리해요', tabs: [
-            { icon: 'terminal', name: '내 AI 세션', tag: '설치 없이 바로', hue: '#0FA37E', bg: '#EBF9F4',
+            { icon: 'terminal', name: '내 AI 세션', tag: '설치 없이 바로', hue: '#0FA37E', bg: '#EBF9F4', nav: 'terminal',
                 summary: '웹에서 곧장 AI와 대화하는 곳',
                 desc: '브라우저에서 바로 AI와 대화하는 화면이에요. 회사 맥락이 이미 들어 있는 AI를 띄워, 까만 창에 하고 싶은 말을 그냥 입력하면 됩니다. 홈의 ‘내 AI 세션’에서 [+ 새 세션]으로 열 수 있고, 대화는 서버에 저장돼 창을 닫아도 이어서 쓸 수 있어요. 비개발자에게 가장 쉬운 출발점입니다.',
                 href: '#/terminal', link: '내 AI 세션 열기' },
-            { icon: 'trello', name: '프로젝트', tag: '진행상황 파악', hue: '#6E59D9', bg: '#F1EEFC',
+            { icon: 'trello', name: '프로젝트', tag: '진행상황 파악', hue: '#6E59D9', bg: '#F1EEFC', nav: 'projects2',
                 summary: '회사에서 지금 무슨 일이 진행 중인지',
                 desc: '진행 중·완료된 프로젝트와 할 일을 모아 보는 곳이에요. 누가 무엇을 했고 지금 무엇을 하는지(작업 현황)를 한눈에 볼 수 있어, 팀 전체의 흐름을 따라가기 좋습니다. 사업·제품·시스템별로도 훑어볼 수 있어요.',
                 href: '#/projects2', link: '프로젝트 열기' },
         ] },
     { num: '3', title: '저장소', sub: 'AI가 읽는 회사의 코드·지식이 쌓이는 데이터예요', tabs: [
-            { icon: 'book-open', name: 'WIKI', tag: '회사 지식 창고', hue: '#1E54CC', bg: '#EAF0FF',
+            { icon: 'book-open', name: 'WIKI', tag: '회사 지식 창고', hue: '#1E54CC', bg: '#EAF0FF', nav: 'knowledge',
                 summary: 'AI에게 전달되는 ‘회사의 지식’이 쌓이는 곳',
                 desc: '회사가 쌓아온 규칙·자료·결정·절차를 모아둔 지식 창고예요. 여기 정리된 내용이 바로 AI에게 자동으로 전달되는 ‘회사 맥락’입니다. 사업·제품·시스템으로 분류돼 있고, 검색으로 원하는 내용을 찾을 수 있어요.',
                 href: '#/knowledge', link: 'WIKI 열기' },
-            { icon: 'share-2', name: '분류체계', tag: '모두', hue: '#1BAEB0', bg: '#E9F7F7',
+            { icon: 'share-2', name: '분류체계', tag: '모두', hue: '#1BAEB0', bg: '#E9F7F7', nav: 'context',
                 summary: '회사의 기록을 어떤 갈래로 나눌지 정하는 곳',
                 desc: '지식과 프로젝트를 담는 분류(사업·제품·시스템과 그 하위 갈래)를 만들고, 각 분류가 무엇을 담는지 정의합니다. 정의가 오래돼 현실과 어긋나기 시작하면 이 화면에서 먼저 드러나요.',
                 href: '#/categories', link: '분류체계 열기' },
         ] },
     { num: '4', title: '설정 · 도움말', sub: '환경을 설정하고, 사용법을 안내해요', tabs: [
-            { icon: 'sliders', name: '관리', tag: '주로 관리자용', hue: '#5A6B85', bg: '#EDF1F7',
+            { icon: 'sliders', name: '관리', tag: '주로 관리자용', hue: '#5A6B85', bg: '#EDF1F7', nav: 'system',
                 summary: '위 모든 것을 설정하고 편집하는 곳',
                 desc: '접속·구성원 같은 기본 설정부터, AI에게 가르칠 회사 규칙·용어, AI가 동작하는 방식까지 설정하는 곳이에요. 항목마다 ‘구성원에게 어떤 효과가 생기는지’를 함께 보여줍니다. 누구나 볼 수 있지만, 실제 수정은 관리자만 할 수 있어요.',
                 href: '#/system', link: '관리 열기' },
@@ -376,11 +378,16 @@ const GUIDE_CHAPTERS = [
 ];
 function tabsGuideCard() {
     const chapters = GUIDE_CHAPTERS.map((c) => {
-        const grid = el('div', { class: 'tabguide-grid' + (c.tabs.length === 1 ? ' tabguide-grid--single' : '') });
-        for (const t of c.tabs)
+        // ui_nav 게이팅(#1454 S2) — 꺼진 탭의 카드는 소개하지 않는다(가이드가 없는 화면을 안내하면 거짓말이 된다).
+        //  nav 없는 카드(사용 가이드=현재 페이지)는 항상 노출. 챕터의 카드가 전부 꺼지면 챕터 머리도 뺀다.
+        const tabs = c.tabs.filter((t) => !t.nav || navOn(t.nav));
+        if (!tabs.length)
+            return null;
+        const grid = el('div', { class: 'tabguide-grid' + (tabs.length === 1 ? ' tabguide-grid--single' : '') });
+        for (const t of tabs)
             grid.append(tabCard(t));
         return el('div', { class: 'tabchapter' }, el('div', { class: 'tabchapter-head' }, el('span', { class: 'tabchapter-num', 'aria-hidden': 'true', text: c.num }), el('div', { class: 'tabchapter-headtext' }, el('div', { class: 'tabchapter-title', text: c.title }), el('div', { class: 'tabchapter-sub', text: c.sub }))), grid);
-    });
+    }).filter(Boolean);
     // 제목은 페이지 h1('메뉴 한눈에 보기')이 이미 말하므로 카드 머리는 두지 않는다(#780 — 서브탭 분리).
     return el('div', { class: 'card' }, el('p', { class: 'guide-lead', text: '이 도구의 주요 화면은 성격에 따라 네 묶음이에요 — ① 시작(홈), ② 실무(AI 세션·프로젝트), ③ 저장소(WIKI·도메인 맵), ④ 설정·도움말(관리·사용 가이드). 묶음별로 한 번만 훑어두면 길을 잃지 않아요.' }), ...chapters);
 }
@@ -459,7 +466,15 @@ async function renderLearnTour(view) {
     // 섹션 한 줄(#780) — 골라 들어가는 게 주 동선이라 진입 버튼을 각 줄에 두고, 본 섹션은 ✓ 로 표시한다.
     //  pathStep 과 같은 시각 언어(번호·제목·설명). §0.5 채색 예산: 채운 파란 버튼은 위 '처음부터 쭉 보기' 하나뿐.
     const courseRow = (num, key, title, desc) => el('div', { class: 'guide-path-step' }, el('div', { class: 'guide-path-num', 'aria-hidden': 'true', text: num }), el('div', { class: 'guide-path-body' }, el('div', { class: 'guide-path-title' }, el('span', { text: title }), isSectionDone(key) ? el('span', { class: 'admin-hint', style: 'margin-left:8px;font-weight:400', text: '✓ 봤어요' }) : null), el('p', { class: 'guide-path-desc', text: desc }), el('button', { class: 'btn btn-sm btn-ghost guide-path-btn', text: '▶ ' + title.split(' — ')[0] + '만 보기', onclick: () => startGuideTour([key]) })));
-    const courses = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '섹션만 골라 보기' })), el('p', { class: 'guide-lead', text: '급하면 필요한 것만 봐도 돼요. 각 섹션은 따로 시작하고 따로 끝나요.' }), el('div', { class: 'guide-path' }, courseRow('1', 'projects', '프로젝트 — 일의 흐름', '회사의 일이 어디서 어떻게 진행되는지: 보드와 리스트, 프로젝트 상세, 그리고 AI에게 전달하는 \'필요지식\'.'), courseRow('2', 'domainmap', '도메인 맵 — 코드의 구조', '제품 코드가 어떤 도메인 단위로 나뉘어 있는지, 하려던 것(should)과 실제(is)의 대조.'), courseRow('3', 'wiki', 'WIKI — AI가 읽는 지식', '회사 지식이 어떻게 분류·검색되는지, 지식 한 덩어리와 핀(인덱스)의 의미.')));
+    // ui_nav 게이팅(#1454 S2) — 꺼진 탭의 섹션 코스는 진입 버튼을 내지 않는다(첫 스텝이 숨은 탭을 짚는
+    //  막다른 투어가 된다). nav 매핑: projects→projects2 · domainmap→context(#/categories 는 그리로 리다이렉트) ·
+    //  wiki→knowledge. 남은 코스만 번호를 다시 매긴다.
+    const courseDefs = [
+        { key: 'projects', nav: 'projects2', title: '프로젝트 — 일의 흐름', desc: '회사의 일이 어디서 어떻게 진행되는지: 보드와 리스트, 프로젝트 상세, 그리고 AI에게 전달하는 \'필요지식\'.' },
+        { key: 'domainmap', nav: 'context', title: '도메인 맵 — 코드의 구조', desc: '제품 코드가 어떤 도메인 단위로 나뉘어 있는지, 하려던 것(should)과 실제(is)의 대조.' },
+        { key: 'wiki', nav: 'knowledge', title: 'WIKI — AI가 읽는 지식', desc: '회사 지식이 어떻게 분류·검색되는지, 지식 한 덩어리와 핀(인덱스)의 의미.' },
+    ].filter((c) => navOn(c.nav));
+    const courses = courseDefs.length ? el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '섹션만 골라 보기' })), el('p', { class: 'guide-lead', text: '급하면 필요한 것만 봐도 돼요. 각 섹션은 따로 시작하고 따로 끝나요.' }), el('div', { class: 'guide-path' }, courseDefs.map((c, i) => courseRow(String(i + 1), c.key, c.title, c.desc)))) : null;
     const extra = el('div', { class: 'card' }, el('div', { class: 'card-head' }, el('h2', { text: '더 해보기' })), el('p', { class: 'admin-hint', text: 'AI 세션을 직접 만들어 첫 대화까지 해보는 실습 가이드는 별도로 있어요.' }), el('div', { class: 'step-cta', style: 'margin-bottom:0' }, el('a', { class: 'btn btn-sm btn-ghost', href: '#/dashboard?tour=1', text: '홈에서 따라하며 만들기 →' }), 
     // #762 '#/learn/install' 페이지 숨김 → 같은 설치 화면을 품은 '시작하기'(#/start)로 링크(복원 시 '#/learn/install'·'내 AI 세션 생성'으로 되돌리기).
     el('a', { class: 'btn btn-sm btn-ghost', href: '#/start', text: '내 컴퓨터에 설치하기 — 시작하기 →' })));
