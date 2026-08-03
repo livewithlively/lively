@@ -75,15 +75,18 @@ export const connectorsCapabilities: Capability[] = [
     "커넥터 실행(connector_run) 목록 — 상태·모드·트리거·소요. 로그는 개별 run 조회로. limit(≤100, 기본 20)·offset 으로 과거 이력 페이지네이션(#709).",
     [{ method: "GET", paths: ["/api/ui/org/connector/runs"], parse: (req) => ({
       system: req.query?.system ? String(req.query.system) : undefined,
+      collector_id: req.query?.collector_id ? Number(req.query.collector_id) : undefined,
       limit: req.query?.limit ? Number(req.query.limit) : undefined,
       offset: req.query?.offset ? Number(req.query.offset) : undefined,
     }) }],
     async (input: Record<string, unknown>) => {
       const limit = Number.isFinite(Number(input.limit)) && Number(input.limit) > 0 ? Number(input.limit) : 20;
       const offset = Number.isFinite(Number(input.offset)) && Number(input.offset) > 0 ? Number(input.offset) : 0;
-      return { runs: await listConnectorRuns(input.system ? String(input.system) : undefined, limit, offset) };
+      const collectorId = Number(input.collector_id ?? 0) || undefined;
+      return { runs: await listConnectorRuns(input.system ? String(input.system) : undefined, limit, offset, collectorId) };
     }, {
-      system: z.string().optional().describe("커넥터 시스템(예: clickup)으로 필터"),
+      system: z.string().optional().describe("커넥터 시스템(예: clickup)으로 필터 — 그 프리셋의 전 인스턴스가 함께 보인다"),
+      collector_id: z.number().int().positive().optional().describe("수집기 인스턴스로 필터(#1419) — 그 수집기의 이력만"),
       limit: z.number().int().min(1).max(100).optional().describe("페이지 크기(≤100, 기본 20)"),
       offset: z.number().int().min(0).optional().describe("페이지 오프셋(기본 0) — 최신 N건 너머 과거 이력(#709)"),
     }),

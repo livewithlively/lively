@@ -16,7 +16,7 @@ const ORG_AUDIT_PERIOD_DAYS: Record<string, number> = { all: 0, '1d': 1, '7d': 7
 
 const OA_ENTITY_LABELS: any = {
   org_member: '구성원', auth_token: '토큰', org_profile: '조직 프로필', org_section: '주입 섹션',
-  org_runtime_config: '런타임 설정', org_connector: '외부 자료 수집', org_mcp_server: '외부 도구 서버(MCP)',
+  org_runtime_config: '런타임 설정', org_connector: '외부 자료 수집(레거시)', org_collector: '수집기', org_mcp_server: '외부 도구 서버(MCP)',
   org_hook: '커스텀 훅', org_tool: 'AI 도구', org_harness_asset: '스킬·에이전트·커맨드', org_db_source: 'DB 소스',
   org_db_table_policy: '테이블 정책', org_db_column_mask: '컬럼 마스킹',
 };

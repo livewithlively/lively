@@ -1,0 +1,276 @@
+/* 31-context-pipeline.css — [맥락 관리] 탭(#1419 T6). 파이프라인 개요 + 단계별 관리 화면.
+ *
+ *  토큰만 쓴다(리터럴 색·radius 0). radius 스케일 6/9/12/16/999, 상태색은 blue/mint/coral 삼각.
+ *  컬러 예산: 채운 블루 1(primary CTA — 버튼 컴포넌트가 이미 소유) + 상태 점 3색 + 선택 틴트.
+ *  카드 안 카드 중첩 금지 규칙에 따라, 단계 카드 내부는 카드가 아니라 평면 블록으로 짠다.
+ */
+
+/* ── 레이아웃 ── */
+.ctx-layout { max-width: 1160px; margin: 0 auto; padding: 0 20px 64px; }
+.ctx-body { margin-top: 18px; }
+
+/* ── 단계 내비 — 파이프라인 순서 그대로. 순서 자체가 정보라 가로 배열을 유지한다. ── */
+.ctx-nav {
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  border-bottom: 1px solid var(--line); padding-bottom: 0; margin-top: 16px;
+}
+.ctx-nav-item {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 9px 14px; border-radius: 9px 9px 0 0;
+  font-size: 14px; font-weight: 600; color: var(--ink-sub);
+  border: 1px solid transparent; border-bottom: none;
+  margin-bottom: -1px; transition: color .12s ease, background .12s ease;
+}
+.ctx-nav-item:hover { color: var(--ink); background: var(--bg-tint); }
+.ctx-nav-item.active {
+  color: var(--ink); background: var(--bg);
+  border-color: var(--line); font-weight: 700;
+}
+/* 개요와 4단계 사이 구분 — 개요는 '단계'가 아니라 전체 조망이다. */
+.ctx-nav-sep { width: 1px; height: 16px; background: var(--line); margin: 0 8px; }
+
+/* ── 파이프라인 개요 ── */
+.ctxp { display: grid; gap: 16px; }
+.ctxp-loading { padding: 28px 0; }
+
+.ctxp-summary {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 12px 14px; border-radius: 12px;
+  background: var(--bg-success); border: 1px solid var(--line);
+}
+.ctxp-summary-warn { background: var(--bg-note); border-color: var(--line-note); }
+.ctxp-summary-badge {
+  font-size: 13px; font-weight: 700; color: var(--coral-text);
+  padding: 3px 10px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line);
+  white-space: nowrap;
+}
+.ctxp-summary-ok { color: var(--mint-deep); }
+.ctxp-summary-txt { font-size: 14px; color: var(--ink-sub); }
+
+/* 4단계 트랙 — 가로 나열이 요점(단계 '사이'를 비교하려면 나란히 놓여야 한다). */
+.ctxp-track {
+  display: grid; align-items: stretch; gap: 0;
+  grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr;
+}
+
+.ctxp-stage {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 16px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--bg);
+  color: inherit; min-width: 0;
+  transition: border-color .12s ease, background .12s ease, transform .12s ease;
+}
+.ctxp-stage:hover { border-color: var(--line-net-2); background: var(--bg-tint); }
+.ctxp-stage:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+/* 상태별 좌측 강조 — 채운 배경 대신 얇은 띠(컬러 예산 절약 + 스캔 용이). */
+.ctxp-stage.ctxp-warn { border-left: 3px solid var(--coral); }
+.ctxp-stage.ctxp-off  { border-left: 3px solid var(--muted-2); }
+.ctxp-stage.ctxp-note { border-left: 3px solid var(--node-blue-soft); }
+.ctxp-stage.ctxp-ok   { border-left: 3px solid var(--mint); }
+
+.ctxp-stage-head { display: flex; align-items: center; gap: 8px; }
+.ctxp-step {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 999px; flex: none;
+  background: var(--bg-punch); color: var(--ink-note);
+  font-size: 12px; font-weight: 700;
+}
+.ctxp-stage-title { font-size: 15px; font-weight: 700; color: var(--ink); }
+.ctxp-state { margin-left: auto; display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12px; font-weight: 600; color: var(--ink-sub); white-space: nowrap; }
+
+/* 상태 점 — 채운 컬러 필 금지 규칙에 따른 표준 표기(점 + 라벨). */
+.ctxp-dot { width: 7px; height: 7px; border-radius: 999px; flex: none; display: inline-block; }
+.ctxp-dot-ok   { background: var(--mint); }
+.ctxp-dot-note { background: var(--node-blue-soft); }
+.ctxp-dot-warn { background: var(--coral); }
+.ctxp-dot-off  { background: var(--muted-2); }
+
+.ctxp-what { margin: 0; font-size: 13px; color: var(--muted-head); line-height: 1.5; }
+.ctxp-line { margin: 0; font-size: 13.5px; color: var(--ink-sub); line-height: 1.55; }
+.ctxp-warn .ctxp-line, .ctxp-off .ctxp-line { color: var(--ink-note); font-weight: 600; }
+
+.ctxp-metrics { display: flex; gap: 14px; flex-wrap: wrap; margin-top: auto; padding-top: 10px;
+  border-top: 1px solid var(--line-row); }
+.ctxp-metric { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ctxp-metric-v { font-size: 17px; font-weight: 700; color: var(--ink); line-height: 1.2; }
+.ctxp-metric-l { font-size: 11.5px; color: var(--muted-head); white-space: nowrap; }
+
+.ctxp-goto { font-size: 12.5px; font-weight: 600; color: var(--blue); }
+
+/* 단계 사이 흐름 — 무엇이 넘어가는지. */
+.ctxp-flow { display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px; padding: 0 10px; min-width: 64px; }
+.ctxp-flow-line { flex: 1; width: 1px; background: var(--line-net); min-height: 12px; }
+.ctxp-flow-label { font-size: 11px; color: var(--muted); white-space: nowrap; }
+
+/* 검토 대기 · 자동 실행 — 개요 하단 보조 정보. */
+.ctxp-gates, .ctxp-jobs {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg-tint);
+}
+.ctxp-gates-title, .ctxp-jobs-title { font-size: 13px; font-weight: 700; color: var(--ink-sub); }
+.ctxp-gate { display: inline-flex; align-items: baseline; gap: 6px; color: inherit;
+  padding: 4px 10px; border-radius: 9px; background: var(--bg); border: 1px solid var(--line); }
+.ctxp-gate:hover { border-color: var(--line-net-2); }
+.ctxp-gate-n { font-size: 15px; font-weight: 700; color: var(--ink); }
+.ctxp-gate-l { font-size: 12.5px; color: var(--ink-sub); }
+.ctxp-job { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-sub); }
+.ctxp-job-n { font-weight: 600; color: var(--ink); }
+.ctxp-job-v { color: var(--muted-head); }
+.ctxp-jobs-link { margin-left: auto; font-size: 12.5px; font-weight: 600; color: var(--blue); }
+
+/* ── 단계별 관리 화면 공통 ── */
+.ctx-seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 9px;
+  background: var(--bg-tint-2); border: 1px solid var(--line); margin-bottom: 14px; }
+.ctx-seg-item { padding: 6px 14px; border-radius: 6px; border: none; background: transparent;
+  font-size: 13.5px; font-weight: 600; color: var(--ink-sub); cursor: pointer;
+  transition: background .12s ease, color .12s ease; }
+.ctx-seg-item:hover { color: var(--ink); }
+.ctx-seg-item.active { background: var(--bg); color: var(--ink); font-weight: 700; }
+
+.ctx-row { margin-top: 12px; }
+.ctx-row-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ctx-row-title { font-size: 15px; font-weight: 700; color: var(--ink); }
+.ctx-row-meta { font-size: 13px; color: var(--muted-head); margin-top: 6px; line-height: 1.5; }
+.ctx-row-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.ctx-state { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px;
+  font-weight: 600; color: var(--ink-sub); }
+
+.ctx-tag { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 999px;
+  background: var(--bg-tint-2); color: var(--ink-sub); font-size: 12px; font-weight: 600;
+  white-space: nowrap; }
+.ctx-tag-warn { background: var(--bg-note); color: var(--coral-text); }
+
+.ctx-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+.ctx-sub { font-size: 13px; font-weight: 700; color: var(--ink-sub); margin: 14px 0 8px; }
+
+.ctx-empty { margin-top: 12px; text-align: center; padding: 32px 20px; }
+.ctx-empty-t { font-size: 15px; font-weight: 700; color: var(--ink); margin: 0 0 6px; }
+
+.ctx-cov { margin-top: 12px; }
+.ctx-cov-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.ctx-warn-line { margin-top: 10px; color: var(--ink-note); }
+
+/* ── 편집기 ── */
+.ctx-editor { margin-top: 12px; border-left: 3px solid var(--blue); }
+.ctx-field { margin: 0 0 14px; }
+.ctx-field .field-label { font-size: 13px; font-weight: 700; color: var(--ink); margin-bottom: 2px; }
+.ctx-field-hint { margin: 2px 0 6px; }
+.ctx-pick-row { display: flex; gap: 8px; align-items: center; }
+.ctx-pick-row input { flex: 1; min-width: 0; }
+.ctx-pick-list { display: grid; gap: 2px; max-height: 340px; overflow: auto; }
+.ctx-pick-item { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 6px;
+  font-size: 13.5px; cursor: pointer; }
+.ctx-pick-item:hover { background: var(--bg-tint); }
+
+/* 프리셋 고르기 — 만들기의 첫 결정. */
+.ctx-preset-grid { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.ctx-preset { display: flex; flex-direction: column; gap: 3px; text-align: left;
+  padding: 13px 14px; border-radius: 9px; border: 1px solid var(--line); background: var(--bg);
+  cursor: pointer; transition: border-color .12s ease, background .12s ease; }
+.ctx-preset:hover { border-color: var(--blue); background: var(--bg-tint); }
+.ctx-preset:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.ctx-preset-t { font-size: 14px; font-weight: 700; color: var(--ink); }
+.ctx-preset-d { font-size: 12.5px; color: var(--muted-head); line-height: 1.45; }
+
+/* 안내 접이식 */
+.ctx-guide { margin: 0 0 16px; padding: 12px 14px; border-radius: 9px;
+  background: var(--bg-note); border: 1px solid var(--line-note); }
+.ctx-guide > summary { font-size: 13.5px; font-weight: 700; color: var(--ink-note); cursor: pointer; }
+.ctx-guide-steps { margin: 10px 0 0; padding-left: 20px; font-size: 13px; color: var(--ink-sub); line-height: 1.7; }
+.ctx-guide-link { font-size: 13px; font-weight: 600; color: var(--blue); }
+
+/* 미리보기 · 실행 기록 */
+.ctx-preview-list { display: grid; gap: 6px; margin-top: 10px; }
+.ctx-preview-row { padding: 10px 12px; border-radius: 9px; border: 1px solid var(--line); background: var(--bg); }
+.ctx-preview-t { display: block; font-size: 13.5px; font-weight: 600; color: var(--ink); }
+a.ctx-preview-t:hover { color: var(--blue); }
+.ctx-preview-m { font-size: 12px; color: var(--muted-head); margin-top: 2px; }
+.ctx-preview-b { font-size: 12.5px; color: var(--ink-sub); margin-top: 6px; line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ctx-run-row { display: flex; align-items: center; gap: 8px; padding: 9px 11px; border-radius: 9px;
+  cursor: pointer; }
+.ctx-run-row:hover { background: var(--bg-tint); }
+.ctx-run-t { font-size: 13.5px; font-weight: 600; color: var(--ink); }
+.ctx-run-m { font-size: 12.5px; color: var(--muted-head); margin-left: auto; }
+
+/* ── 발견 큐 ── */
+.ctx-filters { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+.ctx-chip { padding: 5px 12px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--ink-sub); font-size: 12.5px; font-weight: 600; cursor: pointer;
+  transition: border-color .12s ease, background .12s ease, color .12s ease; }
+.ctx-chip:hover { border-color: var(--line-net-2); color: var(--ink); }
+.ctx-chip-on { background: var(--bg-sel); border-color: var(--blue); color: var(--blue); }
+.ctx-filter-sep { width: 1px; height: 18px; background: var(--line); margin: 0 4px; }
+
+.ctx-findings { display: grid; gap: 10px; }
+.ctx-finding { margin-top: 0; }
+.ctx-sev-high { border-left: 3px solid var(--coral); }
+.ctx-sev-warn { border-left: 3px solid var(--node-blue-soft); }
+.ctx-sev-note { border-left: 3px solid var(--muted-3); }
+.ctx-finding-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ctx-sev { font-size: 12px; font-weight: 700; color: var(--ink-sub); }
+.ctx-sev-high .ctx-sev { color: var(--coral-text); }
+.ctx-finding-when { margin-left: auto; font-size: 12px; color: var(--muted); }
+.ctx-finding-sum { margin: 8px 0 0; font-size: 14.5px; font-weight: 600; color: var(--ink); line-height: 1.5; }
+.ctx-finding-target { display: inline-block; margin-top: 6px; font-size: 13px; font-weight: 600; color: var(--blue); }
+.ctx-evidence { margin-top: 8px; }
+.ctx-evidence > summary { font-size: 12.5px; font-weight: 600; color: var(--ink-sub); cursor: pointer; }
+.ctx-evidence-b { margin: 8px 0 0; padding: 10px 12px; border-radius: 9px;
+  background: var(--bg-tint); font-size: 12.5px; color: var(--ink-sub); line-height: 1.6;
+  white-space: pre-wrap; word-break: break-word; }
+
+/* 종류별 현황 */
+.ctx-kind-grid { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.ctx-kind { padding: 11px 13px; border-radius: 9px; border: 1px solid var(--line); background: var(--bg); }
+.ctx-kind-h { display: flex; align-items: center; gap: 6px; }
+.ctx-kind-t { font-size: 13.5px; font-weight: 700; color: var(--ink); }
+.ctx-kind-m { font-size: 12.5px; color: var(--muted-head); margin-top: 3px; }
+
+/* ── 반응형 ──
+ *  파이프라인은 가로 비교가 요점이라 최대한 유지하다가, 좁아지면 2×2 → 세로로 접는다.
+ *  접힐 때 흐름 표시(자료·지식…)는 숨긴다 — 세로에선 화살표가 오히려 읽기를 방해한다. */
+@media (max-width: 1100px) {
+  .ctxp-track { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .ctxp-flow { display: none; }
+}
+@media (max-width: 640px) {
+  .ctx-layout { padding: 0 14px 48px; }
+  .ctxp-track { grid-template-columns: 1fr; }
+  .ctxp-summary { align-items: flex-start; flex-direction: column; gap: 6px; }
+  .ctxp-jobs-link { margin-left: 0; }
+  .ctx-nav { gap: 0; }
+  .ctx-nav-item { padding: 8px 11px; font-size: 13.5px; }
+  .ctx-finding-when { margin-left: 0; }
+  .ctx-preset-grid { grid-template-columns: 1fr; }
+}
+
+/* 제안된 조치 묶음 적용(#1419 T9) — action_level='propose' 의 실체가 화면에 드러나는 자리.
+   report 는 목록만 쌓이고, propose 면 이 바가 뜬다(라벨만 다른 게 아니라 할 수 있는 일이 다르다). */
+.ctx-bulk { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 12px 14px; margin-bottom: 12px; border-radius: 12px;
+  background: var(--bg-punch); border: 1px solid var(--line-note); }
+.ctx-bulk-t { font-size: 13px; font-weight: 700; color: var(--ink-note); }
+.ctx-bulk-d { font-size: 13px; color: var(--ink-sub); flex: 1; min-width: 200px; }
+.ctx-tag-ready { background: var(--bg-punch); color: var(--ink-note); }
+
+/* ── 관리자 전용 표식(#1419) — '보는 건 누구나, 고치는 건 관리자'인 단계를 권한과 무관하게 늘 알린다. ──
+   왜 늘 보이나: 배지를 비관리자에게만 보이면 관리자는 자기 화면과 남의 화면이 다르다는 걸 모른 채
+   "그냥 만드세요"라고 말하게 되고, 아예 안 보이면 막힌 사람이 "나만 고장났나"로 읽는다.
+   문구는 '관리자' 하나로 통일한다(#1085) — admin·memory 같은 내부 scope 이름은 보는 사람에게 뜻이 없다. */
+.ctx-nav-item .admin-only-badge {
+  padding: 0 6px; border-radius: 999px;
+  font-size: 10px; font-weight: 700; line-height: 15px; white-space: nowrap;
+  background: var(--bg-tint-2); color: var(--muted-head); border: 1px solid var(--line);
+}
+.ctx-nav-item.active .admin-only-badge { background: var(--bg); border-color: var(--blue); color: var(--blue); }
+
+/* 단계 본문 첫 줄의 권한 안내 — 배지·[읽기 전용] pill 과 설명이 한 줄에서 끝나게(줄바꿈되면 두 조각으로 읽힌다). */
+.ctx-perm-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }
+.ctx-perm-line .admin-only-badge {
+  padding: 0 6px; border-radius: 999px; flex: none;
+  font-size: 10px; font-weight: 700; line-height: 16px; white-space: nowrap;
+  background: var(--bg-tint-2); color: var(--muted-head); border: 1px solid var(--line);
+}
+.ctx-perm-line .pill { flex: none; }

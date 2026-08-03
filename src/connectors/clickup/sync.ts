@@ -13,6 +13,7 @@ import { itemsPool } from "../../db/client.js";
 import { flushProjectEmbeds, healPmMirror } from "../../v6/connector-mirror.js";
 import { logger } from "../../log.js";
 import { CURSOR_EPSILON_MS } from "../sync-cursor.js";
+import { boundCollector } from "../config.js";
 import { getTeam, getIncludedListIds } from "./api.js";
 import { losslessStream } from "./stream.js";
 
@@ -21,7 +22,14 @@ export async function runClickupSync(opts: { fullFlag: boolean }): Promise<boole
   const team = await getTeam();
   const teamId = team.id;
 
-  const cursor = await getConnectorState("clickup", teamId);
+  // 커서 네임스페이스(#1419 T1) — 종전은 teamId 단독이었다. 토큰이 다르면 팀도 달라 대개 자연히 갈리지만,
+  //  **같은 팀을 리스트 필터만 달리해 두 수집기로 긁는** 구성에선 둘이 한 커서를 밟는다. 그래서 수집기가
+  //  바인딩돼 있으면 그 인스턴스 키를 붙여 갈라 둔다. 바인딩이 없으면 종전 키 그대로(레거시 커서 승계).
+  //  ⚠ 기본 수집기는 instance_key='_' 라 여기서도 종전과 같은 `teamId` 로 떨어진다(마이그레이션 후 재수집 없음).
+  const inst = boundCollector()?.instanceKey ?? "_";
+  const cursorKey = inst === "_" ? teamId : `${teamId}:${inst}`;
+
+  const cursor = await getConnectorState("clickup", cursorKey);
   const prevState = (cursor && typeof cursor === "object" ? cursor : {}) as Record<string, unknown>;
   const prevMaxMs = Number(prevState.tasks_max_updated_ms ?? 0) || 0;
   let incremental = !fullFlag && prevMaxMs > 0;
@@ -98,7 +106,7 @@ export async function runClickupSync(opts: { fullFlag: boolean }): Promise<boole
   const advanceCursor = cleanRun && (maxSeenMs > prevMaxMs || (!incremental && maxSeenMs > 0));
   if (advanceCursor || (cleanRun && !incremental && !losslessFullDone)) {
     // 기존 상태 보존 병합 — full 무결 완주 시 lossless_full_done 마킹(자동 승격 1회성 보장).
-    await setConnectorState("clickup", teamId, {
+    await setConnectorState("clickup", cursorKey, {
       ...prevState,
       tasks_max_updated_ms: Math.max(prevMaxMs, maxSeenMs),
       ...(cleanRun && !incremental ? { lossless_full_done: true } : {}),

@@ -15,6 +15,10 @@ import { orgContentReadCapabilities, orgContentCapabilities } from "./delivery/o
 import { membersReadCapabilities, membersCapabilities } from "./delivery/members.js";
 import { tokensReadCapabilities, tokenMintCapabilities, deviceAuthCapabilities, tokenRevokeCapabilities } from "./delivery/tokens-devices.js";
 import { connectorsReadCapabilities, connectorsCapabilities, connectorMembersCapabilities } from "./delivery/connectors.js";
+import { collectorsReadCapabilities, collectorsCapabilities } from "./delivery/collectors.js"; // #1419 T1 — 수집기 n개 축
+import { classifiersCapabilities } from "./delivery/classifiers.js"; // #1419 T4 — 분류기 n개 축
+import { managersCapabilities } from "./delivery/managers.js"; // #1419 T5 — 관리기 4종 + 발견 큐
+import { pipelineCapabilities } from "./delivery/pipeline.js"; // #1419 T6 — 파이프라인 현황 한 번에
 import { meProfileCapabilities, meSelfCapabilities } from "./delivery/me-self.js";
 import { gitCredentialCapabilities } from "./delivery/git-credentials.js";
 import { runtimeConfigCapabilities } from "./delivery/runtime-config.js";
@@ -36,6 +40,7 @@ export const deliveryCapabilities: Capability[] = [
   ...membersReadCapabilities,
   ...tokensReadCapabilities,
   ...connectorsReadCapabilities,
+  ...collectorsReadCapabilities,
   ...orgContentCapabilities,
   ...membersCapabilities,
   ...tokenMintCapabilities,
@@ -50,7 +55,11 @@ export const deliveryCapabilities: Capability[] = [
   ...embeddingsCapabilities,
   ...mcpServersCapabilities,
   ...connectorsCapabilities,
+  ...collectorsCapabilities,
   ...ingestDistillersCapabilities,
+  ...classifiersCapabilities,
+  ...managersCapabilities,
+  ...pipelineCapabilities,
   ...connectorMembersCapabilities,
   ...hooksCapabilities,
   ...toolsCapabilities,
