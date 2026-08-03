@@ -9,6 +9,7 @@
 import { itemsPool } from "../../db/client.js";
 import { CONNECTOR_SPECS, type ConnectorField } from "../../connectors/config.js";
 import { encryptSecret, secretsEnabled } from "../credentials/secret-box.js";
+import { collectorPresetCatalog, type ResolvedPreset } from "./collector-presets.js";
 import { audit } from "./audit.js";
 
 /** 관리탭용 수집기 뷰 — 시크릿 '값'은 절대 담기지 않는다(설정 여부만). */
@@ -44,12 +45,16 @@ export function collectorJobId(id: number): string {
   return `collector-${id}`;
 }
 
-/** 프리셋 해소 — 지금은 내장(CONNECTOR_SPECS)만. T2 가 커스텀 프리셋(DB)을 여기에 합류시킨다. */
-function presetOf(presetKey: string) {
-  return CONNECTOR_SPECS[presetKey] ?? null;
+/**
+ * 프리셋 해소 — **내장 ∪ 커스텀** 통합 카탈로그(#1419 T2). 한 번 읽어 Map 으로 넘겨 쓴다
+ *  (목록 렌더에서 수집기마다 카탈로그를 다시 읽지 않게).
+ */
+async function presetMap(): Promise<Map<string, ResolvedPreset>> {
+  return new Map((await collectorPresetCatalog()).map((p) => [p.key, p]));
 }
 
 export async function listCollectors(): Promise<CollectorView[]> {
+  const presets = await presetMap();
   const r = await itemsPool.query(
     `SELECT id, key, preset_key, instance_key, label, enabled, config, secrets,
             sync_interval_sec, output_mode, output_config, sort, note, updated_at
@@ -81,7 +86,7 @@ export async function listCollectors(): Promise<CollectorView[]> {
 
   const secEnabled = secretsEnabled();
   return r.rows.map((row: Record<string, unknown>) => {
-    const spec = presetOf(String(row.preset_key));
+    const spec = presets.get(String(row.preset_key)) ?? null;
     const fields = spec?.fields ?? [];
     const rowConfig = (row.config as Record<string, unknown>) ?? {};
     const rowSecrets = (row.secrets as Record<string, unknown>) ?? {};
@@ -141,8 +146,9 @@ export async function upsertCollector(input: CollectorUpsertInput, actor?: strin
   if (input.id && !cur) throw new Error(`수집기를 찾을 수 없습니다: id=${input.id}`);
 
   const presetKey = String(input.preset_key ?? cur?.preset_key ?? "");
-  const spec = presetOf(presetKey);
+  const spec = (await presetMap()).get(presetKey) ?? null;
   if (!spec) throw new Error(`알 수 없는 프리셋: ${presetKey || "(미지정)"}`);
+  if (!spec.enabled) throw new Error(`프리셋 '${presetKey}' 가 꺼져 있어 새 수집기를 만들 수 없습니다`);
 
   const key = normKey(String(input.key ?? cur?.key ?? "")) || normKey(`${presetKey}-${Date.now()}`);
   // 커서 네임스페이스는 **만든 뒤 바꾸지 않는다** — 바꾸면 그 수집기가 커서를 잃고 전체 재수집한다.
@@ -277,7 +283,9 @@ export async function migrateConnectorsToCollectors(actor = "system:migration"):
 
   for (const row of rows) {
     const system = String(row.system);
-    if (!presetOf(system)) continue; // 코드에서 사라진 커넥터의 잔존 행 — 되살리지 않는다
+    // 레거시 행은 언제나 **내장** 커넥터다(org_connector 는 CONNECTOR_SPECS 로만 채워졌다) — 커스텀 카탈로그를
+    //  볼 이유가 없고, 보면 안 된다(같은 이름의 커스텀 프리셋이 마이그레이션 대상을 바꿔치기할 여지).
+    if (!CONNECTOR_SPECS[system]) continue; // 코드에서 사라진 커넥터의 잔존 행 — 되살리지 않는다
     const exists = await itemsPool.query(
       `SELECT 1 FROM org_collector WHERE preset_key=$1 AND instance_key='_'`, [system]);
     if (exists.rows.length) continue; // ① 멱등
@@ -294,12 +302,12 @@ export async function migrateConnectorsToCollectors(actor = "system:migration"):
          VALUES($1,$1,'_',$2,$3,$4::jsonb,$5::jsonb,$6,0,$7,$8,$8)
        ON CONFLICT (preset_key, instance_key) DO NOTHING
        RETURNING id`,
-      [system, presetOf(system)?.label ?? system, enabled,
+      [system, CONNECTOR_SPECS[system]?.label ?? system, enabled,
        JSON.stringify(row.config ?? {}), JSON.stringify(row.secrets ?? {}), interval, row.note ?? null, actor]);
     const id = Number((ins.rows[0] as { id?: string | number } | undefined)?.id ?? 0);
     if (!id) continue; // 경합(다른 부팅이 먼저 넣음) — 멱등하게 넘어간다
 
-    await syncCollectorJob(id, { presetKey: system, label: presetOf(system)?.label ?? system, enabled, interval }, actor);
+    await syncCollectorJob(id, { presetKey: system, label: CONNECTOR_SPECS[system]?.label ?? system, enabled, interval }, actor);
     // 구 잡 정지 — 새 잡이 같은 일을 한다(원본 행은 ③에 따라 보존하지만, 잡이 둘일 이유는 없다).
     try {
       await itemsPool.query(`UPDATE org_cron SET enabled=false WHERE id = ANY($1::text[])`,

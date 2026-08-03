@@ -26,6 +26,7 @@ import { verifyLogin, verifyOwnPassword, setMemberPassword } from "./auth/local-
 import { gatewayUrlForRequest } from "./gateway-url.js";
 import { startDeviceAuth, pollDeviceAuth } from "./org/auth/device-auth.js";
 import { bootstrapBody } from "./bootstrap-asset.js";
+import { registerWebhookRoutes } from "./connectors/generic/webhook-routes.js"; // #1419 T2 — 무인증 웹훅 수신구
 
 // req.auth.extra 에 심긴 LivelyUser 를 꺼낸다(세션·bearer 공통 — 둘 다 이 형태로 채운다).
 const userOf = (req: express.Request): LivelyUser =>
@@ -219,6 +220,11 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       : 410; // expired_token
     res.status(status).json({ error: r.error, ...(r.interval ? { interval: r.interval } : {}) });
   }));
+
+  // ── 웹훅 수신(#1419 T2) — 외부가 밀어넣는 인입구. **무인증**이라 자체 3중 가드를 갖는다(그 파일 헤더 참조).
+  //  cap 마운트 밖에 두는 이유: capabilities 는 전부 sessionOrBearer 뒤에 붙는데, 깃허브·사내 시스템은
+  //  우리 토큰을 갖고 있지 않다. 인증 대신 수집기 id + HMAC 서명 + 본문 상한으로 막는다.
+  registerWebhookRoutes(app);
 
   // ── 정적 프론트 — dist/web.js 기준 레포루트/public. 해시 라우팅이라 서버 폴백 불필요. ──
   const publicDir = fileURLToPath(new URL("../public", import.meta.url));

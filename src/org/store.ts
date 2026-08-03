@@ -69,6 +69,12 @@ export {
 } from "./store/collectors.js";
 export type { CollectorView, CollectorUpsertInput } from "./store/collectors.js";
 
+// ── org_collector_preset(커스텀 프리셋 + 내장∪커스텀 통합 카탈로그 — #1419 T2) ──
+export {
+  collectorPresetCatalog, resolvePreset, moduleNameOf, upsertCollectorPreset, removeCollectorPreset,
+} from "./store/collector-presets.js";
+export type { ResolvedPreset, PresetUpsertInput, PresetDriver } from "./store/collector-presets.js";
+
 // ── 자동 인입 라인(org_ingest_policy · org_distiller · 게이트 관측) ──
 export {
   listIngestPolicies, upsertIngestPolicy, removeIngestPolicy,

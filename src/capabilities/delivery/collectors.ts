@@ -10,23 +10,16 @@ import { z } from "zod";
 import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 import { MEANING } from "../../org/delivery/meaning.js";
-import { listCollectors, upsertCollector, removeCollector } from "../../org/store.js";
-import { CONNECTOR_SPECS, resetConnectorConfigCache, withCollector } from "../../connectors/config.js";
+import {
+  listCollectors, upsertCollector, removeCollector,
+  collectorPresetCatalog, upsertCollectorPreset, removeCollectorPreset,
+} from "../../org/store.js";
+import { resetConnectorConfigCache, withCollector, resolveConnectorConfig } from "../../connectors/config.js";
 import { startConnectorRun } from "../../connectors/run-tracker.js";
 import { discoverConnectorScope } from "../../connectors/discover.js";
 import { runAutoBackfillSweep } from "../../v6/embedding-backfill.js";
 import { itemsPool } from "../../db/client.js";
 import { actorOf, restOnly, str } from "./shared.js";
-
-/** 프리셋 카탈로그 — 수집기를 만들 때 고를 수 있는 것들. T2 가 커스텀 프리셋을 여기에 합류시킨다. */
-function presetCatalog() {
-  return Object.values(CONNECTOR_SPECS).map((s) => ({
-    key: s.system, label: s.label, fields: s.fields, guide: s.guide,
-    builtin: true,
-    // 사람 매핑 지원 여부는 커넥터 SPI(listUsers)가 정한다 — 화면이 패널을 그릴지 미리 알 수 있게.
-    kind: "mirror" as const,
-  }));
-}
 
 /** 수집기 1건 조회 + 바인딩 정보 — 실행·discover 가 공용으로 쓴다. */
 async function loadBinding(id: number): Promise<{ id: number; presetKey: string; instanceKey: string }> {
@@ -43,7 +36,7 @@ export const collectorsReadCapabilities: Capability[] = [
     "워크스페이스가 둘이거나, 채널 그룹마다 주기·산출정책을 달리할 때. 시크릿 값은 담기지 않는다(설정 여부만). " +
     "⚠ 구 org_connectors(system 당 1개)의 후계 — 구 도구는 레거시 축으로 계속 동작하나 새 작업은 이걸 쓴다.",
     [{ method: "GET", paths: ["/api/ui/org/collectors"], parse: () => ({}) }],
-    async () => ({ collectors: await listCollectors(), presets: presetCatalog(), meaning: MEANING["connector"] })),
+    async () => ({ collectors: await listCollectors(), presets: await collectorPresetCatalog(), meaning: MEANING["connector"] })),
 ];
 
 export const collectorsCapabilities: Capability[] = [
@@ -124,6 +117,95 @@ export const collectorsCapabilities: Capability[] = [
       return await withCollector(b, () => discoverConnectorScope(b.presetKey));
     }, {
       id: z.number().int().positive().describe("수집기 id — 그 수집기의 토큰으로 조회한다"),
+    }),
+
+  // ── 커스텀 프리셋(#1419 T2) — "커스텀하게 프리셋을 추가할 수 있게" ──
+  restOnly("org_collector_preset_upsert", "커스텀 프리셋 저장",
+    "수집 **프리셋**을 만들거나 고친다. 두 갈래: driver='clone'(내장 프리셋을 복제해 라벨·기본값만 바꾼 템플릿) 또는 " +
+    "driver='http'|'rss'|'webhook'(코드 배포 없이 새 수집 방식을 정의 — 사내 API·공개 피드·웹훅 수신). " +
+    "⚠ 자격(토큰)은 프리셋이 아니라 **수집기**가 갖는다 — 프리셋의 fields 에 secret:true 항목을 선언하면 각 수집기가 자기 값을 채운다. " +
+    "⚠ parser_script 는 격리 자식 프로세스에서 실행되는 **관리자 작성 코드**다(fs·child_process 차단, 환경변수 미주입, 10초 타임아웃 — 단 네트워크는 막지 못한다).",
+    [{ method: "POST", paths: ["/api/ui/org/collector-presets"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const preset = await upsertCollectorPreset({
+        id: input.id === undefined || input.id === null ? undefined : Number(input.id),
+        key: input.key === undefined ? undefined : str(input.key, "key", 64),
+        label: input.label === undefined ? undefined : str(input.label, "label", 200),
+        driver: input.driver === undefined ? undefined : (str(input.driver, "driver", 20) as never),
+        base_preset: input.base_preset === undefined ? undefined : (input.base_preset === null || input.base_preset === "" ? null : str(input.base_preset, "base_preset", 64)),
+        description: input.description === undefined ? undefined : (input.description === null || input.description === "" ? null : str(input.description, "description", 2000)),
+        fields: (input.fields ?? undefined) as never,
+        driver_config: (input.driver_config ?? undefined) as Record<string, unknown> | undefined,
+        guide: (input.guide ?? undefined) as never,
+        parser_script: input.parser_script === undefined ? undefined : (input.parser_script === null || input.parser_script === "" ? null : String(input.parser_script).slice(0, 100_000)),
+        enabled: input.enabled === undefined ? undefined : Boolean(input.enabled),
+      }, actorOf(user), "web");
+      return { preset };
+    }, {
+      id: z.number().int().positive().optional().describe("수정할 프리셋 id(없으면 생성)"),
+      key: z.string().optional().describe("프리셋 식별 슬러그 — 내장 이름(slack·notion 등)은 쓸 수 없다"),
+      label: z.string().optional().describe("화면에 보일 이름"),
+      driver: z.enum(["clone", "http", "rss", "webhook"]).optional().describe("수집 방식"),
+      base_preset: z.string().nullable().optional().describe("clone 일 때 복제할 내장 프리셋 key(필수)"),
+      description: z.string().nullable().optional(),
+      fields: z.array(z.record(z.unknown())).optional().describe("수집기가 채울 설정 항목 — {key, label, secret, required, hint}[]"),
+      driver_config: z.record(z.unknown()).optional().describe("드라이버 설정 — http: {url, auth, pagination, itemsPath, map} · rss: {url} · webhook: {signature, map}"),
+      guide: z.record(z.unknown()).nullable().optional().describe("설정 안내 — {intro, steps[], url}"),
+      parser_script: z.string().nullable().optional().describe("커스텀 파서 — parse(input) 를 정의하거나 마지막 값을 남긴다. 격리 실행"),
+      enabled: z.boolean().optional(),
+    }),
+
+  restOnly("org_collector_preset_remove", "커스텀 프리셋 삭제",
+    "커스텀 프리셋을 지운다. 그 프리셋으로 만든 수집기가 하나라도 있으면 거부한다(지우면 그 수집기들이 없는 프리셋을 가리켜 조용히 멈춘다). 내장 프리셋은 지울 수 없다.",
+    [{ method: "POST", paths: ["/api/ui/org/collector-presets/:id/remove"], parse: (req) => ({
+      id: Number((req.params as Record<string, string>)?.id),
+    }) }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const id = Number(input.id);
+      if (!Number.isFinite(id) || id <= 0) throw new HttpError(400, "프리셋 id 필요");
+      await removeCollectorPreset(id, actorOf(user), "web");
+      return { ok: true };
+    }, {
+      id: z.number().int().positive().describe("삭제할 커스텀 프리셋 id"),
+    }),
+
+  restOnly("org_collector_preview", "수집기 미리보기(실호출 샘플)",
+    "저장된 설정으로 **실제로 한 번 호출해** 무엇이 잡히는지 샘플을 돌려준다 — 적재는 하지 않는다(읽기만). " +
+    "필드 매핑이 맞는지, 고유 id 가 비지 않는지를 저장 전에 눈으로 확인하는 자리다. 최대 5건.",
+    [{ method: "POST", paths: ["/api/ui/org/collectors/:id/preview"], parse: (req) => ({
+      id: Number((req.params as Record<string, string>)?.id),
+    }) }],
+    async (input: Record<string, unknown>) => {
+      const b = await loadBinding(Number(input.id));
+      resetConnectorConfigCache();
+      return await withCollector(b, async () => {
+        const { connectorForPresetKey } = await import("../../connectors/generic/index.js");
+        const settings = await resolveConnectorConfig(b.presetKey);
+        const { connector, preset } = await connectorForPresetKey(b.presetKey, settings, b.id);
+        const sample: unknown[] = [];
+        let noExternalId = 0;
+        try {
+          // 미리보기는 **증분 옵션 없이** 최신부터 훑는다. 5건에서 끊으므로 대형 소스도 즉시 끝난다.
+          for await (const item of connector.backfill()) {
+            sample.push({
+              external_id: item.provenance.external_id,
+              title: item.title ?? null,
+              body_preview: item.body ? String(item.body).slice(0, 200) : null,
+              occurred_at: item.occurred_at ?? null,
+              container_name: item.container_name ?? null,
+              author: item.actor?.display_name ?? item.actor?.email ?? null,
+              url: item.provenance.external_url ?? null,
+            });
+            if (sample.length >= 5) break;
+          }
+        } catch (e) {
+          // 실패도 결과다 — 던지면 화면이 500 을 받고 '무엇이 왜 안 되는지'를 못 보여준다.
+          return { ok: false, driver: preset.driver, error: String((e as Error)?.message ?? e).slice(0, 1000), sample: [] };
+        }
+        return { ok: true, driver: preset.driver, sample, note: noExternalId ? `고유 id 가 비어 건너뛴 항목 ${noExternalId}건` : undefined };
+      });
+    }, {
+      id: z.number().int().positive().describe("미리볼 수집기 id — 실제 호출하되 적재하지 않는다"),
     }),
 
   restOnly("org_collector_remove", "수집기 삭제",

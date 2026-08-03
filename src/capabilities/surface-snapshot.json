@@ -987,6 +987,36 @@
   "input_hash": "abcf8daecf87f6b2"
  },
  {
+  "name": "org_collector_preset_upsert",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/collector-presets"
+  ],
+  "input_hash": "d4d5431151b320f2"
+ },
+ {
+  "name": "org_collector_preset_remove",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/collector-presets/:id/remove"
+  ],
+  "input_hash": "ee3c682706a9efaf"
+ },
+ {
+  "name": "org_collector_preview",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/collectors/:id/preview"
+  ],
+  "input_hash": "4bc0a360213c8434"
+ },
+ {
   "name": "org_collector_remove",
   "scope": "admin",
   "mcp": true,

@@ -80,6 +80,71 @@ export async function initCollectorRegistry(pool: Pool): Promise<void> {
   `);
 }
 
+export async function initCollectorPresets(pool: Pool): Promise<void> {
+  // ── org_collector_preset — **커스텀 프리셋**(#1419 T2). "거기에 커스텀하게 프리셋을 추가할 수 있게." ──
+  //  내장 프리셋(CONNECTOR_SPECS — slack·notion·…)은 코드가 SoT 로 남는다. 이 테이블은 그 옆에 서는
+  //  **데이터 정의 프리셋**이다. 둘을 합친 카탈로그에서 수집기를 만든다(collectorPresetCatalog).
+  //
+  //  두 갈래:
+  //   · driver='clone'  — 내장 프리셋을 복제해 기본값·라벨·안내문만 바꾼 것("우리 회사 슬랙 템플릿").
+  //     수집 코드는 base_preset 의 커넥터 모듈을 그대로 쓴다.
+  //   · driver='http'|'rss'|'webhook' — **코드 배포 없이** 새 수집 방식을 정의한 것. 커넥터 모듈이 없고,
+  //     범용 드라이버(connectors/generic/*)가 driver_config 를 읽어 그 자리에서 커넥터처럼 행동한다.
+  //     사내 API·공개 피드처럼 라이블리가 모르는 소스를 관리자가 화면에서 붙이는 경로다.
+  //
+  //  fields = 이 프리셋이 수집기에게 물어볼 설정 항목(ConnectorField[] 와 같은 모양). 화면 폼이 여기서 그려지고,
+  //   secret:true 항목은 수집기의 secrets 로 암호화 저장된다 — 즉 **자격은 프리셋이 아니라 수집기가 갖는다**
+  //   (프리셋은 틀, 수집기는 그 틀에 값을 채운 인스턴스). 그래서 같은 프리셋으로 계정이 다른 수집기 n개가 선다.
+  //
+  //  parser_script = 응답 → RawItem 변환을 관리자가 직접 쓰는 자리(선택). 매핑 규칙(driver_config.map)으로
+  //   표현 안 되는 소스를 위한 탈출구다. ⚠ 실행은 격리 자식 프로세스(connectors/generic/parser-sandbox.ts) —
+  //   그 파일 헤더에 보안 경계와 **한계**(네트워크는 못 막는다)가 명시돼 있다. admin scope 전용.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_collector_preset(
+      id BIGSERIAL PRIMARY KEY,
+      key TEXT NOT NULL,
+      label TEXT NOT NULL,
+      driver TEXT NOT NULL DEFAULT 'http',
+      base_preset TEXT,
+      description TEXT,
+      fields JSONB NOT NULL DEFAULT '[]'::jsonb,
+      driver_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+      guide JSONB,
+      parser_script TEXT,
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      version INT NOT NULL DEFAULT 1,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
+    ${ensureCheck("org_collector_preset", {
+      org_collector_preset_driver_chk: "driver IN ('clone','http','rss','webhook')",
+      // clone 은 무엇을 복제할지가 있어야 성립한다 — 없으면 '수집 코드가 없는 프리셋'이 돼 조용히 아무것도 안 한다.
+      org_collector_preset_clone_chk: "driver <> 'clone' OR base_preset IS NOT NULL",
+    })}
+    CREATE UNIQUE INDEX IF NOT EXISTS org_collector_preset_key_uq ON org_collector_preset(key);
+  `);
+
+  // ── 웹훅 수신 함(#1419 T2) — driver='webhook' 수집기가 받은 원문을 **먼저 쌓아 두는 자리**. ──
+  //  왜 따로 두나: 웹훅은 남이 아무 때나 밀어넣는다. 수신 시점에 파싱·적재까지 하면 그 순간의 파서 버그·
+  //  DB 지연이 곧 **전송 실패(4xx/5xx)** 가 되고, 보낸 쪽은 재전송하거나 그냥 버린다(원문 유실).
+  //  그래서 수신은 '검증하고 통째로 적는' 것까지만 하고(즉시 200), 변환·적재는 싱크가 나중에 한다.
+  //  → 파서를 고치고 나서 processed_at 을 비우면 **같은 원문으로 다시 돌릴 수 있다**(재처리 가능).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS collector_webhook_event(
+      id BIGSERIAL PRIMARY KEY,
+      collector_id BIGINT NOT NULL,
+      received_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      headers JSONB NOT NULL DEFAULT '{}'::jsonb,
+      body JSONB,
+      body_text TEXT,
+      processed_at TIMESTAMPTZ,
+      error TEXT);
+    CREATE INDEX IF NOT EXISTS collector_webhook_event_pending_idx
+      ON collector_webhook_event(collector_id, id) WHERE processed_at IS NULL;
+  `);
+}
+
 export async function initIngestPolicyAndDistillers(pool: Pool): Promise<void> {
   // ── org_ingest_policy — 지식 인입 허용선 정책(#638, #783 확장). 오너가 관리탭에서 조절하는 자동화 게이트. ──
   //  매치 규칙 0개면 디폴트 auto(현행 무변 — 오너가 켠 만큼만 gate). 평가 = resolveIngestPolicy(src/org/ingest/ingest-policy.ts).

@@ -14,7 +14,7 @@ import { itemsPool } from "../db/client.js";
 import { initOrgCore, initOrgCoreLateAdditions } from "./schema/core.js";
 import { initRuntimeConfigTable, initRuntimeConfigPolicyColumns } from "./schema/runtime-config.js";
 import { initMcpServerRegistry, initToolAndAssetRegistry, initOrgHookHealthColumn } from "./schema/mcp-tools.js";
-import { initConnectorRegistry, initCollectorRegistry, initIngestPolicyAndDistillers } from "./schema/connectors-ingest.js";
+import { initConnectorRegistry, initCollectorRegistry, initCollectorPresets, initIngestPolicyAndDistillers } from "./schema/connectors-ingest.js";
 import { initDbAccessPolicies } from "./schema/db-access.js";
 import { initSessionsInfra } from "./schema/sessions-infra.js";
 import { initGroundTruthRegistries } from "./schema/registry.js";
@@ -38,5 +38,6 @@ export async function initOrgSchema(): Promise<void> {
   //  SCHEMA_SQL_LOG 스냅샷 diff 가 '무관한 이동'으로 오염돼 다음 리팩토링의 증명이 어려워진다. org_collector 는
   //  기존 어느 테이블도 참조하지 않아(FK 없음) 순서 자유도가 있고, 끝에 두면 기존 시퀀스가 그대로 앞에 남는다.
   await initCollectorRegistry(itemsPool);          // org_collector(수집기 인스턴스 n개 — org_connector 의 system PK 해체)
+  await initCollectorPresets(itemsPool);           // org_collector_preset(커스텀 프리셋)·collector_webhook_event(웹훅 수신함)
   // (org_memory/org_content → knowledge_unit 1회복사 폐기 2026-06-24 — 원본 DROP, 복사 완료·v6 컷오버.)
 }

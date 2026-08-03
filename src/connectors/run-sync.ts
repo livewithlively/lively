@@ -34,9 +34,12 @@ const fullFlag = process.argv.includes("--full");
 const collectorArgIdx = process.argv.indexOf("--collector");
 const collectorId = collectorArgIdx >= 0 ? Number(process.argv[collectorArgIdx + 1]) : 0;
 
-if (!name || (name !== "clickup" && !connectors[name])) {
+// 이름 검증은 **수집기 바인딩 뒤로** 미룬다(#1419 T2) — 커스텀 프리셋(http/rss/webhook)은 코드 레지스트리에
+//  없는 이름이라 여기서 거르면 범용 수집기가 영영 못 뜬다. 프리셋 카탈로그를 봐야 판정할 수 있고,
+//  그 카탈로그는 DB 라 스키마 체인 이후에나 읽힌다. 인자 자체가 비었을 때만 즉시 거른다.
+if (!name) {
   const known = ["clickup", ...Object.keys(connectors).filter((k) => k !== "clickup")];
-  logger.error(`사용: run-sync <${known.join("|")}> [--collector <id>] [--full]`);
+  logger.error(`사용: run-sync <${known.join("|")}|커스텀프리셋> [--collector <id>] [--full]`);
   process.exit(1);
 }
 
@@ -61,10 +64,34 @@ if (collectorId) {
   logger.info({ collectorId, preset: row.preset_key, instance: row.instance_key }, "수집기 인스턴스 바인딩");
 }
 
+// ── 이 실행이 쓸 커넥터 해소(#1419 T2) ──
+//  내장·복제 프리셋이면 기존 커넥터 모듈, http/rss/webhook 프리셋이면 설정으로 조립한 커넥터가 나온다.
+//  둘 다 같은 SPI 라 아래 오케스트레이션(커서·배치·후처리)은 어느 쪽인지 모른다.
+//  수집기 없이(레거시 경로) 부른 경우엔 종전대로 코드 레지스트리만 본다.
+let activeConnector = connectors[name];
+if (collectorId) {
+  const { connectorForPresetKey } = await import("./generic/index.js");
+  const { resolveConnectorConfig } = await import("./config.js");
+  try {
+    // 범용 드라이버는 URL·토큰 등 **수집기 설정**을 알아야 조립된다 — 바인딩이 이미 걸려 있어 이 해소가
+    //  그 인스턴스의 값을 준다. 내장 프리셋 경로에선 이 값이 쓰이지 않는다(커넥터가 스스로 해소).
+    const settings = await resolveConnectorConfig(name);
+    const r = await connectorForPresetKey(name, settings, collectorId);
+    activeConnector = r.connector;
+  } catch (e) {
+    logger.error({ err: (e as Error)?.message, preset: name, collectorId }, "수집기 커넥터 해소 실패");
+    process.exit(1);
+  }
+}
+if (name !== "clickup" && !activeConnector) {
+  logger.error({ name }, "알 수 없는 커넥터·프리셋 — 등록된 프리셋인지 확인하세요");
+  process.exit(1);
+}
+
 // ⚠ 남은 커넥터 이름 분기 1건(#1313 R44 1단계 잔류) — clickup 만 커서 shape(instance=teamId·tasks_max_updated_ms·
 //  lossless_full_done)과 전진 조건(fetch 실패 집계·full 승격)이 generic 시간커서와 달라 훅으로 흡수하지 않았다.
 //  구현은 커넥터 모듈(clickup/sync.ts)에 있으므로 '커넥터 추가=모듈 1개'는 성립 — 여기 남은 건 이 진입 한 줄뿐이다.
-const failed = name === "clickup" ? await runClickupSync({ fullFlag }) : await runGenericSync(name);
+const failed = name === "clickup" ? await runClickupSync({ fullFlag }) : await runGenericSync(name, activeConnector);
 process.exit(failed ? 1 : 0);
 
 // ── generic 증분 — clickup 외 모든 커넥터(slack/discord/notion/…). 커넥터 SPI backfill({since}) 를 커서로 몰아 증분화. ──
@@ -73,8 +100,7 @@ process.exit(failed ? 1 : 0);
 //   워크스페이스 A 의 진행이 B 의 커서를 앞당겨 **B 가 그 구간을 영영 안 읽는다**(조용한 유실).
 //   마이그레이션된 기본 수집기는 instance_key='_' 를 물려받아 종전 커서를 그대로 이어 쓴다(재수집 없음).
 //  커서 max_updated_iso = 이번 run 이 관측한 아이템 updated_at(없으면 occurred_at)의 최대. 성공 후에만 전진.
-async function runGenericSync(system: string): Promise<boolean> {
-  const conn = connectors[system];
+async function runGenericSync(system: string, conn: import("./types.js").Connector): Promise<boolean> {
   const instance = collectorInstanceKey();
   const cursor = await getConnectorState(system, instance);
   const prevIso = (cursor as { max_updated_iso?: unknown } | null)?.max_updated_iso;
