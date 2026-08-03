@@ -6,6 +6,31 @@
 //  스냅샷 diff 0 이 계약, scripts/schema-init.itest.mjs 헤더 참조). 블록을 옮기려면 그 증명을 다시 떠라.
 import type { Pool } from "pg";
 
+/**
+ * org_cron.action 허용목록 — **이 배열이 유일한 출처**다. 아래 CHECK 제약을 여기서 조립한다.
+ *
+ * ⚠ 왜 상수로 뺐나(#1419): 같은 목록이 여기(DB 제약)와 scheduler/registry.ts(CRON_ACTIONS — 화면
+ *  드롭다운의 출처)에 **손으로 두 번** 적혀 있었다. 그래서 T5 가 registry 에 'run_managers' 를
+ *  추가하고 이쪽을 안 고쳤고, 결과는 **화면이 제공하는 액션을 저장하면 제약 위반으로 실패**였다 —
+ *  관리기 4종에 자동 실행 경로가 아예 없었는데, 실패가 크론 저장 시점에만 나므로 아무도 몰랐다.
+ *  이제 scheduler/cron-action-allowlist.test.ts 가 두 목록의 일치를 잠근다(한쪽만 늘리면 red).
+ *
+ * 확장 절차: 이 배열에 키를 넣는다. 아래가 DROP+ADD 라 기존 박스도 다음 부팅에 제약이 갱신된다
+ *  (ADD CONSTRAINT IF NOT EXISTS 만으론 라이브 제약이 안 바뀐다).
+ */
+export const CRON_ACTION_ALLOWLIST = [
+  "refresh_all", "refresh_repo", "refresh_bases",
+  "connector_sync", "connector_push", "wiki_push",
+  "eval_domain_debt",
+  "map_unmapped", "map_unmapped_headless",
+  "classify_knowledge", "classify_knowledge_headless",
+  "bootstrap_is",
+  "distill_sources", "distill_sources_headless",
+  "run_managers",          // #1419 T5 — 관리기 실행(어긋남·아웃데이티드·모순·코드괴리)
+  "agent_inject", "agent_headless",
+  "ensure_managed_sessions", "wikilink_sweep", "preview_reconcile",
+] as const;
+
 export async function initSessionsInfra(pool: Pool): Promise<void> {
   // ── org_cron — 서버사이드 스케줄 잡(웹 관리). is 신선화·커넥터 sync 등을 게이트웨이 프로세스가 주기 실행. ──
   //  트리거 표준화: git push 웹훅(도달성+repo당 등록 필요)을 대체 — 게이트웨이가 바깥으로 fetch 하므로 직원 0·repo셋업 0.
@@ -32,9 +57,10 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
       updated_by TEXT);
     DO $$ BEGIN
       -- action allowlist — 확장 시 DROP+ADD(IF NOT EXISTS 만으론 라이브 제약이 안 바뀜).
+      --  목록은 CRON_ACTION_ALLOWLIST 에서 조립한다(이 파일 상단 — 손으로 두 번 적지 않는다).
       ALTER TABLE org_cron DROP CONSTRAINT IF EXISTS org_cron_action_chk;
       ALTER TABLE org_cron ADD CONSTRAINT org_cron_action_chk
-        CHECK (action IN ('refresh_all','refresh_repo','refresh_bases','connector_sync','connector_push','wiki_push','eval_domain_debt','map_unmapped','map_unmapped_headless','classify_knowledge','classify_knowledge_headless','bootstrap_is','distill_sources','distill_sources_headless','agent_inject','agent_headless','ensure_managed_sessions','wikilink_sweep','preview_reconcile'));
+        CHECK (action IN (${CRON_ACTION_ALLOWLIST.map((a) => `'${a}'`).join(",")}));
     END $$;
     -- cron_expr(절대 벽시계 스케줄, 5필드). NULL=interval_sec 상대 모드. 기존 테이블 비파괴 추가.
     ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS cron_expr TEXT;

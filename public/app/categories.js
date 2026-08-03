@@ -32,7 +32,18 @@ function mismatchLevel(c) {
         return 'note';
     return 'none';
 }
+/**
+ * 분류축 목록 본문(#1419 T6) — 페이지 머리 없이 목록만 그린다.
+ *  [맥락 관리 ▸ 분류 ▸ 분류축] 서브탭이 이걸 부른다. 구 전체페이지(renderCategories)는 이 함수를
+ *  머리와 함께 감싸는 얇은 껍데기가 됐다 — **본문 구현은 하나**다(두 화면이 같은 CRUD 를 각자 갖지 않게).
+ */
+async function renderCategoryList(view) {
+    return renderCategoriesInner(view, false);
+}
 async function renderCategories(view) {
+    return renderCategoriesInner(view, true);
+}
+async function renderCategoriesInner(view, withHead) {
     const canEdit = hasScope('context');
     view.replaceChildren(skeleton('분류체계를 불러오는 중'));
     let cats = [], teams = [], repos = [];
@@ -47,14 +58,19 @@ async function renderCategories(view) {
         repos = repoRes;
     }
     catch (e) {
-        view.replaceChildren(pageHead('분류체계', null, [], '분류체계'), errorNote(e, '분류체계를 불러오지 못했습니다'));
+        view.replaceChildren(...[
+            withHead ? pageHead('분류체계', null, [], '분류체계') : null,
+            errorNote(e, '분류체계를 불러오지 못했습니다'),
+        ].filter(Boolean));
         return;
     }
-    const reload = () => renderCategories(view);
+    const reload = () => renderCategoriesInner(view, withHead);
     const bySpace = {};
     for (const s of SPACE_SUBS)
         bySpace[s.key] = cats.filter((c) => c.space === s.key);
-    const head = pageHead('분류체계', '지식과 프로젝트를 어떤 갈래로 나눌지 정합니다. 정의가 오래되면 여기서 먼저 드러납니다.', [], '분류체계');
+    const head = withHead
+        ? pageHead('분류체계', '지식과 프로젝트를 어떤 갈래로 나눌지 정합니다. 정의가 오래되면 여기서 먼저 드러납니다.', [], '분류체계')
+        : el('p', { class: 'admin-hint' }, '지식과 프로젝트를 어떤 갈래로 나눌지 정합니다. 분류기는 여기 적힌 정의(범위·규칙)를 기준으로 판단하므로, 정의가 비면 분류 기준도 없습니다.');
     // ── 정의가 비었거나 내용과 어긋난 것을 상단에 모아 보여준다 — 이 탭이 존재하는 이유라 목록보다 먼저 온다. ──
     const noDef = cats.filter((c) => !(c.should || '').trim());
     const mismatched = cats.filter((c) => (c.should || '').trim() && mismatchLevel(c) === 'warn');
@@ -223,4 +239,4 @@ async function deleteCategory(c, reload) {
         toast('실패 — ' + e.message, true);
     }
 }
-export { renderCategories };
+export { renderCategories, renderCategoryList };

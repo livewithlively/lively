@@ -183,48 +183,150 @@ export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
   },
 };
 
-// ── 해소 캐시 — system 별 프로세스당 1회 로드. ──
+// ════════ 다중 수집기 인스턴스 해소 (#1419 T1) ════════
+//  이 파일 상단이 약속한 확장을 그대로 이행한다 — "토큰 저장 백엔드가 정해지면 **이 함수 뒤에만** 끼운다.
+//  커넥터 5개는 무변경(이 분리가 본 계층의 목적)." 이제 끼우는 것이 '어느 인스턴스의 설정인가'다.
+//
+//  ⚠ 커넥터 모듈(slack/notion/clickup/gmail/gdrive/discord/domain-wiki)은 여전히 `resolveConnectorConfig("slack")`
+//   한 줄만 부른다 — 그들이 몇 번째 인스턴스로 돌고 있는지 **몰라도 되게** 하는 것이 요점이다. 대신 바깥에서
+//   '지금 어느 인스턴스인가'를 씌운다. 그 씌우는 방식이 호출 맥락에 따라 둘이다:
+//
+//   · **싱크 서브프로세스**(run-sync) — `bindCollector()` 로 프로세스 전체를 못 박는다. 프로세스 하나가
+//     수집기 하나만 담당하고 짧게 살다 죽으므로 전역 바인딩이 정확하다.
+//   · **장수 게이트웨이**(discover 픽커·멤버 매핑 등 REST 경로) — 전역은 **틀린 도구**다. 요청 두 개가 서로 다른
+//     수집기로 동시에 들어오면 늦게 도착한 쪽이 앞선 요청의 바인딩을 갈아엎는다(조용히 남의 토큰으로 호출).
+//     그래서 `withCollector(c, fn)` 로 **비동기 컨텍스트에만** 씌운다(AsyncLocalStorage — 요청별 격리).
+//
+//  해소 순서(3단 폴백 — 무중단 제1계약):
+//   ① 바인딩된 수집기(org_collector) → ② 레거시 기본 인스턴스(org_collector 미마이그레이션분: org_connector)
+//   → ③ env. 어느 단계가 비어도 다음으로 떨어지므로, org_collector 가 **텅 빈 배포는 종전과 완전히 동일**하다.
+import { AsyncLocalStorage } from "node:async_hooks";
+
+/** 수집기 바인딩 — 어느 인스턴스로 해소할 것인가. */
+export interface CollectorBinding {
+  id: number;
+  presetKey: string;
+  instanceKey: string;
+  /**
+   * 산출 정책(#1419 T3) — 이 수집기의 결과를 자료로 둘지 지식으로 올릴지. 미러가 라우팅에 쓴다.
+   *  바인딩에 실어 나르는 이유: 미러(v6/connector-mirror)는 항목 단위로 불리는데 그때마다 DB 를 되묻으면
+   *  항목당 쿼리 한 번이 붙는다. 프로세스가 곧 수집기 하나라 시작할 때 한 번 읽어 들고 다니는 게 맞다.
+   */
+  outputMode?: import("../org/ingest/ingest-classify.js").CollectorOutputMode;
+  /** 지식 직행 시 적용할 규칙(대상 분류·기본 유형·이름 접두어). output_config 원문. */
+  outputConfig?: Record<string, unknown>;
+}
+
+// ── 해소 캐시 ──
+//  ⚠ 키에 **수집기 id 가 반드시 들어간다**(`<collectorId|_>:<system>`). system 만으로 키를 잡으면 게이트웨이에서
+//   먼저 조회한 수집기의 토큰이 캐시에 눌러앉아, 그 다음 요청이 다른 수집기를 물어도 그 값을 돌려준다 —
+//   '남의 워크스페이스 토큰으로 호출'이라는 조용하고 위험한 오작동이 된다.
 const _cache = new Map<string, Promise<Record<string, string | undefined>>>();
+
+/** 프로세스 전역 바인딩(싱크 서브프로세스 전용). null = 레거시 단일 인스턴스 모드(종전 동작). */
+let _boundCollector: CollectorBinding | null = null;
+/** 요청 범위 바인딩(장수 게이트웨이) — 전역보다 우선한다. */
+const _als = new AsyncLocalStorage<CollectorBinding | null>();
+
+/** 지금 유효한 바인딩 — 요청 범위가 있으면 그것, 없으면 프로세스 전역. */
+function activeBinding(): CollectorBinding | null {
+  const scoped = _als.getStore();
+  return scoped !== undefined ? scoped : _boundCollector;
+}
+
+/**
+ * 이 **프로세스**를 한 수집기 인스턴스에 못 박는다(#1419 T1). run-sync 가 첫 해소보다 먼저 부른다.
+ *  ⚠ 장수 게이트웨이에서는 쓰지 마라 — 동시 요청이 서로의 바인딩을 덮는다. 거기선 withCollector 를 쓴다.
+ */
+export function bindCollector(c: CollectorBinding | null): void {
+  _boundCollector = c;
+}
+
+/**
+ * fn 을 이 수집기 바인딩 **안에서** 실행한다(게이트웨이 REST 경로용 — 요청별 격리).
+ *  AsyncLocalStorage 라 동시 요청끼리 섞이지 않고, fn 이 끝나면 바인딩도 함께 사라진다.
+ */
+export function withCollector<T>(c: CollectorBinding | null, fn: () => Promise<T>): Promise<T> {
+  return _als.run(c, fn);
+}
+
+/** 지금 바인딩된 수집기(없으면 null) — run-sync·clickup 커서가 네임스페이스 계산에 쓴다. */
+export function boundCollector(): CollectorBinding | null {
+  return activeBinding();
+}
+
+/**
+ * 지금 맥락의 커서 네임스페이스 — connector_state(system, instance) 의 instance.
+ *  바인딩이 없으면 종전 그대로 '_'(레거시 단일 인스턴스). 그래서 마이그레이션된 기본 수집기가
+ *  instance_key='_' 를 물려받으면 **커서가 그대로 승계**된다(전체 재수집 없음).
+ */
+export function collectorInstanceKey(): string {
+  return activeBinding()?.instanceKey ?? "_";
+}
 
 /**
  * 커넥터 config 해소. 반환 객체의 키 = CONNECTOR_SPECS[system].fields[].key.
- * 현재 백엔드 = env 폴백(byte-identical). 미지정/빈 문자열은 undefined 로 정규화(종전 falsy 검사와 동치).
- * 미정의 system 은 빈 객체.
+ * 백엔드 = 바인딩된 수집기 → org_connector(레거시 기본) → env 폴백. 미지정/빈 문자열은 undefined 로
+ * 정규화(종전 falsy 검사와 동치). 미정의 system 은 빈 객체.
  */
 export function resolveConnectorConfig(system: string): Promise<Record<string, string | undefined>> {
-  let p = _cache.get(system);
+  const bound = activeBinding();
+  // 바인딩의 프리셋이 물어본 system 과 다르면 그 바인딩은 이 조회에 무관하다 — 레거시 키로 떨어뜨려
+  //  캐시가 인스턴스별로 쪼개지지 않게 한다(한 프로세스가 남의 system 을 곁다리로 읽는 경로).
+  const scope = bound && bound.presetKey === system ? String(bound.id) : "_";
+  const cacheKey = `${scope}:${system}`;
+  let p = _cache.get(cacheKey);
   if (!p) {
-    p = loadConnectorConfig(system);
-    _cache.set(system, p);
+    p = loadConnectorConfig(system, bound && bound.presetKey === system ? bound : null);
+    _cache.set(cacheKey, p);
   }
   return p;
 }
 
-async function loadConnectorConfig(system: string): Promise<Record<string, string | undefined>> {
+async function loadConnectorConfig(
+  system: string, bound: CollectorBinding | null,
+): Promise<Record<string, string | undefined>> {
   const spec = CONNECTOR_SPECS[system];
   const out: Record<string, string | undefined> = {};
   if (!spec) return out;
 
-  // ── 백엔드: DB(org_connector) 우선 → env 폴백 ──
+  // ── 백엔드: 수집기 인스턴스 → org_connector(레거시) → env 폴백 ──
   //  관리탭이 저장한 값이 있으면 그걸 쓰고(시크릿은 secret-box 복호화), 없거나 DB 미연결이면 env 로 폴백한다
-  //  (byte-identical 무중단 — DB 부재·마스터키 부재·행 부재·복호화 실패 전부 env 로 수렴). 캐시라 프로세스당 1회 조회.
+  //  (byte-identical 무중단 — DB 부재·마스터키 부재·행 부재·복호화 실패 전부 env 로 수렴). 캐시라 조합당 1회 조회.
   let dbConfig: Record<string, unknown> = {};
   let dbSecrets: Record<string, unknown> = {};
-  try {
-    const r = await itemsPool.query<{ config: Record<string, unknown> | null; secrets: Record<string, unknown> | null }>(
-      `SELECT config, secrets FROM org_connector WHERE system=$1`, [system]);
-    if (r.rows[0]) { dbConfig = r.rows[0].config ?? {}; dbSecrets = r.rows[0].secrets ?? {}; }
-  } catch { /* 테이블 부재/DB 미연결 → 전량 env 폴백 */ }
+  // ① 바인딩된 수집기 — 호출자가 프리셋 일치를 이미 확인해 넘긴다(불일치면 null).
+  if (bound) {
+    try {
+      const r = await itemsPool.query<{ config: Record<string, unknown> | null; secrets: Record<string, unknown> | null }>(
+        `SELECT config, secrets FROM org_collector WHERE id=$1`, [bound.id]);
+      if (r.rows[0]) { dbConfig = r.rows[0].config ?? {}; dbSecrets = r.rows[0].secrets ?? {}; }
+    } catch { /* 테이블 부재(마이그레이션 전) → 아래 레거시 경로로 */ }
+  }
+  // ② 레거시 기본 인스턴스(org_connector) — **바인딩이 없을 때만** 본다.
+  //  ⚠ 바인딩이 있으면 이 층을 건너뛴다. 안 그러면 새로 만든 수집기(아직 토큰 미입력)가 기존 기본 인스턴스의
+  //   토큰을 조용히 물려받아 **남의 워크스페이스를 긁는다** — 게다가 커서 네임스페이스는 달라서 같은 자료를
+  //   처음부터 다시 훑는다. 수집기는 자기 설정으로 완결돼야 하고, 빈 필수값은 화면이 막는다(저장 시 검증).
+  //   마이그레이션이 기존 값을 수집기로 복사하므로 이 생략으로 잃는 것은 없다(기본 인스턴스는 자기 값을 갖는다).
+  let legacyConfig: Record<string, unknown> = {};
+  let legacySecrets: Record<string, unknown> = {};
+  if (!bound) {
+    try {
+      const r = await itemsPool.query<{ config: Record<string, unknown> | null; secrets: Record<string, unknown> | null }>(
+        `SELECT config, secrets FROM org_connector WHERE system=$1`, [system]);
+      if (r.rows[0]) { legacyConfig = r.rows[0].config ?? {}; legacySecrets = r.rows[0].secrets ?? {}; }
+    } catch { /* 테이블 부재/DB 미연결 → 전량 env 폴백 */ }
+  }
 
   for (const f of spec.fields) {
     let v: string | undefined;
     if (f.secret) {
-      // 시크릿: DB 암호문 복호화(gcm$…). 암호화 안 된 평문 저장분도 관용. 실패/부재면 미확정(→env 폴백).
-      const enc = dbSecrets[f.key];
+      // 시크릿: DB 암호문 복호화(gcm$…). 암호화 안 된 평문 저장분도 관용. 실패/부재면 미확정(→다음 단계).
+      const enc = dbSecrets[f.key] ?? legacySecrets[f.key];
       if (typeof enc === "string" && enc) v = isEncrypted(enc) ? (tryDecryptSecret(enc) ?? undefined) : enc;
     } else {
       // 비밀 아닌 설정: DB config 평문.
-      const c = dbConfig[f.key];
+      const c = dbConfig[f.key] ?? legacyConfig[f.key];
       if (typeof c === "string" && c) v = c;
     }
     if (v == null || v === "") v = process.env[f.env]; // env 폴백

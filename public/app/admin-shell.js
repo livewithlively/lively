@@ -12,7 +12,6 @@ import { skeleton } from './ui-primitives.js';
 import { ingestPolicyPanel, reviewNavBadge } from './review.js';
 import { visibilityAxesPanel } from './visibility-axes.js';
 import { sourceVisPolicyPanel } from './source-vis-policy.js'; // #1291 맥락 유형별 공개범위 켜기/끄기   // #783 지식 검토 게이트 + 검토 큐 (+ #802 nav 대기 배지)
-import { distillersPanel } from './distillers.js'; // #1289 자료 증류기(source→지식 생산 라인) 설정
 import { loadAdmin, registerPanel, rerenderPanel } from './admin-rerender.js'; // 패널 재렌더 레지스트리(셸↔패널 순환 절단)
 import { sectionHead, segTabs } from './admin-widgets.js';
 import { dbAuditEditor, orgAuditPanel, toolUsagePanel } from './admin-audit.js';
@@ -32,6 +31,7 @@ import { embeddingsEditor } from './admin-embeddings.js';
 // ── #1313 R40 분해 ④ — 도메인 패널 B. 셸은 아래 등록 블록에서만 이들을 부른다. ──
 import { mcpEditor } from './admin-mcp-servers.js';
 import { connectorEditor } from './admin-connectors.js';
+import { collectorPresetEditor } from './admin-collector-presets.js'; // #1419 T7 — 커스텀 수집 방식 정의
 import { feedTargetsEditor, projectOutboundEditor } from './admin-outbound.js';
 import { dbSourceEditor } from './admin-db-sources.js';
 import { customHookEditor, harnessAssetEditor } from './admin-hooks-assets.js';
@@ -158,10 +158,10 @@ const ADMIN_SECTIONS = [
     // 지식 검토 게이트(#638) — 자동 인입을 auto/confirm/drop 로 조절하는 **정책(밸브)**. 그 밸브가 만든 **대기열**
     //  (구 [검토 큐])은 설정이 아니라 일감이고 권한도 워킹레벨(memory)이라 WIKI 탭으로 옮겼다(#837). 여기선 딥링크만.
     { key: 'ingest-policy', label: '지식 검토 정책', meaning: null, group: 'context' },
-    // 자료 증류기(#1289) — 수집된 원본(슬랙·메일)을 무슨 기준·형식의 지식으로 만드나. [지식 검토 정책]과 직교하며
-    //  순서상 앞선다: 여기가 지식을 **만드는** 생산 라인이고, 검토 정책은 만들어진 지식을 통과시키는 밸브다.
-    //  실측(#1289): 고객사 A 슬랙 10,900건 중 증류 13건 — 전역 인박스 하나로는 팀별 채널·기준·형식을 못 가른다.
-    { key: 'distillers', label: '자료 증류기', meaning: null, group: 'context' },
+    // 자료 증류기(#1289)는 여기서 **뺐다**(#1419) — [맥락 관리 ▸ 증류]가 같은 화면(distillersPanel)을 그린다.
+    //  입구가 둘이면 둘 중 어느 쪽이 정본인지 아무도 모르고, 한쪽만 고치는 사고가 난다. 파이프라인 순서
+    //  (수집→증류→분류→관리) 안에 있어야 '앞뒤로 무엇이 있는지'가 함께 보이므로 그쪽을 남겼다.
+    //  옛 URL(#/system/distillers)은 아래 SECTION_EXIT 가 그 자리로 넘긴다 — 북마크가 끊기지 않게.
     // 벡터 검색(#172) — 의미검색·유사도의 임베딩 provider + 백필. AI가 지식을 '뜻으로' 찾는 능력이라 맥락 그룹.
     { key: 'embeddings', label: '의미 검색', meaning: null, group: 'context' },
     // ── AI 능력 ──
@@ -187,7 +187,10 @@ const ADMIN_SECTIONS = [
     // ── 데이터 연결 ──
     // 커넥터 = **패시브 미러 싱크**(slack/notion/clickup/gmail/drive 를 우리 DB로 당겨온다). AI가 실시간 호출하는
     //  외부 시스템(=MCP 서버·사내 API 도구)과는 다른 것이다 — 그건 [AI 능력 ▸ 도구]에 있다.
-    { key: 'connectors', label: '외부 자료 수집', meaning: null, group: 'data' },
+    { key: 'connectors', label: '외부 자료 수집(레거시)', meaning: null, group: 'data' },
+    // #1419 T7 수집 방식 — 라이블리가 모르는 소스(사내 API·RSS·웹훅)를 코드 없이 정의한다.
+    //  수집기 '인스턴스'는 [맥락 관리 ▸ 수집]에서 만들고, 여기선 그 **틀**만 정의한다(드물게 하는 조직 설정 + admin).
+    { key: 'collector-presets', label: '수집 방식', meaning: null, group: 'data' },
     // #976 위키 아웃바운드 — 우리 정본 지식을 외부(노션 등) '지식 피드' DB로 투영. 커넥터(인바운드)의 역방향.
     //  피드 목적지 + 카테고리 N:M 매핑(발행 게이트) 관리. 사람 페이지 불가침 — 전용 피드 DB에만 카드 append.
     { key: 'feed-targets', label: '위키 아웃바운드(피드)', meaning: null, group: 'data' },
@@ -225,11 +228,13 @@ const SECTION_REMAP = {
 };
 // 구 [검토 큐]는 관리탭을 떠나 WIKI 탭으로 갔다(#837) — 섹션 리맵이 아니라 탭 밖 리다이렉트라 따로 둔다.
 //  #1153 에서 [카테고리(분류 체계)]도 관리탭을 떠나 [분류체계] 탭이 됐다 — 같은 이유로 여기 둔다.
-const SECTION_EXIT = { 'review-queue': '#/knowledge/review', 'wiki-categories': '#/categories' };
+const SECTION_EXIT = { 'review-queue': '#/knowledge/review', 'wiki-categories': '#/categories',
+    // #1419 — 증류기가 [맥락 관리 ▸ 증류]로 옮겨갔다. 관리탭에 남겨 두면 같은 화면의 입구가 둘이 된다.
+    'distillers': '#/context/distill' };
 // admin 권한 전용(쓰기·인프라·감사). #318 호출통계·#549 변경감사는 전 구성원의 변경·before/after 를 노출하므로 admin.
-// #1289 'distillers' 는 **관리자 전용이 아니다** — 서버가 memory(워킹레벨) scope 를 요구한다. 팀이 자기 채널의
-//  증류 기준을 직접 조절하는 게 이 기능의 취지라, admin 을 요구하면 실무자가 관리자를 기다려야 한다.
-const ADMIN_ONLY = ['member-add', 'member-access', 'credentials', 'connectors', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'logs', 'sessions', 'embeddings', 'automation', 'audit', 'ingest-policy', 'session-share', 'visibility-axes', 'source-vis-policy'];
+// (증류기는 #1419 에서 [맥락 관리 ▸ 증류]로 이관 — 여기 목록에 없다. 서버 scope 도 memory(워킹레벨)라
+//  애초에 관리자 전용이 아니었다: 팀이 자기 채널의 증류 기준을 직접 조절하는 게 그 기능의 취지다.)
+const ADMIN_ONLY = ['member-add', 'member-access', 'credentials', 'connectors', 'collector-presets', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'logs', 'sessions', 'embeddings', 'automation', 'audit', 'ingest-policy', 'session-share', 'visibility-axes', 'source-vis-policy'];
 const RUNTIME_ONLY = ['agent-assets']; // runtime 권한 전용(멤버 머신에서 도는 것의 정의)
 // [도구]는 두 권한의 합집합 — 사내 API 도구·빌트인은 runtime, 외부 MCP 서버 등록은 admin. 둘 중 하나라도 있으면
 //  섹션을 보여주고, 안에서 각 서브탭을 권한별로 켠다(구조상 한 섹션=한 scope 전제가 깨지는 유일한 자리라 명시한다).
@@ -350,6 +355,7 @@ registerPanel('tools', (detail, data) => toolsSection(detail, data));
 registerPanel('audit', (detail, data) => auditSection(detail, data));
 registerPanel('automation', (detail, data) => automationSection(detail, data));
 registerPanel('connectors', (detail, data) => connectorEditor(detail, data));
+registerPanel('collector-presets', (detail) => void collectorPresetEditor(detail));
 registerPanel('feed-targets', (detail, data) => feedTargetsEditor(detail, data));
 registerPanel('project-outbound', (detail, data) => projectOutboundEditor(detail, data));
 registerPanel('db-sources', (detail, data) => dbSourceEditor(detail, data));
@@ -363,7 +369,6 @@ registerPanel('repos', (detail, data) => reposPanel(detail, data));
 registerPanel('visibility-axes', (detail) => visibilityAxesPanel(detail));
 registerPanel('source-vis-policy', (detail) => sourceVisPolicyPanel(detail));
 registerPanel('ingest-policy', (detail, data) => ingestPolicyPanel(detail, data));
-registerPanel('distillers', (detail, data) => void distillersPanel(detail, data));
 // ── ② 서브패널 제자리 재렌더 ──
 //  ⚠ 'members'·'tools' 는 ①의 **병합 섹션**(탭 껍데기) 키다 — 그 안의 개별 패널이 자기를 다시 그릴 땐
 //     반드시 아래 전용 키를 써야 한다. 안 그러면 탭 본문 안에 탭 껍데기가 또 렌더돼 중첩된다.

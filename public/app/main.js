@@ -6,7 +6,7 @@
 //   모듈 평가만으로 boot()·전역 리스너 등록이 재실행된다. 새 탭은 아래 route() 에 분기를 더해 붙인다.
 //  ⚠ 실행 순서가 계약이다: 아래 setUnauthorizedHandler 가 이 파일의 첫 실행문이어야 하고, boot() 는 맨 끝이다.
 import { $view, TOKEN_KEY, api, apiUrl, el, errorNote, hideGate, loadPeopleAvatars, markSecretInput, profileAvatar, showGate, state } from './core.js';
-import { renderCategories } from './categories.js';
+import { renderContext } from './context.js'; // #1419 T6 맥락 관리 — 수집·증류·분류·관리 파이프라인
 import { renderWiki, renderWikiTrash } from './wiki.js'; // #764 WIKI 탭 전면 재구축(사이드바 유지)
 import { consumeWikiPeekGuard, dismissWikiPeek, renderWikiDocPage } from './wiki-doc.js';
 import { wkRouteCleanup } from './wiki-data.js'; // #764 — 라우트 이탈 시 위키 에디터/팝오버 청소
@@ -169,13 +169,20 @@ async function route() {
             return;
         }
         else if (page === 'domainmap') {
-            // #1153 — '도메인 맵' 탭이 '분류체계'가 됐다(#/domainmap → #/categories). 구 딥링크·북마크 보존.
-            location.replace('#/categories');
+            // #1153 — '도메인 맵' 탭이 '분류체계'가 됐고, #1419 에서 다시 '맥락 관리'로 넓어졌다.
+            //  구 딥링크·북마크는 두 단계를 건너뛰어 최종 자리로 보낸다(중간 리다이렉트 체인 금지 — 히스토리가 지저분해진다).
+            location.replace('#/context/classify');
             return;
         }
         else if (page === 'categories') {
-            setActiveTab('categories'); // 분류체계 — 독립 탭(index.html data-tab="categories")
-            await renderCategories(view);
+            // #1419 T6 — 분류체계 탭이 [맥락 관리]의 '분류' 단계로 흡수됐다. 구 URL 은 그 자리로 보낸다.
+            //  ⚠ 전체페이지 renderCategories 는 남겨 둔다(직접 링크·문서에서 쓰일 수 있고, 본문 구현은 공유한다).
+            location.replace('#/context/classify');
+            return;
+        }
+        else if (page === 'context') {
+            setActiveTab('context'); // 맥락 관리 — 수집→증류→분류→관리 파이프라인(index.html data-tab="context")
+            await renderContext(view, segs[1] || null);
         }
         else if (page === 'knowledge') {
             setActiveTab('knowledge'); // WIKI(맥락의 기록) — #764 재구축: 홈/카테고리 페이지/필터 목록/드래프트/자료
