@@ -114,6 +114,13 @@
   .pane { position: absolute; inset: 0; display: none; flex-direction: column; }
   .pane.active { display: flex; }
   #term-host { flex: 1; min-height: 0; background: var(--term-bg); padding: 6px 8px; }
+  /* 미리보기 패널 — #1436: 상단 바(전체화면·링크·다운로드) + 본문. 어떤 타입이든 같은 자리에 같은 선택지. */
+  .preview-pane { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .preview-bar { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border);
+    background: var(--bg2); flex: 0 0 auto; }
+  .preview-bar-nm { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46%; }
+  .preview-bar-sp { flex: 1 1 auto; }
+  .preview-bar .tbtn { text-decoration: none; }
   .preview-body { flex: 1; overflow: auto; padding: 20px 26px; background: var(--bg); }
   .preview-body img { max-width: 100%; }
   .preview-body pre.raw { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, monospace; font-size: 13px; line-height: 1.5; }

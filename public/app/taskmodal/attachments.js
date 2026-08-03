@@ -33,7 +33,9 @@ function pjvtmAttachments(d, t, refresh) {
         for (const f of files) {
             const rel = dir + '/' + f.name;
             listBox.append(el('div', { class: 'pjv-tm-att' }, el('span', { class: 'pjv-tm-att-ico', 'aria-hidden': 'true', text: '📎' }), el('button', { class: 'pjv-tm-att-name', type: 'button', text: f.name,
-                onclick: () => openFileViewer(pid, rel, f.name, refresh, base) }), el('span', { class: 'pjv-tm-att-size', text: fmtSize(f.size) }), el('button', { class: 'pjv-tm-att-act', type: 'button', title: '다운로드', text: '↓',
+                // shareBase(=프로젝트 폴더 경로)를 넘겨야 뷰어에 [⛶ 전체화면]·[🔗 링크 복사]가 생긴다(#1436).
+                //  첨부도 프로젝트 폴더 안의 실제 파일이라 같은 주소축(root=shared + path)으로 가리킬 수 있다.
+                onclick: () => openFileViewer(pid, rel, f.name, refresh, base, d.project && d.project.folder) }), el('span', { class: 'pjv-tm-att-size', text: fmtSize(f.size) }), el('button', { class: 'pjv-tm-att-act', type: 'button', title: '다운로드', text: '↓',
                 onclick: () => authDownload(base + pid + '/file?download=1&path=' + encodeURIComponent(rel), f.name) }), el('button', { class: 'pjv-tm-att-act danger', type: 'button', title: '삭제', text: '✕',
                 onclick: async () => {
                     if (!confirm('첨부 ‘' + f.name + '’을(를) 삭제할까요?'))
