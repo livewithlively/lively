@@ -8,7 +8,7 @@ import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 import {
   listManagers, getManager, upsertManager, removeManager,
-  listFindings, resolveFinding, upsertFinding, managerOverview,
+  listFindings, resolveFinding, upsertFinding, managerOverview, applyFindings,
   MANAGER_KIND_LABEL, type ManagerKind,
 } from "../../org/store/managers.js";
 import { runManagerByRef, applyAction } from "../../org/manage/run-manager.js";
@@ -141,6 +141,26 @@ export const managersCapabilities: Capability[] = [
       state: z.enum(["accepted", "rejected", "resolved"]).describe("rejected 는 존중된다 — 다음 주기에 되살아나지 않는다"),
       apply: z.boolean().optional().describe("accepted 시 조치안을 실제 적용(되돌릴 수 있는 것만)"),
       resolution: z.string().nullable().optional().describe("처리 메모"),
+    }),
+
+  restWork("org_manager_findings_apply", "제안된 조치 일괄 적용",
+    "선택한 발견들의 조치안을 한 번에 적용하고 accepted 로 닫는다 — action_level='propose'(조치안을 미리 만들어 두고 사람이 적용)의 실행 경로다. " +
+    "적용 가능한 조치(되돌릴 수 있는 것)만 수행하고, 나머지는 건드리지 않고 열린 채로 남긴다(조용히 닫으면 안 고쳐진 게 사라진다). " +
+    "ids 대신 manager_id 를 주면 그 관리기의 **열린·적용가능 발견 전부**를 대상으로 한다.",
+    [{ method: "POST", paths: ["/api/ui/org/manager-findings/apply"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      let ids: number[] = Array.isArray(input.ids) ? input.ids.map(Number).filter((n) => Number.isFinite(n) && n > 0) : [];
+      if (!ids.length && input.manager_id) {
+        // 관리기 단위 — 지금 열려 있고 적용 가능한 것만(목록이 이미 actionable 을 파생해 준다).
+        const open = await listFindings({ managerId: Number(input.manager_id), limit: 500 });
+        ids = open.filter((f) => f.actionable).map((f) => f.id);
+      }
+      if (!ids.length) throw new HttpError(400, "적용할 발견이 없습니다 — ids 또는 manager_id 를 주세요");
+      const r = await applyFindings(ids, actorOf(user), applyAction);
+      return r;
+    }, {
+      ids: z.array(z.number().int().positive()).optional().describe("적용할 발견 id 들"),
+      manager_id: z.number().int().positive().optional().describe("이 관리기의 열린·적용가능 발견 전부(ids 미지정 시)"),
     }),
 
   // ── AI 가 쓰는 도구 — 모순·코드괴리 판정 배치가 결과를 되돌려 적는 경로. ──

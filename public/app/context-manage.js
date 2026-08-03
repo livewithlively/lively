@@ -61,6 +61,37 @@ export async function renderFindings(host) {
         host.replaceChildren(body);
         return;
     }
+    // '조치안 제시'(propose) 관리기가 낸 **적용 가능한** 발견 — 한 번에 적용할 수 있다(#1419 T9).
+    //  report 와의 실질 차이가 여기다: report 는 목록만, propose 는 이 묶음 바가 뜬다.
+    const proposed = findings.filter((f) => f.actionable && f.action_level === 'propose');
+    if (proposed.length) {
+        const bar = el('div', { class: 'ctx-bulk' });
+        const btn = el('button', { class: 'btn btn-primary btn-sm', text: `제안된 조치 ${proposed.length}건 한 번에 적용` });
+        btn.addEventListener('click', async () => {
+            const ok = await confirmDialog({
+                title: `제안된 조치 ${proposed.length}건을 적용할까요?`,
+                lines: ['분류 이동은 원래 분류가 이력에 남아 되돌릴 수 있습니다.',
+                    '적용되지 않는 항목은 그대로 목록에 남습니다.'],
+                confirmText: '적용',
+            });
+            if (!ok)
+                return;
+            btn.disabled = true;
+            try {
+                const r = await api('/api/ui/org/manager-findings/apply', {
+                    method: 'POST', body: JSON.stringify({ ids: proposed.map((f) => f.id) })
+                });
+                toast(`적용 ${r.applied}건${r.failed ? ` · 실패 ${r.failed}건` : ''}${r.skipped ? ` · 건너뜀 ${r.skipped}건` : ''}`);
+                reload();
+            }
+            catch (e) {
+                toast(e.message, true);
+                btn.disabled = false;
+            }
+        });
+        bar.append(el('span', { class: 'ctx-bulk-t', text: '적용 대기' }), el('span', { class: 'ctx-bulk-d', text: '관리기가 조치안까지 만들어 뒀습니다. 확인하고 한 번에 적용하세요.' }), btn);
+        body.append(bar);
+    }
     const list = el('div', { class: 'ctx-findings' });
     for (const f of findings)
         list.append(findingRow(f, reload));
@@ -69,7 +100,10 @@ export async function renderFindings(host) {
 }
 function findingRow(f, reload) {
     const card = el('div', { class: 'card ctx-finding ctx-sev-' + f.severity });
-    const head = el('div', { class: 'ctx-finding-head' }, el('span', { class: 'ctx-sev', text: SEV_LABEL[f.severity] || f.severity }), el('span', { class: 'ctx-tag', text: KIND_LABEL[f.kind] || f.kind }), f.seen_count > 1 ? el('span', { class: 'ctx-tag', title: '이 문제가 반복해서 발견된 횟수', text: `${f.seen_count}회 발견` }) : null, el('span', { class: 'ctx-finding-when', text: relTime(f.last_seen_at) }));
+    const head = el('div', { class: 'ctx-finding-head' }, el('span', { class: 'ctx-sev', text: SEV_LABEL[f.severity] || f.severity }), el('span', { class: 'ctx-tag', text: KIND_LABEL[f.kind] || f.kind }), f.seen_count > 1 ? el('span', { class: 'ctx-tag', title: '이 문제가 반복해서 발견된 횟수', text: `${f.seen_count}회 발견` }) : null, 
+    // '적용 대기' — 조치안이 준비돼 있고 관리기가 propose 모드일 때만(#1419 T9). report 모드에선 안 뜬다.
+    (f.actionable && f.action_level === 'propose')
+        ? el('span', { class: 'ctx-tag ctx-tag-ready', title: '관리기가 조치안까지 만들어 뒀습니다', text: '적용 대기' }) : null, el('span', { class: 'ctx-finding-when', text: relTime(f.last_seen_at) }));
     card.append(head);
     card.append(el('p', { class: 'ctx-finding-sum', text: f.summary }));
     // 대상으로 가는 링크 — 판단하려면 원문을 봐야 한다.
@@ -87,7 +121,9 @@ function findingRow(f, reload) {
     const acts = el('div', { class: 'ctx-row-acts' });
     const pa = f.proposed_action;
     // 적용 가능한 조치가 있을 때만 '적용' 버튼 — 없는데 버튼만 있으면 눌러도 아무 일이 없다.
-    if (pa && pa.op === 'move_category') {
+    //  ⚠ 판정은 **서버가 준 f.actionable** 을 쓴다(화이트리스트 단일 출처). 여기서 op 를 직접 보면
+    //   서버 규칙이 바뀔 때 화면만 뒤처져 '눌러도 안 되는 버튼'이 남는다 — 그게 이 코드의 원래 모습이었다.
+    if (f.actionable && pa?.op === 'move_category') {
         const apply = el('button', { class: 'btn btn-primary btn-sm', text: `‘${pa.to_category_key}’ 로 옮기기` });
         apply.addEventListener('click', async () => {
             apply.disabled = true;

@@ -1217,6 +1217,16 @@
   "input_hash": "ae82583fc4be8620"
  },
  {
+  "name": "org_manager_findings_apply",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/manager-findings/apply"
+  ],
+  "input_hash": "5a06b4d3972498fb"
+ },
+ {
   "name": "org_manager_finding_report",
   "scope": "memory",
   "mcp": true,

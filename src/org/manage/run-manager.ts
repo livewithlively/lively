@@ -11,6 +11,7 @@ import {
 import {
   detectMismatch, detectOutdated, findContradictionCandidates, findCodeDriftCandidates,
 } from "./detectors.js";
+import { isApplicableAction } from "./action-whitelist.js";
 import { logger } from "../../log.js";
 
 export interface ManagerRunResult {
@@ -26,7 +27,7 @@ export interface ManagerRunResult {
  */
 export async function runManager(
   m: ManagerRow,
-  enqueue?: (prompt: string, opts: { model?: string | null; effort?: string | null; requester?: string | null; extra?: Record<string, unknown> }) => Promise<{ status: string; summary: unknown }>,
+  enqueue?: (prompt: string, opts: { model?: string | null; effort?: string | null; requester?: string | null; repo?: string | null; extra?: Record<string, unknown> }) => Promise<{ status: string; summary: unknown }>,
 ): Promise<ManagerRunResult> {
   const base = { manager: m.key, kind: m.kind };
   try {
@@ -68,16 +69,38 @@ export async function runManager(
       return { ...base, candidates: cands.length, enqueued: true };
     }
 
-    const cands = await findCodeDriftCandidates(m, m.batch_size);
+    const all = await findCodeDriftCandidates(m, m.batch_size);
+    // 레포가 안 붙은 도메인은 뺀다(#1419 T8) — 코드를 읽어야 판정할 수 있는데 어느 레포인지 모르면
+    //  AI 가 '코드를 못 찾겠다'만 보고하거나, 더 나쁘게는 **읽지도 않고 추측한다**. 비교할 is 가 없는 것과 같다.
+    const cands = all.filter((c) => c.repos.length > 0);
     if (!cands.length) {
-      await recordManagerRun(m.id, "ok", { candidates: 0 });
-      return { ...base, candidates: 0, skipped: "정의(should)와 코드가 함께 있는 도메인 없음" };
+      const why = all.length
+        ? `정의는 있으나 레포가 연결된 도메인이 없음(${all.length}개 후보 중 0개) — [맥락 관리 ▸ 분류 ▸ 분류축]에서 레포를 지정하세요`
+        : "정의(should)와 코드가 함께 있는 도메인 없음";
+      await recordManagerRun(m.id, "ok", { candidates: 0, note: why });
+      return { ...base, candidates: 0, skipped: why };
     }
-    const r = await enqueue(buildCodeDriftPrompt(m, cands), {
-      model: m.model, effort: m.effort, requester: m.requester,
-      extra: { manager: m.key, candidates: cands.length },
-    });
-    await recordManagerRun(m.id, r.status, r.summary);
+
+    // 레포 단위로 갈라 접수한다(#1419 T8) — 헤드리스 태스크는 **작업 cwd 가 레포 하나**다.
+    //  여러 레포의 도메인을 한 배치에 섞으면 그중 하나만 워크트리가 준비되고 나머지는 코드를 못 읽는다.
+    const byRepo = new Map<string, typeof cands>();
+    for (const c of cands) {
+      const repo = c.repos[0]; // 도메인에 레포가 여럿이면 첫 번째(정렬 고정) — 나머지는 다음 주기에 다루기보다
+      //  지금은 대표 레포로 본다(도메인이 레포 경계를 넘는 경우는 드물고, 넘으면 도메인 정의를 쪼개는 게 맞다).
+      const list = byRepo.get(repo) ?? [];
+      list.push(c);
+      byRepo.set(repo, list);
+    }
+
+    const out: unknown[] = [];
+    for (const [repo, group] of byRepo) {
+      const r = await enqueue(buildCodeDriftPrompt(m, group), {
+        model: m.model, effort: m.effort, requester: m.requester, repo,
+        extra: { manager: m.key, repo, candidates: group.length },
+      });
+      out.push({ repo, candidates: group.length, ...(r.summary as object) });
+    }
+    await recordManagerRun(m.id, "ok", { repos: out });
     return { ...base, candidates: cands.length, enqueued: true };
   } catch (e) {
     const msg = (e as Error)?.message ?? String(e);
@@ -87,19 +110,18 @@ export async function runManager(
 }
 
 /**
- * 조치 적용 — **되돌릴 수 있는 것만** 자동으로 한다.
+ * 조치 적용 — **되돌릴 수 있는 것만**.
  *
- *  지금 자동 적용하는 것은 분류 이동(move_category) 하나다. 그것도 기존 연결을 **지우지 않고**
+ *  지금 적용하는 것은 분류 이동(move_category) 하나다. 그것도 기존 연결을 **지우지 않고**
  *  rejected 로 내려 두고 새 연결을 건다 — 잘못 옮겼어도 원래 자리가 이력에 남아 되돌릴 수 있다.
- *  본문 수정·삭제 같은 비가역 조치는 자동으로 하지 않는다(review_knowledge 는 사람/AI 에게 넘기는 표식일 뿐).
+ *  본문 수정·삭제 같은 비가역 조치는 자동으로 하지 않는다(isApplicableAction 화이트리스트).
  */
 export async function applyAction(action: unknown, actor: string): Promise<boolean> {
-  const a = action as Record<string, unknown> | null;
-  if (!a || typeof a.op !== "string") return false;
+  if (!isApplicableAction(action)) return false;
+  const a = action as Record<string, unknown>;
 
   if (a.op === "move_category") {
     const name = String(a.name ?? ""), from = Number(a.from_category_id ?? 0), to = Number(a.to_category_id ?? 0);
-    if (!name || !to) return false;
     const client = await itemsPool.connect();
     try {
       await client.query("BEGIN");
@@ -146,12 +168,15 @@ function buildContradictionPrompt(m: ManagerRow, cands: Array<{ a: string; a_tit
 /** 지식↔코드 괴리 프롬프트 — 정의(should)와 실제 코드를 대조하게 한다. */
 function buildCodeDriftPrompt(m: ManagerRow, cands: Array<{ key: string; name: string | null; should: string; repos: string[]; unit_count: number }>): string {
   const list = cands.map((c, i) =>
-    `${i + 1}) ${c.key}${c.name ? ` (${c.name})` : ""} — 레포 ${c.repos.join("·") || "미지정"}, 매핑 코드 ${c.unit_count}건`).join(" / ");
+    `${i + 1}) ${c.key}${c.name ? ` (${c.name})` : ""} — 매핑 코드 ${c.unit_count}건`).join(" / ");
   const crit = m.criteria_md?.trim() ? `이 조직의 판단 기준: ${m.criteria_md.trim().replace(/\s+/g, " ")}. ` : "";
+  // 레포는 그룹 단위로 하나다(호출자가 갈라 넘긴다) — 작업 cwd 가 곧 그 레포의 워크트리라고 알려 준다.
+  const repo = cands[0]?.repos[0] ?? "";
   return `도메인 **정의(should) ↔ 실제 코드(is)** 괴리 점검 배치야(관리기 '${m.label || m.key}'). ` +
     `대상 도메인: ${list}. ` +
+    `⚠ **지금 작업 폴더가 레포 '${repo}' 의 워크트리다** — 클론하지 말고 여기서 바로 Read/Grep 해. ` +
     `① 각 도메인을 category_get 으로 열어 정의·범위·규칙(should)을 정확히 읽어. ` +
-    `② 그 도메인에 매핑된 코드를 실제로 확인해 — 레포 워크트리에서 Read/Grep 으로 구현을 보고, 필요하면 map_code_unit 매핑도 참고해. ${crit}` +
+    `② 그 도메인에 매핑된 코드를 실제로 확인해 — 작업 폴더에서 Read/Grep 으로 구현을 보고, 필요하면 map_code_unit 매핑도 참고해. ${crit}` +
     `③ **괴리의 정의**: 정의가 하겠다고 적어 둔 것을 코드가 안 하거나, 코드가 하는 일이 정의에 없거나, 정의의 규칙을 코드가 어기는 것. ` +
     `구현 세부(변수명·파일 배치)는 괴리가 아니다. 정의가 낡아 보이면 그것도 괴리다(코드가 맞고 정의가 틀린 경우). ` +
     `④ 괴리만 org_manager_finding_report 로 보고: manager_key='${m.key}', target_kind='category', target_ref=(도메인 key), ` +
@@ -171,3 +196,5 @@ export async function runManagerByRef(
 }
 
 export { MANAGER_KIND_LABEL };
+
+export { isApplicableAction };

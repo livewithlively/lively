@@ -8,6 +8,7 @@
 import assert from "node:assert/strict";
 import { needsLlm, MANAGER_KIND_LABEL, type ManagerKind } from "../store/managers.js";
 import { applyAction } from "./run-manager.js";
+import { isApplicableAction } from "./action-whitelist.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void | Promise<void>): Promise<void> =>
@@ -59,6 +60,28 @@ await t("move_category 도 필수값이 없으면 거부", async () => {
   assert.equal(await applyAction({ op: "move_category", name: "k" }, "test"), false);
   assert.equal(await applyAction({ op: "move_category", to_category_id: 3 }, "test"), false);
   assert.equal(await applyAction({ op: "move_category", name: "", to_category_id: 3 }, "test"), false);
+});
+
+// ══ 화이트리스트 단일 출처 — 화면·저장·적용이 같은 판정을 써야 한다 [#1419 T9] ══
+await t("isApplicableAction 과 applyAction 의 판정이 일치한다", async () => {
+  // 이 둘이 어긋나면 '적용' 버튼이 있는데 눌러도 아무 일이 없다(사용자는 실패를 인지하지 못한다).
+  //  applyAction 은 DB 를 건드리므로 **거부 케이스만** 대조한다 — 거부는 DB 접근 전에 끝난다.
+  const rejected: unknown[] = [
+    null, undefined, {}, { op: 123 }, "move_category",
+    { op: "review_knowledge", name: "k" },
+    { op: "delete_knowledge", name: "k" },
+    { op: "move_category" },                              // 필수값 없음
+    { op: "move_category", name: "k" },                   // 대상 분류 없음
+    { op: "move_category", to_category_id: 3 },           // 지식 이름 없음
+    { op: "move_category", name: "   ", to_category_id: 3 }, // 공백뿐인 이름
+    { op: "move_category", name: "k", to_category_id: 0 }, // 0 은 유효 id 가 아니다
+  ];
+  for (const a of rejected) {
+    assert.equal(isApplicableAction(a), false, `whitelist 가 통과시켰다: ${JSON.stringify(a)}`);
+    assert.equal(await applyAction(a, "test"), false, `applyAction 이 통과시켰다: ${JSON.stringify(a)}`);
+  }
+  // 반대로 온전한 조치안은 화이트리스트를 통과해야 한다(대조군 — 전부 false 를 반환하는 구현을 잡는다).
+  assert.equal(isApplicableAction({ op: "move_category", name: "k", to_category_id: 3 }), true);
 });
 
 console.log(`\n${pass} passed`);

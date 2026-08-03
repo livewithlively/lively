@@ -245,3 +245,12 @@ a.ctx-preview-t:hover { color: var(--blue); }
   .ctx-finding-when { margin-left: 0; }
   .ctx-preset-grid { grid-template-columns: 1fr; }
 }
+
+/* 제안된 조치 묶음 적용(#1419 T9) — action_level='propose' 의 실체가 화면에 드러나는 자리.
+   report 는 목록만 쌓이고, propose 면 이 바가 뜬다(라벨만 다른 게 아니라 할 수 있는 일이 다르다). */
+.ctx-bulk { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 12px 14px; margin-bottom: 12px; border-radius: 12px;
+  background: var(--bg-punch); border: 1px solid var(--line-note); }
+.ctx-bulk-t { font-size: 13px; font-weight: 700; color: var(--ink-note); }
+.ctx-bulk-d { font-size: 13px; color: var(--ink-sub); flex: 1; min-width: 200px; }
+.ctx-tag-ready { background: var(--bg-punch); color: var(--ink-note); }

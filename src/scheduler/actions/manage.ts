@@ -33,14 +33,18 @@ export async function runManagers(
   const out: ManagerRunResult[] = [];
   for (const m of targets) {
     const enqueue = requester
-      ? async (prompt: string, o: { model?: string | null; effort?: string | null; requester?: string | null; extra?: Record<string, unknown> }) =>
+      ? async (prompt: string, o: { model?: string | null; effort?: string | null; requester?: string | null; repo?: string | null; extra?: Record<string, unknown> }) =>
           enqueueHeadlessTask({
             prompt, requester: o.requester || requester, jobId,
+            // repo 를 주면 base clone→worktree 를 자동 준비해 작업 cwd 로 삼는다(#1419 T8) —
+            //  지식↔코드 비교는 코드를 실제로 읽어야 판정할 수 있고, 워크트리 없이는 AI 가 추측하게 된다.
+            repo: o.repo ?? null,
             flags: headlessFlags({ model: o.model ?? params.model, effort: o.effort ?? params.effort }),
             extra: o.extra,
             // 관리기별로 마커를 갈라 준다 — 한 잡이 여러 관리기를 병렬 접수할 때 첫 관리기가
             //  나머지를 전부 '진행 중'으로 막지 않게(#1289 증류기에서 배운 것과 같은 함정).
-            marker: `cron:${jobId}#${m.key}`,
+            //  레포별로 또 갈라지므로 레포까지 마커에 넣는다(한 관리기가 레포 셋을 동시에 접수할 수 있다).
+            marker: `cron:${jobId}#${m.key}${o.repo ? `@${o.repo}` : ""}`,
           })
       : undefined;
     out.push(await runManager(m, enqueue));

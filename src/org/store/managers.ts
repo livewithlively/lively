@@ -5,6 +5,7 @@
 //  다음 주기에 무의미해진다(반려한 것이 새 항목으로 또 올라온다). 그래서 재발견은 카운트만 올린다.
 import { itemsPool, q } from "../../db/client.js";
 import { audit } from "./audit.js";
+import { isApplicableAction } from "../manage/action-whitelist.js";
 import type { Finding } from "../manage/detectors.js";
 
 export type ManagerKind = "mismatch" | "outdated" | "contradiction" | "code_drift";
@@ -96,6 +97,14 @@ export interface FindingRow {
   resolved_at: string | null; resolved_by: string | null; resolution: string | null;
   /** 파생 — 대상 지식의 제목(있으면). 큐에서 이름 슬러그만 보이면 무엇인지 모른다. */
   target_title?: string | null;
+  /** 파생 — 이 관리기의 조치 수준(report|propose|auto). 화면이 '적용 대기'를 그릴지 정한다. */
+  action_level?: string;
+  /**
+   * 파생(#1419 T9) — 기계가 적용할 수 있는 조치안이 붙어 있나.
+   *  판정은 applyAction 과 **같은 화이트리스트**(isApplicableAction)를 쓴다 — 서로 다르면
+   *  '적용' 버튼이 있는데 눌러도 아무 일이 없는 상태가 된다(사용자는 실패했다고 인지하지 못한다).
+   */
+  actionable?: boolean;
 }
 
 export async function listFindings(opts: {
@@ -112,7 +121,7 @@ export async function listFindings(opts: {
   params.push(Math.max(0, opts.offset ?? 0)); const offP = `$${params.length}`;
 
   const rows = await q(itemsPool, `
-    SELECT f.*, m.key AS manager_key, m.label AS manager_label,
+    SELECT f.*, m.key AS manager_key, m.label AS manager_label, m.action_level,
            k.title AS target_title
       FROM org_manager_finding f
       JOIN org_manager m ON m.id = f.manager_id
@@ -120,7 +129,31 @@ export async function listFindings(opts: {
      WHERE ${w.join(" AND ")}
      ORDER BY CASE f.severity WHEN 'high' THEN 0 WHEN 'warn' THEN 1 ELSE 2 END, f.last_seen_at DESC
      LIMIT ${limP} OFFSET ${offP}`, params);
-  return rows as FindingRow[];
+  // 적용 가능 여부는 applyAction 과 **같은 판정**으로 파생한다(#1419 T9) — 화면이 자기 규칙을 따로 갖지 않게.
+  return (rows as FindingRow[]).map((f) => ({ ...f, actionable: isApplicableAction(f.proposed_action) }));
+}
+
+/**
+ * 조치안 묶음 적용(#1419 T9) — action_level='propose' 의 실체.
+ *  report 는 쌓기만, auto 는 사람 없이 즉시, **propose 는 미리 만들어 두고 사람이 한 번에** 적용한다.
+ *  적용된 것은 accepted 로 닫는다. 적용 불가·실패는 열린 채로 남긴다(조용히 닫으면 안 고쳐진 게 사라진다).
+ */
+export async function applyFindings(
+  ids: number[], actor: string,
+  apply: (action: unknown, actor: string) => Promise<boolean>,
+): Promise<{ applied: number; failed: number; skipped: number }> {
+  if (!ids.length) return { applied: 0, failed: 0, skipped: 0 };
+  const rows = await q(itemsPool,
+    `SELECT id, proposed_action FROM org_manager_finding WHERE id = ANY($1::bigint[]) AND state='open'`, [ids]);
+  let applied = 0, failed = 0, skipped = 0;
+  for (const r of rows as Array<{ id: number; proposed_action: unknown }>) {
+    if (!isApplicableAction(r.proposed_action)) { skipped++; continue; }
+    if (await apply(r.proposed_action, actor)) {
+      await resolveFinding(Number(r.id), "accepted", actor, "제안된 조치 일괄 적용");
+      applied++;
+    } else failed++;
+  }
+  return { applied, failed, skipped };
 }
 
 /** 발견 처리 — 사람이 승인/반려/해결로 닫는다. */
