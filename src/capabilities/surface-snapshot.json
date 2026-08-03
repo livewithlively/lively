@@ -1525,7 +1525,7 @@
   "rest": [
    "POST /api/ui/activity"
   ],
-  "input_hash": "9b251166c2858b6e"
+  "input_hash": "74cbfa30723e5570"
  },
  {
   "name": "activity_list",
@@ -1925,7 +1925,7 @@
   "rest": [
    "POST /api/ui/knowledge"
   ],
-  "input_hash": "fb3f01ef2616f593"
+  "input_hash": "c3e2bafdd801a367"
  },
  {
   "name": "knowledge_set_lifecycle",
@@ -2065,7 +2065,7 @@
   "rest": [
    "POST /api/ui/sources"
   ],
-  "input_hash": "ccb77cff6227ad73"
+  "input_hash": "869f8253de96ae5b"
  },
  {
   "name": "source_link_knowledge",
