@@ -48,7 +48,11 @@ const domainmapIngest: Capability = {
     "대량은 건별 map_code_unit 대신 이 한 콜로. actor 는 게이트웨이가 스탬프(payload.run actor 무시).",
   scope: "context",
   input: {
-    payload: z.any().describe(
+    // ⚠ z.any() 금지 — JSON Schema 로 `{}`(타입 없음)이 되어 MCP 클라이언트가 객체를 유지하지 못하고
+    // 문자열로 직렬화해 보낸다("payload 는 객체여야 합니다" 400). 그러면 이 툴의 존재 이유(호스트 셸 없는
+    // MCP-전용 세션이 is 에 쓰는 경로, #606)가 무력화된다. object 파라미터는 코드베이스 관례대로
+    // z.record(z.unknown()) — cron.params·lists.settings·managers.proposed_action 과 동일.
+    payload: z.record(z.unknown()).describe(
       "전체 스캔 payload(위 설명 형태). repo.name 필수 + code_units/mappings/domains 중 최소 하나."),
   },
   expose: {
