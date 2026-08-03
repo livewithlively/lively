@@ -12,6 +12,8 @@
 // ⚠ org_ingest_policy(#638)와 직교 — 저건 '지식이 되고 나서 auto/confirm/drop 어디로 보내나'(허용선 밸브),
 //  이건 '무엇을 집어 무슨 기준·형식으로 증류하나'(생산 라인). 증류기 산출도 그 밸브를 그대로 탄다.
 import { itemsPool, q } from "../../db/client.js";
+import { sourceVisSql, resolveSourceViewer } from "../../v6/source-store.js";
+import { PUBLIC_VIEWER } from "../../v6/visibility.js";
 
 export interface DistillerRow {
   id: number;
@@ -221,8 +223,14 @@ const INBOX_SEL = `s.id, s.name, s.kind, s.title, s.provenance, s.external_syste
 //  ⚠ 'seen' 이 없으면 skip 한 자료가 매 배치 다시 올라온다(실측 64% 재독, 전량 skip 시 진행 0). 증류 성공분은
 //   knowledge_source 가 거르고, **보고 버린 것**은 이 테이블이 거른다 — 둘이 합쳐져야 인박스가 실제로 전진한다.
 function unprocessedSql(d: DistillerRow, p: Params, alias = "s"): string {
-  return `NOT EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = ${alias}.id)
-        AND NOT EXISTS (SELECT 1 FROM org_distiller_seen ds WHERE ds.source_id = ${alias}.id AND ds.distiller_id = ${p.add(d.id)})`;
+  // ⚠ 판정 시각을 **자료의 수정 시각과 비교**한다 — 단순 존재 검사가 아니다.
+  //  종전엔 링크가 있으면 영구 제외라, 원문이 수정돼도 지식이 수정 전 내용으로 굳었다(#1289).
+  //  이제 판정(링크 생성 / seen 기록) **이후에** 내용이 바뀌면 다시 올라온다.
+  //  수렴 보장: 재판정 배치를 낼 때 markDistillerSeen 이 seen_at 을 now() 로 **갱신**하므로 다음 배치엔 다시 빠진다.
+  //  ⚠ 이 술어는 source.updated_at 이 '내용이 바뀐 시각'이라는 전제 위에 선다(mirror-source 가 contentChanged
+  //   일 때만 전진시킨다). 그 게이팅이 풀리면 일일 full 스윕마다 전량이 재증류된다.
+  return `NOT EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = ${alias}.id AND ks.created_at >= ${alias}.updated_at)
+        AND NOT EXISTS (SELECT 1 FROM org_distiller_seen ds WHERE ds.source_id = ${alias}.id AND ds.distiller_id = ${p.add(d.id)} AND ds.seen_at >= ${alias}.updated_at)`;
 }
 
 // 인박스 쿼리 조립(순수 — 테스트 seam). 실행은 listDistillerInbox.
@@ -238,8 +246,16 @@ function unprocessedSql(d: DistillerRow, p: Params, alias = "s"): string {
 //   · 상한은 둘이다 — batch_size(스레드 수)와 batch_max_msgs(메시지 수). 최근순으로 누적하다 먼저 걸리는 데서 멈춘다.
 //     ⚠ **첫 스레드만은 메시지 상한을 넘어도 통째로 담는다** — 스레드를 자르면 대화가 끊겨 증류 자체가 불가능하다.
 //     171메시지짜리 스레드는 그 하나만 처리하고 나머지는 다음 배치로 간다.
-export function buildInboxQuery(d: DistillerRow, all: DistillerRow[], limitThreads?: number): { sql: string; values: unknown[] } {
+export function buildInboxQuery(d: DistillerRow, all: DistillerRow[], limitThreads?: number, viewer?: string | null): { sql: string; values: unknown[] } {
   const p = new Params();
+  // 공개범위(#1291 v4) — **인박스는 요청자가 볼 수 있는 자료만** 담는다.
+  //  이 쿼리의 결과는 그대로 프롬프트 본문이 되고(buildDistillerPrompt), 그 프롬프트는 requester 신원으로 도는
+  //  헤드리스 세션에 들어간다. 필터가 없으면 대상이 아닌 사람의 세션에 잠긴 원문이 흘러들고, 그 세션이 그걸
+  //  공개 지식으로 되뱉는다 — v2 에서 admin 우회를 없앤 바로 그 위험이다.
+  //  요청자가 없는 폴백 증류기는 PUBLIC_VIEWER = 전원 공개 자료만(잠긴 자료는 대상인 사람이 요청자여야 다룬다).
+  //  p.add 는 "$N" 문자열을 주고 sourceVisSql 은 자리번호(숫자)를 받는다 — 값을 넣고 그 길이를 쓴다.
+  let visWhere = "TRUE";
+  if (viewer != null) { p.add(viewer); visWhere = sourceVisSql(p.values.length); }
   const where = distillerExclusiveSql(d, higherThan(d, all), p);
   const pre = prefilterSql(d, p);
   const nThreads = Math.min(Math.max(1, limitThreads ?? d.batch_size ?? 3), 200);
@@ -250,6 +266,7 @@ export function buildInboxQuery(d: DistillerRow, all: DistillerRow[], limitThrea
         FROM source s
         WHERE s.lifecycle='active'
           AND ${unprocessedSql(d, p)}
+          AND ${visWhere}
           AND ${where}${pre ? "\n          AND " + pre : ""}`;
   // 스레드를 최근 활동순으로 누적하다 스레드 상한·메시지 상한 중 먼저 걸리는 데서 멈춘다.
   //  `rn = 1` 예외가 핵심 — 첫 스레드는 메시지 상한을 넘어도 담는다(스레드를 자르면 대화가 끊겨 증류가 안 된다).
@@ -274,8 +291,51 @@ export function buildInboxQuery(d: DistillerRow, all: DistillerRow[], limitThrea
 
 // 이 증류기가 이번 배치에서 다룰 자료 목록 — **스레드 batch_size 개**의 미판정 자료(스레드째, 시간순).
 export async function listDistillerInbox(d: DistillerRow, all: DistillerRow[], limitThreads?: number): Promise<Record<string, unknown>[]> {
-  const { sql, values } = buildInboxQuery(d, all, limitThreads);
+  //  요청자 신원으로 필터한다 — 판정(축·긴급열람)은 async 라 여기서 하고, 빌더는 순수하게 둔다.
+  const viewer = await resolveSourceViewer(d.requester || PUBLIC_VIEWER);
+  const { sql, values } = buildInboxQuery(d, all, limitThreads, viewer);
   return q(itemsPool, sql, values);
+}
+
+// 이 배치가 다루는 스레드에 **이미 만들어진 지식**을 찾는다(#1289).
+//
+// 왜 필요한가: 이미 지식이 된 스레드에 답글이 하나 달리면 그 답글만 혼자 배치에 온다(형제는 knowledge_source
+//  가 걸러낸다). 그때 서버가 "이 스레드는 이미 지식 X 다"를 말해주지 않으면 에이전트가 아는 방법은
+//  knowledge_similar(의미검색)뿐인데, "확인했습니다" 같은 한 줄엔 의미 신호가 없어 부모를 못 찾고
+//  **파편 지식**을 새로 만든다. 링크(knowledge_source)는 결정적 답을 갖고 있으므로 그걸 쓴다.
+//
+// 순수 SQL 조립은 buildThreadKnowledgeQuery(테스트 seam) — 실행만 여기서.
+export function buildThreadKnowledgeQuery(rows: Record<string, unknown>[]): { sql: string; values: unknown[] } | null {
+  const keys = new Map<string, [string, string]>();
+  for (const r of rows) {
+    const f = (r.fields ?? {}) as Record<string, unknown>;
+    const ch = String(f.container_name ?? "");
+    const tid = String(f.thread_ts ?? f.ts ?? "");
+    if (tid) keys.set(ch + "\u0000" + tid, [ch, tid]);
+  }
+  if (!keys.size) return null;
+  const chs = [...keys.values()].map((v) => v[0]);
+  const tids = [...keys.values()].map((v) => v[1]);
+  // 같은 (채널, 스레드)에 속한 **다른** 자료가 링크된 지식 — 이번 배치 대상은 아직 링크가 없으니 자연히 빠진다.
+  const sql = `SELECT DISTINCT ks.name,
+       COALESCE(s.fields->>'container_name','') AS ch,
+       COALESCE(s.fields->>'thread_ts', s.fields->>'ts') AS tid,
+       k.title, k.lifecycle
+     FROM source s
+     -- ⚠ derived_from 만 — cites(단순 참조)까지 잡으면 '참고로 걸린 문서'를 갱신하라고 시킨다.
+     JOIN knowledge_source ks ON ks.source_id = s.id AND ks.relation = 'derived_from'
+     JOIN knowledge k ON k.name = ks.name
+     WHERE s.lifecycle='active' AND k.lifecycle <> 'archived'
+       AND (COALESCE(s.fields->>'container_name',''), COALESCE(s.fields->>'thread_ts', s.fields->>'ts'))
+           IN (SELECT * FROM unnest($1::text[], $2::text[]))
+     ORDER BY tid, ks.name`;
+  return { sql, values: [chs, tids] };
+}
+
+export async function listThreadKnowledge(rows: Record<string, unknown>[]): Promise<Record<string, unknown>[]> {
+  const built = buildThreadKnowledgeQuery(rows);
+  if (!built) return [];
+  return q(itemsPool, built.sql, built.values).catch(() => []);
 }
 
 // 배치에 낸 자료를 '판정함'으로 기록 — 다음 배치에서 빠진다. 배치 접수 직후 호출(스케줄러).
@@ -287,7 +347,10 @@ export async function markDistillerSeen(distillerId: number, sourceIds: number[]
   const r = await itemsPool.query(
     `INSERT INTO org_distiller_seen(distiller_id, source_id, task_id)
        SELECT $1, unnest($2::int[]), $3
-     ON CONFLICT (distiller_id, source_id) DO NOTHING`,
+     ON CONFLICT (distiller_id, source_id)
+     -- ⚠ DO NOTHING 이면 재판정이 수렴하지 않는다 — 수정된 자료가 다시 올라와도 seen_at 이 옛 시각에
+     --  머물러 매 배치 반복된다. 판정 시각을 전진시켜야 '이번에 다시 봤다'가 기록된다(#1289).
+     DO UPDATE SET seen_at=now(), task_id=EXCLUDED.task_id`,
     [distillerId, ids, Number.isFinite(tid as number) ? tid : null]);
   return r.rowCount ?? 0;
 }
@@ -630,7 +693,36 @@ export function buildSourceDigest(rows: Record<string, unknown>[]): string {
   ].join("\n");
 }
 
-export function buildDistillerTargeting(d: DistillerRow, rows: Record<string, unknown>[]): string {
+// 이 스레드에 이미 있는 지식 절(#1289) — 새 자료가 기존 지식의 '갱신 재료'임을 못 박는다.
+//  ⚠ "이 스레드에서 만들어졌다"라고 말하면 **거짓일 수 있다.** 실측: 사람이 다른 근거로 손수 쓴 문서에
+//   나중에 이 스레드 자료 1건이 근거로 붙은 사례가 있었다(근거 16건 중 1건, 주 스레드는 다른 채널).
+//   그걸 '내 스레드의 산출물'로 오해하면 남의 논의가 본체인 문서를 갈아엎는다 → 사실만 말하고(연결돼 있다)
+//   갱신은 덮어쓰기가 아니라 덧붙이기라고 못 박는다.
+//  ⚠ 근거 비중이 낮다고 '갱신하지 말라'는 규칙을 넣지 마라 — 채널을 넘는 후속 보고(결정은 A 채널,
+//   적용 보고는 B 채널)가 정확히 그 형태다. 그 규칙은 유효한 연결을 끊고 중복 문서를 만든다(실측 사례).
+//  없으면 절 자체가 안 붙는다(무회귀).
+export const THREAD_KN_MAX = 20;
+export function buildThreadKnowledgeBlock(kn: Record<string, unknown>[]): string {
+  if (!kn.length) return "";
+  const shown = kn.slice(0, THREAD_KN_MAX);
+  const lines = shown.map((k) => {
+    const t = String(k.title ?? "").slice(0, 80);
+    return `  · ${String(k.name)}${t ? ` — ${t}` : ""}${k.lifecycle && k.lifecycle !== "active" ? ` [${String(k.lifecycle)}]` : ""}`;
+  });
+  const more = kn.length > shown.length ? [`  · …외 ${kn.length - shown.length}건(상한으로 생략)`] : [];
+  return [
+    `[이 스레드의 자료가 이미 지식에 연결돼 있다 — 새로 만들지 말고 그것을 갱신해라]`,
+    `아래 지식에는 이번 대상 자료와 **같은 스레드**의 자료가 근거(derived_from)로 이미 연결돼 있다.`
+      + ` 이번 자료는 그 논의의 후속(답글·정정·적용보고)이므로 **새 지식을 만들면 파편화된다.**`
+      + ` knowledge_save 를 같은 name 으로 불러 본문을 보강하고, 이번 자료를 source_link_knowledge 로 연결해라.`,
+    `⚠ 그 지식이 **이 스레드에서 만들어졌다는 뜻은 아니다** — 근거의 대부분이 다른 채널·다른 스레드의 논의이거나,`
+      + ` 사람이 다른 자료로 손수 쓴 문서일 수 있다. 그러니 기존 본문을 갈아엎지 말고 **덧붙여라.**`,
+    ...lines, ...more,
+    `(정말 다른 주제라고 판단될 때만 새로 만든다 — 그때도 왜 갈랐는지 본문에 남겨라.)`,
+  ].join("\n");
+}
+
+export function buildDistillerTargeting(d: DistillerRow, rows: Record<string, unknown>[], threadKnowledge: Record<string, unknown>[] = []): string {
   const ids = rows.map((r) => Number(r.id)).filter(Number.isFinite);
   const digest = buildSourceDigest(rows);
   return [
@@ -640,6 +732,7 @@ export function buildDistillerTargeting(d: DistillerRow, rows: Record<string, un
     //  실측에서 id 를 name 으로 넘겨 19건 전부 실패하고 재시도했다(툴 결과의 30%가 에러였다).
     `조회가 필요하면 source_get 은 id=**숫자**를 받는다(source_get({id: 36835}) — name 으로 넘기면 실패한다).`,
     ...(digest ? ["", digest] : []),
+    ...(threadKnowledge.length ? ["", buildThreadKnowledgeBlock(threadKnowledge)] : []),
   ].join("\n");
 }
 
@@ -657,13 +750,14 @@ export function buildDistillerPrompt(o: {
   distiller: DistillerRow;
   rows: Record<string, unknown>[];
   policySummary: string;
+  threadKnowledge?: Record<string, unknown>[];
 }): string {
   const d = o.distiller;
   const name = d.label || d.key;
   const lines: string[] = [];
 
   lines.push(`'${name}' 증류기 배치야 — 수집된 자료(source) ${o.rows.length}건을 지식으로 증류한다.`);
-  lines.push(buildDistillerTargeting(d, o.rows));
+  lines.push(buildDistillerTargeting(d, o.rows, o.threadKnowledge ?? []));
 
   // ② 지식화 기준 — 팀마다 다른 부분. 없으면 조직 공통 기본.
   lines.push("");

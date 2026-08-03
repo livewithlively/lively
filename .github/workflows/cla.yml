@@ -1,10 +1,10 @@
-# CLA 서명 게이트 — 첫 PR 에서 봇이 서명을 요구하고, 서명 전까지 머지를 막는다.
+# CLA 서명 게이트 — 외부 기여자의 첫 PR 에서 봇이 서명을 요구하고, 서명 전까지 머지를 막는다.
 #  문안은 CLA.md, 서명 기록은 별도 브랜치(cla-signatures)의 JSON 에 누적된다.
 #
-# ⚠ 공개 전 설정 필요:
-#   1) 서명 기록 브랜치(cla-signatures)를 레포에 만들어 둘 것(빈 orphan 브랜치면 충분)
-#   2) 서명 기록 브랜치에 쓸 PAT 를 secrets.CLA_SIGNATURES_TOKEN 으로 등록(repo scope)
-#      — 기본 GITHUB_TOKEN 은 워크플로 파일이 있는 브랜치 밖으로 커밋할 수 없어 별도 토큰이 필요하다.
+# PAT 는 필요 없다. contributor-assistant 는 서명 파일을 **다른 레포/조직**에 저장할 때만
+#  PERSONAL_ACCESS_TOKEN 을 쓰고(src/persistence/persistence.ts 의 isRemoteRepoOrOrgConfigured()
+#  분기), 같은 레포에 저장하는 지금 구성에서는 GITHUB_TOKEN 으로 쓴다. 그래서 아래 permissions 의
+#  contents 가 write 여야 한다 — read 면 서명이 들어와도 기록을 커밋하지 못한다.
 name: CLA
 
 on:
@@ -15,7 +15,7 @@ on:
 
 permissions:
   actions: write
-  contents: read
+  contents: write      # 서명 기록(cla-signatures 브랜치)을 커밋해야 한다 — read 면 서명이 저장되지 않는다
   pull-requests: write
   statuses: write
 
@@ -25,15 +25,21 @@ jobs:
     steps:
       - name: CLA 서명 확인
         if: (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'
-        uses: contributor-assistant/github-action@v2.6.1
+        # pull_request_target + contents:write 조합이라 액션을 커밋 SHA 로 고정한다.
+        # 태그는 옮겨 달 수 있고, 이 워크플로는 우리 시크릿·쓰기 권한을 쥔 채 돈다. (= v2.6.1)
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PERSONAL_ACCESS_TOKEN: ${{ secrets.CLA_SIGNATURES_TOKEN }}
         with:
           path-to-signatures: 'signatures/version1/cla.json'
           path-to-document: 'https://github.com/livewithlively/lively/blob/main/CLA.md'
           branch: 'cla-signatures'
-          allowlist: dependabot[bot],renovate[bot],*[bot]
+          # 서명 대상은 '저작권을 넘겨줄 외부 기여자'다. 아래는 서명 개념이 성립하지 않아 제외한다:
+          #  - 메인테이너(=저작권자 본인). CLA 는 이들에게 권리를 모으는 장치라 자기 자신에게 서명할 게 없다.
+          #  - claude: Co-authored-by 트레일러로 붙는 AI 공동저자 계정. 법적 기여자는 사람 커미터 쪽이다.
+          #    이게 빠져 있어서 우리 PR 마다 CLA 가 실패하고 알림 메일이 왔다.
+          #  - 봇 일반.
+          allowlist: lively-admin,yoon5n3n,Verplusgin,claude,dependabot[bot],renovate[bot],*[bot]
           custom-notsigned-prcomment: |
             이 프로젝트는 기여 전 짧은 CLA 서명이 필요합니다 — [CLA.md](CLA.md) 를 읽고,
             아래 문장을 이 PR 에 댓글로 남겨주세요:

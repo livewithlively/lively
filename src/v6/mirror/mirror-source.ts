@@ -4,6 +4,7 @@ import { redactDeep, redactString } from "../../org/ingest/redact.js";
 import { normalizeExternalInstance } from "../../org/ingest/external-identity.js";
 import type { RawItem } from "../../items/store.js";
 import { auditConnector } from "./mirror-common.js";
+import { stampSourceVisibility } from "../source-vis-policy.js";
 
 // system → source.kind 매핑(표준 kind 준수 — SOURCE_KINDS). 그 외는 'other'(raw 에 system 보존).
 function sourceKindOf(system: string): string {
@@ -66,13 +67,27 @@ export async function mirrorSourceV6(client: pg.PoolClient, it: RawItem, system:
         kind=EXCLUDED.kind, title=EXCLUDED.title, body_md=EXCLUDED.body_md, raw=EXCLUDED.raw,
         fields=EXCLUDED.fields, parent_external_id=EXCLUDED.parent_external_id,
         external_url=EXCLUDED.external_url, occurred_at=EXCLUDED.occurred_at,
-        last_synced_at=now(), updated_at=now(), updated_by=EXCLUDED.updated_by
+        last_synced_at=now(),
+        -- ⚠ updated_at 은 **내용이 바뀐 시각**이다 — "마지막 동기화 시각"은 last_synced_at 이 맡는다.
+        --  무조건 now() 로 밀면 일일 full 스윕이 전 자료의 updated_at 을 갱신하고, 이걸 재판정 신호로 쓰는
+        --  증류 인박스가 **매일 전량을 다시 증류한다**(#1289). 제목·본문이 실제로 달라졌을 때만 전진시킨다.
+        updated_at=CASE WHEN $13::boolean THEN now() ELSE source.updated_at END,
+        updated_by=EXCLUDED.updated_by
      RETURNING id`,
     [kind, title, body, raw == null ? null : JSON.stringify(raw),
      system, instance, externalId, it.provenance.external_url ?? null,
-     it.occurred_at ?? null, author, JSON.stringify(fields), it.parent_external_id ?? null],
+     it.occurred_at ?? null, author, JSON.stringify(fields), it.parent_external_id ?? null,
+     contentChanged],
   );
   const id = (r.rows[0] as { id: number }).id;
+
+  // 공개범위(#1291 v4) — 커넥터별 정책으로 **태어날 때** 정한다. 자료의 생산자는 사람이 아니라 커넥터라
+  //  개별 잠금이 현실적이지 않다(슬랙만 1만건 규모). 채널 좌표는 fields 에 접힌 값을 그대로 쓴다.
+  //  ⚠ INSERT 에만 — 재싱크마다 덮으면 사람이 손으로 조정한 공개범위가 매번 되돌아간다.
+  if (isInsert) {
+    await stampSourceVisibility(client, id, system,
+      [it.container_ref, it.container_name, fields.container_ref as string, fields.container_name as string]);
+  }
 
   if (contentChanged) {
     const beforeSnap = isInsert ? null : { id, title: prevRow!.title, body_md: prevRow!.body_md };

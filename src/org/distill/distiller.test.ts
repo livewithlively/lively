@@ -15,8 +15,7 @@ import {
   buildDistillerPrompt, describeScope, composeDistillPrompt,
   buildInboxQuery, buildBacklogQuery, markDistillerSeen,
   prefilterThresholds, prefilterSql, DEFAULT_DECISIVE_KEYWORDS, type DistillerRow,
-  buildGridSql, buildSourceDigest, DIGEST_PER_SOURCE, DIGEST_TOTAL_BYTES, ARG_MAX_STRLEN, buildDistillerTargeting,
-} from "./distiller.js";
+  buildGridSql, buildSourceDigest, DIGEST_PER_SOURCE, DIGEST_TOTAL_BYTES, ARG_MAX_STRLEN, buildDistillerTargeting, buildThreadKnowledgeQuery, buildThreadKnowledgeBlock, THREAD_KN_MAX,} from "./distiller.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -290,7 +289,9 @@ t("D2 여러 축 지정 → 각 축이 사람 말로 나열된다", () => {
 t("N1 인박스는 '이미 판정한 자료'를 제외한다(증류됨 + 보고버림 둘 다)", () => {
   const { sql, values } = buildInboxQuery(mk({ id: 7 }), []);
   assert.match(sql, /NOT EXISTS \(SELECT 1 FROM knowledge_source/, "지식이 된 자료 제외");
-  assert.match(sql, /NOT EXISTS \(SELECT 1 FROM org_distiller_seen ds WHERE ds\.source_id = s\.id AND ds\.distiller_id = \$\d+\)/,
+  // 사양은 '그 증류기의 seen 기록이 걸린다'이지 술어의 정확한 꼬리 형태가 아니다 — 재판정(#1289)으로
+  //  seen_at 비교가 붙으면서 형태가 바뀌었다. 구조가 아니라 의도를 단언한다.
+  assert.match(sql, /NOT EXISTS \(SELECT 1 FROM org_distiller_seen ds WHERE ds\.source_id = s\.id AND ds\.distiller_id = \$\d+/,
     "보고 버린 자료 제외 — 이게 없으면 skip 한 자료가 매 배치 다시 올라온다");
   assert.ok(values.includes(7), "판정 이력은 증류기별로 걸러야 한다(자기 id 바인딩)");
 });
@@ -630,4 +631,101 @@ t("D9 자료 0건이어도 깨지지 않는다", () => {
   assert.equal(buildSourceDigest([]), "");
   const s = buildDistillerPrompt({ distiller: mk(), rows: [], policySummary: POLICY });
   assert.ok(s.length > 0 && !s.includes("===== 자료 시작 ====="));
+});
+
+// ── 재판정(수정분) + 기존 지식 인지(#1289 R1~R6·K1~K4) ──
+//  계기: 한 번 지식이 된 자료는 knowledge_source 링크가 영구히 걸려 인박스에서 영원히 빠졌다 — 원문이 수정돼도
+//  재판정 트리거가 없어 지식이 수정 전 내용으로 굳었다. 그리고 이미 지식화된 스레드에 답글이 달리면 그 답글만
+//  혼자 배치에 와서(형제는 링크가 걸러낸다) 에이전트가 부모 지식을 모른 채 파편 지식을 만들었다.
+{
+  const p = new Params();
+  const sql = buildInboxQuery(mk({ id: 7 }), [mk({ id: 7 })]).sql;
+
+  t("R2 판정 시각을 자료 수정 시각과 **비교**한다(존재 검사가 아니다)", () => {
+    assert.match(sql, /knowledge_source ks WHERE ks\.source_id = \w+\.id AND ks\.created_at >= \w+\.updated_at/,
+      "링크 존재만 보면 수정분이 영원히 인박스에 못 돌아온다");
+    assert.match(sql, /org_distiller_seen ds WHERE[^)]*ds\.seen_at >= \w+\.updated_at/,
+      "seen 도 시각 비교여야 한다 — 아니면 한 번 버린 자료는 수정돼도 안 돌아온다");
+  });
+
+  t("R6 판정 이력이 없는 자료는 종전대로 인박스에 있다(무회귀)", () => {
+    // NOT EXISTS 구조가 유지돼야 '이력 없음 = 미판정'이 성립한다.
+    assert.match(sql, /NOT EXISTS \(SELECT 1 FROM knowledge_source/);
+    assert.match(sql, /NOT EXISTS \(SELECT 1 FROM org_distiller_seen/);
+  });
+  void p;
+}
+
+// K1·K2 — 스레드 지식 조회 SQL
+t("K1 배치의 (채널,스레드) 조합으로 기존 지식을 찾는다", () => {
+  const rows = [{ id: 1, fields: { container_name: "ch", thread_ts: "100" } }];
+  const q2 = buildThreadKnowledgeQuery(rows)!;
+  assert.ok(q2, "스레드 키가 있으면 조회가 만들어져야 한다");
+  assert.deepEqual(q2.values, [["ch"], ["100"]], "채널·스레드가 바인딩으로 들어간다(질의문 조립 금지)");
+  assert.match(q2.sql, /JOIN knowledge_source/, "링크가 결정적 답이다 — 의미검색에 의존하지 않는다");
+  assert.ok(!/archived/.test(q2.sql.split("WHERE")[0]), "archived 제외는 WHERE 에서");
+  assert.match(q2.sql, /k\.lifecycle <> 'archived'/, "폐기된 지식으로 유도하면 안 된다");
+});
+
+t("K2 스레드 키가 없으면 조회 자체를 안 한다(무회귀)", () => {
+  assert.equal(buildThreadKnowledgeQuery([]), null);
+  assert.equal(buildThreadKnowledgeQuery([{ id: 1, fields: {} }]), null, "thread_ts·ts 가 없으면 스레드가 아니다");
+});
+
+t("K1b 같은 스레드가 여러 자료로 와도 키는 한 번만 나간다", () => {
+  const q3 = buildThreadKnowledgeQuery([
+    { id: 1, fields: { container_name: "ch", thread_ts: "100" } },
+    { id: 2, fields: { container_name: "ch", thread_ts: "100" } },
+    { id: 3, fields: { container_name: "ch", thread_ts: "200" } },
+  ])!;
+  assert.deepEqual(q3.values, [["ch", "ch"], ["100", "200"]]);
+});
+
+t("K3 기존 지식이 있으면 '갱신해라'가 명시되고 지식 이름이 실린다", () => {
+  const s = buildDistillerPrompt({
+    distiller: mk({ thread_aware: true }), rows: ROWS, policySummary: POLICY,
+    threadKnowledge: [{ name: "hf-a-b", title: "기존 지식 제목", lifecycle: "active" }],
+  });
+  assert.match(s, /hf-a-b/, "어느 지식인지 이름이 있어야 갱신할 수 있다");
+  assert.match(s, /새로 만들지 말고/, "새로 만들면 파편화된다 — 그 금지가 명시돼야 한다");
+  assert.match(s, /기존 지식 제목/);
+});
+
+t("K2b 기존 지식이 없으면 그 절이 아예 안 붙는다(무회귀)", () => {
+  const s = buildDistillerPrompt({ distiller: mk(), rows: ROWS, policySummary: POLICY });
+  assert.ok(!s.includes("이미 지식이 있다"), "없는데 절이 붙으면 에이전트가 헛것을 찾는다");
+});
+
+t("K4 기존 지식이 많으면 상한을 두되 **생략 건수를 밝힌다**(조용한 누락 금지)", () => {
+  const many = Array.from({ length: THREAD_KN_MAX + 7 }, (_, i) => ({ name: `k-${i}`, title: `t${i}`, lifecycle: "active" }));
+  const b = buildThreadKnowledgeBlock(many);
+  assert.match(b, /외 7건/, "생략을 안 밝히면 에이전트가 그 지식들을 없는 것으로 취급한다");
+  assert.ok(b.split("\n").length < many.length + 10, "상한이 안 걸리면 프롬프트가 폭주한다");
+});
+
+// K5·K6 — 스레드 지식 절의 사실성(#1289 후속 실측)
+//  계기: 사람이 다른 근거로 손수 쓴 문서(비링크)에 나중에 이 스레드 자료 1건이 붙은 사례가 있었다
+//  (근거 16건 중 1건, 주 스레드는 다른 채널). 절이 "이 스레드에서 만들어졌다"라고 단정하면 에이전트가
+//  남의 논의가 본체인 문서를 자기 산출물로 알고 갈아엎는다.
+t("K5 근거 관계는 derived_from 만 — cites(단순 참조)로 걸린 지식을 갱신 대상으로 주지 않는다", () => {
+  const q4 = buildThreadKnowledgeQuery([{ id: 1, fields: { container_name: "ch", thread_ts: "100" } }])!;
+  assert.match(q4.sql, /ks\.relation = 'derived_from'/,
+    "관계를 안 가리면 '참고로 걸린 문서'를 고치라고 시킨다");
+});
+
+t("K6 절은 '만들어졌다'로 단정하지 않고, 갱신이 덮어쓰기가 아님을 명시한다", () => {
+  const b = buildThreadKnowledgeBlock([{ name: "k-1", title: "t", lifecycle: "active" }]);
+  assert.ok(!/스레드[^\n]*에서 이미 만들어졌다/.test(b),
+    "이 스레드가 만든 문서라고 단정하면 남의 논의가 본체인 문서를 갈아엎는다");
+  assert.match(b, /연결돼 있다/, "사실은 '연결돼 있다'다");
+  assert.match(b, /덧붙여라/, "갱신이 덮어쓰기로 읽히면 기존 맥락이 사라진다");
+});
+
+// K7 — 되돌아오면 안 되는 규칙. 실측에서 '비중 낮으면 새로 만들어라'는 유효한 교차채널 연결을 끊었다
+//  (결정은 A 채널, 적용 보고는 B 채널 — 정확히 '비중 1/16 + 주 스레드 다름' 형태다).
+t("K7 '근거 비중이 낮으면 갱신하지 말라'는 규칙을 넣지 않는다(유효한 교차채널 연결을 끊는다)", () => {
+  const b = buildThreadKnowledgeBlock([{ name: "k-1", title: "t", lifecycle: "active" }]);
+  for (const bad of [/비중이 낮으면[^\n]*새로 만들/, /주 스레드가 다르면[^\n]*새로 만들/]) {
+    assert.ok(!bad.test(b), "채널을 넘는 후속 보고가 그 형태라, 이 규칙은 중복 문서를 만든다");
+  }
 });
