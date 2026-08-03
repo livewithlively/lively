@@ -11,7 +11,10 @@
 //     하면 "정책을 켰는데 옛 자료가 그대로 보인다"가 된다.
 import { api, el, errorNote, toast } from './core.js';
 import { overlayBox, skeleton } from './learn.js';
-import { compactPicker, memberPicker } from './projects.js';
+// ⚠ 배럴(./projects.js)에서 가져오면 프로젝트 모듈 그래프 전체를 끌고 와 admin ↔ projects ↔ terminal
+//  **import 순환**이 생긴다(CI check-imports 가 419건을 잡았다). 프리미티브가 실제로 사는 모듈에서 직접 가져온다.
+import { compactPicker } from './projects/popover.js';
+import { memberPicker } from './projects/files.js';
 import { sectionHead } from './admin-widgets.js';
 export async function sourceVisPolicyPanel(detail) {
     const reload = () => sourceVisPolicyPanel(detail);

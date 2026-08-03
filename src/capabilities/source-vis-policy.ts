@@ -7,7 +7,7 @@
 import { z } from "zod";
 import { HttpError } from "../http-error.js";
 import type { Capability } from "./types.js";
-import { itemsPool } from "../items/store.js";
+import { itemsPool } from "../db/client.js";
 import {
   sourceVisRules, invalidateSourceVisRules, pickRule, applyVisibility,
 } from "../v6/source-vis-policy.js";

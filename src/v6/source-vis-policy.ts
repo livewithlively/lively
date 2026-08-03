@@ -13,7 +13,7 @@
 //  · **스탬핑은 INSERT 에만.** 재싱크(UPDATE)로 덮으면 사람이 손으로 조정한 공개범위가 매 동기화마다 되돌아간다.
 //  · 정책 조회 실패는 **유예 후 fail-closed** — 유출은 못 되돌리고 과차단은 되돌릴 수 있다(backfill 로 정정 가능).
 //    단 캐시된 값이 있으면 그걸 쓴다(순간 장애로 수천 건이 잠기는 걸 막는다 — hiddenProjects 와 같은 유예 패턴).
-import { itemsPool } from "../items/store.js";
+import { itemsPool } from "../db/client.js";
 import { logger } from "../log.js";
 import { axisOn } from "./visibility-axes.js";
 import type pg from "pg";
