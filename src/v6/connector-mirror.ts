@@ -40,7 +40,8 @@
 //     · mirror/notion-post.ts      노션 후처리(링크 물질화·자식 순서·아카이브 스윕·델타 원장)
 import type pg from "pg";
 import { buildMemberResolver, reresolveMemberList } from "./member-resolve.js"; // #697 재해소 순수 로직(테스트 분리)
-import { routeIngestV6 } from "../org/ingest/ingest-classify.js";
+import { routeIngestV6, alsoMirrorKnowledge } from "../org/ingest/ingest-classify.js";
+import { boundCollector } from "../connectors/config.js"; // #1419 T3 — 수집기 산출 정책(자료/지식/둘 다)
 import type { RawItem } from "../items/store.js";
 import { mirrorKnowledgeByNameV6, mirrorKnowledgeV6 } from "./mirror/mirror-knowledge.js";
 import { mirrorPmCommentV6, mirrorPmFolderV6, mirrorPmListV6, mirrorPmTimeV6, mirrorPmViewV6 } from "./mirror/mirror-pm.js";
@@ -248,7 +249,10 @@ export async function mirrorExternalToV6(client: pg.PoolClient, it: RawItem): Pr
   const system = it.provenance.system;
   const externalId = it.provenance.external_id;
   if (!externalId) return false;
-  const target = routeIngestV6(it.type, system);
+  // 수집기 산출 정책(#1419 T3) — 이 프로세스가 대리하는 수집기의 설정이 기본 라우팅을 덮는다.
+  //  바인딩이 없으면(레거시 경로·수동 실행) 'preset' = 종전 동작 그대로.
+  const outputMode = boundCollector()?.outputMode ?? "preset";
+  const target = routeIngestV6(it.type, system, outputMode);
   if (target == null) return false; // 라우팅 정의 밖 — 미러 skip(보수적, 임의 분류 금지).
 
   await client.query("BEGIN");
@@ -258,7 +262,17 @@ export async function mirrorExternalToV6(client: pg.PoolClient, it: RawItem): Pr
     // domain-wiki(#696): 파일 슬러그=name 자연식별 → name-키 upsert(기존 NULL-external 행 채택). 그 외 K류는 external-좌표.
     else if (target === "knowledge" && system === "domain-wiki") ok = await mirrorKnowledgeByNameV6(client, it, system, externalId);
     else if (target === "knowledge") ok = await mirrorKnowledgeV6(client, it, system, externalId);
-    else if (target === "source") ok = await mirrorSourceV6(client, it, system, externalId);
+    else if (target === "source") {
+      ok = await mirrorSourceV6(client, it, system, externalId);
+      // 'both' — 원문을 자료로 남기면서 지식도 만든다(출처 추적 + 즉시 검색). 같은 트랜잭션 안이라
+      //  둘 중 하나만 적재되는 반쪽 상태가 생기지 않는다. 지식 쪽 실패는 항목 전체를 롤백시킨다.
+      if (alsoMirrorKnowledge(it.type, system, outputMode)) {
+        const kOk = system === "domain-wiki"
+          ? await mirrorKnowledgeByNameV6(client, it, system, externalId)
+          : await mirrorKnowledgeV6(client, it, system, externalId);
+        ok = ok || kOk;
+      }
+    }
     else if (target === "pm_folder") ok = await mirrorPmFolderV6(client, it, system, externalId);
     else if (target === "pm_list") ok = await mirrorPmListV6(client, it, system, externalId);
     else if (target === "pm_view") ok = await mirrorPmViewV6(client, it, system, externalId);

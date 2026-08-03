@@ -59,8 +59,35 @@ export {
 export type { McpServer, McpServerInput } from "./store/mcp-servers.js";
 
 // ── org_connector(커넥터 설정/토큰 + #586 자동 싱크 잡) ──
+//  ⚠ 레거시 축 — #1419 T1 부터 정본은 아래 org_collector 다. 이건 폴백원·롤백 여지로 존치한다.
 export { listConnectors, upsertConnector, removeConnector } from "./store/connectors.js";
 export type { ConnectorView, ConnectorUpsertInput } from "./store/connectors.js";
+
+// ── org_collector(수집기 인스턴스 n개 — #1419 T1) ──
+export {
+  listCollectors, upsertCollector, removeCollector, migrateConnectorsToCollectors, collectorJobId,
+} from "./store/collectors.js";
+export type { CollectorView, CollectorUpsertInput } from "./store/collectors.js";
+
+// ── org_collector_preset(커스텀 프리셋 + 내장∪커스텀 통합 카탈로그 — #1419 T2) ──
+export {
+  collectorPresetCatalog, resolvePreset, moduleNameOf, upsertCollectorPreset, removeCollectorPreset,
+} from "./store/collector-presets.js";
+export type { ResolvedPreset, PresetUpsertInput, PresetDriver } from "./store/collector-presets.js";
+
+// ── org_classifier(분류기 n개 — #1419 T4) ──
+export {
+  listClassifiers, getClassifier, classifierInbox, classifierCoverage,
+  upsertClassifier, removeClassifier, recordClassifierRun, markClassifierSeen,
+} from "./store/classifiers.js";
+export type { ClassifierRow, ClassifierUpsertInput } from "./store/classifiers.js";
+
+// ── org_manager(+finding — 관리기 4종. #1419 T5) ──
+export {
+  listManagers, getManager, upsertManager, removeManager, listFindings, upsertFinding,
+  resolveFinding, recordManagerRun, managerOverview, needsLlm, MANAGER_KIND_LABEL,
+} from "./store/managers.js";
+export type { ManagerRow, ManagerKind, ManagerUpsertInput, FindingRow } from "./store/managers.js";
 
 // ── 자동 인입 라인(org_ingest_policy · org_distiller · 게이트 관측) ──
 export {

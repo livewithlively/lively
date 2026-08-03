@@ -32,6 +32,7 @@ import { embeddingsEditor } from './admin-embeddings.js';
 // ── #1313 R40 분해 ④ — 도메인 패널 B. 셸은 아래 등록 블록에서만 이들을 부른다. ──
 import { mcpEditor } from './admin-mcp-servers.js';
 import { connectorEditor } from './admin-connectors.js';
+import { collectorPresetEditor } from './admin-collector-presets.js'; // #1419 T7 — 커스텀 수집 방식 정의
 import { feedTargetsEditor, projectOutboundEditor } from './admin-outbound.js';
 import { dbSourceEditor } from './admin-db-sources.js';
 import { customHookEditor, harnessAssetEditor } from './admin-hooks-assets.js';
@@ -188,7 +189,10 @@ const ADMIN_SECTIONS = [
   // ── 데이터 연결 ──
   // 커넥터 = **패시브 미러 싱크**(slack/notion/clickup/gmail/drive 를 우리 DB로 당겨온다). AI가 실시간 호출하는
   //  외부 시스템(=MCP 서버·사내 API 도구)과는 다른 것이다 — 그건 [AI 능력 ▸ 도구]에 있다.
-  { key: 'connectors', label: '외부 자료 수집', meaning: null, group: 'data' },
+  { key: 'connectors', label: '외부 자료 수집(레거시)', meaning: null, group: 'data' },
+  // #1419 T7 수집 방식 — 라이블리가 모르는 소스(사내 API·RSS·웹훅)를 코드 없이 정의한다.
+  //  수집기 '인스턴스'는 [맥락 관리 ▸ 수집]에서 만들고, 여기선 그 **틀**만 정의한다(드물게 하는 조직 설정 + admin).
+  { key: 'collector-presets', label: '수집 방식', meaning: null, group: 'data' },
   // #976 위키 아웃바운드 — 우리 정본 지식을 외부(노션 등) '지식 피드' DB로 투영. 커넥터(인바운드)의 역방향.
   //  피드 목적지 + 카테고리 N:M 매핑(발행 게이트) 관리. 사람 페이지 불가침 — 전용 피드 DB에만 카드 append.
   { key: 'feed-targets', label: '위키 아웃바운드(피드)', meaning: null, group: 'data' },
@@ -230,7 +234,7 @@ const SECTION_EXIT = { 'review-queue': '#/knowledge/review', 'wiki-categories': 
 // admin 권한 전용(쓰기·인프라·감사). #318 호출통계·#549 변경감사는 전 구성원의 변경·before/after 를 노출하므로 admin.
 // #1289 'distillers' 는 **관리자 전용이 아니다** — 서버가 memory(워킹레벨) scope 를 요구한다. 팀이 자기 채널의
 //  증류 기준을 직접 조절하는 게 이 기능의 취지라, admin 을 요구하면 실무자가 관리자를 기다려야 한다.
-const ADMIN_ONLY = ['member-add', 'member-access', 'credentials', 'connectors', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'logs', 'sessions', 'embeddings', 'automation', 'audit', 'ingest-policy', 'session-share', 'visibility-axes', 'source-vis-policy'];
+const ADMIN_ONLY = ['member-add', 'member-access', 'credentials', 'connectors', 'collector-presets', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'logs', 'sessions', 'embeddings', 'automation', 'audit', 'ingest-policy', 'session-share', 'visibility-axes', 'source-vis-policy'];
 const RUNTIME_ONLY = ['agent-assets']; // runtime 권한 전용(멤버 머신에서 도는 것의 정의)
 // [도구]는 두 권한의 합집합 — 사내 API 도구·빌트인은 runtime, 외부 MCP 서버 등록은 admin. 둘 중 하나라도 있으면
 //  섹션을 보여주고, 안에서 각 서브탭을 권한별로 켠다(구조상 한 섹션=한 scope 전제가 깨지는 유일한 자리라 명시한다).
@@ -347,6 +351,7 @@ registerPanel('tools', (detail, data) => toolsSection(detail, data));
 registerPanel('audit', (detail, data) => auditSection(detail, data));
 registerPanel('automation', (detail, data) => automationSection(detail, data));
 registerPanel('connectors', (detail, data) => connectorEditor(detail, data));
+registerPanel('collector-presets', (detail) => void collectorPresetEditor(detail));
 registerPanel('feed-targets', (detail, data) => feedTargetsEditor(detail, data));
 registerPanel('project-outbound', (detail, data) => projectOutboundEditor(detail, data));
 registerPanel('db-sources', (detail, data) => dbSourceEditor(detail, data));

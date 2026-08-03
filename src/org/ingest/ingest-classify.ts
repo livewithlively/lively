@@ -43,7 +43,35 @@ export type V6IngestTarget =
   | "project" | "knowledge" | "source"
   | "pm_folder" | "pm_list" | "pm_view" | "pm_comment" | "pm_time"
   | null;
-export function routeIngestV6(type: string, system: string): V6IngestTarget {
+
+/**
+ * 수집기 산출 정책(#1419 T3) — "각 수집기마다 수집 결과를 자료로 저장할지, 아니면 바로 지식으로 만들지".
+ *  · 'preset'(기본) = 프리셋 코드가 정하던 그대로(아래 기본 라우팅). **무중단 기본값.**
+ *  · 'source'    = 자료로만 — 증류기가 판단해 지식화한다(노이즈가 섞인 소스에 맞다).
+ *  · 'knowledge' = 지식 직행 — 이미 정제된 소스(사내 위키·릴리스 노트)에 맞다.
+ *  · 'both'      = 원문을 자료로 남기면서 지식도 만든다(출처 추적 + 즉시 검색).
+ */
+export type CollectorOutputMode = "preset" | "source" | "knowledge" | "both";
+
+/**
+ * 산출 정책이 라우팅을 덮을 수 있는 대상인가.
+ *  ⚠ **구조 엔티티는 덮지 않는다** — PM 계층(space/folder/list/view/comment/time)과 project(clickup task)는
+ *   '수집된 자료'가 아니라 그 소스의 **뼈대**다. 폴더 하나를 지식으로 만들면 위계가 깨지고 프로젝트 미러가
+ *   통째로 무너진다. 정책이 뜻하는 것은 어디까지나 '읽을거리를 자료로 둘까 지식으로 올릴까'다.
+ */
+function overridable(target: V6IngestTarget): boolean {
+  return target === "source" || target === "knowledge";
+}
+
+export function routeIngestV6(type: string, system: string, outputMode: CollectorOutputMode = "preset"): V6IngestTarget {
+  const base = baseRouteIngestV6(type, system);
+  if (outputMode === "preset" || !overridable(base)) return base;
+  // 'both' 는 여기서 source 로 답하고, 지식 쪽은 미러가 한 번 더 부른다(둘 다 적재 — connector-mirror 참조).
+  return outputMode === "knowledge" ? "knowledge" : "source";
+}
+
+/** 산출 정책 이전의 기본 라우팅 — 프리셋(커넥터 코드)이 정하던 그대로. */
+function baseRouteIngestV6(type: string, system: string): V6IngestTarget {
   // #541 무손실 — PM 계층/부속 엔티티(현재 clickup 만 방출; 타 PM 커넥터도 같은 타입을 쓰면 그대로 라우팅).
   if (type === "space" || type === "folder") return "pm_folder"; // Space=최상위, Folder=하위 — 둘 다 project_folder
   if (type === "list") return "pm_list";
@@ -63,6 +91,14 @@ export function routeIngestV6(type: string, system: string): V6IngestTarget {
   if (type === "doc" && system === "gdrive") return "source";
   if (type === "doc") return "knowledge";
   return null; // 그 외 미정의(예: 미지원 task) — skip(보수적).
+}
+
+/**
+ * 이 항목을 **지식으로도** 적재해야 하나(#1419 T3 'both'). routeIngestV6 가 source 를 답한 뒤,
+ *  미러가 이걸 물어 지식 미러를 한 번 더 태운다. 구조 엔티티에는 해당 없음(overridable 가드와 같은 이유).
+ */
+export function alsoMirrorKnowledge(type: string, system: string, outputMode: CollectorOutputMode = "preset"): boolean {
+  return outputMode === "both" && overridable(baseRouteIngestV6(type, system));
 }
 
 // 무키 기계 폴백 — 현 미러 인입이 kind 를 정하던 방식과 **정확히 동일**(external-identity 중앙 함수).

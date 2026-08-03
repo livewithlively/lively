@@ -62,6 +62,12 @@ function ensureRunSchema(): Promise<void> {
       ALTER TABLE connector_run ADD COLUMN IF NOT EXISTS heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT now();
       ALTER TABLE connector_run ADD COLUMN IF NOT EXISTS log_total BIGINT NOT NULL DEFAULT 0;
       UPDATE connector_run SET log_total = char_length(log) WHERE log_total = 0 AND log <> '';
+      -- #1419 T1 — 실행을 **수집기 인스턴스**에 귀속. 구 행은 NULL(레거시 system 단위 실행)로 남고,
+      --  화면은 collector_id 가 있으면 그 수집기 이력으로, 없으면 종전처럼 system 이력으로 읽는다.
+      --  ⚠ FK 를 걸지 않는다 — 수집기를 지워도 그 실행 이력(무슨 일이 있었나)은 남아야 한다(감사 성격).
+      ALTER TABLE connector_run ADD COLUMN IF NOT EXISTS collector_id BIGINT;
+      CREATE INDEX IF NOT EXISTS connector_run_collector_idx ON connector_run(collector_id, started_at DESC)
+        WHERE collector_id IS NOT NULL;
     `).then(() => undefined);
   }
   return schemaReady;
@@ -76,9 +82,16 @@ export interface StartRunResult {
 
 export async function startConnectorRun(
   system: string,
-  opts: { full?: boolean; trigger?: "cron" | "manual"; startedBy?: string | null } = {},
+  opts: { full?: boolean; trigger?: "cron" | "manual"; startedBy?: string | null; collectorId?: number | null } = {},
 ): Promise<StartRunResult> {
   await ensureRunSchema();
+
+  // ── 실행 범위(#1419 T1) — 이 run 이 무엇과 겹치면 안 되나. ──
+  //  수집기 인스턴스가 지정되면 **그 인스턴스**가 범위다: 같은 프리셋(예: 슬랙)의 다른 수집기는 서로 다른
+  //  워크스페이스·채널 그룹을 긁으므로 **동시에 도는 게 정상**이다. system 으로 잠그면 그 병렬성이 죽는다.
+  //  지정이 없으면 종전 그대로 system 단위 — 단 collector_id IS NULL 인 레거시 실행끼리만 본다.
+  const scopeSql = opts.collectorId ? `collector_id=$1` : `system=$1 AND collector_id IS NULL`;
+  const scopeVal: string | number = opts.collectorId ?? system;
 
   // 유령 정리 — 하트비트가 STALE 이상 끊긴 running 행은 추적(부모)이 죽은 것(게이트웨이 재시작 등).
   //  error 로 닫고, 자식이 살아 남아있으면 kill(명령줄 검증) — 커서 미전진이라 데이터는 다음 run 이 재수집.
@@ -86,27 +99,29 @@ export async function startConnectorRun(
   const ghosts = await itemsPool.query(
     `UPDATE connector_run SET status='error', finished_at=now(),
             log = right(log || $3, ${LOG_CAP}), log_total = log_total + char_length($3::text)
-     WHERE system=$1 AND status='running' AND heartbeat_at < now() - interval '${Math.round(HEARTBEAT_STALE_MS / 1000)} seconds'
+     WHERE ${scopeSql} AND status='running' AND heartbeat_at < now() - interval '${Math.round(HEARTBEAT_STALE_MS / 1000)} seconds'
        AND NOT (id = ANY($2::bigint[]))
-     RETURNING id, pid`, [system, [...liveRuns.keys()], ghostMarker]);
+     RETURNING id, pid`, [scopeVal, [...liveRuns.keys()], ghostMarker]);
   for (const g of ghosts.rows as Array<{ id: number; pid: number | null }>) {
     if (await killIfRunSync(g.pid, system)) logger.warn({ runId: g.id, pid: g.pid }, "유령 run 의 잔존 자식 프로세스 종료");
   }
 
   // 중복 가드 — 이미 도는 run 이 있으면 그걸 돌려준다(멱등 UX: 버튼 연타·크론 겹침 안전).
   const running = await itemsPool.query(
-    `SELECT id FROM connector_run WHERE system=$1 AND status='running' ORDER BY started_at DESC LIMIT 1`, [system]);
+    `SELECT id FROM connector_run WHERE ${scopeSql} AND status='running' ORDER BY started_at DESC LIMIT 1`, [scopeVal]);
   if (running.rows[0]) {
     return { runId: Number((running.rows[0] as { id: string | number }).id), alreadyRunning: true, done: Promise.resolve({ ok: true, exitCode: null }) };
   }
 
   const mode = opts.full ? "full" : "incremental";
   const ins = await itemsPool.query(
-    `INSERT INTO connector_run(system, mode, trigger, started_by) VALUES($1,$2,$3,$4) RETURNING id`,
-    [system, mode, opts.trigger ?? "cron", opts.startedBy ?? null]);
+    `INSERT INTO connector_run(system, mode, trigger, started_by, collector_id) VALUES($1,$2,$3,$4,$5) RETURNING id`,
+    [system, mode, opts.trigger ?? "cron", opts.startedBy ?? null, opts.collectorId ?? null]);
   const runId = Number((ins.rows[0] as { id: string | number }).id);
 
   const args = ["--env-file-if-exists=.env", "dist/connectors/run-sync.js", system];
+  // 수집기 바인딩을 자식에게 넘긴다 — 자식은 이 id 로 config·커서 네임스페이스를 해소한다(config.bindCollector).
+  if (opts.collectorId) args.push("--collector", String(opts.collectorId));
   if (opts.full) args.push("--full");
   const child = spawn("node", args, { cwd: process.cwd(), env: process.env, stdio: ["ignore", "pipe", "pipe"] });
   liveRuns.set(runId, { child, canceled: false });
@@ -243,16 +258,24 @@ export async function cancelConnectorRun(id: number, actor?: string | null): Pro
   return { ok: true, message: "중지됨" };
 }
 
-/** 실행 목록(로그 제외 — 목록은 가볍게). stale = running 인데 하트비트 끊김(추적 사망 추정). */
-export async function listConnectorRuns(system?: string, limit = 20, offset = 0): Promise<Record<string, unknown>[]> {
+/**
+ * 실행 목록(로그 제외 — 목록은 가볍게). stale = running 인데 하트비트 끊김(추적 사망 추정).
+ *  범위(#1419 T1): collectorId 를 주면 **그 수집기의 이력만**, 없으면 종전대로 system 전체(그 프리셋의 모든
+ *  인스턴스 + 레거시 실행이 함께 보인다 — '이 소스가 최근 어땠나'를 묻는 질문이라 그게 맞다).
+ */
+export async function listConnectorRuns(
+  system?: string, limit = 20, offset = 0, collectorId?: number | null,
+): Promise<Record<string, unknown>[]> {
   await ensureRunSchema();
   const params: unknown[] = [];
-  let where = "";
-  if (system) { params.push(system); where = `WHERE system=$${params.length}`; }
+  const conds: string[] = [];
+  if (collectorId) { params.push(collectorId); conds.push(`collector_id=$${params.length}`); }
+  else if (system) { params.push(system); conds.push(`system=$${params.length}`); }
+  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
   params.push(Math.min(Math.max(1, limit), 100)); const limP = `$${params.length}`;
   params.push(Math.min(Math.max(0, Math.trunc(Number(offset) || 0)), 1_000_000)); const offP = `$${params.length}`;   // #709 offset — 과거 이력 도달
   const r = await itemsPool.query(
-    `SELECT id, system, mode, trigger, status, started_at, finished_at, exit_code, stats, length(log) AS log_size, started_by, heartbeat_at,
+    `SELECT id, system, collector_id, mode, trigger, status, started_at, finished_at, exit_code, stats, length(log) AS log_size, started_by, heartbeat_at,
             (status='running' AND heartbeat_at < now() - interval '${Math.round(HEARTBEAT_STALE_MS / 1000)} seconds') AS stale
      FROM connector_run ${where} ORDER BY started_at DESC LIMIT ${limP} OFFSET ${offP}`, params);
   return r.rows as Record<string, unknown>[];
