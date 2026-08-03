@@ -19,6 +19,9 @@ import { renderClassifiers } from './context-classify.js';
 import { renderFindings, renderManagers } from './context-manage.js';
 import { renderCategoryList } from './categories.js';
 import { distillersPanel } from './distillers.js';
+import { collectorPresetEditor } from './admin-collector-presets.js'; // 수집 방식(커스텀 프리셋) — 수집 단계 안으로(#1419)
+import { sourceVisPolicyPanel } from './source-vis-policy.js'; // 자료 공개범위(#1291 v4) — 생산 지점이 수집이다
+import { ingestPolicyPanel } from './review.js'; // 지식 검토 정책(#638) — 증류 산출물이 통과하는 밸브
 import { loadAdmin } from './admin-rerender.js';
 /** 서브탭 정의 — key 가 곧 URL(#/context/<key>). */
 const TABS = [
@@ -26,13 +29,13 @@ const TABS = [
     // adminEdit — '보는 건 누구나, 고치는 건 관리자'인 단계. 네 단계 중 수집만 그렇다(외부 서비스 토큰을 다룬다).
     //  이걸 **탭에서** 알리는 이유: 들어가서 버튼이 없는 걸 보고 유추하게 두면 "나만 안 보이나"가 되고,
     //  관리자는 자기 화면과 남의 화면이 다르다는 사실 자체를 모른다. 배지는 권한과 무관하게 늘 붙인다.
-    { key: 'collect', label: '수집', adminEdit: true, hint: '외부 도구의 내용을 가져오는 수집기를 만들고 관리합니다. 만들고 고치는 일은 관리자 전용이며, 무엇이 언제 수집되는지는 모두가 봅니다.' },
-    { key: 'distill', label: '증류', hint: '모인 원본에서 무엇을 어떤 형식의 지식으로 만들지 정합니다.' },
+    { key: 'collect', label: '수집', adminEdit: true, hint: '외부 도구의 내용을 가져오는 수집기, 그 수집 방식, 그리고 들어온 자료를 누가 볼지 정합니다. 만들고 고치는 일은 관리자 전용이며, 무엇이 언제 수집되는지는 모두가 봅니다.' },
+    { key: 'distill', label: '증류', hint: '모인 원본에서 무엇을 어떤 형식의 지식으로 만들지, 그리고 만들어진 지식을 사람이 검토할지 정합니다.' },
     { key: 'classify', label: '분류', hint: '지식이 어느 갈래에 속하는지 정하는 규칙과 분류축을 관리합니다.' },
     { key: 'manage', label: '관리', hint: '쌓인 지식이 낡거나 어긋나지 않게 살피고, 찾아낸 것을 처리합니다.' },
 ];
-/** 분류·관리 화면 안의 2단 탭 — 모듈 전역에 둬 탭을 오가도 선택이 보존된다. */
-const inner = { classify: 'classifiers', manage: 'findings' };
+/** 단계별 하위 탭 선택 — 모듈 전역에 둬 탭을 오가도 선택이 보존된다. 값은 STAGE_TABS 의 첫 항목 기준. */
+const inner = { collect: 'collectors', distill: 'distillers', classify: 'classifiers', manage: 'findings' };
 export async function renderContext(view, sub) {
     const sel = TABS.some((t) => t.key === sub) ? String(sub) : 'overview';
     const tab = TABS.find((t) => t.key === sel);
@@ -67,65 +70,70 @@ export async function renderContext(view, sub) {
         await renderPipeline(host);
         return;
     }
-    if (sel === 'collect') {
-        await renderCollectors(host);
-        return;
-    }
-    if (sel === 'distill') {
-        // 증류기 화면은 관리탭 패널을 그대로 재사용한다 — 같은 데이터에 두 화면을 만들지 않는다.
-        //  그 패널은 admin 데이터(meaning 등)를 인자로 받으므로 여기서 채워 준다(없으면 빈 객체로 동작).
-        let data = {};
-        try {
-            data = await loadAdmin();
-        }
-        catch { /* 권한 없거나 실패 — 패널은 자기 API 로 그린다 */ }
-        host.replaceChildren();
-        await distillersPanel(host, data);
-        return;
-    }
-    if (sel === 'classify') {
-        await renderClassifyStage(host);
-        return;
-    }
-    await renderManageStage(host);
+    await renderStage(sel, host);
 }
-/** 분류 단계 — '분류기'(규칙)와 '분류축'(갈래 정의) 2단 탭. */
-async function renderClassifyStage(host) {
-    const box = el('div', {});
+/** 관리탭 패널이 요구하는 admin 데이터 — 없으면 빈 객체(패널이 자기 API 로 그린다). */
+async function adminData() {
+    try {
+        return await loadAdmin();
+    }
+    catch {
+        return {};
+    }
+}
+/**
+ * 단계 하위 탭 표 — **한 단계 안에 그 단계에 속한 설정을 전부** 모은다.
+ *
+ * ⚠ 왜 설정탭에서 여기로 옮겼나(어니스트 실박스 지적): 파이프라인 단계에 속한 설정이 [설정] 탭에도
+ *  남아 있으면 입구가 둘이 되고, 무엇보다 **그 단계를 보면서 앞뒤를 못 본다**. 수집기를 고치다
+ *  '수집 방식'을 정의하려고 다른 탭으로 나가야 했고, 자료 공개범위는 수집 지점(mirror INSERT)에
+ *  걸리는데 [설정 ▸ AI 맥락]에 있었다. 지식 검토 정책도 증류 산출물이 통과하는 밸브다.
+ *  옛 URL 은 admin-shell 의 SECTION_EXIT 가 여기로 넘긴다(북마크 보존).
+ */
+const STAGE_TABS = {
+    collect: [
+        { key: 'collectors', label: '수집기', draw: (b) => renderCollectors(b) },
+        // 수집 '방식'(프리셋) — 수집기와 다른 객체다(틀 vs 인스턴스). 드물게 정의하지만 수집기 화면이
+        //  가리키는 자리라, 나가지 않고 이 안에서 정의할 수 있어야 한다.
+        { key: 'presets', label: '수집 방식', draw: (b) => collectorPresetEditor(b) },
+        // 자료 공개범위 — match_system(+채널)으로 매칭해 **자료가 태어날 때** 공개범위를 새긴다(#1291 v4).
+        //  생산 지점이 곧 수집이라 여기 있는 게 맞다.
+        { key: 'source-vis', label: '자료 공개범위', draw: async (b) => { await sourceVisPolicyPanel(b); } },
+    ],
+    distill: [
+        { key: 'distillers', label: '증류기', draw: async (b) => { await distillersPanel(b, await adminData()); } },
+        // 지식 검토 정책 — 증류가 만든 지식이 통과하는 밸브(#638). 생산 라인 바로 뒤가 제자리다.
+        { key: 'ingest-policy', label: '지식 검토 정책', draw: async (b) => { await ingestPolicyPanel(b, await adminData()); } },
+    ],
+    classify: [
+        { key: 'classifiers', label: '분류기', draw: (b) => renderClassifiers(b) },
+        { key: 'categories', label: '분류축', draw: (b) => renderCategoryList(b) },
+    ],
+    manage: [
+        { key: 'findings', label: '발견', draw: (b) => renderFindings(b) },
+        { key: 'managers', label: '관리기', draw: (b) => renderManagers(b) },
+    ],
+};
+async function renderStage(stage, host) {
+    const tabs = STAGE_TABS[stage] ?? [];
     const body = el('div', {});
-    box.append(segmented('classify', [
-        { key: 'classifiers', label: '분류기' },
-        { key: 'categories', label: '분류축' },
-    ], body));
-    box.append(body);
+    // 하위 탭이 하나뿐인 단계는 바를 그리지 않는다 — 고를 것이 없는 탭 바는 소음이다.
+    const box = tabs.length > 1 ? el('div', {}, segmented(stage, tabs, body), body) : el('div', {}, body);
     host.replaceChildren(box);
-    await drawClassifyInner(body);
+    await drawInner(stage, body);
 }
-async function drawClassifyInner(body) {
+async function drawInner(stage, body) {
+    const tabs = STAGE_TABS[stage] ?? [];
+    const pick = tabs.find((t) => t.key === inner[stage]) ?? tabs[0];
+    if (!pick)
+        return;
     body.replaceChildren(skeleton('불러오는 중'));
-    if (inner.classify === 'categories')
-        await renderCategoryList(body);
-    else
-        await renderClassifiers(body);
-}
-/** 관리 단계 — '발견'(일감)이 먼저, '관리기'(설정)가 뒤. */
-async function renderManageStage(host) {
-    const box = el('div', {});
-    const body = el('div', {});
-    box.append(segmented('manage', [
-        { key: 'findings', label: '발견' },
-        { key: 'managers', label: '관리기' },
-    ], body));
-    box.append(body);
-    host.replaceChildren(box);
-    await drawManageInner(body);
-}
-async function drawManageInner(body) {
-    body.replaceChildren(skeleton('불러오는 중'));
-    if (inner.manage === 'managers')
-        await renderManagers(body);
-    else
-        await renderFindings(body);
+    try {
+        await pick.draw(body);
+    }
+    catch (e) {
+        body.replaceChildren(el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '불러오지 못했습니다 — ' + e.message })));
+    }
 }
 /** 2단 탭(세그먼티드) — 관리탭 segTabs 와 같은 시각 언어. 라우터를 안 타므로 인메모리 상태로. */
 function segmented(scope, items, body) {
@@ -144,7 +152,7 @@ function segmented(scope, items, body) {
                 other.classList.toggle('active', on);
                 other.setAttribute('aria-selected', on ? 'true' : 'false');
             }
-            void (scope === 'classify' ? drawClassifyInner(body) : drawManageInner(body));
+            void drawInner(scope, body);
         });
         bar.append(b);
     }
