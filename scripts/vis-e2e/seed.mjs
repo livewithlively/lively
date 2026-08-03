@@ -63,7 +63,33 @@ try {
   const sub = await one(`INSERT INTO project(level, parent_id, name, status, status_category)
       VALUES('subtask',$1,'VIS_SUBTASK_LOCKED','todo','unstarted') RETURNING id`, [task.id]);
 
+  // 시드는 반복 실행된다 — 앞 실행이 남긴 v4 상태(잠금·정책·증류물)를 걷어 같은 출발선을 만든다.
+  //  안 그러면 두 번째 실행부터 '이미 잠긴 자료'로 시작해 백필 단언이 조용히 어긋난다.
+  await pool.query(`DELETE FROM source_member WHERE source_id IN (SELECT id FROM source WHERE external_id LIKE 'v4-%')`);
+  await pool.query(`DELETE FROM org_source_vis_policy`);
+  await pool.query(`DELETE FROM knowledge WHERE name LIKE 'v4-%'`);
+
+  // #1291 v4 — 증류 상속 테스트에 필요한 분류축(지식 저장은 category 필수).
+  //  유니크는 (space,key) 부분 인덱스라 ON CONFLICT 대상이 못 된다 → 있으면 재사용, 없으면 생성.
+  const cat = (await one(`SELECT id, key FROM category WHERE space='product' AND key='vis-e2e' AND state <> 'merged'`))
+    || await one(`INSERT INTO category(key, name, space, state)
+                  VALUES('vis-e2e','가시성 e2e','product','active') RETURNING id, key`);
+
+  // #1291 v4 — 커넥터 수집물 흉내. mirrorSourceV6 가 넣는 모양 그대로(external_system + fields.container_*)라
+  //  백필·정책 매칭이 실제 데이터에서 도는지 볼 수 있다.
+  const srcEng = await one(`INSERT INTO source(kind, title, body_md, provenance, external_system, external_instance, external_id, fields)
+      VALUES('message','V4_SRC_ENG','엔지니어 채널 원문','observed','slack','t1','v4-eng-1',
+             '{"container_ref":"C-ENG","container_name":"eng-only"}'::jsonb)
+      ON CONFLICT (external_system, external_instance, external_id) WHERE external_id IS NOT NULL
+      DO UPDATE SET visibility='open', updated_at=now() RETURNING id`);
+  const srcGen = await one(`INSERT INTO source(kind, title, body_md, provenance, external_system, external_instance, external_id, fields)
+      VALUES('message','V4_SRC_GEN','일반 채널 원문','observed','slack','t1','v4-gen-1',
+             '{"container_ref":"C-GEN","container_name":"general"}'::jsonb)
+      ON CONFLICT (external_system, external_instance, external_id) WHERE external_id IS NOT NULL
+      DO UPDATE SET visibility='open', updated_at=now() RETURNING id`);
+
   Object.assign(out, {
+    v4SrcEngId: srcEng.id, v4SrcGenId: srcGen.id, v4Category: cat.key,
     lockedListId: lockedList.id, openListId: openList.id, spaceLockedListId: spaceLockedList.id,
     lockedProjectId: lockedProject.id, openProjectId: openProject.id,
     lockedTaskId: task.id, lockedSubtaskId: sub.id,

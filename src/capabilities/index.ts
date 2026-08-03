@@ -31,6 +31,7 @@ import { taskFieldV6Capabilities } from "./task-field-v6.js";
 import { teamCapabilities } from "./teams.js";
 import { trashCapabilities } from "./trash.js";
 import { visAxesCapabilities } from "./vis-axes.js";
+import { sourceVisPolicyCapabilities } from "./source-vis-policy.js";
 import { breakGlassCapabilities } from "./break-glass.js";
 import { undoCapabilities } from "./undo.js";
 import { cronCapabilities } from "./cron.js";
@@ -80,6 +81,7 @@ const all: Capability[] = [
   ...taskDetailV6Capabilities, // v6: 태스크 상세 모달(클릭업형) — 태그·시간추적·체크리스트·의존성·댓글/활동피드. scope=memory. expose.mcp:true(자동등록)+REST(/api/ui/v6/tasks/:id/*).
   ...taskFieldV6Capabilities, // v6: 커스텀 필드(클릭업형 "+ 컬럼 추가") — 필드 정의 CRUD + 태스크별 값 패치. scope=memory. expose.mcp:true(자동등록)+REST(/api/ui/v6/projects/:id/fields, /fields/:id, /tasks/:id/fields/:fieldId). task_field_delete_v6 는 org_tool 기본 OFF(값 손실).
   ...trashCapabilities, // v6: 휴지통(deleted_list 조회 + content_restore 복원) — 감사로그 기반 공통 경로. 복원은 사람전용(에이전트 403). 삭제는 엔티티별(knowledge_delete·category_delete·project_delete_v6). #1291: 조회·복원 모두 공개범위 판정을 탄다(지우면 열린다가 되지 않게).
+  ...sourceVisPolicyCapabilities, // #1291 v4: 커넥터별 자료 공개범위 정책(source_vis_policy_*). 수집물이 태어날 때 공개범위를 정하고, 과거분은 backfill 로 소급.
   ...visAxesCapabilities, // #1291: 맥락 유형별 공개범위 켜기/끄기(vis_axis_list/_set). admin scope. 끄기는 잠긴 항목을 전원 공개시키므로 confirm+작업기록 필수.
   ...breakGlassCapabilities, // #1291 v2: 긴급 열람 — admin 도 우회하지 않으므로, 사유·감사·통지와 함께 한시적으로 여는 유일한 문.
   ...undoCapabilities, // #702: 전역 실행취소(Cmd+Z) — org_content_audit before/after 역적용(content_undo, REST 전용 /api/ui/undo). 사람전용(에이전트 403), 대상=내 웹 채널 변경만.
