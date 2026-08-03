@@ -308,7 +308,7 @@ export async function initManagerRegistry(pool: Pool): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT);
     ${ensureCheck("org_manager", {
-      org_manager_kind_chk: "kind IN ('mismatch','outdated','contradiction','code_drift')",
+      org_manager_kind_chk: "kind IN ('mismatch','outdated','stale_ref','contradiction','code_drift')",
       org_manager_action_chk: "action_level IN ('report','propose','auto')",
       org_manager_batch_chk: "batch_size BETWEEN 1 AND 200",
     })}

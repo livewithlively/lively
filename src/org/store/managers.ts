@@ -8,7 +8,7 @@ import { audit } from "./audit.js";
 import { isApplicableAction } from "../manage/action-whitelist.js";
 import type { Finding } from "../manage/detectors.js";
 
-export type ManagerKind = "mismatch" | "outdated" | "contradiction" | "code_drift";
+export type ManagerKind = "mismatch" | "outdated" | "stale_ref" | "contradiction" | "code_drift";
 
 export interface ManagerRow {
   id: number; key: string; label: string | null; kind: ManagerKind;
@@ -30,8 +30,10 @@ const COLS = `id, key, label, kind, enabled, priority,
 
 /** kind 별 사람 읽는 이름 — 화면·요약 공용(한 곳에서 정의해 표기가 갈리지 않게). */
 export const MANAGER_KIND_LABEL: Record<ManagerKind, string> = {
-  mismatch: "분류 어긋남 보정",
+  mismatch: "분류 어긋남 후보",
   outdated: "지식 아웃데이티드",
+  // #1419 도그푸드 산출 — mismatch·outdated 가 우리 조직에서 '낡은 지식'을 못 보는 자리를 결정론으로 메운다.
+  stale_ref: "사라진 코드 경로 인용",
   contradiction: "지식 간 모순",
   code_drift: "지식 ↔ 코드 비교",
 };
@@ -40,6 +42,9 @@ export const MANAGER_KIND_LABEL: Record<ManagerKind, string> = {
 export function needsLlm(kind: ManagerKind): boolean {
   return kind === "contradiction" || kind === "code_drift";
 }
+
+/** 결정적 종류 — 이 호출 안에서 판정·저장이 끝난다(LLM 0). needsLlm 의 여집합이지만 이름으로 읽히게 둔다. */
+export const DETERMINISTIC_KINDS: ManagerKind[] = ["mismatch", "outdated", "stale_ref"];
 
 export async function listManagers(): Promise<ManagerRow[]> {
   const rows = await q(itemsPool, `
