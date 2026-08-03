@@ -37,7 +37,11 @@ export const STALE_REF_TYPES = ["reference", "how-to"] as const;
  *  URL 이나 더 긴 식별자 중간을 잘라 오지 않게 한다.
  *  ⚠ 확장자를 요구한다 — 확장자가 없으면 디렉터리·모듈 이름과 구분이 안 되고, 그건 '사라짐' 판정이 불가능하다.
  */
-const PATH_RE = /(?:^|[\s`([])((?:src|web|scripts|deploy|kit|public)\/[A-Za-z0-9_./-]+\.(?:ts|tsx|js|mjs|css|sh|json|md))/g;
+// ⚠ 확장자 대안은 **긴 것부터** 놓는다. 정규식 교대는 먼저 맞는 대안이 이기므로 (…|js|…|json) 순서면
+//  `web/tsconfig.json` 이 `web/tsconfig.js` 로 잘린다 — 그러면 **없는 경로를 만들어 내고** 그걸
+//  '사라졌다'고 보고한다(검출기가 스스로 유령을 만든다). 도그푸드 79건 중 6건이 이 오탐이었다.
+//  뒤의 lookahead 는 같은 사고의 두 번째 방어선이다(대안 순서를 나중에 누가 흩어도 잘림을 막는다).
+const PATH_RE = /(?:^|[\s`([])((?:src|web|scripts|deploy|kit|public)\/[A-Za-z0-9_./-]+\.(?:tsx|ts|mjs|json|js|css|sh|md))(?![A-Za-z0-9])/g;
 
 /** 한 레포 클론의 파일 목록(상대경로 집합) + 파일명→경로 색인. 이동 위치를 제시하는 데 색인이 필요하다. */
 export interface RepoIndex { files: Set<string>; byBase: Map<string, string[]> }
@@ -86,8 +90,13 @@ export function verifyRef(path: string, idx: RepoIndex): RefVerdict {
   // 같은 파일명이 다른 자리에 있으면 '이동'으로 본다 — 그게 #1313 류 리팩토링의 지배적 형태이고,
   //  사람에게 줄 수 있는 가장 구체적인 다음 행동이다(문서의 경로만 고치면 끝난다).
   //  ⚠ 자기 자신은 후보에서 빠진다(위 files.has 에서 이미 걸렀다).
-  const cands = idx.byBase.get(basename(path));
-  if (cands && cands.length) return { state: "moved", to: cands.slice(0, 3) };
+  //  ⚠⚠ 후보를 **같은 최상위 디렉터리**로 제한한다. 파일명만 보면 `src/terminal.ts`(백엔드)를
+  //   `web/terminal.ts`(프론트)로 옮기라고 하게 된다 — 도그푸드에서 그 오제안이 8건 나왔다.
+  //   검출은 맞고 제안만 틀린 경우라 더 나쁘다: 사람이 그 말을 따르면 문서가 더 틀려진다.
+  //   같은 최상위 안의 깊이 변화(src/org/publish.ts → src/org/delivery/publish.ts)가 실제 형태다.
+  const top = path.slice(0, path.indexOf("/"));
+  const cands = (idx.byBase.get(basename(path)) ?? []).filter((c) => c.startsWith(`${top}/`));
+  if (cands.length) return { state: "moved", to: cands.slice(0, 3) };
   return { state: "gone" };
 }
 
@@ -130,9 +139,15 @@ export async function detectStaleRefs(
      WHERE ${conds.join(" AND ")}
      ORDER BY k.updated_at ASC`, params);
 
-  const out: Finding[] = [];
+  // 1패스 — 문서별 죽은 경로를 모으고, **경로가 몇 문서에 걸쳐 있는지**도 센다.
+  //  ⚠ 왜 세나: 리팩토링 하나가 큐를 지배한다. 도그푸드 실측에서 79건 중 public/styles.css 가 18건,
+  //   src/terminal-sessions.ts 가 12건을 유발했다. 각각은 사실이지만 사람이 보기엔 "같은 얘기가 18번"이고,
+  //   그러면 큐 전체가 노이즈로 읽힌다(#1153 이 배운 '거짓 경보가 반복되면 배지가 무시된다'의 사촌).
+  //   발견마다 '이 경로는 다른 N개 문서에도 있습니다'를 적어 **한 번에 정리할 수 있게** 안내한다.
+  type Hit = { moved: Array<{ path: string; to: string[] }>; gone: string[] };
+  const hits: Array<{ row: Record<string, unknown>; hit: Hit }> = [];
+  const pathDocs = new Map<string, number>();
   for (const r of rows) {
-    if (out.length >= limit) break;
     const moved: Array<{ path: string; to: string[] }> = [];
     const gone: string[] = [];
     for (const p of extractPaths(String(r.body_md))) {
@@ -141,12 +156,27 @@ export async function detectStaleRefs(
       else if (v.state === "gone") gone.push(p);
     }
     if (!moved.length && !gone.length) continue;
+    for (const p of [...moved.map((x) => x.path), ...gone]) pathDocs.set(p, (pathDocs.get(p) ?? 0) + 1);
+    hits.push({ row: r as Record<string, unknown>, hit: { moved, gone } });
+  }
+
+  const out: Finding[] = [];
+  for (const { row, hit } of hits) {
+    if (out.length >= limit) break;
+    const r = row;
+    const { moved, gone } = hit;
 
     const total = moved.length + gone.length;
     const label = String(r.title || r.name);
     const bits: string[] = [];
     if (moved.length) bits.push(moved.map((x) => `${x.path} → ${x.to.join(" 또는 ")}`).join(" · "));
     if (gone.length) bits.push(`${gone.join(" · ")} (레포에 같은 파일명이 없음 — 삭제됐거나 이름이 바뀌었다)`);
+    // 이 문서의 죽은 경로 중 **다른 문서에도 있는 것** — 2건 이상일 때만 말한다(1이면 이 문서뿐이라 소음).
+    const shared = [...moved.map((x) => x.path), ...gone]
+      .map((p) => ({ p, n: pathDocs.get(p) ?? 1 }))
+      .filter((x) => x.n > 1)
+      .sort((a, b) => b.n - a.n)
+      .map((x) => `${x.p} 는 문서 ${x.n}개에 있습니다`);
 
     out.push({
       target_kind: "knowledge",
@@ -158,6 +188,9 @@ export async function detectStaleRefs(
       summary: `‘${label}’ 이 가리키는 코드 경로 ${total}개가 지금 레포에 없습니다`,
       evidence:
         `${MANAGER_TYPE_NOTE[String(r.type)] ?? "현재 사실을 주장하는 문서"}인데 인용 경로가 사라졌습니다. ${bits.join(" / ")}\n` +
+        (shared.length
+          ? `※ 함께 고치면 좋습니다 — ${shared.join(" · ")}. 같은 리팩토링이 원인이라 한 번에 정리하는 게 빠릅니다.\n`
+          : "") +
         `※ 이 판정은 결정론입니다(파일이 있나 없나) — 다만 본문이 **과거 시점을 서술**하며 그 경로를 적은 것이라면 ` +
         `고칠 것이 없습니다. 그 경우 반려하시면 다시 올라오지 않습니다.`,
       // 조치안을 만들지 않는다 — 본문 수정은 비가역이라 자동 적용 화이트리스트에 없다(applyAction 이 거부).

@@ -47,7 +47,8 @@ t("S3 파일명조차 없으면 gone", () => {
 
 t("S4 moved 후보가 여러 개면 최대 3개까지만", () => {
   // 흔한 파일명(index.ts·types.ts)은 후보가 수십 개다. 전부 적으면 증거문이 읽히지 않는다.
-  const idx = idxOf(["a/index.ts", "b/index.ts", "c/index.ts", "d/index.ts", "e/index.ts"]);
+  //  ⚠ 후보는 같은 최상위 디렉터리 안에서만 센다(S12) — 그래서 여기 후보도 전부 src/ 아래에 둔다.
+  const idx = idxOf(["src/a/index.ts", "src/b/index.ts", "src/c/index.ts", "src/d/index.ts", "src/e/index.ts"]);
   const v = verifyRef("src/index.ts", idx);
   assert.equal(v.state, "moved");
   assert.equal((v as { to: string[] }).to.length, 3);
@@ -91,6 +92,38 @@ t("S9 같은 경로를 여러 번 인용해도 한 번만", () => {
 t("S10 URL 안의 경로는 안 잡는다", () => {
   // https://…/src/x.ts 는 우리 레포 경로가 아니다(남의 깃허브일 수 있다). 앞 문자가 '/' 라 경계에 안 걸린다.
   assert.deepEqual(extractPaths("https://github.com/o/r/blob/main/src/x.ts 를 봐라"), []);
+});
+
+// ══ 도그푸드 2차에서 드러난 결함 3건 (S11~S13) ══
+t("S11 .json 을 .js 로 잘라내지 않는다 [도그푸드 오탐]", () => {
+  // 실측: 79건 중 6건이 `web/tsconfig.js` 였다. 실제 파일은 web/tsconfig.json 이고,
+  //  확장자 대안이 (…|js|…|json) 순서라 정규식이 'js' 에서 먼저 멈춰 **없는 경로를 만들어 냈다.**
+  //  즉 살아 있는 파일을 '사라졌다'고 보고하는 오탐 — 검출기가 스스로 만든 유령이다.
+  assert.deepEqual(extractPaths("`web/tsconfig.json` 을 본다"), ["web/tsconfig.json"]);
+  assert.deepEqual(extractPaths("scripts/node-agent-allowed-modules.json 갱신"),
+    ["scripts/node-agent-allowed-modules.json"]);
+  // .mjs 도 같은 함정(js 가 먼저면 'm' 이 남는다)
+  assert.deepEqual(extractPaths("`scripts/run-tests.mjs` 실행"), ["scripts/run-tests.mjs"]);
+  // .tsx 도(ts 가 먼저면 'x' 가 남는다)
+  assert.deepEqual(extractPaths("`web/x.tsx` 참고"), ["web/x.tsx"]);
+});
+
+t("S12 이동 후보는 최상위 디렉터리가 같은 것만 [도그푸드 오제안]", () => {
+  // 실측: `src/terminal.ts → web/terminal.ts` 를 8건 제안했다. src(백엔드)와 web(프론트)는
+  //  완전히 다른 계층이라 그 제안을 따르면 문서가 더 틀려진다. 검출은 맞았고 제안이 틀렸다.
+  const idx = idxOf(["web/terminal.ts"]);
+  assert.deepEqual(verifyRef("src/terminal.ts", idx), { state: "gone" });
+  // 같은 최상위면 이동으로 본다(실측된 정상 케이스)
+  const idx2 = idxOf(["src/terminal/terminal-sessions.ts"]);
+  assert.deepEqual(verifyRef("src/terminal-sessions.ts", idx2),
+    { state: "moved", to: ["src/terminal/terminal-sessions.ts"] });
+});
+
+t("S13 최상위가 같으면 깊이가 달라도 이동으로 본다", () => {
+  // src/org/publish.ts → src/org/delivery/publish.ts (실측된 지배적 형태)
+  const idx = idxOf(["src/org/delivery/publish.ts"]);
+  assert.deepEqual(verifyRef("src/org/publish.ts", idx),
+    { state: "moved", to: ["src/org/delivery/publish.ts"] });
 });
 
 console.log(`\n${pass} passed`);
