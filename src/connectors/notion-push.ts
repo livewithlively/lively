@@ -9,7 +9,7 @@ import {
 } from "../v6/knowledge-store.js";
 import { loadNotionConfig, notionCreatePage, notionUpdatePage, notionCreateDatabase, notionRetrieveDatabase, type NotionConfig } from "./notion.js";
 import { listFeedTargets, updateFeedTarget, listPublishableForFeedTarget } from "../v6/feed-target-store.js";
-import { getOrgProfile } from "../org/store.js";
+import { gatewayUrl, normalizeGatewayUrl } from "../gateway-url.js";
 import { logger } from "../log.js";
 
 const SYSTEM = "notion";
@@ -39,6 +39,16 @@ export function synopsisOf(k: { summary?: string | null; body_md?: string | null
     if (line.length >= 8) return line.slice(0, max);
   }
   return "";
+}
+
+// 카드 본문의 '정본 보기' 딥링크 — base 가 없으면 링크 없이(null) 발행한다.
+//  base 는 drainWikiFeeds 가 gateway-url.ts 단일 소스로 해소해 넘기지만, 이 함수의 호출자는 원본 표기를
+//  넘길 수도 있으니 **여기서도 같은 정규화를 거친다**. 종전엔 말미 슬래시만 떼서, '/mcp' 로 저장된 조직은
+//  노션 카드에 http://host/mcp/#/k/… 라는 죽은 링크가 실렸다(gateway-url.ts 단일 소스 우회).
+export function knowledgeDeepLink(base: string | null | undefined, name: string): string | null {
+  if (!base) return null;
+  const b = normalizeGatewayUrl(String(base));
+  return b ? `${b}/#/k/${encodeURIComponent(name)}` : null;
 }
 
 // 투영 대상 필드만 해시 — 무변경이면 재푸시 skip(노션 API 호출·rate 절약). 좌표(page_id)는 해시 대상 아님(위치는 불변).
@@ -91,7 +101,8 @@ export async function publishKnowledgeToNotion(
   const updated = toYmd(k.updated_at);  // 노션 date 속성용 YYYY-MM-DD (pg 는 TIMESTAMPTZ 를 Date 로 반환 — toYmd 로 ISO)
   // #976 주의: livelyUrl 은 본문(create 시)에만 실리고 content_hash 5필드에 없다 → livelyBase 가 최초 발행 뒤 늦게
   //  설정되면 skip 으로 링크가 안 붙는 엣지. 드레인이 발행 전 livelyBase(gateway_url)를 필수 해소해 회피(후속 슬라이스).
-  const livelyUrl = opts.livelyBase ? `${opts.livelyBase.replace(/\/+$/, "")}/#/k/${encodeURIComponent(name)}` : null;
+  //  ⚠ 같은 이유로 base 표기가 **고쳐져도** 이미 발행된 카드의 링크는 갱신되지 않는다(해시 무변경 → skip).
+  const livelyUrl = knowledgeDeepLink(opts.livelyBase, name);
   const fields: FeedFields = { title: k.title ?? name, domain, type: typeLabel, summary, updated, livelyUrl };
   const hash = feedContentHash(fields);
 
@@ -175,7 +186,9 @@ export async function drainWikiFeeds(opts?: { limit?: number }): Promise<{ targe
   const targets = await listFeedTargets({ system: SYSTEM, activeOnly: true });
   if (!targets.length) return { targets: 0, created: 0, updated: 0, skipped: 0, failed: 0 };
   const cfg = await loadNotionConfig();
-  const livelyBase = (await getOrgProfile()).gateway_url ?? null;
+  // 게이트웨이 base 는 gateway-url.ts 단일 소스로 해소한다 — org 프로필 > PUBLIC_URL 폴백 + 표기 정규화 +
+  //  형태 검증까지 한 번에 온다(종전엔 org 프로필 필드를 날것으로 읽어 '/mcp'·공백이 링크에 그대로 샜다).
+  const livelyBase = await gatewayUrl();
 
   let created = 0, updated = 0, skipped = 0, failed = 0;
   for (const ft of targets) {

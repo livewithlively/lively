@@ -1,11 +1,13 @@
 // #976 notion-push 순수 함수 테스트 — 사양 기반(구현 블라인드).
 //   실행: npm run build && node dist/connectors/notion-push.test.js
-//   목적: 위키 아웃바운드 투영의 두 순수 함수를 사양(intent)만으로 잠근다.
+//   목적: 위키 아웃바운드 투영의 순수 함수를 사양(intent)만으로 잠근다.
 //     (1) synopsisOf  — 카드용 스캔 한줄요약(summary 우선 · 본문 폴백 · 장식 제거 · max 절단)
 //     (2) feedContentHash — 무변경 재푸시 skip 용 콘텐츠 지문(결정론 · 5필드 민감 · 고정길이 hex)
+//     (3) knowledgeDeepLink — 카드의 '정본 보기' 링크(base 표기 정규화 = 게이트웨이 base 와 동일 계약 ·
+//         base 없거나 비면 링크 없음 · 지식 이름 URL 인코딩)
 //   라이브 노션/DB 불요 — 입력→출력만 검증.
 import assert from "node:assert";
-import { synopsisOf, feedContentHash } from "./notion-push.js";
+import { synopsisOf, feedContentHash, knowledgeDeepLink } from "./notion-push.js";
 
 // ────────────────────────────────────────────────────────────────────────
 // 1) synopsisOf(k, max=200) → string
@@ -141,5 +143,42 @@ const hEmpty = feedContentHash({ title: "", domain: "", type: "", summary: "", u
 assert.ok(hEmpty.length > 0, "빈 필드 입력도 빈 지문이 아니다");
 assert.ok(/^[0-9a-fA-F]+$/.test(hEmpty), "빈 필드 입력도 16진수");
 assert.strictEqual(hEmpty.length, h.length, "빈 필드 입력도 동일한 고정 길이");
+
+// ────────────────────────────────────────────────────────────────────────
+// 3) knowledgeDeepLink(base, name) → string | null
+//    사양: 카드에 실을 '정본 보기' 링크. base 가 없거나 정규화 후 비면 **링크를 만들지 않는다**(null —
+//    깨진 링크보다 링크 없음이 낫다). base 는 게이트웨이 base 와 동일 계약으로 정규화한다(공백·'/mcp'·
+//    말미 슬래시 흡수). 지식 이름은 URL 조각으로 안전하게 인코딩한다.
+// ────────────────────────────────────────────────────────────────────────
+
+// ── base 가 없으면 링크 없음 ──
+assert.strictEqual(knowledgeDeepLink(null, "foo"), null, "base=null → 링크 없음");
+assert.strictEqual(knowledgeDeepLink(undefined, "foo"), null, "base=undefined → 링크 없음");
+assert.strictEqual(knowledgeDeepLink("", "foo"), null, "base='' → 링크 없음");
+// 정규화하면 비는 값(공백뿐)도 '없음'과 같이 취급 — 'https:///#/k/foo' 같은 반쪽 링크를 만들면 안 된다.
+assert.strictEqual(knowledgeDeepLink("   ", "foo"), null, "base=공백뿐 → 링크 없음");
+
+// ── 정상 base ──
+assert.strictEqual(knowledgeDeepLink("http://host", "foo"), "http://host/#/k/foo");
+// 말미 슬래시가 있어도 '//#/k/' 처럼 겹치지 않는다.
+assert.strictEqual(knowledgeDeepLink("http://host/", "foo"), "http://host/#/k/foo");
+// 회귀 핵심: '/mcp' 로 저장된 조직. 종전엔 말미 슬래시만 떼서 'http://host/mcp/#/k/foo' 라는 죽은 링크가 실렸다.
+assert.strictEqual(knowledgeDeepLink("http://host/mcp/", "foo"), "http://host/#/k/foo");
+assert.strictEqual(knowledgeDeepLink("http://host/mcp", "foo"), "http://host/#/k/foo");
+// 앞뒤 공백도 흡수한다(게이트웨이 base 와 같은 계약).
+assert.strictEqual(knowledgeDeepLink("  http://host  ", "foo"), "http://host/#/k/foo");
+assert.strictEqual(knowledgeDeepLink("\thttps://gw.example.com:8080/mcp/\n", "foo"),
+  "https://gw.example.com:8080/#/k/foo");
+
+// ── 이름 인코딩: '/'·'#'·공백이 원문 그대로 나오면 해시 라우트가 깨진다 ──
+{
+  const link = knowledgeDeepLink("http://host", "a/b c#d");
+  assert.ok(link, "링크가 만들어져야 한다");
+  const frag = link.slice("http://host/#/k/".length);
+  assert.ok(!frag.includes("/"), "이름의 '/' 는 인코딩되어야 한다");
+  assert.ok(!frag.includes(" "), "이름의 공백은 인코딩되어야 한다");
+  assert.ok(!frag.includes("#"), "이름의 '#' 는 인코딩되어야 한다");
+  assert.strictEqual(decodeURIComponent(frag), "a/b c#d", "디코드하면 원래 이름으로 돌아온다");
+}
 
 console.log("notion-push.test: OK");
