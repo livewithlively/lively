@@ -54,6 +54,43 @@ export async function resolveRootPath(user: LivelyUser, rootKey: string, subpath
   return { base, abs };
 }
 
+// (순수 — 테스트 seam) 루트 base 목록 중 이 절대경로를 담는 것을 골라 좌표로. 담는 게 없으면 null.
+//  ⭐ **가장 깊은(구체적인) base 가 이긴다.** 왜 순서가 아니라 깊이인가: 루트가 서로 **중첩**되게 설정될 수 있다
+//   (예: TERMINAL_ROOT_PERSONAL 을 공유 루트 안에 둔 배포). 그때 얕은 쪽(shared)으로 잡으면 **개인 파일에
+//   root=shared 링크**가 나오고, shared 는 perUser 가 아니므로 그 링크는 **전원에게 같은 파일**로 열린다 —
+//   즉 설정 실수 하나가 "나만 보는 파일"을 조용히 전원 공개 링크로 바꾼다. 깊은 쪽(personal)을 택하면
+//   링크가 개인 좌표로 남아 남이 열어도 자기 폴더를 보게 된다(fail-closed).
+//  ⚠ 담김 판정은 `base + 구분자` 로 잰다 — startsWith(base) 만 쓰면 이름이 겹치는 **형제** 디렉터리
+//   (`<base>-other`)가 루트 안으로 오검출되고, 그 좌표는 `../` 가 섞여 전혀 다른 파일을 가리킨다.
+export function pickRootCoord(bases: Array<{ root: string; base: string }>, abs: string): { root: string; rel: string } | null {
+  const target = path.resolve(abs);
+  let best: { root: string; rel: string; depth: number } | null = null;
+  for (const { root, base } of bases) {
+    const b = path.resolve(base);
+    if (target !== b && !target.startsWith(b + path.sep)) continue;
+    if (best && b.length <= best.depth) continue;
+    best = { root, rel: target === b ? "" : path.relative(b, target).split(path.sep).join("/"), depth: b.length };
+  }
+  return best ? { root: best.root, rel: best.rel } : null;
+}
+
+// resolveRootPath 의 **역함수** — 절대경로를 허용 루트 좌표({root, rel})로 되돌린다(#1436 공유 링크).
+//  왜 필요한가: 공유 링크의 주소 축은 root+path 하나다(세션 id·프로젝트 id 를 주소에 넣으면 세션이 죽거나
+//  프로젝트가 보관될 때 링크가 죽는다). 그런데 세션 파일 API 는 세션 작업폴더의 **절대경로**만 알고 있어,
+//  그 화면이 링크를 만들려면 좌표로 되돌릴 자가 필요하다. 규칙(격리 여부·perUser 하위)이 갈라지면 좌표가
+//  어긋나므로 정방향과 **같은 함수**(resolveRootPath)로 베이스를 구해 비교한다 — 파생지가 둘이 되지 않게.
+//  ⚠ 판정은 요청자 기준이다. 남의 개인 폴더는 베이스가 달라 매칭되지 않고 null → 호출부는 '공유 링크 없음'으로
+//   다룬다(그게 맞다 — 개인 폴더는 경로로 남에게 건넬 수 없다). 루트 밖 경로(원격 노드 등)도 null.
+//  해소에 실패한 루트는 건너뛴다 — 좌표를 못 구하는 건 부가기능의 부재일 뿐이라, 여기서 던지면 그 폴더의
+//  **파일 목록 응답 자체**가 깨진다(공유 링크가 없어도 목록은 떠야 한다).
+export async function rootRelOf(user: LivelyUser, abs: string): Promise<{ root: string; rel: string } | null> {
+  const bases: Array<{ root: string; base: string }> = [];
+  for (const r of ROOTS) {
+    try { bases.push({ root: r.key, base: (await resolveRootPath(user, r.key, "")).base }); } catch { /* 이 루트는 해소 불가 */ }
+  }
+  return pickRootCoord(bases, abs);
+}
+
 // ── 멀티프로필 / 프로필별 Claude 계정(#346) ──
 //  M1: 프로필 = 세션 owner(멤버). 프로필별 격리된 CLAUDE_CONFIG_DIR(=config·자격증명·MCP)로 claude 를 띄운다.
 //  각 프로필 dir 은 1회 로그인(CLAUDE_CONFIG_DIR=<dir> claude)으로 프로비저닝된다(+키트로 lively MCP·훅 주입).

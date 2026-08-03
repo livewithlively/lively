@@ -1287,6 +1287,32 @@ function fileIcon(name, type) {
   if (/\.md$/i.test(name)) return '📝';
   return '📄';
 }
+// ── 공유 링크(#1436) ─────────────────────────────────────────────────────────
+//  세션 작업폴더가 공유/개인 루트의 어디인지는 서버가 /ls 응답에 실어 준다(shareRoot·sharePath —
+//  src/terminal/terminal-files.ts). 그 좌표로 세션과 **무관한** 주소를 만든다: 세션 id 를 주소에 넣으면
+//  세션을 종료한 순간 이미 뿌린 링크가 죽기 때문이다(자세한 근거는 web/lib/sharelink.ts 헤더).
+//  ⚠ 이 페이지는 standalone 번들이라 web/lib 를 import 할 수 없다(rootDir 이 web/standalone) → 같은 주소
+//   형식을 여기서 한 번 더 만든다. **형식을 바꿀 땐 두 곳을 함께** 고쳐야 한다(lib/sharelink.ts fileLinkHash).
+let shareRoot: string | null = null;   // 'shared' | 'personal' | null(좌표 없음 = 원격 노드 등 → 버튼 안 그림)
+let sharePath = '';                    // 현재 보고 있는 폴더의 루트기준 경로
+function shareUrlFor(rel) {
+  // 이 페이지는 /ui/terminal.html 이므로 파일명을 떼어 앱 루트(/ui/)를 얻는다(프리뷰 서브패스도 그대로 유지된다).
+  const appBase = location.origin + location.pathname.replace(/[^/]*$/, '');
+  return appBase + '#/f?root=' + encodeURIComponent(shareRoot || '') + '&path=' + encodeURIComponent(rel || '');
+}
+async function copyShareLink(rel, isDir) {
+  const url = shareUrlFor(rel);
+  const who = shareRoot === 'personal' ? '개인 폴더라 이 링크는 나만 열 수 있어요' : '볼 권한이 있는 팀원이 열 수 있어요';
+  try {
+    if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error('no clipboard');
+    await navigator.clipboard.writeText(url);
+    toast((isDir ? '폴더' : '파일') + ' 링크 복사 — ' + who);
+  } catch (_) {
+    // 자동 복사가 막혔으면(비보안 컨텍스트 등) 주소를 보여준다 — 아무 일도 안 일어나면 고장으로 읽힌다.
+    window.prompt('아래 주소를 복사해 보내세요', url);
+  }
+}
+
 async function loadDir(p) {
   curDir = p || '';
   const list = document.getElementById('exp-list');
@@ -1295,13 +1321,20 @@ async function loadDir(p) {
   let data;
   try { data = await api(sUrl('/ls?path=' + encodeURIComponent(curDir))); }
   catch (e) { list.replaceChildren(el('div', { class: 'exp-item', text: '오류: ' + e.message })); return; }
+  shareRoot = data.shareRoot || null;
+  sharePath = data.sharePath || '';
   list.replaceChildren();
   if (data.parent !== null && curDir) list.append(el('div', { class: 'exp-item', onclick: () => loadDir(data.parent), title: '상위' }, el('span', { class: 'ic', text: '↩' }), '..'));
   for (const it of (data.items || [])) {
     const childPath = (curDir ? curDir + '/' : '') + it.name;
-    const row = el('div', { class: 'exp-item', onclick: () => (it.type === 'dir' ? loadDir(childPath) : openPreview(childPath, it.name)) },
+    const isDir = it.type === 'dir';
+    const shareRel = shareRoot ? (sharePath ? sharePath + '/' + it.name : it.name) : null;
+    const row = el('div', { class: 'exp-item', onclick: () => (isDir ? loadDir(childPath) : openPreview(childPath, it.name)) },
       el('span', { class: 'ic', text: fileIcon(it.name, it.type) }), it.name,
-      it.type === 'file' ? el('span', { class: 'sz', text: fmtSize(it.size) }) : null,
+      // .sz 는 폴더에서도(빈 값으로) 항상 그린다 — 이 span 의 margin-left:auto 가 오른쪽 액션들을 끝으로 밀기
+      //  때문이다(terminal.html .exp-item .sz). 폴더에서 빼면 🔗 가 이름 바로 옆에 붙어 열이 어긋난다.
+      el('span', { class: 'sz', text: isDir ? '' : fmtSize(it.size) }),
+      shareRel ? el('span', { class: 'exp-dl exp-share', text: '🔗', title: '링크 복사', onclick: (e) => { e.stopPropagation(); copyShareLink(shareRel, isDir); } }) : null,
       it.type === 'file' ? el('span', { class: 'exp-dl', text: '⬇', title: '다운로드', onclick: (e) => { e.stopPropagation(); downloadFile(childPath, it.name); } }) : null);
     list.append(row);
   }

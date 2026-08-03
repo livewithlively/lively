@@ -1,0 +1,118 @@
+/* 32-file-share.css — 공유 링크(#1436): 착지 전체페이지(#/f)와 링크 복사 폴백 박스.
+   ⚠ index.html <link> 나열 순서가 캐스케이드 계약이다(01-base.css 헤더 주석) — 이 파일은 **끝**에 붙는다.
+   재정렬·중간 삽입 금지. */
+
+/* ── 셸 감추기 — "내비바 등 없이"가 이 화면의 요구다. ────────────────────────────
+   앱 셸(상단바·좌하단 동기칩)을 숨기고 main 의 중앙정렬·여백을 걷어 전폭 캔버스로 만든다.
+   #app 은 그대로 쓴다 — 로그인 게이트(#gate)와 토스트(#toasts)가 이 셸에 걸려 있어야 링크를 받은 사람이
+   미로그인일 때 정상적으로 로그인 화면을 만난다(별도 standalone HTML 을 만들지 않은 이유). */
+body[data-route="f"] { height: 100vh; overflow: hidden; }
+body[data-route="f"] .topbar,
+body[data-route="f"] .app-foot { display: none; }
+body[data-route="f"] #app { height: 100%; display: flex; flex-direction: column; }
+body[data-route="f"] main { max-width: none; margin: 0; padding: 0; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+
+.fpg { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+
+/* 상단 바 — 이 파일에 필요한 것만. 왼쪽 이름·경로, 오른쪽 액션. */
+.fpg-head { display: flex; align-items: center; gap: 16px; padding: 12px 20px; border-bottom: 1px solid var(--line);
+  background: var(--bg); flex: 0 0 auto; }
+.fpg-idbox { min-width: 0; flex: 1 1 auto; }
+.fpg-name { font-size: 15.5px; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fpg-crumb { display: flex; align-items: center; gap: 4px; margin-top: 2px; font-size: 12px; color: var(--muted-2);
+  overflow: hidden; white-space: nowrap; }
+.fpg-crumb-seg { color: var(--muted-2); text-decoration: none; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.fpg-crumb-seg:hover { color: var(--blue, #2d6bf0); text-decoration: underline; }
+.fpg-crumb-sep { color: var(--line); }
+
+.fpg-acts { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.fpg-btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border: 1px solid var(--line);
+  border-radius: 9px; background: var(--bg); color: var(--ink-sub, #5a6b85); font: inherit; font-size: 13px;
+  font-weight: 600; cursor: pointer; text-decoration: none; white-space: nowrap; }
+.fpg-btn:hover { border-color: var(--muted-2); color: var(--ink); background: var(--bg-tint); }
+.fpg-btn-primary { background: var(--blue, #2d6bf0); border-color: var(--blue, #2d6bf0); color: #fff; }
+.fpg-btn-primary:hover { background: color-mix(in srgb, var(--blue, #2d6bf0) 88%, #000); border-color: transparent; color: #fff; }
+.fpg-btn-ghost { border-color: transparent; color: var(--muted-2); }
+.fpg-btn-lg { margin-top: 14px; padding: 10px 18px; font-size: 14px; }
+
+/* 본문 스테이지 — 남는 높이를 전부 쓴다(PDF·html 은 100% 로 채운다). */
+.fpg-stage { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column;
+  align-items: center; justify-content: flex-start; padding: 18px 20px 24px; scrollbar-width: thin; }
+.fpg-msg { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: auto; padding: 24px;
+  color: var(--muted-2); font-size: 13.5px; text-align: center; line-height: 1.6; }
+.fpg-msg-empty b { font-size: 15px; color: var(--ink); }
+.fpg-msg-empty span { max-width: 460px; }
+.fpg-msg-path { margin-top: 4px; font-size: 12px; color: var(--muted-2); word-break: break-all; max-width: 520px; }
+
+/* 타입별 표시면 */
+.fpg-img { max-width: 100%; max-height: 100%; margin: auto; border-radius: 8px; box-shadow: 0 2px 14px rgba(21, 35, 59, .14); }
+.fpg-pdf, .fpg-html { width: 100%; flex: 1 1 auto; min-height: 420px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.fpg-video { max-width: 100%; max-height: 100%; margin: auto; border-radius: 8px; background: #000; }
+.fpg-audio { width: min(560px, 100%); margin: auto; }
+.fpg-code { margin: 0; width: 100%; max-width: 1100px; box-sizing: border-box; background: var(--bg-tint);
+  border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; overflow: auto;
+  font-family: 'D2Coding', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.65;
+  white-space: pre; }
+.fpg-code:not(.is-code) { white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 14px; line-height: 1.75; }
+/* 렌더된 마크다운 — 읽기 폭(문서처럼)으로 좁힌다. 공유의 목적이 '가독성'이라 여기가 이 화면의 핵심 폭이다. */
+.fpg-md { width: 100%; max-width: 860px; box-sizing: border-box; padding: 4px 4px 40px; text-align: left; }
+.fpg-table { width: 100%; overflow: auto; }
+
+/* 폴더 목록 — 편집 없는 읽기 전용 행. */
+.fpg-list { width: 100%; max-width: 1100px; }
+.fpg-row { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px;
+  color: inherit; text-decoration: none; border-bottom: 1px solid var(--bg-tint-2, var(--line)); }
+.fpg-row:hover { background: var(--bg-tint); }
+.fpg-row-head { font-size: 11.5px; font-weight: 700; color: var(--muted-2); text-transform: none;
+  border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 1; }
+.fpg-row-ic { flex: 0 0 22px; display: inline-flex; align-items: center; justify-content: center; }
+.fpg-row-nm { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+.fpg-row.is-dir .fpg-row-nm { font-weight: 600; }
+.fpg-row-sz { flex: 0 0 90px; text-align: right; font-size: 12px; color: var(--muted-2); }
+.fpg-row-dt { flex: 0 0 150px; text-align: right; font-size: 12px; color: var(--muted-2); }
+.fpg-row-act { flex: 0 0 34px; display: flex; justify-content: flex-end; }
+.fpg-rowbtn { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid transparent; border-radius: 7px; background: none; color: var(--muted-2); cursor: pointer; padding: 0; }
+.fpg-row:hover .fpg-rowbtn { border-color: var(--line); background: var(--bg); }
+.fpg-rowbtn:hover { color: var(--ink); border-color: var(--muted-2); }
+
+@media (max-width: 720px) {
+  .fpg-head { flex-wrap: wrap; gap: 10px; padding: 10px 14px; }
+  .fpg-acts { width: 100%; }
+  .fpg-stage { padding: 12px 12px 18px; }
+  .fpg-row-dt { display: none; }
+}
+
+/* ── 링크 복사 폴백(lib/sharelink.ts) — 브라우저가 자동 복사를 막았을 때 주소를 보여준다. ──
+   비보안 컨텍스트(http)나 권한 거부에서 navigator.clipboard 가 없는데, 그때 아무 일도 안 일어나면
+   사용자는 버튼이 고장 났다고 읽는다. */
+.sharelink-back { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center;
+  background: rgba(21, 35, 59, .38); padding: 20px; }
+.sharelink-box { width: min(560px, 100%); background: var(--bg); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(21, 35, 59, .22); padding: 18px 20px 16px; }
+.sharelink-title { font-size: 15px; font-weight: 700; color: var(--ink); }
+.sharelink-hint { margin: 6px 0 12px; font-size: 13px; color: var(--muted-2); line-height: 1.55; }
+.sharelink-input { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--line);
+  border-radius: 9px; background: var(--bg-tint); color: var(--ink); font: inherit; font-size: 12.5px; }
+.sharelink-acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+
+/* 액션 열이 4개(공유 추가)로 늘어난 폴더 브라우저 목록 뷰 — 파일(4)·폴더(4) 열 폭을 다시 맞춘다.
+   (20-dashboard.css 의 78px 는 버튼 3개 기준이었다 — 늘린 채 두면 날짜 열이 어긋난다.) */
+.dash-fb-row .dash-fb-actions { width: 104px; }
+
+/* ── 프로젝트 공유 폴더 카드의 🔗 (files-cards.projFileCardEl) ──────────────────
+   카드엔 액션 열이 없어 호버 시 모서리 버튼으로 얹는다(대시보드 카드와 같은 수).
+   ⚠ .proj-file-card 에 position: relative 를 세운다 — 원래 없었고(13-projects.css:547) 그래서
+     기존 `.proj-file-card > .dash-lock-badge`(30-projects-views.css:242, position:absolute)도 이 카드가
+     아니라 더 위 조상에 붙어 있었다. 여기서 기준을 세우면 그 배지도 제 자리(카드 좌상단)로 온다. */
+.proj-file-card { position: relative; }
+.proj-file-share { position: absolute; top: 5px; right: 5px; width: 24px; height: 24px;
+  display: inline-flex; align-items: center; justify-content: center; padding: 0;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--muted-2);
+  cursor: pointer; opacity: 0; transition: opacity .12s; }
+.proj-file-card:hover .proj-file-share,
+.proj-file-card:focus-within .proj-file-share { opacity: 1; }
+.proj-file-share:hover { color: var(--ink); border-color: var(--muted-2); background: var(--bg-tint); }
+.proj-file-share svg { display: block; }
+/* 목록 행(전체 보기 모달)의 🔗 — 아이콘 버튼이 3개에서 4개로 늘었다. */
+.proj-file-iconbtn svg { display: block; }

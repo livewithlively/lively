@@ -6,6 +6,16 @@ import { overlayBox } from '../learn.js';
 import { fmtFileDate, fmtFileDateFull, fmtSize } from './files-format.js';
 import { IMG_EXTS, fileExt, fileThumb } from './files-icons.js';
 import { authDownload, authUpload } from './files-upload.js';
+import { copyFileLink, joinRel, shareLinkIcon } from '../lib/sharelink.js';
+
+// 프로젝트 폴더의 공유 링크 좌표(#1436) — 프로젝트 폴더는 **공유 워크스페이스의 한 경로**(project/<id>/…,
+//  src/project/project-fs.ts)라 홈 탐색기가 만드는 링크와 같은 주소축(root=shared + path)을 쓴다.
+//  shareBase = 그 프로젝트 폴더의 루트기준 경로(= project.folder). 호출부가 그 값을 모르면(구 org 프리픽스 등)
+//  undefined 로 두고, 그럼 버튼을 아예 그리지 않는다 — 죽은 링크를 뿌리는 것보다 없는 게 낫다.
+function projShareRel(shareBase, rel): string | null {
+  const b = String(shareBase || '').replace(/^\/+|\/+$/g, '');
+  return b ? joinRel(b, rel) : null;
+}
 
 // 텍스트로 열어 편집 가능한 확장자(화이트리스트). 그 외 바이너리(docx/xlsx/zip 등)는 textarea 로 열면 깨지므로 다운로드.
 const TEXT_EXTS = ['txt', 'md', 'markdown', 'json', 'csv', 'tsv', 'log', 'js', 'ts', 'tsx', 'jsx', 'mjs', 'cjs',
@@ -14,7 +24,7 @@ const TEXT_EXTS = ['txt', 'md', 'markdown', 'json', 'csv', 'tsv', 'log', 'js', '
   'sql', 'vue', 'svelte', 'r', 'lua', 'pl', 'dart', 'gradle', 'properties', 'gitignore', 'dockerfile'];
 
 // 파일 뷰어 — 이미지=미리보기, PDF=내장 뷰어(iframe), 텍스트=편집·저장, 그 외 바이너리=다운로드 안내.
-async function openFileViewer(id, rel, name, reload, base) {
+async function openFileViewer(id, rel, name, reload, base, shareBase?) {
   const B = base || '/api/ui/projects/';
   const token = localStorage.getItem(TOKEN_KEY);
   const url = B + id + '/file?path=' + encodeURIComponent(rel);
@@ -22,8 +32,11 @@ async function openFileViewer(id, rel, name, reload, base) {
   const isImg = IMG_EXTS.includes(ext);
   const isPdf = ext === 'pdf';
   const isText = TEXT_EXTS.includes(ext);
+  const shareRel = projShareRel(shareBase, rel);
   const footer = (back, extra?) => el('div', { class: 'ov-actions' },
     ...(extra || []),
+    // 🔗 링크 복사(#1436) — 열어 보다가 그대로 건넬 수 있게. 좌표를 모르면 버튼 없음(죽은 링크 금지).
+    shareRel ? el('button', { class: 'btn btn-ghost', text: '🔗 링크 복사', onclick: () => copyFileLink('shared', shareRel, 'file') }) : null,
     el('button', { class: 'btn btn-ghost', text: '다운로드', onclick: () => authDownload(url + '&download=1', name) }),
     el('button', { class: 'btn btn-ghost', text: '닫기', onclick: () => back.remove() }));
 
@@ -88,13 +101,21 @@ async function openFileViewer(id, rel, name, reload, base) {
 }
 
 // 공유 폴더 아이콘 카드(맥 데스크탑 느낌) — 폴더는 onDir(rel), 파일은 뷰어 팝업. 섹션·전체보기 팝업 공용.
-function projFileCardEl(id, it, rel, onDir, reload, base, select) {
+function projFileCardEl(id, it, rel, onDir, reload, base, select, shareBase?) {
   const isDir = it.type === 'dir';
   const c = el('div', { class: 'proj-file-card' + (select ? ' select-mode' : ''), title: it.name },
     el('div', { class: 'proj-file-card-ic' }, fileThumb(id, it, rel, base)),
     el('div', { class: 'proj-file-card-nm', text: it.name }),
     el('div', { class: 'proj-file-card-sz', text: isDir ? '폴더' : fmtSize(it.size) }),
     it.mtime ? el('div', { class: 'proj-file-card-dt', text: fmtFileDate(it.mtime), title: fmtFileDateFull(it.mtime) }) : null);
+  // 🔗 링크 복사(#1436) — 카드엔 액션 열이 없어 **호버 시 모서리 버튼**으로(대시보드 카드와 같은 수).
+  //  선택(일괄삭제) 모드에선 안 붙인다 — 그 모드의 카드 클릭은 체크 토글이라 다른 버튼이 끼면 오조작이 난다.
+  const shareRel = select ? null : projShareRel(shareBase, rel);
+  if (shareRel) {
+    c.append(el('button', { class: 'proj-file-share', type: 'button', title: '링크 복사', 'aria-label': '링크 복사',
+      onclick: (ev: any) => { ev.stopPropagation(); copyFileLink('shared', shareRel, isDir ? 'dir' : 'file'); } },
+    shareLinkIcon(13)));
+  }
   if (select) {
     // 선택 모드 — 카드 클릭 = 체크 토글(열기/진입 대신). 파일·폴더 모두 골라 일괄 삭제 가능.
     const ids = select.ids;
@@ -107,7 +128,7 @@ function projFileCardEl(id, it, rel, onDir, reload, base, select) {
     c.onclick = toggle;
     c.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggle(); } });
   } else {
-    c.onclick = isDir ? () => onDir(rel) : () => openFileViewer(id, rel, it.name, reload, base);
+    c.onclick = isDir ? () => onDir(rel) : () => openFileViewer(id, rel, it.name, reload, base, shareBase);
   }
   return c;
 }
@@ -118,10 +139,13 @@ function projUpCardEl(onClick) {
 }
 
 // 전체 보기 목록의 한 행 — [아이콘][이름][크기][호버 시 액션 아이콘]. 폴더는 진입, 파일은 뷰어.
-function projFileRowEl(id, it, rel, onDir, reload, base) {
+function projFileRowEl(id, it, rel, onDir, reload, base, shareBase?) {
   const B = base || '/api/ui/projects/';
   const isDir = it.type === 'dir';
+  const shareRel = projShareRel(shareBase, rel);
   const acts = el('div', { class: 'proj-file-lacts' },
+    // 🔗 첫 자리 — 파괴적 액션(삭제)에서 가장 멀고, 이 화면에서 가장 자주 하는 일이다(#1436).
+    shareRel ? fileIconBtn(shareLinkIcon(12), '링크 복사', (ev) => { ev.stopPropagation(); copyFileLink('shared', shareRel, isDir ? 'dir' : 'file'); }) : null,
     fileIconBtn('✎', '이름변경', (ev) => { ev.stopPropagation(); renameEntry(id, rel, it.name, isDir, reload, B); }),
     isDir ? null : fileIconBtn('↓', '다운로드', (ev) => { ev.stopPropagation(); authDownload(B + id + '/file?download=1&path=' + encodeURIComponent(rel), it.name); }),
     fileIconBtn('✕', '삭제', (ev) => { ev.stopPropagation(); deleteEntry(id, rel, it.name, isDir, reload, B); }, true));
@@ -131,12 +155,14 @@ function projFileRowEl(id, it, rel, onDir, reload, base) {
     el('span', { class: 'proj-file-lsz', text: isDir ? '' : fmtSize(it.size) }),
     el('span', { class: 'proj-file-ldt', text: fmtFileDateFull(it.mtime) }),   // #1118 — 항상 풀 일시(오늘/어제 축약 X)
     acts);
-  row.onclick = isDir ? () => onDir(rel) : () => openFileViewer(id, rel, it.name, reload, B);
+  row.onclick = isDir ? () => onDir(rel) : () => openFileViewer(id, rel, it.name, reload, B, shareBase);
   return row;
 }
 
+// glyph 는 문자(✎·↓·✕) 또는 **노드**(SVG 아이콘 — #1436 🔗)다. text: 로 넣으면 노드가 "[object SVGSVGElement]"
+//  문자열이 되므로 자식으로 넘긴다(el 이 nodeType 을 보고 그대로 붙인다).
 function fileIconBtn(glyph, title, onclick, danger?) {
-  return el('button', { class: 'proj-file-iconbtn' + (danger ? ' danger' : ''), title, type: 'button', text: glyph, onclick });
+  return el('button', { class: 'proj-file-iconbtn' + (danger ? ' danger' : ''), title, type: 'button', onclick }, glyph);
 }
 
 // 파일/폴더 이름 변경(같은 폴더 안).

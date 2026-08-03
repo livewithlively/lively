@@ -551,7 +551,7 @@
   }
   function diagText() {
     return [
-      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build 630bb648",
+      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build da7a5699",
       "ua: " + navigator.userAgent,
       "session: " + SESSION_ID + (NODE_ID ? " node=" + NODE_ID : ""),
       "secure: " + window.isSecureContext + " \xB7 exported: " + (/* @__PURE__ */ new Date()).toISOString(),
@@ -1805,6 +1805,23 @@
     if (/\.md$/i.test(name)) return "\u{1F4DD}";
     return "\u{1F4C4}";
   }
+  var shareRoot = null;
+  var sharePath = "";
+  function shareUrlFor(rel) {
+    const appBase = location.origin + location.pathname.replace(/[^/]*$/, "");
+    return appBase + "#/f?root=" + encodeURIComponent(shareRoot || "") + "&path=" + encodeURIComponent(rel || "");
+  }
+  async function copyShareLink(rel, isDir) {
+    const url = shareUrlFor(rel);
+    const who = shareRoot === "personal" ? "\uAC1C\uC778 \uD3F4\uB354\uB77C \uC774 \uB9C1\uD06C\uB294 \uB098\uB9CC \uC5F4 \uC218 \uC788\uC5B4\uC694" : "\uBCFC \uAD8C\uD55C\uC774 \uC788\uB294 \uD300\uC6D0\uC774 \uC5F4 \uC218 \uC788\uC5B4\uC694";
+    try {
+      if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error("no clipboard");
+      await navigator.clipboard.writeText(url);
+      toast((isDir ? "\uD3F4\uB354" : "\uD30C\uC77C") + " \uB9C1\uD06C \uBCF5\uC0AC \u2014 " + who);
+    } catch (_) {
+      window.prompt("\uC544\uB798 \uC8FC\uC18C\uB97C \uBCF5\uC0AC\uD574 \uBCF4\uB0B4\uC138\uC694", url);
+    }
+  }
   async function loadDir(p) {
     curDir = p || "";
     const list = document.getElementById("exp-list");
@@ -1817,16 +1834,26 @@
       list.replaceChildren(el("div", { class: "exp-item", text: "\uC624\uB958: " + e.message }));
       return;
     }
+    shareRoot = data.shareRoot || null;
+    sharePath = data.sharePath || "";
     list.replaceChildren();
     if (data.parent !== null && curDir) list.append(el("div", { class: "exp-item", onclick: () => loadDir(data.parent), title: "\uC0C1\uC704" }, el("span", { class: "ic", text: "\u21A9" }), ".."));
     for (const it of data.items || []) {
       const childPath = (curDir ? curDir + "/" : "") + it.name;
+      const isDir = it.type === "dir";
+      const shareRel = shareRoot ? sharePath ? sharePath + "/" + it.name : it.name : null;
       const row = el(
         "div",
-        { class: "exp-item", onclick: () => it.type === "dir" ? loadDir(childPath) : openPreview(childPath, it.name) },
+        { class: "exp-item", onclick: () => isDir ? loadDir(childPath) : openPreview(childPath, it.name) },
         el("span", { class: "ic", text: fileIcon(it.name, it.type) }),
         it.name,
-        it.type === "file" ? el("span", { class: "sz", text: fmtSize(it.size) }) : null,
+        // .sz 는 폴더에서도(빈 값으로) 항상 그린다 — 이 span 의 margin-left:auto 가 오른쪽 액션들을 끝으로 밀기
+        //  때문이다(terminal.html .exp-item .sz). 폴더에서 빼면 🔗 가 이름 바로 옆에 붙어 열이 어긋난다.
+        el("span", { class: "sz", text: isDir ? "" : fmtSize(it.size) }),
+        shareRel ? el("span", { class: "exp-dl exp-share", text: "\u{1F517}", title: "\uB9C1\uD06C \uBCF5\uC0AC", onclick: (e) => {
+          e.stopPropagation();
+          copyShareLink(shareRel, isDir);
+        } }) : null,
         it.type === "file" ? el("span", { class: "exp-dl", text: "\u2B07", title: "\uB2E4\uC6B4\uB85C\uB4DC", onclick: (e) => {
           e.stopPropagation();
           downloadFile(childPath, it.name);
@@ -2137,7 +2164,7 @@
           "\uBB38\uC81C\uAC00 \uC0DD\uACBC\uC744 \uB54C",
           tool("\uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", "\uC785\uB825\uC774 \uC774\uC0C1\uD560 \uB54C(\uD0A4\uB9CC \uB20C\uB7EC\uB3C4 \uAC19\uC740 \uBB38\uC790\uC5F4\uC774 \uB4E4\uC5B4\uAC00\uB294 \uB4F1) \uC544\uB798 \uBC84\uD2BC\uC73C\uB85C \uCD5C\uADFC \uC785\uB825 \uAE30\uB85D\uC744 \uBCF5\uC0AC\uD574 \uC81C\uBCF4\uC5D0 \uBD99\uC5EC \uC8FC\uC138\uC694 \u2014 \uC11C\uBC84\uB85C\uB294 \uC804\uC1A1\uB418\uC9C0 \uC54A\uC544\uC694"),
           el("button", { class: "tbtn", text: "\u{1F50D} \uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", onclick: () => copyText(diagText(), false, true) }),
-          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "630bb648 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
+          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "da7a5699 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
         ),
         sec(
           "\uB3C4\uAD6C (\uC624\uB978\uCABD \uC704 \uBC84\uD2BC)",

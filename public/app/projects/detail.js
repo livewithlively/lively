@@ -329,7 +329,8 @@ async function renderProjectV2Detail(view, idStr) {
     //  본문이 전폭을 쓰고 코멘트는 그 아래로 내려간다). 코멘트가 세로 순서에서 빠지므로 아래 섹션들이 그만큼 올라온다.
     // 터미널 세션 ↔ 공유 폴더 교환(#1233) — 터미널이 실제로 가장 자주 쓰이는데 2화면 아래에 있었다. '하위 태스크보다는
     //  아래'라는 위계는 지키면서 올릴 수 있는 자리가 태스크 바로 다음이다.
-    view.replaceChildren(head, projectBodyCommentRow(id, p, reload, members), projectKnowledgeSection(id, p, reload), pjvTasksSection(id, p.tasks || [], members, reload, p.fields || []), projectTerminalSection(id, members, meId, V6_BASE, p.name, p), projectFolderSection(id, V6_BASE), projectTimelineSection(id, members, V6_BASE));
+    view.replaceChildren(head, projectBodyCommentRow(id, p, reload, members), projectKnowledgeSection(id, p, reload), pjvTasksSection(id, p.tasks || [], members, reload, p.fields || []), projectTerminalSection(id, members, meId, V6_BASE, p.name, p), projectFolderSection(id, V6_BASE, p.folder), // #1436 — p.folder = 공유 루트 기준 폴더 경로(공유 링크 좌표)
+    projectTimelineSection(id, members, V6_BASE));
     // 인라인 편집 재렌더면 리빌 애니메이션 대신 스크롤 복원(전면 재애니메이션도 '새로고침'처럼 보임) (#358)
     if (keepY != null)
         pjvRestoreScroll(keepY, keepHost);

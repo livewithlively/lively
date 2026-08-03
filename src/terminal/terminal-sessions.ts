@@ -22,7 +22,7 @@ export {
   sessionDir, getSessionLabel, getSessionProject, ensureSessionOpts,
 } from "./tmux-exec.js";
 export {
-  memberOsUser, resolveRootPath, profileConfigDir, resolveProfileConfigDir, profileStatus, profileStatusFor,
+  memberOsUser, resolveRootPath, rootRelOf, profileConfigDir, resolveProfileConfigDir, profileStatus, profileStatusFor,
   provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, ensureMemberOsUser,
   sessionOsUser, userOsUser, type AiAccountStatus,
 } from "./profiles.js";

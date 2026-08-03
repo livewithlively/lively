@@ -11,6 +11,7 @@ import { UP_CONFIRM, authDownload, compactPicker, fileSortApply, fileSortBtn, fi
 import { dashFoldView, dashSaveFoldView } from './prefs.js';
 import { dashDownloadIcon, dashFileThumb, dashFolderThumb, dashRenameIcon, dashTrashIcon, dashViewIconIcon, dashViewListIcon } from './icons.js';
 import { dashChoicePopover, dashCtl, dashEmpty } from './chrome.js';
+import { copyFileLink, shareLinkIcon } from '../lib/sharelink.js';   // #1436 공유 링크 — 주소 형식·복사 UI 의 단일 소유
 import { dashModal } from './widget-tasks-review-log.js'; // 전체 보기 팝업 — 작업로그 팝업과 **같은** 경량 모달
 import { DASH_AUDIO_MIME, DASH_IMG_MIME, DASH_MEDIA_MAX, DASH_PREVIEW_CODE, DASH_PREVIEW_IMG, DASH_PREVIEW_TABLE, DASH_PREVIEW_TEXT, DASH_VIDEO_MIME, dashAuthFetch, dashFileExt, dashTablePreview, wheelToHorizontal } from './widget-folders-preview.js';
 
@@ -302,6 +303,10 @@ function dashFolderBrowser(root, startPath) {
       el('span', { class: 'dash-fp-name', title: name, text: name }),
       el('span', { class: 'dash-fb-spacer' }),
       mdToggle,
+      // 🔗 링크 복사(#1436) — 미리보기를 보다가 "이거 보내줘야겠다"가 되는 자리라 여기에도 둔다(목록에만
+      //  두면 뒤로 나가서 그 행을 다시 찾아야 한다).
+      el('button', { class: 'dash-fb-btn', type: 'button', title: '이 파일의 링크 복사', text: '🔗 링크 복사',
+        onclick: () => copyFileLink(root, rel, 'file') }),
       el('button', { class: 'dash-fb-btn', type: 'button', text: '⬇ 다운로드', onclick: () => authDownload(dlUrl, name) }));
     const stage = el('div', { class: 'dash-fp-stage' }, el('div', { class: 'dash-fp-load' }, skeleton('불러오는 중')));
     container.replaceChildren(bar, stage);
@@ -367,7 +372,11 @@ function dashFolderBrowser(root, startPath) {
   };
   const mkActions = (it, isDir) => {
     const actions = el('div', { class: 'dash-fb-actions' });
-    // 폴더는 다운로드가 없는 자리에 '공개범위'가 들어간다 — 그래서 파일·폴더 모두 버튼이 3개로 맞아
+    // 🔗 공유 링크(#1436) — 파일·폴더 **모두** 첫 자리. 이게 첫 자리인 이유: 링크로 건네는 일이 이 화면에서
+    //  가장 자주 하는 일이 됐고(요구 원문: "링크로 유관자 공유할때 훨씬 편할거같음"), 파괴적 액션(삭제)에서
+    //  가장 먼 자리이기도 하다. 폭 계약은 32-file-share.css 가 4개 기준으로 다시 맞춘다.
+    actions.append(act(shareLinkIcon(), '링크 복사', false, () => copyFileLink(root, relOf(it.name), isDir ? 'dir' : 'file')));
+    // 폴더는 다운로드가 없는 자리에 '공개범위'가 들어간다 — 그래서 파일·폴더 모두 버튼 수가 같아
     //  기존 액션 열 폭(.dash-fb-row .dash-fb-actions)이 그대로 유지된다(정렬이 어긋나지 않는다).
     //  개인 폴더 루트는 애초에 멤버별로 갈려 있어 잠글 대상이 없다 → 공유 루트에서만 노출한다.
     //  공개범위 메뉴는 축이 켜져 있을 때만(#1291) — 꺼진 축의 설정 폼은 저장돼도 강제되지 않는다.

@@ -6,7 +6,11 @@ import { overlayBox, skeletonRows } from '../learn.js';
 import { UP_CONFIRM, UP_MANY, debounce, iconFor, openFolderGrid, openPasteDialog, projFileCardEl, projUpCardEl, upControl, upDropZone, upPrecheckOverwrite, upProgress, upSend, upToast } from './files.js';
 // 새 프로젝트 오버레이 폼 — 이름(필수)·설명(선택)·팀원. 생성 시 폴더 자동 생성 + 새 전용 페이지로 이동.
 // ── 상세 ① 공유 폴더 — 프로젝트 폴더 탐색 + 업로드/다운로드 + 검색. ──
-function projectFolderSection(id, base) {
+//  shareBase = 이 프로젝트 폴더의 공유 워크스페이스 기준 경로(project.folder, 예 'project/1436').
+//   프로젝트 폴더는 공유 루트의 한 경로라 홈 탐색기와 **같은 주소축**으로 링크를 만든다(#1436).
+//   ⚠ id 로 'project/<id>' 를 추측하지 않는다 — 폴더명이 이름 기반인 프로젝트가 실재하고(project-fs.ts 주석),
+//    완료 프로젝트는 legacy-project/ 로 옮겨진다. 서버가 준 folder 값만 믿는다.
+function projectFolderSection(id, base, shareBase) {
     const B = base || '/api/ui/projects/';
     const card = el('div', { class: 'card', style: 'margin-bottom:18px' });
     const body = el('div', {});
@@ -17,7 +21,7 @@ function projectFolderSection(id, base) {
     const searchIn = el('input', { type: 'search', placeholder: '파일 검색…', class: 'proj-file-search' });
     searchIn.addEventListener('input', debounce(() => { st.q = searchIn.value.trim(); load(); }, 300));
     const up = upControl((items) => uploadFiles(items, []));
-    const allBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '전체 보기', onclick: () => openFolderGrid(id, st.path, B) });
+    const allBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '전체 보기', onclick: () => openFolderGrid(id, st.path, B, shareBase) });
     const mkdirBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '＋ 새 폴더', onclick: () => openMkdir() });
     // 선택(일괄삭제) 모드 — 카드 뷰에서 여러 항목을 골라 한 번에 삭제. ids = 선택된 rel(상대경로) 집합.
     const sel = { mode: false, ids: new Set() };
@@ -246,7 +250,7 @@ function projectFolderSection(id, base) {
             cards.push(projUpCardEl(() => enterDir(data.parent || '')));
         const selCtl = sel.mode ? { ids: sel.ids, onToggle: paintSelBar } : null;
         for (const { it, rel } of pairs)
-            cards.push(projFileCardEl(id, it, rel, enterDir, load, B, selCtl));
+            cards.push(projFileCardEl(id, it, rel, enterDir, load, B, selCtl, shareBase));
         if (cards.length)
             frag.push(el('div', { class: 'proj-file-grid' }, ...cards));
         body.replaceChildren(...frag);
