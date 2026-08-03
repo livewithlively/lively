@@ -12,15 +12,24 @@ import {
   listDistillers, getDistiller, listDistillerInbox, countDistillerBacklog, distillerCoverage, listSourceChannels, buildDistillerPrompt,
   describeScope, clearDistillerSeen, countDistillerSeen, prefilterCurve, prefilterThresholds, DEFAULT_DECISIVE_KEYWORDS, tuneDistiller
 } from "../../org/distill/distiller.js";
-import { actorOf, restOnly, restWork } from "./shared.js";
+import { actorOf, restOnly, restRead, restWork } from "./shared.js";
 
 export const ingestDistillersCapabilities: Capability[] = [
   // ── 인입 허용선 정책 (#638, #783) — 지식이 라이브에 박히기 전 게이트. 오너가 관리탭에서 조절(디폴트 auto=현행 무변). ──
   //  #783: 축에 작성자(ai/human)·하네스·page-type 이 추가되고, 액션이 [신규(action)]·[수정(action_update)] 2축이 됐다.
-  restOnly("org_ingest_policy_list", "인입 허용선 정책 목록",
-    "인입 허용선 정책 규칙 목록 — priority 내림차순. 규칙 0개면 디폴트 auto(현행 무변).",
+  // 목록은 **인증만**, 편집은 admin(#1419). 이 화면이 [맥락 관리 ▸ 증류]로 오면서 전 구성원에게 보이는
+  //  자리가 됐다 — 조회까지 admin 이면 비-admin 은 403 카드만 보고 "왜 내 지식이 검토 대기에 걸렸나"를
+  //  화면에서 알 수 없다(대기열 자체는 이미 WIKI 탭에서 memory 권한으로 본다).
+  //  ⚠ 편집은 풀지 않는다: 누구나 '전역 auto 통과' 규칙을 넣을 수 있으면 검토 게이트(#638·#783)가
+  //   무력화되고, 파괴 반경이 조직 단위다(팀 단위인 증류기·분류기와 다른 점). canEdit 을 함께 준다.
+  restRead("org_ingest_policy_list", "인입 허용선 정책 목록",
+    "인입 허용선 정책 규칙 목록 — priority 내림차순. 규칙 0개면 디폴트 auto(현행 무변). " +
+    "조회는 전 구성원, 저장·삭제는 admin(응답의 canEdit 이 그 판정).",
     [{ method: "GET", paths: ["/api/ui/org/ingest-policy"], parse: () => ({}) }],
-    async () => ({ policies: await listIngestPolicies() })),
+    async (_input: unknown, user: LivelyUser) => ({
+      policies: await listIngestPolicies(),
+      canEdit: !!(user?.scopes && user.scopes.includes("admin")),
+    }), true),
   restOnly("org_ingest_policy_upsert", "인입 허용선 정책 저장",
     "인입 정책 규칙 저장(id 있으면 수정 · preset 키가 있으면 그 프리셋 행을 갱신 · 둘 다 없으면 신규). " +
     "match_*(카테고리·시스템·채널·provenance·민감라벨·작성자(ai|human)·하네스·page-type)는 빈값=any. " +

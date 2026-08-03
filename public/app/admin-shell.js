@@ -9,9 +9,7 @@
 //   (#837: 합치는 건 화면이지 데이터가 아니다 — 새 진실 출처 0).
 import { applyReveal, cardHead, el, errorNote, hasScope, state, toast } from './core.js';
 import { skeleton } from './ui-primitives.js';
-import { ingestPolicyPanel, reviewNavBadge } from './review.js';
 import { visibilityAxesPanel } from './visibility-axes.js';
-import { sourceVisPolicyPanel } from './source-vis-policy.js'; // #1291 맥락 유형별 공개범위 켜기/끄기   // #783 지식 검토 게이트 + 검토 큐 (+ #802 nav 대기 배지)
 import { loadAdmin, registerPanel, rerenderPanel } from './admin-rerender.js'; // 패널 재렌더 레지스트리(셸↔패널 순환 절단)
 import { sectionHead, segTabs } from './admin-widgets.js';
 import { dbAuditEditor, orgAuditPanel, toolUsagePanel } from './admin-audit.js';
@@ -30,8 +28,6 @@ import { logsEditor, sessionShareEditor, sessionsAdminEditor } from './admin-ops
 import { embeddingsEditor } from './admin-embeddings.js';
 // ── #1313 R40 분해 ④ — 도메인 패널 B. 셸은 아래 등록 블록에서만 이들을 부른다. ──
 import { mcpEditor } from './admin-mcp-servers.js';
-import { connectorEditor } from './admin-connectors.js';
-import { collectorPresetEditor } from './admin-collector-presets.js'; // #1419 T7 — 커스텀 수집 방식 정의
 import { feedTargetsEditor, projectOutboundEditor } from './admin-outbound.js';
 import { dbSourceEditor } from './admin-db-sources.js';
 import { customHookEditor, harnessAssetEditor } from './admin-hooks-assets.js';
@@ -149,15 +145,16 @@ const ADMIN_SECTIONS = [
     //  여기선 축 자체를 켜고 끈다. 축이 5개(프로젝트·지식·자료·공유폴더·세션 기록범위)로 늘면서 전부가
     //  필요하지 않은 조직엔 정보 흐름만 복잡해지기 때문이다.
     { key: 'visibility-axes', label: '맥락 공개범위', meaning: null, group: 'context' },
-    // 자료 공개범위(#1291 v4) — 커넥터로 수집되는 자료를 누가 보나. [맥락 공개범위]가 '이 축을 쓸지'라면
-    //  여기는 '자료 축을 실제로 어떻게 가를지'다. 생산자가 커넥터라 개별 잠금이 현실적이지 않아 생산 지점에 건다.
-    { key: 'source-vis-policy', label: '자료 공개범위', meaning: null, group: 'context' },
+    // 자료 공개범위(#1291 v4)는 여기서 **뺐다**(#1419) — [맥락 관리 ▸ 수집 ▸ 자료 공개범위]로 옮겼다.
+    //  이 정책은 match_system(+채널)으로 매칭해 **자료가 태어날 때**(mirror INSERT) 공개범위를 새긴다 —
+    //  생산 지점이 곧 수집이라, 수집기 옆이 제자리다. 편집은 admin 유지(누가 볼 수 있는지를 정하는 보안 경계).
     // #1153 — 카테고리(분류축) CRUD 는 [분류체계] 탭(#/categories)으로 이관됐다. #837 은 정의·범위의 주인을
     //  관리탭으로 일원화했었지만, 분류체계 정립·재정립은 조직 '설정'이 아니라 상시 업무라 탭이 제 자리다.
     //  구 딥링크(#/system/wiki-categories)는 SECTION_EXIT 가 그 탭으로 보낸다.
-    // 지식 검토 게이트(#638) — 자동 인입을 auto/confirm/drop 로 조절하는 **정책(밸브)**. 그 밸브가 만든 **대기열**
-    //  (구 [검토 큐])은 설정이 아니라 일감이고 권한도 워킹레벨(memory)이라 WIKI 탭으로 옮겼다(#837). 여기선 딥링크만.
-    { key: 'ingest-policy', label: '지식 검토 정책', meaning: null, group: 'context' },
+    // 지식 검토 게이트(#638)도 여기서 **뺐다**(#1419) — [맥락 관리 ▸ 증류 ▸ 지식 검토 정책]으로.
+    //  증류가 만든 지식이 통과하는 밸브라 생산 라인 바로 뒤가 제자리다. 대기열은 이미 WIKI 탭에 있다(#837).
+    //  조회는 전 구성원(내 지식이 왜 대기에 걸렸는지 알 수 있게), 편집은 admin 유지 — 이 밸브를 누구나
+    //  '전역 auto 통과'로 열 수 있으면 게이트 자산이 무력화되고, 파괴 반경이 조직 단위다(증류기와 다른 점).
     // 자료 증류기(#1289)는 여기서 **뺐다**(#1419) — [맥락 관리 ▸ 증류]가 같은 화면(distillersPanel)을 그린다.
     //  입구가 둘이면 둘 중 어느 쪽이 정본인지 아무도 모르고, 한쪽만 고치는 사고가 난다. 파이프라인 순서
     //  (수집→증류→분류→관리) 안에 있어야 '앞뒤로 무엇이 있는지'가 함께 보이므로 그쪽을 남겼다.
@@ -185,12 +182,13 @@ const ADMIN_SECTIONS = [
     //  걸린 org 정책이라 admin 전용. 기본 꺼짐(켜기 전엔 수집 안 함).
     { key: 'session-share', label: '세션 공유', meaning: null, group: 'capability' },
     // ── 데이터 연결 ──
-    // 커넥터 = **패시브 미러 싱크**(slack/notion/clickup/gmail/drive 를 우리 DB로 당겨온다). AI가 실시간 호출하는
-    //  외부 시스템(=MCP 서버·사내 API 도구)과는 다른 것이다 — 그건 [AI 능력 ▸ 도구]에 있다.
-    { key: 'connectors', label: '외부 자료 수집(레거시)', meaning: null, group: 'data' },
-    // #1419 T7 수집 방식 — 라이블리가 모르는 소스(사내 API·RSS·웹훅)를 코드 없이 정의한다.
-    //  수집기 '인스턴스'는 [맥락 관리 ▸ 수집]에서 만들고, 여기선 그 **틀**만 정의한다(드물게 하는 조직 설정 + admin).
-    { key: 'collector-presets', label: '수집 방식', meaning: null, group: 'data' },
+    // 구 [외부 자료 수집(레거시)] 화면은 **삭제했다**(#1419). 중복이 아니라 **효과가 없는 화면**이었다:
+    //  org_connector 를 편집하지만, 마이그레이션 후 실제 수집은 전부 수집기 바인딩으로 돌고 레거시
+    //  sync-<system> 크론은 꺼진다 — 즉 살아 있어 보이는데 아무 일도 하지 않는다(중복보다 나쁘다).
+    //  ⚠ 테이블(org_connector)과 REST/MCP(org_connector_*)는 **남긴다** — 구 코드 롤백 시의 해소 폴백원이다.
+    //  지운 것은 화면뿐이고, 옛 URL 은 SECTION_EXIT 가 [맥락 관리 ▸ 수집]으로 넘긴다.
+    // 수집 방식(#1419 T7)도 [맥락 관리 ▸ 수집 ▸ 수집 방식]으로 옮겼다. 수집기와 다른 객체(틀 vs 인스턴스)라
+    //  중복은 아니었지만, 수집기 화면이 이 자리를 가리키는데 다른 탭이면 정의하러 나갔다 돌아와야 했다.
     // #976 위키 아웃바운드 — 우리 정본 지식을 외부(노션 등) '지식 피드' DB로 투영. 커넥터(인바운드)의 역방향.
     //  피드 목적지 + 카테고리 N:M 매핑(발행 게이트) 관리. 사람 페이지 불가침 — 전용 피드 DB에만 카드 append.
     { key: 'feed-targets', label: '위키 아웃바운드(피드)', meaning: null, group: 'data' },
@@ -229,12 +227,17 @@ const SECTION_REMAP = {
 // 구 [검토 큐]는 관리탭을 떠나 WIKI 탭으로 갔다(#837) — 섹션 리맵이 아니라 탭 밖 리다이렉트라 따로 둔다.
 //  #1153 에서 [카테고리(분류 체계)]도 관리탭을 떠나 [분류체계] 탭이 됐다 — 같은 이유로 여기 둔다.
 const SECTION_EXIT = { 'review-queue': '#/knowledge/review', 'wiki-categories': '#/categories',
-    // #1419 — 증류기가 [맥락 관리 ▸ 증류]로 옮겨갔다. 관리탭에 남겨 두면 같은 화면의 입구가 둘이 된다.
-    'distillers': '#/context/distill' };
+    // #1419 — 파이프라인 단계에 속한 설정을 [맥락 관리]로 모았다. 관리탭에 남겨 두면 입구가 둘이 되고,
+    //  그 단계를 보면서 앞뒤를 못 본다. 옛 딥링크·북마크는 여기서 새 자리로 넘긴다(끊지 않는다).
+    'distillers': '#/context/distill',
+    'ingest-policy': '#/context/distill',
+    'connectors': '#/context/collect',
+    'collector-presets': '#/context/collect',
+    'source-vis-policy': '#/context/collect' };
 // admin 권한 전용(쓰기·인프라·감사). #318 호출통계·#549 변경감사는 전 구성원의 변경·before/after 를 노출하므로 admin.
 // (증류기는 #1419 에서 [맥락 관리 ▸ 증류]로 이관 — 여기 목록에 없다. 서버 scope 도 memory(워킹레벨)라
 //  애초에 관리자 전용이 아니었다: 팀이 자기 채널의 증류 기준을 직접 조절하는 게 그 기능의 취지다.)
-const ADMIN_ONLY = ['member-add', 'member-access', 'credentials', 'connectors', 'collector-presets', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'logs', 'sessions', 'embeddings', 'automation', 'audit', 'ingest-policy', 'session-share', 'visibility-axes', 'source-vis-policy'];
+const ADMIN_ONLY = ['member-add', 'member-access', 'credentials', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'logs', 'sessions', 'embeddings', 'automation', 'audit', 'session-share', 'visibility-axes'];
 const RUNTIME_ONLY = ['agent-assets']; // runtime 권한 전용(멤버 머신에서 도는 것의 정의)
 // [도구]는 두 권한의 합집합 — 사내 API 도구·빌트인은 runtime, 외부 MCP 서버 등록은 admin. 둘 중 하나라도 있으면
 //  섹션을 보여주고, 안에서 각 서브탭을 권한별로 켠다(구조상 한 섹션=한 scope 전제가 깨지는 유일한 자리라 명시한다).
@@ -316,7 +319,7 @@ async function renderAdmin(view, sub) {
                 'aria-current': s.key === sel ? 'page' : null }, el('span', { text: s.label }), 
             // 배지 = **이 항목을 보려면 필요한 권한**. 전엔 ADMIN_ONLY 에만 달려서, 같은 '권한 없으면 아예 안 보이는'
             //  항목인데도 [스킬 · 훅](runtime 전용)·[AI 도구]·[미리보기](합집합)엔 아무 신호가 없었다(#1085 지적).
-            navPermBadge(s.key), s.key === 'ingest-policy' ? reviewNavBadge() : null));
+            navPermBadge(s.key)));
         }
         side.append(box);
     }
@@ -354,8 +357,6 @@ registerPanel('agent-assets', (detail, data) => agentAssetsSection(detail, data)
 registerPanel('tools', (detail, data) => toolsSection(detail, data));
 registerPanel('audit', (detail, data) => auditSection(detail, data));
 registerPanel('automation', (detail, data) => automationSection(detail, data));
-registerPanel('connectors', (detail, data) => connectorEditor(detail, data));
-registerPanel('collector-presets', (detail) => void collectorPresetEditor(detail));
 registerPanel('feed-targets', (detail, data) => feedTargetsEditor(detail, data));
 registerPanel('project-outbound', (detail, data) => projectOutboundEditor(detail, data));
 registerPanel('db-sources', (detail, data) => dbSourceEditor(detail, data));
@@ -367,8 +368,6 @@ registerPanel('session-share', (detail, data) => sessionShareEditor(detail, data
 registerPanel('embeddings', (detail, data) => embeddingsEditor(detail, data));
 registerPanel('repos', (detail, data) => reposPanel(detail, data));
 registerPanel('visibility-axes', (detail) => visibilityAxesPanel(detail));
-registerPanel('source-vis-policy', (detail) => sourceVisPolicyPanel(detail));
-registerPanel('ingest-policy', (detail, data) => ingestPolicyPanel(detail, data));
 // ── ② 서브패널 제자리 재렌더 ──
 //  ⚠ 'members'·'tools' 는 ①의 **병합 섹션**(탭 껍데기) 키다 — 그 안의 개별 패널이 자기를 다시 그릴 땐
 //     반드시 아래 전용 키를 써야 한다. 안 그러면 탭 본문 안에 탭 껍데기가 또 렌더돼 중첩된다.

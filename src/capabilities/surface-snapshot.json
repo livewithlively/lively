@@ -1028,7 +1028,7 @@
  },
  {
   "name": "org_ingest_policy_list",
-  "scope": "admin",
+  "scope": null,
   "mcp": true,
   "mutates": false,
   "rest": [
