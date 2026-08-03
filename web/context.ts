@@ -46,15 +46,20 @@ export async function renderContext(view: HTMLElement, sub?: string | null): Pro
   //  순서 자체가 정보다: 이 탭에서 처음 보는 사람도 흐름을 읽는다.
   const nav = el('nav', { class: 'ctx-nav', 'aria-label': '파이프라인 단계' });
   for (const t of TABS) {
+    const adminEdit = !!(t as { adminEdit?: boolean }).adminEdit;
     nav.append(el('a', {
       class: 'ctx-nav-item' + (t.key === sel ? ' active' : ''),
       href: '#/context/' + t.key,
       'aria-current': t.key === sel ? 'page' : null,
+      // ⚠ 배지를 붙이면 링크의 접근가능 이름이 자식 텍스트 연결로 '수집관리자'가 된다 — 한 낱말로 읽혀
+      //  뜻이 사라진다(실측: linkText === '수집관리자'). aria-label 로 이름을 직접 정해 끊어 읽히게 한다.
+      //  span 에 aria-label 을 걸어도 안 된다 — role 없는 generic 은 그 값이 노출되지 않는다.
+      'aria-label': adminEdit ? `${t.label} — 관리자 전용 단계` : null,
     }, el('span', { text: t.label }),
        // 배지 문구는 '관리자' 하나로 통일한다(#1085) — admin·memory 같은 내부 scope 이름은 보는 사람에게
        //  아무 뜻이 아니고, 실제로 그 자리를 고칠 수 있는 사람은 관리 권한을 받은 사람이다.
-       (t as { adminEdit?: boolean }).adminEdit
-         ? el('span', { class: 'admin-only-badge', text: '관리자',
+       adminEdit
+         ? el('span', { class: 'admin-only-badge', text: '관리자', 'aria-hidden': 'true',
              title: '보는 것은 모든 구성원이 할 수 있고, 만들고 고치는 것은 관리자만 할 수 있는 단계입니다.' })
          : null));
     if (t.key === 'overview') nav.append(el('span', { class: 'ctx-nav-sep', 'aria-hidden': 'true' }));
