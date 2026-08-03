@@ -10,7 +10,7 @@
 //   "모드를 정확히 보여주는가"와 "모르는 걸 아는 척하지 않는가" 두 가지다.
 import { createServer } from "node:http";
 import { execFile, execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, realpathSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -54,10 +54,28 @@ const GW = `http://127.0.0.1:${server.address().port}`;
 writeFileSync(join(HOME, ".lively", "gateway-url"), GW);
 writeFileSync(join(HOME, ".lively", "token"), "lvk_test_token");
 
+// ⚠ 스텁 `claude` — `lively status` 는 harness 프로브로 **실제 `claude mcp list`** 를 부른다(lively.mjs #1043:
+//  등록된 MCP 서버를 전부 헬스체크 · MCP_TIMEOUT 3s · 하드백스톱 8s). 가리지 않으면 이 파일이
+//  ① 머리 주석의 계약("네트워크는 127.0.0.1 픽스처뿐")을 깬다 — 사람의 로컬 MCP 등록(원격 커넥터 포함)에 실제로 붙는다.
+//  ② 실행시간이 그 사람의 MCP 설정에 의존한다 — 실측 status 1회 ≈2.8s, 이 파일 혼자 36초로 유닛 체인 전체의 30%였다.
+//  kit/cli/lively.test.mjs 의 newHome 과 같은 관례(스텁 bin 을 PATH 앞에). 이 파일의 계약은 프로젝트 섹션이라
+//  harness 프로브 결과는 아무 단정도 하지 않는다 — 가려도 잃는 검증이 없다.
+const STUB_BIN = join(BOX, "stub-bin");
+mkdirSync(STUB_BIN, { recursive: true });
+writeFileSync(join(STUB_BIN, "claude"), "#!/bin/sh\nexit 0\n");
+chmodSync(join(STUB_BIN, "claude"), 0o755);
+const CHILD_ENV = {
+  ...process.env,
+  PATH: `${STUB_BIN}:${process.env.PATH}`,
+  LIVELY_HOME: HOME,
+  LIVELY_GATEWAY_URL: GW,
+  LIVELY_TOKEN: "lvk_test_token",
+  NO_COLOR: "1",
+};
+
 const statusIn = async (cwd) => {
   const { stdout } = await pExecFile(process.execPath, [CLI, "status", "--json"], {
-    cwd, env: { ...process.env, LIVELY_HOME: HOME, LIVELY_GATEWAY_URL: GW, LIVELY_TOKEN: "lvk_test_token", NO_COLOR: "1" },
-    timeout: 30_000,
+    cwd, env: CHILD_ENV, timeout: 30_000,
   });
   return JSON.parse(stdout);
 };
@@ -145,7 +163,7 @@ try {
   //  "출력이 비었는데 테스트는 통과"하는 공허한 검증이 된다(실제로 여기서 한 번 걸렸다).
   const initIn = async (cwd, args) => {
     const { stdout, stderr } = await pExecFile(process.execPath, [CLI, "init", ...args], {
-      cwd, env: { ...process.env, LIVELY_HOME: HOME, LIVELY_GATEWAY_URL: GW, LIVELY_TOKEN: "lvk_test_token", NO_COLOR: "1" }, timeout: 30_000,
+      cwd, env: CHILD_ENV, timeout: 30_000,
     });
     return args.includes("--json") ? stdout : stderr;
   };
