@@ -157,4 +157,18 @@ export async function initRuntimeConfigPolicyColumns(pool: Pool): Promise<void> 
     -- #1291 맥락 유형별 공개범위 켜기/끄기. 키가 없으면 '켜짐'(현행 동작) — 새 축이 추가돼도 자동으로 켜진 채 시작한다.
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS visibility_axes JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
+
+  // ── org_runtime_config 확장(#1454 S2~S5): 매니지드 표면 노브 4종 — 전부 기본값이 '기존 동작 완전 불변'이라
+  //  셀프호스트 조직은 이 컬럼이 생겨도 아무 변화가 없다(매니지드 컨트롤플레인만 org_runtime_update 로 값을 준다).
+  //   · ui_nav(S2): 상단 탭 게이팅. '{}' = 전부 노출(현행). {tabs:{context:false}} 처럼 **명시적 false 인 탭만** 숨김.
+  //   · announcement(S3): 조직 공지 배너 {text, href?, tone?:'info'|'warn'}. NULL = 미표시(현행).
+  //   · ui_profile(S4): 관리탭 프로파일 'full'(현행 전체) | 'personal'(개인 워크스페이스 — 조직 운영 섹션 숨김).
+  //   · usage_url(S5): 상단바 '사용량' 칩 링크. NULL = 칩 미노출(현행).
+  //  넷 다 whoami(me) 응답에 실려 프론트가 부팅 때 한 번에 받는다 — 별도 조회 왕복 없음(vis_axes 와 동형).
+  await pool.query(`
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS ui_nav JSONB NOT NULL DEFAULT '{}'::jsonb;
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS announcement JSONB;
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS ui_profile TEXT NOT NULL DEFAULT 'full';
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS usage_url TEXT;
+  `);
 }

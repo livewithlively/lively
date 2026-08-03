@@ -58,6 +58,10 @@ export interface OrgRuntimeConfig {
   hook_grace_ms: number | null; // #1008 — run-custom 이 게이트웨이 미도달 시 최근 캐시를 쓸 유효기간(ms). NULL=무제한(기본). 양수=그 ms 후 fail-CLOSED.
   embedding_backfill_paused: boolean; // #1060 — 자동 임베딩 백필 스윕 일시중지. true=부팅·주기·sync후·nudge 스윕 no-op + 실행 중 잡 중단. DB 영속(재시작에도 유지).
   inject_ontology_guide: boolean; // #1245 — 온톨로지 가이드(제품 소유 섹션, 코드 단일 출처) 주입 여부. 본문 편집은 불가 — 이 토글만 org 가 정한다.
+  ui_nav: UiNavConfig; // #1454 S2 — 상단 탭 게이팅. {} = 전부 노출(현행). tabs 에 **명시적 false 인 탭만** 숨김(프론트 navOn 이 해석).
+  announcement: UiAnnouncement | null; // #1454 S3 — 조직 공지 배너. null = 미표시(현행).
+  ui_profile: UiProfile; // #1454 S4 — 관리탭 프로파일. 'full'(현행) | 'personal'(개인 워크스페이스 — 조직 운영 섹션 숨김).
+  usage_url: string | null; // #1454 S5 — 상단바 '사용량' 칩 링크. null = 칩 미노출(현행).
   version: number;
   updated_at: string | null;
   updated_by: string | null;
@@ -84,9 +88,38 @@ const graceMsSafe = (v: unknown): number | null => {
   return Number.isFinite(n) && Number.isInteger(n) && n >= 0 ? n : null;
 };
 
+// ── 매니지드 표면 노브(#1454 S2~S5) 타입 + 안전 fold — 넷 다 '잡값/부재 = 기본값(현행 동작)' 규약. ──
+//  ui_nav 의 해석 주체는 프론트(web/lib/state.ts navOn)다 — 서버는 형태만 보존해 실어 나른다(강제 아님).
+export interface UiNavConfig { tabs?: Record<string, boolean> }
+export interface UiAnnouncement { text: string; href: string | null; tone: "info" | "warn" }
+export type UiProfile = "full" | "personal";
+const uiNavSafe = (v: unknown): UiNavConfig => {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const tabsRaw = (v as Record<string, unknown>).tabs;
+  if (!tabsRaw || typeof tabsRaw !== "object" || Array.isArray(tabsRaw)) return {};
+  const tabs: Record<string, boolean> = {};
+  for (const [k, val] of Object.entries(tabsRaw as Record<string, unknown>)) {
+    if (typeof val === "boolean") tabs[k] = val;
+  }
+  return { tabs };
+};
+const announcementSafe = (v: unknown): UiAnnouncement | null => {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const a = v as Record<string, unknown>;
+  const text = typeof a.text === "string" ? a.text.trim() : "";
+  if (!text) return null; // 본문 없는 배너는 배너가 아니다 — 미표시로 접는다
+  return {
+    text,
+    href: typeof a.href === "string" && a.href.trim() ? a.href.trim() : null,
+    tone: a.tone === "warn" ? "warn" : "info",
+  };
+};
+const uiProfileSafe = (v: unknown): UiProfile => (v === "personal" ? "personal" : "full");
+const usageUrlSafe = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
+
 export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
   const r = await itemsPool.query(
-    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, version, updated_at, updated_by
+    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, ui_nav, announcement, ui_profile, usage_url, version, updated_at, updated_by
        FROM org_runtime_config WHERE id=1`,
   );
   const row = r.rows[0] as Record<string, unknown> | undefined;
@@ -120,6 +153,10 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
     hook_grace_ms: graceMsSafe(row?.hook_grace_ms), // #1008 — 컬럼 부재/NULL 이면 null(무제한)
     embedding_backfill_paused: row?.embedding_backfill_paused === true, // #1060 — 컬럼 부재(구 DB)면 undefined → false(평소대로 자동 백필)
     inject_ontology_guide: row?.inject_ontology_guide !== false, // #1245 — 컬럼 부재(구 DB)면 켜짐(hooks 와 같은 '없으면 on' 규약)
+    ui_nav: uiNavSafe(row?.ui_nav), // #1454 S2 — 잡값/부재면 {} = 전부 노출(현행)
+    announcement: announcementSafe(row?.announcement), // #1454 S3 — 잡값/부재면 null = 미표시(현행)
+    ui_profile: uiProfileSafe(row?.ui_profile), // #1454 S4 — 잡값/부재면 'full'(현행)
+    usage_url: usageUrlSafe(row?.usage_url), // #1454 S5 — 빈값/부재면 null = 칩 미노출(현행)
     version: (row?.version as number) ?? 1,
     updated_at: (row?.updated_at as string) ?? null,
     updated_by: (row?.updated_by as string) ?? null,
@@ -149,6 +186,10 @@ export async function updateRuntimeConfig(
     hook_grace_ms?: number | null;
     embedding_backfill_paused?: boolean;
     inject_ontology_guide?: boolean;
+    ui_nav?: UiNavConfig;
+    announcement?: UiAnnouncement | null;
+    ui_profile?: UiProfile;
+    usage_url?: string | null;
   },
   actor?: string,
   source?: string,
@@ -174,6 +215,12 @@ export async function updateRuntimeConfig(
   const embeddingBackfillPaused = patch.embedding_backfill_paused !== undefined ? patch.embedding_backfill_paused : before.embedding_backfill_paused;
   // #1245 — 온톨로지 가이드 주입 토글. 단순 boolean(되쓰기 안전 — relay/grace/backfill 과 동일 idiom).
   const injectOntologyGuide = patch.inject_ontology_guide !== undefined ? patch.inject_ontology_guide : before.inject_ontology_guide;
+  // #1454 S2~S5 — 매니지드 표면 노브 4종. before 는 이미 safe-fold 된 값이고 fold(기본값) == 컬럼 DEFAULT 라
+  //  되써도 '미설정'이 굳지 않는다(화이트리스트 idiom — relay/grace 와 동일. embedding 류의 env 시드 구분이 없다).
+  const uiNav = patch.ui_nav !== undefined ? uiNavSafe(patch.ui_nav) : before.ui_nav;
+  const announcement = patch.announcement !== undefined ? announcementSafe(patch.announcement) : before.announcement;
+  const uiProfile = patch.ui_profile !== undefined ? uiProfileSafe(patch.ui_profile) : before.ui_profile;
+  const usageUrl = patch.usage_url !== undefined ? usageUrlSafe(patch.usage_url) : before.usage_url;
   // 임베딩 설정 — 저장 시 정규화(잡값/알 수 없는 provider → off). 시크릿 미저장(auth_env_ref=env 이름만).
   //  #688 두 가지 보존: ① '명시적 끄기'({provider:'off',explicit:true})는 normalize 로 마커를 벗기지 않고 그대로 저장
   //  (env 시드 부활 금지). ② embedding_config 를 안 건드린 저장은 DB '원본'을 유지 — before(resolved)를 되쓰면
@@ -239,8 +286,8 @@ export async function updateRuntimeConfig(
     sessionShare = (raw.rows[0] as { session_share?: unknown } | undefined)?.session_share ?? null;
   }
   await itemsPool.query(
-    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, version, updated_at, updated_by)
-       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$20::jsonb,$18::jsonb,$19::jsonb,$22::jsonb,$14::jsonb,$15::jsonb,$16,$17,$21,1,now(),$13)
+    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, ui_nav, announcement, ui_profile, usage_url, version, updated_at, updated_by)
+       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$20::jsonb,$18::jsonb,$19::jsonb,$22::jsonb,$14::jsonb,$15::jsonb,$16,$17,$21,$23::jsonb,$24::jsonb,$25,$26,1,now(),$13)
      ON CONFLICT (id) DO UPDATE SET hooks=EXCLUDED.hooks, writeback_notice=EXCLUDED.writeback_notice,
        work_roots=EXCLUDED.work_roots, allowed_auth_envs=EXCLUDED.allowed_auth_envs, url_allowlist=EXCLUDED.url_allowlist,
        allowed_db_secret_refs=EXCLUDED.allowed_db_secret_refs, allowed_db_hosts=EXCLUDED.allowed_db_hosts,
@@ -252,9 +299,12 @@ export async function updateRuntimeConfig(
        session_share=EXCLUDED.session_share, hook_grace_ms=EXCLUDED.hook_grace_ms,
        embedding_backfill_paused=EXCLUDED.embedding_backfill_paused,
        inject_ontology_guide=EXCLUDED.inject_ontology_guide,
+       ui_nav=EXCLUDED.ui_nav, announcement=EXCLUDED.announcement, ui_profile=EXCLUDED.ui_profile, usage_url=EXCLUDED.usage_url,
        version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots),
-     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(pullTools), JSON.stringify(embeddingConfig), JSON.stringify(storagePolicy), actor ?? null, JSON.stringify(relayDecisions), JSON.stringify(sessionShare), hookGraceMs, embeddingBackfillPaused, JSON.stringify(sessionMemoryPolicy), JSON.stringify(sessionReclaimPolicy), JSON.stringify(callLogPolicy), injectOntologyGuide, JSON.stringify(delegatePolicy)],
+     JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(pullTools), JSON.stringify(embeddingConfig), JSON.stringify(storagePolicy), actor ?? null, JSON.stringify(relayDecisions), JSON.stringify(sessionShare), hookGraceMs, embeddingBackfillPaused, JSON.stringify(sessionMemoryPolicy), JSON.stringify(sessionReclaimPolicy), JSON.stringify(callLogPolicy), injectOntologyGuide, JSON.stringify(delegatePolicy),
+     // #1454 S2~S5 — announcement 는 null 이면 SQL NULL(json 'null' 이 아니라 컬럼 NULL — 미표시의 정본 표현).
+     JSON.stringify(uiNav), announcement === null ? null : JSON.stringify(announcement), uiProfile, usageUrl],
   );
   // 저장 즉시 반영 — /readyz 임계치·로그 재니터가 캐시를 들고 있다(게이트웨이 재시작 없이 먹어야 한다).
   if (patch.storage_policy !== undefined) invalidateStoragePolicyCache();
@@ -316,4 +366,29 @@ export function getSessionReclaimPolicySource(): Promise<"db" | "env" | "default
 // 위탁 태스크 정책(#1101)의 출처(관리 UI 안내) — db(관리탭 저장)·env(.env 시드)·default(코드 기본값).
 export function getDelegatePolicySource(): Promise<"db" | "env" | "default"> {
   return policySourceOf("delegate_policy", delegatePolicySource);
+}
+
+// ── 매니지드 표면 노브 4종만 경량 조회(#1454 S2~S5) — /api/ui/me 전용. ──
+//  me 는 모든 화면이 부팅마다 부르는 핫패스라 getRuntimeConfig(정책 resolve 전량)를 태우지 않고 4컬럼만 읽는다.
+//  **fail-open**: 테이블/컬럼 부재(구 DB·부트스트랩 전)·조회 실패에도 me 는 살아야 하므로 기본값(= 기존 동작:
+//  전탭 노출·배너 없음·full 프로파일·칩 없음)으로 접는다 — me 핸들러의 다른 보강 조회들과 같은 규약.
+export interface UiSurfaceConfig {
+  ui_nav: UiNavConfig;
+  announcement: UiAnnouncement | null;
+  ui_profile: UiProfile;
+  usage_url: string | null;
+}
+export async function getUiSurface(): Promise<UiSurfaceConfig> {
+  try {
+    const r = await itemsPool.query(`SELECT ui_nav, announcement, ui_profile, usage_url FROM org_runtime_config WHERE id=1`);
+    const row = r.rows[0] as Record<string, unknown> | undefined;
+    return {
+      ui_nav: uiNavSafe(row?.ui_nav),
+      announcement: announcementSafe(row?.announcement),
+      ui_profile: uiProfileSafe(row?.ui_profile),
+      usage_url: usageUrlSafe(row?.usage_url),
+    };
+  } catch {
+    return { ui_nav: {}, announcement: null, ui_profile: "full", usage_url: null };
+  }
 }

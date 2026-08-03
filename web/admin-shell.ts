@@ -255,7 +255,31 @@ function navPermBadge(key) {
   if (!gated) return null;
   return el('span', { class: 'admin-only-badge', text: '관리자', title: '권한이 있어야 보고 편집할 수 있는 항목입니다.' });
 }
+// 심플 어드민(#1454 S4) — ui_profile='personal'(노션식 개인 워크스페이스) 때 숨기는 조직 운영 섹션.
+//  기준: 조직 규모의 배포·정책·인프라 관측 화면은 접고, 개인이 실제로 쓰는 것(내 설정·구성원·DB 데이터소스·
+//  레포·자동화 — 대표 지시로 명시 유지)만 남긴다. 기본 'full' 이면 이 목록은 아예 평가되지 않는 것과 같다
+//  (uiProfilePersonal=false) — 셀프호스트 무회귀. 숨김은 sectionHidden 한 곳이라 사이드바·기본선택·딥링크
+//  폴백(renderAdmin 의 visibleSections·첫 노출 섹션 선택)이 전부 일관되게 따라온다.
+const PERSONAL_HIDDEN = [
+  'injection-map',     // 세션 주입
+  'visibility-axes',   // 맥락 공개범위
+  'embeddings',        // 의미 검색
+  'tools',             // AI 도구
+  'credentials',       // 서비스 로그인(조직 금고)
+  'agent-assets',      // 스킬 · 훅(조직 배포)
+  'preview-envs',      // 미리보기
+  'session-share',     // 세션 공유
+  'feed-targets',      // 위키 아웃바운드(피드)
+  'project-outbound',  // 프로젝트 아웃바운드
+  'audit',             // 감사 로그
+  'storage',           // 컴퓨팅 리소스
+  'logs',              // 로그
+  'sessions',          // 세션(회수)
+];
+// ui_profile 판정 — me 응답(#1454 S2~S5 동승) 한 곳만 본다. 값을 못 받았으면(구 서버) 'full'(현행) 취급.
+const uiProfilePersonal = () => !!(state.me && state.me.ui_profile === 'personal');
 function sectionHidden(key, data) {
+  if (uiProfilePersonal() && PERSONAL_HIDDEN.includes(key)) return true; // #1454 S4 — 심플 어드민
   if (ADMIN_ONLY.includes(key) && !data.canEdit) return true;
   if (RUNTIME_ONLY.includes(key) && !data.canRuntime) return true;
   // 합집합 섹션([도구]) — 요구 권한 중 하나라도 있으면 노출(안에서 서브탭별로 다시 건다).

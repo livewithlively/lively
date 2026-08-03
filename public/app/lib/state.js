@@ -28,4 +28,15 @@ function visAxisOn(axis) {
         return true;
     return ax[axis] !== false;
 }
-export { state, visAxisOn, };
+// UI 내비 게이팅(#1454 S2) — 이 상단 탭이 켜져 있나. **탭 숨김·라우트 가드·가이드 필터가 공유하는 단일 규칙**이다
+//  (main.ts 탭 hidden/딥링크 가드 · learn.ts 메뉴 가이드 · guide-tour.ts 둘러보기 — 표면마다 me.ui_nav 를 직접
+//  뒤지면 visAxisOn 의 경고 그대로 사본이 생기고 한쪽만 고쳐진다). 값을 못 받았거나 ui_nav 가 빈 객체면
+//  **전부 켜짐**(구 서버·셀프호스트 = 종전 화면 그대로) — {tabs:{context:false}} 처럼 명시적 false 인 탭만 숨긴다.
+function navOn(tab) {
+    const nav = state.me && state.me.ui_nav;
+    const tabs = nav && nav.tabs;
+    if (!tabs)
+        return true;
+    return tabs[tab] !== false;
+}
+export { state, visAxisOn, navOn, };

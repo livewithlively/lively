@@ -70,6 +70,18 @@
   align-items: center; justify-content: center; font-size: 11px; font-weight: 700; line-height: 1; color: #fff; overflow: hidden; }
 .topbar-ava img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
+/* ── 조직 공지 배너(#1454 S3) — #app 첫 자식, sticky topbar 위의 일반 블록(스크롤 시 말려 올라감). ──
+   시각 언어는 .wk-banner(24-wiki-redesign.css)의 '좌측 3px 컬러 보더 + 옅은 배경' 차용 —
+   info(기본)=노트 블루 계열, warn=coral 계열(.ctxp-warn 관례). 내용은 main.ts 가 textContent 로만 채운다. */
+#org-banner { display: flex; align-items: center; justify-content: center; gap: 12px;
+  padding: 8px 24px; font-size: 13px;
+  border-bottom: 1px solid var(--line-note); border-left: 3px solid var(--blue); background: var(--bg-note); }
+#org-banner.warn { border-left-color: var(--coral); border-bottom-color: var(--line-row); background: var(--bg-tint); }
+#org-banner .org-banner-txt { color: var(--ink-note); font-weight: 500; min-width: 0; }
+#org-banner.warn .org-banner-txt { color: var(--ink-sub); }
+#org-banner .org-banner-link { flex: none; color: var(--blue-deep); font-weight: 600; text-decoration: none; font-size: 12px; }
+#org-banner .org-banner-link:hover { text-decoration: underline; }
+
 /* ── 본문 셸 ── */
 main { max-width: 1200px; margin: 0 auto; padding: 32px 24px 64px; }
 
