@@ -14,7 +14,11 @@ import { getOrgProfile } from "./org/store.js";
 export const SAFE_GATEWAY_URL = /^https?:\/\/[A-Za-z0-9._-]+(:\d{1,5})?$/;
 
 // 저장된 값의 표기 편차 흡수 — 끝의 '/mcp'(사람이 MCP 엔드포인트를 붙여 저장하는 흔한 실수)와 말미 슬래시 제거.
-export const normalizeGatewayUrl = (u: string): string => u.replace(/\/mcp$/, "").replace(/\/+$/, "");
+//  ⚠ 순서: 말미 슬래시를 **먼저** 벗겨야 '/mcp/' 로 복붙된 값도 '/mcp$' 매칭에 걸린다. 먼저 '/mcp$' 를
+//   떼면 말미 슬래시에 막혀 '/mcp' 가 살아남고 SAFE_GATEWAY_URL(경로 불허)에서 통째로 탈락한다.
+//   kit/cli 의 normGw(lively.mjs·lively-mcp-local.mjs)와 동일 계약 — 여기서만 어긋나 있었다.
+export const normalizeGatewayUrl = (u: string): string =>
+  u.replace(/\/+$/, "").replace(/\/mcp$/, "").replace(/\/+$/, "");
 
 const safe = (u: string | null | undefined): string | null => {
   if (!u) return null;
