@@ -84,7 +84,7 @@ async function applyPromptOverride(params: Record<string, unknown>, b: DistillBa
 //  · 증류기가 하나도 등록 안 됐으면 **구 전역 동작으로 폴백**(기존 잡 무중단 + 증류기 설정 전에도 바로 쓸 수 있게).
 async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: boolean }):
   Promise<{ batches: DistillBatch[]; considered: number; error?: string }> {
-  const { listDistillers, getDistiller, listDistillerInbox, countDistillerBacklog, buildDistillerPrompt, buildDistillerTargeting } = await import("../../org/distill/distiller.js");
+  const { listDistillers, getDistiller, listDistillerInbox, countDistillerBacklog, buildDistillerPrompt, buildDistillerTargeting, listThreadKnowledge } = await import("../../org/distill/distiller.js");
   const policySummary = await buildDistillPolicySummary();
 
   let all: Awaited<ReturnType<typeof listDistillers>>;
@@ -97,12 +97,14 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
     if (!d) return { batches: [], considered: all.length, error: `증류기 '${ref}' 없음 — [AI 맥락 ▸ 자료 증류기]에서 확인하세요.` };
     if (!d.enabled) return { batches: [], considered: all.length, error: `증류기 '${ref}' 가 꺼져 있습니다.` };
     const inbox = await listDistillerInbox(d, all);
+    // 이 스레드에 이미 있는 지식(#1289) — 답글만 혼자 온 배치가 부모 지식을 못 찾아 파편을 만드는 걸 막는다.
+    const threadKn = await listThreadKnowledge(inbox);
     if (!inbox.length) return { batches: [], considered: 1 };
     const ids = inbox.map((s) => Number(s.id));
     return { batches: [{
       distillerId: d.id, key: d.key, ids, backlog: await countDistillerBacklog(d, all),
-      prompt: buildDistillerPrompt({ distiller: d, rows: inbox, policySummary }),
-      targeting: buildDistillerTargeting(d, inbox),
+      prompt: buildDistillerPrompt({ distiller: d, rows: inbox, policySummary, threadKnowledge: threadKn }),
+      targeting: buildDistillerTargeting(d, inbox, threadKn),
       requester: d.requester, model: d.model, effort: d.effort,
     }], considered: 1 };
   }
@@ -125,12 +127,14 @@ async function pickDistillerBatch(params: Record<string, unknown>, opt: { one: b
   const batches: DistillBatch[] = [];
   for (const d of enabled) {
     const inbox = await listDistillerInbox(d, all);
+    // 이 스레드에 이미 있는 지식(#1289) — 답글만 혼자 온 배치가 부모 지식을 못 찾아 파편을 만드는 걸 막는다.
+    const threadKn = await listThreadKnowledge(inbox);
     if (!inbox.length) continue;
     const ids = inbox.map((s) => Number(s.id));
     batches.push({
       distillerId: d.id, key: d.key, ids, backlog: await countDistillerBacklog(d, all),
-      prompt: buildDistillerPrompt({ distiller: d, rows: inbox, policySummary }),
-      targeting: buildDistillerTargeting(d, inbox),
+      prompt: buildDistillerPrompt({ distiller: d, rows: inbox, policySummary, threadKnowledge: threadKn }),
+      targeting: buildDistillerTargeting(d, inbox, threadKn),
       requester: d.requester, model: d.model, effort: d.effort,
     });
     if (opt.one) break;   // 세션 주입판 — 매 틱 하나만.
