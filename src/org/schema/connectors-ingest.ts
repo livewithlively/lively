@@ -499,6 +499,10 @@ export async function initIngestPolicyAndDistillers(pool: Pool): Promise<void> {
     --  ⚠ 단 **첫 스레드는 상한을 넘어도 통째로 담는다** — 스레드를 자르면 대화가 끊겨 증류 자체가 불가능하다
     --   (171메시지짜리 스레드는 그 하나만 처리하고 다음 배치로 넘긴다).
     ALTER TABLE org_distiller ADD COLUMN IF NOT EXISTS batch_max_msgs INT NOT NULL DEFAULT 20;
+    -- 프롬프트 조각별 덮어쓰기(#1419-B) — {intro?,criteria?,format?,thread?,procedure?} 중 **지정한 것만** 대체.
+    --  미지정 = 코드 기본값(제품 개선이 계속 흘러든다) · 빈 문자열 = 그 조각을 뺀다(둘을 구분한다).
+    --  criteria·format 은 기존 criteria_md·format_md 가 저장소이므로 여기 담지 않는다(이중 출처 금지).
+    ALTER TABLE org_distiller ADD COLUMN IF NOT EXISTS prompt_sections JSONB;
     ${ensureCheck("org_distiller", { org_distiller_prefilter_chk: "prefilter_level BETWEEN 0 AND 100" })}
   `);
 }

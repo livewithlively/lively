@@ -138,6 +138,7 @@ export interface DistillerUpsertInput {
   thread_aware?: boolean;
   prefilter_level?: number;
   prefilter_rules?: Record<string, unknown> | null;
+  prompt_sections?: Record<string, unknown> | null;
   batch_size?: number;
   batch_max_msgs?: number;
   mode?: string;
@@ -166,7 +167,7 @@ const D_SEL = `id, key, label, enabled, priority,
   match_kinds, match_system, include_channels, exclude_channels, include_authors, exclude_authors,
   exclude_bots, min_chars, lookback_days,
   criteria_md, format_md, target_category, default_type, name_prefix, thread_aware,
-  prefilter_level, prefilter_rules,
+  prefilter_level, prefilter_rules, prompt_sections,
   batch_size, batch_max_msgs, mode, session_ref, model, effort, requester,
   last_run_at, last_status, last_summary, note, updated_at`;
 
@@ -174,6 +175,19 @@ const D_SEL = `id, key, label, enabled, priority,
 //  · 입력에 그 키가 있고 undefined 가 아니면 → 보낸 값을 쓴다(명시적 null 은 '지우기'라 그대로 반영).
 //  · 없으면 → 기존 행의 값을 유지한다. 기존 행이 없으면(신규) 기본값.
 //  ⚠ truthy 검사로 바꾸지 마라 — enabled:false·priority:0 을 '미지정'으로 오해해 증류기를 못 끄게 된다.
+// 조각 오버라이드 위생(#1419-B) — 알려진 **편집 가능** 조각만, 문자열만 남긴다.
+//  불변 조각(targeting·guards)은 조립부가 무시하지만 저장 단계에서도 걸러 DB 에 오해를 남기지 않는다
+//  (관리탭이 그걸 편집란으로 오인하면 안 된다). 오타 키·비문자열도 여기서 버린다.
+const EDITABLE_SECTIONS = new Set(["intro", "criteria", "format", "thread", "procedure"]);
+export function sanitizePromptSections(v: unknown): Record<string, string> | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+  const out: Record<string, string> = {};
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (EDITABLE_SECTIONS.has(k) && typeof val === "string") out[k] = val;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 export function pickDistillerField<T>(
   input: Record<string, unknown>, before: Record<string, unknown> | undefined, key: string, computed: T,
 ): T {
@@ -241,6 +255,7 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
     // 사전 필터 — 레버(0~100)와 축별 덮어쓰기. 레버 0 = 필터 끔(구 동작 그대로).
     prefilter_level: pick("prefilter_level", Number.isFinite(input.prefilter_level) ? Math.max(0, Math.min(100, Math.trunc(input.prefilter_level as number))) : 0),
     prefilter_rules: pick("prefilter_rules", (input.prefilter_rules && typeof input.prefilter_rules === "object") ? input.prefilter_rules : null),
+    prompt_sections: pick("prompt_sections", sanitizePromptSections(input.prompt_sections)),
     batch_size: batch,
     batch_max_msgs: batchMsgs,
     mode,
@@ -259,7 +274,7 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
          include_authors=$10, exclude_authors=$11, exclude_bots=$12, min_chars=$13, lookback_days=$14,
          criteria_md=$15, format_md=$16, target_category=$17, default_type=$18, name_prefix=$19, thread_aware=$20,
          batch_size=$21, mode=$22, session_ref=$23, model=$24, effort=$25, requester=$26, note=$27,
-         prefilter_level=$29, prefilter_rules=$30::jsonb, batch_max_msgs=$31,
+         prefilter_level=$29, prefilter_rules=$30::jsonb, batch_max_msgs=$31, prompt_sections=$32::jsonb,
          version=version+1, updated_at=now(), updated_by=$28
        WHERE id=$1 RETURNING ${D_SEL}`,
       [targetId, vals.key, vals.label, vals.enabled, vals.priority,
@@ -267,7 +282,8 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
        vals.include_authors, vals.exclude_authors, vals.exclude_bots, vals.min_chars, vals.lookback_days,
        vals.criteria_md, vals.format_md, vals.target_category, vals.default_type, vals.name_prefix, vals.thread_aware,
        vals.batch_size, vals.mode, vals.session_ref, vals.model, vals.effort, vals.requester, vals.note, actor ?? null,
-       vals.prefilter_level, vals.prefilter_rules ? JSON.stringify(vals.prefilter_rules) : null, vals.batch_max_msgs]);
+       vals.prefilter_level, vals.prefilter_rules ? JSON.stringify(vals.prefilter_rules) : null, vals.batch_max_msgs,
+       vals.prompt_sections ? JSON.stringify(vals.prompt_sections) : null]);
     await audit("org_distiller", String(targetId), "update", before, r.rows[0], actor, source);
     return r.rows[0];
   }
@@ -278,15 +294,16 @@ export async function upsertDistiller(input: DistillerUpsertInput, actor?: strin
        exclude_bots, min_chars, lookback_days,
        criteria_md, format_md, target_category, default_type, name_prefix, thread_aware,
        batch_size, mode, session_ref, model, effort, requester, note, created_by, updated_by,
-       prefilter_level, prefilter_rules, batch_max_msgs)
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$27,$28,$29::jsonb,$30)
+       prefilter_level, prefilter_rules, batch_max_msgs, prompt_sections)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$27,$28,$29::jsonb,$30,$31::jsonb)
      RETURNING ${D_SEL}`,
     [vals.key, vals.label, vals.enabled, vals.priority,
      vals.match_kinds, vals.match_system, vals.include_channels, vals.exclude_channels,
      vals.include_authors, vals.exclude_authors, vals.exclude_bots, vals.min_chars, vals.lookback_days,
      vals.criteria_md, vals.format_md, vals.target_category, vals.default_type, vals.name_prefix, vals.thread_aware,
      vals.batch_size, vals.mode, vals.session_ref, vals.model, vals.effort, vals.requester, vals.note, actor ?? null,
-     vals.prefilter_level, vals.prefilter_rules ? JSON.stringify(vals.prefilter_rules) : null, vals.batch_max_msgs]);
+     vals.prefilter_level, vals.prefilter_rules ? JSON.stringify(vals.prefilter_rules) : null, vals.batch_max_msgs,
+     vals.prompt_sections ? JSON.stringify(vals.prompt_sections) : null]);
   await audit("org_distiller", String(r.rows[0].id), "insert", null, r.rows[0], actor, source);
   return r.rows[0];
 }

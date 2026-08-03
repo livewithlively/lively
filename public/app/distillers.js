@@ -281,8 +281,45 @@ function editorCard(d, rerender) {
             session_ref: sessIn.value.trim() || null,
             model: modelSel.value || null, effort: effortSel.value || null,
             requester: reqIn.value.trim() || null,
+            // 조각: 손대지 않은(빈) 칸은 **키를 아예 안 보낸다** — 미지정=기본값이고, 빈 문자열은 '그 조각을 뺀다'는
+            //  다른 뜻이기 때문이다. 조각 UI 를 아직 안 불러왔으면 이 필드를 건드리지 않는다(기존 설정 보존).
+            ...(sectionsLoaded.v ? { prompt_sections: (() => {
+                    const o = {};
+                    for (const [id, ta] of Object.entries(sectionInputs))
+                        if (ta.value !== '')
+                            o[id] = ta.value;
+                    return Object.keys(o).length ? o : null;
+                })() } : {}),
         };
     };
+    // ── 프롬프트 조각 덮어쓰기(#1419-B) ──────────────────────────────────────────
+    //  프롬프트가 코드에 통으로 박혀 있으면 무엇이 나가는지 파악도 수정도 어렵다. 조각만 덮어쓴다.
+    //  · 편집란은 **비어 있는 게 기본** — 비면 코드 기본값이 나가고, 제품 개선이 계속 흘러든다.
+    //  · [기본값 보기]로 원문을 펼쳐 확인한 뒤 덮어쓴다(무엇을 대체하는지 모르면 덮어쓸 수 없다).
+    //  · 대상 지정·안전 문구는 불변이라 여기 없다(스코프 누출·주입 방어 상실 방지).
+    const SECTION_HINT = {
+        intro: '배치 첫 문장. 증류기 이름과 자료 건수를 알립니다.',
+        criteria: '무엇을 지식화할지. 위 [지식화 기준] 칸이 이 조각의 저장소입니다 — 여기에 쓰면 그 칸 대신 이게 나갑니다.',
+        format: '결과 문서 형식. 위 [문서 형식] 칸이 저장소입니다.',
+        thread: '스레드를 한 덩어리로 묶으라는 지시. 스레드 묶기를 끄면 애초에 안 나갑니다.',
+        procedure: '절차 ①~⑤(본문 읽기·중복확인·저장·허용선·skip).',
+    };
+    const sectionInputs = {};
+    const sectionsHost = el('div');
+    const sectionsLoaded = { v: false };
+    // 프롬프트 조각 그룹 — 접혀 있고, 펼친 뒤 [지금 무엇이 집히는지 보기]를 누르면 기본값이 채워진다.
+    const sectionsGroup = el('details', { style: 'margin-top:10px' }, el('summary', { class: 'admin-hint', text: 'AI 에게 나갈 지시문 — 조각별로 고치기' }), el('p', { class: 'admin-hint', text: '기본값을 받아오려면 아래 [지금 무엇이 집히는지 보기]를 먼저 누르세요.' }), sectionsHost);
+    function renderSections(views) {
+        const rows = [];
+        for (const v of (views || [])) {
+            const ta = el('textarea', { rows: '4', style: 'width:100%;font-size:12px', placeholder: '비어 있으면 기본값이 나갑니다' });
+            ta.value = typeof v.override === 'string' ? v.override : '';
+            sectionInputs[v.id] = ta;
+            rows.push(el('div', { style: 'margin-bottom:12px' }, el('div', { class: 'mini-meta' }, el('span', { class: 'pill', text: v.label }), el('span', { class: 'admin-hint', text: ' ' + (SECTION_HINT[v.id] || '') })), ta, el('details', { style: 'margin-top:4px' }, el('summary', { class: 'admin-hint', text: '기본값 보기' }), el('pre', { style: 'white-space:pre-wrap;font-size:11px;max-height:200px;overflow:auto', text: v.def || '(이 조각은 지금 설정에선 나가지 않습니다)' }))));
+        }
+        sectionsLoaded.v = true;
+        sectionsHost.replaceChildren(el('p', { class: 'admin-hint', text: '비워 두면 코드 기본값이 나갑니다(제품이 개선되면 자동 반영). 내용을 쓰면 그 조각만 대체됩니다. 대상 자료 지정과 안전 문구는 바꿀 수 없어 여기 없습니다.' }), ...rows);
+    }
     const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '증류기 만들기' : '저장' });
     const cancelBtn = el('button', { class: 'btn-text', text: '닫기' });
     const previewBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '지금 무엇이 집히는지 보기' });
@@ -320,13 +357,16 @@ function editorCard(d, rerender) {
                 rows.append(el('div', { class: 'mini-meta' }, el('span', { class: 'pill', text: String(s.channel || s.kind) }), el('span', { text: ' ' + String(s.title || '(제목 없음)').slice(0, 80) })));
             }
             previewBox.replaceChildren(el('div', { class: 'mini-meta' }, el('span', { class: 'pill', text: '지금 맡은 자료 ' + Number(r.backlog).toLocaleString() + '건' }), r.reviewed ? el('span', { class: 'pill', text: '이미 판정 ' + Number(r.reviewed).toLocaleString() }) : null), (r.sample || []).length ? rows : el('p', { class: 'admin-hint', text: '지금 집히는 자료가 0건입니다 — 채널명이 정확한지, 사전 필터가 너무 빡빡하지 않은지, 우선순위 높은 증류기가 먼저 가져가고 있진 않은지 확인하세요.' }), el('details', { style: 'margin-top:8px' }, el('summary', { class: 'admin-hint', text: 'AI에게 나갈 지시문 보기' }), el('pre', { style: 'white-space:pre-wrap;font-size:12px;max-height:260px;overflow:auto', text: r.prompt || '' })));
+            // 조각 편집란도 같은 응답으로 채운다 — 편집과 미리보기가 **같은 조립 결과**를 보게 한다.
+            if (r.sections)
+                renderSections(r.sections);
         }
         catch (e) {
             previewBox.replaceChildren(el('p', { class: 'admin-hint', text: '실패: ' + e.message }));
         }
     });
     card.append(el('div', { class: 'mini-title' }, el('span', { text: isNew ? '새 증류기' : ('설정 — ' + (d.label || d.key)) })));
-    card.append(F('식별자(key)', isNew ? '소문자 슬러그(a-z0-9._-). 만든 뒤에는 바꾸지 않는 것을 권합니다.' : '만든 뒤에는 바꾸지 않습니다.', keyIn), F('이름', '목록에 보일 이름.', labelIn), F('우선순위', '높을수록 자료를 먼저 가져갑니다. 겹치는 자료는 우선순위가 높은 증류기 하나만 처리합니다. 낮은 값 + 넓은 범위 = 나머지를 받는 기본 라인.', prioIn), el('label', { class: 'inline' }, enabledChk, el('span', { text: ' 이 증류기 사용' })), group('① 무엇을 집을까 — 범위', F('자료 종류', '비우면 전체. 슬랙만 다루는 증류기면 slack 만 고르세요.', kindsWrap), F('대상 채널', '한 줄에 하나. 비우면 채널을 가리지 않습니다. 아래 목록에서 눌러 담으면 오타가 없습니다.', el('div', {}, incCh, chPick)), F('제외 채널', '알림봇·모니터링 채널처럼 지식화할 게 없는 곳을 빼세요.', excCh), el('label', { class: 'inline' }, botChk, el('span', { text: ' 봇이 쓴 메시지는 제외' })), fold('세부 조건(길이·기간)', F('본문 최소 길이', '이 길이보다 짧은 자료는 건너뜁니다. 0이면 제한 없음.', minIn), F('기간', '최근 며칠치만 다룰지. 비우면 과거 전체를 백필합니다.', lookIn))), group('② 얼마나 걸러낼까 — 사전 필터', el('p', { class: 'admin-hint', style: 'margin:0 0 10px' }, el('span', { text: 'AI에게 보내기 ' }), el('b', { text: '전에' }), el('span', { text: ' 서버가 스레드를 걸러냅니다. 비워두면 필터가 꺼집니다(전부 보냄). ' }), el('b', { text: '⚠ 세게 걸수록 지식을 놓칩니다' }), el('span', { text: ' — 실측에서 4축을 모두 요구했더니(AND) 이미 지식이 된 스레드의 21%가 탈락했습니다. 결합은 OR 을 권합니다.' })), el('p', { class: 'admin-hint', style: 'margin:0 0 12px;padding:8px 10px;border-radius:6px;background:var(--bg-soft,#f6f7f9)' }, el('b', { text: '값을 감으로 정하지 마세요. ' }), el('span', { text: 'AI에게 "이 증류기 사전 필터를 튜닝해줘"라고 하면 실측으로 정합니다 — 이미 지식이 된 스레드가 몇 %나 걸러지는지(유실률), 이 채널에서 판별력 높은 단어가 무엇인지, 조합별 절감 대비 유실이 얼마인지를 계산해 최적값을 넣어줍니다.' })), F('결정성 키워드 최소 등장', '아래 목록의 말이 스레드에 몇 번 나와야 하는지.', rDec), F('결정성 키워드 목록', '이 채널에서 실제로 쓰는 말. 실측상 "결정·장애" 같은 일반어보다 "할인일시납·플랫폼이용료" 같은 도메인 용어가 훨씬 잘 듣습니다. 많이 넣으세요.', rKw), F('스레드 최소 길이(자)', '짧은 잡담을 거르는 데 가장 안전한 축입니다.', rChr), fold('참여자·메시지 수 조건 (신중히)', el('p', { class: 'admin-hint', text: '⚠ 이 두 축이 유실을 많이 냅니다 — 한 사람이 길게 쓴 분석 보고, 짧지만 결론이 담긴 스레드가 잘립니다.' }), F('최소 참여자 수', '', rAut), F('최소 메시지 수', '', rMsg)), F('조건 결합', 'OR 권장. AND 는 모든 축을 만족해야 해서 값진 스레드를 많이 버립니다.', rMatch)), group('③ 무엇을 지식으로 만들까 — 기준과 형식', F('지식화 기준', '이 팀에서 무엇이 남길 가치가 있는지 그대로 쓰세요. 이 문장이 AI의 판단 기준이 됩니다.', critIn), F('결과 문서 형식', '제목 규칙·섹션 구성 등을 자유롭게 쓰세요.', fmtIn), el('label', { class: 'inline' }, threadChk, el('span', { text: ' 스레드를 묶어 하나의 지식으로 (권장)' })), fold('분류·이름 규칙', F('분류 고정', '항상 한 분류에 넣으려면 분류 key 를 쓰세요. 비우면 AI가 내용에 맞게 고릅니다.', catIn), F('문서 유형 기본값', '', typeSel), F('지식 이름 접두어', '산출 지식의 이름을 이 문자열로 시작하게 합니다.', prefixIn))), group('④ 어떻게 돌릴까 — 실행', F('한 번에 처리할 스레드 수', '배치는 스레드 단위로 자릅니다 — 스레드를 쪼개면 대화가 끊겨 증류가 안 됩니다. 2~3 권장.', batchIn), F('한 배치 메시지 상한', '스레드를 최근순으로 담다가 이 수를 넘으면 멈춥니다. 토큰이 메시지 수의 제곱으로 늘어나니 작을수록 쌉니다. ⚠ 첫 스레드는 예외 — 상한보다 커도 통째로 담습니다(대화를 자르지 않으려고). 20~40 권장.', batchMsgIn), F('의뢰자', '이 사람의 AI 계정으로 실행되고 과금됩니다.', reqIn), fold('실행 방식·모델', F('실행 방식', '헤드리스는 매 배치 새 세션이라 이전 판단에 끌려가지 않습니다(권장).', modeSel), F('상시 세션 id', '실행 방식이 상시 세션일 때만 필요합니다.', sessIn), F('모델', '판단이 무거운 기준이면 sonnet 이상을 권합니다.', modelSel), F('추론 강도', '', effortSel))), el('div', { style: 'display:flex;gap:10px;align-items:center;margin-top:18px;padding-top:14px;border-top:1px solid var(--line,#e5e7eb)' }, saveBtn, previewBtn, cancelBtn), previewBox);
+    card.append(F('식별자(key)', isNew ? '소문자 슬러그(a-z0-9._-). 만든 뒤에는 바꾸지 않는 것을 권합니다.' : '만든 뒤에는 바꾸지 않습니다.', keyIn), F('이름', '목록에 보일 이름.', labelIn), F('우선순위', '높을수록 자료를 먼저 가져갑니다. 겹치는 자료는 우선순위가 높은 증류기 하나만 처리합니다. 낮은 값 + 넓은 범위 = 나머지를 받는 기본 라인.', prioIn), el('label', { class: 'inline' }, enabledChk, el('span', { text: ' 이 증류기 사용' })), group('① 무엇을 집을까 — 범위', F('자료 종류', '비우면 전체. 슬랙만 다루는 증류기면 slack 만 고르세요.', kindsWrap), F('대상 채널', '한 줄에 하나. 비우면 채널을 가리지 않습니다. 아래 목록에서 눌러 담으면 오타가 없습니다.', el('div', {}, incCh, chPick)), F('제외 채널', '알림봇·모니터링 채널처럼 지식화할 게 없는 곳을 빼세요.', excCh), el('label', { class: 'inline' }, botChk, el('span', { text: ' 봇이 쓴 메시지는 제외' })), fold('세부 조건(길이·기간)', F('본문 최소 길이', '이 길이보다 짧은 자료는 건너뜁니다. 0이면 제한 없음.', minIn), F('기간', '최근 며칠치만 다룰지. 비우면 과거 전체를 백필합니다.', lookIn))), group('② 얼마나 걸러낼까 — 사전 필터', el('p', { class: 'admin-hint', style: 'margin:0 0 10px' }, el('span', { text: 'AI에게 보내기 ' }), el('b', { text: '전에' }), el('span', { text: ' 서버가 스레드를 걸러냅니다. 비워두면 필터가 꺼집니다(전부 보냄). ' }), el('b', { text: '⚠ 세게 걸수록 지식을 놓칩니다' }), el('span', { text: ' — 실측에서 4축을 모두 요구했더니(AND) 이미 지식이 된 스레드의 21%가 탈락했습니다. 결합은 OR 을 권합니다.' })), el('p', { class: 'admin-hint', style: 'margin:0 0 12px;padding:8px 10px;border-radius:6px;background:var(--bg-soft,#f6f7f9)' }, el('b', { text: '값을 감으로 정하지 마세요. ' }), el('span', { text: 'AI에게 "이 증류기 사전 필터를 튜닝해줘"라고 하면 실측으로 정합니다 — 이미 지식이 된 스레드가 몇 %나 걸러지는지(유실률), 이 채널에서 판별력 높은 단어가 무엇인지, 조합별 절감 대비 유실이 얼마인지를 계산해 최적값을 넣어줍니다.' })), F('결정성 키워드 최소 등장', '아래 목록의 말이 스레드에 몇 번 나와야 하는지.', rDec), F('결정성 키워드 목록', '이 채널에서 실제로 쓰는 말. 실측상 "결정·장애" 같은 일반어보다 "할인일시납·플랫폼이용료" 같은 도메인 용어가 훨씬 잘 듣습니다. 많이 넣으세요.', rKw), F('스레드 최소 길이(자)', '짧은 잡담을 거르는 데 가장 안전한 축입니다.', rChr), fold('참여자·메시지 수 조건 (신중히)', el('p', { class: 'admin-hint', text: '⚠ 이 두 축이 유실을 많이 냅니다 — 한 사람이 길게 쓴 분석 보고, 짧지만 결론이 담긴 스레드가 잘립니다.' }), F('최소 참여자 수', '', rAut), F('최소 메시지 수', '', rMsg)), F('조건 결합', 'OR 권장. AND 는 모든 축을 만족해야 해서 값진 스레드를 많이 버립니다.', rMatch)), group('③ 무엇을 지식으로 만들까 — 기준과 형식', F('지식화 기준', '이 팀에서 무엇이 남길 가치가 있는지 그대로 쓰세요. 이 문장이 AI의 판단 기준이 됩니다.', critIn), F('결과 문서 형식', '제목 규칙·섹션 구성 등을 자유롭게 쓰세요.', fmtIn), el('label', { class: 'inline' }, threadChk, el('span', { text: ' 스레드를 묶어 하나의 지식으로 (권장)' })), fold('분류·이름 규칙', F('분류 고정', '항상 한 분류에 넣으려면 분류 key 를 쓰세요. 비우면 AI가 내용에 맞게 고릅니다.', catIn), F('문서 유형 기본값', '', typeSel), F('지식 이름 접두어', '산출 지식의 이름을 이 문자열로 시작하게 합니다.', prefixIn))), group('④ 어떻게 돌릴까 — 실행', F('한 번에 처리할 스레드 수', '배치는 스레드 단위로 자릅니다 — 스레드를 쪼개면 대화가 끊겨 증류가 안 됩니다. 2~3 권장.', batchIn), F('한 배치 메시지 상한', '스레드를 최근순으로 담다가 이 수를 넘으면 멈춥니다. 토큰이 메시지 수의 제곱으로 늘어나니 작을수록 쌉니다. ⚠ 첫 스레드는 예외 — 상한보다 커도 통째로 담습니다(대화를 자르지 않으려고). 20~40 권장.', batchMsgIn), F('의뢰자', '이 사람의 AI 계정으로 실행되고 과금됩니다.', reqIn), fold('실행 방식·모델', F('실행 방식', '헤드리스는 매 배치 새 세션이라 이전 판단에 끌려가지 않습니다(권장).', modeSel), F('상시 세션 id', '실행 방식이 상시 세션일 때만 필요합니다.', sessIn), F('모델', '판단이 무거운 기준이면 sonnet 이상을 권합니다.', modelSel), F('추론 강도', '', effortSel))), el('div', { style: 'display:flex;gap:10px;align-items:center;margin-top:18px;padding-top:14px;border-top:1px solid var(--line,#e5e7eb)' }, saveBtn, previewBtn, cancelBtn), sectionsGroup, previewBox);
     return card;
 }
 // ── 실행 잡 ────────────────────────────────────────────────────────────────
