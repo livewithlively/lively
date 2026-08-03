@@ -44,6 +44,15 @@ const server = http.createServer((req, res) => {
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const BASE = `http://127.0.0.1:${server.address().port}`;
 const root = await fsp.mkdtemp(path.join(os.tmpdir(), "lively-backfill-"));
+// ⚠ 하네스(claude·codex)를 PATH 에서 가린다 — CLI 하위명령이 하네스를 만지는 순간 유닛 테스트가 **사람의 로컬
+//  설치·MCP 설정에 시간과 결과를 의존**한다(#1431 실측: project-status 가 실제 `claude mcp list` 를 불러 36.5초).
+//  가드: kit/cli/cli-spawn-harness-sandbox.test.mjs
+const STUB_BIN = path.join(root, "stub-bin");
+fs.mkdirSync(STUB_BIN, { recursive: true });
+for (const b of ["claude", "codex"]) {
+  fs.writeFileSync(path.join(STUB_BIN, b), "#!/bin/sh\nexit 0\n");
+  fs.chmodSync(path.join(STUB_BIN, b), 0o755);
+}
 
 // 격리 HOME 에 claude 프로젝트 기록 픽스처를 깐다.
 function mkHome(files) {
@@ -58,7 +67,7 @@ function mkHome(files) {
 function runBackfill(home, extra = []) {
   return new Promise((resolve) => {
     const c = spawn(process.execPath, [CLI, "backfill", ...extra], {
-      cwd: root, env: { ...process.env, LIVELY_HOME: home, LIVELY_GATEWAY_URL: BASE, LIVELY_TOKEN: "t" },
+      cwd: root, env: { ...process.env, PATH: `${STUB_BIN}:${process.env.PATH}`, LIVELY_HOME: home, LIVELY_GATEWAY_URL: BASE, LIVELY_TOKEN: "t" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = ""; c.stdout.on("data", (d) => (out += d)); c.stderr.on("data", (d) => (out += d));
