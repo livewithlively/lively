@@ -16,6 +16,7 @@ import { renderLearn, renderLearnDocs, renderLearnTour, renderOnboarding } from 
 import { renderStart, renderStartMigrate, renderStartProject } from './start.js'; // #/start — 구성원 온보딩(#846/850) + 프로젝트 체험(#853)
 import { renderActivate } from './activate.js'; // #/activate — CLI 디바이스 로그인 승인(#880)
 import { renderSessions } from './sessions.js'; // #/sessions — 세션이력 웹뷰(#905 C1 이어보기)
+import { renderFilePage } from './filepage.js'; // #/f — 공유 링크 착지(#1436): 내비 없는 전체페이지 파일 미리보기
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard, startDashboardSessionTour } from './dashboard-home.js';
 import { renderTerminal, startTerminalTour } from './terminal.js';
@@ -157,6 +158,14 @@ async function route() {
             //  로그인 후에도 살아남는다(route 가 state.me 없으면 showGate 후 return — 해시는 보존, boot 이 재실행).
             setActiveTab('');
             await renderActivate(view);
+        }
+        else if (page === 'f') {
+            // #/f?root=<shared|personal>&path=<rel> — 공유 링크의 착지 화면(#1436). **내비게이션이 없는** 전체 페이지로
+            //  파일 하나(또는 폴더 하나)만 보여준다: 링크를 받은 사람이 무엇을 봐야 하는지 찾지 않아도 되게.
+            //  셸(상단바·푸터) 숨김은 body[data-route="f"] CSS 가 한다(위에서 dataset.route 를 이미 세웠다).
+            //  ⚠ 탭 활성 표시는 비운다 — 어느 탭에도 속하지 않는 화면이라 아무 탭이 켜져 있으면 거짓말이 된다.
+            setActiveTab('');
+            await renderFilePage(view, params);
         }
         else if (page === 'sessions') {
             // #/sessions — 세션이력 웹뷰(#905 C1 이어보기). 내 세션 목록 + 트랜스크립트 회수(렌더).

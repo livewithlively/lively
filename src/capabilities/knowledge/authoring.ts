@@ -7,7 +7,8 @@ import type { Capability, CapabilityCtx } from "../types.js";
 import type { LivelyUser } from "../../context.js";
 import {
   upsertKnowledge, setKnowledgeLifecycle, getKnowledgeLifecycle, setKnowledgeWiki, deleteKnowledge,
-  findSimilarKnowledge, moveKnowledge, appendBody, isDuplicateAppend, stampSessionVisibility,
+  findSimilarKnowledge, moveKnowledge, appendBody, isDuplicateAppend, stampSessionVisibility, slugify,
+  setKnowledgeTitle,
 } from "../../v6/knowledge-store.js";
 // #783 인입 허용선 게이트 — 에이전트(MCP) 저작 지식의 자동 검토대기 + 기존 지식 수정 검토 큐.
 import { resolveKnowledgeGate } from "../../v6/knowledge-gate.js";
@@ -15,10 +16,19 @@ import { proposeRevision, pendingStagedRevisionId } from "../../v6/knowledge-rev
 import {
   assertKnowledgeWritable, BODY_MD_MAX, DEDUP_WARN_SIMILARITY, classificationInfo, seedSyncWarning, wikiLinkInfo,
 } from "./shared.js";
+// #1442 소프트캡 — 짧은 메타 필드의 길이 초과가 body_md 전체를 튕기지 않게 한다(서버 조정 + 응답 capped).
+import { SOFT_CAPS, applySoftCaps, softCapHint } from "../soft-cap.js";
 
+// #1442 소프트캡 — 아래 다섯 짧은 필드(name·title·supersedes·parent_name·change_note)엔 zod .max() 를 두지
+//  않는다. SDK 는 검증을 핸들러 앞에서 하므로 그 max 가 body_md(최대 200,000자)까지 통째로 튕겨 재전송을
+//  부르고, 그 실패는 mcp_call_log 에도 안 남았다. 상한은 describe(softCapHint)로 광고하고 조정은
+//  핸들러(applySoftCaps)가 한다 — 표는 soft-cap.ts SOFT_CAPS.knowledge_save 하나뿐이다.
+const CAPS = SOFT_CAPS.knowledge_save;
 const knowledgeSaveInput = {
-  name: z.string().max(64).optional(),
-  title: z.string().max(200).optional(),
+  name: z.string().optional()
+    .describe(`지식 이름(슬러그) — 없으면 title·본문에서 자동 생성. 기존 지식을 고칠 땐 그 이름을 그대로. ${softCapHint(CAPS.name)}`),
+  title: z.string().optional()
+    .describe(`표시 제목 — 한 줄 라벨이다(문서의 논지·범위를 담되 문단이 아니다). 더 긴 설명·부제는 본문 첫 헤딩으로 내려라. ${softCapHint(CAPS.title)}`),
   // body_md 는 DB 상 TEXT(무제한) — 이 max 는 폭주/실수 입력(붙여넣은 바이너리·base64·무한생성) 차단용 방어 상한일 뿐이다.
   //  구 40,000 은 정상 장문 설계문서(#534: 45k자 doc 이 쪼개짐)를 튕겨 무손실 저장을 막았다 → 200,000(≈50k토큰)으로 상향.
   //  임베딩은 별도로 8,000자 절단(embeddingInputText), grep 은 응답에서 body_md 제외, get 은 부분읽기 — 이 값에 의존하는 하류 없음.
@@ -29,18 +39,20 @@ const knowledgeSaveInput = {
   provenance: z.enum(["authored", "observed"]).optional(),
   lifecycle: z.enum(["active", "pending"]).optional()
     .describe("#638 자동 인입(distill 등)이 검토대기로 저장할 때 pending — 기본 목록·검색·주입에서 격리(승인=set_lifecycle active). 미지정=active(사람 저작 기본). superseded/archived 는 set_lifecycle 로만."),
-  supersedes: z.string().max(64).optional(),
+  supersedes: z.string().optional()
+    .describe(`이 지식이 대체하는 기존 지식의 name. ${softCapHint(CAPS.supersedes)}`),
   type: z.enum(["decision", "concept", "how-to", "reference", "research", "entity"]).optional()
     .describe("page-type(#290, 신규 필수): decision(결정·ADR)|concept(개념·배경·도메인설명)|how-to(런북·절차)|reference(사양·참조)|research(조사·분석)|entity(사람·조직·제품)"),
   category: z.string().optional().describe("분류 key 1개(단일 — category_list). 신규 필수."),
   is_folder: z.boolean().optional()
     .describe("#592 폴더 노드 — true 면 트리 그룹핑용 폴더(title 필수, body_md 빈 문자열 허용). 미전송 시 기존값 보존."),
-  parent_name: z.string().min(1).max(64).optional()
-    .describe("#592 트리 위치 — 부모 지식/폴더 name(생성 시 배치). 이동은 knowledge_move. 미전송 시 기존값 보존."),
+  parent_name: z.string().min(1).optional()
+    .describe(`#592 트리 위치 — 부모 지식/폴더 name(생성 시 배치). 이동은 knowledge_move. 미전송 시 기존값 보존. ${softCapHint(CAPS.parent_name)}`),
   mode: z.enum(["replace", "append"]).optional()
     .describe("#921 replace(기본)=body_md 로 전문 교체(종전 동작) · append=body_md('조각')를 기존 본문 끝에 덧붙임(구분 빈 줄은 서버가 정규화). append 는 기존 지식 전용(name 필수)."),
-  change_note: z.string().max(600).optional()
-    .describe("#968 변경 요약 — **기존 지식을 고칠 땐 무엇을·왜 바꾸는지 1~2문장으로 함께 보내라**(예: \"재시작 완료 기준을 healthz 200 으로 명확화. 계기 — 7/15 장애 때 절차 부재\"). 검토 카드와 변화 기록에 이 문장이 그대로 표시된다 — 없으면 사람이 diff 만 보고 판단해야 한다."),
+  change_note: z.string().optional()
+    .describe("#968 변경 요약 — **기존 지식을 고칠 땐 무엇을·왜 바꾸는지 1~2문장으로 함께 보내라**(예: \"재시작 완료 기준을 healthz 200 으로 명확화. 계기 — 7/15 장애 때 절차 부재\"). 검토 카드와 변화 기록에 이 문장이 그대로 표시된다 — 없으면 사람이 diff 만 보고 판단해야 한다. "
+      + softCapHint(CAPS.change_note)),
 };
 type KnowledgeSaveInput = z.infer<z.ZodObject<typeof knowledgeSaveInput>>;
 export const knowledgeSave: Capability = {
@@ -59,7 +71,10 @@ export const knowledgeSave: Capability = {
     "**append 모드(#921): 기존 문서에 내용을 보탤 땐 mode='append' 를 써라** — 이때 body_md 는 전문이 아니라 **덧붙일 조각**이고, 서버가 기존 본문 끝에 빈 줄로 잇는다. " +
     "전문을 읽어와(knowledge_get) 재조립해 통째로 되보내지 마라 — 원문이 그대로 보존되고(네가 재출력하며 생기는 요약·드리프트·누락이 없다) 전문이 컨텍스트를 오갈 일도 없다. " +
     "기존 지식 전용(name 필수 · 신규는 mode 없이 만들고 · 외부 미러(observed)엔 불가), 응답엔 본문 전문 대신 증분 요약(appended)만 온다. " +
-    "**변경 요약(#968): 기존 지식을 고칠 땐 change_note(무엇을·왜 — 1~2문장)를 함께 보내라** — 검토 카드와 변화 기록에 그 문장이 그대로 표시된다.",
+    "**변경 요약(#968): 기존 지식을 고칠 땐 change_note(무엇을·왜 — 1~2문장)를 함께 보내라** — 검토 카드와 변화 기록에 그 문장이 그대로 표시된다. " +
+    "**길이 상한(#1442): 짧은 필드(title 200 · name/supersedes/parent_name 64 · change_note 600자)를 넘겨도 이 호출은 실패하지 않는다** — " +
+    "서버가 그 필드만 조정(자르기/참조 무시)하고 본문은 그대로 저장한 뒤 응답 capped 로 무엇을 어떻게 조정했는지 알려준다. " +
+    "그러니 **본문을 다시 실어 재시도하지 마라**(capped 가 왔다고 저장이 실패한 게 아니다). 잘린 제목을 고치려면 **knowledge_set_title**(name+title — 본문 불요)을 쓰고, 애초에 제목은 한 줄로 짧게 쓰고 긴 설명은 본문 첫 헤딩으로 내려라.",
   scope: "memory",
   input: knowledgeSaveInput,
   expose: {
@@ -95,11 +110,24 @@ export const knowledgeSave: Capability = {
           is_folder,
           parent_name: b.parent_name ? String(b.parent_name) : undefined,   // #592 생성 시 트리 배치(이동은 /move)
           mode,                                                             // #921 replace(기본)|append
-          change_note: b.change_note ? String(b.change_note).slice(0, 600) : undefined,   // #968 변경 요약(검토 카드·기록)
+          // #968 변경 요약(검토 카드·기록). 길이 조정은 여기서 하지 않는다 — 핸들러 소프트캡(#1442)이 유일한
+          //  상한 지점이라야 REST 호출자도 '잘렸다'는 사실을 응답 capped 로 받는다(여기서 자르면 조용히 사라진다).
+          change_note: b.change_note ? String(b.change_note) : undefined,
         };
       } }],
   },
   handler: async (input: KnowledgeSaveInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    // #1442 짧은 메타 필드 조정 — **맨 앞에서 한 번**. 아래 경로 전체(인입 게이트·리비전 제안·store)가
+    //  조정된 값을 보게 하려면 여기여야 한다. capped(조정 보고)는 성공 return 마다 실어 호출자가 반드시 본다.
+    //  MCP·REST 어느 경로로 와도 같은 판정을 받는다(REST 는 zod 를 안 타므로 이 자리가 유일한 상한 지점).
+    const capped = applySoftCaps("knowledge_save", input, CAPS);
+    // #1442 name 정규화 — 소프트캡 **다음에**(위에서 보낸 길이를 먼저 보고해야 하므로). store 가 upsert 직전
+    //  slugify 로 정규화·절단하므로, 정규화를 store 에만 맡기면 아래 인입 게이트·공개범위 검사는 **원본 이름**을
+    //  보고 store 는 **잘린 이름**을 쓰는 불일치가 생긴다: 65자 이름이면 게이트는 그 이름의 문서가 없으니 '신규'로
+    //  판정하는데 store 는 잘린 이름의 기존 문서를 덮어쓴다(= create 정책으로 update 를 통과시키는 우회).
+    //  zod .max(64) 가 그 입력을 튕겨 왔기에 지금까지 닿지 않던 경로다 — 상한을 소프트캡으로 바꾼 이 커밋이
+    //  경로를 열므로 같은 커밋에서 닫는다. slugify 는 멱등이라 store 가 한 번 더 불러도 결과가 같다.
+    if (input.name) input.name = slugify(input.name);
     // #592: MCP 경로의 빈 본문 방어 — zod min(1) 완화 대신 여기서(폴더만 예외). REST 는 parse 가 이미 걸렀다.
     if (!String(input.body_md ?? "").trim() && input.is_folder !== true) {
       throw new HttpError(400, "body_md 가 필요합니다(폴더 is_folder=true 만 빈 본문 허용)");
@@ -197,10 +225,10 @@ export const knowledgeSave: Capability = {
         // 중복경고도 뷰어 기준 — 안 보이는 문서를 "비슷한 게 있다"고 알려주면 그 제목·발췌가 그대로 나간다.
         const similar = await findSimilarKnowledge({ name: knowledge.name, limit: 3, minScore: DEDUP_WARN_SIMILARITY }, ctx?.viewer ?? null);
         if (similar.length) {
-          return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...(await classificationInfo(knowledge.name)), similar, similar_note: "⚠ 비슷한 기존 지식이 있습니다(유사도순). 별개 주제가 아니라면 새로 만들지 말고 기존을 갱신하거나 supersedes 로 대체하세요 — 다음부터는 저장 전 knowledge_similar 로 먼저 확인하세요." };
+          return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...capped, ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...(await classificationInfo(knowledge.name)), similar, similar_note: "⚠ 비슷한 기존 지식이 있습니다(유사도순). 별개 주제가 아니라면 새로 만들지 말고 기존을 갱신하거나 supersedes 로 대체하세요 — 다음부터는 저장 전 knowledge_similar 로 먼저 확인하세요." };
         }
       }
-      return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...(await classificationInfo(knowledge.name)) };
+      return { knowledge, ...visInfo, ...seedSyncWarning(knowledge.name), ...capped, ...(gateInfo ? { gate: gateInfo } : {}), ...wl, ...(await classificationInfo(knowledge.name)) };
     }
 
     // ② 기존 지식 수정 — 라이브(active) 대상일 때만 게이트(pending 초안 다듬기는 그대로 통과).
@@ -221,6 +249,7 @@ export const knowledgeSave: Capability = {
       return {
         knowledge: null,
         ...seedSyncWarning(before.name),
+        ...capped,
         gate: {
           action: "stage", state: "proposed", revision_id: revision.id, rule_id: gate.rule_id,
           note: "수정 제안으로 접수됐습니다 — 라이브 본문은 아직 바뀌지 않았습니다(사람이 승인해야 반영). 같은 지식을 다시 저장하면 이 제안이 갱신됩니다.",
@@ -242,6 +271,7 @@ export const knowledgeSave: Capability = {
       return {
         ...withBody(knowledge),
         ...seedSyncWarning(knowledge.name),
+        ...capped,
         ...wl,
         gate: {
           action: "review", state: "applied_pending_review", revision_id: revision.id, rule_id: gate.rule_id,
@@ -249,7 +279,7 @@ export const knowledgeSave: Capability = {
         },
       };
     }
-    return { ...withBody(knowledge), ...seedSyncWarning(knowledge.name), ...wl, ...(await classificationInfo(knowledge.name)) };
+    return { ...withBody(knowledge), ...seedSyncWarning(knowledge.name), ...capped, ...wl, ...(await classificationInfo(knowledge.name)) };
   },
 };
 
@@ -292,6 +322,93 @@ export const knowledgeSetLifecycle: Capability = {
     }
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     return { knowledge: await setKnowledgeLifecycle(input.name, input.lifecycle, writeCtx) };
+  },
+};
+
+// 제목만 갱신(#1442) — knowledge_save 는 body_md 가 필수라 제목 한 줄을 고치는 데도 전문을 되보내야 했다.
+//  그건 소프트캡이 없애려던 바로 그 재전송이라(제목이 잘렸다고 알려주면서 고치는 길은 전문 재전송뿐인 모순)
+//  set_lifecycle·set_wiki·move 와 같은 경량 메타 툴로 뒀다.
+//  ⚠ 그 둘과 달리 **인입 허용선 게이트(#783)를 탄다.** title 은 사람이 읽고 검색·주입에 나가는 내용이라,
+//   게이트를 안 태우면 "본문 수정은 검토 대기인데 제목은 자유롭게 바꿈"이라는 우회로가 생긴다.
+//   stage 일 때 제안의 next.body_md 는 **서버가 DB 에서 읽어** 채운다 — 호출자가 전문을 실을 이유가 없다(이 툴의 존재 이유).
+const KSET_CAPS = SOFT_CAPS.knowledge_set_title;
+const knowledgeSetTitleInput = {
+  name: z.string().min(1).max(64).describe("제목을 고칠 지식 이름"),
+  title: z.string().min(1).describe(`새 제목 — 한 줄 라벨(문서의 논지·범위를 담되 문단이 아니다). ${softCapHint(KSET_CAPS.title)}`),
+  change_note: z.string().optional()
+    .describe(`#968 변경 요약 — 무엇을·왜 바꾸는지 1~2문장(검토 카드·변화 기록에 그대로 표시된다). ${softCapHint(KSET_CAPS.change_note)}`),
+};
+type KnowledgeSetTitleInput = z.infer<z.ZodObject<typeof knowledgeSetTitleInput>>;
+export const knowledgeSetTitle: Capability = {
+  name: "knowledge_set_title",
+  title: "지식 제목 갱신",
+  description:
+    "기존 지식의 **제목만** 바꾼다(본문 불변). knowledge_save 는 body_md 가 필수라 제목 한 줄을 고치려면 전문을 되보내야 하는데, " +
+    "이 툴은 name+title 만 받으므로 본문을 컨텍스트에 실을 필요가 없다 — **knowledge_save 응답에 capped(제목이 잘렸다)가 왔을 때 쓰라고 만든 경로다**(#1442). " +
+    "제목은 검색·주입에 나가는 내용이라 version 이 올라가고 임베딩도 다시 계산된다(뷰 설정 토글과 다른 클래스). " +
+    "조직이 '에이전트 지식 검토'를 켜 두면 이 변경도 게이트를 탄다 — 응답 gate 가 결과를 알려준다(pending 제안 접수 / 반영 후 사후검토). " +
+    "제목을 아예 비우거나 본문·분류를 함께 고치려면 knowledge_save 를 쓰라.",
+  scope: "memory",
+  input: knowledgeSetTitleInput,
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/knowledge/:name/title"],
+      parse: (req) => {
+        const b = (req.body ?? {}) as Record<string, unknown>;
+        const title = String(b.title ?? "").trim();
+        if (!title) throw new HttpError(400, "title 이(가) 필요합니다");
+        return {
+          name: String(req.params?.name ?? ""), title,
+          change_note: b.change_note ? String(b.change_note) : undefined,
+        };
+      } }],
+  },
+  handler: async (input: KnowledgeSetTitleInput, user: LivelyUser, ctx?: CapabilityCtx) => {
+    const capped = applySoftCaps("knowledge_set_title", input, KSET_CAPS);
+    await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);
+    // 게이트는 knowledge_save 와 같은 함수로 판정한다(같은 '기존 지식 수정'이므로 같은 규칙을 받아야 한다).
+    const gate = await resolveKnowledgeGate({ name: input.name }, ctx);
+    if (gate.isCreate || !gate.before) {
+      throw new HttpError(404, `지식 '${input.name}' 없음 — 제목 갱신은 기존 지식에만 됩니다(신규는 knowledge_save).`);
+    }
+    if (gate.update === "drop") {
+      throw new HttpError(403, "인입 허용선 정책상 이 지식은 수정할 수 없습니다(drop) — 관리탭 '인입 허용선'에서 규칙을 확인하세요.");
+    }
+    // 검토 대기(staged) 제안이 있으면 거부 — 라이브 제목을 지금 바꿔도 그 제안이 승인되는 순간 제안의 제목으로
+    //  덮여 사라진다(조용한 유실). append 가 같은 이유로 409 하는 것과 동형 가드.
+    const staged = await pendingStagedRevisionId(gate.before.name);
+    if (staged) {
+      throw new HttpError(409, `이 지식엔 검토 대기 중인 수정 제안(#${staged})이 있어 제목 갱신이 허용되지 않습니다 — 사람이 승인/반려한 뒤 다시 시도하세요(지금 바꾸면 검토 결과에 덮여 사라집니다).`);
+    }
+    const before = gate.before;
+    const revisionInput = {
+      name: before.name,
+      base: { version: before.version, title: before.title, body_md: before.body_md, confidence: before.confidence },
+      // 본문은 그대로 유지된다 — before.body_md(서버가 DB 에서 읽은 값)를 그대로 next 로 넘긴다.
+      //  승인 시 applyRevisionBody 가 전문 교체라, 여기에 빈 값이나 조각을 넣으면 문서가 날아간다.
+      next: { title: input.title, body_md: before.body_md ?? "", summary: null, type: before.type ?? null },
+      proposed_by: ctx?.actor ?? user?.userId ?? null, actor_kind: gate.actor_kind, agent: gate.agent, rule_id: gate.rule_id,
+      note: input.change_note ?? null,
+    };
+    if (gate.update === "stage") {
+      const revision = await proposeRevision({ ...revisionInput, mode: "staged" });
+      return {
+        knowledge: null, ...capped,
+        gate: { action: "stage", state: "proposed", revision_id: revision.id, rule_id: gate.rule_id,
+          note: "제목 변경이 수정 제안으로 접수됐습니다 — 라이브 제목은 아직 그대로입니다(사람이 승인해야 반영)." },
+      };
+    }
+    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    const knowledge = await setKnowledgeTitle(before.name, input.title, writeCtx);
+    if (gate.update === "review") {
+      const revision = await proposeRevision({ ...revisionInput, mode: "applied" });
+      return {
+        knowledge, ...capped,
+        gate: { action: "review", state: "applied_pending_review", revision_id: revision.id, rule_id: gate.rule_id,
+          note: "제목이 반영됐고(라이브), 사람 검토 큐에 diff 가 적재됐습니다 — 검토에서 되돌려질 수 있습니다." },
+      };
+    }
+    return { knowledge, ...capped };
   },
 };
 
@@ -391,7 +508,9 @@ export const knowledgeMove: Capability = {
 };
 
 export const authoringCapabilities: Capability[] = [
-  knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete,
+  // #1442 knowledgeSetTitle 은 **맨 뒤**에 붙인다 — 앞에 끼우면 기존 op 들의 등록 순서(= tools/list 순 ·
+  //  REST 마운트 순 · 표면 스냅샷)가 통째로 밀린다. 새 op 추가만이 표면 변화이도록 자리를 고른다.
+  knowledgeSave, knowledgeSetLifecycle, knowledgeSetWiki, knowledgeDelete, knowledgeSetTitle,
 ];
 // #592 트리 이동 — 원본 등록 배열에서 **맨 뒤**(다른 :name 하위 경로들 뒤)였다. 도메인은 저작이지만
 //  등록 순서(= tools/list 순 · REST 마운트 순 · 표면 스냅샷)를 바꾸지 않으려 자리를 지켜 따로 내보낸다.

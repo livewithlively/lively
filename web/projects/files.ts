@@ -149,7 +149,9 @@ function openPasteDialog(imgs, destLabel, onConfirm) {
 }
 
 // 공유 폴더 '전체 보기' — 넓은 팝업에 일반 파일 목록(행 단위)으로 전부 표시. 폴더 탐색·파일 열기 가능.
-function openFolderGrid(id, startPath, base) {
+//  shareBase = 이 프로젝트 폴더의 공유 루트 기준 경로(project.folder) — 행마다 [🔗 링크 복사]를 그리는 좌표(#1436).
+//   없으면 그 버튼을 안 그린다(files-cards.projShareRel).
+function openFolderGrid(id, startPath, base, shareBase?) {
   const B = base || '/api/ui/projects/';
   const st = { path: startPath || '', q: '' };
   let lastFolderItems: any[] = [];   // 현재 폴더(검색결과 아님) 목록 — 업로드 덮어쓰기 사전확인용(#877). 검색 중이어도 실제 업로드 대상 폴더 기준으로 판정.
@@ -234,7 +236,7 @@ function openFolderGrid(id, startPath, base) {
       el('span', { class: 'proj-file-lacts' }));
     if (data.search !== undefined) {
       crumb.replaceChildren(el('span', { text: '“' + data.search + '” 검색 — ' + items.length + '건' }));
-      const rows = items.map((it) => projFileRowEl(id, it, it.path, (t) => { st.q = ''; searchIn.value = ''; st.path = t; load(); }, load, B));
+      const rows = items.map((it) => projFileRowEl(id, it, it.path, (t) => { st.q = ''; searchIn.value = ''; st.path = t; load(); }, load, B, shareBase));
       listBox.replaceChildren(head, ...(rows.length ? rows : [el('div', { class: 'empty', text: '일치하는 파일이 없어요.' })]));
       return;
     }
@@ -245,7 +247,7 @@ function openFolderGrid(id, startPath, base) {
     if (data.path) rows.push(el('div', { class: 'proj-file-lrow', onclick: () => { st.path = data.parent || ''; load(); } },
       el('span', { class: 'proj-file-lic', text: '↩' }), el('span', { class: 'proj-file-lnm', text: '상위 폴더' }),
       el('span', { class: 'proj-file-lsz' }), el('span', { class: 'proj-file-ldt' }), el('span', { class: 'proj-file-lacts' })));
-    for (const it of items) rows.push(projFileRowEl(id, it, join(st.path, it.name), (t) => { st.path = t; load(); }, load, B));
+    for (const it of items) rows.push(projFileRowEl(id, it, join(st.path, it.name), (t) => { st.path = t; load(); }, load, B, shareBase));
     listBox.replaceChildren(head, ...(rows.length ? rows : [el('div', { class: 'empty', text: '빈 폴더입니다.' })]));
   }
 }

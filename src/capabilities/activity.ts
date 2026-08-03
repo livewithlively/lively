@@ -8,6 +8,8 @@ import { HttpError } from "./rest-util.js";
 import { canAttach, sessionWriteCap } from "../terminal/terminal-sessions.js"; // #852 세션 귀속 검증 — 그 세션에 들어갈 수 있는 사람만 그 세션으로 기록
 import { canSeeProjectRow, hiddenProjects } from "../v6/visibility.js"; // #1291 프로젝트 공개범위
 import { PUBLIC_VIEWER } from "../v6/knowledge-store.js";
+// #1442 소프트캡 — title·summary 길이 초과가 body(최대 20,000자)까지 함께 튕기지 않게 한다(서버 조정 + 응답 capped).
+import { SOFT_CAPS, applySoftCaps, softCapHint } from "./soft-cap.js";
 
 // activity_log REST(#533) parse 가 검증하는 type 화이트리스트 — zod input enum 과 동일(MCP/REST 파리티).
 //  REST 는 zod 를 안 타므로 parse 에서 필수·enum 을 직접 게이트한다(knowledge_save 파스와 동형).
@@ -30,8 +32,10 @@ const activityLog: Capability = {
   scope: "memory",
   input: {
     type: z.enum(["feature", "fix", "decision", "docs", "research", "review", "chore", "other"]).describe("작업 유형(성격): feature·fix·decision·docs·research·review·chore·other. 커밋 여부는 유형이 아니라 commit_sha 로 표현"),
-    title: z.string().min(1).max(500).describe("기술 상세 제목(펼침에 표시 — 정확한 기술 용어 OK). 얇게 — 실질 내용은 ku_refs 로 참조"),
-    summary: z.string().max(120).optional().describe("작업현황 겉(접힘)에 보일 짧은 라벨 '중분류 - 내용' 형식(예: '웹 페이지 수정 - 작업현황 UI 개선', '배포 - 도메인 맵 탭'). 한 문장 설명이 아니라 라벨처럼 짧게(기술용어·약어 지양). 상세 설명은 title/body 에. 생략 시 title 로 폴백"),
+    // #1442 title·summary 엔 zod .max() 를 두지 않는다 — SDK 가 핸들러 앞에서 검증해 같은 호출의 body 까지
+    //  통째로 튕기고 그 실패는 mcp_call_log 에도 안 남는다. 상한은 describe 로 광고하고 조정은 핸들러가 한다.
+    title: z.string().min(1).describe(`기술 상세 제목(펼침에 표시 — 정확한 기술 용어 OK). 얇게 — 실질 내용은 ku_refs 로 참조. ${softCapHint(SOFT_CAPS.activity_log.title)}`),
+    summary: z.string().optional().describe(`작업현황 겉(접힘)에 보일 짧은 라벨 '중분류 - 내용' 형식(예: '웹 페이지 수정 - 작업현황 UI 개선', '배포 - 도메인 맵 탭'). 한 문장 설명이 아니라 라벨처럼 짧게(기술용어·약어 지양). 상세 설명은 title/body 에. 생략 시 title 로 폴백. ${softCapHint(SOFT_CAPS.activity_log.summary)}`),
     body: z.string().max(20000).optional().describe("짧은 메모(선택)"),
     project_id: z.number().int().positive().optional().describe("이 작업이 진척시킨 프로젝트(task/subtask) id(project_list_v6/task_create_v6). 미존재 id 면 무시"),
     ku_refs: z.array(z.object({
@@ -94,6 +98,8 @@ const activityLog: Capability = {
       } }],
   },
   handler: async (input: any, user, ctx) => {
+    // #1442 짧은 메타 필드 조정 — store 에 넘기기 전에(MCP·REST 공통 지점). 보고는 응답 capped 로.
+    const capped = applySoftCaps("activity_log", input, SOFT_CAPS.activity_log);
     const authorPerson = ctx?.actor ?? user?.userId ?? null;
     // 작업자(AI) — 게이트웨이가 접속 신원(User-Agent)으로 식별한 값이 권위(프로젝트 #182). 자기보고(input.author_agent)는
     //  게이트웨이가 식별 못 했을 때만 폴백(예: UA 없는 경로). 게이트웨이 값이 있으면 그게 이긴다.
@@ -138,7 +144,7 @@ const activityLog: Capability = {
       external_url: input.external_url ?? null, external_instance: input.external_instance,
       should_review: input.should_review, is_review: input.is_review,
     }, authorPerson);
-    return { ok: true, ...res };
+    return { ok: true, ...res, ...capped };
   },
 };
 

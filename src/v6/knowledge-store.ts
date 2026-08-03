@@ -451,6 +451,24 @@ export async function setKnowledgeWiki(name: string, isWiki: boolean, ctx?: Writ
   return after;
 }
 
+// 제목만 갱신(#1442) — 본문 불변. `knowledge_save` 는 body_md 가 필수라 제목 한 줄을 고치려면 전문을
+//  되보내야 했는데, 그건 소프트캡이 없애려던 바로 그 재전송이다(제목이 잘렸다고 알려주면서 고치는 길은
+//  전문 재전송뿐인 모순). 그래서 제목만 바꾸는 경로를 둔다.
+//  ⚠ is_wiki·props_ui 같은 '뷰 설정'과 **다른 클래스**다 — title 은 사람이 읽고 검색·주입에 나가는 내용이라
+//   upsertKnowledge 와 동형으로 version+1·updated_at 을 올린다.
+//  ⚠ 임베딩 재계산을 반드시 예약한다: embeddingInputText 의 첫 파트가 title 이라(embedding-provider.ts)
+//   이걸 빠뜨리면 제목을 바꿔도 벡터는 옛 제목으로 남아 의미검색이 조용히 어긋난다(upsert 경로와 같은 규율).
+export async function setKnowledgeTitle(name: string, title: string, ctx?: WriteCtx): Promise<KnowledgeRow> {
+  const before = await one(itemsPool, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
+  if (!before) throw new Error(`지식 '${name}' 없음`);
+  const after = await one(itemsPool,
+    `UPDATE knowledge SET title=$2, version=version+1, updated_at=now(), updated_by=$3
+      WHERE name=$1 RETURNING ${K_COLS}`, [name, title, ctx?.actor ?? null]);
+  await auditKnowledge(name, "set_title", before, after, ctx);
+  if ((before as { title?: string | null }).title !== title) await markEmbeddingPending(KNOWLEDGE_TARGET, name);
+  return after as KnowledgeRow;
+}
+
 // ── #592 항목 단위 속성 노출 오버라이드(props_ui) — { show:[키], hide:[키], full_width:bool } 부분 병합. ──
 //  키에 null 을 명시하면 그 키 제거, undefined(미전송)는 미변경. 전부 비면 컬럼 NULL 로 환원.
 //  뷰 설정은 내용이 아니다 — version 불변(setKnowledgeWiki 참조), updated_at 도 불변(목록 최신순 정렬을

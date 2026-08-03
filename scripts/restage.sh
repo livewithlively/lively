@@ -80,8 +80,14 @@ git rev-parse --verify --quiet "${REMOTE}/${STAGE}" >/dev/null || die "${REMOTE}
 BASE_SHA="$(git rev-parse "${REMOTE}/${BASE}")"
 STAGE_SHA="$(git rev-parse "${REMOTE}/${STAGE}")"   # ③ lease 의 기준값 — 여기서 고정한다.
 
-if [[ "$BASE_SHA" == "$STAGE_SHA" ]]; then
+# stage 가 이미 base 와 같으면 **되돌릴 것**이 없다 — 단 인자로 브랜치를 받았다면 얘기가 다르다.
+#  ⚠ 종전엔 여기서 무조건 exit 0 이라, `restage.sh project/X` 가 "재조립할 것이 없습니다" 한 줄과 함께
+#   **조용히 무시**됐다. 요청한 사람은 성공으로 읽는다(종료코드 0). 이 상태는 흔하다: 방금 재조립해
+#   stage 를 비운 직후, 또는 stage 를 main 으로 리셋한 뒤 브랜치 하나만 얹으려는 경우.
+#   '얹을 것이 있는데 안 얹는' 것은 이 스크립트가 막으려는 유실과 같은 부류다.
+if [[ "$BASE_SHA" == "$STAGE_SHA" && ${#EXPLICIT_TARGETS[@]} -eq 0 ]]; then
   say "✓ ${STAGE} = ${BASE} (동일) — 재조립할 것이 없습니다."
+  say "  (특정 브랜치를 얹으려면 인자로 지정하세요: scripts/restage.sh <브랜치>)"
   exit 0
 fi
 

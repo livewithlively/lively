@@ -333,7 +333,7 @@ async function renderProjectV2Detail(view, idStr) {
     projectKnowledgeSection(id, p, reload),
     pjvTasksSection(id, p.tasks || [], members, reload, p.fields || []),
     projectTerminalSection(id, members, meId, V6_BASE, p.name, p),
-    projectFolderSection(id, V6_BASE),
+    projectFolderSection(id, V6_BASE, p.folder),   // #1436 — p.folder = 공유 루트 기준 폴더 경로(공유 링크 좌표)
     projectTimelineSection(id, members, V6_BASE));
   // 인라인 편집 재렌더면 리빌 애니메이션 대신 스크롤 복원(전면 재애니메이션도 '새로고침'처럼 보임) (#358)
   if (keepY != null) pjvRestoreScroll(keepY, keepHost); else applyReveal(Array.from(view.children).slice(1));

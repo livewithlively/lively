@@ -13,7 +13,6 @@ import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
-import { getOrgProfile } from "../org/store.js";
 import { createNode, deleteNode, getNode, listNodes, rotateNodeToken, setNodeEnabled, type OrgNode } from "./store.js";
 import { liveNodes } from "./registry.js";
 import { agentIsLatest } from "./protocol.js";
@@ -25,16 +24,14 @@ const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as 
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 const isAdmin = (u: LivelyUser): boolean => !!u.scopes?.includes("admin");
 
-async function gatewayUrlHint(req: express.Request): Promise<string> {
-  const p = await getOrgProfile().catch(() => null);
-  if (p?.gateway_url) return p.gateway_url.replace(/\/+$/, "");
-  return `${req.protocol}://${req.get("host") ?? "localhost:8080"}`;
-}
-
-function installHint(_gw: string, _token: string, id: string): string {
+function installHint(id: string): string {
   // 정본(단일 번들 상시화): `lively` 설치 + `lively login`(멤버 인증) 후 이 PC 를 노드로 상시 연결.
   //  `lively node` 는 멤버 로그인으로 self-register(게이트웨이 주소는 ~/.lively/gateway-url) 하므로,
   //  응답의 노드 토큰(token)은 구 deploy/node/install.sh(헤드리스 토큰 주입) 경로에서만 쓴다.
+  //  ⚠ 그래서 이 문자열엔 게이트웨이 base 가 안 들어간다 — 종전엔 base 를 구해 넘겼는데 여기서 쓰지 않아
+  //   노드 등록·회전마다 org 프로필을 읽고 버리기만 했다(게다가 gateway-url.ts 단일 소스를 우회한 자체
+  //   정규화라 '/mcp' 를 못 벗었다). 다시 필요해지면 gatewayUrlForRequest(단일 소스)를 쓸 것 — 여기서
+  //   정규화를 재구현하지 말 것.
   return `lively node --daemon --id ${id}`;
 }
 
@@ -97,10 +94,9 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
       { id: String(b.id ?? b.name ?? ""), name: String(b.name ?? b.id ?? ""), kind, owner: me },
       me,
     );
-    const gw = await gatewayUrlHint(req);
     logger.info({ node: node.id, kind, owner: me }, "노드 등록");
     res.setHeader("Cache-Control", "no-store");
-    res.json({ node: toView(node, new Map()), token, install: installHint(gw, token, node.id) });
+    res.json({ node: toView(node, new Map()), token, install: installHint(node.id) });
   }));
 
   const requireOwn = async (req: express.Request): Promise<OrgNode> => {
@@ -115,9 +111,8 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
   app.post("/api/ui/nodes/:id/rotate", auth, wrap(async (req, res) => {
     const n = await requireOwn(req);
     const { node, token } = await rotateNodeToken(n.id, idOf(userOf(req)));
-    const gw = await gatewayUrlHint(req);
     res.setHeader("Cache-Control", "no-store");
-    res.json({ node: toView(node, new Map()), token, install: installHint(gw, token, node.id) });
+    res.json({ node: toView(node, new Map()), token, install: installHint(node.id) });
   }));
 
   // 활성/비활성 — 비활성은 즉시 연결 차단(authNodeToken 이 enabled 를 본다 — 다음 재연결부터. 현 연결은 heartbeat 로 소멸).
