@@ -7,7 +7,8 @@
 //     그 결과는 AI 가 org_manager_finding_report 도구로 되돌려 적는다.
 import { itemsPool } from "../../db/client.js";
 import {
-  getManager, upsertFinding, recordManagerRun, needsLlm, MANAGER_KIND_LABEL, type ManagerRow,
+  getManager, upsertFinding, recordManagerRun, needsLlm, resolveUnseenFindings,
+  MANAGER_KIND_LABEL, type ManagerRow,
 } from "../store/managers.js";
 import {
   detectMismatch, detectOutdated, findContradictionCandidates, findCodeDriftCandidates,
@@ -22,7 +23,7 @@ import { logger } from "../../log.js";
 
 export interface ManagerRunResult {
   manager: string; kind: string;
-  found?: number; created?: number; repeated?: number; applied?: number;
+  found?: number; created?: number; repeated?: number; applied?: number; resolved?: number; truncated?: string;
   candidates?: number; enqueued?: boolean; task_id?: number;
   skipped?: string; error?: string;
 }
@@ -45,6 +46,10 @@ export async function runManager(
           ? await detectStaleRefs(m, m.batch_size, await repoIndexForAllRepos())
           : await detectOutdated(m, m.batch_size);
 
+      // 이 시각 이전에 마지막으로 본 발견은 '이번에 못 본 것'이다 — 아래 전수 판정일 때만 닫는 데 쓴다.
+      //  upsertFinding 이 last_seen_at=now() 로 올리므로, 이 스냅샷보다 오래된 것이 곧 미발견이다.
+      const sweepStart = (await itemsPool.query(`SELECT now() AS t`)).rows[0].t as string;
+
       let created = 0, repeated = 0, applied = 0;
       for (const f of findings) {
         const r = await upsertFinding(m.id, m.kind, f);
@@ -55,7 +60,14 @@ export async function runManager(
           if (await applyAction(f.proposed_action, `manager:${m.key}`)) applied++;
         }
       }
-      const summary = { found: findings.length, created, repeated, applied };
+      // **전수 실행이었을 때만** 미발견을 닫는다. batch_size 에 닿았다면 잘렸을 수 있고, 그때 닫으면
+      //  '배치 밖이라 못 본 것'을 '고쳐진 것'으로 만든다(조용한 손실). 잘렸으면 그 사실을 요약에 남긴다.
+      const truncated = findings.length >= m.batch_size;
+      const resolved = truncated ? 0 : await resolveUnseenFindings(m.id, sweepStart, `manager:${m.key}`);
+      const summary = {
+        found: findings.length, created, repeated, applied, resolved,
+        ...(truncated ? { truncated: `배치 한도(${m.batch_size})에 닿아 전수가 아닙니다 — 미발견 자동 해소를 건너뜁니다. 한도를 올리거나 스코프를 좁히세요.` } : {}),
+      };
       await recordManagerRun(m.id, "ok", summary);
       return { ...base, ...summary };
     }

@@ -171,6 +171,34 @@ export async function resolveFinding(
   return (r.rows[0] as FindingRow) ?? null;
 }
 
+/**
+ * **이번 전수 실행에서 다시 발견되지 않은 열린 발견을 닫는다**(#1419 도그푸드 2차).
+ *
+ * ⚠ 왜 필요한가 — 이게 없으면 **큐가 고쳐서 줄어들지 않는다.** 사람이 문서를 고치면 다음 실행에서
+ *  안 잡히기만 하고 발견은 `open` 으로 영원히 남는다. 그러면 큐가 단조증가하고 '할 일'이라는 뜻을
+ *  잃는다 — 자동 관리의 가치가 정확히 여기서 무너진다. 실측에서도 판정기를 고쳐 유령 6건이 더 이상
+ *  생성되지 않게 됐는데 큐엔 그대로 남아 있었다.
+ *
+ * ⚠⚠ **전수 실행일 때만 부른다.** batch_size 로 잘린 실행에서 부르면 '배치 밖이라 못 본 것'을
+ *  '고쳐진 것'으로 닫아 버린다 — 조용한 데이터 손실이다. 호출자가 truncated 여부를 판단한다.
+ *
+ * rejected 는 건드리지 않는다(반려 영속 — 사람의 '오탐이다'가 최신 판단이다).
+ * accepted 는 닫는다(고치겠다고 했고 이제 안 잡히니 고쳐진 것이다).
+ */
+export async function resolveUnseenFindings(
+  managerId: number, seenSince: string, actor = "manager:sweep",
+): Promise<number> {
+  const r = await itemsPool.query(
+    `UPDATE org_manager_finding
+        SET state='resolved', resolved_at=now(), resolved_by=$3,
+            resolution='이번 전수 판정에서 다시 발견되지 않았습니다 — 고쳐진 것으로 봅니다.'
+      WHERE manager_id=$1
+        AND state IN ('open','accepted')
+        AND last_seen_at < $2`,
+    [managerId, seenSince, actor]);
+  return r.rowCount ?? 0;
+}
+
 export interface ManagerUpsertInput {
   id?: number; key?: string; label?: string | null; kind?: ManagerKind;
   enabled?: boolean; priority?: number;
