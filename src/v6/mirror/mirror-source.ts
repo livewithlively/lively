@@ -4,6 +4,7 @@ import { redactDeep, redactString } from "../../org/ingest/redact.js";
 import { normalizeExternalInstance } from "../../org/ingest/external-identity.js";
 import type { RawItem } from "../../items/store.js";
 import { auditConnector } from "./mirror-common.js";
+import { stampSourceVisibility } from "../source-vis-policy.js";
 
 // system → source.kind 매핑(표준 kind 준수 — SOURCE_KINDS). 그 외는 'other'(raw 에 system 보존).
 function sourceKindOf(system: string): string {
@@ -79,6 +80,14 @@ export async function mirrorSourceV6(client: pg.PoolClient, it: RawItem, system:
      contentChanged],
   );
   const id = (r.rows[0] as { id: number }).id;
+
+  // 공개범위(#1291 v4) — 커넥터별 정책으로 **태어날 때** 정한다. 자료의 생산자는 사람이 아니라 커넥터라
+  //  개별 잠금이 현실적이지 않다(슬랙만 1만건 규모). 채널 좌표는 fields 에 접힌 값을 그대로 쓴다.
+  //  ⚠ INSERT 에만 — 재싱크마다 덮으면 사람이 손으로 조정한 공개범위가 매번 되돌아간다.
+  if (isInsert) {
+    await stampSourceVisibility(client, id, system,
+      [it.container_ref, it.container_name, fields.container_ref as string, fields.container_name as string]);
+  }
 
   if (contentChanged) {
     const beforeSnap = isInsert ? null : { id, title: prevRow!.title, body_md: prevRow!.body_md };

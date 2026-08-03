@@ -285,3 +285,19 @@
 .gloss-code { font-size: 12px; color: var(--muted); font-family: ui-monospace, Menlo, monospace; }
 .gloss-desc { font-size: 13.5px; color: var(--ink-sub); line-height: 1.5; margin-top: 1px; }
 
+
+/* #1291 v4 관리탭 ▸ 자료 공개범위 — 커넥터별 규칙 목록 */
+.svp-list { display: flex; flex-direction: column; gap: 2px; margin: 12px 0; }
+.svp-row { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-radius: 8px; }
+.svp-row + .svp-row { border-top: 1px solid var(--line, rgba(128,128,128,.18)); }
+.svp-row:hover { background: var(--hover, rgba(128,128,128,.06)); }
+.svp-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.svp-scope { font-size: 13px; }
+.svp-who { font-size: 12px; color: var(--warn-fg, #b26a00); }
+.svp-who.svp-open { color: inherit; opacity: .55; }
+.svp-row-actions { display: flex; gap: 6px; flex: none; }
+.svp-actions { display: flex; gap: 8px; margin-top: 14px; }
+.svp-warn { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 8px; margin-bottom: 12px;
+  background: var(--warn-bg, rgba(255,176,32,.12)); border: 1px solid var(--warn-line, rgba(255,176,32,.35)); }
+.svp-warn span { font-size: 13px; opacity: .85; }
+.svp-dry { margin: 12px 0; }

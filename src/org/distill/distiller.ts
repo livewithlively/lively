@@ -12,6 +12,8 @@
 // ⚠ org_ingest_policy(#638)와 직교 — 저건 '지식이 되고 나서 auto/confirm/drop 어디로 보내나'(허용선 밸브),
 //  이건 '무엇을 집어 무슨 기준·형식으로 증류하나'(생산 라인). 증류기 산출도 그 밸브를 그대로 탄다.
 import { itemsPool, q } from "../../db/client.js";
+import { sourceVisSql, resolveSourceViewer } from "../../v6/source-store.js";
+import { PUBLIC_VIEWER } from "../../v6/visibility.js";
 
 export interface DistillerRow {
   id: number;
@@ -244,8 +246,16 @@ function unprocessedSql(d: DistillerRow, p: Params, alias = "s"): string {
 //   · 상한은 둘이다 — batch_size(스레드 수)와 batch_max_msgs(메시지 수). 최근순으로 누적하다 먼저 걸리는 데서 멈춘다.
 //     ⚠ **첫 스레드만은 메시지 상한을 넘어도 통째로 담는다** — 스레드를 자르면 대화가 끊겨 증류 자체가 불가능하다.
 //     171메시지짜리 스레드는 그 하나만 처리하고 나머지는 다음 배치로 간다.
-export function buildInboxQuery(d: DistillerRow, all: DistillerRow[], limitThreads?: number): { sql: string; values: unknown[] } {
+export function buildInboxQuery(d: DistillerRow, all: DistillerRow[], limitThreads?: number, viewer?: string | null): { sql: string; values: unknown[] } {
   const p = new Params();
+  // 공개범위(#1291 v4) — **인박스는 요청자가 볼 수 있는 자료만** 담는다.
+  //  이 쿼리의 결과는 그대로 프롬프트 본문이 되고(buildDistillerPrompt), 그 프롬프트는 requester 신원으로 도는
+  //  헤드리스 세션에 들어간다. 필터가 없으면 대상이 아닌 사람의 세션에 잠긴 원문이 흘러들고, 그 세션이 그걸
+  //  공개 지식으로 되뱉는다 — v2 에서 admin 우회를 없앤 바로 그 위험이다.
+  //  요청자가 없는 폴백 증류기는 PUBLIC_VIEWER = 전원 공개 자료만(잠긴 자료는 대상인 사람이 요청자여야 다룬다).
+  //  p.add 는 "$N" 문자열을 주고 sourceVisSql 은 자리번호(숫자)를 받는다 — 값을 넣고 그 길이를 쓴다.
+  let visWhere = "TRUE";
+  if (viewer != null) { p.add(viewer); visWhere = sourceVisSql(p.values.length); }
   const where = distillerExclusiveSql(d, higherThan(d, all), p);
   const pre = prefilterSql(d, p);
   const nThreads = Math.min(Math.max(1, limitThreads ?? d.batch_size ?? 3), 200);
@@ -256,6 +266,7 @@ export function buildInboxQuery(d: DistillerRow, all: DistillerRow[], limitThrea
         FROM source s
         WHERE s.lifecycle='active'
           AND ${unprocessedSql(d, p)}
+          AND ${visWhere}
           AND ${where}${pre ? "\n          AND " + pre : ""}`;
   // 스레드를 최근 활동순으로 누적하다 스레드 상한·메시지 상한 중 먼저 걸리는 데서 멈춘다.
   //  `rn = 1` 예외가 핵심 — 첫 스레드는 메시지 상한을 넘어도 담는다(스레드를 자르면 대화가 끊겨 증류가 안 된다).
@@ -280,7 +291,9 @@ export function buildInboxQuery(d: DistillerRow, all: DistillerRow[], limitThrea
 
 // 이 증류기가 이번 배치에서 다룰 자료 목록 — **스레드 batch_size 개**의 미판정 자료(스레드째, 시간순).
 export async function listDistillerInbox(d: DistillerRow, all: DistillerRow[], limitThreads?: number): Promise<Record<string, unknown>[]> {
-  const { sql, values } = buildInboxQuery(d, all, limitThreads);
+  //  요청자 신원으로 필터한다 — 판정(축·긴급열람)은 async 라 여기서 하고, 빌더는 순수하게 둔다.
+  const viewer = await resolveSourceViewer(d.requester || PUBLIC_VIEWER);
+  const { sql, values } = buildInboxQuery(d, all, limitThreads, viewer);
   return q(itemsPool, sql, values);
 }
 
