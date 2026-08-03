@@ -129,7 +129,6 @@ function editorCard(d, rerender) {
     const S = 'width:100%;padding:7px 9px;font:inherit;box-sizing:border-box';
     // 한 줄 필드 — 라벨·설명·입력을 묶어 일관되게. 설명은 '왜 이 값을 정하나'를 말한다.
     const F = (label, hint, ctrl) => el('div', { style: 'margin:0 0 14px' }, el('div', { class: 'field-label', text: label }), hint ? el('p', { class: 'admin-hint', style: 'margin:2px 0 6px', text: hint }) : null, ctrl);
-    const group = (title, ...kids) => el('div', { style: 'margin:20px 0 0;padding-top:14px;border-top:1px solid var(--line,#e5e7eb)' }, el('h3', { class: 'ps-block-title', style: 'margin:0 0 12px', text: title }), ...kids);
     // 접이식 — 세부 옵션을 숨기되 막지는 않는다(커스텀 상한 없음).
     const fold = (title, ...kids) => {
         const box = el('div', { style: 'display:none;margin-top:10px' }, ...kids);
@@ -307,8 +306,6 @@ function editorCard(d, rerender) {
     const sectionInputs = {};
     const sectionsHost = el('div');
     const sectionsLoaded = { v: false };
-    // 프롬프트 조각 그룹 — 접혀 있고, 펼친 뒤 [지금 무엇이 집히는지 보기]를 누르면 기본값이 채워진다.
-    const sectionsGroup = el('details', { style: 'margin-top:10px' }, el('summary', { class: 'admin-hint', text: 'AI 에게 나갈 지시문 — 조각별로 고치기' }), el('p', { class: 'admin-hint', text: '기본값을 받아오려면 아래 [지금 무엇이 집히는지 보기]를 먼저 누르세요.' }), sectionsHost);
     function renderSections(views) {
         const rows = [];
         for (const v of (views || [])) {
@@ -320,21 +317,122 @@ function editorCard(d, rerender) {
         sectionsLoaded.v = true;
         sectionsHost.replaceChildren(el('p', { class: 'admin-hint', text: '비워 두면 코드 기본값이 나갑니다(제품이 개선되면 자동 반영). 내용을 쓰면 그 조각만 대체됩니다. 대상 자료 지정과 안전 문구는 바꿀 수 없어 여기 없습니다.' }), ...rows);
     }
+    // ── 반사판(우측) — "지금 이 설정이 무엇을 집는가"를 입력 즉시 보여준다 ──────────
+    //  종전 화면의 가장 큰 불편이 여기였다: 미리보기가 **저장된 값**만 읽고 폼 맨 아래에 나와서,
+    //  채널 하나 고치려면 저장→스크롤→확인을 반복해야 했다(새 증류기는 미리보기 자체가 거부됐다).
+    //  이제 입력이 바뀌면 draft 로 서버에 물어 오른쪽이 갱신된다 — 저장 없이. DB 는 안 건드린다.
+    const rBacklog = el('div', { class: 'mini-title', text: '—' });
+    const rFilter = el('p', { class: 'admin-hint', style: 'margin:2px 0 0' });
+    const rLoss = el('p', { style: 'margin:6px 0 0;font-size:12px' });
+    const rSample = el('div', { style: 'display:grid;gap:3px;margin-top:10px' });
+    const rPrompt = el('pre', { style: 'white-space:pre-wrap;font-size:11px;max-height:300px;overflow:auto;margin:6px 0 0' });
+    const rState = el('p', { class: 'admin-hint', style: 'margin:0', text: '설정을 바꾸면 여기가 갱신됩니다.' });
+    function paint(r) {
+        rState.textContent = '';
+        rBacklog.textContent = '집힐 자료 ' + Number(r.backlog || 0).toLocaleString() + '건';
+        const fi = r.filter_impact;
+        if (!fi) {
+            rFilter.textContent = '';
+            rLoss.replaceChildren();
+        }
+        else if (!fi.filtered) {
+            rFilter.textContent = '사전 필터 꺼짐 — 이 범위의 자료를 전부 AI에게 보냅니다.';
+            rLoss.replaceChildren();
+        }
+        else {
+            rFilter.textContent = '필터 통과 ' + Number(fi.pass_msgs).toLocaleString() + '건'
+                + (fi.pass_pct != null ? ' (' + fi.pass_pct + '%)' : '') + ' · 범위 전체 ' + Number(fi.msgs).toLocaleString() + '건';
+            // ⚠ 유실률이 이 화면의 핵심 숫자다 — 절감은 눈에 띄지만 유실은 안 보여주면 아무도 모른 채 지식을 버린다.
+            if (fi.loss_pct == null) {
+                rLoss.replaceChildren(el('span', { class: 'admin-hint', text: '이 범위엔 아직 지식이 된 스레드가 없어 유실률을 잴 수 없습니다.' }));
+            }
+            else {
+                const bad = fi.loss_pct > 5;
+                rLoss.replaceChildren(el('b', { style: 'color:' + (bad ? 'var(--danger,#c33)' : 'var(--ok,#2a7)'),
+                    text: (bad ? '⚠ ' : '✓ ') + '이미 지식이 된 스레드의 ' + fi.loss_pct + '% 가 이 필터에 걸러집니다' }), el('span', { class: 'admin-hint', text: ' (' + (fi.known_threads - fi.kept_known) + '/' + fi.known_threads + '건)' }), bad ? el('p', { class: 'admin-hint', style: 'margin:4px 0 0', text: '그만큼 앞으로 지식을 놓칩니다. AI에게 "이 증류기 사전 필터를 튜닝해줘"라고 하면 유실을 억제한 값을 실측으로 찾아줍니다.' }) : null);
+            }
+        }
+        rSample.replaceChildren();
+        for (const s of (r.sample || [])) {
+            rSample.append(el('div', { class: 'mini-meta' }, el('span', { class: 'pill', text: String(s.channel || s.kind) }), el('span', { text: ' ' + String(s.title || '(제목 없음)').slice(0, 70) })));
+        }
+        if (!(r.sample || []).length) {
+            rSample.append(el('p', { class: 'admin-hint', text: '지금 집히는 자료가 0건입니다 — 채널명 오타, 사전 필터가 과함, 또는 우선순위가 높은 증류기가 먼저 가져가는지 확인하세요.' }));
+        }
+        rPrompt.textContent = r.prompt || '';
+        if (r.sections)
+            renderSections(r.sections);
+    }
+    let seq = 0, timer = null;
+    async function refresh() {
+        const my = ++seq;
+        rState.textContent = '계산 중…';
+        try {
+            const body = { draft: collect(), limit: 8 };
+            if (!isNew)
+                body.key = d.key;
+            const r = await api('/api/ui/org/distillers/preview', { method: 'POST', body: JSON.stringify(body) });
+            if (my !== seq)
+                return; // 늦게 온 응답이 최신 결과를 덮지 않게
+            paint(r);
+        }
+        catch (e) {
+            if (my === seq) {
+                rState.textContent = '미리보기 실패: ' + e.message;
+            }
+        }
+    }
+    // 입력 변경 → 디바운스 → 갱신. 타이핑마다 서버를 때리지 않는다.
+    const onEdit = () => { clearTimeout(timer); timer = setTimeout(refresh, 600); };
+    card.addEventListener('input', onEdit);
+    card.addEventListener('change', onEdit);
+    const reflector = el('div', { class: 'card', style: 'margin:0;position:sticky;top:12px;align-self:start' }, el('div', { class: 'mini-meta', style: 'margin-bottom:6px' }, el('span', { class: 'pill', text: '지금 이 설정이' })), rBacklog, rFilter, rLoss, rState, rSample, el('details', { style: 'margin-top:10px' }, el('summary', { class: 'admin-hint', text: 'AI 에게 나갈 지시문 전문' }), rPrompt));
+    // ── 단계 탭(좌측) — 필드 20개를 한 화면에 세로로 쌓지 않는다 ──────────────────
+    const STEPS = [
+        { key: 'scope', label: '① 범위', hint: '어떤 자료를 이 증류기가 맡을지' },
+        { key: 'filter', label: '② 사전 필터', hint: 'AI에게 보내기 전에 서버가 걸러낼 기준' },
+        { key: 'what', label: '③ 기준·형식', hint: '무엇을 지식으로, 어떤 문서로' },
+        { key: 'run', label: '④ 실행', hint: '배치 크기·의뢰자·모델' },
+        { key: 'prompt', label: '⑤ 지시문', hint: 'AI에게 나갈 문장을 조각별로 손보기' },
+    ];
+    const panes = {};
+    const tabsRow = el('div', { style: 'display:flex;flex-wrap:wrap;gap:6px;margin:12px 0 4px' });
+    const paneHost = el('div', { style: 'margin-top:10px' });
+    const stepHint = el('p', { class: 'admin-hint', style: 'margin:0' });
+    function showStep(k) {
+        for (const s of STEPS) {
+            const on = s.key === k;
+            tabsRow.querySelector('[data-step="' + s.key + '"]')?.classList.toggle('active', on);
+        }
+        stepHint.textContent = (STEPS.find((s) => s.key === k) || STEPS[0]).hint;
+        paneHost.replaceChildren(panes[k]);
+    }
+    for (const s of STEPS) {
+        const b = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-step': s.key, text: s.label });
+        b.addEventListener('click', () => showStep(s.key));
+        tabsRow.append(b);
+    }
+    panes.scope = el('div', {}, F('자료 종류', '비우면 전체. 슬랙만 다루는 증류기면 slack 만 고르세요.', kindsWrap), F('대상 채널', '한 줄에 하나. 비우면 채널을 가리지 않습니다. 아래 목록에서 눌러 담으면 오타가 없습니다.', el('div', {}, incCh, chPick)), F('제외 채널', '알림봇·모니터링 채널처럼 지식화할 게 없는 곳을 빼세요. (이미 수집된 뒤라면 커넥터에서 막는 게 낫습니다 — 저장공간을 계속 먹습니다.)', excCh), el('label', { class: 'inline' }, botChk, el('span', { text: ' 봇이 쓴 메시지는 제외' })), fold('세부 조건(길이·기간)', F('본문 최소 길이', '이 길이보다 짧은 자료는 건너뜁니다. 0이면 제한 없음.', minIn), F('기간', '최근 며칠치만 다룰지. 비우면 과거 전체를 백필합니다.', lookIn)), fold('우선순위 — 다른 증류기와 겹칠 때', F('우선순위', '높을수록 먼저 가져갑니다. 한 자료는 우선순위가 높은 증류기 하나만 처리합니다. 낮은 값 + 넓은 범위 = 나머지를 받는 기본 라인(catch-all).', prioIn)));
+    panes.filter = el('div', {}, el('p', { class: 'admin-hint', style: 'margin:0 0 10px' }, el('span', { text: 'AI에게 보내기 ' }), el('b', { text: '전에' }), el('span', { text: ' 서버가 스레드를 걸러냅니다. 비워두면 필터가 꺼집니다(전부 보냄). 오른쪽에서 ' }), el('b', { text: '유실률' }), el('span', { text: '을 보며 정하세요 — 그게 앞으로 놓칠 지식의 비율입니다.' })), el('p', { class: 'admin-hint', style: 'margin:0 0 12px;padding:8px 10px;border-radius:6px;background:var(--bg-soft,#f6f7f9)' }, el('b', { text: '값을 감으로 정하지 마세요. ' }), el('span', { text: 'AI에게 "이 증류기 사전 필터를 튜닝해줘"라고 하면 실측으로 정합니다 — 이 채널에서 판별력 높은 단어가 무엇인지, 조합별 절감 대비 유실이 얼마인지 계산해 최적값을 넣어줍니다.' })), F('결정성 키워드 최소 등장', '아래 목록의 말이 스레드에 몇 번 나와야 하는지.', rDec), F('결정성 키워드 목록', '이 채널에서 실제로 쓰는 말. 실측상 "결정·장애" 같은 일반어보다 "할인일시납·플랫폼이용료" 같은 도메인 용어가 훨씬 잘 듣습니다. 많이 넣으세요.', rKw), F('스레드 최소 길이(자)', '짧은 잡담을 거르는 데 가장 안전한 축입니다.', rChr), fold('참여자·메시지 수 조건 (신중히)', el('p', { class: 'admin-hint', text: '⚠ 이 두 축이 유실을 많이 냅니다 — 한 사람이 길게 쓴 분석 보고, 짧지만 결론이 담긴 스레드가 잘립니다.' }), F('최소 참여자 수', '', rAut), F('최소 메시지 수', '', rMsg)), F('조건 결합', 'OR 권장. AND 는 모든 축을 만족해야 해서 값진 스레드를 많이 버립니다(실측 21% 유실).', rMatch));
+    panes.what = el('div', {}, F('지식화 기준', '이 팀에서 무엇이 남길 가치가 있는지 그대로 쓰세요. 이 문장이 AI의 판단 기준이 됩니다.', critIn), F('결과 문서 형식', '제목 규칙·섹션 구성 등을 자유롭게 쓰세요.', fmtIn), el('label', { class: 'inline' }, threadChk, el('span', { text: ' 스레드를 묶어 하나의 지식으로 (권장)' })), fold('분류·이름 규칙', F('분류 고정', '항상 한 분류에 넣으려면 분류 key 를 쓰세요. 비우면 AI가 내용에 맞게 고릅니다.', catIn), F('문서 유형 기본값', '', typeSel), F('지식 이름 접두어', '산출 지식의 이름을 이 문자열로 시작하게 합니다.', prefixIn)));
+    panes.run = el('div', {}, F('한 번에 처리할 스레드 수', '배치는 스레드 단위로 자릅니다 — 스레드를 쪼개면 대화가 끊겨 증류가 안 됩니다. 2~3 권장.', batchIn), F('한 배치 메시지 상한', '스레드를 최근순으로 담다가 이 수를 넘으면 멈춥니다. ⚠ 첫 스레드는 예외 — 상한보다 커도 통째로 담습니다(대화를 자르지 않으려고). 20~40 권장.', batchMsgIn), F('의뢰자', '이 사람의 AI 계정으로 실행되고 과금됩니다.', reqIn), fold('실행 방식·모델', F('실행 방식', '헤드리스는 매 배치 새 세션이라 이전 판단에 끌려가지 않습니다(권장).', modeSel), F('상시 세션 id', '실행 방식이 상시 세션일 때만 필요합니다.', sessIn), F('모델', '판단이 무거운 기준이면 sonnet 이상을 권합니다.', modelSel), F('추론 강도', '', effortSel)));
+    panes.prompt = el('div', {}, sectionsHost);
+    // ── 저장 ──────────────────────────────────────────────────────────────────
     const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '증류기 만들기' : '저장' });
     const cancelBtn = el('button', { class: 'btn-text', text: '닫기' });
-    const previewBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '지금 무엇이 집히는지 보기' });
-    const previewBox = el('div', { style: 'margin-top:10px' });
     saveBtn.addEventListener('click', async () => {
         const body = collect();
         if (!body.key) {
             toast('식별자(key)가 필요합니다', true);
+            showStep('scope');
             return;
         }
         saveBtn.disabled = true;
         try {
             await api('/api/ui/org/distillers', { method: 'POST', body: JSON.stringify(body) });
             toast(isNew ? '증류기를 만들었습니다' : '저장했습니다');
-            editingKey = null;
+            // 저장 후에도 편집을 이어갈 수 있게 카드를 닫지 않는다(연속 조정이 이 화면의 주 용도다).
+            editingKey = body.key;
             creatingNew = false;
             rerender();
         }
@@ -344,29 +442,11 @@ function editorCard(d, rerender) {
         }
     });
     cancelBtn.addEventListener('click', () => { editingKey = null; creatingNew = false; rerender(); });
-    previewBtn.addEventListener('click', async () => {
-        if (isNew) {
-            toast('먼저 저장한 뒤 확인할 수 있어요', true);
-            return;
-        }
-        previewBox.replaceChildren(el('p', { class: 'admin-hint', text: '확인 중…' }));
-        try {
-            const r = await api('/api/ui/org/distillers/preview?key=' + encodeURIComponent(d.key) + '&limit=12');
-            const rows = el('div', { style: 'display:grid;gap:3px;margin-top:6px' });
-            for (const s of (r.sample || [])) {
-                rows.append(el('div', { class: 'mini-meta' }, el('span', { class: 'pill', text: String(s.channel || s.kind) }), el('span', { text: ' ' + String(s.title || '(제목 없음)').slice(0, 80) })));
-            }
-            previewBox.replaceChildren(el('div', { class: 'mini-meta' }, el('span', { class: 'pill', text: '지금 맡은 자료 ' + Number(r.backlog).toLocaleString() + '건' }), r.reviewed ? el('span', { class: 'pill', text: '이미 판정 ' + Number(r.reviewed).toLocaleString() }) : null), (r.sample || []).length ? rows : el('p', { class: 'admin-hint', text: '지금 집히는 자료가 0건입니다 — 채널명이 정확한지, 사전 필터가 너무 빡빡하지 않은지, 우선순위 높은 증류기가 먼저 가져가고 있진 않은지 확인하세요.' }), el('details', { style: 'margin-top:8px' }, el('summary', { class: 'admin-hint', text: 'AI에게 나갈 지시문 보기' }), el('pre', { style: 'white-space:pre-wrap;font-size:12px;max-height:260px;overflow:auto', text: r.prompt || '' })));
-            // 조각 편집란도 같은 응답으로 채운다 — 편집과 미리보기가 **같은 조립 결과**를 보게 한다.
-            if (r.sections)
-                renderSections(r.sections);
-        }
-        catch (e) {
-            previewBox.replaceChildren(el('p', { class: 'admin-hint', text: '실패: ' + e.message }));
-        }
-    });
-    card.append(el('div', { class: 'mini-title' }, el('span', { text: isNew ? '새 증류기' : ('설정 — ' + (d.label || d.key)) })));
-    card.append(F('식별자(key)', isNew ? '소문자 슬러그(a-z0-9._-). 만든 뒤에는 바꾸지 않는 것을 권합니다.' : '만든 뒤에는 바꾸지 않습니다.', keyIn), F('이름', '목록에 보일 이름.', labelIn), F('우선순위', '높을수록 자료를 먼저 가져갑니다. 겹치는 자료는 우선순위가 높은 증류기 하나만 처리합니다. 낮은 값 + 넓은 범위 = 나머지를 받는 기본 라인.', prioIn), el('label', { class: 'inline' }, enabledChk, el('span', { text: ' 이 증류기 사용' })), group('① 무엇을 집을까 — 범위', F('자료 종류', '비우면 전체. 슬랙만 다루는 증류기면 slack 만 고르세요.', kindsWrap), F('대상 채널', '한 줄에 하나. 비우면 채널을 가리지 않습니다. 아래 목록에서 눌러 담으면 오타가 없습니다.', el('div', {}, incCh, chPick)), F('제외 채널', '알림봇·모니터링 채널처럼 지식화할 게 없는 곳을 빼세요.', excCh), el('label', { class: 'inline' }, botChk, el('span', { text: ' 봇이 쓴 메시지는 제외' })), fold('세부 조건(길이·기간)', F('본문 최소 길이', '이 길이보다 짧은 자료는 건너뜁니다. 0이면 제한 없음.', minIn), F('기간', '최근 며칠치만 다룰지. 비우면 과거 전체를 백필합니다.', lookIn))), group('② 얼마나 걸러낼까 — 사전 필터', el('p', { class: 'admin-hint', style: 'margin:0 0 10px' }, el('span', { text: 'AI에게 보내기 ' }), el('b', { text: '전에' }), el('span', { text: ' 서버가 스레드를 걸러냅니다. 비워두면 필터가 꺼집니다(전부 보냄). ' }), el('b', { text: '⚠ 세게 걸수록 지식을 놓칩니다' }), el('span', { text: ' — 실측에서 4축을 모두 요구했더니(AND) 이미 지식이 된 스레드의 21%가 탈락했습니다. 결합은 OR 을 권합니다.' })), el('p', { class: 'admin-hint', style: 'margin:0 0 12px;padding:8px 10px;border-radius:6px;background:var(--bg-soft,#f6f7f9)' }, el('b', { text: '값을 감으로 정하지 마세요. ' }), el('span', { text: 'AI에게 "이 증류기 사전 필터를 튜닝해줘"라고 하면 실측으로 정합니다 — 이미 지식이 된 스레드가 몇 %나 걸러지는지(유실률), 이 채널에서 판별력 높은 단어가 무엇인지, 조합별 절감 대비 유실이 얼마인지를 계산해 최적값을 넣어줍니다.' })), F('결정성 키워드 최소 등장', '아래 목록의 말이 스레드에 몇 번 나와야 하는지.', rDec), F('결정성 키워드 목록', '이 채널에서 실제로 쓰는 말. 실측상 "결정·장애" 같은 일반어보다 "할인일시납·플랫폼이용료" 같은 도메인 용어가 훨씬 잘 듣습니다. 많이 넣으세요.', rKw), F('스레드 최소 길이(자)', '짧은 잡담을 거르는 데 가장 안전한 축입니다.', rChr), fold('참여자·메시지 수 조건 (신중히)', el('p', { class: 'admin-hint', text: '⚠ 이 두 축이 유실을 많이 냅니다 — 한 사람이 길게 쓴 분석 보고, 짧지만 결론이 담긴 스레드가 잘립니다.' }), F('최소 참여자 수', '', rAut), F('최소 메시지 수', '', rMsg)), F('조건 결합', 'OR 권장. AND 는 모든 축을 만족해야 해서 값진 스레드를 많이 버립니다.', rMatch)), group('③ 무엇을 지식으로 만들까 — 기준과 형식', F('지식화 기준', '이 팀에서 무엇이 남길 가치가 있는지 그대로 쓰세요. 이 문장이 AI의 판단 기준이 됩니다.', critIn), F('결과 문서 형식', '제목 규칙·섹션 구성 등을 자유롭게 쓰세요.', fmtIn), el('label', { class: 'inline' }, threadChk, el('span', { text: ' 스레드를 묶어 하나의 지식으로 (권장)' })), fold('분류·이름 규칙', F('분류 고정', '항상 한 분류에 넣으려면 분류 key 를 쓰세요. 비우면 AI가 내용에 맞게 고릅니다.', catIn), F('문서 유형 기본값', '', typeSel), F('지식 이름 접두어', '산출 지식의 이름을 이 문자열로 시작하게 합니다.', prefixIn))), group('④ 어떻게 돌릴까 — 실행', F('한 번에 처리할 스레드 수', '배치는 스레드 단위로 자릅니다 — 스레드를 쪼개면 대화가 끊겨 증류가 안 됩니다. 2~3 권장.', batchIn), F('한 배치 메시지 상한', '스레드를 최근순으로 담다가 이 수를 넘으면 멈춥니다. 토큰이 메시지 수의 제곱으로 늘어나니 작을수록 쌉니다. ⚠ 첫 스레드는 예외 — 상한보다 커도 통째로 담습니다(대화를 자르지 않으려고). 20~40 권장.', batchMsgIn), F('의뢰자', '이 사람의 AI 계정으로 실행되고 과금됩니다.', reqIn), fold('실행 방식·모델', F('실행 방식', '헤드리스는 매 배치 새 세션이라 이전 판단에 끌려가지 않습니다(권장).', modeSel), F('상시 세션 id', '실행 방식이 상시 세션일 때만 필요합니다.', sessIn), F('모델', '판단이 무거운 기준이면 sonnet 이상을 권합니다.', modelSel), F('추론 강도', '', effortSel))), el('div', { style: 'display:flex;gap:10px;align-items:center;margin-top:18px;padding-top:14px;border-top:1px solid var(--line,#e5e7eb)' }, saveBtn, previewBtn, cancelBtn), sectionsGroup, previewBox);
+    const left = el('div', {}, el('div', { class: 'mini-title' }, el('span', { text: isNew ? '새 증류기' : ('설정 — ' + (d.label || d.key)) })), F('이름', '목록에 보일 이름.', labelIn), F('식별자(key)', isNew ? '소문자 슬러그(a-z0-9._-). 만든 뒤에는 바꾸지 않는 것을 권합니다.' : '만든 뒤에는 바꾸지 않습니다.', keyIn), el('label', { class: 'inline' }, enabledChk, el('span', { text: ' 이 증류기 사용' })), tabsRow, stepHint, paneHost, el('div', { style: 'display:flex;gap:10px;align-items:center;margin-top:18px;padding-top:14px;border-top:1px solid var(--line,#e5e7eb)' }, saveBtn, cancelBtn));
+    // 2열 — 좁은 화면에서는 자동으로 1열로 떨어진다(반사판이 아래로).
+    card.append(el('div', { style: 'display:grid;gap:18px;grid-template-columns:minmax(0,1fr) minmax(260px,var(--reflector,340px));align-items:start' }, left, reflector));
+    showStep('scope');
+    void refresh(); // 카드를 열면 바로 지금 상태를 보여준다(버튼을 누르게 하지 않는다)
     return card;
 }
 // ── 실행 잡 ────────────────────────────────────────────────────────────────

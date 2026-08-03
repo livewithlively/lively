@@ -17,9 +17,13 @@ export const restOnly = (name: string, title: string, description: string,
 // 워킹레벨(memory) — 조직 '정책'이 아니라 팀이 일상적으로 굴리는 설정. admin 을 요구하면 실무자가 자기 팀
 //  채널의 증류 기준 하나 못 고치고 관리자를 기다려야 한다(#1289 요구: "누구나 관리"). 파괴 반경도 조직 단위가
 //  아니다 — 잘못 만들어도 지식이 검토 게이트(#638)를 거치고, 산출은 자료 링크로 추적·되돌리기가 된다.
+//  mutates: capMutates 는 REST 에 POST 가 있으면 쓰기로 파생한다. 몸통이 커서(수천 자 draft) GET 쿼리로는
+//   못 보내는 **읽기 전용** op 은 여기서 false 를 명시한다 — 안 하면 읽기전용 세션이 조회조차 못 한다.
 export const restWork = (name: string, title: string, description: string,
-  rest: Capability["expose"]["rest"], handler: Capability["handler"], input: Capability["input"] = {}): Capability =>
-  ({ name, title, description, scope: "memory", input, expose: { mcp: true, rest }, handler });
+  rest: Capability["expose"]["rest"], handler: Capability["handler"], input: Capability["input"] = {},
+  mutates?: boolean): Capability =>
+  ({ name, title, description, scope: "memory", input, expose: { mcp: true, rest }, handler,
+    ...(mutates === undefined ? {} : { mutates }) });
 
 // 읽기 전용(read) — scope null = 인증만. 비-admin 구성원도 공유 컨텍스트를 읽을 수 있게(핸들러가 admin 여부로 민감 필드 redact).
 //  mcp 기본 false(공유 읽기는 웹/REST 표면) — 관리 대시보드 조회(org_overview)만 mcp=true 로 열어 에이전트가 상태를 본다(#549).
