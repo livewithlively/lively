@@ -1,12 +1,13 @@
 // projects/files-cards.ts — #1405 W1: files.ts 분할 ④.
 //  파일 하나를 보는/다루는 표면 — 뷰어 모달(이미지·텍스트) + 카드/행 엘리먼트 + 이름변경·삭제.
 //  의존은 단방향: cards → {files-upload, files-icons, files-format}.
-import { TOKEN_KEY, api, el, renderMarkdown, toast } from '../core.js';
+import { TOKEN_KEY, api, apiUrl, el, toast } from '../core.js';
 import { overlayBox } from '../learn.js';
 import { fmtFileDate, fmtFileDateFull, fmtSize } from './files-format.js';
-import { IMG_EXTS, fileExt, fileThumb } from './files-icons.js';
+import { fileThumb } from './files-icons.js';
 import { authDownload, authUpload } from './files-upload.js';
-import { copyFileLink, joinRel, shareLinkIcon } from '../lib/sharelink.js';
+import { copyFileLink, fileLinkUrl, joinRel, shareLinkIcon } from '../lib/sharelink.js';
+import { buildFilePreview } from '../lib/file-preview.js'; // #1436 후속 — 미리보기 판정·렌더의 단일 소유
 // 프로젝트 폴더의 공유 링크 좌표(#1436) — 프로젝트 폴더는 **공유 워크스페이스의 한 경로**(project/<id>/…,
 //  src/project/project-fs.ts)라 홈 탐색기가 만드는 링크와 같은 주소축(root=shared + path)을 쓴다.
 //  shareBase = 그 프로젝트 폴더의 루트기준 경로(= project.folder). 호출부가 그 값을 모르면(구 org 프리픽스 등)
@@ -15,103 +16,50 @@ function projShareRel(shareBase, rel) {
     const b = String(shareBase || '').replace(/^\/+|\/+$/g, '');
     return b ? joinRel(b, rel) : null;
 }
-// 텍스트로 열어 편집 가능한 확장자(화이트리스트). 그 외 바이너리(docx/xlsx/zip 등)는 textarea 로 열면 깨지므로 다운로드.
-const TEXT_EXTS = ['txt', 'md', 'markdown', 'json', 'csv', 'tsv', 'log', 'js', 'ts', 'tsx', 'jsx', 'mjs', 'cjs',
-    'py', 'sh', 'bash', 'zsh', 'rb', 'go', 'rs', 'c', 'cc', 'cpp', 'h', 'hpp', 'java', 'kt', 'swift', 'php',
-    'html', 'htm', 'css', 'scss', 'sass', 'less', 'xml', 'svg', 'yml', 'yaml', 'toml', 'ini', 'conf', 'env',
-    'sql', 'vue', 'svelte', 'r', 'lua', 'pl', 'dart', 'gradle', 'properties', 'gitignore', 'dockerfile'];
-// 파일 뷰어 — 이미지=미리보기, PDF=내장 뷰어(iframe), 텍스트=편집·저장, 그 외 바이너리=다운로드 안내.
+// 파일 뷰어(오버레이 모달) — 프로젝트 공유 폴더와 **태스크 첨부**(taskmodal/attachments)가 함께 쓴다.
+//  ⭐ #1436 후속: 타입 판정·렌더·툴바 동작은 **공용 렌더러**(lib/file-preview.buildFilePreview)가 소유한다.
+//   종전엔 이 함수가 자기 화이트리스트(TEXT_EXTS)를 갖고 있어 홈 팀공유폴더 모달과 답이 갈렸다 —
+//   .csv 는 여기선 textarea 원문(저기선 표), .mp4·.mp3 는 여기선 '미지원'(저기선 재생), 코드 파일은 스타일 없음.
+//   판정이 두 벌이면 반드시 갈라진다. 이 함수는 이제 '오버레이에 담는 것'과 '버튼 모양'만 정한다.
+//  이 화면이 새로 얻은 것: **csv·tsv 표 · 음성·영상 재생 · 코드 스타일·json 정렬 · html 렌더** + [⛶ 전체화면].
+//  오버레이인 이유: 프로젝트 상세의 공유 폴더는 페이지 안 인라인 섹션이라 '제자리 전환'할 컨테이너가 없다
+//   (홈은 이미 모달 안이라 제자리 전환이 자연스럽다). 문맥이 실제로 달라서 남는 차이다.
 async function openFileViewer(id, rel, name, reload, base, shareBase) {
     const B = base || '/api/ui/projects/';
-    const token = localStorage.getItem(TOKEN_KEY);
     const url = B + id + '/file?path=' + encodeURIComponent(rel);
-    const ext = fileExt(name);
-    const isImg = IMG_EXTS.includes(ext);
-    const isPdf = ext === 'pdf';
-    const isText = TEXT_EXTS.includes(ext);
     const shareRel = projShareRel(shareBase, rel);
-    const footer = (back, extra) => el('div', { class: 'ov-actions' }, ...(extra || []), 
-    // 🔗 링크 복사(#1436) — 열어 보다가 그대로 건넬 수 있게. 좌표를 모르면 버튼 없음(죽은 링크 금지).
-    shareRel ? el('button', { class: 'btn btn-ghost', text: '🔗 링크 복사', onclick: () => copyFileLink('shared', shareRel, 'file') }) : null, el('button', { class: 'btn btn-ghost', text: '다운로드', onclick: () => authDownload(url + '&download=1', name) }), el('button', { class: 'btn btn-ghost', text: '닫기', onclick: () => back.remove() }));
-    // 미리보기 미지원 바이너리 — 다운로드만(fetch 생략).
-    if (!isImg && !isPdf && !isText) {
-        const back = overlayBox(name, el('p', { class: 'admin-hint', text: '미리보기를 지원하지 않는 형식이에요. 다운로드해서 확인하세요.' }));
-        back.querySelector('.ov-box').append(footer(back));
-        return;
-    }
-    let res;
-    try {
-        res = await fetch(url, { headers: token ? { Authorization: 'Bearer ' + token } : {} });
-    }
-    catch (_) {
-        toast('파일을 열지 못했습니다', true);
-        return;
-    }
-    if (res.status === 413) {
-        const back = overlayBox(name, el('p', { class: 'admin-hint', text: '미리보기엔 너무 큰 파일이에요. 다운로드해서 확인하세요.' }));
-        back.querySelector('.ov-box').append(footer(back));
-        return;
-    }
-    if (!res.ok) {
-        toast('파일을 열지 못했습니다 (' + res.status + ')', true);
-        return;
-    }
-    const blob = await res.blob();
-    if (isImg) {
-        const back = overlayBox(name, el('img', { class: 'proj-file-img', src: URL.createObjectURL(blob), alt: name }));
-        back.querySelector('.ov-box').append(footer(back));
-        return;
-    }
-    if (isPdf) {
-        // blob 에 MIME 이 없으면 iframe 이 PDF 를 텍스트로 표시(원시 %PDF 바이트 노출) — application/pdf 로 강제 후 네이티브 뷰어 렌더.
-        const pdfBlob = blob.type === 'application/pdf' ? blob : new Blob([await blob.arrayBuffer()], { type: 'application/pdf' });
-        const back = overlayBox(name, el('iframe', { class: 'proj-file-pdf', src: URL.createObjectURL(pdfBlob) }));
-        const box = back.querySelector('.ov-box');
-        box.classList.add('ov-box-wide');
-        box.append(footer(back));
-        return;
-    }
-    // 텍스트 — 편집/저장
-    const ta = el('textarea', { class: 'proj-file-edit' });
-    ta.value = await blob.text();
-    const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
-    // #req 마크다운 — 원문 대신 렌더(제목·목록·표·코드…)로 보기 좋게. '✎ 편집' 토글로 원문 수정·저장.
-    const isMd = ext === 'md' || ext === 'markdown';
-    let content = ta;
-    let extraBtns = [saveBtn];
-    if (isMd) {
-        const wrap = el('div', { class: 'proj-file-mdwrap' }, el('div', { class: 'md-rendered proj-file-md' }, renderMarkdown(ta.value)));
-        let editing = false;
-        const toggle = el('button', { class: 'btn btn-ghost', text: '✎ 편집' });
-        toggle.onclick = () => {
-            editing = !editing;
-            wrap.replaceChildren(editing ? ta : el('div', { class: 'md-rendered proj-file-md' }, renderMarkdown(ta.value)));
-            toggle.textContent = editing ? '👁 렌더 보기' : '✎ 편집';
-            saveBtn.hidden = !editing; // 저장은 편집 모드에서만 노출
-        };
-        saveBtn.hidden = true;
-        content = wrap;
-        extraBtns = [toggle, saveBtn];
-    }
-    const back = overlayBox(name, content);
-    const box = back.querySelector('.ov-box');
-    if (isMd)
-        box.classList.add('ov-box-wide');
-    box.append(footer(back, extraBtns));
-    saveBtn.onclick = async () => {
-        saveBtn.disabled = true;
-        try {
-            await authUpload(url, new Blob([ta.value]));
-            toast('저장했습니다');
-            back.remove();
-            if (reload)
-                reload();
-        }
-        catch (e) {
-            toast(e.message, true);
-            saveBtn.disabled = false;
-        }
+    const mkBtn = (label, onClick) => el('button', { class: 'btn btn-ghost', type: 'button', text: label, onclick: onClick });
+    const authFetch = (u) => {
+        const t = localStorage.getItem(TOKEN_KEY);
+        return fetch(apiUrl(u), { headers: t ? { Authorization: 'Bearer ' + t } : {} });
     };
+    let out;
+    try {
+        out = await buildFilePreview({
+            name, size: undefined,
+            fetchView: () => authFetch(url),
+            fetchDownload: () => authFetch(url + '&download=1'),
+            // 기존 크기 규칙(14-files-upload.css .proj-file-*)을 보존하려고 화면 클래스를 함께 얹는다.
+            cls: { img: 'proj-file-img', pdf: 'proj-file-pdf', html: 'proj-file-pdf', md: 'proj-file-md', code: 'proj-file-edit', msg: 'admin-hint' },
+            mkBtn,
+            // 편집·저장은 이 화면의 원래 장점 — 공용 렌더러의 옵션으로 남겨 홈 모달에도 같이 생겼다.
+            save: async (text) => { await authUpload(url, new Blob([text])); },
+            onSaved: () => { toast('저장했습니다'); if (reload)
+                reload(); },
+            onError: (m) => toast(m, true),
+        });
+    }
+    catch (e) {
+        toast('파일을 열지 못했습니다 — ' + ((e && e.message) || e), true);
+        return;
+    }
+    const back = overlayBox(name, out.body);
+    const box = back.querySelector('.ov-box');
+    if (out.wide)
+        box.classList.add('ov-box-wide');
+    box.append(el('div', { class: 'ov-actions' }, ...out.tools, 
+    // ⛶ 전체화면 — 같은 파일을 공유 링크 전체페이지(#/f)로 새 탭에 연다. 좌표를 모르면 버튼 없음(죽은 링크 금지).
+    shareRel ? el('a', { class: 'btn btn-ghost', href: fileLinkUrl('shared', shareRel), target: '_blank', rel: 'noopener', text: '⛶ 전체화면' }) : null, shareRel ? el('button', { class: 'btn btn-ghost', type: 'button', text: '🔗 링크 복사', onclick: () => copyFileLink('shared', shareRel, 'file') }) : null, el('button', { class: 'btn btn-ghost', type: 'button', text: '다운로드', onclick: () => authDownload(url + '&download=1', name) }), el('button', { class: 'btn btn-ghost', type: 'button', text: '닫기', onclick: () => back.remove() })));
 }
 // 공유 폴더 아이콘 카드(맥 데스크탑 느낌) — 폴더는 onDir(rel), 파일은 뷰어 팝업. 섹션·전체보기 팝업 공용.
 function projFileCardEl(id, it, rel, onDir, reload, base, select, shareBase) {
