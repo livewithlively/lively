@@ -173,7 +173,11 @@ else
     p2="$(git rev-parse --verify --quiet "${m}^2" || true)"
     [[ -n "$p2" ]] || continue
     # 1순위: 그 커밋을 지금도 가리키는 origin 브랜치(가장 확실).
-    name="$(git for-each-ref --format='%(refname:strip=3)' --points-at "$p2" "refs/remotes/${REMOTE}" | grep -v '^HEAD$' | head -1)"
+    #  ⚠ `|| true` 필수 — 가리키는 브랜치가 없으면 grep 이 1 을 반환하고, set -e + pipefail 이 여기서
+    #   **스크립트를 통째로 죽인다**(2순위로 못 넘어간다). 그런데 '없음'은 예외가 아니라 정상이다:
+    #   재조립 뒤 그 브랜치에 커밋을 하나만 더 얹어도 tip 이 머지지점을 지나 --points-at 이 빈다.
+    #   즉 **restage 재실행이라는 가장 흔한 경로에서 매번 죽었다**(증상: "▸ origin fetch…" 만 찍고 종료 1).
+    name="$(git for-each-ref --format='%(refname:strip=3)' --points-at "$p2" "refs/remotes/${REMOTE}" | grep -v '^HEAD$' | head -1 || true)"
     # 2순위: 머지 커밋 제목에 박힌 브랜치명. 브랜치가 그 뒤로 더 진행돼 tip 이 안 맞을 때 쓴다.
     if [[ -z "$name" ]]; then
       subj="$(git log -1 --format='%s' "$m")"
