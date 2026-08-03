@@ -1112,9 +1112,10 @@
   "mcp": true,
   "mutates": false,
   "rest": [
-   "GET /api/ui/org/distillers/preview"
+   "GET /api/ui/org/distillers/preview",
+   "POST /api/ui/org/distillers/preview"
   ],
-  "input_hash": "59db3abd71a66417"
+  "input_hash": "d459e6057624b71e"
  },
  {
   "name": "org_distiller_tune",

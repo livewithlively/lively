@@ -15,7 +15,7 @@ import {
   buildDistillerPrompt, describeScope, composeDistillPrompt,
   buildInboxQuery, buildBacklogQuery, markDistillerSeen,
   prefilterThresholds, prefilterSql, DEFAULT_DECISIVE_KEYWORDS, type DistillerRow,
-  buildGridSql, buildSourceDigest, DIGEST_PER_SOURCE, DIGEST_TOTAL_BYTES, ARG_MAX_STRLEN, buildDistillerTargeting, buildThreadKnowledgeQuery, buildThreadKnowledgeBlock, THREAD_KN_MAX, distillerSectionViews, PROMPT_SECTIONS} from "./distiller.js";
+  buildGridSql, buildSourceDigest, DIGEST_PER_SOURCE, DIGEST_TOTAL_BYTES, ARG_MAX_STRLEN, buildDistillerTargeting, buildThreadKnowledgeQuery, buildThreadKnowledgeBlock, THREAD_KN_MAX, distillerSectionViews, PROMPT_SECTIONS, mergeDraftDistiller, isPrefilterActive, unfilteredImpact,} from "./distiller.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -791,4 +791,74 @@ t("B8 기존 criteria_md·format_md 가 그 조각의 저장소로 계속 동작
   assert.match(s, /내 기준/); assert.match(s, /내 형식/);
   const v = distillerSectionViews(mk({ criteria_md: "내 기준" }), SOPT).find((x) => x.id === "criteria")!;
   assert.match(v.def, /내 기준/, "criteria 조각의 기본값은 criteria_md 다 — 별도 저장소를 만들지 않는다");
+});
+
+// ── 저장 전 미리보기 draft 병합(#1419-B UX · P1~P5) ──
+//  종전 화면은 미리보기가 **저장된 값**만 읽어, 채널 하나 고치려면 저장→스크롤→확인을 반복해야 했고
+//  새 증류기는 미리보기 자체가 거부됐다. draft 를 저장된 행 위에 얹어 DB 없이 미리 본다.
+t("DR1 draft 가 저장값을 덮고, 안 보낸 필드는 저장값이 남는다", () => {
+  const saved = mk({ id: 5, key: "k", include_channels: ["a"], criteria_md: "기존 기준", batch_size: 3 });
+  const m = mergeDraftDistiller(saved, { include_channels: ["b", "c"] });
+  assert.deepEqual(m.include_channels, ["b", "c"]);
+  assert.equal(m.criteria_md, "기존 기준", "안 보낸 필드가 사라지면 부분 편집 화면이 설정을 날린다");
+  assert.equal(m.batch_size, 3);
+});
+
+t("DR2 저장본이 있으면 id 를 유지한다 — 자기 자신은 higherThan 이 이미 뺀다", () => {
+  const saved = mk({ id: 5, key: "k", priority: 50 });
+  const m = mergeDraftDistiller(saved, { priority: 50 });
+  assert.equal(m.id, 5, "id 를 바꾸면 동순위 경쟁이 실제와 달라져 미리보기가 부풀거나 0건이 된다");
+  assert.equal(higherThan(m, [saved]).length, 0, "자기 저장본이 자기 몫을 가로채면 안 된다");
+});
+
+t("DR2b 새 증류기는 가장 큰 id — 동순위에서 지는 쪽이 실제와 같다", () => {
+  const m = mergeDraftDistiller(undefined, { priority: 50 });
+  const other = mk({ id: 7, key: "other", priority: 50, enabled: true });
+  assert.equal(m.id, Number.MAX_SAFE_INTEGER);
+  assert.equal(higherThan(m, [other]).length, 1,
+    "새로 만들면 기존 동순위 증류기가 먼저 가져간다 — 미리보기가 낙관적으로 부풀면 안 된다");
+});
+
+t("DR3 draft 의 undefined 는 '미지정'이라 저장값을 덮지 않는다", () => {
+  const saved = mk({ id: 5, key: "k", criteria_md: "기존" });
+  const m = mergeDraftDistiller(saved, { criteria_md: undefined, label: "새 이름" });
+  assert.equal(m.criteria_md, "기존");
+  assert.equal(m.label, "새 이름");
+});
+
+t("DR4 저장된 행이 없어도(새 증류기) 미리보기용 행이 만들어진다", () => {
+  const m = mergeDraftDistiller(undefined, { include_channels: ["x"], thread_aware: true });
+  assert.equal(m.id, Number.MAX_SAFE_INTEGER);
+  assert.deepEqual(m.include_channels, ["x"]);
+  assert.equal(m.batch_size, 3, "기본값이 채워져야 프롬프트 조립이 깨지지 않는다");
+  assert.equal(m.exclude_bots, true);
+  // 이 행으로 인박스 쿼리가 실제로 조립돼야 한다(빈 행이면 여기서 던진다).
+  assert.ok(buildInboxQuery(m, []).sql.includes("WITH cand"));
+});
+
+t("DR5 draft 가 없으면 저장값 그대로(무회귀)", () => {
+  const saved = mk({ id: 5, key: "k", criteria_md: "기존" });
+  assert.equal(mergeDraftDistiller(saved, null).criteria_md, "기존");
+  assert.equal(mergeDraftDistiller(saved, null).id, 5, "draft 없는 경로는 id 를 건드리지 않는다");
+});
+
+// FI1~FI3 — 사전필터 효과 표시(#1419-B UX). 유실률이 이 화면의 핵심 숫자라 표시 규약을 못박는다.
+t("FI1 축이 하나도 없으면 필터 꺼짐 — 있으면 켜짐", () => {
+  assert.equal(isPrefilterActive(mk({ prefilter_rules: null })), false);
+  assert.equal(isPrefilterActive(mk({ prefilter_rules: {} })), false, "빈 규칙은 꺼짐이다(전부 통과)");
+  assert.equal(isPrefilterActive(mk({ prefilter_rules: { min_chars: 400 } })), true);
+  assert.equal(isPrefilterActive(mk({ prefilter_rules: { min_decisive: 1, keywords: ["a"] } })), true);
+});
+
+t("FI2 필터 꺼짐이면 유실률은 **0** 이다(null 이 아니다 — 화면이 '잴 수 없음'으로 오해하면 안 된다)", () => {
+  const r = unfilteredImpact(["ch"], 10, 500, 4);
+  assert.equal(r.loss_pct, 0, "안 거르면 유실은 0 이라는 게 사실이다");
+  assert.equal(r.pass_pct, 100);
+  assert.equal(r.pass_msgs, 500, "전부 통과");
+  assert.equal(r.filtered, false);
+});
+
+t("FI3 지식이 된 스레드가 0 이면 유실률은 잴 수 없다(null) — 0% 라고 우기지 않는다", () => {
+  assert.equal(unfilteredImpact([], 3, 20, 0).loss_pct, null,
+    "분모가 0인데 0% 라고 표시하면 '안전하다'는 거짓 신호가 된다");
 });

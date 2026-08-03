@@ -454,6 +454,86 @@ export function buildGridSql(rules: Record<string, unknown>, p: Params, keywords
        FROM th`;
 }
 
+// 미리보기 대상 조립(#1419-B UX) — 저장 전 draft 를 저장된 행 위에 얹어 **가상 증류기**를 만든다.
+//  왜 순수 함수인가: 병합 규칙이 이 기능의 급소이고, 그중 **id 처리**가 조용히 틀리기 쉽다.
+//   · 저장본이 있으면 **그 id 를 유지한다.** higherThan() 이 이미 `x.id !== d.id` 로 자기를 빼므로
+//     자기 스코프를 자기가 가로채는 일은 없고, 동순위(priority 동일) 경쟁도 실제와 같게 풀린다.
+//     (id 를 0 으로 바꾸면 동순위 전부를 이기게 되어 미리보기가 실제보다 많이 집는 것처럼 보인다.)
+//   · 저장본이 없으면(새 증류기) **가장 큰 id** 로 둔다. 실제로 만들면 다음 시퀀스값 = 기존보다 큰 id 를
+//     받으므로, 동순위에서는 지는 쪽이 맞다(낙관적으로 부풀리지 않는다).
+//  draft 의 undefined 는 '미지정'이라 저장값을 덮지 않는다(부분 편집 화면이 일부 필드만 보내기 때문).
+export function mergeDraftDistiller(saved: DistillerRow | undefined, draft: Record<string, unknown> | null): DistillerRow {
+  const base: DistillerRow = saved ?? ({
+    id: Number.MAX_SAFE_INTEGER, key: "", label: null, enabled: false, priority: 0,
+    match_kinds: null, match_system: null, include_channels: null, exclude_channels: null,
+    include_authors: null, exclude_authors: null, exclude_bots: true, min_chars: 0, lookback_days: null,
+    criteria_md: null, format_md: null, target_category: null, default_type: null, name_prefix: null,
+    thread_aware: true, prefilter_level: 0, prefilter_rules: null, prompt_sections: null,
+    batch_size: 3, batch_max_msgs: 20, mode: "headless", session_ref: null, model: null, effort: null,
+    requester: null, last_run_at: null, last_status: null, last_summary: null, note: null, updated_at: null,
+  } as DistillerRow);
+  if (!draft) return base;
+  const out = { ...base } as Record<string, unknown>;
+  for (const [k, v] of Object.entries(draft)) if (v !== undefined) out[k] = v;
+  out.id = saved ? saved.id : Number.MAX_SAFE_INTEGER;   // 위 주석의 id 규칙
+  return out as unknown as DistillerRow;
+}
+
+// 지금 이 설정의 **사전필터 효과**를 한 번에 재는 경량 계산(#1419-B UX) — 미리보기 반사판이 쓴다.
+//  tune 은 후보 격자를 다 도는 무거운 도구다. 여기선 **현재 rules 하나**만 재서 "얼마나 거르고 얼마를 놓치나"를 낸다.
+//  ⚠ 유실률(loss_pct)이 이 화면의 핵심 숫자다 — 절감률은 사람이 알아서 좋아하지만 유실률은 안 보여주면
+//   아무도 모른 채 지식을 버린다(실측: 4축 AND 가 기지식의 21%를 탈락시켰다).
+export interface FilterImpact {
+  channel_scope: string[]; threads: number; msgs: number;
+  known_threads: number;          // 이 스코프에서 이미 지식이 된 스레드 수(유실률의 분모)
+  pass_msgs: number; kept_known: number;
+  pass_pct: number | null;        // 통과 자료 비율 = 비용 대리지표
+  loss_pct: number | null;        // 이미 지식이 된 스레드 중 걸러질 비율 = 놓칠 지식 비율
+  filtered: boolean;              // 필터가 실제로 걸려 있나(꺼져 있으면 100% 통과)
+}
+// 필터가 실제로 걸려 있나 — 축이 하나도 없으면 '꺼짐'이고 전부 통과한다(순수 · 테스트 seam).
+export function isPrefilterActive(d: DistillerRow): boolean {
+  const th = prefilterThresholds(d.prefilter_level ?? 0, d.prefilter_rules as Record<string, unknown> | null);
+  return th.min_msgs > 0 || th.min_authors > 0 || th.min_chars > 0 || th.min_decisive > 0;
+}
+
+// 필터 꺼짐일 때의 결과(순수). ⚠ loss_pct 는 **0** 이어야 한다 — null 로 두면 화면이 "잴 수 없음"으로
+//  표시해 사람이 "유실이 있을지도" 로 오해한다. 안 거르면 유실은 0 이라는 게 사실이다.
+export function unfilteredImpact(chans: string[], threads: number, msgs: number, knownThreads: number): FilterImpact {
+  return { channel_scope: chans, threads, msgs, known_threads: knownThreads,
+    pass_msgs: msgs, kept_known: knownThreads,
+    pass_pct: msgs ? 100 : null, loss_pct: knownThreads ? 0 : null, filtered: false };
+}
+
+export async function measureFilterImpact(d: DistillerRow): Promise<FilterImpact> {
+  const chans = (d.include_channels ?? []).map((x) => String(x).trim()).filter(Boolean);
+  const th = prefilterThresholds(d.prefilter_level ?? 0, d.prefilter_rules as Record<string, unknown> | null);
+  const rules = (d.prefilter_rules && typeof d.prefilter_rules === "object" ? d.prefilter_rules : {}) as Record<string, unknown>;
+  const filtered = isPrefilterActive(d);
+
+  const chanFilter = chans.length ? `AND COALESCE(fields->>'container_name','') = ANY($1::text[])` : "";
+  const base = await q(itemsPool,
+    `WITH th AS (
+       SELECT COALESCE(fields->>'thread_ts', fields->>'ts') AS tid, count(*)::int AS msgs,
+              bool_or(EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = source.id)) AS became
+       FROM source WHERE lifecycle='active' ${chanFilter} GROUP BY 1)
+     SELECT count(*)::int AS threads, COALESCE(sum(msgs),0)::int AS msgs,
+            count(*) FILTER (WHERE became)::int AS kt FROM th`,
+    chans.length ? [chans] : []);
+  const threads = Number(base[0]?.threads ?? 0), msgs = Number(base[0]?.msgs ?? 0), kt = Number(base[0]?.kt ?? 0);
+
+  if (!filtered) return unfilteredImpact(chans, threads, msgs, kt);
+  const p = new Params();
+  const rows = await q(itemsPool, buildGridSql(rules, p, th.keywords, chans), p.values);
+  const passMsgs = Number(rows[0]?.pass_msgs ?? 0), keep = Number(rows[0]?.keep ?? 0);
+  return {
+    channel_scope: chans, threads, msgs, known_threads: kt, pass_msgs: passMsgs, kept_known: keep,
+    pass_pct: msgs ? Math.round((passMsgs / msgs) * 1000) / 10 : null,
+    loss_pct: kt ? Math.round(((kt - keep) / kt) * 1000) / 10 : null,
+    filtered: true,
+  };
+}
+
 // 증류기의 채널 스코프 안에서 튜닝 재료를 계산한다. 채널을 안 정한 증류기는 전 채널이 대상이라 표본이 뭉개지므로
 //  호출부가 채널을 좁히도록 안내한다(channel_scope 를 그대로 돌려준다).
 export async function tuneDistiller(d: DistillerRow, candidates?: Array<{ label: string; rules: Record<string, unknown> }>): Promise<DistillerTuning> {

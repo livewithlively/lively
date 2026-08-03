@@ -10,7 +10,7 @@ import {
 // #1289 자료 증류기 — 스코프(배타 배정)·커버리지·프롬프트 조립. CRUD 는 store, 이건 읽기·판정 계층.
 import {
   listDistillers, getDistiller, listDistillerInbox, countDistillerBacklog, distillerCoverage, listSourceChannels, buildDistillerPrompt,
-  distillerSectionViews,
+  distillerSectionViews, measureFilterImpact, mergeDraftDistiller,
   describeScope, clearDistillerSeen, countDistillerSeen, prefilterCurve, prefilterThresholds, DEFAULT_DECISIVE_KEYWORDS, tuneDistiller
 } from "../../org/distill/distiller.js";
 import { actorOf, restOnly, restRead, restWork } from "./shared.js";
@@ -171,20 +171,31 @@ export const ingestDistillersCapabilities: Capability[] = [
       key: z.string().optional(),
     }),
   restWork("org_distiller_preview", "자료 증류기 미리보기",
-    "이 증류기가 **지금 무엇을 집는지**를 저장·실행 전에 확인한다 — 배타 배정된 인박스 표본 + 남은 잔량 + 실제로 나갈 프롬프트. " +
-    "스코프 오타(채널명 하나 틀림)로 0건을 집는 사고를 켜기 전에 잡는 자리.",
-    [{ method: "GET", paths: ["/api/ui/org/distillers/preview"], parse: (req) => ({ key: req.query?.key, limit: req.query?.limit ? Number(req.query.limit) : 10 }) }],
+    "이 증류기가 **지금 무엇을 집는지**를 저장·실행 전에 확인한다 — 배타 배정된 인박스 표본 + 남은 잔량 + 실제로 나갈 프롬프트 " +
+    "+ 사전필터 효과(통과율과 **유실률**). 스코프 오타(채널명 하나 틀림)로 0건을 집는 사고를 켜기 전에 잡는 자리.\n" +
+    "⚠ draft 를 주면 **저장하지 않고** 그 값으로 미리 본다 — 화면이 입력을 바꾸는 즉시 결과를 보여주기 위한 경로다. " +
+    "key 없이 draft 만 주면 아직 저장 안 한 새 증류기도 미리 볼 수 있다(배타 배정은 저장된 증류기들 기준).",
+    [{ method: "GET", paths: ["/api/ui/org/distillers/preview"], parse: (req) => ({ key: req.query?.key, limit: req.query?.limit ? Number(req.query.limit) : 10 }) },
+     // ⚠ POST 지만 **읽기 전용**이다(draft 본문이 커서 GET 쿼리로는 못 보낸다 — criteria_md 가 수천 자다).
+     //  capMutates 는 POST 를 쓰기로 파생하므로 여기서 mutates:false 를 명시한다. 안 그러면 읽기전용 세션이
+     //  미리보기를 못 해, 설정을 못 바꾸는 사람이 확인조차 못 하게 된다.
+     { method: "POST", paths: ["/api/ui/org/distillers/preview"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>) => {
       const ref = String(input.key ?? "").trim();
-      if (!ref) throw new HttpError(400, "key 필요");
-      const d = await getDistiller(ref);
-      if (!d) throw new HttpError(404, `증류기 '${ref}' 없음`);
+      const draft = (input.draft && typeof input.draft === "object" ? input.draft : null) as Record<string, unknown> | null;
+      if (!ref && !draft) throw new HttpError(400, "key 또는 draft 필요");
+      const saved = ref ? await getDistiller(ref) : undefined;
+      if (ref && !saved) throw new HttpError(404, `증류기 '${ref}' 없음`);
+      const d = mergeDraftDistiller(saved, draft);
       const all = await listDistillers();
+
       const limit = Math.min(Math.max(1, Number(input.limit) || 10), 50);
       const sample = await listDistillerInbox(d, all, limit);
       return {
         distiller: { ...d, scope_text: describeScope(d) },
         backlog: await countDistillerBacklog(d, all),
+        // 사전필터 효과 — 통과율(비용)과 **유실률**(놓칠 지식). 유실률을 안 보여주면 아무도 모른 채 버린다.
+        filter_impact: await measureFilterImpact(d).catch(() => null),
         reviewed: await countDistillerSeen(d.id),   // 이미 보고 버린 자료 수(재검토하려면 reset_seen)
         // 레버 튜닝 재료 — 지금 임계값 + 레버를 옮겼을 때의 통과 건수 곡선(감으로 찍지 않게).
         prefilter: {
@@ -205,9 +216,10 @@ export const ingestDistillersCapabilities: Capability[] = [
         sections: distillerSectionViews(d, { count: sample.length, policySummary: "(실행 시점의 인입 허용선 정책이 여기 들어갑니다)" }),
       };
     }, {
-      key: z.string().describe("증류기 key"),
+      key: z.string().optional().describe("증류기 key. draft 만 줄 땐 생략 가능(새 증류기 미리보기)"),
+      draft: z.record(z.any()).optional().describe("저장 전 값 — 저장된 행 위에 얹어 미리 본다(DB 미변경). 입력 변경 즉시 결과를 보여주는 경로."),
       limit: z.number().int().positive().optional().describe("표본 개수(기본 10, 최대 50)"),
-    }),
+    }, /* mutates */ false),
   restWork("org_distiller_tune", "자료 증류기 튜닝 재료",
     "사전 필터의 최적값을 **감이 아니라 실측으로** 정하기 위한 재료를 준다. AI 가 이걸 읽고 rules 를 정해 " +
     "org_distiller_upsert 로 설정하는 게 표준 플로우다(사람이 임계값을 감으로 찍지 않는다).\n" +
