@@ -137,6 +137,19 @@ function normKey(s: string): string {
   return s.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64);
 }
 
+/**
+ * 이름 미지정 시 자동 key — `slack` · `slack-2` · `slack-3` … (그 프리셋의 첫 인스턴스는 접미 없음).
+ *  사람이 읽는 자리(URL·크론 잡 id·로그·감사)에 그대로 박히므로 순번이 타임스탬프보다 낫다.
+ */
+async function nextAutoKey(presetKey: string): Promise<string> {
+  const base = normKey(presetKey) || "collector";
+  const taken = new Set((await itemsPool.query<{ key: string }>(
+    `SELECT key FROM org_collector WHERE key = $1 OR key LIKE $2`, [base, `${base}-%`])).rows.map((r) => r.key));
+  if (!taken.has(base)) return base;
+  for (let i = 2; i < 1000; i++) if (!taken.has(`${base}-${i}`)) return `${base}-${i}`;
+  return `${base}-${taken.size + 1}`; // 도달 불가에 가까운 백스톱
+}
+
 export async function upsertCollector(input: CollectorUpsertInput, actor?: string, source?: string): Promise<CollectorView> {
   const cur = input.id
     ? (await itemsPool.query(
@@ -150,7 +163,10 @@ export async function upsertCollector(input: CollectorUpsertInput, actor?: strin
   if (!spec) throw new Error(`알 수 없는 프리셋: ${presetKey || "(미지정)"}`);
   if (!spec.enabled) throw new Error(`프리셋 '${presetKey}' 가 꺼져 있어 새 수집기를 만들 수 없습니다`);
 
-  const key = normKey(String(input.key ?? cur?.key ?? "")) || normKey(`${presetKey}-${Date.now()}`);
+  // key 자동 생성 — 이름이 한국어면 슬러그가 통째로 비므로(정규화가 a-z0-9 만 남긴다) 프리셋 + 순번으로 짓는다.
+  //  타임스탬프를 쓰면 `slack-1785728013251` 같은 게 URL·잡 id·로그에 그대로 박혀 사람이 읽을 수 없다.
+  let key = normKey(String(input.key ?? cur?.key ?? ""));
+  if (!key) key = await nextAutoKey(presetKey);
   // 커서 네임스페이스는 **만든 뒤 바꾸지 않는다** — 바꾸면 그 수집기가 커서를 잃고 전체 재수집한다.
   //  그래서 신규 생성 시에만 입력을 받고, 기존 행은 저장 페이로드에 뭐가 오든 현재 값을 지킨다.
   const instanceKey = cur
