@@ -1,3 +1,12 @@
 {
-  "signedContributors": []
+  "signedContributors": [
+    {
+      "name": "scbang",
+      "id": 32830661,
+      "comment_id": 5163609211,
+      "created_at": "2026-08-03T07:40:51Z",
+      "repoId": 1320029755,
+      "pullRequestNo": 15
+    }
+  ]
 }
