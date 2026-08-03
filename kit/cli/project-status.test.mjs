@@ -68,6 +68,9 @@ const CHILD_ENV = {
   ...process.env,
   PATH: `${STUB_BIN}:${process.env.PATH}`,
   LIVELY_HOME: HOME,
+  // ⚠ 셸에 CLAUDE_CONFIG_DIR 이 있으면 CLI 가 **실제** 프로필 설정(.claude.json)을 읽는다 — 명시적으로 샌드박스로 덮는다.
+  //  (LIVELY_HOME 이 CLI 의 HOME 을 대체하므로 HOME 쪽 후보는 이미 샌드박스다.)
+  CLAUDE_CONFIG_DIR: join(HOME, ".claude"),
   LIVELY_GATEWAY_URL: GW,
   LIVELY_TOKEN: "lvk_test_token",
   NO_COLOR: "1",
