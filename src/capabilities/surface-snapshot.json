@@ -2676,6 +2676,16 @@
   "input_hash": "6c9f16e97bc4049d"
  },
  {
+  "name": "source_vis_policy_targets",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/source-vis-policy/targets"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
   "name": "source_vis_policy_set",
   "scope": "admin",
   "mcp": true,
