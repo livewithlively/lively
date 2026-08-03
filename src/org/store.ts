@@ -75,6 +75,13 @@ export {
 } from "./store/collector-presets.js";
 export type { ResolvedPreset, PresetUpsertInput, PresetDriver } from "./store/collector-presets.js";
 
+// ── org_classifier(분류기 n개 — #1419 T4) ──
+export {
+  listClassifiers, getClassifier, classifierInbox, classifierCoverage,
+  upsertClassifier, removeClassifier, recordClassifierRun, markClassifierSeen,
+} from "./store/classifiers.js";
+export type { ClassifierRow, ClassifierUpsertInput } from "./store/classifiers.js";
+
 // ── 자동 인입 라인(org_ingest_policy · org_distiller · 게이트 관측) ──
 export {
   listIngestPolicies, upsertIngestPolicy, removeIngestPolicy,

@@ -145,6 +145,84 @@ export async function initCollectorPresets(pool: Pool): Promise<void> {
   `);
 }
 
+export async function initClassifierRegistry(pool: Pool): Promise<void> {
+  // ── org_classifier — **분류기**(#1419 T4). 증류기(org_distiller)의 분류판. ──
+  //  as-is 문제: 분류는 크론 액션(classify_knowledge[_headless]) 하나뿐이고 **설정할 게 없었다**. 대상은
+  //   'listUnmappedKnowledge(50)' 전역 고정, 기준은 코드에 박힌 프롬프트, 후보는 전 카테고리. 그래서
+  //   "제품 도메인은 엄격히·사업 맥락은 느슨히", "이 팀 지식은 이 축들 안에서만" 같은 걸 표현할 데가 없었다.
+  //   증류기가 같은 이유로 n개가 됐고(#1289: 전역 인박스 하나면 둘을 만들어도 같은 50건을 집는다), 분류도 같다.
+  //
+  //  ⚠ 증류기와 직교한다 — 증류기는 **자료→지식**(없던 지식을 만든다), 분류기는 **지식→분류축**(있는 지식의
+  //   자리를 정한다). 파이프라인에서 증류 다음이 분류다.
+  //  ⚠ 산출 경로는 바꾸지 않는다 — 분류기가 만드는 것은 여전히 knowledge_propose_category 의 제안이고,
+  //   사람 확정은 기존 [분류 검토 대기] 화면이 받는다. 새 진실 출처를 만들지 않는다(#837 불변식).
+  //
+  //  배정 규칙은 증류기와 같다: priority DESC, id ASC 로 **한 지식은 가장 앞선 분류기 하나에만** 배정된다.
+  //   낮은 우선순위 + 넓은 스코프 = 나머지를 받는 기본 라인.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_classifier(
+      id BIGSERIAL PRIMARY KEY,
+      key   TEXT NOT NULL,
+      label TEXT,
+      enabled  BOOLEAN NOT NULL DEFAULT false,
+      priority INT NOT NULL DEFAULT 0,
+      -- ① 스코프: 어떤 지식을 분류 대상으로 삼는가 (전부 비우면 '나머지 전부' catch-all)
+      --  target: unmapped=미분류만(기본) · low_confidence=제안 신뢰도 낮은 것 재분류 · both
+      target TEXT NOT NULL DEFAULT 'unmapped',
+      confidence_below REAL,
+      match_spaces      TEXT[],
+      match_types       TEXT[],
+      match_provenance  TEXT,
+      match_systems     TEXT[],
+      exclude_names     TEXT[],
+      min_chars     INT NOT NULL DEFAULT 0,
+      lookback_days INT,
+      -- ② 기준: 무엇을 근거로 자리를 정하는가(자유서술 — 프롬프트에 그대로 삽입) + 후보 축 제한
+      criteria_md TEXT,
+      candidate_categories TEXT[],
+      -- 이 확신도 이상이면 confirmed, 미만이면 proposed(사람 검토). 분류기마다 엄격도가 다르다.
+      confirm_threshold REAL NOT NULL DEFAULT 0.8,
+      -- ③ 실행
+      batch_size  INT NOT NULL DEFAULT 50,
+      mode        TEXT NOT NULL DEFAULT 'headless',
+      session_ref TEXT,
+      model TEXT, effort TEXT, requester TEXT,
+      -- ④ 관측
+      last_run_at TIMESTAMPTZ, last_status TEXT, last_summary JSONB,
+      note TEXT,
+      version INT NOT NULL DEFAULT 1,
+      created_by TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_by TEXT);
+    ${ensureCheck("org_classifier", {
+      org_classifier_mode_chk: "mode IN ('headless','session')",
+      org_classifier_target_chk: "target IN ('unmapped','low_confidence','both')",
+      org_classifier_batch_chk: "batch_size BETWEEN 1 AND 500",
+      org_classifier_threshold_chk: "confirm_threshold BETWEEN 0 AND 1",
+    })}
+    CREATE UNIQUE INDEX IF NOT EXISTS org_classifier_key_uq ON org_classifier(key);
+    CREATE INDEX IF NOT EXISTS org_classifier_enabled_idx ON org_classifier(enabled, priority DESC, id);
+  `);
+
+  // ── org_classifier_seen — 분류기가 **이미 판정한** 지식(#1419 T4). org_distiller_seen 과 같은 이유로 존재한다. ──
+  //  증류기에서 실측된 문제(#1289, 고객사 A): 인박스 판정이 '결과물 없음' 뿐이라 LLM 이 skip 한 것은 흔적이
+  //   안 남아 **다음 배치에 그대로 다시 올라왔다**(연속 두 배치의 64%가 재독). 극단적으로 한 배치가 전부 skip 이면
+  //   진행이 영원히 0 이 된다. 분류도 정확히 같은 구조다 — '못 정하겠다'고 넘긴 지식은 카테고리 행이 안 생겨
+  //   영원히 인박스 맨 앞에 남는다(updated_at DESC 정렬이라 더 나쁘다).
+  //  ⚠ LLM 자기보고에 의존하지 않는다 — **서버가 배치를 낸 시점에** 기록한다.
+  //  기준(criteria)을 바꿔 다시 보고 싶으면 upsert 의 reset_seen 으로 비운다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_classifier_seen(
+      classifier_id BIGINT NOT NULL REFERENCES org_classifier(id) ON DELETE CASCADE,
+      knowledge_name TEXT NOT NULL,
+      task_id BIGINT,
+      seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY(classifier_id, knowledge_name));
+    CREATE INDEX IF NOT EXISTS org_classifier_seen_task_idx ON org_classifier_seen(task_id) WHERE task_id IS NOT NULL;
+  `);
+}
+
 export async function initIngestPolicyAndDistillers(pool: Pool): Promise<void> {
   // ── org_ingest_policy — 지식 인입 허용선 정책(#638, #783 확장). 오너가 관리탭에서 조절하는 자동화 게이트. ──
   //  매치 규칙 0개면 디폴트 auto(현행 무변 — 오너가 켠 만큼만 gate). 평가 = resolveIngestPolicy(src/org/ingest/ingest-policy.ts).

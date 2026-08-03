@@ -31,6 +31,7 @@
  "dist/org/policies/storage-policy.js",
  "dist/org/store.js",
  "dist/org/store/audit.js",
+ "dist/org/store/classifiers.js",
  "dist/org/store/collector-presets.js",
  "dist/org/store/collectors.js",
  "dist/org/store/connectors.js",

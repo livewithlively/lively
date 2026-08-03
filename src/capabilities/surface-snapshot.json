@@ -1127,6 +1127,46 @@
   "input_hash": "7d3b26cb0b2c2ce3"
  },
  {
+  "name": "org_classifier_list",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/classifiers"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_classifier_upsert",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/classifiers"
+  ],
+  "input_hash": "0f169305127f063e"
+ },
+ {
+  "name": "org_classifier_preview",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/classifiers/preview"
+  ],
+  "input_hash": "c5dbf18020496e89"
+ },
+ {
+  "name": "org_classifier_remove",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/classifiers/remove"
+  ],
+  "input_hash": "2aa5d51896628e35"
+ },
+ {
   "name": "org_connector_members",
   "scope": "admin",
   "mcp": true,

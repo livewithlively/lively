@@ -13,7 +13,7 @@ import { runClassifyKnowledgeInject, runClassifyKnowledgeHeadless } from "./acti
 import { runDistillInject, runDistillHeadless } from "./actions/distill.js";
 import { runAgentInject, runAgentHeadless } from "./actions/agent.js";
 
-export interface CronActionParam { name: string; label: string; kind: "session" | "repo" | "system" | "text" | "textarea" | "select" | "distiller"; choices?: string[]; hint?: string }
+export interface CronActionParam { name: string; label: string; kind: "session" | "repo" | "system" | "text" | "textarea" | "select" | "distiller" | "classifier"; choices?: string[]; hint?: string }
 export interface CronActionDef { key: string; label: string; params: CronActionParam[]; run: CronActionRun }
 
 export interface CronJob {
@@ -60,6 +60,7 @@ export const CRON_ACTIONS: CronActionDef[] = [
   { key: "classify_knowledge", label: "미분류 지식 LLM 분류 (세션 주입)", params: [{ name: "session", label: "타깃 상시 세션", kind: "session", hint: "‘상시 세션’ 탭에서 등록한 관리 세션(map_unmapped 와 공용 가능)." }], run: runClassifyKnowledgeInject },
   // #1061 classify_knowledge 의 헤드리스판 — 상시세션 관성(옛 should 로 판단 — classify-knowledge-stale-session-inertia)을 매 배치 fresh 컨텍스트로 근본 회피. 인박스 있을 때만 접수.
   { key: "classify_knowledge_headless", label: "미분류 지식 LLM 분류 (헤드리스 — 매 배치 새 세션)", params: [
+    { name: "classifier", label: "분류기 (선택)", kind: "classifier", hint: "[맥락 관리 ▸ 분류기]에서 등록한 분류기. 비우면 **켜져 있는 분류기 전부**를 각각 접수(병렬). 분류기가 하나도 없으면 종전 전역 분류로 동작." },
     { name: "requester", label: "의뢰자 (멤버 id/이메일)", kind: "text", hint: "헤드리스 실행 신원·과금 귀속(그 멤버의 클로드 로그인/프로필). 비우면 잡 생성자(created_by)." },
     { name: "prompt", label: "프롬프트 (선택 오버라이드)", kind: "textarea", hint: "비우면 기본 분류 프롬프트(관성 대응 — 매 배치 should 재조회·근거 인용 강제 포함). 인박스 비면 접수 안 함." },
     HEADLESS_MODEL_PARAM, HEADLESS_EFFORT_PARAM,
