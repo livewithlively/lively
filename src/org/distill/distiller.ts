@@ -322,7 +322,8 @@ export function buildThreadKnowledgeQuery(rows: Record<string, unknown>[]): { sq
        COALESCE(s.fields->>'thread_ts', s.fields->>'ts') AS tid,
        k.title, k.lifecycle
      FROM source s
-     JOIN knowledge_source ks ON ks.source_id = s.id
+     -- ⚠ derived_from 만 — cites(단순 참조)까지 잡으면 '참고로 걸린 문서'를 갱신하라고 시킨다.
+     JOIN knowledge_source ks ON ks.source_id = s.id AND ks.relation = 'derived_from'
      JOIN knowledge k ON k.name = ks.name
      WHERE s.lifecycle='active' AND k.lifecycle <> 'archived'
        AND (COALESCE(s.fields->>'container_name',''), COALESCE(s.fields->>'thread_ts', s.fields->>'ts'))
@@ -693,6 +694,12 @@ export function buildSourceDigest(rows: Record<string, unknown>[]): string {
 }
 
 // 이 스레드에 이미 있는 지식 절(#1289) — 새 자료가 기존 지식의 '갱신 재료'임을 못 박는다.
+//  ⚠ "이 스레드에서 만들어졌다"라고 말하면 **거짓일 수 있다.** 실측: 사람이 다른 근거로 손수 쓴 문서에
+//   나중에 이 스레드 자료 1건이 근거로 붙은 사례가 있었다(근거 16건 중 1건, 주 스레드는 다른 채널).
+//   그걸 '내 스레드의 산출물'로 오해하면 남의 논의가 본체인 문서를 갈아엎는다 → 사실만 말하고(연결돼 있다)
+//   갱신은 덮어쓰기가 아니라 덧붙이기라고 못 박는다.
+//  ⚠ 근거 비중이 낮다고 '갱신하지 말라'는 규칙을 넣지 마라 — 채널을 넘는 후속 보고(결정은 A 채널,
+//   적용 보고는 B 채널)가 정확히 그 형태다. 그 규칙은 유효한 연결을 끊고 중복 문서를 만든다(실측 사례).
 //  없으면 절 자체가 안 붙는다(무회귀).
 export const THREAD_KN_MAX = 20;
 export function buildThreadKnowledgeBlock(kn: Record<string, unknown>[]): string {
@@ -704,10 +711,12 @@ export function buildThreadKnowledgeBlock(kn: Record<string, unknown>[]): string
   });
   const more = kn.length > shown.length ? [`  · …외 ${kn.length - shown.length}건(상한으로 생략)`] : [];
   return [
-    `[이 스레드엔 이미 지식이 있다 — 새로 만들지 말고 그것을 갱신해라]`,
-    `아래 지식은 이번 대상 자료와 **같은 스레드**의 다른 자료에서 이미 만들어졌다. 이번 자료는 그 논의의`
-      + ` 후속(답글·정정)이므로 **새 지식을 만들면 파편화된다.** knowledge_save 를 같은 name 으로 불러 본문을`
-      + ` 보강하고, 이번 자료를 source_link_knowledge 로 그 지식에 연결해라.`,
+    `[이 스레드의 자료가 이미 지식에 연결돼 있다 — 새로 만들지 말고 그것을 갱신해라]`,
+    `아래 지식에는 이번 대상 자료와 **같은 스레드**의 자료가 근거(derived_from)로 이미 연결돼 있다.`
+      + ` 이번 자료는 그 논의의 후속(답글·정정·적용보고)이므로 **새 지식을 만들면 파편화된다.**`
+      + ` knowledge_save 를 같은 name 으로 불러 본문을 보강하고, 이번 자료를 source_link_knowledge 로 연결해라.`,
+    `⚠ 그 지식이 **이 스레드에서 만들어졌다는 뜻은 아니다** — 근거의 대부분이 다른 채널·다른 스레드의 논의이거나,`
+      + ` 사람이 다른 자료로 손수 쓴 문서일 수 있다. 그러니 기존 본문을 갈아엎지 말고 **덧붙여라.**`,
     ...lines, ...more,
     `(정말 다른 주제라고 판단될 때만 새로 만든다 — 그때도 왜 갈랐는지 본문에 남겨라.)`,
   ].join("\n");
