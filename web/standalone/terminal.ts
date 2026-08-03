@@ -1329,7 +1329,7 @@ async function loadDir(p) {
     const childPath = (curDir ? curDir + '/' : '') + it.name;
     const isDir = it.type === 'dir';
     const shareRel = shareRoot ? (sharePath ? sharePath + '/' + it.name : it.name) : null;
-    const row = el('div', { class: 'exp-item', onclick: () => (isDir ? loadDir(childPath) : openPreview(childPath, it.name)) },
+    const row = el('div', { class: 'exp-item', onclick: () => (isDir ? loadDir(childPath) : openPreview(childPath, it.name, shareRel)) },
       el('span', { class: 'ic', text: fileIcon(it.name, it.type) }), it.name,
       // .sz 는 폴더에서도(빈 값으로) 항상 그린다 — 이 span 의 margin-left:auto 가 오른쪽 액션들을 끝으로 밀기
       //  때문이다(terminal.html .exp-item .sz). 폴더에서 빼면 🔗 가 이름 바로 옆에 붙어 열이 어긋난다.
@@ -1420,19 +1420,36 @@ const TEXT_RE = /\.(txt|text|log|json|jsonc|ya?ml|toml|ini|conf|cfg|env|csv|tsv|
 const TEXT_NAMES = new Set(['dockerfile', 'makefile', 'license', 'readme', 'changelog', '.gitignore', '.gitattributes', '.editorconfig', '.env']);
 const isTextLike = (name) => MD_RE.test(name) || TEXT_RE.test(name) || TEXT_NAMES.has(name.toLowerCase());
 
-async function openPreview(p, name) {
+// 세션 파일 탐색기의 미리보기(탭 패널).
+//  ⭐ #1436 후속 — 이 페이지는 **standalone 번들**이라 web/lib 를 import 할 수 없다(standalone tsconfig 의 rootDir 이
+//   web/standalone 이고, 산출물 경로를 바꾸면 dist/standalone 을 직접 import 하는 테스트가 깨진다). 그래서 공용
+//   렌더러(lib/file-preview)를 **복제하지 않고 위임**한다:
+//    · 여기서 인라인으로 보여주는 것 = 터미널 문맥에 맞는 것뿐(이미지 · md 렌더 · 텍스트/코드).
+//    · pdf·표·음성·영상 등 나머지 = [⛶ 전체화면]으로 공용 렌더러(#/f)에 넘긴다.
+//   종전엔 그 자리에 '그래도 미리보기'가 있어 **바이너리를 텍스트로 뿌렸다**(깨진 글자 화면) — 선택지처럼 보이지만
+//   쓸 수 있는 답이 아니었다. 이제 실제로 볼 수 있는 곳으로 보낸다.
+//  shareRel = 공유 링크 좌표(loadDir 이 서버 응답에서 받은 것). 없으면(원격 노드 등) 전체화면 버튼을 안 만든다.
+async function openPreview(p, name, shareRel?) {
   const id = 'file:' + p;
   const body = el('div', { class: 'preview-body' }, el('div', { class: 'gate-msg', text: '불러오는 중…' }));
-  addPane(id, name, true, body);
+  // 상단 바 — 어떤 타입이든 같은 자리에 같은 선택지를 둔다(전체화면·링크·다운로드).
+  const bar = el('div', { class: 'preview-bar' },
+    el('span', { class: 'preview-bar-nm', title: name, text: name }),
+    el('span', { class: 'preview-bar-sp' }),
+    shareRel ? el('a', { class: 'tbtn', href: shareUrlFor(shareRel), target: '_blank', rel: 'noopener', title: '전체화면(새 탭)', text: '⛶ 전체화면' }) : null,
+    shareRel ? el('button', { class: 'tbtn', text: '🔗 링크', title: '링크 복사', onclick: () => copyShareLink(shareRel, false) }) : null,
+    el('button', { class: 'tbtn', text: '⬇ 다운로드', onclick: () => downloadFile(p, name) }));
+  const pane = el('div', { class: 'preview-pane' }, bar, body);
+  addPane(id, name, true, pane);
   if (IMG_RE.test(name)) { renderImage(body, p, name); return; }
   if (isTextLike(name)) { renderTextPreview(body, p, MD_RE.test(name)); return; }
-  // 미지원 타입 → 오버레이로 알리고 선택지 제공.
+  // 인라인으로 보여줄 수 없는 형식 → 볼 수 있는 곳(전체화면)으로 보낸다.
   body.replaceChildren(el('div', { class: 'unsupported' },
     el('div', { class: 'unsupported-card' },
-      el('div', { class: 'unsupported-title', text: '미리보기를 지원하지 않는 파일' }),
-      el('div', { class: 'unsupported-sub', text: name }),
+      el('div', { class: 'unsupported-title', text: shareRel ? '이 형식은 전체화면에서 열려요' : '미리보기를 지원하지 않는 파일' }),
+      el('div', { class: 'unsupported-sub', text: shareRel ? name + ' — PDF·표·음성·영상은 전체화면 미리보기가 렌더합니다.' : name }),
       el('div', { class: 'unsupported-actions' },
-        el('button', { class: 'tbtn', text: '그래도 미리보기', onclick: () => renderTextPreview(body, p, false) }),
+        shareRel ? el('a', { class: 'tbtn', href: shareUrlFor(shareRel), target: '_blank', rel: 'noopener', text: '⛶ 전체화면으로 열기' }) : null,
         el('button', { class: 'tbtn', text: '다운로드', onclick: () => downloadFile(p, name) })))));
 }
 async function renderImage(body, p, name) {
@@ -1447,7 +1464,9 @@ async function renderTextPreview(body, p, asMd) {
   try {
     const res = await fetchAuth(sUrl('/file?path=' + encodeURIComponent(p)));
     if (!res.ok) { const d = await res.json().catch(() => null); throw new Error((d && d.error) || ('' + res.status)); }
-    const text = await res.text();
+    let text = await res.text();
+    // json 은 정렬해서 보여준다 — 한 줄로 밀린 json 은 사실상 못 읽는다(공용 렌더러와 같은 처리).
+    if (/\.json$/i.test(p)) { try { text = JSON.stringify(JSON.parse(text), null, 2); } catch { /* 원문 유지 */ } }
     body.replaceChildren(asMd ? renderMarkdown(text) : el('pre', { class: 'raw', text: text }));
   } catch (e) { body.replaceChildren(el('div', { class: 'gate-msg', text: '미리보기 실패: ' + e.message })); }
 }

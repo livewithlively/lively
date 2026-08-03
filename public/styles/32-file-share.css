@@ -96,6 +96,37 @@ body[data-route="f"] main { max-width: none; margin: 0; padding: 0; flex: 1 1 au
   border-radius: 9px; background: var(--bg-tint); color: var(--ink); font: inherit; font-size: 12.5px; }
 .sharelink-acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
 
+/* ── 공용 미리보기 렌더러(web/lib/file-preview.ts)의 기본 스타일 ──────────────
+   #1436 후속: 프로젝트 모달·홈 모달·공유 링크 전체페이지가 **같은 렌더러**를 쓴다. 여기 `fp-*` 는 그 기본이고,
+   각 화면은 자기 클래스(.proj-file-* / .dash-fp-* / .fpg-*)를 같은 노드에 함께 얹어 **크기만** 덮는다
+   (컨테이너가 달라 max-height 등이 다른 건 정당한 차이다).
+   ⚠ 기존 셀렉터는 지우지 않는다 — scripts/check-css-drops.mjs 가 HEAD 셀렉터 유실을 실패로 잡는다. */
+.fp-wrap { width: 100%; }
+.fp-img { display: block; max-width: 100%; margin: 0 auto; border-radius: 8px; }
+.fp-pdf, .fp-html { display: block; width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.fp-video { display: block; max-width: 100%; margin: 0 auto; border-radius: 8px; background: #000; }
+.fp-audio { display: block; width: min(560px, 100%); margin: 12px auto; }
+.fp-code { margin: 0; width: 100%; box-sizing: border-box; overflow: auto; background: var(--bg-tint);
+  border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px;
+  font-family: 'D2Coding', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.65;
+  white-space: pre; }
+.fp-code:not(.is-code) { white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 14px; line-height: 1.75; }
+/* 편집칸 — textarea 지만 코드 표시와 같은 톤이어야 '원문/편집'이 같은 화면으로 읽힌다. */
+.fp-edit { width: 100%; box-sizing: border-box; min-height: 44vh; resize: vertical; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px;
+  font-family: 'D2Coding', ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.65; }
+.fp-md { width: 100%; box-sizing: border-box; text-align: left; }
+.fp-msg { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 20px;
+  color: var(--muted-2); font-size: 13.5px; text-align: center; line-height: 1.6; }
+/* 표(csv·tsv) */
+.fp-tablewrap { width: 100%; overflow: auto; }
+.fp-table { border-collapse: collapse; font-size: 12.5px; }
+.fp-table th, .fp-table td { border: 1px solid var(--line); padding: 5px 9px; text-align: left; white-space: nowrap;
+  max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+.fp-table th { background: var(--bg-tint); font-weight: 700; position: sticky; top: 0; }
+.fp-table .fp-cn { color: var(--muted-2); text-align: right; background: var(--bg-tint); font-variant-numeric: tabular-nums; }
+.fp-tablemore { margin-top: 8px; font-size: 12px; color: var(--muted-2); }
+
 /* 액션 열이 4개(공유 추가)로 늘어난 폴더 브라우저 목록 뷰 — 파일(4)·폴더(4) 열 폭을 다시 맞춘다.
    (20-dashboard.css 의 78px 는 버튼 3개 기준이었다 — 늘린 채 두면 날짜 열이 어긋난다.) */
 .dash-fb-row .dash-fb-actions { width: 104px; }

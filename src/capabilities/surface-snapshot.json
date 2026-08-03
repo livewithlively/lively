@@ -1094,7 +1094,7 @@
   "rest": [
    "POST /api/ui/org/distillers"
   ],
-  "input_hash": "14b5a84e40429f33"
+  "input_hash": "ee04aef088d4095e"
  },
  {
   "name": "org_distiller_remove",
@@ -1535,7 +1535,7 @@
   "rest": [
    "POST /api/ui/activity"
   ],
-  "input_hash": "9b251166c2858b6e"
+  "input_hash": "74cbfa30723e5570"
  },
  {
   "name": "activity_list",
@@ -1935,7 +1935,7 @@
   "rest": [
    "POST /api/ui/knowledge"
   ],
-  "input_hash": "fb3f01ef2616f593"
+  "input_hash": "c3e2bafdd801a367"
  },
  {
   "name": "knowledge_set_lifecycle",
@@ -1966,6 +1966,16 @@
    "POST /api/ui/knowledge/:name/delete"
   ],
   "input_hash": "4a8417658cc910a2"
+ },
+ {
+  "name": "knowledge_set_title",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/knowledge/:name/title"
+  ],
+  "input_hash": "3f9f3b9278775b20"
  },
  {
   "name": "knowledge_link_category",
@@ -2075,7 +2085,7 @@
   "rest": [
    "POST /api/ui/sources"
   ],
-  "input_hash": "ccb77cff6227ad73"
+  "input_hash": "869f8253de96ae5b"
  },
  {
   "name": "source_link_knowledge",

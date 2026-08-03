@@ -4,16 +4,17 @@
 //  프로젝트 공유 폴더(#781·#795·#797)에서 검증된 것을 그대로 재사용한다 — 취소·진행바를 화면마다 따로 만들지 않는다.
 //  공개범위 폼 프리미티브(compactPicker·memberPicker)도 같은 이유로 재사용(#1291) — 리스트·스페이스·공유폴더가
 //  '누가 보나'를 **같은 컨트롤**로 물어봐야 사용자가 규칙을 한 번만 배운다.
-import { api, el, errorNote, renderMarkdown, toast, visAxisOn } from '../core.js';
+import { TOKEN_KEY, api, apiUrl, el, errorNote, toast, visAxisOn } from '../core.js';
 import { skeleton } from '../learn.js';
 import { overlay } from '../admin.js'; // 공개범위 폼 등 — 다른 모달과 같은 프리미티브(#853)
 import { UP_CONFIRM, authDownload, compactPicker, fileSortApply, fileSortBtn, fileSortLoad, fileSortSave, fmtFileDateFull, fmtSize, memberPicker, upControl, upDropZone, upPrecheckOverwrite, upProgress, upSend, upToast } from '../projects.js';
 import { dashFoldView, dashSaveFoldView } from './prefs.js';
 import { dashDownloadIcon, dashFileThumb, dashFolderThumb, dashRenameIcon, dashTrashIcon, dashViewIconIcon, dashViewListIcon } from './icons.js';
 import { dashChoicePopover, dashCtl, dashEmpty } from './chrome.js';
-import { copyFileLink, shareLinkIcon } from '../lib/sharelink.js'; // #1436 공유 링크 — 주소 형식·복사 UI 의 단일 소유
+import { copyFileLink, fileLinkUrl, shareLinkIcon } from '../lib/sharelink.js'; // #1436 공유 링크 — 주소 형식·복사 UI 의 단일 소유
 import { dashModal } from './widget-tasks-review-log.js'; // 전체 보기 팝업 — 작업로그 팝업과 **같은** 경량 모달
-import { DASH_AUDIO_MIME, DASH_IMG_MIME, DASH_MEDIA_MAX, DASH_PREVIEW_CODE, DASH_PREVIEW_IMG, DASH_PREVIEW_TABLE, DASH_PREVIEW_TEXT, DASH_VIDEO_MIME, dashAuthFetch, dashFileExt, dashTablePreview, wheelToHorizontal } from './widget-folders-preview.js';
+import { dashAuthFetch, wheelToHorizontal } from './widget-folders-preview.js';
+import { buildFilePreview } from '../lib/file-preview.js'; // #1436 후속 — 미리보기 판정·렌더의 단일 소유
 // ── ③ 팀 공유 폴더 — 공유 워크스페이스 루트의 폴더. 목록형→아이콘형(#621). ──
 //  프로젝트 상세 '공유 폴더'와 동일한 아이콘 카드(proj-file-*): 맥 스타일 폴더 아이콘 + 이름 + '폴더'.
 async function fillFolders(zone) {
@@ -333,99 +334,58 @@ function dashFolderBrowser(root, startPath) {
         }
     };
     const download = (name) => authDownload('/api/ui/terminal/browse/file?download=1&' + qp(relOf(name)), name);
-    // 파일 미리보기 — 클릭 시 다운로드 대신 타입별 렌더(이미지·PDF·텍스트/코드[json 정렬])를 브라우저 안(제자리)에 표시.
-    //  browse/file 은 download 없이 인라인 서빙(2MB 미리보기 상한) → 이미지·PDF 는 blob(타입 재지정), 텍스트는 text.
+    // 파일 미리보기 — 클릭 시 다운로드 대신 타입별 렌더를 브라우저 안(제자리)에 표시.
+    //  ⭐ #1436 후속: 타입 판정·렌더·툴바 동작은 **공용 렌더러**(lib/file-preview.buildFilePreview)가 소유한다.
+    //   종전엔 이 함수와 프로젝트 파일 뷰어(projects/files-cards.openFileViewer)가 각자 판정을 갖고 있어 같은 파일이
+    //   화면마다 다르게 열렸다 — .csv 는 여기선 표·저기선 원문, .mp4 는 여기선 재생·저기선 '미지원', .md 편집은
+    //   저기만 가능. 여기는 이제 '어디에 놓을지(제자리 전환)'와 '버튼 모양'만 정한다.
+    //  이 화면이 새로 얻은 것: **md·텍스트 편집·저장**(프로젝트 모달의 장점) + [⛶ 전체화면].
+    // 편집 저장 — browse 업로드(PUT)와 같은 라우트(파일 바이트라 JSON api() 를 쓰지 않는다).
+    //  이 루트는 셸(터미널)로 이미 rw 라 UI 편집이 새 권한경계를 열지 않는다 — browse CRUD 를 연 것과 같은 근거.
+    const browsePutFile = (url, text) => {
+        const headers = { 'Content-Type': 'application/octet-stream' };
+        const t = localStorage.getItem(TOKEN_KEY);
+        if (t)
+            headers.Authorization = 'Bearer ' + t;
+        return fetch(apiUrl(url), { method: 'PUT', headers, body: new Blob([text]) });
+    };
     const showPreview = async (rel, name, size) => {
-        const ext = dashFileExt(name);
         const viewUrl = '/api/ui/terminal/browse/file?' + qp(rel);
         const dlUrl = '/api/ui/terminal/browse/file?download=1&' + qp(rel);
-        // 마크다운은 렌더/원문 토글을 붙인다(다른 형식엔 숨김). 클릭 핸들러는 md 분기에서 연결.
-        const mdToggle = el('button', { class: 'dash-fb-btn', type: 'button', text: '</> 원문', hidden: 'true' });
-        const bar = el('div', { class: 'dash-fp-bar' }, el('button', { class: 'dash-fb-btn', type: 'button', text: '← 뒤로', onclick: () => load() }), el('span', { class: 'dash-fp-name', title: name, text: name }), el('span', { class: 'dash-fb-spacer' }), mdToggle, 
-        // 🔗 링크 복사(#1436) — 미리보기를 보다가 "이거 보내줘야겠다"가 되는 자리라 여기에도 둔다(목록에만
-        //  두면 뒤로 나가서 그 행을 다시 찾아야 한다).
-        el('button', { class: 'dash-fb-btn', type: 'button', title: '이 파일의 링크 복사', text: '🔗 링크 복사',
-            onclick: () => copyFileLink(root, rel, 'file') }), el('button', { class: 'dash-fb-btn', type: 'button', text: '⬇ 다운로드', onclick: () => authDownload(dlUrl, name) }));
+        const mkBtn = (label, onClick) => el('button', { class: 'dash-fb-btn', type: 'button', text: label, onclick: onClick });
+        const bar = el('div', { class: 'dash-fp-bar' }, el('button', { class: 'dash-fb-btn', type: 'button', text: '← 뒤로', onclick: () => load() }), el('span', { class: 'dash-fp-name', title: name, text: name }), el('span', { class: 'dash-fb-spacer' }));
         const stage = el('div', { class: 'dash-fp-stage' }, el('div', { class: 'dash-fp-load' }, skeleton('불러오는 중')));
         container.replaceChildren(bar, stage);
-        const fail = (msg) => stage.replaceChildren(el('div', { class: 'dash-fp-msg' }, msg));
-        const big = (res) => res.status === 413;
+        // ⛶ 전체화면 — 같은 파일을 공유 링크 전체페이지(#/f)로 새 탭에 연다. '더 크게 보기'와 '링크로 보내기'가
+        //  같은 주소로 수렴해, 모달은 빠른 확인용이고 정독·공유는 전체페이지가 맡는다.
+        const fullBtn = el('a', { class: 'dash-fb-btn', href: fileLinkUrl(root, rel), target: '_blank', rel: 'noopener',
+            title: '전체화면(새 탭)으로 열기', text: '⛶ 전체화면' });
+        let out;
         try {
-            if (DASH_PREVIEW_IMG.includes(ext)) {
-                const res = await dashAuthFetch(viewUrl);
-                if (!res.ok)
-                    return fail(big(res) ? '이미지가 커서 미리보기할 수 없어요 — 다운로드하세요.' : '미리보기를 불러오지 못했어요 (' + res.status + ')');
-                const img = el('img', { class: 'dash-fp-img', alt: name });
-                img.src = URL.createObjectURL(new Blob([await res.blob()], { type: DASH_IMG_MIME[ext] || 'application/octet-stream' }));
-                stage.replaceChildren(img);
-            }
-            else if (ext === 'pdf') {
-                const res = await dashAuthFetch(viewUrl);
-                if (!res.ok)
-                    return fail(big(res) ? 'PDF가 커서 미리보기할 수 없어요 — 다운로드하세요.' : '미리보기를 불러오지 못했어요 (' + res.status + ')');
-                const frame = el('iframe', { class: 'dash-fp-pdf', title: name });
-                // #req 내장 PDF 뷰어: 썸네일 사이드바(navpanes) 끄고 폭맞춤(FitH)으로 크게. 툴바는 유지(다운로드·인쇄).
-                frame.src = URL.createObjectURL(new Blob([await res.blob()], { type: 'application/pdf' })) + '#navpanes=0&toolbar=1&view=FitH';
-                stage.replaceChildren(frame);
-            }
-            else if (DASH_PREVIEW_TABLE.has(ext)) { // csv·tsv → 표
-                const res = await dashAuthFetch(viewUrl);
-                if (!res.ok)
-                    return fail(big(res) ? '파일이 커서 미리보기할 수 없어요 — 다운로드하세요.' : '미리보기를 불러오지 못했어요 (' + res.status + ')');
-                stage.replaceChildren(dashTablePreview(await res.text(), ext === 'tsv' ? '\t' : ','));
-            }
-            else if (DASH_AUDIO_MIME[ext] || DASH_VIDEO_MIME[ext]) { // 음성·영상 — download=1 로 2MB 상한 우회(미디어는 큼), 메모리 보호 상한.
-                if (size && size > DASH_MEDIA_MAX)
-                    return fail('파일이 커서(' + fmtSize(size) + ') 미리보기 대신 다운로드하세요.');
-                const res = await dashAuthFetch(dlUrl);
-                if (!res.ok)
-                    return fail('미리보기를 불러오지 못했어요 (' + res.status + ')');
-                const isVid = !!DASH_VIDEO_MIME[ext];
-                const url = URL.createObjectURL(new Blob([await res.blob()], { type: isVid ? DASH_VIDEO_MIME[ext] : DASH_AUDIO_MIME[ext] }));
-                stage.replaceChildren(el(isVid ? 'video' : 'audio', { class: isVid ? 'dash-fp-video' : 'dash-fp-audio', src: url, controls: 'true', preload: 'metadata', playsinline: 'true' }));
-            }
-            else if (ext === 'md' || ext === 'markdown') { // #req 마크다운 — 원문 대신 렌더(제목·목록·표·코드…)로 가독성↑. 토글로 원문도.
-                const res = await dashAuthFetch(viewUrl);
-                if (!res.ok)
-                    return fail(big(res) ? '파일이 커서 미리보기할 수 없어요 — 다운로드하세요.' : '미리보기를 불러오지 못했어요 (' + res.status + ')');
-                const text = await res.text();
-                let raw = false;
-                const renderMd = () => {
-                    if (raw) {
-                        const pre = el('pre', { class: 'dash-fp-code' });
-                        pre.textContent = text;
-                        stage.replaceChildren(pre);
-                    }
-                    else
-                        stage.replaceChildren(el('div', { class: 'md-rendered dash-fp-md' }, renderMarkdown(text)));
-                    mdToggle.textContent = raw ? '👁 렌더 보기' : '</> 원문';
-                };
-                mdToggle.hidden = false;
-                mdToggle.onclick = () => { raw = !raw; renderMd(); };
-                renderMd();
-            }
-            else if (DASH_PREVIEW_TEXT.includes(ext) || !ext) {
-                const res = await dashAuthFetch(viewUrl);
-                if (!res.ok)
-                    return fail(big(res) ? '파일이 커서 미리보기할 수 없어요 — 다운로드하세요.' : '미리보기를 불러오지 못했어요 (' + res.status + ')');
-                let text = await res.text();
-                if (ext === 'json') {
-                    try {
-                        text = JSON.stringify(JSON.parse(text), null, 2);
-                    }
-                    catch { /* 원문 유지 */ }
-                }
-                const pre = el('pre', { class: 'dash-fp-code' + (DASH_PREVIEW_CODE.has(ext) ? ' is-code' : '') });
-                pre.textContent = text;
-                stage.replaceChildren(pre);
-            }
-            else {
-                fail('이 형식(' + (ext || '알 수 없음') + ')은 미리보기를 지원하지 않아요. 다운로드해 확인하세요.');
-            }
+            out = await buildFilePreview({
+                name, size,
+                fetchView: () => dashAuthFetch(viewUrl),
+                fetchDownload: () => dashAuthFetch(dlUrl),
+                // 기존 크기 규칙(20-dashboard.css .dash-fp-*)을 보존하려고 화면 클래스를 함께 얹는다.
+                cls: { img: 'dash-fp-img', pdf: 'dash-fp-pdf', md: 'dash-fp-md', code: 'dash-fp-code', html: 'dash-fp-pdf', table: 'dash-fp-tablewrap', audio: 'dash-fp-audio', video: 'dash-fp-video', msg: 'dash-fp-msg' },
+                pdfHash: '#navpanes=0&toolbar=1&view=FitH', // 모달은 폭이 좁아 썸네일 사이드바를 끈다
+                mkBtn,
+                save: async (text) => {
+                    const res = await browsePutFile(viewUrl, text);
+                    if (!res.ok)
+                        throw new Error('저장 실패 (' + res.status + ')');
+                },
+                onSaved: () => toast('저장했습니다'),
+                onError: (m) => toast(m, true),
+            });
         }
         catch (e) {
-            fail('미리보기 실패 — ' + ((e && e.message) || e));
+            stage.replaceChildren(el('div', { class: 'dash-fp-msg' }, '미리보기 실패 — ' + ((e && e.message) || e)));
+            return;
         }
+        bar.append(...out.tools, fullBtn, el('button', { class: 'dash-fb-btn', type: 'button', title: '이 파일의 링크 복사', text: '🔗 링크 복사',
+            onclick: () => copyFileLink(root, rel, 'file') }), el('button', { class: 'dash-fb-btn', type: 'button', text: '⬇ 다운로드', onclick: () => authDownload(dlUrl, name) }));
+        stage.replaceChildren(out.body);
     };
     // 액션 버튼(다운로드·이름변경·삭제) — 아이콘/목록 두 뷰 공용.
     const act = (icon, title, danger, onClick) => {
@@ -549,4 +509,6 @@ function dashFolderBrowser(root, startPath) {
     return container;
 }
 export { dashFolderBrowser, dashFolderCard, dashFolderRow, dashLockBadge, fillFolders, openFolderVisibilityForm, };
-export { DASH_AUDIO_MIME, DASH_IMG_MIME, DASH_MEDIA_MAX, DASH_PREVIEW_CODE, DASH_PREVIEW_IMG, DASH_PREVIEW_TABLE, DASH_PREVIEW_TEXT, DASH_VIDEO_MIME, dashAuthFetch, dashFileExt, dashParseDelimited, dashTablePreview, wheelToHorizontal } from './widget-folders-preview.js';
+// #1436 후속 — 미리보기 판정표·표 파서 재수출을 걷었다(전부 web/lib/file-preview.ts 소관이 됐고, 소비처는 셋 다 그쪽을
+//  직접 문다). 여기 남는 재수출은 대시보드 고유 보조 둘뿐이다.
+export { dashAuthFetch, wheelToHorizontal } from './widget-folders-preview.js';

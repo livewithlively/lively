@@ -85,7 +85,9 @@ export async function getTaskDetail(id: number, viewer?: string | null): Promise
       ...task, field_values: fieldValues,
       subtasks: subtasks.map((s: any) => ({ ...s, field_values: valuesByTask.get(s.id) ?? {} })),
     },
-    project: root ? { id: root.id, name: root.name, list_id: projectListId } : null,
+    // folder = 그 프로젝트의 공유 워크스페이스 기준 폴더 경로. 첨부 미리보기가 공유 링크(#1436)를 만들 좌표다
+    //  (첨부는 <folder>/_attachments/task-<id>/ 아래 실재하는 파일이다). 이미 조회 중이던 컬럼을 싣기만 한다.
+    project: root ? { id: root.id, name: root.name, folder: root.folder, list_id: projectListId } : null,
     list: listStatus,   // #731 리스트 상태 체계(커스텀이면 statuses[]) — 모달 상태 필드가 커스텀 상태로 렌더.
     parent: parentRow ? { id: parentRow.id, name: parentRow.name, level: parentRow.level } : null,
     members, tags, time, checklists, links, feed,

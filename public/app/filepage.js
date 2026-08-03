@@ -17,15 +17,11 @@
 // ## 권한
 //  이 화면은 특권이 없다 — 파일을 읽는 API 가 기존 게이트(공유폴더 ACL + 프로젝트 가시성)를 그대로 집행한다.
 //  안 보이는 경로는 목록에서 빠지므로 여기선 '찾을 수 없음'으로 보인다(존재 은닉 정책과 같은 결).
-import { TOKEN_KEY, api, apiUrl, el, errorNote, renderMarkdown, toast } from './core.js';
+import { TOKEN_KEY, api, apiUrl, el, errorNote, toast } from './core.js';
 import { copyFileLink, fileLinkHash, joinRel, shareLinkIcon, shareRootLabel } from './lib/sharelink.js';
-import { DASH_AUDIO_MIME, DASH_IMG_MIME, DASH_MEDIA_MAX, DASH_PREVIEW_CODE, DASH_PREVIEW_IMG, DASH_PREVIEW_TABLE, DASH_PREVIEW_TEXT, DASH_VIDEO_MIME, dashFileExt, dashTablePreview, } from './dash/widget-folders-preview.js';
+import { buildFilePreview } from './lib/file-preview.js'; // 미리보기 판정·렌더의 단일 소유(세 화면 공용)
 import { dashFileThumb, dashFolderThumb } from './dash/icons.js';
 import { fmtFileDateFull, fmtSize } from './projects/files-format.js';
-// 확장자 없는 흔한 텍스트 파일 — 목록에서 클릭했을 때 '미지원'으로 떨어지지 않게(터미널 미리보기와 같은 목록).
-const TEXT_NAMES = new Set(['dockerfile', 'makefile', 'license', 'readme', 'changelog', 'agents.md', '.gitignore', '.env']);
-const HTML_EXTS = new Set(['html', 'htm']);
-const MD_EXTS = new Set(['md', 'markdown']);
 // 인증 fetch — **apiUrl 경유**가 중요하다: 프리뷰 서브패스(/preview/<id>/ui/)에서 뜬 화면이 fetch('/api/…')를
 //  그대로 쓰면 오리진 루트(=라이브 게이트웨이)로 새어 '새 프론트 + 구 백엔드'를 본다(lib/net.ts 헤더 주석).
 //  ⚠ dash/widget-folders-preview.ts 의 dashAuthFetch 는 그 버그가 남아 있어(그 파일 주석에 명시) 여기서 쓰지 않는다.
@@ -141,143 +137,37 @@ async function showDir(root, rel, stage, acts) {
 }
 // ── 파일 ────────────────────────────────────────────────────────────────────
 async function showFile(root, rel, name, entry, stage, acts) {
-    const ext = dashFileExt(name);
     const viewUrl = '/api/ui/terminal/browse/file?' + browseQs(root, rel);
     const dlUrl = '/api/ui/terminal/browse/file?download=1&' + browseQs(root, rel);
     const size = Number(entry && entry.size) || 0;
-    // md·html 은 렌더가 기본, 원문은 토글로. 다른 형식엔 이 버튼을 아예 안 만든다(빈 버튼 자리를 남기지 않는다).
-    const toggle = el('button', { class: 'fpg-btn', type: 'button', text: '</> 원문' });
-    const withToggle = (nodes) => [toggle, ...nodes];
+    const mkBtn = (label, onClick) => el('button', { class: 'fpg-btn', type: 'button', text: label, onclick: onClick });
     const tail = tailActions(root, rel, 'file', dlUrl);
     acts.replaceChildren(...tail);
-    const fail = (msg) => { stage.replaceChildren(el('div', { class: 'fpg-msg', text: msg })); };
-    const tooBig = (res) => res.status === 413;
-    const readable = async (url, what) => {
-        const res = await fileFetch(url);
-        if (res.ok)
-            return res;
-        fail(tooBig(res)
-            ? what + '이(가) 커서 미리보기할 수 없어요 — [⬇ 다운로드] 로 확인하세요.'
-            : '미리보기를 불러오지 못했어요 (' + res.status + ')');
-        return null;
-    };
+    let out;
     try {
-        if (DASH_PREVIEW_IMG.includes(ext)) {
-            const res = await readable(viewUrl, '이미지');
-            if (!res)
-                return;
-            const img = el('img', { class: 'fpg-img', alt: name });
-            img.src = URL.createObjectURL(new Blob([await res.blob()], { type: DASH_IMG_MIME[ext] || 'application/octet-stream' }));
-            stage.replaceChildren(img);
-        }
-        else if (ext === 'pdf') {
-            // 브라우저 내장 PDF 뷰어(요구: "바로 해당 브라우저의 pdf미리보기로"). blob 에 MIME 을 명시해야 iframe 이
-            //  뷰어를 띄운다(안 하면 %PDF 원시바이트가 텍스트로 노출된다 — files-cards.ts 가 같은 함정을 이미 적어뒀다).
-            //  전체 페이지라 썸네일 사이드바(navpanes)를 켜 둔다 — 모달과 달리 폭이 넉넉해 목차가 쓸모 있다.
-            const res = await readable(viewUrl, 'PDF');
-            if (!res)
-                return;
-            const frame = el('iframe', { class: 'fpg-pdf', title: name });
-            frame.src = URL.createObjectURL(new Blob([await res.blob()], { type: 'application/pdf' })) + '#toolbar=1&view=FitH';
-            stage.replaceChildren(frame);
-        }
-        else if (MD_EXTS.has(ext)) {
-            const res = await readable(viewUrl, '파일');
-            if (!res)
-                return;
-            const text = await res.text();
-            let raw = false;
-            const paint = () => {
-                stage.replaceChildren(raw
-                    ? codeBlock(text, ext)
-                    : el('article', { class: 'md-rendered fpg-md' }, renderMarkdown(text)));
-                toggle.textContent = raw ? '👁 렌더 보기' : '</> 원문';
-            };
-            toggle.onclick = () => { raw = !raw; paint(); };
-            acts.replaceChildren(...withToggle(tail));
-            paint();
-        }
-        else if (HTML_EXTS.has(ext)) {
-            const res = await readable(viewUrl, '파일');
-            if (!res)
-                return;
-            const text = await res.text();
-            let raw = false;
-            const paint = () => {
-                stage.replaceChildren(raw ? codeBlock(text, ext) : renderHtml(text, name));
-                toggle.textContent = raw ? '👁 렌더 보기' : '</> 원문';
-            };
-            toggle.onclick = () => { raw = !raw; paint(); };
-            acts.replaceChildren(...withToggle(tail));
-            paint();
-        }
-        else if (DASH_PREVIEW_TABLE.has(ext)) {
-            const res = await readable(viewUrl, '파일');
-            if (!res)
-                return;
-            stage.replaceChildren(el('div', { class: 'fpg-table' }, dashTablePreview(await res.text(), ext === 'tsv' ? '\t' : ',')));
-        }
-        else if (DASH_AUDIO_MIME[ext] || DASH_VIDEO_MIME[ext]) {
-            // 미디어는 인라인 상한(서버 MAX_PREVIEW)을 넘기 쉬워 download=1 로 받고, 메모리 보호는 클라 상한으로.
-            if (size && size > DASH_MEDIA_MAX) {
-                fail('파일이 커서(' + fmtSize(size) + ') 미리보기 대신 [⬇ 다운로드] 로 확인하세요.');
-                return;
-            }
-            const res = await readable(dlUrl, '파일');
-            if (!res)
-                return;
-            const isVid = !!DASH_VIDEO_MIME[ext];
-            const src = URL.createObjectURL(new Blob([await res.blob()], { type: isVid ? DASH_VIDEO_MIME[ext] : DASH_AUDIO_MIME[ext] }));
-            stage.replaceChildren(el(isVid ? 'video' : 'audio', { class: isVid ? 'fpg-video' : 'fpg-audio', src, controls: 'true', preload: 'metadata', playsinline: 'true' }));
-        }
-        else if (DASH_PREVIEW_TEXT.includes(ext) || !ext || TEXT_NAMES.has(name.toLowerCase())) {
-            const res = await readable(viewUrl, '파일');
-            if (!res)
-                return;
-            let text = await res.text();
-            if (ext === 'json') {
-                try {
-                    text = JSON.stringify(JSON.parse(text), null, 2);
-                }
-                catch { /* 원문 유지 */ }
-            }
-            stage.replaceChildren(codeBlock(text, ext));
-        }
-        else {
-            // 미리보기 미지원 — 요구대로 '다운로드 버튼'을 화면 가운데에 크게(상단 바에도 있지만 여기가 이 화면의 결론이다).
-            stage.replaceChildren(el('div', { class: 'fpg-msg fpg-msg-empty' }, el('b', { text: '이 형식은 미리보기를 지원하지 않아요' }), el('span', { text: (ext ? '.' + ext + ' 파일은' : '이 파일은') + ' 브라우저에서 그려 줄 수 없어요 — 내려받아 확인하세요.' }), el('div', { class: 'fpg-msg-path', text: name + ' · ' + fmtSize(size) }), el('button', { class: 'fpg-btn fpg-btn-primary fpg-btn-lg', type: 'button', text: '⬇ 다운로드', onclick: () => download(dlUrl, name) })));
-        }
+        // 타입 판정·렌더·툴바 동작은 공용 렌더러가 소유한다(홈 모달·프로젝트 모달과 **같은 코드**).
+        //  이 화면은 전체페이지라 PDF 썸네일 사이드바를 켜 둔다(모달과 달리 폭이 넉넉해 목차가 쓸모 있다).
+        //  편집(save)은 주지 않는다 — 링크를 받은 사람의 읽기 화면이고, 편집 표면은 앱 안(모달)에 이미 있다.
+        out = await buildFilePreview({
+            name, size,
+            fetchView: () => fileFetch(viewUrl),
+            fetchDownload: () => fileFetch(dlUrl),
+            cls: { img: 'fpg-img', pdf: 'fpg-pdf', html: 'fpg-html', md: 'fpg-md', code: 'fpg-code', table: 'fpg-table', audio: 'fpg-audio', video: 'fpg-video', msg: 'fpg-msg' },
+            pdfHash: '#toolbar=1&view=FitH',
+            mkBtn,
+        });
     }
     catch (e) {
-        fail('미리보기 실패 — ' + ((e && e.message) || e));
+        stage.replaceChildren(el('div', { class: 'fpg-msg', text: '미리보기 실패 — ' + ((e && e.message) || e) }));
+        return;
     }
-}
-function codeBlock(text, ext) {
-    const pre = el('pre', { class: 'fpg-code' + (DASH_PREVIEW_CODE.has(ext) ? ' is-code' : '') });
-    pre.textContent = text;
-    return pre;
-}
-/**
- * html 렌더 — **sandbox iframe + srcdoc**.
- *  이 파일들은 남이 올린 임의의 html 이다. innerHTML 로 같은 문서에 심으면 그 안의 <script> 가 우리 오리진에서
- *  돌아 세션 쿠키·localStorage 토큰을 그대로 가져갈 수 있다(저장형 XSS). 그래서:
- *   · srcdoc + sandbox → 문서가 **불투명 오리진**을 갖는다(allow-same-origin 을 주지 않는 것이 핵심).
- *     부모 DOM·쿠키·localStorage 에 손이 닿지 않는다.
- *   · allow-scripts 는 준다 — 스크립트로 그리는 보고서(차트 등)가 아예 백지로 뜨면 '렌더해서 보여주자'가
- *     성립하지 않는다. 불투명 오리진이라 스크립트가 있어도 우리 자격증명엔 닿지 못한다.
- *     (⚠ allow-scripts 와 allow-same-origin 을 **함께** 주면 샌드박스가 스스로 풀린다 — 절대 같이 주지 말 것.)
- *   · allow-top-navigation 은 주지 않는다 → 이 페이지를 피싱 사이트로 갈아치울 수 없다.
- *   · 링크는 새 탭으로만 열리게 allow-popups(+escape-sandbox) — 그것마저 막으면 문서 안 링크가 죽은 것처럼 보인다.
- *  한계(정직하게): srcdoc 문서엔 base URL 이 없어 상대경로 <img src="a.png">·외부 css 는 안 붙는다.
- *   자기완결 html(단일 파일 보고서)이 이 기능의 대상이고, 아니라면 다운로드해서 보는 게 맞다.
- */
-function renderHtml(text, name) {
-    const frame = el('iframe', {
-        class: 'fpg-html', title: name,
-        sandbox: 'allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals',
-        referrerpolicy: 'no-referrer',
-    });
-    frame.srcdoc = text;
-    return frame;
+    acts.replaceChildren(...out.tools, ...tail);
+    stage.replaceChildren(out.body);
+    // 미리보기가 없는 형식이면 이 화면의 결론은 '내려받기'다 — 상단 바에만 두지 말고 본문 가운데에 크게 한 번 더.
+    //  (공용 렌더러는 안내 문구만 만든다. '이 화면에서 무엇을 하라'는 화면 소관이라 여기서 붙인다.)
+    if (out.tools.length === 0 && out.body.classList && out.body.classList.contains('fp-msg')) {
+        out.body.classList.add('fpg-msg-empty');
+        out.body.append(el('div', { class: 'fpg-msg-path', text: name + (size ? ' · ' + fmtSize(size) : '') }), el('button', { class: 'fpg-btn fpg-btn-primary fpg-btn-lg', type: 'button', text: '⬇ 다운로드', onclick: () => download(dlUrl, name) }));
+    }
 }
 export { renderFilePage };
