@@ -38,6 +38,16 @@ await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const BASE = `http://127.0.0.1:${server.address().port}`;
 
 const root = await fsp.mkdtemp(path.join(os.tmpdir(), "lively-resume-"));
+// ⚠ 하네스(claude·codex)를 PATH 에서 가린다 — CLI 하위명령이 하네스를 만지는 순간 유닛 테스트가 **사람의 로컬
+//  설치·MCP 설정에 시간과 결과를 의존**한다(#1431 실측: project-status 가 실제 `claude mcp list` 를 불러 36.5초).
+//  `resume` 는 실제로 `claude` 를 띄우는 명령이라 여기선 특히 중요하다(--print 로 안 뜨더라도 관례로 막는다).
+//  가드: kit/cli/cli-spawn-harness-sandbox.test.mjs
+const STUB_BIN = path.join(root, "stub-bin");
+fs.mkdirSync(STUB_BIN, { recursive: true });
+for (const b of ["claude", "codex"]) {
+  fs.writeFileSync(path.join(STUB_BIN, b), "#!/bin/sh\nexit 0\n");
+  fs.chmodSync(path.join(STUB_BIN, b), 0o755);
+}
 // CLI 를 격리 HOME + 격리 cwd 로 실행. --print 라 claude 는 안 뜬다.
 //  ⚠ **async spawn 필수** — 가짜 게이트웨이가 이 프로세스에 있어, spawnSync 로 블로킹하면 이벤트루프가 멈춰
 //    자식의 요청을 서버가 못 받아 교착한다(child↔server 상호대기).
@@ -46,7 +56,7 @@ function runResume(sid, extra = []) {
   const cwd = fs.mkdtempSync(path.join(root, "work-"));
   return new Promise((resolve) => {
     const c = spawn(process.execPath, [CLI, "resume", sid, "--print", "--node", "", ...extra], {
-      cwd, env: { ...process.env, LIVELY_HOME: home, LIVELY_GATEWAY_URL: BASE, LIVELY_TOKEN: "t" },
+      cwd, env: { ...process.env, PATH: `${STUB_BIN}:${process.env.PATH}`, LIVELY_HOME: home, LIVELY_GATEWAY_URL: BASE, LIVELY_TOKEN: "t" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";
