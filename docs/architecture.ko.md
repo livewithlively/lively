@@ -72,7 +72,7 @@
 
 | 게이트 | 실행 | 막는 사고 |
 |---|---|---|
-| **러너** | `node scripts/run-tests.mjs` | 유닛 회귀 일반. 소스 글롭 자동 발견이라 **테스트 추가 = 파일 생성만**(등록 불요). 계층은 [`scripts/README.md`](../scripts/README.md) |
+| **러너** | `node scripts/run-tests.mjs` | 유닛 회귀 일반. 소스 글롭 자동 발견이라 **테스트 추가 = 파일 생성만**(등록 불요). **병렬(`-j`)·실패해도 끝까지** 돌고 끝에 실패를 모아 보고한다(#1431 — 실측 121s→42s). 계층·옵션은 [`scripts/README.md`](../scripts/README.md) |
 | **표면 스냅샷** | `node dist/capabilities/surface-snapshot.test.js` | 파일을 옮기고 가르는 사이 MCP/REST op 이 조용히 빠지거나 스키마·경로·순서가 바뀌는 것. 리팩토링 커밋에서 이게 빨개지면 **그 자체가 회귀 신호** — `UPDATE_SURFACE_SNAPSHOT=1` 은 의도적 표면 변경일 때만 |
 | **경계** | `node scripts/check-imports.mjs` | 새 순환 import(알려진 잔존은 소관 항목과 함께 등재) · 계층 위반 엣지(스토어→표면, 스토어→express, 범용 db→온톨로지, `web/lib`→페이지) · 500줄 초과 신규 대형 파일(경고) |
 | **번들** | `npm run build`(`scripts/build-node-agent.mjs` 내장) | 워커 노드 에이전트 번들에 DB 계열 모듈이 새로 실리는 것 — '**노드에 DB 없음**' 계약. `scripts/node-agent-allowed-modules.json` 과 대조하며, 이 파일은 손으로 고치지 말고 `UPDATE_NODE_AGENT_ALLOWLIST=1` 로만 갱신한다 |

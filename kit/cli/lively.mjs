@@ -348,12 +348,25 @@ function readMcpServers() {
 //   프로필 격리(#346)에선 claude 가 CLAUDE_CONFIG_DIR 쪽을 쓴다(deploy/provision-profile.sh:37 이 명시).
 //   그래서 backupUserMcp 가 **유저 원본을 못 보고 null 로 굳어**, uninstall 이 "설치 전 없었음"으로 판단해
 //   유저의 linear/notion 을 자격증명째 지웠다 — 백업이 막으려던 #744 갭 그 자체.
-function claudeUserConfigPath() {
+//  ⚠ #1079 와 같은 이유로 **존재하는 것 전부**를 돌려주는 판(claudeUserConfigPaths)이 따로 있다 — 훅과 클로드 코드가
+//   서로 다른 파일을 볼 수 있어(프로필 격리 #346) 하나만 보면 "등록했는데 미등록으로 보이는" 상태가 된다.
+//   단수판(claudeUserConfigPath)은 종전과 같이 **첫 후보**를 돌려준다 — 백업 스냅샷은 대상이 하나여야 한다(#744).
+function claudeUserConfigPaths() {
   const cands = [];
   if (process.env.CLAUDE_CONFIG_DIR) cands.push(join(process.env.CLAUDE_CONFIG_DIR, ".claude.json"));
   cands.push(join(HOME, ".claude.json"));
-  for (const c of cands) { try { if (existsSync(c)) return c; } catch { /* */ } }
-  return null;
+  const out = [];
+  for (const c of cands) { try { if (existsSync(c) && !out.includes(c)) out.push(c); } catch { /* */ } }
+  return out;
+}
+function claudeUserConfigPath() { return claudeUserConfigPaths()[0] ?? null; }
+// #1431 — **등록 여부만** 필요할 때(값이 아니라 유무). 존재하는 유저 설정 파일 전부를 본다.
+function claudeUserMcpRegistered(name) {
+  for (const p of claudeUserConfigPaths()) {
+    try { if (JSON.parse(readFileSync(p, "utf8"))?.mcpServers?.[name]) return true; }
+    catch { /* 파손·못읽음 → 다음 후보 */ }
+  }
+  return false;
 }
 function claudeUserMcp(name) {
   const p = claudeUserConfigPath();
@@ -754,7 +767,8 @@ async function gatherStatus() {
     account: { authenticated: false, id: null, name: null },
     kit: { local: readLively("kit-version") || null, remote: null, current: false, autoUpdate: null },
     harness: {
-      claude: { installed: has("claude"), wired: false, mcp: false },
+      // mcp = 등록됐나(정적) · mcpConnected = 지금 실제로 붙나(동적, 모르면 null — 아는 척하지 않는다)
+      claude: { installed: has("claude"), wired: false, mcp: false, mcpConnected: null },
       codex: { installed: has("codex"), wired: false },
     },
     hooks: { installed: 0, expected: REQUIRED_HOOKS.length },
@@ -766,12 +780,27 @@ async function gatherStatus() {
   try { st.harness.codex.wired = readFileSync(CODEX_CFG, "utf8").includes("lively-managed"); } catch { /* */ }
   try { st.hooks.installed = readdirSync(join(LIVELY, "hooks")).filter((f) => REQUIRED_HOOKS.includes(f)).length; } catch { /* */ }
   if (st.harness.claude.installed) {
-    // ⚠ `claude mcp list` 는 등록된 MCP 서버를 **헬스체크(=연결)** 한다. lively(http) 서버가 게이트웨이에 못 붙으면
+    // ⚠ `claude mcp list` 는 등록된 MCP 서버를 **전부** 헬스체크(=연결)한다. lively(http) 서버가 게이트웨이에 못 붙으면
     //  (게이트웨이 미도달) 그 연결이 무한정 매달려 `lively status` 전체가 hang 된다 — #1043 실측: MCP_TIMEOUT 없으면
     //  10초+ 후에도 안 끝나 SIGKILL. MCP_TIMEOUT 으로 서버별 헬스체크를 bound 하면 다운 서버는 ~3s 뒤 ✘ 로 완료되고,
-    //  spawnSync timeout 은 그마저 안 먹힐 때의 하드 백스톱이다. 등록 여부(이름 매칭)는 헬스체크 성패와 무관하게 출력에 남는다.
-    const r = run("claude", ["mcp", "list"], { allowFail: true, quiet: true, timeout: 8000, env: { MCP_TIMEOUT: "3000" } });
-    st.harness.claude.mcp = /(^|\s)lively\b/m.test(r.out + r.err);
+    //  spawnSync timeout 은 그마저 안 먹힐 때의 하드 백스톱이다.
+    // #1431 — 그래서 `list`(전체) 대신 **`get lively`(우리 것 하나)** 를 쓴다. 실측(2026-08-03, 등록 서버 14개):
+    //   · `mcp list` 4.78s = `lively status` 4.8s 의 **91%**. 그 비용은 **남의 서버 12개**(claude.ai 커넥터 8·npx·bun·
+    //     linear·notion)를 깨우는 값이다 — 게이트웨이 자체는 0.09s 다. 우리 상태를 보려고 남의 커넥터를 다 깨울 이유가 없다.
+    //   · `mcp get lively` 1.55s — 우리 서버만 헬스체크한다.
+    //   · 게다가 종전 판정은 **이름 매칭**이라 헬스체크 결과를 버렸다: 죽은 서버도 출력에 이름은 남아
+    //     (`lively: … - ✘ Failed to connect`) true 였다 → **끊김을 감지할 수 없었다**. `get` 은 `Status:` 줄로 답한다.
+    const g = run("claude", ["mcp", "get", "lively"], { allowFail: true, quiet: true, timeout: 8000, env: { MCP_TIMEOUT: "3000" } });
+    const out = `${g.out}${g.err}`;
+    if (/^\s*Scope:/m.test(out)) {
+      st.harness.claude.mcp = true;                                        // 등록됨(스코프 무관 — user/project/local 다 잡힌다)
+      st.harness.claude.mcpConnected = /^\s*Status:/m.test(out) ? /^\s*Status:\s*✔/m.test(out) : null;
+    } else {
+      // `mcp get` 을 모르는 구버전 claude 이거나, 정말 미등록. **구별할 필요가 없다** — 유저 설정 파일을 직접 읽으면
+      //  등록 여부는 구버전에서도 정답이고, 미등록이면 어차피 false 다. 연결은 확인 못 했으니 null(모른다)로 둔다.
+      st.harness.claude.mcp = claudeUserMcpRegistered("lively");
+      st.harness.claude.mcpConnected = null;
+    }
   }
   if (!gw) { st.gateway.error = "게이트웨이 미설정"; return st; }
   if (!tok) { st.gateway.error = "로그인 필요"; return st; }
@@ -900,7 +929,11 @@ async function cmdStatus(opts) {
         : String(st.kit.local)}`);
   }
   say(`  훅            ${st.hooks.installed}/${st.hooks.expected} ${mark(st.hooks.installed === st.hooks.expected)}`);
-  say(`  claude        ${mark(st.harness.claude.installed)} 설치   ${mark(st.harness.claude.wired)} 배선   ${mark(st.harness.claude.mcp)} MCP 등록`);
+  // 연결(#1431)은 **등록됐을 때만** 뜻이 있다. 확인 못 했으면(구버전 claude 등) 물음표로 — 모르는 걸 아는 척하지 않는다.
+  const conn = !st.harness.claude.mcp ? ""
+    : st.harness.claude.mcpConnected === null ? `   ${dim("? 연결")}`
+    : `   ${st.harness.claude.mcpConnected ? green("✓") : yellow("✘")} 연결`;
+  say(`  claude        ${mark(st.harness.claude.installed)} 설치   ${mark(st.harness.claude.wired)} 배선   ${mark(st.harness.claude.mcp)} MCP 등록${conn}`);
   say(`  codex         ${mark(st.harness.codex.installed)} 설치   ${mark(st.harness.codex.wired)} 배선`);
   if (st.kit.autoUpdate !== null) say(`  자동 업데이트 ${st.kit.autoUpdate ? green("켜짐") : yellow("꺼짐")}`);
   if (st.project) { say(""); renderProjectStatus(st.project); }
@@ -938,6 +971,13 @@ async function cmdDoctor(opts) {
   chk("훅 파일", st.hooks.installed === st.hooks.expected, `${st.hooks.installed}/${st.hooks.expected} (~/.lively/hooks)`, "lively install");
   chk("Claude 훅 배선", st.harness.claude.wired, st.harness.claude.wired ? "settings.json OK" : "미배선", "lively install");
   if (st.harness.claude.installed) chk("Claude MCP 등록", st.harness.claude.mcp, st.harness.claude.mcp ? "lively 등록됨" : "미등록", "lively update");
+  // #1431 — 등록과 별개로 **지금 붙는가**. VPN 끊김·게이트웨이 다운·프록시 파손은 등록이 멀쩡해도 여기서 ✘ 로 뜬다.
+  //  null(확인 못 함)이면 체크 자체를 만들지 않는다 — 모르는 것을 pass/fail 로 단정하면 진단이 거짓말을 한다.
+  if (st.harness.claude.mcp && st.harness.claude.mcpConnected !== null) {
+    chk("Claude MCP 연결", st.harness.claude.mcpConnected,
+      st.harness.claude.mcpConnected ? "lively 연결됨" : "등록은 됐지만 연결 실패 — 게이트웨이 도달·VPN·프록시 확인",
+      "lively doctor 후 게이트웨이 도달 여부(위 줄) 확인");
+  }
   if (st.harness.codex.installed) chk("Codex 배선", st.harness.codex.wired, st.harness.codex.wired ? "config.toml OK" : "미배선", "lively install");
   if (st.kit.remote) chk("키트 최신", st.kit.current, st.kit.current ? String(st.kit.local) : `${st.kit.local || "(미설치)"} → ${st.kit.remote}`, "lively update");
   // 새 터미널에서 `lively` 가 잡히는지 — rc 배선이 안 됐으면 다음 창에서 못 찾는다.
