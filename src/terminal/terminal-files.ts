@@ -15,7 +15,7 @@ import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { viewerOf } from "../capabilities/principal.js";
-import { canAttach, sessionDir, resolveRootPath, sessionOsUser, userOsUser } from "./terminal-sessions.js";
+import { canAttach, sessionDir, resolveRootPath, rootRelOf, sessionOsUser, userOsUser } from "./terminal-sessions.js";
 import { memberLs, memberStat, memberMkdir, memberMv, memberRm, memberReadTo, type LsEntry } from "./terminal-member-fs.js";
 import { receiveUpload, uploadError, nfcPath } from "./upload-file.js";
 import { nodeCanAttach, nodeRpc } from "../node/registry.js";
@@ -26,7 +26,11 @@ import {
 } from "../v6/shared-folder-store.js";
 
 const MAX_UPLOAD = 50 * 1024 * 1024; // 50MB
-const MAX_PREVIEW = 2 * 1024 * 1024; // 2MB
+// 인라인 미리보기 상한 — 프로젝트 파일 라우트(project-routes.ts MAX_PREVIEW)와 **같은 값**이어야 한다(#1436):
+//  공유 링크는 root+path 하나로 공유/개인/프로젝트 폴더를 똑같이 가리키는데, 같은 파일이 어느 라우트를 타는지에
+//  따라 "미리보기엔 너무 큽니다"가 갈리면 링크를 받은 사람에게는 그게 그냥 고장으로 보인다.
+//  (종전 2MB 는 대시보드 위젯 미리보기만 염두에 둔 값이라 5MB PDF 보고서조차 링크로 열리지 않았다.)
+const MAX_PREVIEW = 25 * 1024 * 1024; // 25MB
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 
@@ -246,8 +250,15 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     }
     items.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
     const rel = path.relative(base, abs);
+    // 공유 링크 좌표(#1436) — 이 세션 작업폴더가 공유/개인 루트의 어디인지. 세션 파일 탐색기가 [🔗 링크 복사]로
+    //  **세션과 무관한** 주소(#/f?root=…&path=…)를 만들 수 있게. 좌표를 못 잡으면(원격 노드·루트 밖·남의 개인
+    //  폴더) 아예 안 싣는다 → 프론트는 그 자리에 버튼을 그리지 않는다(죽은 링크를 만들지 않는 편이 낫다).
+    const coord = await rootRelOf(userOf(req), abs).catch(() => null);
     res.setHeader("Cache-Control", "no-store");
-    res.json({ path: rel, parent: rel ? (path.dirname(rel) === "." ? "" : path.dirname(rel)) : null, items });
+    res.json({
+      path: rel, parent: rel ? (path.dirname(rel) === "." ? "" : path.dirname(rel)) : null, items,
+      ...(coord ? { shareRoot: coord.root, sharePath: coord.rel } : {}),
+    });
   }));
 
   // 미리보기/다운로드. 격리 세션(#524)은 멤버 uid 로 stat+cat.
