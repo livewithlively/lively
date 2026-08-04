@@ -1,8 +1,12 @@
-# Claude 어댑터
+# Claude 하네스 배선
 
 Claude Code 하네스용 설정을 emit 한다. **user-level 설치**가 주력(D2/D3): 한 번 설치하면 멤버가 어느 폴더에서 `claude` 를 켜든 조직 컨텍스트+리플렉스가 따라온다.
 
-## emit 하는 것 (`install.mjs`, 전부 idempotent)
+> **정본은 `setup/user-install.mjs` 다.** 이 폴더에 있던 `install.mjs` 는 아무도 호출하지 않는 죽은 코드라
+> 삭제했다(#1475 — 그 존재가 "개선을 실배포 아닌 곳에 넣는" 사고를 코덱스 쪽에서 실제로 만들었다).
+> 제거기(`uninstall.mjs`)와 managed 예시는 여기 그대로다. 코덱스 쪽 대응 문서는 `../codex/README.md`.
+
+## 심는 것 (전부 idempotent)
 
 | 산출물 | 내용 | 비고 |
 |---|---|---|
