@@ -1,17 +1,20 @@
 {
   "name": "lively",
-  "description": "라이블리 — 조직 맥락 스토어(지식·프로젝트·도메인맵)를 AI 세션에 잇는 플러그인",
+  "description": "Lively - organizational context store for AI sessions",
   "owner": {
     "name": "Lively",
-    "url": "https://github.com/livewithlively"
+    "email": "teamlively.official@gmail.com"
   },
   "plugins": [
     {
-      "name": "lively",
-      "source": "./plugins/lively",
+      "name": "lively-min",
+      "description": "Minimal probe plugin used to isolate a marketplace sync validation failure.",
+      "author": {
+        "name": "Lively"
+      },
       "category": "productivity",
-      "tags": ["knowledge", "context", "wiki", "self-hosted", "mcp"],
-      "description": "조직의 지식·프로젝트·도메인맵을 세션에 잇는다. 게이트웨이 MCP 연결 + 세션 시작 시 조직 맥락 자동 주입 + 운영 스킬 번들."
+      "source": "./plugins/lively-min",
+      "homepage": "https://github.com/livewithlively/lively"
     }
   ]
 }
