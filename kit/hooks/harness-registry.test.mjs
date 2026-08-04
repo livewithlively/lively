@@ -16,7 +16,7 @@ import { mkdtempSync, rmSync, mkdirSync, cpSync, writeFileSync, existsSync, read
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   HARNESS, HARNESS_IDS, resolveHarness, isKnownHarness,
   harness, placementFor, assetDirsFor, assetDirNames, toolMatcher, mcpMatcher, allToolNames, mcpToolName,
@@ -132,7 +132,7 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
     const BUNDLE = join(SB, "bundle"), HOME = join(SB, "home");
     // 번들 구성은 발행물 배치를 최소 재현한다(codex-wiring.test.mjs 의 makeBundle 과 같은 형태).
     // 번들 구성 재료는 **설치기의 정본 목록**을 따른다(사본을 두면 훅이 늘 때마다 여기가 스테일해진다).
-    const { HOOK_SCRIPTS: scripts } = await import(join(KIT, "setup", "user-install.mjs"));
+    const { HOOK_SCRIPTS: scripts } = await import(pathToFileURL(join(KIT, "setup", "user-install.mjs")).href); // ⚠ pathToFileURL 필수(윈도우 드라이브문자)
     mkdirSync(join(BUNDLE, ".claude", "hooks"), { recursive: true });
     mkdirSync(join(BUNDLE, ".lively"), { recursive: true });
     mkdirSync(join(BUNDLE, "setup"), { recursive: true });

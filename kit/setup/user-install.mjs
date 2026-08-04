@@ -693,7 +693,11 @@ function installCodex(ctx, mcpUrl) {
 //  ⚠ 경로는 XDG 다 — `~/.opencode` 가 아니다. opencode 번들 소스 실측: `XDG_CONFIG_HOME || homedir()/.config`
 //   + 앱이름이고 이 계산은 **플랫폼 무관**(Windows 도 APPDATA 가 아니라 `%USERPROFILE%\.config\opencode`).
 //   XDG_CONFIG_HOME 을 무시하면 우리는 다른 곳에 쓰고 opencode 는 못 봐서 어댑터가 조용히 안 돈다.
-const OPENCODE = join(process.env.XDG_CONFIG_HOME || join(HOME, ".config"), "opencode");
+// ⚠ LIVELY_HOME(샌드박스 격리)이 설정된 경우엔 XDG_CONFIG_HOME 을 **따르지 않는다.** LIVELY_HOME 은
+//  "이 프로세스의 홈을 여기로 봐라"는 계약인데, XDG 가 그걸 뚫으면 격리가 새어 **테스트가 실 환경을
+//  오염시킨다**(실측: `lively status`/`install` 을 돌리는 테스트가 XDG 아래에 opencode 설정을 만들었다).
+//  실사용에선 LIVELY_HOME 이 없으므로 종전대로 XDG 를 존중한다.
+const OPENCODE = join(process.env.LIVELY_HOME ? join(HOME, ".config") : (process.env.XDG_CONFIG_HOME || join(HOME, ".config")), "opencode");
 
 // opencode.json 머지 — JSON 이라 codex TOML 처럼 센티넬 블록을 쓰지 않고 키 단위로 비파괴 머지한다.
 //  ⚠ opencode 는 **알 수 없는 top-level 키를 거부**하고(ConfigInvalidError) 그러면 아예 안 뜬다 → 우리가 넣는

@@ -30,8 +30,12 @@ const bad = (n, why) => { fail++; console.error(`FAIL ${n} — ${why}`); };
 const skip = (n, why) => { console.log(`skip ${n} — ${why}`); };
 
 // ⓪ 배선 단언 — 실 홈 무접촉(관측 장치 없이 통과하는 vacuous test 방지).
-const REAL_OC = join(homedir(), ".config", "opencode");
-const REAL_BEFORE = existsSync(REAL_OC) ? String(statSync(REAL_OC).mtimeMs) : "(none)";
+//  ⚠ **실행 환경의 XDG 경로도 함께 본다.** 종전엔 `~/.config/opencode` 만 봐서, XDG_CONFIG_HOME 이 설정된
+//   환경에서 테스트가 그 아래를 오염시켜도 지문이 통과했다(실측 — 이 지문의 사각지대였다).
+const REAL_OCS = [join(homedir(), ".config", "opencode")];
+if (process.env.XDG_CONFIG_HOME) REAL_OCS.push(join(process.env.XDG_CONFIG_HOME, "opencode"));
+const fingerprint = () => REAL_OCS.map((p) => (existsSync(p) ? String(statSync(p).mtimeMs) : "(none)")).join("|");
+const REAL_BEFORE = fingerprint();
 
 // ── 게이트웨이 스텁 ─────────────────────────────────────────────────────────
 let ASSETS = [];
@@ -66,7 +70,10 @@ function freshHome() {
 function sync(env = {}) {
   return new Promise((resolve) => {
     const p = spawn(process.execPath, [RUNNER, "--harness", "opencode"],
-      { env: { ...process.env, LIVELY_HOME: HOME, ...env }, stdio: ["ignore", "pipe", "pipe"] });
+      // ⚠ XDG_CONFIG_HOME 를 **명시적으로 비운다.** LIVELY_HOME 은 HOME 만 리다이렉트하므로, 실행 환경에
+      //  XDG_CONFIG_HOME 이 설정돼 있으면(CI 가 그렇다) 러너가 샌드박스 **밖**에 쓴다 — 실제로 ⓪ 지문이
+      //  "샌드박스 계약 파손"으로 이 사고를 잡았다. 테스트가 개발자 실 홈을 오염시키면 안 된다.
+      { env: { ...process.env, LIVELY_HOME: HOME, XDG_CONFIG_HOME: "", ...env }, stdio: ["ignore", "pipe", "pipe"] });
     let err = "";
     p.stderr.on("data", (d) => { err += d; });
     p.on("close", (status) => resolve({ status, stderr: err }));
@@ -126,20 +133,28 @@ let r = await sync();
   }
 }
 
-// ── O5 — XDG_CONFIG_HOME 존중. 무시하면 우리는 ~/.config 에 쓰고 opencode 는 다른 곳을 봐서 아무것도 안 걸린다.
+// ── O5 — **격리 우선**: LIVELY_HOME 이 있으면 XDG_CONFIG_HOME 을 따르지 않는다.
+//  (XDG 존중 자체는 레지스트리 단위 케이스 C11 이 검증한다 — 거긴 LIVELY_HOME 이 없는 실사용 조건이다.)
+//  이게 깨지면 테스트·샌드박스가 **실 환경을 오염시킨다** — 실제로 그 사고를 겪고 넣은 케이스다.
 {
   freshHome();
-  const XDG = join(SANDBOX, "xdg");
-  ASSETS = [asset("skill", "xdg-skill", "# XDG")];
+  const XDG = join(SANDBOX, "xdg-should-be-ignored");
+  ASSETS = [asset("skill", "iso-skill", "# 격리")];
   await sync({ XDG_CONFIG_HOME: XDG });
-  existsSync(join(XDG, "opencode", "skill", "xdg-skill", "SKILL.md"))
-    ? ok("O5 XDG_CONFIG_HOME 을 존중해 그 아래에 심는다") : bad("O5 XDG_CONFIG_HOME", "기본 경로에 심었다 — opencode 는 못 본다");
+  const inSandbox = existsSync(join(OC, "skill", "iso-skill", "SKILL.md"));
+  const leaked = existsSync(join(XDG, "opencode"));
+  (inSandbox && !leaked)
+    ? ok("O5 LIVELY_HOME 격리가 XDG_CONFIG_HOME 보다 우선한다")
+    : bad("O5 격리 우선", `샌드박스=${inSandbox} XDG누출=${leaked} — 격리가 새면 테스트가 실 환경을 오염시킨다`);
 }
 
 // ── O6 — 실제 opencode 가 있으면 **그 설정을 읽는지**까지 확인(없으면 skip; codex 판과 같은 규율) ──
 //  "파일이 생겼다"와 "하네스가 읽는다"는 다른 문제이고, 이번 결함이 정확히 그 틈이었다.
 {
-  const probe = spawnSync("opencode", ["--version"], { encoding: "utf8", timeout: 15000 });
+  // ⚠ probe 도 env 를 격리한다 — `opencode --version` 조차 설정 디렉터리를 만들 수 있어서, 상속 env 로 부르면
+  //  **실행 환경의** XDG_CONFIG_HOME 아래에 흔적을 남긴다(테스트가 개발자 환경을 오염시키는 형태).
+  const isolated = { ...process.env, HOME: SANDBOX, XDG_CONFIG_HOME: "" };
+  const probe = spawnSync("opencode", ["--version"], { env: isolated, encoding: "utf8", timeout: 15000 });
   if (probe.status !== 0) skip("O6 실제 opencode 로 설정 유효성 확인", "opencode 미설치");
   else {
     freshHome();
@@ -162,8 +177,9 @@ let r = await sync();
 
 // ⓪ 재검 — 실 홈을 안 건드렸나.
 {
-  const after = existsSync(REAL_OC) ? String(statSync(REAL_OC).mtimeMs) : "(none)";
-  after === REAL_BEFORE ? ok("⓪ 실 ~/.config/opencode 무접촉") : bad("⓪ 실 홈 무접촉", "샌드박스 계약 파손");
+  const after = fingerprint();
+  after === REAL_BEFORE ? ok("⓪ 실 설정 디렉터리 무접촉(~/.config + XDG 둘 다)")
+    : bad("⓪ 실 홈 무접촉", `샌드박스 계약 파손: ${REAL_OCS.join(", ")}`);
 }
 
 server.close();

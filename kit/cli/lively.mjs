@@ -47,7 +47,7 @@ const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || join(HOME, ".claude");
 const CODEX_CFG = join(HOME, ".codex", "config.toml");
 // opencode 는 XDG 규약 — `~/.opencode` 가 아니다. `XDG_CONFIG_HOME || homedir()/.config` + 앱이름이고
 //  이 계산은 플랫폼 무관이다(#1519 실측). 설치기·제거기와 같은 계산이어야 진단이 실제 배선을 본다.
-const OPENCODE_DIR = join(process.env.XDG_CONFIG_HOME || join(HOME, ".config"), "opencode");
+const OPENCODE_DIR = join(process.env.LIVELY_HOME ? join(HOME, ".config") : (process.env.XDG_CONFIG_HOME || join(HOME, ".config")), "opencode"); // LIVELY_HOME 격리 우선(설치기와 동일)
 const OPENCODE_PLUGIN = join(OPENCODE_DIR, "plugin", "lively.js");
 // 자동 업데이터(self-update.mjs)와 **같은 필수 훅 목록**을 쓴다 — 손상 번들 판정 기준이 갈리면 안 된다.
 //  self-update.mjs 자신은 목록에 없다(구 게이트웨이로 롤백 시 '손상'으로 오판해 영구 고착되는 걸 막기 위함 — #858).
@@ -877,17 +877,12 @@ async function gatherStatus() {
       } catch { /* 주석 든 .jsonc 등 — 우리가 못 읽었을 뿐 opencode 는 읽을 수 있다 → null 유지(모름) */ }
     }
   }
-  if (st.harness.opencode.installed) {
-    const g = run("opencode", ["mcp", "list"], { allowFail: true, quiet: true, timeout: 10000 });
-    const out = `${g.out}${g.err}`;
-    if (/ConfigInvalidError|failed to (load|parse) config/i.test(out)) st.harness.opencode.configOk = false;
-    else if (/MCP Servers|server\(s\)/i.test(out)) {
-      st.harness.opencode.configOk = true;
-      // `✓ lively   connected` / `✘ lively   failed` 형태. 우리 서버 줄만 본다.
-      const line = out.split("\n").find((l) => /\blively\b/.test(l)) || "";
-      st.harness.opencode.mcpConnected = /connected/i.test(line) ? true : (/fail|error/i.test(line) ? false : null);
-    }
-  }
+  // ⚠ 연결 확인은 **하지 않는다.** opencode 엔 `mcp get`(우리 서버 하나만 보기)이 없고 `mcp list` 뿐인데,
+  //  그건 ① 등록된 **모든** MCP 를 실제로 연결하고(#1431 에서 claude 쪽으로 이미 겪은 비용) ② opencode 를
+  //  띄우는 순간 **설정 디렉터리를 만든다**(plugin/·package.json·node_modules). 즉 진단이 상태를 바꾼다.
+  //  실측: 이 호출 때문에 `lively status` 를 돌리는 테스트들이 XDG 경로를 오염시켰다.
+  //  → 등록 여부는 위에서 **설정 파일을 읽어** 확정하고, 연결은 `null`(모름)로 둔다. 모르는 걸 아는 척하지
+  //   않는 게 이 화면의 규칙이고(codex 의 enabled 를 null 로 둔 것과 같은 이유), 부작용 없는 진단이 우선이다.
   if (!gw) { st.gateway.error = "게이트웨이 미설정"; return st; }
   if (!tok) { st.gateway.error = "로그인 필요"; return st; }
   try {

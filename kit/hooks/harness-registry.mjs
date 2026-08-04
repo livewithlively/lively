@@ -124,7 +124,11 @@ export const HARNESS = {
     //  그리고 이 계산은 **플랫폼 무관**이다(Windows 에서도 APPDATA 가 아니라 `%USERPROFILE%\.config\opencode`).
     //  ⚠ XDG_CONFIG_HOME 을 설정한 사용자에게 이걸 무시하면 우리는 `~/.config/opencode` 에 쓰고 opencode 는
     //   다른 곳을 봐서 **어댑터가 영영 로드되지 않는다**(에러도 안 난다 — 그냥 훅이 안 돈다).
-    home: (HOME, env = process.env) => j(env.XDG_CONFIG_HOME || j(HOME, ".config"), "opencode"),
+    // ⚠ LIVELY_HOME(샌드박스 격리)이 설정된 경우엔 XDG_CONFIG_HOME 을 **따르지 않는다.** LIVELY_HOME 은
+    //  "이 프로세스의 홈을 여기로 봐라"는 계약인데, XDG 가 그걸 뚫으면 격리가 새어 **테스트가 실 환경을
+    //  오염시킨다**(실측: `lively status`/`install` 을 돌리는 테스트가 XDG 아래에 opencode 설정을 만들었다).
+    //  실사용에선 LIVELY_HOME 이 없으므로 종전대로 XDG 를 존중한다.
+    home: (HOME, env = process.env) => j(env.LIVELY_HOME ? j(HOME, ".config") : (env.XDG_CONFIG_HOME || j(HOME, ".config")), "opencode"),
     configFile: (home) => j(home, "opencode.json"),
     configFormat: "json",
     // 훅이 command 등록이 아니라 **파일로 놓는 JS 모듈**이다 — claude·codex 와 다른 배선 방식.
