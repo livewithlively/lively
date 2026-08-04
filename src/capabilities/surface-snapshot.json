@@ -1296,7 +1296,7 @@
   "rest": [
    "POST /api/ui/org/hook"
   ],
-  "input_hash": "f2a46f63144984ec"
+  "input_hash": "394f2f91a596c49d"
  },
  {
   "name": "org_hook_remove",
