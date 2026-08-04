@@ -145,6 +145,28 @@ hits.includes("/api/ui/org/runner/assets")
   digest(mine) === before ? ok("A7 id 충돌 → 멤버 파일 보존(배포 생략)") : bad("A7 충돌", "멤버 파일을 덮어썼다");
 }
 
+// ── A8 경로 containment 는 **문자열 prefix 가 아니라 path 기반**이어야 한다(윈도우) ──────
+//  `root + "/"` prefix 검사는 윈도우에서 **항상 false** 다(path.join 이 `\` 로 만든다) → writeAsset 이 전부
+//  조기 반환해 조직 자산이 한 개도 안 깔린다. 그 분기는 stderr 도 안 내서 **매 세션 조용히** 실패한다
+//  (2026-08-04 윈도우 실기기: 서버 26개 / 로컬 0개, 매니페스트는 `{"claude":{}}` — fetch 는 됐는데 쓰기만 전멸).
+//  ⚠ 이 결함은 mac/linux 에서 **재현되지 않는다** → 동작 대신 정적 계약으로 못박는다
+//   (kit/cli/bootstrap-windows.test.mjs 와 같은 규율: 돌릴 수 없는 플랫폼은 '그렇게 생겼나'까지 본다).
+{
+  const src = readFileSync(new URL("./sync-harness-assets.mjs", import.meta.url), "utf8");
+  const body = /function within\([\s\S]*?\n}/.exec(src)?.[0] || "";
+  const usesRelative = /\brelative\s*\(/.test(body) && /isAbsolute/.test(body);
+  const noStringPrefix = !/root\s*\+\s*"\/"/.test(body) && !/endsWith\("\/"\)/.test(body);
+  // 판정 자체도 확인 — win32 시맨틱에서 자산 경로가 root 안으로 잡히고, 탈출은 여전히 막힌다.
+  const { win32 } = await import("node:path");
+  const w = (root, p) => { const rel = win32.relative(root, p); return rel === "" || (!rel.startsWith("..") && !win32.isAbsolute(rel)); };
+  const WROOT = "C:\\Users\\amorite\\.claude\\skills";
+  const inside = w(WROOT, win32.join(WROOT, "blind-diff-review", "SKILL.md"));
+  const escape = w(WROOT, "C:\\Users\\amorite\\.claude\\evil.md");
+  usesRelative && noStringPrefix && inside && !escape
+    ? ok("A8 containment = path.relative 기반(윈도우 자산 배포 가능 · 탈출은 차단)")
+    : bad("A8 containment", `relative=${usesRelative} noPrefix=${noStringPrefix} inside=${inside} escapeBlocked=${!escape}`);
+}
+
 // ⓪ 재검
 const realAfter = existsSync(REAL_SKILLS) ? String(statSync(REAL_SKILLS).mtimeMs) : "(none)";
 realAfter === REAL_BEFORE ? ok("⓪ 실 ~/.codex 무접촉") : bad("⓪ 샌드박스 계약", "실 홈이 변경됐다");
