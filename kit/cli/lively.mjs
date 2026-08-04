@@ -781,8 +781,12 @@ async function gatherStatus() {
     kit: { local: readLively("kit-version") || null, remote: null, current: false, autoUpdate: null },
     harness: {
       // mcp = 등록됐나(정적) · mcpConnected = 지금 실제로 붙나(동적, 모르면 null — 아는 척하지 않는다)
-      claude: { installed: has("claude"), wired: false, mcp: false, mcpConnected: null },
-      codex: { installed: has("codex"), wired: false },
+      // assets = 조직 자산이 이 머신에 실제로 깔렸나 { local, server } (#1475 — 아래 주석 참조)
+      claude: { installed: has("claude"), wired: false, mcp: false, mcpConnected: null, assets: null },
+      // configOk = codex 가 config.toml 을 **실제로 읽을 수 있나**. 이 축이 없어서 2026-08-04 윈도우 사고 때
+      //  status 가 "✓ 배선"이라고 거짓 보고했다 — 파일에 우리 센티넬은 있는데 codex 는 파싱 실패로 아예 안 떴다.
+      //  (한 줄의 문법 오류가 파일 전체를 무효화하는 게 TOML 이라, '우리 블록이 있다'는 '동작한다'가 아니다.)
+      codex: { installed: has("codex"), wired: false, mcp: false, mcpConnected: null, configOk: null, transport: null, assets: null },
     },
     hooks: { installed: 0, expected: REQUIRED_HOOKS.length },
   };
@@ -815,6 +819,26 @@ async function gatherStatus() {
       st.harness.claude.mcpConnected = null;
     }
   }
+  // codex 도 같은 깊이로 본다(#1475) — 종전엔 '설치·배선' 두 칸뿐이라, config 가 깨져 codex 가 아예 안 뜨는
+  //  상태에서도 status 는 초록불이었다. `codex mcp get lively` 한 번으로 세 가지를 동시에 얻는다:
+  //   ① config 로드 가능 여부(파싱 실패면 stderr 에 `Error loading config.toml` — 이게 그 사고의 유일한 신호였다)
+  //   ② 우리 서버 등록 여부  ③ transport(stdio 프록시인가 http 직결인가 — 세션·모드 헤더가 실리는지가 갈린다)
+  //  ⚠ 연결 여부는 **모른다(null)** 로 둔다 — codex 의 `enabled` 는 설정값이지 헬스체크가 아니다. 아는 척하지 않는다.
+  if (st.harness.codex.installed) {
+    const g = run("codex", ["mcp", "get", "lively"], { allowFail: true, quiet: true, timeout: 8000 });
+    const out = `${g.out}${g.err}`;
+    if (/error loading config|failed to load configuration/i.test(out)) {
+      st.harness.codex.configOk = false;                    // 파일이 통째로 무효 — 우리 배선도 남의 MCP 도 다 죽는다
+    } else if (/^\s*enabled:/m.test(out)) {
+      st.harness.codex.configOk = true;
+      st.harness.codex.mcp = true;
+      st.harness.codex.transport = (/^\s*transport:\s*(\S+)/m.exec(out) || [])[1] || null;
+    } else if (/no mcp server named/i.test(out)) {
+      st.harness.codex.configOk = true;                     // 파일은 읽혔다 — 우리 서버만 없다
+      st.harness.codex.mcp = false;
+    }
+    // 그 외(구버전 codex 등 출력 미상) → configOk·mcp 를 그대로 null/false 로 둔다(판정 불가를 단정하지 않는다).
+  }
   if (!gw) { st.gateway.error = "게이트웨이 미설정"; return st; }
   if (!tok) { st.gateway.error = "로그인 필요"; return st; }
   try {
@@ -829,6 +853,22 @@ async function gatherStatus() {
       st.account.id = me?.id ?? null;
       st.account.name = me?.display_name ?? null;
     } catch { /* 프로필은 부가 정보 — 실패해도 상태는 유효 */ }
+    // 조직 자산이 이 머신에 **실제로 깔렸나**(#1475). 서버가 주는 수 ↔ 로컬 매니페스트(우리가 심은 것)의 수를 맞댄다.
+    //  왜 필요한가: 2026-08-04 윈도우 실기기에서 서버는 26개를 주고 그 머신은 0개였는데, **그 사실을 보여주는 표면이
+    //   어디에도 없었다** — 훅은 "5/5 ✓", 하네스는 "✓ 배선"이라 전부 초록불이었고 사용자가 스킬을 못 찾고서야 드러났다.
+    //   (자산 sync 는 실패해도 조용하다 — 세션을 막지 않는 게 설계라서. 그래서 '조용한 실패'가 기본값이다.)
+    //  로컬 0 / 서버 N 이면 그 머신에서 materialize 가 한 번도 성공한 적 없다는 뜻이고, 그게 곧 신고 전에 잡을 신호다.
+    const manifest = (() => { try { return JSON.parse(readFileSync(join(LIVELY, "managed-harness-assets.json"), "utf8")) || {}; } catch { return {}; } })();
+    for (const h of ["claude", "codex"]) {
+      if (!st.harness[h].installed) continue;               // 안 깔린 하네스는 물어볼 것도 없다
+      try {
+        const r = await api(`/api/ui/org/runner/assets?harness=${h}`, { timeoutMs: 8000 });
+        const server = Array.isArray(r?.assets) ? r.assets.length : null;
+        if (server === null) continue;
+        const local = Object.keys((manifest[h] && typeof manifest[h] === "object") ? manifest[h] : {}).length;
+        st.harness[h].assets = { local, server };
+      } catch { /* 자산 조회 실패는 부가 정보 — 상태 전체를 죽이지 않는다 */ }
+    }
   } catch (e) { st.gateway.error = e.message; }
   return st;
 }
@@ -943,17 +983,28 @@ async function cmdStatus(opts) {
   }
   say(`  훅            ${st.hooks.installed}/${st.hooks.expected} ${mark(st.hooks.installed === st.hooks.expected)}`);
   // 연결(#1431)은 **등록됐을 때만** 뜻이 있다. 확인 못 했으면(구버전 claude 등) 물음표로 — 모르는 걸 아는 척하지 않는다.
-  const conn = !st.harness.claude.mcp ? ""
-    : st.harness.claude.mcpConnected === null ? `   ${dim("? 연결")}`
-    : `   ${st.harness.claude.mcpConnected ? green("✓") : yellow("✘")} 연결`;
-  say(`  claude        ${mark(st.harness.claude.installed)} 설치   ${mark(st.harness.claude.wired)} 배선   ${mark(st.harness.claude.mcp)} MCP 등록${conn}`);
-  say(`  codex         ${mark(st.harness.codex.installed)} 설치   ${mark(st.harness.codex.wired)} 배선`);
+  const connOf = (h) => !h.mcp ? "" : h.mcpConnected === null ? `   ${dim("? 연결")}` : `   ${h.mcpConnected ? green("✓") : yellow("✘")} 연결`;
+  // 자산은 **개수가 곧 진단**이다 — 0/26 이면 그 머신에서 materialize 가 한 번도 성공한 적 없다는 뜻(#1475).
+  const assetsOf = (h) => !h.assets ? "" : `   자산 ${h.assets.local === h.assets.server ? green(`${h.assets.local}/${h.assets.server}`) : yellow(`${h.assets.local}/${h.assets.server}`)}`;
+  say(`  claude        ${mark(st.harness.claude.installed)} 설치   ${mark(st.harness.claude.wired)} 배선   ${mark(st.harness.claude.mcp)} MCP 등록${connOf(st.harness.claude)}${assetsOf(st.harness.claude)}`);
+  // codex 는 '배선' 자리에 **config 유효성**을 함께 싣는다 — 우리 블록이 있어도 파일이 파싱 안 되면 codex 는 아예 안 뜬다.
+  const cx = st.harness.codex;
+  const cxWired = cx.configOk === false ? `${red("✘")} 배선 ${red("(config.toml 을 codex 가 못 읽음)")}` : `${mark(cx.wired)} 배선`;
+  const cxMcp = cx.installed && cx.configOk !== false
+    ? `   ${mark(cx.mcp)} MCP 등록${cx.mcp && cx.transport ? dim(`(${cx.transport})`) : ""}` : "";
+  say(`  codex         ${mark(cx.installed)} 설치   ${cxWired}${cxMcp}${connOf(cx)}${assetsOf(cx)}`);
   if (st.kit.autoUpdate !== null) say(`  자동 업데이트 ${st.kit.autoUpdate ? green("켜짐") : yellow("꺼짐")}`);
   if (st.project) { say(""); renderProjectStatus(st.project); }
   say("");
   if (!st.account.authenticated) say(dim("  → ") + bold("lively login") + dim(" 으로 시작하세요."));
   else if (st.kit.remote && !st.kit.current) say(dim("  → ") + bold("lively update") + dim(" 로 최신화할 수 있습니다."));
+  else if (st.harness.codex.configOk === false) say(dim("  → codex 가 config.toml 을 못 읽습니다(그 파일의 MCP·훅이 전부 무효): ") + bold("lively update"));
   else if (st.harness.claude.installed && !st.harness.claude.mcp) say(dim("  → MCP 등록이 안 돼 있습니다: ") + bold("lively update"));
+  else {
+    // 자산은 설치기가 아니라 **세션 시작 훅**이 내린다 — 업데이트만 하고 세션을 안 켜면 0 인 채로 남는다.
+    const short = ["claude", "codex"].filter((h) => st.harness[h].assets && st.harness[h].assets.local < st.harness[h].assets.server);
+    if (short.length) say(dim("  → 조직 자산이 덜 깔렸습니다(") + short.join("·") + dim("). 새 세션을 한 번 켜면 내려옵니다 — 그래도 그대로면 ") + bold("lively doctor"));
+  }
 }
 
 async function cmdDoctor(opts) {
@@ -991,7 +1042,28 @@ async function cmdDoctor(opts) {
       st.harness.claude.mcpConnected ? "lively 연결됨" : "등록은 됐지만 연결 실패 — 게이트웨이 도달·VPN·프록시 확인",
       "lively doctor 후 게이트웨이 도달 여부(위 줄) 확인");
   }
-  if (st.harness.codex.installed) chk("Codex 배선", st.harness.codex.wired, st.harness.codex.wired ? "config.toml OK" : "미배선", "lively install");
+  if (st.harness.codex.installed) {
+    chk("Codex 배선", st.harness.codex.wired, st.harness.codex.wired ? "config.toml 에 관리 블록 있음" : "미배선", "lively install");
+    // ⚠ '배선됨'과 '동작함'은 다르다 — TOML 은 한 줄의 문법 오류가 파일 전체를 무효화한다. 2026-08-04 윈도우 사고에서
+    //  우리 블록은 멀쩡히 있는데 codex 는 아예 안 떴고, 그때 진단은 전부 초록불이었다. 그래서 파서에게 직접 묻는다.
+    if (st.harness.codex.configOk !== null) {
+      chk("Codex config 유효", st.harness.codex.configOk,
+        st.harness.codex.configOk ? "codex 가 읽음" : "codex 가 config.toml 을 못 읽습니다 — 그 파일의 MCP·훅이 전부 무효입니다",
+        "lively update  (설치기가 깨진 줄을 복구합니다)");
+    }
+    if (st.harness.codex.configOk !== false) {
+      chk("Codex MCP 등록", st.harness.codex.mcp,
+        st.harness.codex.mcp ? `lively 등록됨${st.harness.codex.transport ? ` (${st.harness.codex.transport})` : ""}` : "미등록", "lively update");
+    }
+  }
+  // 조직 자산이 이 머신에 실제로 깔렸나(#1475) — 서버가 주는 수 ↔ 우리가 심은 수. 어긋나면 신고 전에 여기서 드러난다.
+  //  ⚠ 자산은 설치기가 아니라 **세션 시작 훅**이 내린다 → 업데이트 직후엔 정상적으로 어긋날 수 있다(해결 문구에 그 사실을 담는다).
+  for (const h of ["claude", "codex"]) {
+    const a = st.harness[h].assets;
+    if (!a) continue;
+    chk(`조직 자산(${h})`, a.local >= a.server, `${a.local}/${a.server} 설치됨`,
+      "새 세션을 한 번 켜세요(세션 시작 훅이 내려받습니다). 그래도 0 이면 배선·권한 문제입니다");
+  }
   if (st.kit.remote) chk("키트 최신", st.kit.current, st.kit.current ? String(st.kit.local) : `${st.kit.local || "(미설치)"} → ${st.kit.remote}`, "lively update");
   // 새 터미널에서 `lively` 가 잡히는지 — rc 배선이 안 됐으면 다음 창에서 못 찾는다.
   chk("lively PATH", has("lively"), has("lively") ? "OK" : "현 셸의 PATH 밖", RELOAD_SHELL_HINT);
