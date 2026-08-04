@@ -60,7 +60,7 @@ async function cimdFetch(): Promise<ReturnType<typeof makeSsrfFetch>> {
 }
 
 // Cache-Control: max-age 를 존중하되 [5분, 24시간] 으로 클램프. 헤더가 없으면 1시간.
-function ttlFromHeaders(h: Headers): number {
+export function ttlFromHeaders(h: Headers): number {
   const cc = h.get("cache-control") ?? "";
   if (/no-store|no-cache/i.test(cc)) return CIMD_MIN_TTL;
   const m = /max-age\s*=\s*(\d+)/i.exec(cc);
@@ -82,36 +82,39 @@ function rowToClientInfo(row: ClientRow): OAuthClientInformationFull {
   } as OAuthClientInformationFull;
 }
 
-/** CIMD 문서를 가져와 검증한다. 실패하면 null. 성공하면 메모리 캐시 + DB 미러(폴백·감사)에 남긴다. */
-async function fetchCimd(clientId: string): Promise<OAuthClientInformationFull | null> {
+/** CIMD 문서 검증 — 순수 함수(네트워크·DB 무접촉). 위반이면 throw. 이 파일의 **보안 핵심**이라 따로 뺐다. */
+export function validateCimdDocument(clientId: string, doc: unknown): OAuthClientInformationFull {
+  const d = (doc && typeof doc === "object" ? doc : {}) as Record<string, unknown>;
+  // ★ 초안의 핵심 검증 — 문서 안의 client_id 가 우리가 요청한 URL 과 **정확히** 같아야 한다.
+  //  이게 없으면 아무 URL 이나 남의 client_id 를 참칭하는 문서를 올려 신원을 훔칠 수 있다.
+  if (String(d.client_id ?? "") !== clientId) throw new Error("CIMD 문서의 client_id 가 URL 과 일치하지 않음");
+  const parsed = OAuthClientMetadataSchema.safeParse(d);
+  if (!parsed.success) throw new Error(`CIMD 메타데이터 형식 오류: ${parsed.error.message}`);
+  const meta = parsed.data;
+  const redirectUris = (meta.redirect_uris ?? []).filter(isAcceptableRedirectUri);
+  if (!redirectUris.length) throw new Error("CIMD 문서에 사용 가능한 redirect_uris 가 없음(https 또는 loopback 만 허용)");
+  return {
+    ...meta,
+    client_id: clientId,
+    redirect_uris: redirectUris,
+    client_secret: undefined, // CIMD 클라이언트는 공개 클라이언트다 — 문서에 비밀이 적혀 있어도 무시한다.
+  } as OAuthClientInformationFull;
+}
+
+/** CIMD 문서를 가져와 검증한다. 실패하면 throw. 성공하면 메모리 캐시 + DB 미러(폴백·감사)에 남긴다. */
+async function fetchCimd(clientId: string): Promise<OAuthClientInformationFull> {
   const fetchFn = await cimdFetch();
   const res = await fetchFn(clientId, { headers: { accept: "application/json" } });
   if (!res.ok) throw new Error(`CIMD 문서 응답 ${res.status}`);
   const ct = res.headers.get("content-type") ?? "";
   if (!/json/i.test(ct)) throw new Error(`CIMD 문서 content-type 이 JSON 이 아님: ${ct}`);
-  const doc = (await res.json()) as Record<string, unknown>;
-  // ★ 초안의 핵심 검증 — 문서 안의 client_id 가 우리가 요청한 URL 과 **정확히** 같아야 한다.
-  //  이게 없으면 아무 URL 이나 남의 client_id 를 참칭하는 문서를 올려 신원을 훔칠 수 있다.
-  if (String(doc.client_id ?? "") !== clientId) throw new Error("CIMD 문서의 client_id 가 URL 과 일치하지 않음");
-  const parsed = OAuthClientMetadataSchema.safeParse(doc);
-  if (!parsed.success) throw new Error(`CIMD 메타데이터 형식 오류: ${parsed.error.message}`);
-  const meta = parsed.data;
-  const redirectUris = (meta.redirect_uris ?? []).filter(isAcceptableRedirectUri);
-  if (!redirectUris.length) throw new Error("CIMD 문서에 사용 가능한 redirect_uris 가 없음(https 또는 loopback 만 허용)");
-
-  const info = {
-    ...meta,
-    client_id: clientId,
-    redirect_uris: redirectUris,
-    client_secret: undefined, // CIMD 클라이언트는 공개 클라이언트다(시크릿 없음).
-  } as OAuthClientInformationFull;
-  const ttl = ttlFromHeaders(res.headers);
-  cimdCache.set(clientId, { info, expiresAt: Date.now() + ttl * 1000 });
+  const info = validateCimdDocument(clientId, await res.json());
+  cimdCache.set(clientId, { info, expiresAt: Date.now() + ttlFromHeaders(res.headers) * 1000 });
   // DB 미러 — 재기동 후 문서 서버가 잠깐 죽어도 기존 연결이 살아 있게(아래 stale 폴백) + 누가 붙었는지 감사.
   await saveClient({
-    clientId, kind: "cimd", clientName: meta.client_name ?? null,
-    redirectUris, grantTypes: meta.grant_types ?? ["authorization_code", "refresh_token"],
-    tokenEndpointAuthMethod: "none", metadata: meta as unknown as Record<string, unknown>,
+    clientId, kind: "cimd", clientName: info.client_name ?? null,
+    redirectUris: info.redirect_uris, grantTypes: info.grant_types ?? ["authorization_code", "refresh_token"],
+    tokenEndpointAuthMethod: "none", metadata: info as unknown as Record<string, unknown>,
     actor: "system",
   }).catch((err) => logger.warn({ err, clientId }, "CIMD 미러 저장 실패(무시)"));
   return info;
@@ -123,8 +126,7 @@ export class LivelyClientsStore implements OAuthRegisteredClientsStore {
       const hit = cimdCache.get(clientId);
       if (hit && hit.expiresAt > Date.now()) return hit.info;
       try {
-        const fresh = await fetchCimd(clientId);
-        if (fresh) return fresh;
+        return await fetchCimd(clientId);
       } catch (err) {
         // stale 폴백 — 문서 서버 일시 장애로 **이미 연결된 커넥터가 죽지 않게**. 없으면 그냥 미등록 취급.
         logger.warn({ err: (err as Error).message, clientId }, "CIMD 문서 조회 실패 — DB 미러로 폴백");

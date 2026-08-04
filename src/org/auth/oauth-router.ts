@@ -8,7 +8,7 @@
 //  ⚠ issuer 를 **요청 헤더에서 뽑지 않는다**(gatewayUrlForRequest 를 안 쓴다). Host 헤더는 요청자가 통제하므로
 //   그걸로 issuer 를 만들면 issuer 혼동 공격이 열린다 — 토큰을 남의 이름으로 광고하게 된다.
 import express from "express";
-import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
+import { mcpAuthRouter, createOAuthMetadata } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { LivelyOAuthProvider } from "./oauth-provider.js";
 import { verifyClientSecret } from "./oauth-clients.js";
 import { resourceIds, type ResourceIds } from "../../auth/resource-id.js";
@@ -16,6 +16,7 @@ import { SCOPES } from "../../auth/scopes.js";
 import { logger } from "../../log.js";
 
 const provider = new LivelyOAuthProvider();
+const RESOURCE_NAME = "Lively 컨텍스트 게이트웨이";
 
 // SDK 가 /token·/revoke 앞에 세우는 authenticateClient 는 `client.client_secret !== 제시값` **평문 비교**를 한다.
 //  우리는 시크릿을 sha256 으로만 보관하므로 getClient 가 시크릿을 비워 보내고(oauth-clients.ts 머리주석 ★★),
@@ -42,12 +43,17 @@ export function clientSecretGate(): express.RequestHandler {
 //  SDK 는 자원 식별자의 경로를 붙인 `/.well-known/oauth-protected-resource/mcp` 만 서빙한다(사양 정본).
 //  그런데 여러 클라이언트가 서버 origin 을 자원으로 보고 루트를 먼저 친다 — 거기서 404 를 받으면 인가서버를
 //  발견하지 못하고 401 에서 멈춘다(실측: 2026-08-04 dev.lvly.io 프로브). 같은 문서를 한 벌 더 낸다.
-function prmRootAlias(ids: ResourceIds): express.RequestHandler {
+//
+//  ⚠ **정본과 한 글자도 달라선 안 된다.** issuer 는 RFC 8414/9207 에서 문자열 동등 비교 대상이라
+//   `https://gw` 와 `https://gw/`(URL 정규화가 붙이는 말미 슬래시)는 서로 다른 값이다. 손으로 만들면
+//   반드시 어긋난다 — 실제로 첫 구현이 그렇게 어긋났다(통합테스트가 잡음). 그래서 issuer 는 SDK 자신의
+//   메타데이터 생성기(createOAuthMetadata)에서 뽑고, 자원 식별자도 같은 URL 정규화를 통과시킨다.
+function prmRootAlias(ids: ResourceIds, issuer: string): express.RequestHandler {
   const doc = {
-    resource: ids.mcp,
-    authorization_servers: [ids.base],
+    resource: new URL(ids.mcp).href,
+    authorization_servers: [issuer],
     scopes_supported: [...SCOPES],
-    resource_name: "Lively 컨텍스트 게이트웨이",
+    resource_name: RESOURCE_NAME,
   };
   const router = express.Router();
   const cors = (res: express.Response): void => {
@@ -61,15 +67,18 @@ function prmRootAlias(ids: ResourceIds): express.RequestHandler {
 }
 
 function build(ids: ResourceIds): express.RequestHandler {
-  const router = express.Router();
-  router.use(prmRootAlias(ids));
-  router.use(mcpAuthRouter({
+  const opts = {
     provider,
     issuerUrl: new URL(ids.base),
     resourceServerUrl: new URL(ids.mcp),
     scopesSupported: [...SCOPES],
-    resourceName: "Lively 컨텍스트 게이트웨이",
-  }));
+    resourceName: RESOURCE_NAME,
+  };
+  // 같은 옵션으로 SDK 가 만들 메타데이터를 먼저 뽑아 issuer 문자열을 얻는다(루트 별칭이 정본과 어긋나지 않게).
+  const issuer = createOAuthMetadata(opts).issuer;
+  const router = express.Router();
+  router.use(prmRootAlias(ids, issuer));
+  router.use(mcpAuthRouter(opts));
   return router;
 }
 
