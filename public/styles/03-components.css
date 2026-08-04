@@ -225,6 +225,11 @@ label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; fo
   font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
   font-size: 12.5px; line-height: 1.55; color: var(--ink); background: none; border: 0; padding: 0;
 }
+/* 코드블록 [복사] 버튼(사용 가이드 docsDecorate) — pre 우상단에 얹는다.
+   ⚠ pre 자신은 overflow:auto 라 버튼을 그 안에 두면 가로 스크롤과 함께 흘러간다 → 감싸는 래퍼를 기준으로 고정. */
+.md-pre-copy { position: relative; }
+.md-pre-copy > .btn { position: absolute; top: 6px; right: 6px; z-index: 1; opacity: .5; background: var(--bg); }
+.md-pre-copy:hover > .btn, .md-pre-copy > .btn:focus-visible { opacity: 1; }
 .md-list { margin: 0 0 12px; padding-left: 22px; }
 .md-list li { margin: 2px 0; }
 .md-list .md-list { margin-bottom: 0; }
