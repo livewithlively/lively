@@ -28,6 +28,11 @@ let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
 const bad = (n, why) => { fail++; console.error(`FAIL ${n} — ${why}`); };
 const eq = (n, got, want) => (JSON.stringify(got) === JSON.stringify(want) ? ok(n) : bad(n, `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`));
+// 경로 단언은 **구분자를 정규화해서** 비교한다. 레지스트리는 플랫폼 구분자로 조립하므로(win32 는 `\\`),
+//  `/` 로 쓴 기대값을 그대로 맞대면 **Windows 에서만** 전부 깨진다 — 그 플랫폼에서만 나는 실패가 가장 늦게
+//  발견된다(#1510 이 정확히 그 부류였다). 검증하려는 건 구분자가 아니라 **경로 구성**이다.
+const slash = (v) => JSON.parse(JSON.stringify(v ?? null).replace(/\\\\/g, "/"));
+const eqPath = (n, got, want) => eq(n, slash(got), want);
 
 // ── A. 배선 보장(S1) — 엣지 E1·E2 ────────────────────────────────────────────────
 // 복사 목록이 두 벌인 건 설치 경로가 둘이기 때문이다(발행물 생성 = build-context, 설치 = user-install).
@@ -84,33 +89,35 @@ const eq = (n, got, want) => (JSON.stringify(got) === JSON.stringify(want) ? ok(
 {
   const H = "/h";
   const env = {}; // 설정 디렉터리 환경변수 미설정 = 기본 ~/.claude
-  eq("C1[E7] claude skill", placementFor("claude", "skill", "s1", H, env),
+  eqPath("C1[E7] claude skill", placementFor("claude", "skill", "s1", H, env),
     { file: "/h/.claude/skills/s1/SKILL.md", skillDir: "/h/.claude/skills/s1", root: "/h/.claude/skills" });
-  eq("C2[E7] claude subagent", placementFor("claude", "subagent", "a1", H, env),
+  eqPath("C2[E7] claude subagent", placementFor("claude", "subagent", "a1", H, env),
     { file: "/h/.claude/agents/a1.md", root: "/h/.claude/agents" });
-  eq("C3[E7] claude command", placementFor("claude", "command", "c1", H, env),
+  eqPath("C3[E7] claude command", placementFor("claude", "command", "c1", H, env),
     { file: "/h/.claude/commands/c1.md", root: "/h/.claude/commands" });
-  eq("C4[E8] codex subagent 는 .toml", placementFor("codex", "subagent", "a1", H, env),
+  eqPath("C4[E8] codex subagent 는 .toml", placementFor("codex", "subagent", "a1", H, env),
     { file: "/h/.codex/agents/a1.toml", root: "/h/.codex/agents" });
-  eq("C5[E9] codex command 는 prompts/", placementFor("codex", "command", "c1", H, env),
+  eqPath("C5[E9] codex command 는 prompts/", placementFor("codex", "command", "c1", H, env),
     { file: "/h/.codex/prompts/c1.md", root: "/h/.codex/prompts" });
-  eq("C6[E10] claude 는 CLAUDE_CONFIG_DIR 를 존중", placementFor("claude", "skill", "s1", H, { CLAUDE_CONFIG_DIR: "/p" }),
+  eqPath("C6[E10] claude 는 CLAUDE_CONFIG_DIR 를 존중", placementFor("claude", "skill", "s1", H, { CLAUDE_CONFIG_DIR: "/p" }),
     { file: "/p/skills/s1/SKILL.md", skillDir: "/p/skills/s1", root: "/p/skills" });
-  eq("C7[E11] 모르는 하네스는 claude 배치로 폴백", placementFor("nope", "skill", "s1", H, env),
+  eqPath("C7[E11] 모르는 하네스는 claude 배치로 폴백", placementFor("nope", "skill", "s1", H, env),
     { file: "/h/.claude/skills/s1/SKILL.md", skillDir: "/h/.claude/skills/s1", root: "/h/.claude/skills" });
   // '어디에 쓰나'(placement)와 '어디를 훑나'(assetDirs)가 같은 출처여야 한다 —
   //  어긋나면 배포된 자산이 관측·로컬토글에서 통째로 안 보인다(종전엔 두 함수가 따로 하드코딩돼 있었다).
   const dirs = assetDirsFor("codex", H, env);
+  // ⚠ 여기만 eq — 양변이 **둘 다 레지스트리 산출**이라(플랫폼 구분자끼리) 한쪽만 정규화하면 오히려 어긋난다.
+  //  이 케이스가 보려는 것도 구분자가 아니라 '두 함수가 같은 값을 낸다'이다.
   eq("C8[E12] assetDirs 의 root 가 placement 와 일치", dirs.map((d) => d[1]),
     ["skill", "subagent", "command"].map((k) => placementFor("codex", k, "x", H, env).root));
   eq("C9[E8·E9] codex assetDirs 확장자", dirs.map((d) => d[3]), ["", ".toml", ".md"]);
   // E28/E29 — opencode 는 XDG 규약이고 **플랫폼 무관**이다(번들 소스 실측: XDG_CONFIG_HOME || homedir()/.config).
   //  XDG_CONFIG_HOME 을 무시하면 우리는 ~/.config 에 쓰고 opencode 는 다른 곳을 봐서 **어댑터가 조용히 안 돈다**.
-  eq("C10[E28] opencode 기본 경로는 ~/.config/opencode", placementFor("opencode", "skill", "s1", H, env),
+  eqPath("C10[E28] opencode 기본 경로는 ~/.config/opencode", placementFor("opencode", "skill", "s1", H, env),
     { file: "/h/.config/opencode/skill/s1/SKILL.md", skillDir: "/h/.config/opencode/skill/s1", root: "/h/.config/opencode/skill" });
-  eq("C11[E29] opencode 는 XDG_CONFIG_HOME 을 존중", placementFor("opencode", "skill", "s1", H, { XDG_CONFIG_HOME: "/xdg" }),
+  eqPath("C11[E29] opencode 는 XDG_CONFIG_HOME 을 존중", placementFor("opencode", "skill", "s1", H, { XDG_CONFIG_HOME: "/xdg" }),
     { file: "/xdg/opencode/skill/s1/SKILL.md", skillDir: "/xdg/opencode/skill/s1", root: "/xdg/opencode/skill" });
-  eq("C12[E28] opencode subagent/command 는 단수 디렉터리", [
+  eqPath("C12[E28] opencode subagent/command 는 단수 디렉터리", [
     placementFor("opencode", "subagent", "a1", H, env).file,
     placementFor("opencode", "command", "c1", H, env).file,
   ], ["/h/.config/opencode/agent/a1.md", "/h/.config/opencode/command/c1.md"]);
