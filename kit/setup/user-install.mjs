@@ -684,9 +684,10 @@ function installCodex(ctx, mcpUrl) {
 // ── OpenCode user-level 설치 (#1519) ──────────────────────────────────────────
 //  claude·codex 와 배선 **방식**이 다르다: 설정에 command 문자열을 등록하는 게 아니라 플러그인 파일을 놓는다.
 //  그래서 여기서 하는 일은 셋뿐이다 — ① 어댑터 파일 배치 ② opencode.json 에 MCP·자동승인 머지 ③ AGENTS.md 시드.
-//  ⚠ 경로는 XDG(`~/.config/opencode`)다 — `~/.opencode` 가 아니다(실측 `opencode debug paths`).
-//   Windows 에서도 같은 경로를 쓰는지는 **미검증**이다(실기기 확인 전까지 mac/linux 기준).
-const OPENCODE = join(HOME, ".config", "opencode");
+//  ⚠ 경로는 XDG 다 — `~/.opencode` 가 아니다. opencode 번들 소스 실측: `XDG_CONFIG_HOME || homedir()/.config`
+//   + 앱이름이고 이 계산은 **플랫폼 무관**(Windows 도 APPDATA 가 아니라 `%USERPROFILE%\.config\opencode`).
+//   XDG_CONFIG_HOME 을 무시하면 우리는 다른 곳에 쓰고 opencode 는 못 봐서 어댑터가 조용히 안 돈다.
+const OPENCODE = join(process.env.XDG_CONFIG_HOME || join(HOME, ".config"), "opencode");
 
 // opencode.json 머지 — JSON 이라 codex TOML 처럼 센티넬 블록을 쓰지 않고 키 단위로 비파괴 머지한다.
 //  ⚠ opencode 는 **알 수 없는 top-level 키를 거부**하고(ConfigInvalidError) 그러면 아예 안 뜬다 → 우리가 넣는

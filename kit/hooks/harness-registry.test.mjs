@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 하네스 레지스트리 사양테스트 — 테이블화(#1519)가 지켜야 할 불변식을 고정한다.
 //  실행: node kit/hooks/harness-registry.test.mjs   (kit/**/*.test.mjs 라 npm test 체인에 자동 포함)
-//  사양·엣지 표(27행): 프로젝트 #1519 · 케이스 이름의 [E#] 가 그 행 번호다.
+//  사양·엣지 표(29행): 프로젝트 #1519 · 케이스 이름의 [E#] 가 그 행 번호다.
 //
 // 왜 이 테스트인가 — 테이블화는 **조용히 깨지는 방식**이 둘이다:
 //  ① 훅이 import 하는 모듈이 설치 복사 목록에서 빠지면, 설치된 자리에서 ERR_MODULE_NOT_FOUND 로 훅이 통째로
@@ -104,6 +104,16 @@ const eq = (n, got, want) => (JSON.stringify(got) === JSON.stringify(want) ? ok(
   eq("C8[E12] assetDirs 의 root 가 placement 와 일치", dirs.map((d) => d[1]),
     ["skill", "subagent", "command"].map((k) => placementFor("codex", k, "x", H, env).root));
   eq("C9[E8·E9] codex assetDirs 확장자", dirs.map((d) => d[3]), ["", ".toml", ".md"]);
+  // E28/E29 — opencode 는 XDG 규약이고 **플랫폼 무관**이다(번들 소스 실측: XDG_CONFIG_HOME || homedir()/.config).
+  //  XDG_CONFIG_HOME 을 무시하면 우리는 ~/.config 에 쓰고 opencode 는 다른 곳을 봐서 **어댑터가 조용히 안 돈다**.
+  eq("C10[E28] opencode 기본 경로는 ~/.config/opencode", placementFor("opencode", "skill", "s1", H, env),
+    { file: "/h/.config/opencode/skill/s1/SKILL.md", skillDir: "/h/.config/opencode/skill/s1", root: "/h/.config/opencode/skill" });
+  eq("C11[E29] opencode 는 XDG_CONFIG_HOME 을 존중", placementFor("opencode", "skill", "s1", H, { XDG_CONFIG_HOME: "/xdg" }),
+    { file: "/xdg/opencode/skill/s1/SKILL.md", skillDir: "/xdg/opencode/skill/s1", root: "/xdg/opencode/skill" });
+  eq("C12[E28] opencode subagent/command 는 단수 디렉터리", [
+    placementFor("opencode", "subagent", "a1", H, env).file,
+    placementFor("opencode", "command", "c1", H, env).file,
+  ], ["/h/.config/opencode/agent/a1.md", "/h/.config/opencode/command/c1.md"]);
 }
 
 // ── D. 설치 라운드트립(S1) — 엣지 E3·E4 ★이번 변경이 새로 만든 엣지 ───────────────────

@@ -45,8 +45,9 @@ const HOME = process.env.LIVELY_HOME || homedir();
 const LIVELY = join(HOME, ".lively");
 const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || join(HOME, ".claude");
 const CODEX_CFG = join(HOME, ".codex", "config.toml");
-// opencode 는 XDG 규약(`~/.config/opencode`) — `~/.opencode` 가 아니다(#1519 실측 `opencode debug paths`).
-const OPENCODE_DIR = join(HOME, ".config", "opencode");
+// opencode 는 XDG 규약 — `~/.opencode` 가 아니다. `XDG_CONFIG_HOME || homedir()/.config` + 앱이름이고
+//  이 계산은 플랫폼 무관이다(#1519 실측). 설치기·제거기와 같은 계산이어야 진단이 실제 배선을 본다.
+const OPENCODE_DIR = join(process.env.XDG_CONFIG_HOME || join(HOME, ".config"), "opencode");
 const OPENCODE_PLUGIN = join(OPENCODE_DIR, "plugin", "lively.js");
 // 자동 업데이터(self-update.mjs)와 **같은 필수 훅 목록**을 쓴다 — 손상 번들 판정 기준이 갈리면 안 된다.
 //  self-update.mjs 자신은 목록에 없다(구 게이트웨이로 롤백 시 '손상'으로 오판해 영구 고착되는 걸 막기 위함 — #858).
@@ -1049,6 +1050,12 @@ async function cmdStatus(opts) {
     // 자산은 설치기가 아니라 **세션 시작 훅**이 내린다 — 업데이트만 하고 세션을 안 켜면 0 인 채로 남는다.
     const short = ["claude", "codex", "opencode"].filter((h) => st.harness[h].assets && st.harness[h].assets.local < st.harness[h].assets.server);
     if (short.length) say(dim("  → 조직 자산이 덜 깔렸습니다(") + short.join("·") + dim("). 새 세션을 한 번 켜면 내려옵니다 — 그래도 그대로면 ") + bold("lively doctor"));
+    // ⚠ 진단이 거짓말하지 않게 — opencode 는 `~/.claude/skills` 를 **자동으로도** 읽는다(#1519 결정: 스킬 격리 안 함).
+    //  위 수치는 우리가 심은 매니페스트만 센 것이라, opencode 세션에서 실제로 보이는 스킬은 이보다 많을 수 있다.
+    //  이 한 줄이 없으면 "opencode 자산 0/26" 을 보고 고장으로 오해한다(실제로는 claude 쪽에서 전부 보인다).
+    if (st.harness.opencode.assets && st.harness.opencode.installed) {
+      say(dim("     (opencode 는 ~/.claude/skills 도 함께 읽습니다 — 위 수치는 opencode 전용 자리에 심은 것만 셉니다)"));
+    }
   }
 }
 
