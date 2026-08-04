@@ -12,10 +12,11 @@ import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { applySandboxEnv } from "../testlib/os-sandbox.mjs";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "codex-aa-test-"));
 const REAL_HOME = homedir();
-process.env.HOME = SANDBOX;          // os.homedir() 리다이렉트(POSIX)
+applySandboxEnv({ home: SANDBOX });  // os.homedir() 리다이렉트 — POSIX(HOME)·윈도우(USERPROFILE) 양쪽(#1510)
 process.env.LIVELY_HOME = SANDBOX;
 const CODEX = join(SANDBOX, ".codex");
 const CFG = join(CODEX, "config.toml");

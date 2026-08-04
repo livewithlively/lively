@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { sandboxEnv } from "../testlib/os-sandbox.mjs";   // HOME/TMPDIR 만으론 윈도우 격리가 안 된다(#1510)
 import http from "node:http";
 
 const HOOK = join(fileURLToPath(import.meta.url), "..", "work-flag.mjs");
@@ -50,7 +51,7 @@ function runHook(input, env = {}) {
   return new Promise((resolve) => {
     const cp = spawn(process.execPath, [HOOK], {
       env: {
-        ...process.env, HOME, TMPDIR: TMP,
+        ...process.env, ...sandboxEnv({ home: HOME, tmp: TMP }),
         LIVELY_OFF: "", LIVELY_HOOKS_OFF: "",
         LIVELY_TOKEN: "test-token", LIVELY_GATEWAY_URL: GW,
         LIVELY_SESSION_ID: BOX,
