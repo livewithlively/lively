@@ -4,8 +4,9 @@
 // 자산을 발견하므로(name+description 상시광고, 본문 온디맨드) 본문을 파일로 굳힌다 — 훅처럼 임시실행·삭제가 아니다.
 //
 //   Claude:  skill→ ~/.claude/skills/<id>/SKILL.md · subagent→ ~/.claude/agents/<id>.md · command→ ~/.claude/commands/<id>.md
-//   Codex:   skill→ ~/.codex/skills/<id>/SKILL.md (스킬은 Agent Skills 오픈표준 = Claude 와 동일 파일).
-//            subagent(.toml translator)·command(prompts deprecated)는 후속 — 이 스크립트는 skip+경고 로깅.
+//   Codex:   skill→ ~/.codex/skills/<id>/SKILL.md (Agent Skills 오픈표준 = Claude 와 **같은 파일**)
+//            subagent→ ~/.codex/agents/<id>.toml (포맷이 다르다 — composeCodexSubagent 가 변환)
+//            command→ ~/.codex/prompts/<id>.md  (커스텀 프롬프트 `/prompts:<id>` — 최상위 .md 만 스캔됨)
 //
 // 동기화 모델(session-preload 의 auto-approve reconcile 와 동형): ~/.lively/managed-harness-assets.json 매니페스트로
 //  'lively 가 심은 것'만 추적 → 멤버 본인 스킬은 절대 안 건드리고, lively 가 더는 원치 않는 것만 회수한다.
@@ -69,7 +70,12 @@ const GW = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readLocal("gateway-
 function placement(kind, id) {
   if (HARNESS === "codex") {
     if (kind === "skill") return { file: join(CODEX_DIR, "skills", id, "SKILL.md"), skillDir: join(CODEX_DIR, "skills", id), root: join(CODEX_DIR, "skills") };
-    return null; // codex subagent(.toml)·command(prompts deprecated) — 후속과업
+    // 서브에이전트 — codex 는 md 가 아니라 **TOML**(name·description·developer_instructions)이다.
+    //  경로: ~/.codex/agents/<name>.toml (개인) · .codex/agents/ (레포). 0.142.0 공식 문서 확인.
+    if (kind === "subagent") return { file: join(CODEX_DIR, "agents", `${id}.toml`), root: join(CODEX_DIR, "agents") };
+    // 슬래시커맨드 — codex 의 대응물은 커스텀 프롬프트(`/prompts:<name>`), ~/.codex/prompts/<name>.md.
+    if (kind === "command") return { file: join(CODEX_DIR, "prompts", `${id}.md`), root: join(CODEX_DIR, "prompts") };
+    return null;
   }
   // claude(및 미설정 기본)
   if (kind === "skill") return { file: join(CLAUDE_DIR, "skills", id, "SKILL.md"), skillDir: join(CLAUDE_DIR, "skills", id), root: join(CLAUDE_DIR, "skills") };
@@ -85,7 +91,39 @@ function yamlValue(v) {
   if (Array.isArray(v)) return "[" + v.map((e) => JSON.stringify(String(e))).join(", ") + "]";
   return JSON.stringify(String(v ?? ""));
 }
+// provenance 한 줄(#932) — 이 파일은 중앙 asset 의 사본이라 손으로 만든 로컬 자산과 겉이 같다.
+const PROVENANCE = "라이블리가 materialize 한 사본입니다. 편집은 MCP org_harness_asset_upsert(또는 관리탭 ▸ 하네스) — 이 파일 직접 수정은 다음 sync 에 덮어써집니다.";
+
+// codex 서브에이전트 = **TOML**(md 아님). 필수 키 name·description·developer_instructions(본문=시스템 프롬프트).
+//  값은 전부 TOML basic 문자열(JSON.stringify) — 개행·따옴표·한글이 그대로 escape 된다. multi-line `"""` 를 쓰면
+//  본문에 `"""` 나 끝나는 따옴표가 있을 때 파일 전체가 깨지므로 쓰지 않는다(yamlValue 와 같은 철학: 가독성보다 정확성).
+//  ⚠ claude frontmatter 의 model·tools 는 **옮기지 않는다** — 모델 슬러그("sonnet")도 툴 이름도 하네스마다 달라
+//   그대로 넣으면 codex 가 뜨지 않거나 조용히 무시한다. 넘기는 건 이식 가능한 셋(name·description·본문)뿐이다.
+function composeCodexSubagent(asset) {
+  const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
+  const name = fm.name != null ? String(fm.name) : String(asset.id || "");
+  const desc = asset.description != null ? String(asset.description) : String(fm.description ?? "");
+  return [
+    `# ${PROVENANCE}`,
+    `name = ${JSON.stringify(name)}`,
+    `description = ${JSON.stringify(desc)}`,
+    `developer_instructions = ${JSON.stringify(String(asset.body || ""))}`,
+    "",
+  ].join("\n");
+}
+
+// codex 커스텀 프롬프트(`/prompts:<name>`) = **본문 그대로의 markdown**. claude command 의 frontmatter
+//  (description·argument-hint 등)는 codex 가 해석하지 않아 그대로 프롬프트 텍스트로 새어 들어가므로 싣지 않는다.
+function composeCodexPrompt(asset) {
+  return `<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
+}
+
 function composeFile(asset) {
+  if (HARNESS === "codex") {
+    if (asset.kind === "subagent") return composeCodexSubagent(asset);
+    if (asset.kind === "command") return composeCodexPrompt(asset);
+    // skill 은 Agent Skills 오픈표준이라 claude 와 **같은 파일**(아래 공통 경로).
+  }
   const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
   const ordered = [];
   const seen = new Set();
@@ -94,10 +132,9 @@ function composeFile(asset) {
   push("description", asset.description != null ? asset.description : (fm.description ?? "")); // description 컬럼이 진실원천
   for (const k of Object.keys(fm)) if (k !== "name" && k !== "description") push(k, fm[k]);
   const lines = ordered.map(([k, v]) => `${k}: ${yamlValue(v)}`);
-  // provenance 한 줄(#932) — 이 파일은 중앙 asset 의 사본이라 손으로 만든 로컬 스킬과 겉이 같다. 세션이 파일만 봐도
-  //  '사본이니 중앙을 고쳐라'를 알게 마커를 박는다(frontmatter 뒤 = 로더 무영향, HTML 주석 = 렌더 무영향, 한 줄 = 노이즈 최소).
-  const provenance = "<!-- 라이블리가 materialize 한 사본입니다. 편집은 MCP org_harness_asset_upsert(또는 관리탭 ▸ 하네스) — 이 파일 직접 수정은 다음 sync 에 덮어써집니다. -->";
-  return `---\n${lines.join("\n")}\n---\n\n${provenance}\n\n${asset.body || ""}\n`;
+  // 세션이 파일만 봐도 '사본이니 중앙을 고쳐라'를 알게 마커를 박는다
+  //  (frontmatter 뒤 = 로더 무영향, HTML 주석 = 렌더 무영향, 한 줄 = 노이즈 최소).
+  return `---\n${lines.join("\n")}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
 }
 
 async function fetchAssets() {
@@ -165,8 +202,10 @@ function writeAsset(asset, prevEntry) {
 function removeAsset(entry) {
   try {
     const f = entry.file;
-    // 방어 — 매니페스트가 변조돼도 자산 경로 패턴(.../{skills,agents,commands}/...) 밖 파일은 절대 삭제하지 않는다.
-    if (!f || !/[/\\](skills|agents|commands)[/\\]/.test(f)) return;
+    // 방어 — 매니페스트가 변조돼도 자산 경로 패턴(.../{skills,agents,commands,prompts}/...) 밖 파일은 절대 삭제하지 않는다.
+    //  prompts = codex 커스텀 프롬프트(claude 의 commands 대응). 이 목록에 없으면 회수(prune)가 조용히 안 돌아
+    //  '중앙에서 지운 자산이 멤버 디스크에 영원히 남는다'.
+    if (!f || !/[/\\](skills|agents|commands|prompts)[/\\]/.test(f)) return;
     if (!lstatSyncIsSymlink(f)) { try { rmSync(f, { force: true }); } catch { /* */ } }
     // 스킬은 <root>/<id>/SKILL.md 구조 → 부모 디렉터리가 비면 제거(rmdirSync=빈 디렉터리 전용, 비었을 때만 성공)
     if (entry.kind === "skill") {
@@ -189,8 +228,45 @@ function emitReload() {
 // 사용자 **자체** 훅 관측(#893 후속) — ~/.claude/settings.json 의 hooks 중 라이블리 배선(.lively/) 아닌 것만.
 //  라이블리 훅은 파일이 아니라 run-custom 중앙 디스패치라 여기선 안 센다(웹은 '배선된 PC=전부 실행'으로 다룬다).
 //  훅은 settings.json 항목이지 파일이 아니므로 managed=false 표시전용(비파괴 .disabled 토글 대상 아님).
+// codex 자체 훅 관측 — ~/.codex/config.toml 의 [[hooks.<E>.hooks]] 중 **라이블리 배선이 아닌 것**만.
+//  라이블리 배선은 ① 관리 센티넬 블록 안이거나 ② command 가 .lively/hooks 를 가리킨다 — 둘 다 뺀다.
+//  TOML 파서를 들이지 않는다(이 훅의 계약 = 런타임 의존 0). 관측·표시 전용이라 정규식으로 충분하고, 틀려도
+//  웹 목록에 한 줄이 더/덜 보일 뿐 배포·회수엔 영향이 없다(claude 쪽 scanLocalHooks 와 같은 성격).
+//  ⚠ 센티넬 리터럴은 setup/user-install.mjs·user-uninstall.mjs 와 **정확히 같아야** 한다.
+const CDX_BEGIN = "# >>> lively-managed (auto-generated by workflow-std/adapters/codex — do not edit) >>>";
+const CDX_END = "# <<< lively-managed <<<";
+function scanLocalHooksCodex() {
+  let raw;
+  try { raw = readFileSync(join(CODEX_DIR, "config.toml"), "utf8"); } catch { return []; }
+  const bi = raw.indexOf(CDX_BEGIN);
+  if (bi !== -1) {
+    const ei = raw.indexOf(CDX_END, bi);
+    raw = raw.slice(0, bi) + (ei === -1 ? "" : raw.slice(ei + CDX_END.length));
+  }
+  const out = [], seen = new Set();
+  // [[hooks.<E>.hooks]] 헤더부터 다음 테이블 헤더 전까지가 한 핸들러 블록.
+  const blocks = /\[\[hooks\.([A-Za-z]+)\.hooks\]\]([\s\S]*?)(?=\n[ \t]*\[|$)/g;
+  let m;
+  while ((m = blocks.exec(raw))) {
+    const event = m[1];
+    const cm = /(^|\n)[ \t]*command[ \t]*=[ \t]*("(?:[^"\\]|\\.)*"|'[^']*')/.exec(m[2]);
+    if (!cm) continue;
+    const lit = cm[2];
+    let cmd = lit;
+    try { cmd = lit.startsWith("'") ? lit.slice(1, -1) : JSON.parse(lit); } catch { /* 원문 그대로 */ }
+    if (!cmd || cmd.includes(".lively/") || cmd.includes(".lively\\")) continue; // 라이블리 배선분 제외 = 내 것만
+    const tok = cmd.replace(/["']/g, "").split(/\s+/).find((t) => /[\\/]/.test(t) && !t.startsWith("-")) || cmd.split(/\s+/)[0] || "hook";
+    const base = (tok.split(/[\\/]/).pop() || tok).slice(0, 40);
+    let id = `${event}:${base}`.slice(0, 60);
+    while (seen.has(id)) id = id.length < 62 ? id + "~" : id.slice(0, -1) + "~";
+    seen.add(id);
+    out.push({ id, kind: "hook", managed: false });
+  }
+  return out;
+}
+
 function scanLocalHooks() {
-  if (HARNESS === "codex") return []; // codex 훅은 config.toml(별도 포맷) — 미지원
+  if (HARNESS === "codex") return scanLocalHooksCodex();
   let cfg;
   try { cfg = JSON.parse(readFileSync(join(CLAUDE_DIR, "settings.json"), "utf8")); } catch { return []; }
   const hooksCfg = cfg && typeof cfg === "object" ? cfg.hooks : null;
@@ -216,19 +292,34 @@ function scanLocalHooks() {
   return out;
 }
 
+// 하네스별 자산 디렉터리 — [kind, root, isDir, ext]. isDir=true 면 <root>/<id>/(스킬), 아니면 <root>/<id><ext>.
+//  ⚠ placement() 와 **짝을 맞춰야** 한다 — 여기 빠진 종류는 관측(#891)·로컬토글에서 통째로 안 보이고,
+//   claude 는 전부 .md 지만 codex 서브에이전트만 .toml 이라 확장자를 하드코딩하면 스캔이 조용히 0건이 된다.
+function assetDirs() {
+  if (HARNESS === "codex") {
+    return [
+      ["skill", join(CODEX_DIR, "skills"), true, ""],
+      ["subagent", join(CODEX_DIR, "agents"), false, ".toml"],
+      ["command", join(CODEX_DIR, "prompts"), false, ".md"],
+    ];
+  }
+  return [
+    ["skill", join(CLAUDE_DIR, "skills"), true, ""],
+    ["subagent", join(CLAUDE_DIR, "agents"), false, ".md"],
+    ["command", join(CLAUDE_DIR, "commands"), false, ".md"],
+  ];
+}
+
 function scanLocalAssets(managedIds) {
   const out = [];
-  const dirs = HARNESS === "codex"
-    ? [["skill", join(CODEX_DIR, "skills"), true]]
-    : [["skill", join(CLAUDE_DIR, "skills"), true], ["subagent", join(CLAUDE_DIR, "agents"), false], ["command", join(CLAUDE_DIR, "commands"), false]];
-  for (const [kind, root, isDir] of dirs) {
+  for (const [kind, root, isDir, ext] of assetDirs()) {
     let entries;
     try { entries = readdirSync(root, { withFileTypes: true }); } catch { continue; } // 디렉터리 없음 = 자산 0
     for (const e of entries) {
-      // skill = <root>/<id>/SKILL.md(디렉터리) · subagent·command = <root>/<id>.md(파일). .disabled 접미사는 무시(비활성분).
+      // skill = <root>/<id>/SKILL.md(디렉터리) · 그 외 = <root>/<id><ext>(파일). .disabled 접미사는 무시(비활성분).
       let id = null;
       if (isDir) { if (e.isDirectory() && !e.name.endsWith(".disabled")) id = e.name; }
-      else if ((e.isFile() || e.isSymbolicLink()) && e.name.endsWith(".md")) id = e.name.slice(0, -3);
+      else if ((e.isFile() || e.isSymbolicLink()) && e.name.endsWith(ext)) id = e.name.slice(0, -ext.length);
       if (!id || !SLUG.test(id)) continue;
       out.push({ id, kind, managed: managedIds.has(id) });
     }
@@ -269,14 +360,11 @@ async function applyLocalPref() {
     if (!plan || !Array.isArray(plan.disabled)) return;
     const wantDisabled = new Set(plan.disabled.map((x) => `${x.kind}:${x.id}`)); // 꺼야 할 것
     // 현재 로컬을 훑어 지시대로 맞춘다 — 켜진 파일 중 꺼야 할 건 .disabled 로, 꺼진 것 중 켜야 할 건 복원.
-    const dirs = HARNESS === "codex"
-      ? [["skill", join(CODEX_DIR, "skills"), true]]
-      : [["skill", join(CLAUDE_DIR, "skills"), true], ["subagent", join(CLAUDE_DIR, "agents"), false], ["command", join(CLAUDE_DIR, "commands"), false]];
-    for (const [kind, root, isDir] of dirs) {
+    for (const [kind, root, isDir, ext] of assetDirs()) {
       let entries; try { entries = readdirSync(root, { withFileTypes: true }); } catch { continue; }
       for (const e of entries) {
         const base = e.name.endsWith(".disabled") ? e.name.slice(0, -".disabled".length) : e.name;
-        const id = isDir ? base : (base.endsWith(".md") ? base.slice(0, -3) : null);
+        const id = isDir ? base : (base.endsWith(ext) ? base.slice(0, -ext.length) : null);
         if (!id || !SLUG.test(id)) continue;
         const key = `${kind}:${id}`;
         const isOff = e.name.endsWith(".disabled");
