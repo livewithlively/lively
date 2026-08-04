@@ -791,6 +791,11 @@ async function gatherStatus() {
     st.harness.claude.wired = s.includes(".lively/hooks/") || s.includes(".lively\\hooks\\");
   } catch { /* */ }
   try { st.harness.codex.wired = readFileSync(CODEX_CFG, "utf8").includes("lively-managed"); } catch { /* */ }
+  // PATH 에서 못 찾아도 config.toml 이 배선돼 있으면 **설치된 것**이다 — 코덱스 세션 *안에서* doctor 를 돌리면
+  //  코덱스가 자기 자신을 그 셸 PATH 에 안 넣어 `where codex` 가 빈다(윈도우 실측 2026-08-04: 같은 머신에서
+  //  PowerShell 직접 실행은 installed=true, 코덱스 세션 안은 false). 그대로 두면 '미설치'로 읽혀
+  //  "Codex 설치 상태 점검" 같은 헛다리 조치가 나온다 — 배선이 곧 설치의 증거다.
+  if (!st.harness.codex.installed && st.harness.codex.wired) st.harness.codex.installed = true;
   try { st.hooks.installed = readdirSync(join(LIVELY, "hooks")).filter((f) => REQUIRED_HOOKS.includes(f)).length; } catch { /* */ }
   if (st.harness.claude.installed) {
     // ⚠ `claude mcp list` 는 등록된 MCP 서버를 **전부** 헬스체크(=연결)한다. lively(http) 서버가 게이트웨이에 못 붙으면
