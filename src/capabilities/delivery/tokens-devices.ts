@@ -8,6 +8,11 @@ import type { LivelyUser } from "../../context.js";
 import { getMember, mintToken, listTokens, revokeToken, mintSessionCode } from "../../org/store.js";
 import { hasCredential, verifyOwnPassword } from "../../auth/local-accounts.js";
 import { lookupDeviceAuth, approveDeviceAuth, denyDeviceAuth, checkDeviceRate } from "../../org/auth/device-auth.js";
+import {
+  listClients as listOAuthClients, saveClient as saveOAuthClient, disableClient as disableOAuthClient,
+} from "../../org/store/oauth.js";
+import { isAcceptableRedirectUri } from "../../org/auth/oauth-clients.js";
+import { sha256Hex } from "../../org/auth/grant-util.js";
 import { actorOf, restOnly, restRead, slug, str } from "./shared.js";
 
 export const tokensReadCapabilities: Capability[] = [
@@ -153,6 +158,62 @@ export const deviceAuthCapabilities: Capability[] = [
       if (!checkDeviceRate(user.userId)) throw new HttpError(429, "요청이 너무 잦습니다 — 잠시 후 다시 시도하세요");
       await denyDeviceAuth(str(input.user_code, "user_code", 20));
       return { ok: true };
+    }),
+];
+
+// ── OAuth 클라이언트 사전등록(#1473 T2) — 'static' 경로. ──
+//  CIMD(ChatGPT)·DCR(claude.ai)는 클라이언트가 스스로 등록하지만, Gemini Enterprise 처럼 **관리자가 미리 받은
+//  client_id/secret 을 손으로 넣는** 표면이 있다. 그 표면을 위한 창구다.
+//  발급 자격이라 scope=admin(정적 토큰은 web.ts B5 게이트가 이미 거부 — 회수 가능한 자격으로만 등록된다).
+export const oauthClientCapabilities: Capability[] = [
+  restOnly("org_oauth_clients", "OAuth 클라이언트 목록",
+    "이 게이트웨이에 등록된 OAuth 클라이언트(cimd 자동캐시 · dcr 동적등록 · static 사전등록) 목록. " +
+    "**클라이언트 시크릿은 복원 불가**(해시만 저장) — has_secret 로 존재 여부만 보인다. 끄려면 org_oauth_client_disable.",
+    [{ method: "GET", paths: ["/api/ui/org/oauth/clients"], parse: () => ({}) }],
+    async () => ({ clients: await listOAuthClients() })),
+
+  restOnly("org_oauth_client_upsert", "OAuth 클라이언트 사전등록",
+    "관리자가 OAuth 클라이언트를 직접 등록한다(kind=static). Gemini Enterprise 처럼 client_id/secret 을 손으로 넣는 " +
+    "표면용. clientSecret 을 주면 그 값의 해시를 저장하고(평문 보관 안 함), 생략하면 공개 클라이언트로 등록된다. " +
+    "redirectUris 는 https 또는 loopback 만 허용(오픈 리다이렉터 방지).",
+    [{ method: "POST", paths: ["/api/ui/org/oauth/client"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const clientId = str(input.clientId, "clientId", 200).trim();
+      if (!clientId) throw new HttpError(400, "clientId 가 필요합니다");
+      const rawUris = Array.isArray(input.redirectUris) ? input.redirectUris : [];
+      const redirectUris = rawUris.map((u) => str(u, "redirectUris[]", 500).trim()).filter(Boolean);
+      if (!redirectUris.length) throw new HttpError(400, "redirectUris 가 1개 이상 필요합니다");
+      for (const u of redirectUris) {
+        if (!isAcceptableRedirectUri(u)) throw new HttpError(400, `허용되지 않은 redirect_uri: ${u} (https 또는 loopback 만)`);
+      }
+      const secret = input.clientSecret === undefined ? null : str(input.clientSecret, "clientSecret", 512);
+      await saveOAuthClient({
+        clientId, kind: "static",
+        clientName: input.clientName === undefined ? null : str(input.clientName, "clientName", 200).trim(),
+        clientSecretHash: secret ? sha256Hex(secret) : null,
+        redirectUris,
+        tokenEndpointAuthMethod: secret ? "client_secret_post" : "none",
+        metadata: { redirect_uris: redirectUris },
+        actor: actorOf(user),
+      });
+      return { ok: true, clientId, hasSecret: Boolean(secret) };
+    }, {
+      clientId: z.string().describe("클라이언트 ID(상대 표면이 발급했거나 우리가 정한 값)"),
+      redirectUris: z.array(z.string()).describe("허용할 redirect_uri 목록 — https 또는 loopback 만"),
+      clientName: z.string().optional().describe("동의 화면에 표시할 이름"),
+      clientSecret: z.string().optional().describe("클라이언트 시크릿(평문). 저장은 sha256 해시만 — 생략 시 공개 클라이언트"),
+    }),
+
+  restOnly("org_oauth_client_disable", "OAuth 클라이언트 해제",
+    "클라이언트를 즉시 비활성화하고 그 클라이언트로 발급된 액세스·리프레시 토큰을 전부 회수한다(게이트웨이 재시작 불요).",
+    [{ method: "POST", paths: ["/api/ui/org/oauth/client/disable"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const clientId = str(input.clientId, "clientId", 200).trim();
+      if (!clientId) throw new HttpError(400, "clientId 가 필요합니다");
+      const disabled = await disableOAuthClient(clientId, actorOf(user));
+      return { ok: true, clientId, disabled }; // disabled=false = 이미 꺼져 있었음(토큰 회수는 그래도 수행)
+    }, {
+      clientId: z.string().describe("비활성화할 클라이언트 ID"),
     }),
 ];
 

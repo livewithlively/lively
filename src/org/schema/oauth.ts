@@ -38,6 +38,30 @@ export async function initOAuthServer(pool: Pool): Promise<void> {
     })}
   `);
 
+  // ── oauth_auth_request — /authorize 와 동의 화면 사이에 걸친 **미결 인가요청**. ──
+  //  왜 필요한가: OAuth 의 /authorize 는 한 번의 HTTP 왕복으로 끝나지 않는다 — 사람이 로그인하고 동의를
+  //  누르는 사이에 요청 파라미터(client_id·redirect_uri·PKCE challenge·state·resource)를 서버가 들고 있어야
+  //  한다. 그 보관소다. request_id 는 동의 URL 에 실리는 **비밀**이라 평문 저장 금지(sha256).
+  //  consumed_at 으로 1회성 — 동의 화면을 뒤로가기로 다시 제출해도 코드가 두 번 나오지 않는다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS oauth_auth_request(
+      request_hash TEXT PRIMARY KEY,
+      client_id TEXT NOT NULL,
+      redirect_uri TEXT NOT NULL,
+      code_challenge TEXT NOT NULL,
+      code_challenge_method TEXT NOT NULL DEFAULT 'S256',
+      scopes JSONB NOT NULL DEFAULT '[]'::jsonb,
+      state TEXT,
+      resource TEXT,
+      expires_at TIMESTAMPTZ NOT NULL,
+      consumed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+    CREATE INDEX IF NOT EXISTS oauth_auth_request_expiry_idx ON oauth_auth_request(expires_at);
+    ${ensureCheck("oauth_auth_request", {
+      oauth_auth_request_method_chk: "code_challenge_method = 'S256'",
+    })}
+  `);
+
   // ── oauth_auth_code — 인가코드(단명). 평문은 저장하지 않는다(sha256). ──
   //  PKCE(code_challenge)는 필수다 — 사양이 S256 을 요구하고, 우리 디바이스 코드 흐름(#880)도 같은 규율을 쓴다.
   //  resource = RFC 8707 대상 지정. 이 값이 그대로 발급 토큰의 audience 가 되고, 자원서버가 자기 앞 토큰인지 검증한다.

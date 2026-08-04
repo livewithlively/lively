@@ -13,7 +13,7 @@ import type { Capability } from "./types.js";
 import { overviewCapabilities } from "./delivery/overview.js";
 import { orgContentReadCapabilities, orgContentCapabilities } from "./delivery/org-content.js";
 import { membersReadCapabilities, membersCapabilities } from "./delivery/members.js";
-import { tokensReadCapabilities, tokenMintCapabilities, deviceAuthCapabilities, tokenRevokeCapabilities } from "./delivery/tokens-devices.js";
+import { tokensReadCapabilities, tokenMintCapabilities, deviceAuthCapabilities, tokenRevokeCapabilities, oauthClientCapabilities } from "./delivery/tokens-devices.js";
 import { connectorsReadCapabilities, connectorsCapabilities, connectorMembersCapabilities } from "./delivery/connectors.js";
 import { collectorsReadCapabilities, collectorsCapabilities } from "./delivery/collectors.js"; // #1419 T1 — 수집기 n개 축
 import { classifiersCapabilities } from "./delivery/classifiers.js"; // #1419 T4 — 분류기 n개 축
@@ -49,6 +49,7 @@ export const deliveryCapabilities: Capability[] = [
   ...meSelfCapabilities,
   ...gitCredentialCapabilities,
   ...tokenRevokeCapabilities,
+  ...oauthClientCapabilities,   // #1473 T2 — OAuth 클라이언트 사전등록(static)·목록·해제
   ...runtimeConfigCapabilities,
   ...boxStatusCapabilities,
   ...workspaceCapabilities,
