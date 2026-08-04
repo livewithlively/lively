@@ -9,7 +9,7 @@
   },
   "homepage": "https://github.com/livewithlively/lively",
   "repository": "https://github.com/livewithlively/lively",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "keywords": [
     "knowledge",
     "context",
