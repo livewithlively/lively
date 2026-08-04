@@ -22,7 +22,7 @@ description: 라이블리 플러그인을 처음 설치했거나 연결이 안 �
 그다음 **로그인**한다. 토큰을 복사해 붙일 필요는 없다 — 브라우저에서 승인하면 된다.
 
 ```bash
-node "$CLAUDE_PLUGIN_ROOT/bin/login.mjs"
+node "$CLAUDE_PLUGIN_ROOT/scripts/login.mjs"
 ```
 
 실행하면 승인 주소와 코드가 뜨고 브라우저가 열린다. 승인하면 접속 토큰이 `~/.lively/token`(권한 600)에 저장된다.
