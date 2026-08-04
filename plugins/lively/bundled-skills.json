@@ -1,0 +1,35 @@
+{
+  "_comment": "플러그인에 동봉할 조직 스킬 목록(#1473). 진실원천은 게이트웨이 org_harness_assets — 여기 이름을 적으면 scripts/build-plugin.mjs --skills 가 본문을 끌어와 skills/<name>/SKILL.md 로 굽는다. 스킬 본문을 여기서 직접 고치지 말 것(다음 빌드에 덮인다 — 중앙에서 고친다).",
+  "_criteria": "동봉 기준 = 라이블리를 쓰는 사람에게 실제로 쓸모 있는가. 제외 기준 = ① 우리 개발 워크플로 전용 ② 우리 내부 인프라 전제 ③ 매우 니치. 스킬 목록은 모든 세션에 설명이 주입되므로 안 쓰는 스킬은 그대로 노이즈 비용이다.",
+  "skills": [
+    "lively-onboarding",
+    "lively-memory-triage",
+    "lively-harness-triage",
+    "lively-mcp-triage",
+    "lively-harness-generalize",
+    "lively-taxonomy",
+    "context-pipeline-audit",
+    "distiller-authoring",
+    "project-closeout",
+    "next-session-handover",
+    "mcp-vetting",
+    "source-citation",
+    "sensitive-data-filter",
+    "llm-wiki-init-macos",
+    "llm-wiki-init-linux",
+    "llm-wiki-init-windows"
+  ],
+  "_excluded": {
+    "blind-diff-review": "개발 전용 — diff 로 기능 유추, 코드 리뷰 워크플로",
+    "spec-failfirst-test": "개발 전용 — fail-first 테스트 작성",
+    "spec-blind-test": "개발 전용 + 게이트웨이에서 이미 비활성",
+    "pin-sources": "개발 전용 — 레포 SHA 핀(lively_local_repo_pin 의존)",
+    "design-adversarial-converge": "개발·설계 전용 — 코드 SoT 위 반복 수렴",
+    "proposal-review": "개발 비중이 높다(코드 근거·핀 전제) + 본문 12.8KB로 최대. 범용성은 있으나 노이즈 대비 이득이 불확실",
+    "diff-reviewer(subagent)": "개발 전용 서브에이전트 — 본문 14.5KB로 전 자산 중 최대",
+    "preview-screen-check": "우리 dev 인프라 전제(라이브 :8080·프리뷰 환경) — 외부인에겐 무의미",
+    "delegate-heavy-work": "우리 워커 노드·lively delegate CLI 전제",
+    "chrome-ops": "claude-in-chrome 의존 + 특정 웹폼 조작 노하우 — 니치",
+    "sheets-cell-entry": "구글시트 입력 자동화 — 니치"
+  }
+}
