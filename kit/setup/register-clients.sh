@@ -66,7 +66,8 @@ echo
 echo "▶ Codex — 이 스크립트는 codex 를 건드리지 않습니다."
 echo "   codex 배선(MCP + 훅 + AGENTS.md)은 setup/user-install.mjs --harness codex 가 통째로 담당합니다:"
 echo "     node setup/user-install.mjs --harness codex"
-echo "   (claude 와 같은 stdio 프록시로 등록되므로 x-lively-session·x-lively-mode 도 함께 실립니다."
+echo "   (#1475 부터 claude 와 같은 stdio 프록시로 등록되므로 x-lively-session·x-lively-mode 도 함께 실립니다 —"
+echo "    codex 의 http_headers 는 정적값이라 http 직결로는 그 둘을 보낼 수 없었습니다."
 echo "    수동 http 직결이 필요하면 ~/.lively/mcp-transport 에 http 를 적고 재설치하세요.)"
 
 echo
