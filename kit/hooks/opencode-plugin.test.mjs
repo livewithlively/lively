@@ -13,7 +13,9 @@
 //  P4 하네스 stamp 가 "opencode" (프록시·게이트웨이 집계 축 — 틀리면 세션이 남의 하네스로 집계된다)
 //  P5 배포 목록(HOOK_SCRIPTS)에 등재 — 안 그러면 설치기가 복사할 소스가 없다
 //  P6 유일한 throw 는 deny 경로 하나뿐(fail-open 불변식)
-import { readFileSync } from "node:fs";
+//  P7 **어댑터를 직접 실행**해 deny→차단 / 결정없음→통과 / 러너부재→통과(fail-open) 확인
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HARNESS } from "./harness-registry.mjs";
@@ -84,6 +86,54 @@ const bad = (n, why) => { fail++; console.error(`FAIL ${n} — ${why}`); };
   const nocatch = hooks.filter((h) => !/catch\s*\{/.test(h[2])).map((h) => h[1]);
   nocatch.length ? bad("P6b 부수효과 훅은 전부 catch 로 감싼다", `미보호: ${nocatch.join(",")}`)
     : ok("P6b 부수효과 훅은 전부 catch 로 감싼다");
+}
+
+// ── P7 차단이 실제로 걸리는가 — **어댑터를 직접 실행**한다 ────────────────────────────────
+//  실기기 세션(모델 필요)으로는 무료 모델 큐 때문에 안정적으로 못 돈다. 어댑터는 순수 함수라
+//  러너를 스텁으로 두고 훅을 직접 부르면 **차단 로직 자체**를 모델 없이 검증할 수 있다.
+//  P6 은 "throw 가 deny 분기에 있다"를 소스로만 본다 — 여기서는 실제로 던지는지 실행으로 본다.
+{
+  const SB = mkdtempSync(join(tmpdir(), "oc-plugin-run-"));
+  try {
+    const hooksDir = join(SB, ".lively", "hooks");
+    mkdirSync(hooksDir, { recursive: true });
+    // 스텁 러너 — 입력에 BLOCK 이 있으면 deny 결정을, 아니면 아무것도 내지 않는다.
+    writeFileSync(join(hooksDir, "run-custom.mjs"), `
+import { readFileSync } from "node:fs";
+let s = ""; try { s = readFileSync(0, "utf8"); } catch {}
+if (process.argv[2] === "PreToolUse" && s.includes("BLOCK")) {
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "테스트 정책" } }) + "\\n");
+}
+`);
+    // 어댑터는 모듈 로드 시점에 경로를 굳힌다 → LIVELY_HOME 을 먼저 세우고 dynamic import.
+    const prev = process.env.LIVELY_HOME;
+    process.env.LIVELY_HOME = SB;
+    const mod = await import(`./opencode-plugin.js?t=${SB.replace(/\W/g, "")}`);
+    const hooks = await mod.LivelyAdapter({});
+    process.env.LIVELY_HOME = prev;
+
+    // ① deny → throw (거버넌스가 실제로 툴을 막는다)
+    let threw = null;
+    try { await hooks["tool.execute.before"]({ tool: "bash", sessionID: "s1", callID: "c1" }, { args: { command: "BLOCK me" } }); }
+    catch (e) { threw = e; }
+    threw ? ok("P7a deny 결정이 실제로 툴을 막는다(throw)") : bad("P7a deny 결정이 실제로 툴을 막는다(throw)", "throw 하지 않음 — 관리자가 막았다고 믿는 것이 안 막힌다");
+    // 사유가 사용자에게 보이는 메시지에 실려야 한다(왜 막혔는지가 화면에 남아야 한다).
+    (threw && /테스트 정책/.test(String(threw.message))) ? ok("P7b 차단 사유가 메시지에 실린다")
+      : bad("P7b 차단 사유가 메시지에 실린다", `got ${threw ? threw.message : "(없음)"}`);
+
+    // ② 결정 없음 → 통과 (fail-open — 훅이 아무 말도 안 하면 막지 않는다)
+    let passed = true;
+    try { await hooks["tool.execute.before"]({ tool: "bash", sessionID: "s1", callID: "c2" }, { args: { command: "safe" } }); }
+    catch { passed = false; }
+    passed ? ok("P7c 결정이 없으면 통과한다") : bad("P7c 결정이 없으면 통과한다", "막혔다 — fail-open 위반");
+
+    // ③ 러너가 아예 없어도 통과 (설치 파손 시 세션을 막지 않는다)
+    rmSync(join(hooksDir, "run-custom.mjs"), { force: true });
+    let passed2 = true;
+    try { await hooks["tool.execute.before"]({ tool: "bash", sessionID: "s1", callID: "c3" }, { args: { command: "BLOCK me" } }); }
+    catch { passed2 = false; }
+    passed2 ? ok("P7d 러너가 없어도 세션을 막지 않는다(fail-open)") : bad("P7d 러너가 없어도 세션을 막지 않는다(fail-open)", "막혔다 — 배선 파손이 곧 장애가 된다");
+  } finally { rmSync(SB, { recursive: true, force: true }); }
 }
 
 console.log(`\n${fail ? "✗" : "✓"} opencode-plugin: ${pass} passed, ${fail} failed`);
