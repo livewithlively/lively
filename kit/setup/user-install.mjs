@@ -620,6 +620,15 @@ function wireCodexTokenEnv() {
   if (wired) console.log("    (현재 셸 즉시 반영 안 됨 — 새 터미널 또는 `source ~/.zshrc` 후 codex)");
 }
 
+// 게이트웨이 MCP URL — ~/.lively/gateway-url(부트스트랩·CLI 가 기록) > 기본. /mcp 정규화.
+//  하네스별 배선이 공통으로 쓰는 값이라 배선 표 밖으로 빼 둔다(하네스마다 다시 계산하지 않는다).
+function gatewayMcpUrl() {
+  let gwBase = "http://localhost:8080";
+  try { gwBase = (readFileSync(join(LIVELY, "gateway-url"), "utf8").trim() || gwBase); } catch { /* 기본 */ }
+  gwBase = gwBase.replace(/\/+$/, "");
+  return /\/mcp$/.test(gwBase) ? gwBase : gwBase + "/mcp";
+}
+
 function installCodex(ctx, mcpUrl) {
   mkdirSync(CODEX, { recursive: true });
   // (c) AGENTS.md — org-context 시드(설치-시 라이브 fetch 결과). 센티넬 블록으로 **비파괴 머지**(기존 지침 보존 + 백업).
@@ -765,21 +774,28 @@ async function main() {
   console.log(`▶ user-level 설치 (발행물 동봉 설치기 — harness=${harnesses.join(",")})`);
   const ctx = await installShared(workRoots);
 
-  if (harnesses.includes("claude")) {
-    console.log("  ── Claude ──");
-    // 기본 훅 3종 + 커스텀 훅 런너(이벤트별 고정 엔트리)를 비파괴 머지(절대경로).
-    safeMergeUserSettings(mergeBlocks(userLevelHooksBlock(), runnerHooksBlock()));
-    mergeAutoApprove(); // auto-approve(permissions.allow) reconcile
+  // 하네스별 배선 — **표(dispatch)로 돈다.** 종전엔 `if (harnesses.includes("claude"))` / `includes("codex")`
+  //  두 블록이었고, 세 번째 하네스는 여기 if 를 하나 더 다는 일이 됐다(그렇게 늘어난 분기가 #1519 가 정리하는 대상).
+  //  이제 하네스를 늘리는 건 이 표에 한 줄을 더하는 것이다. 모르는 이름은 **조용히 넘기지 않고 경고**한다 —
+  //  오타로 아무것도 설치되지 않았는데 성공처럼 보이는 게 이 계열에서 가장 흔한 조용한 실패다.
+  const WIRING = {
+    claude: () => {
+      console.log("  ── Claude ──");
+      // 기본 훅 3종 + 커스텀 훅 런너(이벤트별 고정 엔트리)를 비파괴 머지(절대경로).
+      safeMergeUserSettings(mergeBlocks(userLevelHooksBlock(), runnerHooksBlock()));
+      mergeAutoApprove(); // auto-approve(permissions.allow) reconcile
+    },
+    codex: () => {
+      console.log("  ── Codex ──");
+      installCodex(ctx, gatewayMcpUrl());
+    },
+  };
+  const unknown = [];
+  for (const h of harnesses) {
+    const wire = WIRING[h];
+    if (wire) wire(); else unknown.push(h);
   }
-  if (harnesses.includes("codex")) {
-    console.log("  ── Codex ──");
-    // 게이트웨이 URL: ~/.lively/gateway-url(부트스트랩·CLI 가 기록) > 기본. /mcp 정규화.
-    let gwBase = "http://localhost:8080";
-    try { gwBase = (readFileSync(join(LIVELY, "gateway-url"), "utf8").trim() || gwBase); } catch { /* 기본 */ }
-    gwBase = gwBase.replace(/\/+$/, "");
-    const mcpUrl = /\/mcp$/.test(gwBase) ? gwBase : gwBase + "/mcp";
-    installCodex(ctx, mcpUrl);
-  }
+  if (unknown.length) console.warn(`  ⚠️ 배선 미지원 하네스: ${unknown.join(", ")} — 공유 자산(~/.lively)만 설치했습니다.`);
 
   // ⚠ 문구는 **실제 동작과 일치해야 한다**(#1087). 종전엔 "setup 의 register-clients.sh 가 담당" 이라 했는데,
   //  `lively install` 경로에선 바로 다음 단계인 CLI 의 [3/3] 이 등록한다 — 화면상 이 줄 **바로 아래**에서

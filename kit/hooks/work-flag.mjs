@@ -22,6 +22,9 @@
 import { mkdirSync, writeFileSync, readFileSync, existsSync, statSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
+// 툴 이름은 하네스마다 다르다(대소문자·MCP 접두어 형태까지) — 문자열을 여기 박으면 그 하네스에서 판정이
+//  **항상 false** 가 되어 세션 상태·기록 인정이 통째로 무음이 된다. 반드시 표에서 파생한다(#1519 §4).
+import { resolveHarness, allToolNames, mcpToolName } from "./harness-registry.mjs";
 
 // 어드민 런타임 설정 — ~/.lively/hooks-config.json 의 hooks[name]===false 면 이 훅 비활성(fail-open: 못 읽으면 활성).
 function hookDisabled(name) {
@@ -54,10 +57,14 @@ const WRITE_TOOLS_DEFAULT = [
   //  "노션 읽고 → source_save 로 남기고 종료"한 모범 세션이 기록 안 한 것으로 판정돼 너지를 맞는다.
   "source_save", "source_link_knowledge",
 ];
-// 하네스 무관 파일-편집 툴 집합: Claude(Edit/Write/MultiEdit/NotebookEdit) + Codex(apply_patch).
-//   Codex 0.138+ 는 파일 편집을 apply_patch 로 보고한다(tool_name:"apply_patch"). 추가는 가산적·무해 —
-//   Claude 는 apply_patch 를 내지 않고, Codex 는 Edit/Write 등을 내지 않으므로 양쪽 모두 정확.
-const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch"]);
+// 이 세션의 하네스 — MCP 툴 접두어 판정에 쓴다(설치기가 훅 command 에 박아 준다: env LIVELY_HARNESS / --harness).
+const HARNESS = resolveHarness(process.argv, process.env);
+// 하네스 무관 파일-편집 툴 집합 = **전 하네스 합집합**(표에서 파생).
+//   Claude(Edit/Write/MultiEdit/NotebookEdit) + Codex(apply_patch) + OpenCode(edit/write).
+//   합집합이 안전한 이유는 종전 주석 그대로다 — 이름 공간이 겹치지 않아 추가가 가산적·무해하다
+//   (Claude 는 apply_patch 를 안 내고, Codex 는 Edit/Write 를 안 낸다).
+//   ⚠ 손으로 적으면 하네스를 추가할 때 여기가 스테일해져 **그 하네스에서만** 작업 판정이 조용히 빠진다.
+const EDIT_TOOLS = allToolNames("edit");
 const FLAG_DIR = join(tmpdir(), "lively-hooks"); // 전 플랫폼 per-user tmp — 공유 /tmp 미사용
 
 // 기록 인정 툴의 effective 목록 — hooks-config.json 의 write_tools 가 비어있지 않으면 그걸, 아니면 내장 기본(fail-open).
@@ -174,13 +181,18 @@ try {
 
   // 한 PostToolUse 가 여러 플래그를 만들 수 있다(예: lively 쓰기 툴 → .lively + .writeback).
   const flags = new Set();
-  if (tool.startsWith("mcp__lively__")) {
+  // 우리 MCP 서버 툴인가 — 접두어 형태가 하네스마다 다르므로(`mcp__lively__whoami` vs `lively_whoami`)
+  //  표에서 파생해 벗긴다. bare = 서버 접두어를 뗀 이름(둘 다 `knowledge_save`·`ext__slack__…` 형태로 수렴).
+  const bare = mcpToolName(HARNESS, "lively", tool);
+  if (bare !== null) {
     flags.add("lively"); // 자가 게이팅 신호 — 읽기/쓰기 무관, 이 세션은 lively work.
     // writeback = **우리 스토어에 썼다** → 그래서 lively 서버로 스코프한다(.lively 와 같은 기준). suffix 만 보면
     //  남의 MCP 의 `...__knowledge_save` 같은 동명 툴이 우리 스토어엔 아무것도 안 쓰고 게이트를 조용히 끈다 —
     //  실패가 '유실' 방향이라 치명적이다. 구 matcher(mcp__lively__.*)일 땐 tool 이 항상 우리 것이라 안 드러나던
     //  잠재 버그였고, #906 이 matcher 를 mcp__.* 로 넓히며 실재화됐다.
-    if (effectiveWriteTools().some((w) => tool.endsWith(`__${w}`))) flags.add("writeback");
+    //  정확일치 + `__` 경계 suffix 둘 다 본다: 전자는 우리 v6 툴(knowledge_save), 후자는 ext 프록시
+    //  (ext__slack__send_message)를 덮는다 — 종전 `tool.endsWith("__"+w)` 와 같은 결과다.
+    if (effectiveWriteTools().some((w) => bare === w || bare.endsWith(`__${w}`))) flags.add("writeback");
   } else if (EDIT_TOOLS.has(tool)) {
     flags.add("worked");
   }

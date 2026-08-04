@@ -43,7 +43,7 @@ const j = (...parts) => parts.filter(Boolean).join(SEP);
 //  assets[kind]         자산 배치 — {root(home), dir(디렉터리형인가), ext, compose(본문 변환기 이름)}
 //  tools                이 하네스가 툴을 부르는 이름 — matcher 는 반드시 여기서 파생시킨다
 //  mcp                  MCP 등록 스키마의 형태(설치기가 분기하는 지점)
-//  autoApprove          자동승인 표면
+//  autoApprove          자동승인 표면 — {kind, key(server,tool)}. kind 가 곧 reconcile 전략의 키다.
 //  contextEnvelope      컨텍스트 주입 봉투: "raw" | "json" | "file"
 //  reloadAssets         자산 변경이 같은 세션에 반영되나
 //  events               우리 8이벤트 중 이 하네스가 지원하는 것(러너 배선 대상)
@@ -77,7 +77,7 @@ export const HARNESS = {
       mcpMatcher: (server) => `mcp__${server}__.*`,
     },
     mcp: { style: "claude-cli" },          // `claude mcp add --transport stdio …`
-    autoApprove: { surface: "permissions.allow", key: (server, tool) => `mcp__${server}__${tool}` },
+    autoApprove: { kind: "settings-allow", key: (server, tool) => `mcp__${server}__${tool}` },
     contextEnvelope: "raw",                // SessionStart raw stdout 이 곧 컨텍스트
     reloadAssets: true,                    // reloadSkills:true 로 같은 세션 반영
     events: ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "Notification", "PreCompact", "PostCompact"],
@@ -108,7 +108,7 @@ export const HARNESS = {
     },
     // ⚠ command 는 **문자열**, args 는 배열(0.142.0 실측). 배열을 넣으면 config.toml 전체가 로드 실패한다.
     mcp: { style: "toml-table", commandShape: "string+args" },
-    autoApprove: { surface: "mcp_servers.<s>.tools.<t>.approval_mode", key: (_s, tool) => tool },
+    autoApprove: { kind: "toml-approval", key: (_s, tool) => tool },
     contextEnvelope: "json",               // SessionStart 는 JSON 봉투 필수(raw 는 무시된다)
     reloadAssets: false,                   // 재시작해야 반영
     // codex 에 없는 것: SessionEnd · Notification. codex 에만 있는 것: PermissionRequest · SubagentStart
@@ -145,7 +145,7 @@ export const HARNESS = {
     },
     // ⚠ command 는 **항상 배열**, type 필수 — codex 와 정반대다.
     mcp: { style: "json-object", commandShape: "array", typeKey: true },
-    autoApprove: { surface: "permission", key: (server, tool) => `${server}_${tool}` },
+    autoApprove: { kind: "config-permission", key: (server, tool) => `${server}_${tool}` },
     // 정적 컨텍스트는 AGENTS.md/instructions 로 싣는다 — system.transform 은 **매 요청** 돌아 토큰이 반복된다.
     contextEnvelope: "file",
     contextFile: (home) => j(home, "AGENTS.md"),
@@ -199,7 +199,8 @@ export function assetDirNames() {
   const names = new Set();
   for (const id of HARNESS_IDS) {
     for (const spec of Object.values(HARNESS[id].assets)) {
-      const r = spec.root(" ");                 // home 자리표시자 — 마지막 세그먼트가 디렉터리명
+      // home 을 빈 문자열로 넘기면 j() 의 filter(Boolean) 이 그 자리를 지워 디렉터리명만 남는다.
+      const r = spec.root("");
       names.add(r.split(/[/\\]/).pop());
     }
   }
@@ -215,4 +216,23 @@ export function toolMatcher(id, group) {
 // MCP 서버 툴 matcher(우리 서버 호출 관측용).
 export function mcpMatcher(id, server = "lively") {
   return harness(id).tools.mcpMatcher(server);
+}
+
+// 전 하네스의 툴 이름 합집합 — "어느 하네스에서 왔든 이건 편집 툴이다" 같은 **하네스 무관 판정**에 쓴다.
+//  합집합이 안전한 이유: 하네스마다 이름 공간이 겹치지 않는다(claude 는 `apply_patch`·`edit` 를 내지 않고,
+//  codex 는 `Edit`·`edit` 를 내지 않는다). 그래서 추가는 가산적이고 오탐을 만들지 않는다.
+//  ⚠ 손으로 적은 집합을 쓰면 하네스를 추가할 때마다 이 집합이 스테일해져 그 하네스에서만 판정이 조용히 빠진다.
+export function allToolNames(group) {
+  const out = new Set();
+  for (const id of HARNESS_IDS) for (const t of harness(id).tools[group] || []) out.add(t);
+  return out;
+}
+
+// 이 툴 호출이 우리 MCP 서버 것인가 — 맞으면 **서버 접두어를 뗀 bare 이름**, 아니면 null.
+//  하네스마다 접두어 형태가 다르다(`mcp__lively__whoami` vs `lively_whoami`) — 문자열을 코드에 박으면
+//  한쪽 하네스에서 판정이 **항상 false** 가 되어 세션 상태·기록 인정이 통째로 무음이 된다(#1519 §4).
+export function mcpToolName(id, server, full) {
+  const prefix = harness(id).tools.mcp(server, "");
+  const s = String(full || "");
+  return s.startsWith(prefix) ? s.slice(prefix.length) : null;
 }

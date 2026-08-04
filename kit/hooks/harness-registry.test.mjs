@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 하네스 레지스트리 사양테스트 — 테이블화(#1519)가 지켜야 할 불변식을 고정한다.
 //  실행: node kit/hooks/harness-registry.test.mjs   (kit/**/*.test.mjs 라 npm test 체인에 자동 포함)
-//  사양·엣지 표(23행): 프로젝트 #1519 · 케이스 번호가 그 행 번호에 대응한다.
+//  사양·엣지 표(27행): 프로젝트 #1519 · 케이스 이름의 [E#] 가 그 행 번호다.
 //
 // 왜 이 테스트인가 — 테이블화는 **조용히 깨지는 방식**이 둘이다:
 //  ① 훅이 import 하는 모듈이 설치 복사 목록에서 빠지면, 설치된 자리에서 ERR_MODULE_NOT_FOUND 로 훅이 통째로
@@ -19,7 +19,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   HARNESS, HARNESS_IDS, resolveHarness, isKnownHarness,
-  harness, placementFor, assetDirsFor, assetDirNames, toolMatcher, mcpMatcher,
+  harness, placementFor, assetDirsFor, assetDirNames, toolMatcher, mcpMatcher, allToolNames, mcpToolName,
 } from "./harness-registry.mjs";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -186,6 +186,40 @@ const eq = (n, got, want) => (JSON.stringify(got) === JSON.stringify(want) ? ok(
   eq("G4[E22] 모르는 값은 그대로 둔다", resolveHarness(["--harness", "opencde"], {}), "opencde");
   eq("G5[E22] isKnownHarness 로 판별", [isKnownHarness("opencode"), isKnownHarness("opencde")], [true, false]);
   eq("G6[E23] 표 조회는 claude 로 폴백", harness("opencde").id, "claude");
+}
+
+// ── H. 파생 헬퍼(S4·S6) — 엣지 E24~E27 ───────────────────────────────────────
+//  work-flag 가 이 둘로 '작업했나·기록했나'를 판정한다. 틀리면 그 하네스에서만 세션 상태가 **조용히 무음**이
+//  되므로(에러도 안 난다) 값 자체를 못박는다.
+{
+  const edit = allToolNames("edit");
+  // E24 합집합 — 어느 하네스에서 온 이름이든 편집으로 인정해야 한다(이름 공간이 겹치지 않아 가산적).
+  const wantEdit = ["Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch", "edit", "write"];
+  const missEdit = wantEdit.filter((t) => !edit.has(t));
+  missEdit.length ? bad("H1[E24] 편집 툴 합집합이 전 하네스를 덮음", `빠짐: ${missEdit.join(",")}`)
+    : ok("H1[E24] 편집 툴 합집합이 전 하네스를 덮음");
+  // 대소문자를 구분해야 한다 — `Write` 와 `write` 는 다른 하네스의 다른 툴이다(둘 다 있어야 한다).
+  eq("H2[E24] 대소문자를 구분해 둘 다 보유", [edit.has("Write"), edit.has("write")], [true, true]);
+
+  // E25 MCP 툴 이름 벗기기 — 하네스마다 접두어 형태가 다르다.
+  eq("H3[E25] claude 접두어를 벗긴다", mcpToolName("claude", "lively", "mcp__lively__knowledge_save"), "knowledge_save");
+  eq("H4[E25] opencode 접두어를 벗긴다", mcpToolName("opencode", "lively", "lively_knowledge_save"), "knowledge_save");
+  eq("H5[E25] ext 프록시도 벗긴다(bare 는 __ 형태 유지)", mcpToolName("claude", "lively", "mcp__lively__ext__slack__send"), "ext__slack__send");
+  // E26 우리 서버가 아니면 null — '' 를 반환하면 호출부의 `!== null` 판정이 새어 남의 MCP 를 우리 것으로 센다.
+  eq("H6[E26] 남의 MCP 는 null", mcpToolName("claude", "lively", "mcp__notion__search"), null);
+  eq("H7[E26] 내장 툴은 null", mcpToolName("opencode", "lively", "bash"), null);
+  // ⚠ 하네스가 틀리면 접두어가 안 맞아 null 이 된다 — 이게 곧 "matcher 를 잘못 쓰면 무음"의 증거다.
+  eq("H8[E26] 하네스가 어긋나면 매칭 안 됨", mcpToolName("opencode", "lively", "mcp__lively__whoami"), null);
+
+  // E27 auto-approve 표면 — 하네스마다 다른 전략 키를 갖는다(같으면 한쪽이 엉뚱한 파일에 쓴다).
+  eq("H9[E27] auto-approve kind 가 하네스별로 다름",
+    HARNESS_IDS.map((id) => HARNESS[id].autoApprove.kind),
+    ["settings-allow", "toml-approval", "config-permission"]);
+  eq("H10[E27] auto-approve 키 형태", [
+    HARNESS.claude.autoApprove.key("lively", "whoami"),
+    HARNESS.codex.autoApprove.key("lively", "whoami"),
+    HARNESS.opencode.autoApprove.key("lively", "whoami"),
+  ], ["mcp__lively__whoami", "whoami", "lively_whoami"]);
 }
 
 console.log(`\n${fail ? "✗" : "✓"} harness-registry: ${pass} passed, ${fail} failed`);

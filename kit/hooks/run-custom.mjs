@@ -18,6 +18,9 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
+// 주입 봉투는 하네스별 규약이다 — 표에서 파생한다. ⚠ HARNESS 상수는 종전 계산식 유지(빈 문자열 가능):
+//  이 값이 게이트웨이 질의(`?harness=`)에 그대로 실리므로 여기서 기본값을 채우면 서버가 받는 값이 바뀐다.
+import { harness } from "./harness-registry.mjs";
 
 if (process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1") process.exit(0);
 
@@ -59,7 +62,7 @@ function emitContext(text) {
   // PostToolUse 는 Claude Code 가 raw stdout 을 컨텍스트로 안 넣는다 → hookSpecificOutput.additionalContext JSON 필수
   //  (담당자 wiki-action-router 로 검증된 계약, #637 Stage2). SessionStart·UserPromptSubmit 는 claude 가 raw stdout 을
   //  컨텍스트로 받으므로 raw 유지(codex 만 전 이벤트 JSON 래핑). → 기존 두 이벤트 동작 무변경.
-  if (HARNESS === "codex" || EVENT === "PostToolUse") {
+  if (harness(HARNESS).contextEnvelope === "json" || EVENT === "PostToolUse") {
     process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: EVENT, additionalContext: text } }) + "\n");
   } else {
     process.stdout.write(text + "\n");
