@@ -81,6 +81,21 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/auth/device-auth.pg-test.mjs
+      # ④ OAuth 인가서버 스토어(#1473 T2) — 목으로는 못 보는 것들: now() 기준 만료, 인가코드 1회성(RETURNING
+      #    rowCount), 코드·리프레시 재사용 시 **연쇄 회수**, 클라이언트 해제 kill-switch.
+      - name: OAuth 인가서버 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/auth/oauth.pg-test.mjs
+      # ⑤ OAuth 전 구간(#1473 T2) — 실제 게이트웨이 프로세스를 띄워 MCP 클라이언트가 밟는 순서를 그대로:
+      #    401 발견 → PRM/AS 메타데이터 → DCR → 동의 → PKCE 토큰교환 → /mcp 호출 → 리프레시 회전.
+      #    라우터 마운트 순서·메타데이터 경로·쿠키 세션은 이 계층이 아니면 아무도 안 본다.
+      - name: OAuth 전 구간 통합 테스트 (실 게이트웨이)
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node scripts/oauth-flow.itest.mjs
 
   # ── 윈도우 커버리지 (#1475) ────────────────────────────────────────────────────
   #  왜: 멤버 대상 코드(kit/)는 **윈도우에서 실행된 적이 없다**. 그 사이 같은 클래스의 결함이 반복해서
