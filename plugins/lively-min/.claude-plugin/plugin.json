@@ -1,9 +1,0 @@
-{
-  "name": "lively-min",
-  "version": "0.1.0",
-  "description": "Minimal probe plugin used to isolate a claude.ai marketplace sync validation failure. Ships a single skill and nothing else.",
-  "author": {
-    "name": "Lively",
-    "email": "teamlively.official@gmail.com"
-  }
-}

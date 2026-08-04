@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "lively": {
+      "type": "http",
+      "url": "${user_config.gateway_url}/mcp",
+      "headersHelper": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/mcp-headers.mjs\""
+    }
+  }
+}
