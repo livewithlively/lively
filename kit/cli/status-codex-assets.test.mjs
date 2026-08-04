@@ -115,7 +115,11 @@ try {
     const h = await statusOf(mkCase("broken", { codexMode: "brokenConfig" }));
     check("C2 config 파손 → configOk=false (센티넬은 있으니 wired 는 true 인 채로)",
       h.codex.configOk === false && h.codex.wired === true, JSON.stringify(h.codex));
-    check("C2b config 파손이면 MCP 등록을 참으로 말하지 않는다", h.codex.mcp === false, JSON.stringify(h.codex));
+    // ⚠ 단언은 `!== true` 다(`=== false` 가 아니라). config 가 깨지면 `codex mcp get` 이 아무것도 못 알려주므로
+    //  등록 여부는 **판정 불가(null)** 가 정확한 사실이고, false(미등록)로 단정하면 "lively update" 같은 헛다리
+    //  조치를 부른다(#1505 실측: 코덱스 세션 안에서 doctor 가 계속 '미등록'을 냈다). 이 케이스의 계약은
+    //  "참으로 말하지 않는다" 이지 "거짓으로 말한다" 가 아니다 — null·false 둘 다 통과해야 한다.
+    check("C2b config 파손이면 MCP 등록을 참으로 말하지 않는다", h.codex.mcp !== true, JSON.stringify(h.codex));
   }
 
   // ── C3 파일은 읽히는데 우리 서버만 없음 ────────────────────────────────────
