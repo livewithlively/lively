@@ -167,6 +167,14 @@ export async function initRuntimeConfigPolicyColumns(pool: Pool): Promise<void> 
   //  넷 다 whoami(me) 응답에 실려 프론트가 부팅 때 한 번에 받는다 — 별도 조회 왕복 없음(vis_axes 와 동형).
   await pool.query(`
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS ui_nav JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+    -- ── oidc_config — 외부 IdP 웹 로그인(#1520) 설정. embedding_config 와 같은 seam(DB 우선, 비면 env 시드). ──
+    --  왜 DB 인가: 고객 실박스가 SSM 전용이면 .env 편집이 비현실적이라 관리탭이 유일한 창구가 된다
+    --   (secret-box.ts 머리주석의 컨벤션 확장과 같은 사정). 에어갭·자동화 배포는 종전대로 env 로 굽는다.
+    --  ⚠ client_secret 은 **암호문(secret-box, gcm$…)만** 넣는다 — 평문 시크릿은 DB 에 두지 않는다.
+    --   그래서 이 컬럼은 '시크릿 금지' 원칙의 예외가 아니다(암호문은 키 없이는 쓸모없다).
+    --  {} = 미설정 → OIDC 는 env(OIDC_*)로만 켜지고, env 도 없으면 로컬 로그인만 남는다.
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS oidc_config JSONB NOT NULL DEFAULT '{}'::jsonb;
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS announcement JSONB;
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS ui_profile TEXT NOT NULL DEFAULT 'full';
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS usage_url TEXT;

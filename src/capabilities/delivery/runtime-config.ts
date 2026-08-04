@@ -27,7 +27,26 @@ import {
   EMBEDDING_BATCH_MIN, EMBEDDING_BATCH_MAX, EMBEDDING_TIMEOUT_MIN_MS, EMBEDDING_TIMEOUT_MAX_MS, EMBEDDING_BACKFILL_MIN_MB_MIN,
   EMBEDDING_BACKFILL_MIN_MB_MAX
 } from "../../v6/embedding-provider.js";
+import { oidcConfigFromEnv } from "../../auth/oidc.js"; // #1520 — env 시드 존재 여부(관리탭 안내용)
+import { encryptSecret, secretsEnabled } from "../../org/credentials/secret-box.js";
+import { normalizeDomains, normalizeIssuer, type OidcSettings, type OidcSettingsPatch, type OidcSettingsPublic } from "../../auth/oidc-config.js";
 import { actorOf, restOnly, restRead, str } from "./shared.js";
+
+// #1520 — 관리탭에 돌려줄 OIDC 설정. 암호문(client_secret_enc)은 빼고 '설정됐나'만 준다.
+//  source 가 중요하다: 관리탭에 값을 넣었는데 enabled 를 안 켰거나, 켰는데 env 가 먹고 있는 상황을
+//  사람이 화면에서 바로 알아야 "저장했는데 왜 안 되지"가 사라진다.
+function publicOidc(s: OidcSettings): OidcSettingsPublic {
+  const env = oidcConfigFromEnv();
+  const dbUsable = s.enabled && !!s.issuer && !!s.client_id && !!s.client_secret_enc;
+  return {
+    enabled: s.enabled, issuer: s.issuer, client_id: s.client_id,
+    client_secret_set: !!s.client_secret_enc,
+    allowed_domains: s.allowed_domains, label: s.label,
+    trust_unverified_email: s.trust_unverified_email,
+    source: dbUsable ? "db" : (env ? "env" : "none"),
+    env_present: !!env,
+  };
+}
 
 export const runtimeConfigCapabilities: Capability[] = [
   // ── 발행(검증 + 산출 확인) ──
@@ -62,7 +81,10 @@ export const runtimeConfigCapabilities: Capability[] = [
       return {
         hooks: c.hooks, writeback_notice: c.writeback_notice || DEFAULT_WRITEBACK_NOTICE, write_tools: c.write_tools,
         pull_tools: c.pull_tools, auto_approve: autoApprove, kit_version: kv, hook_grace_ms: c.hook_grace_ms,
-        config: isAdmin ? c : null, writebackNoticeDefault: DEFAULT_WRITEBACK_NOTICE, meaning: MEANING["runtime"],
+        // #1520 — oidc_config 는 **암호문을 벗겨** 내보낸다(client_secret_set 만). 관리탭은 '설정됐나'만 알면 되고,
+        //  암호문은 마스터키 없이는 쓸모없지만 굳이 브라우저·로그를 거치게 할 이유가 없다.
+        config: isAdmin ? { ...c, oidc_config: publicOidc(c.oidc_config) } : null,
+        writebackNoticeDefault: DEFAULT_WRITEBACK_NOTICE, meaning: MEANING["runtime"],
       };
     }, true),
   restOnly("org_runtime_update", "런타임 설정 수정",
@@ -74,6 +96,7 @@ export const runtimeConfigCapabilities: Capability[] = [
         allowed_auth_envs?: string[]; url_allowlist?: string[]; allowed_db_hosts?: string[];
         allowed_internal_hosts?: string[];
         allowed_db_secret_refs?: string[]; write_tools?: string[]; pull_tools?: string[];
+        oidc_config?: OidcSettingsPatch;
         embedding_config?: EmbeddingConfigPatch;
         storage_policy?: StoragePolicyPatch;
         call_log_policy?: CallLogPolicyPatch;
@@ -351,6 +374,36 @@ export const runtimeConfigCapabilities: Capability[] = [
         }
       }
       // 임베딩(벡터검색 #172) 런타임 토글 — provider off|http, 시크릿 금지(auth_env_ref=환경변수 이름만). store 가 다시 normalize.
+      // ── #1520 외부 IdP 로그인 설정 ─────────────────────────────────────────
+      //  client_secret 은 **평문으로 받아 즉시 암호화**해 저장한다(secret-box). 3상태를 지킨다:
+      //   미전송=보존(관리탭이 매번 다시 입력하지 않아도 되게) · ""/null=지움 · 문자열=교체.
+      if (input.oidc_config !== undefined) {
+        const raw = input.oidc_config;
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "oidc_config 는 객체여야 합니다");
+        const o = raw as Record<string, unknown>;
+        const p: OidcSettingsPatch = {};
+        if (o.enabled !== undefined) p.enabled = o.enabled === true;
+        if (o.issuer !== undefined) {
+          const iss = normalizeIssuer(str(o.issuer, "oidc_config.issuer", 500));
+          // https 만 — iss 대조 기준이자 discovery 대상이라 평문 HTTP 면 중간자가 신원을 통째로 바꾼다.
+          if (iss && !/^https:\/\//i.test(iss)) throw new HttpError(400, "issuer 는 https 주소여야 합니다");
+          p.issuer = iss;
+        }
+        if (o.client_id !== undefined) p.client_id = str(o.client_id, "oidc_config.client_id", 300).trim();
+        if (o.allowed_domains !== undefined) p.allowed_domains = normalizeDomains(o.allowed_domains);
+        if (o.label !== undefined) p.label = o.label === null ? null : str(o.label, "oidc_config.label", 100);
+        if (o.trust_unverified_email !== undefined) p.trust_unverified_email = o.trust_unverified_email === true;
+        if (o.client_secret !== undefined) {
+          const plain = o.client_secret === null ? "" : str(o.client_secret, "oidc_config.client_secret", 1000).trim();
+          if (!plain) p.client_secret_enc = null;
+          else {
+            // 마스터키가 없으면 암호화할 수 없다 → 저장을 거절하고 이유를 말한다(평문 저장으로 절대 폴백하지 않는다).
+            if (!secretsEnabled()) throw new HttpError(400, "CONNECTOR_SECRET_KEY 가 설정되지 않아 시크릿을 저장할 수 없습니다(.env 에 추가 후 재시작하거나, OIDC_* env 로 설정하세요)");
+            p.client_secret_enc = encryptSecret(plain);
+          }
+        }
+        patch.oidc_config = p;
+      }
       if (input.embedding_config !== undefined) {
         const raw = input.embedding_config;
         if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new HttpError(400, "embedding_config 는 객체여야 합니다");
@@ -503,5 +556,16 @@ export const runtimeConfigCapabilities: Capability[] = [
         request_timeout_ms: z.number().int().optional().describe("요청 타임아웃 ms. 비우면 기본값"),
         backfill_min_available_mb: z.number().int().min(0).max(1_048_576).optional().describe("#1059 G2/G3 — 자동 백필 pre-flight 메모리 게이트: 가용 메모리가 이 MB 미만이면 이번 스윕을 건너뛴다(다음 주기 재시도, pending 유실 없음). 0=끔(무회귀). Ollama 모델 로드 스파이크가 세션 baseline 과 겹쳐 OOM 나는 걸 예방(예: 16GB 박스 4096~5000)"),
       }).optional().describe("임베딩 설정 — knowledge/project 백필과 검색이 공유"),
+      // #1520 회사 계정 로그인(OIDC 클라이언트). 관리탭 ▸ [로그인 · 회사 계정] 과 같은 입력.
+      //  ⚠ 여기 client_secret 은 **평문으로 받아 즉시 암호화**해 저장한다(secret-box) — 응답에는 절대 실리지 않는다.
+      oidc_config: z.object({
+        enabled: z.boolean().optional().describe("회사 계정 로그인 사용. 끄면 .env(OIDC_*) 설정으로 되돌아가고, 그것도 없으면 이메일+비밀번호만 남는다"),
+        issuer: z.string().optional().describe("IdP 주소(https 필수) — 구글 워크스페이스 https://accounts.google.com · Azure AD https://login.microsoftonline.com/<tenant>/v2.0"),
+        client_id: z.string().optional().describe("IdP 콘솔에서 발급한 클라이언트 ID"),
+        client_secret: z.string().nullable().optional().describe("클라이언트 시크릿 **평문** — 저장 시 암호화된다(CONNECTOR_SECRET_KEY 필요). 생략=기존 보존 · null/빈 문자열=지움"),
+        allowed_domains: z.union([z.array(z.string()), z.string()]).optional().describe("자동 가입 허용 이메일 도메인(배열 또는 쉼표 구분). 비우면 자동 가입 없음 = 미리 등록된 구성원만 로그인"),
+        label: z.string().nullable().optional().describe("로그인 버튼 문구. 비우면 issuer 로 추정(구글이면 'Google 계정으로 로그인')"),
+        trust_unverified_email: z.boolean().optional().describe("⚠ IdP 가 email_verified 를 아예 안 줄 때만 켠다 — 켜면 미검증 이메일로도 구성원에 매칭된다"),
+      }).optional().describe("회사 계정(OIDC) 웹 로그인 설정(#1520) — DB 우선, 비면 .env(OIDC_*) 시드. 리디렉션 URI 는 <게이트웨이>/api/ui/auth/oidc/callback"),
     }),
 ];
