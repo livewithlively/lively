@@ -10,7 +10,7 @@ import {
   getRuntimeConfig, listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook, recordHookFailures, type HookHarness
 } from "../../org/store.js";
 import { previewHooks } from "../../org/delivery/hooks-preview.js";
-import { HOOK_HARNESSES, parseTargetMembers, restRead, restRuntime, str, wctx } from "./shared.js";
+import { HOOK_HARNESSES, HOOK_HARNESSES_MSG, parseTargetMembers, restRead, restRuntime, str, wctx } from "./shared.js";
 
 // 커스텀 훅(org_hook)이 붙을 수 있는 이벤트 — DB 제약(org_hook_event_chk)·run-custom 배선(runnerHooksBlock)과 일치 유지.
 //  Claude 31개 이벤트 중 저빈도·유용한 라이프사이클만 노출(MessageDisplay 등 상시발화는 perf 위해 제외).
@@ -62,7 +62,7 @@ export const hooksCapabilities: Capability[] = [
       //  (`?? before`)가 못 걸리게 항상 구체값('all'·10)을 넘겨, 부분수정이 이 필드를 기본값으로 되돌렸다.
       //  '미지정=보존'으로 통일(enabled·sort·target_members 와 동형). 신규 훅은 store 가 기본값으로 채운다.
       const harness = input.harness === undefined ? undefined : str(input.harness, "harness", 12);
-      if (harness !== undefined && !HOOK_HARNESSES.has(harness)) throw new HttpError(400, "harness 는 claude|codex|openclaw|all");
+      if (harness !== undefined && !HOOK_HARNESSES.has(harness)) throw new HttpError(400, HOOK_HARNESSES_MSG);
       const sourceCode = resolveHookSource(input.source_code); // #970: 생략=보존(undefined→store 위임), "" 만 지움
       const matcher = resolveHookMatcher(input.matcher); // #970: 생략=보존 / null·""=전체매칭 / 문자열=패턴
       const timeout = input.timeout_sec === undefined ? undefined : Number(input.timeout_sec);

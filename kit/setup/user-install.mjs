@@ -46,7 +46,7 @@ const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || join(HOME, ".claude");
 //  복사되므로 같은 목록에 있어야 하고, 빠지면 sync-harness-assets 가 ERR_MODULE_NOT_FOUND 로 **통째로 죽는다**
 //  (그러면 조직 자산이 한 개도 안 깔린다 — 게다가 자산 sync 는 조용히 실패하는 게 설계라 아무 신호가 없다).
 //  이 등재 누락은 kit/hooks/harness-registry.test.mjs 가 잡는다.
-const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs", "harness-registry.mjs"];
+const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs", "harness-registry.mjs", "opencode-plugin.js"];
 
 // 발행물 루트: --clone-root 우선, 없으면 이 스크립트의 ../ (setup/ 의 부모).
 const CLONE_ROOT = resolve(getOpt("--clone-root") || join(dirname(fileURLToPath(import.meta.url)), ".."));
@@ -681,6 +681,113 @@ function installCodex(ctx, mcpUrl) {
   wireCodexTokenEnv();
 }
 
+// ── OpenCode user-level 설치 (#1519) ──────────────────────────────────────────
+//  claude·codex 와 배선 **방식**이 다르다: 설정에 command 문자열을 등록하는 게 아니라 플러그인 파일을 놓는다.
+//  그래서 여기서 하는 일은 셋뿐이다 — ① 어댑터 파일 배치 ② opencode.json 에 MCP·자동승인 머지 ③ AGENTS.md 시드.
+//  ⚠ 경로는 XDG(`~/.config/opencode`)다 — `~/.opencode` 가 아니다(실측 `opencode debug paths`).
+//   Windows 에서도 같은 경로를 쓰는지는 **미검증**이다(실기기 확인 전까지 mac/linux 기준).
+const OPENCODE = join(HOME, ".config", "opencode");
+
+// opencode.json 머지 — JSON 이라 codex TOML 처럼 센티넬 블록을 쓰지 않고 키 단위로 비파괴 머지한다.
+//  ⚠ opencode 는 **알 수 없는 top-level 키를 거부**하고(ConfigInvalidError) 그러면 아예 안 뜬다 → 우리가 넣는
+//   키는 `mcp`·`permission` 둘뿐이고, 사용자의 다른 키는 그대로 둔다.
+//  ⚠ 설정이 `.jsonc`(주석 허용)일 수 있다. 주석이 있으면 JSON.parse 가 실패하는데, 그때는 **건드리지 않고
+//   경고만 한다** — 우리가 주석을 지우고 다시 쓰면 사용자 설정의 의도가 사라진다(비파괴 불변식).
+function opencodeConfigPath() {
+  const jsonc = join(OPENCODE, "opencode.jsonc");
+  const json = join(OPENCODE, "opencode.json");
+  if (existsSync(json)) return json;
+  if (existsSync(jsonc)) return jsonc;   // opencode 가 초기 생성하는 형태
+  return json;                            // 둘 다 없으면 표준 .json 으로 만든다
+}
+
+// auto-approve(opencode) — 발행 묶음 .lively/auto-approve.json 의 'mcp__lively__<tool>' 을
+//  opencode 의 permission 키(`lively_<tool>`)로 옮긴다. ⚠ 툴 이름 체계가 claude 와 다르다(#1519 §4).
+//  회수: 우리가 넣은 키 목록을 ~/.lively/managed-opencode-permission.json 에 남겨, 다음 설치 때
+//  '더는 원치 않는 것'만 걷는다(멤버가 손으로 넣은 permission 은 그 목록 밖이라 보존된다 — claude 와 동형).
+function opencodePermission(cur) {
+  let want = [];
+  try {
+    const d = JSON.parse(readFileSync(cloneAbs(join(".lively", "auto-approve.json")), "utf8"));
+    want = (Array.isArray(d.allow) ? d.allow : [])
+      .map((s) => (typeof s === "string" ? /^mcp__lively__(.+)$/.exec(s) : null))
+      .filter(Boolean).map((m) => `lively_${m[1]}`);
+  } catch { /* 번들에 없으면 회수만 수행 */ }
+  const prevPath = join(LIVELY, "managed-opencode-permission.json");
+  let prev = []; try { prev = JSON.parse(readFileSync(prevPath, "utf8")); if (!Array.isArray(prev)) prev = []; } catch { /* */ }
+  const next = (cur && typeof cur === "object" && !Array.isArray(cur)) ? { ...cur } : {};
+  const wantSet = new Set(want);
+  for (const k of prev) if (!wantSet.has(k) && next[k] === "allow") delete next[k]; // 우리가 넣었다 뺀 것만 회수
+  for (const k of want) next[k] = "allow";
+  try { writeFileSync(prevPath, JSON.stringify(want, null, 2)); chmodSync(prevPath, 0o600); } catch { /* 추적 실패는 비치명 */ }
+  return next;
+}
+
+function installOpencode(ctx) {
+  mkdirSync(OPENCODE, { recursive: true });
+  // (a) 플러그인 어댑터 — opencode 는 이 디렉터리를 자동 스캔한다(config 의 plugin 배열에 안 적어도 로드됨).
+  //  소스는 ~/.lively/hooks 에 방금 깔린 사본을 쓴다 → 자동 업데이트가 러너를 갱신하면 어댑터도 함께 갱신된다.
+  const pluginDir = join(OPENCODE, "plugin");
+  mkdirSync(pluginDir, { recursive: true });
+  const src = join(LIVELY, "hooks", "opencode-plugin.js");
+  if (existsSync(src)) {
+    copyFileSync(src, join(pluginDir, "lively.js"));
+    console.log("  ✓ ~/.config/opencode/plugin/lively.js (훅 어댑터)");
+  } else {
+    console.warn("  ⚠️ opencode 어댑터 미동봉(구버전 번들) — 훅이 배선되지 않습니다. MCP·자산만 적용됩니다.");
+  }
+
+  // (b) AGENTS.md — org-context 를 센티넬 블록으로 비파괴 머지(codex 와 같은 규약·같은 함수).
+  //  opencode 는 이 파일을 글로벌 지침으로 네이티브 로드하므로 컨텍스트 주입은 여기서 끝난다
+  //  (플러그인의 system.transform 은 매 요청 발화라 org-context 를 싣기에 부적합 — #1519 실측).
+  if (ctx) {
+    const apath = join(OPENCODE, "AGENTS.md");
+    let existing = "";
+    if (existsSync(apath)) {
+      try { existing = readFileSync(apath, "utf8"); } catch { existing = ""; }
+      const backupDir = join(LIVELY, "backups"); mkdirSync(backupDir, { recursive: true });
+      try {
+        const orig = join(backupDir, "opencode-AGENTS.md.orig");
+        if (!existsSync(orig)) copyFileSync(apath, orig);
+        copyFileSync(apath, join(backupDir, "opencode-AGENTS.md.bak"));
+      } catch { /* 백업 실패해도 머지는 비파괴 */ }
+    }
+    writeFileSync(apath, agentsMerge(existing, ctx));
+    console.log(`  ✓ ~/.config/opencode/AGENTS.md (org-context ${(Buffer.byteLength(ctx, "utf8") / 1024).toFixed(1)} KiB 머지 — 기존 지침 보존)`);
+  } else {
+    console.log("  · ~/.config/opencode/AGENTS.md 시드 보류(오프라인) — 다음 세션 훅이 채움");
+  }
+
+  // (c) opencode.json — MCP(stdio 프록시) + 자동승인. 사용자 키는 보존한다.
+  const cfgPath = opencodeConfigPath();
+  let cfg = {};
+  if (existsSync(cfgPath)) {
+    const backupDir = join(LIVELY, "backups"); mkdirSync(backupDir, { recursive: true });
+    try { copyFileSync(cfgPath, join(backupDir, "opencode-config.bak")); }
+    catch (e) { console.error(`✗ ${cfgPath} 백업 실패 — 중단: ${e.message}`); return; }
+    try { cfg = JSON.parse(readFileSync(cfgPath, "utf8")); }
+    catch {
+      // 주석이 든 .jsonc 등 — 우리가 다시 쓰면 사용자 주석·의도가 사라진다. 손대지 않는다.
+      console.warn(`  ⚠️ ${cfgPath.replace(HOME, "~")} 를 JSON 으로 못 읽었습니다(주석 포함 .jsonc 등) — MCP·자동승인 머지를 건너뜁니다.`);
+      console.warn("     수동 설정: mcp.lively = { type:\"local\", command:[\"<~/.lively/bin/lively>\",\"mcp\"], environment:{ LIVELY_HARNESS:\"opencode\" } }");
+      return;
+    }
+  }
+  if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) { console.warn(`  ⚠️ ${cfgPath.replace(HOME, "~")} 가 객체가 아님 — 머지 건너뜀`); return; }
+  if (!cfg.$schema) cfg.$schema = "https://opencode.ai/config.json";
+  // MCP — codex 와 **같은 이유**로 stdio 프록시다(세션·모드 헤더가 따라가고, 토큰이 설정 파일에 안 굽힌다).
+  //  ⚠ opencode 스키마는 `type` 필수 + `command` **배열**이다(codex 의 command=문자열과 정반대 — 형태를 바꾸면
+  //   설정 전체가 ConfigInvalidError 로 거부돼 opencode 가 안 뜬다).
+  const shim = fwd(join(LIVELY, "bin", WIN ? "lively.cmd" : "lively"));
+  cfg.mcp = (cfg.mcp && typeof cfg.mcp === "object" && !Array.isArray(cfg.mcp)) ? cfg.mcp : {};
+  cfg.mcp.lively = { type: "local", command: [shim, "mcp"], enabled: true, environment: { LIVELY_HARNESS: "opencode" } };
+  cfg.permission = opencodePermission(cfg.permission);
+  try {
+    writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n");
+    console.log(`  ✓ ${cfgPath.replace(HOME, "~")} (MCP stdio 프록시 + 자동승인 ${Object.keys(cfg.permission).length}건 · 사용자 키 보존)`);
+  } catch (e) { console.warn(`  ⚠️ ${cfgPath.replace(HOME, "~")} 쓰기 실패: ${e.message}`); }
+}
+
 // 설치-시 org-context 시드 — 세션 훅(session-preload)과 동일 라이브 소스(/api/ui/org/preview)를 1회 fetch.
 //  토큰·게이트웨이는 setup 이 먼저 ~/.lively 에 기록하므로 거기서 읽는다. fail-soft(오프라인/무토큰/구 node → "").
 async function fetchOrgSeed() {
@@ -788,6 +895,10 @@ async function main() {
     codex: () => {
       console.log("  ── Codex ──");
       installCodex(ctx, gatewayMcpUrl());
+    },
+    opencode: () => {
+      console.log("  ── OpenCode ──");
+      installOpencode(ctx);
     },
   };
   const unknown = [];

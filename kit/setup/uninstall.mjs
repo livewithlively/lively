@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { uninstallClaude } from "../adapters/claude/uninstall.mjs";
 import { uninstallCodex } from "../adapters/codex/uninstall.mjs";
+import { uninstallOpencode } from "../adapters/opencode/uninstall.mjs";
 
 // kit 안 오케스트레이터 — 하네스별 어댑터(adapters/claude·codex/uninstall.mjs)를 import 해 dispatch 한다.
 //  (install 의 user-install.mjs → adapters/*/install.mjs 와 같은 미러 관계.)
@@ -130,6 +131,13 @@ const HARNESS_UNINSTALL = {
       } catch { return false; }
     },
     run: uninstallCodex,
+  },
+  opencode: {
+    label: "OpenCode",
+    // 어댑터 파일이 있으면 배선된 것. opencode.json 은 사용자가 먼저 만들 수 있어(빈 설정도 생성된다)
+    //  '우리 것이 있나'의 신호로 약하다 — 플러그인 파일은 우리만 놓는다.
+    detect: () => existsSync(join(HOME, ".config", "opencode", "plugin", "lively.js")),
+    run: uninstallOpencode,
   },
 };
 // 제거 어댑터를 가진 하네스 = 이 파일이 다룰 수 있는 전부(install 측 범위와 같아야 한다).
