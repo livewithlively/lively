@@ -22,7 +22,7 @@
 import { readFileSync, writeFileSync, mkdirSync, rmSync, rmdirSync, existsSync, lstatSync, readdirSync, renameSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { randomUUID } from "node:crypto";
-import { join, dirname } from "node:path";
+import { join, dirname, relative, isAbsolute } from "node:path";
 
 const OFF = process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1";
 if (OFF) process.exit(0);
@@ -159,10 +159,14 @@ function saveManifest(m) {
   try { mkdirSync(LIVELY, { recursive: true }); writeFileSync(MANIFEST, JSON.stringify(m, null, 2), { mode: 0o600 }); } catch { /* fail-soft */ }
 }
 
-// 경로가 root 아래인지(containment) — 정규화 후 prefix 검사. 심링크 통과는 별도 lstat 로 거부.
-function within(root, p) {
-  const r = root.endsWith("/") ? root : root + "/";
-  return p === root || p.startsWith(r);
+// 경로가 root 아래인지(containment). 심링크 통과는 별도 lstat 로 거부.
+//  ⚠ 문자열 prefix 검사(`root + "/"`)를 쓰면 **윈도우에서 항상 false** 다 — path.join 이 `\` 로 만드는데
+//   `/` 로 끝나는 접두사를 찾기 때문. 그러면 writeAsset 이 전부 조기 반환해 **조직 자산이 한 개도 안 깔린다**
+//   (게다가 그 분기는 stderr 도 안 내서 매 세션 조용히 실패한다 — 윈도우 실기기에서 자산 0개로 실측).
+//   path.relative 로 판정하면 구분자·드라이브 문자·대소문자를 path 모듈이 플랫폼에 맞게 처리한다.
+export function within(root, p) {
+  const rel = relative(root, p);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 // 대상 파일/디렉터리 경로 중 하나라도 심링크면 true(멤버 파일 탈취·트리 밖 write 방지).
 function anySymlink(paths) {
