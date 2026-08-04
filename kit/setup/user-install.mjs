@@ -544,6 +544,21 @@ function codexManagedBlock(mcpUrl) {
   ].join("\n");
 }
 
+// 옛 버전이 `[sandbox_workspace_write] writable_roots` 에 **이스케이프 없이** 박은 윈도우 경로 복구.
+//  그 한 줄 때문에 codex 가 config.toml 을 통째로 못 읽어(`too few unicode value digits`) **아예 안 뜬다** —
+//  그러면 우리 MCP·훅도 같이 죽는다. 우리가 만든 고장이라 우리가 되돌린다.
+//  ⚠ **이 복구는 설치기에 있어야 한다.** 처음엔 그 줄을 쓰는 쪽(work.mjs·project-provision.ts)에만 넣었는데,
+//   그 둘은 '프로젝트를 실행할 때'만 돌아서 **키트를 업데이트해도 안 고쳐졌다**(윈도우 실기기 실측 — 최신 키트인데
+//   codex 는 여전히 못 뜸). 설치기는 자동 업데이트가 매번 돌리는 유일한 경로라 여기 있어야 자가치유가 된다.
+//  ⚠ 센티넬 **밖**을 만지는 예외다(그 줄을 우리가 썼기 때문). 대상은 writable_roots 줄 하나뿐이고 나머지는 불가침.
+//  ⚠ 유효 이스케이프를 통째로 소비해야 멱등이다 — 하나씩 lookahead 로 보면 이미 올바른 `\\Users` 가 매번 더 늘어난다.
+const TOML_ESC = /\\\\|\\["bfnrt]|\\u[0-9a-fA-F]{4}|\\U[0-9a-fA-F]{8}|\\/g;
+function repairTomlWinPaths(toml) {
+  return String(toml).replace(/^([ \t]*writable_roots[ \t]*=[ \t]*)(\[[^\]\n]*\])/gm, (_line, head, arr) =>
+    head + arr.replace(/"(?:[^"\\]|\\.)*"/g, (lit) =>
+      lit.replace(TOML_ESC, (m) => (m === "\\" ? "\\\\" : m))));
+}
+
 function codexStripManaged(text) {
   let bi = text.indexOf(CDX_BEGIN);
   if (bi === -1) {
@@ -634,6 +649,9 @@ function installCodex(ctx, mcpUrl) {
       copyFileSync(cfgPath, join(backupDir, "config.toml.codex.bak"));
     } catch (e) { console.error(`✗ ~/.codex/config.toml 백업 실패 — 중단: ${e.message}`); process.exit(1); }
     raw = readFileSync(cfgPath, "utf8");
+    // 자가치유 — 옛 버전이 남긴 깨진 윈도우 경로를 여기서 되돌린다(설치기가 매 업데이트마다 도는 유일한 경로).
+    const repaired = repairTomlWinPaths(raw);
+    if (repaired !== raw) { raw = repaired; console.log("  ✓ ~/.codex/config.toml 의 writable_roots 윈도우 경로 복구(이스케이프 누락 — codex 가 파일을 못 읽던 원인)"); }
   }
   const { user, had } = codexStripManaged(raw);
   // TOML 은 다중 [[hooks.*]] array-of-table 공존 허용 → 사용자 훅과 우리 센티넬 블록은 비충돌.
