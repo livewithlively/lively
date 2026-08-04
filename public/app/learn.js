@@ -202,6 +202,17 @@ function docsDecorate(root) {
     const lead = root.querySelector(':scope > .md-p');
     if (lead)
         lead.classList.add('guide-lead');
+    // 코드블록에 [복사] — 이 문서들의 코드블록은 '읽는 예시'가 아니라 **그대로 가져가 쓰는 것**이다
+    //  (설치 한 줄 · 배선 점검 프롬프트 60줄). 드래그 선택은 긴 블록에서 특히 불편하고 앞뒤가 잘리기 쉽다.
+    //  copyButton 은 비보안 origin(http://localhost)에서도 execCommand 폴백으로 동작한다(ui-primitives).
+    for (const pre of Array.from(root.querySelectorAll('pre.md-pre'))) {
+        const text = String(pre.textContent || '');
+        if (!text.trim() || !pre.parentNode)
+            continue;
+        const wrap = el('div', { class: 'md-pre-copy' });
+        pre.parentNode.insertBefore(wrap, pre);
+        wrap.append(copyButton(() => text, '복사'), pre);
+    }
     for (const ul of Array.from(root.querySelectorAll('ul.md-list'))) {
         const lis = Array.from(ul.children);
         if (!lis.length)
