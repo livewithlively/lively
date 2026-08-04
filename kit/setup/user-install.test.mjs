@@ -5,6 +5,7 @@
 import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { WIN } from "../testlib/os-sandbox.mjs";
 
 const SANDBOX = mkdtempSync(join(tmpdir(), "ui-test-"));
 process.env.LIVELY_HOME = SANDBOX;                       // HOME 리다이렉트(설치기 샌드박스 계약)
@@ -34,20 +35,36 @@ safeMergeUserSettings(FULL());
 s = readS();
 countHooks(s) === FULL_N ? ok("② 동세대 재설치 멱등") : bad("② 멱등", `count=${countHooks(s)}`);
 
-// ③ 구표기 회수 — 맥미니 실측 레이아웃 재현: 구세대(무인용 node, sync 없음 = pre-#636) + 사용자 tmux 훅.
+// ③ 구표기 회수 — 맥미니 실측 레이아웃 재현: 구세대(인터프리터 토큰이 다름, sync 없음 = pre-#636) + 사용자 tmux 훅.
 //   재설치 후: 구세대 lively 항목은 전부 최신형으로 교체(중복 0), tmux 는 보존.
+//   ⚠ '구표기'를 **플랫폼 고유 문자열**로 정의하면 안 된다(#1510). 종전엔 `"node"`→`node` 치환으로 구세대를
+//    만들고 `/^node "/` 로 셌는데, 윈도우의 현행 표기가 이미 `node "…"` 라 ① 치환이 무동작이 되고(구세대가
+//    안 만들어짐) ② 판정은 **현행 표기를 구표기로 오인**했다. 그래서 아래처럼 정의한다:
+//      · 구세대 만들기 = 정체성(스크립트+인자)은 그대로 두고 **인터프리터 토큰만** 바꾼다 → 두 플랫폼 공통.
+//      · 구표기 세기 = "kit 훅인데 현행 command 집합에 없는 것" → 표기 규칙을 아예 안 가정한다.
+const LEGACY_NODE = WIN ? '"%LOCALAPPDATA%\\lively\\runtime\\node.exe"' : "node";
+const toOldForm = (cmd) => cmd.replace(/^("[^"]*"|\S+)/, LEGACY_NODE);
 const oldGen = {};
 for (const [ev, entries] of Object.entries(FULL())) {
   oldGen[ev] = entries
     .filter((e) => !JSON.stringify(e).includes("sync-harness-assets")) // 구세대엔 sync 배선 없음
-    .map((e) => ({ ...e, hooks: e.hooks.map((h) => ({ ...h, command: h.command.replace(/^"node"/, "node") })) }));
+    .map((e) => ({ ...e, hooks: e.hooks.map((h) => ({ ...h, command: toOldForm(h.command) })) }));
 }
+// 배선 — 픽스처가 실제로 '다른 표기'를 만들었나. 무동작이면 ③ 은 아무것도 검증하지 않는다(종전 윈도우가 그랬다).
+{
+  const before = FULL().Stop[0].hooks[0].command;
+  before !== toOldForm(before)
+    ? ok("③ 배선 — 구세대 픽스처가 현행과 다른 표기를 만든다")
+    : bad("③ 배선", `구세대 변환이 무동작 — 이 케이스는 공허하다: ${before}`);
+}
+const FULL_CMDS = new Set(Object.values(FULL()).flatMap((arr) => arr.flatMap((e) => (e.hooks || []).map((h) => h.command))));
+const isKitCmd = (c) => /[/\\]\.lively[/\\]hooks[/\\]/.test(c);
 oldGen.Stop = [{ hooks: [{ type: "command", command: 'tmux display-message "done" || true' }] }, ...(oldGen.Stop || [])];
 writeFileSync(SP, JSON.stringify({ hooks: oldGen }, null, 2) + "\n");
 safeMergeUserSettings(FULL());
 s = readS();
 const cmds = Object.values(s.hooks).flatMap((arr) => arr.flatMap((e) => (e.hooks || []).map((h) => h.command)));
-const oldForm = cmds.filter((c) => /^node "/.test(c) && c.includes(".lively/hooks")).length;
+const oldForm = cmds.filter((c) => isKitCmd(c) && !FULL_CMDS.has(c)).length;
 const tmuxKept = cmds.some((c) => c.startsWith("tmux "));
 if (oldForm === 0 && tmuxKept && countHooks(s) === FULL_N + 1) ok(`③ 구표기 ${FULL_N - 1}개 회수·교체 + 사용자 훅 보존 (${FULL_N}+tmux)`);
 else bad("③ 구표기 회수", `oldForm=${oldForm} tmux=${tmuxKept} count=${countHooks(s)}≠${FULL_N + 1}`);
@@ -62,6 +79,46 @@ writeFileSync(SP, JSON.stringify({ hooks: doubled }, null, 2) + "\n");
 safeMergeUserSettings(FULL());
 s = readS();
 countHooks(s) === FULL_N + 1 ? ok("④ 기중복 상태 → 한 벌로 수렴(+사용자 훅)") : bad("④ 기중복 수렴", `count=${countHooks(s)}≠${FULL_N + 1}`);
+
+// ④-b **표기까지 똑같은** 중복 (#1510) — ④ 와 다른 사고다. ④ 의 중복은 구세대라 '표기가 달라서' 걸러진다.
+//   표기가 같은 중복은 종전 구현에서 **영영 안 줄었다**(동일본을 전부 유지 → 재설치해도 훅이 툴콜마다 2회 실행).
+//   POSIX 에선 픽스처가 늘 표기를 바꿔 왔기 때문에 이 구멍이 한 번도 드러나지 않았다.
+const dupBlocks = (n, extra = {}) => {
+  const h = {};
+  for (const [ev, entries] of Object.entries(FULL())) {
+    h[ev] = entries.flatMap((e) => Array.from({ length: n }, () => JSON.parse(JSON.stringify(e))));
+  }
+  for (const [ev, entries] of Object.entries(extra)) h[ev] = [...entries, ...(h[ev] || [])];
+  return h;
+};
+const mergeInto = (blocks) => { writeFileSync(SP, JSON.stringify({ hooks: blocks }, null, 2) + "\n"); safeMergeUserSettings(FULL()); return readS(); };
+
+// F1 동일 2벌 → 1벌
+s = mergeInto(dupBlocks(2));
+countHooks(s) === FULL_N ? ok("④-b F1 동일 표기 2벌 → 한 벌로 수렴") : bad("④-b F1", `count=${countHooks(s)}≠${FULL_N}`);
+
+// F2 경계 — 2벌만이 아니라 3벌도(=2 이상 전부) 한 벌로
+s = mergeInto(dupBlocks(3));
+countHooks(s) === FULL_N ? ok("④-b F2 동일 표기 3벌 → 한 벌로 수렴(경계)") : bad("④-b F2", `count=${countHooks(s)}≠${FULL_N}`);
+
+// F4 동일 2벌 + **같은 matcher** 의 사용자 훅(tmux) → kit 은 한 벌, 사용자 훅은 보존
+s = mergeInto(dupBlocks(2, { Stop: [{ hooks: [{ type: "command", command: 'tmux display-message "done" || true' }] }] }));
+{
+  const cmds2 = Object.values(s.hooks).flatMap((arr) => arr.flatMap((e) => (e.hooks || []).map((h) => h.command)));
+  countHooks(s) === FULL_N + 1 && cmds2.some((c) => c.startsWith("tmux "))
+    ? ok("④-b F4 동일 2벌 + 같은 matcher 사용자 훅 → kit 한 벌 + 사용자 훅 보존")
+    : bad("④-b F4", `count=${countHooks(s)}≠${FULL_N + 1} tmux=${cmds2.some((c) => c.startsWith("tmux "))}`);
+}
+
+// F5 동일 2벌 + **다른 matcher** 로 사용자가 직접 건 kit-경로 훅 → 그 항목은 불변
+s = mergeInto(dupBlocks(2, { PostToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: 'node "$HOME/.lively/hooks/work-flag.mjs"' }] }] }));
+countHooks(s) === FULL_N + 1 && (s.hooks.PostToolUse || []).some((e) => e.matcher === "Bash")
+  ? ok("④-b F5 동일 2벌 + 다른 matcher 의 kit-경로 훅 → kit 한 벌 + 그 항목 보존")
+  : bad("④-b F5", `count=${countHooks(s)}≠${FULL_N + 1}`);
+
+// F6 경계 — 중복이 아예 없으면 그대로(수렴 로직이 정상 항목을 먹지 않는다)
+s = mergeInto(dupBlocks(1));
+countHooks(s) === FULL_N ? ok("④-b F6 중복 없음 → 그대로 한 벌(멱등 무회귀)") : bad("④-b F6", `count=${countHooks(s)}≠${FULL_N}`);
 
 // ⑤ 사용자가 같은 스크립트를 다른 matcher 로 직접 배선한 항목 — 정체성이 같아도 matcher 가 다르면 불변.
 const custom = { PostToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: 'node "$HOME/.lively/hooks/work-flag.mjs"' }] }] };

@@ -13,12 +13,13 @@
 //   E6 --require-repo → 즉시 실패                     E13 통지: 마커 파손 → 침묵(예외 없음)
 //   E7 성공 실행이 실패 기록 제거 + 남의 키 보존      E14 통지: 하위 폴더에서 상위 마커 탐색
 import { repoStatusNotice } from "../hooks/session-preload.mjs";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
+import { WIN, pathWith, writeStubBin } from "../testlib/os-sandbox.mjs";   // 스텁은 윈도우에서도 실행 가능해야 한다(#1510)
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -55,7 +56,7 @@ function newHome() {
 //   work.mjs 가 매니페스트를 기다리며 영영 멈춘다(교착).
 function runWork(home, extra, pathPrefix) {
   const env = { ...process.env, HOME: home, USERPROFILE: home, LIVELY_GATEWAY_URL: GW, LIVELY_TOKEN: "test-token" };
-  if (pathPrefix) env.PATH = `${pathPrefix}:${process.env.PATH}`;
+  if (pathPrefix) env.PATH = pathWith(pathPrefix);
   return new Promise((resolve) => {
     const c = spawn(process.execPath, [WORK, PID, "--no-launch", ...extra], { env });
     let out = "";
@@ -187,16 +188,24 @@ await run("E7 성공 실행이 실패 기록을 지우고 남의 키는 보존",
 // ══════════════════════════════════════════════════════════════════════════
 // E8 — git 은 '대기'하지 않고 실패해야 한다: 자격 프롬프트 비활성으로 호출되는지 스텁으로 관측
 await run("E8 git 호출 환경 — 자격 프롬프트 비활성", async () => {
+  // ⚠ 윈도우에선 git 을 가로챌 수 없다 — work.mjs 는 `spawnSync("git", …)` 를 **셸 없이** 부르고,
+  //  node 는 보안 수정(BatBadBut) 이후 shell:true 없이 .cmd/.bat 스폰을 거부한다. 스텁으로 만들 수 있는
+  //  실행형은 .cmd 뿐이라(진짜 .exe 는 테스트가 못 만든다) 관측 자체가 성립하지 않는다.
+  //  단언 대상(GIT_TERMINAL_PROMPT=0 등)은 플랫폼 무관 코드라 POSIX 실행이 그대로 덮는다(#1510).
+  if (WIN) { console.log("skip E8 — 윈도우는 셸 없는 spawn 이라 git 스텁을 끼울 수 없다(.cmd 스폰 거부)"); return; }
   const home = newHome();
   const binDir = tmp("wf-bin-");
   const logFile = join(binDir, "git-calls.log");
   // PATH 앞에 놓는 git 스텁 — argv 와 관심 env 를 기록하고 실패로 끝난다(=clone 실패 경로 유도).
-  writeFileSync(join(binDir, "git"), [
-    "#!/bin/sh",
-    `echo "argv=$* prompt=[$GIT_TERMINAL_PROMPT] gcm=[$GCM_INTERACTIVE]" >> "${logFile}"`,
-    "exit 1",
-  ].join("\n") + "\n");
-  chmodSync(join(binDir, "git"), 0o755);
+  // 스텁 본문은 JS 한 벌 — sh 로 쓰면 윈도우에서 실행조차 안 돼 가로채기가 조용히 실패한다(#1510).
+  writeStubBin(binDir, "git", [
+    'import { appendFileSync } from "node:fs";',
+    `const LOG = ${JSON.stringify(logFile)};`,
+    'const argv = process.argv.slice(2).join(" ");',
+    'const e = (k) => process.env[k] ?? "";',
+    'appendFileSync(LOG, `argv=${argv} prompt=[${e("GIT_TERMINAL_PROMPT")}] gcm=[${e("GCM_INTERACTIVE")}]\\n`);',
+    "process.exit(1);",
+  ].join("\n"));
   const { code } = await runWork(home, ["--repos", b64([{ name: "any", path: join(home, "dst"), gitUrl: NEVER, worktree: false }])], binDir);
   const calls = existsSync(logFile) ? readFileSync(logFile, "utf8").trim().split("\n") : [];
   check("E8 스텁이 실제로 불림(관측 배선 확인)", calls.length > 0, "git 스텁 호출 0건 — 테스트가 아무것도 못 본다");

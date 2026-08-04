@@ -15,7 +15,8 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";  // ⚠ 절대경로 동적 import 는 반드시 file:// URL 로 — 윈도우는 "d:" 를 프로토콜로 읽는다(#1510)
+import { WIN } from "../testlib/os-sandbox.mjs";
 
 const HERE = path.join(fileURLToPath(import.meta.url), "..");
 
@@ -57,7 +58,7 @@ await new Promise((r) => server.listen(0, "127.0.0.1", r));
 process.env.LIVELY_GATEWAY_URL = `http://127.0.0.1:${server.address().port}`;
 process.env.LIVELY_TOKEN = "test-token";
 
-const { TOOLS, makeCtx } = await import(path.join(HERE, "lively-mcp-local.mjs"));
+const { TOOLS, makeCtx } = await import(pathToFileURL(path.join(HERE, "lively-mcp-local.mjs")));
 const tool = TOOLS.find((t) => t.name === "lively_local_project_init");
 assert.ok(tool, "lively_local_project_init 툴이 등록돼야 함");
 
@@ -255,7 +256,10 @@ try {
     const dir = await mkRepo("readonly", "https://github.com/o/ro.git");
     const before = seen.created.length;
     fs.chmodSync(dir, 0o500); // 쓰기 불가
-    try {
+    // ⚠ 윈도우에선 chmod 가 '쓰기 불가'를 만들지 못한다(POSIX mode 비트가 없다 — NTFS ACL 이라야 한다).
+    //  전제가 안 서면 이 케이스는 '쓸 수 있는 폴더'를 검사하는 셈이라 아무것도 못 잡는다(#1510).
+    if (WIN) { console.error("skip 🔴 마커 쓰기 사전점검 — 윈도우는 chmod 로 쓰기금지를 만들 수 없다(ACL)"); }
+    else try {
       await assert.rejects(() => call(dir, { mode: "create", name: "고아" }), /마커를 쓸 수 없습니다/);
       assert.equal(seen.created.length, before, "🔴 마커를 못 쓰는데 중앙에 프로젝트를 만들면 고아가 된다(롤백 없음)");
       ok("🔴 마커 쓰기 사전점검 실패 → 중앙 생성 안 함(고아 프로젝트 방지)");

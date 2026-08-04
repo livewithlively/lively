@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { pathWith, writeNoopBin } from "../testlib/os-sandbox.mjs";   // 스텁은 윈도우에서도 실행 가능해야 한다(#1510)
 
 const CLI = path.join(fileURLToPath(import.meta.url), "..", "lively.mjs");
 let pass = 0; const ok = (n) => { pass++; console.error(`ok  ${n}`); };
@@ -49,10 +50,7 @@ const root = await fsp.mkdtemp(path.join(os.tmpdir(), "lively-backfill-"));
 //  가드: kit/cli/cli-spawn-harness-sandbox.test.mjs
 const STUB_BIN = path.join(root, "stub-bin");
 fs.mkdirSync(STUB_BIN, { recursive: true });
-for (const b of ["claude", "codex"]) {
-  fs.writeFileSync(path.join(STUB_BIN, b), "#!/bin/sh\nexit 0\n");
-  fs.chmodSync(path.join(STUB_BIN, b), 0o755);
-}
+for (const b of ["claude", "codex"]) writeNoopBin(STUB_BIN, b);
 
 // 격리 HOME 에 claude 프로젝트 기록 픽스처를 깐다.
 function mkHome(files) {
@@ -67,7 +65,7 @@ function mkHome(files) {
 function runBackfill(home, extra = []) {
   return new Promise((resolve) => {
     const c = spawn(process.execPath, [CLI, "backfill", ...extra], {
-      cwd: root, env: { ...process.env, PATH: `${STUB_BIN}:${process.env.PATH}`, LIVELY_HOME: home, LIVELY_GATEWAY_URL: BASE, LIVELY_TOKEN: "t" },
+      cwd: root, env: { ...process.env, PATH: pathWith(STUB_BIN), LIVELY_HOME: home, LIVELY_GATEWAY_URL: BASE, LIVELY_TOKEN: "t" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = ""; c.stdout.on("data", (d) => (out += d)); c.stderr.on("data", (d) => (out += d));

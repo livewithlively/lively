@@ -3,11 +3,11 @@
 //  실행: node kit/cli/lively-mcp-local.test.mjs   (npm test 체인에 포함)
 //  실제 ~/.lively·네트워크 무접촉 — serveMcpLocal 을 인메모리 PassThrough 로 구동한다.
 import { PassThrough } from "node:stream";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";  // ⚠ 절대경로 동적 import 는 반드시 file:// URL 로 — 윈도우는 "d:" 를 프로토콜로 읽는다(#1510)
 import { join } from "node:path";
 
 const HERE = join(fileURLToPath(import.meta.url), "..");
-const { serveMcpLocal, TOOLS, registerTool, handleCall, toolSpec } = await import(join(HERE, "lively-mcp-local.mjs"));
+const { serveMcpLocal, TOOLS, registerTool, handleCall, toolSpec } = await import(pathToFileURL(join(HERE, "lively-mcp-local.mjs")));
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.error(`ok  ${n}`); };

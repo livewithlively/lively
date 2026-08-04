@@ -15,6 +15,8 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { pathWith, writeNoopBin } from "../testlib/os-sandbox.mjs";   // 스텁은 윈도우에서도 실행 가능해야 한다(#1510)
+import { encodeCwd } from "./cmd-session.mjs";   // 트랜스크립트 폴더 인코딩 — 제품 정본을 그대로 쓴다(두 벌이면 어긋난다)
 
 const CLI = path.join(fileURLToPath(import.meta.url), "..", "lively.mjs");
 let pass = 0; const ok = (n) => { pass++; console.error(`ok  ${n}`); };
@@ -53,10 +55,7 @@ const root = await fsp.mkdtemp(path.join(os.tmpdir(), "lively-share-"));
 //  가드: kit/cli/cli-spawn-harness-sandbox.test.mjs
 const STUB_BIN = path.join(root, "stub-bin");
 fs.mkdirSync(STUB_BIN, { recursive: true });
-for (const b of ["claude", "codex"]) {
-  fs.writeFileSync(path.join(STUB_BIN, b), "#!/bin/sh\nexit 0\n");
-  fs.chmodSync(path.join(STUB_BIN, b), 0o755);
-}
+for (const b of ["claude", "codex"]) writeNoopBin(STUB_BIN, b);
 
 // 픽스처: cwd(프로젝트 폴더) + 마커 + cwd 인코딩 경로에 트랜스크립트. cmdShare 는 process.cwd() 인코딩 경로를 본다.
 function mkFixture({ sid, body, projectId, mtimeBump }) {
@@ -64,7 +63,7 @@ function mkFixture({ sid, body, projectId, mtimeBump }) {
   // ⚠ realpath — 자식 process.cwd() 는 심볼릭(macOS /var→/private/var)을 해소하므로 cwd 인코딩 경로가 어긋난다. 실경로로 맞춘다.
   const cwd = fs.realpathSync(fs.mkdtempSync(path.join(root, "proj-")));
   if (projectId) { fs.mkdirSync(path.join(cwd, ".lively"), { recursive: true }); fs.writeFileSync(path.join(cwd, ".lively", "project.json"), JSON.stringify({ project_id: projectId, sync: "none" })); }
-  const enc = path.join(home, ".claude", "projects", cwd.replace(/[/.]/g, "-"));
+  const enc = path.join(home, ".claude", "projects", encodeCwd(cwd));
   fs.mkdirSync(enc, { recursive: true });
   fs.writeFileSync(path.join(enc, `${sid}.jsonl`), body);
   if (mtimeBump) { const t = Date.now() / 1000 + mtimeBump; fs.utimesSync(path.join(enc, `${sid}.jsonl`), t, t); }
@@ -73,7 +72,7 @@ function mkFixture({ sid, body, projectId, mtimeBump }) {
 function runShare(home, cwd, extra = []) {
   return new Promise((resolve) => {
     const c = spawn(process.execPath, [CLI, "share", ...extra], {
-      cwd, env: { ...process.env, PATH: `${STUB_BIN}:${process.env.PATH}`, LIVELY_HOME: home, LIVELY_GATEWAY_URL: BASE, LIVELY_TOKEN: "t" },
+      cwd, env: { ...process.env, PATH: pathWith(STUB_BIN), LIVELY_HOME: home, LIVELY_GATEWAY_URL: BASE, LIVELY_TOKEN: "t" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "", err = ""; c.stdout.on("data", (d) => (out += d)); c.stderr.on("data", (d) => (err += d));
@@ -89,7 +88,7 @@ try {
     const cwdBody = (q) => JSON.stringify({ type: "user", cwd: null, message: { content: q } });   // cwd 는 아래서 치환
     const { home, cwd } = mkFixture({ sid: "cur-sess", projectId: 42, body: "x".repeat(0) });   // 자리표시, 아래서 실 트랜스크립트로 덮음
     // 실제 트랜스크립트(cwd 라인 포함 — 마커 탐색 근거).
-    const enc = path.join(home, ".claude", "projects", cwd.replace(/[/.]/g, "-"));
+    const enc = path.join(home, ".claude", "projects", encodeCwd(cwd));
     const body = JSON.stringify({ type: "user", cwd, message: { content: "공유할 질문" } }) + "\n" + JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "답변" }] } }) + "\n";
     fs.writeFileSync(path.join(enc, "cur-sess.jsonl"), body);
     void cwdBody;
@@ -106,7 +105,7 @@ try {
   {
     reset();
     const { home, cwd } = mkFixture({ sid: "js-sess", projectId: 7, body: "" });
-    const enc = path.join(home, ".claude", "projects", cwd.replace(/[/.]/g, "-"));
+    const enc = path.join(home, ".claude", "projects", encodeCwd(cwd));
     const body = JSON.stringify({ type: "user", cwd, message: { content: "q" } }) + "\n";
     fs.writeFileSync(path.join(enc, "js-sess.jsonl"), body);
     const r = await runShare(home, cwd, ["--json"]);
@@ -122,7 +121,7 @@ try {
   {
     reset();
     const { home, cwd } = mkFixture({ sid: "done-sess", projectId: null, body: "" });
-    const enc = path.join(home, ".claude", "projects", cwd.replace(/[/.]/g, "-"));
+    const enc = path.join(home, ".claude", "projects", encodeCwd(cwd));
     const body = JSON.stringify({ type: "user", message: { content: "q" } }) + "\n";
     fs.writeFileSync(path.join(enc, "done-sess.jsonl"), body);
     SERVER["done-sess"] = { bytes: Buffer.byteLength(body) };   // 서버가 이미 다 가짐
@@ -137,7 +136,7 @@ try {
   {
     reset(); CAPTURE.enabled = false;
     const { home, cwd } = mkFixture({ sid: "off-sess", projectId: 9, body: "" });
-    const enc = path.join(home, ".claude", "projects", cwd.replace(/[/.]/g, "-"));
+    const enc = path.join(home, ".claude", "projects", encodeCwd(cwd));
     fs.writeFileSync(path.join(enc, "off-sess.jsonl"), JSON.stringify({ type: "user", cwd, message: { content: "q" } }) + "\n");
     const r = await runShare(home, cwd);
     assert.equal(appends.length, 0, "🔴 꺼져 있으면 델타 안 올린다");

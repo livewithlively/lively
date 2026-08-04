@@ -696,6 +696,36 @@
   "input_hash": "bba13b8183929248"
  },
  {
+  "name": "org_oauth_clients",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/oauth/clients"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_oauth_client_upsert",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/oauth/client"
+  ],
+  "input_hash": "f2145467c07a5e7b"
+ },
+ {
+  "name": "org_oauth_client_disable",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/oauth/client/disable"
+  ],
+  "input_hash": "47ca2cca834a048c"
+ },
+ {
   "name": "org_runtime_config",
   "scope": null,
   "mcp": true,

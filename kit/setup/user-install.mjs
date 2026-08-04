@@ -207,13 +207,19 @@ function safeMergeUserSettings(blockHooks) {
       //  아래에서 최신형으로 교체한다. 종전엔 command **문자열**이 다를 때만 회수했는데(구표기 전용), 그러면
       //  command 는 그대로고 timeout 만 바뀐 변경(#1043 — SessionEnd 조기 abort 방지용 timeout 추가)이 이미
       //  설치된 멤버에게 영영 반영되지 않았다(같은 command → dup 로 스킵). 전문 비교로 넓힌다(멱등: 동일하면 유지).
+      let kept = false;                                                  // 같은 (정체성, matcher) 는 **한 벌만** 남긴다
       arr = arr.filter((e) => {
         if (!same(e.matcher ?? null, matcher)) return true;              // matcher 다르면 사용자 항목 — 불변(테스트 ⑤)
         const hs = e.hooks ?? [];
         if (!hs.length) return true;
         const isKitEntry = hs.every((h) => { const id = kitHookId(h.command); return id && ids.has(id); });
         if (!isKitEntry) return true;                                    // 우리 훅 아님(사용자 tmux 등)·정체성 불일치 — 보존
-        return same(e, entry);                                           // 우리 훅: 최신과 동일할 때만 유지, 다르면 회수
+        if (!same(e, entry)) return false;                               // 우리 훅인데 전문이 다르다 — 구표기 회수
+        // 최신형과 동일. 단 **이미 한 벌 남겼으면 버린다** — 종전엔 동일본을 전부 유지해서, 완전히 같은 엔트리가
+        //  두 벌 쌓인 설정은 재설치해도 영영 안 줄었다(툴콜마다 훅 2회 실행 — 맥미니 15→30 누적과 같은 사고).
+        //  POSIX 테스트가 이걸 못 잡은 건 픽스처의 '구세대'가 표기까지 달라(`node` vs `"node"`) 위 줄에서 걸렸기 때문이다.
+        if (kept) return false;
+        kept = true; return true;
       });
       if (!arr.some((e) => same(e, entry))) arr.push(entry);             // 동일본 없으면 최신형 배치
     }

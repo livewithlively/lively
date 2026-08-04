@@ -132,6 +132,12 @@ function run(cmd, args, { allowFail = false, quiet = false, env, timeout } = {})
   return { code: r.status ?? -1, out: String(r.stdout || ""), err: String(r.stderr || "") };
 }
 const has = (bin) => spawnSync(WIN ? "where" : "command", WIN ? [bin] : ["-v", bin], { stdio: "ignore", shell: !WIN }).status === 0;
+// 윈도우 tar.exe 는 System32 동봉이다 — 훅·자식 프로세스의 빈약한 PATH 에서도 찾도록 절대경로를 먼저 본다(#1510).
+const tarBin = () => {
+  if (!WIN) return "tar";
+  const abs = join(process.env.SystemRoot || process.env.windir || "C:\\Windows", "System32", "tar.exe");
+  return existsSync(abs) ? abs : "tar";
+};
 
 // ── 3. 대화형 입력 — `curl … | sh` 로 stdin 이 파이프여도 사람 입력을 받는다 ──────────────────
 //  POSIX 의 /dev/tty 는 프로세스의 **제어 단말**이라 stdin 파이프와 독립이다. 이게 없으면
@@ -321,7 +327,9 @@ async function downloadBundle() {
   writeFileSync(tgz, buf);
   const root = join(dir, "kit");
   mkdirSync(root, { recursive: true });
-  run("tar", ["-xzf", tgz, "-C", root], { quiet: true });
+  // tar 는 PATH 이름으로만 부르지 않는다 — 윈도우의 tar.exe 는 System32 에 있고 그게 PATH 에 없는 컨텍스트가
+  //  실제로 관측됐다(#1510, self-update 와 같은 처리). 절대경로가 있으면 그걸, 없으면 종전대로.
+  run(tarBin(), ["-xzf", tgz, "-C", root], { quiet: true });
   return { dir, root };
 }
 
@@ -793,10 +801,12 @@ async function gatherStatus() {
       // configOk = codex 가 config.toml 을 **실제로 읽을 수 있나**. 이 축이 없어서 2026-08-04 윈도우 사고 때
       //  status 가 "✓ 배선"이라고 거짓 보고했다 — 파일에 우리 센티넬은 있는데 codex 는 파싱 실패로 아예 안 떴다.
       //  (한 줄의 문법 오류가 파일 전체를 무효화하는 게 TOML 이라, '우리 블록이 있다'는 '동작한다'가 아니다.)
-      codex: { installed: has("codex"), wired: false, mcp: false, mcpConnected: null, configOk: null, transport: null, assets: null },
+      codex: { installed: has("codex"), wired: false, mcp: null, mcpConnected: null, configOk: null, transport: null, assets: null },
       // opencode 도 codex 와 같은 깊이로 본다 — 설정에 **알 수 없는 top-level 키가 있으면 아예 안 뜨므로**
       //  ('배선됨'과 '동작함'이 다른 구조가 codex 와 같다) configOk 축을 함께 둔다.
-      opencode: { installed: has("opencode"), wired: false, mcp: false, mcpConnected: null, configOk: null, transport: null, assets: null },
+      //  mcp 초기값이 null 인 것도 codex 와 같은 이유다: 설정을 **못 읽었을 때**(주석 든 .jsonc 등)를
+      //  '미등록'으로 단정하면 "lively update" 헛다리 조치를 부른다. 모르면 물음표로 적는다.
+      opencode: { installed: has("opencode"), wired: false, mcp: null, mcpConnected: null, configOk: null, transport: null, assets: null },
     },
     hooks: { installed: 0, expected: REQUIRED_HOOKS.length },
   };
@@ -856,6 +866,8 @@ async function gatherStatus() {
   try { st.harness.opencode.wired = existsSync(OPENCODE_PLUGIN); } catch { /* */ }
   {
     const cfgPath = [join(OPENCODE_DIR, "opencode.json"), join(OPENCODE_DIR, "opencode.jsonc")].find((p) => existsSync(p));
+    // 설정 파일이 **아예 없다** = 우리가 배선한 적 없다 → 미등록(확정). 파일은 있는데 못 읽는 건 다른 얘기라 아래서 null 유지.
+    if (!cfgPath) st.harness.opencode.mcp = false;
     if (cfgPath) {
       try {
         const cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
@@ -1027,15 +1039,20 @@ async function cmdStatus(opts) {
   // codex 는 '배선' 자리에 **config 유효성**을 함께 싣는다 — 우리 블록이 있어도 파일이 파싱 안 되면 codex 는 아예 안 뜬다.
   const cx = st.harness.codex;
   const cxWired = cx.configOk === false ? `${red("✘")} 배선 ${red("(config.toml 을 codex 가 못 읽음)")}` : `${mark(cx.wired)} 배선`;
+  // mcp === null 은 '판정 못 함'이다(코덱스 세션 *안*에서 돌리면 `codex mcp get` 이 실패한다) — `–` 로 뭉개면
+  //  미등록과 구별이 안 돼 "lively update" 헛다리 조치를 부른다. 물음표로 모른다고 적는다('? 연결'과 같은 원칙).
   const cxMcp = cx.installed && cx.configOk !== false
-    ? `   ${mark(cx.mcp)} MCP 등록${cx.mcp && cx.transport ? dim(`(${cx.transport})`) : ""}` : "";
+    ? (cx.mcp === null ? `   ${dim("? MCP 등록")}` : `   ${mark(cx.mcp)} MCP 등록${cx.mcp && cx.transport ? dim(`(${cx.transport})`) : ""}`) : "";
   say(`  codex         ${mark(cx.installed)} 설치   ${cxWired}${cxMcp}${connOf(cx)}${assetsOf(cx)}`);
   // opencode — codex 와 같은 형태. 배선 신호는 플러그인 어댑터 파일이다.
   //  ⚠ 자산 수에 `~/.claude/skills` 자동 로드분은 안 잡힌다(#1519 결정: 스킬 격리 안 함) — 그 사실을 아래 안내에 담는다.
   const oc = st.harness.opencode;
   if (oc.installed || oc.wired) {
     const ocWired = oc.configOk === false ? `${red("✘")} 배선 ${red("(opencode.json 을 opencode 가 못 읽음)")}` : `${mark(oc.wired)} 배선`;
-    const ocMcp = oc.configOk !== false ? `   ${mark(oc.mcp)} MCP 등록${oc.mcp && oc.transport ? dim(`(${oc.transport})`) : ""}` : "";
+    // codex 와 같은 원칙 — null(판정 못 함)을 `–` 로 뭉개면 미등록과 구별이 안 된다.
+    const ocMcp = oc.configOk !== false
+      ? (oc.mcp === null ? `   ${dim("? MCP 등록")}` : `   ${mark(oc.mcp)} MCP 등록${oc.mcp && oc.transport ? dim(`(${oc.transport})`) : ""}`)
+      : "";
     say(`  opencode      ${mark(oc.installed)} 설치   ${ocWired}${ocMcp}${connOf(oc)}${assetsOf(oc)}`);
   }
   if (st.kit.autoUpdate !== null) say(`  자동 업데이트 ${st.kit.autoUpdate ? green("켜짐") : yellow("꺼짐")}`);
@@ -1103,7 +1120,10 @@ async function cmdDoctor(opts) {
         st.harness.codex.configOk ? "codex 가 읽음" : "codex 가 config.toml 을 못 읽습니다 — 그 파일의 MCP·훅이 전부 무효입니다",
         "lively update  (설치기가 깨진 줄을 복구합니다)");
     }
-    if (st.harness.codex.configOk !== false) {
+    // ⚠ mcp === null 은 **판정 못 함**이지 미등록이 아니다 — 코덱스 세션 *안에서* doctor 를 돌리면
+    //  `codex mcp get` 이 실패해(자기 자신이 그 셸 PATH 에 없다) 종전엔 "미등록"으로 떨어졌다. 같은 머신
+    //  PowerShell 직접 실행은 정상 등록으로 나온다 — 모르는 것을 문제로 보고하면 헛다리 조치가 나온다.
+    if (st.harness.codex.configOk !== false && st.harness.codex.mcp !== null) {
       chk("Codex MCP 등록", st.harness.codex.mcp,
         st.harness.codex.mcp ? `lively 등록됨${st.harness.codex.transport ? ` (${st.harness.codex.transport})` : ""}` : "미등록", "lively update");
     }
@@ -1117,7 +1137,7 @@ async function cmdDoctor(opts) {
         st.harness.opencode.configOk ? "opencode 가 읽음" : "opencode 가 opencode.json 을 못 읽습니다 — 그 파일의 MCP·플러그인이 전부 무효입니다",
         "lively update");
     }
-    if (st.harness.opencode.configOk !== false) {
+    if (st.harness.opencode.configOk !== false && st.harness.opencode.mcp !== null) {
       chk("OpenCode MCP 등록", st.harness.opencode.mcp,
         st.harness.opencode.mcp ? `lively 등록됨${st.harness.opencode.transport ? ` (${st.harness.opencode.transport})` : ""}` : "미등록", "lively update");
       if (st.harness.opencode.mcp && st.harness.opencode.mcpConnected !== null) {
@@ -1150,6 +1170,73 @@ async function cmdDoctor(opts) {
   say("");
   if (!bad.length) say(green("  모두 정상입니다."));
   else { say(yellow(`  ${bad.length}건 문제 — 위 '해결' 을 순서대로 실행하세요.`)); process.exitCode = 1; }
+}
+
+// ── selfcheck (#1505) — **AI 가 자기 세션과 대조할 사실**만 뽑아 준다. 판정은 AI 가 한다. ──
+//  왜 CLI 인가: 이 로직을 사용가이드의 복붙 프롬프트에 코드로 실어 뒀더니 **LLM 이 50줄을 손으로 옮겨 적다
+//   대괄호를 빠뜨려** 매 실행 결과가 달라졌다(실측). 더 나쁜 건 그 전사 오류를 '확인불가'로 보고해 라이블리
+//   문제처럼 보이게 만든 것이다. 코드는 여기 두고 프롬프트는 `lively selfcheck` 한 줄만 부른다.
+//  ⚠ 여기 담는 것은 **로컬 파일을 읽어야 아는 사실**뿐이다. 신원(whoami)·검색 동작·세션에 실제 노출된 스킬·
+//   주입된 맥락은 MCP 와 AI 자기관측으로 얻으므로 **셸 없는 환경(웹·앱에서 MCP 만 연결)에서도** 점검이 성립한다.
+//   그 경계를 지켜야 점검이 하네스를 안 가린다.
+async function cmdSelfcheck(opts) {
+  const out = {};
+  let man = {}; try { man = JSON.parse(readFileSync(join(LIVELY, "managed-harness-assets.json"), "utf8")); } catch { /* 없으면 빈 것 */ }
+  const hs = Object.keys(man);
+  out.kit = readLively("kit-version") || null;
+  out.assets = Object.fromEntries(hs.map((x) => [x, Object.entries(man[x] || {}).map(([id, v]) => ({ id, kind: v.kind, hash: v.hash, missing: !!(v.file && !existsSync(v.file)) }))]));
+  const EV = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "Notification", "PreCompact", "PostCompact", "SessionEnd"];
+  let fired = null; const cache = {};
+  for (const e of EV) { try { const c = JSON.parse(readFileSync(join(LIVELY, `custom-hooks-${e}.json`), "utf8"));
+    const n = (c.hooks || []).length; if (n) cache[e] = n;
+    const s = Math.round((Date.now() - c.at) / 1000); if (!fired || s < fired.sec) fired = { sec: s, event: e }; } catch { /* 없으면 skip */ } }
+  let runner = null; try { runner = readdirSync(join(LIVELY, "hooks")).filter((f) => f.endsWith(".mjs")).length; } catch { /* */ }
+  out.hooks = { runner, cache, lastFired: fired };
+  // 맥락은 **이번 세션이 실제로 받은 것**이다(session-preload 가 fetch 성공분을 여기 굳힌다) — 서버 preview 가 아니다.
+  const ctx = readLively("context.md");
+  const secs = []; let cur = null;
+  for (const line of ctx.split("\n")) { if (line.startsWith("## ")) { cur = { title: line.slice(3), items: 0 }; secs.push(cur); } else if (cur && line.startsWith("- ")) cur.items++; }
+  out.context = { sections: secs, chars: ctx.length };
+  // ── 서버 대조 — 네트워크가 필요하다. 막히면 이 블록만 접고 위 로컬 사실은 그대로 유효하다(하네스 샌드박스). ──
+  const norm = (s) => crypto.createHash("sha256").update(String(s).replace(/\s+/g, "")).digest("hex").slice(0, 12);
+  out.server = null;
+  if (gateway() && token()) {
+    const h = hs[0] || "claude";
+    try {
+      const srv = (await api(`/api/ui/org/runner/assets?harness=${encodeURIComponent(h)}`, { timeoutMs: 8000 })).assets || [];
+      const lm = new Map((out.assets[h] || []).map((a) => [a.id, a.hash]));
+      out.server = { harness: h, assets: srv.length,
+        sameHash: srv.length === (out.assets[h] || []).length && srv.every((a) => lm.get(a.id) === a.content_hash),
+        notLocal: srv.filter((a) => !lm.has(a.id)).map((a) => `${a.kind}:${a.id}`),
+        mismatch: srv.filter((a) => lm.has(a.id) && lm.get(a.id) !== a.content_hash).map((a) => `${a.kind}:${a.id}`),
+        stale: (out.assets[h] || []).filter((a) => !srv.some((s) => s.id === a.id)).map((a) => a.id) };
+      const c = (await api("/api/ui/org/preview", { timeoutMs: 8000 }))?.context || "";
+      out.server.contextFresh = norm(c) === norm(ctx);
+    } catch (e) { out.server = { error: e.message }; }
+  }
+  if (opts.json) { process.stdout.write(JSON.stringify(out, null, 2) + "\n"); return; }
+  say(`\n${bold("라이블리 배선 점검")} ${dim("— 아래는 사실이다. 지금 이 세션에 실제로 무엇이 보이는지와 대조해 판정하라.")}\n`);
+  say(`  키트          ${out.kit || dim("(없음)")}`);
+  if (!hs.length) say(`  자산          ${yellow("매니페스트 없음 — 이 머신에 조직 자산이 한 번도 안 깔렸다")}`);
+  for (const x of hs) {
+    const l = out.assets[x], miss = l.filter((a) => a.missing);
+    say(`  자산 ${x.padEnd(8)} ${l.length ? green(`${l.length}개`) : yellow("0개 — 이 하네스에 하나도 안 깔렸다")}${miss.length ? "  " + yellow(`파일없음 ${miss.length}개`) : ""}`);
+    if (l.length) say(`    ${dim(l.map((a) => `${a.kind}:${a.id}`).join(" "))}`);
+    for (const a of miss) say(`    ${red("✗")} ${a.id}`);
+  }
+  if (hs.length > 1) say(`  ${dim("↑ whoami 의 session.harness 와 같은 줄을 보라 — 다른 줄은 이 PC 의 다른 하네스 것이다.")}`);
+  say(`  훅            러너 ${out.hooks.runner ?? "?"}개 · 캐시 ${Object.entries(out.hooks.cache).map(([e, n]) => `${e}=${n}`).join(" ") || dim("없음")} · 마지막 발화 ${fired ? `${fired.sec}초 전(${fired.event})` : dim("기록없음")}`);
+  say(`  맥락          ${secs.length ? secs.map((s) => `${s.title}(${s.items})`).join(" · ") : yellow("context.md 없음 — 주입이 한 번도 성공한 적 없다")}`);
+  if (!out.server) say(`  서버 대조     ${dim("생략(게이트웨이·토큰 없음) — 위 로컬 사실로 판정하라")}`);
+  else if (out.server.error) say(`  서버 대조     ${yellow("생략")} ${dim(out.server.error)}\n                ${dim("네트워크가 막힌 것이지 배선 고장이 아니다(하네스 샌드박스일 수 있다) — 위 로컬 사실로 판정하라")}`);
+  else {
+    say(`  서버 대조     ${out.server.harness} · 자산 ${out.server.assets}개 ${out.server.sameHash ? green("· 로컬과 해시까지 동일") : yellow("· 로컬과 다름")}`);
+    for (const x of out.server.notLocal) say(`    ${red("✗")} 로컬에 없음 ${x}`);
+    for (const x of out.server.mismatch) say(`    ${yellow("·")} 내용 다름 ${x} ${dim("(다음 세션에 갱신된다)")}`);
+    for (const x of out.server.stale) say(`    ${yellow("·")} 서버에 없음(잔재) ${x}`);
+    say(`                맥락 ${out.server.contextFresh ? green("= 이 세션이 받은 것(최신)") : yellow("≠ 세션 시작 뒤 서버가 바뀜 — 다음 세션에 반영")}`);
+  }
+  say("");
 }
 
 // ── 실행 모드(#1007+) — 이 세션이 라이블리와 얼마나 상호작용하나. CLI 가 모드 이름을 env 플래그로 번역한다. ──
@@ -1408,6 +1495,8 @@ ${bold("확인")}
   status                 설치 · 버전 · 하네스 · MCP 상태  ${dim("--json")}
                          ${dim("프로젝트 폴더에서 실행하면 프로젝트 · 공유폴더 동기화 상태도 함께 보여줍니다")}
   doctor                 문제 진단 + 해결책               ${dim("--json")}
+  selfcheck              배선 점검 사실 덤프(AI 가 세션과 대조) ${dim("--json")}
+  selfcheck              배선 점검(AI가 세션과 대조할 사실) ${dim("--json")}
 
 ${bold("작업")}
   init                   지금 폴더를 프로젝트로 — 기본은 ${bold("제안만")}(무엇을 할지 알려주고 아무것도 안 바꿈)
@@ -1507,6 +1596,7 @@ async function main() {
     case "init": return cmdInit(argv.slice(argv.indexOf("init") + 1));
     case "status": return cmdStatus(o);
     case "doctor": return cmdDoctor(o);
+    case "selfcheck": return cmdSelfcheck(o);
     // run 은 나머지 인자를 **그대로** 넘긴다(모드 플래그만 cmdRun 이 소비, 나머지는 work.mjs/하네스로 원형 보존).
     case "run": return cmdRun(argv.slice(argv.indexOf("run") + 1));
     // mode — 디폴트 실행 모드(normal|readonly|incognito) 조회/설정(#1007+). lively run 이 이걸 읽는다.

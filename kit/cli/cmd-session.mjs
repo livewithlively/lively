@@ -12,6 +12,48 @@ import { spawnSync } from "node:child_process";
 
 // lively.mjs 와 같은 계약(LIVELY_HOME 은 HOME 리다이렉트 — 샌드박스/테스트).
 const HOME = process.env.LIVELY_HOME || homedir();
+const WIN = process.platform === "win32";
+
+// ── Claude Code 트랜스크립트 위치 (#1510) ────────────────────────────────────
+// 트랜스크립트는 `~/.claude/projects/<cwd 를 인코딩한 폴더>/<세션id>.jsonl` 에 있다.
+//  인코딩 규칙은 **Claude Code 쪽 구현**이라 우리가 정하는 값이 아니다 — mac/linux 실측은 `/`·`.` → `-`.
+//  윈도우는 경로 구분자 `\` 와 드라이브 콜론 `:` 이 파일명에 못 들어가므로 그것도 치환 대상이다.
+//  종전 코드는 `/[/.]/g` 뿐이라 윈도우 경로가 **그대로 남았고**, join(base, "C:\\Users\\…") 가
+//  `…\projects\C:\Users\…` 를 만들어 `lively resume` 이 mkdir ENOENT 로 죽었다(share 는 세션 미발견).
+//  ⚠ POSIX 는 `:` 가 합법 파일명 문자다 — 규칙을 넓히면 기존 폴더를 못 찾는다. 그래서 윈도우에서만 넓힌다.
+//  ⚠ `win` 을 인자로 뺀 이유: 이 분기는 **자기 플랫폼에선 절반이 절대 실행되지 않는다.** 그대로 두면 윈도우
+//   규칙은 윈도우 러너에서만 검증되고(=대부분의 개발·CI 에서 무방비), 이 프로젝트가 고친 결함이 정확히 그런
+//   사각지대에서 났다. lively.mjs 의 winArg 를 순수함수로 직접 검증하는 관례와 같다(#1510).
+export const encodeCwd = (cwd, win = WIN) => String(cwd).replace(win ? /[/\\:.]/g : /[/.]/g, "-");
+
+// 트랜스크립트 앞부분에서 기록된 cwd 를 읽는다(앞쪽 라인에 나온다). 못 읽으면 null.
+function cwdOfTranscript(buf) {
+  const head = buf.toString("utf8", 0, Math.min(buf.length, 65536));
+  for (const line of head.split("\n")) {
+    if (!line.includes('"cwd"')) continue;
+    try { const o = JSON.parse(line); if (typeof o.cwd === "string" && o.cwd) return o.cwd; } catch { /* 부분/깨진 줄 */ }
+  }
+  return null;
+}
+
+// 이 cwd 의 트랜스크립트 폴더. **인코딩 규칙은 남의 구현이라 언제든 바뀔 수 있으므로** 규칙에만 기대지 않는다:
+//  규칙으로 만든 이름이 이미 있으면 그것, 없으면 기존 폴더들의 트랜스크립트에 적힌 cwd 로 **내용 기반** 매칭한다.
+//  (폴더 = cwd 인코딩이므로 폴더당 첫 .jsonl 하나만 보면 충분하다.) 끝내 못 찾으면 규칙 이름을 돌려준다 —
+//  새로 만들 자리이므로 그게 정답이다.
+export function projectsDirFor(cwd) {
+  const base = join(HOME, ".claude", "projects");
+  const guess = join(base, encodeCwd(cwd));
+  if (existsSync(guess)) return guess;
+  let dirs; try { dirs = readdirSync(base); } catch { return guess; }
+  for (const d of dirs) {
+    let inner; try { inner = readdirSync(join(base, d)); } catch { continue; }
+    const f = inner.find((n) => n.endsWith(".jsonl"));
+    if (!f) continue;
+    let buf; try { buf = readFileSync(join(base, d, f)); } catch { continue; }
+    if (cwdOfTranscript(buf) === cwd) return join(base, d);
+  }
+  return guess;
+}
 
 // ctx 주입 슬롯 — 아래 함수 본문은 lively.mjs 원문 그대로다(이름·들여쓰기 무변경).
 let say, dim, bold, green, yellow, red, gateway, token, has;
@@ -61,8 +103,8 @@ async function cmdResume(args) {
   } catch (e) { say(red(`트랜스크립트 회수 실패: ${e.message}`)); process.exit(1); }
   if (!body.length) { say(red("회수된 트랜스크립트가 비었습니다.")); process.exit(1); }
 
-  // 3) 이 머신의 claude 프로젝트 경로로 물질화(cwd 인코딩 '/'·'.' → '-' — 서버 terminal-transcript 와 동일 규칙).
-  const dir = join(HOME, ".claude", "projects", process.cwd().replace(/[/.]/g, "-"));
+  // 3) 이 머신의 claude 프로젝트 경로로 물질화(cwd 인코딩 — projectsDirFor 머리말 참조).
+  const dir = projectsDirFor(process.cwd());
   const file = join(dir, `${sid}.jsonl`);
   mkdirSync(dir, { recursive: true });
   writeFileSync(file, body);
@@ -82,12 +124,7 @@ async function cmdResume(args) {
 // 트랜스크립트의 cwd → `.lively/project.json` 마커의 project_id(구조화된 정본 — 경로 휴리스틱 아님). 없으면 null.
 //  cwd 는 앞쪽 라인에 나오므로 앞부분만 스캔. cwd 에서 위로 올라가며 마커를 찾는다.
 function projectIdForTranscript(buf) {
-  let cwd = null;
-  const head = buf.toString("utf8", 0, Math.min(buf.length, 65536));
-  for (const line of head.split("\n")) {
-    if (!line.includes('"cwd"')) continue;
-    try { const o = JSON.parse(line); if (typeof o.cwd === "string" && o.cwd) { cwd = o.cwd; break; } } catch { /* 부분/깨진 줄 */ }
-  }
+  const cwd = cwdOfTranscript(buf);
   if (!cwd) return null;
   let dir = cwd;
   for (let i = 0; i < 40 && dir; i++) {
@@ -174,7 +211,7 @@ async function cmdShare(args) {
   const gw = gateway(), tok = token();
   if (!gw) { say(red("게이트웨이 주소를 모릅니다 — `lively login --gateway <url>`.")); process.exit(1); }
   if (!tok) { say(red("로그인이 필요합니다 — `lively login`.")); process.exit(1); }
-  const encDir = join(HOME, ".claude", "projects", process.cwd().replace(/[/.]/g, "-"));
+  const encDir = projectsDirFor(process.cwd());
 
   // 1) 대상 세션 — 인자 or 이 cwd 의 가장 최근 트랜스크립트(현재 세션). 로컬 파일이 있으면 델타도 올린다.
   let sid = o._[0], fp = null;

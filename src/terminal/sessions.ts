@@ -24,7 +24,7 @@ import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.
 import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
 import { memberMkdir } from "./terminal-member-fs.js";
 import { materializeMemberGit, ensureGitSafeDirectory } from "../org/credentials/git-credential-materialize.js";
-import { ROOTS, SHARED_ROOT, HARNESSES, PANE_LOCALE, modeEnvArgs, type SessionInfo, type CreateInput } from "./catalog.js";
+import { ROOTS, SHARED_ROOT, HARNESSES, PANE_LOCALE, modeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput } from "./catalog.js";
 import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir } from "./tmux-exec.js";
 import {
   sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
@@ -288,6 +288,12 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     }
     if (input.autoApprove && harness.autoApproveFlag) cmd.push(harness.autoApproveFlag);
   }
+  // pane 이 실제로 실행할 argv(#1516). 세 갈래:
+  //  · 로그인 세션(loginFor) — 하네스 TUI 대신 그 하네스의 **로그인 명령**을 셸에서 돌린다(만료 자격으로는
+  //    하네스가 즉사해 로그인 화면조차 못 보던 데드락을 끊는다). 모르는 하네스면 무시하고 평범한 셸 세션.
+  //  · AI 하네스 — 런처로 감싼다(비정상 종료 시 세션 보존 + 한국어 안내). harnessLaunchArgv 주석 참조.
+  //  · 셸 하네스 — 그대로(감쌀 하네스가 없다).
+  const launch = input.loginFor ? (harnessLoginArgv(input.loginFor) ?? cmd) : harnessLaunchArgv(harness.key, cmd);
 
   const invites = await validInvites(input.invites, ownerId(user));
   const args = ["new-session", "-d", "-s", id];
@@ -349,7 +355,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     } catch (err) {
       console.warn(`[terminal] 세션 메모리 정책 조회 생략(비치명): ${err instanceof Error ? err.message : String(err)}`);
     }
-    args.push(...wrapAsMember(osUser, cmd, target, cg));
+    args.push(...wrapAsMember(osUser, launch, target, cg));
   } else {
     args.push("-c", target);
     // 멀티프로필(#346·#1014): 비격리 경로에서도 **항상 이 멤버 전용 CLAUDE_CONFIG_DIR** 을 준다(공유 폴백 폐기).
@@ -365,7 +371,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       await fsp.mkdir(profileDir, { recursive: true, mode: 0o700 });
       args.push("-e", `CLAUDE_CONFIG_DIR=${profileDir}`);
     }
-    if (cmd.length) args.push(...cmd);
+    if (launch.length) args.push(...launch);
   }
   // 웹터미널은 xterm.js 로 렌더된다 — pane TERM 을 xterm-256color 로 통일(색 일관성: 격리 세션은 box-spawn 이
   //  강제, 비격리(프로젝트·managed)는 여기 default-terminal 로. 서버 전역이나 '새 pane' 에만 적용=기존 세션 무영향, 멱등).
