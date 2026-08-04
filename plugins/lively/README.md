@@ -9,17 +9,22 @@
 /plugin install lively@lively
 ```
 
-활성화하면 **게이트웨이 주소** 하나를 묻는다(`https://lively.회사도메인` 또는 매니지드 워크스페이스 주소. `/mcp` 는 붙이지 않는다). 바꾸려면 `/plugin` → `lively` → 설정.
+활성화하면 두 값을 묻는다. 바꾸려면 `/plugin` → `lively` → 설정.
 
-그다음 로그인한다 — 토큰을 복붙할 필요 없이 브라우저 승인으로 끝난다.
+| 값 | 설명 |
+|---|---|
+| **게이트웨이 주소** | `https://lively.회사도메인` 또는 매니지드 워크스페이스 주소. `/mcp` 는 붙이지 않는다 |
+| **접속 토큰** | 관리 화면에서 발급한 개인 토큰(`lvk_…`). 키체인에 저장되며 `settings.json` 에 남지 않는다 |
+
+**훅까지 쓰려면**(조직 맥락 자동주입·조직 스킬 배포·거버넌스 훅 — Claude Code·Cowork) 한 번 더 로그인한다.
 
 ```bash
 node "$CLAUDE_PLUGIN_ROOT/bin/login.mjs"
 ```
 
-토큰은 `~/.lively/token`(0600)에 저장되고, MCP 헤더와 훅이 **같은 파일**을 읽는다.
+브라우저 승인으로 끝나고 토큰이 `~/.lively/token`(0600)에 저장된다. 챗 표면(웹·데스크톱 Chat 탭)은 훅을 쓰지 않으므로 이 단계가 필요 없다.
 
-> **왜 토큰을 `userConfig` 로 안 받나** — `sensitive: true` 값은 **훅 프로세스 env 로 전달되지 않는다**(2026-08-04 실기기 실측. 공식 문서의 "All values are exported to hook processes" 와 다르다). 토큰을 설정으로 받으면 MCP 는 붙지만 조직 맥락 주입·스킬 배포·거버넌스 훅·상태 보고가 전부 인증에 실패한다. 그래서 토큰의 단일 출처를 파일로 두고 MCP 는 `headersHelper` 로 그 파일을 읽는다.
+> **왜 두 번인가** — `sensitive: true` 인 userConfig 값은 **훅 프로세스 env 로 전달되지 않는다**(2026-08-04 실기기 실측. 공식 문서의 "All values are exported to hook processes" 와 다르다). 그래서 MCP 헤더용 토큰(설정)과 훅용 토큰(파일)의 경로가 갈린다. 파일 하나로 합치는 `headersHelper` 방식도 동작하지만(Claude Code 실측 확인) claude.ai 마켓플레이스 싱크와의 호환을 확인하는 중이다.
 
 ## 무엇이 들어 있나
 
