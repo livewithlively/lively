@@ -128,6 +128,12 @@ function run(cmd, args, { allowFail = false, quiet = false, env, timeout } = {})
   return { code: r.status ?? -1, out: String(r.stdout || ""), err: String(r.stderr || "") };
 }
 const has = (bin) => spawnSync(WIN ? "where" : "command", WIN ? [bin] : ["-v", bin], { stdio: "ignore", shell: !WIN }).status === 0;
+// 윈도우 tar.exe 는 System32 동봉이다 — 훅·자식 프로세스의 빈약한 PATH 에서도 찾도록 절대경로를 먼저 본다(#1510).
+const tarBin = () => {
+  if (!WIN) return "tar";
+  const abs = join(process.env.SystemRoot || process.env.windir || "C:\\Windows", "System32", "tar.exe");
+  return existsSync(abs) ? abs : "tar";
+};
 
 // ── 3. 대화형 입력 — `curl … | sh` 로 stdin 이 파이프여도 사람 입력을 받는다 ──────────────────
 //  POSIX 의 /dev/tty 는 프로세스의 **제어 단말**이라 stdin 파이프와 독립이다. 이게 없으면
@@ -314,7 +320,9 @@ async function downloadBundle() {
   writeFileSync(tgz, buf);
   const root = join(dir, "kit");
   mkdirSync(root, { recursive: true });
-  run("tar", ["-xzf", tgz, "-C", root], { quiet: true });
+  // tar 는 PATH 이름으로만 부르지 않는다 — 윈도우의 tar.exe 는 System32 에 있고 그게 PATH 에 없는 컨텍스트가
+  //  실제로 관측됐다(#1510, self-update 와 같은 처리). 절대경로가 있으면 그걸, 없으면 종전대로.
+  run(tarBin(), ["-xzf", tgz, "-C", root], { quiet: true });
   return { dir, root };
 }
 

@@ -53,6 +53,20 @@ const LOCK_STALE_MS = 10 * 60 * 1000;      // 죽은 프로세스가 남긴 락 
 const BACKOFF_MS = 6 * 60 * 60 * 1000;     // 같은 버전 실패 후 재시도 간격
 const FETCH_MS = 60_000;                   // 번들 다운로드(백그라운드라 넉넉히)
 const INSTALL_MS = 180_000;                // 설치기 상한
+
+// tar 실행파일 — **PATH 해석에만 기대지 않는다.**
+//  윈도우 실기기의 update-state.json 에 `tar -xzf` 실패가 남았다(#1510 로 넘어온 미해결건). tar.exe 는
+//  윈도우 10 1803+ 에 System32 로 기본 동봉되므로 '설치 안 됨'보다 **훅 실행 컨텍스트의 PATH 에 System32 가
+//  없는 쪽**이 유력하다 — 훅은 하네스가 준 env 로 돌고, 그 PATH 는 사용자의 대화형 셸과 다를 수 있다.
+//  자가 업데이트가 막히면 우리가 고친 키트가 **자동으로는 영영 안 간다**(수동 `lively update` 만 된다).
+//  ⚠ 이건 가설에 기반한 하드닝이고 실기기 재확인 전이다. 다만 회귀 위험이 없다 — 절대경로가 있으면 그걸 쓰고,
+//   없으면 종전대로 PATH 이름으로 부른다.
+function tarBin() {
+  if (process.platform !== "win32") return "tar";
+  const root = process.env.SystemRoot || process.env.windir || "C:\\Windows";
+  const abs = join(root, "System32", "tar.exe");
+  return existsSync(abs) ? abs : "tar";
+}
 const LOG_MAX = 64 * 1024;                 // 로그 상한(넘으면 갈아엎음 — 무한증식 방지)
 
 // 번들에 반드시 있어야 하는 러너(설치기 HOOK_SCRIPTS 와 동일 — 하나라도 없으면 그 번들은 설치하지 않는다).
@@ -312,7 +326,7 @@ async function main() {
   try {
     log(`업데이트 시작: ${local || "(스탬프 없음)"} → ${target} · harness=${harnesses.join(",")}`);
     const bytes = await download(gw, token, join(tmp, "bundle.tgz"));
-    execFileSync("tar", ["-xzf", join(tmp, "bundle.tgz"), "-C", tmp], { stdio: "ignore", timeout: 60_000 });
+    execFileSync(tarBin(), ["-xzf", join(tmp, "bundle.tgz"), "-C", tmp], { stdio: "ignore", timeout: 60_000 });
     const installer = verifyBundle(tmp);
     log(`번들 검증 통과 (${(bytes / 1024).toFixed(0)} KiB)`);
 

@@ -6,7 +6,7 @@
 //   실행: node kit/hooks/session-preload-plugin-creds.test.mjs   (exit 0=통과, 1=실패). 네트워크 불요.
 //
 //   ⚠ 단언은 **관찰 가능한 상태**만 본다 — 파일 존재·내용·권한 지문·소유기록 내용. 로그 문구는 보지 않는다.
-//   ⚠ HOME 을 임시 디렉터리로 돌린다(POSIX 에서 os.homedir() 는 $HOME 을 쓴다) — 실제 홈을 건드리지 않는다.
+//   ⚠ 홈을 임시 디렉터리로 돌린다 — os.homedir() 는 POSIX 에서 $HOME, 윈도우에서 %USERPROFILE% 을 본다(sandboxEnv).
 //   ⚠ 케이스마다 **서브프로세스**로 돈다: 인코그니토 판정은 모듈 로드 시점 상수라 같은 프로세스에선 못 바꾼다.
 //   ⚠ 배선 단언: 러너가 미러 호출 **후** 표식을 남긴다. 부정 케이스(§1·§6)는 그 표식을 함께 단언해
 //      "프로세스가 죽어서 아무 파일도 없는 것"이 통과로 둔갑하지 않게 한다.
@@ -14,7 +14,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSy
 import { tmpdir, platform, homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { execFileSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { sandboxEnv } from "../testlib/os-sandbox.mjs";   // HOME 만으론 윈도우 격리가 안 된다(#1510)
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MODULE = join(HERE, "session-preload.mjs");
@@ -30,7 +31,7 @@ const check = (n, cond, why = "") => { cond ? ok(n) : bad(n, why); };
 const RUNNER_DIR = mkdtempSync(join(tmpdir(), "lv-runner-"));
 const RUNNER = join(RUNNER_DIR, "run.mjs");
 writeFileSync(RUNNER, [
-  `import { mirrorPluginCreds } from ${JSON.stringify(MODULE)};`,
+  `import { mirrorPluginCreds } from ${JSON.stringify(pathToFileURL(MODULE).href)};`,  // 절대경로 그대로면 윈도우에서 죽는다(#1510)
   `import { writeFileSync } from "node:fs";`,
   `import { homedir } from "node:os";`,
   `import { join } from "node:path";`,
@@ -44,7 +45,7 @@ function newHome() { const h = mkdtempSync(join(tmpdir(), "lv-home-")); homes.pu
 function run(home, env) {
   execFileSync(process.execPath, [RUNNER], {
     env: {
-      ...process.env, HOME: home,
+      ...process.env, ...sandboxEnv({ home }),
       LIVELY_OFF: "", LIVELY_HOOKS_OFF: "", LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "",
       CLAUDE_PLUGIN_OPTION_TOKEN: "", CLAUDE_PLUGIN_OPTION_GATEWAY_URL: "",
       ...env,

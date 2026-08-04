@@ -12,6 +12,16 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
+// `lively node`(워커 노드 상시화)는 **POSIX 전용 사양**이다 — tmux 로 세션을 띄우고 launchd/systemd 로
+//  상시화하며, 정지는 pkill 로 한다. 제품이 그렇게 선언한다(cmd-node.mjs: "미지원 OS: win32 — Windows 는
+//  WSL2 안에서 실행하세요"). 그러니 윈도우에서 이 테스트가 빨간불인 건 **결함이 아니라 비목표**다.
+//  가드를 명시해 둔다(짝인 bootstrap-node-gate.test.mjs 와 같은 관례) — 안 그러면 CI 를 필수 게이트로
+//  올릴 수 없고, 매번 "이건 원래 안 되는 거였나"를 다시 조사하게 된다(#1510).
+if (process.platform === "win32") {
+  console.log("skip — `lively node` 는 POSIX 전용(tmux·launchd/systemd·pkill). Windows 는 WSL2 안에서 실행한다(사양 비목표).");
+  process.exit(0);
+}
+
 const pExecFile = promisify(execFile);
 const HERE = join(fileURLToPath(import.meta.url), "..");
 const CLI = join(HERE, "lively.mjs");
