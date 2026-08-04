@@ -16,13 +16,5 @@
     "wiki",
     "project-management",
     "self-hosted"
-  ],
-  "userConfig": {
-    "gateway_url": {
-      "type": "string",
-      "title": "게이트웨이 주소",
-      "description": "라이블리 게이트웨이의 공개 주소 (예: https://lively.example.com). 매니지드는 워크스페이스 주소를 그대로 넣으세요. 끝에 /mcp 는 붙이지 않습니다.",
-      "required": true
-    }
-  }
+  ]
 }
