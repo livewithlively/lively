@@ -215,7 +215,9 @@ function copyPs1WithHeader(srcAbs, destAbs, srcLabel, orgLabel) {
 //  sync-harness-assets.mjs = 하네스 자산(스킬·서브에이전트·커맨드) materializer(SessionStart → 게이트웨이 fetch → 디스크 동기화).
 //  self-update.mjs(#858) = 키트 자가 업데이터. **배선되는 훅이 아니다** — session-preload 가 kit_version 불일치를
 //   보면 detached 로 띄우는 백그라운드 프로세스다. 번들·설치 대상엔 들어가되 settings 훅 목록엔 안 들어간다.
-const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs"];
+// ⚠ harness-registry.mjs 는 훅이 아니라 훅들이 import 하는 모듈이다 — 발행물에 동봉되지 않으면 설치된 훅이
+//  ERR_MODULE_NOT_FOUND 로 죽는다(user-install.HOOK_SCRIPTS 와 **같은 목록**이어야 한다).
+const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs", "harness-registry.mjs"];
 
 function emitHooks(targetDir, orgLabel) {
   const hooksDir = join(targetDir, ".claude", "hooks");

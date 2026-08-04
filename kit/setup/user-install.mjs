@@ -42,7 +42,11 @@ const CODEX = join(HOME, ".codex");
 const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || join(HOME, ".claude");
 // self-update.mjs(#858)는 settings 에 **배선하지 않는다** — 훅이 아니라 session-preload 가 detached 로 띄우는
 //  백그라운드 업데이터다(세션 시작마다 프로세스를 하나 더 띄우지 않기 위함). 파일만 ~/.lively/hooks 에 놓는다.
-const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs"];
+// ⚠ harness-registry.mjs 는 실행되는 훅이 아니라 **훅들이 import 하는 모듈**이다. 훅은 이 디렉터리로 평평하게
+//  복사되므로 같은 목록에 있어야 하고, 빠지면 sync-harness-assets 가 ERR_MODULE_NOT_FOUND 로 **통째로 죽는다**
+//  (그러면 조직 자산이 한 개도 안 깔린다 — 게다가 자산 sync 는 조용히 실패하는 게 설계라 아무 신호가 없다).
+//  이 등재 누락은 kit/hooks/harness-registry.test.mjs 가 잡는다.
+const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs", "harness-registry.mjs"];
 
 // 발행물 루트: --clone-root 우선, 없으면 이 스크립트의 ../ (setup/ 의 부모).
 const CLONE_ROOT = resolve(getOpt("--clone-root") || join(dirname(fileURLToPath(import.meta.url)), ".."));
@@ -795,4 +799,7 @@ const DIRECT_RUN = (() => {
 })();
 if (DIRECT_RUN) main().catch((e) => { console.error("✗ user-level 설치 실패:", e?.message || e); process.exit(1); });
 
-export { safeMergeUserSettings, mergeBlocks, userLevelHooksBlock, runnerHooksBlock, CLI_SHIM, CLI_SHIM_CMD, CLI_PATH_BEGIN, CLI_PATH_END };
+// HOOK_SCRIPTS 도 export 한다 — 테스트들이 발행물 번들을 구성할 때 이 목록을 **복제하지 않고 따르도록**.
+//  종전엔 codex-wiring.test.mjs·self-update.test.mjs 가 각자 사본을 갖고 있어, 훅 파일이 하나 늘 때마다
+//  네 곳을 동시에 고쳐야 했고 한 곳만 빠뜨리면 그 테스트가 "발행물에 훅 누락"으로 죽었다(#1519 실측).
+export { safeMergeUserSettings, mergeBlocks, userLevelHooksBlock, runnerHooksBlock, CLI_SHIM, CLI_SHIM_CMD, CLI_PATH_BEGIN, CLI_PATH_END, HOOK_SCRIPTS };

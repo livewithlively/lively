@@ -1,0 +1,192 @@
+#!/usr/bin/env node
+// 하네스 레지스트리 사양테스트 — 테이블화(#1519)가 지켜야 할 불변식을 고정한다.
+//  실행: node kit/hooks/harness-registry.test.mjs   (kit/**/*.test.mjs 라 npm test 체인에 자동 포함)
+//  사양·엣지 표(23행): 프로젝트 #1519 · 케이스 번호가 그 행 번호에 대응한다.
+//
+// 왜 이 테스트인가 — 테이블화는 **조용히 깨지는 방식**이 둘이다:
+//  ① 훅이 import 하는 모듈이 설치 복사 목록에서 빠지면, 설치된 자리에서 ERR_MODULE_NOT_FOUND 로 훅이 통째로
+//     죽는다. 자산 sync 는 실패해도 세션을 안 막는 게 설계라 **아무 신호가 없다** — 사용자는 스킬이 0개인
+//     채로 계속 일하고 `lively status` 도 훅 파일 개수만 보므로 초록불이다.
+//     ⚠ 목록 비교(A2)만으로는 "복사는 됐지만 실행이 안 되는" 상태를 못 본다 → **D 가 실제로 설치를 돌려 실행한다.**
+//  ② 표에 하네스를 한 줄 더할 때 축 하나를 안 채우면 그 하네스에서만 그 기능이 조용히 없다 — #1475 가
+//     "한 군데 빠져 조용히 안 감"으로 실제로 겪은 사고다. B 가 축 전수를 강제한다.
+//
+// 단언은 **문구가 아니라 부작용**으로 한다: 실제 설치 산출물의 존재·설치된 훅의 종료코드·경로 문자열 자체.
+import { mkdtempSync, rmSync, mkdirSync, cpSync, writeFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, dirname } from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import {
+  HARNESS, HARNESS_IDS, resolveHarness, isKnownHarness,
+  harness, placementFor, assetDirsFor, assetDirNames, toolMatcher, mcpMatcher,
+} from "./harness-registry.mjs";
+
+const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
+const KIT = join(HOOKS_DIR, "..");
+let pass = 0, fail = 0;
+const ok = (n) => { pass++; console.log(`ok  ${n}`); };
+const bad = (n, why) => { fail++; console.error(`FAIL ${n} — ${why}`); };
+const eq = (n, got, want) => (JSON.stringify(got) === JSON.stringify(want) ? ok(n) : bad(n, `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`));
+
+// ── A. 배선 보장(S1) — 엣지 E1·E2 ────────────────────────────────────────────────
+// 복사 목록이 두 벌인 건 설치 경로가 둘이기 때문이다(발행물 생성 = build-context, 설치 = user-install).
+// 한쪽만 고치면 "발행은 됐는데 설치가 안 되는" 또는 그 반대가 된다.
+{
+  const listOf = (file, name) => {
+    const m = new RegExp(`const ${name}\\s*=\\s*\\[([^\\]]*)\\]`).exec(readFileSync(file, "utf8"));
+    return m ? [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]) : null;
+  };
+  const install = listOf(join(KIT, "setup", "user-install.mjs"), "HOOK_SCRIPTS");
+  const build = listOf(join(KIT, "generator", "build-context.mjs"), "HOOK_SCRIPTS");
+  if (!install || !build) bad("A0 두 목록 파싱", "HOOK_SCRIPTS 를 못 찾음(형태가 바뀌었으면 이 테스트를 고칠 것)");
+  else {
+    eq("A1[E2] 두 HOOK_SCRIPTS 목록이 동일", install, build);
+    // 배포되는 훅들이 import 하는 상대 모듈을 모아, 전부 목록에 있는지 본다(정적 검사).
+    const missing = [];
+    for (const f of readdirSync(HOOKS_DIR).filter((x) => x.endsWith(".mjs") && !x.endsWith(".test.mjs"))) {
+      if (!install.includes(f)) continue;                       // 배포 대상 훅만 검사(examples 등 제외)
+      const src = readFileSync(join(HOOKS_DIR, f), "utf8");
+      for (const m of src.matchAll(/^\s*import\s[^"']*["']\.\/([^"']+)["']/gm)) {
+        if (!install.includes(m[1])) missing.push(`${f} → ${m[1]}`);
+      }
+    }
+    missing.length
+      ? bad("A2[E1] 훅이 import 하는 로컬 모듈이 전부 복사 목록에 있음", `누락: ${missing.join(", ")}`)
+      : ok("A2[E1] 훅이 import 하는 로컬 모듈이 전부 복사 목록에 있음");
+  }
+}
+
+// ── B. 표 완전성(S2) — 엣지 E5·E6 ────────────────────────────────────────────────
+{
+  const REQUIRED = ["id", "label", "bin", "home", "configFile", "configFormat", "wiring", "assets", "tools", "mcp", "autoApprove", "contextEnvelope", "reloadAssets", "events"];
+  const KINDS = ["skill", "subagent", "command"];
+  const TOOL_GROUPS = ["edit", "shell", "read", "skill", "mcp", "mcpMatcher"];
+  const holes = [];
+  for (const id of HARNESS_IDS) {
+    const h = HARNESS[id];
+    if (!h) { holes.push(`${id}: 표에 없음`); continue; }
+    for (const k of REQUIRED) if (h[k] === undefined) holes.push(`${id}.${k}`);
+    for (const kind of KINDS) {
+      const s = h.assets?.[kind];
+      if (!s) { holes.push(`${id}.assets.${kind}`); continue; }
+      for (const k of ["root", "dir", "ext", "compose"]) if (s[k] === undefined) holes.push(`${id}.assets.${kind}.${k}`);
+    }
+    for (const g of TOOL_GROUPS) if (h.tools?.[g] === undefined) holes.push(`${id}.tools.${g}`);
+    if (h.id !== id) holes.push(`${id}.id 불일치(${h.id})`);
+  }
+  holes.length ? bad("B1[E5·E6] 모든 하네스가 필수 축을 채움", `빠짐: ${holes.join(", ")}`)
+    : ok("B1[E5·E6] 모든 하네스가 필수 축을 채움");
+}
+
+// ── C. 동작 무변경(S3) — 엣지 E7~E12 ─────────────────────────────────────────────
+// 값을 **하드코딩된 기대 경로**와 맞댄다. 표를 읽어 만든 기대값과 비교하면 표를 표로 검증하는 tautology 가 된다.
+{
+  const H = "/h";
+  const env = {}; // 설정 디렉터리 환경변수 미설정 = 기본 ~/.claude
+  eq("C1[E7] claude skill", placementFor("claude", "skill", "s1", H, env),
+    { file: "/h/.claude/skills/s1/SKILL.md", skillDir: "/h/.claude/skills/s1", root: "/h/.claude/skills" });
+  eq("C2[E7] claude subagent", placementFor("claude", "subagent", "a1", H, env),
+    { file: "/h/.claude/agents/a1.md", root: "/h/.claude/agents" });
+  eq("C3[E7] claude command", placementFor("claude", "command", "c1", H, env),
+    { file: "/h/.claude/commands/c1.md", root: "/h/.claude/commands" });
+  eq("C4[E8] codex subagent 는 .toml", placementFor("codex", "subagent", "a1", H, env),
+    { file: "/h/.codex/agents/a1.toml", root: "/h/.codex/agents" });
+  eq("C5[E9] codex command 는 prompts/", placementFor("codex", "command", "c1", H, env),
+    { file: "/h/.codex/prompts/c1.md", root: "/h/.codex/prompts" });
+  eq("C6[E10] claude 는 CLAUDE_CONFIG_DIR 를 존중", placementFor("claude", "skill", "s1", H, { CLAUDE_CONFIG_DIR: "/p" }),
+    { file: "/p/skills/s1/SKILL.md", skillDir: "/p/skills/s1", root: "/p/skills" });
+  eq("C7[E11] 모르는 하네스는 claude 배치로 폴백", placementFor("nope", "skill", "s1", H, env),
+    { file: "/h/.claude/skills/s1/SKILL.md", skillDir: "/h/.claude/skills/s1", root: "/h/.claude/skills" });
+  // '어디에 쓰나'(placement)와 '어디를 훑나'(assetDirs)가 같은 출처여야 한다 —
+  //  어긋나면 배포된 자산이 관측·로컬토글에서 통째로 안 보인다(종전엔 두 함수가 따로 하드코딩돼 있었다).
+  const dirs = assetDirsFor("codex", H, env);
+  eq("C8[E12] assetDirs 의 root 가 placement 와 일치", dirs.map((d) => d[1]),
+    ["skill", "subagent", "command"].map((k) => placementFor("codex", k, "x", H, env).root));
+  eq("C9[E8·E9] codex assetDirs 확장자", dirs.map((d) => d[3]), ["", ".toml", ".md"]);
+}
+
+// ── D. 설치 라운드트립(S1) — 엣지 E3·E4 ★이번 변경이 새로 만든 엣지 ───────────────────
+//  harness-registry.mjs 라는 **새 모듈을 도입한 것 자체**가 "그 파일이 설치 자리에 없는 경우"라는 엣지를 만들었다.
+//  A2 는 목록만 본다 — 여기서는 **실제로 설치기를 돌리고 설치된 훅을 실행**해 import 가 풀리는지 확인한다.
+{
+  const SB = mkdtempSync(join(tmpdir(), "harness-registry-test-"));
+  try {
+    const BUNDLE = join(SB, "bundle"), HOME = join(SB, "home");
+    // 번들 구성은 발행물 배치를 최소 재현한다(codex-wiring.test.mjs 의 makeBundle 과 같은 형태).
+    // 번들 구성 재료는 **설치기의 정본 목록**을 따른다(사본을 두면 훅이 늘 때마다 여기가 스테일해진다).
+    const { HOOK_SCRIPTS: scripts } = await import(join(KIT, "setup", "user-install.mjs"));
+    mkdirSync(join(BUNDLE, ".claude", "hooks"), { recursive: true });
+    mkdirSync(join(BUNDLE, ".lively"), { recursive: true });
+    mkdirSync(join(BUNDLE, "setup"), { recursive: true });
+    for (const f of scripts) cpSync(join(HOOKS_DIR, f), join(BUNDLE, ".claude", "hooks", f));
+    for (const f of ["user-install.mjs", "user-uninstall.mjs", "work.mjs", "work-roots-header.mjs"]) cpSync(join(KIT, "setup", f), join(BUNDLE, "setup", f));
+    writeFileSync(join(BUNDLE, ".lively-org-name"), "테스트조직\n");
+    writeFileSync(join(BUNDLE, ".lively", "auto-approve.json"), JSON.stringify({ allow: [] }));
+    writeFileSync(join(BUNDLE, ".lively", "mcp-servers.json"), JSON.stringify({ servers: [] }));
+    mkdirSync(join(HOME, ".lively"), { recursive: true });
+    writeFileSync(join(HOME, ".lively", "gateway-url"), "http://127.0.0.1:9\n"); // 토큰 없음 = 네트워크 미접촉
+
+    const r = spawnSync(process.execPath, [join(BUNDLE, "setup", "user-install.mjs"), "--harness", "claude", "--clone-root", BUNDLE],
+      { env: { ...process.env, LIVELY_HOME: HOME }, encoding: "utf8" });
+    r.status === 0 ? ok("D1[E4] 설치기 성공") : bad("D1[E4] 설치기 성공", `exit=${r.status} ${r.stderr || r.stdout}`);
+
+    existsSync(join(HOME, ".lively", "hooks", "harness-registry.mjs"))
+      ? ok("D2[E3] 레지스트리가 ~/.lively/hooks 에 설치됨")
+      : bad("D2[E3] 레지스트리가 ~/.lively/hooks 에 설치됨", "파일 없음 — HOOK_SCRIPTS 등재 누락");
+
+    // ★ 핵심 — 설치된 자리에서 훅을 실제로 실행한다. import 가 안 풀리면 ERR_MODULE_NOT_FOUND 로 죽는다.
+    //  토큰이 없으므로 훅은 즉시 exit 0(fail-open) 이어야 한다 — 그게 정상 동작이다.
+    const h = spawnSync(process.execPath, [join(HOME, ".lively", "hooks", "sync-harness-assets.mjs")],
+      { env: { ...process.env, LIVELY_HOME: HOME, HOME }, encoding: "utf8", timeout: 20000 });
+    if (h.status !== 0) bad("D3[E3·E4] 설치된 훅이 그 자리에서 실행됨", `exit=${h.status} ${String(h.stderr).slice(0, 300)}`);
+    else if (/ERR_MODULE_NOT_FOUND|Cannot find module/.test(String(h.stderr))) bad("D3[E3·E4] 설치된 훅이 그 자리에서 실행됨", `모듈 해석 실패: ${String(h.stderr).slice(0, 300)}`);
+    else ok("D3[E3·E4] 설치된 훅이 그 자리에서 실행됨");
+  } finally { rmSync(SB, { recursive: true, force: true }); }
+}
+
+// ── E. 툴 이름(S4) — 엣지 E13~E16 ────────────────────────────────────────────────
+//  이 케이스가 없으면 "matcher 를 claude 형태로 박아 두고 다른 하네스에선 한 번도 안 걸리는" 결함이
+//  테스트를 통과한다 — codex 때 실제로 겪은 조용한 무력화와 같은 클래스다.
+{
+  eq("E1[E13] claude MCP matcher", mcpMatcher("claude", "lively"), "mcp__lively__.*");
+  eq("E2[E13] codex MCP matcher(claude 와 동일)", mcpMatcher("codex", "lively"), "mcp__lively__.*");
+  eq("E3[E14] opencode MCP matcher 는 <server>_", mcpMatcher("opencode", "lively"), "lively_.*");
+  eq("E4[E14] opencode MCP 툴 이름", HARNESS.opencode.tools.mcp("lively", "whoami"), "lively_whoami");
+  eq("E5[E13] claude MCP 툴 이름", HARNESS.claude.tools.mcp("lively", "whoami"), "mcp__lively__whoami");
+  eq("E6[E15] claude 편집 matcher", toolMatcher("claude", "edit"), "Edit|Write|MultiEdit|NotebookEdit");
+  eq("E7[E15] codex 편집 matcher", toolMatcher("codex", "edit"), "apply_patch");
+  eq("E8[E15] opencode 편집 matcher(소문자)", toolMatcher("opencode", "edit"), "edit|write");
+  // 없는 툴은 null — '배선하지 않는다'를 빈 문자열과 구분해야 matcher 가 전체매칭으로 새지 않는다.
+  eq("E9[E16] codex 엔 read 툴이 없다(null)", toolMatcher("codex", "read"), null);
+  eq("E10[E16] codex 엔 Skill 툴이 없다(null)", toolMatcher("codex", "skill"), null);
+  eq("E11[E16] opencode 엔 skill 툴이 있다", toolMatcher("opencode", "skill"), "skill");
+}
+
+// ── F. 회수 안전(S5) — 엣지 E17·E18 ──────────────────────────────────────────────
+{
+  const names = assetDirNames();
+  const want = ["skills", "agents", "commands", "prompts", "skill", "agent", "command"];
+  const miss = want.filter((w) => !names.has(w));
+  miss.length ? bad("F1[E17] 회수 화이트리스트가 전 하네스 자산 디렉터리를 덮음", `빠짐: ${miss.join(",")}`)
+    : ok("F1[E17] 회수 화이트리스트가 전 하네스 자산 디렉터리를 덮음");
+  // 실제 훅이 조립하는 것과 같은 정규식으로 — 자산 경로만 걸리고 남의 경로는 안 걸려야 한다(경로 탈출 방어).
+  const re = new RegExp(`[/\\\\](${[...names].join("|")})[/\\\\]`);
+  re.test("/h/.claude/skills/x/SKILL.md") ? ok("F2[E18] 자산 경로는 매치") : bad("F2[E18] 자산 경로는 매치", "미매치");
+  re.test("/h/.ssh/id_rsa") ? bad("F3[E18] 비자산 경로는 미매치", "매치됨 — 삭제 위험") : ok("F3[E18] 비자산 경로는 미매치");
+}
+
+// ── G. 하네스 결정(S6) — 엣지 E19~E23 ────────────────────────────────────────────
+{
+  eq("G1[E19] argv 우선", resolveHarness(["--harness", "codex"], { LIVELY_HARNESS: "claude" }), "codex");
+  eq("G2[E20] env 폴백 + 소문자 정규화", resolveHarness([], { LIVELY_HARNESS: "Codex" }), "codex");
+  eq("G3[E21] 둘 다 없으면 claude", resolveHarness([], {}), "claude");
+  // ⚠ 모르는 값을 claude 로 **정규화하지 않는다** — 이 값은 매니페스트 키·게이트웨이 질의에 그대로 쓰이므로,
+  //  조용히 바꾸면 오타 하나가 '남의 하네스 자산을 내 디스크에 깔았다'가 된다.
+  eq("G4[E22] 모르는 값은 그대로 둔다", resolveHarness(["--harness", "opencde"], {}), "opencde");
+  eq("G5[E22] isKnownHarness 로 판별", [isKnownHarness("opencode"), isKnownHarness("opencde")], [true, false]);
+  eq("G6[E23] 표 조회는 claude 로 폴백", harness("opencde").id, "claude");
+}
+
+console.log(`\n${fail ? "✗" : "✓"} harness-registry: ${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

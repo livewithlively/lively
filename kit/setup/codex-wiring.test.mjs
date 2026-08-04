@@ -35,7 +35,9 @@ const REAL_CODEX_CFG = join(homedir(), ".codex", "config.toml");
 const REAL_BEFORE = digest(REAL_CODEX_CFG);
 
 // ── 발행물 번들 구성(generator/build-context.mjs publish() 의 배치를 최소 재현) ──────────────
-const HOOKS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs"];
+// 번들에 넣을 훅 파일 목록은 **설치기의 정본을 따른다**(사본을 두지 않는다 — 훅이 하나 늘 때 여기가 빠지면
+//  이 테스트가 "발행물에 훅 누락"으로 죽는다). DIRECT_RUN 가드가 있어 import 해도 설치는 돌지 않는다.
+const { HOOK_SCRIPTS: HOOKS } = await import(join(KIT, "setup", "user-install.mjs"));
 function makeBundle({ withCli = true, mcpServers = [], autoApprove = ["mcp__lively__whoami"] } = {}) {
   rmSync(BUNDLE, { recursive: true, force: true });
   mkdirSync(join(BUNDLE, ".claude", "hooks"), { recursive: true });
