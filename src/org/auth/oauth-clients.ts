@@ -24,6 +24,7 @@ const CIMD_MAX_BYTES = 256 * 1024;   // 클라이언트 메타데이터 문서�
 const CIMD_MIN_TTL = 300;            // 캐시 하한 5분(문서가 no-store 여도 매 요청 fetch 하지 않는다).
 const CIMD_MAX_TTL = 24 * 3600;      // 캐시 상한 24시간(회수 반영이 하루 넘게 늦지 않게).
 const CIMD_DEFAULT_TTL = 3600;
+const CIMD_USER_AGENT = "Lively-Gateway (+https://github.com/livewithlively/lively)";
 
 // CIMD 문서 메모리 캐시. DB(oauth_client) 는 영속·감사·폴백용이고, 핫패스는 이 맵이 받는다.
 const cimdCache = new Map<string, { info: OAuthClientInformationFull; expiresAt: number }>();
@@ -104,7 +105,10 @@ export function validateCimdDocument(clientId: string, doc: unknown): OAuthClien
 /** CIMD 문서를 가져와 검증한다. 실패하면 throw. 성공하면 메모리 캐시 + DB 미러(폴백·감사)에 남긴다. */
 async function fetchCimd(clientId: string): Promise<OAuthClientInformationFull> {
   const fetchFn = await cimdFetch();
-  const res = await fetchFn(clientId, { headers: { accept: "application/json" } });
+  // ⚠ User-Agent 필수 — 우리 SSRF fetch 는 node:https 로 직접 요청하느라 UA 를 안 붙이는데, **UA 없는 요청을
+  //  403 으로 막는 문서 호스트가 실제로 있다**(2026-08-04 실측: api.github.com 은 UA 없으면 403, 붙이면 200).
+  //  챗 벤더의 CIMD 문서 서버가 같은 정책이면 인가가 통째로 실패한다. 우리가 누구인지 밝히는 게 예의이기도 하다.
+  const res = await fetchFn(clientId, { headers: { accept: "application/json", "user-agent": CIMD_USER_AGENT } });
   if (!res.ok) throw new Error(`CIMD 문서 응답 ${res.status}`);
   const ct = res.headers.get("content-type") ?? "";
   if (!/json/i.test(ct)) throw new Error(`CIMD 문서 content-type 이 JSON 이 아님: ${ct}`);

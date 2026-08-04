@@ -12,11 +12,16 @@ import { mcpAuthRouter, createOAuthMetadata } from "@modelcontextprotocol/sdk/se
 import { LivelyOAuthProvider } from "./oauth-provider.js";
 import { verifyClientSecret } from "./oauth-clients.js";
 import { resourceIds, type ResourceIds } from "../../auth/resource-id.js";
-import { SCOPES } from "../../auth/scopes.js";
+import { SCOPES, DANGEROUS_SCOPES } from "../../auth/scopes.js";
 import { logger } from "../../log.js";
 
 const provider = new LivelyOAuthProvider();
 const RESOURCE_NAME = "Lively 컨텍스트 게이트웨이";
+
+// 광고하는 scope = **실제로 발급될 수 있는 것만**. 위험 scope(admin·runtime)는 이 경로로 어떤 경우에도
+//  나가지 않으므로(store/oauth.ts 의 grantableScopes) 목록에 넣으면 거짓 광고다 — 클라이언트가 요청했다가
+//  조용히 좁혀진 토큰을 받고 "왜 admin 이 안 되지"를 디버깅하게 된다. 광고와 실제를 일치시킨다.
+const ADVERTISED_SCOPES = SCOPES.filter((s) => !DANGEROUS_SCOPES.has(s));
 
 // SDK 가 /token·/revoke 앞에 세우는 authenticateClient 는 `client.client_secret !== 제시값` **평문 비교**를 한다.
 //  우리는 시크릿을 sha256 으로만 보관하므로 getClient 가 시크릿을 비워 보내고(oauth-clients.ts 머리주석 ★★),
@@ -52,7 +57,7 @@ function prmRootAlias(ids: ResourceIds, issuer: string): express.RequestHandler 
   const doc = {
     resource: new URL(ids.mcp).href,
     authorization_servers: [issuer],
-    scopes_supported: [...SCOPES],
+    scopes_supported: [...ADVERTISED_SCOPES],
     resource_name: RESOURCE_NAME,
   };
   const router = express.Router();
@@ -71,7 +76,7 @@ function build(ids: ResourceIds): express.RequestHandler {
     provider,
     issuerUrl: new URL(ids.base),
     resourceServerUrl: new URL(ids.mcp),
-    scopesSupported: [...SCOPES],
+    scopesSupported: [...ADVERTISED_SCOPES],
     resourceName: RESOURCE_NAME,
   };
   // 같은 옵션으로 SDK 가 만들 메타데이터를 먼저 뽑아 issuer 문자열을 얻는다(루트 별칭이 정본과 어긋나지 않게).
