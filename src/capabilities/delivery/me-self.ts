@@ -10,7 +10,7 @@ import {
   setAssetPref, clearAssetPref, getOrgHook, getOrgHarnessAsset, type AssetPrefKind, type HookHarness, type AssetKind
 } from "../../org/store.js";
 import { effectiveVisible, targetsMember } from "../../org/asset-visibility.js"; // #699 per-member 유효 가시성 규칙(SoT)
-import { HARNESS_ASSET_KINDS, HOOK_HARNESSES, actorOf, assertPrefKind, parseAssetFrontmatter, restRead, str, wctx } from "./shared.js";
+import { HARNESS_ASSET_KINDS, HOOK_HARNESSES, HOOK_HARNESSES_MSG, actorOf, assertPrefKind, parseAssetFrontmatter, restRead, str, wctx } from "./shared.js";
 
 export const meProfileCapabilities: Capability[] = [
   // ── 본인 프로필 셀프 편집(우측 상단 '내 프로필') — 인증된 구성원이 자기 표시이름·개인레이어를 직접 수정. admin 불요. ──
@@ -164,7 +164,7 @@ export const meSelfCapabilities: Capability[] = [
       const kind = str(input.kind ?? "skill", "kind", 12);
       if (!HARNESS_ASSET_KINDS.has(kind)) throw new HttpError(400, `kind 는 ${[...HARNESS_ASSET_KINDS].join("|")} 만 허용됩니다`);
       const harness = input.harness === undefined ? "all" : str(input.harness, "harness", 12);
-      if (!HOOK_HARNESSES.has(harness)) throw new HttpError(400, "harness 는 claude|codex|openclaw|all");
+      if (!HOOK_HARNESSES.has(harness)) throw new HttpError(400, HOOK_HARNESSES_MSG);
       const label = input.label == null ? undefined : str(input.label, "label", 200).trim();
       const description = str(input.description ?? "", "description", 2000);
       const body = str(input.body ?? "", "body", 262144);

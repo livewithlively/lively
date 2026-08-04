@@ -45,6 +45,10 @@ const HOME = process.env.LIVELY_HOME || homedir();
 const LIVELY = join(HOME, ".lively");
 const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || join(HOME, ".claude");
 const CODEX_CFG = join(HOME, ".codex", "config.toml");
+// opencode 는 XDG 규약 — `~/.opencode` 가 아니다. `XDG_CONFIG_HOME || homedir()/.config` + 앱이름이고
+//  이 계산은 플랫폼 무관이다(#1519 실측). 설치기·제거기와 같은 계산이어야 진단이 실제 배선을 본다.
+const OPENCODE_DIR = join(process.env.LIVELY_HOME ? join(HOME, ".config") : (process.env.XDG_CONFIG_HOME || join(HOME, ".config")), "opencode"); // LIVELY_HOME 격리 우선(설치기와 동일)
+const OPENCODE_PLUGIN = join(OPENCODE_DIR, "plugin", "lively.js");
 // 자동 업데이터(self-update.mjs)와 **같은 필수 훅 목록**을 쓴다 — 손상 번들 판정 기준이 갈리면 안 된다.
 //  self-update.mjs 자신은 목록에 없다(구 게이트웨이로 롤백 시 '손상'으로 오판해 영구 고착되는 걸 막기 위함 — #858).
 const REQUIRED_HOOKS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs"];
@@ -291,6 +295,9 @@ function detectHarnesses() {
     if (s.includes(".lively/hooks/") || s.includes(".lively\\hooks\\")) out.add("claude");
   } catch { /* */ }
   try { if (readFileSync(CODEX_CFG, "utf8").includes("lively-managed")) out.add("codex"); } catch { /* */ }
+  // opencode: 배선의 신호는 **어댑터 파일**이다(설정 파일은 opencode 가 빈 것도 만들어서 신호가 약하다).
+  if (has("opencode")) out.add("opencode");
+  try { if (existsSync(OPENCODE_PLUGIN)) out.add("opencode"); } catch { /* */ }
   return [...out];
 }
 
@@ -795,6 +802,11 @@ async function gatherStatus() {
       //  status 가 "✓ 배선"이라고 거짓 보고했다 — 파일에 우리 센티넬은 있는데 codex 는 파싱 실패로 아예 안 떴다.
       //  (한 줄의 문법 오류가 파일 전체를 무효화하는 게 TOML 이라, '우리 블록이 있다'는 '동작한다'가 아니다.)
       codex: { installed: has("codex"), wired: false, mcp: null, mcpConnected: null, configOk: null, transport: null, assets: null },
+      // opencode 도 codex 와 같은 깊이로 본다 — 설정에 **알 수 없는 top-level 키가 있으면 아예 안 뜨므로**
+      //  ('배선됨'과 '동작함'이 다른 구조가 codex 와 같다) configOk 축을 함께 둔다.
+      //  mcp 초기값이 null 인 것도 codex 와 같은 이유다: 설정을 **못 읽었을 때**(주석 든 .jsonc 등)를
+      //  '미등록'으로 단정하면 "lively update" 헛다리 조치를 부른다. 모르면 물음표로 적는다.
+      opencode: { installed: has("opencode"), wired: false, mcp: null, mcpConnected: null, configOk: null, transport: null, assets: null },
     },
     hooks: { installed: 0, expected: REQUIRED_HOOKS.length },
   };
@@ -847,6 +859,30 @@ async function gatherStatus() {
     }
     // 그 외(구버전 codex 등 출력 미상) → configOk·mcp 를 그대로 null/false 로 둔다(판정 불가를 단정하지 않는다).
   }
+  // opencode — 배선 신호는 어댑터 파일, MCP 등록은 설정 파일에서 직접 읽는다(파일 읽기라 비용 0).
+  //  연결 여부만 `opencode mcp list` 로 확인한다. ⚠ 그 명령은 등록된 **모든** MCP 를 실제로 연결하므로
+  //   claude 의 `mcp list` 와 같은 비용 문제가 있다(#1431) — opencode 엔 `mcp get` 이 없어 대안이 없으니
+  //   타임아웃으로 bound 하고, 못 읽으면 null(모름)로 둔다. 모르는 걸 pass/fail 로 단정하지 않는다.
+  try { st.harness.opencode.wired = existsSync(OPENCODE_PLUGIN); } catch { /* */ }
+  {
+    const cfgPath = [join(OPENCODE_DIR, "opencode.json"), join(OPENCODE_DIR, "opencode.jsonc")].find((p) => existsSync(p));
+    // 설정 파일이 **아예 없다** = 우리가 배선한 적 없다 → 미등록(확정). 파일은 있는데 못 읽는 건 다른 얘기라 아래서 null 유지.
+    if (!cfgPath) st.harness.opencode.mcp = false;
+    if (cfgPath) {
+      try {
+        const cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
+        st.harness.opencode.mcp = !!(cfg && cfg.mcp && cfg.mcp.lively);
+        st.harness.opencode.transport = st.harness.opencode.mcp ? (cfg.mcp.lively.type || null) : null;
+        st.harness.opencode.configOk = true;              // 우리가 읽을 수 있는 형태 — opencode 도 읽는다
+      } catch { /* 주석 든 .jsonc 등 — 우리가 못 읽었을 뿐 opencode 는 읽을 수 있다 → null 유지(모름) */ }
+    }
+  }
+  // ⚠ 연결 확인은 **하지 않는다.** opencode 엔 `mcp get`(우리 서버 하나만 보기)이 없고 `mcp list` 뿐인데,
+  //  그건 ① 등록된 **모든** MCP 를 실제로 연결하고(#1431 에서 claude 쪽으로 이미 겪은 비용) ② opencode 를
+  //  띄우는 순간 **설정 디렉터리를 만든다**(plugin/·package.json·node_modules). 즉 진단이 상태를 바꾼다.
+  //  실측: 이 호출 때문에 `lively status` 를 돌리는 테스트들이 XDG 경로를 오염시켰다.
+  //  → 등록 여부는 위에서 **설정 파일을 읽어** 확정하고, 연결은 `null`(모름)로 둔다. 모르는 걸 아는 척하지
+  //   않는 게 이 화면의 규칙이고(codex 의 enabled 를 null 로 둔 것과 같은 이유), 부작용 없는 진단이 우선이다.
   if (!gw) { st.gateway.error = "게이트웨이 미설정"; return st; }
   if (!tok) { st.gateway.error = "로그인 필요"; return st; }
   try {
@@ -867,7 +903,7 @@ async function gatherStatus() {
     //   (자산 sync 는 실패해도 조용하다 — 세션을 막지 않는 게 설계라서. 그래서 '조용한 실패'가 기본값이다.)
     //  로컬 0 / 서버 N 이면 그 머신에서 materialize 가 한 번도 성공한 적 없다는 뜻이고, 그게 곧 신고 전에 잡을 신호다.
     const manifest = (() => { try { return JSON.parse(readFileSync(join(LIVELY, "managed-harness-assets.json"), "utf8")) || {}; } catch { return {}; } })();
-    for (const h of ["claude", "codex"]) {
+    for (const h of ["claude", "codex", "opencode"]) {
       if (!st.harness[h].installed) continue;               // 안 깔린 하네스는 물어볼 것도 없다
       try {
         const r = await api(`/api/ui/org/runner/assets?harness=${h}`, { timeoutMs: 8000 });
@@ -1003,17 +1039,35 @@ async function cmdStatus(opts) {
   const cxMcp = cx.installed && cx.configOk !== false
     ? (cx.mcp === null ? `   ${dim("? MCP 등록")}` : `   ${mark(cx.mcp)} MCP 등록${cx.mcp && cx.transport ? dim(`(${cx.transport})`) : ""}`) : "";
   say(`  codex         ${mark(cx.installed)} 설치   ${cxWired}${cxMcp}${connOf(cx)}${assetsOf(cx)}`);
+  // opencode — codex 와 같은 형태. 배선 신호는 플러그인 어댑터 파일이다.
+  //  ⚠ 자산 수에 `~/.claude/skills` 자동 로드분은 안 잡힌다(#1519 결정: 스킬 격리 안 함) — 그 사실을 아래 안내에 담는다.
+  const oc = st.harness.opencode;
+  if (oc.installed || oc.wired) {
+    const ocWired = oc.configOk === false ? `${red("✘")} 배선 ${red("(opencode.json 을 opencode 가 못 읽음)")}` : `${mark(oc.wired)} 배선`;
+    // codex 와 같은 원칙 — null(판정 못 함)을 `–` 로 뭉개면 미등록과 구별이 안 된다.
+    const ocMcp = oc.configOk !== false
+      ? (oc.mcp === null ? `   ${dim("? MCP 등록")}` : `   ${mark(oc.mcp)} MCP 등록${oc.mcp && oc.transport ? dim(`(${oc.transport})`) : ""}`)
+      : "";
+    say(`  opencode      ${mark(oc.installed)} 설치   ${ocWired}${ocMcp}${connOf(oc)}${assetsOf(oc)}`);
+  }
   if (st.kit.autoUpdate !== null) say(`  자동 업데이트 ${st.kit.autoUpdate ? green("켜짐") : yellow("꺼짐")}`);
   if (st.project) { say(""); renderProjectStatus(st.project); }
   say("");
   if (!st.account.authenticated) say(dim("  → ") + bold("lively login") + dim(" 으로 시작하세요."));
   else if (st.kit.remote && !st.kit.current) say(dim("  → ") + bold("lively update") + dim(" 로 최신화할 수 있습니다."));
   else if (st.harness.codex.configOk === false) say(dim("  → codex 가 config.toml 을 못 읽습니다(그 파일의 MCP·훅이 전부 무효): ") + bold("lively update"));
+  else if (st.harness.opencode.configOk === false) say(dim("  → opencode 가 opencode.json 을 못 읽습니다(그 파일의 MCP·플러그인이 전부 무효): ") + bold("lively update"));
   else if (st.harness.claude.installed && !st.harness.claude.mcp) say(dim("  → MCP 등록이 안 돼 있습니다: ") + bold("lively update"));
   else {
     // 자산은 설치기가 아니라 **세션 시작 훅**이 내린다 — 업데이트만 하고 세션을 안 켜면 0 인 채로 남는다.
-    const short = ["claude", "codex"].filter((h) => st.harness[h].assets && st.harness[h].assets.local < st.harness[h].assets.server);
+    const short = ["claude", "codex", "opencode"].filter((h) => st.harness[h].assets && st.harness[h].assets.local < st.harness[h].assets.server);
     if (short.length) say(dim("  → 조직 자산이 덜 깔렸습니다(") + short.join("·") + dim("). 새 세션을 한 번 켜면 내려옵니다 — 그래도 그대로면 ") + bold("lively doctor"));
+    // ⚠ 진단이 거짓말하지 않게 — opencode 는 `~/.claude/skills` 를 **자동으로도** 읽는다(#1519 결정: 스킬 격리 안 함).
+    //  위 수치는 우리가 심은 매니페스트만 센 것이라, opencode 세션에서 실제로 보이는 스킬은 이보다 많을 수 있다.
+    //  이 한 줄이 없으면 "opencode 자산 0/26" 을 보고 고장으로 오해한다(실제로는 claude 쪽에서 전부 보인다).
+    if (st.harness.opencode.assets && st.harness.opencode.installed) {
+      say(dim("     (opencode 는 ~/.claude/skills 도 함께 읽습니다 — 위 수치는 opencode 전용 자리에 심은 것만 셉니다)"));
+    }
   }
 }
 
@@ -1067,6 +1121,24 @@ async function cmdDoctor(opts) {
     if (st.harness.codex.configOk !== false && st.harness.codex.mcp !== null) {
       chk("Codex MCP 등록", st.harness.codex.mcp,
         st.harness.codex.mcp ? `lively 등록됨${st.harness.codex.transport ? ` (${st.harness.codex.transport})` : ""}` : "미등록", "lively update");
+    }
+  }
+  // opencode — codex 와 같은 3축(배선·config 유효·MCP 등록). 배선 신호는 플러그인 어댑터 파일이다.
+  if (st.harness.opencode.installed || st.harness.opencode.wired) {
+    chk("OpenCode 배선", st.harness.opencode.wired,
+      st.harness.opencode.wired ? "plugin/lively.js 있음" : "어댑터 미설치 — 훅이 하나도 안 돕니다", "lively install");
+    if (st.harness.opencode.configOk !== null) {
+      chk("OpenCode config 유효", st.harness.opencode.configOk,
+        st.harness.opencode.configOk ? "opencode 가 읽음" : "opencode 가 opencode.json 을 못 읽습니다 — 그 파일의 MCP·플러그인이 전부 무효입니다",
+        "lively update");
+    }
+    if (st.harness.opencode.configOk !== false && st.harness.opencode.mcp !== null) {
+      chk("OpenCode MCP 등록", st.harness.opencode.mcp,
+        st.harness.opencode.mcp ? `lively 등록됨${st.harness.opencode.transport ? ` (${st.harness.opencode.transport})` : ""}` : "미등록", "lively update");
+      if (st.harness.opencode.mcp && st.harness.opencode.mcpConnected !== null) {
+        chk("OpenCode MCP 연결", st.harness.opencode.mcpConnected,
+          st.harness.opencode.mcpConnected ? "lively 연결됨" : "등록은 됐지만 연결 실패 — 게이트웨이 도달·VPN·프록시 확인", "lively doctor");
+      }
     }
   }
   // 조직 자산이 이 머신에 실제로 깔렸나(#1475) — 서버가 주는 수 ↔ 우리가 심은 수. 어긋나면 신고 전에 여기서 드러난다.

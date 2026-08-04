@@ -168,7 +168,10 @@ function verifyBundle(root) {
   //  않는다 — macOS 게이트웨이 번들엔 `._<name>` AppleDouble 쓰레기가 섞일 수 있는데(#858 회귀, tar/xattr),
   //  설치기는 명시된 이름만 복사하므로 그 쓰레기는 애초에 배포되지 않는다. 그걸 검사해 전체를 막는 건 과잉 차단이었다.
   //  (번들 자체를 깨끗하게 만드는 건 서버측 COPYFILE_DISABLE — 여기선 '설치될 파일'만 본다는 원칙으로 견고화.)
-  const runners = [...REQUIRED_HOOKS, "self-update.mjs"].filter((f) => existsSync(join(hooksDir, f)));
+  //  harness-registry.mjs 는 REQUIRED_HOOKS 에 **넣지 않는다**(self-update.mjs 와 같은 이유 — 그게 없는 구
+//   번들을 '손상'으로 오판하면 롤백이 막힌다). 대신 **있으면 구문검사한다**: 훅들이 import 하는 모듈이라
+//   여기서 깨진 채 통과하면 설치 후 sync-harness-assets 가 통째로 죽는다(구문오류는 import 시점에 터진다).
+  const runners = [...REQUIRED_HOOKS, "self-update.mjs", "harness-registry.mjs"].filter((f) => existsSync(join(hooksDir, f)));
   for (const p of [installer, ...runners.map((f) => join(hooksDir, f))]) {
     try { execFileSync(process.execPath, ["--check", p], { stdio: "ignore", timeout: 20_000 }); }
     catch { throw new Error(`번들 손상 — 구문 오류: ${p.replace(root, "")}`); }

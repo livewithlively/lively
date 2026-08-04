@@ -16,7 +16,7 @@ import { tmpdir, homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const KIT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SANDBOX = mkdtempSync(join(tmpdir(), "codex-wiring-test-"));
@@ -35,7 +35,11 @@ const REAL_CODEX_CFG = join(homedir(), ".codex", "config.toml");
 const REAL_BEFORE = digest(REAL_CODEX_CFG);
 
 // ── 발행물 번들 구성(generator/build-context.mjs publish() 의 배치를 최소 재현) ──────────────
-const HOOKS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs"];
+// 번들에 넣을 훅 파일 목록은 **설치기의 정본을 따른다**(사본을 두지 않는다 — 훅이 하나 늘 때 여기가 빠지면
+//  이 테스트가 "발행물에 훅 누락"으로 죽는다). DIRECT_RUN 가드가 있어 import 해도 설치는 돌지 않는다.
+//  ⚠ pathToFileURL 필수 — ESM 의 dynamic import 는 인자를 **URL 로** 해석해서, 윈도우 절대경로(`C:\…`)는
+//   드라이브문자가 스킴으로 오해돼 ERR_UNSUPPORTED_ESM_URL_SCHEME 로 죽는다(mac/linux 에선 우연히 통과한다).
+const { HOOK_SCRIPTS: HOOKS } = await import(pathToFileURL(join(KIT, "setup", "user-install.mjs")).href);
 function makeBundle({ withCli = true, mcpServers = [], autoApprove = ["mcp__lively__whoami"] } = {}) {
   rmSync(BUNDLE, { recursive: true, force: true });
   mkdirSync(join(BUNDLE, ".claude", "hooks"), { recursive: true });

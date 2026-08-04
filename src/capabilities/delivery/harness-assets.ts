@@ -15,7 +15,7 @@ import {
   clearAssetPref, clearAssetPrefs, getOrgHook, getOrgHarnessAsset, type AssetPrefKind, type HookHarness, type AssetKind
 } from "../../org/store.js";
 import { effectiveVisible, targetsMember } from "../../org/asset-visibility.js"; // #699 per-member 유효 가시성 규칙(SoT)
-import { HARNESS_ASSET_KINDS, HOOK_HARNESSES, assertPrefKind, parseAssetFrontmatter, parseTargetMembers, restRead, restRuntime, slug, str, wctx } from "./shared.js";
+import { HARNESS_ASSET_KINDS, HOOK_HARNESSES, HOOK_HARNESSES_MSG, assertPrefKind, parseAssetFrontmatter, parseTargetMembers, restRead, restRuntime, slug, str, wctx } from "./shared.js";
 
 // ── 시딩 스킬 편집 경고(#878) — 지식 seedSyncWarning(knowledge.ts)과 대칭. 시딩되는 스킬(org_harness_asset)을
 //  이 게이트웨이에서 고치면, 고객이 받는 본문의 SoT 는 이 DB 가 아니라 src/org/delivery/default-content.ts(capture 스냅샷)다.
@@ -47,7 +47,7 @@ export const harnessAssetsCapabilities: Capability[] = [
       const kind = input.kind === undefined ? undefined : str(input.kind, "kind", 12);
       if (kind !== undefined && !HARNESS_ASSET_KINDS.has(kind)) throw new HttpError(400, `kind 는 ${[...HARNESS_ASSET_KINDS].join("|")} 만 허용됩니다`);
       const harness = input.harness === undefined ? undefined : str(input.harness, "harness", 12);
-      if (harness !== undefined && !HOOK_HARNESSES.has(harness)) throw new HttpError(400, "harness 는 claude|codex|openclaw|all");
+      if (harness !== undefined && !HOOK_HARNESSES.has(harness)) throw new HttpError(400, HOOK_HARNESSES_MSG);
       // ⚠ 부분수정 보존 — 미전송 필드는 **undefined 로 넘겨 기존 값을 지킨다**. 예전엔 `input.x ?? ""` 라
       //  summary 만 고치려고 id+summary 만 보내면 description·body 가 빈 문자열로 덮여 **본문이 날아갔다**.
       //  (store 의 `a.field ?? before.field` 는 undefined 일 때만 보존한다.)

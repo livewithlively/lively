@@ -20,6 +20,11 @@ import { execFileSync, spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+// 하네스별 규약(주입 봉투·배선 방식·자동승인 표면·자산 재로드)은 표에서 온다 — 하네스 이름으로 분기하지 않는다.
+//  ⚠ HARNESS 상수 자체는 **종전 계산식을 유지**한다(빈 문자열 가능): 이 값은 self-update 인자로도 넘어가는데,
+//   여기서 "claude" 로 기본값을 채우면 종전에 인자를 안 넘기던 경로가 넘기게 되어 동작이 바뀐다.
+//   표 조회(harness())가 알아서 claude 로 폴백하므로 분기 결과는 종전과 같다.
+import { harness } from "./harness-registry.mjs";
 
 const OFF = process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1";
 // 읽기전용 세션(#1007+) — 세션 pane 에 -e LIVELY_MODE=readonly 로 주입된다(게이트웨이 헤더 x-lively-mode 와 같은 값).
@@ -57,9 +62,10 @@ const HARNESS = (() => {
 //   opts.reloadSkills(Claude 전용, 자산 sync 자기치유가 이번 세션에 스킬을 materialize 했을 때):
 //   raw 텍스트론 신호를 실을 수 없어 JSON 봉투(additionalContext+reloadSkills)로 전환 — 공식 SessionStart 계약.
 function emitContext(text, opts = {}) {
-  const reload = !!opts.reloadSkills && HARNESS !== "codex";
+  const h = harness(HARNESS);
+  const reload = !!opts.reloadSkills && h.reloadAssets;
   if (!text && !reload) return;
-  if (HARNESS === "codex" || reload) {
+  if (h.contextEnvelope === "json" || reload) {
     const out = { hookEventName: "SessionStart" };
     if (text) out.additionalContext = text;
     if (reload) out.reloadSkills = true;
@@ -228,6 +234,13 @@ export function reconcileCodexAutoApprove(want) {
   } catch { return false; }                                  // fail-soft
 }
 
+// auto-approve reconcile 전략 — 표의 autoApprove.kind → 실제 반영 함수. 여기 없는 kind 는 no-op 이고,
+//  그건 "그 하네스는 아직 자동승인 배선이 없다"를 뜻한다(조용히 claude 표면에 쓰는 것보다 안전하다).
+const AUTO_APPROVE = {
+  "settings-allow": (dir, want) => reconcileClaudeAutoApprove(dir, want),
+  "toml-approval": (_dir, want) => reconcileCodexAutoApprove(want),
+};
+
 // kit 훅 중복 dedup(자기치유 확장, #742) — 설치 세대 간 command 표기 드리프트(`node` vs `"node"` vs 번들 런타임
 //  절대경로)로 같은 훅이 여러 벌 배선된 settings 를 세션 시작마다 한 벌로 수렴시킨다(v0.1.131 설치기 dedup 과
 //  동일 정체성 규칙 = 스크립트 파일명(+인자)+matcher — 설치기는 설치 시에만 돌므로, 재설치 없는 머신은 이게 정리).
@@ -239,7 +252,8 @@ const kitHookId = (cmd) => {
   return m ? `${m[1]}|${m[2].trim()}` : null;
 };
 function dedupKitWiring() {
-  if (HARNESS === "codex") return false; // codex 배선은 config.toml 센티널 — 이 dedup 은 Claude settings 전용
+  // 이 dedup 은 settings.json 머지 방식 배선에만 성립한다(센티넬 블록·플러그인 파일 배선은 대상 아님).
+  if (harness(HARNESS).wiring !== "settings-merge") return false;
   try {
     const sp = join(homedir(), ".claude", "settings.json");
     if (!existsSync(sp)) return false;
@@ -291,7 +305,7 @@ function dedupKitWiring() {
 //  Codex 배선은 config.toml 센티넬(설치 시점 관리)이라 제외. 러너 파일이 없는 구형 로컬 kit 은 건드리지 않는다
 //  (없는 파일을 배선하면 매 세션 훅 에러) — 그 경우는 kit 재설치가 경로.
 function healAssetSyncWiring() {
-  if (HARNESS === "codex") return false;
+  if (harness(HARNESS).wiring !== "settings-merge") return false;   // settings 머지 배선만 자기치유 대상
   try {
     const runner = join(homedir(), ".lively", "hooks", "sync-harness-assets.mjs");
     if (!existsSync(runner)) return false;
@@ -356,7 +370,7 @@ export function reconcileExtPullWiring(hooks, { extPullCmd, pullTools }) {
 //  codex 제외(config.toml 센티널 관리 — 동적 matcher 밖, 자체설치 MCP 커버는 Claude 한정). 전 경로 fail-soft.
 //  extPullCmd 는 **메인 work-flag 엔트리의 command 를 그대로 재사용** + ' --ext-pull' — node 토큰·경로 표기를 잇는다.
 export function applyExtPullWiring(pullTools) {
-  if (HARNESS === "codex") return false;
+  if (harness(HARNESS).wiring !== "settings-merge") return false; // 동적 matcher 는 settings 머지 배선 전용
   try {
     const sp = join(homedir(), ".claude", "settings.json");
     if (!existsSync(sp)) return false;
@@ -408,8 +422,10 @@ async function refreshRuntimeConfig() {
     if (Array.isArray(rc.auto_approve)) {
       const want = rc.auto_approve.filter((s) => typeof s === "string" && s.startsWith("mcp__lively__"));
       writeFileSync(join(dir, "auto-approve.json"), JSON.stringify({ allow: want }, null, 2));
-      if (HARNESS === "codex") reconcileCodexAutoApprove(want);
-      else reconcileClaudeAutoApprove(dir, want);
+      //  어느 표면에 반영할지는 표의 autoApprove.kind 가 정한다(하네스 이름으로 분기하지 않는다).
+      //  아직 전략이 없는 하네스(opencode: config-permission)는 no-op — 캐시 파일만 남고 반영은 그 하네스 배선 작업에서.
+      const reconcile = AUTO_APPROVE[harness(HARNESS).autoApprove.kind];
+      if (reconcile) reconcile(dir, want);
     }
     // work-roots 는 동적 갱신하지 않는다 — 디렉토리 경로 노출 회피(scope-null endpoint 가 work_roots 미반환).
     //  중앙 work-roots 는 설치 번들(.lively/work-roots)/재설치로만 적용된다(자동 업데이트가 그 재설치를 돌린다).
