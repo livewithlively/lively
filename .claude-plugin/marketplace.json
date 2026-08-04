@@ -9,7 +9,7 @@
     {
       "name": "lively",
       "source": "./plugins/lively",
-      "category": "knowledge",
+      "category": "productivity",
       "tags": ["knowledge", "context", "wiki", "self-hosted", "mcp"],
       "description": "조직의 지식·프로젝트·도메인맵을 세션에 잇는다. 게이트웨이 MCP 연결 + 세션 시작 시 조직 맥락 자동 주입 + 운영 스킬 번들."
     }
