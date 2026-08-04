@@ -16,7 +16,7 @@ import { readAuthRequest, approveAuthRequest, denyAuthRequest } from "../store/o
 import { grantableScopes } from "./grant-util.js";
 import { parseSessionCookie, userFromSession, createSession, sessionCookie } from "../../auth/sessions.js";
 import { verifyLogin } from "../../auth/local-accounts.js";
-import { activeProviders } from "../../auth/providers.js"; // #1520 외부 IdP 버튼(로컬 폼은 폴백으로 유지)
+import { activeProviders, type AuthProviderInfo } from "../../auth/providers.js"; // #1520 외부 IdP 버튼(로컬 폼은 폴백으로 유지)
 import { esc, page, errorPage } from "../../auth/auth-pages.js"; // 페이지 셸 공용(#1520 계정 연결 화면과 동일 스타일)
 import { LivelyClientsStore, isCimdClientId } from "./oauth-clients.js";
 import { logger } from "../../log.js";
@@ -70,7 +70,7 @@ export function registerOAuthConsent(app: express.Express): void {
 
       const sid = parseSessionCookie(req.headers.cookie);
       const user = sid ? await userFromSession(sid) : null;
-      if (!user) { res.send(loginView(rid, disp, notice)); return; }
+      if (!user) { res.send(loginView(rid, disp, notice, undefined, await oidcProvider())); return; }
 
       const grant = grantableScopes({ memberScopes: user.scopes, allowed: reqRow.scopes.length ? reqRow.scopes : null });
       res.send(consentView(rid, disp, user.email || user.userId, grant, reqRow.resource, notice));
@@ -96,7 +96,7 @@ export function registerOAuthConsent(app: express.Express): void {
         if (!result.ok) {
           const client = await clients.getClient(reqRow.client_id);
           res.status(401).send(loginView(rid, clientDisplay(reqRow.client_id, client?.client_name ?? null),
-            "", "이메일 또는 비밀번호가 올바르지 않습니다."));
+            "", "이메일 또는 비밀번호가 올바르지 않습니다.", await oidcProvider()));
           return;
         }
         const { sessionId, expiresAt } = await createSession(result.memberId,
@@ -146,16 +146,21 @@ function clientBox(disp: { name: string; origin: string }): string {
     `<dt>출처</dt><dd>${esc(disp.origin)}</dd></div>`;
 }
 
+// 활성 외부 IdP 하나(없으면 null) — 렌더러가 sync 라 호출부에서 미리 구한다.
+const oidcProvider = async (): Promise<AuthProviderInfo | null> =>
+  (await activeProviders()).find((p) => p.kind === "oidc" && p.enabled) ?? null;
+
 function noticeBox(notice: string, error?: string): string {
   if (error) return `<div class="box err">${esc(error)}</div>`;
   return notice ? `<div class="box warn">${esc(notice)}</div>` : "";
 }
 
-function loginView(rid: string, disp: { name: string; origin: string }, notice: string, error?: string): string {
+// oidc: 활성 제공자 중 외부 IdP(없으면 null). **호출부가 await 해서 넘긴다** — 이 함수는 sync 렌더러다.
+function loginView(rid: string, disp: { name: string; origin: string }, notice: string, error: string | undefined,
+  oidc: AuthProviderInfo | null): string {
   // 외부 IdP(#1520)가 켜진 배포면 여기서도 그 버튼을 준다. 안 그러면 조직 지메일만 쓰는 고객이
   //  챗 커넥터를 붙일 때마다 별도 로컬 비밀번호를 요구받아, OIDC 를 붙인 목적의 절반이 무너진다.
   //  로그인 후 이 동의 화면(rid 그대로)으로 되돌아온다 — start 가 받는 to 는 same-origin 경로만 통과한다.
-  const oidc = activeProviders().find((p) => p.kind === "oidc" && p.enabled);
   const oidcForm = oidc
     ? `<form method="get" action="/api/ui/auth/oidc/start">` +
       `<input type="hidden" name="to" value="${esc(`${OAUTH_CONSENT_PATH}?rid=${rid}`)}">` +

@@ -26,6 +26,7 @@ import { injectionMap } from './admin-injection.js';
 import { storageEditor } from './admin-storage.js';
 import { logsEditor, sessionShareEditor, sessionsAdminEditor } from './admin-ops.js';
 import { embeddingsEditor } from './admin-embeddings.js';
+import { loginIdpEditor } from './admin-login-idp.js'; // #1520 회사 계정(OIDC) 로그인 설정
 // ── #1313 R40 분해 ④ — 도메인 패널 B. 셸은 아래 등록 블록에서만 이들을 부른다. ──
 import { mcpEditor } from './admin-mcp-servers.js';
 import { feedTargetsEditor, projectOutboundEditor } from './admin-outbound.js';
@@ -139,6 +140,8 @@ const ADMIN_SECTIONS = [
   //  둘 다 관리자 전용 — ADMIN_ONLY 에 넣어 비관리자에겐 숨고, 관리자에겐 '관리자' 배지가 붙는다.
   { key: 'member-add', label: '구성원 추가', meaning: null, group: 'org' },
   { key: 'member-access', label: '구성원 권한 관리', meaning: null, group: 'org' },
+  // 회사 계정 로그인(#1520) — '누가 어떻게 들어오나'라서 구성원 옆에 둔다. 시크릿을 다루므로 ADMIN_ONLY.
+  { key: 'login-idp', label: '로그인 · 회사 계정', meaning: null, group: 'org' },
   // ── AI 맥락 ──
   //  항상-주입 섹션 문서(injection=always)는 지도에서 직접 추가/편집/삭제/재정렬한다(#335).
   { key: 'injection-map', label: '세션 주입', meaning: null, group: 'context' },
@@ -238,7 +241,7 @@ const SECTION_EXIT = { 'review-queue': '#/knowledge/review', 'wiki-categories': 
 // admin 권한 전용(쓰기·인프라·감사). #318 호출통계·#549 변경감사는 전 구성원의 변경·before/after 를 노출하므로 admin.
 // (증류기는 #1419 에서 [맥락 관리 ▸ 증류]로 이관 — 여기 목록에 없다. 서버 scope 도 memory(워킹레벨)라
 //  애초에 관리자 전용이 아니었다: 팀이 자기 채널의 증류 기준을 직접 조절하는 게 그 기능의 취지다.)
-const ADMIN_ONLY = ['member-add', 'member-access', 'credentials', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'logs', 'sessions', 'embeddings', 'automation', 'audit', 'session-share', 'visibility-axes'];
+const ADMIN_ONLY = ['member-add', 'member-access', 'login-idp', 'credentials', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'logs', 'sessions', 'embeddings', 'automation', 'audit', 'session-share', 'visibility-axes'];
 const RUNTIME_ONLY = ['agent-assets']; // runtime 권한 전용(멤버 머신에서 도는 것의 정의)
 // [도구]는 두 권한의 합집합 — 사내 API 도구·빌트인은 runtime, 외부 MCP 서버 등록은 admin. 둘 중 하나라도 있으면
 //  섹션을 보여주고, 안에서 각 서브탭을 권한별로 켠다(구조상 한 섹션=한 scope 전제가 깨지는 유일한 자리라 명시한다).
@@ -389,6 +392,7 @@ registerPanel('logs', (detail, data) => logsEditor(detail, data));
 registerPanel('sessions', (detail, data) => sessionsAdminEditor(detail, data));
 registerPanel('session-share', (detail, data) => sessionShareEditor(detail, data));
 registerPanel('embeddings', (detail, data) => embeddingsEditor(detail, data));
+registerPanel('login-idp', (detail, data) => loginIdpEditor(detail, data));
 registerPanel('repos', (detail, data) => reposPanel(detail, data));
 registerPanel('visibility-axes', (detail) => visibilityAxesPanel(detail));
 // ── ② 서브패널 제자리 재렌더 ──
