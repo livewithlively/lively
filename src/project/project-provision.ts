@@ -511,6 +511,19 @@ export async function provisionProjectRepos(
 // add-dir — 세션 cwd(프로젝트 폴더) 밖의 레포 클론을 하네스가 접근하도록 등록(work.mjs writeAddDir 서버 포팅, 멱등).
 //  Claude Code: 프로젝트 폴더의 .claude/settings.local.json(additionalDirectories, host-local·비동기화).
 //  Codex: ~/.codex/config.toml 의 [sandbox_workspace_write] writable_roots(이미 있는 경로는 건너뜀).
+// 옛 버전이 이스케이프 없이 박은 윈도우 경로 복구 — 그 파일은 codex 가 통째로 못 읽는 상태라 사용자는
+//  손으로 고치기 전엔 codex 를 아예 못 켠다(2026-08-04 윈도우 실기기). 우리가 만든 고장이므로 우리가 되돌린다.
+//  대상은 `writable_roots = [...]` 줄뿐 — 사용자의 다른 줄은 불가침.
+//  ⚠ 유효 이스케이프를 **통째로 소비**해야 멱등이다. 백슬래시를 하나씩 lookahead 로 보면 이미 올바른 `\\Users` 의
+//   두 번째 백슬래시가 '\U 로 시작하는 잘못된 이스케이프'로 보여 재실행마다 백슬래시가 늘어난다(실측).
+//  ⚠ kit/setup/work.mjs 의 동명 함수와 **같은 규칙을 유지**할 것(두 경로가 같은 파일을 쓴다).
+const TOML_ESC = /\\\\|\\["bfnrt]|\\u[0-9a-fA-F]{4}|\\U[0-9a-fA-F]{8}|\\/g;
+export function repairTomlWinPaths(toml: string): string {
+  return String(toml).replace(/^([ \t]*writable_roots[ \t]*=[ \t]*)(\[[^\]\n]*\])/gm, (_line, head: string, arr: string) =>
+    head + arr.replace(/"(?:[^"\\]|\\.)*"/g, (lit) =>
+      lit.replace(TOML_ESC, (m) => (m === "\\" ? "\\\\" : m))));
+}
+
 async function writeAddDir(projDir: string, projectId: number, targets: string[]): Promise<void> {
   if (!targets.length) return;
   // Claude Code — 프로젝트-로컬 설정
@@ -524,13 +537,20 @@ async function writeAddDir(projDir: string, projectId: number, targets: string[]
   cc.additionalDirectories = [...dirs];
   await fsp.writeFile(ccFile, JSON.stringify(cc, null, 2) + "\n");
   // Codex — 박스 사용자 전역 config(이미 등재된 경로는 제외; 미설치/실패는 무해)
+  //  ⚠ 경로는 **반드시 JSON.stringify** 로 — TOML basic string 은 백슬래시를 이스케이프로 읽으므로 윈도우 경로를
+  //   날것으로 넣으면 `C:\Users\…` 의 `\U` 가 유니코드 이스케이프로 해석돼 `too few unicode value digits` 로
+  //   **config.toml 전체가 로드 실패**한다(= codex 가 아예 안 뜬다). mac/linux 에선 절대 재현되지 않는다.
   try {
     const cxFile = path.join(os.homedir(), ".codex", "config.toml");
     let toml = ""; try { toml = await fsp.readFile(cxFile, "utf8"); } catch { /* 신규 */ }
-    const fresh = targets.filter((t) => !toml.includes(t));
+    const before = toml;
+    toml = repairTomlWinPaths(toml);           // 옛 버전이 남긴 깨진 줄 복구
+    // 중복 판정도 **기록되는 표기**로 — 날것 경로로 찾으면 윈도우에선 매번 못 찾아 같은 경로가 계속 쌓인다.
+    const fresh = targets.filter((t) => !toml.includes(JSON.stringify(t)) && !toml.includes(`"${t}"`));
+    if (!fresh.length && toml !== before) await fsp.writeFile(cxFile, toml); // 복구만 필요한 경우
     if (fresh.length) {
       await fsp.mkdir(path.dirname(cxFile), { recursive: true });
-      const roots = fresh.map((t) => `"${t}"`).join(", ");
+      const roots = fresh.map((t) => JSON.stringify(t)).join(", ");
       const ins = `[sandbox_workspace_write]\n# lively: 프로젝트 ${projectId} 레포\nwritable_roots = [${roots}]`;
       const block = toml.includes("[sandbox_workspace_write]") ? toml.replace(/\[sandbox_workspace_write\]/, ins) : toml + "\n" + ins + "\n";
       await fsp.writeFile(cxFile, block);
