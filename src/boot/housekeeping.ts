@@ -9,6 +9,7 @@ import type { Server } from "node:http";
 import type { BearerVerifier } from "../auth/bearer.js";
 import { itemsPool } from "../db/client.js";
 import { reapDeviceAuth } from "../org/auth/device-auth.js";
+import { reapOAuth } from "../org/store/oauth.js";
 import { initAllSchemas } from "./schemas.js";
 import { ensureSelfRls } from "../db/self-rls.js";
 import { seedDefaultContent } from "../org/delivery/seed-content.js";
@@ -173,6 +174,8 @@ function startBackgroundSweeps(): void {
   setInterval(() => { void runAutoBackfillSweep(); }, 600_000).unref();
   // #880 device-auth reaper — 만료 1h 경과 pending 행 정리(user_code 회수). start/poll 이 lazy 백업도 함.
   setInterval(() => { void reapDeviceAuth().catch(() => { /* best-effort */ }); }, 600_000).unref();
+  // #1473 T2 OAuth reaper — 만료된 인가요청·인가코드 정리. 리프레시는 회전 사슬(도난 탐지 근거)이라 더 오래 둔다.
+  setInterval(() => { void reapOAuth().catch(() => { /* best-effort */ }); }, 600_000).unref();
   // #905 C1 — 세션이력 retention reap: session_share.retention_days 지나도록 손대지 않은 로그·청크 정리
   //  (session 레코드는 불멸). retention_days=0 이면 no-op. 일 단위 보존이라 6h 주기로 충분.
   setInterval(() => {

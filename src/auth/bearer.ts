@@ -3,6 +3,7 @@ import { InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.
 import type { LivelyUser } from "../context.js";
 import { verifyDbToken } from "../org/store.js";
 import { isScope, DANGEROUS_SCOPES, type Scope } from "./scopes.js";
+import { isOwnResource } from "./resource-id.js";
 import { logger } from "../log.js";
 
 const sha256Hex = (s: string): string => crypto.createHash("sha256").update(s).digest("hex");
@@ -16,6 +17,7 @@ export interface AuthInfo {
   clientId: string;
   scopes: string[];
   expiresAt?: number;
+  resource?: URL;   // RFC 8707 대상(SDK 규격 필드) — OAuth 발급분만 채워진다.
   extra?: Record<string, unknown>;
 }
 
@@ -50,12 +52,18 @@ function sanitizeStaticTokens(table: TokenTable): TokenTable {
   return table;
 }
 
-function authInfo(user: LivelyUser, token: string): AuthInfo {
+function authInfo(user: LivelyUser, token: string, over?: { expiresAt?: number | null; resource?: string | null }): AuthInfo {
+  // SDK 의 requireBearerAuth 는 expiresAt 을 **필수**로 본다(없으면 'Token has no expiration time' 401).
+  //  만료 없는 종전 토큰은 여기서 1년짜리 합성값을 주고, OAuth 발급분(짧은 수명)은 DB 값을 그대로 쓴다.
+  const expiresAt = over?.expiresAt ?? Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS;
+  let resource: URL | undefined;
+  if (over?.resource) { try { resource = new URL(over.resource); } catch { /* 형태 이상 → 미표기(검증은 이미 통과) */ } }
   return {
     token,
     clientId: user.userId,
     scopes: user.scopes,
-    expiresAt: Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS,
+    expiresAt,
+    resource,
     extra: user as unknown as Record<string, unknown>,
   };
 }
@@ -81,10 +89,24 @@ export class BearerVerifier {
     //    tokenHashPrefix 는 감사 상관추적용(회수 대상 즉시 특정 — 비밀 아님).
     if (token.startsWith("lvk_")) {
       const dbUser = await verifyDbToken(token);
-      if (dbUser) return authInfo(
-        { ...dbUser, tokenSource: "db", tokenHashPrefix: sha256Hex(token).slice(0, 12) } as LivelyUser,
-        token,
-      );
+      if (dbUser) {
+        // ★ audience 바인딩(#1473 T2, MCP 사양 MUST) — 남의 자원서버 앞으로 발급된 토큰은 받지 않는다(패스스루 금지).
+        //  resource 가 NULL 인 종전 토큰은 제약 없음(무회귀). OAuth 발급분만 여기서 걸린다.
+        if (!(await isOwnResource(dbUser.resource))) {
+          logger.warn({ clientId: dbUser.clientId, resource: dbUser.resource },
+            "다른 자원서버 앞으로 발급된 토큰 거부(audience 불일치)");
+          throw new InvalidTokenError("token audience does not match this resource server");
+        }
+        const { clientId, resource, expiresAt, ...identity } = dbUser;
+        return authInfo(
+          {
+            ...identity, tokenSource: "db", tokenHashPrefix: sha256Hex(token).slice(0, 12),
+            ...(clientId ? { oauthClientId: clientId } : {}),
+          } as LivelyUser,
+          token,
+          { expiresAt, resource },
+        );
+      }
     }
     throw new InvalidTokenError("invalid token"); // → 401
   }
