@@ -83,7 +83,7 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   // 활성 제공자 목록 — 로그인 화면이 어떤 버튼을 그릴지 묻는다. 라벨 외엔 아무 설정도 나가지 않는다.
   app.get("/api/ui/auth/providers", wrap(async (_req, res) => {
     res.setHeader("Cache-Control", "no-store");
-    res.json({ providers: activeProviders() });
+    res.json({ providers: await activeProviders() });
   }));
 
   // 인가 개시 — state/nonce/PKCE 를 만들어 저장하고 IdP 로 302. return_to 는 same-origin 경로만 통과한다.
@@ -91,7 +91,7 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   //  그때만 세션을 요구하고, 대상 구성원을 state 행에 못박는다(콜백이 쿼리스트링에 속지 않게).
   app.get("/api/ui/auth/oidc/start", wrap(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
-    const cfg = oidcConfig();
+    const cfg = await oidcConfig();
     if (!cfg) { res.status(404).json({ error: "OIDC 로그인이 이 배포에 설정되어 있지 않습니다" }); return; }
     const redirectUri = await oidcRedirectUri(req);
     if (!redirectUri) { res.status(500).json({ error: "게이트웨이 공개 주소를 확정할 수 없습니다" }); return; }
@@ -119,7 +119,7 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   app.get("/api/ui/auth/oidc/callback", wrap(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     const fail = (reason: string): void => { res.redirect(302, `/ui/#/login?error=${encodeURIComponent(reason)}`); };
-    const cfg = oidcConfig();
+    const cfg = await oidcConfig();
     if (!cfg) { fail("oidc_off"); return; }
     // 사용자가 IdP 화면에서 취소했거나 IdP 가 오류를 돌려준 경우 — code 없이 error 만 온다.
     if (req.query?.error) { fail("oidc_denied"); return; }
@@ -221,7 +221,7 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   app.get("/api/ui/me/logins", ...mw(null), wrap(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     const user = userOf(req);
-    const providers = activeProviders();
+    const providers = await activeProviders();
     res.json({
       ...(await oidcLinkStatus(user.userId)),
       oidcAvailable: providers.some((p) => p.kind === "oidc" && p.enabled),

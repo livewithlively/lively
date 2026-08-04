@@ -34,9 +34,45 @@ export interface OidcConfig {
   scopes: string;
 }
 
-// 설정 읽기 — 셋이 다 있어야 켜진다. 값이 없으면 null(제공자 미등록 → 로그인 화면에 버튼도 안 뜬다).
-//  매번 env 를 읽는다(캐시 없음): 호출 빈도가 로그인 시점뿐이라 비용이 없고, 재기동 없이 값을 고쳐 볼 수 있다.
-export function oidcConfig(): OidcConfig | null {
+// 설정 읽기 — **관리탭(DB) 우선, 비면 배포 env**. embedding_config(#172)와 같은 seam 이다.
+//  왜 둘 다인가: SSM 전용 고객 박스는 .env 편집이 비현실적이라 관리탭이 유일한 창구고(secret-box.ts 머리주석),
+//  반대로 에어갭·자동화 배포는 env 로 굽는 게 자연스럽다. 관리탭에서 끄면 env 로 되돌아간다.
+//  캐시 없음: 호출 빈도가 로그인 시점뿐이라 비용이 없고, **재기동 없이** 바뀐 설정이 즉시 먹는다.
+export async function oidcConfig(): Promise<OidcConfig | null> {
+  const fromDb = await oidcConfigFromDb();
+  return fromDb ?? oidcConfigFromEnv();
+}
+
+// 관리탭 설정 — 켜져 있고 셋이 다 있어야 성립. 복호화 실패(마스터키 분실·교체)는 조용히 env 로 넘긴다.
+async function oidcConfigFromDb(): Promise<OidcConfig | null> {
+  if (!process.env.ITEMS_DATABASE_URL) return null; // DB 없는 실행(테스트·부트스트랩 전)
+  try {
+    const { getRuntimeConfig } = await import("../org/store.js");
+    const s = (await getRuntimeConfig()).oidc_config;
+    if (!s.enabled || !s.issuer || !s.client_id || !s.client_secret_enc) return null;
+    if (!/^https:\/\//i.test(s.issuer)) {
+      logger.warn({ issuer: s.issuer }, "[oidc] 관리탭 issuer 가 https 가 아니라 무시한다");
+      return null;
+    }
+    const { decryptSecret } = await import("../org/credentials/secret-box.js");
+    const clientSecret = decryptSecret(s.client_secret_enc);
+    if (!clientSecret) return null;
+    return {
+      issuer: s.issuer, clientId: s.client_id, clientSecret,
+      allowedDomains: s.allowed_domains,
+      label: s.label || defaultLabel(s.issuer),
+      trustUnverifiedEmail: s.trust_unverified_email,
+      scopes: (process.env.OIDC_SCOPES ?? "").trim() || "openid email profile",
+    };
+  } catch (err) {
+    // 복호화 실패·DB 미가동 — 로그인 자체를 죽이지 않는다(env 폴백 → 최악이라도 로컬 로그인).
+    logger.warn({ err }, "[oidc] 관리탭 설정을 읽지 못해 env 로 폴백한다");
+    return null;
+  }
+}
+
+// 배포 env — 셋이 다 있어야 켜진다. 값이 없으면 null(제공자 미등록 → 로그인 화면에 버튼도 안 뜬다).
+export function oidcConfigFromEnv(): OidcConfig | null {
   const issuer = (process.env.OIDC_ISSUER ?? "").trim().replace(/\/+$/, "");
   const clientId = (process.env.OIDC_CLIENT_ID ?? "").trim();
   const clientSecret = (process.env.OIDC_CLIENT_SECRET ?? "").trim();

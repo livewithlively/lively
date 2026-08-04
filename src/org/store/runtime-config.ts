@@ -1,6 +1,7 @@
 // org_runtime_config — 런타임 설정 단일행(훅 on/off·화이트리스트·정책 seam 들).
 //  (#1313 R18) 구 org/store.ts 에서 verbatim 분리. ⚠ #688 '원본 재조회' 분기·정책 seam import 는 그대로(단순화 금지).
 import { itemsPool } from "../../db/client.js";
+import { readOidcSettings, mergeOidcSettings, type OidcSettings, type OidcSettingsPatch } from "../../auth/oidc-config.js"; // #1520 외부 IdP 로그인 설정 seam
 // 임베딩(벡터검색 #172) config seam — embedding_config 정규화/병합(env 시드 + DB 우선). 무순환(provider 모듈은 store 미import).
 import {
   type EmbeddingConfig, type EmbeddingConfigPatch, resolveEmbeddingConfig, normalizeEmbeddingConfig,
@@ -58,6 +59,7 @@ export interface OrgRuntimeConfig {
   hook_grace_ms: number | null; // #1008 — run-custom 이 게이트웨이 미도달 시 최근 캐시를 쓸 유효기간(ms). NULL=무제한(기본). 양수=그 ms 후 fail-CLOSED.
   embedding_backfill_paused: boolean; // #1060 — 자동 임베딩 백필 스윕 일시중지. true=부팅·주기·sync후·nudge 스윕 no-op + 실행 중 잡 중단. DB 영속(재시작에도 유지).
   inject_ontology_guide: boolean; // #1245 — 온톨로지 가이드(제품 소유 섹션, 코드 단일 출처) 주입 여부. 본문 편집은 불가 — 이 토글만 org 가 정한다.
+  oidc_config: OidcSettings; // #1520 외부 IdP 웹 로그인 — 관리탭 설정(DB). 비면 env(OIDC_*) 시드. client_secret 은 암호문만.
   ui_nav: UiNavConfig; // #1454 S2 — 상단 탭 게이팅. {} = 전부 노출(현행). tabs 에 **명시적 false 인 탭만** 숨김(프론트 navOn 이 해석).
   announcement: UiAnnouncement | null; // #1454 S3 — 조직 공지 배너. null = 미표시(현행).
   ui_profile: UiProfile; // #1454 S4 — 관리탭 프로파일. 'full'(현행) | 'personal'(개인 워크스페이스 — 조직 운영 섹션 숨김).
@@ -119,7 +121,7 @@ const usageUrlSafe = (v: unknown): string | null => (typeof v === "string" && v.
 
 export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
   const r = await itemsPool.query(
-    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, ui_nav, announcement, ui_profile, usage_url, version, updated_at, updated_by
+    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, version, updated_at, updated_by
        FROM org_runtime_config WHERE id=1`,
   );
   const row = r.rows[0] as Record<string, unknown> | undefined;
@@ -142,6 +144,7 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
     write_tools: strArrSafe(row?.write_tools),
     // #906 — 컬럼 부재(구 DB)면 [] = 꺼짐. 마이그레이션이 ADD COLUMN DEFAULT 로 기존 행까지 켜준다.
     pull_tools: strArrSafe(row?.pull_tools),
+    oidc_config: readOidcSettings(row?.oidc_config), // 형태만 정규화 — env 폴백은 실제 사용처(auth/oidc.ts)가 판단한다
     embedding_config: resolveEmbeddingConfig(row?.embedding_config), // DB 우선, off/미설정이면 env(EMBEDDINGS_*) 시드
     storage_policy: resolveStoragePolicy(row?.storage_policy), // DB 우선, 비면 env 시드 → 코드 기본값(#813)
     call_log_policy: resolveCallLogPolicy(row?.call_log_policy), // #1082 — 구 DB(컬럼 부재)면 기본값(90일)
@@ -175,6 +178,7 @@ export async function updateRuntimeConfig(
     allowed_internal_hosts?: string[];
     write_tools?: string[];
     pull_tools?: string[];
+    oidc_config?: OidcSettingsPatch;
     embedding_config?: EmbeddingConfigPatch;
     storage_policy?: StoragePolicyPatch;
     call_log_policy?: CallLogPolicyPatch;
@@ -285,9 +289,16 @@ export async function updateRuntimeConfig(
     const raw = await itemsPool.query(`SELECT session_share FROM org_runtime_config WHERE id=1`);
     sessionShare = (raw.rows[0] as { session_share?: unknown } | undefined)?.session_share ?? null;
   }
+  // OIDC 설정(#1520) — 위 정책들과 같은 규칙: **안 건드린 저장은 DB 원본을 그대로 둔다**.
+  //  before.oidc_config 는 DB 원본의 정규화형이라(env 시드를 섞지 않는다) 병합의 바닥으로 안전하다.
+  //  ⚠ client_secret 은 patch 에 undefined 면 보존된다 — 관리탭이 시크릿을 매번 다시 입력하지 않아도 되게.
+  const oidcConfig = patch.oidc_config !== undefined
+    ? mergeOidcSettings(before.oidc_config, patch.oidc_config)
+    : before.oidc_config;
+
   await itemsPool.query(
-    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, ui_nav, announcement, ui_profile, usage_url, version, updated_at, updated_by)
-       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$20::jsonb,$18::jsonb,$19::jsonb,$22::jsonb,$14::jsonb,$15::jsonb,$16,$17,$21,$23::jsonb,$24::jsonb,$25,$26,1,now(),$13)
+    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, version, updated_at, updated_by)
+       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$20::jsonb,$18::jsonb,$19::jsonb,$22::jsonb,$14::jsonb,$15::jsonb,$16,$17,$21,$27::jsonb,$23::jsonb,$24::jsonb,$25,$26,1,now(),$13)
      ON CONFLICT (id) DO UPDATE SET hooks=EXCLUDED.hooks, writeback_notice=EXCLUDED.writeback_notice,
        work_roots=EXCLUDED.work_roots, allowed_auth_envs=EXCLUDED.allowed_auth_envs, url_allowlist=EXCLUDED.url_allowlist,
        allowed_db_secret_refs=EXCLUDED.allowed_db_secret_refs, allowed_db_hosts=EXCLUDED.allowed_db_hosts,
@@ -298,13 +309,14 @@ export async function updateRuntimeConfig(
        delegate_policy=EXCLUDED.delegate_policy, hook_relay_decisions=EXCLUDED.hook_relay_decisions,
        session_share=EXCLUDED.session_share, hook_grace_ms=EXCLUDED.hook_grace_ms,
        embedding_backfill_paused=EXCLUDED.embedding_backfill_paused,
-       inject_ontology_guide=EXCLUDED.inject_ontology_guide,
+       inject_ontology_guide=EXCLUDED.inject_ontology_guide, oidc_config=EXCLUDED.oidc_config,
        ui_nav=EXCLUDED.ui_nav, announcement=EXCLUDED.announcement, ui_profile=EXCLUDED.ui_profile, usage_url=EXCLUDED.usage_url,
        version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots),
      JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(pullTools), JSON.stringify(embeddingConfig), JSON.stringify(storagePolicy), actor ?? null, JSON.stringify(relayDecisions), JSON.stringify(sessionShare), hookGraceMs, embeddingBackfillPaused, JSON.stringify(sessionMemoryPolicy), JSON.stringify(sessionReclaimPolicy), JSON.stringify(callLogPolicy), injectOntologyGuide, JSON.stringify(delegatePolicy),
      // #1454 S2~S5 — announcement 는 null 이면 SQL NULL(json 'null' 이 아니라 컬럼 NULL — 미표시의 정본 표현).
-     JSON.stringify(uiNav), announcement === null ? null : JSON.stringify(announcement), uiProfile, usageUrl],
+     JSON.stringify(uiNav), announcement === null ? null : JSON.stringify(announcement), uiProfile, usageUrl,
+     JSON.stringify(oidcConfig)],
   );
   // 저장 즉시 반영 — /readyz 임계치·로그 재니터가 캐시를 들고 있다(게이트웨이 재시작 없이 먹어야 한다).
   if (patch.storage_policy !== undefined) invalidateStoragePolicyCache();

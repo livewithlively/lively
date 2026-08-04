@@ -19,14 +19,16 @@ export interface AuthProviderInfo {
 
 // 활성 제공자 목록(로그인 UI 가 무엇을 띄울지) — 로그인 화면·OAuth 동의 화면이 이 목록으로 버튼을 그린다.
 //  무인증 표면에 노출되는 값이라 라벨 말고는 아무것도 담지 않는다(issuer·client_id 도 내보내지 않는다).
-export function activeProviders(): AuthProviderInfo[] {
+//  async 인 이유: 설정이 관리탭(DB)에도 있을 수 있다 — 재기동 없이 켜고 끄려면 매번 확인해야 한다.
+export async function activeProviders(): Promise<AuthProviderInfo[]> {
   const providers: AuthProviderInfo[] = [
     { kind: "local", label: "이메일 + 비밀번호", enabled: true },
   ];
-  const oidc = oidcConfig();
+  const oidc = await oidcConfig();
   if (oidc) providers.push({ kind: "oidc", label: oidc.label, enabled: true });
   return providers;
 }
 
 // OIDC 가 켜져 있나 — 버튼을 그릴지 판단하는 자리들이 쓰는 짧은 질의.
-export const oidcEnabled = (): boolean => activeProviders().some((p) => p.kind === "oidc" && p.enabled);
+export const oidcEnabled = async (): Promise<boolean> =>
+  (await activeProviders()).some((p) => p.kind === "oidc" && p.enabled);

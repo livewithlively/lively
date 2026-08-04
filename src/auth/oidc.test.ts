@@ -13,6 +13,9 @@ import {
 } from "./oidc.js";
 import { safeReturnTo } from "../org/store/oidc-auth.js";
 
+// 이 스위트는 DB 를 쓰지 않는다 — oidcConfig 의 관리탭(DB) 경로를 타면 설정이 우리 통제 밖이 된다.
+delete process.env.ITEMS_DATABASE_URL;
+
 let pass = 0;
 const ok = (n: string): void => { pass++; console.log(`ok  ${n}`); };
 
@@ -110,22 +113,22 @@ const RS = { alg: "RS256", kid: "k1", typ: "JWT" };
   };
 
   setEnv({});
-  assert.equal(oidcConfig(), null);
+  assert.equal(await oidcConfig(), null);
   ok("C1 설정 없음 → 제공자 꺼짐");
 
   setEnv({ OIDC_ISSUER: ISSUER, OIDC_CLIENT_ID: "x" });
-  assert.equal(oidcConfig(), null);
+  assert.equal(await oidcConfig(), null);
   ok("C2 secret 누락 → 꺼짐(반쯤 켜진 상태를 만들지 않는다)");
 
   setEnv({ OIDC_ISSUER: "http://idp.example", OIDC_CLIENT_ID: "x", OIDC_CLIENT_SECRET: "y" });
-  assert.equal(oidcConfig(), null);
+  assert.equal(await oidcConfig(), null);
   ok("C3 issuer 가 http → 꺼짐(iss 대조 기준이 중간자에게 열린다)");
 
   setEnv({
     OIDC_ISSUER: "https://accounts.google.com/", OIDC_CLIENT_ID: "x", OIDC_CLIENT_SECRET: "y",
     OIDC_ALLOWED_DOMAINS: " honest.ai , @Example.COM ",
   });
-  const c4 = oidcConfig();
+  const c4 = await oidcConfig();
   assert.ok(c4);
   assert.equal(c4.issuer, "https://accounts.google.com");
   assert.deepEqual(c4.allowedDomains, ["honest.ai", "example.com"]);
@@ -134,7 +137,7 @@ const RS = { alg: "RS256", kid: "k1", typ: "JWT" };
   ok("C4 issuer 말미 슬래시·도메인 대소문자/@/공백 정규화 + 라벨 추정");
 
   setEnv({ OIDC_ISSUER: ISSUER, OIDC_CLIENT_ID: "x", OIDC_CLIENT_SECRET: "y" });
-  const c5 = oidcConfig();
+  const c5 = await oidcConfig();
   assert.ok(c5);
   assert.deepEqual(c5.allowedDomains, [], "도메인 env 부재 → 빈 목록(자동 가입 대상 0개)");
   assert.equal(c5.label, "회사 SSO 로 로그인", "모르는 issuer 는 중립 문구");
