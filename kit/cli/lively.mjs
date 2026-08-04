@@ -226,7 +226,20 @@ async function api(path, { timeoutMs = 15000, method = "GET", body } = {}) {
   try {
     const headers = { authorization: `Bearer ${tok}` };
     if (body !== undefined) headers["content-type"] = "application/json";
-    const res = await fetch(gw + path, { method, signal: ctl.signal, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
+    // ⚠ undici 는 진짜 원인을 `e.cause` 에 숨긴다 — 그대로 두면 사용자에게 보이는 건 'fetch failed' 뿐이고
+    //  DNS·프록시·TLS·방화벽을 구별할 수 없다. #1505 윈도우 실측이 정확히 그 벽이었다: `Claude MCP 연결 ✓`(붙는다)
+    //  인데 `게이트웨이 도달 ✗ fetch failed`(CLI 만 못 붙는다) — 원인 코드가 없어 진단이 거기서 멈췄다.
+    let res;
+    try {
+      res = await fetch(gw + path, { method, signal: ctl.signal, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
+    } catch (e) {
+      if (e?.name === "AbortError" || e?.name === "TimeoutError") throw new Error(`게이트웨이 응답 없음 — ${timeoutMs}ms 초과 (${path})`);
+      const code = e?.cause?.code || e?.code || "";
+      const hint = code === "ENOTFOUND" ? " — 주소·DNS 확인"
+        : /^(ETIMEDOUT|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH)$/.test(code) ? " — 네트워크·VPN·사내 프록시 확인(⚠ Node 는 HTTPS_PROXY 를 자동으로 쓰지 않는다 — 브라우저·다른 앱이 되는데 CLI 만 안 되면 대개 이것)"
+          : /CERT|SELF_SIGNED|UNABLE_TO_VERIFY|DEPTH_ZERO/.test(code) ? " — TLS 인증서 확인(사내 프록시가 가로채는 환경?)" : "";
+      throw new Error(`${e.message}${code ? ` (${code})` : ""}${hint}`);
+    }
     if (res.status === 401 || res.status === 403) throw new Error("접속 열쇠가 유효하지 않습니다(만료·해제됨?) — `lively login` 으로 다시 등록하세요.");
     if (!res.ok) { let m = ""; try { m = (await res.json())?.error || ""; } catch { /* */ } throw new Error(`게이트웨이 오류 ${res.status}${m ? " — " + m : ""} (${path})`); }
     return await res.json();
