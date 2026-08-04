@@ -262,6 +262,18 @@ for (const spec of repoSpecs) {
 }
 
 // ── 3-b) add-dir 설정파일(host-local, 동기화 제외) — worktree 미사용 시 레포를 자동 접근 대상으로 ──
+// 옛 버전이 이스케이프 없이 박은 윈도우 경로 복구 — 그 파일은 **codex 가 통째로 못 읽는 상태**라
+//  사용자는 손으로 고치기 전엔 codex 를 아예 못 켠다. 우리가 만든 고장이므로 우리가 되돌린다.
+//  대상은 `writable_roots = [...]` 줄뿐(사용자의 다른 줄은 불가침). 유효 이스케이프(\\ \" \b\f\n\r\t \uXXXX \UXXXXXXXX)는 그대로 둔다.
+//  ⚠ 유효 이스케이프를 **통째로 소비**해야 멱등이다. 백슬래시를 하나씩 lookahead 로 보면 이미 올바른 `\\Users` 에서
+//   두 번째 백슬래시가 '\U 로 시작하는 잘못된 이스케이프'로 보여 재실행마다 백슬래시가 늘어난다(실측 W4).
+const TOML_ESC = /\\\\|\\["bfnrt]|\\u[0-9a-fA-F]{4}|\\U[0-9a-fA-F]{8}|\\/g;
+function repairTomlWinPaths(toml) {
+  return String(toml).replace(/^([ \t]*writable_roots[ \t]*=[ \t]*)(\[[^\]\n]*\])/gm, (line, head, arr) =>
+    head + arr.replace(/"(?:[^"\\]|\\.)*"/g, (lit) =>
+      lit.replace(TOML_ESC, (m) => (m === "\\" ? "\\\\" : m))));
+}
+
 async function writeAddDir(targets) {
   if (!targets.length) return;
   // Claude Code: .claude/settings.local.json 의 additionalDirectories (프로젝트-로컬, 비동기화)
@@ -274,13 +286,21 @@ async function writeAddDir(targets) {
   cc.additionalDirectories = [...dirs];
   await fsp.writeFile(ccFile, JSON.stringify(cc, null, 2) + "\n");
   // Codex: ~/.codex/config.toml 의 [sandbox_workspace_write] writable_roots (이미 있는 경로는 제외)
+  //  ⚠ 경로는 **반드시 JSON.stringify** 로 넣는다 — TOML basic string 은 백슬래시를 이스케이프로 읽으므로
+  //   윈도우 경로를 날것으로 넣으면 `C:\Users\…` 의 `\U` 가 유니코드 이스케이프로 해석돼
+  //   `too few unicode value digits` 로 **config.toml 전체가 로드 실패**한다 = codex 가 아예 안 뜬다
+  //   (mac/linux 에선 슬래시라 절대 재현되지 않는다 — 윈도우 전용 결함 클래스).
   try {
     const cxFile = path.join(HOME, ".codex", "config.toml");
     let toml = ""; try { toml = fs.readFileSync(cxFile, "utf8"); } catch { /* 신규 */ }
-    const fresh = targets.filter((t) => !toml.includes(t));
+    const before = toml;
+    toml = repairTomlWinPaths(toml);           // 옛 버전이 남긴 깨진 줄 복구(우리가 쓴 줄만)
+    // 중복 판정도 **기록되는 표기**로 봐야 한다 — 날것 경로로 찾으면 윈도우에선 매번 못 찾아 같은 경로가 계속 쌓인다.
+    const fresh = targets.filter((t) => !toml.includes(JSON.stringify(t)) && !toml.includes(`"${t}"`));
+    if (!fresh.length && toml !== before) { await fsp.writeFile(cxFile, toml); } // 복구만 필요한 경우
     if (fresh.length) {
       await fsp.mkdir(path.dirname(cxFile), { recursive: true });
-      const roots = fresh.map((t) => `"${t}"`).join(", ");
+      const roots = fresh.map((t) => JSON.stringify(t)).join(", ");
       const ins = `[sandbox_workspace_write]\n# lively: 프로젝트 ${projectId} 레포\nwritable_roots = [${roots}]`;
       const block = toml.includes("[sandbox_workspace_write]") ? toml.replace(/\[sandbox_workspace_write\]/, ins) : toml + "\n" + ins + "\n";
       await fsp.writeFile(cxFile, block);
