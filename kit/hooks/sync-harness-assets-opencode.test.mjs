@@ -148,6 +148,28 @@ let r = await sync();
     : bad("O5 격리 우선", `샌드박스=${inSandbox} XDG누출=${leaked} — 격리가 새면 테스트가 실 환경을 오염시킨다`);
 }
 
+// ── O7 회수(prune) — 중앙이 뺀 자산은 opencode 디스크에서도 사라진다. **멤버 본인 것은 보존.** ──
+//  회수는 매니페스트(우리가 심은 것) 기반이라, 그 목록이 하네스별로 갈리거나 경로 화이트리스트에
+//  opencode 디렉터리명이 빠지면 **조용히 안 돈다** — 중앙에서 지운 자산이 멤버 디스크에 영원히 남는다.
+{
+  freshHome();
+  ASSETS = [asset("skill", "gone-skill", "# 사라질 것"), asset("skill", "stay-skill", "# 남을 것")];
+  await sync();
+  const both = existsSync(join(OC, "skill", "gone-skill", "SKILL.md")) && existsSync(join(OC, "skill", "stay-skill", "SKILL.md"));
+  // 멤버가 직접 만든 스킬 — 매니페스트 밖이므로 회수 대상이 아니다.
+  mkdirSync(join(OC, "skill", "my-own"), { recursive: true });
+  writeFileSync(join(OC, "skill", "my-own", "SKILL.md"), "---\nname: my-own\ndescription: 내 것\n---\n본문\n");
+
+  ASSETS = [asset("skill", "stay-skill", "# 남을 것")];   // 중앙이 하나를 뺐다
+  await sync();
+  const gone = !existsSync(join(OC, "skill", "gone-skill", "SKILL.md"));
+  const stay = existsSync(join(OC, "skill", "stay-skill", "SKILL.md"));
+  const mine = existsSync(join(OC, "skill", "my-own", "SKILL.md"));
+  (both && gone && stay && mine)
+    ? ok("O7 회수 — 중앙이 뺀 자산만 제거, 남긴 것과 멤버 본인 스킬은 보존")
+    : bad("O7 회수", `초기배포=${both} 제거=${gone} 유지=${stay} 멤버보존=${mine}`);
+}
+
 // ── O6 — 실제 opencode 가 있으면 **그 설정을 읽는지**까지 확인(없으면 skip; codex 판과 같은 규율) ──
 //  "파일이 생겼다"와 "하네스가 읽는다"는 다른 문제이고, 이번 결함이 정확히 그 틈이었다.
 {
