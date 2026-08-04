@@ -111,7 +111,109 @@ export interface CreateInput { label: string; rootKey: string; subpath: string; 
   // #1059 E — 상시(managed) 세션은 desired-state DB 미러를 만들지 않는다(keep-alive 가 그 영속을 소유). ensureManagedSession 만 넘긴다.
   managed?: boolean;
   // #1059 — claude UUID 를 모를 때 인자 없는 --resume 로 후보 picker 를 띄운다(restorable 복원. resume 과 배타 — resume 우선).
-  resumePick?: boolean; }
+  resumePick?: boolean;
+  // #1516 — 로그인 전용 세션: 이 하네스의 **로그인 명령**을 셸에서 돌린다(하네스 TUI 를 띄우지 않는다).
+  //  자격이 만료된 상태에서 그 하네스로 세션을 열면 즉사해 로그인 자체가 불가능하기 때문(harnessLoginArgv 주석).
+  //  harness 는 'shell' 로 보낸다 — 이 세션은 AI 세션이 아니라 로그인 절차용이다.
+  loginFor?: string; }
+
+// ── 세션 런처(#1516) — 하네스가 죽어도 세션은 산다 ──
+//
+// 결함: 세션은 `tmux new-session -d -s <id> … <하네스 바이너리>` 로 뜬다(격리 경로의 box-spawn 도 `exec "$@"`).
+//  하네스가 **그 pane 의 유일한 프로세스**라 하네스가 종료되면 pane→window→**tmux 세션이 통째로 사라진다.**
+//  claude 는 미인증이어도 TUI 로 로그인 화면을 띄워 세션이 살아 있지만(실측), codex 는 인증이 만료되면
+//   `Error: Your access token could not be refreshed because your refresh token was already used.` 를
+//   stderr 로 한 줄 뱉고 **exit 1** 로 즉사한다 → 사용자는 그 문구를 읽을 기회조차 없이 세션이 닫히고,
+//   무엇을 해야 하는지도 알 수 없다(2026-08-04 상민님 신고 · 실측 재현).
+//  ⚠ 서버가 미리 막을 수는 없다: `codex login status` 도 `codex doctor` 도 **만료된 토큰을 정상으로 보고**한다
+//   (실측 — 각각 "Logged in using ChatGPT" exit 0 / "✓ auth is configured"). 실제 갱신을 시도해야만 알 수 있다.
+//   그래서 사전 판정이 아니라 **사후 회복**(세션 보존 + 사람 말 안내)이 유일하게 옳은 자리다.
+//
+// 그래서 하네스를 이 런처로 감싼다:
+//  · exit 0(사용자가 /exit 로 정상 종료) → **종전 그대로** 세션 종료(#1059 restorable 설계 보존 — 여기서
+//    셸을 남기면 정상 종료가 '종료됨'으로 안 잡히고 회수·복원 흐름이 통째로 어긋난다).
+//  · exit≠0(비정상) → 한국어 안내를 찍고 **로그인 셸로 폴백** → 세션이 살아남아 원문 에러가 화면에 그대로 남고,
+//    사람이 그 자리에서 로그인·재실행을 할 수 있다. pane 포그라운드가 셸이 되므로 isAgentOffline(phase.ts)이
+//    'exited'(종료됨)로 정확히 판정한다 — 기존 상태 모델과 정합.
+//
+// ⚠ 인젝션 안전: 스크립트는 **고정 문자열**이고 하네스·플래그는 `sh -c '<고정>' <argv0> <안내> "$@"` 의
+//  위치인자로만 들어간다(셸이 값을 해석하지 않는다). 문자열 보간으로 명령을 조립하지 말 것.
+const LAUNCH_SH = [
+  'notice=$1; shift',
+  '"$@"',
+  'rc=$?',
+  '[ "$rc" -eq 0 ] && exit 0',
+  'printf \'\\n%s\\n\' "$notice"',
+  'exec "${SHELL:-/bin/sh}" -il',
+].join("\n");
+
+// 비정상 종료 안내 — **비개발자가 그대로 따라 할 수 있는 한 줄**을 준다(원문 영문 에러는 위에 그대로 남는다).
+//  codex 로그인은 `--device-auth` 가 정답이다: 웹터미널은 본질적으로 원격이라 기본 플로우가 띄우는
+//  `http://localhost:1455`(서버의 localhost) 에 사용자 브라우저가 닿지 못한다. device-auth 는 주소+일회용 코드라
+//  어느 브라우저에서든 된다(실측). 만료 케이스는 logout 이 선행돼야 한다 — codex 안내문("Please log out and
+//  sign in again")과 같은 처방.
+export function harnessFailNotice(harnessKey: string): string {
+  const line = "─".repeat(60);
+  const body = harnessKey === "codex"
+    ? [
+      "Codex 가 시작하지 못하고 종료됐습니다 — 위 영문 메시지가 원인입니다.",
+      "",
+      "로그인이 만료됐을 때 가장 흔합니다. 아래 한 줄을 복사해 붙여넣고 Enter 를 누르세요:",
+      "",
+      "    codex logout && codex login --device-auth",
+      "",
+      "화면에 주소와 일회용 코드가 나옵니다 → 브라우저에서 그 주소를 열고 코드를 입력하면 로그인이 끝납니다.",
+      "로그인한 뒤  codex  를 입력하면 이 세션에서 그대로 이어서 쓸 수 있습니다.",
+    ]
+    : harnessKey === "claude"
+      ? [
+        "Claude Code 가 예기치 않게 종료됐습니다 — 위 메시지가 원인입니다.",
+        "",
+        "이 세션은 살아 있습니다. 아래를 입력하면 다시 시작합니다:",
+        "",
+        "    claude",
+        "",
+        "로그인이 필요하다고 나오면 claude 를 실행한 뒤 /login 을 입력하세요.",
+      ]
+      : [
+        `${harnessKey} 이(가) 예기치 않게 종료됐습니다 — 위 메시지가 원인입니다.`,
+        "",
+        "이 세션은 살아 있습니다. 아래를 입력하면 다시 시작합니다:",
+        "",
+        `    ${harnessKey}`,
+      ];
+  // 세션이 살아 있다는 사실 자체가 안내의 절반이다 — 종전엔 창이 사라져 사용자가 '내가 뭘 잘못했나'로 끝났다.
+  return [line, ...body, line].join("\n");
+}
+
+// 하네스 실행 argv → 런처로 감싼 argv. cmd 가 비면(셸 세션) 감싸지 않는다 — 감쌀 하네스가 없다.
+export function harnessLaunchArgv(harnessKey: string, cmd: string[]): string[] {
+  if (!cmd.length) return cmd;
+  return ["sh", "-c", LAUNCH_SH, "lively-launch", harnessFailNotice(harnessKey), ...cmd];
+}
+
+// 로그인 전용 세션(#1516) — 관리탭 [연결된 AI 계정]의 [로그인]이 여는 세션.
+//  종전엔 `harness: codex` 세션을 열었는데, **자격이 만료된 바로 그 상태에서는 그 세션도 즉사**해서
+//  로그인하려고 연 세션이 로그인 화면을 못 보여주는 데드락이었다. 로그인은 하네스 TUI 가 아니라
+//  **셸에서 로그인 명령을 직접** 돌려야 한다.
+//  codex: logout(만료 자격 제거) → device-auth 로그인 → 끝나면 셸로 남아 바로 `codex` 를 칠 수 있다.
+//  claude: 로그인이 TUI 안 슬래시 커맨드(/login)라 자동화할 수 없다 → null(종전대로 claude 세션을 연다).
+const LOGIN_SH = [
+  'printf \'\\n%s\\n\\n\' "$1"',
+  'codex logout >/dev/null 2>&1 || true',
+  'codex login --device-auth || true',
+  'printf \'\\n%s\\n\' "$2"',
+  'exec "${SHELL:-/bin/sh}" -il',
+].join("\n");
+export function harnessLoginArgv(harnessKey: string): string[] | null {
+  if (harnessKey !== "codex") return null;
+  const line = "─".repeat(60);
+  const intro = [line, "Codex 로그인을 시작합니다.",
+    "잠시 뒤 나오는 주소를 브라우저에서 열고, 함께 표시되는 일회용 코드를 입력하세요.", line].join("\n");
+  const done = [line, "로그인 절차가 끝났습니다. 확인하려면  codex login status  를 입력해 보세요.",
+    "이 세션에서 바로 쓰려면  codex  를 입력하세요.", line].join("\n");
+  return ["sh", "-c", LOGIN_SH, "lively-login", intro, done];
+}
 
 // 실행 모드(#1007+) → 격리 pane 에 실을 `-e` env 인자. 순수 함수라 단위테스트로 계약을 못박는다(terminal-sessions.test.ts).
 //  incognito 는 readonly 보다 강함(lively 전체 차단 + LIVELY_OFF 로 훅까지 off). 둘 다면 incognito.

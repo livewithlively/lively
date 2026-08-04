@@ -316,6 +316,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       // #1291 v2 — 새 세션 폼의 '기록 범위'. 안 읽으면 폼이 조용히 무시되고 사용자는 고른 대로 됐다고 믿는다.
       //  normalizeCap 이 모르는 값을 null 로 접어 미지정(폴더 파생)으로 되돌린다.
       writeVis: normalizeCap(b.writeVis as string) ?? undefined,
+      // #1516 — 로그인 전용 세션(관리탭 [연결된 AI 계정] ▸ 로그인). 값 검증은 harnessLoginArgv 가 한다
+      //  (아는 하네스만 로그인 argv 를 내주고, 모르는 값은 평범한 셸 세션으로 접힌다 — 임의 문자열이 명령이 되지 않는다).
+      loginFor: String(b.loginFor ?? "") || undefined,
     };
     const nodeId = String(b.node ?? "").trim();
     res.setHeader("Cache-Control", "no-store");
