@@ -1,0 +1,8 @@
+[Unit]
+Description=Lively loopback alias socket (:8080 → active color gateway)
+# 세션 클라 핀(~/.lively/gateway-url=http://localhost:8080)의 안정 진입점. 실제 gateway 는 blue:8081|green:8082 로
+#  flip 되지만 세션은 이 고정 8080 만 본다. 프록시 대상은 lively-loopback.service 가 active-color 에 맞춰 재지정.
+[Socket]
+ListenStream=127.0.0.1:8080
+[Install]
+WantedBy=sockets.target
