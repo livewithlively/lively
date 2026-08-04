@@ -245,6 +245,26 @@ install({ userConfig: USER_CFG });
   }
 }
 
+// ── ⑯ 설치기가 옛 버전이 남긴 깨진 윈도우 경로를 **자가치유**한다 ─────────────
+//  writable_roots 에 이스케이프 없이 박힌 윈도우 경로 한 줄이 config.toml 전체를 못 읽게 만든다(= codex 미기동).
+//  그 줄을 쓰는 쪽(work.mjs·project-provision.ts)만 고치면 **프로젝트를 실행할 때만** 복구돼, 키트를 업데이트해도
+//  안 고쳐진다(윈도우 실기기 실측). 설치기는 자동 업데이트가 매번 돌리는 유일한 경로라 여기서 복구해야 한다.
+makeBundle();
+{
+  const BROKEN = 'model = "gpt-5.5"\n\n[sandbox_workspace_write]\n# lively: 프로젝트 59 레포\nwritable_roots = ["C:\\Users\\amorite\\context-ontology"]\n';
+  const t = install({ userConfig: BROKEN });
+  const fixed = t.includes('"C:\\\\Users\\\\amorite\\\\context-ontology"');
+  const noRaw = !t.includes('["C:\\Users\\amorite\\context-ontology"]');
+  const keeps = /^model = "gpt-5\.5"$/m.test(t);          // 사용자 다른 줄은 그대로
+  fixed && noRaw && keeps
+    ? ok("⑯ 설치 시 깨진 writable_roots 자가치유(사용자 다른 줄 보존)")
+    : bad("⑯ 자가치유", `fixed=${fixed} noRaw=${noRaw} keeps=${keeps}`);
+  // 멱등 — 재설치해도 백슬래시가 더 늘지 않는다.
+  const again = runInstall();
+  again.includes('"C:\\\\Users\\\\amorite\\\\context-ontology"') && !again.includes("\\\\\\\\Users")
+    ? ok("⑯b 재설치 멱등(이중 이스케이프 없음)") : bad("⑯b 멱등", "백슬래시가 늘어난다");
+}
+
 // ⓪ 재검 — 실 홈이 그대로인가(테스트가 관측 장치 없이 통과하는 걸 막는 배선 단언).
 digest(REAL_CODEX_CFG) === REAL_BEFORE ? ok("⓪ 실 ~/.codex/config.toml 무접촉(지문 동일)") : bad("⓪ 샌드박스 계약", "실 홈이 변경됐다");
 
