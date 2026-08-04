@@ -44,10 +44,15 @@ node "$CLAUDE_PLUGIN_ROOT/bin/login.mjs"
 
 ## 유지보수 (이 저장소 기여자용)
 
-플러그인이 담는 두 자산은 **진실원천이 딴 데 있다.**
+플러그인이 담는 것들은 **진실원천이 딴 데 있다.**
 
 - 훅 스크립트 = `kit/hooks/*.mjs`
+- **훅 배선표**(`hooks/hooks.json`) = `kit/setup/user-install.mjs` 의 `userLevelHooksBlock()` + `runnerHooksBlock()` 을 `${CLAUDE_PLUGIN_ROOT}` 경로로 옮긴 것. 정본이 바뀌면 여기도 같이 고친다(빌드 스크립트는 배선표를 손대지 않고 참조 무결성만 검사한다). `kit/hooks/settings-hooks.json` 은 구 어댑터용 축약본이라 정본이 아니다
 - 조직 스킬 = 게이트웨이 `org_harness_assets` (편집은 중앙에서 — 로컬 사본을 고치면 다음 빌드에 덮인다)
+
+`run-custom` 은 이벤트당 고정 엔트리 하나이고 커스텀 훅 자체는 런너가 런타임에 게이트웨이에서 받아온다 — 조직이 훅을 추가·삭제해도 배선표를 다시 쓸 필요가 없고, 비활성화하면 다음 세션에 즉시 무효가 된다(kill-switch).
+
+> ⚠ `.mcp.json`·`hooks/hooks.json` 에 `_comment` 같은 주석 키를 넣지 말 것. Claude Code 는 무시하지만(그래서 `claude plugin validate --strict` 도 통과한다) **claude.ai 마켓플레이스 싱크가 거부할 수 있다** — 그래서 이 문서가 주석을 대신 담는다.
 
 복제는 빌드 스크립트가 한다.
 

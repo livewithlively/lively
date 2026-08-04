@@ -1,6 +1,4 @@
 {
-  "_source": "정본 = kit/setup/user-install.mjs 의 userLevelHooksBlock() + runnerHooksBlock(). 이 파일은 그 두 블록을 ${CLAUDE_PLUGIN_ROOT} 경로로 옮긴 것이다 — 정본이 바뀌면 여기도 같이 바꾼다(scripts/build-plugin.mjs 가 스크립트 파일만 복제하고 이 배선표는 손대지 않는다). kit/hooks/settings-hooks.json 은 구 어댑터용 축약본이라 정본이 아니다.",
-  "_note": "run-custom 은 이벤트당 고정 엔트리 1개이고 커스텀 훅 자체는 런너가 런타임에 게이트웨이에서 fetch 한다 — 조직이 훅을 추가·삭제해도 이 파일을 다시 쓸 필요가 없고, enabled=false 면 다음 세션에 즉시 무효(kill-switch).",
   "hooks": {
     "SessionStart": [
       { "matcher": "startup|resume|clear", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-preload.mjs\"", "timeout": 10 }] },
