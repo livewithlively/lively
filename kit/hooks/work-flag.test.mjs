@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { sandboxEnv } from "../testlib/os-sandbox.mjs";   // HOME/TMPDIR 만으론 윈도우 격리가 안 된다(#1510)
 
 const HOOK = join(fileURLToPath(import.meta.url), "..", "work-flag.mjs");
 const SANDBOX = mkdtempSync(join(tmpdir(), "wf-test-"));
@@ -31,7 +32,7 @@ function flagsFor(tool) {
   const id = `s${++sid}`;
   execFileSync(process.execPath, [HOOK], {
     input: JSON.stringify({ session_id: id, tool_name: tool }),
-    env: { ...process.env, HOME, TMPDIR: TMP, LIVELY_OFF: "", LIVELY_HOOKS_OFF: "" },
+    env: { ...process.env, ...sandboxEnv({ home: HOME, tmp: TMP }), LIVELY_OFF: "", LIVELY_HOOKS_OFF: "" },
   });
   return ["worked", "writeback", "lively"].filter((f) => existsSync(join(TMP, "lively-hooks", `${id}.${f}`)));
 }

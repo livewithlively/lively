@@ -14,7 +14,7 @@
 그다음 로그인한다 — 토큰을 복붙할 필요 없이 브라우저 승인으로 끝난다.
 
 ```bash
-node "$CLAUDE_PLUGIN_ROOT/bin/login.mjs"
+node "$CLAUDE_PLUGIN_ROOT/scripts/login.mjs"
 ```
 
 토큰은 `~/.lively/token`(0600)에 저장되고, MCP 헤더와 훅이 **같은 파일**을 읽는다.
@@ -52,7 +52,9 @@ node "$CLAUDE_PLUGIN_ROOT/bin/login.mjs"
 
 `run-custom` 은 이벤트당 고정 엔트리 하나이고 커스텀 훅 자체는 런너가 런타임에 게이트웨이에서 받아온다 — 조직이 훅을 추가·삭제해도 배선표를 다시 쓸 필요가 없고, 비활성화하면 다음 세션에 즉시 무효가 된다(kill-switch).
 
-> ⚠ `.mcp.json`·`hooks/hooks.json` 에 `_comment` 같은 주석 키를 넣지 말 것. Claude Code 는 무시하지만(그래서 `claude plugin validate --strict` 도 통과한다) **claude.ai 마켓플레이스 싱크가 거부할 수 있다** — 그래서 이 문서가 주석을 대신 담는다.
+> ⚠ **플러그인 루트에 `bin/` 디렉터리를 만들지 말 것**(2026-08-04 실측). claude.ai 마켓플레이스 싱크가 `bin/` 이 있는 플러그인을 거부한다 — 내용·파일모드 무관이고, 안에 평문 .txt 하나만 있어도 거부된다. `scripts/`·`hooks/` 는 정상이라 스크립트는 `scripts/` 에 둔다. 로컬 `claude plugin validate --strict`·공개 JSON 스키마·CLI 원격설치는 전부 통과하므로 이 함정은 웹에서만 드러난다. 상세: WIKI `claude-marketplace-sync-rejects-bin-dir`
+>
+> 주석 키(`_comment` 등)는 무해함이 확인됐지만(공식 훅 파일도 `hooks` 옆에 `description` 을 둔다) 이 문서가 주석을 대신 담는 편이 읽기 좋다.
 
 복제는 빌드 스크립트가 한다.
 
@@ -62,19 +64,3 @@ node scripts/build-plugin.mjs --skills   # 스킬까지(게이트웨이 토큰 �
 ```
 
 동봉 스킬 목록은 `bundled-skills.json` 이 정한다 — 제외 사유도 그 파일에 적혀 있다.
-
----
-
-## ⚠ 현재 진단 중 (claude.ai 마켓플레이스 싱크)
-
-claude.ai 마켓플레이스 싱크가 "유효성 검사 오류"로 거부한다. 로컬 도구(`claude plugin validate --strict`,
-GitHub 원격 소스 추가, 원격 설치)와 공개 JSON 스키마 검증은 전부 통과하므로 웹 전용 제약이다.
-
-실측 근거로 좁힌 용의자 — **Anthropic 공식 마켓플레이스의 상대경로 플러그인 39개 중 `userConfig` 를
-쓰는 것이 0개**다(훅은 22개, `mcpServers` 는 11개가 쓴다). `headersHelper` 도 실제 설정에는 0개이고
-참조 문서에만 나온다. 그래서 이 라운드는 **`userConfig` + 그것에 의존하는 파라미터화 MCP** 를 통째로
-빼고 싱크가 통과하는지 본다.
-
-통과하면 함의가 크다 — **웹에서는 "사용자가 주소를 넣는 MCP 커넥터"를 플러그인으로 만들 수 없다**는 뜻이고,
-그 표면의 MCP 연결은 OAuth 커스텀 커넥터 경로로 가야 한다. 플러그인은 그 표면에서 **스킬 배포 채널**로 남는다.
-Claude Code·Cowork 경로는 이미 실측으로 완전히 동작한다(연결·조직 스킬 26개·거버넌스 훅).

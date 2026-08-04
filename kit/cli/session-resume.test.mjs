@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { pathWith, writeNoopBin } from "../testlib/os-sandbox.mjs";   // 스텁은 윈도우에서도 실행 가능해야 한다(#1510)
 
 const CLI = path.join(fileURLToPath(import.meta.url), "..", "lively.mjs");
 let pass = 0; const ok = (n) => { pass++; console.error(`ok  ${n}`); };
@@ -44,10 +45,7 @@ const root = await fsp.mkdtemp(path.join(os.tmpdir(), "lively-resume-"));
 //  가드: kit/cli/cli-spawn-harness-sandbox.test.mjs
 const STUB_BIN = path.join(root, "stub-bin");
 fs.mkdirSync(STUB_BIN, { recursive: true });
-for (const b of ["claude", "codex"]) {
-  fs.writeFileSync(path.join(STUB_BIN, b), "#!/bin/sh\nexit 0\n");
-  fs.chmodSync(path.join(STUB_BIN, b), 0o755);
-}
+for (const b of ["claude", "codex"]) writeNoopBin(STUB_BIN, b);
 // CLI 를 격리 HOME + 격리 cwd 로 실행. --print 라 claude 는 안 뜬다.
 //  ⚠ **async spawn 필수** — 가짜 게이트웨이가 이 프로세스에 있어, spawnSync 로 블로킹하면 이벤트루프가 멈춰
 //    자식의 요청을 서버가 못 받아 교착한다(child↔server 상호대기).
@@ -56,7 +54,7 @@ function runResume(sid, extra = []) {
   const cwd = fs.mkdtempSync(path.join(root, "work-"));
   return new Promise((resolve) => {
     const c = spawn(process.execPath, [CLI, "resume", sid, "--print", "--node", "", ...extra], {
-      cwd, env: { ...process.env, PATH: `${STUB_BIN}:${process.env.PATH}`, LIVELY_HOME: home, LIVELY_GATEWAY_URL: BASE, LIVELY_TOKEN: "t" },
+      cwd, env: { ...process.env, PATH: pathWith(STUB_BIN), LIVELY_HOME: home, LIVELY_GATEWAY_URL: BASE, LIVELY_TOKEN: "t" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";
@@ -94,7 +92,7 @@ try {
     assert.ok(mm, "물질화 경로를 출력");
     const file = mm[1];
     assert.ok(file.endsWith(path.join("s-mine.jsonl")), "파일명이 <sid>.jsonl");
-    assert.match(file, /\.claude\/projects\//, "claude 프로젝트 경로로 물질화");
+    assert.match(file.replace(/\\/g, "/"), /\.claude\/projects\//, "claude 프로젝트 경로로 물질화");   // 구분자 무관(#1510)
     assert.equal(fs.readFileSync(file, "utf8"), TRANSCRIPT, "✅ 중앙 트랜스크립트를 그대로 로컬에 물질화");
     ok("✅ 소유자 → 트랜스크립트 물질화 + claude --resume 준비");
   }

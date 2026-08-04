@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { pathWith, writeNoopBin } from "../testlib/os-sandbox.mjs";   // 스텁은 윈도우에서도 실행 가능해야 한다(#1510)
 
 const pExecFile = promisify(execFile);
 const HERE = join(fileURLToPath(import.meta.url), "..");
@@ -62,11 +63,10 @@ writeFileSync(join(HOME, ".lively", "token"), "lvk_test_token");
 //  harness 프로브 결과는 아무 단정도 하지 않는다 — 가려도 잃는 검증이 없다.
 const STUB_BIN = join(BOX, "stub-bin");
 mkdirSync(STUB_BIN, { recursive: true });
-writeFileSync(join(STUB_BIN, "claude"), "#!/bin/sh\nexit 0\n");
-chmodSync(join(STUB_BIN, "claude"), 0o755);
+writeNoopBin(STUB_BIN, "claude");
 const CHILD_ENV = {
   ...process.env,
-  PATH: `${STUB_BIN}:${process.env.PATH}`,
+  PATH: pathWith(STUB_BIN),
   LIVELY_HOME: HOME,
   // ⚠ 셸에 CLAUDE_CONFIG_DIR 이 있으면 CLI 가 **실제** 프로필 설정(.claude.json)을 읽는다 — 명시적으로 샌드박스로 덮는다.
   //  (LIVELY_HOME 이 CLI 의 HOME 을 대체하므로 HOME 쪽 후보는 이미 샌드박스다.)

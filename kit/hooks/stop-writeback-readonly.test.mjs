@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { sandboxEnv } from "../testlib/os-sandbox.mjs";   // HOME/TMPDIR 만으론 윈도우 격리가 안 된다(#1510)
 import assert from "node:assert/strict";
 
 const HOOK = join(fileURLToPath(import.meta.url), "..", "stop-writeback-gate.mjs");
@@ -30,7 +31,7 @@ function runGate(modeEnv) {
   writeFileSync(join(FLAG_DIR, `${id}.worked`), "");  // 의미있는 작업함 → 넛지 후보
   const out = execFileSync(process.execPath, [HOOK], {
     input: JSON.stringify({ session_id: id, stop_hook_active: false, cwd: TMP }),
-    env: { ...process.env, HOME, TMPDIR: TMP, LIVELY_OFF: "", LIVELY_HOOKS_OFF: "", LIVELY_MODE: modeEnv },
+    env: { ...process.env, ...sandboxEnv({ home: HOME, tmp: TMP }), LIVELY_OFF: "", LIVELY_HOOKS_OFF: "", LIVELY_MODE: modeEnv },
     encoding: "utf8",
   });
   return out;

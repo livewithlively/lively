@@ -8,8 +8,8 @@
 //   마커까지 올라가 정하면서 경로는 cwd 에서 뽑아, 같은 project/<id> 를 노리는 워크트리가 여러 자리에 생겼다
 //   → 나중에 온 쪽이 죽었다(서버 provision 이면 502). 아래는 그 불변식들이다.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, rmSync, existsSync, mkdtempSync, utimesSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { mkdirSync, writeFileSync, rmSync, existsSync, mkdtempSync, utimesSync, realpathSync } from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";  // ⚠ 절대경로 동적 import 는 반드시 file:// URL 로 — 윈도우는 "d:" 를 프로토콜로 읽는다(#1510)
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -37,7 +37,7 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   process.env.LIVELY_REPOS_DIR = SB;                     // reposDir() → SB ⇒ base = SB/base
   process.env.TMPDIR = join(SB, "ostmp");                // os.tmpdir() → SB/ostmp (핀 기본경로를 샌드박스 안으로 — 실제 tmp 오염 방지)
   mkdirSync(join(SB, "ostmp"), { recursive: true });
-  const { repoWorktree, repoPin, repoPinRemove, REPO_NAME_RE, authNote, gitHostOf } = await import(join(HERE, "repo-worktree-core.mjs"));
+  const { repoWorktree, repoPin, repoPinRemove, REPO_NAME_RE, authNote, gitHostOf } = await import(pathToFileURL(join(HERE, "repo-worktree-core.mjs")));
 
   // ── 0) REPO_NAME_RE — 레포명은 경로 컴포넌트라 점세그먼트(traversal) 거부, 이름 속 점은 허용(#932 후속) ──
   check("REPO_NAME_RE: '..' 거부(traversal)", REPO_NAME_RE.test("..") === false, "'..' 통과");
@@ -92,7 +92,13 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
     await repoWorktree(ctx(proj), { repo: "base", path: join(SB, "scratch", "boom"), branch: "project/999" });
     bad("점유 브랜치 명시 → 실패해야 함", "성공해버림");
   } catch (e) {
-    check("점유 브랜치 명시 → 점유자 경로를 알려준다", e.message.includes(join(proj, "base")), e.message);
+    // ⚠ 윈도우에서 두 가지가 어긋난다(#1510): ① git 은 경로를 `/` 로 뱉는다 ② tmpdir() 은 8.3 단축형
+    //  (`C:\\Users\\RUNNER~1\\…`)인데 git 은 롱패스(`C:\\Users\\runneradmin\\…`)로 되돌려준다.
+    //  그래서 구분자 정규화 + realpath 정규화를 둘 다 건다.
+    const slash = (p) => String(p).replace(/\\/g, "/");
+    let expect = join(proj, "base");
+    try { expect = realpathSync.native(expect); } catch { /* 아직 없거나 realpath 불가 — 원형 그대로 */ }
+    check("점유 브랜치 명시 → 점유자 경로를 알려준다", slash(e.message).includes(slash(expect)), e.message);
     check("점유 브랜치 명시 → 빠져나갈 방법을 알려준다", /branch 인자/.test(e.message), e.message);
   }
 

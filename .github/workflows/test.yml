@@ -109,13 +109,16 @@ jobs:
   #   그래서 네이티브 모듈(node-pty) 빌드 리스크 없이 1분 안에 끝난다. 서버(src/) 는 리눅스 박스에서만 도므로
   #   윈도우에서 돌릴 이유가 없다.
   #
-  #  ⚠ continue-on-error 는 **1단계 한정**이다. 지금은 "윈도우에서 무엇이 깨지는지" 목록을 만드는 게 목적이고,
-  #   그 목록을 정리(수정 또는 POSIX 전용 skip 가드)한 뒤 이 줄을 지워 **필수 게이트로 승격**한다.
-  #   이 줄이 남아 있는 동안은 초록불이 '통과'를 뜻하지 않는다 — 로그의 실패 목록을 직접 읽어야 한다.
+  #  ⚠ 2026-08-04 **필수 게이트로 승격**(#1510) — continue-on-error 를 제거했다. 첫 실행에서 18/33 이 깨졌고
+  #   그걸 전수 분류해 제품 2건(트랜스크립트 경로 인코딩 · 훅 엔트리 중복 수렴)을 고치고, 나머지는 테스트의
+  #   POSIX 가정(절대경로 동적 import · CRLF · HOME/TMPDIR 샌드박스 · sh 스텁 바이너리)을 걷어냈다.
+  #   POSIX 전용 기능(`lively node` — tmux·launchd/systemd)은 테스트 안에서 **명시적으로 skip** 한다.
+  #   → 이제 여기 초록불은 '통과'를 뜻한다. 깨지면 고치거나, 비목표임을 테스트에 skip 으로 적어라.
   test-windows:
     runs-on: windows-latest
-    continue-on-error: true
     steps:
+      # ⚠ 줄끝은 .gitattributes(`* text=auto eol=lf`)가 LF 로 고정한다 — kit 의 정적 계약 테스트가
+      #  '우리 소스 텍스트'를 읽어 단언하므로, 체크아웃이 CRLF 로 바뀌면 주석 제거 정규식이 무력화된다.
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:

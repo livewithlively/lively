@@ -1,7 +1,13 @@
 // 단위 체크(node:assert) — '확인 필요'(waiting) pane 판정. 픽스처는 tmux capture-pane 실측(#853).
 // 실행: npm run build && node dist/terminal/terminal-sessions.test.js
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { detectAwaiting, modeEnvArgs, canSeeSession, resolveAgentPhase, parseReportedPhase, isPhaseFresh, isActivityProgress, PHASE_TTL_SEC } from "./terminal-sessions.js";
+// 배럴(terminal-sessions.ts)엔 새 심볼을 늘리지 않는다 — 그 파일의 재수출 집합은 #1313 R15 분할의 계약이다.
+import { harnessLaunchArgv, harnessLoginArgv, harnessFailNotice } from "./catalog.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -195,4 +201,91 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
   ok2(isActivityProgress("waiting", "waiting") === false, "확인필요 하트비트는 활동이 아니다");
   ok2(isActivityProgress(undefined, null) === true, "단계 없는 구 훅의 활동 보고는 종전대로 올린다");
   ok2(isActivityProgress("idle", null) === true, "첫 보고는 전이로 본다");
+}
+
+// ── 세션 런처 / 로그인 세션(#1516) ────────────────────────────────────────────────
+// 사양: 하네스가 죽어도 세션은 살아야 하고, 사람은 무엇을 할지 알아야 한다.
+//  이 계약은 **문자열 모양이 아니라 실행 결과**로만 증명된다(그 셸 스크립트가 정말 그렇게 도는가) →
+//  런처 argv 를 실제로 실행한다. 폴백 셸(`exec … -il`)이 살아 있으면 stdin 으로 준 명령이 실행되므로,
+//  'SHELL_ALIVE' 의 유무가 곧 **세션이 살아남았는가**의 관측이다(문구가 아니라 부작용으로 단언).
+//  회귀 시나리오: codex 는 인증 만료 시 stderr 한 줄 뒤 exit 1 로 즉사한다 → 종전엔 pane 이 사라져 tmux
+//   세션이 통째로 닫혔고 사용자는 에러를 읽을 기회조차 없었다(상민님 신고 2026-08-04 · 실측 재현).
+{
+  // pane 이 실제로 보게 되는 것 = stdout + stderr(같은 tty 로 섞인다). 둘 다 합쳐 돌려준다.
+  const runLaunch = (argv: string[], stdin = "", opts: { noShell?: boolean } = {}): string => {
+    // ⚠ 'SHELL 없음'은 **빈 문자열**로 재현한다. env 에서 지우면(unset) 재현이 안 된다 — macOS 의 /bin/sh(bash)는
+    //  SHELL 이 unset 이면 passwd 의 로그인 셸로 **스스로 채워** 폴백 경로를 타지 않는다(실측: unset 인데 $SHELL=/bin/zsh).
+    //  그러면 이 시나리오는 통과하면서 아무것도 안 보는 vacuous 테스트가 된다(mutation 으로 실제 확인함).
+    //  빈 문자열은 어느 셸에서도 유지되고 `${SHELL:-…}` 폴백을 실제로 발동시킨다(dash 처럼 안 채워주는 셸의 대역).
+    const env: Record<string, string | undefined> = { ...process.env, SHELL: opts.noShell ? "" : "/bin/sh", ENV: "" };
+    const r = spawnSync(argv[0], argv.slice(1), { input: stdin, encoding: "utf8", env: env as NodeJS.ProcessEnv });
+    // [배선] 관측 장치가 죽어 있으면 아래 단언은 통과하면서 아무것도 안 본다(vacuous).
+    ok2(!r.error && r.status !== null, "[배선] 런처가 실제로 실행됐다");
+    return (r.stdout || "") + (r.stderr || "");
+  };
+  const ALIVE = "echo SHELL_ALIVE\n";   // 폴백 셸이 살아 있을 때만 실행된다
+
+  // E1 — 정상 종료(사용자 /exit): 종전대로 세션이 끝나야 한다. 여기서 셸을 남기면 '사용자가 끝낸 세션'이
+  //  안 끝나 #1059(restorable·회수) 설계가 통째로 어긋난다.
+  {
+    const out = runLaunch(harnessLaunchArgv("codex", ["sh", "-c", "echo HARNESS_BYE; exit 0"]), ALIVE);
+    ok2(/HARNESS_BYE/.test(out), "E1 정상 종료: 하네스 출력은 그대로 남는다");
+    ok2(!/SHELL_ALIVE/.test(out), "E1 정상 종료(exit 0)는 종전대로 세션을 끝낸다(셸 폴백 없음)");
+    ok2(!/codex logout/.test(out), "E1 정상 종료엔 실패 안내를 찍지 않는다");
+  }
+  // E2 — 비정상 종료(= 인증 만료로 즉사한 codex): 세션이 살아남고, 원문 에러와 조치 안내가 함께 남는다.
+  {
+    const out = runLaunch(harnessLaunchArgv("codex", ["sh", "-c", "echo HARNESS_ERR >&2; exit 1"]), ALIVE);
+    ok2(/SHELL_ALIVE/.test(out), "E2 비정상 종료(exit≠0): **세션이 살아남는다**(셸이 자리를 이어받음)");
+    ok2(/HARNESS_ERR/.test(out), "E2 하네스가 stderr 로 남긴 원문 에러가 화면에 보존된다");
+    ok2(/codex logout && codex login --device-auth/.test(out), "E2 비개발자가 그대로 붙여넣을 로그인 한 줄을 준다");
+  }
+  // E3 — 실패 코드 값에 무관해야 한다(127=바이너리 없음 등).
+  {
+    const out = runLaunch(harnessLaunchArgv("codex", ["sh", "-c", "exit 127"]), ALIVE);
+    ok2(/SHELL_ALIVE/.test(out), "E3 다른 실패 코드(127)도 세션을 살린다(코드 값에 무관)");
+  }
+  // E4 — 새로 도입한 헬퍼의 **빈 입력**: 셸 세션은 감쌀 하네스가 없다.
+  ok2(harnessLaunchArgv("shell", []).length === 0, "E4 셸 세션(빈 cmd)은 감싸지 않는다");
+  // E5 — 인젝션: 하네스·플래그는 위치인자로만 들어가 셸이 값을 해석하지 않는다.
+  {
+    const out = runLaunch(harnessLaunchArgv("codex", ["echo", "$(echo PWNED)"]));
+    ok2(/\$\(echo PWNED\)/.test(out), "E5 하네스 argv 의 명령치환이 실행되지 않고 값 그대로 전달된다");
+  }
+  // E6 — 여러 줄·유니코드 박스문자 안내가 깨지지 않고 그대로 나온다(pane 에서 사람이 읽는 형태).
+  {
+    const out = runLaunch(harnessLaunchArgv("codex", ["sh", "-c", "exit 1"]));
+    const notice = harnessFailNotice("codex");
+    ok2(out.includes(notice), "E6 안내가 여러 줄·박스문자 그대로 온전히 출력된다");
+    ok2(notice.split("\n").length >= 5, "E6 안내는 한 줄짜리가 아니다(따라 할 절차가 있다)");
+  }
+  // E7 — **SHELL 이 비어 있는 환경**(격리 경로의 sudo 는 env_reset 으로 env 를 턴다). 새로 기댄 변수의 부재 엣지 —
+  //  여기서 폴백이 없으면 '세션을 살리는' 수정이 정작 격리 박스(리눅스 고객 설치)에서만 조용히 안 먹는다.
+  {
+    const out = runLaunch(harnessLaunchArgv("codex", ["sh", "-c", "exit 1"]), ALIVE, { noShell: true });
+    ok2(/SHELL_ALIVE/.test(out), "E7 SHELL 이 비어 있어도 폴백 셸이 떠서 세션이 살아남는다");
+  }
+  // E11 — 모르는 하네스도 빈 안내를 주지 않는다(장래에 하네스가 늘어도 사용자는 조치를 안다).
+  ok2(harnessFailNotice("codex").includes("device-auth"), "E11a codex 안내는 device-auth 를 지목한다");
+  ok2(harnessFailNotice("claude").includes("/login"), "E11b claude 안내는 TUI 안 /login 을 지목한다");
+  ok2(harnessFailNotice("gemini").includes("gemini"), "E11c 모르는 하네스도 그 이름으로 재실행 안내를 준다");
+
+  // ── 로그인 세션 — 만료 자격으로는 하네스가 즉사해 로그인 화면조차 못 뜨던 데드락을 끊는다 ──
+  {
+    const argv = harnessLoginArgv("codex");
+    ok2(!!argv && argv[0] === "sh", "E8a codex 로그인은 셸에서 명령을 돌린다(하네스 TUI 아님)");
+    ok2(!!argv && argv.join(" ").includes("codex logout"), "E8b 만료 자격을 먼저 지운다");
+    ok2(!!argv && argv.join(" ").includes("codex login --device-auth"), "E8c 원격에서도 되는 주소+코드 방식으로 로그인한다");
+    // L3 — 로그인이 끝나면 셸로 남는다(codex 를 스텁으로 가려 실제 로그인 없이 흐름만 관측).
+    const stub = mkdtempSync(join(tmpdir(), "lively-1516-"));
+    writeFileSync(join(stub, "codex"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const r = spawnSync(argv![0], argv!.slice(1), {
+      input: ALIVE, encoding: "utf8",
+      env: { ...process.env, SHELL: "/bin/sh", ENV: "", PATH: `${stub}:${process.env.PATH ?? ""}` },
+    });
+    rmSync(stub, { recursive: true, force: true });
+    ok2(/SHELL_ALIVE/.test((r.stdout || "") + (r.stderr || "")), "E8d 로그인 절차가 끝나면 셸로 남아 그 자리에서 바로 쓸 수 있다");
+  }
+  ok2(harnessLoginArgv("claude") === null, "E9 claude 는 /login 이 TUI 안이라 자동화 불가 → 종전 경로 유지");
+  ok2(harnessLoginArgv("nope") === null, "E10 모르는 하네스는 로그인 명령을 만들지 않는다");
 }
