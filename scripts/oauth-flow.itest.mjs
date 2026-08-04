@@ -101,6 +101,12 @@ try {
     as.issuer === prm.authorization_servers[0], `as=${as.issuer} prm=${prm.authorization_servers[0]}`);
   chk("③ ★ code_challenge_methods_supported=S256(없으면 클라이언트가 진행을 거부)",
     Array.isArray(as.code_challenge_methods_supported) && as.code_challenge_methods_supported.includes("S256"));
+  // 광고와 실제가 어긋나면 클라이언트가 admin 을 요청했다가 조용히 좁혀진 토큰을 받고 원인을 못 찾는다.
+  chk("③ ★ 광고 scope 에 위험 scope 가 없다(OAuth 로는 발급 불가하므로)",
+    Array.isArray(as.scopes_supported) && !as.scopes_supported.includes("admin") && !as.scopes_supported.includes("runtime")
+      && as.scopes_supported.includes("items"), `scopes=${JSON.stringify(as.scopes_supported)}`);
+  chk("③ PRM 의 광고 scope 도 같다", JSON.stringify(prm.scopes_supported) === JSON.stringify(as.scopes_supported),
+    `prm=${JSON.stringify(prm.scopes_supported)} as=${JSON.stringify(as.scopes_supported)}`);
   chk("③ authorization/token/registration 엔드포인트 광고",
     as.authorization_endpoint === `${BASE}/authorize` && as.token_endpoint === `${BASE}/token` && as.registration_endpoint === `${BASE}/register`,
     JSON.stringify(as));
