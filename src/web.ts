@@ -23,6 +23,11 @@ import {
   parseSessionCookie, createSession, revokeSession, sessionCookie, clearSessionCookie,
 } from "./auth/sessions.js";
 import { verifyLogin, verifyOwnPassword, setMemberPassword } from "./auth/local-accounts.js";
+import { activeProviders } from "./auth/providers.js";
+import { oidcConfig, discover, buildAuthorizeUrl, exchangeCode } from "./auth/oidc.js"; // #1520 외부 IdP 로그인
+import { resolveOidcMember } from "./auth/oidc-login.js";
+import { createOidcAuthRequest, consumeOidcAuthRequest } from "./org/store/oidc-auth.js";
+import { logger } from "./log.js";
 import { gatewayUrlForRequest } from "./gateway-url.js";
 import { startDeviceAuth, pollDeviceAuth } from "./org/auth/device-auth.js";
 import { exchangeSessionCode } from "./org/store.js"; // #1454 S1 — 세션 SSO 브리지(1회용 코드 → 세션)
@@ -61,6 +66,76 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     res.setHeader("Set-Cookie", sessionCookie(sessionId, expiresAt));
     res.setHeader("Cache-Control", "no-store");
     res.json({ ok: true, memberId: result.memberId, mustChange: result.mustChange });
+  }));
+
+  // ── 외부 IdP 로그인(OIDC, #1520). 전부 **무인증** — 세션을 얻기 전에 타는 문이다. ──
+  //  auth/oidc.ts(프로토콜) + auth/oidc-login.ts(멤버 매핑) + org/store/oidc-auth.ts(state 저장)의 배선만 한다.
+  //  ⚠ 우리가 인가서버인 /authorize(#1473 T2, org/auth/oauth-*.ts)와 방향이 반대다 — 여기선 우리가 클라이언트다.
+
+  // redirect_uri 는 개시와 콜백에서 **글자 그대로 같아야** IdP 검증을 통과한다 → 한 함수에서만 만든다.
+  //  base 는 gateway-url 단일소스(#1438) — org 프로필 > PUBLIC_URL > 요청 헤더.
+  const oidcRedirectUri = async (req: express.Request): Promise<string | null> => {
+    const base = await gatewayUrlForRequest(req);
+    return base ? `${base}/api/ui/auth/oidc/callback` : null;
+  };
+
+  // 활성 제공자 목록 — 로그인 화면이 어떤 버튼을 그릴지 묻는다. 라벨 외엔 아무 설정도 나가지 않는다.
+  app.get("/api/ui/auth/providers", wrap(async (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ providers: activeProviders() });
+  }));
+
+  // 인가 개시 — state/nonce/PKCE 를 만들어 저장하고 IdP 로 302. return_to 는 same-origin 경로만 통과한다.
+  app.get("/api/ui/auth/oidc/start", wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const cfg = oidcConfig();
+    if (!cfg) { res.status(404).json({ error: "OIDC 로그인이 이 배포에 설정되어 있지 않습니다" }); return; }
+    const redirectUri = await oidcRedirectUri(req);
+    if (!redirectUri) { res.status(500).json({ error: "게이트웨이 공개 주소를 확정할 수 없습니다" }); return; }
+    try {
+      const disc = await discover(cfg);
+      const { state, nonce, codeVerifier } = await createOidcAuthRequest({ returnTo: String(req.query?.to ?? "") });
+      res.redirect(302, buildAuthorizeUrl(cfg, disc, { redirectUri, state, nonce, codeVerifier }));
+    } catch (err) {
+      // discovery 실패(IdP 다운·설정 오타)는 사람에게 '지금은 로컬 로그인을 쓰라'고 보이는 게 최선이다.
+      logger.error({ err }, "[oidc] 인가 개시 실패");
+      res.redirect(302, "/ui/#/login?error=oidc_start");
+    }
+  }));
+
+  // 콜백 — 인가코드를 세션 쿠키로. 실패는 전부 로그인 화면으로 되돌린다(사유는 error 파라미터로만).
+  app.get("/api/ui/auth/oidc/callback", wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const fail = (reason: string): void => { res.redirect(302, `/ui/#/login?error=${encodeURIComponent(reason)}`); };
+    const cfg = oidcConfig();
+    if (!cfg) { fail("oidc_off"); return; }
+    // 사용자가 IdP 화면에서 취소했거나 IdP 가 오류를 돌려준 경우 — code 없이 error 만 온다.
+    if (req.query?.error) { fail("oidc_denied"); return; }
+    const code = String(req.query?.code ?? "");
+    const state = String(req.query?.state ?? "");
+    if (!code || !state) { fail("oidc_bad_request"); return; }
+    // state 소비가 곧 CSRF 검증이다 — 우리가 발급하지 않았거나 이미 쓴 state 면 여기서 끝난다.
+    const pending = await consumeOidcAuthRequest(state);
+    if (!pending) { fail("oidc_state"); return; }
+    const redirectUri = await oidcRedirectUri(req);
+    if (!redirectUri) { fail("oidc_config"); return; }
+    try {
+      const disc = await discover(cfg);
+      const claims = await exchangeCode(cfg, disc, {
+        code, redirectUri, codeVerifier: pending.codeVerifier, nonceHash: pending.nonceHash,
+      });
+      const resolved = await resolveOidcMember(claims, cfg);
+      if (!resolved.ok) { fail(`oidc_${resolved.reason}`); return; }
+      const { sessionId, expiresAt } = await createSession(resolved.memberId,
+        { ip: req.ip, userAgent: (req.headers["user-agent"] as string) ?? null });
+      res.setHeader("Set-Cookie", sessionCookie(sessionId, expiresAt));
+      res.redirect(302, pending.returnTo ?? "/ui/");
+    } catch (err) {
+      // 토큰 교환·id_token 검증 실패. 원인은 로그에만 남긴다 — 무인증 표면에 검증 실패 사유를 흘리면
+      //  공격자에게 어디까지 통과했는지 알려주는 셈이다.
+      logger.warn({ err }, "[oidc] 콜백 처리 실패");
+      fail("oidc_verify");
+    }
   }));
 
   // ── 세션 SSO 브리지 교환(#1454 S1) — 컨트롤플레인이 발급한 1회용 코드(org_session_mint)를 웹 세션으로. ──

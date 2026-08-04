@@ -16,6 +16,7 @@ import { readAuthRequest, approveAuthRequest, denyAuthRequest } from "../store/o
 import { grantableScopes } from "./grant-util.js";
 import { parseSessionCookie, userFromSession, createSession, sessionCookie } from "../../auth/sessions.js";
 import { verifyLogin } from "../../auth/local-accounts.js";
+import { activeProviders } from "../../auth/providers.js"; // #1520 외부 IdP 버튼(로컬 폼은 폴백으로 유지)
 import { LivelyClientsStore, isCimdClientId } from "./oauth-clients.js";
 import { logger } from "../../log.js";
 
@@ -200,17 +201,27 @@ function noticeBox(notice: string, error?: string): string {
 }
 
 function loginView(rid: string, disp: { name: string; origin: string }, notice: string, error?: string): string {
+  // 외부 IdP(#1520)가 켜진 배포면 여기서도 그 버튼을 준다. 안 그러면 조직 지메일만 쓰는 고객이
+  //  챗 커넥터를 붙일 때마다 별도 로컬 비밀번호를 요구받아, OIDC 를 붙인 목적의 절반이 무너진다.
+  //  로그인 후 이 동의 화면(rid 그대로)으로 되돌아온다 — start 가 받는 to 는 same-origin 경로만 통과한다.
+  const oidc = activeProviders().find((p) => p.kind === "oidc" && p.enabled);
+  const oidcForm = oidc
+    ? `<form method="get" action="/api/ui/auth/oidc/start">` +
+      `<input type="hidden" name="to" value="${esc(`${OAUTH_CONSENT_PATH}?rid=${rid}`)}">` +
+      `<div class="row"><button class="primary" type="submit">${esc(oidc.label)}</button></div></form>` +
+      `<p class="foot">회사 계정이 없으면 아래 이메일·비밀번호로 로그인하세요.</p>`
+    : "";
   return page("로그인 — Lively 연결 승인",
     `<h1>Lively 로그인</h1>` +
     `<p class="sub">연결을 승인하려면 먼저 회사 계정으로 로그인하세요.</p>` +
-    clientBox(disp) + noticeBox(notice, error) +
+    clientBox(disp) + noticeBox(notice, error) + oidcForm +
     `<form method="post" action="${OAUTH_CONSENT_PATH}">` +
     `<input type="hidden" name="rid" value="${esc(rid)}">` +
     `<input type="hidden" name="action" value="login">` +
-    `<label for="email">이메일</label><input id="email" name="email" type="email" autocomplete="username" required autofocus>` +
+    `<label for="email">이메일</label><input id="email" name="email" type="email" autocomplete="username" required${oidc ? "" : " autofocus"}>` +
     `<label for="password">비밀번호</label><input id="password" name="password" type="password" autocomplete="current-password" required>` +
-    `<div class="row"><button class="primary" type="submit">로그인</button></div></form>` +
-    `<p class="foot">구글 계정(매니지드)으로 쓰신다면 Lively 웹 UI 에서 먼저 로그인한 뒤 이 페이지를 새로고침하세요.</p>`);
+    `<div class="row"><button class="${oidc ? "ghost" : "primary"}" type="submit">로그인</button></div></form>` +
+    (oidc ? "" : `<p class="foot">구글 계정(매니지드)으로 쓰신다면 Lively 웹 UI 에서 먼저 로그인한 뒤 이 페이지를 새로고침하세요.</p>`));
 }
 
 function consentView(

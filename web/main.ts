@@ -385,6 +385,58 @@ document.getElementById('gate-form')!.addEventListener('submit', async (ev) => {
   }
 });
 
+// ── 외부 IdP 로그인(OIDC, #1520) ────────────────────────────────────────────
+//  버튼은 배포에 IdP 가 설정된 경우에만 뜬다(/api/ui/auth/providers). 로컬 폼은 지우지 않는다 —
+//  IdP 장애·에어갭 배포의 영구 폴백이라는 auth/providers.ts 의 계약을 UI 도 그대로 지킨다.
+async function renderAuthProviders() {
+  const box = document.getElementById('gate-providers');
+  if (!box) return;
+  try {
+    const res = await fetch(apiUrl('/api/ui/auth/providers'));
+    if (!res.ok) return;
+    const data = await res.json();
+    const list = (data && data.providers) || [];
+    const oidc = list.find((p: any) => p && p.kind === 'oidc' && p.enabled);
+    if (!oidc) return;
+    box.textContent = '';
+    box.appendChild(el('button', {
+      type: 'button', class: 'btn gate-btn', onclick: () => {
+        // 보고 있던 화면(해시)을 로그인 후 그대로 복귀시킨다. 서버는 same-origin 경로만 받는다(safeReturnTo).
+        const h = location.hash && location.hash.indexOf('#/login') !== 0 ? location.hash : '';
+        location.href = apiUrl('/api/ui/auth/oidc/start') + '?to=' + encodeURIComponent('/ui/' + h);
+      },
+    }, String(oidc.label || '회사 SSO 로 로그인')));
+    box.appendChild(el('p', { class: 'gate-idp-hint' }, '회사 계정이 없으면 위 이메일·비밀번호로 로그인하세요.'));
+    box.hidden = false;
+  } catch (_) { /* 조회 실패 = 로컬 로그인만 보인다(폴백이 안전한 기본값) */ }
+}
+
+// OIDC 콜백은 실패를 #/login?error=… 로 알려온다(무인증 표면이라 서버는 사유를 문장으로 주지 않는다).
+//  여기서 사람이 읽을 문구로 바꾼다 — '왜 못 들어가는지'를 모르면 관리자에게 물을 수도 없다.
+const AUTH_ERROR_TEXT: Record<string, string> = {
+  oidc_denied: '로그인을 취소했습니다.',
+  oidc_not_member: '등록된 구성원이 아닙니다. 관리자에게 계정 등록을 요청하세요.',
+  oidc_domain_not_allowed: '이 도메인의 계정은 자동 가입 대상이 아닙니다. 관리자에게 문의하세요.',
+  oidc_inactive: '비활성 상태의 계정입니다. 관리자에게 문의하세요.',
+  oidc_no_email: '로그인한 계정에서 검증된 이메일을 받지 못했습니다. 관리자에게 문의하세요.',
+  oidc_off: '이 배포에는 회사 계정 로그인이 설정되어 있지 않습니다.',
+  exchange: '자동 로그인 링크가 만료되었습니다. 다시 로그인하세요.',
+};
+function showAuthErrorFromHash() {
+  const { params } = parseHash();
+  const code = params.get('error');
+  if (!code) return;
+  // 세부 검증 실패(state·nonce·서명 등)는 한 문구로 뭉뚱그린다 — 어디까지 통과했는지 알려줄 이유가 없다.
+  const msg = AUTH_ERROR_TEXT[code] || (code.indexOf('oidc_') === 0 ? '로그인에 실패했습니다. 다시 시도해 주세요.' : '');
+  if (!msg) return;
+  const err = document.getElementById('gate-error');
+  if (err) { err.textContent = msg; (err as any).hidden = false; }
+  // 사유를 한 번 보여준 뒤 주소에서 지운다(새로고침마다 같은 오류가 되살아나지 않게).
+  history.replaceState(null, '', location.pathname + location.search + '#/login');
+}
+renderAuthProviders();
+showAuthErrorFromHash();
+
 installGlobalUndo(); // #702 전역 실행취소(Cmd/Ctrl+Z) — 텍스트 편집 밖에서 '내 마지막 웹 변경'을 되돌린다.
 boot();
 

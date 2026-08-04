@@ -193,4 +193,24 @@ export async function initMemberAuth(pool: Pool): Promise<void> {
       used_at TIMESTAMPTZ,
       created_by TEXT);
   `);
+
+  // ── pending_oidc_auth — 외부 IdP 로그인(OIDC)의 진행 중 인가요청(#1520). auth/oidc.ts 참조. ──
+  //  왜 서버 저장인가: 우리가 **클라이언트**라 state·nonce·PKCE verifier 를 콜백까지 우리가 들고 있어야 하는데,
+  //   이 시점엔 세션이 없다(로그인 전이다). 쿠키에 담으면 서명·크기·SameSite 를 우리가 다시 발명해야 해서
+  //   pending_device_auth / pending_session_mint 와 같은 관례를 따른다 — 짧은 TTL + 1회용 + 평문 미저장.
+  //  state 는 CSRF 방어값이자 이 행의 열쇠 → 평문은 저장하지 않고 sha256 만(PK). 돌아온 state 를 해시해 찾는다.
+  //  nonce_hash: id_token 의 nonce 대조용. 역시 해시만 둔다 — 대조는 '같은가' 뿐이라 원본이 필요 없다.
+  //  code_verifier 는 PKCE 상 원본이 있어야 교환에 쓸 수 있어 유일하게 평문이다(TTL 10분 · state 를 모르면 조회 불가).
+  //  return_to: 로그인 후 돌아갈 **경로**(오픈 리다이렉트 방지로 '/'로 시작하는 상대경로만 저장).
+  //  셀프호스트 무해: OIDC env 를 안 켜면 이 표는 영원히 비어 있다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pending_oidc_auth(
+      state_hash TEXT PRIMARY KEY,
+      nonce_hash TEXT NOT NULL,
+      code_verifier TEXT NOT NULL,
+      return_to TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ);
+  `);
 }
