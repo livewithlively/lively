@@ -81,3 +81,48 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/auth/device-auth.pg-test.mjs
+
+  # ── 윈도우 커버리지 (#1475) ────────────────────────────────────────────────────
+  #  왜: 멤버 대상 코드(kit/)는 **윈도우에서 실행된 적이 없다**. 그 사이 같은 클래스의 결함이 반복해서
+  #   고객에게 나갔다 — 2026-08-04 하루에 두 건:
+  #     · `writable_roots` 에 윈도우 경로를 TOML 이스케이프 없이 써서 **codex 가 통째로 안 뜸**
+  #     · 자산 containment 검사가 `/` 를 하드코딩해 **조직 스킬 26개가 한 개도 안 깔림**(게다가 무음)
+  #   둘 다 mac/linux 에선 **절대 재현되지 않는다**. 사람이 윈도우 PC 를 열어 확인하는 방식은 지속되지 않는다
+  #   (실제로 사용자 신고로만 발견됐다) → 러너로 자동화한다. public 레포라 windows 러너는 무료다.
+  #
+  #  범위: kit/**/*.test.mjs 만. 이 계층은 외부 의존성이 없어(node 내장 + 자기 모듈) `npm ci` 가 불필요하고,
+  #   그래서 네이티브 모듈(node-pty) 빌드 리스크 없이 1분 안에 끝난다. 서버(src/) 는 리눅스 박스에서만 도므로
+  #   윈도우에서 돌릴 이유가 없다.
+  #
+  #  ⚠ continue-on-error 는 **1단계 한정**이다. 지금은 "윈도우에서 무엇이 깨지는지" 목록을 만드는 게 목적이고,
+  #   그 목록을 정리(수정 또는 POSIX 전용 skip 가드)한 뒤 이 줄을 지워 **필수 게이트로 승격**한다.
+  #   이 줄이 남아 있는 동안은 초록불이 '통과'를 뜻하지 않는다 — 로그의 실패 목록을 직접 읽어야 한다.
+  test-windows:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # 끝까지 실행하고 실패를 모아 보고(run-tests 러너와 같은 정책 — 실패 1건이 나머지를 가리지 않게).
+      - name: kit 테스트 (윈도우)
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path kit -Recurse -Filter *.test.mjs |
+                   Where-Object { $_.Name -notlike '*.itest.mjs' } | Sort-Object FullName
+          Write-Host "수집 $($files.Count)건"
+          $failed = @()
+          foreach ($f in $files) {
+            $rel = Resolve-Path -Relative $f.FullName
+            node $f.FullName 2>&1 | Out-String | Write-Host
+            if ($LASTEXITCODE -ne 0) { $failed += $rel; Write-Host "FAIL($LASTEXITCODE) $rel" }
+            else { Write-Host "ok   $rel" }
+          }
+          Write-Host ""
+          if ($failed.Count) {
+            Write-Host "=== 윈도우 실패 $($failed.Count)/$($files.Count) ==="
+            $failed | ForEach-Object { Write-Host "  - $_" }
+            exit 1
+          }
+          Write-Host "=== 윈도우 $($files.Count)건 전부 통과 ==="
