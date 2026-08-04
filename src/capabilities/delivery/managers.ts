@@ -17,8 +17,9 @@ import { actorOf, restWork, str } from "./shared.js";
 
 export const managersCapabilities: Capability[] = [
   restWork("org_manager_list", "관리기 목록",
-    "등록된 관리기 + 종류별 현황(열린 발견 수). 4종: mismatch(분류 어긋남) · outdated(지식 아웃데이티드) · " +
-    "contradiction(지식 간 모순) · code_drift(지식↔코드 괴리). 앞의 둘은 결정적 SQL 판정이라 LLM 비용이 없고, " +
+    "등록된 관리기 + 종류별 현황(열린 발견 수). 5종: mismatch(분류 어긋남 **후보** — 실측 정밀도가 낮아 사람 판정 필수) · "
+    + "outdated(지식 아웃데이티드 — 자료에서 증류된 지식만) · stale_ref(런북·사양이 인용한 코드 경로가 사라짐 — 결정론) · " +
+    "contradiction(지식 간 모순) · code_drift(지식↔코드 괴리). 앞의 **셋**은 결정적 판정이라 LLM 비용이 0이고, " +
     "뒤의 둘은 후보를 좁혀 AI 가 판정한다.",
     [{ method: "GET", paths: ["/api/ui/org/managers"], parse: () => ({}) }],
     async () => ({ managers: await listManagers(), overview: await managerOverview(), kinds: MANAGER_KIND_LABEL })),
@@ -55,7 +56,7 @@ export const managersCapabilities: Capability[] = [
       id: z.number().int().positive().optional(),
       key: z.string().optional(),
       label: z.string().nullable().optional(),
-      kind: z.enum(["mismatch", "outdated", "contradiction", "code_drift"]).optional().describe("생성 시 필수 · 이후 변경 불가"),
+      kind: z.enum(["mismatch", "outdated", "stale_ref", "contradiction", "code_drift"]).optional().describe("생성 시 필수 · 이후 변경 불가"),
       enabled: z.boolean().optional(),
       priority: z.number().int().optional(),
       match_spaces: z.array(z.string()).or(z.string()).nullable().optional(),
@@ -75,7 +76,7 @@ export const managersCapabilities: Capability[] = [
     }),
 
   restWork("org_manager_run", "관리기 지금 실행",
-    "관리기를 즉시 실행한다. 결정적 종류(mismatch·outdated)는 이 호출 안에서 판정·저장까지 끝난다. " +
+    "관리기를 즉시 실행한다. 결정적 종류(mismatch·outdated·stale_ref)는 이 호출 안에서 판정·저장까지 끝난다. " +
     "판단이 필요한 종류(contradiction·code_drift)는 크론에서 실행해야 한다(헤드리스 배치 접수가 필요).",
     [{ method: "POST", paths: ["/api/ui/org/managers/run"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>) => {
@@ -108,7 +109,7 @@ export const managersCapabilities: Capability[] = [
       }),
     }), {
       manager_id: z.number().int().positive().optional(),
-      kind: z.enum(["mismatch", "outdated", "contradiction", "code_drift"]).optional(),
+      kind: z.enum(["mismatch", "outdated", "stale_ref", "contradiction", "code_drift"]).optional(),
       state: z.enum(["open", "accepted", "rejected", "resolved"]).optional().describe("기본 open — 큐는 '할 일'이지 이력이 아니다"),
       severity: z.enum(["note", "warn", "high"]).optional(),
       limit: z.number().int().min(1).max(500).optional(), offset: z.number().int().min(0).optional(),

@@ -93,14 +93,27 @@ export async function detectMismatch(m: ManagerRow, limit: number): Promise<Find
       target_ref: String(r.name),
       // 같은 지식이라도 '어느 분류에서 어긋났나'가 다르면 다른 문제다(복수 분류 지식).
       dedup_key: `${r.cat_key}->${r.near_key}`,
-      severity: (margin > 0.25 ? "warn" : "note") as Finding["severity"],
+      // ⚠ 심각도 컷을 0.25 → 0.18 로 내렸다. 실측(라이블리 지식 587 매핑) 최대 마진이 0.256 이라
+      //  0.25 컷에서는 43건 중 1건만 warn 이 되고 나머지가 note 로 뭉쳐 우선순위가 사라졌다.
+      //  ⚠⚠ 그런데 마진이 클수록 정확한 것도 아니다 — 실측에서 **최대 마진 1건이 오탐**이었다
+      //  (주제어 자석이 셀수록 거리차가 커진다). 그래서 warn 은 '먼저 볼 것'일 뿐 '더 확실한 것'이 아니다.
+      severity: (margin > 0.18 ? "warn" : "note") as Finding["severity"],
       summary: `‘${r.title || r.name}’ 은(는) 지금 분류(${r.cat_name || r.cat_key})보다 ‘${r.near_key}’ 정의에 더 가깝습니다`,
       evidence: `정의 거리차 ${margin.toFixed(3)} (자기 ${Number(r.own_dist).toFixed(3)} → ${r.near_key} ${Number(r.near_dist).toFixed(3)}). ` +
-        `임계 ${(m.threshold ?? MISMATCH_DEFAULT_MARGIN).toFixed(2)} 초과.`,
-      proposed_action: {
-        op: "move_category", name: String(r.name),
-        from_category_id: Number(r.cat_id), to_category_id: Number(r.near_id), to_category_key: String(r.near_key),
-      },
+        `임계 ${(m.threshold ?? MISMATCH_DEFAULT_MARGIN).toFixed(2)} 초과.\n` +
+        // 실측된 오탐 발생원을 증거문에 붙인다 — 사람이 이 두 줄만 읽고 대부분을 즉시 걸러낼 수 있다.
+        //  이걸 안 적으면 매번 같은 판단을 처음부터 다시 한다(#1195 가 21건을 손으로 판정한 그 작업).
+        `⚠ 이건 **판정이 아니라 후보**입니다(실측 정밀도 2/21, #1195). 옮기기 전에 두 가지를 확인하세요 — ` +
+        `① 자석 축: 정의에 흔한 낱말(조직명·일반명사)이 있으면 그 낱말을 담은 문서 전부가 끌립니다. ` +
+        `② 주제어 겹침: 주제가 같아도 **문서의 역할**이 다르면 지금 분류가 맞습니다` +
+        `(예: 경쟁사 하네스 비교는 '하네스'가 겹쳐도 시장·경쟁이 맞습니다). ` +
+        `거리차가 클수록 정확한 게 아니라 **자석이 센 것**일 수 있습니다.`,
+      // ⚠ proposed_action 을 만들지 않는다(#1419 도그푸드). 종전엔 move_category 를 채웠고, 그것이
+      //  action_level='auto' 의 자동 적용 대상이자 propose 의 묶음 적용 대상이 됐다. 정밀도 2/21 에서
+      //  auto 를 켜면 건드리는 10건 중 9건을 잘못 옮긴다 — 되돌릴 수 있게 만들었어도 사람이 정리해 둔
+      //  분류를 대량으로 흔든다. 이 신호는 사람이 정의를 읽고 판정해야 하는 후보다.
+      //  자동 이동을 맡길 수 있는 신호는 **구조 일관성**(같은 출처·트리 부모인데 축이 흩어짐)이고,
+      //  그건 정밀도가 사실상 100% 다(#1195) — 별도 kind 로 만들 때 그쪽에 조치안을 붙인다.
     };
   });
 }
@@ -218,8 +231,14 @@ export async function findCodeDriftCandidates(m: ManagerRow, limit: number): Pro
     const rows = await q(itemsPool, `
       SELECT c.id AS category_id, c.key, c.name, c.should, c.updated_at AS should_updated,
              COALESCE((SELECT ARRAY_AGG(cr.repo ORDER BY cr.repo) FROM category_repo cr WHERE cr.category_id=c.id), ARRAY[]::text[]) AS repos,
-             (SELECT count(*)::int FROM code_unit cu WHERE cu.category_id = c.id) AS unit_count,
-             (SELECT max(cu.updated_at) FROM code_unit cu WHERE cu.category_id = c.id) AS code_updated
+             -- ⚠ code_unit 에는 category_id 가 없다(컬럼: id·repo_id·kind·path·label·state·prev_path·…).
+             --  분류축↔코드 매핑은 mapping 테이블에 산다(v6 가 domain_id → category_id 로 착지시킨 것).
+             --  종전 코드가 code_unit.category_id 를 참조해 매 실행이 SQL 오류였고, 아래 catch 가 그것을
+             --  '도메인맵 미사용'으로 삼켜 **항상 조용히 0건 + status=ok** 였다(#1419 도그푸드에서 발견).
+             (SELECT count(*)::int FROM mapping mp
+               WHERE mp.category_id = c.id AND mp.target_kind = 'code_unit' AND mp.status = 'confirmed') AS unit_count,
+             (SELECT max(mp.updated_at) FROM mapping mp
+               WHERE mp.category_id = c.id AND mp.target_kind = 'code_unit' AND mp.status = 'confirmed') AS code_updated
         FROM category c
        WHERE ${conds.join(" AND ")}
        ORDER BY c.updated_at DESC
@@ -233,7 +252,11 @@ export async function findCodeDriftCandidates(m: ManagerRow, limit: number): Pro
         should_updated: r.should_updated ? String(r.should_updated) : null,
         code_updated: r.code_updated ? String(r.code_updated) : null,
       }));
-  } catch {
-    return []; // code_unit 부재(도메인맵 미사용 배포) — 이 관리기는 할 일이 없다
+  } catch (e) {
+    // 관용은 **테이블 부재만**(도메인맵 미사용 배포). 그 외(컬럼 오타·문법)는 드러낸다 —
+    //  종전에 전부 삼켜서 잘못된 컬럼 참조가 '0건 + status=ok' 로 몇 달 숨어 있었다(#1419).
+    //  42P01 = undefined_table. 이 코드 외의 오류는 위로 던져 실행이 error 로 기록되게 한다.
+    if ((e as { code?: string })?.code === "42P01") return [];
+    throw e;
   }
 }
