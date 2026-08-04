@@ -3,9 +3,7 @@
     "lively": {
       "type": "http",
       "url": "${user_config.gateway_url}/mcp",
-      "headers": {
-        "Authorization": "Bearer ${user_config.token}"
-      }
+      "headersHelper": "node \"${CLAUDE_PLUGIN_ROOT}/bin/mcp-headers.mjs\""
     }
   }
 }
