@@ -1,6 +1,8 @@
 import express from "express";
-import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { BearerVerifier } from "./auth/bearer.js";
+import { bearerWithResourceMetadata } from "./auth/http-auth.js";
+import { oauthAuthorizationServer, clientSecretGate } from "./org/auth/oauth-router.js";
+import { registerOAuthConsent } from "./org/auth/oauth-consent.js";
 import { itemsPool } from "./db/client.js";
 import { buildToolCandidates } from "./capabilities/index.js";
 import { setToolCandidates } from "./mcp/mcp-surface.js";
@@ -56,7 +58,9 @@ app.use("/api/webhook", domainmapWebhookRouter());
 app.use(express.json({ limit: "1mb" }));
 
 const verifier = new BearerVerifier();
-const auth = requireBearerAuth({ verifier });
+// /mcp 의 401 은 RFC 9728 resource_metadata 를 실어 인가서버를 가리킨다(#1473 T2 — 이게 없으면 챗 클라이언트가
+//  로그인 지점을 못 찾는다). 공개 주소가 미설정이면 종전 401 그대로.
+const auth = bearerWithResourceMetadata(verifier);
 
 // liveness — '프로세스가 살아있나'. **얕은 채로 둔다.**
 //  deploy/lib/common.sh 의 wait_healthz() 가 설치·업데이트 중 이걸 60회 재시도로 폴링해 기동을 확인하는데,
@@ -85,6 +89,16 @@ app.get("/readyz", async (_req, res) => {
     res.status(503).json({ ok: false, status: "down" });
   }
 });
+
+// ── OAuth 2.1 인가서버(#1473 T2) — claude.ai 챗·ChatGPT 웹·Gemini Enterprise 를 여는 단일 열쇠. ──
+//  그 표면들의 커넥터 UI 에는 Bearer·커스텀 헤더 입력란이 아예 없어(2026-08-04 실측) OAuth 가 유일한 경로다.
+//  순서 — ① 동의 화면(/oauth/consent, 서버렌더) ② /token·/revoke 앞의 시크릿 게이트 ③ SDK 인가서버 라우터.
+//  ②가 ③보다 **반드시** 먼저여야 한다: SDK 의 클라이언트 인증은 시크릿 평문 비교라 우리 해시 저장과 맞지 않아
+//   우회시켜 두었고, 실제 검증은 이 게이트가 한다(oauth-clients.ts 머리주석 ★★). 빠지면 시크릿 검사가 사라진다.
+//  ③은 앱 **루트**에 마운트해야 한다(SDK 요구) — 자기 경로가 아니면 즉시 통과시키므로 다른 라우트엔 무영향.
+registerOAuthConsent(app);
+app.use(["/token", "/revoke"], express.urlencoded({ extended: false }), clientSecretGate());
+app.use(oauthAuthorizationServer());
 
 // MCP 전송 계층 — /mcp POST/GET/DELETE + 요청별 서버 조립(무상태/sessioned). 본문·불변식은 boot/mcp-transport.ts.
 registerMcpTransport(app, auth);

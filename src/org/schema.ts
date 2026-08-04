@@ -19,6 +19,7 @@ import { initDbAccessPolicies } from "./schema/db-access.js";
 import { initSessionsInfra } from "./schema/sessions-infra.js";
 import { initGroundTruthRegistries } from "./schema/registry.js";
 import { initMemberAuth } from "./schema/member-auth.js";
+import { initOAuthServer } from "./schema/oauth.js";
 
 export async function initOrgSchema(): Promise<void> {
   await initOrgCore(itemsPool);                    // org_profile·org_member·org_content_audit·mcp_call_log·auth_token
@@ -35,6 +36,8 @@ export async function initOrgSchema(): Promise<void> {
   await initOrgCoreLateAdditions(itemsPool);       // org_member.status_message·project_member·org_content_audit 확장
   await initGroundTruthRegistries(itemsPool);      // kind_registry·data_source(+시드) + 레거시 DROP
   await initMemberAuth(itemsPool);                 // member_credential·member_secret·channel_policy/meta·web_session·git_credential·pending_device_auth
+  await initOAuthServer(itemsPool);                // #1473 T2: oauth_client·oauth_auth_code·oauth_refresh + auth_token 확장(client_id·resource·expires_at)
+  //  ⚠ initMemberAuth 뒤여야 한다 — 같은 인증 계열이고, auth_token 은 initOrgCore 가 이미 만들어 둔 뒤라 ALTER 가 안전하다.
   // ⚠ 신규 조각은 **맨 끝에 붙인다**(#1419 T1) — 위 순서는 분할 전 시퀀스를 보존한 계약이라, 중간에 끼우면
   //  SCHEMA_SQL_LOG 스냅샷 diff 가 '무관한 이동'으로 오염돼 다음 리팩토링의 증명이 어려워진다. org_collector 는
   //  기존 어느 테이블도 참조하지 않아(FK 없음) 순서 자유도가 있고, 끝에 두면 기존 시퀀스가 그대로 앞에 남는다.
