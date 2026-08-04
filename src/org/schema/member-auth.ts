@@ -212,5 +212,29 @@ export async function initMemberAuth(pool: Pool): Promise<void> {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       expires_at TIMESTAMPTZ NOT NULL,
       used_at TIMESTAMPTZ);
+    -- link_member: '이 인가요청은 로그인이 아니라 **이미 로그인한 사람의 계정에 IdP 를 붙이려는 것**'(#1520 A).
+    --  콜백이 두 모드를 가르는 근거를 요청 개시 시점에 못박아 둔다 — 콜백 쿼리스트링으로 모드를 받으면
+    --  공격자가 그 값을 바꿔 남의 계정에 자기 IdP 를 붙이려 시도할 수 있다. NULL = 평범한 로그인.
+    ALTER TABLE pending_oidc_auth ADD COLUMN IF NOT EXISTS link_member TEXT;
+  `);
+
+  // ── pending_oidc_link — IdP 신원은 검증됐는데 **어느 구성원인지 아직 못 정한** 상태(#1520 B). ──
+  //  언제 생기나: 구글 로그인은 성공했지만 그 이메일과 일치하는 구성원이 없을 때. 이때 두 갈래가 있다 —
+  //   ① 새 구성원으로 시작(자동 가입이 켜진 도메인일 때) ② 이미 다른 이메일로 쓰던 계정에 연결.
+  //   ②를 지원하지 않으면 이메일 표기만 다른 사람에게 **빈 계정이 하나 더 생기고**(중복 구성원),
+  //   본인은 자기 데이터가 없는 화면을 보게 된다. 그래서 검증된 신원을 잠깐 들고 사람에게 묻는다.
+  //  ⚠ 이 행을 쥔 사람 = 그 구글 계정으로 인증을 마친 사람이다. 그래서 평문 코드는 저장하지 않고(sha256 만),
+  //   TTL 은 10분, 소비는 1회용이다. ②를 고르면 **로컬 비밀번호를 추가로** 요구한다 — 그게 '기존 계정의
+  //   주인임'을 입증하는 유일한 근거고, 없으면 남의 계정에 자기 IdP 를 붙일 수 있다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pending_oidc_link(
+      code_hash TEXT PRIMARY KEY,
+      sub TEXT NOT NULL,
+      email TEXT NOT NULL,
+      display_name TEXT,
+      can_provision BOOLEAN NOT NULL DEFAULT false,  -- allowlist 도메인이라 '새로 시작'을 제안해도 되는가
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ);
   `);
 }

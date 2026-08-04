@@ -420,6 +420,10 @@ const AUTH_ERROR_TEXT: Record<string, string> = {
   oidc_inactive: '비활성 상태의 계정입니다. 관리자에게 문의하세요.',
   oidc_no_email: '로그인한 계정에서 검증된 이메일을 받지 못했습니다. 관리자에게 문의하세요.',
   oidc_off: '이 배포에는 회사 계정 로그인이 설정되어 있지 않습니다.',
+  // 계정 연결(내 정보 ▸ 회사 계정 로그인)에서 돌아온 실패들(#1520 A).
+  oidc_link_session: '연결하는 동안 로그인이 풀렸습니다. 다시 로그인한 뒤 연결해 주세요.',
+  oidc_link_taken: '이 회사 계정은 이미 다른 구성원에게 연결되어 있습니다. 관리자에게 문의하세요.',
+  oidc_link_no_member: '연결할 구성원을 찾지 못했습니다.',
   exchange: '자동 로그인 링크가 만료되었습니다. 다시 로그인하세요.',
 };
 function showAuthErrorFromHash() {

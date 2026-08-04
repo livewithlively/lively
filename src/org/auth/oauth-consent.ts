@@ -17,6 +17,7 @@ import { grantableScopes } from "./grant-util.js";
 import { parseSessionCookie, userFromSession, createSession, sessionCookie } from "../../auth/sessions.js";
 import { verifyLogin } from "../../auth/local-accounts.js";
 import { activeProviders } from "../../auth/providers.js"; // #1520 외부 IdP 버튼(로컬 폼은 폴백으로 유지)
+import { esc, page, errorPage } from "../../auth/auth-pages.js"; // 페이지 셸 공용(#1520 계정 연결 화면과 동일 스타일)
 import { LivelyClientsStore, isCimdClientId } from "./oauth-clients.js";
 import { logger } from "../../log.js";
 
@@ -31,56 +32,6 @@ const SCOPE_LABEL: Record<string, string> = {
   items: "아이템 조회", context: "컨텍스트", memory: "지식·메모리",
   db: "DB 조회", code: "코드 도구", admin: "관리자(편집·적용)", runtime: "런타임(훅·툴 정의)",
 };
-
-const esc = (s: unknown): string =>
-  String(s ?? "").replace(/[<>&"']/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&#39;" }[c] as string));
-
-const STYLE = `
-  :root{color-scheme:light dark}
-  *{box-sizing:border-box}
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;margin:0;padding:2.5rem 1rem;
-       background:#f6f7f9;color:#16181d;line-height:1.6}
-  main{max-width:30rem;margin:0 auto;background:#fff;border:1px solid #e3e6ea;border-radius:14px;padding:1.75rem}
-  h1{font-size:1.15rem;margin:0 0 .25rem}
-  .sub{color:#5b6270;font-size:.875rem;margin:0 0 1.25rem}
-  .box{background:#f6f7f9;border:1px solid #e8ebef;border-radius:10px;padding:.85rem 1rem;margin:0 0 1rem;font-size:.875rem}
-  .box dt{color:#5b6270;font-size:.78rem;margin-top:.55rem}
-  .box dt:first-child{margin-top:0}
-  .box dd{margin:.1rem 0 0;word-break:break-all}
-  ul.scopes{margin:.35rem 0 0;padding-left:1.1rem}
-  ul.scopes li{margin:.15rem 0}
-  .warn{background:#fff8e6;border-color:#f2e2b5;color:#6b5518}
-  .err{background:#fdecec;border-color:#f3c9c9;color:#8c2020}
-  label{display:block;font-size:.8rem;color:#5b6270;margin:.75rem 0 .25rem}
-  input[type=email],input[type=password]{width:100%;padding:.6rem .7rem;border:1px solid #d5d9df;border-radius:8px;
-       font-size:.95rem;background:#fff;color:inherit}
-  .row{display:flex;gap:.6rem;margin-top:1.25rem}
-  button{flex:1;padding:.65rem 1rem;border-radius:8px;border:1px solid transparent;font-size:.925rem;
-       font-weight:600;cursor:pointer}
-  button.primary{background:#1f6feb;color:#fff}
-  button.ghost{background:#fff;border-color:#d5d9df;color:#3a4150}
-  .foot{margin-top:1.1rem;font-size:.78rem;color:#79808d}
-  a{color:#1f6feb}
-  @media (prefers-color-scheme:dark){
-    body{background:#0f1115;color:#e6e8ec}
-    main{background:#171a20;border-color:#272b33}
-    .box{background:#12141a;border-color:#272b33}
-    .box dt,.sub,.foot{color:#9aa1ad}
-    input[type=email],input[type=password]{background:#0f1115;border-color:#333946;color:#e6e8ec}
-    button.ghost{background:#171a20;border-color:#333946;color:#c8ccd4}
-    .warn{background:#2a2413;border-color:#4a3f1c;color:#e3cd8a}
-    .err{background:#2b1616;border-color:#4d2222;color:#f0b4b4}
-  }`;
-
-const page = (title: string, body: string): string =>
-  `<!doctype html><html lang="ko"><head><meta charset="utf-8">` +
-  `<meta name="viewport" content="width=device-width,initial-scale=1">` +
-  `<meta name="referrer" content="no-referrer">` + // rid 가 외부로 새지 않게(이 페이지의 링크·리다이렉트 모두)
-  `<title>${esc(title)}</title><style>${STYLE}</style></head><body><main>${body}</main></body></html>`;
-
-const errorPage = (msg: string): string =>
-  page("연결 승인 — Lively", `<h1>연결을 진행할 수 없습니다</h1><div class="box err">${esc(msg)}</div>` +
-    `<p class="foot">이 창을 닫고 연결을 처음부터 다시 시도해 주세요.</p>`);
 
 // 클라이언트 표시명 — CIMD 문서의 client_name 은 **외부가 준 문자열**이라 반드시 이스케이프하고,
 //  출처(도메인/등록방식)를 함께 보여준다. 이름만 믿고 승인하는 사고를 막기 위한 표기다.
