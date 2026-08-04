@@ -63,14 +63,11 @@ if [ -n "$MCP_FILE" ] && [ -f "$MCP_FILE" ] && command -v node >/dev/null 2>&1; 
 fi
 
 echo
-echo "▶ Codex — ~/.codex/config.toml 에 아래 추가 (토큰은 LIVELY_TOKEN 환경변수로):"
-cat <<EOF
-[mcp_servers.${MCP_LABEL}]
-url = "${STORE_URL}"
-bearer_token_env_var = "LIVELY_TOKEN"
-EOF
-# ⚠ 실행 모드(#1007+): codex 의 http_headers 는 정적값이라 x-lively-mode 를 세션 env 로 확장하지 못한다
-#  → codex 는 per-session 실행 모드(readonly/incognito)를 지원하지 않는다(향후 토큰 scope 로 커버). claude-code 가 1차 대상.
+echo "▶ Codex — 이 스크립트는 codex 를 건드리지 않습니다."
+echo "   codex 배선(MCP + 훅 + AGENTS.md)은 setup/user-install.mjs --harness codex 가 통째로 담당합니다:"
+echo "     node setup/user-install.mjs --harness codex"
+echo "   (claude 와 같은 stdio 프록시로 등록되므로 x-lively-session·x-lively-mode 도 함께 실립니다."
+echo "    수동 http 직결이 필요하면 ~/.lively/mcp-transport 에 http 를 적고 재설치하세요.)"
 
 echo
 echo "▶ openclaw — openclaw.json 의 mcpServers 에 추가 (\${LIVELY_TOKEN} 은 환경변수 참조 — 토큰 값을 직접 적지 말 것):"

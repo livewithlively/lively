@@ -24,8 +24,8 @@ workflow-std/
 │                                 #   · run-custom(커스텀 훅 런너: org_hook 을 매 세션 게이트웨이 fetch·실행, 디스크 미저장, kill-switch)
 │                                 #   + settings-hooks.json(PROJECT-DIR 템플릿) · test-hooks.sh
 ├─ adapters/
-│  ├─ claude/                     # Claude 어댑터(install.mjs) — user-level 설치, managed 예시 (v1)
-│  └─ codex/                      # Codex 어댑터(install.mjs) (v1) · openclaw/pi = TODO
+│  ├─ claude/                     # 하네스별 제거기(uninstall.mjs) + managed 예시 · 배선 문서
+│  └─ codex/                      # 〃 (설치 정본은 setup/user-install.mjs 하나 — 어댑터 설치기는 #1475 에서 삭제)
 ├─ template-org/                  # 새 조직콘텐츠 1회성 INIT 소스(generic 골격, 라이블리 특정 내용 없음)
 ├─ setup/                         # 설치 엔진(user-install.mjs)·제거기 + 가이드 + vendored register-clients.sh
 └─ ORG-CONTENT-GUIDE.md           # 조직콘텐츠 각 파일 작성법 + 새 조직 부트스트랩 체크리스트
