@@ -1195,7 +1195,7 @@
   "rest": [
    "POST /api/ui/org/managers"
   ],
-  "input_hash": "01b7bed06326289a"
+  "input_hash": "31607d843e8b79f6"
  },
  {
   "name": "org_manager_run",
@@ -1215,7 +1215,7 @@
   "rest": [
    "GET /api/ui/org/manager-findings"
   ],
-  "input_hash": "847a88aaac11e5b2"
+  "input_hash": "a2298f966ea6222d"
  },
  {
   "name": "org_manager_finding_resolve",
