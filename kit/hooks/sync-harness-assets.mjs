@@ -113,7 +113,28 @@ function composeCodexPrompt(asset) {
 const COMPOSERS = {
   "codex-toml": composeCodexSubagent,
   "codex-prompt": composeCodexPrompt,
+  "opencode-agent": composeOpencodeAgent,
+  "opencode-command": composeOpencodeCommand,
 };
+// opencode 서브에이전트 = md 지만 **frontmatter 스키마가 claude 와 다르다.**
+//  실측(1.18.12): `tools` 는 배열이 아니라 객체 · `color` 는 hex 또는 지정 enum · `model` 은 `provider/model` 형식.
+//  claude 값을 그대로 넣으면 `Configuration is invalid` 로 거부되고 — 여기가 중요하다 — **그 파일만 빠지는 게
+//  아니라 설정 로드가 통째로 실패해 스킬까지 0개가 된다**(실측). 그래서 이식 가능한 셋만 넘긴다:
+//  description + mode(subagent) + 본문. 나머지(color·model·tools)는 하네스가 알아서 기본값을 쓴다.
+function composeOpencodeAgent(asset) {
+  const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
+  const desc = asset.description != null ? String(asset.description) : String(fm.description ?? "");
+  return `---\ndescription: ${yamlValue(desc)}\nmode: "subagent"\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
+}
+
+// opencode 커맨드 — 같은 이유로 description 만 넘긴다(claude 의 argument-hint·allowed-tools 는 opencode 스키마에 없다).
+//  본문은 `template` 이 된다.
+function composeOpencodeCommand(asset) {
+  const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
+  const desc = asset.description != null ? String(asset.description) : String(fm.description ?? "");
+  return `---\ndescription: ${yamlValue(desc)}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
+}
+
 function composeFile(asset) {
   const spec = harness(HARNESS).assets[asset.kind];
   const custom = spec && COMPOSERS[spec.compose];

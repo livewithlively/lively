@@ -131,10 +131,13 @@ export const HARNESS = {
     wiring: "plugin-file",
     pluginDir: (home) => j(home, "plugin"),
     assets: {
-      // 에이전트·커맨드는 claude md 와 사실상 동형(frontmatter description + 본문). 스킬은 오픈표준.
+      // 스킬은 오픈표준이라 claude 와 같은 파일. 에이전트·커맨드는 **파일 형태만** 같고 frontmatter 스키마가 다르다.
+      //  ⚠ claude frontmatter 를 그대로 넘기면 opencode 가 `Configuration is invalid` 로 거부하고,
+      //   그러면 **그 파일 하나 때문에 스킬까지 통째로 안 로드된다**(실측: 에이전트 1개 → 스킬 25개가 0개로).
+      //   codex 의 `model`·`tools` 미이식과 같은 판단이며, opencode 는 피해가 그 파일 밖으로 번진다는 게 다르다.
       skill: { root: (h) => j(h, "skill"), dir: true, ext: "", compose: "markdown" },
-      subagent: { root: (h) => j(h, "agent"), dir: false, ext: ".md", compose: "markdown" },
-      command: { root: (h) => j(h, "command"), dir: false, ext: ".md", compose: "markdown" },
+      subagent: { root: (h) => j(h, "agent"), dir: false, ext: ".md", compose: "opencode-agent" },
+      command: { root: (h) => j(h, "command"), dir: false, ext: ".md", compose: "opencode-command" },
     },
     tools: {
       // ⚠ 전부 **소문자**다. claude 의 `Edit|Write|…` 정규식은 여기서 한 번도 안 걸린다(조용한 무력화).
