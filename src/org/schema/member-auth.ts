@@ -193,4 +193,48 @@ export async function initMemberAuth(pool: Pool): Promise<void> {
       used_at TIMESTAMPTZ,
       created_by TEXT);
   `);
+
+  // ── pending_oidc_auth — 외부 IdP 로그인(OIDC)의 진행 중 인가요청(#1520). auth/oidc.ts 참조. ──
+  //  왜 서버 저장인가: 우리가 **클라이언트**라 state·nonce·PKCE verifier 를 콜백까지 우리가 들고 있어야 하는데,
+  //   이 시점엔 세션이 없다(로그인 전이다). 쿠키에 담으면 서명·크기·SameSite 를 우리가 다시 발명해야 해서
+  //   pending_device_auth / pending_session_mint 와 같은 관례를 따른다 — 짧은 TTL + 1회용 + 평문 미저장.
+  //  state 는 CSRF 방어값이자 이 행의 열쇠 → 평문은 저장하지 않고 sha256 만(PK). 돌아온 state 를 해시해 찾는다.
+  //  nonce_hash: id_token 의 nonce 대조용. 역시 해시만 둔다 — 대조는 '같은가' 뿐이라 원본이 필요 없다.
+  //  code_verifier 는 PKCE 상 원본이 있어야 교환에 쓸 수 있어 유일하게 평문이다(TTL 10분 · state 를 모르면 조회 불가).
+  //  return_to: 로그인 후 돌아갈 **경로**(오픈 리다이렉트 방지로 '/'로 시작하는 상대경로만 저장).
+  //  셀프호스트 무해: OIDC env 를 안 켜면 이 표는 영원히 비어 있다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pending_oidc_auth(
+      state_hash TEXT PRIMARY KEY,
+      nonce_hash TEXT NOT NULL,
+      code_verifier TEXT NOT NULL,
+      return_to TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ);
+    -- link_member: '이 인가요청은 로그인이 아니라 **이미 로그인한 사람의 계정에 IdP 를 붙이려는 것**'(#1520 A).
+    --  콜백이 두 모드를 가르는 근거를 요청 개시 시점에 못박아 둔다 — 콜백 쿼리스트링으로 모드를 받으면
+    --  공격자가 그 값을 바꿔 남의 계정에 자기 IdP 를 붙이려 시도할 수 있다. NULL = 평범한 로그인.
+    ALTER TABLE pending_oidc_auth ADD COLUMN IF NOT EXISTS link_member TEXT;
+  `);
+
+  // ── pending_oidc_link — IdP 신원은 검증됐는데 **어느 구성원인지 아직 못 정한** 상태(#1520 B). ──
+  //  언제 생기나: 구글 로그인은 성공했지만 그 이메일과 일치하는 구성원이 없을 때. 이때 두 갈래가 있다 —
+  //   ① 새 구성원으로 시작(자동 가입이 켜진 도메인일 때) ② 이미 다른 이메일로 쓰던 계정에 연결.
+  //   ②를 지원하지 않으면 이메일 표기만 다른 사람에게 **빈 계정이 하나 더 생기고**(중복 구성원),
+  //   본인은 자기 데이터가 없는 화면을 보게 된다. 그래서 검증된 신원을 잠깐 들고 사람에게 묻는다.
+  //  ⚠ 이 행을 쥔 사람 = 그 구글 계정으로 인증을 마친 사람이다. 그래서 평문 코드는 저장하지 않고(sha256 만),
+  //   TTL 은 10분, 소비는 1회용이다. ②를 고르면 **로컬 비밀번호를 추가로** 요구한다 — 그게 '기존 계정의
+  //   주인임'을 입증하는 유일한 근거고, 없으면 남의 계정에 자기 IdP 를 붙일 수 있다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pending_oidc_link(
+      code_hash TEXT PRIMARY KEY,
+      sub TEXT NOT NULL,
+      email TEXT NOT NULL,
+      display_name TEXT,
+      can_provision BOOLEAN NOT NULL DEFAULT false,  -- allowlist 도메인이라 '새로 시작'을 제안해도 되는가
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ);
+  `);
 }

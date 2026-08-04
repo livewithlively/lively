@@ -4,7 +4,7 @@
 //   이 모듈을 그대로 재수출해 main.ts 를 무수정으로 둔다(소비자 import 문 무변경 계약).
 //  PROF_* · profChips · parseMyProfile 은 [내 설정 ▸ 내 AI 설정](me-ai.ts)이 함께 쓴다 — 모달과 그 화면이
 //   같은 저장 경로(POST /api/ui/me/profile)를 부분 갱신으로 나눠 쓰기 때문에 직렬화 규약이 한 곳이어야 한다.
-import { api, el, errorNote, logout, profileAvatar, setPersonAvatar, state, toast, uiText, usernameAnchor } from './core.js';
+import { api, apiUrl, el, errorNote, logout, profileAvatar, setPersonAvatar, state, toast, uiText, usernameAnchor } from './core.js';
 import { field, skeleton } from './ui-primitives.js';
 
 // 우측 상단 '내 프로필' — 인증된 구성원이 자기 표시 이름·개인 레이어를 직접 편집(셀프 서비스, 선택형).
@@ -240,6 +240,9 @@ export async function openMyProfileModal(): Promise<void> {
   let data: any;
   try { data = await api('/api/ui/me/profile'); }
   catch (e) { bodyWrap.replaceChildren(errorNote(e, '내 정보를 불러오지 못했습니다')); return; }
+  // 로그인 수단(#1520) — 실패해도 프로필 편집은 그대로 되게 조용히 넘어간다(부가 정보).
+  let logins: any = null;
+  try { logins = await api('/api/ui/me/logins'); } catch (_) { /* OIDC 미설정 배포 등 — 섹션을 안 그린다 */ }
 
   const nameIn = el('input', { type: 'text', value: data.display_name || '', placeholder: '이름 (비우면 이메일/아이디로 표시)' });
   const nickIn = el('input', { type: 'text', value: data.nickname || '', placeholder: '닉네임 (비우면 이름으로 표시)' });
@@ -267,7 +270,45 @@ export async function openMyProfileModal(): Promise<void> {
     data.email ? field('비밀번호', el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' },
       el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '비밀번호 변경', onclick: () => changePasswordModal() }),
       el('span', { class: 'admin-hint', style: 'margin:0' }, ...uiText('현재 비밀번호를 확인한 뒤 새 비밀번호로 바꿔요.')))) : null,
+    logins && logins.oidcAvailable ? field('회사 계정 로그인', companyLoginRow(logins)) : null,
     el('div', { class: 'admin-actions' }, saveBtn, status));
+}
+
+// 회사 계정(외부 IdP) 연결 — 붙이면 그 계정 버튼 한 번으로 들어오고, 떼면 비밀번호로만 들어온다(#1520 A).
+//  '연결'은 IdP 왕복이 필요해 페이지 이동으로 시작하고, '해제'는 그 자리에서 끝난다.
+function companyLoginRow(logins: any): any {
+  const row = el('div', { style: 'display:flex; align-items:center; gap:10px; flex-wrap:wrap;' });
+  const label = String(logins.oidcLabel || '회사 계정');
+  const render = (st: any) => {
+    const kids: any[] = [];
+    if (st.linked) {
+      kids.push(el('span', { class: 'admin-ro', text: st.email || '연결됨' }));
+      const off = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '연결 해제' });
+      off.addEventListener('click', async () => {
+        off.disabled = true;
+        try {
+          await api('/api/ui/me/oidc/unlink', { method: 'POST' });
+          toast('연결을 해제했습니다.');
+          render({ ...st, linked: false, email: null });
+        } catch (e: any) { toast((e && e.message) || '해제하지 못했습니다', true); off.disabled = false; }
+      });
+      kids.push(off);
+      // 비밀번호가 없으면 해제 자체가 막힌다(로그인 수단이 0이 된다) — 누르기 전에 이유를 알려준다.
+      kids.push(el('span', { class: 'admin-hint', style: 'margin:0' }, ...uiText(st.hasPassword
+        ? '해제하면 이메일·비밀번호로만 로그인해요.'
+        : '해제하려면 먼저 비밀번호를 설정하세요 — 지금 해제하면 로그인할 수단이 없어져요.')));
+    } else {
+      const on = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: label + ' 연결' });
+      on.addEventListener('click', () => {
+        location.href = apiUrl('/api/ui/auth/oidc/start') + '?link=1&to=' + encodeURIComponent('/ui/' + (location.hash || ''));
+      });
+      kids.push(on, el('span', { class: 'admin-hint', style: 'margin:0' },
+        ...uiText('연결하면 다음부터 버튼 한 번으로 로그인해요. 이메일이 달라도 괜찮아요.')));
+    }
+    row.replaceChildren(...kids);
+  };
+  render(logins);
+  return row;
 }
 
 export {

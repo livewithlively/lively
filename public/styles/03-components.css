@@ -412,6 +412,10 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .gate-btn { width: 100%; }
 .gate-token-toggle { background: none; border: 0; color: var(--muted-2); font-size: 12.5px; cursor: pointer; padding: 4px; text-decoration: underline; align-self: center; }
 .gate-token-toggle:hover { color: var(--ink-sub); }
+/* 외부 IdP 로그인(#1520) — 로컬 폼과 시각적으로 분리한다. 'IdP 가 곧 이 조직의 정문' 인 배포가 많아
+   보조 버튼처럼 보이면 안 되지만, 폴백(로컬)을 지우지도 않으므로 구분선으로 층을 나눈다. */
+.gate-providers { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.gate-providers .gate-idp-hint { font-size: 12.5px; color: var(--muted-2); margin: 0; text-align: center; }
 
 /* ── 토스트 — 헤어라인 보더 + 선두 6px 점(성공=민트·에러=코랄) ── */
 /* z-index 는 모든 모달/오버레이/드로어 위여야 한다(현 최대 .cmt-backdrop=1300). 토스트는 전역 피드백이라
