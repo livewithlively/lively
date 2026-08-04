@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Windows 부트스트랩(bootstrap.ps1) **실행 계약** 회귀테스트 (#1087).
 //
-//  이 파일은 POSIX CI 에서 **한 줄도 실행되지 않는다**(PowerShell 부재). 짝인 bootstrap-node-gate.test.mjs 는
+//  이 파일의 ⑦⑧(실제 PowerShell 실행)은 POSIX 박스에선 돌지 않는다(PowerShell 부재). 짝인 bootstrap-node-gate.test.mjs 는
 //  win32 에서 skip 하므로 bootstrap.ps1 의 자동 검증은 **0 이었고**, 그래서 아래 두 사고가 배포까지 갔다:
 //    ① `exit` 로 중단 → `irm | iex` 는 사용자 세션에서 도니까 **사용자 창이 닫히고 에러가 증발**했다.
 //       (실측: `iex 'Write-Host A; exit 3'` → A 만 찍히고 세션 종료. 사용자는 "갑자기 창이 닫혔다"만 안다.)
@@ -14,8 +14,10 @@
 //  실행: node kit/cli/bootstrap-windows.test.mjs
 
 import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, delimiter } from "node:path";
+// ⚠ 절대경로 동적 import 는 반드시 file:// URL 로 — 윈도우는 "d:" 를 프로토콜로 읽는다(#1510)
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { WIN, writeStubBin } from "../testlib/os-sandbox.mjs";   // 스텁 node 는 윈도우에서도 실행 가능해야 한다(#1510)
 
 let pass = 0, fail = 0;
 const ok = (name) => { pass++; console.log(`ok  ${name}`); };
@@ -93,7 +95,7 @@ check("④ 판정 불가와 구버전을 구분해 안내한다", /버전 확인
 {
   // ⚠ 헬퍼가 없어도 **크래시로 죽지 않는다** — 한 섹션의 예외가 뒤 검사(⑥⑦⑧)를 통째로 가리면
   //   "몇 개가 통과했나"가 거짓이 되고, 진짜 회귀가 그 뒤에 숨는다.
-  const { winSpawnArgs } = await import(join(HERE, "lively.mjs")).catch(() => ({}));
+  const { winSpawnArgs } = await import(pathToFileURL(join(HERE, "lively.mjs"))).catch(() => ({}));
   if (typeof winSpawnArgs !== "function") {
     bad("⑤-b 셸 스폰 인자 조립 헬퍼(winSpawnArgs)가 없다", "명령 인용이 호출부에 흩어져 있으면 또 빠뜨린다");
   } else {
@@ -135,11 +137,21 @@ check("⑥ cmdSetup 이 토큰 유효성을 확인한다 (존재만 보면 401 �
 //  정적 단언은 "코드가 그렇게 생겼나"까지만 본다. pwsh 가 있는 곳에선 한 걸음 더 가서 **그렇게 동작하나**를 본다.
 //  이 파일이 사고를 낸 근본 이유가 '실행 커버리지 0' 이었으므로, 실행할 수 있는 곳에선 반드시 실행한다.
 {
-  const pwsh = (process.env.PATH || "").split(":").map((d) => join(d, "pwsh")).find((p) => existsSync(p));
-  if (!pwsh) console.log("skip ⑦⑧ 실제 PowerShell 실행 검사 — pwsh 없음(POSIX CI 정상)");
+  // ⚠ PATH 를 `:` 로 쪼개고 확장자 없이 찾으면 **윈도우에서 영영 못 찾는다**(구분자 `;` · pwsh.exe).
+  //  그래서 정작 PowerShell 이 있는 유일한 곳(windows 러너)에서 ⑦⑧ 이 조용히 skip 됐다 — 이 파일이 사고를 낸
+  //  근본 이유(실행 커버리지 0)가 CI 를 붙인 뒤에도 그대로였다는 뜻이다(#1510).
+  const findExe = (name) => {
+    const exts = WIN ? (process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";") : [""];
+    for (const d of (process.env.PATH || "").split(delimiter)) {
+      for (const e of exts) { const p = join(d, name + e); if (existsSync(p)) return p; }
+    }
+    return null;
+  };
+  const pwsh = findExe("pwsh") || (WIN ? findExe("powershell") : null);
+  if (!pwsh) console.log("skip ⑦⑧ 실제 PowerShell 실행 검사 — pwsh 없음(PowerShell 미설치 박스 정상)");
   else {
     const { spawnSync } = await import("node:child_process");
-    const { mkdtempSync, writeFileSync, chmodSync } = await import("node:fs");
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
     const ps1Path = join(HERE, "bootstrap.ps1");
 
@@ -152,12 +164,11 @@ check("⑥ cmdSetup 이 토큰 유효성을 확인한다 (존재만 보면 401 �
     //   ⚠ 경계값 행(정확히 최소 major)을 반드시 포함한다 — `>` vs `>=` 오프바이원은 그 행이 없으면 안 잡힌다.
     //   ⚠ "판정 자체가 실패하는 node" 행도 포함 — #1087 이 정확히 그 경로였다(그때는 '구버전'으로 오분류됐다).
     const box = mkdtempSync(join(tmpdir(), "lively-nodegate-"));
-    const stub = (name, ver) => {
-      const p = join(box, name);
-      writeFileSync(p, ver ? `#!/bin/sh\n[ "$1" = "-v" ] && echo ${ver} && exit 0\nexit 1\n` : `#!/bin/sh\necho boom >&2\nexit 1\n`);
-      chmodSync(p, 0o755);
-      return p;
-    };
+    // 스텁 node — `& $exe -v` 로 불린다. sh 스크립트로 쓰면 윈도우에서 실행이 안 돼 **모든 케이스가 False** 가
+    //  되고, 판정 로직이 아니라 스텁이 틀린 탓에 빨간불이 난다(#1510). 런처를 플랫폼별로 낸다.
+    const stub = (name, ver) => writeStubBin(box, name, ver
+      ? `if (process.argv[2] === "-v") { console.log(${JSON.stringify(ver)}); process.exit(0); }\nprocess.exit(1);`
+      : 'console.error("boom");\nprocess.exit(1);');
     const cases = [
       ["v22.15.0 (현장 실측 — 옛 코드가 '20 미만'이라 오판한 바로 그 버전)", stub("n-new", "v22.15.0"), "True"],
       ["v16.20.2 (진짜 구버전)", stub("n-old", "v16.20.2"), "False"],

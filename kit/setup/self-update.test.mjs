@@ -9,7 +9,8 @@ import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";  // ⚠ 절대경로 동적 import 는 반드시 file:// URL 로 — 윈도우는 "d:" 를 프로토콜로 읽는다(#1510)
+import { sandboxEnv, WIN } from "../testlib/os-sandbox.mjs";   // HOME 만으론 윈도우 격리가 안 된다(#1510)
 
 // ⚠ 업데이터는 **반드시 비동기(execFile)** 로 띄운다. 픽스처 게이트웨이가 이 프로세스에서 돌기 때문에
 //  execFileSync 로 막으면 이벤트 루프가 멈춰 자식의 fetch 가 전부 타임아웃한다 — 그러면 모든 케이스가
@@ -18,7 +19,7 @@ const pExecFile = promisify(execFile);
 
 const HERE = join(fileURLToPath(import.meta.url), "..");           // kit/setup
 const UPDATER = join(HERE, "..", "hooks", "self-update.mjs");
-const { buildKitBundle } = await import(join(HERE, "..", "generator", "build-context.mjs"));
+const { buildKitBundle } = await import(pathToFileURL(join(HERE, "..", "generator", "build-context.mjs")));
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -95,7 +96,7 @@ function freshHome(stamp) {
 //  · LIVELY_HOME — self-update·user-install 의 샌드박스 계약.
 //  · LIVELY_TOKEN / LIVELY_GATEWAY_URL — env 가 파일보다 우선하므로, 셸에 있으면 실게이트웨이로 새어나간다.
 const env = (home, extra = {}) => ({
-  ...process.env, HOME: home, LIVELY_HOME: home, CLAUDE_CONFIG_DIR: join(home, ".claude"),
+  ...process.env, ...sandboxEnv({ home }), LIVELY_HOME: home, CLAUDE_CONFIG_DIR: join(home, ".claude"),
   LIVELY_OFF: "", LIVELY_HOOKS_OFF: "", LIVELY_NO_AUTO_UPDATE: "",
   LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "", ...extra,
 });
@@ -300,8 +301,12 @@ try {
       : bad("⑬ 토큰 비유출", ran ? `유출 ${leaked.length}곳` : "설치가 안 돌아 검증 무의미");
     // 로그 퍼미션 0600(형제 상태파일과 동일 — world-readable 금지)
     const { statSync: stat } = await import("node:fs");
-    const mode = existsSync(lv(home, "update.log")) ? (stat(lv(home, "update.log")).mode & 0o777) : null;
-    (mode === 0o600) ? ok("⑬b update.log 0600") : bad("⑬b 로그 퍼미션", `mode=${mode && mode.toString(8)}`);
+    // 윈도우엔 POSIX 퍼미션 비트가 없다(NTFS ACL) — node 가 보고하는 mode 는 0666/0444 뿐이라 이 계약이 성립하지 않는다.
+    if (WIN) console.log("skip ⑬b 로그 퍼미션 — 윈도우는 POSIX mode 비트가 없다(ACL)");
+    else {
+      const mode = existsSync(lv(home, "update.log")) ? (stat(lv(home, "update.log")).mode & 0o777) : null;
+      (mode === 0o600) ? ok("⑬b update.log 0600") : bad("⑬b 로그 퍼미션", `mode=${mode && mode.toString(8)}`);
+    }
   }
 
   // ⑭ **AppleDouble 쓰레기 내성**(#858 회귀 — 2026-07-14 고객사 A 실사고). macOS 게이트웨이 번들엔 `._name.mjs`
@@ -365,13 +370,15 @@ try {
     await runUpdater(home);
     const conf = JSON.parse(readFileSync(cj, "utf8"));
     const ll = conf.mcpServers && conf.mcpServers["lively-local"];
-    const llOk = !!(ll && ll.type === "stdio" && Array.isArray(ll.args) && ll.args[0] === "mcp-local" && String(ll.command).endsWith("/bin/lively"));
+    const llOk = !!(ll && ll.type === "stdio" && Array.isArray(ll.args) && ll.args[0] === "mcp-local"
+      && /[/\\]bin[/\\]lively(\.cmd)?$/.test(String(ll.command)));   // 윈도우 심은 `bin\\lively.cmd`(#1510)
     const userKept = !!(conf.mcpServers && conf.mcpServers.other && conf.projects && conf.projects["/some/path"]);
     // #1079 — additive 무손실의 **유일한 예외**: 우리가 심은 lively 항목을 http 직결 → stdio 프록시로 교정한다.
     //  (http 직결은 VPN 미접속 세션에서 그 세션 내내 죽는다.) 유저 항목·claude 상태는 여전히 불변이어야 한다.
     const lvEntry = (conf.mcpServers && conf.mcpServers.lively) || {};
     const migrated = lvEntry.type === "stdio" && Array.isArray(lvEntry.args) && lvEntry.args[0] === "mcp"
-      && String(lvEntry.command).endsWith("/bin/lively");
+      // 윈도우 심은 `bin\\lively.cmd` 다 — 구분자·확장자를 가정하지 않는다(#1510).
+      && /[/\\]bin[/\\]lively(\.cmd)?$/.test(String(lvEntry.command));
     // 부수 이득 — 설정 파일에서 평문 토큰이 사라진다(신원은 런타임에 ~/.lively/token 에서 읽는다).
     const tokenGone = !JSON.stringify(lvEntry).includes("test-token");
     (llOk && userKept && migrated && tokenGone)

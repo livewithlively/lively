@@ -13,7 +13,11 @@ import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";  // ⚠ 절대경로 동적 import 는 반드시 file:// URL 로 — 윈도우는 "d:" 를 프로토콜로 읽는다(#1510)
+import { pathWith, writeStubBin } from "../testlib/os-sandbox.mjs";   // 스텁은 윈도우에서도 실행 가능해야 한다(#1510)
+import { WIN } from "../testlib/os-sandbox.mjs";
+// CLI 런처 심의 파일명 — 윈도우는 `.cmd` 배치다(user-install.mjs 의 CLI_SHIM_CMD). 이름을 가정하면 윈도우에서 어긋난다(#1510).
+const SHIM = WIN ? "lively.cmd" : "lively";
 
 const pExecFile = promisify(execFile);
 
@@ -21,11 +25,11 @@ const HERE = join(fileURLToPath(import.meta.url), "..");          // kit/cli
 const KIT = join(HERE, "..");                                     // kit
 const REPO = join(KIT, "..");                                     // 레포 루트
 const CLI = join(HERE, "lively.mjs");
-const { buildKitBundle } = await import(join(KIT, "generator", "build-context.mjs"));
-const { CLI_SHIM, CLI_SHIM_CMD } = await import(join(KIT, "setup", "user-install.mjs"));
+const { buildKitBundle } = await import(pathToFileURL(join(KIT, "generator", "build-context.mjs")));
+const { CLI_SHIM, CLI_SHIM_CMD } = await import(pathToFileURL(join(KIT, "setup", "user-install.mjs")));
 // 순수함수 — 실행 경로로는 못 태우는 분기라 직접 검증한다: winArg 는 POSIX CI 에서 안 돌고(WIN=false),
 //  loginEscapeToken 은 제어단말(/dev/tty)이 있어야 밟히는 분기를 담는다(#916).
-const { winArg, loginEscapeToken } = await import(CLI);
+const { winArg, loginEscapeToken } = await import(pathToFileURL(CLI));
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -98,28 +102,31 @@ function newHome(name) {
   const bin = join(home, "stub-bin");
   mkdirSync(bin, { recursive: true });
   const log = join(home, "claude-argv.log");
-  writeFileSync(join(bin, "claude"), [
-    "#!/bin/sh",
-    `printf '%s\\n' "$*" >> ${JSON.stringify(log)}`,
+  // 스텁 본문은 JS 한 벌 — sh 로 쓰면 윈도우에서 실행조차 안 돼 가로채기가 조용히 실패한다(#1510).
+  writeStubBin(bin, "claude", [
+    'import { appendFileSync, readFileSync } from "node:fs";',
+    `const LOG = ${JSON.stringify(log)};`,
+    "const a = process.argv.slice(2);",
+    'appendFileSync(LOG, a.join(" ") + "\\n");',
+    'const logged = (re) => { try { return re.test(readFileSync(LOG, "utf8")); } catch { return false; } };',
     // `claude mcp list` 는 등록된 걸 되돌려준다(구 status 판정 경로 — 남겨둔다).
-    'if [ "$1" = "mcp" ] && [ "$2" = "list" ]; then',
-    `  grep -q "mcp add .*lively " ${JSON.stringify(log)} 2>/dev/null && echo "lively: ${GW}/mcp (HTTP)"`,
-    "  exit 0",
-    "fi",
+    'if (a[0] === "mcp" && a[1] === "list") {',
+    `  if (logged(/mcp add .*lively /)) console.log(${JSON.stringify(`lively: ${GW}/mcp (HTTP)`)});`,
+    "  process.exit(0);",
+    "}",
     // `claude mcp get <name>` — #1431 부터 status/doctor 가 **이걸** 쓴다(우리 서버 하나만 헬스체크).
     //  실물 형식을 그대로 흉내낸다: 등록됐으면 Scope:/Status: 두 줄, 아니면 rc=1 + "No MCP server named".
-    'if [ "$1" = "mcp" ] && [ "$2" = "get" ]; then',
-    `  if grep -q "mcp add .*$3 " ${JSON.stringify(log)} 2>/dev/null; then`,
-    '    echo "Scope: User config (available in all your projects)"',
-    '    echo "Status: ✔ Connected"',
-    "    exit 0",
-    "  fi",
-    '  echo "No MCP server named \\"$3\\"." >&2',
-    "  exit 1",
-    "fi",
-    "exit 0",
+    'if (a[0] === "mcp" && a[1] === "get") {',
+    '  if (logged(new RegExp("mcp add .*" + a[2] + " "))) {',
+    '    console.log("Scope: User config (available in all your projects)");',
+    '    console.log("Status: ✔ Connected");',
+    "    process.exit(0);",
+    "  }",
+    '  console.error(`No MCP server named "${a[2]}".`);',
+    "  process.exit(1);",
+    "}",
+    "process.exit(0);",
   ].join("\n"));
-  chmodSync(join(bin, "claude"), 0o755);
   return { home, bin, log, argv: () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean) : []) };
 }
 
@@ -134,7 +141,7 @@ async function lively(h, args, { env = {}, expectFail = false } = {}) {
         HOME: h.home,
         LIVELY_HOME: h.home,
         CLAUDE_CONFIG_DIR: join(h.home, ".claude"),
-        PATH: `${h.bin}:${process.env.PATH}`,
+        PATH: pathWith(h.bin),
         LIVELY_TOKEN: "",
         LIVELY_GATEWAY_URL: "",
         ...env,
@@ -165,7 +172,8 @@ try {
   {
     const r = await lively(H, ["login", "--gateway", `${GW}/mcp`, "--token", TOKEN]);
     const tp = join(H.home, ".lively", "token");
-    const mode = (statSync(tp).mode & 0o777).toString(8);
+    // 윈도우엔 POSIX mode 비트가 없다(NTFS ACL) — node 는 0666 만 보고한다. 그 계약은 여기서 성립하지 않는다.
+    const mode = WIN ? "600" : (statSync(tp).mode & 0o777).toString(8);
     const gw = readFileSync(join(H.home, ".lively", "gateway-url"), "utf8").trim();
     check("② 로그인 성공 · 토큰 0600 · gateway-url 정규화(/mcp 제거)",
       readFileSync(tp, "utf8") === TOKEN && mode === "600" && gw === GW,
@@ -180,7 +188,7 @@ try {
     const stamped = readFileSync(join(lv, "kit-version"), "utf8").trim();
     const hooks = existsSync(join(lv, "hooks", "session-preload.mjs"));
     const cli = existsSync(join(lv, "lib", "lively.mjs"));
-    const shim = existsSync(join(lv, "bin", "lively"));
+    const shim = existsSync(join(lv, "bin", SHIM));
     check("③ 설치 — 훅 · CLI · 심 · 버전 스탬프",
       stamped === "v-aaa" && hooks && cli && shim,
       `stamp=${stamped} hooks=${hooks} cli=${cli} shim=${shim}\n${r.err.slice(-400)}`);
@@ -196,7 +204,7 @@ try {
     // (a) #1079 — lively 는 **stdio 프록시**로 등록한다(http 직결은 VPN 미접속 세션에서 그 세션 내내 죽는다).
     //  종전 3헤더(토큰·세션귀속#852·실행모드#1007+)는 사라진 게 아니라 **프록시가 상류 호출에 붙인다** —
     //  그 계약은 lively-mcp-gateway.test.mjs(E11 파일토큰 우선 · E15 하네스 stamp)가 못박는다.
-    const shimPath = join(H.home, ".lively", "bin", "lively");
+    const shimPath = join(H.home, ".lively", "bin", SHIM);
     const want = `mcp add --transport stdio --scope user lively ${shimPath} mcp`;
     check("④ claude MCP 등록 argv 못박기(#1079 — lively = stdio 프록시)",
       adds.some((l) => l === want), `got=${JSON.stringify(adds)}\nwant=${JSON.stringify(want)}`);
@@ -366,7 +374,10 @@ try {
   }
 
   // ⑭ PATH rc 블록 멱등 — 재설치해도 늘지 않는다(구표기 누적으로 훅이 두 벌 되던 사고의 rc 판).
-  {
+  //  ⚠ 윈도우엔 셸 rc 개념이 없다 — wireCliPath 는 사용자 PATH 환경변수를 직접 손댄다(레지스트리/setx).
+  //   그건 샌드박스 홈으로 격리할 수 없으므로(실기기 오염) 여기서 검증하지 않는다(#1510).
+  if (WIN) console.log("skip ⑭ PATH rc 블록 — 윈도우는 셸 rc 가 아니라 사용자 PATH 환경변수를 쓴다");
+  else {
     const h = newHome("h-rc");
     writeFileSync(join(h.home, ".zshrc"), "# 내 설정\nalias ll='ls -la'\n");
     await lively(h, ["login", "--gateway", GW, "--token", TOKEN]);
@@ -387,7 +398,7 @@ try {
     // 게이트웨이가 서빙하듯 주소를 굽는다(src/web.ts 의 serveBootstrap 과 동일 치환).
     writeFileSync(boot, readFileSync(join(HERE, "bootstrap.sh"), "utf8").replaceAll("__LIVELY_GATEWAY__", GW));
     const r = await pExecFile("sh", [boot], {
-      env: { ...process.env, HOME: h.home, LIVELY_HOME: h.home, PATH: `${h.bin}:${process.env.PATH}` },
+      env: { ...process.env, HOME: h.home, LIVELY_HOME: h.home, PATH: pathWith(h.bin) },
       timeout: 60000,
     }).catch((e) => ({ stdout: e.stdout ?? "", stderr: e.stderr ?? String(e.message), failed: true }));
 
@@ -419,9 +430,11 @@ try {
   }
   // ⑮ run — 프로젝트# **없으면 하네스 바로 실행**(#1007+, 사용자 요청) + 모드 플래그가 세션 env 주입. --harness 로 하네스 지정.
   {
-    const fakeH = join(H.home, "fake-harness.mjs");
-    writeFileSync(fakeH, "#!/usr/bin/env node\nprocess.stdout.write('HARNESS['+process.argv.slice(2).join(',')+'] MODE='+(process.env.LIVELY_MODE||'')+' RO='+(process.env.LIVELY_READONLY||'')+' INC='+(process.env.LIVELY_INCOGNITO||'')+' OFF='+(process.env.LIVELY_OFF||''));\n");
-    chmodSync(fakeH, 0o755);
+    // 하네스는 **PATH 에서 이름으로** 찾게 한다 — 윈도우의 has() 는 `where <이름>` 이라 절대경로를 못 받고,
+    //  스폰도 .cmd 셰임을 PATHEXT 로 해석해야 한다(#1510). 그래서 스텁 bin 에 심고 이름만 넘긴다.
+    const fakeH = "fake-harness";
+    writeStubBin(H.bin, "fake-harness",
+      "process.stdout.write('HARNESS['+process.argv.slice(2).join(',')+'] MODE='+(process.env.LIVELY_MODE||'')+' RO='+(process.env.LIVELY_READONLY||'')+' INC='+(process.env.LIVELY_INCOGNITO||'')+' OFF='+(process.env.LIVELY_OFF||''));");
     const r = await lively(H, ["run", "--readonly", "--harness", fakeH, "hello"]);
     check("⑮ run — 프로젝트# 없으면 하네스 직접 실행 + 모드 플래그는 인자에서 소비(하네스엔 hello 만)",
       r.out.includes("HARNESS[hello]") && r.out.includes("MODE=readonly") && r.out.includes("RO=1"), r.out.trim());
@@ -443,7 +456,7 @@ try {
     writeFileSync(join(box, ".claude.json"), JSON.stringify({ mcpServers: { linear: { type: "http", url: "https://user.example/mcp" } } }));
     const probe = join(box, "probe.mjs");
     writeFileSync(probe, [
-      `import { backupUserMcp } from ${JSON.stringify(CLI)};`,
+      `import { backupUserMcp } from ${JSON.stringify(pathToFileURL(CLI).href)};`,   // 절대경로 그대로면 윈도우에서 죽는다(#1510)
       `import { writeFileSync as w } from "node:fs";`,
       `backupUserMcp("linear"); backupUserMcp("notion");`,                                    // linear=유저것, notion=부재(null)
       `w(${JSON.stringify(join(box, ".claude.json"))}, JSON.stringify({mcpServers:{linear:{type:"http",url:"https://org.example/mcp"}}}));`, // 라이블리가 덮어쓴 상태 모사
@@ -472,7 +485,7 @@ try {
     writeFileSync(join(prof, ".claude.json"), JSON.stringify({ mcpServers: { linear: { type: "http", url: "https://user-profile.example/mcp" } } }));
     const probe = join(box, "probe.mjs");
     writeFileSync(probe, [
-      `import { backupUserMcp } from ${JSON.stringify(CLI)};`,
+      `import { backupUserMcp } from ${JSON.stringify(pathToFileURL(CLI).href)};`,   // 절대경로 그대로면 윈도우에서 죽는다(#1510)
       `backupUserMcp("linear");`,
     ].join("\n"));
     execFileSync(process.execPath, [probe], { env: { ...process.env, LIVELY_HOME: box, CLAUDE_CONFIG_DIR: prof }, stdio: "ignore" });

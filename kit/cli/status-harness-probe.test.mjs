@@ -13,11 +13,12 @@
 //  ⚠ 스텁의 목록 조회(`mcp list`)는 **일부러 '정답'을 되돌려준다** — 누군가 그 경로로 되돌려도 값은 맞아서 통과한다.
 //   그 회귀를 잡는 건 오직 "목록 조회 호출 0건" 단정(케이스 ⑫)이다. 시간으로 재면 flaky 하므로 **호출 로그**로 본다.
 import { execFile } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { closedPath, writeStubBin } from "../testlib/os-sandbox.mjs";   // 스텁은 윈도우에서도 실행 가능해야 한다(#1510)
 
 const pExecFile = promisify(execFile);
 const HERE = join(fileURLToPath(import.meta.url), "..");
@@ -31,14 +32,14 @@ const check = (n, cond, why) => (cond ? ok(n) : bad(n, why || "조건 불만족"
 
 // 스텁 claude — 실물 `claude mcp get` 출력 형식을 흉내내고 호출 argv 를 전부 로그에 남긴다.
 //  get 모드: connected · down · noStatus(Scope 만) · weird(✔/✘ 아닌 값) · absent(미등록 rc=1) · old(하위명령 미지원 rc=1)
-const SCOPE = '  echo "Scope: User config (available in all your projects)"';
+const SCOPE = "Scope: User config (available in all your projects)";
 const GET = {
-  connected: [SCOPE, '  echo "Status: ✔ Connected"', "  exit 0"],
-  down: [SCOPE, '  echo "Status: ✘ Failed to connect"', "  exit 0"],
-  noStatus: [SCOPE, '  echo "Type: stdio"', "  exit 0"],
-  weird: [SCOPE, '  echo "Status: ⏳ Pending"', "  exit 0"],
-  absent: ['  echo "No MCP server named \\"$3\\". Configured servers: notion, linear" >&2', "  exit 1"],
-  old: ["  echo \"error: unknown command 'get'\" >&2", "  exit 1"],
+  connected: { out: [SCOPE, "Status: ✔ Connected"], code: 0 },
+  down: { out: [SCOPE, "Status: ✘ Failed to connect"], code: 0 },
+  noStatus: { out: [SCOPE, "Type: stdio"], code: 0 },
+  weird: { out: [SCOPE, "Status: ⏳ Pending"], code: 0 },
+  absent: { err: ['No MCP server named "${a[2]}". Configured servers: notion, linear'], code: 1 },
+  old: { err: ["error: unknown command 'get'"], code: 1 },
 };
 
 // 케이스 하나 = 샌드박스 홈 + 스텁 bin + 프로필 설정 디렉터리. stub=false 면 claude 를 아예 안 깐다(①행).
@@ -50,20 +51,21 @@ function mkCase(name, mode, { stub = true } = {}) {
   mkdirSync(ccd, { recursive: true });
   const log = join(home, "claude-argv.log");
   if (stub) {
-    writeFileSync(join(bin, "claude"), [
-      "#!/bin/sh",
-      `printf '%s\\n' "$*" >> ${JSON.stringify(log)}`,
+    // 스텁 본문은 JS 한 벌 — sh 로 쓰면 윈도우에서 실행조차 안 돼 가로채기가 조용히 실패한다(#1510).
+    const g = GET[mode];
+    writeStubBin(bin, "claude", [
+      'import { appendFileSync } from "node:fs";',
+      "const a = process.argv.slice(2);",
+      `appendFileSync(${JSON.stringify(log)}, a.join(" ") + "\\n");`,
       // 구 경로에 '정답'을 주는 건 의도적이다(위 ⚠ 참조) — 값으로는 회귀가 안 잡히게 해서 로그 단정이 유일한 가드가 되도록.
-      'if [ "$1" = "mcp" ] && [ "$2" = "list" ]; then',
-      '  echo "lively: /stub/bin/lively mcp - ✔ Connected"',
-      "  exit 0",
-      "fi",
-      'if [ "$1" = "mcp" ] && [ "$2" = "get" ]; then',
-      ...GET[mode],
-      "fi",
-      "exit 0",
+      'if (a[0] === "mcp" && a[1] === "list") { console.log("lively: /stub/bin/lively mcp - ✔ Connected"); process.exit(0); }',
+      'if (a[0] === "mcp" && a[1] === "get") {',
+      ...(g.out || []).map((l) => `  console.log(\`${l}\`);`),
+      ...(g.err || []).map((l) => `  console.error(\`${l}\`);`),
+      `  process.exit(${g.code});`,
+      "}",
+      "process.exit(0);",
     ].join("\n"));
-    chmodSync(join(bin, "claude"), 0o755);
   }
   return {
     home, bin, ccd, log,
@@ -80,7 +82,7 @@ const LIVELY_ENTRY = { lively: { type: "stdio", command: "/stub/lively", args: [
 async function statusOf(c) {
   const env = {
     ...process.env,
-    PATH: `${c.bin}:/usr/bin:/bin:/usr/sbin:/sbin`,   // 닫힌 PATH — 실제 claude 가 절대 안 잡히게
+    PATH: closedPath(c.bin),                          // 닫힌 PATH — 실제 claude 가 절대 안 잡히게
     LIVELY_HOME: c.home,                              // CLI 의 HOME(= 유저 설정파일 후보의 뿌리)도 이걸 따른다
     CLAUDE_CONFIG_DIR: c.ccd,
     LIVELY_GATEWAY_URL: "",
