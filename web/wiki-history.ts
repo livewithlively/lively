@@ -11,10 +11,10 @@
 //   · 본문은 클릭한 행에서만 — 목록 응답엔 본문이 없다(문서 하나가 감사행 100건 × 30KB 인 사례가 있다).
 //   · diff 는 검토 큐 것을 그대로 쓴다(review.ts diffView + .rq-diff 스타일) — 같은 변경에 두 화면이 다른
 //     모양을 보이지 않게. classifications.ts 가 rqEnsureStyles 를 재사용하는 것과 같은 관례.
-import { absTime, api, el, errorNote, relTime, toast } from './core.js';
+import { absTime, api, el, errorNote, relTime, renderMarkdown, toast } from './core.js';
 import { overlayBox, skeleton } from './learn.js';
 import { confirmDialog } from './ui-primitives.js';
-import { diffView, rqEnsureStyles } from './review.js';
+import { diffView, lineDiff, rqEnsureStyles } from './review.js';
 
 const OP_LABEL: Record<string, string> = {
   insert: '문서 생성', update: '본문 수정', set_title: '제목 변경', delete: '삭제', restore: '복원',
@@ -58,8 +58,63 @@ function khEnsureStyles(): void {
 .kh-cur{font-size:11.5px;color:var(--muted);font-weight:700}
 .kh-empty{padding:22px 14px;text-align:center;color:var(--muted);font-size:13px}
 .kh-more{display:block;margin:10px auto 0}
+.kh-seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin:0 0 8px}
+.kh-seg button{padding:3px 11px;border:0;background:var(--bg);font:inherit;font-size:11.5px;font-weight:700;color:var(--muted-head);cursor:pointer}
+.kh-seg button.on{background:var(--bg-punch);color:var(--blue-deep)}
+.kh-mdiff{max-height:460px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--bg);padding:4px}
+.kh-md{position:relative;padding:1px 10px 1px 24px;border-radius:6px}
+.kh-md.add{background:rgba(22,199,154,.10);box-shadow:inset 2px 0 0 var(--mint-deep)}
+.kh-md.del{background:rgba(228,117,107,.10);box-shadow:inset 2px 0 0 var(--coral-text)}
+.kh-md.del .md{opacity:.8}
+.kh-md .md{font-size:13.5px}
+.kh-md-sig{position:absolute;left:8px;top:5px;font-family:ui-monospace,monospace;font-size:12px;font-weight:800;user-select:none}
+.kh-md.add .kh-md-sig{color:var(--mint-deep)}
+.kh-md.del .kh-md-sig{color:var(--coral-text)}
+.kh-mdskip{display:block;width:100%;text-align:left;padding:4px 10px;margin:3px 0;border:0;border-top:1px solid var(--line-row);border-bottom:1px solid var(--line-row);background:var(--bg-tint);color:var(--muted-2);font:inherit;font-size:11.5px;font-style:italic;cursor:pointer}
+.kh-mdskip:hover{color:var(--ink-sub)}
 `,
   }));
+}
+
+// ── 서식 diff — 줄 diff 를 **같은 유형끼리 묶어(run)** 덩어리마다 마크다운으로 렌더한다. ──
+//  왜 덩어리 단위인가: 마크다운은 블록 문법이라 줄 하나씩 렌더하면 표·목록·코드펜스가 전부 부서진다.
+//  연속된 추가/삭제/무변경을 한 덩어리로 모아 그 텍스트를 통째로 렌더해야 제목·표가 살아난다.
+//  ⚠ 그래도 덩어리가 문법의 중간을 자를 수 있다(표의 구분행만 삭제된 경우 등) — 그럴 때 보라고 '원문' 토글이 있다.
+function mdChunk(t: string, text: string): HTMLElement {
+  const wrap = el('div', { class: 'kh-md' + (t === '+' ? ' add' : t === '-' ? ' del' : '') });
+  if (t !== ' ') wrap.append(el('span', { class: 'kh-md-sig', 'aria-hidden': 'true', text: t }));
+  wrap.append(renderMarkdown(text));
+  return wrap;
+}
+function diffViewMd(before: string, after: string): HTMLElement {
+  const d = lineDiff(before, after);
+  const runs: { t: string; lines: string[] }[] = [];
+  for (const l of d) {
+    const last = runs[runs.length - 1];
+    if (last && last.t === l.t) last.lines.push(l.s);
+    else runs.push({ t: l.t, lines: [l.s] });
+  }
+  const box = el('div', { class: 'kh-mdiff' });
+  if (!runs.some((r) => r.t !== ' ')) {
+    box.append(el('div', { class: 'rq-dl skip', text: '내용 변화 없음(메타만 변경)' }));
+    return box;
+  }
+  const CTX = 3, COLLAPSE = 8;   // 안 바뀐 긴 구간은 접는다 — 700줄 문서에서 한 줄 고친 걸 찾으려 스크롤하지 않게
+  runs.forEach((r, idx) => {
+    if (r.t === ' ' && r.lines.length > COLLAPSE) {
+      const head = idx === 0 ? [] : r.lines.slice(0, CTX);
+      const tail = idx === runs.length - 1 ? [] : r.lines.slice(-CTX);
+      const mid = r.lines.slice(head.length, r.lines.length - tail.length);
+      if (head.length) box.append(mdChunk(' ', head.join('\n')));
+      const bar = el('button', { class: 'kh-mdskip', type: 'button', text: `⋯ 변화 없는 ${mid.length}줄 — 펼치기` });
+      bar.onclick = () => bar.replaceWith(mdChunk(' ', mid.join('\n')));
+      box.append(bar);
+      if (tail.length) box.append(mdChunk(' ', tail.join('\n')));
+    } else {
+      box.append(mdChunk(r.t, r.lines.join('\n')));
+    }
+  });
+  return box;
 }
 
 interface HistoryRow {
@@ -84,6 +139,9 @@ export function openKnHistory(
   let offset = 0;
   let total = 0;
   const rows: HistoryRow[] = [];
+  // 기본은 **서식(마크다운 렌더)** — 사람이 읽는 건 원문이 아니라 문서다. 원문 diff 는 토글로.
+  //  패널 단위 상태라 한 행에서 바꾸면 다음에 펼치는 행도 그 모드로 열린다(매번 다시 고르지 않게).
+  let mdMode = true;
 
   const metaChip = el('button', {
     class: 'rq-chip', type: 'button', text: '메타 변경도',
@@ -162,7 +220,9 @@ export function openKnHistory(
       exp.replaceChildren(skeleton('내용을 불러오는 중'));
       try {
         const d = await api('/api/ui/knowledge/' + encodeURIComponent(name) + '/history/' + r.audit_id);
-        exp.replaceChildren(...expandedView(r, d));
+        // 받아온 전문을 행에 붙여 둔다 — 서식↔원문 토글이 다시 요청하지 않게(같은 감사행은 불변이다).
+        (exp as any)._d = d;
+        exp.replaceChildren(...expandedView(r, d, exp));
       } catch (e: any) {
         loaded = false;
         exp.replaceChildren(errorNote(e, '내용을 불러오지 못했습니다'));
@@ -172,7 +232,7 @@ export function openKnHistory(
     return row;
   }
 
-  function expandedView(r: HistoryRow, d: any): any[] {
+  function expandedView(r: HistoryRow, d: any, exp: HTMLElement): any[] {
     const out: any[] = [];
     if (r.title_changed) {
       out.push(el('p', { class: 'kh-exp-note', text: `제목: ${r.title_before || '(없음)'} → ${r.title_after || '(없음)'}` }));
@@ -184,7 +244,19 @@ export function openKnHistory(
     }
     if (!d.before) out.push(el('p', { class: 'kh-exp-note', text: '이 시점에 문서가 처음 만들어졌습니다.' }));
     if (!d.after) out.push(el('p', { class: 'kh-exp-note', text: '이 변경으로 문서가 삭제됐습니다.' }));
-    out.push(diffView((d.before && d.before.body_md) || '', (d.after && d.after.body_md) || ''));
+
+    // 서식 ↔ 원문 토글. 다시 그리는 건 이 행뿐이고 요청은 없다(전문은 _d 에 이미 있다).
+    const seg = el('div', { class: 'kh-seg', role: 'group', 'aria-label': '본문 표시 방식' });
+    const mk = (label: string, on: boolean, next: boolean) => el('button', {
+      class: on ? 'on' : '', type: 'button', text: label, 'aria-pressed': String(on),
+      onclick: () => { if (mdMode === next) return; mdMode = next; exp.replaceChildren(...expandedView(r, d, exp)); },
+    });
+    seg.append(mk('서식', mdMode, true), mk('원문', !mdMode, false));
+    out.push(seg);
+
+    const before = (d.before && d.before.body_md) || '';
+    const after = (d.after && d.after.body_md) || '';
+    out.push(mdMode ? diffViewMd(before, after) : diffView(before, after));
 
     const isCurrent = opts.currentVersion != null && r.version_after != null && r.version_after === opts.currentVersion;
     const acts = el('div', { class: 'kh-exp-acts' });

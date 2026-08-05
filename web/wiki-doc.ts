@@ -117,7 +117,7 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
   const moreBtn = el('button', { class: 'wk-folio-btn wk-more', type: 'button', title: '문서 동작', 'aria-label': '문서 동작', text: '⋯' });
   actions.append(moreBtn);
 
-  // ── ⋯ 메뉴 — 이동 / 원문(MD) / 전폭 / 삭제 ──
+  // ── ⋯ 메뉴 — 변경 이력 / 이동 / 원문(MD) / 전폭 / 삭제 ──
   let rawOpen = false;
   moreBtn.onclick = () => {
     const old: any = document.querySelector('.wk-morepop');
@@ -131,6 +131,12 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
       b.onclick = () => { close(); fn(); };
       return b;
     };
+    // #1546 변경 이력 — **문서 동작 메뉴가 정식 진입점**이다. 속성줄의 '갱신 …' 클릭은 지름길일 뿐:
+    //  거긴 유형·분류 피커와 똑같이 생긴 회색 잔글씨라 "누르면 이력이 열린다"는 신호가 없다(실사용자 피드백).
+    //  권한 게이트 없음 — 이력 조회는 읽기다(서버가 문서 가시성으로 판정하고, 되돌리기 버튼만 편집자에게 뜬다).
+    pop.append(item('↺ 변경 이력', () => openKnHistory(k.name, {
+      canEdit: editableDoc, currentVersion: k.version, onReverted: reload,
+    })));
     if (canMeta) pop.append(item('⇥ 폴더로 이동', () => openKnowledgeMoveTo(k, reload)));
     pop.append(item(rawOpen ? '¶ 서식 보기로' : 'MD 원문 ' + (editableDoc ? '편집' : '보기'), () => toggleRaw()));
     const fullOn = !!(k.props_ui && k.props_ui.full_width);
