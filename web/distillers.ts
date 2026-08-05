@@ -307,7 +307,7 @@ function editorCard(d, rerender) {
     procedure: '절차 ①~⑤(본문 읽기·중복확인·저장·허용선·skip).',
   };
   const sectionInputs: Record<string, HTMLTextAreaElement> = {};
-  const sectionsHost = el('div');
+  const sectionsHost = el('div', {}, el('p', { class: 'admin-hint', text: '지시문 조각을 불러오는 중…' }));
   const sectionsLoaded = { v: false };
 
   function renderSections(views: any[]): void {
@@ -387,7 +387,16 @@ function editorCard(d, rerender) {
       const r = await api('/api/ui/org/distillers/preview', { method: 'POST', body: JSON.stringify(body) });
       if (my !== seq) return;            // 늦게 온 응답이 최신 결과를 덮지 않게
       paint(r);
-    } catch (e) { if (my === seq) { rState.textContent = '미리보기 실패: ' + e.message; } }
+    } catch (e) {
+      if (my !== seq) return;
+      rState.textContent = '미리보기 실패: ' + e.message;
+      // ⑤ 지시문 조각도 **이 응답 하나**에서 온다 — 실패를 그 탭에도 알리지 않으면
+      //  "설명 문구만 있고 편집란이 없는" 텅 빈 화면이 되어 사람이 원인을 못 짚는다(#1557).
+      if (!sectionsLoaded.v) {
+        sectionsHost.replaceChildren(el('p', { class: 'admin-hint',
+          text: '지시문 조각을 불러오지 못했습니다(미리보기 실패: ' + e.message + '). 설정을 바꾸면 다시 시도합니다.' }));
+      }
+    }
   }
   // 입력 변경 → 디바운스 → 갱신. 타이핑마다 서버를 때리지 않는다.
   const onEdit = () => { clearTimeout(timer); timer = setTimeout(refresh, 600); };
