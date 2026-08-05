@@ -343,7 +343,7 @@ function installCli() {
   // 서브커맨드 모듈(#1313 R52) — lively.mjs 가 `node`·`delegate`·`resume/backfill/share` 에서 dynamic import 한다.
   //  ⚠ 이게 빠지면 그 서브커맨드만 ERR_MODULE_NOT_FOUND 로 못 뜬다(다른 명령은 정상 — 부트스트랩 경로가
   //   lively.mjs 단독이라 설치 이전 표면은 애초에 이 파일들을 안 쓴다). 구버전 번들엔 없으면 조용히 스킵.
-  for (const f of ["cmd-node.mjs", "cmd-delegate.mjs", "cmd-session.mjs", "json-events.mjs"]) {
+  for (const f of ["cmd-node.mjs", "cmd-delegate.mjs", "cmd-session.mjs"]) {
     const src2 = cloneAbs(join("cli", f));
     if (existsSync(src2)) { copyFileSync(src2, join(lib, f)); chmodSync(join(lib, f), 0o755); }
   }

@@ -7,7 +7,7 @@
 //  이벤트 루프가 멈춰 자식의 fetch 가 전부 타임아웃하고, 무동작을 기대하는 케이스가 공허하게 통과한다.
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, existsSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,9 +44,9 @@ const GW = `http://127.0.0.1:${srv.address().port}`;
  * closeStdinOnPrompt: 답 대신 stdin 을 닫는다(= 앱이 죽은 상황 재현).
  * ⚠ killed 를 함께 돌려준다 — 타임아웃 SIGKILL 로 끝난 걸 '정상 종료'로 읽으면 무한대기 결함을 놓친다.
  */
-function runCli(args, { home, answers, closeStdinOnPrompt = false, timeoutMs = 20000 } = {}) {
+function runCli(args, { home, answers, closeStdinOnPrompt = false, timeoutMs = 20000, cliPath = CLI } = {}) {
   return new Promise((resolve) => {
-    const p = spawn(process.execPath, [CLI, ...args], {
+    const p = spawn(process.execPath, [cliPath, ...args], {
       // PATH: 닫힌 PATH — 사람의 로컬 하네스 설치·MCP 설정에 결과와 시간이 의존하지 않게(#1431).
       env: { ...process.env, PATH: closedPath(join(BOX, "bin")), LIVELY_HOME: home || join(BOX, "h"), LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "", NO_COLOR: "1" },
       stdio: ["pipe", "pipe", "pipe"],
@@ -159,6 +159,22 @@ function runCli(args, { home, answers, closeStdinOnPrompt = false, timeoutMs = 2
   const tokenFile = join(home, ".lively", "token");
   check("C4-통합 ★ 확인 중 앱이 끊기면 토큰을 저장하지 않는다(fail-closed)", !existsSync(tokenFile), "무응답인데 로그인이 저장됐다");
   check("C4-b 그리고 실패로 끝난다(성공으로 위장하지 않는다)", r.code !== 0 && !r.killed, `exit=${r.code} killed=${r.killed}`);
+}
+
+// ── B. ★ 부트스트랩 단계 — lively.mjs **한 파일만** 있어도 동작하나 ─────────
+// 부트스트랩은 게이트웨이의 `/cli/lively.mjs` 한 파일만 내려받아 `lively setup` 을 실행한다(lively.mjs 맨 위 불변식).
+//  형제 모듈이 필요한 코드를 그 경로에 두면 **설치 이전 명령이 통째로 깨진다** — 그리고 그건 데스크톱 앱이
+//  이 계약을 가장 필요로 하는 순간이다(실측: ERR_MODULE_NOT_FOUND json-events.mjs → 설치 마법사가 첫 단계에서 멈춤).
+//  그래서 파일 하나만 떼어 낸 환경에서 직접 돌려 본다.
+{
+  const solo = mkdtempSync(join(BOX, "solo-"));
+  copyFileSync(CLI, join(solo, "lively.mjs"));
+  const r = await runCli(["version", "--json-events"], { cliPath: join(solo, "lively.mjs") });
+  const first = r.events[0], last = r.events[r.events.length - 1];
+  check("B1 ★ lively.mjs 단독(형제 모듈 0개)에서도 --json-events 가 동작한다",
+    first?.t === "start" && last?.t === "end" && last.ok === true && r.code === 0,
+    `events=${r.events.length} first=${first?.t} last=${JSON.stringify(last)} exit=${r.code}\n${r.err.slice(-300)}`);
+  check("B1-b 형제 모듈을 찾지 못했다는 오류가 없다", !/ERR_MODULE_NOT_FOUND|Cannot find module/.test(r.err), r.err.slice(-200));
 }
 
 srv.close();

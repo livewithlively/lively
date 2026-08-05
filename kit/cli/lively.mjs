@@ -69,13 +69,8 @@ const say = (s = "") => process.stderr.write(s + "\n");
 //  EV 는 main() 이 플래그를 보고 채운다(그 전에 죽는 경로 — Node 버전 게이트 등 — 은 종전 그대로 stderr 만).
 let EV = null;                       // { emit, start, step, notice, result, end } | null
 let PROMPTER = null;                 // { ask, tell } | null
-let EVENTS_MOD = null;               // json-events.mjs — 이벤트 모드에서만 dynamic import 한다
 const evNotice = (level, s) => { if (EV) EV.notice(level, stripAnsi(s)); };
-// 이벤트 문구엔 ANSI 를 싣지 않는다 — 구현은 json-events.mjs 에 있다(거기서 엣지까지 단위검증한다).
-//  여기 두면 검증이 불가능하다: stderr 가 파이프인 테스트 환경에선 색이 아예 안 붙어(TTY=false) 이 함수가
-//  한 번도 실전 입력을 못 본다. 옮겨서 ANSI 문자열을 직접 먹여 잰다(색 말고 커서 이동 등 CSI 전반도 함께).
-//  모듈이 없으면 이벤트도 없으므로(둘 다 --json-events 에서만 산다) 원문 그대로가 안전한 폴백이다.
-const stripAnsi = (s) => (EVENTS_MOD ? EVENTS_MOD.stripAnsi(s) : String(s));
+// (구현은 아래 §1.6 — 같은 파일 안에 있다. 부트스트랩 단계에서도 반드시 동작해야 하므로 형제 모듈로 빼지 않는다.)
 // `--json` 결과 출력 — 이벤트 모드에선 raw JSON 을 stdout 에 섞지 않고 `result` 이벤트로 싣는다.
 //  안 그러면 여러 줄 pretty JSON 이 NDJSON 스트림 한복판에 끼어 앱의 줄 단위 파서를 깬다(D5).
 const jsonOut = (obj) => { if (EV) EV.result(obj); else process.stdout.write(JSON.stringify(obj, null, 2) + "\n"); };
@@ -89,6 +84,135 @@ const die = (s, code = 1) => {
   if (EV) { EV.notice("error", stripAnsi(s)); endEvents(false, code); }
   process.exit(code);
 };
+
+
+// ── 1.6 앱↔CLI 이벤트 계약 (#1541 T1) — `--json-events` 의 NDJSON + 프롬프트 채널 ──────────
+// **왜 이 파일 안에 있나**: 부트스트랩은 게이트웨이의 `/cli/lively.mjs` **한 파일만** 내려받아 `lively setup` 을
+//  실행한다(맨 위 주석의 그 불변식). 그런데 데스크톱 앱이 이 계약을 가장 필요로 하는 순간이 정확히 그 단계다 —
+//  형제 모듈로 빼서 dynamic import 하면 **설치 이전 명령이 통째로 깨진다**(실측: ERR_MODULE_NOT_FOUND
+//  json-events.mjs → 앱의 설치 마법사가 첫 단계에서 멈춤). 그래서 여기 둔다.
+// 테스트는 이 파일에서 직접 import 한다(kit/cli/json-events.test.mjs) — 아래 함수들이 export 인 이유.
+//
+// stdout = NDJSON 이벤트 · stderr = 사람용 · stdin = 답 한 줄. 자세한 계약은 위키 app-cli-json-events-contract-1541.
+// ⚠ **비밀은 이벤트에 싣지 않는다.** 토큰이 stdout 으로 나가면 앱 로그·크래시 리포트로 샌다.
+
+export const EVENT_V = 1;
+
+/**
+ * 이벤트 문구에서 ANSI 색·스타일 시퀀스를 제거한다.
+ *
+ * GUI 는 색 코드를 렌더할 수 없고, 로그에 남으면 읽기만 나빠진다. **ESC 바이트까지 함께** 지우는 게 요점이다 —
+ * `\x1b` 를 빼고 `[0m` 만 지우면 보이지 않는 ESC 가 문구에 남아 앱 쪽 표시가 깨진다(그리고 눈으로는 안 보인다).
+ * CSI 계열(`ESC [ … 종결문자`)을 통째로 지운다 — 색(m) 말고도 커서 이동 등이 섞여 들어올 수 있다.
+ */
+export const stripAnsi = (s) => String(s).replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "");
+
+/**
+ * 이벤트 1건 → NDJSON **한 줄**(끝에 개행 1개). 순수 함수.
+ *
+ * 봉투(v·t·ts)는 payload 가 **덮어쓸 수 없다** — 페이로드가 봉투를 위조하면 앱의 버전 협상·정렬이 무너진다.
+ * 직렬화가 실패해도(순환참조 등) **throw 하지 않는다**: 진행 보고가 명령을 죽이면 안 된다. 대신 그 사실을
+ * 담은 이벤트를 낸다(조용한 유실보다 낫다 — 앱이 '뭔가 못 실었다'를 알 수 있어야 한다).
+ */
+export function encodeEvent(t, payload, ts) {
+  const env = { v: EVENT_V, t: String(t), ts: Number(ts) };
+  try {
+    return JSON.stringify({ ...(payload && typeof payload === "object" ? payload : {}), ...env }) + "\n";
+  } catch (e) {
+    return JSON.stringify({ ...env, t: "notice", level: "warn", message: `이벤트 직렬화 실패(${t}): ${e?.message || e}` }) + "\n";
+  }
+}
+
+/**
+ * stdin 한 줄 → 답 `{id, value}` 또는 `null`(무시). 순수 함수.
+ *
+ * ⚠ `value` 가 없으면 **null 이다**(빈 답을 '기본값 승인'으로 만들지 않는다). 앱이 실수로 빈 객체를 보내는 것과
+ *  사람이 실제로 '아니오'를 고른 것은 완전히 다른 사건이고, 전자를 후자로 오독하면 신원확인이 조용히 통과한다.
+ */
+export function parseAnswer(line) {
+  let m;
+  try { m = JSON.parse(String(line)); } catch { return null; }
+  if (!m || typeof m !== "object" || Array.isArray(m)) return null;
+  if (m.t !== "answer") return null;
+  if (typeof m.id !== "string" || !m.id) return null;
+  if (!("value" in m)) return null;
+  return { id: m.id, value: m.value };
+}
+
+/** 이벤트 발행기 — `write(line)` 와 시계만 주입받는다(테스트가 프로세스 없이 전량 관측). */
+export function createEmitter({ write, now = () => Date.now() } = {}) {
+  const emit = (t, payload) => { write(encodeEvent(t, payload, now())); };
+  return {
+    emit,
+    start: (cmd, cli) => emit("start", { cmd, cli }),
+    /** status: start|done|fail. i/n 은 진행률(1-based / 총계) — 없으면 생략된다. */
+    step: (id, label, status, extra) => emit("step", { id, label, status, ...(extra || {}) }),
+    notice: (level, message) => emit("notice", { level, message }),
+    result: (data) => emit("result", { data }),
+    end: (ok, code) => emit("end", { ok: !!ok, code: Number(code) || 0 }),
+  };
+}
+
+/**
+ * 프롬프트 채널 — `prompt` 이벤트를 내고 stdin 의 답을 기다린다.
+ *
+ * `onLine(cb)` 로 줄 공급원을, `onEnd(cb)` 로 입력 종료를 주입받는다(테스트가 stdin 없이 구동).
+ *
+ * ⚠ **EOF 는 기본값 승인이 아니라 실패다**(C4). 답 없이 입력이 닫혔다는 건 앱이 죽었거나 계약을 안 지킨 것이고,
+ *  그때 `def` 로 진행하면 "이 계정으로 로그인됩니다" 같은 **신원확인이 사람 없이 통과**한다(#R2-F1 이 막으려던 바로 그것).
+ *  fail-closed 가 맞다.
+ */
+export function createPrompter({ emit, onLine, onEnd }) {
+  const waiting = new Map();      // id → resolve/reject
+  let ended = false;
+  onLine((line) => {
+    const a = parseAnswer(line);
+    if (!a) return;                                   // 잡음·다른 메시지는 조용히 무시(C2·C3)
+    const w = waiting.get(a.id);
+    if (!w) return;                                   // 내가 안 기다리는 id — 무시
+    waiting.delete(a.id);
+    w.resolve(a.value);
+  });
+  if (typeof onEnd === "function") {
+    onEnd(() => {
+      ended = true;
+      for (const [, w] of waiting) w.reject(new Error("앱과의 연결이 끊겼습니다(답을 받지 못했습니다)."));
+      waiting.clear();
+    });
+  }
+  /** kind·payload 로 물어보고 답을 기다린다. id 는 호출자가 준다(짝을 앱이 맞출 수 있게). */
+  return {
+    ask(id, kind, payload) {
+      if (ended) return Promise.reject(new Error("앱과의 연결이 끊겼습니다(답을 받지 못했습니다)."));
+      return new Promise((resolve, reject) => {
+        waiting.set(id, { resolve, reject });
+        emit("prompt", { id, kind, ...(payload || {}) });
+      });
+    },
+    /** 답을 기다리지 않는 통지용 프롬프트(예: device-code — 사람은 브라우저에서 승인한다). */
+    tell(id, kind, payload) { emit("prompt", { id, kind, ...(payload || {}) }); },
+    get pending() { return waiting.size; },
+  };
+}
+
+/** 스트림 → 줄 단위 공급원. 청크 경계에서 답이 잘리지 않게 버퍼링한다(C6). */
+export function lineReader(stream) {
+  let buf = "";
+  const lineCbs = [], endCbs = [];
+  stream.setEncoding("utf8");
+  stream.on("data", (chunk) => {
+    buf += chunk;
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i);
+      buf = buf.slice(i + 1);
+      for (const cb of lineCbs) cb(line);
+    }
+  });
+  stream.on("end", () => { if (buf.trim()) for (const cb of lineCbs) cb(buf); buf = ""; for (const cb of endCbs) cb(); });
+  stream.on("error", () => { for (const cb of endCbs) cb(); });
+  return { onLine: (cb) => lineCbs.push(cb), onEnd: (cb) => endCbs.push(cb) };
+}
 
 // ── 1.5 Node 버전 게이트 (#1068) ────────────────────────────────────────────
 // 이 CLI 는 의존성 0 으로 **전역 fetch(Node 18+)** 등 최신 런타임 API 를 쓴다(맨 위 설계 원칙).
@@ -1663,7 +1787,6 @@ function cmdOnboarding(rest) {
 //  ⚠ 쓰기는 **writeSync(fd 1)** 로 한다. process.stdout 은 파이프일 때 비동기라(POSIX) 마지막 `end` 이벤트가
 //   프로세스 종료와 경합해 통째로 유실될 수 있다 — 앱은 그 한 줄로 성공·실패를 판정하므로 유실이 곧 오판이다.
 function startEvents(cmd) {
-  const { createEmitter, createPrompter, lineReader } = EVENTS_MOD;
   const write = (line) => {
     try { writeSync(1, line); }
     catch { try { process.stdout.write(line); } catch { /* stdout 닫힘 — 보고를 못 해도 명령은 계속한다 */ } }
@@ -1694,7 +1817,6 @@ async function main() {
   const o = parse(argv);
   const cmd = o._[0] || (o.version ? "version" : o.help ? "help" : "status");
   if (!o.jsonEvents) return dispatch(cmd, o, argv);
-  EVENTS_MOD = await import(new URL("./json-events.mjs", import.meta.url));
   startEvents(cmd);
   // end 는 **모든 경로**에서 정확히 한 번 나가야 한다(앱이 그 한 줄로 성공·실패를 판정한다):
   //  ⓐ 정상 반환 ⓑ 예외 ⓒ die() ⓓ 명령이 스스로 process.exit() 하는 경우(onboarding 등) — ⓓ 만 훅으로 잡힌다.

@@ -534,4 +534,19 @@ t('U9 ★ 설치기 없는 빌드(app-update.yml 부재)는 확인하지 않는�
   assert.ok(line.includes('app-update.yml'), line);
 });
 
+t('D6 ★ 답한 프롬프트는 다시 뜨지 않는다(리듀서가 옛 prompt 를 물고 있으면 안 된다)', () => {
+  // 실측(맥 풀 플로우): '예' 를 누르고 나서도 다음 step 이벤트마다 확인 카드가 되살아나 세 번 눌러야 했다.
+  //  리듀서는 prompt 를 end 까지 들고 있으므로, **답한 순간** 메인이 그 자리를 비워 줘야 한다.
+  let s2 = reduceProgress(undefined, { t: 'prompt', id: 'confirm-1', kind: 'confirm', label: '계속?' });
+  assert.ok(s2.prompt, '프롬프트가 상태에 들어와야 화면이 그린다');
+  s2 = { ...s2, prompt: null };                       // 메인이 답 직후 하는 일
+  s2 = reduceProgress(s2, { t: 'step', id: 'kit', label: '설치 중', status: 'start' });
+  assert.equal(s2.prompt, null, '답한 뒤 step 이 오면 카드가 되살아난다');
+  // 배선 확인 — 메인의 ANSWER 핸들러가 실제로 그렇게 하는가.
+  const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
+  const seg = main.slice(main.indexOf('IPC.ANSWER'), main.indexOf('IPC.SET_GATEWAY'));
+  assert.ok(/prompt:\s*null/.test(seg), '답 처리에서 progress.prompt 를 비우지 않는다');
+  assert.ok(/send\(IPC\.PROGRESS/.test(seg), '비운 상태를 렌더러에 안 보내면 화면은 그대로다');
+});
+
 console.log(`\n${pass} passed`);

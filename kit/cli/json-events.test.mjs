@@ -1,9 +1,10 @@
 // 앱↔CLI 계약(#1541 T1) — NDJSON 이벤트 인코딩 · 답 파싱 · 프롬프트 채널 · 줄 리더.
 //  프로세스를 띄우지 않고 검증하는 층(엣지 전수). 실제 CLI 를 스폰하는 통합 검증은 lively-json-events.test.mjs.
+//  ⚠ 구현은 lively.mjs **안에** 있다 — 부트스트랩이 그 한 파일만 내려받기 때문(형제 모듈이면 설치 이전 명령이 깨진다).
 // 실행: node kit/cli/json-events.test.mjs
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
-import { EVENT_V, encodeEvent, parseAnswer, createEmitter, createPrompter, lineReader, stripAnsi } from "./json-events.mjs";
+import { EVENT_V, encodeEvent, parseAnswer, createEmitter, createPrompter, lineReader, stripAnsi } from "./lively.mjs";
 const ESC = "\u001b";   // 소스엔 리터럴 제어문자를 넣지 않는다
 
 let pass = 0;

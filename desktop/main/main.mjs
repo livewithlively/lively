@@ -242,6 +242,11 @@ ipcMain.handle(IPC.ANSWER, (_e, { id, value }) => {
   const r = pendingPrompts.get(id);
   if (!r) return { ok: false };
   pendingPrompts.delete(id); r(value);
+  // ★ 답한 프롬프트는 진행 상태에서도 지운다. 안 지우면 다음 step 이벤트가 올 때 리듀서의 옛 prompt 로
+  //  **카드가 다시 뜬다** — 사용자는 방금 누른 확인을 또 보게 되고, 어느 게 유효한지 알 수 없다
+  //  (실측: 맥 풀 플로우에서 '예' 를 세 번 누르게 됐다).
+  progress = progress ? { ...progress, prompt: null } : progress;
+  send(IPC.PROGRESS, progress);
   return { ok: true };
 });
 ipcMain.handle(IPC.SET_GATEWAY, (_e, { url }) => onboard(url));
