@@ -335,18 +335,12 @@ function openNodeManager(view) {
 
     const list = el('div', { style: 'display:flex;flex-direction:column;gap:8px;margin-top:10px' });
     if (!nodes.length) list.append(el('div', { class: 'caption', text: '아직 등록된 노드가 없습니다 — 위 안내대로 추가하세요.' }));
-    // 공유 지정은 관리자만 바꿀 수 있다(#1540) — 서버가 admin 을 강제하므로, 여기선 버튼을 아예 안 그린다
-    //  (누구에게나 보여주고 403 을 받게 하면 '되는 줄 알았는데 안 되는' 경험이 된다).
-    const canShare = !!(state.me && Array.isArray(state.me.scopes) && state.me.scopes.includes('admin'));
+    // ⚠ 공유 지정 버튼은 여기 없다(#1558) — 이미 연결된 컴퓨터를 나중에 공유로 올리는 경로 자체를 없앴다.
+    //  공유 컴퓨터는 [설정 ▸ 컴퓨터(노드)]에서 그 목적으로 **등록**한다. 여기선 공유 여부를 배지로 보여만 준다.
     for (const n of nodes) {
       const badge = el('span', { class: 'tsess-badge' + (n.online ? '' : ' danger'),
         text: n.online ? '🟢 연결됨 · 세션 ' + (n.sessions || 0) : '⦿ 끊김' });
       const acts = el('div', { style: 'display:flex;gap:6px;margin-left:auto' },
-        ...(canShare ? [el('button', { class: 'btn btn-ghost btn-sm', text: n.shared ? '공유 해제' : '공유 노드로',
-          title: n.shared
-            ? '이 노드를 다시 등록자 전용으로 되돌립니다(진행 중인 남의 작업은 그대로 끝납니다).'
-            : '조직 전체가 이 노드에 위탁·세션을 열 수 있게 합니다. 개인 PC라면 남이 그 컴퓨터에서 코드를 실행하게 되는 것이니 주의하세요.',
-          onclick: () => share(n) })] : []),
         el('button', { class: 'btn btn-ghost btn-sm', text: n.enabled === false ? '활성화' : '비활성',
           title: n.enabled === false ? '다시 연결 허용' : '연결 차단(다음 재연결부터 거부)', onclick: () => toggle(n) }),
         el('button', { class: 'btn btn-ghost btn-sm', text: '토큰 회전',
@@ -358,7 +352,8 @@ function openNodeManager(view) {
           el('div', { style: 'font-weight:600' }, document.createTextNode((n.name || n.id) + ' '),
             el('span', { class: 'caption', text: n.kind === 'worker' ? '워커' : '멤버' }),
             // 공유 여부는 '누가 이 컴퓨터를 쓸 수 있나'라서 종류(워커/멤버)보다 중요하다 — 배지로 눈에 걸리게.
-            ...(n.shared ? [document.createTextNode(' '), el('span', { class: 'tsess-badge', text: '🌐 공유' })] : [])),
+            //  이모지는 쓰지 않는다(디자인 시스템: 아이콘 스타일 혼용 금지) — 관리탭 [컴퓨터(노드)]와 같은 표기.
+            ...(n.shared ? [document.createTextNode(' '), el('span', { class: 'dm-tag', text: '공유' })] : [])),
           el('div', { class: 'caption', text: n.id })),
         badge, acts));
     }
@@ -366,7 +361,11 @@ function openNodeManager(view) {
       el('div', {}, howToggle, howBody),
       el('div', { style: 'margin-top:8px;font-weight:600' }, document.createTextNode('내 노드 '),
         el('button', { class: 'btn btn-ghost btn-sm', text: '↻', title: '새로고침', onclick: () => load() })),
-      list);
+      list,
+      // 이 모달은 '내 컴퓨터를 붙이고 관리하는' 자리다. 조직 전체 노드와 공유 지정은 관리탭이 정본이므로
+      //  거기로 안내한다(같은 일을 두 화면에서 각자 설명하지 않게 — 입구가 둘이면 어느 쪽이 맞는지 모른다).
+      el('div', { class: 'caption', style: 'margin-top:10px' },
+        '조직 전체의 컴퓨터 목록과 공유 지정은 [설정 ▸ 컴퓨터(노드)]에 있습니다.'));
   }
   async function del(n) {
     if (!confirm('노드 "' + (n.name || n.id) + '" 를 삭제할까요?\n접속 열쇠가 해제되고 그 머신의 노드 연결이 끊깁니다(다시 붙이려면 lively node --daemon 재실행).')) return;
@@ -376,17 +375,6 @@ function openNodeManager(view) {
   async function toggle(n) {
     try { await api('/api/ui/nodes/' + encodeURIComponent(n.id) + '/enable', { method: 'POST', body: JSON.stringify({ enabled: n.enabled === false }) }); toast(n.enabled === false ? '활성화됨' : '비활성화됨'); load(); }
     catch (e) { toast('변경 실패 — ' + e.message, true); }
-  }
-  // 공유 지정/해제(#1540, admin) — 켤 때만 확인을 받는다. 켜는 건 '조직 전체에 이 컴퓨터를 여는' 되돌리기 어려운
-  //  성격의 변경이고(그 사이 남의 작업이 들어온다), 끄는 건 좁히는 방향이라 확인 없이 바로 적용한다.
-  async function share(n) {
-    const on = !n.shared;
-    if (on && !confirm('노드 "' + (n.name || n.id) + '" 를 공유 노드로 지정할까요?\n\n조직 구성원 전체가 이 컴퓨터에 작업을 위탁하고 세션을 열 수 있게 됩니다.\n개인 PC라면 남이 그 컴퓨터에서 코드를 실행하게 되는 것이니, 공용 워커 서버에만 켜는 것을 권합니다.')) return;
-    try {
-      await api('/api/ui/nodes/' + encodeURIComponent(n.id) + '/share', { method: 'POST', body: JSON.stringify({ shared: on }) });
-      toast(on ? '공유 노드로 지정됨 — 전체가 쓸 수 있습니다' : '공유 해제됨 — 등록자 전용으로 되돌렸습니다');
-      load();
-    } catch (e) { toast('변경 실패 — ' + e.message, true); }
   }
   async function rotate(n) {
     if (!confirm('노드 "' + (n.name || n.id) + '" 의 토큰을 회전할까요?\n현재 토큰이 폐기돼 연결이 끊기고, 그 머신에서 lively node --daemon 을 다시 실행해야 합니다.')) return;
