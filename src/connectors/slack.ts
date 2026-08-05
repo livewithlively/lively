@@ -769,6 +769,19 @@ export function threadNeedsReplies(msg: SlackMessage, sinceMs: number | undefine
   return latestMs >= sinceMs;
 }
 
+/**
+ * 이 채널을 어느 시각부터 훑을 것인가(순수 함수).
+ *  두 요구가 만나는 지점이라 한 곳에 둔다 —
+ *   ① 증분은 커서보다 THREAD_LOOKBACK 만큼 거슬러야 오래된 스레드의 새 답글을 잡는다.
+ *   ② 그 역스캔이 운영자가 정한 `backfill_since` 하한을 **뚫으면 안 된다**(#1531 — 전량 수집만 보면
+ *      범위가 지켜지는 것처럼 보여 증분에서만 조용히 깨지던 결함).
+ *  전량(커서 없음)이면 그냥 하한부터. 0 = 하한 없음 = 채널 개설일부터.
+ */
+export function channelScanFromMs(backfillSinceMs: number, sinceMs: number | undefined): number {
+  if (sinceMs === undefined) return backfillSinceMs;
+  return Math.max(backfillSinceMs, sinceMs - THREAD_LOOKBACK_MS);
+}
+
 /** 봇이 초대된 대화 목록(공개+비공개). 보관 채널 포함 — 종료 프로젝트 기록도 자산이다. */
 async function fetchBotChannels(token: string): Promise<SlackConversation[]> {
   const out: SlackConversation[] = [];
@@ -791,7 +804,7 @@ async function* sweepChannel(
   sinceMs: number | undefined,
   floorMs: number,
 ): AsyncGenerator<RawItem> {
-  const scanFromMs = sinceMs !== undefined ? Math.max(floorMs, sinceMs - THREAD_LOOKBACK_MS) : floorMs;
+  const scanFromMs = channelScanFromMs(floorMs, sinceMs);
   const oldest = Number.isFinite(scanFromMs) && scanFromMs > 0 ? (scanFromMs / 1000).toFixed(6) : undefined;
   // 채널 안에서는 변하지 않는 맥락 — 메시지마다 새로 만들 이유가 없다(딥링크는 toRawItem 이 ts 로 구성).
   const ctx: SlackToRawItemCtx = {
@@ -803,31 +816,42 @@ async function* sweepChannel(
     userMap: base.userMap,
   };
 
+  // ⚠ 진행 로그는 **장식이 아니라 생존 조건**이다(#1531 실측). 실행 감시자는 일정 시간 출력이 없으면
+  //  멈춘 프로세스로 보고 죽인다. 전량 백필은 채널 하나만으로도 그 시간을 넘길 수 있다 — 스레드 수천 개의
+  //  replies 를 tier-3 레이트리밋 아래서 부르기 때문이다. 실제로 첫 전량 run 이 "15분간 출력 없음"으로
+  //  종료됐다(12,543건까지 넣고 커서는 동결). 그래서 페이지·스레드 단위로 살아 있음을 알린다.
   let cursor: string | undefined;
   let page = 0;
+  let msgs = 0;
+  let threads = 0;
+  const label = ch.name ?? ch.id;
   for (;;) {
     const r = await slackCall<HistoryResp>("conversations.history", token, {
       channel: ch.id, limit: HISTORY_LIMIT, oldest, cursor, inclusive: true,
     });
     for (const msg of r.messages ?? []) {
       if (!msg?.ts) continue;
-      if (isCollectableMessage(msg)) yield toRawItem(msg, ctx);
+      if (isCollectableMessage(msg)) { yield toRawItem(msg, ctx); msgs++; }
       // 스레드 답글 — history 는 부모만 준다. 변경된 스레드만 열어본다(threadNeedsReplies).
       if (threadNeedsReplies(msg, sinceMs)) {
+        threads++;
         for await (const reply of paginate<HistoryResp, "messages">(
           "conversations.replies", token, "messages",
           { channel: ch.id, ts: msg.thread_ts ?? msg.ts, limit: HISTORY_LIMIT },
         )) {
           // replies 의 첫 항목은 부모 자신 — 위에서 이미 냈으므로 ts 로 건너뛴다(중복 인입 방지).
           if (!reply?.ts || reply.ts === msg.ts) continue;
-          if (isCollectableMessage(reply)) yield toRawItem(reply, ctx);
+          if (isCollectableMessage(reply)) { yield toRawItem(reply, ctx); msgs++; }
         }
+        // 스레드 묶음마다 한 줄 — replies 가 느린 구간에서도 침묵이 길어지지 않게.
+        if (threads % 25 === 0) console.log(`slack #${label}: 스레드 ${threads}개·메시지 ${msgs}건 처리 중`);
       }
     }
     cursor = r.response_metadata?.next_cursor;
-    if (!cursor || ++page >= HISTORY_PAGE_MAX) {
+    console.log(`slack #${label}: ${++page}페이지 완료 (메시지 ${msgs}건, 스레드 ${threads}개)${cursor ? "" : " — 채널 끝"}`);
+    if (!cursor || page >= HISTORY_PAGE_MAX) {
       if (cursor) {
-        console.warn(`slack history 페이지 백스톱: #${ch.name ?? ch.id} 가 ${HISTORY_PAGE_MAX} 페이지 초과 — 남은 구간은 다음 run 이 이어받습니다`);
+        console.warn(`slack history 페이지 백스톱: #${label} 가 ${HISTORY_PAGE_MAX} 페이지 초과 — 남은 구간은 다음 run 이 이어받습니다`);
       }
       break;
     }
@@ -875,7 +899,11 @@ async function* botBackfill(
     cfg.backfill_since && Number.isFinite(Date.parse(cfg.backfill_since))
       ? Date.parse(cfg.backfill_since)
       : 0;
-  const floorMs = sinceMs !== undefined ? 0 : backfillSinceMs; // 전량 수집의 하한(0 = 채널 개설일부터)
+  // 수집 하한 — **전량이든 증분이든 같다.** 0 이면 채널 개설일부터.
+  //  ⚠ 증분에서 이 하한을 0 으로 열어두면 아래 THREAD_LOOKBACK 역스캔이 설정값을 뚫고 30일을 더 거슬러 올라간다.
+  //   관리탭이 "이 날짜 이후의 자료만 수집합니다"라고 약속한 값이 증분에서만 조용히 깨지는 것이라, 운영자는
+  //   전량 수집 결과만 보고 범위가 지켜진다고 믿게 된다(#1531 어니스트 실측: 7/28 설정에 7/5 자료가 들어왔다).
+  const floorMs = backfillSinceMs;
 
   const all = await fetchBotChannels(token);
   const targets = selectBotChannels(all, parseNoise(cfg.channels), parseNoise(cfg.noise_exclude));
@@ -890,11 +918,13 @@ async function* botBackfill(
   }
 
   const failures: string[] = [];
+  let done = 0;
   for (const ch of targets) {
+    const label = ch.name ?? ch.id;
+    console.log(`slack 봇 모드: [${++done}/${targets.length}] #${label} 시작${ch.is_private ? " (비공개)" : ""}`);
     try {
       yield* sweepChannel(token, ch, base, sinceMs, floorMs);
     } catch (err) {
-      const label = ch.name ?? ch.id;
       failures.push(`${label}(${(err as Error).message})`);
       console.warn(`slack 채널 수집 실패 — 계속 진행: #${label}: ${(err as Error).message}`);
     }
