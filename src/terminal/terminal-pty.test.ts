@@ -2,7 +2,7 @@
 //  + '세션 종료 확답' 판정(#835).
 // 실행: npm run build && node dist/terminal/terminal-pty.test.js
 import assert from "node:assert/strict";
-import { inputToSendKeys, resizeToRefresh, captureCmd, stateCmd, mouseResetCmd, STATE_MARKER, handleControlMsg, parseEtimeSec, summarizeAttachProcs } from "./terminal-pty.js";
+import { inputToSendKeys, inputToSendKeysArgv, isPsmuxBin, createInputPump, resizeToRefresh, captureCmd, stateCmd, mouseResetCmd, STATE_MARKER, handleControlMsg, parseEtimeSec, summarizeAttachProcs } from "./terminal-pty.js";
 import { isSessionGoneError } from "./terminal-sessions.js";
 
 let pass = 0;
@@ -209,6 +209,193 @@ t("attach 요약 — etime 컬럼이 없는 ps 여도 개수는 센다(나이만
   assert.equal(s.children, 1);
   assert.equal(s.orphans, 1);
   assert.equal(s.oldestChildSec, null, "못 읽은 나이는 null — 0 으로 눕히면 ‘방금 떴다’로 오독된다");
+});
+
+// ── psmux 입력 경로(#1541) — Windows 네이티브 노드 ────────────────────────────────
+// 사양 근거(실기기 실측): psmux 는 `send-keys -H`(hex)를 **받지 않고**(공식 docs 가 "Not accepted: -H"),
+//  대안 `0xNN` 은 **코드포인트** 단위여야 하며, 그마저 **CLI 표면에서만** 멀티바이트가 통한다
+//  (control mode stdin 은 ASCII 2자리만). → 출력은 control mode 유지, 입력만 CLI 로 가른다.
+//  아래는 그 사양의 엣지 표를 그대로 옮긴 것 — 표의 행 하나가 곧 실기기에서 확인한 깨짐 하나다.
+const ID = "box-test-1541";
+const argvOf = (d: string): string[][] => inputToSendKeysArgv(ID, d);
+const toksOf = (d: string): string[] => argvOf(d).flatMap((a) => a.slice(3));
+const sleep = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms); });
+const ta = async (name: string, fn: () => Promise<void>): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
+const timerCount = (): number => process.getActiveResourcesInfo().filter((r) => r === "Timeout").length;
+
+// A. 인코딩
+t("A1 psmux 입력 — ASCII 는 코드포인트 토큰(`send-keys -t <id> 0x..`), -H 없음", () => {
+  assert.deepEqual(argvOf("ls\r"), [["send-keys", "-t", ID, "0x6c", "0x73", "0x0d"]]);
+  assert.ok(!argvOf("ls").some((a) => a.includes("-H")), "-H 가 섞이면 psmux 가 그 뒤를 리터럴로 찍는다");
+});
+
+t("A2 psmux 입력 — 한글은 **코드포인트 1토큰**(UTF-8 바이트 3토큰이면 화면이 깨진다)", () => {
+  // '한' = U+D55C. 바이트 인코딩(ed 95 9c)이면 실기기에서 `íU\` 로 들어갔다.
+  assert.deepEqual(toksOf("한"), ["0xd55c"]);
+  assert.deepEqual(toksOf("가나"), ["0xac00", "0xb098"]);
+  assert.equal(String.fromCodePoint(...toksOf("가나").map((h) => parseInt(h, 16))), "가나", "왕복 복원");
+});
+
+t("A3 psmux 입력 — BMP 밖(이모지)은 서로게이트 2개가 아니라 코드포인트 1토큰", () => {
+  // '🚀' = U+1F680. UTF-16 코드유닛으로 쪼개면 0xd83d 0xde80 이 되어 깨진다.
+  assert.deepEqual(toksOf("🚀"), ["0x1f680"]);
+  assert.ok(!toksOf("🚀").includes("0xd83d"), "서로게이트를 그대로 보내면 안 된다");
+});
+
+t("A4 psmux 입력 — 토큰 폭은 **2자리 이상**(Ctrl-C 가 `0x3` 이면 미검증 형태)", () => {
+  // 실측에서 통과한 형태는 `0x0d`(2자리)·ASCII 자연폭(2자리)·`0xd55c`·`0x1f680` 뿐이다.
+  //  Ctrl-C(0x03)·Tab(0x09) 이 안 먹으면 터미널을 통째로 못 쓴다 → 폭을 계약으로 고정한다.
+  assert.deepEqual(toksOf("\x03"), ["0x03"]);
+  assert.deepEqual(toksOf("\x09"), ["0x09"]);
+  assert.deepEqual(toksOf("\x1b[A"), ["0x1b", "0x5b", "0x41"]); // 방향키(ESC 시퀀스)
+  for (const tk of toksOf("\x01\x02\x03\r\n")) assert.match(tk, /^0x[0-9a-f]{2,}$/, `토큰 폭 위반: ${tk}`);
+});
+
+t("A5 psmux 입력 — 빈 입력은 호출 0건(키 없는 프로세스 스폰 금지)", () => {
+  assert.deepEqual(argvOf(""), []);
+});
+
+t("A6 psmux 입력 — 청크 경계: 512 는 1회, 513 은 2회(명령줄 한도)", () => {
+  assert.equal(argvOf("a".repeat(512)).length, 1, "정확히 한도면 아직 1회");
+  const cmds = argvOf("a".repeat(513));
+  assert.equal(cmds.length, 2);
+  assert.equal(cmds[0].length - 3, 512);
+  assert.equal(cmds[1].length - 3, 1);
+});
+
+t("A7 psmux 입력 — 모든 청크가 대상 세션을 달고 나간다", () => {
+  // 하나라도 -t 가 빠지면 그 조각이 '현재 세션'(엉뚱한 곳)으로 간다.
+  for (const a of argvOf("a".repeat(1500))) assert.deepEqual(a.slice(0, 3), ["send-keys", "-t", ID]);
+});
+
+t("A8 psmux 입력 — 인젝션 차단: 값이 전부 0x 토큰이라 명령이 되지 않는다", () => {
+  const cmds = argvOf(";kill-server;\nnew-session\n");
+  assert.equal(cmds.length, 1);
+  for (const tk of cmds[0].slice(3)) assert.match(tk, /^0x[0-9a-f]+$/);
+  assert.ok(!cmds[0].some((a) => /kill-server|new-session|\n/.test(a)), "리터럴·개행이 argv 에 남으면 안 된다");
+});
+
+// B. 백엔드 판정 — 이 한 줄이 attach 백엔드와 입력 경로를 **동시에** 가른다.
+t("B1·B2·B3 psmux 판정 — 파일명으로만(경로·확장자·대소문자 무관), tmux·빈값은 절대 아님", () => {
+  for (const b of ["psmux", "psmux.exe", "C:\\psmux\\psmux.exe", "C:/Users/y/.lively/bin/psmux/PSMUX.EXE", "/opt/psmux"]) {
+    assert.equal(isPsmuxBin(b), true, `psmux 로 안 잡힘 → Windows 입력이 통째로 안 먹는다: ${b}`);
+  }
+  for (const b of ["tmux", "/opt/homebrew/bin/tmux", "C:\\tmux\\tmux.exe", "psmuxx", "psmux-old", "", null as unknown as string]) {
+    assert.equal(isPsmuxBin(b), false, `tmux 인데 psmux 로 잡힘 → 매 키마다 프로세스: ${b}`);
+  }
+});
+
+// C. 디스패치
+t("C1·C2 psmux 모드 — 입력만 CLI 싱크로 가르고 나머지는 control 스트림 그대로", () => {
+  const lines: string[] = [], typed: string[] = [];
+  const run = (msg: any): void => handleControlMsg((l) => lines.push(l), msg, { sendInput: (d) => typed.push(d) });
+  run({ t: "i", d: "ls\r" });
+  assert.deepEqual(typed, ["ls\r"], "C1: 입력은 CLI 싱크로");
+  assert.deepEqual(lines, [], "C1: control 스트림에 send-keys 가 실리면 psmux 는 리터럴로 찍는다");
+  // 나머지는 응답(%begin/%end)이 control 스트림으로 와야 하므로 옮길 수 없다.
+  run({ t: "cap", n: 600, st: 1 });
+  run({ t: "st" });
+  run({ t: "mr" });
+  assert.deepEqual(lines, [stateCmd(), captureCmd(600), stateCmd(), mouseResetCmd(), stateCmd()]);
+  assert.deepEqual(typed, ["ls\r"], "C2: 입력 싱크는 그 뒤로 안 늘어난다");
+});
+
+t("C3 싱크가 없으면(=tmux) 기존 `send-keys -H` 그대로(회귀 방지)", () => {
+  assert.deepEqual(seqOf({ t: "i", d: "ls\r" }), ["send-keys -H 6c 73 0d"]);
+});
+
+t("C4 psmux 모드 + 빈 입력 → control 스트림에 아무것도 안 실린다", () => {
+  const lines: string[] = [];
+  handleControlMsg((l) => lines.push(l), { t: "i", d: "" }, { sendInput: () => { /* 싱크 */ } });
+  assert.deepEqual(lines, []);
+});
+
+// C5·C6 — 리사이즈 구분자. psmux 는 `WxH` 를 **오류 없이 조용히 무시**한다(실측: 창이 안 변한다).
+//  조용한 무시라 이 계약이 깨져도 로그·종료코드엔 아무 흔적이 없고, 증상은 "웹터미널이 브라우저 크기를
+//  안 따라간다"로만 나타난다 → 형식 자체를 테스트로 못박는다.
+t("C5 psmux 모드 리사이즈 → 콤마 형식(`W,H`) — WxH 는 psmux 가 조용히 무시한다", () => {
+  const lines: string[] = [];
+  handleControlMsg((l) => lines.push(l), { t: "r", c: 120, r: 40 }, { sendInput: () => { /* noop */ } });
+  assert.deepEqual(lines, ["refresh-client -C 120,40"]);
+  assert.equal(resizeToRefresh(120, 40, ","), "refresh-client -C 120,40");
+  // 클램프는 형식과 무관하게 동일해야 한다(psmux 만 경계 검사가 빠지는 일 없게).
+  assert.equal(resizeToRefresh(0, -5, ","), "refresh-client -C 1,1");
+  assert.equal(resizeToRefresh(99999, 99999, ","), "refresh-client -C 2000,2000");
+});
+
+t("C6 tmux 모드 리사이즈 → 기존 `WxH` 유지(tmux 하한을 안 정했으므로 회귀 위험 0)", () => {
+  assert.deepEqual(seqOf({ t: "r", c: 120, r: 40 }), ["refresh-client -C 120x40"]);
+  assert.equal(resizeToRefresh(120, 40), "refresh-client -C 120x40");
+});
+
+// D. 입력 펌프 — 신규 도입물이 만든 새 엣지(배치·순서·종료·실패).
+//  전부 **부작용**(run 호출 argv·호출 순서·활성 타이머 수)으로 판정한다.
+await ta("D1 펌프 — 디바운스 창 안의 키는 한 번의 호출로 묶인다", async () => {
+  const calls: string[][] = [];
+  const pump = createInputPump(ID, async (argv) => { calls.push(argv); }, () => { /* noop */ }, 5);
+  pump.sendInput("a"); pump.sendInput("b"); pump.sendInput("c");
+  assert.equal(calls.length, 0, "창이 닫히기 전엔 나가지 않는다");
+  await sleep(25); await pump.idle();
+  assert.equal(calls.length, 1, "키 3개에 프로세스 3개면 타이핑이 프로세스 폭풍이 된다");
+  assert.deepEqual(calls[0].slice(3), ["0x61", "0x62", "0x63"]);
+});
+
+await ta("D2 펌프 — 청크가 여러 개여도 **순차** 실행(겹치면 글자가 섞인다)", async () => {
+  const order: string[] = [];
+  let releaseFirst = (): void => { /* 채워짐 */ };
+  const gate = new Promise<void>((r) => { releaseFirst = r; });
+  let n = 0;
+  const pump = createInputPump(ID, async () => {
+    const i = ++n; order.push(`start${i}`);
+    if (i === 1) await gate;
+    order.push(`end${i}`);
+  }, () => { /* noop */ }, 5);
+  pump.sendInput("a".repeat(513)); // 2 청크
+  await sleep(25);
+  assert.deepEqual(order, ["start1"], "첫 호출이 끝나기 전에 두 번째가 시작되면 순서 보장이 없다");
+  releaseFirst();
+  await pump.idle();
+  assert.deepEqual(order, ["start1", "end1", "start2", "end2"]);
+});
+
+await ta("D3 펌프 — 백필/상태 명령보다 **방금 친 키가 먼저** 나간다", async () => {
+  // 이게 깨지면 capture-pane 이 '마지막 입력이 빠진 화면'을 백필한다(재접속마다 글자가 사라져 보임).
+  const order: string[] = [];
+  const pump = createInputPump(ID, async () => { order.push("keys"); }, (l) => order.push(`cmd:${l}`), 50);
+  pump.sendInput("x");
+  pump.sendCmd(captureCmd(600));   // 디바운스 창이 아직 안 닫힌 시점
+  await pump.idle();
+  assert.deepEqual(order, ["keys", `cmd:${captureCmd(600)}`]);
+});
+
+await ta("D4 펌프 — 닫히면 대기 입력을 버리고 타이머도 해제한다", async () => {
+  const calls: string[][] = [];
+  const pump = createInputPump(ID, async (argv) => { calls.push(argv); }, () => { /* noop */ }, 5);
+  const base = timerCount();
+  pump.sendInput("abc");
+  assert.equal(timerCount(), base + 1, "배선 확인: 디바운스 타이머가 실제로 떠 있어야 이 관측이 의미를 갖는다");
+  pump.close();
+  assert.equal(timerCount(), base, "close 가 타이머를 해제하지 않으면 연결마다 타이머가 남는다");
+  pump.sendInput("def");
+  await sleep(25); await pump.idle();
+  assert.deepEqual(calls, [], "닫힌 세션에 유령 입력이 가면 안 된다");
+});
+
+await ta("D5 펌프 — 전송 1건이 실패해도 다음 입력은 계속 흐른다", async () => {
+  const calls: string[][] = [];
+  let first = true;
+  const pump = createInputPump(ID, async (argv) => {
+    calls.push(argv);
+    if (first) { first = false; throw new Error("psmux timeout"); }
+  }, () => { throw new Error("write boom"); }, 5);
+  pump.sendInput("a");
+  await sleep(25); await pump.idle();
+  pump.sendCmd("refresh-client -C 80x24");  // 명령 쪽 예외도 체인을 끊지 않는다
+  await pump.idle();
+  pump.sendInput("b");
+  await sleep(25); await pump.idle();
+  assert.equal(calls.length, 2, "실패 1건이 체인을 끊으면 터미널이 그대로 먹통이 된다");
+  assert.deepEqual(calls[1].slice(3), ["0x62"]);
 });
 
 console.log(`\n${pass} passed`);

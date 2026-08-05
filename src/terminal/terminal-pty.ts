@@ -10,7 +10,8 @@
 // ws 종료 = attach 클라만 종료(tmux 세션은 영속). 셸 미경유(argv).
 import { WebSocketServer, type WebSocket } from "ws";
 import { spawn as ptySpawn } from "node-pty";
-import { spawn as cpSpawn } from "node:child_process";   // psmux 파이프 attach 백엔드(#1541)
+import { spawn as cpSpawn, execFile as cpExecFile } from "node:child_process";   // psmux 파이프 attach 백엔드 + CLI 입력(#1541)
+import { promisify } from "node:util";
 import type { Server, IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { logger } from "../log.js";
@@ -29,6 +30,7 @@ export interface AttachSocket {
 export type TicketLookup = (cookieHeader?: string) => { userId: string } | null;
 
 const CONTROL_MODE = process.env.TERMINAL_LEGACY_ATTACH !== "1"; // 기본 control mode, =1 이면 plain attach 폴백
+const execFileP = promisify(cpExecFile);
 const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
 
 // ── attach PTY 수명 관리(#687 PTY 누수) ──
@@ -166,10 +168,99 @@ export function inputToSendKeys(d: string): string[] {
   }
   return cmds;
 }
+// ── psmux 입력 경로 (#1541) — 같은 의도를 **다른 표면**으로 보낸다 ─────────────────
+// psmux 는 `send-keys -H`(hex)를 **받지 않는다**. 공식 `docs/tmux_args_reference.md` 가 send-keys 에 대해
+//  "Not accepted: `-c`, `-F`, `-H`, `-K`, `-M`" 로 `-H` 를 명시 배제하고, 실측도 일치한다
+//  (`-H 41 42 43` → 화면에 `41 42 43` 리터럴. CLI·control 양쪽).
+// 대안은 tmux 표준 키 표기 `0xNN` 인데 **인코딩 단위가 바이트가 아니라 코드포인트**여야 한다:
+//   UTF-8 바이트(`한`=ed 95 9c) → `íU\` 로 깨짐 ❌ / 코드포인트(`한`=0xd55c) → `한` ✅ (BMP 밖 이모지도 정상)
+// ⚠ 그리고 psmux 는 **CLI 파서와 control 파서가 갈려 있다** — 같은 `0xNN` 이 CLI 로는 한글·이모지까지 되는데
+//  control mode stdin 으로는 ASCII(2자리)만 된다(4자리 hex 를 못 받는다). 10-1 의 "PTY 에서 -CC 만 침묵"과
+//  같은 계열이다. → **출력은 control mode(파이프) 유지, 입력만 CLI 호출**로 갈라 보낸다.
+// 인젝션 안전성은 그대로 승계된다 — 값이 전부 `0x…` 토큰이고 execFile argv(셸 미경유)라
+//  `;kill-server;` 를 쳐도 서버가 살고 화면엔 리터럴로만 도달한다(실측). `-l`(리터럴)로 바꿔 보안 경계를
+//  새로 그릴 필요 **없다**.
+const SENDKEYS_CHUNK = 512;    // 한 호출에 싣는 키 토큰 수 — 토큰 최대 8자라 ~4.6KB(Windows 명령줄 한도 32767자 대비 여유)
+const INPUT_DEBOUNCE_MS = 16;  // 키 배치 창(≈1프레임) — 매 키마다 프로세스를 띄우지 않게 묶는다
+/**
+ * 입력 d → `psmux send-keys` **argv 배열들**(순수 함수). 셸을 안 거치므로 argv 요소는 인용 불요.
+ *
+ * ⚠ 토큰 폭은 **2자리 이상**으로 고정한다. 실측에서 통과가 확인된 형태는 `0x0d`·ASCII 자연폭(2자리)·
+ *  `0xd55c`·`0x1f680` 뿐이고 1자리(`0x3`)는 미검증이다 — Ctrl-C(0x03)·Tab(0x09) 이 안 먹으면 터미널을
+ *  통째로 못 쓴다. 검증된 폭 안에 머무는 게 맞다.
+ */
+export function inputToSendKeysArgv(id: string, d: string): string[][] {
+  const toks: string[] = [];
+  for (const ch of d) toks.push("0x" + (ch.codePointAt(0) as number).toString(16).padStart(2, "0")); // for..of = 코드포인트 단위(서로게이트 쌍 보존)
+  const out: string[][] = [];
+  for (let i = 0; i < toks.length; i += SENDKEYS_CHUNK) out.push(["send-keys", "-t", id, ...toks.slice(i, i + SENDKEYS_CHUNK)]);
+  return out;
+}
+/**
+ * psmux 입력 펌프 — 배치(디바운스) + **순차 실행**(순서 보장).
+ *
+ * 입력을 CLI 로 가르면 축이 둘로 갈린다: **입력은 비동기(프로세스 spawn)** · **명령은 동기(stdin write)**.
+ * 그대로 두면 순서가 뒤집힌다 — 방금 친 글자가 pane 에 닿기 전에 `capture-pane` 이 나가 **그 글자가 빠진
+ * 화면**을 백필하는 식(재접속마다 마지막 입력이 사라져 보인다). 그래서 **입력과 명령을 하나의 직렬 체인**에
+ * 태운다. 체인이 곧 순서다.
+ *
+ * 배치가 필요한 이유는 비용이다 — 키 하나에 프로세스 하나면 타이핑이 그대로 프로세스 폭풍이 된다.
+ * 16ms(≈1프레임) 창으로 묶고, 붙여넣기처럼 큰 입력은 청크로 갈라지되 같은 체인이라 글자가 섞이지 않는다.
+ */
+export interface InputPump {
+  /** 클라 입력 — 디바운스 창으로 묶어 순차 전송. */
+  sendInput(d: string): void;
+  /** control 명령 — 대기 입력을 **먼저** 내보낸 뒤 같은 체인에 태운다(입력↔명령 순서 보존). */
+  sendCmd(line: string): void;
+  /** 연결 종료 — 대기 입력 폐기 + 타이머 해제. 이후 아무것도 보내지 않는다. */
+  close(): void;
+  /** 체인이 빌 때까지. 순서·순차 계약을 실제로 재는 관측점(테스트·종료 대기). */
+  idle(): Promise<void>;
+}
+export function createInputPump(
+  id: string,
+  run: (argv: string[]) => Promise<unknown>,
+  write: (line: string) => void,
+  debounceMs: number = INPUT_DEBOUNCE_MS,
+): InputPump {
+  let closed = false;
+  let chain: Promise<void> = Promise.resolve();
+  let pending = "";
+  let timer: NodeJS.Timeout | null = null;
+  const enqueue = (fn: () => Promise<unknown> | unknown): void => {
+    chain = chain.then(() => (closed ? undefined : fn())).then(() => undefined, (err) => {
+      // 전송 1건 실패가 세션을 끊지 않는다 — 다음 입력은 계속 흐른다(체인은 이어진다).
+      logger.warn({ err: (err as Error)?.message ?? String(err), id }, "psmux 입력 전송 실패(비치명)");
+    });
+  };
+  const flush = (): void => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (!pending) return;
+    const d = pending; pending = "";
+    for (const argv of inputToSendKeysArgv(id, d)) enqueue(() => run(argv));
+  };
+  return {
+    sendInput(d) {
+      if (!d || closed) return;
+      pending += d;
+      if (!timer) timer = setTimeout(flush, debounceMs);
+    },
+    sendCmd(line) { flush(); enqueue(() => write(line)); },
+    close() { closed = true; if (timer) { clearTimeout(timer); timer = null; } pending = ""; },
+    idle() { return chain; },
+  };
+}
+
 // 리사이즈: control-mode 클라 크기(= tmux 창 크기 결정). 1..2000 클램프.
-export function resizeToRefresh(c: number, r: number): string {
+// ⚠ 구분자가 백엔드마다 다르다(#1541 실측). tmux 는 `WxH`·`W,H` 를 **둘 다** 받지만(3.6a 확인),
+//  **psmux 는 콤마만** 받고 `WxH` 는 **오류도 없이 조용히 무시**한다(psmux 3.3.7 실측:
+//  `-C 120x40` → 창 그대로 120x30 / `-C 120,40` → 120x40). 조용한 무시라 종료코드·%error 로는 안 잡히고,
+//  증상은 "웹터미널 크기가 브라우저를 안 따라간다"로만 나타난다.
+//  콤마는 tmux 3.2 에서 도입됐다 — 우리는 tmux 하한을 못 박지 않았으므로(배포판이 주는 걸 쓴다: Debian 11=3.1c)
+//  tmux 경로는 **손대지 않고** psmux 일 때만 콤마로 보낸다. 한쪽으로 통일하는 건 하한을 정한 뒤에 할 일이다.
+export function resizeToRefresh(c: number, r: number, sep: "x" | "," = "x"): string {
   const cc = Math.min(Math.max(1, Math.trunc(c)), 2000), rr = Math.min(Math.max(1, Math.trunc(r)), 2000);
-  return `refresh-client -C ${cc}x${rr}`;
+  return `refresh-client -C ${cc}${sep}${rr}`;
 }
 // 백필: -p stdout, -e 색/속성 이스케이프 보존, -q 조용히, -N 줄 끝 공백 보존(= 배경색으로 줄 끝까지
 //  채운 셀을 유지 — Claude 프롬프트의 회색 배경 채움이 재접속 복원 때 잘리지 않게). -S -n ~ -E -: 히스토리~가시영역.
@@ -208,11 +299,16 @@ export function mouseResetCmd(): string {
   return `run-shell -b 'printf "\\033[?1000l\\033[?1002l\\033[?1003l\\033[?1005l\\033[?1006l\\033[?1015l" > #{pane_tty}'`;
 }
 
-export function handleControlMsg(send: SendCmd, msg: { t?: string; d?: unknown; c?: unknown; r?: unknown; n?: unknown; st?: unknown }): void {
+// psmux: 주면 **그 백엔드용으로** 두 군데가 갈린다(#1541) — ① 입력은 control 스트림이 아니라 그 싱크(CLI)로,
+//  ② 리사이즈 구분자는 콤마. 둘 다 psmux 라는 **하나의 사실**에서 나오므로 인자 하나로 묶는다.
+//  나머지(백필·상태·복구)는 두 경우 모두 control 스트림 그대로 — 응답(%begin/%end 블록)이 그 스트림으로
+//  되돌아오므로 옮길 수 없다.
+export function handleControlMsg(send: SendCmd, msg: { t?: string; d?: unknown; c?: unknown; r?: unknown; n?: unknown; st?: unknown }, psmux?: { sendInput(d: string): void }): void {
   if (msg.t === "i" && typeof msg.d === "string") {
-    for (const cmd of inputToSendKeys(msg.d)) send(cmd);
+    if (psmux) psmux.sendInput(msg.d);
+    else for (const cmd of inputToSendKeys(msg.d)) send(cmd);
   } else if (msg.t === "r" && Number.isInteger(msg.c) && Number.isInteger(msg.r)) {
-    send(resizeToRefresh(msg.c as number, msg.r as number));
+    send(resizeToRefresh(msg.c as number, msg.r as number, psmux ? "," : "x"));
   } else if (msg.t === "cap") {
     // 상태 블록은 '클라가 요청할 때만'(msg.st) 백필 직전에 보낸다. 옛 클라(캐시된 terminal.js)는 st 를 안 실어
     //  보내므로 상태 블록을 못 받고 → 마커(__LTSTATE__)를 화면에 출력하는 회귀가 없다(신·구 클라 버전 스큐 안전).
@@ -282,10 +378,15 @@ export function attachSession(ws: AttachSocket, id: string): void {
       //  → tmux 의 '첫 출력'(= control 모드 진입·no-echo 완료)이 오기 전까지 명령을 큐에 모았다가 그때 flush.
       let ready = false;
       const cmdQueue: string[] = [];
-      const sendCmd: SendCmd = (line) => {
+      const writeCmd: SendCmd = (line) => {
         if (!ready) { cmdQueue.push(line); return; }
         try { term?.write(line + "\n"); } catch { /* socket closed */ }
       };
+      // 입력 경로는 멀티플렉서가 가른다(#1541) — tmux 는 control 스트림 그대로, psmux 는 CLI 펌프.
+      const pump = isPsmuxBin(TMUX_BIN)
+        ? createInputPump(id, (argv) => execFileP(TMUX_BIN, argv, { timeout: 5000, env, windowsHide: true }), writeCmd)
+        : null;
+      const sendCmd: SendCmd = pump ? (line) => pump.sendCmd(line) : writeCmd;
       term.onData((d) => {
         if (!ready) { ready = true; for (const q of cmdQueue) { try { term?.write(q + "\n"); } catch { /* noop */ } } cmdQueue.length = 0; }
         try { ws.send(d as unknown as Buffer); } catch { /* socket closed */ }
@@ -295,12 +396,16 @@ export function attachSession(ws: AttachSocket, id: string): void {
         let msg: { t?: string; d?: unknown; c?: unknown; r?: unknown; n?: unknown };
         try { msg = JSON.parse(raw.toString()); } catch { return; }
         if (!term) return;
-        if (CONTROL_MODE) handleControlMsg(sendCmd, msg);
+        if (CONTROL_MODE) handleControlMsg(sendCmd, msg, pump ?? undefined);
         else handleLegacyMsg(term, msg);
       });
       // 회수는 **SIGTERM 명시** — 기본 SIGHUP 은 tmux -CC 클라가 무시해 좀비로 남는다(위 (3)). 여기가 연결 단위
       //  회수의 유일한 관문이라(탭 종료·heartbeat terminate·에러 전부 이 경로) 시그널 하나가 곧 누수 여부다.
-      const cleanup = () => { if (term) liveTerms.delete(term); try { term?.kill("SIGTERM"); } catch { /* already gone */ } };
+      const cleanup = () => {
+        pump?.close();                        // 대기 입력 폐기 + 타이머 해제(#1541 — 닫힌 세션에 유령 입력·타이머 잔류 금지)
+        if (term) liveTerms.delete(term);
+        try { term?.kill("SIGTERM"); } catch { /* already gone */ }
+      };
       ws.on("close", cleanup);
       ws.on("error", cleanup);
     })
