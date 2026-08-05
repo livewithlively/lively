@@ -98,9 +98,15 @@ export interface RevisionListItem {
 }
 
 // 줄 단위 증감 — 정확한 LCS 는 상세 diff(웹)에서. 목록용은 집합 근사(추가/삭제 줄 수)로 충분하고 O(n).
-function lineDelta(before: string | null, after: string | null): { added: number; removed: number } {
-  const b = (before ?? "").split("\n");
-  const a = (after ?? "").split("\n");
+//  export(#1546): 문서 변경 이력 타임라인(knowledge-history-store)이 같은 ±숫자를 써야 한다 — 검토 큐와
+//  이력 패널이 같은 변경에 다른 증감을 보이면 그 불일치 자체가 버그로 읽힌다(알고리즘 두 벌 금지).
+//  ⚠ 빈 쪽은 **0줄**이다 — "".split("\n") 이 [""] 을 주는 JS 특성을 그대로 쓰면 팬텀 1줄이 생겨,
+//   문서 '생성'이 `+2/−1`(1줄 삭제?)로, '삭제'가 `+1/−2` 로 표시된다(#1546 이력 타임라인에서 실측).
+//   검토 큐는 양쪽이 늘 실제 본문이라 이 결함이 안 드러났을 뿐, 폴더(body_md='')나 신규 제안에선 같은 거짓이 난다.
+export function lineDelta(before: string | null, after: string | null): { added: number; removed: number } {
+  const lines = (s: string | null): string[] => (s ? s.split("\n") : []);
+  const b = lines(before);
+  const a = lines(after);
   const bc = new Map<string, number>();
   for (const l of b) bc.set(l, (bc.get(l) ?? 0) + 1);
   let added = 0;

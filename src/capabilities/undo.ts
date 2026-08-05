@@ -107,7 +107,9 @@ const PROJECT_OPS: Record<string, Apply> = {
 };
 
 // 지식 행 스냅샷 → upsertKnowledge 입력(본문·메타 재기록; 카테고리는 미전송=보존, lifecycle 은 update 경로에서 불변).
-const knowledgeUpsertInput = (s: Record<string, any>) => ({
+//  export(#1546): 지식 이력 패널의 '이 버전으로 되돌리기'가 같은 매핑을 쓴다 — 스냅샷을 upsert 입력으로 옮기는
+//  규칙이 두 벌이면 한쪽만 facet 을 빠뜨려도 조용히 그 필드가 지워진다(is_wiki·type 유실이 그 사고).
+export const knowledgeUpsertInput = (s: Record<string, any>) => ({
   name: String(s.name), title: s.title ?? undefined, body_md: String(s.body_md ?? ""),
   injection: s.injection ?? undefined, provenance: s.provenance ?? undefined,
   supersedes: s.supersedes ?? undefined, summary: s.summary ?? null, sort: s.sort ?? undefined,
