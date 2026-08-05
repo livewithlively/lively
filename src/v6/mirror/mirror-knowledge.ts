@@ -8,7 +8,7 @@ import { classifyIngest } from "../../org/ingest/ingest-classify.js";
 import type { RawItem } from "../../items/store.js";
 import { resolveIngestPolicy } from "../../org/ingest/ingest-policy.js";
 import { getIngestPolicyRules } from "../../org/ingest/ingest-policy-load.js";
-import { auditConnector } from "./mirror-common.js";
+import { auditConnector, auditLifecycleSweep } from "./mirror-common.js";
 import { boundCollector } from "../../connectors/config.js";
 
 /**
@@ -200,11 +200,15 @@ export async function mirrorKnowledgeByNameV6(client: pg.PoolClient, it: RawItem
 }
 
 /** domain-wiki 삭제 전파 — 이번 전량 싱크에서 관측 안 된(last_synced_at<runStart) 활성 domain-wiki 지식을 아카이브.
- *  repo 는 매 실행 전량 관측하므로 파일이 사라지면 그 행만 last_synced_at 이 안 갱신돼 걸린다. run-sync 가 호출. */
+ *  repo 는 매 실행 전량 관측하므로 파일이 사라지면 그 행만 last_synced_at 이 안 갱신돼 걸린다. run-sync 가 호출.
+ *  #1561 감사: notion 스윕과 같은 무감사 아카이브였다 — 같은 헬퍼로 op='set_lifecycle' 을 남긴다(둘이 갈라지면
+ *  한쪽 커넥터의 아카이브만 이력에 보이는, 더 헷갈리는 상태가 된다). */
 export async function sweepDomainWikiArchived(db: pg.Pool, runStartIso: string): Promise<number> {
   const r = await db.query(
     `UPDATE knowledge SET lifecycle='archived', updated_at=now()
      WHERE external_system='domain-wiki' AND lifecycle='active'
        AND (last_synced_at IS NULL OR last_synced_at < $1) RETURNING name`, [runStartIso]);
+  await auditLifecycleSweep(db, (r.rows as Array<{ name: string }>).map((x) => x.name),
+    "connector:domain-wiki", "active", "archived");
   return r.rowCount ?? 0;
 }
