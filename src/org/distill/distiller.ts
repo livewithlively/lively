@@ -206,15 +206,31 @@ export function prefilterSql(d: DistillerRow, p: Params, alias = "s"): string | 
   // ⚠ **비상관(uncorrelated) 서브쿼리여야 한다.** 처음엔 바깥 행(s)을 참조하는 EXISTS 로 썼는데, 그러면 자료 한 건마다
   //  source 전체를 다시 스캔한다(O(n×m)) — 310건짜리 작은 채널에서도 statement timeout 이 났다(실측 2026-07-31).
   //  s 를 참조하지 않는 형태면 Postgres 가 **스레드 집계를 한 번만** 하고 해시로 조인한다.
-  //  스레드 키 = (채널, thread_ts ?? ts) — thread_ts 가 없으면 자기 ts(단독 메시지 = 1건짜리 스레드).
-  return `(COALESCE(${alias}.fields->>'container_name',''), COALESCE(${alias}.fields->>'thread_ts', ${alias}.fields->>'ts')) IN (
-      SELECT COALESCE(x.fields->>'container_name',''), COALESCE(x.fields->>'thread_ts', x.fields->>'ts')
+  //  스레드 키 = (채널, threadIdSql) — 양쪽이 **같은 표현식**이어야 튜플 IN 이 성립한다(한쪽만 폴백을 주면 전량 탈락).
+  return `(COALESCE(${alias}.fields->>'container_name',''), ${threadIdSql(alias)}) IN (
+      SELECT COALESCE(x.fields->>'container_name',''), ${threadIdSql("x")}
       FROM source x
       WHERE x.lifecycle='active'
       GROUP BY 1, 2
       HAVING ${conds.join(join)}
     )`;
 }
+
+// 스레드 식별자 — thread_ts 가 없으면 자기 ts(단독 메시지 = 1건짜리 스레드), **그것도 없으면 자기 id**.
+//  ⚠ 마지막 폴백이 이 함수의 존재 이유다. 슬랙 밖 자료(디스코드·회의록·전사·문서)엔 ts 가 아예 없어
+//   키가 NULL 이 되는데, NULL 은 두 군데서 조용히 다르게 깨진다(#1557 실측 — 이 조직 자료 565건 전부가 그 경우였다):
+//   ① **조인에서 전량 탈락** — 인박스는 스레드를 골라 원본에 되붙이는데(JOIN pk._tid = c._tid) NULL=NULL 은
+//      참이 아니다. 그래서 인박스가 항상 0 건이 되어, 증류기를 만들어도 배치가 아무것도 안 집는다.
+//      (반사판이 "집힐 자료 250건"과 "지금 집히는 자료가 0건"을 동시에 띄우던 것이 이 증상이다.)
+//   ② **한 덩어리로 뭉침** — GROUP BY 는 NULL 을 한 그룹으로 묶는다. 무관한 자료 수백 건이 '한 스레드'가 되면
+//      첫 스레드 예외(rn=1)로 배치에 통째로 실리고, 사전필터의 스레드 집계(메시지·참여자 수)도 거짓이 된다.
+//  id 폴백은 "스레드 정보가 없는 자료 = 각자 1건짜리 스레드"라는 뜻이고, 그게 이 자료들의 실제 모습이다.
+//  ⚠ 이 표현식은 **비교하는 양쪽이 같아야** 한다 — 한쪽만 폴백을 주면 매칭이 어긋난다.
+export const threadIdSql = (alias = "s"): string => {
+  const f = alias ? `${alias}.fields` : "fields";
+  const id = alias ? `${alias}.id` : "id";
+  return `COALESCE(${f}->>'thread_ts', ${f}->>'ts', 'src:' || ${id}::text)`;
+};
 
 // ⚠ body_md 를 포함한다 — 배치 프롬프트에 본문을 동봉하기 위해서다(buildSourceDigest). 빼면 에이전트가
 //  서버가 이미 쥔 것을 source_get 으로 다시 조회하고, 실측에선 인자를 틀려 19건 전부 실패 후 재시도했다.
@@ -264,7 +280,7 @@ export function buildInboxQuery(d: DistillerRow, all: DistillerRow[], limitThrea
   const maxMsgs = Math.min(Math.max(1, d.batch_max_msgs ?? 20), 2000);
   const cand = `SELECT ${INBOX_SEL},
              COALESCE(s.fields->>'container_name','') AS _ch,
-             COALESCE(s.fields->>'thread_ts', s.fields->>'ts') AS _tid
+             ${threadIdSql("s")} AS _tid
         FROM source s
         WHERE s.lifecycle='active'
           AND ${unprocessedSql(d, p)}
@@ -307,6 +323,10 @@ export async function listDistillerInbox(d: DistillerRow, all: DistillerRow[], l
 //  **파편 지식**을 새로 만든다. 링크(knowledge_source)는 결정적 답을 갖고 있으므로 그걸 쓴다.
 //
 // 순수 SQL 조립은 buildThreadKnowledgeQuery(테스트 seam) — 실행만 여기서.
+//
+// ⚠ 여기만 threadIdSql 의 id 폴백을 **쓰지 않는다**(의도된 예외). 이 질문은 "같은 스레드의 형제가 이미 지식이
+//  됐나"인데, ts 가 없는 자료는 애초에 형제가 없는 1건짜리라 물을 것이 없다. 게다가 아래 SQL 은 JS 가 만든 키
+//  목록과 튜플로 대조하므로 **양쪽 표현식이 같아야** 한다 — 한쪽에만 폴백을 넣으면 매칭이 통째로 어긋난다.
 export function buildThreadKnowledgeQuery(rows: Record<string, unknown>[]): { sql: string; values: unknown[] } | null {
   const keys = new Map<string, [string, string]>();
   for (const r of rows) {
@@ -444,7 +464,7 @@ function havingFor(r: Record<string, unknown>, p: Params, keywords: string[]): s
 export function buildGridSql(rules: Record<string, unknown>, p: Params, keywords: string[], chans: string[]): string {
   const chParam = chans.length ? p.add(chans) : null;
   return `WITH th AS (
-         SELECT COALESCE(fields->>'thread_ts', fields->>'ts') AS tid,
+         SELECT ${threadIdSql("")} AS tid,
                 count(*)::int AS msgs,
                 bool_or(EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = source.id)) AS became,
                 (${havingFor(rules, p, keywords)}) AS pass
@@ -558,7 +578,7 @@ export async function measureFilterImpact(d: DistillerRow): Promise<FilterImpact
   const chanFilter = chans.length ? `AND COALESCE(fields->>'container_name','') = ANY($1::text[])` : "";
   const base = await q(itemsPool,
     `WITH th AS (
-       SELECT COALESCE(fields->>'thread_ts', fields->>'ts') AS tid, count(*)::int AS msgs,
+       SELECT ${threadIdSql("")} AS tid, count(*)::int AS msgs,
               bool_or(EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = source.id)) AS became
        FROM source WHERE lifecycle='active' ${chanFilter} GROUP BY 1)
      SELECT count(*)::int AS threads, COALESCE(sum(msgs),0)::int AS msgs,
@@ -587,7 +607,7 @@ export async function tuneDistiller(d: DistillerRow, candidates?: Array<{ label:
 
   const base = await q(itemsPool,
     `WITH th AS (
-       SELECT COALESCE(fields->>'thread_ts', fields->>'ts') AS tid,
+       SELECT ${threadIdSql("")} AS tid,
               count(*)::int AS msgs,
               bool_or(EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = source.id)) AS became
        FROM source WHERE lifecycle='active' ${chanFilter} GROUP BY 1)
@@ -597,7 +617,7 @@ export async function tuneDistiller(d: DistillerRow, candidates?: Array<{ label:
   //  lift 는 유효하다). 노이즈(사람 이름·영어 조각) 판별은 AI 에게 맡긴다 — 여기선 재료만 준다.
   const kw = await q(itemsPool,
     `WITH th AS (
-       SELECT COALESCE(fields->>'thread_ts', fields->>'ts') AS tid,
+       SELECT ${threadIdSql("")} AS tid,
               string_agg(COALESCE(body_md,''), ' ') AS txt,
               bool_or(EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = source.id)) AS became
        FROM source WHERE lifecycle='active' ${chanFilter} GROUP BY 1),

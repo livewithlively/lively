@@ -929,6 +929,54 @@ t("DR14 enabled:false·priority:0 은 '미지정'이 아니라 값이다", () =>
   assert.equal(m.priority, 0);
 });
 
+// ── TK. 스레드 키(#1557) — **정보 부재가 배제가 되면 안 된다**(이 파일 머리말의 정책 그대로) ─────
+//  실측: 이 조직 자료 565건(디스코드 556·회의록·전사)엔 thread_ts 도 ts 도 없어 키가 NULL 이었다.
+//  ① 인박스는 스레드를 골라 원본에 되붙이는데(JOIN pk._tid = c._tid) NULL=NULL 은 참이 아니라 **전량 탈락** —
+//     증류기를 만들어도 0 건을 집었다(화면엔 "집힐 자료 250건 / 지금 집히는 자료가 0건"이 동시에 떴다).
+//  ② GROUP BY 는 NULL 을 한 그룹으로 묶어 무관한 자료 수백 건이 '한 스레드'가 된다(배치 통째로 실림 + 필터 집계 거짓).
+const threadKeyExprs = (sql: string): string[] =>
+  [...sql.matchAll(/COALESCE\([^()]*->>'thread_ts'[^()]*\)/g)].map((m) => m[0]);
+
+t("TK1 인박스의 스레드 키는 부재를 흡수한다 — 값이 없으면 자기 id 로 1건짜리 스레드", () => {
+  const keys = threadKeyExprs(buildInboxQuery(mk({ id: 3 }), []).sql);
+  assert.ok(keys.length > 0, "인박스는 스레드 키로 자른다");
+  for (const k of keys) assert.ok(k.includes("'src:'"), `NULL 키는 JOIN 에서 전량 탈락한다: ${k}`);
+});
+
+t("TK2 스레드 키를 쓰는 쿼리는 전부 같은 폴백을 쓴다 — 한 곳만 빠지면 그 축만 조용히 다르게 센다", () => {
+  const sqls = [
+    buildInboxQuery(mk({ id: 1 }), []).sql,
+    prefilterSql(mk({ prefilter_rules: { min_msgs: 2 } }), new Params()) ?? "",
+    buildGridSql({ min_msgs: 2 }, new Params(), ["가나"], []),
+  ];
+  for (const s of sqls) {
+    const keys = threadKeyExprs(s);
+    assert.ok(keys.length > 0, "이 쿼리는 스레드 단위로 집계한다");
+    for (const k of keys) assert.ok(k.includes("'src:'"), `폴백 누락: ${k}`);
+  }
+});
+
+t("TK3 튜플로 대조하는 자리는 양쪽 표현식이 같아야 한다 — 한쪽만 폴백이면 매칭이 통째로 어긋난다", () => {
+  const sql = prefilterSql(mk({ prefilter_rules: { min_msgs: 2 } }), new Params()) ?? "";
+  const shapes = threadKeyExprs(sql).map((k) => k.replace(/\b[a-z]\./g, ""));   // alias 지우고 형태만 본다
+  assert.ok(shapes.length >= 2, "바깥 행과 집계 서브쿼리 양쪽에 키가 있다");
+  assert.equal(new Set(shapes).size, 1, `양쪽이 다르다: ${JSON.stringify(shapes)}`);
+});
+
+t("TK4 스레드 지식 조회는 폴백을 쓰지 않는다(의도된 예외) — JS 키 목록과 표현식이 같아야 매칭된다", () => {
+  const qy = buildThreadKnowledgeQuery([{ fields: { container_name: "일반", thread_ts: "1.1" } }]);
+  assert.ok(qy, "키가 있는 자료면 조회를 만든다");
+  for (const k of threadKeyExprs(qy!.sql)) {
+    assert.ok(!k.includes("'src:'"), "여기에 폴백을 넣으면 JS 가 만든 키(thread_ts??ts)와 어긋나 스레드 지식을 못 찾는다");
+  }
+});
+
+t("TK5 폴백은 **마지막**이다 — thread_ts·ts 가 있으면 기존대로 그 값으로 묶인다(회귀 금지)", () => {
+  for (const k of threadKeyExprs(buildInboxQuery(mk({ id: 1 }), []).sql)) {
+    assert.match(k, /'thread_ts'[\s\S]*'ts'[\s\S]*'src:'/, `순서가 바뀌면 슬랙 스레드가 낱개로 쪼개진다: ${k}`);
+  }
+});
+
 // FI1~FI3 — 사전필터 효과 표시(#1419-B UX). 유실률이 이 화면의 핵심 숫자라 표시 규약을 못박는다.
 t("FI1 축이 하나도 없으면 필터 꺼짐 — 있으면 켜짐", () => {
   assert.equal(isPrefilterActive(mk({ prefilter_rules: null })), false);
