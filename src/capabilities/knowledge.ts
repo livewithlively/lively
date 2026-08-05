@@ -11,6 +11,7 @@ import { authoringCapabilities, authoringMoveCapabilities } from "./knowledge/au
 import { classificationInboxCapabilities, classificationCapabilities } from "./knowledge/classification.js";
 import { wikiUiStaticCapabilities, wikiUiNamedCapabilities } from "./knowledge/wiki-ui.js";
 import { reviewCapabilities } from "./knowledge/review.js";
+import { historyCapabilities } from "./knowledge/history.js";
 
 // ⚠ REST 마운트 순서 주의 — knowledgeGrep(REST 경로는 그대로 /knowledge/search — 웹 지식탭 소비)는
 //  반드시 knowledgeGet(/knowledge/:name) **앞**에 둔다(web.ts 가 배열순 app.get 마운트 → Express 선매치;
@@ -27,5 +28,6 @@ export const knowledgeCapabilities: Capability[] = [
   ...authoringCapabilities,             // save · set_lifecycle · set_wiki · delete
   ...classificationCapabilities,        // link_category · propose_category · link
   ...wikiUiNamedCapabilities,           // #592 :name 하위 경로(props-ui · comments)
+  ...historyCapabilities,               // #1546 변경 이력(/knowledge/:name/history[/:audit_id] · /revert) — :name 하위라 무충돌
   ...authoringMoveCapabilities,         // #592 트리 이동(/knowledge/:name/move — 원본 배열 마지막 자리)
 ];

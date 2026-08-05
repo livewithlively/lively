@@ -2069,6 +2069,36 @@
   "input_hash": "bf879c6a35eec07e"
  },
  {
+  "name": "knowledge_history",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/knowledge/:name/history"
+  ],
+  "input_hash": "fefa2e89250fd254"
+ },
+ {
+  "name": "knowledge_history_entry",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/knowledge/:name/history/:audit_id"
+  ],
+  "input_hash": "217cd104bc6cbcd3"
+ },
+ {
+  "name": "knowledge_revert",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/knowledge/:name/revert"
+  ],
+  "input_hash": "863f3c61797107fc"
+ },
+ {
   "name": "knowledge_move",
   "scope": "memory",
   "mcp": true,
