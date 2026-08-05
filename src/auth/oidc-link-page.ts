@@ -96,24 +96,36 @@ function chooseView(code: string, link: PendingOidcLink, error: string): string 
     (link.displayName ? ` <span style="opacity:.7">(${esc(link.displayName)})</span>` : "") + `</dd></div>`;
   const err = error ? `<div class="box err">${esc(error)}</div>` : "";
 
-  // 새로 시작 — allowlist 도메인일 때만. 버튼을 아예 안 그리는 게 아니라 '왜 없는지'를 말해 준다.
+  // 새로 시작 — allowlist 도메인일 때만. 버튼이 없을 땐 '왜 없는지'가 아니라 **그래서 뭘 하면 되는지**를 말한다
+  //  (아래 연결 폼이 이미 보이므로, 여기서 할 말은 '쓰던 계정마저 없을 때의 다음 행동' 하나뿐이다).
   const newForm = link.canProvision
     ? `<form method="post" action="${OIDC_LINK_PATH}">` +
       `<input type="hidden" name="code" value="${esc(code)}">` +
       `<input type="hidden" name="action" value="new">` +
       `<div class="row"><button class="primary" type="submit">새 구성원으로 시작</button></div></form>` +
       `<p class="foot">새로 시작하면 지식·프로젝트 조회 권한으로 시작합니다. 관리자·터미널 권한이 필요하면 관리자에게 요청하세요.</p>`
-    : `<div class="box warn">이 도메인은 자동 가입 대상이 아닙니다. 이미 쓰던 계정이 있다면 아래에서 연결하고, ` +
-      `없다면 관리자에게 구성원 등록을 요청하세요.</div>`;
+    : `<div class="box warn">쓰던 계정이 없다면 관리자에게 구성원 등록을 요청하세요 — ` +
+      `이 게이트웨이는 자동 가입이 꺼져 있어 새 계정은 관리자가 만듭니다.</div>`;
+
+  // ⚠ 자동 가입이 꺼진 배포에선 갈래가 **하나뿐**이라 이 화면은 '선택'이 아니라 '연결 안내'다.
+  //  그런데도 "어느 계정으로 들어갈까요? / 처음이시라면 새로 시작하고…" 를 그대로 띄우면, 사람은 있지도 않은
+  //  버튼을 찾다가 막힌다(2026-08-05 실제 지적). 문구는 지금 실제로 고를 수 있는 것만 말해야 한다.
+  const head = link.canProvision
+    ? `<h1>어느 계정으로 들어갈까요?</h1>` +
+      `<p class="sub">이 구글 계정과 이메일이 같은 구성원이 없습니다. 처음이시라면 새로 시작하고, ` +
+      `이미 다른 이메일로 쓰던 계정이 있다면 그 계정에 연결하세요.</p>`
+    : `<h1>쓰던 계정에 연결할까요?</h1>` +
+      `<p class="sub">이 구글 계정과 이메일이 같은 구성원이 없습니다. 이미 쓰던 계정이 있다면 ` +
+      `그 계정의 이메일·비밀번호로 확인하세요 — 다음부터는 구글 버튼 한 번으로 들어옵니다.</p>`;
+  // '이미 계정이 있어요' 소제목은 **선택지가 둘일 때만** 의미가 있다(위쪽 '새로 시작'과 가르는 말이므로).
+  const linkHead = link.canProvision
+    ? `<h1 style="margin-top:1.75rem;font-size:1rem">이미 계정이 있어요</h1>` +
+      `<p class="sub">쓰던 계정의 이메일·비밀번호로 확인하면 이 구글 계정이 그 계정에 연결됩니다 — ` +
+      `다음부터는 구글 버튼 한 번으로 들어옵니다.</p>`
+    : "";
 
   return page(LINK_TITLE,
-    `<h1>어느 계정으로 들어갈까요?</h1>` +
-    `<p class="sub">이 구글 계정과 이메일이 같은 구성원이 없습니다. 처음이시라면 새로 시작하고, ` +
-    `이미 다른 이메일로 쓰던 계정이 있다면 그 계정에 연결하세요.</p>` +
-    who + err + newForm +
-    `<h1 style="margin-top:1.75rem;font-size:1rem">이미 계정이 있어요</h1>` +
-    `<p class="sub">쓰던 계정의 이메일·비밀번호로 확인하면 이 구글 계정이 그 계정에 연결됩니다 — ` +
-    `다음부터는 구글 버튼 한 번으로 들어옵니다.</p>` +
+    head + who + err + newForm + linkHead +
     `<form method="post" action="${OIDC_LINK_PATH}">` +
     `<input type="hidden" name="code" value="${esc(code)}">` +
     `<input type="hidden" name="action" value="link">` +
