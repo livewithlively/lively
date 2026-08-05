@@ -816,31 +816,42 @@ async function* sweepChannel(
     userMap: base.userMap,
   };
 
+  // ⚠ 진행 로그는 **장식이 아니라 생존 조건**이다(#1531 실측). 실행 감시자는 일정 시간 출력이 없으면
+  //  멈춘 프로세스로 보고 죽인다. 전량 백필은 채널 하나만으로도 그 시간을 넘길 수 있다 — 스레드 수천 개의
+  //  replies 를 tier-3 레이트리밋 아래서 부르기 때문이다. 실제로 첫 전량 run 이 "15분간 출력 없음"으로
+  //  종료됐다(12,543건까지 넣고 커서는 동결). 그래서 페이지·스레드 단위로 살아 있음을 알린다.
   let cursor: string | undefined;
   let page = 0;
+  let msgs = 0;
+  let threads = 0;
+  const label = ch.name ?? ch.id;
   for (;;) {
     const r = await slackCall<HistoryResp>("conversations.history", token, {
       channel: ch.id, limit: HISTORY_LIMIT, oldest, cursor, inclusive: true,
     });
     for (const msg of r.messages ?? []) {
       if (!msg?.ts) continue;
-      if (isCollectableMessage(msg)) yield toRawItem(msg, ctx);
+      if (isCollectableMessage(msg)) { yield toRawItem(msg, ctx); msgs++; }
       // 스레드 답글 — history 는 부모만 준다. 변경된 스레드만 열어본다(threadNeedsReplies).
       if (threadNeedsReplies(msg, sinceMs)) {
+        threads++;
         for await (const reply of paginate<HistoryResp, "messages">(
           "conversations.replies", token, "messages",
           { channel: ch.id, ts: msg.thread_ts ?? msg.ts, limit: HISTORY_LIMIT },
         )) {
           // replies 의 첫 항목은 부모 자신 — 위에서 이미 냈으므로 ts 로 건너뛴다(중복 인입 방지).
           if (!reply?.ts || reply.ts === msg.ts) continue;
-          if (isCollectableMessage(reply)) yield toRawItem(reply, ctx);
+          if (isCollectableMessage(reply)) { yield toRawItem(reply, ctx); msgs++; }
         }
+        // 스레드 묶음마다 한 줄 — replies 가 느린 구간에서도 침묵이 길어지지 않게.
+        if (threads % 25 === 0) console.log(`slack #${label}: 스레드 ${threads}개·메시지 ${msgs}건 처리 중`);
       }
     }
     cursor = r.response_metadata?.next_cursor;
-    if (!cursor || ++page >= HISTORY_PAGE_MAX) {
+    console.log(`slack #${label}: ${++page}페이지 완료 (메시지 ${msgs}건, 스레드 ${threads}개)${cursor ? "" : " — 채널 끝"}`);
+    if (!cursor || page >= HISTORY_PAGE_MAX) {
       if (cursor) {
-        console.warn(`slack history 페이지 백스톱: #${ch.name ?? ch.id} 가 ${HISTORY_PAGE_MAX} 페이지 초과 — 남은 구간은 다음 run 이 이어받습니다`);
+        console.warn(`slack history 페이지 백스톱: #${label} 가 ${HISTORY_PAGE_MAX} 페이지 초과 — 남은 구간은 다음 run 이 이어받습니다`);
       }
       break;
     }
@@ -907,11 +918,13 @@ async function* botBackfill(
   }
 
   const failures: string[] = [];
+  let done = 0;
   for (const ch of targets) {
+    const label = ch.name ?? ch.id;
+    console.log(`slack 봇 모드: [${++done}/${targets.length}] #${label} 시작${ch.is_private ? " (비공개)" : ""}`);
     try {
       yield* sweepChannel(token, ch, base, sinceMs, floorMs);
     } catch (err) {
-      const label = ch.name ?? ch.id;
       failures.push(`${label}(${(err as Error).message})`);
       console.warn(`slack 채널 수집 실패 — 계속 진행: #${label}: ${(err as Error).message}`);
     }
