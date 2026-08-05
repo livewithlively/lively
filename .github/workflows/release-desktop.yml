@@ -49,6 +49,8 @@ jobs:
         run: |
           if [ "${{ matrix.name }}" = "mac" ]; then
             if [ -n "${{ secrets.MAC_CSC_LINK }}" ]; then echo "mac: 서명 O"; else echo "::warning::mac 서명 시크릿 없음 — 미서명 빌드(Gatekeeper 경고). 자동 업데이트도 불가."; fi
+            # 공증은 서명과 **별개 축**이다 — 서명만 하고 공증을 빼면 사용자는 여전히 "확인되지 않은 개발자" 를 본다.
+            if [ -n "${{ secrets.APPLE_API_KEY_ID }}" ] || [ -n "${{ secrets.APPLE_ID }}" ]; then echo "mac: 공증 O"; else echo "::warning::mac 공증 자격 없음 — 서명해도 Gatekeeper 는 막는다(Apple Developer 계정 필요)."; fi
           elif [ "${{ matrix.name }}" = "win" ]; then
             if [ -n "${{ secrets.WIN_CSC_LINK }}" ]; then echo "win: 서명 O"; else echo "::warning::win 서명 시크릿 없음 — 미서명 빌드(SmartScreen 경고)."; fi
           fi
@@ -60,7 +62,12 @@ jobs:
           # 인증서(base64 p12)와 암호 — 없으면 electron-builder 가 서명을 건너뛴다.
           CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-          # 공증 — 셋이 다 있어야 electron-builder 가 시도한다(하나라도 없으면 조용히 건너뛴다).
+          # ── 공증(notarization) — 아래 **한 벌이 다 채워지면** electron-builder 가 자동으로 돌린다.
+          #  ① App Store Connect API 키 (공식 권장 — 계정 비밀번호가 CI 에 안 들어간다. 키는 폐기·회전이 쉽다)
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}              # .p8 파일 경로 또는 내용
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          #  ② Apple ID + 앱 암호 (폴백 — ①이 없을 때만 쓰인다)
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
