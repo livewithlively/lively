@@ -8,6 +8,7 @@
 import assert from "node:assert/strict";
 import {
   resolveUpsertFacets, resolveWikiLinkTargets, appendBody, isDuplicateAppend, knowledgeListFilter,
+  applyKnowledgeEdits,
   listWikiPins, type KnowledgeFilter, type KnowledgeRow,
 } from "./knowledge-store.js";
 
@@ -353,6 +354,88 @@ await tA("#1247 E6-b: lister 는 optional seam(#1291 viewer 만 필수) — 호�
   //  놓쳐도 잠긴 지식의 소환키가 전원에게 조용히 샌다(컴파일 에러로 잡히게 만든 것). 반면 lister 는 여전히 optional —
   //  필수가 되면 세 렌더 표면(publish·materialize·guide-preview)이 각자 조회를 조립하게 되고 그게 #1247 의 원인이었다.
   assert.equal(listWikiPins.length, 1, "필수 인자는 viewer 하나뿐이어야 한다(lister 가 필수가 되면 렌더 표면이 갈라진다)");
+});
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// #1531 applyKnowledgeEdits — 본문 일부만 정확일치로 치환(문서 중간 갱신).
+//  이 함수가 없던 동안 유일한 수단이 전문 교체였고, 그래서 40K자 문서를 갱신하다 무관한 문장의 쉼표가
+//  여는 괄호로 바뀌어 괄호가 닫히지 않는 손상이 실제로 났다(어니스트 #1531). 여기서 잠그는 것은
+//  "안 건드린 부분은 문자 단위로 그대로다" 와 "못 찾으면 조용히 넘어가지 않는다" 두 가지다.
+// ════════════════════════════════════════════════════════════════════════════
+const DOC = [
+  "# 제주은행",
+  "",
+  "## 13. 열린 이슈 (2026-07-29 기준)",
+  "",
+  "1. 가심사 조회 속도 개선 미해결",
+  "5. 포트폴리오 제안 진행 상태 미확인.",
+  "",
+  "## 14. 부록",
+  "진행 상태 미확인.",
+].join("\n");
+
+t("E1: 한 조각만 바뀌고 나머지는 문자 단위로 그대로다", () => {
+  const out = applyKnowledgeEdits(DOC, [
+    { old: "## 13. 열린 이슈 (2026-07-29 기준)", new: "## 13. 열린 이슈 (2026-08-03 기준)" },
+  ]);
+  assert.ok(out.includes("## 13. 열린 이슈 (2026-08-03 기준)"));
+  // 나머지 줄은 하나도 안 변했다 — 이 모드의 존재 이유.
+  assert.equal(out.replace("2026-08-03", "2026-07-29"), DOC);
+});
+
+t("E2: 여러 편집을 순차 적용한다", () => {
+  const out = applyKnowledgeEdits(DOC, [
+    { old: "2026-07-29 기준", new: "2026-08-03 기준" },
+    { old: "1. 가심사 조회 속도 개선 미해결", new: "1. 가심사 조회 속도 — NICE 측 원인 규명 중" },
+  ]);
+  assert.ok(out.includes("2026-08-03 기준"));
+  assert.ok(out.includes("NICE 측 원인 규명 중"));
+  assert.ok(!out.includes("1. 가심사 조회 속도 개선 미해결"));
+});
+
+t("E3: 못 찾으면 던진다 — 조용히 넘어가면 '저장했는데 안 바뀐' 최악의 실패가 된다", () => {
+  assert.throws(() => applyKnowledgeEdits(DOC, [{ old: "존재하지 않는 문장", new: "x" }]),
+    /찾지 못했습니다/);
+});
+
+t("E4: 여러 곳에 있으면 모호하므로 던진다(replace_all 없이는)", () => {
+  // "진행 상태 미확인." 은 13장과 14장 두 곳에 있다.
+  assert.throws(() => applyKnowledgeEdits(DOC, [{ old: "진행 상태 미확인.", new: "재문의 인입." }]),
+    /2곳 있어/);
+});
+
+t("E5: replace_all 을 명시하면 전부 바꾼다", () => {
+  const out = applyKnowledgeEdits(DOC, [{ old: "진행 상태 미확인.", new: "재문의 인입.", replace_all: true }]);
+  assert.equal(out.split("재문의 인입.").length - 1, 2);
+  assert.ok(!out.includes("진행 상태 미확인."));
+});
+
+t("E6: new 가 빈 문자열이면 삭제다", () => {
+  const out = applyKnowledgeEdits(DOC, [{ old: "1. 가심사 조회 속도 개선 미해결\n", new: "" }]);
+  assert.ok(!out.includes("가심사"));
+  assert.ok(out.includes("5. 포트폴리오 제안"));
+});
+
+t("E7: 앞 편집이 뒤 앵커를 지웠으면 '못 찾음'으로 드러난다(조용한 무시 금지)", () => {
+  assert.throws(() => applyKnowledgeEdits(DOC, [
+    { old: "5. 포트폴리오 제안 진행 상태 미확인.", new: "5. 포트폴리오 제안 — 재문의 인입." },
+    { old: "5. 포트폴리오 제안 진행 상태 미확인.", new: "또 바꾸기" },
+  ]), /찾지 못했습니다/);
+});
+
+t("E8: 빈 edits·빈 old·old==new 는 거부한다", () => {
+  assert.throws(() => applyKnowledgeEdits(DOC, []), /비었습니다/);
+  assert.throws(() => applyKnowledgeEdits(DOC, [{ old: "", new: "x" }]), /old 가 비었습니다/);
+  assert.throws(() => applyKnowledgeEdits(DOC, [{ old: "## 14. 부록", new: "## 14. 부록" }]), /같습니다/);
+});
+
+t("E9: 여러 줄 앵커(줄바꿈 포함)도 정확일치로 다룬다", () => {
+  const out = applyKnowledgeEdits(DOC, [
+    { old: "## 14. 부록\n진행 상태 미확인.", new: "## 14. 부록\n2026-08 갱신됨." },
+  ]);
+  assert.ok(out.includes("## 14. 부록\n2026-08 갱신됨."));
+  assert.ok(out.includes("5. 포트폴리오 제안 진행 상태 미확인.")); // 13장 쪽은 그대로
 });
 
 console.log(`\n${pass} passed`);
