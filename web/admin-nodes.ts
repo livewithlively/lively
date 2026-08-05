@@ -176,6 +176,8 @@ function openSharedNodeForm(reload) {
   const nameInp = el('input', { type: 'text', style: psInputStyle, placeholder: '빌드 서버 1호' });
   const msg = el('p', { class: 'admin-hint' });
   const save = el('button', { class: 'btn btn-primary', text: '공유 컴퓨터로 등록' });
+  // ⚠ 저장 버튼도 **body 안에** 둔다 — overlay 의 별도 인자로 넘기면 성공 후 body 를 갈아끼워도 버튼이 남아
+  //  다시 눌리고(409 "이미 존재하는 노드"), 다 끝난 화면에 primary 버튼이 떠 있어 무엇을 할 차례인지 흐려진다.
   const body = el('div', {},
     el('p', { class: 'admin-hint' },
       '여럿이 함께 쓸 컴퓨터의 자리를 먼저 만듭니다. 등록한 뒤 그 컴퓨터에서 연결 명령을 실행하면 목록에 나타납니다. '
@@ -183,8 +185,9 @@ function openSharedNodeForm(reload) {
     field('아이디', idInp),
     el('p', { class: 'admin-hint', style: 'margin:-8px 0 12px' }, '영문 소문자·숫자·하이픈. 연결 명령에 그대로 들어갑니다.'),
     field('이름 (선택)', nameInp),
-    msg);
-  const back = overlay('공유 컴퓨터 등록', body, el('div', { class: 'admin-actions' }, save));
+    msg,
+    el('div', { class: 'admin-actions' }, save));
+  const back = overlay('공유 컴퓨터 등록', body);
 
   save.onclick = async () => {
     const id = idInp.value.trim();
@@ -197,14 +200,17 @@ function openSharedNodeForm(reload) {
       const cmd = 'lively login\nlively node --daemon --id ' + (r && r.node ? r.node.id : id);
       body.replaceChildren(
         el('p', { class: 'install-ok', text: '✓ 자리를 만들었습니다. 이제 그 컴퓨터에서 연결하세요.' }),
-        el('p', { class: 'admin-hint' }, '공유할 컴퓨터에서 아래를 실행합니다(관리자 계정으로 로그인). 라이블리 CLI 가 아직 없다면 '),
+        el('p', { class: 'admin-hint' }, '공유할 컴퓨터에서 관리자 계정으로 로그인한 뒤 아래를 실행합니다.'),
         el('pre', { class: 'admin-preview', text: cmd }),
         el('div', { class: 'admin-actions' },
           el('button', { class: 'btn btn-primary', text: '명령 복사',
             onclick: async () => { const ok = await copyText(cmd); toast(ok ? '복사했습니다' : '복사 실패 — 직접 선택해 복사하세요', !ok); } }),
-          el('button', { class: 'btn btn-ghost', text: '닫기', onclick: () => { back.remove(); reload(); } })),
-        el('p', { class: 'admin-hint' }, 'CLI 설치가 아직이면 ', el('a', { href: '#/start', text: '시작하기' }),
-          ' 의 한 줄 설치를 먼저 실행하세요. 연결되면 이 목록에 나타납니다.'));
+          // 닫기는 overlay 자체에도 있지만, 이건 **목록을 다시 그리는** 마무리 동작이라 이름을 달리 준다.
+          el('button', { class: 'btn btn-ghost', text: '완료 — 목록으로', onclick: () => { back.remove(); reload(); } })),
+        el('p', { class: 'admin-hint' },
+          document.createTextNode('라이블리 CLI 가 그 컴퓨터에 아직 없다면 '),
+          el('a', { href: '#/start', text: '시작하기' }),
+          document.createTextNode('의 한 줄 설치를 먼저 실행하세요. 연결되면 이 목록에 나타납니다.')));
       toast('공유 컴퓨터로 등록했습니다');
     } catch (e) { save.disabled = false; msg.textContent = '등록 실패 — ' + e.message; }
   };
