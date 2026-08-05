@@ -44,21 +44,31 @@ export interface ConnectorSpec {
 
 // ── 단일 진실원천 — 커넥터별 설정 필드. env 이름은 종전 .env.example 과 정확히 일치(byte-identical). ──
 export const CONNECTOR_SPECS: Record<string, ConnectorSpec> = {
+  // 슬랙은 **두 모드**다(#1531) — 어느 토큰을 넣었는지가 곧 모드다.
+  //  · 유저 토큰(xoxp-) = 검색 스윕 — 봇 초대 없이 **전 공개채널**. 비공개는 원리적으로 못 본다.
+  //  · 봇 토큰(xoxb-)   = 멤버십 스윕 — **봇이 초대된 채널만**, 대신 **비공개 채널이 들어온다**.
+  //  둘은 배타가 아니라 상보라 보통 수집기를 둘 만든다(공개 전체 1개 + 비공개 담당 봇 1개). 커서는
+  //  인스턴스별로 갈리므로(#1419) 서로의 진행을 밀지 않는다. 한 수집기에 둘 다 넣으면 유저 토큰이 이긴다.
   slack: {
     system: "slack",
     label: "Slack",
     guide: {
-      intro: "Slack 은 워크스페이스 멤버가 가입 안 한 공개채널도 검색으로 읽을 수 있어, 봇을 채널마다 초대하지 않고 전체 공개채널을 수집합니다. 이 방식(search.messages)은 봇 토큰(xoxb-)이 아니라 유저 토큰(xoxp-)이 필요합니다 — 봇 토큰은 search 를 거부(not_allowed_token_type)합니다.",
+      intro: "토큰 종류가 수집 방식을 결정합니다. **유저 토큰(xoxp-)** 은 검색(search.messages)으로 봇 초대 없이 전 공개채널을 훑습니다(비공개는 못 봅니다). **봇 토큰(xoxb-)** 은 봇이 초대된 채널만 읽는 대신 **비공개 채널을 수집할 수 있습니다**. 둘 다 필요하면 수집기를 두 개 만드세요 — 각자 커서를 가지므로 서로 간섭하지 않습니다.",
       steps: [
         "api.slack.com/apps ▸ 앱 선택(없으면 [Create New App] ▸ From scratch — 워크스페이스 선택)",
-        "OAuth & Permissions ▸ 'User Token Scopes'에 추가: search:read, channels:read, users:read, users:read.email",
-        "[Install to Workspace] 로 (재)설치·승인 → 'User OAuth Token'(xoxp-…) 복사 → 아래에 저장",
-        "가입 안 한 공개채널도 검색으로 읽히므로 /invite 불필요. 모니터링·알람 등 노이즈 채널은 아래 '제외 채널'에 채널명을 넣으세요.",
+        "[공개채널 전체를 훑을 때] OAuth & Permissions ▸ 'User Token Scopes': search:read, channels:read, users:read, users:read.email → [Install to Workspace] → 'User OAuth Token'(xoxp-…) 을 아래 User Token 에 저장. 채널 초대 불필요.",
+        "[비공개 채널을 수집할 때] 같은 화면 'Bot Token Scopes': groups:history, groups:read, channels:history, channels:read, users:read (+첨부까지 받으려면 files:read) → 재설치 → 'Bot User OAuth Token'(xoxb-…) 을 아래 Bot Token 에 저장",
+        "봇 토큰은 **초대된 채널만** 읽습니다 — 대상 채널에서 /invite @봇이름 으로 초대하세요(초대 안 된 채널은 조용히 빠집니다)",
+        "모니터링·알람 등 노이즈 채널은 '제외 채널'에, 봇이 초대된 채널 중 일부만 원하면 '대상 채널'에 적으세요.",
       ],
       url: "https://api.slack.com/apps",
     },
     fields: [
-      { key: "user_token", env: "SLACK_USER_TOKEN", secret: true, required: true, label: "User Token", hint: "xoxp-... (봇 토큰 xoxb- 아님 — search.messages 는 유저 토큰 필요)" },
+      // ⚠ required 를 뗀 이유: 봇 전용 수집기는 유저 토큰이 **없는 것이 정상**이다. 대신 커넥터가 부팅 때
+      //  "둘 중 하나는 있어야 한다"를 검사하고 어느 쪽을 넣어야 하는지 알려준다(빈 값 = 조용한 무수집 방지).
+      { key: "user_token", env: "SLACK_USER_TOKEN", secret: true, label: "User Token", hint: "xoxp-... — 검색 스윕(전 공개채널). 비공개 채널을 원하면 아래 Bot Token 을 쓰세요" },
+      { key: "bot_token", env: "SLACK_BOT_TOKEN", secret: true, label: "Bot Token", hint: "xoxb-... — 봇이 초대된 채널만 수집(**비공개 채널 포함**). User Token 을 함께 넣으면 그쪽이 우선합니다" },
+      { key: "channels", env: "SLACK_CHANNELS", secret: false, label: "대상 채널", hint: "봇 모드 전용 — 채널명·id 를 공백·쉼표로 구분(비우면 봇이 초대된 전체). 예: hai솔루션_front hai솔루션_closing" },
       { key: "noise_exclude", env: "SLACK_NOISE_EXCLUDE", secret: false, label: "제외 채널", hint: "수집에서 제외할 채널명을 공백·쉼표로 구분해 입력 (예: alerts monitoring) — 모니터링·알람 등 메시지가 많은 봇 채널에 사용합니다." },
       { key: "backfill_since", env: "SLACK_BACKFILL_SINCE", secret: false, label: "최초 수집 시작일", hint: "이 날짜 이후의 자료만 수집합니다 (YYYY-MM-DD, 비우면 활동이 있는 과거 전체를 자동 수집)" },
     ],
