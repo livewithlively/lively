@@ -10,6 +10,9 @@
 import { api, el, errorNote, renderMarkdown, state, toast, uiText } from './core.js';
 import { field, overlay } from './ui-primitives.js';
 import { sectionHead } from './admin-widgets.js';
+// 변경 이력(#1562) — 위키 문서 패널을 그대로 쓴다. 섹션은 knowledge 행이라 같은 엔드포인트가 덮고,
+//  서버가 org_section 축 감사까지 합쳐 준다(관리탭에서 한 편집과 위키에서 한 편집이 한 타임라인에 온다).
+import { openKnHistory } from './wiki-history.js';
 // 위 3시점(SessionStart·PostToolUse·Stop) — 이 목록 밖의 이벤트는 '기타 이벤트' 블록으로 모은다.
 const HANDLED = ['SessionStart', 'PostToolUse', 'Stop'];
 // 딥링크 — 정식 편집 집으로 이동(섹션 / WIKI 탭). tab 을 주면 그 화면의 서브탭까지 맞춘다.
@@ -238,7 +241,23 @@ function injectionMap(detail, data) {
     // #1245 — 제품 소유 가이드 읽기 전용 뷰어. 본문은 sectionsPayload 가 항상 코드 기본값으로 채워 보낸다(실주입과 동일).
     function openGuideViewer(name) {
         const cur = (data.sections && data.sections[name]) || { body_md: '' };
-        overlay('제품 가이드 · ' + name + ' (읽기 전용)', el('div', { class: 'mem-modal' }, el('p', { class: 'admin-hint' }, ...uiText('제품이 소유하는 가이드입니다 — 본문은 코드가 단일 출처라 편집할 수 없고, 라이블리 업데이트(릴리스)마다 자동으로 최신이 됩니다. 주입 여부만 목록의 토글로 선택하세요.')), el('div', { class: 'md-rendered admin-md-box', style: 'max-height:420px; overflow:auto' }, renderMarkdown(cur.body_md || ''))));
+        overlay('제품 가이드 · ' + name + ' (읽기 전용)', el('div', { class: 'mem-modal' }, el('p', { class: 'admin-hint' }, ...uiText('제품이 소유하는 가이드입니다 — 본문은 코드가 단일 출처라 편집할 수 없고, 라이블리 업데이트(릴리스)마다 자동으로 최신이 됩니다. 주입 여부만 목록의 토글로 선택하세요.')), el('div', { class: 'md-rendered admin-md-box', style: 'max-height:420px; overflow:auto' }, renderMarkdown(cur.body_md || '')), 
+        // 잠금 섹션도 **이력은 연다** — 편집이 막혀 있다고 '어떻게 변해왔나'까지 가릴 이유는 없다(실측: 이 문서에도
+        //  9건의 변경이 쌓여 있다). 되돌리기는 canEdit=false 로 버튼을 안 띄우고, 서버도 409 로 막는다.
+        el('div', { class: 'admin-actions' }, historyBtn(name, cur, false))));
+    }
+    // '변경 이력' 버튼 — 위키 문서의 이력 패널을 그대로 연다(#1562).
+    //  섹션은 편집 경로가 둘이라(관리탭 모달 · 위키 문서 페이지) 감사가 두 축으로 갈라져 있었는데, 서버가 그
+    //  둘을 합쳐 주므로 어느 화면에서 열든 같은 전체 타임라인이 나온다.
+    function historyBtn(name, cur, canRevert) {
+        return el('button', {
+            class: 'btn btn-ghost btn-sm', type: 'button', text: '↺ 변경 이력',
+            onclick: () => openKnHistory(name, {
+                canEdit: canRevert,
+                currentVersion: Number(cur.version) || null,
+                onReverted: () => { reloadSections(); },
+            }),
+        });
     }
     // 섹션 본문 편집/생성 모달 — overlay + textarea. 저장 → POST /api/ui/org/section.
     function openSectionEditor(name, opts) {
@@ -256,7 +275,9 @@ function injectionMap(detail, data) {
         ta.value = cur.body_md || '';
         const st = el('span', { class: 'admin-status' });
         const saveBtn = el('button', { class: 'btn btn-primary', text: isNew ? '추가' : '저장' });
-        const root = el('div', { class: 'mem-modal' }, isNew ? field('섹션 키', nameIn) : null, name === guideKey ? el('p', { class: 'admin-hint' }, ...uiText('⚠ 시스템 가이드 — LLM 이 라이블리 사용법을 이해하는 핵심 문서입니다. 대폭 수정·삭제 시 AI 가 시스템 사용법을 잃을 수 있어요.')) : null, field('본문 (markdown)', ta), el('div', { class: 'admin-actions' }, saveBtn, st));
+        const root = el('div', { class: 'mem-modal' }, isNew ? field('섹션 키', nameIn) : null, name === guideKey ? el('p', { class: 'admin-hint' }, ...uiText('⚠ 시스템 가이드 — LLM 이 라이블리 사용법을 이해하는 핵심 문서입니다. 대폭 수정·삭제 시 AI 가 시스템 사용법을 잃을 수 있어요.')) : null, field('본문 (markdown)', ta), 
+        // 기존 섹션에만 이력 — 아직 만들지 않은 문서에는 되돌아갈 버전이 없다.
+        el('div', { class: 'admin-actions' }, saveBtn, isNew ? null : historyBtn(name, cur, canEdit), st));
         const back = overlay(isNew ? '섹션 추가' : ('섹션 편집 · ' + name), root);
         saveBtn.onclick = async () => {
             const section = (isNew ? nameIn.value : name).trim().toLowerCase();

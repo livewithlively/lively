@@ -265,7 +265,7 @@ export const knowledgeSave: Capability = {
       //  기존 문서 수정에 걸면 남의 공개 문서를 잠긴 프로젝트 세션에서 한 글자 고치는 것만으로 조직에서 사라지게 만든다
       //  (가시성 축소가 편집의 부수효과가 되면 안 된다 — 축소는 언제나 명시적 행위여야 한다).
       //  잠긴 리스트의 프로젝트 세션이 아니면 no-op → 종전대로 open.
-      const stampedList = await stampSessionVisibility(knowledge.name, ctx?.session);
+      const stampedList = await stampSessionVisibility(knowledge.name, ctx?.session, writeCtx);
       const visInfo = stampedList
         ? { visibility: { level: "members", via_project_list: stampedList,
             note: "이 지식은 지금 세션이 속한 프로젝트가 비공개라, 그 프로젝트를 볼 수 있는 사람에게만 보이도록 저장됐습니다(공개 위키에는 안 뜹니다). 전 조직에 공유할 내용이라면 프로젝트 밖 세션에서 다시 쓰거나 사람에게 공개범위 변경을 요청하세요." } }

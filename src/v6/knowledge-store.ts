@@ -578,7 +578,7 @@ export async function moveKnowledge(name: string, parentName: string | null, sor
 //   **아무 grant 도 없는 사람(PUBLIC_VIEWER)에게 그 리스트가 보이나** 로 판정한다 — 스페이스 상속(폴더 체인)까지
 //   자동으로 반영되고, 상속 규칙 사본을 여기 또 만들지 않는다.
 //  실패는 비치명(open 유지): 세션↔프로젝트 바인딩은 부가 정보라, 못 찾았다고 저장을 깨뜨리지 않는다.
-export async function stampSessionVisibility(name: string, sessionId?: string | null): Promise<number | null> {
+export async function stampSessionVisibility(name: string, sessionId?: string | null, ctx?: WriteCtx): Promise<number | null> {
   if (!name || !sessionId) return null;
   try {
     // 세션→프로젝트는 session_project(타임라인 귀속과 같은 소스)로 본다. 바인딩이 없으면 프로젝트 세션이 아니다.
@@ -592,6 +592,13 @@ export async function stampSessionVisibility(name: string, sessionId?: string | 
     await itemsPool.query(
       `INSERT INTO knowledge_list_grant(name, list_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, [name, listId]);
     await itemsPool.query(`UPDATE knowledge SET visibility='members' WHERE name=$1`, [name]);
+    // #1561 감사 — 접근통제 이력. 사람이 아무것도 누르지 않았는데 문서가 잠기는 자리라 흔적이 있어야 한다.
+    //  ⚠ 실패를 여기서 따로 삼킨다: 잠금은 **이미 적용됐으므로** 아래 catch 의 '공개 상태 유지' 문구가
+    //   거짓이 되고, 감사가 안 됐다고 잠금을 되돌리면 그게 곧 유출이다(안전 방향은 잠긴 채로 두는 것).
+    await auditKnowledge(name, "set_visibility",
+      { name, visibility: "open" },
+      { name, visibility: "members", via_project_list: listId }, ctx)
+      .catch((e) => console.warn(`[visibility] '${name}' 잠금 감사 실패(잠금은 적용됨): ${(e as Error)?.message}`));
     return listId;
   } catch (e) {
     console.warn(`[visibility] '${name}' 세션 스탬핑 실패(공개 상태 유지): ${(e as Error)?.message}`);
@@ -619,7 +626,15 @@ export async function restoreKnowledge(before: Record<string, unknown>, ctx?: Wr
   return after;
 }
 
+// ⚠ replace 시맨틱 — 이 함수는 '추가'가 아니라 '교체'다(#290 단일 카테고리).
+//  #1563: 그래서 **지우기 전에 기존 매핑을 읽어 before 에 싣는다.** 안 읽으면 감사에 '무엇에서 무엇으로'가
+//   없어 두 곳이 동시에 반쪽이 된다 — 이력 화면은 분류 변경을 '분류 지정'이라고만 쓸 수 있고,
+//   Cmd+Z(#702)는 아예 이 op 을 되돌릴 수 없다(그 한계 때문에 undo 행렬에서 제외돼 있었다).
 export async function linkKnowledgeCategory(name: string, categoryId: number, state = "confirmed", ctx?: WriteCtx): Promise<void> {
+  // single_uq 로 name 당 1행이지만 ORDER BY 로 결정적으로 고른다(이행기 다중 잔존 대비 — 비결정 스냅샷은 되돌리기를 복불복으로 만든다).
+  const prev = await one(itemsPool,
+    `SELECT category_id, state, mapped_by FROM knowledge_category WHERE name=$1 ORDER BY category_id LIMIT 1`,
+    [name]) as { category_id: number; state: string; mapped_by: string } | undefined;
   // #290 단일 카테고리: 기존 다른 카테고리 매핑을 먼저 제거(replace) — knowledge_category_single_uq 와 정합(앱이 단일 강제, 인덱스 위반 대신 교체).
   await itemsPool.query(`DELETE FROM knowledge_category WHERE name=$1 AND category_id<>$2`, [name, categoryId]);
   await itemsPool.query(
@@ -627,7 +642,13 @@ export async function linkKnowledgeCategory(name: string, categoryId: number, st
      VALUES($1,$2,'manual',$3,now())
      ON CONFLICT (name, category_id) DO UPDATE SET state=EXCLUDED.state`,
     [name, categoryId, state]);
-  await auditKnowledge(name, "link_category", null, { category_id: categoryId, state }, ctx);
+  // 무변경 재링크(같은 분류·같은 state 를 다시 누름)는 감사하지 않는다 — 실측상 지식 감사행의 절반 가까이가
+  //  link_category 였고(200행 표본 중 93건), 그 잡음이 정확히 '누가 본문을 고쳤나'를 덮는 것이었다.
+  //  판정 기준은 이력 화면의 무변경 update 판정(UPDATE_CHANGED_SQL)과 같다: 실제로 뭔가 달라졌을 때만 남긴다.
+  if (prev && Number(prev.category_id) === categoryId && prev.state === state) return;
+  await auditKnowledge(name, "link_category",
+    prev ? { category_id: Number(prev.category_id), state: prev.state, mapped_by: prev.mapped_by } : null,
+    { category_id: categoryId, state }, ctx);
 }
 
 export async function unlinkKnowledgeCategory(name: string, categoryId: number, ctx?: WriteCtx): Promise<void> {
