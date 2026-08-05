@@ -23,6 +23,7 @@ import { isProjectSessionDir } from "../project/project-fs.js";
 import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, liveNodes } from "../node/registry.js";
 import type { NodeOp } from "../node/protocol.js";
 import { getNode, listNodes } from "../node/store.js";
+import { nodeOpenTo } from "../node/node-access.js";
 import { translateNodeRpcError } from "../node/rpc-error.js";
 import { registerNodeRoutes } from "../node/routes.js";
 
@@ -121,14 +122,16 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
       // 구성원 격리(#524): 이 세션이 '내 격리 OS 계정(box_)'으로 뜨는지 안내 — box_ 격리가 #346 프로필을 대체.
       //  {ready:인프라설치, provisioned:box_존재, osUser}. 미프로비저닝이어도 첫 세션에 자동 생성(lazy)됨.
       os: await memberOsStatus(userOf(req).userId),
-      // 분산 노드(#869): 생성폼 실행 위치 피커 — 내 노드(admin 은 전체)만. online 이어야 생성 가능(폼이 비활성 표시).
+      // 분산 노드(#869): 생성폼 실행 위치 피커 — **내가 등록한 노드 ∪ 관리자가 공유로 지정한 노드**(#1540).
+      //  아래 requireCreatableNode 와 **같은 술어**를 쓴다 — 목록과 게이트가 갈리면 고른 뒤 403 이 난다.
+      //  admin 예외는 두지 않는다(남의 개인 PC 가 관리자에게 선택지로 보이면 그게 이 정책의 구멍이다).
+      //  online 이어야 실제 생성 가능(폼이 비활성 표시).
       nodes: await (async () => {
         const me = idOf(userOf(req));
-        const admin = !!userOf(req).scopes?.includes("admin");
         const live = new Map(liveNodes().map((n) => [n.id, n.online]));
         return (await listNodes().catch(() => []))
-          .filter((n) => n.enabled && (admin || n.owner_member === me))
-          .map((n) => ({ id: n.id, name: n.name, kind: n.kind, online: live.get(n.id) ?? false }));
+          .filter((n) => n.enabled && nodeOpenTo(n, me))
+          .map((n) => ({ id: n.id, name: n.name, kind: n.kind, shared: n.shared, online: live.get(n.id) ?? false }));
       })(),
     });
   }));
@@ -295,13 +298,19 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     res.setHeader("Cache-Control", "no-store");
     res.json(out);
   }));
-  // 노드 세션 생성 게이트(#869) — 노드 실재·활성·연결 + 소유자(또는 admin)만. 초대는 여기서 구성원 디렉터리로
-  //  검증해 노드엔 '검증된 목록'만 넘긴다(노드는 DB 가 없어 스스로 검증 불가 — F7 정책/실행 분리).
+  // 노드 세션 생성 게이트(#869) — 노드 실재·활성·연결 + **소유 또는 관리자 지정 공유**(#1540, nodeOpenTo).
+  //  초대는 여기서 구성원 디렉터리로 검증해 노드엔 '검증된 목록'만 넘긴다(노드는 DB 가 없어 스스로 검증 불가 —
+  //  F7 정책/실행 분리).
+  //  ⚠ admin 우회를 **제거했다**(종전엔 관리자가 남의 개인 PC 에 세션을 열 수 있었다). 이 정책이 지키려는 게
+  //   정확히 '남의 컴퓨터에서 코드가 도는 것'이고, 그럴 사람은 대개 관리자다. 관리자는 공유를 켜고 쓰면 된다 —
+  //   그 편이 배지·감사로 드러난다. 프로젝트 경로(assertNodeUsable)엔 애초에 우회가 없어 이제 두 경로가 일치한다.
+  //   노드 **관리**(토글·회전·삭제)의 admin 권한은 그대로다 — 관리 ≠ 사용.
   const requireCreatableNode = async (req: express.Request, nodeId: string): Promise<void> => {
     const n = await getNode(nodeId);
     if (!n || !n.enabled) throw new HttpError(404, `노드 없음: ${nodeId}`);
-    const u = userOf(req);
-    if (n.owner_member !== idOf(u) && !u.scopes?.includes("admin")) throw new HttpError(403, "본인 노드가 아닙니다");
+    if (!nodeOpenTo(n, idOf(userOf(req)))) {
+      throw new HttpError(403, "본인이 등록한 노드가 아니고 공유 노드도 아닙니다 — 관리자가 공유 노드로 지정한 노드만 함께 쓸 수 있습니다");
+    }
     if (!nodeOnline(nodeId)) throw new HttpError(409, "노드가 오프라인입니다(에이전트 연결 대기)");
   };
 

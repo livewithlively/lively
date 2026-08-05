@@ -112,13 +112,14 @@ function openTermCreateForm(cfg, view, onCreated?) {
   if (rootBtns[rootKey]) rootBtns[rootKey].classList.add('active');
   const pickerBox = el('div', { class: 'term-picker' });
   let pickerPath = '';
-  // 실행 위치(#869) — 기본 중앙 컴퓨터. 등록된 내 노드(멤버 PC 등)가 있으면 골라서 그 노드에 세션을 만든다.
-  //  오프라인 노드는 비활성(에이전트가 게이트웨이에 연결돼 있어야 생성 가능 — 서버도 409 재검증).
+  // 실행 위치(#869) — 기본 중앙 컴퓨터. 후보는 **내가 등록한 노드 + 관리자가 공유로 지정한 노드**(#1540, 서버 필터).
+  //  공유 노드는 남의 컴퓨터일 수 있으니 라벨에 표시한다. 오프라인 노드는 비활성(에이전트가 게이트웨이에
+  //  연결돼 있어야 생성 가능 — 서버도 409 재검증).
   const nodes = cfg.nodes || [];
   const nodeSel = el('select', { class: 'term-input' },
     el('option', { value: '' }, '중앙 컴퓨터 (기본)'),
     ...nodes.map((n) => {
-      const o = el('option', { value: n.id }, '🖥 ' + (n.name || n.id) + (n.online ? '' : ' — 오프라인'));
+      const o = el('option', { value: n.id }, '🖥 ' + (n.name || n.id) + (n.shared ? ' (공유)' : '') + (n.online ? '' : ' — 오프라인'));
       if (!n.online) o.disabled = true;
       return o;
     }));
@@ -324,7 +325,7 @@ function openNodeManager(view) {
     const cmd = 'curl -fsSL ' + gw + '/cli | sh\nlively login\nlively node --daemon        # 부팅·로그인마다 자동 연결';
     const codeEl = el('pre', { style: codeStyle, text: cmd });
     const howBody = el('div', { style: 'display:none' },
-      el('div', { class: 'caption', text: '내 PC·서버(macOS·Linux)를 노드로 붙이면 그 머신의 터미널 세션을 여기서 만들고 관리하며, 위탁 워커로도 씁니다.' }),
+      el('div', { class: 'caption', text: '내 PC·서버(macOS·Linux)를 노드로 붙이면 그 머신의 터미널 세션을 여기서 만들고 관리하며, 위탁 워커로도 씁니다. 붙인 노드는 기본적으로 나만 쓸 수 있고, 관리자가 공유 노드로 지정한 노드만 조직 전체가 함께 씁니다.' }),
       codeEl,
       el('div', {},
         el('button', { class: 'btn btn-ghost btn-sm', text: '명령 복사', onclick: () => { try { navigator.clipboard.writeText(cmd).then(() => toast('명령 복사됨')).catch(() => toast('복사 실패', true)); } catch (_) { toast('복사 실패', true); } } }),
@@ -334,10 +335,18 @@ function openNodeManager(view) {
 
     const list = el('div', { style: 'display:flex;flex-direction:column;gap:8px;margin-top:10px' });
     if (!nodes.length) list.append(el('div', { class: 'caption', text: '아직 등록된 노드가 없습니다 — 위 안내대로 추가하세요.' }));
+    // 공유 지정은 관리자만 바꿀 수 있다(#1540) — 서버가 admin 을 강제하므로, 여기선 버튼을 아예 안 그린다
+    //  (누구에게나 보여주고 403 을 받게 하면 '되는 줄 알았는데 안 되는' 경험이 된다).
+    const canShare = !!(state.me && Array.isArray(state.me.scopes) && state.me.scopes.includes('admin'));
     for (const n of nodes) {
       const badge = el('span', { class: 'tsess-badge' + (n.online ? '' : ' danger'),
         text: n.online ? '🟢 연결됨 · 세션 ' + (n.sessions || 0) : '⦿ 끊김' });
       const acts = el('div', { style: 'display:flex;gap:6px;margin-left:auto' },
+        ...(canShare ? [el('button', { class: 'btn btn-ghost btn-sm', text: n.shared ? '공유 해제' : '공유 노드로',
+          title: n.shared
+            ? '이 노드를 다시 등록자 전용으로 되돌립니다(진행 중인 남의 작업은 그대로 끝납니다).'
+            : '조직 전체가 이 노드에 위탁·세션을 열 수 있게 합니다. 개인 PC라면 남이 그 컴퓨터에서 코드를 실행하게 되는 것이니 주의하세요.',
+          onclick: () => share(n) })] : []),
         el('button', { class: 'btn btn-ghost btn-sm', text: n.enabled === false ? '활성화' : '비활성',
           title: n.enabled === false ? '다시 연결 허용' : '연결 차단(다음 재연결부터 거부)', onclick: () => toggle(n) }),
         el('button', { class: 'btn btn-ghost btn-sm', text: '토큰 회전',
@@ -347,7 +356,9 @@ function openNodeManager(view) {
         el('span', { text: '🖥' }),
         el('div', { style: 'min-width:0' },
           el('div', { style: 'font-weight:600' }, document.createTextNode((n.name || n.id) + ' '),
-            el('span', { class: 'caption', text: n.kind === 'worker' ? '워커' : '멤버' })),
+            el('span', { class: 'caption', text: n.kind === 'worker' ? '워커' : '멤버' }),
+            // 공유 여부는 '누가 이 컴퓨터를 쓸 수 있나'라서 종류(워커/멤버)보다 중요하다 — 배지로 눈에 걸리게.
+            ...(n.shared ? [document.createTextNode(' '), el('span', { class: 'tsess-badge', text: '🌐 공유' })] : [])),
           el('div', { class: 'caption', text: n.id })),
         badge, acts));
     }
@@ -365,6 +376,17 @@ function openNodeManager(view) {
   async function toggle(n) {
     try { await api('/api/ui/nodes/' + encodeURIComponent(n.id) + '/enable', { method: 'POST', body: JSON.stringify({ enabled: n.enabled === false }) }); toast(n.enabled === false ? '활성화됨' : '비활성화됨'); load(); }
     catch (e) { toast('변경 실패 — ' + e.message, true); }
+  }
+  // 공유 지정/해제(#1540, admin) — 켤 때만 확인을 받는다. 켜는 건 '조직 전체에 이 컴퓨터를 여는' 되돌리기 어려운
+  //  성격의 변경이고(그 사이 남의 작업이 들어온다), 끄는 건 좁히는 방향이라 확인 없이 바로 적용한다.
+  async function share(n) {
+    const on = !n.shared;
+    if (on && !confirm('노드 "' + (n.name || n.id) + '" 를 공유 노드로 지정할까요?\n\n조직 구성원 전체가 이 컴퓨터에 작업을 위탁하고 세션을 열 수 있게 됩니다.\n개인 PC라면 남이 그 컴퓨터에서 코드를 실행하게 되는 것이니, 공용 워커 서버에만 켜는 것을 권합니다.')) return;
+    try {
+      await api('/api/ui/nodes/' + encodeURIComponent(n.id) + '/share', { method: 'POST', body: JSON.stringify({ shared: on }) });
+      toast(on ? '공유 노드로 지정됨 — 전체가 쓸 수 있습니다' : '공유 해제됨 — 등록자 전용으로 되돌렸습니다');
+      load();
+    } catch (e) { toast('변경 실패 — ' + e.message, true); }
   }
   async function rotate(n) {
     if (!confirm('노드 "' + (n.name || n.id) + '" 의 토큰을 회전할까요?\n현재 토큰이 폐기돼 연결이 끊기고, 그 머신에서 lively node --daemon 을 다시 실행해야 합니다.')) return;
