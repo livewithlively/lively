@@ -138,7 +138,26 @@ export interface CreateInput { label: string; rootKey: string; subpath: string; 
 //
 // ⚠ 인젝션 안전: 스크립트는 **고정 문자열**이고 하네스·플래그는 `sh -c '<고정>' <argv0> <안내> "$@"` 의
 //  위치인자로만 들어간다(셸이 값을 해석하지 않는다). 문자열 보간으로 명령을 조립하지 말 것.
+//
+// ⚠⚠ `set -m`(job control) 은 취향이 아니라 이 런처의 **정확성 요건**이다 (#1535, 2026-08-05 실측).
+//  래퍼를 씌운다는 것은 pane 에 프로세스를 하나 더 만든다는 뜻이고, job control 이 없으면 그 래퍼가
+//  **pane tty 의 foreground 프로세스 그룹 리더로 눌러앉는다**. 그러면 하네스가 멀쩡히 돌고 있는데도
+//  tmux 의 `#{pane_current_command}` 가 **`bash`** 로 나온다(macOS `/bin/sh` 의 실체가 bash).
+//   실측 대조 — 같은 하네스를 같은 tmux 에 띄우고 pane_current_command 만 본 결과:
+//     래퍼 없음(#1516 이전) → `2.1.220`(하네스) · 래퍼만 → `bash` · 래퍼+`set -m` → `2.1.220`
+//  그 한 값이 아래 두 판정의 **유일한 입력**이라 둘 다 조용히 뒤집혔다:
+//   · 웹터미널 stale 마우스 게이팅([[webterm-stale-mouse-mode-gating]] #1302) — '포그라운드가 셸이면 그
+//     마우스 flag 는 죽은 앱의 잔재'로 오판 → 살아있는 앱의 마우스모드를 끄고(alt-screen 에서 휠이 화살표
+//     키로 폴백 = #1535 사용자 신고 증상) `{t:'mr'}` 로 pane tty 에 DECRST 까지 써서 **tmux 가 아는
+//     진실마저 파괴**했다. #1302 는 "Bash 툴 호출 중에도 foreground 는 안 바뀐다"를 실측 전제로 삼았는데,
+//     #1516 의 래퍼가 그 전제를 깼다 — 게이팅의 잘못이 아니라 입력이 오염된 것이다.
+//   · isAgentOffline(phase.ts) — SHELL_CMDS 에 `bash` 가 있으므로 살아있는 하네스가 '종료됨'으로 표시됐다.
+//  `set -m` 이면 셸이 각 job 을 **새 프로세스 그룹**에 넣고 foreground job 에 tty 를 넘긴다 → 하네스가
+//  자기 pgrp 리더 + tty foreground 가 되어 tmux 가 다시 하네스를 본다. 하네스가 끝나면 셸이 foreground 를
+//  되찾으므로 위 두 판정은 **그때** 정확히 참이 된다 — 이 런처가 원래 의도한 정합 그대로다.
+//  (비대화형 셸이라 job control 상태 메시지는 pane 에 찍히지 않는다 — 실측 확인.)
 const LAUNCH_SH = [
+  'set -m',
   'notice=$1; shift',
   '"$@"',
   'rc=$?',
