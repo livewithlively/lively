@@ -1,14 +1,16 @@
 // 크론 액션: 커넥터 sync/push·위키 push — R16 에서 scheduler runJob if-체인 본문을 원문 이동.
 import { itemsPool, q } from "../../db/client.js";
 
-// sync 대상 커넥터 — 관리탭에서 켠 것(org_connector.enabled=true, #541) 우선.
-//  비었으면(마이그레이션 전) 기존 data_source.status='active' 로 폴백 — 하위호환 무중단.
+// sync 대상 커넥터 — 관리탭에서 켠 것(org_connector.enabled=true, #541).
+//  레거시 폴백(data_source.status='active')은 **org_connector 행이 하나도 없을 때만** — 즉 '마이그레이션 전'
+//  일 때만이다. 종전엔 `WHERE enabled=true` 가 0행이면 폴백했는데, 그러면 "아직 이관 안 됨"과 "관리탭에서
+//  전부 껐음"이 구분되지 않아 **다 끈 조직이 레거시 경로로 계속 싱크됐다**(#1534). 행이 있으면 관리탭이 SoT다.
 async function activeConnectorSystems(): Promise<string[]> {
   try {
-    const on = await q(itemsPool, `SELECT system FROM org_connector WHERE enabled=true`);
-    if (on.length) return on.map((r) => r.system);
-    const rows = await q(itemsPool, `SELECT system FROM data_source WHERE status='active'`);
-    return rows.map((r) => r.system);
+    const rows = await q(itemsPool, `SELECT system, enabled FROM org_connector`);
+    if (rows.length) return rows.filter((r) => r.enabled).map((r) => r.system);
+    const legacy = await q(itemsPool, `SELECT system FROM data_source WHERE status='active'`);
+    return legacy.map((r) => r.system);
   } catch { return []; }
 }
 
@@ -36,7 +38,11 @@ async function resolveSyncTargets(params: Record<string, unknown>): Promise<Arra
   } catch { /* org_collector 부재(구 배포) → 레거시 폴백 */ }
   if (rows.length) return rows.map((r) => ({ system: String(r.preset_key), collectorId: Number(r.id), label: String(r.key) }));
   // 레거시 폴백 — 수집기가 하나도 없는 배포(마이그레이션 전·구 코드에서 올라온 DB)는 종전 그대로 돈다.
-  const systems = wantSystem ? [wantSystem] : await activeConnectorSystems();
+  //  ⚠ system 을 박은 잡도 '관리탭에서 켠 것'인지 함께 본다(#1534). 종전엔 wantSystem 을 그대로 대상 삼아,
+  //   커넥터를 꺼도(org_connector.enabled=false) params.system 이 있는 크론은 계속 돌았다 — 꺼진 clickup 이
+  //   4분마다 space/folder/list 를 재삽입해, 사람이 지운 폴더·리스트가 되살아났다. 관리탭 토글이 SoT다.
+  const active = await activeConnectorSystems();
+  const systems = wantSystem ? (active.includes(wantSystem) ? [wantSystem] : []) : active;
   return systems.map((s) => ({ system: s, collectorId: null, label: s }));
 }
 
