@@ -134,18 +134,27 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
     res.json({ ok: true, id: n.id, enabled });
   }));
 
-  // 공유 노드 지정/해제(#1540) — **admin 전용**. 소유자 본인도 자기 노드를 조직에 개방할 수 없다:
-  //  개방은 조직의 결정(누가 어디서 무엇을 돌리는지)이고, 그걸 각자가 켤 수 있으면 "기본은 본인 것" 이라는
-  //  이 정책의 기본값이 사실상 무력해진다. 그래서 requireOwn(소유자 또는 admin)을 쓰지 않는다.
+  // 공유 **해제** 전용(#1558) — admin 전용. ⚠ 이 라우트로 공유를 **켤 수는 없다**.
+  //
+  //  왜 승격을 없앴나: 종전엔 admin 이 아무 노드나 `shared:true` 로 올릴 수 있었다. 그러면 구성원이 붙여 둔
+  //  **개인 노트북이 어느 날 조직 공용이 되는** 경로가 열려 있고, 그걸 하려면 관리 화면이 남의 개인 컴퓨터
+  //  목록을 늘어놔야 한다(프라이버시). 공유 컴퓨터는 처음부터 그 목적으로 등록하는 것이지, 남의 것을 끌어
+  //  올리는 게 아니다 → **공유는 등록 시점(POST /api/ui/nodes {shared:true})에만 켠다.**
+  //  해제는 남긴다 — 좁히는 방향이라 안전하고, 잘못 등록한 것을 지우지 않고 되돌릴 수 있어야 한다.
+  //  다시 공유로 만들려면 지우고 공유용으로 새로 등록한다(그 편이 감사에도 한 줄로 남는다).
   app.post("/api/ui/nodes/:id/share", auth, wrap(async (req, res) => {
     const u = userOf(req);
-    if (!isAdmin(u)) throw new HttpError(403, "공유 노드 지정/해제는 admin 권한이 필요합니다");
+    if (!isAdmin(u)) throw new HttpError(403, "공유 해제는 admin 권한이 필요합니다");
+    // 승격 차단은 **DB 조회보다 먼저** 본다 — 입력만으로 결정되는 규칙이고(노드가 뭐든 답은 같다), 그래야
+    //  이 계약을 DB 없이 테스트할 수 있다(share-promotion-gate.test.ts).
+    if (((req.body ?? {}) as Record<string, unknown>).shared) {
+      throw new HttpError(400, "이미 등록된 컴퓨터를 공유로 올릴 수는 없습니다 — 공유 컴퓨터는 등록할 때 지정합니다(관리 ▸ 컴퓨터(노드) ▸ 공유 컴퓨터 등록).");
+    }
     const n = await getNode(String(req.params.id ?? ""));
     if (!n) throw new HttpError(404, "노드 없음");
-    const shared = !!((req.body ?? {}) as Record<string, unknown>).shared;
-    await setNodeShared(n.id, shared);
-    logger.info({ node: n.id, shared, by: idOf(u) }, shared ? "노드 공유 지정" : "노드 공유 해제");
-    res.json({ ok: true, id: n.id, shared });
+    await setNodeShared(n.id, false);
+    logger.info({ node: n.id, by: idOf(u) }, "노드 공유 해제");
+    res.json({ ok: true, id: n.id, shared: false });
   }));
 
   app.delete("/api/ui/nodes/:id", auth, wrap(async (req, res) => {

@@ -11,8 +11,8 @@
 //  ⚠ '노드가 무엇인가'·'연결하는 법'은 여기 두지 않는다 — 사용가이드(#/learn/docs/nodes)가 원고의 집이다.
 //   설정 화면은 **지금 상태를 보고 바꾸는 곳**이고, 배우는 곳은 문서다. 두 곳에 같은 설명을 두면 갈라진다.
 import { api, el, errorNote, state, toast } from './core.js';
-import { confirmDialog, skeleton } from './ui-primitives.js';
-import { sectionHead } from './admin-widgets.js';
+import { confirmDialog, copyText, field, overlay, skeleton } from './ui-primitives.js';
+import { psInputStyle, sectionHead } from './admin-widgets.js';
 
 const GUIDE = '#/learn/docs/nodes';   // 사용가이드 '컴퓨터 연결(노드)' — 설명·연결 명령의 단일 출처
 
@@ -66,23 +66,12 @@ async function loadNodes() {
 //  공유 해제·연결 차단은 좁히는 방향이라 즉시 적용한다.
 function nodeActions(reload) {
   return {
-    async setShared(n, on) {
-      if (on) {
-        const ok = await confirmDialog({
-          title: '이 컴퓨터를 조직 전체에 열까요?',
-          message: (n.name || n.id) + ' 를 공유 컴퓨터로 지정합니다.',
-          lines: [
-            '구성원 누구나 이 컴퓨터에서 AI 세션을 열고 작업을 맡길 수 있게 됩니다.',
-            '즉 다른 사람이 이 컴퓨터에서 코드를 실행합니다 — 공용 서버에만 켜는 것을 권합니다.',
-          ],
-          note: '개인 노트북이라면 켜지 마세요. 나중에 언제든 공유를 해제할 수 있습니다.',
-          confirmText: '공유로 지정',
-        });
-        if (!ok) return;
-      }
+    // 공유 **해제**만 있다(#1558) — 이미 있는 컴퓨터를 공유로 올리는 경로는 서버에도 없다. 공유 컴퓨터는
+    //  처음부터 그 목적으로 등록한다(openSharedNodeForm). 해제는 좁히는 방향이라 확인 없이 즉시.
+    async unshare(n) {
       try {
-        await api('/api/ui/nodes/' + encodeURIComponent(n.id) + '/share', { method: 'POST', body: JSON.stringify({ shared: on }) });
-        toast(on ? '공유 컴퓨터로 지정했습니다' : '공유를 해제했습니다 — 이제 연결한 사람만 씁니다');
+        await api('/api/ui/nodes/' + encodeURIComponent(n.id) + '/share', { method: 'POST', body: JSON.stringify({ shared: false }) });
+        toast('공유를 해제했습니다 — 이제 등록한 사람만 씁니다');
         reload();
       } catch (e) { toast('변경 실패 — ' + e.message, true); }
     },
@@ -168,55 +157,105 @@ export async function myNodesPanel(detail, data) {
           '아직 공유로 지정된 컴퓨터가 없습니다.'),
       ]),
       // 내 컴퓨터가 공유로 지정돼 있으면 반드시 알린다 — 내 기계에서 남의 작업이 도는 상태이므로.
+      // 내 목록에 공유 컴퓨터가 섞여 있으면 반드시 알린다 — 내 이름으로 등록돼 있지만 남의 작업이 도는 기계다.
+      //  (공유 컴퓨터는 관리자가 등록하므로 보통 그 관리자 본인의 목록에 뜬다. 예전에 승격됐던 노드도 여기 걸린다.)
       sharedMine ? el('p', { class: 'admin-hint' },
-        '내 컴퓨터 중 ' + sharedMine + '대가 공유로 지정돼 있습니다 — 구성원 누구나 그 컴퓨터를 씁니다. '
-        + '공유를 해제하려면 관리자에게 요청하세요(연결 차단·지우기는 직접 할 수 있습니다).') : null,
+        document.createTextNode('내 목록 중 ' + sharedMine + '대가 공유 컴퓨터입니다 — 구성원 누구나 그 컴퓨터를 씁니다. 공유 해제는 '),
+        el('a', { href: '#/system/nodes', text: '설정 ▸ 컴퓨터(노드)' }),
+        document.createTextNode(' 에서 합니다(관리자). 연결 차단·지우기는 여기서 직접 할 수 있습니다.')) : null,
       guideLine('컴퓨터를 새로 연결하려면 그 컴퓨터에서 명령 세 줄을 실행하면 됩니다.'),
     ].filter(Boolean)),
   ].filter(Boolean));
 }
 
+// 공유 컴퓨터 등록 폼 — **공유는 여기서만 켜진다.** 이미 붙어 있는 컴퓨터를 나중에 공유로 올리는 경로는 없다
+//  (그러면 구성원 개인 노트북이 어느 날 조직 공용이 되고, 그걸 하려면 관리 화면이 남의 개인 컴퓨터를 늘어놔야
+//  한다). 순서도 그래서 뒤집혀 있다 — **먼저 여기서 등록해 자리를 만들고**, 그 자리에 그 컴퓨터를 연결한다.
+function openSharedNodeForm(reload) {
+  const idInp = el('input', { type: 'text', style: psInputStyle, placeholder: 'build-server-1' });
+  const nameInp = el('input', { type: 'text', style: psInputStyle, placeholder: '빌드 서버 1호' });
+  const msg = el('p', { class: 'admin-hint' });
+  const save = el('button', { class: 'btn btn-primary', text: '공유 컴퓨터로 등록' });
+  const body = el('div', {},
+    el('p', { class: 'admin-hint' },
+      '여럿이 함께 쓸 컴퓨터의 자리를 먼저 만듭니다. 등록한 뒤 그 컴퓨터에서 연결 명령을 실행하면 목록에 나타납니다. '
+      + '구성원 누구나 여기에 AI 세션을 열고 작업을 맡길 수 있게 되니, 개인 노트북이 아니라 공용 서버에만 쓰세요.'),
+    field('아이디', idInp),
+    el('p', { class: 'admin-hint', style: 'margin:-8px 0 12px' }, '영문 소문자·숫자·하이픈. 연결 명령에 그대로 들어갑니다.'),
+    field('이름 (선택)', nameInp),
+    msg);
+  const back = overlay('공유 컴퓨터 등록', body, el('div', { class: 'admin-actions' }, save));
+
+  save.onclick = async () => {
+    const id = idInp.value.trim();
+    if (!id) { msg.textContent = '아이디를 입력하세요.'; return; }
+    save.disabled = true;
+    try {
+      const r = await api('/api/ui/nodes', { method: 'POST', body: JSON.stringify({ id, name: nameInp.value.trim() || id, shared: true }) });
+      // 등록은 '자리'를 만든 것뿐 — 실제 연결은 그 컴퓨터에서 해야 한다. 그래서 폼을 닫지 않고 다음 할 일을 준다.
+      //  접속 열쇠는 화면에 띄우지 않는다: 아래 명령이 관리자 로그인으로 자기 열쇠를 받아 간다(비밀을 눈에 안 띄우는 게 낫다).
+      const cmd = 'lively login\nlively node --daemon --id ' + (r && r.node ? r.node.id : id);
+      body.replaceChildren(
+        el('p', { class: 'install-ok', text: '✓ 자리를 만들었습니다. 이제 그 컴퓨터에서 연결하세요.' }),
+        el('p', { class: 'admin-hint' }, '공유할 컴퓨터에서 아래를 실행합니다(관리자 계정으로 로그인). 라이블리 CLI 가 아직 없다면 '),
+        el('pre', { class: 'admin-preview', text: cmd }),
+        el('div', { class: 'admin-actions' },
+          el('button', { class: 'btn btn-primary', text: '명령 복사',
+            onclick: async () => { const ok = await copyText(cmd); toast(ok ? '복사했습니다' : '복사 실패 — 직접 선택해 복사하세요', !ok); } }),
+          el('button', { class: 'btn btn-ghost', text: '닫기', onclick: () => { back.remove(); reload(); } })),
+        el('p', { class: 'admin-hint' }, 'CLI 설치가 아직이면 ', el('a', { href: '#/start', text: '시작하기' }),
+          ' 의 한 줄 설치를 먼저 실행하세요. 연결되면 이 목록에 나타납니다.'));
+      toast('공유 컴퓨터로 등록했습니다');
+    } catch (e) { save.disabled = false; msg.textContent = '등록 실패 — ' + e.message; }
+  };
+  return back;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// ② [운영·감사 ▸ 컴퓨터(노드)] — 관리자. 조직의 컴퓨터 전체를 보고 **무엇을 함께 쓸지** 정한다.
-//   개인 컴퓨터 목록이 그대로 보이므로 관리자 전용(ADMIN_ONLY)이다.
+// ② [운영·감사 ▸ 컴퓨터(노드)] — 관리자. **조직이 함께 쓰는 컴퓨터**만 다룬다.
+//   ⚠ 구성원 개인 컴퓨터는 **여기 안 보인다.** 관리자가 볼 이유가 없기 때문이다 — 승격(남의 것을 공유로
+//    올리기)이라는 동작 자체를 없앴으므로, 남의 개인 컴퓨터를 늘어놓을 목적이 사라졌다. 각자의 컴퓨터는
+//    각자 [내 설정 ▸ 내 컴퓨터]에서 관리한다. ADMIN_ONLY 인 이유는 공유 컴퓨터를 만들고 없애는 화면이라서다.
 // ─────────────────────────────────────────────────────────────────────────────
 export async function orgNodesPanel(detail, data) {
   const reload = () => orgNodesPanel(detail, data);
   const act = nodeActions(reload);
-  detail.replaceChildren(el('div', { class: 'card' }, skeleton('조직의 컴퓨터를 불러오는 중')));
+  detail.replaceChildren(el('div', { class: 'card' }, skeleton('공유 컴퓨터를 불러오는 중')));
 
   let nodes;
   try { const r = await api('/api/ui/nodes'); nodes = (r && r.nodes) || []; }
-  catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '조직의 컴퓨터를 불러오지 못했습니다'))); return; }
+  catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '공유 컴퓨터를 불러오지 못했습니다'))); return; }
 
   const memberName = (id) => {
     const m = ((data && data.members) || []).find((x) => x.id === id);
     return (m && (m.display_name || m.id)) || id || '알 수 없음';
   };
   const shared = nodes.filter((n) => n.shared);
-  const personal = nodes.filter((n) => !n.shared);
 
   const adminActs = (n) => el('div', { class: 'wikicat-row-acts' },
-    el('button', { class: 'btn btn-ghost btn-sm', text: n.shared ? '공유 해제' : '공유로 지정',
-      title: n.shared ? '다시 연결한 사람만 쓰도록 되돌립니다.' : '조직 구성원 전체가 이 컴퓨터를 쓸 수 있게 합니다.',
-      onclick: () => act.setShared(n, !n.shared) }),
     el('button', { class: 'btn btn-ghost btn-sm', text: n.enabled === false ? '연결 허용' : '연결 차단',
+      title: n.enabled === false ? '이 컴퓨터가 다시 연결되도록 허용합니다.' : '이 컴퓨터의 연결을 막습니다(작업은 못 들어오고, 등록은 남습니다).',
       onclick: () => act.setEnabled(n, n.enabled === false) }),
     el('button', { class: 'btn btn-ghost btn-sm', text: '접속 열쇠 재발급', onclick: () => act.rotate(n) }),
+    el('button', { class: 'btn btn-ghost btn-sm', text: '공유 해제',
+      title: '공유를 거두고 등록한 사람 전용으로 되돌립니다. 다시 공유하려면 지우고 공유용으로 새로 등록하세요.',
+      onclick: () => act.unshare(n) }),
     el('button', { class: 'btn btn-ghost btn-sm', text: '지우기', onclick: () => act.remove(n) }));
 
   detail.replaceChildren(...[
-    sectionHead('컴퓨터(노드) · ' + nodes.length + '대',
-      '조직에 연결된 컴퓨터 전체입니다. 기본은 연결한 사람만 쓰고, 여기서 공유로 지정한 컴퓨터만 구성원 전체가 함께 씁니다.'),
+    sectionHead('컴퓨터(노드) · 공유 ' + shared.length + '대',
+      '조직이 함께 쓰는 컴퓨터입니다. 구성원 누구나 여기에 AI 세션을 열고 오래 걸리는 작업을 맡길 수 있습니다.'),
+    el('div', { class: 'admin-actions', style: 'margin:0 0 14px' },
+      el('button', { class: 'btn btn-primary', text: '+ 공유 컴퓨터 등록', onclick: () => openSharedNodeForm(reload) })),
     el('div', { class: 'card' }, ...[
-      el('div', { class: 'wikicat' }, ...[
-        nodeGroup('공유 컴퓨터', '구성원 누구나 여기에 AI 세션을 열고 작업을 맡길 수 있습니다.',
+      el('div', { class: 'wikicat' },
+        nodeGroup('공유 컴퓨터', null,
           shared, (n) => nodeRow(n, memberName(n.owner_member), adminActs(n)),
-          '아직 공유로 지정된 컴퓨터가 없습니다 — 아래에서 공용 서버를 골라 [공유로 지정]하세요.'),
-        nodeGroup('구성원 개인 컴퓨터', '연결한 본인만 씁니다. 공유로 지정하면 조직 전체가 그 컴퓨터에서 작업을 실행하게 되니, 개인 노트북은 그대로 두세요.',
-          personal, (n) => nodeRow(n, memberName(n.owner_member), adminActs(n)),
-          '연결된 개인 컴퓨터가 없습니다.'),
-      ]),
+          '아직 공유 컴퓨터가 없습니다 — [+ 공유 컴퓨터 등록]으로 공용 서버의 자리를 먼저 만드세요.')),
+      // 이 화면이 '조직 전체 컴퓨터 목록'이 아니라는 걸 분명히 한다 — 안 보이는 게 결함이 아니라 설계다.
+      el('p', { class: 'admin-hint' },
+        '구성원이 각자 연결한 개인 컴퓨터는 여기 보이지 않습니다. 그 컴퓨터들은 연결한 본인만 쓰고, 각자 [내 설정 ▸ 내 컴퓨터]에서 관리합니다. '
+        + '이미 연결된 개인 컴퓨터를 공유로 올리는 기능은 없습니다 — 공유 컴퓨터는 위에서 그 목적으로 등록합니다.'),
       guideLine('구성원은 각자 자기 컴퓨터를 연결합니다.'),
     ].filter(Boolean)),
   ].filter(Boolean));
