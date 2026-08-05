@@ -299,6 +299,61 @@ export function appendBody(base: string, chunk: string): string {
 //  (다르면 '붙인 것'과 '중복 판정 대상'이 어긋나 감지가 헛돈다).
 const normalizeAppendChunk = (chunk: string): string => (chunk ?? "").replace(/^[\r\n]+/, "").replace(/\s+$/, "");
 
+/** #1531 edit 모드 — 본문 일부만 정확일치로 갈아끼운다. */
+export interface KnowledgeEdit {
+  /** 바꿀 기존 텍스트 — 본문에 **정확히 한 번** 있어야 한다(replace_all 이면 여러 번 허용). */
+  old: string;
+  /** 그 자리에 넣을 텍스트. 빈 문자열이면 삭제. */
+  new: string;
+  /** 같은 텍스트가 여러 곳에 있고 전부 바꿔야 할 때만 true. */
+  replace_all?: boolean;
+}
+
+/**
+ * #1531 본문 부분 편집 — 전문을 되보내지 않고 바뀌는 조각만 갈아끼운다.
+ *
+ * 왜 필요한가: append 는 **문서 끝**에만 붙는다. 그런데 실제 갱신은 문서 중간에서 일어난다 —
+ * 타임라인 중간에 이번 달을 끼우고, '열린 이슈'의 낡은 항목을 고치고, 표의 수치를 바꾸는 식이다.
+ * 그 경우 유일한 수단이 replace(전문 교체)인데, 그러면 **에이전트가 4만 자를 통째로 받아쓰게 된다.**
+ * 토큰도 토큰이지만 전사 과정에서 **손대지 말아야 할 문장이 깨진다** — 어니스트 실측에서 40K자 문서를
+ * 갱신하다 무관한 문장의 쉼표가 여는 괄호로 바뀌어 괄호가 닫히지 않았다(#1531).
+ * 손상 확률이 문서 크기에 비례하는 구조라, 문서가 자랄수록 갱신이 위험해진다.
+ *
+ * 계약(Claude Code 의 Edit 도구와 동형):
+ *  · `old` 는 **정확일치**. 못 찾으면 조용히 넘어가지 않고 던진다 — 조용한 무시는 "저장했는데 안 바뀐"
+ *    최악의 실패다(호출자는 본문을 안 읽으므로 영영 모른다).
+ *  · 여러 번 나오면 **모호**하므로 던진다(replace_all 로 의도를 밝히면 전부 교체).
+ *  · 편집은 **순차 적용** — 앞 편집의 결과 위에 다음 편집이 얹힌다. 앞 편집이 뒤 앵커를 지웠다면
+ *    '못 찾음'으로 드러난다(그것도 조용한 실패보다 낫다).
+ *  · 건드리지 않은 부분은 **문자 단위로 그대로다** — 이 모드의 존재 이유다.
+ */
+export function applyKnowledgeEdits(base: string, edits: KnowledgeEdit[]): string {
+  if (!Array.isArray(edits) || edits.length === 0) {
+    throw new Error("edits 가 비었습니다 — 무엇을 바꿀지 지정하세요.");
+  }
+  let out = String(base ?? "");
+  edits.forEach((e, i) => {
+    const at = `edits[${i}]`;
+    const oldText = String(e?.old ?? "");
+    const newText = String(e?.new ?? "");
+    if (!oldText) throw new Error(`${at}.old 가 비었습니다 — 바꿀 기존 텍스트를 지정하세요(본문 끝에 덧붙이려면 mode='append').`);
+    if (oldText === newText) throw new Error(`${at}: old 와 new 가 같습니다 — 바뀌는 것이 없습니다.`);
+    // 출현 횟수 — indexOf 루프로 센다(정규식 이스케이프 이슈 없음).
+    let count = 0;
+    for (let p = out.indexOf(oldText); p !== -1; p = out.indexOf(oldText, p + oldText.length)) count++;
+    if (count === 0) {
+      const head = oldText.slice(0, 60).replace(/\n/g, "⏎");
+      throw new Error(`${at}: 본문에서 찾지 못했습니다 — "${head}${oldText.length > 60 ? "…" : ""}". 공백·줄바꿈까지 원문 그대로여야 합니다(지식을 다시 읽어 확인하세요).`);
+    }
+    if (count > 1 && !e.replace_all) {
+      const head = oldText.slice(0, 60).replace(/\n/g, "⏎");
+      throw new Error(`${at}: 본문에 ${count}곳 있어 어디를 바꿀지 모호합니다 — "${head}${oldText.length > 60 ? "…" : ""}". 앞뒤를 더 붙여 유일하게 만들거나, 전부 바꾸려면 replace_all: true 로 명시하세요.`);
+    }
+    out = e.replace_all ? out.split(oldText).join(newText) : out.replace(oldText, newText);
+  });
+  return out;
+}
+
 /**
  * #921 중복 append 감지 — 조각이 이미 본문 끝에 그대로 있는가.
  *
