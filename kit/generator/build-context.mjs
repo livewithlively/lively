@@ -575,7 +575,7 @@ export function buildKitBundle(target, { orgName = "조직", orgLabel = "org", h
   copied.push("cli/project-init-core.mjs");
   // 서브커맨드 모듈(#1313 R52) — lively.mjs 가 `node`·`delegate`·`resume/backfill/share` 에서 dynamic import.
   //  번들 동봉(lively.mjs 옆에 둬야 import 해결) → kit_version 지문 포함 → 자동 업뎃(#858)이 함께 갱신.
-  for (const f of ["cmd-node.mjs", "cmd-delegate.mjs", "cmd-session.mjs"]) {
+  for (const f of ["cmd-node.mjs", "cmd-delegate.mjs", "cmd-session.mjs", "json-events.mjs"]) {
     copyMjsWithHeader(kitAbs(`cli/${f}`), join(target, "cli", f), `kit/cli/${f}`, orgLabel);
     copied.push(`cli/${f}`);
   }

@@ -22,7 +22,7 @@
 
 import {
   readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, chmodSync,
-  readdirSync, statSync, realpathSync, openSync,
+  readdirSync, statSync, realpathSync, openSync, writeSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -63,11 +63,32 @@ const WIDE = /[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹯＀-｠￠-￦]/;
 const cols = (s) => [...String(s)].reduce((n, ch) => n + (WIDE.test(ch) ? 2 : 1), 0);
 // 사람 대상 출력은 stderr — stdout 은 --json 기계 판독용으로 비워 둔다(파이프 안전).
 const say = (s = "") => process.stderr.write(s + "\n");
-const ok = (s) => say("  " + green("✓") + " " + s);
-const info = (s) => say("  " + dim("·") + " " + s);
-const warn = (s) => say("  " + yellow("⚠") + " " + s);
-const fail = (s) => say("  " + red("✗") + " " + s);
-const die = (s, code = 1) => { say("\n" + red("✗ " + s)); process.exit(code); };
+// ── 앱↔CLI 이벤트 채널(#1541 T1) ────────────────────────────────────────────
+// `--json-events` 일 때만 켜진다. 켜지면 사람용 메시지가 stderr 로 **그대로 나가면서** stdout 에 NDJSON
+//  notice 이벤트로도 나간다 — 둘 중 하나만 있으면 GUI 나 터미널 중 한쪽이 벙어리가 된다.
+//  EV 는 main() 이 플래그를 보고 채운다(그 전에 죽는 경로 — Node 버전 게이트 등 — 은 종전 그대로 stderr 만).
+let EV = null;                       // { emit, start, step, notice, result, end } | null
+let PROMPTER = null;                 // { ask, tell } | null
+let EVENTS_MOD = null;               // json-events.mjs — 이벤트 모드에서만 dynamic import 한다
+const evNotice = (level, s) => { if (EV) EV.notice(level, stripAnsi(s)); };
+// 이벤트 문구엔 ANSI 를 싣지 않는다 — 구현은 json-events.mjs 에 있다(거기서 엣지까지 단위검증한다).
+//  여기 두면 검증이 불가능하다: stderr 가 파이프인 테스트 환경에선 색이 아예 안 붙어(TTY=false) 이 함수가
+//  한 번도 실전 입력을 못 본다. 옮겨서 ANSI 문자열을 직접 먹여 잰다(색 말고 커서 이동 등 CSI 전반도 함께).
+//  모듈이 없으면 이벤트도 없으므로(둘 다 --json-events 에서만 산다) 원문 그대로가 안전한 폴백이다.
+const stripAnsi = (s) => (EVENTS_MOD ? EVENTS_MOD.stripAnsi(s) : String(s));
+// `--json` 결과 출력 — 이벤트 모드에선 raw JSON 을 stdout 에 섞지 않고 `result` 이벤트로 싣는다.
+//  안 그러면 여러 줄 pretty JSON 이 NDJSON 스트림 한복판에 끼어 앱의 줄 단위 파서를 깬다(D5).
+const jsonOut = (obj) => { if (EV) EV.result(obj); else process.stdout.write(JSON.stringify(obj, null, 2) + "\n"); };
+const ok = (s) => { say("  " + green("✓") + " " + s); evNotice("ok", s); };
+const info = (s) => { say("  " + dim("·") + " " + s); evNotice("info", s); };
+const warn = (s) => { say("  " + yellow("⚠") + " " + s); evNotice("warn", s); };
+const fail = (s) => { say("  " + red("✗") + " " + s); evNotice("error", s); };
+// die 는 이벤트 모드에서도 **끝을 알리고** 죽는다 — 앱이 '끝났는지'를 종료코드만으로 추측하지 않게(D3).
+const die = (s, code = 1) => {
+  say("\n" + red("✗ " + s));
+  if (EV) { EV.notice("error", stripAnsi(s)); endEvents(false, code); }
+  process.exit(code);
+};
 
 // ── 1.5 Node 버전 게이트 (#1068) ────────────────────────────────────────────
 // 이 CLI 는 의존성 0 으로 **전역 fetch(Node 18+)** 등 최신 런타임 API 를 쓴다(맨 위 설계 원칙).
@@ -168,11 +189,15 @@ function ttyIO() {
   }
   return { in: process.stdin, out: process.stderr, close: () => { /* 소유 아님 — 닫지 않는다 */ } };
 }
-const interactive = () => { const t = ttyIO(); const y = !!t.in.isTTY; t.close(); return y; };
+// ⚠ 이벤트 모드에선 **TTY 가 없어도 대화형이다** — 앱이 곧 단말이다(prompt 이벤트 ↔ stdin 답).
+//  이 한 줄이 없으면 GUI 로그인이 "비대화형 환경입니다"로 죽어 T3 이 성립하지 않는다.
+const interactive = () => { if (PROMPTER) return true; const t = ttyIO(); const y = !!t.in.isTTY; t.close(); return y; };
 
 // 가림 입력(에코 없음) — 토큰이 화면·스크롤백·화면녹화·셸 히스토리 어디에도 안 남는다. 비대화형이면 null.
 const CTRL_C = "\u0003", CTRL_D = "\u0004", BACKSPACE = "\u007f";
 function askHidden(label) {
+  // 이벤트 모드: 가림 입력도 앱이 받는다(비밀은 **이벤트로 나가지 않고 stdin 으로 들어온다** — 방향이 반대라 안전).
+  if (PROMPTER) return PROMPTER.ask("secret", "secret", { label: stripAnsi(label) });
   const t = ttyIO();
   if (!t.in.isTTY) { t.close(); return Promise.resolve(null); }
   return new Promise((resolve) => {
@@ -200,7 +225,11 @@ function askHidden(label) {
 }
 
 // 예/아니오 — 비대화형이면 기본값을 그대로 쓴다(프롬프트가 자동화를 막지 않게).
+let promptSeq = 0;
 function askYesNo(label, def = true) {
+  // 이벤트 모드: GUI 가 물어본다. **답이 안 오고 stdin 이 닫히면 실패한다** — 기본값으로 조용히 승인하면
+  //  "이 계정으로 로그인됩니다" 확인이 사람 없이 통과한다(#R2-F1 이 막으려던 바로 그것). fail-closed.
+  if (PROMPTER) return PROMPTER.ask(`confirm-${++promptSeq}`, "confirm", { label: stripAnsi(label), default: !!def });
   const t = ttyIO();
   if (!t.in.isTTY) { t.close(); return Promise.resolve(def); }
   return new Promise((resolve) => {
@@ -519,13 +548,18 @@ async function syncKit({ label, offerHarness }) {
   }
 
   say(`\n${bold(label)}  ${dim("하네스: " + harnesses.join(", "))}`);
+  // 진행 신호(#1541 T1) — GUI 가 진행률을 그린다. 사람용 `[1/3]` 문구는 그대로 두고 **덧붙이기만** 한다.
+  const step = (id, lbl, status, i, extra) => { if (EV) EV.step(id, lbl, status, { i, n: 3, harnesses, ...(extra || {}) }); };
   say(dim("  [1/3] 키트 내려받는 중…"));
+  step("kit-download", "키트 내려받는 중", "start", 1);
   const { dir, root } = await downloadBundle();
   try {
     const version = verifyBundle(root);
     ok(`키트 검증 완료${version ? "  " + dim("(" + version + ")") : ""}`);
+    step("kit-download", "키트 내려받는 중", "done", 1);
 
     say(dim("  [2/3] 설치 중…"));
+    step("kit-install", "설치 중", "start", 2);
     // 설치의 엔진은 번들 동봉 user-install.mjs — 비파괴 머지·백업·auto-approve reconcile 이 전부 거기 있다.
     //  ⚠ LIVELY_TOKEN 을 **명시 주입**한다: user-install.mjs 의 org-seed fetch 는 아직 env 우선이라(그쪽:539),
     //   안 주면 이 셸의 스테일 env 로 시드를 받아 **번들은 새 신원·시드는 옛 신원**으로 갈린다(#916 계열).
@@ -533,9 +567,12 @@ async function syncKit({ label, offerHarness }) {
     run(process.execPath, [join(root, "setup", "user-install.mjs"), "--clone-root", root, "--harness", harnesses.join(",")],
       { env: { LIVELY_TOKEN: token() } });
 
+    step("kit-install", "설치 중", "done", 2);
     say(dim("  [3/3] MCP 등록 중…"));
+    step("mcp-register", "MCP 등록 중", "start", 3);
     const r = registerClaudeMcp();
     if (r.failed) warn(`MCP 등록 ${r.failed}건 실패 — 위 오류를 확인하고 다시 시도하세요.`);
+    step("mcp-register", "MCP 등록 중", r.failed ? "fail" : "done", 3, r.failed ? { failed: r.failed } : undefined);
 
     say("");
     say(green(bold("=== 끝! ===")));
@@ -634,8 +671,19 @@ async function deviceLogin(gw) {
   say("    " + bold(start.verification_uri));
   say("    코드: " + bold(start.user_code));
   say(dim("  (브라우저가 자동으로 열립니다. 안 열리면 위 주소를 직접 여세요.)"));
+  // 앱은 코드·주소를 **이벤트로** 받는다(#1541 T1) — 사람용 문구를 파싱하게 두면 문구를 못 고친다.
+  //  답을 기다리지 않는 통지형이다: 승인은 브라우저에서 일어나고, CLI 는 아래 폴 루프로 그걸 안다.
+  //  ⚠ device_code(비밀)는 싣지 않는다 — 앱이 알 이유가 없고, 새면 그 로그인을 가로챌 수 있다.
+  if (PROMPTER) {
+    PROMPTER.tell("device-code", "device-code", {
+      user_code: start.user_code, verification_uri: start.verification_uri,
+      verification_uri_complete: start.verification_uri_complete || null,
+      expires_in: Number(start.expires_in) || null, gateway: gw,
+    });
+  }
   openBrowser(start.verification_uri_complete || start.verification_uri);
   say(dim("  · 브라우저에서 승인을 기다리는 중… (이 창은 열어 두세요)"));
+  if (EV) EV.step("device-approve", "브라우저에서 승인 대기", "start");
 
   // ③ 폴 루프 — 전송오류 내성(백오프 계속), 종료는 명시적 denied/expired/invalid 만.
   let interval = Math.max(2, Number(start.interval) || 5);
@@ -653,7 +701,10 @@ async function deviceLogin(gw) {
       const text = await res.text();
       try { body = JSON.parse(text); } catch { body = null; } // 비-JSON(Caddy 502 등) → 일시 오류
     } catch { status = 0; body = null; } // ECONNREFUSED·타임아웃 등 → 일시 오류
-    if (status === 200 && body?.token) return { token: body.token, scopes: body.scopes || [] };
+    if (status === 200 && body?.token) {
+      if (EV) EV.step("device-approve", "브라우저에서 승인 대기", "done");   // ⚠ 토큰은 절대 이벤트에 안 싣는다(D6)
+      return { token: body.token, scopes: body.scopes || [] };
+    }
     if (status === 202) continue;                                  // authorization_pending
     if (status === 429) { interval = (Number(body?.interval) || interval) + 5; continue; } // slow_down
     if (status === 403) die("승인이 거부됐습니다.");
@@ -1027,7 +1078,7 @@ function renderProjectStatus(p) {
 async function cmdStatus(opts) {
   const st = await gatherStatus();
   st.project = await gatherProjectStatus(process.cwd(), st.gateway.reachable).catch(() => null); // 프로젝트 섹션은 부가 — 실패해도 status 는 유효(미도달이면 서버 왕복 스킵, #1043)
-  if (opts.json) { process.stdout.write(JSON.stringify(st, null, 2) + "\n"); return; }
+  if (opts.json) { jsonOut(st); return; }
   const mark = (b) => (b ? green("✓") : dim("–"));
   say(`\n${bold("라이블리")} ${dim("CLI " + st.cli)}\n`);
   say(`  게이트웨이    ${st.gateway.url || dim("(미설정)")}  ${st.gateway.reachable ? green("도달 OK") : red(st.gateway.error || "도달 실패")}`);
@@ -1165,7 +1216,7 @@ async function cmdDoctor(opts) {
   // 새 터미널에서 `lively` 가 잡히는지 — rc 배선이 안 됐으면 다음 창에서 못 찾는다.
   chk("lively PATH", has("lively"), has("lively") ? "OK" : "현 셸의 PATH 밖", RELOAD_SHELL_HINT);
 
-  if (opts.json) { process.stdout.write(JSON.stringify({ status: st, checks }, null, 2) + "\n"); return; }
+  if (opts.json) { jsonOut({ status: st, checks }); return; }
   say(`\n${bold("라이블리 진단")}\n`);
   const w = Math.max(...checks.map((x) => cols(x.name)));
   for (const x of checks) {
@@ -1221,7 +1272,7 @@ async function cmdSelfcheck(opts) {
       out.server.contextFresh = norm(c) === norm(ctx);
     } catch (e) { out.server = { error: e.message }; }
   }
-  if (opts.json) { process.stdout.write(JSON.stringify(out, null, 2) + "\n"); return; }
+  if (opts.json) { jsonOut(out); return; }
   say(`\n${bold("라이블리 배선 점검")} ${dim("— 아래는 사실이다. 지금 이 세션에 실제로 무엇이 보이는지와 대조해 판정하라.")}\n`);
   say(`  키트          ${out.kit || dim("(없음)")}`);
   if (!hs.length) say(`  자산          ${yellow("매니페스트 없음 — 이 머신에 조직 자산이 한 번도 안 깔렸다")}`);
@@ -1360,7 +1411,7 @@ async function cmdInit(rest) {
   let r;
   try { r = await projectInit(ctx, a); }
   catch (e) { die(e.message, 1); }
-  if (a.json) { process.stdout.write(JSON.stringify(r, null, 2) + "\n"); return; }
+  if (a.json) { jsonOut(r); return; }
 
   if (r.status === "already_project") { say(`\n${yellow("이미 프로젝트입니다")} — #${r.project_id}\n  ${dim(r.note)}\n`); return; }
   if (r.status === "suggestion") {
@@ -1531,6 +1582,8 @@ ${bold("작업")}
 ${bold("옵션")}
   --gateway <url>        게이트웨이 주소 지정 (login 과 함께)
   --token <토큰>         비대화형 로그인 (스크립트 · 프로비저닝용)
+  --json-events          진행 상황을 stdout 에 NDJSON 으로 ${dim("(데스크톱 앱·자동화용 — 사람용 출력은 stderr 그대로)")}
+                         ${dim("확인이 필요하면 prompt 이벤트를 내고 stdin 의 {\"t\":\"answer\",\"id\":…,\"value\":…} 한 줄을 기다립니다.")}
   -v, --version          버전
   -h, --help             이 도움말
 
@@ -1546,6 +1599,7 @@ function parse(argv) {
     else if (t === "--harness") o.harness = argv[++i];
     else if (t === "--check") o.check = true;
     else if (t === "--json") o.json = true;
+    else if (t === "--json-events") o.jsonEvents = true;   // 앱↔CLI 계약(#1541 T1) — stdout NDJSON
     else if (t === "--dry-run") o.dryRun = true;
     else if (t === "--purge") o.purge = true;
     else if (t === "--yes" || t === "-y") o.yes = true;
@@ -1586,11 +1640,59 @@ function cmdOnboarding(rest) {
   process.exit(st ?? 0);
 }
 
+// 이벤트 채널 기동(#1541 T1) — `--json-events` 일 때만. 여기서만 켜므로 플래그가 없으면 stdout 은 종전대로 빈다.
+//  ⚠ **stdin 을 여는 것도 여기서만** 한다: 평소에 stdin 을 resume 하면 파이프 입력을 기다리는 명령들의
+//   동작이 바뀐다(`curl … | sh` 부트스트랩이 정확히 그 형태다).
+//  ⚠ 쓰기는 **writeSync(fd 1)** 로 한다. process.stdout 은 파이프일 때 비동기라(POSIX) 마지막 `end` 이벤트가
+//   프로세스 종료와 경합해 통째로 유실될 수 있다 — 앱은 그 한 줄로 성공·실패를 판정하므로 유실이 곧 오판이다.
+function startEvents(cmd) {
+  const { createEmitter, createPrompter, lineReader } = EVENTS_MOD;
+  const write = (line) => {
+    try { writeSync(1, line); }
+    catch { try { process.stdout.write(line); } catch { /* stdout 닫힘 — 보고를 못 해도 명령은 계속한다 */ } }
+  };
+  EV = createEmitter({ write });
+  const src = lineReader(process.stdin);
+  PROMPTER = createPrompter({ emit: EV.emit, onLine: src.onLine, onEnd: src.onEnd });
+  EV.start(cmd, CLI_VERSION);
+}
+/**
+ * end 를 정확히 한 번 낸다(정상 종료·die·exit 훅이 모두 이 문을 지난다).
+ *
+ * ⚠ 그리고 **stdin 핸들을 놓아준다.** 이벤트 모드는 답을 받으려고 stdin 을 열어 두는데(그게 프롬프트의 전제다),
+ *  그 핸들이 이벤트 루프를 붙잡고 있어서 놓지 않으면 **명령이 끝나도 프로세스가 영영 안 죽는다** — 앱 입장에선
+ *  `lively install` 이 성공 보고를 하고도 종료되지 않는다(통합 테스트가 실제로 이걸 잡았다: exit=null).
+ *  process.exit() 로 끊지 않는 이유는 stderr 다 — 파이프일 때 비동기라 사람용 출력이 잘린다.
+ *  핸들만 놓으면 루프가 자연히 비면서 남은 출력이 flush 된다.
+ */
+function endEvents(okFlag, code) {
+  if (!EV) return;
+  EV.end(okFlag, code);
+  EV = null; PROMPTER = null;
+  try { process.stdin.pause(); process.stdin.unref?.(); } catch { /* 이미 닫힘 */ }
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const o = parse(argv);
   const cmd = o._[0] || (o.version ? "version" : o.help ? "help" : "status");
+  if (!o.jsonEvents) return dispatch(cmd, o, argv);
+  EVENTS_MOD = await import(new URL("./json-events.mjs", import.meta.url));
+  startEvents(cmd);
+  // end 는 **모든 경로**에서 정확히 한 번 나가야 한다(앱이 그 한 줄로 성공·실패를 판정한다):
+  //  ⓐ 정상 반환 ⓑ 예외 ⓒ die() ⓓ 명령이 스스로 process.exit() 하는 경우(onboarding 등) — ⓓ 만 훅으로 잡힌다.
+  process.on("exit", (code) => endEvents(!code, code));
+  try {
+    await dispatch(cmd, o, argv);
+    endEvents(true, 0);
+  } catch (e) {
+    if (EV) EV.notice("error", String(e?.message || e));
+    endEvents(false, 1);
+    throw e;
+  }
+}
 
+async function dispatch(cmd, o, argv) {
   switch (cmd) {
     case "setup": return cmdSetup();
     case "login": { await cmdLogin(o); return; }
