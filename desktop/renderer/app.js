@@ -8,6 +8,10 @@ let state = null, prompt = null;
 // 이번 실행에서 설치를 **방금 마쳤나** — 완료 화면은 그때만 띄운다.
 //  앱을 다시 열 때마다 "설치가 끝났습니다" 가 뜨면 그건 안내가 아니라 소음이다.
 let justFinished = false;
+// 이미 답한 프롬프트 id — **다시 그리지 않는다.**
+//  메인도 답을 받으면 progress.prompt 를 비우지만, 그 사이에 다음 step 이벤트가 먼저 도착하면
+//  옛 prompt 를 든 진행 상태가 한 번 더 그려진다(실측: 답한 카드가 잠깐 되살아났다). 양쪽에서 막는다.
+const answeredPrompts = new Set();
 
 function renderState(s) {
   state = s || {};
@@ -58,9 +62,11 @@ function renderProgress(p) {
 }
 
 function renderPrompt(p) {
+  if (p && answeredPrompts.has(p.id)) p = null;   // 이미 답했다 — 경쟁으로 되살아난 것
   prompt = p || null;
   show($("prompt-card"), !!p);
-  if (!p) return;
+  // 안쪽 블록도 함께 접는다 — 안 그러면 다음에 다른 kind 가 와도 옛 블록이 같이 보인다.
+  if (!p) { show($("prompt-device"), false); show($("prompt-confirm"), false); return; }
   $("prompt-label").textContent = p.label || (p.kind === "device-code" ? "브라우저에서 승인" : "확인이 필요합니다");
   show($("prompt-device"), p.kind === "device-code");
   show($("prompt-confirm"), p.kind === "confirm");
@@ -97,8 +103,9 @@ $("gw-go").addEventListener("click", async () => {
 });
 $("done-web").addEventListener("click", () => { if (state?.gatewayUrl) window.lively.openExternal(state.gatewayUrl); });
 $("cancel").addEventListener("click", () => window.lively.cancel());
-$("prompt-yes").addEventListener("click", () => { if (prompt) { window.lively.answer(prompt.id, true); renderPrompt(null); } });
-$("prompt-no").addEventListener("click", () => { if (prompt) { window.lively.answer(prompt.id, false); renderPrompt(null); } });
+const answer = (v) => { if (!prompt) return; answeredPrompts.add(prompt.id); window.lively.answer(prompt.id, v); renderPrompt(null); };
+$("prompt-yes").addEventListener("click", () => answer(true));
+$("prompt-no").addEventListener("click", () => answer(false));
 $("device-link").addEventListener("click", (e) => { e.preventDefault(); const u = e.target.dataset.url; if (u) window.lively.openExternal(u); });
 $("node-start").addEventListener("click", async () => { const r = await window.lively.run("node-start"); if (r?.error) log("✗ " + r.error); });
 $("node-stop").addEventListener("click", async () => { const r = await window.lively.run("node-stop"); if (r?.error) log("✗ " + r.error); });
