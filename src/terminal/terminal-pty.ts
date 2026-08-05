@@ -9,7 +9,8 @@
 // TERMINAL_LEGACY_ATTACH=1 이면 옛 방식(plain `tmux attach`, tmux 가 화면 painting + copy-mode 스크롤)으로 폴백.
 // ws 종료 = attach 클라만 종료(tmux 세션은 영속). 셸 미경유(argv).
 import { WebSocketServer, type WebSocket } from "ws";
-import { spawn as ptySpawn, type IPty } from "node-pty";
+import { spawn as ptySpawn } from "node-pty";
+import { spawn as cpSpawn } from "node:child_process";   // psmux 파이프 attach 백엔드(#1541)
 import type { Server, IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { logger } from "../log.js";
@@ -49,7 +50,53 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
 //      ⓒ 에 안 걸리고, JS 로는 회수도 불가하다(kill·destroy 모두 무효 — 잔류 fd 2개 동일 실측). upstream 이
 //      close(slave) + low_fds 정리 off-by-one 을 고친 **1.2.0-beta.10+** 로 올려 해결한다(package.json).
 const HEARTBEAT_MS = 30_000;              // 이 주기로 ping — 직전 주기에 pong 이 없던 소켓은 죽은 것으로 보고 terminate.
-const liveTerms = new Set<IPty>();        // 이 인스턴스가 띄운 살아있는 attach node-pty — 종료 훅이 일괄 kill 한다.
+// ── attach 백엔드 (#1541) ─────────────────────────────────────────────────────
+// tmux 는 `attach` 에 tty 를 요구하므로 node-pty 로 띄운다. 그런데 **Windows 노드의 멀티플렉서(psmux)는
+//  정반대**다 — PTY 위에서 control mode 가 **아무것도 내보내지 않는다**(실측: 같은 node-pty 로 cmd.exe·
+//  powershell·psmux plain attach 는 모두 데이터가 흐르는데 `-CC` 만 0바이트). 반면 **파이프로 붙이면 정상**이고
+//  (`%begin`/`%end`/`%output` 수신 확인), psmux 는 attach 에 tty 를 요구하지도 않는다.
+//  → 그 조합에서만 파이프로 붙인다. 인터페이스를 node-pty 와 같게 맞춰 **아래 attach 로직은 한 벌로** 유지한다.
+//  ⚠ resize 가 갈린다: PTY 는 창 크기를 커널에 알려야 하지만, control mode 는 크기를 `refresh-client -C w,h`
+//   명령으로 전달한다(resizeToRefresh). 그래서 파이프 백엔드의 resize 는 no-op 이 맞다 — 실제 통지는 이미
+//   control 스트림으로 나간다.
+export interface AttachTerm {
+  onData(cb: (d: Buffer) => void): void;
+  onExit(cb: () => void): void;
+  write(s: string): void;
+  resize(cols: number, rows: number): void;
+  kill(signal?: string): void;
+}
+/** psmux(윈도우 네이티브 tmux 구현)인가 — 파일명으로 판정한다(경로·확장자 무관). */
+export const isPsmuxBin = (bin: string): boolean => /(^|[\\/])psmux(\.exe)?$/i.test(String(bin || ""));
+
+function spawnAttachTerm(bin: string, args: string[], env: Record<string, string>): AttachTerm {
+  if (!isPsmuxBin(bin)) {
+    // encoding:null → onData 가 Buffer(raw 바이트). 아래 relay 가 디코드하지 않는 이유는 attachSession 주석 참조.
+    const t = ptySpawn(bin, args, { name: "xterm-256color", cols: 80, rows: 24, cwd: os.homedir(), env, encoding: null });
+    return {
+      onData: (cb) => { t.onData((d) => cb(d as unknown as Buffer)); },
+      onExit: (cb) => { t.onExit(() => cb()); },
+      write: (s) => t.write(s),
+      resize: (c, r) => { try { t.resize(c, r); } catch { /* 이미 종료 */ } },
+      kill: (sig) => t.kill(sig),
+    };
+  }
+  const c = cpSpawn(bin, args, { cwd: os.homedir(), env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+  let exited = false;
+  const fire = new Set<() => void>();
+  const done = (): void => { if (exited) return; exited = true; for (const f of fire) f(); };
+  c.on("exit", done);
+  c.on("error", done);
+  return {
+    onData: (cb) => { c.stdout?.on("data", (d: Buffer) => cb(d)); },
+    onExit: (cb) => { fire.add(cb); if (exited) cb(); },
+    write: (s) => { try { c.stdin?.write(s); } catch { /* 파이프 닫힘 */ } },
+    resize: () => { /* control mode 가 refresh-client 로 통지한다 — 파이프엔 창 크기 개념이 없다 */ },
+    kill: (sig) => { try { c.kill((sig as NodeJS.Signals) || "SIGTERM"); } catch { /* 이미 종료 */ } },
+  };
+}
+
+const liveTerms = new Set<AttachTerm>();  // 이 인스턴스가 띄운 살아있는 attach 클라 — 종료 훅이 일괄 kill 한다.
 // 스폰 실패 폭주 차단(#869) — node-pty spawn 이 반복 실패하면(예: 노드에서 fd 고갈 EMFILE) 매 실패가 pty fd 를 새게 해
 //  가속 붕괴한다(실측: 노드 에이전트 fd 1543개, 10K 실패). 세션별 최근 연속 실패를 세어 임계 초과 시 **스폰 자체를 건너뛰고**
 //  즉시 닫는다 — 할당을 안 하니 누수 원천 차단(정상 스폰 1회로 스트릭 리셋). 브라우저 재연결은 하되 pty 는 안 뜬다.
@@ -182,7 +229,7 @@ export function handleControlMsg(send: SendCmd, msg: { t?: string; d?: unknown; 
 }
 
 // 폴백(legacy plain attach): 옛 동작 — 입력 raw write, 리사이즈 pty.resize.
-function handleLegacyMsg(term: IPty, msg: { t?: string; d?: unknown; c?: unknown; r?: unknown }): void {
+function handleLegacyMsg(term: AttachTerm, msg: { t?: string; d?: unknown; c?: unknown; r?: unknown }): void {
   if (msg.t === "i" && typeof msg.d === "string") term.write(msg.d);
   else if (msg.t === "r" && Number.isInteger(msg.c) && Number.isInteger(msg.r)) {
     try { term.resize(Math.max(1, msg.c as number), Math.max(1, msg.r as number)); } catch { /* race on close */ }
@@ -203,7 +250,7 @@ export function attachSession(ws: AttachSocket, id: string): void {
     try { ws.close(4403, "attach-throttled"); } catch { /* noop */ }
     return;
   }
-  let term: IPty | undefined;
+  let term: AttachTerm | undefined;
   // heartbeat(#687): 새 소켓은 살아있음으로 시작하고, 브라우저가 자동 응답하는 pong 을 받을 때마다 생존 표시.
   //  ping 은 WS 프로토콜 제어프레임이라 tmux 데이터와 무관 — 프론트 코드 변경 불요(브라우저가 투명하게 pong).
   //  (노드 어댑터는 pong 이 안 와 isAlive 가 안 갱신되지만, 노드 채널 생존은 노드 WSS 자체 heartbeat 가 담당.)
@@ -223,10 +270,11 @@ export function attachSession(ws: AttachSocket, id: string): void {
       }
       // control mode: `-CC`(echo off) + `-u`(UTF-8). 폴백: plain attach.
       const args = CONTROL_MODE ? ["-u", "-CC", "attach", "-t", id] : ["-u", "attach", "-t", id];
+      // ⚠ 백엔드는 멀티플렉서가 고른다(#1541) — tmux=node-pty(tty 필수) · psmux=파이프(PTY 에선 -CC 가 침묵).
       // encoding:null → onData 가 Buffer(raw 바이트). 바이너리 프레임으로 그대로 relay하고 서버는 UTF-8 디코드를
       //  하지 않는다 — tmux 는 멀티바이트 UTF-8 문자를 %output 알림 경계에서 쪼갤 수 있어, 서버가 문자열로 디코드하면
       //  그 자리가 깨진다(�). 디코드/재조립은 클라가 바이트 레벨로 한다(terminal.js makeControl).
-      term = ptySpawn(TMUX_BIN, args, { name: "xterm-256color", cols: 80, rows: 24, cwd: os.homedir(), env, encoding: null });
+      term = spawnAttachTerm(TMUX_BIN, args, env);
       liveTerms.add(term); // 종료 훅이 회수할 수 있게 추적(#687 고아 방지)
       spawnFailStreak.delete(id); // 정상 스폰 → 실패 스트릭 리셋(#869)
       // 시작 레이스 방지: tmux -CC 가 tty 를 no-echo 로 잡기 전에 명령을 쓰면 pty 가 그 명령을 '에코백'하고,
