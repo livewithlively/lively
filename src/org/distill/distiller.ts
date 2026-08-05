@@ -12,6 +12,7 @@
 // ⚠ org_ingest_policy(#638)와 직교 — 저건 '지식이 되고 나서 auto/confirm/drop 어디로 보내나'(허용선 밸브),
 //  이건 '무엇을 집어 무슨 기준·형식으로 증류하나'(생산 라인). 증류기 산출도 그 밸브를 그대로 탄다.
 import { itemsPool, q } from "../../db/client.js";
+import { normList, normText, sanitizePromptSections } from "../store/ingest.js";   // 저장 경로와 **같은** 입력 정규화(#1557)
 import { sourceVisSql, resolveSourceViewer } from "../../v6/source-store.js";
 import { PUBLIC_VIEWER } from "../../v6/visibility.js";
 
@@ -462,6 +463,49 @@ export function buildGridSql(rules: Record<string, unknown>, p: Params, keywords
 //   · 저장본이 없으면(새 증류기) **가장 큰 id** 로 둔다. 실제로 만들면 다음 시퀀스값 = 기존보다 큰 id 를
 //     받으므로, 동순위에서는 지는 쪽이 맞다(낙관적으로 부풀리지 않는다).
 //  draft 의 undefined 는 '미지정'이라 저장값을 덮지 않는다(부분 편집 화면이 일부 필드만 보내기 때문).
+//  ⚠ draft 는 **날값**이라 저장 경로와 같은 정규화를 먹여야 한다(#1557). 안 먹이면 두 가지가 한꺼번에 깨진다:
+//   (a) 화면은 채널을 줄바꿈 **문자열**로 보낸다(저장 API 가 "줄바꿈/쉼표도 받는다"고 약속하므로 화면이 옳다).
+//       날값을 그대로 얹으면 distillerScopeSql 의 nonEmpty 가 문자열에 .map 을 걸어 500 이 나고,
+//       **우측 반사판과 ⑤ 지시문 조각이 통째로 사라진다** — 둘 다 이 응답 하나에서 나오기 때문이다.
+//   (b) 정규화가 갈리는 만큼 미리보기가 "저장하면 이렇게 된다"를 거짓으로 보여준다(B7 위반).
+const DRAFT_LISTS = new Set(["match_kinds", "include_channels", "exclude_channels", "include_authors", "exclude_authors"]);
+const DRAFT_TEXTS = new Set(["label", "match_system", "criteria_md", "format_md", "target_category",
+  "default_type", "name_prefix", "session_ref", "model", "effort", "requester", "note"]);
+const DRAFT_BOOLS = new Set(["enabled", "exclude_bots", "thread_aware"]);
+// 숫자 축 — 저장 경로는 범위를 벗어나면 던지지만 미리보기는 **타이핑 중**에도 불린다(입력마다 디바운스 호출).
+//  반쯤 친 값(batch_size 를 지운 순간 등)에 500 을 내면 화면이 죽으므로, 던지지 않고 clamp 한다.
+const DRAFT_NUMS: Record<string, { def: number; min?: number; max?: number }> = {
+  priority: { def: 0 },
+  min_chars: { def: 0, min: 0 },
+  prefilter_level: { def: 0, min: 0, max: 100 },
+  batch_size: { def: 3, min: 1, max: 200 },
+  batch_max_msgs: { def: 20, min: 1, max: 2000 },
+};
+
+function normDraftField(field: string, v: unknown): unknown {
+  if (DRAFT_LISTS.has(field)) return normList(v as string[] | string | null);
+  if (DRAFT_TEXTS.has(field)) return normText(v as string | null);
+  if (DRAFT_BOOLS.has(field)) return !!v;
+  if (field === "key") return normText(v as string | null) ?? "";   // key 는 non-null 축(빈 값 = 아직 안 지음)
+  // ⚠ 숫자 축은 저장 경로처럼 **Number.isFinite(강제변환 없이)** 로 본다. Number("") = 0 으로 흡수해버리면
+  //  빈칸이 '0 을 지정' 이 되어, 저장하면 기본값이 되는 값을 미리보기가 0 으로 보여준다(= 미리보기가 거짓).
+  if (field === "lookback_days") {                                   // 0·빈칸 = '제한 없음'(백필) → null
+    if (!Number.isFinite(v)) return null;
+    const n = Math.max(0, Math.trunc(v as number));
+    return n > 0 ? n : null;
+  }
+  const spec = DRAFT_NUMS[field];
+  if (spec) {
+    if (!Number.isFinite(v)) return spec.def;
+    const n = Math.trunc(v as number);
+    return Math.min(spec.max ?? Number.MAX_SAFE_INTEGER, Math.max(spec.min ?? -Number.MAX_SAFE_INTEGER, n));
+  }
+  if (field === "mode") return v === "session" ? "session" : "headless";
+  if (field === "prefilter_rules") return v && typeof v === "object" && !Array.isArray(v) ? v : null;
+  if (field === "prompt_sections") return sanitizePromptSections(v);
+  return v;
+}
+
 export function mergeDraftDistiller(saved: DistillerRow | undefined, draft: Record<string, unknown> | null): DistillerRow {
   const base: DistillerRow = saved ?? ({
     id: Number.MAX_SAFE_INTEGER, key: "", label: null, enabled: false, priority: 0,
@@ -474,7 +518,7 @@ export function mergeDraftDistiller(saved: DistillerRow | undefined, draft: Reco
   } as DistillerRow);
   if (!draft) return base;
   const out = { ...base } as Record<string, unknown>;
-  for (const [k, v] of Object.entries(draft)) if (v !== undefined) out[k] = v;
+  for (const [k, v] of Object.entries(draft)) if (v !== undefined) out[k] = normDraftField(k, v);
   out.id = saved ? saved.id : Number.MAX_SAFE_INTEGER;   // 위 주석의 id 규칙
   return out as unknown as DistillerRow;
 }
@@ -848,9 +892,13 @@ function sectionOverride(d: DistillerRow, id: PromptSectionId): string | undefin
 
 export interface PromptSectionView { id: PromptSectionId; label: string; def: string; override?: string; editable: true }
 
+// 프롬프트에 박히는 증류기 이름. 새 증류기 미리보기는 이름·key 를 아직 안 친 상태로 돌기 때문에
+//  폴백이 없으면 지시문 전문이 `'' 증류기 배치야` 로 나와 사람이 "빈칸이 버그인가" 를 의심한다.
+export const distillerDisplayName = (d: DistillerRow): string => d.label || d.key || "(이름 없음)";
+
 // 각 조각의 **기본값**. 관리탭이 이걸 그대로 보여준다 — 무엇을 덮어쓰는지 모르면 덮어쓸 수 없다.
 export function distillerSectionDefault(id: PromptSectionId, d: DistillerRow, o: { count: number; policySummary: string }): string {
-  const name = d.label || d.key;
+  const name = distillerDisplayName(d);
   switch (id) {
     case "intro":
       return `'${name}' 증류기 배치야 — 수집된 자료(source) ${o.count}건을 지식으로 증류한다.`;
@@ -938,6 +986,6 @@ export function buildDistillerPrompt(o: {
   }
 
   // ⚠ 안전 문구는 절차 바로 뒤에 붙는다(빈 줄 없음) — 조각화 전 출력과 바이트 동일해야 한다(B1).
-  lines.push(guardsBlock(d.label || d.key));
+  lines.push(guardsBlock(distillerDisplayName(d)));
   return lines.join("\n");
 }
