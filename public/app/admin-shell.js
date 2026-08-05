@@ -22,6 +22,7 @@ import { myLoginsSection } from './me-logins.js';
 import { myAssetsSection } from './me-assets.js';
 import { memberForm, membersEditor, profileEditor, profilesEditor, teamsPanel, tokensPanel } from './admin-members.js';
 import { reposPanel } from './admin-repos.js';
+import { nodesPanel } from './admin-nodes.js';
 import { injectionMap } from './admin-injection.js';
 import { storageEditor } from './admin-storage.js';
 import { logsEditor, sessionShareEditor, sessionsAdminEditor } from './admin-ops.js';
@@ -213,6 +214,12 @@ const ADMIN_SECTIONS = [
     { key: 'logs', label: '로그', meaning: null, group: 'ops' },
     // #1059 F — 세션: 이 박스에서 도는 전 AI 세션 메타뷰 + 수동 회수(idle 누적이 OOM 의 만성 원인. 여기서 보고 회수).
     { key: 'sessions', label: '세션', meaning: null, group: 'ops' },
+    // 컴퓨터(노드) — 조직에 연결된 컴퓨터 전체와 **공유 지정**(#1540). 종전엔 [AI세션] 탭 [🖥 노드] 버튼 뒤에만
+    //  있었는데, 거기서 하는 일이 두 종류로 갈린다: '내 컴퓨터 붙이기'(개인)와 '어떤 컴퓨터를 조직 전체에
+    //  열기'(관리자 정책). 뒤엣것은 "누가 누구 컴퓨터에서 코드를 돌리나"를 정하는 조직 설정이라 여기가 제자리다.
+    //  ⚠ ADMIN_ONLY 에 넣지 않는다 — 자기 컴퓨터를 연결하는 건 전 구성원이 하는 일이고, 그 방법을 배우는
+    //   자리가 이 화면이다. 공유 토글만 패널 안에서 admin 으로 가른다(서버도 admin 강제).
+    { key: 'nodes', label: '컴퓨터(노드)', meaning: null, group: 'ops' },
 ];
 // 구 URL → 새 섹션. 북마크·내부 링크·문서 링크를 깨지 않는다(#837 병합 + 과거 흡수분).
 const SECTION_REMAP = {
@@ -396,6 +403,7 @@ registerPanel('session-share', (detail, data) => sessionShareEditor(detail, data
 registerPanel('embeddings', (detail, data) => embeddingsEditor(detail, data));
 registerPanel('login-idp', (detail, data) => loginIdpEditor(detail, data));
 registerPanel('repos', (detail, data) => reposPanel(detail, data));
+registerPanel('nodes', (detail, data) => nodesPanel(detail, data));
 registerPanel('visibility-axes', (detail) => visibilityAxesPanel(detail));
 // ── ② 서브패널 제자리 재렌더 ──
 //  ⚠ 'members'·'tools' 는 ①의 **병합 섹션**(탭 껍데기) 키다 — 그 안의 개별 패널이 자기를 다시 그릴 땐

@@ -358,7 +358,8 @@ function openNodeManager(view) {
           el('div', { style: 'font-weight:600' }, document.createTextNode((n.name || n.id) + ' '),
             el('span', { class: 'caption', text: n.kind === 'worker' ? '워커' : '멤버' }),
             // 공유 여부는 '누가 이 컴퓨터를 쓸 수 있나'라서 종류(워커/멤버)보다 중요하다 — 배지로 눈에 걸리게.
-            ...(n.shared ? [document.createTextNode(' '), el('span', { class: 'tsess-badge', text: '🌐 공유' })] : [])),
+            //  이모지는 쓰지 않는다(디자인 시스템: 아이콘 스타일 혼용 금지) — 관리탭 [컴퓨터(노드)]와 같은 표기.
+            ...(n.shared ? [document.createTextNode(' '), el('span', { class: 'dm-tag', text: '공유' })] : [])),
           el('div', { class: 'caption', text: n.id })),
         badge, acts));
     }
@@ -366,7 +367,11 @@ function openNodeManager(view) {
       el('div', {}, howToggle, howBody),
       el('div', { style: 'margin-top:8px;font-weight:600' }, document.createTextNode('내 노드 '),
         el('button', { class: 'btn btn-ghost btn-sm', text: '↻', title: '새로고침', onclick: () => load() })),
-      list);
+      list,
+      // 이 모달은 '내 컴퓨터를 붙이고 관리하는' 자리다. 조직 전체 노드와 공유 지정은 관리탭이 정본이므로
+      //  거기로 안내한다(같은 일을 두 화면에서 각자 설명하지 않게 — 입구가 둘이면 어느 쪽이 맞는지 모른다).
+      el('div', { class: 'caption', style: 'margin-top:10px' },
+        '조직 전체의 컴퓨터 목록과 공유 지정은 [설정 ▸ 컴퓨터(노드)]에 있습니다.'));
   }
   async function del(n) {
     if (!confirm('노드 "' + (n.name || n.id) + '" 를 삭제할까요?\n접속 열쇠가 해제되고 그 머신의 노드 연결이 끊깁니다(다시 붙이려면 lively node --daemon 재실행).')) return;

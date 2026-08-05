@@ -300,6 +300,17 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .wikicat-mismatch-t:hover { color: var(--blue); text-decoration: underline; }
 .wikicat-mismatch-to { flex: none; font-size: 11.5px; font-weight: 700; color: var(--ink-sub); }
 .wikicat-mismatch-d { margin-left: auto; flex: none; font-size: 11.5px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+/* 좁은 화면에서 행 액션이 잘려 '기능이 사라지던' 문제 — .wikicat-rows 가 overflow:hidden 이라 넘친 버튼은
+   스크롤로도 못 닿았다(390px 실측: acts 오른쪽 끝 492px). 모바일에서 기능을 숨기지 않는다는 규칙에 어긋나므로
+   좁아지면 행을 두 줄로 접어 액션을 아래로 내린다. 이 컴포넌트를 쓰는 모든 패널(분류·레포·컴퓨터)에 함께 적용된다. */
+@media (max-width: 640px) {
+  .wikicat-row { flex-wrap: wrap; }
+  .wikicat-row-main { flex-basis: 100%; }
+  /* 액션 묶음도 한 줄을 통째로 차지하게 한다 — 기본값 flex-shrink:0 이라 폭이 max-content 에 고정돼
+     안쪽 flex-wrap 이 걸리지 않고 마지막 버튼이 잘렸다(390px 실측). 여기선 왼쪽 정렬이 자연스럽다. */
+  .wikicat-row-acts { flex-basis: 100%; margin-left: 0; flex-wrap: wrap; justify-content: flex-start; opacity: 1; }
+}
+
 /* 분류 폼의 연결 레포 체크박스 — 레포 수가 소수라 나열이 다중선택 <select> 보다 읽기 쉽다. */
 .catform-repos { display: flex; flex-wrap: wrap; gap: 8px 14px; }
 .catform-repo { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-sub); cursor: pointer; }
