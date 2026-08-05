@@ -22,7 +22,7 @@ import { myLoginsSection } from './me-logins.js';
 import { myAssetsSection } from './me-assets.js';
 import { memberForm, membersEditor, profileEditor, profilesEditor, teamsPanel, tokensPanel } from './admin-members.js';
 import { reposPanel } from './admin-repos.js';
-import { nodesPanel } from './admin-nodes.js';
+import { myNodesPanel, orgNodesPanel } from './admin-nodes.js';
 import { injectionMap } from './admin-injection.js';
 import { storageEditor } from './admin-storage.js';
 import { logsEditor, sessionShareEditor, sessionsAdminEditor } from './admin-ops.js';
@@ -129,6 +129,9 @@ const ADMIN_SECTIONS = [
     //  연결·해제에 더해 **연결한 뒤 무엇까지 허용할지**(슬랙 채널별 열람/발송)를 여기서 고른다.
     { key: 'me-logins', label: '외부 서비스 관리', meaning: null, group: 'me' },
     { key: 'me-assets', label: '내 스킬 · 훅', meaning: null, group: 'me' },
+    // 내 컴퓨터(노드) — 내가 연결한 컴퓨터를 내가 관리한다. **전 구성원**이 하는 일이라 '내 설정'에 둔다
+    //  (조직 전체 목록과 공유 지정은 [운영·감사 ▸ 컴퓨터(노드)] 로 갈랐다 — 개인 행위와 조직 정책은 축이 다르다).
+    { key: 'me-nodes', label: '내 컴퓨터', meaning: null, group: 'me' },
     // ── 조직 ──
     { key: 'profile', label: '조직 정보', meaning: 'gateway-url', group: 'org' },
     // 구성원 — 구 [구성원 관리]+[구성원 추가]+[구성원 토큰 관리]+[중앙박스 계정] 4개 탭을 한 화면(서브탭)으로.
@@ -214,11 +217,9 @@ const ADMIN_SECTIONS = [
     { key: 'logs', label: '로그', meaning: null, group: 'ops' },
     // #1059 F — 세션: 이 박스에서 도는 전 AI 세션 메타뷰 + 수동 회수(idle 누적이 OOM 의 만성 원인. 여기서 보고 회수).
     { key: 'sessions', label: '세션', meaning: null, group: 'ops' },
-    // 컴퓨터(노드) — 조직에 연결된 컴퓨터 전체와 **공유 지정**(#1540). 종전엔 [AI세션] 탭 [🖥 노드] 버튼 뒤에만
-    //  있었는데, 거기서 하는 일이 두 종류로 갈린다: '내 컴퓨터 붙이기'(개인)와 '어떤 컴퓨터를 조직 전체에
-    //  열기'(관리자 정책). 뒤엣것은 "누가 누구 컴퓨터에서 코드를 돌리나"를 정하는 조직 설정이라 여기가 제자리다.
-    //  ⚠ ADMIN_ONLY 에 넣지 않는다 — 자기 컴퓨터를 연결하는 건 전 구성원이 하는 일이고, 그 방법을 배우는
-    //   자리가 이 화면이다. 공유 토글만 패널 안에서 admin 으로 가른다(서버도 admin 강제).
+    // 컴퓨터(노드) — 조직에 연결된 컴퓨터 **전체**와 공유 지정(#1540). 개인이 자기 컴퓨터를 관리하는 화면은
+    //  [내 설정 ▸ 내 컴퓨터]로 갈랐다: 여기는 "누가 누구 컴퓨터에서 코드를 돌리나"를 정하는 조직 정책이고,
+    //  구성원 개인 컴퓨터 목록이 그대로 보이므로 ADMIN_ONLY 다.
     { key: 'nodes', label: '컴퓨터(노드)', meaning: null, group: 'ops' },
 ];
 // 구 URL → 새 섹션. 북마크·내부 링크·문서 링크를 깨지 않는다(#837 병합 + 과거 흡수분).
@@ -247,7 +248,10 @@ const SECTION_EXIT = { 'review-queue': '#/knowledge/review', 'wiki-categories': 
 // admin 권한 전용(쓰기·인프라·감사). #318 호출통계·#549 변경감사는 전 구성원의 변경·before/after 를 노출하므로 admin.
 // (증류기는 #1419 에서 [맥락 관리 ▸ 증류]로 이관 — 여기 목록에 없다. 서버 scope 도 memory(워킹레벨)라
 //  애초에 관리자 전용이 아니었다: 팀이 자기 채널의 증류 기준을 직접 조절하는 게 그 기능의 취지다.)
-const ADMIN_ONLY = ['member-add', 'member-access', 'login-idp', 'credentials', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'logs', 'sessions', 'embeddings', 'automation', 'audit', 'session-share', 'visibility-axes'];
+const ADMIN_ONLY = ['member-add', 'member-access', 'login-idp', 'credentials', 'feed-targets', 'project-outbound', 'db-sources', 'storage', 'logs', 'sessions', 'embeddings', 'automation', 'audit', 'session-share', 'visibility-axes',
+    // 'nodes' = 조직 전체 컴퓨터 + 공유 지정. 구성원 개인 컴퓨터가 그대로 보이고, 공유 지정은 남의 기계를
+    //  전체에 여는 결정이라 관리자 전용. (개인용 [내 설정 ▸ 내 컴퓨터]='me-nodes' 는 여기 넣지 않는다.)
+    'nodes'];
 const RUNTIME_ONLY = ['agent-assets']; // runtime 권한 전용(멤버 머신에서 도는 것의 정의)
 // [도구]는 두 권한의 합집합 — 사내 API 도구·빌트인은 runtime, 외부 MCP 서버 등록은 admin. 둘 중 하나라도 있으면
 //  섹션을 보여주고, 안에서 각 서브탭을 권한별로 켠다(구조상 한 섹션=한 scope 전제가 깨지는 유일한 자리라 명시한다).
@@ -403,7 +407,8 @@ registerPanel('session-share', (detail, data) => sessionShareEditor(detail, data
 registerPanel('embeddings', (detail, data) => embeddingsEditor(detail, data));
 registerPanel('login-idp', (detail, data) => loginIdpEditor(detail, data));
 registerPanel('repos', (detail, data) => reposPanel(detail, data));
-registerPanel('nodes', (detail, data) => nodesPanel(detail, data));
+registerPanel('me-nodes', (detail, data) => myNodesPanel(detail, data));
+registerPanel('nodes', (detail, data) => orgNodesPanel(detail, data));
 registerPanel('visibility-axes', (detail) => visibilityAxesPanel(detail));
 // ── ② 서브패널 제자리 재렌더 ──
 //  ⚠ 'members'·'tools' 는 ①의 **병합 섹션**(탭 껍데기) 키다 — 그 안의 개별 패널이 자기를 다시 그릴 땐
