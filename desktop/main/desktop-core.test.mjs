@@ -521,4 +521,17 @@ t('U8 빌드 설정 — 배포처·아이콘·무인 설치 계약', () => {
   assert.equal(pkg.build.mac.hardenedRuntime, true, '공증(notarization)의 전제');
 });
 
+t('U9 ★ 설치기 없는 빌드(app-update.yml 부재)는 확인하지 않는다 — 실기기가 잡은 결함', () => {
+  // Windows 실기기 실측: `--dir` 빌드에서 electron-updater 가 'Checking for update' 후
+  //  ENOENT app-update.yml 로 죽었다. 그 파일이 곧 '이 빌드에 배포처가 박혔다'의 증거다.
+  //  상수 true 로 두면 포터블·개발 빌드가 매번 같은 오류를 낸다.
+  assert.equal(shouldCheckForUpdates({ ...UOK, hasPublishConfig: false }).ok, false);
+  assert.equal(shouldCheckForUpdates({ ...UOK, hasPublishConfig: false }).reason, 'no-publish-config');
+  // 배선 확인 — main.mjs 가 상수가 아니라 **파일 존재**로 판정하는가.
+  const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
+  const line = main.split('\n').find((l) => l.includes('hasPublishConfig:'));
+  assert.ok(line && /existsSync/.test(line), `상수로 되돌아갔다: ${line}`);
+  assert.ok(line.includes('app-update.yml'), line);
+});
+
 console.log(`\n${pass} passed`);

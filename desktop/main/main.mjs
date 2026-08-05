@@ -115,8 +115,11 @@ let updateFailed = false;
 async function checkUpdates() {
   const verdict = shouldCheckForUpdates({
     packaged: app.isPackaged, platform: process.platform,
-    // 빌드에 publish 설정이 박혔나 = electron-updater 가 볼 곳이 있나.
-    hasPublishConfig: true,
+    // 빌드에 배포처가 **실제로** 박혔나. ⚠ 상수 true 로 두면 안 된다 — 설치기 없이 만든 빌드(`--dir`,
+    //  포터블, 개발자가 손으로 푼 것)엔 `app-update.yml` 이 없어 electron-updater 가 ENOENT 로 죽는다.
+    //  Windows 실기기에서 실제로 그랬다: "Checking for update" → ENOENT app-update.yml.
+    //  그 파일이 곧 "이 빌드는 어디서 갱신을 받는다"의 증거이므로, 있는지를 직접 본다.
+    hasPublishConfig: existsSync(join(process.resourcesPath || "", "app-update.yml")),
     // mac 서명 여부는 런타임에 확실히 알기 어렵다 — 서명된 앱만 통과하는 게이트키퍼 판정을 대신 쓴다.
     macSigned: process.platform !== "darwin" || app.isPackaged && !!process.mas === false && isMacSigned(),
     optOut: process.env[UPDATE_OPT_OUT_ENV], failedBefore: updateFailed,
