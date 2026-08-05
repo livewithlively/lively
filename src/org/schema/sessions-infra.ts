@@ -272,6 +272,10 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
       owner_member TEXT NOT NULL,
       token_hash TEXT,
       enabled BOOLEAN NOT NULL DEFAULT true,
+      -- 공유 노드(#1540) — '전체 구성원이 쓸 수 있나'의 **유일한 근거**. 관리자만 켠다.
+      --  기본은 비공유 = 등록한 사람 것. 판정은 src/node/node-access.ts 단일 술어(kind 는 자격·용량 축이지
+      --  개방 축이 아니다 — 종전엔 kind='worker' 가 개방을 겸해서 위탁이 그 경계를 우회했다).
+      shared BOOLEAN NOT NULL DEFAULT false,
       platform TEXT,
       agent_ver TEXT,
       -- 노드가 hello 로 선언한 op 목록(#905 C4). 오프라인 노드의 능력도 관리탭에서 보이게 저장한다.
@@ -285,6 +289,19 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   
     -- 기존 테이블에도 붙인다(#905 C4) — CREATE TABLE IF NOT EXISTS 는 이미 있는 테이블을 안 고친다.
     ALTER TABLE org_node ADD COLUMN IF NOT EXISTS agent_caps TEXT[];
+
+    -- shared 이관(#1540) — **컬럼을 방금 만든 경우에만** 백필한다.
+    --  ⚠ 조건 없이 UPDATE 로 두면, 관리자가 공유를 끈 worker 노드가 게이트웨이 재시작마다 다시 공유로
+    --   되살아난다(정책이 코드에 의해 조용히 되돌려지는 최악의 형태). 그래서 컬럼 부재를 조건으로 1회만 돈다.
+    --  구 모델에서 kind='worker' 는 **admin 만** 등록할 수 있는 조직 공용 실행기였고(node/routes.ts) 접근 게이트가
+    --   그 종류를 전원 개방으로 취급했다 → '관리자가 공유로 등록한 노드'와 동의. 그 행만 옮겨 무회귀를 만든다.
+    --   멤버 노드는 전부 비공유로 시작한다(= 이 프로젝트가 닫으려는 구멍).
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='org_node' AND column_name='shared') THEN
+        ALTER TABLE org_node ADD COLUMN shared BOOLEAN NOT NULL DEFAULT false;
+        UPDATE org_node SET shared=true WHERE kind='worker';
+      END IF;
+    END $$;
   `);
 
   // ── org_task — 위탁 태스크(P2 #869). 의뢰자가 delegate_run 으로 넣고, 태스크 스케줄러가 리소스-적합 노드에 ──

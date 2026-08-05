@@ -185,12 +185,15 @@ let taskDoneHandler: ((nodeId: string, m: TaskDoneMsg) => void) | null = null;
 export function onTaskDone(cb: (nodeId: string, m: TaskDoneMsg) => void): void { taskDoneHandler = cb; }
 
 // 스케줄러용 원격 노드 뷰(§10) — 온라인 노드만(오프라인은 후보 자체가 아님).
-export interface RemoteSchedulable { id: string; kind: string; owner: string; hasDocker: boolean; res: NodeResources | null }
+// 스케줄러가 여기서 얻는 것은 **지금 붙어 있는가 + 그 머신의 리소스**뿐이다(liveness). 소유자·공유·활성 같은
+//  정책 필드는 일부러 안 싣는다(#1540) — c.node 는 **연결 시점 스냅샷**이라, 관리자가 공유를 끈 뒤에도 그 노드가
+//  재연결하기 전까지 옛 값을 들고 있다. 정책은 스케줄러가 매 tick DB(listNodes)에서 다시 읽는다.
+export interface RemoteSchedulable { id: string; hasDocker: boolean; res: NodeResources | null }
 export function schedulableRemotes(): RemoteSchedulable[] {
   const out: RemoteSchedulable[] = [];
   for (const [id, c] of conns) {
     const st = states.get(id);
-    out.push({ id, kind: c.node.kind, owner: c.node.owner_member, hasDocker: c.hasDocker, res: st?.res ?? null });
+    out.push({ id, hasDocker: c.hasDocker, res: st?.res ?? null });
   }
   return out;
 }

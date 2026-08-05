@@ -2,6 +2,8 @@
 // 등록에 관리자 수동 승인은 없다(§8-7 ⑵ — 토큰 보유=신뢰). 대신:
 //  - member 노드: 본인 것만 만들 수 있다(owner=본인 고정 — 남의 PC 를 자기 노드로 등록 불가).
 //  - worker 노드: admin 만(조직 공용 실행기라 관리 표면).
+//  - 공유 지정(shared, #1540): admin 만. 등록은 누구나 해도 **조직 전체에 여는 것은 관리자 결정**이다
+//    (소유자 본인도 못 켠다 — 각자 켤 수 있으면 '기본은 본인 것'이 무력해진다).
 // 평문 토큰은 생성/회전 응답 1회만 반환(저장은 해시). 응답에 설치 한 줄을 같이 준다.
 import type express from "express";
 import { spawn } from "node:child_process";
@@ -13,7 +15,8 @@ import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
-import { createNode, deleteNode, getNode, listNodes, rotateNodeToken, setNodeEnabled, type OrgNode } from "./store.js";
+import { createNode, deleteNode, getNode, listNodes, rotateNodeToken, setNodeEnabled, setNodeShared, type OrgNode } from "./store.js";
+import { nodeOpenTo } from "./node-access.js";
 import { liveNodes } from "./registry.js";
 import { agentIsLatest } from "./protocol.js";
 import { logger } from "../log.js";
@@ -69,20 +72,27 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
   const auth = sessionOrBearer(verifier);
 
   // 목록 — 본인 소유(admin 은 전체). 라이브 연결 상태를 DB 행에 얹는다.
-  //  usable=1(#905 C4): 프로젝트 세션을 **열 수 있는** 노드 = 내 멤버 노드 ∪ 조직 공용 worker 노드(개방 — provision
-  //  게이트가 worker 를 누구에게나 허용하는 것과 정합). 기본(관리 목록)은 종전대로 본인 소유만 — worker 노드의 관리
-  //  액션(토글·삭제·토큰회전)은 별 라우트가 admin 게이트하므로, 여기서 worker 를 조회에 넣어도 선택용일 뿐 안전하다.
+  //  usable=1(#905 C4): 프로젝트 세션을 **열 수 있는** 노드 = 내 노드 ∪ 공유 노드. 판정은 nodeOpenTo 로
+  //  provision·세션생성 게이트와 **같은 술어**를 쓴다(#1540) — 목록과 게이트가 갈리면 골랐는데 403 이 나거나
+  //  쓸 수 있는데 목록에 없다. 종전 기준은 kind==='worker' 였고, 그래서 '개방을 끄는 손잡이'가 없었다.
+  //  기본(관리 목록)은 종전대로 본인 소유만 — 관리 액션(토글·삭제·토큰회전)은 각 라우트가 따로 게이트한다.
   app.get("/api/ui/nodes", auth, wrap(async (req, res) => {
     const u = userOf(req);
     const me = idOf(u);
     const usable = req.query.usable === "1" || req.query.usable === "true";
     const live = new Map(liveNodes().map((n) => [n.id, { online: n.online, sessions: n.sessions }]));
-    const rows = (await listNodes()).filter((n) => isAdmin(u) || n.owner_member === me || (usable && n.kind === "worker" && n.enabled));
+    // 두 목록은 **질문이 다르다**: usable=1 은 "이 노드를 쓸 수 있나"(게이트와 동일한 술어여야 한다), 기본은
+    //  "내가 관리하는 노드"(admin 은 전체 — 토글·회전·삭제 대상). 그래서 usable 에는 admin 예외를 얹지 않는다:
+    //  얹으면 관리자에게 남의 비공유 노드가 선택지로 보이고, 고르면 게이트가 403 을 던진다(목록≠게이트).
+    const rows = (await listNodes()).filter((n) => usable
+      ? (n.enabled && nodeOpenTo(n, me))
+      : (isAdmin(u) || n.owner_member === me));
     res.setHeader("Cache-Control", "no-store");
     res.json({ nodes: rows.map((n) => toView(n, live)) });
   }));
 
   // 등록 — member=본인, worker=admin. 평문 토큰은 이 응답 1회.
+  //  shared(#1540)는 **admin 만** 등록 시점에 켤 수 있다(그 외엔 항상 비공유로 시작 → 등록한 사람 것).
   app.post("/api/ui/nodes", auth, wrap(async (req, res) => {
     const u = userOf(req);
     const me = idOf(u);
@@ -90,11 +100,12 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
     const b = (req.body ?? {}) as Record<string, unknown>;
     const kind = b.kind === "worker" ? "worker" : "member";
     if (kind === "worker" && !isAdmin(u)) throw new HttpError(403, "worker 노드 등록은 admin 권한이 필요합니다");
+    if (b.shared && !isAdmin(u)) throw new HttpError(403, "공유 노드 지정은 admin 권한이 필요합니다");
     const { node, token } = await createNode(
-      { id: String(b.id ?? b.name ?? ""), name: String(b.name ?? b.id ?? ""), kind, owner: me },
+      { id: String(b.id ?? b.name ?? ""), name: String(b.name ?? b.id ?? ""), kind, owner: me, shared: !!b.shared },
       me,
     );
-    logger.info({ node: node.id, kind, owner: me }, "노드 등록");
+    logger.info({ node: node.id, kind, owner: me, shared: !!b.shared }, "노드 등록");
     res.setHeader("Cache-Control", "no-store");
     res.json({ node: toView(node, new Map()), token, install: installHint(node.id) });
   }));
@@ -121,6 +132,20 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
     const enabled = !!((req.body ?? {}) as Record<string, unknown>).enabled;
     await setNodeEnabled(n.id, enabled);
     res.json({ ok: true, id: n.id, enabled });
+  }));
+
+  // 공유 노드 지정/해제(#1540) — **admin 전용**. 소유자 본인도 자기 노드를 조직에 개방할 수 없다:
+  //  개방은 조직의 결정(누가 어디서 무엇을 돌리는지)이고, 그걸 각자가 켤 수 있으면 "기본은 본인 것" 이라는
+  //  이 정책의 기본값이 사실상 무력해진다. 그래서 requireOwn(소유자 또는 admin)을 쓰지 않는다.
+  app.post("/api/ui/nodes/:id/share", auth, wrap(async (req, res) => {
+    const u = userOf(req);
+    if (!isAdmin(u)) throw new HttpError(403, "공유 노드 지정/해제는 admin 권한이 필요합니다");
+    const n = await getNode(String(req.params.id ?? ""));
+    if (!n) throw new HttpError(404, "노드 없음");
+    const shared = !!((req.body ?? {}) as Record<string, unknown>).shared;
+    await setNodeShared(n.id, shared);
+    logger.info({ node: n.id, shared, by: idOf(u) }, shared ? "노드 공유 지정" : "노드 공유 해제");
+    res.json({ ok: true, id: n.id, shared });
   }));
 
   app.delete("/api/ui/nodes/:id", auth, wrap(async (req, res) => {

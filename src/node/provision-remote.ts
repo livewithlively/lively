@@ -9,6 +9,7 @@
 //   ⚠ 그래도 호출자(라우트)는 이 함수를 **await 로 오래 붙들면 안 된다** — 202+백그라운드나 별도 상태 폴링으로
 //    감싸는 건 호출자 몫(현재 라우트는 clone 이 대개 초 단위인 사내 레포 전제로 직접 await, 상한은 아래 CAP).
 import { getNode, type OrgNode } from "./store.js";
+import { nodeOpenTo } from "./node-access.js";
 import { nodeOnline, nodeRpc, nodeSupports, nodeSessionsFor, type NodeSessionInfo } from "./registry.js";
 import type { NodeOp } from "./protocol.js";
 import { resolveRepoInject, type RepoSpec, type ProvisionedRepo, type ProvisionResult } from "../project/project-provision.js";
@@ -85,10 +86,12 @@ export interface NodeUsableDeps {
 }
 const liveNodeDeps: NodeUsableDeps = { online: nodeOnline, supports: nodeSupports, getNode };
 
-// 정책(🔴 트립와이어): **member 노드 = 개인 것(본인만) · worker 노드 = 조직 공용(개방)**. provision 자격 주입(member=
-//  본인 git 자격·worker=조직 폴백)과 같은 경계다. 이게 무너지면 남의 노트북에 세션이 열리거나(격리 깨짐·자격 유출)
-//  조직 실행기를 못 쓴다(worker 막힘). requireProvision=true 는 provision 능력까지 요구(세션생성=create 는 v1 기본
-//  능력이라 false — 모든 노드가 가짐).
+// 정책(🔴 트립와이어): **등록한 사람 것 · 관리자가 공유로 지정한 노드만 개방**(#1540 — nodeOpenTo 단일 술어).
+//  종전엔 개방 근거가 `kind==='worker'` 였다. 그게 두 축(개방 / git 자격·용량)을 한 컬럼에 얹은 것이어서,
+//  admin 이 등록한 워커는 무조건 전원 개방이고 '개방을 끄는 손잡이'가 아예 없었다. 이제 개방은 shared 뿐이고
+//  kind 는 자격 주입(member=본인 git 자격·worker=조직 폴백, resolveRepoInject)에만 남는다.
+//  이게 무너지면 남의 노트북에 세션이 열리거나(격리 깨짐·자격 유출) 공유 실행기를 못 쓴다.
+//  requireProvision=true 는 provision 능력까지 요구(세션생성=create 는 v1 기본 능력이라 false — 모든 노드가 가짐).
 export async function assertNodeUsable(
   deps: NodeUsableDeps, nodeId: string, requesterId: string, opts?: { requireProvision?: boolean },
 ): Promise<OrgNode> {
@@ -99,10 +102,11 @@ export async function assertNodeUsable(
   }
   const node = await deps.getNode(nodeId);
   if (!node || !node.enabled) throw new HttpError(409, `노드 '${nodeId}' 가 비활성 상태입니다.`);
-  // 🔴 소유권 게이트 — member 노드는 개인 노트북이라 남의 것엔 아무것도 안 한다(격리·본인 git 자격 유출 차단).
-  //  위탁 스케줄러도 같은 규율(리스 없으면 owner===requester 만 후보). worker 노드는 조직 공용 실행기라 개방.
-  if (node.kind === "member" && node.owner_member !== requesterId) {
-    throw new HttpError(403, `노드 '${nodeId}' 는 본인 소유의 멤버 노드가 아닙니다 — 남의 멤버 노드에는 접근할 수 없습니다.`);
+  // 🔴 소유·공유 게이트 — 남의 노드엔 아무것도 안 한다(격리·본인 git 자격 유출 차단). 관리자가 공유로 지정한
+  //  노드만 예외. 위탁 스케줄러도 같은 술어를 쓴다(remoteDelegateAllowed — 거기에 자격 리스 조건이 하나 더 붙는다).
+  //  admin 우회는 없다 — 관리자가 남의 노드를 쓰려면 공유를 켜야 한다(감사 가능한 경로).
+  if (!nodeOpenTo(node, requesterId)) {
+    throw new HttpError(403, `노드 '${nodeId}' 는 본인이 등록한 노드가 아니고 공유 노드도 아닙니다 — 관리자가 공유 노드로 지정한 노드만 함께 쓸 수 있습니다.`);
   }
   return node;
 }

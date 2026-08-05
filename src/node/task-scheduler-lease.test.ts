@@ -7,7 +7,10 @@
 // kind 축은 task-scheduler-kind.test.ts 가 막고 있었지만 owner 축은 비어 있어서 통과된 결함이다.
 import { strict as assert } from "node:assert";
 import { memberOwner } from "../org/credentials/member-secret-store.js";
-import { SECRET_KIND, leaseEnvFor, remoteAllowed } from "./task-scheduler.js";
+import { SECRET_KIND, leaseEnvFor } from "./task-scheduler.js";
+// 후보 판정은 #1540 에서 node-access 로 옮겼다(리스는 '자격', 소유·공유는 '권한' — 축이 다르다).
+//  진리표는 node-access.test.ts 가 맡고, 여기선 **리스가 후보 범위에 미치는 영향**만 이어서 본다.
+import { remoteDelegateAllowed } from "./node-access.js";
 
 const ENV_KEY = "CLAUDE_CODE_OAUTH_TOKEN";
 type Call = { owner: string; kind: string; scope: string };
@@ -51,14 +54,23 @@ const fail = async (): Promise<never> => { throw new Error("저장소 장애"); 
 {
   const { lookup } = store({});
   assert.equal(await leaseEnvFor("nobody", lookup), undefined, "자격이 없으면 env 없이 진행한다");
-  assert.equal(remoteAllowed(false, "someone_else", "nobody"), false, "리스 없으면 남의 노드는 후보 제외");
-  assert.equal(remoteAllowed(false, "nobody", "nobody"), true, "리스 없어도 본인 소유 노드는 후보");
+  assert.equal(remoteDelegateAllowed({ owner_member: "someone_else", shared: false }, "nobody", false), false,
+    "리스 없으면 남의 노드는 후보 제외");
+  assert.equal(remoteDelegateAllowed({ owner_member: "nobody", shared: false }, "nobody", false), true,
+    "리스 없어도 본인 소유 노드는 후보");
 }
 
-// L4 — 자격이 있으면 소유자가 다른 원격 노드도 후보에 든다(리스가 배치 분산까지 바꾼다).
+// L4 — 리스가 넓히는 범위는 **공유 노드까지**다(#1540). 종전엔 리스 하나로 남의 개인 노드까지 열렸다.
+//  즉 리스는 '자격이 그 머신에 실리는가'만 정하고, '그 노드를 써도 되는가'는 소유·공유가 정한다.
 {
-  assert.equal(remoteAllowed(true, "someone_else", "lively1"), true, "리스가 있으면 아무 노드나 배치 가능");
-  assert.equal(remoteAllowed(true, null, "lively1"), true, "소유자 미상 노드도 리스가 있으면 후보");
+  assert.equal(remoteDelegateAllowed({ owner_member: "someone_else", shared: true }, "lively1", true), true,
+    "리스가 있으면 관리자가 공유로 지정한 남의 노드는 후보");
+  assert.equal(remoteDelegateAllowed({ owner_member: "someone_else", shared: true }, "lively1", false), false,
+    "공유 노드라도 리스가 없으면 후보 제외(그 박스엔 의뢰자 자격이 없다)");
+  assert.equal(remoteDelegateAllowed({ owner_member: "someone_else", shared: false }, "lively1", true), false,
+    "🔴 리스가 있어도 남의 비공유 노드는 후보가 아니다(#1540)");
+  assert.equal(remoteDelegateAllowed({ owner_member: null, shared: true }, "lively1", true), true,
+    "소유자 미상이어도 공유 노드 + 리스면 후보");
 }
 
 // L5 — 저장소가 던져도 태스크를 죽이지 않는다(자격 없음으로 강등).

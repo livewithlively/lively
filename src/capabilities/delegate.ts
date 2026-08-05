@@ -7,6 +7,7 @@ import { HttpError } from "./rest-util.js";
 import type { Capability } from "./types.js";
 import { createTask, getTask, listTasks, markCanceled, type DelegateStatus } from "../node/task-store.js";
 import { getNode } from "../node/store.js";
+import { nodeOpenTo } from "../node/node-access.js";
 import { nodeOnline, nodeRpc } from "../node/registry.js";
 import { killTaskSession, tailTask, type TailResult } from "../node/tasks.js";
 import { CENTRAL_NODE_ID, tryAssignNow } from "../node/task-scheduler.js";
@@ -26,6 +27,7 @@ const run: Capability = {
     "MCP 동기 호출은 하네스에서 인라인 블로킹이라, 긴 wait 는 게이트웨이 long-poll 이 transport keepalive 를 넘겨 응답을 잃는다 — 서버측 작업은 완주하지만 결과를 받아오지 못한다. " +
     "CLI 는 wait=false 로 접수 후 진행을 미러링해 그 함정이 없다(런북 delegate-background-cli-not-mcp-wait). " +
     "가용 노드 없으면 {no_capacity:true, reason} 즉시 반환(무한 대기 안 함), queue:true=적합 노드 날 때까지 대기 등록(장기 잡). " +
+    "위탁 대상은 중앙 + **본인이 등록한 노드** + 관리자가 공유 노드로 지정한 노드뿐이다(남의 노드엔 안 간다 — 공유 노드는 내 셋업토큰 등록이 필요). " +
     "repo=대상 레포명(주면 게이트웨이가 공유 base clone→worktree 자동 준비해 워커 cwd 로 — 프롬프트 클론 지시 불필요), ref=기준 브랜치(예 main), " +
     "prompt=작업 지시(전문), need_ram_mb/need_disk_mb/need_cpu=예상 소모량(노드 리소스 대조), needs_docker·node(지정)·subpath, wait_sec=완료 대기 상한(기본 120s).",
   scope: "context",
@@ -56,6 +58,13 @@ const run: Capability = {
     if (input.node && input.node !== CENTRAL_NODE_ID) {
       const n = await getNode(String(input.node));
       if (!n || !n.enabled) throw new HttpError(404, `노드 없음: ${input.node}`);
+      // 🔴 지정 노드 소유·공유 게이트(#1540) — 종전엔 존재·활성만 봤다. 스케줄러 후보 필터가 뒤에서 한 번 더
+      //  막지만(방어 2겹), 거기까지 가면 사용자는 '가용 노드 없음(no_capacity)'이라는 **엉뚱한 사유**를 받는다.
+      //  권한 문제는 권한 문제로 말한다. 리스 유무는 여기서 보지 않는다 — 그건 '왜 안 도는지'(자격)라서
+      //  스케줄러 사유로 설명하는 게 맞고, 여기서 요구하면 자격 등록 여부가 403 으로 새어 나간다.
+      if (!nodeOpenTo(n, requester)) {
+        throw new HttpError(403, `노드 '${input.node}' 에는 위탁할 수 없습니다 — 본인이 등록한 노드이거나 관리자가 공유 노드로 지정한 노드여야 합니다.`);
+      }
     }
     const task = await createTask({
       requester, requesterSession: null, prompt: String(input.prompt),
