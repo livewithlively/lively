@@ -18,7 +18,7 @@ import { renderCollectors } from './context-collectors.js';
 import { renderClassifiers } from './context-classify.js';
 import { renderFindings, renderManagers } from './context-manage.js';
 import { renderCategoryList } from './categories.js';
-import { distillersPanel } from './distillers.js';
+import { distillerPage, distillersPanel } from './distillers.js';
 import { collectorPresetEditor } from './admin-collector-presets.js';  // 수집 방식(커스텀 프리셋) — 수집 단계 안으로(#1419)
 import { sourceVisPolicyPanel } from './source-vis-policy.js';         // 자료 공개범위(#1291 v4) — 생산 지점이 수집이다
 import { ingestPolicyPanel } from './review.js';                       // 지식 검토 정책(#638) — 증류 산출물이 통과하는 밸브
@@ -39,7 +39,11 @@ const TABS = [
 /** 단계별 하위 탭 선택 — 모듈 전역에 둬 탭을 오가도 선택이 보존된다. 값은 STAGE_TABS 의 첫 항목 기준. */
 const inner: Record<string, string> = { collect: 'collectors', distill: 'distillers', classify: 'classifiers', manage: 'findings' };
 
-export async function renderContext(view: HTMLElement, sub?: string | null): Promise<void> {
+export async function renderContext(view: HTMLElement, sub?: string | null, sub2?: string | null): Promise<void> {
+  // 증류기 설정(#/context/distill/<key>)은 **이 셸 밖**의 전용 페이지다(#1564) — 3단 전폭을 쓰려면
+  //  위쪽 파이프라인 네비 + 단계 탭이 자리를 비켜야 한다(종전 세로 1840px = 2화면의 절반이 그것이었다).
+  //  대신 그 페이지의 크럼이 '맥락 관리 › 증류'라는 위치 정보를 대신 진다.
+  if (sub === 'distill' && sub2) { await distillerPage(view, sub2); return; }
   const sel = TABS.some((t) => t.key === sub) ? String(sub) : 'overview';
   const tab = TABS.find((t) => t.key === sel)!;
 

@@ -1,0 +1,120 @@
+/* 33-distiller-page.css — 증류기 설정 페이지(#1564). #/context/distill/<key>
+ *
+ *  왜 별도 페이지인가(실측 1440px): 목록 위에 카드를 인라인 확장하던 종전 화면은 폼이 702px 밖에
+ *  못 썼다(main 1200 캡 → .ctx-layout 1160 → 카드 안 2열 = 폼 702 + 반사판 340). 그 안에 필드 20개를
+ *  5단계 가로 탭으로 쪼개 넣고, 6천 자짜리 지시문 전문을 340px 폭 · max-height 300px 안에서 봤다.
+ *  세로는 1840px(2화면) — 파이프라인 네비 + 단계 탭 + 목록이 계속 자리를 먹었다.
+ *
+ *  그래서 이 페이지만 3단 전폭이다:
+ *    좌 184  단계 네비(세로) — 사용 가이드/관리탭의 .docs-side 를 그대로 재사용(#827 과 같은 결)
+ *    중 나머지 폼
+ *    우 340~420 반사판 sticky — 지시문 전문이 접힌 details 가 아니라 남은 높이를 다 쓰는 영역이 된다
+ *
+ *  토큰만 쓴다(리터럴 색·radius 0). radius 스케일 6/9/12/16/999.
+ */
+
+/* 전폭은 **이 페이지에만** — 목록(#/context/distill)은 .ctx-layout 1160 컬럼 그대로다.
+   탭을 오갈 때마다 폭이 출렁이지 않게, 라우트를 세분화해(main.ts: context-distiller) 여기서만 캡을 푼다.
+   (관리탭 #827 의 body[data-route="system"] main { max-width:none } 과 같은 수법.) */
+body[data-route="context-distiller"] main { max-width: none; }
+
+/* 전폭이라도 상한은 둔다 — 27인치에서 3단이 무한정 벌어지면 좌(네비)↔우(반사판) 시선 이동이 과해진다.
+   관리탭이 본문에 1160 을 건 것과 같은 이유이고, 여기는 3단 도구 화면이라 더 넉넉하게 잡는다. */
+.dst-page { max-width: 1600px; margin: 0 auto; padding: 0 20px 64px;
+  /* 폭 변수는 이 페이지가 소유한다(미선언 변수 참조 금지 — A15). */
+  --dst-nav-w: 184px;
+  --dst-reflect-w: clamp(340px, 25vw, 420px);
+}
+
+/* ── 머리 ── */
+/* 크럼 = 되돌아갈 자리. 이 페이지엔 파이프라인 네비(.ctx-nav)를 그리지 않으므로(세로 공간 회수)
+   '여기가 어디인지'와 '어떻게 나가는지'를 이 한 줄이 전담한다. */
+.dst-crumb { display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin: 4px 0 10px; font-size: 13px; color: var(--muted-head); }
+.dst-crumb a { color: var(--ink-sub); text-decoration: none; border-radius: 6px; padding: 2px 4px; }
+.dst-crumb a:hover { color: var(--blue); background: var(--bg-tint); }
+.dst-crumb a:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.dst-crumb-sep { color: var(--muted-2); }
+
+.dst-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.dst-head-main { flex: 1 1 340px; min-width: 0; }
+.dst-title { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.4px; color: var(--ink);
+  word-break: keep-all; overflow-wrap: break-word; }
+.dst-sub { margin: 6px 0 0; font-size: 13.5px; color: var(--ink-sub); }
+/* 저장 줄 — 이 페이지의 핵심 행동 하나(저장)만 primary, 나머지는 ghost/text. */
+.dst-head-acts { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; flex: none; padding-top: 2px; }
+/* '저장 안 된 변경' — 페이지가 되면 뒤로가기·새로고침으로 쉽게 나갈 수 있어, 지금 상태가 저장본과
+   다르다는 사실을 늘 보이는 자리에 둔다(색 아닌 텍스트 배지 — 채운 상태필 금지). */
+.dst-dirty { font-size: 12.5px; font-weight: 700; color: var(--coral-text);
+  padding: 3px 10px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line-note); white-space: nowrap; }
+
+/* ── 3단 ── */
+.dst-grid { display: grid; gap: 24px; align-items: start; margin-top: 18px;
+  grid-template-columns: var(--dst-nav-w) minmax(0, 1fr) var(--dst-reflect-w); }
+
+/* 좌 — .docs-side 를 그대로 재사용하고 이 페이지 사정(폭·상단 여백)만 덧쓴다. */
+.dst-side { flex: none; width: auto; padding-right: 14px; }
+.dst-side .docs-side-title { margin-bottom: 8px; }
+
+/* 중 — 폼. 카드 하나 안에 현재 단계만 그린다(카드 안 카드 중첩 금지). */
+.dst-form { min-width: 0; }
+.dst-step-hint { margin: 0 0 16px; font-size: 13.5px; color: var(--ink-sub); }
+.dst-field { margin: 0 0 18px; }
+.dst-field:last-child { margin-bottom: 0; }
+.dst-field .admin-hint { margin: 2px 0 6px; }
+/* 입력 — 종전 인라인 style 문자열(S)을 클래스로. 폼이 넓어진 만큼 상한을 둬 한 줄이 과하게 길어지지 않게. */
+.dst-in { width: 100%; max-width: 720px; padding: 8px 10px; font: inherit; box-sizing: border-box;
+  border: 1px solid var(--line-net); border-radius: 9px; background: var(--bg); color: var(--ink); }
+.dst-in:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+textarea.dst-in { resize: vertical; max-width: 860px; }
+.dst-in-sm { max-width: 260px; }
+/* 짧은 입력(숫자·선택)은 두 개씩 나란히 — 이게 없으면 폭 760px 짜리 폼에서 260px 칸이 세로로만 쌓여
+   오른쪽 500px 이 통째로 빈다(실측 ④ 실행: 입력 3개가 세로 447px). 폭을 쓰면 세로가 그만큼 줄어든다. */
+.dst-row2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 24px; align-items: start; }
+.dst-row2 .dst-in { max-width: none; }   /* 칸이 이미 폭을 정한다 */
+/* 접이식(세부 조건) — 폼이 넓어져도 '늘 필요한 건 아닌' 축은 접어 둔다. */
+.dst-fold { margin: 10px 0 0; }
+.dst-fold-body { display: none; margin-top: 12px; padding-left: 12px; border-left: 2px solid var(--line); }
+.dst-fold.open .dst-fold-body { display: block; }
+/* 채널 고르기 — 실재하는 채널을 눌러 담는다(오타 원천 차단). 넓어진 폼에서 두 줄 이상 보이게. */
+.dst-chpick { display: flex; flex-wrap: wrap; gap: 6px; max-height: 168px; overflow: auto;
+  margin-top: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-tint); }
+.dst-kinds { display: flex; flex-wrap: wrap; gap: 6px; }
+.dst-callout { margin: 0 0 14px; padding: 10px 12px; border-radius: 12px;
+  background: var(--bg-tint); border: 1px solid var(--line); font-size: 13px; color: var(--ink-sub); }
+/* 지시문 조각 한 벌 */
+.dst-sec { margin: 0 0 16px; }
+.dst-sec:last-child { margin-bottom: 0; }
+.dst-sec-def { white-space: pre-wrap; font-size: 11.5px; line-height: 1.6; max-height: 240px; overflow: auto;
+  margin: 6px 0 0; padding: 10px 12px; border-radius: 9px; background: var(--bg-tint); color: var(--ink-sub); }
+
+/* 우 — 반사판. 화면 높이를 다 쓰는 세로 flex: 숫자·표본은 제 크기, 지시문 전문이 남은 높이를 먹는다.
+   종전엔 이게 max-height:300px 짜리 접힌 details 였다(6천 자를 그 안에서 봐야 했다). */
+.dst-reflect { position: sticky; top: 74px; max-height: calc(100vh - 96px);
+  display: flex; flex-direction: column; gap: 8px; padding: 16px; margin: 0; }
+.dst-reflect-num { margin: 0; font-size: 17px; font-weight: 800; color: var(--ink); }
+.dst-reflect-sample { flex: none; max-height: 190px; overflow: auto; display: grid; gap: 3px; margin-top: 2px; }
+.dst-reflect-prompt-head { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--line); }
+.dst-reflect-prompt { flex: 1 1 auto; min-height: 96px; overflow: auto; margin: 0;
+  white-space: pre-wrap; font-size: 11.5px; line-height: 1.6; color: var(--ink-sub); }
+
+/* ── 반응형 ──
+   1180 아래: 반사판을 아래로 내려 전폭으로(3단을 우겨넣으면 폼이 오히려 종전보다 좁아진다).
+   내려간 반사판은 sticky 를 풀고 높이 제한도 푼다 — 화면 아래에 붙어 있으면 안 보이고, 잘려 있으면 못 읽는다. */
+@media (max-width: 1180px) {
+  .dst-grid { grid-template-columns: var(--dst-nav-w) minmax(0, 1fr); }
+  .dst-reflect { grid-column: 1 / -1; position: static; max-height: none; }
+  .dst-reflect-prompt { max-height: 420px; }
+}
+/* 820 아래: 세로 스택. 단계 네비가 위로 오고 가로로 흐른다(.docs-side 의 세로 스택 규칙과 같은 결).
+   ⚠ 폭을 명시한다 — grid 라 자동 stretch 지만, 안에 들어가는 표·pre 가 넓어 min-width:0 이 함께 필요하다
+   (#827 이 flex 전환에서 밟은 함정과 같은 부류). */
+@media (max-width: 820px) {
+  .dst-page { padding: 0 14px 48px; }
+  .dst-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .dst-side { width: 100%; min-width: 0; padding-right: 0; }
+  .dst-title { font-size: 21px; }
+  .dst-head-acts { width: 100%; }
+  .dst-row2 { grid-template-columns: minmax(0, 1fr); }
+}
