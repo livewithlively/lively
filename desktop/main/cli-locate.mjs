@@ -47,13 +47,24 @@ export function locateCli(exists, platform = process.platform, env = process.env
 }
 
 /**
+ * 부트스트랩 한 줄 — 게이트웨이가 실제로 서빙하는 경로다(src/web.ts: `/cli`=sh · `/cli.ps1`=PowerShell).
+ * ⚠ 웹 관리화면이 사람에게 주는 문구(public/app/admin-install.js)와 **같은 URL** 이어야 한다.
+ *  앱이 다른 주소를 안내하면 사람은 404 를 받고, 우리는 그걸 영영 모른다.
+ */
+export function bootstrapOneLiner(gatewayUrl, platform = process.platform) {
+  const gw = String(gatewayUrl || "").replace(/\/+$/, "");
+  if (!gw) return null;
+  return platform === "win32" ? `irm ${gw}/cli.ps1 | iex` : `curl -fsSL ${gw}/cli | sh`;
+}
+
+/**
  * CLI 가 없을 때 사람에게 줄 안내 — 앱이 "실패했습니다"로 끝나지 않게 **다음 행동**을 준다.
  * 게이트웨이 주소를 알면 부트스트랩 한 줄을, 모르면 주소부터 물어야 한다고 말한다.
  */
 export function cliMissingHelp(gatewayUrl, platform = process.platform) {
-  const gw = String(gatewayUrl || "").replace(/\/+$/, "");
-  if (!gw) return "라이블리 CLI 를 찾지 못했습니다. 먼저 게이트웨이 주소를 입력하면 앱이 설치를 진행합니다.";
+  const one = bootstrapOneLiner(gatewayUrl, platform);
+  if (!one) return "라이블리 CLI 를 찾지 못했습니다. 먼저 게이트웨이 주소를 입력하면 앱이 설치를 진행합니다.";
   return platform === "win32"
-    ? `라이블리 CLI 가 아직 없습니다. PowerShell 에서 아래 한 줄을 실행한 뒤 앱을 다시 여세요:\n  irm ${gw}/cli/bootstrap.ps1 | iex`
-    : `라이블리 CLI 가 아직 없습니다. 터미널에서 아래 한 줄을 실행한 뒤 앱을 다시 여세요:\n  curl -fsSL ${gw}/cli | sh`;
+    ? `라이블리 CLI 가 아직 없습니다. PowerShell 에서 아래 한 줄을 실행한 뒤 앱을 다시 여세요:\n  ${one}`
+    : `라이블리 CLI 가 아직 없습니다. 터미널에서 아래 한 줄을 실행한 뒤 앱을 다시 여세요:\n  ${one}`;
 }

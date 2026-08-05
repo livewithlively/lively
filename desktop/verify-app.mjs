@@ -86,6 +86,22 @@ chk(gwVisible === true, "⑧ 첫 실행이면 게이트웨이 주소 입력이 �
 const bad = await evaluate("window.lively.setGateway('--token X').then(r=>JSON.stringify(r))");
 chk(/형식/.test(String(bad)), "⑨ ★ 렌더러가 준 이상한 주소를 메인이 거부한다", String(bad).slice(0, 140));
 
+// ── T3 마법사 ───────────────────────────────────────────────────────────────
+// 입력하는 동안 '무엇을 실행할지' 를 보여준다 — 설치는 원격 코드 실행이라 숨기면 안 된다.
+await evaluate("(()=>{const i=document.getElementById('gw'); i.value='https://gw.example'; i.dispatchEvent(new Event('input')); return 1;})()");
+const preview = await evaluate("document.getElementById('gw-preview').textContent");
+chk(/gw\.example\/cli/.test(String(preview)), "⑩ 실행할 명령을 미리 보여준다", JSON.stringify(preview));
+
+// 거부 사유는 로그가 아니라 **입력칸 옆**에 뜬다(사람이 보는 자리).
+await evaluate("(()=>{const i=document.getElementById('gw'); i.value='ftp://nope'; i.dispatchEvent(new Event('input')); document.getElementById('gw-go').click(); return 1;})()");
+await sleep(600);
+const err = await evaluate("document.getElementById('gw-err').textContent");
+chk(/형식/.test(String(err)), "⑪ 잘못된 주소는 입력칸 옆에서 알려준다", JSON.stringify(err));
+
+// 아직 설치 전이면 완료 화면은 뜨지 않는다(앱 열 때마다 "설치 끝" 이 뜨면 소음이다).
+const doneHidden = await evaluate("document.getElementById('done-card').classList.contains('hidden')");
+chk(doneHidden === true, "⑫ 설치 전엔 완료 화면이 안 뜬다", `done-card hidden=${doneHidden}`);
+
 ws.close(); p.kill();
 try { rmSync(BOX, { recursive: true, force: true }); } catch { /* */ }
 await sleep(300);

@@ -5,6 +5,9 @@
 const $ = (id) => document.getElementById(id);
 const show = (el, on) => el.classList.toggle("hidden", !on);
 let state = null, prompt = null;
+// 이번 실행에서 설치를 **방금 마쳤나** — 완료 화면은 그때만 띄운다.
+//  앱을 다시 열 때마다 "설치가 끝났습니다" 가 뜨면 그건 안내가 아니라 소음이다.
+let justFinished = false;
 
 function renderState(s) {
   state = s || {};
@@ -15,17 +18,22 @@ function renderState(s) {
   $("status").textContent = label;
   $("sub").textContent = s?.gatewayUrl || "";
   $("dot").className = "dot " + (s?.nodeRunning ? "on" : s?.loggedIn ? "warn" : "off");
-  // 게이트웨이 카드는 주소를 모를 때만 — 아는데 또 물으면 사용자가 '뭘 잘못했나' 한다.
-  show($("gw-card"), !s?.gatewayUrl || !s?.loggedIn);
-  show($("node-card"), !!(s?.cliFound && s?.loggedIn && s?.kitInstalled));
+  // 설치가 끝났나 — 이 한 줄이 마법사와 평상시 화면을 가른다.
+  const ready = !!(s?.cliFound && s?.loggedIn && s?.kitInstalled);
+  // 게이트웨이 카드는 아직 끝나지 않았을 때만 — 다 됐는데 또 물으면 사용자가 '뭘 잘못했나' 한다.
+  show($("gw-card"), !ready && !s?.busy);
+  show($("done-card"), ready && !s?.busy && justFinished);
+  show($("node-card"), ready);
   $("node-start").disabled = !!s?.busy || !!s?.nodeRunning;
   $("node-stop").disabled = !!s?.busy || !s?.nodeRunning;
   $("gw-go").disabled = !!s?.busy;
 }
 
 function renderProgress(p) {
-  show($("progress-card"), !!p && !p.done);
+  // 실패는 화면에 남긴다 — 성공만 사라지고 실패가 조용히 없어지면 사람은 무슨 일이 났는지 모른다.
+  show($("progress-card"), !!p && (!p.done || p.ok === false));
   if (!p) return;
+  if (p.done && p.ok) justFinished = true;
   $("progress-title").textContent = p.done ? (p.ok ? "완료" : "실패") : "진행 중";
   // 진행률을 모르면(i/n 없음) 바를 채우지 않는다 — 가짜 퍼센트는 멈춘 것처럼 보인다.
   const pct = Number.isFinite(p.i) && Number.isFinite(p.n) && p.n > 0 ? Math.round((p.i / p.n) * 100) : null;
@@ -62,11 +70,23 @@ function log(line) {
 }
 
 // ── 배선 ────────────────────────────────────────────────────────────────────
+// 무엇을 실행할지 **입력하는 동안** 보여준다(설치는 원격 코드 실행이다 — 숨기지 않는다).
+const preview = () => {
+  const gw = $("gw").value.trim().replace(/\/+$/, "");
+  const win = /win/i.test(navigator.userAgent || "");
+  $("gw-preview").textContent = /^https?:\/\/\S+$/i.test(gw)
+    ? (win ? `irm ${gw}/cli.ps1 | iex` : `curl -fsSL ${gw}/cli | sh`) + "  → 이어서 로그인·설치"
+    : "";
+};
+$("gw").addEventListener("input", () => { $("gw-err").textContent = ""; preview(); });
+$("gw").addEventListener("keydown", (e) => { if (e.key === "Enter") $("gw-go").click(); });
 $("gw-go").addEventListener("click", async () => {
   const url = $("gw").value.trim();
+  $("gw-err").textContent = "";
   const r = await window.lively.setGateway(url);
-  if (!r?.ok && r?.error) log("✗ " + r.error);
+  if (!r?.ok && r?.error) { $("gw-err").textContent = r.error; log("✗ " + r.error); }
 });
+$("done-web").addEventListener("click", () => { if (state?.gatewayUrl) window.lively.openExternal(state.gatewayUrl); });
 $("cancel").addEventListener("click", () => window.lively.cancel());
 $("prompt-yes").addEventListener("click", () => { if (prompt) { window.lively.answer(prompt.id, true); renderPrompt(null); } });
 $("prompt-no").addEventListener("click", () => { if (prompt) { window.lively.answer(prompt.id, false); renderPrompt(null); } });

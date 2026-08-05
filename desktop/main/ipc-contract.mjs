@@ -24,16 +24,24 @@ export const RUN_KINDS = ["setup", "login", "install", "node-start", "node-stop"
  * ⚠ **렌더러가 argv 를 만들지 않는다.** 여기서만 만든다 — 렌더러(웹 컨텐츠)가 인자를 조립할 수 있으면
  *  XSS 한 방이 `lively` 임의 실행으로 승격된다. opts 는 값만 받고 형태는 여기서 강제한다.
  */
+/**
+ * 게이트웨이 주소 검사 — **한 자리에서만** 한다(setup·login 이 같은 자를 쓰게).
+ * 빈 값·공백만 = 미입력(저장된 주소를 쓴다). 그 외엔 http(s) 형식이어야 하고, 셸/인자로 샐 문자를 배제한다
+ * (부트스트랩은 이 주소를 `sh -c` 문자열에 넣는다 — 거기서 한 번 더 막지만, 애초에 여기서 걸러야 한다).
+ */
+function gateway(o) {
+  const gw = String(o.gateway || "").trim();
+  if (!gw) return "";
+  if (!/^https?:\/\/[^\s"'`;|&$()<>\\]+$/i.test(gw)) throw new Error("게이트웨이 주소 형식이 올바르지 않습니다.");
+  return gw;
+}
+
 export function argvFor(kind, opts) {
   const o = opts || {};
   switch (kind) {
-    case "setup": return ["setup"];
-    case "login": {
-      const gw = String(o.gateway || "").trim();
-      // 주소는 http(s) 만. 여기서 막지 않으면 `--gateway` 뒤에 임의 문자열이 붙는다.
-      if (gw && !/^https?:\/\/[^\s]+$/i.test(gw)) throw new Error("게이트웨이 주소 형식이 올바르지 않습니다.");
-      return gw ? ["login", "--gateway", gw] : ["login"];
-    }
+    // setup = 로그인 + 키트 설치(순서·조건의 정본은 CLI 다 — 앱이 다시 판단하지 않는다).
+    case "setup": { const gw = gateway(o); return gw ? ["setup", "--gateway", gw] : ["setup"]; }
+    case "login": { const gw = gateway(o); return gw ? ["login", "--gateway", gw] : ["login"]; }
     case "install": return ["install"];
     case "node-start": return ["node", "--daemon"];
     case "node-stop": return ["node", "stop"];

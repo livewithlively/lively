@@ -26,6 +26,17 @@
         <input id="gw" type="url" placeholder="https://..." spellcheck="false" />
         <button id="gw-go" class="primary">연결</button>
       </div>
+      <!-- 앱이 무엇을 실행하는지 숨기지 않는다 — 설치는 원격 코드 실행이다. -->
+      <p class="hint mono" id="gw-preview"></p>
+      <p class="err" id="gw-err"></p>
+    </section>
+
+    <!-- 완료 -->
+    <section id="done-card" class="card hidden">
+      <h2>설치가 끝났습니다</h2>
+      <p class="hint">이제 아무 폴더에서든 <b>claude</b> 를 켜면 회사 맥락이 따라옵니다.
+        이미 켜 둔 터미널이 있으면 껐다 켜세요(훅은 세션 시작에 스냅샷됩니다).</p>
+      <div class="row"><button id="done-web" class="ghost">웹에서 보기</button></div>
     </section>
 
     <!-- 진행 -->

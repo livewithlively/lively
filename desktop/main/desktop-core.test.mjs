@@ -9,7 +9,8 @@ import { EventEmitter } from "node:events";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cliCandidates, locateCli, cliShimName, cliMissingHelp } from "./cli-locate.mjs";
+import { cliCandidates, locateCli, cliShimName, cliMissingHelp, bootstrapOneLiner } from "./cli-locate.mjs";
+import { bootstrapCommand, runBootstrap } from "./bootstrap.mjs";
 import { createNdjsonParser, runCli, reduceProgress, lastError } from "./cli-runner.mjs";
 import { argvFor, RUN_KINDS, IPC } from "./ipc-contract.mjs";
 import { trayMenuModel, statusLabel } from "./tray-menu.mjs";
@@ -61,10 +62,29 @@ t("A6 locateCli 는 존재하는 첫 후보 — 없으면 null(추측한 경로�
 });
 
 t("A7 CLI 부재 안내는 **다음 행동**을 준다(플랫폼별 부트스트랩 한 줄)", () => {
+  assert.equal(bootstrapOneLiner("https://dev.lvly.io", "darwin"), "curl -fsSL https://dev.lvly.io/cli | sh");
+  assert.equal(bootstrapOneLiner("https://dev.lvly.io/", "win32"), "irm https://dev.lvly.io/cli.ps1 | iex");
   assert.match(cliMissingHelp("https://dev.lvly.io", "darwin"), /curl -fsSL https:\/\/dev\.lvly\.io\/cli \| sh/);
-  assert.match(cliMissingHelp("https://dev.lvly.io/", "win32"), /irm https:\/\/dev\.lvly\.io\/cli\/bootstrap\.ps1 \| iex/);
   // 주소를 모르면 명령을 지어내지 않는다 — 주소부터 물어야 한다고 말한다.
+  assert.equal(bootstrapOneLiner("", "darwin"), null);
   assert.ok(!/curl|irm/.test(cliMissingHelp("", "darwin")));
+});
+
+t("A8 ★ 부트스트랩 URL 이 웹 관리화면이 주는 한 줄과 같다(다르면 사람은 404 를 받는다)", () => {
+  // 진실원천: 게이트웨이 라우트(src/web.ts `/cli`·`/cli.ps1`)와 그걸 복붙시키는 화면(public/app/admin-install.js).
+  //  앱이 그와 다른 주소를 안내하면 아무도 그 사실을 모른 채 설치가 막힌다.
+  const repo = fileURLToPath(new URL("../../", import.meta.url));
+  const web = readFileSync(join(repo, "src", "web.ts"), "utf8");
+  assert.match(web, /app\.get\("\/cli",\s*serveBootstrap\("bootstrap\.sh"\)\)/, "게이트웨이 라우트가 바뀌었다");
+  assert.match(web, /app\.get\("\/cli\.ps1",\s*serveBootstrap\("bootstrap\.ps1"\)\)/, "게이트웨이 라우트가 바뀌었다");
+  const admin = readFileSync(join(repo, "public", "app", "admin-install.js"), "utf8");
+  const gw = "https://gw.example";
+  for (const [plat, needle] of [["darwin", `curl -fsSL ${gw}/cli | sh`], ["win32", `irm ${gw}/cli.ps1 | iex`]]) {
+    const mine = bootstrapOneLiner(gw, plat);
+    assert.equal(mine, needle, plat);
+    // 화면 코드가 같은 모양의 템플릿을 쓰는지(경로 조각으로 확인 — 변수명·따옴표는 자유).
+    assert.ok(admin.includes(plat === "win32" ? "/cli.ps1 | iex" : "/cli | sh"), `admin-install.js 와 어긋남: ${plat}`);
+  }
 });
 
 // ── B. NDJSON 파서 ───────────────────────────────────────────────────────────
@@ -213,6 +233,47 @@ await ta("C9 취소 손잡이는 stdin 을 닫는다(대기 중 프롬프트를 
   await runCli({ cli: "/bin/lively", args: ["login"], spawn: s.spawn, onHandle: (h) => { handle = h; setTimeout(() => h.cancel(), 10); } });
   assert.ok(handle, "취소 손잡이가 없으면 사용자가 멈출 방법이 없다");
   assert.equal(s.calls[0].child.stdin.ended, true, "stdin 을 안 닫으면 CLI 가 영원히 기다린다");
+});
+
+// ── C2. 부트스트랩(새 PC — CLI 자체가 없을 때) ──────────────────────────────
+t("H1 플랫폼별 부트스트랩 명령 — 게이트웨이가 서빙하는 그 스크립트를 그대로 실행한다", () => {
+  const mac = bootstrapCommand("https://dev.lvly.io", "darwin");
+  assert.equal(mac.cmd, "/bin/sh");
+  assert.deepEqual(mac.args, ["-c", "curl -fsSL https://dev.lvly.io/cli | sh"]);
+  const win = bootstrapCommand("https://dev.lvly.io/", "win32");
+  assert.equal(win.cmd, "powershell.exe");
+  assert.ok(win.args.includes("-NoProfile"), "프로필이 출력·PATH 를 오염시킨다");
+  assert.ok(win.args[win.args.length - 1] === "irm https://dev.lvly.io/cli.ps1 | iex");
+});
+
+t("H2 ★ 셸 문자열에 주소가 들어간다 — 셸 메타문자는 절대 통과시키지 않는다", () => {
+  // 여기가 뚫리면 게이트웨이 주소 입력칸이 곧 임의 명령 실행이다(`sh -c` 문자열 안이니까).
+  for (const bad of [
+    "https://a.io; rm -rf /", "https://a.io && curl evil", "https://a.io | sh", "https://a.io`id`",
+    "https://a.io$(id)", "https://a.io'x'", 'https://a.io"x"', "https://a.io\\x", "http://a.io >out", "ftp://a.io",
+    "", "   ",
+  ]) {
+    assert.throws(() => bootstrapCommand(bad, "darwin"), /형식/, `통과해버림: ${JSON.stringify(bad)}`);
+  }
+});
+
+await ta("H3 출력은 줄 단위로 흘리고, 실패는 실패로 보고한다", async () => {
+  const lines = [];
+  const s = stubSpawn((c) => {
+    c.stdout.emit("data", "  ✓ Node 준비 완료\n  · lively 설치");
+    c.stdout.emit("data", " 중…\n");
+    c.emit("close", 1, null);
+  });
+  const r = await runBootstrap({ gatewayUrl: "https://a.io", spawn: s.spawn, onLine: (l) => lines.push(l) });
+  assert.deepEqual(lines, ["  ✓ Node 준비 완료", "  · lively 설치 중…"], "청크 경계에서 줄이 깨졌다");
+  assert.equal(r.ok, false);
+  assert.match(r.error, /실패/);
+});
+
+await ta("H4 stdio 는 파이프다 — TTY 를 주면 스크립트가 `lively setup` 으로 인계해 흐름이 갈라진다", async () => {
+  const s = stubSpawn((c) => c.emit("close", 0, null));
+  await runBootstrap({ gatewayUrl: "https://a.io", spawn: s.spawn });
+  assert.deepEqual(s.calls[0].opts.stdio, ["ignore", "pipe", "pipe"]);
 });
 
 // ── D. 진행 리듀서 ───────────────────────────────────────────────────────────

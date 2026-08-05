@@ -1515,8 +1515,13 @@ async function tokenAccepted(gw, tok) {
   } catch { return null; } finally { clearTimeout(timer); }
 }
 
-async function cmdSetup() {
+async function cmdSetup(opts = {}) {
   say(`\n${bold("라이블리 설치를 시작합니다.")}`);
+  // `--gateway` 를 여기서도 받는다(#1541 T3) — 데스크톱 앱은 주소를 방금 사람에게 받아 들고 있고,
+  //  `login` 과 `install` 을 따로 부르는 대신 **setup 하나**로 몰 수 있어야 한다(순서·조건의 정본은 CLI 다).
+  //  아래 tokenAccepted 가 **새 주소로** 판정되도록 로그인보다 먼저 쓴다 — 게이트웨이를 바꾸는 경우
+  //  옛 주소의 토큰이 '먹힌다'고 나와 로그인을 통째로 건너뛰는 사고(#1087 계열)를 막는다.
+  if (opts.gateway) writeLively("gateway-url", normGw(opts.gateway));
   // ⚠ 토큰이 **있는지**가 아니라 **먹히는지**를 본다(#1087). token() 은 파일 다음에 LIVELY_TOKEN 환경변수도
   //  보므로, 만료·회수된 토큰이나 셸에 남아 있던 옛 env 값이 로그인을 건너뛰게 만들었다. 그러면 설치는
   //  한참 뒤 [1/3] 키트 내려받기에서 401 로 죽고, 그 지점의 메시지만으론 사용자가 뭘 해야 할지 알 수 없다
@@ -1538,7 +1543,7 @@ ${bold("사용법")}
   lively <명령> [옵션]
 
 ${bold("시작하기")}
-  setup                  로그인 + 설치를 한 번에 (처음 설치할 때)
+  setup                  로그인 + 설치를 한 번에 (처음 설치할 때) ${dim("--gateway <url>")}
   login                  접속 토큰 등록 (가림 입력 — 화면·히스토리에 안 남음)
   logout                 토큰만 지움 (설치는 유지)
   onboarding             내 환경 정리 · 라이블리 첫 세팅을 지금 시작 ${dim("(claude 를 열어 온보딩 스킬 실행 — 언제든 재실행)")}
@@ -1694,7 +1699,7 @@ async function main() {
 
 async function dispatch(cmd, o, argv) {
   switch (cmd) {
-    case "setup": return cmdSetup();
+    case "setup": return cmdSetup(o);
     case "login": { await cmdLogin(o); return; }
     case "logout": return cmdLogout();
     // onboarding — 온보딩 스킬을 이 PC 에서 바로 실행(설치 직후 제안·수동 재실행 공용). 나머지 인자=초기 프롬프트.

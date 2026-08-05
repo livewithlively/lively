@@ -15,6 +15,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { locateCli, cliMissingHelp } from "./cli-locate.mjs";
+import { runBootstrap, bootstrapPreview } from "./bootstrap.mjs";
 import { runCli, reduceProgress } from "./cli-runner.mjs";
 import { trayMenuModel } from "./tray-menu.mjs";
 import { IPC, RUN_KINDS, argvFor } from "./ipc-contract.mjs";
@@ -122,6 +123,42 @@ async function start(kind, opts) {
   return { ok: r.ok, error: r.error, result: r.result };
 }
 
+/**
+ * 온보딩 (#1541 T3) — 주소 입력 한 번으로 **끝까지** 간다: (없으면) CLI 부트스트랩 → `lively setup`.
+ *
+ * `setup` 은 CLI 안에서 로그인 + 설치를 순서대로 한다. 앱이 login·install 을 따로 부르지 않는 이유가 그거다 —
+ *  그 순서·조건(이미 로그인돼 있으면 설치만 등)은 CLI 가 이미 알고 있고, 앱이 다시 판단하면 규약이 둘로 갈린다.
+ */
+async function onboard(url) {
+  if (running) return { ok: false, error: "이미 실행 중인 작업이 있습니다." };
+  try { argvFor("login", { gateway: url }); } catch (e) { return { ok: false, error: e.message }; }  // 형식 검사(한 자)
+  const gw = String(url || "").trim();
+
+  if (!locateCli(existsSync)) {
+    // 새 PC — CLI 자체가 없다. 게이트웨이가 서빙하는 부트스트랩으로 Node·CLI·PATH 를 확보한다.
+    state = { ...state, busy: true }; renderTray(); send(IPC.STATE, state);
+    progress = reduceProgress(null, { t: "start", cmd: "bootstrap" });
+    progress = reduceProgress(progress, { t: "step", id: "bootstrap", label: "라이블리 CLI 설치 중", status: "start", i: 1, n: 2 });
+    send(IPC.PROGRESS, progress);
+    send(IPC.LOG, { stream: "raw", line: `$ ${bootstrapPreview(gw) || ""}` });   // 무엇을 실행하는지 숨기지 않는다
+    const b = await runBootstrap({ gatewayUrl: gw, onLine: (line) => send(IPC.LOG, { stream: "stderr", line }), timeoutMs: 15 * 60_000 });
+    // ★ 종료코드가 아니라 **CLI 가 실제로 생겼는지**로 판정한다 — `curl | sh` 는 curl 이 404 를 받아도 0 으로 끝난다.
+    const cli = locateCli(existsSync);
+    if (!cli) {
+      progress = reduceProgress(progress, { t: "step", id: "bootstrap", label: "라이블리 CLI 설치 중", status: "fail", i: 1, n: 2 });
+      progress = reduceProgress(progress, { t: "end", ok: false, code: 1 });
+      state = { ...state, busy: false }; renderTray(); send(IPC.STATE, state); send(IPC.PROGRESS, progress);
+      return { ok: false, error: b.error || `CLI 설치가 끝났는데 실행파일이 없습니다. 주소가 맞는지 확인하세요: ${gw}` };
+    }
+    progress = reduceProgress(progress, { t: "step", id: "bootstrap", label: "라이블리 CLI 설치 중", status: "done", i: 1, n: 2 });
+    send(IPC.PROGRESS, progress);
+    state = { ...state, busy: false, cliPath: cli, cliFound: true };
+    await refreshState();
+  }
+  // 로그인 + 키트 설치는 CLI 의 setup 이 통째로 한다(순서·조건은 거기가 정본).
+  return start("setup", { gateway: gw });
+}
+
 /** prompt → 렌더러로 넘기고 답을 기다린다. device-code 는 통지형이라 답하지 않는다(undefined). */
 function askUser(p) {
   if (p.kind === "device-code") {
@@ -143,11 +180,7 @@ ipcMain.handle(IPC.ANSWER, (_e, { id, value }) => {
   pendingPrompts.delete(id); r(value);
   return { ok: true };
 });
-ipcMain.handle(IPC.SET_GATEWAY, async (_e, { url }) => {
-  // 저장은 CLI 가 한다(형식 검사·정규화가 거기 있다) — 앱이 ~/.lively 를 직접 쓰기 시작하면 규약이 둘로 갈린다.
-  try { argvFor("login", { gateway: url }); } catch (e) { return { ok: false, error: e.message }; }
-  return start("login", { gateway: url });
-});
+ipcMain.handle(IPC.SET_GATEWAY, (_e, { url }) => onboard(url));
 // 외부 링크는 메인만 연다 — 렌더러에 shell 을 노출하면 임의 URL·파일 열기가 된다.
 ipcMain.handle(IPC.OPEN_EXTERNAL, (_e, { url }) => {
   if (!/^https?:\/\//i.test(String(url || ""))) return { ok: false };
