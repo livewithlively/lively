@@ -263,6 +263,12 @@ function navPermBadge(key) {
 //  (uiProfilePersonal=false) — 셀프호스트 무회귀. 숨김은 sectionHidden 한 곳이라 사이드바·기본선택·딥링크
 //  폴백(renderAdmin 의 visibleSections·첫 노출 섹션 선택)이 전부 일관되게 따라온다.
 const PERSONAL_HIDDEN = [
+    // [로그인 · 회사 계정](#1520 IdP/OIDC) — 개인 워크스페이스에서 **숨기는 게 아니라 막는 것에 가깝다**.
+    //  매니지드 배포에서 이 워크스페이스로 들어오는 길은 컨트롤플레인 계정 + SSO 브리지 하나뿐이고,
+    //  구성원은 초대로만 늘어난다(운영자가 인원을 통제한다). 워크스페이스가 자기 IdP 를 따로 붙이면
+    //  **두 번째 신원 축**이 생기고, 그 화면의 도메인 allowlist 자동 가입을 켜는 순간 그 도메인 사람이
+    //  초대 없이 구성원이 된다 = 초대제 우회. 그래서 개인 프로필에서는 입구 자체를 두지 않는다.
+    'login-idp', // 로그인 · 회사 계정(조직 IdP)
     'injection-map', // 세션 주입
     'visibility-axes', // 맥락 공개범위
     'embeddings', // 의미 검색

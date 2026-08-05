@@ -227,12 +227,50 @@ async function memberFileRemove(osUser: string, rel: string): Promise<void> {
 async function memberClaudeLoggedIn(osUser: string): Promise<boolean> {
   return memberFileExists(osUser, HARNESS_CRED.claude);
 }
-// OS 격리 상태(#524) — UI 표시용. ready=인프라 준비(활성+Linux+box-spawn), provisioned=이 멤버 box_<slug> 존재,
-//  loggedIn=box_ 홈에 claude 자격증명 있음(drop-priv 확인). loggedIn 이면 UI 로그인 버튼 숨김.
-export async function memberOsStatus(memberId: string): Promise<{ ready: boolean; provisioned: boolean; osUser: string; loggedIn: boolean }> {
+// box_ 홈 dir 존재 — **OS 유저와 별개**로 본다. 홈 부모(/home)는 755 라 게이트웨이가 stat 할 수 있고
+//  (내용은 700 이라 여전히 못 읽는다), 이 한 비트가 아래 '고아 홈' 판정의 유일한 근거다.
+async function memberHomeExists(osUser: string): Promise<boolean> {
+  try { return (await fsp.stat(path.join(MEMBER_HOME_BASE, osUser))).isDirectory(); }
+  catch { return false; }
+}
+
+// OS 격리 상태(#524) — UI 표시용 + 컨트롤플레인의 '이 멤버가 로그인했나' 판정 입력.
+//  ready=인프라 준비(활성+Linux+box-spawn) · provisioned=이 멤버 box_<slug> 존재 · loggedIn=box_ 홈에
+//  claude 자격증명 있음(drop-priv 확인) · orphanHome=홈은 남았는데 OS 유저가 없음(아래).
+export interface MemberOsStatus {
+  ready: boolean;
+  provisioned: boolean;
+  osUser: string;
+  /** null = **알 수 없음**(orphanHome). false 는 '확실히 미로그인'일 때만 — aiAccountStatus 와 같은 교리. */
+  loggedIn: boolean | null;
+  /** 홈(/home/box_<slug>)은 실재하는데 그 OS 유저가 없다 = passwd 초기화 드리프트. 아래 판정 주석 참조. */
+  orphanHome: boolean;
+}
+
+/**
+ * (순수 — 테스트 seam) OS 격리 신호에서 로그인 판정. **미탐이 아니라 '모름'을 정직하게 낸다.**
+ *
+ * ⚠ 왜 세 갈래인가: 홈(/home/box_<slug>)과 OS 유저(/etc/passwd)의 수명이 **다를 수 있다**.
+ *   컨테이너 배포(매니지드 테넌트)에서 /home 은 영속 볼륨이고 /etc/passwd 는 컨테이너 수명이라,
+ *   컨테이너를 다시 만들면 **자격증명이 든 홈은 그대로인데 그 홈의 주인 유저만 사라진다**.
+ *   그 상태에서 종전 코드는 `provisioned=false → loggedIn=false`(= '이 사람은 로그인 안 했다')로 단정했는데,
+ *   그건 거짓말이다 — 자격은 디스크에 있고 다음 세션의 lazy provision(ensureMemberOsUser)이 되살린다.
+ *   실측(#1471): 매니지드 테넌트에서 이 거짓 false 때문에 컨트롤플레인이 자율 파이프라인을 영영 안 켰다.
+ *   드롭-프리브할 유저가 없어 **확인할 방법 자체가 없으므로** 답은 false 가 아니라 null(모름)이다.
+ */
+export function judgeMemberOs(i: { ready: boolean; provisioned: boolean; homeExists: boolean; credExists: boolean }): { loggedIn: boolean | null; orphanHome: boolean } {
+  if (i.provisioned) return { loggedIn: i.credExists, orphanHome: false };   // drop-priv 로 실제 확인함
+  const orphanHome = i.ready && i.homeExists;                                 // 홈만 남음 → 확인 불가
+  return { loggedIn: orphanHome ? null : false, orphanHome };                 // 홈도 없으면 확실히 미로그인
+}
+
+export async function memberOsStatus(memberId: string): Promise<MemberOsStatus> {
   const osUser = osUsername(userSlug({ userId: memberId } as LivelyUser));
+  const ready = isolationInfraReady();
   const provisioned = await osUserExists(osUser);
-  return { ready: isolationInfraReady(), provisioned, osUser, loggedIn: provisioned ? await memberClaudeLoggedIn(osUser) : false };
+  const credExists = provisioned ? await memberClaudeLoggedIn(osUser) : false;
+  const homeExists = provisioned ? true : await memberHomeExists(osUser);
+  return { ready, provisioned, osUser, ...judgeMemberOs({ ready, provisioned, homeExists, credExists }) };
 }
 
 // ── 내 AI 계정(#1085) — 관리탭 [내 설정 ▸ 내 AI 설정] 상단 카드. "내 AI 세션이 어느 AI(Claude Code·Codex)로,
