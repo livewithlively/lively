@@ -842,6 +842,141 @@ t("DR5 draft 가 없으면 저장값 그대로(무회귀)", () => {
   assert.equal(mergeDraftDistiller(saved, null).id, 5, "draft 없는 경로는 id 를 건드리지 않는다");
 });
 
+// DR6~DR14 — draft 정규화(#1557). 미리보기는 "저장하면 이렇게 된다"를 보여주는 화면이므로
+//  draft 해석이 저장 경로(upsertDistiller)와 **같아야** 한다. 갈려서 실제로 이렇게 깨졌다:
+//  관리탭은 채널을 줄바꿈 **문자열**로 보내는데(저장 API 가 그렇게 받겠다고 약속한다) 미리보기만
+//  날값을 그대로 얹어 nonEmpty 가 문자열에 .map 을 걸었다 → 500. 그러면 우측 반사판과 ⑤ 지시문
+//  조각이 **동시에** 사라진다(둘 다 이 응답 하나에서 나온다).
+t("DR6 관리탭 초기 날값 draft 로 미리보기 행이 조립된다 (#1557 회귀)", () => {
+  const m = mergeDraftDistiller(undefined, {
+    key: "", label: null, enabled: false, priority: 0,
+    match_kinds: [], include_channels: "", exclude_channels: "",
+    exclude_bots: true, min_chars: 0, lookback_days: null,
+    prefilter_level: 0, prefilter_rules: null, criteria_md: null, format_md: null,
+    batch_size: 3, batch_max_msgs: 20, mode: "headless",
+  });
+  assert.equal(m.match_kinds, null, "빈 배열 = 종류를 가리지 않음");
+  assert.equal(m.include_channels, null, "빈 칸은 '조건 없음'이지 이름이 빈 채널 하나가 아니다");
+  assert.equal(m.exclude_channels, null);
+  const p = new Params();
+  assert.ok(!distillerScopeSql(m, p).includes("container_name"), "조건 없는 축은 술어에 아예 안 붙는다");
+  // 아래 두 줄이 미리보기 응답의 실체다 — 수정 전엔 여기서 던져 화면이 통째로 죽었다.
+  assert.ok(buildInboxQuery(m, []).sql.includes("WITH cand"));
+  assert.ok(describeScope(m).length > 0);
+});
+
+t("DR7 리스트 축은 저장 경로와 같은 규칙으로 분해되고, 그 **배열**이 SQL 에 바인딩된다", () => {
+  const m = mergeDraftDistiller(undefined, { include_channels: "#일반\n 회의 ,\n\n#dev", exclude_channels: "   " });
+  assert.deepEqual(m.include_channels, ["일반", "회의", "dev"], "줄바꿈·쉼표 분해, 공백 trim, '#' 흡수");
+  assert.equal(m.exclude_channels, null, "공백만 있는 칸은 조건이 아니다");
+  const p = new Params();
+  distillerScopeSql(m, p);
+  assert.deepEqual(bound(p), [JSON.stringify(["일반", "회의", "dev"])],
+    "문자열 통짜가 실리면 '줄바꿈 포함 채널명 하나'로 대조돼 조용히 0건을 집는다");
+});
+
+t("DR8 숫자 축은 거부하지 않고 좁힌다 — 미리보기는 **타이핑 중**에도 불린다", () => {
+  const bs = (v: unknown): number => mergeDraftDistiller(undefined, { batch_size: v }).batch_size;
+  assert.equal(bs(0), 1, "반쯤 친 값에 500 을 내면 화면이 죽는다");
+  assert.equal(bs(1), 1, "경계값은 그대로");
+  assert.equal(bs(200), 200, "경계값은 그대로");
+  assert.equal(bs(201), 200);
+  assert.equal(mergeDraftDistiller(undefined, { batch_max_msgs: "" }).batch_max_msgs, 20, "지우는 중이면 기본값");
+  assert.equal(mergeDraftDistiller(undefined, { prefilter_level: 900 }).prefilter_level, 100);
+});
+
+t("DR9 숫자 축은 **숫자만** 값으로 받는다(저장 경로와 같은 규칙) — SQL 에도 숫자만 실린다", () => {
+  // 저장은 Number.isFinite 로 걸러 "300" 을 값으로 안 받는다. 미리보기가 받아버리면 300 으로 필터된다고
+  //  보여준 뒤 저장하면 0 이 되어, 이 화면이 하는 유일한 약속("저장하면 이렇게 된다")이 깨진다.
+  assert.strictEqual(mergeDraftDistiller(undefined, { min_chars: "300" }).min_chars, 0);
+  const p = new Params();
+  distillerScopeSql(mergeDraftDistiller(undefined, { min_chars: 300, exclude_bots: false }), p);
+  assert.deepEqual(p.values, [300], "숫자로 준 값은 숫자 그대로 — 문자열이 실리면 length() >= text 비교가 된다");
+});
+
+t("DR10 기간 0·빈칸은 '제한 없음'(전체 백필)이다", () => {
+  assert.equal(mergeDraftDistiller(undefined, { lookback_days: 0 }).lookback_days, null);
+  assert.equal(mergeDraftDistiller(undefined, { lookback_days: "" }).lookback_days, null);
+  assert.equal(mergeDraftDistiller(undefined, { lookback_days: 7 }).lookback_days, 7);
+  const p = new Params();
+  assert.ok(!distillerScopeSql(mergeDraftDistiller(undefined, { lookback_days: 0 }), p).includes("interval"),
+    "0 인데 기간 절이 붙으면 최근 0일 = 아무것도 안 집는다");
+});
+
+t("DR11 텍스트·실행방식·규칙 축의 빈 값과 이상한 값", () => {
+  const m = mergeDraftDistiller(undefined, { criteria_md: "  ", mode: "wat", prefilter_rules: ["a"], key: "" });
+  assert.equal(m.criteria_md, null, "공백만 남은 기준은 '기준 없음'이다");
+  assert.equal(m.mode, "headless", "알 수 없는 실행 방식은 기본값으로 좁힌다");
+  assert.equal(m.prefilter_rules, null, "객체가 아니면 규칙이 아니다");
+  assert.strictEqual(m.key, "", "key 는 비-null 축 — null 이 되면 이름 표시·폴백이 깨진다");
+});
+
+t("DR12 지시문 조각 오버라이드는 알려진 편집 가능 조각·문자열만 남는다", () => {
+  const m = mergeDraftDistiller(undefined, { prompt_sections: { intro: "A", nope: "B", format: 123 } });
+  assert.deepEqual(m.prompt_sections, { intro: "A" }, "오타 키·비문자열이 지시문에 새면 안 된다");
+});
+
+t("DR13 이름을 아직 안 친 새 증류기도 지시문에 빈 이름이 박히지 않는다", () => {
+  const m = mergeDraftDistiller(undefined, { key: "", label: null });
+  const s = buildDistillerPrompt({ distiller: m, rows: [], policySummary: POLICY });
+  assert.ok(s.includes("'(이름 없음)' 증류기 배치야"), "새 증류기는 이름 없이도 지시문을 보여줄 수 있어야 한다");
+  assert.ok(!s.includes("'' 증류기"), "빈 따옴표는 사람이 버그로 읽는다");
+});
+
+t("DR14 enabled:false·priority:0 은 '미지정'이 아니라 값이다", () => {
+  const m = mergeDraftDistiller(mk({ id: 5, key: "k", enabled: true, priority: 50 }), { enabled: false, priority: 0 });
+  assert.equal(m.enabled, false, "false 를 못 얹으면 '끈 상태'를 미리 볼 수 없다");
+  assert.equal(m.priority, 0);
+});
+
+// ── TK. 스레드 키(#1557) — **정보 부재가 배제가 되면 안 된다**(이 파일 머리말의 정책 그대로) ─────
+//  실측: 이 조직 자료 565건(디스코드 556·회의록·전사)엔 thread_ts 도 ts 도 없어 키가 NULL 이었다.
+//  ① 인박스는 스레드를 골라 원본에 되붙이는데(JOIN pk._tid = c._tid) NULL=NULL 은 참이 아니라 **전량 탈락** —
+//     증류기를 만들어도 0 건을 집었다(화면엔 "집힐 자료 250건 / 지금 집히는 자료가 0건"이 동시에 떴다).
+//  ② GROUP BY 는 NULL 을 한 그룹으로 묶어 무관한 자료 수백 건이 '한 스레드'가 된다(배치 통째로 실림 + 필터 집계 거짓).
+const threadKeyExprs = (sql: string): string[] =>
+  [...sql.matchAll(/COALESCE\([^()]*->>'thread_ts'[^()]*\)/g)].map((m) => m[0]);
+
+t("TK1 인박스의 스레드 키는 부재를 흡수한다 — 값이 없으면 자기 id 로 1건짜리 스레드", () => {
+  const keys = threadKeyExprs(buildInboxQuery(mk({ id: 3 }), []).sql);
+  assert.ok(keys.length > 0, "인박스는 스레드 키로 자른다");
+  for (const k of keys) assert.ok(k.includes("'src:'"), `NULL 키는 JOIN 에서 전량 탈락한다: ${k}`);
+});
+
+t("TK2 스레드 키를 쓰는 쿼리는 전부 같은 폴백을 쓴다 — 한 곳만 빠지면 그 축만 조용히 다르게 센다", () => {
+  const sqls = [
+    buildInboxQuery(mk({ id: 1 }), []).sql,
+    prefilterSql(mk({ prefilter_rules: { min_msgs: 2 } }), new Params()) ?? "",
+    buildGridSql({ min_msgs: 2 }, new Params(), ["가나"], []),
+  ];
+  for (const s of sqls) {
+    const keys = threadKeyExprs(s);
+    assert.ok(keys.length > 0, "이 쿼리는 스레드 단위로 집계한다");
+    for (const k of keys) assert.ok(k.includes("'src:'"), `폴백 누락: ${k}`);
+  }
+});
+
+t("TK3 튜플로 대조하는 자리는 양쪽 표현식이 같아야 한다 — 한쪽만 폴백이면 매칭이 통째로 어긋난다", () => {
+  const sql = prefilterSql(mk({ prefilter_rules: { min_msgs: 2 } }), new Params()) ?? "";
+  const shapes = threadKeyExprs(sql).map((k) => k.replace(/\b[a-z]\./g, ""));   // alias 지우고 형태만 본다
+  assert.ok(shapes.length >= 2, "바깥 행과 집계 서브쿼리 양쪽에 키가 있다");
+  assert.equal(new Set(shapes).size, 1, `양쪽이 다르다: ${JSON.stringify(shapes)}`);
+});
+
+t("TK4 스레드 지식 조회는 폴백을 쓰지 않는다(의도된 예외) — JS 키 목록과 표현식이 같아야 매칭된다", () => {
+  const qy = buildThreadKnowledgeQuery([{ fields: { container_name: "일반", thread_ts: "1.1" } }]);
+  assert.ok(qy, "키가 있는 자료면 조회를 만든다");
+  for (const k of threadKeyExprs(qy!.sql)) {
+    assert.ok(!k.includes("'src:'"), "여기에 폴백을 넣으면 JS 가 만든 키(thread_ts??ts)와 어긋나 스레드 지식을 못 찾는다");
+  }
+});
+
+t("TK5 폴백은 **마지막**이다 — thread_ts·ts 가 있으면 기존대로 그 값으로 묶인다(회귀 금지)", () => {
+  for (const k of threadKeyExprs(buildInboxQuery(mk({ id: 1 }), []).sql)) {
+    assert.match(k, /'thread_ts'[\s\S]*'ts'[\s\S]*'src:'/, `순서가 바뀌면 슬랙 스레드가 낱개로 쪼개진다: ${k}`);
+  }
+});
+
 // FI1~FI3 — 사전필터 효과 표시(#1419-B UX). 유실률이 이 화면의 핵심 숫자라 표시 규약을 못박는다.
 t("FI1 축이 하나도 없으면 필터 꺼짐 — 있으면 켜짐", () => {
   assert.equal(isPrefilterActive(mk({ prefilter_rules: null })), false);
