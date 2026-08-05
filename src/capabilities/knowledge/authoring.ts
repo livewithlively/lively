@@ -35,8 +35,10 @@ const knowledgeSaveInput = {
   //  임베딩은 별도로 8,000자 절단(embeddingInputText), grep 은 응답에서 body_md 제외, get 은 부분읽기 — 이 값에 의존하는 하류 없음.
   //  min(1)은 zod 에선 완화(#592: 폴더는 빈 본문 허용) — is_folder=false 의 min 1 은 handler 가 강제(기존 계약 불변).
   //  #921: mode='append' 면 이 값의 의미가 '전문'에서 '조각'으로 바뀐다 → describe 로 스키마에 명시(설명문만 믿게 두지 않는다).
-  body_md: z.string().max(BODY_MD_MAX)
-    .describe("본문 전문. **mode='append' 일 때만 의미가 다르다 — 전문이 아니라 기존 본문 끝에 덧붙일 '조각'**(그때 전문을 보내면 문서가 통째로 중복된다)."),
+  // #1531 optional 로 완화 — mode='edit' 는 본문을 **보내지 않는다**(서버가 edits 로 만든다). 그 외 모드의
+  //  누락은 핸들러가 잡는다(zod 로 필수를 강제하면 edit 호출이 스키마 단계에서 튕겨 도달조차 못 한다).
+  body_md: z.string().max(BODY_MD_MAX).optional()
+    .describe("본문 전문(mode 미지정·replace 필수). **mode='append' 면 전문이 아니라 기존 본문 끝에 덧붙일 '조각'** · **mode='edit' 면 보내지 않는다**(edits 로 지정)."),
   provenance: z.enum(["authored", "observed"]).optional(),
   lifecycle: z.enum(["active", "pending"]).optional()
     .describe("#638 자동 인입(distill 등)이 검토대기로 저장할 때 pending — 기본 목록·검색·주입에서 격리(승인=set_lifecycle active). 미지정=active(사람 저작 기본). superseded/archived 는 set_lifecycle 로만."),
@@ -152,7 +154,9 @@ export const knowledgeSave: Capability = {
     //  경로를 열므로 같은 커밋에서 닫는다. slugify 는 멱등이라 store 가 한 번 더 불러도 결과가 같다.
     if (input.name) input.name = slugify(input.name);
     // #592: MCP 경로의 빈 본문 방어 — zod min(1) 완화 대신 여기서(폴더만 예외). REST 는 parse 가 이미 걸렀다.
-    if (!String(input.body_md ?? "").trim() && input.is_folder !== true) {
+    //  #1531 edit 는 예외 — 본문을 서버가 edits 로 만들므로 호출자는 body_md 를 보내지 않는다(보낼 수 있다면
+    //  전문을 아는 것이고, 그럼 이 모드를 쓸 이유가 없다).
+    if (input.mode !== "edit" && !String(input.body_md ?? "").trim() && input.is_folder !== true) {
       throw new HttpError(400, "body_md 가 필요합니다(폴더 is_folder=true 만 빈 본문 허용)");
     }
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
@@ -171,7 +175,9 @@ export const knowledgeSave: Capability = {
     const isAppend = input.mode === "append";
     const isEdit = input.mode === "edit";
     let appendBase: string | null = null;
-    let saveInput = input;
+    // body_md 는 스키마상 optional(edit 가 안 보내므로)이라 하류(전문 string 필수)로 넘기기 전에 확정한다.
+    //  edit/append 분기가 아래에서 각자 계산한 전문으로 덮는다.
+    let saveInput: KnowledgeSaveInput & { body_md: string } = { ...input, body_md: String(input.body_md ?? "") };
     // ── #1531 edit — 본문 일부만 정확일치로 치환. append 와 같은 자리에서 '전문'으로 바꿔 아래 경로를 무변경으로 둔다. ──
     //  append 와 가드가 같은 이유: 둘 다 "호출자가 본문을 안 읽는다"는 전제 위에 서 있어, 그 전제가 깨지는
     //  상황(외부 미러 재싱크·검토 대기 제안)에서 똑같이 조용히 유실된다.
@@ -254,7 +260,7 @@ export const knowledgeSave: Capability = {
       }
       // 서버 클램프: 에이전트가 lifecycle='active' 로 우회할 수 없다. 반대로 에이전트가 자진 pending 하면 존중(안전 방향).
       const lifecycle = (gate.create === "confirm" || input.lifecycle === "pending") ? "pending" : (input.lifecycle ?? "active");
-      const { wikilinks, ...knowledge } = await upsertKnowledge({ ...input, lifecycle }, writeCtx);
+      const { wikilinks, ...knowledge } = await upsertKnowledge({ ...saveInput, lifecycle }, writeCtx);
       // ── 세션 산출물 스탬핑(#1291 v2) — **신규 생성에만** 건다. ──
       //  기존 문서 수정에 걸면 남의 공개 문서를 잠긴 프로젝트 세션에서 한 글자 고치는 것만으로 조직에서 사라지게 만든다
       //  (가시성 축소가 편집의 부수효과가 되면 안 된다 — 축소는 언제나 명시적 행위여야 한다).
