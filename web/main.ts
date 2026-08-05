@@ -168,7 +168,11 @@ async function route() {
       return;
     } else if (page === 'context') {
       setActiveTab('context'); // 맥락 관리 — 수집→증류→분류→관리 파이프라인(index.html data-tab="context")
-      await renderContext(view!, segs[1] || null);
+      // 증류기 설정(#/context/distill/<key>, #1564)은 3단 전폭 도구 화면이라 main 의 1200px 상한을 풀어야 한다.
+      //  라우트를 세분화해 CSS 가 그 페이지에서만 캡을 풀게 한다 — 목록은 종전 1160 컬럼 그대로여야
+      //  탭을 오갈 때 폭이 출렁이지 않는다(projects2 가 상세/보드를 가르는 것과 같은 수법).
+      if (segs[1] === 'distill' && segs[2]) document.body.dataset.route = 'context-distiller';
+      await renderContext(view!, segs[1] || null, segs[2] || null);
     } else if (page === 'knowledge') {
       setActiveTab('knowledge'); // WIKI(맥락의 기록) — #764 재구축: 홈/카테고리 페이지/필터 목록/드래프트/자료
       await renderWiki(view, segs[1] || '', params);
