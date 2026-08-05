@@ -3,7 +3,9 @@
 //   핵심 정보인데, 예전 toRawItem 은 channel.id(container_ref)만 남기고 name 을 버려 유실됐다(사용자 지적).
 //   실행: npm run build && node dist/connectors/slack.test.js  (순수 함수 — DB/네트워크 불요)
 import assert from "node:assert/strict";
-import { toRawItem, selectBotChannels, threadNeedsReplies, isCollectableMessage } from "./slack.js";
+import {
+  toRawItem, selectBotChannels, threadNeedsReplies, isCollectableMessage, channelScanFromMs,
+} from "./slack.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -173,6 +175,39 @@ t("S3-7: 봇 알림 메시지도 본문이 있으면 남긴다(업무 기록이�
 
 t("S3-8: 스레드 브로드캐스트도 남긴다(중복은 external_id 유일성이 처리)", () => {
   assert.equal(isCollectableMessage({ ts: "1", subtype: "thread_broadcast", text: "공유합니다" }), true);
+});
+
+// ── S4. 수집 시작 시각 — 역스캔이 backfill_since 하한을 뚫지 않는가 ─────────
+//  #1531 어니스트 실측 회귀: 전량 run 은 하한(7/28)을 지켰는데 증분 run 이 커서-30일(7/5)까지 거슬러
+//  올라가 설정 밖 자료를 끌어왔다. "전량만 보면 정상으로 보인다"가 이 결함의 고약한 점이라 행으로 잠근다.
+const D30 = 30 * 86_400_000;
+const FLOOR = Date.parse("2026-07-28T00:00:00Z");
+
+t("S4-1: 전량 수집(커서 없음)이면 backfill_since 그 시각부터", () => {
+  assert.equal(channelScanFromMs(FLOOR, undefined), FLOOR);
+});
+
+t("S4-2: 전량 + 하한 미설정(0)이면 0 — 채널 개설일부터", () => {
+  assert.equal(channelScanFromMs(0, undefined), 0);
+});
+
+t("S4-3: 증분 — 역스캔이 하한보다 과거로 가려 하면 하한에서 멈춘다(이번 회귀 지점)", () => {
+  const cursor = Date.parse("2026-08-04T00:00:00Z"); // 커서-30일 = 7/5 → 하한 7/28 보다 과거
+  assert.equal(channelScanFromMs(FLOOR, cursor), FLOOR);
+});
+
+t("S4-4: 증분 — 역스캔이 하한 이후면 역스캔 창을 쓴다(오래된 스레드의 새 답글을 잡기 위해)", () => {
+  const cursor = Date.parse("2026-10-01T00:00:00Z"); // 커서-30일 = 9/1 → 하한보다 나중
+  assert.equal(channelScanFromMs(FLOOR, cursor), cursor - D30);
+});
+
+t("S4-5: 증분 + 하한 미설정(0)이면 역스캔 창이 그대로 산다", () => {
+  const cursor = Date.parse("2026-08-04T00:00:00Z");
+  assert.equal(channelScanFromMs(0, cursor), cursor - D30);
+});
+
+t("S4-6: 경계 — 역스캔 시작이 하한과 정확히 같으면 그 값", () => {
+  assert.equal(channelScanFromMs(FLOOR, FLOOR + D30), FLOOR);
 });
 
 console.log(`\n${pass} passed`);

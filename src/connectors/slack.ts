@@ -769,6 +769,19 @@ export function threadNeedsReplies(msg: SlackMessage, sinceMs: number | undefine
   return latestMs >= sinceMs;
 }
 
+/**
+ * 이 채널을 어느 시각부터 훑을 것인가(순수 함수).
+ *  두 요구가 만나는 지점이라 한 곳에 둔다 —
+ *   ① 증분은 커서보다 THREAD_LOOKBACK 만큼 거슬러야 오래된 스레드의 새 답글을 잡는다.
+ *   ② 그 역스캔이 운영자가 정한 `backfill_since` 하한을 **뚫으면 안 된다**(#1531 — 전량 수집만 보면
+ *      범위가 지켜지는 것처럼 보여 증분에서만 조용히 깨지던 결함).
+ *  전량(커서 없음)이면 그냥 하한부터. 0 = 하한 없음 = 채널 개설일부터.
+ */
+export function channelScanFromMs(backfillSinceMs: number, sinceMs: number | undefined): number {
+  if (sinceMs === undefined) return backfillSinceMs;
+  return Math.max(backfillSinceMs, sinceMs - THREAD_LOOKBACK_MS);
+}
+
 /** 봇이 초대된 대화 목록(공개+비공개). 보관 채널 포함 — 종료 프로젝트 기록도 자산이다. */
 async function fetchBotChannels(token: string): Promise<SlackConversation[]> {
   const out: SlackConversation[] = [];
@@ -791,7 +804,7 @@ async function* sweepChannel(
   sinceMs: number | undefined,
   floorMs: number,
 ): AsyncGenerator<RawItem> {
-  const scanFromMs = sinceMs !== undefined ? Math.max(floorMs, sinceMs - THREAD_LOOKBACK_MS) : floorMs;
+  const scanFromMs = channelScanFromMs(floorMs, sinceMs);
   const oldest = Number.isFinite(scanFromMs) && scanFromMs > 0 ? (scanFromMs / 1000).toFixed(6) : undefined;
   // 채널 안에서는 변하지 않는 맥락 — 메시지마다 새로 만들 이유가 없다(딥링크는 toRawItem 이 ts 로 구성).
   const ctx: SlackToRawItemCtx = {
@@ -875,7 +888,11 @@ async function* botBackfill(
     cfg.backfill_since && Number.isFinite(Date.parse(cfg.backfill_since))
       ? Date.parse(cfg.backfill_since)
       : 0;
-  const floorMs = sinceMs !== undefined ? 0 : backfillSinceMs; // 전량 수집의 하한(0 = 채널 개설일부터)
+  // 수집 하한 — **전량이든 증분이든 같다.** 0 이면 채널 개설일부터.
+  //  ⚠ 증분에서 이 하한을 0 으로 열어두면 아래 THREAD_LOOKBACK 역스캔이 설정값을 뚫고 30일을 더 거슬러 올라간다.
+  //   관리탭이 "이 날짜 이후의 자료만 수집합니다"라고 약속한 값이 증분에서만 조용히 깨지는 것이라, 운영자는
+  //   전량 수집 결과만 보고 범위가 지켜진다고 믿게 된다(#1531 어니스트 실측: 7/28 설정에 7/5 자료가 들어왔다).
+  const floorMs = backfillSinceMs;
 
   const all = await fetchBotChannels(token);
   const targets = selectBotChannels(all, parseNoise(cfg.channels), parseNoise(cfg.noise_exclude));
