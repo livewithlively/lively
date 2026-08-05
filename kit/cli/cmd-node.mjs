@@ -118,18 +118,33 @@ async function autoInstallTmux() {
   }
   if (process.platform === "win32") {
     // 패키지 매니저가 있으면 그쪽이 낫다 — 설치·갱신·제거가 표준 경로에 남는다(#869 의 '공급망 표면 최소' 취지).
-    if (has("winget") && run(["winget", "install", "--id", "psmux.psmux", "-e", "--silent",
-      "--accept-package-agreements", "--accept-source-agreements"])) return true;
+    if (has("winget") && run(winInstallArgv())) return true;
+    // scoop 은 **공식 Main 버킷**에 psmux 가 있다(bucket/psmux.json → 같은 GitHub 릴리스 zip + sha256).
+    //  업스트림 README 는 전용 버킷 추가를 안내하지만 그건 대안 경로다 — 남의 버킷을 사용자 scoop 설정에
+    //  영구히 등록하는 부작용을 낼 이유가 없다.
     if (has("scoop") && run(["scoop", "install", "psmux"])) return true;
     // 없으면(Windows Server 등 winget 미동봉 박스) 릴리스 zip 을 우리 자리에 푼다.
     return await installPsmuxFromRelease();
   }
   return false;
 }
+// winget 설치 명령 — **패키지 id 는 `marlocarlo.psmux`** 다.
+//  ⚠ 이 문자열은 추측할 수 없고, 틀려도 **조용히** 실패한다(`-e` 라 엉뚱한 패키지가 깔리진 않지만, 그냥 실패한 뒤
+//   zip 폴백으로 떨어져 '왜 느리지'로만 보인다). winget 공식 소스 인덱스(cdn.winget.microsoft.com/cache/source.msix
+//   안의 index.db)를 직접 조회해 확정했다 — id 는 `marlocarlo.psmux`(publisher 가 psmux 가 아니다).
+//   winget-pkgs 매니페스트도 manifests/m/marlocarlo/psmux/3.3.7 에 있고 InstallerUrl 이 psmux/psmux 릴리스 zip 을
+//   가리킨다. 종전 값 `psmux.psmux` 는 **존재하지 않는다**(그 publisher 폴더엔 psmux.TerminalMap 뿐).
+//  순수함수로 빼는 이유는 muxCandidates 와 같다(#1510 §5) — Windows 분기는 mac/linux CI 에서 한 번도 안 돈다.
+export function winInstallArgv() {
+  return ["winget", "install", "--id", "marlocarlo.psmux", "-e", "--silent",
+    "--accept-package-agreements", "--accept-source-agreements"];
+}
 
 // psmux 릴리스 zip → ~/.lively/bin/psmux/ (패키지 매니저가 없는 박스용 폴백).
 //  zip 해제는 Windows 10 1803+ 동봉 tar.exe 로 한다(별도 도구 불요). PATH 가 빈약한 컨텍스트를 대비해 절대경로 우선(#1510 §6).
-async function installPsmuxFromRelease() {
+//  export 인 이유: winget 이 없는 박스(Windows Server)가 **실제로 타는 유일한 경로**인데 CI 에서 한 번도 안 돈다
+//   → 실기기 검증 하네스가 제품 함수를 그대로 부를 수 있어야 한다(하네스가 절차를 베끼면 하네스만 검증된다).
+export async function installPsmuxFromRelease() {
   const arch = process.arch === "arm64" ? "arm64" : (process.arch === "ia32" ? "x86" : "x64");
   try {
     const rel = await fetch("https://api.github.com/repos/psmux/psmux/releases/latest", {
@@ -179,7 +194,7 @@ function tmuxHelp() {
     return "tmux 자동 설치 실패(패키지 매니저·권한 확인). 수동: sudo apt install -y tmux (또는 dnf/pacman/apk/zypper).";
   if (process.platform === "win32")
     return "psmux(윈도우용 tmux) 자동 설치에 실패했습니다. 네트워크·권한을 확인하고 다시 실행하거나, 수동으로 설치하세요:\n" +
-      "  winget install psmux.psmux      (또는 scoop install psmux)\n" +
+      "  winget install marlocarlo.psmux      (또는 scoop install psmux)\n" +
       "  설치 후 `lively node --daemon` 을 다시 실행하면 됩니다.";
   return `${MUX} 가 필요합니다 — 설치 후 다시 실행하세요.`;
 }

@@ -6,7 +6,7 @@
 //  (실기기 e2e 는 별도 — Windows VM 에서 등록·기동까지 확인한다.)
 // 실행: node kit/cli/node-win-contract.test.mjs
 import assert from "node:assert/strict";
-import { muxCandidates, winTaskXml, winRunnerCmd, resolveWinUserId } from "./cmd-node.mjs";
+import { muxCandidates, winTaskXml, winRunnerCmd, resolveWinUserId, winInstallArgv } from "./cmd-node.mjs";
 
 let pass = 0;
 const t = (name, fn) => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -47,6 +47,24 @@ t("W5 POSIX — 종전 tmux 목록 그대로(무회귀)", () => {
   for (const plat of ["darwin", "linux"]) {
     const c = muxCandidates(plat, {});
     assert.deepEqual(c, ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/opt/local/bin/tmux", "/usr/bin/tmux"]);
+  }
+});
+
+// ── A1-2. winget 패키지 id — 추측할 수 없고, 틀려도 조용히 실패한다 ────────
+// 계기(#1541 실측): 코드가 `psmux.psmux` 로 깔려 있었는데 **그 id 는 존재하지 않는다**. winget 공식 소스
+//  인덱스(source.msix 안의 index.db)를 직접 조회해 확정한 값이 `marlocarlo.psmux` 다(publisher 가 psmux 가
+//  아니다 — psmux 퍼블리셔엔 psmux.TerminalMap 뿐). `-e` 덕에 엉뚱한 패키지가 깔리진 않지만, 틀리면 그냥
+//  실패해 zip 폴백으로 떨어져 **아무 오류도 안 보이고 느려질 뿐**이라 아무도 눈치채지 못한다.
+//  Windows 분기는 CI 에서 한 번도 실행되지 않으므로(#1510 §5) 문자열 자체를 여기서 못박는다.
+t("W6 winget 설치 명령 — id 는 marlocarlo.psmux(존재하지 않는 psmux.psmux 아님)", () => {
+  const argv = winInstallArgv();
+  assert.equal(argv[argv.indexOf("--id") + 1], "marlocarlo.psmux");
+  assert.ok(!argv.includes("psmux.psmux"), "존재하지 않는 id 로 되돌아갔다");
+  // -e(exact) 가 빠지면 이름 검색으로 떨어져 **다른 패키지**가 깔릴 수 있다(psmux.TerminalMap 등 동명 후보 존재).
+  assert.ok(argv.includes("-e"), "exact 매칭이 빠지면 엉뚱한 패키지를 깔 수 있다");
+  // 무인 설치 — 프롬프트가 뜨면 데몬·설치 스크립트가 그대로 멈춘다.
+  for (const f of ["--silent", "--accept-package-agreements", "--accept-source-agreements"]) {
+    assert.ok(argv.includes(f), `무인 설치 플래그 누락: ${f}`);
   }
 });
 
