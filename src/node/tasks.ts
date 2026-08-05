@@ -200,6 +200,9 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
     const cap = await deriveWriteCap(workspace);
     if (cap !== "open") await tmux(["set-option", "-t", id, "@box_write_vis", cap]);
   } catch { /* 비치명 — 조회 시점 파생으로 폴백 */ }
+  // 위탁 세션은 초대 없음(의뢰자 전용). ⚠ 여기만 평문 "[]" 인 이유: 빈 배열엔 따옴표가 없어 psmux 에서도
+  //  무손실이고(#1541), decodeOptJson 이 `[` 로 시작하는 값을 레거시 평문 경로로 정확히 읽는다. 이 한 값 때문에
+  //  노드 번들에 tmux-exec 의존을 새로 들이지 않는다.
   await tmux(["set-option", "-t", id, "@box_invites", "[]"]);
   return { sessionId: id, taskDir, workspace };
 }
