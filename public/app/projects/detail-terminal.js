@@ -368,8 +368,9 @@ async function openProjectSessionForm(id, reload, base, projectName, projectRepo
     catch (_) { /* graceful: 레포 없음 */ }
     // 이 프로젝트의 관련 레포를 기본 행으로(있으면) — 없으면 빈 채로 '+ 레포 추가' 안내.
     (projectRepos || []).filter((n) => cloneRepoNames.includes(n)).forEach((n) => addRepoRow(n));
-    // 실행 위치(#905 C4) — 기본 중앙 박스. 등록된 워커/멤버 노드를 고르면 그 노드에서 레포 provision + 세션 생성.
-    //  usable=1 로 조직 worker 노드까지 조회(소유 무관 개방). provision 능력 없는 구 번들·오프라인 노드는 disabled 로 이유를 보인다.
+    // 실행 위치(#905 C4) — 기본 중앙 박스. 등록된 노드를 고르면 그 노드에서 레포 provision + 세션 생성.
+    //  usable=1 = **내가 등록한 노드 ∪ 관리자가 공유로 지정한 노드**(#1540 — 서버의 provision 게이트와 같은 술어라
+    //  목록에 보이면 반드시 열린다). provision 능력 없는 구 번들·오프라인 노드는 disabled 로 이유를 보인다.
     let usableNodes = [];
     try {
         usableNodes = (await api('/api/ui/nodes?usable=1')).nodes || [];
@@ -378,7 +379,9 @@ async function openProjectSessionForm(id, reload, base, projectName, projectRepo
     const nodeSel = el('select', { class: 'term-input' }, el('option', { value: '', text: '중앙 컴퓨터 (기본)' }), ...usableNodes.map((n) => {
         const caps = Array.isArray(n.agent_caps) ? n.agent_caps : [];
         const suffix = caps.indexOf('provision') < 0 ? ' — 에이전트 업데이트 필요' : (!n.online ? ' — 오프라인' : '');
-        const o = el('option', { value: n.id, text: '🖥 ' + (n.name || n.id) + (n.kind === 'worker' ? ' (워커)' : '') + suffix });
+        // 공유 노드는 '남의 컴퓨터일 수 있다'가 고를 때 중요한 정보라 라벨에 함께 보인다(종류보다 앞).
+        const scope = n.shared ? ' (공유)' : (n.kind === 'worker' ? ' (워커)' : '');
+        const o = el('option', { value: n.id, text: '🖥 ' + (n.name || n.id) + scope + suffix });
         if (suffix)
             o.disabled = true;
         return o;
