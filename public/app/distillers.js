@@ -304,15 +304,32 @@ function editorCard(d, rerender) {
         procedure: '절차 ①~⑤(본문 읽기·중복확인·저장·허용선·skip).',
     };
     const sectionInputs = {};
+    const sectionDefs = {}; // [기본값 보기] 본문 — 설정이 바뀌면 **이것만** 갱신한다
     const sectionsHost = el('div', {}, el('p', { class: 'admin-hint', text: '지시문 조각을 불러오는 중…' }));
     const sectionsLoaded = { v: false };
+    const defText = (v) => v.def || '(이 조각은 지금 설정에선 나가지 않습니다)';
+    // ⚠ **이미 만든 편집란을 다시 만들지 않는다.** 미리보기는 입력이 바뀔 때마다(디바운스 0.6초) 갱신되는데,
+    //  그 응답마다 textarea 를 새로 그리면 **사람이 지금 타이핑하던 요소가 DOM 에서 사라진다** — 값은 서버가
+    //  override 로 돌려줘 복원되지만 **포커스·커서·선택영역이 매번 날아가** 문장을 이어 쓸 수가 없다
+    //  (= 조각 편집이 사실상 불가능. 실측 #1557: 0.6초마다 activeElement 가 BODY 로 빠졌다).
+    //  편집란의 값은 **사람이 소유**한다 — 서버 응답이 갱신해야 할 것은 [기본값 보기] 본문뿐이다.
     function renderSections(views) {
+        if (sectionsLoaded.v) {
+            for (const v of (views || [])) {
+                const pre = sectionDefs[v.id];
+                if (pre)
+                    pre.textContent = defText(v);
+            }
+            return;
+        }
         const rows = [];
         for (const v of (views || [])) {
             const ta = el('textarea', { rows: '4', style: 'width:100%;font-size:12px', placeholder: '비어 있으면 기본값이 나갑니다' });
             ta.value = typeof v.override === 'string' ? v.override : '';
             sectionInputs[v.id] = ta;
-            rows.push(el('div', { style: 'margin-bottom:12px' }, el('div', { class: 'mini-meta' }, el('span', { class: 'pill', text: v.label }), el('span', { class: 'admin-hint', text: ' ' + (SECTION_HINT[v.id] || '') })), ta, el('details', { style: 'margin-top:4px' }, el('summary', { class: 'admin-hint', text: '기본값 보기' }), el('pre', { style: 'white-space:pre-wrap;font-size:11px;max-height:200px;overflow:auto', text: v.def || '(이 조각은 지금 설정에선 나가지 않습니다)' }))));
+            const pre = el('pre', { style: 'white-space:pre-wrap;font-size:11px;max-height:200px;overflow:auto', text: defText(v) });
+            sectionDefs[v.id] = pre;
+            rows.push(el('div', { style: 'margin-bottom:12px' }, el('div', { class: 'mini-meta' }, el('span', { class: 'pill', text: v.label }), el('span', { class: 'admin-hint', text: ' ' + (SECTION_HINT[v.id] || '') })), ta, el('details', { style: 'margin-top:4px' }, el('summary', { class: 'admin-hint', text: '기본값 보기' }), pre)));
         }
         sectionsLoaded.v = true;
         sectionsHost.replaceChildren(el('p', { class: 'admin-hint', text: '비워 두면 코드 기본값이 나갑니다(제품이 개선되면 자동 반영). 내용을 쓰면 그 조각만 대체됩니다. 대상 자료 지정과 안전 문구는 바꿀 수 없어 여기 없습니다.' }), ...rows);
