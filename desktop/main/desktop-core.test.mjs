@@ -378,6 +378,20 @@ t("F4 실행 중(busy)이면 상태를 바꾸는 항목을 전부 잠근다", ()
   assert.notEqual(find(m, "quit").enabled, false);
 });
 
+t("F7 ★ 노드 자동시작과 앱 자동시작은 **다른 축**이다(문구·상태가 안 섞인다)", () => {
+  const base = { cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true };
+  const m = trayMenuModel({ ...base, nodeDaemon: true, appAutoLaunch: false });
+  assert.equal(find(m, "node-autostart").checked, true, "노드 데몬은 켜짐");
+  assert.equal(find(m, "app-autolaunch").checked, false, "앱 자동시작은 꺼짐 — 두 축이 섞이면 안 된다");
+  assert.ok(/노드/.test(find(m, "node-autostart").label) && !/노드/.test(find(m, "app-autolaunch").label), "문구가 축을 구분해야 한다");
+});
+
+t("F8 앱 자동시작을 지원 못 하는 플랫폼(null)이면 항목 자체를 안 보여준다", () => {
+  // Electron 의 로그인 항목은 Linux 미지원이다. 눌러도 아무 일 없는 체크박스를 보여주면 그건 거짓말이다.
+  const m = trayMenuModel({ cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true, appAutoLaunch: null });
+  assert.equal(find(m, "app-autolaunch"), undefined);
+});
+
 t("F5 앱 종료 문구가 '노드는 계속 실행' 을 말한다(상시성의 주체는 OS 데몬)", () => {
   assert.match(find(trayMenuModel({ nodeDaemon: true, cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true }), "quit").label, /노드는 계속 실행/);
   assert.equal(find(trayMenuModel({ cliFound: false }), "quit").label, "앱 종료");

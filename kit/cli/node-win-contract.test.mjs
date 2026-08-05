@@ -6,7 +6,7 @@
 //  (실기기 e2e 는 별도 — Windows VM 에서 등록·기동까지 확인한다.)
 // 실행: node kit/cli/node-win-contract.test.mjs
 import assert from "node:assert/strict";
-import { muxCandidates, winTaskXml, winRunnerCmd, resolveWinUserId, winInstallArgv } from "./cmd-node.mjs";
+import { muxCandidates, winTaskXml, winRunnerCmd, resolveWinUserId, winInstallArgv, nodeDaemonArtifact, nodeProcProbe, parseProcCount } from "./cmd-node.mjs";
 
 let pass = 0;
 const t = (name, fn) => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -208,6 +208,39 @@ t("X9 구조 유효성 — 필수 노드 존재 + 태그 균형", () => {
   const opens = (XML.match(/<[A-Za-z][^>]*>/g) || []).length;
   const closes = (XML.match(/<\/[A-Za-z][^>]*>/g) || []).length;
   assert.equal(opens, closes, `태그 불균형: 열림 ${opens} / 닫힘 ${closes}`);
+});
+
+// ── N. 노드 상태 축(#1541 T4) — 데스크톱 앱이 폴링하는 그 값 ────────────────
+// 앱은 이 값으로 '시작/정지' 버튼을 가른다. 틀리면 사용자는 도는 노드에 '시작' 을 눌러 중복 기동하거나,
+//  죽은 노드를 '실행 중' 으로 본다. Windows 분기는 CI 에서 안 도니 여기서 못박는다(#1510 §5).
+t('N1 플랫폼별 데몬 아티팩트 — mac=plist · linux=systemd unit · win=작업 이름', () => {
+  const mac = nodeDaemonArtifact('darwin', '/Users/yoon');
+  assert.equal(mac.kind, 'file');
+  assert.ok(mac.path.endsWith('/Library/LaunchAgents/io.lvly.node-agent.plist'), mac.path);
+  const lin = nodeDaemonArtifact('linux', '/home/yoon');
+  assert.equal(lin.path, '/home/yoon/.config/systemd/user/lively-node-agent.service');
+  assert.deepEqual(nodeDaemonArtifact('win32', 'C:\\Users\\yoon'), { kind: 'task', name: 'Lively Node Agent' });
+  // 모르는 플랫폼에서 파일 경로를 지어내지 않는다.
+  assert.equal(nodeDaemonArtifact('aix', '/h').kind, 'none');
+});
+
+t('N2 ★ 프로세스 프로브가 남의 Node 를 세지 않는다(커맨드라인으로 우리 것만)', () => {
+  const win = nodeProcProbe('win32');
+  assert.equal(win.cmd, 'powershell');
+  const script = win.args.join(' ');
+  assert.ok(script.includes('node-agent*agent.mjs'), script);
+  assert.ok(!/tasklist/i.test(script), 'tasklist /IM node.exe 는 사용자의 다른 Node 까지 센다');
+  assert.deepEqual(nodeProcProbe('linux'), { cmd: 'pgrep', args: ['-f', 'node-agent/agent.mjs'] });
+});
+
+t('N3 프로브 출력 해석 — pgrep 은 pid 줄, PowerShell 은 개수', () => {
+  assert.equal(parseProcCount('linux', '1234\n5678\n', 0), 2);
+  assert.equal(parseProcCount('linux', '', 1), 0, 'pgrep 미검출(exit 1)은 0 이다');
+  assert.equal(parseProcCount('win32', '\r\n2\r\n', 0), 2);
+  assert.equal(parseProcCount('win32', '0', 0), 0);
+  // 쓰레기 출력을 '있다' 로 읽지 않는다.
+  assert.equal(parseProcCount('win32', '무슨 오류', 0), 0);
+  assert.equal(parseProcCount('linux', '무슨 오류', 0), 0);
 });
 
 console.log(`\n${pass} passed`);

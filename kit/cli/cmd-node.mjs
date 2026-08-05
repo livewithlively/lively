@@ -486,6 +486,67 @@ export function winTaskXml({ runnerCmd, userId }) {
 `;
 }
 
+// ── 노드 상태 (#1541 T4) ────────────────────────────────────────────────────
+// 데스크톱 앱이 폴링할 축이다. 사람이 트레이에서 한 줄로 이해하는 건 "지금 도는가"이고, 버튼이 갈리는 건
+//  "등록됐나 / 자동시작이 켜졌나" 다 — 그 셋을 따로 준다.
+// ⚠ 파일 존재만 보면 **거짓말한다**: 데몬 등록이 남아 있어도 프로세스는 죽어 있을 수 있고(그게 정확히
+//  #1541 §6-3 이 잡은 상황이다), 반대로 데몬 없이 foreground 로 도는 경우도 있다. 그래서 축을 나눈다.
+//  registered = 등록(env 파일) · daemon = OS 데몬 등록 · running = 프로세스 실측.
+
+/** 플랫폼별 데몬 아티팩트(파일 경로 또는 작업 이름) — 순수. Windows 분기는 CI 에서 안 도므로 목록을 못박는다. */
+export function nodeDaemonArtifact(platform = process.platform, home = HOME) {
+  if (platform === "darwin") return { kind: "file", path: join(home, "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`) };
+  if (platform === "linux") return { kind: "file", path: join(home, ".config", "systemd", "user", "lively-node-agent.service") };
+  if (platform === "win32") return { kind: "task", name: WIN_TASK_NAME };
+  return { kind: "none" };
+}
+
+/** '우리 에이전트가 도는가' 를 세는 명령 — 순수(실행은 nodeStatus 가 한다). */
+export function nodeProcProbe(platform = process.platform) {
+  if (platform === "win32") {
+    // ⚠ `tasklist /IM node.exe` 는 사용자의 다른 Node 까지 센다 — 커맨드라인으로 우리 것만 고른다(stop 과 같은 자).
+    return { cmd: "powershell", args: ["-NoProfile", "-Command",
+      "@(Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | Where-Object { $_.CommandLine -like '*node-agent*agent.mjs*' }).Count"] };
+  }
+  return { cmd: "pgrep", args: ["-f", "node-agent/agent.mjs"] };
+}
+
+/** 프로브 출력 → 실행 중 개수(순수). pgrep 은 pid 줄, PowerShell 은 숫자 한 줄. */
+export function parseProcCount(platform, stdout, status) {
+  const s = String(stdout || "").trim();
+  if (platform === "win32") { const n = Number(s.split(/\r?\n/).filter(Boolean).pop()); return Number.isFinite(n) ? n : 0; }
+  // pgrep 은 못 찾으면 exit 1 + 빈 출력 — 그걸 '모름' 이 아니라 0 으로 읽는다(찾았는데 못 셌으면 pid 가 나온다).
+  if (status !== 0 && !s) return 0;
+  return s.split(/\r?\n/).filter((l) => /^\d+$/.test(l.trim())).length;
+}
+
+/** 노드 상태 실측 — 앱·`status --json` 이 쓰는 단일 통로. 못 재는 축은 null(모르는 걸 false 로 눕히지 않는다). */
+export function nodeStatus() {
+  const artifact = nodeDaemonArtifact();
+  const registered = existsSync(NODE_ENV_FILE);
+  const out = {
+    registered,
+    bundled: existsSync(join(NODE_AGENT_DIR, "agent.mjs")),
+    daemon: artifact.kind === "file" ? existsSync(artifact.path)
+      : artifact.kind === "task" ? winTaskExists()
+        : false,
+    running: null,
+    id: registered ? readEnvFile(NODE_ENV_FILE, "LIVELY_NODE_ID") : null,
+    gateway: registered ? readEnvFile(NODE_ENV_FILE, "LIVELY_GATEWAY_URL") : null,
+  };
+  try {
+    const probe = nodeProcProbe();
+    const r = spawnSync(probe.cmd, probe.args, { encoding: "utf8", timeout: 8000 });
+    // 프로브 자체를 못 돌렸으면(명령 없음 등) **모름(null)** 이다 — 0 으로 적으면 "정지됨" 이라고 거짓말한다.
+    out.running = r.error ? null : parseProcCount(process.platform, r.stdout, r.status) > 0;
+  } catch { out.running = null; }
+  return out;
+}
+function winTaskExists() {
+  try { return spawnSync("schtasks", ["/Query", "/TN", WIN_TASK_NAME], { stdio: "ignore", timeout: 8000 }).status === 0; }
+  catch { return false; }
+}
+
 function nodeStop() {
   if (process.platform === "darwin") {
     spawnSync("launchctl", ["bootout", `gui/${process.getuid()}`, PLIST_PATH], { stdio: "ignore" });

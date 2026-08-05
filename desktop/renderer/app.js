@@ -24,8 +24,17 @@ function renderState(s) {
   show($("gw-card"), !ready && !s?.busy);
   show($("done-card"), ready && !s?.busy && justFinished);
   show($("node-card"), ready);
-  $("node-start").disabled = !!s?.busy || !!s?.nodeRunning;
-  $("node-stop").disabled = !!s?.busy || !s?.nodeRunning;
+  // 실행 여부를 **모를 때**(측정 실패)는 버튼을 잠그지 않는다 — 모른다고 사용자를 가두면 안 된다.
+  const running = s?.nodeRunning === true, stopped = s?.nodeRunning === false;
+  $("node-state").textContent = !s?.nodeRegistered ? "아직 이 PC 는 노드로 등록되지 않았습니다."
+    : s?.nodeRunning === null ? `노드 ${s?.nodeId || ""} — 실행 여부를 확인하지 못했습니다.`
+      : running ? `노드 ${s?.nodeId || ""} 실행 중${s?.nodeDaemon ? " · PC 켤 때 자동 시작" : " · 이 세션만"}`
+        : `노드 ${s?.nodeId || ""} 정지됨`;
+  $("node-start").disabled = !!s?.busy || running;
+  $("node-stop").disabled = !!s?.busy || stopped || !s?.nodeRegistered;
+  const al = $("app-autolaunch");
+  al.closest("label").classList.toggle("hidden", s?.appAutoLaunch === null || s?.appAutoLaunch === undefined);
+  al.checked = !!s?.appAutoLaunch; al.disabled = !!s?.busy;
   $("gw-go").disabled = !!s?.busy;
 }
 
@@ -93,6 +102,7 @@ $("prompt-no").addEventListener("click", () => { if (prompt) { window.lively.ans
 $("device-link").addEventListener("click", (e) => { e.preventDefault(); const u = e.target.dataset.url; if (u) window.lively.openExternal(u); });
 $("node-start").addEventListener("click", async () => { const r = await window.lively.run("node-start"); if (r?.error) log("✗ " + r.error); });
 $("node-stop").addEventListener("click", async () => { const r = await window.lively.run("node-stop"); if (r?.error) log("✗ " + r.error); });
+$("app-autolaunch").addEventListener("change", (e) => window.lively.setAppAutoLaunch(e.target.checked));
 
 window.lively.onState(renderState);
 window.lively.onProgress(renderProgress);

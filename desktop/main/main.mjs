@@ -34,19 +34,30 @@ let progress = null;
 const pendingPrompts = new Map();   // prompt id → resolve (렌더러의 답을 기다린다)
 
 // ── 상태 ────────────────────────────────────────────────────────────────────
-// 노드 축(등록·데몬·실행)은 아직 CLI 가 안 알려준다 — T4 에서 `status --json` 에 붙인다.
-//  그때까지 파일 존재로만 **추정**하고, 추정이라는 걸 이름(Registered)으로 드러낸다.
-async function refreshState() {
+// 파일 존재는 **싸고 즉시** 알 수 있는 축이라 먼저 채운다(창을 여는 판단이 여기 달렸다).
+//  노드의 실행 여부는 프로세스를 재야 알 수 있어 `lively status --json` 으로 따로 가져온다(#1541 T4).
+//  ⚠ 못 잰 축은 null 로 남긴다 — 모르는 걸 false 로 눕히면 화면이 "정지됨" 이라고 거짓말한다.
+async function refreshState({ deep = false } = {}) {
   const cliPath = locateCli(existsSync);
   const next = { ...state, cliPath, cliFound: !!cliPath };
   next.gatewayUrl = readTrim(join(LIVELY_DIR, "gateway-url"));
   next.loggedIn = existsSync(join(LIVELY_DIR, "token"));
   next.kitInstalled = existsSync(join(LIVELY_DIR, "kit-version"));
   next.nodeRegistered = existsSync(join(LIVELY_DIR, "node-agent.env"));
+  next.appAutoLaunch = appAutoLaunchEnabled();
   state = next;
-  renderTray();
-  send(IPC.STATE, state);
+  renderTray(); send(IPC.STATE, state);
+  if (deep && cliPath && !running) await refreshNodeStatus(cliPath);
   return state;
+}
+
+/** `lively status --json` 의 node 축을 읽어 실제 상태로 덮는다(폴링·작업 직후). */
+async function refreshNodeStatus(cli) {
+  const r = await runCli({ cli, args: argvFor("status"), env: { ...process.env }, timeoutMs: 30_000 });
+  const n = r.result?.node;
+  if (!r.ok || !n) return;                     // 못 읽었으면 **건드리지 않는다**(옛 값이 추측보다 낫다)
+  state = { ...state, nodeRegistered: !!n.registered, nodeDaemon: !!n.daemon, nodeRunning: n.running, nodeId: n.id || null };
+  renderTray(); send(IPC.STATE, state);
 }
 function readTrim(p) { try { return readFileSync(p, "utf8").trim() || null; } catch { return null; } }
 
@@ -73,7 +84,25 @@ function onMenu(id) {
   if (id === "setup") { showWindow(); return start("setup", {}); }
   if (id === "node-start") return start("node-start", {});
   if (id === "node-stop") return start("node-stop", {});
-  if (id === "node-autostart") { showWindow(); return start(state.nodeDaemon ? "node-stop" : "node-start", {}); }
+  // 노드의 자동 시작 = OS 데몬 등록. `node --daemon` 이 켜고 `node stop` 이 끈다(등록·번들은 남는다).
+  if (id === "node-autostart") return start(state.nodeDaemon ? "node-stop" : "node-start", {});
+  if (id === "app-autolaunch") return setAppAutoLaunch(!state.appAutoLaunch);
+}
+
+// ── 앱 자동 시작 (#1541 T4) ─────────────────────────────────────────────────
+// ⚠ **노드의 자동 시작과 다른 축이다.** 노드는 OS 데몬이 살리므로 앱이 없어도 돈다 — 이건 순전히
+//  '리모컨을 로그인할 때 띄울까' 다. 그래서 기본은 꺼짐이고, 사람이 켤 때만 켠다.
+//  Electron 의 loginItem 은 macOS(로그인 항목)·Windows(Run 키)를 한 API 로 덮는다. Linux 는 미지원이라
+//  false 를 그대로 돌려준다(있는 척하지 않는다).
+function appAutoLaunchEnabled() {
+  try { return process.platform === "linux" ? null : !!app.getLoginItemSettings().openAtLogin; } catch { return null; }
+}
+function setAppAutoLaunch(on) {
+  try {
+    // openAsHidden: 로그인 때 창을 띄우지 않는다 — 트레이 앱이 매 부팅마다 창을 열면 그건 방해다.
+    app.setLoginItemSettings({ openAtLogin: !!on, openAsHidden: true });
+  } catch { /* 미지원 플랫폼 */ }
+  void refreshState();
 }
 
 // ── 창 ──────────────────────────────────────────────────────────────────────
@@ -117,8 +146,9 @@ async function start(kind, opts) {
     onPrompt: (p) => askUser(p),
   });
   running = null;
-  await refreshState();
-  state = { ...state, busy: false }; renderTray(); send(IPC.STATE, state);
+  state = { ...state, busy: false };
+  await refreshState({ deep: true });          // 방금 바꾼 상태를 **실측으로** 되읽는다(추측으로 그리지 않는다)
+  renderTray(); send(IPC.STATE, state);
   send(IPC.PROGRESS, progress);
   return { ok: r.ok, error: r.error, result: r.result };
 }
@@ -181,6 +211,7 @@ ipcMain.handle(IPC.ANSWER, (_e, { id, value }) => {
   return { ok: true };
 });
 ipcMain.handle(IPC.SET_GATEWAY, (_e, { url }) => onboard(url));
+ipcMain.handle(IPC.SET_APP_AUTOLAUNCH, (_e, { on }) => { setAppAutoLaunch(!!on); return { ok: true, on: appAutoLaunchEnabled() }; });
 // 외부 링크는 메인만 연다 — 렌더러에 shell 을 노출하면 임의 URL·파일 열기가 된다.
 ipcMain.handle(IPC.OPEN_EXTERNAL, (_e, { url }) => {
   if (!/^https?:\/\//i.test(String(url || ""))) return { ok: false };
@@ -195,8 +226,12 @@ else {
   app.whenReady().then(async () => {
     tray = new Tray(trayImage());
     tray.on("click", () => showWindow());          // Windows·Linux 는 좌클릭이 자연스럽다
-    await refreshState();
+    await refreshState({ deep: true });
     if (!state.cliFound || !state.loggedIn || !state.kitInstalled) showWindow();   // 할 일이 있으면 먼저 보여준다
+    // 노드는 앱 밖에서도 죽고 살아난다(OS 데몬·사용자의 `lively node stop`). 주기적으로 되읽지 않으면
+    //  트레이가 옛 상태를 계속 보여준다. 30초 — 사람이 느끼기엔 실시간이고 `status` 호출은 가볍다.
+    const poll = setInterval(() => { if (!running) void refreshState({ deep: true }); }, 30_000);
+    if (poll.unref) poll.unref();
   });
   // ★ 창을 다 닫아도 종료하지 않는다(트레이 상주). 기본 동작(win/linux 종료)을 반드시 덮어야 한다.
   app.on("window-all-closed", () => { /* noop — 트레이로 산다 */ });

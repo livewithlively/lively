@@ -33,7 +33,12 @@ export function trayMenuModel(st) {
     items.push({ id: "node-start", label: "노드 시작", enabled: !busy });
   }
   // 자동 시작은 **노드가 등록된 뒤에만** 의미가 있다(등록 전엔 켤 대상이 없다).
-  items.push({ id: "node-autostart", label: "PC 켤 때 자동 시작", type: "checkbox", checked: !!s.nodeDaemon, enabled: !busy && !!s.nodeRegistered });
+  items.push({ id: "node-autostart", label: "노드를 PC 켤 때 자동 시작", type: "checkbox", checked: !!s.nodeDaemon, enabled: !busy && !!s.nodeRegistered });
+  // ⚠ 위와 **다른 축**이다. 노드는 OS 데몬이 살리므로 앱이 없어도 돈다 — 이건 리모컨(앱)을 띄울지다.
+  //  Linux 는 Electron 이 로그인 항목을 지원하지 않는다 → null 이면 항목 자체를 안 보여준다(있는 척 금지).
+  if (s.appAutoLaunch !== null && s.appAutoLaunch !== undefined) {
+    items.push({ id: "app-autolaunch", label: "이 앱도 로그인할 때 시작", type: "checkbox", checked: !!s.appAutoLaunch, enabled: !busy });
+  }
   items.push({ type: "separator" });
   items.push({ id: "open", label: "창 열기" });
   items.push({ id: "open-web", label: "웹에서 보기", enabled: !!s.gatewayUrl });

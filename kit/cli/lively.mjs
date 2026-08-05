@@ -872,7 +872,14 @@ async function gatherStatus() {
       opencode: { installed: has("opencode"), wired: false, mcp: null, mcpConnected: null, configOk: null, transport: null, assets: null },
     },
     hooks: { installed: 0, expected: REQUIRED_HOOKS.length },
+    // 노드 축(#1541 T4) — 데스크톱 앱이 폴링한다. 부트스트랩 직후엔 cmd-node.mjs 가 아직 없을 수 있으므로
+    //  (그 시점의 lively.mjs 는 단독 파일이다) 못 읽으면 null 로 둔다 — '없음' 과 '모름' 을 섞지 않는다.
+    node: null,
   };
+  try {
+    const { nodeCommands: _n, nodeStatus } = await import(new URL("./cmd-node.mjs", import.meta.url));
+    if (typeof nodeStatus === "function") st.node = nodeStatus();
+  } catch { /* 모듈 없음(부트스트랩 직후) 또는 조회 실패 — node 는 null 로 남는다 */ }
   try {
     const s = readFileSync(join(CLAUDE_DIR, "settings.json"), "utf8");
     st.harness.claude.wired = s.includes(".lively/hooks/") || s.includes(".lively\\hooks\\");
@@ -1114,6 +1121,11 @@ async function cmdStatus(opts) {
     say(`  opencode      ${mark(oc.installed)} 설치   ${ocWired}${ocMcp}${connOf(oc)}${assetsOf(oc)}`);
   }
   if (st.kit.autoUpdate !== null) say(`  자동 업데이트 ${st.kit.autoUpdate ? green("켜짐") : yellow("꺼짐")}`);
+  // 노드(#1541 T4) — **등록됐을 때만** 뜻이 있다. 실행 여부를 못 재면 `?` 로 적는다(모르는 걸 '정지' 로 쓰면 거짓말).
+  if (st.node?.registered) {
+    const run = st.node.running === null ? dim("? 실행") : st.node.running ? green("✓ 실행 중") : yellow("정지됨");
+    say(`  노드          ${st.node.id || dim("(id 미상)")}   ${run}   ${st.node.daemon ? green("✓ 자동 시작") : dim("– 자동 시작")}`);
+  }
   if (st.project) { say(""); renderProjectStatus(st.project); }
   say("");
   if (!st.account.authenticated) say(dim("  → ") + bold("lively login") + dim(" 으로 시작하세요."));

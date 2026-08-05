@@ -55,3 +55,6 @@ ul#steps { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-d
 
 .mono { font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; margin: 8px 0 0; }
 .err { color: var(--bad); font-size: 12px; margin: 6px 0 0; min-height: 1em; }
+
+.check { display: flex; align-items: center; gap: 7px; font-size: 13px; margin-top: 12px; }
+.check .hint { margin: 0; }

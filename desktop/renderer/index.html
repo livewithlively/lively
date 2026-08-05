@@ -66,10 +66,13 @@
       <h2>이 PC 를 노드로</h2>
       <p class="hint">웹에서 이 PC 의 터미널을 열고, 무거운 작업을 여기로 위탁할 수 있습니다.
         노드는 앱을 꺼도 계속 실행됩니다(PC 를 켜면 자동 시작).</p>
+      <p class="hint" id="node-state"></p>
       <div class="row">
         <button id="node-start" class="primary">노드 시작</button>
         <button id="node-stop" class="ghost">노드 정지</button>
       </div>
+      <label class="check"><input type="checkbox" id="app-autolaunch" /> 이 앱도 로그인할 때 시작
+        <span class="hint">(노드는 앱과 무관하게 계속 실행됩니다)</span></label>
     </section>
 
     <details id="log-wrap">

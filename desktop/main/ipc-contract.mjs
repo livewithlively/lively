@@ -8,6 +8,7 @@ export const IPC = {
   ANSWER: "lively:answer",             // { id, value } — prompt 에 대한 사람의 답
   SET_GATEWAY: "lively:set-gateway",   // { url }
   OPEN_EXTERNAL: "lively:open-external", // { url } — 브라우저로 (렌더러에 shell 을 노출하지 않기 위해 메인 경유)
+  SET_APP_AUTOLAUNCH: "lively:set-app-autolaunch", // { on } — 앱(리모컨)을 로그인 때 띄울지. 노드 자동시작과 별개 축.
 
   // 메인 → 렌더러 (send, 단방향)
   STATE: "lively:state",               // 상태 스냅샷 갱신
