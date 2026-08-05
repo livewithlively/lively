@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { detectAwaiting, modeEnvArgs, canSeeSession, resolveAgentPhase, parseReportedPhase, isPhaseFresh, isActivityProgress, PHASE_TTL_SEC } from "./terminal-sessions.js";
 // 배럴(terminal-sessions.ts)엔 새 심볼을 늘리지 않는다 — 그 파일의 재수출 집합은 #1313 R15 분할의 계약이다.
 import { harnessLaunchArgv, harnessLoginArgv, harnessFailNotice } from "./catalog.js";
+import { SHELL_CMDS, isAgentOffline } from "./phase.js";  // E12 — 런처가 pane 포그라운드를 무엇으로 보이게 하는가(#1535)
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -269,6 +270,50 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
   ok2(harnessFailNotice("codex").includes("device-auth"), "E11a codex 안내는 device-auth 를 지목한다");
   ok2(harnessFailNotice("claude").includes("/login"), "E11b claude 안내는 TUI 안 /login 을 지목한다");
   ok2(harnessFailNotice("gemini").includes("gemini"), "E11c 모르는 하네스도 그 이름으로 재실행 안내를 준다");
+
+  // E12 — 런처의 **부작용**: pane 의 foreground 프로세스가 무엇으로 보이는가 (#1535).
+  //  래퍼를 씌운다는 건 pane 에 프로세스를 하나 더 만든다는 뜻이다. job control 이 없으면 그 래퍼
+  //  (`sh` — macOS 실체는 bash)가 tty 의 foreground pgrp 리더로 눌러앉아, 하네스가 도는 중에도 tmux 의
+  //  `#{pane_current_command}` 가 **`bash`** 로 나온다. 그 한 값이 두 판정의 유일한 입력이라 둘 다 뒤집힌다:
+  //   · stale 마우스 게이팅(#1302) — 살아있는 앱의 마우스를 끄고(alt-screen 휠이 화살표 키로 폴백 =
+  //     2026-08-05 상민님 신고 증상) pane tty 에 DECRST 를 써서 tmux 의 진실까지 파괴
+  //   · isAgentOffline — 살아있는 하네스를 '종료됨'으로 표시
+  //  둘 다 **웹 UI 에서만** 보이는 증상이라 서버 테스트로는 안 잡힌다 → 계약을 여기서 tmux 로 직접 고정한다.
+  //  (문자열 검사로는 못 한다. `set -m` 이 든 스크립트를 확인해봐야 그게 정말 pgrp 을 옮겼는지는 tmux 만 안다.)
+  {
+    const haveTmux = spawnSync("tmux", ["-V"], { encoding: "utf8" }).status === 0;
+    if (!haveTmux) console.log("skip E12 (tmux 없음 — 윈도우/최소 컨테이너)");
+    else {
+      // ⚠ 소켓 경로는 짧아야 한다(unix sun_path ≈104바이트). macOS 의 tmpdir() 은 /var/folders/… 라 길어서 실패한다.
+      const sock = `/tmp/lv-e12-${process.pid}.sock`;
+      const tmux = (...a: string[]): string =>
+        (spawnSync("tmux", ["-S", sock, ...a], { encoding: "utf8" }).stdout || "").trim();
+      // pane 기동을 기다린다(최대 ~3s) — done(cmd) 이 참이 되면 즉시 반환. 고정 sleep 은 느리거나 불안정하다.
+      const paneCmd = (sess: string, done: (c: string) => boolean): string => {
+        let c = "";
+        for (let i = 0; i < 30; i++) {
+          c = tmux("display-message", "-p", "-t", sess, "#{pane_current_command}");
+          if (done(c)) break;
+          spawnSync("sleep", ["0.1"]);
+        }
+        return c;
+      };
+      try {
+        tmux("kill-server");
+        // 하네스 대역 = `sleep`(셸이 아닌 이름이면 무엇이든 된다). 실제 하네스는 부르지 않는다 — 설치·인증에 기대지 않게.
+        tmux("new-session", "-d", "-s", "e12a", "-x", "80", "-y", "24", ...harnessLaunchArgv("claude", ["sleep", "120"]));
+        const alive = paneCmd("e12a", (c) => c === "sleep");
+        ok2(alive === "sleep", `E12a 하네스가 도는 동안 tmux 의 foreground 는 하네스여야 한다(실측 '${alive}')`);
+        ok2(!SHELL_CMDS.has(alive), `E12b 그게 셸로 보이면 마우스 게이팅·offline 판정이 동시에 뒤집힌다(실측 '${alive}')`);
+        ok2(!isAgentOffline("claude", alive), "E12c 살아있는 하네스를 '종료됨'으로 판정하지 않는다");
+        // 반대 축 — 하네스가 죽으면 폴백 셸이 foreground 를 되찾아 '종료됨'·'stale 마우스'가 **그때** 참이 된다.
+        //  (이게 없으면 E12a~c 는 "게이팅을 통째로 무력화하라"는 요구로 오독될 수 있다.)
+        tmux("new-session", "-d", "-s", "e12d", "-x", "80", "-y", "24", ...harnessLaunchArgv("claude", ["sh", "-c", "exit 1"]));
+        const dead = paneCmd("e12d", (c) => SHELL_CMDS.has(c));
+        ok2(isAgentOffline("claude", dead), `E12d 하네스가 죽은 뒤엔 셸이 foreground → '종료됨'이 참이 된다(실측 '${dead}')`);
+      } finally { tmux("kill-server"); }
+    }
+  }
 
   // ── 로그인 세션 — 만료 자격으로는 하네스가 즉사해 로그인 화면조차 못 뜨던 데드락을 끊는다 ──
   {
