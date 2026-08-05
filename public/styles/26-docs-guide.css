@@ -12,12 +12,17 @@
    그룹이 항목보다 크고 진하다: 14.5/800 잉크 vs 14/500 ink-sub. */
 .docs-side-title { font-size: 14.5px; font-weight: 800; letter-spacing: -.2px;
   color: var(--ink); margin: 0 0 5px; padding: 0 11px; }
-.docs-side a.docs-item { display: block; padding: 5.5px 11px 5.5px 22px; border-radius: 9px; font-size: 14px;
+/* 항목은 앵커(라우트 이동)가 기본이지만 **버튼일 수도 있다**: 증류기 설정(#1564)의 단계 네비는 같은
+   페이지 안에서 폼을 갈아끼우므로 링크면 안 된다(라우터가 돌면 입력 중인 폼이 통째로 재렌더돼 값이 날아간다).
+   그래서 선택자를 태그에서 풀고, 버튼일 때만 필요한 기본 스타일 리셋을 아래에 덧붙인다. */
+.docs-side .docs-item { display: block; padding: 5.5px 11px 5.5px 22px; border-radius: 9px; font-size: 14px;
   font-weight: 500; line-height: 1.5; color: var(--ink-sub); text-decoration: none;
   transition: background .12s ease, color .12s ease; }
-.docs-side a.docs-item:hover { background: var(--bg-tint); color: var(--ink); }
-.docs-side a.docs-item.active { background: var(--bg-punch); color: var(--blue); font-weight: 700; }
-.docs-side a.docs-item:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.docs-side button.docs-item { width: 100%; text-align: left; appearance: none;
+  background: none; border: 0; font-family: inherit; cursor: pointer; }
+.docs-side .docs-item:hover { background: var(--bg-tint); color: var(--ink); }
+.docs-side .docs-item.active { background: var(--bg-punch); color: var(--blue); font-weight: 700; }
+.docs-side .docs-item:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 /* 관리자 전용 섹션 표식(#1010) — 비관리자에겐 sectionHidden 으로 아예 안 보이는 섹션(ADMIN_ONLY)임을,
    관리자가 볼 때 라벨 옆 배지로 알린다(#837 이 그룹 아래 회색 힌트를 걷어낸 자리에 항목 단위 권한 신호만 남긴다). */
 .docs-side a.docs-item .admin-only-badge { display: inline-block; margin-left: 7px; padding: 0 6px;
