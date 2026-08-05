@@ -51,6 +51,11 @@ function ring(size, scale) {
 }
 
 const b1 = ring(22, 1), b2 = ring(22, 2);
+// 앱 아이콘 — electron-builder 가 512px PNG 하나로 macOS icns·Windows ico 를 만든다.
+//  레포엔 안 담는다(생성물): desktop/build/ 는 gitignore. 빌드 스크립트가 매번 만든다.
+import { mkdirSync } from "node:fs";
+mkdirSync(new URL("./build/", import.meta.url), { recursive: true });
+writeFileSync(new URL("./build/icon.png", import.meta.url), ring(512, 1));
 const out = `// ⚠ **생성물이다** — 손으로 고치지 마라. 재생성: scratchpad/gen-icon.mjs (22x22 링, 검정+알파).
 // 레포에 바이너리 자산을 두지 않으려고 data URL 로 임베드한다(electron-builder files 목록도 단순해진다).
 // macOS 템플릿 이미지 규약(검정+알파만)을 지켜 다크/라이트 메뉴바 양쪽에서 자동 반전된다.

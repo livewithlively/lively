@@ -11,6 +11,7 @@
 //  ③ 렌더러는 신뢰하지 않는다 — contextIsolation·sandbox 켜고, argv 는 메인이 만든다(ipc-contract).
 import { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, dialog } from "electron";
 import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -20,6 +21,7 @@ import { runCli, reduceProgress } from "./cli-runner.mjs";
 import { trayMenuModel } from "./tray-menu.mjs";
 import { IPC, RUN_KINDS, argvFor } from "./ipc-contract.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
+import { shouldCheckForUpdates, updateFailureNote, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LIVELY_DIR = join(process.env.LIVELY_HOME || homedir(), ".lively");
@@ -103,6 +105,35 @@ function setAppAutoLaunch(on) {
     app.setLoginItemSettings({ openAtLogin: !!on, openAsHidden: true });
   } catch { /* 미지원 플랫폼 */ }
   void refreshState();
+}
+
+// ── 자동 업데이트 (#1541 T6) ─────────────────────────────────────────────────
+// ⚠ **앱 자신의 갱신**이다 — 키트 자동 업데이트(#858)와 다른 축이다(그건 CLI 가 자기 키트를 갱신한다).
+// 실패는 치명이 아니다(앱은 그대로 쓴다) → 오류 팝업을 띄우지 않고 로그·상태로만 남기고, 한 번 실패하면
+//  이 세션엔 다시 묻지 않는다(같은 팝업이 6시간마다 반복되는 것보다 낫다).
+let updateFailed = false;
+async function checkUpdates() {
+  const verdict = shouldCheckForUpdates({
+    packaged: app.isPackaged, platform: process.platform,
+    // 빌드에 publish 설정이 박혔나 = electron-updater 가 볼 곳이 있나.
+    hasPublishConfig: true,
+    // mac 서명 여부는 런타임에 확실히 알기 어렵다 — 서명된 앱만 통과하는 게이트키퍼 판정을 대신 쓴다.
+    macSigned: process.platform !== "darwin" || app.isPackaged && !!process.mas === false && isMacSigned(),
+    optOut: process.env[UPDATE_OPT_OUT_ENV], failedBefore: updateFailed,
+  });
+  if (!verdict.ok) { send(IPC.LOG, { stream: "raw", line: `업데이트 확인 건너뜀(${verdict.reason})` }); return; }
+  try {
+    const { autoUpdater } = (await import("electron-updater")).default;
+    autoUpdater.autoDownload = true;
+    autoUpdater.on("error", (e) => { updateFailed = true; send(IPC.LOG, { stream: "raw", line: updateFailureNote(e) }); });
+    await autoUpdater.checkForUpdatesAndNotify();
+  } catch (e) { updateFailed = true; send(IPC.LOG, { stream: "raw", line: updateFailureNote(e) }); }
+}
+/** mac 서명 여부 — 서명되지 않은 번들은 codesign 검증에 실패한다. 못 재면 '서명 안 됨' 으로 본다(안전측). */
+function isMacSigned() {
+  try {
+    return spawnSync("codesign", ["-dv", app.getAppPath().replace(/\/Contents\/Resources\/app(\.asar)?$/, "")], { stdio: "ignore" }).status === 0;
+  } catch { return false; }
 }
 
 // ── 창 ──────────────────────────────────────────────────────────────────────
@@ -232,6 +263,9 @@ else {
     //  트레이가 옛 상태를 계속 보여준다. 30초 — 사람이 느끼기엔 실시간이고 `status` 호출은 가볍다.
     const poll = setInterval(() => { if (!running) void refreshState({ deep: true }); }, 30_000);
     if (poll.unref) poll.unref();
+    void checkUpdates();
+    const up = setInterval(() => void checkUpdates(), UPDATE_INTERVAL_MS);
+    if (up.unref) up.unref();
   });
   // ★ 창을 다 닫아도 종료하지 않는다(트레이 상주). 기본 동작(win/linux 종료)을 반드시 덮어야 한다.
   app.on("window-all-closed", () => { /* noop — 트레이로 산다 */ });

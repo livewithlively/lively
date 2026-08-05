@@ -5,12 +5,15 @@
   "description": "라이블리 데스크톱 — 설치·로그인·노드 등록을 GUI 로 (트레이 상주)",
   "type": "module",
   "main": "main/main.mjs",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --publish never",
-    "dist:mac": "electron-builder --mac --publish never",
-    "dist:win": "electron-builder --win --publish never"
+    "dist": "npm run icon && electron-builder --publish never",
+    "dist:mac": "npm run icon && electron-builder --mac --publish never",
+    "dist:win": "npm run icon && electron-builder --win --publish never",
+    "icon": "node tools-gen-icon.mjs"
   },
   "devDependencies": {
     "electron": "^43.3.0",
@@ -19,10 +22,52 @@
   "build": {
     "appId": "io.lvly.desktop",
     "productName": "Lively",
-    "directories": { "output": "release" },
-    "files": ["main/**/*", "preload/**/*", "renderer/**/*", "assets/**/*", "!**/*.test.mjs"],
-    "mac": { "category": "public.app-category.developer-tools", "target": ["dmg", "zip"] },
-    "win": { "target": ["nsis"] },
-    "linux": { "target": ["AppImage"], "category": "Development" }
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main/**/*",
+      "preload/**/*",
+      "renderer/**/*",
+      "assets/**/*",
+      "!**/*.test.mjs"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "signtoolOptions": {}
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Development"
+    },
+    "icon": "build/icon.png",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "livewithlively",
+        "repo": "context-ontology"
+      }
+    ],
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "dependencies": {
+    "electron-updater": "^6.6.2"
   }
 }

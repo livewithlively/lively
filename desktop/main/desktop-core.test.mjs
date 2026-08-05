@@ -15,6 +15,7 @@ import { createNdjsonParser, runCli, reduceProgress, lastError } from "./cli-run
 import { argvFor, RUN_KINDS, IPC } from "./ipc-contract.mjs";
 import { trayMenuModel, statusLabel } from "./tray-menu.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
+import { shouldCheckForUpdates, updateFailureNote, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
 
 let pass = 0;
 const t = (n, fn) => { fn(); pass++; console.log(`ok  ${n}`); };
@@ -459,6 +460,65 @@ t("G6 트레이 아이콘 데이터가 진짜 PNG 다(1x·2x, 정사각, 알파 
     assert.equal(b.readUInt32BE(20), want, `${name}: 높이`);
     assert.equal(b[25], 6, `${name}: 알파 없는 컬러타입 — 메뉴바에서 검은 사각형이 된다`);
   }
+});
+
+// ── U. 자동 업데이트 정책(#1541 T6) ─────────────────────────────────────────
+// 이 판단이 틀리면 증상이 **조용하다** — 개발 중에 릴리스를 두드리거나, 서명 안 된 mac 빌드가 6시간마다
+//  같은 오류 팝업을 반복하거나, 꺼 뒀는데 계속 확인한다. 전부 로그를 봐야 아는 부류라 표로 못박는다.
+const UOK = { packaged: true, platform: 'win32', hasPublishConfig: true, macSigned: true };
+
+t('U1 정상 조건이면 확인한다', () => {
+  assert.deepEqual(shouldCheckForUpdates(UOK), { ok: true, reason: 'ok' });
+});
+
+t('U2 개발 실행(electron .)에서는 확인하지 않는다', () => {
+  // 로컬 빌드가 남의 릴리스로 덮이려 하면 개발이 통째로 이상해진다.
+  assert.equal(shouldCheckForUpdates({ ...UOK, packaged: false }).ok, false);
+  assert.equal(shouldCheckForUpdates({ ...UOK, packaged: false }).reason, 'dev-run');
+});
+
+t('U3 배포처 설정이 없으면 확인하지 않는다(볼 곳이 없다)', () => {
+  assert.equal(shouldCheckForUpdates({ ...UOK, hasPublishConfig: false }).reason, 'no-publish-config');
+});
+
+t('U4 ★ mac 미서명은 구조적 불가 — 시도조차 하지 않는다', () => {
+  // Squirrel.Mac 은 서명을 요구한다. 시도하면 매번 같은 오류가 나고 사용자는 그걸 6시간마다 본다.
+  assert.equal(shouldCheckForUpdates({ ...UOK, platform: 'darwin', macSigned: false }).reason, 'mac-unsigned');
+  assert.equal(shouldCheckForUpdates({ ...UOK, platform: 'darwin', macSigned: true }).ok, true);
+  // 다른 OS 는 서명과 무관하다.
+  assert.equal(shouldCheckForUpdates({ ...UOK, platform: 'win32', macSigned: false }).ok, true);
+  assert.equal(shouldCheckForUpdates({ ...UOK, platform: 'linux', macSigned: false }).ok, true);
+});
+
+t('U5 한 번 실패하면 이 세션엔 다시 묻지 않는다', () => {
+  assert.equal(shouldCheckForUpdates({ ...UOK, failedBefore: true }).reason, 'failed-before');
+});
+
+t('U6 opt-out 은 무엇보다 먼저 이긴다 · 0 은 opt-out 이 아니다', () => {
+  assert.equal(shouldCheckForUpdates({ ...UOK, optOut: '1' }).reason, 'opt-out');
+  assert.equal(shouldCheckForUpdates({ ...UOK, optOut: 'yes' }).reason, 'opt-out');
+  assert.equal(shouldCheckForUpdates({ ...UOK, optOut: '0' }).ok, true, '0 을 opt-out 으로 읽으면 끌 수가 없다');
+  assert.equal(shouldCheckForUpdates({ ...UOK, optOut: '' }).ok, true);
+  assert.equal(UPDATE_OPT_OUT_ENV, 'LIVELY_DESKTOP_NO_UPDATE');
+});
+
+t('U7 실패 문구는 원인별로 다르고, 앱을 못 쓰게 됐다고 말하지 않는다', () => {
+  assert.match(updateFailureNote(new Error('Could not get code signature')), /서명되지 않/);
+  assert.match(updateFailureNote(new Error('getaddrinfo ENOTFOUND github.com')), /네트워크/);
+  for (const e of [new Error('Could not get code signature'), new Error('ENOTFOUND')]) {
+    assert.ok(!/설치|재설치|중단/.test(updateFailureNote(e)), '자동 업데이트 실패는 치명이 아니다');
+  }
+  assert.ok(UPDATE_INTERVAL_MS >= 60 * 60 * 1000, '너무 잦으면 레이트리밋에 걸린다');
+});
+
+t('U8 빌드 설정 — 배포처·아이콘·무인 설치 계약', () => {
+  // electron-builder 설정이 빠지면 **빌드는 성공하는데** 자동 업데이트가 조용히 죽는다(볼 곳이 없어서).
+  const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'));
+  assert.equal(pkg.build.publish?.[0]?.provider, 'github', '배포처가 없으면 electron-updater 는 어디도 안 본다');
+  assert.ok(pkg.dependencies?.['electron-updater'], 'electron-updater 는 런타임 의존성이어야 한다(devDep 이면 번들에서 빠진다)');
+  assert.equal(pkg.build.icon, 'build/icon.png');
+  assert.ok(pkg.scripts.dist.includes('icon'), '아이콘 생성 없이 빌드하면 기본 Electron 아이콘이 나간다');
+  assert.equal(pkg.build.mac.hardenedRuntime, true, '공증(notarization)의 전제');
 });
 
 console.log(`\n${pass} passed`);
