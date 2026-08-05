@@ -1,22 +1,29 @@
 // 관리기 실행(#1419 T5) — 판정기를 돌려 발견을 쌓고, action_level 이 허락하면 조치까지 적용한다.
 //
 //  실행 경로가 kind 에 따라 갈린다:
-//   · 결정적(mismatch·outdated) — 여기서 **끝까지** 한다. SQL 판정 → 발견 저장 → (auto 면) 조치 적용.
+//   · 결정적(mismatch·outdated·stale_ref) — 여기서 **끝까지** 한다. SQL 판정 → 발견 저장 → (auto 면) 조치 적용.
+//     stale_ref 만 추가 재료가 있다: 레포 파일 목록. base 클론(workspace/repos/<repo>)을 읽어 색인한다.
 //   · LLM 필요(contradiction·code_drift) — 후보를 뽑아 **헤드리스 배치로 넘긴다**. 판정은 AI 가 하고,
 //     그 결과는 AI 가 org_manager_finding_report 도구로 되돌려 적는다.
 import { itemsPool } from "../../db/client.js";
 import {
-  getManager, upsertFinding, recordManagerRun, needsLlm, MANAGER_KIND_LABEL, type ManagerRow,
+  getManager, upsertFinding, recordManagerRun, needsLlm, resolveUnseenFindings,
+  MANAGER_KIND_LABEL, type ManagerRow,
 } from "../store/managers.js";
 import {
   detectMismatch, detectOutdated, findContradictionCandidates, findCodeDriftCandidates,
 } from "./detectors.js";
+import { detectStaleRefs, indexRepo, type RepoIndex } from "./stale-ref.js";
+import { listReposV6 } from "../../v6/domainmap-store.js";
+import { REPOS_SUBDIR } from "../../project/project-provision.js";
+import { PROJECT_SHARED_BASE } from "../../project/project-fs.js";
+import path from "node:path";
 import { isApplicableAction } from "./action-whitelist.js";
 import { logger } from "../../log.js";
 
 export interface ManagerRunResult {
   manager: string; kind: string;
-  found?: number; created?: number; repeated?: number; applied?: number;
+  found?: number; created?: number; repeated?: number; applied?: number; resolved?: number; truncated?: string;
   candidates?: number; enqueued?: boolean; task_id?: number;
   skipped?: string; error?: string;
 }
@@ -35,7 +42,13 @@ export async function runManager(
       // ── 결정적 경로 — 판정부터 조치까지 여기서 끝난다. ──
       const findings = m.kind === "mismatch"
         ? await detectMismatch(m, m.batch_size)
-        : await detectOutdated(m, m.batch_size);
+        : m.kind === "stale_ref"
+          ? await detectStaleRefs(m, m.batch_size, await repoIndexForAllRepos())
+          : await detectOutdated(m, m.batch_size);
+
+      // 이 시각 이전에 마지막으로 본 발견은 '이번에 못 본 것'이다 — 아래 전수 판정일 때만 닫는 데 쓴다.
+      //  upsertFinding 이 last_seen_at=now() 로 올리므로, 이 스냅샷보다 오래된 것이 곧 미발견이다.
+      const sweepStart = (await itemsPool.query(`SELECT now() AS t`)).rows[0].t as string;
 
       let created = 0, repeated = 0, applied = 0;
       for (const f of findings) {
@@ -47,7 +60,14 @@ export async function runManager(
           if (await applyAction(f.proposed_action, `manager:${m.key}`)) applied++;
         }
       }
-      const summary = { found: findings.length, created, repeated, applied };
+      // **전수 실행이었을 때만** 미발견을 닫는다. batch_size 에 닿았다면 잘렸을 수 있고, 그때 닫으면
+      //  '배치 밖이라 못 본 것'을 '고쳐진 것'으로 만든다(조용한 손실). 잘렸으면 그 사실을 요약에 남긴다.
+      const truncated = findings.length >= m.batch_size;
+      const resolved = truncated ? 0 : await resolveUnseenFindings(m.id, sweepStart, `manager:${m.key}`);
+      const summary = {
+        found: findings.length, created, repeated, applied, resolved,
+        ...(truncated ? { truncated: `배치 한도(${m.batch_size})에 닿아 전수가 아닙니다 — 미발견 자동 해소를 건너뜁니다. 한도를 올리거나 스코프를 좁히세요.` } : {}),
+      };
       await recordManagerRun(m.id, "ok", summary);
       return { ...base, ...summary };
     }
@@ -193,6 +213,37 @@ export async function runManagerByRef(
   if (!m) return { manager: String(ref), kind: "?", skipped: "관리기를 찾을 수 없습니다" };
   if (!m.enabled) return { manager: m.key, kind: m.kind, skipped: "꺼져 있음" };
   return runManager(m, enqueue);
+}
+
+/**
+ * 등록된 전 레포의 base 클론을 색인해 하나로 합친다 — "이 경로가 우리 코드에 있나"가 판정이므로
+ *  레포 경계를 나눌 이유가 없다(한 문서가 여러 레포 경로를 인용할 수 있다).
+ *  ⚠ 클론이 없는 레포는 **조용히 건너뛰지 않는다**: 색인이 비면 살아 있는 경로까지 '사라짐'으로 판정해
+ *   큐가 오탐으로 덮인다. 그래서 하나도 색인하지 못하면 판정을 아예 건너뛰도록 빈 색인을 구분해 던진다.
+ */
+async function repoIndexForAllRepos(): Promise<RepoIndex> {
+  const repos = await listReposV6().catch(() => [] as Array<{ name?: string }>);
+  const merged: RepoIndex = { files: new Set(), byBase: new Map() };
+  let indexed = 0;
+  for (const r of repos) {
+    const name = String((r as { name?: string }).name ?? "").trim();
+    if (!name) continue;
+    const root = path.join(PROJECT_SHARED_BASE, REPOS_SUBDIR, name);
+    const idx = indexRepo(root);
+    if (!idx.files.size) continue;   // 클론 없음 — 이 레포는 색인에 기여하지 않는다
+    indexed++;
+    for (const f of idx.files) merged.files.add(f);
+    for (const [b, list] of idx.byBase) {
+      const cur = merged.byBase.get(b);
+      if (cur) cur.push(...list); else merged.byBase.set(b, [...list]);
+    }
+  }
+  if (!indexed) {
+    throw new Error(
+      "레포 base 클론을 하나도 읽지 못했습니다 — 색인이 비면 살아 있는 경로까지 '사라짐'으로 판정합니다. " +
+      "[설정 ▸ 레포(git)]에 레포가 등록됐는지, refresh_bases 크론이 도는지 확인하세요.");
+  }
+  return merged;
 }
 
 export { MANAGER_KIND_LABEL };
