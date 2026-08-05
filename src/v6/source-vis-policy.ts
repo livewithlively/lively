@@ -16,6 +16,8 @@
 import { itemsPool } from "../db/client.js";
 import { logger } from "../log.js";
 import { axisOn } from "./visibility-axes.js";
+import { auditKnowledge } from "./knowledge-common.js";
+import type { WriteCtx } from "./content-audit.js";
 import type pg from "pg";
 
 export interface SourceVisRule {
@@ -136,7 +138,7 @@ export async function applyVisibility(
  */
 export interface InheritResult { applied: boolean; visibility: "open" | "members"; audience: number; empty: boolean }
 
-export async function inheritSourceVisibility(name: string, sourceId: number): Promise<InheritResult> {
+export async function inheritSourceVisibility(name: string, sourceId: number, ctx?: WriteCtx): Promise<InheritResult> {
   const none: InheritResult = { applied: false, visibility: "open", audience: 0, empty: false };
   // 두 축이 다 켜져 있어야 의미가 있다 — 자료 잠금이 강제되지 않거나(자료 축 off) 지식 잠금이 강제되지
   //  않으면(지식 축 off) 상속은 아무 보호도 못 하면서 예상 못 한 잠금만 만든다.
@@ -155,12 +157,14 @@ export async function inheritSourceVisibility(name: string, sourceId: number): P
   const kLocked = kRow.rows[0].visibility === "members";
 
   let nextSet: Set<string>;
+  let prevAudience = 0;                                // 잠금 전 대상 수 — 감사 before 와 no-op 판정에 쓴다
   if (!kLocked) {
     nextSet = srcSet;                                  // 열려 있던 지식 → 원본 대상으로 좁힌다
   } else {
     const kAud = await itemsPool.query(
       `SELECT subject_kind, member_id FROM knowledge_member WHERE name=$1`, [name]);
     const kSet = new Set(kAud.rows.map((r: any) => `${r.subject_kind}:${r.member_id}`));
+    prevAudience = kSet.size;
     nextSet = new Set([...kSet].filter((x) => srcSet.has(x)));   // 이미 잠긴 지식 → 교집합(더 좁아지기만)
   }
 
@@ -176,6 +180,15 @@ export async function inheritSourceVisibility(name: string, sourceId: number): P
   if (!rows.length) {
     logger.warn({ knowledge: name, sourceId },
       "[source-vis] 증류 지식의 상속 대상이 비었다 — 서로 다른 대상의 자료를 섞었을 수 있다(현재 아무도 못 본다)");
+  }
+  // #1561 감사 — **접근통제 이력**. 이 경로는 사람이 아무것도 누르지 않았는데 문서가 잠기는 자리라,
+  //  안 남기면 '누가·언제·왜 이 문서를 잠갔나'에 답할 수 없다(그건 감사가 반드시 덮어야 하는 종류의 변경이다).
+  //  ⚠ 실변경일 때만 — 이미 같은 대상으로 잠긴 문서를 재증류할 때마다 감사행이 쌓이면 타임라인이 덮인다
+  //   (미러의 감사 노이즈 게이트와 같은 결). nextSet ⊆ kSet 이라 크기 비교만으로 동일 집합 판정이 성립한다.
+  if (!kLocked || nextSet.size !== prevAudience) {
+    await auditKnowledge(name, "set_visibility",
+      { name, visibility: kLocked ? "members" : "open", audience: prevAudience },
+      { name, visibility: "members", audience: rows.length, via_source: sourceId }, ctx);
   }
   return { applied: true, visibility: "members", audience: rows.length, empty: !rows.length };
 }

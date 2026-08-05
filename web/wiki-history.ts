@@ -20,6 +20,7 @@ const OP_LABEL: Record<string, string> = {
   insert: '문서 생성', update: '본문 수정', set_title: '제목 변경', delete: '삭제', restore: '복원',
   link_category: '분류 지정', unlink_category: '분류 해제', propose_category: '분류 제안',
   set_lifecycle: '상태 변경', set_wiki: 'WIKI 핀', move: '위치 이동', set_props_ui: '표시 설정',
+  set_visibility: '공개범위 변경',
   link_knowledge: '문서 연결', unlink_knowledge: '연결 해제',
   link_source: '자료 연결', unlink_source: '자료 연결 해제',
 };
@@ -48,6 +49,7 @@ function khEnsureStyles(): void {
 .kh-kind{font-size:10.5px;font-weight:800;padding:1px 6px;border-radius:5px;margin-left:6px;border:1px solid var(--line)}
 .kh-kind.ai{background:var(--bg-note);border-color:var(--line-note);color:var(--ink-note)}
 .kh-kind.human{background:var(--bg-success);border-color:var(--mint-soft,#7FE0C4);color:var(--mint-deep)}
+.kh-cat{flex:none;font-size:11.5px;color:var(--ink-sub);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .kh-delta{flex:none;font-family:ui-monospace,monospace;font-size:11px;font-weight:700}
 .kh-delta .add{color:var(--mint-deep)}
 .kh-delta .del{color:var(--coral-text)}
@@ -119,10 +121,14 @@ function diffViewMd(before: string, after: string): HTMLElement {
 
 interface HistoryRow {
   audit_id: number; at: string; op: string; kind: 'content' | 'meta';
+  // entity — 이 행이 어느 감사 축에서 왔나(knowledge | org_section). **화면엔 안 보인다**: 사람에겐 같은 문서를
+  //  고친 한 사건이고, 어느 화면에서 고쳤는지는 채널(웹/MCP)로 이미 드러난다. 되돌리기 경로만 서버에서 갈린다.
+  entity?: string;
   actor: string | null; actor_display: string | null; actor_kind: string | null; channel: string | null;
   version_before: number | null; version_after: number | null;
   added: number; removed: number;
   title_before: string | null; title_after: string | null; title_changed: boolean;
+  category_before: string | null; category_after: string | null;
 }
 
 // name 문서의 이력 패널을 연다.
@@ -199,6 +205,13 @@ export function openKnHistory(
       ? el('span', { class: 'kh-kind ' + r.actor_kind, text: r.actor_kind === 'ai' ? 'AI' : '사람' })
       : null;
     const who = el('span', { class: 'kh-who' }, document.createTextNode(whoText(r)), kindBadge);
+    // 분류 변경은 ±줄수가 늘 0/0 이라 그 칸이 비어 있다 — 거기에 '무엇에서 무엇으로'를 넣는다(#1563).
+    //  before 가 없으면 '→ X' 로만 쓴다: 그건 '분류가 없었다'일 수도, #1563 이전에 쌓여 **before 를 안 남긴**
+    //  행일 수도 있어서, 있지도 않은 출발점을 지어내지 않는다.
+    const catText = (r.category_before || r.category_after)
+      ? (r.category_before ? r.category_before + ' → ' : '→ ') + (r.category_after || '(해제)')
+      : '';
+    const cat = catText ? el('span', { class: 'kh-cat', text: catText }) : null;
     // 버전 뱃지 — 부제다(§시간축이 1차). version 이 없는 op(표시설정 등)는 아예 안 그린다.
     const ver = el('span', { class: 'kh-ver', text: r.version_after != null ? 'v' + r.version_after : '' });
     const main = el('button', { class: 'kh-main', type: 'button',
@@ -207,7 +220,7 @@ export function openKnHistory(
       // 무변경 update(에디터 자동저장 등)는 서버가 kind='meta' 로 준다 — '본문 수정'이라 쓰면 거짓말이 된다.
       el('span', { class: 'kh-op' + (r.kind === 'meta' ? ' meta' : ''),
         text: r.op === 'update' && r.kind === 'meta' ? '속성만 변경' : (OP_LABEL[r.op] || r.op) }),
-      who, delta, ver);
+      who, cat, delta, ver);
     const exp = el('div', { class: 'kh-exp' });
     exp.style.display = 'none';
     let loaded = false;
@@ -237,13 +250,23 @@ export function openKnHistory(
     if (r.title_changed) {
       out.push(el('p', { class: 'kh-exp-note', text: `제목: ${r.title_before || '(없음)'} → ${r.title_after || '(없음)'}` }));
     }
-    // before/after 가 null 인 경계 — '내용이 빈 버전'과 '그 시점엔 문서가 없었음'은 다르다.
-    if (!d.before && !d.after) {
+    // ── 경계 판정은 **본문 스냅샷의 유무**로 한다(스냅샷 객체의 유무가 아니라). ──
+    //  link_category 같은 메타 op 은 after 가 `{category_id, state}` 라 객체는 있는데 body_md 가 없다.
+    //  객체 유무로 판정하면 그 행이 '이 시점에 문서가 처음 만들어졌습니다'로 표시된다 — 실측으로 잡힌 거짓말이다
+    //  (before 가 null 인 건 '문서가 없었다'가 아니라 '이 op 은 본문을 안 남긴다'는 뜻이었다).
+    const bBody = d.before && typeof d.before.body_md === 'string' ? d.before.body_md : null;
+    const aBody = d.after && typeof d.after.body_md === 'string' ? d.after.body_md : null;
+    if (bBody === null && aBody === null) {
+      // 분류 변경이면 목록 칩과 같은 정보를 문장으로 한 번 더 — 펼친 사람이 여기서 답을 얻게.
+      if (r.category_before || r.category_after) {
+        out.push(el('p', { class: 'kh-exp-note',
+          text: `분류: ${r.category_before || '(없음)'} → ${r.category_after || '(해제)'}` }));
+      }
       out.push(el('p', { class: 'kh-exp-note', text: '이 변경에는 본문 스냅샷이 없습니다(분류·표시 설정 등).' }));
       return out;
     }
-    if (!d.before) out.push(el('p', { class: 'kh-exp-note', text: '이 시점에 문서가 처음 만들어졌습니다.' }));
-    if (!d.after) out.push(el('p', { class: 'kh-exp-note', text: '이 변경으로 문서가 삭제됐습니다.' }));
+    if (bBody === null) out.push(el('p', { class: 'kh-exp-note', text: '이 시점에 문서가 처음 만들어졌습니다.' }));
+    if (aBody === null) out.push(el('p', { class: 'kh-exp-note', text: '이 변경으로 문서가 삭제됐습니다.' }));
 
     // 서식 ↔ 원문 토글. 다시 그리는 건 이 행뿐이고 요청은 없다(전문은 _d 에 이미 있다).
     const seg = el('div', { class: 'kh-seg', role: 'group', 'aria-label': '본문 표시 방식' });
@@ -254,9 +277,7 @@ export function openKnHistory(
     seg.append(mk('서식', mdMode, true), mk('원문', !mdMode, false));
     out.push(seg);
 
-    const before = (d.before && d.before.body_md) || '';
-    const after = (d.after && d.after.body_md) || '';
-    out.push(mdMode ? diffViewMd(before, after) : diffView(before, after));
+    out.push(mdMode ? diffViewMd(bBody || '', aBody || '') : diffView(bBody || '', aBody || ''));
 
     const isCurrent = opts.currentVersion != null && r.version_after != null && r.version_after === opts.currentVersion;
     const acts = el('div', { class: 'kh-exp-acts' });

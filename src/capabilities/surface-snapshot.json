@@ -2071,7 +2071,7 @@
  {
   "name": "knowledge_history",
   "scope": "memory",
-  "mcp": false,
+  "mcp": true,
   "mutates": false,
   "rest": [
    "GET /api/ui/knowledge/:name/history"
