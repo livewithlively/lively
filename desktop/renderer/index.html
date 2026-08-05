@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <!-- CSP: 인라인 스크립트 금지·외부 로드 금지. 렌더러가 원격 코드를 실행할 길을 아예 없앤다. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self';" />
+  <title>라이블리</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <div class="dot" id="dot"></div>
+    <div>
+      <h1 id="status">확인 중…</h1>
+      <p class="sub" id="sub"></p>
+    </div>
+  </header>
+
+  <main>
+    <!-- 게이트웨이 주소 — 아직 모를 때만 -->
+    <section id="gw-card" class="card hidden">
+      <h2>회사 게이트웨이 주소</h2>
+      <p class="hint">관리자에게 받은 주소를 넣으면 브라우저로 로그인합니다.</p>
+      <div class="row">
+        <input id="gw" type="url" placeholder="https://..." spellcheck="false" />
+        <button id="gw-go" class="primary">연결</button>
+      </div>
+    </section>
+
+    <!-- 진행 -->
+    <section id="progress-card" class="card hidden">
+      <h2 id="progress-title">진행 중</h2>
+      <div class="bar"><div id="bar-fill"></div></div>
+      <ul id="steps"></ul>
+      <button id="cancel" class="ghost">취소</button>
+    </section>
+
+    <!-- 사람 확인 -->
+    <section id="prompt-card" class="card hidden">
+      <h2 id="prompt-label"></h2>
+      <div id="prompt-device" class="hidden">
+        <p class="hint">브라우저에서 아래 코드를 확인하고 승인하세요.</p>
+        <p class="code" id="device-code"></p>
+        <a href="#" id="device-link" class="link"></a>
+      </div>
+      <div id="prompt-confirm" class="row hidden">
+        <button id="prompt-yes" class="primary">예</button>
+        <button id="prompt-no" class="ghost">아니오</button>
+      </div>
+    </section>
+
+    <!-- 노드 -->
+    <section id="node-card" class="card hidden">
+      <h2>이 PC 를 노드로</h2>
+      <p class="hint">웹에서 이 PC 의 터미널을 열고, 무거운 작업을 여기로 위탁할 수 있습니다.
+        노드는 앱을 꺼도 계속 실행됩니다(PC 를 켜면 자동 시작).</p>
+      <div class="row">
+        <button id="node-start" class="primary">노드 시작</button>
+        <button id="node-stop" class="ghost">노드 정지</button>
+      </div>
+    </section>
+
+    <details id="log-wrap">
+      <summary>자세히</summary>
+      <pre id="log"></pre>
+    </details>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
