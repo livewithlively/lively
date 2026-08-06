@@ -89,6 +89,9 @@
 .be-block[data-type="h"]:first-child { margin-top: 2px; }
 .be-gutter { position: absolute; left: -50px; top: 2px; display: flex; gap: 1px; opacity: 0; transition: opacity .12s; z-index: 5; }
 .be-block:hover > .be-gutter { opacity: 1; }
+/*  :hover 는 조상에도 걸린다 — 컬럼/토글 안 블록에 올리면 그 블록의 거터와 **컨테이너 자신의 거터**가
+    동시에 떠 두 벌로 겹쳐 보였다(안쪽은 흰 박스 스타일이라 더 도드라진다). 자식이 hover 중이면 조상은 접는다. */
+.be-block:has(.be-block:hover) > .be-gutter { opacity: 0; }
 .be-handle, .be-addbtn { width: 20px; height: 22px; display: flex; align-items: center; justify-content: center;
   border: none; background: none; border-radius: 5px; color: var(--muted-2); cursor: pointer; font-size: 13px; padding: 0; }
 .be-handle { cursor: grab; letter-spacing: -1.5px; font-size: 11px; }

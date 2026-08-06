@@ -555,8 +555,22 @@ export function createKeys(ctx) {
                 return;
             }
         }
-        else if (type === 'bullet' && /^\[( |x)?\]\s$/.test(txt)) {
-            convertBlock(block, { type: 'todo', indent: Number(block.dataset.indent) || 0, checked: /x/.test(txt), text: '' });
+        else if (LISTY.has(type)) {
+            //  목록 안에서도 **다른 목록 유형으로 갈아탈 수 있어야 한다** — 종전엔 bullet→todo 하나만 열려 있어서,
+            //  글머리 목록을 쓰다가 `1. ` 을 치면 번호 목록이 되지 않고 글자만 남았다(들여쓰기는 유지한다).
+            const indent = Number(block.dataset.indent) || 0;
+            if (/^\[( |x)?\]\s$/.test(txt) && type !== 'todo') {
+                convertBlock(block, { type: 'todo', indent, checked: /x/.test(txt), text: '' });
+                return;
+            }
+            if (/^([-*+])\s$/.test(txt) && type !== 'bullet') {
+                convertBlock(block, { type: 'bullet', indent, text: '' });
+                return;
+            }
+            if (/^(\d+)[.)]\s$/.test(txt) && type !== 'numbered') {
+                convertBlock(block, { type: 'numbered', indent, text: '' });
+                return;
+            }
             return;
         }
         // 인라인 페어 변환 — 캐럿 앞이 **…**·`…`·~~…~~·==…==·++…++·*…* 로 끝나면 실서식으로.
