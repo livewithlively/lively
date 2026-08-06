@@ -60,7 +60,7 @@ export function createBlockEditor(opts: BlockEditorOpts = {}) {
   Object.assign(ctx, createToolbar(ctx));
   Object.assign(ctx, createHistory(ctx));
   createKeys(ctx);           // keydown/input 리스너 등록(반환값 없음)
-  createInteractions(ctx);   // 포인터/드래그 리스너 등록(반환값 없음)
+  Object.assign(ctx, createInteractions(ctx));   // 포인터/드래그 리스너 등록 + 크로스 블록 선택 API(bsel*)
 
   const { blockEls, blockData, ensureOne, renumber, focusBlock, isEmptyNow, makeBlock,
     closeSlashMenu, closeMention, snapNow, resetHistory } = ctx;

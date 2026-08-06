@@ -3,6 +3,7 @@
 import { el, renderInline } from '../core.js';
 import { TEXTY } from './model.js';
 import { mdToBlocks } from './parse.js';
+import { blocksToMd } from './serialize.js';   // 크로스 블록 선택 복사/잘라내기 — 선택 블록을 마크다운으로
 import { caretRange, insertText, placeCaret } from './caret.js';
 import type { EditorCtx } from './context.js';
 
@@ -208,7 +209,10 @@ export function createInteractions(ctx: EditorCtx) {
     const r = target.getBoundingClientRect();
     // 좌/우 엣지 = 컬럼 생성 힌트 — 루트 직계 + 양쪽 다 컬럼 아님일 때만.
     const EDGE = Math.min(72, Math.max(28, r.width * 0.16));
-    const canCol = target.parentElement === root && target.dataset.type !== 'columns' && dragging.dataset.type !== 'columns';
+    //  이미 컬럼 안에 있는 블록의 좌/우 엣지도 허용한다 — 그래야 2열을 3열로 늘릴 수 있다(예전엔 루트 직계만
+    //  받아 열을 더 만들 방법이 아예 없었다). 컬럼 컨테이너 자체를 끌어 넣는 것(중첩 컬럼)은 여전히 막는다.
+    const inCol = !!(target.parentElement && target.parentElement.classList.contains('be-col'));
+    const canCol = (target.parentElement === root || inCol) && target.dataset.type !== 'columns' && dragging.dataset.type !== 'columns';
     if (canCol && e.clientX < r.left + EDGE) { target.classList.add('be-drop-left'); return; }
     if (canCol && e.clientX > r.right - EDGE) { target.classList.add('be-drop-right'); return; }
     target.classList.add(e.clientY < r.top + r.height / 2 ? 'be-drop-above' : 'be-drop-below');
@@ -219,13 +223,22 @@ export function createInteractions(ctx: EditorCtx) {
     const t = root.querySelector('.' + DROP_CLASSES.join(', .')) as HTMLElement;
     if (t && t !== dragging) {
       if (t.classList.contains('be-drop-left') || t.classList.contains('be-drop-right')) {
-        // 컬럼 생성 — 새 컨테이너에 [드래그, 타깃](왼쪽 드롭) 또는 [타깃, 드래그] 순으로 실 DOM 이동.
         const left = t.classList.contains('be-drop-left');
-        const shell = makeBlock({ type: 'columns', cols: [[], []], __shell: true });
-        t.before(shell);
-        const cols = shell.querySelectorAll(':scope > .be-main > .be-cols > .be-col');
-        cols[0].append(left ? dragging : t);
-        cols[1].append(left ? t : dragging);
+        const hostCol = t.parentElement && t.parentElement.classList.contains('be-col') ? t.parentElement : null;
+        if (hostCol) {
+          // 이미 컬럼 안 — 그 열 옆에 **새 열을 끼워** 열 수를 늘린다(2열 → 3열).
+          const colsWrap = hostCol.parentElement!;
+          const newCol = el('div', { class: 'be-col' });
+          colsWrap.insertBefore(newCol, left ? hostCol : hostCol.nextSibling);
+          newCol.append(dragging);
+        } else {
+          // 컬럼 생성 — 새 컨테이너에 [드래그, 타깃](왼쪽 드롭) 또는 [타깃, 드래그] 순으로 실 DOM 이동.
+          const shell = makeBlock({ type: 'columns', cols: [[], []], __shell: true });
+          t.before(shell);
+          const cols = shell.querySelectorAll(':scope > .be-main > .be-cols > .be-col');
+          cols[0].append(left ? dragging : t);
+          cols[1].append(left ? t : dragging);
+        }
       } else if (t.classList.contains('be-drop-above')) {
         t.before(dragging);
       } else {
@@ -242,4 +255,89 @@ export function createInteractions(ctx: EditorCtx) {
     clearDrop();
     setTimeout(() => { justDragged = false; }, 50);   // 드래그 직후 handle click 오발 방지
   });
+
+  // ════════ 크로스 블록 선택 ════════
+  //  블록마다 contenteditable 이 따로라(render.ts 의 .be-text) 브라우저 Selection 은 **한 편집 호스트 안에서만**
+  //  range 를 만든다 → 경계를 넘는 드래그가 원천적으로 안 되고 ⌘A 도 커서가 있는 블록 하나만 잡힌다.
+  //  그래서 경계를 넘는 순간 우리가 넘겨받아 '블록 범위 선택'을 직접 그린다(노션과 같은 방식).
+  //  keys.ts 가 이 범위를 보고 삭제·대체·복사를 처리한다(ctx.bsel* — context.ts 참조).
+  let bselAnchor: HTMLElement | null = null;
+  let bsel: HTMLElement[] = [];
+  let bDragging = false;
+
+  const bselActive = () => bsel.length > 0;
+  const bselEdge = (last: boolean) => (bsel.length ? bsel[last ? bsel.length - 1 : 0] : null);
+  function bselClear() {
+    if (!bsel.length) return;
+    for (const b of bsel) b.classList.remove('be-bsel');
+    bsel = [];
+    root.classList.remove('be-bselecting');
+  }
+  function bselSet(a: HTMLElement, b: HTMLElement) {
+    const all = ctx.blockEls();
+    let i = all.indexOf(a), j = all.indexOf(b);
+    if (i < 0 || j < 0) return;
+    if (i > j) { const t = i; i = j; j = t; }
+    const next = all.slice(i, j + 1);
+    // 한 블록 안에 머무는 드래그는 브라우저 기본(문자 단위)이 낫다 — 우리 하이라이트를 걷는다.
+    if (next.length < 2) { bselClear(); return; }
+    for (const x of bsel) if (next.indexOf(x) < 0) x.classList.remove('be-bsel');
+    for (const x of next) x.classList.add('be-bsel');
+    bsel = next;
+    root.classList.add('be-bselecting');
+    const s = window.getSelection(); if (s) s.removeAllRanges();   // 두 겹 하이라이트 방지
+  }
+  function bselAll(): boolean {
+    const all = ctx.blockEls();
+    if (all.length < 2) return false;
+    bselSet(all[0], all[all.length - 1]);
+    return true;
+  }
+  //  선택 블록을 지우고 그 자리에 빈 문단 하나를 남긴다(그리로 포커스) — 삭제·문자 대체·잘라내기 공통 경로.
+  //  snapNow 로 한 스텝을 확정하므로 ⌘Z 로 통째로 되돌아온다.
+  function bselDelete(): HTMLElement | null {
+    if (!bsel.length) return null;
+    ctx.snapNow();
+    const nb = ctx.makeBlock({ type: 'p', text: '' });
+    bsel[0].before(nb);
+    for (const b of bsel) b.remove();
+    bselClear();
+    ctx.ensureOne(); ctx.renumber(); markDirty();
+    ctx.focusBlock(nb, true);
+    return nb;
+  }
+  const bselMd = () => blocksToMd(bsel.map((b) => ctx.blockData(b)));
+
+  root.addEventListener('mousedown', (e: any) => {
+    if (e.button !== 0) return;
+    bselClear();
+    // 거터(＋·⋮⋮ 손잡이)에서 시작한 드래그는 **블록 이동**(HTML5 drag)의 몫이다 — 범위 선택으로 가로채지 않는다.
+    if (e.target && e.target.closest && e.target.closest('.be-gutter')) { bselAnchor = null; bDragging = false; return; }
+    bselAnchor = blockOf(e.target);
+    bDragging = !!bselAnchor;
+  });
+  document.addEventListener('mousemove', (e: any) => {
+    if (!bDragging || !bselAnchor) return;
+    const over = blockOf(document.elementFromPoint(e.clientX, e.clientY));
+    if (!over) return;                     // 에디터 밖으로 나간 동안은 직전 범위를 유지
+    bselSet(bselAnchor, over);             // 같은 블록으로 돌아오면 bselSet 이 알아서 걷는다
+  });
+  document.addEventListener('mouseup', () => { bDragging = false; });
+  //  HTML5 드래그가 시작되면 mouseup 이 오지 않는다 → 여기서 끊지 않으면 이후 '마우스만 움직여도 선택'이 된다.
+  root.addEventListener('dragstart', () => { bDragging = false; bselAnchor = null; bselClear(); }, true);
+
+  //  복사·잘라내기는 선택 블록을 마크다운으로 — 붙여넣기(위 paste)가 그대로 되받아 블록으로 복원한다.
+  root.addEventListener('copy', (e: any) => {
+    if (!bselActive() || !e.clipboardData) return;
+    e.preventDefault();
+    e.clipboardData.setData('text/plain', bselMd());
+  });
+  root.addEventListener('cut', (e: any) => {
+    if (!bselActive() || !e.clipboardData) return;
+    e.preventDefault();
+    e.clipboardData.setData('text/plain', bselMd());
+    bselDelete();
+  });
+
+  return { bselActive, bselAll, bselClear, bselDelete, bselEdge };
 }
