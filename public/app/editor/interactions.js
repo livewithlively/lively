@@ -139,9 +139,16 @@ export function createInteractions(ctx) {
             }
             rest = parsed.slice(1);
         }
+        const wasEmpty = !((textElOf(block) || { textContent: '' }).textContent || '').trim();
+        const inlineJoined = rest !== parsed; // 첫 블록을 캐럿에 이어 붙였나
         let anchor = block;
         for (const d of rest)
             anchor = insertBlockAfter(anchor, d);
+        //  캐럿이 있던 블록이 비어 있었고 거기에 이어붙이지도 않았다면(첫 파싱 블록이 제목·목록 등) 그 빈 문단은
+        //  붙여넣은 내용 **앞에 남는 빈 줄**이 된다 → 지운다. (예: '# 제목…' 붙여넣기가 ["p","h",…] 로 되던 문제)
+        if (rest.length && wasEmpty && !inlineJoined && block.dataset.type === 'p')
+            block.remove();
+        normalizeStructure();
         renumber();
         markDirty();
         if (rest.length)
@@ -337,8 +344,29 @@ export function createInteractions(ctx) {
         bsel = [];
         root.classList.remove('be-bselecting');
     }
-    function bselSet(a, b) {
-        const all = ctx.blockEls();
+    //  두 끝이 서로 다른 컨테이너(컬럼·토글) 안이면 공통 부모 레벨까지 각각 승격한다 —
+    //  blockEls()(루트 직계)만 보면 컬럼 안 블록은 인덱스가 -1 이라 선택이 통째로 죽었다(실측).
+    const chainUp = (n) => { const c = []; let x = n; while (x && x !== root) {
+        if (x.classList && x.classList.contains('be-block'))
+            c.push(x);
+        x = x.parentElement;
+    } return c; };
+    function liftToCommon(a, b) {
+        if (a.parentElement === b.parentElement)
+            return [a, b];
+        for (const x of chainUp(a))
+            for (const y of chainUp(b))
+                if (x.parentElement === y.parentElement)
+                    return [x, y];
+        return null;
+    }
+    const siblingBlocks = (n) => Array.from(n.parentElement.children).filter((c) => c.classList && c.classList.contains('be-block'));
+    function bselSet(a0, b0) {
+        const lifted = liftToCommon(a0, b0);
+        if (!lifted)
+            return;
+        const [a, b] = lifted;
+        const all = siblingBlocks(a);
         let i = all.indexOf(a), j = all.indexOf(b);
         if (i < 0 || j < 0)
             return;
@@ -365,7 +393,7 @@ export function createInteractions(ctx) {
             s.removeAllRanges(); // 두 겹 하이라이트 방지
     }
     function bselAll() {
-        const all = ctx.blockEls();
+        const all = ctx.blockEls(); // ⌘A 2차는 문서 전체 = 루트 직계 전부
         if (all.length < 2)
             return false;
         bselSet(all[0], all[all.length - 1]);
@@ -413,6 +441,9 @@ export function createInteractions(ctx) {
     document.addEventListener('mouseup', () => { bDragging = false; });
     //  HTML5 드래그가 시작되면 mouseup 이 오지 않는다 → 여기서 끊지 않으면 이후 '마우스만 움직여도 선택'이 된다.
     root.addEventListener('dragstart', () => { bDragging = false; bselAnchor = null; bselClear(); }, true);
+    //  블록 이동/컬럼 생성 **직전** 상태를 한 스텝으로 확정한다 — 없으면 드롭 뒤 ⌘Z 가 되돌릴 지점이 없어
+    //  컬럼이 그대로 남는다(실측). markDirty 의 사후 스냅만으론 '이전'이 안 담긴다.
+    root.addEventListener('dragstart', () => { ctx.histFlushTyping(); ctx.snapNow(); });
     //  복사·잘라내기는 선택 블록을 마크다운으로 — 붙여넣기(위 paste)가 그대로 되받아 블록으로 복원한다.
     root.addEventListener('copy', (e) => {
         if (!bselActive() || !e.clipboardData)
