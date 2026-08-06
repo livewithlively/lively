@@ -67,6 +67,37 @@ export function createKeys(ctx: EditorCtx) {
     // 구조 키 직전 — 진행 중 타이핑 버스트를 별도 undo 스텝으로 확정(타이핑↔Enter 분할이 한 스텝으로 뭉치지 않게).
     if (!e.isComposing && e.keyCode !== 229 && (e.key === 'Enter' || e.key === 'Tab' || e.metaKey || e.ctrlKey)) histFlushTyping();
 
+    // ── 블록 범위(크로스 블록 선택)가 잡혀 있으면 그 범위에 대한 동작이 먼저다. 아래 blockOf 가드보다 앞에 둔다
+    //    — 범위 선택 중에는 포커스가 특정 .be-text 에 없을 수 있어 거기서 걸러지면 키가 통째로 죽는다.
+    if (ctx.bselActive()) {
+      if (e.key === 'Escape') { e.preventDefault(); const last = ctx.bselEdge(true); ctx.bselClear(); if (last) focusBlock(last, false); return; }
+      if (e.key === 'Backspace' || e.key === 'Delete' || e.key === 'Enter') { e.preventDefault(); ctx.bselDelete(); return; }
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'a' || e.key === 'A')) { e.preventDefault(); ctx.bselAll(); return; }
+      if (e.metaKey || e.ctrlKey || e.altKey) return;      // 복사·잘라내기·붙여넣기·⌘Z 는 각자 경로가 처리
+      if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); const f = ctx.bselEdge(false); ctx.bselClear(); if (f) focusBlock(f, true); return; }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); const l = ctx.bselEdge(true); ctx.bselClear(); if (l) focusBlock(l, false); return; }
+      // IME 조합 시작 — 막지 않고 자리만 비워 준다(빈 문단으로 대체된 뒤 거기서 조합이 이어진다).
+      if (e.keyCode === 229 || e.key === 'Process') { ctx.bselDelete(); return; }
+      if (e.key.length === 1) {                            // 그 밖의 문자 = 선택 대체
+        e.preventDefault();
+        const nb = ctx.bselDelete();
+        const t = nb && textElOf(nb);
+        if (t) { t.textContent = e.key; placeCaret(t, false); markDirtyType(); }
+        return;
+      }
+      return;
+    }
+    // ⌘A — 1차는 이 블록 전체(브라우저 기본), 이미 전체거나 빈 블록이면 2차로 **문서 전체를 블록 선택**.
+    //  블록마다 편집 호스트가 달라 브라우저는 여기까지밖에 못 한다 — 그 위를 우리가 잇는다.
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'a' || e.key === 'A')) {
+      const t = target.classList && target.classList.contains('be-text') ? target : null;
+      const len = t ? (t.textContent || '').length : 0;
+      const s = window.getSelection();
+      const already = !!t && len > 0 && !!s && String(s).length >= len;
+      if (!t || len === 0 || already) { e.preventDefault(); ctx.bselAll(); return; }
+      return;
+    }
+
     const block = blockOf(target);
     if (!block) return;
 
