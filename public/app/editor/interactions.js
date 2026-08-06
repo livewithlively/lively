@@ -262,7 +262,10 @@ export function createInteractions(ctx) {
         const r = target.getBoundingClientRect();
         // 좌/우 엣지 = 컬럼 생성 힌트 — 루트 직계 + 양쪽 다 컬럼 아님일 때만.
         const EDGE = Math.min(72, Math.max(28, r.width * 0.16));
-        const canCol = target.parentElement === root && target.dataset.type !== 'columns' && dragging.dataset.type !== 'columns';
+        //  이미 컬럼 안에 있는 블록의 좌/우 엣지도 허용한다 — 그래야 2열을 3열로 늘릴 수 있다(예전엔 루트 직계만
+        //  받아 열을 더 만들 방법이 아예 없었다). 컬럼 컨테이너 자체를 끌어 넣는 것(중첩 컬럼)은 여전히 막는다.
+        const inCol = !!(target.parentElement && target.parentElement.classList.contains('be-col'));
+        const canCol = (target.parentElement === root || inCol) && target.dataset.type !== 'columns' && dragging.dataset.type !== 'columns';
         if (canCol && e.clientX < r.left + EDGE) {
             target.classList.add('be-drop-left');
             return;
@@ -280,13 +283,23 @@ export function createInteractions(ctx) {
         const t = root.querySelector('.' + DROP_CLASSES.join(', .'));
         if (t && t !== dragging) {
             if (t.classList.contains('be-drop-left') || t.classList.contains('be-drop-right')) {
-                // 컬럼 생성 — 새 컨테이너에 [드래그, 타깃](왼쪽 드롭) 또는 [타깃, 드래그] 순으로 실 DOM 이동.
                 const left = t.classList.contains('be-drop-left');
-                const shell = makeBlock({ type: 'columns', cols: [[], []], __shell: true });
-                t.before(shell);
-                const cols = shell.querySelectorAll(':scope > .be-main > .be-cols > .be-col');
-                cols[0].append(left ? dragging : t);
-                cols[1].append(left ? t : dragging);
+                const hostCol = t.parentElement && t.parentElement.classList.contains('be-col') ? t.parentElement : null;
+                if (hostCol) {
+                    // 이미 컬럼 안 — 그 열 옆에 **새 열을 끼워** 열 수를 늘린다(2열 → 3열).
+                    const colsWrap = hostCol.parentElement;
+                    const newCol = el('div', { class: 'be-col' });
+                    colsWrap.insertBefore(newCol, left ? hostCol : hostCol.nextSibling);
+                    newCol.append(dragging);
+                }
+                else {
+                    // 컬럼 생성 — 새 컨테이너에 [드래그, 타깃](왼쪽 드롭) 또는 [타깃, 드래그] 순으로 실 DOM 이동.
+                    const shell = makeBlock({ type: 'columns', cols: [[], []], __shell: true });
+                    t.before(shell);
+                    const cols = shell.querySelectorAll(':scope > .be-main > .be-cols > .be-col');
+                    cols[0].append(left ? dragging : t);
+                    cols[1].append(left ? t : dragging);
+                }
             }
             else if (t.classList.contains('be-drop-above')) {
                 t.before(dragging);

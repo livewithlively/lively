@@ -124,7 +124,9 @@ function projectBodyCollapse(card, bodyWrap, onWide?) {
   const caret = el('span', { class: 'caret', text: '⌄' });
   const btn = el('button', { class: 'proj-detail-body-expand', type: 'button' }, lbl, caret);
   const row = el('div', { class: 'proj-detail-body-expand-row proj-body-expand-row' }, btn);
-  let userExpanded = false;   // 사용자가 펼쳤는지 — 재측정(내용 변경) 후에도 상태 보존
+  //  [더 보기]로 **명시적으로** 펼친 상태. 편집·드래그로 포커스가 오갈 때 이 값을 건드리면 안 된다 —
+  //  블록을 끌면 편집 영역에서 포커스가 빠지는데, 그때 리셋하면 펼쳐 둔 본문이 제멋대로 도로 접힌다.
+  let userExpanded = false;
   const apply = (expanded) => {
     box.classList.toggle('collapsed', !expanded);
     caret.textContent = expanded ? '⌃' : '⌄';
@@ -143,7 +145,11 @@ function projectBodyCollapse(card, bodyWrap, onWide?) {
   };
   // 편집 시작 = 무조건 펼침(커서 유실 방지) + 전폭(쓸 땐 넓은 게 낫다). 편집을 마치고 나가면 다시 판정한다.
   box.addEventListener('focusin', () => { apply(true); row.style.display = 'none'; wide(true); });
-  box.addEventListener('focusout', () => setTimeout(() => { if (!box.contains(document.activeElement)) { userExpanded = false; remeasure(); wide(false); } }, 220));
+  box.addEventListener('focusout', () => setTimeout(() => {
+    if (box.contains(document.activeElement)) return;
+    remeasure();            // 사용자가 펼쳐 뒀으면(userExpanded) remeasure 가 그 상태를 그대로 유지한다
+    wide(userExpanded);
+  }, 220));
   // 이미지·비동기 렌더로 높이가 늦게 확정된다 → 처음 한 번 + 크기 변할 때마다 재측정.
   requestAnimationFrame(remeasure);
   if (typeof ResizeObserver === 'function') new ResizeObserver(() => remeasure()).observe(bodyWrap);

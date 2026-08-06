@@ -79,9 +79,30 @@ export function createBlocks(ctx: EditorCtx) {
       else { counters[d] = 0; if (marker) marker.textContent = ['•', '◦', '▪', '▹', '·'][d] || '•'; }
     }
   }
+  //  번호 매기기 — **컬럼은 문서 흐름을 잇는다**(왼쪽 열 → 오른쪽 열 순으로 카운터를 이어받는다).
+  //   목록 도중에 열을 만들면 4·5 였던 항목이 1·1 로 되돌아가 '번호가 망가진' 것처럼 보였다.
+  //   토글 자식은 접히면 보이지 않는 별개 흐름이라 지금처럼 독립적으로 1부터 센다.
   function renumber() {
-    renumberIn(root);
-    root.querySelectorAll('.be-togglekids, .be-col').forEach((c: any) => renumberIn(c));
+    const counters: number[] = [];
+    const walk = (scope: HTMLElement) => {
+      for (const b of Array.from(scope.children).filter((n: any) => n.classList && n.classList.contains('be-block')) as HTMLElement[]) {
+        const type = b.dataset.type!;
+        if (type === 'columns') {                      // 열을 왼쪽부터 훑어 카운터를 이어간다
+          b.querySelectorAll(':scope > .be-main > .be-cols > .be-col').forEach((c: any) => walk(c));
+          continue;
+        }
+        if (!LISTY.has(type)) { counters.length = 0; continue; }
+        const d = Math.min(Number(b.dataset.indent) || 0, 4);
+        counters.length = d + 1;
+        const row = b.querySelector('.be-li') as HTMLElement;
+        if (row) row.style.paddingLeft = (d * 26) + 'px';
+        const marker = b.querySelector('.be-marker') as HTMLElement;
+        if (type === 'numbered') { counters[d] = (counters[d] || 0) + 1; if (marker) marker.textContent = counters[d] + '.'; }
+        else { counters[d] = 0; if (marker) marker.textContent = ['•', '◦', '▪', '▹', '·'][d] || '•'; }
+      }
+    };
+    walk(root);
+    root.querySelectorAll('.be-togglekids').forEach((c: any) => renumberIn(c));   // 토글 자식은 독립 흐름
   }
 
   // #657n 구조 정규화 — 빈 컬럼 정리(1열 이하면 해체), 빈 토글엔 빈 문단 채움. 컨테이너 간 이동/삭제 뒤 호출.

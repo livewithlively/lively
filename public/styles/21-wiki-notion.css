@@ -151,8 +151,14 @@
    한글은 조합 중 DOM 이 더 자주 비어 체감이 더 심했다.
    ⚠ position:absolute 필수 — static ::before 는 실제 인라인 박스를 만들어 **뒤 내용을 밀어낸다**(글씨 밀림의 원인). */
 .be-text { position: relative; }
-.be .be-block:only-child .be-text:empty::before {
+.be .be-block:only-child .be-text:empty::before,
+.be .be-block:only-child .be-text:has(> br:only-child)::before {
   position: absolute; left: 2px; top: 3px; white-space: nowrap; }
+/*  ⚠ :empty 만으로는 부족하다 — contentEditable 은 '빈' 블록에 <br> 하나를 남기므로 정작 새 문서에서
+    안내가 안 뜬다. 단 이 조건은 **블록이 하나뿐일 때(:only-child)** 로 묶여 있어, 예전처럼 줄마다
+    따라다니며 깜빡이지 않는다. (:has 미지원 브라우저에서는 :empty 규칙만 동작 — 격리해 둔다.) */
+.be .be-block:only-child .be-text:has(> br:only-child)::before {
+  content: attr(data-ph); color: var(--muted-3); pointer-events: none; }
 .be .be-block:only-child .be-text:empty::before,
 .ke-title:empty::before,
 .kn-doc-title-edit:empty::before,
