@@ -82,11 +82,17 @@
   color: var(--blue); background: none; border: none; border-radius: 6px; padding: 6px 8px; cursor: pointer; }
 .tsess-projfilter-new:hover { background: var(--bg-sel); }
 .tsess-projfilter-none { padding: 10px 8px; font-size: 12px; color: var(--muted); }
-.tsess-projfilter-opt { display: block; width: 100%; text-align: left; font-family: inherit; font-size: 12.5px; color: var(--ink-sub); background: none; border: none; border-radius: 6px; padding: 6px 10px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 항목 행은 언제나 **한 줄 가로 배치**다 — 체크박스(.dash-pop-box)·이름·개수/메타가 한 줄에 선다.
+   ⚠ display:block 으로 두면 체크박스(grid 박스)가 블록으로 떨어져 이름이 아래 줄로 밀린다(#1098 다중선택에서 실제로 그랬다).
+   그래서 :has() 조건부가 아니라 기본을 flex 로 둔다. 이름이 남는 폭을 먹고, 개수·메타는 오른쪽 끝. */
+.tsess-projfilter-opt { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; font-family: inherit; font-size: 12.5px; color: var(--ink-sub); background: none; border: none; border-radius: 6px; padding: 6px 10px; cursor: pointer; white-space: nowrap; overflow: hidden; }
+.tsess-projfilter-opt .tsess-opt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* 삭제됐는데 세션만 남은 프로젝트 — 살아있는 항목과 구분되게 흐리고 기울여 쓴다. */
+.tsess-opt-gone { color: var(--muted); font-style: italic; }
 .tsess-projfilter-opt:hover { background: var(--bg-sel); color: var(--ink); }
 .tsess-projfilter-opt.active { color: var(--ink); font-weight: 700; background: var(--bg-sel); }
 /* #1098 축 드롭다운(출처·기간) — 라벨 + 우측 카운트. 0건 항목도 숨기지 않고 흐리게 남긴다. */
-.tsess-projfilter-opt:has(.tsess-opt-n), .tsess-projfilter-opt:has(.tsess-opt-meta) { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+/* (개수·메타가 붙는 행은 위 flex 그대로 — 이름이 flex:1 이라 오른쪽 끝으로 밀린다.) */
 .tsess-opt-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tsess-opt-n { flex: none; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .tsess-projfilter-opt.active .tsess-opt-n { color: var(--ink-sub); }
