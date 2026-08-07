@@ -351,9 +351,13 @@ function listPicker(selectedListId) {
   let picked: number | null = selectedListId != null ? Number(selectedListId) : null;
   const expanded = new Set<string>();
 
+  //  ⚠ 트리거는 폼의 **다른 칸(팀원·레포)과 같은 옷**을 입는다(.cf-trigger + .cf-chips/.cf-chip/.cf-caret).
+  //   세션 탭 툴바 칩(.tsess-projfilter-btn)을 그대로 가져오면 12.5px 작은 알약이라 옆 입력칸들과 높이·모서리가 어긋난다(상민님).
+  //   팝오버(.tsess-projfilter-dd) 안쪽만 세션 탭 것을 공유한다 — 거기는 같은 기능·같은 읽기라 한 벌이 맞다.
   const box = el('div', { class: 'pjv-listpick tsess-projfilter' });
-  const btn = el('button', { type: 'button', class: 'tsess-projfilter-btn', 'aria-haspopup': 'true', title: '리스트 고르기' },
-    el('span', { class: 'pjv-listpick-label', text: '불러오는 중…' }), el('span', { class: 'tsess-projfilter-chev', text: '▾' }));
+  const chips = el('span', { class: 'cf-chips' });
+  const btn = el('button', { type: 'button', class: 'cf-trigger', 'aria-haspopup': 'true', title: '리스트 고르기' },
+    chips, el('span', { class: 'cf-caret', text: '▾' }));
   const dd = el('div', { class: 'tsess-projfilter-dd', hidden: true });
   const search = el('input', { type: 'search', class: 'tsess-projfilter-search', placeholder: '리스트 검색…' }) as HTMLInputElement;
   const listBox = el('div', { class: 'tsess-projfilter-list' });
@@ -362,11 +366,11 @@ function listPicker(selectedListId) {
   box.append(btn, dd);
 
   const nameOf = (id: number | null) => { const l = loaded.find((x) => Number(x.id) === Number(id)); return l ? l.name : ''; };
+  //  고른 값은 팀원·레포 칸과 같은 **칩**으로, 비었으면 같은 톤의 안내문(.cf-empty)으로 — 세 칸이 한 줄에서 같은 리듬으로 읽힌다.
   const paintBtn = () => {
-    const lab = btn.querySelector('.pjv-listpick-label') as HTMLElement;
-    if (!loaded.length) { lab.textContent = '리스트 없음 — 미분류로 생성'; btn.classList.remove('active'); return; }
-    lab.textContent = picked != null ? nameOf(picked) || ('리스트 #' + picked) : '리스트를 선택하세요…';
-    btn.classList.toggle('active', picked != null);
+    if (!loaded.length) { chips.replaceChildren(el('span', { class: 'cf-empty', text: '리스트 없음 — 미분류로 생성' })); return; }
+    if (picked == null) { chips.replaceChildren(el('span', { class: 'cf-empty', text: '리스트를 선택하세요' })); return; }
+    chips.replaceChildren(el('span', { class: 'cf-chip' }, el('span', { class: 'cf-chip-t', text: nameOf(picked) || ('리스트 #' + picked) })));
   };
 
   let docHandler: any = null;
