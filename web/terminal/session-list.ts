@@ -30,7 +30,12 @@ function buildSessProjFilter(opts: {
   const sel = new Set<number>([...selected]);
   const idSet = new Set(projIds.map((x) => Number(x)));
   const rows = projects.filter((p) => idSet.has(Number(p.id)));
-  for (const id of idSet) if (!rows.some((p) => Number(p.id) === Number(id))) rows.push({ id, name: projName.get(id) || ('프로젝트 #' + id), list_id: 0, updated_at: null });
+  //  목록에 없는 id = **지워진(또는 내가 못 보는) 프로젝트**인데 세션은 아직 그걸 가리킨다. 숨기면 그 세션을 못 고르므로
+  //  행은 남기되 'ㅇㅇ #1090' 같은 정체불명 이름 대신 무슨 일인지 그대로 적는다(#1098 — 실제로 삭제된 1090 이 이렇게 떴다).
+  for (const id of idSet) if (!rows.some((p) => Number(p.id) === Number(id))) {
+    const known = projName.get(id);
+    rows.push({ id, name: known || '삭제된 프로젝트', missing: !known, list_id: 0, updated_at: null });
+  }
   const tsOf = (p) => { const t = Date.parse(p.updated_at || p.created_at || ''); return Number.isFinite(t) ? t : 0; };
   const listById = new Map<any, any>((lists || []).map((l) => [String(l.id), l]));
   const folderById = new Map<any, any>((folders || []).map((f) => [String(f.id), f]));
@@ -101,7 +106,8 @@ function buildSessProjFilter(opts: {
   const projBtn = (p: any, depth: number, meta?: string) => {
     const on = sel.has(Number(p.id));
     return el('button', {
-      class: 'tsess-projfilter-opt tsess-tree-proj' + (on ? ' active' : ''), type: 'button', title: p.name,
+      class: 'tsess-projfilter-opt tsess-tree-proj' + (on ? ' active' : ''), type: 'button',
+      title: p.missing ? '이 프로젝트는 삭제됐지만 세션이 남아 있어요 (#' + p.id + ')' : p.name,
       role: 'menuitemcheckbox', 'aria-checked': String(on),
       style: depth ? 'padding-left:' + (10 + depth * 13) + 'px' : '',
       onmousedown: (e: any) => {
@@ -110,8 +116,9 @@ function buildSessProjFilter(opts: {
         onChange(new Set(sel));
       },
     }, el('span', { class: 'dash-pop-box', text: on ? '✓' : '' }),
-       el('span', { class: 'tsess-opt-name', text: p.name }),
-       meta ? el('span', { class: 'tsess-opt-meta', text: meta }) : null);
+       el('span', { class: 'tsess-opt-name' + (p.missing ? ' tsess-opt-gone' : ''), text: p.name }),
+       // 지워진 프로젝트는 id 를 회색으로 붙여 어떤 세션 묶음인지 추적할 수 있게 한다.
+       p.missing ? el('span', { class: 'tsess-opt-meta', text: '#' + p.id }) : (meta ? el('span', { class: 'tsess-opt-meta', text: meta }) : null));
   };
 
   const renderList = (q: string) => {
