@@ -410,7 +410,10 @@ function openTermCreateForm(cfg, view, onCreated, opts) {
         return b;
     }));
     // 내 PC 안내 — `lively run <프로젝트번호|폴더>` 한 줄. work.mjs 가 공유폴더 pull·레포·마커·실행까지 한다.
-    const localCmd = () => 'lively run ' + (project ? String(project.id) : '.');
+    // ⚠ 인자 규약(kit/cli/lively.mjs:1268 · kit/setup/work.mjs:47): `lively run <프로젝트#>` 는 work.mjs 로 가고
+    //  **숫자 id 만** 받는다(공유폴더 pull·레포·마커까지 자동). 프로젝트가 없으면 인자 없이 `lively run` —
+    //  지금 폴더에서 하네스를 띄운다. '.' 같은 걸 넣으면 하네스 인자로 흘러가 엉뚱하게 동작한다.
+    const localCmd = () => (project && /^\d+$/.test(String(project.id)) ? 'lively run ' + project.id : 'lively run');
     const localBox = el('div', { class: 'term-local-guide' }, el('p', { class: 'caption', text: '내 PC 터미널에 붙여넣어 실행하세요(Mac·Windows 동일). 웹은 그 화면을 보지 않습니다 — 세션은 내 컴퓨터에서 돕니다.' }), el('pre', { class: 'term-cmd' }, el('code', { text: localCmd() })), el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, el('button', {
         class: 'btn btn-ghost btn-sm', type: 'button', text: '명령 복사',
         onclick: () => {
