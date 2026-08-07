@@ -472,6 +472,36 @@ export async function killSession(user: LivelyUser, id: string, opts?: { admin?:
   await tmuxKill(id);
   if (!opts?.preserveState) await deleteSessionState(id).catch((e) => console.warn(`[terminal] desired-state 삭제 실패(${id}):`, (e as Error)?.message ?? e));
 }
+// #1098 — 프로젝트를 지우면 그 프로젝트의 AI 세션도 함께 정리한다. 안 그러면 세션만 남아 이름 없는 프로젝트를
+//  가리키고(필터에 '삭제된 프로젝트 #1090' 으로 뜬 실제 사례), 복원 목록·워크스페이스도 계속 붙잡는다.
+//  정리 = tmux 세션 종료 + desired-state(org_session_state) 제거. 대화록(중앙 세션 기록)은 건드리지 않는다.
+//  ⚠ 원격 노드 세션은 여기서 못 죽인다(게이트웨이가 노드에 relay 해야 함) → 죽이지 않고 **기록만** 지우지도 않는다.
+//   그대로 두고 skipped 로 보고한다(노드가 돌아오면 그 세션은 여전히 살아 있어야 하므로).
+//  best-effort: 실패해도 프로젝트 삭제 자체는 되돌리지 않는다(호출부가 결과만 로그·응답에 싣는다).
+export async function cleanupProjectSessions(projectId: number): Promise<{ killed: string[]; forgot: string[]; skippedNode: string[]; failed: number }> {
+  const out = { killed: [] as string[], forgot: [] as string[], skippedNode: [] as string[], failed: 0 };
+  const pid = Number(projectId) || 0;
+  if (!pid) return out;
+  let live: SessionInfo[] = [];
+  try { live = await listSessionsRaw(); } catch { /* tmux 접근 불가 — DB 기록만 정리한다 */ }
+  const liveIds = new Set<string>();
+  for (const s of live) {
+    if ((Number(s.projectId) || 0) !== pid) continue;
+    liveIds.add(s.id);
+    if ((s as any).node) { out.skippedNode.push(s.id); continue; }   // 원격 노드 세션은 손대지 않는다
+    try { await tmuxKill(s.id); out.killed.push(s.id); } catch { out.failed++; }
+    try { await deleteSessionState(s.id); } catch { /* 기록 없음·DB 오류 — 비치명 */ }
+  }
+  // tmux 에는 없고 DB 기록(복원 가능)만 남은 세션 — 복원 목록에서도 지운다.
+  try {
+    const states = await listAllSessionStates();
+    for (const st of states) {
+      if ((Number(st.project_id) || 0) !== pid || liveIds.has(st.id)) continue;
+      try { await deleteSessionState(st.id); out.forgot.push(st.id); } catch { out.failed++; }
+    }
+  } catch { /* DB 조회 실패 — 라이브 정리는 이미 끝냈다 */ }
+  return out;
+}
 export async function editSession(user: LivelyUser, id: string, patch: { label?: string; invites?: unknown }): Promise<void> {
   await assertManage(user, id);
   const mirror: { label?: string; invites?: string[] } = {};

@@ -7,6 +7,8 @@ import { HttpError, parseId } from "./rest-util.js";
 import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
 import { listSessions } from "../terminal/terminal-sessions.js";
+import { cleanupProjectSessions } from "../terminal/sessions.js";   // #1098 프로젝트 삭제 시 그 세션도 함께 정리
+import { logger } from "../log.js";
 import { ensureAgentsMd } from "../v6/agents-md.js";
 import { syncFolderAcls } from "../v6/folder-acl-sync.js";
 // 워크스페이스 회수(#813 T3-2) — 프로젝트 마무리 시 '복구 가능한 것'만 되돌린다(파생물 + 푸시된 워크트리).
@@ -511,7 +513,11 @@ const projectDeleteV6: Capability = {
     // 삭제 전원 개방(#280) — 인증만 요구(작성자 제한 해제, 채널·토큰 무관). 삭제는 감사로그 기반으로 #/trash 에서 복원 가능.
     if (!actor) throw new HttpError(401, "로그인이 필요합니다");
     await deleteProject(input.id, { actor, source: ctx?.source ?? "web" });
-    return { deleted: true, id: input.id };
+    // #1098 — 프로젝트만 지우고 세션을 두면 그 세션이 사라진 프로젝트를 계속 가리킨다(필터에 '삭제된 프로젝트 #1090'
+    //  으로 뜬 실제 사례). 여기서 함께 정리한다 — best-effort 라 실패해도 프로젝트 삭제는 그대로 성공이다.
+    let sessions = { killed: [] as string[], forgot: [] as string[], skippedNode: [] as string[], failed: 0 };
+    try { sessions = await cleanupProjectSessions(input.id); } catch (e) { logger.warn({ err: e, id: input.id }, "프로젝트 삭제: 세션 정리 실패(비치명)"); }
+    return { deleted: true, id: input.id, sessions };
   },
 };
 

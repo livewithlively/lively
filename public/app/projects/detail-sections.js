@@ -83,12 +83,14 @@ function projectDangerBlock(id, p, meId, back) {
     // 삭제 전원 개방(#280) — 인증된 누구나(서버도 인증만 요구). 삭제는 #/trash 에서 복원 가능.
     const delBtn = el('button', { class: 'btn btn-sm btn-danger', type: 'button', text: '프로젝트 삭제' });
     delBtn.onclick = async () => {
-        if (!confirm('프로젝트 ‘' + p.name + '’을(를) 삭제할까요?\n\n프로젝트와 그 작업(태스크·하위)이 함께 사라집니다(되돌릴 수 없음). 연결된 지식은 보존됩니다.'))
+        // #1098 — 이 프로젝트의 AI 세션도 서버가 함께 정리한다(종료 + 복원 목록 제거). 대화록은 남는다.
+        if (!confirm('프로젝트 ‘' + p.name + '’을(를) 삭제할까요?\n\n프로젝트와 그 작업(태스크·하위)이 함께 사라집니다(되돌릴 수 없음).\n이 프로젝트의 AI 세션도 종료됩니다 — 대화록은 📜 세션 기록에 남고, 연결된 지식은 보존됩니다.'))
             return;
         delBtn.disabled = true;
         try {
-            await api('/api/ui/v6/projects/' + id + '/delete', { method: 'POST' });
-            toast('프로젝트를 삭제했습니다');
+            const r = await api('/api/ui/v6/projects/' + id + '/delete', { method: 'POST' });
+            const nSess = ((r && r.sessions && r.sessions.killed?.length) || 0) + ((r && r.sessions && r.sessions.forgot?.length) || 0);
+            toast('프로젝트를 삭제했습니다' + (nSess ? ' — AI 세션 ' + nSess + '개도 정리했어요' : ''));
             back.remove();
             location.hash = '#/projects2';
         }
