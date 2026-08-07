@@ -191,39 +191,49 @@ input.emb-num { width: 120px; flex: none; }
 .md-axes-fnode.is-static { border-top: 3px solid var(--mint, #16C79A); }
 @media (max-width: 700px) { .md-axes-biflow { transform: none; } .md-axes-bilab { white-space: normal; text-align: center; } }
 
-/* ── #853 :::shot — 주석 스크린샷(실사 + 번호 핀 + 범례). 절제된 구성: 프레임·소수 핀·2열 범례. ── */
-/* ── #853 :::shot — 위: 구획 박스 스크린샷 / 아래: 번호별 1:1 상세 카드. 본문 폭(800)을 넘겨 크게. ── */
-.md-shot { margin: 22px 0 26px; display: flex; flex-direction: column; gap: 14px;
-  width: 100%; max-width: 100%; }   /* 콘텐츠 컬럼(.docs-body)에 맞춰 담는다 — 전폭 셸(#780)에서 옛 breakout(1120px)이 뷰포트를 넘던 것 제거 */
-.md-shot-imgwrap { position: relative; display: block; border: 1px solid var(--line); border-radius: 12px;
-  overflow: hidden; box-shadow: 0 6px 22px rgba(21,35,59,.12); line-height: 0; }
+/* ── #1107 :::shot v2 — 쉼: 깨끗한 화면 + 파란 번호 마커 / 짚음: 그 영역만 스포트라이트(나머지 딤).
+   제품의 둘러보기(guide-tour) 스포트라이트와 같은 시각언어. 색은 블루 단색(§0.5 컬러 예산). ── */
+.md-shot { margin: 20px 0 24px; display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 100%; }
+.md-shot-stage { position: relative; border: 1px solid var(--line-net); border-radius: 12px; overflow: hidden;
+  background: var(--canvas); box-shadow: 0 1px 2px rgba(21,35,59,.04); line-height: 0; }
 .md-shot-img { width: 100%; height: auto; display: block; }
-/* 5색 팔레트 — 박스·번호·상세카드가 --sc 공유(1:1로 색까지 매칭). */
-.is-c0 { --sc: var(--blue, #2D6BF0); } .is-c1 { --sc: var(--mint-deep, #0FA37E); } .is-c2 { --sc: #C2822F; }
-.is-c3 { --sc: #7A5AF0; } .is-c4 { --sc: #D6584A; }
-/* 구획 박스 — 실제 영역을 감싼다(옅은 채움 + 뚜렷한 테두리 + 좌상단 번호 탭). */
-.md-shot-box { position: absolute; box-sizing: border-box; border: 2.5px solid var(--sc, var(--blue)); border-radius: 9px;
-  background: color-mix(in srgb, var(--sc, var(--blue)) 8%, transparent);
-  box-shadow: 0 1px 7px color-mix(in srgb, var(--sc, var(--blue)) 22%, transparent); }
-.md-shot-bnum { position: absolute; left: -2.5px; top: -2.5px; min-width: 26px; height: 26px; padding: 0 7px;
-  border-radius: 9px 3px 9px 3px; background: var(--sc, var(--blue)); color: #fff; font-size: 14px; font-weight: 800;
-  line-height: 26px; text-align: center; box-shadow: 0 1px 4px rgba(21,35,59,.32); }
-.md-shot-pin { position: absolute; transform: translate(-50%, -50%); width: 26px; height: 26px; border-radius: 50%;
-  background: var(--sc, var(--blue)); color: #fff; font-size: 14px; font-weight: 800; line-height: 26px; text-align: center;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sc, var(--blue)) 26%, transparent), 0 1px 4px rgba(21,35,59,.35); }
-.md-shot-cap { font-size: 12.5px; color: var(--muted, #6b7a90); margin: -2px 0 2px; }
-/* 번호별 상세 카드 — 스크린샷 번호와 1:1(번호·색 일치). */
-.md-shot-details { display: flex; flex-direction: column; gap: 10px; }
-.md-shot-detail { display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: start;
-  padding: 14px 18px; border: 1px solid var(--line); border-left: 4px solid var(--sc, var(--blue));
-  border-radius: 11px; background: var(--bg); }
-.md-shot-dnum { flex: none; width: 27px; height: 27px; border-radius: 8px; background: var(--sc, var(--blue));
-  color: #fff; font-size: 14px; font-weight: 800; line-height: 27px; text-align: center; }
-.md-shot-dmain { min-width: 0; }
-.md-shot-dtitle { font-size: 15px; font-weight: 700; color: var(--ink); line-height: 1.45; }
-.md-shot-dbody { font-size: 14px; color: var(--ink-sub, #40506a); line-height: 1.65; margin: 6px 0 0; }
-.md-shot-dbody + .md-shot-dbody { margin-top: 5px; }
-@media (max-width: 1120px) { .md-shot { width: 100%; } }
+/* 스포트라이트 — 영역 링(블루 2px) + 바깥 전체 딤(대형 box-shadow 한 장, overflow 로 클립). */
+.md-shot-hl { position: absolute; z-index: 1; border-radius: 10px; opacity: 0; pointer-events: none;
+  box-shadow: 0 0 0 2px var(--blue), 0 0 0 9999px rgba(21, 35, 59, .38); transition: opacity var(--dur-base, 150ms) ease; }
+.md-shot-hl.is-on { opacity: 1; }
+/* 번호 마커 — 영역 좌상단 모서리에 걸치는 블루 원(백색 링으로 화면과 분리). 활성 시 나머지는 물러난다. */
+.md-shot-marker { position: absolute; z-index: 2; transform: translate(-42%, -42%); width: 23px; height: 23px;
+  padding: 0; border: 0; border-radius: 999px; background: var(--blue); color: #fff; cursor: pointer;
+  font-family: inherit; font-size: 12px; font-weight: 800; line-height: 23px; text-align: center;
+  box-shadow: 0 0 0 2px #fff, 0 1px 6px rgba(21, 35, 59, .28);
+  transition: opacity var(--dur-base, 150ms) ease, transform var(--dur-base, 150ms) ease; }
+.md-shot-stage.has-on .md-shot-marker { opacity: .35; }
+.md-shot-stage.has-on .md-shot-marker.is-on { opacity: 1; transform: translate(-42%, -42%) scale(1.08); }
+.md-shot-marker:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+/* 캡션 줄 — 왼쪽 캡션, 오른쪽 조작 힌트. */
+.md-shot-cap { display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+  font-size: 12.5px; color: var(--muted-head); line-height: 1.5; }
+.md-shot-hint { flex: none; font-size: 12px; color: var(--muted-2); }
+/* 범례 — 번호와 1:1 부품 목록. 카드가 아니라 조용한 행(hover·활성 = 선택 행 틴트). */
+.md-shot-legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 20px; }
+.md-shot-part { display: flex; align-items: flex-start; gap: 11px; margin: 0; padding: 10px 12px; border: 0;
+  background: none; border-radius: 9px; text-align: left; cursor: pointer; font-family: inherit;
+  transition: background-color var(--dur-base, 150ms) ease; }
+.md-shot-part:hover, .md-shot-part.is-on { background: var(--bg-sel); }
+.md-shot-part:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.md-shot-pnum { flex: none; width: 20px; height: 20px; margin-top: 1px; border-radius: 999px;
+  background: var(--bg-punch); color: var(--blue); font-size: 11.5px; font-weight: 800; line-height: 20px;
+  text-align: center; transition: background-color var(--dur-base, 150ms) ease, color var(--dur-base, 150ms) ease; }
+.md-shot-part:hover .md-shot-pnum, .md-shot-part.is-on .md-shot-pnum { background: var(--blue); color: #fff; }
+.md-shot-pbody { min-width: 0; display: block; }
+.md-shot-ptitle { display: block; font-size: 14px; font-weight: 700; color: var(--ink); line-height: 1.5; }
+.md-shot-pdesc { display: block; font-size: 13px; font-weight: 500; color: var(--ink-sub); line-height: 1.55; margin-top: 2px; }
+.md-shot-pdesc + .md-shot-pdesc { margin-top: 4px; }
+@media (max-width: 720px) { .md-shot-legend { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) {
+  .md-shot-hl, .md-shot-marker, .md-shot-part, .md-shot-pnum { transition: none; }
+  .md-shot-stage.has-on .md-shot-marker.is-on { transform: translate(-42%, -42%); }
+}
 
 /* 온보딩 connect '지금 하기' 선택 — 중앙 팝업(overlayBox). 웹=추천 / 로컬=개발자용 배지로 구분. */
 .ov-back.ob-choice-back { align-items: center; }   /* 세로도 화면 중앙(짧은 선택 팝업이라 위쪽에 붙지 않게) */

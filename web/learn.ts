@@ -50,13 +50,16 @@ const DOCS_NAV = [
     // #req tour 탭 숨김(사용자 요청). 라우트는 유지. 복원: 아래 줄 주석 해제.
     // { key: 'tour', label: 'Lively 둘러보기', href: '#/start/tour' },
   ] },
+  // #1107 상단 탭 현행화 — 사이드바 라벨은 실제 상단 탭 이름 그대로(내 AI 세션→AI 세션 · 도메인 맵→맥락 관리 ·
+  //  관리→설정, #1153/#1419 개편 반영). slug 는 URL 안정성 위해 terminal·admin 유지, domainmap 만 context 로
+  //  교체(구 #/learn/docs/domainmap 은 renderLearnDocs 가 리다이렉트).
   { group: '화면별 안내', items: [
     { key: 'home', label: '홈 (대시보드)', href: '#/learn/docs/home' },
-    { key: 'terminal', label: '내 AI 세션', href: '#/learn/docs/terminal' },
+    { key: 'terminal', label: 'AI 세션', href: '#/learn/docs/terminal' },
     { key: 'projects', label: '프로젝트', href: '#/learn/docs/projects' },
     { key: 'wiki', label: 'WIKI', href: '#/learn/docs/wiki' },
-    { key: 'domainmap', label: '도메인 맵', href: '#/learn/docs/domainmap' },
-    { key: 'admin', label: '관리', href: '#/learn/docs/admin' },
+    { key: 'context', label: '맥락 관리', href: '#/learn/docs/context' },
+    { key: 'admin', label: '설정', href: '#/learn/docs/admin' },
   ] },
   { group: '레퍼런스', items: [
     { key: 'cli', label: 'AI 세션 명령어', href: '#/learn/docs/cli' },
@@ -265,6 +268,8 @@ async function renderLearnDocs(view, slug) {
   // #762 '문서 안내(IA·규칙)'(#/learn/docs/plan) 페이지 숨김(사용자 요청) — 개요로 리다이렉트. 원고(DOC_PAGES['plan'])는 보존.
   //  복원: 이 줄 삭제 + learn.ts nav 의 plan 항목 주석 해제.
   if (slug === 'plan') { location.replace('#/learn'); return; }
+  // #1107 — '도메인 맵' 문서는 '맥락 관리'(context)로 흡수(#1153/#1419 탭 개편 반영). 구 딥링크 보존.
+  if (slug === 'domainmap') { location.replace('#/learn/docs/context'); return; }
   const page = DOC_PAGES.find((p) => p.slug === slug);
   if (!page) { location.replace('#/learn'); return; }
   const h1 = /^#\s+(.+)\r?\n/.exec(page.md);
@@ -276,7 +281,7 @@ async function renderLearnDocs(view, slug) {
   ];
   if (slug === 'wiki') {
     body.push(el('div', { class: 'guide-cards', style: 'margin-top:18px' },
-      kindsCard(),            // WIKI 에 쌓이는 '지식 한 덩어리'란? (#317 이관 — 구 가이드 랜딩에서)
+      // kindsCard(지식 한 덩어리)는 #1107 새 원고의 '문서 속성' 섹션이 흡수 — 중복이라 제거.
       projectKnowledgeCard()  // 필요지식을 연결하면 뭐가 좋나 — #/learn/docs/wiki?focus=required 대상
     ));
   }
@@ -341,62 +346,6 @@ function flowStep(icon, title, desc) {
     el('p', { class: 'guide-flow-desc', text: desc }));
 }
 function flowArrow() { return el('div', { class: 'guide-flow-arrow', 'aria-hidden': 'true', text: '→' }); }
-
-// ── WIKI 에 쌓이는 '지식 한 덩어리'란? — 현재 모델(2026-06-30): 카테고리 1개 + 직교 두 축(주입/출처). ──
-//  옛 R·K·H·W '종류'는 폐기. WIKI 탭과 동일 용어·칩(kn-chip)으로 맞춘다: 주입=항상 주입/검색, 출처=저작/외부 미러.
-//  '할 일·과업'은 더 이상 지식이 아니라 [프로젝트] 탭(맥락의 변화)으로 분리됨.
-function kindsCard() {
-  // WIKI 탭의 injection/provenance 칩과 동일 스타일.
-  const chip = (mod, label) => el('span', { class: 'kn-chip ' + mod, text: label });
-
-  // 추상 → 눈으로: 실제 '한 덩어리' 예시 한 장 + 거기 붙는 분류/꼬리표.
-  const example = el('div', { class: 'gloss-example' },
-    el('span', { class: 'gloss-example-tag', text: '이런 게 한 덩어리예요' }),
-    el('div', { class: 'gloss-example-title', text: '경쟁사 가격 비교 (2월 조사)' }),
-    el('div', { class: 'gloss-example-body', text: 'A사 월 9,900원, B사 월 14,000원, 우리 월 12,000원 — 우리가 중간 가격대.' }),
-    el('div', { class: 'kn-ex-meta' },
-      el('span', { class: 'kn-cat-pill', text: '분야: 시장·경쟁' }),
-      el('span', { class: 'kn-ex-meta-sep', text: '·' }),
-      chip('kn-inject-recalled', '검색'),
-      chip('kn-prov-authored', '저작')),
-    el('div', { class: 'kn-ex-cap', text: '↑ 한 덩어리에는 ‘분야(카테고리)’ 하나와 속성 두 개(주입·출처)가 붙습니다.' }));
-
-  // 축 1 — 주입(언제 AI에게 전달되나)
-  const injAxis = el('div', { class: 'kn-axis' },
-    el('div', { class: 'kn-axis-q', text: '주입 — 언제 AI에게 전달되나?' }),
-    el('p', { class: 'kn-axis-sub', text: '이 지식이 AI 대화에 들어가는 시점.' }),
-    knOpt(chip('kn-inject-always', '항상 주입'), '회사 규칙·페르소나처럼 모든 대화에 늘 자동으로 들어가요.', '추측으로 답하지 않기 — 근거 없으면 “잘 모르겠다”고 말한다'),
-    knOpt(chip('kn-inject-recalled', '검색'), '평소엔 주입되지 않고, 관련된 일을 할 때 AI가 검색해 읽습니다.', '경쟁사 가격 비교 · 새 팀원 온보딩 절차'));
-
-  // 축 2 — 출처(어디서 왔나)
-  const provAxis = el('div', { class: 'kn-axis' },
-    el('div', { class: 'kn-axis-q', text: '출처 — 어디서 왔나?' }),
-    el('p', { class: 'kn-axis-sub', text: '이 지식의 원본이 어디 있나.' }),
-    knOpt(chip('kn-prov-authored', '저작'), '이 안에서 직접 써넣은 지식. 원본이 여기 있어요.', '우리가 정리한 결정·런북·조사'),
-    knOpt(chip('kn-prov-observed', '외부 미러'), '노션·클릭업 등 외부 도구에서 동기화해 가져온 사본입니다. 원본 편집은 외부 도구에서 합니다.', '미러된 노션 문서 · 클릭업 과업'));
-
-  return el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h2', { text: '조금 더: WIKI에 쌓이는 ‘지식 한 덩어리’란?' })),
-    el('p', { class: 'guide-lead', text: 'WIKI에 담기는 지식은 제목과 내용으로 된 짧은 글 한 장이에요 — 메모 한 장, 문서 한 페이지 같은 거죠. 회사가 오래 기억해야 할 사실·결정·규칙·설명서가 한 덩어리씩 쌓입니다.' }),
-    example,
-    el('p', { class: 'guide-kinds-q', text: '두 속성은 각각 이런 질문에 답합니다:' }),
-    el('div', { class: 'kn-axis-grid' }, injAxis, provAxis),
-    el('div', { class: 'guide-note' },
-      el('span', { class: 'kn-chip kn-pin', text: '📌 인덱스' }),
-      el('div', {}, el('b', { text: '특히 중요한 지식' }), '은 인덱스에 ‘핀’해 두면, 제목이 매 대화 첫머리에 항상 포함되어 모두가 바로 발견해요.')),
-    el('p', { class: 'admin-hint', style: 'margin-top:12px' }, '‘지금 진행 중인 ', el('b', { text: '할 일·과업' }),
-      '’은 WIKI가 아니라 ', el('a', { href: '#/projects2', text: '[프로젝트] 탭' }), '에서 다룹니다 — WIKI에는 ‘오래 남는 기록’만 담습니다.'),
-    el('p', { class: 'admin-hint', style: 'margin-top:6px' }, '실제 지식들은 ',
-      el('a', { href: '#/knowledge', text: '[WIKI] 탭' }), '에서 볼 수 있어요.'));
-}
-
-// 축 옵션 한 줄 — 칩 + 설명 + 작은 예시.
-function knOpt(chipEl, desc, ex) {
-  return el('div', { class: 'kn-axis-opt' },
-    el('div', { class: 'kn-axis-opt-head' }, chipEl),
-    el('div', { class: 'kn-axis-opt-desc', text: desc }),
-    el('div', { class: 'kn-axis-opt-ex' }, el('b', { text: '예: ' }), ex));
-}
 
 // ── 그 지식을 [프로젝트]에 '필요지식'으로 연결하면? — 맥락의 기록(WIKI) → 맥락의 변화(프로젝트) 다리. 비개발자용(#317). ──
 //  새 CSS 없이 hero 의 guide-flow + guide-remember 패턴 재사용(같은 '3단계' 시각 언어로 통일).
