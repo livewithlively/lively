@@ -16,19 +16,17 @@ import { itemsPool } from "../db/client.js";
 import { CANONICAL_HARNESS_IDS } from "./auth/agent-identity.js";
 
 // 조회 필터 — interval=postgres interval 문자열(null=전체), actor=사람 축 식별자(mcp_call_log.actor).
-//  mine=false 면 actor 조건을 걸지 않는다(조직 전체). 왜 이 선택지가 필요한가:
-//   actor 는 '그 세션을 만든 사람'이 아니라 **게이트웨이에 접속한 토큰의 신원**이다. 공용 박스에서 도는
+//  ⚠ actor 는 '그 세션을 만든 사람'이 아니라 **게이트웨이에 접속한 토큰의 신원**이다. 공용 박스에서 도는
 //   AI 세션은 그 박스 계정 하나로 전부 찍힌다(실측 2026-08-07: 이 게이트웨이 30일 8,519건 전량 단일 actor).
-//   그래서 '내 것만'으로 고정하면 실제로 일한 사람의 화면이 텅 빈다 — 사람이 범위를 고를 수 있어야 한다.
+//   그래서 다른 계정으로 보면 텅 빌 수 있다. '팀 전체' 범위 전환을 넣었다가 반려됐다(사용자 결정 —
+//   빈 이유를 설명하는 문구도 원치 않음). 지금은 항상 본인 것만이다.
 export interface LivelyLogFilter {
   interval: string | null;
   actor: string;
-  mine: boolean;
 }
 
-const p = (f: LivelyLogFilter): unknown[] => [f.interval, f.actor, f.mine];
-// $3=mine — false 면 actor 조건 통과(전체). 파라미터로 두어 쿼리문을 갈래내지 않는다.
-const byActor = (col = "actor") => `($3::bool IS NOT TRUE OR ${col} = $2)`;
+const p = (f: LivelyLogFilter): unknown[] => [f.interval, f.actor];
+const byActor = (col = "actor") => `${col} = $2`;
 
 // 기간 조건 — 두 표가 시각 컬럼 이름이 달라(mcp_call_log.called_at / db_access_log.at) 인자로 받는다.
 const inWindow = (col: string) => `($1::text IS NULL OR ${col} >= now() - $1::interval)`;
@@ -39,28 +37,49 @@ export interface LivelySummary {
   knowledge_reads: number; // 조직 지식 본문 열람 횟수
   knowledge_titles: number; // 서로 다른 지식 수
   knowledge_saved: number;  // 내가 남긴 지식 수
+  prev_knowledge_titles: number; // 직전 같은 길이 구간의 값(타일 증감 표시용, 전체 기간이면 0)
+  prev_knowledge_saved: number;
   activities: number;       // 내가 기록한 작업 수
   harnesses: number;        // 내가 쓴 하네스 종류
   first_at: string | null;
   last_at: string | null;
 }
 
-// 요약 — 위젯 머리의 한 줄. 전부 한 번의 스캔으로 뽑는다(FILTER 집계).
+// 요약 — 위젯 머리(브리핑 문장·타일)용. 전부 한 번의 스캔으로 뽑는다(FILTER 집계).
+//  타일의 "지난주보다 +N" 을 위해 **직전 같은 길이 구간**(prev_*)도 같은 스캔에서 뽑는다 — WHERE 를 2×창으로
+//  넓히고 FILTER 로 현재/직전을 가른다. 전체 기간(interval=null)이면 직전 구간이 정의되지 않아 prev_*=0.
 export async function livelySummary(f: LivelyLogFilter): Promise<LivelySummary | undefined> {
+  const CURR = `($1::text IS NULL OR called_at >= now() - $1::interval)`;
+  const PREV = `($1::text IS NOT NULL AND called_at < now() - $1::interval)`;
   const r = await itemsPool.query(
-    `SELECT count(*)::int AS calls,
-            count(DISTINCT tool)::int AS tools,
-            count(*) FILTER (WHERE tool = 'knowledge_get' AND ok)::int AS knowledge_reads,
-            count(DISTINCT args->>'name') FILTER (WHERE tool = 'knowledge_get' AND ok)::int AS knowledge_titles,
-            count(*) FILTER (WHERE tool = 'knowledge_save' AND ok)::int AS knowledge_saved,
-            count(*) FILTER (WHERE tool = 'activity_log' AND ok)::int AS activities,
-            count(DISTINCT harness)::int AS harnesses,
-            min(called_at) AS first_at, max(called_at) AS last_at
+    `SELECT count(*) FILTER (WHERE ${CURR})::int AS calls,
+            count(DISTINCT tool) FILTER (WHERE ${CURR})::int AS tools,
+            count(*) FILTER (WHERE ${CURR} AND tool = 'knowledge_get' AND ok)::int AS knowledge_reads,
+            count(DISTINCT args->>'name') FILTER (WHERE ${CURR} AND tool = 'knowledge_get' AND ok)::int AS knowledge_titles,
+            count(*) FILTER (WHERE ${CURR} AND tool = 'knowledge_save' AND ok)::int AS knowledge_saved,
+            count(DISTINCT args->>'name') FILTER (WHERE ${PREV} AND tool = 'knowledge_get' AND ok)::int AS prev_knowledge_titles,
+            count(*) FILTER (WHERE ${PREV} AND tool = 'knowledge_save' AND ok)::int AS prev_knowledge_saved,
+            count(*) FILTER (WHERE ${CURR} AND tool = 'activity_log' AND ok)::int AS activities,
+            count(DISTINCT harness) FILTER (WHERE ${CURR})::int AS harnesses,
+            min(called_at) FILTER (WHERE ${CURR}) AS first_at,
+            max(called_at) FILTER (WHERE ${CURR}) AS last_at
        FROM mcp_call_log
-      WHERE ${inWindow("called_at")} AND actor = $2`,
+      WHERE ($1::text IS NULL OR called_at >= now() - ($1::interval * 2)) AND actor = $2`,
     p(f),
   );
   return r.rows[0];
+}
+
+// 유형별 구성 — 브리핑(A안)의 '활동 구성' 스택 바. 분류는 livelyEvents 와 같은 KIND_SQL 한 벌을 쓴다.
+export async function livelyKindCounts(f: LivelyLogFilter): Promise<{ kind: string; calls: number }[]> {
+  const r = await itemsPool.query(
+    `SELECT ${KIND_SQL} AS kind, count(*)::int AS calls
+       FROM mcp_call_log l
+      WHERE ${inWindow("l.called_at")} AND ${byActor("l.actor")} AND l.tool NOT IN ('whoami','me')
+      GROUP BY 1 ORDER BY calls DESC`,
+    p(f),
+  );
+  return r.rows;
 }
 
 // ── ★ 본체: 시간순 작업 로그 ──────────────────────────────────────────────────────────────────
@@ -75,6 +94,7 @@ export interface LivelyEvent {
   tool: string;
   kind: string;          // knowledge_read | knowledge_write | project | task | db | activity | infra | other
   label: string | null;  // 그 사건의 대상(지식 제목·프로젝트 이름·SQL 요약 …)
+  ref: string | null;    // 대상이 실존 지식이면 그 소환키(name) — 화면이 #/k/<name> 링크를 건다
   harness: string | null;
   actor: string | null;
   ok: boolean;
@@ -106,6 +126,7 @@ export async function livelyEvents(f: LivelyLogFilter, limit = 120, offset = 0):
   const r = await itemsPool.query(
     `SELECT l.called_at AS at, l.tool, ${KIND_SQL} AS kind,
             left(${LABEL_SQL}, 200) AS label,
+            k.name AS ref,
             l.harness, l.actor, l.ok
        FROM mcp_call_log l
        LEFT JOIN knowledge k ON k.name = l.args->>'name'
@@ -126,19 +147,6 @@ export async function livelyEventCount(f: LivelyLogFilter): Promise<number> {
     p(f),
   );
   return Number(r.rows[0]?.n || 0);
-}
-
-// 이 기간에 기록이 있는 사람들 — '내 것만'이 비었을 때 화면이 "그럼 누구 걸 볼 수 있는지"를 말해줄 수 있게.
-//  (실측처럼 공용 박스 한 계정으로 전부 찍히는 조직에서, 빈 화면의 이유를 사람이 스스로 알아내게 하는 장치.)
-export async function livelyActors(f: LivelyLogFilter): Promise<{ actor: string; calls: number }[]> {
-  const r = await itemsPool.query(
-    `SELECT actor, count(*)::int AS calls
-       FROM mcp_call_log
-      WHERE ${inWindow("called_at")} AND actor IS NOT NULL
-      GROUP BY actor ORDER BY calls DESC LIMIT 12`,
-    [f.interval],
-  );
-  return r.rows;
 }
 
 export interface KnowledgeReadRow {

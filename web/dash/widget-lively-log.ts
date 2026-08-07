@@ -1,31 +1,132 @@
-// dash/widget-lively-log.ts — ⑧ 내 라이블리 사용 내역(#1570).
-//  요구 원문(윤상민): "감사 기록을 쉬운 말로 보여주든 뭐든, 내가 최근에 작업하면서 **라이블리가 어떤 작업을
-//   했는지가 로그로 쭉 보이면** 좋겠다." → 이 위젯의 본체는 통계 요약이 아니라 **사건의 나열**이다.
-//   (초안은 '근거 지식 top 8 + 숫자' 요약이었고 "내용이 너무 부족하다"고 반려됐다 — 요약은 로그의 머리 한 줄로
-//    줄이고, 자리의 대부분을 시간순 로그에 준다.)
+// dash/widget-lively-log.ts — ⑧ 내 라이블리 사용 내역(브리핑) + ⑨ 라이블리 로그(타임라인) (#1570).
+//  요구 원문(윤상민): "라이블리 딴에서 한 작업들의 목록/통계가 보이면 좋겠다" → 디자인 시안 4종
+//  (lvlog-designs.html) 중 **A 브리핑**을 기본 위젯으로 확정, **D 정돈된 로그**도 별도 위젯으로 유지.
+//   · lvlog(브리핑) — 문장 리드 + 스탯 타일 3 + 활동 구성 스택바 + 많이 기댄 지식. 기본 배치 3열 상단.
+//   · lvlogd(로그) — KPI 스트립 + 시간순 감사 로그(사람 말 번역·연속 중복 접기). 기본 숨김(편집에서 꺼냄).
 //
-//  ── 이 위젯이 지키는 것 ──
-//   ① **기록이지 주장이 아니다.** "라이블리가 도왔습니다"는 광고고, "「X」를 읽었다 · 12:04"는 감사 기록이다.
-//      그래서 문구는 일어난 일만 말하고, 색은 쓰지 않는다(§0.5 채색 예산).
-//   ② **쉬운 말.** mcp_call_log 는 툴 이름(knowledge_get)으로 남는데 그건 사람 말이 아니다. 여기서 번역한다.
-//   ③ **읽을 수 있게 접는다.** 7일 2,391건을 그대로 쏟으면 로그가 아니라 벽이다 — 같은 대상 연속 호출은 ×N 로 접고,
-//      날짜로 끊는다.
-//   ④ **빈 화면에는 이유를 준다.** actor 는 '세션을 만든 사람'이 아니라 접속 토큰의 신원이라, 공용 박스에서 도는
-//      세션은 그 박스 계정 하나로 몰린다(실측 2026-08-07: 이 게이트웨이 30일 8,519건 전량 단일 actor). 그래서
-//      다른 계정으로 보면 텅 빈다 — 그때 '전체' 범위와 "기록이 있는 사람"을 화면이 직접 알려준다.
-//  ⚠ 회수(훅 자동주입)는 REST 라 호출 로그에 안 남는다 — 이 로그의 '읽음'은 모델이 본문을 실제로 연 것뿐이다.
-//  ⚠ 기간 단위다. mcp_call_log 에 session_id 가 없어 '이 세션에서'로는 못 묶는다(#1578).
-import { api, el, errorNote, state } from '../core.js';
-import { dashChips, dashCtl, dashChoicePopover } from './chrome.js';
+//  ── 지키는 것 ──
+//   ① 기록이지 주장이 아니다 — 문구는 일어난 일만. 자화자찬 배지 금지.
+//   ② 쉬운 말 — 툴 이름(knowledge_get)은 사람 말이 아니다. 여기서 번역한다.
+//   ③ 유형 4색(blue·mint-deep·violet·coral)은 CVD 검증 통과 조합 — 라벨 병기 필수(coral 대비 2.9:1).
+//   ④ '팀 전체' 범위와 빈 화면 사유 문구는 있었다가 **사용자 반려로 제거**됐다 — 재도입 금지.
+//  ⚠ '읽음'은 knowledge_get(본문을 실제로 연 것)만 — 훅 자동회수(주입)는 주입≠사용이라 세면 과대계상.
+//  ⚠ 기간 단위 — mcp_call_log 에 session_id 가 없어 '이 세션에서'로는 못 묶는다(#1578).
+import { api, el, errorNote } from '../core.js';
+import { dashChips, dashCtl } from './chrome.js';
 
 const LVL_WINDOWS: [string, string][] = [['24h', '24시간'], ['7d', '7일'], ['30d', '30일']];
 const PAGE = 120;
 
 function n(v: unknown): string { return Number(v || 0).toLocaleString('ko-KR'); }
 
-// ── 툴 → 사람 말 ────────────────────────────────────────────────────────────────────────────
-//  자주 흐르는 것부터 명시 매핑(실측 상위 28종을 덮는다). 모르는 툴은 접미사 규칙으로 떨어뜨린다 —
-//  새 툴이 생겨도 로그가 'knowledge_frobnicate' 같은 raw 이름을 뱉지 않게.
+// 유형 축 — 색은 20-dashboard.css 의 기존 톤 어휘(tn-*)와 같은 값. 구성 바·범례·KPI·로그 점이 전부 이 한 벌.
+const KINDS: { keys: string[]; label: string; cls: string }[] = [
+  { keys: ['knowledge_read'], label: '지식 읽음', cls: 'k-read' },
+  { keys: ['knowledge_write'], label: '지식 기록', cls: 'k-write' },
+  { keys: ['project', 'task', 'activity'], label: '프로젝트·할 일', cls: 'k-work' },
+  { keys: ['db'], label: 'DB 조회', cls: 'k-db' },
+  { keys: ['context', 'infra', 'other'], label: '기타', cls: 'k-etc' },
+];
+const kindCls = (kind: string) => (KINDS.find((g) => g.keys.includes(kind)) || KINDS[4]).cls;
+
+// 기간 → 리드 문장 접두 / 증감 비교 라벨.
+const WIN_WORD: Record<string, [string, string]> = { '24h': ['오늘', '어제보다'], '7d': ['이번 주', '지난주보다'], '30d': ['이번 달', '지난달보다'] };
+
+// ── ⑧ 브리핑(lvlog) — 시안 A ──────────────────────────────────────────────────────────────────
+async function fillLivelyLog(zone) {
+  let win = '7d';
+
+  const draw = async () => {
+    let d: any;
+    try { d = await api('/api/ui/me/lively-log?window=' + encodeURIComponent(win) + '&limit=1'); }
+    catch (e) { zone.body.replaceChildren(errorNote(e, '사용 내역을 불러오지 못했습니다')); return; }
+
+    const s = d.summary || {};
+    const bg = d.background || null;
+    const dbQ = (d.dbAccess || []).reduce((a: number, r: any) => a + Number(r.queries || 0), 0);
+    const dbRows = (d.dbAccess || []).reduce((a: number, r: any) => a + Number(r.rows_read || 0), 0);
+    zone.countEl.textContent = n(d.event_total);
+    dashChips(zone.chipsEl, LVL_WINDOWS, win, (k) => { win = k; draw(); });
+
+    const box = el('div', { class: 'dash-lvl' });
+    const [word, prevWord] = WIN_WORD[win] || WIN_WORD['7d'];
+
+    if (!Number(d.event_total)) {
+      box.append(el('div', { class: 'dash-lvl-why', text: '이 기간에는 라이블리가 관여한 기록이 없어요.' }));
+      zone.body.replaceChildren(box);
+      return;
+    }
+
+    // 리드 — 이 기간을 문장으로. 숫자는 <b>로만 세운다(색 강조 금지 — 잉크 위계).
+    const lead = el('div', { class: 'dash-lvl-lead' });
+    const seg: (string | HTMLElement)[] = [word + ' 라이블리는 '];
+    if (s.knowledge_titles) { seg.push('조직 지식 ', el('b', { text: n(s.knowledge_titles) + '건' }), '을 답변 근거로 꺼냈'); }
+    if (s.knowledge_saved) { seg.push(s.knowledge_titles ? '고, 새 지식 ' : '새 지식 ', el('b', { text: n(s.knowledge_saved) + '건' }), '을 남겼어요.'); }
+    else if (s.knowledge_titles) seg.push('어요.');
+    else seg.push('도구 호출 ', el('b', { text: n(s.calls) + '건' }), '을 처리했어요.');
+    if (bg && (Number(bg.sources_ingested) || Number(bg.distilled))) {
+      seg.push(' 밤사이 자료 ', el('b', { text: n(bg.sources_ingested) + '건' }), '이 수집');
+      if (Number(bg.distilled)) seg.push('돼 지식 ', el('b', { text: n(bg.distilled) + '건' }), '으로 증류됐어요.');
+      else seg.push('됐어요.');
+    }
+    lead.append(...seg);
+    box.append(lead);
+
+    // 스탯 타일 3 — 값 + 라벨 + 보조(증감/행수). 증감은 직전 같은 길이 구간 대비(전체 기간이면 숨김).
+    const delta = (curr: number, prev: number) => {
+      if (win === 'all' || (!curr && !prev)) return '';
+      const df = curr - prev;
+      return df === 0 ? prevWord.replace('보다', '와') + ' 비슷' : `${prevWord} ${df > 0 ? '+' : ''}${n(df)}`;
+    };
+    box.append(el('div', { class: 'dash-lvl-tiles' },
+      el('div', { class: 'dash-lvl-tile' },
+        el('div', { class: 'v', text: n(s.knowledge_titles) }),
+        el('div', { class: 'l', text: '근거로 쓴 지식' }),
+        el('div', { class: 'd', text: delta(Number(s.knowledge_titles), Number(s.prev_knowledge_titles)) })),
+      el('div', { class: 'dash-lvl-tile' },
+        el('div', { class: 'v', text: n(s.knowledge_saved) }),
+        el('div', { class: 'l', text: '새로 남긴 지식' }),
+        el('div', { class: 'd', text: delta(Number(s.knowledge_saved), Number(s.prev_knowledge_saved)) })),
+      el('div', { class: 'dash-lvl-tile' },
+        el('div', { class: 'v', text: n(dbQ) }),
+        el('div', { class: 'l', text: '조직 DB 조회' }),
+        el('div', { class: 'd', text: dbRows ? n(dbRows) + '행' : '' }))));
+
+    // 활동 구성 — 유형별 스택 바(2px 갭) + 범례(수치 병기 — coral 대비 부족을 라벨이 메운다).
+    const counts = new Map<string, number>();
+    for (const k of d.kinds || []) counts.set(kindCls(k.kind), (counts.get(kindCls(k.kind)) || 0) + Number(k.calls || 0));
+    const groups = KINDS.map((g) => ({ ...g, v: counts.get(g.cls) || 0 })).filter((g) => g.v > 0);
+    const total = groups.reduce((a, g) => a + g.v, 0);
+    if (total) {
+      box.append(el('div', { class: 'dash-task-gh' }, el('span', { text: '활동 구성' }), el('span', { class: 'dash-task-gn', text: n(total) + '건' })));
+      box.append(el('div', { class: 'dash-lvl-comp' },
+        ...groups.map((g) => el('i', { class: g.cls, style: `flex:${g.v}`, title: `${g.label} ${n(g.v)}` }))));
+      box.append(el('div', { class: 'dash-lvl-legend' },
+        ...groups.map((g) => el('span', {}, el('i', { class: 'dash-dot-s ' + g.cls }), `${g.label} `, el('b', { text: n(g.v) })))));
+    }
+
+    // 가장 많이 기댄 지식 — top 3. 행 = 지식 문서 링크(#/k/<name> — 전역 '지식 문서 열기' 정주소).
+    const reads = (d.reads || []).slice(0, 3);
+    if (reads.length) {
+      box.append(el('div', { class: 'dash-task-gh' }, el('span', { text: '가장 많이 기댄 지식' })));
+      const rows = el('div', { class: 'dash-lvl-rows' });
+      for (const r of reads) {
+        rows.append(el('a', { class: 'dash-lvl-krow', href: '#/k/' + encodeURIComponent(r.name), title: r.name },
+          el('span', { class: 't', text: r.title || r.name }),
+          el('span', { class: 'v num', text: n(r.reads) + '번' })));
+      }
+      box.append(rows);
+    }
+
+    zone.body.replaceChildren(box);
+  };
+
+  dashCtl(zone, { action: { href: '#/knowledge', title: '지식 탭으로' } });
+  await draw();
+}
+
+// ── ⑨ 라이블리 로그(lvlogd) — 시안 D ─────────────────────────────────────────────────────────
+//  툴명 → 사람 말. 자주 흐르는 것부터 명시 매핑(실측 상위 28종을 덮는다), 모르는 툴은 접미사 규칙 폴백.
 const VERB: Record<string, string> = {
   knowledge_get: '지식을 읽었어요',
   knowledge_search: '지식을 찾아봤어요',
@@ -35,7 +136,7 @@ const VERB: Record<string, string> = {
   knowledge_link_category: '지식을 분류에 연결했어요',
   knowledge_set_lifecycle: '지식 상태를 바꿨어요',
   activity_log: '작업 기록을 남겼어요',
-  db_query: '조직 DB 를 조회했어요',
+  db_query: '조직 DB를 조회했어요',
   project_get_v6: '프로젝트 맥락을 불러왔어요',
   project_create_v6: '프로젝트를 만들었어요',
   project_update_v6: '프로젝트를 고쳤어요',
@@ -59,7 +160,6 @@ const VERB: Record<string, string> = {
   map_code_unit: '코드 구조를 기록했어요',
   delegate_run: '무거운 작업을 다른 컴퓨터에 맡겼어요',
 };
-// 접미/접두 규칙 — 명시 매핑에 없는 툴의 폴백. 라이블리 툴은 동사가 이름 끝에 온다(_get·_create·_set_*).
 function verbOf(tool: string): string {
   if (VERB[tool]) return VERB[tool];
   if (/_(get|list|search|grep|read|overview)(_v6)?$/.test(tool)) return '맥락을 조회했어요';
@@ -69,8 +169,7 @@ function verbOf(tool: string): string {
   return '작업했어요';
 }
 
-// 같은 대상을 연달아 부른 사건을 한 줄로 접는다(×N). 접지 않으면 로그가 같은 줄로 도배된다 —
-//  실측: knowledge_get 이 같은 런북을 19번 연속 부른 구간이 있었다.
+// 같은 대상 연속 호출을 ×N 로 접는다 — 실측: 같은 런북을 19번 연속 부른 구간이 있었다(안 접으면 벽).
 function fold(events: any[]): any[] {
   const out: any[] = [];
   for (const e of events) {
@@ -82,92 +181,52 @@ function fold(events: any[]): any[] {
 }
 
 const dayKey = (iso: string) => { const d = new Date(iso); return d.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' }); };
-const hhmm = (iso: string) => new Date(iso).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+const hhmm = (iso: string) => new Date(iso).toLocaleTimeString('ko-KR', { hour12: false, hour: '2-digit', minute: '2-digit' });
 
-async function fillLivelyLog(zone) {
+async function fillLivelyLogTimeline(zone) {
   let win = '7d';
-  let scope = 'me';
   let shown = PAGE;
-
-  const people = await api('/api/ui/dash/people').then((d: any) => (d && d.people) || []).catch(() => []);
-  const meId = (state.me && (state.me.userId || state.me.email)) || '';
-  const nameOf = (pid: string) => {
-    if (!pid) return '';
-    const m = people.find((x: any) => x.author_person === pid);
-    return (m && (m.nickname || m.display_name)) || pid;
-  };
 
   const draw = async () => {
     let d: any;
-    try { d = await api(`/api/ui/me/lively-log?window=${encodeURIComponent(win)}&scope=${scope}&limit=${shown}`); }
-    catch (e) { zone.body.replaceChildren(errorNote(e, '사용 내역을 불러오지 못했습니다')); return; }
+    try { d = await api(`/api/ui/me/lively-log?window=${encodeURIComponent(win)}&limit=${shown}`); }
+    catch (e) { zone.body.replaceChildren(errorNote(e, '로그를 불러오지 못했습니다')); return; }
 
-    const s = d.summary || {};
     const events = d.events || [];
     const total = Number(d.event_total || 0);
     zone.countEl.textContent = n(total);
     dashChips(zone.chipsEl, LVL_WINDOWS, win, (k) => { win = k; shown = PAGE; draw(); });
 
     const box = el('div', { class: 'dash-lvl' });
-
-    // ── 머리 한 줄 — 이 기간을 한 문장으로. 로그가 본체이므로 요약은 여기서 끝낸다. ──
-    const lead: string[] = [];
-    if (s.knowledge_reads) lead.push(`조직 지식 ${n(s.knowledge_titles)}건을 근거로 썼어요`);
-    if (s.knowledge_saved) lead.push(`지식 ${n(s.knowledge_saved)}건을 남겼어요`);
-    if (d.dbAccess && d.dbAccess.length) lead.push(`조직 DB 를 ${n(d.dbAccess.reduce((a: number, r: any) => a + Number(r.queries || 0), 0))}번 봤어요`);
-    if (lead.length) box.append(el('div', { class: 'dash-lvl-lead', text: lead.join(' · ') }));
-
-    // ── 범위 전환 — '내 것만'이 기본. 공용 박스 조직에선 이게 비므로 '전체'로 넘어갈 길을 항상 준다. ──
-    box.append(el('div', { class: 'dash-lvl-scope' },
-      ...([['me', '내 작업'], ['all', '팀 전체']] as [string, string][]).map(([k, label]) => {
-        const b = el('button', { class: 'dash-chip' + (k === scope ? ' on' : ''), type: 'button', text: label });
-        b.onclick = () => { if (k !== scope) { scope = k; shown = PAGE; draw(); } };
-        return b;
-      })));
-
     if (!events.length) {
-      // 빈 화면에 이유를 준다 — 기록이 있는 사람을 알려주면 "왜 내 화면만 비지"가 풀린다.
-      const others = (d.actors || []).filter((a: any) => a.actor !== meId);
-      const why = others.length
-        ? `이 계정(${nameOf(meId) || meId})으로 남은 기록이 없어요. 이 기간 기록은 ${others.map((a: any) => `${nameOf(a.actor)} ${n(a.calls)}건`).join(' · ')} 입니다 — AI 세션은 그 세션이 도는 계정으로 기록돼요. [팀 전체]로 보세요.`
-        : '이 기간에는 라이블리가 관여한 기록이 없어요.';
-      box.append(el('div', { class: 'dash-lvl-why', text: why }));
+      box.append(el('div', { class: 'dash-lvl-why', text: '이 기간에는 라이블리가 관여한 기록이 없어요.' }));
       zone.body.replaceChildren(box);
       return;
     }
 
-    // ── ★ 본체: 시간순 로그 ── 날짜로 끊고, 같은 대상 연속 호출은 접는다.
+    // KPI 스트립 — 유형 4칸(값 + 색점 + 라벨). 로그 점과 같은 색 어휘.
+    const counts = new Map<string, number>();
+    for (const k of d.kinds || []) counts.set(kindCls(k.kind), (counts.get(kindCls(k.kind)) || 0) + Number(k.calls || 0));
+    box.append(el('div', { class: 'dash-lvl-kpis' },
+      ...KINDS.slice(0, 4).map((g) => el('div', { class: 'dash-lvl-kpi' },
+        el('div', { class: 'v num', text: n(counts.get(g.cls) || 0) }),
+        el('div', { class: 'l' }, el('i', { class: 'dash-dot-s ' + g.cls }), g.label)))));
+
+    // 시간순 로그 — 날짜 머리 + [시각 | 유형점 | 동사 · 대상 | ×N]. 대상이 실존 지식(ref)이면 행이 문서 링크.
     let lastDay = '';
     for (const e of fold(events)) {
       const day = dayKey(e.at);
-      if (day !== lastDay) { lastDay = day; box.append(el('div', { class: 'dash-task-gh' }, el('span', { text: day }))); }
-      const who = scope === 'all' && e.actor && e.actor !== meId ? nameOf(e.actor) : '';
-      const main = el('span', { class: 'dash-lvl-main' },
-        el('span', { class: 'dash-lvl-verb' + (e.ok ? '' : ' fail'), text: verbOf(e.tool) }),
-        e.label ? el('span', { class: 'dash-lvl-title', text: e.label }) : null,
-        e.count > 1 ? el('span', { class: 'dash-lvl-x', text: '×' + e.count }) : null,
-        who ? el('span', { class: 'dash-lvl-by', text: who }) : null);
-      box.append(el('div', { class: 'dash-row dash-lvl-row', title: `${e.tool}${e.harness ? ' · ' + e.harness : ''}` },
-        main, el('span', { class: 'dash-lvl-when', text: hhmm(e.at) })));
-    }
-
-    // ── 세션 밖 — 내가 없는 동안 돈 것. 사람 축이 아니라 조직 축이라 로그와 분리해 꼬리에 둔다. ──
-    const bg = d.background;
-    if (bg) {
-      const bgAll: [string, number][] = [
-        ['자료를 새로 수집했어요', Number(bg.sources_ingested || 0)],
-        ['자료를 지식으로 증류했어요', Number(bg.distilled || 0)],
-        ['새 지식을 자동 분류했어요', Number(bg.classified || 0)],
-      ];
-      const bgLines = bgAll.filter((row) => row[1] > 0);
-      if (bgLines.length) {
-        box.append(el('div', { class: 'dash-task-gh' }, el('span', { text: '내가 없는 동안 (자동)' })));
-        for (const [label, v] of bgLines) {
-          box.append(el('div', { class: 'dash-row dash-lvl-row' },
-            el('span', { class: 'dash-lvl-main' }, el('span', { class: 'dash-lvl-verb', text: label })),
-            el('span', { class: 'dash-lvl-when', text: `${n(v)}건` })));
-        }
-      }
+      if (day !== lastDay) { lastDay = day; box.append(el('div', { class: 'dash-lvl-day', text: day })); }
+      const tag = e.ref ? 'a' : 'div';
+      const attrs: any = { class: 'dash-lvl-erow', title: `${e.tool}${e.harness ? ' · ' + e.harness : ''}` };
+      if (e.ref) attrs.href = '#/k/' + encodeURIComponent(e.ref);
+      box.append(el(tag, attrs,
+        el('span', { class: 'tm num', text: hhmm(e.at) }),
+        el('i', { class: 'dash-dot-s ' + kindCls(e.kind) + (e.ok ? '' : ' fail') }),
+        el('span', { class: 'body' },
+          el('span', { class: 'verb', text: verbOf(e.tool) }),
+          e.label ? el('span', { class: 'obj', text: ' · ' + e.label }) : null),
+        e.count > 1 ? el('span', { class: 'x num', text: '×' + e.count }) : el('span')));
     }
 
     if (events.length < total) {
@@ -177,15 +236,11 @@ async function fillLivelyLog(zone) {
     } else if (d.retention_days) {
       box.append(el('div', { class: 'dash-lvl-foot', text: `호출 기록은 ${d.retention_days}일간 보관돼요` }));
     }
-
     zone.body.replaceChildren(box);
   };
 
-  dashCtl(zone, {
-    gear: { title: '사용 내역 설정', open: (a) => dashChoicePopover(a, '기본 범위', [['me', '내 작업'], ['all', '팀 전체']], scope, (k) => { scope = k; shown = PAGE; draw(); }) },
-    action: { href: '#/knowledge', title: '지식 탭으로' },
-  });
+  dashCtl(zone, { action: { href: '#/knowledge', title: '지식 탭으로' } });
   await draw();
 }
 
-export { fillLivelyLog };
+export { fillLivelyLog, fillLivelyLogTimeline };
