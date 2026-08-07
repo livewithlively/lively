@@ -60,7 +60,9 @@ async function renderTerminal(view) {
     // 두 칸이 전체를 덮으므로 '빈 선택'과 '둘 다 선택'은 결과가 같다(둘 다 전체) — 굳이 정규화하지 않는다.
     const matchScope = (s) => fScope.size === 0 || fScope.has(tsessScopeOf(s));
     const matchPeriod = (s) => tsessPeriodMatch(fPeriod, s);
-    let projF = 0; // 0=전체 · >0=projectId (소속 축은 fScope 가 전담 — #1229)
+    // 프로젝트 축 — **다중 선택**(빈 집합 = 전체). 소속 축은 fScope 가 전담(#1229).
+    //  단일선택이면 '지금 붙잡고 있는 두세 개를 한 화면에' 가 안 되고, 고른 걸 푸는 길도 '전체' 한 칸뿐이었다.
+    const projF = new Set();
     let shownNow = []; // 지금 필터에 걸려 화면에 있는 세션 — 벌크바의 '보이는 것 전체 선택' 범위
     const headActions = el('div', { class: 'term-head-actions' });
     const bulkBar = el('div', { class: 'dash-bulkbar dash-bulkbar--sess', hidden: true });
@@ -111,6 +113,7 @@ async function renderTerminal(view) {
     //  (#1098 에서 배운 것: 재렌더가 앵커를 갈아치우면 팝오버가 '바깥 클릭'으로 판정돼 닫힌다).
     //  기간은 프리셋을 고르면 닫히는 게 맞지만, 날짜·기준을 만질 땐(직접 고르기) 닫히면 못 쓴다 → 'period' 로 다시 편다.
     function draw(reopen = '') {
+        let projDDRef = null;
         // 헤더 우측 — [+ 새 세션] + (내 세션 0개면) 따라하기. data-tour 앵커 유지(#517 온보딩).
         const newBtn = el('button', { class: 'btn btn-primary', 'data-tour': 'new-session', text: '+ 새 세션', onclick: () => openTermCreateForm(cfg, view) });
         const nodeBtn = el('button', { class: 'btn btn-ghost', title: '내 PC·서버를 노드로 연결/관리(#869)', text: '🖥 노드', onclick: () => openNodeManager(view) });
@@ -200,10 +203,18 @@ async function renderTerminal(view) {
         //  통째로 사라진다(고를 게 없는 컨트롤을 남겨 두면 골랐다가 빈 화면을 보게 된다). 걸려 있던 프로젝트가
         //  그렇게 사라지면 자동 해제한다 — 안 그러면 아무것도 안 보이는데 그 원인이 화면에 없다.
         const projIds = [...new Set(sessions.filter(matchScope).map((s) => Number(s.projectId) || 0).filter(Boolean))];
-        if (projF && !projIds.includes(projF))
-            projF = 0;
-        if (projIds.length)
-            right.append(buildSessProjFilter({ projects: projects || [], projIds, projName, lists: projLists || [], folders: projFolders || [], current: projF, onPick: (v) => { projF = v; draw(); } }));
+        for (const id of [...projF])
+            if (!projIds.includes(id))
+                projF.delete(id); // 세션이 사라진 프로젝트는 선택 해제
+        if (projIds.length) {
+            const projDD = buildSessProjFilter({
+                projects: projects || [], projIds, projName, lists: projLists || [], folders: projFolders || [], selected: projF,
+                onChange: (next) => { projF.clear(); for (const v of next)
+                    projF.add(v); draw('proj'); },
+            });
+            right.append(projDD.wrap);
+            projDDRef = projDD;
+        }
         const selToggle = sel.mode
             ? el('button', { class: 'btn btn-ghost btn-sm', text: '취소', onclick: () => { sel.mode = false; sel.ids.clear(); draw(); } })
             : (sessions.length ? el('button', { class: 'btn btn-ghost btn-sm', text: '선택', title: '여러 세션을 골라 한 탭 그리드로 열거나 한 번에 종료', onclick: () => { sel.mode = true; draw(); } }) : null);
@@ -219,10 +230,12 @@ async function renderTerminal(view) {
             scopeDD.open();
         else if (reopen === 'period')
             periodDD.open();
+        else if (reopen === 'proj' && projDDRef)
+            projDDRef.open();
         // 필터 적용(상태 · 소속 · 기간 · 프로젝트) + 정렬(확인필요→작업중→대기→끝남, 그 안에서 최근 작업순).
         const shown = sessions
             .filter((s) => matchState(s) && matchScope(s) && matchPeriod(s))
-            .filter((s) => projF === 0 || (Number(s.projectId) || 0) === projF)
+            .filter((s) => projF.size === 0 || projF.has(Number(s.projectId) || 0))
             .sort((a, b) => TSESS_STATUS[a._st].rank - TSESS_STATUS[b._st].rank
             || (Number(b.lastActive || b.created) || 0) - (Number(a.lastActive || a.created) || 0));
         shownNow = shown; // 벌크바 '보이는 것 전체 선택' 범위(필터 결과와 항상 일치)
