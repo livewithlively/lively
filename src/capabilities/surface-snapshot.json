@@ -3384,7 +3384,7 @@
   "rest": [
    "GET /api/ui/me/lively-log"
   ],
-  "input_hash": "35575f03cbbad924"
+  "input_hash": "eb5974a41c4710f1"
  },
  {
   "name": "recall_route",

@@ -222,6 +222,15 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-lvl-by { flex: none; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
 .dash-lvl-when { flex: none; font-size: 11.5px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
 .dash-lvl-foot { padding: 8px; font-size: 11.5px; color: var(--muted-2); }
+/* 로그 한 줄 = [무엇을 했다] + [대상] — 동사가 앞, 대상이 뒤(스캔할 때 동사 열이 먼저 읽힌다) */
+.dash-lvl-verb { flex: none; font-size: 12.5px; color: var(--ink-sub); white-space: nowrap; }
+.dash-lvl-verb.fail { color: var(--coral-text); }
+.dash-lvl-x { flex: none; font-size: 11px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+.dash-lvl-scope { display: flex; gap: 6px; padding: 4px 8px 6px; }
+.dash-lvl-why { padding: 14px 10px; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+.dash-lvl-more { display: block; width: calc(100% - 16px); margin: 8px; padding: 7px; font: inherit; font-size: 12.5px;
+  color: var(--ink-sub); background: transparent; border: 1px solid var(--line); border-radius: 7px; cursor: pointer; }
+.dash-lvl-more:hover { background: var(--bg-tint); }
 
 /* ── 대시보드 편집(#1232) — 창 자체가 대시보드의 축소판: 3열 + 아래 '숨긴 위젯' 트레이 ── */
 .dash-lay { display: flex; flex-direction: column; gap: 12px; }

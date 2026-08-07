@@ -16,12 +16,19 @@ import { itemsPool } from "../db/client.js";
 import { CANONICAL_HARNESS_IDS } from "./auth/agent-identity.js";
 
 // 조회 필터 — interval=postgres interval 문자열(null=전체), actor=사람 축 식별자(mcp_call_log.actor).
+//  mine=false 면 actor 조건을 걸지 않는다(조직 전체). 왜 이 선택지가 필요한가:
+//   actor 는 '그 세션을 만든 사람'이 아니라 **게이트웨이에 접속한 토큰의 신원**이다. 공용 박스에서 도는
+//   AI 세션은 그 박스 계정 하나로 전부 찍힌다(실측 2026-08-07: 이 게이트웨이 30일 8,519건 전량 단일 actor).
+//   그래서 '내 것만'으로 고정하면 실제로 일한 사람의 화면이 텅 빈다 — 사람이 범위를 고를 수 있어야 한다.
 export interface LivelyLogFilter {
   interval: string | null;
   actor: string;
+  mine: boolean;
 }
 
-const p = (f: LivelyLogFilter): unknown[] => [f.interval, f.actor];
+const p = (f: LivelyLogFilter): unknown[] => [f.interval, f.actor, f.mine];
+// $3=mine — false 면 actor 조건 통과(전체). 파라미터로 두어 쿼리문을 갈래내지 않는다.
+const byActor = (col = "actor") => `($3::bool IS NOT TRUE OR ${col} = $2)`;
 
 // 기간 조건 — 두 표가 시각 컬럼 이름이 달라(mcp_call_log.called_at / db_access_log.at) 인자로 받는다.
 const inWindow = (col: string) => `($1::text IS NULL OR ${col} >= now() - $1::interval)`;
@@ -54,6 +61,84 @@ export async function livelySummary(f: LivelyLogFilter): Promise<LivelySummary |
     p(f),
   );
   return r.rows[0];
+}
+
+// ── ★ 본체: 시간순 작업 로그 ──────────────────────────────────────────────────────────────────
+//  요구 원문(윤상민): "감사 기록을 쉬운 말로 보여주든 뭐든, 내가 최근에 작업하면서 라이블리가 어떤 작업을
+//   했는지가 로그로 쭉 보이면 좋겠다." → 이 화면의 본체는 통계 요약이 아니라 **사건의 나열**이다.
+//  번역(툴명 → 사람 말)은 화면 관심사라 web/dash/widget-lively-log.ts 가 한다. 여기서는 그 재료만 만든다:
+//   시각 · 툴 · 분류(kind) · **대상 이름(label)** · 하네스 · 성공여부.
+//  ⚠ label 은 args 에서 뽑되 **지식은 제목까지 조인**한다 — 소환키(name)는 사람이 읽는 이름이 아니다.
+//  ⚠ 연속 중복 접기는 화면이 한다(같은 대상 반복 호출이 로그를 도배하므로). 여기서는 원본 순서를 지킨다.
+export interface LivelyEvent {
+  at: string;
+  tool: string;
+  kind: string;          // knowledge_read | knowledge_write | project | task | db | activity | infra | other
+  label: string | null;  // 그 사건의 대상(지식 제목·프로젝트 이름·SQL 요약 …)
+  harness: string | null;
+  actor: string | null;
+  ok: boolean;
+}
+
+// 툴 → 분류(kind). 화면이 색·아이콘을 고르고 필터 칩을 만드는 축이라 **SQL 에서 한 번에** 정한다
+//  (프론트가 94종 툴 이름을 다시 파싱하면 규칙이 두 벌이 된다).
+const KIND_SQL = `CASE
+  WHEN l.tool IN ('knowledge_get','knowledge_search','knowledge_grep','knowledge_list','knowledge_graph') THEN 'knowledge_read'
+  WHEN l.tool LIKE 'knowledge%' THEN 'knowledge_write'
+  WHEN l.tool = 'activity_log' THEN 'activity'
+  WHEN l.tool LIKE 'db_%' THEN 'db'
+  WHEN l.tool LIKE 'task_%' THEN 'task'
+  WHEN l.tool LIKE 'project%' THEN 'project'
+  WHEN l.tool LIKE 'source%' OR l.tool LIKE 'category%' OR l.tool LIKE 'team%' THEN 'context'
+  WHEN l.tool LIKE 'preview_env%' OR l.tool LIKE 'delegate%' OR l.tool LIKE 'workspace%'
+       OR l.tool LIKE 'node%' OR l.tool LIKE 'session%' OR l.tool LIKE 'repo%' OR l.tool LIKE 'map_%' THEN 'infra'
+  ELSE 'other' END`;
+
+// args 에서 대상 이름 한 개 뽑기 — 툴마다 키가 달라 우선순위로 훑는다(없으면 null → 화면이 대상 없이 그린다).
+//  ⚠ 값 전체를 넣지 않는다(로그가 본문 덤프가 되면 못 읽는다) — 화면 라벨로 쓸 만한 짧은 식별자만.
+const LABEL_SQL = `COALESCE(
+  k.title,                          -- 지식이면 제목(소환키가 아니라)
+  l.args->>'name', l.args->>'title', l.args->>'key', l.args->>'id',
+  l.args->>'text', l.args->>'q', l.args->>'query', l.args->>'pattern',
+  l.args->>'summary', l.args->>'repo', l.args->>'source')`;
+
+export async function livelyEvents(f: LivelyLogFilter, limit = 120, offset = 0): Promise<LivelyEvent[]> {
+  const r = await itemsPool.query(
+    `SELECT l.called_at AS at, l.tool, ${KIND_SQL} AS kind,
+            left(${LABEL_SQL}, 200) AS label,
+            l.harness, l.actor, l.ok
+       FROM mcp_call_log l
+       LEFT JOIN knowledge k ON k.name = l.args->>'name'
+      WHERE ${inWindow("l.called_at")} AND ${byActor("l.actor")}
+        AND l.tool NOT IN ('whoami','me')          -- 신원 확인은 사건이 아니라 배관이다
+      ORDER BY l.called_at DESC
+      LIMIT ${Number(limit) || 120} OFFSET ${Number(offset) || 0}`,
+    p(f),
+  );
+  return r.rows;
+}
+
+// 로그 전체 건수(더보기 버튼이 '남았는지'를 알아야 한다).
+export async function livelyEventCount(f: LivelyLogFilter): Promise<number> {
+  const r = await itemsPool.query(
+    `SELECT count(*)::int AS n FROM mcp_call_log l
+      WHERE ${inWindow("l.called_at")} AND ${byActor("l.actor")} AND l.tool NOT IN ('whoami','me')`,
+    p(f),
+  );
+  return Number(r.rows[0]?.n || 0);
+}
+
+// 이 기간에 기록이 있는 사람들 — '내 것만'이 비었을 때 화면이 "그럼 누구 걸 볼 수 있는지"를 말해줄 수 있게.
+//  (실측처럼 공용 박스 한 계정으로 전부 찍히는 조직에서, 빈 화면의 이유를 사람이 스스로 알아내게 하는 장치.)
+export async function livelyActors(f: LivelyLogFilter): Promise<{ actor: string; calls: number }[]> {
+  const r = await itemsPool.query(
+    `SELECT actor, count(*)::int AS calls
+       FROM mcp_call_log
+      WHERE ${inWindow("called_at")} AND actor IS NOT NULL
+      GROUP BY actor ORDER BY calls DESC LIMIT 12`,
+    [f.interval],
+  );
+  return r.rows;
 }
 
 export interface KnowledgeReadRow {
