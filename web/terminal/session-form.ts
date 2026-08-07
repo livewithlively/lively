@@ -239,7 +239,10 @@ function openTermCreateForm(cfg, view, onCreated?) {
     for (const f of (h.flags || [])) {
       let ctrl: any;
       // 빈 값 = 그 플래그를 아예 안 넘김(하네스가 알아서) — '기본'보다 '자동'이 그 뜻에 가깝다(#1145).
-      if (f.type === 'select') ctrl = el('select', { class: 'term-input', 'data-flag': f.name }, ...(f.choices || []).map((c) => el('option', { value: c }, c || '(자동)')));
+      //  카탈로그가 그 하네스의 기본값을 알려주면 '(자동 · gpt-5.5)' 처럼 **무엇으로 뜨는지**까지 보여준다.
+      //  값을 고정하는 게 아니라 표기만 하는 것 — 하네스가 기본을 올리면 실제로는 새 기본으로 뜬다(표기만 낡는다).
+      const autoLabel = f.default ? '(자동 · ' + f.default + ')' : '(자동)';
+      if (f.type === 'select') ctrl = el('select', { class: 'term-input', 'data-flag': f.name }, ...(f.choices || []).map((c) => el('option', { value: c }, c || autoLabel)));
       else if (f.type === 'bool') ctrl = el('input', { type: 'checkbox', 'data-flag': f.name });
       else ctrl = el('input', { class: 'term-input', type: 'text', 'data-flag': f.name, placeholder: f.desc || '' });
       const saved = prefs.flags && prefs.flags[f.name]; // 이전 설정 복원(#673)
