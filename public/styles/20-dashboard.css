@@ -540,6 +540,8 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-pop-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .dash-pop-name { font-size: 13px; font-weight: 600; color: var(--ink); }
 .dash-pop-desc { font-size: 11px; color: var(--muted); }
+/* #1098 리스트 고르기 팝오버 — 목록이 길 수 있어 안에서만 스크롤(팝오버가 화면 밖으로 자라지 않게). */
+.dash-pop-scroll { max-height: 320px; overflow-y: auto; }
 /* #1098 설명 접기 — 이름 옆 (i) 를 눌러야 회색 설명이 펼쳐진다(항목마다 두 줄이면 팝오버가 화면을 넘긴다). */
 .dash-pop-nameline { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .dash-pop-i {

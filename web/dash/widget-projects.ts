@@ -138,22 +138,47 @@ function projInlineAdd(ctx: ProjCtx, listId, countEl?) {
   //  이름만으로 POST /v6/projects 즉시 생성하고, 새 행을 그 자리에 인라인 삽입한 뒤 입력을 열어 둬(keepOpen) 연속 추가한다.
   //  자세한 설정(설명·레포·태스크·팀원·AI세션)이 필요하면 섹션 상단 헤더의 '+ 새 프로젝트'(openProjectV2Form 팝업)를 쓴다.
   let busy = false;
-  const commit = async (keepOpen) => {
+  // #1098 — 리스트 없이 만들어지던 구멍 막기. 미분류 묶음의 추가행은 **리스트를 고른 뒤에만** 생성한다
+  //  (예전엔 listId 가 없으면 list_id 없이 POST 해 '어느 리스트에도 없는 프로젝트'가 계속 생겼다).
+  //  고르는 자리는 팝오버 한 겹 — 이름은 이미 쳤으니 리스트만 집으면 바로 만들어진다.
+  const pickListThen = (anchor, onPicked: (id: number) => void) => {
+    const panel = el('div', { class: 'dash-pop-panel' });
+    panel.append(el('div', { class: 'dash-pop-head' }, el('strong', { text: '어느 리스트에 넣을까요?' })));
+    let close = () => { /* dashPopover 반환값으로 대체 */ };
+    const body = el('div', { class: 'dash-pop-scroll' });
+    panel.append(body);
+    body.append(el('div', { class: 'dash-pop-desc', text: '불러오는 중…' }));
+    api('/api/ui/v6/project-lists').then((d) => (d && d.lists) || []).catch(() => []).then((lists: any[]) => {
+      if (!lists.length) { body.replaceChildren(el('div', { class: 'dash-pop-desc', text: '리스트가 아직 없어요 — 프로젝트 탭에서 먼저 만들어 주세요.' })); return; }
+      body.replaceChildren(...lists.map((l) => {
+        const b = el('button', { class: 'dash-pop-opt', type: 'button' }, el('span', { class: 'dash-pop-name', text: l.name }));
+        b.onclick = () => { close(); onPicked(Number(l.id)); };
+        return b;
+      }));
+    });
+    close = dashPopover(anchor, panel);
+  };
+  const commit = async (keepOpen, forcedListId?: number) => {
     if (busy) return;
     const name = (input.value || '').trim();
     if (!name) { if (!keepOpen) collapse(); return; }
+    const useListId = forcedListId != null ? forcedListId : listId;
+    if (useListId == null || useListId === 0) {          // 미분류 자리 — 리스트를 먼저 고른다
+      pickListThen(input, (picked) => { void commit(keepOpen, picked); });
+      return;
+    }
     busy = true; input.disabled = true;
     try {
       // 생성 — 이름·리스트를 한 번에. (작성자=나(actor) 자동 → 내 보드 노출·삭제권한.)
       const np = await api('/api/ui/v6/projects', { method: 'POST', body: JSON.stringify({
-        name, list_id: listId != null ? listId : undefined,
+        name, list_id: useListId,
       }) }).then((d) => (d && d.project) || d);
       // #1130 대시보드 빠른 생성 기본 상태 = '할 일'(todo). 백엔드 createProject 는 항상 active(진행 중)로
       //  만들므로 생성 직후 상태만 todo 로 패치한다(프로젝트 탭이 비-진행중 그룹에 넣을 때와 동일 경로 /status POST).
       //  ⚠ 이 기본값 변경은 '대시보드 빠른 생성'에만 적용 — 백엔드 기본값·프로젝트 탭은 그대로(사용자 결정 #1130).
       if (np && np.id) await api('/api/ui/v6/projects/' + np.id + '/status', { method: 'POST', body: JSON.stringify({ status: 'todo', status_raw: null }) }).catch(() => {});
       // 새 프로젝트 행을 추가행 바로 위에 인라인 삽입(리로드 없이 흐름 유지). status 는 위 패치와 일치시켜 '할 일'로.
-      const p = Object.assign({ task_count: 0, tasks: [], field_values: {}, tags: [], members: [] }, np, { status: 'todo', status_category: 'unstarted', list_id: listId ?? (np && np.list_id) ?? null });
+      const p = Object.assign({ task_count: 0, tasks: [], field_values: {}, tags: [], members: [] }, np, { status: 'todo', status_category: 'unstarted', list_id: useListId ?? (np && np.list_id) ?? null });
       if (np && np.id) {
         // ⚠ 데이터 배열(projects)에도 넣는다 — DOM 만 삽입하면, 행의 상태 아이콘을 눌러 상태를 바꿀 때
         //  dashSetProjStatus → draw() 가 projects 로 재렌더하며 이 행을 통째로 떨군다(생성은 됐는데 목록에서 사라짐, #1130).
