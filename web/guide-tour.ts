@@ -147,18 +147,8 @@ const SCENES: any[] = [
           body: el('p', { class: 'tour-p' }, '이 프로젝트에서 여는 ', b('AI 작업 세션'), '이에요. 팀원별로 모여 보여서 누가 무슨 일을 하고 있는지 한눈에 알 수 있어요.') });
         steps.push({ target: '[data-tour="proj-new-session"]', placement: 'left', advanceOn: 'click',
           title: '세션 만들기 ① — ＋ 새 세션', body: '오른쪽 위 [＋ 새 세션]을 눌러 볼게요.' });
-        // 드롭다운: 두 옵션을 설명하되 클릭 진행은 '웹에서 바로 열기'에만 건다 — '내 PC' 항목은 딤에 가려 못 눌러
-        //  오작동(로컬 모달 오픈)이 원천 차단되고, 설명 단계와 클릭 단계를 하나로 합쳐 순서 어긋남도 없앤다.
-        steps.push({ target: '[data-tour="sess-web"]', placement: 'left', advanceOn: 'click',
-          title: '세션 만들기 ② — 어디서 켤까',
-          body: [
-            p('두 가지가 떠요:'),
-            el('p', { class: 'tour-p' }, b('💻 내 PC'), ' — 개발자용이에요. 내 컴퓨터에 설치해서 써요.'),
-            el('p', { class: 'tour-p' }, b('☁️ 웹에서 바로'), ' — 설치 없이 중앙에서 열리는 팀 공용 세션이에요. 비개발자는 이게 쉬워요.'),
-            el('p', { class: 'tour-p' }, '밝은 ', b('[☁️ 웹에서 바로 열기]'), '를 눌러 볼게요.'),
-          ] });
-        // 프리필 값은 projects.ts 의 DEMO_SESSION_NAME('출시 안내 메일 초안') — 아래 예시와 반드시 일치시킨다(#1009).
-        steps.push({ target: '[data-tour="sess-name"]', placement: 'right', scrollIntoView: true,
+        // #1145 — '내 PC / 웹' 드롭다운은 없어졌다(그 선택은 이제 모달 제목 줄의 pill). 스텝도 함께 걷는다.
+        steps.push({ target: '[data-tour="label"]', placement: 'right', scrollIntoView: true,
           title: '만들기 창 — 세션 이름',
           body: el('p', { class: 'tour-p' }, '무슨 일을 하는 세션인지 알아보기 쉽게 이름을 정해요. 여기선 예시로 ', b('“출시 안내 메일 초안”'), ' 을 넣어 뒀어요.') });
         steps.push({ target: '[data-tour="sess-repos"]', placement: 'right', scrollIntoView: true,
@@ -272,10 +262,7 @@ const SCENES: any[] = [
         steps.push({ target: '[data-tour="proj-new-session"]', placement: 'left' as const, scrollIntoView: true, advanceOn: 'click' as const,
           title: '② 이 프로젝트에서 AI 켜기',
           body: el('p', { class: 'tour-p' }, '이 프로젝트 맥락(본문·연결된 지식)을 다 아는 ', b('AI 작업 세션'), '을 열 수 있어요. ', b('[＋ 새 세션]'), ' 을 눌러 보세요.') });
-        steps.push({ target: '[data-tour="sess-web"]', placement: 'left' as const, advanceOn: 'click' as const,
-          title: '☁️ 웹에서 바로 열기',
-          body: el('p', { class: 'tour-p' }, '설치 없이 중앙에서 열리는 세션이에요. 밝은 ', b('[☁️ 웹에서 바로 열기]'), ' 를 누르세요.') });
-        steps.push({ target: '[data-tour="sess-name"]', placement: 'right' as const, scrollIntoView: true,
+        steps.push({ target: '[data-tour="label"]', placement: 'right' as const, scrollIntoView: true,
           title: '세션 이름',
           body: el('p', { class: 'tour-p' }, '무슨 일을 시킬지 알아보기 쉽게 이름을 지어요. 예: ', b('“자료 조사”'), '. 저장소·실행 설정은 필요할 때만 만지면 돼요.') });
         steps.push({ target: '[data-tour="sess-create"]', placement: 'top' as const, scrollIntoView: true,

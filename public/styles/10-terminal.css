@@ -58,13 +58,16 @@
 /* 고급 설정 = 세 문장(#1145 안 2) — 라벨 6개 대신 읽히는 문장으로. 5열 격자라 줄이 달라도 드롭다운이
    세로로 정렬된다(값 길이대로 두면 줄마다 시작점이 달라 '들쭉날쭉'해 보인다).
    앞말은 오른쪽 정렬로 값에 붙이고, 끝말 열만 1fr 로 남는 폭을 먹는다. */
-.ig-grid { display: grid; grid-template-columns: max-content max-content max-content max-content 1fr;
+/* ⚠ 값 열은 minmax(0,1fr) 이어야 한다 — max-content 로 두면 **드롭다운의 가장 긴 옵션**이 열 폭을 정해서
+   (예: '일반 — 라이블리 읽기·쓰기') 마지막 끝말 열에 폭이 안 남고 '로 돕니다.' 가 한 글자씩 세로로 쪼개진다(실측).
+   글자 열은 max-content + nowrap 으로 고정하고, 남는 폭은 드롭다운 둘이 나눠 갖는다. */
+.ig-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr) max-content;
   gap: 9px 8px; align-items: center; margin-top: 12px; padding: 13px 14px;
   border: 1px solid var(--line); border-radius: 11px; background: var(--bg-tint); }
-.ig-lead { justify-self: end; font: 600 13px/1.4 inherit; color: var(--muted-head); }
-.ig-mid, .ig-tail { font-size: 13px; color: var(--ink); }
+.ig-lead { justify-self: end; font: 600 13px/1.4 inherit; color: var(--muted-head); white-space: nowrap; }
+.ig-mid, .ig-tail { font-size: 13px; color: var(--ink); white-space: nowrap; }
 .ig-tail { display: flex; align-items: center; gap: 2px; }
-.ig-grid .ig-sel { width: 100%; min-width: 132px; box-sizing: border-box; padding: 5px 6px;
+.ig-grid .ig-sel { width: 100%; min-width: 0; box-sizing: border-box; padding: 5px 6px;
   font: 600 13px/1.35 inherit; color: var(--blue-deep); background: var(--bg);
   border: 1px solid var(--line-net); border-radius: 7px; cursor: pointer; }
 .ig-grid .ig-sel:hover { border-color: var(--blue); }
