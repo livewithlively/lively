@@ -350,47 +350,43 @@ function startTerminalTour(firstStep?, opts?) {
       placement: 'right', scrollIntoView: true,
     },
     {
-      // 실행 위치(#869 노드) — 어느 '컴퓨터'에서 돌지. folder(어느 '폴더'에서 일할지)와는 다른 것이라 스텝을 나눈다(#req).
-      target: '[data-tour="node"]',
-      title: '③ 실행 위치',
-      body: [el('p', { class: 'tour-p' }, 'AI가 실제로 ', el('b', { text: '어느 컴퓨터에서 실행될지' }), '예요.'),
-        el('p', { class: 'tour-p' }, '보통은 회사의 ', el('b', { text: '[중앙 컴퓨터]' }), '(기본)에서 돌아가니 ', el('b', { text: '그대로 두면 됩니다' }), '. 내 PC를 따로 등록해 뒀다면 여기서 골라 그 컴퓨터에서 돌릴 수도 있어요.')],
-      placement: 'right', scrollIntoView: true,
-    },
-    {
       // 작업 위치(공유/개인) + 그 안의 폴더 = 어느 '폴더'에서 일할지. AI가 들여다보고 다룰 파일들이 있는 곳.
       target: '[data-tour="folder"]',
-      title: '④ 어디서 실행할까요',
+      title: '③ 어디서 실행할까요',
       body: [el('p', { class: 'tour-p' }, 'AI가 ', el('b', { text: '어느 폴더에서 일할지' }), ' 골라요 — 그 폴더 안의 파일을 AI가 보고 다뤄요.'),
         el('p', { class: 'tour-p' }, '먼저 ', el('b', { text: '작업 위치' }), '를 골라요: ', el('b', { text: '공유 워크스페이스' }), '(팀이 함께 쓰는 곳) 또는 ', el('b', { text: '개인 폴더' }), '(나만 쓰는 곳). 그 아래 ', el('b', { text: '폴더' }), '에서 더 좁은 하위 폴더까지 정할 수 있어요.'),
         el('p', { class: 'tour-p', text: '잘 모르겠으면 기본값 그대로 두어도 괜찮아요.' })],
       placement: 'right', scrollIntoView: true,
     },
     {
-      target: '[data-tour="options"]',
-      title: '⑤ 실행 옵션',
-      body: [el('p', { class: 'tour-p' }, el('b', { text: '자동 승인' }), ' — 확인 없이 바로 실행해 빨라요. 공유 폴더에선 꺼 두는 걸 권해요.')],
-      placement: 'right', scrollIntoView: true,
-    },
-    {
-      target: '[data-tour="preset"]',
-      title: '⑥ 실행 설정 (선택)',
-      body: [el('p', { class: 'tour-p' }, '함께 일할 ', el('b', { text: 'AI · 모델 · effort' }), '예요. 기본값으로 접혀 있고 ', el('b', { text: '이전 설정을 기억' }), '해요 — 바꾸려면 눌러 펼치세요.'),
-        el('p', { class: 'tour-p', text: '잘 모르겠으면 그대로 — Claude Code · 기본 모델로 시작해요.' })],
-      placement: 'right', scrollIntoView: true,
-    },
-    {
       // 검색하면 그 아래로 '사람 목록'(.proj-mp-menu, position:absolute)이 초대칸 밖으로 열린다 → 구멍이 초대칸만 뚫으면
       //  목록이 딤(pointer-events:auto) 밑에 깔려 클릭이 씹힌다(#req). 목록이 열려 있으면 구멍에 함께 포함해 누를 수 있게.
       target: () => { const f = document.querySelector('[data-tour="invite"]'); if (!f) return null; const m = f.querySelector('.proj-mp-menu:not([hidden])'); return m ? [f, m] : f; },
-      title: '⑦ 함께 볼 사람 초대하기 (선택)',
+      title: '④ 함께 볼 사람 초대하기 (선택)',
       body: [el('p', { class: 'tour-p' }, '검색해서 추가하면 그 사람도 이 세션을 봐요. ', el('b', { text: '비워두면 나만 보는 비공개 세션' }), '이에요.'),
         el('p', { class: 'tour-p', text: '지금 안 정해도 돼요 — 나중에 세션 [수정]에서 바꿀 수 있어요.' })],
       placement: 'right', scrollIntoView: true,
     },
     {
+      // 고급 설정(#1145 안 C) — 실행 위치·라이블리 모드·기록 범위·모델·자동 승인이 이 한 줄 뒤에 접혀 있다.
+      //  ⚠ 접힌 채로는 그 안의 앵커(node·options)가 화면에 없으므로, 이 스텝에 들어오는 순간 **펼쳐서** 보여준다.
+      //   target 이 함수면 tour 가 매 프레임 호출하므로(tour.ts) 여는 부작용을 여기 둔다 — 이미 열려 있으면 아무 일도 안 한다.
+      target: () => {
+        const t = document.querySelector('[data-tour="preset"]') as HTMLElement | null;
+        if (!t) return null;
+        const body = t.parentElement?.querySelector('.term-adv-body') as HTMLElement | null;
+        if (body?.hasAttribute('hidden')) t.click();
+        return body ? [t, body] : t;
+      },
+      title: '⑤ 고급 설정 (선택)',
+      body: [el('p', { class: 'tour-p' }, '자주 안 바꾸는 것들은 여기 접혀 있어요 — ', el('b', { text: '실행 위치 · 라이블리 모드 · 기록 범위 · AI와 모델 · 자동 승인' }), '.'),
+        el('p', { class: 'tour-p' }, '접힌 줄에 지금 값이 요약돼 있으니 ', el('b', { text: '열지 않아도 무엇으로 뜨는지' }), ' 알 수 있어요.'),
+        el('p', { class: 'tour-p', text: '잘 모르겠으면 그대로 두세요 — 기본값으로 충분해요.' })],
+      placement: 'right', scrollIntoView: true,
+    },
+    {
       target: '[data-tour="create"]',
-      title: '⑧ 만들기',
+      title: '⑥ 만들기',
       body: [el('p', { class: 'tour-p' }, '마지막! ', el('b', { text: '[생성하기]' }), ' 를 누르면 새 탭에 까만 터미널 창이 열리고, 거기서 완료 안내가 이어집니다.')],
       placement: 'top', scrollIntoView: true, advanceOn: 'click',
     },

@@ -25,6 +25,10 @@
 /* 4택(기록 범위 #1145)도 모드와 같은 한 줄 — 카드가 좁아지므로 제목·부제를 한 줄 길이로 줄이고,
    넘칠 땐 접히는 대신 말줄임한다(카드 높이가 서로 달라지면 줄이 울퉁불퉁해진다). */
 .term-seg-lbl, .term-seg-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 고급 설정(#1145 안 C) — 접힌 줄의 요약과, 펼친 내용의 들여쓰기. term-fold 자체는 index.html 인라인 style 에 있다. */
+.term-fold-sum { color: var(--muted-head); font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.term-adv-body { margin: 2px 0 0; padding: 2px 0 6px; }
+.term-adv-body > * + * { margin-top: 12px; }
 .term-loc-folder { border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint); padding: 10px 12px; }
 .term-loc-folder .term-crumb { margin-bottom: 6px; }
 /* '이 폴더에서 AI 실행' 배너 — 지금 고른 위치/폴더에서 세션이 시작됨을 명시. */
