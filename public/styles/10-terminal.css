@@ -22,9 +22,75 @@
 .term-seg-sub { font-size: 11.5px; font-weight: 500; color: var(--muted-head); }
 .term-seg-check { flex: none; width: 17px; height: 17px; border-radius: 999px; border: 2px solid var(--line-net-2); background: var(--bg); }
 .term-seg-btn.active .term-seg-check { border-color: var(--blue); box-shadow: inset 0 0 0 3px var(--bg), inset 0 0 0 9px var(--blue); }
-/* 4택(기록 범위 #1145)은 한 줄에 넷을 욱여넣으면 카드마다 부제가 두세 줄로 접힌다 — 2×2 로 나눈다. */
-.term-seg--wrap { flex-wrap: wrap; }
-.term-seg--wrap .term-seg-btn { flex: 1 1 46%; }
+/* 4택(기록 범위 #1145)도 모드와 같은 한 줄 — 카드가 좁아지므로 제목·부제를 한 줄 길이로 줄이고,
+   넘칠 땐 접히는 대신 말줄임한다(카드 높이가 서로 달라지면 줄이 울퉁불퉁해진다). */
+.term-seg-lbl, .term-seg-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 세션 모달은 세로 중앙(#1145) — .ov-back 은 기본이 align-items:flex-start + padding 6vh 라 모달이 짧을수록
+   위로 쏠린다. 프로젝트 모달 위에 겹쳐 뜰 때 그 어긋남이 특히 도드라진다는 신고.
+   ⚠ align-items:center 만 주면 모달이 뷰포트보다 길 때 위가 잘려 스크롤로도 못 올라간다(flex 정렬의 고전 함정).
+    그래서 정렬은 박스의 margin:auto 로 준다 — 짧으면 중앙, 길면 위에서 시작하고 스크롤이 정상 동작한다.
+   이 모달에만 붙이는 클래스라 다른 모달(태스크 상세 등 긴 것)의 배치는 그대로다. */
+.ov-back--center { padding-top: 3vh; padding-bottom: 3vh; }
+.ov-back--center > .ov-box { margin-top: auto; margin-bottom: auto; }
+
+/* '웹 / 내 PC'(#1145) — 이 2택은 폼 전체를 갈아끼우므로 다른 필드보다 위계가 높아야 한다.
+   두 모양을 다 두고 session-form.ts 의 WHERE_UI 상수로 고른다(현재 'pill').
+   ① pill — 모달 제목 줄에 얹는다. 가장 짧다. */
+.ov-head .where-pill { display: inline-flex; gap: 2px; padding: 3px; margin-left: auto; flex: none;
+  background: var(--bg-tint); border: 1px solid var(--line); border-radius: 999px; }
+.where-pill-btn { border: 0; background: none; padding: 6px 13px; border-radius: 999px;
+  font: 600 12.5px/1 inherit; color: var(--ink-sub); cursor: pointer; white-space: nowrap; }
+.where-pill-btn:hover { color: var(--ink); }
+.where-pill-btn.on { background: var(--bg); color: var(--blue-deep); box-shadow: 0 1px 3px rgba(20, 35, 60, .10); }
+.ov-head .where-pill + .btn { margin-left: 10px; }
+/* 좁은 폭 — 제목/pill/닫기가 한 줄에 못 들어가면 pill 을 다음 줄 전체폭으로 떨어뜨린다(어정쩡한 접힘 방지). */
+@media (max-width: 560px) {
+  .ov-head:has(.where-pill) { flex-wrap: wrap; }
+  .ov-head .where-pill { order: 3; width: 100%; margin-left: 0; justify-content: center; }
+  .where-pill-btn { flex: 1; }
+}
+/* ② tabs — 제목 아래 밑줄 탭(.seg-tabs 재사용). 발견성이 높고 좁은 폭에서도 헤더가 안 접힌다. */
+.where-tabs { margin: 0 0 14px; }
+.where-tab-btn { border: 0; border-bottom: 2px solid transparent; background: none; padding: 9px 14px;
+  font: 600 13.5px/1.2 inherit; color: var(--muted-head); cursor: pointer; }
+.where-tab-btn:hover { color: var(--ink); }
+.where-tab-btn.active { color: var(--ink); border-bottom-color: var(--blue); }
+/* 고급 설정 = 세 문장(#1145 안 2) — 라벨 6개 대신 읽히는 문장으로. 5열 격자라 줄이 달라도 드롭다운이
+   세로로 정렬된다(값 길이대로 두면 줄마다 시작점이 달라 '들쭉날쭉'해 보인다).
+   앞말은 오른쪽 정렬로 값에 붙이고, 끝말 열만 1fr 로 남는 폭을 먹는다. */
+/* ⚠ 값 열은 minmax(0,1fr) 이어야 한다 — max-content 로 두면 **드롭다운의 가장 긴 옵션**이 열 폭을 정해서
+   (예: '일반 — 라이블리 읽기·쓰기') 마지막 끝말 열에 폭이 안 남고 '로 돕니다.' 가 한 글자씩 세로로 쪼개진다(실측).
+   글자 열은 max-content + nowrap 으로 고정하고, 남는 폭은 드롭다운 둘이 나눠 갖는다. */
+.ig-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr) max-content;
+  gap: 9px 8px; align-items: center; margin-top: 12px; padding: 13px 14px;
+  border: 1px solid var(--line); border-radius: 11px; background: var(--bg-tint); }
+.ig-lead { justify-self: end; font: 600 13px/1.4 inherit; color: var(--muted-head); white-space: nowrap; }
+.ig-mid, .ig-tail { font-size: 13px; color: var(--ink); white-space: nowrap; }
+.ig-tail { display: flex; align-items: center; gap: 2px; }
+.ig-grid .ig-sel { width: 100%; min-width: 0; box-sizing: border-box; padding: 5px 6px;
+  font: 600 13px/1.35 inherit; color: var(--blue-deep); background: var(--bg);
+  border: 1px solid var(--line-net); border-radius: 7px; cursor: pointer; }
+.ig-grid .ig-sel:hover { border-color: var(--blue); }
+.ig-grid .ig-sel:disabled { color: var(--muted-2); background: var(--bg-soft, #f4f4f6); cursor: default; }
+.ig-grid .caption { grid-column: 2 / -1; margin: -4px 0 0; }
+@media (max-width: 560px) { .ig-grid { grid-template-columns: 1fr; } .ig-lead { justify-self: start; } }
+/* 프로젝트 맥락 카드(#1145) — 폴더를 고를 여지가 없을 때 그 자리에 '무엇이 정해졌는지'를 채운다.
+   비활성 회색이 아니라 강조 테두리인 이유: 뺏긴 게 아니라 얻은 것이기 때문이다. */
+.term-proj-lock { border: 1.5px solid var(--blue); border-radius: 11px; background: var(--bg-tint); padding: 11px 13px; }
+.term-proj-lock-head { display: flex; align-items: center; gap: 7px; font-size: 13.5px; color: var(--ink); }
+.term-proj-lock-head .pill { margin-left: auto; flex: none; }
+.term-proj-lock .term-runhere { margin-top: 8px; }
+.term-proj-why { margin: 8px 0 0 16px; padding: 0; font-size: 12px; color: var(--muted-head); line-height: 1.7; }
+/* 프로젝트 세션의 초대칸 — 남기되 못 쓰게. 가시성은 리스트 공개범위가 정하므로 여기 입력은 효과가 없다. */
+.term-invite-off { opacity: .5; pointer-events: none; margin-top: 6px; }
+/* 내 PC 안내 — 세션을 만들지 않고 붙여넣을 한 줄만 준다. */
+.term-local-guide { border: 1px solid var(--line); border-radius: 11px; padding: 12px 13px; }
+.term-cmd { background: #0d1117; color: #c9d1d9; padding: 9px 11px; border-radius: 8px; font-size: 12px;
+  overflow-x: auto; margin: 8px 0; font-family: ui-monospace, Menlo, monospace; user-select: all; }
+/* 고급 설정(#1145 안 C) — 접힌 줄의 요약과, 펼친 내용의 들여쓰기. term-fold 자체는 index.html 인라인 style 에 있다. */
+.term-fold-sum { color: var(--muted-head); font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.term-adv-body { margin: 2px 0 0; padding: 2px 0 6px; }
+.term-adv-body > * + * { margin-top: 12px; }
 .term-loc-folder { border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint); padding: 10px 12px; }
 .term-loc-folder .term-crumb { margin-bottom: 6px; }
 /* '이 폴더에서 AI 실행' 배너 — 지금 고른 위치/폴더에서 세션이 시작됨을 명시. */
