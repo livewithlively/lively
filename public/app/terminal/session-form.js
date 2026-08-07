@@ -135,7 +135,7 @@ function openTermCreateForm(cfg, view, onCreated, opts) {
     //  공유 노드는 남의 컴퓨터일 수 있으니 라벨에 표시한다. 오프라인 노드는 비활성(에이전트가 게이트웨이에
     //  연결돼 있어야 생성 가능 — 서버도 409 재검증).
     const nodes = cfg.nodes || [];
-    const nodeSel = el('select', { class: 'term-input' }, el('option', { value: '' }, '중앙 컴퓨터 (기본)'), ...nodes.map((n) => {
+    const nodeSel = el('select', { class: 'term-input ig-sel' }, el('option', { value: '' }, '중앙 컴퓨터 (기본)'), ...nodes.map((n) => {
         const o = el('option', { value: n.id }, '🖥 ' + (n.name || n.id) + (n.shared ? ' (공유)' : '') + (n.online ? '' : ' — 오프라인'));
         if (!n.online)
             o.disabled = true;
@@ -150,13 +150,16 @@ function openTermCreateForm(cfg, view, onCreated, opts) {
             loadPicker();
     };
     nodeSel.addEventListener('change', paintPicker);
-    const harnessSel = el('select', { class: 'term-input' }, ...harnesses.map((h) => el('option', { value: h.key }, h.label)));
+    const harnessSel = el('select', { class: 'term-input ig-sel' }, ...harnesses.map((h) => el('option', { value: h.key }, h.label)));
     const inviteBox = buildInvitePicker(cfg, new Set()); // 기본 비공개(아무도 선택 안 됨)
     // 한 줄 배치(#1145)는 인라인으로도 못 박는다 — styles 는 브라우저가 오래 캐시해 클래스 규칙만으로는
     //  '새 JS + 옛 CSS' 조합에서 레이아웃이 무너진다(실측). 클래스(.term-preset-row)는 그대로 두되 값은 여기서 확정.
     //  ⚠ flex-direction 을 **반드시 명시**한다 — public/index.html 의 인라인 <style> 에 `.term-flags { flex-direction: column }`
     //  이 살아 있어서(외부 CSS 는 그 속성을 안 건드린다) 방향을 안 주면 모델·추론강도가 세로로 쌓인다(#1145 실측).
-    const flagsBox = el('div', { class: 'term-flags', style: 'display:flex;flex-direction:row;gap:10px;flex-wrap:wrap;flex:2 1 240px;min-width:0' });
+    // 문장 격자(#1145 안 2)의 **셀로 직접 참여**한다 — display:contents 라 이 div 자체는 레이아웃에서 사라지고
+    //  자식(앞말·드롭다운·중간말·드롭다운·끝말)이 부모 .ig-grid 의 열에 그대로 붙는다. 값 읽기는 종전대로
+    //  flagsBox.querySelectorAll('[data-flag]') 로 하므로 제출 코드는 한 글자도 안 바뀐다.
+    const flagsBox = el('div', { class: 'term-flags', style: 'display:contents' });
     // 자동 승인은 기본 꺼짐이되, 내가 지난번에 켰다면 켠 채로 복원한다(#782 — 사용자별 기억).
     //  (#673 의 'git 워크트리에서 작업' 체크박스는 #918 에서 제거 — 서버측 근거가 사라졌다: terminal-sessions 참조.)
     const autoCb = el('input', { type: 'checkbox' });
@@ -180,10 +183,12 @@ function openTermCreateForm(cfg, view, onCreated, opts) {
     // 고급 설정 안에서는 **드롭다운**이다(#1145) — 종전엔 모드 3카드 + 기록 범위 4카드 = 7카드가 세로를 190px 잡아먹고
     //  드롭다운·카드·체크박스가 뒤섞여 산만했다. 카드는 기본 화면의 갈림길(공유/개인 폴더)에만 남긴다.
     //  선택지 설명은 옵션 텍스트에 붙이고(`일반 — 읽고 씁니다`) 자세한 건 라벨 옆 ⓘ 가 맡는다.
-    const modeSel = el('select', { class: 'term-input' }, ...modeOpts.map((m) => el('option', { value: m.key }, m.lbl + ' — ' + m.sub)));
+    const modeSel = el('select', { class: 'term-input ig-sel' }, ...modeOpts.map((m) => el('option', { value: m.key }, m.lbl + ' — ' + m.sub)));
     modeSel.value = modeVal;
     modeSel.addEventListener('change', () => { modeVal = modeSel.value; syncWriteVis(); });
-    const modeField = el('div', { 'data-tour': 'mode', style: 'flex:1 1 150px;min-width:0' }, fieldInfo('라이블리 모드', '이 세션이 라이블리(회사 맥락)를 얼마나 쓸지 정합니다.\n\n· **일반** — 읽고 씁니다.\n· **읽기전용** — 읽기만 하고 쓰지 않습니다. 기밀 작업에 씁니다.\n· **인코그니토** — 라이블리를 아예 쓰지 않습니다. 클린룸이 필요할 때 씁니다.', modeSel));
+    const MODE_TIP = '이 세션이 라이블리(회사 맥락)를 얼마나 쓸지, 남긴 기록을 누가 볼지 정합니다.\n\n· **일반** — 읽고 씁니다.\n· **읽기전용** — 읽기만 하고 쓰지 않습니다. 기밀 작업에 씁니다.\n· **인코그니토** — 라이블리를 아예 쓰지 않습니다.\n\n**기록 범위**는 이 세션의 AI 가 내 승인 없이 남기는 기록의 최대 공개 범위입니다 — 「자동」은 실행 폴더를 따릅니다(프로젝트 폴더면 그 프로젝트 범위, 그 밖은 전체 공개). 읽기전용·인코그니토에서는 기록하지 않아 고를 수 없습니다.';
+    // 라이블리 모드 + 기록 범위를 한 문장으로(#1145 안 2) — 라벨 없이 읽히고, 축이 꺼지거나 하네스가 바뀌면 문장이 다시 조립된다.
+    const modeRow = el('div', { 'data-tour': 'mode', style: 'display:contents' });
     // 기록 범위(#1291 v2) — 이 세션의 AI 가 **내 승인 없이** 만들 수 있는 맥락의 최대 공개범위.
     //  모드(읽기전용/인코그니토)와 직교한다: 모드는 '쓰나 마나', 이건 '쓴다면 누구에게 보이게'.
     //  기본은 '자동' — 실행 위치 폴더를 따른다(프로젝트 폴더면 그 프로젝트 범위, 그 밖은 전체 공개).
@@ -196,7 +201,7 @@ function openTermCreateForm(cfg, view, onCreated, opts) {
         { v: 'audience', t: '프로젝트', d: '그 팀만 봅니다' },
         { v: 'private', t: '나만', d: '나만 봅니다' },
     ];
-    const writeVisSel = el('select', { class: 'term-input' }, ...writeVisOpts.map((o) => el('option', { value: o.v }, o.t + ' — ' + o.d)));
+    const writeVisSel = el('select', { class: 'term-input ig-sel' }, ...writeVisOpts.map((o) => el('option', { value: o.v }, o.t + ' — ' + o.d)));
     writeVisSel.value = writeVisVal;
     writeVisSel.addEventListener('change', () => { writeVisVal = writeVisSel.value; advSummary(); });
     // 읽기전용·인코그니토면 기록 범위는 **고를 수 없다**(#1145) — readOnly 는 쓰기 툴이 소거되고(capabilities/index.ts)
@@ -204,6 +209,15 @@ function openTermCreateForm(cfg, view, onCreated, opts) {
     //  효과 없는 컨트롤을 남겨두면 사람은 그게 먹는다고 믿는다 — 자리에 이유를 적어 잠근다.
     const writeVisHost = el('div', {});
     function writeVisLocked() { return modeVal !== 'normal'; }
+    // 「라이블리는 [모드] 모드로 쓰고, 기록은 [기록범위] 범위로 남깁니다.」 — 축이 꺼졌거나 claude 가 아니면 문장을 줄인다.
+    function paintModeRow() {
+        if (harnessOf().key !== 'claude') {
+            modeRow.replaceChildren();
+            return;
+        }
+        const showVis = visAxisOn('session_cap');
+        modeRow.replaceChildren(el('span', { class: 'ig-lead', text: '라이블리는' }), modeSel, el('span', { class: 'ig-mid', text: showVis ? '모드로 쓰고, 기록은' : '모드로 씁니다.' }), showVis ? writeVisHost : el('span'), el('span', { class: 'ig-tail' }, showVis ? document.createTextNode('범위로 남깁니다.') : null, infoPop(MODE_TIP)));
+    }
     function syncWriteVis() {
         writeVisSel.disabled = writeVisLocked();
         if (writeVisLocked()) {
@@ -213,10 +227,8 @@ function openTermCreateForm(cfg, view, onCreated, opts) {
             writeVisHost.replaceChildren(writeVisSel);
         advSummary();
     }
-    const writeVisField = el('div', { style: 'flex:1 1 150px;min-width:0' }, fieldInfo('기록 범위', '이 세션의 AI 가 **내 승인 없이** 남길 수 있는 기록의 최대 공개 범위입니다.\n\n· **자동** — 실행 폴더를 따릅니다. 프로젝트 폴더에서 열었으면 그 프로젝트 범위가 되고, 그 밖에서 열었으면 전체 공개가 됩니다.\n· **전체 공개** — 조직 누구나 볼 수 있게 남깁니다.\n· **프로젝트** — 그 프로젝트를 볼 수 있는 사람만 볼 수 있게 남깁니다.\n· **나만** — 나만 볼 수 있게 남깁니다.\n\n「라이블리 모드」가 **쓸지 말지**를 정한다면, 이 항목은 **쓴다면 누구에게 보이게 할지**를 정합니다.\n\n읽기전용·인코그니토를 고르면 이 항목은 잠깁니다 — 그 모드에서는 애초에 기록하지 않습니다.', writeVisHost));
     // 실행(AI)·모델·추론강도 — 짧은 드롭다운 셋이라 한 줄에 나란히 둔다(#1145).
     //  ⚠ flagsBox 의 flex-direction 을 인라인으로 주는 이유는 그 정의부 주석 참조(index.html 인라인 style).
-    const presetBody = el('div', { class: 'term-preset-body', 'data-tour': 'model', style: 'margin-top:0' }, el('div', { class: 'term-preset-row', style: 'display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start' }, el('div', { 'data-tour': 'harness', style: 'flex:1 1 120px;min-width:0' }, field('실행 (AI)', harnessSel)), flagsBox), profileNoteEl(cfg));
     // ── 고급 설정(#1145 안 C) — 기본 화면은 '이름·폴더·초대' 셋만 두고, 나머지는 이 한 줄 뒤로 접는다.
     //  접힌 줄에 **지금 값**을 요약해 둔다: 열지 않아도 무엇으로 뜨는지(모드·기록·모델) 알 수 있어야 한다.
     const advSum = el('span', { class: 'term-fold-sum' });
@@ -247,6 +259,7 @@ function openTermCreateForm(cfg, view, onCreated, opts) {
     function renderFlags() {
         const h = harnessOf();
         flagsBox.replaceChildren();
+        const ctrls = [];
         for (const f of (h.flags || [])) {
             let ctrl;
             // 빈 값 = 그 플래그를 **안 넘긴다** → 하네스가 자기 설정을 쓴다. claude 는 마지막에 고른 모델·effort 를
@@ -269,13 +282,18 @@ function openTermCreateForm(cfg, view, onCreated, opts) {
                     ctrl.value = saved;
             }
             ctrl.addEventListener('change', presetSummary);
-            // 폭도 인라인으로 — 모델·추론강도가 실행(AI)과 같은 줄에서 균등하게 나뉘도록(옛 CSS 캐시에도 안전).
-            flagsBox.append(el('div', { class: 'field', style: 'flex:1 1 110px;min-width:0;margin:8px 0 0' }, el('label', { class: 'field-label', text: f.label }), ctrl, f.desc ? el('div', { class: 'caption', text: f.desc }) : null));
+            ctrl.classList.add('ig-sel');
+            ctrls.push({ f, ctrl });
+        }
+        // 문장으로 조립한다 — 「모델은 [ ] , 추론강도는 [ ] 를 씁니다.」. 플래그가 하나뿐인 하네스(codex)면
+        //  뒤 두 칸을 비워 열 정렬을 유지하고, 아예 없으면(shell) 이 줄 자체를 안 만든다.
+        const tip = ctrls.map(({ f }) => f.desc).filter(Boolean).join('\n');
+        if (ctrls.length) {
+            flagsBox.append(el('span', { class: 'ig-lead', text: ctrls[0].f.label + '은' }), ctrls[0].ctrl, el('span', { class: 'ig-mid', text: ctrls[1] ? ', ' + ctrls[1].f.label + '는' : '' }), ctrls[1] ? ctrls[1].ctrl : el('span'), el('span', { class: 'ig-tail' }, document.createTextNode('를 씁니다.'), tip ? infoPop(tip) : null));
         }
         autoWrap.style.display = h.hasAutoApprove ? '' : 'none';
         //  기록 범위 축이 꺼져 있으면 아예 안 보인다(#1291) — 고른 값이 강제되지 않는 컨트롤을 남기지 않는다.
-        writeVisField.style.display = (h.key === 'claude' && visAxisOn('session_cap')) ? '' : 'none'; // 모드와 같은 이유(MCP 헤더 레일이 claude 만)
-        modeField.style.display = h.key === 'claude' ? '' : 'none'; // 라이블리 모드는 claude-code 만 동작(codex 정적 헤더·shell 무 MCP) — 안 되는 하네스엔 안 보여 오해 방지(#1007+)
+        paintModeRow(); // 라이블리 모드/기록 범위 줄 — claude 가 아니면 아예 안 만든다(#1007+ 정적 헤더·shell 무 MCP)
         presetSummary();
     }
     harnessSel.addEventListener('change', renderFlags);
@@ -418,10 +436,13 @@ function openTermCreateForm(cfg, view, onCreated, opts) {
     // 고급 설정 안(#1145) — 기본 화면엔 '이름·어디서·초대'만 두고, 나머지는 이 블록에 접어 둔다.
     //  실행 위치·라이블리 모드·기록 범위·실행(AI)/모델/추론강도·자동 승인이 여기 들어간다.
     //  드롭다운 6개를 2줄 격자로 — 실행 위치·모드·기록 범위 / 실행(AI)·모델·추론강도. 한 가지 언어로 통일한다(#1145).
-    const advBody = el('div', { class: 'term-adv-body', hidden: '' }, el('div', { class: 'term-adv-row' }, el('div', { 'data-tour': 'node', style: 'flex:1 1 150px;min-width:0' }, fieldInfo('실행 위치', 'AI 가 실제로 돌아가는 컴퓨터입니다.\n\n· **중앙 컴퓨터**(기본) — 내 노트북을 꺼도 세션은 계속 실행됩니다.\n· **내 PC** — 노드로 등록해 두었다면 골라서 그 컴퓨터에서 실행할 수 있습니다.', nodeSel)), // #869 등록 노드가 없으면 '중앙 컴퓨터(기본)' 한 줄만 보인다(submit 값은 기존과 동일 '').
-    modeField, // 라이블리 모드
-    writeVisField), // 기록 범위 — 모드가 읽기전용·인코그니토면 잠긴다(syncWriteVis)
-    presetBody, el('div', { class: 'term-checks', 'data-tour': 'options' }, autoWrap));
+    const advBody = el('div', { class: 'term-adv-body', hidden: '' }, 
+    // 문장 격자(#1145 안 2) — 라벨 6개를 세우는 대신 세 문장으로 읽힌다. 5열(앞말·값·중간말·값·끝말)이라
+    //  줄이 달라도 드롭다운이 세로로 정렬된다(라벨형 격자가 '들쭉날쭉'했던 이유가 그 정렬 부재였다).
+    el('div', { class: 'ig-grid' }, el('span', { class: 'ig-lead', text: '이 세션은' }), nodeSel, // #869 등록 노드가 없으면 '중앙 컴퓨터(기본)' 한 줄만 보인다(submit 값은 기존과 동일 '')
+    el('span', { class: 'ig-mid', text: '에서' }), harnessSel, el('span', { class: 'ig-tail' }, document.createTextNode('로 돕니다.'), infoPop('**어느 컴퓨터에서 어떤 AI 로** 돌릴지입니다.\n\n· **중앙 컴퓨터**(기본) — 내 노트북을 꺼도 세션은 계속 실행됩니다.\n· **내 PC** — 노드로 등록해 두었다면 골라서 그 컴퓨터에서 실행할 수 있습니다.')), flagsBox, // 「모델은 [ ] , 추론강도는 [ ] 를 씁니다.」 — renderFlags 가 채운다
+    modeRow), // 「라이블리는 [ ] 모드로 쓰고, 기록은 [ ] 범위로 남깁니다.」
+    profileNoteEl(cfg), el('div', { class: 'term-checks', 'data-tour': 'options' }, autoWrap));
     const advOpen = () => { advBody.removeAttribute('hidden'); advCaret.textContent = '▾'; };
     advToggle.onclick = () => {
         if (advBody.hasAttribute('hidden'))
@@ -507,6 +528,7 @@ function openTermCreateForm(cfg, view, onCreated, opts) {
         } })));
     // pill 모드 — 제목 줄(.ov-head)의 [닫기] 앞에 끼운다. overlay() 가 헤더를 만들어 주므로 만든 뒤 옮긴다.
     //  헤더에 두면 가장 짧지만(모달 −77px) 좁은 폭에서 헤더가 2줄로 접힌다 — CSS 가 그때 전체폭으로 떨어뜨린다.
+    back.classList.add('ov-back--center'); // 세로 중앙(#1145) — 짧은 모달이 위로 쏠려 어색하던 것. 긴 모달은 종전대로 위에서 시작.
     if (WHERE_UI === 'pill') {
         const head = back.querySelector('.ov-head');
         const closeBtn = head?.querySelector('.btn');

@@ -25,6 +25,14 @@
 /* 4택(기록 범위 #1145)도 모드와 같은 한 줄 — 카드가 좁아지므로 제목·부제를 한 줄 길이로 줄이고,
    넘칠 땐 접히는 대신 말줄임한다(카드 높이가 서로 달라지면 줄이 울퉁불퉁해진다). */
 .term-seg-lbl, .term-seg-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 세션 모달은 세로 중앙(#1145) — .ov-back 은 기본이 align-items:flex-start + padding 6vh 라 모달이 짧을수록
+   위로 쏠린다. 프로젝트 모달 위에 겹쳐 뜰 때 그 어긋남이 특히 도드라진다는 신고.
+   ⚠ align-items:center 만 주면 모달이 뷰포트보다 길 때 위가 잘려 스크롤로도 못 올라간다(flex 정렬의 고전 함정).
+    그래서 정렬은 박스의 margin:auto 로 준다 — 짧으면 중앙, 길면 위에서 시작하고 스크롤이 정상 동작한다.
+   이 모달에만 붙이는 클래스라 다른 모달(태스크 상세 등 긴 것)의 배치는 그대로다. */
+.ov-back--center { padding-top: 3vh; padding-bottom: 3vh; }
+.ov-back--center > .ov-box { margin-top: auto; margin-bottom: auto; }
+
 /* '웹 / 내 PC'(#1145) — 이 2택은 폼 전체를 갈아끼우므로 다른 필드보다 위계가 높아야 한다.
    두 모양을 다 두고 session-form.ts 의 WHERE_UI 상수로 고른다(현재 'pill').
    ① pill — 모달 제목 줄에 얹는다. 가장 짧다. */
@@ -47,8 +55,22 @@
   font: 600 13.5px/1.2 inherit; color: var(--muted-head); cursor: pointer; }
 .where-tab-btn:hover { color: var(--ink); }
 .where-tab-btn.active { color: var(--ink); border-bottom-color: var(--blue); }
-/* 고급 설정 2줄 격자(#1145) — 실행 위치·모드·기록 범위 / 실행(AI)·모델·추론강도. */
-.term-adv-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-start; }
+/* 고급 설정 = 세 문장(#1145 안 2) — 라벨 6개 대신 읽히는 문장으로. 5열 격자라 줄이 달라도 드롭다운이
+   세로로 정렬된다(값 길이대로 두면 줄마다 시작점이 달라 '들쭉날쭉'해 보인다).
+   앞말은 오른쪽 정렬로 값에 붙이고, 끝말 열만 1fr 로 남는 폭을 먹는다. */
+.ig-grid { display: grid; grid-template-columns: max-content max-content max-content max-content 1fr;
+  gap: 9px 8px; align-items: center; margin-top: 12px; padding: 13px 14px;
+  border: 1px solid var(--line); border-radius: 11px; background: var(--bg-tint); }
+.ig-lead { justify-self: end; font: 600 13px/1.4 inherit; color: var(--muted-head); }
+.ig-mid, .ig-tail { font-size: 13px; color: var(--ink); }
+.ig-tail { display: flex; align-items: center; gap: 2px; }
+.ig-grid .ig-sel { width: 100%; min-width: 132px; box-sizing: border-box; padding: 5px 6px;
+  font: 600 13px/1.35 inherit; color: var(--blue-deep); background: var(--bg);
+  border: 1px solid var(--line-net); border-radius: 7px; cursor: pointer; }
+.ig-grid .ig-sel:hover { border-color: var(--blue); }
+.ig-grid .ig-sel:disabled { color: var(--muted-2); background: var(--bg-soft, #f4f4f6); cursor: default; }
+.ig-grid .caption { grid-column: 2 / -1; margin: -4px 0 0; }
+@media (max-width: 560px) { .ig-grid { grid-template-columns: 1fr; } .ig-lead { justify-self: start; } }
 /* 프로젝트 맥락 카드(#1145) — 폴더를 고를 여지가 없을 때 그 자리에 '무엇이 정해졌는지'를 채운다.
    비활성 회색이 아니라 강조 테두리인 이유: 뺏긴 게 아니라 얻은 것이기 때문이다. */
 .term-proj-lock { border: 1.5px solid var(--blue); border-radius: 11px; background: var(--bg-tint); padding: 11px 13px; }
