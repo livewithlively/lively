@@ -177,16 +177,17 @@ function openTermCreateForm(cfg, view, onCreated?) {
   //  모드(읽기전용/인코그니토)와 직교한다: 모드는 '쓰나 마나', 이건 '쓴다면 누구에게 보이게'.
   //  기본은 '자동' — 실행 위치 폴더를 따른다(프로젝트 폴더면 그 프로젝트 범위, 그 밖은 전체 공개).
   let writeVisVal = '';
+  // 부제는 **카드 한 줄에 들어가는 길이**로 — 4열이라 카드가 좁다. 자세한 설명은 라벨 옆 ⓘ 가 맡는다.
   const writeVisOpts = [
-    { v: '', t: '자동', d: '실행 위치 따름 — 프로젝트 폴더면 그 프로젝트' },
-    { v: 'open', t: '전체 공개', d: '조직 전체가 봄' },
-    { v: 'audience', t: '프로젝트 범위', d: '그 프로젝트를 볼 수 있는 사람만' },
+    { v: '', t: '자동', d: '실행 위치 따름' },
+    { v: 'open', t: '전체 공개', d: '조직 전체' },
+    { v: 'audience', t: '프로젝트', d: '그 프로젝트만' },
     { v: 'private', t: '나만', d: '나만 봄' },
   ];
   const writeVisBtns: any[] = [];
   // 카드 언어는 '라이블리 모드'(modeSeg)와 **같은 클래스**를 쓴다(#1145) — 종전의 term-seg-item/-t/-d/.on 은
-  //  CSS 에 정의가 아예 없어 스타일이 하나도 안 먹었다(맨 버튼 4개). 4택이라 term-seg--wrap 으로 2×2 로 접는다.
-  const writeVisSeg = el('div', { class: 'term-seg term-seg--wrap' },
+  //  CSS 에 정의가 아예 없어 스타일이 하나도 안 먹었다(맨 버튼 4개). 4택도 모드와 같은 한 줄(term-seg 기본 flex:1).
+  const writeVisSeg = el('div', { class: 'term-seg' },
     ...writeVisOpts.map((o) => {
       const b = el('button', { class: 'term-seg-btn', type: 'button' },
         el('span', { class: 'term-seg-txt' },

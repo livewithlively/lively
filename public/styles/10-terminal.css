@@ -22,9 +22,9 @@
 .term-seg-sub { font-size: 11.5px; font-weight: 500; color: var(--muted-head); }
 .term-seg-check { flex: none; width: 17px; height: 17px; border-radius: 999px; border: 2px solid var(--line-net-2); background: var(--bg); }
 .term-seg-btn.active .term-seg-check { border-color: var(--blue); box-shadow: inset 0 0 0 3px var(--bg), inset 0 0 0 9px var(--blue); }
-/* 4택(기록 범위 #1145)은 한 줄에 넷을 욱여넣으면 카드마다 부제가 두세 줄로 접힌다 — 2×2 로 나눈다. */
-.term-seg--wrap { flex-wrap: wrap; }
-.term-seg--wrap .term-seg-btn { flex: 1 1 46%; }
+/* 4택(기록 범위 #1145)도 모드와 같은 한 줄 — 카드가 좁아지므로 제목·부제를 한 줄 길이로 줄이고,
+   넘칠 땐 접히는 대신 말줄임한다(카드 높이가 서로 달라지면 줄이 울퉁불퉁해진다). */
+.term-seg-lbl, .term-seg-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .term-loc-folder { border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint); padding: 10px 12px; }
 .term-loc-folder .term-crumb { margin-bottom: 6px; }
 /* '이 폴더에서 AI 실행' 배너 — 지금 고른 위치/폴더에서 세션이 시작됨을 명시. */
