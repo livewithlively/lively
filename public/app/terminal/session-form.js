@@ -146,12 +146,20 @@ function openTermCreateForm(cfg, view, onCreated) {
     const inviteBox = buildInvitePicker(cfg, new Set()); // 기본 비공개(아무도 선택 안 됨)
     // 한 줄 배치(#1145)는 인라인으로도 못 박는다 — styles 는 브라우저가 오래 캐시해 클래스 규칙만으로는
     //  '새 JS + 옛 CSS' 조합에서 레이아웃이 무너진다(실측). 클래스(.term-preset-row)는 그대로 두되 값은 여기서 확정.
-    const flagsBox = el('div', { class: 'term-flags', style: 'display:flex;gap:10px;flex-wrap:wrap;flex:2 1 240px;min-width:0' });
+    //  ⚠ flex-direction 을 **반드시 명시**한다 — public/index.html 의 인라인 <style> 에 `.term-flags { flex-direction: column }`
+    //  이 살아 있어서(외부 CSS 는 그 속성을 안 건드린다) 방향을 안 주면 모델·추론강도가 세로로 쌓인다(#1145 실측).
+    const flagsBox = el('div', { class: 'term-flags', style: 'display:flex;flex-direction:row;gap:10px;flex-wrap:wrap;flex:2 1 240px;min-width:0' });
     // 자동 승인은 기본 꺼짐이되, 내가 지난번에 켰다면 켠 채로 복원한다(#782 — 사용자별 기억).
     //  (#673 의 'git 워크트리에서 작업' 체크박스는 #918 에서 제거 — 서버측 근거가 사라졌다: terminal-sessions 참조.)
     const autoCb = el('input', { type: 'checkbox' });
     autoCb.checked = prefs.autoApprove === true;
     const autoWrap = el('label', { class: 'term-auto' }, autoCb, el('span', { text: ' 자동 승인 — 확인 없이 바로 실행해 빨라요. 공유 폴더에선 꺼 두는 걸 권해요.' }));
+    // 설정 기억(#1145) — 켜고 생성하면 이 폼에서 고른 값을 **전부** 저장해, 다음에 새 AI 세션을 열 때 그대로 채운다.
+    //  종전에도 하네스·모델·추론강도·자동 승인은 늘 기억했지만(#673/#782), 실행 위치·폴더·모드·기록 범위는 매번 처음부터였다.
+    //  체크를 끄고 생성하면 저장해 둔 값을 지운다 — '기억하지 않기'가 곧 '지금까지 기억한 것도 잊기'가 되도록.
+    const rememberCb = el('input', { type: 'checkbox' });
+    rememberCb.checked = prefs.rememberAll === true;
+    const rememberWrap = el('label', { class: 'term-auto' }, rememberCb, el('span', { text: ' 이 설정을 기억하기 — 다음에 새 AI 세션을 열면 지금 고른 값이 그대로 채워집니다.' }));
     // 라이블리 모드(#1007+) — 이 세션이 라이블리와 얼마나 상호작용하나. 기본 일반, prefs 에 기억하지 않음(매번 명시 — 보안 모드라 의도적).
     //  claude-code 만 동작(codex 는 정적 헤더 → renderFlags 에서 숨김). '어디서 실행할까요'(rootSeg)와 같은 term-seg 선택 카드로 통일 —
     //  체크박스용 term-auto 에 얹은 인라인 <select> 는 라벨이 줄바꿈되고 카드 UI 와 이질적이었다(디자인 통일 요청).
@@ -178,11 +186,12 @@ function openTermCreateForm(cfg, view, onCreated) {
     //  기본은 '자동' — 실행 위치 폴더를 따른다(프로젝트 폴더면 그 프로젝트 범위, 그 밖은 전체 공개).
     let writeVisVal = '';
     // 부제는 **카드 한 줄에 들어가는 길이**로 — 4열이라 카드가 좁다. 자세한 설명은 라벨 옆 ⓘ 가 맡는다.
+    //  다만 짧게 줄인다고 명사로 끊지 않는다 — 화면 문구는 어미까지 끝맺는다(상민님 지시, 반복).
     const writeVisOpts = [
-        { v: '', t: '자동', d: '실행 위치 따름' },
-        { v: 'open', t: '전체 공개', d: '조직 전체' },
-        { v: 'audience', t: '프로젝트', d: '그 프로젝트만' },
-        { v: 'private', t: '나만', d: '나만 봄' },
+        { v: '', t: '자동', d: '위치를 따릅니다' },
+        { v: 'open', t: '전체 공개', d: '누구나 봅니다' },
+        { v: 'audience', t: '프로젝트', d: '그 팀만 봅니다' },
+        { v: 'private', t: '나만', d: '나만 봅니다' },
     ];
     const writeVisBtns = [];
     // 카드 언어는 '라이블리 모드'(modeSeg)와 **같은 클래스**를 쓴다(#1145) — 종전의 term-seg-item/-t/-d/.on 은
@@ -201,7 +210,7 @@ function openTermCreateForm(cfg, view, onCreated) {
         writeVisBtns.push(b);
         return b;
     }));
-    const writeVisField = el('div', {}, fieldInfo('기록 범위', '이 세션의 AI 가 **내 승인 없이** 남길 수 있는 기록의 최대 공개 범위입니다.\n\n· **자동** — 실행 폴더를 따릅니다. 프로젝트 폴더면 그 프로젝트 범위, 그 밖은 전체 공개.\n· **전체 공개** — 조직 누구나 봅니다.\n· **프로젝트 범위** — 그 프로젝트를 볼 수 있는 사람만 봅니다.\n· **나만** — 나만 볼 수 있게 남깁니다.\n\n「라이블리 모드」가 **쓸지 말지**를 정한다면, 이건 **쓴다면 누구에게 보이게**를 정합니다.', writeVisSeg));
+    const writeVisField = el('div', {}, fieldInfo('기록 범위', '이 세션의 AI 가 **내 승인 없이** 남길 수 있는 기록의 최대 공개 범위입니다.\n\n· **자동** — 실행 폴더를 따릅니다. 프로젝트 폴더에서 열었으면 그 프로젝트 범위가 되고, 그 밖에서 열었으면 전체 공개가 됩니다.\n· **전체 공개** — 조직 누구나 볼 수 있게 남깁니다.\n· **프로젝트** — 그 프로젝트를 볼 수 있는 사람만 볼 수 있게 남깁니다.\n· **나만** — 나만 볼 수 있게 남깁니다.\n\n「라이블리 모드」가 **쓸지 말지**를 정한다면, 이 항목은 **쓴다면 누구에게 보이게 할지**를 정합니다.', writeVisSeg));
     // '실행 설정'(하네스·모델·effort) — 접이식 프리셋으로 묶어 세로를 아끼고, 이전 설정을 기억한다(#673). 기본 접힘.
     const presetSum = el('div', { class: 'term-preset-sum' });
     const presetChev = el('span', { class: 'term-preset-chev', text: '▾' });
@@ -261,6 +270,34 @@ function openTermCreateForm(cfg, view, onCreated) {
         harnessSel.value = prefs.harness; // 이전 하네스 복원
     renderFlags();
     applyPreset();
+    // '이 설정을 기억하기'로 남겨둔 스냅샷 복원(#1145) — 실행 위치·폴더·모드·기록 범위.
+    //  없어진 것(삭제된 노드·지워진 폴더)은 조용히 건너뛴다: 저장값 때문에 폼이 못 열리면 안 된다.
+    //  폴더는 여기서 pickerPath 만 세팅하고, 아래 loadPicker() 첫 호출이 그 경로로 연다(없으면 그 자리에서 오류 문구).
+    if (prefs.rememberAll && prefs.snap) {
+        const s = prefs.snap;
+        if (s.node && nodes.some((n) => n.id === s.node && n.online))
+            nodeSel.value = s.node;
+        if (s.rootKey && rootBtns[s.rootKey]) {
+            rootKey = s.rootKey;
+            for (const k in rootBtns)
+                rootBtns[k].classList.toggle('active', k === rootKey);
+        }
+        if (s.subpath) {
+            if (nodeSel.value)
+                remoteSubI.value = s.subpath;
+            else
+                pickerPath = s.subpath;
+        }
+        if (s.mode && modeBtns[s.mode]) {
+            modeVal = s.mode;
+            for (const k in modeBtns)
+                modeBtns[k].classList.toggle('active', k === modeVal);
+        }
+        if (writeVisOpts.some((o) => o.v === (s.writeVis || ''))) {
+            writeVisVal = s.writeVis || '';
+            writeVisBtns.forEach((c, i) => c.classList.toggle('active', writeVisOpts[i].v === writeVisVal));
+        }
+    }
     // 작업 폴더 = 선택한 루트(공유/개인) 안을 드롭다운으로 재귀 탐색.
     async function loadPicker() {
         pickerBox.replaceChildren(el('div', { class: 'caption', text: '폴더 불러오는 중…' }));
@@ -317,14 +354,16 @@ function openTermCreateForm(cfg, view, onCreated) {
             toast('폴더 생성 실패 — ' + e.message, true);
         }
     }
-    loadPicker();
+    paintPicker(); // 스냅샷으로 노드가 복원됐으면 원격 경로 입력, 아니면 폴더 브라우저(#1145)
     // 폼 순서(#673) — 무엇(이름) → 어디(폴더) → 어떻게(실행 옵션 체크박스 · 실행 설정 프리셋) → 누구(초대는 맨 아래).
     //  온보딩 투어(#517)의 data-tour 앵커도 이 순서에 맞춘다: label → node → folder → options → preset → invite → create.
-    const back = overlay('새 세션', el('div', { 'data-tour': 'label' }, field('이름', labelI)), el('div', { 'data-tour': 'node' }, fieldInfo('실행 위치', 'AI 가 실제로 돌아가는 컴퓨터입니다.\n\n· **중앙 컴퓨터**(기본) — 내 노트북을 꺼도 세션은 계속 실행됩니다.\n· **내 PC** — 노드로 등록해 두었다면 골라서 그 컴퓨터에서 실행합니다.', nodeSel)), // #869 중앙 컴퓨터/등록 노드 — 항상 노출: 투어 ③'실행 위치' 스텝의 대상(#req). 등록 노드가 없으면 '중앙 컴퓨터(기본)' 한 줄만 보인다(submit 값은 기존과 동일 '').
+    const back = overlay('새 AI 세션', el('div', { 'data-tour': 'label' }, field('이름', labelI)), el('div', { 'data-tour': 'node' }, fieldInfo('실행 위치', 'AI 가 실제로 돌아가는 컴퓨터입니다.\n\n· **중앙 컴퓨터**(기본) — 내 노트북을 꺼도 세션은 계속 실행됩니다.\n· **내 PC** — 노드로 등록해 두었다면 골라서 그 컴퓨터에서 실행할 수 있습니다.', nodeSel)), // #869 중앙 컴퓨터/등록 노드 — 항상 노출: 투어 ③'실행 위치' 스텝의 대상(#req). 등록 노드가 없으면 '중앙 컴퓨터(기본)' 한 줄만 보인다(submit 값은 기존과 동일 '').
     // #853 작업 위치(공유/개인 토글) + 그 안의 폴더를 한 블록으로 — '이 폴더에서 AI를 실행한다'는 직관.
-    el('div', { 'data-tour': 'folder' }, fieldInfo('어디서 실행할까요', 'AI 는 폴더 하나를 정해 그 안에서 일합니다.\n\n· 여기서 고른 폴더가 이 세션의 **작업 공간**이 됩니다.\n· 그 안의 파일과 하위 폴더는 AI 가 **자유롭게 열어 봅니다**.\n· 「공유 워크스페이스」는 팀과 함께 쓰는 폴더, 「개인 폴더」는 나만 쓰는 폴더입니다.', el('div', { class: 'term-loc' }, rootSeg, el('div', { class: 'term-loc-folder' }, pickerBox)))), modeField, // 라이블리 모드 — '어디서 실행할까요'와 같은 카드 언어로, 그 아래 독립 필드(#1007+ 디자인 통일)
+    el('div', { 'data-tour': 'folder' }, fieldInfo('어디서 실행할까요', 'AI 는 폴더 하나를 정해 그 안에서 일합니다.\n\n· 여기서 고른 폴더가 이 세션의 **작업 공간**이 됩니다.\n· 그 안의 파일과 하위 폴더는 AI 가 **자유롭게 열어 볼 수 있습니다**.\n· 「공유 워크스페이스」는 팀과 함께 쓰는 폴더이고, 「개인 폴더」는 나만 쓰는 폴더입니다.', el('div', { class: 'term-loc' }, rootSeg, el('div', { class: 'term-loc-folder' }, pickerBox)))), modeField, // 라이블리 모드 — '어디서 실행할까요'와 같은 카드 언어로, 그 아래 독립 필드(#1007+ 디자인 통일)
     writeVisField, // 기록 범위(#1291 v2) — 모드와 직교(쓰나 마나 vs 쓴다면 누구에게)
-    el('div', { class: 'term-checks', 'data-tour': 'options' }, autoWrap), presetToggle, presetBody, el('div', { 'data-tour': 'invite' }, field('초대 (비우면 나만 보는 비공개 세션)', inviteBox.box)), el('div', { class: 'ov-actions' }, el('button', { class: 'btn btn-primary', 'data-tour': 'create', text: '생성하기', onclick: async (ev) => {
+    presetToggle, presetBody, el('div', { 'data-tour': 'invite' }, field('초대 (비우면 나만 보는 비공개 세션)', inviteBox.box)), 
+    // 체크박스 둘은 폼 맨 아래로(#1145) — 무엇을·어디서·어떻게·누구를 다 고른 뒤 마지막에 결정하는 성격이다.
+    el('div', { class: 'term-checks', 'data-tour': 'options' }, autoWrap, rememberWrap), el('div', { class: 'ov-actions' }, el('button', { class: 'btn btn-primary', 'data-tour': 'create', text: '생성하기', onclick: async (ev) => {
             const btn = ev.currentTarget;
             btn.disabled = true;
             const fromTour = isTourActive(); // 클릭 순간(투어 종료 전)에 캡처 — 따라하기면 완료 안내를 새 터미널 탭에 띄운다(#673)
@@ -336,7 +375,15 @@ function openTermCreateForm(cfg, view, onCreated) {
             const payload = { label: labelI.value, rootKey, subpath: nodeId ? remoteSubI.value.trim() : pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, readOnly: mode === 'readonly', incognito: mode === 'incognito', writeVis: writeVisVal || undefined, invites: inviteBox.selected(), node: nodeId || undefined };
             try {
                 const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify(payload) });
-                saveTermCreatePrefs({ harness: harnessSel.value, flags, autoApprove: autoCb.checked }); // 이 설정을 다음 생성 때 기본값으로 기억(#673, 자동 승인은 #782)
+                // 하네스·모델·추론강도·자동 승인은 종전대로 늘 기억한다(#673/#782).
+                //  '이 설정을 기억하기'를 켰으면 나머지(실행 위치·폴더·모드·기록 범위)까지 스냅샷으로 함께 남긴다(#1145).
+                saveTermCreatePrefs({
+                    harness: harnessSel.value, flags, autoApprove: autoCb.checked,
+                    rememberAll: rememberCb.checked,
+                    snap: rememberCb.checked
+                        ? { node: nodeId, rootKey, subpath: nodeId ? remoteSubI.value.trim() : pickerPath, mode: modeVal, writeVis: writeVisVal }
+                        : undefined,
+                });
                 back.remove();
                 toast('세션 생성됨');
                 if (out && out.session)

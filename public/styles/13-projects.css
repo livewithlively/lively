@@ -203,7 +203,8 @@
    (같은 값을 session-form.ts 가 인라인으로도 준다 — 옛 CSS 가 캐시된 브라우저에서 레이아웃이 무너지지 않게.) */
 .term-preset-body .term-preset-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-start; }
 .term-preset-body .term-preset-row > * { flex: 1 1 120px; min-width: 0; }
-.term-preset-body .term-preset-row > .term-flags { flex: 2 1 240px; }
+/* flex-direction 명시 필수 — public/index.html 인라인 <style> 의 `.term-flags { flex-direction: column }` 를 덮는다. */
+.term-preset-body .term-preset-row > .term-flags { flex: 2 1 240px; flex-direction: row; }
 .term-preset-body .term-preset-row .term-flags > .field { min-width: 110px; }
 /* 실행 옵션 — 두 체크박스(워크트리·자동 승인)를 한 묶음으로(#673). */
 .term-checks { display: flex; flex-direction: column; gap: 9px; margin: 14px 0 2px; }
