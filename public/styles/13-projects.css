@@ -198,6 +198,13 @@
 .term-preset-body .term-flags { display: flex; gap: 10px; flex-wrap: wrap; }
 .term-preset-body .term-flags > .field { flex: 1; min-width: 150px; }
 .term-preset-body .caption { font-size: 11px; margin-top: 3px; line-height: 1.4; }
+/* 실행(AI)·모델·추론강도 한 줄(#1145) — 셋 다 짧은 드롭다운이라 한 줄씩 쓰면 세로만 길고 가로는 비어 보인다.
+   좁아지면 wrap 으로 접히고, 이 줄 안에서만 flags 의 min-width 를 낮춰 셋이 나란히 들어가게 한다.
+   (같은 값을 session-form.ts 가 인라인으로도 준다 — 옛 CSS 가 캐시된 브라우저에서 레이아웃이 무너지지 않게.) */
+.term-preset-body .term-preset-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-start; }
+.term-preset-body .term-preset-row > * { flex: 1 1 120px; min-width: 0; }
+.term-preset-body .term-preset-row > .term-flags { flex: 2 1 240px; }
+.term-preset-body .term-preset-row .term-flags > .field { min-width: 110px; }
 /* 실행 옵션 — 두 체크박스(워크트리·자동 승인)를 한 묶음으로(#673). */
 .term-checks { display: flex; flex-direction: column; gap: 9px; margin: 14px 0 2px; }
 .term-checks .term-auto { display: flex; gap: 8px; align-items: flex-start; margin: 0; font-size: 13.5px; color: var(--ink); cursor: pointer; }

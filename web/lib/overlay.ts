@@ -42,6 +42,9 @@ function infoPop(text) {
   btn.addEventListener('click', () => {
     if (pop) { close(); return; }
     pop = el('div', { class: 'hint-pop', role: 'dialog' }, el('p', { class: 'hint-pop-text' }, ...uiText(text)));
+    // 모달 오버레이(.ov-back) 위로(#1145) — CSS 에도 같은 값이 있지만, 옛 스타일이 캐시된 브라우저에선
+    //  z-index 90 이 남아 모달 안 ⓘ 가 '눌러도 안 뜨는' 것처럼 보인다. 여기서 값을 확정한다.
+    pop.style.zIndex = '1500';
     document.body.append(pop);
     // 아이콘 **오른쪽**에 띄운다(사용자 요구) — 아래로 내리면 바로 밑 내용을 가려 읽던 자리를 잃는다.
     //  오른쪽에 자리가 없으면 왼쪽, 그것도 없으면 아래로 떨어뜨린다. 세로는 아이콘에 맞추되 화면 안에 가둔다.

@@ -312,7 +312,9 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .hint-i[aria-expanded="true"] { color: var(--blue); background: var(--bg-tint-2); }
 .hint-i:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
 /* 팝오버 — body 에 fixed 로 붙어 카드 overflow·스크롤 컨테이너에 잘리지 않는다. */
-.hint-pop { position: fixed; z-index: 90; box-sizing: border-box; max-height: 70vh; overflow-y: auto;
+/* z-index 1500 = 모달 오버레이(.ov-back) 위 · 토스트 아래 — 팝오버 층(.pjv-pop 등)과 같은 자리.
+   90 이던 시절엔 모달 안 필드의 ⓘ 를 눌러도 팝이 오버레이 뒤로 깔려 '안 뜨는' 것처럼 보였다(#1145). */
+.hint-pop { position: fixed; z-index: 1500; box-sizing: border-box; max-height: 70vh; overflow-y: auto;
   padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg);
   box-shadow: 0 12px 32px rgba(21, 35, 59, .13); }
 .hint-pop-text { margin: 0; font-size: 13px; line-height: 1.62; color: var(--ink-sub); white-space: pre-line; }
