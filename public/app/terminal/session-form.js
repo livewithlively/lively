@@ -175,7 +175,7 @@ function openTermCreateForm(cfg, view, onCreated) {
         const b = el('button', { class: 'term-seg-btn', type: 'button' }, el('span', { class: 'term-seg-txt' }, el('span', { class: 'term-seg-lbl', text: m.lbl }), el('span', { class: 'term-seg-sub', text: m.sub })), el('span', { class: 'term-seg-check' }));
         b.onclick = () => { if (modeVal === m.key)
             return; modeVal = m.key; for (const k in modeBtns)
-            modeBtns[k].classList.toggle('active', k === modeVal); };
+            modeBtns[k].classList.toggle('active', k === modeVal); syncWriteVis(); };
         modeBtns[m.key] = b;
         return b;
     }));
@@ -204,44 +204,68 @@ function openTermCreateForm(cfg, view, onCreated) {
                 return;
             writeVisVal = o.v;
             writeVisBtns.forEach((c, i) => c.classList.toggle('active', writeVisOpts[i].v === writeVisVal));
+            advSummary();
         };
         if (o.v === writeVisVal)
             b.classList.add('active');
         writeVisBtns.push(b);
         return b;
     }));
-    const writeVisField = el('div', {}, fieldInfo('기록 범위', '이 세션의 AI 가 **내 승인 없이** 남길 수 있는 기록의 최대 공개 범위입니다.\n\n· **자동** — 실행 폴더를 따릅니다. 프로젝트 폴더에서 열었으면 그 프로젝트 범위가 되고, 그 밖에서 열었으면 전체 공개가 됩니다.\n· **전체 공개** — 조직 누구나 볼 수 있게 남깁니다.\n· **프로젝트** — 그 프로젝트를 볼 수 있는 사람만 볼 수 있게 남깁니다.\n· **나만** — 나만 볼 수 있게 남깁니다.\n\n「라이블리 모드」가 **쓸지 말지**를 정한다면, 이 항목은 **쓴다면 누구에게 보이게 할지**를 정합니다.', writeVisSeg));
-    // '실행 설정'(하네스·모델·effort) — 접이식 프리셋으로 묶어 세로를 아끼고, 이전 설정을 기억한다(#673). 기본 접힘.
-    const presetSum = el('div', { class: 'term-preset-sum' });
-    const presetChev = el('span', { class: 'term-preset-chev', text: '▾' });
-    const presetToggle = el('button', { class: 'term-preset-toggle', type: 'button', 'data-tour': 'preset' }, presetSum, presetChev);
-    // 실행(AI)·모델·추론강도는 짧은 드롭다운 셋 — 각자 한 줄을 차지할 이유가 없어 한 줄에 나란히 둔다(#1145).
-    const presetBody = el('div', { class: 'term-preset-body', 'data-tour': 'model' }, el('div', { class: 'term-preset-row', style: 'display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start' }, el('div', { 'data-tour': 'harness', style: 'flex:1 1 120px;min-width:0' }, field('실행 (AI)', harnessSel)), flagsBox), profileNoteEl(cfg));
-    let presetOpen = false;
-    const applyPreset = () => { presetBody.style.display = presetOpen ? '' : 'none'; presetChev.textContent = presetOpen ? '▴' : '▾'; };
-    presetToggle.onclick = () => { presetOpen = !presetOpen; applyPreset(); };
+    // 읽기전용·인코그니토면 기록 범위는 **고를 수 없다**(#1145) — readOnly 는 쓰기 툴이 소거되고(capabilities/index.ts)
+    //  incognito 는 라이블리 접근 자체가 막히므로, '쓴다면 누구에게 보이게'라는 이 축은 그때 아무 효과가 없다.
+    //  효과 없는 컨트롤을 남겨두면 사람은 그게 먹는다고 믿는다 — 자리에 이유를 적어 잠근다.
+    const writeVisHost = el('div', {});
+    function writeVisLocked() { return modeVal !== 'normal'; }
+    function syncWriteVis() {
+        if (writeVisLocked()) {
+            writeVisHost.replaceChildren(el('div', { class: 'term-lock-note' }, el('span', { text: '🔒' }), el('span', { text: '읽기전용·인코그니토에서는 라이블리에 기록하지 않으므로 기록 범위를 고르지 않습니다.' })));
+        }
+        else
+            writeVisHost.replaceChildren(writeVisSeg);
+        advSummary();
+    }
+    const writeVisField = el('div', {}, fieldInfo('기록 범위', '이 세션의 AI 가 **내 승인 없이** 남길 수 있는 기록의 최대 공개 범위입니다.\n\n· **자동** — 실행 폴더를 따릅니다. 프로젝트 폴더에서 열었으면 그 프로젝트 범위가 되고, 그 밖에서 열었으면 전체 공개가 됩니다.\n· **전체 공개** — 조직 누구나 볼 수 있게 남깁니다.\n· **프로젝트** — 그 프로젝트를 볼 수 있는 사람만 볼 수 있게 남깁니다.\n· **나만** — 나만 볼 수 있게 남깁니다.\n\n「라이블리 모드」가 **쓸지 말지**를 정한다면, 이 항목은 **쓴다면 누구에게 보이게 할지**를 정합니다.\n\n읽기전용·인코그니토를 고르면 이 항목은 잠깁니다 — 그 모드에서는 애초에 기록하지 않습니다.', writeVisHost));
+    // 실행(AI)·모델·추론강도 — 짧은 드롭다운 셋이라 한 줄에 나란히 둔다(#1145).
+    //  ⚠ flagsBox 의 flex-direction 을 인라인으로 주는 이유는 그 정의부 주석 참조(index.html 인라인 style).
+    const presetBody = el('div', { class: 'term-preset-body', 'data-tour': 'model', style: 'margin-top:0' }, el('div', { class: 'term-preset-row', style: 'display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start' }, el('div', { 'data-tour': 'harness', style: 'flex:1 1 120px;min-width:0' }, field('실행 (AI)', harnessSel)), flagsBox), profileNoteEl(cfg));
+    // ── 고급 설정(#1145 안 C) — 기본 화면은 '이름·폴더·초대' 셋만 두고, 나머지는 이 한 줄 뒤로 접는다.
+    //  접힌 줄에 **지금 값**을 요약해 둔다: 열지 않아도 무엇으로 뜨는지(모드·기록·모델) 알 수 있어야 한다.
+    const advSum = el('span', { class: 'term-fold-sum' });
+    const advCaret = el('span', { class: 'term-fold-caret', text: '▸' });
+    const advToggle = el('button', { class: 'term-fold', type: 'button', 'data-tour': 'preset' }, advCaret, el('b', { text: '고급 설정' }), advSum);
     const harnessOf = () => harnesses.find((x) => x.key === harnessSel.value) || {};
-    function presetSummary() {
+    function advSummary() {
         const h = harnessOf();
         const parts = [h.label || harnessSel.value];
         for (const f of (h.flags || [])) {
             if (f.name !== '--model' && f.name !== '--effort')
                 continue;
             const c = flagsBox.querySelector('[data-flag="' + f.name + '"]');
-            // 접힌 요약줄도 드롭다운과 같은 말로 — 라벨은 '추론강도', 빈 값은 '(자동)'.
-            parts.push((f.name === '--model' ? '모델 ' : '추론강도 ') + ((c && c.value) || '자동'));
+            // 요약줄도 드롭다운과 같은 말로 — 라벨은 '추론강도', 빈 값은 '지난번 그대로'.
+            parts.push((f.name === '--model' ? '모델 ' : '추론강도 ') + ((c && c.value) || '지난번 그대로'));
         }
-        presetSum.replaceChildren(el('b', { text: '실행 설정' }), document.createTextNode(' · ' + parts.join(' · ')));
+        if (h.key === 'claude') {
+            parts.push((modeOpts.find((m) => m.key === modeVal) || {}).lbl || '일반');
+            if (visAxisOn('session_cap')) {
+                parts.push(writeVisLocked() ? '기록 안 함'
+                    : '기록 ' + ((writeVisOpts.find((o) => o.v === writeVisVal) || {}).t || '자동'));
+            }
+        }
+        advSum.textContent = ' · ' + parts.join(' · ');
     }
+    // presetSummary 라는 이름으로 부르던 곳(renderFlags)이 그대로 동작하도록 별칭을 둔다.
+    const presetSummary = advSummary;
     function renderFlags() {
         const h = harnessOf();
         flagsBox.replaceChildren();
         for (const f of (h.flags || [])) {
             let ctrl;
-            // 빈 값 = 그 플래그를 아예 안 넘김(하네스가 알아서) — '기본'보다 '자동'이 그 뜻에 가깝다(#1145).
-            //  카탈로그가 그 하네스의 기본값을 알려주면 '(자동 · gpt-5.5)' 처럼 **무엇으로 뜨는지**까지 보여준다.
-            //  값을 고정하는 게 아니라 표기만 하는 것 — 하네스가 기본을 올리면 실제로는 새 기본으로 뜬다(표기만 낡는다).
-            const autoLabel = f.default ? '(자동 · ' + f.default + ')' : '(자동)';
+            // 빈 값 = 그 플래그를 **안 넘긴다** → 하네스가 자기 설정을 쓴다. claude 는 마지막에 고른 모델·effort 를
+            //  settings.json(model·effortLevel)에 저장하므로, 실제 의미는 '그 계정이 **지난번 쓰던 그대로**'다(실측).
+            //  그래서 '(자동)' 같은 말 대신 그 뜻을 그대로 적는다(#1145 — "아무도 이해 못할 말").
+            //  ⚠ 프리필은 불가: 그 값은 격리 계정 홈(box_ 700)에 있어 게이트웨이가 못 읽고, 웹이 아는 값을 명시해 넘기면
+            //   세션 안에서 /model 로 바꿔둔 실제 설정을 덮어쓴다.
+            const autoLabel = '지난번 그대로';
             if (f.type === 'select')
                 ctrl = el('select', { class: 'term-input', 'data-flag': f.name }, ...(f.choices || []).map((c) => el('option', { value: c }, c || autoLabel)));
             else if (f.type === 'bool')
@@ -269,7 +293,6 @@ function openTermCreateForm(cfg, view, onCreated) {
     if (prefs.harness && harnesses.some((h) => h.key === prefs.harness))
         harnessSel.value = prefs.harness; // 이전 하네스 복원
     renderFlags();
-    applyPreset();
     // '이 설정을 기억하기'로 남겨둔 스냅샷 복원(#1145) — 실행 위치·폴더·모드·기록 범위.
     //  없어진 것(삭제된 노드·지워진 폴더)은 조용히 건너뛴다: 저장값 때문에 폼이 못 열리면 안 된다.
     //  폴더는 여기서 pickerPath 만 세팅하고, 아래 loadPicker() 첫 호출이 그 경로로 연다(없으면 그 자리에서 오류 문구).
@@ -355,15 +378,30 @@ function openTermCreateForm(cfg, view, onCreated) {
         }
     }
     paintPicker(); // 스냅샷으로 노드가 복원됐으면 원격 경로 입력, 아니면 폴더 브라우저(#1145)
-    // 폼 순서(#673) — 무엇(이름) → 어디(폴더) → 어떻게(실행 옵션 체크박스 · 실행 설정 프리셋) → 누구(초대는 맨 아래).
-    //  온보딩 투어(#517)의 data-tour 앵커도 이 순서에 맞춘다: label → node → folder → options → preset → invite → create.
-    const back = overlay('새 AI 세션', el('div', { 'data-tour': 'label' }, field('이름', labelI)), el('div', { 'data-tour': 'node' }, fieldInfo('실행 위치', 'AI 가 실제로 돌아가는 컴퓨터입니다.\n\n· **중앙 컴퓨터**(기본) — 내 노트북을 꺼도 세션은 계속 실행됩니다.\n· **내 PC** — 노드로 등록해 두었다면 골라서 그 컴퓨터에서 실행할 수 있습니다.', nodeSel)), // #869 중앙 컴퓨터/등록 노드 — 항상 노출: 투어 ③'실행 위치' 스텝의 대상(#req). 등록 노드가 없으면 '중앙 컴퓨터(기본)' 한 줄만 보인다(submit 값은 기존과 동일 '').
+    // 고급 설정 안(#1145) — 기본 화면엔 '이름·어디서·초대'만 두고, 나머지는 이 블록에 접어 둔다.
+    //  실행 위치·라이블리 모드·기록 범위·실행(AI)/모델/추론강도·자동 승인이 여기 들어간다.
+    const advBody = el('div', { class: 'term-adv-body', hidden: '' }, el('div', { 'data-tour': 'node' }, fieldInfo('실행 위치', 'AI 가 실제로 돌아가는 컴퓨터입니다.\n\n· **중앙 컴퓨터**(기본) — 내 노트북을 꺼도 세션은 계속 실행됩니다.\n· **내 PC** — 노드로 등록해 두었다면 골라서 그 컴퓨터에서 실행할 수 있습니다.', nodeSel)), // #869 중앙 컴퓨터/등록 노드 — 등록 노드가 없으면 '중앙 컴퓨터(기본)' 한 줄만 보인다(submit 값은 기존과 동일 '').
+    modeField, // 라이블리 모드 — 카드 언어(term-seg)
+    writeVisField, // 기록 범위 — 모드가 읽기전용·인코그니토면 잠긴다(syncWriteVis)
+    presetBody, el('div', { class: 'term-checks', 'data-tour': 'options' }, autoWrap));
+    const advOpen = () => { advBody.removeAttribute('hidden'); advCaret.textContent = '▾'; };
+    advToggle.onclick = () => {
+        if (advBody.hasAttribute('hidden'))
+            advOpen();
+        else {
+            advBody.setAttribute('hidden', '');
+            advCaret.textContent = '▸';
+        }
+    };
+    advSummary();
+    syncWriteVis(); // 초기 상태(일반=카드 노출)를 그려 둔다 — 요약줄도 여기서 함께 채워진다
+    // 폼 순서(#1145 안 C) — 무엇(이름) → 어디(폴더) → 누구(초대) → 그 밖의 모든 것(고급 설정) → 기억할지 → 만들기.
+    //  온보딩 투어(#517) 앵커: label → folder → invite → preset(=고급 설정, 열리면 node·options 도 그 안에) → create.
+    const back = overlay('새 AI 세션', el('div', { 'data-tour': 'label' }, field('이름', labelI)), 
     // #853 작업 위치(공유/개인 토글) + 그 안의 폴더를 한 블록으로 — '이 폴더에서 AI를 실행한다'는 직관.
-    el('div', { 'data-tour': 'folder' }, fieldInfo('어디서 실행할까요', 'AI 는 폴더 하나를 정해 그 안에서 일합니다.\n\n· 여기서 고른 폴더가 이 세션의 **작업 공간**이 됩니다.\n· 그 안의 파일과 하위 폴더는 AI 가 **자유롭게 열어 볼 수 있습니다**.\n· 「공유 워크스페이스」는 팀과 함께 쓰는 폴더이고, 「개인 폴더」는 나만 쓰는 폴더입니다.', el('div', { class: 'term-loc' }, rootSeg, el('div', { class: 'term-loc-folder' }, pickerBox)))), modeField, // 라이블리 모드 — '어디서 실행할까요'와 같은 카드 언어로, 그 아래 독립 필드(#1007+ 디자인 통일)
-    writeVisField, // 기록 범위(#1291 v2) — 모드와 직교(쓰나 마나 vs 쓴다면 누구에게)
-    presetToggle, presetBody, el('div', { 'data-tour': 'invite' }, field('초대 (비우면 나만 보는 비공개 세션)', inviteBox.box)), 
-    // 체크박스 둘은 폼 맨 아래로(#1145) — 무엇을·어디서·어떻게·누구를 다 고른 뒤 마지막에 결정하는 성격이다.
-    el('div', { class: 'term-checks', 'data-tour': 'options' }, autoWrap, rememberWrap), el('div', { class: 'ov-actions' }, el('button', { class: 'btn btn-primary', 'data-tour': 'create', text: '생성하기', onclick: async (ev) => {
+    el('div', { 'data-tour': 'folder' }, fieldInfo('어디서 실행할까요', 'AI 는 폴더 하나를 정해 그 안에서 일합니다.\n\n· 여기서 고른 폴더가 이 세션의 **작업 공간**이 됩니다.\n· 그 안의 파일과 하위 폴더는 AI 가 **자유롭게 열어 볼 수 있습니다**.\n· 「공유 워크스페이스」는 팀과 함께 쓰는 폴더이고, 「개인 폴더」는 나만 쓰는 폴더입니다.', el('div', { class: 'term-loc' }, rootSeg, el('div', { class: 'term-loc-folder' }, pickerBox)))), el('div', { 'data-tour': 'invite' }, field('초대 (비우면 나만 보는 비공개 세션)', inviteBox.box)), advToggle, advBody, 
+    // '이 설정을 기억하기'는 고급 설정 밖 맨 아래 — 고급을 펼치지 않아도 켤 수 있어야 한다.
+    el('div', { class: 'term-checks' }, rememberWrap), el('div', { class: 'ov-actions' }, el('button', { class: 'btn btn-primary', 'data-tour': 'create', text: '생성하기', onclick: async (ev) => {
             const btn = ev.currentTarget;
             btn.disabled = true;
             const fromTour = isTourActive(); // 클릭 순간(투어 종료 전)에 캡처 — 따라하기면 완료 안내를 새 터미널 탭에 띄운다(#673)
@@ -372,7 +410,9 @@ function openTermCreateForm(cfg, view, onCreated) {
                 flags[c.dataset.flag] = (c.type === 'checkbox') ? c.checked : c.value;
             const nodeId = nodeSel.value || ''; // #869 노드면 원격 경로(remoteSubI), 아니면 로컬 폴더(pickerPath)
             const mode = modeVal; // #1007+ 라이블리 모드 → readOnly/incognito 불리언(서버 CreateInput)
-            const payload = { label: labelI.value, rootKey, subpath: nodeId ? remoteSubI.value.trim() : pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, readOnly: mode === 'readonly', incognito: mode === 'incognito', writeVis: writeVisVal || undefined, invites: inviteBox.selected(), node: nodeId || undefined };
+            // 잠긴 상태(읽기전용·인코그니토)면 기록 범위는 보내지 않는다 — 화면에서 못 고르는 값을 몰래 실어 보내지 않는다(#1145).
+            const writeVisOut = writeVisLocked() ? '' : writeVisVal;
+            const payload = { label: labelI.value, rootKey, subpath: nodeId ? remoteSubI.value.trim() : pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, readOnly: mode === 'readonly', incognito: mode === 'incognito', writeVis: writeVisOut || undefined, invites: inviteBox.selected(), node: nodeId || undefined };
             try {
                 const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify(payload) });
                 // 하네스·모델·추론강도·자동 승인은 종전대로 늘 기억한다(#673/#782).
