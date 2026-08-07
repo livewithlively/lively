@@ -25,6 +25,30 @@
 /* 4택(기록 범위 #1145)도 모드와 같은 한 줄 — 카드가 좁아지므로 제목·부제를 한 줄 길이로 줄이고,
    넘칠 땐 접히는 대신 말줄임한다(카드 높이가 서로 달라지면 줄이 울퉁불퉁해진다). */
 .term-seg-lbl, .term-seg-sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* '웹 / 내 PC'(#1145) — 이 2택은 폼 전체를 갈아끼우므로 다른 필드보다 위계가 높아야 한다.
+   두 모양을 다 두고 session-form.ts 의 WHERE_UI 상수로 고른다(현재 'pill').
+   ① pill — 모달 제목 줄에 얹는다. 가장 짧다. */
+.ov-head .where-pill { display: inline-flex; gap: 2px; padding: 3px; margin-left: auto; flex: none;
+  background: var(--bg-tint); border: 1px solid var(--line); border-radius: 999px; }
+.where-pill-btn { border: 0; background: none; padding: 6px 13px; border-radius: 999px;
+  font: 600 12.5px/1 inherit; color: var(--ink-sub); cursor: pointer; white-space: nowrap; }
+.where-pill-btn:hover { color: var(--ink); }
+.where-pill-btn.on { background: var(--bg); color: var(--blue-deep); box-shadow: 0 1px 3px rgba(20, 35, 60, .10); }
+.ov-head .where-pill + .btn { margin-left: 10px; }
+/* 좁은 폭 — 제목/pill/닫기가 한 줄에 못 들어가면 pill 을 다음 줄 전체폭으로 떨어뜨린다(어정쩡한 접힘 방지). */
+@media (max-width: 560px) {
+  .ov-head:has(.where-pill) { flex-wrap: wrap; }
+  .ov-head .where-pill { order: 3; width: 100%; margin-left: 0; justify-content: center; }
+  .where-pill-btn { flex: 1; }
+}
+/* ② tabs — 제목 아래 밑줄 탭(.seg-tabs 재사용). 발견성이 높고 좁은 폭에서도 헤더가 안 접힌다. */
+.where-tabs { margin: 0 0 14px; }
+.where-tab-btn { border: 0; border-bottom: 2px solid transparent; background: none; padding: 9px 14px;
+  font: 600 13.5px/1.2 inherit; color: var(--muted-head); cursor: pointer; }
+.where-tab-btn:hover { color: var(--ink); }
+.where-tab-btn.active { color: var(--ink); border-bottom-color: var(--blue); }
+/* 고급 설정 2줄 격자(#1145) — 실행 위치·모드·기록 범위 / 실행(AI)·모델·추론강도. */
+.term-adv-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-start; }
 /* 프로젝트 맥락 카드(#1145) — 폴더를 고를 여지가 없을 때 그 자리에 '무엇이 정해졌는지'를 채운다.
    비활성 회색이 아니라 강조 테두리인 이유: 뺏긴 게 아니라 얻은 것이기 때문이다. */
 .term-proj-lock { border: 1.5px solid var(--blue); border-radius: 11px; background: var(--bg-tint); padding: 11px 13px; }
