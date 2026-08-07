@@ -97,7 +97,15 @@ function fieldInfo(label, tip, control) {
 
 // 새 세션 — 기본 비공개. 초대 피커에서 멤버를 고르면 그 사람도 보고 열 수 있다.
 // onCreated(out) — 있으면 생성 후 그걸 호출(대시보드에서 재사용: 세션 위젯 새로고침). 없으면 터미널 뷰 재렌더.
-function openTermCreateForm(cfg, view, onCreated?) {
+//
+// opts.project = { id, name, base } — 프로젝트에서 열었으면 그 맥락(#1145). 주면 폼이 이렇게 바뀐다:
+//   · 폴더를 묻지 않는다 — 그 프로젝트 폴더에서 열린다(고를 여지가 없으므로 카드로 사실만 보여준다).
+//   · 초대를 묻지 않는다 — 프로젝트 세션의 가시성은 **리스트 공개범위**가 정하고 invites 는 보지도 않는다
+//     (canSeeSession, terminal/write-cap.ts). 효과 없는 칸을 활성으로 두면 '초대한 사람만 본다'고 오해한다.
+//   · 생성은 POST <base><id>/sessions 로 간다(자유 세션은 /api/ui/terminal/sessions).
+// 이 모달 하나가 '웹/내 PC'와 '프로젝트/자유'를 모두 받는다 — 종전엔 경로마다 다른 모달이 떴다(#1145 안 1).
+function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any; name?: string; base?: string } }) {
+  const project = opts && opts.project;
   const roots = cfg.roots || [];
   const harnesses = cfg.harnesses || [];
   const prefs = termCreatePrefs();
@@ -360,6 +368,48 @@ function openTermCreateForm(cfg, view, onCreated?) {
   }
   paintPicker(); // 스냅샷으로 노드가 복원됐으면 원격 경로 입력, 아니면 폴더 브라우저(#1145)
 
+  // ── 어떻게 열까요(#1145 안 1) — 웹 / 내 PC. 종전엔 프로젝트 상세에서 드롭다운으로 먼저 고른 뒤에야
+  //  모달이 떴다(경로마다 다른 모달). 이제 이 모달 한 장이 두 경우를 다 받는다.
+  //  내 PC 는 세션을 만들지 않는다 — 그 사람 터미널에 붙여넣을 `lively run` 한 줄을 만들어 줄 뿐이다.
+  const bodyHost = el('div', {});   // 웹/내 PC 에 따라 통째로 갈리는 본문(applyWhere)
+  let openWhere: 'web' | 'local' = 'web';
+  const whereOpts = [
+    { key: 'web', ico: '☁️', lbl: '웹에서 열기', sub: '설치 없이 바로 씁니다' },
+    { key: 'local', ico: '💻', lbl: '내 PC에서 열기', sub: '실행 명령을 알려드립니다' },
+  ];
+  const whereBtns: Record<string, any> = {};
+  const whereSeg = el('div', { class: 'term-seg' }, ...whereOpts.map((w) => {
+    const b = el('button', { class: 'term-seg-btn' + (w.key === openWhere ? ' active' : ''), type: 'button' },
+      el('span', { class: 'term-seg-ico', text: w.ico }),
+      el('span', { class: 'term-seg-txt' },
+        el('span', { class: 'term-seg-lbl', text: w.lbl }),
+        el('span', { class: 'term-seg-sub', text: w.sub })),
+      el('span', { class: 'term-seg-check' }));
+    b.onclick = () => {
+      if (openWhere === w.key) return;
+      openWhere = w.key as any;
+      for (const k in whereBtns) whereBtns[k].classList.toggle('active', k === openWhere);
+      applyWhere();
+    };
+    whereBtns[w.key] = b; return b;
+  }));
+
+  // 내 PC 안내 — `lively run <프로젝트번호|폴더>` 한 줄. work.mjs 가 공유폴더 pull·레포·마커·실행까지 한다.
+  const localCmd = () => 'lively run ' + (project ? String(project.id) : '.');
+  const localBox = el('div', { class: 'term-local-guide' },
+    el('p', { class: 'caption', text: '내 PC 터미널에 붙여넣어 실행하세요(Mac·Windows 동일). 웹은 그 화면을 보지 않습니다 — 세션은 내 컴퓨터에서 돕니다.' }),
+    el('pre', { class: 'term-cmd' }, el('code', { text: localCmd() })),
+    el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' },
+      el('button', {
+        class: 'btn btn-ghost btn-sm', type: 'button', text: '명령 복사',
+        onclick: () => {
+          const t = localCmd();
+          try { navigator.clipboard.writeText(t).then(() => toast('명령을 복사했어요')).catch(() => toast('복사 실패 — 직접 드래그해 복사하세요', true)); }
+          catch (_) { toast('복사 실패 — 직접 드래그해 복사하세요', true); }
+        },
+      }),
+      el('span', { class: 'caption', text: "'lively: command not found' 가 나오면 아직 설치 전이에요 — [사용 가이드 ▸ 내 AI 세션 생성] 을 먼저 따라 하세요." })));
+
   // 고급 설정 안(#1145) — 기본 화면엔 '이름·어디서·초대'만 두고, 나머지는 이 블록에 접어 둔다.
   //  실행 위치·라이블리 모드·기록 범위·실행(AI)/모델/추론강도·자동 승인이 여기 들어간다.
   const advBody = el('div', { class: 'term-adv-body', hidden: '' },
@@ -378,20 +428,62 @@ function openTermCreateForm(cfg, view, onCreated?) {
   advSummary();
   syncWriteVis(); // 초기 상태(일반=카드 노출)를 그려 둔다 — 요약줄도 여기서 함께 채워진다
 
-  // 폼 순서(#1145 안 C) — 무엇(이름) → 어디(폴더) → 누구(초대) → 그 밖의 모든 것(고급 설정) → 기억할지 → 만들기.
+  // 웹/내 PC 에 따라 본문을 통째로 갈아끼운다. 내 PC 는 명령 한 줄이 전부라 나머지를 물을 이유가 없다.
+  function applyWhere() {
+    if (openWhere === 'local') { bodyHost.replaceChildren(localBox); return; }
+    bodyHost.replaceChildren(
+      el('div', { 'data-tour': 'label' }, field('이름', labelI)),
+      project
+        // 프로젝트 맥락 — 고를 게 없으니 '무엇이 정해졌는지'를 보여준다.
+        ? el('div', { 'data-tour': 'folder' }, fieldInfo('어디서 실행할까요',
+          '이 세션은 **이 프로젝트의 폴더**에서 열립니다 — 폴더를 따로 고르지 않습니다.\n\n· 프로젝트 본문·연결된 지식·프로젝트 규칙이 세션에 자동으로 들어갑니다.\n· 이 프로젝트를 볼 수 있는 사람은 모두 이 세션을 보고 이어받을 수 있습니다.',
+          projCard()))
+        // #853 작업 위치(공유/개인 토글) + 그 안의 폴더를 한 블록으로 — '이 폴더에서 AI를 실행한다'는 직관.
+        : el('div', { 'data-tour': 'folder' }, fieldInfo('어디서 실행할까요',
+          'AI 는 폴더 하나를 정해 그 안에서 일합니다.\n\n· 여기서 고른 폴더가 이 세션의 **작업 공간**이 됩니다.\n· 그 안의 파일과 하위 폴더는 AI 가 **자유롭게 열어 볼 수 있습니다**.\n· 「공유 워크스페이스」는 팀과 함께 쓰는 폴더이고, 「개인 폴더」는 나만 쓰는 폴더입니다.',
+          el('div', { class: 'term-loc' }, rootSeg, el('div', { class: 'term-loc-folder' }, pickerBox)))),
+      project
+        ? el('div', { 'data-tour': 'invite' }, field('초대', projInvite()))
+        : el('div', { 'data-tour': 'invite' }, field('초대 (비우면 나만 보는 비공개 세션)', inviteBox.box)),
+      advToggle, advBody,
+      // '이 설정을 기억하기'는 고급 설정 밖 맨 아래 — 고급을 펼치지 않아도 켤 수 있어야 한다.
+      el('div', { class: 'term-checks' }, rememberWrap));
+  }
+
+  // 프로젝트에서 열었으면 폴더를 고를 여지가 없다 — 빈 자리를 남기는 대신 **무엇이 정해졌고 그래서 뭐가 좋은지**를 채운다.
+  //  (비활성 회색이 아니라 강조 카드인 이유: 뺏긴 게 아니라 얻은 것이다.)
+  const projCard = () => el('div', { class: 'term-proj-lock' },
+    el('div', { class: 'term-proj-lock-head' },
+      el('span', { text: '🗂' }),
+      el('b', { text: project!.name || ('프로젝트 ' + project!.id) }),
+      el('span', { class: 'pill', text: '프로젝트 세션' })),
+    el('div', { class: 'term-runhere' },
+      el('span', { class: 'term-runhere-ic', text: '▶' }),
+      el('span', { class: 'term-runhere-txt' }, el('b', { text: '이 폴더에서 AI 실행 · project/' + project!.id }))),
+    el('ul', { class: 'term-proj-why' },
+      el('li', { text: '이 프로젝트 폴더에서 열립니다 — 폴더를 고르지 않아도 됩니다.' }),
+      el('li', { text: '프로젝트 본문·연결된 지식·규칙이 세션에 자동으로 들어갑니다.' }),
+      el('li', { text: '이 프로젝트를 볼 수 있는 사람은 모두 이 세션을 보고 이어받을 수 있습니다.' })));
+
+  // 프로젝트 세션의 '초대' — 칸은 남기되 사실을 적고 잠근다. 넣어도 가시성이 안 바뀌기 때문이다(위 주석 참조).
+  const projInvite = () => el('div', {},
+    el('div', { class: 'term-lock-note' },
+      el('span', { text: '🗂' }),
+      el('span', {}, el('b', { text: '이 프로젝트를 볼 수 있는 사람은 모두' }),
+        document.createTextNode(' 이 세션을 봅니다 — 따로 초대하지 않아도 됩니다.'))),
+    el('div', { class: 'term-invite-off' }, inviteBox.box));
+
+  // 폼 순서(#1145 안 C+1) — 어떻게(웹/내 PC) → 무엇(이름) → 어디(폴더) → 누구(초대) → 그 밖(고급 설정) → 기억 → 만들기.
   //  온보딩 투어(#517) 앵커: label → folder → invite → preset(=고급 설정, 열리면 node·options 도 그 안에) → create.
-  const back = overlay('새 AI 세션',
-    el('div', { 'data-tour': 'label' }, field('이름', labelI)),
-    // #853 작업 위치(공유/개인 토글) + 그 안의 폴더를 한 블록으로 — '이 폴더에서 AI를 실행한다'는 직관.
-    el('div', { 'data-tour': 'folder' }, fieldInfo('어디서 실행할까요',
-      'AI 는 폴더 하나를 정해 그 안에서 일합니다.\n\n· 여기서 고른 폴더가 이 세션의 **작업 공간**이 됩니다.\n· 그 안의 파일과 하위 폴더는 AI 가 **자유롭게 열어 볼 수 있습니다**.\n· 「공유 워크스페이스」는 팀과 함께 쓰는 폴더이고, 「개인 폴더」는 나만 쓰는 폴더입니다.',
-      el('div', { class: 'term-loc' }, rootSeg, el('div', { class: 'term-loc-folder' }, pickerBox)))),
-    el('div', { 'data-tour': 'invite' }, field('초대 (비우면 나만 보는 비공개 세션)', inviteBox.box)),
-    advToggle, advBody,
-    // '이 설정을 기억하기'는 고급 설정 밖 맨 아래 — 고급을 펼치지 않아도 켤 수 있어야 한다.
-    el('div', { class: 'term-checks' }, rememberWrap),
+  applyWhere();
+  const back = overlay(project ? '새 AI 세션 · ' + (project.name || ('프로젝트 ' + project.id)) : '새 AI 세션',
+    fieldInfo('어떻게 열까요',
+      'AI 세션을 **어디서 돌릴지** 고릅니다.\n\n· **웹에서 열기** — 회사 중앙 컴퓨터에서 돌아갑니다. 설치가 필요 없고, 내 노트북을 꺼도 계속 실행됩니다.\n· **내 PC에서 열기** — 내 컴퓨터에서 돌립니다. 붙여넣을 명령 한 줄을 알려드립니다(라이블리 설치 필요).',
+      whereSeg),
+    bodyHost,
     el('div', { class: 'ov-actions' },
       el('button', { class: 'btn btn-primary', 'data-tour': 'create', text: '생성하기', onclick: async (ev) => {
+        if (openWhere === 'local') { toast('위 명령을 내 PC 터미널에 붙여넣어 실행하세요'); return; }
         const btn = ev.currentTarget; btn.disabled = true;
         const fromTour = isTourActive(); // 클릭 순간(투어 종료 전)에 캡처 — 따라하기면 완료 안내를 새 터미널 탭에 띄운다(#673)
         const flags = {};
@@ -400,9 +492,14 @@ function openTermCreateForm(cfg, view, onCreated?) {
         const mode = modeVal; // #1007+ 라이블리 모드 → readOnly/incognito 불리언(서버 CreateInput)
         // 잠긴 상태(읽기전용·인코그니토)면 기록 범위는 보내지 않는다 — 화면에서 못 고르는 값을 몰래 실어 보내지 않는다(#1145).
         const writeVisOut = writeVisLocked() ? '' : writeVisVal;
-        const payload = { label: labelI.value, rootKey, subpath: nodeId ? remoteSubI.value.trim() : pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, readOnly: mode === 'readonly', incognito: mode === 'incognito', writeVis: writeVisOut || undefined, invites: inviteBox.selected(), node: nodeId || undefined };
+        // 프로젝트 세션은 폴더·초대를 안 받는다(그 프로젝트 폴더에서 열리고, 가시성은 리스트 공개범위가 정한다).
+        const payload: any = project
+          ? { label: labelI.value, harness: harnessSel.value, flags, autoApprove: autoCb.checked, readOnly: mode === 'readonly', incognito: mode === 'incognito', writeVis: writeVisOut || undefined, node: nodeId || undefined }
+          : { label: labelI.value, rootKey, subpath: nodeId ? remoteSubI.value.trim() : pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, readOnly: mode === 'readonly', incognito: mode === 'incognito', writeVis: writeVisOut || undefined, invites: inviteBox.selected(), node: nodeId || undefined };
         try {
-          const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify(payload) });
+          // 프로젝트 세션은 그 프로젝트 엔드포인트로 만든다 — 서버가 폴더·가시성·맥락 주입을 그쪽에서 붙인다.
+          const url = project ? ((project.base || '/api/ui/v6/projects/') + project.id + '/sessions') : '/api/ui/terminal/sessions';
+          const out = await api(url, { method: 'POST', body: JSON.stringify(payload) });
           // 하네스·모델·추론강도·자동 승인은 종전대로 늘 기억한다(#673/#782).
           //  '이 설정을 기억하기'를 켰으면 나머지(실행 위치·폴더·모드·기록 범위)까지 스냅샷으로 함께 남긴다(#1145).
           saveTermCreatePrefs({
