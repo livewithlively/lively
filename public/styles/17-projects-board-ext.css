@@ -146,6 +146,11 @@
 .np-addrow.editing { display: flex; align-items: center; gap: 9px; padding: 7px 11px; }
 .cf-row .pjv-listpick { flex: 1; min-width: 0; }
 .cf-row .pjv-listpick-sel { width: 100%; }
+/* #1098 — 리스트 피커가 <select> → 검색+폴더 트리 팝오버로 바뀌었다. 폼 행 안에서 버튼이 폭을 채우고
+   팝오버는 그 아래에 뜬다(모달 안이라 relative 기준을 피커 자신이 갖는다). */
+.cf-row .pjv-listpick { position: relative; }
+.cf-row .pjv-listpick .tsess-projfilter-btn { width: 100%; justify-content: space-between; }
+.cf-row .pjv-listpick .tsess-projfilter-dd { width: 100%; min-width: 240px; }
 .cf-trigger { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 5px 10px; border: 1px solid var(--line-net); border-radius: 9px; background: var(--bg); cursor: pointer; text-align: left; font: inherit; }
 .cf-trigger:hover { border-color: var(--line-net-2); background: var(--bg-tint); }
 .cf-chips { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
