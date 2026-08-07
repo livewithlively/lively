@@ -343,47 +343,151 @@ function repoPicker(selectedNames, opts?) {
 //   ok=false → 영역이 있는데 아직 미선택(검증에서 막음) · listId=null → 명시적 '기타(미분류)' · 그 외 → 선택한 영역 id.
 //  selectedListId 가 주어지면(특정 영역 추가행에서 연 경우) 그 영역을 미리 선택 — 기존 동작 유지.
 function listPicker(selectedListId) {
-  const sel = el('select', { class: 'pjv-listpick-sel', 'aria-label': '분류(리스트)' });
-  sel.append(el('option', { value: '', text: '불러오는 중…' }));
-  sel.disabled = true;
-  const box = el('div', { class: 'pjv-listpick' }, sel);
-  let loaded: any[] = [];      // 로드된 영역(없으면 미분류 강제 불가 — 첫 프로젝트 부트스트랩)
-  let prevValue = '';          // '＋ 새 영역' 선택 시 되돌릴 직전 값
-  const sortLists = pjvContainerCmp; // #541 — 사이드바와 동일 비교자(sort → ClickUp orderindex → 이름)
-  const rebuild = (lists, preferId) => {
-    loaded = [...lists].sort(sortLists);
-    const has = preferId != null && loaded.some((l) => String(l.id) === String(preferId));
-    const opts: any[] = [];
-    // 미리 선택할 영역이 없으면 placeholder — 영역이 있으면 '선택하세요'(검증에서 막힘), 없으면 '미분류로 생성'(허용).
-    if (!has) opts.push(el('option', { value: '', text: loaded.length ? '리스트를 선택하세요…' : '리스트 없음 — 미분류로 생성' }));
-    for (const l of loaded) opts.push(el('option', { value: 'L' + l.id, text: l.name }));
-    // #1098 — '기타(미분류)' 제거. 이 탈출구로 만들어진 프로젝트가 어느 리스트에도 안 잡혀 목록·필터에서 떠돌았다.
-    //  리스트가 하나도 없는 최초 부트스트랩만 미분류 생성을 허용한다(아래 getSelected).
-    opts.push(el('option', { value: '__new__', text: '＋ 새 리스트 만들기…' }));
-    sel.replaceChildren(...opts);
-    sel.value = has ? ('L' + preferId) : '';
-    prevValue = sel.value;
-    sel.disabled = false;
+  // #1098 — 20개 넘는 리스트가 평면 <select> 로 쏟아져 원하는 걸 못 찾았다(상민님).
+  //  AI 세션 탭의 프로젝트 피커와 **같은 방식**으로 바꾼다: 검색 + 폴더 트리(접힌 가지는 눌러서 들어감).
+  //  클래스도 거기 것(tsess-projfilter-*/tsess-tree-*)을 그대로 쓴다 — 새 CSS 를 만들면 두 화면이 갈라진다(#1062 관례).
+  let loaded: any[] = [];      // 로드된 리스트(하나도 없으면 미분류 허용 — 첫 프로젝트 부트스트랩)
+  let folders: any[] = [];
+  let picked: number | null = selectedListId != null ? Number(selectedListId) : null;
+  const expanded = new Set<string>();
+
+  const box = el('div', { class: 'pjv-listpick tsess-projfilter' });
+  const btn = el('button', { type: 'button', class: 'tsess-projfilter-btn', 'aria-haspopup': 'true', title: '리스트 고르기' },
+    el('span', { class: 'pjv-listpick-label', text: '불러오는 중…' }), el('span', { class: 'tsess-projfilter-chev', text: '▾' }));
+  const dd = el('div', { class: 'tsess-projfilter-dd', hidden: true });
+  const search = el('input', { type: 'search', class: 'tsess-projfilter-search', placeholder: '리스트 검색…' }) as HTMLInputElement;
+  const listBox = el('div', { class: 'tsess-projfilter-list' });
+  const foot = el('div', { class: 'tsess-projfilter-foot' });
+  dd.append(search, listBox, foot);
+  box.append(btn, dd);
+
+  const nameOf = (id: number | null) => { const l = loaded.find((x) => Number(x.id) === Number(id)); return l ? l.name : ''; };
+  const paintBtn = () => {
+    const lab = btn.querySelector('.pjv-listpick-label') as HTMLElement;
+    if (!loaded.length) { lab.textContent = '리스트 없음 — 미분류로 생성'; btn.classList.remove('active'); return; }
+    lab.textContent = picked != null ? nameOf(picked) || ('리스트 #' + picked) : '리스트를 선택하세요…';
+    btn.classList.toggle('active', picked != null);
   };
-  const ready = api('/api/ui/v6/project-lists')
-    .then((d) => (d && d.lists) || [])
-    .catch(() => [])
-    .then((lists) => rebuild(lists, selectedListId));
-  sel.addEventListener('change', () => {
-    if (sel.value === '__new__') {
-      sel.value = prevValue;  // 선택값 아님 — 즉시 되돌리고 영역 생성 폼을 띄운다.
-      openListForm(null, undefined, { onCreated: (list) => { if (list && list.id != null) rebuild([...loaded, list], list.id); } });
+
+  let docHandler: any = null;
+  const close = () => { dd.hidden = true; if (docHandler) { document.removeEventListener('mousedown', docHandler); docHandler = null; } };
+  const open = () => {
+    dd.hidden = false; search.value = ''; render(''); search.focus();
+    docHandler = (e: any) => { if (!box.contains(e.target)) close(); };
+    setTimeout(() => { if (!dd.hidden) document.addEventListener('mousedown', docHandler); }, 0);
+  };
+  btn.addEventListener('click', () => (dd.hidden ? open() : close()));
+  search.addEventListener('input', () => render(search.value));
+
+  // 폴더(중첩) › 리스트 트리. 리스트가 없는 폴더 가지는 통째로 감춘다(빈 서랍을 늘리지 않는다).
+  type Node = { key: string; name: string; sort: number; children: Node[]; lists: any[]; count: number };
+  const buildTree = () => {
+    const byId = new Map<string, any>(folders.map((f) => [String(f.id), f]));
+    const nodeOf = new Map<string, Node>();
+    const roots: Node[] = [];
+    const orphans: any[] = [];
+    const ensure = (fid: any): Node | null => {
+      const f = byId.get(String(fid));
+      if (!f) return null;
+      const k = 'f' + f.id;
+      let n = nodeOf.get(k);
+      if (n) return n;
+      n = { key: k, name: f.name || '폴더', sort: Number(f.sort) || 0, children: [], lists: [], count: 0 };
+      nodeOf.set(k, n);
+      const parent = f.parent_id != null ? ensure(f.parent_id) : null;
+      if (parent) parent.children.push(n); else roots.push(n);
+      return n;
+    };
+    for (const l of loaded) {
+      const n = l.folder_id != null ? ensure(l.folder_id) : null;
+      if (n) n.lists.push(l); else orphans.push(l);
+    }
+    const cnt = (n: Node): number => { n.count = n.lists.length + n.children.reduce((a, c) => a + cnt(c), 0); return n.count; };
+    for (const r of roots) cnt(r);
+    const prune = (ns: Node[]): Node[] => ns.filter((n) => n.count > 0).map((n) => ({ ...n, children: prune(n.children) }));
+    return { roots: prune(roots).sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'ko')), orphans };
+  };
+
+  const listRow = (l: any, depth: number) => {
+    const on = picked != null && Number(picked) === Number(l.id);
+    return el('button', {
+      class: 'tsess-projfilter-opt' + (on ? ' active' : ''), type: 'button', title: l.name,
+      style: depth ? 'padding-left:' + (10 + depth * 13) + 'px' : '',
+      onmousedown: (e: any) => { e.preventDefault(); picked = Number(l.id); paintBtn(); close(); },
+    }, el('span', { class: 'tsess-opt-name', text: l.name }));
+  };
+
+  const render = (q: string) => {
+    const ql = (q || '').trim().toLowerCase();
+    const hit = (l: any) => !ql || String(l.name || '').toLowerCase().includes(ql);
+    if (!loaded.length) {
+      listBox.replaceChildren(el('div', { class: 'tsess-projfilter-none', text: '리스트가 아직 없어요 — 아래에서 만들 수 있어요(만들기 전에는 미분류로 생성됩니다).' }));
       return;
     }
-    prevValue = sel.value;
+    const { roots, orphans } = buildTree();
+    const nodes: any[] = [];
+    let shown = 0;
+    const walk = (ns: Node[], depth: number) => {
+      for (const n of ns) {
+        const deep = (function c(x: Node): number { return x.lists.filter(hit).length + x.children.reduce((a, y) => a + c(y), 0); })(n);
+        if (ql && !deep) continue;                      // 검색 중 매치 없는 가지는 숨긴다
+        const isOpen = ql ? true : expanded.has(n.key);  // 검색 중엔 자동으로 펼친다
+        nodes.push(el('button', {
+          class: 'tsess-tree-node tsess-tree-folder' + (isOpen ? ' open' : ''), type: 'button',
+          style: depth ? 'padding-left:' + (8 + depth * 13) + 'px' : '', 'aria-expanded': String(isOpen), title: '폴더: ' + n.name,
+          onmousedown: (e: any) => {
+            e.preventDefault(); e.stopPropagation();     // 가지를 여닫아도 팝오버는 닫지 않는다
+            if (expanded.has(n.key)) expanded.delete(n.key); else expanded.add(n.key);
+            render(search.value);
+          },
+        },
+          el('span', { class: 'tsess-tree-caret', text: isOpen ? '▾' : '▸' }),
+          el('span', { class: 'tsess-tree-name', text: n.name }),
+          el('span', { class: 'tsess-tree-n', text: String(deep) })));
+        shown++;
+        if (isOpen) {
+          walk(n.children, depth + 1);
+          for (const l of n.lists.filter(hit).sort(sortLists)) { nodes.push(listRow(l, depth + 1)); shown++; }
+        }
+      }
+    };
+    walk(roots, 0);
+    for (const l of orphans.filter(hit).sort(sortLists)) { nodes.push(listRow(l, 0)); shown++; }   // 폴더 밖 리스트는 최상위에
+    if (!shown) nodes.push(el('div', { class: 'tsess-projfilter-none', text: '일치하는 리스트가 없어요' }));
+    listBox.replaceChildren(...nodes);
+  };
+
+  const sortLists = pjvContainerCmp; // #541 — 사이드바와 동일 비교자(sort → ClickUp orderindex → 이름)
+  const seedExpand = () => { for (const r of buildTree().roots) expanded.add(r.key); };   // 스페이스(최상위 폴더)는 펼친 채로 시작
+
+  // 새 리스트 만들기 — 만들면 그 리스트를 곧바로 고른 상태로.
+  const newBtn = el('button', { class: 'tsess-projfilter-new', type: 'button', text: '＋ 새 리스트 만들기…' });
+  newBtn.onmousedown = (e: any) => {
+    e.preventDefault(); close();
+    openListForm(null, undefined, { onCreated: (list) => {
+      if (!list || list.id == null) return;
+      loaded = [...loaded, list]; picked = Number(list.id); seedExpand(); paintBtn();
+    } });
+  };
+  foot.append(newBtn);
+
+  const ready = Promise.all([
+    api('/api/ui/v6/project-lists').then((d) => (d && d.lists) || []).catch(() => []),
+    api('/api/ui/v6/project-folders').then((d) => (d && d.folders) || []).catch(() => []),
+  ]).then(([lists, folds]) => {
+    loaded = [...lists].sort(sortLists);
+    folders = folds || [];
+    if (picked != null && !loaded.some((l) => Number(l.id) === Number(picked))) picked = null;
+    seedExpand();
+    paintBtn();
   });
+
   return {
     box,
     ready,
     getSelected: () => {
-      const v = sel.value;
-      if (v.charAt(0) === 'L') return { ok: true, listId: Number(v.slice(1)) };
-      // placeholder('') — 영역이 있으면 미선택(차단), 하나도 없으면 미분류 허용(부트스트랩).
+      if (picked != null) return { ok: true, listId: Number(picked) };
+      // 리스트가 하나도 없는 최초 부트스트랩만 미분류 생성을 허용한다(그 외엔 검증에서 막힌다).
       return loaded.length ? { ok: false, listId: undefined } : { ok: true, listId: null };
     },
   };
