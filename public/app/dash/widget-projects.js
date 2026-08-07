@@ -108,6 +108,17 @@ function projRow(ctx, p) {
     });
     return row;
 }
+// #1098 프로젝트 삭제 응답의 세션 정리 결과를 토스트 꼬리말로. 정리한 게 없으면 빈 문자열(군더더기 없이).
+function sessCleanupNote(r) {
+    const s = r && r.sessions;
+    if (!s)
+        return '';
+    const n = (s.killed?.length || 0) + (s.forgot?.length || 0);
+    const node = s.skippedNode?.length || 0;
+    if (!n && !node)
+        return '';
+    return ' — AI 세션 ' + n + '개도 정리했어요' + (node ? ' (원격 노드 세션 ' + node + '개는 그대로 뒀어요)' : '');
+}
 // #req R19 — 목록 맨 밑 인라인 '+ 새 프로젝트'. 프로젝트 탭 보드 추가행(pjvProjAddRow)과 동일 클래스·톤(테두리 없는 인라인 입력).
 //  트리거(＋ 프로젝트) → 클릭 시 제목 셀(체크박스 자리·캐럿 자리·상태점 + 입력)로 펼침. Enter=생성 후 상세로, Esc=접기.
 function projInlineAdd(ctx, listId, countEl) {
@@ -502,11 +513,12 @@ function openProjRowMenu(anchor, p, onChanged) {
     const del = el('button', { class: 'dash-pop-opt danger', type: 'button' }, el('span', { class: 'dash-pop-name', text: '삭제' }));
     del.onclick = async () => {
         close();
-        if (!confirm('프로젝트 ‘' + (p.name || '') + '’을(를) 삭제할까요?\n하위 태스크·세션 연결 포함 되돌릴 수 없어요.'))
+        // #1098 — 서버가 이 프로젝트의 AI 세션도 함께 정리한다(종료 + 복원 목록에서 제거). 지우기 전에 그 사실을 알린다.
+        if (!confirm('프로젝트 ‘' + (p.name || '') + '’을(를) 삭제할까요?\n하위 태스크가 함께 사라지고, 이 프로젝트의 AI 세션도 종료됩니다(대화록은 📜 세션 기록에 남아요).'))
             return;
         try {
-            await api('/api/ui/v6/projects/' + p.id + '/delete', { method: 'POST', body: '{}' });
-            toast('프로젝트를 삭제했어요');
+            const r = await api('/api/ui/v6/projects/' + p.id + '/delete', { method: 'POST', body: '{}' });
+            toast('프로젝트를 삭제했어요' + sessCleanupNote(r));
             onChanged && onChanged();
         }
         catch (e) {
