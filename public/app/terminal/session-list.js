@@ -28,7 +28,8 @@ function saveTsessProjView(v) { try {
 }
 catch { /* noop */ } }
 function buildSessProjFilter(opts) {
-    const { projects, projIds, projName, lists, folders, current, onPick } = opts;
+    const { projects, projIds, projName, lists, folders, selected, onChange } = opts;
+    const sel = new Set([...selected]);
     const idSet = new Set(projIds.map((x) => Number(x)));
     const rows = projects.filter((p) => idSet.has(Number(p.id)));
     for (const id of idSet)
@@ -115,27 +116,42 @@ function buildSessProjFilter(opts) {
     if (!hadSaved)
         seedExpanded(tree);
     let view = tsessProjView();
-    const cur = rows.find((p) => Number(p.id) === current);
+    const nameOf = (id) => { const p = rows.find((x) => Number(x.id) === id); return (p && p.name) || projName.get(id) || ('프로젝트 #' + id); };
     const wrap = el('div', { class: 'tsess-projfilter' });
-    const btn = el('button', { type: 'button', class: 'tsess-projfilter-btn' + (current !== 0 ? ' active' : ''), title: '프로젝트로 필터' }, el('span', { text: current === 0 ? '프로젝트' : (cur ? cur.name : projName.get(current) || ('프로젝트 #' + current)) }), el('span', { class: 'tsess-projfilter-chev', text: '▾' }));
+    const btn = el('button', { type: 'button', class: 'tsess-projfilter-btn' + (sel.size ? ' active' : ''), title: '프로젝트로 필터 — 여러 개 고를 수 있어요' }, el('span', { text: sel.size === 0 ? '프로젝트' : sel.size === 1 ? nameOf([...sel][0]) : '프로젝트 ' + sel.size }), el('span', { class: 'tsess-projfilter-chev', text: '▾' }));
     const dd = el('div', { class: 'tsess-projfilter-dd', hidden: true });
     const search = el('input', { type: 'search', class: 'tsess-projfilter-search', placeholder: '프로젝트 검색…' });
     const seg = el('div', { class: 'tsess-projview-seg' });
     const listBox = el('div', { class: 'tsess-projfilter-list' });
-    const projBtn = (p, depth, meta) => el('button', {
-        class: 'tsess-projfilter-opt tsess-tree-proj' + (Number(p.id) === current ? ' active' : ''), type: 'button', title: p.name,
-        style: depth ? 'padding-left:' + (10 + depth * 13) + 'px' : '',
-        onmousedown: (e) => { e.preventDefault(); close(); if (Number(p.id) !== current)
-            onPick(Number(p.id)); },
-    }, el('span', { class: 'tsess-opt-name', text: p.name }), meta ? el('span', { class: 'tsess-opt-meta', text: meta }) : null);
+    //  프로젝트 행 = **체크박스**(다중). 다른 축 드롭다운과 같은 마크업(.dash-pop-box)을 써 화면이 갈라지지 않게 한다.
+    //  고를 때마다 닫지 않는다 — 여러 개 체크하는 게 기본 동선이라 닫히면 매번 다시 열어야 한다.
+    const projBtn = (p, depth, meta) => {
+        const on = sel.has(Number(p.id));
+        return el('button', {
+            class: 'tsess-projfilter-opt tsess-tree-proj' + (on ? ' active' : ''), type: 'button', title: p.name,
+            role: 'menuitemcheckbox', 'aria-checked': String(on),
+            style: depth ? 'padding-left:' + (10 + depth * 13) + 'px' : '',
+            onmousedown: (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (on)
+                    sel.delete(Number(p.id));
+                else
+                    sel.add(Number(p.id));
+                onChange(new Set(sel));
+            },
+        }, el('span', { class: 'dash-pop-box', text: on ? '✓' : '' }), el('span', { class: 'tsess-opt-name', text: p.name }), meta ? el('span', { class: 'tsess-opt-meta', text: meta }) : null);
+    };
     const renderList = (q) => {
         const ql = (q || '').trim().toLowerCase();
         const hit = (p) => !ql || String(p.name || '').toLowerCase().includes(ql);
-        const nodes = [el('button', {
-                class: 'tsess-projfilter-opt' + (current === 0 ? ' active' : ''), type: 'button',
-                onmousedown: (e) => { e.preventDefault(); close(); if (current !== 0)
-                    onPick(0); },
-            }, el('span', { class: 'tsess-opt-name', text: '프로젝트 전체' }))];
+        // 상단 — 선택이 있으면 '몇 개 골랐는지 + 초기화'(체크를 하나씩 끄지 않고 한 번에 전체로 되돌린다).
+        const nodes = [sel.size
+                ? el('div', { class: 'tsess-projfilter-head' }, el('span', { class: 'tsess-projfilter-headn', text: sel.size + '개 선택' }), el('button', {
+                    class: 'dash-pop-clear', type: 'button', title: '프로젝트 조건을 지우고 전체 보기',
+                    onmousedown: (e) => { e.preventDefault(); e.stopPropagation(); sel.clear(); onChange(new Set()); },
+                }, '초기화'))
+                : el('div', { class: 'tsess-projfilter-head' }, el('span', { class: 'tsess-projfilter-headn', text: '프로젝트 전체 — 골라서 좁히세요' }))];
         if (view === 'recent') {
             // 최신순 — 폴더·리스트를 무시한 평면 목록. 어느 리스트인지는 회색 메타로.
             const flat = rows.filter(hit).sort((a, b) => tsOf(b) - tsOf(a));
@@ -226,7 +242,8 @@ function buildSessProjFilter(opts) {
     search.addEventListener('input', () => renderList(search.value));
     dd.append(search, seg, listBox);
     wrap.append(btn, dd);
-    return wrap;
+    // 다중 선택은 고를 때마다 재렌더되므로 호출부가 '다시 펼치기'를 할 수 있어야 한다(다른 축 드롭다운과 같은 계약).
+    return { wrap, open };
 }
 // 세션 카드(#745) — 라이브 상태점 + 라벨(작업) / 상태·시각·하네스·모델·폴더 + 프로젝트 칩 + 열기/관리.
 //  선택(일괄삭제) 모드면 내 소유 카드에 체크박스(카드 전체가 토글 = label). 남의 세션은 체크박스 없음(삭제 불가).
