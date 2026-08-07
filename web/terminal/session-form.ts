@@ -1,7 +1,7 @@
 // terminal/session-form.ts — 세션 **생성·수정 폼**과 그 부속: 실행 설정 기억(#673/#782) · 초대 피커 · 노드 관리 · 로그인 배너/프로필 안내.
 //  소비자: terminal/{session-list,routes}.ts + 프로젝트·대시보드 탭(배럴 terminal.ts 경유).
 //  import 방향: select-bar(아래층)만 본다. 목록 재렌더는 routes.ts 를 직접 import 하지 않고 아래 훅으로 부른다(순환 방지).
-import { api, appUrl, el, personFace, state, toast, visAxisOn } from '../core.js';
+import { api, appUrl, el, infoPop, personFace, state, toast, visAxisOn } from '../core.js';
 import { field, overlay } from '../admin.js';
 import { isTourActive } from '../tour.js';
 import { termUrl } from './select-bar.js';
@@ -86,6 +86,15 @@ function loginBannerEl(cfg, view) {
     el('button', { class: 'btn btn-primary', text: '내 계정 로그인', onclick: () => openLoginSession(view) }));
 }
 
+// 라벨 옆 ⓘ 로 설명을 접는 필드(#1145) — 회색 캡션을 한 줄 더 늘리면 폼만 길어지고 정작 안 읽힌다.
+//  관리탭 카드 제목(cardHead)과 같은 infoPop 이라 '이 아이콘은 설명'이라는 감각이 화면 사이에서 이어진다.
+//  본문은 .hint-pop-text 가 white-space:pre-line 이라 \n 이 그대로 줄바꿈되고, **강조** 는 uiText 가 굵게 만든다.
+function fieldInfo(label, tip, control) {
+  return el('div', { class: 'field' },
+    el('div', { class: 'field-label-row' }, el('label', { class: 'field-label', text: label }), infoPop(tip)),
+    control);
+}
+
 // 새 세션 — 기본 비공개. 초대 피커에서 멤버를 고르면 그 사람도 보고 열 수 있다.
 // onCreated(out) — 있으면 생성 후 그걸 호출(대시보드에서 재사용: 세션 위젯 새로고침). 없으면 터미널 뷰 재렌더.
 function openTermCreateForm(cfg, view, onCreated?) {
@@ -132,7 +141,9 @@ function openTermCreateForm(cfg, view, onCreated?) {
   nodeSel.addEventListener('change', paintPicker);
   const harnessSel = el('select', { class: 'term-input' }, ...harnesses.map((h) => el('option', { value: h.key }, h.label)));
   const inviteBox = buildInvitePicker(cfg, new Set()); // 기본 비공개(아무도 선택 안 됨)
-  const flagsBox = el('div', { class: 'term-flags' });
+  // 한 줄 배치(#1145)는 인라인으로도 못 박는다 — styles 는 브라우저가 오래 캐시해 클래스 규칙만으로는
+  //  '새 JS + 옛 CSS' 조합에서 레이아웃이 무너진다(실측). 클래스(.term-preset-row)는 그대로 두되 값은 여기서 확정.
+  const flagsBox = el('div', { class: 'term-flags', style: 'display:flex;gap:10px;flex-wrap:wrap;flex:2 1 240px;min-width:0' });
   // 자동 승인은 기본 꺼짐이되, 내가 지난번에 켰다면 켠 채로 복원한다(#782 — 사용자별 기억).
   //  (#673 의 'git 워크트리에서 작업' 체크박스는 #918 에서 제거 — 서버측 근거가 사라졌다: terminal-sessions 참조.)
   const autoCb = el('input', { type: 'checkbox' });
@@ -167,31 +178,43 @@ function openTermCreateForm(cfg, view, onCreated?) {
   //  기본은 '자동' — 실행 위치 폴더를 따른다(프로젝트 폴더면 그 프로젝트 범위, 그 밖은 전체 공개).
   let writeVisVal = '';
   const writeVisOpts = [
-    { v: '', t: '자동(실행 위치 따름)', d: '프로젝트 폴더면 그 프로젝트 범위, 그 밖은 전체 공개' },
-    { v: 'open', t: '전체 공개', d: '이 세션이 만든 지식·기록을 조직 전체가 본다' },
-    { v: 'audience', t: '프로젝트 범위', d: '그 프로젝트를 볼 수 있는 사람에게만' },
-    { v: 'private', t: '나만', d: '내가 볼 수 있는 범위로만 기록' },
+    { v: '', t: '자동', d: '실행 위치 따름 — 프로젝트 폴더면 그 프로젝트' },
+    { v: 'open', t: '전체 공개', d: '조직 전체가 봄' },
+    { v: 'audience', t: '프로젝트 범위', d: '그 프로젝트를 볼 수 있는 사람만' },
+    { v: 'private', t: '나만', d: '나만 봄' },
   ];
-  const writeVisSeg = el('div', { class: 'term-seg' },
+  const writeVisBtns: any[] = [];
+  // 카드 언어는 '라이블리 모드'(modeSeg)와 **같은 클래스**를 쓴다(#1145) — 종전의 term-seg-item/-t/-d/.on 은
+  //  CSS 에 정의가 아예 없어 스타일이 하나도 안 먹었다(맨 버튼 4개). 4택이라 term-seg--wrap 으로 2×2 로 접는다.
+  const writeVisSeg = el('div', { class: 'term-seg term-seg--wrap' },
     ...writeVisOpts.map((o) => {
-      const card = el('button', { class: 'term-seg-item' + (o.v === writeVisVal ? ' on' : ''), type: 'button' },
-        el('span', { class: 'term-seg-t', text: o.t }), el('span', { class: 'term-seg-d', text: o.d }));
-      card.onclick = (e: any) => {
+      const b = el('button', { class: 'term-seg-btn', type: 'button' },
+        el('span', { class: 'term-seg-txt' },
+          el('span', { class: 'term-seg-lbl', text: o.t }),
+          el('span', { class: 'term-seg-sub', text: o.d })),
+        el('span', { class: 'term-seg-check' }));
+      b.onclick = (e: any) => {
         e.preventDefault();
+        if (writeVisVal === o.v) return;
         writeVisVal = o.v;
-        [...writeVisSeg.children].forEach((c: any, i) => c.classList.toggle('on', writeVisOpts[i].v === writeVisVal));
+        writeVisBtns.forEach((c, i) => c.classList.toggle('active', writeVisOpts[i].v === writeVisVal));
       };
-      return card;
+      if (o.v === writeVisVal) b.classList.add('active');
+      writeVisBtns.push(b); return b;
     }));
-  const writeVisField = el('div', {}, field('기록 범위', writeVisSeg));
+  const writeVisField = el('div', {}, fieldInfo('기록 범위',
+    '이 세션의 AI 가 **내 승인 없이** 남길 수 있는 기록의 최대 공개 범위입니다.\n\n· **자동** — 실행 폴더를 따릅니다. 프로젝트 폴더면 그 프로젝트 범위, 그 밖은 전체 공개.\n· **전체 공개** — 조직 누구나 봅니다.\n· **프로젝트 범위** — 그 프로젝트를 볼 수 있는 사람만 봅니다.\n· **나만** — 나만 볼 수 있게 남깁니다.\n\n「라이블리 모드」가 **쓸지 말지**를 정한다면, 이건 **쓴다면 누구에게 보이게**를 정합니다.',
+    writeVisSeg));
 
   // '실행 설정'(하네스·모델·effort) — 접이식 프리셋으로 묶어 세로를 아끼고, 이전 설정을 기억한다(#673). 기본 접힘.
   const presetSum = el('div', { class: 'term-preset-sum' });
   const presetChev = el('span', { class: 'term-preset-chev', text: '▾' });
   const presetToggle = el('button', { class: 'term-preset-toggle', type: 'button', 'data-tour': 'preset' }, presetSum, presetChev);
+  // 실행(AI)·모델·추론강도는 짧은 드롭다운 셋 — 각자 한 줄을 차지할 이유가 없어 한 줄에 나란히 둔다(#1145).
   const presetBody = el('div', { class: 'term-preset-body', 'data-tour': 'model' },
-    el('div', { 'data-tour': 'harness' }, field('실행 (AI)', harnessSel)),
-    flagsBox,
+    el('div', { class: 'term-preset-row', style: 'display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start' },
+      el('div', { 'data-tour': 'harness', style: 'flex:1 1 120px;min-width:0' }, field('실행 (AI)', harnessSel)),
+      flagsBox),
     profileNoteEl(cfg));
   let presetOpen = false;
   const applyPreset = () => { presetBody.style.display = presetOpen ? '' : 'none'; presetChev.textContent = presetOpen ? '▴' : '▾'; };
@@ -204,7 +227,8 @@ function openTermCreateForm(cfg, view, onCreated?) {
     for (const f of (h.flags || [])) {
       if (f.name !== '--model' && f.name !== '--effort') continue;
       const c = flagsBox.querySelector('[data-flag="' + f.name + '"]') as any;
-      parts.push((f.name === '--model' ? '모델 ' : 'effort ') + ((c && c.value) || '기본'));
+      // 접힌 요약줄도 드롭다운과 같은 말로 — 라벨은 '추론강도', 빈 값은 '(자동)'.
+      parts.push((f.name === '--model' ? '모델 ' : '추론강도 ') + ((c && c.value) || '자동'));
     }
     presetSum.replaceChildren(el('b', { text: '실행 설정' }), document.createTextNode(' · ' + parts.join(' · ')));
   }
@@ -214,13 +238,18 @@ function openTermCreateForm(cfg, view, onCreated?) {
     flagsBox.replaceChildren();
     for (const f of (h.flags || [])) {
       let ctrl: any;
-      if (f.type === 'select') ctrl = el('select', { class: 'term-input', 'data-flag': f.name }, ...(f.choices || []).map((c) => el('option', { value: c }, c || '(기본)')));
+      // 빈 값 = 그 플래그를 아예 안 넘김(하네스가 알아서) — '기본'보다 '자동'이 그 뜻에 가깝다(#1145).
+      //  카탈로그가 그 하네스의 기본값을 알려주면 '(자동 · gpt-5.5)' 처럼 **무엇으로 뜨는지**까지 보여준다.
+      //  값을 고정하는 게 아니라 표기만 하는 것 — 하네스가 기본을 올리면 실제로는 새 기본으로 뜬다(표기만 낡는다).
+      const autoLabel = f.default ? '(자동 · ' + f.default + ')' : '(자동)';
+      if (f.type === 'select') ctrl = el('select', { class: 'term-input', 'data-flag': f.name }, ...(f.choices || []).map((c) => el('option', { value: c }, c || autoLabel)));
       else if (f.type === 'bool') ctrl = el('input', { type: 'checkbox', 'data-flag': f.name });
       else ctrl = el('input', { class: 'term-input', type: 'text', 'data-flag': f.name, placeholder: f.desc || '' });
       const saved = prefs.flags && prefs.flags[f.name]; // 이전 설정 복원(#673)
       if (saved != null) { if (ctrl.type === 'checkbox') ctrl.checked = !!saved; else ctrl.value = saved; }
       ctrl.addEventListener('change', presetSummary);
-      flagsBox.append(el('div', { class: 'field' }, el('label', { class: 'field-label', text: f.label }), ctrl, f.desc ? el('div', { class: 'caption', text: f.desc }) : null));
+      // 폭도 인라인으로 — 모델·추론강도가 실행(AI)과 같은 줄에서 균등하게 나뉘도록(옛 CSS 캐시에도 안전).
+      flagsBox.append(el('div', { class: 'field', style: 'flex:1 1 110px;min-width:0;margin:8px 0 0' }, el('label', { class: 'field-label', text: f.label }), ctrl, f.desc ? el('div', { class: 'caption', text: f.desc }) : null));
     }
     autoWrap.style.display = h.hasAutoApprove ? '' : 'none';
     //  기록 범위 축이 꺼져 있으면 아예 안 보인다(#1291) — 고른 값이 강제되지 않는 컨트롤을 남기지 않는다.
@@ -279,9 +308,13 @@ function openTermCreateForm(cfg, view, onCreated?) {
   //  온보딩 투어(#517)의 data-tour 앵커도 이 순서에 맞춘다: label → node → folder → options → preset → invite → create.
   const back = overlay('새 세션',
     el('div', { 'data-tour': 'label' }, field('이름', labelI)),
-    el('div', { 'data-tour': 'node' }, field('실행 위치', nodeSel)), // #869 중앙 컴퓨터/등록 노드 — 항상 노출: 투어 ③'실행 위치' 스텝의 대상(#req). 등록 노드가 없으면 '중앙 컴퓨터(기본)' 한 줄만 보인다(submit 값은 기존과 동일 '').
+    el('div', { 'data-tour': 'node' }, fieldInfo('실행 위치',
+      'AI 가 실제로 돌아가는 컴퓨터입니다.\n\n· **중앙 컴퓨터**(기본) — 내 노트북을 꺼도 세션은 계속 실행됩니다.\n· **내 PC** — 노드로 등록해 두었다면 골라서 그 컴퓨터에서 실행합니다.',
+      nodeSel)), // #869 중앙 컴퓨터/등록 노드 — 항상 노출: 투어 ③'실행 위치' 스텝의 대상(#req). 등록 노드가 없으면 '중앙 컴퓨터(기본)' 한 줄만 보인다(submit 값은 기존과 동일 '').
     // #853 작업 위치(공유/개인 토글) + 그 안의 폴더를 한 블록으로 — '이 폴더에서 AI를 실행한다'는 직관.
-    el('div', { 'data-tour': 'folder' }, field('어디서 실행할까요', el('div', { class: 'term-loc' }, rootSeg, el('div', { class: 'term-loc-folder' }, pickerBox)))),
+    el('div', { 'data-tour': 'folder' }, fieldInfo('어디서 실행할까요',
+      'AI 는 폴더 하나를 정해 그 안에서 일합니다.\n\n· 여기서 고른 폴더가 이 세션의 **작업 공간**이 됩니다.\n· 그 안의 파일과 하위 폴더는 AI 가 **자유롭게 열어 봅니다**.\n· 「공유 워크스페이스」는 팀과 함께 쓰는 폴더, 「개인 폴더」는 나만 쓰는 폴더입니다.',
+      el('div', { class: 'term-loc' }, rootSeg, el('div', { class: 'term-loc-folder' }, pickerBox)))),
     modeField, // 라이블리 모드 — '어디서 실행할까요'와 같은 카드 언어로, 그 아래 독립 필드(#1007+ 디자인 통일)
     writeVisField, // 기록 범위(#1291 v2) — 모드와 직교(쓰나 마나 vs 쓴다면 누구에게)
     el('div', { class: 'term-checks', 'data-tour': 'options' }, autoWrap),
@@ -437,7 +470,15 @@ function buildInvitePicker(cfg, current) {
   const box = el('div', { class: 'proj-mp' }, chips, el('div', { class: 'proj-mp-ta' }, searchIn, menu));
 
   function paintChips() {
-    if (!selected.size) { chips.replaceChildren(el('span', { class: 'proj-mp-hint', text: others.length ? '비우면 나만 보는 비공개 세션이에요.' : '초대할 다른 구성원이 없습니다 — 비공개 세션이 됩니다.' })); return; }
+    // 아무도 안 고른 상태의 '비우면 비공개' 안내는 두지 않는다(#1145) — 필드 라벨이 이미 같은 말을 한다.
+    //  이때 chips 를 **빈 채로 남기면** 그 div 의 gap·min-height 가 그대로 남아 라벨과 검색창 사이에 빈 띠가 생긴다
+    //  (사용자 신고). 그러니 내용이 없을 땐 요소 자체를 접는다. '고를 사람이 아예 없다'만은 라벨이 못 하는 말이라 남긴다.
+    chips.style.display = '';
+    if (!selected.size) {
+      if (others.length) { chips.replaceChildren(); chips.style.display = 'none'; }
+      else chips.replaceChildren(el('span', { class: 'proj-mp-hint', text: '초대할 다른 구성원이 없습니다 — 비공개 세션이 됩니다.' }));
+      return;
+    }
     chips.replaceChildren(...[...selected].map((id) => {
       const m = others.find((x) => x.id === id) || { id, name: id };
       return el('span', { class: 'proj-mp-chip' },
