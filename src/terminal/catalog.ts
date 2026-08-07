@@ -41,14 +41,17 @@ export const HARNESSES: Harness[] = [
     key: "claude", label: "Claude Code", bin: "claude",
     autoApproveFlag: "--dangerously-skip-permissions",
     flags: [
-      { name: "--model", label: "모델", desc: "비우면 기본 모델", type: "select", choices: ["", "opus", "sonnet", "haiku"] },
-      { name: "--effort", label: "effort(추론 강도)", desc: "비우면 기본. 판단 무거운 작업(부트스트랩·분류)은 high+ 권장", type: "select", choices: ["", "low", "medium", "high", "xhigh", "max"] },
+      // desc 는 폼에서 드롭다운 아래 회색 캡션으로 붙는다 — '비우면 기본' 류는 빈 값 옵션 라벨('(자동)')이 이미 말하므로 두지 않는다(#1145).
+      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "opus", "sonnet", "haiku"] },
+      { name: "--effort", label: "추론강도(effort)", desc: "무거운 작업(부트스트랩·분류 등)은 xhigh 권장", type: "select", choices: ["", "low", "medium", "high", "xhigh", "max"] },
     ],
   },
   {
     key: "codex", label: "Codex", bin: "codex",
     autoApproveFlag: "--yolo",
-    flags: [{ name: "--model", label: "모델", desc: "비우면 기본 모델(gpt-5.5)", type: "select", choices: ["", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"] }],
+    // default 는 **표기용**이다(#1145) — 빈 값 옵션을 '(자동 · gpt-5.5)' 로 보여줄 뿐, 이 값을 argv 로 넘기지는 않는다.
+    //  넘기는 순간 그 모델에 고정돼, codex 가 기본을 올려도 여기 적힌 낡은 문자열에 사용자가 묶인다.
+    flags: [{ name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"], default: "gpt-5.5" }],
   },
   { key: "shell", label: "셸 (에이전트 없음)", bin: "", flags: [] },
 ];
