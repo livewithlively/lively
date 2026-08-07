@@ -177,18 +177,13 @@ function openTermCreateForm(cfg, view, onCreated, opts) {
         { key: 'readonly', lbl: '읽기전용', sub: '읽되 쓰지 않음 · 기밀 작업' },
         { key: 'incognito', lbl: '인코그니토', sub: '라이블리 전혀 안 씀 · 클린룸' },
     ];
-    const modeBtns = {};
-    // 아이콘 없이 텍스트(제목·부제) + 라디오만 — 카드 구조·정렬은 term-seg 그대로(요청: 이모지 아이콘 제거).
-    const modeSeg = el('div', { class: 'term-seg' }, ...modeOpts.map((m) => {
-        const b = el('button', { class: 'term-seg-btn', type: 'button' }, el('span', { class: 'term-seg-txt' }, el('span', { class: 'term-seg-lbl', text: m.lbl }), el('span', { class: 'term-seg-sub', text: m.sub })), el('span', { class: 'term-seg-check' }));
-        b.onclick = () => { if (modeVal === m.key)
-            return; modeVal = m.key; for (const k in modeBtns)
-            modeBtns[k].classList.toggle('active', k === modeVal); syncWriteVis(); };
-        modeBtns[m.key] = b;
-        return b;
-    }));
-    modeBtns[modeVal].classList.add('active');
-    const modeField = el('div', { 'data-tour': 'mode' }, field('라이블리 모드', modeSeg));
+    // 고급 설정 안에서는 **드롭다운**이다(#1145) — 종전엔 모드 3카드 + 기록 범위 4카드 = 7카드가 세로를 190px 잡아먹고
+    //  드롭다운·카드·체크박스가 뒤섞여 산만했다. 카드는 기본 화면의 갈림길(공유/개인 폴더)에만 남긴다.
+    //  선택지 설명은 옵션 텍스트에 붙이고(`일반 — 읽고 씁니다`) 자세한 건 라벨 옆 ⓘ 가 맡는다.
+    const modeSel = el('select', { class: 'term-input' }, ...modeOpts.map((m) => el('option', { value: m.key }, m.lbl + ' — ' + m.sub)));
+    modeSel.value = modeVal;
+    modeSel.addEventListener('change', () => { modeVal = modeSel.value; syncWriteVis(); });
+    const modeField = el('div', { 'data-tour': 'mode', style: 'flex:1 1 150px;min-width:0' }, fieldInfo('라이블리 모드', '이 세션이 라이블리(회사 맥락)를 얼마나 쓸지 정합니다.\n\n· **일반** — 읽고 씁니다.\n· **읽기전용** — 읽기만 하고 쓰지 않습니다. 기밀 작업에 씁니다.\n· **인코그니토** — 라이블리를 아예 쓰지 않습니다. 클린룸이 필요할 때 씁니다.', modeSel));
     // 기록 범위(#1291 v2) — 이 세션의 AI 가 **내 승인 없이** 만들 수 있는 맥락의 최대 공개범위.
     //  모드(읽기전용/인코그니토)와 직교한다: 모드는 '쓰나 마나', 이건 '쓴다면 누구에게 보이게'.
     //  기본은 '자동' — 실행 위치 폴더를 따른다(프로젝트 폴더면 그 프로젝트 범위, 그 밖은 전체 공개).
@@ -201,38 +196,24 @@ function openTermCreateForm(cfg, view, onCreated, opts) {
         { v: 'audience', t: '프로젝트', d: '그 팀만 봅니다' },
         { v: 'private', t: '나만', d: '나만 봅니다' },
     ];
-    const writeVisBtns = [];
-    // 카드 언어는 '라이블리 모드'(modeSeg)와 **같은 클래스**를 쓴다(#1145) — 종전의 term-seg-item/-t/-d/.on 은
-    //  CSS 에 정의가 아예 없어 스타일이 하나도 안 먹었다(맨 버튼 4개). 4택도 모드와 같은 한 줄(term-seg 기본 flex:1).
-    const writeVisSeg = el('div', { class: 'term-seg' }, ...writeVisOpts.map((o) => {
-        const b = el('button', { class: 'term-seg-btn', type: 'button' }, el('span', { class: 'term-seg-txt' }, el('span', { class: 'term-seg-lbl', text: o.t }), el('span', { class: 'term-seg-sub', text: o.d })), el('span', { class: 'term-seg-check' }));
-        b.onclick = (e) => {
-            e.preventDefault();
-            if (writeVisVal === o.v)
-                return;
-            writeVisVal = o.v;
-            writeVisBtns.forEach((c, i) => c.classList.toggle('active', writeVisOpts[i].v === writeVisVal));
-            advSummary();
-        };
-        if (o.v === writeVisVal)
-            b.classList.add('active');
-        writeVisBtns.push(b);
-        return b;
-    }));
+    const writeVisSel = el('select', { class: 'term-input' }, ...writeVisOpts.map((o) => el('option', { value: o.v }, o.t + ' — ' + o.d)));
+    writeVisSel.value = writeVisVal;
+    writeVisSel.addEventListener('change', () => { writeVisVal = writeVisSel.value; advSummary(); });
     // 읽기전용·인코그니토면 기록 범위는 **고를 수 없다**(#1145) — readOnly 는 쓰기 툴이 소거되고(capabilities/index.ts)
     //  incognito 는 라이블리 접근 자체가 막히므로, '쓴다면 누구에게 보이게'라는 이 축은 그때 아무 효과가 없다.
     //  효과 없는 컨트롤을 남겨두면 사람은 그게 먹는다고 믿는다 — 자리에 이유를 적어 잠근다.
     const writeVisHost = el('div', {});
     function writeVisLocked() { return modeVal !== 'normal'; }
     function syncWriteVis() {
+        writeVisSel.disabled = writeVisLocked();
         if (writeVisLocked()) {
-            writeVisHost.replaceChildren(el('div', { class: 'term-lock-note' }, el('span', { text: '🔒' }), el('span', { text: '읽기전용·인코그니토에서는 라이블리에 기록하지 않으므로 기록 범위를 고르지 않습니다.' })));
+            writeVisHost.replaceChildren(writeVisSel, el('div', { class: 'caption', text: '이 모드에서는 기록하지 않아 고를 수 없습니다.' }));
         }
         else
-            writeVisHost.replaceChildren(writeVisSeg);
+            writeVisHost.replaceChildren(writeVisSel);
         advSummary();
     }
-    const writeVisField = el('div', {}, fieldInfo('기록 범위', '이 세션의 AI 가 **내 승인 없이** 남길 수 있는 기록의 최대 공개 범위입니다.\n\n· **자동** — 실행 폴더를 따릅니다. 프로젝트 폴더에서 열었으면 그 프로젝트 범위가 되고, 그 밖에서 열었으면 전체 공개가 됩니다.\n· **전체 공개** — 조직 누구나 볼 수 있게 남깁니다.\n· **프로젝트** — 그 프로젝트를 볼 수 있는 사람만 볼 수 있게 남깁니다.\n· **나만** — 나만 볼 수 있게 남깁니다.\n\n「라이블리 모드」가 **쓸지 말지**를 정한다면, 이 항목은 **쓴다면 누구에게 보이게 할지**를 정합니다.\n\n읽기전용·인코그니토를 고르면 이 항목은 잠깁니다 — 그 모드에서는 애초에 기록하지 않습니다.', writeVisHost));
+    const writeVisField = el('div', { style: 'flex:1 1 150px;min-width:0' }, fieldInfo('기록 범위', '이 세션의 AI 가 **내 승인 없이** 남길 수 있는 기록의 최대 공개 범위입니다.\n\n· **자동** — 실행 폴더를 따릅니다. 프로젝트 폴더에서 열었으면 그 프로젝트 범위가 되고, 그 밖에서 열었으면 전체 공개가 됩니다.\n· **전체 공개** — 조직 누구나 볼 수 있게 남깁니다.\n· **프로젝트** — 그 프로젝트를 볼 수 있는 사람만 볼 수 있게 남깁니다.\n· **나만** — 나만 볼 수 있게 남깁니다.\n\n「라이블리 모드」가 **쓸지 말지**를 정한다면, 이 항목은 **쓴다면 누구에게 보이게 할지**를 정합니다.\n\n읽기전용·인코그니토를 고르면 이 항목은 잠깁니다 — 그 모드에서는 애초에 기록하지 않습니다.', writeVisHost));
     // 실행(AI)·모델·추론강도 — 짧은 드롭다운 셋이라 한 줄에 나란히 둔다(#1145).
     //  ⚠ flagsBox 의 flex-direction 을 인라인으로 주는 이유는 그 정의부 주석 참조(index.html 인라인 style).
     const presetBody = el('div', { class: 'term-preset-body', 'data-tour': 'model', style: 'margin-top:0' }, el('div', { class: 'term-preset-row', style: 'display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start' }, el('div', { 'data-tour': 'harness', style: 'flex:1 1 120px;min-width:0' }, field('실행 (AI)', harnessSel)), flagsBox), profileNoteEl(cfg));
@@ -319,14 +300,13 @@ function openTermCreateForm(cfg, view, onCreated, opts) {
             else
                 pickerPath = s.subpath;
         }
-        if (s.mode && modeBtns[s.mode]) {
+        if (s.mode && modeOpts.some((m) => m.key === s.mode)) {
             modeVal = s.mode;
-            for (const k in modeBtns)
-                modeBtns[k].classList.toggle('active', k === modeVal);
+            modeSel.value = modeVal;
         }
         if (writeVisOpts.some((o) => o.v === (s.writeVis || ''))) {
             writeVisVal = s.writeVis || '';
-            writeVisBtns.forEach((c, i) => c.classList.toggle('active', writeVisOpts[i].v === writeVisVal));
+            writeVisSel.value = writeVisVal;
         }
     }
     // 작업 폴더 = 선택한 루트(공유/개인) 안을 드롭다운으로 재귀 탐색.
@@ -396,19 +376,28 @@ function openTermCreateForm(cfg, view, onCreated, opts) {
         { key: 'local', ico: '💻', lbl: '내 PC에서 열기', sub: '실행 명령을 알려드립니다' },
     ];
     const whereBtns = {};
-    const whereSeg = el('div', { class: 'term-seg' }, ...whereOpts.map((w) => {
-        const b = el('button', { class: 'term-seg-btn' + (w.key === openWhere ? ' active' : ''), type: 'button' }, el('span', { class: 'term-seg-ico', text: w.ico }), el('span', { class: 'term-seg-txt' }, el('span', { class: 'term-seg-lbl', text: w.lbl }), el('span', { class: 'term-seg-sub', text: w.sub })), el('span', { class: 'term-seg-check' }));
-        b.onclick = () => {
+    // 이 2택은 폼 전체를 갈아끼우므로 **다른 필드보다 위계가 높아야 한다**(#1145).
+    //  두 가지 모양을 만들어 두고 상수 하나로 고른다 — 바꾸고 싶으면 이 값만 'tabs' 로:
+    //   · 'pill'(현재) — 모달 제목 줄의 pill 세그먼트. 가장 짧다(모달 −77px). 한 번 고르면 잘 안 바꾸는 사람 기준.
+    //   · 'tabs'      — 제목 아래 밑줄 탭(.seg-tabs 재사용). 발견성이 높고 좁은 폭에서 헤더가 안 접힌다.
+    const WHERE_UI = 'pill';
+    const mkWhereBtn = (w, cls, body) => {
+        const b = el('button', { class: cls + (w.key === openWhere ? (cls === 'where-pill-btn' ? ' on' : ' active') : ''), type: 'button' }, ...body);
+        b.onclick = (e) => {
+            e.preventDefault();
             if (openWhere === w.key)
                 return;
             openWhere = w.key;
             for (const k in whereBtns)
-                whereBtns[k].classList.toggle('active', k === openWhere);
+                whereBtns[k].classList.toggle(cls === 'where-pill-btn' ? 'on' : 'active', k === openWhere);
             applyWhere();
         };
         whereBtns[w.key] = b;
         return b;
-    }));
+    };
+    const whereSeg = WHERE_UI === 'pill'
+        ? el('div', { class: 'where-pill' }, ...whereOpts.map((w) => mkWhereBtn(w, 'where-pill-btn', [el('span', { text: w.ico + ' ' + (w.key === 'web' ? '웹' : '내 PC') })])))
+        : el('div', { class: 'seg-tabs where-tabs' }, ...whereOpts.map((w) => mkWhereBtn(w, 'where-tab-btn', [el('span', { text: w.ico + '  ' + w.lbl })])));
     // 내 PC 안내 — `lively run <프로젝트번호|폴더>` 한 줄. work.mjs 가 공유폴더 pull·레포·마커·실행까지 한다.
     // ⚠ 인자 규약(kit/cli/lively.mjs:1268 · kit/setup/work.mjs:47): `lively run <프로젝트#>` 는 work.mjs 로 가고
     //  **숫자 id 만** 받는다(공유폴더 pull·레포·마커까지 자동). 프로젝트가 없으면 인자 없이 `lively run` —
@@ -428,9 +417,10 @@ function openTermCreateForm(cfg, view, onCreated, opts) {
     }), el('span', { class: 'caption', text: "'lively: command not found' 가 나오면 아직 설치 전이에요 — [사용 가이드 ▸ 내 AI 세션 생성] 을 먼저 따라 하세요." })));
     // 고급 설정 안(#1145) — 기본 화면엔 '이름·어디서·초대'만 두고, 나머지는 이 블록에 접어 둔다.
     //  실행 위치·라이블리 모드·기록 범위·실행(AI)/모델/추론강도·자동 승인이 여기 들어간다.
-    const advBody = el('div', { class: 'term-adv-body', hidden: '' }, el('div', { 'data-tour': 'node' }, fieldInfo('실행 위치', 'AI 가 실제로 돌아가는 컴퓨터입니다.\n\n· **중앙 컴퓨터**(기본) — 내 노트북을 꺼도 세션은 계속 실행됩니다.\n· **내 PC** — 노드로 등록해 두었다면 골라서 그 컴퓨터에서 실행할 수 있습니다.', nodeSel)), // #869 중앙 컴퓨터/등록 노드 — 등록 노드가 없으면 '중앙 컴퓨터(기본)' 한 줄만 보인다(submit 값은 기존과 동일 '').
-    modeField, // 라이블리 모드 — 카드 언어(term-seg)
-    writeVisField, // 기록 범위 — 모드가 읽기전용·인코그니토면 잠긴다(syncWriteVis)
+    //  드롭다운 6개를 2줄 격자로 — 실행 위치·모드·기록 범위 / 실행(AI)·모델·추론강도. 한 가지 언어로 통일한다(#1145).
+    const advBody = el('div', { class: 'term-adv-body', hidden: '' }, el('div', { class: 'term-adv-row' }, el('div', { 'data-tour': 'node', style: 'flex:1 1 150px;min-width:0' }, fieldInfo('실행 위치', 'AI 가 실제로 돌아가는 컴퓨터입니다.\n\n· **중앙 컴퓨터**(기본) — 내 노트북을 꺼도 세션은 계속 실행됩니다.\n· **내 PC** — 노드로 등록해 두었다면 골라서 그 컴퓨터에서 실행할 수 있습니다.', nodeSel)), // #869 등록 노드가 없으면 '중앙 컴퓨터(기본)' 한 줄만 보인다(submit 값은 기존과 동일 '').
+    modeField, // 라이블리 모드
+    writeVisField), // 기록 범위 — 모드가 읽기전용·인코그니토면 잠긴다(syncWriteVis)
     presetBody, el('div', { class: 'term-checks', 'data-tour': 'options' }, autoWrap));
     const advOpen = () => { advBody.removeAttribute('hidden'); advCaret.textContent = '▾'; };
     advToggle.onclick = () => {
@@ -467,7 +457,9 @@ function openTermCreateForm(cfg, view, onCreated, opts) {
     // 폼 순서(#1145 안 C+1) — 어떻게(웹/내 PC) → 무엇(이름) → 어디(폴더) → 누구(초대) → 그 밖(고급 설정) → 기억 → 만들기.
     //  온보딩 투어(#517) 앵커: label → folder → invite → preset(=고급 설정, 열리면 node·options 도 그 안에) → create.
     applyWhere();
-    const back = overlay(project ? '새 AI 세션 · ' + (project.name || ('프로젝트 ' + project.id)) : '새 AI 세션', fieldInfo('어떻게 열까요', 'AI 세션을 **어디서 돌릴지** 고릅니다.\n\n· **웹에서 열기** — 회사 중앙 컴퓨터에서 돌아갑니다. 설치가 필요 없고, 내 노트북을 꺼도 계속 실행됩니다.\n· **내 PC에서 열기** — 내 컴퓨터에서 돌립니다. 붙여넣을 명령 한 줄을 알려드립니다(라이블리 설치 필요).', whereSeg), bodyHost, el('div', { class: 'ov-actions' }, el('button', { class: 'btn btn-primary', 'data-tour': 'create', text: '생성하기', onclick: async (ev) => {
+    const back = overlay(project ? '새 AI 세션 · ' + (project.name || ('프로젝트 ' + project.id)) : '새 AI 세션', 
+    // 'tabs' 모드일 때만 본문 맨 위에 둔다 — 'pill' 은 아래에서 헤더(제목 줄)로 옮긴다.
+    WHERE_UI === 'tabs' ? whereSeg : null, bodyHost, el('div', { class: 'ov-actions' }, el('button', { class: 'btn btn-primary', 'data-tour': 'create', text: '생성하기', onclick: async (ev) => {
             if (openWhere === 'local') {
                 toast('위 명령을 내 PC 터미널에 붙여넣어 실행하세요');
                 return;
@@ -513,6 +505,15 @@ function openTermCreateForm(cfg, view, onCreated, opts) {
                 toast('생성 실패 — ' + e.message, true);
             }
         } })));
+    // pill 모드 — 제목 줄(.ov-head)의 [닫기] 앞에 끼운다. overlay() 가 헤더를 만들어 주므로 만든 뒤 옮긴다.
+    //  헤더에 두면 가장 짧지만(모달 −77px) 좁은 폭에서 헤더가 2줄로 접힌다 — CSS 가 그때 전체폭으로 떨어뜨린다.
+    if (WHERE_UI === 'pill') {
+        const head = back.querySelector('.ov-head');
+        const closeBtn = head?.querySelector('.btn');
+        if (head)
+            head.insertBefore(whereSeg, closeBtn || null);
+    }
+    return back;
 }
 // 노드 관리(#869) — 내 PC·서버를 노드로 연결(상태·추가안내·토큰회전·활성토글·삭제). 등록 자체는 그 머신에서
 //  `lively node --daemon` 이 self-register 하므로, 여기선 '추가하는 법' 안내 + 이미 붙은 노드의 관리를 제공한다.
