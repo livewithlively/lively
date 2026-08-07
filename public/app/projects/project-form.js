@@ -286,7 +286,7 @@ export function openProjectV2Form(reload, prefill) {
         await listPick.ready;
         const listChoice = listPick.getSelected();
         if (!listChoice.ok) {
-            toast('리스트를 선택하세요 — 미분류로 두려면 ‘기타(미분류)’를 고르세요', true);
+            toast('리스트를 선택하세요 — 프로젝트는 반드시 리스트에 들어갑니다', true);
             return;
         }
         saveBtn.disabled = true;
@@ -482,7 +482,8 @@ function listPicker(selectedListId) {
             opts.push(el('option', { value: '', text: loaded.length ? '리스트를 선택하세요…' : '리스트 없음 — 미분류로 생성' }));
         for (const l of loaded)
             opts.push(el('option', { value: 'L' + l.id, text: l.name }));
-        opts.push(el('option', { value: '__none__', text: '기타 (미분류)' }));
+        // #1098 — '기타(미분류)' 제거. 이 탈출구로 만들어진 프로젝트가 어느 리스트에도 안 잡혀 목록·필터에서 떠돌았다.
+        //  리스트가 하나도 없는 최초 부트스트랩만 미분류 생성을 허용한다(아래 getSelected).
         opts.push(el('option', { value: '__new__', text: '＋ 새 리스트 만들기…' }));
         sel.replaceChildren(...opts);
         sel.value = has ? ('L' + preferId) : '';
@@ -507,8 +508,6 @@ function listPicker(selectedListId) {
         ready,
         getSelected: () => {
             const v = sel.value;
-            if (v === '__none__')
-                return { ok: true, listId: null };
             if (v.charAt(0) === 'L')
                 return { ok: true, listId: Number(v.slice(1)) };
             // placeholder('') — 영역이 있으면 미선택(차단), 하나도 없으면 미분류 허용(부트스트랩).
