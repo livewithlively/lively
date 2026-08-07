@@ -27,6 +27,7 @@ import { dashTourStep1, fillSessions } from './widget-sessions.js';
 import { fillFolders } from './widget-folders.js';
 import { fillNotifications } from './widget-notifications.js';
 import { dashModal, fillActivity, fillMyTasks, fillReviewQueue } from './widget-tasks-review-log.js';
+import { fillLivelyLog } from './widget-lively-log.js';
 
 // ── 위젯 레지스트리 + 배치(#1232) — '대시보드 편집' 모달이 이 표 하나만 보고 화면을 조립한다. ──
 //  위젯을 새로 만들면 여기에 한 줄 + fill 매핑(renderMyDashboard 의 위젯별 호출)만 추가하면 편집 모달에 자동으로 나온다.
@@ -43,6 +44,8 @@ const DASH_WIDGETS = [
   { key: 'log', title: '팀 작업 로그', desc: '회사 전체의 사람·AI 작업 기록', col: 3, row: 5 },
   // ↓ 기본 숨김 — 조직이 그 기능을 실제로 쓸 때만 값이 찬다(안 쓰면 빈 칸). 편집에서 [표시]로 꺼내 쓴다.
   //   검토 대기: 검토 게이트를 켠 조직에서만 / 내 할 일: 태스크에 담당자·마감을 쓰는 팀에서만.
+  //   내 라이블리 사용 내역: 기록이 쌓이기 전(설치 직후)이나 라이블리 도구를 안 쓰는 사람에겐 빈 칸이라 off.
+  { key: 'lvlog', title: '내 라이블리 사용 내역', desc: '내 답변의 근거가 된 조직 맥락 · 내가 없는 동안 한 일', col: 3, row: 5, off: true },
   { key: 'review', title: '검토 대기 지식', desc: '승인해야 검색·세션주입에 반영돼요', col: 3, row: 4, off: true },
   { key: 'task', title: '내 할 일', desc: '내가 담당인 태스크 — 마감 임박순', col: 5, row: 4, off: true },
 ];
@@ -166,6 +169,7 @@ async function renderMyDashboard(view) {
   if (zones.fold) fillFolders(zones.fold);
   if (zones.log) fillActivity(zones.log);
   if (zones.review) fillReviewQueue(zones.review);
+  if (zones.lvlog) fillLivelyLog(zones.lvlog);
   fillOnboarding(obSlot);
   if (!zones.proj && !zones.sess) drawSummary(); // 두 위젯을 다 숨기면 요약할 게 없다 — '불러오는 중…'을 남기지 않는다
 }

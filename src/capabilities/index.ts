@@ -42,6 +42,7 @@ import { previewEnvCapabilities } from "./preview-env.js";
 import { stackProfileCapabilities } from "./stack-profiles.js";
 import { delegateCapabilities } from "./delegate.js";
 import { toolUsageCapabilities } from "./tool-usage.js";
+import { livelyLogCapabilities } from "./lively-log.js";
 import { recallCapabilities } from "./recall.js";
 import { memberSecretCapabilities } from "./member-secret.js";
 import { awsCredentialCapabilities } from "./aws-credentials.js";
@@ -94,6 +95,7 @@ const all: Capability[] = [
   ...stackProfileCapabilities, // '어떻게 띄우나' 정의(stack_profile_list/set/delete) — 조회는 code, 정의는 admin(start_cmd = 셸 명령).
   ...delegateCapabilities, // P2(#869): 작업 위탁 — delegate_run/status/list/cancel(context scope, MCP+REST /api/ui/delegate*). 예상 소모량 신고→스케줄러가 노드 리소스 대조 배치, 결과는 .lively-task/<id>/.
   ...toolUsageCapabilities, // #318: MCP 호출 통계 집계(tool_usage_stats) — admin scope, REST 전용(/api/ui/tool-usage). mcp_call_log 를 요약/툴별/하네스/일별/최근으로 집계(관리탭 대시보드).
+  ...livelyLogCapabilities, // #1570: 내 라이블리 사용 내역(my_lively_log) — scope=null(본인 한정), REST 전용(/api/ui/me/lively-log). 같은 mcp_call_log 를 "나에게 무슨 이득이 됐나"로 읽는 개인 서사(대시보드 위젯).
   ...recallCapabilities, // #637: 컨텍스트 라우팅(recall_route) — memory scope, REST 전용(POST /api/ui/recall/route). 작업맥락(프롬프트+최근Read경로)→도메인 HUB·leaf 지식 포인터. 훅 전용(주입은 훅이 포맷).
   // P5/P4(#746) db 접근 감사(db_audit_*)·raw-PII 언마스크 grant(db_unmask_grant_*)는 **Enterprise 표면**이다.
   //  코어는 src/ee 를 정적으로 모르므로 여기 목록에 없고, EE 적재 시 addEnterpriseCapabilities 로 합류한다.

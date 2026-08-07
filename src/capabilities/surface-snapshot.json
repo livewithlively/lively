@@ -3377,6 +3377,16 @@
   "input_hash": "1849d1b4b11d0a84"
  },
  {
+  "name": "my_lively_log",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/lively-log"
+  ],
+  "input_hash": "35575f03cbbad924"
+ },
+ {
   "name": "recall_route",
   "scope": "memory",
   "mcp": false,

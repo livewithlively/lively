@@ -211,6 +211,18 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-rvw-cat { flex: none; max-width: 30%; font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dash-rvw-when { flex: none; font-size: 11.5px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
 
+/* ── 내 라이블리 사용 내역(#1570) — 사건 한 줄 = 한 행. 라이블리가 실제로 한 일만 적는다. ──
+   §0.5 채색 예산: 자기홍보로 읽히지 않게 강조색을 쓰지 않는다(무채 + 작은 회색 보조). 근거는 사실이지
+   배지가 아니라는 원칙(widget-lively-log.ts 머리주석 ①)이 색 선택까지 규정한다. */
+.dash-lvl { display: flex; flex-direction: column; }
+.dash-lvl-lead { padding: 8px 8px 2px; font-size: 13px; color: var(--ink-sub); line-height: 1.5; }
+.dash-lvl-row { gap: 8px; min-height: 32px; padding: 5px 8px; }
+.dash-lvl-main { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; overflow: hidden; }
+.dash-lvl-title { min-width: 0; font-size: 13.5px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-lvl-by { flex: none; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.dash-lvl-when { flex: none; font-size: 11.5px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+.dash-lvl-foot { padding: 8px; font-size: 11.5px; color: var(--muted-2); }
+
 /* ── 대시보드 편집(#1232) — 창 자체가 대시보드의 축소판: 3열 + 아래 '숨긴 위젯' 트레이 ── */
 .dash-lay { display: flex; flex-direction: column; gap: 12px; }
 .dash-lay-hint { margin: 0; font-size: 13px; line-height: 1.6; color: var(--muted); }
