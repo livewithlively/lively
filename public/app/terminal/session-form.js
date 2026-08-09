@@ -112,7 +112,11 @@ function openTermCreateForm(cfg, view, onCreated, opts) {
     const roots = cfg.roots || [];
     const harnesses = cfg.harnesses || [];
     const prefs = termCreatePrefs();
+    // 프로젝트에서 열었으면 이름을 **프로젝트 제목으로 프리필**한다(#1145) — 그대로 [생성하기] 를 눌러 끝낼 수 있게.
+    //  (데모는 호출부가 '이 세션이 하는 일' 예시를 projectName 으로 넘긴다 — 투어가 가르치려는 작명이 그거다, #1009.)
     const labelI = el('input', { class: 'term-input', type: 'text', placeholder: '예: 랜딩 카피 수정' });
+    if (project && project.name)
+        labelI.value = project.name;
     // #853 작업 위치 = 공유/개인 2택 → 드롭다운 대신 세그먼트 토글(둘 중 하나를 명확히 고르게). 아래 '폴더'는 이 안의 하위 폴더.
     let rootKey = (roots[0] && roots[0].key) || 'personal';
     const rootBtns = {};
