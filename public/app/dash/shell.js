@@ -107,7 +107,17 @@ function dashLayout() {
             continue;
         }
         const ci = DASH_LAYOUT_DEFAULT.findIndex((c) => c.includes(w.key));
-        cols[ci < 0 ? 0 : ci].push(w.key);
+        const target = cols[ci < 0 ? 0 : ci];
+        // 자리만이 아니라 **순서까지** 기본 배치를 따른다(#1570) — 예전엔 열 끝에 push 라, 기본 배치에서 위인
+        //  새 위젯(lvlog: 3열 '상단')이 기존 저장 배치 사용자에겐 맨 아래로 들어갔다. 기본 배치에서 이 위젯보다
+        //  뒤인 위젯이 그 열에 있으면 그 앞에 끼운다 — "새 위젯은 기본 자리로 되살린다"의 순서 완성판.
+        const def = ci < 0 ? [] : DASH_LAYOUT_DEFAULT[ci];
+        const after = def.slice(def.indexOf(w.key) + 1);
+        const at = target.findIndex((k) => after.includes(k));
+        if (at < 0)
+            target.push(w.key);
+        else
+            target.splice(at, 0, w.key);
     }
     return { cols, hidden };
 }
