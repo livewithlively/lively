@@ -27,6 +27,7 @@ import { dashTourStep1, fillSessions } from './widget-sessions.js';
 import { fillFolders } from './widget-folders.js';
 import { fillNotifications } from './widget-notifications.js';
 import { dashModal, fillActivity, fillMyTasks, fillReviewQueue } from './widget-tasks-review-log.js';
+import { fillLivelyLog, fillLivelyLogTimeline } from './widget-lively-log.js';
 // ── 위젯 레지스트리 + 배치(#1232) — '대시보드 편집' 모달이 이 표 하나만 보고 화면을 조립한다. ──
 //  위젯을 새로 만들면 여기에 한 줄 + fill 매핑(renderMyDashboard 의 위젯별 호출)만 추가하면 편집 모달에 자동으로 나온다.
 //  col  = 열 폭 기본 가중치(그 열 위젯들의 최댓값이 열 fr) — 기본 배치에서 5:4:3 = 예전 프리셋 그대로.
@@ -42,13 +43,18 @@ const DASH_WIDGETS = [
     { key: 'log', title: '팀 작업 로그', desc: '회사 전체의 사람·AI 작업 기록', col: 3, row: 5 },
     // ↓ 기본 숨김 — 조직이 그 기능을 실제로 쓸 때만 값이 찬다(안 쓰면 빈 칸). 편집에서 [표시]로 꺼내 쓴다.
     //   검토 대기: 검토 게이트를 켠 조직에서만 / 내 할 일: 태스크에 담당자·마감을 쓰는 팀에서만.
+    //   내 라이블리 사용 내역(#1570 시안 A 확정): 기본 배치 3열 상단 — 사용자 결정(2026-08-07).
+    { key: 'lvlog', title: '내 라이블리 사용 내역', desc: '주간 브리핑 — 근거로 쓴 지식·활동 구성', col: 3, row: 5 },
+    //   라이블리 로그(#1570 시안 D): 감사 기록을 시간순 그대로 — 원하는 사람만 편집에서 꺼낸다.
+    { key: 'lvlogd', title: '라이블리 로그', desc: '라이블리가 한 일 시간순 — 감사 기록을 쉬운 말로', col: 3, row: 5, off: true },
     { key: 'review', title: '검토 대기 지식', desc: '승인해야 검색·세션주입에 반영돼요', col: 3, row: 4, off: true },
     { key: 'task', title: '내 할 일', desc: '내가 담당인 태스크 — 마감 임박순', col: 5, row: 4, off: true },
 ];
 const DASH_W = Object.fromEntries(DASH_WIDGETS.map((w) => [w.key, w]));
 // 기본 배치 = 1단계 프리셋 **그대로**(좌: 내 프로젝트+팀 공유 폴더 / 중: 최신 알림+내 AI 세션 / 우: 팀 작업 로그).
 //  '기본 배치로 되돌리기'가 돌아오는 자리이자, 새 위젯이 처음 놓이는 자리(off 위젯은 여기 없고 숨김으로 간다).
-const DASH_LAYOUT_DEFAULT = [['proj', 'fold'], ['notif', 'sess'], ['log']];
+//  #1570(2026-08-07 사용자 결정): 3열 = 위 '내 라이블리 사용 내역', 아래 '팀 작업 로그'.
+const DASH_LAYOUT_DEFAULT = [['proj', 'fold'], ['notif', 'sess'], ['lvlog', 'log']];
 const DASH_COL_LABELS = ['왼쪽 열', '가운데 열', '오른쪽 열'];
 // ⚠ 배치 정규화(아래 두 함수)는 위 레지스트리(DASH_WIDGETS/DASH_W/DASH_LAYOUT_DEFAULT)를 읽어야 해서 여기 산다.
 //  저장 키·버전·writer(DASH_LAYOUT_KEY·DASH_LAYOUT_VER·dashSaveLayout·dashResetLayout)는 dash/prefs.ts 에 있다.
@@ -101,7 +107,17 @@ function dashLayout() {
             continue;
         }
         const ci = DASH_LAYOUT_DEFAULT.findIndex((c) => c.includes(w.key));
-        cols[ci < 0 ? 0 : ci].push(w.key);
+        const target = cols[ci < 0 ? 0 : ci];
+        // 자리만이 아니라 **순서까지** 기본 배치를 따른다(#1570) — 예전엔 열 끝에 push 라, 기본 배치에서 위인
+        //  새 위젯(lvlog: 3열 '상단')이 기존 저장 배치 사용자에겐 맨 아래로 들어갔다. 기본 배치에서 이 위젯보다
+        //  뒤인 위젯이 그 열에 있으면 그 앞에 끼운다 — "새 위젯은 기본 자리로 되살린다"의 순서 완성판.
+        const def = ci < 0 ? [] : DASH_LAYOUT_DEFAULT[ci];
+        const after = def.slice(def.indexOf(w.key) + 1);
+        const at = target.findIndex((k) => after.includes(k));
+        if (at < 0)
+            target.push(w.key);
+        else
+            target.splice(at, 0, w.key);
     }
     return { cols, hidden };
 }
@@ -187,6 +203,10 @@ async function renderMyDashboard(view) {
         fillActivity(zones.log);
     if (zones.review)
         fillReviewQueue(zones.review);
+    if (zones.lvlog)
+        fillLivelyLog(zones.lvlog);
+    if (zones.lvlogd)
+        fillLivelyLogTimeline(zones.lvlogd);
     fillOnboarding(obSlot);
     if (!zones.proj && !zones.sess)
         drawSummary(); // 두 위젯을 다 숨기면 요약할 게 없다 — '불러오는 중…'을 남기지 않는다
