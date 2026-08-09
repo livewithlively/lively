@@ -494,34 +494,78 @@ function renderContainer(type, rest, bodyLines) {
             }
             const stage = el('div', { class: 'md-shot-stage' }, el('img', { class: 'md-shot-img', src: attrs.src || '', alt: attrs.alt || '화면 스크린샷', loading: 'lazy' }));
             const fig = el('figure', { class: 'md-shot' }, stage);
-            const hls = [], marks = [], rows = [];
+            const hits = [], marks = [], rows = [];
+            // 스포트라이트 구멍은 하나(v2.2) — 구역을 오가면 딤은 유지된 채 구멍이 미끄러진다(꺼졌다 켜지는
+            //  번쩍임 제거). 진입은 짧은 머뭇(의도 판정) 뒤에 켜고, 이탈은 유예를 두고 끈다 — 마우스가 스쳐
+            //  지나가거나 구역 사이 틈을 건널 때 딤이 펄럭이지 않게.
+            const hl = el('span', { class: 'md-shot-hl', 'aria-hidden': 'true' });
             let sticky = -1; // 클릭 고정된 항목(없으면 -1) — hover 는 고정이 없을 때만 반영
-            const setOn = (i) => {
-                stage.classList.toggle('has-on', i >= 0);
-                hls.forEach((h, k) => h.classList.toggle('is-on', k === i));
-                marks.forEach((m, k) => m.classList.toggle('is-on', k === i));
-                rows.forEach((r, k) => r.classList.toggle('is-on', k === i));
+            let active = -1;
+            let pend = 0, clr = 0;
+            const place = (s0) => {
+                hl.style.left = s0.l + '%';
+                hl.style.top = s0.t + '%';
+                hl.style.width = s0.w + '%';
+                hl.style.height = s0.h + '%';
             };
-            const enter = (i) => { if (sticky < 0)
-                setOn(i); };
-            const leave = () => { if (sticky < 0)
-                setOn(-1); };
+            const setOn = (i) => {
+                clearTimeout(pend);
+                clearTimeout(clr);
+                pend = clr = 0;
+                const ok = i >= 0 && items[i] && Number.isFinite(items[i].l);
+                if (ok) {
+                    if (active < 0) {
+                        hl.style.transition = 'none';
+                        place(items[i]);
+                        void hl.offsetWidth;
+                        hl.style.transition = '';
+                    }
+                    else
+                        place(items[i]); // 켜진 채 이동 → CSS 가 구멍을 미끄러뜨린다
+                }
+                hl.classList.toggle('is-on', ok);
+                active = ok ? i : -1;
+                stage.classList.toggle('has-on', ok);
+                marks.forEach((m, k) => m.classList.toggle('is-on', k === active));
+                rows.forEach((r, k) => r.classList.toggle('is-on', k === active));
+            };
+            const enter = (i) => {
+                if (sticky >= 0)
+                    return;
+                clearTimeout(clr);
+                clr = 0; // 유예 중 재진입 — 딤을 끊지 않는다
+                if (active === i) {
+                    clearTimeout(pend);
+                    pend = 0;
+                    return;
+                }
+                clearTimeout(pend);
+                pend = setTimeout(() => setOn(i), active >= 0 ? 60 : 130); // 첫 점등은 머뭇, 이동은 빠르게
+            };
+            const leave = () => {
+                if (sticky >= 0)
+                    return;
+                clearTimeout(pend);
+                pend = 0;
+                clearTimeout(clr);
+                clr = setTimeout(() => setOn(-1), 200); // 이탈 유예 — 틈을 건너는 동안 유지
+            };
             const toggle = (i) => { sticky = sticky === i ? -1 : i; setOn(sticky); };
             const wire = (i) => ({ onmouseenter: () => enter(i), onmouseleave: leave, onclick: () => toggle(i),
                 onfocus: () => enter(i), onblur: leave });
             items.forEach((s0, i) => {
                 if (![s0.l, s0.t, s0.w, s0.h].every((v) => Number.isFinite(v)))
                     return;
-                // 하이라이트 영역 자체가 포인터 표적(#1107 v2) — 이미지 위에서 구역을 직접 지나가거나 탭해도 밝혀진다.
+                // 구역 자체가 포인터 표적(#1107 v2) — 보이지 않는 히트 영역으로 이미지 위 직접 탐색·탭을 받는다.
                 //  키보드·스크린리더 동선은 범례 버튼이 전담하므로 여긴 aria-hidden 포인터 전용으로 둔다.
-                hls.push(el('span', { class: 'md-shot-hl', 'aria-hidden': 'true',
+                hits.push(el('span', { class: 'md-shot-hit', 'aria-hidden': 'true',
                     style: `left:${s0.l}%; top:${s0.t}%; width:${s0.w}%; height:${s0.h}%`, ...wire(i) }));
                 // 마커는 영역 좌상단 모서리에 걸친다 — 이미지 가장자리에 붙은 영역은 잘리지 않게 살짝 안쪽으로.
                 marks.push(el('button', { type: 'button', class: 'md-shot-marker', text: String(i + 1),
                     'aria-label': (i + 1) + '. ' + (s0.title || ''), style: `left:${Math.max(s0.l, 1.1)}%; top:${Math.max(s0.t, 1.6)}%`,
                     ...wire(i) }));
             });
-            stage.append(...hls, ...marks);
+            stage.append(...hits, hl, ...marks);
             if (attrs.caption || summary)
                 fig.append(el('figcaption', { class: 'md-shot-cap' }, el('span', { class: 'md-shot-capt' }, ...renderInline(attrs.caption ? String(attrs.caption).replace(/_/g, ' ') : summary)), items.length ? el('span', { class: 'md-shot-hint', 'aria-hidden': 'true', text: '화면이나 항목을 짚으면 그 영역만 밝혀집니다' }) : null));
             // 범례 — 번호와 1:1 로 묶인 부품 목록(2열 그리드). 짚으면 위 화면의 해당 영역이 밝혀진다.

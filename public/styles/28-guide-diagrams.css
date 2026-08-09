@@ -198,10 +198,15 @@ input.emb-num { width: 120px; flex: none; }
   background: var(--canvas); box-shadow: 0 1px 2px rgba(21,35,59,.04); line-height: 0; }
 .md-shot-img { width: 100%; height: auto; display: block; }
 /* 스포트라이트 — 영역 링(블루 2px) + 바깥 전체 딤(대형 box-shadow 한 장, overflow 로 클립).
-   영역 자체가 포인터 표적(#1107 v2) — 이미지 위에서 구역을 직접 지나가거나 탭해도 밝혀진다. */
-.md-shot-hl { position: absolute; z-index: 1; border-radius: 10px; opacity: 0; cursor: pointer;
-  box-shadow: 0 0 0 2px var(--blue), 0 0 0 9999px rgba(21, 35, 59, .38); transition: opacity var(--dur-base, 150ms) ease; }
+   구멍은 스테이지당 하나(v2.2): 구역을 오가면 딤은 그대로 두고 구멍이 미끄러진다 — 꺼짐/켜짐
+   번쩍임 없이 시선만 이동(guide-tour 글라이드와 동일). 좌표 전환은 JS(setOn)가 넣는다. */
+.md-shot-hl { position: absolute; z-index: 1; border-radius: 10px; opacity: 0; pointer-events: none;
+  box-shadow: 0 0 0 2px var(--blue), 0 0 0 9999px rgba(21, 35, 59, .38);
+  transition: opacity var(--dur-base, 150ms) ease, left var(--dur-slow, 250ms) ease, top var(--dur-slow, 250ms) ease,
+    width var(--dur-slow, 250ms) ease, height var(--dur-slow, 250ms) ease; }
 .md-shot-hl.is-on { opacity: 1; }
+/* 구역 히트 영역 — 보이지 않는 포인터 표적(이미지 위 직접 탐색·탭). 시각은 hl·마커가 담당한다. */
+.md-shot-hit { position: absolute; z-index: 1; cursor: pointer; }
 /* 번호 마커 — 유령 배지(백지 + 블루 숫자), 활성만 블루 채움. 데스크톱(hover)은 쉬는 상태에 아예 숨겨
    화면을 스크린샷 그대로 두고, 이미지를 만지거나 범례를 짚거나 첫 시연(is-demo)일 때만 떠오른다.
    터치(hover 없음)는 탭 표적이라 항상 노출 — 유령 톤이라 화면을 덜 가린다. */
