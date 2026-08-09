@@ -98,6 +98,15 @@ function dashLayout() {
                     hidden.push(k);
             cols[i] = cols[i].filter((k) => !DASH_W[k].off);
         }
+        // v4(#1570): '최신 알림' hidden 구제 — 알림 개편(#1571)의 과도기 상태(최신 알림→통합 인박스 대체, 곧 원복)를
+        //  연 브라우저에 notif 가 hidden 으로 저장돼 "숨긴 적 없는데 사라졌다"가 됐다. 한 번 되꺼낸다 — seen 에서도
+        //  빼서 아래 unseen 삽입이 기본 자리(가운데 열 상단)로 되살리게. 일부러 숨긴 사람은 이 한 번만 다시 보이고,
+        //  다시 숨기면 v4 로 저장돼 반복되지 않는다(v3 의 '검토 대기 되돌리기'와 같은 철학, 방향만 반대).
+        const ni = hidden.indexOf('notif');
+        if (ni >= 0) {
+            hidden.splice(ni, 1);
+            seen.delete('notif');
+        }
     }
     for (const w of DASH_WIDGETS) {
         if (seen.has(w.key))
