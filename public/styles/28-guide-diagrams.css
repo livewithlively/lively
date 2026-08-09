@@ -231,6 +231,8 @@ input.emb-num { width: 120px; flex: none; }
 .md-shot-cap { display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
   font-size: 12.5px; color: var(--muted-head); line-height: 1.5; }
 .md-shot-hint { flex: none; font-size: 12px; color: var(--muted-2); }
+/* 좁은 화면 — 힌트를 아래로 내린다(가로로 붙으면 캡션이 한 글자씩 접힌다). */
+@media (max-width: 700px) { .md-shot-cap { display: block; } .md-shot-hint { display: block; margin-top: 3px; } }
 /* 범례 — 번호와 1:1 부품 목록. 카드가 아니라 조용한 행(hover·활성 = 선택 행 틴트). */
 .md-shot-legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 20px; }
 .md-shot-part { display: flex; align-items: flex-start; gap: 11px; margin: 0; padding: 10px 12px; border: 0;
@@ -271,19 +273,24 @@ input.emb-num { width: 120px; flex: none; }
 .md-shotx-panel { padding: 16px 2px 4px; }
 .md-shotx-lead { margin: 0 0 16px; font-size: 14px; line-height: 1.65; color: var(--ink-sub); }
 .md-shotx-body { position: relative; }
-.md-shotx-body.is-wide { display: flex; flex-direction: column; gap: 26px; }
-.md-shotx-row { display: grid; grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr)); gap: 14px; align-items: start; }
-.md-shotx-body.is-tall { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 24px; align-items: start; }
-.md-shotx-col { display: flex; flex-direction: column; gap: 12px; }
+.md-shotx-body.is-wide { display: flex; flex-direction: column; gap: 30px; }
+/* 말풍선은 JS 가 실측으로 자리를 잡는다(짚는 지점을 따라가되 서로 밀어냄) — 행/열은 그 좌표계일 뿐. */
+.md-shotx-row { position: relative; }
+.md-shotx-body.is-tall { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 30px; align-items: start; }
+.md-shotx-col { position: relative; }
+.md-shotx-row .md-shotx-bl, .md-shotx-col .md-shotx-bl { position: absolute; left: 0; top: 0; }
+.md-shotx-col .md-shotx-bl { width: 100%; }
 /* 확대 크롭 — 같은 스크린샷을 background-position 으로 오려낸다(추가 자산 없음) */
 .md-shotx-crop { position: relative; border: 1px solid var(--line); border-radius: 9px; background-repeat: no-repeat;
   background-color: #fff; box-shadow: 0 1px 4px rgba(21, 35, 59, .06); }
 .md-shotx-body.is-wide .md-shotx-crop { width: 100%; }
 .md-shotx-body.is-tall .md-shotx-crop { height: 400px; max-height: 52vh; }
-.md-shotx-dot { position: absolute; width: 12px; height: 12px; border-radius: 999px; background: var(--blue);
-  box-shadow: 0 0 0 3px rgba(45, 107, 240, .22), inset 0 0 0 1.5px #fff; transform: translate(-50%, -50%);
-  cursor: default; transition: transform .15s ease, box-shadow .15s ease; z-index: 2; }
-.md-shotx-dot.is-hot { transform: translate(-50%, -50%) scale(1.35); box-shadow: 0 0 0 5px rgba(45, 107, 240, .3), inset 0 0 0 1.5px #fff; }
+/* 지점 표시는 속이 빈 고리 — 짚은 자리를 가리지 않고 테두리만 두른다(작은 버튼·글자 위에 놓여도 읽힌다). */
+.md-shotx-dot { position: absolute; width: 13px; height: 13px; border-radius: 999px; background: transparent;
+  border: 2.5px solid var(--blue); box-shadow: 0 0 0 1.5px rgba(255, 255, 255, .95), 0 0 0 3.5px rgba(45, 107, 240, .16);
+  transform: translate(-50%, -50%); cursor: default; transition: transform .15s ease, box-shadow .15s ease; z-index: 2; }
+.md-shotx-dot.is-hot { transform: translate(-50%, -50%) scale(1.3);
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, .95), 0 0 0 5px rgba(45, 107, 240, .28); }
 /* 말풍선 — 이름(굵게) + 한두 문장. 짝 지점을 짚으면 함께 밝아진다 */
 .md-shotx-bl { position: relative; padding: 10px 13px 11px 27px; border: 1px solid var(--line); border-radius: 9px;
   background: #fff; box-shadow: 0 1px 3px rgba(21, 35, 59, .05); transition: border-color .15s ease, box-shadow .15s ease; }
@@ -295,11 +302,13 @@ input.emb-num { width: 120px; flex: none; }
 .md-shotx-net { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
 .md-shotx-line { fill: none; stroke: rgba(45, 107, 240, .40); stroke-width: 1.4; transition: stroke .15s ease; }
 .md-shotx-line.is-hot { stroke: var(--blue); stroke-width: 2; }
+/* 좁은 화면 — 실측 배치를 끄고 평범한 세로 스택으로(선은 의미를 잃으므로 숨긴다). */
 @media (max-width: 700px) {
-  .md-shotx-row, .md-shotx-body.is-tall { grid-template-columns: 1fr; }
+  .md-shotx-body.is-tall { grid-template-columns: 1fr; }
   .md-shotx-body.is-wide { gap: 12px; }
   .md-shotx-body.is-tall .md-shotx-crop { height: auto; max-height: none; width: 100%; max-width: 360px; margin: 0 auto; }
-  /* 세로 스택에선 선이 의미를 잃는다 — 말풍선 이름이 대응을 대신한다 */
+  .md-shotx-row, .md-shotx-col { display: flex; flex-direction: column; gap: 10px; height: auto !important; }
+  .md-shotx-row .md-shotx-bl, .md-shotx-col .md-shotx-bl { position: static; width: auto !important; }
   .md-shotx-net { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {

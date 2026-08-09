@@ -672,32 +672,45 @@ function renderContainer(type, rest, bodyLines) {
                             style: `left:${((e0.x - l2) / w2 * 100).toFixed(2)}%; top:${((e0.y - t2) / h2 * 100).toFixed(2)}%` });
                         const b0 = el('div', { class: 'md-shotx-bl' }, el('span', { class: 'md-shotx-bn', 'aria-hidden': 'true' }), el('span', { class: 'md-shotx-bt' }, ...renderInline(e0.name)), e0.desc ? el('span', { class: 'md-shotx-bd' }, ...renderInline(e0.desc)) : null);
                         crop.append(d0);
-                        pairs.push({ b0, d0, line: null });
+                        pairs.push({ b0, d0, e0, line: null });
                         return b0;
                     };
-                    // 정렬 — 안내선이 서로 교차하지 않게. 가로형은 x 순. 세로형(말풍선이 오른쪽 열)은 y 순이되,
-                    //  위젯 머리글처럼 같은 높이 띠에 지점이 여럿이면 열에 가까운(x 큰) 것부터 — 부챗살로 퍼져 교차가 없다.
-                    const bandOf = (e0) => Math.round(((e0.y - t2) / h2) * 8);
-                    const elems = s0.elems.slice().sort((a, b1) => (wideLayout ? a.x - b1.x : (bandOf(a) - bandOf(b1)) || (b1.x - a.x)));
+                    // 말풍선 자리 = 짚는 지점을 따라간다(교차·엇갈림 방지). 가로형은 지점이 위 절반이면 위 행,
+                    //  아래 절반이면 아래 행 — 가까운 변으로 나간다. 아주 납작한 스트립은 위/아래 교대로 균형을 잡는다.
+                    const rel = (e0) => ({ rx: (e0.x - l2) / w2, ry: (e0.y - t2) / h2 });
+                    const elems = s0.elems.slice().sort((a, b1) => (wideLayout ? a.x - b1.x : a.y - b1.y));
                     const body = el('div', { class: 'md-shotx-body ' + (wideLayout ? 'is-wide' : 'is-tall') });
+                    const groups = [];
                     if (wideLayout) {
-                        // 행 배정 — 얇은 스트립(선이 어차피 짧다)은 위/아래 교대로 균형을 잡고,
-                        //  키가 있는 크롭은 지점이 위쪽 절반이면 위 행, 아래쪽 절반이면 아래 행 — 선이 화면을 길게 가로지르지 않게.
                         const thin = cropAspect > 4;
                         const top = [], bot = [];
-                        elems.forEach((e0, k) => {
-                            const toTop = thin ? k % 2 === 0 : ((e0.y - t2) / h2) < 0.5;
-                            (toTop ? top : bot).push(e0);
-                        });
-                        const row = (list) => el('div', { class: 'md-shotx-row', style: `--cols:${list.length}` }, ...list.map(mkPair));
+                        elems.forEach((e0, k) => ((thin ? k % 2 === 0 : rel(e0).ry < 0.5) ? top : bot).push(e0));
+                        // 한 행에 너무 몰리면(4개 이상) 가운데에 가까운 것부터 반대 행으로 넘긴다 — 말풍선이 잘게 쪼개지지 않게.
+                        const spill = (from, to, toTop) => {
+                            while (from.length > 3) {
+                                from.sort((a, b1) => (toTop ? rel(a).ry - rel(b1).ry : rel(b1).ry - rel(a).ry));
+                                to.push(from.pop());
+                            }
+                        };
+                        spill(top, bot, false);
+                        spill(bot, top, true);
+                        top.sort((a, b1) => a.x - b1.x);
+                        bot.sort((a, b1) => a.x - b1.x);
+                        const mkRow = (list, side) => {
+                            const box = el('div', { class: 'md-shotx-row is-' + side }, ...list.map(mkPair));
+                            groups.push({ box, list, side });
+                            return box;
+                        };
                         if (top.length)
-                            body.append(row(top));
+                            body.append(mkRow(top, 'top'));
                         body.append(crop);
                         if (bot.length)
-                            body.append(row(bot));
+                            body.append(mkRow(bot, 'bot'));
                     }
                     else {
-                        body.append(crop, el('div', { class: 'md-shotx-col' }, ...elems.map(mkPair)));
+                        const box = el('div', { class: 'md-shotx-col' }, ...elems.map(mkPair));
+                        groups.push({ box, list: elems, side: 'right' });
+                        body.append(crop, box);
                     }
                     const NS = 'http://www.w3.org/2000/svg';
                     const net = document.createElementNS(NS, 'svg');
@@ -718,38 +731,124 @@ function renderContainer(type, rest, bodyLines) {
                         p0.d0.onmouseenter = hot(true);
                         p0.d0.onmouseleave = hot(false);
                     });
+                    // 1차원 자리잡기 — 원하는 위치(짚는 지점)에 최대한 붙이되 서로 겹치지 않게 밀어낸다.
+                    const spread = (arr, min, max, gap) => {
+                        arr.sort((a, b1) => a.want - b1.want);
+                        let cur = min; // ① 앞에서부터 — 원하는 자리, 겹치면 뒤로 민다
+                        for (const it of arr) {
+                            it.pos = Math.max(it.want - it.size / 2, cur);
+                            cur = it.pos + it.size + gap;
+                        }
+                        cur = max; // ② 뒤에서부터 — 끝을 넘긴 만큼 되민다(칸에 다 들어가게)
+                        for (let i = arr.length - 1; i >= 0; i--) {
+                            arr[i].pos = Math.min(arr[i].pos, cur - arr[i].size);
+                            cur = arr[i].pos - gap;
+                        }
+                    };
+                    const GAP = 12;
+                    const place = () => {
+                        const bw = body.clientWidth;
+                        if (!bw)
+                            return;
+                        for (const g of groups) {
+                            const gr = g.box.getBoundingClientRect();
+                            if (g.side === 'right') { // 세로형 — 오른쪽 열, 지점의 높이를 따라 배치
+                                const arr = g.list.map((e0) => {
+                                    const b0 = pairs.find((p1) => p1.e0 === e0).b0;
+                                    return { b0, want: rel(e0).ry * crop.offsetHeight, size: 0, pos: 0 };
+                                });
+                                arr.forEach((it) => { it.size = it.b0.offsetHeight; });
+                                const need = arr.reduce((a, it) => a + it.size, 0) + GAP * (arr.length - 1);
+                                const H = Math.max(crop.offsetHeight, need);
+                                g.box.style.height = H + 'px';
+                                spread(arr, 0, H, GAP);
+                                arr.forEach((it) => { it.b0.style.top = it.pos + 'px'; });
+                            }
+                            else { // 가로형 — 행 안에서 지점의 x 를 따라 배치
+                                const n0 = g.list.length;
+                                const w = Math.max(150, Math.min(320, (gr.width - GAP * (n0 - 1)) / n0));
+                                const arr = g.list.map((e0) => {
+                                    const b0 = pairs.find((p1) => p1.e0 === e0).b0;
+                                    b0.style.width = w + 'px';
+                                    return { b0, want: rel(e0).rx * crop.offsetWidth + (crop.getBoundingClientRect().left - gr.left), size: w, pos: 0 };
+                                });
+                                let h = 0;
+                                arr.forEach((it) => { h = Math.max(h, it.b0.offsetHeight); });
+                                g.box.style.height = h + 'px';
+                                spread(arr, 0, gr.width, GAP);
+                                arr.forEach((it) => {
+                                    it.b0.style.left = it.pos + 'px';
+                                    it.b0.style.top = (g.side === 'top' ? h - it.b0.offsetHeight : 0) + 'px';
+                                });
+                            }
+                        }
+                    };
+                    // 안내선 — 이미지 안에서는 한 방향(가로형=세로선 / 세로형=가로선)으로만 뻗고, 꺾임은 이미지 밖
+                    //  여백(도랑)에서 처리한다. 도랑 높이·깊이를 항목마다 조금씩 어긋내 선끼리 겹치지 않는다.
+                    const poly = (pts, r) => {
+                        const p1 = pts.filter((pt, k) => !k || Math.abs(pt[0] - pts[k - 1][0]) > 0.5 || Math.abs(pt[1] - pts[k - 1][1]) > 0.5);
+                        if (p1.length < 2)
+                            return '';
+                        let d = `M ${p1[0][0].toFixed(1)} ${p1[0][1].toFixed(1)}`;
+                        for (let k = 1; k < p1.length - 1; k++) {
+                            const [ax, ay] = p1[k - 1], [cx, cy] = p1[k], [nx, ny] = p1[k + 1];
+                            const d1 = Math.hypot(cx - ax, cy - ay), d2 = Math.hypot(nx - cx, ny - cy);
+                            const rr = Math.min(r, d1 / 2, d2 / 2);
+                            d += ` L ${(cx + (ax - cx) / d1 * rr).toFixed(1)} ${(cy + (ay - cy) / d1 * rr).toFixed(1)}`
+                                + ` Q ${cx.toFixed(1)} ${cy.toFixed(1)} ${(cx + (nx - cx) / d2 * rr).toFixed(1)} ${(cy + (ny - cy) / d2 * rr).toFixed(1)}`;
+                        }
+                        const last = p1[p1.length - 1];
+                        return d + ` L ${last[0].toFixed(1)} ${last[1].toFixed(1)}`;
+                    };
                     const draw = () => {
                         const bb = body.getBoundingClientRect();
                         if (!bb.width)
                             return;
                         net.setAttribute('viewBox', `0 0 ${bb.width} ${bb.height}`);
                         net.textContent = '';
-                        pairs.forEach((p0) => {
-                            const br = p0.b0.getBoundingClientRect(), dr = p0.d0.getBoundingClientRect();
-                            const dx2 = dr.left + dr.width / 2 - bb.left, dy2 = dr.top + dr.height / 2 - bb.top;
-                            let x1, y1;
-                            // 출발점은 말풍선 변 위에서 지점과 가장 가까운 자리 — 사선을 최소화해 선이 흐트러지지 않게
-                            if (wideLayout) { // 위 행은 아래변, 아래 행은 윗변에서 출발
-                                x1 = Math.min(Math.max(dx2, br.left - bb.left + 18), br.right - bb.left - 18);
-                                y1 = (br.bottom <= dr.top + 1 ? br.bottom : br.top) - bb.top;
-                            }
-                            else { // 말풍선 왼쪽 변에서 출발
-                                x1 = br.left - bb.left;
-                                y1 = Math.min(Math.max(dy2, br.top - bb.top + 14), br.bottom - bb.top - 14);
-                            }
-                            const path = document.createElementNS(NS, 'path');
-                            path.setAttribute('d', `M ${x1.toFixed(1)} ${y1.toFixed(1)} L ${dx2.toFixed(1)} ${dy2.toFixed(1)}`);
-                            path.setAttribute('class', 'md-shotx-line');
-                            net.append(path);
-                            p0.line = path;
-                        });
+                        const cr = crop.getBoundingClientRect();
+                        for (const g of groups) {
+                            g.list.forEach((e0, k) => {
+                                const p0 = pairs.find((p1) => p1.e0 === e0);
+                                if (!p0)
+                                    return;
+                                const br = p0.b0.getBoundingClientRect(), dr = p0.d0.getBoundingClientRect();
+                                const dx2 = dr.left + dr.width / 2 - bb.left, dy2 = dr.top + dr.height / 2 - bb.top;
+                                const stag = 9 + (k % 3) * 7; // 도랑 어긋내기 — 나란한 선이 겹쳐 한 줄로 보이지 않게
+                                let pts;
+                                if (g.side === 'right') {
+                                    const gx = cr.right - bb.left + stag;
+                                    const by = Math.min(Math.max(dy2, br.top - bb.top + 14), br.bottom - bb.top - 14);
+                                    pts = [[dx2, dy2], [gx, dy2], [gx, by], [br.left - bb.left, by]];
+                                }
+                                else {
+                                    const top = g.side === 'top';
+                                    const gy = (top ? br.bottom - bb.top + stag : br.top - bb.top - stag);
+                                    const bx = Math.min(Math.max(dx2, br.left - bb.left + 20), br.right - bb.left - 20);
+                                    pts = [[dx2, dy2], [dx2, gy], [bx, gy], [bx, top ? br.bottom - bb.top : br.top - bb.top]];
+                                }
+                                const path = document.createElementNS(NS, 'path');
+                                path.setAttribute('d', poly(pts, 7));
+                                path.setAttribute('class', 'md-shotx-line');
+                                net.append(path);
+                                p0.line = path;
+                            });
+                        }
                     };
+                    let lastW = 0, raf = 0;
+                    const relayout = (force) => {
+                        const w = body.clientWidth;
+                        if (!force && w === lastW)
+                            return;
+                        lastW = w;
+                        place();
+                        draw();
+                    };
+                    requestAnimationFrame(() => relayout(true));
                     if (typeof ResizeObserver !== 'undefined') {
-                        ro = new ResizeObserver(() => draw());
+                        ro = new ResizeObserver(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => relayout(false)); });
                         ro.observe(body);
                     }
-                    else
-                        requestAnimationFrame(draw);
                 };
                 const tabs = el('nav', { class: 'md-shotx-tabs', role: 'tablist', 'aria-label': '화면 구역' });
                 items.forEach((s0, i) => {
