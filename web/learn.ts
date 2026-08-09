@@ -46,17 +46,20 @@ const DOCS_NAV = [
     { key: 'start', label: 'AI 세션 시작하기', href: '#/start' },
     // #req examples 탭 숨김(사용자 요청) — 본문을 #/start 블록 ③ 로 인라인 이동. 라우트는 유지(직접 URL 접근 가능). 복원: 아래 줄 주석 해제.
     // { key: 'examples', label: '이런 걸 시켜보세요', href: '#/start/examples' },
-    { key: 'start-project', label: '프로젝트 생성하기', href: '#/start/project' },   // #853 프로젝트 한 바퀴 손수 투어
+    { key: 'start-project', label: '프로젝트 시작하기', href: '#/start/project' },   // #853 프로젝트 한 바퀴 손수 투어 + 직접 만들기(#1104)
     // #req tour 탭 숨김(사용자 요청). 라우트는 유지. 복원: 아래 줄 주석 해제.
     // { key: 'tour', label: 'Lively 둘러보기', href: '#/start/tour' },
   ] },
+  // #1107 상단 탭 현행화 — 사이드바 라벨은 실제 상단 탭 이름 그대로(내 AI 세션→AI 세션 · 도메인 맵→맥락 관리 ·
+  //  관리→설정, #1153/#1419 개편 반영). slug 는 URL 안정성 위해 terminal·admin 유지, domainmap 만 context 로
+  //  교체(구 #/learn/docs/domainmap 은 renderLearnDocs 가 리다이렉트).
   { group: '화면별 안내', items: [
     { key: 'home', label: '홈 (대시보드)', href: '#/learn/docs/home' },
-    { key: 'terminal', label: '내 AI 세션', href: '#/learn/docs/terminal' },
+    { key: 'terminal', label: 'AI 세션', href: '#/learn/docs/terminal' },
     { key: 'projects', label: '프로젝트', href: '#/learn/docs/projects' },
     { key: 'wiki', label: 'WIKI', href: '#/learn/docs/wiki' },
-    { key: 'domainmap', label: '도메인 맵', href: '#/learn/docs/domainmap' },
-    { key: 'admin', label: '관리', href: '#/learn/docs/admin' },
+    { key: 'context', label: '맥락 관리', href: '#/learn/docs/context' },
+    { key: 'admin', label: '설정', href: '#/learn/docs/admin' },
   ] },
   { group: '레퍼런스', items: [
     { key: 'cli', label: 'AI 세션 명령어', href: '#/learn/docs/cli' },
@@ -265,6 +268,8 @@ async function renderLearnDocs(view, slug) {
   // #762 '문서 안내(IA·규칙)'(#/learn/docs/plan) 페이지 숨김(사용자 요청) — 개요로 리다이렉트. 원고(DOC_PAGES['plan'])는 보존.
   //  복원: 이 줄 삭제 + learn.ts nav 의 plan 항목 주석 해제.
   if (slug === 'plan') { location.replace('#/learn'); return; }
+  // #1107 — '도메인 맵' 문서는 '맥락 관리'(context)로 흡수(#1153/#1419 탭 개편 반영). 구 딥링크 보존.
+  if (slug === 'domainmap') { location.replace('#/learn/docs/context'); return; }
   const page = DOC_PAGES.find((p) => p.slug === slug);
   if (!page) { location.replace('#/learn'); return; }
   const h1 = /^#\s+(.+)\r?\n/.exec(page.md);
@@ -276,7 +281,7 @@ async function renderLearnDocs(view, slug) {
   ];
   if (slug === 'wiki') {
     body.push(el('div', { class: 'guide-cards', style: 'margin-top:18px' },
-      kindsCard(),            // WIKI 에 쌓이는 '지식 한 덩어리'란? (#317 이관 — 구 가이드 랜딩에서)
+      // kindsCard(지식 한 덩어리)는 #1107 새 원고의 '문서 속성' 섹션이 흡수 — 중복이라 제거.
       projectKnowledgeCard()  // 필요지식을 연결하면 뭐가 좋나 — #/learn/docs/wiki?focus=required 대상
     ));
   }
@@ -341,155 +346,6 @@ function flowStep(icon, title, desc) {
     el('p', { class: 'guide-flow-desc', text: desc }));
 }
 function flowArrow() { return el('div', { class: 'guide-flow-arrow', 'aria-hidden': 'true', text: '→' }); }
-
-// ── ② 메뉴 한눈에 보기 — 주요 화면 7개를 성격이 비슷한 묶음(챕터) 4개로 그룹핑(#761: 상단 내비 개편 반영) ──
-//  ① 시작(홈=대시보드) ② 실무=AI로 직접 일하기(터미널·프로젝트) ③ 저장소=회사 지식·코드 데이터(WIKI·도메인 맵) ④ 설정·도움말(관리·사용가이드).
-//  #617 이후 IA: 터미널(AI 세션)은 상단 탭이 아니라 '홈'에서 열고, 옛 상단 '시작하기'는 사용 가이드 서브탭(#/learn/install)으로 이동.
-//  탭 객체: [아이콘, 이름, 태그, 강조색, 강조배경, 한줄요약, 친절설명, 링크, 링크라벨, 현재페이지?].
-//  nav(#1454 S2): 이 카드가 속한 상단 탭(data-tab) — ui_nav 로 꺼진 탭의 카드는 tabsGuideCard 가 걸러낸다
-//  (숨긴 탭을 가이드가 계속 소개하면 '있다는데 없는' 화면이 된다). nav 없는 카드(사용 가이드)는 항상 노출.
-const GUIDE_CHAPTERS = [
-  { num: '1', title: '시작', sub: '로그인하면 처음 만나는 내 화면', tabs: [
-    { icon: 'home', name: '홈', tag: '로그인 후 첫 화면', hue: '#2D6BF0', bg: '#EEF4FF', nav: 'dashboard',
-      summary: '내 일과 팀 소식을 한눈에 모은 대시보드',
-      desc: '라이블리에 들어오면 가장 먼저 만나는 나만의 화면이에요. 내가 맡은 프로젝트, 팀이 공유하는 폴더, 최신 알림, 내가 켜 둔 AI 세션, 팀의 작업 기록을 한 화면에 모아 보여줍니다. 여기 ‘내 AI 세션’에서 [+ 새 세션]을 누르면 곧바로 AI와 대화를 시작할 수 있어요.',
-      href: '#/dashboard', link: '홈 열기' },
-  ] },
-  { num: '2', title: '실무', sub: 'AI로 직접 일하고, 진행 상황을 관리해요', tabs: [
-    { icon: 'terminal', name: '내 AI 세션', tag: '설치 없이 바로', hue: '#0FA37E', bg: '#EBF9F4', nav: 'terminal',
-      summary: '웹에서 곧장 AI와 대화하는 곳',
-      desc: '브라우저에서 바로 AI와 대화하는 화면이에요. 회사 맥락이 이미 들어 있는 AI를 띄워, 까만 창에 하고 싶은 말을 그냥 입력하면 됩니다. 홈의 ‘내 AI 세션’에서 [+ 새 세션]으로 열 수 있고, 대화는 서버에 저장돼 창을 닫아도 이어서 쓸 수 있어요. 비개발자에게 가장 쉬운 출발점입니다.',
-      href: '#/terminal', link: '내 AI 세션 열기' },
-    { icon: 'trello', name: '프로젝트', tag: '진행상황 파악', hue: '#6E59D9', bg: '#F1EEFC', nav: 'projects2',
-      summary: '회사에서 지금 무슨 일이 진행 중인지',
-      desc: '진행 중·완료된 프로젝트와 할 일을 모아 보는 곳이에요. 누가 무엇을 했고 지금 무엇을 하는지(작업 현황)를 한눈에 볼 수 있어, 팀 전체의 흐름을 따라가기 좋습니다. 사업·제품·시스템별로도 훑어볼 수 있어요.',
-      href: '#/projects2', link: '프로젝트 열기' },
-  ] },
-  { num: '3', title: '저장소', sub: 'AI가 읽는 회사의 코드·지식이 쌓이는 데이터예요', tabs: [
-    { icon: 'book-open', name: 'WIKI', tag: '회사 지식 창고', hue: '#1E54CC', bg: '#EAF0FF', nav: 'knowledge',
-      summary: 'AI에게 전달되는 ‘회사의 지식’이 쌓이는 곳',
-      desc: '회사가 쌓아온 규칙·자료·결정·절차를 모아둔 지식 창고예요. 여기 정리된 내용이 바로 AI에게 자동으로 전달되는 ‘회사 맥락’입니다. 사업·제품·시스템으로 분류돼 있고, 검색으로 원하는 내용을 찾을 수 있어요.',
-      href: '#/knowledge', link: 'WIKI 열기' },
-    { icon: 'share-2', name: '분류체계', tag: '모두', hue: '#1BAEB0', bg: '#E9F7F7', nav: 'context',
-      summary: '회사의 기록을 어떤 갈래로 나눌지 정하는 곳',
-      desc: '지식과 프로젝트를 담는 분류(사업·제품·시스템과 그 하위 갈래)를 만들고, 각 분류가 무엇을 담는지 정의합니다. 정의가 오래돼 현실과 어긋나기 시작하면 이 화면에서 먼저 드러나요.',
-      href: '#/categories', link: '분류체계 열기' },
-  ] },
-  { num: '4', title: '설정 · 도움말', sub: '환경을 설정하고, 사용법을 안내해요', tabs: [
-    { icon: 'sliders', name: '관리', tag: '주로 관리자용', hue: '#5A6B85', bg: '#EDF1F7', nav: 'system',
-      summary: '위 모든 것을 설정하고 편집하는 곳',
-      desc: '접속·구성원 같은 기본 설정부터, AI에게 가르칠 회사 규칙·용어, AI가 동작하는 방식까지 설정하는 곳이에요. 항목마다 ‘구성원에게 어떤 효과가 생기는지’를 함께 보여줍니다. 누구나 볼 수 있지만, 실제 수정은 관리자만 할 수 있어요.',
-      href: '#/system', link: '관리 열기' },
-    { icon: 'compass', name: '사용 가이드', tag: '지금 이 페이지', hue: '#B84E44', bg: '#FBEFEE',
-      summary: '이 도구 전체를 설명하는 안내서',
-      desc: '지금 보고 있는 안내서예요. 왼쪽 목차로 나뉘어 있어요 — ‘시작하기’는 이 서비스가 무엇이고 어떻게 동작하는지, ‘화면별 안내’(지금 이 화면 포함)는 각 메뉴가 무슨 일을 하는지, ‘직접 해보기’는 내 AI 세션을 만들거나 화면을 눌러 보며 배우는 투어예요.',
-      current: true },
-  ] },
-];
-
-function tabsGuideCard() {
-  const chapters = GUIDE_CHAPTERS.map((c) => {
-    // ui_nav 게이팅(#1454 S2) — 꺼진 탭의 카드는 소개하지 않는다(가이드가 없는 화면을 안내하면 거짓말이 된다).
-    //  nav 없는 카드(사용 가이드=현재 페이지)는 항상 노출. 챕터의 카드가 전부 꺼지면 챕터 머리도 뺀다.
-    const tabs = c.tabs.filter((t: any) => !t.nav || navOn(t.nav));
-    if (!tabs.length) return null;
-    const grid = el('div', { class: 'tabguide-grid' + (tabs.length === 1 ? ' tabguide-grid--single' : '') });
-    for (const t of tabs) grid.append(tabCard(t));
-    return el('div', { class: 'tabchapter' },
-      el('div', { class: 'tabchapter-head' },
-        el('span', { class: 'tabchapter-num', 'aria-hidden': 'true', text: c.num }),
-        el('div', { class: 'tabchapter-headtext' },
-          el('div', { class: 'tabchapter-title', text: c.title }),
-          el('div', { class: 'tabchapter-sub', text: c.sub }))),
-      grid);
-  }).filter(Boolean);
-  // 제목은 페이지 h1('메뉴 한눈에 보기')이 이미 말하므로 카드 머리는 두지 않는다(#780 — 서브탭 분리).
-  return el('div', { class: 'card' },
-    el('p', { class: 'guide-lead', text: '이 도구의 주요 화면은 성격에 따라 네 묶음이에요 — ① 시작(홈), ② 실무(AI 세션·프로젝트), ③ 저장소(WIKI·도메인 맵), ④ 설정·도움말(관리·사용 가이드). 묶음별로 한 번만 훑어두면 길을 잃지 않아요.' }),
-    ...chapters);
-}
-
-// 탭 한 칸 — 현재 페이지는 클릭 불가 카드(점선), 나머지는 클릭하면 해당 탭으로 이동하는 링크 카드.
-function tabCard(t) {
-  const top = el('div', { class: 'tabguide-top' },
-    el('span', { class: 'tabguide-icon', style: 'color:' + t.hue + ';background:' + t.bg }, tabIcon(t.icon)),
-    el('div', { class: 'tabguide-headtext' },
-      el('div', { class: 'tabguide-name', text: t.name }),
-      el('span', { class: 'tabguide-tag', text: t.tag })));
-  const summary = el('div', { class: 'tabguide-summary', text: t.summary });
-  const desc = el('p', { class: 'tabguide-desc', text: t.desc });
-  if (t.current) {
-    return el('div', { class: 'tabguide-card is-current' }, top, summary, desc,
-      el('span', { class: 'tabguide-current', text: '지금 보고 있는 화면이에요' }));
-  }
-  return el('a', { class: 'tabguide-card', href: t.href }, top, summary, desc,
-    el('span', { class: 'tabguide-go' }, t.link,
-      el('span', { class: 'tabguide-go-arrow', 'aria-hidden': 'true', text: '→' })));
-}
-
-// ── 메뉴 한눈에 보기(#/learn/menu, #780) — 문서 셸 안의 인터랙티브 페이지. ──
-//  내용(GUIDE_CHAPTERS·tabsGuideCard)은 그대로 재사용한다 — 옮기기만 하고 카피는 손대지 않는다.
-async function renderLearnMenu(view) {
-  const head = el('div', { class: 'page-head' },
-    el('h1', {}, '메뉴 ', el('span', { class: 'accent', text: '한눈에 보기' })));
-  docsShell(view, 'menu', docsEyebrow('menu'), head, el('div', { class: 'guide-cards' }, tabsGuideCard()));
-}
-
-// ── WIKI 에 쌓이는 '지식 한 덩어리'란? — 현재 모델(2026-06-30): 카테고리 1개 + 직교 두 축(주입/출처). ──
-//  옛 R·K·H·W '종류'는 폐기. WIKI 탭과 동일 용어·칩(kn-chip)으로 맞춘다: 주입=항상 주입/검색, 출처=저작/외부 미러.
-//  '할 일·과업'은 더 이상 지식이 아니라 [프로젝트] 탭(맥락의 변화)으로 분리됨.
-function kindsCard() {
-  // WIKI 탭의 injection/provenance 칩과 동일 스타일.
-  const chip = (mod, label) => el('span', { class: 'kn-chip ' + mod, text: label });
-
-  // 추상 → 눈으로: 실제 '한 덩어리' 예시 한 장 + 거기 붙는 분류/꼬리표.
-  const example = el('div', { class: 'gloss-example' },
-    el('span', { class: 'gloss-example-tag', text: '이런 게 한 덩어리예요' }),
-    el('div', { class: 'gloss-example-title', text: '경쟁사 가격 비교 (2월 조사)' }),
-    el('div', { class: 'gloss-example-body', text: 'A사 월 9,900원, B사 월 14,000원, 우리 월 12,000원 — 우리가 중간 가격대.' }),
-    el('div', { class: 'kn-ex-meta' },
-      el('span', { class: 'kn-cat-pill', text: '분야: 시장·경쟁' }),
-      el('span', { class: 'kn-ex-meta-sep', text: '·' }),
-      chip('kn-inject-recalled', '검색'),
-      chip('kn-prov-authored', '저작')),
-    el('div', { class: 'kn-ex-cap', text: '↑ 한 덩어리에는 ‘분야(카테고리)’ 하나와 속성 두 개(주입·출처)가 붙습니다.' }));
-
-  // 축 1 — 주입(언제 AI에게 전달되나)
-  const injAxis = el('div', { class: 'kn-axis' },
-    el('div', { class: 'kn-axis-q', text: '주입 — 언제 AI에게 전달되나?' }),
-    el('p', { class: 'kn-axis-sub', text: '이 지식이 AI 대화에 들어가는 시점.' }),
-    knOpt(chip('kn-inject-always', '항상 주입'), '회사 규칙·페르소나처럼 모든 대화에 늘 자동으로 들어가요.', '추측으로 답하지 않기 — 근거 없으면 “잘 모르겠다”고 말한다'),
-    knOpt(chip('kn-inject-recalled', '검색'), '평소엔 주입되지 않고, 관련된 일을 할 때 AI가 검색해 읽습니다.', '경쟁사 가격 비교 · 새 팀원 온보딩 절차'));
-
-  // 축 2 — 출처(어디서 왔나)
-  const provAxis = el('div', { class: 'kn-axis' },
-    el('div', { class: 'kn-axis-q', text: '출처 — 어디서 왔나?' }),
-    el('p', { class: 'kn-axis-sub', text: '이 지식의 원본이 어디 있나.' }),
-    knOpt(chip('kn-prov-authored', '저작'), '이 안에서 직접 써넣은 지식. 원본이 여기 있어요.', '우리가 정리한 결정·런북·조사'),
-    knOpt(chip('kn-prov-observed', '외부 미러'), '노션·클릭업 등 외부 도구에서 동기화해 가져온 사본입니다. 원본 편집은 외부 도구에서 합니다.', '미러된 노션 문서 · 클릭업 과업'));
-
-  return el('div', { class: 'card' },
-    el('div', { class: 'card-head' }, el('h2', { text: '조금 더: WIKI에 쌓이는 ‘지식 한 덩어리’란?' })),
-    el('p', { class: 'guide-lead', text: 'WIKI에 담기는 지식은 제목과 내용으로 된 짧은 글 한 장이에요 — 메모 한 장, 문서 한 페이지 같은 거죠. 회사가 오래 기억해야 할 사실·결정·규칙·설명서가 한 덩어리씩 쌓입니다.' }),
-    example,
-    el('p', { class: 'guide-kinds-q', text: '두 속성은 각각 이런 질문에 답합니다:' }),
-    el('div', { class: 'kn-axis-grid' }, injAxis, provAxis),
-    el('div', { class: 'guide-note' },
-      el('span', { class: 'kn-chip kn-pin', text: '📌 인덱스' }),
-      el('div', {}, el('b', { text: '특히 중요한 지식' }), '은 인덱스에 ‘핀’해 두면, 제목이 매 대화 첫머리에 항상 포함되어 모두가 바로 발견해요.')),
-    el('p', { class: 'admin-hint', style: 'margin-top:12px' }, '‘지금 진행 중인 ', el('b', { text: '할 일·과업' }),
-      '’은 WIKI가 아니라 ', el('a', { href: '#/projects2', text: '[프로젝트] 탭' }), '에서 다룹니다 — WIKI에는 ‘오래 남는 기록’만 담습니다.'),
-    el('p', { class: 'admin-hint', style: 'margin-top:6px' }, '실제 지식들은 ',
-      el('a', { href: '#/knowledge', text: '[WIKI] 탭' }), '에서 볼 수 있어요.'));
-}
-
-// 축 옵션 한 줄 — 칩 + 설명 + 작은 예시.
-function knOpt(chipEl, desc, ex) {
-  return el('div', { class: 'kn-axis-opt' },
-    el('div', { class: 'kn-axis-opt-head' }, chipEl),
-    el('div', { class: 'kn-axis-opt-desc', text: desc }),
-    el('div', { class: 'kn-axis-opt-ex' }, el('b', { text: '예: ' }), ex));
-}
 
 // ── 그 지식을 [프로젝트]에 '필요지식'으로 연결하면? — 맥락의 기록(WIKI) → 맥락의 변화(프로젝트) 다리. 비개발자용(#317). ──
 //  새 CSS 없이 hero 의 guide-flow + guide-remember 패턴 재사용(같은 '3단계' 시각 언어로 통일).
@@ -962,7 +818,6 @@ export {
   renderInstall,
   renderLearn,
   renderLearnDocs,
-  renderLearnMenu,
   renderLearnTour,
   renderOnboarding,
   skeleton,

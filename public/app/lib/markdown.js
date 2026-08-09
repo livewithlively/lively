@@ -10,6 +10,8 @@ import { TOKEN_KEY, api, apiUrl } from './net.js';
 import { el } from './dom.js';
 import { relTime } from './format.js';
 import { uiKeyCls } from './uitext.js';
+// :::shot 첫 만남 시연을 이미 튼 라우트(#1107 v2) — 같은 페이지에서 한 번만, 재방문에도 다시 안 튼다.
+let shotDemoRoute = '';
 // ── 안전 마크다운 렌더러 ──
 // 비개발자 친화: body_md(raw 마크다운)을 실제 서식으로 보여준다. 의존성 0 — 작은 서브셋을
 // 직접 파싱한다. 보안 불변식(P4b): **모든 텍스트는 textContent/createTextNode 만** 거치고
@@ -307,12 +309,11 @@ function renderContainer(type, rest, bodyLines) {
             const panes = Array.from(rendered.children).filter((n) => n.classList && n.classList.contains('md-tabpane'));
             if (!panes.length)
                 return moveChildren(rendered, el('div', { class: 'md-tabs-fallback' }));
-            const hue = (summary || '').split(/\s+/).includes('hue'); // :::tabs hue — 탭을 스크린샷 구역색(is-cN)과 1:1 연결 (#1013)
             const bar = el('div', { class: 'md-tabs-bar', role: 'tablist' });
             const body = el('div', { class: 'md-tabs-body' });
             const btns = [];
             panes.forEach((p, idx) => {
-                const btn = el('button', { class: 'md-tab-btn' + (idx === 0 ? ' active' : '') + (hue ? ' is-c' + (idx % 5) : ''), type: 'button', role: 'tab',
+                const btn = el('button', { class: 'md-tab-btn' + (idx === 0 ? ' active' : ''), type: 'button', role: 'tab',
                     'aria-selected': idx === 0 ? 'true' : 'false', text: p.getAttribute('data-tab-label') || '탭 ' + (idx + 1) });
                 btn.onclick = () => btns.forEach((b, k) => {
                     const on = b === btn;
@@ -326,7 +327,7 @@ function renderContainer(type, rest, bodyLines) {
                 bar.append(btn);
                 body.append(p);
             });
-            return el('div', { class: 'md-tabs' + (hue ? ' md-tabs--hue' : '') }, bar, body);
+            return el('div', { class: 'md-tabs' }, bar, body);
         }
         case 'tab': {
             const pane = el('div', { class: 'md-tabpane' });
@@ -467,11 +468,13 @@ function renderContainer(type, rest, bodyLines) {
             return frame;
         }
         case 'shot': {
-            // 주석 스크린샷(#853) — 위에 **구획 박스**(영역을 감싼 색 사각형+번호)를 얹은 실제 화면, 아래에 **번호마다 1:1 상세 설명 카드**.
+            // 주석 스크린샷 v2(#1107) — 쉬는 상태는 깨끗한 화면 + 파란 번호 마커만. 범례 항목이나 마커를
+            //  짚으면(hover·focus·탭) 그 영역만 스포트라이트로 밝히고 나머지를 딤 처리한다 — 제품의
+            //  둘러보기(guide-tour) 스포트라이트와 같은 시각언어, 색은 블루 단색(컬러 예산 §0.5).
             //  속성: src=이미지(필수) alt caption. 본문 = 구획 목록:
-            //    좌표줄  'left% | top% | width% | height% | 제목'   (전부 이미지 기준 %; 캡처 시 요소 실측)
-            //    상세줄  그 아래 들여쓴/일반 줄들 = 그 번호의 설명 문단(여러 줄 = 여러 문단). 다음 좌표줄 전까지.
-            //  박스·번호·상세 카드는 5색(is-cN)을 돌려 1:1로 색까지 맞춘다. 이미지는 데이터 마스킹된 정적 자산.
+            //    좌표줄  'left% | top% | width% | height% | 제목 ~ 한 줄 설명'  (전부 이미지 기준 %)
+            //    상세줄  그 아래 일반 줄들 = 그 번호의 추가 문단. 다음 좌표줄 전까지.
+            //  클릭은 고정 토글(터치 대응) — 같은 항목을 다시 누르면 해제. 이미지는 데이터 마스킹된 정적 자산.
             const items = [];
             for (const raw of bodyLines) {
                 const t = (raw || '').trim();
@@ -481,7 +484,6 @@ function renderContainer(type, rest, bodyLines) {
                 if (isCoord) {
                     const parts = t.split('|').map((s) => s.trim());
                     const n = parts.map((c) => parseFloat(c));
-                    // 제목에 '~' 가 있으면(구형식) 왼쪽=제목·오른쪽=첫 상세문단으로.
                     const titleRaw = parts.slice(4).join(' | ');
                     const [title, sub] = titleRaw.split('~').map((s) => s.trim());
                     items.push({ l: n[0], t: n[1], w: n[2], h: n[3], title, detail: sub ? [sub] : [] });
@@ -490,28 +492,77 @@ function renderContainer(type, rest, bodyLines) {
                     items[items.length - 1].detail.push(t);
                 }
             }
-            const wrap = el('span', { class: 'md-shot-imgwrap' }, el('img', { class: 'md-shot-img', src: attrs.src || '', alt: attrs.alt || '화면 스크린샷', loading: 'lazy' }));
+            const stage = el('div', { class: 'md-shot-stage' }, el('img', { class: 'md-shot-img', src: attrs.src || '', alt: attrs.alt || '화면 스크린샷', loading: 'lazy' }));
+            const fig = el('figure', { class: 'md-shot' }, stage);
+            const hls = [], marks = [], rows = [];
+            let sticky = -1; // 클릭 고정된 항목(없으면 -1) — hover 는 고정이 없을 때만 반영
+            const setOn = (i) => {
+                stage.classList.toggle('has-on', i >= 0);
+                hls.forEach((h, k) => h.classList.toggle('is-on', k === i));
+                marks.forEach((m, k) => m.classList.toggle('is-on', k === i));
+                rows.forEach((r, k) => r.classList.toggle('is-on', k === i));
+            };
+            const enter = (i) => { if (sticky < 0)
+                setOn(i); };
+            const leave = () => { if (sticky < 0)
+                setOn(-1); };
+            const toggle = (i) => { sticky = sticky === i ? -1 : i; setOn(sticky); };
+            const wire = (i) => ({ onmouseenter: () => enter(i), onmouseleave: leave, onclick: () => toggle(i),
+                onfocus: () => enter(i), onblur: leave });
             items.forEach((s0, i) => {
-                const box = [s0.l, s0.t, s0.w, s0.h].every((v) => Number.isFinite(v));
-                if (box)
-                    wrap.append(el('span', { class: 'md-shot-box is-c' + (i % 5), style: `left:${s0.l}%; top:${s0.t}%; width:${s0.w}%; height:${s0.h}%`, 'aria-hidden': 'true' }, el('span', { class: 'md-shot-bnum', text: String(i + 1) })));
-                else if (Number.isFinite(s0.l) && Number.isFinite(s0.t))
-                    wrap.append(el('span', { class: 'md-shot-pin is-c' + (i % 5), style: `left:${s0.l}%; top:${s0.t}%`, 'aria-hidden': 'true', text: String(i + 1) }));
+                if (![s0.l, s0.t, s0.w, s0.h].every((v) => Number.isFinite(v)))
+                    return;
+                // 하이라이트 영역 자체가 포인터 표적(#1107 v2) — 이미지 위에서 구역을 직접 지나가거나 탭해도 밝혀진다.
+                //  키보드·스크린리더 동선은 범례 버튼이 전담하므로 여긴 aria-hidden 포인터 전용으로 둔다.
+                hls.push(el('span', { class: 'md-shot-hl', 'aria-hidden': 'true',
+                    style: `left:${s0.l}%; top:${s0.t}%; width:${s0.w}%; height:${s0.h}%`, ...wire(i) }));
+                // 마커는 영역 좌상단 모서리에 걸친다 — 이미지 가장자리에 붙은 영역은 잘리지 않게 살짝 안쪽으로.
+                marks.push(el('button', { type: 'button', class: 'md-shot-marker', text: String(i + 1),
+                    'aria-label': (i + 1) + '. ' + (s0.title || ''), style: `left:${Math.max(s0.l, 1.1)}%; top:${Math.max(s0.t, 1.6)}%`,
+                    ...wire(i) }));
             });
-            const fig = el('figure', { class: 'md-shot' }, wrap);
+            stage.append(...hls, ...marks);
             if (attrs.caption || summary)
-                fig.append(el('figcaption', { class: 'md-shot-cap' }, ...renderInline(attrs.caption ? String(attrs.caption).replace(/_/g, ' ') : summary)));
-            // 번호별 상세 카드(1:1) — 번호 배지 + 제목 + 설명 문단들.
-            //  legend=off 면 이 카드 목록을 생략한다(옵트인) — 스크린샷 아래 설명을 탭 등 다른 표면이 대신할 때(#1013 홈).
-            if (String(attrs.legend || '').toLowerCase() !== 'off') {
-                const details = el('div', { class: 'md-shot-details' }, ...items.map((s0, i) => {
-                    const main = el('div', { class: 'md-shot-dmain' }, el('div', { class: 'md-shot-dtitle' }, ...renderInline(s0.title || '')));
+                fig.append(el('figcaption', { class: 'md-shot-cap' }, el('span', { class: 'md-shot-capt' }, ...renderInline(attrs.caption ? String(attrs.caption).replace(/_/g, ' ') : summary)), items.length ? el('span', { class: 'md-shot-hint', 'aria-hidden': 'true', text: '화면이나 항목을 짚으면 그 영역만 밝혀집니다' }) : null));
+            // 범례 — 번호와 1:1 로 묶인 부품 목록(2열 그리드). 짚으면 위 화면의 해당 영역이 밝혀진다.
+            if (items.length) {
+                fig.append(el('div', { class: 'md-shot-legend' }, ...items.map((s0, i) => {
+                    const body = el('span', { class: 'md-shot-pbody' }, el('span', { class: 'md-shot-ptitle' }, ...renderInline(s0.title || '')));
                     for (const d of s0.detail)
                         if (d)
-                            main.append(el('p', { class: 'md-shot-dbody' }, ...renderInline(d)));
-                    return el('div', { class: 'md-shot-detail is-c' + (i % 5) }, el('span', { class: 'md-shot-dnum', text: String(i + 1) }), main);
-                }));
-                fig.append(details);
+                            body.append(el('span', { class: 'md-shot-pdesc' }, ...renderInline(d)));
+                    const r = el('button', { type: 'button', class: 'md-shot-part', ...wire(i) }, el('span', { class: 'md-shot-pnum', 'aria-hidden': 'true', text: String(i + 1) }), body);
+                    rows.push(r);
+                    return r;
+                })));
+            }
+            // 첫 만남 시연(#1107 v2) — 데스크톱 쉬는 상태는 마커까지 숨긴 완전한 화면이라, '짚으면 밝아진다'는
+            //  대응을 처음 한 번은 보여줘야 한다: 이 라우트에서 처음 화면에 들어온 shot 하나만 마커를 띄우고
+            //  1번 구역을 잠깐 밝혔다 놓는다. 사용자가 만지기 시작하면 즉시 중단, 모션 축소 설정이면 생략
+            //  (그땐 마커·범례 숫자가 상시 대응을 대신한다 — 아래 CSS reduced-motion 참조).
+            if (items.length && typeof IntersectionObserver !== 'undefined'
+                && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                const io = new IntersectionObserver((es) => {
+                    if (!es.some((e0) => e0.isIntersecting))
+                        return;
+                    io.disconnect();
+                    if (shotDemoRoute === location.hash || sticky >= 0)
+                        return;
+                    shotDemoRoute = location.hash;
+                    const timers = [
+                        setTimeout(() => { if (sticky < 0)
+                            setOn(0); }, 380),
+                        setTimeout(() => { if (sticky < 0)
+                            setOn(-1); }, 1550),
+                        setTimeout(() => stage.classList.remove('is-demo'), 1950),
+                    ];
+                    const cancelDemo = () => { timers.forEach(clearTimeout); stage.classList.remove('is-demo'); if (sticky < 0)
+                        setOn(-1); };
+                    stage.classList.add('is-demo');
+                    fig.addEventListener('pointerenter', cancelDemo, { once: true });
+                    fig.addEventListener('pointerdown', cancelDemo, { once: true });
+                }, { threshold: 0.3 });
+                io.observe(stage);
             }
             return fig;
         }
