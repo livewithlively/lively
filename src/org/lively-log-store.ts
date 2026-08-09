@@ -149,6 +149,25 @@ export async function livelyEventCount(f: LivelyLogFilter): Promise<number> {
   return Number(r.rows[0]?.n || 0);
 }
 
+export interface PendingSavedRow { name: string; title: string | null; updated_at: string }
+
+// 새로 남긴 지식 중 **검토 대기**(lifecycle=pending) — pending 은 승인 전까지 검색·세션주입에서 격리되므로,
+//  '남겼다'가 아직 '팀이 쓸 수 있다'가 아니다. 그 간극을 타일에서 바로 보이게 한다(#1570 후속 요청).
+//  판정은 knowledge_save 호출 로그 × knowledge.lifecycle 현재값 — 이 기간에 내가 저장했고 지금도 pending 인 것.
+export async function livelyPendingSaved(f: LivelyLogFilter, limit = 20): Promise<PendingSavedRow[]> {
+  const r = await itemsPool.query(
+    `SELECT DISTINCT k.name, k.title, k.updated_at
+       FROM mcp_call_log l
+       JOIN knowledge k ON k.name = l.args->>'name'
+      WHERE ${inWindow("l.called_at")} AND ${byActor("l.actor")}
+        AND l.tool = 'knowledge_save' AND l.ok AND k.lifecycle = 'pending'
+      ORDER BY k.updated_at DESC
+      LIMIT ${Number(limit) || 20}`,
+    p(f),
+  );
+  return r.rows;
+}
+
 export interface KnowledgeReadRow {
   name: string; title: string | null; reads: number; author: string | null; last_at: string;
 }

@@ -12,7 +12,7 @@
 //  ⚠ '읽음'은 knowledge_get(본문을 실제로 연 것)만 — 훅 자동회수(주입)는 주입≠사용이라 세면 과대계상.
 //  ⚠ 기간 단위 — mcp_call_log 에 session_id 가 없어 '이 세션에서'로는 못 묶는다(#1578).
 import { api, el, errorNote } from '../core.js';
-import { dashChips, dashCtl, myDisplayName } from './chrome.js';
+import { dashChips, dashCtl, dashPopover, myDisplayName } from './chrome.js';
 const LVL_WINDOWS = [['24h', '24시간'], ['7d', '7일'], ['30d', '30일']];
 const PAGE = 120;
 function n(v) { return Number(v || 0).toLocaleString('ko-KR'); }
@@ -85,7 +85,27 @@ async function fillLivelyLog(zone) {
             const df = curr - prev;
             return df === 0 ? prevWord.replace('보다', '와') + ' 비슷' : `${prevWord} ${df > 0 ? '+' : ''}${n(df)}`;
         };
-        box.append(el('div', { class: 'dash-lvl-tiles' }, el('div', { class: 'dash-lvl-tile' }, el('div', { class: 'v', text: n(s.knowledge_titles) }), el('div', { class: 'l', text: '근거로 쓴 지식' }), el('div', { class: 'd', text: delta(Number(s.knowledge_titles), Number(s.prev_knowledge_titles)) })), el('div', { class: 'dash-lvl-tile' }, el('div', { class: 'v', text: n(s.knowledge_saved) }), el('div', { class: 'l', text: '새로 남긴 지식' }), el('div', { class: 'd', text: delta(Number(s.knowledge_saved), Number(s.prev_knowledge_saved)) })), el('div', { class: 'dash-lvl-tile' }, el('div', { class: 'v', text: n(dbQ) }), el('div', { class: 'l', text: '조직 DB 조회' }), el('div', { class: 'd', text: dbRows ? n(dbRows) + '행' : '' }))));
+        box.append(el('div', { class: 'dash-lvl-tiles' }, el('div', { class: 'dash-lvl-tile' }, el('div', { class: 'v', text: n(s.knowledge_titles) }), el('div', { class: 'l', text: '근거로 쓴 지식' }), el('div', { class: 'd', text: delta(Number(s.knowledge_titles), Number(s.prev_knowledge_titles)) })), el('div', { class: 'dash-lvl-tile' }, el('div', { class: 'v', text: n(s.knowledge_saved) }), el('div', { class: 'l', text: '새로 남긴 지식' }), 
+        // 검토 대기가 있으면 증감 대신 그걸 보인다 — pending 은 승인 전까지 검색·주입에 안 붙으므로
+        //  '남겼다 ≠ 팀이 쓸 수 있다'. 더 행동 가능한 정보가 자리를 이긴다. 클릭 = 목록 팝오버(항목 → 문서,
+        //  꼬리 → 검토 큐 #/knowledge/review 에서 하나씩 승인/반려).
+        (d.pendingReview || []).length
+            ? (() => {
+                const pend = d.pendingReview;
+                const b = el('button', { class: 'dash-lvl-pend', type: 'button', text: `검토 필요 ${n(pend.length)}`,
+                    title: '승인해야 검색·세션주입에 반영돼요 — 눌러서 목록 보기' });
+                b.onclick = () => {
+                    const panel = el('div', { class: 'dash-pop-panel' });
+                    panel.append(el('div', { class: 'dash-pop-head' }, el('strong', { text: '검토가 필요한 지식' }), el('span', { class: 'dash-pop-sub', text: '승인해야 검색·세션주입에 반영돼요' })));
+                    for (const it of pend) {
+                        panel.append(el('a', { class: 'dash-pop-opt dash-lvl-pop-row', href: '#/k/' + encodeURIComponent(it.name), title: it.name }, el('span', { class: 'dash-pop-name', text: it.title || it.name })));
+                    }
+                    panel.append(el('a', { class: 'dash-lvl-pop-go', href: '#/knowledge/review', text: '검토 큐에서 하나씩 검토하기 →' }));
+                    dashPopover(b, panel);
+                };
+                return b;
+            })()
+            : el('div', { class: 'd', text: delta(Number(s.knowledge_saved), Number(s.prev_knowledge_saved)) })), el('div', { class: 'dash-lvl-tile' }, el('div', { class: 'v', text: n(dbQ) }), el('div', { class: 'l', text: '조직 DB 조회' }), el('div', { class: 'd', text: dbRows ? n(dbRows) + '행' : '' }))));
         // 활동 구성 — 유형별 스택 바(2px 갭) + 범례(수치 병기 — coral 대비 부족을 라벨이 메운다).
         const counts = new Map();
         for (const k of d.kinds || [])
