@@ -10,6 +10,8 @@ import { TOKEN_KEY, api, apiUrl } from './net.js';
 import { el } from './dom.js';
 import { relTime } from './format.js';
 import { uiKeyCls } from './uitext.js';
+// :::shot 첫 만남 시연을 이미 튼 라우트(#1107 v2) — 같은 페이지에서 한 번만, 재방문에도 다시 안 튼다.
+let shotDemoRoute = '';
 // ── 안전 마크다운 렌더러 ──
 // 비개발자 친화: body_md(raw 마크다운)을 실제 서식으로 보여준다. 의존성 0 — 작은 서브셋을
 // 직접 파싱한다. 보안 불변식(P4b): **모든 텍스트는 textContent/createTextNode 만** 거치고
@@ -510,8 +512,10 @@ function renderContainer(type, rest, bodyLines) {
             items.forEach((s0, i) => {
                 if (![s0.l, s0.t, s0.w, s0.h].every((v) => Number.isFinite(v)))
                     return;
+                // 하이라이트 영역 자체가 포인터 표적(#1107 v2) — 이미지 위에서 구역을 직접 지나가거나 탭해도 밝혀진다.
+                //  키보드·스크린리더 동선은 범례 버튼이 전담하므로 여긴 aria-hidden 포인터 전용으로 둔다.
                 hls.push(el('span', { class: 'md-shot-hl', 'aria-hidden': 'true',
-                    style: `left:${s0.l}%; top:${s0.t}%; width:${s0.w}%; height:${s0.h}%` }));
+                    style: `left:${s0.l}%; top:${s0.t}%; width:${s0.w}%; height:${s0.h}%`, ...wire(i) }));
                 // 마커는 영역 좌상단 모서리에 걸친다 — 이미지 가장자리에 붙은 영역은 잘리지 않게 살짝 안쪽으로.
                 marks.push(el('button', { type: 'button', class: 'md-shot-marker', text: String(i + 1),
                     'aria-label': (i + 1) + '. ' + (s0.title || ''), style: `left:${Math.max(s0.l, 1.1)}%; top:${Math.max(s0.t, 1.6)}%`,
@@ -519,7 +523,7 @@ function renderContainer(type, rest, bodyLines) {
             });
             stage.append(...hls, ...marks);
             if (attrs.caption || summary)
-                fig.append(el('figcaption', { class: 'md-shot-cap' }, el('span', { class: 'md-shot-capt' }, ...renderInline(attrs.caption ? String(attrs.caption).replace(/_/g, ' ') : summary)), items.length ? el('span', { class: 'md-shot-hint', 'aria-hidden': 'true', text: '항목을 짚으면 화면에서 위치가 밝혀집니다' }) : null));
+                fig.append(el('figcaption', { class: 'md-shot-cap' }, el('span', { class: 'md-shot-capt' }, ...renderInline(attrs.caption ? String(attrs.caption).replace(/_/g, ' ') : summary)), items.length ? el('span', { class: 'md-shot-hint', 'aria-hidden': 'true', text: '화면이나 항목을 짚으면 그 영역만 밝혀집니다' }) : null));
             // 범례 — 번호와 1:1 로 묶인 부품 목록(2열 그리드). 짚으면 위 화면의 해당 영역이 밝혀진다.
             if (items.length) {
                 fig.append(el('div', { class: 'md-shot-legend' }, ...items.map((s0, i) => {
@@ -531,6 +535,34 @@ function renderContainer(type, rest, bodyLines) {
                     rows.push(r);
                     return r;
                 })));
+            }
+            // 첫 만남 시연(#1107 v2) — 데스크톱 쉬는 상태는 마커까지 숨긴 완전한 화면이라, '짚으면 밝아진다'는
+            //  대응을 처음 한 번은 보여줘야 한다: 이 라우트에서 처음 화면에 들어온 shot 하나만 마커를 띄우고
+            //  1번 구역을 잠깐 밝혔다 놓는다. 사용자가 만지기 시작하면 즉시 중단, 모션 축소 설정이면 생략
+            //  (그땐 마커·범례 숫자가 상시 대응을 대신한다 — 아래 CSS reduced-motion 참조).
+            if (items.length && typeof IntersectionObserver !== 'undefined'
+                && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                const io = new IntersectionObserver((es) => {
+                    if (!es.some((e0) => e0.isIntersecting))
+                        return;
+                    io.disconnect();
+                    if (shotDemoRoute === location.hash || sticky >= 0)
+                        return;
+                    shotDemoRoute = location.hash;
+                    const timers = [
+                        setTimeout(() => { if (sticky < 0)
+                            setOn(0); }, 380),
+                        setTimeout(() => { if (sticky < 0)
+                            setOn(-1); }, 1550),
+                        setTimeout(() => stage.classList.remove('is-demo'), 1950),
+                    ];
+                    const cancelDemo = () => { timers.forEach(clearTimeout); stage.classList.remove('is-demo'); if (sticky < 0)
+                        setOn(-1); };
+                    stage.classList.add('is-demo');
+                    fig.addEventListener('pointerenter', cancelDemo, { once: true });
+                    fig.addEventListener('pointerdown', cancelDemo, { once: true });
+                }, { threshold: 0.3 });
+                io.observe(stage);
             }
             return fig;
         }

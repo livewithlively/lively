@@ -197,16 +197,28 @@ input.emb-num { width: 120px; flex: none; }
 .md-shot-stage { position: relative; border: 1px solid var(--line-net); border-radius: 12px; overflow: hidden;
   background: var(--canvas); box-shadow: 0 1px 2px rgba(21,35,59,.04); line-height: 0; }
 .md-shot-img { width: 100%; height: auto; display: block; }
-/* 스포트라이트 — 영역 링(블루 2px) + 바깥 전체 딤(대형 box-shadow 한 장, overflow 로 클립). */
-.md-shot-hl { position: absolute; z-index: 1; border-radius: 10px; opacity: 0; pointer-events: none;
+/* 스포트라이트 — 영역 링(블루 2px) + 바깥 전체 딤(대형 box-shadow 한 장, overflow 로 클립).
+   영역 자체가 포인터 표적(#1107 v2) — 이미지 위에서 구역을 직접 지나가거나 탭해도 밝혀진다. */
+.md-shot-hl { position: absolute; z-index: 1; border-radius: 10px; opacity: 0; cursor: pointer;
   box-shadow: 0 0 0 2px var(--blue), 0 0 0 9999px rgba(21, 35, 59, .38); transition: opacity var(--dur-base, 150ms) ease; }
 .md-shot-hl.is-on { opacity: 1; }
-/* 번호 마커 — 영역 좌상단 모서리에 걸치는 블루 원(백색 링으로 화면과 분리). 활성 시 나머지는 물러난다. */
+/* 번호 마커 — 유령 배지(백지 + 블루 숫자), 활성만 블루 채움. 데스크톱(hover)은 쉬는 상태에 아예 숨겨
+   화면을 스크린샷 그대로 두고, 이미지를 만지거나 범례를 짚거나 첫 시연(is-demo)일 때만 떠오른다.
+   터치(hover 없음)는 탭 표적이라 항상 노출 — 유령 톤이라 화면을 덜 가린다. */
 .md-shot-marker { position: absolute; z-index: 2; transform: translate(-42%, -42%); width: 23px; height: 23px;
-  padding: 0; border: 0; border-radius: 999px; background: var(--blue); color: #fff; cursor: pointer;
+  padding: 0; border: 0; border-radius: 999px; background: rgba(255, 255, 255, .94); color: var(--blue); cursor: pointer;
   font-family: inherit; font-size: 12px; font-weight: 800; line-height: 23px; text-align: center;
-  box-shadow: 0 0 0 2px #fff, 0 1px 6px rgba(21, 35, 59, .28);
-  transition: opacity var(--dur-base, 150ms) ease, transform var(--dur-base, 150ms) ease; }
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--blue) 42%, transparent), 0 1px 5px rgba(21, 35, 59, .2);
+  transition: opacity var(--dur-base, 150ms) ease, transform var(--dur-base, 150ms) ease,
+    background-color var(--dur-base, 150ms) ease, color var(--dur-base, 150ms) ease; }
+.md-shot-marker.is-on { background: var(--blue); color: #fff;
+  box-shadow: 0 0 0 2px #fff, 0 1px 6px rgba(21, 35, 59, .28); }
+@media (hover: hover) {
+  .md-shot-marker { opacity: 0; pointer-events: none; }
+  .md-shot-stage:hover .md-shot-marker, .md-shot-stage.has-on .md-shot-marker,
+  .md-shot-stage.is-demo .md-shot-marker, .md-shot-marker:focus-visible { opacity: 1; pointer-events: auto; }
+}
+/* 활성이 있으면 나머지 마커는 물러난다 — 위 hover 노출(1)보다 뒤에 두어 이긴다. */
 .md-shot-stage.has-on .md-shot-marker { opacity: .35; }
 .md-shot-stage.has-on .md-shot-marker.is-on { opacity: 1; transform: translate(-42%, -42%) scale(1.08); }
 .md-shot-marker:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
@@ -233,6 +245,8 @@ input.emb-num { width: 120px; flex: none; }
 @media (prefers-reduced-motion: reduce) {
   .md-shot-hl, .md-shot-marker, .md-shot-part, .md-shot-pnum { transition: none; }
   .md-shot-stage.has-on .md-shot-marker.is-on { transform: translate(-42%, -42%); }
+  /* 첫 시연(JS)이 생략되는 환경 — 마커를 상시 노출해 번호 대응이 시연 없이도 읽히게 한다. */
+  .md-shot-marker { opacity: 1; pointer-events: auto; }
 }
 
 /* 온보딩 connect '지금 하기' 선택 — 중앙 팝업(overlayBox). 웹=추천 / 로컬=개발자용 배지로 구분. */
