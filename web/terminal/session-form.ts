@@ -428,8 +428,8 @@ function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any;
       nodeSel, // #869 등록 노드가 없으면 '중앙 컴퓨터(기본)' 한 줄만 보인다(submit 값은 기존과 동일 '')
       el('span', { class: 'ig-mid', text: '에서' }),
       harnessSel,
-      el('span', { class: 'ig-tail' }, document.createTextNode('로 돕니다.'),
-        infoPop('**어느 컴퓨터에서 어떤 AI 로** 돌릴지입니다.\n\n· **중앙 컴퓨터**(기본) — 내 노트북을 꺼도 세션은 계속 실행됩니다.\n· **내 PC** — 노드로 등록해 두었다면 골라서 그 컴퓨터에서 실행할 수 있습니다.')),
+      el('span', { class: 'ig-tail' }, document.createTextNode('로 실행됩니다.'),
+        infoPop('**어느 컴퓨터에서 어떤 AI 로** 실행할지 정합니다.\n\n· **중앙 컴퓨터**(기본) — 내 노트북을 꺼도 세션은 계속 실행됩니다.\n· **내 PC** — 노드로 등록해 두었다면 골라서 그 컴퓨터에서 실행할 수 있습니다.')),
       flagsBox,  // 「모델은 [ ] , 추론강도는 [ ] 를 씁니다.」 — renderFlags 가 채운다
       modeRow),  // 「라이블리는 [ ] 모드로 쓰고, 기록은 [ ] 범위로 남깁니다.」
     profileNoteEl(cfg),

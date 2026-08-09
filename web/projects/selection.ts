@@ -323,7 +323,7 @@ async function pjvBulkRunDefaultsModal(ctx) {
   const runGrid = el('div', { class: 'ig-grid' },
     el('span', { class: 'ig-lead', text: '실행은' }),
     harnessSel,
-    el('span', { class: 'ig-mid', text: '로, 모델은' }),
+    el('span', { class: 'ig-mid', text: '로 실행하고, 모델은' }),
     modelSel,
     el('span', { class: 'ig-tail' }, document.createTextNode('를 씁니다.'),
       infoPop('선택한 태스크를 맡길 **AI 와 모델**입니다.\n\n모델의 「지난번 그대로」는 그 값을 **넘기지 않는다**는 뜻입니다 — 그 AI 가 자기 설정(마지막에 고른 모델)으로 뜹니다.')));

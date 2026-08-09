@@ -444,7 +444,7 @@ function openTermCreateForm(cfg, view, onCreated, opts) {
     // 문장 격자(#1145 안 2) — 라벨 6개를 세우는 대신 세 문장으로 읽힌다. 5열(앞말·값·중간말·값·끝말)이라
     //  줄이 달라도 드롭다운이 세로로 정렬된다(라벨형 격자가 '들쭉날쭉'했던 이유가 그 정렬 부재였다).
     el('div', { class: 'ig-grid' }, el('span', { class: 'ig-lead', text: '이 세션은' }), nodeSel, // #869 등록 노드가 없으면 '중앙 컴퓨터(기본)' 한 줄만 보인다(submit 값은 기존과 동일 '')
-    el('span', { class: 'ig-mid', text: '에서' }), harnessSel, el('span', { class: 'ig-tail' }, document.createTextNode('로 돕니다.'), infoPop('**어느 컴퓨터에서 어떤 AI 로** 돌릴지입니다.\n\n· **중앙 컴퓨터**(기본) — 내 노트북을 꺼도 세션은 계속 실행됩니다.\n· **내 PC** — 노드로 등록해 두었다면 골라서 그 컴퓨터에서 실행할 수 있습니다.')), flagsBox, // 「모델은 [ ] , 추론강도는 [ ] 를 씁니다.」 — renderFlags 가 채운다
+    el('span', { class: 'ig-mid', text: '에서' }), harnessSel, el('span', { class: 'ig-tail' }, document.createTextNode('로 실행됩니다.'), infoPop('**어느 컴퓨터에서 어떤 AI 로** 실행할지 정합니다.\n\n· **중앙 컴퓨터**(기본) — 내 노트북을 꺼도 세션은 계속 실행됩니다.\n· **내 PC** — 노드로 등록해 두었다면 골라서 그 컴퓨터에서 실행할 수 있습니다.')), flagsBox, // 「모델은 [ ] , 추론강도는 [ ] 를 씁니다.」 — renderFlags 가 채운다
     modeRow), // 「라이블리는 [ ] 모드로 쓰고, 기록은 [ ] 범위로 남깁니다.」
     profileNoteEl(cfg), el('div', { class: 'term-checks', 'data-tour': 'options' }, autoWrap));
     const advOpen = () => { advBody.removeAttribute('hidden'); advCaret.textContent = '▾'; };
