@@ -83,7 +83,10 @@ catch { /* 저장 실패 무시 */ } }
 const DASH_LAYOUT_KEY = 'dash_layout_v1';
 // 2 = 'off(기본 숨김)' 개념이 생긴 뒤 · 3 = 검토 대기 지식도 off 로(기본 배치를 1단계 프리셋과 완전히 동일하게).
 //  v2 는 짧게 살아 있었지만 그 사이에 저장한 사람에겐 검토 대기가 열에 박혀 있다 — 버전을 올려 그 한 번을 되돌린다.
-const DASH_LAYOUT_VER = 3;
+// 4 = '최신 알림' hidden 구제(#1570) — 알림 개편(#1571)의 과도기(최신 알림→통합 인박스 대체 후 원복) 상태를
+//  연 브라우저에 notif 가 hidden 으로 저장돼 남았다("숨긴 적 없는데 사라짐"). v3 때와 같은 되돌리기를 반대
+//  방향으로 한 번 한다(shell.ts dashLayout 마이그레이션).
+const DASH_LAYOUT_VER = 4;
 function dashSaveLayout(lay) { try {
     localStorage.setItem(DASH_LAYOUT_KEY, JSON.stringify({ v: DASH_LAYOUT_VER, ...lay }));
 }
