@@ -578,18 +578,30 @@ function renderContainer(type, rest, bodyLines) {
           // 크롭 사각형 — 구역 rect 에 약간의 프레이밍 여백(이미지 가장자리는 클램프)
           const px = 0.6, py = px * imgAspect;
           const l2 = Math.max(0, s0.l - px), t2 = Math.max(0, s0.t - py);
-          const w2 = Math.min(100, s0.l + s0.w + px) - l2, h2 = Math.min(100, s0.t + s0.h + py) - t2;
+          const w2 = Math.min(100, s0.l + s0.w + px) - l2;
+          let h2 = Math.min(100, s0.t + s0.h + py) - t2;
+          let t2b = t2;
+          // 아주 홀쭉한 구역(사이드바 등)은 통째로 오리면 글씨가 안 보일 만큼 작아진다 —
+          //  짚는 지점들이 담기는 만큼만 세로로 잘라 확대 배율을 지킨다(구역 표시 자체는 원래 크기 그대로).
+          if ((w2 / h2) * imgAspect < 0.5 && s0.elems.length) {
+            const need = (w2 * imgAspect) / 0.5;                 // 가로세로비 0.5 를 만드는 높이
+            const ys = s0.elems.map((e0: any) => e0.y);
+            const mid = (Math.min(...ys) + Math.max(...ys)) / 2;
+            const span = Math.max(need, Math.max(...ys) - Math.min(...ys) + 2 * py);
+            t2b = Math.min(Math.max(t2, mid - span / 2), t2 + h2 - Math.min(span, h2));
+            h2 = Math.min(span, h2);
+          }
           const cropAspect = (w2 / h2) * imgAspect;
           const wideLayout = cropAspect >= 1.55;   // 가로형 → 말풍선 위/아래 행, 세로형 → 크롭 왼쪽 + 말풍선 오른쪽 열
           const crop = el('div', { class: 'md-shotx-crop', 'aria-hidden': 'true',
             style: `aspect-ratio:${(w2 * imgAspect).toFixed(3)} / ${h2.toFixed(3)};`
               + `background-image:url('${attrs.src || ''}');`
               + `background-size:${(10000 / w2).toFixed(2)}% ${(10000 / h2).toFixed(2)}%;`
-              + `background-position:${w2 >= 100 ? 0 : (l2 / (100 - w2) * 100).toFixed(2)}% ${h2 >= 100 ? 0 : (t2 / (100 - h2) * 100).toFixed(2)}%` });
+              + `background-position:${w2 >= 100 ? 0 : (l2 / (100 - w2) * 100).toFixed(2)}% ${h2 >= 100 ? 0 : (t2b / (100 - h2) * 100).toFixed(2)}%` });
           const pairs: any[] = [];
           const mkPair = (e0: any) => {
             const d0 = el('span', { class: 'md-shotx-dot',
-              style: `left:${((e0.x - l2) / w2 * 100).toFixed(2)}%; top:${((e0.y - t2) / h2 * 100).toFixed(2)}%` });
+              style: `left:${((e0.x - l2) / w2 * 100).toFixed(2)}%; top:${((e0.y - t2b) / h2 * 100).toFixed(2)}%` });
             const b0 = el('div', { class: 'md-shotx-bl' },
               el('span', { class: 'md-shotx-bn', 'aria-hidden': 'true' }),
               el('span', { class: 'md-shotx-bt' }, ...renderInline(e0.name)),
@@ -600,7 +612,7 @@ function renderContainer(type, rest, bodyLines) {
           };
           // 말풍선 자리 = 짚는 지점을 따라간다(교차·엇갈림 방지). 가로형은 지점이 위 절반이면 위 행,
           //  아래 절반이면 아래 행 — 가까운 변으로 나간다. 아주 납작한 스트립은 위/아래 교대로 균형을 잡는다.
-          const rel = (e0: any) => ({ rx: (e0.x - l2) / w2, ry: (e0.y - t2) / h2 });
+          const rel = (e0: any) => ({ rx: (e0.x - l2) / w2, ry: (e0.y - t2b) / h2 });
           const elems = s0.elems.slice().sort((a: any, b1: any) => (wideLayout ? a.x - b1.x : a.y - b1.y));
           const body = el('div', { class: 'md-shotx-body ' + (wideLayout ? 'is-wide' : 'is-tall') });
           const groups: { box: any; list: any[]; side: string }[] = [];
