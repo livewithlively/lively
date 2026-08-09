@@ -436,17 +436,27 @@ function renderContainer(type, rest, bodyLines) {
       for (const raw of bodyLines) {
         const t = (raw || '').trim();
         if (!t || t === ':::') continue;
+        // 요소줄(v3): '@ x% | y% | 이름 ~ 설명' — 직전 구역 안의 세부 요소(말풍선 콜아웃) 앵커.
+        //  요소줄이 하나라도 있으면 그 shot 은 v3(구역 탭 + 콜아웃 패널)로 렌더된다. 없으면 v2 범례 그대로.
+        if (t.startsWith('@') && items.length) {
+          const parts = t.slice(1).split('|').map((s) => s.trim());
+          const nmRaw = parts.slice(2).join(' | ');
+          const [name, desc] = nmRaw.split('~').map((s) => s.trim());
+          items[items.length - 1].elems.push({ x: parseFloat(parts[0]), y: parseFloat(parts[1]), name: name || '', desc: desc || '' });
+          continue;
+        }
         const isCoord = /^[\d.]+\s*\|/.test(t) && t.split('|').length >= 5;
         if (isCoord) {
           const parts = t.split('|').map((s) => s.trim());
           const n = parts.map((c) => parseFloat(c));
           const titleRaw = parts.slice(4).join(' | ');
           const [title, sub] = titleRaw.split('~').map((s) => s.trim());
-          items.push({ l: n[0], t: n[1], w: n[2], h: n[3], title, detail: sub ? [sub] : [] });
+          items.push({ l: n[0], t: n[1], w: n[2], h: n[3], title, detail: sub ? [sub] : [], elems: [] });
         } else if (items.length) {
           items[items.length - 1].detail.push(t);
         }
       }
+      const hasElems = items.some((s0) => s0.elems.length > 0);
       const stage = el('div', { class: 'md-shot-stage' },
         el('img', { class: 'md-shot-img', src: attrs.src || '', alt: attrs.alt || '화면 스크린샷', loading: 'lazy' }));
       const fig = el('figure', { class: 'md-shot' }, stage);
@@ -455,8 +465,9 @@ function renderContainer(type, rest, bodyLines) {
       //  번쩍임 제거). 진입은 짧은 머뭇(의도 판정) 뒤에 켜고, 이탈은 유예를 두고 끈다 — 마우스가 스쳐
       //  지나가거나 구역 사이 틈을 건널 때 딤이 펄럭이지 않게.
       const hl = el('span', { class: 'md-shot-hl', 'aria-hidden': 'true' });
-      let sticky = -1;   // 클릭 고정된 항목(없으면 -1) — hover 는 고정이 없을 때만 반영
+      let sticky = -1;   // v2: 클릭 고정된 항목(없으면 -1). v3: 현재 선택된 구역 탭(항상 ≥0)
       let active = -1;
+      let selectTab: ((i: number) => void) | null = null;   // v3 에서만 할당 — wire 의 클릭이 여기로 온다
       let pend: any = 0, clr: any = 0;
       const place = (s0: any) => { hl.style.left = s0.l + '%'; hl.style.top = s0.t + '%';
         hl.style.width = s0.w + '%'; hl.style.height = s0.h + '%'; };
@@ -474,20 +485,21 @@ function renderContainer(type, rest, bodyLines) {
         rows.forEach((r, k) => r.classList.toggle('is-on', k === active));
       };
       const enter = (i: number) => {
-        if (sticky >= 0) return;
+        if (sticky >= 0 && !hasElems) return;              // v2 고정 중엔 hover 무시. v3 는 고정(탭) 위로 미리보기 허용
         clearTimeout(clr); clr = 0;                        // 유예 중 재진입 — 딤을 끊지 않는다
         if (active === i) { clearTimeout(pend); pend = 0; return; }
         clearTimeout(pend);
         pend = setTimeout(() => setOn(i), active >= 0 ? 60 : 130);   // 첫 점등은 머뭇, 이동은 빠르게
       };
       const leave = () => {
-        if (sticky >= 0) return;
+        if (sticky >= 0 && !hasElems) return;
         clearTimeout(pend); pend = 0;
         clearTimeout(clr);
-        clr = setTimeout(() => setOn(-1), 200);            // 이탈 유예 — 틈을 건너는 동안 유지
+        clr = setTimeout(() => setOn(hasElems ? sticky : -1), 200);  // v3: 손을 떼면 선택된 탭 구역으로 복귀
       };
       const toggle = (i: number) => { sticky = sticky === i ? -1 : i; setOn(sticky); };
-      const wire = (i: number) => ({ onmouseenter: () => enter(i), onmouseleave: leave, onclick: () => toggle(i),
+      const wire = (i: number) => ({ onmouseenter: () => enter(i), onmouseleave: leave,
+        onclick: () => { if (hasElems && selectTab) selectTab(i); else toggle(i); },
         onfocus: () => enter(i), onblur: leave });
       items.forEach((s0, i) => {
         if (![s0.l, s0.t, s0.w, s0.h].every((v) => Number.isFinite(v))) return;
@@ -503,9 +515,11 @@ function renderContainer(type, rest, bodyLines) {
       stage.append(...hits, hl, ...marks);
       if (attrs.caption || summary) fig.append(el('figcaption', { class: 'md-shot-cap' },
         el('span', { class: 'md-shot-capt' }, ...renderInline(attrs.caption ? String(attrs.caption).replace(/_/g, ' ') : summary)),
-        items.length ? el('span', { class: 'md-shot-hint', 'aria-hidden': 'true', text: '화면이나 항목을 짚으면 그 영역만 밝혀집니다' }) : null));
+        items.length ? el('span', { class: 'md-shot-hint', 'aria-hidden': 'true',
+          text: hasElems ? '아래 탭이나 화면 위 번호를 눌러 구역을 하나씩 살펴보세요' : '화면이나 항목을 짚으면 그 영역만 밝혀집니다' }) : null));
       // 범례 — 번호와 1:1 로 묶인 부품 목록(2열 그리드). 짚으면 위 화면의 해당 영역이 밝혀진다.
-      if (items.length) {
+      //  v3(요소줄 있음)에선 범례 대신 아래 구역 탭 + 콜아웃 패널이 그 역할을 맡는다.
+      if (items.length && !hasElems) {
         fig.append(el('div', { class: 'md-shot-legend' }, ...items.map((s0, i) => {
           const body = el('span', { class: 'md-shot-pbody' },
             el('span', { class: 'md-shot-ptitle' }, ...renderInline(s0.title || '')));
@@ -520,7 +534,7 @@ function renderContainer(type, rest, bodyLines) {
       //  대응을 처음 한 번은 보여줘야 한다: 이 라우트에서 처음 화면에 들어온 shot 하나만 마커를 띄우고
       //  1번 구역을 잠깐 밝혔다 놓는다. 사용자가 만지기 시작하면 즉시 중단, 모션 축소 설정이면 생략
       //  (그땐 마커·범례 숫자가 상시 대응을 대신한다 — 아래 CSS reduced-motion 참조).
-      if (items.length && typeof IntersectionObserver !== 'undefined'
+      if (items.length && !hasElems && typeof IntersectionObserver !== 'undefined'
           && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
         const io = new IntersectionObserver((es) => {
           if (!es.some((e0) => e0.isIntersecting)) return;
@@ -538,6 +552,133 @@ function renderContainer(type, rest, bodyLines) {
           fig.addEventListener('pointerdown', cancelDemo, { once: true });
         }, { threshold: 0.3 });
         io.observe(stage);
+      }
+      // ── v3(#1107) 구역 탭 + 콜아웃 패널 — 요소줄이 있는 shot 만. 위 화면은 지도(스포트라이트 유지),
+      //  아래 패널은 선택한 구역의 확대 크롭 + 말풍선이다. 크롭은 같은 스크린샷을 background-position 으로
+      //  오려내 추가 자산이 없고, 말풍선은 절대배치가 아니라 일반 플로우(행/열)라 서로 겹칠 수 없다.
+      //  안내선(SVG)은 레이아웃이 잡힌 뒤 실측 좌표로 말풍선과 화면 속 지점을 잇는다.
+      if (hasElems) {
+        fig.classList.add('md-shot--x');
+        const img0 = stage.querySelector('img') as HTMLImageElement;
+        const tabBtns: any[] = [];
+        const panel = el('section', { class: 'md-shotx-panel', role: 'tabpanel' });
+        let ro: any = null;
+        const renderPanel = (i: number) => {
+          if (ro) { ro.disconnect(); ro = null; }
+          panel.textContent = '';
+          const s0 = items[i];
+          if (!s0) return;
+          if (s0.detail.length) {
+            const lead = el('p', { class: 'md-shotx-lead' });
+            s0.detail.forEach((d: string, k: number) => { if (d) { if (k) lead.append(' '); lead.append(...renderInline(d)); } });
+            panel.append(lead);
+          }
+          const iw = (img0 && img0.naturalWidth) || 1440, ih = (img0 && img0.naturalHeight) || 900;
+          const imgAspect = iw / ih;
+          // 크롭 사각형 — 구역 rect 에 약간의 프레이밍 여백(이미지 가장자리는 클램프)
+          const px = 0.6, py = px * imgAspect;
+          const l2 = Math.max(0, s0.l - px), t2 = Math.max(0, s0.t - py);
+          const w2 = Math.min(100, s0.l + s0.w + px) - l2, h2 = Math.min(100, s0.t + s0.h + py) - t2;
+          const cropAspect = (w2 / h2) * imgAspect;
+          const wideLayout = cropAspect >= 1.55;   // 가로형 → 말풍선 위/아래 행, 세로형 → 크롭 왼쪽 + 말풍선 오른쪽 열
+          const crop = el('div', { class: 'md-shotx-crop', 'aria-hidden': 'true',
+            style: `aspect-ratio:${(w2 * imgAspect).toFixed(3)} / ${h2.toFixed(3)};`
+              + `background-image:url('${attrs.src || ''}');`
+              + `background-size:${(10000 / w2).toFixed(2)}% ${(10000 / h2).toFixed(2)}%;`
+              + `background-position:${w2 >= 100 ? 0 : (l2 / (100 - w2) * 100).toFixed(2)}% ${h2 >= 100 ? 0 : (t2 / (100 - h2) * 100).toFixed(2)}%` });
+          const pairs: any[] = [];
+          const mkPair = (e0: any) => {
+            const d0 = el('span', { class: 'md-shotx-dot',
+              style: `left:${((e0.x - l2) / w2 * 100).toFixed(2)}%; top:${((e0.y - t2) / h2 * 100).toFixed(2)}%` });
+            const b0 = el('div', { class: 'md-shotx-bl' },
+              el('span', { class: 'md-shotx-bn', 'aria-hidden': 'true' }),
+              el('span', { class: 'md-shotx-bt' }, ...renderInline(e0.name)),
+              e0.desc ? el('span', { class: 'md-shotx-bd' }, ...renderInline(e0.desc)) : null);
+            crop.append(d0);
+            pairs.push({ b0, d0, line: null });
+            return b0;
+          };
+          // 정렬 — 안내선이 서로 교차하지 않게. 가로형은 x 순. 세로형(말풍선이 오른쪽 열)은 y 순이되,
+          //  위젯 머리글처럼 같은 높이 띠에 지점이 여럿이면 열에 가까운(x 큰) 것부터 — 부챗살로 퍼져 교차가 없다.
+          const bandOf = (e0: any) => Math.round(((e0.y - t2) / h2) * 8);
+          const elems = s0.elems.slice().sort((a: any, b1: any) =>
+            (wideLayout ? a.x - b1.x : (bandOf(a) - bandOf(b1)) || (b1.x - a.x)));
+          const body = el('div', { class: 'md-shotx-body ' + (wideLayout ? 'is-wide' : 'is-tall') });
+          if (wideLayout) {
+            // 행 배정 — 얇은 스트립(선이 어차피 짧다)은 위/아래 교대로 균형을 잡고,
+            //  키가 있는 크롭은 지점이 위쪽 절반이면 위 행, 아래쪽 절반이면 아래 행 — 선이 화면을 길게 가로지르지 않게.
+            const thin = cropAspect > 4;
+            const top: any[] = [], bot: any[] = [];
+            elems.forEach((e0: any, k: number) => {
+              const toTop = thin ? k % 2 === 0 : ((e0.y - t2) / h2) < 0.5;
+              (toTop ? top : bot).push(e0);
+            });
+            const row = (list: any[]) => el('div', { class: 'md-shotx-row', style: `--cols:${list.length}` },
+              ...list.map(mkPair));
+            if (top.length) body.append(row(top));
+            body.append(crop);
+            if (bot.length) body.append(row(bot));
+          } else {
+            body.append(crop, el('div', { class: 'md-shotx-col' }, ...elems.map(mkPair)));
+          }
+          const NS = 'http://www.w3.org/2000/svg';
+          const net = document.createElementNS(NS, 'svg');
+          net.setAttribute('class', 'md-shotx-net');
+          net.setAttribute('aria-hidden', 'true');
+          body.append(net);
+          panel.append(body);
+          // 말풍선 ↔ 지점 짝 강조 — 어느 쪽을 짚어도 둘 다 밝아진다
+          pairs.forEach((p0) => {
+            const hot = (on: boolean) => () => { p0.b0.classList.toggle('is-hot', on); p0.d0.classList.toggle('is-hot', on);
+              if (p0.line) p0.line.classList.toggle('is-hot', on); };
+            p0.b0.onmouseenter = hot(true); p0.b0.onmouseleave = hot(false);
+            p0.d0.onmouseenter = hot(true); p0.d0.onmouseleave = hot(false);
+          });
+          const draw = () => {
+            const bb = body.getBoundingClientRect();
+            if (!bb.width) return;
+            net.setAttribute('viewBox', `0 0 ${bb.width} ${bb.height}`);
+            net.textContent = '';
+            pairs.forEach((p0) => {
+              const br = p0.b0.getBoundingClientRect(), dr = p0.d0.getBoundingClientRect();
+              const dx2 = dr.left + dr.width / 2 - bb.left, dy2 = dr.top + dr.height / 2 - bb.top;
+              let x1: number, y1: number;
+              // 출발점은 말풍선 변 위에서 지점과 가장 가까운 자리 — 사선을 최소화해 선이 흐트러지지 않게
+              if (wideLayout) {   // 위 행은 아래변, 아래 행은 윗변에서 출발
+                x1 = Math.min(Math.max(dx2, br.left - bb.left + 18), br.right - bb.left - 18);
+                y1 = (br.bottom <= dr.top + 1 ? br.bottom : br.top) - bb.top;
+              } else {            // 말풍선 왼쪽 변에서 출발
+                x1 = br.left - bb.left;
+                y1 = Math.min(Math.max(dy2, br.top - bb.top + 14), br.bottom - bb.top - 14);
+              }
+              const path = document.createElementNS(NS, 'path');
+              path.setAttribute('d', `M ${x1.toFixed(1)} ${y1.toFixed(1)} L ${dx2.toFixed(1)} ${dy2.toFixed(1)}`);
+              path.setAttribute('class', 'md-shotx-line');
+              net.append(path);
+              p0.line = path;
+            });
+          };
+          if (typeof ResizeObserver !== 'undefined') { ro = new ResizeObserver(() => draw()); ro.observe(body); }
+          else requestAnimationFrame(draw);
+        };
+        const tabs = el('nav', { class: 'md-shotx-tabs', role: 'tablist', 'aria-label': '화면 구역' });
+        items.forEach((s0, i) => {
+          const b0 = el('button', { type: 'button', class: 'md-shotx-tab', role: 'tab', 'aria-selected': 'false',
+            onclick: () => { if (selectTab) selectTab(i); } },
+            el('span', { class: 'md-shotx-tno', 'aria-hidden': 'true', text: String(i + 1) }),
+            el('span', { class: 'md-shotx-tlab', text: s0.title || '' }));
+          tabBtns.push(b0);
+          tabs.append(b0);
+        });
+        selectTab = (i: number) => {
+          sticky = i;
+          setOn(i);
+          tabBtns.forEach((b0, k) => { b0.classList.toggle('is-on', k === i); b0.setAttribute('aria-selected', k === i ? 'true' : 'false'); });
+          renderPanel(i);
+        };
+        fig.append(tabs, panel);
+        if (img0 && !img0.complete) img0.addEventListener('load', () => { if (selectTab) selectTab(sticky); }, { once: true });
+        selectTab(0);
       }
       return fig;
     }
