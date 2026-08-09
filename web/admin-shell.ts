@@ -241,11 +241,13 @@ const SECTION_REMAP = {
 const SECTION_EXIT = { 'review-queue': '#/knowledge/review', 'wiki-categories': '#/categories',
   // #1419 — 파이프라인 단계에 속한 설정을 [맥락 관리]로 모았다. 관리탭에 남겨 두면 입구가 둘이 되고,
   //  그 단계를 보면서 앞뒤를 못 본다. 옛 딥링크·북마크는 여기서 새 자리로 넘긴다(끊지 않는다).
-  'distillers': '#/context/distill',
-  'ingest-policy': '#/context/distill',
-  'connectors': '#/context/collect',
-  'collector-presets': '#/context/collect',
-  'source-vis-policy': '#/context/collect' };
+  //  #1584 — 그 단계의 **어느 화면**인지까지 주소가 말한다(단계 안 하위 탭이 좌측 사이드바 항목이 되면서
+  //  화면마다 주소가 생겼다). 종전엔 단계까지만 보내 놓고 첫 화면에 떨어뜨렸다.
+  'distillers': '#/context/distill/distillers',
+  'ingest-policy': '#/context/distill/ingest-policy',
+  'connectors': '#/context/collect/collectors',
+  'collector-presets': '#/context/collect/presets',
+  'source-vis-policy': '#/context/collect/source-vis' };
 // admin 권한 전용(쓰기·인프라·감사). #318 호출통계·#549 변경감사는 전 구성원의 변경·before/after 를 노출하므로 admin.
 // (증류기는 #1419 에서 [맥락 관리 ▸ 증류]로 이관 — 여기 목록에 없다. 서버 scope 도 memory(워킹레벨)라
 //  애초에 관리자 전용이 아니었다: 팀이 자기 채널의 증류 기준을 직접 조절하는 게 그 기능의 취지다.)

@@ -5,29 +5,92 @@
  *  카드 안 카드 중첩 금지 규칙에 따라, 단계 카드 내부는 카드가 아니라 평면 블록으로 짠다.
  */
 
-/* ── 레이아웃 ── */
-.ctx-layout { max-width: 1160px; margin: 0 auto; padding: 0 20px 64px; }
-.ctx-body { margin-top: 18px; }
+/* ── 레이아웃(#1584) — 위계 2단(단계 ▸ 화면)을 좌측 사이드바 하나가 전담한다. ──
+ *  종전엔 페이지 안에 가로 탭이 2층으로 쌓여 있었다(단계 바 + 세그먼티드 바). 다른 탭
+ *  (프로젝트·WIKI·관리)이 전부 좌측 내비인데 이 탭만 달랐고, 2층 아래에서 본문이 시작해 그만큼 밀렸다.
+ *  사이드바 마크업·스타일은 관리탭·사용 가이드의 .docs-side 를 그대로 쓴다(26-docs-guide.css) —
+ *  여기서는 이 탭 사정(본문 폭·단계 번호·권한 배지)만 덧쓴다. */
+body[data-route="context"] main { max-width: none; }   /* 관리탭과 같다 — 폭은 아래 .ctx-body 가 잡는다 */
+/* 2단 골격(반응형 세로 스택 포함)은 .docs-layout/.docs-side 가 갖는다(26-docs-guide.css) — 마크업이 두
+   클래스를 함께 단다. 여기 .ctx-layout 은 그 위에 이 탭 사정만 덧쓰는 자리다(관리탭 .admin-layout 과 같은 짝). */
+/* 본문 읽기 폭 — 전폭이면 27인치에서 카드 한 줄이 너무 길어 한눈에 안 들어온다(#1085 관리탭과 같은 처방).
+   1160 은 종전 .ctx-layout 컬럼과 같은 값이라 탭을 옮겨도 화면이 넓어졌다 좁아졌다 하지 않는다. */
+.ctx-body { flex: 1; min-width: 0; max-width: 1160px; padding: 4px 0 48px; }
 
-/* ── 단계 내비 — 파이프라인 순서 그대로. 순서 자체가 정보라 가로 배열을 유지한다. ── */
-.ctx-nav {
-  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
-  border-bottom: 1px solid var(--line); padding-bottom: 0; margin-top: 16px;
+/* ── 단계 레일(#1584) — 번호 원을 세로선으로 이어 '수집 → 증류 → 분류 → 관리'를 흐름으로 읽히게. ──
+ *  왜: 좌측으로 옮기고 번호만 붙였더니 **지금 어느 단계인지 감각이 죽었다**(사용자 지적). 가로 배열이
+ *  공짜로 주던 순서·진행을 세로에서 되찾으려면 선이 있어야 한다. 상태는 셋 — 지나온(is-done) ·
+ *  현재(is-current) · 아직(is-todo). 개요를 보는 중이면 현재 단계가 없어 넷 다 '아직'으로 물러난다.
+ *  ⚠ 칠하는 건 레일과 머리글뿐이다 — 항목(.docs-item)까지 흐리게 하면 갈 수 있는 화면이 잠긴 것처럼 보인다. */
+.ctx-side .docs-side-title { display: flex; align-items: center; gap: 7px; }
+.ctx-side .ctx-stage { position: relative; padding-left: 26px; margin-bottom: 22px; }
+.ctx-side .ctx-stage > .docs-side-title { padding: 0; margin-bottom: 4px; }
+.ctx-side .ctx-stage .docs-item { padding-left: 11px; }
+/* 번호 원 — 사용 가이드의 단계 배지(06-learn.css)와 같은 문법(원형 필 + 흰 숫자)을 작게 쓴다. */
+.ctx-side-step {
+  position: absolute; left: 0; top: 1px;
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 17px; height: 17px; border-radius: 999px; box-sizing: border-box;
+  border: 1.5px solid var(--line); background: var(--bg); color: var(--muted-2);
+  font-size: 10.5px; font-weight: 700; line-height: 1;
 }
-.ctx-nav-item {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 9px 14px; border-radius: 9px 9px 0 0;
-  font-size: 14px; font-weight: 600; color: var(--ink-sub);
-  border: 1px solid transparent; border-bottom: none;
-  margin-bottom: -1px; transition: color .12s ease, background .12s ease;
+/* 레일 — 원 아래에서 다음 그룹의 원까지(그룹 간격 22px 를 건너뛴다). 마지막 단계는 항목 끝에서 끊는다. */
+.ctx-side .ctx-stage::before {
+  content: ''; position: absolute; left: 7.5px; top: 20px; bottom: -22px;
+  width: 2px; border-radius: 1px; background: var(--line);
 }
-.ctx-nav-item:hover { color: var(--ink); background: var(--bg-tint); }
-.ctx-nav-item.active {
-  color: var(--ink); background: var(--bg);
-  border-color: var(--line); font-weight: 700;
+.ctx-side .ctx-stage:last-child::before { bottom: 10px; }
+
+/* 지나온 단계 · 개요(강조 없음) — 또렷하되 주장하지 않는 톤. 둘을 같이 칠하는 이유는 위 buildSide 주석 참조. */
+.ctx-side .ctx-stage.is-done::before,
+.ctx-side .ctx-stage.is-idle::before { background: var(--line-net-2); }
+.ctx-side .ctx-stage.is-done .ctx-side-step,
+.ctx-side .ctx-stage.is-idle .ctx-side-step { border-color: var(--muted-2); color: var(--ink-sub); }
+/* 현재 단계 — 채운 원 + 굵은 블루 레일. 좌측에서 눈이 먼저 닿는 유일한 지점이다. */
+.ctx-side .ctx-stage.is-current::before { background: var(--blue); width: 3px; left: 7px; }
+.ctx-side .ctx-stage.is-current .ctx-side-step { background: var(--blue); border-color: var(--blue); color: #fff; }
+.ctx-side .ctx-stage.is-current > .docs-side-title { color: var(--blue); }
+/* 아직 오지 않은 단계 — 머리글까지 흐리게(레일 기본값 그대로). */
+.ctx-side .ctx-stage.is-todo > .docs-side-title { color: var(--muted-head); }
+
+/* ── 개요 입구 카드(#1584) — 사이드바 맨 위. ──
+ *  왜 카드인가: 굵은 잉크 한 줄로 뒀더니 아래 단계 머리글(수집·증류…)과 **같은 모양**이라 라벨로 읽혔다
+ *  ("누를 수 있는 버튼 같지가 않다" — 사용자). 머리글은 안 눌리는 텍스트이므로, 같은 모양이면 안 눌리는
+ *  것으로 학습된다. 테두리·틴트가 클릭 대상임을 말하고, 아이콘이 '이어진 전체'를, 부제가 '눌러서 무엇을
+ *  보는지'를 말한다. 개요는 이 탭에서 유일하게 '설정이 아니라 상태를 보는' 화면이라 모양도 달라야 맞다. */
+.ctx-side-ov {
+  display: flex; align-items: center; gap: 9px;
+  margin: 0 0 20px; padding: 9px 10px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--bg-tint); color: var(--ink); text-decoration: none;
+  transition: border-color .12s ease, background .12s ease;
 }
-/* 개요와 4단계 사이 구분 — 개요는 '단계'가 아니라 전체 조망이다. */
-.ctx-nav-sep { width: 1px; height: 16px; background: var(--line); margin: 0 8px; }
+.ctx-side-ov:hover { border-color: var(--line-net-2); background: var(--bg-punch); }
+.ctx-side-ov:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.ctx-side-ov.active { border-color: var(--blue); background: var(--bg-punch); }
+.ctx-side-ov-ic { flex: none; color: var(--ink-sub); }
+.ctx-side-ov.active .ctx-side-ov-ic { color: var(--blue); }
+.ctx-side-ov-t { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ctx-side-ov-label { font-size: 14px; font-weight: 700; line-height: 1.35; color: var(--ink); }
+.ctx-side-ov.active .ctx-side-ov-label { color: var(--blue); }
+.ctx-side-ov-sub { font-size: 11.5px; line-height: 1.35; color: var(--muted-head); }
+.ctx-side-ov-go { margin-left: auto; flex: none; font-size: 15px; color: var(--muted-2); }
+.ctx-side-ov:hover .ctx-side-ov-go, .ctx-side-ov.active .ctx-side-ov-go { color: var(--blue); }
+
+/* ── 본문 위치 한 줄 — '맥락 관리 › ③ 분류'. 증류기 설정 페이지의 .dst-crumb 과 같은 시각 언어. ──
+ *  좌측 레일이 '어느 단계'를 말해도 시선이 본문에 있으면 그 정보가 화면 밖이다. 제목 바로 위 한 줄이
+ *  그 간극을 메운다(종전 가로 탭이 본문 바로 위에서 하던 일). */
+.ctx-crumb { display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin: 0 0 10px; font-size: 13px; color: var(--muted-head); }
+.ctx-crumb a { color: var(--ink-sub); text-decoration: none; border-radius: 6px; padding: 2px 4px; }
+.ctx-crumb a:hover { color: var(--blue); background: var(--bg-tint); }
+.ctx-crumb .ctx-crumb-stage { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; color: var(--ink); }
+.ctx-crumb-step {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; border-radius: 999px; flex: none;
+  background: var(--blue); color: #fff; font-size: 10px; font-weight: 700; line-height: 1;
+}
+.ctx-crumb-sep { color: var(--muted-2); }
 
 /* ── 파이프라인 개요 ── */
 .ctxp { display: grid; gap: 16px; }
@@ -120,15 +183,8 @@
 .ctxp-job-v { color: var(--muted-head); }
 .ctxp-jobs-link { margin-left: auto; font-size: 12.5px; font-weight: 600; color: var(--blue); }
 
-/* ── 단계별 관리 화면 공통 ── */
-.ctx-seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 9px;
-  background: var(--bg-tint-2); border: 1px solid var(--line); margin-bottom: 14px; }
-.ctx-seg-item { padding: 6px 14px; border-radius: 6px; border: none; background: transparent;
-  font-size: 13.5px; font-weight: 600; color: var(--ink-sub); cursor: pointer;
-  transition: background .12s ease, color .12s ease; }
-.ctx-seg-item:hover { color: var(--ink); }
-.ctx-seg-item.active { background: var(--bg); color: var(--ink); font-weight: 700; }
-
+/* ── 단계별 관리 화면 공통 ──
+ *  (구 세그먼티드 바(.ctx-seg)는 #1584 에서 폐지 — 2층이던 하위 탭이 좌측 사이드바 항목이 됐다.) */
 .ctx-row { margin-top: 12px; }
 .ctx-row-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .ctx-row-title { font-size: 15px; font-weight: 700; color: var(--ink); }
@@ -235,13 +291,22 @@ a.ctx-preview-t:hover { color: var(--blue); }
   .ctxp-track { grid-template-columns: 1fr 1fr; gap: 10px; }
   .ctxp-flow { display: none; }
 }
+/* 세로 스택(사이드바가 위로)될 땐 본문 폭을 명시한다 — .docs-layout 의 align-items:flex-start 가
+   세로 모드에선 '내용 폭'으로 줄여, 표·그리드가 넓은 본문이 화면 밖으로 삐져나온다(관리탭과 같은 처방). */
+@media (max-width: 960px) {
+  .ctx-body { width: 100%; }
+  /* 사이드바가 위로 올라가 가로로 흐르는 모드 — 세로 레일은 뜻을 잃으므로 걷고 번호 원만 남긴다
+     (번호가 인라인으로 돌아가 '1 수집 · 2 증류 …'가 가로 순서로 읽힌다). */
+  .ctx-side .ctx-stage { padding-left: 0; margin-bottom: 0; }
+  .ctx-side .ctx-stage::before { display: none; }
+  .ctx-side-step { position: static; }
+  /* 개요 카드는 가로 줄의 첫 칸 — 아래 여백을 걷고 폭은 내용만큼만(단계들과 한 줄에 선다). */
+  .ctx-side-ov { margin: 0; align-self: flex-start; }
+}
 @media (max-width: 640px) {
-  .ctx-layout { padding: 0 14px 48px; }
   .ctxp-track { grid-template-columns: 1fr; }
   .ctxp-summary { align-items: flex-start; flex-direction: column; gap: 6px; }
   .ctxp-jobs-link { margin-left: 0; }
-  .ctx-nav { gap: 0; }
-  .ctx-nav-item { padding: 8px 11px; font-size: 13.5px; }
   .ctx-finding-when { margin-left: 0; }
   .ctx-preset-grid { grid-template-columns: 1fr; }
 }
@@ -259,12 +324,11 @@ a.ctx-preview-t:hover { color: var(--blue); }
    왜 늘 보이나: 배지를 비관리자에게만 보이면 관리자는 자기 화면과 남의 화면이 다르다는 걸 모른 채
    "그냥 만드세요"라고 말하게 되고, 아예 안 보이면 막힌 사람이 "나만 고장났나"로 읽는다.
    문구는 '관리자' 하나로 통일한다(#1085) — admin·memory 같은 내부 scope 이름은 보는 사람에게 뜻이 없다. */
-.ctx-nav-item .admin-only-badge {
-  padding: 0 6px; border-radius: 999px;
+.ctx-side .docs-side-title .admin-only-badge {
+  padding: 0 6px; border-radius: 999px; flex: none;
   font-size: 10px; font-weight: 700; line-height: 15px; white-space: nowrap;
   background: var(--bg-tint-2); color: var(--muted-head); border: 1px solid var(--line);
 }
-.ctx-nav-item.active .admin-only-badge { background: var(--bg); border-color: var(--blue); color: var(--blue); }
 
 /* 단계 본문 첫 줄의 권한 안내 — 배지·[읽기 전용] pill 과 설명이 한 줄에서 끝나게(줄바꿈되면 두 조각으로 읽힌다). */
 .ctx-perm-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }

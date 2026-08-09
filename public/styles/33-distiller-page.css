@@ -13,7 +13,7 @@
  *  토큰만 쓴다(리터럴 색·radius 0). radius 스케일 6/9/12/16/999.
  */
 
-/* 전폭은 **이 페이지에만** — 목록(#/context/distill)은 .ctx-layout 1160 컬럼 그대로다.
+/* 전폭은 **이 페이지에만** — 목록(#/context/distill/distillers)은 .ctx-body 1160 컬럼 그대로다.
    탭을 오갈 때마다 폭이 출렁이지 않게, 라우트를 세분화해(main.ts: context-distiller) 여기서만 캡을 푼다.
    (관리탭 #827 의 body[data-route="system"] main { max-width:none } 과 같은 수법.) */
 body[data-route="context-distiller"] main { max-width: none; }
@@ -27,7 +27,7 @@ body[data-route="context-distiller"] main { max-width: none; }
 }
 
 /* ── 머리 ── */
-/* 크럼 = 되돌아갈 자리. 이 페이지엔 파이프라인 네비(.ctx-nav)를 그리지 않으므로(세로 공간 회수)
+/* 크럼 = 되돌아갈 자리. 이 페이지엔 좌측 단계 내비(.ctx-side)를 그리지 않으므로(가로 공간 회수)
    '여기가 어디인지'와 '어떻게 나가는지'를 이 한 줄이 전담한다. */
 .dst-crumb { display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   margin: 4px 0 10px; font-size: 13px; color: var(--muted-head); }
