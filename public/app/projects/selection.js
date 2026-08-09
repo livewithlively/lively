@@ -379,7 +379,7 @@ async function pjvBulkRunDefaultsModal(ctx) {
     if (((harnessCat[harnessSel.value] || { models: [] }).models || []).includes(d.model))
         modelSel.value = d.model;
     autoCb.checked = d.autoApprove === true; // #782 기본 해제(저장된 값이 있을 때만 켬)
-    const runGrid = el('div', { class: 'ig-grid' }, el('span', { class: 'ig-lead', text: '실행은' }), harnessSel, el('span', { class: 'ig-mid', text: '로, 모델은' }), modelSel, el('span', { class: 'ig-tail' }, document.createTextNode('를 씁니다.'), infoPop('선택한 태스크를 맡길 **AI 와 모델**입니다.\n\n모델의 「지난번 그대로」는 그 값을 **넘기지 않는다**는 뜻입니다 — 그 AI 가 자기 설정(마지막에 고른 모델)으로 뜹니다.')));
+    const runGrid = el('div', { class: 'ig-grid' }, el('span', { class: 'ig-lead', text: '실행은' }), harnessSel, el('span', { class: 'ig-mid', text: '로 실행하고, 모델은' }), modelSel, el('span', { class: 'ig-tail' }, document.createTextNode('를 씁니다.'), infoPop('선택한 태스크를 맡길 **AI 와 모델**입니다.\n\n모델의 「지난번 그대로」는 그 값을 **넘기지 않는다**는 뜻입니다 — 그 AI 가 자기 설정(마지막에 고른 모델)으로 뜹니다.')));
     // 워크트리 — 이 프로젝트 전용 작업 공간을 자동 준비(있으면 재사용). 브랜치명(project/<id>)은 자동 파생이라 안 묻는다(#514 후속).
     const wtChk = el('input', { type: 'checkbox' });
     wtChk.checked = d.worktree !== false;

@@ -64,8 +64,10 @@
 .ig-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr) max-content;
   gap: 9px 8px; align-items: center; margin-top: 12px; padding: 13px 14px;
   border: 1px solid var(--line); border-radius: 11px; background: var(--bg-tint); }
-.ig-lead { justify-self: end; font: 600 13px/1.4 inherit; color: var(--muted-head); white-space: nowrap; }
-.ig-mid, .ig-tail { font-size: 13px; color: var(--ink); white-space: nowrap; }
+/* 한 문장이므로 앞말·중간말·끝말은 **같은 글자**여야 한다 — 앞말만 굵거나 흐리면 라벨처럼 읽혀 문장이 끊긴다.
+   정렬(오른쪽 붙임)만 앞말의 역할이고, 서체·굵기·색은 전부 같다. */
+.ig-lead, .ig-mid, .ig-tail { font: 400 13px/1.5 inherit; color: var(--ink); white-space: nowrap; }
+.ig-lead { justify-self: end; }
 .ig-tail { display: flex; align-items: center; gap: 2px; }
 .ig-grid .ig-sel { width: 100%; min-width: 0; box-sizing: border-box; padding: 5px 6px;
   font: 600 13px/1.35 inherit; color: var(--blue-deep); background: var(--bg);
