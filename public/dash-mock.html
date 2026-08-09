@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>가상 예시 — 기본 대시보드 (더미 데이터)</title>
+<style>
+/* 앱 토큰 그대로(01-base.css) — 실제 제품에서 어떻게 보일지가 목적 */
+:root {
+  --bg:#FFFFFF; --bg-tint:#F6FAFF; --bg-tint-2:#EEF5FF;
+  --ink:#15233B; --ink-sub:#5A6B85; --muted:#8A99B5; --muted-2:#A6B2C8; --muted-3:#C2CCDD;
+  --line:#E6ECF5; --line-row:#EDF1F8;
+  --blue:#2D6BF0; --blue-deep:#1E54CC; --mint-deep:#0FA37E; --coral:#E4756B;
+  --c-read:var(--blue); --c-write:var(--mint-deep); --c-work:#8B7BD8; --c-db:var(--coral); --c-etc:var(--muted-3);
+}
+* { box-sizing:border-box; margin:0; }
+body { background:#F2F6FC; color:var(--ink); font-family:"Pretendard",-apple-system,"Apple SD Gothic Neo",sans-serif; font-size:14px; padding:20px 24px 48px; }
+.note { max-width:1500px; margin:0 auto 14px; font-size:12.5px; color:var(--ink-sub); }
+.strip { max-width:1500px; margin:0 auto 12px; display:flex; align-items:baseline; gap:10px; }
+.strip h1 { font-size:19px; font-weight:800; }
+.strip .sub { font-size:12.5px; color:var(--ink-sub); }
+.cols { max-width:1500px; margin:0 auto; display:grid; grid-template-columns:5fr 4fr 3.4fr; gap:14px; align-items:start; }
+.col { display:flex; flex-direction:column; gap:14px; }
+.zone { background:var(--bg); border:1px solid var(--line); border-radius:12px; overflow:hidden; box-shadow:0 1px 2px rgba(21,35,59,.04); }
+.zh { display:flex; align-items:center; gap:8px; padding:12px 14px 9px; }
+.zh strong { font-size:14.5px; font-weight:800; }
+.zh .n { font-size:12.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
+.zh .sp { flex:1; }
+.chip { font-size:11.5px; font-weight:700; color:var(--muted); border-radius:999px; padding:2px 9px; }
+.chip.on { color:var(--blue-deep); background:var(--bg-tint-2); }
+.zb { padding:2px 14px 13px; }
+.num { font-variant-numeric:tabular-nums; }
+.gh { display:flex; align-items:baseline; gap:6px; padding:11px 0 5px; font-size:12px; font-weight:700; color:var(--muted); }
+.gh .gn { font-weight:600; color:var(--muted-2); }
+.dot { width:7px; height:7px; border-radius:50%; flex:none; display:inline-block; }
+
+/* 1열 — 내 프로젝트(요약) · 팀 공유 폴더 */
+.pj { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; padding-top:6px; }
+.pjc { border:1px solid var(--line); border-radius:9px; padding:10px 11px 9px; }
+.pjc .t { font-size:13px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pjc .c { font-size:11.5px; color:var(--muted); margin-top:2px; }
+.pjc .bar { height:4px; border-radius:2px; background:var(--bg-tint-2); margin-top:8px; overflow:hidden; }
+.pjc .bar i { display:block; height:100%; background:var(--blue); }
+.folders { display:flex; gap:18px; padding:8px 2px 2px; }
+.fd { text-align:center; font-size:11.5px; color:var(--ink-sub); }
+.fd .ic { width:46px; height:34px; border-radius:6px; background:var(--bg-tint-2); margin:0 auto 5px; }
+
+/* 2열 — 최신 알림 · 내 AI 세션 */
+.nt { display:flex; gap:9px; padding:8px 2px; border-top:1px solid var(--line-row); align-items:flex-start; }
+.nt:first-child { border-top:0; }
+.nt .av { width:26px; height:26px; border-radius:50%; background:var(--bg-tint-2); flex:none; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:800; color:var(--blue-deep); }
+.nt .s { font-size:13px; line-height:1.5; min-width:0; }
+.nt .s b { font-weight:700; }
+.nt .w { font-size:11.5px; color:var(--muted-2); margin-top:1px; }
+.ss { border:1px solid var(--line); border-radius:9px; padding:9px 11px; margin-top:8px; }
+.ss .r1 { display:flex; align-items:center; gap:7px; font-size:13px; font-weight:700; }
+.ss .st { font-size:11px; font-weight:800; }
+.ss .st.on { color:var(--mint-deep); } .ss .st.off { color:var(--muted-2); }
+.ss .r2 { font-size:11.5px; color:var(--muted); margin-top:2px; }
+.ss .badges { display:flex; gap:5px; margin-top:7px; }
+.ss .bg { font-size:11px; font-weight:700; color:var(--blue-deep); background:var(--bg-tint-2); border-radius:6px; padding:1.5px 7px; }
+
+/* 3열 — ★ 내 라이블리 사용 내역(브리핑 A) */
+.lead { padding:7px 2px 2px; font-size:14px; line-height:1.65; }
+.lead b { font-weight:800; font-variant-numeric:tabular-nums; }
+.tiles { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:11px; }
+.tile { background:var(--bg-tint); border-radius:9px; padding:10px 11px 8px; }
+.tile .v { font-size:21px; font-weight:800; letter-spacing:-.3px; font-variant-numeric:tabular-nums; }
+.tile .l { font-size:11px; color:var(--ink-sub); margin-top:1px; }
+.tile .d { font-size:10.5px; color:var(--muted); margin-top:3px; min-height:13px; }
+.comp { display:flex; height:13px; border-radius:4px; overflow:hidden; gap:2px; margin-top:2px; }
+.comp i { display:block; height:100%; }
+.legend { display:flex; flex-wrap:wrap; gap:4px 12px; padding:8px 0 0; }
+.legend span { display:flex; align-items:center; gap:5px; font-size:11px; color:var(--ink-sub); }
+.legend b { font-weight:700; font-variant-numeric:tabular-nums; }
+.krow { display:flex; align-items:center; gap:8px; padding:6px 2px; border-top:1px solid var(--line-row); }
+.krow:first-of-type { border-top:0; }
+.krow .t { flex:1; min-width:0; font-size:12.5px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.krow .v { flex:none; font-size:11.5px; color:var(--ink-sub); }
+
+/* 3열 — 팀 작업 로그 */
+.wl { display:flex; gap:8px; padding:7px 2px; border-top:1px solid var(--line-row); align-items:flex-start; }
+.wl:first-child { border-top:0; }
+.wl .dot { margin-top:5px; }
+.wl .s { font-size:12.5px; line-height:1.5; min-width:0; }
+.wl .w { font-size:11px; color:var(--muted-2); margin-top:1px; }
+.callout { max-width:1500px; margin:10px auto 0; font-size:12px; color:var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="strip"><h1>좋은 오후예요, 상민님</h1><span class="sub">8월 9일 일요일 · 진행 중 프로젝트 6 · 실행 중 세션 1</span></div>
+<div class="note">가상 예시(전부 더미 데이터) — 로그인 직후 기본 배치. 3열이 이번에 만든 부분입니다: 위 <b>내 라이블리 사용 내역</b>, 아래 <b>팀 작업 로그</b>. 데이터는 평범한 한 주를 가정했습니다.</div>
+
+<div class="cols">
+
+<!-- ── 1열 ── -->
+<div class="col">
+  <div class="zone">
+    <div class="zh"><strong>내 프로젝트</strong><span class="n num">6</span><span class="sp"></span><span class="chip">전체</span><span class="chip on">진행 중</span></div>
+    <div class="zb"><div class="pj">
+      <div class="pjc"><div class="t">신제품 출시 준비</div><div class="c">3개 프로젝트</div><div class="bar"><i style="width:60%"></i></div></div>
+      <div class="pjc"><div class="t">고객 온보딩</div><div class="c">2개 프로젝트</div><div class="bar"><i style="width:35%"></i></div></div>
+      <div class="pjc"><div class="t">운영 개선</div><div class="c">1개 프로젝트</div><div class="bar"><i style="width:80%"></i></div></div>
+    </div></div>
+  </div>
+  <div class="zone">
+    <div class="zh"><strong>팀 공유 폴더</strong><span class="n num">4</span></div>
+    <div class="zb"><div class="folders">
+      <div class="fd"><div class="ic"></div>계약서</div>
+      <div class="fd"><div class="ic"></div>디자인</div>
+      <div class="fd"><div class="ic"></div>회의록</div>
+      <div class="fd"><div class="ic"></div>정산</div>
+    </div></div>
+  </div>
+</div>
+
+<!-- ── 2열 ── -->
+<div class="col">
+  <div class="zone">
+    <div class="zh"><strong>최신 알림</strong><span class="chip on">2 안 읽음</span></div>
+    <div class="zb">
+      <div class="nt"><span class="av">지</span><div class="s"><b>지수님</b>이 나를 언급했어요<div class="w">"@상민 이 견적 검토 부탁드려요" · 프로젝트 신제품 출시 · 2시간 전</div></div></div>
+      <div class="nt"><span class="av">민</span><div class="s"><b>민호님</b>이 댓글을 남겼어요<div class="w">고객 온보딩 체크리스트 · 어제</div></div></div>
+    </div>
+  </div>
+  <div class="zone">
+    <div class="zh"><strong>내 AI 세션</strong><span class="n num">3</span><span class="sp"></span><span class="chip">전체</span></div>
+    <div class="zb">
+      <div class="ss"><div class="r1"><span class="st on">● 진행 중</span> 견적서 검토</div><div class="r2">터미널 제목: box-sangmin-01 · 마지막 작업 10분 전</div><div class="badges"><span class="bg">프로젝트: 신제품 출시</span></div></div>
+      <div class="ss"><div class="r1"><span class="st off">● 오프라인</span> 주간 리포트 정리</div><div class="r2">어제 오후 6:10</div></div>
+      <div class="ss"><div class="r1"><span class="st off">● 오프라인</span> 정산 데이터 확인</div><div class="r2">금요일</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── 3열 ★ 이번에 만든 부분 ── -->
+<div class="col">
+  <div class="zone" style="outline:2px solid var(--blue); outline-offset:-1px">
+    <div class="zh"><strong>내 라이블리 사용 내역</strong><span class="n num">77</span><span class="sp"></span><span class="chip">24시간</span><span class="chip on">7일</span><span class="chip">30일</span></div>
+    <div class="zb">
+      <div class="lead">이번 주 라이블리는 상민님의 AI 세션에서 조직 지식 <b>9건</b>을 답변 근거로 꺼냈고, 새 지식 <b>4건</b>을 남겼어요.</div>
+      <div class="tiles">
+        <div class="tile"><div class="v">9</div><div class="l">근거로 쓴 지식</div><div class="d">지난주보다 +2</div></div>
+        <div class="tile"><div class="v">4</div><div class="l">새로 남긴 지식</div><div class="d">지난주와 비슷</div></div>
+        <div class="tile"><div class="v">12</div><div class="l">조직 DB 조회</div><div class="d">486행</div></div>
+      </div>
+      <div class="gh">활동 구성 <span class="gn num">77건</span></div>
+      <div class="comp">
+        <i style="flex:31;background:var(--c-read)"></i>
+        <i style="flex:9;background:var(--c-write)"></i>
+        <i style="flex:18;background:var(--c-work)"></i>
+        <i style="flex:12;background:var(--c-db)"></i>
+        <i style="flex:7;background:var(--c-etc)"></i>
+      </div>
+      <div class="legend">
+        <span><i class="dot" style="background:var(--c-read)"></i>지식 읽음 <b>31</b></span>
+        <span><i class="dot" style="background:var(--c-write)"></i>지식 기록 <b>9</b></span>
+        <span><i class="dot" style="background:var(--c-work)"></i>프로젝트·할 일 <b>18</b></span>
+        <span><i class="dot" style="background:var(--c-db)"></i>DB 조회 <b>12</b></span>
+        <span><i class="dot" style="background:var(--c-etc)"></i>기타 <b>7</b></span>
+      </div>
+      <div class="gh">가장 많이 기댄 지식</div>
+      <div>
+        <div class="krow"><span class="t">신제품 출시 체크리스트 v2</span><span class="v num">3번</span></div>
+        <div class="krow"><span class="t">2분기 가격 정책 결정</span><span class="v num">2번</span></div>
+        <div class="krow"><span class="t">고객사 A 온보딩 미팅 노트 (7/28)</span><span class="v num">2번</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="zone">
+    <div class="zh"><strong>팀 작업 로그</strong><span class="n num">12</span><span class="sp"></span><span class="chip">전체</span></div>
+    <div class="zb">
+      <div class="wl"><i class="dot" style="background:var(--mint-deep)"></i><div class="s">출시 페이지 초안 - 카피 2안 정리<div class="w">지수 · 1시간 전</div></div></div>
+      <div class="wl"><i class="dot" style="background:var(--blue)"></i><div class="s">가격 정책 결정 - 부가세 표기 방식 확정<div class="w">상민 · 3시간 전</div></div></div>
+      <div class="wl"><i class="dot" style="background:#8B7BD8"></i><div class="s">고객사 A 요구사항 리서치<div class="w">민호 · claude-code · 어제</div></div></div>
+      <div class="wl"><i class="dot" style="background:var(--muted-3)"></i><div class="s">정산 시트 8월분 갱신<div class="w">지수 · 어제</div></div></div>
+    </div>
+  </div>
+</div>
+
+</div>
+<div class="callout">파란 테두리는 안내용 표시일 뿐 실제 화면엔 없습니다. 활동 77건 = AI와 함께 일한 평범한 한 주 수준(하루 10~15번 도구 호출)입니다.</div>
+</body>
+</html>

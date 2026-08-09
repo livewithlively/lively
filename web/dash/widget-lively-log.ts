@@ -12,7 +12,7 @@
 //  ⚠ '읽음'은 knowledge_get(본문을 실제로 연 것)만 — 훅 자동회수(주입)는 주입≠사용이라 세면 과대계상.
 //  ⚠ 기간 단위 — mcp_call_log 에 session_id 가 없어 '이 세션에서'로는 못 묶는다(#1578).
 import { api, el, errorNote } from '../core.js';
-import { dashChips, dashCtl } from './chrome.js';
+import { dashChips, dashCtl, myDisplayName } from './chrome.js';
 
 const LVL_WINDOWS: [string, string][] = [['24h', '24시간'], ['7d', '7일'], ['30d', '30일']];
 const PAGE = 120;
@@ -58,8 +58,12 @@ async function fillLivelyLog(zone) {
     }
 
     // 리드 — 이 기간을 문장으로. 숫자는 <b>로만 세운다(색 강조 금지 — 잉크 위계).
+    //  "XX님의 AI 세션에서" — 이 내역이 누구의 작업에서 나온 것인지 주어를 박는다(사용자 요청 2026-08-09).
+    //  표시명이 없어 폴백('나')이면 '내 AI 세션에서'로 자연스럽게.
+    const who = myDisplayName();
+    const whoPhrase = who && who !== '나' ? who + '님의 AI 세션에서 ' : '내 AI 세션에서 ';
     const lead = el('div', { class: 'dash-lvl-lead' });
-    const seg: (string | HTMLElement)[] = [word + ' 라이블리는 '];
+    const seg: (string | HTMLElement)[] = [word + ' 라이블리는 ' + whoPhrase];
     if (s.knowledge_titles) { seg.push('조직 지식 ', el('b', { text: n(s.knowledge_titles) + '건' }), '을 답변 근거로 꺼냈'); }
     if (s.knowledge_saved) { seg.push(s.knowledge_titles ? '고, 새 지식 ' : '새 지식 ', el('b', { text: n(s.knowledge_saved) + '건' }), '을 남겼어요.'); }
     else if (s.knowledge_titles) seg.push('어요.');
