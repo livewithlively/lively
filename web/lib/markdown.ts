@@ -441,7 +441,9 @@ function renderContainer(type, rest, bodyLines) {
         if (t.startsWith('@') && items.length) {
           const parts = t.slice(1).split('|').map((s) => s.trim());
           const nmRaw = parts.slice(2).join(' | ');
-          const [name, desc] = nmRaw.split('~').map((s) => s.trim());
+          const cut = nmRaw.indexOf('~');   // 첫 물결표만 구분자 — 설명 안의 '①~④' 같은 표기를 살린다
+          const name = (cut < 0 ? nmRaw : nmRaw.slice(0, cut)).trim();
+          const desc = cut < 0 ? '' : nmRaw.slice(cut + 1).trim();
           items[items.length - 1].elems.push({ x: parseFloat(parts[0]), y: parseFloat(parts[1]), name: name || '', desc: desc || '' });
           continue;
         }
@@ -450,7 +452,9 @@ function renderContainer(type, rest, bodyLines) {
           const parts = t.split('|').map((s) => s.trim());
           const n = parts.map((c) => parseFloat(c));
           const titleRaw = parts.slice(4).join(' | ');
-          const [title, sub] = titleRaw.split('~').map((s) => s.trim());
+          const rc = titleRaw.indexOf('~');
+          const title = (rc < 0 ? titleRaw : titleRaw.slice(0, rc)).trim();
+          const sub = rc < 0 ? '' : titleRaw.slice(rc + 1).trim();
           items.push({ l: n[0], t: n[1], w: n[2], h: n[3], title, detail: sub ? [sub] : [], elems: [] });
         } else if (items.length) {
           items[items.length - 1].detail.push(t);
