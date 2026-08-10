@@ -111,13 +111,15 @@ function uninstallClaudeSettings() {
 }
 
 // claude mcp remove — install 의 add 역연산. 자식 HOME 명시 주입(샌드박스 격리). idempotent.
+//  ⚠ HOME 과 USERPROFILE 을 함께 준다 — 윈도우의 os.homedir() 는 USERPROFILE 을 보므로 HOME 만 주면
+//   격리가 조용히 무효가 된다(#1593 · testlib/os-sandbox.mjs 가 못박은 교훈).
 //  lively(http 본체) + lively-local(stdio 로컬조작, #899) 둘 다 해제한다.
 function deregisterClaudeMcp() {
   for (const name of ["lively", "lively-local"]) {
     const cmd = ["mcp", "remove", name, "--scope", "user"];
     if (DRY) { log(`  [dry-run] MCP 등록 해제 명령(미실행): HOME=${HOME} claude ${cmd.join(" ")}`); continue; }
     try {
-      execFileSync("claude", cmd, { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, HOME } });
+      execFileSync("claude", cmd, { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, HOME, USERPROFILE: HOME } });
       log(`  ✓ claude mcp remove ${name} --scope user`);
     } catch (e) {
       const m = String(e.stderr || e.stdout || e.message || "");
@@ -186,13 +188,13 @@ function deregisterExtraMcp() {
       continue;
     }
     try {
-      execFileSync("claude", ["mcp", "remove", name, "--scope", "user"], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, HOME } });
+      execFileSync("claude", ["mcp", "remove", name, "--scope", "user"], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, HOME, USERPROFILE: HOME } });
       log(`  ✓ claude mcp remove ${name} --scope user`);
     } catch { /* 미등록/CLI 부재 — 무시(idempotent) */ }
     // 비파괴 원복 — 유저가 설치 전부터 쓰던 항목이면 그 원본을 되살린다(라이블리가 덮어썼던 것).
     if (orig && typeof orig === "object") {
       try {
-        execFileSync("claude", ["mcp", "add-json", name, JSON.stringify(orig), "--scope", "user"], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, HOME } });
+        execFileSync("claude", ["mcp", "add-json", name, JSON.stringify(orig), "--scope", "user"], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, HOME, USERPROFILE: HOME } });
         log(`  ↩ ${name} — 설치 전 유저 MCP 설정 복원(라이블리가 덮어썼던 것)`);
       } catch (e) {
         log(`  ⚠️ ${name} 복원 실패 — 수동 복원: claude mcp add-json ${name} '${JSON.stringify(orig)}' --scope user (${String(e.message || "").split("\n")[0]})`);
