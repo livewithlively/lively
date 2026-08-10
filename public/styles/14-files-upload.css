@@ -131,61 +131,9 @@
 .proj-tl-note-ic { flex: none; color: var(--muted-2); }
 .proj-tl-more { margin-top: 10px; }
 
-/* 작업(activity) 타임라인 한 줄 — 접힘(캐럿+유형칩+요약/메타) → 클릭 펼침(본문·연결·변경). #/projects2 회사전체·#/dash 공용. */
-.act-row { border-top: 1px solid var(--line-row); }
-.act-row:first-child { border-top: none; }
-.act-row-head { display: flex; align-items: flex-start; gap: 9px; padding: 10px 6px; }
-.act-row-expandable > .act-row-head { cursor: pointer; border-radius: 9px; }
-.act-row-expandable > .act-row-head:hover { background: var(--bg-tint); }
-.act-row-caret { flex: none; width: 12px; text-align: center; color: var(--muted-2); font-size: 10px; line-height: 20px; }
-.act-row-caret-empty { visibility: hidden; }
-.act-row.open > .act-row-head .act-row-caret { color: var(--ink-sub); }
-.act-row-head > .act-type { flex: none; margin-top: 2px; }
-.act-row-body { min-width: 0; flex: 1; }
-.act-row-title { font-size: 13.5px; font-weight: 600; color: var(--ink); line-height: 1.42; word-break: break-word; }
-.act-row-meta { margin-top: 3px; font-size: 12px; color: var(--muted-2); }
-.act-row-who { color: var(--ink-sub); font-weight: 600; }
-.act-row-agent { color: var(--muted-2); }
-.act-row-time { color: var(--muted-2); }
-.act-row-tag { display: inline-block; margin-left: 8px; font-size: 10.5px; font-weight: 700; color: var(--ink-note); background: var(--bg-note); border: 1px solid var(--line-note); border-radius: 6px; padding: 0 6px; line-height: 16px; vertical-align: 1px; }
-.act-row-detail { margin: 0 6px 11px 33px; padding: 11px 14px; background: var(--bg-tint); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; gap: 8px; }
+/* 작업(activity) 행·상세(.act-row / .act-doc)는 08-activity.css 로 옮겼다(#1610) —
+   렌더러가 web/activity-view.ts 하나인데 스타일만 파일 업로드 CSS 에 얹혀 있어 찾을 수 없었다. */
 
-/* 작업 상세(act-doc) — 목록의 인라인 펼침과 단건 팝업이 **같은** 템플릿을 쓴다(#852).
-   유형이 8가지(기능·수정·결정·문서·리서치·검토·운영·기타)여도 뼈대는 하나:
-   무엇을 했나 → 자세히 → 결과물 → 어디에 반영됐나 → 언제. */
-.act-doc { display: flex; flex-direction: column; gap: 11px; min-width: 0; }
-.act-doc-head { display: flex; flex-direction: column; gap: 7px; padding-bottom: 11px; border-bottom: 1px solid var(--line); }
-.act-doc-titleline { display: flex; align-items: flex-start; gap: 8px; }
-.act-doc-titleline > .act-type { flex: none; margin-top: 3px; }
-.act-doc-title { font-size: 15px; font-weight: 700; color: var(--ink); line-height: 1.45; word-break: break-word; min-width: 0; }
-.act-doc-by { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
-.act-doc-who { font-weight: 700; color: var(--ink-sub); }
-.act-doc-agent { border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; line-height: 17px; }
-.act-doc-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.act-doc-actions:empty { display: none; }
-.act-doc-sess { border-color: var(--blue); color: var(--blue); font-weight: 700; }
-.act-doc-sec { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.act-doc-label { font-size: 11px; font-weight: 700; letter-spacing: .3px; color: var(--muted-head); }
-.act-doc-what { font-size: 13px; font-weight: 600; color: var(--ink); line-height: 1.5; word-break: break-word; }
-.act-doc-md { font-size: 13px; color: var(--ink-sub); line-height: 1.6; word-break: break-word; }
-/* 작업 본문은 '문서'가 아니라 '카드 속 메모'다 — 위키용 큰 헤딩(.md-h1~3 = 19~15.5px)이 그대로 먹으면
-   본문 소제목이 상세 제목(15px)보다 커져 위계가 뒤집힌다. 카드 눈금으로 눌러 준다(특이도 0,2,0 로 확실히). */
-.act-doc-md .md-h { margin: 12px 0 5px; }
-.act-doc-md .md-h1, .act-doc-md .md-h2, .act-doc-md .md-h3 { font-size: 13px; }
-.act-doc-md .md-h4, .act-doc-md .md-h5, .act-doc-md .md-h6 { font-size: 12.5px; }
-.act-doc-md .md-p, .act-doc-md .md-list, .act-doc-md .md-pre, .act-doc-md .md-quote { margin-bottom: 7px; }
-.act-doc-md .md-list { padding-left: 19px; }
-.act-doc-refrow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 12.5px; min-width: 0; }
-.act-doc-rel { flex: none; min-width: 54px; font-weight: 700; color: var(--muted); }
-.act-doc-links { display: flex; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
-.act-doc-link { color: var(--blue); text-decoration: none; font-weight: 600; word-break: break-word; }
-.act-doc-link:hover { text-decoration: underline; }
-.act-doc-code { color: var(--ink-sub); }
-.act-doc-chg { color: var(--ink-sub); font-weight: 600; }
-.act-doc-foot { font-size: 11px; color: var(--muted-2); }
-.act-doc-empty { font-size: 13px; color: var(--muted); line-height: 1.55; }
-/* 인라인 펼침에선 긴 본문이 목록을 삼키지 않게 가둔다 — 팝업(단건·전체 보기)에선 제한 없이 다 읽힌다. */
-.act-row-detail .act-doc-md { max-height: 420px; overflow-y: auto; scrollbar-width: thin; }
 /* 전체 작업 로그 머리 — 지금 몇 개를 보고 있는지 + 조작 힌트(6개씩 끊어 보여주던 것 폐지). */
 .proj-tl-count { font-size: 11.5px; color: var(--muted); padding: 2px 2px 8px; }
 
