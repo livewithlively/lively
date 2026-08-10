@@ -57,11 +57,20 @@ function knSpaceGroup(sk: string, countEl?: any) {
 // ★ '내 소유 카테고리' 그룹(#1600) — 사업·제품·시스템과 **같은 마크업**으로 만든다.
 //  종전엔 작은 회색 라벨(.pjv-side-favhead)이라 세 space 헤더보다 아래 위계로 읽혔다. 실제로는 그 반대다 —
 //  매일 여기서 출발하니까. 같은 형태(아바타+볼드+카운트+캐럿)를 주면 위계가 동급이 되고, 맨 위에 놓이니 첫 자리가 된다.
+//  아이콘은 stroke 별(디자인 시스템 아이콘 규칙 — 텍스트 '★' 글리프는 금지 8 '이모지 아이콘'에 해당).
+//  space 아바타(채운 색 사각 + 흰 글자)와 **자리·크기는 같고 형태만 다르게** 둔다: 옅은 틴트 + 선 아이콘.
+//  그래야 위계는 동급이면서 "이건 또 하나의 분류축이 아니라 내 것 표식"이라는 뜻이 형태로 전해진다.
+function knOwnedStar() {
+  const n = sv('svg', { class: 'kn-owned-star', viewBox: '0 0 24 24', 'aria-hidden': 'true', fill: 'none',
+    stroke: 'currentColor', 'stroke-width': '1.7', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' });
+  n.append(sv('path', { d: 'M12 3.9l2.55 5.17 5.7.83-4.13 4.02.98 5.68L12 16.91l-5.1 2.69.97-5.68-4.12-4.02 5.7-.83z' }));
+  return n;
+}
 function knOwnedGroup(countEl?: any) {
   const caret = el('span', { class: 'pjv-side-folder-caret kn-space-caret', 'aria-hidden': 'true', text: '▾' });
   const grp = el('details', { class: 'kn-space-group kn-owned-group', open: '' },
     el('summary', { class: 'pjv-side-navitem pjv-side-navfolder pjv-side-navspace kn-space-head kn-owned-head' },
-      el('span', { class: 'pjv-side-space-avatar kn-owned-ava', title: '내가 담당하는 카테고리', text: '★' }),
+      el('span', { class: 'pjv-side-space-avatar kn-owned-ava', title: '내가 담당하는 카테고리' }, knOwnedStar()),
       el('span', { class: 'pjv-side-navlabel', text: '내 소유 카테고리' }),
       countEl || null, caret));
   grp.addEventListener('toggle', () => { caret.textContent = (grp as any).open ? '▾' : '▸'; });

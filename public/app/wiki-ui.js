@@ -22,9 +22,11 @@ function wkStamp(iso) {
     }
     return (d.getMonth() + 1) + '월 ' + d.getDate() + '일 ' + hm;
 }
-// ── 출처 — "누가, 어떤 경로로 만들었나"(#1600). ──
-//  세 갈래뿐이다: 사람이 직접 썼거나(human) · 그 사람 자격으로 AI 가 썼거나(ai) · 외부에서 미러됐거나(observed).
-//  AI 저작이어도 '누구의 세션인가'는 남아 있어야 한다 — updated_by 가 그 사람이다.
+// ── 출처 — "마지막으로 누가, 어느 경로로 저장했나"(#1600). ──
+//  ⚠ confidence 는 **작성자 이력이 아니라 마지막 저장 경로**다(knowledge-store.ts:427 — 웹=human, MCP=ai,
+//   그리고 매 저장마다 덮어쓴다: "기존 보존 대상 아님"). 그래서 AI 가 쓴 문서를 사람이 오타만 고쳐도 human 이 되고,
+//   사람이 쓴 문서에 AI 가 한 줄 붙이면 ai 가 된다. '직접 작성' 같은 말을 쓰면 안 되는 이유다.
+//  updated_by(마지막 저장자)·updated_at(그 시각)과 **같은 한 사건**을 가리키므로 셋을 한 줄로 묶어도 어긋나지 않는다.
 const WK_MIRROR_LABEL = { notion: '노션 미러', clickup: '클릭업 미러', slack: '슬랙 미러' };
 function wkOriginText(e) {
     if (!e)
@@ -32,28 +34,35 @@ function wkOriginText(e) {
     if (e.provenance === 'observed')
         return WK_MIRROR_LABEL[e.external_system] || '외부 미러';
     const who = e.updated_by ? personName(e.updated_by) : '';
-    const how = e.confidence === 'human' ? '직접' : 'AI';
-    return who ? who + ' · ' + how : (e.confidence === 'human' ? '사람 작성' : 'AI 작성');
+    const how = e.confidence === 'human' ? '사람' : 'AI';
+    return who ? who + ' · ' + how : (how === '사람' ? '사람 저장' : 'AI 저장');
 }
-//  hover 상세 — 만든 시각과 갱신 시각을 모두 절대값으로(목록은 자리가 좁아 하나만 보인다).
+//  hover 상세 — 목록 한 줄이 줄인 것을 여기서 정확히 말한다(무엇의 시각인지·'사람'이 무슨 뜻인지).
 function wkOriginTitle(e) {
     if (!e)
         return '';
     const bits = [];
-    const origin = wkOriginText(e);
-    if (origin)
-        bits.push(e.provenance === 'observed' ? origin : origin.replace(' · AI', ' 님의 AI 세션이 작성').replace(' · 직접', ' 님이 직접 작성'));
-    if (e.created_at)
-        bits.push('만듦 ' + absTime(e.created_at));
-    if (e.updated_at && e.updated_at !== e.created_at)
+    if (e.provenance === 'observed') {
+        bits.push((WK_MIRROR_LABEL[e.external_system] || '외부 미러') + ' — 원본은 외부에 있습니다');
+    }
+    else {
+        const who = e.updated_by ? personName(e.updated_by) : '';
+        bits.push(e.confidence === 'human'
+            ? (who ? who + ' 님이 웹 화면에서 마지막으로 저장' : '웹 화면에서 마지막으로 저장') + ' (직접 쓰거나 고침 — 최초 작성자를 뜻하지 않습니다)'
+            : (who ? who + ' 님의 AI 세션이 마지막으로 저장' : 'AI 세션이 마지막으로 저장'));
+    }
+    if (e.updated_at)
         bits.push('갱신 ' + absTime(e.updated_at));
+    if (e.created_at && String(e.created_at).slice(0, 16) !== String(e.updated_at).slice(0, 16))
+        bits.push('만듦 ' + absTime(e.created_at));
     return bits.join(' · ');
 }
-//  목록 메타 한 벌 — [유형] [누가·어떻게] [언제]. 호출부가 자리를 더 끼우고 싶으면 opts 로 앞에 붙인다.
-//  시각은 '만든 때'를 기본으로 쓴다(사용자 요구) — created_at 이 없는 옛 행만 updated_at 으로 폴백.
+//  목록 메타 한 벌 — [유형] [누가·어느 경로] [언제].
+//  ⚠ 시각은 **갱신 시각**을 쓴다. 누가(updated_by)·경로(confidence)가 마지막 저장의 속성이라,
+//   여기에 created_at 을 붙이면 "윤상민이 7월 20일에 썼다"로 읽히는 서로 다른 시점의 조합이 된다.
+//   만든 시각은 두 값이 다를 때만 툴팁에서 따로 말한다. 목록 정렬(updated_at)과도 이제 일치한다.
 function wkMetaOf(e, opts = {}) {
-    const stampSrc = e.created_at || e.updated_at;
-    const stamp = wkStamp(stampSrc);
+    const stamp = wkStamp(e.updated_at || e.created_at);
     const origin = wkOriginText(e);
     const title = wkOriginTitle(e);
     return [

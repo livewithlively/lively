@@ -871,16 +871,18 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
    #1600 — 사이드바 위계·정렬 · 문서 메타(누가·언제·어떤 경로) · 유형 축
    ══════════════════════════════════════════════════════════════ */
 
-/* ── ★ 내 소유 카테고리 그룹 — 사업·제품·시스템과 같은 형태(동급 위계), 자리는 맨 위 ── */
-.kn-owned-ava { background: #2D6BF0; color: #fff; }
+/* ── ★ 내 소유 카테고리 그룹 — 사업·제품·시스템과 같은 자리·크기(동급 위계), 다른 형태 ──
+   space 아바타는 '채운 색 사각 + 흰 글자'다. 그 형태를 그대로 쓰면 ★도 또 하나의 분류축처럼 읽힌다.
+   ★는 축이 아니라 '내 것' 표식이므로 크기·자리만 같게 두고 형태를 가른다: 옅은 틴트 + 선 아이콘.
+   (텍스트 '★' 글리프는 디자인 시스템 금지 8 — 이모지/글자 아이콘 → stroke 아이콘으로) */
+.kn-owned-ava { background: var(--bg-tint-2); color: var(--blue); }
+.kn-owned-star { width: 13px; height: 13px; flex: none; }
 .kn-owned-head .pjv-side-navlabel { letter-spacing: -.01em; }
-/* 첫 자리라는 사실을 아주 옅은 바탕으로만 표시 — 강조가 과하면 아래 space 들이 부차적으로 보인다 */
-.kn-owned-group { background: color-mix(in srgb, #2D6BF0 4%, transparent); border-radius: 10px; padding-bottom: 2px; }
 .kn-owned-sep { margin: 10px 8px 8px; }
 /* 순서 되돌리기 — 직접 정렬한 사람에게만 뜬다 */
 .kn-order-reset { border: none; background: none; cursor: pointer; padding: 0 4px; margin-left: auto;
   font-size: 12px; line-height: 1; color: var(--muted-2); border-radius: 5px; }
-.kn-order-reset:hover { color: var(--ink); background: var(--surface-2); }
+.kn-order-reset:hover { color: var(--ink); background: var(--bg-tint-2); }
 
 /* ── 카테고리 드래그 정렬 — 삽입 위치를 가로 색선으로 ── */
 .kn-nav-catwrap { position: relative; }
@@ -889,14 +891,23 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
 .kn-nav-catwrap.drop-before::before,
 .kn-nav-catwrap.drop-after::after {
   content: ''; position: absolute; left: 6px; right: 6px; height: 2px; z-index: 3;
-  background: #2D6BF0; border-radius: 2px; box-shadow: 0 0 0 1px color-mix(in srgb, #2D6BF0 25%, transparent);
+  background: var(--blue); border-radius: 2px;
 }
 .kn-nav-catwrap.drop-before::before { top: -1px; }
 .kn-nav-catwrap.drop-after::after { bottom: -1px; }
 
-/* ── 목록 메타 — 누가(사람·AI·미러) / 언제(절대시각) ── */
-.wk-row-who { color: var(--ink-sub); }
-.wk-row-when { font-variant-numeric: tabular-nums; }
+/* ── 목록 메타 — [유형] [누가·경로] [언제] 를 **열로 세운다** ──
+   가변폭이면 행마다 시작 위치가 달라 눈이 매번 값을 다시 찾아야 한다. 각 슬롯에 최소폭 + 오른쪽 정렬을
+   주면 세로로 줄이 맞아 훑을 수 있다(값 길이는 여전히 가변이라 긴 이름도 안 잘린다). */
+.wk-row-who, .wk-row-when { display: inline-block; text-align: right; }
+.wk-row-who { color: var(--ink-sub); min-width: 104px; }
+.wk-row-when { font-variant-numeric: tabular-nums; min-width: 92px; }
+.wk-row-meta .wk-tytag { min-width: 46px; justify-content: center; }
+/* 좁은 화면에선 최소폭을 풀어 준다 — 열 맞춤보다 잘리지 않는 게 먼저다 */
+@media (max-width: 900px) {
+  .wk-row-who, .wk-row-when { min-width: 0; }
+  .wk-row-meta .wk-tytag { min-width: 0; }
+}
 
 /* ── 유형 태그 — 결정·개념·런북·참조·리서치가 한 축의 값임을 형태로 말한다 ──
    전역 `[data-ty]` 는 background 만 주므로(통계 막대용) 여기서 태그 형태로 덮어쓴다. */
