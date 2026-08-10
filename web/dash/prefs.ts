@@ -67,7 +67,9 @@ const DASH_LAYOUT_KEY = 'dash_layout_v1';
 // 4 = '최신 알림' hidden 구제(#1570) — 알림 개편(#1571)의 과도기(최신 알림→통합 인박스 대체 후 원복) 상태를
 //  연 브라우저에 notif 가 hidden 으로 저장돼 남았다("숨긴 적 없는데 사라짐"). v3 때와 같은 되돌리기를 반대
 //  방향으로 한 번 한다(shell.ts dashLayout 마이그레이션).
-const DASH_LAYOUT_VER = 4;
+// 5 = 3열 상단 기본 교체(#1596) — '내 라이블리 사용 내역'(브리핑)을 접고 '라이블리 로그'(시간순)를 그 자리에.
+//  이미 배치를 저장한 사람도 한 번 따라오게 하려면 버전이 올라가야 한다(저장값이 곧 화면이라 코드만 바꾸면 안 바뀜).
+const DASH_LAYOUT_VER = 5;
 type DashLayout = { cols: string[][]; hidden: string[] };
 function dashSaveLayout(lay: DashLayout) { try { localStorage.setItem(DASH_LAYOUT_KEY, JSON.stringify({ v: DASH_LAYOUT_VER, ...lay })); } catch { /* 저장 실패 무시 */ } }
 function dashResetLayout() { try { localStorage.removeItem(DASH_LAYOUT_KEY); } catch { /* 무시 */ } }

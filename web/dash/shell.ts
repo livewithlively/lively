@@ -36,26 +36,31 @@ import { fillLivelyLog, fillLivelyLogTimeline } from './widget-lively-log.js';
 //  wide = 이 위젯이 있는 열은 기본 폭을 px 로 고정(내 프로젝트 = 리스트 개요 카드가 3열로 정렬되는 최소 폭).
 //  off  = **기본 숨김** — 화면에 자리를 주기 전에 사람이 편집에서 직접 꺼내야 하는 위젯. 모두에게 값이 차지는 않는
 //         위젯(역할 한정이거나, 그 필드를 아직 안 쓰는 조직에선 빈 칸)을 기본 배치에 밀어 넣지 않기 위한 장치.
+//  home = off 위젯을 편집에서 [표시]로 꺼냈을 때 놓일 열(기본 배치에 자리가 없으니 필요 — 없으면 왼쪽 열).
 const DASH_WIDGETS = [
   { key: 'proj', title: '내 프로젝트', desc: '내가 참여한 프로젝트를 리스트별로', col: 5, row: 5, wide: true },
   { key: 'fold', title: '팀 공유 폴더', desc: '팀이 함께 쓰는 중앙 저장 공간', col: 5, row: 1.5, auto: true },
   { key: 'notif', title: '최신 알림', desc: '나에 관한 멘션·댓글·초대·마감', col: 4, row: 5 },
   { key: 'sess', title: '내 AI 세션', desc: '내 세션 · 초대받은 세션 · 프로젝트 세션', col: 4, row: 7 },
   { key: 'log', title: '팀 작업 로그', desc: '회사 전체의 사람·AI 작업 기록', col: 3, row: 5 },
+  //   라이블리 로그(#1570 시안 D): 감사 기록을 시간순 그대로. #1596 에서 기본 배치 3열 상단으로 —
+  //   브리핑(집계)보다 "무엇을 언제 했는지"를 먼저 본다(사용자 결정 2026-08-10, #1570 의 시안 A 기본을 뒤집음).
+  { key: 'lvlogd', title: '라이블리 로그', desc: '라이블리가 한 일 시간순 — 감사 기록을 쉬운 말로', col: 3, row: 5 },
   // ↓ 기본 숨김 — 조직이 그 기능을 실제로 쓸 때만 값이 찬다(안 쓰면 빈 칸). 편집에서 [표시]로 꺼내 쓴다.
   //   검토 대기: 검토 게이트를 켠 조직에서만 / 내 할 일: 태스크에 담당자·마감을 쓰는 팀에서만.
-  //   내 라이블리 사용 내역(#1570 시안 A 확정): 기본 배치 3열 상단 — 사용자 결정(2026-08-07).
-  { key: 'lvlog', title: '내 라이블리 사용 내역', desc: '주간 브리핑 — 근거로 쓴 지식·활동 구성', col: 3, row: 5 },
-  //   라이블리 로그(#1570 시안 D): 감사 기록을 시간순 그대로 — 원하는 사람만 편집에서 꺼낸다.
-  { key: 'lvlogd', title: '라이블리 로그', desc: '라이블리가 한 일 시간순 — 감사 기록을 쉬운 말로', col: 3, row: 5, off: true },
+  //   내 라이블리 사용 내역(#1570 시안 A): 같은 기록의 기간 브리핑 — 로그와 한 열에 둘 다 세우지 않는다(#1596).
+  //   home=2: 기본 배치엔 없지만 편집에서 [표시]로 꺼내면 원래 살던 3열로 — 3열 폭(col:3)에 맞춰 만든 위젯이라
+  //    왼쪽 열(내 프로젝트가 쓰는 넓은 열) 바닥에 떨어지면 자리가 어색하다.
+  { key: 'lvlog', title: '내 라이블리 사용 내역', desc: '주간 브리핑 — 근거로 쓴 지식·활동 구성', col: 3, row: 5, off: true, home: 2 },
   { key: 'review', title: '검토 대기 지식', desc: '승인해야 검색·세션주입에 반영돼요', col: 3, row: 4, off: true },
   { key: 'task', title: '내 할 일', desc: '내가 담당인 태스크 — 마감 임박순', col: 5, row: 4, off: true },
 ];
 const DASH_W: Record<string, any> = Object.fromEntries(DASH_WIDGETS.map((w) => [w.key, w]));
 // 기본 배치 = 1단계 프리셋 **그대로**(좌: 내 프로젝트+팀 공유 폴더 / 중: 최신 알림+내 AI 세션 / 우: 팀 작업 로그).
 //  '기본 배치로 되돌리기'가 돌아오는 자리이자, 새 위젯이 처음 놓이는 자리(off 위젯은 여기 없고 숨김으로 간다).
-//  #1570(2026-08-07 사용자 결정): 3열 = 위 '내 라이블리 사용 내역', 아래 '팀 작업 로그'.
-const DASH_LAYOUT_DEFAULT: string[][] = [['proj', 'fold'], ['notif', 'sess'], ['lvlog', 'log']];
+//  #1596(2026-08-10 사용자 결정): 3열 = 위 '라이블리 로그', 아래 '팀 작업 로그'
+//  (#1570 에서 그 자리에 있던 '내 라이블리 사용 내역'은 기본 숨김으로 — 편집에서 꺼내 쓴다).
+const DASH_LAYOUT_DEFAULT: string[][] = [['proj', 'fold'], ['notif', 'sess'], ['lvlogd', 'log']];
 const DASH_COL_LABELS = ['왼쪽 열', '가운데 열', '오른쪽 열'];
 
 // ⚠ 배치 정규화(아래 두 함수)는 위 레지스트리(DASH_WIDGETS/DASH_W/DASH_LAYOUT_DEFAULT)를 읽어야 해서 여기 산다.
@@ -80,20 +85,40 @@ function dashLayout(): DashLayout {
   // 저장값이 4열 이상이면(미래 포맷 축소) 넘치는 열은 마지막 열 뒤로 흡수 — 위젯이 사라지지 않게.
   for (let i = 3; i < raw.cols.length; i++) cols[2].push(...take(raw.cols[i]));
   const hidden = take(raw.hidden);
-  // 구버전 저장값 마이그레이션: 이전 정규화(또는 이전 기본 배치)가 지금 기준으로 '기본 숨김'인 위젯을 열에 밀어
-  //  넣어 둔 상태를 되돌린다(다른 위젯의 자리는 사람이 정한 대로 그대로 둔다).
-  //  사람이 편집에서 직접 꺼내면 그때 현재 버전으로 저장되므로, 이 되돌림은 그 뒤로 다시 일어나지 않는다.
-  if (Number(raw.v) !== DASH_LAYOUT_VER) {
-    for (let i = 0; i < cols.length; i++) {
-      for (const k of cols[i]) if (DASH_W[k].off && !hidden.includes(k)) hidden.push(k);
-      cols[i] = cols[i].filter((k) => !DASH_W[k].off);
+  // 구버전 저장값 마이그레이션 — **단계마다 그 단계가 겨냥한 버전 구간에서만** 돈다(sv = 저장된 포맷 버전).
+  //  ⚠ 예전엔 전부 `raw.v !== 현재버전` 한 덩어리였다. 그러면 버전을 올릴 때마다 옛 구제가 다시 발동해,
+  //   그 사이 사람이 직접 내린 결정(예: 검토 대기를 꺼내 뒀다 / 최신 알림을 일부러 숨겼다)을 도로 뒤집는다.
+  //   각 단계는 자기 구간(sv < N)에서 한 번만 돌아야 "그 뒤로 다시 일어나지 않는다"는 약속이 실제로 지켜진다.
+  //  ⚠ DASH_LAYOUT_VER 를 올릴 때는 여기에 그 버전의 단계(sv < 새버전)를 함께 추가한다 — 버전만 올리면
+  //   저장값은 낡은 채로 통과하고, 단계만 추가하면 이미 저장한 사람에겐 영영 닿지 않는다.
+  const sv = Number(raw.v) || 0;
+  if (sv < DASH_LAYOUT_VER) {
+    // v3: 이전 정규화(또는 이전 기본 배치)가 지금 기준으로 '기본 숨김'인 위젯을 열에 밀어 넣어 둔 상태를 되돌린다
+    //  (다른 위젯의 자리는 사람이 정한 대로 그대로 둔다).
+    if (sv < 3) {
+      for (let i = 0; i < cols.length; i++) {
+        for (const k of cols[i]) if (DASH_W[k].off && !hidden.includes(k)) hidden.push(k);
+        cols[i] = cols[i].filter((k) => !DASH_W[k].off);
+      }
     }
     // v4(#1570): '최신 알림' hidden 구제 — 알림 개편(#1571)의 과도기 상태(최신 알림→통합 인박스 대체, 곧 원복)를
     //  연 브라우저에 notif 가 hidden 으로 저장돼 "숨긴 적 없는데 사라졌다"가 됐다. 한 번 되꺼낸다 — seen 에서도
     //  빼서 아래 unseen 삽입이 기본 자리(가운데 열 상단)로 되살리게. 일부러 숨긴 사람은 이 한 번만 다시 보이고,
     //  다시 숨기면 v4 로 저장돼 반복되지 않는다(v3 의 '검토 대기 되돌리기'와 같은 철학, 방향만 반대).
-    const ni = hidden.indexOf('notif');
-    if (ni >= 0) { hidden.splice(ni, 1); seen.delete('notif'); }
+    if (sv < 4) {
+      const ni = hidden.indexOf('notif');
+      if (ni >= 0) { hidden.splice(ni, 1); seen.delete('notif'); }
+    }
+    // v5(#1596): 3열 상단 기본을 '내 라이블리 사용 내역'(브리핑) → '라이블리 로그'(시간순)로 **교체**한다.
+    //  둘은 같은 기록의 두 표현이라 한 열에 나란히 세우지 않는다 — 그래서 자리를 넘기며 브리핑은 숨김으로 접는다.
+    //  이 자리에 있던 브리핑은 사람이 고른 게 아니라 기본으로 들어가 있던 것이므로 한 번 접어도 선택을 뒤집지 않는다.
+    //  이후 편집에서 다시 꺼내면 v5 로 저장돼 반복되지 않는다.
+    if (sv < 5) {
+      for (let i = 0; i < cols.length; i++) cols[i] = cols[i].filter((k) => k !== 'lvlog');
+      if (!hidden.includes('lvlog')) hidden.push('lvlog');
+      const di = hidden.indexOf('lvlogd');
+      if (di >= 0) { hidden.splice(di, 1); seen.delete('lvlogd'); } // 기본 자리(3열 상단)로 되살리도록 seen 에서도 뺀다
+    }
   }
   for (const w of DASH_WIDGETS) {
     if (seen.has(w.key)) continue;
@@ -325,9 +350,14 @@ function openDashLayoutModal(onApply) {
   const pluck = (k) => { lay.cols = lay.cols.map((c) => c.filter((x) => x !== k)); lay.hidden = lay.hidden.filter((x) => x !== k); };
   const place = (k, ci, i) => { pluck(k); const c = lay.cols[ci]; c.splice(Math.max(0, Math.min(i, c.length)), 0, k); };
   const hide = (k) => { pluck(k); lay.hidden.push(k); };
-  // 되돌릴 땐 그 위젯의 기본 자리로. 기본 배치에 없는 위젯(off=기본 숨김)은 갈 자리가 정해져 있지 않으니 왼쪽 열 끝에 —
-  //  거기서 사람이 원하는 자리로 옮기면 된다(그 순간 v2 로 저장돼 다시 숨겨지지 않는다).
-  const show = (k) => { const ci = DASH_LAYOUT_DEFAULT.findIndex((c) => c.includes(k)); pluck(k); lay.cols[ci < 0 ? 0 : ci].push(k); };
+  // 되돌릴 땐 그 위젯의 기본 자리로. 기본 배치에 없는 위젯(off=기본 숨김)은 갈 자리가 정해져 있지 않으니
+  //  home(레지스트리에 적힌 제자리, 없으면 왼쪽 열) 끝에 — 거기서 사람이 원하는 자리로 옮기면 된다
+  //  (그 순간 현재 버전으로 저장돼 다시 숨겨지지 않는다).
+  const show = (k) => {
+    const ci = DASH_LAYOUT_DEFAULT.findIndex((c) => c.includes(k));
+    pluck(k);
+    lay.cols[ci >= 0 ? ci : (DASH_W[k].home || 0)].push(k);
+  };
   const commit = (focusKey?) => { dashSaveLayout(lay); draw(focusKey); scheduleApply(); };
 
   // 카드 — 배치된 것(ci≥0)과 숨긴 것(ci=-1)이 같은 모양. 배치 카드만 이동 컨트롤을 갖는다.
