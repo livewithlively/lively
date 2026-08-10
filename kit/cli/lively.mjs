@@ -132,6 +132,18 @@ function run(cmd, args, { allowFail = false, quiet = false, env, timeout } = {})
   return { code: r.status ?? -1, out: String(r.stdout || ""), err: String(r.stderr || "") };
 }
 const has = (bin) => spawnSync(WIN ? "where" : "command", WIN ? [bin] : ["-v", bin], { stdio: "ignore", shell: !WIN }).status === 0;
+// claude CLI 호출 — **자식 HOME 을 모듈 HOME(=LIVELY_HOME or os.homedir())으로 명시 주입한다.**
+//  ⚠ 이걸 빠뜨리면 샌드박스(LIVELY_HOME)로 돌린 login·install 이 **실사용자 ~/.claude.json** 을 고친다.
+//   등록하는 command 값은 LIVELY_HOME 기반인데 기록되는 파일만 실 HOME 이라 둘이 어긋나고, 남는 건
+//   **곧 삭제될 임시 경로를 가리키는 lively MCP 항목**이다 → 그 뒤 모든 세션에서 ENOENT 로 lively 툴이
+//   통째로 안 뜬다(#1593 실측: `/var/folders/…/lively-ev-test-*/login-home/.lively/bin/lively`).
+//   증상이 "MCP 가 안 붙는다"뿐이라 게이트웨이 장애로 오진하기까지 한다.
+//  역연산인 uninstall 쪽(adapters/claude/uninstall.mjs · setup/user-uninstall.mjs)은 이미 같은 주입을 한다 —
+//   여기까지 해야 add/remove 가 대칭이 되고, 샌드박스가 라이브에 손대는 경로가 닫힌다.
+//  ⚠ USERPROFILE 도 같이 세운다 — 윈도우의 os.homedir() 는 HOME 이 아니라 USERPROFILE 을 본다
+//   (testlib/os-sandbox.mjs 가 못박은 교훈: HOME 만 대입하면 윈도우에서 조용히 샌다).
+//  캡슐화한 이유는 winSpawnArgs 와 같다 — 호출부마다 "HOME 도 넘겨야 한다"를 기억해야 하면 다음 사람이 또 빠뜨린다.
+const runClaude = (args, opts = {}) => run("claude", args, { ...opts, env: { HOME, USERPROFILE: HOME, ...(opts.env || {}) } });
 // 윈도우 tar.exe 는 System32 동봉이다 — 훅·자식 프로세스의 빈약한 PATH 에서도 찾도록 절대경로를 먼저 본다(#1510).
 const tarBin = () => {
   if (!WIN) return "tar";
@@ -431,10 +443,10 @@ function backupUserMcp(name) {
 //  코드 자동 업뎃(#858)에 무임승차: command(심 절대경로)만 등록하고 서버 코드는 lib/lively-mcp-gateway.mjs 로
 //   매 세션 최신 → 코드가 바뀌어도 재등록 불필요.
 function registerLivelyMcp(gw, _tok) {
-  run("claude", ["mcp", "remove", "lively"], { allowFail: true, quiet: true });
+  runClaude(["mcp", "remove", "lively"], { allowFail: true, quiet: true });
   try {
     const shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively");
-    run("claude", ["mcp", "add", "--transport", "stdio", "--scope", "user", "lively", shim, "mcp"], { quiet: true });
+    runClaude(["mcp", "add", "--transport", "stdio", "--scope", "user", "lively", shim, "mcp"], { quiet: true });
     ok(`MCP 등록: lively (stdio 프록시 → ${gw}/mcp)`);
     return true;
   } catch (e) { fail(`MCP 등록 실패(lively): ${e.message}`); return false; }
@@ -449,10 +461,10 @@ function registerClaudeMcp() {
   // lively-local — 로컬 조작 stdio MCP(#899). 같은 CLI 가 서버(`lively mcp-local`).
   //  코드 자동 업뎃(#858)에 무임승차: command(심 절대경로)만 등록하고 서버 코드는 lib/lively-mcp-local.mjs 로
   //  매 세션 최신 → 코드가 바뀌어도 재등록 불필요(툴 목록 자체를 바꿀 때만 여기 add 가 다시 태운다).
-  run("claude", ["mcp", "remove", "lively-local"], { allowFail: true, quiet: true });
+  runClaude(["mcp", "remove", "lively-local"], { allowFail: true, quiet: true });
   try {
     const shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively");
-    run("claude", ["mcp", "add", "--transport", "stdio", "--scope", "user", "lively-local", shim, "mcp-local"], { quiet: true });
+    runClaude(["mcp", "add", "--transport", "stdio", "--scope", "user", "lively-local", shim, "mcp-local"], { quiet: true });
     ok("MCP 등록: lively-local (stdio · 로컬조작)");
     registered++;
   } catch (e) { fail(`MCP 등록 실패(lively-local): ${e.message}`); failed++; }
@@ -461,17 +473,17 @@ function registerClaudeMcp() {
   for (const s of readMcpServers()) {
     if (!s || s.enabled === false || !s.name || s.name === "lively") continue;
     backupUserMcp(s.name); // 덮어쓰기 전 유저 원본 스냅샷(최초 1회) — uninstall 원복용(비파괴 라운드트립)
-    run("claude", ["mcp", "remove", s.name], { allowFail: true, quiet: true });
+    runClaude(["mcp", "remove", s.name], { allowFail: true, quiet: true });
     try {
       if (s.transport === "stdio" && s.command) {
         // claude stdio 는 command+args 를 분리 인자로 받는다(공백 토큰 분리 — register-clients.sh 와 동일 한계).
         const parts = String(s.command).trim().split(/\s+/).filter(Boolean);
-        run("claude", ["mcp", "add", "--transport", "stdio", "--scope", "user", s.name, ...parts], { quiet: true });
+        runClaude(["mcp", "add", "--transport", "stdio", "--scope", "user", s.name, ...parts], { quiet: true });
       } else if (s.url) {
         const secret = s.auth_env ? (process.env[s.auth_env] || "") : "";
         const a = ["mcp", "add", "--transport", "http", "--scope", "user", s.name, s.url];
         if (secret) a.push("--header", `Authorization: Bearer ${secret}`);
-        run("claude", a, { quiet: true });
+        runClaude(a, { quiet: true });
         if (s.auth_env && !secret) warn(`${s.name}: 환경변수 ${s.auth_env} 가 비어 무인증 등록됨`);
       } else continue;
       ok(`MCP 등록: ${s.name}`);
@@ -827,7 +839,7 @@ async function gatherStatus() {
     //   · `mcp get lively` 1.55s — 우리 서버만 헬스체크한다.
     //   · 게다가 종전 판정은 **이름 매칭**이라 헬스체크 결과를 버렸다: 죽은 서버도 출력에 이름은 남아
     //     (`lively: … - ✘ Failed to connect`) true 였다 → **끊김을 감지할 수 없었다**. `get` 은 `Status:` 줄로 답한다.
-    const g = run("claude", ["mcp", "get", "lively"], { allowFail: true, quiet: true, timeout: 8000, env: { MCP_TIMEOUT: "3000" } });
+    const g = runClaude(["mcp", "get", "lively"], { allowFail: true, quiet: true, timeout: 8000, env: { MCP_TIMEOUT: "3000" } });
     const out = `${g.out}${g.err}`;
     if (/^\s*Scope:/m.test(out)) {
       st.harness.claude.mcp = true;                                        // 등록됨(스코프 무관 — user/project/local 다 잡힌다)

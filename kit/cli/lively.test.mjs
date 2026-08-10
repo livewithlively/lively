@@ -108,6 +108,9 @@ function newHome(name) {
     `const LOG = ${JSON.stringify(log)};`,
     "const a = process.argv.slice(2);",
     'appendFileSync(LOG, a.join(" ") + "\\n");',
+    // #1593 — 받은 HOME 을 따로 남긴다. **등록 대상 파일을 고르는 건 argv 가 아니라 이 값**이라,
+    //  샌드박스가 라이브 홈을 건드리는지는 오직 이걸로만 판별된다(⑰-c 가 이 로그를 본다).
+    'appendFileSync(LOG + ".home", (process.env.HOME || process.env.USERPROFILE || "") + "\\n");',
     'const logged = (re) => { try { return re.test(readFileSync(LOG, "utf8")); } catch { return false; } };',
     // `claude mcp list` 는 등록된 걸 되돌려준다(구 status 판정 경로 — 남겨둔다).
     'if (a[0] === "mcp" && a[1] === "list") {',
@@ -127,7 +130,11 @@ function newHome(name) {
     "}",
     "process.exit(0);",
   ].join("\n"));
-  return { home, bin, log, argv: () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean) : []) };
+  return {
+    home, bin, log,
+    argv: () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean) : []),
+    homes: () => (existsSync(log + ".home") ? readFileSync(log + ".home", "utf8").trim().split("\n").filter(Boolean) : []),
+  };
 }
 
 // CLI 실행 — 샌드박스 HOME + 스텁 PATH. 절대 실기기·실게이트웨이에 닿지 않는다.
@@ -493,6 +500,40 @@ try {
     check("⑰-b backupUserMcp — 프로필 격리(#346)에서 CLAUDE_CONFIG_DIR 의 .claude.json 을 본다",
       !!(bak.linear && bak.linear.url === "https://user-profile.example/mcp"), JSON.stringify(bak));
     rmSync(box, { recursive: true, force: true });
+  }
+
+  // ⑰-c **#1593 — 샌드박스(LIVELY_HOME)가 라이브 ~/.claude.json 을 오염시키면 안 된다.**
+  //   실측 사고: `LIVELY_HOME=<임시> lively login` 이 **실사용자** ~/.claude.json 에 그 임시 경로를 구웠고,
+  //   임시 디렉터리가 지워지자 lively MCP 가 ENOENT 로 **통째로 안 떴다** — 이후 모든 세션이 조직 맥락을 잃는다.
+  //   등록되는 command 값은 LIVELY_HOME 기반인데 기록되는 파일만 실 HOME 이라 둘이 어긋난 것이다.
+  //  ⚠ 이 케이스는 HOME 과 LIVELY_HOME 을 **일부러 다르게** 준다. 위 lively() 처럼 둘을 같은 값으로 주면
+  //   자식 HOME 주입이 빠져 있어도 결과가 같아 **결함이 드러나지 않는다** — 그게 이 버그가 오래 숨은 이유다.
+  //  ⚠ 판정은 argv 가 아니라 **스텁 claude 가 받은 HOME** 으로 한다(등록 파일을 고르는 게 그 값이므로).
+  {
+    const h = newHome("mcp-home-isolation");
+    const live = join(BOX, "pretend-live-home");   // '실사용자 홈' 대역 — 여기로 새면 실패다
+    mkdirSync(join(live, ".claude"), { recursive: true });
+    mkdirSync(join(h.home, ".lively"), { recursive: true });
+    writeFileSync(join(h.home, ".lively", "mcp-servers.json"), JSON.stringify({ servers: [] }));
+    const probe = join(h.home, "probe-1593.mjs");
+    writeFileSync(probe, [
+      `import { registerClaudeMcp } from ${JSON.stringify(pathToFileURL(CLI).href)};`,   // 절대경로 그대로면 윈도우에서 죽는다(#1510)
+      "registerClaudeMcp();",
+    ].join("\n"));
+    execFileSync(process.execPath, [probe], {
+      // HOME=가짜 실홈 · LIVELY_HOME=샌드박스 — 어긋난 상태를 그대로 재현한다.
+      env: {
+        ...process.env,
+        HOME: live, USERPROFILE: live,          // 윈도우는 os.homedir() 가 USERPROFILE 을 본다(#1510)
+        LIVELY_HOME: h.home, CLAUDE_CONFIG_DIR: "",
+        PATH: pathWith(h.bin), LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "",
+      },
+      stdio: "ignore",
+    });
+    const seen = h.homes();
+    check("⑰-c ★ #1593 MCP 등록이 부르는 claude 는 샌드박스 HOME 을 받는다(실사용자 홈 무접촉)",
+      seen.length > 0 && seen.every((x) => x === h.home),
+      `claude 가 받은 HOME=${JSON.stringify(seen)} · 기대=${h.home} · 실홈대역=${live}`);
   }
 
   // ⑱ **#916 — 스테일 LIVELY_TOKEN 이 파일 토큰을 이기면 안 된다.**
