@@ -1,4 +1,10 @@
+// ⚠ Lively Enterprise Edition — 이 디렉터리(src/ee)는 상용 라이센스다. src/ee/LICENSE 참조.
+//   유효한 구독 없이 프로덕션에서 사용할 수 없다(열람·개발·테스트는 허용).
+//
 // OIDC 로그인 — providers.ts 의 'oidc' 구현(P4). 사람 웹 로그인의 '누구인가'를 외부 IdP 가 입증한다.
+//  ★ EE 인 이유(#1601, 위키 ee-boundary-criteria-and-candidates §1-1): 조직이 구성원 인증을 IdP 로 통제하고,
+//   없어도 제품이 온전히 동작하며(local 계정이 영구 폴백 tier), 규제·계약이 요구해서 사고, 소팀엔 가치가 0 이다.
+//   경계 반대편: 설정 타입·env 판정·관리탭 표면은 **코어**(auth/oidc-config.ts) — 마스킹과 같은 선이다.
 //  ⚠ 방향 주의: 여기서 **우리는 OIDC 클라이언트**다(고객 조직의 구글/사내 SSO 로 웹 로그인, #1520).
 //   우리가 인가서버인 쪽(#1473 T2)은 org/auth/oauth-*.ts 다 — 이름이 닮았지만 반대편이고 섞으면 안 된다.
 //   둘은 /authorize 에서 만난다: T2 의 동의 화면이 요구하는 '세션'을 만드는 게 이 파일의 로그인이다.
@@ -22,17 +28,10 @@
 //   된다고 허용하지만, 서명까지 검증한다. 외부 의존이 필요 없기 때문이다 — node:crypto 의
 //   createPublicKey({format:'jwk'}) 가 JWKS 의 JWK 를 그대로 키로 받는다(jose 등 새 런타임 의존 0).
 import crypto from "node:crypto";
-import { logger } from "../log.js";
+import { logger } from "../../log.js";
+import { defaultOidcLabel, oidcEnvSeed, oidcScopes, type OidcConfig } from "../../auth/oidc-config.js";
 
-export interface OidcConfig {
-  issuer: string;
-  clientId: string;
-  clientSecret: string;
-  allowedDomains: string[];   // 소문자. 비었으면 자동 가입 없음(기존 멤버만).
-  label: string;
-  trustUnverifiedEmail: boolean;
-  scopes: string;
-}
+export type { OidcConfig };
 
 // 설정 읽기 — **관리탭(DB) 우선, 비면 배포 env**. embedding_config(#172)와 같은 seam 이다.
 //  왜 둘 다인가: SSM 전용 고객 박스는 .env 편집이 비현실적이라 관리탭이 유일한 창구고(secret-box.ts 머리주석),
@@ -40,29 +39,29 @@ export interface OidcConfig {
 //  캐시 없음: 호출 빈도가 로그인 시점뿐이라 비용이 없고, **재기동 없이** 바뀐 설정이 즉시 먹는다.
 export async function oidcConfig(): Promise<OidcConfig | null> {
   const fromDb = await oidcConfigFromDb();
-  return fromDb ?? oidcConfigFromEnv();
+  return fromDb ?? oidcEnvSeed();
 }
 
 // 관리탭 설정 — 켜져 있고 셋이 다 있어야 성립. 복호화 실패(마스터키 분실·교체)는 조용히 env 로 넘긴다.
 async function oidcConfigFromDb(): Promise<OidcConfig | null> {
   if (!process.env.ITEMS_DATABASE_URL) return null; // DB 없는 실행(테스트·부트스트랩 전)
   try {
-    const { getRuntimeConfig } = await import("../org/store.js");
+    const { getRuntimeConfig } = await import("../../org/store.js");
     const s = (await getRuntimeConfig()).oidc_config;
     if (!s.enabled || !s.issuer || !s.client_id || !s.client_secret_enc) return null;
     if (!/^https:\/\//i.test(s.issuer)) {
       logger.warn({ issuer: s.issuer }, "[oidc] 관리탭 issuer 가 https 가 아니라 무시한다");
       return null;
     }
-    const { decryptSecret } = await import("../org/credentials/secret-box.js");
+    const { decryptSecret } = await import("../../org/credentials/secret-box.js");
     const clientSecret = decryptSecret(s.client_secret_enc);
     if (!clientSecret) return null;
     return {
       issuer: s.issuer, clientId: s.client_id, clientSecret,
       allowedDomains: s.allowed_domains,
-      label: s.label || defaultLabel(s.issuer),
+      label: s.label || defaultOidcLabel(s.issuer),
       trustUnverifiedEmail: s.trust_unverified_email,
-      scopes: (process.env.OIDC_SCOPES ?? "").trim() || "openid email profile",
+      scopes: oidcScopes(),
     };
   } catch (err) {
     // 복호화 실패·DB 미가동 — 로그인 자체를 죽이지 않는다(env 폴백 → 최악이라도 로컬 로그인).
@@ -71,36 +70,8 @@ async function oidcConfigFromDb(): Promise<OidcConfig | null> {
   }
 }
 
-// 배포 env — 셋이 다 있어야 켜진다. 값이 없으면 null(제공자 미등록 → 로그인 화면에 버튼도 안 뜬다).
-export function oidcConfigFromEnv(): OidcConfig | null {
-  const issuer = (process.env.OIDC_ISSUER ?? "").trim().replace(/\/+$/, "");
-  const clientId = (process.env.OIDC_CLIENT_ID ?? "").trim();
-  const clientSecret = (process.env.OIDC_CLIENT_SECRET ?? "").trim();
-  if (!issuer || !clientId || !clientSecret) return null;
-  // issuer 는 https 만 — id_token 의 iss 대조 기준이자 discovery 대상이라 평문 HTTP 면 중간자가 신원을 통째로 바꾼다.
-  //  (개발용 http IdP 를 붙일 일이 생기면 그때 명시적 escape hatch 를 추가할 것. 지금 열어두지 않는다.)
-  if (!/^https:\/\//i.test(issuer)) {
-    logger.warn({ issuer }, "[oidc] OIDC_ISSUER 가 https 가 아니라 OIDC 제공자를 켜지 않는다");
-    return null;
-  }
-  const allowedDomains = (process.env.OIDC_ALLOWED_DOMAINS ?? "")
-    .split(",").map((d) => d.trim().toLowerCase().replace(/^@/, "")).filter(Boolean);
-  return {
-    issuer, clientId, clientSecret, allowedDomains,
-    label: (process.env.OIDC_LABEL ?? "").trim() || defaultLabel(issuer),
-    trustUnverifiedEmail: process.env.OIDC_TRUST_UNVERIFIED_EMAIL === "1",
-    scopes: (process.env.OIDC_SCOPES ?? "").trim() || "openid email profile",
-  };
-}
-
-// 버튼 문구 기본값 — 사람이 보는 건 IdP 이름이지 'OIDC' 가 아니다. 모르면 중립 문구.
-function defaultLabel(issuer: string): string {
-  const h = (() => { try { return new URL(issuer).hostname.toLowerCase(); } catch { return ""; } })();
-  if (h.endsWith("accounts.google.com") || h.endsWith("google.com")) return "Google 계정으로 로그인";
-  if (h.includes("microsoftonline") || h.includes("microsoft.com")) return "Microsoft 계정으로 로그인";
-  if (h.includes("okta")) return "Okta 로 로그인";
-  return "회사 SSO 로 로그인";
-}
+// (배포 env 시드 oidcEnvSeed() 와 버튼 문구 기본값 defaultOidcLabel() 은 코어 auth/oidc-config.ts 에 있다 —
+//  관리탭이 EE 없이도 'env 로 설정돼 있는가'를 표시해야 하기 때문이다. #1601)
 
 // ── discovery ────────────────────────────────────────────────────────────────
 export interface OidcDiscovery {

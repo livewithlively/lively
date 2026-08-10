@@ -27,24 +27,29 @@ import {
   EMBEDDING_BATCH_MIN, EMBEDDING_BATCH_MAX, EMBEDDING_TIMEOUT_MIN_MS, EMBEDDING_TIMEOUT_MAX_MS, EMBEDDING_BACKFILL_MIN_MB_MIN,
   EMBEDDING_BACKFILL_MIN_MB_MAX
 } from "../../v6/embedding-provider.js";
-import { oidcConfigFromEnv } from "../../auth/oidc.js"; // #1520 — env 시드 존재 여부(관리탭 안내용)
 import { encryptSecret, secretsEnabled } from "../../org/credentials/secret-box.js";
-import { normalizeDomains, normalizeIssuer, type OidcSettings, type OidcSettingsPatch, type OidcSettingsPublic } from "../../auth/oidc-config.js";
+import { normalizeDomains, normalizeIssuer, oidcEnvSeed, type OidcSettings, type OidcSettingsPatch, type OidcSettingsPublic } from "../../auth/oidc-config.js";
+import { ee } from "../../enterprise/registry.js"; // #1601 — SSO 구현은 EE. 설정 표면은 코어에 남지만 '켜지나'는 EE 유무에 달렸다
 import { actorOf, restOnly, restRead, str } from "./shared.js";
 
 // #1520 — 관리탭에 돌려줄 OIDC 설정. 암호문(client_secret_enc)은 빼고 '설정됐나'만 준다.
 //  source 가 중요하다: 관리탭에 값을 넣었는데 enabled 를 안 켰거나, 켰는데 env 가 먹고 있는 상황을
 //  사람이 화면에서 바로 알아야 "저장했는데 왜 안 되지"가 사라진다.
 function publicOidc(s: OidcSettings): OidcSettingsPublic {
-  const env = oidcConfigFromEnv();
+  const env = oidcEnvSeed();
   const dbUsable = s.enabled && !!s.issuer && !!s.client_id && !!s.client_secret_enc;
+  const source = dbUsable ? "db" : (env ? "env" : "none");
   return {
     enabled: s.enabled, issuer: s.issuer, client_id: s.client_id,
     client_secret_set: !!s.client_secret_enc,
     allowed_domains: s.allowed_domains, label: s.label,
     trust_unverified_email: s.trust_unverified_email,
-    source: dbUsable ? "db" : (env ? "env" : "none"),
+    source,
     env_present: !!env,
+    // ★ #1601 — 설정은 갖춰졌는데 Enterprise 모듈이 없어 **실제로는 안 켜지는** 상태. source 만으로는
+    //  이걸 표현할 수 없다(설정 출처는 db/env 로 멀쩡한데 집행할 코드가 없는 것이므로). 조용히 안 되면
+    //  관리자는 issuer·시크릿을 계속 고치며 헤맨다 — 그래서 '설정이 있을 때만' 참으로 둔다.
+    enterprise_required: source !== "none" && !ee().sso,
   };
 }
 

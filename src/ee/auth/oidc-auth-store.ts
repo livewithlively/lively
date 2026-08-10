@@ -1,3 +1,6 @@
+// ⚠ Lively Enterprise Edition — 이 디렉터리(src/ee)는 상용 라이센스다. src/ee/LICENSE 참조.
+//   유효한 구독 없이 프로덕션에서 사용할 수 없다(열람·개발·테스트는 허용).
+//
 // pending_oidc_auth — 외부 IdP 로그인(OIDC, #1520)의 진행 중 인가요청 저장 계층.
 //  개시(createOidcAuthRequest)는 GET /api/ui/auth/oidc/start 가, 소비(consumeOidcAuthRequest)는
 //  콜백 GET /api/ui/auth/oidc/callback 이 부른다(web.ts). 둘 다 **무인증** 표면이다 — 로그인 전이니까.
@@ -6,7 +9,7 @@
 //  db 인자(기본 itemsPool)는 session-mint 와 같은 주입 seam — 단위 테스트가 가짜 풀로 계약을 검증한다.
 import crypto from "node:crypto";
 import { itemsPool, type Db } from "../../db/client.js";
-import { sha256 } from "./audit.js";
+import { sha256 } from "../../org/store/audit.js";
 
 // TTL 10분 — 사람이 IdP 화면에서 계정을 고르고 동의하는 시간. 60초(session-mint)로는 짧고,
 //  더 길면 유출된 state 가 살아 있는 창만 넓어진다.

@@ -3,7 +3,6 @@ import { BearerVerifier } from "./auth/bearer.js";
 import { bearerWithResourceMetadata } from "./auth/http-auth.js";
 import { oauthAuthorizationServer, clientSecretGate } from "./org/auth/oauth-router.js";
 import { registerOAuthConsent } from "./org/auth/oauth-consent.js";
-import { registerOidcLinkPage } from "./auth/oidc-link-page.js"; // #1520 B — 계정 갈림길(서버렌더)
 import { itemsPool } from "./db/client.js";
 import { buildToolCandidates } from "./capabilities/index.js";
 import { setToolCandidates } from "./mcp/mcp-surface.js";
@@ -98,9 +97,8 @@ app.get("/readyz", async (_req, res) => {
 //   우회시켜 두었고, 실제 검증은 이 게이트가 한다(oauth-clients.ts 머리주석 ★★). 빠지면 시크릿 검사가 사라진다.
 //  ③은 앱 **루트**에 마운트해야 한다(SDK 요구) — 자기 경로가 아니면 즉시 통과시키므로 다른 라우트엔 무영향.
 registerOAuthConsent(app);
-// 계정 갈림길(#1520 B, /auth/link) — 외부 IdP 신원은 검증됐는데 어느 구성원인지 못 정했을 때 뜨는 서버렌더 화면.
-//  동의 화면과 같은 성격(로그인 전에 떠야 해서 프런트 빌드에 의존하지 않는다)이라 나란히 둔다.
-registerOidcLinkPage(app);
+// (계정 갈림길 /auth/link 는 #1601 로 Enterprise 로 옮겼다 — registerWebUi 안에서 ee().sso 훅이 등록한다.
+//  동의 화면과 나란히 두던 자리였지만, SSO 신원이 있어야만 뜨는 화면이라 SSO 라우트와 함께 있는 편이 맞다.)
 app.use(["/token", "/revoke"], express.urlencoded({ extended: false }), clientSecretGate());
 app.use(oauthAuthorizationServer());
 

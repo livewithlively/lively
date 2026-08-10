@@ -29,6 +29,7 @@ What lives in `src/ee/` today:
 - Hash-chained data access audit log
 - Unstructured PII scrubbing for proxied responses
 - The organisation-wide ingest policy gate
+- External IdP login (SSO / OIDC), including account linking and domain-allowlist provisioning
 
 Everything else — including the SQL firewall, table allow/deny policy, secret redaction, and
 per-channel read/write guards — is core AGPL code, because **basic safety belongs in the free
@@ -37,6 +38,12 @@ edition**. We sell compliance, not safety.
 If a compliance policy is configured in the database but the Enterprise module is absent, the
 core **refuses the request** rather than silently ignoring the policy. A missing feature and an
 unenforced policy are not the same thing.
+
+That rule protects data; it is not a lock on the door. Where the Enterprise feature *is* the
+door — SSO — its absence simply removes a login option: the SSO button does not appear, and
+local password login, which is core and always enabled, still works. The free edition always
+lets you in. Where SSO is configured but the Enterprise module is missing, the admin screen
+says so plainly, because failing silently is worse than failing.
 
 ## Our commitments
 

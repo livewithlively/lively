@@ -1,3 +1,6 @@
+// ⚠ Lively Enterprise Edition — 이 디렉터리(src/ee)는 상용 라이센스다. src/ee/LICENSE 참조.
+//   유효한 구독 없이 프로덕션에서 사용할 수 없다(열람·개발·테스트는 허용).
+//
 // #1520 — 외부 IdP 로그인(우리가 OIDC 클라이언트)의 신원 검증 경계. DB 불요(순수 함수 + fetch 스텁).
 //  차단하는 회귀 3건:
 //   🔴 id_token 검증이 느슨하면 **누구나 남의 계정으로 로그인**한다. V 표가 그 경계를 고정한다
@@ -11,7 +14,7 @@ import {
   oidcConfig, verifyIdToken, emailFromClaims, buildAuthorizeUrl, S256, sha256hex,
   type OidcConfig, type OidcDiscovery,
 } from "./oidc.js";
-import { safeReturnTo } from "../org/store/oidc-auth.js";
+import { safeReturnTo } from "./oidc-auth-store.js";
 
 // 이 스위트는 DB 를 쓰지 않는다 — oidcConfig 의 관리탭(DB) 경로를 타면 설정이 우리 통제 밖이 된다.
 delete process.env.ITEMS_DATABASE_URL;
