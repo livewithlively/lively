@@ -91,19 +91,24 @@ export const API_PREFIX = (() => {
 })();
 // 루트 절대경로만 접두사를 받는다(상대·절대URL 은 그대로). fetch 와 내비게이션 둘 다 같은 규칙.
 export const apiUrl = (path) => (API_PREFIX && String(path).charAt(0) === '/' ? API_PREFIX + path : path);
-// ⚠ WS(/terminal/ws)에는 붙이지 않는다 — PTY 세션 실체는 게이트웨이 본체에 있고 프리뷰 라우트는 upgrade 를
-//  처리하지 않는다(#1169 와 같은 판단). 그래서 프리뷰에서도 4410 은 본체에서 정상적으로 온다.
+// WS(/terminal/ws)도 **같은 접두사**를 받는다 — 티켓·WS·세션이 한 프로세스에 모여야 한다.
+//  ⚠ 한때는 반대로 했다(WS 만 본체로). 프리뷰 라우트가 upgrade 를 처리하지 못했기 때문인데, 그 한계가
+//   preview/ws-proxy.ts 로 사라졌다. 그리고 그 우회는 **노드 세션에서 틀렸다**(실측 #1541):
+//   노드 에이전트는 자기가 등록한 게이트웨이(프리뷰 자식)의 인메모리 레지스트리에 붙어 있는데, 브라우저 WS 만
+//   본체로 가면 본체는 그 노드를 모른다 → 4462(노드 오프라인) → "연결 끊김·재연결 중" 무한 반복.
+//   프리뷰에서 노드 세션을 여는 것이 정확히 이 프로젝트의 검증 시나리오라, 우회를 남겨두면 검증 자체가 불가능하다.
 
 function authHeaders(extra) {
   const t = localStorage.getItem(TOKEN_KEY);
   return Object.assign({}, extra, t ? { Authorization: 'Bearer ' + t } : {});
 }
-// opts.mainOrigin=true 면 프리뷰 접두사를 붙이지 않고 **게이트웨이 본체**로 보낸다 — WS 와 짝이어야 하는 요청(티켓)용.
-//  붙이면 티켓은 프리뷰 자식에 발급되는데 WS 는 본체로 붙어(아래 주석) 본체가 그 티켓을 몰라 계속 재연결한다(실측).
+// 모든 요청이 apiUrl 을 탄다 — 티켓도 WS 도 **화면이 놓인 곳**(프리뷰면 프리뷰 자식)으로 간다.
+//  ⚠ 이 둘은 반드시 같은 프로세스여야 한다: 티켓은 인메모리라, 발급한 쪽과 WS 가 붙는 쪽이 갈리면
+//   받는 쪽이 그 티켓을 몰라 계속 재연결한다(실측). 한쪽만 바꾸지 마라.
 async function api(path, opts: any = {}) {
   const headers = authHeaders(opts.headers);
   if (opts.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-  const res = await fetch(opts.mainOrigin ? path : apiUrl(path), Object.assign({}, opts, { headers }));
+  const res = await fetch(apiUrl(path), Object.assign({}, opts, { headers }));
   const data = await res.json().catch(() => null);
   if (!res.ok) throw new Error((data && data.error) || ('요청 실패 ' + res.status));
   return data;
@@ -2058,11 +2063,12 @@ async function connectNow() {
   connecting = true;
   clearTimeout(reconnectTimer);
   // 재기동 시 인메모리 티켓이 비워지므로 매 연결마다 티켓을 새로 발급받는다.
-  //  ⚠ 티켓은 **본체**에 발급받는다(mainOrigin) — 바로 아래 WS 가 본체로 붙으므로 짝이 맞아야 한다.
-  try { await api('/api/ui/terminal/ticket', { method: 'POST', mainOrigin: true }); }
+  //  ⚠ 티켓과 WS 는 **같은 곳**(화면이 놓인 오리진+접두사)으로 간다 — 둘 다 apiUrl 을 탄다. 짝이 갈리면
+  //   받는 쪽이 티켓을 모르고, 노드 세션이면 노드까지 못 찾는다(4462). 한쪽만 고치지 마라.
+  try { await api('/api/ui/terminal/ticket', { method: 'POST' }); }
   catch (e) { connecting = false; scheduleReconnect('게이트웨이 응답 없음 — 재연결 중…'); return; }
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const sock = new WebSocket(proto + '://' + location.host + '/terminal/ws?session=' + encodeURIComponent(SESSION_ID) + nodeQ('&'));
+  const sock = new WebSocket(proto + '://' + location.host + apiUrl('/terminal/ws') + '?session=' + encodeURIComponent(SESSION_ID) + nodeQ('&'));
   sock.binaryType = 'arraybuffer'; // 서버가 raw 바이트(바이너리)로 보냄 → 바이트 레벨 파싱(멀티바이트 경계 안전)
   ws = sock;
   // 연결마다 새 control 파서(각 tmux -CC 스트림은 자기 도입자로 시작). 도입자 없으면 raw 모드로 자동 폴백.

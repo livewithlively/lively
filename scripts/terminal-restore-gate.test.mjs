@@ -133,12 +133,21 @@ eq((await mk("/ui/preview/p1/x.html")).API_PREFIX, "", "⑲경로 중간의 prev
 // 상대경로·절대 URL 은 건드리지 않는다(접두사를 붙이면 깨진다).
 eq(preview.apiUrl("app/core.js"), "app/core.js", "⑳상대경로는 그대로");
 eq(preview.apiUrl("https://other.example/x"), "https://other.example/x", "㉑절대 URL 은 그대로");
-// WS 는 접두사를 받지 않아야 한다(프리뷰 라우트가 upgrade 를 처리하지 않는다) — 소스로 직접 확인.
+// WS 와 티켓은 **같은 곳**으로 가야 한다 — 화면이 놓인 오리진+접두사(프리뷰면 프리뷰 자식).
+//  ⚠ 이 계약은 한 번 뒤집혔다(#1541). 예전엔 "WS 에 접두사를 붙이면 안 된다(프리뷰가 upgrade 미처리)" 였고
+//   이 테스트가 그걸 잠그고 있었다. preview/ws-proxy.ts 로 upgrade 중계가 생기면서 전제가 사라졌고,
+//   무엇보다 그 우회는 **노드 세션에서 틀렸다**: 노드는 자기가 등록한 게이트웨이(프리뷰 자식)의 인메모리
+//   레지스트리에 붙는데 브라우저 WS 만 본체로 가면 본체는 그 노드를 몰라 4462 → "연결 끊김·재연결" 무한 반복.
+//   지금 잠그는 것은 방향이 아니라 **짝**이다: 티켓(인메모리)과 WS 가 갈리면 어느 방향이든 깨진다.
 {
   const wsLine = src.split("\n").find((l) => l.includes("new WebSocket("));
   assert.ok(wsLine, "WebSocket 생성 줄을 찾지 못했습니다");
-  assert.ok(!/apiUrl\(/.test(wsLine), "㉒WS URL 에 프리뷰 접두사를 붙이면 안 됩니다(upgrade 미처리): " + wsLine.trim());
-  pass++; console.log("ok  ㉒WS 는 접두사 없이 본체로 붙는다");
+  assert.ok(/apiUrl\(/.test(wsLine), "㉒WS URL 이 화면 접두사를 따라가야 합니다(노드 세션이 4462 로 깨집니다): " + wsLine.trim());
+  const ticketLine = src.split("\n").find((l) => l.includes("/api/ui/terminal/ticket"));
+  assert.ok(ticketLine, "티켓 발급 줄을 찾지 못했습니다");
+  assert.ok(!/mainOrigin/.test(ticketLine),
+    "㉒티켓만 본체로 보내면 WS 와 짝이 갈립니다(받는 쪽이 그 티켓을 모릅니다): " + ticketLine.trim());
+  pass++; console.log("ok  ㉒WS 와 티켓이 같은 곳으로 간다(짝 불변식)");
 }
 
 console.log(`\n${pass} passed`);
