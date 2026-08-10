@@ -248,6 +248,17 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
   }
   // E4 — 새로 도입한 헬퍼의 **빈 입력**: 셸 세션은 감쌀 하네스가 없다.
   ok2(harnessLaunchArgv("shell", []).length === 0, "E4 셸 세션(빈 cmd)은 감싸지 않는다");
+  // E4b ★ Windows(psmux 노드)는 감싸지 않는다 (#1541 실측) — 이 런처는 POSIX 셸 스크립트인데 pane 셸이
+  //  PowerShell 이라 그대로 파싱돼(`'[' 뒤에 형식 이름이 없습니다`) 하네스가 시작조차 못 하고 세션이 즉사했다.
+  //  Windows 분기는 mac/linux CI 에서 한 번도 실행되지 않으므로(#1510 §5) 계약을 여기서 못박는다.
+  {
+    const win = harnessLaunchArgv("claude", ["claude", "--model", "opus"], "win32");
+    ok2(win.join(" ") === "claude --model opus", "E4b Windows 는 하네스를 직접 띄운다(sh 래퍼 없음)");
+    ok2(!win.includes("sh") && !win.some((a) => a.includes('[ "$rc"')), "E4b Windows argv 에 POSIX 스크립트가 섞이지 않는다");
+    // POSIX 는 종전 그대로 감싼다(#1516 사후회복 유지) — 회귀 방지.
+    const posix = harnessLaunchArgv("claude", ["claude"], "linux");
+    ok2(posix[0] === "sh" && posix[1] === "-c" && posix[2].includes('[ "$rc" -eq 0 ]'), "E4b POSIX 는 종전대로 런처로 감싼다");
+  }
   // E5 — 인젝션: 하네스·플래그는 위치인자로만 들어가 셸이 값을 해석하지 않는다.
   {
     const out = runLaunch(harnessLaunchArgv("codex", ["echo", "$(echo PWNED)"]));

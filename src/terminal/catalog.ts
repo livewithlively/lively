@@ -209,8 +209,19 @@ export function harnessFailNotice(harnessKey: string): string {
 }
 
 // 하네스 실행 argv → 런처로 감싼 argv. cmd 가 비면(셸 세션) 감싸지 않는다 — 감쌀 하네스가 없다.
-export function harnessLaunchArgv(harnessKey: string, cmd: string[]): string[] {
+//
+// ⚠ Windows(psmux 노드)에서는 감싸지 않는다 (#1541 실측). 이 런처는 **POSIX 셸 스크립트**인데
+//  Windows 노드의 pane 셸은 PowerShell 이라 그 스크립트가 그대로 파싱된다 → 하네스는 시작조차 못 하고
+//  세션이 즉사한다. 사용자가 본 화면 그대로:
+//    위치 줄:5 문자:2  + [ "$rc" -eq 0 ] && exit 0
+//    '[' 뒤에 형식 이름이 없습니다. / '&&' 토큰은 이 버전에서 올바른 문 구분 기호가 아닙니다.
+//  감싸지 않으면 하네스가 **직접** 뜬다(정상 동작 회복). 대신 #1516 의 사후회복(하네스가 비정상 종료해도
+//  세션은 셸로 남는다)이 Windows 에선 없다 — 그건 알려진 갭이고, PowerShell 판 런처는 별도로 만들어야 한다.
+//  ⚠ 여기서 문자열 보간으로 PowerShell 스크립트를 조립하지 말 것: 이 자리는 하네스·플래그가 위치인자로만
+//   들어가야 하는 인젝션 경계다(위 LAUNCH_SH 주석). 검증 없이 급조한 래퍼를 끼우는 것보다 안 감싸는 게 낫다.
+export function harnessLaunchArgv(harnessKey: string, cmd: string[], platform: string = process.platform): string[] {
   if (!cmd.length) return cmd;
+  if (platform === "win32") return cmd;
   return ["sh", "-c", LAUNCH_SH, "lively-launch", harnessFailNotice(harnessKey), ...cmd];
 }
 
