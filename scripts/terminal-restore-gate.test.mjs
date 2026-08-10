@@ -150,4 +150,30 @@ eq(preview.apiUrl("https://other.example/x"), "https://other.example/x", "㉑절
   pass++; console.log("ok  ㉒WS 와 티켓이 같은 곳으로 간다(짝 불변식)");
 }
 
+// ── ㉝ 캡처가 빈 백엔드(psmux alt-screen) 폴백 — 크기 넛지로 앱 재그리기 (#1541 실측) ──────────
+// A/B 실측(같은 Windows 노드, 같은 요청): 셸 팬(alt=0) → 캡처 44줄 / claude 팬(alt=1) → **캡처 블록 자체가 없음**.
+//  그래서 새로고침하면 하얀 화면 + 방금 그려진 조각 하나만 남았다(사용자 스크린샷). 입력은 앱에 도달하는데
+//  결과가 안 보여 "타이핑이 안 된다 · 클로드가 죽었다" 로 보였다.
+{
+  const { nudgeSizes } = preview;   // 모듈에서 export — 순수 계산부만 검증한다
+  const ok2 = (cond, n) => { assert.ok(cond, n); pass++; console.log(`ok  ${n}`); };
+  // 줄였다 되돌린다: 이 순서가 곧 '앱이 리사이즈를 두 번 받아 전체를 다시 그린다'는 뜻이다.
+  eq(JSON.stringify(nudgeSizes(120, 40)), JSON.stringify([{ t: 'r', c: 120, r: 39 }, { t: 'r', c: 120, r: 40 }]),
+    "㉝ 넛지는 r-1 로 줄였다가 원래 r 로 되돌린다");
+  // 되돌린 값이 원래와 같아야 한다 — 안 그러면 넛지가 크기를 영구히 바꿔버린다.
+  const [, back] = nudgeSizes(80, 24);
+  eq(back.r === 24 && back.c === 80, true, "㉝ 넛지 후 크기가 원래대로 복원된다");
+  // 줄일 수 없는 크기는 넛지하지 않는다(0줄 pane 을 만들지 않는다).
+  eq(nudgeSizes(80, 1), null, "㉝ 1줄짜리는 넛지 불가 — null");
+  eq(nudgeSizes(0, 40), null, "㉝ 폭 0 은 넛지 불가 — null");
+}
+// 폴백이 **관측된 사실**로만 열리는지(플랫폼 스니핑 아님) — 소스로 확인.
+{
+  const ok2 = (cond, n) => { assert.ok(cond, n); pass++; console.log(`ok  ${n}`); };
+  const gate = src.split("\n").find((l) => l.includes("if (!st || !st.alt) return;"));
+  ok2(!!gate, "㉝ 폴백 게이트는 'alt-screen인데 백필이 안 왔다'는 관측이다");
+  ok2(!/psmux|win32|navigator\.platform/.test(src.slice(src.indexOf("armBackfillWatch"), src.indexOf("armBackfillWatch") + 1200)),
+    "㉝ 게이트에 플랫폼 스니핑이 섞이지 않는다(캡처되는 백엔드에선 이 경로가 아예 안 탄다)");
+}
+
 console.log(`\n${pass} passed`);

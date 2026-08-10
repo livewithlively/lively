@@ -551,7 +551,7 @@
   }
   function diagText() {
     return [
-      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build 78858404",
+      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build 3b6f144d",
       "ua: " + navigator.userAgent,
       "session: " + SESSION_ID + (NODE_ID ? " node=" + NODE_ID : ""),
       "secure: " + window.isSecureContext + " \xB7 exported: " + (/* @__PURE__ */ new Date()).toISOString(),
@@ -696,6 +696,43 @@
   var ctrl = null, didBackfill = false;
   var syncedThisConn = false;
   var pendingPaneState = null, lastStateAt = 0, lastMouseResetAt = 0, lastMouseProbeAt = 0, mouseResetTries = 0;
+  var BACKFILL_WAIT_MS = 900;
+  var backfillWatch = null;
+  function clearBackfillWatch() {
+    if (backfillWatch) {
+      clearTimeout(backfillWatch);
+      backfillWatch = null;
+    }
+  }
+  function nudgeSizes(cols, rows) {
+    const c = Math.trunc(cols) || 0, r = Math.trunc(rows) || 0;
+    if (c < 1 || r < 2) return null;
+    return [{ t: "r", c, r: r - 1 }, { t: "r", c, r }];
+  }
+  function armBackfillWatch() {
+    clearBackfillWatch();
+    backfillWatch = setTimeout(() => {
+      backfillWatch = null;
+      const st = pendingPaneState;
+      if (!st || !st.alt) return;
+      pendingPaneState = null;
+      const msgs = nudgeSizes(term && term.cols, term && term.rows);
+      if (!msgs || !ws || ws.readyState !== 1) return;
+      dlog("backfill", "alt-screen \uCEA1\uCC98 \uC5C6\uC74C \u2192 \uD06C\uAE30 \uB11B\uC9C0\uB85C \uC571 \uC7AC\uADF8\uB9AC\uAE30 \uC720\uB3C4");
+      try {
+        ws.send(JSON.stringify(msgs[0]));
+      } catch (_) {
+      }
+      setTimeout(() => {
+        try {
+          if (ws && ws.readyState === 1) ws.send(JSON.stringify(msgs[1]));
+        } catch (_) {
+        }
+      }, 140);
+      lastCols = 0;
+      lastRows = 0;
+    }, BACKFILL_WAIT_MS);
+  }
   function parsePaneState(line) {
     const m = {};
     for (const tok of String(line).trim().split(/\s+/)) {
@@ -810,6 +847,7 @@
       if (ctrl && ctrl.isControl()) {
         try {
           ws.send(JSON.stringify({ t: "cap", n: BACKFILL_LINES, st: 1 }));
+          armBackfillWatch();
         } catch (_) {
         }
       }
@@ -2180,7 +2218,7 @@
           "\uBB38\uC81C\uAC00 \uC0DD\uACBC\uC744 \uB54C",
           tool("\uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", "\uC785\uB825\uC774 \uC774\uC0C1\uD560 \uB54C(\uD0A4\uB9CC \uB20C\uB7EC\uB3C4 \uAC19\uC740 \uBB38\uC790\uC5F4\uC774 \uB4E4\uC5B4\uAC00\uB294 \uB4F1) \uC544\uB798 \uBC84\uD2BC\uC73C\uB85C \uCD5C\uADFC \uC785\uB825 \uAE30\uB85D\uC744 \uBCF5\uC0AC\uD574 \uC81C\uBCF4\uC5D0 \uBD99\uC5EC \uC8FC\uC138\uC694 \u2014 \uC11C\uBC84\uB85C\uB294 \uC804\uC1A1\uB418\uC9C0 \uC54A\uC544\uC694"),
           el("button", { class: "tbtn", text: "\u{1F50D} \uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", onclick: () => copyText(diagText(), false, true) }),
-          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "78858404 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
+          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "3b6f144d \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
         ),
         sec(
           "\uB3C4\uAD6C (\uC624\uB978\uCABD \uC704 \uBC84\uD2BC)",
@@ -2864,6 +2902,7 @@
       //  attach~capture 사이에 먼저 흘러든 라이브 %output 과 겹쳐 줄이 중복되는 것을 막는다. 이후 라이브는 그대로 append.
       backfill: (text) => {
         try {
+          clearBackfillWatch();
           const st = pendingPaneState;
           pendingPaneState = null;
           dlog("backfill", "len=" + text.length + (st ? " +state" : ""));
@@ -2920,6 +2959,7 @@
           didBackfill = true;
           try {
             sock.send(JSON.stringify({ t: "cap", n: BACKFILL_LINES, st: 1 }));
+            armBackfillWatch();
           } catch (_) {
           }
         } else if (!syncedThisConn) {

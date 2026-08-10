@@ -281,6 +281,40 @@ let syncedThisConn = false;           // 이 연결에서 재접속 상태동기
 //  cap 을 보내면(옛 서버로의 degrade 는 예외 — 그땐 상태 자체가 안 옴), state-only(t:'st')가 남긴 stale 커서가
 //  엉뚱한 백필에 적용돼 이 버그(커서 desync)가 재발한다. 새 cap 송신부를 추가하면 st:1 을 반드시 함께.
 let pendingPaneState = null, lastStateAt = 0, lastMouseResetAt = 0, lastMouseProbeAt = 0, mouseResetTries = 0;
+// ── 캡처가 불가능한 백엔드를 위한 폴백 (#1541 실측) ──────────────────────────────────────────
+// psmux(Windows 노드)는 **alt-screen 팬의 capture-pane 에 빈 응답**을 준다(tmux 는 내용을 준다).
+//  A/B 실측 — 같은 노드, 같은 요청: 셸 팬(alt=0) → 상태 블록 + 캡처 44줄 / claude 팬(alt=1) → 상태 블록만.
+//  그래서 새로고침하면 복원할 내용이 없어 화면이 비고, TUI 는 '바뀐 부분만' 다시 그리므로 영영 안 채워진다.
+//  사용자가 본 화면: 하얀 바탕에 방금 그려진 조각 하나(까만 네모). 입력은 앱에 정상 도달하는데(커서 좌표로 확인)
+//  결과가 안 보이니 "타이핑이 안 된다 · 클로드가 죽은 것 같다" 로 보였다.
+// 해법: 캡처로 못 채우면 **앱이 스스로 다시 그리게** 한다 — 크기를 1줄 줄였다 되돌리면 앱이 리사이즈를 받고
+//  화면 전체를 다시 그린다(정상적인 TUI 의 보편 동작). 캡처가 되는 백엔드에선 이 경로가 아예 안 탄다.
+// ⚠ 게이트는 '플랫폼'이 아니라 **관측된 사실**이다: alt-screen 인데 백필이 안 왔다. tmux 에선 그 조합이
+//  발생하지 않으므로 자동으로 무영향이고, 백엔드 종류를 클라가 알 필요도 없다.
+const BACKFILL_WAIT_MS = 900;   // 상태 블록 뒤 이 시간 안에 백필이 없으면 '캡처 불가'로 본다
+let backfillWatch = null;
+function clearBackfillWatch() { if (backfillWatch) { clearTimeout(backfillWatch); backfillWatch = null; } }
+// 크기 넛지 — r-1 로 줄였다 되돌린다. 순수 계산부는 아래 nudgeSizes(테스트가 이 표를 지킨다).
+export function nudgeSizes(cols, rows) {
+  const c = Math.trunc(cols) || 0, r = Math.trunc(rows) || 0;
+  if (c < 1 || r < 2) return null;             // 1줄짜리는 줄일 수 없다 — 넛지 불가(그냥 포기)
+  return [{ t: 'r', c, r: r - 1 }, { t: 'r', c, r }];
+}
+function armBackfillWatch() {
+  clearBackfillWatch();
+  backfillWatch = setTimeout(() => {
+    backfillWatch = null;
+    const st = pendingPaneState;
+    if (!st || !st.alt) return;                // 캡처가 왔거나 alt-screen 이 아니면 할 일 없음
+    pendingPaneState = null;                   // 이 백필은 오지 않는다 — 커서 복원 대상도 없다
+    const msgs = nudgeSizes(term && term.cols, term && term.rows);
+    if (!msgs || !ws || ws.readyState !== 1) return;
+    dlog('backfill', 'alt-screen 캡처 없음 → 크기 넛지로 앱 재그리기 유도');
+    try { ws.send(JSON.stringify(msgs[0])); } catch (_) { /* noop */ }
+    setTimeout(() => { try { if (ws && ws.readyState === 1) ws.send(JSON.stringify(msgs[1])); } catch (_) { /* noop */ } }, 140);
+    lastCols = 0; lastRows = 0;                // 다음 applyFit 이 실제 크기를 다시 확정하게
+  }, BACKFILL_WAIT_MS);
+}
 function parsePaneState(line) {
   const m: any = {};
   for (const tok of String(line).trim().split(/\s+/)) { const i = tok.indexOf('='); if (i > 0) m[tok.slice(0, i)] = tok.slice(i + 1); }
@@ -380,7 +414,9 @@ function forceRedraw() {
   if (ws && ws.readyState === 1) {
     lastCols = term.cols; lastRows = term.rows;
     try { ws.send(JSON.stringify({ t: 'r', c: term.cols, r: term.rows })); } catch (_) { /* noop */ }
-    if (ctrl && ctrl.isControl()) { try { ws.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES, st: 1 })); } catch (_) { /* noop */ } } // 깨끗이 재캡처(+상태 동기화)
+    // 깨끗이 재캡처(+상태 동기화). '화면 복구' 버튼도 이 길을 타므로 넛지 폴백을 같이 건다 —
+    //  alt-screen 에서 캡처가 빈 백엔드에선 이 버튼이 **유일한 회복 수단**이 된다(재연결은 같은 공백을 반복한다).
+    if (ctrl && ctrl.isControl()) { try { ws.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES, st: 1 })); armBackfillWatch(); } catch (_) { /* noop */ } }
   }
   try { term.refresh(0, term.rows - 1); } catch (_) { /* noop */ }
 }
@@ -2080,6 +2116,7 @@ async function connectNow() {
     //  attach~capture 사이에 먼저 흘러든 라이브 %output 과 겹쳐 줄이 중복되는 것을 막는다. 이후 라이브는 그대로 append.
     backfill: (text) => {
       try {
+        clearBackfillWatch();                  // 캡처가 왔다 — 넛지 폴백은 필요 없다
         const st = pendingPaneState; pendingPaneState = null;
         dlog('backfill', 'len=' + text.length + (st ? ' +state' : ''));
         // 상태 블록을 받았으면 alt/mouse 는 applyPaneState 가 이미 진실로 동기화함(이 백필 직전). 못 받은 경우(구 서버)만
@@ -2120,7 +2157,7 @@ async function connectNow() {
     if (ctrl.isControl()) {
       // 첫 연결: 현재 화면+스크롤백 백필(상태 포함). 재연결: 백필은 생략(스크롤백 truncate 방지 — 중복 방지)하되
       //  상태만(t:'st') 1회 동기화해 재접속 갭에 놓친 마우스-off/alt-off 로 인한 stuck 을 해소(#1092 버그1).
-      if (!didBackfill) { didBackfill = true; try { sock.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES, st: 1 })); } catch (_) { /* noop */ } }
+      if (!didBackfill) { didBackfill = true; try { sock.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES, st: 1 })); armBackfillWatch(); } catch (_) { /* noop */ } }
       else if (!syncedThisConn) { syncedThisConn = true; try { sock.send(JSON.stringify({ t: 'st' })); } catch (_) { /* noop */ } }
     }
   };
