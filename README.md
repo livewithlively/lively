@@ -232,7 +232,7 @@ Three licenses apply, decided entirely by directory.
 
 `src/ee/` is **optional**. The core never imports it statically, so you can delete `src/ee/` and the project still builds and runs. The **basic safety mechanisms live in the core (AGPL)** — the SQL firewall, table policy, secret redaction, channel guards — because the free edition should not be the dangerous one.
 
-We've published our commitments: `kit/` stays Apache-2.0 permanently, we will not move the core to SSPL or BUSL, and we will not move functionality that is AGPL today into `src/ee/` — **[LICENSING.md](LICENSING.md)**.
+We've published our commitments: `kit/` stays Apache-2.0 permanently, we will not move the core to SSPL or BUSL, and the free edition will stay a complete, working product — **[LICENSING.md](LICENSING.md)**.
 
 The name follows a trademark policy, not the code license: [TRADEMARK.md](TRADEMARK.md). Fork freely; just rename your fork.
 
