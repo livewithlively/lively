@@ -130,7 +130,6 @@ function projInlineAdd(ctx, listId, countEl) {
     // Enter / 바깥클릭 → **설정 팝업 없이 바로 생성**(#1130). 프로젝트 탭 추가행(pjvProjAddRow, #1067)과 동일 —
     //  이름만으로 POST /v6/projects 즉시 생성하고, 새 행을 그 자리에 인라인 삽입한 뒤 입력을 열어 둬(keepOpen) 연속 추가한다.
     //  자세한 설정(설명·레포·태스크·팀원·AI세션)이 필요하면 섹션 상단 헤더의 '+ 새 프로젝트'(openProjectV2Form 팝업)를 쓴다.
-    let busy = false;
     // #1098 — 리스트 없이 만들어지던 구멍 막기. 미분류 묶음의 추가행은 **리스트를 고른 뒤에만** 생성한다
     //  (예전엔 listId 가 없으면 list_id 없이 POST 해 '어느 리스트에도 없는 프로젝트'가 계속 생겼다).
     //  고르는 자리는 팝오버 한 겹 — 이름은 이미 쳤으니 리스트만 집으면 바로 만들어진다.
@@ -154,9 +153,12 @@ function projInlineAdd(ctx, listId, countEl) {
         });
         close = dashPopover(anchor, panel);
     };
-    const commit = async (keepOpen, forcedListId) => {
-        if (busy)
-            return;
+    // Enter 를 눌러도 **기다리지 않는다**(#1581) — 예전엔 입력칸을 disabled 로 잠근 채 생성(POST)과 상태 패치(POST)
+    //  두 왕복이 끝나기를 기다렸다(실측 353ms 입력 불가). 연달아 적어 내려가는 흐름에서 그 정지가 "한참 걸린다"였다.
+    //  이제 이름만 챙겨 즉시 입력칸을 비우고(다음 이름을 바로 칠 수 있다) 임시 행을 그 자리에 세운 뒤, 생성은 뒤에서 돈다.
+    //  응답이 오면 임시 행을 진짜 행으로 교체하고, 실패하면 임시 행을 걷어내며 친 이름을 입력칸에 되돌려 준다.
+    //  ⚠ 리스트 고르기(#1098)는 그 앞에 있다 — 어디에 넣을지부터 정해야 낙관적 행을 놓을 자리가 정해진다.
+    const commit = (keepOpen, forcedListId) => {
         const name = (input.value || '').trim();
         if (!name) {
             if (!keepOpen)
@@ -164,50 +166,65 @@ function projInlineAdd(ctx, listId, countEl) {
             return;
         }
         const useListId = forcedListId != null ? forcedListId : listId;
-        if (useListId == null || useListId === 0) { // 미분류 자리 — 리스트를 먼저 고른다
-            pickListThen(input, (picked) => { void commit(keepOpen, picked); });
+        if (useListId == null || useListId === 0) { // 미분류 자리 — 리스트를 먼저 고른다(이름은 입력칸에 그대로 둔 채)
+            pickListThen(input, (picked) => { commit(keepOpen, picked); });
             return;
         }
-        busy = true;
-        input.disabled = true;
-        try {
-            // 생성 — 이름·리스트를 한 번에. (작성자=나(actor) 자동 → 내 보드 노출·삭제권한.)
-            const np = await api('/api/ui/v6/projects', { method: 'POST', body: JSON.stringify({
-                    name, list_id: useListId,
-                }) }).then((d) => (d && d.project) || d);
-            // #1130 대시보드 빠른 생성 기본 상태 = '할 일'(todo). 백엔드 createProject 는 항상 active(진행 중)로
-            //  만들므로 생성 직후 상태만 todo 로 패치한다(프로젝트 탭이 비-진행중 그룹에 넣을 때와 동일 경로 /status POST).
-            //  ⚠ 이 기본값 변경은 '대시보드 빠른 생성'에만 적용 — 백엔드 기본값·프로젝트 탭은 그대로(사용자 결정 #1130).
-            if (np && np.id)
-                await api('/api/ui/v6/projects/' + np.id + '/status', { method: 'POST', body: JSON.stringify({ status: 'todo', status_raw: null }) }).catch(() => { });
-            // 새 프로젝트 행을 추가행 바로 위에 인라인 삽입(리로드 없이 흐름 유지). status 는 위 패치와 일치시켜 '할 일'로.
-            const p = Object.assign({ task_count: 0, tasks: [], field_values: {}, tags: [], members: [] }, np, { status: 'todo', status_category: 'unstarted', list_id: useListId ?? (np && np.list_id) ?? null });
-            if (np && np.id) {
+        input.value = '';
+        if (keepOpen)
+            input.focus();
+        else
+            collapse();
+        // 낙관적 행 — 아직 id 가 없어 클릭·상태변경은 막아 둔다(pending). 자리·글자는 실제 행과 같아 흐름이 끊기지 않는다.
+        const pending = el('div', { class: 'dash-projrow2 dash-projrow-pending' }, el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'dash-projstatus-btn dash-projstatus-static', 'aria-hidden': 'true' }, dashStatusIconSvg('todo', '#94a3b8', 0)), el('span', { class: 'pjv-trow-title', text: name })));
+        row.parentNode?.insertBefore(pending, row);
+        if (countEl)
+            countEl.textContent = String((parseInt(countEl.textContent, 10) || 0) + 1);
+        (async () => {
+            try {
+                // 생성 — 이름·리스트를 한 번에. (작성자=나(actor) 자동 → 내 보드 노출·삭제권한.)
+                const np = await api('/api/ui/v6/projects', { method: 'POST', body: JSON.stringify({
+                        name, list_id: useListId,
+                    }) }).then((d) => (d && d.project) || d);
+                // #1130 대시보드 빠른 생성 기본 상태 = '할 일'(todo). 백엔드 createProject 는 항상 active(진행 중)로
+                //  만들므로 생성 직후 상태만 todo 로 패치한다(프로젝트 탭이 비-진행중 그룹에 넣을 때와 동일 경로 /status POST).
+                //  ⚠ 이 기본값 변경은 '대시보드 빠른 생성'에만 적용 — 백엔드 기본값·프로젝트 탭은 그대로(사용자 결정 #1130).
+                if (np && np.id)
+                    await api('/api/ui/v6/projects/' + np.id + '/status', { method: 'POST', body: JSON.stringify({ status: 'todo', status_raw: null }) }).catch(() => { });
+                if (!np || !np.id)
+                    throw new Error('생성 응답에 프로젝트가 없어요');
+                // 임시 행을 진짜 행으로 교체. status 는 위 패치와 일치시켜 '할 일'로.
+                const p = Object.assign({ task_count: 0, tasks: [], field_values: {}, tags: [], members: [] }, np, { status: 'todo', status_category: 'unstarted', list_id: useListId ?? np.list_id ?? null });
                 // ⚠ 데이터 배열(projects)에도 넣는다 — DOM 만 삽입하면, 행의 상태 아이콘을 눌러 상태를 바꿀 때
                 //  dashSetProjStatus → draw() 가 projects 로 재렌더하며 이 행을 통째로 떨군다(생성은 됐는데 목록에서 사라짐, #1130).
                 ctx.projects.push(p);
-                row.parentNode?.insertBefore(projRow(ctx, p), row);
+                if (pending.isConnected)
+                    pending.replaceWith(projRow(ctx, p));
+                else
+                    row.parentNode?.insertBefore(projRow(ctx, p), row);
                 ctx.onCount(ctx.projects.filter((x) => !projIsDone(x)).length); // 인사줄 '진행 중' 카운트 동기화
             }
-            if (countEl)
-                countEl.textContent = String((parseInt(countEl.textContent, 10) || 0) + 1);
-            input.value = '';
-            input.disabled = false;
-            busy = false;
-            if (keepOpen)
-                input.focus();
-            else
-                collapse();
-        }
-        catch (err) {
-            toast('프로젝트 생성 실패 — ' + (err && err.message || err), true);
-            input.disabled = false;
-            busy = false;
-        }
+            catch (err) {
+                pending.remove();
+                if (countEl)
+                    countEl.textContent = String(Math.max(0, (parseInt(countEl.textContent, 10) || 1) - 1));
+                toast('프로젝트 생성 실패 — ' + (err && err.message || err), true);
+                // 친 이름을 잃지 않게 되돌린다 — 입력칸이 비어 있을 때만(그 사이 다음 이름을 치고 있으면 건드리지 않는다).
+                if (!(input.value || '').trim()) {
+                    if (!row.classList.contains('editing'))
+                        expand();
+                    input.value = name;
+                    input.focus();
+                }
+            }
+        })();
     };
     const expand = () => {
         row.classList.add('editing');
-        row.replaceChildren(el('div', { class: 'pjv-trow-title-cell' }, dashStatusIconSvg('active', '#94a3b8', 0), input));
+        // 상태 아이콘을 **행과 같은 24px 자리**(dash-projstatus-btn)에 넣는다(#1581) — 예전엔 18px svg 를 맨앞에
+        //  그대로 놨더니, 아이콘이 행보다 3px·이름이 8px 왼쪽으로 어긋나 타이핑을 시작하는 순간 줄이 밀려 보였다.
+        //  누를 일은 없으니(생성 전) span 으로 — 크기·여백만 버튼과 공유한다.
+        row.replaceChildren(el('div', { class: 'pjv-trow-title-cell' }, el('span', { class: 'dash-projstatus-btn dash-projstatus-static', 'aria-hidden': 'true' }, dashStatusIconSvg('todo', '#94a3b8', 0)), input));
         input.focus();
     };
     // 한글(IME) 조합 중 Enter 는 글자 확정용 — 그때 커밋하면 마지막 글자가 중복된 이름이 된다(프로젝트 탭 pjvProjAddRow 동형 가드).
@@ -221,10 +238,10 @@ function projInlineAdd(ctx, listId, countEl) {
         input.value = '';
         collapse();
     } });
-    // 바깥클릭 — 이름 있으면 생성(접기), 없으면 접기. busy·행 내부 포커스면 보류(조기 이중생성 방지).
+    // 바깥클릭 — 이름 있으면 생성(접기), 없으면 접기. 행 내부 포커스면 보류.
     input.addEventListener('blur', () => {
         setTimeout(() => {
-            if (busy || !row.classList.contains('editing'))
+            if (!row.classList.contains('editing'))
                 return;
             if (row.contains(document.activeElement))
                 return;

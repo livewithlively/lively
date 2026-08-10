@@ -19,6 +19,7 @@ export function createKeys(ctx) {
     const focusBlock = (block, atStart) => ctx.focusBlock(block, atStart);
     const toToggleBlock = (b, summaryText) => ctx.toToggleBlock(b, summaryText);
     const ensureOne = () => ctx.ensureOne();
+    const refreshEmpty = () => ctx.refreshEmpty();
     const renumber = () => ctx.renumber();
     const normalizeStructure = () => ctx.normalizeStructure();
     const duplicateBlock = (block) => ctx.duplicateBlock(block);
@@ -37,8 +38,8 @@ export function createKeys(ctx) {
     const histRedo = () => ctx.histRedo();
     const histFlushTyping = () => ctx.histFlushTyping();
     // ════════ 키 입력 ════════
-    root.addEventListener('compositionstart', () => { st.composing = true; }, true);
-    root.addEventListener('compositionend', () => { st.composing = false; setTimeout(syncSlashQuery, 0); }, true);
+    root.addEventListener('compositionstart', () => { st.composing = true; refreshEmpty(); }, true);
+    root.addEventListener('compositionend', () => { st.composing = false; refreshEmpty(); setTimeout(syncSlashQuery, 0); }, true);
     root.addEventListener('keydown', (e) => {
         if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S')) {
             if (opts.onSaveShortcut) {
@@ -501,6 +502,7 @@ export function createKeys(ctx) {
             return;
         }
         markDirtyType();
+        refreshEmpty(); // 플레이스홀더 노출 판정 갱신(#1581) — 한 글자만 쳐도 안내문이 즉시 사라지게.
         //  #764 단어 단위 실행취소 — 공백·구두점 입력 시 직전 타이핑 버스트를 히스토리 1스텝으로 확정(노션 감각).
         //  IME 조합 중엔 건너뛴다(조합 종료 후의 공백만 경계로).
         if (!st.composing && !e.isComposing && e.inputType === 'insertText' && e.data && /[\s.,;:!?)\]}"'、。]/.test(e.data))
@@ -529,8 +531,10 @@ export function createKeys(ctx) {
                 convertBlock(block, { type: 'bullet', indent: 0, text: '' });
                 return;
             }
-            if (/^(\d+)[.)]\s$/.test(txt)) {
-                convertBlock(block, { type: 'numbered', indent: 0, text: '' });
+            //  친 숫자를 **시작 번호로 존중**한다(#1581) — `2. ` 로 시작한 목록이 제멋대로 1 로 돌아가면
+            //   "내가 친 2 가 1 이 됐다"가 된다. 이어지는 항목은 종전대로 renumber 가 +1 씩 매긴다.
+            if ((m = /^(\d+)[.)]\s$/.exec(txt))) {
+                convertBlock(block, { type: 'numbered', indent: 0, start: Number(m[1]), text: '' });
                 return;
             }
             if (/^\[( |x)?\]\s$/.test(txt)) {
@@ -559,6 +563,7 @@ export function createKeys(ctx) {
             //  목록 안에서도 **다른 목록 유형으로 갈아탈 수 있어야 한다** — 종전엔 bullet→todo 하나만 열려 있어서,
             //  글머리 목록을 쓰다가 `1. ` 을 치면 번호 목록이 되지 않고 글자만 남았다(들여쓰기는 유지한다).
             const indent = Number(block.dataset.indent) || 0;
+            let lm;
             if (/^\[( |x)?\]\s$/.test(txt) && type !== 'todo') {
                 convertBlock(block, { type: 'todo', indent, checked: /x/.test(txt), text: '' });
                 return;
@@ -567,8 +572,23 @@ export function createKeys(ctx) {
                 convertBlock(block, { type: 'bullet', indent, text: '' });
                 return;
             }
-            if (/^(\d+)[.)]\s$/.test(txt) && type !== 'numbered') {
-                convertBlock(block, { type: 'numbered', indent, text: '' });
+            if ((lm = /^(\d+)[.)]\s$/.exec(txt))) {
+                if (type !== 'numbered') {
+                    convertBlock(block, { type: 'numbered', indent, start: Number(lm[1]), text: '' });
+                    return;
+                }
+                //  이미 번호 항목인데 또 `2. ` 를 치는 건 '번호를 내가 정하겠다'는 뜻이다(#1581) — 그대로 두면
+                //  마커와 글자가 겹쳐 `2. 2. …` 로 보였다. 친 프리픽스는 마커로 흡수하고, 시작 번호로 반영한다
+                //  (목록 도중 항목이면 renumber 가 이어지는 번호를 유지한다 — 목록은 이어서 매겨진다는 규칙이 우선).
+                const n = Number(lm[1]);
+                target.textContent = '';
+                if (n > 1)
+                    block.dataset.start = String(n);
+                else
+                    delete block.dataset.start;
+                renumber();
+                markDirty();
+                focusBlock(block, true);
                 return;
             }
             return;

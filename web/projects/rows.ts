@@ -785,46 +785,67 @@ function pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDele
   //  대로 만들고, 태스크 추가행(pjvAddRow)과 똑같이 새 행을 그 자리에 끼운 뒤 입력을 열어 둬(keepOpen) 다음 프로젝트를
   //  바로 이어서 만들 수 있게 한다. 자세한 설정(설명·레포·태스크 등)이 필요하면 트리거 옆 '자세히'(pjvProjAddMenu)에서.
   //  Tab 들여쓰기 상태(#663)면 위 프로젝트의 태스크로 즉시 생성(종전과 동일).
-  let busy = false;
-  const commit = async (keepOpen) => {
+  // Enter 를 눌러도 **기다리지 않는다**(#1581) — 예전엔 입력칸을 잠근 채 생성 + 상태 패치(+마감·우선순위 패치)
+  //  왕복이 끝나야 다음 이름을 칠 수 있었다. 이제 이름·드래프트를 그 자리에서 챙겨 입력을 비우고 임시 행을 세운 뒤,
+  //  생성은 뒤에서 돈다. 응답이 오면 임시 행을 진짜 행으로 바꾸고, 실패하면 걷어내며 친 이름을 되돌린다.
+  const commit = (keepOpen) => {
     if (indentParent) { commitAsTask(); return; }
-    if (busy) return;
     const name = input.value.trim();
     if (!name) { if (!keepOpen) collapse(); return; }
-    busy = true; input.disabled = true;
-    try {
-      // 생성 — 이름·팀원·리스트를 한 번에. (커스텀/비-진행중 상태·마감·우선순위는 생성 직후 패치.)
-      const np = await api('/api/ui/v6/projects', { method: 'POST', body: JSON.stringify({
-        name, members: draft.memberIds && draft.memberIds.length ? draft.memberIds : undefined,
-        list_id: listId != null ? listId : undefined,
-      }) }).then((d) => (d && d.project) || d);
-      const nativeStatus = statusDef ? pjvNativeStatusOf(statusDef.category) : (statusKey === 'todo' ? 'todo' : statusKey === 'done' ? 'done' : 'in_progress');
-      if (np && np.id && (statusDef || nativeStatus !== 'in_progress')) {
-        await api('/api/ui/v6/projects/' + np.id + '/status', { method: 'POST', body: JSON.stringify({ status: nativeStatus, status_raw: statusDef ? statusDef.key : null }) }).catch(() => {});
+    // 이 커밋이 쓸 드래프트를 **스냅샷**으로 떠 둔다 — 아래에서 곧바로 드래프트를 비우므로(다음 입력용) 참조를 남기면 안 된다.
+    const memberIds = (draft.memberIds || []).slice();
+    const dueDate = draft.due_date, priority = draft.priority;
+    input.value = '';
+    draft.memberIds = []; draft.due_date = draft.priority = null;
+    if (keepOpen) { paintDateCells(); cTeam.replaceChildren(pjvProjTeamControl([], (ids) => { draft.memberIds = ids; })); input.focus(); } else collapse();
+    const nativeStatus = statusDef ? pjvNativeStatusOf(statusDef.category) : (statusKey === 'todo' ? 'todo' : statusKey === 'done' ? 'done' : 'in_progress');
+    // 낙관적 행 — 아직 id 가 없어 클릭·인라인 편집은 막아 둔다(pending). 자리·글자는 실제 행과 같아 흐름이 끊기지 않는다.
+    const dotEl = statusDef ? pjvCustomStatusDot(statusDef) : pjvStatusIconStd(pjvProjStatusMeta(statusKey).key);
+    const pending = el('div', { class: 'pjv-trow pjv-proj-row pjv-proj-row-pending' },
+      el('div', { class: 'pjv-trow-title-cell' },
+        el('span', { class: 'pjv-row-check-spacer', 'aria-hidden': 'true' }),
+        el('span', { class: 'pjv-trow-caret empty', 'aria-hidden': 'true' }),
+        dotEl, el('span', { class: 'pjv-trow-title', text: name })));
+    pending.style.gridTemplateColumns = pjvProjGridTemplate(fields);
+    body.insertBefore(pending, row);
+    if (countEl) countEl.textContent = String((parseInt(countEl.textContent, 10) || 0) + 1);
+    const emptyEl = body.querySelector('.pjv-proj-empty'); if (emptyEl) emptyEl.remove();
+    (async () => {
+      try {
+        // 생성 — 이름·팀원·리스트를 한 번에. (커스텀/비-진행중 상태·마감·우선순위는 생성 직후 패치.)
+        const np = await api('/api/ui/v6/projects', { method: 'POST', body: JSON.stringify({
+          name, members: memberIds.length ? memberIds : undefined,
+          list_id: listId != null ? listId : undefined,
+        }) }).then((d) => (d && d.project) || d);
+        if (!np || !np.id) throw new Error('생성 응답에 프로젝트가 없어요');
+        if (statusDef || nativeStatus !== 'in_progress') {
+          await api('/api/ui/v6/projects/' + np.id + '/status', { method: 'POST', body: JSON.stringify({ status: nativeStatus, status_raw: statusDef ? statusDef.key : null }) }).catch(() => {});
+        }
+        const patch: any = {};
+        if (dueDate) patch.due_date = dueDate;
+        if (priority) patch.priority = priority;
+        if (Object.keys(patch).length) await api('/api/ui/v6/projects/' + np.id, { method: 'POST', body: JSON.stringify(patch) }).catch(() => {});
+        // 임시 행을 진짜 행으로 교체. 멤버 facepile 은 draft ids 로 임시 구성(다음 렌더에 정식화).
+        const p = Object.assign({ priority: null, due_date: null, start_date: null, task_count: 0, field_values: {}, tags: [] }, np, patch, {
+          status: nativeStatus, status_raw: statusDef ? statusDef.key : null, list_id: listId ?? np.list_id ?? null, members: memberIds.map((id) => ({ member_id: id })),
+        });
+        const real = pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx);
+        if (pending.isConnected) pending.replaceWith(real); else body.insertBefore(real, row);
+      } catch (err: any) {
+        pending.remove();
+        if (countEl) countEl.textContent = String(Math.max(0, (parseInt(countEl.textContent, 10) || 1) - 1));
+        toast('프로젝트 생성 실패 — ' + (err.message || err), true);
+        // 친 이름을 잃지 않게 되돌린다 — 입력칸이 비어 있을 때만(그 사이 다음 이름을 치고 있으면 건드리지 않는다).
+        if (!input.value.trim()) { if (!row.classList.contains('editing')) expand(); input.value = name; input.focus(); }
       }
-      const patch: any = {};
-      if (draft.due_date) patch.due_date = draft.due_date;
-      if (draft.priority) patch.priority = draft.priority;
-      if (np && np.id && Object.keys(patch).length) await api('/api/ui/v6/projects/' + np.id, { method: 'POST', body: JSON.stringify(patch) }).catch(() => {});
-      // 새 프로젝트 행을 그 자리에 인라인 삽입(리로드 없이 흐름 유지). 멤버 facepile 은 draft ids 로 임시 구성(다음 렌더에 정식화).
-      const memberRows = (draft.memberIds || []).map((id) => ({ member_id: id }));
-      const p = Object.assign({ priority: null, due_date: null, start_date: null, task_count: 0, field_values: {}, tags: [] }, np, patch, {
-        status: nativeStatus, status_raw: statusDef ? statusDef.key : null, list_id: listId ?? (np && np.list_id) ?? null, members: memberRows,
-      });
-      body.insertBefore(pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx), row);
-      if (countEl) countEl.textContent = String((parseInt(countEl.textContent, 10) || 0) + 1);
-      const emptyEl = body.querySelector('.pjv-proj-empty'); if (emptyEl) emptyEl.remove();
-      input.value = ''; input.disabled = false; busy = false;
-      draft.memberIds = []; draft.due_date = draft.priority = null; paintDateCells();
-      if (keepOpen) input.focus(); else collapse();
-    } catch (err) { toast('프로젝트 생성 실패 — ' + (err.message || err), true); input.disabled = false; busy = false; }
+    })();
   };
   // 바깥클릭 — 드래프트 셀 팝오버가 열려 있거나 행 내부 포커스면 보류. 이름 있으면 생성(접기), 없으면 접기.
   //  ⚠ 팀원·마감·우선순위 팝오버는 `.pjv-pop` 이 아니라 `.pjv-menu`(마감=`.pjv-date-pop`) 를 쓴다 — `.pjv-pop` 만
   //   보면 그 셀을 여는 순간 blur 가 조기 생성해 **프로젝트가 두 개** 만들어졌다(#1067). 둘 다 가드한다.
   input.addEventListener('blur', () => {
     setTimeout(() => {
-      if (busy || !row.classList.contains('editing')) return;
+      if (busyTask || !row.classList.contains('editing')) return;
       if (document.querySelector('.pjv-pop, .pjv-menu')) return;
       if (row.contains(document.activeElement)) return;
       if (input.value.trim()) commit(false); else collapse();

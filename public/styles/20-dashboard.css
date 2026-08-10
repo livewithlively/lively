@@ -163,6 +163,11 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 /* #req 대시보드 프로젝트 행 상태 동그라미 — 클릭 가능(상태 변경 메뉴 — 프로젝트 탭과 동일 동작). */
 .dash-projstatus-btn { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: none; background: none; padding: 0; margin-right: 2px; border-radius: 6px; cursor: pointer; }
 .dash-projstatus-btn:hover { background: var(--bg-tint-2); }
+/* 인라인 추가행의 상태 아이콘 — 자리(24px)만 행과 공유하는 표시용. 누를 수 없으니 호버·커서 신호는 뺀다(#1581). */
+.dash-projstatus-static { cursor: text; }
+.dash-projstatus-static:hover { background: none; }
+/* 생성 응답을 기다리는 임시 행(#1581) — 자리는 잡되 아직 열 수 없다는 걸 옅기로 알린다(깜빡임 없이 조용히). */
+.dash-projrow-pending { opacity: .55; pointer-events: none; }
 /* 상태 메뉴 카드 — 기존 dashPopover 가 .dash-pop(위치만) 을 얹으므로 배경·테두리는 여기서. */
 .dash-statusmenu { background: var(--bg); border: 1px solid var(--line-net); border-radius: 10px; box-shadow: 0 8px 28px rgba(20,35,59,.16); padding: 5px; min-width: 168px; }
 /* #req 내가 할당된 프로젝트의 세션 뱃지 — 액센트 강조로 '내 프로젝트 세션' 구분. */
