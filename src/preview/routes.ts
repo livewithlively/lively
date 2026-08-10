@@ -52,8 +52,21 @@ function reLocate(loc: string, base: string, prefix: string): string | null {
   } catch { return null; }
 }
 
+// 자식이 준 Set-Cookie 의 Path 를 프리뷰 서브패스로 되돌린다(#1541) — reLocate 와 같은 이유·같은 자리.
+//  자식은 자기가 오리진 루트에 있다고 믿으므로 `Path=/terminal` 같은 **루트 절대경로**를 준다. 그대로 흘리면
+//  브라우저는 그 쿠키를 `/preview/<id>/terminal/…` 요청에 **보내지 않는다**(Path 가 안 맞으므로).
+//  실측 증상: 웹터미널 티켓 쿠키가 Path=/terminal 로 내려와, 프리뷰에서 WS 업그레이드에 쿠키가 빠짐 →
+//   게이트웨이가 티켓을 못 찾아 소켓을 그냥 끊음 → 502 → 화면은 "재연결 중…" 무한 반복.
+//   ⚠ raw 소켓 프로브로는 재현되지 않는다(도구는 Path 를 무시하고 쿠키를 싣는다) — 브라우저로만 보인다.
+//  Path 가 없는 쿠키는 건드리지 않는다(브라우저 기본값이 요청 경로 기준이라 이미 프리뷰 안이다).
+export function rePathCookie(setCookie: string, prefix: string): string {
+  if (!prefix) return setCookie;
+  return setCookie.replace(/(;\s*[Pp]ath\s*=\s*)(\/[^;]*)/, (m, pre: string, p: string) =>
+    p === prefix || p.startsWith(prefix + "/") ? m : `${pre}${prefix}${p === "/" ? "/" : p}`);
+}
+
 // base(http(s)://host:port) 로 HTTP 프록시 — rest 경로 + 쿼리 보존, JSON body 재직렬화, 응답 스트림 파이프.
-//  prefix = `/preview/<id>` — 자식 응답의 Location 을 이 아래로 되돌리는 데 쓴다.
+//  prefix = `/preview/<id>` — 자식 응답의 Location·Set-Cookie Path 를 이 아래로 되돌리는 데 쓴다.
 function proxyTo(base: string, rest: string, req: express.Request, res: express.Response, prefix: string): void {
   let target: URL;
   const qi = req.originalUrl.indexOf("?");
@@ -74,6 +87,11 @@ function proxyTo(base: string, rest: string, req: express.Request, res: express.
         const fixed = reLocate(out.location, base, prefix);
         if (fixed) out.location = fixed;
       }
+      // Set-Cookie 는 여러 줄일 수 있어 배열로 온다 — 전부 같은 규칙으로 되돌린다.
+      //  (Node 타입상 string[] 이지만 구현에 따라 단일 문자열이 올 수 있어 둘 다 받는다.)
+      const sc: unknown = out["set-cookie"];
+      if (Array.isArray(sc)) out["set-cookie"] = sc.map((c) => rePathCookie(String(c), prefix));
+      else if (typeof sc === "string") out["set-cookie"] = [rePathCookie(sc, prefix)];
       res.writeHead(r.statusCode || 502, out); r.pipe(res);
     });
   // ⚠ charset 필수 — 이 경로가 사용자가 **실제로 가장 자주 만나는** 에러다(게이트웨이가 재시작되면 spawn 자식이

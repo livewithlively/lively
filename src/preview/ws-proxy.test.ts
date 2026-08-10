@@ -5,6 +5,7 @@
 //  업그레이드가 Express 를 통과하지 않아 **어떤 핸들러에도 닿지 않았기** 때문이다. 그 침묵이 진단을 가장 어렵게 했다.
 import { strict as assert } from "node:assert";
 import { parsePreviewWsPath, rebuildUpgradeResponse } from "./ws-proxy.js";
+import { rePathCookie } from "./routes.js";
 
 // ── 경로 분해 ──────────────────────────────────────────────────────────────
 {
@@ -42,6 +43,26 @@ import { parsePreviewWsPath, rebuildUpgradeResponse } from "./ws-proxy.js";
   assert.ok(rebuildUpgradeResponse(101, "", []).startsWith("HTTP/1.1 101 Switching Protocols\r\n"));
   // 홀수 rawHeaders(값 없는 꼬리)에서 undefined 를 흘리지 않는다.
   assert.ok(!rebuildUpgradeResponse(101, "x", ["A", "1", "B"]).includes("undefined"));
+}
+
+// ── Set-Cookie Path 되돌리기 — WS 가 붙어도 **쿠키가 안 실리면** 소용없다 ─────────────────────
+// 실측(#1541): 티켓 쿠키가 Path=/terminal 로 내려와 `/preview/<id>/terminal/ws` 요청에 실리지 않았다.
+//  게이트웨이는 티켓을 못 찾아 소켓을 그냥 끊고(→502) 화면은 "재연결 중…" 만 반복했다.
+//  ⚠ raw 소켓 프로브로는 재현되지 않는다(도구가 Path 를 무시하고 쿠키를 싣는다) — 그래서 오래 헤맸다.
+{
+  const P = "/preview/p1541-lively";
+  assert.equal(rePathCookie("lively_term=abc; HttpOnly; Path=/terminal; SameSite=Lax; Max-Age=43200", P),
+    "lively_term=abc; HttpOnly; Path=/preview/p1541-lively/terminal; SameSite=Lax; Max-Age=43200");
+  assert.equal(rePathCookie("a=1; Path=/", P), "a=1; Path=/preview/p1541-lively/");
+  assert.equal(rePathCookie("a=1; path=/x", P), "a=1; path=/preview/p1541-lively/x", "속성 이름은 대소문자 무관");
+  // Path 가 없으면 건드리지 않는다 — 브라우저 기본값(요청 경로 기준)이 이미 프리뷰 안이다.
+  assert.equal(rePathCookie("a=1; HttpOnly", P), "a=1; HttpOnly");
+  // 라이브(접두사 없음)에선 **무변화** — 이 함수가 live 동작을 바꾸면 안 된다.
+  assert.equal(rePathCookie("lively_term=abc; Path=/terminal", ""), "lively_term=abc; Path=/terminal");
+  // 이미 접두사가 붙어 있으면 두 번 붙이지 않는다(재프록시·중복 호출 안전).
+  assert.equal(rePathCookie("a=1; Path=/preview/p1541-lively/terminal", P), "a=1; Path=/preview/p1541-lively/terminal");
+  assert.equal(rePathCookie("a=1; Path=/preview/p1541-livelyX", P), "a=1; Path=/preview/p1541-lively/preview/p1541-livelyX",
+    "접두사가 '이름의 앞부분만' 같은 건 다른 경로다 — 접두사를 붙여야 한다");
 }
 
 console.log("preview/ws-proxy.test OK");
