@@ -83,6 +83,8 @@ export function overlayBox(title, ...content) {
 //  왜: 브라우저 기본 confirm 은 디자인시스템 밖이고(OS 팝업), 줄바꿈·강조·위험도 표현이 안 되며,
 //   포커스가 확인 버튼에 잡혀 엔터 연타로 실수하기 쉽다. 여기선 기본 포커스를 '취소'에 둔다.
 //  반환: Promise<boolean> — 확인=true, 취소·Esc·바깥클릭=false. 호출부는 `if (!await confirmDialog(...)) return;`.
+//  extra: 안내문 아래에 붙는 임의 노드(세션 종료창의 「📜 세션 기록 열어보기」 링크처럼, **말로 하는 약속을
+//   그 자리에서 확인시켜 주는** 것). 확인창을 닫지 않는 컨트롤만 넣을 것 — 닫아야 하면 호출부가 직접 만든다.
 export function confirmDialog(opts) {
     return new Promise((resolve) => {
         let done = false;
@@ -95,6 +97,8 @@ export function confirmDialog(opts) {
             body.append(el('p', { class: 'ov-confirm-line', text: l }));
         if (opts.note)
             body.append(el('p', { class: 'ov-confirm-note' }, ...uiText(opts.note)));
+        if (opts.extra)
+            body.append(el('div', { class: 'ov-confirm-extra' }, opts.extra));
         const cancel = el('button', { class: 'btn btn-ghost', type: 'button', text: opts.cancelText || '취소', onclick: () => finish(false) });
         const ok = el('button', { class: 'btn ' + (opts.danger ? 'btn-danger' : 'btn-primary'), type: 'button', text: opts.confirmText || '확인', onclick: () => finish(true) });
         const box = el('div', { class: 'ov-box ov-confirm' + (opts.danger ? ' danger' : '') }, el('div', { class: 'ov-head' }, el('h3', { text: opts.title })), body, el('div', { class: 'ov-confirm-acts' }, cancel, ok));
