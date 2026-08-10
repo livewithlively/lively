@@ -19,6 +19,7 @@ import { addEnterpriseCapabilities } from "../capabilities/index.js";
 import { oidcConfig } from "./auth/oidc.js"; // #1601 SSO — 외부 IdP 웹 로그인
 import { registerOidcRoutes } from "./auth/oidc-routes.js";
 import { oidcLinkStatus, unlinkOidcFromMember } from "./auth/oidc-login.js";
+import { registerAuditExportRoutes } from "./audit/export-routes.js"; // #1601 감사 증빙 반출
 
 export function registerEnterpriseModule(): void {
   // EE 관리 표면(db_audit_*·db_unmask_grant_*) 합류 — 코어 registry 는 이 이름들을 정적으로 모른다.
@@ -42,5 +43,6 @@ export function registerEnterpriseModule(): void {
       ssoLinkStatus: oidcLinkStatus,
       ssoUnlink: unlinkOidcFromMember,
     },
+    auditExport: { registerAuditExportRoutes },
   });
 }

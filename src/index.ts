@@ -13,7 +13,7 @@ import { registerWebUi } from "./web.js";
 import { killAttachedPtys } from "./terminal/terminal-pty.js";
 import { registerProjectV6Routes } from "./project/project-routes.js";
 import { registerSessionLogRoutes } from "./sessions/session-log-routes.js";
-import { registerAuditExportRoutes } from "./audit-export-routes.js";
+import { ee } from "./enterprise/registry.js"; // #1601 감사 CSV 내보내기는 Enterprise — 미탑재면 그 라우트가 없다
 import { registerPreviewRoutes } from "./preview/routes.js";
 import { getProject as v6GetProject, listProjectMemberIds as v6ListProjectMemberIds, setProjectFolder as v6SetProjectFolder } from "./v6/project-store.js";
 import { isProjectMember as v6IsProjectMember } from "./v6/project-session-store.js";   // #1313 R21 — 멤버십 게이트는 세션 바인딩 모듈
@@ -164,8 +164,23 @@ registerProjectV6Routes(app, verifier, {
 // 세션이력 회수·수집(#905 C1) — 트랜스크립트 델타 offset-CAS append + watermark. 캡처 훅(kit)이 POST 한다.
 registerSessionLogRoutes(app, verifier);
 // 감사로그 CSV 내보내기(#1309) — 관리탭 [감사 로그] 3탭의 "CSV 다운로드". capability(res.json 일괄)로는 담을 수
-//  없는 무제한 행수를 keyset 커서로 스트리밍한다(상세·불변식은 audit-export-routes.ts 머리주석).
-registerAuditExportRoutes(app, verifier);
+//  없는 무제한 행수를 keyset 커서로 스트리밍한다(상세·불변식은 ee/audit/export-routes.ts 머리주석).
+//  ★ #1601 로 Enterprise 로 갔다 — 화면 집계(3탭)는 코어에 그대로 있고, 증빙 반출만 EE 다.
+const auditExportHooks = ee().auditExport;
+if (auditExportHooks) {
+  auditExportHooks.registerAuditExportRoutes(app, verifier);
+} else {
+  // EE 미탑재 — 라우트가 없으면 express 기본 404(HTML)가 나가고 화면엔 "요청 실패 (404)" 만 뜬다.
+  //  그러면 관리자는 필터를 바꿔가며 헤맨다. 무엇이 없어서 안 되는지 화면이 읽을 수 있게 JSON 으로 답한다
+  //  (web/lib/net.ts 의 api() 가 응답 error 를 그대로 토스트에 쓴다).
+  const eeRequired: express.RequestHandler = (_req, res) => {
+    res.status(404).json({
+      error: "감사 로그 CSV 내보내기는 Enterprise 모듈(src/ee)이 필요합니다 — 화면의 조회·집계는 그대로 쓰실 수 있습니다.",
+    });
+  };
+  app.get("/api/ui/audit-export/plan", eeRequired);
+  app.get("/api/ui/audit-export.csv", eeRequired);
+}
 // #1036 프리뷰 환경 — /preview/<id>/* 를 프리뷰 환경의 워크트리 public/ 로 정적 서빙(shared-proxy: /api 는 게이트웨이 자신).
 //  express.json 이후·app.listen 이전. WS 불요(정적+REST 만)라 server 핸들 불필요.
 registerPreviewRoutes(app, verifier);

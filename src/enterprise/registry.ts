@@ -11,6 +11,7 @@
 //  조용히 raw 가 나가면 그건 유출이다. 그래서 코어 shim 은 **정책이 설정돼 있는데 집행할 EE 가 없으면
 //  거부(fail-closed)** 한다 — assertEnterpriseForCompliance() 참조.
 import type express from "express";
+import type { BearerVerifier } from "../auth/bearer.js";
 import type { MaskStyle, FieldMeta, MaskTarget } from "../db/mask.js";
 import type { SourcePolicy } from "../db/firewall.js";
 import type { UnmaskResolution } from "../db/policy.js";
@@ -91,6 +92,20 @@ export interface SsoHooks {
   ssoUnlink(memberId: string): Promise<{ ok: true } | { ok: false; reason: "would_lock_out" | "no_member" }>;
 }
 
+/**
+ * 감사로그 CSV 내보내기(#1601) — 감사 제출용 증빙 반출.
+ *
+ * '통계 vs 감사' 경계(위키 ee-boundary-criteria §1-3): 관리탭 [감사 로그] 3탭의 **화면 집계는 코어**,
+ *  그걸 감사 증빙으로 **반출**하는 것이 EE 다. 그래서 EE 미탑재면 화면은 그대로 보이고 CSV 버튼만 404 다.
+ *
+ * ⚠ SSO 와 같은 부류로 fail-closed 가 아니다 — 내보내기가 없다고 데이터가 새지 않는다(오히려 반대다).
+ *  다만 보관기간 정책·prune 은 **코어에 남았다**: 그건 '규제가 요구하는 장기 보존'이 아니라 '개인정보를
+ *  무한정 쌓지 않는 기본 삭제'라, EE 로 옮기면 무료판이 사람 단위 로그를 영원히 쌓는 위험한 제품이 된다.
+ */
+export interface AuditExportHooks {
+  registerAuditExportRoutes(app: express.Express, verifier: BearerVerifier): void;
+}
+
 export interface EnterpriseHooks {
   dbMask?: DbMaskHooks;
   dbMaskPolicy?: DbMaskPolicyHooks;
@@ -98,6 +113,7 @@ export interface EnterpriseHooks {
   pii?: PiiHooks;
   ingestPolicy?: IngestPolicyHooks;
   sso?: SsoHooks;
+  auditExport?: AuditExportHooks;
 }
 
 let _hooks: EnterpriseHooks = {};
