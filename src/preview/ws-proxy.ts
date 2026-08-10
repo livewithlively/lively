@@ -110,8 +110,22 @@ export function setupPreviewWsUpgrade(server: Server): void {
       });
       up.on("error", (err) => {
         if (settled) return;
-        logger.warn({ err, id: hit.id, rest: hit.rest }, "프리뷰 WS 프록시 연결 실패");
-        bail(socket, "502 Bad Gateway", "프리뷰 백엔드 연결 실패 — 프로세스가 떠 있는지 확인하세요.");
+        // ⚠ 두 실패를 **구분해서** 말한다(실측: 구분 없이 "연결 실패" 로 뭉갰다가 '자식이 인증 거부한 것'을
+        //  '백엔드가 죽은 것'으로 오독할 뻔했다). 자식은 인증 실패 시 소켓을 그냥 destroy 하므로,
+        //  프록시 입장에선 ECONNRESET/socket hang up 으로 온다 — 그건 백엔드가 살아 있다는 증거다.
+        const code = (err as NodeJS.ErrnoException)?.code;
+        const refused = code === "ECONNREFUSED" || code === "EHOSTUNREACH" || code === "ENOTFOUND";
+        logger.warn({ err, id: hit.id, rest: hit.rest }, refused ? "프리뷰 WS 프록시 — 백엔드 미기동" : "프리뷰 WS 프록시 — 백엔드가 업그레이드 전에 끊음");
+        bail(socket, "502 Bad Gateway", refused
+          ? "프리뷰 백엔드 연결 실패 — 프로세스가 떠 있는지 확인하세요. (게이트웨이가 재시작되면 프리뷰 백엔드도 함께 내려갑니다 — 다시 띄우세요.)"
+          : `프리뷰 백엔드가 업그레이드 전에 연결을 끊었습니다 — 인증 실패(토큰·쿠키)일 가능성이 큽니다. 경로: /${hit.rest}`);
+      });
+      // 자식이 **아무 응답도 안 하는** 경로(그 경로에 업그레이드 핸들러가 없음)에서 소켓을 영원히 붙잡지 않는다.
+      //  침묵이 이 버그의 정체였다 — 프록시가 그 침묵을 그대로 물려주면 우리가 고친 의미가 없다.
+      up.setTimeout(30_000, () => {
+        if (settled) return;
+        bail(socket, "504 Gateway Timeout", `프리뷰 백엔드가 업그레이드에 응답하지 않았습니다 — 그 경로에 WS 핸들러가 없을 수 있습니다. 경로: /${hit.rest}`);
+        try { up.destroy(); } catch { /* noop */ }
       });
       socket.on("error", () => { try { up.destroy(); } catch { /* noop */ } });
       up.end();
