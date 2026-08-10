@@ -6,7 +6,7 @@
 //  (실기기 e2e 는 별도 — Windows VM 에서 등록·기동까지 확인한다.)
 // 실행: node kit/cli/node-win-contract.test.mjs
 import assert from "node:assert/strict";
-import { muxCandidates, winTaskXml, winRunnerCmd, resolveWinUserId, winInstallArgv, nodeDaemonArtifact, nodeProcProbe, parseProcCount } from "./cmd-node.mjs";
+import { muxCandidates, winTaskXml, winRunnerCmd, resolveWinUserId, winInstallArgv, nodeDaemonArtifact, nodeProcProbe, parseProcCount, winStartupDir, winStartupVbs } from "./cmd-node.mjs";
 
 let pass = 0;
 const t = (name, fn) => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -219,7 +219,12 @@ t('N1 플랫폼별 데몬 아티팩트 — mac=plist · linux=systemd unit · wi
   assert.ok(mac.path.endsWith('/Library/LaunchAgents/io.lvly.node-agent.plist'), mac.path);
   const lin = nodeDaemonArtifact('linux', '/home/yoon');
   assert.equal(lin.path, '/home/yoon/.config/systemd/user/lively-node-agent.service');
-  assert.deepEqual(nodeDaemonArtifact('win32', 'C:\\Users\\yoon'), { kind: 'task', name: 'Lively Node Agent' });
+  // Windows 는 **두 자리**를 다 준다 — 스케줄러가 거부된 계정은 시작프로그램으로 앉기 때문(#1541 실측).
+  //  한쪽만 보면 폴백으로 설치된 PC 전부가 "자동시작 꺼짐" 으로 보인다.
+  assert.deepEqual(nodeDaemonArtifact('win32', 'C:\\Users\\yoon', {}), {
+    kind: 'task', name: 'Lively Node Agent',
+    fallbackPath: 'C:\\Users\\yoon\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\lively-node-agent.vbs',
+  });
   // 모르는 플랫폼에서 파일 경로를 지어내지 않는다.
   assert.equal(nodeDaemonArtifact('aix', '/h').kind, 'none');
 });
@@ -241,6 +246,41 @@ t('N3 프로브 출력 해석 — pgrep 은 pid 줄, PowerShell 은 개수', () 
   // 쓰레기 출력을 '있다' 로 읽지 않는다.
   assert.equal(parseProcCount('win32', '무슨 오류', 0), 0);
   assert.equal(parseProcCount('linux', '무슨 오류', 0), 0);
+});
+
+// ── E. 폴백 상시화(시작프로그램) — 작업 스케줄러를 못 쓰는 계정 (#1541 실측) ──────────────
+// 왜 필요했나: 일반 사용자 PC(비관리자 + 그룹정책)에서 `schtasks /Create` 가 **가장 단순한 ONLOGON 작업조차**
+//  "액세스가 거부되었습니다" 로 거절했다. 트리거 종류나 S4U 문제가 아니라 등록 권한 자체가 없는 계정이 있다.
+//  그 PC 들이 이 기능의 주 대상(개인 노트북)이라, 폴백이 없으면 기능이 통째로 없는 것과 같다.
+t('E1 ★ 시작프로그램 경로 — %APPDATA% 를 존중하고, 없으면 표준 경로로 파생', () => {
+  assert.equal(winStartupDir({ APPDATA: 'C:\\Users\\yoon\\AppData\\Roaming' }, 'C:\\Users\\yoon'),
+    'C:\\Users\\yoon\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup');
+  // 로밍 프로필·리디렉션된 홈이면 APPDATA 가 홈 밖을 가리킨다 — 그걸 무시하고 홈으로 지어내면 안 된다.
+  assert.equal(winStartupDir({ APPDATA: 'D:\\Roaming' }, 'C:\\Users\\yoon'),
+    'D:\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup');
+  assert.ok(winStartupDir({}, 'C:\\Users\\yoon').startsWith('C:\\Users\\yoon\\AppData\\Roaming\\'));
+  // Windows 경로에 posix 구분자가 섞이면 안 된다(mac CI 에서 만들어도 나가는 건 Windows 경로다).
+  assert.ok(!winStartupDir({}, 'C:\\Users\\yoon').includes('/'), winStartupDir({}, 'C:\\Users\\yoon'));
+});
+
+t('E2 ★ 시작프로그램 런처(.vbs) — 콘솔 창 없이(0), 기다리지 않고(False) 런처를 띄운다', () => {
+  const vbs = winStartupVbs({ runnerCmd: 'C:\\Users\\yoon\\.lively\\node-agent-run.cmd' });
+  // 창모드 0 = 숨김. 여기가 1 이면 로그인마다 검은 창이 뜨고, 사용자가 닫으면 노드가 죽는다.
+  assert.ok(/\.Run\s+""".+""",\s*0,\s*False/.test(vbs), vbs);
+  assert.ok(vbs.includes('node-agent-run.cmd'), vbs);
+  // 런처를 직접 부르지 말 것 — 재시작 루프가 .cmd 안에 있다(node.exe 를 바로 부르면 죽으면 끝이다).
+  assert.ok(!/node\.exe/i.test(vbs), '에이전트를 직접 부르면 재시작 루프를 건너뛴다');
+  // .cmd 와 달리 .vbs 는 CRLF + ASCII 본문(경로만 유니코드) — wscript 가 읽는 형식.
+  assert.ok(vbs.endsWith('\r\n'), 'CRLF 로 끝나야 한다');
+  assert.ok(/^[\x00-\x7F]*$/.test(vbs), '본문에 비ASCII 가 섞였다 — 경로 외엔 ASCII 로 둔다');
+});
+
+t('E3 ★ .vbs 문자열 이스케이프 — 인용부호가 섞인 경로로 임의 실행이 되면 안 된다', () => {
+  // VBS 문자열 리터럴의 " 는 "" 로 이스케이프한다. 안 하면 리터럴이 조기 종료돼 뒤가 코드가 된다.
+  const vbs = winStartupVbs({ runnerCmd: 'C:\\a"b\\run.cmd' });
+  assert.ok(vbs.includes('"""C:\\a""b\\run.cmd"""'), vbs);
+  // 한글 사용자명 경로도 그대로 실린다(파일은 UTF-16LE+BOM 으로 써서 wscript 가 제대로 읽는다).
+  assert.ok(winStartupVbs({ runnerCmd: 'C:\\Users\\상민\\.lively\\node-agent-run.cmd' }).includes('상민'));
 });
 
 console.log(`\n${pass} passed`);

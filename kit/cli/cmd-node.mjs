@@ -14,7 +14,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, readdirSync } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { join, win32 as pwin } from "node:path";
+import { join, dirname, win32 as pwin } from "node:path";
 import { spawnSync, spawn, execFileSync } from "node:child_process";
 
 // lively.mjs 와 같은 계약(LIVELY_HOME 은 HOME 리다이렉트 — 샌드박스/테스트).
@@ -44,6 +44,9 @@ const WIN = process.platform === "win32";
 // Windows 상시화 = 작업 스케줄러(로그온 트리거 + 실패 시 재시작). 서비스가 아니라 **사용자 작업**인 이유:
 //  노드가 띄우는 세션은 그 사용자의 하네스·자격·홈을 쓴다 — SYSTEM 권한 서비스로 돌리면 남의 신원이 된다.
 const WIN_TASK_NAME = "Lively Node Agent";
+// 폴백 상시화 — 작업 스케줄러를 **쓸 수 없는 계정**용(비관리자 + 그룹정책. 실측 #1541).
+//  시작프로그램 폴더는 자기 프로필의 파일 하나라 권한상승·정책을 안 탄다. 스케줄러가 되면 이건 안 쓴다.
+const WIN_STARTUP_VBS = "lively-node-agent.vbs";
 // 우리가 직접 설치할 때의 자리(패키지 매니저가 없는 박스 — Server 등). ~/.lively 안이라 제거도 대칭이다.
 const WIN_MUX_DIR = join(LIVELY, "bin", "psmux");
 
@@ -81,8 +84,11 @@ export function muxCandidates(platform = process.platform, env = process.env) {
 function resolveTmux() {
   if (WIN) {
     // where.exe 는 여러 줄을 낼 수 있다(같은 이름이 PATH 에 여럿) — 첫 줄만 쓴다.
+    //  ⚠ stderr 는 반드시 버린다(실측 #1541): 못 찾으면 where 가 "지정된 파일에 해당되는 파일을 찾지 못했습니다"
+    //   를 콘솔에 그대로 뱉는데, 이건 **정상 경로**(설치 전 탐지)다. 게다가 cp949 로 나와 UTF-8 콘솔에선 깨진
+    //   글자로 보인다 — 사용자는 그걸 크래시로 읽는다. 여기선 '없음' 이 답이지 에러가 아니다.
     try {
-      const out = execFileSync("where", [MUX_EXE], { encoding: "utf8" });
+      const out = execFileSync("where", [MUX_EXE], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
       const first = out.split(/\r?\n/).map((s) => s.trim()).find(Boolean);
       if (first && existsSync(first)) return first;
     } catch { /* PATH 에 없음 */ }
@@ -345,12 +351,45 @@ WantedBy=default.target\n`);
     const xmlPath = join(LIVELY, "node-agent-task.xml");
     const xml = winTaskXml({ runnerCmd, userId: winUserId() });
     // ⚠ schtasks /XML 은 UTF-16(BOM 포함)을 기대한다. UTF-8 로 쓰면 한글 설명이 깨지고 파싱이 실패할 수 있다.
-    writeFileSync(xmlPath, "﻿" + xml, "utf16le");
+    writeFileSync(xmlPath, "\ufeff" + xml, "utf16le");
     spawnSync("schtasks", ["/Delete", "/TN", WIN_TASK_NAME, "/F"], { stdio: "ignore" });   // 재등록 안전(멱등)
-    const r = spawnSync("schtasks", ["/Create", "/TN", WIN_TASK_NAME, "/XML", xmlPath], { stdio: "inherit" });
-    if (r.status !== 0) die("작업 스케줄러 등록 실패 — schtasks /Create", 1);
-    spawnSync("schtasks", ["/Run", "/TN", WIN_TASK_NAME], { stdio: "ignore" });            // 재로그인 기다리지 않고 지금 기동
-    say(green(`✅ 노드 '${nodeId}' 상시화(작업 스케줄러) — 로그인마다 자동 연결·죽으면 1분 뒤 재기동`));
+    // stdio:"pipe" — 실패했을 때 **schtasks 가 뭐라 했는지**가 폴백 여부 판단의 근거다(그냥 버리면 진단이 사라진다).
+    const r = spawnSync("schtasks", ["/Create", "/TN", WIN_TASK_NAME, "/XML", xmlPath], { encoding: "utf8" });
+    if (r.status === 0) {
+      spawnSync("schtasks", ["/Run", "/TN", WIN_TASK_NAME], { stdio: "ignore" });          // 재로그인 기다리지 않고 지금 기동
+      say(green(`✅ 노드 '${nodeId}' 상시화(작업 스케줄러) — 로그인마다 자동 연결·죽으면 1분 뒤 재기동`));
+      say(dim(`   중지: lively node stop   ·   로그: type ${NODE_LOG}`));
+      return;
+    }
+    // ── 폴백: 작업 스케줄러를 **못 쓰는 계정**이 있다(실측 #1541, 일반 사용자 PC). ──
+    //  비관리자 + 그룹정책이면 `schtasks /Create` 가 가장 단순한 ONLOGON 작업조차 "액세스가 거부되었습니다" 로
+    //  거절한다(트리거 종류·S4U 문제가 아니다 — 등록 권한 자체가 없다). 여기서 die 하면 사용자는
+    //  "노트북을 노드로 쓴다" 는 이 기능의 본체를 통째로 못 쓴다. 그건 우리 사정이지 사용자 잘못이 아니다.
+    //  시작프로그램 폴더는 **자기 프로필에 파일 하나 쓰는 것**이라 권한상승도 정책도 타지 않는다.
+    //  잃는 것은 '로그인 전 기동' 하나뿐 — 어차피 그건 관리자 권한이 필요하고, 사용자 홈·자격으로 도는
+    //  노드에겐 로그인 전 실행이 의미도 없다. 재시작 보장은 런처(.cmd)의 루프가 그대로 진다.
+    say(yellow(`⚠ 작업 스케줄러 등록이 거부됐습니다 — 시작프로그램 방식으로 대체합니다.`));
+    const denied = String(r.stderr || r.stdout || "").trim();
+    if (denied) say(dim(`   (schtasks: ${denied.split(/\r?\n/)[0]})`));
+    const vbsPath = join(winStartupDir(), WIN_STARTUP_VBS);
+    try {
+      mkdirSync(dirname(vbsPath), { recursive: true });
+      // ⚠ UTF-16LE+BOM — BOM 이 없으면 wscript 가 ANSI 로 읽어 **한글 사용자명 경로**(C:\Users\상민\…)가 깨진다.
+      writeFileSync(vbsPath, "\ufeff" + winStartupVbs({ runnerCmd }), "utf16le");
+    } catch (e) {
+      die(`상시화 실패 — 작업 스케줄러도 시작프로그램도 쓸 수 없습니다: ${e?.message || e}\n` +
+        "  관리자 PowerShell 에서 `lively node --daemon` 을 실행하거나, `lively node` 로 창을 띄워두고 쓰세요.", 1);
+    }
+    winKillAgentProcs();                                                                   // 재등록 멱등 — 옛 인스턴스 회수
+    // 지금 기동 — 로그인 때와 **같은 경로**로 띄운다(다르게 띄우면 여기선 되고 재부팅 후 안 되는 걸 못 잡는다).
+    const started = spawnSync("wscript", [vbsPath], { stdio: "ignore", timeout: 15_000 }).status === 0;
+    if (!started) {
+      // WSH(Windows Script Host)가 정책으로 꺼진 환경 — 지금 기동만 직접 하고, 자동시작은 아래에서 경고한다.
+      spawn(process.env.COMSPEC || "cmd.exe", ["/c", runnerCmd], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    }
+    say(green(`✅ 노드 '${nodeId}' 상시화(시작프로그램) — 로그인마다 자동 연결·죽으면 5초 뒤 재기동`));
+    if (!started) say(yellow("   ⚠ WSH 가 꺼져 있어 로그인 시 자동 시작이 안 될 수 있습니다 — 재부팅 후 `lively node --status` 로 확인하세요."));
+    say(dim("   로그인 전에는 돌지 않습니다(그 기능은 관리자 권한 필요 — 관리자 PowerShell 에서 다시 실행하면 승격됩니다)."));
     say(dim(`   중지: lively node stop   ·   로그: type ${NODE_LOG}`));
     return;
   }
@@ -486,6 +525,45 @@ export function winTaskXml({ runnerCmd, userId }) {
 `;
 }
 
+// ── Windows 폴백 상시화(시작프로그램) — 작업 스케줄러를 못 쓰는 계정용(#1541 실측). ────────────
+// 스케줄러 대비 잃는 것은 **로그인 전 기동** 하나뿐이다. 그건 관리자 권한이 필요하고, 사용자 홈·자격으로
+//  도는 노드에겐 의미도 없다. 재시작 보장(런처 .cmd 의 루프)과 신원(그 사용자)은 그대로 유지된다.
+
+/** 시작프로그램 폴더 — %APPDATA% 우선(로밍 프로필·리디렉션된 홈을 존중), 없으면 표준 경로로 파생. 순수.
+ *  ⚠ pwin.join — muxCandidates 와 같은 이유다. mac/linux CI 에서 이 함수를 검증할 때 posix 구분자가 섞이면
+ *   테스트가 '실제로 나가는 경로' 를 못 본다(Windows 분기는 CI 에서 한 번도 실행되지 않는다). */
+export function winStartupDir(env = process.env, home = HOME) {
+  const appData = env.APPDATA || pwin.join(home, "AppData", "Roaming");
+  return pwin.join(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup");
+}
+
+/** 시작프로그램 런처(.vbs) — 런처 .cmd 를 **콘솔 창 없이** 띄운다. 순수.
+ *  ⚠ .cmd 를 시작프로그램에 그대로 두면 로그인마다 검은 창이 뜨고, 사용자가 그 창을 닫으면 노드가 죽는다.
+ *   Run 의 인자: (명령, 창모드 0=숨김, 대기여부 False=즉시 반환).
+ *  ⚠ 본문은 ASCII 로만 — 경로만 유니코드일 수 있고, 그래서 파일은 UTF-16LE+BOM 으로 쓴다(한글 사용자명). */
+export function winStartupVbs({ runnerCmd }) {
+  const q = String(runnerCmd).replace(/"/g, '""');   // VBS 문자열 리터럴의 " 는 "" 로 이스케이프
+  return [
+    "' Lively node agent autostart - generated by `lively node --daemon`. Do not edit.",
+    "' Registered here because Task Scheduler registration was denied for this account.",
+    "' To stop: `lively node stop`",
+    `CreateObject("WScript.Shell").Run """${q}""", 0, False`,
+    "",
+  ].join("\r\n");
+}
+
+/** 잔여 에이전트 회수 — stop 과 재등록이 **같은 자를 쓰게** 한다(둘이 갈리면 고아 프로세스가 남는다).
+ *  ⚠ 순서: 런처(cmd)를 먼저 죽인다. 에이전트(node)만 죽이면 런처 루프가 5초 뒤 되살린다. */
+function winKillAgentProcs() {
+  const kill = (name, like) => spawnSync("powershell", ["-NoProfile", "-Command",
+    `Get-CimInstance Win32_Process -Filter "Name='${name}'" | ` +
+    `Where-Object { $_.CommandLine -like '${like}' } | ` +
+    "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"], { stdio: "ignore" });
+  kill("cmd.exe", "*node-agent-run.cmd*");
+  kill("wscript.exe", `*${WIN_STARTUP_VBS}*`);
+  kill("node.exe", "*node-agent*agent.mjs*");
+}
+
 // ── 노드 상태 (#1541 T4) ────────────────────────────────────────────────────
 // 데스크톱 앱이 폴링할 축이다. 사람이 트레이에서 한 줄로 이해하는 건 "지금 도는가"이고, 버튼이 갈리는 건
 //  "등록됐나 / 자동시작이 켜졌나" 다 — 그 셋을 따로 준다.
@@ -494,10 +572,12 @@ export function winTaskXml({ runnerCmd, userId }) {
 //  registered = 등록(env 파일) · daemon = OS 데몬 등록 · running = 프로세스 실측.
 
 /** 플랫폼별 데몬 아티팩트(파일 경로 또는 작업 이름) — 순수. Windows 분기는 CI 에서 안 도므로 목록을 못박는다. */
-export function nodeDaemonArtifact(platform = process.platform, home = HOME) {
+export function nodeDaemonArtifact(platform = process.platform, home = HOME, env = process.env) {
   if (platform === "darwin") return { kind: "file", path: join(home, "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`) };
   if (platform === "linux") return { kind: "file", path: join(home, ".config", "systemd", "user", "lively-node-agent.service") };
-  if (platform === "win32") return { kind: "task", name: WIN_TASK_NAME };
+  // Windows 는 **두 자리 중 하나**다 — 스케줄러가 거부된 계정은 시작프로그램으로 앉는다(#1541).
+  //  둘 중 하나만 보면 "자동시작 꺼짐" 이라고 거짓말한다(폴백으로 설치된 PC 전부가 그렇게 보인다).
+  if (platform === "win32") return { kind: "task", name: WIN_TASK_NAME, fallbackPath: pwin.join(winStartupDir(env, home), WIN_STARTUP_VBS) };
   return { kind: "none" };
 }
 
@@ -528,7 +608,7 @@ export function nodeStatus() {
     registered,
     bundled: existsSync(join(NODE_AGENT_DIR, "agent.mjs")),
     daemon: artifact.kind === "file" ? existsSync(artifact.path)
-      : artifact.kind === "task" ? winTaskExists()
+      : artifact.kind === "task" ? (winTaskExists() || (!!artifact.fallbackPath && existsSync(artifact.fallbackPath)))
         : false,
     running: null,
     id: registered ? readEnvFile(NODE_ENV_FILE, "LIVELY_NODE_ID") : null,
@@ -559,23 +639,22 @@ function nodeStop() {
     spawnSync("pkill", ["-f", "node-agent/agent.mjs"], { stdio: "ignore" });
     say(green("✅ 노드 데몬 해제(systemd)"));
   } else if (WIN) {
+    // 폴백(시작프로그램)도 함께 걷는다 — **어느 쪽으로 앉았는지 모르고 stop 하기 때문**이다.
+    //  한쪽만 지우면 "정지했다" 고 말해놓고 다음 로그인에 되살아난다(사용자는 우리가 거짓말했다고 느낀다).
+    //  ⚠ 어느 쪽이었는지는 **지우기 전에** 재야 한다.
+    const vbs = join(winStartupDir(), WIN_STARTUP_VBS);
+    const hadTask = winTaskExists(), hadVbs = existsSync(vbs);
     // 순서가 중요하다: 실행 중인 인스턴스를 먼저 끝내고(/End) 지운다(/Delete). 반대로 하면 고아 프로세스가 남는다.
     spawnSync("schtasks", ["/End", "/TN", WIN_TASK_NAME], { stdio: "ignore" });
     spawnSync("schtasks", ["/Delete", "/TN", WIN_TASK_NAME, "/F"], { stdio: "ignore" });
+    rmSync(vbs, { force: true });
     // 잔여 프로세스 회수 = POSIX 의 `pkill -f node-agent/agent.mjs` 대응물.
     //  ⚠ 순서가 또 중요하다: **런처(cmd)를 먼저** 죽여야 한다. 에이전트(node)만 죽이면 런처의 재시작 루프가
     //   5초 뒤 그대로 되살린다 — 그게 런처의 존재 이유다.
     //  ⚠ `taskkill /IM node.exe` 는 금지 — 사용자의 다른 Node 를 전부 죽인다. 커맨드라인으로 우리 것만 고른다
     //   (이 CLI 자신은 그 문자열이 없어 대상이 아니다).
-    spawnSync("powershell", ["-NoProfile", "-Command",
-      "Get-CimInstance Win32_Process -Filter \"Name='cmd.exe'\" | " +
-      "Where-Object { $_.CommandLine -like '*node-agent-run.cmd*' } | " +
-      "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"], { stdio: "ignore" });
-    spawnSync("powershell", ["-NoProfile", "-Command",
-      "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | " +
-      "Where-Object { $_.CommandLine -like '*node-agent*agent.mjs*' } | " +
-      "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"], { stdio: "ignore" });
-    say(green("✅ 노드 데몬 해제(작업 스케줄러)"));
+    winKillAgentProcs();
+    say(green(`✅ 노드 데몬 해제(${hadTask ? "작업 스케줄러" : hadVbs ? "시작프로그램" : "등록 없음 — 잔여 프로세스만 회수"})`));
   } else { die(`미지원 OS: ${process.platform}`, 1); }
   say(dim("   (노드 등록·번들은 남습니다 — 완전 제거는 웹/REST 로 노드 삭제)"));
 }

@@ -1,7 +1,7 @@
 // 노드 프로토콜(#869) 단위 테스트 — 채널 프레임 인코딩/디코딩 왕복 + 제어 파싱 + 가시성 판정.
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
-import { encodeChanFrame, decodeChanFrame, parseMsg, nodeSessionVisible, nodeCaps, agentIsLatest, NODE_OPS, NODE_BASELINE_OPS, FRAME_PTY } from "./protocol.js";
+import { encodeChanFrame, decodeChanFrame, parseMsg, nodeSessionVisible, nodeCaps, agentIsLatest, nodeWsUrl, NODE_OPS, NODE_BASELINE_OPS, FRAME_PTY } from "./protocol.js";
 
 // 프레임 왕복 — 멀티바이트(UTF-8 쪼개짐 경계 포함)도 바이트 그대로 보존돼야 한다(무디코드 릴레이 불변식).
 {
@@ -84,6 +84,21 @@ assert.equal(nodeSessionVisible({ owner: "yoon", invites: [] }, "jang"), false);
   assert.equal(agentIsLatest("abc123", null), null, "🔴 번들이 없어 서빙본을 모르는데 노드를 '구버전'이라 단정했다");
   assert.equal(agentIsLatest(null, null), null);
   assert.equal(agentIsLatest("", "abc123"), null, "빈 문자열은 '모름'이다 — 최신 아님으로 단정하면 안 된다");
+}
+
+// ── 노드 WSS 주소 — **베이스경로를 보존**해야 한다(#1541 실측 회귀). ──
+//  프리뷰(서브패스)에 등록한 노드가 운영으로 붙어버린 사고의 재발 방지. 등록한 곳과 붙는 곳이 갈리면
+//  노드는 "연결됨" 을 찍는데 브라우저에선 안 보이고 attach 가 무한 재시도한다 — 가장 진단하기 어려운 실패다.
+{
+  assert.equal(nodeWsUrl("https://dev.lvly.io"), "wss://dev.lvly.io/node/ws");
+  assert.equal(nodeWsUrl("https://dev.lvly.io/"), "wss://dev.lvly.io/node/ws", "루트 슬래시가 //node/ws 를 만들면 안 된다");
+  assert.equal(nodeWsUrl("http://127.0.0.1:8080"), "ws://127.0.0.1:8080/node/ws", "평문은 ws: 로");
+  // 🔴 이게 그 버그다 — pathname 을 덮어써 접두사가 날아가면 다른 게이트웨이에 붙는다.
+  assert.equal(nodeWsUrl("https://dev.lvly.io/preview/p1541-lively"), "wss://dev.lvly.io/preview/p1541-lively/node/ws",
+    "🔴 서브패스 게이트웨이의 베이스경로가 날아갔다 — 프리뷰 노드가 운영에 붙는다");
+  assert.equal(nodeWsUrl("https://dev.lvly.io/preview/p1541-lively/"), "wss://dev.lvly.io/preview/p1541-lively/node/ws");
+  // 쿼리·프래그먼트는 붙이지 않는다(업그레이드 요청에 의미 없고, 토큰이 실릴 여지를 남기지 않는다).
+  assert.equal(nodeWsUrl("https://dev.lvly.io/preview/x?a=1#f"), "wss://dev.lvly.io/preview/x/node/ws");
 }
 
 console.log("node/protocol.test OK");

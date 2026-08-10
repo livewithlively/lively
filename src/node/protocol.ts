@@ -10,6 +10,22 @@ import type { SessionInfo } from "../terminal/terminal-sessions.js";
 export const NODE_WS_PATH = "/node/ws";
 export const PROTO_VER = 1;
 
+// 게이트웨이 주소 → 노드 채널 WSS. 에이전트가 쓰지만 **여기** 두는 이유: agent.ts 는 임포트 즉시
+//  환경변수를 검사하고 종료하는 실행 스크립트라 테스트가 못 붙는다(그래서 이 규칙이 오래 안 지켜졌다).
+//  ⚠ pathname 을 **덮어쓰면 안 된다**(실측 #1541): 서브패스로 서비스되는 게이트웨이
+//   (프리뷰 `https://호스트/preview/<env>`, 리버스프록시 하위 마운트)의 접두사가 통째로 날아가
+//   전혀 다른 게이트웨이에 붙는다. 실제로 프리뷰에 등록한 윈도우 노드가 `wss://dev.lvly.io/node/ws`
+//   (운영)로 연결돼, 브라우저(프리뷰)에선 그 노드가 영영 안 보이고 attach 가 무한 재시도했다.
+//   등록한 곳과 붙는 곳은 **같은 오리진 + 같은 베이스경로**여야 한다.
+export function nodeWsUrl(base: string): string {
+  const u = new URL(base);
+  u.protocol = u.protocol === "http:" ? "ws:" : u.protocol === "https:" ? "wss:" : u.protocol;
+  u.pathname = u.pathname.replace(/\/+$/, "") + NODE_WS_PATH;   // 베이스경로를 보존하고 이어붙인다
+  u.search = "";
+  u.hash = "";
+  return u.toString();
+}
+
 // 바이너리 채널 프레임 kind. 현재 PTY 데이터 하나 — 추후 파일 스트림 등 확장 여지.
 export const FRAME_PTY = 0x01;
 
