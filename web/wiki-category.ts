@@ -5,7 +5,7 @@
 //  제목 형식과 무관하게 어떤 지식이든 동일하게 흘러든다(범용). 추가 API 0.
 //  레이아웃(블록 배열)은 대문 문서(category-home-*)의 body_md 에 JSON 으로 저장(props-ui 는 icon/cover 화이트리스트).
 //  읽기 모드 = 완성된 대문 · 편집 모드 = 커스터마이즈(드래그·⚙조건·크기·삭제·＋블록).
-import { api, el, errorNote, relTime, toast } from './core.js';
+import { api, el, errorNote, toast } from './core.js';
 import { overlayBox, skeleton } from './learn.js';
 import { hasScope } from './admin.js';
 import { applyCoverBg, openCoverPicker, openEmojiPicker } from './page-decor.js';
@@ -13,7 +13,7 @@ import {
   HOME_EMPTY, KN_TYPE_LABEL, hasMemoryScope, homeDocName, isCategoryHomeDoc,
   knFetchCategoryRows, knFolderFirstSort, knInvalidateTreeCaches, openProjectChooser,
 } from './wiki-data.js';
-import { wkAurora, wkDeck, wkDocCard, wkEmpty, wkRow, wkSection, wkTick } from './wiki-ui.js';
+import { wkAurora, wkDeck, wkDocCard, wkEmpty, wkMetaOf, wkRow, wkSection, wkTick } from './wiki-ui.js';
 import { openWikiPeek, setWikiPeekList } from './wiki-doc.js';
 
 // ── 폴더 만들기 — 트리 그룹 노드(is_folder). 현재 폴더 안이면 그 아래로. ──
@@ -322,12 +322,20 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
     // 유형 카운트 행 — 칩이 아닌 텍스트 필터(클릭=토글).
     const counts = new Map<string, number>();
     for (const r of allDocs) counts.set(r.type || '', (counts.get(r.type || '') || 0) + 1);
+    //  유형 필터(#1600) — 이 줄이 **하나의 분류축**임을 라벨로 못박고, 각 항목에 목록 태그와 같은 색 점을 준다.
+    //  종전엔 색도 라벨도 없어 '결정·참조·리서치·개념'이 같은 층위의 값이라는 신호가 없었다(형태가 축, 색이 값).
     const typeRow = el('div', { class: 'wk-typerow' },
+      el('span', { class: 'wk-typerow-label', title: '문서 유형 — 이 카테고리의 문서를 한 축으로 가른다', text: '유형' }),
       el('button', { class: 'wk-type-it' + (!f.type ? ' on' : ''), type: 'button', text: '전체 ' + allDocs.length,
         onclick: () => { f.type = ''; ctx.syncHash(); paintLibrary(); } }),
       ...Array.from(counts.entries()).filter(([t]) => t).sort((a, b) => b[1] - a[1]).map(([t, n]) =>
-        el('button', { class: 'wk-type-it' + (f.type === t ? ' on' : ''), type: 'button', text: (KN_TYPE_LABEL[t] || t) + ' ' + n,
-          onclick: () => { f.type = f.type === t ? '' : t; ctx.syncHash(); paintLibrary(); } })));
+        // ⚠ 버튼에는 data-ty 를 걸지 않는다 — 전역 `[data-ty]` 규칙이 background 를 칠해 버튼이 색 덩어리가 된다.
+        //  색은 점(.wk-ty-dot)만 받는다.
+        el('button', { class: 'wk-type-it' + (f.type === t ? ' on' : ''), type: 'button',
+          title: (KN_TYPE_LABEL[t] || t) + ' ' + n + '건',
+          onclick: () => { f.type = f.type === t ? '' : t; ctx.syncHash(); paintLibrary(); } },
+        el('i', { class: 'wk-ty-dot', 'data-ty': t, 'aria-hidden': 'true' }),
+        el('span', { text: (KN_TYPE_LABEL[t] || t) + ' ' + n }))));
 
     // 문서 목록 — 최신순. 주제 색인에서 온 필터가 있으면 그 멤버만.
     const list = allDocs.filter((r) => (!f.type || r.type === f.type) && (!topicFilter || topicFilter.names.has(r.name)))
@@ -342,7 +350,8 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
         open: openDoc,
         select: sel.mode ? { names: sel.names, onToggle: repaintBulk } : null,
         deck: sel.mode ? '' : wkDeck(r.body_md || '', 110),   // 발췌 한 줄 — 목록이 피드처럼 읽히게(#764v2)
-        metas: [r.is_wiki ? '인덱스' : null, !f.type && r.type ? (KN_TYPE_LABEL[r.type] || r.type) : null, relTime(r.updated_at)],
+        //  유형 필터가 걸려 있으면 행마다 같은 유형을 반복하지 않는다(그 목록에서 '변하는 값만' — 목록 문법).
+        metas: wkMetaOf(r, { type: !f.type }),
       }));
       if (!sel.mode) setWikiPeekList(list.map((r) => r.name));
     }
@@ -505,18 +514,23 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
       if (ed) node.addEventListener('blur', () => { const t = (node.textContent || '').trim(); if (t !== (b.text || '').trim()) { b.text = t; scheduleSave(); } });
       return node;
     }
-    const head = el('div', { class: 'wk-bld-head' },
-      el('span', { class: 'wk-bld-title', text: blkTitle(b) }),
-      el('span', { class: 'wk-bld-meta', text: b.type === 'stat' ? (allDocs.length + '건') : cfgLabel(b.cfg) }));
     let body: any;
-    if (b.type === 'stat') body = statBody();
+    let shownN = 0;
+    if (b.type === 'stat') { body = statBody(); shownN = allDocs.length; }
     else {
       const d = queryDocs(b.cfg);
+      shownN = d.length;
       if (!d.length) body = emptyBlk();
       else if (b.type === 'highlight') body = el('div', { class: 'wk-bld-hl' }, ...d.slice(0, b.cfg.limit || 3).map((x) => wkDocCard(x, { open: openDoc, deckCap: 128, cls: 'wk-hlcard' })));
       else if (b.type === 'gallery') body = el('div', { class: 'wk-bld-gal' }, ...d.map(galCard));
-      else { body = el('div', { class: 'wk-bld-list' }); for (const x of d) body.append(wkRow(x, { open: openDoc, deck: deckLine(x.body_md || '', 92), metas: [x.is_wiki ? '인덱스' : null, x.type ? (KN_TYPE_LABEL[x.type] || x.type) : null, relTime(x.updated_at)] })); }
+      else { body = el('div', { class: 'wk-bld-list' }); for (const x of d) body.append(wkRow(x, { open: openDoc, deck: deckLine(x.body_md || '', 92), metas: wkMetaOf(x) })); }
     }
+    // 헤더 메타(#1600) — 읽기 모드에선 **건수만**. 종전엔 cfgLabel 이 조건 라벨을 다시 찍어
+    //  "참조·규칙   참조·규칙 · 5건" 처럼 제목이 두 번 나왔다(제목이 이미 무엇인지 말한다).
+    //  편집 중에만 조건('참조·규칙 · 5건')을 보여준다 — ⚙로 고칠 대상이 무엇인지 알아야 하므로.
+    const head = el('div', { class: 'wk-bld-head' },
+      el('span', { class: 'wk-bld-title', text: blkTitle(b) }),
+      el('span', { class: 'wk-bld-meta', text: (editing && canDoc && b.type !== 'stat') ? cfgLabel(b.cfg) : (shownN + '건') }));
     return el('div', {}, head, body);
   }
 

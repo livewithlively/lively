@@ -100,7 +100,9 @@ const KN_AUTHOR_HINT = {
     observed: '외부 시스템에서 미러됐습니다.',
 };
 // page-type(#290) 한글 라벨 — 엔터프라이즈 표준(DITA/Diátaxis/ADR/LLM위키) 6종. NULL=미분류(칩 생략).
-const KN_TYPE_LABEL = { decision: '결정', concept: '개념', 'how-to': 'How-to', reference: '참조', research: '리서치', entity: '엔티티' };
+//  같은 축의 값은 같은 말로 쓴다(#1600) — 'How-to' 만 영어라 결정·개념·참조·리서치와 한 줄에 섞이면
+//  다른 층위처럼 읽혔다. 대문 블록의 SRC_LABEL 도 이미 '런북'이라 표기가 갈리던 문제도 함께 사라진다.
+const KN_TYPE_LABEL = { decision: '결정', concept: '개념', 'how-to': '런북', reference: '참조', research: '리서치', entity: '엔티티' };
 // 지식↔프로젝트 연결 관계(#255~257) · 지식↔지식 링크 · 자료(source) 라벨.
 const KN_REL_LABEL = { required: '필요', produced: '산출' };
 const KN_LINK_REL_LABEL = { related: '관련', refines: '구체화', contradicts: '모순', depends_on: '의존' };
@@ -1072,4 +1074,59 @@ async function knFolderChildrenBlock(k) {
 function knPageIcon(e) {
     return (e && e.icon) || (e && e.is_folder ? '📁' : '📄');
 }
-export { HOME_EMPTY, KN_UNCAT, SPACE_LABEL, KN_INJECTION_LABEL, KN_INJECTION_HINT, KN_PROVENANCE_LABEL, KN_PROVENANCE_HINT, KN_AUTHOR_LABEL, KN_AUTHOR_HINT, KN_TYPE_LABEL, KN_REL_LABEL, KN_LINK_REL_LABEL, KN_SOURCE_REL_LABEL, KN_PROP_CATALOG, SOURCE_KIND_LABEL, buildKnPropsBlock, fetchKnHiddenProps, hasMemoryScope, homeDocName, infoDot, isCategoryHomeDoc, knAuthorChip, knChildrenPanel, knCommentsSection, knDelete, knEffectiveVisible, knFetchAuthoredTree, knFetchCategoryIndex, knFetchCategoryRows, knFetchUncategorizedCount, knFolderChildrenBlock, knFolderFirstSort, knInjectChip, knInvalidateTreeCaches, knLinksPanel, knNotionPropsPanel, knPageIcon, knProjectLinks, knPropValue, knProvChip, knSimilarItem, knTreeIcon, knTypeChip, openKnMetaPicker, openKnowledgeLinkPicker, openKnowledgeMoveTo, openProjectChooser, openSourceDetail, saveKnPropsUi, wkRegisterFlush, wkRouteCleanup, wkTrackEditor, };
+// ════════════════════════════════════════════
+// 카테고리 사용자 정렬(#1600) — 사이드바와 홈 카드가 **같은 순서**를 쓴다.
+//  한 사람이 정한 순서가 화면마다 다르면 그건 순서가 아니다 → 저장 키를 공유한다
+//  (#657h3 홈 카드가 쓰던 키를 그대로 승계 — 기존 사용자 순서가 사이드바에도 그대로 나타난다).
+//  기기 로컬(localStorage)이라 다른 PC 에는 따라가지 않는다 — 계정 동기화는 별도 과업.
+// ════════════════════════════════════════════
+const WK_CAT_ORDER_KEY = 'kn_home_cat_order_v1';
+function knCatOrderSaved() {
+    try {
+        const v = JSON.parse(localStorage.getItem(WK_CAT_ORDER_KEY) || '[]');
+        return Array.isArray(v) ? v.map(String) : [];
+    }
+    catch (_) {
+        return [];
+    }
+}
+function knCatOrderSave(ids) {
+    try {
+        localStorage.setItem(WK_CAT_ORDER_KEY, JSON.stringify(ids));
+    }
+    catch (_) { /* 용량 초과·프라이빗 모드 — 이번 세션만 미저장 */ }
+}
+function knCatOrderClear() { try {
+    localStorage.removeItem(WK_CAT_ORDER_KEY);
+}
+catch (_) { /* noop */ } }
+//  저장 순서를 앞에, 미지정(신설)은 원래 순서대로 뒤에 — 안정 병합(신규 카테고리가 사라지지 않는다).
+function knSortByCatOrder(cats, order) {
+    const ord = order || knCatOrderSaved();
+    if (!ord.length)
+        return cats.slice();
+    const pos = new Map(ord.map((id, i) => [String(id), i]));
+    return cats.slice().sort((a, b) => {
+        const pa = pos.has(String(a.id)) ? pos.get(String(a.id)) : 1e9;
+        const pb = pos.has(String(b.id)) ? pos.get(String(b.id)) : 1e9;
+        return pa - pb;
+    });
+}
+//  재정렬 반영 — 화면 밖(다른 그룹) id 까지 보존한 전역 순서를 다시 쓴다.
+//  allCats 는 정렬 대상 전체(공간 무관) — 그룹 안에서만 끌더라도 저장은 전역 배열 하나다.
+function knApplyCatReorder(allCats, srcId, targetId, before) {
+    const cur = knSortByCatOrder(allCats).map((c) => String(c.id));
+    const from = cur.indexOf(String(srcId));
+    if (from < 0)
+        return false;
+    cur.splice(from, 1);
+    let to = cur.indexOf(String(targetId));
+    if (to < 0)
+        return false;
+    if (!before)
+        to += 1;
+    cur.splice(to, 0, String(srcId));
+    knCatOrderSave(cur);
+    return true;
+}
+export { HOME_EMPTY, KN_UNCAT, knApplyCatReorder, knCatOrderClear, knCatOrderSave, knCatOrderSaved, knSortByCatOrder, SPACE_LABEL, KN_INJECTION_LABEL, KN_INJECTION_HINT, KN_PROVENANCE_LABEL, KN_PROVENANCE_HINT, KN_AUTHOR_LABEL, KN_AUTHOR_HINT, KN_TYPE_LABEL, KN_REL_LABEL, KN_LINK_REL_LABEL, KN_SOURCE_REL_LABEL, KN_PROP_CATALOG, SOURCE_KIND_LABEL, buildKnPropsBlock, fetchKnHiddenProps, hasMemoryScope, homeDocName, infoDot, isCategoryHomeDoc, knAuthorChip, knChildrenPanel, knCommentsSection, knDelete, knEffectiveVisible, knFetchAuthoredTree, knFetchCategoryIndex, knFetchCategoryRows, knFetchUncategorizedCount, knFolderChildrenBlock, knFolderFirstSort, knInjectChip, knInvalidateTreeCaches, knLinksPanel, knNotionPropsPanel, knPageIcon, knProjectLinks, knPropValue, knProvChip, knSimilarItem, knTreeIcon, knTypeChip, openKnMetaPicker, openKnowledgeLinkPicker, openKnowledgeMoveTo, openProjectChooser, openSourceDetail, saveKnPropsUi, wkRegisterFlush, wkRouteCleanup, wkTrackEditor, };

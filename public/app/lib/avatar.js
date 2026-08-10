@@ -85,4 +85,14 @@ function personFace(id, cls, name) {
         loadPeopleAvatars().then(() => paintFace(wrap, id, name));
     return wrap;
 }
-export { avatarColor, initials, loadPeopleAvatars, personFace, profileAvatar, setPersonAvatar, };
+// 사람 표시명 — 같은 맵의 텍스트 판. 아바타를 그릴 자리가 없는 목록 메타 등에서 '누가'를 글자로 쓴다.
+//  ⚠ 동기 함수라 맵이 아직 안 왔으면 id 를 돌려준다 — 이름이 처음부터 필요한 화면은 렌더 전에
+//   loadPeopleAvatars() 를 await 하라(personFace 처럼 self-heal 하지 않는다).
+function personName(id, fallback) {
+    const k = String(id || '');
+    if (!k)
+        return fallback || '';
+    const m = _peopleAvatars[k];
+    return (m && m.display_name) || fallback || k;
+}
+export { avatarColor, initials, loadPeopleAvatars, personFace, personName, profileAvatar, setPersonAvatar, };

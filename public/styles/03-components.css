@@ -443,3 +443,9 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .toast.coral::before { background: var(--coral); }
 .toast .btn-text { padding: 0 2px; color: var(--blue); }
 
+
+/* 위키링크(#1600) — 본문에서 다른 지식으로 가는 내부 이동.
+   외부 링크와 구분되게 옅은 밑줄만 두고, hover 에서 또렷해진다(본문 가독을 해치지 않게). */
+.md-wikilink { color: #2D6BF0; text-decoration: none; border-bottom: 1px solid rgba(45, 107, 240, .32);
+  padding-bottom: .5px; transition: background .12s, border-color .12s; }
+.md-wikilink:hover { border-bottom-color: rgba(45, 107, 240, .85); background: rgba(45, 107, 240, .08); border-radius: 3px; }

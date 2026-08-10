@@ -2,9 +2,9 @@
 //  사용자가 명시적으로 유지하라고 한 표면이라 마크업·클래스·동작을 바꾸지 않는다(검색·★내소유·space 그룹·트리 펼침·
 //  도구 섹션·폭 리사이즈(--pjv-side-w, localStorage 'pjv:sideW' — 프로젝트 탭 공유)·접기).
 //  콘텐츠와의 접점은 3개뿐: ① [data-cat-val] 클릭 위임(onSelect) ② 문서 열기(onOpen) ③ rebuild().
-import { api, el, state, sv } from './core.js';
+import { api, el, loadPeopleAvatars, state, sv } from './core.js';
 import { reviewNavBadge } from './review.js';   // #837 검토 대기 배지(대기 0이면 안 그려진다)
-import { isCategoryHomeDoc, KN_UNCAT, knFetchAuthoredTree, knFetchCategoryIndex, knFetchUncategorizedCount, knFolderFirstSort, knPageIcon, SPACE_LABEL } from './wiki-data.js';
+import { isCategoryHomeDoc, KN_UNCAT, knApplyCatReorder, knCatOrderClear, knCatOrderSaved, knFetchAuthoredTree, knFetchCategoryIndex, knFetchUncategorizedCount, knFolderFirstSort, knPageIcon, knSortByCatOrder, SPACE_LABEL } from './wiki-data.js';
 
 // WIKI 인덱스(#336) — '전체' 하위 '인덱스(핀)' 필터의 가짜 카테고리 센티넬. data-cat-val 위임에 실린다.
 const KN_INDEXED = '__indexed__';
@@ -52,6 +52,64 @@ function knSpaceGroup(sk: string, countEl?: any) {
       countEl || null, caret));
   grp.addEventListener('toggle', () => { caret.textContent = (grp as any).open ? '▾' : '▸'; });
   return grp;
+}
+
+// ★ '내 소유 카테고리' 그룹(#1600) — 사업·제품·시스템과 **같은 마크업**으로 만든다.
+//  종전엔 작은 회색 라벨(.pjv-side-favhead)이라 세 space 헤더보다 아래 위계로 읽혔다. 실제로는 그 반대다 —
+//  매일 여기서 출발하니까. 같은 형태(아바타+볼드+카운트+캐럿)를 주면 위계가 동급이 되고, 맨 위에 놓이니 첫 자리가 된다.
+function knOwnedGroup(countEl?: any) {
+  const caret = el('span', { class: 'pjv-side-folder-caret kn-space-caret', 'aria-hidden': 'true', text: '▾' });
+  const grp = el('details', { class: 'kn-space-group kn-owned-group', open: '' },
+    el('summary', { class: 'pjv-side-navitem pjv-side-navfolder pjv-side-navspace kn-space-head kn-owned-head' },
+      el('span', { class: 'pjv-side-space-avatar kn-owned-ava', title: '내가 담당하는 카테고리', text: '★' }),
+      el('span', { class: 'pjv-side-navlabel', text: '내 소유 카테고리' }),
+      countEl || null, caret));
+  grp.addEventListener('toggle', () => { caret.textContent = (grp as any).open ? '▾' : '▸'; });
+  return grp;
+}
+
+// ── 드래그 정렬(#1600) — 그룹 **안에서만** 순서를 바꾼다. ──
+//  경계를 넘지 못하게 하는 이유: 카테고리의 space 는 분류 사실이지 사용자 취향이 아니다(사업 카테고리를 제품 밑으로
+//  끌어다 놓을 수 있으면 그건 정렬이 아니라 오분류다). ★구역은 소유 여부로 정해지므로 역시 닫힌 집합이다.
+//  삽입 위치는 행 위/아래 가로선으로 보여준다(.drop-before/.drop-after — CSS 가 색선을 그린다).
+let knDragId: string | null = null;
+let knDragGroup: string | null = null;
+function knClearDropHints(nav: any) {
+  nav.querySelectorAll('.kn-nav-catwrap.drop-before, .kn-nav-catwrap.drop-after')
+    .forEach((n: any) => n.classList.remove('drop-before', 'drop-after'));
+}
+function knWireCatDrag(wrap: any, catId: string, group: string, nav: any, onReorder: (src: string, target: string, before: boolean) => void) {
+  wrap.setAttribute('draggable', 'true');
+  wrap.dataset.dragGroup = group;
+  wrap.addEventListener('dragstart', (ev: any) => {
+    knDragId = String(catId); knDragGroup = group;
+    wrap.classList.add('drag-src');
+    try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', String(catId)); } catch (_) { /* 일부 브라우저 — setData 없이도 진행 */ }
+  });
+  wrap.addEventListener('dragend', () => {
+    knDragId = null; knDragGroup = null;
+    wrap.classList.remove('drag-src');
+    knClearDropHints(nav);
+  });
+  wrap.addEventListener('dragover', (ev: any) => {
+    if (!knDragId || knDragGroup !== group || knDragId === String(catId)) return;   // 다른 그룹·자기 자신 — 받지 않는다
+    ev.preventDefault();
+    const r = wrap.getBoundingClientRect();
+    const before = ev.clientY < r.top + r.height / 2;   // 세로 목록이라 Y 로 가른다(홈 카드는 X)
+    wrap.classList.toggle('drop-before', before);
+    wrap.classList.toggle('drop-after', !before);
+  });
+  wrap.addEventListener('dragleave', () => wrap.classList.remove('drop-before', 'drop-after'));
+  wrap.addEventListener('drop', (ev: any) => {
+    if (!knDragId || knDragGroup !== group || knDragId === String(catId)) return;
+    ev.preventDefault();
+    const before = wrap.classList.contains('drop-before');
+    const src = knDragId;
+    knDragId = null; knDragGroup = null;
+    knClearDropHints(nav);
+    onReorder(src, String(catId), before);
+  });
+  return wrap;
 }
 
 // ⭐ '내 소유 카테고리' 별 토글 — 프로젝트 탭 즐겨찾기와 동일 컴포넌트(.pjv-side-navfav), WIKI 는 파란색(.fav-blue).
@@ -154,37 +212,60 @@ function knNavDocNode(r, depth, onOpen, childN?: Map<string, number>) {
   return el('div', {}, row, kids);
 }
 
-// nav 채우기 — '전체'·'인덱스' → ★내 소유 구역(팀 소유 자동 + 사용자 토글 합집합) → space별 접이식.
+// nav 채우기(#1600 순서) — ★내 소유 → 가로구분선 → 전체·인덱스 → space별 접이식 → 미분류.
+//  ★가 맨 위인 이유: 사람이 매일 출발하는 자리이기 때문이다. '전체'는 훑을 때만 쓰는 도구라 그 아래가 맞다.
+//  각 그룹 안에서는 사용자가 끌어서 순서를 정할 수 있고(knWireCatDrag), 그 순서는 홈 카드와 공유된다.
 function buildKnowledgeNav(nav, bySpace, selected, myIds: Set<string>, opts) {
   const onOpen = (opts && opts.onOpen) || ((name) => { location.hash = '#/k/' + encodeURIComponent(name); });
   const favCatIds: Set<string> = (opts && opts.favCatIds) || new Set();
   const onToggleFav = (opts && opts.onToggleFav) || (() => {});
+  const onReorder = (opts && opts.onReorder) || (() => {});
   (nav as any)._knOnOpen = onOpen;   // 사이드바 검색(knSideFilterNav)의 문서 결과 행이 같은 열기 경로를 쓰도록
   nav.replaceChildren();
   nav.classList.add('kn-tree2');
+  const ownedIds = new Set<string>([...favCatIds, ...Array.from(myIds)]);
+  const favOpts = { favCatIds: ownedIds, onToggleFav };
+  const allCats = ['business', 'product', 'system'].flatMap((sk) => bySpace[sk] || []);
+  //  드래그로 순서가 바뀌면 전역 순서를 저장하고 호출부가 사이드바를 다시 그린다(홈 카드도 같은 키를 읽는다).
+  const reorder = (src: string, target: string, before: boolean) => {
+    if (knApplyCatReorder(allCats, src, target, before)) onReorder();
+  };
+  const catNode = (c: any, group: string) => knWireCatDrag(
+    knNavCatNode(c, String(selected) === String(c.id), onOpen, false, favOpts),
+    String(c.id), group, nav, reorder);
+
+  // ① ★ 내 소유 카테고리 — 첫 자리, space 와 동급 위계.
+  const favCats = knSortByCatOrder(allCats.filter((c) => ownedIds.has(String(c.id))));
+  if (favCats.length) {
+    const ownedTotal = favCats.reduce((n, c) => n + (Number(c.knowledge_count) || 0), 0);
+    const grp = knOwnedGroup(el('span', { class: 'pjv-side-navcount', title: '내 소유 카테고리의 지식 수', text: String(ownedTotal) }));
+    //  되돌리기 — 직접 정렬한 사람만 본다(순서를 바꾼 적 없으면 버튼 자체가 없다).
+    //  summary 안이라 클릭이 접힘 토글로 새지 않게 막는다.
+    if (knCatOrderSaved().length) {
+      const undo = el('button', { class: 'kn-order-reset', type: 'button', title: '드래그로 바꾼 카테고리 순서를 기본으로 되돌립니다', 'aria-label': '카테고리 순서 초기화', text: '↺' });
+      undo.addEventListener('click', (ev: any) => { ev.preventDefault(); ev.stopPropagation(); knCatOrderClear(); onReorder(); });
+      (grp.firstChild as any).insertBefore(undo, (grp.firstChild as any).lastChild);
+    }
+    for (const c of favCats) grp.append(catNode(c, 'mine'));
+    nav.append(grp);
+    nav.append(el('div', { class: 'pjv-side-favsep kn-owned-sep', 'aria-hidden': 'true' }));
+  }
+
+  // ② 전체 · 인덱스 — 카테고리 축을 벗어나 훑는 두 도구.
   nav.append(knSideItem('전체', '', !selected || selected === ''));
   if (opts && opts.indexed) {
     nav.append(knSideItem('인덱스', KN_INDEXED, selected === KN_INDEXED,
       { glyph: '📌', cls: 'kn-side-item-sub', title: '인덱스(핀)된 지식만 — 전체 카테고리에서 매 대화 첫머리에 깔리는 항목' }));
   }
-  const ownedIds = new Set<string>([...favCatIds, ...Array.from(myIds)]);
-  const favOpts = { favCatIds: ownedIds, onToggleFav };
-  {
-    const allCats = ['business', 'product', 'system'].flatMap((sk) => bySpace[sk] || []);
-    const favCats = allCats.filter((c) => ownedIds.has(String(c.id)));
-    if (favCats.length) {
-      nav.append(el('div', { class: 'pjv-side-favhead fav-blue', 'aria-hidden': 'true' }, el('span', { class: 'pjv-side-favhead-ic', text: '★' }), el('span', { text: '내 소유 카테고리' })));
-      for (const c of favCats) nav.append(knNavCatNode(c, String(selected) === String(c.id), onOpen, false, favOpts));
-      nav.append(el('div', { class: 'pjv-side-favsep', 'aria-hidden': 'true' }));
-    }
-  }
+
+  // ③ 사업 · 제품 · 시스템
   for (const sk of ['business', 'product', 'system']) {
-    const cats = (bySpace[sk] || []);
+    const cats = knSortByCatOrder(bySpace[sk] || []);
     if (!cats.length) continue;
     const hasCounts = cats.some((c) => Number.isFinite(Number(c.knowledge_count)));
     const total = cats.reduce((n, c) => n + (Number(c.knowledge_count) || 0), 0);
     const grp = knSpaceGroup(sk, hasCounts ? el('span', { class: 'pjv-side-navcount', title: '이 스페이스의 지식 수', text: String(total) }) : null);
-    for (const c of cats) grp.append(knNavCatNode(c, String(selected) === String(c.id), onOpen, false, favOpts));
+    for (const c of cats) grp.append(catNode(c, sk));
     nav.append(grp);
   }
   // 미분류(#1091) — 어느 카테고리에도 안 걸린 지식. 트리 맨 아래(프로젝트 탭 '기타 (미분류)'와 같은 자리).
@@ -362,7 +443,7 @@ function createWikiSide(opts: any) {
 
   function buildSide() {
     buildKnowledgeNav(nav, bySpace, opts.selected ? opts.selected() : '', myIds,
-      { indexed: true, onOpen: opts.onOpen, favCatIds, onToggleFav: toggleCatFav, uncatCount });
+      { indexed: true, onOpen: opts.onOpen, favCatIds, onToggleFav: toggleCatFav, uncatCount, onReorder: buildSide });
     side.replaceChildren(...[
       el('div', { class: 'pjv-side-nav-head' }, el('span', { class: 'pjv-side-nav-head-label', text: '지식 카테고리' }), collapseBtn),
       knMakeSideSearch(nav, sideState), nav,
@@ -380,7 +461,11 @@ function createWikiSide(opts: any) {
   });
 
   const ready = (async () => {
+    // 사람 맵(#1600) — 목록 메타의 '누가 만들었나'를 첫 렌더부터 이름으로 쓰려면 먼저 와 있어야 한다
+    //  (personName 은 동기 조회라 self-heal 하지 않는다). 실패해도 id 로 폴백되니 화면은 계속 그린다.
+    const peopleP = loadPeopleAvatars().catch(() => null);
     try { bySpace = await fetchAllSpaceCats(); } catch (_) { /* graceful: 사이드바 생략(콘텐츠는 계속) */ }
+    await peopleP;
     if (opts.uncategorized) {
       try { uncatCount = await knFetchUncategorizedCount(); } catch (_) { /* graceful: '미분류' 노드만 생략 */ }
     }
@@ -397,7 +482,16 @@ function createWikiSide(opts: any) {
     return null;
   }
 
-  return { side, reopenBtn, collapseBtn, ready, rebuild: buildSide, findCat, bySpace: () => bySpace };
+  // ★내 소유 중 맨 위 카테고리 id(#1600) — 위키 첫 진입의 기본 화면. 소유가 없으면 '' (홈으로 폴백).
+  //  사용자가 사이드바에서 끌어 정한 순서를 그대로 따른다 — '맨 위'는 그 사람이 정한 맨 위여야 한다.
+  function ownedFirst(): string {
+    const allCats = ['business', 'product', 'system'].flatMap((sk) => bySpace[sk] || []);
+    const owned = new Set<string>([...favCatIds, ...Array.from(myIds)]);
+    const list = knSortByCatOrder(allCats.filter((c: any) => owned.has(String(c.id))));
+    return list.length ? String(list[0].id) : '';
+  }
+
+  return { side, reopenBtn, collapseBtn, ready, rebuild: buildSide, findCat, ownedFirst, bySpace: () => bySpace };
 }
 
 // 문서 셸의 접기 상태 배선 — shell(.kn-shell)에 side-off 클래스 + localStorage. 기본: 저장값 없으면 ≤820px 접힘.

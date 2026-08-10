@@ -5,8 +5,68 @@
 //  · 칩 더미 금지 — 메타는 "그 목록에서 값이 변하는 필드만", 우측 mono 한 줄.
 //  · 민트 틱 = 사람 저작 표식(시그니처). AI 는 무표식(다수라 반복=제로 정보), 외부 미러는 회색 링.
 //    10px 고정폭 영역이라 표식 유무와 무관하게 제목이 정렬된다.
-import { el, relTime } from './core.js';
+import { absTime, el, personName } from './core.js';
 import { KN_TYPE_LABEL, isCategoryHomeDoc } from './wiki-data.js';
+
+// ── 시각 — "며칠 몇시에 만들어졌나"를 그대로 쓴다(#1600). ──
+//  상대시간('6일 전')은 목록을 훑을 때 두 문서의 선후를 못 세우고, 같은 날 안에서의 순서도 지운다.
+//  올해면 '8월 10일 18:43', 지난해면 '2025.8.10. 18:43'. 잘못된 값은 빈 문자열(호출부가 자리째 생략).
+function wkStamp(iso: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const hm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  if (d.getFullYear() !== new Date().getFullYear()) {
+    return d.getFullYear() + '.' + (d.getMonth() + 1) + '.' + d.getDate() + '. ' + hm;
+  }
+  return (d.getMonth() + 1) + '월 ' + d.getDate() + '일 ' + hm;
+}
+
+// ── 출처 — "누가, 어떤 경로로 만들었나"(#1600). ──
+//  세 갈래뿐이다: 사람이 직접 썼거나(human) · 그 사람 자격으로 AI 가 썼거나(ai) · 외부에서 미러됐거나(observed).
+//  AI 저작이어도 '누구의 세션인가'는 남아 있어야 한다 — updated_by 가 그 사람이다.
+const WK_MIRROR_LABEL: Record<string, string> = { notion: '노션 미러', clickup: '클릭업 미러', slack: '슬랙 미러' };
+function wkOriginText(e: any): string {
+  if (!e) return '';
+  if (e.provenance === 'observed') return WK_MIRROR_LABEL[e.external_system] || '외부 미러';
+  const who = e.updated_by ? personName(e.updated_by) : '';
+  const how = e.confidence === 'human' ? '직접' : 'AI';
+  return who ? who + ' · ' + how : (e.confidence === 'human' ? '사람 작성' : 'AI 작성');
+}
+//  hover 상세 — 만든 시각과 갱신 시각을 모두 절대값으로(목록은 자리가 좁아 하나만 보인다).
+function wkOriginTitle(e: any): string {
+  if (!e) return '';
+  const bits: string[] = [];
+  const origin = wkOriginText(e);
+  if (origin) bits.push(e.provenance === 'observed' ? origin : origin.replace(' · AI', ' 님의 AI 세션이 작성').replace(' · 직접', ' 님이 직접 작성'));
+  if (e.created_at) bits.push('만듦 ' + absTime(e.created_at));
+  if (e.updated_at && e.updated_at !== e.created_at) bits.push('갱신 ' + absTime(e.updated_at));
+  return bits.join(' · ');
+}
+//  목록 메타 한 벌 — [유형] [누가·어떻게] [언제]. 호출부가 자리를 더 끼우고 싶으면 opts 로 앞에 붙인다.
+//  시각은 '만든 때'를 기본으로 쓴다(사용자 요구) — created_at 이 없는 옛 행만 updated_at 으로 폴백.
+function wkMetaOf(e: any, opts: any = {}): any[] {
+  const stampSrc = e.created_at || e.updated_at;
+  const stamp = wkStamp(stampSrc);
+  const origin = wkOriginText(e);
+  const title = wkOriginTitle(e);
+  return [
+    ...(opts.lead || []),
+    e.is_wiki ? '인덱스' : null,
+    opts.type === false ? null : wkTypeTag(e),
+    origin ? el('span', { class: 'wk-row-m wk-row-who', title, text: origin }) : null,
+    stamp ? el('span', { class: 'wk-row-m wk-row-when', title, text: stamp }) : null,
+  ].filter(Boolean);
+}
+
+// ── 유형 태그 — 결정·개념·런북·참조·리서치가 **같은 층위의 한 축**임이 보이게(#1600). ──
+//  종전엔 다른 메타(인덱스·시간)와 같은 회색 글씨라 "이게 분류축"이라는 신호가 없었다.
+//  같은 모양(테두리 태그) + 유형별 색만 다르게 = 형태가 축을, 색이 값을 말한다.
+function wkTypeTag(e: any): any {
+  const t = e && e.type;
+  if (!t) return null;
+  return el('span', { class: 'wk-tytag', 'data-ty': t, title: '유형 — ' + (KN_TYPE_LABEL[t] || t), text: KN_TYPE_LABEL[t] || t });
+}
 
 // ── 민트 틱 ──
 function wkTick(e: any) {
@@ -81,12 +141,8 @@ function wkDocCard(e: any, opts: any = {}) {
       e.icon ? el('span', { class: 'wk-doccard-ic', 'aria-hidden': 'true', text: e.icon }) : null,
       el('span', { class: 'wk-doccard-title', text: e.title || e.name })),
     deck ? el('p', { class: 'wk-doccard-deck', text: deck }) : null,
-    el('div', { class: 'wk-doccard-meta' }, ...([
-      e.is_wiki ? el('span', { class: 'wk-row-m', text: '인덱스' }) : null,
-      e.type ? el('span', { class: 'wk-row-m', text: KN_TYPE_LABEL[e.type] || e.type }) : null,
-      ...(opts.metas || []),
-      e.updated_at ? el('span', { class: 'wk-row-m', text: relTime(e.updated_at) }) : null,
-    ].filter(Boolean))));
+    el('div', { class: 'wk-doccard-meta' }, ...wkMetaOf(e, { lead: opts.metas || [] })
+      .map((m: any) => ((m && m.nodeType) ? m : el('span', { class: 'wk-row-m', text: String(m) })))));
   const go = () => { if (opts.open) opts.open(e, card); else location.hash = '#/k/' + encodeURIComponent(e.name); };
   card.addEventListener('click', go);
   card.addEventListener('keydown', (ev: any) => { if (ev.key === 'Enter') go(); });
@@ -100,11 +156,7 @@ function wkDocCard(e: any, opts: any = {}) {
 //          select?: { names:Set, onToggle }  선택 모드(행 클릭=토글) }
 function wkRow(e: any, opts: any = {}) {
   const ic = e.icon || (e.is_folder ? '📁' : '');
-  const metas = (opts.metas || [
-    e.is_wiki ? '인덱스' : null,
-    e.type ? (KN_TYPE_LABEL[e.type] || e.type) : null,
-    e.updated_at ? relTime(e.updated_at) : null,
-  ]).filter((x) => x != null && x !== '');
+  const metas = (opts.metas || wkMetaOf(e)).filter((x) => x != null && x !== '');
   const metaEl = el('span', { class: 'wk-row-meta' }, ...metas.map((m: any) =>
     (m && (m as any).nodeType) ? m : el('span', { class: 'wk-row-m', text: String(m) })));
   // 발췌 줄 — opts.deck(본문 발췌) 또는 검색(grep) 매치 스니펫(L<n>: 등 기계 표기는 정리).
@@ -206,4 +258,7 @@ function wkEmpty(text: string, action?: any) {
   return el('div', { class: 'wk-empty' }, el('span', { text }), action || null);
 }
 
-export { wkAurora, wkDayLabel, wkDeck, wkDocCard, wkEmpty, wkHash, wkIsRead, wkMarkRead, wkReadVisits, wkRecordVisit, wkRow, wkSection, wkTick };
+export {
+  wkAurora, wkDayLabel, wkDeck, wkDocCard, wkEmpty, wkHash, wkIsRead, wkMarkRead, wkMetaOf,
+  wkOriginText, wkOriginTitle, wkReadVisits, wkRecordVisit, wkRow, wkSection, wkStamp, wkTick, wkTypeTag,
+};

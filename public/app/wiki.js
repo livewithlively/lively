@@ -42,47 +42,47 @@ async function renderReviewQueue(view) {
 }
 // ── WIKI 셸 — 사이드바 + 콘텐츠 한 장. 상태 f 는 세션 전역(state.wiki). ──
 async function renderWikiSpace(view, params) {
-    const f = state.wiki = state.wiki || { category: '', folder: '', type: '', q: '', indexed: false, all: false };
-    // 파라미터 없는 진입 = 상단 WIKI 탭 클릭 등 '맨 진입' — 홈으로 리셋(이전 카테고리가 복원되면 놀란다).
-    if (!params || Array.from(params.keys()).length === 0) {
+    const f = state.wiki = state.wiki || { category: '', folder: '', type: '', q: '', indexed: false, all: false, home: false };
+    // 파라미터 없는 진입 = 상단 WIKI 탭 클릭 등 '맨 진입' — 상태를 비운다(이전 카테고리가 복원되면 놀란다).
+    //  비운 뒤 무엇을 보여줄지는 사이드바가 준비된 다음 결정한다(#1600: ★내 소유 맨 위 카테고리).
+    const freshEntry = !params || Array.from(params.keys()).length === 0;
+    if (freshEntry) {
         f.category = '';
         f.folder = '';
         f.type = '';
         f.q = '';
         f.indexed = false;
         f.all = false;
+        f.home = false;
     }
-    if (params) {
-        // category 딥링크는 폴더 드릴다운을 리셋 — 세션 잔존 f.folder 가 다른 카테고리로 새면
-        //  '폴더가 비어 있어요' 빈 화면이 뜬다. ?category=..&folder=.. 조합은 아래 folder 절이 다시 채운다.
-        if (params.has('category')) {
-            f.category = params.get('category') || '';
-            f.indexed = false;
-            f.all = false;
+    else if (params) {
+        // ⚠ URL 이 상태의 진실이다 — **이번 주소에 없는 필터는 리셋한다**(#1600).
+        //  종전엔 params.has(...) 로 있는 것만 덮어써서, state.wiki 가 세션 전역인 탓에 옛 필터가 살아남았다:
+        //  인덱스(?indexed=1)를 보다가 ?q=… 딥링크로 가면 indexed 가 남아 '인덱스 ∩ 검색어' = 0건이 뜨고
+        //  주소까지 ?indexed=1&q=… 로 합쳐졌다(실측). 전량 대입이라 syncHash 가 쓰는 값과도 항상 일치한다.
+        //  ?home=1 — '전체'를 눌러 홈을 **명시적으로** 고른 상태. 이게 없으면 맨 진입과 구분이 안 돼
+        //  새로고침할 때마다 기본 카테고리로 튕긴다(사용자가 고른 화면을 주소가 기억해야 한다).
+        f.home = params.get('home') === '1';
+        f.indexed = params.get('indexed') === '1';
+        f.all = params.get('all') === '1';
+        f.category = params.get('category') || '';
+        f.folder = params.get('folder') || '';
+        f.type = params.get('type') || '';
+        f.q = params.get('q') || '';
+        //  상호배타 — 인덱스·전체는 카테고리 축을 벗어난 목록이라 카테고리/폴더와 같이 설 수 없다.
+        if (f.indexed) {
+            f.category = '';
             f.folder = '';
+            f.all = false;
+            f.home = false;
         }
-        if (params.has('folder'))
-            f.folder = params.get('folder') || '';
-        if (params.has('type'))
-            f.type = params.get('type') || '';
-        if (params.has('q'))
-            f.q = params.get('q') || '';
-        if (params.has('indexed')) {
-            f.indexed = params.get('indexed') === '1';
-            if (f.indexed) {
-                f.category = '';
-                f.folder = '';
-                f.all = false;
-            }
+        else if (f.all) {
+            f.category = '';
+            f.folder = '';
+            f.home = false;
         }
-        if (params.has('all')) {
-            f.all = params.get('all') === '1';
-            if (f.all) {
-                f.category = '';
-                f.folder = '';
-                f.indexed = false;
-            }
-        }
+        else if (f.category)
+            f.home = false;
     }
     if (!f.category)
         f.folder = ''; // 폴더는 카테고리 컨텍스트에서만
@@ -96,6 +96,8 @@ async function renderWikiSpace(view, params) {
             p.set('all', '1');
         else if (f.category)
             p.set('category', f.category);
+        else if (f.home)
+            p.set('home', '1'); // 사용자가 고른 홈 — 새로고침해도 기본 카테고리로 안 튕기게
         if (f.folder)
             p.set('folder', f.folder);
         if (f.type)
@@ -131,11 +133,13 @@ async function renderWikiSpace(view, params) {
         if (v === KN_INDEXED) {
             f.indexed = true;
             f.category = '';
+            f.home = false;
         }
         else {
             f.indexed = false;
             f.category = v || '';
-        }
+            f.home = !v;
+        } // '전체' = 홈을 명시적으로 고름
         f.folder = '';
         f.type = '';
         f.q = '';
@@ -173,6 +177,15 @@ async function renderWikiSpace(view, params) {
     //  남의 화면을 덮고 replaceState 로 주소까지 되돌리는 경합 방지(라우터가 dataset.route 를 즉시 세팅).
     if (document.body.dataset.route !== 'knowledge')
         return;
+    // 맨 진입의 기본 화면(#1600) — ★내 소유 맨 위 카테고리. 매일 여기서 출발하니 첫 화면이어야 한다.
+    //  카테고리 목록이 온 뒤라야 정할 수 있어 여기서 한다. 소유 카테고리가 없으면 종전대로 홈.
+    if (freshEntry) {
+        const top = sideCtl.ownedFirst();
+        if (top) {
+            f.category = top;
+            sideCtl.rebuild();
+        }
+    }
     view.replaceChildren(shell);
     syncHash();
     repaint();

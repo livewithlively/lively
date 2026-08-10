@@ -98,6 +98,29 @@ function renderInline(text, opts?: { noAutolink?: boolean }) {
         continue;
       }
     }
+    // 위키링크 [[이름]] · [[이름|표시글]] · [[이름#헤딩]] (#1600)
+    //  저장 시엔 이미 지식↔지식 엣지로 해석되는 문법인데(#907) **렌더러만 몰라서** 본문에 슬러그가 그대로
+    //  보이고 클릭도 안 됐다 — 비아카이브 문서 665건 중 603건(91%)이 이 문법을 쓴다. 위키에서 문서 사이를
+    //  오갈 수 없던 직접 원인. 인라인 코드(`) 처리 뒤에 두므로 코드 안의 [[…]] 는 여기 오지 않는다(문법 예시 보존).
+    //  대상 지식이 없어도 링크는 건다 — 열면 '문서를 찾을 수 없어요' 화면이 휴지통 복원까지 안내한다.
+    if (ch === '[' && s[i + 1] === '[') {
+      const close = s.indexOf(']]', i + 2);
+      const raw = close > i + 1 ? s.slice(i + 2, close) : '';
+      if (raw && raw.indexOf('[') < 0 && raw.indexOf(']') < 0) {
+        const bar = raw.indexOf('|');
+        const target = (bar >= 0 ? raw.slice(0, bar) : raw).trim();
+        const label = (bar >= 0 ? raw.slice(bar + 1) : raw).trim();
+        const hash = target.indexOf('#');
+        const name = (hash > 0 ? target.slice(0, hash) : target).trim();
+        if (name) {
+          flush();
+          out.push(el('a', { class: 'md-wikilink', href: '#/k/' + encodeURIComponent(name),
+            title: '위키 문서 — ' + name, text: label || name }));
+          i = close + 2;
+          continue;
+        }
+      }
+    }
     // 이미지 ![alt](url) — 링크보다 먼저(문법이 링크의 상위집합).
     if (ch === '!' && s[i + 1] === '[') {
       const close = s.indexOf(']', i + 2);
