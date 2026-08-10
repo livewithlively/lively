@@ -1,14 +1,26 @@
-// me-logins.ts — [내 설정 ▸ 내 서비스 로그인] 패널: 서비스별 탭 · 슬랙 대화별 열람/발송 정책 · 레포 접근
-//  (#1313 R38, admin.ts 에서 verbatim 분리).
+// me-logins.ts — [내 설정 ▸ 외부 서비스 관리] 패널: 서비스 로그인 · 슬랙 대화별 열람/발송 정책 · 레포 접근
+//  (#1313 R38, admin.ts 에서 verbatim 분리 / #1597 서비스 로그인 UI 전면 재설계).
 //  토큰 입력 폼(svcTokenForm)과 git 자격 오버레이는 자격 금고(admin-credentials.ts) 소유를 그대로 받아 쓴다 —
 //   CRED_KINDS 스펙 표를 여기서 다시 만들지 않는다(단일 거처).
-import { api, cardHead, el, errorNote, toast, uiText } from './core.js';
+//
+// ── #1597 재설계 — 무엇을 왜 버렸나 ────────────────────────────────────────────────
+//  구조: [서비스 탭] + [＋ 서비스 연결] 탭. 두 자리의 경계가 **연결 여부가 아니라 '조직이 그 서비스를
+//   OAuth 로 등록해 뒀는가'** 였다. 그래서 아직 연결 안 한 Notion·Linear·Slack 은 탭에 있고, 역시 연결
+//   안 한 GitHub·Figma 는 [＋] 뒤에 숨는 — 사용자가 설명할 수 없는 분할이 생겼다(사용자 지적).
+//  또 탭은 한 번에 하나만 보여줘서 "지금 뭐가 켜져 있나"를 답하려면 탭을 전부 눌러 봐야 했다. 이 화면에서
+//   사람이 하는 질문은 사실상 그거 하나다.
+//  그래서 경계를 **연결됨 / 연결할 수 있음** 으로 다시 긋고, 둘 다 한 화면에 편다. [＋ 서비스 연결] 은
+//   가리키는 대상이 없어져(연결 가능한 서비스가 이미 다 보인다) 사라진다.
+//  아이콘은 이모지 대신 서비스별 브랜드 마크를 직접 그린다(svc-icons.ts) — 대시보드 알림 타일과 같은 형태 언어.
+import { api, cardHead, el, errorNote, relTime, toast, uiText } from './core.js';
+import { confirmDialog, overlay, skeleton } from './ui-primitives.js';
 import { sectionHead } from './admin-widgets.js';
 import { openGitCredentialManager, svcTokenForm } from './admin-credentials.js';
-// ── 내 서비스 로그인 — 서비스별 탭(#762). 방식(OAuth/토큰) 대신 '어떤 서비스'로 묶어 비개발자도 직관적으로. ──
-//  탭 = 조직에 등록/연결된 서비스. [＋ 서비스 연결]에서 토큰형 서비스를 셀프 추가(OAuth 미등록 서비스는 관리자 몫).
+import { svcTile } from './svc-icons.js';
+// ── 지원 서비스 표 ──
+//  blurb — '무엇을 허용하는 것인지'를 그대로 말한다(#1085). '나로서 …해요' 는 무슨 일이 벌어지는지 모호했다.
+//  oauth = 조직이 등록해 둔 OAuth 커넥터(프록시 MCP 서버) 이름 · token = 내가 직접 붙여넣는 자격 종류.
 const LOGIN_SERVICES = [
-    // blurb — '무엇을 허용하는 것인지'를 그대로 말한다(#1085). '나로서 …해요' 는 무슨 일이 벌어지는지 모호했다.
     { key: 'notion', label: 'Notion', icon: '📔', oauth: 'notion', blurb: 'AI가 내 Notion 계정에 로그인해서 직접 문서를 읽고 작성할 수 있습니다.' },
     { key: 'linear', label: 'Linear', icon: '📐', oauth: 'linear', blurb: 'AI가 내 Linear 계정에 로그인해서 직접 이슈를 보고 만들 수 있습니다.' },
     { key: 'slack', label: 'Slack', icon: '💬', oauth: 'slack', token: 'slack_user_token', blurb: 'AI가 내 Slack 계정에 로그인해서 직접 메시지를 검색하고 보낼 수 있습니다.' },
@@ -22,8 +34,31 @@ const LOGIN_SERVICES = [
     { key: 'prometheus', label: 'Prometheus', icon: '📊', token: 'prometheus_bearer', blurb: 'AI가 내 Prometheus 계정에 로그인해서 직접 지표를 조회할 수 있습니다.' },
     { key: 'claude-headless', label: 'Claude (헤드리스 실행)', icon: '🤖', token: 'claude_setup_token', blurb: '헤드리스 분류·에이전트 크론(claude -p)이 내 Claude 계정으로 인증·실행됩니다 — 터미널에서 `claude setup-token` 으로 발급한 토큰을 등록하세요(구독 크레딧 과금).' },
 ];
-async function renderServiceTabs(host) {
-    host.replaceChildren(el('p', { class: 'admin-hint', style: 'margin:0' }, ...uiText('불러오는 중…')));
+function partition(oauth, creds) {
+    const oauthMap = new Map((oauth.connectors || []).map((c) => [c.server, c]));
+    const credMap = new Map((creds.credentials || []).filter((c) => c.kind !== 'aws_role_arn').map((c) => [c.kind, c]));
+    const oauthOn = (s) => !!(s.oauth && oauthMap.get(s.oauth)?.connected);
+    const tokenOn = (s) => !!(s.token && credMap.get(s.token)?.has_secret);
+    // 내 힘으로 켤 수 있나 — OAuth 는 조직 등록이 선행돼야 하고, 토큰형은 내가 붙여넣으면 그만이다.
+    const selfServe = (s) => !!((s.oauth && oauthMap.has(s.oauth)) || s.token);
+    const connected = [], available = [], blockedOAuth = [];
+    for (const s of LOGIN_SERVICES) {
+        if (oauthOn(s) || tokenOn(s))
+            connected.push(s);
+        else if (selfServe(s))
+            available.push(s);
+        else
+            blockedOAuth.push(s); // OAuth 전용인데 조직 미등록 → 카드로 내밀면 눌러도 안 되는 버튼이 된다
+    }
+    return { oauthMap, credMap, connected, available, blockedOAuth };
+}
+// ── 화면 그리기 ──
+//  host 하나를 통째로 다시 그린다(상태가 서버에 있고 화면엔 없어서, 부분 갱신할 게 없다).
+async function renderServices(host) {
+    // 화면을 떠난 뒤(다른 탭으로 이동) 늦게 돌아오는 재렌더는 버린다 — OAuth 복귀 focus 훅이 그 경우를 만든다.
+    if (host.isConnected === false)
+        return;
+    host.replaceChildren(el('div', { class: 'card' }, skeleton('연결 상태를 불러오는 중')));
     let creds = { credentials: [] }, oauth = { connectors: [] };
     try {
         creds = await api('/api/ui/me/credentials');
@@ -33,92 +68,134 @@ async function renderServiceTabs(host) {
         host.replaceChildren(errorNote(e, '내 로그인을 불러오지 못했습니다'));
         return;
     }
-    const oauthMap = new Map((oauth.connectors || []).map((c) => [c.server, c]));
-    const credMap = new Map((creds.credentials || []).filter((c) => c.kind !== 'aws_role_arn').map((c) => [c.kind, c]));
-    const isReg = (s) => !!((s.oauth && oauthMap.has(s.oauth)) || (s.token && credMap.has(s.token)));
-    const isOn = (s) => !!((s.oauth && oauthMap.get(s.oauth) && oauthMap.get(s.oauth).connected) || (s.token && credMap.get(s.token) && credMap.get(s.token).has_secret));
-    const tabs = LOGIN_SERVICES.filter(isReg);
-    const addable = LOGIN_SERVICES.filter((s) => !isReg(s) && s.token); // 토큰형은 셀프 추가 가능
-    const reload = () => renderServiceTabs(host);
-    if (!tabs.length) {
-        host.replaceChildren(el('p', { class: 'admin-hint', style: 'margin:0 0 12px' }, ...uiText('아직 연결한 서비스가 없어요. 아래에서 골라 연결해요.')), addPanel(addable, reload));
-        return;
-    }
-    let active = tabs[0].key;
-    const tabBar = el('div', { class: 'chips svc-tabs' });
-    const body = el('div', { class: 'svc-tab-body' });
-    const draw = () => {
-        const mkTab = (key, label, icon, ok) => {
-            const b = el('button', { type: 'button', class: 'chip svc-tab' + (active === key ? ' on' : '') }, icon ? el('span', { class: 'svc-tab-ic', text: icon }) : null, el('span', { text: label }), ok ? el('span', { class: 'svc-tab-dot', title: '연결됨' }) : null);
-            b.onclick = () => { active = key; draw(); };
-            return b;
-        };
-        tabBar.replaceChildren(...tabs.map((s) => mkTab(s.key, s.label, s.icon, isOn(s))), mkTab('__add__', '＋ 서비스 연결', '', false));
-        if (active === '__add__')
-            body.replaceChildren(addPanel(addable, reload));
-        else
-            body.replaceChildren(servicePanel(tabs.find((x) => x.key === active) || tabs[0], oauthMap, credMap, reload));
-    };
-    host.replaceChildren(tabBar, body);
-    draw();
+    const v = partition(oauth, creds);
+    const reload = () => renderServices(host);
+    host.replaceChildren(connectedCard(v, reload), availableCard(v, reload));
 }
-// 선택한 서비스 패널 — 상태 + 연결/해제(OAuth) 또는 토큰 상태/삭제/입력.
-function servicePanel(svc, oauthMap, credMap, reload) {
-    const oc = svc.oauth ? oauthMap.get(svc.oauth) : null;
-    const cred = svc.token ? credMap.get(svc.token) : null;
-    const on = !!((oc && oc.connected) || (cred && cred.has_secret));
-    const wrap = el('div', {}, el('div', { class: 'svc-panel-head' }, el('span', { class: 'svc-panel-ic', text: svc.icon }), el('span', { class: 'svc-panel-nm', text: svc.label }), el('span', { class: 'pill' + (on ? ' pill-ok' : ''), text: on ? '연결됨 ✓' : '미연결' })), el('p', { class: 'admin-hint', style: 'margin:6px 0 14px' }, ...uiText(svc.blurb)));
-    if (oc) {
-        const connectBtn = el('button', { class: 'btn btn-sm ' + (oc.connected ? 'btn-ghost' : 'btn-primary'), text: oc.connected ? '다시 연결' : '연결',
-            onclick: async () => {
-                try {
-                    const r = await api('/api/ui/me/oauth/connect', { method: 'POST', body: JSON.stringify({ server: svc.oauth }) });
-                    if (r.authorized) {
-                        toast('이미 연결됨');
-                        reload();
-                        return;
-                    }
-                    window.open(r.authorization_url, '_blank', 'noopener');
-                    toast('새 탭에서 로그인·동의하세요 — 완료 후 [새로고침]');
-                }
-                catch (e) {
-                    toast(e.message, true);
-                }
-            } });
-        const discBtn = oc.connected ? el('button', { class: 'btn-text btn-text-danger', style: 'margin-left:auto', text: '연결 해제',
-            onclick: async () => { if (!confirm(svc.label + ' 연결을 해제할까요?'))
-                return; try {
-                await api('/api/ui/me/oauth/disconnect', { method: 'POST', body: JSON.stringify({ server: svc.oauth }) });
-                toast('해제됨');
+// ── 구역 1 · 연결된 서비스 ──
+function connectedCard(v, reload) {
+    const refresh = el('button', { type: 'button', class: 'btn-text', text: '새로고침', onclick: reload });
+    const card = el('div', { class: 'card' }, cardHead('연결된 서비스', 'AI가 지금 내 계정으로 쓸 수 있는 서비스입니다. 연결은 나에게만 적용되고, 토큰 값은 저장한 뒤 다시 볼 수 없습니다.', v.connected.length ? el('span', { class: 'head-badge', text: String(v.connected.length) }) : null, refresh));
+    if (!v.connected.length) {
+        card.append(el('div', { class: 'svc-empty' }, el('span', { class: 'svc-empty-t', text: '아직 연결한 서비스가 없습니다.' }), el('span', { class: 'svc-empty-s' }, ...uiText('아래 [연결할 수 있는 서비스]에서 하나를 고르면 AI가 그 계정으로 일할 수 있습니다.'))));
+        return card;
+    }
+    card.append(el('div', { class: 'svc-conn-list' }, ...v.connected.map((s) => connectedRow(s, v, reload))));
+    return card;
+}
+function connectedRow(svc, v, reload) {
+    const oc = svc.oauth ? v.oauthMap.get(svc.oauth) : null;
+    const cred = svc.token ? v.credMap.get(svc.token) : null;
+    const viaOAuth = !!oc?.connected;
+    const viaToken = !!cred?.has_secret;
+    const box = el('div', { class: 'svc-conn' });
+    const expand = el('div'); // 슬랙 대화 정책이 열리는 자리(닫혀 있으면 비어 있다)
+    const acts = [];
+    // 슬랙은 '연결했다 = 내 대화가 통째로 열렸다' 라서, 연결 다음에 할 일이 하나 더 있다(#1226). 그게 첫 동작.
+    if (svc.key === 'slack') {
+        const toggle = el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '대화별 허용' });
+        toggle.onclick = () => {
+            if (expand.firstChild) {
+                expand.replaceChildren();
+                toggle.textContent = '대화별 허용';
+                return;
+            }
+            expand.replaceChildren(el('div', { class: 'svc-expand' }, slackChannelPolicyCard()));
+            toggle.textContent = '대화별 허용 닫기';
+        };
+        acts.push(toggle);
+    }
+    if (viaOAuth) {
+        acts.push(el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '다시 연결', onclick: () => void startOAuth(svc, reload) }));
+    }
+    if (viaToken) {
+        acts.push(el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '토큰 교체', onclick: () => openTokenForm(svc, reload) }));
+    }
+    acts.push(el('button', {
+        type: 'button', class: 'btn-text btn-text-danger', text: '연결 해제',
+        onclick: async () => {
+            if (!await confirmDialog({
+                title: svc.label + ' 연결을 해제할까요?', danger: true, confirmText: '연결 해제',
+                message: 'AI가 이 서비스를 내 계정으로 쓰지 못하게 됩니다.',
+                note: '저장해 둔 로그인 정보가 지워집니다 — 다시 쓰려면 처음부터 연결해야 합니다.',
+            }))
+                return;
+            try {
+                if (viaOAuth)
+                    await api('/api/ui/me/oauth/disconnect', { method: 'POST', body: JSON.stringify({ server: svc.oauth }) });
+                if (viaToken)
+                    await api('/api/ui/me/credential/delete', { method: 'POST', body: JSON.stringify({ kind: svc.token, scope_key: cred.scope_key || '' }) });
+                toast('연결을 해제했습니다');
                 reload();
             }
             catch (e) {
-                toast(e.message, true);
-            } } }) : null;
-        wrap.append(el('div', { class: 'admin-actions', style: 'margin:0' }, connectBtn, el('button', { class: 'btn-text', text: '새로고침', onclick: reload }), discBtn));
+                toast((e && e.message) || '해제하지 못했습니다', true);
+            }
+        },
+    }));
+    // 메타 — 토큰형만 시각이 남는다(OAuth 커넥터 목록은 연결 여부만 알려준다). 없으면 아예 안 쓴다.
+    const metaBits = [];
+    if (viaToken && cred?.scope_key)
+        metaBits.push(cred.scope_key);
+    if (viaToken && cred?.last_used_at)
+        metaBits.push('마지막 사용 ' + relTime(cred.last_used_at));
+    else if (viaToken && cred?.updated_at)
+        metaBits.push('연결 ' + relTime(cred.updated_at));
+    box.append(el('div', { class: 'svc-conn-row' }, svcTile(svc.key, svc.label, true), el('div', { class: 'svc-conn-main' }, el('div', { class: 'svc-conn-nm' }, el('span', { text: svc.label }), el('span', { class: 'svc-state', text: '연결됨' }), metaBits.length ? el('span', { class: 'svc-meta', text: metaBits.join(' · ') }) : null), el('div', { class: 'svc-conn-blurb' }, ...uiText(svc.blurb))), el('div', { class: 'svc-conn-acts' }, ...acts)), expand);
+    return box;
+}
+// ── 구역 2 · 연결할 수 있는 서비스 ──
+//  카드 전체가 [연결] 버튼이다 — 카드 안에 또 버튼을 넣으면 어디를 눌러야 하는지 두 번 판단하게 된다.
+//  primary 버튼을 12개 늘어놓지 않는 이유도 같다(디자인시스템: 한 화면 동일 우선순위 primary 는 1개).
+//  진짜 확정(토큰 저장·OAuth 동의)은 그 다음 단계에서 일어나고, primary 는 거기에 있다.
+function availableCard(v, reload) {
+    const card = el('div', { class: 'card' }, cardHead('연결할 수 있는 서비스', '아직 연결하지 않은 서비스입니다. 카드를 누르면 그 자리에서 연결이 시작됩니다 — Google·Notion처럼 계정 로그인으로 연결하는 서비스는 새 탭이 열리고, 나머지는 토큰을 붙여넣습니다.', v.available.length ? el('span', { class: 'head-badge', text: String(v.available.length) }) : null));
+    if (!v.available.length) {
+        card.append(el('div', { class: 'svc-empty' }, el('span', { class: 'svc-empty-t', text: '연결할 수 있는 서비스를 모두 연결했습니다.' }), el('span', { class: 'svc-empty-s' }, ...uiText('새 서비스는 관리자가 조직에 등록하면 여기에 나타납니다.'))));
     }
-    if (svc.token) {
-        if (cred) {
-            wrap.append(el('div', { class: 'svc-item', style: 'margin-top:12px' }, el('span', { class: 'mini-meta', text: '토큰 등록됨 ✓' + (cred.scope_key ? ' · ' + cred.scope_key : '') }), el('span', { class: 'svc-item-actions' }, el('button', { class: 'btn btn-ghost btn-sm', text: '삭제',
-                onclick: async () => { if (!confirm(svc.label + ' 토큰을 삭제할까요?'))
-                    return; try {
-                    await api('/api/ui/me/credential/delete', { method: 'POST', body: JSON.stringify({ kind: svc.token, scope_key: cred.scope_key || '' }) });
-                    toast('삭제됨');
-                    reload();
-                }
-                catch (e) {
-                    toast((e && e.message) || '삭제 실패', true);
-                } } }))));
-        }
-        else if (!oc) {
-            wrap.append(el('div', { style: 'margin-top:12px' }, svcTokenForm(svc.token, reload)));
-        }
+    else {
+        card.append(el('div', { class: 'svc-grid' }, ...v.available.map((s) => availableCardItem(s, reload))));
     }
-    // #1226 — 연결한 다음이 진짜 문제다: 슬랙은 **워크스페이스 통째로만** 권한을 준다(채널별 거부가 없다).
-    //  그래서 '연결했다 = 내가 속한 모든 대화가 AI 에게 열렸다' 가 된다. 그걸 여기서 채널 단위로 되돌린다.
-    if (svc.key === 'slack' && on)
-        wrap.append(slackChannelPolicyCard());
-    return wrap;
+    // 내 힘으로 못 켜는 것 — 목록에서 빼되, 왜 안 보이는지는 말해 준다(안 그러면 '왜 Gmail 이 없지?' 가 남는다).
+    if (v.blockedOAuth.length) {
+        card.append(el('p', { class: 'admin-hint', style: 'margin:12px 0 0' }, ...uiText('관리자가 조직에 먼저 등록해야 연결할 수 있는 서비스는 목록에 없습니다 — '
+            + v.blockedOAuth.map((s) => s.label).join(' · ') + '. 필요하면 관리자에게 요청하세요.')));
+    }
+    return card;
+}
+function availableCardItem(svc, reload) {
+    const viaOAuth = !!svc.oauth;
+    const btn = el('button', { type: 'button', class: 'svc-card' }, el('span', { class: 'svc-card-top' }, svcTile(svc.key, svc.label, false), el('span', { class: 'svc-card-nm', text: svc.label })), el('span', { class: 'svc-card-blurb' }, ...uiText(svc.blurb)), el('span', { class: 'svc-card-cta', text: viaOAuth ? '계정으로 연결 →' : '토큰으로 연결 →' }));
+    btn.onclick = () => { if (viaOAuth)
+        void startOAuth(svc, reload);
+    else
+        openTokenForm(svc, reload); };
+    return btn;
+}
+// ── 연결 동작 ──
+//  OAuth — 새 탭에서 동의를 받고 온다. 돌아왔는지는 타이머로 캐묻지 않고 **창 포커스 한 번**으로 안다:
+//   사용자가 이 탭으로 돌아오는 순간이 곧 '동의 끝났거나 그만뒀다' 는 시점이라, 그때 한 번만 다시 읽으면 된다.
+async function startOAuth(svc, reload) {
+    try {
+        const r = await api('/api/ui/me/oauth/connect', { method: 'POST', body: JSON.stringify({ server: svc.oauth }) });
+        if (r.authorized) {
+            toast('이미 연결되어 있습니다');
+            reload();
+            return;
+        }
+        window.open(r.authorization_url, '_blank', 'noopener');
+        toast('새 탭에서 로그인하고 동의하세요 — 끝나고 이 화면으로 돌아오면 자동으로 반영됩니다');
+        window.addEventListener('focus', () => reload(), { once: true });
+    }
+    catch (e) {
+        toast((e && e.message) || '연결을 시작하지 못했습니다', true);
+    }
+}
+// 토큰 — 모달로 받는다. 인라인으로 펼치면 그리드가 밀려 다른 카드 위치가 흔들린다.
+function openTokenForm(svc, reload) {
+    const host = el('div', { class: 'svc-form-host', style: 'min-width:min(460px, 78vw)' });
+    const back = overlay(svc.label + ' 연결', host);
+    host.append(svcTokenForm(svc.token, () => { back.remove(); reload(); }));
 }
 // ── [Slack] 대화별 열람·발송 허용(#1226 · 기본값 재설계 #1262) ──
 //  체크를 끄면 그 대화는 AI 의 슬랙 호출에서 걸러진다(게이트웨이가 요청을 막고 응답에서 지운다).
@@ -231,41 +308,15 @@ function slackChannelPolicyCard() {
         draw();
     };
     void load();
-    return el('div', { class: 'card', style: 'margin-top:14px' }, cardHead('대화별 열람 · 발송 허용', 'AI 가 내 슬랙에서 무엇을 읽고 어디로 보낼 수 있는지 대화 단위로 정합니다. 여기서 끄면 게이트웨이가 AI 의 슬랙 요청에서 그 대화를 걸러냅니다.'), channelRuleExplainer(), notice, summary, el('div', { class: 'admin-actions', style: 'margin:0 0 10px' }, search, el('button', { class: 'btn-text', text: '새로고침', onclick: () => void load() })), el('div', { style: 'max-height:420px; overflow:auto' }, listBox));
+    // 카드가 아니라 '연결된 슬랙 행에 딸린 상세' 다 — 카드 안 카드를 만들지 않는다(디자인시스템 금지 §9).
+    return el('div', {}, cardHead('대화별 열람 · 발송 허용', 'AI 가 내 슬랙에서 무엇을 읽고 어디로 보낼 수 있는지 대화 단위로 정합니다. 여기서 끄면 게이트웨이가 AI 의 슬랙 요청에서 그 대화를 걸러냅니다.'), channelRuleExplainer(), notice, summary, el('div', { class: 'admin-actions', style: 'margin:0 0 10px' }, search, el('button', { class: 'btn-text', text: '새로고침', onclick: () => void load() })), el('div', { style: 'max-height:420px; overflow:auto' }, listBox));
 }
-// 추가 패널 — 지원하지만 아직 연결 안 한 서비스. [연결] 시 그 서비스 토큰 폼을 인라인으로 편다.
-function addPanel(addable, reload) {
-    const wrap = el('div', {});
-    if (!addable.length) {
-        wrap.append(el('p', { class: 'admin-hint', style: 'margin:0' }, ...uiText('추가로 연결할 서비스가 없어요.')));
-        return wrap;
-    }
-    const list = el('div', { class: 'svc-list' });
-    addable.forEach((s) => {
-        const btn = el('button', { class: 'btn btn-primary btn-sm', text: '연결' });
-        const row = el('div', { class: 'svc-item' }, el('span', { class: 'svc-panel-ic', style: 'font-size:19px', text: s.icon }), el('span', { class: 'svc-item-main' }, el('span', { class: 'mini-title', text: s.label }), el('span', { class: 'mini-meta' }, ...uiText(s.blurb))), el('span', { class: 'svc-item-actions' }, btn));
-        btn.onclick = () => {
-            const next = row.nextElementSibling;
-            if (next && next.classList.contains('svc-inline-form')) {
-                next.remove();
-                return;
-            }
-            row.after(el('div', { class: 'svc-inline-form', style: 'margin:-2px 0 2px' }, svcTokenForm(s.token, reload)));
-        };
-        list.append(row);
-    });
-    wrap.append(list);
-    wrap.append(el('p', { class: 'admin-hint', style: 'margin:12px 0 0' }, ...uiText('Google 등 OAuth로만 연결되는 서비스는 관리자가 조직에 등록하면 위 탭에 떠요.')));
-    return wrap;
-}
-// ── [내 설정 ▸ 내 서비스 로그인] — member_secret vault + OAuth 연결 + git 인증 ──
+// ── [내 설정 ▸ 외부 서비스 관리] — member_secret vault + OAuth 연결 + git 인증 ──
 async function myLoginsSection(detail) {
-    // #762 서비스별 탭 재설계 — 헤더 + [서비스 로그인(탭)] + [레포 접근(개발자용)]. 방식(OAuth/토큰) 노출 안 함.
-    // 제목은 카드에 고정하고, 탭 본문만 안쪽 host 에 그린다 — renderServiceTabs 가 replaceChildren 이라 제목이 같이 지워지면 안 된다.
-    const svcHost = el('div');
-    const svcCard = el('div', { class: 'card' }, cardHead('서비스 로그인', 'AI 가 나를 대신해 이 서비스를 쓰려면 내 계정을 연결해야 합니다. 연결은 나에게만 적용되고, 토큰 값은 저장 후 다시 볼 수 없습니다.'), svcHost);
+    // 제목은 카드 밖에 고정하고, 서비스 카드 두 장만 안쪽 host 가 다시 그린다.
+    const svcHost = el('div', { class: 'admin-stack' });
     const gitCard = el('div', { class: 'card' }, cardHead('리포지토리 접근', '코드 저장소(GitHub·GitLab)에서 클론·푸시할 때 쓰는 SSH 키·토큰입니다. 코드 작업을 하지 않으면 설정하지 않아도 됩니다.', el('span', { class: 'head-badge head-badge-aud', text: '개발자용' })), el('div', { class: 'admin-actions' }, el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: 'git 인증 관리', onclick: () => openGitCredentialManager('me') })));
-    detail.replaceChildren(sectionHead('외부 서비스 관리', 'AI가 내 계정으로 외부 서비스를 쓸 수 있게 연결하고, 연결한 뒤 어디까지 허용할지 정합니다. 여기 설정은 나에게만 적용되고 팀에는 공유되지 않습니다.'), el('div', { class: 'admin-stack' }, svcCard, gitCard));
-    await renderServiceTabs(svcHost);
+    detail.replaceChildren(sectionHead('외부 서비스 관리', 'AI가 내 계정으로 외부 서비스를 쓸 수 있게 연결하고, 연결한 뒤 어디까지 허용할지 정합니다. 여기 설정은 나에게만 적용되고 팀에는 공유되지 않습니다.'), el('div', { class: 'admin-stack' }, svcHost, gitCard));
+    await renderServices(svcHost);
 }
-export { CH_TYPE_LABEL, LOGIN_SERVICES, addPanel, channelRuleExplainer, myLoginsSection, renderServiceTabs, servicePanel, slackChannelPolicyCard, };
+export { CH_TYPE_LABEL, LOGIN_SERVICES, channelRuleExplainer, myLoginsSection, renderServices, slackChannelPolicyCard, };
