@@ -46,8 +46,8 @@ These are promises we intend to keep, published here so you can hold us to them:
    be relicensed to something more restrictive.
 2. **We will not move the core to SSPL, BUSL, or any other non-open-source license.** Loosening
    (for example, AGPL → Apache) remains possible; tightening does not.
-3. **We will not move existing core functionality into `src/ee/`.** New Enterprise features may
-   be added there, but what is AGPL today stays AGPL.
+3. **The free edition stays a complete, working product.** Basic safety and the core value of
+   the product stay AGPL. Enterprise governance and compliance features may live in `src/ee/`.
 
 ## Contributing
 
