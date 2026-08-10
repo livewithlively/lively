@@ -6,7 +6,7 @@
 //  (실기기 e2e 는 별도 — Windows VM 에서 등록·기동까지 확인한다.)
 // 실행: node kit/cli/node-win-contract.test.mjs
 import assert from "node:assert/strict";
-import { muxCandidates, winTaskXml, winRunnerCmd, resolveWinUserId, winInstallArgv, nodeDaemonArtifact, nodeProcProbe, parseProcCount, winStartupDir, winStartupVbs } from "./cmd-node.mjs";
+import { muxCandidates, winTaskXml, winRunnerCmd, resolveWinUserId, winInstallArgv, nodeDaemonArtifact, nodeProcProbe, parseProcCount, winStartupDir, winStartupVbs, tailLines, lastConnectedAt } from "./cmd-node.mjs";
 
 let pass = 0;
 const t = (name, fn) => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -281,6 +281,32 @@ t('E3 ★ .vbs 문자열 이스케이프 — 인용부호가 섞인 경로로 �
   assert.ok(vbs.includes('"""C:\\a""b\\run.cmd"""'), vbs);
   // 한글 사용자명 경로도 그대로 실린다(파일은 UTF-16LE+BOM 으로 써서 wscript 가 제대로 읽는다).
   assert.ok(winStartupVbs({ runnerCmd: 'C:\\Users\\상민\\.lively\\node-agent-run.cmd' }).includes('상민'));
+});
+
+// ── F. 기동 확인 — '등록했다' 를 '돌고 있다' 로 말하지 않는다 (#1541 실측) ────────────────────
+// 왜 필요했나: 시작프로그램 폴백이 등록에 성공해 `✅ 상시화` 를 찍었는데 에이전트는 한 번도 붙지 않았다.
+//  사용자는 초록 체크를 보고 끝났다고 믿었고 노드는 관리탭에서 오프라인이었다.
+t('F1 ★ 연결 판정은 프로세스가 아니라 로그의 "게이트웨이 연결됨" 시각으로 한다', () => {
+  const log = [
+    '{"level":30,"time":1786344258025,"msg":"노드 에이전트 시작"}',
+    '{"level":30,"time":1786344258376,"url":"wss://x/node/ws","msg":"게이트웨이 연결됨"}',
+  ].join("\n");
+  assert.equal(lastConnectedAt(log), 1786344258376);
+  // 재연결이 여러 번이면 **마지막**이 답이다(로그는 append 라 뒤가 최신).
+  assert.equal(lastConnectedAt(log + '\n{"level":30,"time":1786344999999,"msg":"게이트웨이 연결됨"}'), 1786344999999);
+  // 붙은 적 없음 = null. 0 이나 false 로 눕히면 '옛날에 붙었다' 와 구분이 사라진다.
+  assert.equal(lastConnectedAt('{"level":30,"time":1786344258025,"msg":"노드 에이전트 시작"}'), null);
+  assert.equal(lastConnectedAt(""), null);
+  assert.equal(lastConnectedAt(null), null);
+  // 🔴 크래시 루프 방어의 핵심 — 기동 **전** 연결 기록을 이번 기동의 성공으로 세면 안 된다.
+  const since = 1786344258500;
+  assert.ok(!(lastConnectedAt(log) >= since), '🔴 옛 연결 기록을 이번 기동 성공으로 읽었다');
+});
+
+t('F2 로그 꼬리 — 빈 줄을 빼고 마지막 n줄만(실패를 그 자리에서 보여준다)', () => {
+  assert.deepEqual(tailLines("a\n\nb\r\nc\n", 2), ["b", "c"]);
+  assert.deepEqual(tailLines("", 5), [], "로그가 비어도 throw 하지 않는다");
+  assert.equal(tailLines("x\n".repeat(50), 12).length, 12);
 });
 
 console.log(`\n${pass} passed`);

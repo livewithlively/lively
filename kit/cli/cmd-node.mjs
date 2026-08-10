@@ -356,9 +356,11 @@ WantedBy=default.target\n`);
     // stdio:"pipe" — 실패했을 때 **schtasks 가 뭐라 했는지**가 폴백 여부 판단의 근거다(그냥 버리면 진단이 사라진다).
     const r = spawnSync("schtasks", ["/Create", "/TN", WIN_TASK_NAME, "/XML", xmlPath], { encoding: "utf8" });
     if (r.status === 0) {
+      const since = Date.now();                                                            // 기동 **전** 시각 — 이후의 연결만 우리 것으로 센다
       spawnSync("schtasks", ["/Run", "/TN", WIN_TASK_NAME], { stdio: "ignore" });          // 재로그인 기다리지 않고 지금 기동
       say(green(`✅ 노드 '${nodeId}' 상시화(작업 스케줄러) — 로그인마다 자동 연결·죽으면 1분 뒤 재기동`));
       say(dim(`   중지: lively node stop   ·   로그: type ${NODE_LOG}`));
+      reportAgentAlive(since);
       return;
     }
     // ── 폴백: 작업 스케줄러를 **못 쓰는 계정**이 있다(실측 #1541, 일반 사용자 PC). ──
@@ -381,6 +383,7 @@ WantedBy=default.target\n`);
         "  관리자 PowerShell 에서 `lively node --daemon` 을 실행하거나, `lively node` 로 창을 띄워두고 쓰세요.", 1);
     }
     winKillAgentProcs();                                                                   // 재등록 멱등 — 옛 인스턴스 회수
+    const since = Date.now();                                                              // 기동 **전** 시각 — 이후의 연결만 우리 것으로 센다
     // 지금 기동 — 로그인 때와 **같은 경로**로 띄운다(다르게 띄우면 여기선 되고 재부팅 후 안 되는 걸 못 잡는다).
     const started = spawnSync("wscript", [vbsPath], { stdio: "ignore", timeout: 15_000 }).status === 0;
     if (!started) {
@@ -388,9 +391,10 @@ WantedBy=default.target\n`);
       spawn(process.env.COMSPEC || "cmd.exe", ["/c", runnerCmd], { detached: true, stdio: "ignore", windowsHide: true }).unref();
     }
     say(green(`✅ 노드 '${nodeId}' 상시화(시작프로그램) — 로그인마다 자동 연결·죽으면 5초 뒤 재기동`));
-    if (!started) say(yellow("   ⚠ WSH 가 꺼져 있어 로그인 시 자동 시작이 안 될 수 있습니다 — 재부팅 후 `lively node --status` 로 확인하세요."));
+    if (!started) say(yellow("   ⚠ WSH 가 꺼져 있어 로그인 시 자동 시작이 안 될 수 있습니다 — 재부팅 후 `lively status` 로 확인하세요."));
     say(dim("   로그인 전에는 돌지 않습니다(그 기능은 관리자 권한 필요 — 관리자 PowerShell 에서 다시 실행하면 승격됩니다)."));
     say(dim(`   중지: lively node stop   ·   로그: type ${NODE_LOG}`));
+    reportAgentAlive(since);
     return;
   }
   die(`미지원 OS: ${process.platform}`, 1);
@@ -523,6 +527,61 @@ export function winTaskXml({ runnerCmd, userId }) {
   </Actions>
 </Task>
 `;
+}
+
+// ── 기동 확인 — '등록했다' 와 '돌고 있다' 는 다르다 (#1541 실측). ─────────────────────────────
+// 왜 필요했나: 시작프로그램 폴백이 등록에 성공해 `✅ 상시화` 를 찍었는데, 에이전트는 **한 번도 붙지 않았다**.
+//  사용자는 초록 체크를 보고 끝났다고 믿었고, 노드는 관리탭에서 오프라인이었다. 등록 성공을 기동 성공이라고
+//  말한 것 — 그게 거짓말이다. 여기서 실제로 떴는지 보고, 안 떴으면 **로그 꼬리까지 붙여** 사실대로 말한다.
+//  ⚠ '못 쟀다(null)' 와 '안 돈다(false)' 를 구분한다 — 프로브를 못 돌린 걸 실패로 단정하지 않는다(#1087).
+
+/** 동기 sleep — nodeInstallDaemon 이 동기 흐름이라(설치 순서가 곧 안전성이다) await 를 끼울 수 없다. */
+function sleepSync(ms) {
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+  catch { spawnSync(WIN ? "powershell" : "sh", WIN ? ["-NoProfile", "-Command", `Start-Sleep -Milliseconds ${ms}`] : ["-c", `sleep ${ms / 1000}`], { stdio: "ignore" }); }
+}
+
+/** 로그 꼬리 n줄 — 실패했을 때 "로그를 보세요" 대신 **로그를 보여준다**(그 한 번의 왕복이 사람의 하루를 먹는다). */
+export function tailLines(text, n = 12) {
+  return String(text || "").split(/\r?\n/).filter((l) => l.trim()).slice(-n);
+}
+
+/** 로그에서 **마지막으로 게이트웨이에 붙은 시각**(epoch ms) — 없으면 null. 순수.
+ *  ⚠ 프로세스 존재로 판정하면 안 된다: 런처가 5초마다 되살리므로 **크래시 루프도 '실행 중'으로 보인다**.
+ *   우리가 확인해야 하는 건 "떴다" 가 아니라 "붙었다" 다 — 그게 사용자가 관리탭에서 보는 축(online)이다.
+ *   에이전트는 pino 로 한 줄 JSON 을 남긴다: {"level":30,"time":<ms>,...,"msg":"게이트웨이 연결됨"} */
+export function lastConnectedAt(logText, marker = "게이트웨이 연결됨") {
+  let t = null;
+  for (const line of String(logText || "").split(/\r?\n/)) {
+    if (!line.includes(marker)) continue;
+    const m = line.match(/"time":(\d{10,})/);
+    if (m) t = Number(m[1]);            // 마지막 것이 이긴다(로그는 append 라 뒤가 최신)
+  }
+  return t;
+}
+
+/** 기동 확인 후 **사실대로** 보고 — 초록 체크를 이미 찍었으니, 아니면 그 자리에서 취소한다. */
+function reportAgentAlive(since = Date.now(), waitMs = 12_000, stepMs = 2_000) {
+  const readLog = () => { try { return readFileSync(NODE_LOG, "utf8"); } catch { return ""; } };
+  let log = "";
+  for (let waited = 0; ; waited += stepMs) {
+    log = readLog();
+    const at = lastConnectedAt(log);
+    if (at !== null && at >= since) { say(green("   ✓ 게이트웨이 연결 확인 — 지금 온라인입니다.")); return true; }
+    if (waited >= waitMs) break;
+    sleepSync(stepMs);
+  }
+  // 안 붙었다. 프로세스라도 살아 있나로 원인을 갈라준다(안 뜬 것 ≠ 떴는데 못 붙은 것 — 할 일이 다르다).
+  const running = nodeStatus().running;
+  say(yellow(`   ✗ 등록은 됐지만 ${Math.round(waitMs / 1000)}초 안에 게이트웨이에 붙지 않았습니다.`));
+  say(dim(running === true ? "     (에이전트 프로세스는 있습니다 — 연결/인증 단계에서 막혔거나 크래시 루프입니다)"
+    : running === false ? "     (에이전트 프로세스가 없습니다 — 런처가 즉시 죽었습니다)"
+      : "     (프로세스 실행 여부는 확인하지 못했습니다)"));
+  const tail = tailLines(log);
+  if (tail.length) { say(dim("   ── 로그 꼬리 ──")); for (const l of tail) say(dim(`   ${l}`)); }
+  else say(dim(`   로그가 비어 있습니다(${NODE_LOG}) — 런처 자체가 실행되지 않았습니다.`));
+  say(dim("   당장 쓰려면: `lively node` (창을 열어둔 채 foreground 실행)"));
+  return false;
 }
 
 // ── Windows 폴백 상시화(시작프로그램) — 작업 스케줄러를 못 쓰는 계정용(#1541 실측). ────────────
