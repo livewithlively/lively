@@ -64,8 +64,10 @@ function partition(oauth: any, creds: any): SvcView {
 // ── 화면 그리기 ──
 //  host 하나를 통째로 다시 그린다(상태가 서버에 있고 화면엔 없어서, 부분 갱신할 게 없다).
 async function renderServices(host: any) {
-  // 화면을 떠난 뒤(다른 탭으로 이동) 늦게 돌아오는 재렌더는 버린다 — OAuth 복귀 focus 훅이 그 경우를 만든다.
-  if (host.isConnected === false) return;
+  // ⚠ 여기서 host.isConnected 로 '이미 화면을 떠났나'를 거르면 안 된다 — 관리탭 셸은 detach 된 detail 노드에
+  //  **먼저 그린 다음** 붙인다(admin-shell.ts). 그래서 최초 렌더 시점의 host 는 항상 미부착이고, 그걸 거르면
+  //  화면이 통째로 비어 버린다(실측). OAuth 복귀 focus 훅이 뒤늦게 부르는 경우는 {once:true} 라 1회뿐이고,
+  //  미부착 노드에 그리는 건 무해하다 — 막을 값이 못 된다.
   host.replaceChildren(el('div', { class: 'card' }, skeleton('연결 상태를 불러오는 중')));
   let creds: any = { credentials: [] }, oauth: any = { connectors: [] };
   try {
