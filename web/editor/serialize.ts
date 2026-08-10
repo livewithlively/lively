@@ -71,7 +71,9 @@ function blocksToMd(blocks: any[]): string {
         const d = Math.min(it.indent || 0, 4);
         counters.length = d + 1;   // 더 깊은 카운터 리셋
         let marker = '-';
-        if (it.type === 'numbered') { counters[d] = (counters[d] || 0) + 1; marker = counters[d] + '.'; }
+        //  시작 번호(#1581) — run 첫 항목의 it.start 를 존중(이후는 +1). 화면 마커(blocks.ts renumber)와 같은 규칙이라
+        //  '보이는 번호 = 저장되는 번호'가 유지된다.
+        if (it.type === 'numbered') { counters[d] = counters[d] ? counters[d] + 1 : Math.max(1, Number(it.start) || 1); marker = counters[d] + '.'; }
         else counters[d] = 0;
         const text = String(it.text || '').replace(/\n+/g, ' ');
         lines.push('  '.repeat(d) + marker + ' ' + (it.type === 'todo' ? (it.checked ? '[x] ' : '[ ] ') : '') + text);

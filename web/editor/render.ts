@@ -51,6 +51,9 @@ export function createRender(ctx: EditorCtx) {
       }
       case 'bullet': case 'numbered': case 'todo': {
         block.dataset.indent = String(Math.min(d.indent || 0, 4));
+        // 번호 목록의 **시작 번호**(#1581) — 사용자가 `3. ` 로 시작했으면 3 부터. 1 은 기본이라 안 남긴다.
+        //  이 값은 그 리스트 run 의 첫 항목에서만 의미가 있다(renumber·blocksToMd 가 이후 항목을 +1 로 매긴다).
+        if (d.type === 'numbered' && Number(d.start) > 1) block.dataset.start = String(Number(d.start));
         const row = el('div', { class: 'be-li' });
         if (d.type === 'todo') {
           block.dataset.checked = d.checked ? '1' : '';

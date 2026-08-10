@@ -54,6 +54,7 @@ export interface EditorCtx {
   deleteBlock(block: HTMLElement): void;
   ensureOne(): void;
   isEmptyNow(): boolean;
+  refreshEmpty(): void;
   focusBlock(block: HTMLElement, atStart?: boolean): void;
   convertBlock(block: HTMLElement, to: any): HTMLElement;
   insertBlockAfter(block: HTMLElement | null, data: any): HTMLElement;

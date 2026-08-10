@@ -30,7 +30,7 @@ export function createBlocks(ctx) {
             case 'h': return { type, level: Number(block.dataset.level) || 1, text: t ? inlineDomToMd(t) : '' };
             case 'bullet':
             case 'numbered':
-                return { type, indent: Number(block.dataset.indent) || 0, text: t ? inlineDomToMd(t) : '' };
+                return { type, indent: Number(block.dataset.indent) || 0, start: Number(block.dataset.start) || undefined, text: t ? inlineDomToMd(t) : '' };
             case 'todo':
                 return { type, indent: Number(block.dataset.indent) || 0, checked: block.dataset.checked === '1', text: t ? inlineDomToMd(t) : '' };
             case 'quote':
@@ -65,6 +65,9 @@ export function createBlocks(ctx) {
             .filter((n) => n.classList && n.classList.contains('be-block'))
             .map((n) => blockData(n));
     }
+    // 이 깊이에서 **새로 시작하는** 번호 시퀀스의 첫 값 — 블록에 시작 번호(data-start)가 있으면 그걸 쓴다(#1581).
+    //  이미 세던 중(prev 있음)이면 이어서 +1. 시작 번호는 run 의 첫 항목에서만 읽는다(CommonMark 와 동일).
+    const nextNum = (prev, b) => (prev ? prev + 1 : Math.max(1, Number(b.dataset.start) || 1));
     // 번호 목록 재부여 + 글머리 글리프(깊이별 • ◦ ▪) + 들여쓰기 패딩 — 컨테이너(루트/토글/컬럼) 스코프별로.
     function renumberIn(scope) {
         const counters = [];
@@ -81,7 +84,7 @@ export function createBlocks(ctx) {
                 row.style.paddingLeft = (d * 26) + 'px';
             const marker = b.querySelector('.be-marker');
             if (type === 'numbered') {
-                counters[d] = (counters[d] || 0) + 1;
+                counters[d] = nextNum(counters[d], b);
                 if (marker)
                     marker.textContent = counters[d] + '.';
             }
@@ -115,7 +118,7 @@ export function createBlocks(ctx) {
                     row.style.paddingLeft = (d * 26) + 'px';
                 const marker = b.querySelector('.be-marker');
                 if (type === 'numbered') {
-                    counters[d] = (counters[d] || 0) + 1;
+                    counters[d] = nextNum(counters[d], b);
                     if (marker)
                         marker.textContent = counters[d] + '.';
                 }
@@ -192,10 +195,15 @@ export function createBlocks(ctx) {
         if (nb && nb.isConnected)
             focusBlock(nb, false);
     }
+    // 빈 에디터 표식(.be-empty) — 플레이스홀더 노출 조건의 **단일 출처**(21-wiki-notion.css).
+    //  CSS 선택자로는 '텍스트가 비었나'를 정확히 물을 수 없어(:empty 는 <br> 에 지고, :has(> br:only-child) 는
+    //  텍스트 노드를 안 세서 `첫 줄<br>둘째 줄` 에도 걸렸다 — 안내문이 본문 위에 겹쳐 그려졌다, #1581)
+    //  타이핑마다 여기서 판정한다. 블록이 하나일 때만 실검사라 비용은 무시할 수준.
+    function refreshEmpty() { root.classList.toggle('be-empty', isEmptyNow()); }
     function ensureOne() {
         if (!blockEls().length)
             root.append(makeBlock({ type: 'p', text: '' }));
-        root.classList.toggle('be-empty', isEmptyNow());
+        refreshEmpty();
         // 에디터가 통째로 빈 상태(유일한 빈 문단) — 그 블록에 에디터 수준 안내 플레이스홀더를 얹는다(포커스 없이도 노출).
         const bs = blockEls();
         if (bs.length === 1 && bs[0].dataset.type === 'p' && opts.placeholder) {
@@ -267,5 +275,5 @@ export function createBlocks(ctx) {
         return nb;
     }
     return { blockEls, blockOf, textElOf, prevTextBlock, nextTextBlock, blockData, renumber, normalizeStructure,
-        duplicateBlock, moveBlockDir, deleteBlock, ensureOne, isEmptyNow, focusBlock, convertBlock, insertBlockAfter, toToggleBlock };
+        duplicateBlock, moveBlockDir, deleteBlock, ensureOne, isEmptyNow, refreshEmpty, focusBlock, convertBlock, insertBlockAfter, toToggleBlock };
 }
