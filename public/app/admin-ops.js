@@ -5,6 +5,8 @@
 //   클로저 버그가 난다(원래 주석 그대로 보존). 캐시하지 마라.
 import { api, cardHead, el, toast, uiText } from './core.js';
 import { fmtBytes, sectionHead } from './admin-widgets.js';
+// ⚠ confirmDialog 는 정의처(ui-primitives)에서 직접 — admin.ts 배럴을 거치면 순환이 된다(admin-collector-presets 와 같은 이유).
+import { confirmDialog } from './ui-primitives.js';
 // 로그(#1059 — '컴퓨팅 리소스'에서 분리한 별도 메뉴). 게이트웨이 로그 파일 크기 + 회전(보관) 정책.
 //  데이터 출처는 저장소와 같은 /api/ui/org/storage(logs·policy.log_*). 저장은 storage_policy 의 log 필드만(병합 — 디스크·메모리 보존).
 function logsEditor(detail, data) {
@@ -121,9 +123,14 @@ function sessionsAdminEditor(detail, data) {
             if (s.managed)
                 reclaimBtn.title = '상시(managed) 세션은 keep-alive 가 되살리므로 회수 대상이 아닙니다.';
             reclaimBtn.addEventListener('click', async () => {
+                // #1582 — 브라우저 confirm 대신 라이블리 확인창(세션을 다루는 다른 화면과 같은 모양·같은 어휘).
+                //  회수는 남의 세션을 건드리는 관리자 동작이라, 무엇이 보존되고 무엇이 끊기는지 둘 다 적는다.
                 const inUse = s.attached || s.agentState === 'busy' || s.agentState === 'waiting';
-                const warn = inUse ? '\n\n⚠ 지금 사용 중(접속/작업/대기)입니다 — 회수하면 진행 화면이 끊깁니다(대화는 보존, 다시 열 수 있음).' : '';
-                if (!confirm(`세션 “${s.label || s.id}”을(를) 회수할까요?\n메모리를 되찾고 “복원 가능” 목록에 남습니다(대화·설정 보존).${warn}`))
+                if (!await confirmDialog({
+                    title: `‘${s.label || s.id}’ 세션을 회수할까요?`, danger: true, confirmText: '회수', cancelText: '취소',
+                    message: '메모리를 되찾고 「복원 가능」 목록에 남습니다 — 대화·설정은 보존되고 소유자가 다시 열 수 있어요.',
+                    lines: inUse ? ['⚠ 지금 사용 중(접속·작업·대기)입니다 — 회수하면 진행 중이던 화면이 끊깁니다.'] : [],
+                }))
                     return;
                 reclaimBtn.disabled = true;
                 reclaimBtn.textContent = '회수 중…';

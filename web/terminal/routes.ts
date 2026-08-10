@@ -317,7 +317,7 @@ async function renderTerminal(view) {
     const lines: string[] = [];
     if (live) lines.push('⚠ 이 중 ' + live + '개는 아직 도는 세션입니다.');
     if (skipped) lines.push('남의 세션 ' + skipped + '개는 제외됩니다(소유자만 종료 가능).');
-    if (!await tsessConfirmEnd(items.length + '개 세션을 종료할까요?', lines)) return;
+    if (!await tsessConfirmEnd(items.length + '개 세션을 종료할까요?', lines, items)) return;
     btn.disabled = true;
     // 병렬 종료 — 일부 실패해도 나머지는 진행(성공/실패 건수 보고). 노드 세션은 ?node= 로 위임(#869).
     const results = await Promise.allSettled(

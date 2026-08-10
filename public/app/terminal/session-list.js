@@ -2,7 +2,9 @@
 //  소비자: terminal/routes.ts + 대시보드 '내 AI 세션'(openSessPrompts — 배럴 terminal.ts 경유).
 //  import 방향: status-filter·select-bar·session-form(전부 아래층)만 본다 — routes.ts 는 보지 않는다.
 import { api, appUrl, el, toast } from '../core.js';
-import { confirmDialog, overlay } from '../admin.js';
+import { overlay } from '../admin.js';
+// #1582 — 세션 종료·목록제거 확인창은 전 화면 공용 정의 하나만 쓴다.
+import { confirmSessionForget, endedToast } from '../session-actions.js';
 import { TSESS_STATUS, relAgo, shortDir, tsessConfirmEnd } from './status-filter.js';
 import { termUrl } from './select-bar.js';
 import { memberName, openTermEdit } from './session-form.js';
@@ -345,17 +347,18 @@ function tsessCard(s, ctx) {
     if (s.owned) {
         if (!s.restorable)
             acts.append(el('button', { class: 'tsess-icon', title: '이름·초대 수정', text: '수정', onclick: () => openTermEdit(s, cfg, view) }));
-        // restorable 은 '복원 목록에서 제거'(desired-state 삭제), 라이브는 '종료'(tmux 종료, 대화록은 세션 기록에 남아 이어받기 가능). 둘 다 DELETE(백엔드가 gone→forget 처리).
-        acts.append(el('button', { class: 'tsess-icon danger', title: s.restorable ? '복원 목록에서 제거' : '이 세션을 끝낸다(대화록은 세션 기록에 남아 나중에 이어받을 수 있음)', text: s.restorable ? '제거' : '종료', onclick: async () => {
+        // restorable 은 '복원 목록에서 지우기'(desired-state 삭제), 라이브는 '종료'(tmux 종료, 대화록은 세션 기록에 남아 이어받기 가능). 둘 다 DELETE(백엔드가 gone→forget 처리).
+        acts.append(el('button', { class: 'tsess-icon danger', title: s.restorable ? '이 세션 카드를 복원 목록에서 지운다(대화록은 세션 기록에 남는다)' : '이 세션을 끝낸다(작업 폴더·파일은 그대로, 대화록은 세션 기록에 남아 나중에 이어받을 수 있음)', text: s.restorable ? '지우기' : '종료', onclick: async () => {
+                // #1582 — restorable 쪽 확인창도 공용 정의로. 종전엔 '더는 복원할 수 없어요'만 말해서, 잃는 것이
+                //  세션 카드(폴더·설정)뿐인데 **대화록까지 사라지는 것처럼** 읽혔다.
                 const ok = s.restorable
-                    ? await confirmDialog({ title: '‘' + (s.label || '이름 없음') + '’ 을(를) 복원 목록에서 제거할까요?', danger: true,
-                        confirmText: '제거', cancelText: '취소', message: '더는 이 세션을 복원할 수 없어요.' })
-                    : await tsessConfirmEnd('‘' + (s.label || '이름 없음') + '’ 세션을 종료할까요?');
+                    ? await confirmSessionForget({ title: '‘' + (s.label || '이름 없음') + '’ 을(를) 복원 목록에서 지울까요?', sessions: [s] })
+                    : await tsessConfirmEnd('‘' + (s.label || '이름 없음') + '’ 세션을 종료할까요?', [], [s]);
                 if (!ok)
                     return;
                 try {
                     await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' });
-                    toast(s.restorable ? '복원 목록에서 제거됨' : '세션을 종료했습니다 — 대화록은 📜 세션 기록에 남아 있어요');
+                    toast(s.restorable ? '복원 목록에서 지웠어요' : await endedToast(1, [s]));
                     reRender();
                 }
                 catch (e) {

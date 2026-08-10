@@ -17,7 +17,7 @@ import { sessionPrompts, searchPrompts, searchPromptsHybrid, transcriptExists } 
 import { activeEmbeddingProvider } from "../v6/search-util.js";
 import { setupPtyUpgrade, type TicketLookup } from "./terminal-pty.js";
 import { registerTerminalFiles } from "./terminal-files.js";
-import { listMembers } from "../org/store.js";
+import { listMembers, getRuntimeConfig } from "../org/store.js";
 import { isProjectSessionDir } from "../project/project-fs.js";
 // 분산 노드(#869) — 원격 노드 세션의 목록 병합·CRUD 위임. 정책(소유·초대 검증)은 여기, 실행은 노드(F7).
 import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, liveNodes } from "../node/registry.js";
@@ -221,6 +221,22 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const local = all.filter(keep);
     const localRestorable = restorable.filter(keep);
     res.json({ sessions: [...local, ...localRestorable, ...remote] });
+  }));
+  // 세션 종료 확인창이 '대화 기록이 남는지'를 **사실대로** 말하기 위한 최소 정책 조회(#1582).
+  //  왜 필요한가: 종전 확인창은 전 화면에서 "되돌릴 수 없어요"라고 단언했지만, 종료(DELETE)는 tmux 를 죽이고
+  //   desired-state 행을 지울 뿐 **작업 폴더도 대화록도 건드리지 않는다**. 반대로 "대화록은 남아요"라고 못 박아도
+  //   조직이 세션 공유를 안 켰거나 그 하네스가 캡처 대상이 아니면 그건 거짓이 된다 — 어느 쪽으로도 단언하면 틀린다.
+  //   그래서 프론트가 확인창을 그리기 직전에 이걸 한 번 물어보고 문구를 고른다.
+  //  비밀 없음(캡처 on/off · 대상 하네스 · 보존일)이라 admin 게이트를 걸지 않는다 — 어차피 자기 세션을 종료하는
+  //   모든 멤버가 알아야 할 사실이고, org_runtime_config 전량(work_roots 등)은 여기로 나가지 않는다.
+  app.get("/api/ui/terminal/session-log-policy", auth, wrap(async (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const c = await getRuntimeConfig();
+    res.json({
+      enabled: c.session_share.enabled,
+      harnesses: c.session_share.harnesses,
+      retentionDays: c.session_share.retention_days,   // 0 = 무제한
+    });
   }));
   // 단일 세션의 현재 이름 — 단독 터미널 페이지가 id 로 조회(프로젝트 세션은 목록에서 빠져 ?label= 폴백만 됐던 문제 해결).
   //  접근통제: canAttach(소유자·초대된 멤버, 프로젝트 세션은 전원 #452) — 입장 가능한 사람만 이름을 읽는다.
