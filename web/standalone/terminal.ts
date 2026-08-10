@@ -305,7 +305,7 @@ let pendingPaneState = null, lastStateAt = 0, lastMouseResetAt = 0, lastMousePro
 //  발생하지 않으므로 자동으로 무영향이고, 백엔드 종류를 클라가 알 필요도 없다.
 const BACKFILL_WAIT_MS = 900;   // 상태 블록 뒤 이 시간 안에 백필이 없으면 '캡처 불가'로 본다
 const MAX_NUDGES = 3;           // 연결당 상한 — 회복이 안 될 때 화면이 무한히 깜빡이지 않게
-let backfillWatch = null, nudgeTries = 0, needBackfill = false;
+let backfillWatch = null, nudgeTries = 0, needBackfill = false, lastKnownState = null;
 function clearBackfillWatch() { if (backfillWatch) { clearTimeout(backfillWatch); backfillWatch = null; } }
 // 크기 넛지 — r-1 로 줄였다 되돌린다. 순수 계산부는 아래 nudgeSizes(테스트가 이 표를 지킨다).
 export function nudgeSizes(cols, rows) {
@@ -324,6 +324,9 @@ export function captureUnsafe(st) {
 // 크기 넛지 실행 — 앱이 리사이즈를 두 번 받아 화면 전체를 다시 그린다.
 function doNudge() {
   if (++nudgeTries > MAX_NUDGES) return;
+  // ⚠ 넛지 직전에 fit 을 확정한다 — 폰트 정착 전 크기로 넛지하면 앱이 **다른 크기로** 전체를 그려
+  //  클라 화면과 어긋난다(실측: 상단 일부가 화면 위로 벗어남). 넛지는 '지금 확정된 크기'를 기준으로만 의미가 있다.
+  try { if (fit) fit.fit(); } catch (_) { /* noop */ }
   const msgs = nudgeSizes(term && term.cols, term && term.rows);
   if (!msgs || !ws || ws.readyState !== 1) return;
   try { ws.send(JSON.stringify(msgs[0])); } catch (_) { /* noop */ }
@@ -379,6 +382,7 @@ export function isMouseReport(d) { return /^\x1b\[(<[0-9;]+[Mm]|[0-9;]+M|M)/.tes
 // 클라 xterm 상태를 tmux pane 실상태에 맞춘다. 모든 쓰기는 '실제 불일치일 때만'(가드) — 일치하면 no-op.
 export function applyPaneState(st) {
   if (!term || !st) return;
+  lastKnownState = st;   // 소비되지 않는 사본 — forceRedraw 가 '캡처를 걸어도 되나'를 판단하는 근거
   pendingPaneState = st; // 바로 뒤따르는 백필의 커서 복원용
   lastStateAt = Date.now();
   // alt-screen 동기화 — 추측(옛 #252)이 아니라 tmux 실상태로. 앱 alt인데 클라 normal → 진입(#252 재접속 보정),
@@ -444,9 +448,13 @@ function forceRedraw() {
   if (ws && ws.readyState === 1) {
     lastCols = term.cols; lastRows = term.rows;
     try { ws.send(JSON.stringify({ t: 'r', c: term.cols, r: term.rows })); } catch (_) { /* noop */ }
-    // 깨끗이 재캡처(+상태 동기화). '화면 복구' 버튼도 이 길을 타므로 넛지 폴백을 같이 건다 —
-    //  alt-screen 에서 캡처가 빈 백엔드에선 이 버튼이 **유일한 회복 수단**이 된다(재연결은 같은 공백을 반복한다).
-    if (ctrl && ctrl.isControl()) { try { ws.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES, st: 1 })); armBackfillWatch(); } catch (_) { /* noop */ } }
+    // 깨끗이 재캡처(+상태 동기화). ⚠ 단, **캡처가 스트림을 멈추는 조합엔 절대 보내지 않는다**(#1541) —
+    //  이 경로는 새로고침 직후 자동(initialSettleRedraw)으로도, '화면 복구' 버튼으로도 돈다. 여기가 안 막히면
+    //  방금 살려낸 스트림을 다시 잠근다(실측: 강력 새로고침 3회 중 2회 화면 상단이 어긋남).
+    if (ctrl && ctrl.isControl()) {
+      if (captureUnsafe(lastKnownState)) { doNudge(); return; }
+      try { ws.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES, st: 1 })); armBackfillWatch(); } catch (_) { /* noop */ }
+    }
   }
   try { term.refresh(0, term.rows - 1); } catch (_) { /* noop */ }
 }

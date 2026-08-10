@@ -551,7 +551,7 @@
   }
   function diagText() {
     return [
-      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build cbd4d2bf",
+      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build cfe02dd9",
       "ua: " + navigator.userAgent,
       "session: " + SESSION_ID + (NODE_ID ? " node=" + NODE_ID : ""),
       "secure: " + window.isSecureContext + " \xB7 exported: " + (/* @__PURE__ */ new Date()).toISOString(),
@@ -707,7 +707,7 @@
   var pendingPaneState = null, lastStateAt = 0, lastMouseResetAt = 0, lastMouseProbeAt = 0, mouseResetTries = 0;
   var BACKFILL_WAIT_MS = 900;
   var MAX_NUDGES = 3;
-  var backfillWatch = null, nudgeTries = 0, needBackfill = false;
+  var backfillWatch = null, nudgeTries = 0, needBackfill = false, lastKnownState = null;
   function clearBackfillWatch() {
     if (backfillWatch) {
       clearTimeout(backfillWatch);
@@ -726,6 +726,10 @@
   }
   function doNudge() {
     if (++nudgeTries > MAX_NUDGES) return;
+    try {
+      if (fit) fit.fit();
+    } catch (_) {
+    }
     const msgs = nudgeSizes(term && term.cols, term && term.rows);
     if (!msgs || !ws || ws.readyState !== 1) return;
     try {
@@ -794,6 +798,7 @@
   }
   function applyPaneState(st) {
     if (!term || !st) return;
+    lastKnownState = st;
     pendingPaneState = st;
     lastStateAt = Date.now();
     try {
@@ -869,6 +874,10 @@
       } catch (_) {
       }
       if (ctrl && ctrl.isControl()) {
+        if (captureUnsafe(lastKnownState)) {
+          doNudge();
+          return;
+        }
         try {
           ws.send(JSON.stringify({ t: "cap", n: BACKFILL_LINES, st: 1 }));
           armBackfillWatch();
@@ -2242,7 +2251,7 @@
           "\uBB38\uC81C\uAC00 \uC0DD\uACBC\uC744 \uB54C",
           tool("\uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", "\uC785\uB825\uC774 \uC774\uC0C1\uD560 \uB54C(\uD0A4\uB9CC \uB20C\uB7EC\uB3C4 \uAC19\uC740 \uBB38\uC790\uC5F4\uC774 \uB4E4\uC5B4\uAC00\uB294 \uB4F1) \uC544\uB798 \uBC84\uD2BC\uC73C\uB85C \uCD5C\uADFC \uC785\uB825 \uAE30\uB85D\uC744 \uBCF5\uC0AC\uD574 \uC81C\uBCF4\uC5D0 \uBD99\uC5EC \uC8FC\uC138\uC694 \u2014 \uC11C\uBC84\uB85C\uB294 \uC804\uC1A1\uB418\uC9C0 \uC54A\uC544\uC694"),
           el("button", { class: "tbtn", text: "\u{1F50D} \uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", onclick: () => copyText(diagText(), false, true) }),
-          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "cbd4d2bf \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
+          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "cfe02dd9 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
         ),
         sec(
           "\uB3C4\uAD6C (\uC624\uB978\uCABD \uC704 \uBC84\uD2BC)",
