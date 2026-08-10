@@ -54,8 +54,10 @@ if (typeof window !== 'undefined' && !window.__wkUnloadGuard) {
         wkFlushAll(); });
     window.addEventListener('pagehide', () => wkFlushAll());
     window.addEventListener('online', () => wkFlushAll());
+    //  ⚠ #1600 이후 문서 본문은 **확인 없이 저장하지 않는다** — 미저장분이 flush 로 구제되지 않으므로
+    //   온라인이어도 dirty 면 이탈을 경고해야 한다(종전엔 자동저장이 받아 줘서 오프라인일 때만 경고했다).
     window.addEventListener('beforeunload', (e) => {
-        if (!navigator.onLine && wkAnyEditorDirty()) {
+        if (wkAnyEditorDirty()) {
             e.preventDefault();
             e.returnValue = '';
         }

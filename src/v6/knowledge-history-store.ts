@@ -70,6 +70,10 @@ export interface KnowledgeHistoryRow {
   /** 분류 변경(#1563) — link/unlink/propose_category 행에서만 채워진다. 그 외 op 은 양쪽 null. */
   category_before: string | null;
   category_after: string | null;
+  /** 왜 고쳤나(#1600) — 저장하며 함께 낸 한 줄 이유(change_note). 안 적고 저장하면 null. */
+  note: string | null;
+  /** 어디서 고쳤나(#1600) — 그 쓰기가 일어난 터미널 세션(x-lively-session). 웹 편집은 null. */
+  session_id: string | null;
 }
 
 export interface KnowledgeHistoryFilter {
@@ -103,7 +107,7 @@ export async function listKnowledgeHistory(
 
   const [rowsRes, countRes] = await Promise.all([
     itemsPool.query(
-      `SELECT a.id, a.at, a.op, a.entity, a.actor, a.actor_kind, a.channel,
+      `SELECT a.id, a.at, a.op, a.entity, a.actor, a.actor_kind, a.channel, a.note, a.session_id, a.note, a.session_id,
               a.before->>'body_md'  AS body_before,
               a.after ->>'body_md'  AS body_after,
               a.before->>'title'    AS title_before,
@@ -158,6 +162,8 @@ export async function listKnowledgeHistory(
       title_changed: op !== "insert" && op !== "restore" && tb !== ta,
       category_before: (r.category_before as string | null) ?? null,
       category_after: (r.category_after as string | null) ?? null,
+      note: (r.note as string | null) ?? null,
+      session_id: (r.session_id as string | null) ?? null,
     };
   });
   return { rows, total: Number((countRes as { total?: number } | undefined)?.total ?? 0) };
@@ -169,6 +175,7 @@ export async function listKnowledgeHistory(
 export interface KnowledgeHistoryEntry {
   audit_id: number; at: string; op: string; entity: string;
   actor: string | null; actor_display: string | null; actor_kind: string | null; channel: string | null;
+  note: string | null; session_id: string | null;
   //  body_md 가 **null 일 수 있다**: 스냅샷 객체는 있는데 본문 키가 없는 op 이 있다(link_category 의 after 는
   //  `{category_id, state}` 다). 여기서 `?? ""` 로 뭉개면 화면이 '본문이 빈 버전'과 '이 op 은 본문을 안 남긴다'를
   //  구분 못 해, 분류 변경 행이 '이 시점에 문서가 처음 만들어졌습니다'로 표시된다(실측으로 잡힌 거짓말).
@@ -199,6 +206,8 @@ export async function getKnowledgeHistoryEntry(name: string, auditId: number): P
     actor_display: (r.actor_display as string | null) ?? null,
     actor_kind: (r.actor_kind as string | null) ?? null,
     channel: (r.channel as string | null) ?? null,
+    note: (r.note as string | null) ?? null,
+    session_id: (r.session_id as string | null) ?? null,
     // insert 의 before, delete 의 after 는 통째로 null 이다 — 빈 문자열로 뭉개면 화면이 '내용 없는 버전'과
     //  '그 시점엔 문서가 없었음'을 구분 못 한다. null 을 그대로 흘린다.
     before: r.has_before ? { title: (r.title_before as string | null) ?? null, body_md: (r.body_before as string | null) ?? null } : null,

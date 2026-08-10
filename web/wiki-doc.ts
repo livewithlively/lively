@@ -9,6 +9,7 @@
 import { absTime, api, el, errorNote, relTime, renderMarkdown, safeHref, toast } from './core.js';
 import { skeleton } from './learn.js';
 import { createBlockEditor } from './block-editor.js';
+import { confirmDialog } from './ui-primitives.js';
 import { applyCoverBg, openCoverPicker, openEmojiPicker } from './page-decor.js';
 import {
   HOME_EMPTY, KN_TYPE_LABEL, buildKnPropsBlock, fetchKnHiddenProps, hasMemoryScope, isCategoryHomeDoc,
@@ -114,6 +115,12 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
     };
     actions.append(pinBtn);
   }
+  // 변경 이력(#1600) — 종전 진입점은 ⋯ 메뉴와 속성줄의 회색 '갱신 …' 글씨뿐이라 아무도 못 찾았다.
+  //  "누가 언제 무엇을 왜 고쳤나"는 이 문서를 믿을지 판단하는 근거라, 문서 위에 상시 노출한다.
+  const histBtn = el('button', { class: 'wk-folio-btn wk-hist', type: 'button',
+    title: '이 문서가 언제·누가·무엇을 고쳤는지, 고치기 전과 후를 나란히 봅니다', text: '↺ 수정 기록' });
+  histBtn.onclick = () => openKnHistory(k.name, { canEdit: editableDoc, currentVersion: k.version, onReverted: reload });
+  actions.append(histBtn);
   const moreBtn = el('button', { class: 'wk-folio-btn wk-more', type: 'button', title: '문서 동작', 'aria-label': '문서 동작', text: '⋯' });
   actions.append(moreBtn);
 
@@ -213,6 +220,15 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
       const t = (titleEl.textContent || '').trim();
       if (!t) { titleEl.textContent = k.title || k.name; return; }
       if (t === (k.title || k.name)) return;
+      //  본문과 같은 약속(#1600) — 제목도 물어보고 바꾼다. 스쳐 지나가다 고쳐지는 자리가 아니어야 한다.
+      const okTitle = await confirmDialog({
+        title: '제목을 바꿀까요?',
+        message: '“' + (k.title || k.name) + '” → “' + t + '”',
+        lines: ['바꾸면 변경 이력에 남고, 목록·검색에 보이는 이름이 바뀝니다.'],
+        confirmText: '제목 바꾸기',
+        cancelText: '되돌리기',
+      });
+      if (!okTitle) { titleEl.textContent = k.title || k.name; return; }
       try {
         const payload: any = { name: k.name, title: t, body_md: bodyMdNow() };
         if (k.is_folder) payload.is_folder = true;
@@ -389,16 +405,42 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
     saving = false;
     if (!lastSaveFailed && editor && editor.isDirty()) queueSave();   // 저장 중 추가 편집분 재큐잉(성공 시에만)
   };
-  //  실시간 저장 리듬 — 600ms trailing 디바운스 + 최초 편집 후 4s 이내 강제 flush(연속 타이핑 중 미저장 창 제거).
+  // ── 저장 리듬(#1600) — **자동저장하지 않는다. 편집을 마칠 때 한 번 묻는다.** ──
+  //  종전엔 600ms 디바운스로 타이핑이 곧 저장이었다. 그래서 지나가다 잘못 누르고 한 글자만 스쳐도
+  //  버전이 오르고 변경 이력에 남았다("수정의 허들이 너무 낮다" — 사용자 지적).
+  //  지금은 타이핑 중엔 화면에만 남기고, 본문 밖으로 나갈 때 실제로 바뀐 게 있으면 확인창을 띄운다.
+  //  ⌘S 는 명시적 의도라 묻지 않고 바로 저장한다.
   const queueSave = () => {
     lastSaveFailed = false;
     if (!firstEditAt) firstEditAt = Date.now();
-    setChip('저장 중…', true);
     clearTimeout(saveTimer);
-    const waited = Date.now() - firstEditAt;
-    if (waited >= 4000) { doSave(); return; }   // maxWait — 리셋 무시 강제 저장
-    saveTimer = setTimeout(doSave, Math.min(600, 4000 - waited));
+    setChip('수정 중 — 아직 저장 안 됨');
   };
+  //  편집을 마쳤을 때(본문 밖 클릭·다른 화면으로 이동) 묻는다. 실제 변경이 없으면 묻지 않는다.
+  let confirming = false;
+  async function confirmAndSave(): Promise<boolean> {
+    if (!editor || !editor.isDirty() || confirming || rawOpen) return false;
+    confirming = true;
+    let ok = false;
+    try {
+      ok = await confirmDialog({
+        title: '지식을 수정할까요?',
+        message: '이 문서의 내용이 바뀌었습니다.',
+        lines: [
+          '수정하면 변경 이력에 남고, 다른 사람과 AI가 보는 내용이 바뀝니다.',
+          '되돌리기를 누르면 방금 고친 것은 사라지고 원래 내용으로 돌아갑니다.',
+        ],
+        confirmText: '수정',
+        cancelText: '되돌리기',
+      });
+    } finally { confirming = false; }
+    if (ok) { clearTimeout(saveTimer); await doSave(true); return true; }
+    //  되돌리기 — 화면을 원래 본문으로 되돌린다. 반쯤 고쳐진 상태로 두면 다음 편집이 그걸 기준으로 삼는다.
+    editor.setMarkdown(k.body_md || '');
+    editor.resetDirty();
+    setChip('저장됨');
+    return false;
+  }
 
   if (k.is_folder) {
     body.append(await knFolderChildrenBlock(k));
@@ -407,9 +449,16 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
       initial: k.body_md || '',
       placeholder: "내용 입력 · '/' 블록 메뉴",
       onChange: queueSave,
-      onSaveShortcut: () => { clearTimeout(saveTimer); doSave(); },
-    }), () => { if (editor && editor.isDirty()) { clearTimeout(saveTimer); doSave(true, { keepalive: true }); } });   // 언로드 flush
-    editor.el.addEventListener('focusout', () => { if (editor.isDirty()) { clearTimeout(saveTimer); doSave(); } });
+      onSaveShortcut: () => { clearTimeout(saveTimer); doSave(true); },   // ⌘S = 명시적 의도 — 묻지 않는다
+    }), () => { /* 언로드 flush 안 함(#1600) — 확인 없이 저장하지 않는 게 이 화면의 약속. 미저장분은 이탈 경고로 지킨다 */ });
+    //  focusout 은 에디터 **안에서** 블록을 옮길 때도 뜬다 — relatedTarget 이 에디터 안이면 편집이 끝난 게 아니다.
+    //  확인창이 열리며 포커스를 가져갈 때도 마찬가지라(confirming 가드) 창이 두 번 뜨지 않는다.
+    editor.el.addEventListener('focusout', (ev: any) => {
+      const to = ev && ev.relatedTarget;
+      if (to && editor.el.contains(to)) return;
+      if (document.querySelector('.ov-confirm-back')) return;   // 이미 확인창이 떠 있다
+      setTimeout(() => { if (editor && editor.isDirty() && !editor.el.contains(document.activeElement)) confirmAndSave(); }, 0);
+    });
     (body as any)._getMd = () => editor.getMarkdown();
     body.append(editor.el);
   } else {

@@ -58,6 +58,12 @@ function khEnsureStyles(): void {
 .kh-exp-note{font-size:12px;color:var(--ink-sub);margin:0 0 8px}
 .kh-exp-acts{display:flex;align-items:center;gap:8px;margin:10px 0 0}
 .kh-cur{font-size:11.5px;color:var(--muted);font-weight:700}
+.kh-why{display:block;padding:0 12px 9px 88px;font-size:12.5px;color:var(--ink-sub);line-height:1.5}
+.kh-why.none{color:var(--muted-2);font-style:italic}
+.kh-exp-why{margin:0 0 10px;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--bg)}
+.kh-exp-why h4{margin:0 0 4px;font-size:11px;font-weight:800;color:var(--muted-head);letter-spacing:.03em}
+.kh-exp-why p{margin:0;font-size:13px;color:var(--ink);line-height:1.55}
+.kh-where{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px;font-size:12px;color:var(--ink-sub)}
 .kh-empty{padding:22px 14px;text-align:center;color:var(--muted);font-size:13px}
 .kh-more{display:block;margin:10px auto 0}
 .kh-seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin:0 0 8px}
@@ -129,6 +135,8 @@ interface HistoryRow {
   added: number; removed: number;
   title_before: string | null; title_after: string | null; title_changed: boolean;
   category_before: string | null; category_after: string | null;
+  note: string | null;         // 왜 고쳤는지 — 저장하며 함께 낸 한 줄(#1600)
+  session_id: string | null;   // 어디서 고쳤는지 — 그 터미널 세션(#1600)
 }
 
 // name 문서의 이력 패널을 연다.
@@ -241,12 +249,32 @@ export function openKnHistory(
         exp.replaceChildren(errorNote(e, '내용을 불러오지 못했습니다'));
       }
     };
-    row.append(main, exp);
+    // 왜 고쳤나 — 목록에서 바로 보이게(펼치지 않아도). 안 적었으면 그 사실을 그대로 말한다.
+    row.append(main, r.note
+      ? el('span', { class: 'kh-why', text: r.note })
+      : el('span', { class: 'kh-why none', text: '수정 이유를 적지 않았습니다.' }), exp);
     return row;
   }
 
   function expandedView(r: HistoryRow, d: any, exp: HTMLElement): any[] {
     const out: any[] = [];
+    // ── 왜 고쳤나 ──
+    const why = el('div', { class: 'kh-exp-why' }, el('h4', { text: '왜 고쳤나' }));
+    why.append(r.note
+      ? el('p', { text: r.note })
+      : el('p', { style: 'color:var(--muted-2)', text: '이유가 적혀 있지 않습니다. 저장할 때 한 줄로 남기면 여기에 보입니다.' }));
+    out.push(why);
+    // ── 어디서 고쳤나 — 그 터미널 세션의 대화 기록으로 건너뛴다 ──
+    const where = el('div', { class: 'kh-where' },
+      el('span', { text: (r.actor_display || r.actor || '알 수 없음') + '님이 ' + absTime(r.at) + '에 '
+        + (r.channel === 'mcp' ? 'AI 세션에서' : r.channel === 'web' ? '웹 화면에서' : (CHANNEL_LABEL[r.channel || ''] || '알 수 없는 곳') + '에서') + ' 저장했습니다.' }));
+    if (r.session_id) {
+      where.append(el('a', { class: 'btn btn-ghost btn-sm', href: '#/sessions/' + encodeURIComponent(r.session_id),
+        title: '이 수정이 일어난 AI 세션의 대화 기록을 엽니다', text: '이때 무슨 대화였는지 보기 →' }));
+    } else if (r.channel === 'mcp') {
+      where.append(el('span', { style: 'color:var(--muted-2)', text: '(세션 기록 없음 — 이 기능이 생기기 전 수정입니다)' }));
+    }
+    out.push(where);
     if (r.title_changed) {
       out.push(el('p', { class: 'kh-exp-note', text: `제목: ${r.title_before || '(없음)'} → ${r.title_after || '(없음)'}` }));
     }
@@ -274,7 +302,7 @@ export function openKnHistory(
       class: on ? 'on' : '', type: 'button', text: label, 'aria-pressed': String(on),
       onclick: () => { if (mdMode === next) return; mdMode = next; exp.replaceChildren(...expandedView(r, d, exp)); },
     });
-    seg.append(mk('서식', mdMode, true), mk('원문', !mdMode, false));
+    seg.append(mk('읽기 쉽게', mdMode, true), mk('원본 텍스트', !mdMode, false));
     out.push(seg);
 
     out.push(mdMode ? diffViewMd(bBody || '', aBody || '') : diffView(bBody || '', aBody || ''));

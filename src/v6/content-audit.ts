@@ -7,7 +7,9 @@ import { itemsPool } from "../db/client.js";
 import { one } from "../db/client.js";
 
 // 쓰기 호출 맥락 — actor(누가)·source(어느 채널). v6 스토어 공통(구 5곳 중복 정의 통합).
-export type WriteCtx = { actor?: string | null; source?: string };
+//  note/session(#1600): 변경 이력이 사람에게 '왜 고쳤나'·'어디서 고쳤나'를 답하려면 쓰기 시점에 함께 받아야 한다.
+//  둘 다 선택 — 안 넘기면 종전과 똑같이 NULL 로 남는다(기존 호출부 무변경).
+export type WriteCtx = { actor?: string | null; source?: string; note?: string | null; session?: string | null };
 
 // 삭제 스냅샷(org_content_audit before)으로부터 행 재적재 — knowledge/category/project 복원 공통 골격.
 //  keyCol 로 존재검사(이미 있으면 거부=복원 대상 아님), cols 순서로 placeholder INSERT, RETURNING 으로 after 반환.
@@ -55,10 +57,11 @@ export async function auditOrgContent(
   const source = ctx?.source ?? null;
   const channel = normalizeAuditChannel(channelOverride ?? source);
   await itemsPool.query(
-    `INSERT INTO org_content_audit(entity, entity_key, op, before, after, actor, source, channel, actor_kind)
-     VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9)`,
+    `INSERT INTO org_content_audit(entity, entity_key, op, before, after, actor, source, channel, actor_kind, note, session_id)
+     VALUES($1,$2,$3,$4::jsonb,$5::jsonb,$6,$7,$8,$9,$10,$11)`,
     [entity, entityKey, op,
      before == null ? null : JSON.stringify(before),
      after == null ? null : JSON.stringify(after),
-     ctx?.actor ?? null, source, channel, actorKindOf(source)]);
+     ctx?.actor ?? null, source, channel, actorKindOf(source),
+     ctx?.note ?? null, ctx?.session ?? null]);
 }

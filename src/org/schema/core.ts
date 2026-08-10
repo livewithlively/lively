@@ -192,6 +192,14 @@ export async function initOrgCoreLateAdditions(pool: Pool): Promise<void> {
     ALTER TABLE org_content_audit ADD COLUMN IF NOT EXISTS actor_kind TEXT;
     ALTER TABLE org_content_audit ADD COLUMN IF NOT EXISTS channel    TEXT;
   `);
+  // ── #1600 '왜 고쳤나'와 '어디서 고쳤나' — 변경 이력 화면이 사람에게 답해야 하는 두 질문. ──
+  //  note: 저장하며 함께 낸 변경 요약(knowledge_save 의 change_note). 종전엔 검토 큐(revision)에만 남아
+  //   게이트가 꺼진 조직에선 아무 데도 안 남았다 — 그래서 이력에 '무엇이 바뀌었나'는 있고 '왜'는 없었다.
+  //  session_id: 그 쓰기가 일어난 터미널 세션(x-lively-session, #852). 이력에서 그 세션 기록으로 건너뛴다.
+  await pool.query(`
+    ALTER TABLE org_content_audit ADD COLUMN IF NOT EXISTS note       TEXT;
+    ALTER TABLE org_content_audit ADD COLUMN IF NOT EXISTS session_id TEXT;
+  `);
   await pool.query(`
     ${ensureCheck("org_content_audit", {
       org_content_audit_actor_kind_chk: "actor_kind IS NULL OR actor_kind IN ('human','ai','connector','system','unknown')",

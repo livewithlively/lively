@@ -61,7 +61,11 @@ const knowledgeSaveInput = {
   })).optional()
     .describe("mode='edit' 전용. 순차 적용되며, old 를 못 찾거나 여러 곳에서 찾으면 **저장 자체가 실패한다**(조용히 넘어가지 않는다)."),
   change_note: z.string().optional()
-    .describe("#968 변경 요약 — **기존 지식을 고칠 땐 무엇을·왜 바꾸는지 1~2문장으로 함께 보내라**(예: \"재시작 완료 기준을 healthz 200 으로 명확화. 계기 — 7/15 장애 때 절차 부재\"). 검토 카드와 변화 기록에 이 문장이 그대로 표시된다 — 없으면 사람이 diff 만 보고 판단해야 한다. "
+    .describe("#968 변경 요약 — **기존 지식을 고칠 땐 무엇을·왜 바꾸는지 함께 보내라**. "
+      + "⚠ **12살이 읽어도 아는 말로 한 문장**(#1600): 이슈번호(#1600)·영문 약어·내부 은어·파일 경로·커밋 해시를 쓰지 마라. "
+      + "이 문장은 사람이 보는 '수정 기록' 화면에 **그대로** 뜬다 — 거기 있는 사람은 이 프로젝트를 모른다. "
+      + "나쁜 예 \"#1600 조사 산출 + summary 인자 부재 특정\" / 좋은 예 \"위키가 왜 사람에게 안 읽히는지 다시 조사한 결과를 덧붙였습니다\". "
+      + "없으면 사람이 바뀐 줄만 보고 판단해야 한다. "
       + softCapHint(CAPS.change_note)),
 };
 type KnowledgeSaveInput = z.infer<z.ZodObject<typeof knowledgeSaveInput>>;
@@ -84,7 +88,8 @@ export const knowledgeSave: Capability = {
     "**edit 모드(#1531): 문서 '중간'을 고칠 땐 mode='edit' + edits=[{old,new}] 를 써라** — append 는 끝에만 붙으므로 타임라인 중간 삽입·표의 수치 교체·낡은 항목 갱신엔 못 쓴다. " +
     "그때 replace 로 전문을 되보내면 네가 4만 자를 받아쓰게 되고, 그 전사 중에 **손대지 말아야 할 문장이 깨진다**(실측: 무관한 쉼표가 여는 괄호로 바뀌어 괄호가 닫히지 않았다). " +
     "edit 는 old 를 정확일치로 찾아 그 자리만 바꾸므로 나머지는 문자 단위로 보존된다. old 는 공백·줄바꿈까지 원문 그대로여야 하고, **못 찾거나 여러 곳에서 찾으면 저장이 실패한다**(조용히 넘어가지 않는다 — 여러 곳이면 앞뒤를 더 붙여 유일하게 만들거나 replace_all: true). " +
-    "**변경 요약(#968): 기존 지식을 고칠 땐 change_note(무엇을·왜 — 1~2문장)를 함께 보내라** — 검토 카드와 변화 기록에 그 문장이 그대로 표시된다. " +
+    "**변경 요약(#968): 기존 지식을 고칠 땐 change_note 를 함께 보내라 — 12살이 읽어도 아는 말로 한 문장**(#1600, 이슈번호·약어·경로 금지). " +
+    "사람이 보는 '수정 기록' 화면에 그대로 뜨고, 거기 있는 사람은 이 프로젝트를 모른다. " +
     "**길이 상한(#1442): 짧은 필드(title 200 · name/supersedes/parent_name 64 · change_note 600자)를 넘겨도 이 호출은 실패하지 않는다** — " +
     "서버가 그 필드만 조정(자르기/참조 무시)하고 본문은 그대로 저장한 뒤 응답 capped 로 무엇을 어떻게 조정했는지 알려준다. " +
     "그러니 **본문을 다시 실어 재시도하지 마라**(capped 가 왔다고 저장이 실패한 게 아니다). 잘린 제목을 고치려면 **knowledge_set_title**(name+title — 본문 불요)을 쓰고, 애초에 제목은 한 줄로 짧게 쓰고 긴 설명은 본문 첫 헤딩으로 내려라.",
@@ -159,7 +164,12 @@ export const knowledgeSave: Capability = {
     if (input.mode !== "edit" && !String(input.body_md ?? "").trim() && input.is_folder !== true) {
       throw new HttpError(400, "body_md 가 필요합니다(폴더 is_folder=true 만 빈 본문 허용)");
     }
-    const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
+    //  note/session(#1600) — 변경 이력이 '왜 고쳤나'·'어디서 고쳤나'를 답할 수 있게 감사에 함께 싣는다.
+    //   change_note 는 종전엔 검토 큐(revision)로만 갔다 → 게이트가 꺼진 조직에선 이유가 아무 데도 안 남았다.
+    const writeCtx = {
+      actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web",
+      note: input.change_note ?? null, session: ctx?.session ?? null,
+    };
     // 공개범위(#1291) — 이름을 명시해 **기존 문서를 고치는** 경우만 막는다(신규 생성은 그대로).
     //  안 그러면 이름만 알면 안 보이는 문서를 upsert 로 통째로 덮어쓸 수 있다.
     if (input.name) await assertKnowledgeWritable(input.name, ctx?.viewer ?? null);

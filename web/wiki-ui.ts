@@ -28,12 +28,16 @@ function wkStamp(iso: string): string {
 //   사람이 쓴 문서에 AI 가 한 줄 붙이면 ai 가 된다. '직접 작성' 같은 말을 쓰면 안 되는 이유다.
 //  updated_by(마지막 저장자)·updated_at(그 시각)과 **같은 한 사건**을 가리키므로 셋을 한 줄로 묶어도 어긋나지 않는다.
 const WK_MIRROR_LABEL: Record<string, string> = { notion: '노션 미러', clickup: '클릭업 미러', slack: '슬랙 미러' };
+//  '누가'와 '어느 경로'를 **다른 슬롯**으로 나눈다 — 한 문자열('윤상민 · AI')로 붙이면 'AI'(2자)와
+//  '사람'(2자)의 실제 글자 폭이 달라 가운뎃점 위치가 행마다 어긋난다. 슬롯을 나눠야 열이 선다.
+function wkOriginParts(e: any): { who: string; how: string } {
+  if (!e) return { who: '', how: '' };
+  if (e.provenance === 'observed') return { who: WK_MIRROR_LABEL[e.external_system] || '외부 미러', how: '' };
+  return { who: e.updated_by ? personName(e.updated_by) : '', how: e.confidence === 'human' ? '사람' : 'AI' };
+}
 function wkOriginText(e: any): string {
-  if (!e) return '';
-  if (e.provenance === 'observed') return WK_MIRROR_LABEL[e.external_system] || '외부 미러';
-  const who = e.updated_by ? personName(e.updated_by) : '';
-  const how = e.confidence === 'human' ? '사람' : 'AI';
-  return who ? who + ' · ' + how : (how === '사람' ? '사람 저장' : 'AI 저장');
+  const { who, how } = wkOriginParts(e);
+  return who && how ? who + ' · ' + how : (who || how);
 }
 //  hover 상세 — 목록 한 줄이 줄인 것을 여기서 정확히 말한다(무엇의 시각인지·'사람'이 무슨 뜻인지).
 function wkOriginTitle(e: any): string {
@@ -57,13 +61,14 @@ function wkOriginTitle(e: any): string {
 //   만든 시각은 두 값이 다를 때만 툴팁에서 따로 말한다. 목록 정렬(updated_at)과도 이제 일치한다.
 function wkMetaOf(e: any, opts: any = {}): any[] {
   const stamp = wkStamp(e.updated_at || e.created_at);
-  const origin = wkOriginText(e);
+  const { who, how } = wkOriginParts(e);
   const title = wkOriginTitle(e);
   return [
     ...(opts.lead || []),
     e.is_wiki ? '인덱스' : null,
     opts.type === false ? null : wkTypeTag(e),
-    origin ? el('span', { class: 'wk-row-m wk-row-who', title, text: origin }) : null,
+    who ? el('span', { class: 'wk-row-m wk-row-who', title, text: who }) : null,
+    how ? el('span', { class: 'wk-row-m wk-row-how', title, text: how }) : null,
     stamp ? el('span', { class: 'wk-row-m wk-row-when', title, text: stamp }) : null,
   ].filter(Boolean);
 }
