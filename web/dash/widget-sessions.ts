@@ -1,5 +1,5 @@
 // dash/widget-sessions.ts — 대시보드 '내 AI 세션' 위젯(#1313 R42 · dashboard-home.ts 에서 verbatim 분리).
-//  내 세션 + 초대받은 세션 + 내 프로젝트 세션을 한 목록으로 합쳐 카드로 보여주고, 열기·복원·삭제·일괄선택을 준다.
+//  내 세션 + 초대받은 세션 + 내 프로젝트 세션을 한 목록으로 합쳐 카드로 보여주고, 열기·복원·종료·일괄선택을 준다.
 //  fillSessions 가 470줄짜리 한 덩어리 클로저였다 — 지역 상태를 **SessCtx 한 객체**로 명명해 내부 함수들을
 //  파일 상위로 승격했다(로직 무수정). 거르기 모델·팝오버 4종은 widget-sessions-popovers.ts 로 나가 있다.
 //
@@ -22,6 +22,9 @@ import { dashSessionIcon } from './icons.js';
 import { dashSessRank, dashSessState } from './status.js';
 import { dashCtl, dashEmpty } from './chrome.js';
 import { openSessMenu, sessBaseSessions, sessFilterLabel, sessIsClosedProjSess, sessIsProjClosed, sessMatchSrc, sessMatchState, sessOpenFilterMenu, sessOpenPrefs } from './widget-sessions-popovers.js';
+// #1582 — 세션 종료 확인창은 전 화면 공용 정의 하나만 쓴다(문구가 화면마다 갈라지지 않게).
+import { confirmSessionEnd, endedToast } from '../session-actions.js';
+import { confirmDialog } from '../ui-primitives.js';
 
 // 위젯 한 벌의 지역 상태 — 종전 fillSessions 클로저의 let/const 를 그대로 옮겨 담은 것(이름·의미 무변경).
 type SessCtx = {
@@ -96,13 +99,20 @@ function sessPaintFilterChip(ctx: SessCtx) {
   if (ctx.zone.chipsEl.firstChild !== ctx.fdd) ctx.zone.chipsEl.replaceChildren(ctx.fdd);
 }
 
-// #req 일괄 삭제 — 소유한 세션 여러 개를 체크해 한 번에 삭제(DELETE=tmux 세션 제거). 소유자만 선택 가능(서버도 403 재검증). 개별 ⋮ 메뉴 '삭제'와 통일.
+// #req 일괄 종료 — 소유한 세션 여러 개를 체크해 한 번에 끝낸다(DELETE=tmux 세션 제거). 소유자만 선택 가능(서버도 403 재검증).
+//  #1582 — 이름·확인창을 AI 세션 탭과 통일했다('삭제' + 브라우저 confirm + "되돌릴 수 없어요" → '종료' + 라이블리
+//  확인창 + 남는 것 안내). 문구를 왜 그렇게 쓰는지는 session-actions.ts 헤더 참고 — 이 동작은 파일을 안 지운다.
 async function sessKillSelected(ctx: SessCtx) {
   const ids = [...ctx.selected]; if (!ids.length) return;
-  if (!confirm(ids.length + '개 세션을 삭제할까요?\n실행 중인 작업도 함께 종료되고 되돌릴 수 없어요.')) return;
+  const items = ids.map((id) => ctx.sessions.find((s) => s.id === id)).filter(Boolean) as any[];
+  // 이미 꺼진(restorable) 세션은 끊을 작업이 없다 — 섞여 있으면 '종료'라는 말이 그 카드엔 안 맞으므로 알려준다.
+  const dead = items.filter((s) => s.restorable).length;
+  const lines = dead ? [dead + '개는 이미 꺼진 세션이라 목록에서만 지워집니다.'] : [];
+  if (!await confirmSessionEnd({ title: ids.length + '개 세션을 종료할까요?', lines, sessions: items })) return;
   let failed = 0;
   for (const id of ids) { try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(id), { method: 'DELETE' }); } catch { failed++; } }
-  toast(failed ? ((ids.length - failed) + '개 삭제 · ' + failed + '건 실패') : (ids.length + '개 세션을 삭제했어요'), !!failed);
+  const done = ids.length - failed;
+  toast(failed ? (done + '개 종료 · ' + failed + '건 실패') : await endedToast(done, items), !!failed);
   ctx.selected.clear(); await ctx.reloadSessions();
 }
 const sessRestorableSelected = (ctx: SessCtx) => [...ctx.selected].map((id) => ctx.sessions.find((s) => s.id === id)).filter((s) => s && s.restorable);
@@ -111,7 +121,10 @@ const sessRestorableSelected = (ctx: SessCtx) => [...ctx.selected].map((id) => c
 //  — 복원 후 목록이 라이브 카드로 바뀌므로, 열고 싶으면 '그리드로 열기'로 고르면 된다.
 async function sessRestoreSelected(ctx: SessCtx) {
   const items = sessRestorableSelected(ctx); if (!items.length) return;
-  if (!confirm(items.length + '개 세션을 이어서 열까요?\n저장된 폴더·설정 그대로 다시 열리고, 대화도 이어받아요.')) return;
+  if (!await confirmDialog({
+    title: items.length + '개 세션을 이어서 열까요?', confirmText: '복원', cancelText: '취소',
+    message: '저장된 폴더·설정 그대로 다시 열리고, 대화도 이어받습니다.',
+  })) return;
   let ok = 0, failed = 0;
   for (const s of items) { // 순차 — 세션 생성은 tmux 를 띄우는 일이라 한꺼번에 몰지 않는다.
     try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/restore', { method: 'POST', body: '{}' }); ok++; } catch { failed++; }
@@ -143,7 +156,10 @@ function sessRenderBar(ctx: SessCtx) {
   //  dash-bulkbar-push 로 액션 묶음을 우측 정렬.
   const gridBtn: any = el('button', { class: 'dash-bulkbar-btn primary dash-bulkbar-push', type: 'button', title: '고른 세션 열기 — 각각 새 탭으로 또는 한 탭에 나란히', text: '열기' + (n ? ' (' + n + ')' : ''), onclick: () => sessOpenSelectedGrid(ctx) });
   gridBtn.disabled = n === 0;
-  const delBtn: any = el('button', { class: 'dash-bulkbar-btn danger', type: 'button', text: '삭제' + (n ? ' (' + n + ')' : ''), onclick: () => sessKillSelected(ctx) });
+  // #1582 '삭제' → '종료' — AI 세션 탭과 같은 이름. 세션은 지워 없애는 게 아니라 끝내는 것이고, 대화록·파일은 남는다.
+  const delBtn: any = el('button', { class: 'dash-bulkbar-btn danger', type: 'button',
+    title: '고른 세션을 끝냅니다 — 작업 폴더·파일은 그대로, 대화록은 세션 기록에 남습니다',
+    text: '종료' + (n ? ' (' + n + ')' : ''), onclick: () => sessKillSelected(ctx) });
   delBtn.disabled = n === 0;
   // #1141 복원 — 고른 것 중 '복원 가능'한 세션 수만 센다(라이브 세션은 복원 대상이 아니다). 0개면 비활성.
   const nr = sessRestorableSelected(ctx).length;
@@ -162,7 +178,7 @@ function sessRenderBar(ctx: SessCtx) {
     apply: (next) => { ctx.selected.clear(); next.forEach((id) => ctx.selected.add(id)); ctx.draw(); },
   });
   bar.replaceChildren(
-    el('span', { class: 'dash-bulkbar-n', text: n ? (n + '개 선택') : '세션을 골라 열거나 복원·삭제하세요' }),
+    el('span', { class: 'dash-bulkbar-n', text: n ? (n + '개 선택') : '세션을 골라 열거나 복원·종료하세요' }),
     ...(scope.length ? [pickBtn] : []),
     gridBtn,
     restoreBtn,
@@ -251,8 +267,8 @@ function sessDraw(ctx: SessCtx) {
     } else {
       openBtn.onclick = () => dashOpenSessionTab(s.id, s.label || '', (s.node && s.node.id) || ''); // #869 원격 노드면 node 파라미터 · #1098 이미 열린 탭이면 그 탭으로
     }
-    const moreBtn = el('button', { class: 'dash-scard-more', type: 'button', title: s.owned ? '세션 관리 (이름 수정·내 질문·삭제)' : '세션 (내 질문)', 'aria-label': '세션 관리', text: '⋮' });
-    moreBtn.onclick = () => openSessMenu(moreBtn, s, ctx.reloadSessions); // 이름 수정·삭제는 소유자만 메뉴에 뜬다(서버도 403 재검증).
+    const moreBtn = el('button', { class: 'dash-scard-more', type: 'button', title: s.owned ? '세션 관리 (이름 수정·내 질문·종료)' : '세션 (내 질문)', 'aria-label': '세션 관리', text: '⋮' });
+    moreBtn.onclick = () => openSessMenu(moreBtn, s, ctx.reloadSessions); // 이름 수정·종료는 소유자만 메뉴에 뜬다(서버도 403 재검증).
     const acts = el('div', { class: 'dash-scard-acts' }, openBtn, moreBtn);
     // 1행 볼드 제목 = 하고 있는 작업(s.title). 없으면 세션명.
     //   자세히: [상태 · 작업제목] / [터미널 제목: 세션명] / [뱃지] · 시각은 우측 고정열
