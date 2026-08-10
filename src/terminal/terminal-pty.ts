@@ -237,7 +237,16 @@ export function createInputPump(
     if (timer) { clearTimeout(timer); timer = null; }
     if (!pending) return;
     const d = pending; pending = "";
-    for (const argv of inputToSendKeysArgv(id, d)) enqueue(() => run(argv));
+    // ⚠ 지연의 정체(#1541 실측): psmux 입력은 배치마다 **CLI 프로세스를 새로 띄운다**. Windows 에서 프로세스
+    //  생성은 수십 ms 라, 중앙 세션(제어 스트림에 바로 쓰기)과 나란히 두면 타이핑이 눈에 띄게 늦다.
+    //  psmux 의 control-mode stdin 은 **2자리 토큰(0xNN)** 은 받아준다 → 코드포인트가 0xff 이하인 배치
+    //  (영문·숫자·기호·제어키 = 타이핑의 대부분)는 프로세스 없이 스트림으로 보낸다. 한글처럼 3자리 이상
+    //  토큰이 섞인 배치만 종전대로 CLI 로 간다(정확성 우선 — 여기서 잘못 보내면 글자가 깨진다).
+    for (const argv of inputToSendKeysArgv(id, d)) {
+      const streamable = argv.every((a) => !a.startsWith("0x") || a.length === 4);
+      if (streamable) enqueue(() => write(argv.join(" ")));
+      else enqueue(() => run(argv));
+    }
   };
   return {
     sendInput(d) {

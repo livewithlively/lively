@@ -336,14 +336,27 @@ t("C6 tmux 모드 리사이즈 → 기존 `WxH` 유지(tmux 하한을 안 정했
 
 // D. 입력 펌프 — 신규 도입물이 만든 새 엣지(배치·순서·종료·실패).
 //  전부 **부작용**(run 호출 argv·호출 순서·활성 타이머 수)으로 판정한다.
-await ta("D1 펌프 — 디바운스 창 안의 키는 한 번의 호출로 묶인다", async () => {
-  const calls: string[][] = [];
-  const pump = createInputPump(ID, async (argv) => { calls.push(argv); }, () => { /* noop */ }, 5);
+await ta("D1 펌프 — 디바운스 창 안의 키는 한 번으로 묶이고, ASCII 는 프로세스 없이 스트림으로 간다", async () => {
+  const calls: string[][] = [], lines: string[] = [];
+  const pump = createInputPump(ID, async (argv) => { calls.push(argv); }, (l) => { lines.push(l); }, 5);
   pump.sendInput("a"); pump.sendInput("b"); pump.sendInput("c");
-  assert.equal(calls.length, 0, "창이 닫히기 전엔 나가지 않는다");
+  assert.equal(calls.length + lines.length, 0, "창이 닫히기 전엔 나가지 않는다");
   await sleep(25); await pump.idle();
-  assert.equal(calls.length, 1, "키 3개에 프로세스 3개면 타이핑이 프로세스 폭풍이 된다");
-  assert.deepEqual(calls[0].slice(3), ["0x61", "0x62", "0x63"]);
+  // ★ ASCII 는 **프로세스 0개** — psmux 는 배치마다 CLI 를 띄우는데 Windows 에서 그게 수십 ms 라
+  //  중앙 세션과 나란히 두면 타이핑이 눈에 띄게 늦다(사용자 실측). 2자리 토큰은 제어 스트림이 받아준다.
+  assert.equal(calls.length, 0, "ASCII 인데 프로세스를 띄웠다 — 타이핑 지연의 원인");
+  assert.equal(lines.length, 1, "키 3개는 한 줄로 묶여야 한다(폭풍 금지)");
+  assert.deepEqual(lines[0].split(" ").slice(3), ["0x61", "0x62", "0x63"]);
+});
+
+await ta("D1b 펌프 — 3자리 이상 토큰(한글)이 섞이면 CLI 로 보낸다(정확성 우선)", async () => {
+  const calls: string[][] = [], lines: string[] = [];
+  const pump = createInputPump(ID, async (argv) => { calls.push(argv); }, (l) => { lines.push(l); }, 5);
+  pump.sendInput("가");                       // U+AC00 → 0xac00 (4자리) — 스트림이 못 받는다
+  await sleep(25); await pump.idle();
+  assert.equal(lines.length, 0, "한글을 스트림으로 보내면 글자가 깨진다");
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].slice(3), ["0xac00"]);
 });
 
 await ta("D2 펌프 — 청크가 여러 개여도 **순차** 실행(겹치면 글자가 섞인다)", async () => {
@@ -356,7 +369,8 @@ await ta("D2 펌프 — 청크가 여러 개여도 **순차** 실행(겹치면 �
     if (i === 1) await gate;
     order.push(`end${i}`);
   }, () => { /* noop */ }, 5);
-  pump.sendInput("a".repeat(513)); // 2 청크
+  // 한글로 보낸다 — ASCII 는 이제 프로세스 없이 스트림으로 가므로(D1), 순차성은 **CLI 경로**에서 확인해야 한다.
+  pump.sendInput("가".repeat(513)); // 2 청크
   await sleep(25);
   assert.deepEqual(order, ["start1"], "첫 호출이 끝나기 전에 두 번째가 시작되면 순서 보장이 없다");
   releaseFirst();
@@ -371,7 +385,8 @@ await ta("D3 펌프 — 백필/상태 명령보다 **방금 친 키가 먼저** 
   pump.sendInput("x");
   pump.sendCmd(captureCmd(600));   // 디바운스 창이 아직 안 닫힌 시점
   await pump.idle();
-  assert.deepEqual(order, ["keys", `cmd:${captureCmd(600)}`]);
+  // ASCII 는 스트림으로 나가므로 `cmd:send-keys …` 로 관측된다 — 확인하려는 것은 **순서**다(키가 먼저).
+  assert.deepEqual(order, [`cmd:send-keys -t ${ID} 0x78`, `cmd:${captureCmd(600)}`]);
 });
 
 await ta("D4 펌프 — 닫히면 대기 입력을 버리고 타이머도 해제한다", async () => {
@@ -394,14 +409,14 @@ await ta("D5 펌프 — 전송 1건이 실패해도 다음 입력은 계속 흐�
     calls.push(argv);
     if (first) { first = false; throw new Error("psmux timeout"); }
   }, () => { throw new Error("write boom"); }, 5);
-  pump.sendInput("a");
+  pump.sendInput("가");
   await sleep(25); await pump.idle();
   pump.sendCmd("refresh-client -C 80x24");  // 명령 쪽 예외도 체인을 끊지 않는다
   await pump.idle();
-  pump.sendInput("b");
+  pump.sendInput("나");
   await sleep(25); await pump.idle();
   assert.equal(calls.length, 2, "실패 1건이 체인을 끊으면 터미널이 그대로 먹통이 된다");
-  assert.deepEqual(calls[1].slice(3), ["0x62"]);
+  assert.deepEqual(calls[1].slice(3), ["0xb098"]);
 });
 
 console.log(`\n${pass} passed`);
