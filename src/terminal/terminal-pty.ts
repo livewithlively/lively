@@ -285,8 +285,13 @@ export function captureCmd(n: number): string {
 //  셸은 마우스 트래킹을 켜는 일이 없다 → foreground 가 셸이면 그 flag 는 죽은 앱의 잔재다(클라가 이걸로 게이팅).
 //  ⚠ cmd 는 반드시 **마지막** 토큰: 프로세스명에 공백이 있어도 앞 항목 파싱을 깨지 않는다.
 export const STATE_MARKER = "__LTSTATE__";
-export function stateCmd(): string {
-  return `display-message -p '${STATE_MARKER} alt=#{alternate_on} any=#{mouse_any_flag} btn=#{mouse_button_flag} std=#{mouse_standard_flag} sgr=#{mouse_sgr_flag} cx=#{cursor_x} cy=#{cursor_y} cmd=#{pane_current_command}'`;
+// mux= 는 **우리가 아는 사실**을 그대로 실어 보내는 리터럴이다(멀티플렉서가 그대로 되돌려준다).
+//  왜 필요한가(실측 #1541): psmux 는 alt-screen 팬에 `capture-pane` 을 걸면 **제어 스트림 전체가 멈춘다**
+//  (`%begin` 만 오고 `%end` 도, 그 뒤 어떤 `%output` 도 오지 않는다 — 실측 9초 무응답). 그러면 화면 복원은
+//  물론이고 앱의 재그리기·리사이즈 응답까지 통째로 막혀 웹터미널이 하얀 화면으로 굳는다.
+//  클라가 '이 백엔드에는 캡처를 걸면 안 된다'를 알아야 그 명령을 처음부터 보내지 않을 수 있다.
+export function stateCmd(psmux = false): string {
+  return `display-message -p '${STATE_MARKER} mux=${psmux ? "psmux" : "tmux"} alt=#{alternate_on} any=#{mouse_any_flag} btn=#{mouse_button_flag} std=#{mouse_standard_flag} sgr=#{mouse_sgr_flag} cx=#{cursor_x} cy=#{cursor_y} cmd=#{pane_current_command}'`;
 }
 // stale 마우스모드 복구 — tmux 가 아는 pane 상태 자체를 고친다(클라 게이팅은 이 클라의 garbage 만 막을 뿐,
 //  tmux 의 잘못된 진실은 그대로라 다른 클라·실 터미널 attach 는 계속 flood 를 받는다).
@@ -312,15 +317,15 @@ export function handleControlMsg(send: SendCmd, msg: { t?: string; d?: unknown; 
   } else if (msg.t === "cap") {
     // 상태 블록은 '클라가 요청할 때만'(msg.st) 백필 직전에 보낸다. 옛 클라(캐시된 terminal.js)는 st 를 안 실어
     //  보내므로 상태 블록을 못 받고 → 마커(__LTSTATE__)를 화면에 출력하는 회귀가 없다(신·구 클라 버전 스큐 안전).
-    if (msg.st) send(stateCmd());      // pane 실상태(alt/mouse/cursor) → 클라가 동기화 후 렌더
+    if (msg.st) send(stateCmd(!!psmux));   // pane 실상태(alt/mouse/cursor/백엔드) → 클라가 동기화 후 렌더
     send(captureCmd(Number(msg.n)));
   } else if (msg.t === "st") {
-    send(stateCmd());                  // 상태만 동기화(재접속 시 — 스크롤백 truncate 없이 마우스/alt stuck·커서 어긋남 해소). 옛 클라는 st 를 안 보냄.
+    send(stateCmd(!!psmux));           // 상태만 동기화(재접속 시 — 스크롤백 truncate 없이 마우스/alt stuck·커서 어긋남 해소). 옛 클라는 st 를 안 보냄.
   } else if (msg.t === "mr") {
     // 클라가 'flag 는 마우스 ON 인데 foreground 는 셸' = stale 을 관측했을 때만 온다 → tmux 쪽 진실을 복구하고,
     //  고쳐진 상태를 곧바로 되돌려 클라가 확인(관측 없이 여는 경로 없음).
     send(mouseResetCmd());
-    send(stateCmd());
+    send(stateCmd(!!psmux));
   }
 }
 

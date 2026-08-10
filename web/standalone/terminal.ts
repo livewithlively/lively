@@ -192,7 +192,14 @@ function makeControl(opts) {
   // opts: { write(string), backfill(string), onExit() }
   let mode = null;                  // null=미정, 'control', 'raw'
   let pending = new Uint8Array(0);  // 부분 줄/도입자 판별용 바이트 잔여
-  let inBlock = false, blockNum = '', blockParts = [];
+  let inBlock = false, blockNum = '', blockParts = [], blockAt = 0;
+  // 미완결 블록 탈출 시한 (#1541 실측). tmux control mode 의 `%begin`은 반드시 같은 번호의 `%end`/`%error`로
+  //  닫히는데, **psmux 는 alt-screen 팬의 capture-pane 에서 `%begin` 만 보내고 영영 닫지 않는다**(실측 트레이스:
+  //  348ms `%begin` 이후 9초간 `%end` 없음). 파서는 블록 안에 있는 동안 `%output` 까지 전부 블록 내용으로
+  //  삼키므로, 한 번 갇히면 **그 뒤 앱 출력이 화면에 영영 안 나온다** — 새로고침 후 하얀 화면 + 조각 하나,
+  //  타이핑해도 반응 없음, 넛지로 앱이 다시 그려도 안 보임의 진짜 원인이 이것이다.
+  //  진짜 캡처는 한 번에 밀려오므로(수 ms) 이 시한이 정상 백필을 자르는 일은 없다.
+  const BLOCK_MAX_MS = 1500;
   const outDec = new TextDecoder('utf-8'); // 라이브 %output 전용 — stream:true 로 %output 경계 분할 재조립
   const rawDec = new TextDecoder('utf-8'); // legacy raw 모드 전용 streaming 디코더
   const ascii = (b, s, e) => { let r = ''; for (let i = s; i < e; i++) r += String.fromCharCode(b[i]); return r; };
@@ -215,10 +222,15 @@ function makeControl(opts) {
   }
   function handleLine(s, e0) { // pending[s,e0) — 줄(개행 제외). 끝 \r 제거.
     let e = e0; if (e > s && pending[e - 1] === 0x0d) e--;
+    // 닫히지 않는 블록에서 빠져나온다 — 이 줄부터는 평소대로(=%output 은 화면에 쓴다) 처리한다.
+    if (inBlock && blockAt && Date.now() - blockAt > BLOCK_MAX_MS) {
+      inBlock = false; blockParts = []; blockAt = 0;
+      if (opts.blockLost) opts.blockLost();
+    }
     if (inBlock) {
       const head = ascii(pending, s, Math.min(e, s + 8));
       if ((head.startsWith('%end ') || head.startsWith('%error ')) && ascii(pending, s, e).split(' ')[2] === blockNum) {
-        inBlock = false;
+        inBlock = false; blockAt = 0;
         // 블록(capture 백필) 내용 = 실제 ESC + 리터럴 멀티바이트(줄 안에선 안 쪼개짐). 줄 사이 구분자는
         //  `\e[0m\r\n`(SGR 리셋 + CRLF) — capture-pane -N 으로 보존한 줄 끝 배경색이 '다음 줄'로 새지 않게 한다.
         const SEP = [0x1b, 0x5b, 0x30, 0x6d, 0x0d, 0x0a]; // \e[0m\r\n
@@ -242,7 +254,7 @@ function makeControl(opts) {
       return;
     }
     const head = ascii(pending, s, Math.min(e, s + 18));
-    if (head.startsWith('%begin ')) { inBlock = true; blockNum = ascii(pending, s, e).split(' ')[2] || ''; blockParts = []; }
+    if (head.startsWith('%begin ')) { inBlock = true; blockAt = Date.now(); blockNum = ascii(pending, s, e).split(' ')[2] || ''; blockParts = []; }
     else if (head.startsWith('%extended-output ')) {            // pause-after 형태: `... : <value>`
       const full = ascii(pending, s, Math.min(e, s + 200)); const mk = full.indexOf(' : ');
       if (mk >= 0) { const str = outDec.decode(octalDecode(pending, s + mk + 3, e), { stream: true }); if (str) opts.write(str); }
@@ -292,13 +304,31 @@ let pendingPaneState = null, lastStateAt = 0, lastMouseResetAt = 0, lastMousePro
 // ⚠ 게이트는 '플랫폼'이 아니라 **관측된 사실**이다: alt-screen 인데 백필이 안 왔다. tmux 에선 그 조합이
 //  발생하지 않으므로 자동으로 무영향이고, 백엔드 종류를 클라가 알 필요도 없다.
 const BACKFILL_WAIT_MS = 900;   // 상태 블록 뒤 이 시간 안에 백필이 없으면 '캡처 불가'로 본다
-let backfillWatch = null;
+const MAX_NUDGES = 3;           // 연결당 상한 — 회복이 안 될 때 화면이 무한히 깜빡이지 않게
+let backfillWatch = null, nudgeTries = 0, needBackfill = false;
 function clearBackfillWatch() { if (backfillWatch) { clearTimeout(backfillWatch); backfillWatch = null; } }
 // 크기 넛지 — r-1 로 줄였다 되돌린다. 순수 계산부는 아래 nudgeSizes(테스트가 이 표를 지킨다).
 export function nudgeSizes(cols, rows) {
   const c = Math.trunc(cols) || 0, r = Math.trunc(rows) || 0;
   if (c < 1 || r < 2) return null;             // 1줄짜리는 줄일 수 없다 — 넛지 불가(그냥 포기)
   return [{ t: 'r', c, r: r - 1 }, { t: 'r', c, r }];
+}
+/** 이 팬에 capture-pane 을 걸면 위험한가 — 순수.
+ *  psmux 는 alt-screen 팬 캡처에서 **제어 스트림 전체가 멈춘다**(실측 #1541: `%begin` 뒤 무한 무응답).
+ *  tmux 는 정상이므로 종전대로 캡처한다. 백엔드 미상(구 서버 — mux 토큰 없음)이면 종전 동작으로 degrade. */
+export function captureUnsafe(st) {
+  if (!st || !st.alt) return false;              // normal 화면은 어느 백엔드든 캡처가 안전하다
+  if (st.mux) return st.mux === 'psmux';         // 서버가 백엔드를 알려줬으면 그게 답
+  return !!st.flagsMissing;                      // 구 노드 번들 — 지문으로 판별(위 주석)
+}
+// 크기 넛지 실행 — 앱이 리사이즈를 두 번 받아 화면 전체를 다시 그린다.
+function doNudge() {
+  if (++nudgeTries > MAX_NUDGES) return;
+  const msgs = nudgeSizes(term && term.cols, term && term.rows);
+  if (!msgs || !ws || ws.readyState !== 1) return;
+  try { ws.send(JSON.stringify(msgs[0])); } catch (_) { /* noop */ }
+  setTimeout(() => { try { if (ws && ws.readyState === 1) ws.send(JSON.stringify(msgs[1])); } catch (_) { /* noop */ } }, 140);
+  lastCols = 0; lastRows = 0;
 }
 function armBackfillWatch() {
   clearBackfillWatch();
@@ -307,12 +337,8 @@ function armBackfillWatch() {
     const st = pendingPaneState;
     if (!st || !st.alt) return;                // 캡처가 왔거나 alt-screen 이 아니면 할 일 없음
     pendingPaneState = null;                   // 이 백필은 오지 않는다 — 커서 복원 대상도 없다
-    const msgs = nudgeSizes(term && term.cols, term && term.rows);
-    if (!msgs || !ws || ws.readyState !== 1) return;
     dlog('backfill', 'alt-screen 캡처 없음 → 크기 넛지로 앱 재그리기 유도');
-    try { ws.send(JSON.stringify(msgs[0])); } catch (_) { /* noop */ }
-    setTimeout(() => { try { if (ws && ws.readyState === 1) ws.send(JSON.stringify(msgs[1])); } catch (_) { /* noop */ } }, 140);
-    lastCols = 0; lastRows = 0;                // 다음 applyFit 이 실제 크기를 다시 확정하게
+    doNudge();
   }, BACKFILL_WAIT_MS);
 }
 function parsePaneState(line) {
@@ -324,6 +350,10 @@ function parsePaneState(line) {
     alt: num('alt') === 1,
     mouseOn: any === 1 || btn === 1 || std === 1,   // 1003/1002/1000 중 하나라도 = tmux flag 상 마우스 리포트 요구
     any: any === 1, btn: btn === 1, std: std === 1, sgr: sgr === 1,
+    mux: m.mux || '',                               // 백엔드(tmux|psmux) — 서버가 알려주면 이게 답
+    // 구 노드 번들엔 mux 토큰이 없다 → 지문으로 판별한다: psmux 는 마우스 flag 포맷변수를 구현하지 않아
+    //  `any= btn= std= sgr=` 처럼 **전부 빈 값**으로 온다(실측). tmux 는 0/1 을 준다.
+    flagsMissing: any === null && btn === null && std === null && sgr === null,
     cmd: m.cmd || '',                               // foreground 프로세스 — flag 가 stale 인지 가리는 단서(paneMouseMode)
     cx, cy, hasCursor: cx !== null && cy !== null,
   };
@@ -2111,7 +2141,21 @@ async function connectNow() {
   ctrl = makeControl({
     write: (str) => { try { term.write(str); } catch (_) { /* noop */ } },
     // 상태 블록(백필 직전) — tmux pane 실상태로 alt-screen·마우스모드를 '지금' 동기화하고, 커서 좌표를 백필용으로 담아둠(#1092).
-    state: (line) => { try { dlog('state', diagPreview(line, 96)); applyPaneState(parsePaneState(line)); } catch (_) { /* noop */ } },
+    state: (line) => {
+      try {
+        dlog('state', diagPreview(line, 96));
+        const st = parsePaneState(line);
+        applyPaneState(st);
+        if (!needBackfill) return;
+        needBackfill = false;
+        // 캡처를 걸어도 되는가 — **관측된 백엔드·alt 조합**으로만 판단한다(추측 없음).
+        //  psmux + alt-screen 은 캡처가 스트림을 잠그므로 아예 보내지 않고, 앱이 스스로 다시 그리게 넛지한다.
+        if (captureUnsafe(st)) { dlog('backfill', '캡처 불가 백엔드(alt-screen) → 넛지로 재그리기'); doNudge(); return; }
+        try { if (ws && ws.readyState === 1) { ws.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES, st: 1 })); armBackfillWatch(); } } catch (_) { /* noop */ }
+      } catch (_) { /* noop */ }
+    },
+    // 닫히지 않는 블록을 포기했다 — 백필은 오지 않는다. 앱이 스스로 다시 그리게 넛지한다.
+    blockLost: () => { try { dlog('backfill', '미완결 블록 포기 → 넛지로 재그리기 유도'); doNudge(); } catch (_) { /* noop */ } },
     // 백필(capture 스냅샷)은 '현재 화면 전체'다 → 쓰기 전 화면+스크롤백을 비워(\e[H\e[2J\e[3J) 첫 연결 중
     //  attach~capture 사이에 먼저 흘러든 라이브 %output 과 겹쳐 줄이 중복되는 것을 막는다. 이후 라이브는 그대로 append.
     backfill: (text) => {
@@ -2141,6 +2185,7 @@ async function connectNow() {
     dlog('ws', 'open');
     connecting = false; wasConnected = true; reconnectDelay = 1500; denyRetries = 0; attempts = 0; // 붙었으면 입장 허용 확정 → 거부 카운트 리셋
     syncedThisConn = false; // 이 연결에서 재접속 상태동기(t:'st')를 아직 안 보냄
+    nudgeTries = 0; needBackfill = !didBackfill; // 넛지 상한·백필 대기는 '연결 단위'
     mouseResetTries = 0;    // 복구 시도 상한은 '연결 단위' — 새로 붙으면 다시 시도한다(그 사이 환경이 달라졌을 수 있다)
     statusEl.textContent = '연결됨'; statusEl.className = 'status ok';
     lastCols = 0; lastRows = 0; // 재attach 후 사이즈 강제 재동기화(→ control mode: refresh-client -C 재전송)
@@ -2157,7 +2202,10 @@ async function connectNow() {
     if (ctrl.isControl()) {
       // 첫 연결: 현재 화면+스크롤백 백필(상태 포함). 재연결: 백필은 생략(스크롤백 truncate 방지 — 중복 방지)하되
       //  상태만(t:'st') 1회 동기화해 재접속 갭에 놓친 마우스-off/alt-off 로 인한 stuck 을 해소(#1092 버그1).
-      if (!didBackfill) { didBackfill = true; try { sock.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES, st: 1 })); armBackfillWatch(); } catch (_) { /* noop */ } }
+      // ⚠ 첫 연결에서 **캡처를 곧바로 걸지 않는다** (#1541 실측). psmux 는 alt-screen 팬에 capture-pane 을
+      //  걸면 제어 스트림 전체가 멈춘다(`%begin` 뒤 무한 무응답 — 앱 출력·리사이즈까지 통째로 막힌다).
+      //  그래서 먼저 상태만 물어(t:'st') 백엔드와 alt 여부를 확인하고, 안전할 때만 캡처를 건다(아래 state 핸들러).
+      if (!didBackfill) { didBackfill = true; try { sock.send(JSON.stringify({ t: 'st' })); } catch (_) { /* noop */ } }
       else if (!syncedThisConn) { syncedThisConn = true; try { sock.send(JSON.stringify({ t: 'st' })); } catch (_) { /* noop */ } }
     }
   };

@@ -551,7 +551,7 @@
   }
   function diagText() {
     return [
-      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build 3b6f144d",
+      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build cbd4d2bf",
       "ua: " + navigator.userAgent,
       "session: " + SESSION_ID + (NODE_ID ? " node=" + NODE_ID : ""),
       "secure: " + window.isSecureContext + " \xB7 exported: " + (/* @__PURE__ */ new Date()).toISOString(),
@@ -568,7 +568,8 @@
   function makeControl(opts) {
     let mode = null;
     let pending = new Uint8Array(0);
-    let inBlock = false, blockNum = "", blockParts = [];
+    let inBlock = false, blockNum = "", blockParts = [], blockAt = 0;
+    const BLOCK_MAX_MS = 1500;
     const outDec = new TextDecoder("utf-8");
     const rawDec = new TextDecoder("utf-8");
     const ascii = (b, s, e) => {
@@ -608,10 +609,17 @@
     function handleLine(s, e0) {
       let e = e0;
       if (e > s && pending[e - 1] === 13) e--;
+      if (inBlock && blockAt && Date.now() - blockAt > BLOCK_MAX_MS) {
+        inBlock = false;
+        blockParts = [];
+        blockAt = 0;
+        if (opts.blockLost) opts.blockLost();
+      }
       if (inBlock) {
         const head2 = ascii(pending, s, Math.min(e, s + 8));
         if ((head2.startsWith("%end ") || head2.startsWith("%error ")) && ascii(pending, s, e).split(" ")[2] === blockNum) {
           inBlock = false;
+          blockAt = 0;
           const SEP = [27, 91, 48, 109, 13, 10];
           let len = 0;
           for (const p of blockParts) len += p.length;
@@ -650,6 +658,7 @@
       const head = ascii(pending, s, Math.min(e, s + 18));
       if (head.startsWith("%begin ")) {
         inBlock = true;
+        blockAt = Date.now();
         blockNum = ascii(pending, s, e).split(" ")[2] || "";
         blockParts = [];
       } else if (head.startsWith("%extended-output ")) {
@@ -697,7 +706,8 @@
   var syncedThisConn = false;
   var pendingPaneState = null, lastStateAt = 0, lastMouseResetAt = 0, lastMouseProbeAt = 0, mouseResetTries = 0;
   var BACKFILL_WAIT_MS = 900;
-  var backfillWatch = null;
+  var MAX_NUDGES = 3;
+  var backfillWatch = null, nudgeTries = 0, needBackfill = false;
   function clearBackfillWatch() {
     if (backfillWatch) {
       clearTimeout(backfillWatch);
@@ -709,6 +719,28 @@
     if (c < 1 || r < 2) return null;
     return [{ t: "r", c, r: r - 1 }, { t: "r", c, r }];
   }
+  function captureUnsafe(st) {
+    if (!st || !st.alt) return false;
+    if (st.mux) return st.mux === "psmux";
+    return !!st.flagsMissing;
+  }
+  function doNudge() {
+    if (++nudgeTries > MAX_NUDGES) return;
+    const msgs = nudgeSizes(term && term.cols, term && term.rows);
+    if (!msgs || !ws || ws.readyState !== 1) return;
+    try {
+      ws.send(JSON.stringify(msgs[0]));
+    } catch (_) {
+    }
+    setTimeout(() => {
+      try {
+        if (ws && ws.readyState === 1) ws.send(JSON.stringify(msgs[1]));
+      } catch (_) {
+      }
+    }, 140);
+    lastCols = 0;
+    lastRows = 0;
+  }
   function armBackfillWatch() {
     clearBackfillWatch();
     backfillWatch = setTimeout(() => {
@@ -716,21 +748,8 @@
       const st = pendingPaneState;
       if (!st || !st.alt) return;
       pendingPaneState = null;
-      const msgs = nudgeSizes(term && term.cols, term && term.rows);
-      if (!msgs || !ws || ws.readyState !== 1) return;
       dlog("backfill", "alt-screen \uCEA1\uCC98 \uC5C6\uC74C \u2192 \uD06C\uAE30 \uB11B\uC9C0\uB85C \uC571 \uC7AC\uADF8\uB9AC\uAE30 \uC720\uB3C4");
-      try {
-        ws.send(JSON.stringify(msgs[0]));
-      } catch (_) {
-      }
-      setTimeout(() => {
-        try {
-          if (ws && ws.readyState === 1) ws.send(JSON.stringify(msgs[1]));
-        } catch (_) {
-        }
-      }, 140);
-      lastCols = 0;
-      lastRows = 0;
+      doNudge();
     }, BACKFILL_WAIT_MS);
   }
   function parsePaneState(line) {
@@ -752,6 +771,11 @@
       btn: btn === 1,
       std: std === 1,
       sgr: sgr === 1,
+      mux: m.mux || "",
+      // 백엔드(tmux|psmux) — 서버가 알려주면 이게 답
+      // 구 노드 번들엔 mux 토큰이 없다 → 지문으로 판별한다: psmux 는 마우스 flag 포맷변수를 구현하지 않아
+      //  `any= btn= std= sgr=` 처럼 **전부 빈 값**으로 온다(실측). tmux 는 0/1 을 준다.
+      flagsMissing: any === null && btn === null && std === null && sgr === null,
       cmd: m.cmd || "",
       // foreground 프로세스 — flag 가 stale 인지 가리는 단서(paneMouseMode)
       cx,
@@ -2218,7 +2242,7 @@
           "\uBB38\uC81C\uAC00 \uC0DD\uACBC\uC744 \uB54C",
           tool("\uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", "\uC785\uB825\uC774 \uC774\uC0C1\uD560 \uB54C(\uD0A4\uB9CC \uB20C\uB7EC\uB3C4 \uAC19\uC740 \uBB38\uC790\uC5F4\uC774 \uB4E4\uC5B4\uAC00\uB294 \uB4F1) \uC544\uB798 \uBC84\uD2BC\uC73C\uB85C \uCD5C\uADFC \uC785\uB825 \uAE30\uB85D\uC744 \uBCF5\uC0AC\uD574 \uC81C\uBCF4\uC5D0 \uBD99\uC5EC \uC8FC\uC138\uC694 \u2014 \uC11C\uBC84\uB85C\uB294 \uC804\uC1A1\uB418\uC9C0 \uC54A\uC544\uC694"),
           el("button", { class: "tbtn", text: "\u{1F50D} \uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", onclick: () => copyText(diagText(), false, true) }),
-          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "3b6f144d \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
+          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "cbd4d2bf \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
         ),
         sec(
           "\uB3C4\uAD6C (\uC624\uB978\uCABD \uC704 \uBC84\uD2BC)",
@@ -2894,7 +2918,30 @@
       state: (line) => {
         try {
           dlog("state", diagPreview(line, 96));
-          applyPaneState(parsePaneState(line));
+          const st = parsePaneState(line);
+          applyPaneState(st);
+          if (!needBackfill) return;
+          needBackfill = false;
+          if (captureUnsafe(st)) {
+            dlog("backfill", "\uCEA1\uCC98 \uBD88\uAC00 \uBC31\uC5D4\uB4DC(alt-screen) \u2192 \uB11B\uC9C0\uB85C \uC7AC\uADF8\uB9AC\uAE30");
+            doNudge();
+            return;
+          }
+          try {
+            if (ws && ws.readyState === 1) {
+              ws.send(JSON.stringify({ t: "cap", n: BACKFILL_LINES, st: 1 }));
+              armBackfillWatch();
+            }
+          } catch (_) {
+          }
+        } catch (_) {
+        }
+      },
+      // 닫히지 않는 블록을 포기했다 — 백필은 오지 않는다. 앱이 스스로 다시 그리게 넛지한다.
+      blockLost: () => {
+        try {
+          dlog("backfill", "\uBBF8\uC644\uACB0 \uBE14\uB85D \uD3EC\uAE30 \u2192 \uB11B\uC9C0\uB85C \uC7AC\uADF8\uB9AC\uAE30 \uC720\uB3C4");
+          doNudge();
         } catch (_) {
         }
       },
@@ -2934,6 +2981,8 @@
       denyRetries = 0;
       attempts = 0;
       syncedThisConn = false;
+      nudgeTries = 0;
+      needBackfill = !didBackfill;
       mouseResetTries = 0;
       statusEl.textContent = "\uC5F0\uACB0\uB428";
       statusEl.className = "status ok";
@@ -2958,8 +3007,7 @@
         if (!didBackfill) {
           didBackfill = true;
           try {
-            sock.send(JSON.stringify({ t: "cap", n: BACKFILL_LINES, st: 1 }));
-            armBackfillWatch();
+            sock.send(JSON.stringify({ t: "st" }));
           } catch (_) {
           }
         } else if (!syncedThisConn) {

@@ -67,6 +67,12 @@ t("상태질의 → display-message(마커 + alt/mouse/cursor 포맷변수, 단�
   }
   // 단일 라인(개행 인젝션 없음) — control-mode 는 개행 = 명령 구분자.
   assert.ok(!cmd.includes("\n"));
+  // ★ 백엔드 식별(#1541) — psmux 는 alt-screen 팬에 capture-pane 을 걸면 **제어 스트림 전체가 멈춘다**.
+  //  클라는 '이 백엔드엔 캡처를 걸면 안 된다'를 알아야 그 명령을 처음부터 안 보낼 수 있다. 리터럴이라
+  //  멀티플렉서가 그대로 되돌려준다(포맷변수가 아니다 — psmux 가 모르는 변수를 쓰면 빈 값이 된다).
+  assert.ok(stateCmd(true).includes("mux=psmux"), "psmux 를 알려주지 않으면 클라가 캡처를 걸어 스트림을 멈춘다");
+  assert.ok(stateCmd(false).includes("mux=tmux"));
+  assert.ok(cmd.includes("mux=tmux"), "기본값은 tmux(종전 경로 무변화)");
 });
 
 // 디스패치 시퀀스 — 상태 동기화의 핵심 행위: cap 은 '상태→capture' 순서, st 는 상태만, i/r 은 상태 미첨부.
@@ -296,7 +302,7 @@ t("C1·C2 psmux 모드 — 입력만 CLI 싱크로 가르고 나머지는 contro
   run({ t: "cap", n: 600, st: 1 });
   run({ t: "st" });
   run({ t: "mr" });
-  assert.deepEqual(lines, [stateCmd(), captureCmd(600), stateCmd(), mouseResetCmd(), stateCmd()]);
+  assert.deepEqual(lines, [stateCmd(true), captureCmd(600), stateCmd(true), mouseResetCmd(), stateCmd(true)]);
   assert.deepEqual(typed, ["ls\r"], "C2: 입력 싱크는 그 뒤로 안 늘어난다");
 });
 

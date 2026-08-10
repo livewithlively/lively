@@ -172,8 +172,29 @@ eq(preview.apiUrl("https://other.example/x"), "https://other.example/x", "㉑절
   const ok2 = (cond, n) => { assert.ok(cond, n); pass++; console.log(`ok  ${n}`); };
   const gate = src.split("\n").find((l) => l.includes("if (!st || !st.alt) return;"));
   ok2(!!gate, "㉝ 폴백 게이트는 'alt-screen인데 백필이 안 왔다'는 관측이다");
-  ok2(!/psmux|win32|navigator\.platform/.test(src.slice(src.indexOf("armBackfillWatch"), src.indexOf("armBackfillWatch") + 1200)),
-    "㉝ 게이트에 플랫폼 스니핑이 섞이지 않는다(캡처되는 백엔드에선 이 경로가 아예 안 탄다)");
+  // (옛 단언 '플랫폼 스니핑 금지' 는 폐기했다: psmux 는 alt-screen 캡처에서 **제어 스트림이 멈춘다**는 것이
+  //  드러나, 사후 회복이 아니라 '그 백엔드엔 처음부터 안 건다'가 유일한 해법이 됐다. 백엔드 식별이 이제 요건이다.
+  //  단, 식별은 서버가 알려준 사실(mux=)이나 관측된 지문이지 클라의 추측이 아니다 — 아래 ㉝ 블록이 그걸 지킨다.)
+}
+
+// ── ㉝ psmux alt-screen 에는 capture-pane 을 걸지 않는다 (#1541 실측) ────────────────────────
+// 실측 트레이스: alt-screen 팬에 capture 를 걸면 `%begin` 뒤로 **제어 스트림 전체가 멈춘다**(9초 무응답).
+//  앱 출력·리사이즈 응답까지 통째로 막혀 새로고침 후 하얀 화면으로 굳는다 — 클라에서 사후 복구가 불가능하다.
+//  그래서 '걸고 나서 회복'이 아니라 **처음부터 걸지 않는다**. 판정은 관측(백엔드·alt)만 쓴다.
+{
+  const { captureUnsafe, nudgeSizes } = preview;
+  const ok3 = (c, n) => { assert.ok(c, n); pass++; console.log(`ok  ${n}`); };
+  ok3(captureUnsafe({ mux: 'psmux', alt: true }) === true, "㉝ psmux + alt-screen → 캡처 금지");
+  ok3(captureUnsafe({ mux: 'psmux', alt: false }) === false, "㉝ psmux 라도 normal 화면이면 캡처한다");
+  ok3(captureUnsafe({ mux: 'tmux', alt: true }) === false, "㉝ tmux 는 alt-screen 도 캡처가 정상");
+  // 구 노드 번들(mux 토큰 없음) — psmux 는 마우스 flag 를 전부 빈 값으로 준다(지문).
+  ok3(captureUnsafe({ alt: true, flagsMissing: true }) === true, "㉝ mux 미상 + flag 전부 빈 값 = psmux 로 본다");
+  ok3(captureUnsafe({ alt: true, flagsMissing: false }) === false, "㉝ mux 미상이라도 flag 가 오면 tmux 로 본다(종전 동작)");
+  ok3(captureUnsafe(null) === false, "㉝ 상태 없음이면 종전 동작");
+  // 넛지는 원래 크기로 정확히 복원한다 — 회복하려다 크기를 영구히 바꾸면 안 된다.
+  eq(JSON.stringify(nudgeSizes(120, 40)), JSON.stringify([{ t: 'r', c: 120, r: 39 }, { t: 'r', c: 120, r: 40 }]),
+    "㉝ 넛지는 r-1 로 줄였다가 원래 r 로 되돌린다");
+  eq(nudgeSizes(80, 1), null, "㉝ 1줄짜리는 넛지 불가");
 }
 
 console.log(`\n${pass} passed`);
