@@ -30,10 +30,20 @@ What lives in `src/ee/` today:
 - Unstructured PII scrubbing for proxied responses
 - The organisation-wide ingest policy gate
 - External IdP login (SSO / OIDC), including account linking and domain-allowlist provisioning
+- Audit-log CSV export (the on-screen audit views themselves stay core)
+- Break-glass: time-boxed, reasoned, audited access beyond the visibility rules
+- Connector-level source visibility policy and its retroactive backfill (enforcement stays core)
 
 Everything else — including the SQL firewall, table allow/deny policy, secret redaction, and
 per-channel read/write guards — is core AGPL code, because **basic safety belongs in the free
 edition**. We sell compliance, not safety.
+
+Some things look like compliance and are not. Audit-log retention and pruning stay core: their
+job is to stop personal usage records piling up forever, so moving them would make the free
+edition the one that hoards data. Visibility rules are enforced by core, so a box that drops
+`src/ee/` keeps honouring the policies it already has — what it loses is the ability to author
+new ones. Session history and resume stay core too: that is the web terminal, which is the
+product.
 
 If a compliance policy is configured in the database but the Enterprise module is absent, the
 core **refuses the request** rather than silently ignoring the policy. A missing feature and an
