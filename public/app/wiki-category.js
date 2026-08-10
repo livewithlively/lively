@@ -10,7 +10,7 @@ import { overlayBox, skeleton } from './learn.js';
 import { hasScope } from './admin.js';
 import { applyCoverBg, openCoverPicker, openEmojiPicker } from './page-decor.js';
 import { HOME_EMPTY, KN_TYPE_LABEL, hasMemoryScope, homeDocName, isCategoryHomeDoc, knFetchCategoryRows, knFolderFirstSort, knInvalidateTreeCaches, openProjectChooser, } from './wiki-data.js';
-import { wkAurora, wkDeck, wkDocCard, wkEmpty, wkMetaOf, wkRow, wkSection, wkTick } from './wiki-ui.js';
+import { wkAurora, wkDeck, wkDocCard, wkEmpty, wkLede, wkMetaOf, wkRow, wkSection, wkTick } from './wiki-ui.js';
 import { openWikiPeek, setWikiPeekList } from './wiki-doc.js';
 // ── 폴더 만들기 — 트리 그룹 노드(is_folder). 현재 폴더 안이면 그 아래로. ──
 function openFolderForm(cat, parentFolder, done) {
@@ -385,7 +385,7 @@ async function renderCategorySurface(box, cat, ctx) {
                 sec.body.append(wkRow(r, {
                     open: openDoc,
                     select: sel.mode ? { names: sel.names, onToggle: repaintBulk } : null,
-                    deck: sel.mode ? '' : wkDeck(r.body_md || '', 110), // 발췌 한 줄 — 목록이 피드처럼 읽히게(#764v2)
+                    deck: sel.mode ? '' : wkLede(r), // 한 줄 요지(#1600) — 없으면 빈칸(본문 파편을 대신 넣지 않는다)
                     //  유형 필터가 걸려 있으면 행마다 같은 유형을 반복하지 않는다(그 목록에서 '변하는 값만' — 목록 문법).
                     metas: wkMetaOf(r, { type: !f.type }),
                 }));
@@ -512,23 +512,6 @@ async function renderCategorySurface(box, cat, ctx) {
     const blkTitle = (b) => (b.cfg && b.cfg.title) || (b.type === 'stat' ? '이 카테고리의 구성' : (SRC_LABEL[b.cfg.src] || '문서'));
     const cfgLabel = (c) => (SRC_LABEL[c.src] || '최신') + ' · ' + (c.limit || 5) + '건';
     const emptyBlk = () => el('div', { class: 'wk-bld-empty', text: editing ? '이 조건에 맞는 문서가 아직 없어요 — ⚙로 조건을 바꿔 보세요.' : '아직 문서가 없어요.' });
-    // 목록 부제 — 산문 발췌(wkDeck)가 없으면 헤딩을 건너뛴 첫 내용 줄로 폴백. 모든 행이 부제를 갖게 해
-    //  '있는 행/없는 행 높이가 달라 들쭉날쭉'을 없앤다(발췌 있음/없음 무관 균일).
-    function deckLine(md, cap) {
-        const d = wkDeck(md || '', cap);
-        if (d)
-            return d;
-        for (const raw of String(md || '').split('\n')) {
-            const l = raw.trim();
-            if (!l || l.startsWith('#') || l.startsWith('```') || l.startsWith(':::') || l.startsWith('|') || l.startsWith('!['))
-                continue;
-            const clean = l.replace(/^>\s*/, '').replace(/^[-*+]\s+/, '').replace(/^\d+\.\s+/, '')
-                .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/[*_`~]/g, '').replace(/\s+/g, ' ').trim();
-            if (clean.length >= 4)
-                return clean.slice(0, cap);
-        }
-        return '';
-    }
     // 갤러리 카드 — 오로라 커버 + 제목(#764v2 시각 자산 재사용).
     function galCard(x) {
         const c = el('div', { class: 'wk-galc', role: 'link', tabindex: '0', title: x.title || x.name }, wkAurora(x.name, cat.space, { cls: 'wk-galc-cov', watermark: x.icon || '' }), el('div', { class: 'wk-galc-b' }, el('div', { class: 'wk-galc-t', text: x.title || x.name }), el('div', { class: 'wk-galc-m' }, wkTick(x), x.type ? el('span', { class: 'wk-row-m', text: KN_TYPE_LABEL[x.type] || x.type }) : null)));
@@ -585,7 +568,7 @@ async function renderCategorySurface(box, cat, ctx) {
             else {
                 body = el('div', { class: 'wk-bld-list' });
                 for (const x of d)
-                    body.append(wkRow(x, { open: openDoc, deck: deckLine(x.body_md || '', 92), metas: wkMetaOf(x) }));
+                    body.append(wkRow(x, { open: openDoc, deck: wkLede(x), metas: wkMetaOf(x) }));
             }
         }
         // 헤더 메타(#1600) — 읽기 모드에선 **건수만**. 종전엔 cfgLabel 이 조건 라벨을 다시 찍어

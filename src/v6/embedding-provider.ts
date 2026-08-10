@@ -254,9 +254,12 @@ export function toVectorLiteral(v: number[]): string {
 }
 
 const EMBED_MAX_CHARS = 8000; // bge-m3 ~8192토큰 — 한글 멀티바이트 고려 보수적 캡(임베딩 입력 절단)
-// 임베딩 입력 텍스트 — 제목+요약+본문(grep 과 같은 검색 표면 title+body 에 summary 보강). 모델 토큰한계 캡.
+// 임베딩 입력 텍스트 — 제목+본문. 모델 토큰한계 캡.
+//  ⚠ summary(한 줄 요지)는 **넣지 않는다**(#1600). 그건 12살도 알아듣게 범위를 넓혀 쓴 사람용 문장이라,
+//   검색 벡터에 섞이면 AI 가 원문 대신 '쉬운 요약과 비슷한' 문서를 끌어온다(요약의 과일반화가 검색으로 번진다).
+//   시그니처는 그대로 둔다 — 호출부가 summary 를 넘기든 말든 결과가 같아야 이 규칙이 한 곳에서만 지켜진다.
 export function embeddingInputText(k: { title?: string | null; summary?: string | null; body_md?: string | null }): string {
-  const parts = [k.title, k.summary, k.body_md].map((s) => (s ?? "").trim()).filter(Boolean);
+  const parts = [k.title, k.body_md].map((s) => (s ?? "").trim()).filter(Boolean);
   return parts.join("\n\n").slice(0, EMBED_MAX_CHARS);
 }
 

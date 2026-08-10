@@ -14,7 +14,7 @@ import {
 // #783 인입 허용선 게이트 — 상세 조회는 '검토 대기 중인 수정이 있나'를 함께 알린다(덧쓰기 사고 방지).
 import { pendingRevisionFor } from "../../v6/knowledge-revision-store.js";
 import { canSeeKnowledge } from "../../v6/visibility.js";
-import { assertKnowledgeVisible } from "./shared.js";
+import { assertKnowledgeVisible, stripLedeForAgent } from "./shared.js";
 
 // MCP 필드명 = 핸들러가 읽는 이름(REST 는 query 'category'→categoryId, 'category=none'→uncategorized 로 매핑).
 //  injection/provenance/lifecycle/orderBy/is_wiki 도 선택.
@@ -74,7 +74,7 @@ export const knowledgeList: Capability = {
       listKnowledge({ ...input, limit, offset }, viewer),
       countKnowledge(input, viewer),
     ]);
-    return { entries, total, limit, offset, has_more: offset + entries.length < total };
+    return { entries: stripLedeForAgent(entries, ctx), total, limit, offset, has_more: offset + entries.length < total };
   },
 };
 
@@ -124,9 +124,9 @@ export const knowledgeGrep: Capability = {
     }
     return {
       mode: input.mode ?? "snippets",
-      entries: await searchKnowledge(input.q, {
+      entries: stripLedeForAgent(await searchKnowledge(input.q, {
         injection: input.injection, provenance: input.provenance, limit: input.limit, mode: input.mode, context: input.context,
-      }, viewer),
+      }, viewer), ctx),
     };
   },
 };
@@ -175,9 +175,9 @@ export const knowledgeSearch: Capability = {
       } }],
   },
   handler: async (input: KnowledgeSearchInput, _user: LivelyUser, ctx?: CapabilityCtx) => ({
-    entries: await hybridSearchKnowledge(input.q, {
+    entries: stripLedeForAgent(await hybridSearchKnowledge(input.q, {
       injection: input.injection, provenance: input.provenance, limit: input.limit, mode: input.mode, context: input.context,
-    }, ctx?.viewer ?? null),
+    }, ctx?.viewer ?? null), ctx),
   }),
 };
 
@@ -228,10 +228,10 @@ export const knowledgeSimilar: Capability = {
     //  "무엇에 대한 문서인가"를 역추적하는 우회로다(recall 훅이 매 세션 때리는 경로라 특히).
     await assertKnowledgeVisible(input.name, viewer);
     return {
-      entries: await findSimilarKnowledge({
+      entries: stripLedeForAgent(await findSimilarKnowledge({
         name: input.name, text: input.text, limit: input.limit, minScore: input.min_score,
         injection: input.injection, provenance: input.provenance,
-      }, viewer),
+      }, viewer), ctx),
     };
   },
 };
@@ -305,8 +305,9 @@ export const knowledgeGet: Capability = {
   handler: async (input: KnowledgeGetInput, _user: LivelyUser, ctx?: CapabilityCtx) => {
     // 공개범위(#1291) — 전문을 돌려주는 자리라 **본문을 읽기 전에** 막는다(없는 문서와 같은 문구 = 존재 은닉).
     if (!(await canSeeKnowledge(String(input.name), ctx?.viewer ?? null))) throw new Error(`지식 '${input.name}' 없음`);
-    const knowledge = await getKnowledge(input.name, ctx?.viewer ?? null);
-    if (!knowledge) throw new Error(`지식 '${input.name}' 없음`);
+    const knowledge0 = await getKnowledge(input.name, ctx?.viewer ?? null);
+    if (!knowledge0) throw new Error(`지식 '${input.name}' 없음`);
+    const knowledge = stripLedeForAgent(knowledge0, ctx);   // 요지는 사람 화면 전용(#1600)
     // #783 이 지식에 검토 대기 중인 수정이 있으면 함께 알린다 — staged 면 "지금 보는 본문은 옛 승인본"이라는 뜻이라
     //  사람·에이전트가 그 사실을 모르고 덧쓰면 안 된다(웹 문서화면은 이 값으로 배너를 띄운다).
     const pendingRev = await pendingRevisionFor(input.name);

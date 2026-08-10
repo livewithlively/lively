@@ -145,10 +145,21 @@ function wkAurora(seed: string, space: string, opts: any = {}) {
   return cover;
 }
 
-// ── 문서 카드 — 데크(본문 첫 문단 발췌)로 클릭 전에 내용이 읽히는 카드. 홈 핀/최근·카테고리 시작점 공용. ──
+// ── 한 줄 요지(#1600) — 목록·카드에서 제목 아래 붙는 사람용 설명. ──
+//  ⚠ 본문 발췌(wkDeck)로 대신하지 않는다. 발췌는 헤딩·인용을 건너뛰고 '첫 평문 문단'을 집는데,
+//   이 코퍼스는 대부분 인용(> 발단: …)으로 시작해서 본문 한참 아래의 문맥 없는 조각이 뽑혔다
+//   (슬러그로 시작하는 줄이 그대로 붙는 사례가 실제로 있었다). 파편을 보여주느니 비우는 게 낫다.
+//  요지는 저장 시 함께 적히고(knowledge_save summary), AI 에게는 반환되지 않는 사람 전용 필드다.
+function wkLede(e: any): string {
+  return String((e && e.summary) || '').trim();
+}
+
+// ── 문서 카드 — 요지로 클릭 전에 내용이 읽히는 카드. 홈 핀/최근·카테고리 시작점 공용. ──
 //  opts: { open(e, el), deckCap, metas?: 추가 메타 노드, cls }
 function wkDocCard(e: any, opts: any = {}) {
-  const deck = wkDeck(e.body_md || '', opts.deckCap || 120);
+  const cap = opts.deckCap || 120;
+  const lede0 = wkLede(e);
+  const deck = lede0.length > cap ? lede0.slice(0, cap - 1).trimEnd() + '…' : lede0;
   const card = el('div', { class: 'wk-doccard' + (opts.cls ? ' ' + opts.cls : ''), role: 'link', tabindex: '0', 'data-author': e.confidence || '' },
     el('div', { class: 'wk-doccard-top' },
       wkTick(e),
@@ -174,7 +185,7 @@ function wkRow(e: any, opts: any = {}) {
   const metaEl = el('span', { class: 'wk-row-meta' }, ...metas.map((m: any) =>
     (m && (m as any).nodeType) ? m : el('span', { class: 'wk-row-m', text: String(m) })));
   // 발췌 줄 — opts.deck(본문 발췌) 또는 검색(grep) 매치 스니펫(L<n>: 등 기계 표기는 정리).
-  const snip = opts.deck || (e.snippet
+  const snip = (opts.deck != null ? opts.deck : wkLede(e)) || (e.snippet
     ? String(e.snippet).replace(/\(\+\d+ matches\)[^\n]*/g, '').replace(/L\d+:\s*/g, '')
       .replace(/[\n⋯]+/g, ' · ').replace(/\s+/g, ' ').trim().slice(0, 180)
     : '');
@@ -273,6 +284,6 @@ function wkEmpty(text: string, action?: any) {
 }
 
 export {
-  wkAurora, wkDayLabel, wkDeck, wkDocCard, wkEmpty, wkHash, wkIsRead, wkMarkRead, wkMetaOf,
+  wkAurora, wkDayLabel, wkDeck, wkDocCard, wkEmpty, wkHash, wkIsRead, wkLede, wkMarkRead, wkMetaOf,
   wkOriginText, wkOriginTitle, wkReadVisits, wkRecordVisit, wkRow, wkSection, wkStamp, wkTick, wkTypeTag,
 };
