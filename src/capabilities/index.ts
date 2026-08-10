@@ -32,7 +32,6 @@ import { teamCapabilities } from "./teams.js";
 import { trashCapabilities } from "./trash.js";
 import { visAxesCapabilities } from "./vis-axes.js";
 import { sourceVisPolicyCapabilities } from "./source-vis-policy.js";
-import { breakGlassCapabilities } from "./break-glass.js";
 import { undoCapabilities } from "./undo.js";
 import { cronCapabilities } from "./cron.js";
 import { feedTargetCapabilities } from "./feed-targets.js";
@@ -83,7 +82,10 @@ const all: Capability[] = [
   ...trashCapabilities, // v6: 휴지통(deleted_list 조회 + content_restore 복원) — 감사로그 기반 공통 경로. 복원은 사람전용(에이전트 403). 삭제는 엔티티별(knowledge_delete·category_delete·project_delete_v6). #1291: 조회·복원 모두 공개범위 판정을 탄다(지우면 열린다가 되지 않게).
   ...sourceVisPolicyCapabilities, // #1291 v4: 커넥터별 자료 공개범위 정책(source_vis_policy_*). 수집물이 태어날 때 공개범위를 정하고, 과거분은 backfill 로 소급.
   ...visAxesCapabilities, // #1291: 맥락 유형별 공개범위 켜기/끄기(vis_axis_list/_set). admin scope. 끄기는 잠긴 항목을 전원 공개시키므로 confirm+작업기록 필수.
-  ...breakGlassCapabilities, // #1291 v2: 긴급 열람 — admin 도 우회하지 않으므로, 사유·감사·통지와 함께 한시적으로 여는 유일한 문.
+  // (긴급 열람 vis_break_glass_* 는 #1601 로 Enterprise 로 갔다 — ee/capabilities/break-glass.ts.
+  //  공개범위 판정과 긴급열람 **조회**(v6/visibility.ts)는 코어에 그대로다: 그게 EE 로 가면 가시성 자체가
+  //  EE 의존이 된다. 무료판에서 잠긴 맥락을 봐야 하면 admin 이 vis_axis_set 으로 공개범위를 바꾼다 —
+  //  정책을 안 건드리고 사유·감사·통지와 함께 한시적으로 넘는 문이 EE 다.)
   ...undoCapabilities, // #702: 전역 실행취소(Cmd+Z) — org_content_audit before/after 역적용(content_undo, REST 전용 /api/ui/undo). 사람전용(에이전트 403), 대상=내 웹 채널 변경만.
   ...feedTargetCapabilities, // #976 위키 아웃바운드 — 피드 목적지(feed_target)+카테고리 N:M 매핑 CRUD+드레인. admin scope, MCP+REST(/api/ui/feed-targets*). 관리탭 '위키 아웃바운드' 패널.
   ...cronCapabilities, // 서버사이드 스케줄 잡(org_cron) 관리 — admin scope. cron_list/set/delete/run_now(REST /api/ui/cron + MCP). 트리거 표준화: is 신선화·sync 를 게이트웨이가 주기 실행(웹훅 대체).

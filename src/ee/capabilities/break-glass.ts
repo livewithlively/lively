@@ -1,3 +1,6 @@
+// ⚠ Lively Enterprise Edition — 이 디렉터리(src/ee)는 상용 라이센스다. src/ee/LICENSE 참조.
+//   유효한 구독 없이 프로덕션에서 사용할 수 없다(열람·개발·테스트는 허용).
+//
 // 긴급 열람(break-glass, #1291 v2) — admin 이 공개범위를 넘는 **유일한 문**.
 //
 //  왜 이 문이 필요한가: v2 에서 admin 우회를 없앴다(admin 신원을 물려받은 AI 자동화가 잠긴 내용을 읽어
@@ -5,12 +8,12 @@
 //  그래서 **열람 자체를 막는 대신 '흔적 없는 열람'을 막는다** — 사유를 적어야 열리고, 감사에 남고, 대상자가 알게 된다.
 //  (Slack 의 컴플라이언스 익스포트가 법적 근거를 요구하는 것과 같은 자리. 우리는 그걸 조직 안에서 처리한다.)
 import { z } from "zod";
-import { HttpError } from "./rest-util.js";
-import type { Capability } from "./types.js";
-import { itemsPool } from "../db/client.js";
-import { q, one } from "../db/client.js";
-import { invalidateBreakGlass } from "../v6/visibility.js";
-import { logActivity } from "../activity/store.js";
+import { HttpError } from "../../capabilities/rest-util.js";
+import type { Capability } from "../../capabilities/types.js";
+import { itemsPool } from "../../db/client.js";
+import { q, one } from "../../db/client.js";
+import { invalidateBreakGlass } from "../../v6/visibility.js";
+import { logActivity } from "../../activity/store.js";
 
 const MAX_MINUTES = 24 * 60;      // 하루를 넘기면 그건 '긴급'이 아니라 상시 권한이다
 const DEFAULT_MINUTES = 30;

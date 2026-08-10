@@ -3027,36 +3027,6 @@
   "input_hash": "1ad1ce61e6e6e384"
  },
  {
-  "name": "vis_break_glass_start",
-  "scope": "admin",
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/vis/break-glass"
-  ],
-  "input_hash": "8a0e49aa8e26aac4"
- },
- {
-  "name": "vis_break_glass_end",
-  "scope": "admin",
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/vis/break-glass/end"
-  ],
-  "input_hash": "fee9bce64a33c0f5"
- },
- {
-  "name": "vis_break_glass_list",
-  "scope": "admin",
-  "mcp": true,
-  "mutates": false,
-  "rest": [
-   "GET /api/ui/vis/break-glass"
-  ],
-  "input_hash": "2d8947daaba55c08"
- },
- {
   "name": "content_undo",
   "scope": "memory",
   "mcp": false,
