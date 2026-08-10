@@ -31,7 +31,6 @@ import { taskFieldV6Capabilities } from "./task-field-v6.js";
 import { teamCapabilities } from "./teams.js";
 import { trashCapabilities } from "./trash.js";
 import { visAxesCapabilities } from "./vis-axes.js";
-import { sourceVisPolicyCapabilities } from "./source-vis-policy.js";
 import { undoCapabilities } from "./undo.js";
 import { cronCapabilities } from "./cron.js";
 import { feedTargetCapabilities } from "./feed-targets.js";
@@ -80,7 +79,11 @@ const all: Capability[] = [
   ...taskDetailV6Capabilities, // v6: 태스크 상세 모달(클릭업형) — 태그·시간추적·체크리스트·의존성·댓글/활동피드. scope=memory. expose.mcp:true(자동등록)+REST(/api/ui/v6/tasks/:id/*).
   ...taskFieldV6Capabilities, // v6: 커스텀 필드(클릭업형 "+ 컬럼 추가") — 필드 정의 CRUD + 태스크별 값 패치. scope=memory. expose.mcp:true(자동등록)+REST(/api/ui/v6/projects/:id/fields, /fields/:id, /tasks/:id/fields/:fieldId). task_field_delete_v6 는 org_tool 기본 OFF(값 손실).
   ...trashCapabilities, // v6: 휴지통(deleted_list 조회 + content_restore 복원) — 감사로그 기반 공통 경로. 복원은 사람전용(에이전트 403). 삭제는 엔티티별(knowledge_delete·category_delete·project_delete_v6). #1291: 조회·복원 모두 공개범위 판정을 탄다(지우면 열린다가 되지 않게).
-  ...sourceVisPolicyCapabilities, // #1291 v4: 커넥터별 자료 공개범위 정책(source_vis_policy_*). 수집물이 태어날 때 공개범위를 정하고, 과거분은 backfill 로 소급.
+  // (커넥터별 자료 공개범위 **정책 정의·소급 백필**(source_vis_policy_*)은 #1601 로 Enterprise 로 갔다 —
+  //  '강제'가 EE 이기 때문이다(위키 §1-3: 발견은 코어, 강제는 EE).
+  //  ★ 그 정책을 **집행**하는 v6/source-vis-policy.ts(수집 시 스탬핑·증류 지식 상속)는 코어에 그대로다.
+  //   집행까지 EE 로 보내면 EE 를 걷어낸 박스에서 이미 세운 정책이 무시돼 유출이 된다 — 집행이 코어라
+  //   기존 정책은 계속 지켜지고, 없는 것은 '새 정책을 만드는 능력'뿐이다.)
   ...visAxesCapabilities, // #1291: 맥락 유형별 공개범위 켜기/끄기(vis_axis_list/_set). admin scope. 끄기는 잠긴 항목을 전원 공개시키므로 confirm+작업기록 필수.
   // (긴급 열람 vis_break_glass_* 는 #1601 로 Enterprise 로 갔다 — ee/capabilities/break-glass.ts.
   //  공개범위 판정과 긴급열람 **조회**(v6/visibility.ts)는 코어에 그대로다: 그게 EE 로 가면 가시성 자체가

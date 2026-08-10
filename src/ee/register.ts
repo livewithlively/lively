@@ -16,6 +16,7 @@ import { getIngestPolicyRules, invalidateIngestPolicyCache } from "./ingest/inge
 import { dbAuditCapabilities } from "./capabilities/db-audit.js";
 import { dbGrantCapabilities } from "./capabilities/db-grant.js";
 import { breakGlassCapabilities } from "./capabilities/break-glass.js"; // #1601 긴급 열람
+import { sourceVisPolicyCapabilities } from "./capabilities/source-vis-policy.js"; // #1601 자료 공개범위 정책·소급
 import { addEnterpriseCapabilities } from "../capabilities/index.js";
 import { oidcConfig } from "./auth/oidc.js"; // #1601 SSO — 외부 IdP 웹 로그인
 import { registerOidcRoutes } from "./auth/oidc-routes.js";
@@ -24,7 +25,9 @@ import { registerAuditExportRoutes } from "./audit/export-routes.js"; // #1601 �
 
 export function registerEnterpriseModule(): void {
   // EE 관리 표면(db_audit_*·db_unmask_grant_*) 합류 — 코어 registry 는 이 이름들을 정적으로 모른다.
-  addEnterpriseCapabilities([...dbAuditCapabilities, ...dbGrantCapabilities, ...breakGlassCapabilities]);
+  addEnterpriseCapabilities([
+    ...dbAuditCapabilities, ...dbGrantCapabilities, ...breakGlassCapabilities, ...sourceVisPolicyCapabilities,
+  ]);
   registerEnterprise({
     dbMask: { maskValue, planMaskTargets, applyRowMasking },
     dbMaskPolicy: {
