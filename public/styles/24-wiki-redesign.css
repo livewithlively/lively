@@ -930,3 +930,14 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
   text-transform: uppercase; margin-right: 2px; }
 .wk-type-it { display: inline-flex; align-items: center; gap: 5px; }
 .wk-ty-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; }
+
+/* ── 문서 머리(#1600) — 짧은 제목 · 요지 · 원래 제목 ──
+   사람이 읽는 순서를 그대로 세로로 둔다: 무엇인가(짧은 제목) → 뭘 말하나(요지) → 원문 이름(확인용).
+   원래 제목은 지우지 않되 세 번째로 내린다 — 평균 84자짜리가 맨 위에 있으면 화면의 첫 인상을 다 먹는다. */
+.wk-doc-lede { margin: 6px 0 0; font-size: 15px; line-height: 1.6; color: var(--ink-sub); max-width: 720px; }
+.wk-doc-lede.editable:empty::before { content: attr(data-ph); color: var(--muted-2); }
+.wk-doc-lede.editable:hover { background: var(--bg-tint); border-radius: 6px; }
+.wk-doc-fulltitle { margin: 10px 0 0; font-size: 12px; line-height: 1.5; color: var(--muted-2); max-width: 720px;
+  padding-left: 9px; border-left: 2px solid var(--line); }
+.wk-doc-fulltitle.editable:hover { background: var(--bg-tint); }
+.wk-doc.full .wk-doc-lede, .wk-doc.full .wk-doc-fulltitle { max-width: none; }

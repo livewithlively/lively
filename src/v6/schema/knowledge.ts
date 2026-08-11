@@ -58,6 +58,9 @@ export async function initV6Knowledge(pool: Pool): Promise<void> {
     -- created_at(2026-06-30 #290): 최초 작성 시점. 비파괴 ADD COLUMN(NULL) → 기존 행은 updated_at 으로 1회 백필(WHERE NULL, 멱등) → 이후 DEFAULT now().
     --  주의: 백필값은 '마지막 갱신' 기준 근사(편집된 지식은 실제 생성보다 늦을 수 있음 — 더 정확한 출처가 없음). 신규 INSERT 는 DEFAULT now(), ON CONFLICT 갱신은 created_at 미변경(보존).
     ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;
+    -- #1600 사람용 짧은 제목 — 목록·카드·문서 머리에 쓰는 40자 이하 요점 제목.
+    --  title(원래 제목)은 그대로 둔다: AI 는 계속 그걸 보고, 사람은 이걸 본다(요지 summary 와 같은 성격).
+    ALTER TABLE knowledge ADD COLUMN IF NOT EXISTS short_title TEXT;
     UPDATE knowledge SET created_at = updated_at WHERE created_at IS NULL;
     ALTER TABLE knowledge ALTER COLUMN created_at SET DEFAULT now();
     CREATE UNIQUE INDEX IF NOT EXISTS knowledge_external_uidx ON knowledge(external_system, external_instance, external_id) WHERE external_id IS NOT NULL;

@@ -167,6 +167,15 @@ function wkAurora(seed, space, opts = {}) {
 //   이 코퍼스는 대부분 인용(> 발단: …)으로 시작해서 본문 한참 아래의 문맥 없는 조각이 뽑혔다
 //   (슬러그로 시작하는 줄이 그대로 붙는 사례가 실제로 있었다). 파편을 보여주느니 비우는 게 낫다.
 //  요지는 저장 시 함께 적히고(knowledge_save summary), AI 에게는 반환되지 않는 사람 전용 필드다.
+// ── 사람용 짧은 제목(#1600) — 목록·카드·문서 머리에 쓰는 이름. ──
+//  원래 title 은 지우지 않는다(AI 는 계속 그걸 본다). 다만 그 제목은 결론을 다 욱여넣어 평균 84자·최대 200자라
+//  사람 화면에서는 줄마다 잘려 읽히지 않았다 — 사람에게는 short_title 을, 없으면 종전대로 title 을 보여준다.
+//  ⚠ '원문을 그대로 보고 싶은 자리'(문서의 원래 제목 표시·MD 원문)에서는 이 함수를 쓰지 않는다.
+function wkTitle(e) {
+    if (!e)
+        return '';
+    return String(e.short_title || '').trim() || String(e.title || e.name || '').trim();
+}
 function wkLede(e, cap = 150) {
     const s = String((e && e.summary) || '').trim();
     if (s)
@@ -181,7 +190,7 @@ function wkDocCard(e, opts = {}) {
     const cap = opts.deckCap || 120;
     const lede0 = wkLede(e, cap);
     const deck = lede0.length > cap ? lede0.slice(0, cap - 1).trimEnd() + '…' : lede0;
-    const card = el('div', { class: 'wk-doccard' + (opts.cls ? ' ' + opts.cls : ''), role: 'link', tabindex: '0', 'data-author': e.confidence || '' }, el('div', { class: 'wk-doccard-top' }, wkTick(e), e.icon ? el('span', { class: 'wk-doccard-ic', 'aria-hidden': 'true', text: e.icon }) : null, el('span', { class: 'wk-doccard-title', text: e.title || e.name })), deck ? el('p', { class: 'wk-doccard-deck', text: deck }) : null, el('div', { class: 'wk-doccard-meta' }, ...wkMetaOf(e, { lead: opts.metas || [] })
+    const card = el('div', { class: 'wk-doccard' + (opts.cls ? ' ' + opts.cls : ''), role: 'link', tabindex: '0', 'data-author': e.confidence || '' }, el('div', { class: 'wk-doccard-top' }, wkTick(e), e.icon ? el('span', { class: 'wk-doccard-ic', 'aria-hidden': 'true', text: e.icon }) : null, el('span', { class: 'wk-doccard-title', title: e.title || '', text: wkTitle(e) })), deck ? el('p', { class: 'wk-doccard-deck', text: deck }) : null, el('div', { class: 'wk-doccard-meta' }, ...wkMetaOf(e, { lead: opts.metas || [] })
         .map((m) => ((m && m.nodeType) ? m : el('span', { class: 'wk-row-m', text: String(m) })))));
     const go = () => { if (opts.open)
         opts.open(e, card);
@@ -210,7 +219,7 @@ function wkRow(e, opts = {}) {
         class: 'wk-row' + (e.is_folder ? ' folder' : '') + (e.lifecycle === 'archived' ? ' archived' : '') + (snip ? ' has-snip' : ''),
         role: 'link', tabindex: '0',
         'data-author': e.confidence || '', 'data-prov': e.provenance || '',
-    }, wkTick(e), ic ? el('span', { class: 'wk-row-ic', 'aria-hidden': 'true', text: ic }) : null, el('span', { class: 'wk-row-main' }, el('span', { class: 'wk-row-title', text: e.title || e.name }), snip ? el('span', { class: 'wk-row-snip', text: snip }) : null), metaEl);
+    }, wkTick(e), ic ? el('span', { class: 'wk-row-ic', 'aria-hidden': 'true', text: ic }) : null, el('span', { class: 'wk-row-main' }, el('span', { class: 'wk-row-title', title: e.title || '', text: wkTitle(e) }), snip ? el('span', { class: 'wk-row-snip', text: snip }) : null), metaEl);
     if (opts.select) {
         const on0 = opts.select.names.has(e.name);
         row.classList.add('pick');
@@ -323,4 +332,4 @@ function wkDayLabel(iso) {
 function wkEmpty(text, action) {
     return el('div', { class: 'wk-empty' }, el('span', { text }), action || null);
 }
-export { wkAurora, wkDayLabel, wkDeck, wkDocCard, wkEmpty, wkHash, wkIsRead, wkLede, wkMarkRead, wkMetaOf, wkOriginText, wkOriginTitle, wkReadVisits, wkRecordVisit, wkRow, wkSection, wkStamp, wkTick, wkTypeTag, };
+export { wkAurora, wkDayLabel, wkDeck, wkDocCard, wkEmpty, wkHash, wkIsRead, wkLede, wkMarkRead, wkMetaOf, wkTitle, wkOriginText, wkOriginTitle, wkReadVisits, wkRecordVisit, wkRow, wkSection, wkStamp, wkTick, wkTypeTag, };

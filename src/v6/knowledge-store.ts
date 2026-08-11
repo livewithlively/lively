@@ -43,7 +43,7 @@ export type { KnowledgeLinkRow, WikiLinkResult } from "./knowledge-links.js";
 const K_COLS =
   `name, title, body_md, injection, provenance, lifecycle, supersedes, confidence, source,
    external_system, external_instance, external_id, external_url, occurred_at, last_synced_at,
-   as_of, parent_name, summary, author, source_ref, sort, is_wiki, type, is_folder, visibility, version, created_at, updated_at, updated_by`;
+   as_of, parent_name, summary, short_title, author, source_ref, sort, is_wiki, type, is_folder, visibility, version, created_at, updated_at, updated_by`;
 const K_SEL = K_COLS.split(",").map((c) => "k." + c.trim()).join(", ");
 // 목록 전용 경량 SELECT(#1091) — body_md 만 뺀다. 사이드바 트리·검색·홈 카드 보강은 본문을 한 글자도 안 쓰는데,
 //  전량(수백 건 × 평균 8KB)을 실어 나르고 있었다(위키 홈 첫 화면 ~4MB). 발췌(deck)를 그리는 화면만 full 을 쓴다.
@@ -249,12 +249,12 @@ export async function knowledgeTreeData(system: string, limit = 20000, viewer?: 
 
 /** resolveUpsertFacets 입력 — upsertKnowledge input 의 facet 부분집합(명시 시 우선). 상위 input 을 통째로 넘겨도 무방(구조적). */
 export interface UpsertFacetInput {
-  injection?: string; provenance?: string; summary?: string | null; sort?: number; is_wiki?: boolean; type?: string | null;
+  injection?: string; provenance?: string; summary?: string | null; short_title?: string | null; sort?: number; is_wiki?: boolean; type?: string | null;
   is_folder?: boolean; parent_name?: string | null;   // #592 폴더·트리 위치 — 본문만 편집해도 유실 금지(같은 불변식)
 }
 /** 병합 결과 — INSERT VALUES / ON CONFLICT DO UPDATE(is_wiki=EXCLUDED.is_wiki 등) 파라미터로 그대로 사용. */
 export interface ResolvedFacets {
-  injection: string; provenance: string; summary: string | null; sort: number; isWiki: boolean; type: string | null;
+  injection: string; provenance: string; summary: string | null; shortTitle: string | null; sort: number; isWiki: boolean; type: string | null;
   isFolder: boolean; parentName: string | null;
 }
 /**
@@ -268,6 +268,8 @@ export function resolveUpsertFacets(input: UpsertFacetInput, before: Record<stri
     injection: input.injection ?? (before?.injection as string) ?? "recalled",
     provenance: input.provenance ?? (before?.provenance as string) ?? "authored",
     summary: input.summary !== undefined ? input.summary : ((before?.summary as string | null) ?? null),
+    //  #1600 짧은 제목 — summary 와 같은 클래스(명시 우선 → 기존 보존). 본문만 고치는 저장이 이걸 지우면 안 된다.
+    shortTitle: input.short_title !== undefined ? input.short_title : ((before?.short_title as string | null) ?? null),
     sort: input.sort !== undefined ? input.sort : (Number(before?.sort) || 0),
     isWiki: input.is_wiki !== undefined ? input.is_wiki : ((before?.is_wiki as boolean) ?? false),
     type: input.type !== undefined ? input.type : ((before?.type as string | null) ?? null),
@@ -393,7 +395,7 @@ async function assertTreeParent(childName: string, parentName: string): Promise<
 //  행 자체(감사·undo 입력)는 오염되지 않는다: auditKnowledge 는 이 아래에서 raw `after` 로 이미 기록된다.
 //  호출부는 응답에 실을 때 구조분해로 떼어낸다(knowledge_save) — 기존 호출부는 무시하면 그만이라 비파괴.
 export async function upsertKnowledge(
-  input: { name?: string; title?: string; body_md: string; injection?: string; provenance?: string; lifecycle?: string; confidence?: string; source?: string; supersedes?: string; summary?: string | null; sort?: number; is_wiki?: boolean; type?: string | null; category?: string | string[]; is_folder?: boolean; parent_name?: string | null },
+  input: { name?: string; title?: string; body_md: string; injection?: string; provenance?: string; lifecycle?: string; confidence?: string; source?: string; supersedes?: string; summary?: string | null; short_title?: string | null; sort?: number; is_wiki?: boolean; type?: string | null; category?: string | string[]; is_folder?: boolean; parent_name?: string | null },
   ctx?: WriteCtx,
 ): Promise<KnowledgeRow & { wikilinks?: WikiLinkResult }> {
   let name: string;
@@ -427,7 +429,7 @@ export async function upsertKnowledge(
   const confidence = input.confidence ?? (ctx?.source === "mcp" ? "ai" : "human");
   // injection/provenance/summary/sort/is_wiki/type/is_folder/parent_name: 명시 우선 → 없으면 기존(before) 보존 → 신규 기본값.
   //  편집 저장(본문만)이 WIKI 핀 is_wiki 등 미전송 facet 을 조용히 유실하지 않게 하는 불변식 — 단일 진실 resolveUpsertFacets(#345 회귀 방지, knowledge-store.test.ts).
-  const { injection, provenance, summary, sort, isWiki, type, isFolder, parentName } = resolveUpsertFacets(input, before);
+  const { injection, provenance, summary, shortTitle, sort, isWiki, type, isFolder, parentName } = resolveUpsertFacets(input, before);
   // #592 폴더: 본문 없는 트리 노드라 title 이 유일한 표시명 — 신규 폴더는 title 필수(빈 body_md 완화는 capability 쪽).
   if (!before && isFolder && !input.title?.trim()) {
     throw new Error("폴더(is_folder) 생성에는 title 이 필수입니다.");
@@ -448,17 +450,17 @@ export async function upsertKnowledge(
     await assertTreeParent(name, input.parent_name);
   }
   await itemsPool.query(
-    `INSERT INTO knowledge(name, title, body_md, injection, provenance, lifecycle, supersedes, confidence, source, summary, sort, is_wiki, type, is_folder, parent_name, version, updated_at, updated_by)
-     VALUES($1,$2,$3,$4,$5,$16,$6,$7,$8,$9,$10,$11,$12,$13,$14,1,now(),$15)
+    `INSERT INTO knowledge(name, title, body_md, injection, provenance, lifecycle, supersedes, confidence, source, summary, short_title, sort, is_wiki, type, is_folder, parent_name, version, updated_at, updated_by)
+     VALUES($1,$2,$3,$4,$5,$17,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,1,now(),$16)
      ON CONFLICT (name) DO UPDATE SET
        title=COALESCE(EXCLUDED.title, knowledge.title), body_md=EXCLUDED.body_md,
        injection=EXCLUDED.injection, provenance=EXCLUDED.provenance, supersedes=EXCLUDED.supersedes,
        confidence=EXCLUDED.confidence, source=EXCLUDED.source,
-       summary=EXCLUDED.summary, sort=EXCLUDED.sort, is_wiki=EXCLUDED.is_wiki, type=COALESCE(EXCLUDED.type, knowledge.type),
+       summary=EXCLUDED.summary, short_title=EXCLUDED.short_title, sort=EXCLUDED.sort, is_wiki=EXCLUDED.is_wiki, type=COALESCE(EXCLUDED.type, knowledge.type),
        is_folder=EXCLUDED.is_folder, parent_name=EXCLUDED.parent_name,
        version=knowledge.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
-    [name, input.title ?? null, input.body_md, injection, provenance, input.supersedes ?? null, confidence, input.source ?? "authored", summary, sort, isWiki, type, isFolder, parentName, ctx?.actor ?? null,
-     // #638 $16 lifecycle — 신규는 input.lifecycle(자동 인입이 검토대기로 pending 지정) ?? 'active'. 재저장은 ON CONFLICT DO UPDATE 가 lifecycle 미포함이라 기존 보존(승인 전환은 set_lifecycle 로만).
+    [name, input.title ?? null, input.body_md, injection, provenance, input.supersedes ?? null, confidence, input.source ?? "authored", summary, shortTitle, sort, isWiki, type, isFolder, parentName, ctx?.actor ?? null,
+     // #638 $17 lifecycle — 신규는 input.lifecycle(자동 인입이 검토대기로 pending 지정) ?? 'active'. 재저장은 ON CONFLICT DO UPDATE 가 lifecycle 미포함이라 기존 보존(승인 전환은 set_lifecycle 로만).
      input.lifecycle ?? "active"]);
   const after = await one(itemsPool, `SELECT ${K_SEL} FROM knowledge k WHERE k.name=$1`, [name]);
   await auditKnowledge(name, before ? "update" : "insert", before, after, ctx);

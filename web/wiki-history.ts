@@ -70,6 +70,14 @@ function khEnsureStyles(): void {
 .kh-seg button{padding:3px 11px;border:0;background:var(--bg);font:inherit;font-size:11.5px;font-weight:700;color:var(--muted-head);cursor:pointer}
 .kh-seg button.on{background:var(--bg-punch);color:var(--blue-deep)}
 .kh-mdiff{max-height:460px;overflow:auto;border:1px solid var(--line);border-radius:10px;background:var(--bg);padding:4px}
+.kh-side{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.kh-side-col{min-width:0;border:1px solid var(--line);border-radius:10px;background:var(--bg);overflow:hidden}
+.kh-side-h{padding:6px 10px;font-size:11px;font-weight:800;letter-spacing:.02em;border-bottom:1px solid var(--line-row);background:var(--bg-tint);color:var(--muted-head)}
+.kh-side-col.after .kh-side-h{color:var(--mint-deep)}
+.kh-side-b{max-height:460px;overflow:auto;padding:8px 10px}
+.kh-side-b .md{font-size:13.5px}
+.kh-side-empty{color:var(--muted-2);font-style:italic;font-size:12.5px}
+@media (max-width:900px){ .kh-side{grid-template-columns:1fr} }
 .kh-md{position:relative;padding:1px 10px 1px 24px;border-radius:6px}
 .kh-md.add{background:rgba(22,199,154,.10);box-shadow:inset 2px 0 0 var(--mint-deep)}
 .kh-md.del{background:rgba(228,117,107,.10);box-shadow:inset 2px 0 0 var(--coral-text)}
@@ -155,7 +163,7 @@ export function openKnHistory(
   const rows: HistoryRow[] = [];
   // 기본은 **서식(마크다운 렌더)** — 사람이 읽는 건 원문이 아니라 문서다. 원문 diff 는 토글로.
   //  패널 단위 상태라 한 행에서 바꾸면 다음에 펼치는 행도 그 모드로 열린다(매번 다시 고르지 않게).
-  let mdMode = true;
+  let viewMode: 'md' | 'raw' | 'side' = 'side';   // #1600 기본 = 전/후 나란히(사람이 가장 먼저 묻는 것이 '뭐가 달라졌나')
 
   const metaChip = el('button', {
     class: 'rq-chip', type: 'button', text: '메타 변경도',
@@ -298,14 +306,29 @@ export function openKnHistory(
 
     // 서식 ↔ 원문 토글. 다시 그리는 건 이 행뿐이고 요청은 없다(전문은 _d 에 이미 있다).
     const seg = el('div', { class: 'kh-seg', role: 'group', 'aria-label': '본문 표시 방식' });
-    const mk = (label: string, on: boolean, next: boolean) => el('button', {
-      class: on ? 'on' : '', type: 'button', text: label, 'aria-pressed': String(on),
-      onclick: () => { if (mdMode === next) return; mdMode = next; exp.replaceChildren(...expandedView(r, d, exp)); },
+    const mk = (label: string, mode: 'md' | 'raw' | 'side') => el('button', {
+      class: viewMode === mode ? 'on' : '', type: 'button', text: label, 'aria-pressed': String(viewMode === mode),
+      onclick: () => { if (viewMode === mode) return; viewMode = mode; exp.replaceChildren(...expandedView(r, d, exp)); },
     });
-    seg.append(mk('읽기 쉽게', mdMode, true), mk('원본 텍스트', !mdMode, false));
+    seg.append(mk('전 · 후 나란히', 'side'), mk('바뀐 줄만', 'md'), mk('원본 텍스트', 'raw'));
     out.push(seg);
 
-    out.push(mdMode ? diffViewMd(bBody || '', aBody || '') : diffView(bBody || '', aBody || ''));
+    //  전/후 나란히(#1600) — 왼쪽이 고치기 전, 오른쪽이 고친 뒤. 사람이 가장 먼저 묻는 '뭐가 달라졌나'에
+    //   바로 답한다(줄 단위 diff 는 어디가 바뀌었는지는 알려주지만 '문서가 어떻게 됐나'는 안 보여준다).
+    if (viewMode === 'side') {
+      const col = (label: string, body: string | null, cls: string) => {
+        const b = el('div', { class: 'kh-side-b' });
+        if (body === null) b.append(el('div', { class: 'kh-side-empty', text: '이 시점엔 문서가 없었습니다.' }));
+        else if (!body.trim()) b.append(el('div', { class: 'kh-side-empty', text: '(빈 문서)' }));
+        else b.append(renderMarkdown(body));
+        return el('div', { class: 'kh-side-col ' + cls }, el('div', { class: 'kh-side-h', text: label }), b);
+      };
+      out.push(el('div', { class: 'kh-side' },
+        col('고치기 전', bBody, 'before'),
+        col('고친 뒤', aBody, 'after')));
+    } else {
+      out.push(viewMode === 'md' ? diffViewMd(bBody || '', aBody || '') : diffView(bBody || '', aBody || ''));
+    }
 
     const isCurrent = opts.currentVersion != null && r.version_after != null && r.version_after === opts.currentVersion;
     const acts = el('div', { class: 'kh-exp-acts' });

@@ -150,6 +150,15 @@ function wkAurora(seed: string, space: string, opts: any = {}) {
 //   이 코퍼스는 대부분 인용(> 발단: …)으로 시작해서 본문 한참 아래의 문맥 없는 조각이 뽑혔다
 //   (슬러그로 시작하는 줄이 그대로 붙는 사례가 실제로 있었다). 파편을 보여주느니 비우는 게 낫다.
 //  요지는 저장 시 함께 적히고(knowledge_save summary), AI 에게는 반환되지 않는 사람 전용 필드다.
+// ── 사람용 짧은 제목(#1600) — 목록·카드·문서 머리에 쓰는 이름. ──
+//  원래 title 은 지우지 않는다(AI 는 계속 그걸 본다). 다만 그 제목은 결론을 다 욱여넣어 평균 84자·최대 200자라
+//  사람 화면에서는 줄마다 잘려 읽히지 않았다 — 사람에게는 short_title 을, 없으면 종전대로 title 을 보여준다.
+//  ⚠ '원문을 그대로 보고 싶은 자리'(문서의 원래 제목 표시·MD 원문)에서는 이 함수를 쓰지 않는다.
+function wkTitle(e: any): string {
+  if (!e) return '';
+  return String(e.short_title || '').trim() || String(e.title || e.name || '').trim();
+}
+
 function wkLede(e: any, cap = 150): string {
   const s = String((e && e.summary) || '').trim();
   if (s) return s;
@@ -168,7 +177,7 @@ function wkDocCard(e: any, opts: any = {}) {
     el('div', { class: 'wk-doccard-top' },
       wkTick(e),
       e.icon ? el('span', { class: 'wk-doccard-ic', 'aria-hidden': 'true', text: e.icon }) : null,
-      el('span', { class: 'wk-doccard-title', text: e.title || e.name })),
+      el('span', { class: 'wk-doccard-title', title: e.title || '', text: wkTitle(e) })),
     deck ? el('p', { class: 'wk-doccard-deck', text: deck }) : null,
     el('div', { class: 'wk-doccard-meta' }, ...wkMetaOf(e, { lead: opts.metas || [] })
       .map((m: any) => ((m && m.nodeType) ? m : el('span', { class: 'wk-row-m', text: String(m) })))));
@@ -201,7 +210,7 @@ function wkRow(e: any, opts: any = {}) {
     wkTick(e),
     ic ? el('span', { class: 'wk-row-ic', 'aria-hidden': 'true', text: ic }) : null,
     el('span', { class: 'wk-row-main' },
-      el('span', { class: 'wk-row-title', text: e.title || e.name }),
+      el('span', { class: 'wk-row-title', title: e.title || '', text: wkTitle(e) }),
       snip ? el('span', { class: 'wk-row-snip', text: snip }) : null),
     metaEl);
   if (opts.select) {
@@ -293,6 +302,6 @@ function wkEmpty(text: string, action?: any) {
 }
 
 export {
-  wkAurora, wkDayLabel, wkDeck, wkDocCard, wkEmpty, wkHash, wkIsRead, wkLede, wkMarkRead, wkMetaOf,
+  wkAurora, wkDayLabel, wkDeck, wkDocCard, wkEmpty, wkHash, wkIsRead, wkLede, wkMarkRead, wkMetaOf, wkTitle,
   wkOriginText, wkOriginTitle, wkReadVisits, wkRecordVisit, wkRow, wkSection, wkStamp, wkTick, wkTypeTag,
 };

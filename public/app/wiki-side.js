@@ -109,6 +109,10 @@ function knWireCatDrag(wrap, catId, group, nav, onReorder) {
     });
     return wrap;
 }
+//  사람용 짧은 제목(#1600) — wiki-ui 의 wkTitle 과 같은 규칙. 사이드바는 wiki-ui 를 import 하지 않으므로(레이어 규약) 여기 한 줄로 둔다.
+function knShortTitle(r) {
+    return String((r && r.short_title) || '').trim() || String((r && (r.title || r.name)) || '').trim();
+}
 // ⭐ '내 소유 카테고리' 별 토글 — 프로젝트 탭 즐겨찾기와 동일 컴포넌트(.pjv-side-navfav), WIKI 는 파란색(.fav-blue).
 function knFavStar(isFav, onToggle) {
     const btn = el('button', { class: 'pjv-side-navfav fav-blue' + (isFav ? ' on' : ''), type: 'button',
@@ -173,14 +177,14 @@ function knNavDocNode(r, depth, onOpen, childN) {
         const pending = r.lifecycle === 'pending';
         const row = el('a', { class: 'tree-item kn-nav-doc' + (r.lifecycle === 'archived' ? ' kn-tree-archived' : '') + (pending ? ' kn-tree-pending' : ''),
             href: '#/k/' + encodeURIComponent(r.name), style: 'padding-left:' + pad + 'px',
-            title: (r.title || r.name) + (pending ? ' — 검토 대기(승인 전, 검색·주입 제외)' : '') }, el('span', { class: 'tree-glyph kn-nav-glyph', 'aria-hidden': 'true', text: knPageIcon(r) }), el('span', { class: 'tree-label', text: r.title || r.name }), pending ? el('span', { class: 'kn-nav-count kn-nav-review', title: '검토 대기 — 승인해야 검색·주입에 반영됩니다', text: '검토' }) : null);
+            title: (r.title || r.name) + (pending ? ' — 검토 대기(승인 전, 검색·주입 제외)' : '') }, el('span', { class: 'tree-glyph kn-nav-glyph', 'aria-hidden': 'true', text: knPageIcon(r) }), el('span', { class: 'tree-label', text: knShortTitle(r) }), pending ? el('span', { class: 'kn-nav-count kn-nav-review', title: '검토 대기 — 승인해야 검색·주입에 반영됩니다', text: '검토' }) : null);
         row.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); onOpen(r.name); });
         return row;
     }
     const tw = el('button', { class: 'kn-nav-tw', type: 'button', 'aria-expanded': 'false', title: '폴더 펼치기', text: '▸' });
     const folderCnt = childN ? (childN.get(r.name) || 0) : null;
     const row = el('div', { class: 'tree-item kn-nav-doc kn-nav-folder', role: 'button', tabindex: '0',
-        style: 'padding-left:' + Math.max(4, pad - 16) + 'px', title: r.title || r.name }, tw, el('span', { class: 'tree-glyph kn-nav-glyph', 'aria-hidden': 'true', text: knPageIcon(r) }), el('span', { class: 'tree-label', text: r.title || r.name }), folderCnt != null ? el('span', { class: 'kn-nav-count' + (folderCnt === 0 ? ' zero' : ''), title: '항목 ' + folderCnt + '개', text: String(folderCnt) }) : null);
+        style: 'padding-left:' + Math.max(4, pad - 16) + 'px', title: r.title || r.name }, tw, el('span', { class: 'tree-glyph kn-nav-glyph', 'aria-hidden': 'true', text: knPageIcon(r) }), el('span', { class: 'tree-label', text: knShortTitle(r) }), folderCnt != null ? el('span', { class: 'kn-nav-count' + (folderCnt === 0 ? ' zero' : ''), title: '항목 ' + folderCnt + '개', text: String(folderCnt) }) : null);
     const kids = el('div', { class: 'kn-nav-kids' });
     kids.hidden = true;
     let opened = false, loaded = false;
@@ -329,7 +333,7 @@ async function knSideFilterNav(nav, q) {
         const CAP = 8;
         for (const r of hits.slice(0, CAP)) {
             const it = el('a', { class: 'pjv-side-navitem kn-side-hitdoc' + (r.lifecycle === 'archived' ? ' kn-tree-archived' : ''),
-                href: '#/k/' + encodeURIComponent(r.name), title: r.title || r.name }, el('span', { class: 'kn-side-glyph', 'aria-hidden': 'true', text: '📄' }), el('span', { class: 'pjv-side-navlabel', text: r.title || r.name }));
+                href: '#/k/' + encodeURIComponent(r.name), title: r.title || r.name }, el('span', { class: 'kn-side-glyph', 'aria-hidden': 'true', text: '📄' }), el('span', { class: 'pjv-side-navlabel', text: knShortTitle(r) }));
             it.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); onOpen(r.name); });
             box.append(it);
         }

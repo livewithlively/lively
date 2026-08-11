@@ -81,7 +81,7 @@ async function buildWikiDoc(container, name, opts = {}) {
     for (const a of (Array.isArray(k.ancestors) ? k.ancestors : [])) {
         crumbs.append(el('span', { class: 'wk-crumb-sep', 'aria-hidden': 'true', text: '›' }), el('a', { class: 'wk-crumb', href: '#/k/' + encodeURIComponent(a.name), text: a.title || a.name }));
     }
-    crumbs.append(el('span', { class: 'wk-crumb-sep', 'aria-hidden': 'true', text: '›' }), el('span', { class: 'wk-crumb wk-crumb-cur', text: k.title || k.name }));
+    crumbs.append(el('span', { class: 'wk-crumb-sep', 'aria-hidden': 'true', text: '›' }), el('span', { class: 'wk-crumb wk-crumb-cur', title: k.title || '', text: String(k.short_title || '').trim() || k.title || k.name }));
     // 폴리오 우측 액션 — 저장칩 · 핀 · ⋯ (화면당 채운 primary 0 — 문서 페이지의 주인공은 본문).
     const actions = el('div', { class: 'wk-folio-actions' }, saveChip);
     if (canEdit) {
@@ -202,9 +202,14 @@ async function buildWikiDoc(container, name, opts = {}) {
     }
     paintDecor();
     // ── 제목 — 페이지가 곧 에디터(클릭해서 바로 rename). ──
+    //  #1600 화면의 제목 = 사람용 짧은 제목(short_title). 없으면 종전대로 원래 제목.
+    //  원래 제목(title)은 지우지 않고 아래 wk-doc-fulltitle 로 따로 보인다 — AI 가 보는 이름이 무엇인지
+    //  사람도 확인할 수 있어야 하고, '원문을 그대로 읽고 싶다'는 요구가 이 화면의 예외이기 때문이다.
+    const humanTitle = () => String(k.short_title || '').trim() || String(k.title || k.name || '');
     const titleEl = el('h1', { class: 'wk-doc-title' + (canRename ? ' editable' : ''),
-        ...(canRename ? { contenteditable: 'true', 'data-ph': '제목 없음', spellcheck: 'false' } : {}) });
-    titleEl.textContent = k.title || k.name;
+        ...(canRename ? { contenteditable: 'true', 'data-ph': '제목 없음', spellcheck: 'false',
+            title: '사람이 보는 짧은 제목 — 클릭해서 고칩니다(40자 이하 권장)' } : {}) });
+    titleEl.textContent = humanTitle();
     if (canRename) {
         titleEl.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
@@ -219,30 +224,31 @@ async function buildWikiDoc(container, name, opts = {}) {
         });
         titleEl.addEventListener('blur', async () => {
             const t = (titleEl.textContent || '').trim();
+            const cur = humanTitle();
             if (!t) {
-                titleEl.textContent = k.title || k.name;
+                titleEl.textContent = cur;
                 return;
             }
-            if (t === (k.title || k.name))
+            if (t === cur)
                 return;
             //  본문과 같은 약속(#1600) — 제목도 물어보고 바꾼다. 스쳐 지나가다 고쳐지는 자리가 아니어야 한다.
             const okTitle = await confirmDialog({
-                title: '제목을 바꿀까요?',
-                message: '“' + (k.title || k.name) + '” → “' + t + '”',
-                lines: ['바꾸면 변경 이력에 남고, 목록·검색에 보이는 이름이 바뀝니다.'],
+                title: '보이는 제목을 바꿀까요?',
+                message: '“' + cur + '” → “' + t + '”',
+                lines: ['사람이 보는 짧은 제목만 바뀝니다. 원래 제목과 AI 가 보는 이름은 그대로입니다.'],
                 confirmText: '제목 바꾸기',
                 cancelText: '되돌리기',
             });
             if (!okTitle) {
-                titleEl.textContent = k.title || k.name;
+                titleEl.textContent = cur;
                 return;
             }
             try {
-                const payload = { name: k.name, title: t, body_md: bodyMdNow() };
+                const payload = { name: k.name, short_title: t, body_md: bodyMdNow() };
                 if (k.is_folder)
                     payload.is_folder = true;
                 const r = await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
-                k.title = t;
+                k.short_title = t;
                 knInvalidateTreeCaches(); // 사이드바 트리·목록에 옛 제목이 남지 않게
                 const cur = crumbs.querySelector('.wk-crumb-cur');
                 if (cur)
@@ -252,7 +258,78 @@ async function buildWikiDoc(container, name, opts = {}) {
             }
             catch (e) {
                 toast('제목 저장 실패 — ' + e.message, true);
-                titleEl.textContent = k.title || k.name;
+                titleEl.textContent = humanTitle();
+            }
+        });
+    }
+    // ── 요지(#1600) — 제목 다음에 사람이 읽는 줄. 클릭해서 그 자리에서 고친다. ──
+    const ledeEl = el('div', { class: 'wk-doc-lede' + (canMeta ? ' editable' : ''),
+        ...(canMeta ? { contenteditable: 'true', spellcheck: 'false', 'data-ph': '한 줄 요지 추가 — 12살이 읽어도 아는 말로',
+            title: '요지 — 클릭해서 고칩니다. AI 에게는 전달되지 않는 사람용 설명입니다.' } : {}) });
+    ledeEl.textContent = k.summary || '';
+    if (!canMeta && !k.summary)
+        ledeEl.hidden = true;
+    if (canMeta) {
+        const oneLineGuard = (node) => {
+            node.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
+                e.preventDefault();
+                node.blur();
+            } });
+            node.addEventListener('paste', (e) => {
+                e.preventDefault();
+                const t = (e.clipboardData || window.clipboardData).getData('text/plain').replace(/\n+/g, ' ');
+                document.execCommand('insertText', false, t);
+            });
+        };
+        oneLineGuard(ledeEl);
+        ledeEl.addEventListener('blur', async () => {
+            const t = (ledeEl.textContent || '').trim();
+            if (t === (k.summary || ''))
+                return;
+            try {
+                const payload = { name: k.name, summary: t, body_md: bodyMdNow() };
+                if (k.is_folder)
+                    payload.is_folder = true;
+                await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
+                k.summary = t;
+                toast('요지를 저장했습니다');
+            }
+            catch (e) {
+                toast('요지 저장 실패 — ' + e.message, true);
+                ledeEl.textContent = k.summary || '';
+            }
+        });
+    }
+    // ── 원래 제목 — 짧은 제목이 따로 있을 때만 보인다(원문 확인용, 클릭해서 고침). ──
+    const fullTitleEl = el('div', { class: 'wk-doc-fulltitle' + (canRename ? ' editable' : ''),
+        ...(canRename ? { contenteditable: 'true', spellcheck: 'false',
+            title: '원래 제목 — AI 가 보는 이름입니다. 클릭해서 고칩니다.' } : {}) });
+    fullTitleEl.textContent = k.title || '';
+    if (!String(k.short_title || '').trim())
+        fullTitleEl.hidden = true; // 짧은 제목이 없으면 위 제목이 곧 원래 제목이다
+    if (canRename) {
+        fullTitleEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
+            e.preventDefault();
+            fullTitleEl.blur();
+        } });
+        fullTitleEl.addEventListener('blur', async () => {
+            const t = (fullTitleEl.textContent || '').trim();
+            if (!t || t === (k.title || '')) {
+                fullTitleEl.textContent = k.title || '';
+                return;
+            }
+            try {
+                const payload = { name: k.name, title: t, body_md: bodyMdNow() };
+                if (k.is_folder)
+                    payload.is_folder = true;
+                await api('/api/ui/knowledge', { method: 'POST', body: JSON.stringify(payload) });
+                k.title = t;
+                knInvalidateTreeCaches();
+                toast('원래 제목을 저장했습니다');
+            }
+            catch (e) {
+                toast('저장 실패 — ' + e.message, true);
+                fullTitleEl.textContent = k.title || '';
             }
         });
     }
@@ -594,6 +671,8 @@ async function buildWikiDoc(container, name, opts = {}) {
         coverEl,
         el('div', { class: 'wk-folio' }, crumbs, actions),
         el('div', { class: 'wk-doc-head' }, iconBtn, decorAdd, titleEl),
+        ledeEl, // #1600 요지 — 제목 바로 아래(사람이 가장 먼저 읽을 줄)
+        fullTitleEl, // 원래 제목 — 짧은 제목이 따로 있을 때만. 원문 확인용
         propline,
         banner,
         reviewBanner, // #783 검토 대기(pending) · 대기 중인 수정 제안
@@ -822,7 +901,7 @@ function openWikiSearch() {
         }
         list.replaceChildren(...entries.map((e, i) => {
             const snip = String(e.snippet || '').replace(/L\d+:\s*/g, '').replace(/[\n⋯]+/g, ' · ').replace(/\s+/g, ' ').trim().slice(0, 120);
-            const row = el('button', { class: 'qk-row' + (i === sel ? ' on' : ''), type: 'button' }, wkTick(e), el('span', { class: 'qk-row-ic', text: knPageIcon(e) }), el('div', { class: 'qk-row-main' }, el('div', { class: 'qk-row-title', text: e.title || e.name }), snip ? el('div', { class: 'qk-row-snip', text: snip }) : null));
+            const row = el('button', { class: 'qk-row' + (i === sel ? ' on' : ''), type: 'button' }, wkTick(e), el('span', { class: 'qk-row-ic', text: knPageIcon(e) }), el('div', { class: 'qk-row-main' }, el('div', { class: 'qk-row-title', title: e.title || '', text: (e.short_title || '').trim() || e.title || e.name }), snip ? el('div', { class: 'qk-row-snip', text: snip }) : null));
             row.addEventListener('mousedown', (ev) => ev.preventDefault());
             row.onclick = (ev) => openEntry(e, ev.metaKey || ev.ctrlKey);
             return row;

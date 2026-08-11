@@ -48,6 +48,13 @@ const knowledgeSaveInput = {
       + "오직 사람이 보는 목록·카드에만 뜬다. "
       + "나쁜 예 \"#1595 AGPL 구독→영구 BM 판정: prod copyleft 0·CLA 1조로 법적 가능하나 역선택·지원원가 영구화\" / "
       + "좋은 예 \"프로그램을 한 번 사고 계속 쓰게 하는 방식은 법으로는 되지만, 우리한테는 손해라서 권하지 않습니다.\""),
+  // #1600 사람용 짧은 제목 — summary 와 같은 성격(AI 미반환). title 은 그대로 두고 **표시만** 이걸 쓴다.
+  short_title: z.string().optional()
+    .describe("사람이 목록·문서 머리에서 읽을 **짧은 제목**(#1600) — **40자 이하**, 요점만. "
+      + "이슈번호(#1600)·날짜·★·수치 나열·긴 부제 금지. 원래 title 은 지우지 않고 그대로 남는다(AI 는 계속 그걸 본다). "
+      + "⚠ 이 값은 **AI 에게 반환되지 않는다**(임베딩·검색·MCP 응답에서 제외) — 오직 사람 화면용이다. "
+      + "나쁜 예 \"★★ 프라이싱 확정판 v1 — 마이노멀 (2026-08-07) — 조직정액+추가석(베이스30만/15석…)\" / "
+      + "좋은 예 \"마이노멀 최종 가격\""),
   provenance: z.enum(["authored", "observed"]).optional(),
   lifecycle: z.enum(["active", "pending"]).optional()
     .describe("#638 자동 인입(distill 등)이 검토대기로 저장할 때 pending — 기본 목록·검색·주입에서 격리(승인=set_lifecycle active). 미지정=active(사람 저작 기본). superseded/archived 는 set_lifecycle 로만."),
@@ -155,6 +162,7 @@ export const knowledgeSave: Capability = {
           // #1600 한 줄 요지. ⚠ 여기 빠뜨리면 zod 스키마에 있어도 REST 로는 **조용히 유실**된다
           //  (MCP 는 스키마를 그대로 쓰지만 REST 는 이 parse 가 유일한 입구다 — 실측으로 잡힌 누락).
           summary: b.summary != null ? String(b.summary) : undefined,
+          short_title: b.short_title != null ? String(b.short_title) : undefined,
         };
       } }],
   },

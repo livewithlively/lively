@@ -10,7 +10,7 @@ import { overlayBox, skeleton } from './learn.js';
 import { hasScope } from './admin.js';
 import { applyCoverBg, openCoverPicker, openEmojiPicker } from './page-decor.js';
 import { HOME_EMPTY, KN_TYPE_LABEL, hasMemoryScope, homeDocName, isCategoryHomeDoc, knFetchCategoryRows, knFolderFirstSort, knInvalidateTreeCaches, openProjectChooser, } from './wiki-data.js';
-import { wkAurora, wkDeck, wkDocCard, wkEmpty, wkLede, wkMetaOf, wkRow, wkSection, wkTick } from './wiki-ui.js';
+import { wkAurora, wkDeck, wkDocCard, wkEmpty, wkLede, wkMetaOf, wkRow, wkSection, wkTick, wkTitle } from './wiki-ui.js';
 import { openWikiPeek, setWikiPeekList } from './wiki-doc.js';
 // ── 폴더 만들기 — 트리 그룹 노드(is_folder). 현재 폴더 안이면 그 아래로. ──
 function openFolderForm(cat, parentFolder, done) {
@@ -514,7 +514,7 @@ async function renderCategorySurface(box, cat, ctx) {
     const emptyBlk = () => el('div', { class: 'wk-bld-empty', text: editing ? '이 조건에 맞는 문서가 아직 없어요 — ⚙로 조건을 바꿔 보세요.' : '아직 문서가 없어요.' });
     // 갤러리 카드 — 오로라 커버 + 제목(#764v2 시각 자산 재사용).
     function galCard(x) {
-        const c = el('div', { class: 'wk-galc', role: 'link', tabindex: '0', title: x.title || x.name }, wkAurora(x.name, cat.space, { cls: 'wk-galc-cov', watermark: x.icon || '' }), el('div', { class: 'wk-galc-b' }, el('div', { class: 'wk-galc-t', text: x.title || x.name }), el('div', { class: 'wk-galc-m' }, wkTick(x), x.type ? el('span', { class: 'wk-row-m', text: KN_TYPE_LABEL[x.type] || x.type }) : null)));
+        const c = el('div', { class: 'wk-galc', role: 'link', tabindex: '0', title: x.title || x.name }, wkAurora(x.name, cat.space, { cls: 'wk-galc-cov', watermark: x.icon || '' }), el('div', { class: 'wk-galc-b' }, el('div', { class: 'wk-galc-t', text: wkTitle(x) }), el('div', { class: 'wk-galc-m' }, wkTick(x), x.type ? el('span', { class: 'wk-row-m', text: KN_TYPE_LABEL[x.type] || x.type }) : null)));
         const go = () => openDoc(x, c);
         c.addEventListener('click', go);
         c.addEventListener('keydown', (e) => { if (e.key === 'Enter')

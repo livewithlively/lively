@@ -13,7 +13,7 @@ import {
   HOME_EMPTY, KN_TYPE_LABEL, hasMemoryScope, homeDocName, isCategoryHomeDoc,
   knFetchCategoryRows, knFolderFirstSort, knInvalidateTreeCaches, openProjectChooser,
 } from './wiki-data.js';
-import { wkAurora, wkDeck, wkDocCard, wkEmpty, wkLede, wkMetaOf, wkRow, wkSection, wkTick } from './wiki-ui.js';
+import { wkAurora, wkDeck, wkDocCard, wkEmpty, wkLede, wkMetaOf, wkRow, wkSection, wkTick, wkTitle } from './wiki-ui.js';
 import { openWikiPeek, setWikiPeekList } from './wiki-doc.js';
 
 // ── 폴더 만들기 — 트리 그룹 노드(is_folder). 현재 폴더 안이면 그 아래로. ──
@@ -466,7 +466,7 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
     const c = el('div', { class: 'wk-galc', role: 'link', tabindex: '0', title: x.title || x.name },
       wkAurora(x.name, cat.space, { cls: 'wk-galc-cov', watermark: x.icon || '' }),
       el('div', { class: 'wk-galc-b' },
-        el('div', { class: 'wk-galc-t', text: x.title || x.name }),
+        el('div', { class: 'wk-galc-t', text: wkTitle(x) }),
         el('div', { class: 'wk-galc-m' }, wkTick(x), x.type ? el('span', { class: 'wk-row-m', text: KN_TYPE_LABEL[x.type] || x.type }) : null)));
     const go = () => openDoc(x, c);
     c.addEventListener('click', go);

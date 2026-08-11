@@ -103,15 +103,19 @@ export function wikiLinkInfo(w: WikiLinkResult | undefined): Record<string, unkn
   return info;
 }
 
-// ── 한 줄 요지(summary)는 **사람 화면 전용**이다(#1600) ──
+// ── 한 줄 요지(summary)와 짧은 제목(short_title)은 **사람 화면 전용**이다(#1600) ──
 //  12살도 알아듣게 범위를 넓혀 쓴 문장이라, AI 가 그걸 원문 대신 근거로 삼으면 과일반화가 그대로 번진다
 //  (요약을 지식 스토어에 저장한 제품들이 겪은 재귀 오염). 그래서 **MCP 응답에서는 벗겨서** 내보낸다.
 //  임베딩 입력에서도 같은 이유로 빠져 있다(v6/embedding-provider.ts embeddingInputText).
 //  웹(REST)은 그대로 받는다 — 목록·카드에 그 줄을 그리는 게 이 필드의 유일한 용도다.
 export function stripLedeForAgent<T>(payload: T, ctx?: { source?: string }): T {
   if (ctx?.source !== "mcp") return payload;
-  const one = (r: unknown): unknown => (r && typeof r === "object" && "summary" in (r as Record<string, unknown>)
-    ? { ...(r as Record<string, unknown>), summary: undefined } : r);
+  const one = (r: unknown): unknown => {
+    if (!r || typeof r !== "object") return r;
+    const o = r as Record<string, unknown>;
+    if (!("summary" in o) && !("short_title" in o)) return r;
+    return { ...o, summary: undefined, short_title: undefined };
+  };
   if (Array.isArray(payload)) return payload.map(one) as unknown as T;
   return one(payload) as T;
 }
