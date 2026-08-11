@@ -549,4 +549,33 @@ t('D6 ★ 답한 프롬프트는 다시 뜨지 않는다(리듀서가 옛 prompt
   assert.ok(/send\(IPC\.PROGRESS/.test(seg), '비운 상태를 렌더러에 안 보내면 화면은 그대로다');
 });
 
+// ── Z. 릴리스 배선 — 자동 업데이트가 조용히 죽는 두 자리 (#1541) ──────────────────
+// 둘 다 "빌드는 성공하고 설치도 되는데 그 뒤로 아무도 새 버전을 못 받는" 부류라 실행으로는 안 드러난다.
+//  릴리스를 낸 뒤 몇 달 있다 알게 되는 종류의 고장이므로 여기서 못박는다.
+{
+  const pkg = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"));
+  const wf = readFileSync(fileURLToPath(new URL("../../.github/workflows/release-desktop.yml", import.meta.url)), "utf8");
+
+  t("Z1 ★ publish 대상이 실제 레포다 — 개명된 옛 이름이면 업데이터가 없는 곳을 본다", () => {
+    const pub = (pkg.build && pkg.build.publish) || [];
+    assert.equal(pub.length, 1, "publish 항목이 정확히 하나여야 한다");
+    assert.equal(pub[0].provider, "github");
+    assert.equal(pub[0].owner, "livewithlively");
+    // 레포는 2026-08-02 공개 전환 때 context-ontology → lively 로 개명됐다. 옛 이름이 남아 있으면
+    //  electron-updater 가 존재하지 않는 레포의 릴리스를 조회한다(실제로 그 상태로 있었다).
+    assert.equal(pub[0].repo, "lively", "레포 개명(context-ontology→lively)이 반영되지 않았다");
+  });
+
+  t("Z2 ★ 릴리스 버전은 태그에서 온다 — package.json 에 박힌 값이 산출물로 나가면 안 된다", () => {
+    // electron-builder 는 package.json.version 으로 산출물 이름과 latest*.yml 을 만든다. 그 값이 고정이면
+    //  릴리스를 몇 번을 내도 업데이터가 보는 버전이 안 올라가 '이미 최신'으로 판정한다.
+    assert.match(wf, /GITHUB_REF_NAME#v/, "태그에서 버전을 뽑는 스텝이 없다");
+    assert.match(wf, /j\.version = process\.argv\[1\]/, "뽑은 버전을 package.json 에 쓰지 않는다");
+    // 순서 불변식: npm ci 뒤여야 한다(먼저 바꾸면 package-lock 과 어긋나 npm ci 가 거부한다).
+    assert.ok(wf.indexOf("npm ci") < wf.indexOf("GITHUB_REF_NAME#v"), "버전 스탬프가 npm ci 보다 앞에 있다");
+    // 스탬프 스텝보다 빌드가 뒤여야 한다 — 앞이면 옛 버전으로 굽는다.
+    assert.ok(wf.indexOf("GITHUB_REF_NAME#v") < wf.indexOf("electron-builder --win"), "빌드가 버전 스탬프보다 앞에 있다");
+  });
+}
+
 console.log(`\n${pass} passed`);

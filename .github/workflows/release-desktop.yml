@@ -38,6 +38,26 @@ jobs:
         working-directory: desktop
         run: npm ci
 
+      # ── 버전 스탬프 = 릴리스 태그 ──────────────────────────────────────────────
+      # electron-builder 는 `desktop/package.json` 의 version 으로 **산출물 이름과 `latest*.yml`** 을 만든다.
+      #  거기에 손으로 박아 둔 값(0.1.0)이 남아 있으면 릴리스를 몇 번을 내도 업데이터가 보는 버전은 늘 같아서
+      #  **자동 업데이트가 영원히 "이미 최신"으로 판정한다** — 설치는 되는데 그 뒤로 아무도 새 버전을 못 받는다.
+      #  서버 번들(release.yml)과 같은 규약을 쓴다: 버전의 정본은 태그이고 package.json 은 그걸 받아 적는다.
+      # ⚠ `npm ci` **뒤에** 찍는다 — 먼저 바꾸면 package-lock.json 과 어긋나 `npm ci` 가 거부한다.
+      - name: 버전 스탬프 = 태그
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        working-directory: desktop
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          node -e '
+            const fs = require("fs");
+            const j = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            j.version = process.argv[1];
+            fs.writeFileSync("package.json", JSON.stringify(j, null, 2) + "\n");
+          ' "$V"
+          echo "desktop version = $(node -p "require(\"./package.json\").version")"
+
       # 앱 로직 검증 — Electron 을 띄우지 않는 층(루트 체인과 같은 파일).
       - name: 코어 테스트
         working-directory: desktop
