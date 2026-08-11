@@ -64,9 +64,10 @@
       }
     ],
     "nsis": {
-      "oneClick": false,
+      "oneClick": true,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true
+      "runAfterFinish": true,
+      "createDesktopShortcut": false
     }
   },
   "dependencies": {

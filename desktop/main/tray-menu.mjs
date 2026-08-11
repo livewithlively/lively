@@ -13,6 +13,8 @@ export function statusLabel(st) {
   // ⚠ '있다'와 '쓸 수 있다'는 다르다. 앱보다 먼저 깔아 둔 구 CLI 는 `--json-events` 를 조용히 무시해
   //  앱이 아무 말도 못 듣는다 — 그걸 '설치 완료' 로 그리면 화면이 거짓말을 한다.
   if (s.cliOutdated) return "라이블리 CLI 업데이트 필요";
+  // 못 띄우는 CLI 는 **없는 것보다 나쁘다** — 있는 줄 알고 화면이 아무 말도 안 하게 된다.
+  if (s.cliBroken) return "라이블리 CLI 를 실행할 수 없음";
   if (!s.loggedIn) return "로그인 필요";
   if (!s.kitInstalled) return "키트 설치 필요";
   if (s.nodeRunning) return s.nodeDaemon ? "노드 실행 중 (자동 시작 켜짐)" : "노드 실행 중 (이 세션만)";
@@ -35,10 +37,13 @@ export function trayMenuModel(st) {
   const busy = !!s.busy;
   const items = [{ id: "status", label: statusLabel(s), enabled: false }, { type: "separator" }];
 
-  if (!s.cliFound || s.cliOutdated || !s.loggedIn || !s.kitInstalled) {
+  if (!s.cliFound || s.cliOutdated || s.cliBroken || !s.loggedIn || !s.kitInstalled) {
     items.push({
       id: "setup",
-      label: s.cliOutdated ? "라이블리 업데이트…" : s.cliFound ? "설치 계속하기…" : "라이블리 설치…",
+      // 문구가 곧 진단이다 — '오래됨'과 '못 띄움'은 사람이 할 일이 다르다(전자는 갱신, 후자는 재설치).
+      label: s.cliBroken ? "라이블리 다시 설치…"
+        : s.cliOutdated ? "라이블리 업데이트…"
+          : s.cliFound ? "설치 계속하기…" : "라이블리 설치…",
       enabled: !busy,
     });
   } else if (s.nodeRunning) {
