@@ -214,11 +214,15 @@ t("X9 구조 유효성 — 필수 노드 존재 + 태그 균형", () => {
 // 앱은 이 값으로 '시작/정지' 버튼을 가른다. 틀리면 사용자는 도는 노드에 '시작' 을 눌러 중복 기동하거나,
 //  죽은 노드를 '실행 중' 으로 본다. Windows 분기는 CI 에서 안 도니 여기서 못박는다(#1510 §5).
 t('N1 플랫폼별 데몬 아티팩트 — mac=plist · linux=systemd unit · win=작업 이름', () => {
+  // ⚠ 경로는 **인자 platform 의 구분자**로 나와야 한다 — 호스트 OS 와 무관하게. 전문 비교로 못박는다
+  //  (endsWith 로는 앞부분이 `\Users\yoon` 처럼 뒤집혀도 못 잡는다). 윈도우 CI 가 실제로 이걸 잡았다:
+  //  구현이 호스트 기본 join 을 써서 Windows 러너에서 darwin 경로가 `\Users\yoon\Library\…` 로 나왔다.
   const mac = nodeDaemonArtifact('darwin', '/Users/yoon');
   assert.equal(mac.kind, 'file');
-  assert.ok(mac.path.endsWith('/Library/LaunchAgents/io.lvly.node-agent.plist'), mac.path);
+  assert.equal(mac.path, '/Users/yoon/Library/LaunchAgents/io.lvly.node-agent.plist');
   const lin = nodeDaemonArtifact('linux', '/home/yoon');
   assert.equal(lin.path, '/home/yoon/.config/systemd/user/lively-node-agent.service');
+  for (const p of [mac.path, lin.path]) assert.ok(!p.includes('\\'), `POSIX 경로에 역슬래시: ${p}`);
   // Windows 는 **두 자리**를 다 준다 — 스케줄러가 거부된 계정은 시작프로그램으로 앉기 때문(#1541 실측).
   //  한쪽만 보면 폴백으로 설치된 PC 전부가 "자동시작 꺼짐" 으로 보인다.
   assert.deepEqual(nodeDaemonArtifact('win32', 'C:\\Users\\yoon', {}), {

@@ -14,7 +14,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, readdirSync } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { join, dirname, win32 as pwin } from "node:path";
+import { join, dirname, win32 as pwin, posix as pposix } from "node:path";
 import { spawnSync, spawn, execFileSync } from "node:child_process";
 
 // lively.mjs 와 같은 계약(LIVELY_HOME 은 HOME 리다이렉트 — 샌드박스/테스트).
@@ -632,8 +632,12 @@ function winKillAgentProcs() {
 
 /** 플랫폼별 데몬 아티팩트(파일 경로 또는 작업 이름) — 순수. Windows 분기는 CI 에서 안 도므로 목록을 못박는다. */
 export function nodeDaemonArtifact(platform = process.platform, home = HOME, env = process.env) {
-  if (platform === "darwin") return { kind: "file", path: join(home, "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`) };
-  if (platform === "linux") return { kind: "file", path: join(home, ".config", "systemd", "user", "lively-node-agent.service") };
+  // ⚠ 구분자는 **인자로 받은 platform** 을 따른다 — 호스트 join() 을 쓰면 안 된다. 이 함수는 platform 을
+  //  파라미터로 받는 순수 함수인데 호스트 기본 join 은 '지금 도는 OS' 의 구분자를 쓰므로, Windows 에서
+  //  nodeDaemonArtifact('darwin', …) 을 부르면 `\Users\…\Library\…` 를 돌려준다(윈도우 CI 에서 실제로 잡혔다).
+  //  실기기에선 platform === process.platform 이라 안 드러나지만, 계약이 깨져 있으면 계약 테스트도 못 믿는다.
+  if (platform === "darwin") return { kind: "file", path: pposix.join(home, "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`) };
+  if (platform === "linux") return { kind: "file", path: pposix.join(home, ".config", "systemd", "user", "lively-node-agent.service") };
   // Windows 는 **두 자리 중 하나**다 — 스케줄러가 거부된 계정은 시작프로그램으로 앉는다(#1541).
   //  둘 중 하나만 보면 "자동시작 꺼짐" 이라고 거짓말한다(폴백으로 설치된 PC 전부가 그렇게 보인다).
   if (platform === "win32") return { kind: "task", name: WIN_TASK_NAME, fallbackPath: pwin.join(winStartupDir(env, home), WIN_STARTUP_VBS) };
