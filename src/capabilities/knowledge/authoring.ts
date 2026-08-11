@@ -7,7 +7,7 @@ import type { Capability, CapabilityCtx } from "../types.js";
 import type { LivelyUser } from "../../context.js";
 import {
   upsertKnowledge, setKnowledgeLifecycle, getKnowledgeLifecycle, setKnowledgeWiki, deleteKnowledge,
-  findSimilarKnowledge, moveKnowledge, appendBody, isDuplicateAppend, stampSessionVisibility, slugify,
+  findSimilarKnowledge, moveKnowledge, appendBody, isDuplicateAppend, stampSessionVisibility, resolveKnowledgeName,
   applyKnowledgeEdits, type KnowledgeEdit,
   setKnowledgeTitle,
 } from "../../v6/knowledge-store.js";
@@ -176,8 +176,9 @@ export const knowledgeSave: Capability = {
     //  보고 store 는 **잘린 이름**을 쓰는 불일치가 생긴다: 65자 이름이면 게이트는 그 이름의 문서가 없으니 '신규'로
     //  판정하는데 store 는 잘린 이름의 기존 문서를 덮어쓴다(= create 정책으로 update 를 통과시키는 우회).
     //  zod .max(64) 가 그 입력을 튕겨 왔기에 지금까지 닿지 않던 경로다 — 상한을 소프트캡으로 바꾼 이 커밋이
-    //  경로를 열므로 같은 커밋에서 닫는다. slugify 는 멱등이라 store 가 한 번 더 불러도 결과가 같다.
-    if (input.name) input.name = slugify(input.name);
+    //  경로를 열므로 같은 커밋에서 닫는다. resolveKnowledgeName 은 멱등이라 store 가 한 번 더 불러도 결과가 같다.
+    //  #1600 정규화 = slugify + **레거시 이름 구제**(정규화 규칙 이전에 저장돼 slug 와 이름이 다른 행은 그 행을 가리킨다).
+    if (input.name) input.name = await resolveKnowledgeName(input.name);
     // #592: MCP 경로의 빈 본문 방어 — zod min(1) 완화 대신 여기서(폴더만 예외). REST 는 parse 가 이미 걸렀다.
     //  #1531 edit 는 예외 — 본문을 서버가 edits 로 만들므로 호출자는 body_md 를 보내지 않는다(보낼 수 있다면
     //  전문을 아는 것이고, 그럼 이 모드를 쓸 이유가 없다).

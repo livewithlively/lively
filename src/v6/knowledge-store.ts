@@ -13,14 +13,14 @@ import { markEmbeddingPending, KNOWLEDGE_TARGET } from "./embedding-backfill.js"
 import { parseGrep, grepWhere } from "./search-util.js";
 import { visibleListIds, projectRowListId, PUBLIC_VIEWER, type Viewer } from "./visibility.js";
 // 공용 프리미티브(#1313 R21) — 검색·링크와 함께 쓰는 슬러그·감사·가시성 술어·아이콘 표현식.
-import { knowledgeVisWhere, slugify, auditKnowledge, K_ICON_EXPR } from "./knowledge-common.js";
+import { knowledgeVisWhere, slugify, resolveKnowledgeName, auditKnowledge, K_ICON_EXPR } from "./knowledge-common.js";
 import { listKnowledgeLinks, materializeWikiLinksBestEffort, type WikiLinkResult } from "./knowledge-links.js";
 
 // PUBLIC_VIEWER 는 Viewer 개념이라 visibility.ts 로 옮겼다(#1291) — 여기 두면 상수 하나 때문에
 //  터미널·커넥터 같은 hot 모듈이 지식 스토어 전체를 끌어온다. 기존 import 경로는 아래 재export 로 유지.
 export { PUBLIC_VIEWER } from "./visibility.js";
 // 같은 이유로 슬러그·가시성 술어는 knowledge-common.ts(#1313 R21) — 기존 import 경로는 이 재수출로 유지.
-export { slugify, knowledgeVisWhere } from "./knowledge-common.js";
+export { slugify, resolveKnowledgeName, knowledgeVisWhere } from "./knowledge-common.js";
 // 검색(#1313 R21) — 구현은 knowledge-search.ts. 표면은 종전 그대로.
 export {
   countKnowledgeGrep, searchKnowledge, hybridSearchKnowledge, findSimilarKnowledge, findRecommendedKnowledge,
@@ -400,7 +400,7 @@ export async function upsertKnowledge(
 ): Promise<KnowledgeRow & { wikilinks?: WikiLinkResult }> {
   let name: string;
   if (input.name) {
-    name = slugify(input.name);
+    name = await resolveKnowledgeName(input.name);
   } else {
     const base = slugify(input.title || input.body_md.slice(0, 40));
     name = base;

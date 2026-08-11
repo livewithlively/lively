@@ -3,6 +3,7 @@
 //  이미 있다. 이 조각들을 store 에 두면 그 둘이 store 를 되import 해 순환이 난다(#1313 게이트 check-imports 가 잡는다).
 //  담는 것은 '어느 표면이든 지식 1건을 다룰 때 필요한' 규칙뿐 — 슬러그·감사·가시성 술어·아이콘 표현식.
 //  (K_COLS/K_SEL 등 조회 컬럼 집합은 store 전용이라 그대로 knowledge-store.ts 에 남긴다.)
+import { itemsPool, one } from "../db/client.js";
 import { auditOrgContent, type WriteCtx } from "./content-audit.js";
 import { visibleListIds, effectiveViewer, type Viewer } from "./visibility.js";
 import { axisOn } from "./visibility-axes.js";
@@ -53,6 +54,19 @@ export async function knowledgeVisWhere(viewer: Viewer | undefined, params: unkn
 export function slugify(s: string): string {
   return ((s || "untitled").toLowerCase().trim()
     .replace(/[^a-z0-9가-힣]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64)) || "untitled";
+}
+
+// 레거시 이름 구제(#1600) — slugify 는 대문자·끝 하이픈을 지우고 64자에서 자른다. 그 규칙이 지금 형태로
+//  굳기 전에 저장된 행은 name 이 slugify(name) 과 다르다(끝 하이픈 3건·대문자 1건 실측). 정규화만 하고 끝내면
+//  그 행은 **어떤 쓰기 경로로도 못 찾는다** — upsert 는 "없는 문서"로 보고 새 문서를 만들고(중복 3건 실측),
+//  원본은 영영 편집 불가로 남는다. slug 로 행이 없고 원본 이름의 행이 있으면 그 행이 편집 대상이다.
+//  ⚠ 순서가 중요: slug 행 우선(정상 케이스 무변화) → 그 다음에만 원본 이름을 본다.
+export async function resolveKnowledgeName(raw: string): Promise<string> {
+  const slug = slugify(raw);
+  if (slug === raw) return slug;
+  if (await one(itemsPool, `SELECT 1 FROM knowledge WHERE name=$1`, [slug])) return slug;
+  if (await one(itemsPool, `SELECT 1 FROM knowledge WHERE name=$1`, [raw])) return raw;
+  return slug;
 }
 
 // icon(#657) = props_ui->>'icon' — 페이지 아이콘(노션형). 목록·검색·트리 행이 문서 글리프 대신 표시.
