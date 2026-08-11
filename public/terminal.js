@@ -551,7 +551,7 @@
   }
   function diagText() {
     return [
-      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build ad12fa0e",
+      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build bc17b74e",
       "ua: " + navigator.userAgent,
       "session: " + SESSION_ID + (NODE_ID ? " node=" + NODE_ID : ""),
       "secure: " + window.isSecureContext + " \xB7 exported: " + (/* @__PURE__ */ new Date()).toISOString(),
@@ -2273,7 +2273,7 @@
           "\uBB38\uC81C\uAC00 \uC0DD\uACBC\uC744 \uB54C",
           tool("\uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", "\uC785\uB825\uC774 \uC774\uC0C1\uD560 \uB54C(\uD0A4\uB9CC \uB20C\uB7EC\uB3C4 \uAC19\uC740 \uBB38\uC790\uC5F4\uC774 \uB4E4\uC5B4\uAC00\uB294 \uB4F1) \uC544\uB798 \uBC84\uD2BC\uC73C\uB85C \uCD5C\uADFC \uC785\uB825 \uAE30\uB85D\uC744 \uBCF5\uC0AC\uD574 \uC81C\uBCF4\uC5D0 \uBD99\uC5EC \uC8FC\uC138\uC694 \u2014 \uC11C\uBC84\uB85C\uB294 \uC804\uC1A1\uB418\uC9C0 \uC54A\uC544\uC694"),
           el("button", { class: "tbtn", text: "\u{1F50D} \uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", onclick: () => copyText(diagText(), false, true) }),
-          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "ad12fa0e \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
+          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "bc17b74e \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
         ),
         sec(
           "\uB3C4\uAD6C (\uC624\uB978\uCABD \uC704 \uBC84\uD2BC)",
@@ -2759,10 +2759,16 @@
   var denyRetries = 0;
   var MAX_DENY_RETRIES = 5;
   var sessionEnded = false;
+  var MAX_RECONNECT_ATTEMPTS = 40;
+  var gaveUp = false;
   function scheduleReconnect(label) {
     clearTimeout(reconnectTimer);
-    if (sessionEnded) return;
+    if (sessionEnded || gaveUp) return;
     attempts++;
+    if (attempts > MAX_RECONNECT_ATTEMPTS) {
+      giveUpReconnect();
+      return;
+    }
     try {
       statusEl.textContent = label + (attempts > 1 ? " (" + attempts + "\uD68C\uC9F8)" : "");
       statusEl.className = "status err";
@@ -2770,6 +2776,58 @@
     }
     reconnectTimer = setTimeout(connectNow, reconnectDelay);
     reconnectDelay = Math.min(Math.round(reconnectDelay * 1.6), 5e3);
+  }
+  async function giveUpReconnect() {
+    let retryAfterMs = 0;
+    try {
+      const r = await fetch(apiUrl("/healthz"), { cache: "no-store" });
+      if (r.status === 503) {
+        const ra = Number(r.headers.get("retry-after") || 0);
+        retryAfterMs = Math.min(Math.max(ra > 0 ? ra * 1e3 : 5e3, 1e3), 3e4);
+      }
+    } catch (_) {
+    }
+    if (retryAfterMs) {
+      attempts = 0;
+      reconnectDelay = retryAfterMs;
+      try {
+        statusEl.textContent = "\uC11C\uBC84\uAC00 \uC900\uBE44 \uC911\uC785\uB2C8\uB2E4 \u2014 \uC7A0\uC2DC \uD6C4 \uC790\uB3D9\uC73C\uB85C \uC5F0\uACB0\uB429\uB2C8\uB2E4";
+        statusEl.className = "status err";
+      } catch (_) {
+      }
+      reconnectTimer = setTimeout(connectNow, retryAfterMs);
+      return;
+    }
+    gaveUp = true;
+    clearTimeout(reconnectTimer);
+    try {
+      statusEl.textContent = "\uC5F0\uACB0\uD560 \uC218 \uC5C6\uC74C";
+      statusEl.className = "status err";
+    } catch (_) {
+    }
+    showRetryBar();
+  }
+  function showRetryBar() {
+    if (document.getElementById("retry-bar")) return;
+    const bar = el(
+      "div",
+      { class: "ended-bar", id: "retry-bar" },
+      el("span", { text: "\uC11C\uBC84\uC5D0 \uC5F0\uACB0\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uB124\uD2B8\uC6CC\uD06C\uB098 \uAC8C\uC774\uD2B8\uC6E8\uC774 \uC0C1\uD0DC\uB97C \uD655\uC778\uD55C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD574 \uC8FC\uC138\uC694." }),
+      el("button", {
+        class: "gate-retry",
+        text: "\uB2E4\uC2DC \uC2DC\uB3C4",
+        onclick: () => {
+          const b = document.getElementById("retry-bar");
+          if (b && b.parentNode) b.parentNode.removeChild(b);
+          gaveUp = false;
+          attempts = 0;
+          reconnectDelay = 1500;
+          connectNow();
+        }
+      })
+    );
+    const root = document.getElementById("root");
+    if (root) root.insertBefore(bar, root.firstChild);
   }
   function endSession(opts) {
     if (sessionEnded) return;
@@ -3013,6 +3071,7 @@
       reconnectDelay = 1500;
       denyRetries = 0;
       attempts = 0;
+      gaveUp = false;
       syncedThisConn = false;
       nudgeTries = 0;
       needBackfill = !didBackfill;
