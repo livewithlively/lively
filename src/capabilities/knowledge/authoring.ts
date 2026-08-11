@@ -152,6 +152,9 @@ export const knowledgeSave: Capability = {
           // #968 변경 요약(검토 카드·기록). 길이 조정은 여기서 하지 않는다 — 핸들러 소프트캡(#1442)이 유일한
           //  상한 지점이라야 REST 호출자도 '잘렸다'는 사실을 응답 capped 로 받는다(여기서 자르면 조용히 사라진다).
           change_note: b.change_note ? String(b.change_note) : undefined,
+          // #1600 한 줄 요지. ⚠ 여기 빠뜨리면 zod 스키마에 있어도 REST 로는 **조용히 유실**된다
+          //  (MCP 는 스키마를 그대로 쓰지만 REST 는 이 parse 가 유일한 입구다 — 실측으로 잡힌 누락).
+          summary: b.summary != null ? String(b.summary) : undefined,
         };
       } }],
   },
