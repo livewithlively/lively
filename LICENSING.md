@@ -40,10 +40,19 @@ edition**. We sell compliance, not safety.
 
 Some things look like compliance and are not. Audit-log retention and pruning stay core: their
 job is to stop personal usage records piling up forever, so moving them would make the free
-edition the one that hoards data. Visibility rules are enforced by core, so a box that drops
-`src/ee/` keeps honouring the policies it already has — what it loses is the ability to author
-new ones. Session history and resume stay core too: that is the web terminal, which is the
-product.
+edition the one that hoards data. Session history and resume stay core too: that is the web
+terminal, which is the product.
+
+Visibility is worth stating precisely, because it is the one place where the free edition is
+genuinely narrower. Enforcement is core: a box that drops `src/ee/` keeps honouring every
+visibility policy it already has, and nothing silently opens up. Scoping knowledge and projects
+is core as well — project lists, project members, teams and shared-folder ACLs are how that is
+done, and all of them stay AGPL. What is Enterprise is **authoring connector-level source
+policy** ("material from this Slack channel is for this team only") and backfilling it over
+existing material. Since that is currently the only way source-level visibility gets set, a
+free-edition box can enforce source policies but cannot start using them. Keeping connector
+material out in the first place is a separate mechanism, and it is core: the channel guards
+decide what is ingested at all.
 
 If a compliance policy is configured in the database but the Enterprise module is absent, the
 core **refuses the request** rather than silently ignoring the policy. A missing feature and an

@@ -87,8 +87,10 @@ const all: Capability[] = [
   ...visAxesCapabilities, // #1291: 맥락 유형별 공개범위 켜기/끄기(vis_axis_list/_set). admin scope. 끄기는 잠긴 항목을 전원 공개시키므로 confirm+작업기록 필수.
   // (긴급 열람 vis_break_glass_* 는 #1601 로 Enterprise 로 갔다 — ee/capabilities/break-glass.ts.
   //  공개범위 판정과 긴급열람 **조회**(v6/visibility.ts)는 코어에 그대로다: 그게 EE 로 가면 가시성 자체가
-  //  EE 의존이 된다. 무료판에서 잠긴 맥락을 봐야 하면 admin 이 vis_axis_set 으로 공개범위를 바꾼다 —
-  //  정책을 안 건드리고 사유·감사·통지와 함께 한시적으로 넘는 문이 EE 다.)
+  //  EE 의존이 된다.
+  //  무료판에서 admin 이 잠긴 맥락을 봐야 하면 **그 리스트의 멤버에 자신을 넣는다**(project_list_set_members_v6,
+  //  코어). EE 가 파는 건 그 우회가 아니라 *정책을 그대로 둔 채 사유·감사·통지와 함께 한시적으로 넘는 문*이다.
+  //  ⚠ vis_axis_set 은 이 용도가 아니다 — 그건 축을 통째로 끄는 것이라 잠긴 항목이 **전원에게 공개**된다.)
   ...undoCapabilities, // #702: 전역 실행취소(Cmd+Z) — org_content_audit before/after 역적용(content_undo, REST 전용 /api/ui/undo). 사람전용(에이전트 403), 대상=내 웹 채널 변경만.
   ...feedTargetCapabilities, // #976 위키 아웃바운드 — 피드 목적지(feed_target)+카테고리 N:M 매핑 CRUD+드레인. admin scope, MCP+REST(/api/ui/feed-targets*). 관리탭 '위키 아웃바운드' 패널.
   ...cronCapabilities, // 서버사이드 스케줄 잡(org_cron) 관리 — admin scope. cron_list/set/delete/run_now(REST /api/ui/cron + MCP). 트리거 표준화: is 신선화·sync 를 게이트웨이가 주기 실행(웹훅 대체).
