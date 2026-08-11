@@ -4,7 +4,7 @@ import { bearerWithResourceMetadata } from "./auth/http-auth.js";
 import { oauthAuthorizationServer, clientSecretGate } from "./org/auth/oauth-router.js";
 import { registerOAuthConsent } from "./org/auth/oauth-consent.js";
 import { itemsPool } from "./db/client.js";
-import { buildToolCandidates } from "./capabilities/index.js";
+import { buildToolCandidates, registry } from "./capabilities/index.js";
 import { setToolCandidates } from "./mcp/mcp-surface.js";
 import { finishConsent, abandonConsent } from "./org/credentials/oauth-broker.js";
 import { buildInstallBundle } from "./org/delivery/publish.js";
@@ -180,6 +180,26 @@ if (auditExportHooks) {
   };
   app.get("/api/ui/audit-export/plan", eeRequired);
   app.get("/api/ui/audit-export.csv", eeRequired);
+}
+
+// 자료 공개범위 정책(#1601) — capability 가 Enterprise 로 갔다(ee/capabilities/source-vis-policy.ts).
+//  미탑재면 registry 에 op 가 없어 REST 경로가 통째로 안 생기고, 관리탭 [수집 ▸ 자료 공개범위] 패널은
+//  express 기본 404 를 받아 "정책을 불러오지 못했습니다" 만 띄운다 — 기능이 EE 라서 없는 건지, 서버가
+//  고장난 건지, 권한 문제인지 구분할 수 없다. 위 감사 export 와 **같은 처리**를 여기에도 준다.
+//  ⚠ registry 조회로 조건을 건다: EE 가 있으면 capability 마운트가 이 경로를 가져가야 하므로,
+//   무조건 등록하면 스텁이 진짜 기능을 가로챈다.
+if (!registry.has("source_vis_policy_list")) {
+  const eeRequired: express.RequestHandler = (_req, res) => {
+    res.status(404).json({
+      error: "자료 공개범위 정책은 Enterprise 모듈(src/ee)이 필요합니다 — 이미 설정된 정책은 그대로 계속 적용됩니다.",
+      enterprise_required: true,
+    });
+  };
+  app.get("/api/ui/source-vis-policy", eeRequired);
+  app.get("/api/ui/source-vis-policy/targets", eeRequired);
+  app.post("/api/ui/source-vis-policy", eeRequired);
+  app.post("/api/ui/source-vis-policy/delete", eeRequired);
+  app.post("/api/ui/source-vis-policy/backfill", eeRequired);
 }
 // #1036 프리뷰 환경 — /preview/<id>/* 를 프리뷰 환경의 워크트리 public/ 로 정적 서빙(shared-proxy: /api 는 게이트웨이 자신).
 //  express.json 이후·app.listen 이전. WS 불요(정적+REST 만)라 server 핸들 불필요.

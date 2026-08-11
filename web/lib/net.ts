@@ -59,6 +59,9 @@ async function api(path: string, opts: any = {}): Promise<any> {
   if (!res.ok) {
     const e: any = new Error((data && data.error) || ('요청 실패 (' + res.status + ')'));
     e.status = res.status;
+    // 서버가 준 구조화 정보를 그대로 넘긴다 — 호출부가 message 문자열을 파싱하지 않고 분기할 수 있게.
+    //  (#1601 enterprise_required: '고장'이 아니라 '이 배포엔 없는 기능'을 화면이 구분해 안내한다.)
+    e.body = data;
     throw e;
   }
   return data;
