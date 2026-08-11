@@ -7,7 +7,7 @@
 //   홈 대시보드의 팀 작업 로그 위젯(dash/widget-tasks-review-log.ts).
 //  import 방향: core(프리미티브) ← 이 모듈. projects.ts 에서 fmtDateTime 하나를 되받는 역엣지가 남아 있다
 //   (check-imports 의 ALLOWED_CYCLES 등재 — 그 심볼이 내려오면 사라진다). 새 역엣지를 늘리지 마라.
-import { appUrl, ACTIVITY_TYPE_LABEL, REF_REL_LABEL, api, el, fmtNum, relTime, renderMarkdown } from './core.js';
+import { appUrl, ACTIVITY_TYPE_LABEL, api, el, fmtNum, relTime, renderMarkdown, sv } from './core.js';
 import { fmtDateTime } from './projects.js';
 
 
@@ -28,107 +28,146 @@ function activityHasDetail(a) {
     || (a.is_review && a.is_review !== 'na') || (a.should_review && a.should_review !== 'na'));
 }
 
+// ── 연결 항목 아이콘 — 라인 1.7 단일 스타일(이모지 금지). 24 viewBox 를 17px 로 그린다. ──
+//  종류를 아이콘으로도 말하는 이유: 예전엔 '만든 것 / 참고한 것' 아래 파란 링크만 줄줄이 있어
+//  그게 지식인지 프로젝트인지 화면 어디에도 안 적혀 있었다(#1610 신고).
+const ACT_LNK_ICON = {
+  knowledge: ['M6.6 3.9h6.2l4.6 4.6v11.6H6.6z', 'M12.8 3.9v4.6h4.6', 'M9.1 13.3h6.1', 'M9.1 16.5h4'],
+  project: ['M12 3.9a8.1 8.1 0 1 1 0 16.2 8.1 8.1 0 0 1 0-16.2z', 'M8.7 12.2l2.4 2.4 4.3-4.9'],
+  code: ['M9.2 8.4 5.6 12l3.6 3.6', 'M14.8 8.4 18.4 12l-3.6 3.6', 'M13.3 6.7l-2.6 10.6'],
+  session: ['M4.5 5.5h15v13h-15z', 'M8.1 10.2l2.6 2.3-2.6 2.3', 'M13.2 14.8h3.5'],
+  external: ['M13.9 5.3h4.8v4.8', 'M18.7 5.3 11.4 12.6', 'M16.7 13.9v3.9a1.4 1.4 0 0 1-1.4 1.4H6.6a1.4 1.4 0 0 1-1.4-1.4V9.1a1.4 1.4 0 0 1 1.4-1.4h3.9'],
+};
+// 오른쪽 끝 어포던스 — 이 링크가 '새 탭에서 읽고 돌아오는 것(tab)'인지 '지금 화면을 옮기는 것(nav)'인지.
+const ACT_GO_ICON = { tab: ['M6.6 13.4 13.4 6.6', 'M8.6 6.6h4.8v4.8'], nav: ['M5.2 10h9.6', 'M10.8 6l4 4-4 4'] };
+function actGlyph(paths, box, size, cls) {
+  return sv('svg', { class: cls, viewBox: '0 0 ' + box + ' ' + box, width: size, height: size, fill: 'none', 'aria-hidden': 'true' },
+    ...paths.map((d) => sv('path', { d, stroke: 'currentColor', 'stroke-width': '1.7', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' })));
+}
+
+// 위키 제목은 실측 평균 84자·최장 200자를 넘는다(#1600 — 요지 칸이 없어 제목이 요약문으로 부풀었다).
+//  그 현실 위에서 읽히게 만든다: 제목 관례(`이름 — 부연 / 부연`)의 첫 구분자에서 갈라
+//  앞은 이름(굵게·2줄), 뒤는 부연(회색·2줄)으로 내린다. 자를 데가 없으면 통째로 이름이다.
+function splitRefTitle(raw) {
+  const s = String(raw || '').trim();
+  const m = s.match(/\s[—–]\s|\s\/\s|\s-\s/);
+  // 앞동강이 너무 짧으면(‘as-built(#1601):’ 류) 갈라 봐야 이름이 안 된다 — 그럴 땐 통째로 둔다.
+  if (!m || m.index == null || m.index < 8) return { name: s, sub: '' };
+  return { name: s.slice(0, m.index).trim(), sub: s.slice(m.index + m[0].length).trim() };
+}
+
+// 연결 항목 한 줄 — [종류 아이콘] [관계 라벨 / 이름 / 부연] [이동 어포던스].
+//  href 가 없으면(코드 커밋) 링크가 아니라 정보 행이다.
+function actLinkRow(icon, kind, name, sub, href?, newTab?) {
+  const go = href ? actGlyph(ACT_GO_ICON[newTab ? 'tab' : 'nav'], 20, '14', 'act-lnk-go') : null;
+  const attrs: any = { class: 'act-lnk' + (href ? '' : ' act-lnk-static') };
+  // 이름·부연은 2줄에서 잘린다 — 전문을 툴팁으로 함께 준다(잘린 채로만 남지 않게).
+  //  hover 전용 정보는 아니다: 링크를 열면 같은 내용을 제자리에서 다 읽는다.
+  attrs.title = [kind, [name, sub].filter(Boolean).join(' — ')].join(': ');
+  if (href) { attrs.href = href; if (newTab) { attrs.target = '_blank'; attrs.rel = 'noopener'; } }
+  return el(href ? 'a' : 'div', attrs,
+    el('span', { class: 'act-lnk-ico' }, actGlyph(ACT_LNK_ICON[icon], 24, '17', null)),
+    el('span', { class: 'act-lnk-main' },
+      el('span', { class: 'act-lnk-kind', text: kind }),
+      el('span', { class: 'act-lnk-name' + (icon === 'code' ? ' mono' : ''), text: name }),
+      sub ? el('span', { class: 'act-lnk-sub', text: sub }) : null),
+    go);
+}
+
 // ── 작업(activity) 상세 — 하나의 범용 템플릿(#852). 목록의 인라인 펼침과 단건 팝업이 **같은 함수**를 쓴다. ──
 //  왜: 유형(기능·수정·결정·문서·리서치·검토·운영·기타)이 8가지인데 기록의 재료는 늘 같다 —
-//  그래서 유형별 특수 서식 대신, 사람이 묻는 순서 하나로 모든 유형을 담는다:
-//    ① 무엇을 했나(기술 제목) ② 자세히(본문) ③ 결과물(산출·참조 지식) ④ 어디에 반영됐나(과업·코드) ⑤ 언제
-//  이전 문제 두 가지를 여기서 고친다:
-//   · body 는 마크다운인데 raw 텍스트로 박혀 '## 제목'·'- 목록'이 글자 그대로 보였다 → renderMarkdown.
-//   · 'should/is 점검: 해당 없음' 같은 내부 온톨로지 용어가 그대로 노출됐다 → 사람 말로, 바뀐 것만.
+//  그래서 유형별 특수 서식 대신, 사람이 읽는 글 하나의 구조로 모든 유형을 담는다:
+//    머리(무슨 일인가·누가·언제) → 리드(기술 제목) → 본문 → 연결된 기록 → (인라인일 때) 정확한 시각
+//
+//  #1610 재설계 — 그전 판의 실패를 세 가지 고친다.
+//   ① 위계가 없었다: 겉요약(15px)·기술제목(13px 굵게)·본문이 거의 같은 무게라 무엇이 제목인지 안 보였고,
+//      기술제목이 더 길어 오히려 그쪽이 제목처럼 읽혔다 → 겉요약을 19px 제목으로 올리고 기술제목은
+//      라벨 없는 리드 문단으로 내렸다(글의 구조: 제목 → 리드 → 본문).
+//   ② 링크의 정체가 없었다: '만든 것/참고한 것' 아래 파란 제목만 나열돼 지식인지 프로젝트인지 몰랐고,
+//      부풀어 있는 위키 제목이 통째로 박혀 파란 글자 벽이 됐다 → 종류를 말하는 라벨(‘만든 지식’)·아이콘·
+//      이름/부연 분리·새 탭 여부 어포던스를 갖춘 한 벌의 연결 목록으로 통합.
+//   ③ 터미널 세션 버튼이 제목과 본문 사이에 홀로 떠 있었다 → 버튼이 아니라 '연결된 기록'의 한 항목으로.
+//  (body 는 마크다운이라 반드시 renderMarkdown — raw 로 박으면 '## …' 가 글자로 보인다.)
 function activityDetailView(a, nameOf, opts?) {
   const when = a.committed_at || a.created_at;
   const box = el('div', { class: 'act-doc' });
+  const headed = !!(opts && opts.head);
 
-  // 머리(팝업 전용) — 목록 행은 이미 자기 헤드가 있어 생략한다.
-  if (opts && opts.head) {
+  // 바뀐 것 — '점검했으나 변화 없음'은 굳이 알릴 게 아니다. **바뀐 것만** 사람 말로.
+  const changed: string[] = [];
+  if (a.is_review === 'changed') changed.push('코드 구조가 바뀜');
+  if (a.should_review === 'changed') changed.push('설계 의도가 바뀜');
+
+  // 머리(팝업 전용) — 목록 행은 이미 자기 헤드가 있어 생략한다(변경 태그도 거기 이미 있다).
+  if (headed) {
     box.append(el('div', { class: 'act-doc-head' },
-      el('div', { class: 'act-doc-titleline' }, actTypeTag(a.type),
-        el('div', { class: 'act-doc-title', text: a.summary || a.title || '(제목 없음)' })),
+      el('div', { class: 'act-doc-kicker' }, actTypeTag(a.type),
+        ...changed.map((c) => el('span', { class: 'act-doc-tag', text: c }))),
+      el('h3', { class: 'act-doc-title', text: a.summary || a.title || '(제목 없음)' }),
       el('div', { class: 'act-doc-by' },
         el('span', { class: 'act-doc-who', text: nameOf(a.author_person) || '미상' }),
         a.author_agent ? el('span', { class: 'act-doc-agent', text: a.author_agent }) : null,
-        el('span', { class: 'act-doc-when', text: relTime(when) }))));
+        el('span', { class: 'act-doc-when', title: relTime(when), text: fmtDateTime(when) }))));
   }
 
-  // 바로가기 — 이 작업을 한 터미널 세션(#852)·외부 원본. 세션 버튼은 입장 가능할 때만 비동기로 붙는다.
-  const actions = el('div', { class: 'act-doc-actions' });
-  if (a.external_url) actions.append(el('a', { class: 'btn btn-ghost btn-sm', href: a.external_url, target: '_blank', rel: 'noopener', text: '↗ 원본' }));
-  box.append(actions);
-  attachSessionButton(actions, a.session_id);
-
-  const sec = (label, ...kids) => el('div', { class: 'act-doc-sec' },
-    el('div', { class: 'act-doc-label', text: label }), ...kids);
-
-  // ① 무엇을 했나 — AI가 남긴 기술 상세 제목(겉의 쉬운 요약과 다를 때만 — 같으면 되풀이라 뺀다).
+  // 리드 + 본문 — 라벨을 없앴다. 제목 바로 아래 굵은 한 문단이 곧 '무엇을 했나'다.
+  const readable = el('div', { class: 'act-doc-read' });
   if (a.title && a.title !== (a.summary || '')) {
-    box.append(sec('무엇을 했나', el('div', { class: 'act-doc-what', text: a.title })));
+    readable.append(el('p', { class: 'act-doc-lead', text: a.title }));
   }
-  // ② 자세히 — 본문은 마크다운이다. 반드시 렌더한다(raw 로 박으면 '## …' 가 글자로 보인다).
-  if (a.body) {
-    box.append(sec('자세히', el('div', { class: 'md-rendered act-doc-md' }, renderMarkdown(a.body))));
-  }
+  if (a.body) readable.append(el('div', { class: 'md-rendered act-doc-md' }, renderMarkdown(a.body)));
+  if (readable.childNodes.length) box.append(readable);
 
-  // ③ 결과물 — 이 작업이 만든/참고한/결정한 지식. 지식은 '읽고 돌아오는' 참조라 새 탭(#804·#811).
-  if (a.refs && a.refs.length) {
-    const KN_NEW_TAB = { target: '_blank', rel: 'noopener', title: '새 탭에서 지식 열기' };
-    const byRel: any = {};
-    for (const rf of a.refs) (byRel[rf.relation] = byRel[rf.relation] || []).push(rf);
-    const REL_TEXT = { produced: '만든 것', references: '참고한 것', decided: '결정한 것' };
-    const kids: any[] = [];
-    for (const rel of ['produced', 'references', 'decided']) {
-      if (!byRel[rel]) continue;
-      kids.push(el('div', { class: 'act-doc-refrow' },
-        el('span', { class: 'act-doc-rel', text: REL_TEXT[rel] || REF_REL_LABEL[rel] || rel }),
-        el('span', { class: 'act-doc-links' }, ...byRel[rel].map((it) =>
-          el('a', { class: 'act-doc-link', href: '#/k/' + encodeURIComponent(it.name), ...KN_NEW_TAB, text: it.title || it.name })))));
+  // 연결된 기록 — 지식·프로젝트·코드·세션·원본을 한 벌의 목록으로. 세션은 입장 가능할 때만
+  //  비동기로 늦게 붙으므로(권한 판정이 서버에 있다) 섹션을 미리 만들어 두고 항목이 생길 때 연다.
+  const lnks = el('div', { class: 'act-lnks' });
+  const linkSec = el('div', { class: 'act-doc-sec', hidden: true },
+    el('div', { class: 'act-doc-label', text: '연결된 기록' }), lnks);
+  const addLink = (row) => { lnks.append(row); linkSec.hidden = false; };
+
+  // 지식 — '읽고 돌아오는' 참조라 새 탭(#804·#811). 관계를 종류와 함께 말한다.
+  const REL_TEXT = { produced: '만든 지식', references: '참고한 지식', decided: '결정한 지식' };
+  for (const rel of ['produced', 'references', 'decided']) {
+    for (const rf of (a.refs || []).filter((r) => r.relation === rel)) {
+      const t = splitRefTitle(rf.title || rf.name);
+      addLink(actLinkRow('knowledge', REL_TEXT[rel], t.name, t.sub, '#/k/' + encodeURIComponent(rf.name), true));
     }
-    box.append(sec('결과물', ...kids));
   }
-
-  // ④ 어디에 반영됐나 — 과업(프로젝트)·코드(커밋). '과업'은 참조가 아니라 이동이라 같은 탭.
-  const where: any[] = [];
-  if (a.tasks && a.tasks.length) {
-    where.push(el('div', { class: 'act-doc-refrow' },
-      el('span', { class: 'act-doc-rel', text: '과업' }),
-      el('span', { class: 'act-doc-links' }, ...a.tasks.map((t) =>
-        el('a', { class: 'act-doc-link', href: '#/projects2/p/' + t.id, text: t.title || ('#' + t.id) })))));
+  // 프로젝트/태스크 — 참조가 아니라 이동이라 같은 탭.
+  for (const t of (a.tasks || [])) {
+    const s = splitRefTitle(t.title || ('#' + t.id));
+    addLink(actLinkRow('project', t.level === 'project' ? '진척시킨 프로젝트' : '진척시킨 태스크',
+      s.name, s.sub, '#/projects2/p/' + t.id, false));
   }
+  // 코드 — 갈 곳이 없는 사실이라 링크가 아니다.
   if (a.commit_sha) {
-    const bits = [a.repo, a.commit_sha.slice(0, 7), a.touchCount ? '코드 ' + fmtNum(a.touchCount) + '곳' : ''].filter(Boolean);
-    where.push(el('div', { class: 'act-doc-refrow' },
-      el('span', { class: 'act-doc-rel', text: '코드' }),
-      el('span', { class: 'act-doc-code mono', text: bits.join(' · ') })));
+    addLink(actLinkRow('code', '코드 커밋', [a.repo, a.commit_sha.slice(0, 7)].filter(Boolean).join(' · '),
+      a.touchCount ? '코드 ' + fmtNum(a.touchCount) + '곳을 건드렸습니다.' : ''));
   }
-  // 바뀐 것 — '점검했으나 변화 없음'은 굳이 알릴 게 아니다. **바뀐 것만** 사람 말로 띄운다.
-  const changed: any[] = [];
-  if (a.is_review === 'changed') changed.push('코드 구조가 바뀜');
-  if (a.should_review === 'changed') changed.push('설계 의도가 바뀜');
-  if (changed.length) {
-    where.push(el('div', { class: 'act-doc-refrow' },
-      el('span', { class: 'act-doc-rel', text: '영향' }),
-      el('span', { class: 'act-doc-chg', text: changed.join(' · ') })));
+  box.append(linkSec);
+  attachSessionLink(addLink, a.session_id);
+  if (a.external_url) {
+    addLink(actLinkRow('external', '외부 원본', a.external_url, '', a.external_url, true));
   }
-  if (where.length) box.append(sec('어디에 반영됐나', ...where));
 
-  // ⑤ 언제 — 커밋 시각이 있으면 그것, 없으면 기록 시각.
-  box.append(el('div', { class: 'act-doc-foot', text: fmtDateTime(when) }));
+  // 인라인 펼침에는 머리가 없다 — 정확한 시각을 여기서 알린다(행에는 상대시간만 있다).
+  if (!headed) box.append(el('div', { class: 'act-doc-foot', text: fmtDateTime(when) }));
   return box;
 }
 
-// 이 작업이 실행된 터미널 세션으로 바로 입장(#852). 판정은 서버에 맡긴다 —
+// 이 작업이 실행된 터미널 세션(#852) — '연결된 기록'의 한 항목으로 붙인다. 판정은 서버에 맡긴다:
 //  GET /terminal/sessions/:id 는 canAttach(소유자·초대된 멤버, 프로젝트 폴더 세션은 로그인한 전원 #452)를
-//  통과해야 200 을 준다. 그래서 **비공개 세션이면 403, 이미 끝난 세션이면 404/403** → 버튼을 아예 안 붙인다.
+//  통과해야 200 을 준다. 그래서 **비공개 세션이면 403, 이미 끝난 세션이면 404/403** → 항목을 아예 안 붙인다.
 //  (세션 목록 API 는 프로젝트 세션을 일부러 빼고 주므로 목록으로 판정하면 안 된다 — src/terminal/routes.ts:128.)
 //  상세(1건)에서만 부르므로 목록 N+1 이 없다.
-async function attachSessionButton(host, sessionId) {
+async function attachSessionLink(addLink, sessionId) {
   if (!sessionId) return;
   let s: any;
   try { s = await api('/api/ui/terminal/sessions/' + encodeURIComponent(sessionId)); }
-  catch { return; }   // 비공개(403) 또는 종료됨 → 들어갈 수 없으니 버튼 없음
+  catch { return; }   // 비공개(403) 또는 종료됨 → 들어갈 수 없으니 항목 없음
   if (!s || !s.id) return;
   const url = appUrl('/ui/terminal.html?session=') + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || '');
-  host.prepend(el('a', { class: 'btn btn-sm act-doc-sess', href: url, target: '_blank', rel: 'noopener',
-    title: '이 작업을 한 터미널 세션 열기', text: '▶ 터미널 세션 열기' }));
+  addLink(actLinkRow('session', '이 작업을 한 AI 세션', s.label || s.id, '새 탭에서 세션에 들어갑니다.', url, true));
 }
 
 // 작업(activity) 한 줄 — 회사 전체 타임라인(#/projects2)·작업 현황(#/dash) 공용.
