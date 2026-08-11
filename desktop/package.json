@@ -60,7 +60,7 @@
       {
         "provider": "github",
         "owner": "livewithlively",
-        "repo": "context-ontology"
+        "repo": "lively"
       }
     ],
     "nsis": {
