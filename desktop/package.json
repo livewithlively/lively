@@ -2,6 +2,7 @@
   "name": "lively-desktop",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "description": "라이블리 데스크톱 — 설치·로그인·노드 등록을 GUI 로 (트레이 상주)",
   "type": "module",
   "main": "main/main.mjs",
@@ -30,6 +31,7 @@
       "preload/**/*",
       "renderer/**/*",
       "assets/**/*",
+      "LICENSE",
       "!**/*.test.mjs"
     ],
     "mac": {

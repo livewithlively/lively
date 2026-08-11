@@ -6,10 +6,16 @@ determined **solely by the directory a file lives in**.
 | Path | License | What it is |
 |---|---|---|
 | `kit/` | **Apache-2.0** (`kit/LICENSE`) | The member kit — CLI, harness adapters, hooks, templates. Everything that runs on a member's own machine. |
+| `desktop/` | **Apache-2.0** (`desktop/LICENSE`) | The desktop app — a tray-resident GUI around the member kit. Installed on members' own machines, so it follows the same rule as `kit/`. |
 | `src/ee/` | **Lively Enterprise License** (`src/ee/LICENSE`) | Enterprise features. Source-available: you may read, modify and test it, but **production use requires a valid subscription**. |
 | Everything else | **AGPL-3.0-only** (`LICENSE`) | The gateway server, web UI, connectors, domain map, deployment tooling. |
 
-If a file is not inside `kit/` or `src/ee/`, it is AGPL-3.0-only.
+If a file is not inside `kit/`, `desktop/`, or `src/ee/`, it is AGPL-3.0-only.
+
+`desktop/` sits beside `kit/` rather than inside it only for build reasons (its own
+electron-builder pipeline and release workflow). For licensing it is the same category: code we
+ship to run on your machines is permissive, so that a policy against AGPL never becomes a reason
+your staff cannot install it.
 
 ## The Enterprise directory is optional
 
@@ -68,8 +74,8 @@ says so plainly, because failing silently is worse than failing.
 
 These are promises we intend to keep, published here so you can hold us to them:
 
-1. **`kit/` stays Apache-2.0, permanently.** The code that runs on your own machines will never
-   be relicensed to something more restrictive.
+1. **`kit/` and `desktop/` stay Apache-2.0, permanently.** The code that runs on your own machines
+   will never be relicensed to something more restrictive.
 2. **We will not move the core to SSPL, BUSL, or any other non-open-source license.** Loosening
    (for example, AGPL → Apache) remains possible; tightening does not.
 3. **The free edition stays a complete, working product.** Basic safety and the core value of
