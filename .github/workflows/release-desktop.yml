@@ -91,7 +91,22 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npm run icon && npx electron-builder --mac --publish never
+        shell: bash
+        run: |
+          # ⚠ GitHub Actions 는 **없는 시크릿을 빈 문자열 env 로** 넘긴다(unset 이 아니다). electron-builder 는
+          #  `CSC_LINK` 가 '정의돼 있으면' 그 값을 인증서 **파일 경로**로 보고 열려 하므로, 빈 문자열이면
+          #  projectDir 을 가리켜 `⨯ <projectDir> not a file` 로 죽는다.
+          #  실측 A/B(같은 맥, 같은 커밋): 빈 문자열 → EXIT 1 · 아예 unset → EXIT 0("skipped code signing").
+          #  이 워크플로의 계약은 '시크릿 없으면 미서명으로 그냥 빌드'(포크·커뮤니티 빌드가 돌아야 한다)이므로
+          #  **빈 값은 넘기지 않는다**. 서명은 값이 실제로 있을 때만 시도한다.
+          for v in CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER \
+                   APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!v:-}" ]; then unset "$v"; fi
+          done
+          # 인증서가 없으면 키체인 자동탐색도 끈다 — 러너에 남의 인증서가 있으면 엉뚱한 신원으로 서명된다.
+          if [ -z "${CSC_LINK:-}" ]; then export CSC_IDENTITY_AUTO_DISCOVERY=false; fi
+          npm run icon
+          npx electron-builder --mac --publish never
 
       - name: 빌드 (win)
         if: matrix.name == 'win'

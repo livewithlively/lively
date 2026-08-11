@@ -9,6 +9,9 @@ export const IPC = {
   SET_GATEWAY: "lively:set-gateway",   // { url }
   OPEN_EXTERNAL: "lively:open-external", // { url } — 브라우저로 (렌더러에 shell 을 노출하지 않기 위해 메인 경유)
   SET_APP_AUTOLAUNCH: "lively:set-app-autolaunch", // { on } — 앱(리모컨)을 로그인 때 띄울지. 노드 자동시작과 별개 축.
+  RETRY: "lively:retry",               // 방금 실패한 작업을 **그대로** 다시 — kind·opts 는 메인이 기억한다
+  READ_LOG: "lively:read-log",         // { id } — 화이트리스트된 로그의 꼬리(log-view.mjs)
+  CHECK_UPDATE: "lively:check-update", // 사람이 누른 '지금 확인' — 자동 6시간 주기와 같은 판정을 쓴다
 
   // 메인 → 렌더러 (send, 단방향)
   STATE: "lively:state",               // 상태 스냅샷 갱신
@@ -17,7 +20,11 @@ export const IPC = {
 };
 
 /** 렌더러가 요청할 수 있는 작업 — 화이트리스트. 임의 argv 를 렌더러가 만들지 못하게 한다. */
-export const RUN_KINDS = ["setup", "login", "install", "node-start", "node-stop", "status", "doctor"];
+export const RUN_KINDS = ["setup", "login", "logout", "install", "update", "node-start", "node-stop", "status", "doctor"];
+
+/** 다시 시도해도 **안전한** 작업인가 — 재시도 버튼은 이 목록에만 붙는다.
+ *  로그아웃·정지처럼 상태를 되돌리는 것은 실패해도 자동 재시도를 권하지 않는다(사람이 다시 판단해야 한다). */
+export const RETRYABLE_KINDS = ["setup", "login", "install", "update", "node-start", "status", "doctor"];
 
 /**
  * 작업 종류 → CLI argv (순수). `--json-events` 는 runCli 가 붙인다.
@@ -43,7 +50,11 @@ export function argvFor(kind, opts) {
     // setup = 로그인 + 키트 설치(순서·조건의 정본은 CLI 다 — 앱이 다시 판단하지 않는다).
     case "setup": { const gw = gateway(o); return gw ? ["setup", "--gateway", gw] : ["setup"]; }
     case "login": { const gw = gateway(o); return gw ? ["login", "--gateway", gw] : ["login"]; }
+    // 로그아웃은 게이트웨이 인자를 받지 않는다 — 지금 로그인된 곳에서 나가는 것이지 '어디서' 를 고르는 게 아니다.
+    case "logout": return ["logout"];
     case "install": return ["install"];
+    // 키트 갱신 — **앱 자신의 자동 업데이트와 다른 축**이다(그건 electron-updater 가 앱 바이너리를 바꾼다).
+    case "update": return ["update"];
     case "node-start": return ["node", "--daemon"];
     case "node-stop": return ["node", "stop"];
     case "status": return ["status", "--json"];

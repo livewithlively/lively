@@ -58,3 +58,19 @@ ul#steps { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-d
 
 .check { display: flex; align-items: center; gap: 7px; font-size: 13px; margin-top: 12px; }
 .check .hint { margin: 0; }
+
+/* 되돌리기 어려운 동작(로그아웃)은 색으로 구분한다 — 점검 버튼들과 같은 무게로 두면 오조작이 생긴다. */
+button.danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, var(--line)); }
+
+/* 로그 두 축(이번 작업 / 노드 로그) — 섞으면 원인을 못 가린다. */
+.tabs { margin-bottom: 8px; }
+button.tab { padding: 4px 10px; font-size: 12px; background: transparent; color: var(--muted); }
+button.tab.on { background: var(--card); color: var(--fg); border-color: var(--accent); }
+#filelog { max-height: 190px; overflow: auto; background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px; white-space: pre-wrap; word-break: break-word; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* 버전·업데이트는 화면 아래 고정 줄 — 늘 보이되 작업을 가리지 않는다. */
+footer { display: flex; align-items: center; gap: 10px; padding: 8px 22px 14px; border-top: 1px solid var(--line);
+  font-size: 12px; color: var(--muted); }
+footer .grow { flex: 1; }
+button.link-btn { padding: 2px 6px; border: none; background: transparent; color: var(--accent); font-size: 12px; }

@@ -9,8 +9,8 @@
 //  ② **상시성의 주체는 앱이 아니라 OS 데몬**이다(launchd·systemd·작업 스케줄러). 앱을 꺼도 노드는 산다.
 //     그래서 창을 닫아도 앱이 안 죽고(트레이 상주), 앱을 종료해도 노드는 그대로다.
 //  ③ 렌더러는 신뢰하지 않는다 — contextIsolation·sandbox 켜고, argv 는 메인이 만든다(ipc-contract).
-import { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, dialog } from "electron";
-import { existsSync, readFileSync } from "node:fs";
+import { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, dialog, screen } from "electron";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,15 +19,21 @@ import { locateCli, cliMissingHelp } from "./cli-locate.mjs";
 import { runBootstrap, bootstrapPreview } from "./bootstrap.mjs";
 import { runCli, reduceProgress } from "./cli-runner.mjs";
 import { trayMenuModel } from "./tray-menu.mjs";
-import { IPC, RUN_KINDS, argvFor } from "./ipc-contract.mjs";
+import { IPC, RUN_KINDS, RETRYABLE_KINDS, argvFor } from "./ipc-contract.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
-import { shouldCheckForUpdates, updateFailureNote, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
+import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
+import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
+import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LIVELY_DIR = join(process.env.LIVELY_HOME || homedir(), ".lively");
 
+const BOUNDS_FILE = join(LIVELY_DIR, "desktop-window.json");
+
 let tray = null, win = null, quitting = false;
 let running = null;                 // { kind, handle } — 지금 도는 CLI(동시 1개)
+let lastRun = null;                 // 마지막으로 시도한 { kind, opts } — '다시 시도' 가 이걸 그대로 다시 돈다
+let updateNote = null;              // 업데이트 확인 결과 한 줄(사람용)
 let state = {                       // 트레이·렌더러가 함께 보는 스냅샷
   cliPath: null, cliFound: false, gatewayUrl: null, loggedIn: false, kitInstalled: false,
   nodeRegistered: false, nodeDaemon: false, nodeRunning: false, busy: false,
@@ -47,6 +53,14 @@ async function refreshState({ deep = false } = {}) {
   next.kitInstalled = existsSync(join(LIVELY_DIR, "kit-version"));
   next.nodeRegistered = existsSync(join(LIVELY_DIR, "node-agent.env"));
   next.appAutoLaunch = appAutoLaunchEnabled();
+  // 버전 — 제보·지원에서 가장 먼저 묻는 값인데 화면 어디에도 없었다. 두 축을 따로 보여준다:
+  //  앱(=이 바이너리)과 키트(=CLI 가 설치한 것). 서로 다른 주기로 갱신되므로 하나로 합치면 오해가 된다.
+  next.appVersion = safeAppVersion();
+  next.kitVersion = readTrim(join(LIVELY_DIR, "kit-version"));
+  next.updateNote = updateNote;
+  // 재시도는 **실패한 게 있고 그게 안전한 작업일 때만** 제안한다(렌더러가 판단하지 않는다).
+  next.retryable = !!(lastRun && RETRYABLE_KINDS.includes(lastRun.kind));
+  next.logViews = LOG_VIEWS.map((v) => ({ id: v.id, label: v.label }));
   state = next;
   renderTray(); send(IPC.STATE, state);
   if (deep && cliPath && !running) await refreshNodeStatus(cliPath);
@@ -62,6 +76,28 @@ async function refreshNodeStatus(cli) {
   renderTray(); send(IPC.STATE, state);
 }
 function readTrim(p) { try { return readFileSync(p, "utf8").trim() || null; } catch { return null; } }
+/** 개발 실행(electron .)에서는 Electron 자신의 버전이 나온다 — 그래도 없는 척하지 않고 그대로 보여준다. */
+function safeAppVersion() { try { return app.getVersion(); } catch { return null; } }
+
+// ── 창 배치 기억 ────────────────────────────────────────────────────────────
+// 판단(화면 밖 좌표 버리기·최소 크기)은 window-bounds.mjs 가 하고 여기선 읽고 쓰기만 한다.
+function loadBounds() {
+  try { return normalizeBounds(JSON.parse(readFileSync(BOUNDS_FILE, "utf8")), workAreas()); }
+  catch { return normalizeBounds(null, workAreas()); }
+}
+function workAreas() {
+  try { return screen.getAllDisplays().map((d) => d.workArea); } catch { return []; }
+}
+function saveBounds() {
+  // 최소화·전체화면 상태의 좌표를 저장하면 다음 실행이 그 이상한 자리에서 뜬다 — 정상 상태일 때만 남긴다.
+  try {
+    if (!win || win.isDestroyed() || win.isMinimized() || win.isFullScreen()) return;
+    const b = pickBounds(win.getNormalBounds ? win.getNormalBounds() : win.getBounds());
+    if (!b) return;
+    mkdirSync(LIVELY_DIR, { recursive: true });
+    writeFileSync(BOUNDS_FILE, JSON.stringify(b));
+  } catch { /* 저장 실패는 치명이 아니다 — 다음에 기본 위치로 뜰 뿐 */ }
+}
 
 // ── 트레이 ──────────────────────────────────────────────────────────────────
 function trayImage() {
@@ -124,13 +160,18 @@ async function checkUpdates() {
     macSigned: process.platform !== "darwin" || app.isPackaged && !!process.mas === false && isMacSigned(),
     optOut: process.env[UPDATE_OPT_OUT_ENV], failedBefore: updateFailed,
   });
-  if (!verdict.ok) { send(IPC.LOG, { stream: "raw", line: `업데이트 확인 건너뜀(${verdict.reason})` }); return; }
+  // 왜 안 하는지도 **화면에** 남긴다 — 로그에만 적으면 사용자는 '업데이트가 되는 앱인지'조차 모른다.
+  updateNote = updateStatusNote(verdict.reason);
+  if (!verdict.ok) { send(IPC.LOG, { stream: "raw", line: updateNote }); void refreshState(); return; }
   try {
     const { autoUpdater } = (await import("electron-updater")).default;
     autoUpdater.autoDownload = true;
-    autoUpdater.on("error", (e) => { updateFailed = true; send(IPC.LOG, { stream: "raw", line: updateFailureNote(e) }); });
+    autoUpdater.on("error", (e) => { updateFailed = true; updateNote = updateFailureNote(e); send(IPC.LOG, { stream: "raw", line: updateNote }); void refreshState(); });
+    autoUpdater.on("update-not-available", () => { updateNote = "최신 버전입니다."; void refreshState(); });
+    autoUpdater.on("update-downloaded", (i) => { updateNote = `새 버전 ${i?.version || ""} 을 받았습니다 — 앱을 다시 켜면 적용됩니다.`; void refreshState(); });
     await autoUpdater.checkForUpdatesAndNotify();
-  } catch (e) { updateFailed = true; send(IPC.LOG, { stream: "raw", line: updateFailureNote(e) }); }
+  } catch (e) { updateFailed = true; updateNote = updateFailureNote(e); send(IPC.LOG, { stream: "raw", line: updateNote }); }
+  void refreshState();
 }
 /** mac 서명 여부 — 서명되지 않은 번들은 codesign 검증에 실패한다. 못 재면 '서명 안 됨' 으로 본다(안전측). */
 function isMacSigned() {
@@ -142,8 +183,11 @@ function isMacSigned() {
 // ── 창 ──────────────────────────────────────────────────────────────────────
 function showWindow() {
   if (win) { win.show(); win.focus(); return win; }
+  // 지난번 자리·크기로 연다. 모니터를 뺐거나 해상도가 바뀌었으면 좌표를 버린다(window-bounds.mjs) —
+  //  안 그러면 창이 보이지 않는 곳에 떠서 사용자에겐 "앱이 안 열린다" 로 보인다.
+  const b = loadBounds();
   win = new BrowserWindow({
-    width: 720, height: 560, minWidth: 560, minHeight: 420, title: "라이블리", show: false,
+    ...b, minWidth: 560, minHeight: 420, title: "라이블리", show: false,
     webPreferences: {
       preload: join(HERE, "..", "preload", "preload.cjs"),
       contextIsolation: true, nodeIntegration: false, sandbox: true,   // 렌더러는 신뢰하지 않는다
@@ -151,8 +195,11 @@ function showWindow() {
   });
   win.once("ready-to-show", () => win.show());
   // 창을 닫아도 앱은 트레이에 남는다 — 노드 리모컨이 사라지면 안 된다.
-  win.on("close", (e) => { if (!quitting) { e.preventDefault(); win.hide(); } });
+  //  ⚠ 자리는 **숨기기 직전에** 저장한다. 'closed' 는 트레이 상주라 앱 종료 때까지 안 올 수도 있다.
+  win.on("close", (e) => { saveBounds(); if (!quitting) { e.preventDefault(); win.hide(); } });
   win.on("closed", () => { win = null; });
+  win.on("moved", saveBounds);
+  win.on("resized", saveBounds);
   win.loadFile(join(HERE, "..", "renderer", "index.html"));
   return win;
 }
@@ -167,6 +214,7 @@ async function start(kind, opts) {
   let args;
   try { args = argvFor(kind, opts); } catch (e) { return { ok: false, error: e.message }; }
 
+  lastRun = { kind, opts: opts || {} };   // '다시 시도' 가 쓸 값 — 렌더러가 argv 를 다시 만들지 않게 메인이 기억한다
   state = { ...state, busy: true }; renderTray(); send(IPC.STATE, state);
   progress = null;
   running = { kind, handle: null };
@@ -250,6 +298,22 @@ ipcMain.handle(IPC.ANSWER, (_e, { id, value }) => {
   return { ok: true };
 });
 ipcMain.handle(IPC.SET_GATEWAY, (_e, { url }) => onboard(url));
+// 다시 시도 — **렌더러가 무엇을 재시도할지 정하지 않는다.** 메인이 기억한 마지막 작업을 그대로 돌린다
+//  (렌더러가 kind 를 보내면 '실패한 것'과 '보내고 싶은 것'이 갈라져 임의 작업 실행 통로가 된다).
+ipcMain.handle(IPC.RETRY, () => {
+  if (!lastRun) return { ok: false, error: "다시 시도할 작업이 없습니다." };
+  if (!RETRYABLE_KINDS.includes(lastRun.kind)) return { ok: false, error: "이 작업은 자동으로 다시 시도하지 않습니다." };
+  return start(lastRun.kind, lastRun.opts);
+});
+// 로그 꼬리 — id 는 화이트리스트(log-view.mjs). 경로를 렌더러가 정할 수 없다.
+ipcMain.handle(IPC.READ_LOG, (_e, { id }) => {
+  const p = resolveLogPath(join, LIVELY_DIR, id);
+  if (!p) return { ok: false, error: "알 수 없는 로그입니다." };
+  if (!existsSync(p)) return { ok: true, text: "", missing: true, path: p };
+  try { return { ok: true, ...tailText(readFileSync(p, "utf8")), path: p }; }
+  catch (e) { return { ok: false, error: String(e?.message || e) }; }
+});
+ipcMain.handle(IPC.CHECK_UPDATE, async () => { updateFailed = false; await checkUpdates(); return { ok: true, note: updateNote }; });
 ipcMain.handle(IPC.SET_APP_AUTOLAUNCH, (_e, { on }) => { setAppAutoLaunch(!!on); return { ok: true, on: appAutoLaunchEnabled() }; });
 // 외부 링크는 메인만 연다 — 렌더러에 shell 을 노출하면 임의 URL·파일 열기가 된다.
 ipcMain.handle(IPC.OPEN_EXTERNAL, (_e, { url }) => {
