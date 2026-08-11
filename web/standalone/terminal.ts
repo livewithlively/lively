@@ -2034,10 +2034,17 @@ let reconnectTimer = null, reconnectDelay = 1500, wasConnected = false, connecti
 //  받았을 때만 보낸다. 그래야 '살아있는데 죽었다고 오인'(#687) 없이 '죽었는데 영원히 재접속중'을 없앨 수 있다.
 let denyRetries = 0; const MAX_DENY_RETRIES = 5;
 let sessionEnded = false; // 4410 수신 = 세션 종료 확정 → 재연결 영구 중단(아래 endSession)
+// 게이트웨이가 아예 응답하지 않을 때 **언젠가는 포기한다**. 예전엔 5초 간격으로 영원히 재시도했는데,
+//  그러면 서버가 죽었든 노트북이 절전에서 깼든 화면은 똑같이 '재연결 중… (417회째)' 만 돈다 —
+//  사용자는 기다려야 하는지 새로고침해야 하는지 알 수 없고, 탭을 열어둔 채로 무한히 요청이 나간다.
+//  40회면 백오프 포함 약 3분이다. 그 뒤엔 멈추고 '다시 시도'를 사람 손에 넘긴다.
+const MAX_RECONNECT_ATTEMPTS = 40;
+let gaveUp = false;
 function scheduleReconnect(label) {
   clearTimeout(reconnectTimer);
-  if (sessionEnded) return;
+  if (sessionEnded || gaveUp) return;
   attempts++;
+  if (attempts > MAX_RECONNECT_ATTEMPTS) { giveUpReconnect(); return; }
   // 재시도 횟수를 같이 보여준다 — '멈춘 것처럼 보이는 재접속중'이 아니라 '지금 몇 번째로 시도 중'임을 알린다.
   try {
     statusEl.textContent = label + (attempts > 1 ? ' (' + attempts + '회째)' : '');
@@ -2045,6 +2052,64 @@ function scheduleReconnect(label) {
   } catch (_) { /* noop */ }
   reconnectTimer = setTimeout(connectNow, reconnectDelay);
   reconnectDelay = Math.min(Math.round(reconnectDelay * 1.6), 5000); // 지수 백오프, 최대 5s
+}
+
+/**
+ * 재연결 포기 — 단, **포기하기 전에 서버에게 한 번 물어본다**.
+ *
+ * 게이트웨이가 `/healthz` 에 503 + `Retry-After` 로 답하면 그건 "죽었다"가 아니라 "지금 준비 중이니
+ *  그만큼 뒤에 오라"는 표준 HTTP 응답이다(절전에서 깨는 중·기동 중·배포 중). 그 말을 들었으면
+ *  포기하지 않고 서버가 말한 간격으로 계속 기다린다 — 대신 문구를 '준비 중'으로 바꿔서, 사용자가
+ *  '고장'과 '기다리면 되는 상태'를 구별할 수 있게 한다.
+ *
+ * 아무 답도 없으면(연결 자체가 안 되면) 거기서 멈추고 결정권을 사람에게 넘긴다.
+ */
+async function giveUpReconnect() {
+  let retryAfterMs = 0;
+  try {
+    const r = await fetch(apiUrl('/healthz'), { cache: 'no-store' });
+    if (r.status === 503) {
+      const ra = Number(r.headers.get('retry-after') || 0);
+      retryAfterMs = Math.min(Math.max(ra > 0 ? ra * 1000 : 5000, 1000), 30_000);
+    }
+  } catch (_) { /* 도달 자체가 안 됨 → 아래에서 포기 */ }
+
+  if (retryAfterMs) {
+    attempts = 0;                       // 서버가 기다리라고 했다 — 예산을 되돌려준다
+    reconnectDelay = retryAfterMs;
+    try {
+      statusEl.textContent = '서버가 준비 중입니다 — 잠시 후 자동으로 연결됩니다';
+      statusEl.className = 'status err';
+    } catch (_) { /* noop */ }
+    reconnectTimer = setTimeout(connectNow, retryAfterMs);
+    return;
+  }
+
+  gaveUp = true;
+  clearTimeout(reconnectTimer);
+  try {
+    statusEl.textContent = '연결할 수 없음';
+    statusEl.className = 'status err';
+  } catch (_) { /* noop */ }
+  showRetryBar();
+}
+
+/** 포기 상태의 유일한 출구. 터미널 내용은 지우지 않는다 — 마지막 출력이 사용자에게 가장 필요한 정보다. */
+function showRetryBar() {
+  if (document.getElementById('retry-bar')) return;
+  const bar = el('div', { class: 'ended-bar', id: 'retry-bar' },
+    el('span', { text: '서버에 연결하지 못했습니다. 네트워크나 게이트웨이 상태를 확인한 뒤 다시 시도해 주세요.' }),
+    el('button', {
+      class: 'gate-retry', text: '다시 시도',
+      onclick: () => {
+        const b = document.getElementById('retry-bar');
+        if (b && b.parentNode) b.parentNode.removeChild(b);
+        gaveUp = false; attempts = 0; reconnectDelay = 1500;
+        connectNow();
+      },
+    }));
+  const root = document.getElementById('root');
+  if (root) root.insertBefore(bar, root.firstChild);
 }
 // 세션 종료 확정(#835) — 재연결을 멈추고 '닫힘'을 명시한다. 게이트로 화면을 덮지 않는 이유: 마지막 출력이
 //  사용자에게 가장 필요한 정보다(무슨 일이 있었는지 읽고 복사해야 한다). 그래서 터미널은 그대로 두고
@@ -2239,7 +2304,7 @@ async function connectNow() {
   });
   sock.onopen = () => {
     dlog('ws', 'open');
-    connecting = false; wasConnected = true; reconnectDelay = 1500; denyRetries = 0; attempts = 0; // 붙었으면 입장 허용 확정 → 거부 카운트 리셋
+    connecting = false; wasConnected = true; reconnectDelay = 1500; denyRetries = 0; attempts = 0; gaveUp = false; // 붙었으면 입장 허용 확정 → 거부·포기 카운트 리셋
     syncedThisConn = false; // 이 연결에서 재접속 상태동기(t:'st')를 아직 안 보냄
     nudgeTries = 0; needBackfill = !didBackfill; wantRedrawCap = false; // 넛지 상한·백필/재캡처 대기는 '연결 단위'
     lastKnownState = null;  // 백엔드·팬 상태는 이 연결에서 다시 관측한다(옛 연결 사본으로 캡처를 판정하지 않는다)
