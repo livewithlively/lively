@@ -167,14 +167,19 @@ function wkAurora(seed, space, opts = {}) {
 //   이 코퍼스는 대부분 인용(> 발단: …)으로 시작해서 본문 한참 아래의 문맥 없는 조각이 뽑혔다
 //   (슬러그로 시작하는 줄이 그대로 붙는 사례가 실제로 있었다). 파편을 보여주느니 비우는 게 낫다.
 //  요지는 저장 시 함께 적히고(knowledge_save summary), AI 에게는 반환되지 않는 사람 전용 필드다.
-function wkLede(e) {
-    return String((e && e.summary) || '').trim();
+function wkLede(e, cap = 150) {
+    const s = String((e && e.summary) || '').trim();
+    if (s)
+        return s;
+    //  ⚠ 아직 요지가 없는 문서가 대부분이다(611/650). 그때 이 줄을 비워 버리면 목록이 제목만 남아
+    //   지금보다 못해진다 — 요지 백필이 끝나기 전까지는 **고친 발췌**로 버틴다(요지가 생기면 자동으로 대체된다).
+    return wkDeck((e && e.body_md) || '', cap);
 }
 // ── 문서 카드 — 요지로 클릭 전에 내용이 읽히는 카드. 홈 핀/최근·카테고리 시작점 공용. ──
 //  opts: { open(e, el), deckCap, metas?: 추가 메타 노드, cls }
 function wkDocCard(e, opts = {}) {
     const cap = opts.deckCap || 120;
-    const lede0 = wkLede(e);
+    const lede0 = wkLede(e, cap);
     const deck = lede0.length > cap ? lede0.slice(0, cap - 1).trimEnd() + '…' : lede0;
     const card = el('div', { class: 'wk-doccard' + (opts.cls ? ' ' + opts.cls : ''), role: 'link', tabindex: '0', 'data-author': e.confidence || '' }, el('div', { class: 'wk-doccard-top' }, wkTick(e), e.icon ? el('span', { class: 'wk-doccard-ic', 'aria-hidden': 'true', text: e.icon }) : null, el('span', { class: 'wk-doccard-title', text: e.title || e.name })), deck ? el('p', { class: 'wk-doccard-deck', text: deck }) : null, el('div', { class: 'wk-doccard-meta' }, ...wkMetaOf(e, { lead: opts.metas || [] })
         .map((m) => ((m && m.nodeType) ? m : el('span', { class: 'wk-row-m', text: String(m) })))));
@@ -275,16 +280,21 @@ function wkDeck(md, cap = 150) {
                 break;
             continue;
         }
-        if (/^#{1,6}\s/.test(line) || /^[-*+]\s|^\d+[.)]\s|^>\s?|^\||^!\[|^---+$|^\$\$/.test(line)) {
+        //  인용(>)은 건너뛰지 않는다 — 이 코퍼스는 대부분 '> 2026-08-10. 발단: …' 인용으로 문서를 연다.
+        //   그게 사실상 리드 문단인데 종전엔 그걸 지나쳐 본문 한참 아래의 문맥 없는 조각을 집었다.
+        const line2 = line.replace(/^>\s?/, '');
+        if (/^#{1,6}\s/.test(line2) || /^[-*+]\s|^\d+[.)]\s|^\||^!\[|^---+$|^\$\$/.test(line2)) {
             if (buf.length)
                 break;
             continue;
         }
-        buf.push(line);
+        buf.push(line2);
         if (buf.join(' ').length > cap + 60)
             break;
     }
     const txt = buf.join(' ')
+        //  [[이름|표시글]] → 표시글, [[이름]] → 이름. 안 벗기면 발췌가 슬러그로 시작한다(실측 사례 다수).
+        .replace(/\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]/g, (_m, nm, label) => String(label || nm).trim())
         .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
         .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
         .replace(/[*_~`=+]{1,3}([^*_~`=+]+)[*_~`=+]{1,3}/g, '$1')
