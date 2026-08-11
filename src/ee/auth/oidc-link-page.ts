@@ -1,3 +1,6 @@
+// ⚠ Lively Enterprise Edition — 이 디렉터리(src/ee)는 상용 라이센스다. src/ee/LICENSE 참조.
+//   유효한 구독 없이 프로덕션에서 사용할 수 없다(열람·개발·테스트는 허용).
+//
 // 계정 갈림길 화면(#1520 B) — 구글 로그인은 성공했는데 **그 이메일과 일치하는 구성원이 없을 때** 뜬다.
 //  묻는 것은 하나다: "새로 시작할까요, 이미 쓰던 계정에 붙일까요?"
 //
@@ -11,12 +14,12 @@
 //   연결 코드(pending_oidc_link)는 이미 IdP 인증을 통과한 사람만 쥐지만, 그것만으로는 '이 조직의 그 사람'이
 //   증명되지 않는다 — 두 근거를 모두 요구하는 게 이 화면의 핵심이다.
 import express from "express";
-import { esc, page, errorPage } from "./auth-pages.js";
-import { consumeOidcLink, readOidcLink, type PendingOidcLink } from "../org/store/oidc-auth.js";
-import { verifyLogin } from "./local-accounts.js";
+import { esc, page, errorPage } from "../../auth/auth-pages.js";
+import { consumeOidcLink, readOidcLink, type PendingOidcLink } from "./oidc-auth-store.js";
+import { verifyLogin } from "../../auth/local-accounts.js";
 import { linkOidcToMember, provisionOidcMember } from "./oidc-login.js";
-import { createSession, sessionCookie } from "./sessions.js";
-import { logger } from "../log.js";
+import { createSession, sessionCookie } from "../../auth/sessions.js";
+import { logger } from "../../log.js";
 
 export const OIDC_LINK_PATH = "/auth/link";
 

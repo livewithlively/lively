@@ -25,7 +25,17 @@ export async function sourceVisPolicyPanel(detail): Promise<void> {
 
   let data: any, targets: any;
   try { [data, targets] = await Promise.all([api('/api/ui/source-vis-policy'), api('/api/ui/source-vis-policy/targets')]); }
-  catch (e) { detail.replaceChildren(el('div', {}, head(), el('div', { class: 'card' }, errorNote(e, '정책을 불러오지 못했습니다')))); return; }
+  catch (e: any) {
+    // Enterprise 미탑재(#1601) — 이건 고장이 아니라 '이 배포엔 없는 기능'이다. 에러로 그리면 관리자는
+    //  서버 장애·권한 문제와 구분하지 못하고 새로고침만 반복한다. 무엇이 없어서 안 되는지 그대로 말한다.
+    const body = e?.body?.enterprise_required
+      ? el('div', { class: 'svp-warn' },
+          el('b', { text: '이 배포에는 자료 공개범위 정책 기능이 없어요' }),
+          el('span', { text: String(e.message ?? '') }))
+      : errorNote(e, '정책을 불러오지 못했습니다');
+    detail.replaceChildren(el('div', {}, head(), el('div', { class: 'card' }, body)));
+    return;
+  }
 
   const rules = data.rules || [];
   const axisOn = data.axis_on !== false;

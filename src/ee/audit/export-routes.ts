@@ -1,3 +1,6 @@
+// ⚠ Lively Enterprise Edition — 이 디렉터리(src/ee)는 상용 라이센스다. src/ee/LICENSE 참조.
+//   유효한 구독 없이 프로덕션에서 사용할 수 없다(열람·개발·테스트는 허용).
+//
 // 감사로그 CSV 내보내기(#1309) — 관리탭 [감사 로그] 3탭(관리 변경·DB 조회·AI 도구 호출)의 "CSV 다운로드".
 //
 //  ── 왜 capability 가 아니라 별도 라우트인가 ──
@@ -20,16 +23,16 @@
 //   그쪽 필터를 고치면 여기도 같이 고칠 것(각 파일에 상호참조 주석을 달아 뒀다).
 import type express from "express";
 import { once } from "node:events";
-import { sessionOrBearer } from "./auth/http-auth.js";
-import type { BearerVerifier } from "./auth/bearer.js";
-import type { LivelyUser } from "./context.js";
-import { wrap, HttpError } from "./http/rest-util.js";
-import { DANGEROUS_SCOPES } from "./auth/scopes.js";
-import { WINDOWS } from "./capabilities/tool-usage.js";
-import { itemsPool } from "./db/client.js";
-import { ADMIN_AUDIT_ENTITIES } from "./org/store.js";
-import { incognitoFromHeaders } from "./org/auth/agent-identity.js";
-import { orgTimezone } from "./org/timezone.js"; // 파일명 날짜 라벨을 조직 시간대로 자른다(#1309)
+import { sessionOrBearer } from "../../auth/http-auth.js";
+import type { BearerVerifier } from "../../auth/bearer.js";
+import type { LivelyUser } from "../../context.js";
+import { wrap, HttpError } from "../../http/rest-util.js";
+import { DANGEROUS_SCOPES } from "../../auth/scopes.js";
+import { WINDOWS } from "../../capabilities/tool-usage.js";
+import { itemsPool } from "../../db/client.js";
+import { ADMIN_AUDIT_ENTITIES } from "../../org/store.js";
+import { incognitoFromHeaders } from "../../org/auth/agent-identity.js";
+import { orgTimezone } from "../../org/timezone.js"; // 파일명 날짜 라벨을 조직 시간대로 자른다(#1309)
 
 // 한 번에 DB 에서 꺼내는 행 수. 크게 잡을수록 왕복은 줄지만 한 배치가 통째로 메모리에 뜬다 —
 //  mcp_call_log.args 는 도구 인자(잘려도 KB 단위)라 2000행이 현실적인 상한선이다.

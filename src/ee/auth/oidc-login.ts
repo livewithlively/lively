@@ -1,3 +1,6 @@
+// ⚠ Lively Enterprise Edition — 이 디렉터리(src/ee)는 상용 라이센스다. src/ee/LICENSE 참조.
+//   유효한 구독 없이 프로덕션에서 사용할 수 없다(열람·개발·테스트는 허용).
+//
 // OIDC 로그인의 '이 사람이 우리 조직의 누구인가' 매핑(#1520). 신원 입증(auth/oidc.ts)과 분리한 이유:
 //  입증은 표준 프로토콜이고 매핑은 **조직 정책**이다(누구를 자동으로 들일지, 어떤 권한으로).
 //
@@ -16,10 +19,10 @@
 //  ⚠ 둘 다 실패하면 **여기서 새 구성원을 만들지 않는다** — 호출부가 사람에게 묻는다(#1520 B).
 //   이메일 표기만 다른 사람(a.b@ vs ab@)에게 조용히 빈 계정을 하나 더 만들어 주는 게 이 흐름의
 //   가장 흔한 사고였다. 본인은 자기 데이터가 없는 화면을 보고, 관리자는 중복 구성원을 나중에 발견한다.
-import { itemsPool } from "../db/client.js";
-import { getMember, upsertMember, memberIdByEmail, type MemberIdentity } from "../org/store/members.js";
-import { hasCredential } from "./local-accounts.js";
-import { logger } from "../log.js";
+import { itemsPool } from "../../db/client.js";
+import { getMember, upsertMember, memberIdByEmail, type MemberIdentity } from "../../org/store/members.js";
+import { hasCredential } from "../../auth/local-accounts.js";
+import { logger } from "../../log.js";
 import { domainOf, emailFromClaims, type IdTokenClaims, type OidcConfig } from "./oidc.js";
 
 export const OIDC_IDENTITY_SYSTEM = "oidc";
@@ -92,11 +95,13 @@ export async function unlinkOidcFromMember(memberId: string): Promise<{ ok: true
   return { ok: true };
 }
 
-// 내 로그인 수단 현황 — 설정 화면(A)이 '지금 무엇으로 들어올 수 있는지'를 보여주는 데 쓴다.
-export async function oidcLinkStatus(memberId: string): Promise<{ linked: boolean; email: string | null; hasPassword: boolean }> {
+// 내 IdP 연결 현황 — 설정 화면(A)이 '지금 무엇으로 들어올 수 있는지'를 보여주는 데 쓴다.
+//  ★ #1601 — 비밀번호 보유 여부(hasPassword)는 여기서 답하지 않는다. 그건 코어(local-accounts)의 사실이고,
+//   EE 를 걷어낸 무료판에서도 화면이 답해야 하는 값이라 호출부(web.ts)가 직접 코어에 묻는다.
+export async function oidcLinkStatus(memberId: string): Promise<{ linked: boolean; email: string | null }> {
   const m = await getMember(memberId);
   const idn = m?.identities.find((i) => i.system === OIDC_IDENTITY_SYSTEM) ?? null;
-  return { linked: !!idn, email: idn?.email ?? null, hasPassword: await hasCredential(memberId) };
+  return { linked: !!idn, email: idn?.email ?? null };
 }
 
 // 새 구성원으로 시작(#1520 B 의 ① 갈래) — 갈림길 화면에서 사람이 고른 뒤에만 불린다.

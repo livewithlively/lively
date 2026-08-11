@@ -1,3 +1,6 @@
+// ⚠ Lively Enterprise Edition — 이 디렉터리(src/ee)는 상용 라이센스다. src/ee/LICENSE 참조.
+//   유효한 구독 없이 프로덕션에서 사용할 수 없다(열람·개발·테스트는 허용).
+//
 // #1520 — 외부 IdP 로그인의 **진행 중 상태** 보관 계약(state/nonce/PKCE + 계정 연결 갈림길). DB 불요.
 //  차단하는 회귀 3건:
 //   🔴 state 를 1회용으로 태우지 않으면 인가응답 **재생**으로 같은 로그인을 반복 성립시킬 수 있다(A 표).
@@ -14,7 +17,7 @@ import type { Db } from "../../db/client.js";
 import {
   createOidcAuthRequest, consumeOidcAuthRequest, safeReturnTo,
   createOidcLink, readOidcLink, consumeOidcLink, OIDC_AUTH_TTL_MS, OIDC_LINK_TTL_MS,
-} from "./oidc-auth.js";
+} from "./oidc-auth-store.js";
 
 let pass = 0;
 const ok = (n: string): void => { pass++; console.log(`ok  ${n}`); };

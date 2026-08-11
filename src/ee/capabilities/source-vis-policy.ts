@@ -1,3 +1,6 @@
+// ⚠ Lively Enterprise Edition — 이 디렉터리(src/ee)는 상용 라이센스다. src/ee/LICENSE 참조.
+//   유효한 구독 없이 프로덕션에서 사용할 수 없다(열람·개발·테스트는 허용).
+//
 // #1291 v4 — 커넥터별 자료 공개범위 정책 관리(관리탭). 규칙 CRUD + 기존 자료 소급 적용(백필).
 //
 //  왜 백필이 필요한가: 정책은 **태어날 때** 적용된다(스탬핑). 그런데 정책을 세우는 시점엔 이미 수집된 자료가
@@ -5,14 +8,14 @@
 //  기능이 절반만 동작한다. 반대로 백필을 자동으로 돌리지도 않는다 — 수천 건의 공개범위를 바꾸는 일은
 //  사람이 의도해서 눌러야 한다.
 import { z } from "zod";
-import { HttpError } from "../http-error.js";
-import type { Capability } from "./types.js";
-import { itemsPool } from "../db/client.js";
+import { HttpError } from "../../http-error.js";
+import type { Capability } from "../../capabilities/types.js";
+import { itemsPool } from "../../db/client.js";
 import {
   sourceVisRules, invalidateSourceVisRules, pickRule, applyVisibility,
-} from "../v6/source-vis-policy.js";
-import { axisOn } from "../v6/visibility-axes.js";
-import { effectiveViewer } from "../v6/visibility.js";
+} from "../../v6/source-vis-policy.js";
+import { axisOn } from "../../v6/visibility-axes.js";
+import { effectiveViewer } from "../../v6/visibility.js";
 
 const MEMBERS = z.array(z.object({
   subject_kind: z.enum(["member", "team"]).optional(),

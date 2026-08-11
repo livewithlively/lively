@@ -37,6 +37,13 @@ function loginIdpEditor(detail: any, data: any) {
 
   function statusBanner(cfg: any) {
     // '저장했는데 왜 안 되지'를 없애는 자리 — 지금 실제로 무엇이 쓰이는지 그대로 말한다.
+    // ★ #1601 — 설정 출처(db/env)가 멀쩡해도 회사 계정 로그인을 처리할 Enterprise 모듈이 없으면 안 켜진다.
+    //  그 경우 '켜져 있습니다'라고 말하면 관리자는 issuer·시크릿을 계속 고치며 헤맨다 — source 보다 먼저 말한다.
+    if (cfg.enterprise_required) {
+      return el('div', { class: 'box' }, ...uiText(
+        '설정은 갖춰졌지만, 이 배포에는 회사 계정 로그인을 처리할 Enterprise 모듈이 없어 아직 동작하지 않습니다. ' +
+        '로그인 화면에는 이메일·비밀번호만 보입니다.'));
+    }
     if (cfg.source === 'db') {
       return el('div', { class: 'box' }, ...uiText('✅ 지금 이 화면의 설정으로 회사 계정 로그인이 켜져 있습니다.'));
     }

@@ -1,3 +1,6 @@
+// ⚠ Lively Enterprise Edition — 이 디렉터리(src/ee)는 상용 라이센스다. src/ee/LICENSE 참조.
+//   유효한 구독 없이 프로덕션에서 사용할 수 없다(열람·개발·테스트는 허용).
+//
 // 감사로그 CSV 내보내기 테스트 (#1309). 사양·엣지 표 = 스크래치패드 spec.md 「입력 조합 × 기대」 24행.
 //
 //  회귀 대상 ①: **조건의 $n 과 실제 채우는 값의 개수가 어긋나는 것**(표 10·11). 어긋나면 postgres 가 던지는 곳은
@@ -9,7 +12,7 @@
 //  회귀 대상 ④: **분할 경계**(표 22·23). 딱 떨어질 때 빈 파일이 하나 더 생기거나, 1행 넘겼는데 파일이 안 늘면
 //   "다 받았다"는 화면 문구가 거짓이 된다.
 import assert from "node:assert/strict";
-import { buildSpec, csvCell, csvLine, planParts, PART_ROWS } from "./audit-export-routes.js";
+import { buildSpec, csvCell, csvLine, planParts, PART_ROWS } from "./export-routes.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => {
