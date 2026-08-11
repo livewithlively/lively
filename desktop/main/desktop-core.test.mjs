@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cliCandidates, locateCli, cliShimName, cliMissingHelp, bootstrapOneLiner } from "./cli-locate.mjs";
 import { bootstrapCommand, runBootstrap } from "./bootstrap.mjs";
-import { createNdjsonParser, runCli, reduceProgress, lastError } from "./cli-runner.mjs";
+import { createNdjsonParser, runCli, reduceProgress, lastError, cliContractVerdict } from "./cli-runner.mjs";
 import { argvFor, RUN_KINDS, IPC } from "./ipc-contract.mjs";
 import { trayMenuModel, statusLabel } from "./tray-menu.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
@@ -553,6 +553,45 @@ t('D6 ★ 답한 프롬프트는 다시 뜨지 않는다(리듀서가 옛 prompt
   const seg = main.slice(main.indexOf('IPC.ANSWER'), main.indexOf('IPC.SET_GATEWAY'));
   assert.ok(/prompt:\s*null/.test(seg), '답 처리에서 progress.prompt 를 비우지 않는다');
   assert.ok(/send\(IPC\.PROGRESS/.test(seg), '비운 상태를 렌더러에 안 보내면 화면은 그대로다');
+});
+
+// ── K. '있다' 와 '쓸 수 있다' 는 다르다 — 구 CLI 판정 (#1541) ──────────────────
+// 실측(2026-08-11): #1541 이전 CLI 에 `--json-events` 를 주면 **조용히 무시하고 exit 0**, 평범한 JSON 을
+//  stdout 에 뱉고 NDJSON 이벤트는 0개다. 앱은 "성공한 것 같은데 아무 일도 안 일어남" 이 된다.
+//  앱보다 먼저 CLI 를 깔아 둔 PC(=지금까지 CLI 로 쓰던 모든 사람)가 전부 여기 걸린다.
+t("K1 우리 말을 한 마디라도 했으면 계약을 안다", () => {
+  assert.equal(cliContractVerdict({ events: [{ t: "start" }], code: 0 }), "ok");
+  assert.equal(cliContractVerdict({ events: [{ t: "end", ok: false }], code: 1 }), "ok", "실패해도 '말은 통한다'");
+});
+
+t("K2 ★ 깨끗이 끝났는데 한 마디도 안 했다 = 플래그를 모른다(구 CLI)", () => {
+  assert.equal(cliContractVerdict({ events: [], code: 0, error: "CLI 가 완료 신호(end) 없이 끝났습니다." }), "too-old");
+});
+
+t("K3 ★ 죽은 것은 '오래됨' 이 아니다 — 실패를 오래됨으로 읽으면 멀쩡한 CLI 를 오류마다 재설치한다", () => {
+  assert.equal(cliContractVerdict({ events: [], code: 1 }), "failed");
+  assert.equal(cliContractVerdict({ events: [], code: 0, signal: "SIGKILL" }), "failed");
+  assert.equal(cliContractVerdict({ events: [], code: null }), "failed", "종료코드를 모르면 단정하지 않는다");
+});
+
+t("K4 아예 못 띄웠으면 unusable(재설치가 아니라 경로·권한 문제다)", () => {
+  assert.equal(cliContractVerdict({ events: [], code: null, error: "CLI 를 실행하지 못했습니다: ENOENT" }), "unusable");
+});
+
+t("K5 입력이 없거나 망가져도 throw 하지 않는다", () => {
+  for (const bad of [null, undefined, {}, { events: null }]) {
+    const v = cliContractVerdict(bad);
+    assert.ok(["ok", "too-old", "failed", "unusable"].includes(v), `${JSON.stringify(bad)} → ${v}`);
+  }
+});
+
+t("K6 ★ 구 CLI 는 화면이 '설치 완료' 라고 말하면 안 된다", () => {
+  const st = { cliFound: true, cliOutdated: true, loggedIn: true, kitInstalled: true };
+  assert.match(statusLabel(st), /업데이트/);
+  const model = trayMenuModel(st);
+  const setup = model.find((m) => m.id === "setup");
+  assert.ok(setup, "업데이트로 이끄는 항목이 없다 — 사용자는 빠져나갈 길이 없다");
+  assert.match(setup.label, /업데이트/);
 });
 
 // ── W. 창 배치 기억 (#1541 갭) ────────────────────────────────────────────────

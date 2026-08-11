@@ -114,6 +114,32 @@ export function runCli(o) {
   });
 }
 
+/**
+ * 이 CLI 가 **우리 계약을 아는가** — 실행 결과로만 판정한다(버전 문자열 추측 금지). 순수.
+ *
+ * 왜 필요한가(2026-08-11 실측): 앱보다 먼저 CLI 를 깔아 둔 PC 가 흔하다. 그 구 CLI 는 `--json-events` 를
+ * **조용히 무시하고 exit 0** 으로 끝낸다 — 평범한 JSON 을 stdout 에 뱉고 NDJSON 이벤트는 **0개**다.
+ * 그러면 앱은 "성공한 것 같은데 아무 일도 안 일어남" 이 된다(가장 나쁜 실패 모드 — 사람은 앱이 고장났다고 본다).
+ *
+ * 종전 앱은 `locateCli` 로 **있나/없나**만 봤다. 있으면 그대로 몰았으니, 이 상태가 영원히 안 풀렸다.
+ * 판정은 세 갈래여야 한다 — 없다 / 있지만 말이 안 통한다 / 멀쩡하다.
+ *
+ * @param {{error?:string|null, events?:Array, code?:number|null, signal?:string|null}} r  runCli 결과
+ * @returns {"ok"|"too-old"|"failed"|"unusable"}
+ */
+export function cliContractVerdict(r) {
+  const o = r || {};
+  if (!o || typeof o !== "object") return "unusable";
+  const events = Array.isArray(o.events) ? o.events : [];
+  if (events.length) return "ok";                       // 한 마디라도 우리 말로 했으면 계약을 안다
+  // ⚠ 여기서 갈린다. **깨끗이 끝났는데 한 마디도 안 했다** = 플래그를 모르고 무시했다는 뜻이다.
+  //  반대로 죽었거나(code≠0·시그널) 애초에 못 띄웠으면 그건 '오래됨' 이 아니라 그냥 실패다 —
+  //  실패를 오래됨으로 읽으면 멀쩡한 CLI 를 네트워크 오류마다 재설치하게 된다.
+  if (o.error && /실행하지 못했습니다/.test(String(o.error))) return "unusable";
+  if (o.signal) return "failed";
+  return o.code === 0 ? "too-old" : "failed";
+}
+
 /** 마지막 error notice 문구 — 앱이 실패 이유를 사람 말로 보여줄 때 쓴다. */
 export function lastError(events) {
   for (let i = events.length - 1; i >= 0; i--) {

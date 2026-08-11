@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { locateCli, cliMissingHelp } from "./cli-locate.mjs";
 import { runBootstrap, bootstrapPreview } from "./bootstrap.mjs";
-import { runCli, reduceProgress } from "./cli-runner.mjs";
+import { runCli, reduceProgress, cliContractVerdict } from "./cli-runner.mjs";
 import { trayMenuModel } from "./tray-menu.mjs";
 import { IPC, RUN_KINDS, RETRYABLE_KINDS, argvFor } from "./ipc-contract.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
@@ -70,8 +70,12 @@ async function refreshState({ deep = false } = {}) {
 /** `lively status --json` 의 node 축을 읽어 실제 상태로 덮는다(폴링·작업 직후). */
 async function refreshNodeStatus(cli) {
   const r = await runCli({ cli, args: argvFor("status"), env: { ...process.env }, timeoutMs: 30_000 });
+  // ★ 같은 호출로 '이 CLI 가 우리 말을 아는가' 도 같이 안다 — 앱보다 먼저 CLI 를 깔아 둔 PC 는 구 CLI 가
+  //  `--json-events` 를 조용히 무시하고 exit 0 으로 끝낸다(이벤트 0개). 그걸 모르면 앱은 아무 설명 없이 멈춘다.
+  const verdict = cliContractVerdict(r);
+  if (verdict !== "failed") state = { ...state, cliOutdated: verdict === "too-old" };
   const n = r.result?.node;
-  if (!r.ok || !n) return;                     // 못 읽었으면 **건드리지 않는다**(옛 값이 추측보다 낫다)
+  if (!r.ok || !n) { renderTray(); send(IPC.STATE, state); return; }   // 못 읽었으면 **건드리지 않는다**(옛 값이 추측보다 낫다)
   state = { ...state, nodeRegistered: !!n.registered, nodeDaemon: !!n.daemon, nodeRunning: n.running, nodeId: n.id || null };
   renderTray(); send(IPC.STATE, state);
 }
@@ -246,23 +250,40 @@ async function onboard(url) {
   try { argvFor("login", { gateway: url }); } catch (e) { return { ok: false, error: e.message }; }  // 형식 검사(한 자)
   const gw = String(url || "").trim();
 
-  if (!locateCli(existsSync)) {
-    // 새 PC — CLI 자체가 없다. 게이트웨이가 서빙하는 부트스트랩으로 Node·CLI·PATH 를 확보한다.
+  // ★ 부트스트랩 조건은 '**CLI 가 없다**' 가 아니라 '**쓸 수 있는 CLI 가 없다**' 다.
+  //  앱보다 먼저 CLI 를 깔아 둔 PC 가 흔한데(=지금까지 CLI 로 쓰던 모든 사람), 그 구 CLI 는 `--json-events` 를
+  //  조용히 무시하고 exit 0 으로 끝낸다 → 앱은 이벤트를 하나도 못 받고 아무 설명 없이 멈춘다.
+  //  종전엔 '있으면 그대로 몬다' 라서 이 상태가 **영원히 안 풀렸다**(사람이 손으로 부트스트랩 한 줄을 쳐야 했다).
+  const existing = locateCli(existsSync);
+  if (existing && state.cliOutdated === undefined) await refreshNodeStatus(existing);   // 아직 안 재봤으면 지금 잰다
+  if (!existing || state.cliOutdated) {
+    // 새 PC(또는 계약을 모르는 구 CLI) — 게이트웨이가 서빙하는 부트스트랩으로 Node·CLI·PATH 를 확보한다.
+    // 문구가 사실과 맞아야 한다 — 이미 있는 걸 갈아끼우는 중에 "설치 중" 이라고 하면 사람은 뭘 하는지 모른다.
+    const label = existing ? "라이블리 CLI 업데이트 중(설치된 버전이 오래됐습니다)" : "라이블리 CLI 설치 중";
     state = { ...state, busy: true }; renderTray(); send(IPC.STATE, state);
     progress = reduceProgress(null, { t: "start", cmd: "bootstrap" });
-    progress = reduceProgress(progress, { t: "step", id: "bootstrap", label: "라이블리 CLI 설치 중", status: "start", i: 1, n: 2 });
+    progress = reduceProgress(progress, { t: "step", id: "bootstrap", label, status: "start", i: 1, n: 2 });
     send(IPC.PROGRESS, progress);
     send(IPC.LOG, { stream: "raw", line: `$ ${bootstrapPreview(gw) || ""}` });   // 무엇을 실행하는지 숨기지 않는다
     const b = await runBootstrap({ gatewayUrl: gw, onLine: (line) => send(IPC.LOG, { stream: "stderr", line }), timeoutMs: 15 * 60_000 });
     // ★ 종료코드가 아니라 **CLI 가 실제로 생겼는지**로 판정한다 — `curl | sh` 는 curl 이 404 를 받아도 0 으로 끝난다.
     const cli = locateCli(existsSync);
-    if (!cli) {
-      progress = reduceProgress(progress, { t: "step", id: "bootstrap", label: "라이블리 CLI 설치 중", status: "fail", i: 1, n: 2 });
+    // ★ 업그레이드였다면 **실제로 말이 통하게 됐는지 다시 잰다.** 파일이 있다는 것만으로 넘어가면,
+    //  부트스트랩이 옛 키트를 그대로 남긴 경우(주소 오타로 404 등) 똑같은 침묵이 한 번 더 반복된다.
+    if (cli && existing) { state = { ...state, cliOutdated: undefined }; await refreshNodeStatus(cli); }
+    const stillBad = !cli || (existing && state.cliOutdated);
+    if (stillBad) {
+      progress = reduceProgress(progress, { t: "step", id: "bootstrap", label, status: "fail", i: 1, n: 2 });
       progress = reduceProgress(progress, { t: "end", ok: false, code: 1 });
       state = { ...state, busy: false }; renderTray(); send(IPC.STATE, state); send(IPC.PROGRESS, progress);
-      return { ok: false, error: b.error || `CLI 설치가 끝났는데 실행파일이 없습니다. 주소가 맞는지 확인하세요: ${gw}` };
+      return {
+        ok: false,
+        error: b.error || (cli
+          ? `CLI 를 업데이트했는데도 여전히 옛 버전입니다. 그 주소가 최신 키트를 서빙하는지 확인해 주세요: ${gw}`
+          : `CLI 설치가 끝났는데 실행파일이 없습니다. 주소가 맞는지 확인하세요: ${gw}`),
+      };
     }
-    progress = reduceProgress(progress, { t: "step", id: "bootstrap", label: "라이블리 CLI 설치 중", status: "done", i: 1, n: 2 });
+    progress = reduceProgress(progress, { t: "step", id: "bootstrap", label, status: "done", i: 1, n: 2 });
     send(IPC.PROGRESS, progress);
     state = { ...state, busy: false, cliPath: cli, cliFound: true };
     await refreshState();
@@ -330,7 +351,10 @@ else {
     tray = new Tray(trayImage());
     tray.on("click", () => showWindow());          // Windows·Linux 는 좌클릭이 자연스럽다
     await refreshState({ deep: true });
-    if (!state.cliFound || !state.loggedIn || !state.kitInstalled) showWindow();   // 할 일이 있으면 먼저 보여준다
+    // 할 일이 있으면 먼저 보여준다. ⚠ `cliOutdated` 를 빼먹으면 **가장 나쁜 조합**이 된다 — 구 CLI 인 PC 는
+    //  파일이 다 있어 '완료' 로 판정되니 창이 아예 안 뜨고, 트레이 앱은 조용히 앉아 아무것도 안 한다.
+    //  사용자에게는 '앱이 안 켜진다' 로 보인다(실측: 이 검증 하네스가 그 상태를 그대로 잡았다).
+    if (!state.cliFound || state.cliOutdated || !state.loggedIn || !state.kitInstalled) showWindow();
     // 노드는 앱 밖에서도 죽고 살아난다(OS 데몬·사용자의 `lively node stop`). 주기적으로 되읽지 않으면
     //  트레이가 옛 상태를 계속 보여준다. 30초 — 사람이 느끼기엔 실시간이고 `status` 호출은 가볍다.
     const poll = setInterval(() => { if (!running) void refreshState({ deep: true }); }, 30_000);

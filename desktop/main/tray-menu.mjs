@@ -10,6 +10,9 @@
 export function statusLabel(st) {
   const s = st || {};
   if (!s.cliFound) return "라이블리 CLI 없음";
+  // ⚠ '있다'와 '쓸 수 있다'는 다르다. 앱보다 먼저 깔아 둔 구 CLI 는 `--json-events` 를 조용히 무시해
+  //  앱이 아무 말도 못 듣는다 — 그걸 '설치 완료' 로 그리면 화면이 거짓말을 한다.
+  if (s.cliOutdated) return "라이블리 CLI 업데이트 필요";
   if (!s.loggedIn) return "로그인 필요";
   if (!s.kitInstalled) return "키트 설치 필요";
   if (s.nodeRunning) return s.nodeDaemon ? "노드 실행 중 (자동 시작 켜짐)" : "노드 실행 중 (이 세션만)";
@@ -32,8 +35,12 @@ export function trayMenuModel(st) {
   const busy = !!s.busy;
   const items = [{ id: "status", label: statusLabel(s), enabled: false }, { type: "separator" }];
 
-  if (!s.cliFound || !s.loggedIn || !s.kitInstalled) {
-    items.push({ id: "setup", label: s.cliFound ? "설치 계속하기…" : "라이블리 설치…", enabled: !busy });
+  if (!s.cliFound || s.cliOutdated || !s.loggedIn || !s.kitInstalled) {
+    items.push({
+      id: "setup",
+      label: s.cliOutdated ? "라이블리 업데이트…" : s.cliFound ? "설치 계속하기…" : "라이블리 설치…",
+      enabled: !busy,
+    });
   } else if (s.nodeRunning) {
     items.push({ id: "node-stop", label: "노드 정지", enabled: !busy });
   } else {
