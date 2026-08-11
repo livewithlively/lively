@@ -184,11 +184,13 @@ eq(preview.apiUrl("https://other.example/x"), "https://other.example/x", "㉑절
 {
   const { captureUnsafe, nudgeSizes } = preview;
   const ok3 = (c, n) => { assert.ok(c, n); pass++; console.log(`ok  ${n}`); };
-  ok3(captureUnsafe({ mux: 'psmux', alt: true }) === true, "㉝ psmux + alt-screen → 캡처 금지");
+  // 새 번들(mux 토큰 있음)은 psmux 에 안전한 플래그(-peJ)로 캡처한다 → 건너뛰지 않는다.
+  ok3(captureUnsafe({ mux: 'psmux', alt: true }) === false, "㉝ 새 노드 번들은 psmux+alt 도 캡처한다");
   ok3(captureUnsafe({ mux: 'psmux', alt: false }) === false, "㉝ psmux 라도 normal 화면이면 캡처한다");
   ok3(captureUnsafe({ mux: 'tmux', alt: true }) === false, "㉝ tmux 는 alt-screen 도 캡처가 정상");
   // 구 노드 번들(mux 토큰 없음) — psmux 는 마우스 flag 를 전부 빈 값으로 준다(지문).
-  ok3(captureUnsafe({ alt: true, flagsMissing: true }) === true, "㉝ mux 미상 + flag 전부 빈 값 = psmux 로 본다");
+  // 구 번들은 -peqJN 으로 캡처해 스트림을 멈춘다 → 그때만 건너뛴다(지문: 마우스 flag 전부 빈 값).
+  ok3(captureUnsafe({ alt: true, flagsMissing: true }) === true, "㉝ 구 노드 번들 + alt = 캡처 금지(스트림 정지 방지)");
   ok3(captureUnsafe({ alt: true, flagsMissing: false }) === false, "㉝ mux 미상이라도 flag 가 오면 tmux 로 본다(종전 동작)");
   ok3(captureUnsafe(null) === false, "㉝ 상태 없음이면 종전 동작");
   // 넛지는 원래 크기로 정확히 복원한다 — 회복하려다 크기를 영구히 바꾸면 안 된다.
