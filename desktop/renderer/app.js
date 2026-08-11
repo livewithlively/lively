@@ -16,16 +16,31 @@ const answeredPrompts = new Set();
 function renderState(s) {
   state = s || {};
   const label = !s?.cliFound ? "라이블리 CLI 없음"
-    : !s.loggedIn ? "로그인이 필요합니다"
-      : !s.kitInstalled ? "키트 설치가 필요합니다"
-        : s.nodeRunning ? "노드 실행 중" : s.nodeRegistered ? "노드 정지됨" : "설치 완료";
+    // '있다'와 '쓸 수 있다'는 다르다 — 구 CLI 는 앱의 이벤트 계약을 몰라 앱이 아무 말도 못 듣는다.
+    : s.cliOutdated ? "라이블리 CLI 업데이트가 필요합니다"
+      : !s.loggedIn ? "로그인이 필요합니다"
+        : !s.kitInstalled ? "키트 설치가 필요합니다"
+          : s.nodeRunning ? "노드 실행 중" : s.nodeRegistered ? "노드 정지됨" : "설치 완료";
   $("status").textContent = label;
   $("sub").textContent = s?.gatewayUrl || "";
   $("dot").className = "dot " + (s?.nodeRunning ? "on" : s?.loggedIn ? "warn" : "off");
   // 설치가 끝났나 — 이 한 줄이 마법사와 평상시 화면을 가른다.
-  const ready = !!(s?.cliFound && s?.loggedIn && s?.kitInstalled);
+  // ⚠ ready 에 **계약 지원**을 넣는다. 빠뜨리면 구 CLI 인 PC 에서 '설치 완료' 화면이 뜨는데
+  //  버튼은 전부 조용히 아무 일도 안 한다(사람은 앱이 고장났다고 본다).
+  const ready = !!(s?.cliFound && !s?.cliOutdated && s?.loggedIn && s?.kitInstalled);
   // 게이트웨이 카드는 아직 끝나지 않았을 때만 — 다 됐는데 또 물으면 사용자가 '뭘 잘못했나' 한다.
   show($("gw-card"), !ready && !s?.busy);
+  // 업데이트가 필요한 경우엔 **주소를 이미 안다** — 다시 치게 하지 않고 채워 두고, 무엇을 할지 문구로 바꾼다.
+  //  (사람이 편집 중이면 건드리지 않는다 — 입력을 덮어쓰는 화면만큼 짜증나는 게 없다.)
+  const gwIn = $("gw");
+  if (s?.cliOutdated && s?.gatewayUrl && !gwIn.value && document.activeElement !== gwIn) {
+    gwIn.value = s.gatewayUrl; preview();
+  }
+  $("gw-title").textContent = s?.cliOutdated ? "라이블리 CLI 업데이트" : "회사 게이트웨이 주소";
+  $("gw-hint").textContent = s?.cliOutdated
+    ? "설치된 CLI 가 이 앱보다 오래돼 앱이 진행 상황을 읽지 못합니다. 아래 주소에서 최신으로 받아 이어서 진행합니다."
+    : "관리자에게 받은 주소를 넣으면 브라우저로 로그인합니다.";
+  $("gw-go").textContent = s?.cliOutdated ? "업데이트" : "연결";
   show($("done-card"), ready && !s?.busy && justFinished);
   show($("node-card"), ready);
   show($("tools-card"), ready);
