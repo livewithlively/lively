@@ -150,10 +150,13 @@ eq(preview.apiUrl("https://other.example/x"), "https://other.example/x", "㉑절
   pass++; console.log("ok  ㉒WS 와 티켓이 같은 곳으로 간다(짝 불변식)");
 }
 
-// ── ㉝ 캡처가 빈 백엔드(psmux alt-screen) 폴백 — 크기 넛지로 앱 재그리기 (#1541 실측) ──────────
-// A/B 실측(같은 Windows 노드, 같은 요청): 셸 팬(alt=0) → 캡처 44줄 / claude 팬(alt=1) → **캡처 블록 자체가 없음**.
-//  그래서 새로고침하면 하얀 화면 + 방금 그려진 조각 하나만 남았다(사용자 스크린샷). 입력은 앱에 도달하는데
+// ── ㉝ 캡처가 얼어붙는 백엔드(psmux + 앱 팬) 폴백 — 크기 넛지로 앱 재그리기 (#1541 실측) ──────────
+// A/B 실측(같은 Windows 노드 hammurabi, 2026-08-11 같은 분): powershell 팬 → 캡처 40줄 정상·블록 정상 종료·
+//  이후 리사이즈 %output 정상 / Claude Code 팬 → **`alt=0` 으로 보고되는데도** 캡처 블록이 끝내 안 닫히고
+//  제어 스트림이 멈춘다. 그래서 새로고침하면 하얀 화면이 됐다(브라우저 실측 6/6). 입력은 앱에 도달하는데
 //  결과가 안 보여 "타이핑이 안 된다 · 클로드가 죽었다" 로 보였다.
+// ⚠ 판별축은 alt 가 **아니다** — Windows 는 ConPTY 가 앱 출력을 커서이동+`[K` 로 정규화해 1049h 가 흐르지 않고,
+//  psmux 의 alternate_on 은 사실상 항상 0 이다. 포그라운드가 셸인지로 가른다(captureAllowed).
 {
   const { nudgeSizes } = preview;   // 모듈에서 export — 순수 계산부만 검증한다
   const ok2 = (cond, n) => { assert.ok(cond, n); pass++; console.log(`ok  ${n}`); };
@@ -170,10 +173,15 @@ eq(preview.apiUrl("https://other.example/x"), "https://other.example/x", "㉑절
 // 폴백이 **관측된 사실**로만 열리는지(플랫폼 스니핑 아님) — 소스로 확인.
 {
   const ok2 = (cond, n) => { assert.ok(cond, n); pass++; console.log(`ok  ${n}`); };
-  const gate = src.split("\n").find((l) => l.includes("if (!st || !st.alt) return;"));
-  ok2(!!gate, "㉝ 폴백 게이트는 'alt-screen인데 백필이 안 왔다'는 관측이다");
-  // (옛 단언 '플랫폼 스니핑 금지' 는 폐기했다: psmux 는 alt-screen 캡처에서 **제어 스트림이 멈춘다**는 것이
-  //  드러나, 사후 회복이 아니라 '그 백엔드엔 처음부터 안 건다'가 유일한 해법이 됐다. 백엔드 식별이 이제 요건이다.
+  // 주석은 걷어내고 **코드만** 본다 — 아래 부정 단언이 설명 주석에 걸려 거짓 실패하지 않게.
+  const watch = src.split("function armBackfillWatch")[1].split("\n}")[0]
+    .split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
+  ok2(/if \(!st\) return;/.test(watch), "㉝ 폴백은 '보낸 캡처가 안 돌아왔다'는 사실 하나로 연다");
+  // ⚠ 이 부정 단언이 핵심 회귀 방어다. 종전엔 여기서 `|| !st.alt` 로 한 번 더 걸렀는데, psmux 는 alt 를 사실상
+  //  항상 0 으로 보고하므로 그 폴백이 **한 번도 발동하지 못했다** — 캡처가 스트림을 멈춘 뒤 복구 시도조차 없었다.
+  ok2(!/st\.alt/.test(watch), "㉝ 폴백 게이트는 alt 로 다시 거르지 않는다(psmux 는 alt 를 항상 0 으로 보고한다 — 실측)");
+  // (옛 단언 '플랫폼 스니핑 금지' 는 폐기했다: psmux 는 앱이 도는 팬 캡처에서 **제어 스트림이 멈춘다**는 것이
+  //  드러나, 사후 회복이 아니라 '그 조합엔 처음부터 안 건다'가 유일한 해법이 됐다. 백엔드 식별이 이제 요건이다.
   //  단, 식별은 서버가 알려준 사실(mux=)이나 관측된 지문이지 클라의 추측이 아니다 — 아래 ㉝ 블록이 그걸 지킨다.)
 }
 
@@ -182,15 +190,47 @@ eq(preview.apiUrl("https://other.example/x"), "https://other.example/x", "㉑절
 //  앱 출력·리사이즈 응답까지 통째로 막혀 새로고침 후 하얀 화면으로 굳는다 — 클라에서 사후 복구가 불가능하다.
 //  그래서 '걸고 나서 회복'이 아니라 **처음부터 걸지 않는다**. 판정은 관측(백엔드·alt)만 쓴다.
 {
-  const { captureUnsafe, nudgeSizes } = preview;
+  const { captureAllowed, captureSafeBackend, isShellCmd, nudgeSizes } = preview;
   const ok3 = (c, n) => { assert.ok(c, n); pass++; console.log(`ok  ${n}`); };
-  ok3(captureUnsafe({ mux: 'psmux', alt: true }) === true, "㉝ psmux + alt-screen → 캡처 금지");
-  ok3(captureUnsafe({ mux: 'psmux', alt: false }) === false, "㉝ psmux 라도 normal 화면이면 캡처한다");
-  ok3(captureUnsafe({ mux: 'tmux', alt: true }) === false, "㉝ tmux 는 alt-screen 도 캡처가 정상");
-  // 구 노드 번들(mux 토큰 없음) — psmux 는 마우스 flag 를 전부 빈 값으로 준다(지문).
-  ok3(captureUnsafe({ alt: true, flagsMissing: true }) === true, "㉝ mux 미상 + flag 전부 빈 값 = psmux 로 본다");
-  ok3(captureUnsafe({ alt: true, flagsMissing: false }) === false, "㉝ mux 미상이라도 flag 가 오면 tmux 로 본다(종전 동작)");
-  ok3(captureUnsafe(null) === false, "㉝ 상태 없음이면 종전 동작");
+  // ── A. 「갓 받은 상태」로 '지금 이 팬에 걸어도 되나' ──
+  // ⚠ 판별축은 alt 가 아니라 **포그라운드가 셸인가** 다. 2026-08-11 실기기(hammurabi/psmux) 실측으로 뒤집혔다:
+  //  같은 노드·같은 분에 powershell 팬은 40줄 정상 캡처 + 스트림 생존인데, Claude Code 가 도는 팬은
+  //  **alt=0 으로 보고되면서도** 캡처 블록이 안 닫히고 제어 스트림이 멈췄다. Windows 는 ConPTY 가 앱 출력을
+  //  정규화해 1049h 가 흐르지 않아 psmux 의 alternate_on 이 사실상 항상 0 이다 → alt 게이트는 한 번도 발동 못 했다.
+  ok3(captureAllowed({ mux: 'psmux', alt: false, cmd: 'claude' }) === false,
+    "㉝A1 psmux + 앱 팬 → 금지 (alt=0 으로 보고돼도 캡처가 스트림을 멈춘다 — 실측)");
+  ok3(captureAllowed({ mux: 'psmux', alt: false, cmd: 'powershell' }) === true,
+    "㉝A2 psmux + 셸 팬 → 허용 (실측 40줄 정상 · 셸은 리사이즈로 다시 안 그리니 캡처가 유일한 복원 수단)");
+  ok3(captureAllowed({ mux: 'psmux', alt: true, cmd: 'powershell.exe' }) === true, "㉝A3 psmux 셸 판별은 .exe 를 벗긴다");
+  ok3(captureAllowed({ mux: 'psmux', alt: true, cmd: 'C:\\\\Windows\\\\System32\\\\cmd.exe' }) === true, "㉝A4 psmux 셸 판별은 Windows 경로도 벗긴다");
+  ok3(captureAllowed({ mux: 'psmux', cmd: '' }) === false, "㉝A5 psmux + cmd 미상 → 금지(구 서버 degrade 는 안전한 쪽으로)");
+  ok3(captureAllowed({ mux: 'tmux', alt: true, cmd: 'nvim' }) === true, "㉝A6 tmux 는 앱 팬·alt-screen 도 캡처가 정상");
+  ok3(captureAllowed({ alt: true, flagsMissing: true, cmd: 'claude' }) === false, "㉝A7 mux 미상 + flag 전부 빈 값 = psmux 지문 → 앱 팬이면 금지");
+  ok3(captureAllowed({ alt: true, flagsMissing: false, cmd: 'nvim' }) === true, "㉝A8 mux 미상이라도 flag 가 오면 tmux → 허용");
+  // ⚠ 미상은 **금지**다(fail-closed). 종전엔 여기서 '허용'을 못 박고 있었는데, 그 fail-open 이 #1541
+  //  '새로고침하면 하얀 화면'의 직접 원인이었다 — forceRedraw 는 첫 상태블록보다 **먼저** 도는 경로가
+  //  셋(폰트 정착·focus·visibilitychange)이라, 그 창에서 psmux 팬에 캡처가 나가 제어 스트림이 멈췄다.
+  ok3(captureAllowed(null) === false, "㉝A9 상태 없음 → 캡처 금지(fail-open 이 #1541 하얀 화면의 원인이었다)");
+  ok3(captureAllowed(undefined) === false, "㉝A10 상태 undefined → 캡처 금지");
+
+  // isShellCmd — 두 판정(캡처 허용 · 마우스 flag stale)이 공유하는 축.
+  for (const c of ['zsh', '-zsh', '/bin/bash', 'powershell', 'pwsh', 'cmd', 'C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe'])
+    ok3(isShellCmd(c) === true, `㉝S 셸로 판별: ${c}`);
+  for (const c of ['claude', 'claude.exe', 'claude.exe.old', 'nvim', 'node', '', null, undefined])
+    ok3(isShellCmd(c) === false, `㉝S 셸이 아님: ${String(c)}`);
+
+  // ── B. 「최근 상태 사본」으로 '즉시 걸어도 되나' — **백엔드 정체만** 본다 ──
+  // alt 는 매 순간 변하므로 사본으로 믿으면 안 된다: 셸 프롬프트에서 상태를 받아둔 뒤 사용자가 앱을 띄우면
+  //  사본은 alt=0 인데 실제 팬은 alt-screen 이라, 그 사본을 믿고 캡처를 걸면 스트림이 잠긴다(탭 복귀 경로).
+  //  정체(tmux/psmux)는 세션 내내 안 변하므로 사본으로 믿어도 된다.
+  ok3(captureSafeBackend(null) === false, "㉝B1 백엔드 미상 → 즉시 캡처 금지(상태를 물어보고 판정한다)");
+  ok3(captureSafeBackend({ mux: 'psmux', alt: false }) === false, "㉝B2 psmux 는 사본이 normal 이어도 즉시 캡처 금지(alt 는 stale 할 수 있다)");
+  ok3(captureSafeBackend({ mux: 'psmux', alt: true }) === false, "㉝B3 psmux + alt → 금지");
+  ok3(captureSafeBackend({ mux: 'tmux', alt: false }) === true, "㉝B4 tmux + normal → 허용");
+  ok3(captureSafeBackend({ mux: 'tmux', alt: true }) === true, "㉝B5 tmux 는 alt 여도 허용(정체만 본다)");
+  ok3(captureSafeBackend({ flagsMissing: true }) === false, "㉝B6 구 번들 지문이 psmux → 금지");
+  ok3(captureSafeBackend({ flagsMissing: false }) === true, "㉝B7 구 번들이라도 flag 가 오면 tmux → 허용");
+  ok3(captureSafeBackend({ mux: '', flagsMissing: true }) === false, "㉝B8 mux 가 빈 문자열이면 '안 알려준 것' → 지문 경로로 판정");
   // 넛지는 원래 크기로 정확히 복원한다 — 회복하려다 크기를 영구히 바꾸면 안 된다.
   eq(JSON.stringify(nudgeSizes(120, 40)), JSON.stringify([{ t: 'r', c: 120, r: 39 }, { t: 'r', c: 120, r: 40 }]),
     "㉝ 넛지는 r-1 로 줄였다가 원래 r 로 되돌린다");

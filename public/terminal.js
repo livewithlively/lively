@@ -551,7 +551,7 @@
   }
   function diagText() {
     return [
-      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build cfe02dd9",
+      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build ad12fa0e",
       "ua: " + navigator.userAgent,
       "session: " + SESSION_ID + (NODE_ID ? " node=" + NODE_ID : ""),
       "secure: " + window.isSecureContext + " \xB7 exported: " + (/* @__PURE__ */ new Date()).toISOString(),
@@ -708,6 +708,7 @@
   var BACKFILL_WAIT_MS = 900;
   var MAX_NUDGES = 3;
   var backfillWatch = null, nudgeTries = 0, needBackfill = false, lastKnownState = null;
+  var wantRedrawCap = false;
   function clearBackfillWatch() {
     if (backfillWatch) {
       clearTimeout(backfillWatch);
@@ -719,10 +720,19 @@
     if (c < 1 || r < 2) return null;
     return [{ t: "r", c, r: r - 1 }, { t: "r", c, r }];
   }
-  function captureUnsafe(st) {
-    if (!st || !st.alt) return false;
-    if (st.mux) return st.mux === "psmux";
-    return !!st.flagsMissing;
+  function isShellCmd(cmd) {
+    const c = String(cmd || "").replace(/^-/, "").replace(/^.*[\\/]/, "").replace(/\.exe$/i, "").toLowerCase();
+    return ["zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "csh", "ash", "powershell", "pwsh", "cmd"].indexOf(c) >= 0;
+  }
+  function captureSafeBackend(st) {
+    if (!st) return false;
+    if (st.mux) return st.mux !== "psmux";
+    return !st.flagsMissing;
+  }
+  function captureAllowed(st) {
+    if (!st) return false;
+    if (captureSafeBackend(st)) return true;
+    return isShellCmd(st.cmd);
   }
   function doNudge() {
     if (++nudgeTries > MAX_NUDGES) return;
@@ -732,6 +742,7 @@
     }
     const msgs = nudgeSizes(term && term.cols, term && term.rows);
     if (!msgs || !ws || ws.readyState !== 1) return;
+    dlog("nudge", "#" + nudgeTries + " " + msgs[1].c + "x" + msgs[1].r);
     try {
       ws.send(JSON.stringify(msgs[0]));
     } catch (_) {
@@ -750,9 +761,9 @@
     backfillWatch = setTimeout(() => {
       backfillWatch = null;
       const st = pendingPaneState;
-      if (!st || !st.alt) return;
+      if (!st) return;
       pendingPaneState = null;
-      dlog("backfill", "alt-screen \uCEA1\uCC98 \uC5C6\uC74C \u2192 \uD06C\uAE30 \uB11B\uC9C0\uB85C \uC571 \uC7AC\uADF8\uB9AC\uAE30 \uC720\uB3C4");
+      dlog("backfill", "\uBCF4\uB0B8 \uCEA1\uCC98\uAC00 \uC548 \uB3CC\uC544\uC654\uB2E4 \u2192 \uD06C\uAE30 \uB11B\uC9C0\uB85C \uC7AC\uADF8\uB9AC\uAE30 \uC720\uB3C4");
       doNudge();
     }, BACKFILL_WAIT_MS);
   }
@@ -789,8 +800,7 @@
   }
   function paneMouseMode(st) {
     if (!st || !(st.any || st.btn || st.std)) return "none";
-    const cmd = String(st.cmd || "").replace(/^-/, "").replace(/^.*\//, "").toLowerCase();
-    if (cmd && ["zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "csh", "ash"].indexOf(cmd) >= 0) return "none";
+    if (isShellCmd(st.cmd)) return "none";
     return st.any ? "any" : st.btn ? "drag" : "vt200";
   }
   function isMouseReport(d) {
@@ -803,8 +813,13 @@
     lastStateAt = Date.now();
     try {
       const isAlt = !!(term.buffer && term.buffer.active && term.buffer.active.type === "alternate");
-      if (st.alt && !isAlt) term.write("\x1B[?1049h");
-      else if (!st.alt && isAlt) term.write("\x1B[?1049l");
+      if (st.alt && !isAlt) {
+        dlog("alt", "1049h (\uC571 alt \xB7 \uD074\uB77C normal)");
+        term.write("\x1B[?1049h");
+      } else if (!st.alt && isAlt) {
+        dlog("alt", "1049l (\uC571 normal \xB7 \uD074\uB77C alt)");
+        term.write("\x1B[?1049l");
+      }
     } catch (_) {
     }
     try {
@@ -850,6 +865,7 @@
     if (ws && ws.readyState === 1 && (term.cols !== lastCols || term.rows !== lastRows)) {
       lastCols = term.cols;
       lastRows = term.rows;
+      dlog("fit", term.cols + "x" + term.rows);
       try {
         ws.send(JSON.stringify({ t: "r", c: term.cols, r: term.rows }));
       } catch (_) {
@@ -874,14 +890,20 @@
       } catch (_) {
       }
       if (ctrl && ctrl.isControl()) {
-        if (captureUnsafe(lastKnownState)) {
-          doNudge();
-          return;
-        }
-        try {
-          ws.send(JSON.stringify({ t: "cap", n: BACKFILL_LINES, st: 1 }));
-          armBackfillWatch();
-        } catch (_) {
+        if (!captureSafeBackend(lastKnownState)) {
+          dlog("redraw", "cap \uBCF4\uB958 \u2014 \uC0C1\uD0DC \uC9C8\uC758 \uD6C4 \uD310\uC815(backend=" + (lastKnownState && lastKnownState.mux || "\uBBF8\uC0C1") + ")");
+          wantRedrawCap = true;
+          try {
+            ws.send(JSON.stringify({ t: "st" }));
+          } catch (_) {
+          }
+        } else {
+          dlog("redraw", "cap \uC804\uC1A1(backend=" + lastKnownState.mux + ")");
+          try {
+            ws.send(JSON.stringify({ t: "cap", n: BACKFILL_LINES, st: 1 }));
+            armBackfillWatch();
+          } catch (_) {
+          }
         }
       }
     }
@@ -2251,7 +2273,7 @@
           "\uBB38\uC81C\uAC00 \uC0DD\uACBC\uC744 \uB54C",
           tool("\uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", "\uC785\uB825\uC774 \uC774\uC0C1\uD560 \uB54C(\uD0A4\uB9CC \uB20C\uB7EC\uB3C4 \uAC19\uC740 \uBB38\uC790\uC5F4\uC774 \uB4E4\uC5B4\uAC00\uB294 \uB4F1) \uC544\uB798 \uBC84\uD2BC\uC73C\uB85C \uCD5C\uADFC \uC785\uB825 \uAE30\uB85D\uC744 \uBCF5\uC0AC\uD574 \uC81C\uBCF4\uC5D0 \uBD99\uC5EC \uC8FC\uC138\uC694 \u2014 \uC11C\uBC84\uB85C\uB294 \uC804\uC1A1\uB418\uC9C0 \uC54A\uC544\uC694"),
           el("button", { class: "tbtn", text: "\u{1F50D} \uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", onclick: () => copyText(diagText(), false, true) }),
-          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "cfe02dd9 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
+          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "ad12fa0e \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
         ),
         sec(
           "\uB3C4\uAD6C (\uC624\uB978\uCABD \uC704 \uBC84\uD2BC)",
@@ -2929,10 +2951,12 @@
           dlog("state", diagPreview(line, 96));
           const st = parsePaneState(line);
           applyPaneState(st);
-          if (!needBackfill) return;
+          const wantCap = needBackfill || wantRedrawCap;
           needBackfill = false;
-          if (captureUnsafe(st)) {
-            dlog("backfill", "\uCEA1\uCC98 \uBD88\uAC00 \uBC31\uC5D4\uB4DC(alt-screen) \u2192 \uB11B\uC9C0\uB85C \uC7AC\uADF8\uB9AC\uAE30");
+          wantRedrawCap = false;
+          if (!wantCap) return;
+          if (!captureAllowed(st)) {
+            dlog("backfill", "\uCEA1\uCC98 \uBD88\uAC00(psmux + \uC571 \uD32C) \u2192 \uB11B\uC9C0\uB85C \uC7AC\uADF8\uB9AC\uAE30 \xB7 cmd=" + (st.cmd || "?"));
             doNudge();
             return;
           }
@@ -2992,6 +3016,8 @@
       syncedThisConn = false;
       nudgeTries = 0;
       needBackfill = !didBackfill;
+      wantRedrawCap = false;
+      lastKnownState = null;
       mouseResetTries = 0;
       statusEl.textContent = "\uC5F0\uACB0\uB428";
       statusEl.className = "status ok";

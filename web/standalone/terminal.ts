@@ -306,6 +306,8 @@ let pendingPaneState = null, lastStateAt = 0, lastMouseResetAt = 0, lastMousePro
 const BACKFILL_WAIT_MS = 900;   // 상태 블록 뒤 이 시간 안에 백필이 없으면 '캡처 불가'로 본다
 const MAX_NUDGES = 3;           // 연결당 상한 — 회복이 안 될 때 화면이 무한히 깜빡이지 않게
 let backfillWatch = null, nudgeTries = 0, needBackfill = false, lastKnownState = null;
+// forceRedraw 가 '백엔드를 몰라' 미뤄둔 재캡처 — 상태블록이 오면 그 사실로 캡처/넛지를 판정한다(아래 state 핸들러).
+let wantRedrawCap = false;
 function clearBackfillWatch() { if (backfillWatch) { clearTimeout(backfillWatch); backfillWatch = null; } }
 // 크기 넛지 — r-1 로 줄였다 되돌린다. 순수 계산부는 아래 nudgeSizes(테스트가 이 표를 지킨다).
 export function nudgeSizes(cols, rows) {
@@ -313,13 +315,39 @@ export function nudgeSizes(cols, rows) {
   if (c < 1 || r < 2) return null;             // 1줄짜리는 줄일 수 없다 — 넛지 불가(그냥 포기)
   return [{ t: 'r', c, r: r - 1 }, { t: 'r', c, r }];
 }
-/** 이 팬에 capture-pane 을 걸면 위험한가 — 순수.
- *  psmux 는 alt-screen 팬 캡처에서 **제어 스트림 전체가 멈춘다**(실측 #1541: `%begin` 뒤 무한 무응답).
- *  tmux 는 정상이므로 종전대로 캡처한다. 백엔드 미상(구 서버 — mux 토큰 없음)이면 종전 동작으로 degrade. */
-export function captureUnsafe(st) {
-  if (!st || !st.alt) return false;              // normal 화면은 어느 백엔드든 캡처가 안전하다
-  if (st.mux) return st.mux === 'psmux';         // 서버가 백엔드를 알려줬으면 그게 답
-  return !!st.flagsMissing;                      // 구 노드 번들 — 지문으로 판별(위 주석)
+/** 포그라운드 명령이 **셸**인가 — 팬에 전화면 앱이 도는지 가르는 축. 순수(전역 의존 없음).
+ *  경로·선행 하이픈(로그인 셸)·`.exe` 를 벗겨 이름만 본다. Windows 셸(powershell/pwsh/cmd)도 셸이다. */
+export function isShellCmd(cmd) {
+  const c = String(cmd || '').replace(/^-/, '').replace(/^.*[\\/]/, '').replace(/\.exe$/i, '').toLowerCase();
+  return ['zsh', 'bash', 'sh', 'fish', 'dash', 'ksh', 'tcsh', 'csh', 'ash', 'powershell', 'pwsh', 'cmd'].indexOf(c) >= 0;
+}
+/** 이 **백엔드**가 capture-pane 을 무조건 감당하나 — '멀티플렉서 정체'만 본다(팬 상태 아님). 순수.
+ *  정체는 세션 내내 안 변하므로 **최근 상태 사본**으로 판단해도 stale 하지 않다. 팬 상태(alt·cmd)는 매 순간
+ *  변하니 사본으로 믿으면 안 된다 — 그래서 psmux 는 여기서 false 를 받고, 갓 받은 상태로 다시 판정한다.
+ *  ⚠ 미상(st 없음)은 **금지**로 접는다 — fail-open 이면 첫 상태블록이 오기 전 창(원격 노드는 RTT 만큼 길다)에
+ *   캡처가 나가 psmux 를 잠근다. 이것이 #1541 '새로고침하면 하얀 화면'의 직접 원인이었다. */
+export function captureSafeBackend(st) {
+  if (!st) return false;                         // 백엔드 미상 — 알고 나서 결정한다(상태 먼저 질의)
+  if (st.mux) return st.mux !== 'psmux';         // 서버가 백엔드를 알려줬으면 그게 답
+  return !st.flagsMissing;                       // 구 노드 번들 — 지문으로 판별(위 주석)
+}
+/** 지금 이 팬에 capture-pane 을 걸어도 되나 — **갓 받은 상태**로만 판단한다(stale 사본 금지). 순수.
+ *
+ *  ⚠ 판별축은 alt-screen 이 **아니다**(2026-08-11 실기기 실측으로 뒤집힘). 같은 노드·같은 분에 잰 결과:
+ *   - powershell 팬(앱 없음) → capture 40줄 정상, 블록 정상 종료, 이후 리사이즈 %output 도 정상.
+ *   - Claude Code 가 도는 팬 → **`alt=0` 으로 보고되는데도** capture 블록이 끝내 안 닫히고 제어 스트림이 멈춘다.
+ *  Windows 는 ConPTY 가 앱 출력을 커서이동+`[K` 로 정규화해 `1049h` 가 아예 흐르지 않는다 → psmux 의
+ *  `alternate_on` 은 **사실상 항상 0**이다. 그래서 alt 로 가르던 종전 게이트는 한 번도 발동하지 못했고, 앱이 도는
+ *  팬마다 캡처가 나가 스트림이 얼어붙었다(= 새로고침하면 하얀 화면, ⟳ 로만 풀림 — 그건 새 attach 라서).
+ *
+ *  대신 **포그라운드가 셸인지**로 가른다. 이 축은 두 방향 모두에서 맞다:
+ *   - 셸 팬은 캡처가 정상이고, 셸은 SIGWINCH 로 다시 그리지 않으므로 **캡처 말고는 복원 수단이 없다**.
+ *   - 앱 팬은 캡처가 스트림을 잠그지만, 앱은 리사이즈에 전체를 다시 그리므로 **넛지로 복원된다**.
+ *  (같은 축을 paneMouseMode 도 이미 쓴다 — tmux flag 가 stale 인지 가리는 단서.) */
+export function captureAllowed(st) {
+  if (!st) return false;                         // 미상이면 걸지 않는다(위 fail-open 함정)
+  if (captureSafeBackend(st)) return true;       // tmux — 앱이 돌든 말든 캡처가 정상
+  return isShellCmd(st.cmd);                     // psmux — 포그라운드가 셸일 때만(cmd 미상이면 금지)
 }
 // 크기 넛지 실행 — 앱이 리사이즈를 두 번 받아 화면 전체를 다시 그린다.
 function doNudge() {
@@ -329,6 +357,7 @@ function doNudge() {
   try { if (fit) fit.fit(); } catch (_) { /* noop */ }
   const msgs = nudgeSizes(term && term.cols, term && term.rows);
   if (!msgs || !ws || ws.readyState !== 1) return;
+  dlog('nudge', '#' + nudgeTries + ' ' + msgs[1].c + 'x' + msgs[1].r);
   try { ws.send(JSON.stringify(msgs[0])); } catch (_) { /* noop */ }
   setTimeout(() => { try { if (ws && ws.readyState === 1) ws.send(JSON.stringify(msgs[1])); } catch (_) { /* noop */ } }, 140);
   lastCols = 0; lastRows = 0;
@@ -338,9 +367,12 @@ function armBackfillWatch() {
   backfillWatch = setTimeout(() => {
     backfillWatch = null;
     const st = pendingPaneState;
-    if (!st || !st.alt) return;                // 캡처가 왔거나 alt-screen 이 아니면 할 일 없음
+    if (!st) return;                           // 캡처가 도착해 소비됐다 — 할 일 없음
+    // ⚠ 종전엔 여기서 `|| !st.alt` 로 한 번 더 걸렀는데, psmux 는 alt 를 사실상 항상 0 으로 보고하므로(ConPTY 가
+    //  1049h 를 안 흘린다 — captureAllowed 주석의 실측) **이 폴백이 한 번도 발동하지 못했다**. 캡처를 보냈는데
+    //  안 돌아왔다는 사실 자체가 이미 이상 신호다 — 팬 상태와 무관하게 재그리기를 시도한다.
     pendingPaneState = null;                   // 이 백필은 오지 않는다 — 커서 복원 대상도 없다
-    dlog('backfill', 'alt-screen 캡처 없음 → 크기 넛지로 앱 재그리기 유도');
+    dlog('backfill', '보낸 캡처가 안 돌아왔다 → 크기 넛지로 재그리기 유도');
     doNudge();
   }, BACKFILL_WAIT_MS);
 }
@@ -372,8 +404,7 @@ function parsePaneState(line) {
 //  cmd 가 비면(구 서버 — 마커에 cmd 없음) 게이팅하지 않고 옛 동작으로 degrade 한다.
 export function paneMouseMode(st) {
   if (!st || !(st.any || st.btn || st.std)) return 'none';
-  const cmd = String(st.cmd || '').replace(/^-/, '').replace(/^.*\//, '').toLowerCase();
-  if (cmd && ['zsh', 'bash', 'sh', 'fish', 'dash', 'ksh', 'tcsh', 'csh', 'ash'].indexOf(cmd) >= 0) return 'none';
+  if (isShellCmd(st.cmd)) return 'none';              // 셸이 포그라운드 = 죽은 앱이 남긴 flag(위 주석)
   return st.any ? 'any' : st.btn ? 'drag' : 'vt200';  // 1003 > 1002 > 1000 (상위모드 우선)
 }
 // xterm 이 내보낸 데이터가 마우스 리포트인가 — SGR(1006) `\e[<b;x;yM|m` · urxvt(1015) `\e[b;x;yM` · X10 `\e[M`+3바이트.
@@ -389,8 +420,8 @@ export function applyPaneState(st) {
   //  앱 normal인데 클라 alt(stuck) → 복귀(프롬프트/입력 위·아래 어긋남 = 버그2 계열의 한 원인).
   try {
     const isAlt = !!(term.buffer && term.buffer.active && term.buffer.active.type === 'alternate');
-    if (st.alt && !isAlt) term.write('\x1b[?1049h');
-    else if (!st.alt && isAlt) term.write('\x1b[?1049l');
+    if (st.alt && !isAlt) { dlog('alt', '1049h (앱 alt · 클라 normal)'); term.write('\x1b[?1049h'); }
+    else if (!st.alt && isAlt) { dlog('alt', '1049l (앱 normal · 클라 alt)'); term.write('\x1b[?1049l'); }
   } catch (_) { /* noop */ }
   // 마우스모드 동기화 — 앱이 mouse-off 했는데(재접속 갭에 1003l 놓침) 클라가 ON으로 굳으면 마우스 이동마다 셸에
   //  SGR 리포트가 주입돼 `;EB1` 류 garbage(버그1). tmux 실상태의 '트래킹 모드'(any>drag>std 우선)로 정확히 맞춘다 —
@@ -434,6 +465,7 @@ function applyFit() {
   try { fit.fit(); } catch (_) { /* noop */ }
   if (ws && ws.readyState === 1 && (term.cols !== lastCols || term.rows !== lastRows)) {
     lastCols = term.cols; lastRows = term.rows;
+    dlog('fit', term.cols + 'x' + term.rows);
     try { ws.send(JSON.stringify({ t: 'r', c: term.cols, r: term.rows })); } catch (_) { /* noop */ }
   }
 }
@@ -449,11 +481,24 @@ function forceRedraw() {
     lastCols = term.cols; lastRows = term.rows;
     try { ws.send(JSON.stringify({ t: 'r', c: term.cols, r: term.rows })); } catch (_) { /* noop */ }
     // 깨끗이 재캡처(+상태 동기화). ⚠ 단, **캡처가 스트림을 멈추는 조합엔 절대 보내지 않는다**(#1541) —
-    //  이 경로는 새로고침 직후 자동(initialSettleRedraw)으로도, '화면 복구' 버튼으로도 돈다. 여기가 안 막히면
-    //  방금 살려낸 스트림을 다시 잠근다(실측: 강력 새로고침 3회 중 2회 화면 상단이 어긋남).
+    //  이 경로는 새로고침 직후 자동(initialSettleRedraw)으로도, 탭 복귀(visibilitychange·focus)로도 돈다.
+    //  여기가 안 막히면 방금 살려낸 스트림을 다시 잠근다(실측: 강력 새로고침 3회 중 2회 화면 상단이 어긋남).
+    // ⚠⚠ '무조건 안전한 백엔드로 **확인된** 경우에만' 즉시 캡처한다 — 모르면 미룬다. 종전엔 미상을 '안전'으로
+    //  접었는데(captureUnsafe(null)=false), 이 경로는 **첫 상태블록이 도착하기 전에** 먼저 돈다(폰트 로드는 캐시가
+    //  더우면 수십 ms, 상태블록은 원격 노드 왕복이라 수백 ms). 그래서 새로고침마다 psmux 팬에 캡처가 나가 제어
+    //  스트림이 통째로 멈췄고, 그 뒤 넛지·리사이즈가 전부 무시돼 화면이 빈 채로 굳었다(#1541 '하얀 화면'의 직접 원인).
+    //  ⟳ 버튼(softReconnect)만 듣던 이유도 이것 — 그 경로는 새 attach 라 스트림이 새로 열린다.
+    //  psmux 는 '지금 그 팬에 앱이 도는가'까지 봐야 하는데 그건 사본으로 못 믿는다 → 상태를 새로 물어 판정한다.
     if (ctrl && ctrl.isControl()) {
-      if (captureUnsafe(lastKnownState)) { doNudge(); return; }
-      try { ws.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES, st: 1 })); armBackfillWatch(); } catch (_) { /* noop */ }
+      if (!captureSafeBackend(lastKnownState)) {
+        // 백엔드 미상 or psmux — 지금 캡처를 걸지 않는다. 상태를 먼저 물어 **갓 받은 사실**로 판정한다(state 핸들러).
+        dlog('redraw', 'cap 보류 — 상태 질의 후 판정(backend=' + ((lastKnownState && lastKnownState.mux) || '미상') + ')');
+        wantRedrawCap = true;
+        try { ws.send(JSON.stringify({ t: 'st' })); } catch (_) { /* noop */ }
+      } else {
+        dlog('redraw', 'cap 전송(backend=' + lastKnownState.mux + ')');
+        try { ws.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES, st: 1 })); armBackfillWatch(); } catch (_) { /* noop */ }
+      }
     }
   }
   try { term.refresh(0, term.rows - 1); } catch (_) { /* noop */ }
@@ -2154,11 +2199,14 @@ async function connectNow() {
         dlog('state', diagPreview(line, 96));
         const st = parsePaneState(line);
         applyPaneState(st);
-        if (!needBackfill) return;
-        needBackfill = false;
+        // 캡처를 원하는 두 갈래 — ① 첫 연결 백필(needBackfill) ② forceRedraw 가 백엔드를 몰라 미뤄둔 재캡처.
+        //  둘 다 '갓 받은 이 상태'로 판정한다(stale 사본으로 판단하지 않는다 — captureSafeBackend 주석 참조).
+        const wantCap = needBackfill || wantRedrawCap;
+        needBackfill = false; wantRedrawCap = false;
+        if (!wantCap) return;
         // 캡처를 걸어도 되는가 — **관측된 백엔드·alt 조합**으로만 판단한다(추측 없음).
         //  psmux + alt-screen 은 캡처가 스트림을 잠그므로 아예 보내지 않고, 앱이 스스로 다시 그리게 넛지한다.
-        if (captureUnsafe(st)) { dlog('backfill', '캡처 불가 백엔드(alt-screen) → 넛지로 재그리기'); doNudge(); return; }
+        if (!captureAllowed(st)) { dlog('backfill', '캡처 불가(psmux + 앱 팬) → 넛지로 재그리기 · cmd=' + (st.cmd || '?')); doNudge(); return; }
         try { if (ws && ws.readyState === 1) { ws.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES, st: 1 })); armBackfillWatch(); } } catch (_) { /* noop */ }
       } catch (_) { /* noop */ }
     },
@@ -2193,7 +2241,8 @@ async function connectNow() {
     dlog('ws', 'open');
     connecting = false; wasConnected = true; reconnectDelay = 1500; denyRetries = 0; attempts = 0; // 붙었으면 입장 허용 확정 → 거부 카운트 리셋
     syncedThisConn = false; // 이 연결에서 재접속 상태동기(t:'st')를 아직 안 보냄
-    nudgeTries = 0; needBackfill = !didBackfill; // 넛지 상한·백필 대기는 '연결 단위'
+    nudgeTries = 0; needBackfill = !didBackfill; wantRedrawCap = false; // 넛지 상한·백필/재캡처 대기는 '연결 단위'
+    lastKnownState = null;  // 백엔드·팬 상태는 이 연결에서 다시 관측한다(옛 연결 사본으로 캡처를 판정하지 않는다)
     mouseResetTries = 0;    // 복구 시도 상한은 '연결 단위' — 새로 붙으면 다시 시도한다(그 사이 환경이 달라졌을 수 있다)
     statusEl.textContent = '연결됨'; statusEl.className = 'status ok';
     lastCols = 0; lastRows = 0; // 재attach 후 사이즈 강제 재동기화(→ control mode: refresh-client -C 재전송)
