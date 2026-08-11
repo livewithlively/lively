@@ -35,6 +35,25 @@ export function shouldCheckForUpdates(o) {
 export const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 /**
+ * 왜 확인하지 않(았)나 — **사람에게 보여줄 문구**.
+ *
+ * 판정(shouldCheckForUpdates)은 reason 을 기계용 토큰으로 돌려준다. 화면에 그 토큰을 그대로 쓰면
+ * ("mac-unsigned") 사용자는 고장인지 정책인지 알 수 없다. 특히 '구조적 불가'(미서명 mac)와
+ * '지금은 안 함'(개발 실행)은 사람에게 전혀 다른 뜻이라 반드시 갈라 말해야 한다.
+ */
+export function updateStatusNote(reason) {
+  switch (reason) {
+    case "ok": return "업데이트를 확인합니다.";
+    case "opt-out": return `자동 업데이트가 꺼져 있습니다(${UPDATE_OPT_OUT_ENV}).`;
+    case "dev-run": return "개발 실행 중이라 업데이트를 확인하지 않습니다.";
+    case "no-publish-config": return "이 빌드에는 업데이트 받을 곳이 없습니다(설치기로 깐 버전이 아닙니다).";
+    case "failed-before": return "이번 실행에서 이미 실패해 다시 시도하지 않습니다. 앱을 다시 켜면 재시도합니다.";
+    case "mac-unsigned": return "서명되지 않은 빌드라 자동 업데이트를 쓸 수 없습니다. 새 버전은 받아서 덮어써 주세요.";
+    default: return "업데이트를 확인하지 않습니다.";
+  }
+}
+
+/**
  * 사람에게 보여줄 실패 문구 — 자동 업데이트 실패는 **치명이 아니다**(앱은 그대로 쓴다).
  * 그래서 오류 팝업이 아니라 로그·상태 한 줄로 남긴다.
  */

@@ -28,6 +28,11 @@ function renderState(s) {
   show($("gw-card"), !ready && !s?.busy);
   show($("done-card"), ready && !s?.busy && justFinished);
   show($("node-card"), ready);
+  show($("tools-card"), ready);
+  // 버전은 늘 보인다 — 제보할 때 가장 먼저 묻는 값이다. 앱과 키트는 갱신 주기가 달라 따로 적는다.
+  $("ver").textContent = `앱 ${s?.appVersion || "알 수 없음"} · ${s?.kitVersion ? "키트 " + s.kitVersion : "키트 미설치"}`;
+  $("upd-note").textContent = s?.updateNote || "";
+  for (const id of ["doctor", "kit-update", "logout"]) $(id).disabled = !!s?.busy;
   // 실행 여부를 **모를 때**(측정 실패)는 버튼을 잠그지 않는다 — 모른다고 사용자를 가두면 안 된다.
   const running = s?.nodeRunning === true, stopped = s?.nodeRunning === false;
   $("node-state").textContent = !s?.nodeRegistered ? "아직 이 PC 는 노드로 등록되지 않았습니다."
@@ -52,6 +57,10 @@ function renderProgress(p) {
   const pct = Number.isFinite(p.i) && Number.isFinite(p.n) && p.n > 0 ? Math.round((p.i / p.n) * 100) : null;
   $("bar-fill").style.width = pct === null ? "0%" : pct + "%";
   $("bar-fill").classList.toggle("indeterminate", pct === null && !p.done);
+  // 실패했을 때만 '다시 시도'. 취소는 도는 동안만 의미가 있다 — 둘을 함께 보여주면 어느 쪽이 유효한지 모른다.
+  const failed = !!(p.done && p.ok === false);
+  show($("retry"), failed && !!state?.retryable);
+  show($("cancel"), !p.done);
   $("steps").replaceChildren(...(p.steps || []).map((st) => {
     const li = document.createElement("li");
     li.className = "step " + st.status;
@@ -110,6 +119,48 @@ $("device-link").addEventListener("click", (e) => { e.preventDefault(); const u 
 $("node-start").addEventListener("click", async () => { const r = await window.lively.run("node-start"); if (r?.error) log("✗ " + r.error); });
 $("node-stop").addEventListener("click", async () => { const r = await window.lively.run("node-stop"); if (r?.error) log("✗ " + r.error); });
 $("app-autolaunch").addEventListener("change", (e) => window.lively.setAppAutoLaunch(e.target.checked));
+$("retry").addEventListener("click", async () => { const r = await window.lively.retry(); if (r?.error) log("✗ " + r.error); });
+$("doctor").addEventListener("click", async () => { const r = await window.lively.run("doctor"); if (r?.error) log("✗ " + r.error); });
+$("kit-update").addEventListener("click", async () => { const r = await window.lively.run("update"); if (r?.error) log("✗ " + r.error); });
+// 로그아웃은 되돌리기 어렵다(토큰이 지워지고 다시 로그인해야 한다) — 한 번 묻는다.
+//  ⚠ confirm() 은 렌더러를 멈추는 모달이라 진행 중엔 쓰지 않는다. busy 면 버튼 자체가 잠겨 있다.
+$("logout").addEventListener("click", async () => {
+  if (!window.confirm("로그아웃하면 이 PC 의 토큰이 지워지고 다시 로그인해야 합니다.\n노드는 계속 실행됩니다.\n\n계속할까요?")) return;
+  const r = await window.lively.run("logout");
+  if (r?.error) log("✗ " + r.error);
+});
+$("check-update").addEventListener("click", async () => {
+  $("upd-note").textContent = "확인 중…";
+  const r = await window.lively.checkUpdate();
+  if (r?.note) $("upd-note").textContent = r.note;
+});
+
+// ── 로그 두 축 ──────────────────────────────────────────────────────────────
+// '이번 작업'(CLI 가 지금 뱉는 것)과 '노드 로그'(파일에 쌓인 것)는 다른 축이다 — 섞으면 원인을 못 가린다.
+let logTab = "run";
+function setLogTab(tab) {
+  logTab = tab;
+  $("tab-run").classList.toggle("on", tab === "run");
+  $("tab-file").classList.toggle("on", tab === "file");
+  show($("log"), tab === "run");
+  show($("filelog"), tab === "file");
+  show($("log-reload"), tab === "file");
+  if (tab === "file") void loadFileLog();
+  else $("filelog-note").textContent = "";
+}
+async function loadFileLog() {
+  $("filelog").textContent = "읽는 중…";
+  const r = await window.lively.readLog("node");
+  if (!r?.ok) { $("filelog").textContent = ""; $("filelog-note").textContent = r?.error || "읽지 못했습니다."; return; }
+  // 파일이 아예 없는 것과 비어 있는 것은 다르다 — 사람에게 그 차이를 말한다(노드를 한 번도 안 켰나?).
+  if (r.missing) { $("filelog").textContent = ""; $("filelog-note").textContent = "아직 로그가 없습니다(노드를 한 번도 실행하지 않았습니다)."; return; }
+  $("filelog").textContent = r.text || "(비어 있음)";
+  $("filelog-note").textContent = r.truncated ? `마지막 ${r.lines}줄만 표시했습니다 · ${r.path}` : r.path;
+  $("filelog").scrollTop = $("filelog").scrollHeight;
+}
+$("tab-run").addEventListener("click", () => setLogTab("run"));
+$("tab-file").addEventListener("click", () => setLogTab("file"));
+$("log-reload").addEventListener("click", () => void loadFileLog());
 
 window.lively.onState(renderState);
 window.lively.onProgress(renderProgress);

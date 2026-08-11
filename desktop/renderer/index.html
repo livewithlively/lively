@@ -44,7 +44,11 @@
       <h2 id="progress-title">진행 중</h2>
       <div class="bar"><div id="bar-fill"></div></div>
       <ul id="steps"></ul>
-      <button id="cancel" class="ghost">취소</button>
+      <div class="row">
+        <button id="cancel" class="ghost">취소</button>
+        <!-- 실패했을 때만 — 무엇을 다시 할지는 메인이 기억한다(렌더러가 정하지 않는다). -->
+        <button id="retry" class="primary hidden">다시 시도</button>
+      </div>
     </section>
 
     <!-- 사람 확인 -->
@@ -75,11 +79,37 @@
         <span class="hint">(노드는 앱과 무관하게 계속 실행됩니다)</span></label>
     </section>
 
+    <!-- 점검·계정 — 설치가 끝난 뒤에만 의미가 있다 -->
+    <section id="tools-card" class="card hidden">
+      <h2>점검과 계정</h2>
+      <div class="row">
+        <button id="doctor" class="ghost">진단 실행</button>
+        <button id="kit-update" class="ghost">키트 업데이트</button>
+        <button id="logout" class="ghost danger">로그아웃</button>
+      </div>
+      <p class="hint" id="tools-hint">진단은 설치 상태를 점검하고, 키트 업데이트는 CLI·훅을 최신으로 맞춥니다.</p>
+    </section>
+
     <details id="log-wrap">
       <summary>자세히</summary>
+      <!-- 두 축이 다르다: '이번 작업'(CLI 가 지금 뱉는 것) vs '노드 로그'(파일에 쌓인 것). 섞으면 원인을 못 가린다. -->
+      <div class="row tabs">
+        <button id="tab-run" class="tab on">이번 작업</button>
+        <button id="tab-file" class="tab">노드 로그</button>
+        <button id="log-reload" class="ghost hidden">새로고침</button>
+      </div>
       <pre id="log"></pre>
+      <pre id="filelog" class="hidden"></pre>
+      <p class="hint" id="filelog-note"></p>
     </details>
   </main>
+
+  <footer>
+    <span id="ver" class="hint"></span>
+    <span class="grow"></span>
+    <span id="upd-note" class="hint"></span>
+    <button id="check-update" class="link-btn">업데이트 확인</button>
+  </footer>
 
   <script src="app.js"></script>
 </body>

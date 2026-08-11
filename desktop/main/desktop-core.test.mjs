@@ -16,6 +16,12 @@ import { argvFor, RUN_KINDS, IPC } from "./ipc-contract.mjs";
 import { trayMenuModel, statusLabel } from "./tray-menu.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
 import { shouldCheckForUpdates, updateFailureNote, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
+import { normalizeBounds, pickBounds, MIN_SIZE, DEFAULT_SIZE, MIN_VISIBLE } from "./window-bounds.mjs";
+import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
+import { versionLabel } from "./tray-menu.mjs";
+import { RETRYABLE_KINDS } from "./ipc-contract.mjs";
+import { updateStatusNote } from "./update-policy.mjs";
+import { posix as pposix } from "node:path";
 
 let pass = 0;
 const t = (n, fn) => { fn(); pass++; console.log(`ok  ${n}`); };
@@ -549,6 +555,155 @@ t('D6 ★ 답한 프롬프트는 다시 뜨지 않는다(리듀서가 옛 prompt
   assert.ok(/send\(IPC\.PROGRESS/.test(seg), '비운 상태를 렌더러에 안 보내면 화면은 그대로다');
 });
 
+// ── W. 창 배치 기억 (#1541 갭) ────────────────────────────────────────────────
+// 이게 틀리면 증상이 **"앱이 안 열린다"** 다 — 실제로는 보이지 않는 좌표에 떠 있다. 표로 못박는다.
+const D1 = { x: 0, y: 0, width: 1440, height: 900 };            // 주 디스플레이
+const D2 = { x: 1440, y: 0, width: 1920, height: 1080 };        // 오른쪽 보조
+
+t("W1 저장값 없음 → 기본 크기 · 좌표는 **주지 않는다**(0,0 은 '모른다'가 아니라 '좌상단'이다)", () => {
+  const b = normalizeBounds(null, [D1]);
+  assert.deepEqual(b, { width: DEFAULT_SIZE.width, height: DEFAULT_SIZE.height });
+  assert.ok(!("x" in b) && !("y" in b));
+});
+
+t("W2 저장값이 그 디스플레이 안 → 그대로 복원", () => {
+  assert.deepEqual(normalizeBounds({ x: 100, y: 80, width: 800, height: 600 }, [D1]),
+    { width: 800, height: 600, x: 100, y: 80 });
+});
+
+t("W3 ★ 화면 밖 좌표(뺀 모니터 자리) → 크기만 살리고 위치는 버린다", () => {
+  const b = normalizeBounds({ x: 2000, y: 200, width: 800, height: 600 }, [D1]);
+  assert.deepEqual(b, { width: 800, height: 600 });
+});
+
+t("W4 경계에 걸쳐 있어도 충분히 보이면 유지 — 완전 포함을 요구하면 멀쩡한 배치를 매번 되돌린다", () => {
+  const b = normalizeBounds({ x: 1440 - 300, y: 0, width: 800, height: 600 }, [D1]);
+  assert.equal(b.x, 1140);
+});
+
+t("W5 살짝만 걸치면(잡을 수 없다) 버린다", () => {
+  const x = 1440 - (MIN_VISIBLE.width - 10);
+  assert.ok(!("x" in normalizeBounds({ x, y: 0, width: 800, height: 600 }, [D1])), "잡을 수 없는 배치를 유지했다");
+});
+
+t("W6 최소 크기 밑으로는 못 내려간다", () => {
+  const b = normalizeBounds({ x: 10, y: 10, width: 100, height: 50 }, [D1]);
+  assert.equal(b.width, MIN_SIZE.width); assert.equal(b.height, MIN_SIZE.height);
+});
+
+t("W7 디스플레이보다 큰 창은 작업영역으로 제한", () => {
+  const small = { x: 0, y: 0, width: 800, height: 600 };
+  const b = normalizeBounds({ x: 0, y: 0, width: 5000, height: 4000 }, [small]);
+  assert.equal(b.width, 800); assert.equal(b.height, 600);
+});
+
+t("W8 디스플레이를 모르면(빈 목록) 좌표를 믿지 않는다", () => {
+  assert.deepEqual(normalizeBounds({ x: 100, y: 100, width: 800, height: 600 }, []), { width: 800, height: 600 });
+});
+
+t("W9 값이 망가져도(NaN·문자열·빈 객체) throw 없이 기본으로 접힌다", () => {
+  for (const bad of [{}, { x: NaN, y: 1, width: "800", height: null }, { x: "a", y: "b" }, undefined]) {
+    const b = normalizeBounds(bad, [D1]);
+    assert.equal(b.width, DEFAULT_SIZE.width, JSON.stringify(bad));
+    assert.ok(!("x" in b), JSON.stringify(bad));
+  }
+});
+
+t("W10 두 번째 디스플레이의 배치도 유효하다(멀티모니터에서 매번 주화면으로 끌려오면 안 된다)", () => {
+  const b = normalizeBounds({ x: 1600, y: 100, width: 800, height: 600 }, [D1, D2]);
+  assert.equal(b.x, 1600);
+});
+
+t("W11 pickBounds — 네 값이 다 있어야 저장한다(부분 저장은 다음 복원을 망친다)", () => {
+  assert.deepEqual(pickBounds({ x: 1, y: 2, width: 3, height: 4, extra: 9 }), { x: 1, y: 2, width: 3, height: 4 });
+  assert.equal(pickBounds({ x: 1, y: 2, width: 3 }), null);
+  assert.equal(pickBounds(null), null);
+});
+
+// ── L. 로그 보기 (#1541 갭) ───────────────────────────────────────────────────
+t("L1 화이트리스트된 id 만 경로가 된다 — 렌더러가 경로를 정하면 임의 파일 읽기가 된다", () => {
+  assert.equal(resolveLogPath(pposix.join, "/home/u/.lively", "node"), "/home/u/.lively/logs/node-agent.log");
+  for (const bad of ["../../etc/passwd", "node-agent.log", "", null, "NODE", "logs/node"]) {
+    assert.equal(resolveLogPath(pposix.join, "/home/u/.lively", bad), null, `열려서는 안 되는 id: ${String(bad)}`);
+  }
+  assert.equal(resolveLogPath(pposix.join, "", "node"), null, "livelyDir 이 없으면 경로를 지어내지 않는다");
+});
+
+t("L2 목록은 id·label·file 을 모두 갖는다(화면이 고를 수 있어야 한다)", () => {
+  assert.ok(LOG_VIEWS.length >= 1);
+  for (const v of LOG_VIEWS) {
+    assert.ok(v.id && v.label && v.file, JSON.stringify(v));
+    assert.ok(!v.file.includes("/") && !v.file.includes("\\"), `파일명에 경로가 섞였다: ${v.file}`);
+  }
+});
+
+t("L3 짧은 로그는 그대로 — 자르지 않았으면 truncated=false", () => {
+  const r = tailText("a\nb\nc\n");
+  assert.equal(r.text, "a\nb\nc");
+  assert.equal(r.truncated, false);
+  assert.equal(r.lines, 3, "끝 개행을 한 줄로 세면 안 된다");
+});
+
+t("L4 줄 수를 넘으면 **뒤에서** 남긴다(최신이 뒤에 있다)", () => {
+  const src = Array.from({ length: 50 }, (_, i) => `L${i}`).join("\n");
+  const r = tailText(src, { maxLines: 5 });
+  assert.equal(r.text, "L45\nL46\nL47\nL48\nL49");
+  assert.equal(r.truncated, true);
+});
+
+t("L5 ★ 한 줄이 거대해도 바이트 상한을 지킨다(스택트레이스 한 줄로 창이 얼면 안 된다)", () => {
+  const r = tailText("x".repeat(500_000), { maxLines: 400, maxBytes: 1000 });
+  assert.ok(Buffer.byteLength(r.text, "utf8") <= 1000, `상한 초과: ${Buffer.byteLength(r.text, "utf8")}`);
+  assert.equal(r.truncated, true);
+});
+
+t("L6 빈 입력·null 에도 throw 하지 않는다", () => {
+  for (const v of ["", null, undefined]) {
+    const r = tailText(v);
+    assert.equal(r.text, ""); assert.equal(r.truncated, false); assert.equal(r.lines, 0);
+  }
+});
+
+// ── V. 버전 표시 · 재시도 화이트리스트 · 업데이트 문구 (#1541 갭) ───────────────
+t("V1 버전은 앱과 키트를 **따로** 적는다 — 합치면 어느 쪽이 낡았는지 못 가린다", () => {
+  assert.equal(versionLabel({ appVersion: "0.1.317", kitVersion: "abc123" }), "앱 0.1.317 · 키트 abc123");
+  assert.equal(versionLabel({ appVersion: "0.1.317" }), "앱 0.1.317 · 키트 미설치");
+  assert.equal(versionLabel({}), "앱 알 수 없음 · 키트 미설치");
+});
+
+t("V2 트레이에 버전 줄이 있고 **누를 수 없다**(정보 항목)", () => {
+  const item = trayMenuModel({ cliFound: true, loggedIn: true, kitInstalled: true, appVersion: "1.2.3" })
+    .find((m) => m.id === "version");
+  assert.ok(item, "버전 항목이 없다");
+  assert.equal(item.enabled, false);
+  assert.match(item.label, /1\.2\.3/);
+});
+
+t("V3 ★ 재시도 대상은 RUN_KINDS 의 부분집합이고, 되돌리는 작업은 빠져 있다", () => {
+  for (const k of RETRYABLE_KINDS) assert.ok(RUN_KINDS.includes(k), `RUN_KINDS 에 없는 재시도 대상: ${k}`);
+  for (const k of ["logout", "node-stop"]) {
+    assert.ok(!RETRYABLE_KINDS.includes(k), `${k} 는 자동 재시도 대상이면 안 된다(사람이 다시 판단해야 한다)`);
+  }
+});
+
+t("V4 로그아웃·키트 업데이트 argv — 로그아웃은 게이트웨이 인자를 받지 않는다", () => {
+  assert.deepEqual(argvFor("logout", { gateway: "https://x.example" }), ["logout"]);
+  assert.deepEqual(argvFor("update", {}), ["update"]);
+});
+
+t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'와 '지금은 안 함'을 갈라 말한다", () => {
+  const seen = new Set();
+  for (const r of ["ok", "opt-out", "dev-run", "no-publish-config", "failed-before", "mac-unsigned"]) {
+    const s = updateStatusNote(r);
+    assert.ok(s && s.length > 5, r);
+    assert.ok(!seen.has(s), `문구가 겹친다: ${r}`);
+    seen.add(s);
+  }
+  assert.match(updateStatusNote("mac-unsigned"), /서명/);
+  assert.match(updateStatusNote("dev-run"), /개발/);
+  assert.ok(updateStatusNote("듣도보도못한값").length > 0, "모르는 reason 도 문구를 준다");
+});
+
 // ── Z. 릴리스 배선 — 자동 업데이트가 조용히 죽는 두 자리 (#1541) ──────────────────
 // 둘 다 "빌드는 성공하고 설치도 되는데 그 뒤로 아무도 새 버전을 못 받는" 부류라 실행으로는 안 드러난다.
 //  릴리스를 낸 뒤 몇 달 있다 알게 되는 종류의 고장이므로 여기서 못박는다.
@@ -564,6 +719,18 @@ t('D6 ★ 답한 프롬프트는 다시 뜨지 않는다(리듀서가 옛 prompt
     // 레포는 2026-08-02 공개 전환 때 context-ontology → lively 로 개명됐다. 옛 이름이 남아 있으면
     //  electron-updater 가 존재하지 않는 레포의 릴리스를 조회한다(실제로 그 상태로 있었다).
     assert.equal(pub[0].repo, "lively", "레포 개명(context-ontology→lively)이 반영되지 않았다");
+  });
+
+  t("Z3 ★ 빈 서명 시크릿을 electron-builder 에 넘기지 않는다 — mac 빌드가 통째로 실패한다", () => {
+    // GitHub Actions 는 없는 시크릿을 **빈 문자열 env** 로 넘긴다. electron-builder 는 CSC_LINK 가 정의돼
+    //  있으면 인증서 '파일 경로' 로 보고 열려 하므로 빈 값이면 projectDir 을 가리켜 `not a file` 로 죽는다.
+    //  실측 A/B(같은 맥): 빈 문자열 → EXIT 1 · unset → EXIT 0. 시크릿이 없어도 미서명으로 빌드되는 게 계약이다.
+    const macStep = wf.split("빌드 (mac)")[1].split("- name:")[0];
+    assert.match(macStep, /unset "\$v"/, "빈 서명 env 를 unset 하지 않는다");
+    assert.match(macStep, /CSC_IDENTITY_AUTO_DISCOVERY=false/, "인증서가 없을 때 키체인 자동탐색을 끄지 않는다");
+    for (const v of ["CSC_LINK", "APPLE_API_KEY", "APPLE_ID"]) {
+      assert.ok(macStep.includes(v), `${v} 가 정리 대상 목록에 없다`);
+    }
   });
 
   t("Z2 ★ 릴리스 버전은 태그에서 온다 — package.json 에 박힌 값이 산출물로 나가면 안 된다", () => {

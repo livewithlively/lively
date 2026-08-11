@@ -16,6 +16,13 @@ export function statusLabel(st) {
   return s.nodeRegistered ? "노드 정지됨" : "노드 미등록";
 }
 
+/** 버전 한 줄 — 앱과 키트를 **따로** 적는다(갱신 주기가 다르다). 못 읽은 축은 '알 수 없음'으로 남긴다. */
+export function versionLabel(st) {
+  const s = st || {};
+  const kit = s.kitVersion ? `키트 ${s.kitVersion}` : "키트 미설치";
+  return `앱 ${s.appVersion || "알 수 없음"} · ${kit}`;
+}
+
 /**
  * 트레이 메뉴 항목 모델. `{id, label, enabled, type?, checked?}`.
  * 실행 중(busy)이면 상태를 바꾸는 항목을 전부 잠근다 — 설치 도중 '노드 시작' 을 누르면 CLI 두 개가 겹친다.
@@ -43,6 +50,10 @@ export function trayMenuModel(st) {
   items.push({ id: "open", label: "창 열기" });
   items.push({ id: "open-web", label: "웹에서 보기", enabled: !!s.gatewayUrl });
   items.push({ id: "logs", label: "로그 폴더 열기" });
+  items.push({ type: "separator" });
+  // 버전은 **누를 수 없는 정보 항목**이다 — 제보할 때 가장 먼저 묻는 값인데 어디에도 안 보였다.
+  //  앱과 키트는 갱신 주기가 달라 따로 적는다(하나로 합치면 어느 쪽이 낡았는지 못 가린다).
+  items.push({ id: "version", label: versionLabel(s), enabled: false });
   items.push({ type: "separator" });
   // 문구가 곧 계약이다 — 앱을 꺼도 노드는 산다(상시성은 OS 데몬이 갖는다).
   items.push({ id: "quit", label: s.nodeDaemon ? "앱 종료 (노드는 계속 실행)" : "앱 종료" });

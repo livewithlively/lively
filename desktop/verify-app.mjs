@@ -65,7 +65,8 @@ const title = await evaluate("document.title");
 chk(ready === "complete" && title === "라이블리", "② 렌더러 문서가 로드됐다", `readyState=${ready} title=${JSON.stringify(title)}`);
 
 const bridge = await evaluate("Object.keys(window.lively||{}).sort().join(',')");
-const want = ["answer", "cancel", "getState", "onLog", "onProgress", "onState", "openExternal", "run", "setAppAutoLaunch", "setGateway"].join(",");
+const want = ["answer", "cancel", "checkUpdate", "getState", "onLog", "onProgress", "onState", "openExternal",
+  "readLog", "retry", "run", "setAppAutoLaunch", "setGateway"].join(",");
 chk(bridge === want, "③ preload 브리지가 정확히 그 함수들만 노출한다", `실제=${bridge}`);
 
 const noRaw = await evaluate("typeof window.require + '/' + typeof window.ipcRenderer + '/' + typeof window.process");
@@ -101,6 +102,36 @@ chk(/형식/.test(String(err)), "⑪ 잘못된 주소는 입력칸 옆에서 알
 // 아직 설치 전이면 완료 화면은 뜨지 않는다(앱 열 때마다 "설치 끝" 이 뜨면 소음이다).
 const doneHidden = await evaluate("document.getElementById('done-card').classList.contains('hidden')");
 chk(doneHidden === true, "⑫ 설치 전엔 완료 화면이 안 뜬다", `done-card hidden=${doneHidden}`);
+
+// ── 갭 해소분 (#1541) — 새로 붙인 표면이 **실제로 그려지는지** ─────────────────
+// ⚠ 이 층이 아니면 못 잡는다: 렌더러에서 id 를 하나만 틀려도 renderState 가 TypeError 로 죽어
+//  화면 전체가 옛 상태에 굳는데, 빌드·단위테스트는 전부 초록이다.
+
+// 버전은 늘 보인다(제보할 때 첫 질문). 설치 전이라 키트는 '미설치' 여야 정직하다.
+const ver = await evaluate("document.getElementById('ver').textContent");
+chk(/앱 .+ · 키트 미설치/.test(String(ver)), "⑬ 버전 줄이 앱·키트를 따로 말한다", JSON.stringify(ver));
+
+// 점검·계정은 설치가 끝난 뒤에만 — 설치 전에 '로그아웃' 이 보이면 그건 안내가 아니라 혼란이다.
+const toolsHidden = await evaluate("document.getElementById('tools-card').classList.contains('hidden')");
+chk(toolsHidden === true, "⑭ 설치 전엔 점검·계정 카드가 안 보인다", `tools-card hidden=${toolsHidden}`);
+
+// 로그 두 축 — 노드 로그 탭으로 바꾸면 파일을 읽어 온다. 아직 노드를 안 켰으니 '없다' 고 말해야 한다
+//  (빈 문자열로 두면 사용자는 '읽기 실패' 인지 '아직 없음' 인지 못 가린다).
+await evaluate("(()=>{document.getElementById('tab-file').click(); return 1;})()");
+await sleep(700);
+const note = await evaluate("document.getElementById('filelog-note').textContent");
+chk(/아직 로그가 없습니다/.test(String(note)), "⑮ 노드 로그 탭 — 없으면 '없다'고 말한다", JSON.stringify(note));
+
+// 재시도 버튼은 실패했을 때만 — 아무 일도 안 한 지금은 숨어 있어야 한다.
+const retryHidden = await evaluate("document.getElementById('retry').classList.contains('hidden')");
+chk(retryHidden === true, "⑯ 실패 전엔 '다시 시도' 가 안 보인다", `retry hidden=${retryHidden}`);
+
+// 수동 업데이트 확인 — 개발 실행이라 '확인하지 않는다' 는 사유가 사람 문구로 떠야 한다(토큰 노출 금지).
+await evaluate("(()=>{document.getElementById('check-update').click(); return 1;})()");
+await sleep(900);
+const upd = await evaluate("document.getElementById('upd-note').textContent");
+chk(/개발|업데이트/.test(String(upd)) && !/dev-run|no-publish-config/.test(String(upd)),
+  "⑰ 업데이트 사유가 기계 토큰이 아니라 사람 문구다", JSON.stringify(upd));
 
 ws.close(); p.kill();
 try { rmSync(BOX, { recursive: true, force: true }); } catch { /* */ }
