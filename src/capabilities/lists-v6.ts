@@ -2,7 +2,7 @@
 //  네이티브 전용(외부 PM 미러 없음). scope='memory'(조직 공유). 경로 prefix=/api/ui/v6/project-lists + 프로젝트 소속은 /projects/:id/list.
 //  주의: project_list_v6(프로젝트 *목록* 조회)와 이름이 겹치지 않게, 리스트 엔티티 툴은 동사 접미사(create/update/delete/members/index)로 구분.
 import { z } from "zod";
-import { visibleListIds, canSeeProjectRow, invalidateVisibilityCache } from "../v6/visibility.js";
+import { visibleListIds, listVisible, canSeeProjectRow, invalidateVisibilityCache } from "../v6/visibility.js";
 import { syncFolderAcls } from "../v6/folder-acl-sync.js";
 import { isAdmin } from "./principal.js";
 import { HttpError, parseId } from "./rest-util.js";
@@ -69,8 +69,7 @@ async function assertProjectVisibleForMove(id: number, ctx?: CapabilityCtx): Pro
 async function assertListVisible(id: number, ctx?: CapabilityCtx): Promise<void> {
   const viewer = ctx?.viewer ?? null;
   if (viewer === null) return;
-  const ids = await visibleListIds(viewer);
-  if (ids && !ids.has(Number(id))) throw new HttpError(404, `리스트 #${id} 없음`);
+  if (!listVisible(await visibleListIds(viewer), Number(id))) throw new HttpError(404, `리스트 #${id} 없음`);
 }
 
 const projectListIndexV6: Capability = {
