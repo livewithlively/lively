@@ -6,10 +6,10 @@
 //  그래서 Electron API 의존을 main.mjs 한 파일에 가두고, 판단이 있는 코드는 전부 이쪽에 둔다.
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, existsSync as existsSyncReal } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cliCandidates, locateCli, cliShimName, cliMissingHelp, bootstrapOneLiner } from "./cli-locate.mjs";
+import { cliCandidates, locateCli, cliShimName, cliMissingHelp, bootstrapOneLiner, cliLaunchSpec } from "./cli-locate.mjs";
 import { bootstrapCommand, runBootstrap } from "./bootstrap.mjs";
 import { createNdjsonParser, runCli, reduceProgress, lastError, cliContractVerdict } from "./cli-runner.mjs";
 import { argvFor, RUN_KINDS, IPC } from "./ipc-contract.mjs";
@@ -553,6 +553,130 @@ t('D6 ★ 답한 프롬프트는 다시 뜨지 않는다(리듀서가 옛 prompt
   const seg = main.slice(main.indexOf('IPC.ANSWER'), main.indexOf('IPC.SET_GATEWAY'));
   assert.ok(/prompt:\s*null/.test(seg), '답 처리에서 progress.prompt 를 비우지 않는다');
   assert.ok(/send\(IPC\.PROGRESS/.test(seg), '비운 상태를 렌더러에 안 보내면 화면은 그대로다');
+});
+
+// ── J. 어떻게 띄우나 — Windows `.cmd` 는 그대로 spawn 하면 EINVAL (#1541 실기기) ──
+// 실측: Windows 심은 `lively.cmd` 배치인데 Node 는 CVE-2024-27980 이후 shell 없는 배치 실행을 거부한다.
+//  → 앱이 CLI 를 **한 번도** 못 불렀다(`spawn EINVAL` 반복). 스텁 spawn 단위테스트도, mac 실동작 검증도 못 본다.
+{
+  const WIN = "C:\\Users\\yoon";
+  const LV = WIN + "\\.lively";
+  const has = (...ps) => (p) => ps.includes(p);
+  const rd = (map) => (d) => map[d] || [];
+
+  t("J1 ★ Windows — 번들 런타임의 node.exe 로 lively.mjs 를 직접 띄운다(셸 미경유)", () => {
+    const spec = cliLaunchSpec({
+      platform: "win32", cliPath: LV + "\\bin\\lively.cmd", livelyDir: LV, args: ["node", "--daemon"],
+      exists: has(LV + "\\lib\\lively.mjs", LV + "\\runtime\\node-v22.11.0-win-x64\\node.exe"),
+      readdir: rd({ [LV + "\\runtime"]: ["node-v22.11.0-win-x64"] }),
+    });
+    assert.equal(spec.cmd, LV + "\\runtime\\node-v22.11.0-win-x64\\node.exe");
+    assert.deepEqual(spec.args, [LV + "\\lib\\lively.mjs", "node", "--daemon"]);
+    assert.equal(spec.shell, false, "셸을 거치면 값이 cmd.exe 파서에 들어간다");
+    assert.equal(spec.via, "runtime");
+  });
+
+  t("J2 런타임이 여럿이면 **최신**을 고른다(심의 `dir /o-n` 과 같은 규칙이라 둘이 안 갈린다)", () => {
+    const spec = cliLaunchSpec({
+      platform: "win32", cliPath: LV + "\\bin\\lively.cmd", livelyDir: LV, args: [],
+      exists: () => true,
+      readdir: rd({ [LV + "\\runtime"]: ["node-v20.1.0-win-x64", "node-v22.11.0-win-x64", "other"] }),
+    });
+    assert.match(spec.cmd, /node-v22\.11\.0-win-x64/);
+  });
+
+  t("J3 번들 런타임이 없으면 심 + shell 로 폴백한다(그래야 EINVAL 을 안 맞는다)", () => {
+    const spec = cliLaunchSpec({
+      platform: "win32", cliPath: LV + "\\bin\\lively.cmd", livelyDir: LV, args: ["status", "--json"],
+      exists: has(LV + "\\lib\\lively.mjs"), readdir: rd({}),
+    });
+    assert.equal(spec.cmd, LV + "\\bin\\lively.cmd");
+    assert.equal(spec.shell, true);
+    assert.deepEqual(spec.args, ["status", "--json"]);
+  });
+
+  t("J4 POSIX 는 종전 그대로 — 심이 셰방 스크립트라 셸이 필요 없다", () => {
+    const spec = cliLaunchSpec({
+      platform: "darwin", cliPath: "/Users/yoon/.lively/bin/lively", livelyDir: "/Users/yoon/.lively",
+      args: ["setup"], exists: () => true, readdir: rd({}),
+    });
+    assert.deepEqual(spec, { cmd: "/Users/yoon/.lively/bin/lively", args: ["setup"], shell: false, via: "shim" });
+  });
+
+  t("J5 readdir 이 throw 해도 죽지 않고 폴백한다(권한 없는 폴더 등)", () => {
+    const spec = cliLaunchSpec({
+      platform: "win32", cliPath: LV + "\\bin\\lively.cmd", livelyDir: LV, args: [],
+      exists: () => true, readdir: () => { throw new Error("EACCES"); },
+    });
+    assert.equal(spec.shell, true);
+  });
+
+  await ta("J6 ★ runCli 는 launch 스펙을 그대로 쓴다 — 찾은 경로를 다시 spawn 하지 않는다", async () => {
+    const s = stubSpawn((c) => { c.stdout.emit("data", ev({ v: 1, t: "end", ok: true })); c.emit("close", 0, null); });
+    await runCli({ cli: "IGNORED.cmd", launch: { cmd: "C:\\node.exe", args: ["C:\\lively.mjs", "status"], shell: false }, spawn: s.spawn });
+    assert.equal(s.calls[0].cli, "C:\\node.exe", "launch.cmd 가 아니라 cli 를 띄웠다");
+    assert.deepEqual(s.calls[0].args, ["C:\\lively.mjs", "status", "--json-events"]);
+    assert.equal(s.calls[0].opts.shell, false);
+  });
+
+  t("J7 못 띄운 CLI 는 '멀쩡함' 이 아니다 — 화면이 그 사실을 말해야 한다", () => {
+    const st = { cliFound: true, cliBroken: "CLI 를 실행하지 못했습니다: spawn EINVAL", loggedIn: true, kitInstalled: true };
+    assert.match(statusLabel(st), /실행할 수 없음/);
+    const setup = trayMenuModel(st).find((m) => m.id === "setup");
+    assert.ok(setup, "다시 설치로 이끄는 항목이 없다 — 사용자는 빠져나갈 길이 없다");
+    assert.match(setup.label, /다시 설치/);
+  });
+}
+
+// ── J8. ★ **진짜로 띄워 본다** — 이 층이 없어서 EINVAL 이 실기기까지 나갔다 ─────────
+// 위 J1~J7 은 전부 스텁이라 '계획' 만 본다. `.cmd` 를 Node 가 거부하는지는 **실제로 spawn 해야** 안다.
+//  그래서 여기서 심을 진짜로 만들고 진짜로 돌린다. Windows CI 에서 이 파일이 도는 게 이 케이스의 존재 이유다.
+await ta("J8 ★ 설치된 모양 그대로의 심을 실제로 실행한다(Windows 면 .cmd — EINVAL 이 나면 안 된다)", async () => {
+  const { mkdtempSync, mkdirSync: mkd, writeFileSync: wf, chmodSync: chm } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const box = mkdtempSync(join(tmpdir(), "lively-launch-"));
+  const lv = join(box, ".lively");
+  mkd(join(lv, "bin"), { recursive: true });
+  mkd(join(lv, "lib"), { recursive: true });
+  // 진짜 CLI 처럼 계약대로 한 줄 뱉는 최소 구현.
+  wf(join(lv, "lib", "lively.mjs"), 'process.stdout.write(JSON.stringify({v:1,t:"end",ok:true,code:0})+"\\n");\n');
+
+  const win = process.platform === "win32";
+  const shim = join(lv, "bin", win ? "lively.cmd" : "lively");
+  if (win) {
+    // user-install.mjs 의 CLI_SHIM_CMD 와 같은 모양(배치가 node 로 lively.mjs 를 넘긴다).
+    wf(shim, `@echo off\r\n"${process.execPath}" "${join(lv, "lib", "lively.mjs")}" %*\r\n`, "ascii");
+  } else {
+    wf(shim, `#!/bin/sh\nexec "${process.execPath}" "${join(lv, "lib", "lively.mjs")}" "$@"\n`);
+    chm(shim, 0o755);
+  }
+
+  // ① 번들 런타임이 없는 상태 → 폴백 경로(Windows 면 심 + shell). **여기가 EINVAL 이 터지던 자리다.**
+  const fb = cliLaunchSpec({ cliPath: shim, livelyDir: lv, args: ["status"], exists: (p) => existsSyncReal(p), readdir: () => [] });
+  const r1 = await runCli({ cli: shim, launch: fb, env: { ...process.env } });
+  assert.equal(r1.error, null, `폴백 경로 실행 실패: ${r1.error}`);
+  assert.equal(r1.ok, true, "심을 실제로 실행하지 못했다");
+
+  // ② 번들 런타임이 있는 상태 → 직접 경로(셸 미경유). 실제 설치가 쓰는 경로다.
+  const rtDir = join(lv, "runtime", "node-v22.0.0-test");
+  mkd(rtDir, { recursive: true });
+  const fakeNode = join(rtDir, win ? "node.exe" : "node");
+  // 번들 런타임 자리에 **진짜 node** 를 놓는다(복사 대신 심는 건 플랫폼마다 다르니 실행파일을 그대로 쓴다).
+  const spec = cliLaunchSpec({
+    cliPath: shim, livelyDir: lv, args: ["status"],
+    exists: (p) => (p === fakeNode ? true : existsSyncReal(p)),
+    readdir: (d) => (d === join(lv, "runtime") ? ["node-v22.0.0-test"] : []),
+  });
+  if (win) {
+    assert.equal(spec.via, "runtime");
+    assert.equal(spec.shell, false, "직접 경로는 셸을 거치지 않는다");
+  }
+  // 실제 실행은 **진짜 node 경로**로 바꿔 확인한다(위 fakeNode 는 존재 판정만 흉내낸 것).
+  const real = { ...spec, cmd: win ? process.execPath : spec.cmd };
+  const r2 = await runCli({ cli: shim, launch: real, env: { ...process.env } });
+  assert.equal(r2.ok, true, `직접 경로 실행 실패: ${r2.error}`);
+
+  try { (await import("node:fs")).rmSync(box, { recursive: true, force: true }); } catch { /* */ }
 });
 
 // ── K. '있다' 와 '쓸 수 있다' 는 다르다 — 구 CLI 판정 (#1541) ──────────────────

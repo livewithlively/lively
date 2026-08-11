@@ -51,11 +51,15 @@ export function createNdjsonParser(onEvent, onRaw) {
  */
 export function runCli(o) {
   const spawn = o.spawn || nodeSpawn;
-  const args = [...o.args, "--json-events"];
+  // ⚠ **무엇을 띄우나 ≠ 무엇을 찾았나.** Windows 심은 `.cmd` 라 그대로 spawn 하면 `EINVAL` 이다
+  //  (CVE-2024-27980 이후 Node 가 배치 실행을 거부한다 — 실기기에서 앱이 CLI 를 한 번도 못 불렀다).
+  //  그 판단은 cli-locate.cliLaunchSpec 이 하고 여기선 결과를 그대로 쓴다. launch 가 없으면 종전대로.
+  const launch = o.launch || { cmd: o.cli, args: o.args, shell: false };
+  const args = [...launch.args, "--json-events"];
   return new Promise((resolve) => {
     let child;
     try {
-      child = spawn(o.cli, args, { env: o.env, cwd: o.cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+      child = spawn(launch.cmd, args, { env: o.env, cwd: o.cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, shell: !!launch.shell });
     } catch (e) {
       resolve({ ok: false, code: null, signal: null, events: [], result: null, stderr: "", error: `CLI 를 실행하지 못했습니다: ${e?.message || e}` });
       return;

@@ -13,6 +13,50 @@ import { win32 as pwin, posix as pposix } from "node:path";
 export const cliShimName = (platform = process.platform) => (platform === "win32" ? "lively.cmd" : "lively");
 
 /**
+ * **어떻게 띄울 것인가** — 찾은 경로를 그대로 spawn 하면 Windows 에서 못 쓴다.
+ *
+ * ★ 실측(2026-08-11, 실기기): Windows 심은 `lively.cmd` **배치 파일**인데, Node 는 CVE-2024-27980 수정
+ *  이후 `shell` 없이 `.cmd`/`.bat` 실행을 **거부한다** → `spawn EINVAL`. 즉 앱이 CLI 를 **한 번도** 못 불렀다.
+ *  (스텁 spawn 으로 도는 단위테스트도, mac 에서 도는 실동작 검증도 이 층을 못 본다.)
+ *
+ * 해법으로 `shell: true` 를 켜면 게이트웨이 주소 같은 값이 cmd.exe 파서에 들어간다 — 이 앱의 원칙
+ *  (argv 는 메인이 만든다·값을 셸 문자열에 넣지 않는다)과 어긋난다. 그래서 **셸을 아예 안 거친다**:
+ *  심이 하는 일을 그대로 한다 — 번들 런타임 `node.exe` 로 `lib/lively.mjs` 를 직접 띄운다.
+ *  (심은 `runtime` 아래 `node-…` 폴더 중 이름 역순 첫 번째의 `node.exe` 를 골라 `lib/lively.mjs` 를 넘긴다.)
+ *
+ * 번들 런타임이 없으면(=PATH 의 node 로 깔린 PC) 마지막 수단으로 심 + shell 을 쓴다. 그 경우에도 값은
+ *  이미 ipc-contract 의 게이트웨이 검사(셸 메타문자 전량 거부)를 통과한 것만 들어간다.
+ *
+ * @param {object} o
+ * @param {string} o.cliPath      locateCli 결과(심 경로)
+ * @param {string} o.livelyDir    `<home>/.lively`
+ * @param {(p:string)=>boolean} o.exists
+ * @param {(d:string)=>string[]} o.readdir  디렉터리 나열(없으면 [] 를 돌려줄 것)
+ * @param {string} [o.platform]
+ * @returns {{cmd:string,args:string[],shell:boolean,via:"runtime"|"shim"}}
+ */
+export function cliLaunchSpec(o) {
+  const platform = o.platform || process.platform;
+  const args = Array.isArray(o.args) ? o.args : [];
+  if (platform !== "win32") return { cmd: o.cliPath, args, shell: false, via: "shim" };
+
+  const p = pwin;
+  const entry = o.livelyDir ? p.join(o.livelyDir, "lib", "lively.mjs") : "";
+  if (entry && o.exists(entry)) {
+    // 번들 런타임 중 **최신**을 고른다 — 심의 `dir /b /ad /o-n`(이름 역순)과 같은 규칙이라 둘이 안 갈린다.
+    let names = [];
+    try { names = o.readdir(p.join(o.livelyDir, "runtime")) || []; } catch { names = []; }
+    const dirs = names.filter((n) => /^node-/.test(n)).sort().reverse();
+    for (const d of dirs) {
+      const node = p.join(o.livelyDir, "runtime", d, "node.exe");
+      if (o.exists(node)) return { cmd: node, args: [entry, ...args], shell: false, via: "runtime" };
+    }
+  }
+  // 폴백 — 심을 셸로 띄운다(그 자체가 `.cmd` 라 shell 없이는 EINVAL 이다).
+  return { cmd: o.cliPath, args, shell: true, via: "shim" };
+}
+
+/**
  * 실행파일 후보 — **앞이 우선**. 존재 확인은 호출자가 한다(순수 유지).
  *
  * `LIVELY_CLI` 가 있으면 그것만 본다: 개발·테스트가 특정 빌드를 정확히 지목할 수 있어야 하고,
