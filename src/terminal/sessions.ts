@@ -25,7 +25,7 @@ import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSe
 import { memberMkdir } from "./terminal-member-fs.js";
 import { materializeMemberGit, ensureGitSafeDirectory } from "../org/credentials/git-credential-materialize.js";
 import { ROOTS, SHARED_ROOT, HARNESSES, PANE_LOCALE, modeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput } from "./catalog.js";
-import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir } from "./tmux-exec.js";
+import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson } from "./tmux-exec.js";
 import {
   sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
   paneAwaitingInput, parseReportedPhase, isPhaseFresh, resolveAgentPhase,
@@ -38,11 +38,11 @@ const ID_RE = SESSION_ID_RE;   // 세션 id 형식의 단일 진실원천 — �
 const SAFE_VALUE_RE = /^[A-Za-z0-9][A-Za-z0-9._\-:/]*$/;
 const cleanLabel = (s: string): string => (s || "").replace(/[\t\n\r]/g, " ").trim().slice(0, 80);
 
-// @box_invites(JSON 문자열) → 멤버 id 배열. 깨진 값·구버전 메타는 빈 배열(=비공개로 안전 폴백).
+// @box_invites → 멤버 id 배열. 깨진 값·구버전 메타는 빈 배열(=비공개로 안전 폴백).
+//  값 표현은 decodeOptJson 이 흡수한다(신=base64 · 구=평문 JSON — #1541 psmux 따옴표 소실 대응).
 function parseInvites(raw: string): string[] {
-  if (!raw) return [];
-  try { const a = JSON.parse(raw); return Array.isArray(a) ? a.filter((x): x is string => typeof x === "string") : []; }
-  catch { return []; }
+  const a = decodeOptJson<unknown>(raw, []);
+  return Array.isArray(a) ? a.filter((x): x is string => typeof x === "string") : [];
 }
 // 초대 멤버 검증 — 실제 구성원 id 만, 소유자 제외, 중복 제거(위조·중복 초대 차단).
 async function validInvites(ids: unknown, ownerUid: string): Promise<string[]> {
@@ -177,8 +177,8 @@ async function collectSessions(me: string | null): Promise<SessionInfo[]> {
   await Promise.all(needScrape.map(async (r) => { if (await paneAwaitingInput(r.name)) waitingIds.add(r.name); }));
   const sessions: SessionInfo[] = [];
   for (const r of rows) {
-    let flags: Record<string, string> = {};
-    try { if (r.flagsRaw) flags = JSON.parse(r.flagsRaw) as Record<string, string>; } catch { /* 구버전 세션 — 플래그 메타 없음 */ }
+    // 적용 플래그 메타 — 신=base64 · 구=평문 JSON, 못 읽으면 빈 객체(구버전 세션) (#1541)
+    const flags = decodeOptJson<Record<string, string>>(r.flagsRaw, {} as Record<string, string>);
     // 온라인/오프라인 판정 = **지금 브라우저 탭에 열려 있나**(attached). 상민님 확정(2026-07-23):
     //  "나·누군가의 PC 어딘가에 탭으로 열려 있는 세션만 온라인, 나머지는 다 오프라인(회색)".
     //  attached 는 그 뜻을 정확히 준다 — 탭이 WS 로 tmux 클라이언트를 붙이고(terminal-pty), 탭을 닫으면
@@ -383,8 +383,8 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   await tmux(["set-option", "-t", id, "@box_harness", harness.key]);
   await tmux(["set-option", "-t", id, "@box_dir", target]);
   await tmux(["set-option", "-t", id, "@box_auto", input.autoApprove ? "1" : "0"]);
-  await tmux(["set-option", "-t", id, "@box_flags", JSON.stringify(appliedFlags)]);
-  await tmux(["set-option", "-t", id, "@box_invites", JSON.stringify(invites)]);
+  await tmux(["set-option", "-t", id, "@box_flags", encodeOptJson(appliedFlags)]);
+  await tmux(["set-option", "-t", id, "@box_invites", encodeOptJson(invites)]);
   // 프로젝트 세션엔 프로젝트 id 를 박아둔다 — listSessions 의 projectId(프론트 세션 귀속·카운트) + 작업 타임라인 귀속용.
   //  (#452 이후 입장 게이트 canAttach 는 멤버십을 안 봄 — 이 id 는 표시·귀속 목적으로만 남는다.)
   if (input.projectId) {
@@ -483,7 +483,7 @@ export async function editSession(user: LivelyUser, id: string, patch: { label?:
   }
   if (patch.invites !== undefined) {
     const invites = await validInvites(patch.invites, ownerId(user));
-    await tmux(["set-option", "-t", id, "@box_invites", JSON.stringify(invites)]);
+    await tmux(["set-option", "-t", id, "@box_invites", encodeOptJson(invites)]);
     mirror.invites = invites;
   }
   // desired-state 미러도 갱신(#1059 E) — 재부팅 후 복원본이 새 라벨·초대를 반영하도록. best-effort.
@@ -496,7 +496,7 @@ export async function editSession(user: LivelyUser, id: string, patch: { label?:
 export async function applyValidatedInvites(user: LivelyUser, id: string, invites: unknown): Promise<void> {
   await assertManage(user, id);
   const clean = Array.isArray(invites) ? invites.filter((x): x is string => typeof x === "string" && x !== ownerId(user)) : [];
-  await tmux(["set-option", "-t", id, "@box_invites", JSON.stringify(clean)]);
+  await tmux(["set-option", "-t", id, "@box_invites", encodeOptJson(clean)]);
 }
 
 // (#869) 노드 세션 생성 전에 게이트웨이 라우트가 초대 후보를 검증할 수 있게 공개(구성원 실재·소유자 제외·중복 제거).

@@ -18,6 +18,7 @@ import { registerTerminal } from "../terminal/routes.js";
 import { liveAttachCount, scanAttachProcs } from "../terminal/terminal-pty.js";
 import { selfPtmxFdCount } from "../terminal/host-pty.js";
 import { setupNodeUpgrade } from "../node/registry.js";
+import { setupPreviewWsUpgrade } from "../preview/ws-proxy.js";
 import { startTaskScheduler } from "../node/task-scheduler.js";
 import { backfillMarkerSync, backfillSharedGroupWrite } from "../project/project-fs.js";
 import { startScheduler } from "../scheduler/index.js";
@@ -67,6 +68,10 @@ export const LISTEN_STEPS: BootStep[] = [
   { name: "terminal-proxy", gate: "always", run: ({ app, server, verifier }) => registerTerminal(app, server, verifier) },
   // 분산 노드(#869) — 노드 에이전트의 아웃바운드 WSS(/node/ws) 수신. 노드는 포트를 열지 않는다(단일 정문 유지).
   { name: "node-upgrade", gate: "always", run: ({ server }) => setupNodeUpgrade(server) },
+  // 프리뷰 WS 중계(#1541) — `/preview/<id>/…` 업그레이드를 그 환경으로 넘긴다. 업그레이드는 Express 를 통과하지
+  //  않으므로 preview/routes.ts(라우트 핸들러)로는 원리적으로 못 받는다 → 프리뷰에서 웹터미널·노드 채널이
+  //  **아무 응답 없이** 핸드셰이크 타임아웃 나던 자리. 위 두 핸들러 뒤에 둔다(shared-proxy 재-emit 이 그것들을 탄다).
+  { name: "preview-ws", gate: "always", run: ({ server }) => setupPreviewWsUpgrade(server) },
 ];
 
 // ── DB 부팅 직렬 체인(ITEMS_DATABASE_URL 필요) — 종전 .then 체인과 동일 순서. 스텝 하나가 throw 하면

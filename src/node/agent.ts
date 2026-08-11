@@ -20,7 +20,7 @@ import { attachSession, killAttachedPtys, type AttachSocket } from "../terminal/
 import { sessionPrompts } from "../terminal/terminal-transcript.js";
 import type { LivelyUser } from "../context.js";
 import {
-  NODE_WS_PATH, PROTO_VER, NODE_OPS, encodeChanFrame, decodeChanFrame, parseMsg,
+  nodeWsUrl, PROTO_VER, NODE_OPS, encodeChanFrame, decodeChanFrame, parseMsg,
   type GwToNodeMsg, type NodeToGwMsg, type ReqMsg,
 } from "./protocol.js";
 // 위탁 태스크(P2) — 러너/리소스 샘플러는 중앙(게이트웨이 내장 노드)과 공유(node/tasks.ts).
@@ -51,14 +51,6 @@ if (!GW_URL || !TOKEN) {
 const STATE_PUSH_MS = 3_000;
 const BACKOFF_MIN_MS = 1_000;
 const BACKOFF_MAX_MS = 30_000;
-
-function wsUrl(base: string): string {
-  const u = new URL(base);
-  u.protocol = u.protocol === "http:" ? "ws:" : u.protocol === "https:" ? "wss:" : u.protocol;
-  u.pathname = NODE_WS_PATH;
-  u.search = "";
-  return u.toString();
-}
 
 // ── attach 채널 어댑터 — 게이트웨이행 단일 WSS 위의 가상 채널을 AttachSocket 으로 위장해
 //    terminal-pty.attachSession(tmux -CC · 큐잉 · 정리)을 그대로 재사용한다. ──
@@ -249,7 +241,7 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
 
 let attempt = 0;
 function connect(): void {
-  const url = wsUrl(GW_URL);
+  const url = nodeWsUrl(GW_URL);
   const ws = new WebSocket(url, { headers: { Authorization: `Bearer ${TOKEN}` }, handshakeTimeout: 10_000 });
   const chans = new Map<number, ChanSocket>();
   let pusher: NodeJS.Timeout | null = null;

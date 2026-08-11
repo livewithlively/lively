@@ -34,6 +34,31 @@ export async function getOpt(name: string, opt: string): Promise<string> {
   try { return (await tmux(["show-options", "-t", name, "-v", opt])).trim(); } catch { return ""; }
 }
 
+// ── 구조값(JSON)을 user option 에 싣는 단일 통로 (#1541) ──────────────────────
+// **왜 평문 JSON 을 그대로 안 쓰나** — Windows 네이티브 노드가 쓰는 멀티플렉서(psmux)는 옵션 값에서
+//  따옴표를 벗긴다. 실측(psmux 3.3.7, Windows Server 2022):
+//     보냄 {"readonly":true} → 받음 {readonly:true}   ·   보냄 ["yoon","jang"] → 받음 [yoon,jang]
+//  그 값은 JSON.parse 가 안 되므로 세션 플래그·초대 목록이 통째로 유실된다(초대 유실 = 접근이 조용히
+//  비공개로 떨어진다 — 보안 방향으로는 안전하지만 기능은 죽는다). tmux 는 안 벗기지만, **같은 게이트웨이
+//  코드가 두 구현을 모두 상대**하므로 양쪽에서 무손실인 표현으로 통일한다.
+//  base64 는 같은 실측에서 왕복 무손실이었다(백슬래시·한글·`$`·`#{}`·`;`·`=` 도 안전, 따옴표·탭만 소실).
+export function encodeOptJson(value: unknown): string {
+  return Buffer.from(JSON.stringify(value), "utf8").toString("base64");
+}
+// 읽기는 **구·신 둘 다** 받는다. 이미 떠 있는 세션엔 평문 JSON 이 들어 있고, 그 세션들은 재생성 없이
+//  계속 살아야 한다(tmux 서버는 게이트웨이보다 오래 산다 — 배포로 세션을 잃게 만들면 안 된다).
+//  판별은 첫 글자로 한다: base64 알파벳엔 `{`·`[` 가 없으므로 그 둘로 시작하면 레거시 평문이 확실하다.
+//  ⚠ 따옴표가 벗겨진 값(`{readonly:true}`)도 `{` 로 시작해 평문 경로로 가고, 거기서 JSON.parse 가 실패해
+//   fallback 으로 떨어진다 — 즉 psmux 에 쓰인 옛 값도 '조용한 오독' 없이 안전하게 기본값이 된다.
+export function decodeOptJson<T>(raw: string, fallback: T): T {
+  const s = (raw || "").trim();
+  if (!s) return fallback;
+  try {
+    const text = (s[0] === "{" || s[0] === "[") ? s : Buffer.from(s, "base64").toString("utf8");
+    return JSON.parse(text) as T;
+  } catch { return fallback; }
+}
+
 const ID_RE = SESSION_ID_RE;   // 세션 id 형식의 단일 진실원천 — 게이트웨이가 헤더로 받은 세션도 같은 자로 잰다(#852)
 
 // 단일 tmux 호출로 모든 box-* 세션 + @box_* 메타를 읽는다(#{@user-option} 포맷 지원).

@@ -29,7 +29,8 @@ function apiUrl(path: string): string {
 //  대상이 fetch 가 아니라 내비게이션이라 이름을 갈라 둔다(호출부에서 무엇을 하려는지 읽히도록).
 //  없을 때의 증상: 프리뷰에서 새 웹터미널을 열면 `/ui/terminal.html?…` 이 **오리진 루트**로 해소돼
 //  라이브 게이트웨이 탭이 뜨고 프리뷰가 풀렸다.
-//  ⚠ WS(`/terminal/ws`)에는 붙이지 않는다 — PTY 세션 실체는 본체에 있고 프리뷰 라우트는 upgrade 를 처리하지 않는다.
+//  WS(`/terminal/ws`)도 같은 규칙을 탄다(standalone/terminal.ts) — 프리뷰가 upgrade 를 중계하게 된 뒤로는
+//  티켓·WS·노드 레지스트리가 **한 프로세스**에 모여야 하기 때문이다(preview/ws-proxy.ts 머리말 참조).
 function appUrl(path: string): string {
   return apiUrl(path);
 }
