@@ -18,7 +18,7 @@ import {
   wkTrackEditor,
 } from './wiki-data.js';
 import { KN_INDEXED, createWikiSide, knApplySideW, knSideResizeHandle, wireSideCollapse } from './wiki-side.js';
-import { wkMarkRead, wkRecordVisit, wkTick } from './wiki-ui.js';
+import { wkMarkRead, wkRecordVisit, wkStamp, wkTick } from './wiki-ui.js';
 import { openKnHistory } from './wiki-history.js';   // #1546 변경 이력 패널(속성 줄의 '갱신 …'에서 연다)
 
 // 시딩 지식 편집 경고(#846) — 저장 응답에 seed_warning 이 오면(서버가 canonical 게이트웨이에서만 실어
@@ -339,7 +339,9 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
     // #1546 갱신 시각 = 변경 이력 진입점. 이 문서가 '언제 바뀌었나'를 이미 말하고 있는 자리라, 누르면
     //  '무엇이 바뀌었나'로 이어지는 게 자연스럽다(별도 버튼을 속성 줄에 하나 더 늘리지 않는다).
     if (k.updated_at) {
-      parts.push(proplineItem('갱신 ' + relTime(k.updated_at), {
+      // #1600 절대 시각 — 목록·카드가 전부 '8월 11일 15:53' 로 말하는데 여기만 '21분 전'이면 같은 사실이
+      //  화면마다 다른 언어로 보인다. 상대 시각은 title(툴팁)이 아니라 아예 안 쓴다(정확한 날짜가 본문이다).
+      parts.push(proplineItem('갱신 ' + wkStamp(k.updated_at), {
         cls: 'time',
         title: absTime(k.updated_at) + (k.updated_by ? ' · ' + k.updated_by : '') + ' — 클릭해서 변경 이력 보기',
         click: () => openKnHistory(k.name, {
