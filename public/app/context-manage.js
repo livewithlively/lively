@@ -4,6 +4,7 @@
 //  아니라 **쌓인 것을 처리하러** 온다. 설정 화면을 먼저 보여 주면 매번 한 번 더 눌러야 한다.
 import { api, cardHead, el, fmtNum, relTime, toast, uiText } from './core.js';
 import { confirmDialog } from './admin.js';
+import { stageJobCard } from './context-stage-job.js'; // 단계 공용 '언제 도나' 카드(#1618)
 let editingKey = null;
 let creating = false;
 let findingFilter = { kind: '', severity: '' };
@@ -203,6 +204,23 @@ export async function renderManagers(host) {
         add.addEventListener('click', () => { creating = true; editingKey = null; reload(); });
         body.append(el('div', { class: 'ctx-actions' }, add));
     }
+    // 실행 잡(#1618) — 이 카드가 없던 게 이 화면의 가장 비싼 결함이었다. 관리기를 켜면 위 '종류별 현황'에
+    //  초록 점이 켜지고, 사람은 그걸 '돈다'로 읽는다. 실제로는 run_managers 잡이 없으면 아무것도 안 돈다.
+    //  dev 게이트웨이가 그 상태로 8일을 보냈다(관리기 3개 켜짐 · 발견 118건 동결). 하필 그 셋(어긋남·
+    //  아웃데이티드·사라진 경로)은 결정적 판정이라 **비용 0으로 돌 수 있는 것**이었다.
+    body.append(await stageJobCard({
+        stage: '관리',
+        actions: ['run_managers'],
+        create: {
+            id: 'run-managers', label: '관리기 실행 (지식 유지보수)', action: 'run_managers', params: {},
+            interval_sec: 21600,
+            note: '켜진 관리기를 순서대로 실행. 어긋남·아웃데이티드·사라진 경로는 계산만으로 판정하고(비용 0), 모순·코드괴리는 후보를 좁혀 AI 에 접수한다.',
+        },
+        missingLine: '관리 자동 실행이 없습니다 — 관리기를 켜 두어도 아무것도 찾지 않습니다.',
+        // usesAi 를 세우지 않는다: 기본 3종(어긋남·아웃데이티드·사라진 경로)은 결정적 SQL 이라 의뢰자가
+        //  필요 없다. 모순·코드괴리를 켠 조직만 의뢰자가 필요한데, 그건 그 관리기를 켤 때 안내한다
+        //  (여기서 전제로 못 박으면 비용 0인 3종만 쓰는 조직에게 없는 장벽을 세우게 된다).
+    }, reload));
     host.replaceChildren(body);
 }
 const ACTION_LABEL = {
