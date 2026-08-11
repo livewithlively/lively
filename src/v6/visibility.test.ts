@@ -2,7 +2,7 @@
 //  SQL 을 실제로 돌려보는 검증은 visibility.pg-test.mjs 가 한다(실 Postgres 필요 — CI PG 잡/운영 박스).
 //  여기서는 DB 없이 잡을 수 있는 것만 본다: 술어 조립의 세 갈래와 열람 신원 정규화.
 //  이 둘이 조용히 뒤집히면 결과가 **전원 공개**(잠금 무력화)거나 **전원 차단**(장애)이라, 값싼 가드를 깔아둔다.
-import { listIdPredicate } from "./visibility.js";
+import { listIdPredicate, listVisible } from "./visibility.js";
 import { viewerOf } from "../capabilities/principal.js";
 
 let pass = 0, fail = 0;
@@ -69,6 +69,19 @@ chk("일반 멤버는 자기 id 로 필터", viewerOf({ userId: "yoon", scopes: 
 chk("신원 객체가 없으면 특권(내부 경로)", viewerOf(undefined) === null);
 chk("userId 가 비면 특권(빈 문자열로 필터 금지)", viewerOf({ userId: "", scopes: ["items"] }) === null);
 chk("scopes 부재에도 크래시 없이 그 멤버로", viewerOf({ userId: "kim" }) === "kim");
+
+// ── ⑪ 단건 판정 — null(필터 없음)을 '전부 불가시'로 뒤집지 않는다(#1614) ──
+//  visibleListIds 는 특권·**축 꺼짐**에 null 을 돌려준다. 그 뜻을 뒤집으면 프로젝트 축을 끈 조직에서 list_id 를
+//  지정한 프로젝트 생성이 전부 400 이 된다 — 있는 리스트를 "없습니다"라고 답해 원인조차 안 보였던 실제 사고다.
+//  ①의 특권 케이스와 같은 규칙이지만 여기서 따로 고정한다: 다행(SQL)과 단건(Set)은 호출부가 달라 함께 안 깨진다.
+{
+  chk("null(축 꺼짐·특권) — 어떤 리스트도 보인다", listVisible(null, 10) && listVisible(null, 999));
+  chk("가시 집합에 든 리스트는 보인다", listVisible(new Set([10, 20]), 10));
+  chk("가시 집합에 없는 리스트는 안 보인다", !listVisible(new Set([10, 20]), 30));
+  chk("빈 집합(아무것도 못 보는 사람) — 어떤 리스트도 안 보인다", !listVisible(new Set<number>(), 10));
+  // REST 는 파라미터를 문자열로 실어 온다 — Set.has 는 타입이 엄격해 대조 전에 숫자로 맞춰야 한다.
+  chk("문자열 id 도 숫자로 대조", listVisible(new Set([10]), "10" as unknown as number));
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
