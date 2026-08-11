@@ -779,7 +779,7 @@ function pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDele
       if (taskCtx && taskCtx.invalidate) taskCtx.invalidate(indentParent.id);
       toast('“' + (indentParent.name || '위 프로젝트') + '” 에 태스크를 추가했습니다');
       pjvReloadKeepScroll(reload);
-    } catch (err) { toast('태스크 추가 실패 — ' + err.message, true); input.disabled = false; busyTask = false; }
+    } catch (err) { toast('태스크 추가 실패 — ' + err.message, true); input.disabled = false; busyTask = false; input.focus(); }   // focus 는 실패 후 blur 자동커밋 재진입을 막는다(아래 commit 의 catch 주석)
   };
   // Enter / 바깥클릭(blur) → **설정 팝업 없이 바로 생성**(#1067). 프리필(이름 + 그룹 상태 + 인라인 드래프트[팀원·마감·우선순위])
   //  대로 만들고, 태스크 추가행(pjvAddRow)과 똑같이 새 행을 그 자리에 끼운 뒤 입력을 열어 둬(keepOpen) 다음 프로젝트를
@@ -817,7 +817,15 @@ function pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDele
       input.value = ''; input.disabled = false; busy = false;
       draft.memberIds = []; draft.due_date = draft.priority = null; paintDateCells();
       if (keepOpen) input.focus(); else collapse();
-    } catch (err) { toast('프로젝트 생성 실패 — ' + (err.message || err), true); input.disabled = false; busy = false; }
+    } catch (err) {
+      // ⚠ 실패해도 **포커스를 입력칸에 돌려준다**(#1614). 위 `input.disabled = true` 가 그 순간 blur 를 띄워
+      //  아래 바깥클릭 핸들러의 130ms 자동커밋이 이미 예약돼 있는데, 그 전에 busy 가 풀리면(로컬 400 은 수 ms 다)
+      //  같은 이름으로 **한 번 더 커밋**돼 실패 토스트가 두 번 뜬다 — 신고된 화면이 정확히 그 모습이었다.
+      //  포커스가 행 안에 있으면 그 콜백은 `row.contains(activeElement)` 가드에 걸려 멈춘다. 성공 경로가
+      //  keepOpen 에서 focus() 로 이미 막고 있던 것을, 실패 경로에도 똑같이 둔다(고친 이름을 바로 잇는 이점도 같다).
+      toast('프로젝트 생성 실패 — ' + (err.message || err), true);
+      input.disabled = false; busy = false; input.focus();
+    }
   };
   // 바깥클릭 — 드래프트 셀 팝오버가 열려 있거나 행 내부 포커스면 보류. 이름 있으면 생성(접기), 없으면 접기.
   //  ⚠ 팀원·마감·우선순위 팝오버는 `.pjv-pop` 이 아니라 `.pjv-menu`(마감=`.pjv-date-pop`) 를 쓴다 — `.pjv-pop` 만

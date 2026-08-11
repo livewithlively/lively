@@ -156,6 +156,18 @@ export function listIdPredicate(col: string, ids: Set<number> | null): string {
 }
 
 /**
+ * 이 리스트가 가시 집합에 드나 — **단건 판정의 SoT**(다행 쿼리는 위 listIdPredicate).
+ *  ⚠ `ids === null` 은 '아무것도 안 보인다'가 아니라 **'필터 없음'**(특권·축 꺼짐 = 종전대로 전원 공개)이다.
+ *   뜻이 정반대라 호출부에서 `!ids?.has(id)` 로 줄여 쓰면 null 에서 `undefined` 가 나와 **전부 불가시**로 뒤집힌다.
+ *   실제로 #1614 가 그 축약이었다 — 프로젝트 축을 끈 조직에서 list_id 를 지정한 프로젝트 생성이 **전부** 400
+ *   ("리스트(영역) #N 가 없습니다")이 됐다. 있는 리스트를 없다고 답하니 원인도 안 보였다.
+ *   그래서 판정을 함수로 고정한다 — 축약을 쓸 자리를 없애는 것이 이 함수의 존재 이유다.
+ */
+export function listVisible(ids: Set<number> | null, listId: number): boolean {
+  return ids === null || ids.has(Number(listId));
+}
+
+/**
  * 프로젝트 행(project 테이블) 1건이 이 뷰어에게 보이나.
  *  ⚠ task/subtask 행은 자기 list_id 를 쓰지 않는다(createTask 가 그 컬럼을 채우지 않아 사실상 항상 NULL).
  *   그래서 "list_id NULL = 전원 열람" 규칙을 태스크에 그대로 적용하면 잠긴 프로젝트의 태스크가 전부 새어나간다.
@@ -166,8 +178,7 @@ export async function canSeeProjectRow(id: number, viewer: Viewer): Promise<bool
   const listId = await projectRowListId(id);
   if (listId === undefined) return true;   // 그런 행이 없다 — 존재 판정은 호출부(404)의 몫
   if (listId === null) return true;        // 미분류 프로젝트 = 전원
-  const ids = await visibleListIds(viewer);
-  return ids === null || ids.has(listId);
+  return listVisible(await visibleListIds(viewer), listId);
 }
 
 /** 프로젝트/태스크/서브태스크 행이 속한 **프로젝트의** list_id. 행이 없으면 undefined. */
