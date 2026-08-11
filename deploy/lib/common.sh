@@ -99,6 +99,7 @@ run_as_service() {
 render_service_unit() {
   local svc_user="${SERVICE_USER:-$(id -un)}"
   local svc_home; svc_home="$(getent passwd "$svc_user" 2>/dev/null | cut -d: -f6)"; svc_home="${svc_home:-$HOME}"
+  require_cmd node   # set -e 에서 `$(command -v node)` 는 미설치 시 무언 exit(빈 ExecStart 유닛). 명시적 die 로 조기 차단.
   local node_bin node_dir; node_bin="$(command -v node)"; node_dir="$(dirname "$node_bin")"
   # 게이트웨이(비-운영자 lively)가 런타임에 '쓰는' 디렉토리는 서비스유저 소유여야 한다 — logs(systemd append) +
   #  data(노션 자산 등 fs 쓰기: 게이트웨이 cwd=APP_DIR 이라 asset_dir 기본값 = $APP_DIR/data/notion-assets). APP_DIR 본체를
@@ -139,6 +140,68 @@ render_service_unit() {
       ok "launchd plist 렌더: $plist"
       ;;
   esac
+}
+
+# ── blue-green 템플릿 유닛(lively-gateway@.service) 렌더·설치 — deploy-release.sh 가 부른다(Linux/systemd 전용). ──
+#  render_service_unit(단일 유닛)의 blue-green 판. 인스턴스(%i=color)·WorkingDirectory·per-color EnvironmentFile 로
+#  두 color 가 각자의 릴리스·포트를 물게 한다. '파일 렌더 + daemon-reload'만 — enable/start/stop 은 호출자(deploy-release).
+#  멱등: 매 배포 재렌더(템플릿·PATH·node 경로 변경 전파). LIVELY_ROOT 는 caller env(기본 /opt/lively).
+render_bluegreen_unit() {
+  [ "$(detect_os)" = linux ] || die "blue-green 유닛은 Linux/systemd 전용입니다"
+  local root="${LIVELY_ROOT:-/opt/lively}"
+  # ⚠ SERVICE_USER 폴백(id -un) 금지 — silent 실행자 드리프트가 게이트웨이 유저를 운영자/root 로 바꿔 ~/.claude 인증·
+  #  소유권을 무너뜨린 이력(#4). 현재 호출자(deploy-release·migrate)는 모두 export 하지만, 미래 호출자가 안 하면
+  #  조용히 실행자 유닛이 렌더되므로 함수 자체가 불변식을 강제한다(알 수 없으면 폴백 말고 die).
+  [ -n "${SERVICE_USER:-}" ] || die "render_bluegreen_unit: SERVICE_USER 미설정 — 호출자가 서비스 유저를 export 해야 합니다(silent 실행자 드리프트 금지)."
+  local svc_user="$SERVICE_USER"
+  local svc_home; svc_home="$(getent passwd "$svc_user" 2>/dev/null | cut -d: -f6)"; svc_home="${svc_home:-$HOME}"
+  require_cmd node   # set -e 에서 `$(command -v node)` 는 미설치 시 무언 exit(빈 ExecStart 유닛). 명시적 die 로 조기 차단.
+  local node_bin node_dir; node_bin="$(command -v node)"; node_dir="$(dirname "$node_bin")"
+  # 게이트웨이가 런타임에 '쓰는' 공유 디렉토리는 서비스유저 소유 — render_service_unit 과 동일 원칙·동일 멱등성.
+  #  logs: 유닛이 append: 로 쓴다.  shared/data: 릴리스 안 data 심볼릭의 실체(노션 자산 등 fs 쓰기).
+  #  ⚠ data 도 매 배포 재적용해야 한다 — migrate 가 흡수 시 한 번 chown 하지만, 그 뒤 운영자가 root 로 파일을
+  #   떨구면(복원·수기 이관) 게이트웨이가 그 하위에 못 써서 조용히 실패한다. 단일 유닛 쪽 불변식과 같은 이유.
+  sudo mkdir -p "$root/logs" "$root/shared/data"
+  sudo chown -R "$svc_user" "$root/logs" "$root/shared/data" 2>/dev/null || true
+  # MemoryHigh 소프트 상한(#1059 B) — 단일 유닛과 동일 규칙(GATEWAY_MEMORY_HIGH_MB 양의 정수일 때만, 비면 무제한).
+  local mem_high_line=""
+  if [ -n "${GATEWAY_MEMORY_HIGH_MB:-}" ] && printf '%s' "${GATEWAY_MEMORY_HIGH_MB}" | grep -qE '^[0-9]+$' && [ "${GATEWAY_MEMORY_HIGH_MB}" -gt 0 ]; then
+    mem_high_line="MemoryHigh=${GATEWAY_MEMORY_HIGH_MB}M"
+  fi
+  local unit="/etc/systemd/system/lively-gateway@.service"
+  sed -e "s#@LIVELY_ROOT@#$root#g" \
+      -e "s#@APP_USER@#$svc_user#g" \
+      -e "s#@NODE_BIN@#$node_bin#g" \
+      -e "s#@MEMORY_HIGH_LINE@#$mem_high_line#g" \
+      -e "s#@PATH@#$node_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$svc_home/.npm-global/bin#g" \
+      "$DEPLOY_DIR/linux/lively-gateway@.service" | sudo tee "$unit" >/dev/null
+  sudo systemctl daemon-reload
+  ok "systemd 템플릿 유닛 렌더: $unit (User=$svc_user${mem_high_line:+, $mem_high_line})"
+  ensure_journal_read_access "$svc_user"   # earlyoom kill 관측(단일 유닛과 동일) — svc_user 확정 + 재기동 전, 여기가 옳은 자리.
+}
+
+# ── loopback alias forwarder(:8080 → active color) 렌더 — deploy-release 가 flip 마다 부른다(Linux/systemd 전용). ──
+#  migrate 는 의도적으로 안 부른다(흡수 직후엔 구 단일유닛이 아직 :8080 을 물어 socket bind 충돌 — migrate 주석 참조).
+#  8080 은 blue-green flip pool 에서 빠져(blue:8081|green:8082) 세션 클라 핀(~/.lively/gateway-url=http://localhost:8080)
+#  전용 안정 진입점이 됐다(2026-08-03 flip 이 세션 핀을 죽여 전 세션 재연결 실패). socket 은
+#  상시 listen(sockets.target), service(systemd-socket-proxyd L4 프록시)만 flip 마다 새 active 포트로 재렌더·restart.
+#  render_bluegreen_unit 과 동일 규약: '파일 렌더 + daemon-reload'만 — enable/start/restart 는 호출자가(순단 최소).
+render_loopback_forwarder() {
+  [ "$(detect_os)" = linux ] || die "loopback forwarder 는 Linux/systemd 전용입니다"
+  local active_port="${1:?render_loopback_forwarder: active_port 인자 필요}"
+  printf '%s' "$active_port" | grep -qE '^[0-9]+$' || die "render_loopback_forwarder: active_port 는 정수여야 합니다: $active_port"
+  # systemd-socket-proxyd 바이너리 탐지 — 배포판별 위치(/lib vs /usr/lib). 둘 다 없으면 die(systemd 내장이라 통상 존재).
+  local proxyd_bin=""
+  if [ -x /lib/systemd/systemd-socket-proxyd ]; then proxyd_bin=/lib/systemd/systemd-socket-proxyd
+  elif [ -x /usr/lib/systemd/systemd-socket-proxyd ]; then proxyd_bin=/usr/lib/systemd/systemd-socket-proxyd
+  else die "systemd-socket-proxyd 미설치 — loopback forwarder 를 렌더할 수 없습니다(/lib·/usr/lib/systemd 둘 다 없음)."; fi
+  # socket 유닛은 무치환 그대로 복사(ListenStream 고정 :8080), service 유닛만 sed 로 @ACTIVE_PORT@·@PROXYD_BIN@ 치환.
+  sudo tee /etc/systemd/system/lively-loopback.socket < "$DEPLOY_DIR/linux/lively-loopback.socket" >/dev/null
+  sed -e "s#@ACTIVE_PORT@#$active_port#g" \
+      -e "s#@PROXYD_BIN@#$proxyd_bin#g" \
+      "$DEPLOY_DIR/linux/lively-loopback.service" | sudo tee /etc/systemd/system/lively-loopback.service >/dev/null
+  sudo systemctl daemon-reload
+  ok "loopback forwarder 렌더: :8080 → active :$active_port"
 }
 
 # ── 호스트 메모리 안전장치 (#1059 OOM 재발방지) — install·update 공유(단일 소스, render_service_unit 패턴). ──
