@@ -1,7 +1,7 @@
 // 순수 단위 체크(node:assert) — 구성원 격리(#524) drop-priv 래핑·모드 게이트.
 // 실행: npm run build && node dist/terminal/terminal-isolation.test.js
 import assert from "node:assert/strict";
-import { osUsername, wrapAsMember, cgspawnArgv, cgroupInfraReady, isolationEnabled, BOX_SPAWN, BOX_CGSPAWN, OS_USER_PREFIX } from "./terminal-isolation.js";
+import { osUsername, wrapAsMember, cgspawnArgv, sessionSpawnArgv, cgroupInfraReady, isolationEnabled, BOX_SPAWN, BOX_CGSPAWN, OS_USER_PREFIX } from "./terminal-isolation.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -93,6 +93,63 @@ t("isolationEnabled: 기본 활성(secure-by-default), 오직 =off 만 하드 �
   assert.equal(isolationEnabled(), false);       // 하드 킬스위치
   if (prev === undefined) delete process.env.LIVELY_MEMBER_ISOLATION;
   else process.env.LIVELY_MEMBER_ISOLATION = prev;
+});
+
+// ── 세션 spawn 훅(LIVELY_SESSION_SPAWN) ──────────────────────────────────────
+// 세션을 어디에 담아 띄울지 배포자가 갈아끼우는 확장점. 기본(미설정)에서는 **아무것도 바뀌지 않아야** 한다.
+
+const withHook = (path: string, fn: () => void): void => {
+  const prev = process.env.LIVELY_SESSION_SPAWN;
+  process.env.LIVELY_SESSION_SPAWN = path;
+  try { fn(); } finally {
+    if (prev === undefined) delete process.env.LIVELY_SESSION_SPAWN;
+    else process.env.LIVELY_SESSION_SPAWN = prev;
+  }
+};
+
+t("★ 미설정이면 기존 동작 그대로 — 이 훅은 기본 배포에 영향이 없어야 한다", () => {
+  assert.deepEqual(wrapAsMember("box_x", ["claude"]), ["sudo", "-n", "-u", "box_x", "--", BOX_SPAWN, "claude"]);
+});
+
+t("설정하면 훅이 argv 를 받는다 — 순서는 box-cgspawn 과 동일(기존 래퍼 재사용 가능)", () => {
+  withHook("/opt/x/session-spawn", () => {
+    assert.deepEqual(
+      sessionSpawnArgv("box_yoon", ["claude", "--model", "opus"], undefined, { highMb: 768, maxMb: 1024 }),
+      ["/opt/x/session-spawn", "box_yoon", "768M", "1024M", "--", "claude", "--model", "opus"],
+    );
+  });
+});
+
+t("★★ 메모리 캡이 없어도 훅은 호출된다 — box-cgspawn 갈래를 재사용 못 한 이유가 바로 이것이다", () => {
+  withHook("/opt/x/session-spawn", () => {
+    const got = wrapAsMember("box_yoon", ["claude"]);   // cg 없음
+    assert.equal(got[0], "/opt/x/session-spawn");
+    assert.deepEqual(got.slice(1), ["box_yoon", "0", "0", "--", "claude"]);
+  });
+});
+
+t("cwd 는 훅 뒤 '--' 다음에 그대로 넘어간다(멤버 uid 로 cd 하는 책임은 훅에 있다)", () => {
+  withHook("/opt/x/session-spawn", () => {
+    assert.deepEqual(
+      wrapAsMember("box_yoon", ["claude"], "/home/box_yoon/box"),
+      ["/opt/x/session-spawn", "box_yoon", "0", "0", "--", "--cwd", "/home/box_yoon/box", "claude"],
+    );
+  });
+});
+
+t("훅이 설정되면 cgroup 경로보다 우선한다(둘 다 켜도 훅 하나만 탄다)", () => {
+  withHook("/opt/x/session-spawn", () => {
+    const got = wrapAsMember("box_yoon", ["claude"], undefined, { highMb: 100, maxMb: 200 });
+    assert.equal(got[0], "/opt/x/session-spawn");
+    assert.ok(!got.includes(BOX_CGSPAWN));
+    assert.ok(!got.includes("sudo"));
+  });
+});
+
+t("빈 문자열은 미설정과 같다(env 를 '' 로 둔 배포가 조용히 격리를 잃으면 안 된다)", () => {
+  withHook("", () => {
+    assert.deepEqual(wrapAsMember("box_x", ["claude"]), ["sudo", "-n", "-u", "box_x", "--", BOX_SPAWN, "claude"]);
+  });
 });
 
 console.log(`\n${pass} passed`);
