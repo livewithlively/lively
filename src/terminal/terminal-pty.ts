@@ -277,14 +277,9 @@ export function resizeToRefresh(c: number, r: number, sep: "x" | "," = "x"): str
 //  xterm 이 isWrapped 를 못 매기고 → 백필된 문단을 드래그 복사하면 화면폭마다 가짜 개행이 박힌 텍스트가 클립보드에
 //  들어간다(다른 창에 붙여넣으면 여러 줄로 깨짐 — 붙여넣기 오염 제보의 원인 축). -J 면 긴 줄을 클라 xterm 이 다시
 //  랩하며 isWrapped 를 매겨 선택 복사가 원문 그대로 나온다(폭은 refresh-client -C 로 이미 클라와 일치).
-export function captureCmd(n: number, psmux = false): string {
+export function captureCmd(n: number): string {
   const nn = Math.min(Math.max(0, Math.trunc(Number(n) || 0)), 100000);
-  // ⚠ psmux 는 alt-screen 팬에서 **-q 와 -N 각각이** 캡처를 죽인다(실측 #1541, 실기기 플래그 이분탐색):
-  //    -peJ  -S -600 -E -  → 17줄 ✅        -peqJ / -peJN / -peqJN → 0줄 ❌(응답이 아예 안 온다)
-  //  그 0줄이 제어 스트림을 멈춰 세워(%begin 뒤 무응답) 새로고침 후 하얀 화면의 근본 원인이 됐다.
-  //  잃는 것: -q(오류 억제)·-N(줄 끝 배경색 보존)뿐이고 둘 다 표시 품질의 미세한 축이다 —
-  //  화면이 통째로 안 그려지는 것과 바꿀 값이 아니다. tmux 는 종전 플래그 그대로(무회귀).
-  return psmux ? `capture-pane -peJ -S -${nn} -E -` : `capture-pane -peqJN -S -${nn} -E -`;
+  return `capture-pane -peqJN -S -${nn} -E -`;
 }
 // pane 실상태 질의 — capture-pane 백필은 '화면 텍스트'만 담고 DECSET(alt-screen 1049h·마우스모드 1003h)·커서위치는
 //  담지 못한다. 그래서 클라(xterm)는 앱이 지금 alt-screen 인지·마우스모드인지·커서가 어디인지 '추측'할 수밖에 없어,
@@ -332,7 +327,7 @@ export function handleControlMsg(send: SendCmd, msg: { t?: string; d?: unknown; 
     // 상태 블록은 '클라가 요청할 때만'(msg.st) 백필 직전에 보낸다. 옛 클라(캐시된 terminal.js)는 st 를 안 실어
     //  보내므로 상태 블록을 못 받고 → 마커(__LTSTATE__)를 화면에 출력하는 회귀가 없다(신·구 클라 버전 스큐 안전).
     if (msg.st) send(stateCmd(!!psmux));   // pane 실상태(alt/mouse/cursor/백엔드) → 클라가 동기화 후 렌더
-    send(captureCmd(Number(msg.n), !!psmux));
+    send(captureCmd(Number(msg.n)));
   } else if (msg.t === "st") {
     send(stateCmd(!!psmux));           // 상태만 동기화(재접속 시 — 스크롤백 truncate 없이 마우스/alt stuck·커서 어긋남 해소). 옛 클라는 st 를 안 보냄.
   } else if (msg.t === "mr") {

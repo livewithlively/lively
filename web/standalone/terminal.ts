@@ -318,11 +318,8 @@ export function nudgeSizes(cols, rows) {
  *  tmux 는 정상이므로 종전대로 캡처한다. 백엔드 미상(구 서버 — mux 토큰 없음)이면 종전 동작으로 degrade. */
 export function captureUnsafe(st) {
   if (!st || !st.alt) return false;              // normal 화면은 어느 백엔드든 캡처가 안전하다
-  // mux 토큰이 오면 그 노드는 **새 번들**이고, 새 번들은 psmux 에 안전한 플래그(-peJ)로 캡처한다 → 그냥 캡처한다.
-  //  토큰이 없으면 구 번들이다: psmux 라면 -peqJN 으로 캡처해 스트림을 멈춘다 → 그때만 건너뛴다.
-  //  psmux 판별 지문은 마우스 flag 가 전부 빈 값인 것(psmux 는 그 포맷변수를 구현하지 않는다).
-  if (st.mux) return false;
-  return !!st.flagsMissing;
+  if (st.mux) return st.mux === 'psmux';         // 서버가 백엔드를 알려줬으면 그게 답
+  return !!st.flagsMissing;                      // 구 노드 번들 — 지문으로 판별(위 주석)
 }
 // 크기 넛지 실행 — 앱이 리사이즈를 두 번 받아 화면 전체를 다시 그린다.
 function doNudge() {

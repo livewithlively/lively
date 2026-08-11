@@ -81,9 +81,6 @@ const seqOf = (msg: any): string[] => { const out: string[] = []; handleControlM
 
 t("cap+st → 상태질의를 capture '앞'에 보낸다(클라가 렌더 전 alt/mouse 동기화·렌더 후 커서 복원)", () => {
   assert.deepEqual(seqOf({ t: "cap", n: 600, st: 1 }), [stateCmd(), captureCmd(600)]);
-  // ★ psmux 는 -q/-N 이 alt-screen 캡처를 죽인다(실측) → 그 백엔드엔 -peJ 로 나가야 한다.
-  assert.equal(captureCmd(600, true), "capture-pane -peJ -S -600 -E -");
-  assert.equal(captureCmd(600, false), "capture-pane -peqJN -S -600 -E -", "tmux 경로는 무변화");
   // 순서가 핵심 — 상태가 반드시 capture 앞.
   assert.equal(seqOf({ t: "cap", n: 600, st: 1 }).indexOf(stateCmd()), 0);
   // n 부재도 방어(0 강제) + 상태는 여전히 앞.
@@ -305,7 +302,7 @@ t("C1·C2 psmux 모드 — 입력만 CLI 싱크로 가르고 나머지는 contro
   run({ t: "cap", n: 600, st: 1 });
   run({ t: "st" });
   run({ t: "mr" });
-  assert.deepEqual(lines, [stateCmd(true), captureCmd(600, true), stateCmd(true), mouseResetCmd(), stateCmd(true)]);
+  assert.deepEqual(lines, [stateCmd(true), captureCmd(600), stateCmd(true), mouseResetCmd(), stateCmd(true)]);
   assert.deepEqual(typed, ["ls\r"], "C2: 입력 싱크는 그 뒤로 안 늘어난다");
 });
 
