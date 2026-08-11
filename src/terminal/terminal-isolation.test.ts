@@ -122,7 +122,7 @@ t("설정하면 훅이 argv 를 받는다 — 순서는 box-cgspawn 과 동일(�
 
 t("★★ 메모리 캡이 없어도 훅은 호출된다 — box-cgspawn 갈래를 재사용 못 한 이유가 바로 이것이다", () => {
   withHook("/opt/x/session-spawn", () => {
-    const got = wrapAsMember("box_yoon", ["claude"]);   // cg 없음
+    const got = wrapAsMember("box_yoon", ["claude"], undefined, undefined, { session: true });   // cg 없음
     assert.equal(got[0], "/opt/x/session-spawn");
     assert.deepEqual(got.slice(1), ["box_yoon", "0", "0", "--", "claude"]);
   });
@@ -131,7 +131,7 @@ t("★★ 메모리 캡이 없어도 훅은 호출된다 — box-cgspawn 갈래�
 t("cwd 는 훅 뒤 '--' 다음에 그대로 넘어간다(멤버 uid 로 cd 하는 책임은 훅에 있다)", () => {
   withHook("/opt/x/session-spawn", () => {
     assert.deepEqual(
-      wrapAsMember("box_yoon", ["claude"], "/home/box_yoon/box"),
+      wrapAsMember("box_yoon", ["claude"], "/home/box_yoon/box", undefined, { session: true }),
       ["/opt/x/session-spawn", "box_yoon", "0", "0", "--", "--cwd", "/home/box_yoon/box", "claude"],
     );
   });
@@ -139,7 +139,7 @@ t("cwd 는 훅 뒤 '--' 다음에 그대로 넘어간다(멤버 uid 로 cd 하�
 
 t("훅이 설정되면 cgroup 경로보다 우선한다(둘 다 켜도 훅 하나만 탄다)", () => {
   withHook("/opt/x/session-spawn", () => {
-    const got = wrapAsMember("box_yoon", ["claude"], undefined, { highMb: 100, maxMb: 200 });
+    const got = wrapAsMember("box_yoon", ["claude"], undefined, { highMb: 100, maxMb: 200 }, { session: true });
     assert.equal(got[0], "/opt/x/session-spawn");
     assert.ok(!got.includes(BOX_CGSPAWN));
     assert.ok(!got.includes("sudo"));
@@ -148,7 +148,26 @@ t("훅이 설정되면 cgroup 경로보다 우선한다(둘 다 켜도 훅 하�
 
 t("빈 문자열은 미설정과 같다(env 를 '' 로 둔 배포가 조용히 격리를 잃으면 안 된다)", () => {
   withHook("", () => {
-    assert.deepEqual(wrapAsMember("box_x", ["claude"]), ["sudo", "-n", "-u", "box_x", "--", BOX_SPAWN, "claude"]);
+    assert.deepEqual(wrapAsMember("box_x", ["claude"], undefined, undefined, { session: true }),
+      ["sudo", "-n", "-u", "box_x", "--", BOX_SPAWN, "claude"]);
+  });
+});
+
+t("★★ 세션이 아닌 호출(파일 브리지)은 훅을 타지 않는다 — 파일 존재 확인마다 컨테이너를 띄우면 안 된다", () => {
+  // 실측으로 밟았다: 이 구분 없이 훅을 켰더니 세션 생성이 통째로 실패했다. wrapAsMember 는
+  //  profiles(존재 확인·삭제)·terminal-member-fs(탐색기)에서도 불리는데, 그건 일회성 exec 이다.
+  withHook("/opt/x/session-spawn", () => {
+    for (const argv of [["sh", "-c", 'test -f "$HOME/x"'], ["sh", "-c", 'rm -f "$HOME/x"']]) {
+      const got = wrapAsMember("box_x", argv);            // opts 없음 = 세션 아님
+      assert.deepEqual(got.slice(0, 5), ["sudo", "-n", "-u", "box_x", "--"]);
+      assert.ok(!got.includes("/opt/x/session-spawn"), `파일 브리지가 훅을 탔다: ${JSON.stringify(got)}`);
+    }
+  });
+});
+
+t("★ session:false 를 명시해도 훅을 타지 않는다", () => {
+  withHook("/opt/x/session-spawn", () => {
+    assert.ok(!wrapAsMember("box_x", ["sh"], undefined, undefined, { session: false }).includes("/opt/x/session-spawn"));
   });
 });
 
