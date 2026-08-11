@@ -32,7 +32,7 @@ set -euo pipefail
 #   --confirm            (필수) 없으면 dry-run 계획만 출력(부작용 0).
 #   --lively-root <dir>  배포 루트(기본 $LIVELY_ROOT 또는 /opt/lively).
 #   --timestamp <ts>     백업 파일 타임스탬프(기본 date +%Y%m%d-%H%M%S).
-#   환경변수: BLUE_PORT(8081) LIVELY_SERVICE_USER(구 유닛 User 가 비어있을 때만 사용)
+#   환경변수: BLUE_PORT(8081) GREEN_PORT(8082) LIVELY_SERVICE_USER(구 유닛 User 가 비어있을 때만 사용)
 # ─────────────────────────────────────────────────────────────────────────────
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # deploy/
 # shellcheck source=lib/common.sh
@@ -65,12 +65,48 @@ detect_legacy_unit() {
   printf '\n'; return 0
 }
 
+# ── stat 포맷 이식 래퍼 — GNU(coreutils, `-c`)와 BSD(macOS, `-f`) 문법이 다르다. ──
+#  이 스크립트 본체는 Linux 전용이지만 순수 함수(same_filesystem·verify_copy)는 **개발자 맥에서 npm test 로 돈다**
+#  (deploy/**/*.test.mjs 는 러너가 자동 수집). GNU 문법만 쓰면 맥에서 stat 이 통째로 실패해 '판정불가'로 떨어지고
+#  bluegreen-logic.test.mjs 의 mv/copy 분기 단언이 깨진다(실측). 그래서 여기서 한 번만 흡수한다.
+#   %d = 디바이스 번호(GNU) = %d(BSD 도 동일 키), %s = 바이트 크기(GNU) = %z(BSD). 실패 시 rc!=0(호출부가 안전측 판단).
+stat_fmt() {
+  local key="$1" target="$2"
+  case "$key" in
+    dev)  stat -c %d "$target" 2>/dev/null || stat -f %d "$target" 2>/dev/null ;;
+    size) stat -c %s "$target" 2>/dev/null || stat -f %z "$target" 2>/dev/null ;;
+    *)    printf 'stat_fmt: 알 수 없는 키: %s\n' "$key" >&2; return 2 ;;
+  esac
+}
+
 # ── 같은 파일시스템인가(cross-FS 판정) — stat 디바이스 번호 대조. stat 실패면 '다름'(안전측=copy). ──
 same_filesystem() {
   local a b
-  a="$(stat -c %d "$1" 2>/dev/null || echo x)"
-  b="$(stat -c %d "$2" 2>/dev/null || echo y)"
+  a="$(stat_fmt dev "$1" || echo x)"
+  b="$(stat_fmt dev "$2" || echo y)"
   [ "$a" != x ] && [ "$b" != y ] && [ "$a" = "$b" ]
+}
+
+# ── 구 단일유닛이 실제로 서빙 중인 포트 — 다음 deploy-release 의 최초 flip 이 **이 포트를 deregister** 해야 한다. ──
+#  구 유닛은 `node --env-file-if-exists=.env dist/index.js` 를 WorkingDirectory=old_app 에서 돌리므로 포트의 SoT 는
+#  old_app/.env 의 PORT 한 곳뿐이다(유닛 템플릿에 PORT Environment/EnvironmentFile 없음 — deploy/linux/lively-gateway.service).
+#  ⚠ 8080 을 하드코딩하면 안 된다: PORT 를 바꿔 설치한 박스에서 최초 flip 이 **엉뚱한 포트를 deregister** 해
+#   구 포트가 TG 에 등록된 채 남고, 곧이어 구 유닛이 정지되면서 죽은 타깃이 트래픽을 받는다(무증상 5xx — 이 스킴이
+#   assert_tg_hc_traffic_port 로 막으려는 것과 같은 silent-outage 클래스). 그래서 흡수 시점에 실측값을 marker 로 남긴다.
+#  순수(부작용 없음, stdout 만). .env 부재·PORT 미지정이면 앱 기본값과 같은 8080.
+detect_legacy_port() {
+  local envf="$1/.env" content="" p=""
+  # 읽을 수 있으면 그대로(운영자가 .env 소유자 — 640 operator:svc_user 불변식), 아니면 sudo 로 한 번 더.
+  #  sudo 를 조건 없이 쓰면 tty 없는 호출(테스트·CI)에서 통째로 실패해 조용히 기본값으로 떨어진다.
+  if [ -r "$envf" ]; then content="$(cat "$envf" 2>/dev/null || true)"
+  elif [ -f "$envf" ]; then content="$(sudo cat "$envf" 2>/dev/null || true)"; fi
+  # 마지막 정의가 이긴다(dotenv 관례). `PORT` 로 **끝나는** 다른 키(ITEMS_DB_PORT 등)에 낚이지 않게 줄머리 앵커.
+  p="$(printf '%s\n' "$content" \
+       | grep -E '^[[:space:]]*PORT[[:space:]]*=' \
+       | tail -1 \
+       | sed -E 's/^[[:space:]]*PORT[[:space:]]*=[[:space:]]*//; s/[[:space:]]*$//; s/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/' || true)"
+  printf '%s\n' "$p" | grep -qE '^[0-9]+$' || p=8080     # 부재·빈값·비정수 → 앱 기본값
+  printf '%s\n' "$p"
 }
 
 # ── 이동 전략 — 같은 FS 면 mv(원자적 rename), 아니면(또는 판정불가) copy(→검증→삭제, 안전측). ──
@@ -89,8 +125,8 @@ verify_copy() {
     [ "$cs" = "$cd" ]
   else
     local ss sd
-    ss="$(sudo stat -c %s "$src" 2>/dev/null || echo a)"
-    sd="$(sudo stat -c %s "$dst" 2>/dev/null || echo b)"
+    ss="$(sudo stat -c %s "$src" 2>/dev/null || sudo stat -f %z "$src" 2>/dev/null || echo a)"
+    sd="$(sudo stat -c %s "$dst" 2>/dev/null || sudo stat -f %z "$dst" 2>/dev/null || echo b)"
     [ "$ss" = "$sd" ]
   fi
 }
@@ -155,6 +191,14 @@ main() {
 
   local backup="$root/backups/pre-bluegreen-${TS}.tar.gz"
   local blue_port; blue_port="$(bg_port blue)"
+  local green_port; green_port="$(bg_port green)"
+  local legacy_port; legacy_port="$(detect_legacy_port "$old_app")"
+  # 구 포트가 flip pool(blue|green)과 겹치면 흡수해선 안 된다 — 첫 배포가 idle(green)을 그 포트에 띄우려다
+  #  구 유닛과 충돌하고(EADDRINUSE / 선점 검사 die), 최악은 idle==active 포트로 flip 이 무효가 되는 것이다.
+  #  deploy-release 도 이 클래스를 잡지만 그땐 '흡수는 이미 끝난 뒤'라 되돌리기가 번거롭다 → 여기서 먼저 끊는다.
+  if [ "$legacy_port" = "$blue_port" ] || [ "$legacy_port" = "$green_port" ]; then
+    die "구 유닛의 포트(:$legacy_port)가 blue-green flip pool(blue :$blue_port · green :$green_port)과 겹칩니다 — 흡수를 중단합니다. BLUE_PORT/GREEN_PORT 로 겹치지 않는 포트를 지정해 재실행하거나, 구 설치의 PORT 를 먼저 옮기세요."
+  fi
 
   # ── 계획 출력(dry-run·confirm 공통) ───────────────────────────────────────
   phase "흡수 계획 (migrate-to-bluegreen)"
@@ -165,8 +209,10 @@ main() {
   log "백업 파일        : $backup   (← old_app/{.env,data}, 어떤 이동보다 먼저)"
   log "이동             : $old_app/{.env,data} → $root/shared/   (같은 FS=mv, 다르면 copy→검증→삭제)"
   log "blue seed        : active-color=blue · blue→$old_app · color-env/blue.env(PORT=$blue_port) · 템플릿 유닛 렌더"
-  log "레거시 marker    : $root/legacy-blue-unit=$legacy  (다음 deploy-release 최초 flip 때 정리)"
-  log "구 유닛          : 정지·flip 안 함(계속 8080 서빙)."
+  log "레거시 marker    : $root/legacy-blue-unit=$legacy · $root/legacy-blue-port=$legacy_port  (다음 deploy-release 최초 flip 때 정리)"
+  log "구 유닛          : 정지·flip 안 함(계속 :$legacy_port 서빙)."
+  # 실측 포트가 기본이 아니면 눈에 띄게 알린다 — 최초 flip 의 deregister 대상이 이 값이라 오탐이면 곧 사망 타깃이 된다.
+  [ "$legacy_port" = 8080 ] || warn "구 유닛 포트가 기본(8080)이 아닙니다: :$legacy_port (old_app/.env 의 PORT). 최초 flip 은 이 포트를 ALB 에서 deregister 합니다 — 실제 서빙 포트와 다르면 지금 중단하고 확인하세요: ss -ltnp | grep -w $legacy_port"
 
   if [ "$CONFIRM" != 1 ]; then
     warn "DRY-RUN — 실제 변경 없음. 실행하려면 --confirm 을 붙이세요."
@@ -208,27 +254,28 @@ main() {
   sudo ln -sfn "$old_app" "$root/blue"                             # blue = 구 릴리스(구 유닛이 서빙 중). old_app 은 dist/index.js 보유(단일 유닛 ExecStart).
   printf 'PORT=%s\n' "$blue_port" | sudo tee "$root/color-env/blue.env" >/dev/null
   export SERVICE_USER="$svc_user"                                  # render_bluegreen_unit 이 읽는다(User=svc_user).
-  render_bluegreen_unit                                            # 템플릿 유닛(@.service) 렌더 — 기동은 안 함(구 유닛이 8080 을 물고 있음).
+  render_bluegreen_unit                                            # 템플릿 유닛(@.service) 렌더 — 기동은 안 함(구 유닛이 자기 포트를 물고 있음).
   printf '%s\n' "$legacy" | sudo tee "$root/legacy-blue-unit" >/dev/null   # 최초 flip 때 정리할 구 유닛명 인계.
-  printf 'blue' | sudo tee "$root/active-color" >/dev/null         # active seed=blue → 다음 배포 idle=green(8082, 8080 충돌 회피).
-  ok "blue seed 완료 — active=blue · blue→$old_app · 구 유닛 $legacy 계속 8080 서빙"
+  printf '%s\n' "$legacy_port" | sudo tee "$root/legacy-blue-port" >/dev/null  # 최초 flip 이 ALB 에서 뺄 구 포트 인계(8080 하드코딩 금지).
+  printf 'blue' | sudo tee "$root/active-color" >/dev/null         # active seed=blue → 다음 배포 idle=green(8082, 구 포트 충돌 회피).
+  ok "blue seed 완료 — active=blue · blue→$old_app · 구 유닛 $legacy 계속 :$legacy_port 서빙"
 
-  # loopback forwarder(:8080)는 여기서 설치하지 않는다 — 흡수 직후엔 구 단일유닛이 아직 :8080 을 서빙 중이라
+  # loopback forwarder(:8080)는 여기서 설치하지 않는다 — 흡수 직후엔 구 단일유닛이 아직 그 포트를 서빙 중이라
   #  socket bind 가 충돌하고, 세션 핀(localhost:8080)은 그 구 유닛이 그대로 받는다. 첫 deploy-release flip 의
   #  phase3(render_loopback_forwarder)이 구 포트 정리와 함께 forwarder 를 세워 인계한다.
 
   # ── 런북 ──────────────────────────────────────────────────────────────────
   phase "완료 — 다음 단계(런북)"
-  ok "흡수 완료. 구 유닛($legacy)은 계속 8080 서빙 중, 레이아웃 준비됨."
+  ok "흡수 완료. 구 유닛($legacy)은 계속 :$legacy_port 서빙 중, 레이아웃 준비됨."
   log "① 새 릴리스 준비 후 무중단 flip(ALB 타깃 포트 스왑):"
   log "     bash deploy/deploy-release.sh --release <새 릴리스 dir> --tg-arn <ALB 타깃그룹 ARN>"
-  log "     → green(8082)에 올려 ALB register→healthy→구 포트(8080) deregister flip, 그 최초 flip 이"
-  log "       구 유닛 $legacy 를 정지·제거(marker 로 인계). 전제: ALB TG 가 이미 이 인스턴스 :8080 을 서빙 중."
+  log "     → green($(bg_port green))에 올려 ALB register→healthy→구 포트(:$legacy_port) deregister flip, 그 최초 flip 이"
+  log "       구 유닛 $legacy 를 정지·제거(marker 로 인계). 전제: ALB TG 가 이미 이 인스턴스 :$legacy_port 를 서빙 중."
   log "② 롤백(흡수 되돌리기 — 아직 deploy-release 전이라면):"
   log "     - 백업 복원:   sudo tar -xzf $backup -C $old_app"
   log "     - 심볼릭 제거:  sudo rm -f $old_app/.env $old_app/data  (그 뒤 백업에서 푼 실체가 남음)"
-  log "     - 레이아웃 제거: sudo rm -rf $root/shared $root/blue $root/active-color $root/legacy-blue-unit $root/color-env/blue.env"
-  log "     - 구 유닛은 정지된 적 없으므로 그대로 8080 서빙 지속(추가 복구 불요)."
+  log "     - 레이아웃 제거: sudo rm -rf $root/shared $root/blue $root/active-color $root/legacy-blue-unit $root/legacy-blue-port $root/color-env/blue.env"
+  log "     - 구 유닛은 정지된 적 없으므로 그대로 :$legacy_port 서빙 지속(추가 복구 불요)."
   log "   백업 파일: $backup"
 }
 

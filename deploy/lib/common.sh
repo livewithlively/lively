@@ -157,9 +157,12 @@ render_bluegreen_unit() {
   local svc_home; svc_home="$(getent passwd "$svc_user" 2>/dev/null | cut -d: -f6)"; svc_home="${svc_home:-$HOME}"
   require_cmd node   # set -e 에서 `$(command -v node)` 는 미설치 시 무언 exit(빈 ExecStart 유닛). 명시적 die 로 조기 차단.
   local node_bin node_dir; node_bin="$(command -v node)"; node_dir="$(dirname "$node_bin")"
-  # 공유 로그 디렉토리(유닛이 append: 로 쓴다) — 서비스유저 소유(런타임 쓰기, render_service_unit 과 동일 원칙).
-  sudo mkdir -p "$root/logs"
-  sudo chown -R "$svc_user" "$root/logs" 2>/dev/null || true
+  # 게이트웨이가 런타임에 '쓰는' 공유 디렉토리는 서비스유저 소유 — render_service_unit 과 동일 원칙·동일 멱등성.
+  #  logs: 유닛이 append: 로 쓴다.  shared/data: 릴리스 안 data 심볼릭의 실체(노션 자산 등 fs 쓰기).
+  #  ⚠ data 도 매 배포 재적용해야 한다 — migrate 가 흡수 시 한 번 chown 하지만, 그 뒤 운영자가 root 로 파일을
+  #   떨구면(복원·수기 이관) 게이트웨이가 그 하위에 못 써서 조용히 실패한다. 단일 유닛 쪽 불변식과 같은 이유.
+  sudo mkdir -p "$root/logs" "$root/shared/data"
+  sudo chown -R "$svc_user" "$root/logs" "$root/shared/data" 2>/dev/null || true
   # MemoryHigh 소프트 상한(#1059 B) — 단일 유닛과 동일 규칙(GATEWAY_MEMORY_HIGH_MB 양의 정수일 때만, 비면 무제한).
   local mem_high_line=""
   if [ -n "${GATEWAY_MEMORY_HIGH_MB:-}" ] && printf '%s' "${GATEWAY_MEMORY_HIGH_MB}" | grep -qE '^[0-9]+$' && [ "${GATEWAY_MEMORY_HIGH_MB}" -gt 0 ]; then
@@ -180,7 +183,7 @@ render_bluegreen_unit() {
 # ── loopback alias forwarder(:8080 → active color) 렌더 — deploy-release 가 flip 마다 부른다(Linux/systemd 전용). ──
 #  migrate 는 의도적으로 안 부른다(흡수 직후엔 구 단일유닛이 아직 :8080 을 물어 socket bind 충돌 — migrate 주석 참조).
 #  8080 은 blue-green flip pool 에서 빠져(blue:8081|green:8082) 세션 클라 핀(~/.lively/gateway-url=http://localhost:8080)
-#  전용 안정 진입점이 됐다(2026-08-03 flip 이 세션 핀을 죽여 전 세션 재연결 실패 — LOOPBACK-ALIAS-DESIGN.md). socket 은
+#  전용 안정 진입점이 됐다(2026-08-03 flip 이 세션 핀을 죽여 전 세션 재연결 실패). socket 은
 #  상시 listen(sockets.target), service(systemd-socket-proxyd L4 프록시)만 flip 마다 새 active 포트로 재렌더·restart.
 #  render_bluegreen_unit 과 동일 규약: '파일 렌더 + daemon-reload'만 — enable/start/restart 는 호출자가(순단 최소).
 render_loopback_forwarder() {

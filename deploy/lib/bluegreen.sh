@@ -38,6 +38,18 @@ bg_port() {
 # color 유효성(blue|green). 인자 파싱·상태 검증에서 방어적으로 쓴다.
 bg_valid_color() { case "${1:-}" in blue|green) return 0 ;; *) return 1 ;; esac; }
 
+# systemd 유닛명 유효성 — 상태파일에서 읽은 값을 systemctl 대상·경로 조각으로 쓰기 전 좁힌다.
+#  legacy-blue-unit marker 는 `systemctl stop/disable <값>` 이자 `rm -f /etc/systemd/system/<값>.service` 의
+#  경로 조각이 된다. 손상·수기편집된 값(슬래시·공백·`..`)이 흐르면 엉뚱한 유닛 정지나 systemd 디렉터리 밖
+#  삭제로 번지므로, 첫 글자 영숫자 + 이후 [영숫자 @ . _ -] 로만 이뤄진 이름만 통과시킨다(경로 구분자 배제).
+bg_valid_unit_name() {
+  case "${1:-}" in
+    ""|-*|.*) return 1 ;;                                    # 빈값·하이픈/점 시작(옵션·상대경로 모양) 거부
+    *[!A-Za-z0-9@._-]*) return 1 ;;                          # 허용 문자 밖(슬래시·공백·따옴표 등) 거부
+    *) return 0 ;;
+  esac
+}
+
 # color 를 실제로 돌리는 systemd 유닛 이름. 기본은 템플릿 인스턴스 lively-gateway@<color>.
 #  ⚠ LEGACY_BLUE_UNIT 이 설정돼 있으면(= 구 단일설치에서 흡수하는 최초 배포) blue 만 그 구 유닛명으로 매핑한다.
 #   구 단일설치는 blue-green 템플릿과 다른 이름(lively-gateway / context-ontology-gateway)으로 8080 을 이미 물고

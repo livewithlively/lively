@@ -18,6 +18,7 @@ const DEPLOY = path.join(here, "deploy-release.sh");
 const MIGRATE = path.join(here, "migrate-to-bluegreen.sh");
 const COMMON = path.join(here, "lib", "common.sh");
 const UNIT = path.join(here, "linux", "lively-gateway@.service");
+const UPDATE = path.join(here, "update.sh");
 
 // bluegreen.sh 를 source 한 뒤 스크립트 조각을 실행 — 순수함수만 부르므로 부작용 없음.
 //  {stdout, status} 반환(stderr 는 진단이라 버림). env 로 BLUE_PORT/LEGACY_BLUE_UNIT 등 주입.
@@ -67,6 +68,7 @@ const deploy = readFileSync(DEPLOY, "utf8");
 const migrate = readFileSync(MIGRATE, "utf8");
 const common = readFileSync(COMMON, "utf8");
 const unit = readFileSync(UNIT, "utf8");
+const update = readFileSync(UPDATE, "utf8");
 for (const [name, src, fn] of [
   ["bluegreen.sh", lib, "bg_idle_color"],
   ["deploy-release.sh", deploy, "alb_wait_healthy"],
@@ -385,6 +387,136 @@ for (const [name, src, fn] of [
   }
 }
 
+// ── M1b. stat 이식(GNU -c / BSD -f) — 이 테스트가 도는 **개발자 머신에서 실제로** FS 판정이 성립해야 한다 ──
+//  migrate 본체는 Linux 전용이지만 순수 함수는 npm test 로 어디서나 돈다(deploy/**/*.test.mjs 자동 수집).
+//  GNU 문법만 쓰면 macOS 에서 stat 이 통째로 실패 → same_filesystem 이 늘 '다름' → 위 M1 의 mv 단언이 깨진다
+//  (실측: 이 PR 원안이 맥에서 `'copy' !== 'mv'` 로 red). stat_fmt 가 그 갭을 한 자리에서 흡수한다.
+{
+  const dir = mkdtempSync(path.join(tmpdir(), "bg-statfmt-"));
+  try {
+    const f = path.join(dir, "sized");
+    writeFileSync(f, "0123456789");                                    // 정확히 10 바이트
+    // 표 #14 — 존재하는 경로의 디바이스 번호: 이 플랫폼에서 rc 0 + 정수.
+    const dev = shm(`stat_fmt dev ${JSON.stringify(dir)}`);
+    assert.equal(dev.status, 0, "stat_fmt dev 는 이 플랫폼에서 성공해야 한다(폴백이 죽으면 여기서 잡힌다)");
+    assert.ok(/^-?[0-9]+$/.test(dev.stdout), `stat_fmt dev 는 정수를 낸다(got: ${JSON.stringify(dev.stdout)})`);
+    // 표 #15 — 파일 크기: 실제 바이트 수와 일치(포맷 키가 뒤바뀌면 여기서 잡힌다).
+    const size = shm(`stat_fmt size ${JSON.stringify(f)}`);
+    assert.equal(size.status, 0, "stat_fmt size 성공");
+    assert.equal(size.stdout, "10", "stat_fmt size 는 실제 바이트 수");
+    // 표 #16 — 없는 경로: 판정 불가를 성공으로 위장하지 않는다.
+    assert.notEqual(shm(`stat_fmt dev "/no/such/path/xyz"`).status, 0, "없는 경로 → rc≠0(안전측 판단은 호출부 몫)");
+    // 표 #17 — 알 수 없는 키: 오타를 조용히 흘리지 않는다.
+    assert.equal(shm(`stat_fmt bogus ${JSON.stringify(dir)}`).status, 2, "알 수 없는 키 → rc 2");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  // 표 #18(배선) — 위 M1 의 `같은 FS → mv` 가 곧 이 폴백의 end-to-end 확인이다. 이식 책임이 한 자리
+  //  (stat_fmt)에 모여 있는지도 못 박는다: 호출부가 stat 을 직접 부르기 시작하면 폴백이 다시 새어 나간다.
+  const body = (name, src) => {
+    const m = new RegExp(`^${name}\\(\\)\\s*\\{[\\s\\S]*?\\n\\}`, "m").exec(src);
+    assert.ok(m, `${name} 본문을 찾지 못했다(테스트가 대상을 잃음)`);
+    return m[0];
+  };
+  assert.ok(/stat_fmt\(\)/.test(migrate), "stat_fmt 이식 래퍼 정의");
+  const sfBody = body("same_filesystem", migrate);
+  assert.ok(/stat_fmt dev/.test(sfBody), "same_filesystem 은 stat_fmt 를 통해 디바이스 번호를 얻는다");
+  assert.ok(!/\bstat -[cf] /.test(sfBody), "same_filesystem 이 stat 을 직접 부르지 않는다(이식은 stat_fmt 한 자리)");
+  // verify_copy 는 sudo 가 필요해 stat_fmt 를 못 쓴다 — 대신 그 자리에서 두 문법을 모두 시도해야 한다.
+  const vcBody = body("verify_copy", migrate);
+  assert.ok(/stat -c %s/.test(vcBody) && /stat -f %z/.test(vcBody), "verify_copy 의 크기 대조는 GNU·BSD 양쪽 문법을 시도한다");
+}
+
+// ── M1c. 구 단일유닛의 실서빙 포트 실측(detect_legacy_port) — 8080 가정 금지 ─────
+//  최초 flip 의 ALB deregister 대상이 이 값이다. 틀리면 구 포트가 TG 에 남고 구 유닛이 죽어 **사망 타깃**이
+//  트래픽을 받는다(무증상 5xx — assert_tg_hc_traffic_port 가 막는 것과 같은 silent-outage 클래스).
+//  포트의 유일한 출처는 old_app/.env 의 PORT 다(단일 유닛 템플릿에 PORT Environment/EnvironmentFile 없음).
+{
+  const dir = mkdtempSync(path.join(tmpdir(), "bg-legacyport-"));
+  const env = (s) => writeFileSync(path.join(dir, ".env"), s);
+  const port = () => shm(`detect_legacy_port ${JSON.stringify(dir)}`).stdout;
+  try {
+    assert.equal(port(), "8080", "#1 .env 부재 → 앱 기본값 8080(흡수를 막지 않는다)");
+    env("FOO=1\nPORT=9443\nBAR=2\n");
+    assert.equal(port(), "9443", "#2 .env 의 PORT 실측(다른 키와 섞여도)");
+    env('  PORT = "9444"  \n');
+    assert.equal(port(), "9444", "#3 공백·따옴표 트림");
+    env("PORT=8081\nPORT=8099\n");
+    assert.equal(port(), "8099", "#4 중복 정의는 마지막이 이긴다(dotenv 관례)");
+    env("PORT=notanumber\n");
+    assert.equal(port(), "8080", "#5 비정수는 신뢰 불가 → 기본값");
+    env("ITEMS_DB_PORT=5432\n");
+    assert.equal(port(), "8080", "#6 접미 일치(ITEMS_DB_PORT)에 낚이지 않는다");
+    // ⚠ 위 줄은 '값이 정수가 아니게 되는' 경로로도 우연히 통과한다(mutation 실측: grep 앵커만 빼면 여전히 green —
+    //  sed 앵커가 남아 'ITEMS_DB_PORT=5432' 를 통째로 흘려 비정수 폴백에 걸렸다). 값이 **정수로 보이는** 접미
+    //  일치 키를 하나 더 둬, 앵커가 정말 살아 있는지를 우회 없이 친다.
+    env("ITEMS_DB_PORT=5432\nADMIN_PORT=7777\n");
+    assert.equal(port(), "8080", "#6 정수값을 가진 접미 일치 키(ADMIN_PORT)도 PORT 로 오인하지 않는다");
+    env("PORT=\n");
+    assert.equal(port(), "8080", "#7 빈 값 → 기본값");
+    env("PORT=8080\n");
+    assert.equal(port(), "8080", "#8 기본값과 같아도 실측 경로가 통과한다");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  // 구 포트가 flip pool(blue|green)과 겹치면 흡수 자체를 막는다 — 겹치면 첫 배포가 idle 을 그 포트에 띄우려다
+  //  구 유닛과 충돌하고(선점 die), 최악은 idle==active 포트라 flip 이 무효가 된다. 흡수 뒤에 알면 되돌리기가 번거롭다.
+  const iCollide = migrate.indexOf('[ "$legacy_port" = "$blue_port" ]');
+  assert.ok(iCollide > 0, "구 포트 ↔ flip pool 충돌 검사 존재");
+  assert.ok(/\[ "\$legacy_port" = "\$green_port" \]/.test(migrate), "green 포트와의 충돌도 본다");
+  assert.ok(/\bdie\b/.test(migrate.slice(iCollide, iCollide + 500)), "충돌이면 die(흡수 중단)");
+  // 그 검사는 어떤 부작용(백업·이동·seed)보다 먼저여야 한다 — dry-run 게이트 앞이면 계획 출력조차 안 나온다.
+  assert.ok(iCollide < migrate.indexOf("tar -czf"), "충돌 검사는 백업(첫 부작용)보다 먼저");
+}
+
+// ── M1d. 실측 포트의 배선 — 흡수 시점의 값이 flip 시점까지 살아 실제 deregister 대상이 되는가 ──
+{
+  assert.ok(/tee "\$root\/legacy-blue-port"/.test(migrate), "#9 migrate 가 실측값을 legacy-blue-port marker 로 남긴다");
+  assert.ok(/LEGACY_BLUE_PORT="\$\(cat "\$root\/legacy-blue-port"/.test(deploy), "#10 deploy-release 가 그 marker 를 읽는다");
+  assert.ok(/active_port="\$LEGACY_BLUE_PORT"/.test(deploy), "#10 최초 flip 의 deregister 대상 = marker 포트");
+  assert.ok(!/active_port=8080/.test(deploy), "#11 구 포트 8080 하드코딩 잔존 금지(회귀 가드)");
+  assert.ok(
+    /rm -f "\$root\/legacy-blue-unit" "\$root\/legacy-blue-port"/.test(deploy),
+    "#12 흡수 종결 시 두 marker 를 함께 삭제(포트만 남으면 다음 판정이 어긋난다)",
+  );
+  // #13 marker 부재(이미 흡수를 끝낸 구 박스)면 8080 폴백 — 배포 불가로 만들지 않는다.
+  const iPortRead = deploy.indexOf('LEGACY_BLUE_PORT="$(cat "$root/legacy-blue-port"');
+  assert.ok(iPortRead > 0, "#13 marker 읽기 지점");
+  assert.ok(
+    /grep -qE '\^\[0-9\]\+\$' \|\| LEGACY_BLUE_PORT=8080/.test(deploy.slice(iPortRead, iPortRead + 400)),
+    "#13 marker 부재·비정수면 8080 폴백(하위호환)",
+  );
+}
+
+// ── M1e. legacy marker 값 검증(bg_valid_unit_name) — systemctl 대상이자 삭제 경로 조각이다 ──
+//  `systemctl stop/disable <값>` + `rm -f /etc/systemd/system/<값>.service` 로 흐르므로, 손상·수기편집된
+//  값(슬래시·공백·`..`)이 그대로 지나면 엉뚱한 유닛 정지나 systemd 디렉터리 밖 삭제가 된다.
+{
+  const valid = (v) => sh(`bg_valid_unit_name ${JSON.stringify(v)} && echo ok || echo no`).stdout;
+  assert.equal(valid("lively-gateway"), "ok", "#19 정상 유닛명");
+  assert.equal(valid("context-ontology-gateway"), "ok", "#20 또 다른 정상 레거시명");
+  assert.equal(valid("lively-gateway@blue"), "ok", "템플릿 인스턴스명(@)도 유효");
+  assert.equal(valid(""), "no", "#21 빈값은 유효하지 않다(호출부가 '부재'로 따로 다룬다)");
+  assert.equal(valid("../../tmp/evil"), "no", "#22 경로 조각 탈출 거부(점 시작)");
+  // ⚠ 위 한 줄만으로는 '점 시작' 가드에만 걸려 통과한다 — 슬래시 자체를 막는지 따로 봐야 한다(mutation 으로 실측:
+  //  허용 문자셋에 `/` 를 끼워도 위 줄은 green 이었다). 점으로 시작하지 않는 경로 탈출로 그 자리를 정확히 친다.
+  assert.equal(valid("lively/../../tmp/evil"), "no", "#22 슬래시가 든 값 거부(/etc/systemd/system/<값>.service 탈출)");
+  assert.equal(valid("sub/unit"), "no", "#22 하위경로 모양 거부");
+  assert.equal(valid("a b"), "no", "#23 공백 거부");
+  assert.equal(valid("-x"), "no", "#24 하이픈 시작 거부(옵션 모양)");
+  assert.equal(valid(".hidden"), "no", "점 시작 거부(상대경로 모양)");
+  assert.equal(valid("evil;reboot"), "no", "구분자·메타문자 거부");
+  // 배선 — deploy-release 는 marker 를 export/사용하기 **전에** 이 함수로 검증하고, 위반이면 die.
+  const iRead = deploy.indexOf('LEGACY_BLUE_UNIT="$(cat "$root/legacy-blue-unit"');
+  const iExport = deploy.indexOf("export LEGACY_BLUE_UNIT", iRead);
+  assert.ok(iRead > 0 && iExport > iRead, "marker 읽기 → export 사이가 검증 자리");
+  const guard = deploy.slice(iRead, iExport);
+  assert.ok(/bg_valid_unit_name "\$LEGACY_BLUE_UNIT"/.test(guard), "#21~24 marker 를 bg_valid_unit_name 으로 검증");
+  assert.ok(/\bdie\b/.test(guard), "위반이면 die(엉뚱한 유닛 정지·systemd 밖 삭제 방지)");
+  // 빈값(흡수 안 한 박스)은 정상이므로 검증 대상이 아니다 — die 로 막으면 대다수 박스가 배포 불가가 된다.
+  assert.ok(/\[ -n "\$LEGACY_BLUE_UNIT" \]/.test(guard), "#21 값이 있을 때만 검증(부재는 정상 경로)");
+}
+
 // ── M2. --confirm 게이트 — 없으면 dry-run(부작용 0), 있을 때만 실제 변경. 안티-vacuous 순서 락. ──
 {
   assert.ok(/set -euo pipefail/.test(migrate), "set -euo pipefail 필수");
@@ -587,15 +719,19 @@ for (const [name, src, fn] of [
   // restart 성공만으로 ok 찍지 않는다 — :8080 end-to-end 검증(curl, --max-time 10 으로 hang 방지) 통과 시만 ok.
   assert.ok(/curl -fsS --max-time 10 -o \/dev\/null "http:\/\/127\.0\.0\.1:8080\$\{HEALTH_PATH\}"/.test(deploy), "forwarder 재지정 후 :8080 end-to-end 검증(--max-time 10)");
 
-  // ② legacy 흡수 최초 flip: active_port=8080 오버라이드가 구 포트 deregister 앞(실서빙 :8080 을 뺀다).
-  const iOverride = deploy.indexOf('&& active_port=8080');
+  // ② legacy 흡수 최초 flip: 구 유닛의 **실측 포트**(marker) 오버라이드가 구 포트 deregister 앞에 온다.
+  //  8080 상수가 아니다 — PORT 를 바꿔 설치한 박스에서 엉뚱한 포트를 빼면 구 포트가 TG 에 남아 사망 타깃이 된다(M1c/M1d).
+  const iOverride = deploy.indexOf('&& active_port="$LEGACY_BLUE_PORT"');
   const iActivePortCalc = deploy.indexOf('active_port="$(bg_port "$active")"');
   const iDeregOld = deploy.indexOf('deregister-targets --target-group-arn "$TG_ARN" --targets Id="$INSTANCE_ID",Port="$active_port"');
-  assert.ok(iOverride > 0, "LEGACY_BLUE_UNIT 존재 시 active_port=8080 오버라이드 존재(포트 시프트 정합)");
+  assert.ok(iOverride > 0, "LEGACY_BLUE_UNIT 존재 시 active_port ← 실측 marker 포트 오버라이드 존재");
   assert.ok(iOverride > iActivePortCalc, "오버라이드는 active_port=bg_port(active) 산출 뒤");
-  assert.ok(iDeregOld > 0 && iOverride < iDeregOld, "오버라이드는 구 포트 deregister 앞(실서빙 :8080 대상)");
-  // 🔴2 락 — 오버라이드에 active=blue guard(stale marker 시 green 을 :8080 으로 오폭 방지). marker 의미론상 legacy=blue.
-  assert.ok(/\[ -n "\$\{LEGACY_BLUE_UNIT:-\}" \] && \[ "\$active" = blue \] && active_port=8080/.test(deploy), "오버라이드는 active=blue guard 로 stale marker 오폭 차단");
+  assert.ok(iDeregOld > 0 && iOverride < iDeregOld, "오버라이드는 구 포트 deregister 앞(실서빙 포트 대상)");
+  // 🔴2 락 — 오버라이드에 active=blue guard(stale marker 시 green 을 구 포트로 오폭 방지). marker 의미론상 legacy=blue.
+  assert.ok(
+    /\[ -n "\$\{LEGACY_BLUE_UNIT:-\}" \] && \[ "\$active" = blue \] && active_port="\$LEGACY_BLUE_PORT"/.test(deploy),
+    "오버라이드는 active=blue guard 로 stale marker 오폭 차단",
+  );
 
   // ③ 🔴1 락 — legacy 분기의 forwarder 재시도가 구 단일유닛 stop 뒤(그때 :8080 이 비어 bind 성립, 암전 방지).
   const iOldStop = deploy.indexOf('stop "$old_unit"');
@@ -630,8 +766,39 @@ for (const [name, src, fn] of [
 }
 
 // ── L. 새 .sh 문법 검증(bash -n) — 이 테스트가 곧 문법 게이트 ────────────────
-for (const f of [DEPLOY, MIGRATE, LIB, COMMON]) {
+for (const f of [DEPLOY, MIGRATE, LIB, COMMON, UPDATE]) {
   execFileSync("bash", ["-n", f]); // 실패하면 throw → 테스트 실패
+}
+
+// ── U. update.sh 는 blue-green 박스에서 스스로 물러난다 ──────────────────────
+//  두 배포 모델이 한 박스에서 겹치면 조용히 망가진다: update.sh 가 단일 유닛을 되살려 포트를 두고 forwarder 와
+//  다투고(EADDRINUSE 크래시루프), 정작 트래픽을 받는 active color 는 **구 릴리스로 남는다**(silent no-op).
+//  그래서 레이아웃이 보이면 어떤 부작용보다 먼저 멈춰야 한다.
+{
+  const iGuard = update.indexOf("LIVELY_ALLOW_SINGLE_UPDATE");
+  assert.ok(iGuard > 0, "update.sh 에 blue-green 감지 가드가 있다");
+  // 두 신호의 OR — 상태파일(레이아웃)과 템플릿 유닛 파일(LIVELY_ROOT 를 모르는 채 흡수된 박스도 잡는다).
+  assert.ok(/\[ -e "\$BG_ROOT\/active-color" \]/.test(update), "가드는 active-color 상태파일을 본다");
+  assert.ok(/\[ -f "\/etc\/systemd\/system\/lively-gateway@\.service" \]/.test(update), "가드는 템플릿 유닛 파일도 본다");
+  assert.ok(/BG_ROOT="\$\{LIVELY_ROOT:-\/opt\/lively\}"/.test(update), "레이아웃 루트는 LIVELY_ROOT(기본 /opt/lively)");
+  // ⭐ 가드는 **부작용보다 앞**이어야 한다 — 시크릿 백필·빌드·유닛 렌더가 먼저 돌면 이미 박스를 만진 뒤다.
+  //  ⚠ 앵커는 '실행되는 줄'로 잡는다 — 단순 indexOf 는 가드 자신의 설명 주석에 걸려 순서를 거꾸로 읽는다(실측).
+  const codeIndex = (re) => {
+    const m = new RegExp(`^(?![[:space:]]*#)\\s*(?!#)${re}`, "m").exec(update);
+    return m ? m.index : -1;
+  };
+  for (const [label, re] of [
+    ["시크릿 백필(ensure_env_secret)", "ensure_env_secret\\b"],
+    ["빌드 단계", 'phase "1/3'],
+    ["유닛 렌더(render_service_unit)", "render_service_unit\\b"],
+  ]) {
+    const i = codeIndex(re);
+    assert.ok(i > 0, `${label} 실행 줄 앵커 존재`);
+    assert.ok(iGuard < i, `가드는 ${label} 보다 먼저 — 부작용 전에 멈춘다`);
+  }
+  // 탈출구는 있어야 한다(단일 유닛으로 되돌린 박스) — 단, 기본값은 차단이다.
+  assert.ok(/\$\{LIVELY_ALLOW_SINGLE_UPDATE:-0\} != "1"|"\$\{LIVELY_ALLOW_SINGLE_UPDATE:-0\}" != "1"/.test(update), "기본은 차단, 명시 env 로만 강행");
+  assert.ok(/deploy-release\.sh/.test(update.slice(iGuard, iGuard + 1200)), "차단 메시지가 올바른 경로(deploy-release.sh)를 알린다");
 }
 
 console.log("bluegreen-logic.test: all passed");

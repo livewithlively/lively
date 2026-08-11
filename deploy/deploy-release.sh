@@ -3,7 +3,8 @@ set -euo pipefail
 # ─────────────────────────────────────────────────────────────────────────────
 # Blue-green 무중단 배포 — 단일 박스, **정상상태(steady-state) 전용**.
 #   토폴로지: ALB:443 → node(blue:8081 | green:8082). ALB 가 인스턴스 타깃에 **직결**한다(caddy 우회).
-#     (:8080 은 flip pool 에서 빠져 세션 클라 핀 전용 loopback alias 가 됐다 — LOOPBACK-ALIAS-DESIGN.md.)
+#     (:8080 은 flip pool 에서 빠져 세션 클라 핀 전용 loopback alias 가 됐다 — 근거는 lib/common.sh 의
+#      render_loopback_forwarder 주석과 deploy/README.md 의 blue-green 절.)
 #     flip primitive = **ALB 타깃 그룹의 타깃 포트 스왑**이다. 박스의 docker-compose caddy 는 front-door 가
 #     아니라 vestigial 이라 flip 경로에서 제거했다(구버전은 caddy reload 로 flip 했으나 ALB 가 active color 포트 직결이라 불일치).
 #
@@ -21,8 +22,11 @@ set -euo pipefail
 #            ⚠ 최초 레이아웃 생성·구 단일설치 흡수는 이 스크립트가 하지 않는다 — 별도 1회성 `deploy/migrate-to-bluegreen.sh`
 #              가 담당한다(흡수 경로의 데이터파괴 클래스를 배포 스크립트에서 통째로 분리). active-color 가 없으면 die.
 #         (3) ALB 타깃 그룹(--tg-arn)이 이 인스턴스의 **현재 active color 포트**를 이미 등록하고 서빙 중이다
-#            (최초 컷오버 = ALB 타깃을 이 인스턴스로 지정하는 것 — migrate 런북·gitlab-oidc-setup.md 참조).
-#         (4) 박스 instance role 에 elbv2:RegisterTargets/DeregisterTargets/DescribeTargetHealth(해당 TG 한정) 권한.
+#            (최초 컷오버 = ALB 타깃을 이 인스턴스로 지정하는 것 — deploy/migrate-to-bluegreen.sh 런북 참조).
+#            이 스크립트는 TG 를 만들지도, 리스너를 붙이지도 않는다 — ALB·TG·리스너 프로비저닝은 이 리포 밖 인프라 책임.
+#         (4) 박스 instance role 에 elbv2 권한(해당 TG 한정): RegisterTargets · DeregisterTargets ·
+#            DescribeTargetHealth · **DescribeTargetGroups**. 마지막 것을 빠뜨리면 flip 직전 HC preflight
+#            (assert_tg_hc_traffic_port)가 query-failed 로 die 해 **모든 배포가 막힌다**(fail-safe 설계).
 #         ⚠ store(items-db, docker named volume) 가 떠 있어야 한다 — 게이트 기본값 /readyz 가 DB 도달을
 #           요구하므로(src/index.ts), store 미기동이면 readiness 가 200 을 못 내 flip 이 성립하지 않는다(자동 롤백).
 #
@@ -33,6 +37,8 @@ set -euo pipefail
 #     <color> → releases/<id>   color→릴리스 심볼릭.  active-color  상태파일(blue|green).
 #     current → 활성 color 릴리스,  previous → 직전 릴리스(즉시 롤백용).
 #     legacy-blue-unit          (흡수 직후에만) migrate 가 남긴 구 단일유닛명 — 최초 flip 때 정리 후 제거.
+#     legacy-blue-port          (흡수 직후에만) 구 단일유닛의 실서빙 포트(old .env 의 PORT 실측) — 최초 flip 의
+#                               ALB deregister 대상. 8080 을 가정하지 않는다. unit marker 와 같이 제거된다.
 #
 #   롤백: 이전 릴리스로 재실행하면 된다 — `deploy-release.sh --release "$LIVELY_ROOT/previous" --tg-arn <arn>`
 #         (previous 심볼릭·old color 유닛이 보존되므로 재빌드 없이 수초 내 flip).
@@ -189,11 +195,22 @@ main() {
   # ── 흡수 완료 인계(최소) — migrate 가 구 단일유닛을 흡수하면 그 유닛명을 marker 파일로 남긴다. ──
   #  레거시 유닛명(lively-gateway/context-ontology-gateway) 하드코딩 스캔·seed·mv 는 전부 migrate 로 옮겼고,
   #  여기 남는 것은 marker 를 읽어(단순 파일 read) '최초 flip 때 그 구 유닛을 정리' 하는 것뿐이다.
-  #  marker 가 있으면 active=blue 는 아직 구 유닛이 8080 을 물고 있는 상태 → 이번 flip 의 old(blue) 정지 대상이
+  #  marker 가 있으면 active=blue 는 아직 구 유닛이 자기 포트를 물고 있는 상태 → 이번 flip 의 old(blue) 정지 대상이
   #  템플릿 인스턴스가 아니라 그 구 유닛이다(bg_unit_for 가 LEGACY_BLUE_UNIT 으로 blue 를 매핑). phase 4 에서
   #  정지·disable·.service 제거 + marker 삭제 → 이후 배포는 순수 템플릿 유닛만.
   LEGACY_BLUE_UNIT="$(cat "$root/legacy-blue-unit" 2>/dev/null || true)"
+  # ⚠ marker 내용 검증 — 이 값은 아래에서 `systemctl stop/disable` 대상이자 `rm -f /etc/systemd/system/<값>.service`
+  #  의 경로 조각이 된다. 정상 경로에선 migrate 가 쓴 유닛명이지만, 손상·수기편집된 marker(슬래시·공백·`..`)를
+  #  그대로 흘리면 엉뚱한 유닛 정지나 systemd 디렉터리 밖 삭제로 번진다. 유닛명 문법으로 좁히고, 어긋나면 die.
+  if [ -n "$LEGACY_BLUE_UNIT" ]; then
+    bg_valid_unit_name "$LEGACY_BLUE_UNIT" \
+      || die "legacy-blue-unit marker 가 유닛명 문법이 아닙니다('$LEGACY_BLUE_UNIT' — $root/legacy-blue-unit). 이 값으로 systemctl stop/disable 과 /etc/systemd/system 삭제를 하므로 진행하지 않습니다. 파일을 구 유닛명으로 고치거나(흡수 이미 끝났으면) 삭제하세요."
+  fi
   export LEGACY_BLUE_UNIT
+  # 최초 flip 이 ALB 에서 뺄 구 포트 — migrate 가 old_app/.env 의 PORT 를 실측해 남긴다(8080 하드코딩 금지).
+  #  구 marker(포트 파일 없이 유닛명만 남긴 흡수)와의 호환을 위해 부재·비정수면 8080 으로 폴백한다.
+  LEGACY_BLUE_PORT="$(cat "$root/legacy-blue-port" 2>/dev/null || true)"
+  printf '%s' "$LEGACY_BLUE_PORT" | grep -qE '^[0-9]+$' || LEGACY_BLUE_PORT=8080
 
   # ── ALB flip 전제 — INSTANCE_ID(미지정 시 IMDSv2) + region(aws CLI 는 AWS_REGION env 또는 IMDS 로 해석). ──
   #  일찍 확정해 flip 직전이 아니라 여기서 실패하게 한다(idle 을 띄우기 전에 끊음).
@@ -243,12 +260,14 @@ main() {
 
   phase "3/4 ALB flip — idle 등록 → health poll → 구 포트 등록해제 → 상태 커밋"
   local active_port; active_port="$(bg_port "$active")"
-  # legacy 흡수 최초 flip: 구 단일유닛은 항상 :8080 을 서빙하므로(bg_port blue=8081 이 아님) deregister 대상은
-  #  실서빙 포트여야 한다 — 포트 시프트 전엔 blue=8080 이라 우연히 맞았으나 이제 명시 오버라이드가 필요하다.
+  # legacy 흡수 최초 flip: 구 단일유닛은 템플릿 포트(bg_port blue=8081)가 아니라 **자기 .env 의 PORT** 를 서빙하므로
+  #  deregister 대상은 그 실서빙 포트여야 한다 — migrate 가 실측해 legacy-blue-port marker 로 넘겨준 값을 쓴다.
+  #  ⚠ 8080 하드코딩 금지: PORT 를 바꿔 설치한 박스에선 엉뚱한 포트를 빼 구 포트가 TG 에 남고, 곧 구 유닛이 정지되면서
+  #   죽은 타깃이 트래픽을 받는다(무증상 5xx — assert_tg_hc_traffic_port 가 막는 것과 같은 silent-outage 클래스).
   #  ⚠ active=blue guard 필수: marker 는 잔존 가능하다(--keep-old 로 marker 삭제 skip, 또는 phase3 die 로 커밋 후 미삭제).
-  #   marker 의미론상 legacy=blue 이므로, active=green 인데 marker 가 남았으면 실서빙은 :8082 라 8080 강제는 오폭(green 을
-  #   deregister 못 해 사망 타깃 잔존). active=blue 일 때만 8080 이 실서빙과 일치한다.
-  [ -n "${LEGACY_BLUE_UNIT:-}" ] && [ "$active" = blue ] && active_port=8080
+  #   marker 의미론상 legacy=blue 이므로, active=green 인데 marker 가 남았으면 실서빙은 green 포트라 구 포트 강제는
+  #   오폭(green 을 deregister 못 해 사망 타깃 잔존). active=blue 일 때만 marker 포트가 실서빙과 일치한다.
+  [ -n "${LEGACY_BLUE_UNIT:-}" ] && [ "$active" = blue ] && active_port="$LEGACY_BLUE_PORT"
   # ⭐ flip 진입 전 가드 2종(register 로 되돌릴 수 없는 부작용을 내기 전에 끊는다).
   #  (1) idle==active 포트 가드: BLUE_PORT==GREEN_PORT 오설정이면 idle 을 register 한 직후 같은 (instance,port)
   #     타깃을 deregister(구 포트)가 도로 빼 flip 이 무효가 된다(트래픽 유실). 두 포트가 다를 때만 진행한다.
@@ -319,9 +338,10 @@ main() {
       #  다음 배포의 legacy 재감지 차단(흡수는 여기서 종결 — 이후 배포는 템플릿 유닛만).
       sudo systemctl disable "$old_unit" 2>/dev/null || true
       sudo rm -f "/etc/systemd/system/${old_unit}.service" && sudo systemctl daemon-reload
-      sudo rm -f "$root/legacy-blue-unit"
+      sudo rm -f "$root/legacy-blue-unit" "$root/legacy-blue-port"
       log "구 단일유닛 $old_unit 정지·제거 + marker 삭제(흡수 완료 — 이후 배포는 템플릿 유닛만)"
-      # 구 단일유닛이 :8080 을 놓은 뒤에야 forwarder 가 그 포트를 잡을 수 있다(phase3 시도는 bind 충돌로 실패했다).
+      # 구 단일유닛이 그 포트를 놓은 뒤에야 forwarder 가 :8080 을 잡을 수 있다(구 유닛이 8080 을 물었던 경우 —
+      #  phase3 시도는 bind 충돌로 실패했다). 구 포트가 8080 이 아니었다면 phase3 에서 이미 붙었고 여기선 멱등 재확인이다.
       sudo systemctl restart lively-loopback.socket lively-loopback.service 2>/dev/null || true
       if curl -fsS --max-time 10 -o /dev/null "http://127.0.0.1:8080${HEALTH_PATH}"; then
         ok "loopback :8080 → active :$idle_port (legacy 흡수 후 인계 완료)"
