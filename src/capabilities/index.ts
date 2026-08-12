@@ -192,6 +192,8 @@ export function registerMcpCapabilities(
   harness?: string | null,
   readOnly?: boolean,
   incognito?: boolean,
+  // #1643 이 요청 주체가 가진 scope. **undefined = 미상**이라 필터하지 않는다(아래 주석 참조).
+  scopes?: readonly string[],
 ): void {
   // 인코그니토 세션(#1007+): lively 툴을 **하나도** 등록하지 않는다 → tools/list 빈 표면 = 사실상 연결 없음(읽기·쓰기 모두 불가).
   //  (물리적 연결 차단은 per-session 으로 안 되므로 서버측 전체차단으로 대신.) 무상태 /mcp 라 요청마다 헤더로 재계산 = per-session.
@@ -201,6 +203,16 @@ export function registerMcpCapabilities(
     // 읽기전용 세션(#1007): 컨텍스트 스토어에 쓰는 툴은 아예 등록하지 않는다 → tools/list 에서 소거되어
     //  하네스가 그 툴의 존재조차 모른다(호출 시도·혼란 0). 무상태 /mcp 라 요청마다 헤더로 재계산 = per-session.
     if (readOnly && isReadOnlyBlocked(cap)) continue;
+    // ── #1643 권한 없는 도구는 목록에서 뺀다 — 읽기전용 소거와 같은 자리, 같은 이유(존재조차 모르게). ──
+    //  실측(고객사 도입 첫 40일): 관리 계열 호출 54건이 **전부** scope 부족으로 차단됐고 성공은 0건이었다.
+    //  시도자는 12명 = 활성 사용자 거의 전원 — 목록에 보이니까 한 번씩 두드린 것이다. 그중 변경성 도구는
+    //  3건뿐이고 나머지는 전부 조회성(org_hooks·cron_list·managed_session_list…)이었다. 즉 '쓰려던' 게 아니라
+    //  '보려던' 것이었고, 그 수요는 **권한 설계로** 답할 일이지 못 쓰는 도구를 목록에 남겨 답할 일이 아니다.
+    //  부수효과로 도구 목록이 짧아진다 — 하네스 컨텍스트가 줄고 오호출도 준다.
+    //  ⚠ scopes 가 미상(undefined)이면 **필터하지 않는다.** 인증 파싱이 한 번 어긋난 순간 admin 이 도구를
+    //   통째로 잃는 쪽이 '못 쓸 도구가 보이는' 쪽보다 훨씬 나쁘다(fail-safe). 빈 배열은 미상이 아니라
+    //   '권한 없음'이므로 그때는 정상적으로 필터한다.
+    if (scopes && cap.scope && !scopes.includes(cap.scope)) continue;
     const meta = resolveToolMeta(cap, alwaysLoadOverrides, harness);
     server.registerTool(
       cap.name,

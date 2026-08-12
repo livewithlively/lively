@@ -27,7 +27,12 @@ async function buildRegisteredServer(req: express.Request): Promise<McpServer> {
   const incognito = incognitoFromHeaders(req.headers);
   if (incognito) logger.info({ harness }, "인코그니토 세션 — lively 툴 전부 소거(빈 표면, 읽기·쓰기 차단)(#1007+)");
   else if (readOnly) logger.info({ harness }, "읽기전용 세션 — 컨텍스트 스토어 쓰기 툴 소거(#1007)");
-  const server = buildServer(overrides, alwaysLoad, harness, readOnly, incognito);
+  // #1643 이 요청 주체의 scope — 권한 없는 도구를 tools/list 에서 뺀다(보이는데 못 쓰는 도구가 마찰이었다).
+  //  출처는 resolveUser 와 같다(bearer 미들웨어가 실은 req.auth.extra = LivelyUser). 못 읽으면 undefined 로
+  //  두어 종전처럼 전부 노출한다 — 인증 파싱이 어긋났을 때 admin 이 도구를 통째로 잃지 않게 하는 fail-safe.
+  const principal = (req as unknown as { auth?: { extra?: { scopes?: unknown } } }).auth?.extra;
+  const scopes = Array.isArray(principal?.scopes) ? (principal.scopes as string[]) : undefined;
+  const server = buildServer(overrides, alwaysLoad, harness, readOnly, incognito, scopes);
   // 인코그니토면 외부 프록시·동적 툴도 노출하지 않는다(ext__*·http_proxy 도 lively 게이트웨이 표면 — 클린룸이면 전부 차단).
   if (!incognito) {
     try { await registerDynamicTools(server); } catch (err) { logger.warn({ err }, "동적 툴 등록 실패(무시)"); }
