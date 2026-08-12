@@ -17,6 +17,7 @@ import {
   markSessionActive, isReportedPhase, type CreateInput,
 } from "../terminal/terminal-sessions.js";
 import { attachSession, killAttachedPtys, type AttachSocket } from "../terminal/terminal-pty.js";
+import { sendKeysToSession } from "../terminal/send-keys.js";
 import { sessionPrompts } from "../terminal/terminal-transcript.js";
 import type { LivelyUser } from "../context.js";
 import {
@@ -173,6 +174,13 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
     case "markActive": {
       const st = args.state;
       await markSessionActive(String(args.id), isReportedPhase(st) ? st : undefined);
+      return { ok: true };
+    }
+    // #1664 — 게이트웨이가 이 노드의 세션 PTY 에 프롬프트를 넣는다(크론 주입·리브). 인가(소유·초대)는
+    //  게이트웨이가 끝냈다는 전제(F7). mux 표면 분기(tmux `-l` vs psmux 코드포인트)와 flush 지연 규약은
+    //  terminal/send-keys 안에 갇혀 있어 게이트웨이 로컬 주입과 **같은 코드**로 돈다.
+    case "sendKeys": {
+      await sendKeysToSession(String(args.id), String(args.text ?? ""));
       return { ok: true };
     }
     case "create": {

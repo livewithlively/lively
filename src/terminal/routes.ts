@@ -299,6 +299,35 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     res.setHeader("Cache-Control", "no-store");
     res.json(out);
   }));
+  // 이 세션의 AI 에게 프롬프트를 보낸다(#1664) — 사람이 웹터미널에 붙어 타이핑하는 것과 같은 일을 화면이 대신한다.
+  //  리브(#1631)가 "홈에서 열면 바로 진단이 시작된다"를 만드는 통로이자, 화면에서 세션에 일을 시키는 일반 경로다.
+  //  ⚠ 인가는 **canAttach 와 동급**이다 — 입장할 수 있는 사람은 어차피 터미널에서 직접 칠 수 있으므로 더 좁힐 이유가
+  //   없고, 더 넓히면 남의 AI 에게 명령하는 통로가 된다. 노드 세션은 nodeCanAttach(정책=게이트웨이).
+  //  실행은 node/session-inject 가 로컬/원격을 갈라 맡는다 — 크론 주입과 **같은 경로**다(두 벌 두면 한쪽만 고쳐진다).
+  app.post("/api/ui/terminal/sessions/:id/prompt", auth, wrap(async (req, res) => {
+    const uid = idOf(userOf(req));
+    const text = String(((req.body ?? {}) as Record<string, unknown>).text ?? "");
+    if (!text.trim()) throw new HttpError(400, "보낼 내용이 없습니다");
+    const { nodeOfSession } = await import("../node/registry.js");
+    const nodeId = nodeOfSession(req.params.id);
+    if (nodeId) {
+      const v = await nodeCanAttach(nodeId, req.params.id, uid);
+      if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
+    } else if (!(await canAttach(req.params.id, uid))) {
+      throw new HttpError(403, "세션에 접근할 수 없습니다");
+    }
+    const { injectPrompt } = await import("../node/session-inject.js");
+    try { await injectPrompt(req.params.id, text); }
+    catch (e) {
+      // 노드가 꺼졌거나 구버전이면 nodeRpc 가 고정 문자열로 던진다 — 사람 말로 옮긴다(그냥 500 이면 원인을 모른다).
+      const msg = (e as Error)?.message ?? String(e);
+      if (msg === "node-offline") throw new HttpError(503, "그 컴퓨터가 지금 연결돼 있지 않습니다.");
+      if (msg.startsWith("node-unsupported-op:")) throw new HttpError(409, "그 컴퓨터의 라이블리가 오래돼 프롬프트를 받지 못합니다. 업데이트가 필요합니다.");
+      if (msg === "node-rpc-timeout") throw new HttpError(504, "그 컴퓨터가 응답하지 않습니다.");
+      throw e;
+    }
+    res.json({ ok: true });
+  }));
   // 여러 세션 통합 '내 질문' 검색(#745) — 내가 접근 가능한 세션(개인 소유/초대 + 내 프로젝트 세션)의 질문을 grep, 어느 세션인지와 함께.
   app.get("/api/ui/terminal/prompts/search", auth, wrap(async (req, res) => {
     const q = String((req.query.q ?? "") as string);

@@ -91,6 +91,15 @@ export function nodeSessionsFor(viewer: string): NodeSessionInfo[] {
   return out;
 }
 
+// 이 세션이 어느 노드의 것인가 — 없으면 null(= 게이트웨이 로컬 세션이거나, 그 노드가 아직 상태를 안 올렸다).
+//  주입(#1664)처럼 **세션 id 만 들고 오는 호출자**가 로컬/원격을 가르는 자리다. 스냅샷(3s push) 기준이라
+//  방금 만든 세션은 잠깐 안 보일 수 있는데, 그때는 로컬로 폴백해 `has-session` 이 정직하게 실패한다
+//  — 못 찾은 걸 '로컬에 있다'고 단정해 엉뚱한 세션에 키를 흘리는 일은 없다(id 가 겹칠 수 없으므로).
+export function nodeOfSession(sessionId: string): string | null {
+  for (const [id, st] of states) if (st.sessions.some((s) => s.id === sessionId)) return id;
+  return null;
+}
+
 // 이 노드가 op 를 할 수 있나(#905 C4) — hello.caps 가 근거, 안 보낸 구 노드는 v1 기준선.
 //  provision-remote.ts(assertNodeUsable 의 requireProvision 게이트)가 배치 전 사전 조회로 쓴다 — 못 할 노드를
 //   미리 걸러 사람 말로 안내한다. 강제 게이트는 nodeRpc 가 이미 한다(여긴 사전 조회용).
