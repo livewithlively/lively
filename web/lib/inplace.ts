@@ -60,6 +60,7 @@ function busy(host: any, ...nodes: any[]): void {
 //  좌측 사이드바를 만드는 자리에서 한 줄 부르면 된다: keepSideScroll(node, 'admin').
 //  key 는 화면(사이드바 종류)당 하나 — 같은 사이드바가 다시 만들어지면 그 위치로 돌아간다.
 const SIDE_POS = new Map<string, number>();
+const SIDE_GEN = new Map<string, number>();   // key 별 세대 — 새 사이드바가 뜨면 옛 노드의 복원 루프는 물러난다
 let restoring = 0;   // 복원하는 동안의 scroll 이벤트로 기억값이 오염되지 않게
 
 function keepSideScroll(node: any, key: string): void {
@@ -67,11 +68,16 @@ function keepSideScroll(node: any, key: string): void {
   // 사용자가 손으로 옮긴 위치만 기억한다(복원 중 발생한 scroll 은 무시).
   node.addEventListener('scroll', () => { if (!restoring) SIDE_POS.set(key, node.scrollTop); }, { passive: true });
 
+  const gen = (SIDE_GEN.get(key) || 0) + 1;
+  SIDE_GEN.set(key, gen);
   const want = SIDE_POS.get(key) || 0;
   if (!want) return;
-  // 사이드바 내용은 비동기로 채워지는 경우가 많다(카테고리·즐겨찾기 fetch). 아직 짧으면 scrollTop 은
-  //  0 으로 클램프되므로 '한 번 세우고 끝'이 안 된다 — 내용이 자랄 때까지 짧게 재시도한다.
-  //  단 그 사이 사람이 스크롤하면 즉시 손을 뗀다(사람의 조작을 덮어쓰지 않는다 — pjvRestoreScroll 과 같은 규율).
+  // 두 가지를 기다려야 해서 '한 번 세우고 끝'이 안 된다:
+  //   ① 노드가 아직 문서에 안 붙었을 수 있다 — 사이드바를 만들고 **fetch 를 기다렸다가** 붙이는 화면이 있다
+  //      (WIKI: createWikiSide → await ready → view.replaceChildren). 안 붙었으면 scrollTop 은 먹지 않는다.
+  //   ② 붙어도 내용이 아직 짧으면 scrollTop 이 0 으로 클램프된다.
+  //  그래서 목표에 앉을 때까지 창(2s) 안에서 매 프레임 다시 시도한다. 그 사이 사람이 스크롤하면 즉시 손을 뗀다
+  //  (사람의 조작을 덮어쓰지 않는다 — projects/state.ts 의 pjvRestoreScroll 과 같은 규율).
   let done = false;
   const optsP: any = { passive: true, capture: true };
   const stop = () => { done = true; cleanup(); };
@@ -87,11 +93,14 @@ function keepSideScroll(node: any, key: string): void {
   const t0 = Date.now();
   const tick = () => {
     if (done) return;
-    if (!node.isConnected) { cleanup(); return; }   // 화면이 또 바뀌었다 — 새 노드가 자기 복원을 한다
-    restoring++;
-    node.scrollTop = want;
-    restoring--;
-    if (node.scrollTop >= want - 1 || Date.now() - t0 > 800) { cleanup(); return; }
+    if (SIDE_GEN.get(key) !== gen) { cleanup(); return; }   // 더 새 사이드바가 떴다 — 그쪽이 복원을 이어받는다
+    if (node.isConnected) {
+      restoring++;
+      node.scrollTop = want;
+      restoring--;
+      if (node.scrollTop >= want - 1) { cleanup(); return; }
+    }
+    if (Date.now() - t0 > 2000) { cleanup(); return; }
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
