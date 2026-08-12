@@ -12,7 +12,6 @@ import type { Capability } from "../types.js";
 import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 import { restRead } from "./shared.js";
-import { computePipelineOverview } from "../../org/store/pipeline.js";
 import { livFindings, livTopFindings, livMature, type LivSnapshot } from "../../org/delivery/liv-findings.js";
 import { livHomeMode } from "../../org/delivery/liv-home.js";
 
@@ -35,16 +34,6 @@ export const livCapabilities: Capability[] = [
         ? await import("../../org/delivery/onboarding.js")
           .then((m) => m.computeOnboardingStatus()).catch(() => null)
         : null;
-      const pipe = isAdmin ? await computePipelineOverview().catch(() => null) : null;
-      // 임베딩은 **모르면 undefined** — false 로 적으면 "켜져 있다"는 주장이 되고, true 로 적으면 거짓 경고다.
-      const embeddingOff = isAdmin
-        ? await import("../../org/store.js")
-          .then(async (m) => {
-            const cfg = await m.getRuntimeConfig();
-            const provider = cfg?.embedding_config?.provider;
-            return typeof provider === "string" ? provider === "off" : undefined;
-          }).catch(() => undefined)
-        : undefined;
 
       // 내 노드 — 등록/온라인. 이 사람 것만 센다(남의 PC 는 리브의 관심사가 아니다).
       const nodes = await (async () => {
@@ -72,12 +61,7 @@ export const livCapabilities: Capability[] = [
           return accounts.length && accounts.every((a) => a.loggedIn === false) ? false : null;
         }).catch(() => null);
 
-      const snapshot: LivSnapshot = {
-        isAdmin,
-        org: org ? { items: org.items.map((i) => ({ key: i.key, label: i.label, done: i.done })) } : null,
-        pipeline: pipe ? pipe.stages : null,
-        embeddingOff, nodes, migrateReported,
-      };
+      const snapshot: LivSnapshot = { isAdmin, org: org ? org.items : null, nodes, migrateReported };
       const findings = livFindings(snapshot);
       const choice = input.choice === "liv" || input.choice === "dashboard" ? input.choice : null;
       const decision = livHomeMode({ claudeLoggedIn, choice, mature: livMature(findings) });
@@ -87,7 +71,7 @@ export const livCapabilities: Capability[] = [
         findings: livTopFindings(findings, TOP),
         total: findings.length,
         // 화면이 상태를 그릴 근거 — 카드가 없어도 "무엇을 보고 그렇게 판단했나"를 보여줄 수 있어야 한다.
-        context: { isAdmin, claudeLoggedIn, nodes, pipeline: pipe?.stages ?? null, org: org ? { done: org.done, total: org.total } : null },
+        context: { isAdmin, claudeLoggedIn, nodes, org: org ? { done: org.done, total: org.total, complete: org.complete } : null },
       };
     }, false, {
       // 사람이 홈을 명시적으로 고른 적이 있으면 그 값을 실어 보낸다 — **판정은 여전히 서버가 한다**(화면이
