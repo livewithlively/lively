@@ -95,7 +95,7 @@ export function buildClientMetadata(opts: { redirectUrl: string; clientName?: st
 }
 
 // vault 슬롯 키 — 토큰은 서버 설정 scope_key(resolveMemberSecret 이 읽는 슬롯), 클라정보/PKCE 는 예약 scope_key 로 분리.
-const CLIENT_SCOPE = "oauth:client";  // owner=gateway(조직 공용 DCR 등록)
+export const CLIENT_SCOPE = "oauth:client";  // owner=gateway(조직 공용 DCR 등록) — http_proxy 갱신 경로도 여기서 client_id/secret 을 읽는다(#1654)
 // PKCE verifier — owner=member, (member,kind)당 고정 슬롯(콜백까지 임시). 고정키라 재시도 시 덮어써 고아 누적 방지(리뷰 #1);
 //  finishConsent 성공/실패/거부 모두 정리(try/finally + abandonConsent). listMemberSecretsPublic 는 이 슬롯을 숨긴다.
 export const PKCE_SCOPE = "oauth:pkce";
@@ -183,7 +183,7 @@ export class VaultOAuthProvider implements OAuthClientProvider {
 // ── 오케스트레이션(SDK auth() 래퍼) — 콜백 라우트/커넥트 capability 가 호출. OAuth 디스커버리·토큰교환도 SSRF-가드 fetch 로. ──
 //  ⚠ 네트워크 경로 — 단위테스트 불가(빌드 타입검증만). 실 OAuth 서버 대상 통합검증은 콜백 라우트 배선 시.
 //  TODO(T1 리뷰 후 DRY): connectUpstream(mcp-proxy.ts)와 동일한 ssrf-fetch 구성 — 공용 헬퍼로 추출.
-async function gatewaySsrfFetch(): Promise<ReturnType<typeof makeSsrfFetch>> {
+export async function gatewaySsrfFetch(): Promise<ReturnType<typeof makeSsrfFetch>> {
   const cfg = await getRuntimeConfig().catch(() => null);
   const selfHosts: string[] = [];
   try { const p = await getOrgProfile(); if (p.gateway_url) selfHosts.push(new URL(p.gateway_url).hostname.toLowerCase()); } catch { /* 프로필 없음 */ }

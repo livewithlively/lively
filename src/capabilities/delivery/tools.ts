@@ -7,8 +7,9 @@ import type { LivelyUser } from "../../context.js";
 import { MEANING } from "../../org/delivery/meaning.js";
 import { isBuiltinToolName, toolCandidates } from "../../mcp/mcp-surface.js";
 import { assertNoHardSecrets } from "../../org/ingest/redact.js";
-import { getRuntimeConfig, listTools, upsertTool, removeTool, type ToolKind, type OrgToolInput } from "../../org/store.js";
-import { restRuntime, str, wctx } from "./shared.js";
+import { getRuntimeConfig, updateRuntimeConfig, listTools, upsertTool, removeTool, type ToolKind, type OrgToolInput } from "../../org/store.js";
+import { HTTP_TOOL_PRESETS, httpToolPresetToInput } from "../../org/delivery/http-tool-presets.js";
+import { actorOf, restRuntime, str, wctx } from "./shared.js";
 
 const TOOL_SCOPES = new Set(["items", "context", "db", "memory", "code"]); // http_proxy 호출 권한(admin·null 불가)
 const TOOL_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
@@ -118,6 +119,49 @@ export const toolsCapabilities: Capability[] = [
       auth_scope_key: z.string().nullable().optional().describe("auth_kind 의 스코프 키(선택)"),
       pii_scrub: z.boolean().optional().describe("응답 PII 스크럽 여부"),
       log_args: z.boolean().optional().describe("#1082 — 호출 인자 '값'을 감사로그에 저장할지. 기본 false(값 미저장). 끈 상태에서도 호출 사실은 남는다"),
+    }),
+  // ════════ http_proxy 도구 프리셋 (#1655·#1656) ════════
+  //  프리셋은 코드에 SoT 가 있고(http-tool-presets.ts) 실제 노출은 org_tool 행이다. 그 사이를 잇는 창구.
+  restRuntime("org_http_tool_presets", "http_proxy 도구 프리셋 목록",
+    "코드에 정의된 http_proxy 도구 프리셋(구글 3종 등)과 이 조직의 적용 상태. applied=이미 org_tool 로 심어진 도구, " +
+    "hosts_missing=url_allowlist 에 없어서 지금 적용해도 전부 차단될 호스트. 적용은 org_http_tool_preset_apply.",
+    [{ method: "GET", paths: ["/api/ui/org/http-tool-presets"], parse: () => ({}) }],
+    async () => {
+      const [cfg, existing] = await Promise.all([getRuntimeConfig(), listTools()]);
+      const have = new Set(existing.map((t) => t.name));
+      const allow = new Set(cfg.url_allowlist);
+      return {
+        groups: HTTP_TOOL_PRESETS.map((g) => ({
+          key: g.key, label: g.label, auth_kind: g.auth_kind, hosts: g.hosts, scope: g.scope, level: g.level,
+          hosts_missing: g.hosts.filter((h) => !allow.has(h.toLowerCase())),
+          tools: g.tools.map((t) => ({ name: t.name, title: t.title, applied: have.has(t.name), pii_scrub: t.pii_scrub })),
+        })),
+      };
+    }),
+  restRuntime("org_http_tool_preset_apply", "http_proxy 도구 프리셋 적용",
+    "프리셋 묶음을 org_tool 로 심는다(즉시 노출). 필요한 상류 호스트를 url_allowlist 에 함께 추가한다 — allowlist 는 " +
+    "deny-all 기본이라 이걸 빠뜨리면 심어도 전부 차단된다. 같은 이름의 도구가 있으면 덮어쓴다(멱등). " +
+    "⚠ 이 도구들은 per-member OAuth 자격을 쓴다 — 구성원이 '내 자격'에서 연결해 두지 않으면 호출 시 '자격 없음'이 된다.",
+    [{ method: "POST", paths: ["/api/ui/org/http-tool-presets/apply"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
+      const key = str(input.key, "key", 64).trim();
+      const group = HTTP_TOOL_PRESETS.find((g) => g.key === key);
+      if (!group) throw new HttpError(400, `그런 프리셋 묶음이 없습니다: ${key} (가능: ${HTTP_TOOL_PRESETS.map((g) => g.key).join(", ")})`);
+      const applied: string[] = [];
+      for (const t of group.tools) {
+        await upsertTool(httpToolPresetToInput(group, t), wctx(user, ctx)); // 프리셋 자기검증이 여기서 먼저 돈다
+        applied.push(t.name);
+      }
+      // allowlist 병합 — 기존 항목은 건드리지 않는다(다른 커넥터가 쓰고 있을 수 있다).
+      const cfg = await getRuntimeConfig();
+      const want = group.hosts.map((h) => h.toLowerCase());
+      const addedHosts = want.filter((h) => !cfg.url_allowlist.includes(h));
+      if (addedHosts.length) {
+        await updateRuntimeConfig({ url_allowlist: [...cfg.url_allowlist, ...addedHosts] }, actorOf(user), ctx?.source ?? "web");
+      }
+      return { ok: true, key, applied, added_hosts: addedHosts };
+    }, {
+      key: z.string().describe("적용할 프리셋 묶음 key(google-drive · google-gmail · google-calendar)"),
     }),
   restRuntime("org_tool_remove", "AI 도구 제거",
     "조직 MCP 툴을 제거한다(http_proxy=즉시 노출 중단, builtin 게이팅 행 제거=기본값 복귀).",

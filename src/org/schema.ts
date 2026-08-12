@@ -20,6 +20,7 @@ import { initSessionsInfra } from "./schema/sessions-infra.js";
 import { initGroundTruthRegistries } from "./schema/registry.js";
 import { initMemberAuth } from "./schema/member-auth.js";
 import { initOAuthServer } from "./schema/oauth.js";
+import { initCanary } from "./schema/canary.js";
 
 export async function initOrgSchema(): Promise<void> {
   await initOrgCore(itemsPool);                    // org_profile·org_member·org_content_audit·mcp_call_log·auth_token
@@ -43,6 +44,7 @@ export async function initOrgSchema(): Promise<void> {
   //  기존 어느 테이블도 참조하지 않아(FK 없음) 순서 자유도가 있고, 끝에 두면 기존 시퀀스가 그대로 앞에 남는다.
   await initCollectorRegistry(itemsPool);          // org_collector(수집기 인스턴스 n개 — org_connector 의 system PK 해체)
   await initCollectorPresets(itemsPool);           // org_collector_preset(커스텀 프리셋)·collector_webhook_event(웹훅 수신함)
+  await initCanary(itemsPool);                     // #1657: canary_result(상류 회귀 자동탐지 실행 기록)
   await initClassifierRegistry(itemsPool);         // org_classifier(+seen — 분류기 n개. 증류기의 분류판)
   await initManagerRegistry(itemsPool);            // org_manager(+finding — 관리기 4종: 어긋남·아웃데이티드·모순·코드괴리)
   // (org_memory/org_content → knowledge_unit 1회복사 폐기 2026-06-24 — 원본 DROP, 복사 완료·v6 컷오버.)
