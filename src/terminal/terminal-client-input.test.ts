@@ -374,6 +374,103 @@ t("B10 사파리 IME 어댑터 타이핑도 드래그 관측을 해제한다(직
   h.term._keyHandler(h.kev({ key: "c", metaKey: true }));
   assert.equal(cnt03(h), 0); // 타이핑으로 앱 선택이 사라졌다고 보고 ^C 미전송
 });
+// B11~B17 — 다중 클릭 선택(#1646 제보): 앱 화면에서 '더블클릭으로 단어를 선택'했는데 ⌘C 가 먹지 않고
+//  "복사할 선택이 없어요" 안내만 떴다. 관측기가 드래그만 선택으로 인정해, 더블·트리플 클릭(같은 자리 연타)이
+//  '제자리 클릭'으로 분류돼 게이팅에 걸린 것. 사양·엣지 표는 이 테스트 파일 머리의 B 계열 + #1646 사양 참조.
+const clickAt = (h: Harness, x: number, y: number): void => {
+  h.mod.handleTermData("\x1b[<0;" + x + ";" + y + "M");
+  h.mod.handleTermData("\x1b[<0;" + x + ";" + y + "m");
+};
+t("B11 같은 자리 더블클릭(= 단어 선택) → ^C 1회", async () => {
+  const h = await makeCtx();
+  h.mod.setupClipboard(); h.term.modes.mouseTrackingMode = "any";
+  clickAt(h, 5, 5); clickAt(h, 5, 5);
+  h.term._keyHandler(h.kev({ key: "c", metaKey: true }));
+  assert.equal(cnt03(h), 1);
+});
+t("B12 같은 자리 트리플클릭(= 줄 선택) → ^C 1회", async () => {
+  const h = await makeCtx();
+  h.mod.setupClipboard(); h.term.modes.mouseTrackingMode = "any";
+  clickAt(h, 5, 5); clickAt(h, 5, 5); clickAt(h, 5, 5);
+  h.term._keyHandler(h.kev({ key: "c", metaKey: true }));
+  assert.equal(cnt03(h), 1);
+});
+t("B13 더블클릭 뒤 다른 자리 단일 클릭 → 선택 잃음 → ^C 0건", async () => {
+  const h = await makeCtx();
+  h.mod.setupClipboard(); h.term.modes.mouseTrackingMode = "any";
+  clickAt(h, 5, 5); clickAt(h, 5, 5);
+  clickAt(h, 20, 9);
+  h.term._keyHandler(h.kev({ key: "c", metaKey: true }));
+  assert.equal(cnt03(h), 0);
+});
+t("B14 더블클릭 뒤 타이핑 → 선택 잃음 → ^C 0건", async () => {
+  const h = await makeCtx();
+  h.mod.setupClipboard(); h.term.modes.mouseTrackingMode = "any";
+  clickAt(h, 5, 5); clickAt(h, 5, 5);
+  h.mod.handleTermData("가");
+  h.term._keyHandler(h.kev({ key: "c", metaKey: true }));
+  assert.equal(cnt03(h), 0);
+});
+t("B15 더블클릭 관측도 1회용: ⌘C 연타 3회에도 ^C 는 1회", async () => {
+  const h = await makeCtx();
+  h.mod.setupClipboard(); h.term.modes.mouseTrackingMode = "any";
+  clickAt(h, 5, 5); clickAt(h, 5, 5);
+  for (let i = 0; i < 3; i++) h.term._keyHandler(h.kev({ key: "c", metaKey: true }));
+  assert.equal(cnt03(h), 1);
+});
+t("B16 경계: 같은 자리 2회지만 간격이 임계(600ms)를 넘음 → 연타 아님 → ^C 0건", async () => {
+  const h = await makeCtx();
+  h.mod.setupClipboard(); h.term.modes.mouseTrackingMode = "any";
+  clickAt(h, 5, 5);
+  await sleep(650);
+  clickAt(h, 5, 5);
+  h.term._keyHandler(h.kev({ key: "c", metaKey: true }));
+  assert.equal(cnt03(h), 0);
+});
+t("B17 타이핑 직후 같은 자리 클릭 1회 → 직전 연타에 이어붙지 않는다 → ^C 0건", async () => {
+  const h = await makeCtx();
+  h.mod.setupClipboard(); h.term.modes.mouseTrackingMode = "any";
+  clickAt(h, 5, 5); clickAt(h, 5, 5);   // 여기까지는 선택 성립
+  h.mod.handleTermData("가");            // 타이핑 — 앱은 선택을 잃는다
+  clickAt(h, 5, 5);                      // 같은 자리 단일 클릭(앱엔 선택 없음)
+  h.term._keyHandler(h.kev({ key: "c", metaKey: true }));
+  assert.equal(cnt03(h), 0);
+});
+t("B18 더블클릭 사이 휠 리포트가 끼어도 연타로 인정 → ^C 1회", async () => {
+  const h = await makeCtx();
+  h.mod.setupClipboard(); h.term.modes.mouseTrackingMode = "any";
+  clickAt(h, 5, 5);
+  h.mod.handleTermData("\x1b[<64;5;5M"); // 휠 — 선택과 무관
+  clickAt(h, 5, 5);
+  h.term._keyHandler(h.kev({ key: "c", metaKey: true }));
+  assert.equal(cnt03(h), 1);
+});
+t("B19 마우스모드 아님 + 더블클릭 → 전송 0건 · 브라우저 기본에 위임", async () => {
+  const h = await makeCtx();
+  h.mod.setupClipboard();
+  clickAt(h, 5, 5); clickAt(h, 5, 5);
+  assert.equal(h.term._keyHandler(h.kev({ key: "c", metaKey: true })), true);
+  assert.equal(cnt03(h), 0);
+});
+// B20~B21 — 브리지는 갔는데 앱이 복사 신호(OSC52)를 안 보낸 경우(#1646): 종전엔 완전 무음이라
+//  사용자가 실패를 알 수 없었다. 성공(OSC52 도착)은 여전히 무음이어야 한다.
+t("B20 브리지 후 OSC52 도착 → 실패 안내 없음(성공은 무음)", async () => {
+  const h = await makeCtx();
+  h.mod.setupClipboard(); h.mod.setupOscClipboard(); h.term.modes.mouseTrackingMode = "any";
+  clickAt(h, 5, 5); clickAt(h, 5, 5);
+  h.term._keyHandler(h.kev({ key: "c", metaKey: true }));
+  h.term._osc[52]("0;" + Buffer.from("HELLO").toString("base64")); // 앱이 복사 신호를 보냄
+  await sleep(2700);
+  assert.ok(!String(h.diag()).includes("bridge-miss"));
+});
+t("B21 브리지 후 OSC52 없음 → 실패 안내 1회", async () => {
+  const h = await makeCtx();
+  h.mod.setupClipboard(); h.mod.setupOscClipboard(); h.term.modes.mouseTrackingMode = "any";
+  clickAt(h, 5, 5); clickAt(h, 5, 5);
+  h.term._keyHandler(h.kev({ key: "c", metaKey: true }));
+  await sleep(2700);
+  assert.ok(String(h.diag()).includes("bridge-miss"));
+});
 t("B8 마우스모드 아님 + Cmd+C → 전송 0건(브라우저 기본 복사 위임)", async () => {
   const h = await makeCtx();
   h.mod.setupClipboard();
