@@ -203,8 +203,34 @@ async function bootLivSession(host: HTMLElement, cards: HTMLElement): Promise<vo
   host.replaceChildren(el('iframe', { class: 'liv-term', src: url, title: '리브와의 대화' }));
 
   // **열면 바로 진단**(대표 결정) — 방금 만든 세션에만 건다. 이미 있던 세션에 또 걸면 하던 말을 끊는다.
-  //  세션이 뜨자마자 프롬프트를 넣으면 하네스가 아직 입력을 못 받으므로 잠깐 기다린다.
-  if (fresh) {
-    setTimeout(() => { void livSendPrompt(s.id, LIV_OPENING).catch(() => { /* 사람이 직접 물어도 된다 */ }); }, 4000);
+  if (fresh) void sendWhenReady(s.id, LIV_OPENING);
+}
+
+/**
+ * 하네스가 **입력을 받을 준비가 된 뒤에** 첫 말을 넣는다.
+ *
+ * ⚠ 고정 지연은 못 믿는다(실측): 세션이 뜨자마자 4초 뒤 넣었더니 프롬프트가 **조용히 유실**됐다 —
+ *  claude 가 이전 대화를 이어받으면(`--resume`) 기동이 훨씬 길어지는데, 그 사이에 넣은 키는 아무 데도
+ *  안 남고 화면만 멀쩡해 보인다. "열면 바로 진단"이 조건부로 깨지는 셈이라 상태를 보고 넣는다.
+ *  못 넣어도 화면은 살아 있다 — 사람이 직접 물으면 된다(조용히 포기하되 막지는 않는다).
+ */
+async function sendWhenReady(sessionId: string, text: string): Promise<void> {
+  for (let i = 0; i < 40; i++) {                 // 최대 ~80초
+    await new Promise((r) => setTimeout(r, 2000));
+    if (livSessionId !== sessionId) return;      // 그 사이 화면을 떠났거나 다른 세션으로 바뀌었다
+    try {
+      const r = await api('/api/ui/terminal/sessions') as { sessions?: Array<{ id: string; agentState?: string }> };
+      const st = (r.sessions ?? []).find((x) => x.id === sessionId)?.agentState;
+      if (st !== 'idle' && st !== 'waiting') continue;  // 아직 기동·복원 중이다
+      // ⚠ **이미 대화가 있으면 여는 말을 하지 않는다.** tmux 세션이 새로 떴다고 대화가 새 것은 아니다 —
+      //  서버가 죽은 세션을 되살릴 때 claude 대화를 `--resume` 으로 이어붙인다(#1059 E, 실측으로 확인).
+      //  그걸 모르고 여는 말을 또 넣으면 리브가 하던 말을 끊고 처음부터 다시 진단한다.
+      //  (리브가 대화를 이어받는 것 자체는 기획 의도와 맞다 — "세션이 죽어도 리브는 이어진다".)
+      const p = await api('/api/ui/terminal/sessions/' + encodeURIComponent(sessionId) + '/prompts')
+        .catch(() => null) as { prompts?: unknown[] } | null;
+      if (p && Array.isArray(p.prompts) && p.prompts.length) return;
+      await livSendPrompt(sessionId, text).catch(() => { /* 사람이 직접 물어도 된다 */ });
+      return;
+    } catch { /* 조회 실패는 그냥 다음 주기에 다시 */ }
   }
 }
