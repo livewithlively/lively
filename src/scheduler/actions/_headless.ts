@@ -14,15 +14,12 @@ export async function resolveSessionTmux(sessionRef: string): Promise<string> {
 }
 
 // 세션 PTY 에 텍스트 주입(+Enter). **로컬 세션이든 노드 세션이든 같은 함수로 부른다**(#1664).
-//  단일라인 평탄화·flush 지연·psmux 표면 분기 같은 규약은 terminal/send-keys 안에 갇혀 있고, 여기는
-//  **어디로 보낼지**만 고른다. 종전엔 이 함수가 tmux 를 직접 execFile 해서 게이트웨이 로컬 세션에만
-//  닿았다 — 멤버 PC(노드) 세션에는 크론도 리브도 일을 시킬 수 없었다.
+//  규약(단일라인 평탄화·flush 지연·psmux 표면 분기)은 terminal/send-keys 가, 로컬/원격 라우팅은
+//  node/session-inject 가 진다 — 웹 REST(세션 프롬프트 보내기)와 **같은 경로**를 타게 하려는 것이다.
+//  종전엔 이 함수가 tmux 를 직접 execFile 해서 게이트웨이 로컬 세션에만 닿았다.
 export async function injectToSession(sessionId: string, text: string): Promise<void> {
-  const { nodeOfSession, nodeRpc } = await import("../../node/registry.js");
-  const nodeId = nodeOfSession(sessionId);
-  if (nodeId) { await nodeRpc(nodeId, "sendKeys", { id: sessionId, text }); return; } // 원격 — 노드가 자기 mux 로 실행
-  const { sendKeysToSession } = await import("../../terminal/send-keys.js");
-  await sendKeysToSession(sessionId, text);
+  const { injectPrompt } = await import("../../node/session-inject.js");
+  await injectPrompt(sessionId, text);
 }
 
 // 헤드리스 실행 신원(의뢰자) 해소 — params.requester 우선, 없으면 잡 created_by 폴백. D1(의뢰자 시트) — 그 멤버의 클로드 로그인/프로필로 과금·귀속.
