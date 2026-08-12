@@ -1419,6 +1419,36 @@
   "input_hash": "28bad6be76e14faa"
  },
  {
+  "name": "org_canary_status",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/canary"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_canary_run",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/canary/run"
+  ],
+  "input_hash": "4e46462cece225b5"
+ },
+ {
+  "name": "org_canary_probes",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/canary/probes"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
   "name": "org_harness_assets",
   "scope": "runtime",
   "mcp": true,
