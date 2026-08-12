@@ -3,7 +3,7 @@
 //  드래그 정렬 #657h3 계약 유지: localStorage kn_home_cat_order_v1·그룹 경계 불가침) →
 //  시작하기 문서 카드(데크 발췌) → 최근 변경(날짜 구분선 + 2열 리치 카드 — 내용은 유지, 표현을 초대장으로).
 //  시각 재료는 전부 UI 가 생성한다(오로라·워터마크·아이콘) — 사진 업로드 없음.
-import { api, el, errorNote, relTime, state } from './core.js';
+import { api, busy, el, errorNote, relTime, state } from './core.js';
 import { skeletonRows } from './learn.js';
 import { hasMemoryScope, isCategoryHomeDoc, knFetchCategoryIndex } from './wiki-data.js';
 import { wkAurora, wkDayLabel, wkDocCard, wkEmpty, wkReadVisits, wkSection } from './wiki-ui.js';
@@ -41,7 +41,7 @@ function homeSortByOrder(cats, order) {
     });
 }
 async function renderHomeSurface(box, ctx) {
-    box.replaceChildren(el('div', { class: 'wk-home' }, skeletonRows(4)));
+    busy(box, el('div', { class: 'wk-home' }, skeletonRows(4)));
     let pinned = [];
     let recent = [];
     try {

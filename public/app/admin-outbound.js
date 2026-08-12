@@ -4,14 +4,14 @@
 //  둘 다 인바운드(admin-connectors.ts)의 역방향이라 한 파일에 둔다 — 토큰·컨테이너 설정은 인바운드 쪽 소관.
 //  ⚠ 두 패널은 셸의 재렌더 레지스트리를 쓰지 않고 **자기 지역 rerender 클로저**로 자기를 다시 그린다
 //   (feed-targets 는 전용 GET /api/ui/feed-targets 로 자체 조회 — /api/ui/org 페이로드를 오염시키지 않는다).
-import { api, cardHead, el, toast, uiText } from './core.js';
+import { api, busy, cardHead, el, toast, uiText } from './core.js';
 import { sectionHead } from './admin-widgets.js';
 // #976 위키 아웃바운드(피드) 패널 — 정본 지식 → 노션 등 '지식 피드' DB 카드 투영. 커넥터(인바운드)의 역방향.
 //  피드 목적지(feed_target) 목록 + 카테고리 N:M 매핑(발행 게이트) + all_categories + 새 피드 부트스트랩/등록.
 //  전용 GET /api/ui/feed-targets 로 자체 조회(연결 패널처럼) — /api/ui/org 페이로드 오염 안 시킴.
 async function feedTargetsEditor(detail, data) {
     const meaning = data.meaning && data.meaning['feed-targets'];
-    detail.replaceChildren(sectionHead('위키 아웃바운드(피드)', '우리 위키의 지식을 외부 도구로 내보냅니다. 어떤 카테고리를 어디로 보낼지 정합니다.', meaning), el('div', { class: 'card' }, el('p', { class: 'admin-hint' }, ...uiText('피드 목적지 불러오는 중…'))));
+    busy(detail, sectionHead('위키 아웃바운드(피드)', '우리 위키의 지식을 외부 도구로 내보냅니다. 어떤 카테고리를 어디로 보낼지 정합니다.', meaning), el('div', { class: 'card' }, el('p', { class: 'admin-hint' }, ...uiText('피드 목적지 불러오는 중…'))));
     let res;
     try {
         res = await api('/api/ui/feed-targets');
@@ -147,7 +147,7 @@ function newFeedForm(rerender) {
 async function projectOutboundEditor(detail, data) {
     const meaning = data.meaning && data.meaning['project-outbound'];
     const canEdit = !!data.canEdit;
-    detail.replaceChildren(sectionHead('프로젝트 아웃바운드', '우리 프로젝트와 과업의 변경을 외부 협업 도구로 내보냅니다.', meaning), el('div', { class: 'card' }, el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…'))));
+    busy(detail, sectionHead('프로젝트 아웃바운드', '우리 프로젝트와 과업의 변경을 외부 협업 도구로 내보냅니다.', meaning), el('div', { class: 'card' }, el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…'))));
     let jobs = [];
     try {
         const cron = await api('/api/ui/cron');

@@ -1,7 +1,7 @@
 // terminal/session-form.ts — 세션 **생성·수정 폼**과 그 부속: 실행 설정 기억(#673/#782) · 초대 피커 · 노드 관리 · 로그인 배너/프로필 안내.
 //  소비자: terminal/{session-list,routes}.ts + 프로젝트·대시보드 탭(배럴 terminal.ts 경유).
 //  import 방향: select-bar(아래층)만 본다. 목록 재렌더는 routes.ts 를 직접 import 하지 않고 아래 훅으로 부른다(순환 방지).
-import { api, appUrl, el, infoPop, personFace, state, toast, visAxisOn } from '../core.js';
+import { api, appUrl, busy, el, infoPop, personFace, state, toast, visAxisOn } from '../core.js';
 import { field, overlay } from '../admin.js';
 import { isTourActive } from '../tour.js';
 import { termUrl } from './select-bar.js';
@@ -262,7 +262,7 @@ function openTermCreateForm(cfg, view, onCreated) {
     applyPreset();
     // 작업 폴더 = 선택한 루트(공유/개인) 안을 드롭다운으로 재귀 탐색.
     async function loadPicker() {
-        pickerBox.replaceChildren(el('div', { class: 'caption', text: '폴더 불러오는 중…' }));
+        busy(pickerBox, el('div', { class: 'caption', text: '폴더 불러오는 중…' }));
         let data;
         try {
             data = await api('/api/ui/terminal/browse?root=' + encodeURIComponent(rootKey) + '&path=' + encodeURIComponent(pickerPath));
@@ -359,7 +359,7 @@ function openNodeManager(view) {
     const gw = location.origin;
     const codeStyle = 'background:var(--bg-subtle,#0d1117);color:#c9d1d9;padding:10px 12px;border-radius:8px;white-space:pre;overflow-x:auto;font-size:12px;line-height:1.6;margin:6px 0';
     async function load() {
-        body.replaceChildren(el('div', { class: 'caption', text: '노드를 불러오는 중…' }));
+        busy(body, el('div', { class: 'caption', text: '노드를 불러오는 중…' }));
         let nodes = [];
         try {
             nodes = (await api('/api/ui/nodes')).nodes || [];

@@ -1,6 +1,6 @@
 // admin-automation.ts — 자동화 섹션의 두 패널: 스케줄(cron) · 상시 에이전트(managed session)
 //  (#1313 R37, admin.ts 에서 verbatim 분리 — 셸 역호출 없는 자족 패널).
-import { api, cardHead, el, errorNote, memberCombo, relTime, toast, withTip } from './core.js';
+import { api, busy, cardHead, el, errorNote, memberCombo, relTime, toast, withTip } from './core.js';
 import { overlayBox, skeleton } from './ui-primitives.js';
 import { psBlock, psInputStyle } from './admin-widgets.js';
 
@@ -8,7 +8,7 @@ import { psBlock, psInputStyle } from './admin-widgets.js';
 //  map_unmapped 잡은 '타깃 LLM 세션'(상시 시드 세션)을 골라 거기에 분류 태스크를 주입한다(팀플랜 과금 — headless 토큰 아님).
 async function cronPanel(detail, data) {
   const reload = () => cronPanel(detail, data);
-  detail.replaceChildren(el('div', { class: 'card' }, skeleton('스케줄 잡을 불러오는 중')));
+  busy(detail, el('div', { class: 'card' }, skeleton('스케줄 잡을 불러오는 중')));
   let jobs; let actions: any[] = []; let tz = 'Asia/Seoul'; // tz(#778) = cron식을 해석하는 벽시계 기준(조직 시간대)
   try { const r = await api('/api/ui/cron'); jobs = (r && r.jobs) || []; actions = (r && r.actions) || []; tz = (r && r.timezone) || tz; }
   catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '스케줄 잡을 불러오지 못했습니다'))); return; }
@@ -197,7 +197,7 @@ async function cronDelete(id, reload, autoSys?) {
 //  '에이전트를 위한 프로젝트' — createSession + 공유폴더(managed/<id>) 재사용. account=라이블리 계정/프로필(클로드 로그인, 멀티프로필 대비).
 async function managedSessionsPanel(detail, data) {
   const reload = () => managedSessionsPanel(detail, data);
-  detail.replaceChildren(el('div', { class: 'card' }, skeleton('상시 에이전트를 불러오는 중')));
+  busy(detail, el('div', { class: 'card' }, skeleton('상시 에이전트를 불러오는 중')));
   let sessions; let live: string[] = [];
   try { const r = await api('/api/ui/managed-sessions'); sessions = (r && r.sessions) || []; }
   catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '상시 에이전트를 불러오지 못했습니다'))); return; }

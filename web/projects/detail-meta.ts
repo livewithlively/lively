@@ -7,7 +7,7 @@
 //  ⚠ PJV_TAG_NONE 은 taskmodal 소유지만 **실체 리프 직결**로 받는다(#1404) — 금지된 건 배럴 '../taskmodal.js'
 //   직결(그건 projects↔taskmodal 순환에 가지를 늘린다)이고, taskmodal/tags.ts 는 projects 를 되짚지 않는
 //   리프라 간선을 하나 깔아도 순환이 생기지 않는다. R56 이 반대 방향(tags→projects/popover)에 쓴 것과 같은 수다.
-import { api, el, toast } from '../core.js';
+import { api, busy, el, toast } from '../core.js';
 import { PJV_TAG_NONE } from '../taskmodal/tags.js';
 import { _pjvPmOpen, pjvOpenProjectModal } from './detail.js';
 import { pjvFieldControl } from './fields.js';
@@ -395,7 +395,7 @@ function pjvProjEdgePicker(anchor, p, dir, reload) {
     }) : [el('div', { class: 'pjv-menu-empty', text: q ? '결과 없음' : '연결할 다른 프로젝트가 없어요' })]));
   };
   search.addEventListener('input', paint);
-  results.replaceChildren(el('div', { class: 'pjv-menu-empty', text: '불러오는 중…' }));
+  busy(results, el('div', { class: 'pjv-menu-empty', text: '불러오는 중…' }));
   (async () => { try { all = await api('/api/ui/v6/projects').then((d) => (d && d.projects) || []); } catch (_) { all = []; } paint(); })();
   setTimeout(() => { try { search.focus(); } catch (_) { /* noop */ } }, 0);
 }

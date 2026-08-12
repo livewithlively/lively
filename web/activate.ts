@@ -7,7 +7,7 @@
 //   · 양방향 피싱 경고: ① 남이 준 코드 승인 금지(내 계정 탈취) ② 남의 코드 승인 금지(그 기기가 나로 로그인).
 //   · client_ip 는 서버가 안 준다(trust proxy 미설정이라 프록시 IP=모든 클라 동일 → 신뢰신호 무의미).
 //   · control-plane(관리권한) 포함 승인은 비밀번호 재확인(step-up) — 서버가 검증.
-import { api, el, state, toast, usernameAnchor } from './core.js';
+import { api, busy, el, state, toast, usernameAnchor } from './core.js';
 
 export async function renderActivate(view: any): Promise<void> {
   const params = new URLSearchParams((location.hash.split('?')[1] || ''));
@@ -46,7 +46,7 @@ export async function renderActivate(view: any): Promise<void> {
 async function drawLookup(slot: any, raw: string): Promise<void> {
   const code = String(raw || '').trim();
   if (!code) { slot.replaceChildren(el('p', { class: 'admin-hint', text: '코드를 입력하세요.' })); return; }
-  slot.replaceChildren(el('p', { class: 'admin-hint', text: '조회 중…' }));
+  busy(slot, el('p', { class: 'admin-hint', text: '조회 중…' }));
   let info: any;
   try {
     info = await api('/api/ui/cli/device/lookup?code=' + encodeURIComponent(code));

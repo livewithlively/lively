@@ -2,7 +2,7 @@
 //  라벨 사전 · 트리/카테고리 세션 캐시 · 속성(메타) 노출 엔진 · 피커/오버레이 · 댓글 위젯 · 대문 문서 컨벤션.
 //  표면(화면) 코드는 없다 — 홈/카테고리/문서 캔버스는 wiki-home/wiki-category/wiki-doc 이 이 모듈을 소비한다.
 //  순환 import 금지: 이 모듈은 core/learn 만 import 한다(wiki-*.ts → wiki-data.ts 단방향).
-import { LIFECYCLE_LABEL, absTime, api, el, errorNote, personFace, relTime, renderInline, renderMarkdown, safeHref, selectFilter, state, toast, withTip } from './core.js';
+import { absTime, api, busy, el, errorNote, LIFECYCLE_LABEL, personFace, relTime, renderInline, renderMarkdown, safeHref, selectFilter, state, toast, withTip } from './core.js';
 import { overlayBox, skeletonRows } from './learn.js';
 
 // ── 카테고리 대문 문서 컨벤션(#657 → #764 이관) — 카테고리당 지식 문서 `category-home-<key>` 1건이
@@ -593,7 +593,7 @@ function openKnowledgeLinkPicker(k, reload) {
   let t: any = null;
   async function search() {
     const q = qIn.value.trim();
-    results.replaceChildren(skeletonRows(2));
+    busy(results, skeletonRows(2));
     try {
       const url = q ? ('/api/ui/knowledge/search?' + new URLSearchParams({ q, limit: '15' }))
         : ('/api/ui/knowledge?' + new URLSearchParams({ limit: '15', orderBy: 'updated_at' }));

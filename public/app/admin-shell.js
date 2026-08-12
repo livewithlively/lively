@@ -7,7 +7,7 @@
 //   등록 블록이 그 유일한 접점이다. 새 패널을 붙일 땐 여기 한 줄만 늘린다.
 //  병합 섹션 껍데기(membersSection·toolsSection…)도 셸이 갖는다 — 그건 패널이 아니라 **화면 구성**이기 때문이다
 //   (#837: 합치는 건 화면이지 데이터가 아니다 — 새 진실 출처 0).
-import { applyReveal, cardHead, el, errorNote, hasScope, state, toast } from './core.js';
+import { applyReveal, cardHead, el, errorNote, hasScope, keepSideScroll, state, toast } from './core.js';
 import { skeleton } from './ui-primitives.js';
 import { visibilityAxesPanel } from './visibility-axes.js';
 import { loadAdmin, registerPanel, rerenderPanel } from './admin-rerender.js'; // 패널 재렌더 레지스트리(셸↔패널 순환 절단)
@@ -365,6 +365,9 @@ async function renderAdmin(view, sub) {
     //  위계 2단을 사이드바 하나가 전담한다: 그룹명은 소제목, 섹션은 그 아래 항목. 전 그룹이 항상 펼쳐져 있어
     //  '어디에 뭐가 있는지'가 한눈에 보인다. 권한으로 섹션이 0개인 그룹은 통째로 숨는다.
     const side = el('nav', { class: 'docs-side admin-side', 'aria-label': '관리 섹션' });
+    // 섹션을 고르면 이 화면 전체를 다시 그리므로 사이드바도 새 노드가 된다 → 자체 스크롤이 0 으로 돌아갔다
+    //  (실측 #1635: 300→0). 항목이 20개 넘어 늘 스크롤돼 있는 사이드바라 '방금 누른 자리'를 잃었다.
+    keepSideScroll(side, 'admin');
     for (const g of ADMIN_GROUPS) {
         const items = visibleSections.filter((s) => s.group === g.key);
         if (!items.length)

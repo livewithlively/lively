@@ -20,7 +20,7 @@
 //   · **사각지대를 맨 위에** — "증류기를 켰는데 왜 안 줄지?"의 답이 목록보다 먼저 보인다.
 //   · **채널은 고르는 것** — 실재하는 채널 목록(건수·잔량 포함)에서 눌러 담는다(오타 원천 차단).
 //   · **반사판은 늘 곁에** — 설정을 만지는 내내 "지금 이게 무엇을 집는가"가 오른쪽에 붙어 있다.
-import { api, cardHead, el, relTime, toast } from './core.js';
+import { api, busy, cardHead, el, keepSideScroll, relTime, toast } from './core.js';
 import { confirmDialog, skeleton } from './ui-primitives.js';
 import { stageJobCard } from './context-stage-job.js'; // 단계 공용 '언제 도나' 카드(#1618)
 const PAGE_TYPES = ['', 'decision', 'concept', 'how-to', 'reference', 'research', 'entity'];
@@ -54,7 +54,7 @@ window.addEventListener('hashchange', () => {
 // ══════════════════════════════════════════════════════════════════════════
 export async function distillersPanel(detail, data) {
     const head = () => el('div', { class: 'admin-sechead' }, el('div', { class: 'section-title' }, el('h2', { text: '자료 증류기' })), el('p', { class: 'admin-hint', text: '수집된 원본 자료를 무슨 기준으로 어떤 형식의 지식으로 만들지 정합니다. 팀·채널마다 다르게 여러 개 만들 수 있습니다.' }));
-    detail.replaceChildren(head(), el('div', { class: 'card' }, skeleton('증류기 불러오는 중')));
+    busy(detail, head(), el('div', { class: 'card' }, skeleton('증류기 불러오는 중')));
     let res;
     try {
         res = await api('/api/ui/org/distillers');
@@ -517,6 +517,7 @@ function editorPage(d, isNew) {
     ];
     const panes = {};
     const side = el('nav', { class: 'docs-side dst-side', 'aria-label': '설정 단계' });
+    keepSideScroll(side, 'distiller'); // 단계를 고르면 화면을 다시 그려 사이드바가 새 노드가 된다(#1635)
     const sideGroup = el('div', { class: 'docs-side-group' }, el('div', { class: 'docs-side-title', text: '설정' }));
     for (const s of STEPS) {
         const b = el('button', { type: 'button', class: 'docs-item', 'data-step': s.key, text: s.label });

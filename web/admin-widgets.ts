@@ -3,7 +3,7 @@
 //  여기 있는 것들은 어떤 패널도 import 해도 순환이 안 생기는 잎(leaf) 이어야 한다 — core.js·ui-primitives.js 외 의존 금지.
 //  ⚠ 앱 전역 프리미티브(field·overlay·copyButton·confirmDialog…)는 여기 있지 않다 — web/ui-primitives.ts 소유(#1313 R27).
 //   관리탭 밖에서도 쓰이던 것들이라 여기로 내려오면 정의가 두 벌이 된다. 필요하면 아래처럼 거기서 직접 받는다.
-import { api, cardHead, el, errorNote, state, toast, uiText } from './core.js';
+import { api, busy, cardHead, el, errorNote, state, toast, uiText } from './core.js';
 import { field, overlay } from './ui-primitives.js';
 
 // ════════════════════════════════════════════════════════════════════
@@ -27,7 +27,10 @@ function segTabs(sectionKey, tabs) {
   const bar = el('div', { class: 'seg-tabs', role: 'tablist' });
   const paint = () => {
     for (const b of bar.children as any) b.classList.toggle('on', b.dataset.k === state.admin.tab[sectionKey]);
-    body.replaceChildren();
+    // 비우기는 busy 로 — 서브탭 본문 렌더는 대개 비동기(fetch)라, 그냥 비우면 그 사이 문서가 무너져
+    //  스크롤이 위로 클램프된다(#1635). 높이를 예약해 두면 다음 내용이 들어올 때 자동으로 풀린다.
+    //  ⚠ 여기서 먼저 비우고 render 안에서 busy 를 부르면 이미 높이가 0 이라 예약할 것이 없다 — 순서가 계약이다.
+    busy(body);
     (live.find((t) => t.key === state.admin.tab[sectionKey]) as any).render(body);
   };
   for (const t of live) {

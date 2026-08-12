@@ -7,7 +7,7 @@
 //  화면 설계(증류기 화면의 검증된 문법을 따른다 — 같은 자리에서 비교하며 만지게):
 //   · 목록과 편집이 한 페이지에. 편집을 모달로 띄우면 다른 수집기의 상태를 못 보면서 설정하게 된다.
 //   · 만들기는 **프리셋 고르기부터** — 무엇을 붙이는지가 첫 결정이고, 나머지는 그 결정에서 파생된다.
-import { api, cardHead, el, relTime, toast, uiText } from './core.js';
+import { api, busy, cardHead, el, relTime, toast, uiText } from './core.js';
 import { confirmDialog } from './admin.js';
 import { overlay } from './ui-primitives.js';
 import { stageJobCard } from './context-stage-job.js'; // 단계 공용 '언제 도나' 카드(#1618)
@@ -15,7 +15,7 @@ let editingId = null;
 let creatingPreset = null; // 프리셋을 고른 뒤 생성 폼
 let choosingPreset = false;
 export async function renderCollectors(host) {
-    host.replaceChildren(el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '수집기를 불러오는 중…' })));
+    busy(host, el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '수집기를 불러오는 중…' })));
     let d;
     try {
         d = await api('/api/ui/org/collectors');

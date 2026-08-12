@@ -1,7 +1,7 @@
 // taskmodal/composer.ts — #1313 R56: web/taskmodal.ts 섹션 분할 ②(Activity 작성기).
 //  단색 라인 아이콘 맵(PJV_TM_ICONS) · 이모지 피커 · 멘션 메뉴 · 공유폴더 첨부 피커 · 렌더된 #file: 링크 배선 ·
 //  작성기 하단 툴바. 툴바는 프로젝트 탭(projects.ts)도 재사용하는 공개 표면이다.
-import { api, el, personFace, sv, toast } from '../core.js';
+import { api, busy, el, personFace, sv, toast } from '../core.js';
 // 소유처 직결(#1313 R56) — 배럴(../projects.js) 경유였다면 projects↔taskmodal 순환에 가지가 하나 더 생긴다.
 //  R30 이 이미 이 심볼들을 리프로 내려놨으므로 직결이 곧 진짜 소유처다.
 import { pjvPopover } from '../projects/popover.js';
@@ -59,7 +59,7 @@ function pjvtmAttachPicker(anchor, o) {
     el('div', { class: 'pjv-files-head2', text: '공유 폴더에서 첨부' }), crumb, rowsBox));
   let curPath = '';
   const load = async () => {
-    rowsBox.replaceChildren(el('div', { class: 'pjv-files-empty', text: '불러오는 중…' }));
+    busy(rowsBox, el('div', { class: 'pjv-files-empty', text: '불러오는 중…' }));
     let data: any;
     try { data = await api(B + '/files?path=' + encodeURIComponent(curPath)); }
     catch (e) { rowsBox.replaceChildren(el('div', { class: 'pjv-files-empty', text: '공유 폴더를 불러오지 못했어요' })); return; }

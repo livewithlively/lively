@@ -5,7 +5,7 @@
 //  ⚠ 재수출(하위호환): skeleton·skeletonRows·overlayBox 는 **이 파일 소유가 아니다** — ui-primitives.ts 가 소유하고
 //   여기서 그대로 재수출할 뿐이다(#1313 R27). 18개 파일이 옛 경로 './learn.js' 로 가져가고 있어 남겨 뒀다.
 //   새 소비자는 ui-primitives.ts 에서 직접 받아라 — 이 배럴 몫은 줄어드는 방향으로만 간다.
-import { api, el, errorNote, navOn, pageHead, renderMarkdown, state, sv } from './core.js';
+import { api, el, errorNote, keepSideScroll, navOn, pageHead, renderMarkdown, state, sv } from './core.js';
 // 관리탭 조각 4개를 **실체 모듈에서 직접** 받는다(#1313 R40). 종전엔 넷 다 './admin.js' 배럴 경유였고,
 //  admin.ts 가 review/visibility-axes 를 import 하는 한 그 배럴이 learn 으로 되돌아오는 순환 4건을 만들었다
 //  (check-imports 의 ALLOWED_CYCLES 에 'R37/R40 이 나가면 사라진다'로 예약돼 있던 바로 그것).
@@ -66,6 +66,7 @@ const DOCS_NAV = [
 ];
 function docsSidebar(active) {
     const side = el('nav', { class: 'docs-side', 'aria-label': '사용 가이드 문서' });
+    keepSideScroll(side, 'learn'); // 문서를 고르면 화면을 다시 그려 사이드바가 새 노드가 된다(#1635)
     for (const g of DOCS_NAV) {
         const box = el('div', { class: 'docs-side-group' }, el('div', { class: 'docs-side-title', text: g.group }));
         for (const it of g.items) {

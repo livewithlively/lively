@@ -10,7 +10,7 @@
 //   · 행 본체: pjvProjRow · pjvProjTaskRow · pjvProjGroup · 인라인 추가행(pjvProjAddRow)
 //  ⚠ pjvOpenTaskModal 은 **배럴(../projects.js) 경유**로 받는다 — 기존 projects↔taskmodal 순환을 새 직접
 //   엣지(rows→taskmodal)로 늘리지 않기 위해서다(순환 축소는 R56 소관).
-import { api, appUrl, el, personFace, toast } from '../core.js';
+import { api, appUrl, busy, el, personFace, toast } from '../core.js';
 import { openProjectSessionForm, pjvAddTask, pjvOpenTaskModal, pjvRowMore, pjvSetProjStatusCustom, } from '../projects.js';
 import { pjvIcon, pjvSubtaskIcon } from './icons.js';
 import { pjvPopover } from './popover.js';
@@ -409,7 +409,7 @@ function pjvProjTeamControl(currentMembers, applyIds) {
         };
         function rebuild() {
             if (!all) {
-                listBox.replaceChildren(el('div', { class: 'pjv-menu-empty', text: '불러오는 중…' }));
+                busy(listBox, el('div', { class: 'pjv-menu-empty', text: '불러오는 중…' }));
                 return;
             }
             const selIds = new Set(members.map((m) => m.id));
@@ -646,7 +646,7 @@ function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
             if (loading)
                 return;
             loading = true;
-            subBox.replaceChildren(el('div', { class: 'pjv-proj-subnote', text: '태스크 불러오는 중…' }));
+            busy(subBox, el('div', { class: 'pjv-proj-subnote', text: '태스크 불러오는 중…' }));
             try {
                 const d = await taskCtx.fetchProjTasks(p.id);
                 const all = (d && d.tasks) || [];

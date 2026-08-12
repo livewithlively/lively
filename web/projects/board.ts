@@ -25,7 +25,7 @@
 //  ②뷰 탭·③툴바의 실체(필터 엔진 · 팝오버 5종 · 뷰 탭 줄)는 web/projects/filters.ts 로 나갔다(#1313 R32).
 //  이 파일에는 ①브레드크럼과 세 층을 조립하는 보드 렌더(pjvProjectListBoard)가 남는다.
 // ════════════════════════════════════════════════════════════════════════════
-import { api, el, errorNote, personFace, state, sv, toast } from '../core.js';
+import { api, el, errorNote, keepSideScroll, personFace, state, sv, toast } from '../core.js';
 import { skeleton } from '../learn.js';
 import { pjvPopover, pjvSwitchRow } from './popover.js';
 import { pjvBundleIcon, pjvSideSearchIcon, pjvTbIcon, pjvViewIcon } from './icons.js';
@@ -796,6 +796,9 @@ function pjvProjectListBoard(projects, lists, mineIds, reload, canDelete, fields
     });
     nav.append(sideResize);
     const navInner = el('div', { class: 'pjv-side-nav-inner' });
+    // 사이드바 항목을 고르면 보드 전체를 다시 그려 이 스크롤러가 새 노드가 된다 → 위치가 0 으로 돌아갔다
+    //  (실측 #1635: 400→0). 리스트·폴더가 많으면 늘 스크롤돼 있어 '방금 누른 자리'를 매번 잃었다.
+    keepSideScroll(navInner, 'projects');
     // 접기 글리프는 «(이중 꺾쇠) — 클릭업과 같은 기호. 채워진 ▲▼◀ 삼각형은 트리 캐럿(펼침/접힘) 몫이라 섞이면 헷갈린다.
     const collapseBtn = el('button', { class: 'pjv-side-collapse', type: 'button', title: '사이드바 닫기', 'aria-label': '사이드바 닫기', text: '«' });
     // 세모(◀) 닫기 — 직접 고른 스코프(리스트/폴더)는 유지한 채 nav 만 닫는다(#662). 자동 선택 스코프면 예전처럼
