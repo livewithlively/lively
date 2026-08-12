@@ -132,7 +132,12 @@ export const DEFAULT_CONTEXT_ONTOLOGY_GUIDE = [
   "- **⚠ 외부 서비스 MCP 는 라이블리 `ext__*` 가 기본이다(조직 통제)** — 같은 서비스(슬랙·노션·드라이브·메일 등)가 라이블리 프록시(`ext__*`)와 개인 커넥터(claude.ai 연동·자체 설치 MCP) 양쪽에 보이면 **반드시 `ext__*` 를 쓴다**. `ext__*` 는 조직이 관리하는 커넥터·자격·감사 경로로 나가고, 개인 커넥터는 개인 자격으로 그 통제를 우회한다. \"이미 로드돼 있어서\"·\"이름이 먼저 보여서\"는 선택 근거가 아니다. 그 서비스 커넥터가 라이블리에 없거나 실패할 때만 개인 커넥터로 폴백하고, 폴백했음을 답변에 밝힌다.",
   "",
   "**기록 — 지속될 맥락은 그 자리에서(in-flow), 나중에 몰아서가 아니라.**",
-  "- 지식: 연구·결정·설계·런북이 생기면 즉시 `knowledge_save`로 **전문**을 기록한다(요약·링크 X). injection(규칙·페르소나만 `always`, 그 외 `recalled`)·provenance(`authored`)를 정하고 `knowledge_link_category`로 카테고리(제품이면 도메인)에 연결한다.",
+  // #1641 필수 필드를 **여기서** 가르친다. 구 문구는 category·type(신규 필수)을 한 번도 언급하지 않고 카테고리를
+  //  `knowledge_link_category`(저장 후 별도 연결)로 안내했다 — 스키마와 어긋난 지시였다. 고객사 실측(첫 40일):
+  //  knowledge_save 실패 234건 중 224건이 필수 필드 누락, 신규 첫 시도 성공률 73%. 도구 설명은 이미 3,371자로
+  //  그 사실을 적고 있었으므로, 문제는 "설명이 부족한 것"이 아니라 **매 세션 주입되는 이 가이드가 다르게 가르친 것**이다.
+  //  injection 은 뺐다 — #335 로 사용자 입력이 폐기돼(지식은 recalled 고정) 정할 수 있는 값이 아니다.
+  "- 지식: 연구·결정·설계·런북이 생기면 즉시 `knowledge_save`로 **전문**을 기록한다(요약·링크 X). **신규 저장은 `body_md`(전문)·`category`(위 카테고리 지도의 key 1개)·`type`(decision|concept|how-to|reference|research|entity) 셋을 첫 호출에 함께 보낸다** — 하나라도 빠지면 거부되고, 서버는 짐작해 채우지 않는다(오분류는 미분류와 달리 눈에 안 보인다). provenance 는 `authored`(외부 미러만 `observed`). 이미 있는 지식은 같은 `name` 으로 갱신하고(끝에 보탤 땐 `mode='append'`, 중간을 고칠 땐 `mode='edit'`), `knowledge_link_category`는 나중에 분류를 바꿀 때만 쓴다.",
   "- **MCP 도구는 대부분 REST로도 열려 있다 (`/api/ui/*`) — 같은 bearer 토큰·같은 scope.** 그래서 **코드로 짜서 호출하거나 대량 마이그레이션 같은 기계적 방식**이 나을 땐, 건별 MCP 대신 REST를 반복 호출하는 스크립트로 처리할 수 있다(거의 모든 쓰기 툴에 대응 REST 존재). 예: `POST /api/ui/knowledge`(=knowledge_save)·`POST /api/ui/knowledge/:name/category`(연결)·`POST /api/ui/sources`·`POST /api/ui/v6/projects[/:id/tasks]`·`POST /api/ui/activity`(=activity_log). 게이트웨이 주소는 org 프로필 `gateway_url`.",
   "- WIKI 인덱스 핀: 어떤 지식이 **모두가 항상 인덱스에서 봐야 할 만큼** 중요하면 `knowledge_set_wiki`로 핀한다 — 핀된 지식의 제목·소환키가 아래 **WIKI 인덱스**에 항상 노출되어 전원이 발견한다(본문은 여전히 `knowledge_get`/검색으로 소환).",
   "- 작업 진척: `activity_log`로 한 작업을 얇게 기록한다 — type 은 작업의 성격(feature·fix·decision·docs·research·review·chore·other). 커밋은 유형이 아니라 commit_sha 로 표현하고(어떤 유형이든 동반 가능), author_agent(어떤 AI)는 게이트웨이가 접속 신원으로 자동 식별하니 넘기지 않아도 된다. 커밋이면 건드린 코드(is)를, 비커밋이면 바뀐 의도(should)를 함께 표시하고, 실질 산출물은 지식으로 따로 써서 작업에 연결한다.",

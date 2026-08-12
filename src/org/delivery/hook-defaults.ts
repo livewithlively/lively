@@ -15,9 +15,14 @@ export const DEFAULT_WRITEBACK_NOTICE =
   "이번에 주입된 기획·대화 맥락으로 바뀌었으면 category_update(should=…)로 갱신(도메인間 새 의도 의존이 생겼으면 " +
   "category_edge_set). 바뀐 게 없으면 activity_log 의 should_review/is_review='checked_no_change' 로 '점검함·변화없음'을 " +
   "명시 기록(안 한 것과 구분). " +
-  "③ 지속될 지식·결정·설계·런북은 knowledge_save 로 전문 기록 — injection(always=세션마다 항상 주입되는 규칙·페르소나 / " +
-  "recalled=검색으로 소환) + provenance(authored=직접 저작 / observed=외부 관찰), 카테고리 연결은 knowledge_link_category, " +
-  "대체된 옛 지식은 knowledge_set_lifecycle(superseded). 작업과는 activity_log 의 ku_refs(produced/references/decided)로 연결. " +
+  // #1641 이 너지가 knowledge_save 를 촉발하는 마지막 지점이라, 필수 필드를 여기서 알려주지 않으면 그 호출이 그대로 튕긴다.
+  //  구 문구는 category·type(신규 필수)을 언급하지 않고 카테고리를 knowledge_link_category(저장 후 연결)로 안내했다.
+  //  injection 은 뺐다 — #335 로 사용자 입력이 폐기됐다(지식은 recalled 고정). knowledge-index.ts 의 같은 불릿과 짝이다.
+  "③ 지속될 지식·결정·설계·런북은 knowledge_save 로 전문 기록 — 신규 저장은 body_md(전문) + category(분류 key 1개) + " +
+  "type(decision|concept|how-to|reference|research|entity)을 **첫 호출에 함께** 보낸다(하나라도 빠지면 거부된다 — 서버가 짐작해 채우지 않는다). " +
+  "provenance 는 authored(직접 저작 / 외부 관찰은 observed). 이미 있는 지식은 같은 name 으로 갱신하고(끝에 보탤 땐 mode='append'), " +
+  "knowledge_link_category 는 나중에 분류를 바꿀 때만, 대체된 옛 지식은 knowledge_set_lifecycle(superseded). " +
+  "작업과는 activity_log 의 ku_refs(produced/references/decided)로 연결. " +
   "외부(노션·슬랙 등)에서 끌어온 자료 — 프록시(ext__*)나 외부 MCP 로 읽은 건 세션이 끝나면 그대로 증발한다(게이트웨이는 " +
   "무엇을 읽었는지 안 남긴다). 커넥터 미러가 이미 갖고 있으면(knowledge_search 로 먼저 확인) 중복 저장하지 말고, " +
   "미러 범위 밖이라 라이블리에 없으면(개인·미공유 페이지, 커넥터 없는 툴, 방금 쓴 것) source_save 로 원문을 자료로 남긴다. " +

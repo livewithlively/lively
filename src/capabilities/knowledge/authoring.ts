@@ -19,6 +19,10 @@ import {
 } from "./shared.js";
 // #1442 소프트캡 — 짧은 메타 필드의 길이 초과가 body_md 전체를 튕기지 않게 한다(서버 조정 + 응답 capped).
 import { SOFT_CAPS, applySoftCaps, softCapHint } from "../soft-cap.js";
+// #1641 필수 필드 일괄 검증 — 누락을 하나씩 순차로 throw 하지 않고 **한 번에 모아** 알린다(재시도 왕복 제거).
+import { missingRequiredFields, requiredFieldsMessage } from "./required-fields.js";
+// #1641 그 에러에 실을 유효 category key 목록 — 실패 경로에서만 조회한다(정상 저장엔 비용 0).
+import { listCategories } from "../../v6/category-store.js";
 
 // #1442 소프트캡 — 아래 다섯 짧은 필드(name·title·supersedes·parent_name·change_note)엔 zod .max() 를 두지
 //  않는다. SDK 는 검증을 핸들러 앞에서 하므로 그 max 가 body_md(최대 200,000자)까지 통째로 튕겨 재전송을
@@ -114,9 +118,11 @@ export const knowledgeSave: Capability = {
         if (mode === "edit" && (!edits || edits.length === 0)) {
           throw new HttpError(400, "mode='edit' 에는 edits 가 필요합니다 — [{old, new}] 형태로 바꿀 조각을 지정하세요.");
         }
-        // #592: 폴더(is_folder=true)만 빈 본문 허용 — min 1 검증은 is_folder 일 때만 우회(기존 문서 계약 불변).
+        // #592 폴더(is_folder=true)만 빈 본문 허용 — 그 판정을 **여기서 하지 않는다**(#1641).
+        //  빈 본문을 parse 에서 튕기면 REST 호출자는 body_md 하나만 듣고, 같은 호출에 함께 빠진 category·type 은
+        //  다음 왕복에서야 알게 된다 — 그게 이 프로젝트가 없애려는 왕복이다. 핸들러의 일괄 검증이 세 필드를
+        //  한 통으로 알리므로 여기선 통과시킨다(parse 는 모양만 보고, **필수 판정은 한 자리에서**).
         //  edit 는 본문을 서버가 만들므로 body_md 를 받지 않는다(있어도 무시 — 아래 어댑터가 덮는다).
-        if (mode !== "edit" && !body_md.trim() && is_folder !== true) throw new HttpError(400, "body_md(또는 note)가 필요합니다");
         // (#335) injection 사용자 입력 폐기 — 지식은 recalled 고정. 항상-주입은 섹션 문서(org_update_section) 경로로만.
         const provenance = b.provenance ? String(b.provenance) : undefined;
         if (provenance && !["authored", "observed"].includes(provenance)) throw new HttpError(400, "provenance 는 authored|observed");
@@ -153,12 +159,8 @@ export const knowledgeSave: Capability = {
     //  zod .max(64) 가 그 입력을 튕겨 왔기에 지금까지 닿지 않던 경로다 — 상한을 소프트캡으로 바꾼 이 커밋이
     //  경로를 열므로 같은 커밋에서 닫는다. slugify 는 멱등이라 store 가 한 번 더 불러도 결과가 같다.
     if (input.name) input.name = slugify(input.name);
-    // #592: MCP 경로의 빈 본문 방어 — zod min(1) 완화 대신 여기서(폴더만 예외). REST 는 parse 가 이미 걸렀다.
-    //  #1531 edit 는 예외 — 본문을 서버가 edits 로 만들므로 호출자는 body_md 를 보내지 않는다(보낼 수 있다면
-    //  전문을 아는 것이고, 그럼 이 모드를 쓸 이유가 없다).
-    if (input.mode !== "edit" && !String(input.body_md ?? "").trim() && input.is_folder !== true) {
-      throw new HttpError(400, "body_md 가 필요합니다(폴더 is_folder=true 만 빈 본문 허용)");
-    }
+    // #1641 빈 본문 방어(구 #592)는 여기서 하지 않는다 — 아래 **일괄 검증**이 category·type 과 함께 한 번에 알린다.
+    //  게이트 뒤로 내린 이유는 신규 여부(gate.isCreate)를 알아야 category·type 필수를 같은 판정에 넣을 수 있어서다.
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
     // 공개범위(#1291) — 이름을 명시해 **기존 문서를 고치는** 경우만 막는다(신규 생성은 그대로).
     //  안 그러면 이름만 알면 안 보이는 문서를 upsert 로 통째로 덮어쓸 수 있다.
@@ -174,6 +176,28 @@ export const knowledgeSave: Capability = {
     //  적용/undo 도 함께 쓰는 공용 경로라 append 계약을 물려받으면 안 된다(어댑터 층 가드: runbooks/secrets.md 선례).
     const isAppend = input.mode === "append";
     const isEdit = input.mode === "edit";
+
+    // ── #1641 필수 필드 일괄 검증 — 빠진 것을 **한 번에 전부** 알린다(순차 throw 금지). ──
+    //  갈라져 있던 검증(body_md=이 파일 · category/type=store)을 이 한 자리로 모은다. store 의 같은 검증은
+    //  최후 방어선으로 남긴다 — 시드·마이그·리비전 적용·undo 가 함께 쓰는 공용 경로라 거기서 뺄 수 없다.
+    //  실측(고객사 40일): 첫 시도 실패 224건 중 123건이 2개 이상 동시 누락인데 서버가 하나씩만 알려줘
+    //  재시도 체인 121회(낭비 225콜)가 생겼다. 대표형이 'category → type' 69건이다.
+    //  edit 는 제외 — 본문을 서버가 만들고 기존 지식 전용이라, 아래 edit 분기가 자기 계약으로 검증한다.
+    if (!isEdit) {
+      const missing = missingRequiredFields(input, gate.isCreate);
+      if (missing.length) {
+        // 유효 key 목록은 **실패 경로에서만** 조회한다(정상 저장엔 비용 0). 조회가 실패해도 본 메시지는 나가야
+        //  하므로 삼켜서 목록만 생략한다 — 목록은 부가정보지 판정 근거가 아니다.
+        let categoryKeys: string[] | undefined;
+        if (missing.some((m) => m.field === "category")) {
+          try {
+            categoryKeys = (await listCategories(undefined, ctx?.viewer ?? undefined)).map((c) => c.key);
+          } catch { categoryKeys = undefined; }
+        }
+        throw new HttpError(400, requiredFieldsMessage(missing, gate.isCreate, categoryKeys));
+      }
+    }
+
     let appendBase: string | null = null;
     // body_md 는 스키마상 optional(edit 가 안 보내므로)이라 하류(전문 string 필수)로 넘기기 전에 확정한다.
     //  edit/append 분기가 아래에서 각자 계산한 전문으로 덮는다.
