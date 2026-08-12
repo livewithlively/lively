@@ -3,6 +3,7 @@
 import { api, busy, cardHead, el, errorNote, memberCombo, relTime, toast, withTip } from './core.js';
 import { overlayBox, skeleton } from './ui-primitives.js';
 import { psBlock, psInputStyle } from './admin-widgets.js';
+import { cronOwner } from './cron-owner.js';   // 잡 → 전용 화면 매핑(#1618 후속, 단일 출처)
 
 // ── 스케줄러(자동화) — org_cron 잡 관리(admin). is 신선화·미매핑 LLM 분류(세션 주입)·sync 를 주기 실행. ──
 //  map_unmapped 잡은 '타깃 LLM 세션'(상시 시드 세션)을 골라 거기에 분류 태스크를 주입한다(팀플랜 과금 — headless 토큰 아님).
@@ -13,11 +14,14 @@ async function cronPanel(detail, data) {
   try { const r = await api('/api/ui/cron'); jobs = (r && r.jobs) || []; actions = (r && r.actions) || []; tz = (r && r.timezone) || tz; }
   catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '스케줄 잡을 불러오지 못했습니다'))); return; }
 
-  // 자동 생성 잡(#837) — [외부 자료 수집]에서 커넥터를 켜면 서버가 `sync-<system>`(노션은 `-full` 도)을
-  //  **자동으로 등록/해제**한다(src/org/store.ts:987). 관리자가 만든 게 아닌데 목록에선 구분이 안 돼
-  //  "내가 이걸 언제 만들었지?"가 됐고, 손으로 지우면 커넥터는 켜져 있는데 싱크만 안 도는 상태가 됐다.
+  // 자동 생성 잡(#837) — 수집기를 켜면 서버가 싱크 잡을 **자동으로 등록/해제**한다(syncCollectorJob).
+  //  관리자가 만든 게 아닌데 목록에선 구분이 안 돼 "내가 이걸 언제 만들었지?"가 됐고, 손으로 지우면
+  //  수집기는 켜져 있는데 싱크만 안 도는 상태가 됐다.
+  //  ⚠ 두 계보를 모두 잡는다 — 수집기 소유(`collector-<id>`, 현행)와 구 커넥터 축(`sync-<system>`).
+  //   종전엔 후자만 봐서 **현행 수집기 잡에 '자동' 표시가 안 붙었다**(정작 지금 자동으로 도는 쪽인데).
   const autoSystemOf = (j) => {
     if (j.action !== 'connector_sync') return null;
+    if (/^collector-\d+(-full)?$/.test(String(j.id))) return '수집기';
     const sys = j.params && j.params.system;
     if (!sys) return null;
     return (j.id === 'sync-' + sys || j.id === 'sync-' + sys + '-full') ? String(sys) : null;
@@ -33,11 +37,24 @@ async function cronPanel(detail, data) {
     const sched = j.run_once ? '한 번만 (1회성)' : (j.cron_expr ? ('cron: ' + j.cron_expr) : fmtInterval(j.interval_sec || 0));
     const sess = (j.params && j.params.session) ? (' → ' + j.params.session) : '';
     const last = j.last_run_at ? (relTime(j.last_run_at) + ' · ' + (j.last_status || '')) : '미실행';
+    // 주인 화면(#1618 후속) — 이 잡을 소유한 전용 화면이 있으면 그 자리를 밝히고 링크한다.
+    //  표기하지 않으면 "여기서 고쳐도 되나"를 사람이 매번 추측해야 하고, 실제로 그 추측이 틀리면
+    //  (예: 수집 싱크 잡만 끄기) 주인 설정과 어긋난 상태가 만들어진다. 주인이 없는 잡(도메인맵·범용)은
+    //  아무것도 붙이지 않는다 — 그건 이 표가 곧 주인이라는 뜻이다.
+    const owner = cronOwner(j.action, j.id);
     const main = el('div', { class: 'wikicat-row-main' },
       el('span', { class: 'wikicat-name', text: j.label || j.id }),
       autoSys ? withTip(el('span', { class: 'pill', text: '자동' }),
-        '[외부 자료 수집]에서 ' + autoSys + ' 를 켜서 자동 등록된 잡입니다. 싱크를 멈추려면 이 잡이 아니라 커넥터를 끄세요.') : null,
+        autoSys === '수집기'
+          ? '[맥락 관리 ▸ 수집]에서 수집기를 켜서 자동 등록된 잡입니다. 싱크를 멈추려면 이 잡이 아니라 수집기를 끄세요.'
+          : autoSys + ' 커넥터를 켜서 자동 등록된 구 방식 잡입니다. 지금은 [맥락 관리 ▸ 수집]의 수집기가 이 일을 합니다.') : null,
       el('span', { class: 'wikicat-key mono', text: j.action + sess }),
+      owner
+        ? withTip(owner.href
+            ? el('a', { class: 'wikicat-owner', href: owner.href, text: owner.label + ' →' })
+            : el('span', { class: 'wikicat-owner', text: owner.label }),
+          '이 잡의 전용 화면입니다. ' + owner.why)
+        : null,
       el('span', { class: 'dm-tag', text: j.enabled ? sched : '꺼짐' }),
       el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '최근' }), last));
     const acts = el('div', { class: 'wikicat-row-acts' },
@@ -53,6 +70,11 @@ async function cronPanel(detail, data) {
     el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 잡 추가', onclick: () => openCronForm(null, actions, reload, tz) }));
   const card = el('div', { class: 'card' },
     cardHead('정기 실행 잡', '게이트웨이가 정해진 주기마다 실행하는 잡입니다. 실제 코드 의존(is) 최신화(refresh), 미매핑 코드 유닛 LLM 분류(map_unmapped — 타깃 상시 에이전트에 주입, 팀플랜 과금), 외부 자료 수집 싱크 등이 있습니다. 주기는 초 단위 간격 또는 cron식으로 지정합니다. cron식의 시각은 '),
+    // 두 종류가 한 표에 섞여 있다는 사실을 표보다 먼저 말한다(#1618 후속) — 행마다 붙는 링크만으로는
+    //  "왜 어떤 줄에만 있지?"가 되고, 없는 줄이 '누락'인지 '원래 없는 것'인지 구분이 안 된다.
+    el('p', { class: 'admin-hint', style: 'margin:0 0 10px' },
+      el('b', { text: '전용 화면이 있는 잡과 없는 잡이 섞여 있습니다. ' }),
+      el('span', { text: '오른쪽에 화면 이름이 붙은 잡은 그곳이 정본입니다 — 거기서 켜고 끄면 주기·의뢰자 같은 짝이 함께 맞춰집니다(여기서 고칠 수도 있지만 어긋나기 쉽습니다). 이름이 없는 잡은 이 표가 곧 주인입니다.' })),
     el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
   detail.replaceChildren(card);
 }
