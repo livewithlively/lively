@@ -57,6 +57,11 @@ export async function toolUsageByTool(f: ToolUsageFilter): Promise<Record<string
             count(*) FILTER (WHERE NOT ok)::int AS errors,
             round(avg(duration_ms))::int AS avg_ms,
             max(duration_ms)::int AS max_ms,
+            -- #1645 p50/p90 — 평균·최대만으론 **꼬리 지연이 안 보인다**. 실측(고객사 40일): knowledge_search 는
+            --  중앙 764ms 인데 p90 이 9,632ms(최대 33.7초)였고, 그 사실이 이 화면에 없어 한 달 뒤 CSV 로 발견했다.
+            --  성공 호출만 센다 — 실패는 검증에서 즉시 튕겨 빨라서, 섞으면 지연이 실제보다 낫게 보인다.
+            percentile_disc(0.5) WITHIN GROUP (ORDER BY duration_ms) FILTER (WHERE ok)::int AS p50_ms,
+            percentile_disc(0.9) WITHIN GROUP (ORDER BY duration_ms) FILTER (WHERE ok)::int AS p90_ms,
             max(called_at) AS last_at
        FROM mcp_call_log ${WHERE}
       GROUP BY tool
@@ -118,6 +123,99 @@ export async function toolUsageToolOptions(f: ToolUsageFilter): Promise<Record<s
       ORDER BY calls DESC, tool
       LIMIT 500`,
     baseParams(f),
+  );
+  return r.rows;
+}
+
+// ── #1645 실패·재시도 낭비 상시 계측 ────────────────────────────────────────────
+//  왜 필요했나: 지금까지 이 화면은 호출수·오류수·평균/최대 지연만 보여줬다. 그래서 고객사에서
+//  knowledge_save 실패율이 11%→26%로 두 배 넘게 오르는 동안 아무도 몰랐고, CSV 를 받아 스크립트를 돌린
+//  **한 달 뒤에야** 발견했다. 절대값보다 **방향이 바뀌는 순간**이 신호다(같은 기간 db_query 는 내려가고
+//  knowledge_save 만 올라갔다). 아래 두 집계가 그 신호를 화면에 상주시킨다.
+
+// 실패 사유 분포 — 에러 문구를 정규화해 묶는다.
+//  정규화가 없으면 따옴표 안 이름·숫자(id·개수)가 건마다 달라 **전부 1건짜리 고유 사유**가 되어 분포가 안 보인다.
+//  치환 순서: 작은따옴표 안 → 큰따옴표 안 → 숫자. (숫자를 먼저 지우면 따옴표 안 숫자까지 뭉개져 사유가 덜 갈린다.)
+//  이 방식은 고객사 로그 분석에 실제로 쓴 것과 같다 — 그 분석이 필수필드 누락 224건을 한 덩어리로 드러냈다.
+export async function toolUsageFailureReasons(f: ToolUsageFilter, limit = 40): Promise<Record<string, unknown>[]> {
+  const r = await itemsPool.query(
+    `SELECT tool, reason, count(*)::int AS n, max(called_at) AS last_at
+       FROM (
+         SELECT tool, called_at,
+                left(regexp_replace(
+                       regexp_replace(
+                         regexp_replace(COALESCE(error, ''), '''[^'']*''', '''X''', 'g'),
+                         '"[^"]*"', '"X"', 'g'),
+                       '[0-9]+', 'N', 'g'), 160) AS reason
+           FROM mcp_call_log ${WHERE} AND NOT ok
+       ) t
+      WHERE reason <> ''
+      GROUP BY tool, reason
+      ORDER BY n DESC, tool
+      LIMIT $7`,
+    [...params(f), limit],
+  );
+  return r.rows;
+}
+
+// 주차별 도구별 실패율 — **절대값보다 방향이 바뀌는 순간이 신호다.**
+//  실측(고객사 40일): 전체 실패율은 31%→7.4%로 꾸준히 좋아지는 동안 knowledge_save 만 11%→21%→26%로
+//  역주행했다. 그 갈림은 주차로 쪼갠 뒤에야 보였다 — 합계만 보면 개선 추세에 묻힌다.
+//  실패가 한 번이라도 난 (주차, 도구)만 남긴다(무실패 행까지 실으면 화면이 0 으로 뒤덮인다).
+//  ⚠ 주 경계는 조직 시간대 기준(#778 byDay 와 같은 규약) — UTC 로 자르면 월요일이 일요일 밤부터 시작한다.
+export async function toolUsageWeeklyFailure(f: ToolUsageFilter, tz: string): Promise<Record<string, unknown>[]> {
+  const r = await itemsPool.query(
+    `SELECT to_char(date_trunc('week', called_at AT TIME ZONE $7), 'YYYY-MM-DD') AS week,
+            tool,
+            count(*)::int AS calls,
+            count(*) FILTER (WHERE NOT ok)::int AS errors
+       FROM mcp_call_log ${WHERE}
+      GROUP BY 1, 2
+     HAVING count(*) FILTER (WHERE NOT ok) > 0
+      ORDER BY week DESC, errors DESC
+      LIMIT 400`,
+    [...params(f), tz],
+  );
+  return r.rows;
+}
+
+// 재시도 판정 창 — 원 분석과 같은 기준(실패 후 이 시간 안의 같은 도구 재호출을 '그 실패가 부른 재시도'로 본다).
+//  실측에서 knowledge_save 실패의 83%, db_query 의 74%가 이 창 안에 재시도됐다.
+const RETRY_WINDOW = "2 minutes";
+
+// ⚠ 이 집계만은 '오류만'(errorsOnly) 필터를 **의도적으로 무시**한다.
+//  실패만 남긴 창에서 LEAD 를 보면 그 다음 성공(=복구)이 애초에 창 밖이라 **복구율이 항상 0%로 나온다**.
+//  화면의 '오류만' 토글과 이 카드가 어긋나 보이는 건 그래서다 — 여기서 끄지 않으면 지표가 거짓말을 한다.
+//  파티션은 (도구, 행위자, 하네스) — 같은 사람이 같은 도구를 다시 부른 것만 재시도로 본다(남의 호출이 끼면 오염).
+const WHERE_RETRY = `WHERE ($1::text IS NULL OR called_at >= now() - $1::interval)
+                     AND ($2 = '' OR harness = $2)
+                     AND ($3::timestamptz IS NULL OR called_at >= $3)
+                     AND ($4::timestamptz IS NULL OR called_at <= $4)
+                     AND ($5 = '' OR tool = $5)`;
+const retryParams = (f: ToolUsageFilter): unknown[] => [f.interval, f.harness, f.since, f.until, f.tool];
+
+export async function toolUsageRetryWaste(f: ToolUsageFilter): Promise<Record<string, unknown>[]> {
+  const r = await itemsPool.query(
+    `WITH seq AS (
+       SELECT tool, ok, called_at,
+              LEAD(ok)        OVER w AS next_ok,
+              LEAD(called_at) OVER w AS next_at
+         FROM mcp_call_log ${WHERE_RETRY}
+       WINDOW w AS (PARTITION BY tool, COALESCE(actor, ''), COALESCE(harness, '') ORDER BY called_at)
+     )
+     SELECT tool,
+            count(*)::int AS calls,
+            count(*) FILTER (WHERE NOT ok)::int AS failures,
+            count(*) FILTER (WHERE NOT ok AND next_at IS NOT NULL
+                             AND next_at - called_at <= interval '${RETRY_WINDOW}')::int AS retried,
+            count(*) FILTER (WHERE NOT ok AND next_ok AND next_at IS NOT NULL
+                             AND next_at - called_at <= interval '${RETRY_WINDOW}')::int AS recovered
+       FROM seq
+      GROUP BY tool
+     HAVING count(*) FILTER (WHERE NOT ok) > 0
+      ORDER BY failures DESC, tool
+      LIMIT 200`,
+    retryParams(f),
   );
   return r.rows;
 }

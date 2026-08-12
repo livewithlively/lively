@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { Capability } from "./types.js";
 import {
   toolUsageSummary, toolUsageByTool, toolUsageByHarness, toolUsageByDay, toolUsageRecent, toolUsageToolOptions,
+  toolUsageFailureReasons, toolUsageRetryWaste, toolUsageWeeklyFailure, // #1645 실패 사유·재시도 낭비·주차별 실패율
   type ToolUsageFilter,
 } from "../org/tool-usage-store.js";
 import { orgTimezone } from "../org/timezone.js"; // #778 일자 버킷 = 조직 시간대
@@ -59,7 +60,7 @@ const toolUsage: Capability = {
   name: "tool_usage_stats",
   title: "MCP 호출 통계",
   description:
-    "하네스 MCP 툴 호출 로그(mcp_call_log) 집계 — 요약·툴별·하네스별·일별(KST)·최근 호출(인자 포함). 관리탭 'MCP 호출 통계' 대시보드 백엔드.",
+    "하네스 MCP 툴 호출 로그(mcp_call_log) 집계 — 요약·툴별(실패율·p50/p90 지연)·하네스별·일별(KST)·최근 호출(인자 포함) + 실패 사유 분포·재시도 낭비(#1645). 관리탭 'MCP 호출 통계' 대시보드 백엔드.",
   scope: "admin",
   // mcp:false 여도 parse 산출과 같은 필드를 선언한다(#1403 — types.ts 의 input 규약).
   //  REST 로는 전부 쿼리스트링(문자열)으로 오고 핸들러의 parseWindow/parseIso/parseBool/clamp 가 흡수한다.
@@ -109,13 +110,17 @@ const toolUsage: Capability = {
     const tz = await orgTimezone(); // #778 일자 버킷 기준. Promise.all **밖**에서 — 안에서 await 하면 뒤 쿼리들이 직렬화된다.
     const cfg = await getRuntimeConfig(); // #1082 보관 정책(보존일수) — 이 화면이 설정 창구라 현재값을 같이 준다.
 
-    const [summary, byTool, byHarness, byDay, recent, toolOptions] = await Promise.all([
+    const [summary, byTool, byHarness, byDay, recent, toolOptions, failureReasons, retryWaste, weeklyFailure] = await Promise.all([
       toolUsageSummary(filter),
       toolUsageByTool(filter),
       toolUsageByHarness(filter),
       toolUsageByDay(filter, tz),
       toolUsageRecent(filter, limit, offset),
       toolUsageToolOptions(filter),
+      // #1645 — 이 둘이 없어서 knowledge_save 실패율이 두 배 오르는 걸 한 달 뒤 CSV 로야 알았다.
+      toolUsageFailureReasons(filter),
+      toolUsageRetryWaste(filter),
+      toolUsageWeeklyFailure(filter, tz),
     ]);
 
     return {
@@ -132,6 +137,12 @@ const toolUsage: Capability = {
       byDay,
       recent,
       toolOptions,
+      // #1645 실패 사유 분포(정규화해 묶은 것) · 재시도 낭비(실패→재시도→복구).
+      //  ⚠ retryWaste 는 '오류만' 토글을 무시한다 — 실패만 남기면 그 다음 성공(복구)이 창 밖이라 복구율이
+      //   늘 0%가 된다(tool-usage-store.ts 의 WHERE_RETRY 주석). 화면은 이 카드에 그 사실을 함께 표시할 것.
+      failureReasons,
+      retryWaste,
+      weeklyFailure, // 도구별 주차 실패율 — 합계에 묻히는 '한 도구만의 역주행'을 드러낸다.
       // 보관 정책(#1082) — 이 화면이 곧 이 데이터의 설정 창구다. 보존일수·출처를 같이 실어 관리탭이 현재값을 보여준다.
       retention: cfg.call_log_policy,
       retention_source: await getCallLogPolicySource(), // db(관리탭) · env(.env 시드) · default(코드 기본값 90일)

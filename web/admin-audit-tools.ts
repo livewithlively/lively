@@ -109,6 +109,10 @@ async function toolUsagePanel(detail) {
   const sum = r.summary || {};
   const byTool = r.byTool || [];
   const byHarness = r.byHarness || [];
+  // #1645 실패가 부른 추가 호출(재시도 낭비)과 실패 사유 분포 — 마찰을 사후가 아니라 그 자리에서 보이게.
+  const retryWaste = r.retryWaste || [];
+  const failureReasons = r.failureReasons || [];
+  const weeklyFailure = r.weeklyFailure || [];
   const byDay = (r.byDay || []).slice().reverse(); // 서버는 최신→과거 정렬 → 그래프는 과거→최신으로
   const recent = r.recent || [];
   const total = sum.total || 0;
@@ -191,8 +195,11 @@ async function toolUsagePanel(detail) {
         el('span', { class: 'tu-bar', style: 'width:' + frac + '%' }),
         el('span', { class: 'tu-name mono', text: t.tool })),
       el('td', { class: 'tu-num', text: (t.calls || 0).toLocaleString() }),
-      el('td', { class: 'tu-num', text: t.errors ? String(t.errors) : '–' }),
-      el('td', { class: 'tu-num', text: t.avg_ms != null ? tuFmtDur(t.avg_ms) : '–' }),
+      el('td', { class: 'tu-num', text: t.errors ? t.errors + ' (' + Math.round((t.errors / Math.max(t.calls, 1)) * 100) + '%)' : '–' }),
+      // #1645 평균 대신 중앙값 + p90 — 평균은 꼬리에 끌려다녀 지연을 실제보다 낫게 보이게 한다.
+      //  실측: knowledge_search 는 중앙 764ms 인데 p90 이 9.6초였고, 그 차이가 이 표에 없어 한 달을 놓쳤다.
+      el('td', { class: 'tu-num', text: t.p50_ms != null ? tuFmtDur(t.p50_ms) : '–' }),
+      el('td', { class: 'tu-num', text: t.p90_ms != null ? tuFmtDur(t.p90_ms) : '–' }),
       el('td', { class: 'tu-num', text: t.max_ms != null ? tuFmtDur(t.max_ms) : '–' }),
       el('td', { class: 'tu-num', text: t.last_at ? relTime(t.last_at) : '–' })));
   }
@@ -202,7 +209,8 @@ async function toolUsagePanel(detail) {
           el('th', { text: '도구' }),
           el('th', { class: 'tu-num', text: '호출' }),
           el('th', { class: 'tu-num', text: '오류' }),
-          el('th', { class: 'tu-num', text: '평균' }),
+          el('th', { class: 'tu-num', text: '중앙값' }),
+          el('th', { class: 'tu-num', text: 'p90' }),
           el('th', { class: 'tu-num', text: '최대' }),
           el('th', { class: 'tu-num', text: '마지막' }))),
         toolBody)
@@ -211,6 +219,78 @@ async function toolUsagePanel(detail) {
     ? el('div', { class: 'aud-pager' }, el('button', { class: 'btn btn-ghost btn-sm',
         text: TOOL_USAGE_STATE.allTools ? '상위 ' + PAGE_SIZE + '개만 보기' : '나머지 ' + (byTool.length - PAGE_SIZE) + '개 도구 더 보기',
         onclick: () => { TOOL_USAGE_STATE.allTools = !TOOL_USAGE_STATE.allTools; reload(); } }))
+    : null;
+
+  // ── #1645 재시도 낭비 — 실패가 부른 추가 호출을 상시로 보이게 한다. ──
+  //  이게 화면에 없어서 고객사에서 knowledge_save 실패율이 두 배 넘게 오르는 걸 한 달 뒤 CSV 로야 알았다.
+  const wasteBody = el('tbody');
+  for (const w of retryWaste.slice(0, PAGE_SIZE)) {
+    wasteBody.append(el('tr', {},
+      el('td', { class: 'tu-namecell' }, el('span', { class: 'tu-name mono', text: w.tool })),
+      el('td', { class: 'tu-num', text: (w.failures || 0).toLocaleString()
+        + ' (' + Math.round((w.failures / Math.max(w.calls, 1)) * 100) + '%)' }),
+      el('td', { class: 'tu-num', text: w.retried ? String(w.retried) : '–' }),
+      el('td', { class: 'tu-num', text: w.recovered ? String(w.recovered) : '–' })));
+  }
+  const wasteBox = retryWaste.length
+    ? el('div', {},
+        el('div', { class: 'admin-hint' }, ...uiText('실패한 호출은 그 자체로 버려진 호출입니다. 실패한 뒤 2분 안에 같은 사람이 같은 도구를 다시 부른 것을 재시도로, 그 재시도가 성공한 것을 복구로 셉니다. 재시도와 복구가 나란히 많다면 사람이 매번 고쳐 쓰고 있다는 뜻이고, 그 도구가 처음부터 무엇을 원하는지 제대로 알려주지 못하고 있다는 신호입니다. 이 표는 위의 「오류만」 조건을 따르지 않습니다 — 성공한 호출을 빼면 복구를 셀 수 없기 때문입니다.')),
+        el('table', { class: 'tu-table' },
+          el('thead', {}, el('tr', {},
+            el('th', { text: '도구' }),
+            el('th', { class: 'tu-num', text: '실패' }),
+            el('th', { class: 'tu-num', text: '재시도' }),
+            el('th', { class: 'tu-num', text: '복구' }))),
+          wasteBody))
+    : null;
+
+  // ── #1645 실패 사유 분포 — 무엇이 막고 있는지를 묶어서 본다. ──
+  const reasonBody = el('tbody');
+  for (const f of failureReasons.slice(0, PAGE_SIZE)) {
+    reasonBody.append(el('tr', {},
+      el('td', {}, el('span', { class: 'tu-name mono', text: f.tool })),
+      el('td', {}, el('span', { class: 'mono', text: f.reason })),
+      el('td', { class: 'tu-num', text: (f.n || 0).toLocaleString() })));
+  }
+  const reasonBox = failureReasons.length
+    ? el('div', {},
+        el('div', { class: 'admin-hint' }, ...uiText('같은 뜻의 오류를 하나로 묶어 셉니다. 문구마다 다른 이름과 숫자는 X 와 N 으로 바꿔 비교하므로, 건건이 흩어져 보이던 실패가 한 덩어리로 드러납니다. 어떤 사유가 갑자기 늘어나면 그 도구가 새로 막히기 시작했다는 뜻입니다.')),
+        el('table', { class: 'tu-table' },
+          el('thead', {}, el('tr', {},
+            el('th', { text: '도구' }),
+            el('th', { text: '사유' }),
+            el('th', { class: 'tu-num', text: '건수' }))),
+          reasonBody))
+    : null;
+
+  // ── #1645 주차별 실패율 — 합계에 묻히는 '한 도구만의 역주행'을 드러낸다. ──
+  //  실측: 전체 실패율이 31%→7.4%로 좋아지는 동안 knowledge_save 만 11%→26%로 올랐다. 합계만 보면 안 보인다.
+  const weeks = Array.from(new Set(weeklyFailure.map((w) => w.week))).sort().slice(-8);
+  const failTotal = new Map();
+  for (const w of weeklyFailure) failTotal.set(w.tool, (failTotal.get(w.tool) || 0) + (w.errors || 0));
+  const weekTools = Array.from(failTotal.entries()).sort((a, b) => b[1] - a[1]).slice(0, 6).map((e) => e[0]);
+  const weekCell = new Map();
+  for (const w of weeklyFailure) weekCell.set(w.week + '|' + w.tool, w);
+  const weeklyBody = el('tbody');
+  for (const tool of weekTools) {
+    const tr = el('tr', {}, el('td', { class: 'tu-namecell' }, el('span', { class: 'tu-name mono', text: tool })));
+    for (const wk of weeks) {
+      const c = weekCell.get(wk + '|' + tool);
+      // 그 주에 그 도구를 아예 안 썼으면 0% 가 아니라 '–' 다 — 0% 로 칠하면 '고쳐졌다'로 잘못 읽힌다.
+      tr.append(el('td', { class: 'tu-num',
+        text: c ? Math.round((c.errors / Math.max(c.calls, 1)) * 100) + '%' : '–' }));
+    }
+    weeklyBody.append(tr);
+  }
+  // 주차가 하나뿐이면 추세가 아니라 한 점이다 — 그럴 땐 표를 내지 않는다(읽는 사람을 오도하지 않게).
+  const weeklyBox = weeks.length > 1 && weekTools.length
+    ? el('div', {},
+        el('div', { class: 'admin-hint' }, ...uiText('주마다 그 도구의 실패 비율입니다. 전체가 좋아지는 중에도 한 도구만 나빠지는 일이 있어서, 합계로는 보이지 않던 신호가 여기서 드러납니다. 어느 줄의 숫자가 주를 거듭하며 올라가면 그 도구에 새로 생긴 마찰입니다. 그 주에 쓰지 않은 도구는 빈칸으로 둡니다.')),
+        el('table', { class: 'tu-table' },
+          el('thead', {}, el('tr', {},
+            el('th', { text: '도구' }),
+            ...weeks.map((wk) => el('th', { class: 'tu-num', text: String(wk).slice(5) })))),
+          weeklyBody))
     : null;
 
   // ── 하네스별 칩 ──
@@ -269,6 +349,10 @@ async function toolUsagePanel(detail) {
     stats,
     daysEl,
     el('div', { class: 'tu-sub', text: '도구별 호출' }), toolTable, toolMore,
+    // #1645 실패 → 재시도 → 복구 → 무엇이 막았나 순으로 읽히게 도구별 호출 바로 뒤에 둔다.
+    wasteBox ? el('div', { class: 'tu-sub', text: '실패와 재시도 낭비' }) : null, wasteBox,
+    reasonBox ? el('div', { class: 'tu-sub', text: '실패 사유' }) : null, reasonBox,
+    weeklyBox ? el('div', { class: 'tu-sub', text: '주차별 실패율' }) : null, weeklyBox,
     byHarness.length ? el('div', { class: 'tu-sub', text: '하네스별' }) : null,
     byHarness.length ? harnessChips : null,
     el('div', { class: 'tu-sub', text: '최근 호출' }),
