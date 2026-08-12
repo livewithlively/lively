@@ -1,9 +1,17 @@
-// 온보딩 상태 = 단일 SoT. 웹UI '온보딩' 페이지(GET /api/ui/org/onboarding)와 하네스 주입
-//  (previewMemberContext → SessionStart 훅)이 **둘 다 이 한 곳**을 소비한다 → 드리프트 0.
-//  목적(#269): ① 빈/익명 조직도 맥락 블라인드가 아니게(baseline) ② 셋업 단계를 한 곳에 명시
-//             ③ AI 가 미완 단계를 사용자에게 알리고 안내.
+// 온보딩 상태 = 단일 SoT. 웹UI '온보딩' 페이지(GET /api/ui/org/onboarding)와 '시작하기' 배너가 소비한다.
+//  목적(#269): 셋업 단계를 한 곳에 명시하고 어디까지 됐는지 보여준다.
+//
+//  ⚠ **세션 주입은 하지 않는다**(2026-08-12 결정, 상민님). 종전엔 미완일 때 체크리스트 블록을 매 세션
+//   컨텍스트 맨 앞에 붙였는데(renderOnboardingBlock → publish.ts), 그 방식의 문제가 코드에 이미 적혀
+//   있었다 — 아래 구성원 축 주석: "세션에 체크리스트를 밀어 넣으면 '영원히 미완 → 매 세션 잔소리'가
+//   된다". 조직 축은 complete 시 자동 소멸로 그 함정을 피한다고 했지만, 파이프라인처럼 **정상 운영 중에도
+//   미완일 수 있는 항목**이 들어오면 그 방어가 통하지 않는다(수집을 안 쓰는 조직은 영영 미완).
+//   → 체크리스트의 표면은 웹 화면 하나로 통일한다. 구성원 축이 이미 그렇게 하고 있어 두 축이 일관된다.
+//   빈 조직의 AI 가 맥락 블라인드가 되지도 않는다: context-ontology-guide 는 코드 소유 섹션이고
+//   publish.ts 가 **DB 행이 없어도** 렌더하므로(신규 조직 보존), 라이블리가 뭔지·도구가 뭔지는 그대로 간다.
 import { itemsPool } from "../../db/client.js";
-import { getSection, getMemberOnboarding, type ReportedStep } from "../store.js";
+import { getSection, getMemberOnboarding, getRuntimeConfig, type ReportedStep } from "../store.js";
+import { computePipelineOverview, stuckStages } from "../store/pipeline.js";
 
 export interface OnboardingItem {
   key: string;
@@ -12,6 +20,8 @@ export interface OnboardingItem {
   how: string;       // 어디서/어떻게 하는지(웹UI 탭 또는 MCP 도구)
   href?: string;     // 웹UI 내 바로가기 해시(있으면)
   count?: number;    // 참고 카운트(지식/카테고리/구성원 수 등)
+  /** 진행률·complete 계산에서 뺀다(화면엔 '선택'으로 표시). 해당 없는 조직이 많은 항목. */
+  optional?: boolean;
 }
 export interface OnboardingStatus {
   items: OnboardingItem[];
@@ -19,6 +29,26 @@ export interface OnboardingStatus {
   total: number;
   pct: number;       // 0~100
   complete: boolean;
+}
+
+/**
+ * 판정에 필요한 사실 — DB 를 안 타는 순수 입력. 판정 로직을 이 타입 위의 순수 함수로 분리한 이유:
+ *  이 자리에서 실제로 **거짓 완료**가 났었다(시드 지식 3건을 조직 지식으로 세어 빈 워크스페이스가
+ *  "지식 ✓"). 표로 놓고 테스트할 수 있어야 같은 종류의 오판정을 다시 안 만든다.
+ */
+export interface OnboardingFacts {
+  identityEdited: boolean;
+  knowledgeAuthored: number;      // 시드 제외 — 조직이 실제로 쓴 지식
+  categories: number;
+  categoriesNoDefinition: number;
+  membersActive: number;
+  membersWithToken: number;
+  dbSources: number;
+  embeddingsOn: boolean;
+  /** 파이프라인에서 '멈춤'으로 판정된 단계 이름들(pipeline.ts stuckStages). */
+  pipelineStuck: string[];
+  /** 파이프라인을 물을 이유가 있는가 — 자료도 지식도 없으면 아직 물을 단계가 아니다. */
+  pipelineApplicable: boolean;
 }
 
 async function count(sql: string): Promise<number> {
@@ -30,58 +60,93 @@ async function exists(sql: string, params: unknown[]): Promise<boolean> {
   catch { return false; } // fail-open: 테이블 부재/오류 → 미완(안전 — '됐다'고 오인하지 않는다)
 }
 
-// 조직이 얼마나 셋업됐는지 라이브 계산(items DB 카운트 + org-defaults 섹션). 시크릿 없음.
-export async function computeOnboardingStatus(): Promise<OnboardingStatus> {
-  const [identity, knowledge, categories, members, dbSources] = await Promise.all([
-    // baseline 시드(updated_by='bootstrap')만 있으면 '미완' — 관리자가 실제 편집해야 done(자동 시드로 완료 오인 방지).
-    getSection("org-defaults").then((s) => !!s?.body_md?.trim() && s.updated_by !== "bootstrap").catch(() => false),
-    // 섹션(injection='always': org-defaults·managed-policy·가이드)은 제외 — '지식' 단계는 recalled 지식(런북·결정·설계)만.
-    count("SELECT count(*)::int AS n FROM knowledge WHERE lifecycle='active' AND injection <> 'always'"),
-    count("SELECT count(*)::int AS n FROM category"),
-    count("SELECT count(*)::int AS n FROM org_member WHERE state='active'"),
-    count("SELECT count(*)::int AS n FROM org_db_source"),
-  ]);
+/**
+ * 사실 → 항목. **순수 함수**(DB·시각 무접촉)라 표로 테스트한다.
+ *
+ * 필수/선택을 가르는 기준: **이게 없으면 라이블리가 라이블리가 아닌가.**
+ *  · 필수 — 없으면 AI 가 조직 맥락 없이 대답하거나(정체성·분류축·지식), 사람이 못 쓰거나(구성원),
+ *    맥락이 자라지 않는다(파이프라인).
+ *  · 선택 — 해당하는 조직만. 없다고 셋업이 덜 된 게 아니다(제품 DB·의미검색).
+ */
+export function onboardingItems(f: OnboardingFacts): OnboardingItem[] {
+  // 분류축은 '있다'로 부족하다 — 정의(should)가 비면 분류기가 판단할 근거가 없어서, 축을 만들어 두고도
+  //  지식이 계속 미분류로 남는다. 그래서 '정의까지 채워졌나'를 묻는다.
+  const categoriesDone = f.categories > 0 && f.categoriesNoDefinition === 0;
+  const categoriesHow = f.categories === 0
+    ? "사업·제품·시스템 아래 우리 분류축을 만듭니다. 처음이면 AI 에게 시키세요 — 분류축이 없으면 지식이 전부 미분류가 되고, 미분류는 검색으로 소환되지 않습니다."
+    : f.categoriesNoDefinition > 0
+      ? `정의가 빈 분류축이 ${f.categoriesNoDefinition}개 있습니다 — 정의가 없으면 분류 기준도 없습니다.`
+      : "분류축과 정의가 채워져 있습니다.";
 
-  const items: OnboardingItem[] = [
-    { key: "identity", label: "회사·페르소나·업무규칙", done: identity,
-      how: "웹UI 관리 탭 ▸ 맥락 관리(org-defaults) — 매 세션 항상 주입되는 조직 정체성", href: "#/system" },
-    { key: "categories", label: "카테고리(도메인 분류축)", done: categories > 0, count: categories,
-      how: "사업/제품/시스템 분류축. category_* 도구 또는 관리 탭", href: "#/knowledge" },
-    { key: "knowledge", label: "지식(런북·결정·설계)", done: knowledge > 0, count: knowledge,
-      how: "knowledge_save 로 저작하거나 커넥터(Slack/ClickUp/Notion) 싱크", href: "#/knowledge" },
-    { key: "members", label: "구성원 등록 + 토큰", done: members > 1, count: members,
-      how: "웹UI 관리 탭 ▸ 구성원. 토큰 발급 → 멤버 로컬 설치(/install)", href: "#/system" },
-    { key: "dbsource", label: "고객 제품 DB(읽기전용 리플리카)", done: dbSources > 0, count: dbSources,
-      how: "웹UI 관리 탭 ▸ 데이터소스 — db_query 가 읽는 운영 DB", href: "#/system" },
+  return [
+    { key: "identity", label: "회사·페르소나·업무규칙", done: f.identityEdited,
+      how: "맥락 관리 ▸ 전달 ▸ 세션 주입 — 매 세션 항상 주입되는 조직 정체성", href: "#/context/deliver/injection" },
+    { key: "categories", label: "분류축(카테고리)", done: categoriesDone, count: f.categories,
+      how: categoriesHow, href: "#/context/classify/categories" },
+    // ⚠ 시드 지식(updated_by='system')은 세지 않는다 — 신규 워크스페이스에 런북 3건이 자동으로 깔려서,
+    //  조직이 한 건도 안 썼는데 '지식 ✓ (현재 3)'으로 통과했다. 바로 위 identity 가 같은 함정을
+    //  updated_by≠'bootstrap' 으로 이미 막고 있었는데 여기만 빠져 있었다.
+    { key: "knowledge", label: "지식(런북·결정·설계)", done: f.knowledgeAuthored > 0, count: f.knowledgeAuthored,
+      how: "knowledge_save 로 저작하거나, 수집한 자료를 증류해서 쌓입니다.", href: "#/knowledge" },
+    { key: "members", label: "구성원", done: f.membersActive > 1, count: f.membersActive,
+      how: `등록 ${f.membersActive}명 · 접속 토큰 보유 ${f.membersWithToken}명. 웹으로만 쓰면 토큰이 없어도 되고, 로컬 설치(/install)에는 필요합니다.`,
+      href: "#/system/members" },
+    // 파이프라인 4단계를 **한 항목으로 접는다.** 넷을 다 펴면 체크리스트가 열 줄이 되어 처음 온 사람이
+    //  안 읽는다 — 여기서 필요한 건 "돌고 있나"이고, 어디가 왜 막혔는지는 파이프라인 화면이 훨씬 잘 말한다.
+    { key: "pipeline", label: "맥락 파이프라인(수집→증류→분류→관리)",
+      done: f.pipelineStuck.length === 0,
+      optional: !f.pipelineApplicable,
+      how: f.pipelineStuck.length
+        ? `멈춘 단계: ${f.pipelineStuck.join(" · ")}. 자동 실행을 켜지 않으면 자료가 지식이 되지 않고 쌓인 지식도 관리되지 않습니다.`
+        : f.pipelineApplicable ? "네 단계가 돌고 있습니다." : "아직 수집한 자료도 지식도 없어 확인할 단계가 없습니다.",
+      href: "#/context" },
+    { key: "embeddings", label: "의미 검색(벡터)", done: f.embeddingsOn, optional: true,
+      how: f.embeddingsOn
+        ? "뜻으로 찾기가 켜져 있습니다."
+        : "꺼져 있어 지금은 단어가 그대로 들어간 것만 찾습니다(검색이 실패하지는 않고 조용히 그렇게 동작합니다).",
+      href: "#/context/deliver/embeddings" },
+    { key: "dbsource", label: "제품 DB 연결(읽기전용)", done: f.dbSources > 0, count: f.dbSources, optional: true,
+      how: "AI 가 운영 데이터를 직접 조회해야 할 때만 필요합니다. 해당 없으면 건너뛰세요.", href: "#/system/db-sources" },
   ];
-
-  const done = items.filter((i) => i.done).length;
-  const total = items.length;
-  return { items, done, total, pct: Math.round((done / total) * 100), complete: done === total };
 }
 
-// 하네스 주입용 마크다운 렌더 — 완료면 ""(실제 조직 맥락이 대신 주입됨). 미완이면 baseline + 단계 + AI 지침.
-//  ※ 웹 페이지와 동일 status(SoT)에서 렌더 → 둘이 항상 일치.
-export function renderOnboardingBlock(status: OnboardingStatus): string {
-  if (status.complete) return "";
-  const L: string[] = [];
-  L.push(`> ⚠ **이 lively 인스턴스는 온보딩이 진행 중입니다 (${status.done}/${status.total} 완료).** 조직 맥락이 아직 비어 있어 baseline 안내가 표시됩니다. 설정을 채우면 이 블록은 사라지고 실제 조직 맥락이 주입됩니다.`);
-  L.push("");
-  L.push("**lively = 조직 컨텍스트 저장소.** 사람과 여러 AI 에이전트가 하나의 맥락(지식·프로젝트·도메인맵) 위에서 일하게 한다. 맥락은 MCP 도구(`mcp__lively__*` — knowledge_search/save·project_*·category_* 등)로 읽고 쓴다.");
-  L.push("");
-  L.push("## 셋업 단계 (관리자 — 웹UI `/ui/#/onboarding` 에서 진행상황 확인)");
-  status.items.forEach((it, i) => {
-    const c = it.count !== undefined ? ` (현재 ${it.count})` : "";
-    L.push(`${i + 1}. [${it.done ? "x" : " "}] **${it.label}**${c} — ${it.how}`);
+/** 진행률 — **선택 항목은 빼고** 센다. 안 그러면 해당 없는 조직이 영영 100% 가 안 된다. */
+export function summarizeOnboarding(items: OnboardingItem[]): Omit<OnboardingStatus, "items"> {
+  const required = items.filter((i) => !i.optional);
+  const done = required.filter((i) => i.done).length;
+  const total = required.length;
+  return { done, total, pct: total ? Math.round((done / total) * 100) : 100, complete: done === total };
+}
+
+// 조직이 얼마나 셋업됐는지 라이브 계산(사실 수집만 — 판정은 위 순수 함수). 시크릿 없음.
+export async function computeOnboardingStatus(): Promise<OnboardingStatus> {
+  const [identityEdited, knowledgeAuthored, categories, categoriesNoDefinition,
+    membersActive, membersWithToken, dbSources, embeddingsOn, pipeline] = await Promise.all([
+    // baseline 시드(updated_by='bootstrap')만 있으면 '미완' — 관리자가 실제 편집해야 done(자동 시드로 완료 오인 방지).
+    getSection("org-defaults").then((s) => !!s?.body_md?.trim() && s.updated_by !== "bootstrap").catch(() => false),
+    // 섹션(injection='always')은 제외 — '지식' 단계는 recalled 지식(런북·결정·설계)만.
+    //  updated_by<>'system' = 우리가 심은 시드 런북 제외(위 항목 주석 참조).
+    count("SELECT count(*)::int AS n FROM knowledge WHERE lifecycle='active' AND injection <> 'always' AND COALESCE(updated_by,'') <> 'system'"),
+    count("SELECT count(*)::int AS n FROM category"),
+    count("SELECT count(*)::int AS n FROM category WHERE COALESCE(should,'')=''"),
+    count("SELECT count(*)::int AS n FROM org_member WHERE state='active'"),
+    // ⚠ 테이블 이름은 auth_token 이다(org_token 아님). 처음에 틀린 이름으로 짰더니 count() 의 fail-open 이
+    //  오류를 0 으로 삼켜 **"토큰 보유 0명"이 조용히 사실처럼 표시됐다**(실측: 실제로는 6명). 그래서
+    //  이름을 손으로 다시 적지 않고 정본 판정(memberHasActiveToken)이 쓰는 조건을 그대로 쓴다.
+    count("SELECT count(*)::int AS n FROM org_member m WHERE m.state='active' AND EXISTS (SELECT 1 FROM auth_token t WHERE t.member_id = m.id AND t.revoked_at IS NULL)"),
+    count("SELECT count(*)::int AS n FROM org_db_source"),
+    getRuntimeConfig().then((c) => c.embedding_config?.provider !== "off").catch(() => false),
+    computePipelineOverview().catch(() => null),
+  ]);
+
+  const items = onboardingItems({
+    identityEdited, knowledgeAuthored, categories, categoriesNoDefinition,
+    membersActive, membersWithToken, dbSources, embeddingsOn,
+    pipelineStuck: pipeline ? stuckStages(pipeline) : [],
+    // 조회 실패(구 스키마 등)면 '물을 단계 아님'으로 — 못 본 것을 '멈췄다'고 단정하지 않는다(fail-open).
+    pipelineApplicable: !!pipeline && (pipeline.stages.collect.output > 0 || pipeline.stages.distill.output > 0),
   });
-  L.push("");
-  L.push("(인프라 — 게이트웨이 배포·중앙박스 키트·Claude 로그인 — 는 설치 단계에서 완료. 상세: `deploy/README.md`.)");
-  L.push("");
-  L.push("## AI 에이전트 지침 (온보딩 미완)");
-  L.push("- 사용자가 **온보딩·셋업·설정**을 물으면 위 단계(특히 미완 `[ ]`)로 친절히 안내하라.");
-  L.push("- 세션을 시작하면 미완 항목이 있을 때 **사용자에게 한 번** 간단히 알리고 다음 단계를 제안하라. 다른 작업에 집중 중이면 반복하지 말 것.");
-  L.push("- 요청 시 MCP 도구로 직접 도울 수 있다(예: `category_create`, `knowledge_save`; 구성원·데이터소스는 관리 탭) — 사용자 승인 하에.");
-  return L.join("\n");
+  return { items, ...summarizeOnboarding(items) };
 }
 
 // ═══ 구성원(멤버) 축 온보딩 — 웹 전용 (#846 / 태스크 850) ══════════════════════════════

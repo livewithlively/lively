@@ -927,7 +927,7 @@ async function onboardingBanner() {
 async function renderOnboarding(view) {
   const head = el('div', { class: 'page-head' },
     el('h1', {}, '온보딩 ', el('span', { class: 'accent', text: '진행상황' })),
-    el('p', { class: 'sub', text: '이 인스턴스 셋업이 어디까지 됐는지 한눈에 봅니다. AI도 세션 시작 시 같은 진행상황(SoT)을 받아, 덜 된 단계를 사용자에게 안내합니다.' }));
+    el('p', { class: 'sub', text: '이 인스턴스 셋업이 어디까지 됐는지 한눈에 봅니다. 진행률은 필수 항목만으로 셉니다 — 「선택」은 해당하는 조직만 하면 됩니다.' }));
   const slot = el('div', {});
   slot.append(skeleton('진행상황을 불러오는 중'));
   view.replaceChildren(head, slot);
@@ -938,14 +938,17 @@ async function renderOnboarding(view) {
       el('div', { class: 'card-head' }, el('h2', { text: `진행률 ${s.done}/${s.total} (${s.pct}%)` })),
       obProgress(s.pct),
       el('p', { class: 'admin-hint', style: 'margin:0', text: s.complete
-        ? '✓ 기본 셋업 완료 — 세션에 실제 조직 맥락이 주입됩니다.'
-        : '미완 단계를 채우면 다음 세션부터 AI가 그 맥락을 갖고 시작합니다(재설치 불필요 — 라이브 반영).' }));
+        ? '✓ 필수 셋업 완료.'
+        : '남은 필수 항목을 채우면 AI가 그만큼 더 풍부한 회사 맥락으로 시작합니다(재설치 불필요 — 라이브 반영).' }));
     const steps = el('div', {});
     s.items.forEach((it, i) => {
-      steps.append(el('div', { class: 'card', style: 'display:flex;gap:12px;align-items:flex-start;margin-bottom:10px;opacity:' + (it.done ? '0.65' : '1') },
-        el('div', { style: `flex:0 0 28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;background:${it.done ? '#3a9d6e' : '#bbb'}`, text: it.done ? '✓' : String(i + 1) }),
+      // 선택 항목은 **미완이어도 경고처럼 보이면 안 된다** — 진행률에서 빠지는데 화면만 빨갛게 남으면
+      //  "뭔가 덜 됐다"는 잘못된 압박이 된다. 번호 대신 '—', 배지로 '선택'을 명시한다.
+      steps.append(el('div', { class: 'card', style: 'display:flex;gap:12px;align-items:flex-start;margin-bottom:10px;opacity:' + (it.done || it.optional ? '0.65' : '1') },
+        el('div', { style: `flex:0 0 28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;background:${it.done ? '#3a9d6e' : it.optional ? '#d5d5d5' : '#bbb'}`, text: it.done ? '✓' : it.optional ? '–' : String(i + 1) }),
         el('div', { style: 'flex:1;min-width:0' },
           el('div', { style: 'font-weight:600' }, it.label,
+            it.optional ? el('span', { class: 'admin-only-badge', style: 'margin-left:6px', text: '선택' }) : null,
             it.count !== undefined ? el('span', { class: 'admin-hint', text: ` · 현재 ${it.count}` }) : null),
           el('div', { class: 'admin-hint', style: 'margin:2px 0 0', text: it.how }),
           it.href ? el('a', { class: 'accent', href: it.href, text: it.done ? '보기 →' : '바로가기 →', style: 'display:inline-block;margin-top:6px;text-decoration:none' }) : null)));
