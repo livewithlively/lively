@@ -13,6 +13,7 @@ import { runMapInject, runMapHeadless, runBootstrapInject } from "./actions/map-
 import { runClassifyKnowledgeInject, runClassifyKnowledgeHeadless } from "./actions/classify.js";
 import { runDistillInject, runDistillHeadless } from "./actions/distill.js";
 import { runAgentInject, runAgentHeadless } from "./actions/agent.js";
+import { runCanaryJob } from "./actions/canary.js"; // #1657 상류 회귀 탐지
 
 export interface CronActionParam { name: string; label: string; kind: "session" | "repo" | "system" | "text" | "textarea" | "select" | "distiller" | "classifier" | "manager"; choices?: string[]; hint?: string }
 export interface CronActionDef { key: string; label: string; params: CronActionParam[]; run: CronActionRun }
@@ -56,6 +57,9 @@ export const CRON_ACTIONS: CronActionDef[] = [
   //  붕 뜬 링크의 대상이 나중에 생기거나(그때 저장을 다시 하지 않는다), 대상이 지워졌다 되살아나거나, 저장 중
   //  best-effort 로 흘린 실패를 되잡는다. 전수 재계산(수렴형)이라 몇 번을 돌려도 같은 결과다.
   { key: "wikilink_sweep", label: "지식 본문 [[위키링크]] → 엣지 수렴", params: [], run: runWikilinkSweep },
+  // #1657 상류 회귀 자동탐지 — 실자격으로 실호출하고 응답 내용을 단언한다(스키마 diff 로는 이 계열 고장을 못 잡는다).
+  //  ⚠ 잡 생성자의 자격으로 상류에 실제 요청이 나간다 — 라이블리 카나리 계정으로 만들 것.
+  { key: "run_canary", label: "상류 회귀 탐지(카나리) 1회전 — 커넥터가 조용히 막혔는지", params: [], run: runCanaryJob },
   { key: "map_unmapped", label: "미매핑 코드 LLM 분류 (세션 주입)", params: [{ name: "session", label: "타깃 상시 세션", kind: "session", hint: "‘상시 세션’ 탭에서 등록한 관리 세션. 죽어도 재생성·현재 세션으로 자동 해소." }], run: runMapInject },
   // #1061 map_unmapped 의 헤드리스판 — 상시세션 대신 매 배치 새 claude -p(fresh 컨텍스트)로 분류(관성 없음). agent_headless 파이프라인 재사용. 인박스 있을 때만 접수.
   { key: "map_unmapped_headless", label: "미매핑 코드 LLM 분류 (헤드리스 — 매 배치 새 세션)", params: [
