@@ -10,7 +10,7 @@
 //
 //  ⚠ '노드가 무엇인가'·'연결하는 법'은 여기 두지 않는다 — 사용가이드(#/learn/docs/nodes)가 원고의 집이다.
 //   설정 화면은 **지금 상태를 보고 바꾸는 곳**이고, 배우는 곳은 문서다. 두 곳에 같은 설명을 두면 갈라진다.
-import { api, el, errorNote, state, toast } from './core.js';
+import { api, busy, el, errorNote, state, toast } from './core.js';
 import { confirmDialog, copyText, field, overlay, skeleton } from './ui-primitives.js';
 import { psInputStyle, sectionHead } from './admin-widgets.js';
 
@@ -133,7 +133,7 @@ export async function myNodesPanel(detail, data) {
   const me = meId();
   const reload = () => myNodesPanel(detail, data);
   const act = nodeActions(reload);
-  detail.replaceChildren(el('div', { class: 'card' }, skeleton('연결된 컴퓨터를 불러오는 중')));
+  busy(detail, el('div', { class: 'card' }, skeleton('연결된 컴퓨터를 불러오는 중')));
 
   let nodes;
   try { nodes = await loadNodes(); }
@@ -226,7 +226,7 @@ function openSharedNodeForm(reload) {
 export async function orgNodesPanel(detail, data) {
   const reload = () => orgNodesPanel(detail, data);
   const act = nodeActions(reload);
-  detail.replaceChildren(el('div', { class: 'card' }, skeleton('공유 컴퓨터를 불러오는 중')));
+  busy(detail, el('div', { class: 'card' }, skeleton('공유 컴퓨터를 불러오는 중')));
 
   let nodes;
   try { const r = await api('/api/ui/nodes'); nodes = (r && r.nodes) || []; }

@@ -1,6 +1,6 @@
 // context-classify.ts — 분류기 관리(#1419 T4). [맥락 관리 ▸ 분류] 화면의 '분류기' 서브탭.
 //  (같은 화면의 '분류축' 서브탭은 기존 categories.ts 를 그대로 재사용한다 — 합치는 건 화면이지 데이터가 아니다.)
-import { api, cardHead, el, fmtNum, relTime, toast, uiText } from './core.js';
+import { api, busy, cardHead, el, fmtNum, relTime, toast, uiText } from './core.js';
 import { confirmDialog } from './admin.js';
 import { stageJobCard } from './context-stage-job.js';   // 단계 공용 '언제 도나' 카드(#1618)
 
@@ -8,7 +8,7 @@ let editingKey: string | null = null;
 let creating = false;
 
 export async function renderClassifiers(host: HTMLElement): Promise<void> {
-  host.replaceChildren(el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '분류기를 불러오는 중…' })));
+  busy(host, el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '분류기를 불러오는 중…' })));
   let d: any;
   try { d = await api('/api/ui/org/classifiers'); }
   catch (e) {

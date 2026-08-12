@@ -3,7 +3,7 @@
 //   상세 서브트리의 단일 입구(detail.ts)에 두면 detail-terminal → detail 되짚기가 생긴다.
 //   #1313 §1 의 판정 기준('읽는 쪽이 하나뿐인가')대로 소비자 쪽 잎으로 내렸다.
 //  본문은 원문 그대로 옮겼다(verbatim).
-import { api, el, toast } from '../core.js';
+import { api, busy, el, toast } from '../core.js';
 import { overlayBox } from '../learn.js';
 // ── 미리보기(#1036) — 작업 중인 화면을 운영 화면·남의 작업과 섞지 않고 이 프로젝트 몫으로 따로 띄워 본다. ──
 //  **자리**: 관리탭에만 두면 정작 화면을 확인할 작업자가 만나지 못한다. 그렇다고 프로젝트 상세에 섹션을 하나 더
@@ -102,7 +102,7 @@ function openProjectPreviewModal(id, projectName, repos0) {
         addBtn.disabled = false;
         load();
     }
-    body.replaceChildren(el('p', { class: 'ps-block-hint', text: '불러오는 중…' }));
+    busy(body, el('p', { class: 'ps-block-hint', text: '불러오는 중…' }));
     load();
     return back;
 }

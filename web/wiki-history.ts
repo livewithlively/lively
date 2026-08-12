@@ -11,7 +11,7 @@
 //   · 본문은 클릭한 행에서만 — 목록 응답엔 본문이 없다(문서 하나가 감사행 100건 × 30KB 인 사례가 있다).
 //   · diff 는 검토 큐 것을 그대로 쓴다(review.ts diffView + .rq-diff 스타일) — 같은 변경에 두 화면이 다른
 //     모양을 보이지 않게. classifications.ts 가 rqEnsureStyles 를 재사용하는 것과 같은 관례.
-import { absTime, api, el, errorNote, relTime, renderMarkdown, toast } from './core.js';
+import { absTime, api, busy, el, errorNote, relTime, renderMarkdown, toast } from './core.js';
 import { overlayBox, skeleton } from './learn.js';
 import { confirmDialog } from './ui-primitives.js';
 import { diffView, lineDiff, rqEnsureStyles } from './review.js';
@@ -161,7 +161,7 @@ export function openKnHistory(
 
   async function load(): Promise<void> {
     metaChip.classList.toggle('on', includeMeta);
-    if (!rows.length) body.replaceChildren(bar, skeleton('이력을 불러오는 중'));
+    if (!rows.length) busy(body, bar, skeleton('이력을 불러오는 중'));
     try {
       const r = await api('/api/ui/knowledge/' + encodeURIComponent(name) + '/history'
         + '?limit=50&offset=' + offset + (includeMeta ? '&include_meta=true' : ''));
@@ -230,7 +230,7 @@ export function openKnHistory(
       row.classList.toggle('open', !open);
       if (open || loaded) return;
       loaded = true;
-      exp.replaceChildren(skeleton('내용을 불러오는 중'));
+      busy(exp, skeleton('내용을 불러오는 중'));
       try {
         const d = await api('/api/ui/knowledge/' + encodeURIComponent(name) + '/history/' + r.audit_id);
         // 받아온 전문을 행에 붙여 둔다 — 서식↔원문 토글이 다시 요청하지 않게(같은 감사행은 불변이다).

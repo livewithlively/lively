@@ -2,7 +2,7 @@
 //  라벨 사전 · 트리/카테고리 세션 캐시 · 속성(메타) 노출 엔진 · 피커/오버레이 · 댓글 위젯 · 대문 문서 컨벤션.
 //  표면(화면) 코드는 없다 — 홈/카테고리/문서 캔버스는 wiki-home/wiki-category/wiki-doc 이 이 모듈을 소비한다.
 //  순환 import 금지: 이 모듈은 core/learn 만 import 한다(wiki-*.ts → wiki-data.ts 단방향).
-import { LIFECYCLE_LABEL, absTime, api, el, errorNote, personFace, relTime, renderInline, renderMarkdown, safeHref, selectFilter, state, toast, withTip } from './core.js';
+import { absTime, api, busy, el, errorNote, LIFECYCLE_LABEL, personFace, relTime, renderInline, renderMarkdown, safeHref, selectFilter, state, toast, withTip } from './core.js';
 import { overlayBox, skeletonRows } from './learn.js';
 // ── 카테고리 대문 문서 컨벤션(#657 → #764 이관) — 카테고리당 지식 문서 `category-home-<key>` 1건이
 //  대문의 전부(본문=body_md, 아이콘/커버=props_ui)를 담는다. 스키마 변경 0. 빈 본문은 ZWSP 1자(HOME_EMPTY —
@@ -374,9 +374,9 @@ function openKnPropsSettings(foot, gear, k, hidden, onChanged) {
         title: '이 문서의 속성 노출만 바꿉니다(props_ui — 전역 기본값과의 차이만 저장)' });
     const allBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '전체 기본값으로 저장',
         title: '모든 지식 문서의 기본 속성 노출을 이 조합으로 바꿉니다(knowledge_view_config)' });
-    const busy = (b) => { docBtn.disabled = b; allBtn.disabled = b; };
+    const setBusy = (b) => { docBtn.disabled = b; allBtn.disabled = b; }; // ⚠ 배럴의 busy(높이 예약)와 다른 것 — 이름을 갈라 둔다
     docBtn.onclick = async () => {
-        busy(true);
+        setBusy(true);
         try {
             // 전역 기본과의 차이만 오버라이드로 — show=전역숨김인데 켬, hide=전역노출인데 끔.
             const show = [], hide = [];
@@ -394,11 +394,11 @@ function openKnPropsSettings(foot, gear, k, hidden, onChanged) {
         }
         catch (e) {
             toast('저장 실패 — ' + e.message, true);
-            busy(false);
+            setBusy(false);
         }
     };
     allBtn.onclick = async () => {
-        busy(true);
+        setBusy(true);
         try {
             // 전역 기본엔 '이 대화에서 사용자가 바꾼 델타'만 반영한다. 토글 초기값(vis)은 이 문서의
             //  props_ui 오버라이드가 이미 반영된 '효과 노출'이라, 그걸 절대값으로 쓰면 한 문서의 개인화가
@@ -421,7 +421,7 @@ function openKnPropsSettings(foot, gear, k, hidden, onChanged) {
         }
         catch (e) {
             toast('저장 실패 — ' + e.message, true);
-            busy(false);
+            setBusy(false);
         }
     };
     const pop = el('div', { class: 'kn-props-pop' }, el('div', { class: 'kn-props-pop-head' }, el('span', { text: '속성 표시' }), recBtn), list, el('div', { class: 'kn-props-pop-actions' }, docBtn, allBtn));
@@ -631,7 +631,7 @@ function openKnowledgeLinkPicker(k, reload) {
     let t = null;
     async function search() {
         const q = qIn.value.trim();
-        results.replaceChildren(skeletonRows(2));
+        busy(results, skeletonRows(2));
         try {
             const url = q ? ('/api/ui/knowledge/search?' + new URLSearchParams({ q, limit: '15' }))
                 : ('/api/ui/knowledge?' + new URLSearchParams({ limit: '15', orderBy: 'updated_at' }));

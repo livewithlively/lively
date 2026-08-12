@@ -1,6 +1,6 @@
 // admin-teams.ts — #1405 W3: admin-members.ts 분할 ①.
 //  관리탭 '팀(부서)' 패널 — 목록·보기·편집. 구성원 패널과 데이터도 화면도 겹치지 않는 독립 덩어리다.
-import { api, cardHead, el, errorNote, state, toast, uiText } from './core.js';
+import { api, busy, cardHead, el, errorNote, state, toast, uiText } from './core.js';
 import { field, skeleton } from './ui-primitives.js';
 import { sectionHead } from './admin-widgets.js';
 // ── 팀 — 구성원을 팀(스쿼드)으로 묶고, 팀이 카테고리를 '소유'한다(표면화·주입의 '우리 팀' 기준). ──
@@ -12,7 +12,7 @@ const TEAM_ROLE_OPTS = [
 const TEAM_ROLE_LABEL = Object.fromEntries(TEAM_ROLE_OPTS);
 async function teamsPanel(detail, data, opts = {}) {
     const canEdit = state.admin.canContext;
-    detail.replaceChildren(el('div', { class: 'card' }, skeleton('팀을 불러오는 중')));
+    busy(detail, el('div', { class: 'card' }, skeleton('팀을 불러오는 중')));
     let teams;
     try {
         teams = ((await api('/api/ui/teams')) || {}).teams || [];

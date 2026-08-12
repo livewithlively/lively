@@ -8,7 +8,7 @@
 //  자리라 일상 화면에 두면 위험 반경이 넓어진다.
 //
 //  화면 설계: 드라이버를 먼저 고르면 그에 맞는 폼만 보인다(HTTP 폼과 RSS 폼은 공통 항목이 거의 없다).
-import { api, cardHead, el, toast, uiText } from './core.js';
+import { api, busy, cardHead, el, toast, uiText } from './core.js';
 // ⚠ confirmDialog 는 **정의처(ui-primitives)에서 직접** 가져온다 — admin.ts 배럴을 거치면
 //  admin → admin-shell → 이 패널로 순환이 생긴다(셸이 이 패널을 등록하므로). 셸↔패널 순환 절단 규칙과 같은 이유.
 import { confirmDialog } from './ui-primitives.js';
@@ -28,7 +28,7 @@ const DRIVER_WHAT: Record<string, string> = {
 };
 
 export async function collectorPresetEditor(detail: HTMLElement, _data?: unknown): Promise<void> {
-  detail.replaceChildren(head(), el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '불러오는 중…' })));
+  busy(detail, head(), el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '불러오는 중…' })));
   let d: any;
   try { d = await api('/api/ui/org/collectors'); }
   catch (e) {

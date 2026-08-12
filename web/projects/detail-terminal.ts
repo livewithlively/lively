@@ -2,7 +2,7 @@
 //  프로젝트 상세 ② '터미널 세션' 섹션 + 세션 생성/이름변경/삭제 폼.
 //  ⚠ watchProvision 의 폴링 타이머는 이 모듈이 소유한다(노드가 DOM 에서 빠지면 스스로 멈춘다).
 //  본문은 원문 그대로 옮겼다(verbatim).
-import { api, appUrl, el, errorNote, personFace, relTime, toast } from '../core.js';
+import { api, appUrl, busy, el, errorNote, personFace, relTime, toast } from '../core.js';
 import { field } from '../admin.js';
 import { overlayBox, skeletonRows } from '../learn.js';
 import { openProjectSessionsModal } from '../sessions.js';
@@ -80,7 +80,7 @@ function projectTerminalSection(id, members, meId, base, projectName, project?) 
   return card;
 
   async function load() {
-    body.replaceChildren(skeletonRows(2));
+    busy(body, skeletonRows(2));
     try { sessions = await api(B + id + '/sessions').then((d) => (d && d.sessions) || []); }
     catch (e) { body.replaceChildren(errorNote(e, '세션을 불러오지 못했습니다')); return; }
     // 팀원 아닌 주인이 섞여 있으면 이름을 구성원 디렉터리에서 채운다(1회 캐시). 실패해도 id 로 그린다.

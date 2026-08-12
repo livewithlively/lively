@@ -1,7 +1,7 @@
 // taskmodal/attachments.ts — #1313 R56: web/taskmodal.ts 섹션 분할 ⑥(첨부).
 //  프로젝트 폴더 _attachments/task-<id> 목록·업로드(진행·취소) · 공유폴더에서 첨부 · ClickUp DB 첨부(읽기전용) ·
 //  클립보드 이미지 붙여넣기 다이얼로그.
-import { TOKEN_KEY, api, el, toast } from '../core.js';
+import { api, busy, el, toast, TOKEN_KEY } from '../core.js';
 // 소유처 직결(#1313 R56) — 배럴 경유였다면 순환 가지가 늘어난다(composer.ts 주석과 같은 이유).
 import { pjvPopover } from '../projects/popover.js';
 import { authDownload, authUploadProgress, fileIconSvg, fmtSize, openFileViewer, upIsAbort, upProgress, upSend, upToast, type UpItem } from '../projects/files.js';
@@ -82,7 +82,7 @@ function pjvtmAttachments(d, t, refresh) {
       el('div', { class: 'pjv-files-head2', text: '공유 프로젝트 폴더에서 첨부' }), crumb, rowsBox));
     let curPath = '';
     const load = async () => {
-      rowsBox.replaceChildren(el('div', { class: 'pjv-files-empty', text: '불러오는 중…' }));
+      busy(rowsBox, el('div', { class: 'pjv-files-empty', text: '불러오는 중…' }));
       let data: any;
       try { data = await api(base + pid + '/files?path=' + encodeURIComponent(curPath)); }
       catch (e) { rowsBox.replaceChildren(el('div', { class: 'pjv-files-empty', text: '폴더를 불러오지 못했어요' })); return; }

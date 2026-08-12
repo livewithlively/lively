@@ -12,7 +12,7 @@
 //  그래서 경계를 **연결됨 / 연결할 수 있음** 으로 다시 긋고, 둘 다 한 화면에 편다. [＋ 서비스 연결] 은
 //   가리키는 대상이 없어져(연결 가능한 서비스가 이미 다 보인다) 사라진다.
 //  아이콘은 이모지 대신 서비스별 브랜드 마크를 직접 그린다(svc-icons.ts) — 대시보드 알림 타일과 같은 형태 언어.
-import { api, cardHead, el, errorNote, relTime, toast, uiText } from './core.js';
+import { api, busy, cardHead, el, errorNote, relTime, toast, uiText } from './core.js';
 import { confirmDialog, overlay, skeleton } from './ui-primitives.js';
 import { sectionHead } from './admin-widgets.js';
 import { openGitCredentialManager, svcTokenForm } from './admin-credentials.js';
@@ -68,7 +68,7 @@ async function renderServices(host: any) {
   //  **먼저 그린 다음** 붙인다(admin-shell.ts). 그래서 최초 렌더 시점의 host 는 항상 미부착이고, 그걸 거르면
   //  화면이 통째로 비어 버린다(실측). OAuth 복귀 focus 훅이 뒤늦게 부르는 경우는 {once:true} 라 1회뿐이고,
   //  미부착 노드에 그리는 건 무해하다 — 막을 값이 못 된다.
-  host.replaceChildren(el('div', { class: 'card' }, skeleton('연결 상태를 불러오는 중')));
+  busy(host, el('div', { class: 'card' }, skeleton('연결 상태를 불러오는 중')));
   let creds: any = { credentials: [] }, oauth: any = { connectors: [] };
   try {
     creds = await api('/api/ui/me/credentials');

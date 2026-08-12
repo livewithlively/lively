@@ -1,7 +1,7 @@
 // projects/detail-folder.ts — #1405 W1: detail-sections.ts 분할 ②.
 //  프로젝트 상세 ① '공유 폴더' 섹션 — 폴더 탐색 + 업로드(드롭·붙여넣기)/다운로드 + 검색 + 일괄삭제.
 //  본문은 원문 그대로 옮겼다(verbatim).
-import { api, el, errorNote, toast } from '../core.js';
+import { api, busy, el, errorNote, toast } from '../core.js';
 import { overlayBox, skeletonRows } from '../learn.js';
 import { UP_CONFIRM, UP_MANY, debounce, iconFor, openFolderGrid, openPasteDialog, projFileCardEl, projUpCardEl, upControl, upDropZone, upPrecheckOverwrite, upProgress, upSend, upToast, type UpItem } from './files.js';
 
@@ -171,7 +171,7 @@ function projectFolderSection(id, base, shareBase?) {
   }
 
   async function load() {
-    body.replaceChildren(skeletonRows(3));
+    busy(body, skeletonRows(3));
     try {
       const qs = st.q ? ('?q=' + encodeURIComponent(st.q)) : ('?path=' + encodeURIComponent(st.path));
       render(await api(B + id + '/files' + qs));

@@ -9,7 +9,7 @@
 //   · 도메인별로 묶는다 — 자기 도메인만 훑고 나가는 게 가장 빠른 검토다(#638: 워킹레벨이 오너보다 잘 검토).
 //   · 손이 안 떠난다 — j/k 이동 · Enter 펼침 · a 승인 · r 반려 · x 선택 → 일괄 승인.
 //   · 되돌릴 수 있다 — 신규 반려=휴지통(복원 가능) · 수정 반려=수정 전으로 되돌리기.
-import { api, cardHead, el, errorNote, relTime, renderMarkdown, toast } from './core.js';
+import { api, busy, cardHead, el, errorNote, relTime, renderMarkdown, toast } from './core.js';
 import { overlayBox, skeleton } from './learn.js';
 import { SPACE_SUBS } from './category-form.js';
 
@@ -150,7 +150,7 @@ export async function refreshReviewBadge(n?: number): Promise<void> {
 export async function ingestPolicyPanel(detail, data): Promise<void> {
   rqEnsureStyles();
   const reload = () => ingestPolicyPanel(detail, data);
-  detail.replaceChildren(el('div', { class: 'card' }, skeleton('검토 게이트 설정을 불러오는 중')));
+  busy(detail, el('div', { class: 'card' }, skeleton('검토 게이트 설정을 불러오는 중')));
   let policies: any[];
   let canEdit = false;
   try {
@@ -438,7 +438,7 @@ let rqKeys: AbortController | null = null;
 //  data(관리 org 페이로드)는 이 패널이 쓰지 않으므로 옵셔널 — WIKI 에서 인자 없이 부른다.
 export async function reviewQueuePanel(detail, data?): Promise<void> {
   rqEnsureStyles();
-  detail.replaceChildren(el('div', { class: 'card' }, skeleton('검토 대기 항목을 불러오는 중')));
+  busy(detail, el('div', { class: 'card' }, skeleton('검토 대기 항목을 불러오는 중')));
 
   let pending: any[] = [], revs: any[] = [];
   try {

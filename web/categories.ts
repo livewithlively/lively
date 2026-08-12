@@ -13,7 +13,7 @@
 //   조직 '설정'이 아니라 상시 업무라, 주인을 관리탭에서 이 탭으로 옮겼다(#837 의 일원화 지점을 이동).
 //
 //  패턴 = Settings(목록 + 폼 모달). 컴포넌트는 wikicat-* 를 그대로 재사용한다(신규 CSS 최소).
-import { api, el, errorNote, fmtNum, pageHead, toast, uiText } from './core.js';
+import { api, busy, el, errorNote, fmtNum, pageHead, toast, uiText } from './core.js';
 import { skeleton } from './learn.js';
 import { confirmDialog, hasScope } from './admin.js';
 import { SPACE_SUBS, openCategoryForm } from './category-form.js';
@@ -218,7 +218,7 @@ function categoryRow(c: any, space: string, ctx: { canEdit: boolean; teams: any[
       if (!open) { detail.setAttribute('hidden', 'hidden'); toggle.setAttribute('aria-expanded', 'false'); toggle.textContent = '어긋난 지식 보기'; return; }
       detail.removeAttribute('hidden'); toggle.setAttribute('aria-expanded', 'true'); toggle.textContent = '접기';
       if (loaded) return;
-      detail.replaceChildren(el('div', { class: 'wikicat-mismatch-loading', text: '불러오는 중…' }));
+      busy(detail, el('div', { class: 'wikicat-mismatch-loading', text: '불러오는 중…' }));
       try {
         const r = await api('/api/ui/categories/' + c.id);
         const items: any[] = (r && r.mismatches) || [];

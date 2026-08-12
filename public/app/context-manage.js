@@ -2,7 +2,7 @@
 //
 //  두 서브탭: '발견'(일감)이 먼저고 '관리기'(설정)가 뒤다 — 여기 오는 사람의 90%는 설정을 바꾸러 오는 게
 //  아니라 **쌓인 것을 처리하러** 온다. 설정 화면을 먼저 보여 주면 매번 한 번 더 눌러야 한다.
-import { api, cardHead, el, fmtNum, relTime, toast, uiText } from './core.js';
+import { api, busy, cardHead, el, fmtNum, relTime, toast, uiText } from './core.js';
 import { confirmDialog } from './admin.js';
 import { stageJobCard } from './context-stage-job.js'; // 단계 공용 '언제 도나' 카드(#1618)
 let editingKey = null;
@@ -21,7 +21,7 @@ const KIND_WHAT = {
 const SEV_LABEL = { high: '중요', warn: '주의', note: '참고' };
 // ── 발견 큐 ────────────────────────────────────────────────────────────────
 export async function renderFindings(host) {
-    host.replaceChildren(el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '불러오는 중…' })));
+    busy(host, el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '불러오는 중…' })));
     let d;
     try {
         const qs = new URLSearchParams({ limit: '200' });
@@ -170,7 +170,7 @@ function findingRow(f, reload) {
 }
 // ── 관리기 설정 ────────────────────────────────────────────────────────────
 export async function renderManagers(host) {
-    host.replaceChildren(el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '관리기를 불러오는 중…' })));
+    busy(host, el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '관리기를 불러오는 중…' })));
     let d;
     try {
         d = await api('/api/ui/org/managers');

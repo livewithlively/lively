@@ -18,7 +18,7 @@
 //   들어가 보기 전에는 보이지 않았다. 좌측으로 펴면 화면 11개가 항상 한눈에 보인다
 //   (관리탭이 #827 에서 가로 중분류 바를 폐지하고 .docs-side 로 편 것과 같은 방향·같은 시각 언어).
 //   위→아래 순서가 곧 파이프라인 순서라 '순서 자체가 정보'라는 성질도 그대로 남는다(번호로 못박는다).
-import { el, hasScope, sv } from './core.js';
+import { el, hasScope, keepSideScroll, sv } from './core.js';
 import { sectionHead } from './admin-widgets.js';
 import { skeleton } from './ui-primitives.js';
 import { renderPipeline } from './context-pipeline.js';
@@ -190,6 +190,7 @@ function stageCrumb(stage) {
  */
 function buildSide(selStage, selItem) {
     const side = el('nav', { class: 'docs-side ctx-side', 'aria-label': '맥락 관리 단계' });
+    keepSideScroll(side, 'context'); // 단계를 고르면 화면을 다시 그려 사이드바가 새 노드가 된다(#1635)
     const curStep = selStage.step ?? 0;
     for (const s of STAGES) {
         // 개요는 목록의 한 줄이 아니라 **눌러서 들어가는 입구**다(#1584 사용자 지적: "누를 수 있는 버튼 같지가

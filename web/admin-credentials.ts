@@ -3,7 +3,7 @@
 //   (me-logins.ts 의 서비스 탭 → svcTokenForm)이 같은 표를 본다. 표가 두 벌이 되면 한쪽에만 종류가 늘어
 //   조용히 어긋난다 — 그래서 여기 한 곳에만 둔다.
 //  소비자 import 문을 지키려고 admin.ts 가 아래 전부를 그대로 재수출한다.
-import { api, cardHead, el, errorNote, memberCombo, secretInput, secretRow, toast, uiText } from './core.js';
+import { api, busy, cardHead, el, errorNote, memberCombo, secretInput, secretRow, toast, uiText } from './core.js';
 import { copyButton, field, overlay, skeleton } from './ui-primitives.js';
 import { sectionHead } from './admin-widgets.js';
 
@@ -18,7 +18,7 @@ function openGitCredentialManager(scope: 'me' | 'gateway') {
   document.body.append(back);
 
   const reload = async () => {
-    body.replaceChildren(skeleton('불러오는 중'));
+    busy(body, skeleton('불러오는 중'));
     try { render(await api(base)); }
     catch (e: any) { body.replaceChildren(el('p', { class: 'gate-error', text: (e && e.message) || '불러오기 실패' })); }
   };
@@ -146,7 +146,7 @@ function catalogStatusCard(catalog: any[], servers: any[]) {
 //  그것 때문에 이 섹션이 권한 게이트 없이 전 구성원에게 열려 있었고(ADMIN_ONLY 밖), 조직 관리 화면에
 //  개인 설정이 섞여 있었다. 이제 섹션은 admin 전용이고, 안에 조직 자격·AWS 역할·프리셋 현황만 남는다.
 async function credentialsEditor(detail) {
-  detail.replaceChildren(el('div', { class: 'card' }, skeleton('자격을 불러오는 중')));
+  busy(detail, el('div', { class: 'card' }, skeleton('자격을 불러오는 중')));
   let mine: any = { encryption_ready: true };
   let org: any = { credentials: [] };
   let awsRoles: any = { credentials: [] };

@@ -3,7 +3,7 @@
 //   (me-logins.ts 의 서비스 탭 → svcTokenForm)이 같은 표를 본다. 표가 두 벌이 되면 한쪽에만 종류가 늘어
 //   조용히 어긋난다 — 그래서 여기 한 곳에만 둔다.
 //  소비자 import 문을 지키려고 admin.ts 가 아래 전부를 그대로 재수출한다.
-import { api, cardHead, el, errorNote, memberCombo, secretInput, secretRow, toast, uiText } from './core.js';
+import { api, busy, cardHead, el, errorNote, memberCombo, secretInput, secretRow, toast, uiText } from './core.js';
 import { copyButton, field, overlay, skeleton } from './ui-primitives.js';
 import { sectionHead } from './admin-widgets.js';
 // git 자격 관리 오버레이(#540) — 레포 클론·세션 git 용 SSH/HTTPS 자격. scope='me'(본인 자가등록) | 'gateway'(조직 머신계정·admin).
@@ -16,7 +16,7 @@ function openGitCredentialManager(scope) {
     const back = overlay(isGw ? '게이트웨이 git 계정' : 'git 인증 (레포 접근)', body);
     document.body.append(back);
     const reload = async () => {
-        body.replaceChildren(skeleton('불러오는 중'));
+        busy(body, skeleton('불러오는 중'));
         try {
             render(await api(base));
         }
@@ -164,7 +164,7 @@ function catalogStatusCard(catalog, servers) {
 //  그것 때문에 이 섹션이 권한 게이트 없이 전 구성원에게 열려 있었고(ADMIN_ONLY 밖), 조직 관리 화면에
 //  개인 설정이 섞여 있었다. 이제 섹션은 admin 전용이고, 안에 조직 자격·AWS 역할·프리셋 현황만 남는다.
 async function credentialsEditor(detail) {
-    detail.replaceChildren(el('div', { class: 'card' }, skeleton('자격을 불러오는 중')));
+    busy(detail, el('div', { class: 'card' }, skeleton('자격을 불러오는 중')));
     let mine = { encryption_ready: true };
     let org = { credentials: [] };
     let awsRoles = { credentials: [] };

@@ -3,7 +3,7 @@
 //  필터 목록(검색·인덱스·전체 — 이 파일) / 휴지통 / 자료. 문서(#/k)·드래프트는 wiki-doc.
 //  URL 계약(구 딥링크 호환): #/knowledge?category=N&folder=&type=&q=&indexed=1&all=1&peek=<name>
 //  (?tab= 은 #657 대문/문서 탭의 잔재 — 파싱 시 무시한다. 탭이라는 모드 자체를 폐지했다.)
-import { api, el, errorNote, relTime, selectFilter, state, toast } from './core.js';
+import { api, busy, el, errorNote, relTime, selectFilter, state, toast } from './core.js';
 import { skeleton, skeletonRows } from './learn.js';
 import { KN_TYPE_LABEL, KN_UNCAT, SOURCE_KIND_LABEL, isCategoryHomeDoc, knInvalidateTreeCaches, openSourceDetail } from './wiki-data.js';
 import { KN_INDEXED, createWikiSide, knApplySideW, knSideResizeHandle } from './wiki-side.js';
@@ -184,7 +184,7 @@ async function renderWikiSpace(view, params) {
 // ── 필터 목록 — 검색(q)·인덱스(핀)·전체. 한 장의 평면 목록 + 정직한 헤더(무엇으로 좁혀졌나). ──
 async function renderFilterList(box, ctx) {
     const f = ctx.f;
-    box.replaceChildren(el('div', { class: 'wk-home' }, skeletonRows(4)));
+    busy(box, el('div', { class: 'wk-home' }, skeletonRows(4)));
     const p = new URLSearchParams({ limit: '200', orderBy: 'updated_at', injection: 'recalled' });
     if (f.indexed)
         p.set('is_wiki', 'true');
@@ -337,7 +337,7 @@ async function renderSources(view) {
         loading = true;
         if (reset) {
             offset = 0;
-            listBox.replaceChildren(skeletonRows(4));
+            busy(listBox, skeletonRows(4));
             moreBox.replaceChildren();
         }
         try {
