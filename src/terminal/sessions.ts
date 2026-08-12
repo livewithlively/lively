@@ -355,7 +355,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     } catch (err) {
       console.warn(`[terminal] 세션 메모리 정책 조회 생략(비치명): ${err instanceof Error ? err.message : String(err)}`);
     }
-    args.push(...wrapAsMember(osUser, launch, target, cg));
+    // ★ session: true — 여기가 **유일한 세션 spawn** 이다. 파일 브리지 호출들과 구별되어야
+    //  세션 spawn 훅(LIVELY_SESSION_SPAWN)이 그쪽까지 가로채지 않는다(terminal-isolation 헤더 참조).
+    args.push(...wrapAsMember(osUser, launch, target, cg, { session: true }));
   } else {
     args.push("-c", target);
     // 멀티프로필(#346·#1014): 비격리 경로에서도 **항상 이 멤버 전용 CLAUDE_CONFIG_DIR** 을 준다(공유 폴백 폐기).
