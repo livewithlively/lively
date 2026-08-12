@@ -142,6 +142,17 @@ export function annotateUnknownColumn(
     const shown = near.length > 0 ? near : cols.slice(0, COLUMN_LIST_FULL_MAX);
     parts.push(`${table}: ${shown.join(", ")} (전체 ${cols.length}개 — db_schema({table:'${table}'}))`);
   }
-  if (parts.length === 0) return message; // 보강할 정보가 없으면 원문 그대로(원인을 삼키지 않는다)
+  if (parts.length === 0) {
+    // #1642 여기 닿는 두 경우 모두 **다음 행동**을 알려준다 — 종전엔 원문만 돌려줘 호출자가 무엇을 할지 몰랐다.
+    //  ① 카탈로그에서 컬럼을 못 얻음(권한·스키마 밖·이름 불일치) → cols 가 비어 위 루프가 전부 continue
+    //  ② 참조 테이블이 **전부** 그 컬럼을 가짐 → 원인이 컬럼 부재가 아니라 **별칭 오해**다
+    //     (실측 예: `SELECT x.amount … FROM d_charged_principal x` 의 x 가 가리키는 테이블이 딴 것)
+    //  실측(고객사 40일): 컬럼오류 201건 중 41건이 이 자리에서 아무 안내 없이 원문만 받았다.
+    const tables = [...columnsByTable.keys()];
+    if (tables.length === 0) return message; // 참조 테이블조차 모르면 보탤 게 없다(원인을 삼키지 않는다)
+    return `${message} — 참조한 테이블의 컬럼을 확인하세요: ${
+      tables.map((t) => `db_schema({table:'${t}'})`).join(" · ")
+    }. 별칭을 썼다면 그 별칭이 가리키는 테이블이 맞는지도 함께 보세요.`;
+  }
   return `${message} — 참조한 테이블의 실제 컬럼 → ${parts.join(" / ")}`;
 }

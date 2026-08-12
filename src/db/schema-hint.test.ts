@@ -199,4 +199,29 @@ ok("38 컬럼 목록이 빈 테이블만 건너뛴다", () => {
   assert.match(msg, /real_t: deal_realization_uid/);
 });
 
+// ── #1642 힌트를 못 만들 때도 **다음 행동**은 준다. ──
+//  실측(고객사 40일): 컬럼오류 201건 중 41건이 이 자리에서 아무 안내 없이 원문만 받았다.
+//  둘 다 "컬럼 목록을 실을 수 없다"는 점은 같지만 원인이 다르고, 어느 쪽이든 호출자가 할 일은 하나다 —
+//  참조 테이블의 컬럼을 db_schema 로 확인하는 것.
+ok("39 카탈로그가 컬럼을 못 준 경우(전부 빈 목록) — 원문 대신 db_schema 확인 경로를 준다", () => {
+  const orig = "Unknown column 'credit_apply_uid' in 'field list'";
+  const msg = annotateUnknownColumn(orig, "credit_apply_uid", new Map([["cis_dsr_master", []]]));
+  assert.notEqual(msg, orig, "종전처럼 원문만 돌려주면 호출자는 다음에 뭘 할지 모른다");
+  assert.match(msg, /cis_dsr_master/, "어느 테이블을 봐야 하는지 지목해야 함");
+  assert.match(msg, /db_schema/, "확인 경로를 줘야 함");
+  assert.ok(msg.includes(orig), "원인(원문)을 삼키면 안 됨");
+});
+ok("40 참조 테이블이 전부 그 컬럼을 가진 경우(별칭 오해) — 별칭을 의심하라고 알린다", () => {
+  const orig = "Unknown column 'x.amount' in 'field list'";
+  const msg = annotateUnknownColumn(orig, "amount",
+    new Map([["d_charged_principal", ["amount", "bond_uid"]], ["tb_lo_bond", ["amount", "uid"]]]));
+  assert.notEqual(msg, orig);
+  assert.match(msg, /별칭/, "컬럼은 있는데 튕겼다면 원인은 별칭이다");
+  assert.match(msg, /d_charged_principal/);
+});
+ok("41 참조 테이블을 모를 때는 여전히 원문 그대로(없는 안내를 지어내지 않는다)", () => {
+  const orig = "Unknown column 'table_name' in 'field list'";
+  assert.equal(annotateUnknownColumn(orig, "table_name", new Map()), orig);
+});
+
 console.log(`\n${pass} checks passed`);
