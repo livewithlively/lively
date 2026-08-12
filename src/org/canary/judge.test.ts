@@ -7,7 +7,7 @@
 //   등록해 두면 전 고객이 깨져도 초록불이다. 어댑터마다 plain 등급 프로브를 강제한다.
 //  회귀 대상 ③: **단언 없는 프로브는 프로브가 아니다**(R2) — 호출 성공만 보면 정확히 이번처럼 눈이 먼다.
 import assert from "node:assert/strict";
-import { judgeProbe, evaluateStreak, alertTransition, pluck } from "./judge.js";
+import { judgeProbe, evaluateStreak, alertTransition, pluck, isUnconfigured } from "./judge.js";
 import { assertProbeCoverage, CANARY_PROBES, DENIAL_MARKERS, type CanaryProbe } from "./probes.js";
 
 let pass = 0;
@@ -117,6 +117,34 @@ t("Q6 unknown 은 전이로 치지 않는다 — 판정 중인 것을 알리면 
   assert.equal(alertTransition("failing", "unknown"), null, "임계 미만으로 내려간 것뿐인데 '복구'라고 알리면 거짓말이다");
   assert.equal(alertTransition("unknown", "failing"), "raise");
   assert.equal(alertTransition("unknown", "ok"), null, "첫 성공을 '복구'라고 알릴 근거가 없다");
+});
+
+// ── S. 구성 미비 vs 상류 회귀 (dev 실측으로 추가) ──
+//  회귀 대상: **안 쓰는 커넥터가 영구 failing 으로 남아 가짜 경보가 진짜 경보를 묻던 것.**
+//  dev 에서 실제로 그렇게 됐다 — gmail 미연결이 3회 만에 raise 를 울렸다.
+t("S1 '자격 없음'·미연결은 상류 회귀가 아니다", () => {
+  assert.equal(isUnconfigured("상류가 실패를 반환했다: 자격 없음 — 이 툴은 'google_gmail_oauth' 자격이 필요합니다."), true);
+  assert.equal(isUnconfigured("'notion_oauth' OAuth 미연결 — me_oauth_connect 로 먼저 인증하세요."), true);
+  assert.equal(isUnconfigured("org_tool 'google_drive_search' 이 없습니다(프리셋 미적용?)"), true);
+  assert.equal(isUnconfigured("org_tool 'x' 이 꺼져 있습니다"), true);
+});
+
+t("S2 진짜 상류 거부는 구성 미비가 아니다 — 이걸 섞으면 이번 사고를 통째로 놓친다", () => {
+  assert.equal(isUnconfigured("상류가 실패를 반환했다: The caller does not have permission"), false);
+  assert.equal(isUnconfigured("응답에 경로 'files' 가 없다"), false);
+  assert.equal(isUnconfigured(null), false);
+  assert.equal(isUnconfigured(""), false);
+});
+
+t("S3 구성 미비 상태는 경보를 울리지 않는다", () => {
+  assert.equal(alertTransition("unknown", "unconfigured"), null);
+  assert.equal(alertTransition("ok", "unconfigured"), null);
+  assert.equal(alertTransition("unconfigured", "unconfigured"), null);
+});
+
+t("S4 고장 → 구성 미비로 재분류되면 잘못 울린 경보를 푼다", () => {
+  assert.equal(alertTransition("failing", "unconfigured"), "clear",
+    "안 풀면 사람은 아직 고장 중인 줄 알고, 그 오해가 다음 진짜 경보의 신뢰를 깎는다");
 });
 
 // ── R. 프로브 구성이 실제로 볼 수 있는가 ──

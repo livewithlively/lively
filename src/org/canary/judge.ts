@@ -63,7 +63,31 @@ function snippet(t: string, max = 200): string {
   return one.length > max ? `${one.slice(0, max)}…` : one;
 }
 
-export type CanaryState = "ok" | "failing" | "unknown";
+// ── 구성 미비 vs 상류 회귀 (#1657, dev 실측으로 추가) ────────────────────────────────────────
+//  '이 조직은 gmail 을 안 쓴다' 와 '구글이 우리를 막았다' 는 완전히 다른 사실인데 둘 다 '호출 실패' 로 온다.
+//  구분하지 않으면 안 쓰는 커넥터가 영구 failing 으로 남아 **가짜 경보가 진짜 경보를 묻는다** — 그게 사람이
+//  경보를 끄게 만드는 가장 흔한 경로다(dev 에서 실제로 그렇게 됐다: gmail 미연결 → 3회 만에 raise).
+//
+//  판정 근거는 **우리 코드가 만드는 문구만** 쓴다(#1082 와 같은 원칙 — 상류가 정하는 값에 의존하면 상류가
+//  문구를 바꾸는 순간 정책이 조용히 무효화된다). 아래는 전부 게이트웨이 자신이 만드는 메시지다.
+const UNCONFIGURED_MARKERS = [
+  "자격 없음",           // dynamic-tools: vault 해소 실패
+  "미연결",              // mcp-proxy: OAuth 토큰 없음
+  "개인 연결이 필요",     // mcp-proxy: OAuth 커넥터인데 callerId 없음
+  "개인 신원이 필요",     // mcp-proxy: SigV4
+  "이 없습니다(프리셋 미적용?)", // run.ts: org_tool 부재
+  "이 꺼져 있습니다",     // run.ts: org_tool 비활성
+  "proxy MCP 서버 없음",  // mcp-proxy: 서버 행 부재
+  "다시 연결하세요",      // oauth-proxy-auth: 갱신 불가(재연결 필요)
+];
+
+/** 이 실패가 '상류 회귀' 가 아니라 '이 박스에 아직 설정이 없음' 인가. */
+export function isUnconfigured(reason: string | null | undefined): boolean {
+  if (!reason) return false;
+  return UNCONFIGURED_MARKERS.some((m) => reason.includes(m));
+}
+
+export type CanaryState = "ok" | "failing" | "unknown" | "unconfigured";
 
 /**
  * 최근 결과(**최신이 앞**)로 상태를 정한다. threshold 회 연속 실패해야 failing —
@@ -89,5 +113,8 @@ export function evaluateStreak(recent: boolean[], threshold: number): { state: C
 export function alertTransition(prev: CanaryState, next: CanaryState): "raise" | "clear" | null {
   if (next === "failing" && prev !== "failing") return "raise";
   if (next === "ok" && prev === "failing") return "clear";
+  // 고장인 줄 알았는데 '설정이 없는 것' 으로 재분류됐다 → 잘못 울린 경보를 **명시적으로 푼다.**
+  //  안 풀면 사람은 아직 고장 중인 줄 알고, 그 오해가 다음 진짜 경보의 신뢰를 깎는다.
+  if (next === "unconfigured" && prev === "failing") return "clear";
   return null;
 }

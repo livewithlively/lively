@@ -15,6 +15,11 @@ export async function initCanary(pool: Pool): Promise<void> {
       tier TEXT NOT NULL,
       ok BOOLEAN NOT NULL,
       reason TEXT,
-      duration_ms INT);
+      duration_ms INT,
+      -- #1657: '이 박스에 설정이 없다'(자격 미연결·도구 미적용)와 '상류가 막혔다'를 가른다.
+      --  구성 미비는 연속실패 집계에서 빠진다 — 안 쓰는 커넥터가 영구 failing 으로 남으면
+      --  그 가짜 경보가 진짜 경보를 묻는다(dev 실측).
+      configured BOOLEAN NOT NULL DEFAULT true);
+    ALTER TABLE canary_result ADD COLUMN IF NOT EXISTS configured BOOLEAN NOT NULL DEFAULT true;
     CREATE INDEX IF NOT EXISTS canary_result_key_at_idx ON canary_result(probe_key, ran_at DESC);`);
 }

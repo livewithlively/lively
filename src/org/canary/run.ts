@@ -10,14 +10,14 @@ import { itemsPool } from "../../db/client.js";
 import { logger } from "../../log.js";
 import { sendBoxAlert } from "../../ops/alerts.js";
 import { CANARY_PROBES, type CanaryProbe } from "./probes.js";
-import { judgeProbe, evaluateStreak, alertTransition, type CanaryState } from "./judge.js";
+import { judgeProbe, evaluateStreak, alertTransition, isUnconfigured, type CanaryState } from "./judge.js";
 
 /** 연속 실패 임계 — 이 횟수만큼 이어서 실패해야 경보한다. */
 export const FAIL_THRESHOLD = 3;
 /** 상태 판정에 보는 최근 결과 수. */
 const RECENT_WINDOW = 10;
 
-export interface ProbeRun { key: string; ok: boolean; reason: string | null; durationMs: number }
+export interface ProbeRun { key: string; ok: boolean; configured: boolean; reason: string | null; durationMs: number }
 
 /** 프로브 1개 실행 — 어댑터 경로를 그대로 태워 {isError, text} 로 정규화한 뒤 판정에 넘긴다. */
 export async function runProbe(probe: CanaryProbe, callerId: string): Promise<ProbeRun> {
@@ -41,7 +41,9 @@ export async function runProbe(probe: CanaryProbe, callerId: string): Promise<Pr
     raw = { isError: true, text: (err as Error).message };
   }
   const v = judgeProbe(raw, probe.expect);
-  return { key: probe.key, ok: v.ok, reason: v.reason, durationMs: Date.now() - started };
+  // 구성 미비는 '상류 회귀' 가 아니다 — 실패로는 남기되 연속실패 집계에서 빼 경보를 울리지 않는다.
+  const configured = v.ok || !isUnconfigured(v.reason);
+  return { key: probe.key, ok: v.ok, configured, reason: v.reason, durationMs: Date.now() - started };
 }
 
 function textOf(content: unknown[]): string {
@@ -55,13 +57,15 @@ function textOf(content: unknown[]): string {
 
 /** 최근 결과(최신 앞) — 상태 판정용. */
 async function recentResults(key: string, limit = RECENT_WINDOW): Promise<boolean[]> {
-  const r = await itemsPool.query("SELECT ok FROM canary_result WHERE probe_key=$1 ORDER BY ran_at DESC LIMIT $2", [key, limit]);
+  // configured=false 행은 제외한다 — 설정이 없어서 실패한 건 상류에 대한 관측이 아니다.
+  const r = await itemsPool.query(
+    "SELECT ok FROM canary_result WHERE probe_key=$1 AND configured ORDER BY ran_at DESC LIMIT $2", [key, limit]);
   return r.rows.map((row) => row.ok === true);
 }
 
 export interface CanaryRunSummary {
   ran: number; failed: number;
-  probes: Array<{ key: string; label: string; adapter: string; tier: string; ok: boolean; reason: string | null; state: CanaryState; alerted: "raise" | "clear" | null }>;
+  probes: Array<{ key: string; label: string; adapter: string; tier: string; ok: boolean; configured: boolean; reason: string | null; state: CanaryState; alerted: "raise" | "clear" | null }>;
 }
 
 /**
@@ -78,16 +82,18 @@ export async function runCanary(opts: { callerId: string; keys?: string[]; probe
     if (!run.ok) out.failed++;
     try {
       await itemsPool.query(
-        `INSERT INTO canary_result(probe_key, adapter, tier, ok, reason, duration_ms) VALUES($1,$2,$3,$4,$5,$6)`,
-        [probe.key, probe.adapter, probe.tier, run.ok, run.reason, run.durationMs],
+        `INSERT INTO canary_result(probe_key, adapter, tier, ok, reason, duration_ms, configured) VALUES($1,$2,$3,$4,$5,$6,$7)`,
+        [probe.key, probe.adapter, probe.tier, run.ok, run.reason, run.durationMs, run.configured],
       );
     } catch (err) {
       logger.warn({ err, probe: probe.key }, "카나리 결과 저장 실패(판정은 유효)");
     }
-    const after = evaluateStreak(await recentResults(probe.key).catch(() => [run.ok]), FAIL_THRESHOLD);
+    const after = run.configured
+      ? evaluateStreak(await recentResults(probe.key).catch(() => [run.ok]), FAIL_THRESHOLD)
+      : { state: "unconfigured" as CanaryState, failStreak: 0 };
     const transition = alertTransition(before, after.state);
     if (transition) await notify(probe, run, after.state, after.failStreak, transition).catch((err) => logger.warn({ err }, "카나리 경보 전송 실패"));
-    out.probes.push({ key: probe.key, label: probe.label, adapter: probe.adapter, tier: probe.tier, ok: run.ok, reason: run.reason, state: after.state, alerted: transition });
+    out.probes.push({ key: probe.key, label: probe.label, adapter: probe.adapter, tier: probe.tier, ok: run.ok, configured: run.configured, reason: run.reason, state: after.state, alerted: transition });
   }
   return out;
 }
