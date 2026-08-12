@@ -103,10 +103,34 @@ jobs:
                    APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
             if [ -z "${!v:-}" ]; then unset "$v"; fi
           done
-          # 인증서가 없으면 키체인 자동탐색도 끈다 — 러너에 남의 인증서가 있으면 엉뚱한 신원으로 서명된다.
-          if [ -z "${CSC_LINK:-}" ]; then export CSC_IDENTITY_AUTO_DISCOVERY=false; fi
           npm run icon
-          npx electron-builder --mac --publish never
+          if [ -n "${CSC_LINK:-}" ]; then
+            npx electron-builder --mac --publish never          # 진짜 인증서 — package.json 의 배포 설정 그대로
+          else
+            # ⚠ 인증서가 없을 때 **서명을 건너뛰면 안 된다.** electron-builder 는 identity 미설정 + 인증서 부재면
+            #  서명을 통째로 스킵하는데(ad-hoc 자동 폴백 없음), 그러면 번들엔 Electron 바이너리의 **linker-signed
+            #  서명이 그대로 남아 무효**가 된다(app.asar 를 넣고 실행파일 이름을 바꿨으니 봉인이 깨진다).
+            #  실측: `codesign --verify` 가 "code has no resources but signature indicates they must be present" 로 실패하고,
+            #  내려받은 사용자는 "확인되지 않은 개발자"(우회 가능)가 아니라 **"손상되었기 때문에 열 수 없습니다"**(우회 불가)를 본다.
+            #  → 명시적 ad-hoc(`identity=-`)으로 **다시 봉인**한다. 그러면 판정이 단순 `rejected` 가 되어
+            #    우클릭▸열기로 넘어갈 수 있다(공증은 여전히 별개 축 — Apple 자격이 들어오면 위 분기로 간다).
+            #  ⚠ ad-hoc 은 hardenedRuntime 과 같이 못 쓴다(라이브러리 검증에 걸려 앱이 안 뜬다) → 여기서만 끈다.
+            #    package.json 은 배포 의도(hardenedRuntime: true)를 그대로 유지한다.
+            npx electron-builder --mac --publish never -c.mac.identity=- -c.mac.hardenedRuntime=false
+          fi
+
+      # ★ 서명이 **유효한지** 본다. 빌드 성공은 서명 유효를 뜻하지 않는다 — 위 함정이 정확히 그 틈이었다.
+      #  여기서 실패하면 릴리스를 막는다(사용자가 '손상됨' 을 보는 것보다 릴리스가 안 나가는 게 낫다).
+      - name: 서명 유효성 (mac)
+        if: matrix.name == 'mac'
+        shell: bash
+        working-directory: desktop
+        run: |
+          APP="$(find release -maxdepth 2 -name '*.app' | head -1)"
+          [ -n "$APP" ] || { echo "::error::mac .app 산출물을 찾지 못했다"; exit 1; }
+          codesign -dv --verbose=2 "$APP" 2>&1 | sed 's/^/  /'
+          codesign --verify --deep --strict "$APP" || { echo "::error::서명이 무효하다 — 내려받은 사용자는 '손상되었습니다' 를 본다"; exit 1; }
+          echo "✓ 서명 유효"
 
       - name: 빌드 (win)
         if: matrix.name == 'win'
