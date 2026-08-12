@@ -1389,6 +1389,26 @@
   "input_hash": "01ca33da965f9838"
  },
  {
+  "name": "org_http_tool_presets",
+  "scope": "runtime",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/http-tool-presets"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_http_tool_preset_apply",
+  "scope": "runtime",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/http-tool-presets/apply"
+  ],
+  "input_hash": "2dcad916c979d382"
+ },
+ {
   "name": "org_tool_remove",
   "scope": "runtime",
   "mcp": true,

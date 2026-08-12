@@ -21,6 +21,21 @@
 //  ③ 응답은 256KiB·8초 상한이다. 그래서 목록 계열은 pageSize 를 낮게, fields 로 필요한 칸만 받는다.
 //  ④ 경로 자리표시 `{fileId}` 는 인자로 채워진다(#1655). 그 키는 반드시 required 여야 한다 — 안 그러면 런타임에
 //     "경로 인자가 필요합니다" 로 죽는다. assertHttpToolPreset 이 이걸 강제한다.
+//
+// ── A(MCP 프록시) → B 전환 순서 (#1656) ─────────────────────────────────────────────────────
+//  ⚠ **B 를 먼저 켜고 A 를 나중에 내린다.** 반대로 하면 그 사이 구글이 통째로 죽는다.
+//   1. `org_http_tool_preset_apply {key}` — 도구를 심고 url_allowlist 에 호스트를 함께 넣는다
+//      (allowlist 는 deny-all 기본이라 이걸 빠뜨리면 심어도 전부 차단된다).
+//   2. 구성원 1인이 실제로 호출해 200 을 확인한다(연결은 이미 돼 있다 — 아래 참조).
+//   3. A 서버를 `enabled=false` 로 내린다(org_mcp_upsert) → 403 을 뱉던 도구 표면이 사라진다.
+//   4. 되돌릴 땐 3번만 반대로 — A 를 다시 켜면 즉시 복구된다.
+//  **재로그인은 필요 없다.** 금고 행은 (owner, auth_kind, scope_key) 로 잡히지 어느 서버 행에 묶여 있지 않고,
+//   B 가 같은 auth_kind·같은 scope_key 를 쓰기 때문이다. scope 도 그대로라 재동의 사유가 없다 —
+//   클래식 API 는 현재 scope 로 충분하다(drive.readonly · gmail.readonly · calendar.readonly).
+//  자격 화면도 그대로다: 비활성 서버라도 그 auth_kind 를 쓰는 도구가 켜져 있으면 연결 목록에 남는다
+//   (foldOAuthConnectors, #1656). 서버 **이름**이 승계의 열쇠라 바꾸지 않는다.
+//  ⚠ 예외 — access_type=offline 픽스(2026-07-22) 이전에 연결한 사람은 refresh token 이 없어 이미 죽어 있다.
+//   전환과 무관하게 [다시 연결]이 필요하다.
 import type { OrgToolInput } from "../store/tools.js";
 import { assertSafeJsonSchema, urlTemplateKeys, CALLABLE_SCOPES } from "../../mcp/dynamic-tools.js";
 
