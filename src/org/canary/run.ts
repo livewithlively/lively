@@ -113,12 +113,16 @@ async function notify(probe: CanaryProbe, run: ProbeRun, state: CanaryState, fai
 /** 프로브별 현재 상태 — 관리탭·에이전트 조회용. */
 export async function canaryStatus(): Promise<Array<{ key: string; label: string; adapter: string; tier: string; state: CanaryState; failStreak: number; lastReason: string | null; lastRunAt: string | null }>> {
   const r = await itemsPool.query(
-    `SELECT DISTINCT ON (probe_key) probe_key, ran_at, reason FROM canary_result ORDER BY probe_key, ran_at DESC`);
+    `SELECT DISTINCT ON (probe_key) probe_key, ran_at, reason, configured FROM canary_result ORDER BY probe_key, ran_at DESC`);
   const last = new Map(r.rows.map((row) => [row.probe_key as string, row]));
   const out = [];
   for (const p of CANARY_PROBES) {
-    const s = evaluateStreak(await recentResults(p.key).catch(() => []), FAIL_THRESHOLD);
     const row = last.get(p.key);
+    // ⚠ **가장 최근 실행**이 구성 미비면 그 프로브는 unconfigured 다. 연속실패 집계는 configured 행만 보므로
+    //  여기서 덮지 않으면 '설정을 걷어낸 직후'에 과거 실패 기록으로 failing 이 계속 보인다(dev 실측).
+    const s = row && row.configured === false
+      ? { state: "unconfigured" as CanaryState, failStreak: 0 }
+      : evaluateStreak(await recentResults(p.key).catch(() => []), FAIL_THRESHOLD);
     out.push({
       key: p.key, label: p.label, adapter: p.adapter, tier: p.tier,
       state: s.state, failStreak: s.failStreak,
