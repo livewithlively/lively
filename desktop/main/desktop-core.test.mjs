@@ -888,12 +888,31 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     // GitHub Actions 는 없는 시크릿을 **빈 문자열 env** 로 넘긴다. electron-builder 는 CSC_LINK 가 정의돼
     //  있으면 인증서 '파일 경로' 로 보고 열려 하므로 빈 값이면 projectDir 을 가리켜 `not a file` 로 죽는다.
     //  실측 A/B(같은 맥): 빈 문자열 → EXIT 1 · unset → EXIT 0. 시크릿이 없어도 미서명으로 빌드되는 게 계약이다.
-    const macStep = wf.split("빌드 (mac)")[1].split("- name:")[0];
+    const macStep = wf.split("빌드 (mac)")[1].split("- name: 서명 유효성")[0];
     assert.match(macStep, /unset "\$v"/, "빈 서명 env 를 unset 하지 않는다");
-    assert.match(macStep, /CSC_IDENTITY_AUTO_DISCOVERY=false/, "인증서가 없을 때 키체인 자동탐색을 끄지 않는다");
     for (const v of ["CSC_LINK", "APPLE_API_KEY", "APPLE_ID"]) {
       assert.ok(macStep.includes(v), `${v} 가 정리 대상 목록에 없다`);
     }
+    // 러너에 남의 인증서가 있어도 그걸로 서명하지 않는다 — 종전엔 키체인 자동탐색을 꺼서 지켰고,
+    //  지금은 **신원을 ad-hoc 으로 명시 고정**해 지킨다(Z4). 둘 중 하나는 반드시 있어야 한다.
+    assert.ok(/CSC_IDENTITY_AUTO_DISCOVERY=false/.test(macStep) || /-c\.mac\.identity=-/.test(macStep),
+      "인증서 부재 시 서명 신원이 열려 있다 — 러너의 아무 인증서로 서명될 수 있다");
+  });
+
+  t("Z4 ★ 인증서가 없어도 mac 은 ad-hoc 으로 **다시 봉인**한다 — 안 하면 '손상됨' 하드블록", () => {
+    // 실측(2026-08-11, v0.1.321): identity 미설정 + 인증서 부재 → electron-builder 가 서명을 통째로 스킵한다
+    //  (ad-hoc 자동 폴백 없음). 그러면 Electron 바이너리의 linker-signed 서명이 그대로 남아 무효가 되고
+    //  (app.asar 주입 + 실행파일 개명으로 봉인이 깨진다), 내려받은 사용자는 우회 버튼조차 없는
+    //  "손상되었기 때문에 열 수 없습니다" 를 본다. ad-hoc 재봉인 후엔 단순 rejected(우클릭▸열기 가능).
+    const macStep = wf.split("빌드 (mac)")[1].split("- name: 서명 유효성")[0];
+    assert.match(macStep, /-c\.mac\.identity=-/, "인증서 없을 때 ad-hoc 재봉인을 하지 않는다");
+    // ad-hoc + hardenedRuntime 은 라이브러리 검증에 걸려 앱이 안 뜬다 — 그 조합을 만들면 안 된다.
+    assert.match(macStep, /-c\.mac\.hardenedRuntime=false/, "ad-hoc 인데 hardenedRuntime 을 끄지 않는다");
+    // 배포 의도는 package.json 에 남아 있어야 한다(진짜 인증서가 들어오면 그 경로로 간다).
+    assert.equal(pkg.build.mac.hardenedRuntime, true, "package.json 의 배포 설정까지 낮추면 공증 때 되돌려야 한다");
+    assert.ok(!("identity" in pkg.build.mac), "identity 를 package.json 에 박으면 진짜 인증서를 무시하게 된다");
+    // 그리고 **유효한지 실제로 확인**하는 스텝이 있어야 한다 — 빌드 성공은 서명 유효를 뜻하지 않는다.
+    assert.match(wf, /codesign --verify --deep --strict/, "서명 유효성 검증 스텝이 없다");
   });
 
   t("Z2 ★ 릴리스 버전은 태그에서 온다 — package.json 에 박힌 값이 산출물로 나가면 안 된다", () => {

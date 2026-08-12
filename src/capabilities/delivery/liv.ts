@@ -12,7 +12,7 @@ import type { Capability } from "../types.js";
 import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 import { restRead } from "./shared.js";
-import { pipelineOverview } from "./pipeline.js";
+import { computePipelineOverview } from "../../org/store/pipeline.js";
 import { livFindings, livTopFindings, livMature, type LivSnapshot } from "../../org/delivery/liv-findings.js";
 import { livHomeMode } from "../../org/delivery/liv-home.js";
 
@@ -35,7 +35,7 @@ export const livCapabilities: Capability[] = [
         ? await import("../../org/delivery/onboarding.js")
           .then((m) => m.computeOnboardingStatus()).catch(() => null)
         : null;
-      const pipe = isAdmin ? await pipelineOverview().catch(() => null) : null;
+      const pipe = isAdmin ? await computePipelineOverview().catch(() => null) : null;
       // 임베딩은 **모르면 undefined** — false 로 적으면 "켜져 있다"는 주장이 되고, true 로 적으면 거짓 경고다.
       const embeddingOff = isAdmin
         ? await import("../../org/store.js")
