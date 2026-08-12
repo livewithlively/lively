@@ -298,7 +298,9 @@ export async function searchPromptsHybrid(sessions: Array<{ id: string; label: s
   if (!docs.length) return { results: [], total: 0, truncated: false, partial: false, semantic: true };
   // 쿼리 임베딩(실패 시 렉시컬로 폴백 신호 = semantic:false 로 라우트가 처리하도록 예외 throw 하지 않고 빈 sim)
   let qEmb: number[] | null = null;
-  try { qEmb = (await provider.embed([query]))[0] || null; } catch { qEmb = null; }
+  // 질의 데드라인(#1644) — provider.embedQuery 가 배치(request_timeout_ms)가 아니라 질의 인내심을 쓴다. 늦으면 렉시컬만.
+  //  ⚠ search-util 의 embedSearchQuery 를 쓰지 않는 이유: 그 모듈이 db/client 를 끌어와 노드 에이전트 번들('DB 없음' 계약)을 오염시킨다.
+  try { qEmb = (await provider.embedQuery(query)) || null; } catch { qEmb = null; }
   if (qEmb) {
     // 캐시 안 된 프롬프트를 최신순으로 예산만큼 임베딩(배치) — 첫 검색만 비용, 이후 캐시.
     const uncached = docs.filter((d) => d.text && !promptEmbedCache.has(d.text))

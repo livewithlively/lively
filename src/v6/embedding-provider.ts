@@ -20,7 +20,14 @@ export interface EmbeddingConfig {
   auth_env_ref: string | null; // Authorization: Bearer <process.env[auth_env_ref]>. 환경변수 '이름'만 저장(시크릿 금지). null=무인증(로컬 사이드카)
   // 성능 튜닝(#602) — 느린/CPU 백엔드 대응. 백엔드마다 처리속도가 크게 달라 config 로 조정(코드 변경 0).
   batch_size: number;          // 한 fetch 요청당 임베딩 텍스트 수 = 백필 커밋 단위. CPU 백엔드는 낮춰 요청당 시간을 300초 안으로.
-  request_timeout_ms: number;  // 임베딩 요청당 AbortSignal.timeout(ms). undici 무설정 기본(≈300초)을 명시화·설정화. 초과 시 배치를 반으로 줄여 재시도.
+  request_timeout_ms: number;  // **배치 인내심** — 백필 요청당 AbortSignal.timeout(ms). undici 무설정 기본(≈300초)을 명시화·설정화. 초과 시 배치를 반으로 줄여 재시도.
+  // **질의 인내심**(#1644) — 사람/에이전트가 응답을 기다리는 경로(검색·유사·추천)의 단건 임베딩 데드라인.
+  //  배치와 분리한 이유(고객사 실측 knowledge_search 621콜): p50 은 763ms 로 멀쩡한데 p90 9.3초·최대 92.7초였다.
+  //  원인은 임베딩 백엔드(Ollama CPU, 동시 슬롯 1)의 **큐 대기**인데, 검색이 배치와 같은 request_timeout_ms(그 박스는 600초)를
+  //  써서 그 대기를 끝까지 기다렸다. 겹친 임베딩 요청 1건이면 p50 이 14초, 3건이면 71초로 올라간다.
+  //  → 질의는 짧게 끊고 렉시컬(grep)로 폴백한다. 느린 걸 숨기는 게 아니라 **빠른 길을 기본으로** 두는 선택이고,
+  //   폴백했다는 사실은 응답에 실어 부르는 쪽이 알게 한다(조용한 품질 저하 금지).
+  query_timeout_ms: number;
   // 백필 pre-flight 메모리 게이트(#1059) — 자동 백필 스윕이 임베딩 백엔드(예: Ollama bge-m3 = 로드 시 ~3.3GB)를 깨우기 전
   //  가용 메모리가 이 값(MB) 미만이면 이번 스윕을 건너뛰고 다음 주기에 재시도(pending 은 DB 유지, 재진입 안전). 0=게이트 비활성(무회귀).
   //  배경: claude 세션 baseline + 임베딩 3.3GB 스파이크 겹침이 스왑0 물리 초과로 박스를 뻗게 함(고객사 A 2026-07-21). 권장=임베딩 백엔드 상주분+헤드룸.
@@ -34,6 +41,9 @@ export interface EmbeddingProvider {
   readonly dimensions: number;
   // 입력 순서 = 출력 순서(index 보장). 빈 입력 → []. 실패는 throw(호출부가 렉시컬 폴백 판단).
   embed(texts: string[]): Promise<number[][]>;
+  // 질의 임베딩(#1644) — **사람이 기다리는** 단건. query_timeout_ms 데드라인, 축소 재시도 없음(단건은 쪼갤 게 없다).
+  //  실패는 throw(호출부가 렉시컬 폴백 + 사유 표시). embed(배치)와 인내심이 다르다는 게 이 메서드의 존재 이유다.
+  embedQuery(text: string): Promise<number[]>;
   // 헬스(엔드포인트 reachable + 키/차원 일치). 검색경로의 가용성 게이트.
   isAvailable(): Promise<boolean>;
 }
@@ -43,21 +53,33 @@ export const DEFAULT_EMBEDDING_DIMENSIONS = 1024; // bge-m3 / KURE-v1 둘 다 10
 //  ⚠ #602: 32건 배치는 CPU 에서 undici 기본 타임아웃(≈300초)을 넘겨 'fetch failed' → 백필이 0건 커밋 후 죽고 무한 재시도. GPU 는 config 로 올려 처리량 확보.
 export const DEFAULT_EMBEDDING_BATCH_SIZE = 8;
 export const DEFAULT_EMBEDDING_TIMEOUT_MS = 300000; // 요청당 300초. batch_size 를 이 안에 끝나게 잡는 게 정석 — 타임아웃은 이상치용 안전망(초과 시 배치 축소 재시도).
+// 질의 데드라인 기본 1200ms(#1644). 근거: 무경합·warm 단건 왕복 실측 0.39초(고객사 Ollama bge-m3 CPU), 검색 전체 p50 763ms.
+//  정상 상태는 통과시키고 큐 대기(겹침 1건 p50 14초)만 자르는 값. 짧을수록 폴백(=grep 결과)이 늘어난다는 트레이드오프라 설정 가능.
+export const DEFAULT_EMBEDDING_QUERY_TIMEOUT_MS = 1200;
 export const DEFAULT_EMBEDDING_BACKFILL_MIN_MB = 0; // 0=백필 메모리 게이트 비활성(무회귀). 관리자가 박스 크기 보고 설정(#1059).
 export const EMBEDDING_OFF: EmbeddingConfig = {
   provider: "off", base_url: null, model: null, dimensions: DEFAULT_EMBEDDING_DIMENSIONS, auth_env_ref: null,
   batch_size: DEFAULT_EMBEDDING_BATCH_SIZE, request_timeout_ms: DEFAULT_EMBEDDING_TIMEOUT_MS,
+  query_timeout_ms: DEFAULT_EMBEDDING_QUERY_TIMEOUT_MS,
   backfill_min_available_mb: DEFAULT_EMBEDDING_BACKFILL_MIN_MB,
 };
 
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() !== "" ? v.trim() : null);
 // 숫자 정규화 — 유효 정수면 [min,max]로 클램프, 아니면 fallback. (batch_size·request_timeout_ms 방어; DB JSONB/env 잡값 안전화)
+//  ⚠ null·빈 문자열은 **미설정**이다(→ fallback). Number(null)===0 · Number("")===0 이라 이걸 안 걸면 0 이
+//   하한으로 클램프돼 "기본값" 자리에 최솟값이 앉는다. 실제로 그랬다(#1644 에서 발견): embeddingConfigFromEnv 가
+//   미설정 항목을 `?? null` 로 넘기므로, .env 로 임베딩만 켠 박스는 batch_size=1 · request_timeout_ms=1000(기본 300초여야)
+//   으로 돌고 있었다 — CPU 백엔드에서 백필이 통째로 타임아웃 나는 조합이다.
 const clampInt = (v: unknown, fallback: number, min: number, max: number): number => {
+  if (v === null || v === undefined || v === "") return fallback;
   const n = Math.floor(Number(v));
   return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
 };
 export const EMBEDDING_BATCH_MIN = 1, EMBEDDING_BATCH_MAX = 512;             // 배치 상한(과대 요청 방지)
 export const EMBEDDING_TIMEOUT_MIN_MS = 1000, EMBEDDING_TIMEOUT_MAX_MS = 3600000; // 1초~1시간
+// 질의 데드라인 범위(#1644) — 0.1초~1분. 상한이 배치(1시간)보다 훨씬 낮은 게 요점이다: 사람이 기다리는 경로에
+//  분 단위 인내심을 허용하면 이 분리 자체가 무의미해진다(그 값을 원하면 렉시컬 폴백이 아니라 백엔드를 고쳐야 한다).
+export const EMBEDDING_QUERY_TIMEOUT_MIN_MS = 100, EMBEDDING_QUERY_TIMEOUT_MAX_MS = 60000;
 export const EMBEDDING_BACKFILL_MIN_MB_MIN = 0, EMBEDDING_BACKFILL_MIN_MB_MAX = 1048576; // 0(비활성)~1TB(상한 방어)
 
 // DB row(JSONB) / env → 정규화된 EmbeddingConfig(순수). 알 수 없는 provider·잡값은 안전하게 off.
@@ -72,6 +94,8 @@ export function normalizeEmbeddingConfig(raw: unknown): EmbeddingConfig {
     provider: "http", base_url: str(o.base_url), model: str(o.model), dimensions, auth_env_ref: str(o.auth_env_ref),
     batch_size: clampInt(o.batch_size, DEFAULT_EMBEDDING_BATCH_SIZE, EMBEDDING_BATCH_MIN, EMBEDDING_BATCH_MAX),
     request_timeout_ms: clampInt(o.request_timeout_ms, DEFAULT_EMBEDDING_TIMEOUT_MS, EMBEDDING_TIMEOUT_MIN_MS, EMBEDDING_TIMEOUT_MAX_MS),
+    // 기존 조직의 저장된 설정엔 이 필드가 없다(마이그레이션 없음) → clampInt 가 기본값으로 채운다.
+    query_timeout_ms: clampInt(o.query_timeout_ms, DEFAULT_EMBEDDING_QUERY_TIMEOUT_MS, EMBEDDING_QUERY_TIMEOUT_MIN_MS, EMBEDDING_QUERY_TIMEOUT_MAX_MS),
     backfill_min_available_mb: clampInt(o.backfill_min_available_mb, DEFAULT_EMBEDDING_BACKFILL_MIN_MB, EMBEDDING_BACKFILL_MIN_MB_MIN, EMBEDDING_BACKFILL_MIN_MB_MAX),
   };
 }
@@ -88,6 +112,7 @@ export function embeddingConfigFromEnv(): EmbeddingConfig {
     auth_env_ref: process.env.EMBEDDINGS_AUTH_ENV ?? null,
     batch_size: process.env.EMBEDDINGS_BATCH_SIZE ?? null,           // 비면 normalize 가 기본값(8)로
     request_timeout_ms: process.env.EMBEDDINGS_TIMEOUT_MS ?? null,   // 비면 normalize 가 기본값(300000)로
+    query_timeout_ms: process.env.EMBEDDINGS_QUERY_TIMEOUT_MS ?? null, // 비면 normalize 가 기본값(1200)로 — #1644 질의 데드라인
     backfill_min_available_mb: process.env.EMBEDDINGS_BACKFILL_MIN_MB ?? null, // 비면 normalize 가 기본값(0=비활성)로
   });
 }
@@ -121,8 +146,14 @@ export function embeddingConfigSource(dbRaw: unknown): "db" | "db-off" | "env" |
 // 타임아웃(AbortSignal.timeout)·취소·네트워크 실패('fetch failed')는 배치를 줄이면 통할 수 있어 축소 재시도 대상.
 //  HTTP 4xx/5xx(우리가 만든 Error)는 배치를 줄여도 동일하게 실패 → 즉시 throw(불필요한 재시도로 시간 낭비 방지).
 function isRetriableEmbedError(e: unknown): boolean {
+  return isEmbedTimeoutError(e) || e instanceof TypeError; // TypeError = undici 'fetch failed'(네트워크/바디 타임아웃)
+}
+
+// 데드라인에 끊긴 것인가(#1644) — 호출부가 폴백 **사유**를 구분하는 데 쓴다("느려서 포기" vs "엔드포인트 오류").
+//  AbortSignal.timeout 은 TimeoutError, 외부 취소는 AbortError 로 온다.
+export function isEmbedTimeoutError(e: unknown): boolean {
   const name = (e as { name?: string } | null | undefined)?.name;
-  return name === "TimeoutError" || name === "AbortError" || e instanceof TypeError; // TypeError = undici 'fetch failed'(네트워크/바디 타임아웃)
+  return name === "TimeoutError" || name === "AbortError";
 }
 
 // 4xx 중 유일한 예외(#669 포이즌 문서) — 모델 컨텍스트(토큰) 초과. 우리 입력 캡은 8000'자'라 한국어/코드 장문은
@@ -141,7 +172,8 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
   readonly model: string;
   readonly dimensions: number;
   readonly batchSize: number;      // 한 요청당 텍스트 수(백필 커밋 단위와 일치)
-  private readonly timeoutMs: number;
+  private readonly timeoutMs: number;        // 배치 인내심(백필)
+  private readonly queryTimeoutMs: number;   // 질의 인내심(#1644, 사람이 기다리는 경로)
   private readonly url: string;
   private readonly authEnvRef: string | null;
 
@@ -150,6 +182,7 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
     this.dimensions = cfg.dimensions;
     this.batchSize = clampInt(cfg.batch_size, DEFAULT_EMBEDDING_BATCH_SIZE, EMBEDDING_BATCH_MIN, EMBEDDING_BATCH_MAX);
     this.timeoutMs = clampInt(cfg.request_timeout_ms, DEFAULT_EMBEDDING_TIMEOUT_MS, EMBEDDING_TIMEOUT_MIN_MS, EMBEDDING_TIMEOUT_MAX_MS);
+    this.queryTimeoutMs = clampInt(cfg.query_timeout_ms, DEFAULT_EMBEDDING_QUERY_TIMEOUT_MS, EMBEDDING_QUERY_TIMEOUT_MIN_MS, EMBEDDING_QUERY_TIMEOUT_MAX_MS);
     const base = (cfg.base_url ?? "https://api.openai.com").replace(/\/+$/, "");
     // base 가 이미 /v1/embeddings 로 끝나면 그대로(고객이 풀 URL 지정), 아니면 표준 경로 부착.
     this.url = /\/v1\/embeddings$/.test(base) ? base : `${base}/v1/embeddings`;
@@ -173,6 +206,14 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
       for (const v of vecs) out.push(v);
     }
     return out;
+  }
+
+  // 질의 임베딩(#1644) — 단건 1회 요청, **질의 데드라인**. 축소 재시도 없음(단건은 쪼갤 게 없고, 이미 늦은 백엔드를
+  //  다시 때리면 사람 대기만 길어진다). 데드라인 초과는 TimeoutError 로 throw → 호출부가 렉시컬 폴백 + 사유 표시.
+  //  ⚠ 컨텍스트 초과(#669) 축약도 여기선 안 한다 — 질의는 짧고(검색어), 축약 루프는 대기시간을 배로 늘린다.
+  async embedQuery(text: string): Promise<number[]> {
+    const [v] = await this.embedRequest([text.slice(0, EMBED_MAX_CHARS)], this.queryTimeoutMs);
+    return v ?? [];
   }
 
   // 한 청크를 1회 요청. 타임아웃/네트워크 실패면 청크를 반으로 줄여 재귀 재시도(단건까지) — 느린 백엔드가 조금씩이라도 진행되게.
@@ -213,12 +254,13 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
   }
 
   // 실제 1회 HTTP 호출 — 요청마다 새 AbortSignal.timeout(초과 시 TimeoutError → 상위에서 축소 재시도).
-  private async embedRequest(texts: string[]): Promise<number[][]> {
+  //  timeoutMs 를 넘기면 그 데드라인으로(질의 경로, #1644). 안 넘기면 배치 인내심.
+  private async embedRequest(texts: string[], timeoutMs = this.timeoutMs): Promise<number[][]> {
     const res = await fetch(this.url, {
       method: "POST",
       headers: { "content-type": "application/json", ...this.authHeader() },
       body: JSON.stringify({ model: this.model, input: texts }),
-      signal: AbortSignal.timeout(this.timeoutMs),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");

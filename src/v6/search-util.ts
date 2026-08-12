@@ -4,7 +4,7 @@
 //  · activeEmbeddingProvider 만 DB(org_runtime_config)를 읽는다(무순환: embedding-provider 는 store 미import 유지 → 여기로 뺀다).
 import { itemsPool } from "../db/client.js";
 import { one } from "../db/client.js";
-import { type EmbeddingProvider, resolveEmbeddingConfig, resolveEmbeddingProvider } from "./embedding-provider.js";
+import { type EmbeddingProvider, resolveEmbeddingConfig, resolveEmbeddingProvider, isEmbedTimeoutError } from "./embedding-provider.js";
 
 // ── grep 매처 — Claude Code(ripgrep) 직관에 맞춘 텍스트 매칭. "search"(의미검색)가 아니라 grep이다.
 //  · 정규식 메타문자가 있고 유효한 패턴이면 → POSIX 정규식(`~*`, 대소문자 무시)으로 grep. 예: `벡터|vector`, `task_\w+`.
@@ -106,5 +106,28 @@ export async function activeEmbeddingProvider(): Promise<EmbeddingProvider | nul
     return resolveEmbeddingProvider(resolveEmbeddingConfig((r as { embedding_config?: unknown } | undefined)?.embedding_config));
   } catch {
     return null; // 설정 못 읽으면 안전하게 off
+  }
+}
+
+// ── 질의 벡터 획득 + 폴백 사유 판정(#1644) — 지식·프로젝트·트랜스크립트 검색이 공유. ──
+//  벡터 채널을 못 쓰게 되는 경우는 셋이고 **의미가 다르다**: 아예 안 켰다(설정) · 백엔드가 느리다(운영) · 백엔드가 틀렸다(고장).
+//  세 경우 모두 렉시컬로 폴백하되 **사유를 돌려준다** — 부르는 쪽이 응답에 실어 조용한 품질 저하를 막는다.
+//  provider 를 인자로 받는 이유: DB 없이 이 판정만 단위 테스트하기 위한 seam(호출부는 activeEmbeddingProvider 를 넘긴다).
+export type SearchDegradeReason = "embeddings_off" | "embedding_timeout" | "embedding_error";
+export interface QueryVectorResult { qvec: number[] | null; degraded?: SearchDegradeReason }
+export async function embedSearchQuery(provider: EmbeddingProvider | null, qstr: string): Promise<QueryVectorResult> {
+  if (!provider) return { qvec: null, degraded: "embeddings_off" };
+  try {
+    const v = await provider.embedQuery(qstr);
+    if (v && v.length) return { qvec: v };
+    return { qvec: null, degraded: "embedding_error" };   // 빈 벡터 = 응답은 왔는데 쓸 수 없다(모델/차원 이상)
+  } catch (e) {
+    if (isEmbedTimeoutError(e)) {
+      // 운영자가 봐야 할 신호다 — 이게 잦으면 백엔드가 대기열에 밀리고 있다는 뜻(질의 데드라인은 증상 완화지 치료가 아니다).
+      console.warn(`[embeddings] 질의 임베딩 데드라인 초과 — 렉시컬 폴백`);
+      return { qvec: null, degraded: "embedding_timeout" };
+    }
+    console.warn(`[embeddings] 질의 임베딩 실패 — 렉시컬 폴백: ${(e as Error)?.message}`);
+    return { qvec: null, degraded: "embedding_error" };
   }
 }

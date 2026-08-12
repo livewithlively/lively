@@ -150,7 +150,8 @@ export const knowledgeSearch: Capability = {
   description:
     "지식을 **의미 기반 하이브리드 검색**한다 — 벡터 임베딩(의미 유사) + 렉시컬 grep 을 RRF 로 융합. " +
     "grep 과 달리 **자연어 질문**이나 다른 표현을 써도 관련 지식을 찾아낸다(단어가 본문에 그대로 없어도 잡힘). " +
-    "임베딩 미설정 환경에선 자동으로 grep(렉시컬)으로 폴백한다(안전). " +
+    "임베딩 미설정이거나 **의미검색 백엔드가 느려 데드라인을 넘기면** 자동으로 grep(렉시컬)으로 폴백한다 — " +
+    "그 경우 응답의 channel=lexical + degraded 사유로 알려주니, 정확 토큰 매칭이면 knowledge_grep 으로 갈아타라. " +
     "결과는 **스니펫**(본문 전문 아님) + RRF score — 전문은 결과의 name 으로 knowledge_get(부분읽기 offset/limit). " +
     "**정확한 토큰/정규식 매칭**이 필요하면 knowledge_grep 을, **의미/유사/자연어**면 이 도구를 써라. mode=names(이름·제목만)·snippets(기본).",
   scope: "memory",
@@ -174,11 +175,21 @@ export const knowledgeSearch: Capability = {
         };
       } }],
   },
-  handler: async (input: KnowledgeSearchInput, _user: LivelyUser, ctx?: CapabilityCtx) => ({
-    entries: await hybridSearchKnowledge(input.q, {
+  handler: async (input: KnowledgeSearchInput, _user: LivelyUser, ctx?: CapabilityCtx) => {
+    const r = await hybridSearchKnowledge(input.q, {
       injection: input.injection, provenance: input.provenance, limit: input.limit, mode: input.mode, context: input.context,
-    }, ctx?.viewer ?? null),
-  }),
+    }, ctx?.viewer ?? null);
+    // 폴백했으면 **밝힌다**(#1644) — 조용히 렉시컬로 떨어지면 부르는 쪽은 "의미검색이 원래 이 정도"로 오해한다.
+    return { entries: r.entries, channel: r.channel, ...(r.degraded ? { degraded: r.degraded, note: DEGRADED_NOTE[r.degraded] } : {}) };
+  },
+};
+
+// 폴백 사유별 안내 — 에이전트가 다음 행동을 고를 수 있게(재시도할지, grep 으로 갈지, 관리자에게 말할지).
+const DEGRADED_NOTE: Record<string, string> = {
+  embeddings_off: "임베딩이 꺼져 있어 렉시컬(grep)로 검색했습니다 — 의미검색을 쓰려면 관리탭 ▸ 맥락 전달 ▸ 임베딩에서 켜세요.",
+  embedding_timeout: "의미검색(벡터) 채널이 데드라인 안에 응답하지 않아 렉시컬(grep) 결과만 돌려줬습니다. 정확한 토큰 매칭이면 knowledge_grep 이 더 빠릅니다(임베딩 백엔드가 밀리는 중일 수 있음).",
+  embedding_error: "의미검색(벡터) 채널이 오류로 응답하지 않아 렉시컬(grep) 결과만 돌려줬습니다 — 임베딩 설정/백엔드를 확인하세요.",
+  vector_error: "벡터 인덱스를 쓸 수 없어 렉시컬(grep) 결과만 돌려줬습니다 — 임베딩 스키마(pgvector)를 확인하세요.",
 };
 
 // 유사 지식(벡터검색 #172) — 코사인 유사도(0~1) 기반 최근접. dedup(저장 전 확인)·관련패널의 프리미티브.

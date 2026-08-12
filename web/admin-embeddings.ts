@@ -81,6 +81,9 @@ function embeddingsEditor(detail, data) {
     batchIn.value = String(cfg.batch_size || 8); batchIn.disabled = !canEdit;
     const timeoutIn = el('input', { class: 'input emb-num', type: 'number', min: '1000', max: '3600000', placeholder: '300000  (요청당 ms)' });
     timeoutIn.value = String(cfg.request_timeout_ms || 300000); timeoutIn.disabled = !canEdit;
+    // #1644 질의 데드라인 — 검색·유사·추천처럼 사람이 기다리는 단건 임베딩의 상한(배치 타임아웃과 별개).
+    const queryTimeoutIn = el('input', { class: 'input emb-num', type: 'number', min: '100', max: '60000', placeholder: '1200  (질의당 ms)' });
+    queryTimeoutIn.value = String(cfg.query_timeout_ms || 1200); queryTimeoutIn.disabled = !canEdit;
     // #1059 G3 — 백필 pre-flight 메모리 게이트: 가용 메모리가 이 값 미만이면 자동 백필 스윕을 건너뛴다(0=끔).
     const backfillMinIn = el('input', { class: 'input emb-num', type: 'number', min: '0', max: '1048576', placeholder: '0  (끔; 16GB 박스 권장 4096~5000)' });
     backfillMinIn.value = String(cfg.backfill_min_available_mb || 0); backfillMinIn.disabled = !canEdit;
@@ -99,6 +102,7 @@ function embeddingsEditor(detail, data) {
           auth_env_ref: authIn.value.trim() || null,
           batch_size: Number(batchIn.value) || 8,
           request_timeout_ms: Number(timeoutIn.value) || 300000,
+          query_timeout_ms: Number(queryTimeoutIn.value) || 1200,   // #1644 질의 데드라인(검색 경로)
           backfill_min_available_mb: Number(backfillMinIn.value) || 0, // #1059 G3 — 백필 pre-flight 메모리 게이트(0=끔)
         };
         const r = await api('/api/ui/org/runtime-config', { method: 'POST', body: JSON.stringify({ embedding_config }) });
@@ -130,8 +134,10 @@ function embeddingsEditor(detail, data) {
       el('p', { class: 'admin-hint' }, ...uiText('키 값이 아니라 키를 담은 환경변수의 이름을 입력합니다.')),
       field('배치 크기', batchIn),
       el('p', { class: 'admin-hint' }, ...uiText('요청당 보내는 텍스트 수입니다. 느린 백엔드나 CPU 백엔드에서는 낮추면 타임아웃을 피할 수 있습니다(기본 8).')),
-      field('요청 타임아웃 (ms)', timeoutIn),
-      el('p', { class: 'admin-hint' }, ...uiText('초과하면 배치를 반으로 줄여 재시도합니다(기본 300000).')),
+      field('배치 요청 타임아웃 (ms)', timeoutIn),
+      el('p', { class: 'admin-hint' }, ...uiText('백필처럼 사람이 기다리지 않는 배치 요청에 적용됩니다. 초과하면 배치를 반으로 줄여 재시도합니다(기본 300000).')),
+      field('검색 질의 데드라인 (ms)', queryTimeoutIn),
+      el('p', { class: 'admin-hint' }, ...uiText('의미검색·유사도·추천처럼 사람이 응답을 기다리는 경로에서 질의 한 건을 임베딩하는 데 허용하는 시간입니다. 이 시간을 넘기면 기다리지 않고 grep(렉시컬) 검색 결과로 답하고, 그렇게 답했다는 사실을 응답에 표시합니다. 임베딩 백엔드가 CPU이거나 백필과 겹쳐 밀릴 때 검색이 수십 초씩 멈추는 것을 막습니다(기본 1200). 값을 키우면 의미검색이 유지되는 대신 느린 순간에 더 오래 기다립니다.')),
       field('백필 메모리 게이트 (MB, 0=끔)', backfillMinIn),
       el('p', { class: 'admin-hint' }, ...uiText('#1059 — 자동 백필이 임베딩 모델(예: Ollama)을 호출하기 전 가용 메모리를 확인해, 이 값 미만이면 이번 스윕을 건너뜁니다(다음 주기 재시도, 밀린 항목 유실 없음). 모델 로드 스파이크가 세션 baseline 과 겹쳐 박스가 OOM 나는 걸 예방합니다. 0=끔(무회귀). 16GB 박스 권장 4096~5000. 수동 백필 버튼은 게이트하지 않습니다.')),
       canEdit ? el('div', { class: 'admin-actions' }, saveBtn, saveSt) : el('p', { class: 'admin-hint' }, ...uiText('※ 편집은 관리자만 가능합니다.')),

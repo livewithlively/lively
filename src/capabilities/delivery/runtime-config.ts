@@ -25,6 +25,7 @@ import {
 import {
   type EmbeddingConfigPatch, DEFAULT_EMBEDDING_BATCH_SIZE, DEFAULT_EMBEDDING_TIMEOUT_MS, DEFAULT_EMBEDDING_BACKFILL_MIN_MB,
   EMBEDDING_BATCH_MIN, EMBEDDING_BATCH_MAX, EMBEDDING_TIMEOUT_MIN_MS, EMBEDDING_TIMEOUT_MAX_MS, EMBEDDING_BACKFILL_MIN_MB_MIN,
+  DEFAULT_EMBEDDING_QUERY_TIMEOUT_MS, EMBEDDING_QUERY_TIMEOUT_MIN_MS, EMBEDDING_QUERY_TIMEOUT_MAX_MS,
   EMBEDDING_BACKFILL_MIN_MB_MAX
 } from "../../v6/embedding-provider.js";
 import { encryptSecret, secretsEnabled } from "../../org/credentials/secret-box.js";
@@ -439,6 +440,13 @@ export const runtimeConfigCapabilities: Capability[] = [
           if (!Number.isFinite(timeoutMs) || timeoutMs < EMBEDDING_TIMEOUT_MIN_MS || timeoutMs > EMBEDDING_TIMEOUT_MAX_MS) throw new HttpError(400, `embedding_config.request_timeout_ms 는 ${EMBEDDING_TIMEOUT_MIN_MS}~${EMBEDDING_TIMEOUT_MAX_MS}(ms) 정수여야 합니다`);
           timeoutMs = Math.floor(timeoutMs);
         }
+        // 질의 데드라인(#1644) — 사람이 기다리는 경로(검색·유사·추천)의 단건 임베딩 상한. 배치(request_timeout_ms)와 별개다.
+        let queryTimeoutMs = DEFAULT_EMBEDDING_QUERY_TIMEOUT_MS;
+        if (e.query_timeout_ms !== undefined && e.query_timeout_ms !== null && e.query_timeout_ms !== "") {
+          queryTimeoutMs = Number(e.query_timeout_ms);
+          if (!Number.isFinite(queryTimeoutMs) || queryTimeoutMs < EMBEDDING_QUERY_TIMEOUT_MIN_MS || queryTimeoutMs > EMBEDDING_QUERY_TIMEOUT_MAX_MS) throw new HttpError(400, `embedding_config.query_timeout_ms 는 ${EMBEDDING_QUERY_TIMEOUT_MIN_MS}~${EMBEDDING_QUERY_TIMEOUT_MAX_MS}(ms) 정수여야 합니다`);
+          queryTimeoutMs = Math.floor(queryTimeoutMs);
+        }
         // 백필 pre-flight 메모리 게이트(#1059) — 자동 백필이 임베딩 백엔드를 깨우기 전 최소 가용 메모리(MB). 0=비활성. 비우면 기본 0.
         let backfillMinMb = DEFAULT_EMBEDDING_BACKFILL_MIN_MB;
         if (e.backfill_min_available_mb !== undefined && e.backfill_min_available_mb !== null && e.backfill_min_available_mb !== "") {
@@ -455,6 +463,7 @@ export const runtimeConfigCapabilities: Capability[] = [
           auth_env_ref: authRef,
           batch_size: batchSize,
           request_timeout_ms: timeoutMs,
+          query_timeout_ms: queryTimeoutMs,
           backfill_min_available_mb: backfillMinMb,
         };
       }
@@ -558,7 +567,8 @@ export const runtimeConfigCapabilities: Capability[] = [
         dimensions: z.number().int().min(1).max(16_000).optional().describe("임베딩 차원(기본 1024)"),
         auth_env_ref: z.string().nullable().optional().describe("인증에 쓸 환경변수 **이름**(시크릿 값 금지)"),
         batch_size: z.number().int().optional().describe("배치 크기(#602 — 느린/CPU 백엔드 대응). 비우면 기본값"),
-        request_timeout_ms: z.number().int().optional().describe("요청 타임아웃 ms. 비우면 기본값"),
+        request_timeout_ms: z.number().int().optional().describe("배치(백필) 요청 타임아웃 ms. 비우면 기본값"),
+        query_timeout_ms: z.number().int().optional().describe(`#1644 질의 데드라인 ms(${EMBEDDING_QUERY_TIMEOUT_MIN_MS}~${EMBEDDING_QUERY_TIMEOUT_MAX_MS}) — 검색·유사·추천처럼 **사람이 기다리는** 단건 임베딩의 상한. 넘기면 기다리지 않고 렉시컬(grep)로 폴백하고 응답에 사유를 밝힌다. 비우면 기본값(1200)`),
         backfill_min_available_mb: z.number().int().min(0).max(1_048_576).optional().describe("#1059 G2/G3 — 자동 백필 pre-flight 메모리 게이트: 가용 메모리가 이 MB 미만이면 이번 스윕을 건너뛴다(다음 주기 재시도, pending 유실 없음). 0=끔(무회귀). Ollama 모델 로드 스파이크가 세션 baseline 과 겹쳐 OOM 나는 걸 예방(예: 16GB 박스 4096~5000)"),
       }).optional().describe("임베딩 설정 — knowledge/project 백필과 검색이 공유"),
       // #1520 회사 계정 로그인(OIDC 클라이언트). 관리탭 ▸ [로그인 · 회사 계정] 과 같은 입력.

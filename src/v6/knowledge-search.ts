@@ -7,7 +7,7 @@ import { q, one } from "../db/client.js";
 import { toVectorLiteral } from "./embedding-provider.js";
 import {
   type GrepPlan, parseGrep, grepWhere, grepExec, grepSnippet, previewBody,
-  RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider,
+  RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider, embedSearchQuery, type SearchDegradeReason,
 } from "./search-util.js";
 import { type Viewer } from "./visibility.js";
 import { knowledgeVisWhere, K_ICON_EXPR } from "./knowledge-common.js";
@@ -84,21 +84,29 @@ export async function searchKnowledge(
 //  · 결과는 grep 과 동일 표면(스니펫·전문 미포함). 벡터-only 매치는 grepSnippet 이 본문 앞부분 미리보기로 폴백.
 //  RRF_K/HYBRID_CANDIDATES 는 search-util.ts 에서 import(project 검색과 공유).
 
+// 결과 + **어느 채널로 답했는지**(#1644). 폴백을 조용히 하지 않는다 — 부르는 쪽(에이전트·웹)이 알아야
+//  "의미검색인데 왜 이것밖에 안 나오지"를 오해하지 않고, 정확 매칭이면 grep 으로 갈아탈 수 있다.
+export type KnowledgeSearchChannel = "hybrid" | "lexical";
+export interface KnowledgeSearchResult {
+  entries: KnowledgeSearchRow[];
+  channel: KnowledgeSearchChannel;
+  degraded?: SearchDegradeReason | "vector_error";   // lexical 로 떨어진 이유(hybrid 면 없음)
+}
 export async function hybridSearchKnowledge(
   qstr: string,
   opts: { injection?: string; provenance?: string; limit?: number; mode?: KnowledgeGrepMode; context?: number } = {},
   viewer?: Viewer,
-): Promise<KnowledgeSearchRow[]> {
-  const provider = await activeEmbeddingProvider();
-  if (!provider) return searchKnowledge(qstr, opts, viewer);          // off → grep 그대로(하위호환)
-  let qvec: number[] | null = null;
-  try { const [v] = await provider.embed([qstr]); qvec = v && v.length ? v : null; } catch { qvec = null; }
-  if (!qvec) return searchKnowledge(qstr, opts, viewer);               // 쿼리 임베딩 실패 → 폴백
+): Promise<KnowledgeSearchResult> {
+  const lexical = async (degraded: KnowledgeSearchResult["degraded"]): Promise<KnowledgeSearchResult> =>
+    ({ entries: await searchKnowledge(qstr, opts, viewer), channel: "lexical", degraded });
+  // 질의 데드라인(query_timeout_ms) 안에 벡터를 못 받으면 기다리지 않고 렉시컬로 간다(#1644 — 큐 대기가 p90 을 9초로 만들었다).
+  const { qvec, degraded } = await embedSearchQuery(await activeEmbeddingProvider(), qstr);
+  if (!qvec) return lexical(degraded);
   try {
-    return await rrfSearch(qstr, qvec, opts, viewer);
+    return { entries: await rrfSearch(qstr, qvec, opts, viewer), channel: "hybrid" };
   } catch (e) {
     console.warn(`[embeddings] 하이브리드 검색 실패 — 렉시컬 폴백: ${(e as Error)?.message}`);
-    return searchKnowledge(qstr, opts, viewer);                        // pgvector 컬럼 부재 등 → 폴백
+    return lexical("vector_error");                                    // pgvector 컬럼 부재 등 → 폴백
   }
 }
 
@@ -184,10 +192,9 @@ export async function findSimilarKnowledge(
   } else if (opts.text && opts.text.trim()) {
     const provider = await activeEmbeddingProvider();
     if (!provider) return [];                                            // off → 유사 없음
-    try {
-      const [v] = await provider.embed([opts.text.slice(0, 8000)]);
-      vecLiteral = v && v.length ? toVectorLiteral(v) : null;
-    } catch { return []; }                                              // 쿼리 임베딩 실패 → 빈 결과(폴백 아님 — similar 는 벡터 전용)
+    // 질의 데드라인 적용(#1644) — 사람이 저장 직전 중복확인을 기다리는 경로다. 늦으면 "유사 없음"으로 끝내는 게 낫다.
+    const { qvec } = await embedSearchQuery(provider, opts.text.slice(0, 8000));
+    vecLiteral = qvec ? toVectorLiteral(qvec) : null;
   }
   if (!vecLiteral) return [];
   // 2) 최근접 — 코사인 거리 오름차순. 자기 자신·미임베딩·비활성 제외. minScore(코사인 유사도) 이상만.
@@ -254,7 +261,7 @@ export async function findRecommendedKnowledge(
   if (opts.text && opts.text.trim()) {
     const provider = await activeEmbeddingProvider();
     if (provider) {
-      try { const [v] = await provider.embed([opts.text.slice(0, 8000)]); qvec = v && v.length ? v : null; } catch { qvec = null; }
+      qvec = (await embedSearchQuery(provider, opts.text.slice(0, 8000))).qvec;   // 질의 데드라인(#1644) — 늦으면 카테고리만으로 추천(graceful)
     }
   }
   if (!qvec && !cats.length) return [];   // 의미·카테고리 둘 다 신호 없음 → 추천 불가

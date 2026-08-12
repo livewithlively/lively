@@ -16,7 +16,7 @@ import { visibleListIds, listIdPredicate, type Viewer } from "./visibility.js";
 // 쓰기 경로 임베딩 비동기화(#1053) — 저장/수정 시 인라인 임베딩 대신 pending 마킹 후 백그라운드 스윕에 위임(knowledge 와 동형).
 import { markEmbeddingPending, PROJECT_TARGET } from "./embedding-backfill.js";
 import {
-  type GrepPlan, parseGrep, grepWhere, grepExec, grepSnippet, RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider,
+  type GrepPlan, parseGrep, grepWhere, grepExec, grepSnippet, RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider, embedSearchQuery,
 } from "./search-util.js";
 
 // 세션·폴더 바인딩(#1313 R21) — 구현은 project-session-store.ts 로 분리(터미널 척추가 PM 스토어 전체를 안 끌게).
@@ -1003,7 +1003,7 @@ export async function hybridSearchProjects(qstr: string, opts: ProjectSearchOpts
   const provider = await activeEmbeddingProvider();
   if (!provider) return searchProjects(qstr, opts);          // off → grep 그대로
   let qvec: number[] | null = null;
-  try { const [v] = await provider.embed([qstr]); qvec = v && v.length ? v : null; } catch { qvec = null; }
+  qvec = (await embedSearchQuery(provider, qstr)).qvec;   // 질의 데드라인(#1644) — 늦으면 렉시컬 폴백
   if (!qvec) return searchProjects(qstr, opts);               // 쿼리 임베딩 실패 → 폴백
   try {
     const visIds = opts.viewer === undefined ? undefined : await visibleListIds(opts.viewer);
