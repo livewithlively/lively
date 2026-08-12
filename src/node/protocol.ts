@@ -90,7 +90,10 @@ const NODE_OPS_V1 = ["list", "create", "kill", "edit", "gone", "label", "runTask
 //  provisionStatus = 그 백그라운드 작업 상태 폴링(즉답 — RPC 안에 든다). 이 둘이 "노드에서 프로젝트 provision"의 실체다.
 //  markActive = 하네스 훅이 게이트웨이에 보고한 활동·실행단계(#1221)를 **그 세션의 tmux 를 가진 노드**로 넘긴다.
 //   노드 세션의 상태 메타(@box_last_busy·@box_state)는 노드 tmux 에 사니 게이트웨이가 직접 못 쓴다.
-const NODE_OPS_NEW = ["provision", "provisionStatus", "markActive"] as const;
+//  sendKeys = 그 세션의 PTY 에 프롬프트를 넣고 제출한다(#1664). 게이트웨이의 주입(크론·리브)은 여태
+//   **로컬 tmux 를 직접** 불렀기에 노드 세션엔 닿지 못했다 — 사람이 웹터미널에 붙어 손으로 치는 수밖에.
+//   Windows 노드는 mux 가 psmux 라 입력 표면이 다른데, 그 인코딩은 terminal/send-keys 가 흡수한다.
+const NODE_OPS_NEW = ["provision", "provisionStatus", "markActive", "sendKeys"] as const;
 
 // 이 빌드가 아는 op 전량. **타입이 이 배열에서 파생**되므로 목록과 타입이 어긋날 수 없다.
 export const NODE_OPS = [...NODE_OPS_V1, ...NODE_OPS_NEW] as const;

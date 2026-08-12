@@ -13,23 +13,16 @@ export async function resolveSessionTmux(sessionRef: string): Promise<string> {
   return ens.session_id;
 }
 
-// tmux send-keys 로 세션 PTY 에 텍스트 주입(+Enter). UTF-8 로케일 강제(한글 깨짐 방지 — terminal-sessions 와 동일).
-//  send-keys -l 은 **단일 라인**만 안전(개행=조기 Enter=중간 제출). 여기서 개행→공백으로 평탄화해 모든 주입 경로를 단일라인 안전화.
-//  (agent_inject 의 임의 멀티라인 프롬프트 대비 — 한 단락으로 합쳐 1회 제출.)
+// 세션 PTY 에 텍스트 주입(+Enter). **로컬 세션이든 노드 세션이든 같은 함수로 부른다**(#1664).
+//  단일라인 평탄화·flush 지연·psmux 표면 분기 같은 규약은 terminal/send-keys 안에 갇혀 있고, 여기는
+//  **어디로 보낼지**만 고른다. 종전엔 이 함수가 tmux 를 직접 execFile 해서 게이트웨이 로컬 세션에만
+//  닿았다 — 멤버 PC(노드) 세션에는 크론도 리브도 일을 시킬 수 없었다.
 export async function injectToSession(sessionId: string, text: string): Promise<void> {
-  const oneLine = text.replace(/\s*\n\s*/g, " ").trim();
-  const TMUX_BIN = process.env.TMUX_BIN || "/opt/homebrew/bin/tmux";
-  const { execFile } = await import("node:child_process");
-  const { promisify } = await import("node:util");
-  const execFileP = promisify(execFile);
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  if (!/utf-?8/i.test(env.LC_ALL || env.LC_CTYPE || env.LANG || "")) { env.LANG = "en_US.UTF-8"; env.LC_CTYPE = "en_US.UTF-8"; }
-  await execFileP(TMUX_BIN, ["has-session", "-t", sessionId], { timeout: 5000, env });          // 부재면 throw → error.
-  await execFileP(TMUX_BIN, ["send-keys", "-t", sessionId, "-l", oneLine], { timeout: 5000, env }); // 텍스트(literal, 1라인).
-  // TUI(Claude Code)가 주입 텍스트를 flush 한 뒤 Enter 를 받게 짧은 지연 — 긴 프롬프트에서 Enter 가 텍스트보다 먼저
-  //  도착해 '제출 안 됨'(입력창에 텍스트만 남고 미제출) 레이스 방지(#606 부트스트랩서 실측). 길이 비례 500ms~1.5s.
-  await new Promise((r) => setTimeout(r, Math.min(1500, Math.max(500, Math.round(oneLine.length * 0.6)))));
-  await execFileP(TMUX_BIN, ["send-keys", "-t", sessionId, "Enter"], { timeout: 5000, env });       // 제출.
+  const { nodeOfSession, nodeRpc } = await import("../../node/registry.js");
+  const nodeId = nodeOfSession(sessionId);
+  if (nodeId) { await nodeRpc(nodeId, "sendKeys", { id: sessionId, text }); return; } // 원격 — 노드가 자기 mux 로 실행
+  const { sendKeysToSession } = await import("../../terminal/send-keys.js");
+  await sendKeysToSession(sessionId, text);
 }
 
 // 헤드리스 실행 신원(의뢰자) 해소 — params.requester 우선, 없으면 잡 created_by 폴백. D1(의뢰자 시트) — 그 멤버의 클로드 로그인/프로필로 과금·귀속.
