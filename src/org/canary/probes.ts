@@ -57,6 +57,11 @@ export const DENIAL_MARKERS = [
   "unauthorized",
 ];
 
+// ⚠ 프로브가 보는 응답 본문은 **상류가 준 것 그대로**다(2026-08-12 dev 실측에서 잡음).
+//  http_proxy 프로브는 `runHttpProxyTool` 을 직접 부르므로, MCP 등록 핸들러가 씌우는
+//  `{status, ok, truncated, body}` 래퍼가 **없다.** 그 래퍼를 전제로 `paths:["body"]` 를 걸면
+//  호출이 200 으로 멀쩡히 성공해도 "경로 body 가 없다"로 거짓 실패한다.
+//  → 단언은 **상류 스키마 기준**으로 쓴다(Drive 는 `files`, Gmail 은 `labels`·`messages`).
 export const CANARY_PROBES: CanaryProbe[] = [
   // ── B 어댑터(http_proxy · 클래식 REST) — 우리가 계약을 소유한다. 응답 형태 변화만 보면 되므로 싸다. ──
   {
@@ -65,7 +70,9 @@ export const CANARY_PROBES: CanaryProbe[] = [
     adapter: "http_proxy", tier: "plain",
     target: { tool: "google_drive_search" },
     args: { pageSize: 1 },
-    expect: { json: true, paths: ["body"], contains: ["files"], notContains: DENIAL_MARKERS },
+    // `files` 키의 존재가 곧 인가 통과 신호다 — 거부되면 이 키가 아예 안 온다. 개수는 안 본다
+    //  (빈 드라이브도 정상인 구성이 있고, 그걸 실패로 세면 고객과 같은 등급이라는 전제가 깨진다).
+    expect: { json: true, paths: ["files"], notContains: DENIAL_MARKERS },
     why: "구글을 B 로 내린 근거 자체 — 같은 토큰으로 클래식 API 는 200 이라는 비대칭이 유지되는가.",
   },
   {
@@ -74,7 +81,7 @@ export const CANARY_PROBES: CanaryProbe[] = [
     adapter: "http_proxy", tier: "plain",
     target: { tool: "google_gmail_labels" },
     args: {},
-    expect: { json: true, contains: ["labels"], notContains: DENIAL_MARKERS },
+    expect: { json: true, paths: ["labels"], notContains: DENIAL_MARKERS },
     why: "메일 읽기 경로의 최소 왕복 — 자격·scope·엔드포인트가 한꺼번에 검증된다.",
   },
   // ── A 어댑터(MCP 프록시) — 계약을 **상류가 소유**한다. 스키마도 동작도 우리 동의 없이 바뀐다. ──
