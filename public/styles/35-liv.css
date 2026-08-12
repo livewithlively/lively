@@ -1,0 +1,47 @@
+/* ── 리브(#/liv, #1631) — 액션카드 + 대화 ──────────────────────────────────────
+   레이아웃 계약은 대시보드와 같다: **페이지 스크롤 없음.** 위(카드)는 내용맞춤이고 아래(대화)가 남은
+   높이를 전부 먹는다 — 대화는 터미널이라 잘리면 못 쓴다. 카드가 많아지면 카드 영역 '안에서만' 스크롤한다.
+   §0.5 채색 예산: 이 화면에서 채운 색은 살아있음 표시 점과 [리브에게 맡기기] 뿐이다. */
+body[data-route="liv"] { height: 100vh; overflow: hidden; }
+body[data-route="liv"] #app { height: 100%; display: flex; flex-direction: column; }
+body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0; padding: 14px 18px 16px; background: #F4F7FC; }
+
+.liv-wrap { height: 100%; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.liv-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.liv-title { display: flex; align-items: center; gap: 8px; font-size: 16px; }
+.liv-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--mint-deep); display: inline-block; }
+
+.liv-cards { display: flex; flex-direction: column; gap: 8px; max-height: 45%; overflow: auto; }
+.liv-cards-title { font-size: 12px; color: var(--muted); margin: 2px 0 2px 2px; }
+.liv-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--bg); }
+.liv-card-skel { height: 62px; opacity: .5; }
+.liv-card-title { display: flex; align-items: baseline; gap: 8px; }
+/* 등급은 **색이 아니라 표식**으로 가른다 — 색만으로 구분하면 색각 이상에서 그 차이가 사라진다. */
+.liv-card-mark { font-weight: 700; width: 12px; text-align: center; color: var(--muted-2); }
+.liv-card-p0 .liv-card-mark { color: var(--ink); }
+.liv-card-p0 { border-color: var(--line-net-2); }
+.liv-card-detail { color: var(--ink-sub); font-size: 13px; margin: 4px 0 0 20px; line-height: 1.5; }
+.liv-card-acts { display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px; }
+/* 맡긴 카드는 지우지 않고 흐린다 — 무엇을 맡겼는지가 화면에 남아야 사람이 진행을 따라갈 수 있다. */
+.liv-card-done { opacity: .55; }
+
+.liv-chat { flex: 1; min-height: 0; display: flex; flex-direction: column;
+  border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg); }
+.liv-chat-head { padding: 6px 12px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
+.liv-chat-body { flex: 1; min-height: 0; display: flex; }
+.liv-chat-boot { margin: auto; color: var(--muted); font-size: 13px; }
+.liv-chat-err { margin: auto; text-align: center; padding: 16px; }
+.liv-chat-err-detail { color: var(--muted); font-size: 12px; margin-top: 6px; }
+.liv-term { flex: 1; width: 100%; border: 0; min-height: 0; background: #1e1e2e; }
+
+.liv-note { border: 1px dashed var(--line-net); border-radius: 10px; padding: 12px; color: var(--ink-sub); font-size: 13px; background: var(--bg); }
+.liv-toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 9999;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px;
+  font-size: 13px; box-shadow: 0 4px 16px rgba(21, 35, 59, .18); }
+
+/* 좁은 화면 — 무스크롤 코크핏은 데스크톱 계약이다(대시보드와 같은 폴백). 세로로 쌓고 스크롤을 허용한다. */
+@media (max-width: 900px), (max-height: 640px) {
+  body[data-route="liv"] { height: auto; overflow: auto; }
+  .liv-cards { max-height: none; }
+  .liv-chat { min-height: 420px; }
+}

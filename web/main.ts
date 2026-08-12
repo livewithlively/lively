@@ -19,6 +19,7 @@ import { renderSessions } from './sessions.js'; // #/sessions — 세션이력 �
 import { renderFilePage } from './filepage.js'; // #/f — 공유 링크 착지(#1436): 내비 없는 전체페이지 파일 미리보기
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard, startDashboardSessionTour } from './dashboard-home.js';
+import { livHomeGate, livSetChoice, renderLiv } from './liv.js'; // #1631 리브 — 홈 진입 게이트 + 화면
 import { renderTerminal, startTerminalTour } from './terminal.js';
 import { changePasswordModal, openMyProfileModal, renderSystem } from './admin.js';
 import { endTour } from './tour.js';
@@ -101,8 +102,18 @@ async function route() {
   if (mainEl) mainEl.classList.toggle('doc-mode',
     page === 'knowledge' || page === 'k' || page === 'k-edit' || page === 'trash');
   try {
-    if (page === 'dashboard') {
+    if (page === 'liv') {
+      // 리브(#1631) — 워크스페이스가 아직 굴러가지 않을 때 홈을 대신 채우는 화면. 사람이 직접 열 수도 있다.
+      setActiveTab('dashboard');
+      livSetChoice('liv'); // 명시적으로 들어왔으면 그게 선택이다 — 다음부터 홈은 리브다.
+      await renderLiv(view);
+    } else if (page === 'dashboard') {
       setActiveTab('dashboard'); // 대시보드 — 옛 '시작하기' 탭 자리를 개편(#617). 현재는 자리표시.
+      // #1631 홈 진입 게이트 — 상태가 정하되 사람의 선택이 이긴다. 판정은 서버가 하고(화면이 자기 판정을
+      //  가지면 리브와 다른 답을 한다), 실패하면 대시보드로 떨어진다(홈이 안 열리는 게 더 나쁘다).
+      const livMode = await livHomeGate();
+      if (livMode === 'liv') { location.replace('#/liv'); return; }
+      if (livMode === 'login') { location.replace('#/start'); return; } // 리브를 띄우려면 AI 로그인이 먼저다
       await renderMyDashboard(view);
       // 사용 가이드 [내 AI 세션 생성]의 '따라하며 만들기 →'(#/dashboard?tour=1) — 홈에서 세션 만들기 투어를 켠다(#780).
       //  쿼리는 새로고침 재실행 방지를 위해 조용히 제거(해시만 갱신 — hashchange/재라우팅 없음).
