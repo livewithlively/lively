@@ -71,6 +71,12 @@ export async function renderClassifiers(host: HTMLElement): Promise<void> {
       note: '켜진 분류기별로 미분류 지식 배치를 헤드리스 AI 세션에 접수. 분류기가 없으면 전역 기본 분류.',
     },
     missingLine: '분류 자동 실행이 없습니다 — 분류기를 만들어도 아무것도 분류되지 않습니다.',
+    // 신규 워크스페이스에 **꺼진 채 시드되는** 구 세션주입판(classify-unmapped-knowledge)이 이 자리에 앉는다.
+    //  그건 params.session 이 필수라, 상시 세션을 먼저 등록하지 않고 켜면 매 틱 "타깃 상시 세션 미설정"
+    //  error 를 낸다. 그 상태에서 '켜기'를 보여주면 못 지킬 약속이 된다.
+    unrunnable: (j) => (j.action === 'classify_knowledge' && !(j.params && j.params.session))
+      ? '지금 등록된 분류 잡은 상시 세션이 있어야 도는 구 방식인데, 그 세션이 지정돼 있지 않습니다 — 이대로 켜면 매번 실패합니다.'
+      : null,
     usesAi: true,
   }, reload));
 }

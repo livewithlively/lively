@@ -105,6 +105,29 @@ export async function stageJobCard(spec, rerender) {
             card.append(el('p', { class: 'admin-hint', text: spec.managedElsewhere }));
         return card;
     }
+    // 돌 수 없는 잡(구 세션주입판 등) — '켜기'를 주면 안 된다. 눌러도 매 틱 error 를 낼 뿐이다.
+    //  대신 현행 경로(create 명세 = 헤드리스판)로 **전환**을 준다. 구 잡은 꺼진 채 남겨 둔다 —
+    //  나중에 상시 세션을 붙여 쓰고 싶을 수 있고, 남의 설정을 대신 지우지 않는다.
+    const blocked = spec.unrunnable?.(job) ?? null;
+    if (blocked && spec.create && spec.create.id !== job.id) {
+        const c = spec.create;
+        const sw = el('button', { class: 'btn btn-primary btn-sm', text: `${spec.stage} 자동 실행 켜기 (지금 방식으로)` });
+        sw.addEventListener('click', async () => {
+            sw.disabled = true;
+            try {
+                await patch(c.id, { label: c.label, action: c.action, params: c.params ?? {}, interval_sec: c.interval_sec, enabled: true, note: c.note });
+                toast(`${spec.stage} 자동 실행을 켰습니다`);
+                rerender();
+            }
+            catch (e) {
+                toast('실패 — ' + e.message, true);
+                sw.disabled = false;
+            }
+        });
+        card.append(el('p', { class: 'admin-hint' }, el('b', { text: blocked })), el('div', { style: 'margin-top:8px' }, sw), el('p', { class: 'admin-hint', style: 'margin-top:8px',
+            text: `위 ${job.id} 는 꺼진 채로 둡니다 — 나중에 상시 세션을 붙여 쓰고 싶으면 그때 켜세요.` }));
+        return card;
+    }
     // 꺼져 있으면 그게 첫 메시지다 — 잔량이 0이어도 '깨끗함'이 아니라 '멈춤'이다.
     if (!job.enabled) {
         const on = el('button', { class: 'btn btn-sm btn-primary', text: `${spec.stage} 자동 실행 켜기` });
