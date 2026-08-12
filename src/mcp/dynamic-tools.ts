@@ -11,6 +11,7 @@ import { redactDeep } from "../org/ingest/redact.js";
 import { scrubPii } from "../org/ingest/pii-scrub.js";
 import { markExternalTool } from "../org/policies/tool-log.js";
 import { resolveMemberSecret } from "../org/credentials/member-secret-store.js";
+import { resolveProxyBearer } from "../org/credentials/oauth-proxy-auth.js";
 import { resolveUser, requireScope, type LivelyUser } from "../context.js";
 import { HttpError } from "../http/rest-util.js";
 import { isScope } from "../auth/scopes.js";
@@ -107,9 +108,11 @@ export async function runHttpProxyTool(tool: OrgTool, args: Record<string, unkno
                        : "이 등급(L2/집행)은 개인 자격이 필수입니다 — '내 자격'(me_credential_set)에 등록하세요."),
       );
     }
-    const built = buildProxyAuthHeaders(resolved.meta, resolved.secret);
+    // OAuth 자격이면 묶음에서 access token 을 뽑고(만료면 갱신) 그것만 싣는다(#1654). 정적 토큰은 그대로 통과.
+    const bearer = await resolveProxyBearer(resolved, tool.auth_kind);
+    const built = buildProxyAuthHeaders(resolved.meta, bearer);
     Object.assign(headers, built.headers);
-    injectedSecret = resolved.secret;
+    injectedSecret = bearer; // 응답 스크럽 대상은 **실제로 실린 값** — 묶음 전체가 아니라 access token(갱신됐으면 새 것)
     sensitiveHeaders.push(built.headerName); // 커스텀 헤더명(PRIVATE-TOKEN 등)도 리다이렉트에서 벗기게(#746)
   } else if (tool.auth_env) {
     // auth_env 는 운영자 화이트리스트(allowed_auth_envs)에 등록된 이름만 — 인프라 시크릿명(DATABASE_URL 등) 차단.
