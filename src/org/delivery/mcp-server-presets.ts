@@ -39,19 +39,37 @@ export interface McpServerPreset {
 }
 
 // 구글 3종 공통 셋업 — 콘솔 절차가 같고 '어느 API 를 켜느냐'만 다르다.
-//  ⚠ 함정(#746 실측): 원격 MCP 는 **전용 API**(gmailmcp/drivemcp/calendarmcp.googleapis.com)를 따로 켜야 한다.
-//   안 켜면 scope·토큰이 멀쩡해도 발행이 403 으로 죽는다 — gmail 이 실제로 그래서 한동안 막혀 있었고,
-//   "restricted scope 정책" 으로 오진했다가 그 API 활성화로 풀렸다.
-const GOOGLE_INTRO = "구글은 클라우드 콘솔의 '웹 애플리케이션' OAuth 클라이언트로 붙습니다. ⚠ 원격 MCP 전용 API 를 따로 활성화해야 하고, 이걸 빠뜨리면 자격이 멀쩡해도 발행이 403 으로 실패합니다.";
+//
+// ⚠⚠ 2026-08-12 재판정(#1652) — 이 안내는 **한 단계를 통째로 빠뜨리고 있었고, 한 문장은 정반대로 읽혔다.**
+//  ① 진짜 게이트는 API 활성화가 아니라 **Google Workspace Developer Preview 등록**이다. 등록 안 된 GCP
+//     프로젝트에서는 API 를 다 켜고 scope·토큰이 완벽해도 tools/call 이 전부 403(PERMISSION_DENIED)이다.
+//     게이트는 사용자 계정이 아니라 **호출하는 앱의 GCP 프로젝트**에 걸린다(claude.ai 가 같은 구글 계정으로
+//     200 인 것이 근거 — Anthropic 이 전 사용자 이메일을 등록했을 리 없다). 조여진 게 아니라 처음부터
+//     잠겨 있었다(최초 보고 2026-04-26 · 공개 프리뷰 2026-05-01 · 커뮤니티 규명 2026-07-28).
+//  ② 옛 문구 "일반 Gmail/Drive/Calendar API 를 켠 것과 별개입니다" 는 **"일반 API 는 안 켜도 된다"로 읽혔다**
+//     (실제 오독 사례 발생). 뜻은 '추가로 켜야 한다' 였다.
+//  ③ tools/list 200 은 아무것도 증명하지 않는다 — **익명으로 쳐도** 200 + 8툴이 나온다. [발행]이 성공했다는
+//     사실을 '연결이 살아 있다'의 근거로 쓰면 안 된다.
+//  → 그래서 대안(B 어댑터, 클래식 REST API)을 먼저 제시한다. 같은 토큰·같은 scope 로 클래식 API 는 200 이고,
+//    그 경로는 우리 자료수집기가 이미 프로덕션에서 쓰고 있다(org_tool 프리셋 = http-tool-presets.ts).
+const GOOGLE_INTRO =
+  "구글은 클라우드 콘솔의 '웹 애플리케이션' OAuth 클라이언트로 붙습니다. " +
+  "⚠ 먼저 아셔야 할 것: 구글의 원격 MCP 는 **Workspace Developer Preview 에 등록된 GCP 프로젝트에서만** 실제 호출이 됩니다. " +
+  "등록 없이 설정을 아무리 정확히 해도 도구 호출이 전부 403 으로 거부됩니다(도구 목록은 정상으로 보이기 때문에 성공한 것처럼 착각하기 쉽습니다). " +
+  "등록 절차가 부담되면 [AI 도구] ▸ 구글 프리셋(클래식 REST API)을 쓰세요 — 같은 계정·같은 권한으로 동작하며 프리뷰 등록이 필요 없습니다.";
 function googleSteps(api: string): string[] {
   return [
-    `⚠ console.cloud.google.com ▸ API 및 서비스 ▸ 라이브러리에서 **${api}** 를 활성화합니다 — 원격 MCP 전용 API 라 일반 Gmail/Drive/Calendar API 를 켠 것과 별개입니다`,
+    "⚠ **가장 먼저** — 이 GCP 프로젝트를 Google Workspace Developer Preview 에 등록합니다(developers.google.com/workspace/preview). " +
+      "등록되지 않은 프로젝트는 아래 설정을 전부 마쳐도 도구 호출이 403 으로 거부됩니다. 이게 이 연동에서 가장 흔한 실패 원인입니다",
+    `console.cloud.google.com ▸ API 및 서비스 ▸ 라이브러리에서 **${api}** 를 활성화합니다 — 원격 MCP 전용 API 라 일반 Gmail/Drive/Calendar API 와 **둘 다** 켜야 합니다(둘 중 하나가 아닙니다)`,
     "사용자 인증 정보 ▸ [사용자 인증 정보 만들기] ▸ OAuth 클라이언트 ID ▸ 유형 **웹 애플리케이션**",
     "승인된 리디렉션 URI 에 게이트웨이 콜백 추가 → {callback}",
     "OAuth 동의 화면을 게시(In production) — 테스트 상태면 refresh token 이 7일 만에 만료됩니다",
     "발급된 클라이언트 ID·보안 비밀을 아래 [OAuth 클라이언트] 필드에 입력하고 저장합니다",
     "⚠ 저장 후 **본인이 먼저 [외부 서비스 관리 ▸ 해당 서비스 ▸ 연결]** 을 마칩니다 — [발행]은 설정자의 개인 토큰으로 상류에 붙습니다",
     "[발행] — 상류 도구 목록을 캡처합니다. 이후 구성원은 각자 [연결]만 하면 됩니다",
+    "⚠ **[발행] 성공은 연결이 살아 있다는 증거가 아닙니다** — 도구 목록은 인증 없이도 조회됩니다. " +
+      "반드시 도구를 **실제로 한 번 호출해** 결과가 오는지 확인하세요. 403 이 오면 1번(프리뷰 등록)을 다시 보세요",
   ];
 }
 
@@ -103,7 +121,7 @@ export const MCP_SERVER_PRESETS: McpServerPreset[] = [
     //  gmailmcp 이 쓰기 tool 에 gmail.modify 를 요구(실측 규명). 그래서 readonly+compose+modify. mail.google.com(전체·영구삭제)만 제외.
     oauth_scope: "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose https://www.googleapis.com/auth/gmail.modify",
     oauth_token_url: "https://oauth2.googleapis.com/token",
-    note: "Google 공식 MCP. Web앱 OAuth client(콘솔) 필요 — 승인 redirect 에 게이트웨이 /oauth/callback 등록. scope gmail.readonly(+compose).",
+    note: "Google 공식 MCP(Developer Preview). ⚠ **프리뷰 미등록 GCP 프로젝트에서는 tools/call 이 전부 403** — 설정이 완벽해도 안 된다(2026-08-12 실측). 대안: [AI 도구] 의 google-gmail 프리셋(클래식 Gmail API, 같은 자격 슬롯·프리뷰 불요). Web앱 OAuth client 필요 — 승인 redirect 에 /oauth/callback 등록.",
     guide: { url: "https://console.cloud.google.com/apis/credentials", intro: GOOGLE_INTRO, steps: googleSteps("gmailmcp.googleapis.com") },
   },
   {
@@ -113,7 +131,7 @@ export const MCP_SERVER_PRESETS: McpServerPreset[] = [
     // scopes_supported 실측(drive / drive.readonly / drive.file)에서 읽기만 — drive(전체)·drive.file(쓰기)는 후속.
     oauth_scope: "https://www.googleapis.com/auth/drive.readonly",
     oauth_token_url: "https://oauth2.googleapis.com/token",
-    note: "Google 공식 MCP. Web앱 OAuth client 필요. scope drive.readonly(+drive.file).",
+    note: "Google 공식 MCP(Developer Preview). ⚠ **프리뷰 미등록이면 tools/call 전부 403.** 같은 토큰·같은 drive.readonly 로 클래식 API(drive.googleapis.com)는 200 이다 — 막힌 건 데이터가 아니라 새 에이전트 표면. 대안: [AI 도구] 의 google-drive 프리셋. Web앱 OAuth client 필요.",
     guide: { url: "https://console.cloud.google.com/apis/credentials", intro: GOOGLE_INTRO, steps: googleSteps("drivemcp.googleapis.com") },
   },
   {
@@ -123,7 +141,7 @@ export const MCP_SERVER_PRESETS: McpServerPreset[] = [
     // scopes_supported 실측(calendar 전체·events·readonly 등 12종)에서 읽기만 — 이벤트 쓰기 등은 후속(L2).
     oauth_scope: "https://www.googleapis.com/auth/calendar.readonly",
     oauth_token_url: "https://oauth2.googleapis.com/token",
-    note: "Google 공식 MCP. Web앱 OAuth client 필요. scope calendar.events.readonly 등.",
+    note: "Google 공식 MCP(Developer Preview). ⚠ **프리뷰 미등록이면 tools/call 전부 403.** 대안: [AI 도구] 의 google-calendar 프리셋(클래식 Calendar API). Web앱 OAuth client 필요.",
     guide: { url: "https://console.cloud.google.com/apis/credentials", intro: GOOGLE_INTRO, steps: googleSteps("calendarmcp.googleapis.com") },
   },
 ];
