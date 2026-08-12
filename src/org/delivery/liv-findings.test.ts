@@ -24,7 +24,7 @@
 //  | 19 | 상한                                    | top(3) 은 3개, 0 은 0개, 부족하면 그만큼 |
 //  | 20 | 문구 규약                               | 모든 title 이 어미로 끝난다              |
 import assert from "node:assert/strict";
-import { livFindings, livTopFindings, type LivSnapshot } from "./liv-findings.js";
+import { livFindings, livTopFindings, livMature, type LivSnapshot } from "./liv-findings.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -182,6 +182,26 @@ t("[20] 모든 카드 문구가 어미까지 끝맺는다", () => {
     assert.match(f.title, /다\.$|까\?$/, `제목이 명사 종결이다: ${f.title}`);
     assert.match(f.detail, /다\.$/, `설명이 명사 종결이다: ${f.detail}`);
   }
+});
+
+// ── livMature — 홈에 대시보드를 띄울지 리브를 띄울지의 입력 ────────────────────
+t("[21] 손볼 게 없으면 성숙", () => {
+  assert.equal(livMature([]), true);
+});
+
+t("[22] 조직 카드가 하나라도 있으면 아직 아니다 (p1 도 센다)", () => {
+  // #1618 의 실패가 정확히 "P1 을 아무도 안 본다"였다 — p0 만 보면 파이프라인이 8일 멈춰도 리브가 안 뜬다.
+  assert.equal(livMature(livFindings(healthy({ pipeline: { ...healthy().pipeline, manage: { configured: 3, enabled: 3, job: null } } }))), false);
+});
+
+t("[23] 개인 권유 카드 하나만 남은 건 성숙으로 본다 (그것 때문에 홈을 차지하면 잔소리다)", () => {
+  const f = livFindings(healthy({ migrateReported: false, nodes: { registered: 0, online: 0 } }));
+  assert.deepEqual(f.map((x) => x.key), ["member.local-import"]);
+  assert.equal(livMature(f), true);
+});
+
+t("[24] 개인 카드라도 p0 면 성숙이 아니다", () => {
+  assert.equal(livMature([{ key: "x", severity: "p0", scope: "member", title: "무언가 막혔습니다.", detail: "그렇습니다." }]), false);
 });
 
 console.log(`\n${pass} passed`);

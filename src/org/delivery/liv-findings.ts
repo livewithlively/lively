@@ -151,3 +151,16 @@ function jobRunning(job: LivJobState | null | undefined): boolean {
 export function livTopFindings(all: LivFinding[], limit = 3): LivFinding[] {
   return all.slice(0, Math.max(0, limit));
 }
+
+/**
+ * 이 워크스페이스가 **굴러가고 있나** — 홈에 대시보드를 띄울지 리브를 띄울지의 입력(livHomeMode 의 `mature`).
+ *
+ * 판정: **조직 카드가 하나라도 있거나 p0 가 있으면 아직 아니다.**
+ * - p1 도 센다 — #1618 의 실패가 정확히 "P1 을 아무도 안 본다"였다(온보딩은 100% 인데 파이프라인 3단계 정지).
+ *   p0 만 보면 그 상태에서 리브가 안 뜨고, 그러면 이 기능이 존재할 이유가 없어진다.
+ * - **개인 카드 하나만 남은 건 성숙으로 본다** — "예전 설정을 가져오시겠어요"는 권유지 워크스페이스 고장이
+ *   아니다. 그것 때문에 홈을 계속 리브가 차지하면 그게 잔소리다.
+ */
+export function livMature(findings: LivFinding[]): boolean {
+  return !findings.some((f) => f.scope === "org" || f.severity === "p0");
+}
