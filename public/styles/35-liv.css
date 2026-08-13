@@ -11,23 +11,30 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 .liv-title { display: flex; align-items: center; gap: 8px; font-size: 16px; }
 .liv-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--mint-deep); display: inline-block; }
 
-.liv-cards { display: flex; flex-direction: column; gap: 8px; max-height: 45%; overflow: auto; }
-.liv-cards-title { font-size: 12px; color: var(--muted); margin: 2px 0 2px 2px; }
-.liv-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--bg); }
-.liv-card-skel { height: 62px; opacity: .5; }
-.liv-card-title { display: flex; align-items: baseline; gap: 8px; }
+/* 본문 2열 — 왼쪽은 할 일 레일(이슈 목록), 오른쪽이 대화. **이 화면의 주인공은 대화**라서
+   대화가 남은 폭·높이를 전부 먹는다. 카드를 위에 쌓으면 대화가 절반으로 눌려 정작 말하기가 불편해진다. */
+.liv-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 10px; }
+.liv-rail { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+
+.liv-cards { display: flex; flex-direction: column; gap: 6px; }
+.liv-cards-title { font-size: 11px; color: var(--muted); letter-spacing: .02em; margin: 2px 0 2px 2px; }
+/* 레일 카드 = 목록 행에 가깝다. 여백을 줄이고 제목을 먼저 읽히게 한다. */
+.liv-card { border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; background: var(--bg); }
+.liv-card-skel { height: 52px; opacity: .5; }
+.liv-card-title { display: flex; align-items: baseline; gap: 6px; font-size: 13px; line-height: 1.45; }
 /* 등급은 **색이 아니라 표식**으로 가른다 — 색만으로 구분하면 색각 이상에서 그 차이가 사라진다. */
 .liv-card-mark { font-weight: 700; width: 12px; text-align: center; color: var(--muted-2); }
 .liv-card-p0 .liv-card-mark { color: var(--ink); }
 .liv-card-p0 { border-color: var(--line-net-2); }
-.liv-card-detail { color: var(--ink-sub); font-size: 13px; margin: 4px 0 0 20px; line-height: 1.5; }
-.liv-card-acts { display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px; }
+.liv-card-detail { color: var(--ink-sub); font-size: 12px; margin: 4px 0 0 16px; line-height: 1.5; }
+/* 좁은 레일이라 버튼이 줄바꿈된다 — 오른쪽 정렬 대신 왼쪽에서 흐르게 둔다(잘리는 것보다 낫다). */
+.liv-card-acts { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0 16px; }
 /* 맡긴 카드는 지우지 않고 흐린다 — 무엇을 맡겼는지가 화면에 남아야 사람이 진행을 따라갈 수 있다. */
 .liv-card-done { opacity: .55; }
 
-.liv-chat { flex: 1; min-height: 0; display: flex; flex-direction: column;
+/* 대화 — 터미널이 자체 툴바(세션명·파일 탐색기)를 이미 그리므로 여기서 제목을 또 얹지 않는다(중복 크롬). */
+.liv-chat { min-height: 0; display: flex; flex-direction: column;
   border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg); }
-.liv-chat-head { padding: 6px 12px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
 .liv-chat-body { flex: 1; min-height: 0; display: flex; }
 .liv-chat-boot { margin: auto; color: var(--muted); font-size: 13px; }
 .liv-chat-err { margin: auto; text-align: center; padding: 16px; }
@@ -42,6 +49,7 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 /* 좁은 화면 — 무스크롤 코크핏은 데스크톱 계약이다(대시보드와 같은 폴백). 세로로 쌓고 스크롤을 허용한다. */
 @media (max-width: 900px), (max-height: 640px) {
   body[data-route="liv"] { height: auto; overflow: auto; }
-  .liv-cards { max-height: none; }
+  .liv-body { grid-template-columns: minmax(0, 1fr); }  /* 레일을 위로 접는다 */
+  .liv-rail { overflow: visible; }
   .liv-chat { min-height: 420px; }
 }
