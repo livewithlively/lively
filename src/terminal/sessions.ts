@@ -24,7 +24,7 @@ import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.
 import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
 import { memberMkdir } from "./terminal-member-fs.js";
 import { materializeMemberGit, ensureGitSafeDirectory } from "../org/credentials/git-credential-materialize.js";
-import { ROOTS, SHARED_ROOT, HARNESSES, PANE_LOCALE, modeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput } from "./catalog.js";
+import { ROOTS, SHARED_ROOT, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput } from "./catalog.js";
 import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson } from "./tmux-exec.js";
 import {
   sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
@@ -265,17 +265,17 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   const appliedFlags: Record<string, string> = {}; // 생성 시 적용한 플래그 — @box_flags 로 저장(수정 팝업 표시용).
   if (harness.bin) {
     cmd.push(harness.bin);
-    // 이어받기(#905 C1) — claude 하네스에 한해 --resume <sid> 주입(그 세션 대화를 이어서 연다). sid 형식 검증.
-    //  ⚠ 여기의 <sid> 는 **claude 자신의 세션 UUID** 여야 한다(세션이력 캡처가 claude session_id 로 키잉 — #905).
-    //   tmux box-id 를 주면 claude 가 못 찾아 검색-결과없음 picker 가 뜬다(#1059 사용자 신고). 그 경우엔 resumePick 을 쓴다.
-    if (input.resume && harness.key === "claude") {
-      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(input.resume)) throw new HttpError(400, "resume 세션 id 형식이 잘못되었습니다");
-      cmd.push("--resume", input.resume);
-    } else if (input.resumePick && harness.key === "claude") {
-      // #1059 — 정확한 claude UUID 를 모를 때(예: restorable 복원, box-id 만 있음): 인자 없는 --resume 로 **후보 picker** 를
-      //  바로 띄운다. box-id 를 넘겨 "검색 결과 없음"에 빠뜨리는 대신, 이 작업폴더의 실제 대화 후보에서 사용자가 고른다.
-      //  (제로클릭 정밀 복원은 box-id↔claude-UUID 매핑 저장이 선행 — 후속.)
-      cmd.push("--resume");
+    // 이어받기(#905 C1 · #1711 표 구동) — 그 하네스의 이어받기 수단을 **카탈로그에서** 만든다.
+    //  ⚠ 여기의 <sid> 는 **그 하네스 자신의 대화 id** 여야 한다(claude UUID · agy conversationId · opencode sessionID).
+    //   세션이력 캡처도 같은 id 로 키잉된다(#905). tmux box-id 를 주면 하네스가 못 찾아 "검색 결과 없음"이 된다
+    //   (#1059 사용자 신고) — 그 경우엔 resumePick(피커·최근 대화)으로 폴백한다.
+    //  ⚠ 종전엔 이 두 분기가 `harness.key === "claude"` 로 잠겨 있어, **claude 아닌 세션은 복원해도 늘 새 대화**로
+    //   시작했다(2026-08-14 상민님 신고 — antigravity 세션을 /exit 로 닫고 '이어서 열기' 해도 대화가 없다).
+    if (input.resume) {
+      if (!RESUME_ID_RE.test(input.resume)) throw new HttpError(400, "resume 세션 id 형식이 잘못되었습니다");
+      cmd.push(...(harness.resumeArgv?.(input.resume) ?? []));
+    } else if (input.resumePick) {
+      cmd.push(...(harness.resumeArgv?.() ?? []));
     }
     for (const def of harness.flags) {
       const raw = input.flags?.[def.name];

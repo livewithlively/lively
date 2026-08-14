@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { detectAwaiting, modeEnvArgs, canSeeSession, resolveAgentPhase, parseReportedPhase, isPhaseFresh, isActivityProgress, PHASE_TTL_SEC } from "./terminal-sessions.js";
 // 배럴(terminal-sessions.ts)엔 새 심볼을 늘리지 않는다 — 그 파일의 재수출 집합은 #1313 R15 분할의 계약이다.
-import { harnessLaunchArgv, harnessLoginArgv, harnessFailNotice, HARNESSES } from "./catalog.js";
+import { harnessLaunchArgv, harnessLoginArgv, harnessFailNotice, HARNESSES, RESUME_ID_RE } from "./catalog.js";
 import { SHELL_CMDS, isAgentOffline } from "./phase.js";  // E12 — 런처가 pane 포그라운드를 무엇으로 보이게 하는가(#1535)
 
 let pass = 0;
@@ -329,6 +329,29 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
   }
   ok2(harnessLoginArgv("antigravity") === null, "E13h agy 는 로그인 서브커맨드가 없어 로그인 전용 세션을 만들지 않는다");
   ok2(harnessLoginArgv("opencode") === null, "E13i opencode 로그인은 대화형 제공자 선택이라 무인 한 줄이 아니다");
+
+  // E14 (#1711) — **이어서 열기가 그 대화를 실제로 이어받는가.** 종전엔 이 주입이 sessions.ts 에서
+  //  `harness.key === "claude"` 로 잠겨 있어, 다른 하네스는 복원해도 늘 새 대화로 시작했다(상민님 신고).
+  //  수단은 하네스마다 다르고 **위치도 다르다**(codex 는 플래그가 아니라 서브커맨드).
+  {
+    const r = (k: string, id?: string): string[] => HARNESSES.find((h) => h.key === k)?.resumeArgv?.(id) ?? [];
+    ok2(r("claude", "u1").join(" ") === "--resume u1", "E14a claude 는 --resume <id>");
+    ok2(r("claude").join(" ") === "--resume", "E14b id 를 모르면 피커(인자 없는 --resume)");
+    ok2(r("codex", "s1")[0] === "resume", "E14c codex 는 서브커맨드 — bin 바로 뒤 첫 자리여야 한다(플래그가 아니다)");
+    ok2(r("codex").join(" ") === "resume --last", "E14d codex 피커는 대화형이라 무인 복원엔 --last");
+    ok2(r("opencode", "ses_1").join(" ") === "--session ses_1", "E14e opencode 는 --session <id>");
+    ok2(r("antigravity", "c1").join(" ") === "--conversation c1", "E14f antigravity 는 --conversation <id>");
+    ok2(r("antigravity").join(" ") === "--continue", "E14g id 를 모르면 가장 최근 대화");
+    ok2(r("shell", "x").length === 0 && r("shell").length === 0, "E14h 셸은 이어받을 대화가 없다 — 아무 인자도 만들지 않는다");
+    // 새 하네스가 조용히 빠지지 않게 — 빠지면 그 하네스만 '이어서 열기'가 새 대화로 열린다(발견이 어렵다).
+    ok2(HARNESSES.filter((h) => h.bin).every((h) => typeof h.resumeArgv === "function"),
+      "E14i 실행 파일이 있는 하네스는 모두 이어받기 수단을 가진다");
+    // id 형식은 하네스마다 다르다 — 하나라도 막히면 그 하네스는 정밀 복원이 통째로 400 이 된다.
+    ok2(RESUME_ID_RE.test("ses_8f3a_bc"), "E14j opencode 형 id(밑줄)가 형식 검증을 통과한다");
+    ok2(RESUME_ID_RE.test("0199b1a2-1f3e-7c44-9c2a-3b0f5d6e7a8b"), "E14k UUID 형 id 가 통과한다");
+    ok2(!RESUME_ID_RE.test("../etc/passwd") && !RESUME_ID_RE.test("a b") && !RESUME_ID_RE.test(""),
+      "E14l 경로·공백·빈값은 막는다");
+  }
 
   // E12 — 런처의 **부작용**: pane 의 foreground 프로세스가 무엇으로 보이는가 (#1535).
   //  래퍼를 씌운다는 건 pane 에 프로세스를 하나 더 만든다는 뜻이다. job control 이 없으면 그 래퍼

@@ -43,7 +43,20 @@ export interface Harness {
   //  · failHint: 재시작 안내(`<bin>` 입력) 뒤에 덧붙일 줄들. 하네스마다 로그인 절차가 달라서 있는 값.
   loginCmd?: string;
   failHint?: string[];
+  // 이어받기(#1711) — '이어서 열기'(복원)가 **같은 대화를 이어서** 열게 하는 argv 조각.
+  //  id 를 주면 그 대화, 없으면 '가장 최근 대화 또는 피커'. 하네스마다 수단이 완전히 다르다(실측 2026-08-14):
+  //   claude `--resume <uuid>` / `--resume`(피커) · codex **서브커맨드** `resume <id>` / `resume --last`
+  //   · opencode `--session <id>` / `--continue` · antigravity `--conversation <id>` / `--continue`
+  //  ⚠ 반환 argv 는 bin **바로 뒤**에 붙는다 — codex 는 플래그가 아니라 서브커맨드라 그 위치가 계약이다
+  //   (`codex resume <id> --model x` 는 유효하다 — resume 이 --model 을 받는 것을 --help 로 확인했다).
+  //  ⚠ 종전엔 이 로직이 sessions.ts 에 `harness.key === "claude"` 로 박혀 있어, **claude 아닌 세션은 복원해도
+  //   늘 새 대화로 시작**했다(2026-08-14 상민님 신고: antigravity 세션을 /exit 로 닫고 이어 열면 대화가 없다).
+  resumeArgv?: (id?: string) => string[];
 }
+// 이어받기 대화 id 형식 — 하네스가 만든 값이라 제각각이다(claude·agy=UUID · opencode=`ses_…`).
+//  ⚠ `_` 를 허용한다: 종전 정규식(sessions.ts)엔 없어서 opencode 세션 id 가 형식 오류로 400 이 날 자리였다(#1711).
+//  셸 인젝션 표면은 없다(argv 로만 전달) — 이 검증은 하네스에 쓰레기 값을 넘기지 않기 위한 것이다.
+export const RESUME_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 export const HARNESSES: Harness[] = [
   {
     key: "claude", label: "Claude Code", bin: "claude",
@@ -54,6 +67,7 @@ export const HARNESSES: Harness[] = [
       { name: "--effort", label: "추론강도(effort)", desc: "무거운 작업(부트스트랩·분류 등)은 xhigh 권장", type: "select", choices: ["", "low", "medium", "high", "xhigh", "max"] },
     ],
     failHint: ["로그인이 필요하다고 나오면 claude 를 실행한 뒤 /login 을 입력하세요."],
+    resumeArgv: (id) => (id ? ["--resume", id] : ["--resume"]),   // 인자 없는 --resume = 이 폴더의 대화 피커
   },
   {
     key: "codex", label: "Codex", bin: "codex",
@@ -62,6 +76,7 @@ export const HARNESSES: Harness[] = [
     //  넘기는 순간 그 모델에 고정돼, codex 가 기본을 올려도 여기 적힌 낡은 문자열에 사용자가 묶인다.
     flags: [{ name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"], default: "gpt-5.5" }],
     loginCmd: "codex logout && codex login --device-auth",
+    resumeArgv: (id) => (id ? ["resume", id] : ["resume", "--last"]),   // 피커는 대화형이라 무인 복원엔 --last
   },
   {
     // #1519 로 배선(훅·MCP·자산)은 이미 붙어 있는데 **웹 세션 카탈로그에만** 빠져 있던 자리(#1695).
@@ -72,6 +87,7 @@ export const HARNESSES: Harness[] = [
     flags: [],
     // 셸에서 그대로 치는 명령은 **명령 줄**로 준다(복사해 붙여넣게) — claude 의 /login 은 TUI 안 입력이라 문장으로 둔다.
     failHint: ["로그인이 필요하다고 나오면 아래를 입력해 제공자를 고르세요:", "", "    opencode auth login"],
+    resumeArgv: (id) => (id ? ["--session", id] : ["--continue"]),
   },
   {
     // #1689 로 배선 완료 → 이 카탈로그가 웹 세션(AI 세션 탭·프로젝트 화면)의 마지막 조각이다(#1695).
@@ -85,6 +101,11 @@ export const HARNESSES: Harness[] = [
       { name: "--effort", label: "추론강도(effort)", desc: "", type: "select", choices: ["", "low", "medium", "high"] },   // claude 와 달리 3단계(실측)
     ],
     failHint: ["로그인이 필요하다고 나오면 화면에 뜨는 주소를 브라우저에서 열고, 함께 표시되는 코드를 입력하세요."],
+    // ⚠ id 없는 폴백(`--continue`)은 **가장 최근 대화**를 잡는데, agy 의 대화 저장(~/.gemini/antigravity-cli/brain/)은
+    //  워크스페이스별이 아니라 **전역**이다(실측) → 세션을 여러 개 돌리면 남의 대화를 이어받을 수 있다.
+    //  그래서 antigravity 는 id 복원이 정상 경로이고(어댑터가 conversationId 를 세션 id 로 보고한다 — 매핑 존재),
+    //  폴백은 매핑이 없을 때의 차선이다.
+    resumeArgv: (id) => (id ? ["--conversation", id] : ["--continue"]),
   },
   { key: "shell", label: "셸 (에이전트 없음)", bin: "", flags: [] },
 ];
