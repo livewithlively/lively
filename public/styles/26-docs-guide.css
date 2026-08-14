@@ -208,6 +208,9 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   .docs-side { position: static; flex: none; width: 100%; max-height: none; border-right: 0;
     border-bottom: 1px solid var(--line); padding: 0 0 14px; display: flex; flex-wrap: wrap; gap: 2px 26px; }
   .docs-side-group { margin: 0; }
+  /* 세로 스택 함정(#701 함정 1) — align-items:flex-start 가 세로 모드에선 fit-content 가 되어, keep-all
+     본문의 min-content(긴 라벨·중점 연결 어구)가 컬럼을 밀어 body 가로 오버플로를 만든다. admin-body 와 동일 처방. */
+  .docs-body { width: 100%; }
 }
 
 /* ── 전환형 탭(:::tabs — core.renderMarkdown, #780) — 틴트 박스 안 화이트 카드(tabchapter 문법) ── */
@@ -223,16 +226,5 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .md-tabs-body { background: var(--bg); border: 1px solid var(--line-net); border-radius: 10px; padding: 16px 18px 8px; }
 .md-tabs-body .md-tabpane > :last-child { margin-bottom: 8px; }
 @media (prefers-reduced-motion: reduce) { .docs-side a.docs-item, .md-tab-btn { transition: none; } }
-/* :::tabs hue — 색상 구분 가로 탭: 스크린샷 ①~⑥ 구역 색(is-cN·--sc)과 1:1 연결 (#1013 홈 가이드) */
-.md-tabs--hue .md-tab-btn { display: inline-flex; align-items: center; gap: 7px;
-  border-color: color-mix(in srgb, var(--sc) 28%, transparent); }
-.md-tabs--hue .md-tab-btn::before { content: ''; width: 10px; height: 10px; flex: none;
-  border-radius: 4px 1.5px 4px 1.5px; background: var(--sc);
-  box-shadow: 0 1px 3px color-mix(in srgb, var(--sc) 40%, transparent); }
-.md-tabs--hue .md-tab-btn:hover { color: var(--ink);
-  background: color-mix(in srgb, var(--sc) 9%, transparent);
-  border-color: color-mix(in srgb, var(--sc) 45%, transparent); }
-.md-tabs--hue .md-tab-btn.active { color: var(--sc);
-  background: color-mix(in srgb, var(--sc) 12%, var(--bg));
-  border-color: var(--sc); box-shadow: 0 1px 5px color-mix(in srgb, var(--sc) 24%, transparent); }
+/* (:::tabs hue — 구 5색 스크린샷 구역과 연동하던 변형은 #1107 shot v2 전환으로 폐지) */
 

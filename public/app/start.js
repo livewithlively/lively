@@ -37,7 +37,12 @@ function blockStartNow(connect) {
     const lead = done
         ? '이미 AI 세션을 여셨어요. 아래에서 언제든 이어서 쓰거나 새 세션을 열 수 있습니다.'
         : '설치 없이 라이블리 웹에서 AI를 바로 켜서 써보세요. 회사 맥락·규칙이 이미 들어가 있어, 까만 창에 한국어로 시키면 됩니다.';
-    return el('div', { class: 'card docs-card ob-block' }, el('div', { class: 'card-head ob-block-head' }, el('h2', { text: '① 지금 바로 시작하기' }), badge), el('p', { class: 'guide-lead', text: lead }), el('div', { class: 'step-cta', style: 'margin-bottom:0' }, el('a', { class: 'btn btn-primary', href: '#/dashboard?tour=1&from=onboarding', target: '_blank', rel: 'noopener', text: '내 AI 세션 열기 ↗' })));
+    // 버튼 라벨은 '가서 실제로 일어나는 일'과 같아야 한다(#1104) — 이 링크는 홈으로 가서 '따라하기'(스포트라이트)를
+    //  켠다. 이미 세션을 열어 본 사람에게는 따라하기가 필요 없으니 [AI 세션] 탭으로 곧장 보낸다.
+    const cta = done
+        ? el('a', { class: 'btn btn-primary', href: '#/terminal', text: 'AI 세션 열기 →' })
+        : el('a', { class: 'btn btn-primary', href: '#/dashboard?tour=1&from=onboarding', target: '_blank', rel: 'noopener', text: '따라하며 첫 세션 만들기 ↗' });
+    return el('div', { class: 'card docs-card ob-block' }, el('div', { class: 'card-head ob-block-head' }, el('h2', { text: '① 지금 바로 시작하기' }), badge), el('p', { class: 'guide-lead', text: lead }), el('div', { class: 'step-cta', style: 'margin-bottom:0' }, cta));
 }
 // 설정 카드 한 장 — 제목 + (상태칩) + '이런 분께' / '안 해도 되는 경우' + 액션. 상황을 스스로 판단하게 한다.
 //  state: 'done'|'skipped'|'todo'|null(서버가 추적하지 않는 항목=로컬 설치).
@@ -93,6 +98,12 @@ function blockMore() {
     md = md.replace(/^##\s/gm, '### '); // 하위 제목(##)을 블록 head 아래 소제목(###)으로 강등
     return el('div', { class: 'card docs-card ob-block' }, el('div', { class: 'card-head ob-block-head' }, el('h2', { text: '③ 이런 걸 시켜보세요' })), el('div', { class: 'md-rendered docs-md' }, renderMarkdown(md)));
 }
+// ── 블록 ④ 다음 — '직접 해보기'의 다음 항목으로 잇는다(#1104). 세션을 열어 본 다음 자연스러운 순서가
+//  '프로젝트에서 일 시작하기'인데, 여기서 그리로 가는 길이 없어 사이드바를 스스로 찾아야 했다.
+function blockNext() {
+    const card = (href, title, desc) => el('a', { class: 'docs-linkcard', href }, el('span', { class: 'docs-linkcard-t' }, el('span', { text: title }), el('span', { class: 'docs-linkcard-arrow', 'aria-hidden': 'true', text: '→' })), el('span', { class: 'docs-linkcard-d', text: desc }));
+    return el('div', { class: 'card docs-card ob-block' }, el('div', { class: 'card-head ob-block-head' }, el('h2', { text: '④ 그다음은' })), el('p', { class: 'guide-lead', text: '세션을 한 번 열어 봤다면, 이제 일 단위로 써 볼 차례입니다.' }), el('div', { class: 'docs-linkgrid' }, card('#/start/project', '프로젝트 시작하기', '프로젝트를 만들고, 그 맥락을 아는 AI 세션을 여는 흐름을 한 바퀴 봅니다.'), card('#/learn/docs/how-it-works', '라이블리가 동작하는 방식', '회사 맥락이 AI에게 어떤 경로로 전달되는지 원리를 봅니다.')));
+}
 export async function renderStart(view) {
     // #/learn 과 같은 머리 — 아이브로(직접 해보기) + docs-title 히어로 + 리드 한 줄.
     const head = [
@@ -118,6 +129,7 @@ export async function renderStart(view) {
         blockStartNow(byKey.connect),
         blockSetup(byKey),
         blockMore(),
+        blockNext(),
         await orgBanner(),
     ].filter(Boolean);
     slot.replaceChildren(...cards);
@@ -144,8 +156,8 @@ export async function renderStartProject(view) {
     const did = isSectionDone('projects');
     const head = [
         docsEyebrow('start-project'),
-        el('h1', { class: 'docs-title', text: '프로젝트 생성하기' }),
-        el('p', { class: 'docs-lead', text: '프로젝트 화면이 어떤 부분들로 이뤄져 있고 각각 무엇에 쓰는지, 예시 프로젝트에서 한 바퀴 둘러봅니다.' }),
+        el('h1', { class: 'docs-title', text: '프로젝트 시작하기' }),
+        el('p', { class: 'docs-lead', text: '프로젝트 화면이 어떤 부분들로 이뤄져 있고 각각 무엇에 쓰는지 예시 프로젝트로 한 바퀴 둘러본 뒤, 내 프로젝트를 직접 만들어 봅니다.' }),
     ];
     const STEPS = [
         ['프로젝트 목록', '폴더·리스트로 묶어 보는 보드입니다(쓰던 클릭업과 비슷). 여기서 예시 프로젝트를 하나 엽니다.'],
@@ -165,5 +177,12 @@ export async function renderStartProject(view) {
     const lead = el('p', { class: 'ob-journey-lead', text: '실제 화면 위에서 지금 볼 곳을 표시하며 [다음]으로 한 단계씩 넘어갑니다. 예시 프로젝트라 실제로 만들거나 바꾸는 것은 없습니다 — 안심하고 둘러보세요. 언제든 ✕ 나 ESC 로 멈출 수 있습니다.' });
     const steps = el('div', { class: 'ob-journey-steps' }, ...STEPS.map(([t, d], i) => questRowStatic(i, t, d)));
     const cta = el('div', { class: 'step-cta step-cta-center' }, el('button', { class: 'btn btn-primary btn-lg', text: did ? '▶ 다시 둘러보기' : '▶ 둘러보기 시작', onclick: () => startGuideTour(['projects']) }), el('span', { class: 'step-cta-hint', text: '약 2분 · 언제든 ESC 로 중단' }));
-    docsShell(view, 'start-project', ...head, el('div', { class: 'guide-cards' }, el('div', { class: 'card docs-card ob-journey' }, header, lead, steps, cta)));
+    // 둘러보기만으로 끝나면 '시작하기'가 아니다(#1104) — 둘러본 뒤 내 프로젝트를 실제로 만드는 자리까지 잇는다.
+    //  화면 라벨은 프로젝트 탭 실물 그대로: 보드 우측 위 [＋ 프로젝트], 홈 우측 위 [+ 새 프로젝트].
+    const make = el('div', { class: 'card docs-card' }, el('div', { class: 'card-head' }, el('h2', { text: '직접 만들어 보기' })), el('p', { class: 'guide-lead', text: '둘러봤다면 내 프로젝트를 하나 만들어 보세요. 만드는 곳은 두 군데이고, 어느 쪽이든 같은 프로젝트가 만들어집니다.' }), el('div', { class: 'step-list' }, installStepLike(1, '프로젝트 만들기', el('p', { class: 'step-p' }, el('a', { href: '#/projects2', text: '[프로젝트]' }), ' 탭 오른쪽 위 ', el('b', { text: '[＋ 프로젝트]' }), ' 를 누릅니다. ', el('a', { href: '#/dashboard', text: '[홈]' }), ' 오른쪽 위 ', el('b', { text: '[+ 새 프로젝트]' }), ' 로도 같은 창이 열려요.'), el('p', { class: 'step-note', text: '어느 폴더·리스트에 둘지는 만들면서 고르면 되고, 나중에 옮길 수도 있습니다.' })), installStepLike(2, '배경과 필요한 지식 붙이기', el('p', { class: 'step-p' }, '프로젝트를 열고 본문에 배경을 적은 뒤, 「연결된 지식」에서 ', el('b', { text: '[✨ 지식 찾기]' }), ' 로 이 일에 필요한 회사 지식을 붙입니다.'), el('p', { class: 'step-note', text: '여기 붙인 지식은 이 프로젝트에서 여는 AI 세션에 자동으로 전달됩니다 — 배경을 다시 설명하지 않아도 됩니다.' })), installStepLike(3, '이 프로젝트의 AI 세션 열기', el('p', { class: 'step-p' }, '프로젝트 화면에서 세션을 열면, AI가 회사 공통 맥락에 더해 ', el('b', { text: '이 프로젝트의 본문·연결된 지식' }), ' 까지 아는 상태로 시작합니다.'))), el('p', { class: 'admin-hint', style: 'margin-top:12px' }, '각 부분이 무엇을 하는 곳인지 더 알고 싶으면 ', el('a', { href: '#/learn/docs/projects', text: '[프로젝트] 화면 안내' }), ' 를 보세요.'));
+    docsShell(view, 'start-project', ...head, el('div', { class: 'guide-cards' }, el('div', { class: 'card docs-card ob-journey' }, header, lead, steps, cta), make));
+}
+// 번호 매긴 단계 한 칸 — 설치 안내(learn.ts installStep)와 같은 시각 언어. 새 CSS 없이 .step 문법 재사용.
+function installStepLike(n, title, ...body) {
+    return el('div', { class: 'step' }, el('div', { class: 'step-num', 'aria-hidden': 'true', text: String(n) }), el('div', { class: 'step-body' }, el('div', { class: 'step-title', text: title }), ...body));
 }
