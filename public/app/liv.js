@@ -64,6 +64,23 @@ export async function renderLiv(view) {
 /** 화면 갱신 진입점 하나. 카드가 제출 뒤 자기 자신을 새로 그릴 때 **어느 칸에 사는지 알 필요가 없다** —
  *  물음은 대화 칸, 할 일은 레일로 갈렸는데 그 사실을 카드마다 인자로 나르면 한 자리만 틀려도 조용히 안 갱신된다. */
 let refreshLiv = () => { };
+/**
+ * 물음을 **치우는 길**. 이게 없으면 리브가 건 물음은 답하기 전엔 영원히 남는다 —
+ * 대화 칸에 고정한 뒤로는 그게 '리브가 지금 기다리는 것'이 아니라 **영구 가구**로 보인다(대표 지적).
+ * 접으면 서버가 declined 에도 남겨, 다음 대화의 리브가 곧바로 다시 묻지 않는다.
+ */
+function livDismissBtn() {
+    return el('button', {
+        class: 'btn btn-sm btn-ghost liv-ask-later', type: 'button', text: '나중에',
+        title: '지금은 넘어갑니다. 리브가 이걸 다시 곧바로 묻지 않습니다.',
+        onclick: async (ev) => {
+            const b = ev.currentTarget;
+            b.disabled = true;
+            await api('/api/ui/me/liv/ask-dismiss', { method: 'POST', body: '{}' }).catch(() => { });
+            refreshLiv();
+        },
+    });
+}
 function skeletonLine() { return el('div', { class: 'liv-card liv-card-skel' }); }
 /**
  * 레일에는 **서 있는 일**(지금 손볼 것)만 그린다. 리브가 지금 던진 물음은 여기가 아니다 — askHost 로 간다.
@@ -173,7 +190,7 @@ function livChoiceCard(ask, host) {
     sync();
     return el('div', { class: 'liv-card liv-ask' }, el('div', { class: 'liv-ask-head' }, el('b', { text: ask.question ?? '' })), ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null, opts, 
     // '그 외'는 탈출구다 — 여기 적히는 것이 곧 다음에 만들 커넥터 후보라 버리지 않고 쌓는다.
-    ask.allow_other ? el('div', { class: 'liv-ask-row' }, otherIn) : null, (ask.multi || ask.allow_other) ? el('div', { class: 'liv-ask-row' }, send) : null, ask.multi ? el('div', { class: 'liv-ask-note', text: '해당하는 걸 모두 고르셔도 됩니다.' }) : null);
+    ask.allow_other ? el('div', { class: 'liv-ask-row' }, otherIn) : null, el('div', { class: 'liv-ask-row' }, (ask.multi || ask.allow_other) ? send : null, livDismissBtn()), ask.multi ? el('div', { class: 'liv-ask-note', text: '해당하는 걸 모두 고르셔도 됩니다.' }) : null);
 }
 /**
  * 파일 올리기 — **로컬 폴더를 뒤지는 대신 끌어다 놓는다**(대표 판단).
@@ -224,7 +241,7 @@ function livUploadCard(ask, host) {
             setTimeout(() => refreshLiv(), 1200);
         }
     };
-    return el('div', { class: 'liv-card liv-ask' }, el('div', { class: 'liv-ask-head' }, el('b', { text: ask.label ?? '파일 올리기' })), ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null, el('div', { class: 'liv-ask-row' }, input), el('div', { class: 'liv-ask-note', text: ask.accept_hint || '글자로 된 파일만 됩니다 — 메모·문서(.txt·.md)·표(.csv) 등. PDF·이미지는 아직 안 됩니다.' }), msg);
+    return el('div', { class: 'liv-card liv-ask' }, el('div', { class: 'liv-ask-head' }, el('b', { text: ask.label ?? '파일 올리기' })), ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null, el('div', { class: 'liv-ask-row' }, input), el('div', { class: 'liv-ask-row' }, livDismissBtn()), el('div', { class: 'liv-ask-note', text: ask.accept_hint || '글자로 된 파일만 됩니다 — 메모·문서(.txt·.md)·표(.csv) 등. PDF·이미지는 아직 안 됩니다.' }), msg);
 }
 /**
  * 자격 입력칸 — **이 화면에서 끝내기 위한 장치**.
@@ -274,7 +291,7 @@ function livSecretCard(ask, host) {
         ev.preventDefault();
         void submit();
     } };
-    return el('div', { class: 'liv-card liv-ask' }, el('div', { class: 'liv-ask-head' }, el('b', { text: ask.label })), ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null, el('div', { class: 'liv-ask-row' }, input, save), el('div', { class: 'liv-ask-note', text: '입력하신 값은 잠긴 보관함으로 바로 들어가고, 대화 기록에는 남지 않습니다.' }), msg);
+    return el('div', { class: 'liv-card liv-ask' }, el('div', { class: 'liv-ask-head' }, el('b', { text: ask.label })), ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null, el('div', { class: 'liv-ask-row' }, input, save, livDismissBtn()), el('div', { class: 'liv-ask-note', text: '입력하신 값은 잠긴 보관함으로 바로 들어가고, 대화 기록에는 남지 않습니다.' }), msg);
 }
 function livCard(f, host) {
     const acts = el('div', { class: 'liv-card-acts' });

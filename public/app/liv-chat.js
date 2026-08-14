@@ -19,8 +19,16 @@
 //  · **한글 입력 중 Enter 는 전송이 아니다**(IME 조합 확정 Enter — 레포 불변식).
 //  · **실패를 조용히 삼키지 않는다.** exit≠0 이면 그 자리에 말한다.
 import { api, el, renderMarkdown } from './core.js';
-/** 진행을 다시 물어보는 간격. 사람이 기다리는 화면이라 짧게, 그러나 서버를 때리지 않게. */
-const POLL_MS = 900;
+/**
+ * 진행을 다시 물어보는 간격.
+ *
+ * 조각(글자 단위)이 와도 이 간격마다 그리므로 **이 값이 곧 체감 속도**다. 900ms 면 조각이 와도
+ * 뭉텅이로 나타나 스트리밍이 아니게 된다. 400ms 는 20초 턴에 50회 남짓인데, 한 번이 파일을
+ * 오프셋부터 이어 읽는 값싼 요청이라 감당된다.
+ * ⚠ 진짜 밀어주기(SSE)가 아니라 **당겨오기**다 — 부드러운 타이핑이 아니라 짧은 뭉치로 나타난다.
+ *  20초 빈 화면과 비교하면 큰 차이지만, 더 매끄럽게 하려면 그때는 전송 방식을 바꿔야 한다.
+ */
+const POLL_MS = 400;
 /**
  * 도구 이름을 사람 말로.
  *
@@ -95,15 +103,63 @@ function turnBlock(userText) {
     const root = el('section', { class: 'livc-turn' }, el('div', { class: 'livc-ask' }, el('div', { class: 'livc-who', text: '나' }), el('div', { class: 'livc-ask-text', text: userText })), work);
     return { root, work };
 }
-/** 스트림 한 줄을 그 턴의 괘선 안에 반영한다. cards = tool_use id → 그 슬립(결과가 오면 찾아 채운다). */
-function applyEvent(ev, list, cards) {
+/**
+ * 조각(`stream_event`)을 그린다 — 글자가 오는 대로.
+ *
+ * ⚠ **조각을 이어붙인 글은 뒤따르는 완성본(assistant/text)과 글자까지 똑같다**(실측 2026-08-15).
+ *  그래서 조각으로 그린 메시지는 기억해 두고, 완성본이 와도 그 글은 **건너뛴다**. 안 그러면 답이 두 번 나온다.
+ *  그리고 흘러오는 동안은 **날글**로 그린다 — 마크다운을 매 조각마다 다시 파싱하면 비싸고, 반쯤 열린
+ *  `**` 가 화면에서 깜빡인다. 덩이가 끝나는 순간 마크다운으로 갈아끼운다.
+ */
+function applyStream(ev, work, r) {
+    const e = ev?.event;
+    if (!e)
+        return;
+    if (e.type === 'message_start') {
+        r.msgId = String(e.message?.id ?? '');
+        r.blocks.clear();
+        return;
+    }
+    if (e.type === 'content_block_start' && e.content_block?.type === 'text') {
+        const el0 = el('div', { class: 'livc-said livc-said-live' });
+        r.blocks.set(Number(e.index), { el: el0, buf: '' });
+        work.append(el0);
+        return;
+    }
+    if (e.type === 'content_block_delta' && e.delta?.type === 'text_delta') {
+        const b = r.blocks.get(Number(e.index));
+        if (!b)
+            return;
+        b.buf += String(e.delta.text ?? '');
+        b.el.textContent = b.buf; // 흘러오는 동안은 날글
+        if (r.msgId)
+            r.streamed.add(r.msgId);
+        return;
+    }
+    if (e.type === 'content_block_stop') {
+        const b = r.blocks.get(Number(e.index));
+        if (!b)
+            return;
+        b.el.classList.remove('livc-said-live');
+        if (b.buf.trim())
+            b.el.replaceChildren(renderMarkdown(b.buf)); // 끝나면 제대로
+        else
+            b.el.remove(); // 빈 덩이는 자리를 차지하지 않는다
+        r.blocks.delete(Number(e.index));
+    }
+}
+/** 완성본 한 줄을 그 턴의 괘선 안에 반영한다. */
+function applyEvent(ev, list, r) {
+    const cards = r.cards;
     let lastText;
     const content = ev?.message?.content;
+    const already = ev?.type === 'assistant' && r.streamed.has(String(ev?.message?.id ?? ''));
     if (Array.isArray(content)) {
         for (const b of content) {
             if (b?.type === 'text' && String(b.text ?? '').trim()) {
                 lastText = String(b.text);
-                list.append(livSaid(lastText));
+                if (!already)
+                    list.append(livSaid(lastText)); // 조각으로 이미 그렸으면 건너뛴다(같은 글이다)
             }
             else if (b?.type === 'tool_use') {
                 const card = actionCard(String(b.name ?? '도구'), b.input);
@@ -162,20 +218,20 @@ export function mountLivChat(host, askHost) {
     list.append(el('div', { class: 'livc-open' }, el('div', { class: 'livc-open-lede' }, el('b', { text: '말씀하시면 제가 합니다.' }), el('p', { text: '설명서를 드리는 게 아니라, 이 워크스페이스를 직접 손봅니다.' })), el('ul', { class: 'livc-open-list' }, ...STARTERS.map(([kind, t]) => el('li', {}, el('button', { class: 'livc-open-btn', type: 'button', onclick: () => fill(t) }, el('span', { class: 'livc-open-kind', text: kind }), el('span', { class: 'livc-open-say', text: t })))))));
     async function drain(turnId, work) {
         let from = 0;
-        const cards = new Map();
+        const r = { cards: new Map(), blocks: new Map(), msgId: null, streamed: new Set() };
         let sawText = false;
         for (;;) {
-            let r;
+            let tail;
             try {
-                r = await api(`/api/ui/me/liv/turn/${encodeURIComponent(turnId)}?from=${from}`);
+                tail = await api(`/api/ui/me/liv/turn/${encodeURIComponent(turnId)}?from=${from}`);
             }
             catch (e) {
                 work.append(el('div', { class: 'livc-err', text: `진행을 읽지 못했습니다. ${e.message}` }));
                 scroll();
                 return;
             }
-            if (r.chunk) {
-                for (const line of r.chunk.split('\n')) {
+            if (tail.chunk) {
+                for (const line of tail.chunk.split('\n')) {
                     if (!line.trim())
                         continue;
                     let ev;
@@ -185,20 +241,34 @@ export function mountLivChat(host, askHost) {
                     catch {
                         continue;
                     } // 잘린 줄 — 다음 청크에서 온전히 온다
+                    if (ev.type === 'stream_event') {
+                        applyStream(ev, work, r);
+                        sawText = true;
+                        continue;
+                    }
                     if (ev.type === 'result') {
                         // 앞에서 글이 하나도 안 나왔을 때만 최종 result 를 쓴다(보통은 중복이다).
                         if (!sawText && String(ev.result ?? '').trim())
                             work.append(livSaid(String(ev.result)));
                         continue;
                     }
-                    if (applyEvent(ev, work, cards).text)
+                    if (applyEvent(ev, work, r).text)
                         sawText = true;
                 }
-                from = r.next ?? from;
+                from = tail.next ?? from;
                 scroll();
             }
-            if (r.done) {
-                if (r.exit != null && r.exit !== 0) {
+            if (tail.done) {
+                // 중간에 끊겨 content_block_stop 을 못 받은 덩이 — 날글·깜빡이는 커서로 남기지 않는다.
+                for (const [i, b] of r.blocks) {
+                    b.el.classList.remove('livc-said-live');
+                    if (b.buf.trim())
+                        b.el.replaceChildren(renderMarkdown(b.buf));
+                    else
+                        b.el.remove();
+                    r.blocks.delete(i);
+                }
+                if (tail.exit != null && tail.exit !== 0) {
                     // 실패를 조용히 삼키지 않는다. 다만 코드만 던지지 말고 **다음에 할 일**을 준다.
                     work.append(el('div', { class: 'livc-err', text: '이번 요청은 끝까지 가지 못했습니다. 다시 말씀해 주시면 이어서 해 보겠습니다.' }));
                     scroll();

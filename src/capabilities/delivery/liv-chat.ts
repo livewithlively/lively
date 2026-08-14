@@ -104,6 +104,27 @@ export const livChatCapabilities: Capability[] = [
       from: z.number().optional().describe("이어 읽기 시작할 바이트 오프셋(기본 0)"),
     }),
 
+  restRead("me_liv_ask_dismiss", "물음 접어두기",
+    "리브가 걸어 둔 물음(자격·객관식·올리기)을 **사람이 지금은 안 하겠다**고 접는다. " +
+    "접은 사실을 declined 에도 남겨, 다음 대화의 리브가 같은 걸 곧바로 다시 묻지 않게 한다.",
+    [{ method: "POST", paths: ["/api/ui/me/liv/ask-dismiss"], parse: () => ({}) }],
+    async (_input: unknown, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const { getLivProfile, setLivSecretAsk, appendLivProfile } = await import("../../org/store.js");
+      const cur = await getLivProfile(userId);
+      const ask = cur.secret_ask ?? null;
+      if (!ask) return { ask: null, dismissed: false };
+      // 무엇을 접었는지 남긴다 — 안 남기면 다음 턴의 리브가 같은 걸 또 묻고, 그게 잔소리가 된다.
+      // kind 별로 식별자가 다르다(객관식=key · 자격=field · 올리기=없음). 셋 다 같은 모양의 키로 접는다.
+      const a = ask as unknown as { kind?: string; key?: string; field?: string };
+      const key = `ask.${a.kind ?? "secret"}.${a.key ?? a.field ?? ""}`.replace(/\.$/, "");
+      await appendLivProfile(userId, {
+        declined: { at: new Date().toISOString(), key, why: "지금은 안 하겠다고 화면에서 접음" },
+      });
+      return { ask: null, dismissed: true, profile: await setLivSecretAsk(userId, null) };
+    }),
+
   restRead("me_liv_chat_reset", "리브와 새 대화 시작",
     "지금 이어가던 대화를 놓는다. 다음 턴이 첫 턴이 된다(이전 대화 기록은 지우지 않는다 — 이어받기만 끊는다).",
     [{ method: "POST", paths: ["/api/ui/me/liv/chat-reset"], parse: () => ({}) }],

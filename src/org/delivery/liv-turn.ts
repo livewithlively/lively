@@ -62,6 +62,12 @@ export function livTurnArgs(o: LivTurnOpts): string[] {
   //  이 순서가 바뀌면 뒤 인자가 도구 이름으로 먹힌다 → 그 회귀를 테스트가 고정한다.
   return [
     "--disallowedTools", ...LIV_DENIED_TOOLS,
+    // 글자 단위 진행(#1665) — 이게 없으면 사람은 20초 동안 **빈 화면**을 본다(문단이 완성돼야 한 덩이로 온다).
+    //  ⚠ 대가: 조각이 줄마다 실려 stream.jsonl 이 10배 가까이 커진다. tail 은 오프셋으로 이어 읽으니
+    //   증분 비용은 그대로고, 늘어난 건 그 턴의 파일 크기뿐이다(턴 폴더는 대화가 끝나면 쓸모가 없다).
+    //  ⚠ 그리고 조각을 이어붙인 글은 뒤따르는 완성본(assistant/text)과 **글자까지 똑같다**(실측 2026-08-15).
+    //   화면이 둘 다 그리면 답이 두 번 나온다 — 그 규칙은 web/liv-chat.ts 가 지킨다.
+    "--include-partial-messages",
     o.resume ? "--resume" : "--session-id", o.sessionId,
   ];
 }

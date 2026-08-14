@@ -235,3 +235,5 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 .livc-said .md pre { background: var(--bg-tint); border: 1px solid var(--line);
   border-radius: 6px; padding: 9px 10px; overflow: auto; }
 .livc-said .md pre code { background: none; padding: 0; }
+/* 접어두기 — 으뜸 행동 옆에 조용히. 물음은 리브가 기다리는 것이지 사람이 치울 수 없는 가구가 아니다. */
+.liv-ask-later { margin-left: auto; }
