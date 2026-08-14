@@ -13,57 +13,19 @@
 //  ── 판정은 여기서 하지 않는다 ──
 //  무엇이 덜 됐는지(카드)는 서버가 이미 정해서 준다(GET /api/ui/me/liv).
 //  화면이 자기 판정을 가지면 리브와 다른 답을 하고, 그게 #1618 이 잡아낸 실패다. 여기는 그리기만 한다.
-import { api, appUrl, el } from './core.js';
+import { api, el } from './core.js';
+import { mountLivChat, livChatAsk } from './liv-chat.js';
 export async function livStatus() {
     return await api('/api/ui/me/liv');
 }
-// ── 세션 부팅 ────────────────────────────────────────────────────────────────
-// 리브 세션은 **한 사람당 하나**다. 이미 있으면 그걸 쓰고, 없을 때만 만든다 — 홈에 들어올 때마다 세션이
-//  늘어나면 그건 청소해야 할 쓰레기가 된다. 표식은 라벨(@box_label)이다.
-const LIV_LABEL = '리브';
-/**
- * 쓸 수 있는 리브 세션을 고른다 — **살아 있는 것만**.
- *
- * ⚠ 죽은 리브 세션은 되살리지 않고 **버린다**. 라이블리는 죽은 세션을 열 때 claude 대화를 `--resume` 으로
- *  이어붙이는데(#1059 E lazy resume), 그러면 리브가 **그 대화가 시작된 시점의 스킬·맥락에 영원히 묶인다**
- *  (실측: liv 스킬을 켜기 전에 시작된 대화가 계속 되살아나 리브가 "liv 스킬이 없다"고 답했다).
- *  기획의 불변식이 정확히 이걸 막으라고 말한다 — **리브의 기억은 대화가 아니라 서버에 있고, 세션은 교체
- *  가능하다.** 그러니 이어붙일 이유가 없다. 대화를 잇는 건 일반 작업 세션의 미덕이지 리브의 미덕이 아니다.
- */
-async function findLivSession() {
-    const r = await api('/api/ui/terminal/sessions');
-    const mine = (r.sessions ?? []).filter((s) => s.label === LIV_LABEL && s.owned !== false);
-    const live = mine.find((s) => s.agentState !== 'offline');
-    if (live)
-        return live;
-    // 죽은 잔재는 지워 둔다(reclaim 없이 = desired-state 까지 완전 삭제). 안 지우면 다음에 또 되살아난다.
-    for (const dead of mine) {
-        await api('/api/ui/terminal/sessions/' + encodeURIComponent(dead.id), { method: 'DELETE' }).catch(() => { });
-    }
-    return null;
-}
-async function createLivSession() {
-    const r = await api('/api/ui/terminal/sessions', {
-        method: 'POST',
-        body: JSON.stringify({ label: LIV_LABEL, rootKey: 'personal', subpath: 'liv', harness: 'claude', autoApprove: true }),
-    });
-    return r.session;
-}
-/** 리브에게 말을 건다 — 그 세션에 프롬프트를 넣고 제출한다(사람이 터미널에 타이핑한 것과 같다). */
-export async function livSendPrompt(sessionId, text) {
-    await api('/api/ui/terminal/sessions/' + encodeURIComponent(sessionId) + '/prompt', { method: 'POST', body: JSON.stringify({ text }) });
-}
-/**
- * 리브가 처음 열릴 때 스스로 시작하는 말 — **인사 한 마디.**
- *
- * ⚠ 예전엔 여기에 지시문("liv 스킬로 점검하고 급한 것부터 알려줘")을 넣었는데, 두 가지가 틀렸다:
- *  ① **사람이 안 쓴 지시가 자기 이름으로 화면에 찍힌다.** 열자마자 내가 안 한 말이 내 말로 올라와 있는 건
- *     그 자체로 이상하다(대표 지적).
- *  ② **정체성을 프롬프트에 실으면 재량이 된다.** 스킬은 모델이 부를지 말지 정하는 자산이라, 안 부르면 그
- *     세션은 그냥 클로드다(실측: 리브가 "liv 스킬이 없다"고 답했다). 그래서 정체성·모드·첫 수는
- *     **SessionStart 훅(liv-session-boot)** 이 무조건 주입한다 — 여기 남는 건 말을 트는 인사뿐이다.
- */
-const LIV_OPENING = '안녕하세요.';
+// ── 대화 ─────────────────────────────────────────────────────────────────────
+// v0 는 웹터미널 세션을 재사용했다(두뇌를 먼저 검증하려는 선택이었고, 그건 성공했다).
+// v1 부터는 **세션을 만들지 않는다** — 턴마다 서버가 헤드리스를 띄우고 진행을 JSONL 로 남기며,
+// 화면은 그걸 말풍선·액션카드로 그린다(web/liv-chat.ts). 그래서 여기 있던 것들이 통째로 사라졌다:
+//   · 세션 찾기·만들기·죽은 세션 청소   → 세션이 없으니 청소할 것도 없다
+//   · 여는 말 주입과 도달 확인 폴링      → 사람이 먼저 말을 건다(열자마자 리브가 떠들지 않는다)
+//   · 프롬프트 주입(send-keys 규약)      → 대화창이 곧 입력이다
+// 리브의 기억이 세션이 아니라 서버에 산다는 불변식(#1663) 덕분에 이 교체가 무손실이다.
 // ── 화면 ─────────────────────────────────────────────────────────────────────
 export async function renderLiv(view) {
     if (!view)
@@ -84,7 +46,7 @@ export async function renderLiv(view) {
     // 카드와 세션은 **독립적으로** 로드한다. 세션이 못 떠도 무엇이 문제인지는 보여야 하고,
     //  카드 조회가 느려도 대화는 먼저 시작될 수 있다(위젯 독립 실패 원칙과 같은 결).
     void fillLivCards(cards);
-    void bootLivSession(chatWrap.querySelector('.liv-chat-body'), cards);
+    mountLivChat(chatWrap.querySelector('.liv-chat-body'));
     // 리브가 대화 중에 자격을 요청하면(me_liv_ask_secret) 화면이 그걸 알아야 입력칸이 뜬다.
     //  터미널은 iframe 이라 출력에서 신호를 읽을 수 없다 — 서버 상태를 가볍게 되묻는 쪽이 견고하다.
     //  ⚠ 사람이 타이핑 중인 입력칸을 갈아치우지 않는다(fillLivCards 가 그 경우 그냥 넘어간다).
@@ -151,8 +113,8 @@ function livChoiceCard(ask, host) {
             otherIn.blur();
             livToast('고르신 걸 전했습니다.');
             // 사람이 다시 타이핑하지 않아도 대화가 이어지게 — 무엇을 골랐는지 리브에게 그대로 말해 준다.
-            if (livSessionId && said)
-                await livSendPrompt(livSessionId, said).catch(() => { });
+            if (said)
+                livChatAsk(said);
             setTimeout(() => void fillLivCards(host), 600);
         }
         catch (e) {
@@ -242,8 +204,8 @@ function livUploadCard(ask, host) {
         if (failed.length)
             parts.push(`${failed.length}개 실패`);
         msg.replaceChildren(el('span', { class: failed.length ? 'liv-ask-err' : 'liv-ask-ok', text: parts.join(' · ') }));
-        if (saved && livSessionId) {
-            await livSendPrompt(livSessionId, `파일 ${saved}개 올렸어요: ${ok.slice(0, 10).map((f) => f.name).join(', ')}`).catch(() => { });
+        if (saved) {
+            livChatAsk(`파일 ${saved}개 올렸어요: ${ok.slice(0, 10).map((f) => f.name).join(', ')}`);
             setTimeout(() => void fillLivCards(host), 1200);
         }
     };
@@ -281,8 +243,7 @@ function livSecretCard(ask, host) {
             //  사람은 아무 일도 안 일어난 것처럼 본다(실측: 저장은 됐는데 화면엔 흔적이 없었다).
             livToast('저장했습니다. 리브가 이어서 확인합니다.');
             // 사람이 다시 타이핑하지 않아도 대화가 이어지게 한마디 건넨다 — 값은 절대 안 보낸다.
-            if (livSessionId)
-                await livSendPrompt(livSessionId, '자격 저장했어요. 확인해 주세요.').catch(() => { });
+            livChatAsk('자격 저장했어요. 확인해 주세요.');
             setTimeout(() => void fillLivCards(host), 600);
         }
         catch (e) {
@@ -320,104 +281,16 @@ function livCard(f, host) {
     return el('div', { class: 'liv-card liv-card-' + f.severity }, el('div', { class: 'liv-card-title' }, el('span', { class: 'liv-card-mark', text: f.severity === 'p0' ? '!' : '·' }), el('b', { text: f.title })), f.detail ? el('div', { class: 'liv-card-detail', text: f.detail }) : null, acts);
 }
 // 카드에서 맡긴 일은 **대화로 이어진다** — 무엇을 시켰는지 사람이 보고, 리브의 진행도 같은 자리에서 본다.
-async function livDelegate(btn, f) {
-    const id = livSessionId;
-    if (!id) {
-        livToast('리브 세션이 아직 준비되지 않았습니다. 잠시 후 다시 눌러 주세요.');
-        return;
-    }
+function livDelegate(btn, f) {
+    // 카드에서 맡긴 일은 **대화로 이어진다** — 무엇을 시켰는지 사람이 보고, 진행도 같은 자리에서 본다.
+    //  종전엔 터미널 세션에 프롬프트를 주입했다. 표면이 바뀌었으니 들어가는 문도 대화창 하나다.
+    livChatAsk(f.prompt);
     btn.disabled = true;
-    const was = btn.textContent;
-    btn.textContent = '맡기는 중…';
-    try {
-        await livSendPrompt(id, f.prompt);
-        btn.textContent = '맡겼습니다';
-        btn.closest('.liv-card')?.classList.add('liv-card-done');
-    }
-    catch (e) {
-        btn.disabled = false;
-        btn.textContent = was ?? '리브에게 맡기기';
-        livToast(String(e?.message ?? e));
-    }
+    btn.textContent = '맡겼습니다';
+    btn.closest('.liv-card')?.classList.add('liv-card-done');
 }
 function livToast(msg) {
     const t = el('div', { class: 'liv-toast', text: msg });
     document.body.append(t);
     setTimeout(() => t.remove(), 4000);
-}
-// 지금 열려 있는 리브 세션 id — 카드 버튼이 이걸 쓴다(세션이 뜨기 전엔 null).
-let livSessionId = null;
-async function bootLivSession(host, cards) {
-    const bootAt = Date.now() - 15000; // 시계 오차·왕복 지연 여유
-    let s = null;
-    let fresh = false;
-    try {
-        s = await findLivSession();
-        if (!s) {
-            s = await createLivSession();
-            fresh = true;
-        }
-    }
-    catch (e) {
-        host.replaceChildren(el('div', { class: 'liv-chat-err' }, el('div', { text: '리브 세션을 열지 못했습니다.' }), el('div', { class: 'liv-chat-err-detail', text: String(e?.message ?? e) })));
-        void cards; // 카드는 그대로 둔다 — 세션이 없어도 무엇이 문제인지는 보인다
-        return;
-    }
-    livSessionId = s.id;
-    // 터미널은 iframe 으로 붙인다(#745 그리드 뷰어와 같은 문법) — 터미널 화면 코드를 두 벌 만들지 않는다.
-    // #1169 appUrl — 프리뷰(/preview/<id>/…) 아래에서 루트 절대경로를 쓰면 오리진 루트(라이브)로 새어 프리뷰가 풀린다.
-    const url = appUrl('/ui/terminal.html?session=') + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(LIV_LABEL)
-        + (s.node?.id ? '&node=' + encodeURIComponent(s.node.id) : '');
-    host.replaceChildren(el('iframe', { class: 'liv-term', src: url, title: '리브와의 대화' }));
-    // **열면 바로 진단**(대표 결정) — 방금 만든 세션에만 건다. 이미 있던 세션에 또 걸면 하던 말을 끊는다.
-    if (fresh)
-        void sendWhenReady(s.id, LIV_OPENING, bootAt);
-}
-/**
- * 첫 말을 **넣고, 도달했는지 확인하고, 안 됐으면 다시** 넣는다.
- *
- * ⚠ 왜 상태를 안 믿나(실측 2번): ① 고정 지연(4초)은 하네스가 아직 못 받는 시점에 넣어 **조용히 유실**됐다.
- *  ② 그래서 `agentState` 가 idle/waiting 이 되길 기다리게 고쳤더니 **5분이 지나도 `busy` 였다** — 화면은
- *  빈 입력창으로 사람을 기다리는데 서버 판정은 busy 다. 그 값은 "입력을 받을 준비"의 지표가 아니다.
- *  → 판정 대신 **결과**를 본다: 넣고 나서 그 세션의 프롬프트 이력이 늘었으면 도달한 것이다.
- *
- * 못 넣어도 화면은 살아 있다 — 사람이 직접 물으면 된다(조용히 포기하되 막지는 않는다).
- */
-async function sendWhenReady(sessionId, text, since) {
-    // ⚠ `/prompts` 는 **세션이 아니라 그 작업 폴더의 모든 대화**를 모은다(cwd 기준 트랜스크립트 스캔).
-    //  리브 세션은 폴더가 고정(`~/box/<나>/liv`)이라 **옛 대화의 질문이 그대로 잡힌다** — 그걸 '이미 대화가
-    //  있다'로 읽으면 새 세션에 여는 말을 영영 안 넣는다(실측: pane 은 비었는데 이력은 3건이었다).
-    //  그래서 **이 세션이 뜬 뒤의 것만** 센다.
-    const promptCount = async () => {
-        const p = await api('/api/ui/terminal/sessions/' + encodeURIComponent(sessionId) + '/prompts')
-            .catch(() => null);
-        if (!p || !Array.isArray(p.prompts))
-            return null;
-        return p.prompts.filter((x) => {
-            const t = Date.parse(String(x?.ts ?? ''));
-            return Number.isFinite(t) && t >= since;
-        }).length;
-    };
-    for (let i = 0; i < 4; i++) {
-        await new Promise((r) => setTimeout(r, i === 0 ? 5000 : 10000)); // 하네스 기동 여유
-        if (livSessionId !== sessionId)
-            return; // 그 사이 화면을 떠났거나 다른 세션으로 바뀌었다
-        // 이미 대화가 있으면 끼어들지 않는다 — 하던 말을 끊지 않는 게 규칙이다(사람이 먼저 칠 수도 있다).
-        const before = await promptCount();
-        if (before === null)
-            continue; // 조회 실패 — 다음 주기에 다시
-        if (before > 0)
-            return;
-        await livSendPrompt(sessionId, text).catch(() => { });
-        // 도달 확인은 **폴링**이다. 트랜스크립트 반영이 늦는데 한 번만 보고 재주입하면 같은 말이 여러 번
-        //  들어간다(실측: 8초 뒤 한 번만 보고 재시도했더니 3회 주입됐다). 도달하면 그 즉시 끝낸다.
-        for (let k = 0; k < 10; k++) {
-            await new Promise((r) => setTimeout(r, 2500));
-            if (livSessionId !== sessionId)
-                return;
-            const after = await promptCount();
-            if (after !== null && after > 0)
-                return;
-        }
-    }
 }
