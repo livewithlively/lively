@@ -6,6 +6,7 @@
 //  뮤터블 상태(alertPolicy · analyzed · selected · wsList)는 전부 storageEditor 지역이라 모듈 전역이 없다.
 import { api, busy, cardHead, el, relTime, secretInput, secretRow, toast, uiText } from './core.js';
 import { fmtBytes, fmtElapsed, sectionHead, segTabs } from './admin-widgets.js';
+import { planReclaimBatches, wtRemovable } from './admin-storage-plan.js';
 
 function storageEditor(detail, data) {
   const canEdit = !!data.canEdit;
@@ -533,6 +534,10 @@ function storageEditor(detail, data) {
   //  그중 12개는 지금도 살아있는 프로젝트다 — id 로 키를 잡으면 이것들이 화면에서 통째로 사라진다.
   const analyzed = new Map<string, any>(); // folder → 분석 결과(dry-run). 정리는 여기 담긴 것만 대상으로 한다.
   const selected = new Set<string>();
+  // 워크트리까지 제거할 폴더 — 파생물 선택(selected)과 **별도**다.
+  //  ⚠ 절대 자동으로 켜지 않는다(전체 분석에서도). 워크트리는 보존 자산이고, 제거는 사람의 명시 승인으로만 한다.
+  //   서버는 remove_worktree=true 를 받아도 푸시 완료·클린·세션 없음을 실행 직전에 다시 확인하고 아니면 남긴다.
+  const wtSelected = new Set<string>();
   let wsList: any = null;
 
   const ANALYZE_CHUNK = 10; // 요청당 프로젝트 수 — du 비용이 크므로 작게. 서버 상한은 40.
@@ -550,7 +555,7 @@ function storageEditor(detail, data) {
 
   async function loadWorkspace() {
     wsRegion.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('워크스페이스 계산 중… (프로젝트가 많으면 몇 초 걸립니다)')));
-    analyzed.clear(); selected.clear();
+    analyzed.clear(); selected.clear(); wtSelected.clear();
     try { wsList = await api('/api/ui/org/workspace'); }
     catch (e: any) { wsRegion.replaceChildren(el('p', { class: 'admin-hint', text: '불러오지 못했습니다: ' + e.message })); return; }
     renderWorkspace();
@@ -585,18 +590,57 @@ function storageEditor(detail, data) {
     });
 
     // ── 상단: 선택 정리 ──
-    const selFolders = [...selected].filter((f) => (analyzed.get(f)?.reclaimable_bytes ?? 0) > 0);
-    const selBytes = selFolders.reduce((s, f) => s + (analyzed.get(f)?.reclaimable_bytes ?? 0), 0);
-    const reclaimSelBtn = el('button', { class: 'btn btn-primary btn-sm', text: `선택 정리 (${selFolders.length}개 · ${fmtBytes(selBytes)})` });
-    reclaimSelBtn.disabled = !canEdit || !selFolders.length;
+    //  두 갈래를 한 버튼으로 처리한다 — 파생물만 지울 폴더와, 워크트리까지 지울 폴더.
+    //  ⚠ remove_worktree 는 **요청 단위** 플래그라 한 배치에 섞을 수 없다 → 두 번 나눠 부른다.
+    const { selFolders, wtFolders, actFolders, derivedOnly, selBytes } =
+      planReclaimBatches(selected, wtSelected, analyzed);
+
+    const btnLabel = wtFolders.length
+      ? `선택 정리 (${actFolders.length}개 · 파생물 ${fmtBytes(selBytes)} + 워크트리 ${wtFolders.length}개)`
+      : `선택 정리 (${selFolders.length}개 · ${fmtBytes(selBytes)})`;
+    const reclaimSelBtn = el('button', { class: 'btn btn-primary btn-sm', text: btnLabel });
+    reclaimSelBtn.disabled = !canEdit || !actFolders.length;
     reclaimSelBtn.addEventListener('click', async () => {
-      if (!confirm(`${selFolders.length}개 프로젝트에서 파생물 ${fmtBytes(selBytes)} 를 지웁니다.\n\nnode_modules·빌드 산출물 등 다시 만들 수 있는 것만 지웁니다. 소스·커밋·.env·data/ 는 건드리지 않고, 워크트리도 유지합니다.\n\n계속할까요?`)) return;
+      const wtNames = wtFolders.map((f) => analyzed.get(f)?.name || f);
+      const msg = [
+        `${actFolders.length}개 프로젝트에서 파생물 ${fmtBytes(selBytes)} 를 지웁니다.`,
+        '',
+        'node_modules·빌드 산출물 등 다시 만들 수 있는 것만 지웁니다. 소스·커밋·.env·data/ 는 건드리지 않습니다.',
+        ...(wtFolders.length ? [
+          '',
+          `⚠ 아래 ${wtFolders.length}개는 워크트리(체크아웃 폴더)까지 지웁니다:`,
+          wtNames.map((n) => `  · ${n}`).join('\n'),
+          '',
+          '커밋은 원격에 다 올라가 있어 provision 으로 되살릴 수 있습니다. 원격에 없는 커밋이나 미커밋 변경이',
+          '남아 있으면 서버가 그 폴더의 워크트리를 남깁니다.',
+        ] : ['', '워크트리는 유지합니다.']),
+        '',
+        '계속할까요?',
+      ].join('\n');
+      if (!confirm(msg)) return;
       reclaimSelBtn.disabled = true;
       try {
-        const res = await runBatch('/api/ui/org/workspace/reclaim', selFolders, { remove_worktree: false },
-          (done) => { progress.textContent = `  정리 중… ${done}/${selFolders.length}`; });
+        const res: any[] = [];
+        let done = 0;
+        const tick = () => { progress.textContent = `  정리 중… ${done}/${actFolders.length}`; };
+        // ① 파생물만
+        if (derivedOnly.length) {
+          res.push(...await runBatch('/api/ui/org/workspace/reclaim', derivedOnly, { remove_worktree: false },
+            (n) => { done = n; tick(); }));
+        }
+        // ② 워크트리까지 — 서버가 실행 직전에 재검사하고, 거부되면 사유를 담아 돌려준다.
+        if (wtFolders.length) {
+          const base = derivedOnly.length;
+          res.push(...await runBatch('/api/ui/org/workspace/reclaim', wtFolders, { remove_worktree: true },
+            (n) => { done = base + n; tick(); }));
+        }
         const freed = res.reduce((s, pr) => s + (pr.freed_bytes || 0), 0);
-        toast(`정리 완료 — ${fmtBytes(freed)} 확보 (${res.length}개 프로젝트)`);
+        const applied = res.flatMap((pr) => (pr.results || []).map((r) => r.applied)).filter(Boolean);
+        const wtDone = applied.filter((a) => a.worktreeRemoved).length;
+        // 옵트인했는데 서버가 남긴 것 — 조용히 넘기지 않는다(왜 안 지워졌는지가 사용자가 알아야 할 정보다).
+        const wtKept = applied.map((a) => a.worktreeSkippedReason).filter(Boolean);
+        toast(`정리 완료 — ${fmtBytes(freed)} 확보 (${res.length}개 프로젝트)${wtDone ? ` · 워크트리 ${wtDone}개 제거` : ''}`);
+        if (wtKept.length) toast(`워크트리 ${wtKept.length}개는 남았습니다 — ${wtKept[0]}`, true);
         loadWorkspace();
       } catch (e: any) { toast(e.message, true); reclaimSelBtn.disabled = false; progress.textContent = ''; }
     });
@@ -640,13 +684,31 @@ function storageEditor(detail, data) {
           renderWorkspace(); // 상단 [선택 정리] 합계를 다시 그린다
         });
         right.unshift(chk);
+
+        // 워크트리 옵트인 — **제거 가능으로 판정된 폴더에만** 내준다. 기본은 꺼짐(자동 선택 없음).
+        if (wtRemovable(pr)) {
+          const wtChk = el('input', { type: 'checkbox', title: '워크트리(체크아웃 폴더)까지 제거' }) as HTMLInputElement;
+          wtChk.checked = wtSelected.has(p.folder);
+          wtChk.disabled = !canEdit;
+          wtChk.addEventListener('change', () => {
+            if (wtChk.checked) wtSelected.add(p.folder); else wtSelected.delete(p.folder);
+            renderWorkspace(); // 상단 버튼 라벨·합계를 다시 그린다
+          });
+          right.unshift(el('label', { class: 'ws-wt-opt', title: '워크트리(체크아웃 폴더)까지 제거 — 푸시 완료·변경 없음으로 확인된 것만' },
+            wtChk, el('span', { text: '워크트리' })));
+        }
+
         head = el('span', { class: 'storage-calc', text: `  ${fmtBytes(p.bytes ?? 0)} · 정리 가능 ${fmtBytes(pr.reclaimable_bytes || 0)}` });
 
         for (const r of pr.results || []) {
           const derived = r.derived || [];
           detail.append(el('div', { class: 'ws-plan' },
             el('p', { class: 'storage-calc', text: `${derived.map((d) => d.path + ' ' + fmtBytes(d.bytes)).join(' · ') || '정리할 파생물 없음'}` }),
-            el('p', { class: 'storage-calc', text: r.worktree_removable ? '워크트리: 제거 가능(푸시 완료·변경 없음) — 여기서는 유지합니다' : `워크트리: 유지 — ${r.worktree_reason}` })));
+            el('p', { class: 'storage-calc', text: r.worktree_removable
+              ? (wtSelected.has(p.folder)
+                ? '워크트리: 제거합니다(푸시 완료·변경 없음) — provision 으로 되살릴 수 있습니다'
+                : '워크트리: 제거 가능(푸시 완료·변경 없음) — 지우려면 [워크트리] 를 켜세요')
+              : `워크트리: 유지 — ${r.worktree_reason}` })));
         }
       }
 
