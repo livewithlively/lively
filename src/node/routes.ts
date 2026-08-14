@@ -8,20 +8,17 @@
 import type express from "express";
 import { spawn } from "node:child_process";
 import path from "node:path";
-import { existsSync, readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { createHash } from "node:crypto";
 import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
-import { createNode, deleteNode, getNode, listNodes, rotateNodeToken, setNodeEnabled, setNodeShared, type OrgNode } from "./store.js";
+import { authNodeToken, createNode, deleteNode, getNode, listNodes, rotateNodeToken, setNodeEnabled, setNodeShared, type OrgNode } from "./store.js";
 import { nodeOpenTo } from "./node-access.js";
 import { liveNodes } from "./registry.js";
 import { nodeHarnesses, agentIsLatest } from "./protocol.js";
+import { AGENT_BUNDLE, AGENT_BUNDLE_ROOT, servedAgentVersion, agentBundleExists } from "./agent-bundle.js";
 import { logger } from "../log.js";
 
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."); // dist/node/ → 리포 루트
 
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
@@ -38,21 +35,9 @@ function installHint(id: string): string {
   return `lively node --daemon --id ${id}`;
 }
 
-// 게이트웨이가 **지금 서빙하는** 에이전트 번들의 지문(#905 C4) — 노드가 hello 로 보내는 agentVer 와 같은 계산.
-//  키트 kit-version 과 같은 모델("서빙하는 바이트가 곧 버전"). 노드가 그 값을 그대로 보내면 최신, 다르면 구버전이다.
-//  캐시: 이 파일은 배포 때만 바뀌는데 노드 목록은 관리탭이 자주 조회한다.
-const AGENT_BUNDLE = path.join(REPO_ROOT, "dist", "node-agent", "agent.mjs");
-const AGENT_VER_TTL_MS = 60_000;
-let servedAgentVer: { v: string | null; at: number } | null = null;
-function servedAgentVersion(): string | null {
-  if (servedAgentVer && Date.now() - servedAgentVer.at < AGENT_VER_TTL_MS) return servedAgentVer.v;
-  let v: string | null = null;
-  try { v = createHash("sha256").update(readFileSync(AGENT_BUNDLE)).digest("hex").slice(0, 12); }
-  catch { v = null; }   // 번들 미빌드 → 모름. 모르면 최신 여부를 **판정하지 않는다**(아래 agent_latest=null).
-  servedAgentVer = { v, at: Date.now() };
-  return v;
-}
+// 번들 위치·지문은 node/agent-bundle.ts 단일 출처(#1713 — registry 도 같은 값을 써야 노드에게 알려줄 수 있다).
 
+// 화면이 쓰는 노드 뷰 — DB 행 + 라이브 상태 + **판정**(최신인가·무엇을 띄울 수 있나).
 //  agent_latest 3상(true/false/null)의 근거는 protocol.agentIsLatest 참조 — 거기서 검증한다.
 interface NodeView extends Omit<OrgNode, "token_hash"> {
   online: boolean; sessions: number; agent_latest: boolean | null; agent_ver_latest: string | null;
@@ -167,19 +152,40 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
     res.json(r);
   }));
 
+  // 자가 갱신용 번들 배달(#1713) — **노드 토큰**으로 받는다. 멤버 인증 경로(/api/ui/node-agent)는 사람이 설치할
+  //  때 쓰고, 이건 이미 붙어 있는 노드가 스스로 최신 바이트를 가져갈 때 쓴다. 노드는 멤버 토큰이 없다.
+  //  ⚠ 실측(#1713): launchd/systemd 는 `lively node` CLI 가 아니라 받아 둔 agent.mjs 를 **직접** 실행한다 →
+  //   재시작해도 pull 이 없어 노드가 영원히 옛 번들로 돈다(라이브 4대 전부). 그래서 이 경로가 필요하다.
+  //  내용은 코드일 뿐 비밀이 없다(멤버 경로와 같은 tar) — 노드 토큰 보유자에게 주는 데 위험이 없다.
+  app.get("/node/agent-bundle", wrap(async (req, res) => {
+    const raw = String(req.headers.authorization ?? "");
+    const tok = raw.startsWith("Bearer ") ? raw.slice(7).trim() : "";
+    const node = tok ? await authNodeToken(tok) : null;
+    if (!node) throw new HttpError(403, "노드 토큰이 유효하지 않습니다");
+    if (!agentBundleExists()) throw new HttpError(503, "노드 에이전트 번들이 아직 빌드되지 않았습니다(npm run build).");
+    res.setHeader("Content-Type", "application/gzip");
+    res.setHeader("X-Agent-Ver", servedAgentVersion() ?? "");   // 노드가 받은 바이트를 대조할 기준
+    const tar = spawn("tar", ["-czf", "-",
+      "-C", path.dirname(AGENT_BUNDLE), path.basename(AGENT_BUNDLE),
+      "-C", AGENT_BUNDLE_ROOT, "node_modules/node-pty",
+    ], { stdio: ["ignore", "pipe", "ignore"] });
+    tar.stdout.pipe(res);
+    tar.on("error", () => { if (!res.headersSent) res.status(500).end(); });
+  }));
+
   // 노드 에이전트 번들 배달(#869) — `lively node` 가 받아 실행. agent.mjs(단일 esbuild 번들) + node-pty(네이티브,
   //  external 이라 실행환경에 필요). 인증된 멤버면 받는다(코드일 뿐 비밀 없음 — /install 과 동일 성격). tar.gz 스트림.
   app.get("/api/ui/node-agent", auth, wrap(async (req, res) => {
     if (!idOf(userOf(req))) throw new HttpError(403, "사용자 신원이 없습니다");
     // 버전 판정(servedAgentVersion)과 **같은 파일**이어야 한다 — 서빙본과 해시 대상이 갈리면 판정이 거짓이 된다.
-    if (!existsSync(AGENT_BUNDLE)) throw new HttpError(503, "노드 에이전트 번들이 아직 빌드되지 않았습니다(npm run build).");
+    if (!agentBundleExists()) throw new HttpError(503, "노드 에이전트 번들이 아직 빌드되지 않았습니다(npm run build).");
     res.setHeader("Content-Type", "application/gzip");
     res.setHeader("Content-Disposition", 'attachment; filename="node-agent.tgz"');
     // dist/node-agent/agent.mjs → agent.mjs · node_modules/node-pty → node_modules/node-pty (전 플랫폼 prebuild 동봉)
     const tar = spawn("tar", [
       "-czf", "-",
       "-C", path.dirname(AGENT_BUNDLE), path.basename(AGENT_BUNDLE),
-      "-C", REPO_ROOT, "node_modules/node-pty",
+      "-C", AGENT_BUNDLE_ROOT, "node_modules/node-pty",
     ], { stdio: ["ignore", "pipe", "ignore"] });
     tar.stdout.pipe(res);
     tar.on("error", () => { if (!res.headersSent) res.status(500).end(); });

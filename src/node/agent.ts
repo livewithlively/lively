@@ -11,6 +11,7 @@ import path from "node:path";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import crypto from "node:crypto";
+import { spawnSync } from "node:child_process";   // #1713 자가 갱신 — 받은 tar.gz 해제
 import {
   listSessionsRaw, createSession, killSession, editSession, applyValidatedInvites,
   sessionGone, getSessionLabel, killEmptyTmuxServer, sessionDir, SHARED_ROOT,
@@ -44,6 +45,51 @@ const AGENT_VER: string | null = (() => {
     return crypto.createHash("sha256").update(fs.readFileSync(self)).digest("hex").slice(0, 12);
   } catch { return null; }
 })();
+// ── 자가 갱신(#1713) ─────────────────────────────────────────────────────────────────
+// 왜: 런처(launchd KeepAlive · systemd Restart)는 `lively node` CLI 가 아니라 **받아 둔 agent.mjs 를 직접**
+//  실행한다 → 재시작해도 번들 pull 이 일어나지 않아 노드가 영원히 옛 바이트로 돈다. 실측(2026-08-14):
+//  라이브 노드 4대가 전부 옛 번들이라, 게이트웨이가 지원하는 하네스(antigravity)를 **그 PC 에서만** 못 골랐다
+//  (세션 생성이 502 "허용되지 않은 하네스"). 사람이 눈치채기도 어렵다 — 노드는 멀쩡히 '연결됨'이니까.
+// 그래서 게이트웨이가 hello 응답(helloOk)으로 서빙 지문을 알려주고, 다르면 여기서 스스로 받아 교체한 뒤
+//  종료한다. 런처가 즉시 되살리므로 다음 프로세스는 새 바이트로 뜬다(tmux 세션은 별도 프로세스라 보존된다).
+// 안전장치 — 자가 갱신은 잘못 만들면 재시작 스톰이 된다:
+//  ① 지문이 같거나 모르면 아무것도 안 한다  ② 받은 바이트를 **해시로 검증**하고 다르면 교체하지 않는다
+//  ③ 시도 쿨다운 10분(플래그 mtime) — 서버가 계속 다른 지문을 줘도 재시작이 분당 반복되지 않는다
+//  ④ 교체는 임시파일 → rename(원자적). node_modules/node-pty 는 **건드리지 않는다**(네이티브 로드 중 교체 위험).
+const SELF_UPDATE_COOLDOWN_MS = 10 * 60 * 1000;
+let selfUpdating = false;
+async function maybeSelfUpdate(latest: string | null | undefined): Promise<void> {
+  if (selfUpdating || !latest || !AGENT_VER || latest === AGENT_VER) return;
+  const self = process.argv[1];
+  if (!self) return;
+  const tryFlag = `${self}.update-try`;
+  try {
+    const st = fs.statSync(tryFlag);
+    if (Date.now() - st.mtimeMs < SELF_UPDATE_COOLDOWN_MS) return;   // 최근에 시도했다 — 스톰 방지
+  } catch { /* 첫 시도 */ }
+  selfUpdating = true;
+  try {
+    fs.writeFileSync(tryFlag, "");
+    logger.info({ have: AGENT_VER, want: latest }, "노드 프로그램이 낡았다 — 새 번들을 받는다");
+    const res = await fetch(`${GW_URL.replace(/\/$/, "")}/node/agent-bundle`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+    if (!res.ok) { logger.warn({ status: res.status }, "번들 다운로드 실패 — 다음 연결에 다시 시도"); return; }
+    const tgz = Buffer.from(await res.arrayBuffer());
+    const tmpDir = fs.mkdtempSync(path.join(path.dirname(self), ".update-"));
+    try {
+      const tar = spawnSync("tar", ["-xzf", "-", "-C", tmpDir], { input: tgz });
+      if (tar.status !== 0) { logger.warn({ status: tar.status }, "번들 해제 실패 — 교체하지 않는다"); return; }
+      const got = path.join(tmpDir, path.basename(self));
+      const ver = crypto.createHash("sha256").update(fs.readFileSync(got)).digest("hex").slice(0, 12);
+      if (ver !== latest) { logger.warn({ got: ver, want: latest }, "받은 번들 지문이 다르다 — 교체하지 않는다"); return; }
+      fs.renameSync(got, self);   // 같은 파일시스템 → 원자적
+      logger.info({ ver }, "노드 프로그램 갱신 완료 — 다시 시작한다(런처가 되살린다)");
+      setTimeout(() => process.exit(0), 300);   // 로그가 나갈 틈만 주고 종료
+    } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+  } catch (e) {
+    logger.warn({ err: (e as Error)?.message }, "자가 갱신 실패 — 다음 연결에 다시 시도");
+  } finally { selfUpdating = false; }
+}
+
 if (!GW_URL || !TOKEN) {
   console.error("LIVELY_GATEWAY_URL / LIVELY_NODE_TOKEN 이 필요합니다");
   process.exit(2);
@@ -300,6 +346,8 @@ function connect(): void {
     if (isBinary) { decodeChanFrame(raw as Buffer); return; } // 현재 게이트웨이→노드 바이너리는 없음(제어는 ctl)
     const m = parseMsg<GwToNodeMsg>(raw);
     if (!m) return;
+    // #1713 — 게이트웨이가 알려준 서빙 지문. 내가 낡았으면 스스로 받아 교체하고 종료한다(런처가 되살린다).
+    if (m.t === "helloOk") { void maybeSelfUpdate(m.agentVerLatest); return; }
     if (m.t === "req") {
       const req = m as ReqMsg;
       void runOp(req.op, req.args ?? {})
