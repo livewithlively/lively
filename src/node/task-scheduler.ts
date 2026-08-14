@@ -9,7 +9,7 @@
 //     ⚠ 종전 규칙은 `리스 있으면 아무 노드나` 였다 — 리스 하나로 남의 노트북이 열렸다(#1540 이 닫은 구멍).
 //  단일 프로세스 전제(기존 스케줄러와 동일) — LIVELY_NO_SCHEDULER=1 이면 기동 안 함.
 import { logger } from "../log.js";
-import { SHARED_ROOT } from "../terminal/terminal-sessions.js";
+import { sharedRoot } from "../terminal/terminal-sessions.js";
 import { effectiveDelegatePolicy, type DelegatePolicy } from "../org/policies/delegate-policy.js";
 import { getMemberSecret, memberOwner } from "../org/credentials/member-secret-store.js";
 import { getRuntimeConfig } from "../org/store.js";
@@ -156,7 +156,7 @@ async function candidatesFor(t: DelegateTask, counts: Map<string, number>, extra
     if (centralDocker === null) centralDocker = await detectDocker();
     nodes.push({
       id: CENTRAL_NODE_ID, kind: "central", central: true, hasDocker: centralDocker,
-      res: await sampleResources(SHARED_ROOT.base).catch(() => null), capacity: CAP_CENTRAL, running: running(CENTRAL_NODE_ID),
+      res: await sampleResources(sharedRoot().base).catch(() => null), capacity: CAP_CENTRAL, running: running(CENTRAL_NODE_ID),
     });
   }
   const rows = new Map((await listNodes().catch(() => [])).map((n) => [n.id, n]));

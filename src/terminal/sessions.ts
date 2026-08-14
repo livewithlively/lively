@@ -26,7 +26,7 @@ import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.
 import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
 import { memberMkdir } from "./terminal-member-fs.js";
 import { materializeMemberGit, ensureGitSafeDirectory } from "../org/credentials/git-credential-materialize.js";
-import { ROOTS, SHARED_ROOT, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput } from "./catalog.js";
+import { roots, sharedRoot, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput } from "./catalog.js";
 import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson } from "./tmux-exec.js";
 import {
   sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
@@ -267,7 +267,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     const sp = await effectiveStoragePolicy(loadStoragePolicy).catch(() => null);
     await assertDiskWritable(
       "새 세션",
-      ROOTS.map((r) => r.base),
+      roots().map((r) => r.base),
       sp ? { warnPct: sp.disk_warn_pct, criticalPct: sp.disk_critical_pct } : undefined,
     );
   }
@@ -365,7 +365,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  관리탭에서 끌 수 있다(저장소·로그 → 공유 빌드 캐시). 꺼져 있으면 빈 객체 = 아무것도 안 바꾼다(무회귀).
   try {
     const sp = await effectiveStoragePolicy(loadStoragePolicy);
-    const cacheEnv = sessionCacheEnv(SHARED_ROOT.base, {
+    const cacheEnv = sessionCacheEnv(sharedRoot().base, {
       enabled: sp.shared_cache_enabled,
       relocateHome: sp.shared_cache_relocate_home,
     });

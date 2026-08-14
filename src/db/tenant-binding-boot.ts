@@ -19,6 +19,7 @@
 
 import { installTenantResolver } from "./client.js";
 import { currentTenant } from "../org/tenant-context.js";
+import { installTenantSlugResolver } from "../terminal/catalog.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -48,6 +49,11 @@ export function resolveBindingMode(env: NodeJS.ProcessEnv = process.env): { mode
 export function installTenantBinding(env: NodeJS.ProcessEnv = process.env): string {
   const r = resolveBindingMode(env);
   if (r.mode === "off") return "테넌트 바인딩: 꺼짐(단일 테넌트)";
+
+  // ★ DB 뿐 아니라 **파일 루트**도 테넌트를 따라야 한다. 하나만 바인딩하면 "DB 는 내 것, 파일은
+  //  남의 것" 이라는 반쪽 상태가 되고, 그건 파일 탐색기에서 곧바로 남의 파일로 드러난다.
+  //  카탈로그는 leaf 라 컨텍스트를 import 할 수 없어 여기서 꽂는다(catalog.roots 머리말 참조).
+  installTenantSlugResolver(() => currentTenant()?.slug ?? null);
   if (r.mode === "fixed") {
     const id = r.tenantId!;
     installTenantResolver(() => id);

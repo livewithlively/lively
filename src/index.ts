@@ -21,7 +21,7 @@ import { isProjectMember as v6IsProjectMember } from "./v6/project-session-store
 import { listProjectActivities } from "./v6/project-activity-store.js";
 import { createProjectFolder } from "./project/project-fs.js";
 import { stateRoot } from "./ops/state-dir.js";
-import { ROOTS } from "./terminal/terminal-sessions.js";
+import { roots } from "./terminal/terminal-sessions.js";
 import { readyReport } from "./ops/health.js";
 import { buildInfo } from "./build-info.js";
 import { effectiveStoragePolicy } from "./org/policies/storage-policy.js";
@@ -85,7 +85,7 @@ app.get("/readyz", async (_req, res) => {
     const policy = await effectiveStoragePolicy(loadStoragePolicy);
     const report = await readyReport({
       pool: itemsPool,
-      paths: [stateRoot(), ...ROOTS.map((r) => r.base)],
+      paths: [stateRoot(), ...roots().map((r) => r.base)],
       thresholds: { warnPct: policy.disk_warn_pct, criticalPct: policy.disk_critical_pct },
     });
     // 배포 신원(#1289) — "지금 도는 게 몇 버전인가"를 밖에서 한 번에. 없으면 null 로 정직하게 낸다.

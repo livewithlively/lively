@@ -12,7 +12,7 @@ import { getMember, mintToken, listTokens, revokeToken } from "../org/store.js";
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 import { DANGEROUS_SCOPES, isScope } from "../auth/scopes.js";
 import { resolveMemberOsUser, wrapAsMember, osUsername, isolationInfraReady, osUserExists } from "./terminal-isolation.js";
-import { ROOTS, HARNESSES } from "./catalog.js";
+import { roots, HARNESSES } from "./catalog.js";
 import { getOpt } from "./tmux-exec.js";
 import { loadDesiredOne } from "../sessions/session-desired.js";
 
@@ -37,7 +37,7 @@ const SHARED_ISOLATED_BASE = process.env.LIVELY_SHARED_DIR || "/srv/lively/share
 //  격리+프로비저닝된 멤버면 멤버-접근가능 베이스로(세션 spawn 과 동일 게이트 = resolveMemberOsUser),
 //  아니면 게이트웨이 홈 기준(종전, perUser=base/<userSlug>). 세션 생성·생성폼 폴더 탐색이 공유한다.
 export async function resolveRootPath(user: LivelyUser, rootKey: string, subpath: string, osUser?: string | null): Promise<{ base: string; abs: string }> {
-  const root = ROOTS.find((r) => r.key === rootKey);
+  const root = roots().find((r) => r.key === rootKey);
   if (!root) throw new HttpError(400, "허용되지 않은 루트입니다");
   // osUser: 호출자가 격리 여부를 강제한다(프로젝트 공동 세션은 null 로 격리 제외 — cwd 가 게이트웨이 소유라). undefined 면 여기서 파생.
   const iso = osUser === undefined ? await resolveMemberOsUser(userSlug(user)) : osUser;
@@ -86,7 +86,7 @@ export function pickRootCoord(bases: Array<{ root: string; base: string }>, abs:
 //  **파일 목록 응답 자체**가 깨진다(공유 링크가 없어도 목록은 떠야 한다).
 export async function rootRelOf(user: LivelyUser, abs: string): Promise<{ root: string; rel: string } | null> {
   const bases: Array<{ root: string; base: string }> = [];
-  for (const r of ROOTS) {
+  for (const r of roots()) {
     try { bases.push({ root: r.key, base: (await resolveRootPath(user, r.key, "")).base }); } catch { /* 이 루트는 해소 불가 */ }
   }
   return pickRootCoord(bases, abs);
