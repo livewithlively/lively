@@ -187,6 +187,9 @@ export interface LivTurnRef {
   id: string;      // 턴 id(그 턴의 작업 폴더 이름)
   text: string;    // 사람이 한 말 — 이건 어디에도 안 남아서 여기 담는다(리브의 말은 진행 파일에 있다)
   at: string;
+  /** 그 턴이 도는 세션 id. **멈추려면 이게 있어야 한다** — 없으면 사람은 시작만 하고 못 멈춘다.
+   *  본인 프로필에서만 나오므로 남의 턴은 구조상 못 건드린다. */
+  sid?: string;
 }
 
 export interface LivChat {

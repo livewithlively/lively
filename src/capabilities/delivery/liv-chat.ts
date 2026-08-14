@@ -66,7 +66,7 @@ export const livChatCapabilities: Capability[] = [
 
       const turnId = newTurnId();
       const { spawnTaskSession } = await import("../../node/tasks.js");
-      await spawnTaskSession({
+      const spawned = await spawnTaskSession({
         user, taskId: turnId, rootKey: "personal", subpath: "liv",
         prompt: text, harness: "claude",
         extraFlags: livTurnArgs({ sessionId, resume }),
@@ -77,7 +77,7 @@ export const livChatCapabilities: Capability[] = [
       const now = new Date().toISOString();
       if (!resume) await setLivChat(userId, { session_id: sessionId, started_at: now, turns: [] });
       // 되그릴 수 있게 턴을 잇는다. **사람이 한 말만** 담는다 — 리브의 말은 그 턴의 진행 파일이 정본이다.
-      await appendLivTurn(userId, { id: turnId, text, at: now });
+      await appendLivTurn(userId, { id: turnId, text, at: now, sid: spawned.sessionId });
       return { turn_id: turnId, resumed: resume };
     },
     false,  // mcp:false — 이건 **화면이 리브를 부르는 문**이다. 리브가 자기를 다시 부르면 턴이 겹쳐 돈다.
@@ -106,6 +106,24 @@ export const livChatCapabilities: Capability[] = [
       id: z.string().describe("턴 id(me_liv_turn 이 준 값)"),
       from: z.number().optional().describe("이어 읽기 시작할 바이트 오프셋(기본 0)"),
     }),
+
+  restRead("me_liv_turn_stop", "하던 것 멈추기",
+    "돌고 있는 턴을 멈춘다. 사람이 시작만 할 수 있고 멈추지는 못하면 그건 대화가 아니다 — " +
+    "리브가 엉뚱한 길로 갔거나 오래 걸릴 때 끊을 수 있어야 한다. 이미 끝난 턴이면 아무 일도 안 한다.",
+    [{ method: "POST", paths: ["/api/ui/me/liv/turn/:id/stop"], parse: (req) => ({ id: String(req.params?.id ?? "") }) }],
+    async (input: { id: string }, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      if (!TURN_ID_RE.test(input.id)) throw new HttpError(400, "턴 id 형식이 아닙니다");
+      // 세션 id 는 **본인 프로필에서만** 꺼낸다 — 남의 턴을 멈추는 길이 구조적으로 없다.
+      const { getLivProfile } = await import("../../org/store.js");
+      const turn = ((await getLivProfile(userId)).chat?.turns ?? []).find((t) => t.id === input.id);
+      if (!turn?.sid) return { stopped: false, reason: "그 턴의 세션을 찾지 못했습니다" };
+      const { killTaskSession } = await import("../../node/tasks.js");
+      await killTaskSession(turn.sid).catch(() => { /* 이미 끝났다 — 멈추라는 뜻은 이미 이뤄졌다 */ });
+      return { stopped: true };
+    },
+    false, { id: z.string().describe("멈출 턴 id") }),
 
   restRead("me_liv_chat", "지금 이어가는 대화",
     "이 사람이 이어가고 있는 대화와 그 턴 목록. 화면이 **새로고침 뒤 기록을 되그리는** 근거다 — " +
