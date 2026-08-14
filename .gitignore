@@ -29,6 +29,7 @@ var/repos/
 # 노션 자산 미러(#551) — 커넥터가 다운로드한 이미지/파일(만료 URL 의 영구 사본). 레포에 커밋 금지.
 data/
 .tsbuildinfo*
+build-info.json
 
 # 데스크톱 앱(#1541) — Electron 의존·빌드 산출물
 desktop/node_modules/

@@ -22,6 +22,7 @@ import { createProjectFolder } from "./project/project-fs.js";
 import { stateRoot } from "./ops/state-dir.js";
 import { ROOTS } from "./terminal/terminal-sessions.js";
 import { readyReport } from "./ops/health.js";
+import { buildInfo } from "./build-info.js";
 import { effectiveStoragePolicy } from "./org/policies/storage-policy.js";
 import { registerMcpTransport } from "./boot/mcp-transport.js";
 import { runBootHousekeeping, loadStoragePolicy } from "./boot/housekeeping.js";
@@ -82,7 +83,9 @@ app.get("/readyz", async (_req, res) => {
       paths: [stateRoot(), ...ROOTS.map((r) => r.base)],
       thresholds: { warnPct: policy.disk_warn_pct, criticalPct: policy.disk_critical_pct },
     });
-    res.status(report.ok ? 200 : 503).json(report);
+    // 배포 신원(#1289) — "지금 도는 게 몇 버전인가"를 밖에서 한 번에. 없으면 null 로 정직하게 낸다.
+    //  비밀이 아닌 것만 싣는다(버전·커밋·빌드시각). 경로·env 는 싣지 않는다 — 이 응답은 미인증이다.
+    res.status(report.ok ? 200 : 503).json({ ...report, build: buildInfo() });
   } catch (err) {
     // 점검 자체가 터지면 '준비됨'이라 우길 근거가 없다 → fail-closed.
     logger.error({ err }, "readyz 점검 실패");
