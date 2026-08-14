@@ -15,6 +15,7 @@
 //  승인 우회를 쓰지 않는다. 경계는 `--disallowedTools`(liv-turn.ts 의 실측 참조)이고, 이 파일은 그 인자를
 //  만들지 않는다 — livTurnArgs 하나만 부른다. 안전선이 한 자리에 있어야 약해질 때 눈에 띈다.
 import crypto from "node:crypto";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import type { Capability } from "../types.js";
@@ -77,6 +78,9 @@ export const livChatCapabilities: Capability[] = [
       const now = new Date().toISOString();
       if (!resume) await setLivChat(userId, { session_id: sessionId, started_at: now, turns: [] });
       // 되그릴 수 있게 턴을 잇는다. **사람이 한 말만** 담는다 — 리브의 말은 그 턴의 진행 파일이 정본이다.
+      // ⚠ 세션 id 를 **두 곳에** 남긴다. 프로필은 화면이 읽기 좋고, 턴 폴더는 프로필 쓰기가 실패해도 남는다.
+      //  멈추기는 이게 없으면 아예 불가능하다 — "시작만 되고 멈출 수 없는 상태"는 만들지 않는다.
+      await fsp.writeFile(path.join(spawned.taskDir, "session"), spawned.sessionId, "utf8").catch(() => { /* best-effort */ });
       await appendLivTurn(userId, { id: turnId, text, at: now, sid: spawned.sessionId });
       return { turn_id: turnId, resumed: resume };
     },
@@ -118,9 +122,15 @@ export const livChatCapabilities: Capability[] = [
       // 세션 id 는 **본인 프로필에서만** 꺼낸다 — 남의 턴을 멈추는 길이 구조적으로 없다.
       const { getLivProfile } = await import("../../org/store.js");
       const turn = ((await getLivProfile(userId)).chat?.turns ?? []).find((t) => t.id === input.id);
-      if (!turn?.sid) return { stopped: false, reason: "그 턴의 세션을 찾지 못했습니다" };
+      // 프로필에 없으면 턴 폴더에서 읽는다(둘 중 하나만 남아도 멈출 수 있게).
+      let sid = turn?.sid ?? "";
+      if (!sid) sid = (await fsp.readFile(path.join(await turnDir(user, input.id), "session"), "utf8").catch(() => "")).trim();
+      if (!sid) {
+        // 못 멈추면 **못 멈춘다고 말한다.** 조용히 실패하면 사람은 눌렀는데 안 멈춘 이유를 영영 모른다.
+        return { stopped: false, reason: "이 턴의 세션을 찾지 못했습니다 — 멈추기가 붙기 전에 시작된 대화입니다. 리브는 계속 일하고, 끝나면 화면이 풀립니다." };
+      }
       const { killTaskSession } = await import("../../node/tasks.js");
-      await killTaskSession(turn.sid).catch(() => { /* 이미 끝났다 — 멈추라는 뜻은 이미 이뤄졌다 */ });
+      await killTaskSession(sid).catch(() => { /* 이미 끝났다 — 멈추라는 뜻은 이미 이뤄졌다 */ });
       return { stopped: true };
     },
     false, { id: z.string().describe("멈출 턴 id") }),

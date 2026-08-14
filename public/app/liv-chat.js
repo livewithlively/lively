@@ -246,8 +246,13 @@ export function mountLivChat(host, askHost) {
             return;
         stopping = true;
         note.textContent = '멈추는 중…';
-        await api(`/api/ui/me/liv/turn/${encodeURIComponent(running)}/stop`, { method: 'POST', body: '{}' })
-            .catch(() => { });
+        // ⚠ 못 멈췄으면 **못 멈췄다고 말한다.** 눌렀는데 아무 일도 안 나면 사람은 자기가 잘못 눌렀다고 생각한다.
+        const r = await api(`/api/ui/me/liv/turn/${encodeURIComponent(running)}/stop`, { method: 'POST', body: '{}' })
+            .catch((e) => ({ stopped: false, reason: e.message }));
+        if (!r?.stopped) {
+            note.textContent = r?.reason || '멈추지 못했습니다 — 리브가 계속 일하고 있습니다.';
+            stopping = false; // 다시 눌러 볼 수 있게 둔다
+        }
     }
     const busy = (on) => {
         input.disabled = on;
