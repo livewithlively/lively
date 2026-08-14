@@ -83,7 +83,9 @@ export async function detectHarnesses(): Promise<string[]> {
 // ── 태스크 스폰 ──
 export interface RunTaskInput {
   user: LivelyUser;            // 의뢰자(과금·귀속 신원 — D1: 의뢰자 시트)
-  taskId: number;
+  // 작업 폴더 이름이 되는 id. 위탁은 org_task 의 숫자 id, 리브 대화 턴(#1631)은 문자열 턴 id 다
+  //  (턴은 org_task 행을 만들지 않는다 — 배치 의미(재시도·용량·타임아웃)가 채팅 한 턴에 안 맞는다).
+  taskId: number | string;
   rootKey: string;             // v1: 'shared' 만 허용(검증은 호출부)
   subpath: string;             // 공유 루트 하위 작업 폴더(비우면 delegated/<id>)
   prompt: string;
@@ -91,6 +93,12 @@ export interface RunTaskInput {
   repo?: string | null;        // 지정 시 게이트웨이가 공유 base clone→worktree 자동 provision, cwd=worktree(#458 재사용)
   gitRef?: string | null;      // worktree 분기 기준 브랜치(origin/<ref>) — 없으면 base HEAD
   flags?: Record<string, string>;  // 화이트리스트(--model/--effort)만 적용
+  // 리브 대화 턴(#1631) 전용 축 — **사람이 준 값이 아니라 코드가 만든 인자**를 화이트리스트 밖으로 싣는다
+  //  (--disallowedTools 거부 목록 · --session-id/--resume). 위탁은 안 쓴다(undefined).
+  //  ⚠ 여기 사람 텍스트를 넣지 마라 — 이 배열은 셸 명령줄에 그대로 펼쳐진다. 사람 텍스트는 프롬프트 파일뿐이다.
+  extraFlags?: string[];
+  // 승인 우회(기본 true = 위탁). 리브는 false — 사람이 화면에서 보고 있다(taskScript 주석 참조).
+  bypassPermissions?: boolean;
   env?: Record<string, string>;    // 자격 리스(CLAUDE_CODE_OAUTH_TOKEN 등) — 값은 세션 env 로만
   // 레포 provision 주입(#905 C4) — **노드엔 DB 가 없다**. 게이트웨이가 레지스트리 git_url + (의뢰자 본인) git 자격을
   //  조회해 실어 보낸다. 없으면 노드는 종전대로 DB 를 읽으려다 실패하고 "레지스트리에 없다"는 오진을 낸다.
@@ -125,8 +133,15 @@ const flagWhitelist = (key: string): Map<string, { name: string; type: string; c
 //  그 실패는 **하네스가 실행조차 안 되는** 형태라 조용하다(stream 0줄·배치 무한 재시도, #1289 사고와 동형).
 //  그래서 그런 하네스는 접수 시점에 크기를 재서 **미리 거부**한다(spawnTaskSession) — 뒤늦게 죽게 두지 않는다.
 export interface HeadlessSpec {
-  /** 하네스 실행 부분(리다이렉션 앞까지). promptPath 는 숫자 taskId 로만 구성된 화이트리스트 경로다. */
-  run: (bin: string, flags: string, promptPath: string) => string;
+  /** 하네스 실행 부분(리다이렉션 앞까지). promptPath 는 숫자 taskId 로만 구성된 화이트리스트 경로다.
+   *  bypass = 승인 우회 플래그 조각(**앞 공백 포함**, 또는 빈 문자열) — taskScript 가 만들어 넣는다. */
+  run: (bin: string, flags: string, promptPath: string, bypass: string) => string;
+  /** 사람이 안 보는 배치에서 승인을 우회하는 플래그 — **하네스마다 이름이 다르다.**
+   *  종전엔 이 플래그가 각 run 문자열에 박혀 있어 "우회는 항상 켜짐"이 구조였다. 위탁(배치)에는 맞지만
+   *  **리브(#1631)처럼 사람이 화면에서 보고 있는 대화형**에는 그대로 쓰면 안 된다 — 승인 없이 셸·파일을
+   *  만지는 에이전트를 사람 앞에 앉히는 꼴이다. 그래서 우회 여부를 **호출자가 정하게** 축으로 세웠다
+   *  (taskScript 의 bypassPermissions). 우회를 끄는 쪽은 대신 허용 도구를 좁혀서 위험을 줄인다. */
+  bypassFlag: string;
   /** 진행 스트림(JSONL)에서 최종 응답 텍스트를 뽑는다 — 스키마가 하네스마다 다르다. */
   extract: (jsonl: string) => string;
   /** 프롬프트가 argv 로 가는 하네스인가(=크기 상한이 걸린다). */
@@ -145,13 +160,15 @@ const lastMatch = (jsonl: string, pick: (ev: Record<string, unknown>) => string 
 };
 export const HEADLESS: Record<string, HeadlessSpec> = {
   claude: {
-    run: (bin, f, p) => `${bin} -p ${f} --output-format stream-json --verbose --dangerously-skip-permissions < "${p}"`,
+    run: (bin, f, p, bypass) => `${bin} -p ${f} --output-format stream-json --verbose${bypass} < "${p}"`,
+    bypassFlag: "--dangerously-skip-permissions",
     extract: (j) => lastMatch(j, (ev) => (ev.type === "result" ? (typeof ev.result === "string" ? ev.result : JSON.stringify(ev)) : null)),
   },
   codex: {
     // exec = codex 의 헤드리스 서브커맨드. `--json` 이 진행 이벤트를 JSONL 로 뱉고, 프롬프트는 stdin 으로 받는다
     //  ("instructions are read from stdin" — --help). 승인 우회는 세션의 --yolo 가 아니라 이 플래그다.
-    run: (bin, f, p) => `${bin} exec --json --dangerously-bypass-approvals-and-sandbox ${f} < "${p}"`,
+    run: (bin, f, p, bypass) => `${bin} exec --json${bypass} ${f} < "${p}"`,
+    bypassFlag: "--dangerously-bypass-approvals-and-sandbox",
     extract: (j) => lastMatch(j, (ev) => {
       const it = ev.item as { type?: string; text?: string } | undefined;
       return ev.type === "item.completed" && it?.type === "agent_message" && typeof it.text === "string" ? it.text : null;
@@ -163,7 +180,8 @@ export const HEADLESS: Record<string, HeadlessSpec> = {
     //  ⚠ `[ -s ]` 가드는 장식이 아니다: stdin 리다이렉션(`< file`)은 파일이 없으면 **셸이 그 자리에서 실패**시키는데,
     //   명령치환은 cat 이 실패해도 **빈 프롬프트로 하네스가 그냥 돌아** exit 0 이 된다 → 빈 배치가 '성공'으로 집계된다.
     //   그 무증상 성공은 실패보다 나쁘다(#1289 의 교훈: 실패는 반드시 exit 에 남아야 한다).
-    run: (bin, f, p) => `[ -s "${p}" ] && ${bin} --print "$(cat "${p}")" ${f} --output-format stream-json --dangerously-skip-permissions`,
+    run: (bin, f, p, bypass) => `[ -s "${p}" ] && ${bin} --print "$(cat "${p}")" ${f} --output-format stream-json${bypass}`,
+    bypassFlag: "--dangerously-skip-permissions",
     extract: (j) => lastMatch(j, (ev) => {
       const r = ev.result as { response?: string } | undefined;
       return ev.event === "result" && typeof r?.response === "string" ? r.response : null;
@@ -176,14 +194,21 @@ export const HEADLESS: Record<string, HeadlessSpec> = {
     //  `{type:"result", subtype:"success", result:"…"}` — claude 의 stream-json 과 같은 추출 스키마다
     //  (실측 2026-08-14, grok 1.0.3 실계정 1회 실행). `[ -s ]` 가드는 antigravity 와 같은 이유: 빈/부재 프롬프트로
     //  하네스가 그냥 돌아 exit 0 이 되는 무증상 성공을 막는다(실패는 반드시 exit 에 남아야 한다 — #1289).
-    run: (bin, f, p) => `[ -s "${p}" ] && ${bin} --prompt-file "${p}" ${f} --output-format streaming-messages-json --always-approve`,
+    run: (bin, f, p, bypass) => `[ -s "${p}" ] && ${bin} --prompt-file "${p}" ${f} --output-format streaming-messages-json${bypass}`,
+    bypassFlag: "--always-approve",
     extract: (j) => lastMatch(j, (ev) => (ev.type === "result" ? (typeof ev.result === "string" ? ev.result : JSON.stringify(ev)) : null)),
   },
 };
 // argv 로 프롬프트를 넘기는 하네스의 상한 — 실측 상한(131,072B)에서 인자·환경 몫을 빼고 여유를 둔다.
 export const ARGV_PROMPT_MAX = 100_000;
 
-export function taskScript(harnessKey: string, bin: string, flags: string[], taskDir: string): string {
+export interface TaskScriptOpts {
+  /** 승인을 우회할까. **기본 true = 종전 위탁 동작**(사람이 안 보는 배치라 우회가 맞다).
+   *  false 는 사람이 화면에서 보고 있는 대화형(리브 #1631) — 우회 없이 돌고, 허용 도구를 좁혀 위험을 줄인다. */
+  bypassPermissions?: boolean;
+}
+
+export function taskScript(harnessKey: string, bin: string, flags: string[], taskDir: string, opts?: TaskScriptOpts): string {
   // 사용자 텍스트는 프롬프트 파일 안에만 있다 — 이 문자열의 가변부는 숫자/화이트리스트 경로뿐.
   //  stream-json = 진행 이벤트를 stream.jsonl 에 줄단위 append → logs tail(파일 오프셋)로 실시간 미러(§11).
   //  최종 결과(type=result)도 그 마지막 줄에 온다. exec $SHELL 로 세션 잔존(실패 시 사후 검시).
@@ -198,7 +223,10 @@ export function taskScript(harnessKey: string, bin: string, flags: string[], tas
   const f = flags.join(" ");
   const spec = HEADLESS[harnessKey];
   if (!spec) throw new Error(`위탁을 지원하지 않는 하네스입니다: ${harnessKey}`);
-  return `cd "$LIVELY_TASK_WS" && ${spec.run(bin, f, `${taskDir}/prompt.txt`)} > "${taskDir}/stream.jsonl" 2> "${taskDir}/stderr.log"; echo $? > "${taskDir}/exit"; exec "\${SHELL:-sh}"`;
+  // 우회 조각은 **앞 공백을 여기서 붙인다** — 끄면 빈 문자열이라 이중 공백이 안 생기고,
+  //  켜면 종전 스크립트와 바이트 동일하다(위탁의 기존 동작을 한 글자도 안 바꾼다는 것이 이 리팩터의 계약).
+  const bypass = opts?.bypassPermissions === false ? "" : ` ${spec.bypassFlag}`;
+  return `cd "$LIVELY_TASK_WS" && ${spec.run(bin, f, `${taskDir}/prompt.txt`, bypass)} > "${taskDir}/stream.jsonl" 2> "${taskDir}/stderr.log"; echo $? > "${taskDir}/exit"; exec "\${SHELL:-sh}"`;
 }
 
 // 위탁 작업 폴더(.lively-task/<id>) 준비 — 워커가 결과를 쓸 수 있는 상태로 만든다. 테스트 seam(tasks.test).
@@ -227,7 +255,14 @@ export async function prepareTaskDir(baseWs: string, sharedBase: string, taskId:
 }
 
 export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResult> {
-  if (input.rootKey !== "shared") throw new Error("위탁 워크스페이스는 공유 루트(shared)만 지원합니다(v1)");
+  // 루트 축 — 위탁(delegate)은 **공유 루트**다: 결과물이 남고 팀이 본다.
+  //  리브 대화 턴(#1631)만 **개인 루트**다. 두 가지 이유이고 둘 다 축소하면 안 된다:
+  //   ① 세션 시작 훅의 리브 게이트가 `basename(cwd) === "liv"` 라, 그 폴더에서 돌아야 리브가 리브가 된다.
+  //   ② 웹터미널 리브 세션과 **같은 자리**를 써야 두 표면이 한 대화로 보인다.
+  //  그 외 값은 계속 막는다 — 임의 루트를 여는 순간 이 함수가 범용 실행기가 된다.
+  if (input.rootKey !== "shared" && input.rootKey !== "personal") {
+    throw new Error(`위탁 워크스페이스 루트는 shared·personal 만 지원합니다: ${input.rootKey}`);
+  }
   const harness = HARNESSES.find((h) => h.key === input.harness);
   // #1710 — 위탁 가능 여부는 '헤드리스 규약을 아는가'(HEADLESS 표)로 판정한다. 종전엔 `!== "claude"` 로 잠겨 있어,
   //  세션은 네 하네스로 열리는데 **위탁만 claude 전용**이었다. 표에 없는 하네스는 규약을 실측하지 않은 것이므로
@@ -249,13 +284,19 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
   // 격리 게이트 — createSession 과 동일 seam(#524): Linux+인프라면 box_ 유저로 drop, 아니면 null(비격리 폴백).
   const osUser = await ensureMemberOsUser(user).catch(() => null);
   const sub = (input.subpath || "").trim() || `delegated/task-${input.taskId}`;
-  const { base: sharedBase, abs: baseWs } = await resolveRootPath(user, "shared", sub, osUser ?? null);
+  const { base: sharedBase, abs: baseWs } = await resolveRootPath(user, input.rootKey, sub, osUser ?? null);
   // 레포 지정(#458 재사용) — 공유 base clone→worktree 자동 provision, 워커 cwd=worktree. .lively-task 는 worktree 밖(baseWs)에
   //  둬 레포를 오염시키지 않는다(untracked). 미지정이면 빈 워크스페이스(cwd=baseWs, 프롬프트가 알아서 준비).
   let workspace = baseWs;
   if (input.repo) {
+    // 레포 준비는 **위탁 전용 경로**다(리브 대화 턴은 레포를 안 쓴다). 그쪽 id 는 org_task 의 숫자라
+    //  여기서 그 계약을 명시적으로 지킨다 — 문자열 id 가 흘러들면 조용히 NaN 폴더가 생기는 대신 여기서 멈춘다.
+    const numericTaskId = Number(input.taskId);
+    if (!Number.isInteger(numericTaskId)) {
+      throw new Error(`레포를 준비하는 작업은 숫자 taskId 가 필요합니다(위탁 전용): ${input.taskId}`);
+    }
     workspace = await provisionTaskRepo(
-      baseWs, input.taskId, String(input.repo), input.gitRef ?? null, (user.userId || user.email || null),
+      baseWs, numericTaskId, String(input.repo), input.gitRef ?? null, (user.userId || user.email || null),
       input.repoAuth,   // 노드 실행이면 게이트웨이가 실어 보낸 주입(없으면 중앙 실행 → DB 직접 읽기)
     );
   }
@@ -270,6 +311,11 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
     if (!def || !v || (def.choices && !def.choices.includes(v))) continue;
     flags.push(name, v);
   }
+  // 화이트리스트 밖 인자(리브 전용). ⚠ 리브의 거부 목록은 **가변인자**(<tools...>)라 뒤에 오는 첫 `--플래그`
+  //  에서 끊긴다 — 목록이 배열 끝에 오면 taskScript 가 뒤에 붙이는 --output-format 까지 도구 이름으로 먹혀
+  //  **안전선이 조용히 반쪽이 된다**(그래도 실행은 되고 답도 나온다 = 무증상). 그래서 livTurnArgs 가 거부 목록
+  //  **다음에** --session-id/--resume 를 두어 그 자리에서 끊고, 그 순서를 liv-turn.test 가 고정한다.
+  if (input.extraFlags?.length) flags.push(...input.extraFlags);
 
   const args = ["new-session", "-d", "-s", id];
   args.push("-e", `LANG=${PANE_LOCALE}`, "-e", `LC_CTYPE=${PANE_LOCALE}`, "-e", `LC_ALL=${PANE_LOCALE}`);
@@ -283,7 +329,7 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
     if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(k)) continue;
     args.push("-e", `${k}=${v}`);
   }
-  const script = taskScript(harness.key, harness.bin, flags, taskDir);
+  const script = taskScript(harness.key, harness.bin, flags, taskDir, { bypassPermissions: input.bypassPermissions });
   if (osUser) {
     args.push(...wrapAsMember(osUser, ["sh", "-lc", script], workspace));
   } else {

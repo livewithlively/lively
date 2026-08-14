@@ -179,12 +179,23 @@ export interface LivAnswer {
   by?: "self" | "liv";
 }
 
+/** 리브와의 대화 한 줄기(#1631 v1 채팅). **세션이 아니라 여기 산다** — 게이트웨이가 재시작해도
+ *  다음 턴이 같은 대화를 이어받는다(`--resume <session_id>`). 대화 내용은 담지 않는다:
+ *  본문은 하네스가 자기 트랜스크립트에 갖고 있고, 여기 복제하면 진실이 둘이 된다. */
+export interface LivChat {
+  /** claude 대화 세션 uuid. 첫 턴이 만들고 이후 턴이 이어받는다. */
+  session_id: string;
+  started_at: string;
+}
+
 export interface LivProfile {
   work?: LivWork; decisions?: LivDecision[]; declined?: LivDeclined[];
   /** 대기 중인 요청(자격·객관식·업로드) 하나. 받으면 즉시 지운다 — 시크릿 값은 여기 오지 않는다. */
   secret_ask?: LivAsk | null;
   /** 사람이 고른 답들. 뒤에 쌓인다. */
   answers?: LivAnswer[];
+  /** 지금 이어가고 있는 대화. 새로 시작하면 갈아끼운다(null 이면 다음 턴이 첫 턴). */
+  chat?: LivChat | null;
 }
 
 const LIV_LIST_CAP = 50; // 결정·거절 이력 상한 — 오래된 것부터 버린다(프로필은 로그가 아니다)
@@ -193,6 +204,18 @@ const LIV_LIST_CAP = 50; // 결정·거절 이력 상한 — 오래된 것부터
 export async function setLivSecretAsk(id: string, ask: LivAsk | null): Promise<LivProfile> {
   const cur = await getLivProfile(id);
   const next: LivProfile = { ...cur, secret_ask: ask };
+  const r = await itemsPool.query(
+    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
+  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+}
+
+/** 이어갈 대화를 정한다(null = 다음 턴이 첫 턴). 대화 **본문은 저장하지 않는다** — 이어받을 열쇠만.
+ *  ⚠ 이 함수는 읽고-쓰기라, 같은 사람이 동시에 두 턴을 시작하면 뒤가 앞을 덮는다. 리브 화면은 답을
+ *   기다리는 동안 입력을 막으므로 v1 에선 그 경합이 생기지 않는다(막는 게 풀리면 여기부터 다시 봐야 한다). */
+export async function setLivChat(id: string, chat: LivChat | null): Promise<LivProfile> {
+  const cur = await getLivProfile(id);
+  const next: LivProfile = { ...cur, chat };
   const r = await itemsPool.query(
     `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
   if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
