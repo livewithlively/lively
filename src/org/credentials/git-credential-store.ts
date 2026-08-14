@@ -74,7 +74,7 @@ export async function setSshCredential(
   await itemsPool.query(
     `INSERT INTO git_credential(owner,host,kind,ssh_public_key,ssh_private_key_enc,https_username,https_token_enc,label,updated_at,updated_by)
        VALUES($1,$2,'ssh',$3,$4,NULL,NULL,$5,now(),$6)
-     ON CONFLICT (owner,host) DO UPDATE SET
+     ON CONFLICT (tenant_id, owner,host) DO UPDATE SET
        kind='ssh', ssh_public_key=EXCLUDED.ssh_public_key, ssh_private_key_enc=EXCLUDED.ssh_private_key_enc,
        https_username=NULL, https_token_enc=NULL, label=EXCLUDED.label, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [owner, h, pub, enc, input.label ?? null, actor],
@@ -98,7 +98,7 @@ export async function setHttpsCredential(
   await itemsPool.query(
     `INSERT INTO git_credential(owner,host,kind,ssh_public_key,ssh_private_key_enc,https_username,https_token_enc,label,updated_at,updated_by)
        VALUES($1,$2,'https',NULL,NULL,$3,$4,$5,now(),$6)
-     ON CONFLICT (owner,host) DO UPDATE SET
+     ON CONFLICT (tenant_id, owner,host) DO UPDATE SET
        kind='https', ssh_public_key=NULL, ssh_private_key_enc=NULL,
        https_username=EXCLUDED.https_username, https_token_enc=EXCLUDED.https_token_enc,
        label=EXCLUDED.label, updated_at=now(), updated_by=EXCLUDED.updated_by`,

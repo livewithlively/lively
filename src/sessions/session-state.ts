@@ -126,7 +126,7 @@ export async function upsertSessionState(s: SessionStateInput): Promise<void> {
   await itemsPool.query(
     `INSERT INTO org_session_state(id, owner, label, harness, dir, root_key, subpath, flags, auto_approve, invites, project_id, project_src, read_only, incognito, write_vis, restrict_read, created, last_busy, last_seen, updated_at)
      VALUES($1,$2,$3,COALESCE($4,'claude'),$5,$6,$7,COALESCE($8,'{}')::jsonb,COALESCE($9,false),COALESCE($10,'[]')::jsonb,$11,$12,COALESCE($13,false),COALESCE($14,false),$15,COALESCE($16,false),$17,$18,now(),now())
-     ON CONFLICT (id) DO UPDATE SET
+     ON CONFLICT (tenant_id, id) DO UPDATE SET
        owner=EXCLUDED.owner, label=EXCLUDED.label, harness=EXCLUDED.harness, dir=EXCLUDED.dir,
        root_key=EXCLUDED.root_key, subpath=EXCLUDED.subpath, flags=EXCLUDED.flags, auto_approve=EXCLUDED.auto_approve,
        invites=EXCLUDED.invites, project_id=EXCLUDED.project_id, project_src=EXCLUDED.project_src,

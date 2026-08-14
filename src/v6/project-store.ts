@@ -428,7 +428,7 @@ export async function createProject(
   for (const memberId of input.members ?? []) {
     await itemsPool.query(
       `INSERT INTO project_member(project_id, member_id, role, added_at)
-       VALUES($1,$2,'member',now()) ON CONFLICT (project_id, member_id) DO NOTHING`,
+       VALUES($1,$2,'member',now()) ON CONFLICT (tenant_id, project_id, member_id) DO NOTHING`,
       [row.id, memberId]);
   }
   await auditProject(String(row.id), "insert", null, row, ctx);
@@ -453,7 +453,7 @@ export async function setProjectMemberStatus(projectId: number, memberId: string
   const msg = (message ?? '').trim() || null;
   await itemsPool.query(
     `INSERT INTO project_member(project_id, member_id, status_message) VALUES($1,$2,$3)
-     ON CONFLICT (project_id, member_id) DO UPDATE SET status_message=EXCLUDED.status_message`,
+     ON CONFLICT (tenant_id, project_id, member_id) DO UPDATE SET status_message=EXCLUDED.status_message`,
     [projectId, memberId, msg]);
   return msg;
 }

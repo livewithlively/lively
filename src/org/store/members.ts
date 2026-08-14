@@ -398,7 +398,7 @@ export async function upsertMember(m: MemberInput, actor?: string, source?: stri
   await itemsPool.query(
     `INSERT INTO org_member(id, kind, display_name, nickname, email, identities, body_md, avatar, avatar_char, avatar_color, state, scopes, sort, version, updated_at, updated_by)
        VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12::jsonb,$13,1,now(),$14)
-     ON CONFLICT (id) DO UPDATE SET
+     ON CONFLICT (tenant_id, id) DO UPDATE SET
        kind=EXCLUDED.kind, display_name=EXCLUDED.display_name, nickname=EXCLUDED.nickname, email=EXCLUDED.email,
        identities=EXCLUDED.identities, body_md=EXCLUDED.body_md, avatar=EXCLUDED.avatar,
        avatar_char=EXCLUDED.avatar_char, avatar_color=EXCLUDED.avatar_color, state=EXCLUDED.state, scopes=EXCLUDED.scopes, sort=EXCLUDED.sort,
@@ -452,7 +452,7 @@ async function syncMemberToPerson(m: OrgMember): Promise<void> {
   const dn = m.display_name ?? m.id;
   await itemsPool.query(
     `INSERT INTO person(id, display_name, kind) VALUES($1,$2,$3)
-       ON CONFLICT (id) DO UPDATE SET display_name=EXCLUDED.display_name, kind=EXCLUDED.kind`,
+       ON CONFLICT (tenant_id, id) DO UPDATE SET display_name=EXCLUDED.display_name, kind=EXCLUDED.kind`,
     [m.id, dn, m.kind],
   );
   for (const idn of m.identities) {
@@ -460,7 +460,7 @@ async function syncMemberToPerson(m: OrgMember): Promise<void> {
     await itemsPool.query(
       `INSERT INTO person_identity(person_id, system, instance, external_id, email, display_name, origin, state)
          VALUES($1,$2,$3,$4,$5,$6,'manual','confirmed')
-       ON CONFLICT (system, external_id) DO UPDATE SET
+       ON CONFLICT (tenant_id, system, external_id) DO UPDATE SET
          person_id=EXCLUDED.person_id,
          instance=COALESCE(EXCLUDED.instance, person_identity.instance),
          email=COALESCE(EXCLUDED.email, person_identity.email),

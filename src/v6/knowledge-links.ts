@@ -22,7 +22,7 @@ export async function linkKnowledge(fromName: string, toName: string, relation =
   await itemsPool.query(
     `INSERT INTO knowledge_link(from_name, to_name, relation, origin, created_at, updated_at)
      VALUES($1,$2,$3,'user',now(),now())
-     ON CONFLICT (from_name, to_name, relation) DO UPDATE SET updated_at=now(), origin='user'`,
+     ON CONFLICT (tenant_id, from_name, to_name, relation) DO UPDATE SET updated_at=now(), origin='user'`,
     [fromName, toName, relation]); // 커넥터 물질화 행과 충돌 시 origin 을 user 로 승격 — 다음 싱크의 재작성 DELETE 에서 보호(#551)
   await auditKnowledge(fromName, "link_knowledge", null, { to_name: toName, relation }, ctx);
 }
@@ -96,7 +96,7 @@ async function rewriteWikiLinkEdges(fromName: string, toNames: string[]): Promis
       await client.query(
         `INSERT INTO knowledge_link(from_name, to_name, relation, origin, created_at, updated_at)
          SELECT $1, t, 'related', 'wikilink', now(), now() FROM unnest($2::text[]) AS t
-         ON CONFLICT (from_name, to_name, relation) DO NOTHING`,
+         ON CONFLICT (tenant_id, from_name, to_name, relation) DO NOTHING`,
         [fromName, toNames]);
     }
     await client.query("COMMIT");
@@ -157,7 +157,7 @@ export async function sweepWikiLinks(): Promise<{ docs: number; scanned: number;
       await client.query(
         `INSERT INTO knowledge_link(from_name, to_name, relation, origin, created_at, updated_at)
          SELECT f, t, 'related', 'wikilink', now(), now() FROM unnest($1::text[], $2::text[]) AS x(f, t)
-         ON CONFLICT (from_name, to_name, relation) DO NOTHING`,
+         ON CONFLICT (tenant_id, from_name, to_name, relation) DO NOTHING`,
         [froms, tos]);
     }
     await client.query("COMMIT");

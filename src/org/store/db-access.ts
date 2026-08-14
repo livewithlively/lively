@@ -84,7 +84,7 @@ export async function upsertDbSource(s: DbSourceInput, actor?: string, source?: 
   await itemsPool.query(
     `INSERT INTO org_db_source(name, driver, url, auth_mode, auth_ref, rls, max_rows, timeout_ms, note, enabled, table_default, sort, version, updated_at, updated_by)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,1,now(),$13)
-     ON CONFLICT (name) DO UPDATE SET
+     ON CONFLICT (tenant_id, name) DO UPDATE SET
        driver=EXCLUDED.driver, url=EXCLUDED.url, auth_mode=EXCLUDED.auth_mode, auth_ref=EXCLUDED.auth_ref,
        rls=EXCLUDED.rls, max_rows=EXCLUDED.max_rows, timeout_ms=EXCLUDED.timeout_ms, note=EXCLUDED.note,
        enabled=EXCLUDED.enabled, table_default=EXCLUDED.table_default, sort=EXCLUDED.sort,
@@ -137,7 +137,7 @@ export async function upsertTablePolicy(p: { source: string; table_name: string;
   await itemsPool.query(
     `INSERT INTO org_db_table_policy(source, table_name, mode, note, version, updated_at, updated_by)
        VALUES($1,$2,$3,$4,1,now(),$5)
-     ON CONFLICT (source, table_name) DO UPDATE SET
+     ON CONFLICT (tenant_id, source, table_name) DO UPDATE SET
        mode=EXCLUDED.mode, note=EXCLUDED.note, version=org_db_table_policy.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [p.source, p.table_name, p.mode, p.note ?? null, actor ?? null],
   );
@@ -163,7 +163,7 @@ export async function upsertColumnMask(m: { source: string; table_name: string; 
   await itemsPool.query(
     `INSERT INTO org_db_column_mask(source, table_name, column_name, style, note, version, updated_at, updated_by)
        VALUES($1,$2,$3,$4,$5,1,now(),$6)
-     ON CONFLICT (source, table_name, column_name) DO UPDATE SET
+     ON CONFLICT (tenant_id, source, table_name, column_name) DO UPDATE SET
        style=EXCLUDED.style, note=EXCLUDED.note, version=org_db_column_mask.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [m.source, m.table_name, m.column_name, m.style, m.note ?? null, actor ?? null],
   );
@@ -200,7 +200,7 @@ export async function upsertSubjectKey(k: { source: string; table_name: string; 
   await itemsPool.query(
     `INSERT INTO org_db_subject_key(source, table_name, column_name, note, version, updated_at, updated_by)
        VALUES($1,$2,$3,$4,1,now(),$5)
-     ON CONFLICT (source, table_name, column_name) DO UPDATE SET
+     ON CONFLICT (tenant_id, source, table_name, column_name) DO UPDATE SET
        note=EXCLUDED.note, version=org_db_subject_key.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [k.source, k.table_name, k.column_name, k.note ?? null, actor ?? null],
   );

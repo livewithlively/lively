@@ -242,7 +242,7 @@ async function syncCollectorJob(
       await itemsPool.query(
         `INSERT INTO org_cron(id, label, action, params, interval_sec, enabled, created_by)
            VALUES($1,$2,'connector_sync',$3::jsonb,$4,true,$5)
-         ON CONFLICT (id) DO UPDATE SET label=EXCLUDED.label, params=EXCLUDED.params,
+         ON CONFLICT (tenant_id, id) DO UPDATE SET label=EXCLUDED.label, params=EXCLUDED.params,
            interval_sec=EXCLUDED.interval_sec, enabled=true`,
         [jobId, `${spec.label} 자동 수집`, JSON.stringify({ collector_id: id }), spec.interval, actor ?? null]);
       // 일일 full 스윕(notion) — 증분 델타가 구조적으로 못 보는 것들(댓글 단독 변경·아카이브 전파·
@@ -251,7 +251,7 @@ async function syncCollectorJob(
         await itemsPool.query(
           `INSERT INTO org_cron(id, label, action, params, interval_sec, enabled, created_by)
              VALUES($1,$2,'connector_sync',$3::jsonb,86400,true,$4)
-           ON CONFLICT (id) DO UPDATE SET label=EXCLUDED.label, params=EXCLUDED.params, enabled=true`,
+           ON CONFLICT (tenant_id, id) DO UPDATE SET label=EXCLUDED.label, params=EXCLUDED.params, enabled=true`,
           [`${jobId}-full`, `${spec.label} 일일 전체 스윕(아카이브·완결성)`,
            JSON.stringify({ collector_id: id, full: true }), actor ?? null]);
       }
@@ -316,7 +316,7 @@ export async function migrateConnectorsToCollectors(actor = "system:migration"):
       `INSERT INTO org_collector(key, preset_key, instance_key, label, enabled, config, secrets,
                                  sync_interval_sec, sort, note, created_by, updated_by)
          VALUES($1,$1,'_',$2,$3,$4::jsonb,$5::jsonb,$6,0,$7,$8,$8)
-       ON CONFLICT (preset_key, instance_key) DO NOTHING
+       ON CONFLICT (tenant_id, preset_key, instance_key) DO NOTHING
        RETURNING id`,
       [system, CONNECTOR_SPECS[system]?.label ?? system, enabled,
        JSON.stringify(row.config ?? {}), JSON.stringify(row.secrets ?? {}), interval, row.note ?? null, actor]);

@@ -45,7 +45,7 @@ export async function setDashPrefs(memberId: string, prefs: Partial<DashPrefs>):
   const clean = normalize(prefs);
   await q(itemsPool,
     `INSERT INTO member_dash_pref(member_id, prefs, updated_at) VALUES ($1, $2::jsonb, now())
-     ON CONFLICT (member_id) DO UPDATE SET prefs = EXCLUDED.prefs, updated_at = now()`,
+     ON CONFLICT (tenant_id, member_id) DO UPDATE SET prefs = EXCLUDED.prefs, updated_at = now()`,
     [memberId, JSON.stringify(clean)]);
   return { ...clean, saved: true };
 }

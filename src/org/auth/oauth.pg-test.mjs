@@ -34,7 +34,7 @@ async function mkMember(scopes) {
   await itemsPool.query(
     `INSERT INTO org_member(id, kind, display_name, email, state, scopes)
        VALUES($1,'human','OAuth테스트','__oauth_pg_test__@example.invalid','active',$2::jsonb)
-     ON CONFLICT (id) DO UPDATE SET scopes=$2::jsonb, state='active'`,
+     ON CONFLICT (tenant_id, id) DO UPDATE SET scopes=$2::jsonb, state='active'`,
     [MID, JSON.stringify(scopes)],
   );
 }

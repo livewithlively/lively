@@ -254,7 +254,7 @@ export async function setSharedFolderAcl(
   await withTx(async (c) => {
     await c.query(`
       INSERT INTO shared_folder_acl(path, visibility, updated_by, updated_at) VALUES($1,$2,$3,now())
-      ON CONFLICT (path) DO UPDATE SET visibility = EXCLUDED.visibility, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+      ON CONFLICT (tenant_id, path) DO UPDATE SET visibility = EXCLUDED.visibility, updated_by = EXCLUDED.updated_by, updated_at = now()`,
     [path, visibility, actor]);
     await c.query(`DELETE FROM shared_folder_member WHERE path = $1`, [path]);
     for (const m of uniq) {

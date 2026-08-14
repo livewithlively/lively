@@ -132,7 +132,7 @@ export async function upsertOrgHarnessAsset(a: OrgHarnessAssetInput, ctx: WriteC
   await itemsPool.query(
     `INSERT INTO org_harness_asset(id,kind,label,harness,description,summary,body,frontmatter,target_members,paired_hook_id,enabled,sort,version,content_hash,created_by,updated_at,updated_by)
        VALUES($1,$2,$3,$4,$5,$15,$6,$7::jsonb,$8::jsonb,$9,$10,$11,1,$12,$13,now(),$14)
-     ON CONFLICT (id) DO UPDATE SET
+     ON CONFLICT (tenant_id, id) DO UPDATE SET
        kind=EXCLUDED.kind, label=EXCLUDED.label, harness=EXCLUDED.harness, description=EXCLUDED.description,
        summary=EXCLUDED.summary, body=EXCLUDED.body, frontmatter=EXCLUDED.frontmatter, target_members=EXCLUDED.target_members,
        paired_hook_id=EXCLUDED.paired_hook_id, enabled=EXCLUDED.enabled, sort=EXCLUDED.sort,
@@ -202,7 +202,7 @@ export async function setAssetPref(target_kind: AssetPrefKind, ref_id: string, m
   await itemsPool.query(
     `INSERT INTO org_asset_pref(target_kind, ref_id, member_id, state, updated_at, updated_by)
        VALUES($1,$2,$3,$4,now(),$5)
-     ON CONFLICT (target_kind, ref_id, member_id) DO UPDATE SET
+     ON CONFLICT (tenant_id, target_kind, ref_id, member_id) DO UPDATE SET
        state=EXCLUDED.state, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [target_kind, ref_id, member_id, state, ctx.actor ?? null],
   );

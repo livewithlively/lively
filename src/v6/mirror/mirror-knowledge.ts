@@ -101,7 +101,7 @@ export async function mirrorKnowledgeV6(client: pg.PoolClient, it: RawItem, syst
              $4,$5,$6,$7,
              $8, now(), $9, $10,
              $11::jsonb, $12::jsonb, $13, COALESCE($15, 0), now(), $13)
-     ON CONFLICT (external_system, external_instance, external_id) WHERE external_id IS NOT NULL
+     ON CONFLICT (tenant_id, external_system, external_instance, external_id) WHERE external_id IS NOT NULL
      DO UPDATE SET
         title=EXCLUDED.title, body_md=EXCLUDED.body_md,
         injection='recalled', provenance='observed',
@@ -139,7 +139,7 @@ export async function mirrorKnowledgeV6(client: pg.PoolClient, it: RawItem, syst
 //  일반 커넥터는 external 좌표(external_system,instance,id) 로 멱등하지만 domain-wiki 는 **파일 basename
 //  슬러그 = 지식 name** 이 자연 식별자다(파일 1개=주제 1개). 최초 수동이관이 이 규칙으로 name 을 부여했고
 //  external 좌표는 비었다(NULL) — 그래서 external-좌표 upsert(mirrorKnowledgeV6)로는 기존 행을 못 잡고
-//  같은 name 으로 재삽입 시 PK 충돌한다. 따라서 여기선 **ON CONFLICT (name)** 로 재싱크가 기존 행을 그대로
+//  같은 name 으로 재삽입 시 PK 충돌한다. 따라서 여기선 **ON CONFLICT (tenant_id, name)** 로 재싱크가 기존 행을 그대로
 //  갱신(=채택, external 좌표도 이때 부여)하고 신규만 추가한다. name(PK)=external_id(슬러그).
 //  ⚠ 보존 규칙: type(page-type)·is_wiki(핀)·parent_name·카테고리(knowledge_category)는 UPDATE 에서 건드리지
 //  않는다 — 사람이 부여한 분류/핀을 재싱크가 지우지 않게(카테고리는 이 함수가 애초에 안 씀, notion 미러와 동일).
@@ -171,7 +171,7 @@ export async function mirrorKnowledgeByNameV6(client: pg.PoolClient, it: RawItem
       VALUES($1,$2,$3,'recalled','observed','active','observed',$4,
              $4,$5,$6,$7,
              $8, now(), $9::jsonb, $10::jsonb, $11, COALESCE($12,0), now(), $11)
-     ON CONFLICT (name) DO UPDATE SET
+     ON CONFLICT (tenant_id, name) DO UPDATE SET
         title=EXCLUDED.title, body_md=EXCLUDED.body_md,
         injection='recalled', provenance='observed', confidence='observed', source=EXCLUDED.source,
         external_system=EXCLUDED.external_system, external_instance=EXCLUDED.external_instance,

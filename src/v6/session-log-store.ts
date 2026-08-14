@@ -93,7 +93,7 @@ export async function appendSessionLog(input: {
     const titleCand = atOffset === 0 && len > 0 ? firstUserPromptTitle(data.toString("utf8")) : null;
     await client.query(
       `INSERT INTO session(node_id, session_id, harness, owner, title, parent_session_id) VALUES($1,$2,$3,$4,$5,$6)
-       ON CONFLICT (node_id, session_id) DO UPDATE SET last_seen=now(),
+       ON CONFLICT (tenant_id, node_id, session_id) DO UPDATE SET last_seen=now(),
          harness=COALESCE(session.harness, EXCLUDED.harness),
          owner=COALESCE(session.owner, EXCLUDED.owner),
          title=COALESCE(session.title, EXCLUDED.title),

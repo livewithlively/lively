@@ -105,7 +105,7 @@ export async function saveClient(input: {
     `INSERT INTO oauth_client(client_id, kind, client_name, client_secret_hash, redirect_uris,
                               grant_types, token_endpoint_auth_method, metadata, refreshed_at)
        VALUES($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8::jsonb, now())
-     ON CONFLICT (client_id) DO UPDATE SET
+     ON CONFLICT (tenant_id, client_id) DO UPDATE SET
        kind=EXCLUDED.kind, client_name=EXCLUDED.client_name,
        -- 시크릿은 새 값이 있을 때만 교체한다(CIMD 문서 갱신이 static 클라이언트의 시크릿을 지우지 않게).
        client_secret_hash=COALESCE(EXCLUDED.client_secret_hash, oauth_client.client_secret_hash),
