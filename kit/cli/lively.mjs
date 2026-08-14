@@ -264,11 +264,16 @@ const winArg = (s) => {
 //  캡슐화한 이유: 호출부마다 "cmd 도 winArg 해야 한다"를 기억해야 하면 다음 사람이 또 빠뜨린다.
 const winSpawnArgs = (cmd, args) => [winArg(cmd), args.map(winArg)];
 
-function run(cmd, args, { allowFail = false, quiet = false, env, timeout } = {}) {
+// dropEnv: 상속 env 에서 **키를 지운다**(빈 문자열로 덮지 않는다). 빈 문자열은 '설정됨' 으로 읽히는 도구가 많아
+//  (실측 #1541: electron-builder 가 빈 CSC_LINK 를 인증서 경로로 보고 죽었다) 지우는 것과 결과가 다르다.
+//  여기 쓰임: claude 를 **기본 위치**($HOME/.claude.json)로 돌리려면 CLAUDE_CONFIG_DIR 가 없어야 한다.
+function run(cmd, args, { allowFail = false, quiet = false, env, dropEnv, timeout } = {}) {
+  const merged = { ...process.env, ...(env || {}) };
+  for (const k of dropEnv || []) delete merged[k];
   const [c, a] = WIN ? winSpawnArgs(cmd, args) : [cmd, args];
   const r = spawnSync(c, a, {
     stdio: quiet ? ["ignore", "pipe", "pipe"] : "inherit",
-    env: { ...process.env, ...(env || {}) },
+    env: merged,
     encoding: "utf8",
     shell: WIN,
     ...(timeout ? { timeout, killSignal: "SIGKILL" } : {}),
@@ -292,6 +297,13 @@ const has = (bin) => spawnSync(WIN ? "where" : "command", WIN ? [bin] : ["-v", b
 //   (testlib/os-sandbox.mjs 가 못박은 교훈: HOME 만 대입하면 윈도우에서 조용히 샌다).
 //  캡슐화한 이유는 winSpawnArgs 와 같다 — 호출부마다 "HOME 도 넘겨야 한다"를 기억해야 하면 다음 사람이 또 빠뜨린다.
 const runClaude = (args, opts = {}) => run("claude", args, { ...opts, env: { HOME, USERPROFILE: HOME, ...(opts.env || {}) } });
+// 특정 config dir 을 겨냥해 claude 를 부른다. `configDir === null` = **기본 위치**($HOME/.claude.json) —
+//  그때는 상속된 CLAUDE_CONFIG_DIR 를 **지운다**(안 지우면 세션 안에서 돌릴 때 기본 위치엔 영원히 안 박힌다).
+const runClaudeIn = (configDir, args, opts = {}) => runClaude(args, {
+  ...opts,
+  env: configDir ? { CLAUDE_CONFIG_DIR: configDir, ...(opts.env || {}) } : (opts.env || {}),
+  dropEnv: configDir ? (opts.dropEnv || []) : ["CLAUDE_CONFIG_DIR", ...(opts.dropEnv || [])],
+});
 // 윈도우 tar.exe 는 System32 동봉이다 — 훅·자식 프로세스의 빈약한 PATH 에서도 찾도록 절대경로를 먼저 본다(#1510).
 const tarBin = () => {
   if (!WIN) return "tar";
@@ -577,6 +589,80 @@ function claudeUserConfigPaths() {
   return out;
 }
 function claudeUserConfigPath() { return claudeUserConfigPaths()[0] ?? null; }
+
+/**
+ * MCP 를 등록해야 하는 claude config dir **전부** — 순수(테스트가 이 표를 지킨다).
+ * `configDir === null` = claude 기본 위치($HOME/.claude.json).
+ *
+ * ★ 왜 여러 곳인가(2026-08-14 실기기 실측). 웹터미널 세션은 `CLAUDE_CONFIG_DIR=<프로필>` 을 **항상** 주입하고
+ *  (src/terminal/sessions.ts — 멀티프로필 #346·#1014), 그 프로필 dir 은 세션이 만들 때 `mkdir` 로 비어 있는 채
+ *  생긴다. 거기에 lively MCP 를 굽는 일은 지금까지 게이트웨이의 `provisionProfile`(= bash
+ *  `deploy/provision-profile.sh`, 관리자 라우트 전용) 이 했다 — **Windows 노드에선 원리적으로 못 돈다.**
+ *  한편 키트의 install/update 는 사람 셸에서 도니 기본 위치에만 등록한다.
+ *  → 노드 웹세션엔 lively MCP 가 **영원히 안 나타났다**(사람이 세션 안에서 손으로 `lively update` 를 쳐야 했다).
+ *  그 오케스트레이션을 키트로 내린다. provision-profile.sh 가 하는 일도 결국
+ *  `CLAUDE_CONFIG_DIR=<프로필> install-kit.sh` 하나뿐이다 — 새 메커니즘이 아니라 같은 일을 스스로 하는 것이다.
+ *
+ * ⚠ 호출자가 `CLAUDE_CONFIG_DIR` 로 **대상을 지목했으면 그것만** 한다. 지목을 무시하고 퍼뜨리면
+ *  게이트웨이가 멤버 한 명의 프로필을 프로비저닝할 때 남의 프로필까지 건드린다(#1014 격리 위반).
+ */
+export function claudeMcpTargets(o) {
+  const explicit = String((o.env || {}).CLAUDE_CONFIG_DIR || "").trim();
+  if (explicit) return [{ configDir: explicit, label: "지정된 프로필" }];
+  const out = [{ configDir: null, label: "기본" }];
+  let slugs = [];
+  try { slugs = o.listDirs(o.profilesRoot) || []; } catch { slugs = []; }
+  for (const slug of [...slugs].sort()) {
+    const dir = o.join(o.profilesRoot, slug, "claude");
+    if (o.exists(dir)) out.push({ configDir: dir, label: `프로필 ${slug}` });
+  }
+  return out;
+}
+
+/** 이 PC 의 프로필 dir 목록을 실제로 훑어 대상을 낸다(위 순수함수에 파일시스템을 물린다). */
+function mcpTargets() {
+  return claudeMcpTargets({
+    env: process.env,
+    profilesRoot: join(LIVELY, "profiles"),
+    join,
+    exists: existsSync,
+    listDirs: (root) => readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name),
+  });
+}
+
+/** 한 대상(config dir)의 `.claude.json` 에서 항목 하나를 읽는다. null = 없음. configDir null = 기본 위치. */
+function claudeMcpEntryIn(configDir, name) {
+  const p = configDir ? join(configDir, ".claude.json") : join(HOME, ".claude.json");
+  try { return JSON.parse(readFileSync(p, "utf8"))?.mcpServers?.[name] ?? null; } catch { return null; }
+}
+
+/**
+ * 대상별 등록 커버리지 — 순수. `lively status` 가 "어딘가 있음" 을 초록불로 쓰지 않게 하는 근거.
+ *
+ * ★ 종전엔 후보 파일 중 **하나라도** 있으면 true 였다(claudeUserMcpRegistered). 그래서 기본 위치엔 있고
+ *  프로필엔 없는 상태 — 즉 **웹터미널 세션에선 안 보이는 상태** — 가 ✓ 로 표시됐다(실기기에서 그렇게 오진했다).
+ *  "등록됨 ≠ 지금 붙음" 과 같은 계열이다(#1431).
+ */
+export function mcpCoverage(name, targets, readEntry) {
+  const have = [], missing = [];
+  for (const t of targets) (readEntry(t.configDir, name) ? have : missing).push(t.label);
+  return { any: have.length > 0, all: missing.length === 0, have, missing };
+}
+
+/** 폐기된 **우리** 등록 이름 — 남으면 세션마다 '연결 실패' 로 뜬다(#1079 에서 http 직결 → stdio 프록시로 이름이 바뀌었다). */
+const LEGACY_MCP_NAMES = ["lively-store"];
+/**
+ * 이 항목이 **우리가 남긴 잔재**인가 — 순수. 같은 이름을 사람이 직접 만들었을 수 있으니 이름만으로 지우지 않는다.
+ * 판정: 우리 게이트웨이 호스트의 `/mcp` 를 가리킬 때만. (스킴·포트는 안 본다 — 옛 등록이 틀렸을 수 있다.
+ *  실측: `http://dev.lvly.io:8080/mcp` — 공개 호스트에 http+8080 이라 애초에 닿지도 않는다.)
+ */
+export function isLegacyLivelyMcp(name, entry, gatewayUrl) {
+  if (!LEGACY_MCP_NAMES.includes(name) || !entry || !gatewayUrl) return false;
+  try {
+    const u = new URL(String(entry.url || ""));
+    return /^\/mcp\/?$/.test(u.pathname) && u.hostname === new URL(gatewayUrl).hostname;
+  } catch { return false; }
+}
 // #1431 — **등록 여부만** 필요할 때(값이 아니라 유무). 존재하는 유저 설정 파일 전부를 본다.
 function claudeUserMcpRegistered(name) {
   for (const p of claudeUserConfigPaths()) {
@@ -619,53 +705,74 @@ function backupUserMcp(name) {
 //
 //  코드 자동 업뎃(#858)에 무임승차: command(심 절대경로)만 등록하고 서버 코드는 lib/lively-mcp-gateway.mjs 로
 //   매 세션 최신 → 코드가 바뀌어도 재등록 불필요.
-function registerLivelyMcp(gw, _tok) {
-  runClaude(["mcp", "remove", "lively"], { allowFail: true, quiet: true });
-  try {
-    const shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively");
-    runClaude(["mcp", "add", "--transport", "stdio", "--scope", "user", "lively", shim, "mcp"], { quiet: true });
-    ok(`MCP 등록: lively (stdio 프록시 → ${gw}/mcp)`);
-    return true;
-  } catch (e) { fail(`MCP 등록 실패(lively): ${e.message}`); return false; }
-}
-
-function registerClaudeMcp() {
-  const gw = gateway(), tok = token();
-  if (!has("claude")) { info("claude 미설치 — MCP 등록 건너뜀"); return { registered: 0, failed: 0 }; }
+// 한 config dir 에 전부 등록한다. 대상 열거는 claudeMcpTargets, 여기선 '그 한 곳에 무엇을 넣나' 만.
+function registerClaudeMcpIn(target, gw) {
+  const cd = target.configDir;
+  const at = cd ? ` [${target.label}]` : "";
+  const shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively");
   let registered = 0, failed = 0;
-  if (registerLivelyMcp(gw, tok)) registered++; else failed++;
+
+  // lively 본체 — **로컬 stdio 프록시**(`lively mcp`)로 등록한다(#1079).
+  runClaudeIn(cd, ["mcp", "remove", "lively"], { allowFail: true, quiet: true });
+  try {
+    runClaudeIn(cd, ["mcp", "add", "--transport", "stdio", "--scope", "user", "lively", shim, "mcp"], { quiet: true });
+    ok(`MCP 등록: lively${at} (stdio 프록시 → ${gw}/mcp)`);
+    registered++;
+  } catch (e) { fail(`MCP 등록 실패(lively${at}): ${e.message}`); failed++; }
 
   // lively-local — 로컬 조작 stdio MCP(#899). 같은 CLI 가 서버(`lively mcp-local`).
   //  코드 자동 업뎃(#858)에 무임승차: command(심 절대경로)만 등록하고 서버 코드는 lib/lively-mcp-local.mjs 로
   //  매 세션 최신 → 코드가 바뀌어도 재등록 불필요(툴 목록 자체를 바꿀 때만 여기 add 가 다시 태운다).
-  runClaude(["mcp", "remove", "lively-local"], { allowFail: true, quiet: true });
+  runClaudeIn(cd, ["mcp", "remove", "lively-local"], { allowFail: true, quiet: true });
   try {
-    const shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively");
-    runClaude(["mcp", "add", "--transport", "stdio", "--scope", "user", "lively-local", shim, "mcp-local"], { quiet: true });
-    ok("MCP 등록: lively-local (stdio · 로컬조작)");
+    runClaudeIn(cd, ["mcp", "add", "--transport", "stdio", "--scope", "user", "lively-local", shim, "mcp-local"], { quiet: true });
+    ok(`MCP 등록: lively-local${at} (stdio · 로컬조작)`);
     registered++;
-  } catch (e) { fail(`MCP 등록 실패(lively-local): ${e.message}`); failed++; }
+  } catch (e) { fail(`MCP 등록 실패(lively-local${at}): ${e.message}`); failed++; }
+
+  // 폐기된 우리 등록 정리 — 남겨두면 세션마다 '연결 실패' 로 뜬다. **우리 것으로 확인될 때만** 지운다
+  //  (같은 이름을 사람이 직접 만들었을 수 있다 — isLegacyLivelyMcp 가 게이트웨이 호스트·/mcp 경로로 판정).
+  for (const name of LEGACY_MCP_NAMES) {
+    const entry = claudeMcpEntryIn(cd, name);
+    if (!isLegacyLivelyMcp(name, entry, gw)) continue;
+    runClaudeIn(cd, ["mcp", "remove", name], { allowFail: true, quiet: true });
+    info(`폐기된 등록 제거: ${name}${at} (지금은 lively stdio 프록시가 대신한다)`);
+  }
 
   // 조직 추가 MCP 서버 — auth_env 는 환경변수 '이름' 간접참조(토큰 리터럴을 파일에 두지 않는다).
   for (const s of readMcpServers()) {
     if (!s || s.enabled === false || !s.name || s.name === "lively") continue;
     backupUserMcp(s.name); // 덮어쓰기 전 유저 원본 스냅샷(최초 1회) — uninstall 원복용(비파괴 라운드트립)
-    runClaude(["mcp", "remove", s.name], { allowFail: true, quiet: true });
+    runClaudeIn(cd, ["mcp", "remove", s.name], { allowFail: true, quiet: true });
     try {
       if (s.transport === "stdio" && s.command) {
         // claude stdio 는 command+args 를 분리 인자로 받는다(공백 토큰 분리 — register-clients.sh 와 동일 한계).
         const parts = String(s.command).trim().split(/\s+/).filter(Boolean);
-        runClaude(["mcp", "add", "--transport", "stdio", "--scope", "user", s.name, ...parts], { quiet: true });
+        runClaudeIn(cd, ["mcp", "add", "--transport", "stdio", "--scope", "user", s.name, ...parts], { quiet: true });
       } else if (s.url) {
         const secret = s.auth_env ? (process.env[s.auth_env] || "") : "";
         const a = ["mcp", "add", "--transport", "http", "--scope", "user", s.name, s.url];
         if (secret) a.push("--header", `Authorization: Bearer ${secret}`);
-        runClaude(a, { quiet: true });
+        runClaudeIn(cd, a, { quiet: true });
         if (s.auth_env && !secret) warn(`${s.name}: 환경변수 ${s.auth_env} 가 비어 무인증 등록됨`);
       } else continue;
-      ok(`MCP 등록: ${s.name}`);
+      ok(`MCP 등록: ${s.name}${at}`);
       registered++;
-    } catch (e) { fail(`MCP 등록 실패(${s.name}): ${e.message}`); failed++; }
+    } catch (e) { fail(`MCP 등록 실패(${s.name}${at}): ${e.message}`); failed++; }
+  }
+  return { registered, failed };
+}
+
+function registerClaudeMcp() {
+  const gw = gateway();
+  if (!has("claude")) { info("claude 미설치 — MCP 등록 건너뜀"); return { registered: 0, failed: 0 }; }
+  let registered = 0, failed = 0;
+  const targets = mcpTargets();
+  // 프로필이 있으면 그것까지 전부 — 웹터미널 세션은 프로필 dir 을 읽으므로 기본 위치만 등록하면 세션엔 안 보인다.
+  if (targets.length > 1) info(`MCP 등록 대상 ${targets.length}곳: ${targets.map((t) => t.label).join(" · ")}`);
+  for (const t of targets) {
+    const r = registerClaudeMcpIn(t, gw);
+    registered += r.registered; failed += r.failed;
   }
   return { registered, failed };
 }
@@ -1011,7 +1118,7 @@ async function gatherStatus() {
     harness: {
       // mcp = 등록됐나(정적) · mcpConnected = 지금 실제로 붙나(동적, 모르면 null — 아는 척하지 않는다)
       // assets = 조직 자산이 이 머신에 실제로 깔렸나 { local, server } (#1475 — 아래 주석 참조)
-      claude: { installed: has("claude"), wired: false, mcp: false, mcpConnected: null, assets: null },
+      claude: { installed: has("claude"), wired: false, mcp: false, mcpConnected: null, mcpMissing: null, assets: null },
       // configOk = codex 가 config.toml 을 **실제로 읽을 수 있나**. 이 축이 없어서 2026-08-04 윈도우 사고 때
       //  status 가 "✓ 배선"이라고 거짓 보고했다 — 파일에 우리 센티넬은 있는데 codex 는 파싱 실패로 아예 안 떴다.
       //  (한 줄의 문법 오류가 파일 전체를 무효화하는 게 TOML 이라, '우리 블록이 있다'는 '동작한다'가 아니다.)
@@ -1062,6 +1169,13 @@ async function gatherStatus() {
       st.harness.claude.mcp = claudeUserMcpRegistered("lively");
       st.harness.claude.mcpConnected = null;
     }
+    // ★ `mcp get` 은 **이 프로세스의** CLAUDE_CONFIG_DIR 한 곳만 본다. 그래서 그것만으로는
+    //  "웹터미널 세션(=프로필 dir)에서도 보이나" 를 답할 수 없다 — 기본 위치엔 있고 프로필엔 없는 상태가
+    //  ✓ 로 표시되던 실기기 오진이 정확히 그 틈이었다. 대상 전부를 파일로 훑어 **빠진 곳을 이름으로** 남긴다.
+    try {
+      const cov = mcpCoverage("lively", mcpTargets(), claudeMcpEntryIn);
+      st.harness.claude.mcpMissing = cov.missing;      // 빈 배열 = 전 대상 커버(세션에서도 보인다)
+    } catch { st.harness.claude.mcpMissing = null; }    // 못 쟀으면 null — 아는 척하지 않는다
   }
   // codex 도 같은 깊이로 본다(#1475) — 종전엔 '설치·배선' 두 칸뿐이라, config 가 깨져 codex 가 아예 안 뜨는
   //  상태에서도 status 는 초록불이었다. `codex mcp get lively` 한 번으로 세 가지를 동시에 얻는다:
@@ -1278,6 +1392,12 @@ async function cmdStatus(opts) {
   // 자산은 **개수가 곧 진단**이다 — 0/26 이면 그 머신에서 materialize 가 한 번도 성공한 적 없다는 뜻(#1475).
   const assetsOf = (h) => !h.assets ? "" : `   자산 ${h.assets.local === h.assets.server ? green(`${h.assets.local}/${h.assets.server}`) : yellow(`${h.assets.local}/${h.assets.server}`)}`;
   say(`  claude        ${mark(st.harness.claude.installed)} 설치   ${mark(st.harness.claude.wired)} 배선   ${mark(st.harness.claude.mcp)} MCP 등록${connOf(st.harness.claude)}${assetsOf(st.harness.claude)}`);
+  // ★ '어딘가 등록됨' 을 통과로 쓰지 않는다 — 웹터미널 세션은 프로필 dir 을 읽으므로, 거기 없으면 세션엔 안 보인다.
+  //  그 상태가 초록불로 보이던 게 실기기 오진의 원인이었다. 빠진 곳을 이름으로 말하고, 고치는 한 줄까지 준다.
+  if (Array.isArray(st.harness.claude.mcpMissing) && st.harness.claude.mcpMissing.length) {
+    say(`                ${yellow("✘")} MCP 미등록: ${st.harness.claude.mcpMissing.join(" · ")} ${dim("— 이 위치로 뜨는 세션엔 lively 툴이 안 보입니다")}`);
+    say(`                ${dim("고치기: lively update")}`);
+  }
   // codex 는 '배선' 자리에 **config 유효성**을 함께 싣는다 — 우리 블록이 있어도 파일이 파싱 안 되면 codex 는 아예 안 뜬다.
   const cx = st.harness.codex;
   const cxWired = cx.configOk === false ? `${red("✘")} 배선 ${red("(config.toml 을 codex 가 못 읽음)")}` : `${mark(cx.wired)} 배선`;
