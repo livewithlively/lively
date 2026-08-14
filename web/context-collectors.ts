@@ -368,7 +368,11 @@ async function openPreview(c: any) {
     if (!r.ok) { box.replaceChildren(el('p', { class: 'admin-hint', text: '가져오지 못했습니다 — ' + (r.error || '알 수 없는 오류') })); return; }
     const sample: any[] = r.sample || [];
     if (!sample.length) {
-      box.replaceChildren(el('p', { class: 'admin-hint', text: '지금 잡히는 것이 0건입니다. 설정(범위·필드 매핑)을 확인하세요 — 특히 고유 id 매핑이 비어 있으면 항목이 전부 버려집니다.' }));
+      // ⚠ 0건의 원인을 **단정하지 않는다.** 예전엔 "설정(범위·필드 매핑)을 확인하세요"라고 못박았는데,
+      //  실제로 가장 흔한 원인은 자격 실패였다(#1631 실측: 노션 401 인데 이 문구가 범위를 보라고 보냈다).
+      //  이제 자격·범위 실패는 서버가 오류로 올려 주므로(failure-class.ts) 여기까지 온 0건은
+      //  "정말 없거나 · 매핑 문제"다. 그래도 순서를 흔한 것부터 두고 단정은 피한다.
+      box.replaceChildren(el('p', { class: 'admin-hint', text: '지금 잡히는 것이 0건입니다. 그 범위에 실제로 자료가 없거나, 고유 id 매핑이 비어 항목이 버려졌을 수 있습니다(매핑이 비면 전부 버려집니다).' }));
       return;
     }
     const list = el('div', { class: 'ctx-preview-list' });
