@@ -28,6 +28,13 @@ export interface LivSnapshot {
   nodes?: { registered: number; online: number } | null;
   /** 예전 환경 이관을 이미 보고했나(done·skipped 면 다시 묻지 않는다 — 잔소리 금지). */
   migrateReported?: boolean;
+  /**
+   * 사람이 **"그건 안 할게요"라고 한 카드 key** 들(liv_profile.declined).
+   *
+   * ⚠ 이게 없으면 리브는 매번 같은 걸 권하는 잔소리꾼이 된다. 상시로 뜨는 화면이라 그 위험이
+   *  체크리스트보다 크다 — #850 이 멤버 온보딩을 세션 주입에서 뺀 이유와 같은 함정이다.
+   */
+  declined?: string[];
 }
 
 export interface LivFinding {
@@ -114,8 +121,11 @@ export function livFindings(s: LivSnapshot): LivFinding[] {
     });
   }
 
+  // 거절한 것은 **아예 만들지 않는다**(뒤에서 숨기는 게 아니라). 화면·프롬프트·개수 어디에도 안 남아야
+  //  "다시 꺼내지 않는다"가 지켜진다 — 카운트에만 남아도 사람은 그걸 본다.
+  const declined = new Set(s.declined ?? []);
   const rank = { p0: 0, p1: 1 } as const;
-  return out.sort((a, b) => rank[a.severity] - rank[b.severity]);
+  return out.filter((f) => !declined.has(f.key)).sort((a, b) => rank[a.severity] - rank[b.severity]);
 }
 
 /**

@@ -1308,6 +1308,16 @@
   "input_hash": "73fb9f301b2596ea"
  },
  {
+  "name": "me_liv_profile_set",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/liv-profile"
+  ],
+  "input_hash": "28ae905489e3aa6c"
+ },
+ {
   "name": "org_connector_members",
   "scope": "admin",
   "mcp": true,

@@ -152,6 +152,25 @@ t("[17] 모든 카드 제목이 어미까지 끝맺는다", () => {
   for (const c of f) assert.match(c.title, /다\.$/, `제목이 명사 종결이다: ${c.title}`);
 });
 
+t("[19] 거절한 카드는 아예 만들지 않는다 — 개수에도 안 남는다", () => {
+  // 뒤에서 숨기기만 하면 카운트("지금 손볼 것 3")에 남아 사람이 그걸 본다. "다시 꺼내지 않는다"가 깨진다.
+  const org = ITEMS.map((i) => (["categories", "pipeline"].includes(i.key) ? { ...i, done: false } : i));
+  assert.deepEqual(keys(snap({ org })), ["org.categories", "org.pipeline"]);
+  assert.deepEqual(keys(snap({ org, declined: ["org.pipeline"] })), ["org.categories"]);
+  assert.deepEqual(keys(snap({ org, declined: ["org.categories", "org.pipeline"] })), []);
+});
+
+t("[20] 거절 목록에 없는 key 는 영향이 없다(오타·옛 key 가 다른 카드를 지우면 안 된다)", () => {
+  const org = ITEMS.map((i) => (i.key === "categories" ? { ...i, done: false } : i));
+  assert.deepEqual(keys(snap({ org, declined: ["org.nope", "categories"] })), ["org.categories"]);
+});
+
+t("[21] 개인 카드도 거절하면 안 뜬다", () => {
+  const base = { migrateReported: false, nodes: { registered: 0, online: 0 } };
+  assert.deepEqual(keys(snap(base)), ["member.local-import"]);
+  assert.deepEqual(keys(snap({ ...base, declined: ["member.local-import"] })), []);
+});
+
 t("[18] livMature — 조직 카드가 있으면 아직 아니고, 개인 권유만 남으면 성숙", () => {
   assert.equal(livMature([]), true);
   assert.equal(livMature(livFindings(snap({ org: undone("pipeline") }))), false, "p1 이어도 조직 카드면 리브가 필요하다");
