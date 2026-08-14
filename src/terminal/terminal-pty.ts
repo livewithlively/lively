@@ -17,6 +17,7 @@ import type { Duplex } from "node:stream";
 import { logger } from "../log.js";
 import os from "node:os";
 import { TMUX_BIN, canAttach, ensureSessionOpts, sessionGone } from "./terminal-sessions.js";
+import { tmuxExecArgv } from "./tmux-exec.js";
 import { nodeCanAttach, nodeRelayAttach } from "../node/registry.js";
 
 // attach 가 실제로 쓰는 소켓 표면 — 게이트웨이 로컬은 실 WebSocket, 노드 에이전트(#869)는 게이트웨이행
@@ -384,7 +385,13 @@ export function attachSession(ws: AttachSocket, id: string): void {
       // encoding:null → onData 가 Buffer(raw 바이트). 바이너리 프레임으로 그대로 relay하고 서버는 UTF-8 디코드를
       //  하지 않는다 — tmux 는 멀티바이트 UTF-8 문자를 %output 알림 경계에서 쪼갤 수 있어, 서버가 문자열로 디코드하면
       //  그 자리가 깨진다(�). 디코드/재조립은 클라가 바이트 레벨로 한다(terminal.js makeControl).
-      term = spawnAttachTerm(TMUX_BIN, args, env);
+      // attach 실행 seam(#1437) — 기본은 로컬 tmux(설정 없으면 종전과 완전히 동일).
+      //  ★ 명령형 tmux 는 tmux-exec 의 seam 이 덮지만 **attach 는 그 경로가 아니다**(장수 PTY 다).
+      //   게이트웨이와 tmux 서버가 다른 곳에 있는 배포를 위해 여기도 갈아끼울 수 있어야 한다.
+      //   계약은 같다: 지정한 프로그램에 tmux argv 를 그대로 이어 붙인다.
+      const relay = tmuxExecArgv();
+      const [abin, ...aprefix] = relay.length ? relay : [TMUX_BIN];
+      term = spawnAttachTerm(abin!, [...aprefix, ...args], env);
       liveTerms.add(term); // 종료 훅이 회수할 수 있게 추적(#687 고아 방지)
       spawnFailStreak.delete(id); // 정상 스폰 → 실패 스트릭 리셋(#869)
       // 시작 레이스 방지: tmux -CC 가 tty 를 no-echo 로 잡기 전에 명령을 쓰면 pty 가 그 명령을 '에코백'하고,
