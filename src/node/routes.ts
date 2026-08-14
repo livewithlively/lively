@@ -18,7 +18,7 @@ import { wrap, HttpError } from "../http/rest-util.js";
 import { createNode, deleteNode, getNode, listNodes, rotateNodeToken, setNodeEnabled, setNodeShared, type OrgNode } from "./store.js";
 import { nodeOpenTo } from "./node-access.js";
 import { liveNodes } from "./registry.js";
-import { agentIsLatest } from "./protocol.js";
+import { nodeHarnesses, agentIsLatest } from "./protocol.js";
 import { logger } from "../log.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."); // dist/node/ → 리포 루트
@@ -56,6 +56,7 @@ function servedAgentVersion(): string | null {
 //  agent_latest 3상(true/false/null)의 근거는 protocol.agentIsLatest 참조 — 거기서 검증한다.
 interface NodeView extends Omit<OrgNode, "token_hash"> {
   online: boolean; sessions: number; agent_latest: boolean | null; agent_ver_latest: string | null;
+  harnesses: string[];   // #1713 — 이 노드에서 열 수 있는 하네스(정규화 — 미보고면 기준선)
 }
 function toView(n: OrgNode, live: Map<string, { online: boolean; sessions: number }>): NodeView {
   const { token_hash: _hash, ...rest } = n; // 토큰 해시는 응답에 싣지 않는다(상관추적은 토큰탭에서)
@@ -65,6 +66,8 @@ function toView(n: OrgNode, live: Map<string, { online: boolean; sessions: numbe
     ...rest, online: lv?.online ?? false, sessions: lv?.sessions ?? 0,
     agent_ver_latest: served,
     agent_latest: agentIsLatest(n.agent_ver, served),
+    // #1713 — 이 노드에서 열 수 있는 하네스(미보고 = 구 번들 → 기준선). 노드 화면이 그대로 보여준다.
+    harnesses: nodeHarnesses(n.agent_harnesses),
   };
 }
 

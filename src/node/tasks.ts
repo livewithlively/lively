@@ -62,6 +62,24 @@ export async function detectDocker(): Promise<boolean> {
   catch { return false; }
 }
 
+// 이 PC 에서 **실제로 세션을 띄울 수 있는** 하네스(#1713) — 이 번들의 카탈로그 ∩ PATH 에 있는 실행 파일.
+//  게이트웨이는 남의 PC 에 무엇이 깔렸는지 알 방법이 없다. 그래서 노드가 hello 로 직접 답하고, 세션 폼이 그걸로
+//  선택지를 거른다 — 종전엔 사용자가 [생성하기]를 누른 **뒤에야** 알았다(옛 번들이면 502 "허용되지 않은 하네스",
+//  바이너리가 없으면 세션이 뜨자마자 즉사).
+//  ⚠ 판정은 `--version` 1회(네 하네스 모두 무부작용). 노드 기동 시 한 번만 도는 자리다.
+//  ⚠ Windows 는 claude·codex 가 .cmd 셰임이라 shell 없이는 ENOENT 다(work.mjs 가 같은 이유로 shell:true 를 쓴다).
+export async function detectHarnesses(): Promise<string[]> {
+  const out: string[] = [];
+  for (const h of HARNESSES) {
+    if (!h.bin) { out.push(h.key); continue; }   // 셸 — 실행 파일이 필요 없다(어느 PC 에서나 열린다)
+    try {
+      await execFileAsync(h.bin, ["--version"], { timeout: 5000, shell: process.platform === "win32" });
+      out.push(h.key);
+    } catch { /* 없거나 못 뜬다 → 이 노드에선 못 연다. 목록에서 빠지는 것이 곧 사실이다(추측해서 넣지 않는다) */ }
+  }
+  return out;
+}
+
 // ── 태스크 스폰 ──
 export interface RunTaskInput {
   user: LivelyUser;            // 의뢰자(과금·귀속 신원 — D1: 의뢰자 시트)

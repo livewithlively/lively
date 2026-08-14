@@ -1,7 +1,7 @@
 // 노드 프로토콜(#869) 단위 테스트 — 채널 프레임 인코딩/디코딩 왕복 + 제어 파싱 + 가시성 판정.
 import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
-import { encodeChanFrame, decodeChanFrame, parseMsg, nodeSessionVisible, nodeCaps, agentIsLatest, nodeWsUrl, NODE_OPS, NODE_BASELINE_OPS, FRAME_PTY } from "./protocol.js";
+import { encodeChanFrame, decodeChanFrame, parseMsg, nodeSessionVisible, nodeCaps, agentIsLatest, nodeHarnesses, NODE_BASELINE_HARNESSES, nodeWsUrl, NODE_OPS, NODE_BASELINE_OPS, FRAME_PTY } from "./protocol.js";
 
 // 프레임 왕복 — 멀티바이트(UTF-8 쪼개짐 경계 포함)도 바이트 그대로 보존돼야 한다(무디코드 릴레이 불변식).
 {
@@ -84,6 +84,25 @@ assert.equal(nodeSessionVisible({ owner: "yoon", invites: [] }, "jang"), false);
   assert.equal(agentIsLatest("abc123", null), null, "🔴 번들이 없어 서빙본을 모르는데 노드를 '구버전'이라 단정했다");
   assert.equal(agentIsLatest(null, null), null);
   assert.equal(agentIsLatest("", "abc123"), null, "빈 문자열은 '모름'이다 — 최신 아님으로 단정하면 안 된다");
+}
+
+// ── 노드가 띄울 수 있는 하네스(#1713) — caps 와 같은 원칙: **모르면 못 한다고 본다.** ──
+//  이 값이 없어서 생긴 실제 증상: 게이트웨이가 antigravity 를 지원해도, 그 PC 의 노드가 옛 번들이면
+//  세션 만들기가 502("허용되지 않은 하네스")로 튕겼고 사용자는 [생성하기]를 누른 뒤에야 알았다.
+{
+  assert.deepEqual(nodeHarnesses(["claude", "antigravity"]), ["claude", "antigravity"], "보고한 목록을 그대로 쓴다");
+  assert.deepEqual(nodeHarnesses(["claude", "claude"]), ["claude"], "중복은 접는다");
+
+  // 🔴 미보고 = 구 번들이다. 그 빌드가 실제로 알던 것(기준선)으로 봐야 한다 — 최신 목록으로 넘겨짚으면
+  //  그 노드가 못 여는 하네스를 폼에 띄우고, 사용자는 다시 [생성하기] 뒤에 502 를 본다.
+  assert.deepEqual(nodeHarnesses(undefined), [...NODE_BASELINE_HARNESSES], "🔴 미보고를 최신 목록으로 넘겨짚었다");
+  assert.deepEqual(nodeHarnesses(null), [...NODE_BASELINE_HARNESSES]);
+  assert.deepEqual(nodeHarnesses([]), [...NODE_BASELINE_HARNESSES], "빈 배열도 '모름'이다(보고 실패)");
+  assert.deepEqual(nodeHarnesses([null, 1, ""] as unknown as string[]), [...NODE_BASELINE_HARNESSES], "잡값만 오면 기준선");
+
+  // 🔴 기준선은 **옛 빌드가 실제로 알던 것**이다. 여기에 새 하네스를 끼워 넣으면 구 노드가 못 하는 걸
+  //  한다고 주장하게 된다(caps 의 NODE_OPS_V1 과 같은 함정 — 그쪽 주석 참조).
+  assert.deepEqual([...NODE_BASELINE_HARNESSES], ["claude", "codex", "shell"], "🔴 기준선을 늘렸다 — 구 노드가 못 여는 하네스를 주장하게 된다");
 }
 
 // ── 노드 WSS 주소 — **베이스경로를 보존**해야 한다(#1541 실측 회귀). ──

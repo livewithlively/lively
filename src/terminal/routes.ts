@@ -24,6 +24,7 @@ import { isProjectSessionDir } from "../project/project-fs.js";
 import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, liveNodes } from "../node/registry.js";
 import type { NodeOp } from "../node/protocol.js";
 import { getNode, listNodes } from "../node/store.js";
+import { nodeHarnesses } from "../node/protocol.js";   // #1713 — 노드별 하네스 가용성(미보고 → 기준선)
 import { nodeOpenTo } from "../node/node-access.js";
 import { translateNodeRpcError } from "../node/rpc-error.js";
 import { registerNodeRoutes } from "../node/routes.js";
@@ -135,7 +136,10 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
         const live = new Map(liveNodes().map((n) => [n.id, n.online]));
         return (await listNodes().catch(() => []))
           .filter((n) => n.enabled && nodeOpenTo(n, me))
-          .map((n) => ({ id: n.id, name: n.name, kind: n.kind, shared: n.shared, online: live.get(n.id) ?? false }));
+          // harnesses(#1713) — **그 PC 에서 실제로 띄울 수 있는 것**만 폼에 보여주기 위해 함께 준다.
+          //  노드가 hello 로 보고한 값이고, 구 번들이라 미보고면 기준선(claude·codex·shell)이 온다.
+          //  이게 없으면 사용자는 [생성하기]를 누른 뒤에야 안다 — 옛 번들은 502, 바이너리 부재는 세션 즉사.
+          .map((n) => ({ id: n.id, name: n.name, kind: n.kind, shared: n.shared, online: live.get(n.id) ?? false, harnesses: nodeHarnesses(n.agent_harnesses) }));
       })(),
     });
   }));
