@@ -313,7 +313,7 @@ export const livCapabilities: Capability[] = [
 
       const profile = await appendLivAnswer(userId, {
         at: new Date().toISOString(), key: ask.key, question: ask.question,
-        choices: picked, ...(other ? { other } : {}),
+        choices: picked, ...(other ? { other } : {}), by: "self",
       });
       // 리브가 무엇이 골라졌는지 알아야 이어갈 수 있으므로 라벨까지 되돌려준다.
       const labels = ask.options.filter((o) => picked.includes(o.id)).map((o) => o.label);
@@ -321,6 +321,40 @@ export const livCapabilities: Capability[] = [
     }, false, {
       choices: z.array(z.string()).optional().describe("고른 선택지 id 들."),
       other: z.string().optional().describe("'그 외'로 직접 적은 것."),
+    }),
+
+  // ── 채팅으로 답한 것을 리브가 옮겨 적는다(#1631) ────────────────────────────────
+  //
+  //  왜 필요한가(실측): 리브가 객관식을 띄워도 **사람은 그냥 채팅으로 답한다.** 페르소나 A 는
+  //   "카톡 단톡방·네이버 밴드"라고 말했는데 버튼을 안 눌러 통계에 한 줄도 안 남았다 —
+  //   **가장 알고 싶은 것(커넥터 없는 소스)이 정확히 그렇게 유실된다.**
+  //  그래서 리브가 옮겨 적을 수 있어야 한다. 다만 그냥 열면 리브가 답을 지어낼 수 있으므로
+  //   `by:"liv"` 로 표시해 집계에서 **사람이 직접 고른 것과 나눠 센다**(by_self / by_liv).
+  restRead("me_liv_record_answer", "채팅으로 받은 답을 옮겨 적기",
+    "사람이 **버튼 대신 채팅으로** 답했을 때, 리브가 그 답을 구조화해 남긴다. " +
+    "⚠ 사람이 실제로 말한 것만 적어라 — 짐작해서 채우지 마라. 집계에 `by:liv` 로 표시돼 사람이 직접 고른 것과 구분된다. " +
+    "목록에 없던 도구(카카오톡·에버노트 등)는 `other` 에 그 이름 그대로 적어라 — 그게 다음에 만들 커넥터 후보다.",
+    [{ method: "POST", paths: ["/api/ui/me/liv-record-answer"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const key = String(input.key ?? "").trim().slice(0, 60);
+      if (!/^[a-z0-9_.-]+$/.test(key)) throw new HttpError(400, "key 는 소문자·숫자·_.- 만 씁니다");
+      const choices = (Array.isArray(input.choices) ? input.choices : [])
+        .map((c) => String(c).trim().slice(0, 40)).filter((c) => /^[a-z0-9_.-]+$/.test(c)).slice(0, 12);
+      const other = String(input.other ?? "").trim().slice(0, 200);
+      if (!choices.length && !other) throw new HttpError(400, "choices 나 other 중 하나는 있어야 합니다");
+      const { appendLivAnswer } = await import("../../org/store.js");
+      const profile = await appendLivAnswer(userId, {
+        at: new Date().toISOString(), key, choices, ...(other ? { other } : {}),
+        question: String(input.question ?? "").trim().slice(0, 300) || undefined, by: "liv",
+      });
+      return { ok: true, key, choices, other: other || undefined, answers: profile.answers };
+    }, true, {
+      key: z.string().optional().describe("통계 축(예: context_sources). 객관식으로 물었던 것과 같은 key 를 쓴다."),
+      choices: z.array(z.string()).optional().describe("알려진 선택지 id 들(notion·slack·files·head 등)."),
+      other: z.string().optional().describe("목록에 없던 것 — 그 이름 그대로(예: 카카오톡, 네이버 밴드). 커넥터 후보가 된다."),
+      question: z.string().optional().describe("무엇을 물었는지(집계 표시용)."),
     }),
 
   restRead("org_liv_answers", "사람들이 고른 답 집계",

@@ -169,6 +169,14 @@ export interface LivAnswer {
   /** '그 외'로 적어낸 자유입력. **여기 쌓이는 것이 곧 다음에 만들 커넥터 후보다.** */
   other?: string;
   question?: string;
+  /**
+   * 누가 기록했나 — `self`(사람이 버튼을 눌렀다) · `liv`(사람이 채팅으로 답한 걸 리브가 옮겨 적었다).
+   *
+   * ⚠ 왜 나눠야 하나: 리브가 옮겨 적는 걸 허용하지 않으면 **채팅으로 답한 사람의 답이 통째로 유실된다**
+   *  (실측: 카톡·네이버밴드를 쓴다고 말했는데 버튼을 안 눌러 통계에 한 줄도 안 남았다). 그렇다고 섞어
+   *  버리면 리브가 잘못 옮긴 것과 사람이 직접 고른 것을 구분할 수 없다 — 그래서 표시해 두고 따로 센다.
+   */
+  by?: "self" | "liv";
 }
 
 export interface LivProfile {
@@ -199,8 +207,8 @@ export async function setLivSecretAsk(id: string, ask: LivAsk | null): Promise<L
  */
 export async function appendLivAnswer(id: string, answer: LivAnswer): Promise<LivProfile> {
   const cur = await getLivProfile(id);
-  const rest = (cur.answers ?? []).filter((a) => a.key !== answer.key);
-  const next: LivProfile = { ...cur, answers: [...rest, answer].slice(-LIV_LIST_CAP), secret_ask: null };
+  const { mergeAnswer } = await import("../delivery/liv-secret.js");
+  const next: LivProfile = { ...cur, answers: mergeAnswer(cur.answers ?? [], answer, LIV_LIST_CAP) as LivAnswer[], secret_ask: null };
   const r = await itemsPool.query(
     `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
   if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
@@ -214,28 +222,13 @@ export async function appendLivAnswer(id: string, answer: LivAnswer): Promise<Li
  * 사람 이름은 내보내지 않는다(누가 답했는지가 아니라 무엇이 몇 번인지가 알고 싶은 것이다).
  */
 export async function livAnswerStats(): Promise<Array<{
-  key: string; question: string | null; responders: number;
+  key: string; question: string | null; responders: number; by_self: number; by_liv: number;
   choices: Array<{ id: string; n: number }>; others: Array<{ text: string; n: number }>;
 }>> {
   const r = await itemsPool.query<{ liv_profile: LivProfile }>(
     `SELECT liv_profile FROM org_member WHERE liv_profile ? 'answers'`);
-  const byKey = new Map<string, { question: string | null; responders: number; c: Map<string, number>; o: Map<string, number> }>();
-  for (const row of r.rows) {
-    for (const a of row.liv_profile?.answers ?? []) {
-      let e = byKey.get(a.key);
-      if (!e) { e = { question: a.question ?? null, responders: 0, c: new Map(), o: new Map() }; byKey.set(a.key, e); }
-      e.responders++;
-      if (a.question && !e.question) e.question = a.question;
-      for (const c of a.choices ?? []) e.c.set(c, (e.c.get(c) ?? 0) + 1);
-      if (a.other) e.o.set(a.other, (e.o.get(a.other) ?? 0) + 1);
-    }
-  }
-  const sort = <T extends { n: number }>(xs: T[]): T[] => xs.sort((x, y) => y.n - x.n);
-  return [...byKey.entries()].map(([key, e]) => ({
-    key, question: e.question, responders: e.responders,
-    choices: sort([...e.c].map(([id, n]) => ({ id, n }))),
-    others: sort([...e.o].map(([text, n]) => ({ text, n }))),
-  }));
+  const { foldAnswerStats } = await import("../delivery/liv-secret.js");
+  return foldAnswerStats(r.rows.map((row) => row.liv_profile?.answers ?? []));
 }
 
 export async function getLivProfile(id: string): Promise<LivProfile> {

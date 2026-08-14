@@ -1358,6 +1358,16 @@
   "input_hash": "9e7578dfd73f3b4a"
  },
  {
+  "name": "me_liv_record_answer",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/liv-record-answer"
+  ],
+  "input_hash": "2c7885f5c7f6812e"
+ },
+ {
   "name": "org_liv_answers",
   "scope": null,
   "mcp": true,

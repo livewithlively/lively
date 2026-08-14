@@ -33,6 +33,57 @@ export function askTargetVerdict(c: AskTargetCollector | null | undefined, field
   return { ok: true };
 }
 
+/** 집계 입력 — 사람마다 남긴 답들(누구인지는 쓰지 않는다). */
+export interface AnswerRow { key: string; choices?: string[]; other?: string; question?: string; by?: "self" | "liv" }
+
+export interface AnswerStat {
+  key: string; question: string | null; responders: number; by_self: number; by_liv: number;
+  choices: Array<{ id: string; n: number }>; others: Array<{ text: string; n: number }>;
+}
+
+/**
+ * 답들을 **개선점을 찾을 수 있는 모양**으로 접는다.
+ *
+ * 두 가지가 핵심이다:
+ * - **`others` 를 버리지 않는다.** 목록에 없어 직접 적어낸 이름(카카오톡·에버노트·에어테이블…)이
+ *   곧 다음에 만들 커넥터 후보다. 실측에서 가장 값진 정보가 정확히 거기 있었다.
+ * - **`by` 로 나눠 센다.** 사람이 버튼을 누른 것(self)과 리브가 채팅을 옮겨 적은 것(liv)을 섞으면,
+ *   리브가 잘못 옮긴 것과 사람이 직접 고른 것을 구분할 수 없어 통계를 믿을 수 없게 된다.
+ */
+export function foldAnswerStats(rows: ReadonlyArray<ReadonlyArray<AnswerRow>>): AnswerStat[] {
+  const byKey = new Map<string, {
+    question: string | null; responders: number; self: number; liv: number;
+    c: Map<string, number>; o: Map<string, number>;
+  }>();
+  for (const perPerson of rows) {
+    for (const a of perPerson ?? []) {
+      if (!a?.key) continue;
+      let e = byKey.get(a.key);
+      if (!e) { e = { question: a.question ?? null, responders: 0, self: 0, liv: 0, c: new Map(), o: new Map() }; byKey.set(a.key, e); }
+      e.responders++;
+      if (a.by === "liv") e.liv++; else e.self++;   // by 미표기(옛 레코드)는 사람 답으로 본다
+      if (a.question && !e.question) e.question = a.question;
+      for (const c of a.choices ?? []) e.c.set(c, (e.c.get(c) ?? 0) + 1);
+      if (a.other) e.o.set(a.other, (e.o.get(a.other) ?? 0) + 1);
+    }
+  }
+  const sort = <T extends { n: number }>(xs: T[]): T[] => xs.sort((x, y) => y.n - x.n);
+  return [...byKey.entries()].map(([key, e]) => ({
+    key, question: e.question, responders: e.responders, by_self: e.self, by_liv: e.liv,
+    choices: sort([...e.c].map(([id, n]) => ({ id, n }))),
+    others: sort([...e.o].map(([text, n]) => ({ text, n }))),
+  }));
+}
+
+/**
+ * 같은 key 는 **갈아끼운다** — 다시 물어 다시 답했으면 최신 하나만 의미가 있다.
+ *
+ * ⚠ 두 줄이 남으면 `responders` 가 사람 수보다 커진다. 통계가 조용히 틀어지는 가장 흔한 경로다.
+ */
+export function mergeAnswer(cur: ReadonlyArray<AnswerRow>, next: AnswerRow, cap = 50): AnswerRow[] {
+  return [...(cur ?? []).filter((a) => a.key !== next.key), next].slice(-cap);
+}
+
 /**
  * 화면에 그 요청을 아직 띄워야 하는가.
  *
