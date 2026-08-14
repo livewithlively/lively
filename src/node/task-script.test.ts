@@ -155,9 +155,18 @@ t("S10 하네스별 최종 응답 추출", () => {
   ].join("\n");
   assert.equal(HEADLESS.antigravity.extract(agy), "OK\n");
 
+  // grok — streaming-messages-json(실측 2026-08-14, grok 1.0.3 실계정): 마지막 줄이 claude 형 result 다(#1701).
+  const grok = [
+    '{"type":"system","subtype":"init","session_id":"019f","model":"grok-4.6"}',
+    '{"type":"assistant","message":{"id":"msg_0","role":"assistant","content":[{"type":"text","text":"2"}]}}',
+    '{"type":"result","subtype":"success","is_error":false,"result":"2","session_id":"019f","stop_reason":"end_turn"}',
+  ].join("\n");
+  assert.equal(HEADLESS.grok.extract(grok), "2");
+
   // 남의 스키마로 읽으면 빈 값 — 하네스를 안 들고 다니면 요약이 통째로 사라진다는 뜻이다.
   assert.equal(HEADLESS.claude.extract(agy), "", "claude 파서로 agy 스트림을 읽으면 아무것도 못 뽑는다");
   assert.equal(HEADLESS.antigravity.extract(claude), "", "그 반대도 마찬가지");
+  assert.equal(HEADLESS.antigravity.extract(grok), "", "grok 스트림을 agy 파서로 읽어도 마찬가지");
 });
 
 // S11 — argv 하네스의 프롬프트 상한은 exec 실측 상한(131,072B)보다 **작아야** 한다(인자·환경 몫 여유).
