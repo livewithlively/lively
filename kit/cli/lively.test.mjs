@@ -29,7 +29,7 @@ const { buildKitBundle } = await import(pathToFileURL(join(KIT, "generator", "bu
 const { CLI_SHIM, CLI_SHIM_CMD } = await import(pathToFileURL(join(KIT, "setup", "user-install.mjs")));
 // 순수함수 — 실행 경로로는 못 태우는 분기라 직접 검증한다: winArg 는 POSIX CI 에서 안 돌고(WIN=false),
 //  loginEscapeToken 은 제어단말(/dev/tty)이 있어야 밟히는 분기를 담는다(#916).
-const { winArg, loginEscapeToken } = await import(pathToFileURL(CLI));
+const { winArg, loginEscapeToken, claudeMcpTargets, mcpCoverage, isLegacyLivelyMcp } = await import(pathToFileURL(CLI));
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -111,6 +111,9 @@ function newHome(name) {
     // #1593 — 받은 HOME 을 따로 남긴다. **등록 대상 파일을 고르는 건 argv 가 아니라 이 값**이라,
     //  샌드박스가 라이브 홈을 건드리는지는 오직 이걸로만 판별된다(⑰-c 가 이 로그를 본다).
     'appendFileSync(LOG + ".home", (process.env.HOME || process.env.USERPROFILE || "") + "\\n");',
+    // #1541 — **어느 config dir 을 겨냥했나**. 등록 위치는 argv 가 아니라 이 env 가 정한다(claude --scope user 규약).
+    //  '기본 위치' 겨냥은 이 변수가 **없어야** 한다 — 빈 문자열이면 claude 가 '설정됨' 으로 읽는다.
+    'appendFileSync(LOG + ".ccd", (Object.prototype.hasOwnProperty.call(process.env, "CLAUDE_CONFIG_DIR") ? "[" + process.env.CLAUDE_CONFIG_DIR + "]" : "(unset)") + "\\n");',
     'const logged = (re) => { try { return re.test(readFileSync(LOG, "utf8")); } catch { return false; } };',
     // `claude mcp list` 는 등록된 걸 되돌려준다(구 status 판정 경로 — 남겨둔다).
     'if (a[0] === "mcp" && a[1] === "list") {',
@@ -134,6 +137,7 @@ function newHome(name) {
     home, bin, log,
     argv: () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean) : []),
     homes: () => (existsSync(log + ".home") ? readFileSync(log + ".home", "utf8").trim().split("\n").filter(Boolean) : []),
+    ccds: () => (existsSync(log + ".ccd") ? readFileSync(log + ".ccd", "utf8").trim().split("\n").filter(Boolean) : []),
   };
 }
 
@@ -502,6 +506,38 @@ try {
     rmSync(box, { recursive: true, force: true });
   }
 
+  // ⑰-d ★ **#1541 — 프로필 dir 까지 등록한다.** 웹터미널 세션은 CLAUDE_CONFIG_DIR=<프로필> 로 뜨는데
+  //   키트가 기본 위치에만 등록해서, 노드 웹세션엔 lively MCP 가 **영원히 안 보였다**(실기기 확인).
+  //   판정은 argv 가 아니라 **스텁 claude 가 받은 CLAUDE_CONFIG_DIR** 로 한다 — 등록 파일을 고르는 게 그 값이다.
+  //   ⚠ '기본 위치' 겨냥은 그 변수가 **없어야** 한다(빈 문자열이면 claude 가 '설정됨' 으로 읽는다).
+  {
+    const h = newHome("mcp-profile-fanout");
+    const prof = join(h.home, ".lively", "profiles", "yoon", "claude");
+    mkdirSync(prof, { recursive: true });
+    mkdirSync(join(h.home, ".lively", "profiles", "ghost"), { recursive: true });   // claude dir 없음 → 대상 제외
+    writeFileSync(join(h.home, ".lively", "mcp-servers.json"), JSON.stringify({ servers: [] }));
+    const probe = join(h.home, "probe-1541.mjs");
+    writeFileSync(probe, [
+      `import { registerClaudeMcp } from ${JSON.stringify(pathToFileURL(CLI).href)};`,
+      "registerClaudeMcp();",
+    ].join("\n"));
+    execFileSync(process.execPath, [probe], {
+      env: {
+        ...process.env, HOME: h.home, USERPROFILE: h.home, LIVELY_HOME: h.home,
+        PATH: pathWith(h.bin), LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "",
+        CLAUDE_CONFIG_DIR: "",   // 지목 없음 — 빈 문자열을 '지목' 으로 읽으면 프로필이 통째로 빠진다
+      },
+      stdio: "ignore",
+    });
+    const ccds = new Set(h.ccds());
+    check("⑰-d ★ #1541 기본 위치를 겨냥할 때 CLAUDE_CONFIG_DIR 를 **지운다**(빈 문자열로 두지 않는다)",
+      ccds.has("(unset)"), `본 값=${JSON.stringify([...ccds])}`);
+    check("⑰-d ★ #1541 프로필 dir 에도 등록한다(웹터미널 세션이 읽는 곳)",
+      ccds.has(`[${prof}]`), `본 값=${JSON.stringify([...ccds])} · 기대 포함=[${prof}]`);
+    check("⑰-d claude dir 없는 슬러그는 겨냥하지 않는다",
+      ![...ccds].some((x) => x.includes("ghost")), `본 값=${JSON.stringify([...ccds])}`);
+  }
+
   // ⑰-c **#1593 — 샌드박스(LIVELY_HOME)가 라이브 ~/.claude.json 을 오염시키면 안 된다.**
   //   실측 사고: `LIVELY_HOME=<임시> lively login` 이 **실사용자** ~/.claude.json 에 그 임시 경로를 구웠고,
   //   임시 디렉터리가 지워지자 lively MCP 가 ENOENT 로 **통째로 안 떴다** — 이후 모든 세션이 조직 맥락을 잃는다.
@@ -589,6 +625,63 @@ try {
 } finally {
   server.close();
   cleanup();
+}
+
+// ── MCP 등록 대상·커버리지·잔재 판정 (#1541 실기기) ──────────────────────────
+// 실측: 웹터미널 세션은 CLAUDE_CONFIG_DIR=<프로필> 로 뜨는데 키트는 기본 위치에만 등록했다.
+//  → 노드 웹세션엔 lively MCP 가 영원히 안 보였고, status 는 '어딘가 있음' 을 ✓ 로 표시해 오진을 도왔다.
+{
+  const J = (...p) => p.join("/");
+  const T = (o) => claudeMcpTargets({ join: J, ...o });
+
+  // ① 지목이 있으면 그것만 — 게이트웨이가 멤버 한 명의 프로필을 프로비저닝할 때 남의 프로필을 건드리면 안 된다(#1014).
+  check("MCP대상 지목되면 그 한 곳만",
+    JSON.stringify(T({ env: { CLAUDE_CONFIG_DIR: "/p/yoon/claude" }, profilesRoot: "/r", exists: () => true, listDirs: () => ["a", "b"] }))
+      === JSON.stringify([{ configDir: "/p/yoon/claude", label: "지정된 프로필" }]),
+    "지목을 무시하고 퍼뜨렸다");
+
+  // ② 지목이 없으면 기본 + 이 PC 의 프로필 전부. 기본이 **첫** 대상이어야 한다(종전 동작 보존).
+  const t2 = T({ env: {}, profilesRoot: "/r", exists: () => true, listDirs: () => ["yoon", "amorite"] });
+  check("MCP대상 기본이 첫 항목", t2[0].configDir === null, `첫 항목=${JSON.stringify(t2[0])}`);
+  check("MCP대상 프로필까지 포함(정렬)",
+    JSON.stringify(t2.map((x) => x.configDir)) === JSON.stringify([null, "/r/amorite/claude", "/r/yoon/claude"]),
+    JSON.stringify(t2.map((x) => x.configDir)));
+
+  // ③ 프로필 폴더가 없거나 못 읽어도 기본 하나는 나온다(등록이 통째로 죽지 않게).
+  check("MCP대상 프로필 없음 → 기본만",
+    JSON.stringify(T({ env: {}, profilesRoot: "/r", exists: () => true, listDirs: () => [] })) === JSON.stringify([{ configDir: null, label: "기본" }]),
+    "프로필 0개인데 기본이 사라졌다");
+  check("MCP대상 listDirs throw → 기본만",
+    T({ env: {}, profilesRoot: "/r", exists: () => true, listDirs: () => { throw new Error("EACCES"); } }).length === 1,
+    "권한 오류에 등록 전체가 죽는다");
+  // claude dir 이 아직 없는 슬러그는 제외 — 세션이 만들기 전 자리에 미리 쓰지 않는다.
+  check("MCP대상 claude dir 없는 슬러그 제외",
+    T({ env: {}, profilesRoot: "/r", exists: (p) => p === "/r/yoon/claude", listDirs: () => ["yoon", "ghost"] }).length === 2,
+    "존재하지 않는 프로필 dir 을 대상에 넣었다");
+  check("MCP대상 빈 CLAUDE_CONFIG_DIR 는 지목이 아니다",
+    T({ env: { CLAUDE_CONFIG_DIR: "   " }, profilesRoot: "/r", exists: () => true, listDirs: () => [] })[0].configDir === null,
+    "공백 문자열을 지목으로 읽었다");
+
+  // ④ 커버리지 — '어딘가 있음' 이 아니라 '어디가 빠졌나' 를 낸다.
+  const tg = [{ configDir: null, label: "기본" }, { configDir: "/r/yoon/claude", label: "프로필 yoon" }];
+  const cov = mcpCoverage("lively", tg, (cd) => (cd === null ? { command: "x" } : null));
+  check("커버리지 any/all 분리", cov.any === true && cov.all === false, JSON.stringify(cov));
+  check("커버리지 빠진 곳을 이름으로", JSON.stringify(cov.missing) === JSON.stringify(["프로필 yoon"]), JSON.stringify(cov.missing));
+  const cov2 = mcpCoverage("lively", tg, () => ({ command: "x" }));
+  check("커버리지 전부 있으면 missing 비어 있음", cov2.all === true && cov2.missing.length === 0, JSON.stringify(cov2));
+
+  // ⑤ 잔재 판정 — 이름만으로 지우지 않는다(사람이 같은 이름을 쓸 수 있다).
+  const GW = "https://dev.lvly.io";
+  check("잔재: 우리 게이트웨이의 /mcp 면 제거 대상",
+    isLegacyLivelyMcp("lively-store", { url: "http://dev.lvly.io:8080/mcp" }, GW) === true, "실측된 잔재를 못 잡았다");
+  check("잔재: 남의 호스트면 건드리지 않는다",
+    isLegacyLivelyMcp("lively-store", { url: "https://someone.else/mcp" }, GW) === false, "남의 서버를 지우려 했다");
+  check("잔재: 경로가 /mcp 가 아니면 아니다",
+    isLegacyLivelyMcp("lively-store", { url: "https://dev.lvly.io/other" }, GW) === false, "무관한 경로를 잔재로 봤다");
+  check("잔재: 목록에 없는 이름은 아니다",
+    isLegacyLivelyMcp("lively", { url: "https://dev.lvly.io/mcp" }, GW) === false, "현역 이름을 잔재로 봤다");
+  for (const bad2 of [null, {}, { url: "" }, { url: "not a url" }])
+    check(`잔재: 망가진 항목(${JSON.stringify(bad2)})에 throw 없음`, isLegacyLivelyMcp("lively-store", bad2, GW) === false, "throw 또는 오판");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
