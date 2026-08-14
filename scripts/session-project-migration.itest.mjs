@@ -44,7 +44,7 @@ async function pkArity(pool) {
   return r.rows[0]?.n ?? null;
 }
 
-try { sh(`docker rm -f ${CNAME} 2>/dev/null`); } catch { /* */ }
+try { sh(`docker rm -f -v ${CNAME} 2>/dev/null`); } catch { /* */ }
 console.log("· pg 컨테이너 기동…");
 execFileSync("docker", ["run", "-d", "--name", CNAME, "-e", "POSTGRES_PASSWORD=pw",
   "-p", `${PORT}:5432`, "postgres:16-alpine"], { stdio: "ignore" });
@@ -128,5 +128,5 @@ try {
   await itemsPool.end();
   console.log(`\n${pass} passed`);
 } finally {
-  try { sh(`docker rm -f ${CNAME}`); } catch { /* */ }
+  try { sh(`docker rm -f -v ${CNAME}`); } catch { /* */ }
 }
