@@ -26,11 +26,26 @@ const POLL_MS = 900;
 interface TurnStart { turn_id: string; resumed: boolean }
 interface TailResult { chunk?: string; next?: number; done?: boolean; exit?: number | null }
 
-/** 도구 이름을 사람 말로. 모르는 건 이름 그대로 둔다 — 지어내지 않는다. */
+/**
+ * 도구 이름을 사람 말로.
+ *
+ * 이 화면의 전제가 "무대 뒤를 드러내지 않는다"인데, 액션카드에 `ToolSearch` 같은 하네스 내부 이름이
+ * 그대로 뜨면 그 전제가 카드 한 장으로 깨진다(실측: 첫 대화에서 그렇게 떴다). 그렇다고 감추지는 않는다 —
+ * 카드가 있다는 사실 자체가 '진짜 했다'의 증거라, **이름만 사람 말로 바꾸고 원문은 접어 둔다.**
+ *
+ * ⚠ 모르는 이름은 **그대로 둔다.** 그럴싸한 한국어를 지어내면 사람이 무슨 일이 있었는지 오해한다 —
+ *  낯선 영어 한 줄이 틀린 한국어보다 낫다.
+ */
+const TOOL_LABELS: Record<string, string> = {
+  ToolSearch: '쓸 도구 찾기',
+  Skill: '전담 절차 실행',
+  TodoWrite: '할 일 정리',
+  AskUserQuestion: '물어보기',
+};
 function toolLabel(name: string): string {
   if (name.startsWith('mcp__lively__')) return '라이블리 설정';
-  if (name === 'Skill') return '전담 절차 실행';
-  return name;
+  if (name.startsWith('mcp__')) return '연결한 도구 사용';
+  return TOOL_LABELS[name] ?? name;
 }
 
 /** 액션카드 하나. 시작할 때 만들고 결과가 오면 그 자리를 채운다(새 카드를 또 만들지 않는다). */
