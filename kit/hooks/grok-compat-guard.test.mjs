@@ -49,7 +49,10 @@ const treeList = (d) => {
 };
 const runRunner = (script, extraEnv, payload) => spawnSync(process.execPath, [join(HOOKS_DIR, script)], {
   input: JSON.stringify(payload), encoding: "utf8", timeout: 20000, killSignal: "SIGKILL",
-  env: { ...process.env, LIVELY_HOME: HOME, TMPDIR: TMP, GROK_HOOK_EVENT: "stop", LIVELY_HARNESS: "", ...extraEnv },
+  // ⚠ tmpdir 리다이렉트는 세 변수 전부 — POSIX 는 TMPDIR 를 보지만 **Windows 의 os.tmpdir() 는 TMPDIR 를
+  //  무시하고 TEMP→TMP 를 본다**(CI 윈도우 실측: TMPDIR 만 주면 러너가 실 TEMP 에 플래그를 써서 GG6b 가
+  //  '플래그 0개'로 오판 — 런북 ⑥⑦과 같은 '윈도우에서만 조용히 빗나가는' 부류).
+  env: { ...process.env, LIVELY_HOME: HOME, TMPDIR: TMP, TEMP: TMP, TMP: TMP, GROK_HOOK_EVENT: "stop", LIVELY_HARNESS: "", ...extraEnv },
 });
 
 // [GG6] 가드 발동 — 러너 5종: exit0 + stdout 빈 + 샌드박스( .lively + tmp ) 무변화.
