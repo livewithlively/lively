@@ -103,6 +103,24 @@ export async function renderLiv(view: HTMLElement | null): Promise<void> {
  *  물음은 대화 칸, 할 일은 레일로 갈렸는데 그 사실을 카드마다 인자로 나르면 한 자리만 틀려도 조용히 안 갱신된다. */
 let refreshLiv: () => void = () => { /* renderLiv 전 */ };
 
+/**
+ * 물음을 **치우는 길**. 이게 없으면 리브가 건 물음은 답하기 전엔 영원히 남는다 —
+ * 대화 칸에 고정한 뒤로는 그게 '리브가 지금 기다리는 것'이 아니라 **영구 가구**로 보인다(대표 지적).
+ * 접으면 서버가 declined 에도 남겨, 다음 대화의 리브가 곧바로 다시 묻지 않는다.
+ */
+function livDismissBtn(): HTMLElement {
+  return el('button', {
+    class: 'btn btn-sm btn-ghost liv-ask-later', type: 'button', text: '나중에',
+    title: '지금은 넘어갑니다. 리브가 이걸 다시 곧바로 묻지 않습니다.',
+    onclick: async (ev: Event) => {
+      const b = ev.currentTarget as HTMLButtonElement;
+      b.disabled = true;
+      await api('/api/ui/me/liv/ask-dismiss', { method: 'POST', body: '{}' }).catch(() => { /* 비치명 */ });
+      refreshLiv();
+    },
+  });
+}
+
 function skeletonLine(): HTMLElement { return el('div', { class: 'liv-card liv-card-skel' }); }
 
 /**
@@ -206,7 +224,7 @@ function livChoiceCard(ask: LivSecretAsk, host: HTMLElement): HTMLElement {
     opts,
     // '그 외'는 탈출구다 — 여기 적히는 것이 곧 다음에 만들 커넥터 후보라 버리지 않고 쌓는다.
     ask.allow_other ? el('div', { class: 'liv-ask-row' }, otherIn) : null,
-    (ask.multi || ask.allow_other) ? el('div', { class: 'liv-ask-row' }, send) : null,
+    el('div', { class: 'liv-ask-row' }, (ask.multi || ask.allow_other) ? send : null, livDismissBtn()),
     ask.multi ? el('div', { class: 'liv-ask-note', text: '해당하는 걸 모두 고르셔도 됩니다.' }) : null);
 }
 
@@ -254,6 +272,7 @@ function livUploadCard(ask: LivSecretAsk, host: HTMLElement): HTMLElement {
     el('div', { class: 'liv-ask-head' }, el('b', { text: ask.label ?? '파일 올리기' })),
     ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null,
     el('div', { class: 'liv-ask-row' }, input),
+    el('div', { class: 'liv-ask-row' }, livDismissBtn()),
     el('div', { class: 'liv-ask-note', text: ask.accept_hint || '글자로 된 파일만 됩니다 — 메모·문서(.txt·.md)·표(.csv) 등. PDF·이미지는 아직 안 됩니다.' }),
     msg);
 }
@@ -300,7 +319,7 @@ function livSecretCard(ask: LivSecretAsk, host: HTMLElement): HTMLElement {
   return el('div', { class: 'liv-card liv-ask' },
     el('div', { class: 'liv-ask-head' }, el('b', { text: ask.label })),
     ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null,
-    el('div', { class: 'liv-ask-row' }, input, save),
+    el('div', { class: 'liv-ask-row' }, input, save, livDismissBtn()),
     el('div', { class: 'liv-ask-note', text: '입력하신 값은 잠긴 보관함으로 바로 들어가고, 대화 기록에는 남지 않습니다.' }),
     msg);
 }
