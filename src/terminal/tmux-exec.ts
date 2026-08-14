@@ -25,8 +25,29 @@ const TMUX_ENV: NodeJS.ProcessEnv = (() => {
   return env;
 })();
 
+/**
+ * tmux 실행 seam — 기본은 **로컬 execFile**(설정 없으면 종전과 완전히 동일하다).
+ *
+ * 왜 필요한가: 게이트웨이가 tmux 서버와 **같은 호스트에 있다**는 가정이 이 함수에 박혀 있다.
+ *  그 가정이 성립하지 않는 배포가 있다 — 예컨대 게이트웨이는 컨테이너 안, tmux 서버는 호스트에 두는 형태.
+ *  그때 여기만 갈아끼우면 상위 모듈(phase·profiles·write-cap·sessions)은 한 줄도 안 바뀐다.
+ *
+ * 계약: 지정한 프로그램에 **tmux argv 를 그대로 이어 붙여** 실행한다. stdout 이 tmux 의 stdout 이고,
+ *  0 이 아닌 종료코드는 예외다(로컬 실행과 같은 규약 — 상위의 try/catch 가 그대로 동작해야 한다).
+ *
+ * ⚠ **호출 시점에 읽는다.** 모듈 로드 시점에 굳히면 부팅 순서·테스트에서 값이 안 먹는다
+ *  (세션 spawn 훅에서 같은 함정을 밟았다).
+ * ⚠ attach(`tmux -CC`)는 이 경로가 아니다 — 그건 PTY 라 terminal-pty 가 따로 다룬다.
+ */
+export function tmuxExecArgv(): string[] {
+  const raw = (process.env.LIVELY_TMUX_EXEC || "").trim();
+  return raw ? raw.split(/\s+/) : [];
+}
+
 export async function tmux(args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync(TMUX_BIN, args, { timeout: 5000, env: TMUX_ENV });
+  const relay = tmuxExecArgv();
+  const [bin, ...prefix] = relay.length ? relay : [TMUX_BIN];
+  const { stdout } = await execFileAsync(bin!, [...prefix, ...args], { timeout: 5000, env: TMUX_ENV });
   return stdout;
 }
 export async function tmuxQuiet(args: string[]): Promise<void> { try { await tmux(args); } catch { /* 비치명 */ } }
