@@ -148,7 +148,11 @@ export const livCapabilities: Capability[] = [
           declined: dclIn ? { at: now, key: declinedKey as string, why: str(dclIn.why, 500) } : undefined,
         }),
       };
-    }, false, {
+      // ⚠ mcp:true 여야 한다 — 리브에겐 **이게 유일한 기록 수단**이다. 종전엔 mcp:false 라 부팅 훅이
+      //  `curl` 로 남기라고 시켰는데, v1 채팅에서 셸을 막으면서(#1665 안전선) 그 길이 끊겼다.
+      //  도구가 없으면 리브는 "알게 된 것"을 어디에도 못 남기고, 다음 대화의 리브가 그걸 모른다 —
+      //  그건 "리브가 기억한다"(#1663)가 통째로 무너지는 것이라 조용히 넘어갈 수 없다.
+    }, true, {
       work: z.object({ asis: z.string().optional(), tobe: z.string().optional(), by: z.enum(["ai", "self"]).optional() }).optional()
         .describe("이 사람이 무슨 일을 어떻게 하는가(asis)와 어떻게 하고 싶은가(tobe). 주면 통째로 갈아끼운다."),
       decision: z.object({ what: z.string(), why: z.string().optional(), by: z.string().optional() }).optional()
