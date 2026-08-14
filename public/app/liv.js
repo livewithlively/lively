@@ -1,55 +1,21 @@
-// liv.ts — 리브 화면(#1631). 홈이 대시보드 대신 이걸 띄우는 경우가 있다.
+// liv.ts — 리브 화면(#1631). **독립 전체화면**(#/liv) — 상단 내비·푸터를 걷고 화면 전부를 쓴다.
 //
 //  ── 이 화면이 무엇인가 ──
-//  워크스페이스가 아직 굴러가지 않을 때, "지금 손볼 것"을 카드로 보여주고 **리브에게 맡기면 실제로 해 주는** 화면.
-//  위쪽이 액션카드, 아래쪽이 리브와의 대화(터미널)다. 카드의 [리브에게 맡기기]는 그 세션에 프롬프트를 주입한다 —
-//  그래서 **사람이 터미널을 읽을 줄 몰라도 일이 진행된다**. 이게 v0 가 웹터미널을 재사용하면서도 성립하는 이유다.
+//  "지금 손볼 것"을 왼쪽 레일에 카드로 보여주고, 오른쪽에서 **리브에게 맡기면 실제로 해 주는** 화면.
+//  카드의 [리브에게 맡기기]는 그 세션에 프롬프트를 주입한다 — 그래서 **사람이 터미널을 읽을 줄 몰라도
+//  일이 진행된다**. 이게 v0 가 웹터미널을 재사용하면서도 성립하는 이유다.
+//
+//  ── 왜 홈이 아니라 별도 페이지인가(대표 결정) ──
+//  처음엔 상태를 보고 **홈을 리브로 갈아치웠다**. 그건 과했다 — 사람이 기대한 화면이 아닌 게 뜨는 것은
+//  그 자체로 고장으로 읽힌다. 이제 상단 내비의 [리브] 버튼으로 들어오는 자기 페이지이고, 홈은 늘 홈이다.
+//  대신 여기서는 **크롬을 걷는다**: 대화가 주인공인 화면이라 탭·푸터가 높이를 먹으면 정작 말하기가 불편하다.
 //
 //  ── 판정은 여기서 하지 않는다 ──
-//  무엇을 띄울지(mode)도, 무엇이 덜 됐는지(카드)도 서버가 이미 정해서 준다(GET /api/ui/me/liv).
+//  무엇이 덜 됐는지(카드)는 서버가 이미 정해서 준다(GET /api/ui/me/liv).
 //  화면이 자기 판정을 가지면 리브와 다른 답을 하고, 그게 #1618 이 잡아낸 실패다. 여기는 그리기만 한다.
 import { api, appUrl, el } from './core.js';
-// 사람이 홈을 명시적으로 고른 값. **서버 판정을 이긴다** — 내가 껐는데 자꾸 뜨면 고장으로 읽힌다.
-const LIV_CHOICE_KEY = 'liv_home_choice_v1';
-// 세션당 1회만 판정한다. 홈은 자주 드나드는 화면이라 매번 왕복하면 대시보드가 느려진다.
-const LIV_GATE_CACHE = 'liv_home_mode_v1';
-export function livChoice() {
-    const v = localStorage.getItem(LIV_CHOICE_KEY);
-    return v === 'liv' || v === 'dashboard' ? v : null;
-}
-export function livSetChoice(v) {
-    if (v)
-        localStorage.setItem(LIV_CHOICE_KEY, v);
-    else
-        localStorage.removeItem(LIV_CHOICE_KEY);
-    sessionStorage.removeItem(LIV_GATE_CACHE); // 선택이 바뀌면 캐시된 판정은 낡았다
-}
 export async function livStatus() {
-    const c = livChoice();
-    return await api('/api/ui/me/liv' + (c ? '?choice=' + encodeURIComponent(c) : ''));
-}
-/**
- * 홈(#/dashboard) 진입 게이트 — 리브를 띄울지 대시보드를 띄울지.
- *
- * **대시보드를 고른 사람은 왕복조차 하지 않는다**(그게 대부분의 기존 사용자다). 그 외에는 세션당 1회만
- * 서버에 묻고 sessionStorage 에 담아 둔다 — 새로고침이나 탭 이동으로 홈에 다시 와도 즉시 그려진다.
- *
- * 실패하면 **대시보드로 떨어진다**. 리브가 안 뜨는 것보다 홈이 안 열리는 게 훨씬 나쁘다.
- */
-export async function livHomeGate() {
-    if (livChoice() === 'dashboard')
-        return 'dashboard';
-    const cached = sessionStorage.getItem(LIV_GATE_CACHE);
-    if (cached === 'liv' || cached === 'dashboard' || cached === 'login')
-        return cached;
-    try {
-        const st = await livStatus();
-        sessionStorage.setItem(LIV_GATE_CACHE, st.mode);
-        return st.mode;
-    }
-    catch {
-        return 'dashboard';
-    }
+    return await api('/api/ui/me/liv');
 }
 // ── 세션 부팅 ────────────────────────────────────────────────────────────────
 // 리브 세션은 **한 사람당 하나**다. 이미 있으면 그걸 쓰고, 없을 때만 만든다 — 홈에 들어올 때마다 세션이
@@ -104,10 +70,11 @@ export async function renderLiv(view) {
         return; // 라우터가 넘기는 $view() 는 셸이 아직 없으면 null 이다(대시보드와 같은 계약)
     view.replaceChildren();
     document.body.dataset.route = 'liv';
-    const head = el('div', { class: 'liv-head' }, el('div', { class: 'liv-title' }, el('span', { class: 'liv-dot' }), el('b', { text: '리브' })), el('div', { class: 'liv-head-acts' }, el('button', {
-        class: 'btn btn-sm', type: 'button', text: '대시보드로 →',
-        title: '앞으로 홈은 대시보드로 엽니다. 리브는 언제든 다시 열 수 있습니다.',
-        onclick: () => { livSetChoice('dashboard'); location.hash = '#/dashboard'; },
+    // 상단 내비를 걷었으니 **나가는 길이 화면 안에 있어야 한다** — 없으면 사람이 뒤로가기를 찾는다.
+    //  하나만 둔다: 어디로 가는지가 분명한 [← 라이블리]. 탭을 여기 다시 그리면 크롬을 걷은 뜻이 없어진다.
+    const head = el('div', { class: 'liv-head' }, el('div', { class: 'liv-title' }, el('span', { class: 'liv-dot' }), el('b', { text: '리브' })), el('div', { class: 'liv-head-acts' }, el('a', {
+        class: 'btn btn-sm btn-ghost', href: '#/dashboard', text: '← 라이블리',
+        title: '라이블리 홈으로 돌아갑니다. 리브는 상단 [리브] 버튼으로 다시 열 수 있습니다.',
     })));
     // 카드는 **왼쪽 레일**(이슈 목록 문법), 대화가 남은 폭·높이를 전부 먹는다. 카드가 위에 있으면 대화가
     //  절반으로 눌려 정작 리브와 말하기가 불편해진다 — 이 화면의 주인공은 대화다.
