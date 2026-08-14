@@ -71,7 +71,7 @@ export async function updateSection(
      VALUES($1,$2,'always','authored','active',$3,$4,
        COALESCE((SELECT MAX(sort) FROM knowledge WHERE injection='always' AND lifecycle='active'),-1)+1,
        1,now(),$5)
-     ON CONFLICT (name) DO UPDATE SET
+     ON CONFLICT (tenant_id, name) DO UPDATE SET
        body_md=EXCLUDED.body_md, injection='always', lifecycle='active',
        embedding_vector=CASE WHEN knowledge.body_md IS DISTINCT FROM EXCLUDED.body_md THEN NULL ELSE knowledge.embedding_vector END,
        embedding_model=CASE WHEN knowledge.body_md IS DISTINCT FROM EXCLUDED.body_md THEN NULL ELSE knowledge.embedding_model END,

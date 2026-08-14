@@ -108,7 +108,7 @@ export function startScheduler(): void {
       await q(itemsPool,
         `INSERT INTO org_cron(id, label, action, params, interval_sec, enabled)
            VALUES('sync-notion-full','Notion 일일 전체 스윕(아카이브·완결성)','connector_sync','{"system":"notion","full":true}'::jsonb,86400,true)
-         ON CONFLICT (id) DO NOTHING`);
+         ON CONFLICT (tenant_id, id) DO NOTHING`);
     } catch (e) { logger.warn({ err: (e as Error)?.message }, "notion full 스윕 잡 보장 실패(비치명)"); }
   })();
 }

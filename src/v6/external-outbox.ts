@@ -22,7 +22,7 @@ export async function enqueueExternalPush(
     await itemsPool.query(
       `INSERT INTO external_outbox(entity_id, system, op, ext_id_snapshot)
        VALUES($1,'clickup',$2,$3)
-       ON CONFLICT (system, entity_id) WHERE done_at IS NULL
+       ON CONFLICT (tenant_id, system, entity_id) WHERE done_at IS NULL
        DO UPDATE SET op=EXCLUDED.op,
          ext_id_snapshot=COALESCE(EXCLUDED.ext_id_snapshot, external_outbox.ext_id_snapshot),
          updated_at=now(), attempts=0, last_error=NULL`,

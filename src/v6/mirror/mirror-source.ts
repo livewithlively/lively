@@ -62,7 +62,7 @@ export async function mirrorSourceV6(client: pg.PoolClient, it: RawItem, system:
       VALUES($1,$2,$3,$4::jsonb,$11::jsonb,'observed',
              $5,$6,$7,$8,$12,
              $9, now(), $10, now(), $10)
-     ON CONFLICT (external_system, external_instance, external_id) WHERE external_id IS NOT NULL
+     ON CONFLICT (tenant_id, external_system, external_instance, external_id) WHERE external_id IS NOT NULL
      DO UPDATE SET
         kind=EXCLUDED.kind, title=EXCLUDED.title, body_md=EXCLUDED.body_md, raw=EXCLUDED.raw,
         fields=EXCLUDED.fields, parent_external_id=EXCLUDED.parent_external_id,

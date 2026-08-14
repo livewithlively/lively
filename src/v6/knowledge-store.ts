@@ -450,7 +450,7 @@ export async function upsertKnowledge(
   await itemsPool.query(
     `INSERT INTO knowledge(name, title, body_md, injection, provenance, lifecycle, supersedes, confidence, source, summary, sort, is_wiki, type, is_folder, parent_name, version, updated_at, updated_by)
      VALUES($1,$2,$3,$4,$5,$16,$6,$7,$8,$9,$10,$11,$12,$13,$14,1,now(),$15)
-     ON CONFLICT (name) DO UPDATE SET
+     ON CONFLICT (tenant_id, name) DO UPDATE SET
        title=COALESCE(EXCLUDED.title, knowledge.title), body_md=EXCLUDED.body_md,
        injection=EXCLUDED.injection, provenance=EXCLUDED.provenance, supersedes=EXCLUDED.supersedes,
        confidence=EXCLUDED.confidence, source=EXCLUDED.source,
@@ -756,7 +756,7 @@ export async function recordKnowledgePublication(
   await itemsPool.query(
     `INSERT INTO knowledge_publication(name, system, instance, target_id, page_id, url, content_hash, state, last_error, published_at, published_by, created_at, updated_at)
      VALUES($1,$2,$3,$4,$5,$6,$7,'published',NULL,now(),$8,now(),now())
-     ON CONFLICT (name, system, target_id) DO UPDATE SET
+     ON CONFLICT (tenant_id, name, system, target_id) DO UPDATE SET
        instance=EXCLUDED.instance, page_id=EXCLUDED.page_id, url=EXCLUDED.url,
        content_hash=EXCLUDED.content_hash, state='published', last_error=NULL,
        published_at=now(), published_by=EXCLUDED.published_by, updated_at=now()`,
@@ -770,7 +770,7 @@ export async function markKnowledgePublicationFailed(
   await itemsPool.query(
     `INSERT INTO knowledge_publication(name, system, target_id, state, last_error, created_at, updated_at)
      VALUES($1,$2,$3,'failed',$4,now(),now())
-     ON CONFLICT (name, system, target_id) DO UPDATE SET
+     ON CONFLICT (tenant_id, name, system, target_id) DO UPDATE SET
        state='failed', last_error=EXCLUDED.last_error, updated_at=now()`,
     [name, system, targetId, err.slice(0, 500)]);
 }

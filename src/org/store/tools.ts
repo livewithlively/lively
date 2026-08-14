@@ -158,7 +158,7 @@ export async function upsertTool(t: OrgToolInput, ctx: WriteCtx = {}): Promise<O
   await itemsPool.query(
     `INSERT INTO org_tool(name,kind,enabled,title,description,scope,input_schema,method,url,auth_env,auto_approve,always_load,level,auth_kind,auth_scope_key,pii_scrub,log_args,note,sort,version,updated_at,updated_by)
        VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,1,now(),$20)
-     ON CONFLICT (name) DO UPDATE SET
+     ON CONFLICT (tenant_id, name) DO UPDATE SET
        kind=EXCLUDED.kind, enabled=EXCLUDED.enabled, title=EXCLUDED.title, description=EXCLUDED.description,
        scope=EXCLUDED.scope, input_schema=EXCLUDED.input_schema, method=EXCLUDED.method, url=EXCLUDED.url,
        auth_env=EXCLUDED.auth_env, auto_approve=EXCLUDED.auto_approve, always_load=EXCLUDED.always_load, level=EXCLUDED.level,

@@ -137,7 +137,7 @@ export async function mirrorPmViewV6(client: pg.PoolClient, it: RawItem, system:
   await client.query(
     `INSERT INTO project_view(list_id, folder_id, name, type, config, created_by, external_system, external_instance, external_id)
       VALUES($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9)
-     ON CONFLICT (external_system, external_instance, external_id) WHERE external_id IS NOT NULL
+     ON CONFLICT (tenant_id, external_system, external_instance, external_id) WHERE external_id IS NOT NULL
      DO UPDATE SET list_id=EXCLUDED.list_id, folder_id=EXCLUDED.folder_id, name=EXCLUDED.name,
         type=EXCLUDED.type, config=EXCLUDED.config, updated_at=now()`,
     [listId, folderId, name, viewType, JSON.stringify(config), `connector:${system}`, system, instance, externalId]);
@@ -168,7 +168,7 @@ export async function mirrorPmCommentV6(client: pg.PoolClient, it: RawItem, syst
   const res = await client.query(
     `INSERT INTO task_comment(task_id, author, body, reply_to, created_at, external_id, raw)
       VALUES($1,$2,$3,$4,COALESCE($5::timestamptz, now()),$6,$7::jsonb)
-     ON CONFLICT (external_id) WHERE external_id IS NOT NULL
+     ON CONFLICT (tenant_id, external_id) WHERE external_id IS NOT NULL
      DO UPDATE SET body=EXCLUDED.body, author=EXCLUDED.author, reply_to=COALESCE(EXCLUDED.reply_to, task_comment.reply_to), raw=EXCLUDED.raw
      RETURNING id`,
     [taskId, author, body, replyTo, it.occurred_at ?? null, externalId, raw == null ? null : JSON.stringify(raw)]);
@@ -202,7 +202,7 @@ export async function mirrorPmTimeV6(client: pg.PoolClient, it: RawItem, system:
   await client.query(
     `INSERT INTO task_time_entry(task_id, member, started_at, ended_at, duration_seconds, note, source, external_id)
       VALUES($1,$2,$3,$4,$5,$6,'manual',$7)
-     ON CONFLICT (external_id) WHERE external_id IS NOT NULL
+     ON CONFLICT (tenant_id, external_id) WHERE external_id IS NOT NULL
      DO UPDATE SET task_id=EXCLUDED.task_id, member=EXCLUDED.member, started_at=EXCLUDED.started_at,
         ended_at=EXCLUDED.ended_at, duration_seconds=EXCLUDED.duration_seconds, note=EXCLUDED.note`,
     [taskId, resolved ?? member, f.started_at ?? null, f.ended_at ?? null,

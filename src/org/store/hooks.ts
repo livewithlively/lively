@@ -141,7 +141,7 @@ export async function upsertOrgHook(h: OrgHookInput, ctx: WriteCtx = {}): Promis
   await itemsPool.query(
     `INSERT INTO org_hook(id,label,harness,event,matcher,source_code,timeout_sec,note,summary,target_members,enabled,sort,version,content_hash,created_by,updated_at,updated_by)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$15,$14,$9,$10,1,$11,$12,now(),$13)
-     ON CONFLICT (id) DO UPDATE SET
+     ON CONFLICT (tenant_id, id) DO UPDATE SET
        label=EXCLUDED.label, harness=EXCLUDED.harness, event=EXCLUDED.event, matcher=EXCLUDED.matcher,
        source_code=EXCLUDED.source_code, timeout_sec=EXCLUDED.timeout_sec, note=EXCLUDED.note, summary=EXCLUDED.summary,
        target_members=EXCLUDED.target_members, enabled=EXCLUDED.enabled, sort=EXCLUDED.sort, content_hash=EXCLUDED.content_hash,

@@ -25,7 +25,7 @@ async function mkMember(id) {
   await itemsPool.query(
     `INSERT INTO org_member(id, kind, display_name, email, state, scopes)
        VALUES($1,'human',$1,$1||'@example.invalid','active','["items","context","memory"]'::jsonb)
-     ON CONFLICT (id) DO UPDATE SET state='active'`, [id]);
+     ON CONFLICT (tenant_id, id) DO UPDATE SET state='active'`, [id]);
 }
 
 async function cleanup() {

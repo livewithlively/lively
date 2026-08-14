@@ -111,7 +111,7 @@ export async function initGroundTruthRegistries(pool: Pool): Promise<void> {
         '진행 상태(미정/진행/완료)·담당을 가진 **과업/태스크**면 W. 절차 설명은 H, 정리된 지식은 K. 수집된 외부 활동/문서는 출처(provenance=observed)로 들어온 W/K 미러다.',
         '커넥터/pm_* 가 적재(external_id·상태). 과업 단위. 과업을 향한 개별 작업(activity)은 activity_* 가 별도 기록.',
         '질의 시(query): 필요할 때 조회(과업 현황 검색).')
-    ON CONFLICT (kind) DO UPDATE SET
+    ON CONFLICT (tenant_id, kind) DO UPDATE SET
       label=EXCLUDED.label, injection_mode=EXCLUDED.injection_mode, domain_scoped=EXCLUDED.domain_scoped,
       audience=EXCLUDED.audience, cardinality=EXCLUDED.cardinality, sort=EXCLUDED.sort,
       description=EXCLUDED.description, criteria=EXCLUDED.criteria, storage=EXCLUDED.storage, delivery=EXCLUDED.delivery,
@@ -150,7 +150,7 @@ export async function initGroundTruthRegistries(pool: Pool): Promise<void> {
         'Google Drive 커넥터가 문서를 지식(K)으로 적재한다(#541, OAuth2 refresh-token).',
         '주기 동기화(run-sync)', '["K"]'::jsonb, 60,
         'doc(정제 문서) → knowledge(observed). native 문서는 text/plain·csv export. 관리탭에서 Google OAuth 설정 후 활성화. scope drive.readonly.')
-    ON CONFLICT (system) DO UPDATE SET
+    ON CONFLICT (tenant_id, system) DO UPDATE SET
       label=EXCLUDED.label, status=EXCLUDED.status, collection_method=EXCLUDED.collection_method,
       cadence=EXCLUDED.cadence, into_kinds=EXCLUDED.into_kinds, sort=EXCLUDED.sort, note=EXCLUDED.note,
       updated_at=now();

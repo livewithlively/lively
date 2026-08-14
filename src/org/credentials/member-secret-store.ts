@@ -88,7 +88,7 @@ export async function setMemberSecret(
   await itemsPool.query(
     `INSERT INTO member_secret(owner,kind,scope_key,secret_enc,meta,label,updated_at,updated_by)
        VALUES($1,$2,$3,$4,$5::jsonb,$6,now(),$7)
-     ON CONFLICT (owner,kind,scope_key) DO UPDATE SET
+     ON CONFLICT (tenant_id, owner,kind,scope_key) DO UPDATE SET
        secret_enc=COALESCE(EXCLUDED.secret_enc, member_secret.secret_enc),
        meta=EXCLUDED.meta, label=EXCLUDED.label, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [owner, kind, scopeKey, enc, JSON.stringify(meta), input.label ?? null, actor],

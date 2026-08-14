@@ -12,7 +12,9 @@ import path from "node:path";
 
 // ⚠ 컴파일된 테스트는 dist/ 에서 돈다 — 소스는 레포 루트 기준으로 읽는다(러너가 루트에서 실행).
 const src = readFileSync(path.join(process.cwd(), "src/v6/mirror/mirror-source.ts"), "utf8");
-const upsert = src.slice(src.indexOf("ON CONFLICT (external_system"), src.indexOf("RETURNING id"));
+// 앵커는 컬럼 목록에 의존하지 않게 둔다 — 멀티테넌트로 가며 `(tenant_id, external_system…)` 이 됐고,
+//  그때 이 테스트가 "아무것도 안 보는" 상태로 조용히 통과하면 안 된다(실제로 시끄럽게 실패해서 잡았다).
+const upsert = src.slice(src.indexOf("ON CONFLICT ("), src.indexOf("RETURNING id"));
 assert.ok(upsert.length > 50, "upsert 절을 못 찾았다 — 이 테스트가 아무것도 안 보고 있다(배선 확인)");
 
 // U1 — updated_at 은 무조건 now() 가 아니다.

@@ -37,7 +37,7 @@ async function syncProjectMembers(
   for (const m of merged) {
     await client.query(
       `INSERT INTO project_member(project_id, member_id, role, sort) VALUES($1,$2,'member',$3)
-       ON CONFLICT (project_id, member_id) DO NOTHING`,
+       ON CONFLICT (tenant_id, project_id, member_id) DO NOTHING`,
       [projectId, m, sort++]);
   }
   const removed = prevConnectorSet.filter((m) => !merged.includes(m));
@@ -272,7 +272,7 @@ export async function mirrorProjectV6(client: pg.PoolClient, it: RawItem, system
       || (mPriority ?? null) !== (priority ?? null) || (mStart ?? null) !== (startDate ?? null) || (mDue ?? null) !== (dueDate ?? null)) {
       await client.query(
         `INSERT INTO external_outbox(entity_id, system, op) VALUES($1,$2,'upsert')
-         ON CONFLICT (system, entity_id) WHERE done_at IS NULL
+         ON CONFLICT (tenant_id, system, entity_id) WHERE done_at IS NULL
          DO UPDATE SET op='upsert', updated_at=now(), attempts=0, last_error=NULL`,
         [id, system]);
     }
