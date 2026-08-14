@@ -16,19 +16,26 @@ function openLocalWorkModal(id, p, opts) {
         box.classList.add('ov-box-wide');
     const inputStyle = 'width:100%;padding:6px 8px;font:inherit;box-sizing:border-box';
     const block = (title, hint, ...controls) => el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: title }), hint ? el('p', { class: 'ps-block-hint', text: hint }) : null, ...controls);
-    // 하네스
+    // 하네스 — 목록·모델·자동승인 플래그는 **서버 카탈로그**(/api/ui/terminal/config)에서 온다(#1695).
+    //  종전엔 이 셀렉트에 claude·codex 두 줄을 하드코딩해, 배선이 끝난 하네스(opencode #1519 · antigravity #1689)를
+    //  내 PC 실행 명령으로는 만들 수조차 없었다(work.mjs 는 이미 그 둘을 받는다). 아래 폴백은 카탈로그를 못 읽었을 때만.
     const harnessSel = el('select', { style: inputStyle });
-    harnessSel.append(el('option', { value: 'claude', text: 'Claude Code' }), el('option', { value: 'codex', text: 'Codex' }));
-    if (opts && opts.harness && ['claude', 'codex'].includes(opts.harness))
-        harnessSel.value = opts.harness; // '클로드로 실행' 기본값 선주입
+    const fillHarness = (list) => {
+        const want = harnessSel.value || (opts && opts.harness) || '';
+        harnessSel.replaceChildren(...list.map((h) => el('option', { value: h.key, text: h.label })));
+        if (list.some((h) => h.key === want))
+            harnessSel.value = want; // '클로드로 실행' 기본값 선주입 + 사용자가 고른 값 보존
+    };
+    fillHarness([{ key: 'claude', label: 'Claude Code' }, { key: 'codex', label: 'Codex' }]);
     // 모델 · 자동승인 — 웹 터미널 카탈로그(/api/ui/terminal/config) 재사용(하네스별 모델·autoApprove 동일 규칙).
     const modelSel = el('select', { style: inputStyle });
     const modelBlock = block('모델', '비우면 하네스 기본 모델.', modelSel);
     const autoChk = el('input', { type: 'checkbox' });
     if (opts)
         autoChk.checked = !!opts.autoApprove; // '클로드로 실행' 기본값 선주입
-    const autoBlock = el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: '자동 승인' }), el('label', { style: 'display:flex;gap:8px;align-items:center;cursor:pointer' }, autoChk, el('span', { text: '권한 확인 건너뛰기 (claude --dangerously-skip-permissions / codex --yolo) — 내 PC에서 실행되니 주의' })));
-    const harnessCat = {}; // {claude:{models:[...],hasAuto}, codex:{...}}
+    const autoText = el('span', { text: '권한 확인 건너뛰기 — 내 PC에서 실행되니 주의하세요.' });
+    const autoBlock = el('section', { class: 'ps-block' }, el('h3', { class: 'ps-block-title', text: '자동 승인' }), el('label', { style: 'display:flex;gap:8px;align-items:center;cursor:pointer' }, autoChk, autoText));
+    const harnessCat = {}; // {claude:{models:[...],hasAuto,autoFlag}, …}
     const updateModels = () => {
         const cat = harnessCat[harnessSel.value] || { models: [], hasAuto: true };
         const cur = modelSel.value;
@@ -38,6 +45,10 @@ function openLocalWorkModal(id, p, opts) {
         if ((cat.models || []).includes(cur))
             modelSel.value = cur;
         autoBlock.style.display = cat.hasAuto === false ? 'none' : '';
+        // 어떤 플래그가 실제로 붙는지 그 하네스 것으로 적는다(카탈로그를 못 읽었으면 플래그 없이 문장만).
+        autoText.textContent = cat.autoFlag
+            ? `권한 확인 건너뛰기 (${cat.bin || harnessSel.value} ${cat.autoFlag}) — 내 PC에서 실행되니 주의하세요.`
+            : '권한 확인 건너뛰기 — 내 PC에서 실행되니 주의하세요.';
         regen();
     };
     harnessSel.addEventListener('change', updateModels);
@@ -100,9 +111,12 @@ function openLocalWorkModal(id, p, opts) {
     (async () => {
         try {
             const cfg = await api('/api/ui/terminal/config');
-            ((cfg && cfg.harnesses) || []).forEach((h) => { const mf = (h.flags || []).find((f) => f.name === '--model'); harnessCat[h.key] = { models: (mf && mf.choices) || [], hasAuto: !!h.hasAutoApprove }; });
+            const hs = ((cfg && cfg.harnesses) || []).filter((h) => h && h.key !== 'shell'); // 셸은 '내 PC에서 AI 실행'의 선택지가 아니다
+            hs.forEach((h) => { const mf = (h.flags || []).find((f) => f.name === '--model'); harnessCat[h.key] = { models: (mf && mf.choices) || [], hasAuto: !!h.hasAutoApprove, autoFlag: h.autoApproveFlag || '', bin: h.bin || h.key }; });
+            if (hs.length)
+                fillHarness(hs.map((h) => ({ key: h.key, label: h.label || h.key })));
         }
-        catch (_) { /* graceful */ }
+        catch (_) { /* graceful — 위 폴백 목록(claude·codex) 유지 */ }
         updateModels();
         if (opts && opts.model && (harnessCat[harnessSel.value] || { models: [] }).models.includes(opts.model)) {
             modelSel.value = opts.model;

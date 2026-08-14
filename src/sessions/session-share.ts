@@ -23,7 +23,14 @@ export interface SessionShareConfig {
 export const SESSION_SHARE_SCOPES: readonly SessionShareScope[] = ["main", "tree"];
 export const SESSION_SHARE_STORES: readonly SessionShareStore[] = ["slim", "raw"];
 export const SESSION_SHARE_VIEW_POLICIES: readonly SessionShareViewPolicy[] = ["attach", "owner"];
-export const KNOWN_HARNESSES: readonly string[] = ["claude", "codex"];   // 선택지(파이프라인 실제 지원과 별개 — codex 는 D12)
+// 선택지(파이프라인 실제 지원과 별개 — codex 는 D12).
+// ⚠ #1695 판정: 웹 세션 카탈로그에는 opencode·antigravity 가 들어갔지만 **여기엔 넣지 않는다.**
+//  캡처(수집)는 이미 가능하다 — antigravity 어댑터가 Stop 에서 transcript_path 를 실어 조직 훅을 부른다(실측).
+//  막히는 건 **열람**이다: 세션 기록 화면이 쓰는 renderTranscript(terminal/terminal-transcript.ts)는 claude 의
+//  JSONL 스키마(`{type:"assistant", message:{content:[…]}}`)와 `~/.claude/projects/<cwd>/<uuid>.jsonl` 경로 규약
+//  전용인데, antigravity 의 트랜스크립트는 `{step_index, source, type, status, created_at, content}` 다(실측).
+//  → 켜면 로그는 쌓이는데 화면은 빈다. 하네스별 파서가 생기기 전까지 선택지에 두지 않는다('못 지킬 켜기' 금지).
+export const KNOWN_HARNESSES: readonly string[] = ["claude", "codex"];
 export const RETENTION_MAX_DAYS = 3650;   // 상한(10년) — 0=무제한과 구분, 실수로 거대값 입력 방어.
 
 export const DEFAULT_SESSION_SHARE: SessionShareConfig = {

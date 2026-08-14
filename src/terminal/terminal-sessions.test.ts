@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { detectAwaiting, modeEnvArgs, canSeeSession, resolveAgentPhase, parseReportedPhase, isPhaseFresh, isActivityProgress, PHASE_TTL_SEC } from "./terminal-sessions.js";
 // 배럴(terminal-sessions.ts)엔 새 심볼을 늘리지 않는다 — 그 파일의 재수출 집합은 #1313 R15 분할의 계약이다.
-import { harnessLaunchArgv, harnessLoginArgv, harnessFailNotice } from "./catalog.js";
+import { harnessLaunchArgv, harnessLoginArgv, harnessFailNotice, HARNESSES } from "./catalog.js";
 import { SHELL_CMDS, isAgentOffline } from "./phase.js";  // E12 — 런처가 pane 포그라운드를 무엇으로 보이게 하는가(#1535)
 
 let pass = 0;
@@ -281,6 +281,54 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
   ok2(harnessFailNotice("codex").includes("device-auth"), "E11a codex 안내는 device-auth 를 지목한다");
   ok2(harnessFailNotice("claude").includes("/login"), "E11b claude 안내는 TUI 안 /login 을 지목한다");
   ok2(harnessFailNotice("gemini").includes("gemini"), "E11c 모르는 하네스도 그 이름으로 재실행 안내를 준다");
+  // E11d~ (#1695) — 안내에 적히는 명령은 **사용자가 그대로 치는 문자열**이다. 라벨도 내부 식별자도 아닌
+  //  실행 파일이어야 한다: antigravity 의 명령은 `agy` 라, 종전 폴백('그 이름으로 재실행')을 그대로 두면
+  //  하네스가 죽은 뒤 안내대로 쳤는데 command not found 로 **두 번** 막힌다.
+  //  ⚠ 명령 줄은 4칸 들여쓰기 한 줄이다 — 그 형태로 봐야 '문구 어딘가에 단어가 있다'와 구분된다.
+  const cmdLines = (notice: string): string[] =>
+    notice.split("\n").filter((l) => /^ {4}\S/.test(l)).map((l) => l.trim());
+  {
+    const n = harnessFailNotice("antigravity");
+    ok2(cmdLines(n).includes("agy"), "E11d antigravity 안내가 주는 명령은 실행 파일(agy)");
+    ok2(!cmdLines(n).includes("antigravity"), "E11e 내부 식별자를 명령으로 주지 않는다(command not found)");
+    ok2(n.includes("Antigravity"), "E11f 무엇이 죽었는지는 사람이 읽는 이름으로 알린다");
+    ok2(/주소|코드/.test(n), "E11g agy 는 로그인 명령이 없어 하네스가 띄우는 절차를 대신 안내한다");
+  }
+  ok2(cmdLines(harnessFailNotice("opencode")).some((c) => c.startsWith("opencode auth login")),
+    "E11h opencode 안내는 제공자 로그인 명령을 지목한다");
+  ok2(cmdLines(harnessFailNotice("codex")).some((c) => c.includes("codex login --device-auth")),
+    "E11i codex 는 종전대로 로그인 한 줄이 먼저다(무회귀)");
+  // 새로 도입한 '로그인 힌트' 필드가 **없는** 하네스 — 꼬리에 빈 줄·빈 항목이 붙으면 안 된다.
+  //  (필드를 도입하면 '그 필드가 빈 경우'라는 엣지가 새로 생긴다.)
+  {
+    const n = harnessFailNotice("shell");
+    ok2(!/\n\n─+$/.test(n) && !/\n\n\n/.test(n), "E11j 힌트 없는 하네스는 안내 꼬리에 빈 줄이 안 붙는다");
+    // ⚠ '빈 명령 줄이 없다'만 단언하면 vacuous 다 — 빈 줄은 cmdLines 필터에 애초에 안 잡혀 항상 통과한다(실측).
+    //  실행 파일이 비어도 **무언가 칠 것**을 줘야 한다는 쪽으로 단언한다.
+    ok2(cmdLines(n).includes("shell") && !/^ {4}\s*$/m.test(n),
+      "E11k 실행 파일이 빈 하네스는 빈 명령 줄 대신 그 이름으로 안내한다");
+  }
+
+  // E13 (#1695) — 웹 세션 카탈로그: **배선이 끝난 하네스로 세션을 만들 수 있는가.**
+  //  #1519(opencode)·#1689(antigravity) 로 훅·MCP·자산은 다 붙었는데 이 표에만 없어서, 웹에서는 그 하네스로
+  //  세션을 여는 것 자체가 불가능했다(선택지에 없으면 서버 검증이 400 을 낸다).
+  {
+    const keys = HARNESSES.map((h) => h.key);
+    ok2(keys.includes("opencode") && keys.includes("antigravity"), "E13a 배선된 4하네스가 모두 세션 선택지에 있다");
+    const agy = HARNESSES.find((h) => h.key === "antigravity");
+    ok2(agy?.bin === "agy", "E13b antigravity 의 실행 파일은 agy(key 로 spawn 하면 ENOENT)");
+    ok2(agy?.autoApproveFlag === "--dangerously-skip-permissions", "E13c 자동승인은 그 하네스가 실제로 받는 플래그");
+    ok2((agy?.flags.find((f) => f.name === "--effort")?.choices || []).join(",") === ",low,medium,high",
+      "E13d agy 의 추론강도는 3단계 — 다른 하네스의 목록을 복사해 두면 고른 값이 거부된다");
+    ok2(HARNESSES.find((h) => h.key === "opencode")?.autoApproveFlag === "--auto", "E13e opencode 자동승인은 --auto");
+    ok2(HARNESSES.every((h) => h.key === "shell" || !!h.bin), "E13f 셸 말고는 실행 파일이 반드시 있다");
+    // 어느 하네스든 '하네스 기본'을 고를 수 있어야 낡은 모델 문자열에 사용자가 묶이지 않는다.
+    const modelFlags = HARNESSES.flatMap((h) => h.flags.filter((f) => f.name === "--model"));
+    ok2(modelFlags.length > 0 && modelFlags.every((f) => (f.choices || [])[0] === ""),
+      "E13g 모델 목록의 첫 옵션은 언제나 '하네스 기본'(빈 값)");
+  }
+  ok2(harnessLoginArgv("antigravity") === null, "E13h agy 는 로그인 서브커맨드가 없어 로그인 전용 세션을 만들지 않는다");
+  ok2(harnessLoginArgv("opencode") === null, "E13i opencode 로그인은 대화형 제공자 선택이라 무인 한 줄이 아니다");
 
   // E12 — 런처의 **부작용**: pane 의 foreground 프로세스가 무엇으로 보이는가 (#1535).
   //  래퍼를 씌운다는 건 pane 에 프로세스를 하나 더 만든다는 뜻이다. job control 이 없으면 그 래퍼
