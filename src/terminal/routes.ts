@@ -115,7 +115,10 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     res.setHeader("Cache-Control", "no-store");
     res.json({
       roots: ROOTS.map((r) => ({ key: r.key, label: r.label })),
-      harnesses: HARNESSES.map((h) => ({ key: h.key, label: h.label, hasAutoApprove: !!h.autoApproveFlag, flags: h.flags })),
+      // bin·autoApproveFlag 를 함께 준다(#1695) — 프로젝트 화면의 '내 컴퓨터에서 작업'이 자동승인 설명에 **그 하네스의
+      //  실제 플래그**를 적기 위해서다. 종전엔 웹이 'claude --dangerously-skip-permissions / codex --yolo' 를 문장에
+      //  하드코딩해, 하네스가 늘 때마다 그 문장이 조용히 틀려졌다. 둘 다 우리 상수라 노출에 위험이 없다.
+      harnesses: HARNESSES.map((h) => ({ key: h.key, label: h.label, bin: h.bin, hasAutoApprove: !!h.autoApproveFlag, autoApproveFlag: h.autoApproveFlag ?? "", flags: h.flags })),
       members,
       // 멀티프로필(#346): 이 세션이 '내 계정'(프로필 로그인됨)으로 뜰지, '공유 계정'으로 폴백할지 UI 표시.(레거시 폴백)
       profile: await profileStatus(userOf(req)),

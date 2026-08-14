@@ -343,7 +343,10 @@ async function pjvBulkRunDefaultsModal(ctx) {
     (d.where === 'local' ? whereLocal : whereWeb).checked = true;
     const whereRow = el('div', { class: 'field', style: 'margin-top:2px' }, el('label', { class: 'field-label', text: '실행 위치' }), el('label', { class: 'proj-sess-auto', style: 'margin-top:2px' }, whereWeb, el('span', { text: ' 웹(중앙 컴퓨터) — 누르면 곧장 세션을 만들어 실행 (설치 불필요·권장)' })), el('label', { class: 'proj-sess-auto', style: 'margin-top:2px' }, whereLocal, el('span', { text: ' 내 PC(로컬) — 누르면 태스크 내용을 복사하고 내 PC 실행 안내를 띄움' })));
     // 실행기 + 모델 + 자동승인
-    const HKEYS = ['claude', 'codex'].filter((k) => harnessCat[k]);
+    //  #1695 — 목록은 **서버 카탈로그가 준 것 전부**(셸만 제외)다. 종전엔 ['claude','codex'] 를 여기 하드코딩해,
+    //   배선이 다 끝난 하네스(opencode #1519 · antigravity #1689)가 이 화면에서만 존재하지 않았다.
+    //   폴백 카탈로그(위)가 claude·codex 를 담고 있으므로 서버를 못 읽어도 종전 선택지는 그대로 뜬다.
+    const HKEYS = Object.keys(harnessCat).filter((k) => k !== 'shell');
     const harnessSel = el('select', {}, ...HKEYS.map((k) => el('option', { value: k, text: harnessCat[k].label || k })));
     const modelSel = el('select', {});
     const autoCb = el('input', { type: 'checkbox' });

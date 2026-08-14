@@ -204,6 +204,11 @@ export async function provisionMemberOs(memberId: string, opts?: { includeContro
 
 // 하네스별 자격증명 파일(홈 기준 상대경로) — 로그인 여부 판정·로그아웃 대상의 단일 출처.
 //  ⚠ 값은 이 상수에서만 온다(사용자 입력이 셸 문자열에 들어가지 않는다).
+// ⚠ #1695 판정: 세션 카탈로그에 opencode·antigravity 를 넣었지만 **이 표에는 넣지 않는다.**
+//  여기 실리면 [연결된 AI 계정]이 '그 파일이 있나'로 로그인 여부를 말하는데, agy 는 자격을 keyring 에 두고
+//  (~/.gemini 트리에 자격 파일이 없다 — 실측) opencode 는 제공자마다 자리가 갈린다. 없는 파일을 기준으로 하면
+//  로그인돼 있는 사람에게 '연결 안 됨'이라고 **거짓말**을 한다(맥 claude 키체인에서 이미 겪은 실패 — 아래 참조).
+//  표에 없으면 aiAccountStatus 가 그 하네스를 건너뛴다 = 목록에 안 나온다(정직한 침묵). 자격 위치를 실측하면 그때 연다.
 const HARNESS_CRED: Record<string, string> = {
   claude: ".claude/.credentials.json",
   codex: ".codex/auth.json",
