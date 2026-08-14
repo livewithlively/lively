@@ -1318,6 +1318,26 @@
   "input_hash": "28ae905489e3aa6c"
  },
  {
+  "name": "me_liv_ask_secret",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/liv-secret-ask"
+  ],
+  "input_hash": "8a95e0e48664c1f0"
+ },
+ {
+  "name": "me_liv_put_secret",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/liv-secret"
+  ],
+  "input_hash": "d88e2cad56f58113"
+ },
+ {
   "name": "org_connector_members",
   "scope": "admin",
   "mcp": true,

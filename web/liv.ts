@@ -20,9 +20,18 @@ export interface LivFinding {
   key: string; severity: 'p0' | 'p1'; scope: 'org' | 'member';
   title: string; detail: string; href?: string; prompt?: string;
 }
+/**
+ * 리브가 지금 사람에게 받아야 하는 자격 하나. **값은 여기 오지 않는다** — 무엇이 필요한지만 온다.
+ *
+ * 이게 있으면 화면이 안전 입력칸을 띄운다. 그 값은 곧바로 금고로 가고 대화에는 남지 않는다.
+ * (그래서 리브가 "시크릿을 여기 붙여넣어 주세요"라고 하거나 다른 탭으로 보낼 일이 없어진다.)
+ */
+export interface LivSecretAsk { collector_id: number; field: string; label: string; why?: string; hint?: string }
+
 export interface LivStatus {
   mode: LivMode; reason: string; findings: LivFinding[]; total: number;
   context?: { isAdmin?: boolean; claudeLoggedIn?: boolean | null; nodes?: { registered: number; online: number } | null };
+  secretAsk?: LivSecretAsk | null;
 }
 
 export function livChoice(): 'liv' | 'dashboard' | null {
@@ -100,8 +109,17 @@ export async function livSendPrompt(sessionId: string, text: string): Promise<vo
     { method: 'POST', body: JSON.stringify({ text }) });
 }
 
-/** 리브가 처음 열릴 때 스스로 시작하는 말. 사람이 아무것도 안 눌러도 진단이 돈다(대표 결정). */
-const LIV_OPENING = 'liv 스킬로 지금 내 워크스페이스를 점검하고, 제일 급한 것부터 무엇을 하면 되는지 알려줘. 내가 맡기면 네가 직접 해 줘.';
+/**
+ * 리브가 처음 열릴 때 스스로 시작하는 말 — **인사 한 마디.**
+ *
+ * ⚠ 예전엔 여기에 지시문("liv 스킬로 점검하고 급한 것부터 알려줘")을 넣었는데, 두 가지가 틀렸다:
+ *  ① **사람이 안 쓴 지시가 자기 이름으로 화면에 찍힌다.** 열자마자 내가 안 한 말이 내 말로 올라와 있는 건
+ *     그 자체로 이상하다(대표 지적).
+ *  ② **정체성을 프롬프트에 실으면 재량이 된다.** 스킬은 모델이 부를지 말지 정하는 자산이라, 안 부르면 그
+ *     세션은 그냥 클로드다(실측: 리브가 "liv 스킬이 없다"고 답했다). 그래서 정체성·모드·첫 수는
+ *     **SessionStart 훅(liv-session-boot)** 이 무조건 주입한다 — 여기 남는 건 말을 트는 인사뿐이다.
+ */
+const LIV_OPENING = '안녕하세요.';
 
 // ── 화면 ─────────────────────────────────────────────────────────────────────
 
@@ -132,26 +150,87 @@ export async function renderLiv(view: HTMLElement | null): Promise<void> {
   //  카드 조회가 느려도 대화는 먼저 시작될 수 있다(위젯 독립 실패 원칙과 같은 결).
   void fillLivCards(cards);
   void bootLivSession(chatWrap.querySelector('.liv-chat-body') as HTMLElement, cards);
+
+  // 리브가 대화 중에 자격을 요청하면(me_liv_ask_secret) 화면이 그걸 알아야 입력칸이 뜬다.
+  //  터미널은 iframe 이라 출력에서 신호를 읽을 수 없다 — 서버 상태를 가볍게 되묻는 쪽이 견고하다.
+  //  ⚠ 사람이 타이핑 중인 입력칸을 갈아치우지 않는다(fillLivCards 가 그 경우 그냥 넘어간다).
+  const poll = setInterval(() => {
+    if (document.body.dataset.route !== 'liv') { clearInterval(poll); return; }  // 라우트를 떠나면 끝
+    void fillLivCards(cards);
+  }, 6000);
 }
 
 function skeletonLine(): HTMLElement { return el('div', { class: 'liv-card liv-card-skel' }); }
 
 async function fillLivCards(host: HTMLElement): Promise<void> {
+  // 사람이 자격을 입력하는 중이면 손대지 않는다 — 다시 그리면 타이핑하던 값이 사라진다.
+  const typing = host.querySelector('.liv-ask-input') as HTMLInputElement | null;
+  if (typing && (typing.value !== '' || document.activeElement === typing)) return;
+
   let st: LivStatus;
   try { st = await livStatus(); }
   catch {
-    host.replaceChildren(el('div', { class: 'liv-note', text: '지금 상태를 읽지 못했습니다. 아래에서 리브에게 직접 물어보셔도 됩니다.' }));
+    host.replaceChildren(el('div', { class: 'liv-note', text: '지금 상태를 읽지 못했습니다. 옆에서 리브에게 직접 물어보셔도 됩니다.' }));
     return;
   }
+  // 자격 입력칸은 **항상 맨 위**다 — 이게 떠 있으면 리브는 그걸 기다리느라 멈춰 있다.
+  const ask = st.secretAsk ? livSecretCard(st.secretAsk, host) : null;
   if (!st.findings.length) {
-    host.replaceChildren(el('div', { class: 'liv-note' },
+    host.replaceChildren(...(ask ? [ask] : []), el('div', { class: 'liv-note' },
       el('b', { text: '지금 손볼 것은 없습니다.' }),
-      el('span', { text: ' 아래에서 리브에게 무엇이든 물어보세요.' })));
+      el('span', { text: ' 옆에서 리브에게 무엇이든 물어보세요.' })));
     return;
   }
-  host.replaceChildren(
+  host.replaceChildren(...(ask ? [ask] : []),
     el('div', { class: 'liv-cards-title', text: `지금 손볼 것 ${st.total}` }),
     ...st.findings.map((f) => livCard(f, host)));
+}
+
+/**
+ * 자격 입력칸 — **이 화면에서 끝내기 위한 장치**.
+ *
+ * 실측 2회 모두 리브는 시크릿을 채팅에 붙여넣으라고 했고(대화 기록에 남는다), 화면으로 돌릴 때는
+ * 없는 메뉴 경로를 지어냈다. 안내를 다듬어 고칠 문제가 아니라 **여기서 받을 자리가 없던 것**이 원인이다.
+ *
+ * 계약: 넣을 자리는 서버가 저장해 둔 요청에서만 온다(브라우저가 대상을 못 바꾼다). 값은 전송 즉시
+ * 암호화 저장되고 화면에서도 지운다. 저장되면 리브에게 **사람 대신 한 마디 건네** 대화가 이어진다.
+ */
+function livSecretCard(ask: LivSecretAsk, host: HTMLElement): HTMLElement {
+  const input = el('input', {
+    class: 'liv-ask-input', type: 'password', autocomplete: 'off', spellcheck: 'false',
+    placeholder: ask.hint || '여기에 붙여넣어 주세요', 'aria-label': ask.label,
+  }) as HTMLInputElement;
+  const msg = el('div', { class: 'liv-ask-msg' });
+  const save = el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '저장' }) as HTMLButtonElement;
+
+  const submit = async (): Promise<void> => {
+    const value = input.value;
+    if (!value.trim()) { input.focus(); return; }
+    save.disabled = true; input.disabled = true; save.textContent = '저장 중…';
+    try {
+      await api('/api/ui/me/liv-secret', { method: 'POST', body: JSON.stringify({ value }) });
+      input.value = '';  // 화면에서도 즉시 지운다
+      // ⚠ 확인은 **카드 밖**(토스트)에 띄운다 — 카드 안에 쓰면 바로 뒤의 갱신이 카드째 지워서
+      //  사람은 아무 일도 안 일어난 것처럼 본다(실측: 저장은 됐는데 화면엔 흔적이 없었다).
+      livToast('저장했습니다. 리브가 이어서 확인합니다.');
+      // 사람이 다시 타이핑하지 않아도 대화가 이어지게 한마디 건넨다 — 값은 절대 안 보낸다.
+      if (livSessionId) await livSendPrompt(livSessionId, '자격 저장했어요. 확인해 주세요.').catch(() => {});
+      setTimeout(() => void fillLivCards(host), 600);
+    } catch (e) {
+      save.disabled = false; input.disabled = false; save.textContent = '저장';
+      msg.replaceChildren(el('span', { class: 'liv-ask-err', text: String((e as Error)?.message ?? e) }));
+      input.focus();
+    }
+  };
+  save.onclick = () => void submit();
+  input.onkeydown = (ev: KeyboardEvent) => { if (ev.key === 'Enter') { ev.preventDefault(); void submit(); } };
+
+  return el('div', { class: 'liv-card liv-ask' },
+    el('div', { class: 'liv-ask-head' }, el('b', { text: ask.label })),
+    ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null,
+    el('div', { class: 'liv-ask-row' }, input, save),
+    el('div', { class: 'liv-ask-note', text: '입력하신 값은 잠긴 보관함으로 바로 들어가고, 대화 기록에는 남지 않습니다.' }),
+    msg);
 }
 
 function livCard(f: LivFinding, host: HTMLElement): HTMLElement {

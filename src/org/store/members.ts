@@ -100,9 +100,45 @@ export interface LivWork { asis?: string; tobe?: string; at?: string; by?: "ai" 
 export interface LivDecision { at: string; what: string; why?: string; by?: string }
 /** 사람이 "그건 안 할게요"라고 한 것. `key` 는 카드 key(예: `org.embeddings`). */
 export interface LivDeclined { at: string; key: string; why?: string }
-export interface LivProfile { work?: LivWork; decisions?: LivDecision[]; declined?: LivDeclined[] }
+/**
+ * 리브가 **지금 사람에게 받아야 하는 자격 하나**(#1631).
+ *
+ * ⚠ 여기 담기는 것은 "무엇이 필요한가"뿐이다 — **값은 절대 담기지 않는다.** 값은 화면이 받아
+ *  곧바로 금고(수집기 secrets)로 보내고, 이 요청은 지워진다. 리브는 값을 보지 못한다.
+ *
+ * 왜 프로필에 얹었나: 이건 지식이 아니라 **일시 상태**라 원래는 남의 자리다. 그럼에도 여기 둔 이유는
+ *  ① 사람 축으로 정확히 하나이고 ② 새로고침을 견뎌야 하며(사람이 창을 다시 열 수 있다)
+ *  ③ 리브 화면이 이미 이 레코드를 읽고 있어서다. 테이블을 하나 더 만들 값어치가 없다.
+ */
+export interface LivSecretAsk {
+  at: string;
+  /** 어디에 넣을 것인가 — 지금은 수집기뿐이다(collector.id + 그 프리셋의 시크릿 필드 key). */
+  collector_id: number;
+  field: string;
+  /** 사람에게 보일 것. label = 칸 이름, why = 왜 필요한지 한 줄. */
+  label: string;
+  why?: string;
+  /** 값이 어떻게 생겼는지(예: `ntn_` 로 시작하는 긴 문자열). 사람이 맞게 복사했는지 스스로 확인한다. */
+  hint?: string;
+}
+
+export interface LivProfile {
+  work?: LivWork; decisions?: LivDecision[]; declined?: LivDeclined[];
+  /** 대기 중인 자격 요청. 받으면 즉시 지운다(값은 여기 오지 않는다). */
+  secret_ask?: LivSecretAsk | null;
+}
 
 const LIV_LIST_CAP = 50; // 결정·거절 이력 상한 — 오래된 것부터 버린다(프로필은 로그가 아니다)
+
+/** 자격 요청을 걸거나(ask) 지운다(null). 값은 절대 지나가지 않는다. */
+export async function setLivSecretAsk(id: string, ask: LivSecretAsk | null): Promise<LivProfile> {
+  const cur = await getLivProfile(id);
+  const next: LivProfile = { ...cur, secret_ask: ask };
+  const r = await itemsPool.query(
+    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
+  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+}
 
 export async function getLivProfile(id: string): Promise<LivProfile> {
   const r = await itemsPool.query(`SELECT liv_profile FROM org_member WHERE id=$1`, [id]);

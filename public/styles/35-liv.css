@@ -53,3 +53,20 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
   .liv-rail { overflow: visible; }
   .liv-chat { min-height: 420px; }
 }
+
+/* ── 자격 입력칸(#1631) — **사람을 다른 탭으로 보내지 않기 위한 자리** ─────────────────
+   리브가 "무엇이 필요한지"만 말하면 여기 칸이 뜬다. 값은 곧바로 금고로 가고 대화에는 안 남는다.
+   레일에서 유일하게 **테두리를 강조하는 카드**다 — 이게 떠 있는 동안 리브는 이걸 기다리며 멈춰 있다. */
+.liv-ask { border-color: var(--mint-deep); border-width: 1px; }
+.liv-ask-head { font-size: 13px; line-height: 1.45; }
+.liv-ask-why { color: var(--ink-sub); font-size: 12px; margin-top: 4px; line-height: 1.5; }
+/* 좁은 레일이라 칸과 버튼이 줄바꿈된다 — 칸이 먼저 한 줄을 다 쓰고 버튼이 아래로 흐른다. */
+.liv-ask-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.liv-ask-input { flex: 1 1 100%; min-width: 0; font-family: inherit; font-size: 12px;
+  padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
+.liv-ask-input:focus-visible { outline: 2px solid var(--mint-deep); outline-offset: 1px; }
+.liv-ask-input:disabled { opacity: .6; }
+.liv-ask-note { color: var(--muted); font-size: 11px; margin-top: 6px; line-height: 1.5; }
+.liv-ask-msg:not(:empty) { font-size: 12px; margin-top: 6px; line-height: 1.5; }
+.liv-ask-ok { color: var(--mint-deep); }
+.liv-ask-err { color: var(--danger, #B4433A); }

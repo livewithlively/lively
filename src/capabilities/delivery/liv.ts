@@ -12,7 +12,9 @@ import type { Capability } from "../types.js";
 import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 import { restRead } from "./shared.js";
+import type { LivProfile } from "../../org/store/members.js";
 import { livFindings, livTopFindings, livMature, type LivSnapshot } from "../../org/delivery/liv-findings.js";
+import { askTargetVerdict, askStillOpen } from "../../org/delivery/liv-secret.js";
 import { livHomeMode } from "../../org/delivery/liv-home.js";
 
 /** 화면이 한 번에 보여주는 카드 수. 전부 나열하면 아무것도 안 된다. */
@@ -62,9 +64,20 @@ export const livCapabilities: Capability[] = [
         }).catch(() => null);
 
       // 리브가 이 사람에 대해 아는 것 — 무엇을 거절했는지가 여기 있고, 그게 카드 판정에 그대로 들어간다.
-      const profile = await import("../../org/store.js")
-        .then((m) => m.getLivProfile(userId)).catch(() => ({} as { declined?: Array<{ key: string }>; work?: unknown }));
+      const profile: LivProfile = await import("../../org/store.js")
+        .then((m) => m.getLivProfile(userId)).catch(() => ({}));
       const declined = (profile.declined ?? []).map((d) => d.key);
+
+      // 대기 중인 자격 요청 — 화면이 이걸 보고 **안전 입력칸**을 띄운다(§me_liv_ask_secret).
+      //  대상 수집기가 사라졌거나 이미 채워졌으면 죽은 요청이라 내보내지 않는다.
+      const secretAsk = await (async () => {
+        const ask = profile.secret_ask;
+        if (!ask) return null;
+        try {
+          const { listCollectors } = await import("../../org/store/collectors.js");
+          return askStillOpen(ask, await listCollectors()) ? ask : null;
+        } catch { return null; }
+      })();
 
       const snapshot: LivSnapshot = { isAdmin, org: org ? org.items : null, nodes, migrateReported, declined };
       const findings = livFindings(snapshot);
@@ -80,6 +93,7 @@ export const livCapabilities: Capability[] = [
         // 리브가 세션에서 다시 묻지 않도록 프로필을 함께 준다(업무 방식·결정 이력). 거절 목록은 이미
         //  findings 에 반영됐지만, 리브가 "왜 그건 안 꺼내나"를 알아야 사람에게 설명할 수 있다.
         profile,
+        secretAsk,
       };
     }, false, {
       // 사람이 홈을 명시적으로 고른 적이 있으면 그 값을 실어 보낸다 — **판정은 여전히 서버가 한다**(화면이
@@ -134,5 +148,95 @@ export const livCapabilities: Capability[] = [
         .describe("무엇을 왜 그렇게 설정했는지. 뒤에 쌓인다."),
       declined: z.object({ key: z.string(), why: z.string().optional() }).optional()
         .describe("사람이 '안 하겠다'고 한 카드 key(예: org.embeddings). 그 카드는 이후 뜨지 않는다."),
+    }),
+
+  // ── 자격 받기(#1631) — **사람을 다른 탭으로 보내지 않기 위한 자리** ────────────────────
+  //
+  //  왜 이게 필요한가(실측 2회): 리브는 두 번 다 시크릿을 **채팅에 붙여넣으라고** 했고, 사람이 겁먹고
+  //   되물은 뒤에야 화면으로 돌렸다. 그리고 화면으로 돌릴 때는 **없는 메뉴 경로를 지어냈다**
+  //   ("왼쪽 메뉴의 관리 → 외부 자료 수집"; 실제로 좌측 메뉴가 없다). 둘 다 안내를 다듬어 고칠 문제가
+  //   아니다 — **리브 화면에서 끝나지 않는 구조**가 원인이다.
+  //
+  //  그래서 계약을 바꾼다: 리브는 "무엇이 필요한지"만 말하고(ask), **값은 화면이 받아 금고로 직행**한다.
+  //   - 값은 대화·트랜스크립트·모델 컨텍스트 어디에도 안 남는다.
+  //   - 사람은 리브 화면을 벗어나지 않는다(탭 이동·경로 안내 자체가 사라진다).
+  //   - 넣을 자리는 **서버가 저장해 둔 요청**에서만 온다 — 브라우저가 대상을 바꿔 보낼 수 없다.
+  restRead("me_liv_ask_secret", "자격 입력칸 띄우기",
+    "리브가 사람에게 받아야 하는 자격 하나를 **요청**한다 — 리브 화면에 안전 입력칸이 뜬다. " +
+    "⚠ 시크릿을 대화로 받지 마라. 사람에게 다른 탭·메뉴로 가라고 하지도 마라. 이 도구를 쓰면 그 자리에서 끝난다. " +
+    "값은 화면이 받아 곧바로 금고로 넣고, 너는 값을 보지 못한다(설정됐는지 여부만 확인된다).",
+    [{ method: "POST", paths: ["/api/ui/me/liv-secret-ask"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const { setLivSecretAsk } = await import("../../org/store.js");
+
+      // 취소 — 더는 필요 없어졌으면 칸을 내린다(사람 화면에 죽은 입력칸을 남기지 않는다).
+      if (input.cancel === true) return { ask: null, profile: await setLivSecretAsk(userId, null) };
+
+      const collectorId = Number(input.collector_id);
+      const field = String(input.field ?? "").trim();
+      if (!Number.isInteger(collectorId) || collectorId <= 0) throw new HttpError(400, "collector_id 가 필요합니다");
+      if (!field) throw new HttpError(400, "field 가 필요합니다");
+
+      // **대상 검증** — 판정은 순수 모듈이 한다(liv-secret.ts). 여기서는 그 결과를 HTTP 로 옮길 뿐이다.
+      const { listCollectors } = await import("../../org/store/collectors.js");
+      const c = (await listCollectors()).find((x) => x.id === collectorId);
+      const verdict = askTargetVerdict(c, field);
+      if (!verdict.ok) {
+        if (verdict.reason === "no-collector") throw new HttpError(404, "그 수집기를 찾을 수 없습니다");
+        if (verdict.reason === "not-a-secret-field") throw new HttpError(400, `${field} 은(는) 이 수집기의 자격 칸이 아닙니다`);
+        throw new HttpError(409, "이 게이트웨이는 자격을 안전하게 보관할 수 없습니다(마스터키 미설정) — 운영자에게 알려주세요");
+      }
+      const f = c!.fields.find((x) => x.key === field)!;
+
+      const str = (v: unknown, max: number): string | undefined => {
+        const t = String(v ?? "").trim().slice(0, max);
+        return t || undefined;
+      };
+      const ask = {
+        at: new Date().toISOString(),
+        collector_id: collectorId, field,
+        label: str(input.label, 80) ?? f.label ?? field,
+        why: str(input.why, 300),
+        hint: str(input.hint, 120) ?? f.hint ?? undefined,
+      };
+      await setLivSecretAsk(userId, ask);
+      return { ask };
+      // ⚠ **MCP 로 노출한다**(mcp=true). 리브가 쓰라고 만든 도구인데 도구 목록에 없으면 못 쓴다 —
+      //  실측: 리브가 ToolSearch 를 세 번 돌리고 REST 경로를 세 번 추측하느라 96초를 태웠고,
+      //  그 사이 사람에게는 "칸이 떴을 거예요"라고 먼저 말해 버렸다(아직 안 떴는데).
+    }, true, {
+      collector_id: z.number().int().positive().optional().describe("자격을 넣을 수집기 id"),
+      field: z.string().optional().describe("그 수집기의 시크릿 필드 key(예: token)"),
+      label: z.string().optional().describe("칸 이름 — 사람이 읽는다. 없으면 프리셋 라벨."),
+      why: z.string().optional().describe("왜 필요한지 한 줄. 이유를 모르면 사람은 겁이 나서 멈춘다."),
+      hint: z.string().optional().describe("값이 어떻게 생겼는지(예: ntn_ 로 시작하는 긴 문자열)."),
+      cancel: z.boolean().optional().describe("true 면 대기 중인 요청을 내린다."),
+    }),
+
+  restRead("me_liv_put_secret", "자격 저장(화면 전용)",
+    "리브 화면의 안전 입력칸이 받은 값을 금고에 넣는다. **넣을 자리는 서버에 저장된 요청에서만 온다** — " +
+    "요청이 없으면 거부한다. 값은 응답에도, 로그에도, 대화에도 남지 않는다. (사람이 쓰는 자리다. 리브가 부를 일이 없다.)",
+    [{ method: "POST", paths: ["/api/ui/me/liv-secret"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const { getLivProfile, setLivSecretAsk } = await import("../../org/store.js");
+      const ask = (await getLivProfile(userId)).secret_ask;
+      if (!ask) throw new HttpError(409, "지금 받기로 한 자격이 없습니다");
+
+      const value = String(input.value ?? "");
+      if (!value.trim()) throw new HttpError(400, "값이 비어 있습니다");
+      if (value.length > 8192) throw new HttpError(400, "값이 너무 깁니다");
+
+      const { upsertCollector } = await import("../../org/store/collectors.js");
+      // ⚠ 대상은 **저장된 요청**에서만 — 브라우저가 보낸 것을 쓰지 않는다(다른 수집기로 새는 것을 막는다).
+      //  id 로 보낸다: key 로 보내면 중복키로 500 이 난다(#1631 실측).
+      await upsertCollector({ id: ask.collector_id, secrets: { [ask.field]: value } }, userId, "liv");
+      await setLivSecretAsk(userId, null);
+      return { ok: true, field: ask.field };  // 값은 절대 되돌려주지 않는다
+    }, false, {
+      value: z.string().describe("사람이 입력한 자격 값. 서버가 즉시 암호화해 저장하고 버린다."),
     }),
 ];
