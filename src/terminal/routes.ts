@@ -11,18 +11,21 @@ import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { logger } from "../log.js";
 import { ROOTS, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, validateInvites, type SessionInfo, type CreateInput, normalizeCap } from "./terminal-sessions.js";
+import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited } from "../sessions/session-state.js"; // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
 import { listManagedSessions } from "../sessions/managed-sessions.js"; // #1059 F — 관리탭 세션목록에서 managed 표시(회수 제외)
 import { sessionPrompts, searchPrompts, searchPromptsHybrid, transcriptExists } from "./terminal-transcript.js";
 import { activeEmbeddingProvider } from "../v6/search-util.js";
 import { setupPtyUpgrade, type TicketLookup } from "./terminal-pty.js";
 import { registerTerminalFiles } from "./terminal-files.js";
-import { listMembers } from "../org/store.js";
+import { listMembers, getRuntimeConfig } from "../org/store.js";
 import { isProjectSessionDir } from "../project/project-fs.js";
 // 분산 노드(#869) — 원격 노드 세션의 목록 병합·CRUD 위임. 정책(소유·초대 검증)은 여기, 실행은 노드(F7).
 import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, liveNodes } from "../node/registry.js";
 import type { NodeOp } from "../node/protocol.js";
 import { getNode, listNodes } from "../node/store.js";
+import { nodeHarnesses } from "../node/protocol.js";   // #1713 — 노드별 하네스 가용성(미보고 → 기준선)
+import { nodeOpenTo } from "../node/node-access.js";
 import { translateNodeRpcError } from "../node/rpc-error.js";
 import { registerNodeRoutes } from "../node/routes.js";
 
@@ -114,21 +117,29 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     res.setHeader("Cache-Control", "no-store");
     res.json({
       roots: ROOTS.map((r) => ({ key: r.key, label: r.label })),
-      harnesses: HARNESSES.map((h) => ({ key: h.key, label: h.label, hasAutoApprove: !!h.autoApproveFlag, flags: h.flags })),
+      // bin·autoApproveFlag 를 함께 준다(#1695) — 프로젝트 화면의 '내 컴퓨터에서 작업'이 자동승인 설명에 **그 하네스의
+      //  실제 플래그**를 적기 위해서다. 종전엔 웹이 'claude --dangerously-skip-permissions / codex --yolo' 를 문장에
+      //  하드코딩해, 하네스가 늘 때마다 그 문장이 조용히 틀려졌다. 둘 다 우리 상수라 노출에 위험이 없다.
+      harnesses: HARNESSES.map((h) => ({ key: h.key, label: h.label, bin: h.bin, hasAutoApprove: !!h.autoApproveFlag, autoApproveFlag: h.autoApproveFlag ?? "", flags: h.flags })),
       members,
       // 멀티프로필(#346): 이 세션이 '내 계정'(프로필 로그인됨)으로 뜰지, '공유 계정'으로 폴백할지 UI 표시.(레거시 폴백)
       profile: await profileStatus(userOf(req)),
       // 구성원 격리(#524): 이 세션이 '내 격리 OS 계정(box_)'으로 뜨는지 안내 — box_ 격리가 #346 프로필을 대체.
       //  {ready:인프라설치, provisioned:box_존재, osUser}. 미프로비저닝이어도 첫 세션에 자동 생성(lazy)됨.
       os: await memberOsStatus(userOf(req).userId),
-      // 분산 노드(#869): 생성폼 실행 위치 피커 — 내 노드(admin 은 전체)만. online 이어야 생성 가능(폼이 비활성 표시).
+      // 분산 노드(#869): 생성폼 실행 위치 피커 — **내가 등록한 노드 ∪ 관리자가 공유로 지정한 노드**(#1540).
+      //  아래 requireCreatableNode 와 **같은 술어**를 쓴다 — 목록과 게이트가 갈리면 고른 뒤 403 이 난다.
+      //  admin 예외는 두지 않는다(남의 개인 PC 가 관리자에게 선택지로 보이면 그게 이 정책의 구멍이다).
+      //  online 이어야 실제 생성 가능(폼이 비활성 표시).
       nodes: await (async () => {
         const me = idOf(userOf(req));
-        const admin = !!userOf(req).scopes?.includes("admin");
         const live = new Map(liveNodes().map((n) => [n.id, n.online]));
         return (await listNodes().catch(() => []))
-          .filter((n) => n.enabled && (admin || n.owner_member === me))
-          .map((n) => ({ id: n.id, name: n.name, kind: n.kind, online: live.get(n.id) ?? false }));
+          .filter((n) => n.enabled && nodeOpenTo(n, me))
+          // harnesses(#1713) — **그 PC 에서 실제로 띄울 수 있는 것**만 폼에 보여주기 위해 함께 준다.
+          //  노드가 hello 로 보고한 값이고, 구 번들이라 미보고면 기준선(claude·codex·shell)이 온다.
+          //  이게 없으면 사용자는 [생성하기]를 누른 뒤에야 안다 — 옛 번들은 502, 바이너리 부재는 세션 즉사.
+          .map((n) => ({ id: n.id, name: n.name, kind: n.kind, shared: n.shared, online: live.get(n.id) ?? false, harnesses: nodeHarnesses(n.agent_harnesses) }));
       })(),
     });
   }));
@@ -219,6 +230,22 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const localRestorable = restorable.filter(keep);
     res.json({ sessions: [...local, ...localRestorable, ...remote] });
   }));
+  // 세션 종료 확인창이 '대화 기록이 남는지'를 **사실대로** 말하기 위한 최소 정책 조회(#1582).
+  //  왜 필요한가: 종전 확인창은 전 화면에서 "되돌릴 수 없어요"라고 단언했지만, 종료(DELETE)는 tmux 를 죽이고
+  //   desired-state 행을 지울 뿐 **작업 폴더도 대화록도 건드리지 않는다**. 반대로 "대화록은 남아요"라고 못 박아도
+  //   조직이 세션 공유를 안 켰거나 그 하네스가 캡처 대상이 아니면 그건 거짓이 된다 — 어느 쪽으로도 단언하면 틀린다.
+  //   그래서 프론트가 확인창을 그리기 직전에 이걸 한 번 물어보고 문구를 고른다.
+  //  비밀 없음(캡처 on/off · 대상 하네스 · 보존일)이라 admin 게이트를 걸지 않는다 — 어차피 자기 세션을 종료하는
+  //   모든 멤버가 알아야 할 사실이고, org_runtime_config 전량(work_roots 등)은 여기로 나가지 않는다.
+  app.get("/api/ui/terminal/session-log-policy", auth, wrap(async (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const c = await getRuntimeConfig();
+    res.json({
+      enabled: c.session_share.enabled,
+      harnesses: c.session_share.harnesses,
+      retentionDays: c.session_share.retention_days,   // 0 = 무제한
+    });
+  }));
   // 단일 세션의 현재 이름 — 단독 터미널 페이지가 id 로 조회(프로젝트 세션은 목록에서 빠져 ?label= 폴백만 됐던 문제 해결).
   //  접근통제: canAttach(소유자·초대된 멤버, 프로젝트 세션은 전원 #452) — 입장 가능한 사람만 이름을 읽는다.
   app.get("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
@@ -276,9 +303,38 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       res.setHeader("Cache-Control", "no-store"); res.json(out); return;
     }
     if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
-    const out = await sessionPrompts(await sessionDir(req.params.id));
+    const out = await sessionPrompts(await resolveSessionDir(req.params.id, () => sessionDir(req.params.id)));
     res.setHeader("Cache-Control", "no-store");
     res.json(out);
+  }));
+  // 이 세션의 AI 에게 프롬프트를 보낸다(#1664) — 사람이 웹터미널에 붙어 타이핑하는 것과 같은 일을 화면이 대신한다.
+  //  리브(#1631)가 "홈에서 열면 바로 진단이 시작된다"를 만드는 통로이자, 화면에서 세션에 일을 시키는 일반 경로다.
+  //  ⚠ 인가는 **canAttach 와 동급**이다 — 입장할 수 있는 사람은 어차피 터미널에서 직접 칠 수 있으므로 더 좁힐 이유가
+  //   없고, 더 넓히면 남의 AI 에게 명령하는 통로가 된다. 노드 세션은 nodeCanAttach(정책=게이트웨이).
+  //  실행은 node/session-inject 가 로컬/원격을 갈라 맡는다 — 크론 주입과 **같은 경로**다(두 벌 두면 한쪽만 고쳐진다).
+  app.post("/api/ui/terminal/sessions/:id/prompt", auth, wrap(async (req, res) => {
+    const uid = idOf(userOf(req));
+    const text = String(((req.body ?? {}) as Record<string, unknown>).text ?? "");
+    if (!text.trim()) throw new HttpError(400, "보낼 내용이 없습니다");
+    const { nodeOfSession } = await import("../node/registry.js");
+    const nodeId = nodeOfSession(req.params.id);
+    if (nodeId) {
+      const v = await nodeCanAttach(nodeId, req.params.id, uid);
+      if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
+    } else if (!(await canAttach(req.params.id, uid))) {
+      throw new HttpError(403, "세션에 접근할 수 없습니다");
+    }
+    const { injectPrompt } = await import("../node/session-inject.js");
+    try { await injectPrompt(req.params.id, text); }
+    catch (e) {
+      // 노드가 꺼졌거나 구버전이면 nodeRpc 가 고정 문자열로 던진다 — 사람 말로 옮긴다(그냥 500 이면 원인을 모른다).
+      const msg = (e as Error)?.message ?? String(e);
+      if (msg === "node-offline") throw new HttpError(503, "그 컴퓨터가 지금 연결돼 있지 않습니다.");
+      if (msg.startsWith("node-unsupported-op:")) throw new HttpError(409, "그 컴퓨터의 라이블리가 오래돼 프롬프트를 받지 못합니다. 업데이트가 필요합니다.");
+      if (msg === "node-rpc-timeout") throw new HttpError(504, "그 컴퓨터가 응답하지 않습니다.");
+      throw e;
+    }
+    res.json({ ok: true });
   }));
   // 여러 세션 통합 '내 질문' 검색(#745) — 내가 접근 가능한 세션(개인 소유/초대 + 내 프로젝트 세션)의 질문을 grep, 어느 세션인지와 함께.
   app.get("/api/ui/terminal/prompts/search", auth, wrap(async (req, res) => {
@@ -295,13 +351,19 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     res.setHeader("Cache-Control", "no-store");
     res.json(out);
   }));
-  // 노드 세션 생성 게이트(#869) — 노드 실재·활성·연결 + 소유자(또는 admin)만. 초대는 여기서 구성원 디렉터리로
-  //  검증해 노드엔 '검증된 목록'만 넘긴다(노드는 DB 가 없어 스스로 검증 불가 — F7 정책/실행 분리).
+  // 노드 세션 생성 게이트(#869) — 노드 실재·활성·연결 + **소유 또는 관리자 지정 공유**(#1540, nodeOpenTo).
+  //  초대는 여기서 구성원 디렉터리로 검증해 노드엔 '검증된 목록'만 넘긴다(노드는 DB 가 없어 스스로 검증 불가 —
+  //  F7 정책/실행 분리).
+  //  ⚠ admin 우회를 **제거했다**(종전엔 관리자가 남의 개인 PC 에 세션을 열 수 있었다). 이 정책이 지키려는 게
+  //   정확히 '남의 컴퓨터에서 코드가 도는 것'이고, 그럴 사람은 대개 관리자다. 관리자는 공유를 켜고 쓰면 된다 —
+  //   그 편이 배지·감사로 드러난다. 프로젝트 경로(assertNodeUsable)엔 애초에 우회가 없어 이제 두 경로가 일치한다.
+  //   노드 **관리**(토글·회전·삭제)의 admin 권한은 그대로다 — 관리 ≠ 사용.
   const requireCreatableNode = async (req: express.Request, nodeId: string): Promise<void> => {
     const n = await getNode(nodeId);
     if (!n || !n.enabled) throw new HttpError(404, `노드 없음: ${nodeId}`);
-    const u = userOf(req);
-    if (n.owner_member !== idOf(u) && !u.scopes?.includes("admin")) throw new HttpError(403, "본인 노드가 아닙니다");
+    if (!nodeOpenTo(n, idOf(userOf(req)))) {
+      throw new HttpError(403, "본인이 등록한 노드가 아니고 공유 노드도 아닙니다 — 관리자가 공유 노드로 지정한 노드만 함께 쓸 수 있습니다");
+    }
     if (!nodeOnline(nodeId)) throw new HttpError(409, "노드가 오프라인입니다(에이전트 연결 대기)");
   };
 
@@ -316,6 +378,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       // #1291 v2 — 새 세션 폼의 '기록 범위'. 안 읽으면 폼이 조용히 무시되고 사용자는 고른 대로 됐다고 믿는다.
       //  normalizeCap 이 모르는 값을 null 로 접어 미지정(폴더 파생)으로 되돌린다.
       writeVis: normalizeCap(b.writeVis as string) ?? undefined,
+      // #1516 — 로그인 전용 세션(관리탭 [연결된 AI 계정] ▸ 로그인). 값 검증은 harnessLoginArgv 가 한다
+      //  (아는 하네스만 로그인 argv 를 내주고, 모르는 값은 평범한 셸 세션으로 접힌다 — 임의 문자열이 명령이 되지 않는다).
+      loginFor: String(b.loginFor ?? "") || undefined,
     };
     const nodeId = String(b.node ?? "").trim();
     res.setHeader("Cache-Control", "no-store");
@@ -408,10 +473,17 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     //   홈이 따로라 남의 홈 대화를 집을 수 있고, 그러면 그 세션은 못 읽어 claude 가 "No conversation found" 로
     //   즉시 죽는다(마이크 실측 사고) ② 소유자로 스코프해도 **같은 폴더의 다른 대화**를 '최신'이라며 집을 수 있다
     //   — 그럴싸하게 틀리는 쪽이 picker 한 번 고르는 것보다 나쁘다(상민님 판단). 추측하지 않는다.
-    //  claude 하네스에만 해당한다(셸·코덱스는 --resume 이 무의미).
-    const resumeUuid = st.harness === "claude" && st.claude_session_id
-      && await transcriptExists(st.dir || "", st.claude_session_id, st.owner).catch(() => false)
-      ? st.claude_session_id : null;
+    //  ⚠ #1711 — 종전엔 여기에 `st.harness === "claude"` 가 걸려 있어 **claude 세션만** 정밀 복원됐다. 그래서
+    //   antigravity·codex·opencode 세션은 '이어서 열기'를 해도 늘 새 대화로 열렸다(상민님 신고). 매핑 컬럼
+    //   claude_session_id 는 이름만 claude 일 뿐 값은 **그 하네스의 대화 id** 다 — work-flag 훅이 하네스와 무관하게
+    //   보고하고(어댑터가 conversationId·sessionID 를 session_id 로 넘긴다), 이어받기 argv 는 카탈로그가 만든다.
+    //  ⚠ 대화 존재 확인(transcriptExists)은 claude 의 `~/.claude/projects` 규약 전용이라 claude 에서만 한다.
+    //   다른 하네스는 저장 위치 규약을 실측하기 전까지 검사 없이 시도한다 — 없는 id 로 시작해도 #1516 런처가
+    //   세션을 살려 두고 하네스의 원문 에러를 화면에 남기므로, 종전의 '복원 루프'(즉사→재복원)는 구조적으로 끊겨 있다.
+    const mappedId = st.claude_session_id || null;
+    const resumeUuid = mappedId
+      && (st.harness !== "claude" || await transcriptExists(st.dir || "", mappedId, st.owner).catch(() => false))
+      ? mappedId : null;
     const precise = !!resumeUuid;
     const session = await createSession(owner, {
       label: st.label || id, rootKey: st.root_key || "shared", subpath: st.subpath || "",

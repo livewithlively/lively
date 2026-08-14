@@ -2,7 +2,7 @@
 //  (#1313 R38, admin.ts 에서 verbatim 분리).
 //  개인 레이어(org_member.body_md)의 선택지·직렬화·복원은 me-profile.ts 소유를 그대로 쓴다(PROF_* · profChips ·
 //   parseMyProfile) — 규약이 두 벌이 되면 [내 정보] 모달과 이 화면의 저장이 서로를 지운다.
-import { api, appUrl, cardHead, el, errorNote, state, toast, uiText, withTip } from './core.js';
+import { api, appUrl, busy, cardHead, el, errorNote, state, toast, uiText, withTip } from './core.js';
 import { field, skeleton } from './ui-primitives.js';
 import { sectionHead } from './admin-widgets.js';
 import { PROF_DEV, PROF_LANG, PROF_TONE, parseMyProfile, profChips } from './me-profile.js';
@@ -13,9 +13,16 @@ import { PROF_DEV, PROF_LANG, PROF_TONE, parseMyProfile, profChips } from './me-
 //  · 누구 계정으로 — 서버가 보는 자격증명 존재 여부(scope=isolated/profile/shared, /api/ui/me/ai-accounts).
 //  로그인은 그 AI 를 띄운 **개인 세션**을 새 탭으로 열어 사람이 직접 한다(OAuth 는 브라우저 흐름이라 대행 불가) —
 //  AI세션 탭의 [내 계정 로그인]과 같은 경로(loginProfile)를 재사용한다.
+//
+//  ⚠ codex 는 하네스 세션을 열어선 안 된다(#1516): 자격이 만료된 상태에서 codex 는 로그인 화면을 띄우는 대신
+//   `Error: … refresh token was already used …` 를 뱉고 exit 1 로 즉사하고, 그러면 pane 이 사라져 **세션까지
+//   함께 닫힌다** → 로그인하려고 연 세션이 로그인 화면을 못 보여주는 데드락. 그래서 codex 는 셸 세션에서
+//   로그인 명령(`codex login --device-auth`)을 직접 돌린다(서버 loginFor — catalog.ts harnessLoginArgv).
+//   device-auth 인 이유: 웹터미널은 원격이라 기본 플로우의 `http://localhost:1455`(서버의 localhost)에
+//   사용자 브라우저가 닿지 못한다. device-auth 는 주소+일회용 코드라 어느 브라우저에서든 된다(실측).
 const AI_LOGIN_HINT = {
     claude: '열린 세션의 claude 에서 /login 을 실행하세요.',
-    codex: '열린 세션에서 codex 를 실행하면 로그인 안내가 나옵니다.',
+    codex: '열린 세션에 나오는 주소와 일회용 코드를 브라우저에 입력하면 됩니다.',
 };
 function aiAccountRow(a, mySessions, reload) {
     const mine = (mySessions || []).filter((s) => s.harness === a.key);
@@ -24,8 +31,11 @@ function aiAccountRow(a, mySessions, reload) {
     const shared = a.scope === 'shared';
     // 상태는 3-상태다(true/false/null). **배지는 짧게, 사연은 툴팁으로** — 제약 설명(공용 계정·맥 키체인)을
     //  본문에 풀어 쓰면 두세 줄짜리 회색 문단이 되어 정작 '연결됐나?'가 안 읽힌다(사용자 지적).
+    // ⚠ '연결됨'은 **자격이 저장돼 있다**는 뜻이지 '지금 쓸 수 있다'가 아니다(#1516). 만료·무효 토큰은 서버가
+    //  알아낼 방법이 없다 — 파일 존재는 물론 `codex login status`·`codex doctor` 도 만료된 토큰을 정상으로
+    //  보고한다(실측). 그래서 툴팁으로 그 한계를 말하고, 아래에서 **연결됨이어도 [다시 로그인]을 열어 둔다**.
     const st = a.loggedIn === true
-        ? { text: '연결됨', cls: 'pill pill-ok', tip: (shared ? '이 서버 공용 계정으로 연결돼 있습니다' : '내 계정으로 연결돼 있습니다') + ' — ' + a.where }
+        ? { text: '연결됨', cls: 'pill pill-ok', tip: (shared ? '이 서버 공용 계정으로 연결돼 있습니다' : '내 계정으로 연결돼 있습니다') + ' — ' + a.where + '. 저장된 자격이 있다는 뜻이며, 만료 여부까지는 서버가 알 수 없습니다 — 세션에서 로그인 오류가 나면 [다시 로그인] 을 누르세요.' }
         : a.loggedIn === false
             ? { text: '연결 안 됨', cls: 'pill', tip: '아직 로그인하지 않았습니다. [로그인] 을 누르면 이 AI 로 세션이 하나 열리고, 거기서 한 번만 로그인하면 됩니다.' }
             : { text: '확인 불가', cls: 'pill', tip: '이 서버가 로그인 여부를 확인하지 못했습니다(자격이 키체인에 있거나 접근할 수 없음). 세션이 잘 돌고 있으면 연결된 것입니다.' };
@@ -37,8 +47,12 @@ function aiAccountRow(a, mySessions, reload) {
         const btn = ev.currentTarget;
         btn.disabled = true;
         try {
+            // codex 는 셸 세션 + 로그인 명령(loginFor), 그 외는 종전대로 그 하네스 세션(claude 의 /login 은 TUI 안이라 자동화 불가).
+            const viaShell = a.key === 'codex';
             const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify({
-                    label: '내 계정 로그인 (' + a.label + ')', rootKey: 'personal', subpath: '', harness: a.key, flags: {}, autoApprove: false, loginProfile: true,
+                    label: '내 계정 로그인 (' + a.label + ')', rootKey: 'personal', subpath: '',
+                    harness: viaShell ? 'shell' : a.key, loginFor: viaShell ? a.key : undefined,
+                    flags: {}, autoApprove: false, loginProfile: true,
                 }) });
             toast('로그인용 세션을 열었습니다 — ' + (AI_LOGIN_HINT[a.key] || '그 세션에서 로그인하세요.'));
             if (out && out.session)
@@ -67,8 +81,12 @@ function aiAccountRow(a, mySessions, reload) {
     //  공유 계정 같은 단서는 짧은 꼬리표로만 붙이고 사연은 툴팁에 둔다.
     const sub = live.length ? `내 세션 ${live.length}개가 이 AI로 실행 중` : '이 AI로 실행 중인 내 세션 없음';
     return el('div', { class: 'aiacct' }, el('div', { class: 'aiacct-txt' }, el('div', { class: 'aiacct-head' }, el('span', { class: 'aiacct-name', text: a.label }), badge, shared ? withTip(el('span', { class: 'pill', text: '서버 공용' }), '이 AI 의 계정은 이 서버 전체가 함께 씁니다 — 내가 연결한 것이 아닐 수 있고, 로그아웃하면 다른 구성원 세션까지 끊기므로 잠가 두었습니다.') : null), el('div', { class: 'aiacct-sub', text: sub })), el('div', { class: 'aiacct-act' }, 
-    // 로그인 버튼은 '연결 확정'일 때만 감춘다 — 확인 불가에서도 다시 로그인은 언제나 해가 없다.
-    a.loggedIn === true ? null : el('button', { type: 'button', class: 'btn btn-primary btn-sm', text: '로그인', onclick: openLogin }), a.canLogout ? el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '로그아웃', onclick: logout }) : null));
+    // 로그인 버튼은 **언제나 연다**(#1516). 종전엔 '연결 확정'이면 감췄는데, 판정이 자격 **파일 존재**만
+    //  보므로 만료된 자격도 '연결됨'이 된다 → 세션이 인증 오류로 죽는 바로 그 상황에서 화면에 로그인
+    //  진입점이 하나도 없었다(상민님 신고: "비개발자가 어떻게 로그인을 하라는건지도 알기 어렵다").
+    //  다시 로그인은 어떤 상태에서도 해가 없다 — 강조만 낮춘다(연결됨이면 ghost).
+    el('button', { type: 'button', class: a.loggedIn === true ? 'btn btn-ghost btn-sm' : 'btn btn-primary btn-sm',
+        text: a.loggedIn === true ? '다시 로그인' : '로그인', onclick: openLogin }), a.canLogout ? el('button', { type: 'button', class: 'btn btn-ghost btn-sm', text: '로그아웃', onclick: logout }) : null));
 }
 function myAiAccountsCard() {
     const body = el('div');
@@ -76,7 +94,7 @@ function myAiAccountsCard() {
     //  것이고 내가 연결한 게 아니다(사용자 지적: "Codex는 내가 연결한 적 없"). 중립 제목 + 상황별 배너로 바로잡는다.
     const card = el('div', { class: 'card' }, cardHead('연결된 AI 계정', '내 AI 세션이 이 계정으로 실행됩니다. 계정이 구성원별로 갈리지 않는 서버에서는 \'서버 공용\' 표시가 붙습니다.'), body);
     const load = async () => {
-        body.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
+        busy(body, el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
         try {
             // 세션은 실패해도 계정 카드는 보여준다(개수는 부가정보) — 터미널이 없는 배포에서도 로그인 상태는 유효하다.
             const [acc, ses] = await Promise.all([
@@ -109,7 +127,7 @@ function myAiAccountsCard() {
 //   · 담당 영역 — 팀·카테고리 오너십(${team})이 이미 주입한다(중복).
 //   · 자주 쓰는 도구·레포 — 세션이 열린 폴더·레포가 말해 준다(중복).
 async function myAiSection(detail) {
-    detail.replaceChildren(el('div', { class: 'card' }, skeleton('내 AI 설정을 불러오는 중')));
+    busy(detail, el('div', { class: 'card' }, skeleton('내 AI 설정을 불러오는 중')));
     let data;
     try {
         data = await api('/api/ui/me/profile');

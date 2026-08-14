@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { sandboxEnv, applySandboxEnv } from "../testlib/os-sandbox.mjs";   // HOME 만으론 윈도우 격리가 안 된다(#1510)
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -252,9 +253,8 @@ run("엣지 PostToolUse 비배열 + 빈 목록 → 크래시 없이 false", () =
 //  메인 work-flag 엔트리를 찾아 그 command 를 미러(+ --ext-pull)해 배선하고, pull_tools 변경 시 회수하는 파일 왕복.
 run("wrapper: 메인 엔트리 미러 + 배선/회수", () => {
   const SB = mkdtempSync(join(tmpdir(), "sp-wrap-"));
-  const prevHome = process.env.HOME;
+  const restoreHome = applySandboxEnv({ home: SB });   // HOME 만 대입하면 윈도우는 안 따라온다(#1510)
   try {
-    process.env.HOME = SB;
     mkdirSync(join(SB, ".claude"), { recursive: true });
     const sp = join(SB, ".claude", "settings.json");
     const mainCmd = `"node" "${join(SB, ".lively", "hooks", "work-flag.mjs")}"`; // .lively/hooks 경로(kitHookId 매칭)
@@ -302,7 +302,7 @@ run("wrapper: 메인 엔트리 미러 + 배선/회수", () => {
     const cB = applyExtPullWiring(["mcp__notion__"]);
     check("wrapper Bash-matcher work-flag 만 있음 → 메인 아님(무동작 false)", cB === false && extOf(read()).length === 0, `cB=${cB} ext=${extOf(read()).length}`);
   } finally {
-    if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
+    restoreHome();
     rmSync(SB, { recursive: true, force: true });
   }
 });
@@ -321,7 +321,7 @@ run("main-guard: 직접 실행 시 main() 이 STATIC 을 주입(마커 출력)",
   try {
     out = execFileSync(process.execPath, [HOOK], {
       input: JSON.stringify({ hook_event_name: "SessionStart", source: "startup" }),
-      env: { ...process.env, HOME: SB, LIVELY_GATEWAY_URL: "http://127.0.0.1:9", LIVELY_TOKEN: "x", LIVELY_OFF: "", LIVELY_HOOKS_OFF: "" },
+      env: { ...process.env, ...sandboxEnv({ home: SB }), LIVELY_GATEWAY_URL: "http://127.0.0.1:9", LIVELY_TOKEN: "x", LIVELY_OFF: "", LIVELY_HOOKS_OFF: "" },
       timeout: 20000, encoding: "utf8", stdio: ["pipe", "pipe", "ignore"],
     });
     code = 0;

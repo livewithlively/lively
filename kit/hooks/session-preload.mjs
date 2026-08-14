@@ -15,11 +15,20 @@
 //        + [라이브 현황 (게이트웨이, 토큰 필요)]. 어느 쪽이든 있으면 주입, 둘 다 없으면 무동작(fail-open).
 //   ※ Codex 는 ~/.codex/AGENTS.md 로 정적 org-context 를 네이티브 로드하므로(어댑터가 발행), 본 훅의
 //     정적 블록은 Claude 와의 동작 패리티/이중 안전망용이다(중복돼도 무해 — 같은 비밀-없는 텍스트).
-import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync, realpathSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync, realpathSync, rmSync, chmodSync } from "node:fs";
 import { execFileSync, spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+// 하네스별 규약(주입 봉투·배선 방식·자동승인 표면·자산 재로드)은 표에서 온다 — 하네스 이름으로 분기하지 않는다.
+//  ⚠ HARNESS 상수 자체는 **종전 계산식을 유지**한다(빈 문자열 가능): 이 값은 self-update 인자로도 넘어가는데,
+//   여기서 "claude" 로 기본값을 채우면 종전에 인자를 안 넘기던 경로가 넘기게 되어 동작이 바뀐다.
+//   표 조회(harness())가 알아서 claude 로 폴백하므로 분기 결과는 종전과 같다.
+import { harness, isForeignGrokInvocation } from "./harness-registry.mjs";
+
+// grok compat 이중발화 가드(#1701) — grok 은 ~/.claude/settings.json 의 우리 훅을 기본값으로 그대로 실행한다.
+//  그 사본이면 조용히 비켜선다(정본은 grok-adapter 가 LIVELY_HARNESS=grok 으로 스폰하는 경로).
+if (isForeignGrokInvocation()) process.exit(0);
 
 const OFF = process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1";
 // 읽기전용 세션(#1007+) — 세션 pane 에 -e LIVELY_MODE=readonly 로 주입된다(게이트웨이 헤더 x-lively-mode 와 같은 값).
@@ -57,9 +66,10 @@ const HARNESS = (() => {
 //   opts.reloadSkills(Claude 전용, 자산 sync 자기치유가 이번 세션에 스킬을 materialize 했을 때):
 //   raw 텍스트론 신호를 실을 수 없어 JSON 봉투(additionalContext+reloadSkills)로 전환 — 공식 SessionStart 계약.
 function emitContext(text, opts = {}) {
-  const reload = !!opts.reloadSkills && HARNESS !== "codex";
+  const h = harness(HARNESS);
+  const reload = !!opts.reloadSkills && h.reloadAssets;
   if (!text && !reload) return;
-  if (HARNESS === "codex" || reload) {
+  if (h.contextEnvelope === "json" || reload) {
     const out = { hookEventName: "SessionStart" };
     if (text) out.additionalContext = text;
     if (reload) out.reloadSkills = true;
@@ -77,10 +87,52 @@ const readLocal = (rel) => {
 // 정적 org-context (토큰 무관 — cross-repo user-level 전달의 핵심). 동기·저렴, 4.5s 네트워크 타임박스 밖.
 const STATIC = readLocal("context.md");
 
-// OFF 면 토큰 파일도 안 읽는다(클린룸 유지 — 종전 최상단 exit 이 하던 일). !TOKEN 시 정적만 주입하는 처리는 main() 에서.
-const TOKEN = OFF ? "" : ((process.env.LIVELY_TOKEN || "").trim() || readLocal("token"));
+// 플러그인 설치 경로(#1473) — Claude Code 플러그인의 userConfig 값은 훅 프로세스에 CLAUDE_PLUGIN_OPTION_<KEY> 로 export 된다.
+//  키트 설치(curl|sh)는 ~/.lively/{token,gateway-url} 파일을 깔지만 플러그인 설치는 그 파일이 없다 — 그래서 env 폴백을 둔다.
+//  우선순위: LIVELY_* (명시 오버라이드) > CLAUDE_PLUGIN_OPTION_* (플러그인) > ~/.lively 파일(키트). 셋 다 없으면 종전 기본값.
+const pluginOpt = (key) => (process.env[`CLAUDE_PLUGIN_OPTION_${key}`] || "").trim();
 
-const GW = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readLocal("gateway-url") || "http://localhost:8080").replace(/\/$/, "");
+// OFF 면 토큰 파일도 안 읽는다(클린룸 유지 — 종전 최상단 exit 이 하던 일). !TOKEN 시 정적만 주입하는 처리는 main() 에서.
+const TOKEN = OFF ? "" : ((process.env.LIVELY_TOKEN || "").trim() || pluginOpt("TOKEN") || readLocal("token"));
+
+const GW = ((process.env.LIVELY_GATEWAY_URL || "").trim() || pluginOpt("GATEWAY_URL") || readLocal("gateway-url") || "http://localhost:8080").replace(/\/$/, "");
+
+// 플러그인 모드 자격 미러(#1473) — 플러그인 설정값을 `~/.lively` 파일로도 굳힌다. **조직 스킬 본문과 lively CLI 가
+//  그 파일을 전제로 REST 를 호출**하기 때문이다(예: curl -H "Bearer $(cat ~/.lively/token)").
+//  ⚠ 실측(2026-08-04): `sensitive: true` 인 userConfig 값은 **훅 프로세스 env 로 오지 않는다**(공식 문서의
+//   "All values are exported to hook processes" 와 다르다 — 비민감 값만 왔다). 그래서 실제로 이 함수가 굳히는 건
+//   gateway-url 이고, **토큰은 플러그인의 bin/login.mjs(디바이스 코드)가 직접 쓴다.** 아래 로직은 키 종류를 가리지
+//   않으므로 향후 sensitive 전달이 열려도 그대로 동작한다.
+//  소유권 규칙: **플러그인이 만든 파일만 플러그인이 갱신한다.** 키트가 깐 파일은 절대 덮지 않는다(설치 경로 충돌 방지).
+//   → plugin-managed.json 에 이 훅이 만든 파일명을 남겨 그걸로 판정한다. 그 목록에 없는 기존 파일은 건드리지 않는다.
+//  OFF(인코그니토)면 아무것도 쓰지 않는다 — 클린룸에서 토큰이 디스크에 남으면 안 된다.
+export function mirrorPluginCreds() {
+  if (OFF) return;
+  const want = { token: pluginOpt("TOKEN"), "gateway-url": pluginOpt("GATEWAY_URL") };
+  if (!want.token && !want["gateway-url"]) return; // 플러그인 설치가 아니다(키트 경로) — 무동작
+  const dir = join(homedir(), ".lively");
+  const markerPath = join(dir, "plugin-managed.json");
+  try {
+    mkdirSync(dir, { recursive: true });
+    let owned = [];
+    try { const m = JSON.parse(readFileSync(markerPath, "utf8")); if (Array.isArray(m?.files)) owned = m.files; } catch { /* 없으면 빈 목록 */ }
+    let changed = false;
+    for (const [name, value] of Object.entries(want)) {
+      if (!value) continue;
+      const p = join(dir, name);
+      const exists = existsSync(p);
+      if (exists && !owned.includes(name)) continue; // 키트 소유 — 손대지 않는다
+      let cur = null;
+      try { cur = exists ? readFileSync(p, "utf8").trim() : null; } catch { /* 읽기 실패 → 다시 쓴다 */ }
+      if (cur === value) { if (!owned.includes(name)) { owned.push(name); changed = true; } continue; }
+      writeFileSync(p, value + "\n");
+      try { chmodSync(p, name === "token" ? 0o600 : 0o644); } catch { /* 권한 설정 실패는 비치명 */ }
+      if (!owned.includes(name)) owned.push(name);
+      changed = true;
+    }
+    if (changed) writeFileSync(markerPath, JSON.stringify({ files: owned }, null, 2) + "\n");
+  } catch { /* fail-soft — 자격 미러 실패가 세션을 막지 않는다 */ }
+}
 
 // fetch + 개별 타임아웃 + 실패 시 null (어떤 한 소스가 죽어도 나머지로 진행)
 async function jget(path, ms = 2000, auth = true) {
@@ -140,6 +192,59 @@ function reconcileClaudeAutoApprove(dir, want) {
   } catch { /* fail-soft */ }
 }
 
+// auto-approve reconcile(Codex) — claude 의 permissions.allow 와 **같은 결과**를 매 세션 낸다(하네스 패리티).
+//  종전엔 codex 만 설치 시점(=self-update)까지 기다려야 해서, 관리자가 자동승인 목록을 바꿔도 코덱스 사용자는
+//  릴리스가 돌 때까지 승인 프롬프트를 계속 봤다. 여기서 그 지연을 없앤다.
+//  방식: config.toml 의 lively-managed 센티넬 **블록 안에서만** `[mcp_servers.lively.tools.<툴>]` 그룹을 통째 교체한다.
+//   ⚠ TOML 을 파싱해 재직렬화하지 않는다 — 사용자 설정을 우리 파서의 이해도만큼만 보존하게 되기 때문이다.
+//    문자열 치환 + 삽입 자리 고정(첫 `[[hooks.` 앞)만 쓰고, 조립 후 sanity check 를 통과할 때만 기록한다.
+//    센티넬이 없으면(미설치·구버전) 아무것도 안 한다. 어떤 실패든 조용히 무시(세션 불가침).
+const CDX_BEGIN = "# >>> lively-managed (auto-generated by workflow-std/adapters/codex — do not edit) >>>";
+const CDX_END = "# <<< lively-managed <<<";
+export function reconcileCodexAutoApprove(want) {
+  try {
+    const cfgPath = join(homedir(), ".codex", "config.toml");
+    if (!existsSync(cfgPath)) return false;                 // codex 미설치 — 건드리지 않음
+    const raw = readFileSync(cfgPath, "utf8");
+    const bi = raw.indexOf(CDX_BEGIN);
+    if (bi === -1) return false;                            // 우리 블록 없음 = 미배선
+    const ei = raw.indexOf(CDX_END, bi);
+    if (ei === -1) return false;                            // 손상된 마커 — 설치기에 맡긴다(여기서 고치지 않는다)
+    const block = raw.slice(bi, ei);
+    // 기존 승인 테이블 제거(우리가 쓴 형태만 정확히 매칭 — 사용자가 손으로 넣은 다른 키는 형태가 달라 안 걸린다)
+    const stripped = block.replace(/\[mcp_servers\.lively\.tools\.[A-Za-z0-9_-]+\]\napproval_mode = "[a-z]+"\n\n?/g, "");
+    const lines = [];
+    for (const full of want) {
+      const m = /^mcp__lively__(.+)$/.exec(String(full || ""));
+      if (!m || !/^[A-Za-z0-9_-]+$/.test(m[1])) continue;   // TOML 키 안전한 이름만
+      lines.push(`[mcp_servers.lively.tools.${m[1]}]`, 'approval_mode = "approve"', "");
+    }
+    // 삽입 자리 = 첫 `[[hooks.` 앞(설치기가 쓰는 자리와 동일). 훅 블록이 없으면 블록 끝에.
+    const at = stripped.search(/\n\[\[hooks\./);
+    const insert = lines.length ? lines.join("\n") + "\n" : "";
+    const nextBlock = at === -1
+      ? stripped.replace(/\s*$/, "\n\n") + insert
+      : stripped.slice(0, at + 1) + insert + stripped.slice(at + 1);
+    const next = raw.slice(0, bi) + nextBlock + raw.slice(ei);
+    if (next === raw) return false;                          // 변화 없음 — 무기록(대부분의 세션이 여기서 끝)
+    // sanity — 조립이 우리 의도대로 됐나. 하나라도 어긋나면 **쓰지 않는다**(사용자 codex 를 못 뜨게 만드느니 미반영이 낫다).
+    if (!next.includes(CDX_BEGIN) || !next.includes(CDX_END)) return false;
+    if (!/\n\[mcp_servers\.lively\]\n/.test(next)) return false;
+    if ((next.match(/^\[mcp_servers\.lively\]$/gm) || []).length !== 1) return false;
+    if ((next.match(/approval_mode = "approve"/g) || []).length !== lines.length / 3) return false;
+    try { copyFileSync(cfgPath, cfgPath + ".bak-auto-approve"); } catch { /* 백업 실패해도 진행(비파괴 치환) */ }
+    writeFileSync(cfgPath, next);
+    return true;
+  } catch { return false; }                                  // fail-soft
+}
+
+// auto-approve reconcile 전략 — 표의 autoApprove.kind → 실제 반영 함수. 여기 없는 kind 는 no-op 이고,
+//  그건 "그 하네스는 아직 자동승인 배선이 없다"를 뜻한다(조용히 claude 표면에 쓰는 것보다 안전하다).
+const AUTO_APPROVE = {
+  "settings-allow": (dir, want) => reconcileClaudeAutoApprove(dir, want),
+  "toml-approval": (_dir, want) => reconcileCodexAutoApprove(want),
+};
+
 // kit 훅 중복 dedup(자기치유 확장, #742) — 설치 세대 간 command 표기 드리프트(`node` vs `"node"` vs 번들 런타임
 //  절대경로)로 같은 훅이 여러 벌 배선된 settings 를 세션 시작마다 한 벌로 수렴시킨다(v0.1.131 설치기 dedup 과
 //  동일 정체성 규칙 = 스크립트 파일명(+인자)+matcher — 설치기는 설치 시에만 돌므로, 재설치 없는 머신은 이게 정리).
@@ -151,7 +256,8 @@ const kitHookId = (cmd) => {
   return m ? `${m[1]}|${m[2].trim()}` : null;
 };
 function dedupKitWiring() {
-  if (HARNESS === "codex") return false; // codex 배선은 config.toml 센티널 — 이 dedup 은 Claude settings 전용
+  // 이 dedup 은 settings.json 머지 방식 배선에만 성립한다(센티넬 블록·플러그인 파일 배선은 대상 아님).
+  if (harness(HARNESS).wiring !== "settings-merge") return false;
   try {
     const sp = join(homedir(), ".claude", "settings.json");
     if (!existsSync(sp)) return false;
@@ -203,7 +309,7 @@ function dedupKitWiring() {
 //  Codex 배선은 config.toml 센티넬(설치 시점 관리)이라 제외. 러너 파일이 없는 구형 로컬 kit 은 건드리지 않는다
 //  (없는 파일을 배선하면 매 세션 훅 에러) — 그 경우는 kit 재설치가 경로.
 function healAssetSyncWiring() {
-  if (HARNESS === "codex") return false;
+  if (harness(HARNESS).wiring !== "settings-merge") return false;   // settings 머지 배선만 자기치유 대상
   try {
     const runner = join(homedir(), ".lively", "hooks", "sync-harness-assets.mjs");
     if (!existsSync(runner)) return false;
@@ -268,7 +374,7 @@ export function reconcileExtPullWiring(hooks, { extPullCmd, pullTools }) {
 //  codex 제외(config.toml 센티널 관리 — 동적 matcher 밖, 자체설치 MCP 커버는 Claude 한정). 전 경로 fail-soft.
 //  extPullCmd 는 **메인 work-flag 엔트리의 command 를 그대로 재사용** + ' --ext-pull' — node 토큰·경로 표기를 잇는다.
 export function applyExtPullWiring(pullTools) {
-  if (HARNESS === "codex") return false;
+  if (harness(HARNESS).wiring !== "settings-merge") return false; // 동적 matcher 는 settings 머지 배선 전용
   try {
     const sp = join(homedir(), ".claude", "settings.json");
     if (!existsSync(sp)) return false;
@@ -314,12 +420,16 @@ async function refreshRuntimeConfig() {
       JSON.stringify({ hooks, writeback_notice: rc.writeback_notice || undefined, write_tools: writeTools, pull_tools: pullTools, hook_grace_ms: graceMs }, null, 2));
     // auto-approve(B) — 게이트웨이 자동승인 목록을 캐시(~/.lively/auto-approve.json)에 굳히고, Claude 면 settings.json
     //  permissions.allow 에 reconcile(매 세션 → admin 변경이 재설치 없이 다음 세션 반영). 'mcp__lively__*' 만 통과.
-    //  Codex 는 auto-approve 가 config.toml 관리 센티넬 블록 안이라 훅이 매 세션 재생성하지 않는다 — 캐시만 굳히고
-    //  적용은 설치/업데이트 시점(원칙적 비대칭). fetch 실패 시 rc 가 null 이라 이 블록 자체가 안 돈다(상위 가드 = fail-closed).
+    //  Codex 도 같은 주기로 반영한다(#1475 — 종전엔 설치/업데이트 시점까지 기다려야 했다). 표면만 다르다:
+    //  claude=settings.json permissions.allow · codex=config.toml 센티넬 블록의 [mcp_servers.lively.tools.*].
+    //  fetch 실패 시 rc 가 null 이라 이 블록 자체가 안 돈다(상위 가드 = fail-closed).
     if (Array.isArray(rc.auto_approve)) {
       const want = rc.auto_approve.filter((s) => typeof s === "string" && s.startsWith("mcp__lively__"));
       writeFileSync(join(dir, "auto-approve.json"), JSON.stringify({ allow: want }, null, 2));
-      if (HARNESS !== "codex") reconcileClaudeAutoApprove(dir, want);
+      //  어느 표면에 반영할지는 표의 autoApprove.kind 가 정한다(하네스 이름으로 분기하지 않는다).
+      //  아직 전략이 없는 하네스(opencode: config-permission)는 no-op — 캐시 파일만 남고 반영은 그 하네스 배선 작업에서.
+      const reconcile = AUTO_APPROVE[harness(HARNESS).autoApprove.kind];
+      if (reconcile) reconcile(dir, want);
     }
     // work-roots 는 동적 갱신하지 않는다 — 디렉토리 경로 노출 회피(scope-null endpoint 가 work_roots 미반환).
     //  중앙 work-roots 는 설치 번들(.lively/work-roots)/재설치로만 적용된다(자동 업데이트가 그 재설치를 돌린다).
@@ -432,6 +542,7 @@ function takeUpdateNotice() {
 // 출력 = [정적 org-context(게이트웨이 우선, 로컬 폴백)]. 라이브 현황 블록은 폐기(v6 — 구 item/curate 모델 기반이라 제거).
 async function main() {
   if (OFF) process.exit(0);                              // incognito — 아무것도 안 함(클린룸)
+  mirrorPluginCreds();                                   // 플러그인 설치면 자격을 ~/.lively 에도 굳힌다(#1473). 키트 설치면 무동작.
   // 레포 준비 실패 통지(#1155) — 로컬 마커만 읽으므로 토큰 유무와 무관하게 항상 계산한다(무토큰 세션도 코드는 필요하다).
   const repoNotice = repoStatusNotice();
   if (!TOKEN) { emitContext(withRo([repoNotice, STATIC].filter(Boolean).join("\n\n"))); process.exit(0); }  // 토큰 없으면 라이브 스킵, 정적 org-context 만 주입(멤버 기본 상태)

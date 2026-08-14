@@ -9,6 +9,7 @@ import type { Server } from "node:http";
 import type { BearerVerifier } from "../auth/bearer.js";
 import { itemsPool } from "../db/client.js";
 import { reapDeviceAuth } from "../org/auth/device-auth.js";
+import { reapOAuth } from "../org/store/oauth.js";
 import { initAllSchemas } from "./schemas.js";
 import { ensureSelfRls } from "../db/self-rls.js";
 import { seedDefaultContent } from "../org/delivery/seed-content.js";
@@ -17,6 +18,7 @@ import { registerTerminal } from "../terminal/routes.js";
 import { liveAttachCount, scanAttachProcs } from "../terminal/terminal-pty.js";
 import { selfPtmxFdCount } from "../terminal/host-pty.js";
 import { setupNodeUpgrade } from "../node/registry.js";
+import { setupPreviewWsUpgrade } from "../preview/ws-proxy.js";
 import { startTaskScheduler } from "../node/task-scheduler.js";
 import { backfillMarkerSync, backfillSharedGroupWrite } from "../project/project-fs.js";
 import { startScheduler } from "../scheduler/index.js";
@@ -66,6 +68,10 @@ export const LISTEN_STEPS: BootStep[] = [
   { name: "terminal-proxy", gate: "always", run: ({ app, server, verifier }) => registerTerminal(app, server, verifier) },
   // 분산 노드(#869) — 노드 에이전트의 아웃바운드 WSS(/node/ws) 수신. 노드는 포트를 열지 않는다(단일 정문 유지).
   { name: "node-upgrade", gate: "always", run: ({ server }) => setupNodeUpgrade(server) },
+  // 프리뷰 WS 중계(#1541) — `/preview/<id>/…` 업그레이드를 그 환경으로 넘긴다. 업그레이드는 Express 를 통과하지
+  //  않으므로 preview/routes.ts(라우트 핸들러)로는 원리적으로 못 받는다 → 프리뷰에서 웹터미널·노드 채널이
+  //  **아무 응답 없이** 핸드셰이크 타임아웃 나던 자리. 위 두 핸들러 뒤에 둔다(shared-proxy 재-emit 이 그것들을 탄다).
+  { name: "preview-ws", gate: "always", run: ({ server }) => setupPreviewWsUpgrade(server) },
 ];
 
 // ── DB 부팅 직렬 체인(ITEMS_DATABASE_URL 필요) — 종전 .then 체인과 동일 순서. 스텝 하나가 throw 하면
@@ -173,6 +179,8 @@ function startBackgroundSweeps(): void {
   setInterval(() => { void runAutoBackfillSweep(); }, 600_000).unref();
   // #880 device-auth reaper — 만료 1h 경과 pending 행 정리(user_code 회수). start/poll 이 lazy 백업도 함.
   setInterval(() => { void reapDeviceAuth().catch(() => { /* best-effort */ }); }, 600_000).unref();
+  // #1473 T2 OAuth reaper — 만료된 인가요청·인가코드 정리. 리프레시는 회전 사슬(도난 탐지 근거)이라 더 오래 둔다.
+  setInterval(() => { void reapOAuth().catch(() => { /* best-effort */ }); }, 600_000).unref();
   // #905 C1 — 세션이력 retention reap: session_share.retention_days 지나도록 손대지 않은 로그·청크 정리
   //  (session 레코드는 불멸). retention_days=0 이면 no-op. 일 단위 보존이라 6h 주기로 충분.
   setInterval(() => {

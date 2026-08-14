@@ -3,8 +3,10 @@
 //  ② 중앙 = 내장 노드(§9-8): 후보에 "central" 을 저용량(기본 1슬롯)으로 포함 — 동점 시 후순위(오프로드 취지).
 //  ③ 온오프 즉각 인지: registry heartbeat(10s)+close 이벤트. 노드 사망 시 grace(90s) 내 복귀면 감시 재장전(watchTask),
 //     아니면 재큐(attempt<max) 또는 실패 확정. 진행/결과 통지는 CLI 프로세스가 pull(§11) — 스케줄러는 상태 전이만.
-//  ④ 자격(D1 의뢰자 시트): 의뢰자의 setup-token 시크릿(member_secret kind=claude_setup_token)이 있으면 env 리스로
-//     아무 노드나, 없으면 의뢰자 프로필이 실재할 노드(central·본인 소유 노드)로만 배치.
+//  ④ 후보 자격(D1 의뢰자 시트 + #1540): 배치 후보는 **central · 의뢰자가 등록한 노드 · 관리자가 공유로 지정한 노드**
+//     뿐이다. 공유 노드는 그 박스에 의뢰자 프로필이 없으므로 setup-token 시크릿(member_secret
+//     kind=claude_setup_token)을 env 리스로 실을 수 있을 때만 후보다. 본인 노드는 본인 로그인이 그 머신에 있어 리스 불요.
+//     ⚠ 종전 규칙은 `리스 있으면 아무 노드나` 였다 — 리스 하나로 남의 노트북이 열렸다(#1540 이 닫은 구멍).
 //  단일 프로세스 전제(기존 스케줄러와 동일) — LIVELY_NO_SCHEDULER=1 이면 기동 안 함.
 import { logger } from "../log.js";
 import { SHARED_ROOT } from "../terminal/terminal-sessions.js";
@@ -13,7 +15,8 @@ import { getMemberSecret, memberOwner } from "../org/credentials/member-secret-s
 import { getRuntimeConfig } from "../org/store.js";
 import { resolveRepoInject } from "../project/project-provision.js";
 import { nodeOnline, nodeRpc, schedulableRemotes, onTaskDone } from "./registry.js";
-import { getNode } from "./store.js";
+import { getNode, listNodes } from "./store.js";
+import { remoteDelegateAllowed } from "./node-access.js";
 import {
   queuedTasks, runningTasks, runningCountByNode, markRunning, markFinished, requeue, setNodeLost, getTask,
   matchNode, type DelegateTask, type SchedulableNode,
@@ -114,7 +117,7 @@ const QUEUE_MAX_MS = Math.max(0, Number(process.env.LIVELY_TASK_QUEUE_MAX_MS ?? 
 
 // 배치 불가 사유(하네스에게 '왜 안 되는지'를 즉답 — 로컬 폴백 판단 재료). 각 후보 노드의 탈락 이유를 모은다.
 function capacityReason(t: Pick<DelegateTask, "need_cpu" | "need_ram_mb" | "need_disk_mb" | "needs_docker">, nodes: SchedulableNode[]): string {
-  if (!nodes.length) return "가용 노드 없음(등록된 노드가 없거나, 의뢰자 자격으로 쓸 수 있는 노드가 없음 — setup-token 미등록 시 중앙·본인 노드만)";
+  if (!nodes.length) return "가용 노드 없음(쓸 수 있는 노드가 없음 — 위탁은 중앙 + 본인이 등록한 노드 + 관리자가 공유 노드로 지정한 노드에만 갑니다. 공유 노드를 쓰려면 내 셋업토큰 등록이 필요합니다)";
   const bits = nodes.map((n) => {
     if (n.running >= n.capacity) return `${n.id}: 슬롯 만석(${n.running}/${n.capacity})`;
     if (t.needs_docker && !n.hasDocker) return `${n.id}: docker 없음`;
@@ -140,12 +143,11 @@ export async function leaseEnvFor(
   return sec?.secret ? { CLAUDE_CODE_OAUTH_TOKEN: sec.secret } : undefined;
 }
 
-// 원격 후보 정책(④) — 리스가 있으면 아무 노드, 없으면 의뢰자 프로필이 실재하는 노드(본인 소유)만.
-export function remoteAllowed(hasLease: boolean, nodeOwner: string | null | undefined, requester: string): boolean {
-  return hasLease || nodeOwner === requester;
-}
-
-// 자격/후보 정책(④) — 리스 시크릿이 있으면 전 노드, 없으면 central + 의뢰자 소유 노드만.
+// 후보/자격 정책(④ + #1540) — central 은 항상, 원격은 **본인이 등록한 노드 + 관리자가 공유로 지정한 노드**만.
+//  판정은 node-access.remoteDelegateAllowed 단일 술어(접근 게이트와 같은 축 + 자격 리스 조건).
+//  ⚠ 소유·공유·활성은 **매 tick DB 에서 다시 읽는다**(listNodes 1회). registry 의 conns 에 들린 노드 행은
+//   **연결 시점 스냅샷**이라, 관리자가 공유를 끈 뒤에도 그 노드가 재연결하기 전까지 계속 열려 보인다 —
+//   정책 변경이 즉시 듣지 않는 건 접근통제에서 결함이다. 쿼리 1회(노드 수는 수십 규모)로 그걸 없앤다.
 async function candidatesFor(t: DelegateTask, counts: Map<string, number>, extra: Map<string, number>): Promise<{ nodes: SchedulableNode[]; env?: Record<string, string> }> {
   const env = await leaseEnvFor(t.requester);
   const running = (id: string): number => (counts.get(id) ?? 0) + (extra.get(id) ?? 0);
@@ -157,9 +159,12 @@ async function candidatesFor(t: DelegateTask, counts: Map<string, number>, extra
       res: await sampleResources(SHARED_ROOT.base).catch(() => null), capacity: CAP_CENTRAL, running: running(CENTRAL_NODE_ID),
     });
   }
+  const rows = new Map((await listNodes().catch(() => [])).map((n) => [n.id, n]));
   for (const r of schedulableRemotes()) {
-    if (!remoteAllowed(Boolean(env), r.owner, t.requester)) continue; // 리스 없음 → 의뢰자 프로필 실재 노드만
-    nodes.push({ id: r.id, kind: r.kind, hasDocker: r.hasDocker, res: r.res, capacity: r.kind === "worker" ? CAP_WORKER : CAP_MEMBER, running: running(r.id) });
+    const row = rows.get(r.id);
+    if (!row || !row.enabled) continue;                                          // 삭제·비활성(스냅샷은 모를 수 있다)
+    if (!remoteDelegateAllowed(row, t.requester, Boolean(env))) continue;         // 남의 비공유 노드 · 자격 없는 공유 노드
+    nodes.push({ id: r.id, kind: row.kind, hasDocker: r.hasDocker, res: r.res, capacity: row.kind === "worker" ? CAP_WORKER : CAP_MEMBER, running: running(r.id) });
   }
   return { nodes, env };
 }
@@ -253,7 +258,7 @@ async function watchRunning(): Promise<void> {
       }
       if (t.node_id === CENTRAL_NODE_ID) {
         // 중앙(내장 노드)은 스케줄러가 직접 감시 — 원격은 에이전트가 taskdone 을 push.
-        const out = await checkTask({ taskId: t.id, sessionId: t.session_id ?? "", taskDir: t.task_dir ?? "" });
+        const out = await checkTask({ taskId: t.id, sessionId: t.session_id ?? "", taskDir: t.task_dir ?? "", harness: t.harness ?? undefined });   // #1710 — 하네스별 결과 스키마
         if (out) await finish(t, out.ok, out.exit, out.summary, out.error);
         continue;
       }
@@ -273,7 +278,7 @@ async function watchRunning(): Promise<void> {
       }
       if (t.node_lost_at) {
         // 복귀 — 에이전트 재시작으로 감시 목록이 비었을 수 있어 재장전(멱등).
-        await nodeRpc(t.node_id!, "watchTask", { taskId: t.id, sessionId: t.session_id, taskDir: t.task_dir }).catch(() => { /* 다음 tick */ });
+        await nodeRpc(t.node_id!, "watchTask", { taskId: t.id, sessionId: t.session_id, taskDir: t.task_dir, harness: t.harness }).catch(() => { /* 다음 tick */ });
         await setNodeLost(t.id, false);
         logger.info({ task: t.id, node: t.node_id }, "노드 복귀 — 작업 계속");
       }

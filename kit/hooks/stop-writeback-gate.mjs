@@ -17,6 +17,12 @@
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join, resolve, sep, delimiter } from "node:path";
+// harness-registry 는 훅과 같은 디렉터리로 설치된다(HOOK_SCRIPTS — sync-harness-assets 의 import 와 같은 계약).
+import { isForeignGrokInvocation } from "./harness-registry.mjs";
+
+// grok compat 이중발화 가드(#1701) — grok 이 ~/.claude/settings.json 의 우리 훅을 그대로 실행한 사본이면
+//  비켜선다(정본은 grok-adapter 경유 — 사본이 돌면 종료 게이트가 camelCase 페이로드를 오파싱해 오판한다).
+if (isForeignGrokInvocation()) process.exit(0);
 
 const SID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const FLAG_DIR = join(tmpdir(), "lively-hooks"); // 전 플랫폼 per-user tmp(work-flag.mjs 와 동일) — 공유 /tmp 미사용

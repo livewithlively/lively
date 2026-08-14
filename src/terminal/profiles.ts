@@ -14,6 +14,7 @@ import { DANGEROUS_SCOPES, isScope } from "../auth/scopes.js";
 import { resolveMemberOsUser, wrapAsMember, osUsername, isolationInfraReady, osUserExists } from "./terminal-isolation.js";
 import { ROOTS, HARNESSES } from "./catalog.js";
 import { getOpt } from "./tmux-exec.js";
+import { loadDesiredOne } from "../sessions/session-desired.js";
 
 const execFileAsync = promisify(execFile);
 const ID_RE = SESSION_ID_RE;   // 세션 id 형식의 단일 진실원천 — 게이트웨이가 헤더로 받은 세션도 같은 자로 잰다(#852)
@@ -204,9 +205,16 @@ export async function provisionMemberOs(memberId: string, opts?: { includeContro
 
 // 하네스별 자격증명 파일(홈 기준 상대경로) — 로그인 여부 판정·로그아웃 대상의 단일 출처.
 //  ⚠ 값은 이 상수에서만 온다(사용자 입력이 셸 문자열에 들어가지 않는다).
+// ⚠ #1695 판정: 세션 카탈로그에 opencode·antigravity 를 넣었지만 **이 표에는 넣지 않는다.**
+//  여기 실리면 [연결된 AI 계정]이 '그 파일이 있나'로 로그인 여부를 말하는데, agy 는 자격을 keyring 에 두고
+//  (~/.gemini 트리에 자격 파일이 없다 — 실측) opencode 는 제공자마다 자리가 갈린다. 없는 파일을 기준으로 하면
+//  로그인돼 있는 사람에게 '연결 안 됨'이라고 **거짓말**을 한다(맥 claude 키체인에서 이미 겪은 실패 — 아래 참조).
+//  표에 없으면 aiAccountStatus 가 그 하네스를 건너뛴다 = 목록에 안 나온다(정직한 침묵). 자격 위치를 실측하면 그때 연다.
 const HARNESS_CRED: Record<string, string> = {
   claude: ".claude/.credentials.json",
   codex: ".codex/auth.json",
+  // grok 은 자격이 **파일**이다(#1701 실측: `grok login` 이 ~/.grok/auth.json 0600 을 만든다 — agy 의 keyring 과 다름).
+  grok: ".grok/auth.json",
 };
 
 // box_ 홈의 파일 존재 — ⚠ 게이트웨이(lively)는 멤버 700 홈을 '읽지' 못한다(격리의 본질). 대신 box_ 로 drop-priv 해서
@@ -227,12 +235,50 @@ async function memberFileRemove(osUser: string, rel: string): Promise<void> {
 async function memberClaudeLoggedIn(osUser: string): Promise<boolean> {
   return memberFileExists(osUser, HARNESS_CRED.claude);
 }
-// OS 격리 상태(#524) — UI 표시용. ready=인프라 준비(활성+Linux+box-spawn), provisioned=이 멤버 box_<slug> 존재,
-//  loggedIn=box_ 홈에 claude 자격증명 있음(drop-priv 확인). loggedIn 이면 UI 로그인 버튼 숨김.
-export async function memberOsStatus(memberId: string): Promise<{ ready: boolean; provisioned: boolean; osUser: string; loggedIn: boolean }> {
+// box_ 홈 dir 존재 — **OS 유저와 별개**로 본다. 홈 부모(/home)는 755 라 게이트웨이가 stat 할 수 있고
+//  (내용은 700 이라 여전히 못 읽는다), 이 한 비트가 아래 '고아 홈' 판정의 유일한 근거다.
+async function memberHomeExists(osUser: string): Promise<boolean> {
+  try { return (await fsp.stat(path.join(MEMBER_HOME_BASE, osUser))).isDirectory(); }
+  catch { return false; }
+}
+
+// OS 격리 상태(#524) — UI 표시용 + 컨트롤플레인의 '이 멤버가 로그인했나' 판정 입력.
+//  ready=인프라 준비(활성+Linux+box-spawn) · provisioned=이 멤버 box_<slug> 존재 · loggedIn=box_ 홈에
+//  claude 자격증명 있음(drop-priv 확인) · orphanHome=홈은 남았는데 OS 유저가 없음(아래).
+export interface MemberOsStatus {
+  ready: boolean;
+  provisioned: boolean;
+  osUser: string;
+  /** null = **알 수 없음**(orphanHome). false 는 '확실히 미로그인'일 때만 — aiAccountStatus 와 같은 교리. */
+  loggedIn: boolean | null;
+  /** 홈(/home/box_<slug>)은 실재하는데 그 OS 유저가 없다 = passwd 초기화 드리프트. 아래 판정 주석 참조. */
+  orphanHome: boolean;
+}
+
+/**
+ * (순수 — 테스트 seam) OS 격리 신호에서 로그인 판정. **미탐이 아니라 '모름'을 정직하게 낸다.**
+ *
+ * ⚠ 왜 세 갈래인가: 홈(/home/box_<slug>)과 OS 유저(/etc/passwd)의 수명이 **다를 수 있다**.
+ *   컨테이너 배포(매니지드 테넌트)에서 /home 은 영속 볼륨이고 /etc/passwd 는 컨테이너 수명이라,
+ *   컨테이너를 다시 만들면 **자격증명이 든 홈은 그대로인데 그 홈의 주인 유저만 사라진다**.
+ *   그 상태에서 종전 코드는 `provisioned=false → loggedIn=false`(= '이 사람은 로그인 안 했다')로 단정했는데,
+ *   그건 거짓말이다 — 자격은 디스크에 있고 다음 세션의 lazy provision(ensureMemberOsUser)이 되살린다.
+ *   실측(#1471): 매니지드 테넌트에서 이 거짓 false 때문에 컨트롤플레인이 자율 파이프라인을 영영 안 켰다.
+ *   드롭-프리브할 유저가 없어 **확인할 방법 자체가 없으므로** 답은 false 가 아니라 null(모름)이다.
+ */
+export function judgeMemberOs(i: { ready: boolean; provisioned: boolean; homeExists: boolean; credExists: boolean }): { loggedIn: boolean | null; orphanHome: boolean } {
+  if (i.provisioned) return { loggedIn: i.credExists, orphanHome: false };   // drop-priv 로 실제 확인함
+  const orphanHome = i.ready && i.homeExists;                                 // 홈만 남음 → 확인 불가
+  return { loggedIn: orphanHome ? null : false, orphanHome };                 // 홈도 없으면 확실히 미로그인
+}
+
+export async function memberOsStatus(memberId: string): Promise<MemberOsStatus> {
   const osUser = osUsername(userSlug({ userId: memberId } as LivelyUser));
+  const ready = isolationInfraReady();
   const provisioned = await osUserExists(osUser);
-  return { ready: isolationInfraReady(), provisioned, osUser, loggedIn: provisioned ? await memberClaudeLoggedIn(osUser) : false };
+  const credExists = provisioned ? await memberClaudeLoggedIn(osUser) : false;
+  const homeExists = provisioned ? true : await memberHomeExists(osUser);
+  return { ready, provisioned, osUser, ...judgeMemberOs({ ready, provisioned, homeExists, credExists }) };
 }
 
 // ── 내 AI 계정(#1085) — 관리탭 [내 설정 ▸ 내 AI 설정] 상단 카드. "내 AI 세션이 어느 AI(Claude Code·Codex)로,
@@ -348,7 +394,9 @@ export async function ensureMemberOsUser(user: LivelyUser): Promise<string | nul
 //  누가 브라우징하든(초대 멤버 포함) op 는 owner osUser 로 수행해야 소유·권한이 맞다. off/미프로비저닝=null(게이트웨이 직접).
 export async function sessionOsUser(id: string): Promise<string | null> {
   if (!ID_RE.test(id)) return null;
-  const owner = await getOpt(id, "@box_owner");
+  // desired(DB) 우선 · tmux 폴백 — ownerMeta 와 같은 규율(파일 op 의 uid 도 소유자 판정이다).
+  const db = await loadDesiredOne(id);
+  const owner = db?.owner || (await getOpt(id, "@box_owner"));
   if (!owner) return null;
   return resolveMemberOsUser(slug(owner));
 }

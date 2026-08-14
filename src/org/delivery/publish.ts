@@ -326,13 +326,16 @@ export async function previewMemberContext(orgName: string, memberId?: string): 
   const categoryMap = await categoryMapForIndex(viewer, team.mineIds.size ? team.mineIds : undefined);
   // 항상-주입 섹션 전부를 sort 순으로 조립(injection='always' 행 = 섹션). 각 본문에 ${team}/${categories}/${wiki} 치환.
   const sectionsText = await buildSectionBlocks({ team: team.block, categoryMap, wikiUnits: wikiPins, wikiCats: await wikiCategoryMap() });
-  // 온보딩 baseline(#269) — 조직 미완이면 "남은 단계 + AI 지침"을 헤더보다 위에 주입(완료면 ""). SessionStart 훅의 live 소스.
-  const { computeOnboardingStatus, renderOnboardingBlock } = await import("./onboarding.js");
-  const onboarding = renderOnboardingBlock(await computeOnboardingStatus());
+  // (2026-08-12) 온보딩 baseline 블록(#269) **폐지** — 셋업 체크리스트를 매 세션 컨텍스트 맨 앞에 붙이던
+  //  자리다. 없앤 이유는 이 파일이 아니라 onboarding.ts 헤더에 적어 뒀다(요약: 체크리스트를 세션에 밀어
+  //  넣으면 '영원히 미완 → 매 세션 잔소리'가 되고, 파이프라인처럼 정상 운영 중에도 미완일 수 있는 항목이
+  //  들어오면 '완료되면 사라진다'는 방어가 통하지 않는다). 체크리스트의 표면은 웹 화면 하나다.
+  //  ⚠ 빈 조직이 맥락 블라인드가 되지는 않는다 — context-ontology-guide 는 코드 소유라 DB 행이 없어도
+  //   아래 buildSectionBlocks 가 렌더한다(그게 '라이블리가 뭔지'를 설명하는 실제 출처였다).
   // 나 층·개인 층 — 본인 세션에만(memberId=bearer principal). memberId 없으면 둘 다 "" → 정적(멤버 무관) 출력 불변.
   const { me, personal } = memberId ? await buildMemberBlocks(memberId) : { me: "", personal: "" };
   // '나'는 헤더 직후(누구의 맥락인지 먼저), 개인 규칙은 조직·팀 층 뒤(조직 규칙을 덮어쓰는 것처럼 읽히지 않게).
-  const parts = [onboarding, header, me, sectionsText, personal];
+  const parts = [header, me, sectionsText, personal];
   // H1-b 시크릿 출력게이트(v3 P-V3-1): 이 미리보기는 구성원 AI 가 매 세션 읽는 항상-주입 컨텍스트(=훅 fetchOrgContext live 소스).
   //  substituteBlocks 가 섹션마다 이미 마스킹하나, 레거시 섹션 본문의 평문 시크릿 대비 조립 후 한 번 더 redactString(fail-open).
   return redactString(parts.filter(Boolean).join("\n\n")) + "\n";

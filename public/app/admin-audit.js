@@ -5,7 +5,7 @@
 // ── 감사 로그 3탭 공용 컨트롤(#1085) ─────────────────────────────────────────
 //  세 탭이 각자 필터바·페이저를 복제해 갖고 있었고(oa-* / audit-bar / tu-*), 라벨 유무·컨트롤 높이·
 //  모서리·글자 크기가 전부 달랐다. 마크업 생성기를 하나로 모으고 스타일은 styles.css 의 .aud-* 로 통일한다.
-import { api, cardHead, el, errorNote, relTime, state, withTip, uiText } from './core.js';
+import { api, busy, cardHead, el, errorNote, relTime, state, uiText, withTip } from './core.js';
 import { audExportBtn, audExportCsv, audField, audPageSize, audPageSizeField, audPager, audPeriodField, audPeriodQs, audSelect } from './admin-audit-common.js';
 // ── DB 접근 감사 뷰(#746 P5) — 누가·언제·무엇을 조회했나(위변조 방지). 필터는 드롭다운 위주. admin. ──
 const AUDIT_PERIODS = [['1d', '최근 24시간'], ['7d', '최근 7일'], ['30d', '최근 30일'], ['all', '전체 기간']];
@@ -72,7 +72,7 @@ async function dbAuditEditor(detail, data) {
     reload();
 }
 async function loadAuditRows(body, f, reload) {
-    body.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
+    busy(body, el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
     const pageSize = audPageSize('db');
     const page = Math.max(1, f.page || 1);
     const qs = dbAuditFilterQs(f);

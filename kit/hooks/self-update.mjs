@@ -53,6 +53,20 @@ const LOCK_STALE_MS = 10 * 60 * 1000;      // 죽은 프로세스가 남긴 락 
 const BACKOFF_MS = 6 * 60 * 60 * 1000;     // 같은 버전 실패 후 재시도 간격
 const FETCH_MS = 60_000;                   // 번들 다운로드(백그라운드라 넉넉히)
 const INSTALL_MS = 180_000;                // 설치기 상한
+
+// tar 실행파일 — **PATH 해석에만 기대지 않는다.**
+//  윈도우 실기기의 update-state.json 에 `tar -xzf` 실패가 남았다(#1510 로 넘어온 미해결건). tar.exe 는
+//  윈도우 10 1803+ 에 System32 로 기본 동봉되므로 '설치 안 됨'보다 **훅 실행 컨텍스트의 PATH 에 System32 가
+//  없는 쪽**이 유력하다 — 훅은 하네스가 준 env 로 돌고, 그 PATH 는 사용자의 대화형 셸과 다를 수 있다.
+//  자가 업데이트가 막히면 우리가 고친 키트가 **자동으로는 영영 안 간다**(수동 `lively update` 만 된다).
+//  ⚠ 이건 가설에 기반한 하드닝이고 실기기 재확인 전이다. 다만 회귀 위험이 없다 — 절대경로가 있으면 그걸 쓰고,
+//   없으면 종전대로 PATH 이름으로 부른다.
+function tarBin() {
+  if (process.platform !== "win32") return "tar";
+  const root = process.env.SystemRoot || process.env.windir || "C:\\Windows";
+  const abs = join(root, "System32", "tar.exe");
+  return existsSync(abs) ? abs : "tar";
+}
 const LOG_MAX = 64 * 1024;                 // 로그 상한(넘으면 갈아엎음 — 무한증식 방지)
 
 // 번들에 반드시 있어야 하는 러너(설치기 HOOK_SCRIPTS 와 동일 — 하나라도 없으면 그 번들은 설치하지 않는다).
@@ -106,9 +120,15 @@ function installedHarnesses() {
   const out = [];
   try { if (readFileSync(join(CLAUDE_DIR, "settings.json"), "utf8").includes(".lively/hooks/")) out.push("claude"); } catch { /* 미배선 */ }
   try { if (readFileSync(join(CODEX_DIR, "config.toml"), "utf8").includes("lively-managed")) out.push("codex"); } catch { /* 미배선 */ }
+  // opencode: 어댑터 파일 = 우리만 놓는 배선 신호(설치기와 같은 XDG 계산 — LIVELY_HOME 격리 우선).
+  //  antigravity: 플러그인 hooks.json(#1689 plugin-dir). ⚠ 이 두 감지가 없으면 그 하네스만 쓰는 머신은
+  //  자동 업데이트가 --harness 빈 목록으로 돌아 배선이 영영 안 갱신된다(#1519 가 남긴 갭 — #1689 에서 채움).
+  const XDGBASE = process.env.LIVELY_HOME ? join(HOME, ".config") : (process.env.XDG_CONFIG_HOME || join(HOME, ".config"));
+  try { if (existsSync(join(XDGBASE, "opencode", "plugin", "lively.js"))) out.push("opencode"); } catch { /* 미배선 */ }
+  try { if (existsSync(join(HOME, ".gemini", "config", "plugins", "lively"))) out.push("antigravity"); } catch { /* 미배선 */ }
   if (!out.length) {
     const h = (argOf("--harness") || process.env.LIVELY_HARNESS || "").toLowerCase();
-    if (h === "claude" || h === "codex") out.push(h); // 배선을 못 읽었지만 그 하네스 세션에서 불려왔다
+    if (["claude", "codex", "opencode", "antigravity"].includes(h)) out.push(h); // 배선을 못 읽었지만 그 하네스 세션에서 불려왔다
   }
   return out;
 }
@@ -154,7 +174,10 @@ function verifyBundle(root) {
   //  않는다 — macOS 게이트웨이 번들엔 `._<name>` AppleDouble 쓰레기가 섞일 수 있는데(#858 회귀, tar/xattr),
   //  설치기는 명시된 이름만 복사하므로 그 쓰레기는 애초에 배포되지 않는다. 그걸 검사해 전체를 막는 건 과잉 차단이었다.
   //  (번들 자체를 깨끗하게 만드는 건 서버측 COPYFILE_DISABLE — 여기선 '설치될 파일'만 본다는 원칙으로 견고화.)
-  const runners = [...REQUIRED_HOOKS, "self-update.mjs"].filter((f) => existsSync(join(hooksDir, f)));
+  //  harness-registry.mjs 는 REQUIRED_HOOKS 에 **넣지 않는다**(self-update.mjs 와 같은 이유 — 그게 없는 구
+//   번들을 '손상'으로 오판하면 롤백이 막힌다). 대신 **있으면 구문검사한다**: 훅들이 import 하는 모듈이라
+//   여기서 깨진 채 통과하면 설치 후 sync-harness-assets 가 통째로 죽는다(구문오류는 import 시점에 터진다).
+  const runners = [...REQUIRED_HOOKS, "self-update.mjs", "harness-registry.mjs"].filter((f) => existsSync(join(hooksDir, f)));
   for (const p of [installer, ...runners.map((f) => join(hooksDir, f))]) {
     try { execFileSync(process.execPath, ["--check", p], { stdio: "ignore", timeout: 20_000 }); }
     catch { throw new Error(`번들 손상 — 구문 오류: ${p.replace(root, "")}`); }
@@ -312,7 +335,7 @@ async function main() {
   try {
     log(`업데이트 시작: ${local || "(스탬프 없음)"} → ${target} · harness=${harnesses.join(",")}`);
     const bytes = await download(gw, token, join(tmp, "bundle.tgz"));
-    execFileSync("tar", ["-xzf", join(tmp, "bundle.tgz"), "-C", tmp], { stdio: "ignore", timeout: 60_000 });
+    execFileSync(tarBin(), ["-xzf", join(tmp, "bundle.tgz"), "-C", tmp], { stdio: "ignore", timeout: 60_000 });
     const installer = verifyBundle(tmp);
     log(`번들 검증 통과 (${(bytes / 1024).toFixed(0)} KiB)`);
 

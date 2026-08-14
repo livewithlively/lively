@@ -11,8 +11,10 @@ const sha256 = (s: string): string => crypto.createHash("sha256").update(s).dige
 
 export interface OrgNode {
   id: string; name: string; kind: "member" | "worker"; owner_member: string;
-  token_hash: string | null; enabled: boolean;
-  platform: string | null; agent_ver: string | null; agent_caps: string[] | null; host: string | null;
+  // shared(#1540) = 관리자가 '공유 노드'로 지정했나 = 전체 구성원 개방. 판정은 node-access.ts 단일 술어.
+  //  kind 와 직교다 — kind 는 git 자격 정책(resolveRepoInject)·슬롯 용량에만 쓴다.
+  token_hash: string | null; enabled: boolean; shared: boolean;
+  platform: string | null; agent_ver: string | null; agent_caps: string[] | null; agent_harnesses: string[] | null; host: string | null;
   last_seen: string | null; created_by: string | null; created_at: string; updated_at: string;
 }
 
@@ -34,7 +36,7 @@ export async function getNode(id: string): Promise<OrgNode | undefined> {
 }
 
 // 노드 생성 + 전용 토큰 발급(평문 토큰은 이 응답 1회만). 이미 있으면 409 — 토큰 재발급은 rotateNodeToken.
-export async function createNode(input: { id: string; name?: string; kind?: string; owner: string }, actor?: string): Promise<{ node: OrgNode; token: string }> {
+export async function createNode(input: { id: string; name?: string; kind?: string; owner: string; shared?: boolean }, actor?: string): Promise<{ node: OrgNode; token: string }> {
   const id = normalizeNodeId(input.id);
   const kind = input.kind === "worker" ? "worker" : "member";
   if (!(await getMember(input.owner))) throw new HttpError(400, `존재하지 않는 구성원입니다: ${input.owner}`);
@@ -44,9 +46,10 @@ export async function createNode(input: { id: string; name?: string; kind?: stri
     actor ?? input.owner, "node-store",
   );
   const r = await itemsPool.query(
-    `INSERT INTO org_node(id, name, kind, owner_member, token_hash, created_by)
-       VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,
-    [id, input.name || id, kind, input.owner, tokenHash, actor ?? null],
+    `INSERT INTO org_node(id, name, kind, owner_member, token_hash, created_by, shared)
+       VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+    // shared 는 **명시할 때만** 켜진다(#1540) — 기본은 등록한 사람 것. 호출부(REST)가 admin 게이트를 건다.
+    [id, input.name || id, kind, input.owner, tokenHash, actor ?? null, !!input.shared],
   );
   return { node: r.rows[0] as OrgNode, token };
 }
@@ -68,6 +71,14 @@ export async function setNodeEnabled(id: string, enabled: boolean): Promise<void
   await itemsPool.query(`UPDATE org_node SET enabled=$2, updated_at=now() WHERE id=$1`, [id, enabled]);
 }
 
+// 공유 노드 지정/해제(#1540) — **관리자 전용**(게이트는 호출부 REST). 이 한 컬럼이 '전체 개방'의 유일한 근거다.
+//  해제는 즉시 유효하다: 위탁 후보 판정도, 접근 게이트도 매 요청 DB 행을 다시 읽는다(연결 시 스냅샷 캐시를 안 본다).
+//  이미 그 노드에서 돌고 있는 남의 위탁 태스크는 죽이지 않는다 — 새 배치만 막는다(진행 중 작업을 정책 변경으로
+//  중단시키면 결과를 잃는다). 즉시 끊어야 하면 enabled=false(연결 차단) 또는 태스크 취소를 쓴다.
+export async function setNodeShared(id: string, shared: boolean): Promise<void> {
+  await itemsPool.query(`UPDATE org_node SET shared=$2, updated_at=now() WHERE id=$1`, [id, shared]);
+}
+
 export async function deleteNode(id: string, actor?: string): Promise<{ deleted: boolean }> {
   const node = await getNode(id);
   if (!node) return { deleted: false };
@@ -79,7 +90,7 @@ export async function deleteNode(id: string, actor?: string): Promise<{ deleted:
 // hello 시 관측 필드 갱신 + 생존 확인 주기 갱신.
 export async function touchNode(
   id: string,
-  obs?: { platform?: string; agentVer?: string; host?: string; caps?: string[] },
+  obs?: { platform?: string; agentVer?: string; host?: string; caps?: string[]; harnesses?: string[] },
 ): Promise<void> {
   // COALESCE — 관측값이 없으면(state push 로 부른 경우) 기존 값을 지우지 않는다.
   //  ⚠ agent_ver 가 라이브에서 **영원히 NULL** 이던 원인이 여기가 아니라 **hello 가 안 보낸 것**이었다(#905 C4).
@@ -87,9 +98,9 @@ export async function touchNode(
   await itemsPool.query(
     `UPDATE org_node SET last_seen=now(), updated_at=now(),
         platform=COALESCE($2, platform), agent_ver=COALESCE($3, agent_ver), host=COALESCE($4, host),
-        agent_caps=COALESCE($5, agent_caps)
+        agent_caps=COALESCE($5, agent_caps), agent_harnesses=COALESCE($6, agent_harnesses)
       WHERE id=$1`,
-    [id, obs?.platform ?? null, obs?.agentVer ?? null, obs?.host ?? null, obs?.caps ?? null],
+    [id, obs?.platform ?? null, obs?.agentVer ?? null, obs?.host ?? null, obs?.caps ?? null, obs?.harnesses ?? null],
   );
 }
 

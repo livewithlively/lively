@@ -12,7 +12,7 @@
 // 플래그:
 //   --dry-run            무엇을 지울지 출력만, 변경 없음.
 //   --purge              ~/.lively 를 휴지통 이동 대신 하드 삭제(백업 포함 완전 제거).
-//   --harness claude|codex|all   대상 하네스 한정(기본 all — 감지된 것 모두).
+//   --harness claude|codex|opencode|antigravity|grok|all   대상 하네스 한정(기본 all — 감지된 것 모두).
 //
 // 샌드박스/테스트: env LIVELY_HOME=<dir> 로 HOME 전체를 리다이렉트(라이브 dogfood 보호). 미지정 시 os.homedir().
 //   ※ 스크립트는 런타임 실행이므로 stamp(Date)·env 읽기 허용(워크플로 스크립트와 달리 결정성 제약 없음). LLM/모델 호출 없음.
@@ -25,6 +25,9 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { uninstallClaude } from "../adapters/claude/uninstall.mjs";
 import { uninstallCodex } from "../adapters/codex/uninstall.mjs";
+import { uninstallOpencode } from "../adapters/opencode/uninstall.mjs";
+import { uninstallAntigravity } from "../adapters/antigravity/uninstall.mjs";
+import { uninstallGrok } from "../adapters/grok/uninstall.mjs";
 
 // kit 안 오케스트레이터 — 하네스별 어댑터(adapters/claude·codex/uninstall.mjs)를 import 해 dispatch 한다.
 //  (install 의 user-install.mjs → adapters/*/install.mjs 와 같은 미러 관계.)
@@ -96,29 +99,70 @@ export function uninstallRcBlock({ dry = DRY } = {}) {
   return total;
 }
 
-// 설치된 하네스 감지: 센티넬/훅 존재 여부로 판별.
-//  claude: ~/.claude/settings.json 에 ".lively/hooks/" 훅. codex: ~/.codex/config.toml 에 lively 센티넬 블록.
+// ── 하네스별 제거 표 ─────────────────────────────────────────────────────────
+// 감지·제거를 **하네스별 데이터 한 줄**로 모은다. 종전엔 감지 함수·want 목록·제거 if·"남은 하네스" 문구가
+//  네 곳에서 각각 claude/codex 를 하드코딩했고, 세 번째 하네스는 그 네 곳을 동시에 고치는 일이 됐다
+//  (한 곳만 빠뜨리면 "제거했다는데 남아 있다" 가 된다). 이제 여기 한 줄이 그 넷을 모두 답한다.
+const HARNESS_UNINSTALL = {
+  claude: {
+    label: "Claude",
+    // ~/.claude/settings.json 에 .lively/hooks/ 를 가리키는 훅이 있으면 배선된 것.
+    detect: () => {
+      const sp = join(HOME, ".claude", "settings.json");
+      if (!existsSync(sp)) return false;
+      try {
+        const hooks = JSON.parse(readFileSync(sp, "utf8"))?.hooks || {};
+        return Object.values(hooks).some(
+          (entries) => Array.isArray(entries) && entries.some(
+            (e) => Array.isArray(e?.hooks) && e.hooks.some((h) => String(h?.command || "").includes(".lively/hooks/")),
+          ),
+        );
+      } catch { return false; } // 파싱 실패 → 미감지
+    },
+    run: uninstallClaude,
+  },
+  codex: {
+    label: "Codex",
+    // ~/.codex/config.toml 에 lively 센티넬 + 우리 MCP 테이블이 있으면 배선된 것.
+    detect: () => {
+      const cp = join(HOME, ".codex", "config.toml");
+      if (!existsSync(cp)) return false;
+      try {
+        const t = readFileSync(cp, "utf8");
+        return t.includes("lively-managed") && t.includes("[mcp_servers.lively]");
+      } catch { return false; }
+    },
+    run: uninstallCodex,
+  },
+  opencode: {
+    label: "OpenCode",
+    // 어댑터 파일이 있으면 배선된 것. opencode.json 은 사용자가 먼저 만들 수 있어(빈 설정도 생성된다)
+    //  '우리 것이 있나'의 신호로 약하다 — 플러그인 파일은 우리만 놓는다.
+    detect: () => existsSync(join(HOME, ".config", "opencode", "plugin", "lively.js")),
+    run: uninstallOpencode,
+  },
+  antigravity: {
+    label: "Antigravity",
+    // 플러그인 디렉터리는 우리만 만든다(#1689 plugin-dir 배선) — hooks.json 존재가 곧 배선 신호.
+    detect: () => existsSync(join(HOME, ".gemini", "config", "plugins", "lively")),
+    run: uninstallAntigravity,
+  },
+  grok: {
+    label: "Grok Build",
+    // 훅 파일은 우리만 만든다(#1701 hook-file 배선) — lively-grok.json 존재가 곧 배선 신호.
+    //  홈 계산은 어댑터와 동일(GROK_HOME > ~/.grok, LIVELY_HOME 격리 시 GROK_HOME 무시).
+    detect: () => existsSync(join(
+      process.env.LIVELY_HOME ? join(HOME, ".grok") : (process.env.GROK_HOME || join(HOME, ".grok")),
+      "hooks", "lively-grok.json")),
+    run: uninstallGrok,
+  },
+};
+// 제거 어댑터를 가진 하네스 = 이 파일이 다룰 수 있는 전부(install 측 범위와 같아야 한다).
+const UNINSTALLABLE = Object.keys(HARNESS_UNINSTALL);
+
 function detectInstalledHarnesses() {
-  const out = { claude: false, codex: false };
-  const sp = join(HOME, ".claude", "settings.json");
-  if (existsSync(sp)) {
-    try {
-      const s = JSON.parse(readFileSync(sp, "utf8"));
-      const hooks = s?.hooks || {};
-      out.claude = Object.values(hooks).some(
-        (entries) => Array.isArray(entries) && entries.some(
-          (e) => Array.isArray(e?.hooks) && e.hooks.some((h) => String(h?.command || "").includes(".lively/hooks/")),
-        ),
-      );
-    } catch { /* 파싱 실패 → 미감지 */ }
-  }
-  const cp = join(HOME, ".codex", "config.toml");
-  if (existsSync(cp)) {
-    try {
-      const t = readFileSync(cp, "utf8");
-      out.codex = t.includes("lively-managed") && t.includes("[mcp_servers.lively]");
-    } catch { /* */ }
-  }
+  const out = {};
+  for (const [id, spec] of Object.entries(HARNESS_UNINSTALL)) out[id] = spec.detect();
   return out;
 }
 
@@ -157,34 +201,34 @@ function main() {
   // 대상 하네스 = install 과 동일 범위(claude·codex만 user-level 어댑터 보유).
   //  TODO(openclaw/pi): install 측이 native 어댑터 없이 register-clients.sh 스니펫만 내므로 제거 어댑터도 미구현(스텁).
   //   openclaw 는 openclaw.json mcpServers 에서 lively 항목 수동 제거, pi 는 pi-mcp-adapter 에서 해제(가이드 안내).
-  const want = harnessArg === "all" ? ["claude", "codex"] : [harnessArg];
+  const want = harnessArg === "all" ? UNINSTALLABLE : [harnessArg];
 
   // 아무것도 설치 안 됨 + ~/.lively 도 없음 → 클린 no-op.
-  const anythingInstalled = detected.claude || detected.codex || existsSync(LIVELY) || hasRcBlock();
+  const anythingInstalled = UNINSTALLABLE.some((id) => detected[id]) || existsSync(LIVELY) || hasRcBlock();
   if (!anythingInstalled) {
     log("\n✓ lively 가 이 머신에 설치되어 있지 않습니다 — 제거할 것이 없습니다(no-op).");
     return;
   }
 
-  log(`\n[1] 하네스 감지: claude=${detected.claude ? "o" : "x"} codex=${detected.codex ? "o" : "x"} (대상=${want.join(",")})`);
-  if (want.includes("claude")) {
-    if (detected.claude) uninstallClaude({ dry: DRY });
-    else log("  · Claude — lively 미설치(감지 안 됨), 건너뜀");
-  }
-  if (want.includes("codex")) {
-    if (detected.codex) uninstallCodex({ dry: DRY });
-    else log("  · Codex — lively 미설치(감지 안 됨), 건너뜀");
+  log(`\n[1] 하네스 감지: ${UNINSTALLABLE.map((id) => `${id}=${detected[id] ? "o" : "x"}`).join(" ")} (대상=${want.join(",")})`);
+  for (const id of want) {
+    const spec = HARNESS_UNINSTALL[id];
+    // 모르는 하네스를 조용히 넘기지 않는다 — "제거했다"는 화면과 실제가 어긋나는 게 이 계열의 조용한 실패다.
+    if (!spec) { log(`  · ${id} — 제거 어댑터 없음, 건너뜀`); continue; }
+    if (detected[id]) spec.run({ dry: DRY });
+    else log(`  · ${spec.label} — lively 미설치(감지 안 됨), 건너뜀`);
   }
 
   // 공유 자산(~/.lively + LIVELY_TOKEN export)은 claude·codex 가 함께 쓴다(codex 블록은 /.lively/hooks/* 를 참조,
   //  bearer 인증은 LIVELY_TOKEN export 에 의존). --harness 로 한쪽만 제거했는데 다른 하네스가 아직 설치돼 있으면
   //  공유 자산을 지우면 남은 하네스가 깨진다 → 그 경우엔 공유 자산을 보존한다(설치된 하네스가 하나도 안 남을 때만 제거).
-  const othersStillInstalled = (detected.claude && !want.includes("claude")) || (detected.codex && !want.includes("codex"));
+  const remaining = UNINSTALLABLE.filter((id) => detected[id] && !want.includes(id));
+  const othersStillInstalled = remaining.length > 0;
 
   if (othersStillInstalled) {
     log("\n[2] 셸 rc(LIVELY_TOKEN export) — 보존(다른 하네스가 아직 설치됨 — 공유 자산 유지)");
     log("\n[3] ~/.lively 공유 자산 — 보존(다른 하네스가 아직 lively 를 사용 중 — 그 하네스 보호)");
-    log(`  · 남은 하네스(${[detected.claude && !want.includes("claude") ? "claude" : null, detected.codex && !want.includes("codex") ? "codex" : null].filter(Boolean).join(",")})까지 제거하려면 --harness all 로 다시 실행하세요.`);
+    log(`  · 남은 하네스(${remaining.join(",")})까지 제거하려면 --harness all 로 다시 실행하세요.`);
   } else {
     log("\n[2] 셸 rc(LIVELY_TOKEN export) 정리");
     uninstallRcBlock({ dry: DRY });

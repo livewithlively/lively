@@ -8,7 +8,7 @@
 //
 //  ⚠ 외부 통신 툴은 인자 '값'을 저장하지 않는다(#1082) — 아래 '외부 통신 툴 레지스트리' 참조.
 import { itemsPool } from "../../db/client.js";
-import { redactDeep } from "../ingest/redact.js";
+import { redactDeep, redactString } from "../ingest/redact.js";
 import { scrubSqlLiterals } from "../../db/sql-scrub.js";
 import { logger } from "../../log.js";
 
@@ -122,6 +122,48 @@ export function capArgs(raw: unknown): unknown {
   return v ?? {};
 }
 
+// ── 실패 판정(#1653) ────────────────────────────────────────────────────────────────────────
+//  MCP 툴은 실패를 **두 갈래**로 알린다: 예외를 던지거나, `{content, isError:true}` 를 **정상 반환**하거나.
+//  프록시 계열(mcp-proxy·dynamic-tools)은 후자다 — 상류 403 도 예외가 아니라 isError:true 로 돌아온다.
+//  그래서 "핸들러가 안 던졌으면 성공" 으로 적재하면 **커넥터가 전부 죽어 있어도 오류 수가 0** 으로 보인다
+//  (실측: 2026-08-12 어니스트 구글 3종 전부 403 인데 mcp_call_log 는 ok=true·error=null).
+//  이 판정 위에 상류 회귀 탐지를 얹으므로(#1657) 여기가 틀리면 탐지도 같이 눈이 먼다.
+const NO_DETAIL = "(isError 로 실패를 알렸으나 에러 상세 없음)";
+
+/** 핸들러가 정상 반환한 결과의 실패 여부 — 실패면 에러 텍스트, 성공이면 null. */
+export function toolResultFailure(out: unknown): string | null {
+  if (!out || typeof out !== "object" || Array.isArray(out)) return null; // 객체가 아니면 판정 불가 = 성공(무회귀)
+  const r = out as { isError?: unknown; content?: unknown };
+  if (r.isError !== true) return null; // SDK·mcp-proxy 와 같은 엄격 비교 — boolean true 만 실패로 본다
+  const parts: string[] = [];
+  if (Array.isArray(r.content)) {
+    for (const b of r.content) {
+      const blk = b as { type?: unknown; text?: unknown } | null;
+      if (blk && typeof blk === "object" && blk.type === "text" && typeof blk.text === "string" && blk.text) parts.push(blk.text);
+    }
+  }
+  return parts.join("\n") || NO_DETAIL; // 텍스트 블록이 없어도(이미지 등) 실패 사실은 남긴다
+}
+
+/**
+ * 저장될 error 문자열. #1653 이후 이 컬럼엔 예외 메시지뿐 아니라 **상류 응답 본문**(isError 반환분)이 들어온다.
+ *  그래서 시크릿 마스킹을 태운다 — 상류 에러 본문에 우리가 보낸 자격이 에코되거나 상류 자신의 키가 섞일 수 있다.
+ *
+ *  ⚠ PII 스크럽(scrubPii)은 여기서 부르지 않는다. 두 가지 이유가 각각 독립으로 성립한다:
+ *   ① 이미 걸렀다 — dynamic-tools·mcp-proxy 는 `pii_scrub` 가 켜진 경우 응답 텍스트를 스크럽한 **뒤**
+ *      isError 결과에 담는다(dynamic-tools.ts · mcp-proxy.ts). 정책은 그 자리에서 이미 집행된다.
+ *   ② 부르면 코어가 깨진다 — scrubPii 는 EE 경계라 미탑재 박스에서 **throw** 한다(pii-scrub.ts). 로그 적재는
+ *      코어 기능이므로, 여기서 부르면 무료판의 외부 툴 에러가 전부 삼켜진다. 스크럽이 켜진 경로에서만
+ *      호출한다는 그 파일의 fail-closed 계약을 지키는 것이기도 하다.
+ *  인자(#1082)와 달리 통째로 버리지 않는 이유: '왜 깨졌나' 는 상류 회귀를 아는 유일한 단서다(#1657 이 소비).
+ */
+export function errorForLog(_tool: string, raw: string | null | undefined): string | null {
+  if (raw === null || raw === undefined) return null;
+  const t = String(raw);
+  if (!t) return null;
+  return redactString(t.slice(0, MAX_ERR * 2)).slice(0, MAX_ERR); // 마스킹 전 1차 절단 — 대형 본문에 정규식을 태우지 않게
+}
+
 // 한 건 적재(비동기, 호출자는 await 하지 않는다). 실패는 warn 로그만 남기고 삼킨다 — 통계 누락 ≠ 호출 실패.
 /**
  * 이 툴 호출에 대해 **실제로 저장될 args 값**. 저장 직전 형태라 여기가 정책의 최종 관문이다(테스트 지점).
@@ -147,7 +189,7 @@ export function logToolCall(rec: ToolCallRecord): void {
   } catch {
     argsJson = "{}";
   }
-  const error = rec.error ? String(rec.error).slice(0, MAX_ERR) : null;
+  const error = errorForLog(rec.tool, rec.error);
   const durationMs = Number.isFinite(rec.durationMs) ? Math.round(rec.durationMs) : null;
   itemsPool
     .query(

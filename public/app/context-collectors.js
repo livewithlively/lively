@@ -7,14 +7,15 @@
 //  화면 설계(증류기 화면의 검증된 문법을 따른다 — 같은 자리에서 비교하며 만지게):
 //   · 목록과 편집이 한 페이지에. 편집을 모달로 띄우면 다른 수집기의 상태를 못 보면서 설정하게 된다.
 //   · 만들기는 **프리셋 고르기부터** — 무엇을 붙이는지가 첫 결정이고, 나머지는 그 결정에서 파생된다.
-import { api, cardHead, el, relTime, toast, uiText } from './core.js';
+import { api, busy, cardHead, el, relTime, toast, uiText } from './core.js';
 import { confirmDialog } from './admin.js';
 import { overlay } from './ui-primitives.js';
+import { stageJobCard } from './context-stage-job.js'; // 단계 공용 '언제 도나' 카드(#1618)
 let editingId = null;
 let creatingPreset = null; // 프리셋을 고른 뒤 생성 폼
 let choosingPreset = false;
 export async function renderCollectors(host) {
-    host.replaceChildren(el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '수집기를 불러오는 중…' })));
+    busy(host, el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '수집기를 불러오는 중…' })));
     let d;
     try {
         d = await api('/api/ui/org/collectors');
@@ -64,6 +65,22 @@ export async function renderCollectors(host) {
         body.append(el('div', { class: 'ctx-actions' }, add));
     }
     host.replaceChildren(body);
+    // '언제 도나'(#1618) — 이 단계만 잡을 스스로 소유한다(수집기를 켜면 syncCollectorJob 이 크론을 만들고
+    //  켠다). 그래서 만들기 버튼은 주지 않되, **주기·지금 실행·마지막 실행 결과**는 다른 세 단계와 같은
+    //  자리·같은 말로 보여 준다 — 네 단계의 실행 상태를 같은 시각 언어로 읽을 수 있어야 '어디가 막혔나'가
+    //  단계를 오가며 비교된다. host 교체 뒤 비동기로 붙인다(크론 조회 403 이 이 탭을 막지 않게).
+    body.append(await stageJobCard({
+        stage: '수집',
+        actions: ['connector_sync'],
+        // ⚠ id 로 한 번 더 거른다 — `connector_sync` 를 쓰는 잡이 두 계보다. 수집기 소유(`collector-<id>`)와
+        //  구 커넥터 축(`sync-<system>`). 후자를 집으면 이 카드가 엉뚱한 잡을 가리키고, 켜기 버튼이 봉인된
+        //  잡을 되살린다 — sync-clickup 은 커넥터가 꺼진 채 홀로 돌며 사람이 지운 리스트를 4분마다 되살린
+        //  전력으로 비활성해 둔 것이다(#1534). 실제로 이 필터 없이 짰더니 화면이 정확히 그걸 집었다.
+        matchId: (id) => id.startsWith('collector-'),
+        readOnly: true, // 잡의 주인은 수집기(enabled → syncCollectorJob). 여기서 켜고 끄면 주인과 어긋난다.
+        missingLine: '자동 수집이 아직 없습니다 — 켜진 수집기가 없기 때문입니다.',
+        managedElsewhere: '수집은 잡을 따로 만들지 않습니다. 위에서 수집기를 켜면 그 수집기의 자동 싱크가 함께 등록되고, 끄면 같이 멈춥니다.',
+    }, reload));
 }
 /** 접힌 카드 — 무엇을·어디서·어떻게 내보내는지 한 줄로. canEdit=false 면 상태만 보이고 액션 줄은 없다. */
 function collectorSummary(c, reload, canEdit = true) {

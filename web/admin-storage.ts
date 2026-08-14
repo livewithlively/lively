@@ -4,7 +4,7 @@
 //   경보 탭의 옵션 문구는 저장소 탭이 채우는 alertPolicy 를 읽는다. 탭 단위로 더 쪼개면 그 한 벌을 넘기는
 //   배선이 새로 생긴다 — 이번 이동의 목적(셸에서 떼기)과 무관한 구조 변경이라 하지 않는다.
 //  뮤터블 상태(alertPolicy · analyzed · selected · wsList)는 전부 storageEditor 지역이라 모듈 전역이 없다.
-import { api, cardHead, el, relTime, secretInput, secretRow, toast, uiText } from './core.js';
+import { api, busy, cardHead, el, relTime, secretInput, secretRow, toast, uiText } from './core.js';
 import { fmtBytes, fmtElapsed, sectionHead, segTabs } from './admin-widgets.js';
 
 function storageEditor(detail, data) {
@@ -441,7 +441,7 @@ function storageEditor(detail, data) {
   const alertRegion = el('div');
   let alertPolicy: any = {};
   async function loadAlert() {
-    alertRegion.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
+    busy(alertRegion, el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
     let a;
     try { a = await api('/api/ui/org/alert'); }
     catch (e: any) { alertRegion.replaceChildren(el('p', { class: 'admin-hint', text: '불러오지 못했습니다: ' + e.message })); return; }

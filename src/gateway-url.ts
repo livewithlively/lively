@@ -29,11 +29,15 @@ const safe = (u: string | null | undefined): string | null => {
 
 // 요청 없이 확정 — MCP/백그라운드 경로용(헤더가 없다). 못 정하면 null(호출자가 fail-open 할 수 있게).
 export async function gatewayUrl(): Promise<string | null> {
-  try {
-    const p = await getOrgProfile();
-    const fromProfile = safe(p.gateway_url);
-    if (fromProfile) return fromProfile;
-  } catch { /* DB 미가동 등 — env 폴백 */ }
+  // DB 가 아예 구성되지 않은 실행(테스트·DB 없는 배포)에서는 연결 시도 자체를 건너뛴다 —
+  //  verifyDbToken 이 쓰는 것과 같은 가드. 없으면 매 호출이 커넥션 실패를 기다린다.
+  if (process.env.ITEMS_DATABASE_URL) {
+    try {
+      const p = await getOrgProfile();
+      const fromProfile = safe(p.gateway_url);
+      if (fromProfile) return fromProfile;
+    } catch { /* DB 미가동 등 — env 폴백 */ }
+  }
   return safe(process.env.PUBLIC_URL);
 }
 

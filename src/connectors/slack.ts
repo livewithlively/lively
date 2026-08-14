@@ -1,4 +1,12 @@
-// Slack 커넥터 (DESIGN §8, #541 유저토큰 재작성) — 워크스페이스 **전체 공개채널**의 메시지를 canonical RawItem 으로.
+// Slack 커넥터 (DESIGN §8, #541 유저토큰 재작성) — 슬랙 메시지를 canonical RawItem 으로.
+//
+// ── 두 모드(#1531) ──────────────────────────────────────────────────────────
+//  어느 토큰이 설정됐는지가 곧 모드다. 둘은 경쟁이 아니라 **상보**다 — 서로가 못 보는 것을 본다.
+//   · 유저 토큰(xoxp-) = **검색 스윕**(search.messages) — 봇 초대 없이 전 공개채널. 비공개는 원리적으로 불가.
+//   · 봇 토큰(xoxb-)   = **멤버십 스윕**(conversations.*) — 봇이 초대된 채널만, 대신 **비공개 채널이 들어온다**.
+//  둘 다 필요하면 수집기 인스턴스를 두 개 만든다(#1419) — 커서가 인스턴스별로 갈려 서로의 진행을 밀지 않는다.
+//  한 수집기에 둘 다 들어 있으면 **유저 토큰이 이긴다**(기존 배포가 env SLACK_BOT_TOKEN 을 갖고 있어도 모드가
+//  조용히 바뀌지 않게 하는 안전장치 — 모드 전환은 언제나 명시적 선택이어야 한다).
 //
 // 왜 search.messages(유저 토큰) 인가:
 //   봇 토큰(xoxb-)의 conversations.history 는 **봇이 가입한 채널만** 읽힌다(미가입 공개채널은 not_in_channel).
@@ -9,8 +17,12 @@
 //
 // 인증/스코프(유저 토큰): search:read(검색) · channels:read(채널 메타) · users:read(+users:read.email 작성자 해소).
 //   (스레드 재구성은 permalink 의 thread_ts 로 하므로 groups:history 등은 불필요.)
+// 인증/스코프(봇 토큰): groups:history·groups:read(비공개) · channels:history·channels:read(공개) · users:read
+//   (+첨부 본문까지 받으려면 files:read). 봇을 대상 채널에 /invite 해야 읽힌다.
 //
-// 수집 범위: 공개채널만 — search match 의 channel 플래그로 유저 DM/비공개/mpim 을 제외(토큰 소유자 개인 대화 유입 방지).
+// 수집 범위(유저 토큰): 공개채널만 — search match 의 channel 플래그로 DM/비공개/mpim 을 제외(토큰 소유자 개인 대화 유입 방지).
+// 수집 범위(봇 토큰): 봇이 초대된 공개·**비공개** 채널(보관 채널 포함). '대상 채널' 설정으로 더 좁힐 수 있고,
+//   DM/그룹DM 은 어느 설정에서도 들어오지 않는다. 스레드 답글은 history 가 주지 않으므로 replies 로 따로 받는다.
 //
 // 최초 마이그레이션 vs 증분:
 //   · search.messages 의 after:/before: 는 **일 단위·exclusive** → 하루 넉넉히 잡고 ts 로 재필터. count 100/page,
@@ -38,6 +50,18 @@ const SEARCH_MAXP = 100; // search.messages page 상한 → 쿼리당 최신 SEA
 const BISECT_FLOOR_MS = 2 * DAY_MS; // 이 이하로는 이분해도 after/before(일 granular)가 더 못 좁힘 → 잘림 경고만.
 const DRY_STOP = 12; // 최초 스윕 시 연속 빈 창 이만큼이면 이력 시작으로 보고 종료(하한 미지정일 때만).
 const MAX_WINDOWS = 400; // 무한루프 백스톱(하한 -Infinity 안전장치).
+// ── 봇 모드(conversations.*) 파라미터 ───────────────────────────────────────
+const HISTORY_LIMIT = 200; // conversations.history/replies 페이지 크기(상한 1000이나 200이 권장 상한대).
+const CHANNEL_LIST_LIMIT = 200; // users.conversations 페이지 크기.
+// 증분에서 **오래된 스레드에 달린 새 답글**을 잡기 위한 부모 역스캔 창.
+//  왜 필요한가: conversations.history 는 스레드 답글을 돌려주지 않고(부모만), oldest 필터는 **부모의 ts** 로
+//  건다. 그래서 커서 이후만 훑으면 "3개월 전 스레드에 오늘 달린 답글"이 영영 안 잡힌다. 부모를 이 창만큼
+//  거슬러 훑고 그중 latest_reply 가 커서 이후인 것만 replies 를 호출한다(호출 수는 변경된 스레드 수에 비례).
+//  이 창보다 오래된 스레드의 새 답글은 일일 full 스윕(collector-<id>-full)이 치유한다 — search 모드가
+//  편집(edited)을 치유하는 것과 같은 구조.
+const THREAD_LOOKBACK_MS = 30 * DAY_MS;
+// 채널 하나에서 history 페이지를 무한히 넘기지 않기 위한 백스톱(200 * 500 = 10만 건).
+const HISTORY_PAGE_MAX = 500;
 // 파일 수집(files.list) 파라미터.
 const FILE_INCR_LOOKBACK_MS = 2 * DAY_MS; // 증분 시 파일 ts_from 을 커서보다 넉넉히 당김 — 단일 커서가 메시지에
 //  끌려 앞서갈 때 그 사이 업로드된 파일 스트래글러 유실 방지(멱등 upsert 라 재수집 무해). 일일 full 스윕이 최종 백스톱.
@@ -71,6 +95,7 @@ export interface SlackMessage {
   thread_ts?: string; // 스레드 소속 ts (부모면 자기 ts 와 동일)
   reply_count?: number;
   reply_users_count?: number;
+  latest_reply?: string; // 스레드 부모에만 — 마지막 답글 ts(증분에서 '이 스레드를 다시 열어볼까' 판정에 쓴다)
   parent_user_id?: string;
   edited?: { user?: string; ts?: string };
   [k: string]: unknown; // raw 보존용 — 그 외 필드 통과
@@ -577,11 +602,18 @@ function buildBinaryStub(f: SlackFile, channel: string | undefined, uploader: st
   return `${p.join(" ")}\n바이너리 파일(내용 미추출). 볼 가치가 있으면 source_artifact(source_id)로 원본을 받아 판단하고, 노이즈(밈·UI캡처 등)면 fetch 없이 skip 하세요.`;
 }
 
-// 파일 1건 → RawItem(type='note'→source). 공개채널 공유분만. 텍스트·OOXML 은 본문 추출, 그 외 바이너리는 [BINARY] 스텁(on-demand).
-async function fileToRawItem(f: SlackFile, base: SweepBase, token: string): Promise<RawItem | null> {
+// 파일 1건 → RawItem(type='note'→source). 텍스트·OOXML 은 본문 추출, 그 외 바이너리는 [BINARY] 스텁(on-demand).
+//  범위는 모드가 정한다: 유저 모드 = 공개채널 공유분만 · 봇 모드 = 대상 채널(비공개 포함) 공유분만.
+async function fileToRawItem(
+  f: SlackFile, base: SweepBase, token: string,
+  opts?: { includePrivate?: boolean; channelIds?: Set<string> },
+): Promise<RawItem | null> {
   if (!f.id) return null;
-  // 공개채널 공유분만 — 비공개/DM 전용 파일 제외(메시지 공개필터와 일관, 토큰 소유자 개인 파일 유입 방지).
-  const publicChannels = f.channels ?? [];
+  // 기본(유저 모드): 공개채널 공유분만 — 비공개/DM 전용 파일 제외(메시지 공개필터와 일관, 토큰 소유자 개인 파일 유입 방지).
+  // 봇 모드: 비공개 채널(groups)까지 포함하되, **수집 대상 채널에 공유된 것만** — 봇이 낀 다른 채널의 파일이
+  //  '대상 채널만 수집' 설정을 우회해 흘러드는 것을 막는다(DM 전용 파일 f.ims 는 어느 모드에서도 제외).
+  const shared = opts?.includePrivate ? [...(f.channels ?? []), ...(f.groups ?? [])] : (f.channels ?? []);
+  const publicChannels = opts?.channelIds ? shared.filter((c) => opts.channelIds!.has(c)) : shared;
   if (publicChannels.length === 0) return null;
 
   const created = typeof f.created === "number" ? f.created : Number.parseFloat(String(f.created ?? ""));
@@ -659,6 +691,262 @@ async function* sweepFiles(
   }
 }
 
+// ── 봇 모드: 멤버십 스윕(conversations.*) ───────────────────────────────────
+//  search 모드가 못 보는 것 하나를 위해 존재한다 — **비공개 채널**. 봇이 초대된 채널만 읽히므로 범위는
+//  좁지만, 그 대신 초대된 곳은 공개·비공개를 가리지 않고 전량(개설일부터)을 읽을 수 있다.
+
+interface SlackConversation {
+  id: string;
+  name?: string;
+  is_private?: boolean;
+  is_archived?: boolean;
+  is_im?: boolean;
+  is_mpim?: boolean;
+}
+interface ConversationsListResp extends SlackEnvelope {
+  channels?: SlackConversation[];
+}
+interface HistoryResp extends SlackEnvelope {
+  messages?: SlackMessage[];
+  has_more?: boolean;
+}
+
+// 수집에서 빼는 시스템 메시지 subtype — 사람이 쓴 말이 아니라 채널 상태 변화의 부산물이다.
+//  search 모드는 이런 게 애초에 검색되지 않아 문제가 없었지만, history 는 전부 돌려주므로 여기서 거른다
+//  (안 거르면 '○○님이 채널에 참여했습니다' 수천 건이 자료로 쌓여 증류를 오염시킨다).
+const SYSTEM_SUBTYPES = new Set([
+  "channel_join", "channel_leave", "channel_topic", "channel_purpose", "channel_name",
+  "channel_archive", "channel_unarchive", "channel_convert_to_private", "channel_convert_to_public",
+  "group_join", "group_leave", "group_topic", "group_purpose", "group_name",
+  "group_archive", "group_unarchive",
+  "bot_add", "bot_remove", "pinned_item", "unpinned_item", "reminder_add",
+  "huddle_thread", "tombstone", "sh_room_created",
+]);
+
+/** 이 메시지를 자료로 남길 가치가 있는가 — 시스템 부산물·빈 메시지 제외(순수 함수). */
+export function isCollectableMessage(msg: SlackMessage): boolean {
+  if (msg.subtype && SYSTEM_SUBTYPES.has(msg.subtype)) return false;
+  // 본문도 첨부도 없는 메시지(파일 삭제 흔적 등)는 남길 것이 없다. 파일 공유는 files.list 가 따로 담는다.
+  const hasText = typeof msg.text === "string" && msg.text.trim().length > 0;
+  const hasFiles = Array.isArray(msg.files) && msg.files.length > 0;
+  const hasAttachments = Array.isArray(msg.attachments) && msg.attachments.length > 0;
+  return hasText || hasFiles || hasAttachments;
+}
+
+/**
+ * 대상 채널 선별(순수 함수) — 봇이 초대된 목록에서 allow(대상)·noise(제외)를 적용한다.
+ *  · allow 가 비면 "초대된 전체"가 대상이다(봇 초대 자체가 이미 범위 선언이므로).
+ *  · 이름·id 어느 쪽으로 적어도 맞는다(운영자는 보통 이름으로 적고, 이름은 바뀔 수 있어 id 도 받는다).
+ *  · DM/그룹DM 은 언제나 제외 — 봇이 초대된 '채널'을 수집하는 것이지 대화상대의 사담이 아니다.
+ *  · 보관(archived) 채널은 **남긴다** — 종료된 프로젝트의 기록이 오히려 이관 가치가 크다.
+ */
+export function selectBotChannels(
+  all: SlackConversation[], allow: string[], noise: string[],
+): SlackConversation[] {
+  const norm = (s: string): string => s.trim().replace(/^#/, "").toLowerCase();
+  const allowSet = new Set(allow.map(norm));
+  const noiseSet = new Set(noise.map(norm));
+  return all.filter((c) => {
+    if (!c.id || c.is_im || c.is_mpim) return false;
+    const keys = [c.id.toLowerCase(), ...(c.name ? [norm(c.name)] : [])];
+    if (noiseSet.size && keys.some((k) => noiseSet.has(k))) return false;
+    if (allowSet.size && !keys.some((k) => allowSet.has(k))) return false;
+    return true;
+  });
+}
+
+/**
+ * 이 스레드의 답글을 (다시) 받아와야 하는가(순수 함수).
+ *  전량 수집이면 답글이 있는 모든 스레드가 대상이고, 증분이면 **커서 이후에 새 답글이 달린 스레드만**이다
+ *  — 이 판정이 증분 비용을 스레드 수가 아니라 '변경된 스레드 수'로 묶는다.
+ */
+export function threadNeedsReplies(msg: SlackMessage, sinceMs: number | undefined): boolean {
+  const replies = msg.reply_count ?? 0;
+  if (replies <= 0) return false;
+  if (sinceMs === undefined) return true; // 전량 수집
+  const latestMs = Number.parseFloat(msg.latest_reply ?? "") * 1000;
+  if (!Number.isFinite(latestMs)) return true; // latest_reply 부재 = 판단 불가 → 안전하게 받아온다
+  return latestMs >= sinceMs;
+}
+
+/**
+ * 이 채널을 어느 시각부터 훑을 것인가(순수 함수).
+ *  두 요구가 만나는 지점이라 한 곳에 둔다 —
+ *   ① 증분은 커서보다 THREAD_LOOKBACK 만큼 거슬러야 오래된 스레드의 새 답글을 잡는다.
+ *   ② 그 역스캔이 운영자가 정한 `backfill_since` 하한을 **뚫으면 안 된다**(#1531 — 전량 수집만 보면
+ *      범위가 지켜지는 것처럼 보여 증분에서만 조용히 깨지던 결함).
+ *  전량(커서 없음)이면 그냥 하한부터. 0 = 하한 없음 = 채널 개설일부터.
+ */
+export function channelScanFromMs(backfillSinceMs: number, sinceMs: number | undefined): number {
+  if (sinceMs === undefined) return backfillSinceMs;
+  return Math.max(backfillSinceMs, sinceMs - THREAD_LOOKBACK_MS);
+}
+
+/** 봇이 초대된 대화 목록(공개+비공개). 보관 채널 포함 — 종료 프로젝트 기록도 자산이다. */
+async function fetchBotChannels(token: string): Promise<SlackConversation[]> {
+  const out: SlackConversation[] = [];
+  for await (const c of paginate<ConversationsListResp, "channels">(
+    "users.conversations", token, "channels",
+    { types: "public_channel,private_channel", exclude_archived: false, limit: CHANNEL_LIST_LIMIT },
+  )) {
+    if (c?.id) out.push(c);
+  }
+  return out;
+}
+
+// 채널 1개의 [oldest, ∞) 구간을 스윕 — 부모는 history 로, 답글은 변경된 스레드만 replies 로.
+//  oldest 는 **부모 ts** 기준이라 THREAD_LOOKBACK 만큼 당겨 부른다(위 상수 주석 참조). 당겨서 다시 온 부모는
+//  멱등 upsert 라 무해하고, 커서 전진은 관측 최대시각 기준이라 되감기지 않는다.
+async function* sweepChannel(
+  token: string,
+  ch: SlackConversation,
+  base: SweepBase,
+  sinceMs: number | undefined,
+  floorMs: number,
+): AsyncGenerator<RawItem> {
+  const scanFromMs = channelScanFromMs(floorMs, sinceMs);
+  const oldest = Number.isFinite(scanFromMs) && scanFromMs > 0 ? (scanFromMs / 1000).toFixed(6) : undefined;
+  // 채널 안에서는 변하지 않는 맥락 — 메시지마다 새로 만들 이유가 없다(딥링크는 toRawItem 이 ts 로 구성).
+  const ctx: SlackToRawItemCtx = {
+    channel: ch.id,
+    channelName: ch.name,
+    channelPrivate: ch.is_private,
+    instance: base.instance,
+    teamDomain: base.teamDomain,
+    userMap: base.userMap,
+  };
+
+  // ⚠ 진행 로그는 **장식이 아니라 생존 조건**이다(#1531 실측). 실행 감시자는 일정 시간 출력이 없으면
+  //  멈춘 프로세스로 보고 죽인다. 전량 백필은 채널 하나만으로도 그 시간을 넘길 수 있다 — 스레드 수천 개의
+  //  replies 를 tier-3 레이트리밋 아래서 부르기 때문이다. 실제로 첫 전량 run 이 "15분간 출력 없음"으로
+  //  종료됐다(12,543건까지 넣고 커서는 동결). 그래서 페이지·스레드 단위로 살아 있음을 알린다.
+  let cursor: string | undefined;
+  let page = 0;
+  let msgs = 0;
+  let threads = 0;
+  const label = ch.name ?? ch.id;
+  for (;;) {
+    const r = await slackCall<HistoryResp>("conversations.history", token, {
+      channel: ch.id, limit: HISTORY_LIMIT, oldest, cursor, inclusive: true,
+    });
+    for (const msg of r.messages ?? []) {
+      if (!msg?.ts) continue;
+      if (isCollectableMessage(msg)) { yield toRawItem(msg, ctx); msgs++; }
+      // 스레드 답글 — history 는 부모만 준다. 변경된 스레드만 열어본다(threadNeedsReplies).
+      if (threadNeedsReplies(msg, sinceMs)) {
+        threads++;
+        for await (const reply of paginate<HistoryResp, "messages">(
+          "conversations.replies", token, "messages",
+          { channel: ch.id, ts: msg.thread_ts ?? msg.ts, limit: HISTORY_LIMIT },
+        )) {
+          // replies 의 첫 항목은 부모 자신 — 위에서 이미 냈으므로 ts 로 건너뛴다(중복 인입 방지).
+          if (!reply?.ts || reply.ts === msg.ts) continue;
+          if (isCollectableMessage(reply)) { yield toRawItem(reply, ctx); msgs++; }
+        }
+        // 스레드 묶음마다 한 줄 — replies 가 느린 구간에서도 침묵이 길어지지 않게.
+        if (threads % 25 === 0) console.log(`slack #${label}: 스레드 ${threads}개·메시지 ${msgs}건 처리 중`);
+      }
+    }
+    cursor = r.response_metadata?.next_cursor;
+    console.log(`slack #${label}: ${++page}페이지 완료 (메시지 ${msgs}건, 스레드 ${threads}개)${cursor ? "" : " — 채널 끝"}`);
+    if (!cursor || page >= HISTORY_PAGE_MAX) {
+      if (cursor) {
+        console.warn(`slack history 페이지 백스톱: #${label} 가 ${HISTORY_PAGE_MAX} 페이지 초과 — 남은 구간은 다음 run 이 이어받습니다`);
+      }
+      break;
+    }
+  }
+}
+
+// 봇 모드 파일 수집 — files.list 는 봇이 볼 수 있는 파일만 돌려주므로 채널 필터는 대상 채널 집합으로 건다.
+//  유저 모드와 달리 **비공개 채널 공유분(groups)** 을 포함한다(그게 이 모드의 존재 이유다).
+async function* sweepBotFiles(
+  token: string,
+  base: SweepBase,
+  sinceMs: number,
+  channelIds: Set<string>,
+): AsyncGenerator<RawItem> {
+  const tsFrom = Number.isFinite(sinceMs) ? Math.max(0, Math.floor(sinceMs / 1000)) : 0;
+  let page = 1;
+  for (;;) {
+    const r = await slackCall<FilesListResp>("files.list", token, {
+      ts_from: tsFrom, count: 100, page, show_files_hidden_by_limit: true,
+    });
+    for (const f of r.files ?? []) {
+      const it = await fileToRawItem(f, base, token, { includePrivate: true, channelIds });
+      if (it) yield it;
+    }
+    const pages = Math.min(r.paging?.pages ?? 1, FILE_PAGE_MAX);
+    if (page >= pages) break;
+    page++;
+  }
+}
+
+// 봇 모드 백필 — 채널을 나열하고 채널별로 스윕한다. 채널 하나의 실패가 나머지를 막지 않게 채널 단위로 격리한다
+//  (권한 누락·보관 채널 등 개별 사유는 흔하고, 하나 때문에 run 전체를 접으면 그날 수집이 통째로 멈춘다).
+//  ⚠ 단, 실패를 삼키기만 하면 '조용한 유실'이 된다 — 실패한 채널이 하나라도 있으면 마지막에 throw 해
+//   run 을 실패로 만들고, 커서를 동결시켜 다음 run 이 같은 구간을 다시 읽게 한다(유실 없음 불변식).
+async function* botBackfill(
+  token: string,
+  cfg: Record<string, string | undefined>,
+  sinceMs: number | undefined,
+): AsyncGenerator<RawItem> {
+  const { instance, teamDomain } = await loadWorkspaceMeta(token);
+  const userMap = await loadUserMap(token);
+  const base: SweepBase = { instance, teamDomain, userMap };
+
+  const backfillSinceMs =
+    cfg.backfill_since && Number.isFinite(Date.parse(cfg.backfill_since))
+      ? Date.parse(cfg.backfill_since)
+      : 0;
+  // 수집 하한 — **전량이든 증분이든 같다.** 0 이면 채널 개설일부터.
+  //  ⚠ 증분에서 이 하한을 0 으로 열어두면 아래 THREAD_LOOKBACK 역스캔이 설정값을 뚫고 30일을 더 거슬러 올라간다.
+  //   관리탭이 "이 날짜 이후의 자료만 수집합니다"라고 약속한 값이 증분에서만 조용히 깨지는 것이라, 운영자는
+  //   전량 수집 결과만 보고 범위가 지켜진다고 믿게 된다(#1531 어니스트 실측: 7/28 설정에 7/5 자료가 들어왔다).
+  const floorMs = backfillSinceMs;
+
+  const all = await fetchBotChannels(token);
+  const targets = selectBotChannels(all, parseNoise(cfg.channels), parseNoise(cfg.noise_exclude));
+  console.log(
+    `slack 봇 모드: 초대된 ${all.length}개 중 ${targets.length}개 채널 수집` +
+      `(비공개 ${targets.filter((c) => c.is_private).length}개) — ${sinceMs !== undefined ? `증분 since=${new Date(sinceMs).toISOString()}` : `전량 from=${floorMs ? new Date(floorMs).toISOString().slice(0, 10) : "채널 개설일"}`}`,
+  );
+  if (targets.length === 0 && parseNoise(cfg.channels).length > 0) {
+    throw new Error(
+      `'대상 채널' 에 적은 채널 중 봇이 초대된 것이 하나도 없습니다 — 채널명 오타이거나 /invite 가 안 된 상태입니다(봇이 보는 채널: ${all.length}개)`,
+    );
+  }
+
+  const failures: string[] = [];
+  let done = 0;
+  for (const ch of targets) {
+    const label = ch.name ?? ch.id;
+    console.log(`slack 봇 모드: [${++done}/${targets.length}] #${label} 시작${ch.is_private ? " (비공개)" : ""}`);
+    try {
+      yield* sweepChannel(token, ch, base, sinceMs, floorMs);
+    } catch (err) {
+      failures.push(`${label}(${(err as Error).message})`);
+      console.warn(`slack 채널 수집 실패 — 계속 진행: #${label}: ${(err as Error).message}`);
+    }
+  }
+
+  // 파일 — 메시지 스윕 후 1회. files:read 스코프가 없는 설치가 흔해 실패는 경고로 흘린다(메시지는 이미 수집됨).
+  const fileSinceMs = sinceMs !== undefined ? Math.max(0, sinceMs - FILE_INCR_LOOKBACK_MS) : floorMs;
+  try {
+    yield* sweepBotFiles(token, base, fileSinceMs, new Set(targets.map((c) => c.id)));
+  } catch (err) {
+    console.warn(
+      `slack files.list 수집 skip(files:read 스코프 누락 등 — 메시지는 정상 수집됨): ${(err as Error).message}`,
+    );
+  }
+
+  if (failures.length) {
+    throw new Error(
+      `슬랙 채널 ${failures.length}개 수집 실패(커서 동결 — 다음 run 이 재수집): ${failures.slice(0, 5).join(", ")}`,
+    );
+  }
+}
+
 // ── Connector 구현 ───────────────────────────────────────────────────────────
 // on-demand 아티팩트 페치(SPI Connector.fetchArtifact) — distill 시점에 공용 source_artifact 도구가 호출.
 //  externalId = 소스 external_id 원문(slack 파일은 `file:<id>` → prefix strip). files.info 로 신선한
@@ -668,7 +956,12 @@ export async function slackFetchArtifact(
 ): Promise<{ stream: Readable; mime: string; filename?: string; size?: number } | null> {
   const fileId = externalId.replace(/^file:/, "");
   if (!fileId) return null;
-  const token = (await resolveConnectorConfig("slack")).user_token;
+  // ⚠ 이 경로는 **수집기 바인딩 없이** 불린다(게이트웨이의 distill 이 소스만 보고 호출) — 그래서 어느 인스턴스가
+  //  넣은 파일인지 모른 채 기본 설정으로 해소된다. 비공개 채널 파일은 유저 토큰으로 못 여니 봇 토큰을 폴백으로
+  //  둔다(둘 다 있으면 유저 우선 — 공개채널 파일이 다수라 적중률이 높다). 인스턴스별 정확한 라우팅은 소스에
+  //  수집기 id 가 실린 뒤에 붙이는 게 맞다(그 전엔 여기서 추측하지 않는다).
+  const cfg = await resolveConnectorConfig("slack");
+  const token = cfg.user_token ?? cfg.bot_token;
   if (!token) return null;
   let info: FilesInfoResp;
   try {
@@ -705,8 +998,9 @@ export const slackConnector: Connector = {
   //  봇은 제외 — 사람 매핑 대상이 아니다. 토큰 실패 시 loadUserMap 이 빈 맵을 주므로 목록도 빈다(경고는 로그).
   async listUsers(): Promise<ConnectorUser[]> {
     const cfg = await resolveConnectorConfig("slack");
-    const token = cfg.user_token;
-    if (!token) throw new Error("Slack user_token 이 없습니다 — [외부 자료 수집]에서 토큰을 등록하세요");
+    // users.list 는 두 토큰 다 된다(users:read) — 봇 전용 수집기에서도 멤버 매핑 화면이 비지 않게 폴백한다.
+    const token = cfg.user_token ?? cfg.bot_token;
+    if (!token) throw new Error("Slack 토큰이 없습니다 — [외부 자료 수집]에서 User Token 또는 Bot Token 을 등록하세요");
     // ⚠ 여기선 실패를 **삼키지 않는다**. 멤버 매핑 화면의 주역이라, 빈 맵을 돌려주면 화면이 "사용자 0명"으로
     //  보여 원인을 못 찾는다(어니스트에서 실제로 그랬다 — 슬랙 매핑 0명의 정체가 이 조용한 실패였다).
     //  users.list 는 `users:read`(+이메일까지 받으려면 `users:read.email`) 스코프가 필요하다.
@@ -732,14 +1026,30 @@ export const slackConnector: Connector = {
   async *backfill(opts?: BackfillOpts): AsyncIterable<RawItem> {
     const cfg = await resolveConnectorConfig("slack");
     const token = cfg.user_token;
+    // 증분 하한(두 모드 공용) — run-sync 가 커서에서 계산해 넘긴 시각.
+    const sinceMs =
+      opts?.since && Number.isFinite(Date.parse(opts.since)) ? Date.parse(opts.since) : undefined;
+
+    // ── 모드 선택(#1531) — 유저 토큰이 있으면 검색 스윕, 없고 봇 토큰만 있으면 멤버십 스윕. ──
+    //  유저 토큰 우선인 이유는 파일 상단 참조(기존 배포의 env 봇 토큰으로 모드가 조용히 바뀌지 않게).
     if (!token) {
-      throw new Error(
-        "Slack User Token(xoxp-…)이 설정되지 않았습니다 — 관리탭 ▸ 커넥터 ▸ Slack 에 저장하세요. (search.messages 는 봇 토큰 xoxb- 를 거부하므로 유저 토큰 필요)",
-      );
+      const botToken = cfg.bot_token;
+      if (!botToken) {
+        throw new Error(
+          "Slack 토큰이 없습니다 — 관리탭 ▸ 외부 자료 수집 ▸ Slack 에 User Token(xoxp-… 전 공개채널 검색 수집) 또는 Bot Token(xoxb-… 봇이 초대된 채널·비공개 포함)을 저장하세요.",
+        );
+      }
+      if (!botToken.startsWith("xoxb-")) {
+        throw new Error(
+          "Bot Token 이 봇 토큰(xoxb-) 형식이 아닙니다 — OAuth & Permissions 의 'Bot User OAuth Token' 을 저장하세요(유저 토큰 xoxp- 는 위 User Token 칸입니다).",
+        );
+      }
+      yield* botBackfill(botToken, cfg, sinceMs);
+      return;
     }
     if (!token.startsWith("xoxp-")) {
       throw new Error(
-        "Slack 토큰이 유저 토큰(xoxp-)이 아닙니다 — search.messages 는 봇 토큰(xoxb-)을 거부합니다(not_allowed_token_type). User Token Scopes(search:read 등)로 재발급하세요.",
+        "Slack 토큰이 유저 토큰(xoxp-)이 아닙니다 — search.messages 는 봇 토큰(xoxb-)을 거부합니다(not_allowed_token_type). 봇 토큰으로 비공개 채널을 수집하려면 User Token 칸을 비우고 Bot Token 칸에 저장하세요.",
       );
     }
 
@@ -749,9 +1059,7 @@ export const slackConnector: Connector = {
     const base: SweepBase = { instance, teamDomain, userMap };
     const noise = parseNoise(cfg.noise_exclude);
 
-    // 증분: since 하한. 최초: backfill_since(설정) 하한, 없으면 -Infinity(활동 끊길 때까지 과거 탐색).
-    const sinceMs =
-      opts?.since && Number.isFinite(Date.parse(opts.since)) ? Date.parse(opts.since) : undefined;
+    // 증분: since 하한(위에서 계산). 최초: backfill_since(설정) 하한, 없으면 -Infinity(활동 끊길 때까지 과거 탐색).
     const incremental = sinceMs !== undefined;
     const backfillSinceMs =
       cfg.backfill_since && Number.isFinite(Date.parse(cfg.backfill_since))

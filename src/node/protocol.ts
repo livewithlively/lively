@@ -10,6 +10,22 @@ import type { SessionInfo } from "../terminal/terminal-sessions.js";
 export const NODE_WS_PATH = "/node/ws";
 export const PROTO_VER = 1;
 
+// 게이트웨이 주소 → 노드 채널 WSS. 에이전트가 쓰지만 **여기** 두는 이유: agent.ts 는 임포트 즉시
+//  환경변수를 검사하고 종료하는 실행 스크립트라 테스트가 못 붙는다(그래서 이 규칙이 오래 안 지켜졌다).
+//  ⚠ pathname 을 **덮어쓰면 안 된다**(실측 #1541): 서브패스로 서비스되는 게이트웨이
+//   (프리뷰 `https://호스트/preview/<env>`, 리버스프록시 하위 마운트)의 접두사가 통째로 날아가
+//   전혀 다른 게이트웨이에 붙는다. 실제로 프리뷰에 등록한 윈도우 노드가 `wss://dev.lvly.io/node/ws`
+//   (운영)로 연결돼, 브라우저(프리뷰)에선 그 노드가 영영 안 보이고 attach 가 무한 재시도했다.
+//   등록한 곳과 붙는 곳은 **같은 오리진 + 같은 베이스경로**여야 한다.
+export function nodeWsUrl(base: string): string {
+  const u = new URL(base);
+  u.protocol = u.protocol === "http:" ? "ws:" : u.protocol === "https:" ? "wss:" : u.protocol;
+  u.pathname = u.pathname.replace(/\/+$/, "") + NODE_WS_PATH;   // 베이스경로를 보존하고 이어붙인다
+  u.search = "";
+  u.hash = "";
+  return u.toString();
+}
+
 // 바이너리 채널 프레임 kind. 현재 PTY 데이터 하나 — 추후 파일 스트림 등 확장 여지.
 export const FRAME_PTY = 0x01;
 
@@ -40,9 +56,12 @@ export interface NodeResources {
 //            버전"이라 사람이 숫자를 올릴 필요도, 빠뜨릴 일도 없다). 게이트웨이가 서빙본 지문과 비교해 최신 여부를 안다.
 //  caps    = **이 빌드가 실제로 구현한 op 목록**(NODE_OPS). 버전은 '어떤 바이트냐'지 '무엇을 할 수 있냐'가 아니다 —
 //            그 질문엔 노드가 직접 답해야 한다. 없으면 구 노드 → v1 기준선으로 간주(nodeCaps).
+//  harnesses = **이 PC 에서 실제로 세션을 띄울 수 있는 하네스**(#1713) = 이 번들의 카탈로그 ∩ PATH 에 있는 실행 파일.
+//            caps 와 같은 이유로 노드가 직접 답한다 — 게이트웨이는 남의 PC 에 무엇이 깔렸는지 알 방법이 없고,
+//            번들이 낡았는지도 이 값이 스스로 말한다(옛 빌드는 이 필드를 안 보낸다 → nodeHarnesses 가 기준선으로).
 export interface HelloMsg {
   t: "hello"; ver: number; node: string; platform: string;
-  agentVer?: string; caps?: string[]; host?: string; hasDocker?: boolean;
+  agentVer?: string; caps?: string[]; harnesses?: string[]; host?: string; hasDocker?: boolean;
 }
 export interface StateMsg { t: "state"; sessions: SessionInfo[]; res?: NodeResources }
 export interface ResMsg { t: "res"; id: number; ok: boolean; data?: unknown; error?: string }
@@ -56,6 +75,11 @@ export interface OpenMsg { t: "open"; chan: number; session: string }
 export interface CtlMsg { t: "ctl"; chan: number; m: Record<string, unknown> } // 브라우저 제어(i/r/cap) 포워딩
 // 양방향
 export interface CloseChanMsg { t: "close"; chan: number }
+// 게이트웨이 → 노드, hello 직후 1회(#1713) — "지금 서빙 중인 번들은 이 지문이다".
+//  노드는 자기 AGENT_VER 와 비교해 다르면 스스로 새 번들을 받아 교체하고 종료한다(런처가 되살린다).
+//  ⚠ 이게 없으면 노드는 자기가 낡았다는 걸 알 방법이 없다 — 실측(#1713): launchd 는 `lively node` CLI 가 아니라
+//   받아 둔 agent.mjs 를 **직접** 실행하므로 재시작해도 pull 이 일어나지 않아, 노드가 영원히 옛 번들로 돈다.
+export interface HelloOkMsg { t: "helloOk"; agentVerLatest?: string | null }
 
 // runTask = 위탁 태스크 실행(P2) · watchTask = 노드 재연결 시 진행중 태스크 감시 재장전(에이전트 재시작 복구)
 //  · tailTask = 진행 로그(stream.jsonl) 오프셋 tail 릴레이(§11 CLI 미러링).
@@ -74,7 +98,10 @@ const NODE_OPS_V1 = ["list", "create", "kill", "edit", "gone", "label", "runTask
 //  provisionStatus = 그 백그라운드 작업 상태 폴링(즉답 — RPC 안에 든다). 이 둘이 "노드에서 프로젝트 provision"의 실체다.
 //  markActive = 하네스 훅이 게이트웨이에 보고한 활동·실행단계(#1221)를 **그 세션의 tmux 를 가진 노드**로 넘긴다.
 //   노드 세션의 상태 메타(@box_last_busy·@box_state)는 노드 tmux 에 사니 게이트웨이가 직접 못 쓴다.
-const NODE_OPS_NEW = ["provision", "provisionStatus", "markActive"] as const;
+//  sendKeys = 그 세션의 PTY 에 프롬프트를 넣고 제출한다(#1664). 게이트웨이의 주입(크론·리브)은 여태
+//   **로컬 tmux 를 직접** 불렀기에 노드 세션엔 닿지 못했다 — 사람이 웹터미널에 붙어 손으로 치는 수밖에.
+//   Windows 노드는 mux 가 psmux 라 입력 표면이 다른데, 그 인코딩은 terminal/send-keys 가 흡수한다.
+const NODE_OPS_NEW = ["provision", "provisionStatus", "markActive", "sendKeys"] as const;
 
 // 이 빌드가 아는 op 전량. **타입이 이 배열에서 파생**되므로 목록과 타입이 어긋날 수 없다.
 export const NODE_OPS = [...NODE_OPS_V1, ...NODE_OPS_NEW] as const;
@@ -85,6 +112,22 @@ export const NODE_BASELINE_OPS: readonly NodeOp[] = NODE_OPS_V1;
 //  ⚠ "모르면 못 한다고 본다"가 원칙 — 기준선 밖의 op 는 **선언한 노드에만** 보낸다.
 export function nodeCaps(caps: readonly string[] | null | undefined): Set<string> {
   return new Set(Array.isArray(caps) ? caps : NODE_BASELINE_OPS);
+}
+
+// ── 이 노드에서 실제로 열 수 있는 하네스(#1713) ──────────────────────────────────────
+// 왜 필요한가: 노드 세션은 게이트웨이가 하네스를 검증하지 않고 그대로 릴레이하고, 판정은 **그 PC 에서 도는 번들**이
+//  한다. 번들은 `lively node` 실행 시점에 pull 한 것이라 데몬이 도는 동안 갱신되지 않는다 — 그래서 게이트웨이가
+//  antigravity 를 지원해도 노드가 옛 번들이면 "허용되지 않은 하네스입니다"(502)로 튕긴다. 실측(2026-08-14):
+//  라이브 노드 4대가 전부 옛 번들이라 claude·codex·shell 만 알았다. 사용자는 그걸 **[생성하기]를 누른 뒤에야** 알았다.
+//  여기에 바이너리 부재까지 겹친다 — 번들이 최신이어도 그 PC 에 `agy` 가 없으면 세션이 뜨자마자 죽는다.
+//  두 문제의 답은 같다: **노드가 자기가 띄울 수 있는 것을 스스로 말한다.**
+//
+// 기준선(구 노드가 harnesses 를 안 보낼 때) = 옛 번들이 실제로 알던 것. 이것도 caps 와 같은 원칙이다 —
+//  "모르면 못 한다고 본다". 여기에 새 하네스를 끼워넣으면 구 노드가 못 하는 걸 한다고 주장하게 된다.
+export const NODE_BASELINE_HARNESSES: readonly string[] = ["claude", "codex", "shell"];
+export function nodeHarnesses(reported: readonly string[] | null | undefined): string[] {
+  const list = Array.isArray(reported) ? reported.filter((h) => typeof h === "string" && h) : null;
+  return list && list.length ? [...new Set(list)] : [...NODE_BASELINE_HARNESSES];
 }
 
 // 이 노드가 최신 번들을 도는가 — **3상**이다(#905 C4). 순수 함수로 둬 라우트 없이 검증한다.
@@ -99,7 +142,7 @@ export function agentIsLatest(nodeVer: string | null | undefined, servedVer: str
 }
 
 export type NodeToGwMsg = HelloMsg | StateMsg | ResMsg | OpenedMsg | OpenFailMsg | CloseChanMsg | TaskDoneMsg;
-export type GwToNodeMsg = ReqMsg | OpenMsg | CtlMsg | CloseChanMsg;
+export type GwToNodeMsg = ReqMsg | OpenMsg | CtlMsg | CloseChanMsg | HelloOkMsg;
 
 export function parseMsg<T>(raw: unknown): T | null {
   try {

@@ -6,7 +6,7 @@
 //   모듈 평가만으로 boot()·전역 리스너 등록이 재실행된다. 새 탭은 아래 route() 에 분기를 더해 붙인다.
 //  ⚠ 실행 순서가 계약이다: 아래 setUnauthorizedHandler 가 이 파일의 첫 실행문이어야 하고, boot() 는 맨 끝이다.
 import { $view, TOKEN_KEY, api, apiUrl, el, errorNote, hideGate, loadPeopleAvatars, markSecretInput, navOn, profileAvatar, showGate, state } from './core.js';
-import { renderContext } from './context.js';   // #1419 T6 맥락 관리 — 수집·증류·분류·관리 파이프라인
+import { isDistillerDetailPath, renderContext } from './context.js';   // #1419 T6 맥락 관리 — 수집·증류·분류·관리 파이프라인
 import { renderWiki, renderWikiTrash } from './wiki.js';   // #764 WIKI 탭 전면 재구축(사이드바 유지)
 import { consumeWikiPeekGuard, dismissWikiPeek, renderWikiDocPage } from './wiki-doc.js';
 import { wkRouteCleanup } from './wiki-data.js';   // #764 — 라우트 이탈 시 위키 에디터/팝오버 청소
@@ -19,6 +19,7 @@ import { renderSessions } from './sessions.js'; // #/sessions — 세션이력 �
 import { renderFilePage } from './filepage.js'; // #/f — 공유 링크 착지(#1436): 내비 없는 전체페이지 파일 미리보기
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard, startDashboardSessionTour } from './dashboard-home.js';
+import { livHomeGate, livSetChoice, renderLiv } from './liv.js'; // #1631 리브 — 홈 진입 게이트 + 화면
 import { renderTerminal, startTerminalTour } from './terminal.js';
 import { changePasswordModal, openMyProfileModal, renderSystem } from './admin.js';
 import { endTour } from './tour.js';
@@ -101,8 +102,18 @@ async function route() {
   if (mainEl) mainEl.classList.toggle('doc-mode',
     page === 'knowledge' || page === 'k' || page === 'k-edit' || page === 'trash');
   try {
-    if (page === 'dashboard') {
+    if (page === 'liv') {
+      // 리브(#1631) — 워크스페이스가 아직 굴러가지 않을 때 홈을 대신 채우는 화면. 사람이 직접 열 수도 있다.
+      setActiveTab('dashboard');
+      livSetChoice('liv'); // 명시적으로 들어왔으면 그게 선택이다 — 다음부터 홈은 리브다.
+      await renderLiv(view);
+    } else if (page === 'dashboard') {
       setActiveTab('dashboard'); // 대시보드 — 옛 '시작하기' 탭 자리를 개편(#617). 현재는 자리표시.
+      // #1631 홈 진입 게이트 — 상태가 정하되 사람의 선택이 이긴다. 판정은 서버가 하고(화면이 자기 판정을
+      //  가지면 리브와 다른 답을 한다), 실패하면 대시보드로 떨어진다(홈이 안 열리는 게 더 나쁘다).
+      const livMode = await livHomeGate();
+      if (livMode === 'liv') { location.replace('#/liv'); return; }
+      if (livMode === 'login') { location.replace('#/start'); return; } // 리브를 띄우려면 AI 로그인이 먼저다
       await renderMyDashboard(view);
       // 사용 가이드 [내 AI 세션 생성]의 '따라하며 만들기 →'(#/dashboard?tour=1) — 홈에서 세션 만들기 투어를 켠다(#780).
       //  쿼리는 새로고침 재실행 방지를 위해 조용히 제거(해시만 갱신 — hashchange/재라우팅 없음).
@@ -168,7 +179,13 @@ async function route() {
       return;
     } else if (page === 'context') {
       setActiveTab('context'); // 맥락 관리 — 수집→증류→분류→관리 파이프라인(index.html data-tab="context")
-      await renderContext(view!, segs[1] || null);
+      // 증류기 설정(#/context/distill/<key>, #1564)은 3단 전폭 도구 화면이라 main 의 1200px 상한을 풀어야 한다.
+      //  라우트를 세분화해 CSS 가 그 페이지에서만 캡을 풀게 한다 — 목록은 종전 본문 컬럼 그대로여야
+      //  탭을 오갈 때 폭이 출렁이지 않는다(projects2 가 상세/보드를 가르는 것과 같은 수법).
+      //  ⚠ 세그먼트 3개짜리 URL 이 전부 증류기 상세는 아니다(#1584 — #/context/distill/ingest-policy 는
+      //   증류 단계의 한 화면이다). 판정은 화면 표를 가진 context.ts 한 곳에서만 한다.
+      if (isDistillerDetailPath(segs[1], segs[2])) document.body.dataset.route = 'context-distiller';
+      await renderContext(view!, segs[1] || null, segs[2] || null);
     } else if (page === 'knowledge') {
       setActiveTab('knowledge'); // WIKI(맥락의 기록) — #764 재구축: 홈/카테고리 페이지/필터 목록/드래프트/자료
       await renderWiki(view, segs[1] || '', params);
@@ -384,6 +401,62 @@ document.getElementById('gate-form')!.addEventListener('submit', async (ev) => {
     err.hidden = false;
   }
 });
+
+// ── 외부 IdP 로그인(OIDC, #1520) ────────────────────────────────────────────
+//  버튼은 배포에 IdP 가 설정된 경우에만 뜬다(/api/ui/auth/providers). 로컬 폼은 지우지 않는다 —
+//  IdP 장애·에어갭 배포의 영구 폴백이라는 auth/providers.ts 의 계약을 UI 도 그대로 지킨다.
+async function renderAuthProviders() {
+  const box = document.getElementById('gate-providers');
+  if (!box) return;
+  try {
+    const res = await fetch(apiUrl('/api/ui/auth/providers'));
+    if (!res.ok) return;
+    const data = await res.json();
+    const list = (data && data.providers) || [];
+    const oidc = list.find((p: any) => p && p.kind === 'oidc' && p.enabled);
+    if (!oidc) return;
+    box.textContent = '';
+    box.appendChild(el('button', {
+      type: 'button', class: 'btn gate-btn', onclick: () => {
+        // 보고 있던 화면(해시)을 로그인 후 그대로 복귀시킨다. 서버는 same-origin 경로만 받는다(safeReturnTo).
+        const h = location.hash && location.hash.indexOf('#/login') !== 0 ? location.hash : '';
+        location.href = apiUrl('/api/ui/auth/oidc/start') + '?to=' + encodeURIComponent('/ui/' + h);
+      },
+    }, String(oidc.label || '회사 SSO 로 로그인')));
+    box.appendChild(el('p', { class: 'gate-idp-hint' }, '회사 계정이 없으면 위 이메일·비밀번호로 로그인하세요.'));
+    box.hidden = false;
+  } catch (_) { /* 조회 실패 = 로컬 로그인만 보인다(폴백이 안전한 기본값) */ }
+}
+
+// OIDC 콜백은 실패를 #/login?error=… 로 알려온다(무인증 표면이라 서버는 사유를 문장으로 주지 않는다).
+//  여기서 사람이 읽을 문구로 바꾼다 — '왜 못 들어가는지'를 모르면 관리자에게 물을 수도 없다.
+const AUTH_ERROR_TEXT: Record<string, string> = {
+  oidc_denied: '로그인을 취소했습니다.',
+  oidc_not_member: '등록된 구성원이 아닙니다. 관리자에게 계정 등록을 요청하세요.',
+  oidc_domain_not_allowed: '이 도메인의 계정은 자동 가입 대상이 아닙니다. 관리자에게 문의하세요.',
+  oidc_inactive: '비활성 상태의 계정입니다. 관리자에게 문의하세요.',
+  oidc_no_email: '로그인한 계정에서 검증된 이메일을 받지 못했습니다. 관리자에게 문의하세요.',
+  oidc_off: '이 배포에는 회사 계정 로그인이 설정되어 있지 않습니다.',
+  // 계정 연결(내 정보 ▸ 회사 계정 로그인)에서 돌아온 실패들(#1520 A).
+  oidc_link_session: '연결하는 동안 로그인이 풀렸습니다. 다시 로그인한 뒤 연결해 주세요.',
+  oidc_link_taken: '이 회사 계정은 이미 다른 구성원에게 연결되어 있습니다. 관리자에게 문의하세요.',
+  oidc_link_no_member: '연결할 구성원을 찾지 못했습니다.',
+  exchange: '자동 로그인 링크가 만료되었습니다. 다시 로그인하세요.',
+};
+function showAuthErrorFromHash() {
+  const { params } = parseHash();
+  const code = params.get('error');
+  if (!code) return;
+  // 세부 검증 실패(state·nonce·서명 등)는 한 문구로 뭉뚱그린다 — 어디까지 통과했는지 알려줄 이유가 없다.
+  const msg = AUTH_ERROR_TEXT[code] || (code.indexOf('oidc_') === 0 ? '로그인에 실패했습니다. 다시 시도해 주세요.' : '');
+  if (!msg) return;
+  const err = document.getElementById('gate-error');
+  if (err) { err.textContent = msg; (err as any).hidden = false; }
+  // 사유를 한 번 보여준 뒤 주소에서 지운다(새로고침마다 같은 오류가 되살아나지 않게).
+  history.replaceState(null, '', location.pathname + location.search + '#/login');
+}
+renderAuthProviders();
+showAuthErrorFromHash();
 
 installGlobalUndo(); // #702 전역 실행취소(Cmd/Ctrl+Z) — 텍스트 편집 밖에서 '내 마지막 웹 변경'을 되돌린다.
 boot();

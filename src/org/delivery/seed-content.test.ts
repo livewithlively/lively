@@ -18,7 +18,7 @@ const HOOK_EX_DIR = path.join(REPO_ROOT, "kit", "hooks", "examples");
 let pass = 0;
 const ok = (name: string) => { pass++; console.log(`ok  ${name}`); };
 
-const HARNESSES = new Set(["claude", "codex", "openclaw", "all"]);
+const HARNESSES = new Set(["claude", "codex", "openclaw", "opencode", "antigravity", "all"]);
 const KINDS = new Set(["skill", "subagent", "command"]);
 const INJECTIONS = new Set(["always", "recalled"]);
 

@@ -6,7 +6,7 @@
 //   그리고 이 저장이 #697 소급 재해소 훅을 태워 매핑 이전에 raw 로 굳은 미러 데이터까지 되돌려 고친다 —
 //   그래서 매핑은 반드시 이 엔드포인트를 통해야 한다(구성원 화면의 '외부 계정 연결'은 읽기 전용).
 //  재렌더는 R37 의 rerenderPanel('connectors') 레지스트리 경유(셸↔패널 순환 절단).
-import { api, cardHead, el, relTime, secretInput, secretRow, state, toast, uiText } from './core.js';
+import { api, busy, cardHead, el, relTime, secretInput, secretRow, state, toast, uiText } from './core.js';
 import { field, overlay } from './ui-primitives.js';
 import { loadAdmin, rerenderPanel } from './admin-rerender.js';
 import { sectionHead, sectionTitle } from './admin-widgets.js';
@@ -270,7 +270,7 @@ function connectorForm(root, c, data, detail) {
 async function renderConnectorMemberPanel(panel, system) {
   const spec = (state.admin.data && (state.admin.data.connectors || []).find((c) => c.system === system)) || {};
   const label = spec.label || system;
-  panel.replaceChildren(el('p', { class: 'admin-hint', text: label + ' 사용자 불러오는 중…' }));
+  busy(panel, el('p', { class: 'admin-hint', text: label + ' 사용자 불러오는 중…' }));
   let res;
   try { res = await api('/api/ui/org/connector/' + encodeURIComponent(system) + '/members'); }
   catch (e) { panel.replaceChildren(el('p', { class: 'admin-hint', text: label + ' 사용자 로드 실패: ' + e.message })); return; }

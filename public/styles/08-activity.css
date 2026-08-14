@@ -148,3 +148,95 @@
 .dot6.dim { background: var(--muted-2); }
 .learn-cadence { color: var(--muted-2); }
 
+
+/* ════════ 작업(activity) 한 줄 + 상세 — 렌더러 web/activity-view.ts 소유.
+   14-files-upload.css 에 얹혀 있던 것을 여기로 옮겼다(#1610): 파일 업로드 CSS 는 이 컴포넌트의 집이 아니라,
+   스타일을 고치려는 사람이 찾을 수가 없었다. ════════ */
+
+/* 타임라인 한 줄 — 접힘(캐럿+유형칩+요약/메타) → 클릭 펼침(상세). #/projects2 회사전체·#/dash 공용. */
+.act-row { border-top: 1px solid var(--line-row); }
+.act-row:first-child { border-top: none; }
+.act-row-head { display: flex; align-items: flex-start; gap: 9px; padding: 10px 6px; }
+.act-row-expandable > .act-row-head { cursor: pointer; border-radius: 9px; }
+.act-row-expandable > .act-row-head:hover { background: var(--bg-tint); }
+.act-row-caret { flex: none; width: 12px; text-align: center; color: var(--muted-2); font-size: 10px; line-height: 20px; }
+.act-row-caret-empty { visibility: hidden; }
+.act-row.open > .act-row-head .act-row-caret { color: var(--ink-sub); }
+.act-row-head > .act-type { flex: none; margin-top: 2px; }
+.act-row-body { min-width: 0; flex: 1; }
+.act-row-title { font-size: 13.5px; font-weight: 600; color: var(--ink); line-height: 1.42; word-break: break-word; }
+.act-row-meta { margin-top: 3px; font-size: 12px; color: var(--muted-2); }
+.act-row-who { color: var(--ink-sub); font-weight: 600; }
+.act-row-agent { color: var(--muted-2); }
+.act-row-time { color: var(--muted-2); }
+.act-row-tag { display: inline-block; margin-left: 8px; font-size: 10.5px; font-weight: 700; color: var(--ink-note); background: var(--bg-note); border: 1px solid var(--line-note); border-radius: 6px; padding: 0 6px; line-height: 16px; vertical-align: 1px; }
+.act-row-detail { margin: 0 6px 11px 33px; padding: 13px 15px; background: var(--bg-tint); border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+
+/* ── 작업 상세(act-doc) — 목록의 인라인 펼침과 단건 모달이 **같은** 템플릿(#852 · #1610 전면 재설계) ──
+   유형이 8가지(기능·수정·결정·문서·리서치·검토·운영·기타)여도 사람이 읽는 글의 구조는 하나다:
+     머리(무슨 일인가 · 누가 · 언제) → 리드(기술 제목) → 본문 → 연결된 기록.
+   크기 위계를 세 단(19 / 14.5 / 13.5px)으로 벌린 게 핵심 — 이전 판은 15 / 13 / 13 이라 셋이 한 덩어리로
+   뭉쳤고, 하필 기술 제목이 제일 길어서 그쪽이 제목처럼 읽혔다. 굵기만으로는 위계가 서지 않는다. */
+.act-doc { min-width: 0; }
+
+/* 머리 — 모달에서만(목록 행은 이미 자기 헤드를 갖는다). */
+.act-doc-head { padding-bottom: 15px; margin-bottom: 15px; border-bottom: 1px solid var(--line); }
+.act-doc-kicker { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 7px; }
+.act-doc-tag { font-size: 10.5px; font-weight: 700; color: var(--ink-note); background: var(--bg-note); border: 1px solid var(--line-note); border-radius: 6px; padding: 0 7px; line-height: 17px; }
+.act-doc-title { margin: 0; font-size: 19px; font-weight: 800; color: var(--ink); line-height: 1.4; letter-spacing: -.2px; word-break: break-word; }
+.act-doc-by { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 9px; font-size: 12.5px; font-weight: 600; color: var(--muted-head); }
+.act-doc-who { font-weight: 700; color: var(--ink-sub); }
+.act-doc-agent { border: 1px solid var(--line); border-radius: 6px; padding: 0 7px; line-height: 18px; color: var(--muted-head); }
+/* 누가·언제는 12.5px 작은 글씨다 — muted-2(2.4:1)로는 안 읽힌다. 시스템 처방 A12 의 하한(muted-head)까지 올린다. */
+.act-doc-when { color: var(--muted-head); }
+
+/* 리드 + 본문 — 라벨('무엇을 했나'·'자세히')을 없앴다. 제목 아래 굵은 첫 문단이 곧 그 답이다. */
+.act-doc-read { display: flex; flex-direction: column; gap: 11px; min-width: 0; }
+.act-doc-lead { margin: 0; font-size: 14.5px; font-weight: 700; color: var(--ink); line-height: 1.62; word-break: break-word; }
+.act-doc-md { font-size: 13.5px; color: var(--ink-sub); line-height: 1.72; word-break: break-word; }
+/* 작업 본문은 '문서'가 아니라 '카드 속 메모'다 — 위키용 큰 헤딩(.md-h1~3 = 19~15.5px)이 그대로 먹으면
+   본문 소제목이 상세 제목과 같아져 위계가 뒤집힌다. 카드 눈금으로 눌러 준다(특이도 0,2,0 로 확실히). */
+.act-doc-md .md-h { margin: 14px 0 6px; }
+.act-doc-md .md-h1, .act-doc-md .md-h2, .act-doc-md .md-h3 { font-size: 13.5px; color: var(--ink); }
+.act-doc-md .md-h4, .act-doc-md .md-h5, .act-doc-md .md-h6 { font-size: 13px; }
+.act-doc-md .md-p, .act-doc-md .md-list, .act-doc-md .md-pre, .act-doc-md .md-quote { margin-bottom: 9px; }
+.act-doc-md .md-list { padding-left: 19px; }
+.act-doc-md > :last-child { margin-bottom: 0; }
+
+/* 연결된 기록 — 지식·프로젝트·코드·세션·원본이 **한 벌의 목록**. 이전 판은 '만든 것 / 참고한 것' 아래
+   파란 제목만 나열해 그게 지식인지 프로젝트인지 화면 어디에도 없었고(#1610 신고), 부풀어 있는 위키
+   제목(실측 평균 84자)이 통째로 박혀 파란 글자 벽이 됐다. 이제 행마다 종류 아이콘 + 관계 라벨 +
+   이름/부연 분리 + 새 탭(↗)·화면 이동(→) 어포던스를 함께 말한다. */
+.act-doc-sec { margin-top: 18px; padding-top: 15px; border-top: 1px solid var(--line); min-width: 0; }
+.act-doc-label { margin-bottom: 7px; padding-left: 8px; font-size: 11.5px; font-weight: 800; letter-spacing: .4px; color: var(--muted-head); }
+.act-lnks { display: flex; flex-direction: column; gap: 2px; }
+/* hover 배경을 넓히려고 음수 마진을 쓰지 않는다 — 390px 에서 모달 안에 가로 스크롤이 생겼다(실측 322>312).
+   대신 행과 라벨에 같은 좌측 여백(8px)을 줘 목록 전체가 본문에서 한 단 들여쓰인 것으로 읽히게 한다. */
+.act-lnk { display: flex; align-items: flex-start; gap: 11px; min-width: 0; padding: 9px 8px; border-radius: 10px; color: inherit; }
+a.act-lnk { transition: background .12s ease; }
+a.act-lnk:hover { background: var(--bg-tint); }
+a.act-lnk:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.act-lnk-ico { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; background: var(--bg-tint-2); color: var(--muted-head); }
+a.act-lnk:hover .act-lnk-ico { background: var(--bg-punch); color: var(--blue); }
+.act-lnk-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding-top: 1px; }
+/* 종류 라벨은 이 재설계의 핵심 정보('지식인지 프로젝트인지 모르겠다'가 신고 원문이었다) — 흐린 회색으로
+   깔지 않는다(muted 는 흰 배경에서 2.9:1). 위계는 색이 아니라 크기(11 vs 13.5)와 굵기(600 vs 800)로 준다. */
+.act-lnk-kind { font-size: 11px; font-weight: 600; letter-spacing: .2px; color: var(--ink-sub); }
+/* 이름·부연 모두 2줄까지 — 200자짜리 제목 하나가 모달을 삼키지 않게. 전문은 툴팁·링크로 읽는다. */
+.act-lnk-name { font-size: 13.5px; font-weight: 800; color: var(--ink); line-height: 1.45; word-break: break-word;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.act-lnk-name.mono { font-size: 13px; color: var(--ink); word-break: break-all; }
+a.act-lnk:hover .act-lnk-name { color: var(--blue); }
+.act-lnk-sub { font-size: 12.5px; font-weight: 500; color: var(--muted-head); line-height: 1.5; word-break: break-word;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.act-lnk-go { flex: none; margin-top: 3px; color: var(--muted-2); }
+a.act-lnk:hover .act-lnk-go { color: var(--blue); }
+
+.act-doc-foot { margin-top: 14px; font-size: 11.5px; font-weight: 600; color: var(--muted-2); }
+.act-doc-empty { margin-top: 2px; font-size: 13px; color: var(--muted); line-height: 1.6; }
+
+/* 인라인 펼침 — 배경이 틴트라 hover 틴트가 안 보인다(흰색으로 뒤집는다). 긴 본문은 목록을 삼키지 않게
+   가둔다 — 모달(단건·전체 보기)에선 제한 없이 다 읽힌다. */
+.act-row-detail a.act-lnk:hover { background: var(--bg); }
+.act-row-detail .act-lnk-ico { background: var(--bg); }   /* 틴트 위 틴트라 타일이 안 보인다 — 흰색으로 뒤집는다 */
+.act-row-detail .act-doc-md { max-height: 420px; overflow-y: auto; scrollbar-width: thin; }

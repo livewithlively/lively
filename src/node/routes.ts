@@ -2,23 +2,23 @@
 // 등록에 관리자 수동 승인은 없다(§8-7 ⑵ — 토큰 보유=신뢰). 대신:
 //  - member 노드: 본인 것만 만들 수 있다(owner=본인 고정 — 남의 PC 를 자기 노드로 등록 불가).
 //  - worker 노드: admin 만(조직 공용 실행기라 관리 표면).
+//  - 공유 지정(shared, #1540): admin 만. 등록은 누구나 해도 **조직 전체에 여는 것은 관리자 결정**이다
+//    (소유자 본인도 못 켠다 — 각자 켤 수 있으면 '기본은 본인 것'이 무력해진다).
 // 평문 토큰은 생성/회전 응답 1회만 반환(저장은 해시). 응답에 설치 한 줄을 같이 준다.
 import type express from "express";
 import { spawn } from "node:child_process";
 import path from "node:path";
-import { existsSync, readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { createHash } from "node:crypto";
 import { sessionOrBearer } from "../auth/http-auth.js";
 import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
-import { createNode, deleteNode, getNode, listNodes, rotateNodeToken, setNodeEnabled, type OrgNode } from "./store.js";
+import { authNodeToken, createNode, deleteNode, getNode, listNodes, rotateNodeToken, setNodeEnabled, setNodeShared, type OrgNode } from "./store.js";
+import { nodeOpenTo } from "./node-access.js";
 import { liveNodes } from "./registry.js";
-import { agentIsLatest } from "./protocol.js";
+import { nodeHarnesses, agentIsLatest } from "./protocol.js";
+import { AGENT_BUNDLE, AGENT_BUNDLE_ROOT, servedAgentVersion, agentBundleExists } from "./agent-bundle.js";
 import { logger } from "../log.js";
 
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", ".."); // dist/node/ → 리포 루트
 
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
@@ -35,24 +35,13 @@ function installHint(id: string): string {
   return `lively node --daemon --id ${id}`;
 }
 
-// 게이트웨이가 **지금 서빙하는** 에이전트 번들의 지문(#905 C4) — 노드가 hello 로 보내는 agentVer 와 같은 계산.
-//  키트 kit-version 과 같은 모델("서빙하는 바이트가 곧 버전"). 노드가 그 값을 그대로 보내면 최신, 다르면 구버전이다.
-//  캐시: 이 파일은 배포 때만 바뀌는데 노드 목록은 관리탭이 자주 조회한다.
-const AGENT_BUNDLE = path.join(REPO_ROOT, "dist", "node-agent", "agent.mjs");
-const AGENT_VER_TTL_MS = 60_000;
-let servedAgentVer: { v: string | null; at: number } | null = null;
-function servedAgentVersion(): string | null {
-  if (servedAgentVer && Date.now() - servedAgentVer.at < AGENT_VER_TTL_MS) return servedAgentVer.v;
-  let v: string | null = null;
-  try { v = createHash("sha256").update(readFileSync(AGENT_BUNDLE)).digest("hex").slice(0, 12); }
-  catch { v = null; }   // 번들 미빌드 → 모름. 모르면 최신 여부를 **판정하지 않는다**(아래 agent_latest=null).
-  servedAgentVer = { v, at: Date.now() };
-  return v;
-}
+// 번들 위치·지문은 node/agent-bundle.ts 단일 출처(#1713 — registry 도 같은 값을 써야 노드에게 알려줄 수 있다).
 
+// 화면이 쓰는 노드 뷰 — DB 행 + 라이브 상태 + **판정**(최신인가·무엇을 띄울 수 있나).
 //  agent_latest 3상(true/false/null)의 근거는 protocol.agentIsLatest 참조 — 거기서 검증한다.
 interface NodeView extends Omit<OrgNode, "token_hash"> {
   online: boolean; sessions: number; agent_latest: boolean | null; agent_ver_latest: string | null;
+  harnesses: string[];   // #1713 — 이 노드에서 열 수 있는 하네스(정규화 — 미보고면 기준선)
 }
 function toView(n: OrgNode, live: Map<string, { online: boolean; sessions: number }>): NodeView {
   const { token_hash: _hash, ...rest } = n; // 토큰 해시는 응답에 싣지 않는다(상관추적은 토큰탭에서)
@@ -62,6 +51,8 @@ function toView(n: OrgNode, live: Map<string, { online: boolean; sessions: numbe
     ...rest, online: lv?.online ?? false, sessions: lv?.sessions ?? 0,
     agent_ver_latest: served,
     agent_latest: agentIsLatest(n.agent_ver, served),
+    // #1713 — 이 노드에서 열 수 있는 하네스(미보고 = 구 번들 → 기준선). 노드 화면이 그대로 보여준다.
+    harnesses: nodeHarnesses(n.agent_harnesses),
   };
 }
 
@@ -69,20 +60,27 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
   const auth = sessionOrBearer(verifier);
 
   // 목록 — 본인 소유(admin 은 전체). 라이브 연결 상태를 DB 행에 얹는다.
-  //  usable=1(#905 C4): 프로젝트 세션을 **열 수 있는** 노드 = 내 멤버 노드 ∪ 조직 공용 worker 노드(개방 — provision
-  //  게이트가 worker 를 누구에게나 허용하는 것과 정합). 기본(관리 목록)은 종전대로 본인 소유만 — worker 노드의 관리
-  //  액션(토글·삭제·토큰회전)은 별 라우트가 admin 게이트하므로, 여기서 worker 를 조회에 넣어도 선택용일 뿐 안전하다.
+  //  usable=1(#905 C4): 프로젝트 세션을 **열 수 있는** 노드 = 내 노드 ∪ 공유 노드. 판정은 nodeOpenTo 로
+  //  provision·세션생성 게이트와 **같은 술어**를 쓴다(#1540) — 목록과 게이트가 갈리면 골랐는데 403 이 나거나
+  //  쓸 수 있는데 목록에 없다. 종전 기준은 kind==='worker' 였고, 그래서 '개방을 끄는 손잡이'가 없었다.
+  //  기본(관리 목록)은 종전대로 본인 소유만 — 관리 액션(토글·삭제·토큰회전)은 각 라우트가 따로 게이트한다.
   app.get("/api/ui/nodes", auth, wrap(async (req, res) => {
     const u = userOf(req);
     const me = idOf(u);
     const usable = req.query.usable === "1" || req.query.usable === "true";
     const live = new Map(liveNodes().map((n) => [n.id, { online: n.online, sessions: n.sessions }]));
-    const rows = (await listNodes()).filter((n) => isAdmin(u) || n.owner_member === me || (usable && n.kind === "worker" && n.enabled));
+    // 두 목록은 **질문이 다르다**: usable=1 은 "이 노드를 쓸 수 있나"(게이트와 동일한 술어여야 한다), 기본은
+    //  "내가 관리하는 노드"(admin 은 전체 — 토글·회전·삭제 대상). 그래서 usable 에는 admin 예외를 얹지 않는다:
+    //  얹으면 관리자에게 남의 비공유 노드가 선택지로 보이고, 고르면 게이트가 403 을 던진다(목록≠게이트).
+    const rows = (await listNodes()).filter((n) => usable
+      ? (n.enabled && nodeOpenTo(n, me))
+      : (isAdmin(u) || n.owner_member === me));
     res.setHeader("Cache-Control", "no-store");
     res.json({ nodes: rows.map((n) => toView(n, live)) });
   }));
 
   // 등록 — member=본인, worker=admin. 평문 토큰은 이 응답 1회.
+  //  shared(#1540)는 **admin 만** 등록 시점에 켤 수 있다(그 외엔 항상 비공유로 시작 → 등록한 사람 것).
   app.post("/api/ui/nodes", auth, wrap(async (req, res) => {
     const u = userOf(req);
     const me = idOf(u);
@@ -90,11 +88,12 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
     const b = (req.body ?? {}) as Record<string, unknown>;
     const kind = b.kind === "worker" ? "worker" : "member";
     if (kind === "worker" && !isAdmin(u)) throw new HttpError(403, "worker 노드 등록은 admin 권한이 필요합니다");
+    if (b.shared && !isAdmin(u)) throw new HttpError(403, "공유 노드 지정은 admin 권한이 필요합니다");
     const { node, token } = await createNode(
-      { id: String(b.id ?? b.name ?? ""), name: String(b.name ?? b.id ?? ""), kind, owner: me },
+      { id: String(b.id ?? b.name ?? ""), name: String(b.name ?? b.id ?? ""), kind, owner: me, shared: !!b.shared },
       me,
     );
-    logger.info({ node: node.id, kind, owner: me }, "노드 등록");
+    logger.info({ node: node.id, kind, owner: me, shared: !!b.shared }, "노드 등록");
     res.setHeader("Cache-Control", "no-store");
     res.json({ node: toView(node, new Map()), token, install: installHint(node.id) });
   }));
@@ -123,6 +122,29 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
     res.json({ ok: true, id: n.id, enabled });
   }));
 
+  // 공유 **해제** 전용(#1558) — admin 전용. ⚠ 이 라우트로 공유를 **켤 수는 없다**.
+  //
+  //  왜 승격을 없앴나: 종전엔 admin 이 아무 노드나 `shared:true` 로 올릴 수 있었다. 그러면 구성원이 붙여 둔
+  //  **개인 노트북이 어느 날 조직 공용이 되는** 경로가 열려 있고, 그걸 하려면 관리 화면이 남의 개인 컴퓨터
+  //  목록을 늘어놔야 한다(프라이버시). 공유 컴퓨터는 처음부터 그 목적으로 등록하는 것이지, 남의 것을 끌어
+  //  올리는 게 아니다 → **공유는 등록 시점(POST /api/ui/nodes {shared:true})에만 켠다.**
+  //  해제는 남긴다 — 좁히는 방향이라 안전하고, 잘못 등록한 것을 지우지 않고 되돌릴 수 있어야 한다.
+  //  다시 공유로 만들려면 지우고 공유용으로 새로 등록한다(그 편이 감사에도 한 줄로 남는다).
+  app.post("/api/ui/nodes/:id/share", auth, wrap(async (req, res) => {
+    const u = userOf(req);
+    if (!isAdmin(u)) throw new HttpError(403, "공유 해제는 admin 권한이 필요합니다");
+    // 승격 차단은 **DB 조회보다 먼저** 본다 — 입력만으로 결정되는 규칙이고(노드가 뭐든 답은 같다), 그래야
+    //  이 계약을 DB 없이 테스트할 수 있다(share-promotion-gate.test.ts).
+    if (((req.body ?? {}) as Record<string, unknown>).shared) {
+      throw new HttpError(400, "이미 등록된 컴퓨터를 공유로 올릴 수는 없습니다 — 공유 컴퓨터는 등록할 때 지정합니다(관리 ▸ 컴퓨터(노드) ▸ 공유 컴퓨터 등록).");
+    }
+    const n = await getNode(String(req.params.id ?? ""));
+    if (!n) throw new HttpError(404, "노드 없음");
+    await setNodeShared(n.id, false);
+    logger.info({ node: n.id, by: idOf(u) }, "노드 공유 해제");
+    res.json({ ok: true, id: n.id, shared: false });
+  }));
+
   app.delete("/api/ui/nodes/:id", auth, wrap(async (req, res) => {
     const n = await requireOwn(req);
     const r = await deleteNode(n.id, idOf(userOf(req)));
@@ -130,19 +152,40 @@ export function registerNodeRoutes(app: express.Express, verifier: BearerVerifie
     res.json(r);
   }));
 
+  // 자가 갱신용 번들 배달(#1713) — **노드 토큰**으로 받는다. 멤버 인증 경로(/api/ui/node-agent)는 사람이 설치할
+  //  때 쓰고, 이건 이미 붙어 있는 노드가 스스로 최신 바이트를 가져갈 때 쓴다. 노드는 멤버 토큰이 없다.
+  //  ⚠ 실측(#1713): launchd/systemd 는 `lively node` CLI 가 아니라 받아 둔 agent.mjs 를 **직접** 실행한다 →
+  //   재시작해도 pull 이 없어 노드가 영원히 옛 번들로 돈다(라이브 4대 전부). 그래서 이 경로가 필요하다.
+  //  내용은 코드일 뿐 비밀이 없다(멤버 경로와 같은 tar) — 노드 토큰 보유자에게 주는 데 위험이 없다.
+  app.get("/node/agent-bundle", wrap(async (req, res) => {
+    const raw = String(req.headers.authorization ?? "");
+    const tok = raw.startsWith("Bearer ") ? raw.slice(7).trim() : "";
+    const node = tok ? await authNodeToken(tok) : null;
+    if (!node) throw new HttpError(403, "노드 토큰이 유효하지 않습니다");
+    if (!agentBundleExists()) throw new HttpError(503, "노드 에이전트 번들이 아직 빌드되지 않았습니다(npm run build).");
+    res.setHeader("Content-Type", "application/gzip");
+    res.setHeader("X-Agent-Ver", servedAgentVersion() ?? "");   // 노드가 받은 바이트를 대조할 기준
+    const tar = spawn("tar", ["-czf", "-",
+      "-C", path.dirname(AGENT_BUNDLE), path.basename(AGENT_BUNDLE),
+      "-C", AGENT_BUNDLE_ROOT, "node_modules/node-pty",
+    ], { stdio: ["ignore", "pipe", "ignore"] });
+    tar.stdout.pipe(res);
+    tar.on("error", () => { if (!res.headersSent) res.status(500).end(); });
+  }));
+
   // 노드 에이전트 번들 배달(#869) — `lively node` 가 받아 실행. agent.mjs(단일 esbuild 번들) + node-pty(네이티브,
   //  external 이라 실행환경에 필요). 인증된 멤버면 받는다(코드일 뿐 비밀 없음 — /install 과 동일 성격). tar.gz 스트림.
   app.get("/api/ui/node-agent", auth, wrap(async (req, res) => {
     if (!idOf(userOf(req))) throw new HttpError(403, "사용자 신원이 없습니다");
     // 버전 판정(servedAgentVersion)과 **같은 파일**이어야 한다 — 서빙본과 해시 대상이 갈리면 판정이 거짓이 된다.
-    if (!existsSync(AGENT_BUNDLE)) throw new HttpError(503, "노드 에이전트 번들이 아직 빌드되지 않았습니다(npm run build).");
+    if (!agentBundleExists()) throw new HttpError(503, "노드 에이전트 번들이 아직 빌드되지 않았습니다(npm run build).");
     res.setHeader("Content-Type", "application/gzip");
     res.setHeader("Content-Disposition", 'attachment; filename="node-agent.tgz"');
     // dist/node-agent/agent.mjs → agent.mjs · node_modules/node-pty → node_modules/node-pty (전 플랫폼 prebuild 동봉)
     const tar = spawn("tar", [
       "-czf", "-",
       "-C", path.dirname(AGENT_BUNDLE), path.basename(AGENT_BUNDLE),
-      "-C", REPO_ROOT, "node_modules/node-pty",
+      "-C", AGENT_BUNDLE_ROOT, "node_modules/node-pty",
     ], { stdio: ["ignore", "pipe", "ignore"] });
     tar.stdout.pipe(res);
     tar.on("error", () => { if (!res.headersSent) res.status(500).end(); });

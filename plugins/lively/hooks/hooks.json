@@ -1,0 +1,44 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "startup|resume|clear", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-preload.mjs\"", "timeout": 10 }] },
+      { "matcher": "startup|resume|clear", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/sync-harness-assets.mjs\"", "timeout": 10 }] },
+      { "matcher": "startup|resume|clear", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/work-flag.mjs\"", "timeout": 5 }] },
+      { "matcher": "startup|resume|clear", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-custom.mjs\" SessionStart" }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/work-flag.mjs\"", "timeout": 5 }] },
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-custom.mjs\" SessionEnd", "timeout": 10 }] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/work-flag.mjs\"", "timeout": 5 }] },
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-custom.mjs\" UserPromptSubmit" }] }
+    ],
+    "PreToolUse": [
+      { "matcher": ".*", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-custom.mjs\" PreToolUse" }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "mcp__lively__.*", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/work-flag.mjs\"", "timeout": 5 }] },
+      { "matcher": "Edit|Write|MultiEdit|NotebookEdit", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/work-flag.mjs\"", "timeout": 5 }] },
+      { "matcher": ".*", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-custom.mjs\" PostToolUse" }] }
+    ],
+    "Notification": [
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/work-flag.mjs\"", "timeout": 5 }] },
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-custom.mjs\" Notification" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/stop-writeback-gate.mjs\"", "timeout": 10 }] },
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/work-flag.mjs\"", "timeout": 5 }] },
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-custom.mjs\" Stop" }] }
+    ],
+    "SubagentStop": [
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-custom.mjs\" SubagentStop" }] }
+    ],
+    "PreCompact": [
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-custom.mjs\" PreCompact" }] }
+    ],
+    "PostCompact": [
+      { "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/run-custom.mjs\" PostCompact" }] }
+    ]
+  }
+}

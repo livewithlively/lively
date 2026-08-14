@@ -299,6 +299,61 @@ export function appendBody(base: string, chunk: string): string {
 //  (다르면 '붙인 것'과 '중복 판정 대상'이 어긋나 감지가 헛돈다).
 const normalizeAppendChunk = (chunk: string): string => (chunk ?? "").replace(/^[\r\n]+/, "").replace(/\s+$/, "");
 
+/** #1531 edit 모드 — 본문 일부만 정확일치로 갈아끼운다. */
+export interface KnowledgeEdit {
+  /** 바꿀 기존 텍스트 — 본문에 **정확히 한 번** 있어야 한다(replace_all 이면 여러 번 허용). */
+  old: string;
+  /** 그 자리에 넣을 텍스트. 빈 문자열이면 삭제. */
+  new: string;
+  /** 같은 텍스트가 여러 곳에 있고 전부 바꿔야 할 때만 true. */
+  replace_all?: boolean;
+}
+
+/**
+ * #1531 본문 부분 편집 — 전문을 되보내지 않고 바뀌는 조각만 갈아끼운다.
+ *
+ * 왜 필요한가: append 는 **문서 끝**에만 붙는다. 그런데 실제 갱신은 문서 중간에서 일어난다 —
+ * 타임라인 중간에 이번 달을 끼우고, '열린 이슈'의 낡은 항목을 고치고, 표의 수치를 바꾸는 식이다.
+ * 그 경우 유일한 수단이 replace(전문 교체)인데, 그러면 **에이전트가 4만 자를 통째로 받아쓰게 된다.**
+ * 토큰도 토큰이지만 전사 과정에서 **손대지 말아야 할 문장이 깨진다** — 어니스트 실측에서 40K자 문서를
+ * 갱신하다 무관한 문장의 쉼표가 여는 괄호로 바뀌어 괄호가 닫히지 않았다(#1531).
+ * 손상 확률이 문서 크기에 비례하는 구조라, 문서가 자랄수록 갱신이 위험해진다.
+ *
+ * 계약(Claude Code 의 Edit 도구와 동형):
+ *  · `old` 는 **정확일치**. 못 찾으면 조용히 넘어가지 않고 던진다 — 조용한 무시는 "저장했는데 안 바뀐"
+ *    최악의 실패다(호출자는 본문을 안 읽으므로 영영 모른다).
+ *  · 여러 번 나오면 **모호**하므로 던진다(replace_all 로 의도를 밝히면 전부 교체).
+ *  · 편집은 **순차 적용** — 앞 편집의 결과 위에 다음 편집이 얹힌다. 앞 편집이 뒤 앵커를 지웠다면
+ *    '못 찾음'으로 드러난다(그것도 조용한 실패보다 낫다).
+ *  · 건드리지 않은 부분은 **문자 단위로 그대로다** — 이 모드의 존재 이유다.
+ */
+export function applyKnowledgeEdits(base: string, edits: KnowledgeEdit[]): string {
+  if (!Array.isArray(edits) || edits.length === 0) {
+    throw new Error("edits 가 비었습니다 — 무엇을 바꿀지 지정하세요.");
+  }
+  let out = String(base ?? "");
+  edits.forEach((e, i) => {
+    const at = `edits[${i}]`;
+    const oldText = String(e?.old ?? "");
+    const newText = String(e?.new ?? "");
+    if (!oldText) throw new Error(`${at}.old 가 비었습니다 — 바꿀 기존 텍스트를 지정하세요(본문 끝에 덧붙이려면 mode='append').`);
+    if (oldText === newText) throw new Error(`${at}: old 와 new 가 같습니다 — 바뀌는 것이 없습니다.`);
+    // 출현 횟수 — indexOf 루프로 센다(정규식 이스케이프 이슈 없음).
+    let count = 0;
+    for (let p = out.indexOf(oldText); p !== -1; p = out.indexOf(oldText, p + oldText.length)) count++;
+    if (count === 0) {
+      const head = oldText.slice(0, 60).replace(/\n/g, "⏎");
+      throw new Error(`${at}: 본문에서 찾지 못했습니다 — "${head}${oldText.length > 60 ? "…" : ""}". 공백·줄바꿈까지 원문 그대로여야 합니다(지식을 다시 읽어 확인하세요).`);
+    }
+    if (count > 1 && !e.replace_all) {
+      const head = oldText.slice(0, 60).replace(/\n/g, "⏎");
+      throw new Error(`${at}: 본문에 ${count}곳 있어 어디를 바꿀지 모호합니다 — "${head}${oldText.length > 60 ? "…" : ""}". 앞뒤를 더 붙여 유일하게 만들거나, 전부 바꾸려면 replace_all: true 로 명시하세요.`);
+    }
+    out = e.replace_all ? out.split(oldText).join(newText) : out.replace(oldText, newText);
+  });
+  return out;
+}
+
 /**
  * #921 중복 append 감지 — 조각이 이미 본문 끝에 그대로 있는가.
  *
@@ -523,7 +578,7 @@ export async function moveKnowledge(name: string, parentName: string | null, sor
 //   **아무 grant 도 없는 사람(PUBLIC_VIEWER)에게 그 리스트가 보이나** 로 판정한다 — 스페이스 상속(폴더 체인)까지
 //   자동으로 반영되고, 상속 규칙 사본을 여기 또 만들지 않는다.
 //  실패는 비치명(open 유지): 세션↔프로젝트 바인딩은 부가 정보라, 못 찾았다고 저장을 깨뜨리지 않는다.
-export async function stampSessionVisibility(name: string, sessionId?: string | null): Promise<number | null> {
+export async function stampSessionVisibility(name: string, sessionId?: string | null, ctx?: WriteCtx): Promise<number | null> {
   if (!name || !sessionId) return null;
   try {
     // 세션→프로젝트는 session_project(타임라인 귀속과 같은 소스)로 본다. 바인딩이 없으면 프로젝트 세션이 아니다.
@@ -537,6 +592,13 @@ export async function stampSessionVisibility(name: string, sessionId?: string | 
     await itemsPool.query(
       `INSERT INTO knowledge_list_grant(name, list_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, [name, listId]);
     await itemsPool.query(`UPDATE knowledge SET visibility='members' WHERE name=$1`, [name]);
+    // #1561 감사 — 접근통제 이력. 사람이 아무것도 누르지 않았는데 문서가 잠기는 자리라 흔적이 있어야 한다.
+    //  ⚠ 실패를 여기서 따로 삼킨다: 잠금은 **이미 적용됐으므로** 아래 catch 의 '공개 상태 유지' 문구가
+    //   거짓이 되고, 감사가 안 됐다고 잠금을 되돌리면 그게 곧 유출이다(안전 방향은 잠긴 채로 두는 것).
+    await auditKnowledge(name, "set_visibility",
+      { name, visibility: "open" },
+      { name, visibility: "members", via_project_list: listId }, ctx)
+      .catch((e) => console.warn(`[visibility] '${name}' 잠금 감사 실패(잠금은 적용됨): ${(e as Error)?.message}`));
     return listId;
   } catch (e) {
     console.warn(`[visibility] '${name}' 세션 스탬핑 실패(공개 상태 유지): ${(e as Error)?.message}`);
@@ -564,7 +626,15 @@ export async function restoreKnowledge(before: Record<string, unknown>, ctx?: Wr
   return after;
 }
 
+// ⚠ replace 시맨틱 — 이 함수는 '추가'가 아니라 '교체'다(#290 단일 카테고리).
+//  #1563: 그래서 **지우기 전에 기존 매핑을 읽어 before 에 싣는다.** 안 읽으면 감사에 '무엇에서 무엇으로'가
+//   없어 두 곳이 동시에 반쪽이 된다 — 이력 화면은 분류 변경을 '분류 지정'이라고만 쓸 수 있고,
+//   Cmd+Z(#702)는 아예 이 op 을 되돌릴 수 없다(그 한계 때문에 undo 행렬에서 제외돼 있었다).
 export async function linkKnowledgeCategory(name: string, categoryId: number, state = "confirmed", ctx?: WriteCtx): Promise<void> {
+  // single_uq 로 name 당 1행이지만 ORDER BY 로 결정적으로 고른다(이행기 다중 잔존 대비 — 비결정 스냅샷은 되돌리기를 복불복으로 만든다).
+  const prev = await one(itemsPool,
+    `SELECT category_id, state, mapped_by FROM knowledge_category WHERE name=$1 ORDER BY category_id LIMIT 1`,
+    [name]) as { category_id: number; state: string; mapped_by: string } | undefined;
   // #290 단일 카테고리: 기존 다른 카테고리 매핑을 먼저 제거(replace) — knowledge_category_single_uq 와 정합(앱이 단일 강제, 인덱스 위반 대신 교체).
   await itemsPool.query(`DELETE FROM knowledge_category WHERE name=$1 AND category_id<>$2`, [name, categoryId]);
   await itemsPool.query(
@@ -572,7 +642,13 @@ export async function linkKnowledgeCategory(name: string, categoryId: number, st
      VALUES($1,$2,'manual',$3,now())
      ON CONFLICT (name, category_id) DO UPDATE SET state=EXCLUDED.state`,
     [name, categoryId, state]);
-  await auditKnowledge(name, "link_category", null, { category_id: categoryId, state }, ctx);
+  // 무변경 재링크(같은 분류·같은 state 를 다시 누름)는 감사하지 않는다 — 실측상 지식 감사행의 절반 가까이가
+  //  link_category 였고(200행 표본 중 93건), 그 잡음이 정확히 '누가 본문을 고쳤나'를 덮는 것이었다.
+  //  판정 기준은 이력 화면의 무변경 update 판정(UPDATE_CHANGED_SQL)과 같다: 실제로 뭔가 달라졌을 때만 남긴다.
+  if (prev && Number(prev.category_id) === categoryId && prev.state === state) return;
+  await auditKnowledge(name, "link_category",
+    prev ? { category_id: Number(prev.category_id), state: prev.state, mapped_by: prev.mapped_by } : null,
+    { category_id: categoryId, state }, ctx);
 }
 
 export async function unlinkKnowledgeCategory(name: string, categoryId: number, ctx?: WriteCtx): Promise<void> {

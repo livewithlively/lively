@@ -3,7 +3,9 @@
 //   핵심 정보인데, 예전 toRawItem 은 channel.id(container_ref)만 남기고 name 을 버려 유실됐다(사용자 지적).
 //   실행: npm run build && node dist/connectors/slack.test.js  (순수 함수 — DB/네트워크 불요)
 import assert from "node:assert/strict";
-import { toRawItem } from "./slack.js";
+import {
+  toRawItem, selectBotChannels, threadNeedsReplies, isCollectableMessage, channelScanFromMs,
+} from "./slack.js";
 
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -45,6 +47,167 @@ t("toRawItem: channelName 미제공이면 container_name=undefined(graceful)", (
   );
   assert.equal(it.container_ref, "C999");
   assert.equal(it.container_name, undefined);
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// #1531 봇 모드 — 멤버십 스윕의 판정 3종. 사양·엣지 표는 프로젝트 #1531 spec 참조.
+//  검색 모드가 못 보는 비공개 채널을 봇 토큰으로 수집하는 경로라, 여기서 잘못 거르면
+//  "설정은 맞는데 조용히 0건"(운영자가 가장 못 찾는 고장)이 된다.
+// ════════════════════════════════════════════════════════════════════════════
+
+type Ch = Parameters<typeof selectBotChannels>[0][number];
+const ch = (id: string, name?: string, extra: Partial<Ch> = {}): Ch => ({ id, name, ...extra });
+const names = (list: Ch[]): string[] => list.map((c) => c.name ?? c.id);
+
+// ── S1. 대상 채널 선별 ──────────────────────────────────────────────────────
+const FLEET: Ch[] = [
+  ch("C_FRONT", "hai솔루션_front"),
+  ch("C_CLOSE", "hai솔루션_closing", { is_private: true }),
+  ch("C_OLD", "hai솔루션_2024종료", { is_private: true, is_archived: true }),
+  ch("C_NOISE", "alarm_test"),
+  ch("D_DM", undefined, { is_im: true }),
+  ch("G_MPIM", "mpdm-a--b", { is_mpim: true }),
+];
+
+t("S1-1: 대상 미지정이면 봇이 초대된 전체가 대상(DM/그룹DM 제외)", () => {
+  assert.deepEqual(names(selectBotChannels(FLEET, [], [])),
+    ["hai솔루션_front", "hai솔루션_closing", "hai솔루션_2024종료", "alarm_test"]);
+});
+
+t("S1-2: 대상을 이름으로 지정하면 그 채널만", () => {
+  assert.deepEqual(names(selectBotChannels(FLEET, ["hai솔루션_front"], [])), ["hai솔루션_front"]);
+});
+
+t("S1-3: 대상을 채널 id 로 지정해도 맞는다(이름은 바뀔 수 있다)", () => {
+  assert.deepEqual(names(selectBotChannels(FLEET, ["C_CLOSE"], [])), ["hai솔루션_closing"]);
+});
+
+t("S1-4: '#' 접두·대소문자 흔들림을 흡수한다", () => {
+  assert.deepEqual(names(selectBotChannels(FLEET, ["#HAI솔루션_Front"], [])), ["hai솔루션_front"]);
+  assert.deepEqual(names(selectBotChannels(FLEET, ["c_close"], [])), ["hai솔루션_closing"]);
+});
+
+t("S1-5: 제외 채널은 빠진다", () => {
+  assert.ok(!names(selectBotChannels(FLEET, [], ["alarm_test"])).includes("alarm_test"));
+});
+
+t("S1-6: 대상과 제외에 동시에 들면 제외가 이긴다(안전한 쪽)", () => {
+  assert.deepEqual(selectBotChannels(FLEET, ["alarm_test"], ["alarm_test"]), []);
+});
+
+t("S1-7: DM·그룹DM 은 대상으로 명시해도 빠진다(봇 소유자의 사담 유입 방지)", () => {
+  assert.deepEqual(selectBotChannels(FLEET, ["D_DM", "G_MPIM"], []), []);
+});
+
+t("S1-8: 보관 채널은 남긴다 — 종료된 프로젝트 기록이 이관 가치가 크다", () => {
+  assert.deepEqual(names(selectBotChannels(FLEET, ["hai솔루션_2024종료"], [])), ["hai솔루션_2024종료"]);
+});
+
+t("S1-9: 제외만 주면 그것만 뺀 전체", () => {
+  assert.deepEqual(names(selectBotChannels(FLEET, [], ["hai솔루션_front", "alarm_test"])),
+    ["hai솔루션_closing", "hai솔루션_2024종료"]);
+});
+
+// ── S2. 스레드 답글 재수집 판정 ─────────────────────────────────────────────
+const SINCE = Date.parse("2026-07-30T00:00:00Z");
+const tsAt = (iso: string): string => (Date.parse(iso) / 1000).toFixed(6);
+
+t("S2-1: 답글 없는 메시지는 열어보지 않는다", () => {
+  assert.equal(threadNeedsReplies({ ts: "1", reply_count: 0 }, SINCE), false);
+  assert.equal(threadNeedsReplies({ ts: "1" }, SINCE), false); // 필드 자체가 없는 평범한 메시지
+});
+
+t("S2-2: 전량 수집(커서 없음)이면 답글 있는 스레드를 모두 연다", () => {
+  assert.equal(threadNeedsReplies({ ts: "1", reply_count: 3, latest_reply: tsAt("2020-01-01T00:00:00Z") }, undefined), true);
+});
+
+t("S2-3: 증분 — 마지막 답글이 커서 이전이면 열지 않는다(증분 비용의 핵심)", () => {
+  assert.equal(threadNeedsReplies({ ts: "1", reply_count: 9, latest_reply: tsAt("2026-07-29T23:59:59Z") }, SINCE), false);
+});
+
+t("S2-4: 증분 — 마지막 답글이 커서 이후면 연다", () => {
+  assert.equal(threadNeedsReplies({ ts: "1", reply_count: 1, latest_reply: tsAt("2026-07-30T00:00:01Z") }, SINCE), true);
+});
+
+t("S2-5: 경계 — 마지막 답글 == 커서 시각이면 연다(놓치느니 다시 읽는다)", () => {
+  assert.equal(threadNeedsReplies({ ts: "1", reply_count: 2, latest_reply: tsAt("2026-07-30T00:00:00Z") }, SINCE), true);
+});
+
+t("S2-6: 증분 — 마지막 답글 정보가 없으면 연다(판단 불가 시 안전한 쪽)", () => {
+  assert.equal(threadNeedsReplies({ ts: "1", reply_count: 4 }, SINCE), true);
+  assert.equal(threadNeedsReplies({ ts: "1", reply_count: 4, latest_reply: "nonsense" }, SINCE), true);
+});
+
+t("S2-7: 답글 수 경계 — 정확히 1건이면 연다", () => {
+  assert.equal(threadNeedsReplies({ ts: "1", reply_count: 1, latest_reply: tsAt("2026-08-01T00:00:00Z") }, SINCE), true);
+});
+
+// ── S3. 자료로 남길 메시지 판정 ─────────────────────────────────────────────
+t("S3-1: 사람이 쓴 일반 텍스트는 남긴다", () => {
+  assert.equal(isCollectableMessage({ ts: "1", user: "U1", text: "부산은행 배치 일정 공유드립니다" }), true);
+});
+
+t("S3-2: 채널 참여·퇴장 등 시스템 부산물은 버린다(증류 오염 방지)", () => {
+  assert.equal(isCollectableMessage({ ts: "1", subtype: "channel_join", text: "<@U1> has joined the channel" }), false);
+  assert.equal(isCollectableMessage({ ts: "1", subtype: "channel_leave", text: "left" }), false);
+  assert.equal(isCollectableMessage({ ts: "1", subtype: "channel_convert_to_private", text: "x" }), false);
+});
+
+t("S3-3: 본문·첨부 모두 없으면 버린다", () => {
+  assert.equal(isCollectableMessage({ ts: "1", user: "U1" }), false);
+});
+
+t("S3-4: 본문이 없어도 파일 첨부가 있으면 남긴다", () => {
+  assert.equal(isCollectableMessage({ ts: "1", user: "U1", files: [{ id: "F1" }] }), true);
+});
+
+t("S3-5: 본문이 없어도 attachment(봇 카드 등)가 있으면 남긴다", () => {
+  assert.equal(isCollectableMessage({ ts: "1", attachments: [{ title: "배포 알림" }] }), true);
+});
+
+t("S3-6: 경계 — 본문이 공백문자뿐이면 버린다", () => {
+  assert.equal(isCollectableMessage({ ts: "1", user: "U1", text: "   \n\t " }), false);
+});
+
+t("S3-7: 봇 알림 메시지도 본문이 있으면 남긴다(업무 기록이다)", () => {
+  assert.equal(isCollectableMessage({ ts: "1", bot_id: "B1", subtype: "bot_message", text: "배치 완료" }), true);
+});
+
+t("S3-8: 스레드 브로드캐스트도 남긴다(중복은 external_id 유일성이 처리)", () => {
+  assert.equal(isCollectableMessage({ ts: "1", subtype: "thread_broadcast", text: "공유합니다" }), true);
+});
+
+// ── S4. 수집 시작 시각 — 역스캔이 backfill_since 하한을 뚫지 않는가 ─────────
+//  #1531 어니스트 실측 회귀: 전량 run 은 하한(7/28)을 지켰는데 증분 run 이 커서-30일(7/5)까지 거슬러
+//  올라가 설정 밖 자료를 끌어왔다. "전량만 보면 정상으로 보인다"가 이 결함의 고약한 점이라 행으로 잠근다.
+const D30 = 30 * 86_400_000;
+const FLOOR = Date.parse("2026-07-28T00:00:00Z");
+
+t("S4-1: 전량 수집(커서 없음)이면 backfill_since 그 시각부터", () => {
+  assert.equal(channelScanFromMs(FLOOR, undefined), FLOOR);
+});
+
+t("S4-2: 전량 + 하한 미설정(0)이면 0 — 채널 개설일부터", () => {
+  assert.equal(channelScanFromMs(0, undefined), 0);
+});
+
+t("S4-3: 증분 — 역스캔이 하한보다 과거로 가려 하면 하한에서 멈춘다(이번 회귀 지점)", () => {
+  const cursor = Date.parse("2026-08-04T00:00:00Z"); // 커서-30일 = 7/5 → 하한 7/28 보다 과거
+  assert.equal(channelScanFromMs(FLOOR, cursor), FLOOR);
+});
+
+t("S4-4: 증분 — 역스캔이 하한 이후면 역스캔 창을 쓴다(오래된 스레드의 새 답글을 잡기 위해)", () => {
+  const cursor = Date.parse("2026-10-01T00:00:00Z"); // 커서-30일 = 9/1 → 하한보다 나중
+  assert.equal(channelScanFromMs(FLOOR, cursor), cursor - D30);
+});
+
+t("S4-5: 증분 + 하한 미설정(0)이면 역스캔 창이 그대로 산다", () => {
+  const cursor = Date.parse("2026-08-04T00:00:00Z");
+  assert.equal(channelScanFromMs(0, cursor), cursor - D30);
+});
+
+t("S4-6: 경계 — 역스캔 시작이 하한과 정확히 같으면 그 값", () => {
+  assert.equal(channelScanFromMs(FLOOR, FLOOR + D30), FLOOR);
 });
 
 console.log(`\n${pass} passed`);

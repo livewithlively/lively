@@ -5,7 +5,7 @@
 //  제목 형식과 무관하게 어떤 지식이든 동일하게 흘러든다(범용). 추가 API 0.
 //  레이아웃(블록 배열)은 대문 문서(category-home-*)의 body_md 에 JSON 으로 저장(props-ui 는 icon/cover 화이트리스트).
 //  읽기 모드 = 완성된 대문 · 편집 모드 = 커스터마이즈(드래그·⚙조건·크기·삭제·＋블록).
-import { api, el, errorNote, relTime, toast } from './core.js';
+import { api, busy, el, errorNote, relTime, toast } from './core.js';
 import { overlayBox, skeleton } from './learn.js';
 import { hasScope } from './admin.js';
 import { applyCoverBg, openCoverPicker, openEmojiPicker } from './page-decor.js';
@@ -53,7 +53,7 @@ async function renderCategorySurface(box: HTMLElement, cat: any, ctx: any) {
   const f = ctx.f;
   const canDoc = hasScope('memory');
   const canCat = hasScope('context');
-  box.replaceChildren(el('div', { class: 'wk-plainpad' }, skeleton('카테고리를 여는 중')));
+  busy(box, el('div', { class: 'wk-plainpad' }, skeleton('카테고리를 여는 중')));
 
   // ── 데이터 — 카테고리 rows(세션 캐시 1콜) + 대문 문서(404 = 아직 사용자화 전). ──
   let rows: any[] = [];

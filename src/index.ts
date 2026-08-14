@@ -1,8 +1,10 @@
 import express from "express";
-import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { BearerVerifier } from "./auth/bearer.js";
+import { bearerWithResourceMetadata } from "./auth/http-auth.js";
+import { oauthAuthorizationServer, clientSecretGate } from "./org/auth/oauth-router.js";
+import { registerOAuthConsent } from "./org/auth/oauth-consent.js";
 import { itemsPool } from "./db/client.js";
-import { buildToolCandidates } from "./capabilities/index.js";
+import { buildToolCandidates, registry } from "./capabilities/index.js";
 import { setToolCandidates } from "./mcp/mcp-surface.js";
 import { finishConsent, abandonConsent } from "./org/credentials/oauth-broker.js";
 import { buildInstallBundle } from "./org/delivery/publish.js";
@@ -11,7 +13,7 @@ import { registerWebUi } from "./web.js";
 import { killAttachedPtys } from "./terminal/terminal-pty.js";
 import { registerProjectV6Routes } from "./project/project-routes.js";
 import { registerSessionLogRoutes } from "./sessions/session-log-routes.js";
-import { registerAuditExportRoutes } from "./audit-export-routes.js";
+import { ee } from "./enterprise/registry.js"; // #1601 감사 CSV 내보내기는 Enterprise — 미탑재면 그 라우트가 없다
 import { registerPreviewRoutes } from "./preview/routes.js";
 import { getProject as v6GetProject, listProjectMemberIds as v6ListProjectMemberIds, setProjectFolder as v6SetProjectFolder } from "./v6/project-store.js";
 import { isProjectMember as v6IsProjectMember } from "./v6/project-session-store.js";   // #1313 R21 — 멤버십 게이트는 세션 바인딩 모듈
@@ -57,7 +59,9 @@ app.use("/api/webhook", domainmapWebhookRouter());
 app.use(express.json({ limit: "1mb" }));
 
 const verifier = new BearerVerifier();
-const auth = requireBearerAuth({ verifier });
+// /mcp 의 401 은 RFC 9728 resource_metadata 를 실어 인가서버를 가리킨다(#1473 T2 — 이게 없으면 챗 클라이언트가
+//  로그인 지점을 못 찾는다). 공개 주소가 미설정이면 종전 401 그대로.
+const auth = bearerWithResourceMetadata(verifier);
 
 // liveness — '프로세스가 살아있나'. **얕은 채로 둔다.**
 //  deploy/lib/common.sh 의 wait_healthz() 가 설치·업데이트 중 이걸 60회 재시도로 폴링해 기동을 확인하는데,
@@ -88,6 +92,18 @@ app.get("/readyz", async (_req, res) => {
     res.status(503).json({ ok: false, status: "down" });
   }
 });
+
+// ── OAuth 2.1 인가서버(#1473 T2) — claude.ai 챗·ChatGPT 웹·Gemini Enterprise 를 여는 단일 열쇠. ──
+//  그 표면들의 커넥터 UI 에는 Bearer·커스텀 헤더 입력란이 아예 없어(2026-08-04 실측) OAuth 가 유일한 경로다.
+//  순서 — ① 동의 화면(/oauth/consent, 서버렌더) ② /token·/revoke 앞의 시크릿 게이트 ③ SDK 인가서버 라우터.
+//  ②가 ③보다 **반드시** 먼저여야 한다: SDK 의 클라이언트 인증은 시크릿 평문 비교라 우리 해시 저장과 맞지 않아
+//   우회시켜 두었고, 실제 검증은 이 게이트가 한다(oauth-clients.ts 머리주석 ★★). 빠지면 시크릿 검사가 사라진다.
+//  ③은 앱 **루트**에 마운트해야 한다(SDK 요구) — 자기 경로가 아니면 즉시 통과시키므로 다른 라우트엔 무영향.
+registerOAuthConsent(app);
+// (계정 갈림길 /auth/link 는 #1601 로 Enterprise 로 옮겼다 — registerWebUi 안에서 ee().sso 훅이 등록한다.
+//  동의 화면과 나란히 두던 자리였지만, SSO 신원이 있어야만 뜨는 화면이라 SSO 라우트와 함께 있는 편이 맞다.)
+app.use(["/token", "/revoke"], express.urlencoded({ extended: false }), clientSecretGate());
+app.use(oauthAuthorizationServer());
 
 // MCP 전송 계층 — /mcp POST/GET/DELETE + 요청별 서버 조립(무상태/sessioned). 본문·불변식은 boot/mcp-transport.ts.
 registerMcpTransport(app, auth);
@@ -151,8 +167,43 @@ registerProjectV6Routes(app, verifier, {
 // 세션이력 회수·수집(#905 C1) — 트랜스크립트 델타 offset-CAS append + watermark. 캡처 훅(kit)이 POST 한다.
 registerSessionLogRoutes(app, verifier);
 // 감사로그 CSV 내보내기(#1309) — 관리탭 [감사 로그] 3탭의 "CSV 다운로드". capability(res.json 일괄)로는 담을 수
-//  없는 무제한 행수를 keyset 커서로 스트리밍한다(상세·불변식은 audit-export-routes.ts 머리주석).
-registerAuditExportRoutes(app, verifier);
+//  없는 무제한 행수를 keyset 커서로 스트리밍한다(상세·불변식은 ee/audit/export-routes.ts 머리주석).
+//  ★ #1601 로 Enterprise 로 갔다 — 화면 집계(3탭)는 코어에 그대로 있고, 증빙 반출만 EE 다.
+const auditExportHooks = ee().auditExport;
+if (auditExportHooks) {
+  auditExportHooks.registerAuditExportRoutes(app, verifier);
+} else {
+  // EE 미탑재 — 라우트가 없으면 express 기본 404(HTML)가 나가고 화면엔 "요청 실패 (404)" 만 뜬다.
+  //  그러면 관리자는 필터를 바꿔가며 헤맨다. 무엇이 없어서 안 되는지 화면이 읽을 수 있게 JSON 으로 답한다
+  //  (web/lib/net.ts 의 api() 가 응답 error 를 그대로 토스트에 쓴다).
+  const eeRequired: express.RequestHandler = (_req, res) => {
+    res.status(404).json({
+      error: "감사 로그 CSV 내보내기는 Enterprise 모듈(src/ee)이 필요합니다 — 화면의 조회·집계는 그대로 쓰실 수 있습니다.",
+    });
+  };
+  app.get("/api/ui/audit-export/plan", eeRequired);
+  app.get("/api/ui/audit-export.csv", eeRequired);
+}
+
+// 자료 공개범위 정책(#1601) — capability 가 Enterprise 로 갔다(ee/capabilities/source-vis-policy.ts).
+//  미탑재면 registry 에 op 가 없어 REST 경로가 통째로 안 생기고, 관리탭 [수집 ▸ 자료 공개범위] 패널은
+//  express 기본 404 를 받아 "정책을 불러오지 못했습니다" 만 띄운다 — 기능이 EE 라서 없는 건지, 서버가
+//  고장난 건지, 권한 문제인지 구분할 수 없다. 위 감사 export 와 **같은 처리**를 여기에도 준다.
+//  ⚠ registry 조회로 조건을 건다: EE 가 있으면 capability 마운트가 이 경로를 가져가야 하므로,
+//   무조건 등록하면 스텁이 진짜 기능을 가로챈다.
+if (!registry.has("source_vis_policy_list")) {
+  const eeRequired: express.RequestHandler = (_req, res) => {
+    res.status(404).json({
+      error: "자료 공개범위 정책은 Enterprise 모듈(src/ee)이 필요합니다 — 이미 설정된 정책은 그대로 계속 적용됩니다.",
+      enterprise_required: true,
+    });
+  };
+  app.get("/api/ui/source-vis-policy", eeRequired);
+  app.get("/api/ui/source-vis-policy/targets", eeRequired);
+  app.post("/api/ui/source-vis-policy", eeRequired);
+  app.post("/api/ui/source-vis-policy/delete", eeRequired);
+  app.post("/api/ui/source-vis-policy/backfill", eeRequired);
+}
 // #1036 프리뷰 환경 — /preview/<id>/* 를 프리뷰 환경의 워크트리 public/ 로 정적 서빙(shared-proxy: /api 는 게이트웨이 자신).
 //  express.json 이후·app.listen 이전. WS 불요(정적+REST 만)라 server 핸들 불필요.
 registerPreviewRoutes(app, verifier);

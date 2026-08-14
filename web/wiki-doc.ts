@@ -5,8 +5,8 @@
 //  · 시그니처 = 민트 틱: 사람 저작만 표식(AI 무표식·미러 회색 링) — 칩 더미의 구조적 대체.
 //  · 피크: 기존 &peek= URL 계약 그대로(뒤로가기=닫힘·딥링크 복원) + ↑↓ 목록 순회 + 좁은 화면은 페이지 이동.
 //  · 드래프트(#/knowledge/new): 만들기 버튼 없음 — 제목+분류가 서면 2초 유휴 자동 생성 → #/k 로 replaceState 승격.
-//  순환 import 금지: core/learn/admin/block-editor/page-decor/wiki-data/wiki-side 만. (wiki.ts → wiki-doc.ts 단방향)
-import { absTime, api, el, errorNote, relTime, renderMarkdown, safeHref, toast } from './core.js';
+//  순환 import 금지: core/learn/admin/block-editor/page-decor/wiki-data/wiki-side/wiki-history 만. (wiki.ts → wiki-doc.ts 단방향)
+import { absTime, api, busy, el, errorNote, relTime, renderMarkdown, safeHref, toast } from './core.js';
 import { skeleton } from './learn.js';
 import { createBlockEditor } from './block-editor.js';
 import { applyCoverBg, openCoverPicker, openEmojiPicker } from './page-decor.js';
@@ -18,6 +18,7 @@ import {
 } from './wiki-data.js';
 import { KN_INDEXED, createWikiSide, knApplySideW, knSideResizeHandle, wireSideCollapse } from './wiki-side.js';
 import { wkMarkRead, wkRecordVisit, wkTick } from './wiki-ui.js';
+import { openKnHistory } from './wiki-history.js';   // #1546 변경 이력 패널(속성 줄의 '갱신 …'에서 연다)
 
 // 시딩 지식 편집 경고(#846) — 저장 응답에 seed_warning 이 오면(서버가 canonical 게이트웨이에서만 실어
 //  준다) 띄운다. 자동저장이 짧은 간격으로 반복 커밋하므로 name 당 한 번만(같은 문서 재편집은 60s 쿨다운)
@@ -39,7 +40,7 @@ function wkSeedWarn(r: any) {
 async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}) {
   const mode = opts.mode || 'page';
   container.classList.add('wk-doc', 'wk-doc-' + mode);
-  container.replaceChildren(skeleton('문서를 불러오는 중'));
+  busy(container, skeleton('문서를 불러오는 중'));
   let k: any; let hidden: string[] = [];
   let pendingRev: any = null;   // #783 이 문서에 검토 대기 중인 수정(있으면) — 응답의 형제 필드라 knowledge 만 꺼내면 유실된다.
   try {
@@ -116,7 +117,7 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
   const moreBtn = el('button', { class: 'wk-folio-btn wk-more', type: 'button', title: '문서 동작', 'aria-label': '문서 동작', text: '⋯' });
   actions.append(moreBtn);
 
-  // ── ⋯ 메뉴 — 이동 / 원문(MD) / 전폭 / 삭제 ──
+  // ── ⋯ 메뉴 — 변경 이력 / 이동 / 원문(MD) / 전폭 / 삭제 ──
   let rawOpen = false;
   moreBtn.onclick = () => {
     const old: any = document.querySelector('.wk-morepop');
@@ -130,6 +131,12 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
       b.onclick = () => { close(); fn(); };
       return b;
     };
+    // #1546 변경 이력 — **문서 동작 메뉴가 정식 진입점**이다. 속성줄의 '갱신 …' 클릭은 지름길일 뿐:
+    //  거긴 유형·분류 피커와 똑같이 생긴 회색 잔글씨라 "누르면 이력이 열린다"는 신호가 없다(실사용자 피드백).
+    //  권한 게이트 없음 — 이력 조회는 읽기다(서버가 문서 가시성으로 판정하고, 되돌리기 버튼만 편집자에게 뜬다).
+    pop.append(item('↺ 변경 이력', () => openKnHistory(k.name, {
+      canEdit: editableDoc, currentVersion: k.version, onReverted: reload,
+    })));
     if (canMeta) pop.append(item('⇥ 폴더로 이동', () => openKnowledgeMoveTo(k, reload)));
     pop.append(item(rawOpen ? '¶ 서식 보기로' : 'MD 원문 ' + (editableDoc ? '편집' : '보기'), () => toggleRaw()));
     const fullOn = !!(k.props_ui && k.props_ui.full_width);
@@ -256,7 +263,18 @@ async function buildWikiDoc(container: HTMLElement, name: string, opts: any = {}
     if (k.lifecycle === 'archived') parts.push(proplineItem('📦 보관됨', { cls: 'dim' }));
     // #783 승인 전 지식 — 검색·주입에서 빠져 있다는 사실이 문서 자체에서 보여야 한다.
     if (k.lifecycle === 'pending') parts.push(proplineItem('🔎 검토 대기', { cls: 'warn', title: '승인 전까지 검색·세션주입·목록에 노출되지 않습니다' }));
-    if (k.updated_at) parts.push(proplineItem('갱신 ' + relTime(k.updated_at), { cls: 'time', title: absTime(k.updated_at) + (k.updated_by ? ' · ' + k.updated_by : '') }));
+    // #1546 갱신 시각 = 변경 이력 진입점. 이 문서가 '언제 바뀌었나'를 이미 말하고 있는 자리라, 누르면
+    //  '무엇이 바뀌었나'로 이어지는 게 자연스럽다(별도 버튼을 속성 줄에 하나 더 늘리지 않는다).
+    if (k.updated_at) {
+      parts.push(proplineItem('갱신 ' + relTime(k.updated_at), {
+        cls: 'time',
+        title: absTime(k.updated_at) + (k.updated_by ? ' · ' + k.updated_by : '') + ' — 클릭해서 변경 이력 보기',
+        click: () => openKnHistory(k.name, {
+          canEdit: editableDoc, currentVersion: k.version,
+          onReverted: reload,   // 되돌리면 본문이 바뀌었으니 문서를 다시 그린다
+        }),
+      }));
+    }
     parts.push(proplineItem('속성 모두', { cls: 'all', title: '모든 속성 보기·노출 설정', click: (a) => openProplinePopover(a) }));
     propline.replaceChildren(...parts);
   }

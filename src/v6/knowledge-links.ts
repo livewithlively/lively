@@ -180,7 +180,7 @@ export async function linkKnowledgeSource(name: string, sourceId: number, relati
   // 증류물은 원본의 공개범위를 물려받는다(#1291 v4) — 'cites'(단순 참조)는 제외한다: 인용했다는 이유로
   //  참조한 쪽까지 잠그면 공개 지식이 링크 하나로 잠기는 사고가 난다. 파생(derived_from)만 내용이 흘러든다.
   if (relation !== "derived_from") return null;
-  const inherited = await inheritSourceVisibility(name, sourceId)
+  const inherited = await inheritSourceVisibility(name, sourceId, ctx)
     .catch((e) => { logger.warn({ name, sourceId, err: (e as Error)?.message }, "[source-vis] 상속 실패"); return null; });
   return inherited;
 }

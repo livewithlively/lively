@@ -12,7 +12,9 @@
 import crypto from "node:crypto";
 import { itemsPool } from "../../db/client.js";
 import { mintToken, getMember } from "../store.js";
-import { DANGEROUS_SCOPES, isScope, type Scope } from "../../auth/scopes.js";
+import { isScope } from "../../auth/scopes.js";
+// 해시·PKCE·scope 교집합은 OAuth 인가서버(#1473 T2)와 **공유**한다 — 같은 보안 계약을 두 벌로 두지 않는다.
+import { sha256Hex as sha256, s256, grantableScopes } from "./grant-util.js";
 import { HttpError } from "../../http-error.js";
 
 const EXPIRES_IN = 900;   // device_code TTL(초). RFC 권장 900~1800.
@@ -21,10 +23,6 @@ const INTERVAL = 5;       // 폴 최소 간격(초). slow_down 판정 기준.
 const UC_ALPHABET = "ABCDEFGHJKMNPQRSTVWX";
 const START_RETRY = 6;    // user_code 충돌(23505) 재생성 상한.
 const LABEL_MAX = 40;
-
-const sha256 = (s: string): string => crypto.createHash("sha256").update(s).digest("hex");
-// PKCE S256: base64url(sha256(verifier)). CLI 도 동일 계산해 code_challenge 로 보낸다.
-const s256 = (verifier: string): string => crypto.createHash("sha256").update(verifier).digest("base64url");
 
 function genUserCode(): string {
   const buf = crypto.randomBytes(8);
@@ -138,9 +136,8 @@ export async function pollDeviceAuth(deviceCode: string, codeVerifier: string): 
       await client.query("COMMIT");                      // 행은 consumed 로 소진(재시도 무의미)
       return { ok: false, error: "access_denied" };
     }
-    const live: string[] = Array.isArray(mem.scopes) ? mem.scopes.filter(isScope) : [];
-    const approver = new Set(Array.isArray(c.approver_scopes) ? (c.approver_scopes as unknown[]).filter((x): x is string => typeof x === "string") : []);
-    const scopes = live.filter((s) => approver.has(s) && (c.include_control_plane || !DANGEROUS_SCOPES.has(s as Scope)));
+    const approver = Array.isArray(c.approver_scopes) ? (c.approver_scopes as unknown[]).filter((x): x is string => typeof x === "string") : [];
+    const scopes = grantableScopes({ memberScopes: mem.scopes, allowed: approver, allowDangerous: c.include_control_plane });
     const { token } = await mintToken(
       { userId: c.member_id, scopes, label: "device-cli", memberId: c.member_id },
       c.member_id, "device-login", client,

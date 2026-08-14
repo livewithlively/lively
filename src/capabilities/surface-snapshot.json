@@ -696,6 +696,36 @@
   "input_hash": "bba13b8183929248"
  },
  {
+  "name": "org_oauth_clients",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/oauth/clients"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_oauth_client_upsert",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/oauth/client"
+  ],
+  "input_hash": "f2145467c07a5e7b"
+ },
+ {
+  "name": "org_oauth_client_disable",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/oauth/client/disable"
+  ],
+  "input_hash": "47ca2cca834a048c"
+ },
+ {
   "name": "org_runtime_config",
   "scope": null,
   "mcp": true,
@@ -713,7 +743,7 @@
   "rest": [
    "POST /api/ui/org/runtime-config"
   ],
-  "input_hash": "4d45ee728b83642d"
+  "input_hash": "10e81ea1942482e3"
  },
  {
   "name": "org_alert_status",
@@ -1268,6 +1298,26 @@
   "input_hash": "6c9f16e97bc4049d"
  },
  {
+  "name": "me_liv_home",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/liv"
+  ],
+  "input_hash": "73fb9f301b2596ea"
+ },
+ {
+  "name": "me_liv_profile_set",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/liv-profile"
+  ],
+  "input_hash": "28ae905489e3aa6c"
+ },
+ {
   "name": "org_connector_members",
   "scope": "admin",
   "mcp": true,
@@ -1296,7 +1346,7 @@
   "rest": [
    "POST /api/ui/org/hook"
   ],
-  "input_hash": "f2a46f63144984ec"
+  "input_hash": "d25993d565867490"
  },
  {
   "name": "org_hook_remove",
@@ -1359,6 +1409,26 @@
   "input_hash": "01ca33da965f9838"
  },
  {
+  "name": "org_http_tool_presets",
+  "scope": "runtime",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/http-tool-presets"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_http_tool_preset_apply",
+  "scope": "runtime",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/http-tool-presets/apply"
+  ],
+  "input_hash": "2dcad916c979d382"
+ },
+ {
   "name": "org_tool_remove",
   "scope": "runtime",
   "mcp": true,
@@ -1367,6 +1437,36 @@
    "POST /api/ui/org/tool/remove"
   ],
   "input_hash": "28bad6be76e14faa"
+ },
+ {
+  "name": "org_canary_status",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/canary"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_canary_run",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/canary/run"
+  ],
+  "input_hash": "4e46462cece225b5"
+ },
+ {
+  "name": "org_canary_probes",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/canary/probes"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
  },
  {
   "name": "org_harness_assets",
@@ -1386,7 +1486,7 @@
   "rest": [
    "POST /api/ui/org/harness-asset"
   ],
-  "input_hash": "249bcfb54fd37a9e"
+  "input_hash": "a96bbcc213915060"
  },
  {
   "name": "org_harness_asset_remove",
@@ -1936,7 +2036,7 @@
   "rest": [
    "POST /api/ui/knowledge"
   ],
-  "input_hash": "c3e2bafdd801a367"
+  "input_hash": "0e11f6d12b703437"
  },
  {
   "name": "knowledge_set_lifecycle",
@@ -2037,6 +2137,36 @@
    "POST /api/ui/knowledge/:name/comments"
   ],
   "input_hash": "bf879c6a35eec07e"
+ },
+ {
+  "name": "knowledge_history",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/knowledge/:name/history"
+  ],
+  "input_hash": "fefa2e89250fd254"
+ },
+ {
+  "name": "knowledge_history_entry",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/knowledge/:name/history/:audit_id"
+  ],
+  "input_hash": "217cd104bc6cbcd3"
+ },
+ {
+  "name": "knowledge_revert",
+  "scope": "memory",
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/knowledge/:name/revert"
+  ],
+  "input_hash": "863f3c61797107fc"
  },
  {
   "name": "knowledge_move",
@@ -2897,56 +3027,6 @@
   "input_hash": "6cf966c863571d19"
  },
  {
-  "name": "source_vis_policy_list",
-  "scope": "admin",
-  "mcp": true,
-  "mutates": false,
-  "rest": [
-   "GET /api/ui/source-vis-policy"
-  ],
-  "input_hash": "6c9f16e97bc4049d"
- },
- {
-  "name": "source_vis_policy_targets",
-  "scope": "admin",
-  "mcp": true,
-  "mutates": false,
-  "rest": [
-   "GET /api/ui/source-vis-policy/targets"
-  ],
-  "input_hash": "6c9f16e97bc4049d"
- },
- {
-  "name": "source_vis_policy_set",
-  "scope": "admin",
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/source-vis-policy"
-  ],
-  "input_hash": "25a8d520f092b10d"
- },
- {
-  "name": "source_vis_policy_delete",
-  "scope": "admin",
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/source-vis-policy/delete"
-  ],
-  "input_hash": "4dc36ab67eecb455"
- },
- {
-  "name": "source_vis_policy_backfill",
-  "scope": "admin",
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/source-vis-policy/backfill"
-  ],
-  "input_hash": "a3ca2db962674078"
- },
- {
   "name": "vis_axis_list",
   "scope": "admin",
   "mcp": true,
@@ -2965,36 +3045,6 @@
    "POST /api/ui/vis/axes"
   ],
   "input_hash": "1ad1ce61e6e6e384"
- },
- {
-  "name": "vis_break_glass_start",
-  "scope": "admin",
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/vis/break-glass"
-  ],
-  "input_hash": "8a0e49aa8e26aac4"
- },
- {
-  "name": "vis_break_glass_end",
-  "scope": "admin",
-  "mcp": true,
-  "mutates": true,
-  "rest": [
-   "POST /api/ui/vis/break-glass/end"
-  ],
-  "input_hash": "fee9bce64a33c0f5"
- },
- {
-  "name": "vis_break_glass_list",
-  "scope": "admin",
-  "mcp": true,
-  "mutates": false,
-  "rest": [
-   "GET /api/ui/vis/break-glass"
-  ],
-  "input_hash": "2d8947daaba55c08"
  },
  {
   "name": "content_undo",
@@ -3315,6 +3365,16 @@
    "GET /api/ui/tool-usage"
   ],
   "input_hash": "1849d1b4b11d0a84"
+ },
+ {
+  "name": "my_lively_log",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/lively-log"
+  ],
+  "input_hash": "2885f301ee470e74"
  },
  {
   "name": "recall_route",

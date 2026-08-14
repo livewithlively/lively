@@ -10,7 +10,7 @@
 //   확정   = { category_id: 제안값,  state: 'confirmed' }
 //   재분류 = { category_id: 다른값,  state: 'confirmed' }
 //   반려   = { category_id: 제안값,  unlink: true }        (연결을 지워 미분류 인박스로 되돌림)
-import { api, cardHead, el, errorNote, relTime, toast } from './core.js';
+import { api, busy, cardHead, el, errorNote, relTime, toast } from './core.js';
 import { skeleton } from './learn.js';
 import { KN_TYPE_LABEL, SPACE_LABEL } from './wiki-data.js';
 import { rqEnsureStyles } from './review.js';   // .rq-*(행·칩·일괄바·빈상태) 재사용 — 검토 큐와 한 몸으로 보이게
@@ -69,7 +69,7 @@ export async function renderClassificationReview(view: HTMLElement): Promise<voi
 
 async function classificationPanel(detail: HTMLElement): Promise<void> {
   clsEnsureStyles(); rqEnsureStyles();
-  detail.replaceChildren(el('div', { class: 'card' }, skeleton('제안된 분류를 불러오는 중')));
+  busy(detail, el('div', { class: 'card' }, skeleton('제안된 분류를 불러오는 중')));
 
   let entries: any[] = [];
   try {

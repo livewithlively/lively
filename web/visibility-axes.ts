@@ -6,12 +6,12 @@
 //  ⚠ 이 화면의 핵심은 토글이 아니라 **끄기 확인**이다. 잠긴 항목이 있는 축을 끄면 지금까지 일부만 보던 내용이
 //   그 순간 전원에게 열린다. 그래서 무엇이 몇 건 공개되는지 이름까지 보여주고 나서 받는다. 서버도 같은 규칙을
 //   강제한다(confirm 없으면 400) — 화면은 실수를 줄이고, 경계는 서버가 지킨다.
-import { api, el, errorNote, toast } from './core.js';
+import { api, busy, el, errorNote, toast } from './core.js';
 import { overlayBox, skeleton } from './learn.js';
 
 export async function visibilityAxesPanel(detail): Promise<void> {
   const reload = () => visibilityAxesPanel(detail);
-  detail.replaceChildren(el('div', { class: 'card' }, skeleton('맥락 공개범위 설정을 불러오는 중')));
+  busy(detail, el('div', { class: 'card' }, skeleton('맥락 공개범위 설정을 불러오는 중')));
 
   let axes: any[];
   try { axes = (await api('/api/ui/vis/axes')).axes || []; }

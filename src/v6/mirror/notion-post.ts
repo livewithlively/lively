@@ -1,6 +1,7 @@
 // 노션 후처리(#551/#586) — run-sync 가 적재 뒤 호출하는 set 기반 수렴 연산 + 델타 증분 원장 로더.
 //  #1313 R20 으로 connector-mirror.ts 에서 verbatim 이관(connector-mirror.js 배럴이 그대로 재수출).
 import type pg from "pg";
+import { auditLifecycleSweep } from "./mirror-common.js";
 
 // ════════ #551 노션 무손실 싱크 — run-sync 후처리(set 기반, 멱등) ════════
 //  적재(ingestItems) 뒤에 run-sync 가 호출한다. 전부 SQL set 연산이라 재실행·부분실행 안전(수렴형).
@@ -59,13 +60,18 @@ export async function applyNotionChildrenOrder(db: PgRunner): Promise<number> {
 
 /** full 싱크 스윕 — 이번 run(runStartIso 이후)에 관측되지 않은 notion 미러를 archived 로(원본 삭제/공유해제 전파).
  *  ⚠ 호출 조건: full 모드 + 커넥터 실패 0(부분 실패 run 에서 스윕하면 살아있는 페이지가 오탐 아카이브됨). */
+//  #1561 감사: 아카이브된 행마다 op='set_lifecycle' 을 남긴다 — 여기서 안 남기면 '언제·왜 이 문서가
+//   아카이브됐나'가 문서 이력 어디에도 없다(실측: 이 경로로 511건이 흔적 없이 아카이브돼 있었다).
 export async function sweepNotionArchived(db: PgRunner, runStartIso: string): Promise<number> {
   const r = await db.query(
     `UPDATE knowledge SET lifecycle='archived', updated_at=now(), updated_by='connector:notion'
      WHERE external_system='notion' AND lifecycle='active'
-       AND (last_synced_at IS NULL OR last_synced_at < $1::timestamptz)`,
+       AND (last_synced_at IS NULL OR last_synced_at < $1::timestamptz)
+     RETURNING name`,
     [runStartIso],
   );
+  await auditLifecycleSweep(db, (r.rows as Array<{ name: string }>).map((x) => x.name),
+    "connector:notion", "active", "archived");
   return r.rowCount ?? 0;
 }
 

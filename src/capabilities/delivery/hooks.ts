@@ -10,10 +10,13 @@ import {
   getRuntimeConfig, listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook, recordHookFailures, type HookHarness
 } from "../../org/store.js";
 import { previewHooks } from "../../org/delivery/hooks-preview.js";
-import { HOOK_HARNESSES, parseTargetMembers, restRead, restRuntime, str, wctx } from "./shared.js";
+import { HOOK_HARNESSES, HOOK_HARNESSES_MSG, parseTargetMembers, restRead, restRuntime, str, wctx } from "./shared.js";
 
 // 커스텀 훅(org_hook)이 붙을 수 있는 이벤트 — DB 제약(org_hook_event_chk)·run-custom 배선(runnerHooksBlock)과 일치 유지.
-//  Claude 31개 이벤트 중 저빈도·유용한 라이프사이클만 노출(MessageDisplay 등 상시발화는 perf 위해 제외). Codex 는 SessionStart/PostToolUse/Stop 만 지원.
+//  Claude 31개 이벤트 중 저빈도·유용한 라이프사이클만 노출(MessageDisplay 등 상시발화는 perf 위해 제외).
+//  Codex(0.142.0 실측)는 이 중 **SessionEnd·Notification 을 뺀 8개**를 지원하고 러너도 그 8개에 배선된다
+//  (kit/setup/user-install.mjs CODEX_RUNNER_EVENTS). 반대로 Codex 고유 이벤트 PermissionRequest·SubagentStart 는
+//  아직 이 목록에 없어 조직 훅으로 등록할 수 없다 — 필요해지면 여기와 DB 제약(org_hook_event_chk)을 함께 넓힌다.
 const HOOK_EVENTS = new Set(["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "Notification", "PreCompact", "PostCompact"]);
 
 // 커스텀 훅 source_code 해소 — target_members 와 같은 '미지정=보존' 규약(#970).
@@ -59,7 +62,7 @@ export const hooksCapabilities: Capability[] = [
       //  (`?? before`)가 못 걸리게 항상 구체값('all'·10)을 넘겨, 부분수정이 이 필드를 기본값으로 되돌렸다.
       //  '미지정=보존'으로 통일(enabled·sort·target_members 와 동형). 신규 훅은 store 가 기본값으로 채운다.
       const harness = input.harness === undefined ? undefined : str(input.harness, "harness", 12);
-      if (harness !== undefined && !HOOK_HARNESSES.has(harness)) throw new HttpError(400, "harness 는 claude|codex|openclaw|all");
+      if (harness !== undefined && !HOOK_HARNESSES.has(harness)) throw new HttpError(400, HOOK_HARNESSES_MSG);
       const sourceCode = resolveHookSource(input.source_code); // #970: 생략=보존(undefined→store 위임), "" 만 지움
       const matcher = resolveHookMatcher(input.matcher); // #970: 생략=보존 / null·""=전체매칭 / 문자열=패턴
       const timeout = input.timeout_sec === undefined ? undefined : Number(input.timeout_sec);
@@ -82,9 +85,9 @@ export const hooksCapabilities: Capability[] = [
       id: z.string().describe("훅 id(슬러그) — 있으면 수정, 없으면 생성"),
       event: z.enum(["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SubagentStop", "Notification", "PreCompact", "PostCompact"])
         .optional()
-        .describe("발화 라이프사이클 이벤트. Codex 는 SessionStart/PostToolUse/Stop 만 지원. 미전송=기존 유지(#970, 신규 훅은 필수)"),
+        .describe("발화 라이프사이클 이벤트. Codex 는 SessionEnd·Notification 을 제외한 8개 지원(0.142 실측). 미전송=기존 유지(#970, 신규 훅은 필수)"),
       source_code: z.string().optional().describe("훅 본문(멤버 디스크에 굳히지 않고 런너가 매 세션 fetch). 평문 시크릿은 hard-block. 미전송=기존 유지, 빈 문자열=지움(#970)"),
-      harness: z.enum(["claude", "codex", "openclaw", "all"]).optional().describe("대상 하네스(기본 all). 미전송=기존 유지(#970)"),
+      harness: z.enum(["claude", "codex", "openclaw", "opencode", "antigravity", "grok", "all"]).optional().describe("대상 하네스(기본 all). 미전송=기존 유지(#970)"),
       matcher: z.string().nullable().optional().describe("PreToolUse/PostToolUse 등에서 대상 툴 매칭 패턴. null/빈값=전체매칭, 미전송=기존 유지(#970)"),
       timeout_sec: z.number().int().min(1).max(120).optional().describe("실행 타임아웃 초(1~120, 기본 10)"),
       target_members: z.array(z.string()).nullable().optional().describe("이 훅을 받을 멤버 id 배열. null/빈=전원, 미전송=기존 유지(#699)"),

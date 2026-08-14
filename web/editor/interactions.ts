@@ -3,6 +3,7 @@
 import { el, renderInline } from '../core.js';
 import { TEXTY } from './model.js';
 import { mdToBlocks } from './parse.js';
+import { blocksToMd } from './serialize.js';   // 크로스 블록 선택 복사/잘라내기 — 선택 블록을 마크다운으로
 import { caretRange, insertText, placeCaret } from './caret.js';
 import type { EditorCtx } from './context.js';
 
@@ -106,8 +107,14 @@ export function createInteractions(ctx: EditorCtx) {
       }
       rest = parsed.slice(1);
     }
+    const wasEmpty = !((textElOf(block) || { textContent: '' }).textContent || '').trim();
+    const inlineJoined = rest !== parsed;   // 첫 블록을 캐럿에 이어 붙였나
     let anchor: HTMLElement = block;
     for (const d of rest) anchor = insertBlockAfter(anchor, d);
+    //  캐럿이 있던 블록이 비어 있었고 거기에 이어붙이지도 않았다면(첫 파싱 블록이 제목·목록 등) 그 빈 문단은
+    //  붙여넣은 내용 **앞에 남는 빈 줄**이 된다 → 지운다. (예: '# 제목…' 붙여넣기가 ["p","h",…] 로 되던 문제)
+    if (rest.length && wasEmpty && !inlineJoined && block.dataset.type === 'p') block.remove();
+    normalizeStructure();
     renumber();
     markDirty();
     if (rest.length) focusBlock(anchor, false);
@@ -208,7 +215,10 @@ export function createInteractions(ctx: EditorCtx) {
     const r = target.getBoundingClientRect();
     // 좌/우 엣지 = 컬럼 생성 힌트 — 루트 직계 + 양쪽 다 컬럼 아님일 때만.
     const EDGE = Math.min(72, Math.max(28, r.width * 0.16));
-    const canCol = target.parentElement === root && target.dataset.type !== 'columns' && dragging.dataset.type !== 'columns';
+    //  이미 컬럼 안에 있는 블록의 좌/우 엣지도 허용한다 — 그래야 2열을 3열로 늘릴 수 있다(예전엔 루트 직계만
+    //  받아 열을 더 만들 방법이 아예 없었다). 컬럼 컨테이너 자체를 끌어 넣는 것(중첩 컬럼)은 여전히 막는다.
+    const inCol = !!(target.parentElement && target.parentElement.classList.contains('be-col'));
+    const canCol = (target.parentElement === root || inCol) && target.dataset.type !== 'columns' && dragging.dataset.type !== 'columns';
     if (canCol && e.clientX < r.left + EDGE) { target.classList.add('be-drop-left'); return; }
     if (canCol && e.clientX > r.right - EDGE) { target.classList.add('be-drop-right'); return; }
     target.classList.add(e.clientY < r.top + r.height / 2 ? 'be-drop-above' : 'be-drop-below');
@@ -219,13 +229,22 @@ export function createInteractions(ctx: EditorCtx) {
     const t = root.querySelector('.' + DROP_CLASSES.join(', .')) as HTMLElement;
     if (t && t !== dragging) {
       if (t.classList.contains('be-drop-left') || t.classList.contains('be-drop-right')) {
-        // 컬럼 생성 — 새 컨테이너에 [드래그, 타깃](왼쪽 드롭) 또는 [타깃, 드래그] 순으로 실 DOM 이동.
         const left = t.classList.contains('be-drop-left');
-        const shell = makeBlock({ type: 'columns', cols: [[], []], __shell: true });
-        t.before(shell);
-        const cols = shell.querySelectorAll(':scope > .be-main > .be-cols > .be-col');
-        cols[0].append(left ? dragging : t);
-        cols[1].append(left ? t : dragging);
+        const hostCol = t.parentElement && t.parentElement.classList.contains('be-col') ? t.parentElement : null;
+        if (hostCol) {
+          // 이미 컬럼 안 — 그 열 옆에 **새 열을 끼워** 열 수를 늘린다(2열 → 3열).
+          const colsWrap = hostCol.parentElement!;
+          const newCol = el('div', { class: 'be-col' });
+          colsWrap.insertBefore(newCol, left ? hostCol : hostCol.nextSibling);
+          newCol.append(dragging);
+        } else {
+          // 컬럼 생성 — 새 컨테이너에 [드래그, 타깃](왼쪽 드롭) 또는 [타깃, 드래그] 순으로 실 DOM 이동.
+          const shell = makeBlock({ type: 'columns', cols: [[], []], __shell: true });
+          t.before(shell);
+          const cols = shell.querySelectorAll(':scope > .be-main > .be-cols > .be-col');
+          cols[0].append(left ? dragging : t);
+          cols[1].append(left ? t : dragging);
+        }
       } else if (t.classList.contains('be-drop-above')) {
         t.before(dragging);
       } else {
@@ -242,4 +261,104 @@ export function createInteractions(ctx: EditorCtx) {
     clearDrop();
     setTimeout(() => { justDragged = false; }, 50);   // 드래그 직후 handle click 오발 방지
   });
+
+  // ════════ 크로스 블록 선택 ════════
+  //  블록마다 contenteditable 이 따로라(render.ts 의 .be-text) 브라우저 Selection 은 **한 편집 호스트 안에서만**
+  //  range 를 만든다 → 경계를 넘는 드래그가 원천적으로 안 되고 ⌘A 도 커서가 있는 블록 하나만 잡힌다.
+  //  그래서 경계를 넘는 순간 우리가 넘겨받아 '블록 범위 선택'을 직접 그린다(노션과 같은 방식).
+  //  keys.ts 가 이 범위를 보고 삭제·대체·복사를 처리한다(ctx.bsel* — context.ts 참조).
+  let bselAnchor: HTMLElement | null = null;
+  let bsel: HTMLElement[] = [];
+  let bDragging = false;
+
+  const bselActive = () => bsel.length > 0;
+  const bselEdge = (last: boolean) => (bsel.length ? bsel[last ? bsel.length - 1 : 0] : null);
+  function bselClear() {
+    if (!bsel.length) return;
+    for (const b of bsel) b.classList.remove('be-bsel');
+    bsel = [];
+    root.classList.remove('be-bselecting');
+  }
+  //  두 끝이 서로 다른 컨테이너(컬럼·토글) 안이면 공통 부모 레벨까지 각각 승격한다 —
+  //  blockEls()(루트 직계)만 보면 컬럼 안 블록은 인덱스가 -1 이라 선택이 통째로 죽었다(실측).
+  const chainUp = (n: HTMLElement) => { const c: HTMLElement[] = []; let x: any = n; while (x && x !== root) { if (x.classList && x.classList.contains('be-block')) c.push(x); x = x.parentElement; } return c; };
+  function liftToCommon(a: HTMLElement, b: HTMLElement): [HTMLElement, HTMLElement] | null {
+    if (a.parentElement === b.parentElement) return [a, b];
+    for (const x of chainUp(a)) for (const y of chainUp(b)) if (x.parentElement === y.parentElement) return [x, y];
+    return null;
+  }
+  const siblingBlocks = (n: HTMLElement) => Array.from(n.parentElement!.children).filter((c: any) => c.classList && c.classList.contains('be-block')) as HTMLElement[];
+  function bselSet(a0: HTMLElement, b0: HTMLElement) {
+    const lifted = liftToCommon(a0, b0);
+    if (!lifted) return;
+    const [a, b] = lifted;
+    const all = siblingBlocks(a);
+    let i = all.indexOf(a), j = all.indexOf(b);
+    if (i < 0 || j < 0) return;
+    if (i > j) { const t = i; i = j; j = t; }
+    const next = all.slice(i, j + 1);
+    // 한 블록 안에 머무는 드래그는 브라우저 기본(문자 단위)이 낫다 — 우리 하이라이트를 걷는다.
+    if (next.length < 2) { bselClear(); return; }
+    for (const x of bsel) if (next.indexOf(x) < 0) x.classList.remove('be-bsel');
+    for (const x of next) x.classList.add('be-bsel');
+    bsel = next;
+    root.classList.add('be-bselecting');
+    const s = window.getSelection(); if (s) s.removeAllRanges();   // 두 겹 하이라이트 방지
+  }
+  function bselAll(): boolean {
+    const all = ctx.blockEls();          // ⌘A 2차는 문서 전체 = 루트 직계 전부
+    if (all.length < 2) return false;
+    bselSet(all[0], all[all.length - 1]);
+    return true;
+  }
+  //  선택 블록을 지우고 그 자리에 빈 문단 하나를 남긴다(그리로 포커스) — 삭제·문자 대체·잘라내기 공통 경로.
+  //  snapNow 로 한 스텝을 확정하므로 ⌘Z 로 통째로 되돌아온다.
+  function bselDelete(): HTMLElement | null {
+    if (!bsel.length) return null;
+    ctx.snapNow();
+    const nb = ctx.makeBlock({ type: 'p', text: '' });
+    bsel[0].before(nb);
+    for (const b of bsel) b.remove();
+    bselClear();
+    ctx.ensureOne(); ctx.renumber(); markDirty();
+    ctx.focusBlock(nb, true);
+    return nb;
+  }
+  const bselMd = () => blocksToMd(bsel.map((b) => ctx.blockData(b)));
+
+  root.addEventListener('mousedown', (e: any) => {
+    if (e.button !== 0) return;
+    bselClear();
+    // 거터(＋·⋮⋮ 손잡이)에서 시작한 드래그는 **블록 이동**(HTML5 drag)의 몫이다 — 범위 선택으로 가로채지 않는다.
+    if (e.target && e.target.closest && e.target.closest('.be-gutter')) { bselAnchor = null; bDragging = false; return; }
+    bselAnchor = blockOf(e.target);
+    bDragging = !!bselAnchor;
+  });
+  document.addEventListener('mousemove', (e: any) => {
+    if (!bDragging || !bselAnchor) return;
+    const over = blockOf(document.elementFromPoint(e.clientX, e.clientY));
+    if (!over) return;                     // 에디터 밖으로 나간 동안은 직전 범위를 유지
+    bselSet(bselAnchor, over);             // 같은 블록으로 돌아오면 bselSet 이 알아서 걷는다
+  });
+  document.addEventListener('mouseup', () => { bDragging = false; });
+  //  HTML5 드래그가 시작되면 mouseup 이 오지 않는다 → 여기서 끊지 않으면 이후 '마우스만 움직여도 선택'이 된다.
+  root.addEventListener('dragstart', () => { bDragging = false; bselAnchor = null; bselClear(); }, true);
+  //  블록 이동/컬럼 생성 **직전** 상태를 한 스텝으로 확정한다 — 없으면 드롭 뒤 ⌘Z 가 되돌릴 지점이 없어
+  //  컬럼이 그대로 남는다(실측). markDirty 의 사후 스냅만으론 '이전'이 안 담긴다.
+  root.addEventListener('dragstart', () => { ctx.histFlushTyping(); ctx.snapNow(); });
+
+  //  복사·잘라내기는 선택 블록을 마크다운으로 — 붙여넣기(위 paste)가 그대로 되받아 블록으로 복원한다.
+  root.addEventListener('copy', (e: any) => {
+    if (!bselActive() || !e.clipboardData) return;
+    e.preventDefault();
+    e.clipboardData.setData('text/plain', bselMd());
+  });
+  root.addEventListener('cut', (e: any) => {
+    if (!bselActive() || !e.clipboardData) return;
+    e.preventDefault();
+    e.clipboardData.setData('text/plain', bselMd());
+    bselDelete();
+  });
+
+  return { bselActive, bselAll, bselClear, bselDelete, bselEdge };
 }

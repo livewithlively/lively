@@ -8,6 +8,7 @@ import type { LivelyUser } from "../../context.js";
 import {
   upsertKnowledge, setKnowledgeLifecycle, getKnowledgeLifecycle, setKnowledgeWiki, deleteKnowledge,
   findSimilarKnowledge, moveKnowledge, appendBody, isDuplicateAppend, stampSessionVisibility, slugify,
+  applyKnowledgeEdits, type KnowledgeEdit,
   setKnowledgeTitle,
 } from "../../v6/knowledge-store.js";
 // #783 인입 허용선 게이트 — 에이전트(MCP) 저작 지식의 자동 검토대기 + 기존 지식 수정 검토 큐.
@@ -34,8 +35,10 @@ const knowledgeSaveInput = {
   //  임베딩은 별도로 8,000자 절단(embeddingInputText), grep 은 응답에서 body_md 제외, get 은 부분읽기 — 이 값에 의존하는 하류 없음.
   //  min(1)은 zod 에선 완화(#592: 폴더는 빈 본문 허용) — is_folder=false 의 min 1 은 handler 가 강제(기존 계약 불변).
   //  #921: mode='append' 면 이 값의 의미가 '전문'에서 '조각'으로 바뀐다 → describe 로 스키마에 명시(설명문만 믿게 두지 않는다).
-  body_md: z.string().max(BODY_MD_MAX)
-    .describe("본문 전문. **mode='append' 일 때만 의미가 다르다 — 전문이 아니라 기존 본문 끝에 덧붙일 '조각'**(그때 전문을 보내면 문서가 통째로 중복된다)."),
+  // #1531 optional 로 완화 — mode='edit' 는 본문을 **보내지 않는다**(서버가 edits 로 만든다). 그 외 모드의
+  //  누락은 핸들러가 잡는다(zod 로 필수를 강제하면 edit 호출이 스키마 단계에서 튕겨 도달조차 못 한다).
+  body_md: z.string().max(BODY_MD_MAX).optional()
+    .describe("본문 전문(mode 미지정·replace 필수). **mode='append' 면 전문이 아니라 기존 본문 끝에 덧붙일 '조각'** · **mode='edit' 면 보내지 않는다**(edits 로 지정)."),
   provenance: z.enum(["authored", "observed"]).optional(),
   lifecycle: z.enum(["active", "pending"]).optional()
     .describe("#638 자동 인입(distill 등)이 검토대기로 저장할 때 pending — 기본 목록·검색·주입에서 격리(승인=set_lifecycle active). 미지정=active(사람 저작 기본). superseded/archived 는 set_lifecycle 로만."),
@@ -48,8 +51,15 @@ const knowledgeSaveInput = {
     .describe("#592 폴더 노드 — true 면 트리 그룹핑용 폴더(title 필수, body_md 빈 문자열 허용). 미전송 시 기존값 보존."),
   parent_name: z.string().min(1).optional()
     .describe(`#592 트리 위치 — 부모 지식/폴더 name(생성 시 배치). 이동은 knowledge_move. 미전송 시 기존값 보존. ${softCapHint(CAPS.parent_name)}`),
-  mode: z.enum(["replace", "append"]).optional()
-    .describe("#921 replace(기본)=body_md 로 전문 교체(종전 동작) · append=body_md('조각')를 기존 본문 끝에 덧붙임(구분 빈 줄은 서버가 정규화). append 는 기존 지식 전용(name 필수)."),
+  mode: z.enum(["replace", "append", "edit"]).optional()
+    .describe("#921/#1531 replace(기본)=body_md 로 전문 교체(종전 동작) · append=body_md('조각')를 기존 본문 끝에 덧붙임(구분 빈 줄은 서버가 정규화) · edit=edits 로 본문 **일부만** 정확일치 치환(문서 중간을 고칠 때). append·edit 는 기존 지식 전용(name 필수)."),
+  // #1531 edit — 문서 중간을 고치면서 전문을 되보내지 않는 유일한 길. append 는 끝에만 붙는다.
+  edits: z.array(z.object({
+    old: z.string().min(1).describe("바꿀 기존 텍스트 — 공백·줄바꿈까지 원문 그대로. 본문에 정확히 한 번 있어야 한다."),
+    new: z.string().describe("그 자리에 넣을 텍스트. 빈 문자열이면 삭제."),
+    replace_all: z.boolean().optional().describe("같은 텍스트가 여러 곳에 있고 전부 바꿔야 할 때만 true."),
+  })).optional()
+    .describe("mode='edit' 전용. 순차 적용되며, old 를 못 찾거나 여러 곳에서 찾으면 **저장 자체가 실패한다**(조용히 넘어가지 않는다)."),
   change_note: z.string().optional()
     .describe("#968 변경 요약 — **기존 지식을 고칠 땐 무엇을·왜 바꾸는지 1~2문장으로 함께 보내라**(예: \"재시작 완료 기준을 healthz 200 으로 명확화. 계기 — 7/15 장애 때 절차 부재\"). 검토 카드와 변화 기록에 이 문장이 그대로 표시된다 — 없으면 사람이 diff 만 보고 판단해야 한다. "
       + softCapHint(CAPS.change_note)),
@@ -71,6 +81,9 @@ export const knowledgeSave: Capability = {
     "**append 모드(#921): 기존 문서에 내용을 보탤 땐 mode='append' 를 써라** — 이때 body_md 는 전문이 아니라 **덧붙일 조각**이고, 서버가 기존 본문 끝에 빈 줄로 잇는다. " +
     "전문을 읽어와(knowledge_get) 재조립해 통째로 되보내지 마라 — 원문이 그대로 보존되고(네가 재출력하며 생기는 요약·드리프트·누락이 없다) 전문이 컨텍스트를 오갈 일도 없다. " +
     "기존 지식 전용(name 필수 · 신규는 mode 없이 만들고 · 외부 미러(observed)엔 불가), 응답엔 본문 전문 대신 증분 요약(appended)만 온다. " +
+    "**edit 모드(#1531): 문서 '중간'을 고칠 땐 mode='edit' + edits=[{old,new}] 를 써라** — append 는 끝에만 붙으므로 타임라인 중간 삽입·표의 수치 교체·낡은 항목 갱신엔 못 쓴다. " +
+    "그때 replace 로 전문을 되보내면 네가 4만 자를 받아쓰게 되고, 그 전사 중에 **손대지 말아야 할 문장이 깨진다**(실측: 무관한 쉼표가 여는 괄호로 바뀌어 괄호가 닫히지 않았다). " +
+    "edit 는 old 를 정확일치로 찾아 그 자리만 바꾸므로 나머지는 문자 단위로 보존된다. old 는 공백·줄바꿈까지 원문 그대로여야 하고, **못 찾거나 여러 곳에서 찾으면 저장이 실패한다**(조용히 넘어가지 않는다 — 여러 곳이면 앞뒤를 더 붙여 유일하게 만들거나 replace_all: true). " +
     "**변경 요약(#968): 기존 지식을 고칠 땐 change_note(무엇을·왜 — 1~2문장)를 함께 보내라** — 검토 카드와 변화 기록에 그 문장이 그대로 표시된다. " +
     "**길이 상한(#1442): 짧은 필드(title 200 · name/supersedes/parent_name 64 · change_note 600자)를 넘겨도 이 호출은 실패하지 않는다** — " +
     "서버가 그 필드만 조정(자르기/참조 무시)하고 본문은 그대로 저장한 뒤 응답 capped 로 무엇을 어떻게 조정했는지 알려준다. " +
@@ -86,13 +99,24 @@ export const knowledgeSave: Capability = {
         // #921 mode — REST 는 zod 를 안 타고 이 화이트리스트가 유일한 검증이라, 미인식 값을 조용히 흘리면
         //  append 의도가 replace 로 떨어져 '조각이 문서를 통째로 교체'한다 → 여기서 fail-closed(provenance/lifecycle 과 같은 모양).
         const mode = b.mode ? String(b.mode) : undefined;
-        if (mode && !["replace", "append"].includes(mode)) throw new HttpError(400, "mode 는 replace|append");
+        if (mode && !["replace", "append", "edit"].includes(mode)) throw new HttpError(400, "mode 는 replace|append|edit");
         // #921 append 의 body_md 는 '조각' — trim 하면 첫 줄의 들여쓰기(들여쓴 코드블록)가 MCP 와 달리 REST 에서만 깨진다.
         //  빈 값 검증만 trim 으로 하고 원본은 보존한다(구분 빈 줄·앞뒤 개행 정규화는 appendBody 가 한다).
         const raw = String(b.body_md ?? b.note ?? "");
         const body_md = mode === "append" ? raw : raw.trim();
+        // #1531 edit — 본문은 edits 가 만든다. 여기선 모양만 검증하고(빈 배열·타입) 적용은 어댑터가 한다.
+        const edits = mode === "edit"
+          ? (Array.isArray(b.edits) ? (b.edits as Array<Record<string, unknown>>).map((e) => ({
+              old: String(e?.old ?? ""), new: String(e?.new ?? ""),
+              replace_all: e?.replace_all === true || undefined,
+            })) : [])
+          : undefined;
+        if (mode === "edit" && (!edits || edits.length === 0)) {
+          throw new HttpError(400, "mode='edit' 에는 edits 가 필요합니다 — [{old, new}] 형태로 바꿀 조각을 지정하세요.");
+        }
         // #592: 폴더(is_folder=true)만 빈 본문 허용 — min 1 검증은 is_folder 일 때만 우회(기존 문서 계약 불변).
-        if (!body_md.trim() && is_folder !== true) throw new HttpError(400, "body_md(또는 note)가 필요합니다");
+        //  edit 는 본문을 서버가 만들므로 body_md 를 받지 않는다(있어도 무시 — 아래 어댑터가 덮는다).
+        if (mode !== "edit" && !body_md.trim() && is_folder !== true) throw new HttpError(400, "body_md(또는 note)가 필요합니다");
         // (#335) injection 사용자 입력 폐기 — 지식은 recalled 고정. 항상-주입은 섹션 문서(org_update_section) 경로로만.
         const provenance = b.provenance ? String(b.provenance) : undefined;
         if (provenance && !["authored", "observed"].includes(provenance)) throw new HttpError(400, "provenance 는 authored|observed");
@@ -109,7 +133,8 @@ export const knowledgeSave: Capability = {
           category,
           is_folder,
           parent_name: b.parent_name ? String(b.parent_name) : undefined,   // #592 생성 시 트리 배치(이동은 /move)
-          mode,                                                             // #921 replace(기본)|append
+          mode,                                                             // #921/#1531 replace(기본)|append|edit
+          edits,                                                            // #1531 edit 전용(그 외 undefined)
           // #968 변경 요약(검토 카드·기록). 길이 조정은 여기서 하지 않는다 — 핸들러 소프트캡(#1442)이 유일한
           //  상한 지점이라야 REST 호출자도 '잘렸다'는 사실을 응답 capped 로 받는다(여기서 자르면 조용히 사라진다).
           change_note: b.change_note ? String(b.change_note) : undefined,
@@ -129,7 +154,9 @@ export const knowledgeSave: Capability = {
     //  경로를 열므로 같은 커밋에서 닫는다. slugify 는 멱등이라 store 가 한 번 더 불러도 결과가 같다.
     if (input.name) input.name = slugify(input.name);
     // #592: MCP 경로의 빈 본문 방어 — zod min(1) 완화 대신 여기서(폴더만 예외). REST 는 parse 가 이미 걸렀다.
-    if (!String(input.body_md ?? "").trim() && input.is_folder !== true) {
+    //  #1531 edit 는 예외 — 본문을 서버가 edits 로 만들므로 호출자는 body_md 를 보내지 않는다(보낼 수 있다면
+    //  전문을 아는 것이고, 그럼 이 모드를 쓸 이유가 없다).
+    if (input.mode !== "edit" && !String(input.body_md ?? "").trim() && input.is_folder !== true) {
       throw new HttpError(400, "body_md 가 필요합니다(폴더 is_folder=true 만 빈 본문 허용)");
     }
     const writeCtx = { actor: ctx?.actor ?? user?.userId ?? null, source: ctx?.source ?? "web" };
@@ -146,8 +173,37 @@ export const knowledgeSave: Capability = {
     //  append 는 이 어댑터의 계약이라 병합·가드를 전부 여기 둔다 — 데이터 층(upsertKnowledge)은 시드/마이그/리비전
     //  적용/undo 도 함께 쓰는 공용 경로라 append 계약을 물려받으면 안 된다(어댑터 층 가드: runbooks/secrets.md 선례).
     const isAppend = input.mode === "append";
+    const isEdit = input.mode === "edit";
     let appendBase: string | null = null;
-    let saveInput = input;
+    // body_md 는 스키마상 optional(edit 가 안 보내므로)이라 하류(전문 string 필수)로 넘기기 전에 확정한다.
+    //  edit/append 분기가 아래에서 각자 계산한 전문으로 덮는다.
+    let saveInput: KnowledgeSaveInput & { body_md: string } = { ...input, body_md: String(input.body_md ?? "") };
+    // ── #1531 edit — 본문 일부만 정확일치로 치환. append 와 같은 자리에서 '전문'으로 바꿔 아래 경로를 무변경으로 둔다. ──
+    //  append 와 가드가 같은 이유: 둘 다 "호출자가 본문을 안 읽는다"는 전제 위에 서 있어, 그 전제가 깨지는
+    //  상황(외부 미러 재싱크·검토 대기 제안)에서 똑같이 조용히 유실된다.
+    if (isEdit) {
+      if (!gate.name) throw new HttpError(400, "edit 에는 name 이 필수입니다 — 고칠 지식을 지정하세요.");
+      if (!gate.before) throw new HttpError(404, `지식 '${gate.name}' 없음 — edit 는 기존 지식에만 됩니다.`);
+      if (gate.before.provenance === "observed") {
+        throw new HttpError(400, "외부 미러(observed) 지식엔 edit 가 허용되지 않습니다 — 다음 재싱크가 본문을 통째로 덮어 고친 내용이 사라집니다. 원본에서 고치거나 파생 인사이트는 별도 지식(authored)으로 쓰세요.");
+      }
+      const staged = await pendingStagedRevisionId(gate.before.name);
+      if (staged) {
+        throw new HttpError(409, `이 지식엔 검토 대기 중인 수정 제안(#${staged})이 있어 edit 가 허용되지 않습니다 — 사람이 승인/반려한 뒤 다시 시도하세요(지금 고치면 검토 결과에 덮여 사라집니다).`);
+      }
+      appendBase = gate.before.body_md ?? "";
+      let edited: string;
+      try {
+        edited = applyKnowledgeEdits(appendBase, (input as { edits?: KnowledgeEdit[] }).edits ?? []);
+      } catch (e) {
+        // 앵커 불일치·모호는 **호출자 실수**다(400) — 조용히 넘기면 "저장은 됐는데 안 바뀐" 최악의 실패가 된다.
+        throw new HttpError(400, (e as Error).message);
+      }
+      if (edited.length > BODY_MD_MAX) {
+        throw new HttpError(400, `edit 결과가 본문 상한(${BODY_MD_MAX.toLocaleString()}자)을 넘습니다 — 문서를 나누세요.`);
+      }
+      saveInput = { ...input, body_md: edited };
+    }
     if (isAppend) {
       // 신규 금지 — upsertKnowledge 의 category/type 필수(#290)가 실질적으로 막긴 하지만, 신규 분기는 dedup similar
       //  검색 + 전문 에코라 append 의 응답 규약과 아예 다른 모양이다. 여기서 막는 게 그걸 따로 설계하는 것보다 싸다.
@@ -204,12 +260,12 @@ export const knowledgeSave: Capability = {
       }
       // 서버 클램프: 에이전트가 lifecycle='active' 로 우회할 수 없다. 반대로 에이전트가 자진 pending 하면 존중(안전 방향).
       const lifecycle = (gate.create === "confirm" || input.lifecycle === "pending") ? "pending" : (input.lifecycle ?? "active");
-      const { wikilinks, ...knowledge } = await upsertKnowledge({ ...input, lifecycle }, writeCtx);
+      const { wikilinks, ...knowledge } = await upsertKnowledge({ ...saveInput, lifecycle }, writeCtx);
       // ── 세션 산출물 스탬핑(#1291 v2) — **신규 생성에만** 건다. ──
       //  기존 문서 수정에 걸면 남의 공개 문서를 잠긴 프로젝트 세션에서 한 글자 고치는 것만으로 조직에서 사라지게 만든다
       //  (가시성 축소가 편집의 부수효과가 되면 안 된다 — 축소는 언제나 명시적 행위여야 한다).
       //  잠긴 리스트의 프로젝트 세션이 아니면 no-op → 종전대로 open.
-      const stampedList = await stampSessionVisibility(knowledge.name, ctx?.session);
+      const stampedList = await stampSessionVisibility(knowledge.name, ctx?.session, writeCtx);
       const visInfo = stampedList
         ? { visibility: { level: "members", via_project_list: stampedList,
             note: "이 지식은 지금 세션이 속한 프로젝트가 비공개라, 그 프로젝트를 볼 수 있는 사람에게만 보이도록 저장됐습니다(공개 위키에는 안 뜹니다). 전 조직에 공유할 내용이라면 프로젝트 밖 세션에서 다시 쓰거나 사람에게 공개범위 변경을 요청하세요." } }

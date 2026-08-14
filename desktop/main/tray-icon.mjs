@@ -1,0 +1,5 @@
+// ⚠ **생성물이다** — 손으로 고치지 마라. 재생성: scratchpad/gen-icon.mjs (22x22 링, 검정+알파).
+// 레포에 바이너리 자산을 두지 않으려고 data URL 로 임베드한다(electron-builder files 목록도 단순해진다).
+// macOS 템플릿 이미지 규약(검정+알파만)을 지켜 다크/라이트 메뉴바 양쪽에서 자동 반전된다.
+export const TRAY_ICON_1X = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABYAAAAWCAYAAADEtGw7AAAAnklEQVR42sWVwRGAIAwE7YQC7IBiqIFCaIle+FMDo3nwMR5MGD3NzL4IR7xA3Lafwwm+494QS0IRDkXpa8uHRKEBQU3ruaZIBkFNslSKNlYhd+ogJ848bUAwgNwADmgjzxMQ3SdftwNxaInufjD0I4DbcrNBV2sNXfXFDq8W84JwVnv9J8I0K2jNo1432gOhPWnqEKKOTeqgp/6aHsUJGme0bVbPabIAAAAASUVORK5CYII=";
+export const TRAY_ICON_2X = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACwAAAAsCAYAAAAehFoBAAABM0lEQVR42u2ZwQ2DMAxFGSFbsAcTsEeOOWWGXJkAxmAFJugEiCVaI7kXVBoHJy0fYelfEDJPwbEdp6puu62Y1aSWZEmeZflZfRbIFaYnzaRnRDO/2/4DdF25hwByTw/2Udwa0qQA3Wpin0XMZwTdyueG7QrCvtUhwWaD9j+EVYdHc+BjIymQHCvws1Q/hzaiNBssDGe++DL8zpKQPZLzrMTxEAH9BD4IfSflaUlRCIq9EYTFRVxuJSurNclKi8p4L4hZkwHYCGK6lziKNTIuY0FygoYp2iLGfpPJCGwE36s18TsW6FFGTRzbgpnhaMawmlLsCgDH4thfChguJOA2HVxagysckKUZrvmBay8hG3i4IxLkIRTumA85SIEcVUEOAyHHrZADbdgrg73W9PSXMrddzl75RM8/hchagwAAAABJRU5ErkJggg==";

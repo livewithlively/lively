@@ -88,6 +88,15 @@ export interface EditorCtx {
   openLinkPop(): void;
   onSelChange(): void;
 
+  // ── interactions.ts (크로스 블록 선택) ──
+  //  블록마다 contenteditable 이 따로라 브라우저 Selection 은 블록 경계를 못 넘는다 → 경계를 넘는 드래그·⌘A 를
+  //  '블록 범위 선택'으로 넘겨받아 직접 그린다. 상태는 interactions 가 소유하고 keys 가 이 API 로 읽고 쓴다.
+  bselActive(): boolean;
+  bselAll(): boolean;
+  bselClear(): void;
+  bselDelete(): HTMLElement | null;
+  bselEdge(last: boolean): HTMLElement | null;
+
   // ── history.ts ──
   snapNow(): void;
   snapSoon(): void;

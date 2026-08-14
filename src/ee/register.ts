@@ -15,11 +15,19 @@ import { resolveIngestPolicy } from "./ingest/ingest-policy.js";
 import { getIngestPolicyRules, invalidateIngestPolicyCache } from "./ingest/ingest-policy-load.js";
 import { dbAuditCapabilities } from "./capabilities/db-audit.js";
 import { dbGrantCapabilities } from "./capabilities/db-grant.js";
+import { breakGlassCapabilities } from "./capabilities/break-glass.js"; // #1601 긴급 열람
+import { sourceVisPolicyCapabilities } from "./capabilities/source-vis-policy.js"; // #1601 자료 공개범위 정책·소급
 import { addEnterpriseCapabilities } from "../capabilities/index.js";
+import { oidcConfig } from "./auth/oidc.js"; // #1601 SSO — 외부 IdP 웹 로그인
+import { registerOidcRoutes } from "./auth/oidc-routes.js";
+import { oidcLinkStatus, unlinkOidcFromMember } from "./auth/oidc-login.js";
+import { registerAuditExportRoutes } from "./audit/export-routes.js"; // #1601 감사 증빙 반출
 
 export function registerEnterpriseModule(): void {
   // EE 관리 표면(db_audit_*·db_unmask_grant_*) 합류 — 코어 registry 는 이 이름들을 정적으로 모른다.
-  addEnterpriseCapabilities([...dbAuditCapabilities, ...dbGrantCapabilities]);
+  addEnterpriseCapabilities([
+    ...dbAuditCapabilities, ...dbGrantCapabilities, ...breakGlassCapabilities, ...sourceVisPolicyCapabilities,
+  ]);
   registerEnterprise({
     dbMask: { maskValue, planMaskTargets, applyRowMasking },
     dbMaskPolicy: {
@@ -29,5 +37,16 @@ export function registerEnterpriseModule(): void {
     dbAudit: { collectSubjectKeys, persistAccessOrThrow, persistAccessBestEffort },
     pii: { scrubPii, detectPii, scrubPiiDeep },
     ingestPolicy: { resolveIngestPolicy, getIngestPolicyRules, invalidateIngestPolicyCache },
+    // SSO(#1601) — 설정이 갖춰졌을 때만 제공자로 노출한다. 미설정이면 null 이라 코어 로그인 화면은 local 만 그린다.
+    sso: {
+      ssoProvider: async () => {
+        const cfg = await oidcConfig();
+        return cfg ? { label: cfg.label } : null;
+      },
+      registerSsoRoutes: registerOidcRoutes,
+      ssoLinkStatus: oidcLinkStatus,
+      ssoUnlink: unlinkOidcFromMember,
+    },
+    auditExport: { registerAuditExportRoutes },
   });
 }

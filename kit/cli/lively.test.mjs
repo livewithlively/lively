@@ -13,7 +13,11 @@ import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";  // ⚠ 절대경로 동적 import 는 반드시 file:// URL 로 — 윈도우는 "d:" 를 프로토콜로 읽는다(#1510)
+import { pathWith, writeStubBin } from "../testlib/os-sandbox.mjs";   // 스텁은 윈도우에서도 실행 가능해야 한다(#1510)
+import { WIN } from "../testlib/os-sandbox.mjs";
+// CLI 런처 심의 파일명 — 윈도우는 `.cmd` 배치다(user-install.mjs 의 CLI_SHIM_CMD). 이름을 가정하면 윈도우에서 어긋난다(#1510).
+const SHIM = WIN ? "lively.cmd" : "lively";
 
 const pExecFile = promisify(execFile);
 
@@ -21,11 +25,11 @@ const HERE = join(fileURLToPath(import.meta.url), "..");          // kit/cli
 const KIT = join(HERE, "..");                                     // kit
 const REPO = join(KIT, "..");                                     // 레포 루트
 const CLI = join(HERE, "lively.mjs");
-const { buildKitBundle } = await import(join(KIT, "generator", "build-context.mjs"));
-const { CLI_SHIM, CLI_SHIM_CMD } = await import(join(KIT, "setup", "user-install.mjs"));
+const { buildKitBundle } = await import(pathToFileURL(join(KIT, "generator", "build-context.mjs")));
+const { CLI_SHIM, CLI_SHIM_CMD } = await import(pathToFileURL(join(KIT, "setup", "user-install.mjs")));
 // 순수함수 — 실행 경로로는 못 태우는 분기라 직접 검증한다: winArg 는 POSIX CI 에서 안 돌고(WIN=false),
 //  loginEscapeToken 은 제어단말(/dev/tty)이 있어야 밟히는 분기를 담는다(#916).
-const { winArg, loginEscapeToken } = await import(CLI);
+const { winArg, loginEscapeToken, claudeMcpTargets, mcpCoverage, isLegacyLivelyMcp } = await import(pathToFileURL(CLI));
 
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
@@ -98,29 +102,43 @@ function newHome(name) {
   const bin = join(home, "stub-bin");
   mkdirSync(bin, { recursive: true });
   const log = join(home, "claude-argv.log");
-  writeFileSync(join(bin, "claude"), [
-    "#!/bin/sh",
-    `printf '%s\\n' "$*" >> ${JSON.stringify(log)}`,
+  // 스텁 본문은 JS 한 벌 — sh 로 쓰면 윈도우에서 실행조차 안 돼 가로채기가 조용히 실패한다(#1510).
+  writeStubBin(bin, "claude", [
+    'import { appendFileSync, readFileSync } from "node:fs";',
+    `const LOG = ${JSON.stringify(log)};`,
+    "const a = process.argv.slice(2);",
+    'appendFileSync(LOG, a.join(" ") + "\\n");',
+    // #1593 — 받은 HOME 을 따로 남긴다. **등록 대상 파일을 고르는 건 argv 가 아니라 이 값**이라,
+    //  샌드박스가 라이브 홈을 건드리는지는 오직 이걸로만 판별된다(⑰-c 가 이 로그를 본다).
+    'appendFileSync(LOG + ".home", (process.env.HOME || process.env.USERPROFILE || "") + "\\n");',
+    // #1541 — **어느 config dir 을 겨냥했나**. 등록 위치는 argv 가 아니라 이 env 가 정한다(claude --scope user 규약).
+    //  '기본 위치' 겨냥은 이 변수가 **없어야** 한다 — 빈 문자열이면 claude 가 '설정됨' 으로 읽는다.
+    'appendFileSync(LOG + ".ccd", (Object.prototype.hasOwnProperty.call(process.env, "CLAUDE_CONFIG_DIR") ? "[" + process.env.CLAUDE_CONFIG_DIR + "]" : "(unset)") + "\\n");',
+    'const logged = (re) => { try { return re.test(readFileSync(LOG, "utf8")); } catch { return false; } };',
     // `claude mcp list` 는 등록된 걸 되돌려준다(구 status 판정 경로 — 남겨둔다).
-    'if [ "$1" = "mcp" ] && [ "$2" = "list" ]; then',
-    `  grep -q "mcp add .*lively " ${JSON.stringify(log)} 2>/dev/null && echo "lively: ${GW}/mcp (HTTP)"`,
-    "  exit 0",
-    "fi",
+    'if (a[0] === "mcp" && a[1] === "list") {',
+    `  if (logged(/mcp add .*lively /)) console.log(${JSON.stringify(`lively: ${GW}/mcp (HTTP)`)});`,
+    "  process.exit(0);",
+    "}",
     // `claude mcp get <name>` — #1431 부터 status/doctor 가 **이걸** 쓴다(우리 서버 하나만 헬스체크).
     //  실물 형식을 그대로 흉내낸다: 등록됐으면 Scope:/Status: 두 줄, 아니면 rc=1 + "No MCP server named".
-    'if [ "$1" = "mcp" ] && [ "$2" = "get" ]; then',
-    `  if grep -q "mcp add .*$3 " ${JSON.stringify(log)} 2>/dev/null; then`,
-    '    echo "Scope: User config (available in all your projects)"',
-    '    echo "Status: ✔ Connected"',
-    "    exit 0",
-    "  fi",
-    '  echo "No MCP server named \\"$3\\"." >&2',
-    "  exit 1",
-    "fi",
-    "exit 0",
+    'if (a[0] === "mcp" && a[1] === "get") {',
+    '  if (logged(new RegExp("mcp add .*" + a[2] + " "))) {',
+    '    console.log("Scope: User config (available in all your projects)");',
+    '    console.log("Status: ✔ Connected");',
+    "    process.exit(0);",
+    "  }",
+    '  console.error(`No MCP server named "${a[2]}".`);',
+    "  process.exit(1);",
+    "}",
+    "process.exit(0);",
   ].join("\n"));
-  chmodSync(join(bin, "claude"), 0o755);
-  return { home, bin, log, argv: () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean) : []) };
+  return {
+    home, bin, log,
+    argv: () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean) : []),
+    homes: () => (existsSync(log + ".home") ? readFileSync(log + ".home", "utf8").trim().split("\n").filter(Boolean) : []),
+    ccds: () => (existsSync(log + ".ccd") ? readFileSync(log + ".ccd", "utf8").trim().split("\n").filter(Boolean) : []),
+  };
 }
 
 // CLI 실행 — 샌드박스 HOME + 스텁 PATH. 절대 실기기·실게이트웨이에 닿지 않는다.
@@ -134,7 +152,7 @@ async function lively(h, args, { env = {}, expectFail = false } = {}) {
         HOME: h.home,
         LIVELY_HOME: h.home,
         CLAUDE_CONFIG_DIR: join(h.home, ".claude"),
-        PATH: `${h.bin}:${process.env.PATH}`,
+        PATH: pathWith(h.bin),
         LIVELY_TOKEN: "",
         LIVELY_GATEWAY_URL: "",
         ...env,
@@ -165,7 +183,8 @@ try {
   {
     const r = await lively(H, ["login", "--gateway", `${GW}/mcp`, "--token", TOKEN]);
     const tp = join(H.home, ".lively", "token");
-    const mode = (statSync(tp).mode & 0o777).toString(8);
+    // 윈도우엔 POSIX mode 비트가 없다(NTFS ACL) — node 는 0666 만 보고한다. 그 계약은 여기서 성립하지 않는다.
+    const mode = WIN ? "600" : (statSync(tp).mode & 0o777).toString(8);
     const gw = readFileSync(join(H.home, ".lively", "gateway-url"), "utf8").trim();
     check("② 로그인 성공 · 토큰 0600 · gateway-url 정규화(/mcp 제거)",
       readFileSync(tp, "utf8") === TOKEN && mode === "600" && gw === GW,
@@ -180,7 +199,7 @@ try {
     const stamped = readFileSync(join(lv, "kit-version"), "utf8").trim();
     const hooks = existsSync(join(lv, "hooks", "session-preload.mjs"));
     const cli = existsSync(join(lv, "lib", "lively.mjs"));
-    const shim = existsSync(join(lv, "bin", "lively"));
+    const shim = existsSync(join(lv, "bin", SHIM));
     check("③ 설치 — 훅 · CLI · 심 · 버전 스탬프",
       stamped === "v-aaa" && hooks && cli && shim,
       `stamp=${stamped} hooks=${hooks} cli=${cli} shim=${shim}\n${r.err.slice(-400)}`);
@@ -196,7 +215,7 @@ try {
     // (a) #1079 — lively 는 **stdio 프록시**로 등록한다(http 직결은 VPN 미접속 세션에서 그 세션 내내 죽는다).
     //  종전 3헤더(토큰·세션귀속#852·실행모드#1007+)는 사라진 게 아니라 **프록시가 상류 호출에 붙인다** —
     //  그 계약은 lively-mcp-gateway.test.mjs(E11 파일토큰 우선 · E15 하네스 stamp)가 못박는다.
-    const shimPath = join(H.home, ".lively", "bin", "lively");
+    const shimPath = join(H.home, ".lively", "bin", SHIM);
     const want = `mcp add --transport stdio --scope user lively ${shimPath} mcp`;
     check("④ claude MCP 등록 argv 못박기(#1079 — lively = stdio 프록시)",
       adds.some((l) => l === want), `got=${JSON.stringify(adds)}\nwant=${JSON.stringify(want)}`);
@@ -366,7 +385,10 @@ try {
   }
 
   // ⑭ PATH rc 블록 멱등 — 재설치해도 늘지 않는다(구표기 누적으로 훅이 두 벌 되던 사고의 rc 판).
-  {
+  //  ⚠ 윈도우엔 셸 rc 개념이 없다 — wireCliPath 는 사용자 PATH 환경변수를 직접 손댄다(레지스트리/setx).
+  //   그건 샌드박스 홈으로 격리할 수 없으므로(실기기 오염) 여기서 검증하지 않는다(#1510).
+  if (WIN) console.log("skip ⑭ PATH rc 블록 — 윈도우는 셸 rc 가 아니라 사용자 PATH 환경변수를 쓴다");
+  else {
     const h = newHome("h-rc");
     writeFileSync(join(h.home, ".zshrc"), "# 내 설정\nalias ll='ls -la'\n");
     await lively(h, ["login", "--gateway", GW, "--token", TOKEN]);
@@ -387,7 +409,7 @@ try {
     // 게이트웨이가 서빙하듯 주소를 굽는다(src/web.ts 의 serveBootstrap 과 동일 치환).
     writeFileSync(boot, readFileSync(join(HERE, "bootstrap.sh"), "utf8").replaceAll("__LIVELY_GATEWAY__", GW));
     const r = await pExecFile("sh", [boot], {
-      env: { ...process.env, HOME: h.home, LIVELY_HOME: h.home, PATH: `${h.bin}:${process.env.PATH}` },
+      env: { ...process.env, HOME: h.home, LIVELY_HOME: h.home, PATH: pathWith(h.bin) },
       timeout: 60000,
     }).catch((e) => ({ stdout: e.stdout ?? "", stderr: e.stderr ?? String(e.message), failed: true }));
 
@@ -419,9 +441,11 @@ try {
   }
   // ⑮ run — 프로젝트# **없으면 하네스 바로 실행**(#1007+, 사용자 요청) + 모드 플래그가 세션 env 주입. --harness 로 하네스 지정.
   {
-    const fakeH = join(H.home, "fake-harness.mjs");
-    writeFileSync(fakeH, "#!/usr/bin/env node\nprocess.stdout.write('HARNESS['+process.argv.slice(2).join(',')+'] MODE='+(process.env.LIVELY_MODE||'')+' RO='+(process.env.LIVELY_READONLY||'')+' INC='+(process.env.LIVELY_INCOGNITO||'')+' OFF='+(process.env.LIVELY_OFF||''));\n");
-    chmodSync(fakeH, 0o755);
+    // 하네스는 **PATH 에서 이름으로** 찾게 한다 — 윈도우의 has() 는 `where <이름>` 이라 절대경로를 못 받고,
+    //  스폰도 .cmd 셰임을 PATHEXT 로 해석해야 한다(#1510). 그래서 스텁 bin 에 심고 이름만 넘긴다.
+    const fakeH = "fake-harness";
+    writeStubBin(H.bin, "fake-harness",
+      "process.stdout.write('HARNESS['+process.argv.slice(2).join(',')+'] MODE='+(process.env.LIVELY_MODE||'')+' RO='+(process.env.LIVELY_READONLY||'')+' INC='+(process.env.LIVELY_INCOGNITO||'')+' OFF='+(process.env.LIVELY_OFF||''));");
     const r = await lively(H, ["run", "--readonly", "--harness", fakeH, "hello"]);
     check("⑮ run — 프로젝트# 없으면 하네스 직접 실행 + 모드 플래그는 인자에서 소비(하네스엔 hello 만)",
       r.out.includes("HARNESS[hello]") && r.out.includes("MODE=readonly") && r.out.includes("RO=1"), r.out.trim());
@@ -443,7 +467,7 @@ try {
     writeFileSync(join(box, ".claude.json"), JSON.stringify({ mcpServers: { linear: { type: "http", url: "https://user.example/mcp" } } }));
     const probe = join(box, "probe.mjs");
     writeFileSync(probe, [
-      `import { backupUserMcp } from ${JSON.stringify(CLI)};`,
+      `import { backupUserMcp } from ${JSON.stringify(pathToFileURL(CLI).href)};`,   // 절대경로 그대로면 윈도우에서 죽는다(#1510)
       `import { writeFileSync as w } from "node:fs";`,
       `backupUserMcp("linear"); backupUserMcp("notion");`,                                    // linear=유저것, notion=부재(null)
       `w(${JSON.stringify(join(box, ".claude.json"))}, JSON.stringify({mcpServers:{linear:{type:"http",url:"https://org.example/mcp"}}}));`, // 라이블리가 덮어쓴 상태 모사
@@ -472,7 +496,7 @@ try {
     writeFileSync(join(prof, ".claude.json"), JSON.stringify({ mcpServers: { linear: { type: "http", url: "https://user-profile.example/mcp" } } }));
     const probe = join(box, "probe.mjs");
     writeFileSync(probe, [
-      `import { backupUserMcp } from ${JSON.stringify(CLI)};`,
+      `import { backupUserMcp } from ${JSON.stringify(pathToFileURL(CLI).href)};`,   // 절대경로 그대로면 윈도우에서 죽는다(#1510)
       `backupUserMcp("linear");`,
     ].join("\n"));
     execFileSync(process.execPath, [probe], { env: { ...process.env, LIVELY_HOME: box, CLAUDE_CONFIG_DIR: prof }, stdio: "ignore" });
@@ -480,6 +504,72 @@ try {
     check("⑰-b backupUserMcp — 프로필 격리(#346)에서 CLAUDE_CONFIG_DIR 의 .claude.json 을 본다",
       !!(bak.linear && bak.linear.url === "https://user-profile.example/mcp"), JSON.stringify(bak));
     rmSync(box, { recursive: true, force: true });
+  }
+
+  // ⑰-d ★ **#1541 — 프로필 dir 까지 등록한다.** 웹터미널 세션은 CLAUDE_CONFIG_DIR=<프로필> 로 뜨는데
+  //   키트가 기본 위치에만 등록해서, 노드 웹세션엔 lively MCP 가 **영원히 안 보였다**(실기기 확인).
+  //   판정은 argv 가 아니라 **스텁 claude 가 받은 CLAUDE_CONFIG_DIR** 로 한다 — 등록 파일을 고르는 게 그 값이다.
+  //   ⚠ '기본 위치' 겨냥은 그 변수가 **없어야** 한다(빈 문자열이면 claude 가 '설정됨' 으로 읽는다).
+  {
+    const h = newHome("mcp-profile-fanout");
+    const prof = join(h.home, ".lively", "profiles", "yoon", "claude");
+    mkdirSync(prof, { recursive: true });
+    mkdirSync(join(h.home, ".lively", "profiles", "ghost"), { recursive: true });   // claude dir 없음 → 대상 제외
+    writeFileSync(join(h.home, ".lively", "mcp-servers.json"), JSON.stringify({ servers: [] }));
+    const probe = join(h.home, "probe-1541.mjs");
+    writeFileSync(probe, [
+      `import { registerClaudeMcp } from ${JSON.stringify(pathToFileURL(CLI).href)};`,
+      "registerClaudeMcp();",
+    ].join("\n"));
+    execFileSync(process.execPath, [probe], {
+      env: {
+        ...process.env, HOME: h.home, USERPROFILE: h.home, LIVELY_HOME: h.home,
+        PATH: pathWith(h.bin), LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "",
+        CLAUDE_CONFIG_DIR: "",   // 지목 없음 — 빈 문자열을 '지목' 으로 읽으면 프로필이 통째로 빠진다
+      },
+      stdio: "ignore",
+    });
+    const ccds = new Set(h.ccds());
+    check("⑰-d ★ #1541 기본 위치를 겨냥할 때 CLAUDE_CONFIG_DIR 를 **지운다**(빈 문자열로 두지 않는다)",
+      ccds.has("(unset)"), `본 값=${JSON.stringify([...ccds])}`);
+    check("⑰-d ★ #1541 프로필 dir 에도 등록한다(웹터미널 세션이 읽는 곳)",
+      ccds.has(`[${prof}]`), `본 값=${JSON.stringify([...ccds])} · 기대 포함=[${prof}]`);
+    check("⑰-d claude dir 없는 슬러그는 겨냥하지 않는다",
+      ![...ccds].some((x) => x.includes("ghost")), `본 값=${JSON.stringify([...ccds])}`);
+  }
+
+  // ⑰-c **#1593 — 샌드박스(LIVELY_HOME)가 라이브 ~/.claude.json 을 오염시키면 안 된다.**
+  //   실측 사고: `LIVELY_HOME=<임시> lively login` 이 **실사용자** ~/.claude.json 에 그 임시 경로를 구웠고,
+  //   임시 디렉터리가 지워지자 lively MCP 가 ENOENT 로 **통째로 안 떴다** — 이후 모든 세션이 조직 맥락을 잃는다.
+  //   등록되는 command 값은 LIVELY_HOME 기반인데 기록되는 파일만 실 HOME 이라 둘이 어긋난 것이다.
+  //  ⚠ 이 케이스는 HOME 과 LIVELY_HOME 을 **일부러 다르게** 준다. 위 lively() 처럼 둘을 같은 값으로 주면
+  //   자식 HOME 주입이 빠져 있어도 결과가 같아 **결함이 드러나지 않는다** — 그게 이 버그가 오래 숨은 이유다.
+  //  ⚠ 판정은 argv 가 아니라 **스텁 claude 가 받은 HOME** 으로 한다(등록 파일을 고르는 게 그 값이므로).
+  {
+    const h = newHome("mcp-home-isolation");
+    const live = join(BOX, "pretend-live-home");   // '실사용자 홈' 대역 — 여기로 새면 실패다
+    mkdirSync(join(live, ".claude"), { recursive: true });
+    mkdirSync(join(h.home, ".lively"), { recursive: true });
+    writeFileSync(join(h.home, ".lively", "mcp-servers.json"), JSON.stringify({ servers: [] }));
+    const probe = join(h.home, "probe-1593.mjs");
+    writeFileSync(probe, [
+      `import { registerClaudeMcp } from ${JSON.stringify(pathToFileURL(CLI).href)};`,   // 절대경로 그대로면 윈도우에서 죽는다(#1510)
+      "registerClaudeMcp();",
+    ].join("\n"));
+    execFileSync(process.execPath, [probe], {
+      // HOME=가짜 실홈 · LIVELY_HOME=샌드박스 — 어긋난 상태를 그대로 재현한다.
+      env: {
+        ...process.env,
+        HOME: live, USERPROFILE: live,          // 윈도우는 os.homedir() 가 USERPROFILE 을 본다(#1510)
+        LIVELY_HOME: h.home, CLAUDE_CONFIG_DIR: "",
+        PATH: pathWith(h.bin), LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "",
+      },
+      stdio: "ignore",
+    });
+    const seen = h.homes();
+    check("⑰-c ★ #1593 MCP 등록이 부르는 claude 는 샌드박스 HOME 을 받는다(실사용자 홈 무접촉)",
+      seen.length > 0 && seen.every((x) => x === h.home),
+      `claude 가 받은 HOME=${JSON.stringify(seen)} · 기대=${h.home} · 실홈대역=${live}`);
   }
 
   // ⑱ **#916 — 스테일 LIVELY_TOKEN 이 파일 토큰을 이기면 안 된다.**
@@ -535,6 +625,63 @@ try {
 } finally {
   server.close();
   cleanup();
+}
+
+// ── MCP 등록 대상·커버리지·잔재 판정 (#1541 실기기) ──────────────────────────
+// 실측: 웹터미널 세션은 CLAUDE_CONFIG_DIR=<프로필> 로 뜨는데 키트는 기본 위치에만 등록했다.
+//  → 노드 웹세션엔 lively MCP 가 영원히 안 보였고, status 는 '어딘가 있음' 을 ✓ 로 표시해 오진을 도왔다.
+{
+  const J = (...p) => p.join("/");
+  const T = (o) => claudeMcpTargets({ join: J, ...o });
+
+  // ① 지목이 있으면 그것만 — 게이트웨이가 멤버 한 명의 프로필을 프로비저닝할 때 남의 프로필을 건드리면 안 된다(#1014).
+  check("MCP대상 지목되면 그 한 곳만",
+    JSON.stringify(T({ env: { CLAUDE_CONFIG_DIR: "/p/yoon/claude" }, profilesRoot: "/r", exists: () => true, listDirs: () => ["a", "b"] }))
+      === JSON.stringify([{ configDir: "/p/yoon/claude", label: "지정된 프로필" }]),
+    "지목을 무시하고 퍼뜨렸다");
+
+  // ② 지목이 없으면 기본 + 이 PC 의 프로필 전부. 기본이 **첫** 대상이어야 한다(종전 동작 보존).
+  const t2 = T({ env: {}, profilesRoot: "/r", exists: () => true, listDirs: () => ["yoon", "amorite"] });
+  check("MCP대상 기본이 첫 항목", t2[0].configDir === null, `첫 항목=${JSON.stringify(t2[0])}`);
+  check("MCP대상 프로필까지 포함(정렬)",
+    JSON.stringify(t2.map((x) => x.configDir)) === JSON.stringify([null, "/r/amorite/claude", "/r/yoon/claude"]),
+    JSON.stringify(t2.map((x) => x.configDir)));
+
+  // ③ 프로필 폴더가 없거나 못 읽어도 기본 하나는 나온다(등록이 통째로 죽지 않게).
+  check("MCP대상 프로필 없음 → 기본만",
+    JSON.stringify(T({ env: {}, profilesRoot: "/r", exists: () => true, listDirs: () => [] })) === JSON.stringify([{ configDir: null, label: "기본" }]),
+    "프로필 0개인데 기본이 사라졌다");
+  check("MCP대상 listDirs throw → 기본만",
+    T({ env: {}, profilesRoot: "/r", exists: () => true, listDirs: () => { throw new Error("EACCES"); } }).length === 1,
+    "권한 오류에 등록 전체가 죽는다");
+  // claude dir 이 아직 없는 슬러그는 제외 — 세션이 만들기 전 자리에 미리 쓰지 않는다.
+  check("MCP대상 claude dir 없는 슬러그 제외",
+    T({ env: {}, profilesRoot: "/r", exists: (p) => p === "/r/yoon/claude", listDirs: () => ["yoon", "ghost"] }).length === 2,
+    "존재하지 않는 프로필 dir 을 대상에 넣었다");
+  check("MCP대상 빈 CLAUDE_CONFIG_DIR 는 지목이 아니다",
+    T({ env: { CLAUDE_CONFIG_DIR: "   " }, profilesRoot: "/r", exists: () => true, listDirs: () => [] })[0].configDir === null,
+    "공백 문자열을 지목으로 읽었다");
+
+  // ④ 커버리지 — '어딘가 있음' 이 아니라 '어디가 빠졌나' 를 낸다.
+  const tg = [{ configDir: null, label: "기본" }, { configDir: "/r/yoon/claude", label: "프로필 yoon" }];
+  const cov = mcpCoverage("lively", tg, (cd) => (cd === null ? { command: "x" } : null));
+  check("커버리지 any/all 분리", cov.any === true && cov.all === false, JSON.stringify(cov));
+  check("커버리지 빠진 곳을 이름으로", JSON.stringify(cov.missing) === JSON.stringify(["프로필 yoon"]), JSON.stringify(cov.missing));
+  const cov2 = mcpCoverage("lively", tg, () => ({ command: "x" }));
+  check("커버리지 전부 있으면 missing 비어 있음", cov2.all === true && cov2.missing.length === 0, JSON.stringify(cov2));
+
+  // ⑤ 잔재 판정 — 이름만으로 지우지 않는다(사람이 같은 이름을 쓸 수 있다).
+  const GW = "https://dev.lvly.io";
+  check("잔재: 우리 게이트웨이의 /mcp 면 제거 대상",
+    isLegacyLivelyMcp("lively-store", { url: "http://dev.lvly.io:8080/mcp" }, GW) === true, "실측된 잔재를 못 잡았다");
+  check("잔재: 남의 호스트면 건드리지 않는다",
+    isLegacyLivelyMcp("lively-store", { url: "https://someone.else/mcp" }, GW) === false, "남의 서버를 지우려 했다");
+  check("잔재: 경로가 /mcp 가 아니면 아니다",
+    isLegacyLivelyMcp("lively-store", { url: "https://dev.lvly.io/other" }, GW) === false, "무관한 경로를 잔재로 봤다");
+  check("잔재: 목록에 없는 이름은 아니다",
+    isLegacyLivelyMcp("lively", { url: "https://dev.lvly.io/mcp" }, GW) === false, "현역 이름을 잔재로 봤다");
+  for (const bad2 of [null, {}, { url: "" }, { url: "not a url" }])
+    check(`잔재: 망가진 항목(${JSON.stringify(bad2)})에 throw 없음`, isLegacyLivelyMcp("lively-store", bad2, GW) === false, "throw 또는 오판");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

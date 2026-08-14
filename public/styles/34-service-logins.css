@@ -1,0 +1,69 @@
+/* 34-service-logins.css — [설정 ▸ 외부 서비스 관리] 서비스 로그인(#1597).
+   화면의 한 가지 일: **무엇이 켜져 있고 무엇이 꺼져 있는지**를 한눈에 보이게 하는 것.
+   그래서 연결 여부를 탭·버튼 뒤에 숨기지 않고 두 구역(연결됨 / 연결 가능)으로 갈라 놓고,
+   구역 안에서도 색으로 한 번 더 가른다 — 연결된 서비스만 브랜드색이 살아 있다. */
+
+/* ── 서비스 타일 — 대시보드 알림 타일(.dash-ntf-tile)과 같은 형태 언어(라운드 스퀘어 + 단색 글리프).
+      --svc-brand 는 svc-icons.ts 가 서비스마다 인라인으로 넣는다(외부 브랜드 자산 예외). ── */
+.svc-tile { flex: none; width: 40px; height: 40px; border-radius: 12px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--svc-brand, var(--muted-3)) 12%, var(--bg));
+  color: var(--svc-brand, var(--muted));
+  transition: background-color 140ms ease, color 140ms ease; }
+.svc-tile svg { display: block; width: 23px; height: 23px; }
+.svc-tile-ini { font-size: 17px; font-weight: 800; line-height: 1; }
+/* 미연결 — 무채색으로 잠들어 있다가, 카드에 손을 올리면 그 서비스의 색으로 깨어난다(켤 수 있다는 어포던스). */
+.svc-tile.off { background: var(--bg-tint-2); color: var(--muted-2); }
+.svc-card:hover .svc-tile.off, .svc-card:focus-visible .svc-tile.off {
+  background: color-mix(in srgb, var(--svc-brand, var(--muted-3)) 12%, var(--bg));
+  color: var(--svc-brand, var(--muted)); }
+
+/* ── 연결된 서비스 — 전폭 행(관리 동작이 붙고, 슬랙은 아래로 펼쳐진다) ── */
+.svc-conn-list { display: flex; flex-direction: column; gap: 10px; }
+.svc-conn { border: 1px solid var(--line); border-radius: 12px; padding: 13px 15px; background: var(--bg); }
+.svc-conn-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.svc-conn-main { flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.svc-conn-nm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 15px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
+.svc-conn-blurb { font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.svc-conn-acts { flex: none; display: flex; align-items: center; gap: 8px; margin-left: auto; }
+
+/* 상태 표시 — 채운 알약 대신 점 + 라벨(디자인시스템: 채운 컬러 상태 필 금지). */
+.svc-state { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 700; color: var(--mint-deep); }
+.svc-state::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--mint); flex: none; }
+.svc-meta { font-size: 12px; font-weight: 600; color: var(--muted-2); }
+
+/* 슬랙 대화 정책처럼 행에 딸린 상세 — 카드 안 카드를 만들지 않고 헤어라인으로 나눈다. */
+.svc-expand { margin: 13px 0 2px; padding-top: 14px; border-top: 1px solid var(--line-row); }
+
+/* ── 연결할 수 있는 서비스 — 카드 전체가 [연결] 버튼이다(버튼 속 버튼을 만들지 않는다) ── */
+.svc-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(232px, 1fr)); gap: 10px; }
+.svc-card { display: flex; flex-direction: column; gap: 9px; text-align: left; width: 100%;
+  padding: 13px 14px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-tint);
+  font: inherit; color: inherit; cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease; }
+.svc-card:hover { background: var(--bg); border-color: var(--line-net); }
+.svc-card:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.svc-card-top { display: flex; align-items: center; gap: 11px; }
+.svc-card-nm { font-size: 14.5px; font-weight: 700; color: var(--ink-sub); letter-spacing: -.2px; }
+.svc-card:hover .svc-card-nm { color: var(--ink); }
+.svc-card-blurb { font-size: 12px; line-height: 1.5; color: var(--muted);
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.svc-card-cta { margin-top: auto; font-size: 12.5px; font-weight: 700; color: var(--muted-head); }
+.svc-card:hover .svc-card-cta { color: var(--blue); }
+
+/* 토큰 입력 모달 — 폼(svcTokenForm)이 .card 를 달고 오는데 모달 안에서는 테두리가 겹친다(카드 안 카드).
+   폼 소유는 자격 금고(admin-credentials.ts)라 그쪽을 고치지 않고 이 자리에서만 옷을 벗긴다. */
+.svc-form-host > .card { border: 0; padding: 0; background: none; }
+
+/* ── 비어 있을 때 — 사실 + 다음 행동을 한 문장으로. ── */
+.svc-empty { display: flex; flex-direction: column; gap: 4px; align-items: center; text-align: center;
+  padding: 26px 16px; border: 1px dashed var(--line-net); border-radius: 12px; background: var(--bg-tint); }
+.svc-empty-t { font-size: 13.5px; font-weight: 700; color: var(--ink-sub); }
+.svc-empty-s { font-size: 12.5px; color: var(--muted); }
+
+/* ── 모바일 — 행 액션이 잘리지 않게 아래로 내린다(가로 오버플로 0). ── */
+@media (max-width: 640px) {
+  .svc-conn-acts { margin-left: 0; width: 100%; flex-wrap: wrap; }
+  .svc-grid { grid-template-columns: 1fr; }
+}

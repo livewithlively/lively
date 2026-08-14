@@ -7,7 +7,8 @@
 //  - 리버트 ctx.source='undo' → channel='unknown' 이라 픽커(channel='web')에서 자연 제외 — Z 연타가 자기 리버트를
 //    다시 되돌리며 핑퐁하지 않고 그 다음 옛 작업으로 걸어간다.
 //  한계(v1): 태그·체크리스트·댓글·시간추적·커스텀필드값·정렬(reorder)은 비감사라 대상 아님.
-//    knowledge link_category 는 교체(replace) 시맨틱이라 이전 카테고리가 스냅샷에 없어 제외.
+//    (#1563 해소) knowledge link_category 는 교체(replace) 시맨틱이라 이전 카테고리가 스냅샷에 없어 제외돼
+//    있었으나, 스토어가 교체 직전 매핑을 before 에 싣게 되면서 되돌릴 수 있게 됐다(행렬에 추가).
 import { z } from "zod";
 import { HttpError } from "./rest-util.js";
 import type { Capability, CapabilityCtx } from "./types.js";
@@ -107,7 +108,9 @@ const PROJECT_OPS: Record<string, Apply> = {
 };
 
 // 지식 행 스냅샷 → upsertKnowledge 입력(본문·메타 재기록; 카테고리는 미전송=보존, lifecycle 은 update 경로에서 불변).
-const knowledgeUpsertInput = (s: Record<string, any>) => ({
+//  export(#1546): 지식 이력 패널의 '이 버전으로 되돌리기'가 같은 매핑을 쓴다 — 스냅샷을 upsert 입력으로 옮기는
+//  규칙이 두 벌이면 한쪽만 facet 을 빠뜨려도 조용히 그 필드가 지워진다(is_wiki·type 유실이 그 사고).
+export const knowledgeUpsertInput = (s: Record<string, any>) => ({
   name: String(s.name), title: s.title ?? undefined, body_md: String(s.body_md ?? ""),
   injection: s.injection ?? undefined, provenance: s.provenance ?? undefined,
   supersedes: s.supersedes ?? undefined, summary: s.summary ?? null, sort: s.sort ?? undefined,
@@ -175,7 +178,19 @@ const KNOWLEDGE_OPS: Record<string, Apply> = {
     if (d === "before") await linkKnowledgeSource(String(r.entity_key), Number(t.source_id), String(t.relation), ctx);
     else await unlinkKnowledgeSource(String(r.entity_key), Number(t.source_id), String(t.relation), ctx);
   },
-  // link_category 는 교체(replace) — 이전 카테고리가 스냅샷에 없어 제외(행렬 부재 = 픽커가 건너뜀).
+  // link_category(#1563) — 스토어가 교체 직전 매핑을 before 에 실으면서 되돌릴 수 있게 됐다.
+  //  한쪽이 비면(before=null: 그 전엔 분류가 없었다 / after 는 항상 있다) 반대편 분류를 떼는 것이 그 방향의 복원이다.
+  //  ⚠ #1563 배포 **이전**에 쌓인 행은 before 가 정보 부재로 null 이라, 그걸 되돌리면 '이전 분류로 복원'이
+  //   아니라 '분류 해제'가 된다. 파괴적이진 않지만(미분류 인박스로 가고 다시 붙일 수 있다) 구분할 방법이 없다.
+  link_category: async (r, d, ctx) => {
+    const target = rec(d === "before" ? r.before : r.after);
+    const other = rec(d === "before" ? r.after : r.before);
+    if (target.category_id != null) {
+      await linkKnowledgeCategory(String(r.entity_key), Number(target.category_id), String(target.state ?? "confirmed"), ctx);
+    } else if (other.category_id != null) {
+      await unlinkKnowledgeCategory(String(r.entity_key), Number(other.category_id), ctx);
+    }
+  },
 };
 
 const CATEGORY_OPS: Record<string, Apply> = {

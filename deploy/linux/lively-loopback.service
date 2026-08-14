@@ -1,0 +1,10 @@
+[Unit]
+Description=Lively loopback proxy (:8080 → active color :@ACTIVE_PORT@)
+Requires=lively-loopback.socket
+After=lively-loopback.socket
+[Service]
+# systemd-socket-proxyd: socket-activated L4 TCP 프록시(HTTP/WS 그대로 통과). target 은 현재 active color 포트.
+#  flip 시 render_loopback_forwarder 가 이 파일을 새 active 포트로 재렌더 → restart 로 대상 전환(socket 은 상시 listen).
+ExecStart=@PROXYD_BIN@ 127.0.0.1:@ACTIVE_PORT@
+Restart=on-failure
+RestartSec=2

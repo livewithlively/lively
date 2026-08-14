@@ -22,7 +22,9 @@ import { sessionFromHeaders, readOnlyFromHeaders, incognitoFromHeaders } from ".
 import {
   parseSessionCookie, createSession, revokeSession, sessionCookie, clearSessionCookie,
 } from "./auth/sessions.js";
-import { verifyLogin, verifyOwnPassword, setMemberPassword } from "./auth/local-accounts.js";
+import { verifyLogin, verifyOwnPassword, setMemberPassword, hasCredential } from "./auth/local-accounts.js";
+import { activeProviders } from "./auth/providers.js";
+import { ee } from "./enterprise/registry.js"; // #1601 외부 IdP 로그인(SSO)은 Enterprise — 미탑재면 local 만 남는다
 import { gatewayUrlForRequest } from "./gateway-url.js";
 import { startDeviceAuth, pollDeviceAuth } from "./org/auth/device-auth.js";
 import { exchangeSessionCode } from "./org/store.js"; // #1454 S1 — 세션 SSO 브리지(1회용 코드 → 세션)
@@ -63,6 +65,18 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     res.json({ ok: true, memberId: result.memberId, mustChange: result.mustChange });
   }));
 
+  // ── 활성 제공자 목록 — 로그인 화면이 어떤 버튼을 그릴지 묻는다. 라벨 외엔 아무 설정도 나가지 않는다. ──
+  //  ★ #1601 — 외부 IdP 로그인(SSO/OIDC) 구현은 Enterprise(src/ee/auth/)로 갔다. EE 미탑재면 여기 local 하나만
+  //   담겨 돌아오고 로그인 화면에 SSO 버튼이 안 뜬다 — 거부가 아니라 **그게 정상 동작**이다(auth/providers.ts 참조).
+  app.get("/api/ui/auth/providers", wrap(async (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ providers: await activeProviders() });
+  }));
+
+  // 외부 IdP 로그인(SSO) 라우트 — 인가 개시·콜백·계정 갈림길. 전부 **무인증**(세션을 얻기 전에 타는 문)이라
+  //  코어의 scope 미들웨어를 태우지 않고 EE 가 직접 app 에 붙인다. 미탑재면 그 경로들이 아예 없다(404).
+  ee().sso?.registerSsoRoutes(app);
+
   // ── 세션 SSO 브리지 교환(#1454 S1) — 컨트롤플레인이 발급한 1회용 코드(org_session_mint)를 웹 세션으로. ──
   //  **비인증**(로그인과 같은 성격 — 세션을 얻기 전에 탈 수 있는 유일한 문). code 자체가 비밀이다:
   //  TTL 60초·1회용·저장은 sha256 뿐(검증·소비·감사는 exchangeSessionCode 가 원자적으로 수행).
@@ -96,6 +110,41 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     if (!ok) { res.status(401).json({ error: "현재 비밀번호가 올바르지 않습니다" }); return; }
     await setMemberPassword(user.userId, nextPw, { mustChange: false, actor: user.userId });
     res.setHeader("Cache-Control", "no-store");
+    res.json({ ok: true });
+  }));
+
+  // ── 내 로그인 수단(#1520 A) — '지금 무엇으로 들어올 수 있는가' + 회사 계정 연결 해제. ──
+  //  연결 '시작'은 여기가 아니라 /api/ui/auth/oidc/start?link=1 이다(IdP 왕복이 필요하므로 302 흐름).
+  app.get("/api/ui/me/logins", ...mw(null), wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const user = userOf(req);
+    const providers = await activeProviders();
+    // ★ #1601 — linked/email 은 EE(SSO) 소관, hasPassword 는 코어(local-accounts) 소관이다.
+    //  EE 미탑재면 '안 붙었다'가 사실이므로 그대로 답한다(거부하지 않는다) — 화면은 비밀번호 수단을 계속 보여준다.
+    const link = (await ee().sso?.ssoLinkStatus(user.userId)) ?? { linked: false, email: null };
+    res.json({
+      ...link,
+      hasPassword: await hasCredential(user.userId),
+      oidcAvailable: providers.some((p) => p.kind === "oidc" && p.enabled),
+      oidcLabel: providers.find((p) => p.kind === "oidc")?.label ?? null,
+    });
+  }));
+
+  // 해제 — 로컬 비밀번호가 없으면 거절한다(해제하는 순간 로그인 수단이 0이 되어 자기 계정에서 잠긴다).
+  app.post("/api/ui/me/oidc/unlink", ...mw(null), wrap(async (req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    const sso = ee().sso;
+    // EE 미탑재면 애초에 붙일 수 있는 IdP 가 없다 — 해제할 것도 없으므로 404(정책 거부가 아니라 부재).
+    if (!sso) { res.status(404).json({ error: "회사 계정 로그인이 이 배포에 설정되어 있지 않습니다" }); return; }
+    const r = await sso.ssoUnlink(userOf(req).userId);
+    if (!r.ok) {
+      res.status(r.reason === "would_lock_out" ? 409 : 404).json({
+        error: r.reason === "would_lock_out"
+          ? "비밀번호를 먼저 설정하세요 — 지금 해제하면 로그인할 수단이 없어집니다"
+          : "구성원을 찾을 수 없습니다",
+      });
+      return;
+    }
     res.json({ ok: true });
   }));
 

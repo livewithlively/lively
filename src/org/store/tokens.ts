@@ -11,25 +11,39 @@ import { audit, sha256 } from "./audit.js";
 // email 은 토큰에 저장하지 않는다 — 귀속/표시용 email 은 member_id → org_member 에서 파생(중복·stale 제거).
 // client 를 넘기면 그 커넥션(트랜잭션 중)에서 INSERT+audit 을 실행한다(#880 device flow: consume-UPDATE 와
 //  같은 BEGIN/COMMIT 원자성 — 안 그러면 토큰이 독립 커밋돼 COMMIT 실패 시 orphan 토큰 누수). 기본은 풀(autocommit).
+// clientId/resource/expiresInSec 는 OAuth 인가서버(#1473 T2)가 채우는 바인딩 3종 — 생략하면 종전 그대로
+//  '만료 없는·클라이언트 없는' 사람 발급 토큰이다(무회귀).
 export async function mintToken(input: {
   userId: string;
   scopes: string[];
   projects?: string[];
   label?: string | null;
   memberId?: string | null;
-}, actor?: string, source?: string, client?: pg.PoolClient): Promise<{ token: string; tokenHash: string }> {
+  clientId?: string | null;
+  resource?: string | null;
+  expiresInSec?: number | null;
+}, actor?: string, source?: string, client?: pg.PoolClient): Promise<{ token: string; tokenHash: string; expiresAt: Date | null }> {
   const exec = client ?? itemsPool;
   const token = "lvk_" + crypto.randomBytes(24).toString("base64url");
   const tokenHash = sha256(token);
-  await exec.query(
-    `INSERT INTO auth_token(token_hash, user_id, scopes, projects, label, member_id, created_by)
-       VALUES($1,$2,$3::jsonb,$4::jsonb,$5,$6,$7)`,
+  const ttl = input.expiresInSec != null && Number.isFinite(input.expiresInSec) && input.expiresInSec > 0
+    ? Math.floor(input.expiresInSec) : null;
+  // 만료는 DB now() 기준으로 계산한다 — 검증(verifyDbToken)도 DB now() 라 시계가 하나로 유지된다.
+  const r = await exec.query(
+    `INSERT INTO auth_token(token_hash, user_id, scopes, projects, label, member_id, created_by,
+                            client_id, resource, expires_at)
+       VALUES($1,$2,$3::jsonb,$4::jsonb,$5,$6,$7,$8,$9,
+              now() + ($10::int * interval '1 second'))
+     RETURNING expires_at`,
     [tokenHash, input.userId, JSON.stringify(input.scopes),
-     JSON.stringify(input.projects ?? ["*"]), input.label ?? null, input.memberId ?? null, actor ?? null],
+     JSON.stringify(input.projects ?? ["*"]), input.label ?? null, input.memberId ?? null, actor ?? null,
+     input.clientId ?? null, input.resource ?? null, ttl == null ? null : String(ttl)],
   );
   await audit("auth_token", input.userId, "mint",
-    null, { userId: input.userId, scopes: input.scopes, label: input.label, memberId: input.memberId }, actor, source, client);
-  return { token, tokenHash };
+    null, { userId: input.userId, scopes: input.scopes, label: input.label, memberId: input.memberId,
+            clientId: input.clientId ?? null, resource: input.resource ?? null }, actor, source, client);
+  const expiresAt = (r.rows[0] as { expires_at: string | null } | undefined)?.expires_at ?? null;
+  return { token, tokenHash, expiresAt: expiresAt ? new Date(expiresAt) : null };
 }
 
 export interface TokenMeta {
@@ -77,22 +91,39 @@ export function computeEffectiveScopes(opts: {
   return tokenScopes.filter((s) => memberScopes.has(s));
 }
 
+// verifyDbToken 이 돌려주는 토큰 신원 — LivelyUser 원재료 + OAuth 발급분의 바인딩 3종(#1473 T2).
+//  clientId/resource/expiresAt 은 사람이 발급한 장기 토큰이면 전부 null(종전 동작 그대로).
+export interface DbTokenIdentity {
+  userId: string;
+  email: string;
+  scopes: string[];
+  projects: string[];
+  clientId: string | null;   // 발급 OAuth 클라이언트(oauth_client.client_id). 감사·읽기전용 프로필(T3)의 축.
+  resource: string | null;   // RFC 8707 대상(audience) — 자원서버가 '내 앞으로 발급된 토큰인가'를 이걸로 판정.
+  expiresAt: number | null;  // Unix 초. null = 만료 없음.
+}
+
 // 인증 경로(bearer.ts) — 평문 토큰 → 해시 조회. revoked 아니면 LivelyUser shape 반환, 아니면 null.
 // ITEMS_DATABASE_URL 미설정/오류 시 null(fail-closed: 무효 토큰 취급).
-export async function verifyDbToken(token: string): Promise<{ userId: string; email: string; scopes: string[]; projects: string[] } | null> {
+// ⚠ 만료는 **DB 의 now() 로** 판정한다(#1473 T2) — 앱 서버 시계에 의존하지 않고, web_session 검증과 같은
+//  규율이다. 이 검사가 없으면 OAuth 액세스 토큰(1시간)이 영구 토큰이 된다(만료가 장식이 됨).
+export async function verifyDbToken(token: string): Promise<DbTokenIdentity | null> {
   if (!process.env.ITEMS_DATABASE_URL) return null;
   try {
     // email·권한 상한 모두 토큰이 아니라 구성원에서 파생(같은 쿼리 LEFT JOIN — 라운드트립 0, 항상 최신).
     const r = await itemsPool.query(
       `SELECT t.user_id, t.member_id, m.email AS email, m.state AS member_state,
-              t.scopes AS token_scopes, m.scopes AS member_scopes, t.projects
+              t.scopes AS token_scopes, m.scopes AS member_scopes, t.projects,
+              t.client_id, t.resource, EXTRACT(EPOCH FROM t.expires_at) AS expires_epoch
          FROM auth_token t LEFT JOIN org_member m ON m.id = t.member_id
-        WHERE t.token_hash=$1 AND t.revoked_at IS NULL`,
+        WHERE t.token_hash=$1 AND t.revoked_at IS NULL
+          AND (t.expires_at IS NULL OR t.expires_at > now())`,
       [sha256(token)],
     );
     const row = r.rows[0] as {
       user_id: string; member_id: string | null; email: string | null;
       member_state: string | null; token_scopes: unknown; member_scopes: unknown; projects: unknown;
+      client_id: string | null; resource: string | null; expires_epoch: string | null;
     } | undefined;
     if (!row) return null;
     // JSONB scopes/projects 는 런타임에 무엇이든 될 수 있다(마이그레이션 버그·손상) → 보안 경계에서
@@ -109,7 +140,13 @@ export async function verifyDbToken(token: string): Promise<{ userId: string; em
     if (scopes === null) return null; // 멤버 비활성/삭제 → 토큰 무효(→ 401)
     // last_used 갱신은 베스트에포트(인증 핫패스 — 실패 무시).
     itemsPool.query(`UPDATE auth_token SET last_used_at=now() WHERE token_hash=$1`, [sha256(token)]).catch(() => {});
-    return { userId: row.user_id, email: row.email ?? "", scopes, projects: strArr(row.projects, ["*"]) };
+    return {
+      userId: row.user_id, email: row.email ?? "", scopes, projects: strArr(row.projects, ["*"]),
+      clientId: row.client_id ?? null,
+      resource: row.resource ?? null,
+      // numeric → JS number. NaN/음수는 만료없음으로 오독되면 안 되므로 유한수만 통과시킨다.
+      expiresAt: row.expires_epoch == null ? null : (Number.isFinite(Number(row.expires_epoch)) ? Math.floor(Number(row.expires_epoch)) : null),
+    };
   } catch {
     return null;
   }

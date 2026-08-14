@@ -1,0 +1,181 @@
+name: release-desktop
+# 태그 푸쉬(vX.Y.Z) → mac/win/linux 데스크톱 앱 빌드 → 같은 GitHub Release 에 에셋 추가 (#1541 T6).
+#
+# 왜 release.yml 과 나눴나 — 그쪽은 ubuntu 단일 잡으로 **서버 설치 번들(lively.tgz)** 을 만든다.
+#  데스크톱은 각 OS 러너에서 그 OS 용으로만 만들 수 있어(코드서명·설치기가 네이티브 도구를 쓴다) 매트릭스가 필요하고,
+#  실패해도 서버 릴리스를 막으면 안 된다(축이 다르다). 그래서 별도 워크플로 + 같은 릴리스에 붙인다.
+#
+# ⚠ **서명은 시크릿이 있을 때만** 한다. 없으면 electron-builder 가 서명을 건너뛰고 그대로 빌드한다
+#  (mac 은 Gatekeeper 경고, win 은 SmartScreen 경고를 사용자가 보게 된다 — 그 사실을 요약에 남긴다).
+#  포크·커뮤니티 빌드가 시크릿 없이도 돌아야 하므로 실패로 만들지 않는다.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:          # 서명·설치기만 따로 확인하고 싶을 때 수동 실행
+
+permissions:
+  contents: write             # 릴리스 에셋 업로드
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false        # 한 OS 가 깨져도 나머지 산출물은 나온다
+      matrix:
+        include:
+          - os: macos-latest
+            name: mac
+          - os: windows-latest
+            name: win
+          - os: ubuntu-latest
+            name: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: 의존성
+        working-directory: desktop
+        run: npm ci
+
+      # ── 버전 스탬프 = 릴리스 태그 ──────────────────────────────────────────────
+      # electron-builder 는 `desktop/package.json` 의 version 으로 **산출물 이름과 `latest*.yml`** 을 만든다.
+      #  거기에 손으로 박아 둔 값(0.1.0)이 남아 있으면 릴리스를 몇 번을 내도 업데이터가 보는 버전은 늘 같아서
+      #  **자동 업데이트가 영원히 "이미 최신"으로 판정한다** — 설치는 되는데 그 뒤로 아무도 새 버전을 못 받는다.
+      #  서버 번들(release.yml)과 같은 규약을 쓴다: 버전의 정본은 태그이고 package.json 은 그걸 받아 적는다.
+      # ⚠ `npm ci` **뒤에** 찍는다 — 먼저 바꾸면 package-lock.json 과 어긋나 `npm ci` 가 거부한다.
+      - name: 버전 스탬프 = 태그
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        working-directory: desktop
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          node -e '
+            const fs = require("fs");
+            const j = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            j.version = process.argv[1];
+            fs.writeFileSync("package.json", JSON.stringify(j, null, 2) + "\n");
+          ' "$V"
+          echo "desktop version = $(node -p "require(\"./package.json\").version")"
+
+      # 앱 로직 검증 — Electron 을 띄우지 않는 층(루트 체인과 같은 파일).
+      - name: 코어 테스트
+        working-directory: desktop
+        run: node main/desktop-core.test.mjs
+
+      # ── 서명 시크릿 유무를 **먼저 말한다** — 나중에 "왜 경고가 뜨지" 를 안 겪게. ──
+      - name: 서명 상태
+        shell: bash
+        run: |
+          if [ "${{ matrix.name }}" = "mac" ]; then
+            if [ -n "${{ secrets.MAC_CSC_LINK }}" ]; then echo "mac: 서명 O"; else echo "::warning::mac 서명 시크릿 없음 — 미서명 빌드(Gatekeeper 경고). 자동 업데이트도 불가."; fi
+            # 공증은 서명과 **별개 축**이다 — 서명만 하고 공증을 빼면 사용자는 여전히 "확인되지 않은 개발자" 를 본다.
+            if [ -n "${{ secrets.APPLE_API_KEY_ID }}" ] || [ -n "${{ secrets.APPLE_ID }}" ]; then echo "mac: 공증 O"; else echo "::warning::mac 공증 자격 없음 — 서명해도 Gatekeeper 는 막는다(Apple Developer 계정 필요)."; fi
+          elif [ "${{ matrix.name }}" = "win" ]; then
+            if [ -n "${{ secrets.WIN_CSC_LINK }}" ]; then echo "win: 서명 O"; else echo "::warning::win 서명 시크릿 없음 — 미서명 빌드(SmartScreen 경고)."; fi
+          fi
+
+      - name: 빌드 (mac)
+        if: matrix.name == 'mac'
+        working-directory: desktop
+        env:
+          # 인증서(base64 p12)와 암호 — 없으면 electron-builder 가 서명을 건너뛴다.
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          # ── 공증(notarization) — 아래 **한 벌이 다 채워지면** electron-builder 가 자동으로 돌린다.
+          #  ① App Store Connect API 키 (공식 권장 — 계정 비밀번호가 CI 에 안 들어간다. 키는 폐기·회전이 쉽다)
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}              # .p8 파일 경로 또는 내용
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          #  ② Apple ID + 앱 암호 (폴백 — ①이 없을 때만 쓰인다)
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          # ⚠ GitHub Actions 는 **없는 시크릿을 빈 문자열 env 로** 넘긴다(unset 이 아니다). electron-builder 는
+          #  `CSC_LINK` 가 '정의돼 있으면' 그 값을 인증서 **파일 경로**로 보고 열려 하므로, 빈 문자열이면
+          #  projectDir 을 가리켜 `⨯ <projectDir> not a file` 로 죽는다.
+          #  실측 A/B(같은 맥, 같은 커밋): 빈 문자열 → EXIT 1 · 아예 unset → EXIT 0("skipped code signing").
+          #  이 워크플로의 계약은 '시크릿 없으면 미서명으로 그냥 빌드'(포크·커뮤니티 빌드가 돌아야 한다)이므로
+          #  **빈 값은 넘기지 않는다**. 서명은 값이 실제로 있을 때만 시도한다.
+          for v in CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER \
+                   APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!v:-}" ]; then unset "$v"; fi
+          done
+          npm run icon
+          if [ -n "${CSC_LINK:-}" ]; then
+            npx electron-builder --mac --publish never          # 진짜 인증서 — package.json 의 배포 설정 그대로
+          else
+            # ⚠ 인증서가 없을 때 **서명을 건너뛰면 안 된다.** electron-builder 는 identity 미설정 + 인증서 부재면
+            #  서명을 통째로 스킵하는데(ad-hoc 자동 폴백 없음), 그러면 번들엔 Electron 바이너리의 **linker-signed
+            #  서명이 그대로 남아 무효**가 된다(app.asar 를 넣고 실행파일 이름을 바꿨으니 봉인이 깨진다).
+            #  실측: `codesign --verify` 가 "code has no resources but signature indicates they must be present" 로 실패하고,
+            #  내려받은 사용자는 "확인되지 않은 개발자"(우회 가능)가 아니라 **"손상되었기 때문에 열 수 없습니다"**(우회 불가)를 본다.
+            #  → 명시적 ad-hoc(`identity=-`)으로 **다시 봉인**한다. 그러면 판정이 단순 `rejected` 가 되어
+            #    우클릭▸열기로 넘어갈 수 있다(공증은 여전히 별개 축 — Apple 자격이 들어오면 위 분기로 간다).
+            #  ⚠ ad-hoc 은 hardenedRuntime 과 같이 못 쓴다(라이브러리 검증에 걸려 앱이 안 뜬다) → 여기서만 끈다.
+            #    package.json 은 배포 의도(hardenedRuntime: true)를 그대로 유지한다.
+            npx electron-builder --mac --publish never -c.mac.identity=- -c.mac.hardenedRuntime=false
+          fi
+
+      # ★ 서명이 **유효한지** 본다. 빌드 성공은 서명 유효를 뜻하지 않는다 — 위 함정이 정확히 그 틈이었다.
+      #  여기서 실패하면 릴리스를 막는다(사용자가 '손상됨' 을 보는 것보다 릴리스가 안 나가는 게 낫다).
+      - name: 서명 유효성 (mac)
+        if: matrix.name == 'mac'
+        shell: bash
+        working-directory: desktop
+        run: |
+          APP="$(find release -maxdepth 2 -name '*.app' | head -1)"
+          [ -n "$APP" ] || { echo "::error::mac .app 산출물을 찾지 못했다"; exit 1; }
+          codesign -dv --verbose=2 "$APP" 2>&1 | sed 's/^/  /'
+          codesign --verify --deep --strict "$APP" || { echo "::error::서명이 무효하다 — 내려받은 사용자는 '손상되었습니다' 를 본다"; exit 1; }
+          echo "✓ 서명 유효"
+
+      - name: 빌드 (win)
+        if: matrix.name == 'win'
+        working-directory: desktop
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: npm run icon && npx electron-builder --win --publish never
+
+      - name: 빌드 (linux)
+        if: matrix.name == 'linux'
+        working-directory: desktop
+        run: npm run icon && npx electron-builder --linux --publish never
+
+      # ★ 산출물이 **실제로 뜨는지** 본다 — electron-builder 는 files 글롭이 틀려 렌더러가 통째로 빠져도
+      #  성공으로 끝난다. 빌드 로그가 아니라 뜬 앱의 DOM 으로 판정한다(desktop/verify-packaged.mjs).
+      #  헤드리스 러너라 리눅스는 xvfb 가 필요하고, 그마저 불안정하면 이 스텝만 실패해도 에셋은 남긴다.
+      - name: 산출물 실행 검증 (mac/win)
+        if: matrix.name != 'linux'
+        continue-on-error: true
+        working-directory: desktop
+        run: node verify-packaged.mjs
+
+      - name: 산출물 목록
+        shell: bash
+        working-directory: desktop
+        run: ls -la release/ || true
+
+      - name: 에셋 업로드 (릴리스)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            desktop/release/*.dmg
+            desktop/release/*.zip
+            desktop/release/*.exe
+            desktop/release/*.AppImage
+            desktop/release/latest*.yml
+          fail_on_unmatched_files: false
+
+      # 태그가 아닌 수동 실행이면 아티팩트로만 남긴다(릴리스를 건드리지 않는다).
+      - name: 아티팩트 업로드 (수동 실행)
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: lively-desktop-${{ matrix.name }}
+          path: desktop/release/
+          if-no-files-found: warn

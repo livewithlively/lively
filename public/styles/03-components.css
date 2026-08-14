@@ -225,6 +225,11 @@ label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; fo
   font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
   font-size: 12.5px; line-height: 1.55; color: var(--ink); background: none; border: 0; padding: 0;
 }
+/* 코드블록 [복사] 버튼(사용 가이드 docsDecorate) — pre 우상단에 얹는다.
+   ⚠ pre 자신은 overflow:auto 라 버튼을 그 안에 두면 가로 스크롤과 함께 흘러간다 → 감싸는 래퍼를 기준으로 고정. */
+.md-pre-copy { position: relative; }
+.md-pre-copy > .btn { position: absolute; top: 6px; right: 6px; z-index: 1; opacity: .5; background: var(--bg); }
+.md-pre-copy:hover > .btn, .md-pre-copy > .btn:focus-visible { opacity: 1; }
 .md-list { margin: 0 0 12px; padding-left: 22px; }
 .md-list li { margin: 2px 0; }
 .md-list .md-list { margin-bottom: 0; }
@@ -269,6 +274,11 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .wikicat-should-label { font-style: normal; font-size: 10.5px; font-weight: 700; color: var(--muted-2);
   margin-right: 6px; text-transform: none; }
 .wikicat-should-empty { color: var(--muted-2); font-style: italic; }
+/* #1618 후속 — 잡의 '전용 화면(주인)' 표기. 채운 색 필을 쓰지 않는다(DS: 상태 필 금지) — 링크로 읽히되
+   행의 주역(이름)을 이기지 않게 .wikicat-key 급 크기에 accent 색만 얹는다. a·span 둘 다 같은 모양이어야
+   한다(주인이 이 화면 안이면 링크가 아니라 텍스트인데, 그때만 생김새가 달라지면 '눌리는 것'처럼 안 보인다). */
+.wikicat-owner { font-size: 11.5px; color: var(--accent); text-decoration: none; white-space: nowrap; }
+a.wikicat-owner:hover { text-decoration: underline; }
 .wikicat-row-acts { display: flex; gap: 6px; flex-shrink: 0; opacity: .55; transition: opacity .12s; }
 .wikicat-row:hover .wikicat-row-acts, .wikicat-row:focus-within .wikicat-row-acts { opacity: 1; }
 .wikicat-empty { padding: 12px 14px; color: var(--muted-2); font-size: 12.5px; }
@@ -295,6 +305,17 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .wikicat-mismatch-t:hover { color: var(--blue); text-decoration: underline; }
 .wikicat-mismatch-to { flex: none; font-size: 11.5px; font-weight: 700; color: var(--ink-sub); }
 .wikicat-mismatch-d { margin-left: auto; flex: none; font-size: 11.5px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+/* 좁은 화면에서 행 액션이 잘려 '기능이 사라지던' 문제 — .wikicat-rows 가 overflow:hidden 이라 넘친 버튼은
+   스크롤로도 못 닿았다(390px 실측: acts 오른쪽 끝 492px). 모바일에서 기능을 숨기지 않는다는 규칙에 어긋나므로
+   좁아지면 행을 두 줄로 접어 액션을 아래로 내린다. 이 컴포넌트를 쓰는 모든 패널(분류·레포·컴퓨터)에 함께 적용된다. */
+@media (max-width: 640px) {
+  .wikicat-row { flex-wrap: wrap; }
+  .wikicat-row-main { flex-basis: 100%; }
+  /* 액션 묶음도 한 줄을 통째로 차지하게 한다 — 기본값 flex-shrink:0 이라 폭이 max-content 에 고정돼
+     안쪽 flex-wrap 이 걸리지 않고 마지막 버튼이 잘렸다(390px 실측). 여기선 왼쪽 정렬이 자연스럽다. */
+  .wikicat-row-acts { flex-basis: 100%; margin-left: 0; flex-wrap: wrap; justify-content: flex-start; opacity: 1; }
+}
+
 /* 분류 폼의 연결 레포 체크박스 — 레포 수가 소수라 나열이 다중선택 <select> 보다 읽기 쉽다. */
 .catform-repos { display: flex; flex-wrap: wrap; gap: 8px 14px; }
 .catform-repo { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-sub); cursor: pointer; }
@@ -407,6 +428,10 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .gate-btn { width: 100%; }
 .gate-token-toggle { background: none; border: 0; color: var(--muted-2); font-size: 12.5px; cursor: pointer; padding: 4px; text-decoration: underline; align-self: center; }
 .gate-token-toggle:hover { color: var(--ink-sub); }
+/* 외부 IdP 로그인(#1520) — 로컬 폼과 시각적으로 분리한다. 'IdP 가 곧 이 조직의 정문' 인 배포가 많아
+   보조 버튼처럼 보이면 안 되지만, 폴백(로컬)을 지우지도 않으므로 구분선으로 층을 나눈다. */
+.gate-providers { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.gate-providers .gate-idp-hint { font-size: 12.5px; color: var(--muted-2); margin: 0; text-align: center; }
 
 /* ── 토스트 — 헤어라인 보더 + 선두 6px 점(성공=민트·에러=코랄) ── */
 /* z-index 는 모든 모달/오버레이/드로어 위여야 한다(현 최대 .cmt-backdrop=1300). 토스트는 전역 피드백이라

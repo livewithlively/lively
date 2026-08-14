@@ -13,6 +13,9 @@ export interface LivelyUser {
   //  (B5: 회수 불가 토큰으로 fleet 코드 푸시 금지 — 세션·DB 토큰은 허용).
   tokenSource?: "static" | "db" | "session";
   tokenHashPrefix?: string; // DB 토큰 sha256 prefix(감사 상관추적용 — 비밀 아님)
+  // OAuth 2.1 인가서버가 발급한 토큰이면 그 클라이언트 id(#1473 T2). 사람이 발급한 토큰은 없음(undefined).
+  //  헤더를 못 넣는 챗 표면의 프로필(읽기전용 등)을 '토큰에 묶는' 축이 이 값이다(T3 #1499).
+  oauthClientId?: string;
 }
 
 // MCP 핸들러의 extra.authInfo.extra 에 우리가 심어둔 사용자 정보를 꺼낸다.

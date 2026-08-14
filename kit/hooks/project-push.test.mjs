@@ -27,11 +27,22 @@ let SERVER = {};          // path → { body, mtime }
 let TRUNCATED = false;    // 서버 매니페스트가 상한(5000)에 잘렸는가
 let SLOW_MS = 0;          // 모든 응답을 이만큼 지연 — 느린 게이트웨이(데드라인 계약 검증용)
 let puts = [], deletes = [];
+// 케이스 경계 — reset() 마다 증가한다. **데드라인 케이스(SLOW_MS=1500)는 훅이 스스로 끝나면서 in-flight 요청을
+//  남긴다.** 그 요청은 최대 1.5초 뒤에 이 핸들러에서 깨어나는데, 그 사이 다음 케이스가 시작돼 있으면
+//  남의 puts/SERVER 를 오염시켜 **엉뚱한 케이스가 깨진다**(윈도우 러너에서 실측: NFD 케이스가 `a.md` 를
+//  올린 것으로 보였다 — 그건 두 케이스 앞 데드라인 케이스의 늦은 PUT 이었다). 요청이 **도착한** 케이스를
+//  기억해 두고, 깨어났을 때 케이스가 바뀌었으면 아무것도 건드리지 않는다.
+let epoch = 0;
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, "http://x");
   const chunks = [];
+  const at = epoch;
   req.on("data", (c) => chunks.push(c));
   req.on("end", () => setTimeout(() => {
+    if (at !== epoch) {   // 앞 케이스가 남긴 늦은 요청 — 그 훅은 이미 죽었다(응답도 받을 데가 없다)
+      try { res.writeHead(503); res.end("{}"); } catch { /* 소켓이 이미 닫혔다 */ }
+      return;
+    }
     if (u.pathname === `/api/ui/v6/projects/${PROJECT_ID}/shared/manifest`) {
       const files = Object.entries(SERVER).map(([p, v]) => ({ path: p, mtime: v.mtime, size: Buffer.byteLength(v.body) }));
       res.writeHead(200, { "content-type": "application/json" });
@@ -83,7 +94,7 @@ async function runHook(dir, hookTimeoutMs = null) {
 }
 const upOf = (dir) => { try { return JSON.parse(fs.readFileSync(path.join(dir, ".lively", "sync-up.json"), "utf8")); } catch { return null; } };
 const ledgerOf = (dir) => { try { return JSON.parse(fs.readFileSync(path.join(dir, ".lively", "sync-ledger.json"), "utf8")).files; } catch { return null; } };
-const reset = () => { puts = []; deletes = []; SERVER = {}; TRUNCATED = false; SLOW_MS = 0; };
+const reset = () => { epoch++; puts = []; deletes = []; SERVER = {}; TRUNCATED = false; SLOW_MS = 0; };
 // 원장 항목 = '우리가 받은 서버 버전의 신원'. 서버 상태에서 그대로 떠서 만든다.
 const heldFrom = (paths) => Object.fromEntries(paths.map((p) => [p, { mtime: SERVER[p].mtime, size: Buffer.byteLength(SERVER[p].body) }]));
 

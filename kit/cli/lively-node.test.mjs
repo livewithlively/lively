@@ -12,6 +12,19 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
+// 이 파일은 **POSIX 상시화 경로의 e2e** 다 — tmux + launchd/systemd + pkill 을 스텁으로 가로채 검증한다.
+//  ⚠ 2026-08-05(#1541) 사양 변경: Windows 는 더 이상 비목표가 아니다. psmux(ConPTY 네이티브 tmux 구현) +
+//   작업 스케줄러로 **네이티브 지원**한다(WSL2 아님). 다만 그 경로는 여기서 못 돈다 — launchctl/systemctl
+//   스텁도, pkill 도 Windows 엔 없다. 그래서 갈라 둔다:
+//     · Windows 계약(경로 탐지·작업 스케줄러 XML) → `kit/cli/node-win-contract.test.mjs`(순수함수, 전 플랫폼)
+//     · Windows 실기기 등록·기동                  → Windows VM e2e(프로젝트 #1541)
+//  가드를 명시해 두는 관례는 유지한다(짝인 bootstrap-node-gate.test.mjs 와 동일) — 안 그러면 매번
+//  "이건 원래 안 되는 거였나"를 다시 조사하게 된다(#1510).
+if (process.platform === "win32") {
+  console.log("skip — 이 파일은 POSIX 상시화 e2e(launchd/systemd/pkill 스텁). Windows 경로는 node-win-contract.test.mjs + 실기기 e2e 가 덮는다.");
+  process.exit(0);
+}
+
 const pExecFile = promisify(execFile);
 const HERE = join(fileURLToPath(import.meta.url), "..");
 const CLI = join(HERE, "lively.mjs");

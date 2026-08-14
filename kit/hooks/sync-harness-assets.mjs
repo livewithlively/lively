@@ -4,8 +4,9 @@
 // 자산을 발견하므로(name+description 상시광고, 본문 온디맨드) 본문을 파일로 굳힌다 — 훅처럼 임시실행·삭제가 아니다.
 //
 //   Claude:  skill→ ~/.claude/skills/<id>/SKILL.md · subagent→ ~/.claude/agents/<id>.md · command→ ~/.claude/commands/<id>.md
-//   Codex:   skill→ ~/.codex/skills/<id>/SKILL.md (스킬은 Agent Skills 오픈표준 = Claude 와 동일 파일).
-//            subagent(.toml translator)·command(prompts deprecated)는 후속 — 이 스크립트는 skip+경고 로깅.
+//   Codex:   skill→ ~/.codex/skills/<id>/SKILL.md (Agent Skills 오픈표준 = Claude 와 **같은 파일**)
+//            subagent→ ~/.codex/agents/<id>.toml (포맷이 다르다 — composeCodexSubagent 가 변환)
+//            command→ ~/.codex/prompts/<id>.md  (커스텀 프롬프트 `/prompts:<id>` — 최상위 .md 만 스캔됨)
 //
 // 동기화 모델(session-preload 의 auto-approve reconcile 와 동형): ~/.lively/managed-harness-assets.json 매니페스트로
 //  'lively 가 심은 것'만 추적 → 멤버 본인 스킬은 절대 안 건드리고, lively 가 더는 원치 않는 것만 회수한다.
@@ -21,7 +22,16 @@
 import { readFileSync, writeFileSync, mkdirSync, rmSync, rmdirSync, existsSync, lstatSync, readdirSync, renameSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { randomUUID } from "node:crypto";
-import { join, dirname } from "node:path";
+import { join, dirname, relative, isAbsolute } from "node:path";
+// 하네스별 규약(경로·확장자·본문형식·재로드)은 **표 한 벌**에서 온다 — 종전엔 placement()·assetDirs() 두 곳이
+//  따로 하드코딩돼 어긋날 수 있었다(어긋나면 관측·로컬토글에서 그 종류가 통째로 안 보인다).
+//  ⚠ 이 import 가 성립하려면 harness-registry.mjs 가 이 파일과 **같은 디렉터리**로 설치돼야 한다
+//   (설치 시 ~/.lively/hooks/ 로 평평하게 복사되므로) → user-install 의 HOOK_SCRIPTS 에 등재돼 있다.
+import { resolveHarness, harness, placementFor, assetDirsFor, assetDirNames, isForeignGrokInvocation } from "./harness-registry.mjs";
+
+// grok compat 이중발화 가드(#1701) — grok 이 ~/.claude/settings.json 의 우리 훅을 그대로 실행한 사본이면
+//  비켜선다(사본은 --harness 없이 돌아 claude 자리에 sync 하므로 grok 세션에서 무의미 + 이중 fetch).
+if (isForeignGrokInvocation()) process.exit(0);
 
 const OFF = process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1";
 if (OFF) process.exit(0);
@@ -49,10 +59,7 @@ function machineId() {
   catch { return ""; } // 못 쓰면 서버가 host 로 폴백
 }
 
-const HARNESS = (() => {
-  const i = process.argv.indexOf("--harness");
-  return ((i > -1 ? process.argv[i + 1] : "") || process.env.LIVELY_HARNESS || "").toLowerCase();
-})() || "claude"; // 미설정=claude 기본(session-preload 와 동일 규약)
+const HARNESS = resolveHarness(process.argv, process.env); // 미설정=claude 기본(session-preload 와 동일 규약)
 
 function hookDisabled() {
   try {
@@ -65,17 +72,10 @@ const TOKEN = (process.env.LIVELY_TOKEN || "").trim() || readLocal("token");
 const GW = ((process.env.LIVELY_GATEWAY_URL || "").trim() || readLocal("gateway-url") || "http://localhost:8080").replace(/\/$/, "");
 
 // ── 대상 하네스별 자산 배치 규약 ──
-// 반환: { dir(자산 루트), file(절대경로), extraDirs(정리 대상 상위 디렉터리) } 또는 null(미지원=skip).
+// 반환: { root(자산 루트), file(절대경로), skillDir?(스킬 디렉터리) } 또는 null(미지원=skip).
+//  규약 자체는 harness-registry 의 표에 있다 — 여기선 위임만 한다(경로 하드코딩을 두 곳에 두지 않는다).
 function placement(kind, id) {
-  if (HARNESS === "codex") {
-    if (kind === "skill") return { file: join(CODEX_DIR, "skills", id, "SKILL.md"), skillDir: join(CODEX_DIR, "skills", id), root: join(CODEX_DIR, "skills") };
-    return null; // codex subagent(.toml)·command(prompts deprecated) — 후속과업
-  }
-  // claude(및 미설정 기본)
-  if (kind === "skill") return { file: join(CLAUDE_DIR, "skills", id, "SKILL.md"), skillDir: join(CLAUDE_DIR, "skills", id), root: join(CLAUDE_DIR, "skills") };
-  if (kind === "subagent") return { file: join(CLAUDE_DIR, "agents", `${id}.md`), root: join(CLAUDE_DIR, "agents") };
-  if (kind === "command") return { file: join(CLAUDE_DIR, "commands", `${id}.md`), root: join(CLAUDE_DIR, "commands") };
-  return null;
+  return placementFor(HARNESS, kind, id, HOME);
 }
 
 // YAML frontmatter 방출 — 값은 문자열(JSON 이중따옴표=유효 YAML flow scalar)·불리언·숫자·문자열배열.
@@ -85,7 +85,95 @@ function yamlValue(v) {
   if (Array.isArray(v)) return "[" + v.map((e) => JSON.stringify(String(e))).join(", ") + "]";
   return JSON.stringify(String(v ?? ""));
 }
+// provenance 한 줄(#932) — 이 파일은 중앙 asset 의 사본이라 손으로 만든 로컬 자산과 겉이 같다.
+const PROVENANCE = "라이블리가 materialize 한 사본입니다. 편집은 MCP org_harness_asset_upsert(또는 관리탭 ▸ 하네스) — 이 파일 직접 수정은 다음 sync 에 덮어써집니다.";
+
+// codex 서브에이전트 = **TOML**(md 아님). 필수 키 name·description·developer_instructions(본문=시스템 프롬프트).
+//  값은 전부 TOML basic 문자열(JSON.stringify) — 개행·따옴표·한글이 그대로 escape 된다. multi-line `"""` 를 쓰면
+//  본문에 `"""` 나 끝나는 따옴표가 있을 때 파일 전체가 깨지므로 쓰지 않는다(yamlValue 와 같은 철학: 가독성보다 정확성).
+//  ⚠ claude frontmatter 의 model·tools 는 **옮기지 않는다** — 모델 슬러그("sonnet")도 툴 이름도 하네스마다 달라
+//   그대로 넣으면 codex 가 뜨지 않거나 조용히 무시한다. 넘기는 건 이식 가능한 셋(name·description·본문)뿐이다.
+function composeCodexSubagent(asset) {
+  const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
+  const name = fm.name != null ? String(fm.name) : String(asset.id || "");
+  const desc = asset.description != null ? String(asset.description) : String(fm.description ?? "");
+  return [
+    `# ${PROVENANCE}`,
+    `name = ${JSON.stringify(name)}`,
+    `description = ${JSON.stringify(desc)}`,
+    `developer_instructions = ${JSON.stringify(String(asset.body || ""))}`,
+    "",
+  ].join("\n");
+}
+
+// codex 커스텀 프롬프트(`/prompts:<name>`) = **본문 그대로의 markdown**. claude command 의 frontmatter
+//  (description·argument-hint 등)는 codex 가 해석하지 않아 그대로 프롬프트 텍스트로 새어 들어가므로 싣지 않는다.
+function composeCodexPrompt(asset) {
+  return `<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
+}
+
+// 본문 변환기 — 어느 형식으로 쓸지는 표의 assets[kind].compose 가 정한다(하네스 이름으로 분기하지 않는다).
+//  "markdown" = frontmatter + 본문(claude 계열 공통, 스킬은 오픈표준이라 어느 하네스든 여기로 온다).
+const COMPOSERS = {
+  "codex-toml": composeCodexSubagent,
+  "codex-prompt": composeCodexPrompt,
+  "opencode-agent": composeOpencodeAgent,
+  "opencode-command": composeOpencodeCommand,
+  "antigravity-agent": composeAntigravityAgent,
+  "antigravity-workflow": composeAntigravityWorkflow,
+  "grok-agent": composeGrokAgent,
+};
+// opencode 서브에이전트 = md 지만 **frontmatter 스키마가 claude 와 다르다.**
+//  실측(1.18.12): `tools` 는 배열이 아니라 객체 · `color` 는 hex 또는 지정 enum · `model` 은 `provider/model` 형식.
+//  claude 값을 그대로 넣으면 `Configuration is invalid` 로 거부되고 — 여기가 중요하다 — **그 파일만 빠지는 게
+//  아니라 설정 로드가 통째로 실패해 스킬까지 0개가 된다**(실측). 그래서 이식 가능한 셋만 넘긴다:
+//  description + mode(subagent) + 본문. 나머지(color·model·tools)는 하네스가 알아서 기본값을 쓴다.
+function composeOpencodeAgent(asset) {
+  const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
+  const desc = asset.description != null ? String(asset.description) : String(fm.description ?? "");
+  return `---\ndescription: ${yamlValue(desc)}\nmode: "subagent"\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
+}
+
+// opencode 커맨드 — 같은 이유로 description 만 넘긴다(claude 의 argument-hint·allowed-tools 는 opencode 스키마에 없다).
+//  본문은 `template` 이 된다.
+function composeOpencodeCommand(asset) {
+  const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
+  const desc = asset.description != null ? String(asset.description) : String(fm.description ?? "");
+  return `---\ndescription: ${yamlValue(desc)}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
+}
+
+// antigravity 서브에이전트(agents/<n>/agent.md) — 실측(#1689)으로 안전 확인된 name·description 만 이식한다.
+//  claude 의 tools·color·model 은 antigravity 스키마 미확인이라 싣지 않는다(codex·opencode 와 같은 판단 —
+//  잘못된 frontmatter 의 폭발 반경이 하네스마다 달라도, 이식 가능 최소셋만 넘기는 규칙은 같다).
+function composeAntigravityAgent(asset) {
+  const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
+  const desc = asset.description != null ? String(asset.description) : String(fm.description ?? "");
+  const name = fm.name != null ? String(fm.name) : String(asset.id || "");
+  return `---\nname: ${yamlValue(name)}\ndescription: ${yamlValue(desc)}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
+}
+
+// antigravity 워크플로우(workflows/<n>.md — 슬래시커맨드 등가, `/<이름>` 으로 호출) — description + 본문만.
+//  실측(#1689): description frontmatter 워크플로우가 print 모드 포함 정상 실행. argument-hint 류는 미지원이라 제외.
+function composeAntigravityWorkflow(asset) {
+  const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
+  const desc = asset.description != null ? String(asset.description) : String(fm.description ?? "");
+  return `---\ndescription: ${yamlValue(desc)}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
+}
+
+// grok 서브에이전트(agents/<id>.md) — frontmatter 파서는 관용(#1701 실측: 미지 필드·claude 필드 로드됨,
+//  이웃 무해)이지만, claude 의 model 슬러그("sonnet")·tools 이름의 **런타임 의미**는 미실측이다.
+//  codex·opencode·antigravity 와 같은 판단으로 이식 가능 최소셋(name·description·본문)만 넘긴다.
+function composeGrokAgent(asset) {
+  const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
+  const desc = asset.description != null ? String(asset.description) : String(fm.description ?? "");
+  const name = fm.name != null ? String(fm.name) : String(asset.id || "");
+  return `---\nname: ${yamlValue(name)}\ndescription: ${yamlValue(desc)}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
+}
+
 function composeFile(asset) {
+  const spec = harness(HARNESS).assets[asset.kind];
+  const custom = spec && COMPOSERS[spec.compose];
+  if (custom) return custom(asset);
   const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
   const ordered = [];
   const seen = new Set();
@@ -94,10 +182,9 @@ function composeFile(asset) {
   push("description", asset.description != null ? asset.description : (fm.description ?? "")); // description 컬럼이 진실원천
   for (const k of Object.keys(fm)) if (k !== "name" && k !== "description") push(k, fm[k]);
   const lines = ordered.map(([k, v]) => `${k}: ${yamlValue(v)}`);
-  // provenance 한 줄(#932) — 이 파일은 중앙 asset 의 사본이라 손으로 만든 로컬 스킬과 겉이 같다. 세션이 파일만 봐도
-  //  '사본이니 중앙을 고쳐라'를 알게 마커를 박는다(frontmatter 뒤 = 로더 무영향, HTML 주석 = 렌더 무영향, 한 줄 = 노이즈 최소).
-  const provenance = "<!-- 라이블리가 materialize 한 사본입니다. 편집은 MCP org_harness_asset_upsert(또는 관리탭 ▸ 하네스) — 이 파일 직접 수정은 다음 sync 에 덮어써집니다. -->";
-  return `---\n${lines.join("\n")}\n---\n\n${provenance}\n\n${asset.body || ""}\n`;
+  // 세션이 파일만 봐도 '사본이니 중앙을 고쳐라'를 알게 마커를 박는다
+  //  (frontmatter 뒤 = 로더 무영향, HTML 주석 = 렌더 무영향, 한 줄 = 노이즈 최소).
+  return `---\n${lines.join("\n")}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
 }
 
 async function fetchAssets() {
@@ -122,10 +209,14 @@ function saveManifest(m) {
   try { mkdirSync(LIVELY, { recursive: true }); writeFileSync(MANIFEST, JSON.stringify(m, null, 2), { mode: 0o600 }); } catch { /* fail-soft */ }
 }
 
-// 경로가 root 아래인지(containment) — 정규화 후 prefix 검사. 심링크 통과는 별도 lstat 로 거부.
-function within(root, p) {
-  const r = root.endsWith("/") ? root : root + "/";
-  return p === root || p.startsWith(r);
+// 경로가 root 아래인지(containment). 심링크 통과는 별도 lstat 로 거부.
+//  ⚠ 문자열 prefix 검사(`root + "/"`)를 쓰면 **윈도우에서 항상 false** 다 — path.join 이 `\` 로 만드는데
+//   `/` 로 끝나는 접두사를 찾기 때문. 그러면 writeAsset 이 전부 조기 반환해 **조직 자산이 한 개도 안 깔린다**
+//   (게다가 그 분기는 stderr 도 안 내서 매 세션 조용히 실패한다 — 윈도우 실기기에서 자산 0개로 실측).
+//   path.relative 로 판정하면 구분자·드라이브 문자·대소문자를 path 모듈이 플랫폼에 맞게 처리한다.
+export function within(root, p) {
+  const rel = relative(root, p);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 // 대상 파일/디렉터리 경로 중 하나라도 심링크면 true(멤버 파일 탈취·트리 밖 write 방지).
 function anySymlink(paths) {
@@ -161,12 +252,17 @@ function writeAsset(asset, prevEntry) {
   } catch { return { ok: false }; }
 }
 
+// 회수 허용 경로 — 전 하네스의 자산 디렉터리명 합집합(skills·agents·commands·prompts·skill·agent·command …).
+const ASSET_DIR_RE = new RegExp(`[/\\\\](${[...assetDirNames()].join("|")})[/\\\\]`);
+
 // 자산 제거(매니페스트에 있으나 desired 에 없음) — 그 파일만 삭제, 빈 스킬 디렉터리 정리.
 function removeAsset(entry) {
   try {
     const f = entry.file;
-    // 방어 — 매니페스트가 변조돼도 자산 경로 패턴(.../{skills,agents,commands}/...) 밖 파일은 절대 삭제하지 않는다.
-    if (!f || !/[/\\](skills|agents|commands)[/\\]/.test(f)) return;
+    // 방어 — 매니페스트가 변조돼도 자산 디렉터리 밖 파일은 절대 삭제하지 않는다.
+    //  ⚠ 목록은 **표에서 파생**한다(손으로 적지 않는다) — 새 하네스의 디렉터리명을 빠뜨리면 회수(prune)가
+    //   조용히 안 돌아 '중앙에서 지운 자산이 멤버 디스크에 영원히 남는' 결함이 된다.
+    if (!f || !ASSET_DIR_RE.test(f)) return;
     if (!lstatSyncIsSymlink(f)) { try { rmSync(f, { force: true }); } catch { /* */ } }
     // 스킬은 <root>/<id>/SKILL.md 구조 → 부모 디렉터리가 비면 제거(rmdirSync=빈 디렉터리 전용, 비었을 때만 성공)
     if (entry.kind === "skill") {
@@ -179,7 +275,7 @@ function lstatSyncIsSymlink(p) { try { return lstatSync(p).isSymbolicLink(); } c
 
 // Claude 는 SessionStart 훅 완료 후 skills/commands 재스캔(같은 세션 반영). 변경 시에만 발화.
 function emitReload() {
-  if (HARNESS === "codex") return; // Codex 는 reloadSkills 미지원(재시작/자체 감지) — 무출력
+  if (!harness(HARNESS).reloadAssets) return; // 동적 재로드 미지원(codex·opencode 는 재시작) — 무출력
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", reloadSkills: true } }) + "\n");
 }
 
@@ -189,8 +285,49 @@ function emitReload() {
 // 사용자 **자체** 훅 관측(#893 후속) — ~/.claude/settings.json 의 hooks 중 라이블리 배선(.lively/) 아닌 것만.
 //  라이블리 훅은 파일이 아니라 run-custom 중앙 디스패치라 여기선 안 센다(웹은 '배선된 PC=전부 실행'으로 다룬다).
 //  훅은 settings.json 항목이지 파일이 아니므로 managed=false 표시전용(비파괴 .disabled 토글 대상 아님).
+// codex 자체 훅 관측 — ~/.codex/config.toml 의 [[hooks.<E>.hooks]] 중 **라이블리 배선이 아닌 것**만.
+//  라이블리 배선은 ① 관리 센티넬 블록 안이거나 ② command 가 .lively/hooks 를 가리킨다 — 둘 다 뺀다.
+//  TOML 파서를 들이지 않는다(이 훅의 계약 = 런타임 의존 0). 관측·표시 전용이라 정규식으로 충분하고, 틀려도
+//  웹 목록에 한 줄이 더/덜 보일 뿐 배포·회수엔 영향이 없다(claude 쪽 scanLocalHooks 와 같은 성격).
+//  ⚠ 센티넬 리터럴은 setup/user-install.mjs·user-uninstall.mjs 와 **정확히 같아야** 한다.
+const CDX_BEGIN = "# >>> lively-managed (auto-generated by workflow-std/adapters/codex — do not edit) >>>";
+const CDX_END = "# <<< lively-managed <<<";
+function scanLocalHooksCodex() {
+  let raw;
+  try { raw = readFileSync(join(CODEX_DIR, "config.toml"), "utf8"); } catch { return []; }
+  const bi = raw.indexOf(CDX_BEGIN);
+  if (bi !== -1) {
+    const ei = raw.indexOf(CDX_END, bi);
+    raw = raw.slice(0, bi) + (ei === -1 ? "" : raw.slice(ei + CDX_END.length));
+  }
+  const out = [], seen = new Set();
+  // [[hooks.<E>.hooks]] 헤더부터 다음 테이블 헤더 전까지가 한 핸들러 블록.
+  const blocks = /\[\[hooks\.([A-Za-z]+)\.hooks\]\]([\s\S]*?)(?=\n[ \t]*\[|$)/g;
+  let m;
+  while ((m = blocks.exec(raw))) {
+    const event = m[1];
+    const cm = /(^|\n)[ \t]*command[ \t]*=[ \t]*("(?:[^"\\]|\\.)*"|'[^']*')/.exec(m[2]);
+    if (!cm) continue;
+    const lit = cm[2];
+    let cmd = lit;
+    try { cmd = lit.startsWith("'") ? lit.slice(1, -1) : JSON.parse(lit); } catch { /* 원문 그대로 */ }
+    if (!cmd || cmd.includes(".lively/") || cmd.includes(".lively\\")) continue; // 라이블리 배선분 제외 = 내 것만
+    const tok = cmd.replace(/["']/g, "").split(/\s+/).find((t) => /[\\/]/.test(t) && !t.startsWith("-")) || cmd.split(/\s+/)[0] || "hook";
+    const base = (tok.split(/[\\/]/).pop() || tok).slice(0, 40);
+    let id = `${event}:${base}`.slice(0, 60);
+    while (seen.has(id)) id = id.length < 62 ? id + "~" : id.slice(0, -1) + "~";
+    seen.add(id);
+    out.push({ id, kind: "hook", managed: false });
+  }
+  return out;
+}
+
 function scanLocalHooks() {
-  if (HARNESS === "codex") return []; // codex 훅은 config.toml(별도 포맷) — 미지원
+  if (HARNESS === "codex") return scanLocalHooksCodex();
+  // settings-merge(claude) 가 아닌 하네스(opencode·antigravity)는 claude settings 를 읽으면 **남의 하네스 훅**을
+  //  이 하네스 것으로 잘못 보고한다 — 로컬 훅 스캐너가 없는 하네스는 정직하게 빈 목록(#1689, 종전엔 opencode 가
+  //  이 폴스루로 claude settings 를 읽었다).
+  if (harness(HARNESS).wiring !== "settings-merge") return [];
   let cfg;
   try { cfg = JSON.parse(readFileSync(join(CLAUDE_DIR, "settings.json"), "utf8")); } catch { return []; }
   const hooksCfg = cfg && typeof cfg === "object" ? cfg.hooks : null;
@@ -216,19 +353,23 @@ function scanLocalHooks() {
   return out;
 }
 
+// 하네스별 자산 디렉터리 — [kind, root, isDir, ext]. isDir=true 면 <root>/<id>/(스킬), 아니면 <root>/<id><ext>.
+//  ⚠ placement() 와 **짝을 맞춰야** 한다 — 여기 빠진 종류는 관측(#891)·로컬토글에서 통째로 안 보이고,
+//   claude 는 전부 .md 지만 codex 서브에이전트만 .toml 이라 확장자를 하드코딩하면 스캔이 조용히 0건이 된다.
+function assetDirs() {
+  return assetDirsFor(HARNESS, HOME);
+}
+
 function scanLocalAssets(managedIds) {
   const out = [];
-  const dirs = HARNESS === "codex"
-    ? [["skill", join(CODEX_DIR, "skills"), true]]
-    : [["skill", join(CLAUDE_DIR, "skills"), true], ["subagent", join(CLAUDE_DIR, "agents"), false], ["command", join(CLAUDE_DIR, "commands"), false]];
-  for (const [kind, root, isDir] of dirs) {
+  for (const [kind, root, isDir, ext] of assetDirs()) {
     let entries;
     try { entries = readdirSync(root, { withFileTypes: true }); } catch { continue; } // 디렉터리 없음 = 자산 0
     for (const e of entries) {
-      // skill = <root>/<id>/SKILL.md(디렉터리) · subagent·command = <root>/<id>.md(파일). .disabled 접미사는 무시(비활성분).
+      // skill = <root>/<id>/SKILL.md(디렉터리) · 그 외 = <root>/<id><ext>(파일). .disabled 접미사는 무시(비활성분).
       let id = null;
       if (isDir) { if (e.isDirectory() && !e.name.endsWith(".disabled")) id = e.name; }
-      else if ((e.isFile() || e.isSymbolicLink()) && e.name.endsWith(".md")) id = e.name.slice(0, -3);
+      else if ((e.isFile() || e.isSymbolicLink()) && e.name.endsWith(ext)) id = e.name.slice(0, -ext.length);
       if (!id || !SLUG.test(id)) continue;
       out.push({ id, kind, managed: managedIds.has(id) });
     }
@@ -269,14 +410,11 @@ async function applyLocalPref() {
     if (!plan || !Array.isArray(plan.disabled)) return;
     const wantDisabled = new Set(plan.disabled.map((x) => `${x.kind}:${x.id}`)); // 꺼야 할 것
     // 현재 로컬을 훑어 지시대로 맞춘다 — 켜진 파일 중 꺼야 할 건 .disabled 로, 꺼진 것 중 켜야 할 건 복원.
-    const dirs = HARNESS === "codex"
-      ? [["skill", join(CODEX_DIR, "skills"), true]]
-      : [["skill", join(CLAUDE_DIR, "skills"), true], ["subagent", join(CLAUDE_DIR, "agents"), false], ["command", join(CLAUDE_DIR, "commands"), false]];
-    for (const [kind, root, isDir] of dirs) {
+    for (const [kind, root, isDir, ext] of assetDirs()) {
       let entries; try { entries = readdirSync(root, { withFileTypes: true }); } catch { continue; }
       for (const e of entries) {
         const base = e.name.endsWith(".disabled") ? e.name.slice(0, -".disabled".length) : e.name;
-        const id = isDir ? base : (base.endsWith(".md") ? base.slice(0, -3) : null);
+        const id = isDir ? base : (base.endsWith(ext) ? base.slice(0, -ext.length) : null);
         if (!id || !SLUG.test(id)) continue;
         const key = `${kind}:${id}`;
         const isOff = e.name.endsWith(".disabled");

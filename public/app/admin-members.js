@@ -6,13 +6,13 @@
 //      '미변경'으로 읽어 보존한다. 외부 계정 연결의 편집 SoT 는 [외부 자료 수집 ▸ 멤버 매핑]이다(#837).
 //  저장·제거 후 재렌더는 셸(admin.ts) 역호출이 아니라 R37 의 rerenderPanel 레지스트리를 경유한다(셸↔패널 순환 절단).
 //  화면 간 선택·검색 상태(state.admin.memberSel·memberSearch·teamSel…)는 core 의 공유 state 에 있어 여기 모듈 전역이 없다.
-import { api, cardHead, el, errorNote, profileAvatar, state, toast, uiText } from './core.js';
+import { api, busy, cardHead, el, errorNote, profileAvatar, state, toast, uiText } from './core.js';
 import { copyButton, field, overlay, skeleton } from './ui-primitives.js';
 import { loadAdmin, rerenderPanel } from './admin-rerender.js';
 // ── 섹션(강제규칙·회사맥락) markdown 에디터 — 기본은 구성원에게 보이는 읽기 전용 뷰, 관리자는 [수정]을 눌러야 편집 ──
 async function profilesEditor(detail) {
     const reload = () => profilesEditor(detail);
-    detail.replaceChildren(el('div', { class: 'card' }, skeleton('프로필 상태를 불러오는 중')));
+    busy(detail, el('div', { class: 'card' }, skeleton('프로필 상태를 불러오는 중')));
     let r;
     try {
         r = await api('/api/ui/terminal/profiles');

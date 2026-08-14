@@ -12,6 +12,7 @@
 // ⚠ org_ingest_policy(#638)와 직교 — 저건 '지식이 되고 나서 auto/confirm/drop 어디로 보내나'(허용선 밸브),
 //  이건 '무엇을 집어 무슨 기준·형식으로 증류하나'(생산 라인). 증류기 산출도 그 밸브를 그대로 탄다.
 import { itemsPool, q } from "../../db/client.js";
+import { normList, normText, sanitizePromptSections } from "../store/ingest.js";   // 저장 경로와 **같은** 입력 정규화(#1557)
 import { sourceVisSql, resolveSourceViewer } from "../../v6/source-store.js";
 import { PUBLIC_VIEWER } from "../../v6/visibility.js";
 
@@ -205,15 +206,31 @@ export function prefilterSql(d: DistillerRow, p: Params, alias = "s"): string | 
   // ⚠ **비상관(uncorrelated) 서브쿼리여야 한다.** 처음엔 바깥 행(s)을 참조하는 EXISTS 로 썼는데, 그러면 자료 한 건마다
   //  source 전체를 다시 스캔한다(O(n×m)) — 310건짜리 작은 채널에서도 statement timeout 이 났다(실측 2026-07-31).
   //  s 를 참조하지 않는 형태면 Postgres 가 **스레드 집계를 한 번만** 하고 해시로 조인한다.
-  //  스레드 키 = (채널, thread_ts ?? ts) — thread_ts 가 없으면 자기 ts(단독 메시지 = 1건짜리 스레드).
-  return `(COALESCE(${alias}.fields->>'container_name',''), COALESCE(${alias}.fields->>'thread_ts', ${alias}.fields->>'ts')) IN (
-      SELECT COALESCE(x.fields->>'container_name',''), COALESCE(x.fields->>'thread_ts', x.fields->>'ts')
+  //  스레드 키 = (채널, threadIdSql) — 양쪽이 **같은 표현식**이어야 튜플 IN 이 성립한다(한쪽만 폴백을 주면 전량 탈락).
+  return `(COALESCE(${alias}.fields->>'container_name',''), ${threadIdSql(alias)}) IN (
+      SELECT COALESCE(x.fields->>'container_name',''), ${threadIdSql("x")}
       FROM source x
       WHERE x.lifecycle='active'
       GROUP BY 1, 2
       HAVING ${conds.join(join)}
     )`;
 }
+
+// 스레드 식별자 — thread_ts 가 없으면 자기 ts(단독 메시지 = 1건짜리 스레드), **그것도 없으면 자기 id**.
+//  ⚠ 마지막 폴백이 이 함수의 존재 이유다. 슬랙 밖 자료(디스코드·회의록·전사·문서)엔 ts 가 아예 없어
+//   키가 NULL 이 되는데, NULL 은 두 군데서 조용히 다르게 깨진다(#1557 실측 — 이 조직 자료 565건 전부가 그 경우였다):
+//   ① **조인에서 전량 탈락** — 인박스는 스레드를 골라 원본에 되붙이는데(JOIN pk._tid = c._tid) NULL=NULL 은
+//      참이 아니다. 그래서 인박스가 항상 0 건이 되어, 증류기를 만들어도 배치가 아무것도 안 집는다.
+//      (반사판이 "집힐 자료 250건"과 "지금 집히는 자료가 0건"을 동시에 띄우던 것이 이 증상이다.)
+//   ② **한 덩어리로 뭉침** — GROUP BY 는 NULL 을 한 그룹으로 묶는다. 무관한 자료 수백 건이 '한 스레드'가 되면
+//      첫 스레드 예외(rn=1)로 배치에 통째로 실리고, 사전필터의 스레드 집계(메시지·참여자 수)도 거짓이 된다.
+//  id 폴백은 "스레드 정보가 없는 자료 = 각자 1건짜리 스레드"라는 뜻이고, 그게 이 자료들의 실제 모습이다.
+//  ⚠ 이 표현식은 **비교하는 양쪽이 같아야** 한다 — 한쪽만 폴백을 주면 매칭이 어긋난다.
+export const threadIdSql = (alias = "s"): string => {
+  const f = alias ? `${alias}.fields` : "fields";
+  const id = alias ? `${alias}.id` : "id";
+  return `COALESCE(${f}->>'thread_ts', ${f}->>'ts', 'src:' || ${id}::text)`;
+};
 
 // ⚠ body_md 를 포함한다 — 배치 프롬프트에 본문을 동봉하기 위해서다(buildSourceDigest). 빼면 에이전트가
 //  서버가 이미 쥔 것을 source_get 으로 다시 조회하고, 실측에선 인자를 틀려 19건 전부 실패 후 재시도했다.
@@ -263,7 +280,7 @@ export function buildInboxQuery(d: DistillerRow, all: DistillerRow[], limitThrea
   const maxMsgs = Math.min(Math.max(1, d.batch_max_msgs ?? 20), 2000);
   const cand = `SELECT ${INBOX_SEL},
              COALESCE(s.fields->>'container_name','') AS _ch,
-             COALESCE(s.fields->>'thread_ts', s.fields->>'ts') AS _tid
+             ${threadIdSql("s")} AS _tid
         FROM source s
         WHERE s.lifecycle='active'
           AND ${unprocessedSql(d, p)}
@@ -306,6 +323,10 @@ export async function listDistillerInbox(d: DistillerRow, all: DistillerRow[], l
 //  **파편 지식**을 새로 만든다. 링크(knowledge_source)는 결정적 답을 갖고 있으므로 그걸 쓴다.
 //
 // 순수 SQL 조립은 buildThreadKnowledgeQuery(테스트 seam) — 실행만 여기서.
+//
+// ⚠ 여기만 threadIdSql 의 id 폴백을 **쓰지 않는다**(의도된 예외). 이 질문은 "같은 스레드의 형제가 이미 지식이
+//  됐나"인데, ts 가 없는 자료는 애초에 형제가 없는 1건짜리라 물을 것이 없다. 게다가 아래 SQL 은 JS 가 만든 키
+//  목록과 튜플로 대조하므로 **양쪽 표현식이 같아야** 한다 — 한쪽에만 폴백을 넣으면 매칭이 통째로 어긋난다.
 export function buildThreadKnowledgeQuery(rows: Record<string, unknown>[]): { sql: string; values: unknown[] } | null {
   const keys = new Map<string, [string, string]>();
   for (const r of rows) {
@@ -443,7 +464,7 @@ function havingFor(r: Record<string, unknown>, p: Params, keywords: string[]): s
 export function buildGridSql(rules: Record<string, unknown>, p: Params, keywords: string[], chans: string[]): string {
   const chParam = chans.length ? p.add(chans) : null;
   return `WITH th AS (
-         SELECT COALESCE(fields->>'thread_ts', fields->>'ts') AS tid,
+         SELECT ${threadIdSql("")} AS tid,
                 count(*)::int AS msgs,
                 bool_or(EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = source.id)) AS became,
                 (${havingFor(rules, p, keywords)}) AS pass
@@ -462,6 +483,49 @@ export function buildGridSql(rules: Record<string, unknown>, p: Params, keywords
 //   · 저장본이 없으면(새 증류기) **가장 큰 id** 로 둔다. 실제로 만들면 다음 시퀀스값 = 기존보다 큰 id 를
 //     받으므로, 동순위에서는 지는 쪽이 맞다(낙관적으로 부풀리지 않는다).
 //  draft 의 undefined 는 '미지정'이라 저장값을 덮지 않는다(부분 편집 화면이 일부 필드만 보내기 때문).
+//  ⚠ draft 는 **날값**이라 저장 경로와 같은 정규화를 먹여야 한다(#1557). 안 먹이면 두 가지가 한꺼번에 깨진다:
+//   (a) 화면은 채널을 줄바꿈 **문자열**로 보낸다(저장 API 가 "줄바꿈/쉼표도 받는다"고 약속하므로 화면이 옳다).
+//       날값을 그대로 얹으면 distillerScopeSql 의 nonEmpty 가 문자열에 .map 을 걸어 500 이 나고,
+//       **우측 반사판과 ⑤ 지시문 조각이 통째로 사라진다** — 둘 다 이 응답 하나에서 나오기 때문이다.
+//   (b) 정규화가 갈리는 만큼 미리보기가 "저장하면 이렇게 된다"를 거짓으로 보여준다(B7 위반).
+const DRAFT_LISTS = new Set(["match_kinds", "include_channels", "exclude_channels", "include_authors", "exclude_authors"]);
+const DRAFT_TEXTS = new Set(["label", "match_system", "criteria_md", "format_md", "target_category",
+  "default_type", "name_prefix", "session_ref", "model", "effort", "requester", "note"]);
+const DRAFT_BOOLS = new Set(["enabled", "exclude_bots", "thread_aware"]);
+// 숫자 축 — 저장 경로는 범위를 벗어나면 던지지만 미리보기는 **타이핑 중**에도 불린다(입력마다 디바운스 호출).
+//  반쯤 친 값(batch_size 를 지운 순간 등)에 500 을 내면 화면이 죽으므로, 던지지 않고 clamp 한다.
+const DRAFT_NUMS: Record<string, { def: number; min?: number; max?: number }> = {
+  priority: { def: 0 },
+  min_chars: { def: 0, min: 0 },
+  prefilter_level: { def: 0, min: 0, max: 100 },
+  batch_size: { def: 3, min: 1, max: 200 },
+  batch_max_msgs: { def: 20, min: 1, max: 2000 },
+};
+
+function normDraftField(field: string, v: unknown): unknown {
+  if (DRAFT_LISTS.has(field)) return normList(v as string[] | string | null);
+  if (DRAFT_TEXTS.has(field)) return normText(v as string | null);
+  if (DRAFT_BOOLS.has(field)) return !!v;
+  if (field === "key") return normText(v as string | null) ?? "";   // key 는 non-null 축(빈 값 = 아직 안 지음)
+  // ⚠ 숫자 축은 저장 경로처럼 **Number.isFinite(강제변환 없이)** 로 본다. Number("") = 0 으로 흡수해버리면
+  //  빈칸이 '0 을 지정' 이 되어, 저장하면 기본값이 되는 값을 미리보기가 0 으로 보여준다(= 미리보기가 거짓).
+  if (field === "lookback_days") {                                   // 0·빈칸 = '제한 없음'(백필) → null
+    if (!Number.isFinite(v)) return null;
+    const n = Math.max(0, Math.trunc(v as number));
+    return n > 0 ? n : null;
+  }
+  const spec = DRAFT_NUMS[field];
+  if (spec) {
+    if (!Number.isFinite(v)) return spec.def;
+    const n = Math.trunc(v as number);
+    return Math.min(spec.max ?? Number.MAX_SAFE_INTEGER, Math.max(spec.min ?? -Number.MAX_SAFE_INTEGER, n));
+  }
+  if (field === "mode") return v === "session" ? "session" : "headless";
+  if (field === "prefilter_rules") return v && typeof v === "object" && !Array.isArray(v) ? v : null;
+  if (field === "prompt_sections") return sanitizePromptSections(v);
+  return v;
+}
+
 export function mergeDraftDistiller(saved: DistillerRow | undefined, draft: Record<string, unknown> | null): DistillerRow {
   const base: DistillerRow = saved ?? ({
     id: Number.MAX_SAFE_INTEGER, key: "", label: null, enabled: false, priority: 0,
@@ -474,7 +538,7 @@ export function mergeDraftDistiller(saved: DistillerRow | undefined, draft: Reco
   } as DistillerRow);
   if (!draft) return base;
   const out = { ...base } as Record<string, unknown>;
-  for (const [k, v] of Object.entries(draft)) if (v !== undefined) out[k] = v;
+  for (const [k, v] of Object.entries(draft)) if (v !== undefined) out[k] = normDraftField(k, v);
   out.id = saved ? saved.id : Number.MAX_SAFE_INTEGER;   // 위 주석의 id 규칙
   return out as unknown as DistillerRow;
 }
@@ -514,7 +578,7 @@ export async function measureFilterImpact(d: DistillerRow): Promise<FilterImpact
   const chanFilter = chans.length ? `AND COALESCE(fields->>'container_name','') = ANY($1::text[])` : "";
   const base = await q(itemsPool,
     `WITH th AS (
-       SELECT COALESCE(fields->>'thread_ts', fields->>'ts') AS tid, count(*)::int AS msgs,
+       SELECT ${threadIdSql("")} AS tid, count(*)::int AS msgs,
               bool_or(EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = source.id)) AS became
        FROM source WHERE lifecycle='active' ${chanFilter} GROUP BY 1)
      SELECT count(*)::int AS threads, COALESCE(sum(msgs),0)::int AS msgs,
@@ -543,7 +607,7 @@ export async function tuneDistiller(d: DistillerRow, candidates?: Array<{ label:
 
   const base = await q(itemsPool,
     `WITH th AS (
-       SELECT COALESCE(fields->>'thread_ts', fields->>'ts') AS tid,
+       SELECT ${threadIdSql("")} AS tid,
               count(*)::int AS msgs,
               bool_or(EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = source.id)) AS became
        FROM source WHERE lifecycle='active' ${chanFilter} GROUP BY 1)
@@ -553,7 +617,7 @@ export async function tuneDistiller(d: DistillerRow, candidates?: Array<{ label:
   //  lift 는 유효하다). 노이즈(사람 이름·영어 조각) 판별은 AI 에게 맡긴다 — 여기선 재료만 준다.
   const kw = await q(itemsPool,
     `WITH th AS (
-       SELECT COALESCE(fields->>'thread_ts', fields->>'ts') AS tid,
+       SELECT ${threadIdSql("")} AS tid,
               string_agg(COALESCE(body_md,''), ' ') AS txt,
               bool_or(EXISTS (SELECT 1 FROM knowledge_source ks WHERE ks.source_id = source.id)) AS became
        FROM source WHERE lifecycle='active' ${chanFilter} GROUP BY 1),
@@ -848,9 +912,13 @@ function sectionOverride(d: DistillerRow, id: PromptSectionId): string | undefin
 
 export interface PromptSectionView { id: PromptSectionId; label: string; def: string; override?: string; editable: true }
 
+// 프롬프트에 박히는 증류기 이름. 새 증류기 미리보기는 이름·key 를 아직 안 친 상태로 돌기 때문에
+//  폴백이 없으면 지시문 전문이 `'' 증류기 배치야` 로 나와 사람이 "빈칸이 버그인가" 를 의심한다.
+export const distillerDisplayName = (d: DistillerRow): string => d.label || d.key || "(이름 없음)";
+
 // 각 조각의 **기본값**. 관리탭이 이걸 그대로 보여준다 — 무엇을 덮어쓰는지 모르면 덮어쓸 수 없다.
 export function distillerSectionDefault(id: PromptSectionId, d: DistillerRow, o: { count: number; policySummary: string }): string {
-  const name = d.label || d.key;
+  const name = distillerDisplayName(d);
   switch (id) {
     case "intro":
       return `'${name}' 증류기 배치야 — 수집된 자료(source) ${o.count}건을 지식으로 증류한다.`;
@@ -938,6 +1006,6 @@ export function buildDistillerPrompt(o: {
   }
 
   // ⚠ 안전 문구는 절차 바로 뒤에 붙는다(빈 줄 없음) — 조각화 전 출력과 바이트 동일해야 한다(B1).
-  lines.push(guardsBlock(d.label || d.key));
+  lines.push(guardsBlock(distillerDisplayName(d)));
   return lines.join("\n");
 }

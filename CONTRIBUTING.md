@@ -18,12 +18,14 @@ codebase. See [LICENSING.md](LICENSING.md) for our commitments in return.
 Determined entirely by directory:
 
 - `kit/` → Apache-2.0
+- `desktop/` → Apache-2.0 (same rule as `kit/` — it runs on members' own machines)
 - `src/ee/` → Lively Enterprise License (commercial)
 - everything else → AGPL-3.0-only
 
-**Please do not move existing core functionality into `src/ee/`.** We have publicly committed not
-to do this, and the MCP surface snapshot test (`src/capabilities/surface-snapshot.test.ts`) will
-fail if a core tool disappears — that test exists partly to enforce this promise.
+**Please do not move basic safety or core product value into `src/ee/`.** We have publicly
+committed to keeping the free edition a complete, working product (see [LICENSING.md](LICENSING.md)).
+The MCP surface snapshot test (`src/capabilities/surface-snapshot.test.ts`) fails if a core tool
+disappears, so any change to that boundary needs a deliberate decision rather than a drive-by move.
 
 New Enterprise features belong in `src/ee/`. If you are unsure which side a change belongs on,
 open an issue first and we will help decide.

@@ -92,6 +92,48 @@ export async function setMemberOnboardingStep(
   return (r.rows[0].onboarding ?? {}) as Record<string, ReportedStep>;
 }
 
+// ── 리브 프로필(#1631) — **리브가 이 사람에 대해 아는 것**이 사는 자리 ──────────────
+//  리브의 기억은 대화가 아니라 여기 있다(세션은 교체 가능하다는 기획 불변식). 그래서 담는 것은
+//  서버가 **볼 수 없는 것**뿐이다 — 온보딩·파이프라인·하네스 인벤토리는 각자 자기 자리에서 라이브
+//  계산되므로 여기 복제하면 두 개의 진실이 생긴다(#850 이 온보딩에서 이미 내린 결론).
+export interface LivWork { asis?: string; tobe?: string; at?: string; by?: "ai" | "self" }
+export interface LivDecision { at: string; what: string; why?: string; by?: string }
+/** 사람이 "그건 안 할게요"라고 한 것. `key` 는 카드 key(예: `org.embeddings`). */
+export interface LivDeclined { at: string; key: string; why?: string }
+export interface LivProfile { work?: LivWork; decisions?: LivDecision[]; declined?: LivDeclined[] }
+
+const LIV_LIST_CAP = 50; // 결정·거절 이력 상한 — 오래된 것부터 버린다(프로필은 로그가 아니다)
+
+export async function getLivProfile(id: string): Promise<LivProfile> {
+  const r = await itemsPool.query(`SELECT liv_profile FROM org_member WHERE id=$1`, [id]);
+  const v = r.rows[0]?.liv_profile as unknown;
+  return (v && typeof v === "object" && !Array.isArray(v)) ? v as LivProfile : {};
+}
+
+/**
+ * 프로필을 **덧붙인다**(replace 아님).
+ *
+ * - `work` 는 주면 통째로 갈아끼운다(ASIS/TOBE 는 최신 하나만 의미가 있다).
+ * - `decision`·`declined` 는 **뒤에 쌓는다**. 같은 key 의 거절이 이미 있으면 갱신한다 —
+ *   두 번 거절했다고 두 줄이 남을 이유가 없고, 중복이 쌓이면 상한에 걸려 옛 결정이 밀려난다.
+ */
+export async function appendLivProfile(
+  id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined },
+): Promise<LivProfile> {
+  const cur = await getLivProfile(id);
+  const next: LivProfile = { ...cur };
+  if (patch.work) next.work = { ...patch.work, at: patch.work.at ?? new Date().toISOString() };
+  if (patch.decision) next.decisions = [...(cur.decisions ?? []), patch.decision].slice(-LIV_LIST_CAP);
+  if (patch.declined) {
+    const rest = (cur.declined ?? []).filter((d) => d.key !== patch.declined!.key);
+    next.declined = [...rest, patch.declined].slice(-LIV_LIST_CAP);
+  }
+  const r = await itemsPool.query(
+    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
+  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+}
+
 // ── 로컬 하네스 관측 스냅샷(#891 온보딩 C) — 세션훅이 push, 웹이 라이블리 자산과 대조 ──
 //  ⚠ 관측이지 보고가 아니다(onboarding 과 별 컬럼). **메타만**(id·kind·managed) — 스킬 본문·메모리는 절대 안 담는다.
 //  ⚠ **머신별 맵**이다 — 한 멤버가 PC 여러 대(집·회사)를 쓰면 각각 다른 로컬 환경이다. machine_id(훅이

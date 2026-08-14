@@ -3,10 +3,21 @@ name: test
 #  ① 목 유닛 체인(npm test, DB 불요)  ② **device-auth PG 통합 테스트**(실제 Postgres 필요 — 원자적 발급·
 #     slow_down·ON-CONFLICT·DB시각 만료는 목 pg 로 검증 불가, #880 설계 R2-NEW2).
 #  ⚠ items DB 는 pgvector 이미지여야 한다(items-db-pgvector-image-invariant, #172) — plain postgres 금지.
+# ⚠ 트리거 설계(#1508) — push 를 '**' 로 두면 PR 브랜치 하나에 CI 가 **두 번** 붙는다(push 이벤트 + pull_request
+#  이벤트). 실측 2026-08-04: 06:08:28 push / 06:08:30 pull_request 가 같은 커밋에 각각 돌았다(2분 22초짜리가 2배).
+#  게다가 pull_request 이벤트는 브랜치가 아니라 **base 에 머지한 결과**(refs/pull/N/merge)를 검사하므로 push 쪽보다
+#  엄밀하다 — 중복 중 버릴 쪽은 push 다. 그래서 push 는 PR 을 안 거치는 브랜치(main·stage)만 남긴다.
 on:
   push:
-    branches: ['**']
+    branches: [main, stage]
   pull_request:
+  merge_group:      # merge queue 를 켜면 큐가 이 이벤트로 최종 검증한다(안 켠 동안은 발화하지 않음 — 무해)
+
+# 같은 ref 에 새 커밋이 오면 앞의 run 은 쓸모없다(force push·연타). 다만 main 은 커밋마다 '그 커밋이 통과했다'는
+#  기록 자체가 자산이라 취소하지 않는다. PR(refs/pull/N/merge)과 브랜치 push(refs/heads/*)는 ref 가 달라 서로 안 건드린다.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   test:
@@ -70,3 +81,72 @@ jobs:
         env:
           ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
         run: node src/org/auth/device-auth.pg-test.mjs
+      # ④ OAuth 인가서버 스토어(#1473 T2) — 목으로는 못 보는 것들: now() 기준 만료, 인가코드 1회성(RETURNING
+      #    rowCount), 코드·리프레시 재사용 시 **연쇄 회수**, 클라이언트 해제 kill-switch.
+      - name: OAuth 인가서버 PG 통합 테스트
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node src/org/auth/oauth.pg-test.mjs
+      # ⑤ OAuth 전 구간(#1473 T2) — 실제 게이트웨이 프로세스를 띄워 MCP 클라이언트가 밟는 순서를 그대로:
+      #    401 발견 → PRM/AS 메타데이터 → DCR → 동의 → PKCE 토큰교환 → /mcp 호출 → 리프레시 회전.
+      #    라우터 마운트 순서·메타데이터 경로·쿠키 세션은 이 계층이 아니면 아무도 안 본다.
+      - name: OAuth 전 구간 통합 테스트 (실 게이트웨이)
+        if: ${{ !cancelled() && steps.deps.outcome == 'success' }}
+        env:
+          ITEMS_DATABASE_URL: postgres://postgres:test@localhost:5432/lively_test
+        run: node scripts/oauth-flow.itest.mjs
+
+  # ── 윈도우 커버리지 (#1475) ────────────────────────────────────────────────────
+  #  왜: 멤버 대상 코드(kit/)는 **윈도우에서 실행된 적이 없다**. 그 사이 같은 클래스의 결함이 반복해서
+  #   고객에게 나갔다 — 2026-08-04 하루에 두 건:
+  #     · `writable_roots` 에 윈도우 경로를 TOML 이스케이프 없이 써서 **codex 가 통째로 안 뜸**
+  #     · 자산 containment 검사가 `/` 를 하드코딩해 **조직 스킬 26개가 한 개도 안 깔림**(게다가 무음)
+  #   둘 다 mac/linux 에선 **절대 재현되지 않는다**. 사람이 윈도우 PC 를 열어 확인하는 방식은 지속되지 않는다
+  #   (실제로 사용자 신고로만 발견됐다) → 러너로 자동화한다. public 레포라 windows 러너는 무료다.
+  #
+  #  범위: kit/**/*.test.mjs 만. 이 계층은 외부 의존성이 없어(node 내장 + 자기 모듈) `npm ci` 가 불필요하고,
+  #   그래서 네이티브 모듈(node-pty) 빌드 리스크 없이 1분 안에 끝난다. 서버(src/) 는 리눅스 박스에서만 도므로
+  #   윈도우에서 돌릴 이유가 없다.
+  #
+  #  ⚠ 2026-08-04 **필수 게이트로 승격**(#1510) — continue-on-error 를 제거했다. 첫 실행에서 18/33 이 깨졌고
+  #   그걸 전수 분류해 제품 2건(트랜스크립트 경로 인코딩 · 훅 엔트리 중복 수렴)을 고치고, 나머지는 테스트의
+  #   POSIX 가정(절대경로 동적 import · CRLF · HOME/TMPDIR 샌드박스 · sh 스텁 바이너리)을 걷어냈다.
+  #   POSIX 전용 기능(`lively node` — tmux·launchd/systemd)은 테스트 안에서 **명시적으로 skip** 한다.
+  #   → 이제 여기 초록불은 '통과'를 뜻한다. 깨지면 고치거나, 비목표임을 테스트에 skip 으로 적어라.
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      # ⚠ 줄끝은 .gitattributes(`* text=auto eol=lf`)가 LF 로 고정한다 — kit 의 정적 계약 테스트가
+      #  '우리 소스 텍스트'를 읽어 단언하므로, 체크아웃이 CRLF 로 바뀌면 주석 제거 정규식이 무력화된다.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # 끝까지 실행하고 실패를 모아 보고(run-tests 러너와 같은 정책 — 실패 1건이 나머지를 가리지 않게).
+      # ⚠ desktop/ 도 포함한다 (#1541, 2026-08-11). 데스크톱 앱 코어는 kit 과 같은 성질이다 —
+      #  **멤버 PC 에서 실행되고, 외부 의존성이 없다**(node 내장 + 자기 모듈). 그런데 여기서 빠져 있어서
+      #  Windows 전용 결함이 실기기까지 나갔다: 심이 `lively.cmd` 인데 Node 는 CVE-2024-27980 이후
+      #  shell 없는 배치 실행을 거부한다 → 앱이 CLI 를 **한 번도** 못 불렀다(`spawn EINVAL` 반복).
+      #  스텁 spawn 으로 도는 단위테스트도, mac 에서 도는 실동작 검증도 이 층을 원리적으로 못 본다.
+      #  이제 desktop-core 의 J8('진짜로 띄워 본다')이 이 러너에서 돌아 같은 계열을 막는다.
+      - name: kit·desktop 테스트 (윈도우)
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path kit,desktop -Recurse -Filter *.test.mjs |
+                   Where-Object { $_.Name -notlike '*.itest.mjs' -and $_.FullName -notlike '*node_modules*' } | Sort-Object FullName
+          Write-Host "수집 $($files.Count)건"
+          $failed = @()
+          foreach ($f in $files) {
+            $rel = Resolve-Path -Relative $f.FullName
+            node $f.FullName 2>&1 | Out-String | Write-Host
+            if ($LASTEXITCODE -ne 0) { $failed += $rel; Write-Host "FAIL($LASTEXITCODE) $rel" }
+            else { Write-Host "ok   $rel" }
+          }
+          Write-Host ""
+          if ($failed.Count) {
+            Write-Host "=== 윈도우 실패 $($failed.Count)/$($files.Count) ==="
+            $failed | ForEach-Object { Write-Host "  - $_" }
+            exit 1
+          }
+          Write-Host "=== 윈도우 $($files.Count)건 전부 통과 ==="

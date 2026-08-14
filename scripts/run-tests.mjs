@@ -111,7 +111,7 @@ if (opts.itest) {
   const srcTests = collect("src", /\.test\.ts$/).map((p) =>
     path.join("dist", path.relative("src", p).replace(/\.ts$/, ".js")),
   );
-  const mjsTests = ["kit", "scripts", "deploy"].flatMap((d) => collect(d, /\.test\.mjs$/));
+  const mjsTests = ["kit", "scripts", "deploy", "desktop"].flatMap((d) => collect(d, /\.test\.mjs$/));
   files = [...srcTests, ...mjsTests];
 }
 if (filters.length) files = files.filter((f) => filters.some((s) => f.includes(s)));

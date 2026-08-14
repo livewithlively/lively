@@ -1,0 +1,20 @@
+{
+  "name": "lively",
+  "description": "Lively - organizational context store for AI sessions",
+  "owner": {
+    "name": "Lively",
+    "email": "teamlively.official@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "lively",
+      "description": "조직의 지식·프로젝트·도메인맵을 세션에 잇는다. 게이트웨이 MCP 연결 + 세션 시작 시 조직 맥락 자동 주입 + 운영 스킬 번들.",
+      "author": {
+        "name": "Lively"
+      },
+      "category": "productivity",
+      "source": "./plugins/lively",
+      "homepage": "https://github.com/livewithlively/lively"
+    }
+  ]
+}

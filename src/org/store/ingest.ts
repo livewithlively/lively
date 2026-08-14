@@ -150,13 +150,15 @@ export interface DistillerUpsertInput {
 }
 
 // 리스트 축 정규화 — 관리탭은 줄바꿈/쉼표로 받고(사람이 채널명을 붙여넣는다), API 는 배열로도 받는다. 둘 다 여기서 흡수.
-function normList(v: string[] | string | null | undefined): string[] | null {
+//  ⚠ export 인 이유: **미리보기(mergeDraftDistiller)가 같은 함수를 써야** "저장하면 이렇게 된다"가 참이 된다.
+//   따로 구현하면 규칙이 둘로 갈려 미리보기가 거짓이 되고, 실제로 그렇게 깨졌다(#1557).
+export function normList(v: string[] | string | null | undefined): string[] | null {
   if (v === undefined || v === null) return null;
   const arr = Array.isArray(v) ? v : String(v).split(/[\n,]/);
   const out = arr.map((s) => String(s).trim().replace(/^#/, "")).filter(Boolean);   // 슬랙 '#채널' 붙여넣기 흡수
   return out.length ? out : null;
 }
-function normText(v: string | null | undefined): string | null {
+export function normText(v: string | null | undefined): string | null {
   if (v === undefined || v === null) return null;
   const s = String(v).trim();
   return s === "" ? null : s;
