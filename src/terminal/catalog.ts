@@ -52,6 +52,15 @@ export function installTenantSlugResolver(fn: TenantSlugResolver): void {
 const SAFE_SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
 /**
+ * 지금 이 요청의 테넌트 슬러그(형식 검증 통과분만). 없으면 null = 단일 테넌트.
+ *  ⚠ 이 값은 경로·컨테이너 이름에 들어가므로 **여기서 한 번만** 검증한다 — 호출부마다 다시 재면 갈린다.
+ */
+export function tenantSlug(): string | null {
+  const s = slugResolver();
+  return s && SAFE_SLUG.test(s) ? s : null;
+}
+
+/**
  * 테넌트별 루트의 base 디렉터리. 템플릿에 `{slug}` 를 넣어 쓴다
  * (예: `LIVELY_TENANT_ROOT_TEMPLATE=/var/lib/lvly/tenants/{slug}/work`).
  * 템플릿이 없거나 컨텍스트가 없으면 null → 종전 경로.
@@ -59,8 +68,8 @@ const SAFE_SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/;
 function tenantRootBase(): string | null {
   const tpl = process.env.LIVELY_TENANT_ROOT_TEMPLATE;
   if (!tpl || !tpl.includes("{slug}")) return null;
-  const slug = slugResolver();
-  if (!slug || !SAFE_SLUG.test(slug)) return null;
+  const slug = tenantSlug();
+  if (!slug) return null;
   return tpl.replace("{slug}", slug);
 }
 
