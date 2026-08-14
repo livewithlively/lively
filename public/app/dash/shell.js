@@ -41,12 +41,14 @@ const DASH_WIDGETS = [
     { key: 'notif', title: '최신 알림', desc: '나에 관한 멘션·댓글·초대·마감', col: 4, row: 5 },
     { key: 'sess', title: '내 AI 세션', desc: '내 세션 · 초대받은 세션 · 프로젝트 세션', col: 4, row: 7 },
     { key: 'log', title: '팀 작업 로그', desc: '회사 전체의 사람·AI 작업 기록', col: 3, row: 5 },
+    //   라이블리 로그(#1570 시안 D → #1715 기본 승격): 기본 배치 3열 상단 — 사용자 결정(2026-08-15).
+    //    같은 기록(mcp_call_log)을 두 위젯이 다르게 읽는다 — 무엇을 언제 했는지 **시간순 그대로**가 기본이고,
+    //    기간 브리핑(lvlog)은 원하는 사람만 꺼낸다(2026-08-07 결정의 반대 방향 — 그때는 브리핑이 기본이었다).
+    { key: 'lvlogd', title: '라이블리 로그', desc: '라이블리가 한 일 시간순 — 감사 기록을 쉬운 말로', col: 3, row: 5 },
     // ↓ 기본 숨김 — 조직이 그 기능을 실제로 쓸 때만 값이 찬다(안 쓰면 빈 칸). 편집에서 [표시]로 꺼내 쓴다.
     //   검토 대기: 검토 게이트를 켠 조직에서만 / 내 할 일: 태스크에 담당자·마감을 쓰는 팀에서만.
-    //   내 라이블리 사용 내역(#1570 시안 A 확정): 기본 배치 3열 상단 — 사용자 결정(2026-08-07).
-    { key: 'lvlog', title: '내 라이블리 사용 내역', desc: '주간 브리핑 — 근거로 쓴 지식·활동 구성', col: 3, row: 5 },
-    //   라이블리 로그(#1570 시안 D): 감사 기록을 시간순 그대로 — 원하는 사람만 편집에서 꺼낸다.
-    { key: 'lvlogd', title: '라이블리 로그', desc: '라이블리가 한 일 시간순 — 감사 기록을 쉬운 말로', col: 3, row: 5, off: true },
+    //   내 라이블리 사용 내역(#1570 시안 A): 위 라이블리 로그와 같은 기록의 기간 브리핑 — 원하는 사람만 꺼낸다.
+    { key: 'lvlog', title: '내 라이블리 사용 내역', desc: '주간 브리핑 — 근거로 쓴 지식·활동 구성', col: 3, row: 5, off: true },
     { key: 'review', title: '검토 대기 지식', desc: '승인해야 검색·세션주입에 반영돼요', col: 3, row: 4, off: true },
     { key: 'task', title: '내 할 일', desc: '내가 담당인 태스크 — 마감 임박순', col: 5, row: 4, off: true },
 ];
@@ -54,7 +56,8 @@ const DASH_W = Object.fromEntries(DASH_WIDGETS.map((w) => [w.key, w]));
 // 기본 배치 = 1단계 프리셋 **그대로**(좌: 내 프로젝트+팀 공유 폴더 / 중: 최신 알림+내 AI 세션 / 우: 팀 작업 로그).
 //  '기본 배치로 되돌리기'가 돌아오는 자리이자, 새 위젯이 처음 놓이는 자리(off 위젯은 여기 없고 숨김으로 간다).
 //  #1570(2026-08-07 사용자 결정): 3열 = 위 '내 라이블리 사용 내역', 아래 '팀 작업 로그'.
-const DASH_LAYOUT_DEFAULT = [['proj', 'fold'], ['notif', 'sess'], ['lvlog', 'log']];
+//  #1715(2026-08-15 사용자 결정): 3열 위를 '라이블리 로그'로 교체 — 브리핑 대신 시간순 기록이 기본.
+const DASH_LAYOUT_DEFAULT = [['proj', 'fold'], ['notif', 'sess'], ['lvlogd', 'log']];
 const DASH_COL_LABELS = ['왼쪽 열', '가운데 열', '오른쪽 열'];
 // ⚠ 배치 정규화(아래 두 함수)는 위 레지스트리(DASH_WIDGETS/DASH_W/DASH_LAYOUT_DEFAULT)를 읽어야 해서 여기 산다.
 //  저장 키·버전·writer(DASH_LAYOUT_KEY·DASH_LAYOUT_VER·dashSaveLayout·dashResetLayout)는 dash/prefs.ts 에 있다.
@@ -88,24 +91,36 @@ function dashLayout() {
     for (let i = 3; i < raw.cols.length; i++)
         cols[2].push(...take(raw.cols[i]));
     const hidden = take(raw.hidden);
-    // 구버전 저장값 마이그레이션: 이전 정규화(또는 이전 기본 배치)가 지금 기준으로 '기본 숨김'인 위젯을 열에 밀어
-    //  넣어 둔 상태를 되돌린다(다른 위젯의 자리는 사람이 정한 대로 그대로 둔다).
-    //  사람이 편집에서 직접 꺼내면 그때 현재 버전으로 저장되므로, 이 되돌림은 그 뒤로 다시 일어나지 않는다.
-    if (Number(raw.v) !== DASH_LAYOUT_VER) {
-        for (let i = 0; i < cols.length; i++) {
-            for (const k of cols[i])
-                if (DASH_W[k].off && !hidden.includes(k))
-                    hidden.push(k);
-            cols[i] = cols[i].filter((k) => !DASH_W[k].off);
+    // 구버전 저장값 마이그레이션 — 기본값이 바뀐 판(버전)마다 **그 한 번**만 저장값을 손본다.
+    //  demote = 그 판에서 '기본 숨김'이 된 위젯(열에 남아 있으면 숨김으로) · promote = 기본으로 올라온 위젯
+    //  (숨김에 남아 있으면 한 번 되꺼낸다 — seen 에서도 빼서 아래 unseen 삽입이 **기본 자리**로 되살리게).
+    //  ⚠ 판 번호 이후에 저장한 사람은 건너뛴다(sv >= ver) — 그 사람은 그 판을 이미 겪었고, 지금 열/숨김에 있는
+    //   자리는 사람이 직접 정한 것이다. 예전엔 '버전이 다르기만 하면 off 위젯을 전부 숨김으로' 되돌렸는데,
+    //   그러면 v4 에서 '검토 대기'를 일부러 꺼내 둔 사람이 판이 오를 때마다 그걸 다시 잃는다(#1715 에서 수정).
+    //  되돌림을 겪은 사람이 다시 손대면 그때 최신 판으로 저장되므로, 어느 쪽이든 두 번 일어나지 않는다.
+    const sv = Number(raw.v) || 0; // v 없는 초창기 저장값 = 0(모든 이관 대상)
+    if (sv < DASH_LAYOUT_VER) {
+        const DEMOTED = [[2, 'task'], [3, 'review'], [5, 'lvlog']];
+        // v4(#1570) notif: 알림 개편(#1571)의 과도기 상태(최신 알림→통합 인박스 대체, 곧 원복)를 연 브라우저에
+        //  notif 가 hidden 으로 저장돼 "숨긴 적 없는데 사라졌다"가 됐다 — off 였던 적은 없지만 되꺼내기는 같다.
+        // v5(#1715) lvlogd: '라이블리 로그'가 3열 상단 기본이 됐다 — 그전엔 기본 숨김이라 hidden 에 박혀 있다.
+        const PROMOTED = [[4, 'notif'], [5, 'lvlogd']];
+        for (const [ver, k] of DEMOTED) {
+            if (sv >= ver)
+                continue;
+            for (let i = 0; i < cols.length; i++)
+                cols[i] = cols[i].filter((x) => x !== k);
+            if (seen.has(k) && !hidden.includes(k))
+                hidden.push(k);
         }
-        // v4(#1570): '최신 알림' hidden 구제 — 알림 개편(#1571)의 과도기 상태(최신 알림→통합 인박스 대체, 곧 원복)를
-        //  연 브라우저에 notif 가 hidden 으로 저장돼 "숨긴 적 없는데 사라졌다"가 됐다. 한 번 되꺼낸다 — seen 에서도
-        //  빼서 아래 unseen 삽입이 기본 자리(가운데 열 상단)로 되살리게. 일부러 숨긴 사람은 이 한 번만 다시 보이고,
-        //  다시 숨기면 v4 로 저장돼 반복되지 않는다(v3 의 '검토 대기 되돌리기'와 같은 철학, 방향만 반대).
-        const ni = hidden.indexOf('notif');
-        if (ni >= 0) {
-            hidden.splice(ni, 1);
-            seen.delete('notif');
+        for (const [ver, k] of PROMOTED) {
+            if (sv >= ver)
+                continue;
+            const at = hidden.indexOf(k);
+            if (at >= 0) {
+                hidden.splice(at, 1);
+                seen.delete(k);
+            } // 열에 있으면(사람이 둔 자리) 그대로 둔다
         }
     }
     for (const w of DASH_WIDGETS) {
