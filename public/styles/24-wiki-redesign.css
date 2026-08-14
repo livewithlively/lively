@@ -866,3 +866,62 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
 }
 @media (prefers-reduced-motion: reduce) { .wk-blk, .wk-galc, .wk-pal-card, .wk-blk-cbtn { transition: none; } }
 
+
+/* ════════════════════════════════════════════════════════════════════════════
+   #1685 내 소유 카테고리 대시보드 — WIKI 맨 진입 랜딩(+ 사이드바 ★구역 헤더 착지점).
+   언어는 홈 카드(오로라·아이콘 타일·mono 메타·.wk-row)를 그대로 잇되, 폭만 상황판(2열 레인)으로 넓힌다.
+   ════════════════════════════════════════════════════════════════════════════ */
+.wk-mine { max-width: 1040px; margin: 0 auto; padding: 30px 28px 88px; }
+.wk-mine-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.wk-mine-star { color: var(--blue); font-size: 15px; line-height: 1; }
+.wk-mine-title { margin: 0; font-size: 19px; font-weight: 800; letter-spacing: -.2px; color: var(--ink); }
+.wk-mine-sp { flex: 1; }
+.wk-mine-search { display: inline-flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--bg); cursor: pointer;
+  color: var(--muted); font-size: 13px; font-weight: 500; transition: border-color 140ms, background 140ms; }
+.wk-mine-search:hover { border-color: var(--line-net); background: var(--bg-tint); }
+.wk-mine-search:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.wk-mine-new { display: inline-flex; align-items: center; min-height: 34px; padding: 0 14px; border-radius: 10px; font-size: 13px; }
+.wk-mine-stats { display: flex; gap: 16px; margin: 9px 2px 18px; flex-wrap: wrap; }
+.wk-m-new { color: var(--mint-deep); }
+.wk-m-new:empty { display: none; }
+
+.wk-mine-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; align-items: start; }
+.wk-lane { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--line); border-radius: 14px;
+  background: var(--bg); overflow: hidden; }
+.wk-lane-head { display: block; cursor: pointer; }
+.wk-lane-cover { height: 46px; }
+.wk-lane-cover .wk-aurora-wm { font-size: 36px; bottom: -8px; }
+.wk-lane-headrow { display: flex; align-items: center; gap: 9px; padding: 0 14px; min-width: 0; }
+.wk-lane-ic { flex: none; width: 28px; height: 28px; margin-top: -14px; border-radius: 8px; background: var(--bg);
+  border: 1px solid var(--line-row); box-shadow: 0 1px 4px rgba(21, 35, 59, .08);
+  display: inline-flex; align-items: center; justify-content: center; font-size: 15px; position: relative; }
+.wk-lane-ic.letter { font-size: 12.5px; font-weight: 700; color: var(--ink-sub); background: var(--bg-tint-2); }
+.wk-lane-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 8px 0 6px;
+  font-size: 14.5px; font-weight: 700; letter-spacing: -.1px; color: var(--ink); }
+.wk-lane-head:hover .wk-lane-name { color: var(--blue); }
+.wk-lane-head:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.wk-lane-hm { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 10px; padding: 8px 0 6px; }
+.wk-lane-body { padding: 2px 14px 4px; }
+.wk-lane-body .wk-row { padding: 6px 10px; }
+.wk-lane .wk-empty { padding: 10px 4px 12px; font-size: 13px; }
+.wk-lane-foot { display: flex; align-items: center; gap: 6px; margin-top: auto; padding: 2px 8px 8px; }
+
+.wk-mine-tail { margin-top: 34px; }
+
+/* 사이드바 ★구역 헤더 — 장식에서 컨트롤로(#1685). 기본 모양(.pjv-side-favhead)은 그대로, 상호작용만 얹는다. */
+.kn-favhead { cursor: pointer; text-decoration: none; border-radius: 8px; margin: 2px 4px 0; }
+.kn-favhead:hover { background: var(--bg-tint); color: var(--muted-head); }
+.kn-favhead.active { background: var(--bg-sel); color: var(--ink-sub); }
+.kn-favhead:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+
+@media (max-width: 1100px) {
+  .wk-mine-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 700px) {
+  .wk-mine { padding: 18px 16px 64px; }
+  .wk-mine-search { flex: 1; justify-content: flex-start; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wk-mine-search { transition: none; }
+}

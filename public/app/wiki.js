@@ -6,10 +6,11 @@
 import { api, busy, el, errorNote, relTime, selectFilter, state, toast } from './core.js';
 import { skeleton, skeletonRows } from './learn.js';
 import { KN_TYPE_LABEL, KN_UNCAT, SOURCE_KIND_LABEL, isCategoryHomeDoc, knInvalidateTreeCaches, openSourceDetail } from './wiki-data.js';
-import { KN_INDEXED, createWikiSide, knApplySideW, knSideResizeHandle } from './wiki-side.js';
+import { KN_INDEXED, KN_MINE, createWikiSide, knApplySideW, knSideResizeHandle } from './wiki-side.js';
 import { wkDayLabel, wkEmpty, wkRow, wkSection } from './wiki-ui.js';
 import { openWikiPeek, reanchorWikiPeek, renderWikiDraft, setWikiPeekList } from './wiki-doc.js';
 import { renderCategorySurface } from './wiki-category.js';
+import { renderMineSurface } from './wiki-mine.js';
 import { reviewQueuePanel } from './review.js'; // #837 검토 큐 — 관리탭에서 이관(지식의 대기열이니 집은 WIKI)
 import { renderClassificationReview } from './classifications.js'; // #1102 분류 검토 대기 — 분류기 제안 확정/재분류/반려
 import { renderHomeSurface } from './wiki-home.js';
@@ -42,15 +43,18 @@ async function renderReviewQueue(view) {
 }
 // ── WIKI 셸 — 사이드바 + 콘텐츠 한 장. 상태 f 는 세션 전역(state.wiki). ──
 async function renderWikiSpace(view, params) {
-    const f = state.wiki = state.wiki || { category: '', folder: '', type: '', q: '', indexed: false, all: false };
-    // 파라미터 없는 진입 = 상단 WIKI 탭 클릭 등 '맨 진입' — 홈으로 리셋(이전 카테고리가 복원되면 놀란다).
-    if (!params || Array.from(params.keys()).length === 0) {
+    const f = state.wiki = state.wiki || { category: '', folder: '', type: '', q: '', indexed: false, all: false, mine: false };
+    // 파라미터 없는 진입 = 상단 WIKI 탭 클릭 등 '맨 진입' — 리셋(이전 카테고리가 복원되면 놀란다).
+    //  착지 화면은 사이드바 로드 뒤에 정한다(#1685): 내 소유 카테고리가 있으면 대시보드, 없으면 홈.
+    const bare = !params || Array.from(params.keys()).length === 0;
+    if (bare) {
         f.category = '';
         f.folder = '';
         f.type = '';
         f.q = '';
         f.indexed = false;
         f.all = false;
+        f.mine = false;
     }
     if (params) {
         // category 딥링크는 폴더 드릴다운을 리셋 — 세션 잔존 f.folder 가 다른 카테고리로 새면
@@ -59,6 +63,7 @@ async function renderWikiSpace(view, params) {
             f.category = params.get('category') || '';
             f.indexed = false;
             f.all = false;
+            f.mine = false;
             f.folder = '';
         }
         if (params.has('folder'))
@@ -73,6 +78,7 @@ async function renderWikiSpace(view, params) {
                 f.category = '';
                 f.folder = '';
                 f.all = false;
+                f.mine = false;
             }
         }
         if (params.has('all')) {
@@ -81,6 +87,17 @@ async function renderWikiSpace(view, params) {
                 f.category = '';
                 f.folder = '';
                 f.indexed = false;
+                f.mine = false;
+            }
+        }
+        if (params.has('mine')) {
+            f.mine = params.get('mine') === '1';
+            if (f.mine) {
+                f.category = '';
+                f.folder = '';
+                f.indexed = false;
+                f.all = false;
+                f.type = '';
             }
         }
     }
@@ -90,7 +107,9 @@ async function renderWikiSpace(view, params) {
     // URL 동기화 — replaceState(피크 파라미터는 승계). 피크 기준 해시 재앵커.
     function syncHash() {
         const p = new URLSearchParams();
-        if (f.indexed)
+        if (f.mine)
+            p.set('mine', '1');
+        else if (f.indexed)
             p.set('indexed', '1');
         else if (f.all)
             p.set('all', '1');
@@ -112,9 +131,11 @@ async function renderWikiSpace(view, params) {
     }
     const main = el('section', { class: 'wk-main' });
     const sideCtl = createWikiSide({
-        selected: () => (f.indexed ? KN_INDEXED : f.category),
+        selected: () => (f.mine ? KN_MINE : f.indexed ? KN_INDEXED : f.category),
         onSelect: (v) => selectCategory(v),
         onOpen: (name) => { setWikiPeekList(null); openWikiPeek(name, { onRefresh: repaint }); },
+        onFavChange: () => { if (f.mine)
+            repaint(); }, // ★ 토글이 대시보드 레인 구성을 바꾼다(#1685)
         tools: true,
         uncategorized: true,
     });
@@ -126,15 +147,23 @@ async function renderWikiSpace(view, params) {
         onCatChanged: () => sideCtl.rebuild(),
         bySpace: sideCtl.bySpace,
         findCat: sideCtl.findCat,
+        ownedCatIds: sideCtl.ownedCatIds,
     };
     function selectCategory(v) {
-        if (v === KN_INDEXED) {
+        if (v === KN_MINE) {
+            f.mine = true;
+            f.indexed = false;
+            f.category = '';
+        }
+        else if (v === KN_INDEXED) {
             f.indexed = true;
             f.category = '';
+            f.mine = false;
         }
         else {
             f.indexed = false;
             f.category = v || '';
+            f.mine = false;
         }
         f.folder = '';
         f.type = '';
@@ -153,6 +182,8 @@ async function renderWikiSpace(view, params) {
         //  미분류(#1091)는 대문·폴더가 있을 수 없는 '남은 것' 묶음이라 카테고리 페이지가 아니라 평면 목록으로 간다.
         if (f.q || f.all || f.indexed || f.category === KN_UNCAT || (f.type && !f.category))
             return renderFilterList(box, ctx);
+        if (f.mine)
+            return renderMineSurface(box, ctx); // #1685 내 소유 카테고리 대시보드
         if (f.category) {
             const cat = sideCtl.findCat(f.category);
             if (cat)
@@ -173,6 +204,13 @@ async function renderWikiSpace(view, params) {
     //  남의 화면을 덮고 replaceState 로 주소까지 되돌리는 경합 방지(라우터가 dataset.route 를 즉시 세팅).
     if (document.body.dataset.route !== 'knowledge')
         return;
+    // #1685 맨 진입 착지 — 내 소유 카테고리(팀 자동 ∪ ★ 토글)가 있으면 대시보드가 첫 화면이다.
+    //  (사이드바 '전체'로 간 홈은 상태 전용이라 새로고침하면 다시 대시보드로 온다 — 맨 주소의 주인은 대시보드.)
+    //  ready 가 이미 selected='' 로 사이드바를 그렸으므로 ★구역 헤더의 active 를 맞추러 한 번 더 그린다(동기·경량).
+    if (bare && sideCtl.ownedCatIds().size > 0) {
+        f.mine = true;
+        sideCtl.rebuild();
+    }
     view.replaceChildren(shell);
     syncHash();
     repaint();

@@ -34,6 +34,18 @@ function wkReadVisits(): any[] {
   try { const v = JSON.parse(localStorage.getItem(WK_VISITS_KEY) || '[]'); return Array.isArray(v) ? v : []; }
   catch (_) { return []; }
 }
+// '이어서' 필 줄 — 홈·내 소유 대시보드 공용(#1685). 방문 기록이 없으면 null(빈 줄을 차지하지 않는다).
+function wkResumeRow(cap = 3) {
+  const visits = wkReadVisits().slice(0, cap);
+  if (!visits.length) return null;
+  const row = el('div', { class: 'wk-resume' }, el('span', { class: 'wk-resume-label', text: '이어서' }));
+  for (const v of visits) {
+    row.append(el('a', { class: 'wk-resume-it', href: '#/k/' + encodeURIComponent(v.name), title: v.title },
+      v.icon ? el('span', { class: 'wk-resume-ic', 'aria-hidden': 'true', text: v.icon }) : null,
+      el('span', { text: v.title })));
+  }
+  return row;
+}
 
 // ── 읽음 추적(기기 로컬) — 대문 '읽기 코스' 진행률의 근거. 문서를 열면(피크·페이지) 읽음 처리. ──
 const WK_READ_KEY = 'wk_read_v1';
@@ -206,4 +218,4 @@ function wkEmpty(text: string, action?: any) {
   return el('div', { class: 'wk-empty' }, el('span', { text }), action || null);
 }
 
-export { wkAurora, wkDayLabel, wkDeck, wkDocCard, wkEmpty, wkHash, wkIsRead, wkMarkRead, wkReadVisits, wkRecordVisit, wkRow, wkSection, wkTick };
+export { wkAurora, wkDayLabel, wkDeck, wkDocCard, wkEmpty, wkHash, wkIsRead, wkMarkRead, wkReadVisits, wkRecordVisit, wkResumeRow, wkRow, wkSection, wkTick };

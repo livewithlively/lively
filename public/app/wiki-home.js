@@ -6,7 +6,7 @@
 import { api, busy, el, errorNote, relTime, state } from './core.js';
 import { skeletonRows } from './learn.js';
 import { hasMemoryScope, isCategoryHomeDoc, knFetchCategoryIndex } from './wiki-data.js';
-import { wkAurora, wkDayLabel, wkDocCard, wkEmpty, wkReadVisits, wkSection } from './wiki-ui.js';
+import { wkAurora, wkDayLabel, wkDocCard, wkEmpty, wkResumeRow, wkSection } from './wiki-ui.js';
 import { openWikiPeek, openWikiSearch, setWikiPeekList } from './wiki-doc.js';
 const HOME_PIN_CAP = 8;
 const HOME_DAY_CAP = 8;
@@ -75,15 +75,10 @@ async function renderHomeSurface(box, ctx) {
     const hero = el('div', { class: 'wk-hero' }, el('div', { class: 'wk-hero-row' }, searchBtn, hasMemoryScope() ? el('a', { class: 'btn btn-primary wk-hero-new', href: '#/knowledge/new',
         title: '새 페이지 — 제목을 쓰면 바로 저장', text: '＋ 새 페이지' }) : null), el('div', { class: 'wk-hero-stats' }, el('span', { class: 'wk-row-m', text: '지식 ' + totalDocs }), el('span', { class: 'wk-row-m', text: '카테고리 ' + allCats.length }), todayN ? el('span', { class: 'wk-row-m wk-hero-today', text: '오늘 갱신 ' + todayN }) : null));
     home.append(hero);
-    // 이어서 — 마지막으로 열었던 문서 필(히어로 바로 아래, 조용히).
-    const visits = wkReadVisits().slice(0, 3);
-    if (visits.length) {
-        const row = el('div', { class: 'wk-resume' }, el('span', { class: 'wk-resume-label', text: '이어서' }));
-        for (const v of visits) {
-            row.append(el('a', { class: 'wk-resume-it', href: '#/k/' + encodeURIComponent(v.name), title: v.title }, v.icon ? el('span', { class: 'wk-resume-ic', 'aria-hidden': 'true', text: v.icon }) : null, el('span', { text: v.title })));
-        }
-        home.append(row);
-    }
+    // 이어서 — 마지막으로 열었던 문서 필(히어로 바로 아래, 조용히). 내 소유 대시보드와 공용(wkResumeRow).
+    const resume = wkResumeRow();
+    if (resume)
+        home.append(resume);
     // ── 카테고리 카드 그리드 — 오로라 커버 + 아이콘 타일 + 이름/설명 + mono 메타. ──
     //  ★ 내 소유(팀 오너십 = 우선순위)가 큰 카드로 먼저, 그 외는 컴팩트 카드. 그룹 '안'에서만 드래그 정렬.
     const enrich = new Map(); // cat.id → { icEl, timeEl, icNow } 점진 보강 슬롯

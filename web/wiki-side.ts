@@ -8,6 +8,8 @@ import { isCategoryHomeDoc, KN_UNCAT, knFetchAuthoredTree, knFetchCategoryIndex,
 
 // WIKI 인덱스(#336) — '전체' 하위 '인덱스(핀)' 필터의 가짜 카테고리 센티넬. data-cat-val 위임에 실린다.
 const KN_INDEXED = '__indexed__';
+// 내 소유 카테고리 대시보드(#1685) 센티넬 — '★ 내 소유 카테고리' 구역 헤더 클릭이 이 값으로 위임된다.
+const KN_MINE = '__mine__';
 
 // ── 데이터 ──
 // 3 space 카테고리를 한 번에 — {business, product, system}. 각 항목 graceful(실패=빈 배열).
@@ -173,7 +175,11 @@ function buildKnowledgeNav(nav, bySpace, selected, myIds: Set<string>, opts) {
     const allCats = ['business', 'product', 'system'].flatMap((sk) => bySpace[sk] || []);
     const favCats = allCats.filter((c) => ownedIds.has(String(c.id)));
     if (favCats.length) {
-      nav.append(el('div', { class: 'pjv-side-favhead fav-blue', 'aria-hidden': 'true' }, el('span', { class: 'pjv-side-favhead-ic', text: '★' }), el('span', { text: '내 소유 카테고리' })));
+      // #1685 구역 헤더 = 대시보드 진입 링크 — 라벨(장식)에서 행(컨트롤)으로 승격. data-cat-val 위임을 그대로 탄다.
+      nav.append(el('a', { class: 'pjv-side-favhead fav-blue kn-favhead' + (selected === KN_MINE ? ' active' : ''),
+        href: '#', 'data-cat-val': KN_MINE, role: 'button', tabindex: '0',
+        title: '내 소유 카테고리 대시보드 — 카테고리별 최근 지식을 한눈에 봅니다' },
+      el('span', { class: 'pjv-side-favhead-ic', 'aria-hidden': 'true', text: '★' }), el('span', { text: '내 소유 카테고리' })));
       for (const c of favCats) nav.append(knNavCatNode(c, String(selected) === String(c.id), onOpen, false, favOpts));
       nav.append(el('div', { class: 'pjv-side-favsep', 'aria-hidden': 'true' }));
     }
@@ -350,8 +356,9 @@ function createWikiSide(opts: any) {
   const toggleCatFav = async (id: string, next: boolean) => {
     if (next) favCatIds.add(String(id)); else favCatIds.delete(String(id));
     buildSide();
+    if (opts.onFavChange) opts.onFavChange();   // #1685 내 소유 대시보드가 떠 있으면 레인을 즉시 맞춘다
     try { await api('/api/ui/v6/favorites', { method: 'POST', body: JSON.stringify({ kind: 'category', id: Number(id), on: next }) }); }
-    catch (_) { if (next) favCatIds.delete(String(id)); else favCatIds.add(String(id)); buildSide(); }
+    catch (_) { if (next) favCatIds.delete(String(id)); else favCatIds.add(String(id)); buildSide(); if (opts.onFavChange) opts.onFavChange(); }
   };
 
   // 접기(문서 셸) — 목록 셸은 버튼 미노출(현행 동작 유지).
@@ -400,7 +407,9 @@ function createWikiSide(opts: any) {
     return null;
   }
 
-  return { side, reopenBtn, collapseBtn, ready, rebuild: buildSide, findCat, bySpace: () => bySpace };
+  // #1685 내 소유 카테고리 id 집합 — 팀 소유(자동) ∪ ★ 토글(즐겨찾기). ready 이후에 값이 완전하다.
+  const ownedCatIds = () => new Set<string>([...favCatIds, ...Array.from(myCatIdSet())]);
+  return { side, reopenBtn, collapseBtn, ready, rebuild: buildSide, findCat, bySpace: () => bySpace, ownedCatIds };
 }
 
 // 문서 셸의 접기 상태 배선 — shell(.kn-shell)에 side-off 클래스 + localStorage. 기본: 저장값 없으면 ≤820px 접힘.
@@ -422,6 +431,7 @@ function wireSideCollapse(shell: HTMLElement, sideCtl: any) {
 
 export {
   KN_INDEXED,
+  KN_MINE,
   createWikiSide,
   fetchAllSpaceCats,
   knApplySideW,
