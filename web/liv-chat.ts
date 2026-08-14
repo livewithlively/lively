@@ -382,19 +382,24 @@ export function mountLivChat(host: HTMLElement, askHost: HTMLElement): void {
     for (const t of turns) {
       const { root, work } = turnBlock(t.text);
       list.append(root);
-      let tail: TailResult | null = null;
-      try { tail = await api(`/api/ui/me/liv/turn/${encodeURIComponent(t.id)}?from=0`) as TailResult; }
+      // ⚠ 이어읽기(tail)로 되그리지 않는다 — 한 번에 256KB 만 오므로 긴 턴은 **뒷부분이 통째로 잘린다**
+      //  (실측: 1.6MB 턴에서 앞 256KB 만 그려져 리브의 말이 거의 다 사라졌다). 전용 창구가 조각을 걸러
+      //  한 번에 준다.
+      type Replay = { lines?: string[]; head_trimmed?: boolean; done?: boolean; exit?: number | null };
+      let rep: Replay | null = null;
+      try { rep = await api(`/api/ui/me/liv/turn/${encodeURIComponent(t.id)}/replay`) as Replay; }
       catch { work.remove(); continue; }        // 그 턴의 기록이 사라졌다 — 사람 말만 남기고 넘어간다
       const r: TurnRender = { cards: new Map(), blocks: new Map(), msgId: null, streamed: new Set() };
-      for (const line of String(tail.chunk ?? '').split('\n')) {
-        if (!line.trim()) continue;
+      if (rep?.head_trimmed) {
+        work.append(el('div', { class: 'livc-trim', text: '앞부분이 길어 생략했습니다.' }));
+      }
+      for (const line of rep?.lines ?? []) {
         let ev: any; try { ev = JSON.parse(line); } catch { continue; }
-        if (ev.type === 'stream_event') continue;          // 완성본에 같은 글이 있다
-        if (ev.type === 'result') continue;
+        if (ev.type === 'result') continue;     // 완성본에 같은 글이 있다
         applyEvent(ev, work, r);
       }
       work.classList.remove('livc-work-busy');
-      if (!tail.done) {                          // 아직 도는 중 — 새로고침해도 이어서 따라간다
+      if (!rep?.done) {                          // 아직 도는 중 — 새로고침해도 이어서 따라간다
         work.classList.add('livc-work-busy');
         busy(true);
         void drain(t.id, work).finally(() => { work.classList.remove('livc-work-busy'); busy(false); });

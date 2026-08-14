@@ -378,18 +378,19 @@ export function mountLivChat(host, askHost) {
         for (const t of turns) {
             const { root, work } = turnBlock(t.text);
             list.append(root);
-            let tail = null;
+            let rep = null;
             try {
-                tail = await api(`/api/ui/me/liv/turn/${encodeURIComponent(t.id)}?from=0`);
+                rep = await api(`/api/ui/me/liv/turn/${encodeURIComponent(t.id)}/replay`);
             }
             catch {
                 work.remove();
                 continue;
             } // 그 턴의 기록이 사라졌다 — 사람 말만 남기고 넘어간다
             const r = { cards: new Map(), blocks: new Map(), msgId: null, streamed: new Set() };
-            for (const line of String(tail.chunk ?? '').split('\n')) {
-                if (!line.trim())
-                    continue;
+            if (rep?.head_trimmed) {
+                work.append(el('div', { class: 'livc-trim', text: '앞부분이 길어 생략했습니다.' }));
+            }
+            for (const line of rep?.lines ?? []) {
                 let ev;
                 try {
                     ev = JSON.parse(line);
@@ -397,14 +398,12 @@ export function mountLivChat(host, askHost) {
                 catch {
                     continue;
                 }
-                if (ev.type === 'stream_event')
-                    continue; // 완성본에 같은 글이 있다
                 if (ev.type === 'result')
-                    continue;
+                    continue; // 완성본에 같은 글이 있다
                 applyEvent(ev, work, r);
             }
             work.classList.remove('livc-work-busy');
-            if (!tail.done) { // 아직 도는 중 — 새로고침해도 이어서 따라간다
+            if (!rep?.done) { // 아직 도는 중 — 새로고침해도 이어서 따라간다
                 work.classList.add('livc-work-busy');
                 busy(true);
                 void drain(t.id, work).finally(() => { work.classList.remove('livc-work-busy'); busy(false); });

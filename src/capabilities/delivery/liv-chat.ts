@@ -26,6 +26,9 @@ import { livTurnArgs } from "../../org/delivery/liv-turn.js";
 
 /** 한 턴 프롬프트 상한 — 사람이 채팅창에 치는 양이다(자료 본문은 올리기로 간다). */
 const TURN_MAX = 8000;
+/** 되그리기 한 턴의 상한(문자). 넘으면 **앞을 자르고 뒤를 남긴다** — 최종 답은 끝에 있다. */
+const REPLAY_MAX_CHARS = 400_000;
+
 /** 턴 id 는 **우리가 만든 hex 뿐**이다. 사람이 준 값이 폴더 이름이 되면 그 자리가 곧 경로 이동이다. */
 const TURN_ID_RE = /^t[0-9a-f]{16}$/;
 
@@ -110,6 +113,39 @@ export const livChatCapabilities: Capability[] = [
       id: z.string().describe("턴 id(me_liv_turn 이 준 값)"),
       from: z.number().optional().describe("이어 읽기 시작할 바이트 오프셋(기본 0)"),
     }),
+
+  restRead("me_liv_turn_replay", "지난 턴 되그리기",
+    "끝난 턴의 진행을 **한 번에** 준다 — 화면이 새로고침 뒤 기록을 되살릴 때 쓴다. " +
+    "글자 조각(stream_event)은 서버가 걸러서 보낸다: 되그리기는 그걸 안 쓰는데 파일의 대부분이 그것이라, " +
+    "안 거르면 이어 읽기를 수십 번 해야 하고 한 번만 읽으면 **뒷부분이 통째로 잘린다**(실측: 1.6MB 턴에서 " +
+    "앞 256KB 만 그려져 리브의 말이 거의 다 사라졌다).",
+    [{ method: "GET", paths: ["/api/ui/me/liv/turn/:id/replay"], parse: (req) => ({ id: String(req.params?.id ?? "") }) }],
+    async (input: { id: string }, user: LivelyUser) => {
+      if (!user?.userId) throw new HttpError(401, "인증이 필요합니다");
+      const dir = await turnDir(user, input.id);
+      let raw = "";
+      try { raw = await fsp.readFile(path.join(dir, "stream.jsonl"), "utf8"); }
+      catch { return { lines: [], head_trimmed: false, done: true, exit: null, missing: true }; }
+      // 되그리기가 쓰는 것만 남긴다. 나머지(조각·시스템·요금)는 그릴 데가 없다.
+      const KEEP = new Set(["assistant", "user", "result"]);
+      let lines = raw.split("\n").filter((l) => {
+        if (!l.trim()) return false;
+        try { return KEEP.has(String((JSON.parse(l) as { type?: string }).type ?? "")); } catch { return false; }
+      });
+      // 그래도 너무 길면 **뒤를 남긴다** — 최종 답은 끝에 있다. 잘랐다는 사실은 숨기지 않는다.
+      let head_trimmed = false;
+      let bytes = lines.reduce((n, l) => n + l.length, 0);
+      while (bytes > REPLAY_MAX_CHARS && lines.length > 1) {
+        bytes -= lines[0].length; lines = lines.slice(1); head_trimmed = true;
+      }
+      let exit: number | null = null, done = false;
+      try {
+        const e = (await fsp.readFile(path.join(dir, "exit"), "utf8")).trim();
+        done = true; exit = Number.isFinite(Number(e)) ? Number(e) : null;
+      } catch { /* 아직 도는 중 */ }
+      return { lines, head_trimmed, done, exit };
+    },
+    false, { id: z.string().describe("되그릴 턴 id") }),
 
   restRead("me_liv_turn_stop", "하던 것 멈추기",
     "돌고 있는 턴을 멈춘다. 사람이 시작만 할 수 있고 멈추지는 못하면 그건 대화가 아니다 — " +

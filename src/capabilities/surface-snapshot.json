@@ -1408,6 +1408,16 @@
   "input_hash": "71d627e9a9d1759c"
  },
  {
+  "name": "me_liv_turn_replay",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/liv/turn/:id/replay"
+  ],
+  "input_hash": "5eeceacbf6dcf068"
+ },
+ {
   "name": "me_liv_turn_stop",
   "scope": null,
   "mcp": false,

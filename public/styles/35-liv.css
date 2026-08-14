@@ -256,3 +256,5 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 /* 멈춤 — 채운 색을 쓰지 않는다(§0.5). 도는 동안 [보내기] 자리를 그대로 물려받는다. */
 .livc-send-stop { background: var(--bg); color: var(--ink-sub); border-color: var(--line-net); }
 .livc-send-stop:hover { color: var(--ink); border-color: var(--coral-text); }
+/* 앞부분을 생략했을 때 — 조용히 빠뜨리지 않고 그 사실을 적는다. */
+.livc-trim { font-family: var(--livc-mono); font-size: 10.5px; color: var(--muted); }
