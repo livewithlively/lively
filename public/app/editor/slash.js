@@ -99,7 +99,7 @@ export function createSlash(ctx) {
                     setTimeout(() => gear.click(), 0); // 삽입 즉시 조건 설정 열기
             } },
         { k: 'image', ic: '🖼', label: '이미지', hint: 'URL 로 삽입', kw: 'image picture 이미지 사진 그림', apply: (b) => promptImage(b) },
-        { k: 'table', ic: '▦', label: '표', hint: '마크다운 표(원문 편집)', kw: 'table 표 테이블', apply: (b) => {
+        { k: 'table', ic: '▦', label: '표', hint: '칸을 눌러 바로 편집합니다', kw: 'table 표 테이블', apply: (b) => {
                 const tmpl = '| 열 1 | 열 2 |\n| --- | --- |\n|  |  |';
                 const cur = blockData(b);
                 let nb;

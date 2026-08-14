@@ -9,6 +9,7 @@
 import { TOKEN_KEY, api, apiUrl } from './net.js';
 import { el } from './dom.js';
 import { relTime } from './format.js';
+import { isMdTableSep, mdTableSplitRow } from './table-md.js';   // 표 셀 분리 규칙은 에디터(표 즉시 편집)와 공유한다(#1685)
 import { uiKeyCls } from './uitext.js';
 
 // ── 안전 마크다운 렌더러 ──
@@ -575,24 +576,6 @@ function renderMarkdown(md, opts?: any) {
   const lines = String(md == null ? '' : md).replace(/\r\n?/g, '\n').split('\n');
   let i = 0;
 
-  // 표 후보: | 로 시작/구분되는 2줄 이상 + 두번째 줄이 구분행(---|---).
-  const isTableSep = (l) => /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(l) && l.indexOf('-') >= 0;
-  const splitRow = (l) => {
-    let t = l.trim();
-    if (t.startsWith('|')) t = t.slice(1);
-    if (t.endsWith('|') && !t.endsWith('\\|')) t = t.slice(0, -1);
-    // 이스케이프 파이프(\|) 인지 분리 — 노션 셀의 리터럴 '|' 보존(#551).
-    const cells: any[] = [];
-    let cur = '';
-    for (let j = 0; j < t.length; j++) {
-      const ch = t[j];
-      if (ch === '\\' && t[j + 1] === '|') { cur += '|'; j++; continue; }
-      if (ch === '|') { cells.push(cur.trim()); cur = ''; continue; }
-      cur += ch;
-    }
-    cells.push(cur.trim());
-    return cells;
-  };
   const contOpen = (l) => /^:::\s*[a-zA-Z_-]/.test(l);
   const contClose = (l) => l.trim() === ':::';
 
@@ -679,12 +662,12 @@ function renderMarkdown(md, opts?: any) {
     }
 
     // 표: 헤더줄(| 포함) + 다음 줄이 구분행.
-    if (line.indexOf('|') >= 0 && i + 1 < lines.length && isTableSep(lines[i + 1])) {
-      const header = splitRow(line);
+    if (line.indexOf('|') >= 0 && i + 1 < lines.length && isMdTableSep(lines[i + 1])) {
+      const header = mdTableSplitRow(line);
       i += 2; // 헤더 + 구분행 소비
       const rows: any[] = [];
       while (i < lines.length && lines[i].trim() !== '' && lines[i].indexOf('|') >= 0) {
-        rows.push(splitRow(lines[i]));
+        rows.push(mdTableSplitRow(lines[i]));
         i++;
       }
       const headerEmpty = header.every((c) => !c);
@@ -785,7 +768,7 @@ function renderMarkdown(md, opts?: any) {
       if (/^(#{1,6})\s+/.test(l) || /^(```|~~~)/.test(l) || /^\s*>\s?/.test(l) ||
           /^(-{3,}|\*{3,}|_{3,})\s*$/.test(l) || /^(\s*)([-*+])\s+/.test(l) ||
           /^(\s*)(\d+)[.)]\s+/.test(l) || contOpen(l) || contClose(l) || l.trim() === '$$' ||
-          (l.indexOf('|') >= 0 && lines[i + 1] != null && isTableSep(lines[i + 1]))) break;
+          (l.indexOf('|') >= 0 && lines[i + 1] != null && isMdTableSep(lines[i + 1]))) break;
       para.push(l);
       i++;
     }

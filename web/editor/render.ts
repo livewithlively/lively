@@ -4,6 +4,7 @@ import { api, busy, el, renderCollection, renderInline, renderMarkdown } from '.
 import { overlayBox } from '../learn.js';
 import { openEmojiPicker } from '../page-decor.js';
 import { CALLOUT_COLORS } from './model.js';
+import { buildTableEditor } from './table.js';
 import type { EditorCtx } from './context.js';
 
 export function createRender(ctx: EditorCtx) {
@@ -121,11 +122,10 @@ export function createRender(ctx: EditorCtx) {
         break;
       case 'raw': {
         (block as any)._raw = String(d.text || '');
-        const view = el('div', { class: 'be-raw-view md-rendered', title: '클릭해서 마크다운 원문 편집' });
-        view.append(renderMarkdown((block as any)._raw));
-        const chip = el('span', { class: 'be-raw-chip', text: 'MD' });
-        const wrap = el('div', { class: 'be-raw', tabindex: '0' }, chip, view);
-        view.addEventListener('click', () => openRawEditor(block, wrap));
+        const chip = el('span', { class: 'be-raw-chip', text: 'MD', title: '마크다운 원문 편집' });
+        const wrap = el('div', { class: 'be-raw', tabindex: '0' }, chip);
+        chip.addEventListener('click', () => openRawEditor(block, wrap));
+        wrap.append(rawBody(block, wrap));
         main.append(wrap);
         addRowDelete(block);
         break;
@@ -278,6 +278,22 @@ export function createRender(ctx: EditorCtx) {
     setTimeout(() => { qIn.focus(); search(); }, 0);
   }
 
+  // raw 블록 본문 — 표면 '셀이 곧 편집칸'인 표(#1685), 그 외엔 렌더 미리보기(클릭하면 원문 textarea).
+  //  어느 쪽이든 원문 편집 탈출구는 MD 칩이 쥐고 있다.
+  function rawBody(block: HTMLElement, wrap: HTMLElement): HTMLElement {
+    const md = String((block as any)._raw || '');
+    const tbl = buildTableEditor(md, {
+      onEdit: (m) => { (block as any)._raw = m; markDirtyType(); },        // 셀 타이핑 — 버스트 1스텝
+      onStructure: (m) => { (block as any)._raw = m; markDirty(); },       // 행·열·정렬 — 즉시 1스텝
+    });
+    if (tbl) { wrap.classList.add('be-raw-table'); return tbl; }
+    wrap.classList.remove('be-raw-table');
+    const view = el('div', { class: 'be-raw-view md-rendered', title: '클릭해서 마크다운 원문 편집' });
+    view.append(renderMarkdown(md));
+    view.addEventListener('click', () => openRawEditor(block, wrap));
+    return view;
+  }
+
   // raw 블록 — 원문 textarea 편집(블러/⌘Enter 커밋).
   function openRawEditor(block: HTMLElement, wrap: HTMLElement) {
     if (wrap.querySelector('.be-raw-ta')) return;
@@ -287,10 +303,7 @@ export function createRender(ctx: EditorCtx) {
     ta.addEventListener('input', grow);
     const commit = () => {
       (block as any)._raw = ta.value;
-      const view = el('div', { class: 'be-raw-view md-rendered', title: '클릭해서 마크다운 원문 편집' });
-      view.append(renderMarkdown(ta.value));
-      view.addEventListener('click', () => openRawEditor(block, wrap));
-      ta.replaceWith(view);
+      ta.replaceWith(rawBody(block, wrap));
       markDirty();
     };
     ta.addEventListener('blur', commit);
@@ -298,7 +311,7 @@ export function createRender(ctx: EditorCtx) {
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); ta.blur(); }
       e.stopPropagation();   // 에디터 전역 키핸들러(Enter 분할 등)와 충돌 방지
     });
-    const view = wrap.querySelector('.be-raw-view');
+    const view = wrap.querySelector('.be-raw-view, .be-tablewrap');
     if (view) view.replaceWith(ta);
     grow();
     ta.focus();
