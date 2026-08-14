@@ -14,6 +14,7 @@ import { DANGEROUS_SCOPES, isScope } from "../auth/scopes.js";
 import { resolveMemberOsUser, wrapAsMember, osUsername, isolationInfraReady, osUserExists } from "./terminal-isolation.js";
 import { ROOTS, HARNESSES } from "./catalog.js";
 import { getOpt } from "./tmux-exec.js";
+import { loadDesiredOne } from "../sessions/session-desired.js";
 
 const execFileAsync = promisify(execFile);
 const ID_RE = SESSION_ID_RE;   // 세션 id 형식의 단일 진실원천 — 게이트웨이가 헤더로 받은 세션도 같은 자로 잰다(#852)
@@ -391,7 +392,9 @@ export async function ensureMemberOsUser(user: LivelyUser): Promise<string | nul
 //  누가 브라우징하든(초대 멤버 포함) op 는 owner osUser 로 수행해야 소유·권한이 맞다. off/미프로비저닝=null(게이트웨이 직접).
 export async function sessionOsUser(id: string): Promise<string | null> {
   if (!ID_RE.test(id)) return null;
-  const owner = await getOpt(id, "@box_owner");
+  // desired(DB) 우선 · tmux 폴백 — ownerMeta 와 같은 규율(파일 op 의 uid 도 소유자 판정이다).
+  const db = await loadDesiredOne(id);
+  const owner = db?.owner || (await getOpt(id, "@box_owner"));
   if (!owner) return null;
   return resolveMemberOsUser(slug(owner));
 }
