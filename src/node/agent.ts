@@ -155,11 +155,11 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
     case "runTask": {
       const input = args as unknown as RunTaskInput;
       const r = await spawnTaskSession(input);
-      trackedTasks.set(input.taskId, { taskId: input.taskId, sessionId: r.sessionId, taskDir: r.taskDir });
+      trackedTasks.set(input.taskId, { taskId: input.taskId, sessionId: r.sessionId, taskDir: r.taskDir, harness: input.harness });   // #1710 — 결과 스키마가 하네스별이라 함께 들고 있어야 요약을 뽑는다
       return r;
     }
     case "watchTask": {
-      const w = { taskId: Number(args.taskId), sessionId: String(args.sessionId), taskDir: String(args.taskDir) };
+      const w = { taskId: Number(args.taskId), sessionId: String(args.sessionId), taskDir: String(args.taskDir), harness: args.harness ? String(args.harness) : undefined };   // #1710
       if (w.taskId && w.taskDir) trackedTasks.set(w.taskId, w);
       return { ok: true };
     }
