@@ -11,7 +11,7 @@ import { skeleton } from './learn.js';
 import { createBlockEditor } from './block-editor.js';
 import { confirmDialog } from './ui-primitives.js';
 import { applyCoverBg, openCoverPicker, openEmojiPicker } from './page-decor.js';
-import { HOME_EMPTY, KN_TYPE_LABEL, buildKnPropsBlock, fetchKnHiddenProps, hasMemoryScope, isCategoryHomeDoc, knChildrenPanel, knCommentsSection, knDelete, knFolderChildrenBlock, knInvalidateTreeCaches, knLinksPanel, knNotionPropsPanel, knPageIcon, knProjectLinks, knSimilarItem, openKnMetaPicker, openKnowledgeMoveTo, wkTrackEditor, } from './wiki-data.js';
+import { HOME_EMPTY, KN_TYPE_LABEL, buildKnPropsBlock, fetchKnHiddenProps, hasMemoryScope, isCategoryHomeDoc, knChildrenPanel, knCommentsSection, knDelete, knFolderChildrenBlock, knInvalidateTreeCaches, knLinksPanel, knNotionPropsPanel, knPageIcon, knProjectLinks, knSimilarItem, openKnMetaPicker, openKnowledgeMoveTo, wkOnLeave, wkTrackEditor, } from './wiki-data.js';
 import { KN_INDEXED, createWikiSide, knApplySideW, knSideResizeHandle, wireSideCollapse } from './wiki-side.js';
 import { wkMarkRead, wkRecordVisit, wkStamp, wkTick } from './wiki-ui.js';
 import { openKnHistory } from './wiki-history.js'; // #1546 변경 이력 패널(속성 줄의 '갱신 …'에서 연다)
@@ -576,17 +576,10 @@ async function buildWikiDoc(container, name, opts = {}) {
             onChange: queueSave,
             onSaveShortcut: () => { clearTimeout(saveTimer); doSave(true); }, // ⌘S = 명시적 의도 — 묻지 않는다
         }), () => { });
-        //  focusout 은 에디터 **안에서** 블록을 옮길 때도 뜬다 — relatedTarget 이 에디터 안이면 편집이 끝난 게 아니다.
-        //  확인창이 열리며 포커스를 가져갈 때도 마찬가지라(confirming 가드) 창이 두 번 뜨지 않는다.
-        editor.el.addEventListener('focusout', (ev) => {
-            const to = ev && ev.relatedTarget;
-            if (to && editor.el.contains(to))
-                return;
-            if (document.querySelector('.ov-confirm-back'))
-                return; // 이미 확인창이 떠 있다
-            setTimeout(() => { if (editor && editor.isDirty() && !editor.el.contains(document.activeElement))
-                confirmAndSave(); }, 0);
-        });
+        //  묻는 시점은 **이 화면을 떠날 때**다(#1685). 종전엔 focusout(본문 밖 클릭)에 걸려 있어서, 제목을 누르거나
+        //  옆을 스치기만 해도 창이 떠 편집이 끊겼다. 라우터가 새 화면을 그리기 전에 wkConfirmLeave 로 이 훅을 부른다.
+        //  (새로고침·탭 닫기는 wiki-data 의 beforeunload 경고가 계속 지킨다. ⌘S 는 종전대로 묻지 않고 즉시 저장.)
+        wkOnLeave(editor, confirmAndSave);
         body._getMd = () => editor.getMarkdown();
         body.append(editor.el);
     }

@@ -9,7 +9,7 @@ import { $view, TOKEN_KEY, api, apiUrl, el, errorNote, hideGate, loadPeopleAvata
 import { isDistillerDetailPath, renderContext } from './context.js';   // #1419 T6 맥락 관리 — 수집·증류·분류·관리 파이프라인
 import { renderWiki, renderWikiTrash } from './wiki.js';   // #764 WIKI 탭 전면 재구축(사이드바 유지)
 import { consumeWikiPeekGuard, dismissWikiPeek, renderWikiDocPage } from './wiki-doc.js';
-import { wkRouteCleanup } from './wiki-data.js';   // #764 — 라우트 이탈 시 위키 에디터/팝오버 청소
+import { wkConfirmLeave, wkRouteCleanup } from './wiki-data.js';   // #764 — 라우트 이탈 시 위키 에디터/팝오버 청소 · #1685 떠나기 전 수정 확인
 import { pjvCloseProjectModalOnRoute, pjvConsumeSkipRouteRender, renderProjectV2Detail, renderProjectsV2 } from './projects.js';
 import { pjvCloseTaskModalOnRoute, pjvRenderTaskRoute } from './taskmodal.js';   // #804 라우트 이탈 시 모달 정리 · #810 태스크 딥링크
 import { renderLearn, renderLearnDocs, renderLearnTour, renderOnboarding } from './learn.js';
@@ -71,6 +71,10 @@ async function route() {
   if (consumeWikiPeekGuard()) return;
   endTour();          // 진행 중이던 온보딩 투어(#517/#761) 오버레이 정리 — 둘러보기는 라우팅 끝에 resumeGuideTour 로 재개
   dismissWikiPeek();
+  //  #1685 떠나기 전에 한 번 묻는다 — 위키 본문에 저장 안 된 수정이 있으면 여기서 확인창을 띄우고,
+  //  답을 받은 뒤에 새 화면을 그린다(사용자에겐 '나가려는 순간' 묻는 것으로 보인다).
+  //  청소(wkRouteCleanup)보다 **먼저** 와야 한다 — 청소가 에디터를 destroy 하면 물어볼 대상이 사라진다.
+  await wkConfirmLeave();
   wkRouteCleanup();   // 분리된 위키 블록 에디터 destroy + 잔존 body 팝오버 제거(#764)
   // #804 열려 있던 상세 모달(프로젝트·태스크) 정리 — 모달은 document.body 에 얹혀 라우터가 존재를 모른다.
   //  안 닫으면 새 페이지가 모달 뒤에 렌더되고 모달이 계속 덮어 '클릭해도 아무 일 없는' 죽은 클릭이 된다(뒤로가기도 동일).

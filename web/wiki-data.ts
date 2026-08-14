@@ -36,6 +36,22 @@ function wkAnyEditorDirty() {
   }
   return false;
 }
+//  ── 화면을 떠날 때 한 번 묻기(#1685) ──────────────────────────────────────────
+//  #1600 이 "확인 없이 저장하지 않는다"를 세우면서 그 확인을 focusout(본문 밖 클릭)에 걸었는데,
+//  본문 밖을 스치기만 해도 창이 떠서 편집 흐름을 끊었다("블록을 수정하기만 해도 물어본다" — 사용자 지적).
+//  이제는 **화면을 떠날 때만** 묻는다. 라우터(main.ts route)가 새 화면을 그리기 전에 이걸 await 하므로
+//  사용자에겐 '나가려는 순간' 묻는 것으로 보인다. 새로고침·탭 닫기는 위 beforeunload 가 계속 지킨다.
+function wkOnLeave(ed: any, fn: () => Promise<any>) { ed.__wkLeave = fn; return ed; }
+async function wkConfirmLeave() {
+  for (const ed of Array.from(wkLiveEditors)) {
+    try {
+      if (!ed || !ed.el || !ed.el.isConnected) continue;
+      if (typeof ed.__wkLeave !== 'function') continue;
+      if (!(ed.isDirty && ed.isDirty())) continue;
+      await ed.__wkLeave();
+    } catch (_) { /* 한 에디터의 실패가 라우팅을 막지 않는다 */ }
+  }
+}
 //  전역 언로드 가드(모듈 1회 설치) — 이탈 순간 대기 저장을 flush. 오프라인이라 flush 가 실패할 때만 이탈 경고(과잉 경고 방지).
 if (typeof window !== 'undefined' && !(window as any).__wkUnloadGuard) {
   (window as any).__wkUnloadGuard = true;
@@ -1090,6 +1106,8 @@ export {
   openProjectChooser,
   openSourceDetail,
   saveKnPropsUi,
+  wkConfirmLeave,
+  wkOnLeave,
   wkRegisterFlush,
   wkRouteCleanup,
   wkTrackEditor,
