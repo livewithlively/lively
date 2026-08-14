@@ -67,6 +67,16 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
     ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS cron_expr TEXT;
     -- run_once = 1회 실행 후 자동 비활성(반복 안 함). 부트스트랩 등 일회성 잡용. 비파괴 추가.
     ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS run_once BOOLEAN NOT NULL DEFAULT false;
+    -- ── 연속 실패 서킷 브레이커(#1675 ④) ──
+    --  어니스트 2026-08-12: 증류 크론이 **200건 넘게 연속 실패**하는 동안 아무 제동이 없었다. 잡 하나가
+    --  10분마다 계속 실패하는 상태는 그 자체로 고장이지, 다음 주기에 나아질 일이 아니다.
+    --  fail_streak = 연속 실패 횟수(성공 1회로 0 리셋) · max_fail_streak = 이 값에 닿으면 자동 정지(0=끔).
+    --  잡별 컬럼인 이유: 적정 임계가 잡마다 다르다(증류는 짧게, 외부 API 커넥터는 일시 장애를 견디게 길게).
+    ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS fail_streak INT NOT NULL DEFAULT 0;
+    ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS max_fail_streak INT NOT NULL DEFAULT 5;
+    -- 자동 정지 흔적 — 관리탭이 "누가 껐나"를 사람 손과 구분해 보여줘야 재개 버튼을 낼 수 있다.
+    ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS auto_disabled_at TIMESTAMPTZ;
+    ALTER TABLE org_cron ADD COLUMN IF NOT EXISTS auto_disabled_reason TEXT;
   `);
   // 기본 잡 시드(최초 1회만 — 운영자 변경 보존).
   //  refresh_all: 커밋→is 자동 반영(결정적, LLM 없음). map_unmapped: 미매핑→도메인 LLM 분류(라이블리 시드 에이전트) — 토큰 설정 전이라 기본 OFF.

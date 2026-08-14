@@ -65,6 +65,12 @@ export async function updateCronJob(v: CronJobUpdate): Promise<CronJobRow> {
        params=COALESCE($4,params), interval_sec=COALESCE($5,interval_sec),
        cron_expr = CASE WHEN $6::boolean THEN $7::text ELSE cron_expr END,
        enabled=COALESCE($8,enabled), note=COALESCE($9,note), run_once=COALESCE($11,run_once),
+       -- #1675 ④ — **사람이 다시 켜면 서킷 브레이커를 초기화한다.** 안 그러면 streak 가 임계 직전인 채로
+       --  재개되어 한 번만 더 실패해도 즉시 다시 꺼진다(사람 눈엔 "켜도 안 켜진다"로 보인다).
+       --  끄는 방향(enabled=false)에는 손대지 않는다 — 자동 정지 흔적을 사람 조작이 지우면 안 된다.
+       fail_streak = CASE WHEN $8::boolean IS TRUE THEN 0 ELSE fail_streak END,
+       auto_disabled_at = CASE WHEN $8::boolean IS TRUE THEN NULL ELSE auto_disabled_at END,
+       auto_disabled_reason = CASE WHEN $8::boolean IS TRUE THEN NULL ELSE auto_disabled_reason END,
        version=version+1, updated_at=now(), updated_by=$10
      WHERE id=$1 RETURNING *`,
     [v.id, v.label, v.action,

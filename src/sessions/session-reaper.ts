@@ -34,7 +34,7 @@ import { listAllSessionStates } from "./session-state.js";
 import { listManagedSessions } from "./managed-sessions.js";
 import { getRuntimeConfig } from "../org/store.js";
 import { effectiveSessionReclaimPolicy, normalizeSessionReclaimPolicy, type SessionReclaimPolicy } from "./session-reclaim-policy.js";
-import { memAvailableMb, memTotalMb } from "../ops/host-mem.js";
+import { memAvailableMb, memTotalMb, swapUsageMb } from "../ops/host-mem.js";
 import { readProcTable, sessionRssMb } from "./session-rss.js";
 
 /** target = #1220 압박 회수가 **목표(임계 밑)에 닿아 남겨둔** 후보 수 — '왜 더 안 걷었나'의 답(정상·바람직한 종료). */
@@ -57,6 +57,31 @@ export interface ReapPressure {
    *  (둘 다 reachedTarget=false). 사고 중 운영자가 가장 먼저 알아야 할 구분이라 따로 남긴다.
    */
   rssMeasured: boolean;
+  /** #1675 ⑤ — 스왑 축이 발동했나. 발동 시점 스왑 사용률(%)과 임계, 되찾아야 할 초과분(MB). */
+  swap?: { usedPct: number; thresholdPct: number; overMb: number };
+}
+
+/**
+ * 압박 회수의 **정지 조건**(순수) — 발동한 축이 **전부** 목표에 닿으면 true(= 더 걷지 않는다).
+ *
+ * 축마다 목표가 다르다:
+ *  · 물리 축: 되찾은 만큼 사용률이 내려간다(`usedPct' = usedPct − freed/total×100`) → 임계 밑이면 해소.
+ *  · 스왑 축: 스왑에 밀려난 페이지를 직접 되돌릴 수단은 없다. 대신 **물리 메모리를 그만큼 되찾으면 그만큼
+ *    스왑 압력이 준다**는 근사로, `초과분(overMb)` 만큼 회수하면 해소로 본다.
+ *
+ * `undefined` 인 축은 이번 tick 에 발동하지 않은 것 → 자동 만족(그 축 때문에 더 걷지 않는다).
+ *
+ * ⚠ 물리 축에서 `totalMb<=0`(못 잼)이면 **해소로 치지 않는다** — 종전 동작과 같다. 못 재는 상태에서
+ *  '목표 달성'을 선언하면 압박이 안 풀린 채 방어가 멈춘다.
+ */
+export function reclaimTargetReached(o: {
+  freedMb: number;
+  mem?: { usedPct: number; thresholdPct: number; totalMb: number };
+  swap?: { overMb: number };
+}): boolean {
+  const memOk = !o.mem || (o.mem.totalMb > 0 && o.mem.usedPct - (o.freedMb / o.mem.totalMb) * 100 < o.mem.thresholdPct);
+  const swapOk = !o.swap || o.freedMb >= o.swap.overMb;
+  return memOk && swapOk;
 }
 export interface ReapResult {
   enabled: boolean; ttlMin: number; scanned: number; reaped: string[]; skipped: number; skipReasons?: ReapSkipReasons;
@@ -76,6 +101,8 @@ export async function reapIdleSessions(deps?: {
   memUsedPct?: () => Promise<number>;
   memTotal?: () => number;
   sessionRss?: () => Promise<Map<string, number>>;
+  /** #1675 ⑤ — 스왑 사용량(총/여유 MB). null = 못 잼 또는 스왑 없는 박스 → 스왑 축 비활성. */
+  swapUsage?: () => Promise<{ totalMb: number; freeMb: number } | null>;
 }): Promise<ReapResult> {
   const loadPolicy = deps?.loadPolicy ?? (() => getRuntimeConfig().then((c) => c.session_reclaim_policy));
   //  정규화를 한 겹 씌운다 — 부분 정책(구 DB 행·테스트 주입)에도 새 필드가 기본값으로 채워져
@@ -89,21 +116,45 @@ export async function reapIdleSessions(deps?: {
     return totalMb > 0 ? Math.round(((totalMb - availableMb) / totalMb) * 100) : 0;
   });
   const loadRss = deps?.sessionRss ?? (async () => sessionRssMb(await readProcTable(), (await listSessionPanePids()).panes));
+  const loadSwap = deps?.swapUsage ?? swapUsageMb;
 
   // #1220 — 압박 판정을 **먼저** 한다. 평시 회수가 꺼져 있어도(idle_ttl=0) 압박 회수는 독립적으로 발동해야 한다:
   //  "평소엔 아무것도 안 건드리다가 위급할 때만 걷는다"가 성립해야 운영자가 켤 수 있다.
   const pressurePct = policy.pressure_used_pct ?? 0;
   let usedPct = 0;
-  let underPressure = false;
+  let memPressure = false;
   if (pressurePct > 0) {
     try {
       usedPct = await memUsedPct();
-      underPressure = usedPct >= pressurePct;
+      memPressure = usedPct >= pressurePct;
     } catch (e) {
       // 메모리를 못 재면 압박 회수는 발동하지 않는다(모르면 사용자 자산을 건드리지 않는다). 평시 TTL 은 그대로 동작.
       logger.warn({ err: e }, "session-reaper: 메모리 조회 실패 — 압박 회수 생략(평시 TTL 만 적용)");
     }
   }
+  // #1675 ⑤ 스왑 축 — 물리 메모리가 여유로워 보여도 스왑이 바닥이면 그 박스는 이미 벼랑이다(어니스트 실측:
+  //  물리 82% / 스왑 99.9%). 물리 축과 **독립적으로** 발동한다.
+  const swapPct = policy.pressure_swap_pct ?? 0;
+  let swapPressure = false;
+  let swapInfo: { usedPct: number; thresholdPct: number; overMb: number } | undefined;
+  if (swapPct > 0) {
+    try {
+      const su = await loadSwap();
+      // totalMb<=0 = 스왑 없는 박스 → 이 축은 성립하지 않는다(0/0 을 100% 로 읽어 상시 발동하면 재앙이다).
+      if (su && su.totalMb > 0) {
+        const usedMb = Math.max(0, su.totalMb - su.freeMb);
+        const pct = Math.round((usedMb / su.totalMb) * 100);
+        if (pct >= swapPct) {
+          swapPressure = true;
+          // 임계까지 내리는 데 필요한 양 — 물리 메모리를 이만큼 되찾으면 그만큼 스왑 압력이 준다는 근사.
+          swapInfo = { usedPct: pct, thresholdPct: swapPct, overMb: Math.max(0, Math.round(usedMb - (su.totalMb * swapPct) / 100)) };
+        }
+      }
+    } catch (e) {
+      logger.warn({ err: e }, "session-reaper: 스왑 조회 실패 — 스왑 축 생략");
+    }
+  }
+  const underPressure = memPressure || swapPressure;
   // 압박이면 완화 TTL 로 갈아탄다. 둘 다 꺼져 있으면 할 일이 없다.
   const effTtlMin = underPressure ? (policy.pressure_idle_minutes ?? 0) : ttlMin;
   if (!underPressure && (!ttlMin || ttlMin <= 0)) return { enabled: false, ttlMin: 0, scanned: 0, reaped: [], skipped: 0 };
@@ -169,8 +220,12 @@ export async function reapIdleSessions(deps?: {
   let freedMb = 0;
   let reachedTarget = false;
   for (let i = 0; i < candidates.length; i++) {
-    // 되찾은 만큼 사용률이 내려간다: usedPct' = usedPct - freed/total*100. 임계 밑이면 더 걷지 않는다.
-    if (underPressure && totalMb > 0 && usedPct - (freedMb / totalMb) * 100 < pressurePct) {
+    // 발동한 축이 전부 목표에 닿으면 멈춘다(reclaimTargetReached) — 물리·스왑 각각의 해소 조건은 그 함수에.
+    if (underPressure && reclaimTargetReached({
+      freedMb,
+      mem: memPressure ? { usedPct, thresholdPct: pressurePct, totalMb } : undefined,
+      swap: swapInfo,
+    })) {
       reachedTarget = true;
       skipped += candidates.length - i;      // 정렬돼 있으니 남은 후보는 볼 것 없다
       reasons.target += candidates.length - i;
@@ -193,7 +248,11 @@ export async function reapIdleSessions(deps?: {
   //  '쟀다'의 기준 = 후보 중 **하나라도 양수 RSS 를 얻었나**. 맵이 비어 있지 않아도 값이 전부 0 이면 못 잰 것이다
   //  (hidepid 로 남의 uid /proc 를 못 읽는 격리 박스가 정확히 이 모양이 된다 — 이 기능이 노리는 바로 그 환경).
   const pressure: ReapPressure | undefined = underPressure
-    ? { usedPct, thresholdPct: pressurePct, freedMb, reachedTarget, rssMeasured: candidates.some((c) => (rss.get(c.id) ?? 0) > 0) }
+    ? {
+      usedPct, thresholdPct: pressurePct, freedMb, reachedTarget,
+      rssMeasured: candidates.some((c) => (rss.get(c.id) ?? 0) > 0),
+      ...(swapInfo ? { swap: swapInfo } : {}),   // 스왑 축으로 발동했으면 그 사실이 로그에 남아야 한다
+    }
     : undefined;
   logger.info({ ttlMin: effTtlMin, scanned: live.length, reaped: reaped.length, skipped, skipReasons: reasons, pressure },
     underPressure

@@ -22,6 +22,9 @@ import {
   matchNode, type DelegateTask, type SchedulableNode,
 } from "./task-store.js";
 import { spawnTaskSession, checkTask, killTaskSession, sampleResources, detectDocker, tailTask, type RunTaskResult, type TailResult } from "./tasks.js";
+import { detectAuthFailure, cronJobIdFromMarker } from "./task-failure.js";
+import { handleAuthFailure } from "./auth-failure-response.js";
+import { reapFailedTaskSessions, type FailedTaskRow } from "./failed-session-reaper.js";
 
 export const CENTRAL_NODE_ID = "central";
 const TICK_MS = 5_000;
@@ -77,7 +80,10 @@ async function progressBytes(t: DelegateTask): Promise<number> {
 }
 
 // 워커 세션 강제 종료(중앙=로컬 tmux, 원격=노드 RPC). 이미 없거나 노드가 이탈했으면 조용히 넘어간다.
-async function killTaskAnywhere(t: DelegateTask): Promise<void> {
+//  ⚠ 세션 좌표(node_id·session_id·requester)만 쓴다 — 실패 세션 회수기도 같은 함수를 쓰기 위해
+//   DelegateTask 전체가 아니라 그 세 칸만 요구한다(회수기는 DB 에서 그 칸만 읽어온다).
+type SessionCoords = Pick<DelegateTask, "node_id" | "session_id" | "requester">;
+async function killTaskAnywhere(t: SessionCoords): Promise<void> {
   if (!t.session_id) return;
   if (t.node_id === CENTRAL_NODE_ID) await killTaskSession(t.session_id).catch(() => { /* noop */ });
   else if (t.node_id && nodeOnline(t.node_id)) {
@@ -85,19 +91,49 @@ async function killTaskAnywhere(t: DelegateTask): Promise<void> {
   }
 }
 
+// 실패 세션 회수 tick(#1675 ①) — 보존 상한(개수·TTL) 밖의 실패 세션을 걷는다.
+//  ⚠ 실패해도 조용히 넘어간다: 회수가 스케줄러 tick 을 깨면 정작 위탁 감시가 멈춘다.
+async function reapFailedSessions(): Promise<void> {
+  try {
+    const p = await effectiveDelegatePolicy(loadDelegatePolicy);
+    await reapFailedTaskSessions(
+      (t: FailedTaskRow) => killTaskAnywhere(t),
+      { keep: p.keep_failed_sessions, ttlMin: p.failed_session_ttl_min },
+    );
+  } catch (err) {
+    logger.warn({ err: (err as Error)?.message }, "실패 위탁 세션 회수 tick 오류(비치명)");
+  }
+}
+
 // 상태 전이만 DB 에 기록한다 — 의뢰 세션 통지는 하지 않는다(§11: 흐름은 CLI 프로세스가 pull/스트림).
 async function finish(t: DelegateTask, ok: boolean, exit: number | null, summary?: string, error?: string): Promise<void> {
   liveSeen.delete(t.id);
+  // 자격 실패 판정(#1675 ②③) — markFinished **전에** 해서 결과에 함께 남긴다(사후 조회로 원인이 보이게).
+  const auth = ok ? null : detectAuthFailure({ error, summary });
   await markFinished(t.id, ok, {
     exit, node: t.node_id, session: t.session_id, task_dir: t.task_dir,
     summary: (summary ?? "").slice(0, 8192),
+    ...(auth ? { auth_failure: { label: auth.label, from: auth.from } } : {}),
   }, error ?? null);
-  // 성공 = 세션 정리(워커 세션 잔존 방지) · 실패 = 세션 보존(사후 검시 — 웹터미널로 열람).
+  // 성공 = 세션 즉시 정리 · 실패 = 세션 보존(사후 검시 — 웹터미널로 열람)하되 **상한 안에서만**(#1675 ①).
+  //  종전엔 실패 세션이 무기한 남았고, 그게 어니스트 2026-08-12 에 2,300개까지 쌓여 박스를 무너뜨렸다.
   if (ok && t.session_id && t.node_id) {
     if (t.node_id === CENTRAL_NODE_ID) await killTaskSession(t.session_id).catch(() => { /* 이미 없음 */ });
     else await nodeRpc(t.node_id, "kill", { user: { userId: t.requester }, id: t.session_id }).catch(() => { /* 노드 이탈 등 */ });
   }
-  logger.info({ task: t.id, ok, node: t.node_id }, "위탁 태스크 종결");
+  logger.info({ task: t.id, ok, node: t.node_id, auth: auth?.label ?? null }, "위탁 태스크 종결");
+
+  // 자격 실패 대응 — 크론 정지 + 대기분 취소 + 알림. 실패해도 종결 자체는 이미 끝났다.
+  if (auth) {
+    const policy = await effectiveDelegatePolicy(loadDelegatePolicy).catch(() => null);
+    await handleAuthFailure(
+      { taskId: t.id, requester: t.requester, cronJobId: cronJobIdFromMarker(t.requester_session), auth },
+      { stopCron: policy?.auth_fail_stop_cron ?? true },
+    ).catch((err) => logger.warn({ err, task: t.id }, "자격 실패 대응 오류(비치명)"));
+  }
+  // 실패 세션이 하나 늘었으니 그 자리에서 상한을 다시 적용한다 — tick 을 기다리면 그 사이 또 쌓인다
+  //  (사고 당시 한 주기에 9건이 동시에 죽었다).
+  if (!ok) await reapFailedSessions();
 }
 
 // 원격 taskdone push 수신(레지스트리 훅).
@@ -268,6 +304,9 @@ async function watchRunning(): Promise<void> {
         if (!t.node_lost_at) { await setNodeLost(t.id, true); logger.info({ task: t.id, node: t.node_id }, "노드 연결 끊김 — 복귀 대기"); continue; }
         if (now - new Date(t.node_lost_at).getTime() > OFFLINE_GRACE_MS) {
           if (t.attempt < t.max_attempts) {
+            // 재큐하면 session_id 가 NULL 이 되어 **그 세션을 다시는 못 찾는다**. 노드가 돌아왔을 때
+            //  남아 있으면 영구 고아다 — 지우고 나서 재큐한다(오프라인이면 no-op, 무해).
+            await killTaskAnywhere(t);
             await requeue(t.id);
             logger.warn({ task: t.id, node: t.node_id, attempt: t.attempt }, "노드 유실 — 재큐");
           } else {
@@ -294,7 +333,9 @@ export function startTaskScheduler(): void {
     if (ticking) return;
     ticking = true;
     void (async () => {
-      try { await watchRunning(); await assignQueued(); }
+      // 회수는 tick 에도 둔다(#1675 ①) — finish 훅만으로는 **TTL 이 영원히 안 걸린다**: 실패가 멎으면
+      //  훅이 안 불리고, 마지막 남은 세션들이 TTL 을 한참 넘겨도 아무도 안 걷는다.
+      try { await watchRunning(); await assignQueued(); await reapFailedSessions(); }
       catch (err) { logger.warn({ err }, "위탁 스케줄러 tick 오류"); }
       finally { ticking = false; }
     })();
