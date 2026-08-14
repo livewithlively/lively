@@ -6,6 +6,7 @@ import { registerOAuthConsent } from "./org/auth/oauth-consent.js";
 import { itemsPool } from "./db/client.js";
 import { buildToolCandidates, registry } from "./capabilities/index.js";
 import { installTenantBinding } from "./db/tenant-binding-boot.js";
+import { tenantContextMiddleware } from "./org/tenant-middleware.js";
 import { setToolCandidates } from "./mcp/mcp-surface.js";
 import { finishConsent, abandonConsent } from "./org/credentials/oauth-broker.js";
 import { buildInstallBundle } from "./org/delivery/publish.js";
@@ -55,6 +56,11 @@ setToolCandidates(buildToolCandidates());
 console.log(`[boot] ${installTenantBinding()}`);
 
 const app = express();
+
+// ★★ 테넌트 컨텍스트를 **가장 바깥**에서 연다(#1437 v1 5단계). 라우터마다 붙이면 새로 만든 라우터가
+//  빠지고, 빠뜨림이 곧 유출인 구조는 사람 규율로 못 지킨다. 웹훅(아래)보다도 앞이다 — 그 경로도
+//  DB 를 쓴다. `LIVELY_TENANT_HEADER_SECRET` 이 없으면 아무것도 하지 않는다(자가호스팅 무회귀).
+app.use(tenantContextMiddleware());
 
 // domainmap 웹훅(:7700 시절과 동일 경로) — 반드시 전역 express.json() '이전'에 마운트:
 // HMAC 은 정확한 raw bytes 대상이라 JSON 파서가 스트림을 먼저 소비하면 검증이 영원히 실패한다.
