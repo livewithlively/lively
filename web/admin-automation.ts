@@ -1,23 +1,27 @@
 // admin-automation.ts — 자동화 섹션의 두 패널: 스케줄(cron) · 상시 에이전트(managed session)
 //  (#1313 R37, admin.ts 에서 verbatim 분리 — 셸 역호출 없는 자족 패널).
-import { api, cardHead, el, errorNote, memberCombo, relTime, toast, withTip } from './core.js';
+import { api, busy, cardHead, el, errorNote, memberCombo, relTime, toast, withTip } from './core.js';
 import { overlayBox, skeleton } from './ui-primitives.js';
 import { psBlock, psInputStyle } from './admin-widgets.js';
+import { cronOwner } from './cron-owner.js';   // 잡 → 전용 화면 매핑(#1618 후속, 단일 출처)
 
 // ── 스케줄러(자동화) — org_cron 잡 관리(admin). is 신선화·미매핑 LLM 분류(세션 주입)·sync 를 주기 실행. ──
 //  map_unmapped 잡은 '타깃 LLM 세션'(상시 시드 세션)을 골라 거기에 분류 태스크를 주입한다(팀플랜 과금 — headless 토큰 아님).
 async function cronPanel(detail, data) {
   const reload = () => cronPanel(detail, data);
-  detail.replaceChildren(el('div', { class: 'card' }, skeleton('스케줄 잡을 불러오는 중')));
+  busy(detail, el('div', { class: 'card' }, skeleton('스케줄 잡을 불러오는 중')));
   let jobs; let actions: any[] = []; let tz = 'Asia/Seoul'; // tz(#778) = cron식을 해석하는 벽시계 기준(조직 시간대)
   try { const r = await api('/api/ui/cron'); jobs = (r && r.jobs) || []; actions = (r && r.actions) || []; tz = (r && r.timezone) || tz; }
   catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '스케줄 잡을 불러오지 못했습니다'))); return; }
 
-  // 자동 생성 잡(#837) — [외부 자료 수집]에서 커넥터를 켜면 서버가 `sync-<system>`(노션은 `-full` 도)을
-  //  **자동으로 등록/해제**한다(src/org/store.ts:987). 관리자가 만든 게 아닌데 목록에선 구분이 안 돼
-  //  "내가 이걸 언제 만들었지?"가 됐고, 손으로 지우면 커넥터는 켜져 있는데 싱크만 안 도는 상태가 됐다.
+  // 자동 생성 잡(#837) — 수집기를 켜면 서버가 싱크 잡을 **자동으로 등록/해제**한다(syncCollectorJob).
+  //  관리자가 만든 게 아닌데 목록에선 구분이 안 돼 "내가 이걸 언제 만들었지?"가 됐고, 손으로 지우면
+  //  수집기는 켜져 있는데 싱크만 안 도는 상태가 됐다.
+  //  ⚠ 두 계보를 모두 잡는다 — 수집기 소유(`collector-<id>`, 현행)와 구 커넥터 축(`sync-<system>`).
+  //   종전엔 후자만 봐서 **현행 수집기 잡에 '자동' 표시가 안 붙었다**(정작 지금 자동으로 도는 쪽인데).
   const autoSystemOf = (j) => {
     if (j.action !== 'connector_sync') return null;
+    if (/^collector-\d+(-full)?$/.test(String(j.id))) return '수집기';
     const sys = j.params && j.params.system;
     if (!sys) return null;
     return (j.id === 'sync-' + sys || j.id === 'sync-' + sys + '-full') ? String(sys) : null;
@@ -33,11 +37,24 @@ async function cronPanel(detail, data) {
     const sched = j.run_once ? '한 번만 (1회성)' : (j.cron_expr ? ('cron: ' + j.cron_expr) : fmtInterval(j.interval_sec || 0));
     const sess = (j.params && j.params.session) ? (' → ' + j.params.session) : '';
     const last = j.last_run_at ? (relTime(j.last_run_at) + ' · ' + (j.last_status || '')) : '미실행';
+    // 주인 화면(#1618 후속) — 이 잡을 소유한 전용 화면이 있으면 그 자리를 밝히고 링크한다.
+    //  표기하지 않으면 "여기서 고쳐도 되나"를 사람이 매번 추측해야 하고, 실제로 그 추측이 틀리면
+    //  (예: 수집 싱크 잡만 끄기) 주인 설정과 어긋난 상태가 만들어진다. 주인이 없는 잡(도메인맵·범용)은
+    //  아무것도 붙이지 않는다 — 그건 이 표가 곧 주인이라는 뜻이다.
+    const owner = cronOwner(j.action, j.id);
     const main = el('div', { class: 'wikicat-row-main' },
       el('span', { class: 'wikicat-name', text: j.label || j.id }),
       autoSys ? withTip(el('span', { class: 'pill', text: '자동' }),
-        '[외부 자료 수집]에서 ' + autoSys + ' 를 켜서 자동 등록된 잡입니다. 싱크를 멈추려면 이 잡이 아니라 커넥터를 끄세요.') : null,
+        autoSys === '수집기'
+          ? '[맥락 관리 ▸ 수집]에서 수집기를 켜서 자동 등록된 잡입니다. 싱크를 멈추려면 이 잡이 아니라 수집기를 끄세요.'
+          : autoSys + ' 커넥터를 켜서 자동 등록된 구 방식 잡입니다. 지금은 [맥락 관리 ▸ 수집]의 수집기가 이 일을 합니다.') : null,
       el('span', { class: 'wikicat-key mono', text: j.action + sess }),
+      owner
+        ? withTip(owner.href
+            ? el('a', { class: 'wikicat-owner', href: owner.href, text: owner.label + ' →' })
+            : el('span', { class: 'wikicat-owner', text: owner.label }),
+          '이 잡의 전용 화면입니다. ' + owner.why)
+        : null,
       el('span', { class: 'dm-tag', text: j.enabled ? sched : '꺼짐' }),
       el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '최근' }), last));
     const acts = el('div', { class: 'wikicat-row-acts' },
@@ -53,6 +70,11 @@ async function cronPanel(detail, data) {
     el('button', { class: 'btn btn-ghost btn-sm wikicat-add', text: '+ 잡 추가', onclick: () => openCronForm(null, actions, reload, tz) }));
   const card = el('div', { class: 'card' },
     cardHead('정기 실행 잡', '게이트웨이가 정해진 주기마다 실행하는 잡입니다. 실제 코드 의존(is) 최신화(refresh), 미매핑 코드 유닛 LLM 분류(map_unmapped — 타깃 상시 에이전트에 주입, 팀플랜 과금), 외부 자료 수집 싱크 등이 있습니다. 주기는 초 단위 간격 또는 cron식으로 지정합니다. cron식의 시각은 '),
+    // 두 종류가 한 표에 섞여 있다는 사실을 표보다 먼저 말한다(#1618 후속) — 행마다 붙는 링크만으로는
+    //  "왜 어떤 줄에만 있지?"가 되고, 없는 줄이 '누락'인지 '원래 없는 것'인지 구분이 안 된다.
+    el('p', { class: 'admin-hint', style: 'margin:0 0 10px' },
+      el('b', { text: '전용 화면이 있는 잡과 없는 잡이 섞여 있습니다. ' }),
+      el('span', { text: '오른쪽에 화면 이름이 붙은 잡은 그곳이 정본입니다 — 거기서 켜고 끄면 주기·의뢰자 같은 짝이 함께 맞춰집니다(여기서 고칠 수도 있지만 어긋나기 쉽습니다). 이름이 없는 잡은 이 표가 곧 주인입니다.' })),
     el('div', { class: 'wikicat' }, el('div', { class: 'wikicat-group' }, head, rows)));
   detail.replaceChildren(card);
 }
@@ -197,7 +219,7 @@ async function cronDelete(id, reload, autoSys?) {
 //  '에이전트를 위한 프로젝트' — createSession + 공유폴더(managed/<id>) 재사용. account=라이블리 계정/프로필(클로드 로그인, 멀티프로필 대비).
 async function managedSessionsPanel(detail, data) {
   const reload = () => managedSessionsPanel(detail, data);
-  detail.replaceChildren(el('div', { class: 'card' }, skeleton('상시 에이전트를 불러오는 중')));
+  busy(detail, el('div', { class: 'card' }, skeleton('상시 에이전트를 불러오는 중')));
   let sessions; let live: string[] = [];
   try { const r = await api('/api/ui/managed-sessions'); sessions = (r && r.sessions) || []; }
   catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '상시 에이전트를 불러오지 못했습니다'))); return; }
@@ -235,14 +257,44 @@ function openManagedSessionForm(m, reload) {
   const labelInp = el('input', { type: 'text', style: psInputStyle, value: (m && m.label) || '', placeholder: '도메인 분류 배치 LLM' });
   const account = memberCombo({ value: (m && m.account) || '', placeholder: '구성원 id 선택/검색 (예: daon)' });
   const wsInp = el('input', { type: 'text', style: psInputStyle, value: (m && m.workspace_subpath) || '', placeholder: '비우면 managed/<id>' });
+  // 하네스·플래그는 **서버 카탈로그**(/api/ui/terminal/config)에서 온다(#1711). 종전엔 ['claude','codex','shell'] 과
+  //  claude 의 모델·effort 목록이 이 폼에 박혀 있어, 상시 세션을 opencode·antigravity 로 띄울 수 없었고(선택지 부재)
+  //  하네스가 늘 때마다 이 폼이 조용히 낡았다. 카탈로그를 못 읽으면 아래 폴백으로 종전 동작을 유지한다.
   const harnessSel = el('select', { style: psInputStyle });
-  for (const h of ['claude', 'codex', 'shell']) harnessSel.append(el('option', { value: h, text: h, ...((m && m.harness === h) ? { selected: true } : {}) }));
-  // 모델·effort = claude 하네스 플래그(--model/--effort) → flags JSONB. 세션 스폰 시 claude argv 로 적용.
   const mflags = (m && m.flags) || {};
-  const modelSel = el('select', { style: psInputStyle });
-  for (const v of ['', 'opus', 'sonnet', 'haiku']) modelSel.append(el('option', { value: v, text: v || '(기본)', ...((mflags['--model'] === v) ? { selected: true } : {}) }));
-  const effortSel = el('select', { style: psInputStyle });
-  for (const v of ['', 'low', 'medium', 'high', 'xhigh', 'max']) effortSel.append(el('option', { value: v, text: v || '(기본)', ...((mflags['--effort'] === v) ? { selected: true } : {}) }));
+  const flagsWrap = el('div', {});   // 선택한 하네스의 플래그(모델·effort…)를 여기에 그린다
+  let hcat: any[] = [{ key: 'claude', label: 'claude', flags: [
+    { name: '--model', label: '모델', choices: ['', 'opus', 'sonnet', 'haiku'], type: 'select' },
+    { name: '--effort', label: 'effort', choices: ['', 'low', 'medium', 'high', 'xhigh', 'max'], type: 'select' },
+  ] }, { key: 'codex', label: 'codex', flags: [] }, { key: 'shell', label: 'shell', flags: [] }];
+  const flagCtrls: Record<string, any> = {};
+  const autoFlagText = el('span', { text: ' 권한 확인 건너뛰기' });   // 하네스별 실제 플래그로 갱신된다
+  const renderHarnessFlags = () => {
+    const h = hcat.find((x) => x.key === harnessSel.value) || { flags: [] };
+    autoFlagText.textContent = h.autoApproveFlag ? ' ' + h.autoApproveFlag : (h.hasAutoApprove === false ? ' 이 하네스는 자동 승인 플래그가 없습니다.' : ' 권한 확인 건너뛰기');
+    for (const k of Object.keys(flagCtrls)) delete flagCtrls[k];
+    flagsWrap.replaceChildren(...(h.flags || []).filter((f) => f.type === 'select').map((f) => {
+      const sel = el('select', { style: psInputStyle });
+      for (const v of (f.choices || [''])) sel.append(el('option', { value: v, text: v || '(기본)', ...((mflags[f.name] === v) ? { selected: true } : {}) }));
+      flagCtrls[f.name] = sel;
+      return psBlock(`${f.label} (${h.key})`, f.desc || '비우면 하네스 기본값.', sel);
+    }));
+  };
+  const fillHarness = () => {
+    const want = harnessSel.value || (m && m.harness) || 'claude';
+    harnessSel.replaceChildren(...hcat.map((h) => el('option', { value: h.key, text: h.label || h.key })));
+    if (hcat.some((h) => h.key === want)) harnessSel.value = want;
+    renderHarnessFlags();
+  };
+  harnessSel.addEventListener('change', renderHarnessFlags);
+  fillHarness();
+  (async () => {
+    try {
+      const cfg = await api('/api/ui/terminal/config');
+      const list = ((cfg && cfg.harnesses) || []).filter((h) => h && h.key);
+      if (list.length) { hcat = list; fillHarness(); }
+    } catch (_) { /* graceful — 폴백 목록 유지 */ }
+  })();
   const autoChk = el('input', { type: 'checkbox', ...((m ? m.auto_approve : true) ? { checked: true } : {}) });
   const enabledChk = el('input', { type: 'checkbox', ...((m ? m.enabled : true) ? { checked: true } : {}) });
   const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '상시 세션 추가' : '저장' });
@@ -252,9 +304,8 @@ function openManagedSessionForm(m, reload) {
     psBlock('라이블리 계정/프로필', '이 세션을 띄울 클로드 로그인(프로필=구성원). 목록에서 고르거나 입력. 각 프로필은 provision + 웹터미널 /login 후 사용.', account.el),
     psBlock('격리 워크스페이스(하위경로)', '공유폴더 아래 이 세션 전용 작업폴더. 비우면 managed/<id>.', wsInp),
     psBlock('하네스', '', harnessSel),
-    psBlock('모델 (claude)', '이 세션의 claude 모델. 판단 무거운 작업(부트스트랩·분류)은 opus 권장. 비우면 기본.', modelSel),
-    psBlock('effort (claude)', '추론 강도(low~max). 무거운 판단은 high+ 권장. 비우면 기본.', effortSel),
-    psBlock('자동 승인', '도구 실행을 묻지 않고 진행(무인 작업에 필요).', el('label', { class: 'inline' }, autoChk, el('span', { text: ' --dangerously-skip-permissions' }))),
+    flagsWrap,
+    psBlock('자동 승인', '도구 실행을 묻지 않고 진행(무인 작업에 필요).', el('label', { class: 'inline' }, autoChk, autoFlagText)),
     psBlock('항상 켬(keep-alive)', '죽으면 재생성.', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' enabled' }))),
     el('div', { class: 'ps-rules-actions' }, saveBtn));
   const back = overlayBox(isNew ? '상시 세션 추가' : '상시 세션 수정 — ' + m.id, form);
@@ -262,15 +313,14 @@ function openManagedSessionForm(m, reload) {
   saveBtn.onclick = async () => {
     const id = idInp.value.trim();
     if (!id) { toast('세션 id 가 필요합니다', true); return; }
+    // #1711 — 전송할 플래그는 **그 하네스가 실제로 받는 것**만(카탈로그 정의에서 그린 컨트롤이 곧 그 목록이다).
+    //  종전엔 claude 일 때만 model/effort 를 보내고 다른 하네스엔 flags 자체를 안 보냈다 — antigravity 처럼
+    //  자기 모델·effort 를 받는 하네스에서 그 설정이 통째로 사라졌다.
     const flags: Record<string, string> = {};
-    if (harnessSel.value === 'claude') { // model/effort 는 claude 플래그 — 다른 하네스엔 flags 미전송(기존 보존)
-      if (modelSel.value) flags['--model'] = modelSel.value;
-      if (effortSel.value) flags['--effort'] = effortSel.value;
-    }
+    for (const [name, ctrl] of Object.entries(flagCtrls)) if (ctrl && ctrl.value) flags[name] = ctrl.value;
     const body = { id, label: labelInp.value.trim() || null, account: account.value() || null,
       workspace_subpath: wsInp.value.trim() || null, harness: harnessSel.value,
-      auto_approve: autoChk.checked, enabled: enabledChk.checked,
-      ...(harnessSel.value === 'claude' ? { flags } : {}) };
+      auto_approve: autoChk.checked, enabled: enabledChk.checked, flags };
     saveBtn.disabled = true;
     try { await api('/api/ui/managed-sessions', { method: 'POST', body: JSON.stringify(body) }); toast(isNew ? '추가했습니다 (켜져 있으면 곧 keep-alive 가 띄웁니다)' : '저장했습니다'); back.remove(); reload(); }
     catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; }

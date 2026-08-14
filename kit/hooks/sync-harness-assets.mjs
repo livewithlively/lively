@@ -27,7 +27,11 @@ import { join, dirname, relative, isAbsolute } from "node:path";
 //  따로 하드코딩돼 어긋날 수 있었다(어긋나면 관측·로컬토글에서 그 종류가 통째로 안 보인다).
 //  ⚠ 이 import 가 성립하려면 harness-registry.mjs 가 이 파일과 **같은 디렉터리**로 설치돼야 한다
 //   (설치 시 ~/.lively/hooks/ 로 평평하게 복사되므로) → user-install 의 HOOK_SCRIPTS 에 등재돼 있다.
-import { resolveHarness, harness, placementFor, assetDirsFor, assetDirNames } from "./harness-registry.mjs";
+import { resolveHarness, harness, placementFor, assetDirsFor, assetDirNames, isForeignGrokInvocation } from "./harness-registry.mjs";
+
+// grok compat 이중발화 가드(#1701) — grok 이 ~/.claude/settings.json 의 우리 훅을 그대로 실행한 사본이면
+//  비켜선다(사본은 --harness 없이 돌아 claude 자리에 sync 하므로 grok 세션에서 무의미 + 이중 fetch).
+if (isForeignGrokInvocation()) process.exit(0);
 
 const OFF = process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1";
 if (OFF) process.exit(0);
@@ -115,6 +119,9 @@ const COMPOSERS = {
   "codex-prompt": composeCodexPrompt,
   "opencode-agent": composeOpencodeAgent,
   "opencode-command": composeOpencodeCommand,
+  "antigravity-agent": composeAntigravityAgent,
+  "antigravity-workflow": composeAntigravityWorkflow,
+  "grok-agent": composeGrokAgent,
 };
 // opencode 서브에이전트 = md 지만 **frontmatter 스키마가 claude 와 다르다.**
 //  실측(1.18.12): `tools` 는 배열이 아니라 객체 · `color` 는 hex 또는 지정 enum · `model` 은 `provider/model` 형식.
@@ -133,6 +140,34 @@ function composeOpencodeCommand(asset) {
   const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
   const desc = asset.description != null ? String(asset.description) : String(fm.description ?? "");
   return `---\ndescription: ${yamlValue(desc)}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
+}
+
+// antigravity 서브에이전트(agents/<n>/agent.md) — 실측(#1689)으로 안전 확인된 name·description 만 이식한다.
+//  claude 의 tools·color·model 은 antigravity 스키마 미확인이라 싣지 않는다(codex·opencode 와 같은 판단 —
+//  잘못된 frontmatter 의 폭발 반경이 하네스마다 달라도, 이식 가능 최소셋만 넘기는 규칙은 같다).
+function composeAntigravityAgent(asset) {
+  const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
+  const desc = asset.description != null ? String(asset.description) : String(fm.description ?? "");
+  const name = fm.name != null ? String(fm.name) : String(asset.id || "");
+  return `---\nname: ${yamlValue(name)}\ndescription: ${yamlValue(desc)}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
+}
+
+// antigravity 워크플로우(workflows/<n>.md — 슬래시커맨드 등가, `/<이름>` 으로 호출) — description + 본문만.
+//  실측(#1689): description frontmatter 워크플로우가 print 모드 포함 정상 실행. argument-hint 류는 미지원이라 제외.
+function composeAntigravityWorkflow(asset) {
+  const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
+  const desc = asset.description != null ? String(asset.description) : String(fm.description ?? "");
+  return `---\ndescription: ${yamlValue(desc)}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
+}
+
+// grok 서브에이전트(agents/<id>.md) — frontmatter 파서는 관용(#1701 실측: 미지 필드·claude 필드 로드됨,
+//  이웃 무해)이지만, claude 의 model 슬러그("sonnet")·tools 이름의 **런타임 의미**는 미실측이다.
+//  codex·opencode·antigravity 와 같은 판단으로 이식 가능 최소셋(name·description·본문)만 넘긴다.
+function composeGrokAgent(asset) {
+  const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
+  const desc = asset.description != null ? String(asset.description) : String(fm.description ?? "");
+  const name = fm.name != null ? String(fm.name) : String(asset.id || "");
+  return `---\nname: ${yamlValue(name)}\ndescription: ${yamlValue(desc)}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
 }
 
 function composeFile(asset) {
@@ -289,6 +324,10 @@ function scanLocalHooksCodex() {
 
 function scanLocalHooks() {
   if (HARNESS === "codex") return scanLocalHooksCodex();
+  // settings-merge(claude) 가 아닌 하네스(opencode·antigravity)는 claude settings 를 읽으면 **남의 하네스 훅**을
+  //  이 하네스 것으로 잘못 보고한다 — 로컬 훅 스캐너가 없는 하네스는 정직하게 빈 목록(#1689, 종전엔 opencode 가
+  //  이 폴스루로 claude settings 를 읽었다).
+  if (harness(HARNESS).wiring !== "settings-merge") return [];
   let cfg;
   try { cfg = JSON.parse(readFileSync(join(CLAUDE_DIR, "settings.json"), "utf8")); } catch { return []; }
   const hooksCfg = cfg && typeof cfg === "object" ? cfg.hooks : null;

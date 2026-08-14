@@ -10,7 +10,7 @@
 //
 //  ⚠ '노드가 무엇인가'·'연결하는 법'은 여기 두지 않는다 — 사용가이드(#/learn/docs/nodes)가 원고의 집이다.
 //   설정 화면은 **지금 상태를 보고 바꾸는 곳**이고, 배우는 곳은 문서다. 두 곳에 같은 설명을 두면 갈라진다.
-import { api, el, errorNote, state, toast } from './core.js';
+import { api, busy, el, errorNote, state, toast } from './core.js';
 import { confirmDialog, copyText, field, overlay, skeleton } from './ui-primitives.js';
 import { psInputStyle, sectionHead } from './admin-widgets.js';
 const GUIDE = '#/learn/docs/nodes'; // 사용가이드 '컴퓨터 연결(노드)' — 설명·연결 명령의 단일 출처
@@ -24,10 +24,29 @@ function statusBadge(n) {
         return el('span', { class: 'tsess-badge live', text: '연결됨' + (n.sessions ? ' · 세션 ' + n.sessions : '') });
     return el('span', { class: 'tsess-badge', text: '꺼져 있음' });
 }
+// 프로그램 최신 여부(#1713) — 서버는 이미 3상으로 판정해 보내고 있었는데(agent_latest) 화면이 안 보여줬다.
+//  그 사이 노드들은 **옛 프로그램으로 계속 돌았고**, 새로 추가된 AI 를 그 컴퓨터에서만 못 골랐다(실측 4대 전부).
+//  ⚠ null(판정 불가 — 옛 프로그램이라 버전을 안 보냄)을 '구버전'으로 뭉개지 않는다. 대신 그 사실 그대로 적는다.
+function versionBadge(n) {
+    if (!n.online)
+        return null; // 꺼져 있으면 버전 이야기는 소음이다
+    if (n.agent_latest === true)
+        return null; // 최신이면 조용한 게 맞다
+    return el('span', { class: 'tsess-badge warn', title: '그 컴퓨터에서 lively node 를 다시 켜면 최신으로 받습니다.',
+        text: n.agent_latest === false ? '프로그램 구버전' : '프로그램 버전 확인 불가' });
+}
+// 이 노드에서 열 수 있는 AI(#1713) — 노드가 스스로 보고한 목록(그 PC 에 실제로 깔린 것). 세션 만들기 폼이
+//  같은 값으로 선택지를 거르므로, 여기 보이는 것과 거기 고를 수 있는 것이 항상 같다.
+function harnessLine(n) {
+    const hs = (n.harnesses || []).filter((h) => h && h !== 'shell');
+    if (!hs.length)
+        return null;
+    return el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '쓸 수 있는 AI' }), hs.join(' · '));
+}
 // 노드 한 행. acts 는 호출부가 정한다 — 같은 노드라도 '내 화면'과 '관리자 화면'에서 할 수 있는 일이 다르다.
 function nodeRow(n, ownerLabel, acts) {
-    const main = el('div', { class: 'wikicat-row-main' }, el('span', { class: 'wikicat-name', text: n.name || n.id }), el('span', { class: 'wikicat-key mono', text: n.id }), n.shared ? el('span', { class: 'dm-tag', text: '공유' }) : null, ownerLabel ? el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '연결한 사람' }), ownerLabel) : null);
-    return el('div', { class: 'wikicat-row' }, main, statusBadge(n), acts || null);
+    const main = el('div', { class: 'wikicat-row-main' }, el('span', { class: 'wikicat-name', text: n.name || n.id }), el('span', { class: 'wikicat-key mono', text: n.id }), n.shared ? el('span', { class: 'dm-tag', text: '공유' }) : null, ownerLabel ? el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '연결한 사람' }), ownerLabel) : null, harnessLine(n));
+    return el('div', { class: 'wikicat-row' }, main, versionBadge(n), statusBadge(n), acts || null);
 }
 // 그룹(제목·개수·한 줄 설명 + 행들). 빈 그룹도 '사실 + 다음에 할 일'로 말한다.
 function nodeGroup(title, hint, nodes, rowFn, empty) {
@@ -130,7 +149,7 @@ export async function myNodesPanel(detail, data) {
     const me = meId();
     const reload = () => myNodesPanel(detail, data);
     const act = nodeActions(reload);
-    detail.replaceChildren(el('div', { class: 'card' }, skeleton('연결된 컴퓨터를 불러오는 중')));
+    busy(detail, el('div', { class: 'card' }, skeleton('연결된 컴퓨터를 불러오는 중')));
     let nodes;
     try {
         nodes = await loadNodes();
@@ -204,7 +223,7 @@ function openSharedNodeForm(reload) {
 export async function orgNodesPanel(detail, data) {
     const reload = () => orgNodesPanel(detail, data);
     const act = nodeActions(reload);
-    detail.replaceChildren(el('div', { class: 'card' }, skeleton('공유 컴퓨터를 불러오는 중')));
+    busy(detail, el('div', { class: 'card' }, skeleton('공유 컴퓨터를 불러오는 중')));
     let nodes;
     try {
         const r = await api('/api/ui/nodes');

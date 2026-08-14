@@ -1,6 +1,6 @@
 // admin-audit-org.ts — #1405 W3: admin-audit.ts 분할 ③.
 //  '조직 감사' 패널 — 엔티티·작업·채널 라벨 사전 + 변경 diff 렌더.
-import { api, cardHead, el, errorNote, relTime } from './core.js';
+import { api, busy, cardHead, el, errorNote, relTime } from './core.js';
 import { skeleton } from './ui-primitives.js';
 import { audExportBtn, audExportCsv, audField, audPageSize, audPageSizeField, audPager, audPeriodField, audPeriodQs, audSelect } from './admin-audit-common.js';
 
@@ -100,7 +100,7 @@ async function orgAuditPanel(detail) {
     for (const k in (extra || {})) q.set(k, String(extra[k]));
     return q.toString();
   };
-  detail.replaceChildren(el('div', { class: 'card' }, skeleton('변경 이력을 불러오는 중')));
+  busy(detail, el('div', { class: 'card' }, skeleton('변경 이력을 불러오는 중')));
 
   const page = Math.max(1, ORG_AUDIT_STATE.page || 1);
   let r;

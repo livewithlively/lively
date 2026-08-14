@@ -1,7 +1,7 @@
 // admin-preview.ts — 미리보기 환경 패널 (#1313 R37, admin.ts 에서 verbatim 분리).
 //  ⚠ 폴링 타이머(previewPollTimer)는 **이 모듈이 소유**한다 — 패널 재진입 때 이전 타이머를 clearTimeout 하는
 //   계약이 있어서, 타이머 변수와 그걸 세우고 지우는 코드가 갈라지면 안 된다(ESM import 바인딩은 재할당 불가).
-import { api, cardHead, el, errorNote, memberCombo, relTime, toast, uiText } from './core.js';
+import { api, busy, cardHead, el, errorNote, memberCombo, relTime, toast, uiText } from './core.js';
 import { overlayBox, skeleton } from './ui-primitives.js';
 import { psBlock, psInputStyle, sectionHead } from './admin-widgets.js';
 // ── 미리보기 — 작업 중인 화면을 운영 화면·남의 작업과 분리해 따로 띄워 본다. ──
@@ -15,7 +15,7 @@ async function previewEnvsPanel(detail, data) {
         clearTimeout(previewPollTimer);
         previewPollTimer = null;
     }
-    detail.replaceChildren(el('div', { class: 'card' }, skeleton('미리보기를 불러오는 중')));
+    busy(detail, el('div', { class: 'card' }, skeleton('미리보기를 불러오는 중')));
     let envs;
     try {
         const r = await api('/api/ui/preview-envs');
@@ -136,7 +136,7 @@ async function openPreviewEnvForm(p, reload) {
             return;
         }
         if (branchState === 'loading') {
-            branchList.replaceChildren(hintRow('브랜치를 불러오는 중…'));
+            busy(branchList, hintRow('브랜치를 불러오는 중…'));
             return;
         }
         if (branchState === 'error') {

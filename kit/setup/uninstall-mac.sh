@@ -12,7 +12,7 @@ set -euo pipefail
 #   [2] ~/.zshrc 의 LIVELY_TOKEN 센티넬 블록 제거
 #   [3] ~/.lively 제거 — 기본 휴지통 이동(되돌릴 수 있음), --purge 면 하드 삭제
 #
-# ▶ 사용법:  bash setup/uninstall-mac.sh [--dry-run] [--purge] [--harness claude|codex|all]
+# ▶ 사용법:  bash setup/uninstall-mac.sh [--dry-run] [--purge] [--harness claude|codex|opencode|antigravity|grok|all]
 #   --dry-run            무엇을 지울지 출력만(변경 없음)
 #   --purge              ~/.lively 를 휴지통 이동 대신 하드 삭제(백업 포함 완전 제거)
 #   --harness <h>        대상 하네스 한정(기본 all)
@@ -29,7 +29,7 @@ while [ $# -gt 0 ]; do
     --harness) HARNESS="${2:-all}"; PASS_ARGS+=("--harness" "${2:-all}"); shift 2 ;;
     --uninstall) shift ;;  # 옛 설치기 경유 호출에서 흘러들어와도 무시(하위호환)
     -h|--help)
-      echo "사용법: bash setup/uninstall-mac.sh [--dry-run] [--purge] [--harness claude|codex|all] [--yes]"
+      echo "사용법: bash setup/uninstall-mac.sh [--dry-run] [--purge] [--harness claude|codex|opencode|antigravity|grok|all] [--yes]"
       exit 0 ;;
     *) echo "알 수 없는 옵션: $1"; exit 1 ;;
   esac

@@ -77,4 +77,4 @@ setup 이 어댑터를 통해 **user-level**(`~/.claude/settings.json` + `~/.cod
 
 ## 멀티하네스 (설계문서 D5)
 
-훅 스크립트 한 벌 공유, 하네스별로 설정 파일만 다르게 emit. Claude·Codex 어댑터 = v1. openclaw/pi 는 TODO.
+훅 스크립트 한 벌 공유, 하네스별로 설정 파일만 다르게 emit. Claude·Codex·OpenCode·Antigravity 지원(#1475·#1519·#1689). openclaw/pi 는 TODO.

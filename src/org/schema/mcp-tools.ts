@@ -74,12 +74,12 @@ export async function initToolAndAssetRegistry(pool: Pool): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT);
     DO $$ BEGIN
-      -- 하네스 집합 확장(2026-08-04 #1519): opencode 추가. **DROP+ADD 로 갱신한다** — 종전 IF NOT EXISTS
+      -- 하네스 집합 확장(#1519 opencode · #1689 antigravity). **DROP+ADD 로 갱신한다** — 종전 IF NOT EXISTS
       --  프로브형은 제약이 이미 있으면 그대로 둬서 라이브 DB 가 옛 목록에 머문다(그러면 API 는 통과시킨
       --  값을 DB 가 23514 로 거절한다). 아래 이벤트 제약이 같은 이유로 이미 이 패턴이다.
       --  ⚠ delivery/shared.ts HOOK_HARNESSES 와 일치 유지(둘이 갈리면 한쪽만 막는다).
       ALTER TABLE org_hook DROP CONSTRAINT IF EXISTS org_hook_harness_chk;
-      ALTER TABLE org_hook ADD CONSTRAINT org_hook_harness_chk CHECK (harness IN ('claude','codex','openclaw','opencode','all'));
+      ALTER TABLE org_hook ADD CONSTRAINT org_hook_harness_chk CHECK (harness IN ('claude','codex','openclaw','opencode','antigravity','grok','all'));
       -- 이벤트 집합 확장(2026-06-24): 기존 제약은 DROP+ADD 로 갱신한다(IF NOT EXISTS 만으론 라이브 제약이 안 바뀜).
       --  Claude 라이프사이클 이벤트 추가(SessionEnd·PreCompact·PostCompact). delivery.HOOK_EVENTS·runnerHooksBlock 와 일치 유지.
       ALTER TABLE org_hook DROP CONSTRAINT IF EXISTS org_hook_event_chk;
@@ -167,7 +167,7 @@ export async function initToolAndAssetRegistry(pool: Pool): Promise<void> {
       org_harness_asset_kind_chk: "kind IN ('skill','subagent','command')",
     })}
     ${/* 하네스 확장(#1519) — 프로브형이 아니라 DROP+ADD 여야 라이브 제약이 실제로 넓어진다. */
-      redefineCheck("org_harness_asset", "org_harness_asset_harness_chk", "harness IN ('claude','codex','openclaw','opencode','all')")}
+      redefineCheck("org_harness_asset", "org_harness_asset_harness_chk", "harness IN ('claude','codex','openclaw','opencode','antigravity','grok','all')")}
   `);
 
   // ── org_asset_pref — per-member 개인 오버라이드(#699). 관리자 정책(enabled+target_members) 위에 멤버가 본인 것만 ──

@@ -19,10 +19,24 @@ const KNOWN_HARNESSES: ReadonlyArray<readonly [pattern: string, id: string]> = [
   ["claudecode", "claude-code"],
   ["claude", "claude-code"],
   ["codex", "codex"],
+  // #1689 — antigravity(agy)·opencode 보강(둘 다 stdio 프록시가 x-lively-harness 로 stamp 한다).
+  ["antigravity", "antigravity"],
+  ["agy", "antigravity"],
+  // #1701 — grok(Grok Build). UA 는 `grok-shell/<ver>` 형(실측)이지만 stdio 프록시의 x-lively-harness stamp 가 정본.
+  ["grok", "grok"],
+  ["opencode", "opencode"],
   ["cursor", "cursor"],
   ["cline", "cline"],
   ["windsurf", "windsurf"],
 ];
+
+// 캐노니컬 하네스 id 집합(중복 제거) — normalizeHarness 가 **식별에 성공한** 값만. 원문 보존된 UA
+//  (curl/8.7.1 · Google · python-requests …)와 구분해야 하는 소비자용이다.
+//  ⚠ 이 구분이 필요한 이유(#1570): 사용 내역 위젯이 "같은 맥락을 여러 AI 도구에서 이어받았다"를 말할 때
+//   미식별 UA 를 하네스로 세면 **화면이 거짓을 주장한다**(스크립트 한 번 돈 것이 '도구'가 된다). 로그가
+//   거짓말하면 배지보다 신뢰를 더 깎으므로, 그런 소비자는 이 집합으로 좁혀 세고 미식별은 버린다.
+//   위 KNOWN_HARNESSES 에 하네스를 추가하면 그 소비자도 자동으로 따라온다(목록 두 벌 금지).
+export const CANONICAL_HARNESS_IDS: readonly string[] = [...new Set(KNOWN_HARNESSES.map(([, id]) => id))];
 
 // 자유 문자열(UA·헤더값) → 캐노니컬 하네스 id. 알려진 패턴은 정규화, 모르면 원문(64자) 보존
 //  (게이트웨이가 실제로 '본' 값이라 자기보고보다 신뢰, 새 하네스도 데이터 무손실 — 매핑은 나중에 보강).

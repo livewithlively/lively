@@ -2,7 +2,7 @@
 //  레거시 org_project capability(projects.ts)와 병행(REST-only 로 시작 — 웹 v6 프로젝트 탭이 소비). MCP 노출은 컷오버에서 일괄.
 //  scope='memory'(조직 공유 작업/지식 평면 — 레거시 project_* 와 동일). 경로 prefix=/api/ui/v6/projects. 감사는 store(project-store)가 처리.
 import { z } from "zod";
-import { canSeeProjectRow, visibleListIds, projectRowListId } from "../v6/visibility.js";
+import { canSeeProjectRow, visibleListIds, listVisible, projectRowListId } from "../v6/visibility.js";
 import { HttpError, parseId } from "./rest-util.js";
 import type { Capability, CapabilityCtx } from "./types.js";
 import type { LivelyUser } from "../context.js";
@@ -307,7 +307,10 @@ const projectCreateV6: Capability = {
     if (input.folder != null) projectAbsPath(String(input.folder));
     // 대상 리스트도 '보이는 리스트'여야 한다(#1291) — 안 그러면 비대상자가 잠긴 리스트에 프로젝트를 꽂아 넣고,
     //  그 안의 내용을 대상자들이 모르는 채로 만들 수 있다. 존재하지 않는 것과 같은 문구로 답해 존재를 숨긴다.
-    if (input.list_id != null && ctx?.viewer != null && !(await visibleListIds(ctx.viewer))?.has(Number(input.list_id))) {
+    //  ⚠ 판정은 반드시 listVisible 로 — visibleListIds 는 '필터 없음'에 null 을 주므로 `!ids?.has(id)` 로 줄이면
+    //   그 null 이 **전부 불가시**로 뒤집힌다(#1614: 프로젝트 축을 끈 조직에서 이 생성이 전부 400 이었다).
+    if (input.list_id != null && ctx?.viewer != null
+        && !listVisible(await visibleListIds(ctx.viewer), Number(input.list_id))) {
       throw new HttpError(400, `리스트(영역) #${input.list_id} 가 없습니다 — project_list_index_v6 로 확인하세요`);
     }
     if (input.list_id != null && !(await getProjectListRow(input.list_id))) {

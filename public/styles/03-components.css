@@ -274,6 +274,11 @@ details.fields summary { cursor: pointer; font-size: 13px; font-weight: 700; col
 .wikicat-should-label { font-style: normal; font-size: 10.5px; font-weight: 700; color: var(--muted-2);
   margin-right: 6px; text-transform: none; }
 .wikicat-should-empty { color: var(--muted-2); font-style: italic; }
+/* #1618 후속 — 잡의 '전용 화면(주인)' 표기. 채운 색 필을 쓰지 않는다(DS: 상태 필 금지) — 링크로 읽히되
+   행의 주역(이름)을 이기지 않게 .wikicat-key 급 크기에 accent 색만 얹는다. a·span 둘 다 같은 모양이어야
+   한다(주인이 이 화면 안이면 링크가 아니라 텍스트인데, 그때만 생김새가 달라지면 '눌리는 것'처럼 안 보인다). */
+.wikicat-owner { font-size: 11.5px; color: var(--accent); text-decoration: none; white-space: nowrap; }
+a.wikicat-owner:hover { text-decoration: underline; }
 .wikicat-row-acts { display: flex; gap: 6px; flex-shrink: 0; opacity: .55; transition: opacity .12s; }
 .wikicat-row:hover .wikicat-row-acts, .wikicat-row:focus-within .wikicat-row-acts { opacity: 1; }
 .wikicat-empty { padding: 12px 14px; color: var(--muted-2); font-size: 12.5px; }

@@ -3,9 +3,8 @@ import { BearerVerifier } from "./auth/bearer.js";
 import { bearerWithResourceMetadata } from "./auth/http-auth.js";
 import { oauthAuthorizationServer, clientSecretGate } from "./org/auth/oauth-router.js";
 import { registerOAuthConsent } from "./org/auth/oauth-consent.js";
-import { registerOidcLinkPage } from "./auth/oidc-link-page.js"; // #1520 B — 계정 갈림길(서버렌더)
 import { itemsPool } from "./db/client.js";
-import { buildToolCandidates } from "./capabilities/index.js";
+import { buildToolCandidates, registry } from "./capabilities/index.js";
 import { setToolCandidates } from "./mcp/mcp-surface.js";
 import { finishConsent, abandonConsent } from "./org/credentials/oauth-broker.js";
 import { buildInstallBundle } from "./org/delivery/publish.js";
@@ -14,7 +13,7 @@ import { registerWebUi } from "./web.js";
 import { killAttachedPtys } from "./terminal/terminal-pty.js";
 import { registerProjectV6Routes } from "./project/project-routes.js";
 import { registerSessionLogRoutes } from "./sessions/session-log-routes.js";
-import { registerAuditExportRoutes } from "./audit-export-routes.js";
+import { ee } from "./enterprise/registry.js"; // #1601 감사 CSV 내보내기는 Enterprise — 미탑재면 그 라우트가 없다
 import { registerPreviewRoutes } from "./preview/routes.js";
 import { getProject as v6GetProject, listProjectMemberIds as v6ListProjectMemberIds, setProjectFolder as v6SetProjectFolder } from "./v6/project-store.js";
 import { isProjectMember as v6IsProjectMember } from "./v6/project-session-store.js";   // #1313 R21 — 멤버십 게이트는 세션 바인딩 모듈
@@ -23,6 +22,7 @@ import { createProjectFolder } from "./project/project-fs.js";
 import { stateRoot } from "./ops/state-dir.js";
 import { ROOTS } from "./terminal/terminal-sessions.js";
 import { readyReport } from "./ops/health.js";
+import { buildInfo } from "./build-info.js";
 import { effectiveStoragePolicy } from "./org/policies/storage-policy.js";
 import { registerMcpTransport } from "./boot/mcp-transport.js";
 import { runBootHousekeeping, loadStoragePolicy } from "./boot/housekeeping.js";
@@ -83,7 +83,9 @@ app.get("/readyz", async (_req, res) => {
       paths: [stateRoot(), ...ROOTS.map((r) => r.base)],
       thresholds: { warnPct: policy.disk_warn_pct, criticalPct: policy.disk_critical_pct },
     });
-    res.status(report.ok ? 200 : 503).json(report);
+    // 배포 신원(#1289) — "지금 도는 게 몇 버전인가"를 밖에서 한 번에. 없으면 null 로 정직하게 낸다.
+    //  비밀이 아닌 것만 싣는다(버전·커밋·빌드시각). 경로·env 는 싣지 않는다 — 이 응답은 미인증이다.
+    res.status(report.ok ? 200 : 503).json({ ...report, build: buildInfo() });
   } catch (err) {
     // 점검 자체가 터지면 '준비됨'이라 우길 근거가 없다 → fail-closed.
     logger.error({ err }, "readyz 점검 실패");
@@ -98,9 +100,8 @@ app.get("/readyz", async (_req, res) => {
 //   우회시켜 두었고, 실제 검증은 이 게이트가 한다(oauth-clients.ts 머리주석 ★★). 빠지면 시크릿 검사가 사라진다.
 //  ③은 앱 **루트**에 마운트해야 한다(SDK 요구) — 자기 경로가 아니면 즉시 통과시키므로 다른 라우트엔 무영향.
 registerOAuthConsent(app);
-// 계정 갈림길(#1520 B, /auth/link) — 외부 IdP 신원은 검증됐는데 어느 구성원인지 못 정했을 때 뜨는 서버렌더 화면.
-//  동의 화면과 같은 성격(로그인 전에 떠야 해서 프런트 빌드에 의존하지 않는다)이라 나란히 둔다.
-registerOidcLinkPage(app);
+// (계정 갈림길 /auth/link 는 #1601 로 Enterprise 로 옮겼다 — registerWebUi 안에서 ee().sso 훅이 등록한다.
+//  동의 화면과 나란히 두던 자리였지만, SSO 신원이 있어야만 뜨는 화면이라 SSO 라우트와 함께 있는 편이 맞다.)
 app.use(["/token", "/revoke"], express.urlencoded({ extended: false }), clientSecretGate());
 app.use(oauthAuthorizationServer());
 
@@ -166,8 +167,43 @@ registerProjectV6Routes(app, verifier, {
 // 세션이력 회수·수집(#905 C1) — 트랜스크립트 델타 offset-CAS append + watermark. 캡처 훅(kit)이 POST 한다.
 registerSessionLogRoutes(app, verifier);
 // 감사로그 CSV 내보내기(#1309) — 관리탭 [감사 로그] 3탭의 "CSV 다운로드". capability(res.json 일괄)로는 담을 수
-//  없는 무제한 행수를 keyset 커서로 스트리밍한다(상세·불변식은 audit-export-routes.ts 머리주석).
-registerAuditExportRoutes(app, verifier);
+//  없는 무제한 행수를 keyset 커서로 스트리밍한다(상세·불변식은 ee/audit/export-routes.ts 머리주석).
+//  ★ #1601 로 Enterprise 로 갔다 — 화면 집계(3탭)는 코어에 그대로 있고, 증빙 반출만 EE 다.
+const auditExportHooks = ee().auditExport;
+if (auditExportHooks) {
+  auditExportHooks.registerAuditExportRoutes(app, verifier);
+} else {
+  // EE 미탑재 — 라우트가 없으면 express 기본 404(HTML)가 나가고 화면엔 "요청 실패 (404)" 만 뜬다.
+  //  그러면 관리자는 필터를 바꿔가며 헤맨다. 무엇이 없어서 안 되는지 화면이 읽을 수 있게 JSON 으로 답한다
+  //  (web/lib/net.ts 의 api() 가 응답 error 를 그대로 토스트에 쓴다).
+  const eeRequired: express.RequestHandler = (_req, res) => {
+    res.status(404).json({
+      error: "감사 로그 CSV 내보내기는 Enterprise 모듈(src/ee)이 필요합니다 — 화면의 조회·집계는 그대로 쓰실 수 있습니다.",
+    });
+  };
+  app.get("/api/ui/audit-export/plan", eeRequired);
+  app.get("/api/ui/audit-export.csv", eeRequired);
+}
+
+// 자료 공개범위 정책(#1601) — capability 가 Enterprise 로 갔다(ee/capabilities/source-vis-policy.ts).
+//  미탑재면 registry 에 op 가 없어 REST 경로가 통째로 안 생기고, 관리탭 [수집 ▸ 자료 공개범위] 패널은
+//  express 기본 404 를 받아 "정책을 불러오지 못했습니다" 만 띄운다 — 기능이 EE 라서 없는 건지, 서버가
+//  고장난 건지, 권한 문제인지 구분할 수 없다. 위 감사 export 와 **같은 처리**를 여기에도 준다.
+//  ⚠ registry 조회로 조건을 건다: EE 가 있으면 capability 마운트가 이 경로를 가져가야 하므로,
+//   무조건 등록하면 스텁이 진짜 기능을 가로챈다.
+if (!registry.has("source_vis_policy_list")) {
+  const eeRequired: express.RequestHandler = (_req, res) => {
+    res.status(404).json({
+      error: "자료 공개범위 정책은 Enterprise 모듈(src/ee)이 필요합니다 — 이미 설정된 정책은 그대로 계속 적용됩니다.",
+      enterprise_required: true,
+    });
+  };
+  app.get("/api/ui/source-vis-policy", eeRequired);
+  app.get("/api/ui/source-vis-policy/targets", eeRequired);
+  app.post("/api/ui/source-vis-policy", eeRequired);
+  app.post("/api/ui/source-vis-policy/delete", eeRequired);
+  app.post("/api/ui/source-vis-policy/backfill", eeRequired);
+}
 // #1036 프리뷰 환경 — /preview/<id>/* 를 프리뷰 환경의 워크트리 public/ 로 정적 서빙(shared-proxy: /api 는 게이트웨이 자신).
 //  express.json 이후·app.listen 이전. WS 불요(정적+REST 만)라 server 핸들 불필요.
 registerPreviewRoutes(app, verifier);

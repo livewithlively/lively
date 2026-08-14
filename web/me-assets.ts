@@ -2,7 +2,7 @@
 //  (#1313 R38, admin.ts 에서 verbatim 분리).
 //  ⚠ myAssetsSection 안의 클로저(pcChips·summarize·onOffSeg·livelyRow·group)는 **일부러 그대로 뒀다** —
 //   전부 reload/machines 클로저에 묶여 있어 최상위 승격은 인자 계약을 새로 세워야 한다(별도 항목). 이번엔 통짜 이동만.
-import { api, cardHead, el, infoPop, renderMarkdown, toast, uiText } from './core.js';
+import { api, busy, cardHead, el, infoPop, renderMarkdown, toast, uiText } from './core.js';
 import { overlay } from './ui-primitives.js';
 import { sectionHead } from './admin-widgets.js';
 
@@ -28,12 +28,16 @@ async function showHarnessDetail(kind: string, id: string, name: string) {
 
 async function myAssetsSection(detail) {
   const bodyBox = el('div', {});
+  // 펼쳐 둔 그룹(아래 group 의 [더 보기]) — **재적재 너머로 살아남아야 한다**(#1635). 스위치를 하나 누르면
+  //  이 패널을 통째로 다시 그리는데, 펼침이 매번 초기화되면 목록이 접히며 문서가 짧아져 보던 자리가 사라진다
+  //  (실측: 문서 6082→2362px, 방금 누른 행이 화면 밖으로). 켜고 끄기는 목록을 접는 동작이 아니다.
+  const openGroups = new Set<string>();
   detail.replaceChildren(
     sectionHead('내 스킬 · 훅', '내 AI가 쓰는 스킬·훅이 어느 컴퓨터에 설치됐는지 보고, 켜고 끕니다. 켜고 끈 변경은 다음 세션부터 적용됩니다.'),
     el('div', { class: 'card' }, cardHead('설치 상태'), bodyBox));
 
   const reload = async () => {
-    bodyBox.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
+    busy(bodyBox, el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
     let d: any;
     try { d = await api('/api/ui/me/harness'); }
     catch (e: any) { bodyBox.replaceChildren(el('p', { class: 'admin-hint', text: (e && e.message) || '불러오지 못했습니다' })); return; }
@@ -124,21 +128,24 @@ async function myAssetsSection(detail) {
     // 그룹 — 통째로 감추면 뭐가 있는지 모른다(사용자 요구: 프로젝트 탭 '연결된 지식'처럼 몇 개는 보이고
     //  나머지는 [더 보기]). 앞 PEEK 개는 항상 보이고, 넘치는 만큼만 접어 둔다.
     const PEEK = 3;
-    const group = (title: string, count: number, items: any[]) => {
+    //  key = 이 그룹의 신원(펼침을 재적재 너머로 기억하는 축). 같은 제목이 PC 마다 반복되므로 제목은 못 쓴다.
+    const group = (key: string, title: string, count: number, items: any[]) => {
       const head = el('div', { class: 'hgroup-head-row' },
         el('span', { class: 'hgroup-title', text: title }),
         el('span', { class: 'hgroup-count', text: String(count) }));
       const shown = items.slice(0, PEEK);
       const rest = items.slice(PEEK);
       const restBox = el('div', { class: 'hgroup-rest' }, ...rest);
-      restBox.style.display = 'none';
       const kids: any[] = [head, el('div', { class: 'hgroup-body' }, ...shown, restBox)];
+      let open = openGroups.has(key);
+      restBox.style.display = open ? 'block' : 'none';
       if (rest.length) {
-        const lbl = el('span', { class: 'lbl', text: '더 보기 ' + rest.length + '개' });
-        const caret = el('span', { class: 'caret', text: '⌄' });
+        const lbl = el('span', { class: 'lbl', text: open ? '접기' : '더 보기 ' + rest.length + '개' });
+        const caret = el('span', { class: 'caret', text: open ? '⌃' : '⌄' });
         const btn = el('button', { type: 'button', class: 'proj-detail-body-expand' }, lbl, caret);
         btn.addEventListener('click', () => {
-          const open = restBox.style.display === 'none';
+          open = !open;
+          if (open) openGroups.add(key); else openGroups.delete(key);
           restBox.style.display = open ? 'block' : 'none';
           lbl.textContent = open ? '접기' : '더 보기 ' + rest.length + '개';
           caret.textContent = open ? '⌃' : '⌄';
@@ -159,8 +166,8 @@ async function myAssetsSection(detail) {
       el('div', { class: 'hlayer-head' },
         el('h4', { class: 'hlayer-title', text: '라이블리 스킬 · 훅' }),
         infoPop('라이블리가 팀 전체에 배포한 스킬·훅입니다. 내 세션에 적용할지 여기서 켜고 끌 수 있고, 끄면 나에게만 적용되지 않습니다.')),
-      group('스킬', skillNodes.length, skillNodes.length ? skillNodes : [el('p', { class: 'admin-hint' }, ...uiText('배포된 스킬이 없습니다.'))]),
-      group('커스텀 훅', hookNodes.length, hookNodes.length ? hookNodes : [el('p', { class: 'admin-hint' }, ...uiText('배포된 커스텀 훅이 없습니다.'))])));
+      group('lively:skill', '스킬', skillNodes.length, skillNodes.length ? skillNodes : [el('p', { class: 'admin-hint' }, ...uiText('배포된 스킬이 없습니다.'))]),
+      group('lively:hook', '커스텀 훅', hookNodes.length, hookNodes.length ? hookNodes : [el('p', { class: 'admin-hint' }, ...uiText('배포된 커스텀 훅이 없습니다.'))])));
     if (anyMissing) rows.unshift(el('div', { class: 'sync-warn' }, el('b', { text: '켜져 있지만 아직 설치되지 않은 PC(‘미설치’ 표시)가 있습니다. ' }), '그 PC에서 claude(또는 codex) 세션을 한 번 열면 자동으로 설치됩니다.'));
 
     // ── 내 컴퓨터별: 내가 직접 만든 로컬 스킬·훅만 (라이블리가 준 건 위에서 PC 칩으로 봤어요). ──
@@ -212,7 +219,7 @@ async function myAssetsSection(detail) {
               el('div', { class: 'mini-meta' }, ...uiText(meta))),
             el('div', { class: 'hrow-act' }, tb)));
         }
-        for (const [k, list] of Object.entries(byKind)) myLayer.append(group(HARNESS_KIND_LABEL[k] || k, list.length, list));
+        for (const [k, list] of Object.entries(byKind)) myLayer.append(group(m.machine_id + ':' + k, HARNESS_KIND_LABEL[k] || k, list.length, list));
       }
     } else {
       rows.push(el('div', { class: 'hlayer' },

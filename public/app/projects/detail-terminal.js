@@ -1,13 +1,15 @@
 // projects/detail-terminal.ts — #1405 W1: detail-sections.ts 분할 ③.
-//  프로젝트 상세 ② '터미널 세션' 섹션 + 세션 생성/이름변경/삭제 폼.
-//  ⚠ watchProvision 의 폴링 타이머는 이 모듈이 소유한다(노드가 DOM 에서 빠지면 스스로 멈춘다).
-//  본문은 원문 그대로 옮겼다(verbatim).
-import { api, appUrl, el, errorNote, personFace, relTime, toast } from '../core.js';
+//  프로젝트 상세 ② '터미널 세션' 섹션 + 세션 이름변경/삭제 폼.
+//  세션 만들기는 자체 폼을 두지 않고 '새 AI 세션' 모달 하나로 위임한다(#1145) — 그때 레포 미리받기(provision)와
+//  그 진행을 지켜보던 watchProvision 폴링도 함께 사라졌다(세션이 필요할 때 스스로 워크트리를 뜬다, #918).
+import { api, appUrl, busy, el, errorNote, personFace, relTime, toast } from '../core.js';
 import { overlayBox, skeletonRows } from '../learn.js';
 import { openProjectSessionsModal } from '../sessions.js';
 import { openTermCreateForm } from '../terminal.js';
 import { openProjectPreviewModal } from './detail-preview.js';
 import { pjvMemberDirectory } from './task-controls.js';
+// #1582 — 세션 종료 확인창·완료 토스트는 전 화면 공용 정의 하나만 쓴다(AI 세션 탭·대시보드와 같은 말).
+import { confirmSessionEnd, endedToast } from '../session-actions.js';
 // ── 상세 ② 터미널 세션 — 팀원 프로필(아바타) 그리드 → 클릭 시 그 사람 세션 펼침(페이지 내). 본인은 상태메시지 공유. ──
 function projectTerminalSection(id, members, meId, base, projectName, project) {
     const B = base || '/api/ui/projects/';
@@ -18,7 +20,6 @@ function projectTerminalSection(id, members, meId, base, projectName, project) {
     //  뒤에야 (그것도 서로 다른) 모달이 떴다 — 경로마다 다른 폼이 뜨는 게 이 프로젝트가 없애려던 바로 그 문제다.
     //  이제 웹/내 PC 는 그 모달 **맨 위 2택**이고, 프로젝트 맥락(폴더 고정·가시성)은 opts.project 로 넘긴다.
     const newBtn = el('button', { class: 'btn btn-ghost btn-sm', 'data-tour': 'proj-new-session', text: '＋ 새 세션' });
-    newBtn.dataset.tour = 'proj-new-session';
     newBtn.onclick = async (e) => {
         e.stopPropagation();
         newBtn.disabled = true;
@@ -69,7 +70,7 @@ function projectTerminalSection(id, members, meId, base, projectName, project) {
     load();
     return card;
     async function load() {
-        body.replaceChildren(skeletonRows(2));
+        busy(body, skeletonRows(2));
         try {
             sessions = await api(B + id + '/sessions').then((d) => (d && d.sessions) || []);
         }
@@ -175,7 +176,7 @@ function projectTerminalSection(id, members, meId, base, projectName, project) {
     function sessRow(s) {
         const acts = [];
         if (s.owned)
-            acts.push(el('button', { class: 'btn btn-ghost btn-sm', text: '이름변경', onclick: () => openSessionRename(s, load) }), el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: () => removeSession(s, load) }));
+            acts.push(el('button', { class: 'btn btn-ghost btn-sm', text: '이름변경', onclick: () => openSessionRename(s, load) }), el('button', { class: 'btn btn-ghost btn-sm', title: '이 세션을 끝냅니다 — 작업 폴더·파일은 그대로, 대화록은 세션 기록에 남습니다', text: '종료', onclick: () => removeSession(s, load) }));
         acts.push(el('button', { class: 'btn btn-ghost btn-sm', text: 'ℹ 정보', onclick: () => openSessionInfo(s) })); // 세션 메타 팝업(#480 요청2)
         // 노드 세션(#905 C4)은 &node= 로 입장해야 게이트웨이가 그 노드로 attach 를 릴레이한다.
         const openQ = appUrl('/ui/terminal.html?session=') + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || '') + (s.node ? '&node=' + encodeURIComponent(s.node.id) : '');
@@ -280,14 +281,17 @@ function openSessionRename(s, reload) {
     nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter')
         go(); });
 }
-// 세션 삭제 — 확인 후 tmux 세션 종료(소유자만). 실행 중 작업도 종료됨.
+// 세션 종료 — 확인 후 tmux 세션 종료(소유자만). 실행 중 작업도 함께 끝난다.
+//  #1582 — '삭제' + 브라우저 confirm + "되돌릴 수 없음" 이었다. 셋 다 사실과 어긋나 고쳤다: 이 동작은 작업
+//  폴더·파일·대화록을 지우지 않고(killSession 은 tmux 와 desired-state 만 건드린다), 확인창은 AI 세션 탭·
+//  대시보드와 **같은 공용 정의**를 쓴다. 근거는 session-actions.ts 헤더.
 async function removeSession(s, reload) {
-    if (!confirm('세션 ‘' + (s.label || s.id) + '’을(를) 삭제할까요?\n\n실행 중인 작업이 함께 종료됩니다(되돌릴 수 없음).'))
+    if (!await confirmSessionEnd({ title: '‘' + (s.label || s.id) + '’ 세션을 종료할까요?', sessions: [s] }))
         return;
     try {
-        // 노드 세션(#905 C4)은 ?node= 로 삭제를 그 노드에 위임한다(터미널 탭과 동일).
+        // 노드 세션(#905 C4)은 ?node= 로 종료를 그 노드에 위임한다(터미널 탭과 동일).
         await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' });
-        toast('세션을 삭제했습니다');
+        toast(await endedToast(1, [s]));
         reload();
     }
     catch (e) {

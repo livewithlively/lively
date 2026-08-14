@@ -121,6 +121,17 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
     placementFor("opencode", "subagent", "a1", H, env).file,
     placementFor("opencode", "command", "c1", H, env).file,
   ], ["/h/.config/opencode/agent/a1.md", "/h/.config/opencode/command/c1.md"]);
+  // E30~E32(#1689) — antigravity 는 ~/.gemini/config 고정(env 오버라이드 없음 — XDG 를 존중하면 오히려 빗나간다).
+  eqPath("C13[E30] antigravity skill 은 ~/.gemini/config/skills", placementFor("antigravity", "skill", "s1", H, env),
+    { file: "/h/.gemini/config/skills/s1/SKILL.md", skillDir: "/h/.gemini/config/skills/s1", root: "/h/.gemini/config/skills" });
+  // ⚠ 디렉터리형인데 엔트리 파일명이 SKILL.md 가 아니라 agent.md 다(dirFile 축) — 하드코딩하면 여기서만 빗나간다.
+  eqPath("C14[E31] antigravity subagent 는 agents/<n>/agent.md", placementFor("antigravity", "subagent", "a1", H, env),
+    { file: "/h/.gemini/config/agents/a1/agent.md", skillDir: "/h/.gemini/config/agents/a1", root: "/h/.gemini/config/agents" });
+  eqPath("C15[E32] antigravity command 는 workflows/<n>.md", placementFor("antigravity", "command", "c1", H, env),
+    { file: "/h/.gemini/config/workflows/c1.md", root: "/h/.gemini/config/workflows" });
+  // antigravity 는 XDG_CONFIG_HOME 이 있어도 무시해야 한다(agy 가 그 변수를 안 본다 — 존중하면 agy 는 못 보는 자리에 쓴다).
+  eqPath("C16[E30] antigravity 는 XDG 를 무시", placementFor("antigravity", "skill", "s1", H, { XDG_CONFIG_HOME: "/xdg" }).file,
+    "/h/.gemini/config/skills/s1/SKILL.md");
 }
 
 // ── D. 설치 라운드트립(S1) — 엣지 E3·E4 ★이번 변경이 새로 만든 엣지 ───────────────────
@@ -178,12 +189,16 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
   eq("E9[E16] codex 엔 read 툴이 없다(null)", toolMatcher("codex", "read"), null);
   eq("E10[E16] codex 엔 Skill 툴이 없다(null)", toolMatcher("codex", "skill"), null);
   eq("E11[E16] opencode 엔 skill 툴이 있다", toolMatcher("opencode", "skill"), "skill");
+  // #1689 — antigravity 의 MCP 는 어댑터 정규화 계약(call_mcp_tool → mcp__<server>__<tool>) 위에서 claude 형이다.
+  eq("E12[E33] antigravity MCP matcher(정규화 후 claude 형)", mcpMatcher("antigravity", "lively"), "mcp__lively__.*");
+  eq("E13[E33] antigravity 편집 matcher(실측 이름)", toolMatcher("antigravity", "edit"), "write_to_file|replace_file_content");
+  eq("E14[E33] antigravity 엔 Skill 툴이 없다(null)", toolMatcher("antigravity", "skill"), null);
 }
 
 // ── F. 회수 안전(S5) — 엣지 E17·E18 ──────────────────────────────────────────────
 {
   const names = assetDirNames();
-  const want = ["skills", "agents", "commands", "prompts", "skill", "agent", "command"];
+  const want = ["skills", "agents", "commands", "prompts", "skill", "agent", "command", "workflows"];
   const miss = want.filter((w) => !names.has(w));
   miss.length ? bad("F1[E17] 회수 화이트리스트가 전 하네스 자산 디렉터리를 덮음", `빠짐: ${miss.join(",")}`)
     : ok("F1[E17] 회수 화이트리스트가 전 하네스 자산 디렉터리를 덮음");
@@ -211,7 +226,7 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
 {
   const edit = allToolNames("edit");
   // E24 합집합 — 어느 하네스에서 온 이름이든 편집으로 인정해야 한다(이름 공간이 겹치지 않아 가산적).
-  const wantEdit = ["Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch", "edit", "write"];
+  const wantEdit = ["Edit", "Write", "MultiEdit", "NotebookEdit", "apply_patch", "edit", "write", "write_to_file", "replace_file_content"];
   const missEdit = wantEdit.filter((t) => !edit.has(t));
   missEdit.length ? bad("H1[E24] 편집 툴 합집합이 전 하네스를 덮음", `빠짐: ${missEdit.join(",")}`)
     : ok("H1[E24] 편집 툴 합집합이 전 하네스를 덮음");
@@ -231,12 +246,16 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
   // E27 auto-approve 표면 — 하네스마다 다른 전략 키를 갖는다(같으면 한쪽이 엉뚱한 파일에 쓴다).
   eq("H9[E27] auto-approve kind 가 하네스별로 다름",
     HARNESS_IDS.map((id) => HARNESS[id].autoApprove.kind),
-    ["settings-allow", "toml-approval", "config-permission"]);
+    ["settings-allow", "toml-approval", "config-permission", "agy-settings-allow", "grok-permission-allow"]);
   eq("H10[E27] auto-approve 키 형태", [
     HARNESS.claude.autoApprove.key("lively", "whoami"),
     HARNESS.codex.autoApprove.key("lively", "whoami"),
     HARNESS.opencode.autoApprove.key("lively", "whoami"),
-  ], ["mcp__lively__whoami", "whoami", "lively_whoami"]);
+    HARNESS.antigravity.autoApprove.key("lively", "whoami"),
+    HARNESS.grok.autoApprove.key("lively", "whoami"),
+  ], ["mcp__lively__whoami", "whoami", "lively_whoami", "mcp(lively/whoami)", "MCPTool(lively__whoami)"]);
+  // #1689 — 어댑터가 정규화한 이름은 claude 형이므로 mcpToolName 이 그대로 벗겨야 work-flag 기록 인정이 산다.
+  eq("H11[E33] antigravity 정규화 이름을 벗긴다", mcpToolName("antigravity", "lively", "mcp__lively__knowledge_save"), "knowledge_save");
 }
 
 console.log(`\n${fail ? "✗" : "✓"} harness-registry: ${pass} passed, ${fail} failed`);

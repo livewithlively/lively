@@ -22,13 +22,13 @@
 
 import {
   readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, chmodSync,
-  readdirSync, statSync, realpathSync, openSync,
+  readdirSync, statSync, realpathSync, openSync, writeSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { spawnSync, spawn } from "node:child_process";
 import { ReadStream, WriteStream } from "node:tty";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import crypto from "node:crypto";
 
 // ── 0. 상수 · 경로 ──────────────────────────────────────────────────────────
@@ -49,6 +49,15 @@ const CODEX_CFG = join(HOME, ".codex", "config.toml");
 //  이 계산은 플랫폼 무관이다(#1519 실측). 설치기·제거기와 같은 계산이어야 진단이 실제 배선을 본다.
 const OPENCODE_DIR = join(process.env.LIVELY_HOME ? join(HOME, ".config") : (process.env.XDG_CONFIG_HOME || join(HOME, ".config")), "opencode"); // LIVELY_HOME 격리 우선(설치기와 동일)
 const OPENCODE_PLUGIN = join(OPENCODE_DIR, "plugin", "lively.js");
+// antigravity(#1689) — `~/.gemini` 고정($HOME 만 봄, env 오버라이드 없음). 배선 신호는 우리 플러그인 디렉터리다
+//  (plugin-dir 배선 — 그 안의 hooks.json·mcp_config.json 은 전부 우리 파일이라 '우리 것이 있나' 신호가 강하다).
+const AGY_PLUGIN_DIR = join(HOME, ".gemini", "config", "plugins", "lively");
+// grok(#1701) — Grok Build(xAI). 홈은 `$GROK_HOME > ~/.grok` 인데, LIVELY_HOME(샌드박스 격리)이 켜져 있으면
+//  GROK_HOME 을 **무시**한다 — 개발자 실환경의 GROK_HOME 이 테스트 격리를 뚫으면 실 grok 홈을 오염시킨다
+//  (opencode 의 XDG 처리와 같은 원칙 · 레지스트리/설치기와 같은 계산이어야 진단이 실제 배선을 본다).
+const GROK_DIR = process.env.LIVELY_HOME ? join(HOME, ".grok") : (process.env.GROK_HOME || join(HOME, ".grok"));
+// 배선 신호는 **통째로 우리 소유**인 훅 배선 파일이다(user-install.mjs installGrok 이 심는다).
+const GROK_HOOKS_JSON = join(GROK_DIR, "hooks", "lively-grok.json");
 // 자동 업데이터(self-update.mjs)와 **같은 필수 훅 목록**을 쓴다 — 손상 번들 판정 기준이 갈리면 안 된다.
 //  self-update.mjs 자신은 목록에 없다(구 게이트웨이로 롤백 시 '손상'으로 오판해 영구 고착되는 걸 막기 위함 — #858).
 const REQUIRED_HOOKS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs"];
@@ -63,11 +72,156 @@ const WIDE = /[ᄀ-ᅟ⺀-꓏가-힣豈-﫿︰-﹯＀-｠￠-￦]/;
 const cols = (s) => [...String(s)].reduce((n, ch) => n + (WIDE.test(ch) ? 2 : 1), 0);
 // 사람 대상 출력은 stderr — stdout 은 --json 기계 판독용으로 비워 둔다(파이프 안전).
 const say = (s = "") => process.stderr.write(s + "\n");
-const ok = (s) => say("  " + green("✓") + " " + s);
-const info = (s) => say("  " + dim("·") + " " + s);
-const warn = (s) => say("  " + yellow("⚠") + " " + s);
-const fail = (s) => say("  " + red("✗") + " " + s);
-const die = (s, code = 1) => { say("\n" + red("✗ " + s)); process.exit(code); };
+// ── 앱↔CLI 이벤트 채널(#1541 T1) ────────────────────────────────────────────
+// `--json-events` 일 때만 켜진다. 켜지면 사람용 메시지가 stderr 로 **그대로 나가면서** stdout 에 NDJSON
+//  notice 이벤트로도 나간다 — 둘 중 하나만 있으면 GUI 나 터미널 중 한쪽이 벙어리가 된다.
+//  EV 는 main() 이 플래그를 보고 채운다(그 전에 죽는 경로 — Node 버전 게이트 등 — 은 종전 그대로 stderr 만).
+let EV = null;                       // { emit, start, step, notice, result, end } | null
+let PROMPTER = null;                 // { ask, tell } | null
+const evNotice = (level, s) => { if (EV) EV.notice(level, stripAnsi(s)); };
+// (구현은 아래 §1.6 — 같은 파일 안에 있다. 부트스트랩 단계에서도 반드시 동작해야 하므로 형제 모듈로 빼지 않는다.)
+// `--json` 결과 출력 — 이벤트 모드에선 raw JSON 을 stdout 에 섞지 않고 `result` 이벤트로 싣는다.
+//  안 그러면 여러 줄 pretty JSON 이 NDJSON 스트림 한복판에 끼어 앱의 줄 단위 파서를 깬다(D5).
+const jsonOut = (obj) => { if (EV) EV.result(obj); else process.stdout.write(JSON.stringify(obj, null, 2) + "\n"); };
+const ok = (s) => { say("  " + green("✓") + " " + s); evNotice("ok", s); };
+const info = (s) => { say("  " + dim("·") + " " + s); evNotice("info", s); };
+const warn = (s) => { say("  " + yellow("⚠") + " " + s); evNotice("warn", s); };
+const fail = (s) => { say("  " + red("✗") + " " + s); evNotice("error", s); };
+// die 는 이벤트 모드에서도 **끝을 알리고** 죽는다 — 앱이 '끝났는지'를 종료코드만으로 추측하지 않게(D3).
+const die = (s, code = 1) => {
+  say("\n" + red("✗ " + s));
+  if (EV) { EV.notice("error", stripAnsi(s)); endEvents(false, code); }
+  process.exit(code);
+};
+
+
+// ── 1.6 앱↔CLI 이벤트 계약 (#1541 T1) — `--json-events` 의 NDJSON + 프롬프트 채널 ──────────
+// **왜 이 파일 안에 있나**: 부트스트랩은 게이트웨이의 `/cli/lively.mjs` **한 파일만** 내려받아 `lively setup` 을
+//  실행한다(맨 위 주석의 그 불변식). 그런데 데스크톱 앱이 이 계약을 가장 필요로 하는 순간이 정확히 그 단계다 —
+//  형제 모듈로 빼서 dynamic import 하면 **설치 이전 명령이 통째로 깨진다**(실측: ERR_MODULE_NOT_FOUND
+//  json-events.mjs → 앱의 설치 마법사가 첫 단계에서 멈춤). 그래서 여기 둔다.
+// 테스트는 이 파일에서 직접 import 한다(kit/cli/json-events.test.mjs) — 아래 함수들이 export 인 이유.
+//
+// stdout = NDJSON 이벤트 · stderr = 사람용 · stdin = 답 한 줄. 자세한 계약은 위키 app-cli-json-events-contract-1541.
+// ⚠ **비밀은 이벤트에 싣지 않는다.** 토큰이 stdout 으로 나가면 앱 로그·크래시 리포트로 샌다.
+
+export const EVENT_V = 1;
+
+/**
+ * 이벤트 문구에서 ANSI 색·스타일 시퀀스를 제거한다.
+ *
+ * GUI 는 색 코드를 렌더할 수 없고, 로그에 남으면 읽기만 나빠진다. **ESC 바이트까지 함께** 지우는 게 요점이다 —
+ * `\x1b` 를 빼고 `[0m` 만 지우면 보이지 않는 ESC 가 문구에 남아 앱 쪽 표시가 깨진다(그리고 눈으로는 안 보인다).
+ * CSI 계열(`ESC [ … 종결문자`)을 통째로 지운다 — 색(m) 말고도 커서 이동 등이 섞여 들어올 수 있다.
+ */
+export const stripAnsi = (s) => String(s).replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "");
+
+/**
+ * 이벤트 1건 → NDJSON **한 줄**(끝에 개행 1개). 순수 함수.
+ *
+ * 봉투(v·t·ts)는 payload 가 **덮어쓸 수 없다** — 페이로드가 봉투를 위조하면 앱의 버전 협상·정렬이 무너진다.
+ * 직렬화가 실패해도(순환참조 등) **throw 하지 않는다**: 진행 보고가 명령을 죽이면 안 된다. 대신 그 사실을
+ * 담은 이벤트를 낸다(조용한 유실보다 낫다 — 앱이 '뭔가 못 실었다'를 알 수 있어야 한다).
+ */
+export function encodeEvent(t, payload, ts) {
+  const env = { v: EVENT_V, t: String(t), ts: Number(ts) };
+  try {
+    return JSON.stringify({ ...(payload && typeof payload === "object" ? payload : {}), ...env }) + "\n";
+  } catch (e) {
+    return JSON.stringify({ ...env, t: "notice", level: "warn", message: `이벤트 직렬화 실패(${t}): ${e?.message || e}` }) + "\n";
+  }
+}
+
+/**
+ * stdin 한 줄 → 답 `{id, value}` 또는 `null`(무시). 순수 함수.
+ *
+ * ⚠ `value` 가 없으면 **null 이다**(빈 답을 '기본값 승인'으로 만들지 않는다). 앱이 실수로 빈 객체를 보내는 것과
+ *  사람이 실제로 '아니오'를 고른 것은 완전히 다른 사건이고, 전자를 후자로 오독하면 신원확인이 조용히 통과한다.
+ */
+export function parseAnswer(line) {
+  let m;
+  try { m = JSON.parse(String(line)); } catch { return null; }
+  if (!m || typeof m !== "object" || Array.isArray(m)) return null;
+  if (m.t !== "answer") return null;
+  if (typeof m.id !== "string" || !m.id) return null;
+  if (!("value" in m)) return null;
+  return { id: m.id, value: m.value };
+}
+
+/** 이벤트 발행기 — `write(line)` 와 시계만 주입받는다(테스트가 프로세스 없이 전량 관측). */
+export function createEmitter({ write, now = () => Date.now() } = {}) {
+  const emit = (t, payload) => { write(encodeEvent(t, payload, now())); };
+  return {
+    emit,
+    start: (cmd, cli) => emit("start", { cmd, cli }),
+    /** status: start|done|fail. i/n 은 진행률(1-based / 총계) — 없으면 생략된다. */
+    step: (id, label, status, extra) => emit("step", { id, label, status, ...(extra || {}) }),
+    notice: (level, message) => emit("notice", { level, message }),
+    result: (data) => emit("result", { data }),
+    end: (ok, code) => emit("end", { ok: !!ok, code: Number(code) || 0 }),
+  };
+}
+
+/**
+ * 프롬프트 채널 — `prompt` 이벤트를 내고 stdin 의 답을 기다린다.
+ *
+ * `onLine(cb)` 로 줄 공급원을, `onEnd(cb)` 로 입력 종료를 주입받는다(테스트가 stdin 없이 구동).
+ *
+ * ⚠ **EOF 는 기본값 승인이 아니라 실패다**(C4). 답 없이 입력이 닫혔다는 건 앱이 죽었거나 계약을 안 지킨 것이고,
+ *  그때 `def` 로 진행하면 "이 계정으로 로그인됩니다" 같은 **신원확인이 사람 없이 통과**한다(#R2-F1 이 막으려던 바로 그것).
+ *  fail-closed 가 맞다.
+ */
+export function createPrompter({ emit, onLine, onEnd }) {
+  const waiting = new Map();      // id → resolve/reject
+  let ended = false;
+  onLine((line) => {
+    const a = parseAnswer(line);
+    if (!a) return;                                   // 잡음·다른 메시지는 조용히 무시(C2·C3)
+    const w = waiting.get(a.id);
+    if (!w) return;                                   // 내가 안 기다리는 id — 무시
+    waiting.delete(a.id);
+    w.resolve(a.value);
+  });
+  if (typeof onEnd === "function") {
+    onEnd(() => {
+      ended = true;
+      for (const [, w] of waiting) w.reject(new Error("앱과의 연결이 끊겼습니다(답을 받지 못했습니다)."));
+      waiting.clear();
+    });
+  }
+  /** kind·payload 로 물어보고 답을 기다린다. id 는 호출자가 준다(짝을 앱이 맞출 수 있게). */
+  return {
+    ask(id, kind, payload) {
+      if (ended) return Promise.reject(new Error("앱과의 연결이 끊겼습니다(답을 받지 못했습니다)."));
+      return new Promise((resolve, reject) => {
+        waiting.set(id, { resolve, reject });
+        emit("prompt", { id, kind, ...(payload || {}) });
+      });
+    },
+    /** 답을 기다리지 않는 통지용 프롬프트(예: device-code — 사람은 브라우저에서 승인한다). */
+    tell(id, kind, payload) { emit("prompt", { id, kind, ...(payload || {}) }); },
+    get pending() { return waiting.size; },
+  };
+}
+
+/** 스트림 → 줄 단위 공급원. 청크 경계에서 답이 잘리지 않게 버퍼링한다(C6). */
+export function lineReader(stream) {
+  let buf = "";
+  const lineCbs = [], endCbs = [];
+  stream.setEncoding("utf8");
+  stream.on("data", (chunk) => {
+    buf += chunk;
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i);
+      buf = buf.slice(i + 1);
+      for (const cb of lineCbs) cb(line);
+    }
+  });
+  stream.on("end", () => { if (buf.trim()) for (const cb of lineCbs) cb(buf); buf = ""; for (const cb of endCbs) cb(); });
+  stream.on("error", () => { for (const cb of endCbs) cb(); });
+  return { onLine: (cb) => lineCbs.push(cb), onEnd: (cb) => endCbs.push(cb) };
+}
 
 // ── 1.5 Node 버전 게이트 (#1068) ────────────────────────────────────────────
 // 이 CLI 는 의존성 0 으로 **전역 fetch(Node 18+)** 등 최신 런타임 API 를 쓴다(맨 위 설계 원칙).
@@ -116,11 +270,16 @@ const winArg = (s) => {
 //  캡슐화한 이유: 호출부마다 "cmd 도 winArg 해야 한다"를 기억해야 하면 다음 사람이 또 빠뜨린다.
 const winSpawnArgs = (cmd, args) => [winArg(cmd), args.map(winArg)];
 
-function run(cmd, args, { allowFail = false, quiet = false, env, timeout } = {}) {
+// dropEnv: 상속 env 에서 **키를 지운다**(빈 문자열로 덮지 않는다). 빈 문자열은 '설정됨' 으로 읽히는 도구가 많아
+//  (실측 #1541: electron-builder 가 빈 CSC_LINK 를 인증서 경로로 보고 죽었다) 지우는 것과 결과가 다르다.
+//  여기 쓰임: claude 를 **기본 위치**($HOME/.claude.json)로 돌리려면 CLAUDE_CONFIG_DIR 가 없어야 한다.
+function run(cmd, args, { allowFail = false, quiet = false, env, dropEnv, timeout } = {}) {
+  const merged = { ...process.env, ...(env || {}) };
+  for (const k of dropEnv || []) delete merged[k];
   const [c, a] = WIN ? winSpawnArgs(cmd, args) : [cmd, args];
   const r = spawnSync(c, a, {
     stdio: quiet ? ["ignore", "pipe", "pipe"] : "inherit",
-    env: { ...process.env, ...(env || {}) },
+    env: merged,
     encoding: "utf8",
     shell: WIN,
     ...(timeout ? { timeout, killSignal: "SIGKILL" } : {}),
@@ -132,6 +291,25 @@ function run(cmd, args, { allowFail = false, quiet = false, env, timeout } = {})
   return { code: r.status ?? -1, out: String(r.stdout || ""), err: String(r.stderr || "") };
 }
 const has = (bin) => spawnSync(WIN ? "where" : "command", WIN ? [bin] : ["-v", bin], { stdio: "ignore", shell: !WIN }).status === 0;
+// claude CLI 호출 — **자식 HOME 을 모듈 HOME(=LIVELY_HOME or os.homedir())으로 명시 주입한다.**
+//  ⚠ 이걸 빠뜨리면 샌드박스(LIVELY_HOME)로 돌린 login·install 이 **실사용자 ~/.claude.json** 을 고친다.
+//   등록하는 command 값은 LIVELY_HOME 기반인데 기록되는 파일만 실 HOME 이라 둘이 어긋나고, 남는 건
+//   **곧 삭제될 임시 경로를 가리키는 lively MCP 항목**이다 → 그 뒤 모든 세션에서 ENOENT 로 lively 툴이
+//   통째로 안 뜬다(#1593 실측: `/var/folders/…/lively-ev-test-*/login-home/.lively/bin/lively`).
+//   증상이 "MCP 가 안 붙는다"뿐이라 게이트웨이 장애로 오진하기까지 한다.
+//  역연산인 uninstall 쪽(adapters/claude/uninstall.mjs · setup/user-uninstall.mjs)은 이미 같은 주입을 한다 —
+//   여기까지 해야 add/remove 가 대칭이 되고, 샌드박스가 라이브에 손대는 경로가 닫힌다.
+//  ⚠ USERPROFILE 도 같이 세운다 — 윈도우의 os.homedir() 는 HOME 이 아니라 USERPROFILE 을 본다
+//   (testlib/os-sandbox.mjs 가 못박은 교훈: HOME 만 대입하면 윈도우에서 조용히 샌다).
+//  캡슐화한 이유는 winSpawnArgs 와 같다 — 호출부마다 "HOME 도 넘겨야 한다"를 기억해야 하면 다음 사람이 또 빠뜨린다.
+const runClaude = (args, opts = {}) => run("claude", args, { ...opts, env: { HOME, USERPROFILE: HOME, ...(opts.env || {}) } });
+// 특정 config dir 을 겨냥해 claude 를 부른다. `configDir === null` = **기본 위치**($HOME/.claude.json) —
+//  그때는 상속된 CLAUDE_CONFIG_DIR 를 **지운다**(안 지우면 세션 안에서 돌릴 때 기본 위치엔 영원히 안 박힌다).
+const runClaudeIn = (configDir, args, opts = {}) => runClaude(args, {
+  ...opts,
+  env: configDir ? { CLAUDE_CONFIG_DIR: configDir, ...(opts.env || {}) } : (opts.env || {}),
+  dropEnv: configDir ? (opts.dropEnv || []) : ["CLAUDE_CONFIG_DIR", ...(opts.dropEnv || [])],
+});
 // 윈도우 tar.exe 는 System32 동봉이다 — 훅·자식 프로세스의 빈약한 PATH 에서도 찾도록 절대경로를 먼저 본다(#1510).
 const tarBin = () => {
   if (!WIN) return "tar";
@@ -156,11 +334,15 @@ function ttyIO() {
   }
   return { in: process.stdin, out: process.stderr, close: () => { /* 소유 아님 — 닫지 않는다 */ } };
 }
-const interactive = () => { const t = ttyIO(); const y = !!t.in.isTTY; t.close(); return y; };
+// ⚠ 이벤트 모드에선 **TTY 가 없어도 대화형이다** — 앱이 곧 단말이다(prompt 이벤트 ↔ stdin 답).
+//  이 한 줄이 없으면 GUI 로그인이 "비대화형 환경입니다"로 죽어 T3 이 성립하지 않는다.
+const interactive = () => { if (PROMPTER) return true; const t = ttyIO(); const y = !!t.in.isTTY; t.close(); return y; };
 
 // 가림 입력(에코 없음) — 토큰이 화면·스크롤백·화면녹화·셸 히스토리 어디에도 안 남는다. 비대화형이면 null.
 const CTRL_C = "\u0003", CTRL_D = "\u0004", BACKSPACE = "\u007f";
 function askHidden(label) {
+  // 이벤트 모드: 가림 입력도 앱이 받는다(비밀은 **이벤트로 나가지 않고 stdin 으로 들어온다** — 방향이 반대라 안전).
+  if (PROMPTER) return PROMPTER.ask("secret", "secret", { label: stripAnsi(label) });
   const t = ttyIO();
   if (!t.in.isTTY) { t.close(); return Promise.resolve(null); }
   return new Promise((resolve) => {
@@ -188,7 +370,11 @@ function askHidden(label) {
 }
 
 // 예/아니오 — 비대화형이면 기본값을 그대로 쓴다(프롬프트가 자동화를 막지 않게).
+let promptSeq = 0;
 function askYesNo(label, def = true) {
+  // 이벤트 모드: GUI 가 물어본다. **답이 안 오고 stdin 이 닫히면 실패한다** — 기본값으로 조용히 승인하면
+  //  "이 계정으로 로그인됩니다" 확인이 사람 없이 통과한다(#R2-F1 이 막으려던 바로 그것). fail-closed.
+  if (PROMPTER) return PROMPTER.ask(`confirm-${++promptSeq}`, "confirm", { label: stripAnsi(label), default: !!def });
   const t = ttyIO();
   if (!t.in.isTTY) { t.close(); return Promise.resolve(def); }
   return new Promise((resolve) => {
@@ -298,7 +484,31 @@ function detectHarnesses() {
   // opencode: 배선의 신호는 **어댑터 파일**이다(설정 파일은 opencode 가 빈 것도 만들어서 신호가 약하다).
   if (has("opencode")) out.add("opencode");
   try { if (existsSync(OPENCODE_PLUGIN)) out.add("opencode"); } catch { /* */ }
+  // antigravity: 바이너리는 agy 다(#1689 — 하네스 id 로 command -v 하면 영영 미감지). 배선 신호는 플러그인 디렉터리.
+  if (has("agy")) out.add("antigravity");
+  try { if (existsSync(AGY_PLUGIN_DIR)) out.add("antigravity"); } catch { /* */ }
+  // grok: 바이너리 이름이 그대로 grok 이다(#1701). 배선 신호는 우리 소유 훅 파일(lively-grok.json).
+  if (has("grok")) out.add("grok");
+  try { if (existsSync(GROK_HOOKS_JSON)) out.add("grok"); } catch { /* */ }
   return [...out];
+}
+
+// 다운받은 **번들의 레지스트리**로 하네스 목록을 재계산해 보탠다(#1689 실측 UX 갭).
+//  왜: update 의 배선 대상 목록은 "지금 실행 중인 CLI" 의 detectHarnesses() 가 계산하는데, 그 CLI 가 새 하네스를
+//  모르는 구버전이면(새 하네스 지원이 이번 번들에서 처음 들어온 경우가 정확히 그렇다) 새 키트를 깔면서도 그
+//  하네스 배선만 조용히 빠진다 → 멤버가 update 를 **두 번** 돌려야 했다. 번들 레지스트리는 항상 최신이므로
+//  그 기준으로 "PATH 에 바이너리가 있는데 목록에 없는 하네스"를 추가한다. 실패는 전부 무해(구 번들엔
+//  레지스트리가 없다 — 종전 목록 그대로).
+export async function augmentHarnessesFromBundle(root, harnesses) {
+  try {
+    const reg = await import(pathToFileURL(join(root, ".claude", "hooks", "harness-registry.mjs")).href); // ⚠ pathToFileURL — 윈도우 드라이브문자
+    const added = [];
+    for (const id of reg.HARNESS_IDS || []) {
+      const bin = reg.HARNESS?.[id]?.bin;
+      if (typeof bin === "string" && bin && !harnesses.includes(id) && has(bin)) { harnesses.push(id); added.push(id); }
+    }
+    return added;
+  } catch { return []; } // 레지스트리 없음(구 번들)·import 실패 — 종전 목록 유지
 }
 
 // ── 6. 번들 — 다운로드 · 검증 ───────────────────────────────────────────────
@@ -388,6 +598,80 @@ function claudeUserConfigPaths() {
   return out;
 }
 function claudeUserConfigPath() { return claudeUserConfigPaths()[0] ?? null; }
+
+/**
+ * MCP 를 등록해야 하는 claude config dir **전부** — 순수(테스트가 이 표를 지킨다).
+ * `configDir === null` = claude 기본 위치($HOME/.claude.json).
+ *
+ * ★ 왜 여러 곳인가(2026-08-14 실기기 실측). 웹터미널 세션은 `CLAUDE_CONFIG_DIR=<프로필>` 을 **항상** 주입하고
+ *  (src/terminal/sessions.ts — 멀티프로필 #346·#1014), 그 프로필 dir 은 세션이 만들 때 `mkdir` 로 비어 있는 채
+ *  생긴다. 거기에 lively MCP 를 굽는 일은 지금까지 게이트웨이의 `provisionProfile`(= bash
+ *  `deploy/provision-profile.sh`, 관리자 라우트 전용) 이 했다 — **Windows 노드에선 원리적으로 못 돈다.**
+ *  한편 키트의 install/update 는 사람 셸에서 도니 기본 위치에만 등록한다.
+ *  → 노드 웹세션엔 lively MCP 가 **영원히 안 나타났다**(사람이 세션 안에서 손으로 `lively update` 를 쳐야 했다).
+ *  그 오케스트레이션을 키트로 내린다. provision-profile.sh 가 하는 일도 결국
+ *  `CLAUDE_CONFIG_DIR=<프로필> install-kit.sh` 하나뿐이다 — 새 메커니즘이 아니라 같은 일을 스스로 하는 것이다.
+ *
+ * ⚠ 호출자가 `CLAUDE_CONFIG_DIR` 로 **대상을 지목했으면 그것만** 한다. 지목을 무시하고 퍼뜨리면
+ *  게이트웨이가 멤버 한 명의 프로필을 프로비저닝할 때 남의 프로필까지 건드린다(#1014 격리 위반).
+ */
+export function claudeMcpTargets(o) {
+  const explicit = String((o.env || {}).CLAUDE_CONFIG_DIR || "").trim();
+  if (explicit) return [{ configDir: explicit, label: "지정된 프로필" }];
+  const out = [{ configDir: null, label: "기본" }];
+  let slugs = [];
+  try { slugs = o.listDirs(o.profilesRoot) || []; } catch { slugs = []; }
+  for (const slug of [...slugs].sort()) {
+    const dir = o.join(o.profilesRoot, slug, "claude");
+    if (o.exists(dir)) out.push({ configDir: dir, label: `프로필 ${slug}` });
+  }
+  return out;
+}
+
+/** 이 PC 의 프로필 dir 목록을 실제로 훑어 대상을 낸다(위 순수함수에 파일시스템을 물린다). */
+function mcpTargets() {
+  return claudeMcpTargets({
+    env: process.env,
+    profilesRoot: join(LIVELY, "profiles"),
+    join,
+    exists: existsSync,
+    listDirs: (root) => readdirSync(root, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name),
+  });
+}
+
+/** 한 대상(config dir)의 `.claude.json` 에서 항목 하나를 읽는다. null = 없음. configDir null = 기본 위치. */
+function claudeMcpEntryIn(configDir, name) {
+  const p = configDir ? join(configDir, ".claude.json") : join(HOME, ".claude.json");
+  try { return JSON.parse(readFileSync(p, "utf8"))?.mcpServers?.[name] ?? null; } catch { return null; }
+}
+
+/**
+ * 대상별 등록 커버리지 — 순수. `lively status` 가 "어딘가 있음" 을 초록불로 쓰지 않게 하는 근거.
+ *
+ * ★ 종전엔 후보 파일 중 **하나라도** 있으면 true 였다(claudeUserMcpRegistered). 그래서 기본 위치엔 있고
+ *  프로필엔 없는 상태 — 즉 **웹터미널 세션에선 안 보이는 상태** — 가 ✓ 로 표시됐다(실기기에서 그렇게 오진했다).
+ *  "등록됨 ≠ 지금 붙음" 과 같은 계열이다(#1431).
+ */
+export function mcpCoverage(name, targets, readEntry) {
+  const have = [], missing = [];
+  for (const t of targets) (readEntry(t.configDir, name) ? have : missing).push(t.label);
+  return { any: have.length > 0, all: missing.length === 0, have, missing };
+}
+
+/** 폐기된 **우리** 등록 이름 — 남으면 세션마다 '연결 실패' 로 뜬다(#1079 에서 http 직결 → stdio 프록시로 이름이 바뀌었다). */
+const LEGACY_MCP_NAMES = ["lively-store"];
+/**
+ * 이 항목이 **우리가 남긴 잔재**인가 — 순수. 같은 이름을 사람이 직접 만들었을 수 있으니 이름만으로 지우지 않는다.
+ * 판정: 우리 게이트웨이 호스트의 `/mcp` 를 가리킬 때만. (스킴·포트는 안 본다 — 옛 등록이 틀렸을 수 있다.
+ *  실측: `http://dev.lvly.io:8080/mcp` — 공개 호스트에 http+8080 이라 애초에 닿지도 않는다.)
+ */
+export function isLegacyLivelyMcp(name, entry, gatewayUrl) {
+  if (!LEGACY_MCP_NAMES.includes(name) || !entry || !gatewayUrl) return false;
+  try {
+    const u = new URL(String(entry.url || ""));
+    return /^\/mcp\/?$/.test(u.pathname) && u.hostname === new URL(gatewayUrl).hostname;
+  } catch { return false; }
+}
 // #1431 — **등록 여부만** 필요할 때(값이 아니라 유무). 존재하는 유저 설정 파일 전부를 본다.
 function claudeUserMcpRegistered(name) {
   for (const p of claudeUserConfigPaths()) {
@@ -430,53 +714,74 @@ function backupUserMcp(name) {
 //
 //  코드 자동 업뎃(#858)에 무임승차: command(심 절대경로)만 등록하고 서버 코드는 lib/lively-mcp-gateway.mjs 로
 //   매 세션 최신 → 코드가 바뀌어도 재등록 불필요.
-function registerLivelyMcp(gw, _tok) {
-  run("claude", ["mcp", "remove", "lively"], { allowFail: true, quiet: true });
-  try {
-    const shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively");
-    run("claude", ["mcp", "add", "--transport", "stdio", "--scope", "user", "lively", shim, "mcp"], { quiet: true });
-    ok(`MCP 등록: lively (stdio 프록시 → ${gw}/mcp)`);
-    return true;
-  } catch (e) { fail(`MCP 등록 실패(lively): ${e.message}`); return false; }
-}
-
-function registerClaudeMcp() {
-  const gw = gateway(), tok = token();
-  if (!has("claude")) { info("claude 미설치 — MCP 등록 건너뜀"); return { registered: 0, failed: 0 }; }
+// 한 config dir 에 전부 등록한다. 대상 열거는 claudeMcpTargets, 여기선 '그 한 곳에 무엇을 넣나' 만.
+function registerClaudeMcpIn(target, gw) {
+  const cd = target.configDir;
+  const at = cd ? ` [${target.label}]` : "";
+  const shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively");
   let registered = 0, failed = 0;
-  if (registerLivelyMcp(gw, tok)) registered++; else failed++;
+
+  // lively 본체 — **로컬 stdio 프록시**(`lively mcp`)로 등록한다(#1079).
+  runClaudeIn(cd, ["mcp", "remove", "lively"], { allowFail: true, quiet: true });
+  try {
+    runClaudeIn(cd, ["mcp", "add", "--transport", "stdio", "--scope", "user", "lively", shim, "mcp"], { quiet: true });
+    ok(`MCP 등록: lively${at} (stdio 프록시 → ${gw}/mcp)`);
+    registered++;
+  } catch (e) { fail(`MCP 등록 실패(lively${at}): ${e.message}`); failed++; }
 
   // lively-local — 로컬 조작 stdio MCP(#899). 같은 CLI 가 서버(`lively mcp-local`).
   //  코드 자동 업뎃(#858)에 무임승차: command(심 절대경로)만 등록하고 서버 코드는 lib/lively-mcp-local.mjs 로
   //  매 세션 최신 → 코드가 바뀌어도 재등록 불필요(툴 목록 자체를 바꿀 때만 여기 add 가 다시 태운다).
-  run("claude", ["mcp", "remove", "lively-local"], { allowFail: true, quiet: true });
+  runClaudeIn(cd, ["mcp", "remove", "lively-local"], { allowFail: true, quiet: true });
   try {
-    const shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively");
-    run("claude", ["mcp", "add", "--transport", "stdio", "--scope", "user", "lively-local", shim, "mcp-local"], { quiet: true });
-    ok("MCP 등록: lively-local (stdio · 로컬조작)");
+    runClaudeIn(cd, ["mcp", "add", "--transport", "stdio", "--scope", "user", "lively-local", shim, "mcp-local"], { quiet: true });
+    ok(`MCP 등록: lively-local${at} (stdio · 로컬조작)`);
     registered++;
-  } catch (e) { fail(`MCP 등록 실패(lively-local): ${e.message}`); failed++; }
+  } catch (e) { fail(`MCP 등록 실패(lively-local${at}): ${e.message}`); failed++; }
+
+  // 폐기된 우리 등록 정리 — 남겨두면 세션마다 '연결 실패' 로 뜬다. **우리 것으로 확인될 때만** 지운다
+  //  (같은 이름을 사람이 직접 만들었을 수 있다 — isLegacyLivelyMcp 가 게이트웨이 호스트·/mcp 경로로 판정).
+  for (const name of LEGACY_MCP_NAMES) {
+    const entry = claudeMcpEntryIn(cd, name);
+    if (!isLegacyLivelyMcp(name, entry, gw)) continue;
+    runClaudeIn(cd, ["mcp", "remove", name], { allowFail: true, quiet: true });
+    info(`폐기된 등록 제거: ${name}${at} (지금은 lively stdio 프록시가 대신한다)`);
+  }
 
   // 조직 추가 MCP 서버 — auth_env 는 환경변수 '이름' 간접참조(토큰 리터럴을 파일에 두지 않는다).
   for (const s of readMcpServers()) {
     if (!s || s.enabled === false || !s.name || s.name === "lively") continue;
     backupUserMcp(s.name); // 덮어쓰기 전 유저 원본 스냅샷(최초 1회) — uninstall 원복용(비파괴 라운드트립)
-    run("claude", ["mcp", "remove", s.name], { allowFail: true, quiet: true });
+    runClaudeIn(cd, ["mcp", "remove", s.name], { allowFail: true, quiet: true });
     try {
       if (s.transport === "stdio" && s.command) {
         // claude stdio 는 command+args 를 분리 인자로 받는다(공백 토큰 분리 — register-clients.sh 와 동일 한계).
         const parts = String(s.command).trim().split(/\s+/).filter(Boolean);
-        run("claude", ["mcp", "add", "--transport", "stdio", "--scope", "user", s.name, ...parts], { quiet: true });
+        runClaudeIn(cd, ["mcp", "add", "--transport", "stdio", "--scope", "user", s.name, ...parts], { quiet: true });
       } else if (s.url) {
         const secret = s.auth_env ? (process.env[s.auth_env] || "") : "";
         const a = ["mcp", "add", "--transport", "http", "--scope", "user", s.name, s.url];
         if (secret) a.push("--header", `Authorization: Bearer ${secret}`);
-        run("claude", a, { quiet: true });
+        runClaudeIn(cd, a, { quiet: true });
         if (s.auth_env && !secret) warn(`${s.name}: 환경변수 ${s.auth_env} 가 비어 무인증 등록됨`);
       } else continue;
-      ok(`MCP 등록: ${s.name}`);
+      ok(`MCP 등록: ${s.name}${at}`);
       registered++;
-    } catch (e) { fail(`MCP 등록 실패(${s.name}): ${e.message}`); failed++; }
+    } catch (e) { fail(`MCP 등록 실패(${s.name}${at}): ${e.message}`); failed++; }
+  }
+  return { registered, failed };
+}
+
+function registerClaudeMcp() {
+  const gw = gateway();
+  if (!has("claude")) { info("claude 미설치 — MCP 등록 건너뜀"); return { registered: 0, failed: 0 }; }
+  let registered = 0, failed = 0;
+  const targets = mcpTargets();
+  // 프로필이 있으면 그것까지 전부 — 웹터미널 세션은 프로필 dir 을 읽으므로 기본 위치만 등록하면 세션엔 안 보인다.
+  if (targets.length > 1) info(`MCP 등록 대상 ${targets.length}곳: ${targets.map((t) => t.label).join(" · ")}`);
+  for (const t of targets) {
+    const r = registerClaudeMcpIn(t, gw);
+    registered += r.registered; failed += r.failed;
   }
   return { registered, failed };
 }
@@ -507,13 +812,21 @@ async function syncKit({ label, offerHarness }) {
   }
 
   say(`\n${bold(label)}  ${dim("하네스: " + harnesses.join(", "))}`);
+  // 진행 신호(#1541 T1) — GUI 가 진행률을 그린다. 사람용 `[1/3]` 문구는 그대로 두고 **덧붙이기만** 한다.
+  const step = (id, lbl, status, i, extra) => { if (EV) EV.step(id, lbl, status, { i, n: 3, harnesses, ...(extra || {}) }); };
   say(dim("  [1/3] 키트 내려받는 중…"));
+  step("kit-download", "키트 내려받는 중", "start", 1);
   const { dir, root } = await downloadBundle();
   try {
     const version = verifyBundle(root);
     ok(`키트 검증 완료${version ? "  " + dim("(" + version + ")") : ""}`);
+    // 번들 레지스트리 기준으로 하네스 목록 재계산 — 구 CLI 로 돌려도 새 하네스 배선이 빠지지 않게(#1689).
+    const late = await augmentHarnessesFromBundle(root, harnesses);
+    if (late.length) say(dim(`  (이 번들이 새로 지원하는 하네스 감지: ${late.join(", ")} — 함께 배선합니다)`));
+    step("kit-download", "키트 내려받는 중", "done", 1);
 
     say(dim("  [2/3] 설치 중…"));
+    step("kit-install", "설치 중", "start", 2);
     // 설치의 엔진은 번들 동봉 user-install.mjs — 비파괴 머지·백업·auto-approve reconcile 이 전부 거기 있다.
     //  ⚠ LIVELY_TOKEN 을 **명시 주입**한다: user-install.mjs 의 org-seed fetch 는 아직 env 우선이라(그쪽:539),
     //   안 주면 이 셸의 스테일 env 로 시드를 받아 **번들은 새 신원·시드는 옛 신원**으로 갈린다(#916 계열).
@@ -521,9 +834,12 @@ async function syncKit({ label, offerHarness }) {
     run(process.execPath, [join(root, "setup", "user-install.mjs"), "--clone-root", root, "--harness", harnesses.join(",")],
       { env: { LIVELY_TOKEN: token() } });
 
+    step("kit-install", "설치 중", "done", 2);
     say(dim("  [3/3] MCP 등록 중…"));
+    step("mcp-register", "MCP 등록 중", "start", 3);
     const r = registerClaudeMcp();
     if (r.failed) warn(`MCP 등록 ${r.failed}건 실패 — 위 오류를 확인하고 다시 시도하세요.`);
+    step("mcp-register", "MCP 등록 중", r.failed ? "fail" : "done", 3, r.failed ? { failed: r.failed } : undefined);
 
     say("");
     say(green(bold("=== 끝! ===")));
@@ -622,8 +938,19 @@ async function deviceLogin(gw) {
   say("    " + bold(start.verification_uri));
   say("    코드: " + bold(start.user_code));
   say(dim("  (브라우저가 자동으로 열립니다. 안 열리면 위 주소를 직접 여세요.)"));
+  // 앱은 코드·주소를 **이벤트로** 받는다(#1541 T1) — 사람용 문구를 파싱하게 두면 문구를 못 고친다.
+  //  답을 기다리지 않는 통지형이다: 승인은 브라우저에서 일어나고, CLI 는 아래 폴 루프로 그걸 안다.
+  //  ⚠ device_code(비밀)는 싣지 않는다 — 앱이 알 이유가 없고, 새면 그 로그인을 가로챌 수 있다.
+  if (PROMPTER) {
+    PROMPTER.tell("device-code", "device-code", {
+      user_code: start.user_code, verification_uri: start.verification_uri,
+      verification_uri_complete: start.verification_uri_complete || null,
+      expires_in: Number(start.expires_in) || null, gateway: gw,
+    });
+  }
   openBrowser(start.verification_uri_complete || start.verification_uri);
   say(dim("  · 브라우저에서 승인을 기다리는 중… (이 창은 열어 두세요)"));
+  if (EV) EV.step("device-approve", "브라우저에서 승인 대기", "start");
 
   // ③ 폴 루프 — 전송오류 내성(백오프 계속), 종료는 명시적 denied/expired/invalid 만.
   let interval = Math.max(2, Number(start.interval) || 5);
@@ -641,7 +968,10 @@ async function deviceLogin(gw) {
       const text = await res.text();
       try { body = JSON.parse(text); } catch { body = null; } // 비-JSON(Caddy 502 등) → 일시 오류
     } catch { status = 0; body = null; } // ECONNREFUSED·타임아웃 등 → 일시 오류
-    if (status === 200 && body?.token) return { token: body.token, scopes: body.scopes || [] };
+    if (status === 200 && body?.token) {
+      if (EV) EV.step("device-approve", "브라우저에서 승인 대기", "done");   // ⚠ 토큰은 절대 이벤트에 안 싣는다(D6)
+      return { token: body.token, scopes: body.scopes || [] };
+    }
     if (status === 202) continue;                                  // authorization_pending
     if (status === 429) { interval = (Number(body?.interval) || interval) + 5; continue; } // slow_down
     if (status === 403) die("승인이 거부됐습니다.");
@@ -797,7 +1127,7 @@ async function gatherStatus() {
     harness: {
       // mcp = 등록됐나(정적) · mcpConnected = 지금 실제로 붙나(동적, 모르면 null — 아는 척하지 않는다)
       // assets = 조직 자산이 이 머신에 실제로 깔렸나 { local, server } (#1475 — 아래 주석 참조)
-      claude: { installed: has("claude"), wired: false, mcp: false, mcpConnected: null, assets: null },
+      claude: { installed: has("claude"), wired: false, mcp: false, mcpConnected: null, mcpMissing: null, assets: null },
       // configOk = codex 가 config.toml 을 **실제로 읽을 수 있나**. 이 축이 없어서 2026-08-04 윈도우 사고 때
       //  status 가 "✓ 배선"이라고 거짓 보고했다 — 파일에 우리 센티넬은 있는데 codex 는 파싱 실패로 아예 안 떴다.
       //  (한 줄의 문법 오류가 파일 전체를 무효화하는 게 TOML 이라, '우리 블록이 있다'는 '동작한다'가 아니다.)
@@ -807,9 +1137,22 @@ async function gatherStatus() {
       //  mcp 초기값이 null 인 것도 codex 와 같은 이유다: 설정을 **못 읽었을 때**(주석 든 .jsonc 등)를
       //  '미등록'으로 단정하면 "lively update" 헛다리 조치를 부른다. 모르면 물음표로 적는다.
       opencode: { installed: has("opencode"), wired: false, mcp: null, mcpConnected: null, configOk: null, transport: null, assets: null },
+      // antigravity(#1689) — 설치 판정은 **agy** 바이너리다. configOk = 우리 플러그인 JSON(hooks/mcp_config)이
+      //  파싱되는가(깨진 파일은 fail-open 이라 세션은 살지만 그 기능만 조용히 빠진다 — 그걸 여기서 드러낸다).
+      antigravity: { installed: has("agy"), wired: false, mcp: null, mcpConnected: null, configOk: null, transport: null, assets: null },
+      // grok(#1701) — configOk = 우리 훅 배선 파일(lively-grok.json)이 JSON 으로 파싱되는가. grok 은 깨진 훅
+      //  파일을 **조용히 건너뛰므로**(fail-open) 깨짐 = 우리 훅이 통째로 소리 없이 빠진 상태 — 그걸 여기서 드러낸다.
+      grok: { installed: has("grok"), wired: false, mcp: null, mcpConnected: null, configOk: null, transport: null, assets: null },
     },
     hooks: { installed: 0, expected: REQUIRED_HOOKS.length },
+    // 노드 축(#1541 T4) — 데스크톱 앱이 폴링한다. 부트스트랩 직후엔 cmd-node.mjs 가 아직 없을 수 있으므로
+    //  (그 시점의 lively.mjs 는 단독 파일이다) 못 읽으면 null 로 둔다 — '없음' 과 '모름' 을 섞지 않는다.
+    node: null,
   };
+  try {
+    const { nodeCommands: _n, nodeStatus } = await import(new URL("./cmd-node.mjs", import.meta.url));
+    if (typeof nodeStatus === "function") st.node = nodeStatus();
+  } catch { /* 모듈 없음(부트스트랩 직후) 또는 조회 실패 — node 는 null 로 남는다 */ }
   try {
     const s = readFileSync(join(CLAUDE_DIR, "settings.json"), "utf8");
     st.harness.claude.wired = s.includes(".lively/hooks/") || s.includes(".lively\\hooks\\");
@@ -827,7 +1170,7 @@ async function gatherStatus() {
     //   · `mcp get lively` 1.55s — 우리 서버만 헬스체크한다.
     //   · 게다가 종전 판정은 **이름 매칭**이라 헬스체크 결과를 버렸다: 죽은 서버도 출력에 이름은 남아
     //     (`lively: … - ✘ Failed to connect`) true 였다 → **끊김을 감지할 수 없었다**. `get` 은 `Status:` 줄로 답한다.
-    const g = run("claude", ["mcp", "get", "lively"], { allowFail: true, quiet: true, timeout: 8000, env: { MCP_TIMEOUT: "3000" } });
+    const g = runClaude(["mcp", "get", "lively"], { allowFail: true, quiet: true, timeout: 8000, env: { MCP_TIMEOUT: "3000" } });
     const out = `${g.out}${g.err}`;
     if (/^\s*Scope:/m.test(out)) {
       st.harness.claude.mcp = true;                                        // 등록됨(스코프 무관 — user/project/local 다 잡힌다)
@@ -838,6 +1181,13 @@ async function gatherStatus() {
       st.harness.claude.mcp = claudeUserMcpRegistered("lively");
       st.harness.claude.mcpConnected = null;
     }
+    // ★ `mcp get` 은 **이 프로세스의** CLAUDE_CONFIG_DIR 한 곳만 본다. 그래서 그것만으로는
+    //  "웹터미널 세션(=프로필 dir)에서도 보이나" 를 답할 수 없다 — 기본 위치엔 있고 프로필엔 없는 상태가
+    //  ✓ 로 표시되던 실기기 오진이 정확히 그 틈이었다. 대상 전부를 파일로 훑어 **빠진 곳을 이름으로** 남긴다.
+    try {
+      const cov = mcpCoverage("lively", mcpTargets(), claudeMcpEntryIn);
+      st.harness.claude.mcpMissing = cov.missing;      // 빈 배열 = 전 대상 커버(세션에서도 보인다)
+    } catch { st.harness.claude.mcpMissing = null; }    // 못 쟀으면 null — 아는 척하지 않는다
   }
   // codex 도 같은 깊이로 본다(#1475) — 종전엔 '설치·배선' 두 칸뿐이라, config 가 깨져 codex 가 아예 안 뜨는
   //  상태에서도 status 는 초록불이었다. `codex mcp get lively` 한 번으로 세 가지를 동시에 얻는다:
@@ -883,6 +1233,55 @@ async function gatherStatus() {
   //  실측: 이 호출 때문에 `lively status` 를 돌리는 테스트들이 XDG 경로를 오염시켰다.
   //  → 등록 여부는 위에서 **설정 파일을 읽어** 확정하고, 연결은 `null`(모름)로 둔다. 모르는 걸 아는 척하지
   //   않는 게 이 화면의 규칙이고(codex 의 enabled 를 null 로 둔 것과 같은 이유), 부작용 없는 진단이 우선이다.
+  // antigravity — 배선·MCP 전부 **우리 플러그인 파일**에서 읽는다(파일 읽기라 비용 0 · 부작용 0).
+  //  연결 확인은 하지 않는다: agy 를 띄우는 프로브는 설정 트리를 만들고(진단이 상태를 바꿈, #1689 실측)
+  //  모델 세션 없이는 MCP 를 안 붙인다 → null(모름)로 둔다.
+  {
+    const ag = st.harness.antigravity;
+    // 훅 배선은 글로벌 hooks.json 의 "lively" 키다(#1689 — 플러그인 훅은 CLI 가 안 읽는다).
+    const hooksJson = join(HOME, ".gemini", "config", "hooks.json");
+    const mcpJson = join(AGY_PLUGIN_DIR, "mcp_config.json");
+    try { ag.wired = !!(JSON.parse(readFileSync(hooksJson, "utf8")) || {}).lively; } catch { /* 없음/파싱실패 → 미배선 */ }
+    if (!existsSync(AGY_PLUGIN_DIR)) { ag.mcp = false; }   // 플러그인 자체가 없다 = 배선한 적 없다(확정)
+    else {
+      let ok = true;
+      try { if (existsSync(hooksJson)) JSON.parse(readFileSync(hooksJson, "utf8")); } catch { ok = false; }
+      try {
+        if (existsSync(mcpJson)) {
+          const mc = JSON.parse(readFileSync(mcpJson, "utf8"));
+          ag.mcp = !!(mc && mc.mcpServers && mc.mcpServers.lively);
+          ag.transport = ag.mcp ? "stdio" : null;
+        } else ag.mcp = false;
+      } catch { ok = false; ag.mcp = null; }               // 파일은 있는데 못 읽음 — 모름으로 둔다
+      ag.configOk = ok;
+    }
+  }
+  // grok(#1701) — 배선·config 유효·MCP 등록 전부 **파일**에서 읽는다(비용 0 · 부작용 0).
+  //  ⚠ 연결(mcpConnected)은 확인하지 않는다 — `grok mcp doctor --json` 이 있지만 실행 비용이 미지수이고,
+  //   grok 은 **어떤 호출이든** 설정 트리(docs/·active_sessions)를 만든다(진단이 상태를 바꿈 — opencode 에서
+  //   이미 겪은 함정). 런북 규칙대로 모르는 건 null 물음표로 둔다 — pass/fail 로 단정하지 않는다.
+  {
+    const gk = st.harness.grok;
+    // 배선 신호 = 우리 소유 훅 파일의 존재. configOk = 그 파일이 JSON 으로 파싱되는가 — grok 은 깨진 훅 파일을
+    //  조용히 건너뛰므로(fail-open) 파싱 실패 = 우리 훅이 통째로 소리 없이 빠진 상태다.
+    //  ⚠ config.toml 전체의 TOML 유효성은 여기 안 싣는다 — 값싼 파서가 없고(codex 는 `codex mcp get` 으로
+    //   파서에게 직접 물었지만 grok 프로브는 위 부작용 때문에 금지) 모르는 축은 만들지 않는다.
+    try { gk.wired = existsSync(GROK_HOOKS_JSON); } catch { /* */ }
+    if (gk.wired) {
+      try { JSON.parse(readFileSync(GROK_HOOKS_JSON, "utf8")); gk.configOk = true; }
+      catch { gk.configOk = false; }                       // 파일은 있는데 JSON 이 깨짐 — 훅만 조용히 죽은 상태
+    }
+    // MCP 등록 = 사용자 config.toml 에 우리 센티넬 블록 + [mcp_servers.lively] 가 있다(설치기가 심는 유일한 형태).
+    const grokToml = join(GROK_DIR, "config.toml");
+    try {
+      if (!existsSync(grokToml)) gk.mcp = false;           // 파일 자체가 없다 = 배선한 적 없다(확정)
+      else {
+        const t = readFileSync(grokToml, "utf8");
+        gk.mcp = t.includes("lively-managed") && t.includes("[mcp_servers.lively]");
+        gk.transport = gk.mcp ? "stdio" : null;            // command 형(stdio 프록시)만 설치한다 — 등록됐으면 stdio
+      }
+    } catch { /* 파일은 있는데 못 읽음 — null 유지(모름) */ }
+  }
   if (!gw) { st.gateway.error = "게이트웨이 미설정"; return st; }
   if (!tok) { st.gateway.error = "로그인 필요"; return st; }
   try {
@@ -903,7 +1302,7 @@ async function gatherStatus() {
     //   (자산 sync 는 실패해도 조용하다 — 세션을 막지 않는 게 설계라서. 그래서 '조용한 실패'가 기본값이다.)
     //  로컬 0 / 서버 N 이면 그 머신에서 materialize 가 한 번도 성공한 적 없다는 뜻이고, 그게 곧 신고 전에 잡을 신호다.
     const manifest = (() => { try { return JSON.parse(readFileSync(join(LIVELY, "managed-harness-assets.json"), "utf8")) || {}; } catch { return {}; } })();
-    for (const h of ["claude", "codex", "opencode"]) {
+    for (const h of ["claude", "codex", "opencode", "antigravity", "grok"]) {   // #1701 — grok 도 같은 자산 축
       if (!st.harness[h].installed) continue;               // 안 깔린 하네스는 물어볼 것도 없다
       try {
         const r = await api(`/api/ui/org/runner/assets?harness=${h}`, { timeoutMs: 8000 });
@@ -1015,7 +1414,7 @@ function renderProjectStatus(p) {
 async function cmdStatus(opts) {
   const st = await gatherStatus();
   st.project = await gatherProjectStatus(process.cwd(), st.gateway.reachable).catch(() => null); // 프로젝트 섹션은 부가 — 실패해도 status 는 유효(미도달이면 서버 왕복 스킵, #1043)
-  if (opts.json) { process.stdout.write(JSON.stringify(st, null, 2) + "\n"); return; }
+  if (opts.json) { jsonOut(st); return; }
   const mark = (b) => (b ? green("✓") : dim("–"));
   say(`\n${bold("라이블리")} ${dim("CLI " + st.cli)}\n`);
   say(`  게이트웨이    ${st.gateway.url || dim("(미설정)")}  ${st.gateway.reachable ? green("도달 OK") : red(st.gateway.error || "도달 실패")}`);
@@ -1031,6 +1430,12 @@ async function cmdStatus(opts) {
   // 자산은 **개수가 곧 진단**이다 — 0/26 이면 그 머신에서 materialize 가 한 번도 성공한 적 없다는 뜻(#1475).
   const assetsOf = (h) => !h.assets ? "" : `   자산 ${h.assets.local === h.assets.server ? green(`${h.assets.local}/${h.assets.server}`) : yellow(`${h.assets.local}/${h.assets.server}`)}`;
   say(`  claude        ${mark(st.harness.claude.installed)} 설치   ${mark(st.harness.claude.wired)} 배선   ${mark(st.harness.claude.mcp)} MCP 등록${connOf(st.harness.claude)}${assetsOf(st.harness.claude)}`);
+  // ★ '어딘가 등록됨' 을 통과로 쓰지 않는다 — 웹터미널 세션은 프로필 dir 을 읽으므로, 거기 없으면 세션엔 안 보인다.
+  //  그 상태가 초록불로 보이던 게 실기기 오진의 원인이었다. 빠진 곳을 이름으로 말하고, 고치는 한 줄까지 준다.
+  if (Array.isArray(st.harness.claude.mcpMissing) && st.harness.claude.mcpMissing.length) {
+    say(`                ${yellow("✘")} MCP 미등록: ${st.harness.claude.mcpMissing.join(" · ")} ${dim("— 이 위치로 뜨는 세션엔 lively 툴이 안 보입니다")}`);
+    say(`                ${dim("고치기: lively update")}`);
+  }
   // codex 는 '배선' 자리에 **config 유효성**을 함께 싣는다 — 우리 블록이 있어도 파일이 파싱 안 되면 codex 는 아예 안 뜬다.
   const cx = st.harness.codex;
   const cxWired = cx.configOk === false ? `${red("✘")} 배선 ${red("(config.toml 을 codex 가 못 읽음)")}` : `${mark(cx.wired)} 배선`;
@@ -1050,17 +1455,42 @@ async function cmdStatus(opts) {
       : "";
     say(`  opencode      ${mark(oc.installed)} 설치   ${ocWired}${ocMcp}${connOf(oc)}${assetsOf(oc)}`);
   }
+  // antigravity — 같은 형태(#1689). 배선 신호는 플러그인 hooks.json, configOk 는 우리 플러그인 JSON 파싱.
+  const ag = st.harness.antigravity;
+  if (ag.installed || ag.wired) {
+    const agWired = ag.configOk === false ? `${red("✘")} 배선 ${red("(플러그인 JSON 이 깨짐 — 그 기능만 조용히 빠집니다)")}` : `${mark(ag.wired)} 배선`;
+    const agMcp = ag.configOk !== false
+      ? (ag.mcp === null ? `   ${dim("? MCP 등록")}` : `   ${mark(ag.mcp)} MCP 등록${ag.mcp && ag.transport ? dim(`(${ag.transport})`) : ""}`)
+      : "";
+    say(`  antigravity   ${mark(ag.installed)} 설치   ${agWired}${agMcp}${connOf(ag)}${assetsOf(ag)}`);
+  }
+  // grok — 같은 형태(#1701). 배선 신호는 우리 소유 훅 파일(lively-grok.json), configOk 는 그 JSON 파싱.
+  const gk = st.harness.grok;
+  if (gk.installed || gk.wired) {
+    const gkWired = gk.configOk === false ? `${red("✘")} 배선 ${red("(lively-grok.json 이 깨짐 — 우리 훅만 조용히 빠집니다)")}` : `${mark(gk.wired)} 배선`;
+    const gkMcp = gk.configOk !== false
+      ? (gk.mcp === null ? `   ${dim("? MCP 등록")}` : `   ${mark(gk.mcp)} MCP 등록${gk.mcp && gk.transport ? dim(`(${gk.transport})`) : ""}`)
+      : "";
+    say(`  grok          ${mark(gk.installed)} 설치   ${gkWired}${gkMcp}${connOf(gk)}${assetsOf(gk)}`);
+  }
   if (st.kit.autoUpdate !== null) say(`  자동 업데이트 ${st.kit.autoUpdate ? green("켜짐") : yellow("꺼짐")}`);
+  // 노드(#1541 T4) — **등록됐을 때만** 뜻이 있다. 실행 여부를 못 재면 `?` 로 적는다(모르는 걸 '정지' 로 쓰면 거짓말).
+  if (st.node?.registered) {
+    const run = st.node.running === null ? dim("? 실행") : st.node.running ? green("✓ 실행 중") : yellow("정지됨");
+    say(`  노드          ${st.node.id || dim("(id 미상)")}   ${run}   ${st.node.daemon ? green("✓ 자동 시작") : dim("– 자동 시작")}`);
+  }
   if (st.project) { say(""); renderProjectStatus(st.project); }
   say("");
   if (!st.account.authenticated) say(dim("  → ") + bold("lively login") + dim(" 으로 시작하세요."));
   else if (st.kit.remote && !st.kit.current) say(dim("  → ") + bold("lively update") + dim(" 로 최신화할 수 있습니다."));
   else if (st.harness.codex.configOk === false) say(dim("  → codex 가 config.toml 을 못 읽습니다(그 파일의 MCP·훅이 전부 무효): ") + bold("lively update"));
   else if (st.harness.opencode.configOk === false) say(dim("  → opencode 가 opencode.json 을 못 읽습니다(그 파일의 MCP·플러그인이 전부 무효): ") + bold("lively update"));
+  else if (st.harness.antigravity.configOk === false) say(dim("  → antigravity 플러그인 JSON 이 깨졌습니다(그 파일의 훅/MCP 만 조용히 빠짐): ") + bold("lively update"));
+  else if (st.harness.grok.configOk === false) say(dim("  → grok 훅 파일(lively-grok.json)이 깨졌습니다(우리 훅만 조용히 빠짐): ") + bold("lively update"));
   else if (st.harness.claude.installed && !st.harness.claude.mcp) say(dim("  → MCP 등록이 안 돼 있습니다: ") + bold("lively update"));
   else {
     // 자산은 설치기가 아니라 **세션 시작 훅**이 내린다 — 업데이트만 하고 세션을 안 켜면 0 인 채로 남는다.
-    const short = ["claude", "codex", "opencode"].filter((h) => st.harness[h].assets && st.harness[h].assets.local < st.harness[h].assets.server);
+    const short = ["claude", "codex", "opencode", "antigravity", "grok"].filter((h) => st.harness[h].assets && st.harness[h].assets.local < st.harness[h].assets.server); // #1701 — grok 포함
     if (short.length) say(dim("  → 조직 자산이 덜 깔렸습니다(") + short.join("·") + dim("). 새 세션을 한 번 켜면 내려옵니다 — 그래도 그대로면 ") + bold("lively doctor"));
     // ⚠ 진단이 거짓말하지 않게 — opencode 는 `~/.claude/skills` 를 **자동으로도** 읽는다(#1519 결정: 스킬 격리 안 함).
     //  위 수치는 우리가 심은 매니페스트만 센 것이라, opencode 세션에서 실제로 보이는 스킬은 이보다 많을 수 있다.
@@ -1141,9 +1571,39 @@ async function cmdDoctor(opts) {
       }
     }
   }
+  // antigravity(#1689) — 배선(플러그인 hooks.json)·config 유효(우리 플러그인 JSON 파싱)·MCP 등록(mcp_config.json).
+  if (st.harness.antigravity.installed || st.harness.antigravity.wired) {
+    chk("Antigravity 배선", st.harness.antigravity.wired,
+      st.harness.antigravity.wired ? "hooks.json 에 lively 훅 있음" : "훅 미배선 — 훅이 하나도 안 돕니다", "lively install");
+    if (st.harness.antigravity.configOk !== null) {
+      chk("Antigravity config 유효", st.harness.antigravity.configOk,
+        st.harness.antigravity.configOk ? "플러그인 JSON 읽힘" : "플러그인 JSON 이 깨졌습니다 — 깨진 파일의 훅/MCP 만 조용히 빠집니다(fail-open)",
+        "lively update");
+    }
+    if (st.harness.antigravity.configOk !== false && st.harness.antigravity.mcp !== null) {
+      chk("Antigravity MCP 등록", st.harness.antigravity.mcp,
+        st.harness.antigravity.mcp ? `lively 등록됨${st.harness.antigravity.transport ? ` (${st.harness.antigravity.transport})` : ""}` : "미등록", "lively update");
+    }
+  }
+  // grok(#1701) — 배선(우리 훅 파일 lively-grok.json)·config 유효(그 JSON 파싱)·MCP 등록(config.toml 센티넬).
+  //  연결(mcpConnected)은 항상 null 이라 체크를 만들지 않는다 — `grok mcp doctor --json` 이 있지만 실행 비용이
+  //  미지수이고 grok 은 어떤 호출이든 설정 트리를 만든다(진단이 상태를 바꿈). 모르는 걸 pass/fail 로 단정하지 않는다.
+  if (st.harness.grok.installed || st.harness.grok.wired) {
+    chk("Grok Build 배선", st.harness.grok.wired,
+      st.harness.grok.wired ? "hooks/lively-grok.json 있음" : "훅 미배선 — 훅이 하나도 안 돕니다", "lively install");
+    if (st.harness.grok.configOk !== null) {
+      chk("Grok Build config 유효", st.harness.grok.configOk,
+        st.harness.grok.configOk ? "훅 JSON 읽힘" : "lively-grok.json 이 깨졌습니다 — grok 이 조용히 건너뛰어 우리 훅만 빠집니다(fail-open)",
+        "lively update");
+    }
+    if (st.harness.grok.configOk !== false && st.harness.grok.mcp !== null) {
+      chk("Grok Build MCP 등록", st.harness.grok.mcp,
+        st.harness.grok.mcp ? `lively 등록됨${st.harness.grok.transport ? ` (${st.harness.grok.transport})` : ""}` : "미등록", "lively update");
+    }
+  }
   // 조직 자산이 이 머신에 실제로 깔렸나(#1475) — 서버가 주는 수 ↔ 우리가 심은 수. 어긋나면 신고 전에 여기서 드러난다.
   //  ⚠ 자산은 설치기가 아니라 **세션 시작 훅**이 내린다 → 업데이트 직후엔 정상적으로 어긋날 수 있다(해결 문구에 그 사실을 담는다).
-  for (const h of ["claude", "codex"]) {
+  for (const h of ["claude", "codex", "opencode", "antigravity", "grok"]) {   // #1689 — opencode 도 종전 누락분 보강 · #1701 — grok
     const a = st.harness[h].assets;
     if (!a) continue;
     chk(`조직 자산(${h})`, a.local >= a.server, `${a.local}/${a.server} 설치됨`,
@@ -1153,7 +1613,7 @@ async function cmdDoctor(opts) {
   // 새 터미널에서 `lively` 가 잡히는지 — rc 배선이 안 됐으면 다음 창에서 못 찾는다.
   chk("lively PATH", has("lively"), has("lively") ? "OK" : "현 셸의 PATH 밖", RELOAD_SHELL_HINT);
 
-  if (opts.json) { process.stdout.write(JSON.stringify({ status: st, checks }, null, 2) + "\n"); return; }
+  if (opts.json) { jsonOut({ status: st, checks }); return; }
   say(`\n${bold("라이블리 진단")}\n`);
   const w = Math.max(...checks.map((x) => cols(x.name)));
   for (const x of checks) {
@@ -1209,7 +1669,7 @@ async function cmdSelfcheck(opts) {
       out.server.contextFresh = norm(c) === norm(ctx);
     } catch (e) { out.server = { error: e.message }; }
   }
-  if (opts.json) { process.stdout.write(JSON.stringify(out, null, 2) + "\n"); return; }
+  if (opts.json) { jsonOut(out); return; }
   say(`\n${bold("라이블리 배선 점검")} ${dim("— 아래는 사실이다. 지금 이 세션에 실제로 무엇이 보이는지와 대조해 판정하라.")}\n`);
   say(`  키트          ${out.kit || dim("(없음)")}`);
   if (!hs.length) say(`  자산          ${yellow("매니페스트 없음 — 이 머신에 조직 자산이 한 번도 안 깔렸다")}`);
@@ -1265,7 +1725,7 @@ function modeEnv(mode) {
   return {};
 }
 
-// `lively run [--mode M | --readonly | --incognito] [<프로젝트#> [work.mjs 인자…] | [--harness claude|codex] [하네스 인자…]]`
+// `lively run [--mode M | --readonly | --incognito] [<프로젝트#> [work.mjs 인자…] | [--harness claude|codex|opencode|antigravity|grok] [하네스 인자…]]`
 //  · 프로젝트# 있으면 work.mjs(공유폴더 pull · 레포 clone/worktree · 하네스 실행) — 종전 표면.
 //  · 없으면 하네스를 **바로** 실행한다(프로젝트 없이 — 사용자 요청). 기본 claude, --harness 로 변경.
 //  두 경로 모두 모드 env 를 세팅 → 그 세션만 읽기전용/인코그니토가 헤더로 게이트웨이에 전달된다(per-session).
@@ -1348,7 +1808,7 @@ async function cmdInit(rest) {
   let r;
   try { r = await projectInit(ctx, a); }
   catch (e) { die(e.message, 1); }
-  if (a.json) { process.stdout.write(JSON.stringify(r, null, 2) + "\n"); return; }
+  if (a.json) { jsonOut(r); return; }
 
   if (r.status === "already_project") { say(`\n${yellow("이미 프로젝트입니다")} — #${r.project_id}\n  ${dim(r.note)}\n`); return; }
   if (r.status === "suggestion") {
@@ -1452,8 +1912,13 @@ async function tokenAccepted(gw, tok) {
   } catch { return null; } finally { clearTimeout(timer); }
 }
 
-async function cmdSetup() {
+async function cmdSetup(opts = {}) {
   say(`\n${bold("라이블리 설치를 시작합니다.")}`);
+  // `--gateway` 를 여기서도 받는다(#1541 T3) — 데스크톱 앱은 주소를 방금 사람에게 받아 들고 있고,
+  //  `login` 과 `install` 을 따로 부르는 대신 **setup 하나**로 몰 수 있어야 한다(순서·조건의 정본은 CLI 다).
+  //  아래 tokenAccepted 가 **새 주소로** 판정되도록 로그인보다 먼저 쓴다 — 게이트웨이를 바꾸는 경우
+  //  옛 주소의 토큰이 '먹힌다'고 나와 로그인을 통째로 건너뛰는 사고(#1087 계열)를 막는다.
+  if (opts.gateway) writeLively("gateway-url", normGw(opts.gateway));
   // ⚠ 토큰이 **있는지**가 아니라 **먹히는지**를 본다(#1087). token() 은 파일 다음에 LIVELY_TOKEN 환경변수도
   //  보므로, 만료·회수된 토큰이나 셸에 남아 있던 옛 env 값이 로그인을 건너뛰게 만들었다. 그러면 설치는
   //  한참 뒤 [1/3] 키트 내려받기에서 401 로 죽고, 그 지점의 메시지만으론 사용자가 뭘 해야 할지 알 수 없다
@@ -1475,7 +1940,7 @@ ${bold("사용법")}
   lively <명령> [옵션]
 
 ${bold("시작하기")}
-  setup                  로그인 + 설치를 한 번에 (처음 설치할 때)
+  setup                  로그인 + 설치를 한 번에 (처음 설치할 때) ${dim("--gateway <url>")}
   login                  접속 토큰 등록 (가림 입력 — 화면·히스토리에 안 남음)
   logout                 토큰만 지움 (설치는 유지)
   onboarding             내 환경 정리 · 라이블리 첫 세팅을 지금 시작 ${dim("(claude 를 열어 온보딩 스킬 실행 — 언제든 재실행)")}
@@ -1484,7 +1949,7 @@ ${bold("설치 · 유지보수")}
   install                키트 설치 / 재설치 (멱등)
   update                 지금 최신으로 맞춤 ${dim("(MCP 재등록 포함 — 자동 업데이트가 못 하는 축)")}
       --check            확인만 하고 설치하지 않음
-  uninstall              제거 ${dim("--dry-run  --purge  --yes  --harness claude|codex|all")}
+  uninstall              제거 ${dim("--dry-run  --purge  --yes  --harness claude|codex|opencode|antigravity|grok|all")}
 
 ${bold("확인")}
   status                 설치 · 버전 · 하네스 · MCP 상태  ${dim("--json")}
@@ -1519,6 +1984,8 @@ ${bold("작업")}
 ${bold("옵션")}
   --gateway <url>        게이트웨이 주소 지정 (login 과 함께)
   --token <토큰>         비대화형 로그인 (스크립트 · 프로비저닝용)
+  --json-events          진행 상황을 stdout 에 NDJSON 으로 ${dim("(데스크톱 앱·자동화용 — 사람용 출력은 stderr 그대로)")}
+                         ${dim("확인이 필요하면 prompt 이벤트를 내고 stdin 의 {\"t\":\"answer\",\"id\":…,\"value\":…} 한 줄을 기다립니다.")}
   -v, --version          버전
   -h, --help             이 도움말
 
@@ -1534,6 +2001,7 @@ function parse(argv) {
     else if (t === "--harness") o.harness = argv[++i];
     else if (t === "--check") o.check = true;
     else if (t === "--json") o.json = true;
+    else if (t === "--json-events") o.jsonEvents = true;   // 앱↔CLI 계약(#1541 T1) — stdout NDJSON
     else if (t === "--dry-run") o.dryRun = true;
     else if (t === "--purge") o.purge = true;
     else if (t === "--yes" || t === "-y") o.yes = true;
@@ -1574,13 +2042,59 @@ function cmdOnboarding(rest) {
   process.exit(st ?? 0);
 }
 
+// 이벤트 채널 기동(#1541 T1) — `--json-events` 일 때만. 여기서만 켜므로 플래그가 없으면 stdout 은 종전대로 빈다.
+//  ⚠ **stdin 을 여는 것도 여기서만** 한다: 평소에 stdin 을 resume 하면 파이프 입력을 기다리는 명령들의
+//   동작이 바뀐다(`curl … | sh` 부트스트랩이 정확히 그 형태다).
+//  ⚠ 쓰기는 **writeSync(fd 1)** 로 한다. process.stdout 은 파이프일 때 비동기라(POSIX) 마지막 `end` 이벤트가
+//   프로세스 종료와 경합해 통째로 유실될 수 있다 — 앱은 그 한 줄로 성공·실패를 판정하므로 유실이 곧 오판이다.
+function startEvents(cmd) {
+  const write = (line) => {
+    try { writeSync(1, line); }
+    catch { try { process.stdout.write(line); } catch { /* stdout 닫힘 — 보고를 못 해도 명령은 계속한다 */ } }
+  };
+  EV = createEmitter({ write });
+  const src = lineReader(process.stdin);
+  PROMPTER = createPrompter({ emit: EV.emit, onLine: src.onLine, onEnd: src.onEnd });
+  EV.start(cmd, CLI_VERSION);
+}
+/**
+ * end 를 정확히 한 번 낸다(정상 종료·die·exit 훅이 모두 이 문을 지난다).
+ *
+ * ⚠ 그리고 **stdin 핸들을 놓아준다.** 이벤트 모드는 답을 받으려고 stdin 을 열어 두는데(그게 프롬프트의 전제다),
+ *  그 핸들이 이벤트 루프를 붙잡고 있어서 놓지 않으면 **명령이 끝나도 프로세스가 영영 안 죽는다** — 앱 입장에선
+ *  `lively install` 이 성공 보고를 하고도 종료되지 않는다(통합 테스트가 실제로 이걸 잡았다: exit=null).
+ *  process.exit() 로 끊지 않는 이유는 stderr 다 — 파이프일 때 비동기라 사람용 출력이 잘린다.
+ *  핸들만 놓으면 루프가 자연히 비면서 남은 출력이 flush 된다.
+ */
+function endEvents(okFlag, code) {
+  if (!EV) return;
+  EV.end(okFlag, code);
+  EV = null; PROMPTER = null;
+  try { process.stdin.pause(); process.stdin.unref?.(); } catch { /* 이미 닫힘 */ }
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const o = parse(argv);
   const cmd = o._[0] || (o.version ? "version" : o.help ? "help" : "status");
+  if (!o.jsonEvents) return dispatch(cmd, o, argv);
+  startEvents(cmd);
+  // end 는 **모든 경로**에서 정확히 한 번 나가야 한다(앱이 그 한 줄로 성공·실패를 판정한다):
+  //  ⓐ 정상 반환 ⓑ 예외 ⓒ die() ⓓ 명령이 스스로 process.exit() 하는 경우(onboarding 등) — ⓓ 만 훅으로 잡힌다.
+  process.on("exit", (code) => endEvents(!code, code));
+  try {
+    await dispatch(cmd, o, argv);
+    endEvents(true, 0);
+  } catch (e) {
+    if (EV) EV.notice("error", String(e?.message || e));
+    endEvents(false, 1);
+    throw e;
+  }
+}
 
+async function dispatch(cmd, o, argv) {
   switch (cmd) {
-    case "setup": return cmdSetup();
+    case "setup": return cmdSetup(o);
     case "login": { await cmdLogin(o); return; }
     case "logout": return cmdLogout();
     // onboarding — 온보딩 스킬을 이 PC 에서 바로 실행(설치 직후 제안·수동 재실행 공용). 나머지 인자=초기 프롬프트.

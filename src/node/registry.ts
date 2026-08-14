@@ -7,9 +7,10 @@ import { WebSocketServer, type WebSocket } from "ws";
 import type { Server, IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { logger } from "../log.js";
+import { servedAgentVersion } from "./agent-bundle.js";   // #1713 — 노드에게 알려줄 서빙 번들 지문(단일 출처)
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
 import {
-  NODE_WS_PATH, PROTO_VER, decodeChanFrame, parseMsg, nodeSessionVisible, nodeCaps, NODE_BASELINE_OPS,
+  NODE_WS_PATH, PROTO_VER, decodeChanFrame, parseMsg, nodeSessionVisible, nodeCaps, nodeHarnesses, NODE_BASELINE_OPS, NODE_BASELINE_HARNESSES,
   type NodeToGwMsg, type GwToNodeMsg, type NodeOp, type NodeResources, type TaskDoneMsg,
 } from "./protocol.js";
 import { authNodeToken, touchNode, type OrgNode } from "./store.js";
@@ -40,6 +41,7 @@ interface NodeConn {
   // 이 노드가 실제로 할 수 있는 op(#905 C4). hello 전에는 **기준선으로 시작한다** — hello 는 연결 직후 오지만
   //  그 사이 도착한 req 를 "미지원"으로 오판해 떨구면 안 되기 때문(구 노드도 기준선은 전부 한다).
   caps: Set<string>;
+  harnesses: string[];   // #1713 — 이 노드가 실제로 띄울 수 있는 하네스(hello 보고 · 미보고면 기준선)
 }
 
 // 노드 세션 스냅샷 — 노드가 끊겨도 유지해 '오프라인 노드의 세션'을 계속 보여준다(게이트웨이 재시작 시 리셋, 도그푸드 OK).
@@ -89,6 +91,15 @@ export function nodeSessionsFor(viewer: string): NodeSessionInfo[] {
     }
   }
   return out;
+}
+
+// 이 세션이 어느 노드의 것인가 — 없으면 null(= 게이트웨이 로컬 세션이거나, 그 노드가 아직 상태를 안 올렸다).
+//  주입(#1664)처럼 **세션 id 만 들고 오는 호출자**가 로컬/원격을 가르는 자리다. 스냅샷(3s push) 기준이라
+//  방금 만든 세션은 잠깐 안 보일 수 있는데, 그때는 로컬로 폴백해 `has-session` 이 정직하게 실패한다
+//  — 못 찾은 걸 '로컬에 있다'고 단정해 엉뚱한 세션에 키를 흘리는 일은 없다(id 가 겹칠 수 없으므로).
+export function nodeOfSession(sessionId: string): string | null {
+  for (const [id, st] of states) if (st.sessions.some((s) => s.id === sessionId)) return id;
+  return null;
 }
 
 // 이 노드가 op 를 할 수 있나(#905 C4) — hello.caps 가 근거, 안 보낸 구 노드는 v1 기준선.
@@ -236,8 +247,15 @@ function onNodeMessage(c: NodeConn, raw: unknown, isBinary: boolean): void {
     }
     c.hasDocker = !!m.hasDocker;
     c.caps = nodeCaps(m.caps);   // 미전송(구 노드) → v1 기준선. 기준선 밖 op 는 선언한 노드에만 간다.
-    void touchNode(c.node.id, { platform: m.platform, agentVer: m.agentVer, host: m.host, caps: [...c.caps] })
+    // #1713 — 이 PC 에서 실제로 띄울 수 있는 하네스. 미전송(구 번들) → 기준선(claude·codex·shell)으로 본다.
+    //  세션 폼이 이 값으로 선택지를 거른다 — 없는 하네스를 고르고 [생성하기] 뒤에 502 를 보던 것을 사전에 막는다.
+    c.harnesses = nodeHarnesses(m.harnesses);
+    void touchNode(c.node.id, { platform: m.platform, agentVer: m.agentVer, host: m.host, caps: [...c.caps], harnesses: [...c.harnesses] })
       .catch(() => { /* 비치명 */ });
+    // #1713 — "지금 서빙 중인 번들의 지문". 노드가 이걸 받아 자기와 비교해 스스로 갱신한다.
+    //  구 노드는 모르는 t 를 무시하므로 안전하다(무회귀).
+    try { c.ws.send(JSON.stringify({ t: "helloOk", agentVerLatest: servedAgentVersion() } satisfies GwToNodeMsg)); }
+    catch { /* 전송 실패는 비치명 — 다음 재연결에 다시 알린다 */ }
     return;
   }
   if (m.t === "taskdone") {
@@ -296,7 +314,7 @@ export function setupNodeUpgrade(server: Server): void {
         //  hello 를 받으면 그 노드가 선언한 실제 목록으로 교체된다.
         const c: NodeConn = {
           node, ws: ws as LiveWS, nextReq: 1, pending: new Map(), nextChan: 1, chans: new Map(),
-          lastTouch: Date.now(), hasDocker: false, caps: new Set(NODE_BASELINE_OPS),
+          lastTouch: Date.now(), hasDocker: false, caps: new Set(NODE_BASELINE_OPS), harnesses: [...NODE_BASELINE_HARNESSES],
         };
         conns.set(node.id, c);
         (ws as LiveWS).isAlive = true;

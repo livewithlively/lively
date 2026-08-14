@@ -10,6 +10,8 @@
 //  '기능이 없다' 와 '정책이 무시된다' 는 완전히 다르다. 마스킹 정책이 DB 에 설정돼 있는데 EE 가 없어서
 //  조용히 raw 가 나가면 그건 유출이다. 그래서 코어 shim 은 **정책이 설정돼 있는데 집행할 EE 가 없으면
 //  거부(fail-closed)** 한다 — assertEnterpriseForCompliance() 참조.
+import type express from "express";
+import type { BearerVerifier } from "../auth/bearer.js";
 import type { MaskStyle, FieldMeta, MaskTarget } from "../db/mask.js";
 import type { SourcePolicy } from "../db/firewall.js";
 import type { UnmaskResolution } from "../db/policy.js";
@@ -71,12 +73,47 @@ export interface IngestPolicyHooks {
   invalidateIngestPolicyCache(): void;
 }
 
+/**
+ * 외부 IdP 웹 로그인(SSO/OIDC, #1601) — 조직이 구성원 인증을 IdP 로 통제한다.
+ *
+ * ⚠ 이 훅만 fail-closed 가 아니다. 다른 훅은 '정책이 있는데 집행할 EE 가 없으면 거부'지만, SSO 는 거부하면
+ *  로그인 경로 자체가 막혀 **무료판이 못 쓰는 제품**이 된다(LICENSING.md 신 약속 위반). EE 가 없으면
+ *  SSO 버튼이 안 뜨고 local 계정(auth/local-accounts.ts — 영구 코어 폴백 tier)만 남는 것이 정상 동작이다.
+ *  대신 관리탭이 그 사실을 말한다(OidcSettingsPublic.enterprise_required) — 조용한 실패가 최악이므로.
+ */
+export interface SsoHooks {
+  /** 지금 이 배포에 SSO 가 실제로 쓸 수 있게 설정돼 있는가(로그인 버튼 문구 포함). 미설정이면 null. */
+  ssoProvider(): Promise<{ label: string } | null>;
+  /** SSO 라우트(인가 개시·콜백·계정 갈림길·연결 해제)를 붙인다 — 부팅 시 1회. */
+  registerSsoRoutes(app: express.Express): void;
+  /** 내 IdP 연결 현황('내 로그인 수단' 화면). 비밀번호 보유 여부는 코어(local-accounts)가 답한다. */
+  ssoLinkStatus(memberId: string): Promise<{ linked: boolean; email: string | null }>;
+  /** IdP 연결 해제. 로컬 비밀번호가 없으면 거절한다(해제 즉시 로그인 수단이 0 이 되어 자기 계정에서 잠긴다). */
+  ssoUnlink(memberId: string): Promise<{ ok: true } | { ok: false; reason: "would_lock_out" | "no_member" }>;
+}
+
+/**
+ * 감사로그 CSV 내보내기(#1601) — 감사 제출용 증빙 반출.
+ *
+ * '통계 vs 감사' 경계(위키 ee-boundary-criteria §1-3): 관리탭 [감사 로그] 3탭의 **화면 집계는 코어**,
+ *  그걸 감사 증빙으로 **반출**하는 것이 EE 다. 그래서 EE 미탑재면 화면은 그대로 보이고 CSV 버튼만 404 다.
+ *
+ * ⚠ SSO 와 같은 부류로 fail-closed 가 아니다 — 내보내기가 없다고 데이터가 새지 않는다(오히려 반대다).
+ *  다만 보관기간 정책·prune 은 **코어에 남았다**: 그건 '규제가 요구하는 장기 보존'이 아니라 '개인정보를
+ *  무한정 쌓지 않는 기본 삭제'라, EE 로 옮기면 무료판이 사람 단위 로그를 영원히 쌓는 위험한 제품이 된다.
+ */
+export interface AuditExportHooks {
+  registerAuditExportRoutes(app: express.Express, verifier: BearerVerifier): void;
+}
+
 export interface EnterpriseHooks {
   dbMask?: DbMaskHooks;
   dbMaskPolicy?: DbMaskPolicyHooks;
   dbAudit?: DbAuditHooks;
   pii?: PiiHooks;
   ingestPolicy?: IngestPolicyHooks;
+  sso?: SsoHooks;
+  auditExport?: AuditExportHooks;
 }
 
 let _hooks: EnterpriseHooks = {};

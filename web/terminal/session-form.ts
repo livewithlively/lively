@@ -1,7 +1,7 @@
 // terminal/session-form.ts — 세션 **생성·수정 폼**과 그 부속: 실행 설정 기억(#673/#782) · 초대 피커 · 노드 관리 · 로그인 배너/프로필 안내.
 //  소비자: terminal/{session-list,routes}.ts + 프로젝트·대시보드 탭(배럴 terminal.ts 경유).
 //  import 방향: select-bar(아래층)만 본다. 목록 재렌더는 routes.ts 를 직접 import 하지 않고 아래 훅으로 부른다(순환 방지).
-import { api, appUrl, el, infoPop, personFace, state, toast, visAxisOn } from '../core.js';
+import { api, appUrl, busy, el, infoPop, personFace, state, toast, visAxisOn } from '../core.js';
 import { field, overlay } from '../admin.js';
 import { isTourActive } from '../tour.js';
 import { termUrl } from './select-bar.js';
@@ -149,8 +149,26 @@ function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any;
     if (nodeSel.value) pickerBox.replaceChildren(remoteSubI, el('div', { class: 'caption', text: '노드 로컬 경로 — 노드 머신의 선택한 루트(공유/개인 워크스페이스) 기준입니다.' }));
     else loadPicker();
   };
-  nodeSel.addEventListener('change', paintPicker);
   const harnessSel = el('select', { class: 'term-input ig-sel' }, ...harnesses.map((h) => el('option', { value: h.key }, h.label)));
+  // 실행 위치에 따라 **고를 수 있는 AI 가 달라진다**(#1713). 노드는 남의 PC 라 그 PC 에 깔린 것만 뜬다 —
+  //  노드가 hello 로 보고한 목록(cfg.nodes[].harnesses)을 그대로 쓴다. 종전엔 중앙 기준 목록을 그대로 보여줘서,
+  //  그 노드가 모르는 하네스를 고르고 [생성하기]를 누른 **뒤에야** 알았다(옛 번들 → 502, 바이너리 부재 → 세션 즉사).
+  //  ⚠ 못 고르게만 하고 끝내지 않는다 — 왜 없는지 한 줄로 말해 준다(모르면 '이 AI 는 원래 안 되나?'로 오해한다).
+  const nodeHint = el('div', { class: 'caption', style: 'margin-top:4px' });
+  const paintHarnesses = () => {
+    const n = nodes.find((x) => x.id === nodeSel.value);
+    const allow: string[] | null = n ? (Array.isArray(n.harnesses) && n.harnesses.length ? n.harnesses : null) : null;
+    const want = harnessSel.value;
+    const usable = harnesses.filter((h) => !allow || allow.includes(h.key));
+    harnessSel.replaceChildren(...usable.map((h) => el('option', { value: h.key }, h.label)));
+    harnessSel.value = usable.some((h) => h.key === want) ? want : (usable[0]?.key || '');
+    const missing = allow ? harnesses.filter((h) => !allow.includes(h.key)).map((h) => h.label) : [];
+    nodeHint.textContent = missing.length
+      ? `이 컴퓨터에 설치되지 않아 못 고르는 AI: ${missing.join(' · ')} — 그 PC 에 설치하거나, 노드를 최신으로 다시 켜면 나타납니다.`
+      : '';
+    renderFlags();
+  };
+  nodeSel.addEventListener('change', () => { paintPicker(); paintHarnesses(); });
   const inviteBox = buildInvitePicker(cfg, new Set()); // 기본 비공개(아무도 선택 안 됨)
   // 한 줄 배치(#1145)는 인라인으로도 못 박는다 — styles 는 브라우저가 오래 캐시해 클래스 규칙만으로는
   //  '새 JS + 옛 CSS' 조합에서 레이아웃이 무너진다(실측). 클래스(.term-preset-row)는 그대로 두되 값은 여기서 확정.
@@ -215,9 +233,9 @@ function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any;
   //  효과 없는 컨트롤을 남겨두면 사람은 그게 먹는다고 믿는다 — 자리에 이유를 적어 잠근다.
   const writeVisHost = el('div', {});
   function writeVisLocked() { return modeVal !== 'normal'; }
-  // 「라이블리는 [모드] 모드로 쓰고, 기록은 [기록범위] 범위로 남깁니다.」 — 축이 꺼졌거나 claude 가 아니면 문장을 줄인다.
+  // 「라이블리는 [모드] 모드로 쓰고, 기록은 [기록범위] 범위로 남깁니다.」 — 축이 꺼졌거나 셸이면 문장을 줄인다.
   function paintModeRow() {
-    if (harnessOf().key !== 'claude') { modeRow.replaceChildren(); return; }
+    if (!mcpWired(harnessOf())) { modeRow.replaceChildren(); return; }
     const showVis = visAxisOn('session_cap');
     modeRow.replaceChildren(
       el('span', { class: 'ig-lead', text: '라이블리는' }),
@@ -247,6 +265,12 @@ function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any;
   const advToggle = el('button', { class: 'term-fold', type: 'button', 'data-tour': 'preset' },
     advCaret, el('b', { text: '고급 설정' }), advSum);
   const harnessOf = () => harnesses.find((x) => x.key === harnessSel.value) || {};
+  // 라이블리 모드·기록 범위를 물을 수 있는 하네스인가 — **라이블리 MCP 가 붙는가**로 판정한다(셸만 제외, #1711).
+  //  종전 기준은 `=== 'claude'` 였고 근거는 "codex 는 정적 헤더라 세션 env 를 못 싣는다" 였는데, 그 사이 네 하네스가
+  //  전부 stdio 프록시(`lively mcp`)로 붙게 됐다 — 프록시가 상속한 env(LIVELY_MODE·LIVELY_SESSION_ID)를 읽어
+  //  상류 헤더에 붙이므로 모드·기록범위가 codex·opencode·antigravity 에서도 그대로 선다. 낡은 근거로 컨트롤을
+  //  숨기면 되는 기능을 없는 것처럼 보이게 한다. 셸엔 MCP 자체가 없어 강제할 레일이 없다.
+  const mcpWired = (h: any) => !!h && h.key !== 'shell';
   function advSummary() {
     const h = harnessOf();
     const parts = [h.label || harnessSel.value];
@@ -256,7 +280,7 @@ function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any;
       // 요약줄도 드롭다운과 같은 말로 — 라벨은 '추론강도', 빈 값은 '지난번 그대로'.
       parts.push((f.name === '--model' ? '모델 ' : '추론강도 ') + ((c && c.value) || '지난번 그대로'));
     }
-    if (h.key === 'claude') {
+    if (mcpWired(h)) {
       parts.push((modeOpts.find((m) => m.key === modeVal) || {}).lbl || '일반');
       if (visAxisOn('session_cap')) {
         parts.push(writeVisLocked() ? '기록 안 함'
@@ -302,7 +326,8 @@ function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any;
     }
     autoWrap.style.display = h.hasAutoApprove ? '' : 'none';
     //  기록 범위 축이 꺼져 있으면 아예 안 보인다(#1291) — 고른 값이 강제되지 않는 컨트롤을 남기지 않는다.
-    paintModeRow(); // 라이블리 모드/기록 범위 줄 — claude 가 아니면 아예 안 만든다(#1007+ 정적 헤더·shell 무 MCP)
+    //  (그 판정은 문장 자체를 조립하는 paintModeRow 가 mcpWired() 로 한다 — #1145 이후 이 줄엔 개별 필드가 없다.)
+    paintModeRow(); // 라이블리 모드/기록 범위 줄 — 셸이면 아예 안 만든다(MCP 레일이 없어 강제할 방법이 없다)
     presetSummary();
   }
   harnessSel.addEventListener('change', renderFlags);
@@ -326,7 +351,7 @@ function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any;
 
   // 작업 폴더 = 선택한 루트(공유/개인) 안을 드롭다운으로 재귀 탐색.
   async function loadPicker() {
-    pickerBox.replaceChildren(el('div', { class: 'caption', text: '폴더 불러오는 중…' }));
+    busy(pickerBox, el('div', { class: 'caption', text: '폴더 불러오는 중…' }));
     let data: any;
     try { data = await api('/api/ui/terminal/browse?root=' + encodeURIComponent(rootKey) + '&path=' + encodeURIComponent(pickerPath)); }
     catch (e) { pickerBox.replaceChildren(el('div', { class: 'caption', text: '폴더를 불러오지 못했습니다: ' + e.message })); return; }
@@ -365,6 +390,7 @@ function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any;
     catch (e) { toast('폴더 생성 실패 — ' + e.message, true); }
   }
   paintPicker(); // 스냅샷으로 노드가 복원됐으면 원격 경로 입력, 아니면 폴더 브라우저(#1145)
+  paintHarnesses(); // 그 노드에 없는 AI 는 목록에서 뺀다(#1713) — nodeSel.change 와 같은 짝이라 복원 경로도 새지 않는다
 
   // ── 어떻게 열까요(#1145 안 1) — 웹 / 내 PC. 종전엔 프로젝트 상세에서 드롭다운으로 먼저 고른 뒤에야
   //  모달이 떴다(경로마다 다른 모달). 이제 이 모달 한 장이 두 경우를 다 받는다.
@@ -432,6 +458,8 @@ function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any;
         infoPop('**어느 컴퓨터에서 어떤 AI 로** 실행할지 정합니다.\n\n· **중앙 컴퓨터**(기본) — 내 노트북을 꺼도 세션은 계속 실행됩니다.\n· **내 PC** — 노드로 등록해 두었다면 골라서 그 컴퓨터에서 실행할 수 있습니다.')),
       flagsBox,  // 「모델은 [ ] , 추론강도는 [ ] 를 씁니다.」 — renderFlags 가 채운다
       modeRow),  // 「라이블리는 [ ] 모드로 쓰고, 기록은 [ ] 범위로 남깁니다.」
+    //  #1713 — 고른 컴퓨터에 안 깔려서 못 고르는 AI 안내. 격자 **밖** 한 줄이다(5열 정렬을 깨지 않게).
+    nodeHint,
     profileNoteEl(cfg),
     el('div', { class: 'term-checks', 'data-tour': 'options' }, autoWrap));
   const advOpen = () => { advBody.removeAttribute('hidden'); advCaret.textContent = '▾'; };
@@ -548,7 +576,7 @@ function openNodeManager(view) {
   const codeStyle = 'background:var(--bg-subtle,#0d1117);color:#c9d1d9;padding:10px 12px;border-radius:8px;white-space:pre;overflow-x:auto;font-size:12px;line-height:1.6;margin:6px 0';
 
   async function load() {
-    body.replaceChildren(el('div', { class: 'caption', text: '노드를 불러오는 중…' }));
+    busy(body, el('div', { class: 'caption', text: '노드를 불러오는 중…' }));
     let nodes: any[] = [];
     try { nodes = (await api('/api/ui/nodes')).nodes || []; }
     catch (e) { body.replaceChildren(el('div', { class: 'caption', text: '노드를 불러오지 못했습니다: ' + e.message })); return; }

@@ -10,7 +10,7 @@
 //   pjvContainerCmp)는 R33 이 projects/rows.ts 로 가져갔으므로 **직결**로 받는다(배럴 경유 금지).
 //   드래그 싱글턴(pjvSideDrag·pjvFolderDrag)은 #1404 에서 projects/state.ts 로 내려갔다 — 여기·board·rows·
 //   selection 넷이 함께 읽는 **보기 상태**라 리프가 원래 집이고, 그 덕에 이 모듈의 배럴 되짚기가 사라졌다.
-import { api, el, sv, toast, visAxisOn } from '../core.js';
+import { api, busy, el, sv, toast, visAxisOn } from '../core.js';
 import { overlayBox } from '../learn.js';
 import { pjvApplyToolbarFilters } from './filters.js';
 import { pjvBundleIcon } from './icons.js';
@@ -168,7 +168,7 @@ function pjvListSettingsMenu(menu, close, list, reload, favCtx?: { isFav: boolea
 function pjvListFolderSubmenu(menu, close, list, reload) {
   const back = el('button', { class: 'pjv-menu-item pjv-menu-back', type: 'button' }, el('span', { class: 'pjv-menu-caret', text: '‹' }), el('span', { text: '뒤로' }));
   back.onclick = (e) => { e.stopPropagation(); menu.replaceChildren(); pjvListSettingsMenu(menu, close, list, reload); };
-  menu.replaceChildren(back, el('div', { class: 'pjv-menu-head', text: '폴더로 이동' }), el('div', { class: 'pjv-menu-empty', text: '불러오는 중…' }));
+  busy(menu, back, el('div', { class: 'pjv-menu-head', text: '폴더로 이동' }), el('div', { class: 'pjv-menu-empty', text: '불러오는 중…' }));
   api('/api/ui/v6/project-folders').then((d) => {
     const folders = (d && d.folders) || [];
     menu.replaceChildren(back, el('div', { class: 'pjv-menu-head', text: '폴더로 이동' }));

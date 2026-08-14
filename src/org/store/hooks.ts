@@ -4,7 +4,8 @@ import { itemsPool } from "../../db/client.js";
 import { audit, sha256, type WriteCtx } from "./audit.js";
 
 // ════════ 커스텀 훅 — org_hook ════════
-export type HookHarness = "claude" | "codex" | "openclaw" | "all";
+// #1689 — opencode(#1519 때 누락)·antigravity 보강 · #1701 grok. delivery/shared.ts HOOK_HARNESSES 와 일치 유지.
+export type HookHarness = "claude" | "codex" | "openclaw" | "opencode" | "antigravity" | "grok" | "all";
 export interface OrgHook {
   id: string;
   label: string | null;

@@ -191,39 +191,129 @@ input.emb-num { width: 120px; flex: none; }
 .md-axes-fnode.is-static { border-top: 3px solid var(--mint, #16C79A); }
 @media (max-width: 700px) { .md-axes-biflow { transform: none; } .md-axes-bilab { white-space: normal; text-align: center; } }
 
-/* ── #853 :::shot — 주석 스크린샷(실사 + 번호 핀 + 범례). 절제된 구성: 프레임·소수 핀·2열 범례. ── */
-/* ── #853 :::shot — 위: 구획 박스 스크린샷 / 아래: 번호별 1:1 상세 카드. 본문 폭(800)을 넘겨 크게. ── */
-.md-shot { margin: 22px 0 26px; display: flex; flex-direction: column; gap: 14px;
-  width: 100%; max-width: 100%; }   /* 콘텐츠 컬럼(.docs-body)에 맞춰 담는다 — 전폭 셸(#780)에서 옛 breakout(1120px)이 뷰포트를 넘던 것 제거 */
-.md-shot-imgwrap { position: relative; display: block; border: 1px solid var(--line); border-radius: 12px;
-  overflow: hidden; box-shadow: 0 6px 22px rgba(21,35,59,.12); line-height: 0; }
+/* ── #1107 :::shot v2 — 쉼: 깨끗한 화면 + 파란 번호 마커 / 짚음: 그 영역만 스포트라이트(나머지 딤).
+   제품의 둘러보기(guide-tour) 스포트라이트와 같은 시각언어. 색은 블루 단색(§0.5 컬러 예산). ── */
+.md-shot { margin: 20px 0 24px; display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 100%; }
+.md-shot-stage { position: relative; border: 1px solid var(--line-net); border-radius: 12px; overflow: hidden;
+  background: var(--canvas); box-shadow: 0 1px 2px rgba(21,35,59,.04); line-height: 0; }
 .md-shot-img { width: 100%; height: auto; display: block; }
-/* 5색 팔레트 — 박스·번호·상세카드가 --sc 공유(1:1로 색까지 매칭). */
-.is-c0 { --sc: var(--blue, #2D6BF0); } .is-c1 { --sc: var(--mint-deep, #0FA37E); } .is-c2 { --sc: #C2822F; }
-.is-c3 { --sc: #7A5AF0; } .is-c4 { --sc: #D6584A; }
-/* 구획 박스 — 실제 영역을 감싼다(옅은 채움 + 뚜렷한 테두리 + 좌상단 번호 탭). */
-.md-shot-box { position: absolute; box-sizing: border-box; border: 2.5px solid var(--sc, var(--blue)); border-radius: 9px;
-  background: color-mix(in srgb, var(--sc, var(--blue)) 8%, transparent);
-  box-shadow: 0 1px 7px color-mix(in srgb, var(--sc, var(--blue)) 22%, transparent); }
-.md-shot-bnum { position: absolute; left: -2.5px; top: -2.5px; min-width: 26px; height: 26px; padding: 0 7px;
-  border-radius: 9px 3px 9px 3px; background: var(--sc, var(--blue)); color: #fff; font-size: 14px; font-weight: 800;
-  line-height: 26px; text-align: center; box-shadow: 0 1px 4px rgba(21,35,59,.32); }
-.md-shot-pin { position: absolute; transform: translate(-50%, -50%); width: 26px; height: 26px; border-radius: 50%;
-  background: var(--sc, var(--blue)); color: #fff; font-size: 14px; font-weight: 800; line-height: 26px; text-align: center;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sc, var(--blue)) 26%, transparent), 0 1px 4px rgba(21,35,59,.35); }
-.md-shot-cap { font-size: 12.5px; color: var(--muted, #6b7a90); margin: -2px 0 2px; }
-/* 번호별 상세 카드 — 스크린샷 번호와 1:1(번호·색 일치). */
-.md-shot-details { display: flex; flex-direction: column; gap: 10px; }
-.md-shot-detail { display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: start;
-  padding: 14px 18px; border: 1px solid var(--line); border-left: 4px solid var(--sc, var(--blue));
-  border-radius: 11px; background: var(--bg); }
-.md-shot-dnum { flex: none; width: 27px; height: 27px; border-radius: 8px; background: var(--sc, var(--blue));
-  color: #fff; font-size: 14px; font-weight: 800; line-height: 27px; text-align: center; }
-.md-shot-dmain { min-width: 0; }
-.md-shot-dtitle { font-size: 15px; font-weight: 700; color: var(--ink); line-height: 1.45; }
-.md-shot-dbody { font-size: 14px; color: var(--ink-sub, #40506a); line-height: 1.65; margin: 6px 0 0; }
-.md-shot-dbody + .md-shot-dbody { margin-top: 5px; }
-@media (max-width: 1120px) { .md-shot { width: 100%; } }
+/* 스포트라이트 — 영역 링(블루 2px) + 바깥 전체 딤(대형 box-shadow 한 장, overflow 로 클립).
+   구멍은 스테이지당 하나(v2.2): 구역을 오가면 딤은 그대로 두고 구멍이 미끄러진다 — 꺼짐/켜짐
+   번쩍임 없이 시선만 이동(guide-tour 글라이드와 동일). 좌표 전환은 JS(setOn)가 넣는다. */
+.md-shot-hl { position: absolute; z-index: 1; border-radius: 10px; opacity: 0; pointer-events: none;
+  box-shadow: 0 0 0 2px var(--blue), 0 0 0 9999px rgba(21, 35, 59, .38);
+  transition: opacity var(--dur-base, 150ms) ease, left var(--dur-slow, 250ms) ease, top var(--dur-slow, 250ms) ease,
+    width var(--dur-slow, 250ms) ease, height var(--dur-slow, 250ms) ease; }
+.md-shot-hl.is-on { opacity: 1; }
+/* 구역 히트 영역 — 보이지 않는 포인터 표적(이미지 위 직접 탐색·탭). 시각은 hl·마커가 담당한다. */
+.md-shot-hit { position: absolute; z-index: 1; cursor: pointer; }
+/* 번호 마커 — 유령 배지(백지 + 블루 숫자), 활성만 블루 채움. 데스크톱(hover)은 쉬는 상태에 아예 숨겨
+   화면을 스크린샷 그대로 두고, 이미지를 만지거나 범례를 짚거나 첫 시연(is-demo)일 때만 떠오른다.
+   터치(hover 없음)는 탭 표적이라 항상 노출 — 유령 톤이라 화면을 덜 가린다. */
+.md-shot-marker { position: absolute; z-index: 2; transform: translate(-42%, -42%); width: 23px; height: 23px;
+  padding: 0; border: 0; border-radius: 999px; background: rgba(255, 255, 255, .94); color: var(--blue); cursor: pointer;
+  font-family: inherit; font-size: 12px; font-weight: 800; line-height: 23px; text-align: center;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--blue) 42%, transparent), 0 1px 5px rgba(21, 35, 59, .2);
+  transition: opacity var(--dur-base, 150ms) ease, transform var(--dur-base, 150ms) ease,
+    background-color var(--dur-base, 150ms) ease, color var(--dur-base, 150ms) ease; }
+.md-shot-marker.is-on { background: var(--blue); color: #fff;
+  box-shadow: 0 0 0 2px #fff, 0 1px 6px rgba(21, 35, 59, .28); }
+@media (hover: hover) {
+  .md-shot-marker { opacity: 0; pointer-events: none; }
+  .md-shot-stage:hover .md-shot-marker, .md-shot-stage.has-on .md-shot-marker,
+  .md-shot-stage.is-demo .md-shot-marker, .md-shot-marker:focus-visible { opacity: 1; pointer-events: auto; }
+}
+/* 활성이 있으면 나머지 마커는 물러난다 — 위 hover 노출(1)보다 뒤에 두어 이긴다. */
+.md-shot-stage.has-on .md-shot-marker { opacity: .35; }
+.md-shot-stage.has-on .md-shot-marker.is-on { opacity: 1; transform: translate(-42%, -42%) scale(1.08); }
+.md-shot-marker:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+/* 캡션 줄 — 왼쪽 캡션, 오른쪽 조작 힌트. */
+.md-shot-cap { display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+  font-size: 12.5px; color: var(--muted-head); line-height: 1.5; }
+.md-shot-hint { flex: none; font-size: 12px; color: var(--muted-2); }
+/* 좁은 화면 — 힌트를 아래로 내린다(가로로 붙으면 캡션이 한 글자씩 접힌다). */
+@media (max-width: 700px) { .md-shot-cap { display: block; } .md-shot-hint { display: block; margin-top: 3px; } }
+/* 범례 — 번호와 1:1 부품 목록. 카드가 아니라 조용한 행(hover·활성 = 선택 행 틴트). */
+.md-shot-legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px 20px; }
+.md-shot-part { display: flex; align-items: flex-start; gap: 11px; margin: 0; padding: 10px 12px; border: 0;
+  background: none; border-radius: 9px; text-align: left; cursor: pointer; font-family: inherit;
+  transition: background-color var(--dur-base, 150ms) ease; }
+.md-shot-part:hover, .md-shot-part.is-on { background: var(--bg-sel); }
+.md-shot-part:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.md-shot-pnum { flex: none; width: 20px; height: 20px; margin-top: 1px; border-radius: 999px;
+  background: var(--bg-punch); color: var(--blue); font-size: 11.5px; font-weight: 800; line-height: 20px;
+  text-align: center; transition: background-color var(--dur-base, 150ms) ease, color var(--dur-base, 150ms) ease; }
+.md-shot-part:hover .md-shot-pnum, .md-shot-part.is-on .md-shot-pnum { background: var(--blue); color: #fff; }
+.md-shot-pbody { min-width: 0; display: block; }
+.md-shot-ptitle { display: block; font-size: 14px; font-weight: 700; color: var(--ink); line-height: 1.5; }
+.md-shot-pdesc { display: block; font-size: 13px; font-weight: 500; color: var(--ink-sub); line-height: 1.55; margin-top: 2px; }
+.md-shot-pdesc + .md-shot-pdesc { margin-top: 4px; }
+@media (max-width: 720px) { .md-shot-legend { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) {
+  .md-shot-hl, .md-shot-marker, .md-shot-part, .md-shot-pnum { transition: none; }
+  .md-shot-stage.has-on .md-shot-marker.is-on { transform: translate(-42%, -42%); }
+  /* 첫 시연(JS)이 생략되는 환경 — 마커를 상시 노출해 번호 대응이 시연 없이도 읽히게 한다. */
+  .md-shot-marker { opacity: 1; pointer-events: auto; }
+}
+
+/* ── shot v3(#1107) — 구역 탭 + 요소 콜아웃 패널 ──
+   위 화면은 지도(스포트라이트 유지), 아래는 선택한 구역의 확대 크롭 + 말풍선.
+   말풍선은 절대배치가 아니라 플로우(가로형=위/아래 행, 세로형=오른쪽 열)라 겹침이 없고,
+   안내선(SVG)이 실측 좌표로 말풍선과 화면 속 지점을 잇는다. 색은 블루 단색(컬러 예산 §0.5). */
+.md-shotx-tabs { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 16px; border-bottom: 1px solid var(--line); }
+.md-shotx-tab { display: inline-flex; align-items: center; gap: 7px; padding: 9px 13px 10px; border: 0; background: none;
+  cursor: pointer; font: inherit; font-size: 13.5px; font-weight: 600; color: var(--ink-sub);
+  border-bottom: 2px solid transparent; margin-bottom: -1px; border-radius: 6px 6px 0 0;
+  transition: color .14s ease, background-color .14s ease; }
+.md-shotx-tab:hover { color: var(--ink); background: var(--bg-sel); }
+.md-shotx-tab.is-on { color: var(--blue); border-bottom-color: var(--blue); font-weight: 700; }
+.md-shotx-tno { display: inline-grid; place-items: center; width: 17px; height: 17px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 700; box-shadow: inset 0 0 0 1.2px currentColor; opacity: .72; }
+.md-shotx-tab.is-on .md-shotx-tno { background: var(--blue); color: #fff; box-shadow: none; opacity: 1; }
+.md-shotx-panel { padding: 16px 2px 4px; }
+.md-shotx-lead { margin: 0 0 16px; font-size: 14px; line-height: 1.65; color: var(--ink-sub); }
+.md-shotx-body { position: relative; }
+.md-shotx-body.is-wide { display: flex; flex-direction: column; gap: 30px; }
+/* 말풍선은 JS 가 실측으로 자리를 잡는다(짚는 지점을 따라가되 서로 밀어냄) — 행/열은 그 좌표계일 뿐. */
+.md-shotx-row { position: relative; }
+.md-shotx-body.is-tall { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 30px; align-items: start; }
+.md-shotx-col { position: relative; }
+.md-shotx-row .md-shotx-bl, .md-shotx-col .md-shotx-bl { position: absolute; left: 0; top: 0; }
+.md-shotx-col .md-shotx-bl { width: 100%; }
+/* 확대 크롭 — 같은 스크린샷을 background-position 으로 오려낸다(추가 자산 없음) */
+.md-shotx-crop { position: relative; border: 1px solid var(--line); border-radius: 9px; background-repeat: no-repeat;
+  background-color: #fff; box-shadow: 0 1px 4px rgba(21, 35, 59, .06); }
+.md-shotx-body.is-wide .md-shotx-crop { width: 100%; }
+.md-shotx-body.is-tall .md-shotx-crop { height: 400px; max-height: 52vh; }
+/* 지점 표시는 속이 빈 고리 — 짚은 자리를 가리지 않고 테두리만 두른다(작은 버튼·글자 위에 놓여도 읽힌다). */
+.md-shotx-dot { position: absolute; width: 13px; height: 13px; border-radius: 999px; background: transparent;
+  border: 2.5px solid var(--blue); box-shadow: 0 0 0 1.5px rgba(255, 255, 255, .95), 0 0 0 3.5px rgba(45, 107, 240, .16);
+  transform: translate(-50%, -50%); cursor: default; transition: transform .15s ease, box-shadow .15s ease; z-index: 2; }
+.md-shotx-dot.is-hot { transform: translate(-50%, -50%) scale(1.3);
+  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, .95), 0 0 0 5px rgba(45, 107, 240, .28); }
+/* 말풍선 — 이름(굵게) + 한두 문장. 짝 지점을 짚으면 함께 밝아진다 */
+.md-shotx-bl { position: relative; padding: 10px 13px 11px 27px; border: 1px solid var(--line); border-radius: 9px;
+  background: #fff; box-shadow: 0 1px 3px rgba(21, 35, 59, .05); transition: border-color .15s ease, box-shadow .15s ease; }
+.md-shotx-bl.is-hot { border-color: rgba(45, 107, 240, .55); box-shadow: 0 2px 10px rgba(45, 107, 240, .14); }
+.md-shotx-bn { position: absolute; left: 12px; top: 16.5px; width: 7px; height: 7px; border-radius: 999px; background: var(--blue); }
+.md-shotx-bt { display: block; font-size: 13px; font-weight: 700; color: var(--ink); line-height: 1.5; }
+.md-shotx-bd { display: block; font-size: 12.5px; font-weight: 500; color: var(--ink-sub); line-height: 1.58; margin-top: 2px; }
+/* 안내선 — 말풍선 변에서 화면 속 지점까지, 겹치지 않게 순서 정렬된 직선 */
+.md-shotx-net { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+.md-shotx-line { fill: none; stroke: rgba(45, 107, 240, .40); stroke-width: 1.4; transition: stroke .15s ease; }
+.md-shotx-line.is-hot { stroke: var(--blue); stroke-width: 2; }
+/* 좁은 화면 — 실측 배치를 끄고 평범한 세로 스택으로(선은 의미를 잃으므로 숨긴다). */
+@media (max-width: 700px) {
+  .md-shotx-body.is-tall { grid-template-columns: 1fr; }
+  .md-shotx-body.is-wide { gap: 12px; }
+  .md-shotx-body.is-tall .md-shotx-crop { height: auto; max-height: none; width: 100%; max-width: 360px; margin: 0 auto; }
+  .md-shotx-row, .md-shotx-col { display: flex; flex-direction: column; gap: 10px; height: auto !important; }
+  .md-shotx-row .md-shotx-bl, .md-shotx-col .md-shotx-bl { position: static; width: auto !important; }
+  .md-shotx-net { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .md-shotx-tab, .md-shotx-dot, .md-shotx-bl, .md-shotx-line { transition: none; }
+}
 
 /* 온보딩 connect '지금 하기' 선택 — 중앙 팝업(overlayBox). 웹=추천 / 로컬=개발자용 배지로 구분. */
 .ov-back.ob-choice-back { align-items: center; }   /* 세로도 화면 중앙(짧은 선택 팝업이라 위쪽에 붙지 않게) */

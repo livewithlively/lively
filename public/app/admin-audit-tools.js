@@ -1,6 +1,6 @@
 // admin-audit-tools.ts — #1405 W3: admin-audit.ts 분할 ②.
 //  '툴 사용량' 패널 — 집계 표·기간 창·전용 스타일.
-import { api, cardHead, el, errorNote, relTime, toast, uiText } from './core.js';
+import { api, busy, cardHead, el, errorNote, relTime, toast, uiText } from './core.js';
 import { skeleton } from './ui-primitives.js';
 import { AUD_CUSTOM, audDayEnd, audDayStart, audExportBtn, audExportCsv, audField, audPageSize, audPageSizeField, audPager, audPeriodField, audSelect } from './admin-audit-common.js';
 // ════════ MCP 호출 통계(#318) — 하네스가 어떤 MCP 툴을 어떤 인자로 어느 빈도로 호출했는지 ════════
@@ -117,7 +117,7 @@ async function toolUsagePanel(detail) {
             q.set(k, String(extra[k]));
         return q.toString();
     };
-    detail.replaceChildren(el('div', { class: 'card' }, skeleton('호출 통계를 불러오는 중')));
+    busy(detail, el('div', { class: 'card' }, skeleton('호출 통계를 불러오는 중')));
     const page = Math.max(1, TOOL_USAGE_STATE.page || 1);
     let r;
     try {

@@ -302,7 +302,10 @@ async function pjvBulkRunDefaultsModal(ctx) {
   }));
 
   // 실행기 + 모델 — 세션 모달과 같은 문장 격자. 빈 모델은 '지난번 그대로'(그 뜻 그대로다 — 세션 모달 주석 참조).
-  const HKEYS = ['claude', 'codex'].filter((k) => harnessCat[k]);
+  //  #1695 — 목록은 **서버 카탈로그가 준 것 전부**(셸만 제외)다. 종전엔 ['claude','codex'] 를 여기 하드코딩해,
+  //   배선이 다 끝난 하네스(opencode #1519 · antigravity #1689)가 이 화면에서만 존재하지 않았다.
+  //   폴백 카탈로그(위)가 claude·codex 를 담고 있으므로 서버를 못 읽어도 종전 선택지는 그대로 뜬다.
+  const HKEYS = Object.keys(harnessCat).filter((k) => k !== 'shell');
   const harnessSel = el('select', { class: 'term-input ig-sel' }, ...HKEYS.map((k) => el('option', { value: k, text: harnessCat[k].label || k })));
   const modelSel = el('select', { class: 'term-input ig-sel' });
   const autoCb = el('input', { type: 'checkbox' });

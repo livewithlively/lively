@@ -7,7 +7,7 @@
 //   나머지(saveRuntime·momentToggle·guideInjectToggle·customList·listEditor·pullToolsEditor·writebackEditor·
 //   openGuideViewer·openSectionEditor·reloadSections·orderedSections·moveSection·deleteSectionUi·paintSections)는
 //   캡처를 그대로 유지한 채 injectionMap 안에 남는다.
-import { api, el, errorNote, renderMarkdown, state, toast, uiText } from './core.js';
+import { api, busy, el, errorNote, renderMarkdown, state, toast, uiText } from './core.js';
 import { field, overlay } from './ui-primitives.js';
 import { sectionHead } from './admin-widgets.js';
 // 변경 이력(#1562) — 위키 문서 패널을 그대로 쓴다. 섹션은 knowledge 행이라 같은 엔드포인트가 덮고,
@@ -44,7 +44,7 @@ function previewExpander() {
         btn.textContent = open ? '미리보기 접기 ▴' : '실제 주입되는 전문 미리보기 ▾';
         if (open && !loaded) {
             loaded = true;
-            box.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
+            busy(box, el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
             try {
                 const r = await api('/api/ui/org/hooks/preview');
                 const sp = ((r && r.hooks) || []).find((h) => h.id === 'session-preload');

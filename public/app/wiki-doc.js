@@ -6,7 +6,7 @@
 //  · 피크: 기존 &peek= URL 계약 그대로(뒤로가기=닫힘·딥링크 복원) + ↑↓ 목록 순회 + 좁은 화면은 페이지 이동.
 //  · 드래프트(#/knowledge/new): 만들기 버튼 없음 — 제목+분류가 서면 2초 유휴 자동 생성 → #/k 로 replaceState 승격.
 //  순환 import 금지: core/learn/admin/block-editor/page-decor/wiki-data/wiki-side/wiki-history 만. (wiki.ts → wiki-doc.ts 단방향)
-import { absTime, api, el, errorNote, relTime, renderMarkdown, safeHref, toast } from './core.js';
+import { absTime, api, busy, el, errorNote, relTime, renderMarkdown, safeHref, toast } from './core.js';
 import { skeleton } from './learn.js';
 import { createBlockEditor } from './block-editor.js';
 import { applyCoverBg, openCoverPicker, openEmojiPicker } from './page-decor.js';
@@ -35,7 +35,7 @@ function wkSeedWarn(r) {
 async function buildWikiDoc(container, name, opts = {}) {
     const mode = opts.mode || 'page';
     container.classList.add('wk-doc', 'wk-doc-' + mode);
-    container.replaceChildren(skeleton('문서를 불러오는 중'));
+    busy(container, skeleton('문서를 불러오는 중'));
     let k;
     let hidden = [];
     let pendingRev = null; // #783 이 문서에 검토 대기 중인 수정(있으면) — 응답의 형제 필드라 knowledge 만 꺼내면 유실된다.

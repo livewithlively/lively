@@ -508,7 +508,7 @@
   async function api(path, opts = {}) {
     const headers = authHeaders(opts.headers);
     if (opts.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
-    const res = await fetch(opts.mainOrigin ? path : apiUrl(path), Object.assign({}, opts, { headers }));
+    const res = await fetch(apiUrl(path), Object.assign({}, opts, { headers }));
     const data = await res.json().catch(() => null);
     if (!res.ok) throw new Error(data && data.error || "\uC694\uCCAD \uC2E4\uD328 " + res.status);
     return data;
@@ -551,7 +551,7 @@
   }
   function diagText() {
     return [
-      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build b3f3c107",
+      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build 6cba5390",
       "ua: " + navigator.userAgent,
       "session: " + SESSION_ID + (NODE_ID ? " node=" + NODE_ID : ""),
       "secure: " + window.isSecureContext + " \xB7 exported: " + (/* @__PURE__ */ new Date()).toISOString(),
@@ -568,7 +568,8 @@
   function makeControl(opts) {
     let mode = null;
     let pending = new Uint8Array(0);
-    let inBlock = false, blockNum = "", blockParts = [];
+    let inBlock = false, blockNum = "", blockParts = [], blockAt = 0;
+    const BLOCK_MAX_MS = 1500;
     const outDec = new TextDecoder("utf-8");
     const rawDec = new TextDecoder("utf-8");
     const ascii = (b, s, e) => {
@@ -608,10 +609,17 @@
     function handleLine(s, e0) {
       let e = e0;
       if (e > s && pending[e - 1] === 13) e--;
+      if (inBlock && blockAt && Date.now() - blockAt > BLOCK_MAX_MS) {
+        inBlock = false;
+        blockParts = [];
+        blockAt = 0;
+        if (opts.blockLost) opts.blockLost();
+      }
       if (inBlock) {
         const head2 = ascii(pending, s, Math.min(e, s + 8));
         if ((head2.startsWith("%end ") || head2.startsWith("%error ")) && ascii(pending, s, e).split(" ")[2] === blockNum) {
           inBlock = false;
+          blockAt = 0;
           const SEP = [27, 91, 48, 109, 13, 10];
           let len = 0;
           for (const p of blockParts) len += p.length;
@@ -650,6 +658,7 @@
       const head = ascii(pending, s, Math.min(e, s + 18));
       if (head.startsWith("%begin ")) {
         inBlock = true;
+        blockAt = Date.now();
         blockNum = ascii(pending, s, e).split(" ")[2] || "";
         blockParts = [];
       } else if (head.startsWith("%extended-output ")) {
@@ -696,6 +705,68 @@
   var ctrl = null, didBackfill = false;
   var syncedThisConn = false;
   var pendingPaneState = null, lastStateAt = 0, lastMouseResetAt = 0, lastMouseProbeAt = 0, mouseResetTries = 0;
+  var BACKFILL_WAIT_MS = 900;
+  var MAX_NUDGES = 3;
+  var backfillWatch = null, nudgeTries = 0, needBackfill = false, lastKnownState = null;
+  var wantRedrawCap = false;
+  function clearBackfillWatch() {
+    if (backfillWatch) {
+      clearTimeout(backfillWatch);
+      backfillWatch = null;
+    }
+  }
+  function nudgeSizes(cols, rows) {
+    const c = Math.trunc(cols) || 0, r = Math.trunc(rows) || 0;
+    if (c < 1 || r < 2) return null;
+    return [{ t: "r", c, r: r - 1 }, { t: "r", c, r }];
+  }
+  function isShellCmd(cmd) {
+    const c = String(cmd || "").replace(/^-/, "").replace(/^.*[\\/]/, "").replace(/\.exe$/i, "").toLowerCase();
+    return ["zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "csh", "ash", "powershell", "pwsh", "cmd"].indexOf(c) >= 0;
+  }
+  function captureSafeBackend(st) {
+    if (!st) return false;
+    if (st.mux) return st.mux !== "psmux";
+    return !st.flagsMissing;
+  }
+  function captureAllowed(st) {
+    if (!st) return false;
+    if (captureSafeBackend(st)) return true;
+    return isShellCmd(st.cmd);
+  }
+  function doNudge() {
+    if (++nudgeTries > MAX_NUDGES) return;
+    try {
+      if (fit) fit.fit();
+    } catch (_) {
+    }
+    const msgs = nudgeSizes(term && term.cols, term && term.rows);
+    if (!msgs || !ws || ws.readyState !== 1) return;
+    dlog("nudge", "#" + nudgeTries + " " + msgs[1].c + "x" + msgs[1].r);
+    try {
+      ws.send(JSON.stringify(msgs[0]));
+    } catch (_) {
+    }
+    setTimeout(() => {
+      try {
+        if (ws && ws.readyState === 1) ws.send(JSON.stringify(msgs[1]));
+      } catch (_) {
+      }
+    }, 140);
+    lastCols = 0;
+    lastRows = 0;
+  }
+  function armBackfillWatch() {
+    clearBackfillWatch();
+    backfillWatch = setTimeout(() => {
+      backfillWatch = null;
+      const st = pendingPaneState;
+      if (!st) return;
+      pendingPaneState = null;
+      dlog("backfill", "\uBCF4\uB0B8 \uCEA1\uCC98\uAC00 \uC548 \uB3CC\uC544\uC654\uB2E4 \u2192 \uD06C\uAE30 \uB11B\uC9C0\uB85C \uC7AC\uADF8\uB9AC\uAE30 \uC720\uB3C4");
+      doNudge();
+    }, BACKFILL_WAIT_MS);
+  }
   function parsePaneState(line) {
     const m = {};
     for (const tok of String(line).trim().split(/\s+/)) {
@@ -715,6 +786,11 @@
       btn: btn === 1,
       std: std === 1,
       sgr: sgr === 1,
+      mux: m.mux || "",
+      // 백엔드(tmux|psmux) — 서버가 알려주면 이게 답
+      // 구 노드 번들엔 mux 토큰이 없다 → 지문으로 판별한다: psmux 는 마우스 flag 포맷변수를 구현하지 않아
+      //  `any= btn= std= sgr=` 처럼 **전부 빈 값**으로 온다(실측). tmux 는 0/1 을 준다.
+      flagsMissing: any === null && btn === null && std === null && sgr === null,
       cmd: m.cmd || "",
       // foreground 프로세스 — flag 가 stale 인지 가리는 단서(paneMouseMode)
       cx,
@@ -724,8 +800,7 @@
   }
   function paneMouseMode(st) {
     if (!st || !(st.any || st.btn || st.std)) return "none";
-    const cmd = String(st.cmd || "").replace(/^-/, "").replace(/^.*\//, "").toLowerCase();
-    if (cmd && ["zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh", "csh", "ash"].indexOf(cmd) >= 0) return "none";
+    if (isShellCmd(st.cmd)) return "none";
     return st.any ? "any" : st.btn ? "drag" : "vt200";
   }
   function isMouseReport(d) {
@@ -733,12 +808,18 @@
   }
   function applyPaneState(st) {
     if (!term || !st) return;
+    lastKnownState = st;
     pendingPaneState = st;
     lastStateAt = Date.now();
     try {
       const isAlt = !!(term.buffer && term.buffer.active && term.buffer.active.type === "alternate");
-      if (st.alt && !isAlt) term.write("\x1B[?1049h");
-      else if (!st.alt && isAlt) term.write("\x1B[?1049l");
+      if (st.alt && !isAlt) {
+        dlog("alt", "1049h (\uC571 alt \xB7 \uD074\uB77C normal)");
+        term.write("\x1B[?1049h");
+      } else if (!st.alt && isAlt) {
+        dlog("alt", "1049l (\uC571 normal \xB7 \uD074\uB77C alt)");
+        term.write("\x1B[?1049l");
+      }
     } catch (_) {
     }
     try {
@@ -784,6 +865,7 @@
     if (ws && ws.readyState === 1 && (term.cols !== lastCols || term.rows !== lastRows)) {
       lastCols = term.cols;
       lastRows = term.rows;
+      dlog("fit", term.cols + "x" + term.rows);
       try {
         ws.send(JSON.stringify({ t: "r", c: term.cols, r: term.rows }));
       } catch (_) {
@@ -808,9 +890,20 @@
       } catch (_) {
       }
       if (ctrl && ctrl.isControl()) {
-        try {
-          ws.send(JSON.stringify({ t: "cap", n: BACKFILL_LINES, st: 1 }));
-        } catch (_) {
+        if (!captureSafeBackend(lastKnownState)) {
+          dlog("redraw", "cap \uBCF4\uB958 \u2014 \uC0C1\uD0DC \uC9C8\uC758 \uD6C4 \uD310\uC815(backend=" + (lastKnownState && lastKnownState.mux || "\uBBF8\uC0C1") + ")");
+          wantRedrawCap = true;
+          try {
+            ws.send(JSON.stringify({ t: "st" }));
+          } catch (_) {
+          }
+        } else {
+          dlog("redraw", "cap \uC804\uC1A1(backend=" + lastKnownState.mux + ")");
+          try {
+            ws.send(JSON.stringify({ t: "cap", n: BACKFILL_LINES, st: 1 }));
+            armBackfillWatch();
+          } catch (_) {
+          }
         }
       }
     }
@@ -2180,7 +2273,7 @@
           "\uBB38\uC81C\uAC00 \uC0DD\uACBC\uC744 \uB54C",
           tool("\uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", "\uC785\uB825\uC774 \uC774\uC0C1\uD560 \uB54C(\uD0A4\uB9CC \uB20C\uB7EC\uB3C4 \uAC19\uC740 \uBB38\uC790\uC5F4\uC774 \uB4E4\uC5B4\uAC00\uB294 \uB4F1) \uC544\uB798 \uBC84\uD2BC\uC73C\uB85C \uCD5C\uADFC \uC785\uB825 \uAE30\uB85D\uC744 \uBCF5\uC0AC\uD574 \uC81C\uBCF4\uC5D0 \uBD99\uC5EC \uC8FC\uC138\uC694 \u2014 \uC11C\uBC84\uB85C\uB294 \uC804\uC1A1\uB418\uC9C0 \uC54A\uC544\uC694"),
           el("button", { class: "tbtn", text: "\u{1F50D} \uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", onclick: () => copyText(diagText(), false, true) }),
-          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "b3f3c107 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
+          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "6cba5390 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
         ),
         sec(
           "\uB3C4\uAD6C (\uC624\uB978\uCABD \uC704 \uBC84\uD2BC)",
@@ -2666,10 +2759,16 @@
   var denyRetries = 0;
   var MAX_DENY_RETRIES = 5;
   var sessionEnded = false;
+  var MAX_RECONNECT_ATTEMPTS = 40;
+  var gaveUp = false;
   function scheduleReconnect(label) {
     clearTimeout(reconnectTimer);
-    if (sessionEnded) return;
+    if (sessionEnded || gaveUp) return;
     attempts++;
+    if (attempts > MAX_RECONNECT_ATTEMPTS) {
+      giveUpReconnect();
+      return;
+    }
     try {
       statusEl.textContent = label + (attempts > 1 ? " (" + attempts + "\uD68C\uC9F8)" : "");
       statusEl.className = "status err";
@@ -2677,6 +2776,58 @@
     }
     reconnectTimer = setTimeout(connectNow, reconnectDelay);
     reconnectDelay = Math.min(Math.round(reconnectDelay * 1.6), 5e3);
+  }
+  async function giveUpReconnect() {
+    let retryAfterMs = 0;
+    try {
+      const r = await fetch(apiUrl("/healthz"), { cache: "no-store" });
+      if (r.status === 503) {
+        const ra = Number(r.headers.get("retry-after") || 0);
+        retryAfterMs = Math.min(Math.max(ra > 0 ? ra * 1e3 : 5e3, 1e3), 3e4);
+      }
+    } catch (_) {
+    }
+    if (retryAfterMs) {
+      attempts = 0;
+      reconnectDelay = retryAfterMs;
+      try {
+        statusEl.textContent = "\uC11C\uBC84\uAC00 \uC900\uBE44 \uC911\uC785\uB2C8\uB2E4 \u2014 \uC7A0\uC2DC \uD6C4 \uC790\uB3D9\uC73C\uB85C \uC5F0\uACB0\uB429\uB2C8\uB2E4";
+        statusEl.className = "status err";
+      } catch (_) {
+      }
+      reconnectTimer = setTimeout(connectNow, retryAfterMs);
+      return;
+    }
+    gaveUp = true;
+    clearTimeout(reconnectTimer);
+    try {
+      statusEl.textContent = "\uC5F0\uACB0\uD560 \uC218 \uC5C6\uC74C";
+      statusEl.className = "status err";
+    } catch (_) {
+    }
+    showRetryBar();
+  }
+  function showRetryBar() {
+    if (document.getElementById("retry-bar")) return;
+    const bar = el(
+      "div",
+      { class: "ended-bar", id: "retry-bar" },
+      el("span", { text: "\uC11C\uBC84\uC5D0 \uC5F0\uACB0\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uB124\uD2B8\uC6CC\uD06C\uB098 \uAC8C\uC774\uD2B8\uC6E8\uC774 \uC0C1\uD0DC\uB97C \uD655\uC778\uD55C \uB4A4 \uB2E4\uC2DC \uC2DC\uB3C4\uD574 \uC8FC\uC138\uC694." }),
+      el("button", {
+        class: "gate-retry",
+        text: "\uB2E4\uC2DC \uC2DC\uB3C4",
+        onclick: () => {
+          const b = document.getElementById("retry-bar");
+          if (b && b.parentNode) b.parentNode.removeChild(b);
+          gaveUp = false;
+          attempts = 0;
+          reconnectDelay = 1500;
+          connectNow();
+        }
+      })
+    );
+    const root = document.getElementById("root");
+    if (root) root.insertBefore(bar, root.firstChild);
   }
   function endSession(opts) {
     if (sessionEnded) return;
@@ -2764,11 +2915,11 @@
       return;
     }
     if (mode === "ask") {
-      const shellish = !!(meta.harness && meta.harness !== "claude");
-      endSession(shellish ? {
+      const noResume = meta.harness === "shell";
+      endSession(noResume ? {
         info: true,
         title: "\uC774 \uC138\uC158\uC740 \uC885\uB8CC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.",
-        body: "\uC774\uC5B4\uBC1B\uC744 \uB300\uD654\uAC00 \uC5C6\uB294 \uC138\uC158(" + (meta.harness === "shell" ? "\uC178" : meta.harness) + ")\uC774\uC5D0\uC694. \uAC19\uC740 \uD3F4\uB354\xB7\uC124\uC815\uC73C\uB85C \uB2E4\uC2DC \uC5F4 \uC218 \uC788\uC2B5\uB2C8\uB2E4.",
+        body: "\uC774\uC5B4\uBC1B\uC744 \uB300\uD654\uAC00 \uC5C6\uB294 \uC138\uC158(\uC178)\uC774\uC5D0\uC694. \uAC19\uC740 \uD3F4\uB354\xB7\uC124\uC815\uC73C\uB85C \uB2E4\uC2DC \uC5F4 \uC218 \uC788\uC2B5\uB2C8\uB2E4.",
         restoreBtn: true,
         restoreLabel: "\uB2E4\uC2DC \uC5F4\uAE30"
       } : meta.exitedByUser ? {
@@ -2835,14 +2986,14 @@
     connecting = true;
     clearTimeout(reconnectTimer);
     try {
-      await api("/api/ui/terminal/ticket", { method: "POST", mainOrigin: true });
+      await api("/api/ui/terminal/ticket", { method: "POST" });
     } catch (e) {
       connecting = false;
       scheduleReconnect("\uAC8C\uC774\uD2B8\uC6E8\uC774 \uC751\uB2F5 \uC5C6\uC74C \u2014 \uC7AC\uC5F0\uACB0 \uC911\u2026");
       return;
     }
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const sock = new WebSocket(proto + "://" + location.host + "/terminal/ws?session=" + encodeURIComponent(SESSION_ID) + nodeQ("&"));
+    const sock = new WebSocket(proto + "://" + location.host + apiUrl("/terminal/ws") + "?session=" + encodeURIComponent(SESSION_ID) + nodeQ("&"));
     sock.binaryType = "arraybuffer";
     ws = sock;
     ctrl = makeControl({
@@ -2856,7 +3007,32 @@
       state: (line) => {
         try {
           dlog("state", diagPreview(line, 96));
-          applyPaneState(parsePaneState(line));
+          const st = parsePaneState(line);
+          applyPaneState(st);
+          const wantCap = needBackfill || wantRedrawCap;
+          needBackfill = false;
+          wantRedrawCap = false;
+          if (!wantCap) return;
+          if (!captureAllowed(st)) {
+            dlog("backfill", "\uCEA1\uCC98 \uBD88\uAC00(psmux + \uC571 \uD32C) \u2192 \uB11B\uC9C0\uB85C \uC7AC\uADF8\uB9AC\uAE30 \xB7 cmd=" + (st.cmd || "?"));
+            doNudge();
+            return;
+          }
+          try {
+            if (ws && ws.readyState === 1) {
+              ws.send(JSON.stringify({ t: "cap", n: BACKFILL_LINES, st: 1 }));
+              armBackfillWatch();
+            }
+          } catch (_) {
+          }
+        } catch (_) {
+        }
+      },
+      // 닫히지 않는 블록을 포기했다 — 백필은 오지 않는다. 앱이 스스로 다시 그리게 넛지한다.
+      blockLost: () => {
+        try {
+          dlog("backfill", "\uBBF8\uC644\uACB0 \uBE14\uB85D \uD3EC\uAE30 \u2192 \uB11B\uC9C0\uB85C \uC7AC\uADF8\uB9AC\uAE30 \uC720\uB3C4");
+          doNudge();
         } catch (_) {
         }
       },
@@ -2864,6 +3040,7 @@
       //  attach~capture 사이에 먼저 흘러든 라이브 %output 과 겹쳐 줄이 중복되는 것을 막는다. 이후 라이브는 그대로 append.
       backfill: (text) => {
         try {
+          clearBackfillWatch();
           const st = pendingPaneState;
           pendingPaneState = null;
           dlog("backfill", "len=" + text.length + (st ? " +state" : ""));
@@ -2894,7 +3071,12 @@
       reconnectDelay = 1500;
       denyRetries = 0;
       attempts = 0;
+      gaveUp = false;
       syncedThisConn = false;
+      nudgeTries = 0;
+      needBackfill = !didBackfill;
+      wantRedrawCap = false;
+      lastKnownState = null;
       mouseResetTries = 0;
       statusEl.textContent = "\uC5F0\uACB0\uB428";
       statusEl.className = "status ok";
@@ -2919,7 +3101,7 @@
         if (!didBackfill) {
           didBackfill = true;
           try {
-            sock.send(JSON.stringify({ t: "cap", n: BACKFILL_LINES, st: 1 }));
+            sock.send(JSON.stringify({ t: "st" }));
           } catch (_) {
           }
         } else if (!syncedThisConn) {
@@ -2946,6 +3128,10 @@
         }
         clearTimeout(reconnectTimer);
         gate("\uC774 \uC138\uC158\uC5D0 \uC785\uC7A5\uD560 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.\n\n\uD504\uB85C\uC81D\uD2B8 \uD300\uC6D0\uB9CC \uC785\uC7A5\uD560 \uC218 \uC788\uC5B4\uC694. \uB610\uB294 \uC774 \uC138\uC158\uC774 \uB354 \uC774\uC0C1 \uD504\uB85C\uC81D\uD2B8\uC5D0 \uC5F0\uACB0\uB418\uC5B4 \uC788\uC9C0 \uC54A\uC744 \uC218 \uC788\uC2B5\uB2C8\uB2E4(\uD3F4\uB354 \uC774\uB3D9\xB7\uD504\uB85C\uC81D\uD2B8 \uC0AD\uC81C \uB4F1). \uD504\uB85C\uC81D\uD2B8 \uD398\uC774\uC9C0\uC5D0\uC11C \uC138\uC158\uC744 \uB2E4\uC2DC \uD655\uC778\uD574 \uC8FC\uC138\uC694.");
+        return;
+      }
+      if (e && e.code === 4462) {
+        scheduleReconnect("\uC774 \uC138\uC158\uC758 \uB178\uB4DC\uAC00 \uC5F0\uACB0\uB3FC \uC788\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4 \u2014 \uC7AC\uC5F0\uACB0 \uC911\u2026");
         return;
       }
       scheduleReconnect(wasConnected ? "\uC5F0\uACB0 \uB04A\uAE40 \u2014 \uC7AC\uC5F0\uACB0 \uC911\u2026" : "\uC7AC\uC5F0\uACB0 \uC911\u2026");

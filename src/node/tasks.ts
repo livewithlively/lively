@@ -62,6 +62,24 @@ export async function detectDocker(): Promise<boolean> {
   catch { return false; }
 }
 
+// 이 PC 에서 **실제로 세션을 띄울 수 있는** 하네스(#1713) — 이 번들의 카탈로그 ∩ PATH 에 있는 실행 파일.
+//  게이트웨이는 남의 PC 에 무엇이 깔렸는지 알 방법이 없다. 그래서 노드가 hello 로 직접 답하고, 세션 폼이 그걸로
+//  선택지를 거른다 — 종전엔 사용자가 [생성하기]를 누른 **뒤에야** 알았다(옛 번들이면 502 "허용되지 않은 하네스",
+//  바이너리가 없으면 세션이 뜨자마자 즉사).
+//  ⚠ 판정은 `--version` 1회(네 하네스 모두 무부작용). 노드 기동 시 한 번만 도는 자리다.
+//  ⚠ Windows 는 claude·codex 가 .cmd 셰임이라 shell 없이는 ENOENT 다(work.mjs 가 같은 이유로 shell:true 를 쓴다).
+export async function detectHarnesses(): Promise<string[]> {
+  const out: string[] = [];
+  for (const h of HARNESSES) {
+    if (!h.bin) { out.push(h.key); continue; }   // 셸 — 실행 파일이 필요 없다(어느 PC 에서나 열린다)
+    try {
+      await execFileAsync(h.bin, ["--version"], { timeout: 5000, shell: process.platform === "win32" });
+      out.push(h.key);
+    } catch { /* 없거나 못 뜬다 → 이 노드에선 못 연다. 목록에서 빠지는 것이 곧 사실이다(추측해서 넣지 않는다) */ }
+  }
+  return out;
+}
+
 // ── 태스크 스폰 ──
 export interface RunTaskInput {
   user: LivelyUser;            // 의뢰자(과금·귀속 신원 — D1: 의뢰자 시트)
@@ -81,9 +99,91 @@ export interface RunTaskInput {
 }
 export interface RunTaskResult { sessionId: string; taskDir: string; workspace: string }
 
-const FLAG_WHITELIST = new Map((HARNESSES.find((h) => h.key === "claude")?.flags ?? []).map((f) => [f.name, f]));
+// 플래그 화이트리스트는 **그 하네스의 것**이다(#1710) — 종전엔 claude 것 하나로 모든 위탁을 검사해,
+//  다른 하네스의 유효한 값이 거부되거나 그 하네스에 없는 플래그가 통과할 수 있었다.
+const flagWhitelist = (key: string): Map<string, { name: string; type: string; choices?: string[]; label: string }> =>
+  new Map((HARNESSES.find((h) => h.key === key)?.flags ?? []).map((f) => [f.name, f]));
 
-export function taskScript(bin: string, flags: string[], taskDir: string): string {
+// ── 위탁 헤드리스 규약(#1710) ────────────────────────────────────────────────────────
+// 위탁은 대화형 세션이 아니라 **한 번의 헤드리스 실행**이라, 세션 카탈로그(catalog.ts)의 축과 다른 것이 필요하다:
+//  ① 프롬프트를 어떻게 넣나(stdin ↔ argv) ② 진행 스트림을 어떤 형식으로 뱉나 ③ 최종 텍스트를 어디서 뽑나.
+// 종전엔 이 셋이 전부 claude 규약으로 스크립트 한 줄에 박혀 있었고, 그래서 `harness.key !== "claude"` 로
+// 위탁 자체를 막고 있었다(v1). 아래 값은 전부 실측이다(2026-08-14, 각 하네스 --help + 실제 1회 실행):
+//
+//  claude       `claude -p … --output-format stream-json --verbose` · stdin ○ · `{type:"result", result:"…"}`
+//  codex        `codex exec --json …`                                · stdin ○ · `{type:"item.completed", item:{type:"agent_message", text}}`
+//  antigravity  `agy --print "<프롬프트>" --output-format stream-json` · stdin **✗**(flag needs an argument) · `{event:"result", result:{response}}`
+//  grok         `grok --prompt-file <p> --output-format streaming-messages-json` · stdin ✗ 대신 **--prompt-file**(argv 상한 무관) · `{type:"result", result:"…"}`
+//  opencode     `opencode run --format json "<메시지>"`                · **표에 없다** — 아래 참조
+//
+// ⚠ opencode 를 넣지 않은 이유(정직 표기): 규약(`run` 서브커맨드 · `--format json`)은 --help 로 알지만,
+//  이 머신에서 실제로 돌려 보니 **25분 넘게 stdout·stderr 한 바이트도 없이 매달렸다**(자격·모델 미설정 추정).
+//  그 상태로 위탁을 열면 워커가 조용히 매달려 타임아웃(1h)까지 '실행 중'이 된다 — 위탁에서 가장 나쁜 실패다.
+//  스키마를 실측하고 응답을 받아 본 뒤에 한 줄 추가하면 열린다(그때 task-script.test 의 S4·S5·S10 도 함께).
+//
+// ⚠ stdin 을 못 받는 하네스는 프롬프트가 argv 로 간다 → 리눅스 MAX_ARG_STRLEN(131,072B) 상한에 걸린다.
+//  그 실패는 **하네스가 실행조차 안 되는** 형태라 조용하다(stream 0줄·배치 무한 재시도, #1289 사고와 동형).
+//  그래서 그런 하네스는 접수 시점에 크기를 재서 **미리 거부**한다(spawnTaskSession) — 뒤늦게 죽게 두지 않는다.
+export interface HeadlessSpec {
+  /** 하네스 실행 부분(리다이렉션 앞까지). promptPath 는 숫자 taskId 로만 구성된 화이트리스트 경로다. */
+  run: (bin: string, flags: string, promptPath: string) => string;
+  /** 진행 스트림(JSONL)에서 최종 응답 텍스트를 뽑는다 — 스키마가 하네스마다 다르다. */
+  extract: (jsonl: string) => string;
+  /** 프롬프트가 argv 로 가는 하네스인가(=크기 상한이 걸린다). */
+  promptViaArgv?: boolean;
+}
+// 뒤에서부터 첫 매치를 찾는다 — 최종 결과는 항상 스트림 끝에 있고, 중간에 같은 모양이 반복될 수 있다.
+const lastMatch = (jsonl: string, pick: (ev: Record<string, unknown>) => string | null): string => {
+  const lines = jsonl.split("\n").filter((l) => l.trim());
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const got = pick(JSON.parse(lines[i]) as Record<string, unknown>);
+      if (got != null) return got;
+    } catch { /* 부분 줄·비JSON 무시 */ }
+  }
+  return "";
+};
+export const HEADLESS: Record<string, HeadlessSpec> = {
+  claude: {
+    run: (bin, f, p) => `${bin} -p ${f} --output-format stream-json --verbose --dangerously-skip-permissions < "${p}"`,
+    extract: (j) => lastMatch(j, (ev) => (ev.type === "result" ? (typeof ev.result === "string" ? ev.result : JSON.stringify(ev)) : null)),
+  },
+  codex: {
+    // exec = codex 의 헤드리스 서브커맨드. `--json` 이 진행 이벤트를 JSONL 로 뱉고, 프롬프트는 stdin 으로 받는다
+    //  ("instructions are read from stdin" — --help). 승인 우회는 세션의 --yolo 가 아니라 이 플래그다.
+    run: (bin, f, p) => `${bin} exec --json --dangerously-bypass-approvals-and-sandbox ${f} < "${p}"`,
+    extract: (j) => lastMatch(j, (ev) => {
+      const it = ev.item as { type?: string; text?: string } | undefined;
+      return ev.type === "item.completed" && it?.type === "agent_message" && typeof it.text === "string" ? it.text : null;
+    }),
+  },
+  antigravity: {
+    // ⚠ agy 는 `--print` 가 **값을 요구**한다(`--print < file` 은 "flag needs an argument" 로 exit 2). 그래서
+    //  프롬프트를 명령치환으로 넣는다 — 큰따옴표 안이라 셸이 내용을 재해석하지 않는다(단어분할·글롭 없음).
+    //  ⚠ `[ -s ]` 가드는 장식이 아니다: stdin 리다이렉션(`< file`)은 파일이 없으면 **셸이 그 자리에서 실패**시키는데,
+    //   명령치환은 cat 이 실패해도 **빈 프롬프트로 하네스가 그냥 돌아** exit 0 이 된다 → 빈 배치가 '성공'으로 집계된다.
+    //   그 무증상 성공은 실패보다 나쁘다(#1289 의 교훈: 실패는 반드시 exit 에 남아야 한다).
+    run: (bin, f, p) => `[ -s "${p}" ] && ${bin} --print "$(cat "${p}")" ${f} --output-format stream-json --dangerously-skip-permissions`,
+    extract: (j) => lastMatch(j, (ev) => {
+      const r = ev.result as { response?: string } | undefined;
+      return ev.event === "result" && typeof r?.response === "string" ? r.response : null;
+    }),
+    promptViaArgv: true,
+  },
+  grok: {
+    // grok 헤드리스는 **stdin 프롬프트를 읽지 않지만**(문서·#1701 실측) `--prompt-file` 이 있어 argv 상한도
+    //  안 걸린다(경로만 argv 로 간다). streaming-messages-json 은 Messages 호환 JSONL 로 진행을 뱉고 마지막 줄이
+    //  `{type:"result", subtype:"success", result:"…"}` — claude 의 stream-json 과 같은 추출 스키마다
+    //  (실측 2026-08-14, grok 1.0.3 실계정 1회 실행). `[ -s ]` 가드는 antigravity 와 같은 이유: 빈/부재 프롬프트로
+    //  하네스가 그냥 돌아 exit 0 이 되는 무증상 성공을 막는다(실패는 반드시 exit 에 남아야 한다 — #1289).
+    run: (bin, f, p) => `[ -s "${p}" ] && ${bin} --prompt-file "${p}" ${f} --output-format streaming-messages-json --always-approve`,
+    extract: (j) => lastMatch(j, (ev) => (ev.type === "result" ? (typeof ev.result === "string" ? ev.result : JSON.stringify(ev)) : null)),
+  },
+};
+// argv 로 프롬프트를 넘기는 하네스의 상한 — 실측 상한(131,072B)에서 인자·환경 몫을 빼고 여유를 둔다.
+export const ARGV_PROMPT_MAX = 100_000;
+
+export function taskScript(harnessKey: string, bin: string, flags: string[], taskDir: string): string {
   // 사용자 텍스트는 프롬프트 파일 안에만 있다 — 이 문자열의 가변부는 숫자/화이트리스트 경로뿐.
   //  stream-json = 진행 이벤트를 stream.jsonl 에 줄단위 append → logs tail(파일 오프셋)로 실시간 미러(§11).
   //  최종 결과(type=result)도 그 마지막 줄에 온다. exec $SHELL 로 세션 잔존(실패 시 사후 검시).
@@ -96,7 +196,9 @@ export function taskScript(bin: string, flags: string[], taskDir: string): strin
   //  파이프(`cat … | bin`)가 아니라 리다이렉션인 이유: 파이프라인의 $? 는 마지막 명령의 것이라 cat 실패가
   //  통째로 가려진다. `< file` 은 파일이 없으면 셸이 그 자리에서 실패시키고 그 코드가 그대로 exit 에 남는다.
   const f = flags.join(" ");
-  return `cd "$LIVELY_TASK_WS" && ${bin} -p ${f} --output-format stream-json --verbose --dangerously-skip-permissions < "${taskDir}/prompt.txt" > "${taskDir}/stream.jsonl" 2> "${taskDir}/stderr.log"; echo $? > "${taskDir}/exit"; exec "\${SHELL:-sh}"`;
+  const spec = HEADLESS[harnessKey];
+  if (!spec) throw new Error(`위탁을 지원하지 않는 하네스입니다: ${harnessKey}`);
+  return `cd "$LIVELY_TASK_WS" && ${spec.run(bin, f, `${taskDir}/prompt.txt`)} > "${taskDir}/stream.jsonl" 2> "${taskDir}/stderr.log"; echo $? > "${taskDir}/exit"; exec "\${SHELL:-sh}"`;
 }
 
 // 위탁 작업 폴더(.lively-task/<id>) 준비 — 워커가 결과를 쓸 수 있는 상태로 만든다. 테스트 seam(tasks.test).
@@ -127,7 +229,21 @@ export async function prepareTaskDir(baseWs: string, sharedBase: string, taskId:
 export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResult> {
   if (input.rootKey !== "shared") throw new Error("위탁 워크스페이스는 공유 루트(shared)만 지원합니다(v1)");
   const harness = HARNESSES.find((h) => h.key === input.harness);
-  if (!harness || harness.key !== "claude") throw new Error("위탁 하네스는 claude 만 지원합니다(v1)");
+  // #1710 — 위탁 가능 여부는 '헤드리스 규약을 아는가'(HEADLESS 표)로 판정한다. 종전엔 `!== "claude"` 로 잠겨 있어,
+  //  세션은 네 하네스로 열리는데 **위탁만 claude 전용**이었다. 표에 없는 하네스는 규약을 실측하지 않은 것이므로
+  //  추측해서 열지 않는다 — 무엇을 지원하는지 이름으로 알려준다.
+  const spec = harness ? HEADLESS[harness.key] : undefined;
+  if (!harness || !spec) {
+    throw new Error(`위탁을 지원하지 않는 하네스입니다: ${input.harness}(지원: ${Object.keys(HEADLESS).join(", ")})`);
+  }
+  // ⚠ 프롬프트가 argv 로 가는 하네스(agy 등)는 exec 인자 상한에 걸린다. 그 실패는 **하네스가 실행조차 안 되는**
+  //  형태라 조용하다(stream 0줄 → 배치가 같은 프롬프트를 영원히 재시도). 접수 시점에 재서 미리 거절한다.
+  if (spec.promptViaArgv) {
+    const bytes = Buffer.byteLength(input.prompt ?? "", "utf8");
+    if (bytes > ARGV_PROMPT_MAX) {
+      throw new Error(`프롬프트가 ${harness.label} 위탁 상한을 넘습니다(${bytes.toLocaleString()}B > ${ARGV_PROMPT_MAX.toLocaleString()}B) — 이 하네스는 프롬프트를 실행 인자로만 받습니다(stdin 미지원). 프롬프트를 줄이거나 claude·codex 로 위탁하세요.`);
+    }
+  }
   const user = input.user;
   const id = `${sessionPrefix(user)}${crypto.randomBytes(4).toString("hex")}`; // box-<slug>-hex — 세션 목록/가시성 규칙에 그대로 편입
   // 격리 게이트 — createSession 과 동일 seam(#524): Linux+인프라면 box_ 유저로 drop, 아니면 null(비격리 폴백).
@@ -145,10 +261,11 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
   }
   const taskDir = await prepareTaskDir(baseWs, sharedBase, input.taskId, input.prompt);
 
-  // 플래그 화이트리스트(--model/--effort, 카탈로그 choices 만) — createSession 과 동일 원칙.
+  // 플래그 화이트리스트(--model/--effort, 카탈로그 choices 만) — createSession 과 동일 원칙. **그 하네스의 표**로 검사한다(#1710).
+  const whitelist = flagWhitelist(harness.key);
   const flags: string[] = [];
   for (const [name, raw] of Object.entries(input.flags ?? {})) {
-    const def = FLAG_WHITELIST.get(name);
+    const def = whitelist.get(name);
     const v = String(raw ?? "");
     if (!def || !v || (def.choices && !def.choices.includes(v))) continue;
     flags.push(name, v);
@@ -166,7 +283,7 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
     if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(k)) continue;
     args.push("-e", `${k}=${v}`);
   }
-  const script = taskScript(harness.bin, flags, taskDir);
+  const script = taskScript(harness.key, harness.bin, flags, taskDir);
   if (osUser) {
     args.push(...wrapAsMember(osUser, ["sh", "-lc", script], workspace));
   } else {
@@ -200,26 +317,29 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
     const cap = await deriveWriteCap(workspace);
     if (cap !== "open") await tmux(["set-option", "-t", id, "@box_write_vis", cap]);
   } catch { /* 비치명 — 조회 시점 파생으로 폴백 */ }
+  // 위탁 세션은 초대 없음(의뢰자 전용). ⚠ 여기만 평문 "[]" 인 이유: 빈 배열엔 따옴표가 없어 psmux 에서도
+  //  무손실이고(#1541), decodeOptJson 이 `[` 로 시작하는 값을 레거시 평문 경로로 정확히 읽는다. 이 한 값 때문에
+  //  노드 번들에 tmux-exec 의존을 새로 들이지 않는다.
   await tmux(["set-option", "-t", id, "@box_invites", "[]"]);
   return { sessionId: id, taskDir, workspace };
 }
 
 // ── 완료 감지·수집 — exit 파일 등장 = 종결. 결과는 상한(8KB)으로 잘라 보고(전문은 taskDir 에 남는다). ──
-export interface TaskWatch { taskId: number; sessionId: string; taskDir: string }
+//  harness — 결과 스키마가 하네스마다 다르므로 **무엇으로 돌렸는지**를 함께 들고 다녀야 최종 텍스트를 뽑을 수 있다(#1710).
+//  구 레코드(값 없음)는 claude 로 본다 — 그때는 claude 전용이었으므로 그게 사실이다.
+export interface TaskWatch { taskId: number; sessionId: string; taskDir: string; harness?: string }
 export interface TaskOutcome { taskId: number; ok: boolean; exit: number | null; summary?: string; error?: string }
 
 const SUMMARY_CAP = 8 * 1024;
 
-// stream.jsonl 의 마지막 type=result 이벤트에서 최종 텍스트를 뽑는다(claude stream-json 규약).
+// 진행 스트림에서 최종 텍스트를 뽑는다 — **하네스별 스키마**(HEADLESS.extract)로(#1710).
+//  종전엔 claude 의 `type=result` 하나만 알아서, 다른 하네스로 돌린 위탁은 요약이 통째로 빈 값이 됐다.
 //  못 찾으면 마지막 비어있지 않은 줄(진행 중 크래시 등) — 요약 목적이라 근사로 충분.
-function extractResult(streamJsonl: string): string {
+function extractResult(streamJsonl: string, harnessKey?: string): string {
+  const spec = HEADLESS[harnessKey || "claude"] ?? HEADLESS.claude;
+  const got = spec.extract(streamJsonl);
+  if (got) return got;
   const lines = streamJsonl.split("\n").filter((l) => l.trim());
-  for (let i = lines.length - 1; i >= 0; i--) {
-    try {
-      const ev = JSON.parse(lines[i]) as { type?: string; result?: unknown; is_error?: boolean };
-      if (ev.type === "result") return typeof ev.result === "string" ? ev.result : JSON.stringify(ev);
-    } catch { /* 부분 줄 — 계속 위로 */ }
-  }
   return lines.length ? lines[lines.length - 1] : "";
 }
 
@@ -231,7 +351,7 @@ export async function checkTask(w: TaskWatch): Promise<TaskOutcome | null> {
   const code = Number.isFinite(exit) ? exit : null;
   let stream = "";
   try { stream = await fsp.readFile(path.join(w.taskDir, "stream.jsonl"), "utf8"); } catch { /* 결과 없음 */ }
-  const summary = extractResult(stream).slice(0, SUMMARY_CAP);
+  const summary = extractResult(stream, w.harness).slice(0, SUMMARY_CAP);
   if (code === 0) return { taskId: w.taskId, ok: true, exit: code, summary };
   let err = "";
   try { err = (await fsp.readFile(path.join(w.taskDir, "stderr.log"), "utf8")).slice(-2048); } catch { /* noop */ }

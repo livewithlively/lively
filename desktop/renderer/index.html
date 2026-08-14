@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <!-- CSP: 인라인 스크립트 금지·외부 로드 금지. 렌더러가 원격 코드를 실행할 길을 아예 없앤다. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self';" />
+  <title>라이블리</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <div class="dot" id="dot"></div>
+    <div>
+      <h1 id="status">확인 중…</h1>
+      <p class="sub" id="sub"></p>
+    </div>
+  </header>
+
+  <main>
+    <!-- 게이트웨이 주소 — 아직 모를 때만 -->
+    <section id="gw-card" class="card hidden">
+      <h2 id="gw-title">회사 게이트웨이 주소</h2>
+      <p class="hint" id="gw-hint">관리자에게 받은 주소를 넣으면 브라우저로 로그인합니다.</p>
+      <div class="row">
+        <input id="gw" type="url" placeholder="https://..." spellcheck="false" />
+        <button id="gw-go" class="primary">연결</button>
+      </div>
+      <!-- 앱이 무엇을 실행하는지 숨기지 않는다 — 설치는 원격 코드 실행이다. -->
+      <p class="hint mono" id="gw-preview"></p>
+      <p class="err" id="gw-err"></p>
+    </section>
+
+    <!-- 완료 -->
+    <section id="done-card" class="card hidden">
+      <h2>설치가 끝났습니다</h2>
+      <p class="hint">이제 아무 폴더에서든 <b>claude</b> 를 켜면 회사 맥락이 따라옵니다.
+        이미 켜 둔 터미널이 있으면 껐다 켜세요(훅은 세션 시작에 스냅샷됩니다).</p>
+      <div class="row"><button id="done-web" class="ghost">웹에서 보기</button></div>
+    </section>
+
+    <!-- 진행 -->
+    <section id="progress-card" class="card hidden">
+      <h2 id="progress-title">진행 중</h2>
+      <div class="bar"><div id="bar-fill"></div></div>
+      <ul id="steps"></ul>
+      <div class="row">
+        <button id="cancel" class="ghost">취소</button>
+        <!-- 실패했을 때만 — 무엇을 다시 할지는 메인이 기억한다(렌더러가 정하지 않는다). -->
+        <button id="retry" class="primary hidden">다시 시도</button>
+      </div>
+    </section>
+
+    <!-- 사람 확인 -->
+    <section id="prompt-card" class="card hidden">
+      <h2 id="prompt-label"></h2>
+      <div id="prompt-device" class="hidden">
+        <p class="hint">브라우저에서 아래 코드를 확인하고 승인하세요.</p>
+        <p class="code" id="device-code"></p>
+        <a href="#" id="device-link" class="link"></a>
+      </div>
+      <div id="prompt-confirm" class="row hidden">
+        <button id="prompt-yes" class="primary">예</button>
+        <button id="prompt-no" class="ghost">아니오</button>
+      </div>
+    </section>
+
+    <!-- 노드 -->
+    <section id="node-card" class="card hidden">
+      <h2>이 PC 를 노드로</h2>
+      <p class="hint">웹에서 이 PC 의 터미널을 열고, 무거운 작업을 여기로 위탁할 수 있습니다.
+        노드는 앱을 꺼도 계속 실행됩니다(PC 를 켜면 자동 시작).</p>
+      <p class="hint" id="node-state"></p>
+      <div class="row">
+        <button id="node-start" class="primary">노드 시작</button>
+        <button id="node-stop" class="ghost">노드 정지</button>
+      </div>
+      <label class="check"><input type="checkbox" id="app-autolaunch" /> 이 앱도 로그인할 때 시작
+        <span class="hint">(노드는 앱과 무관하게 계속 실행됩니다)</span></label>
+    </section>
+
+    <!-- 점검·계정 — 설치가 끝난 뒤에만 의미가 있다 -->
+    <section id="tools-card" class="card hidden">
+      <h2>점검과 계정</h2>
+      <div class="row">
+        <button id="doctor" class="ghost">진단 실행</button>
+        <button id="kit-update" class="ghost">키트 업데이트</button>
+        <button id="logout" class="ghost danger">로그아웃</button>
+      </div>
+      <p class="hint" id="tools-hint">진단은 설치 상태를 점검하고, 키트 업데이트는 CLI·훅을 최신으로 맞춥니다.</p>
+    </section>
+
+    <details id="log-wrap">
+      <summary>자세히</summary>
+      <!-- 두 축이 다르다: '이번 작업'(CLI 가 지금 뱉는 것) vs '노드 로그'(파일에 쌓인 것). 섞으면 원인을 못 가린다. -->
+      <div class="row tabs">
+        <button id="tab-run" class="tab on">이번 작업</button>
+        <button id="tab-file" class="tab">노드 로그</button>
+        <button id="log-reload" class="ghost hidden">새로고침</button>
+      </div>
+      <pre id="log"></pre>
+      <pre id="filelog" class="hidden"></pre>
+      <p class="hint" id="filelog-note"></p>
+    </details>
+  </main>
+
+  <footer>
+    <span id="ver" class="hint"></span>
+    <span class="grow"></span>
+    <span id="upd-note" class="hint"></span>
+    <button id="check-update" class="link-btn">업데이트 확인</button>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

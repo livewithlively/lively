@@ -43,6 +43,6 @@ export async function requireSelfSourceAllowed(
   }
   throw new Error(
     "self 소스는 지금 조회할 수 없습니다 — 이 조직에는 공개범위가 지정된 맥락이 있어, SQL 직접 조회로 그 범위를 "
-    + "우회하지 않도록 제한됩니다. 필요하면 긴급 열람(vis_break_glass_start)을 사유와 함께 여세요. "
+    + "우회하지 않도록 제한됩니다. 관리자에게 공개범위 조정을 요청하거나, 긴급 열람(vis_break_glass_start · Enterprise)을 사유와 함께 여세요. "
     + "다른 등록 소스는 종전대로 조회 가능합니다.");
 }

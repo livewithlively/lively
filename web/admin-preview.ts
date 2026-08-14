@@ -1,7 +1,7 @@
 // admin-preview.ts — 미리보기 환경 패널 (#1313 R37, admin.ts 에서 verbatim 분리).
 //  ⚠ 폴링 타이머(previewPollTimer)는 **이 모듈이 소유**한다 — 패널 재진입 때 이전 타이머를 clearTimeout 하는
 //   계약이 있어서, 타이머 변수와 그걸 세우고 지우는 코드가 갈라지면 안 된다(ESM import 바인딩은 재할당 불가).
-import { api, cardHead, el, errorNote, memberCombo, relTime, toast, uiText } from './core.js';
+import { api, busy, cardHead, el, errorNote, memberCombo, relTime, toast, uiText } from './core.js';
 import { overlayBox, skeleton } from './ui-primitives.js';
 import { psBlock, psInputStyle, sectionHead } from './admin-widgets.js';
 
@@ -14,7 +14,7 @@ let previewPollTimer: any = null;
 async function previewEnvsPanel(detail, data) {
   const reload = () => previewEnvsPanel(detail, data);
   if (previewPollTimer) { clearTimeout(previewPollTimer); previewPollTimer = null; }
-  detail.replaceChildren(el('div', { class: 'card' }, skeleton('미리보기를 불러오는 중')));
+  busy(detail, el('div', { class: 'card' }, skeleton('미리보기를 불러오는 중')));
   let envs;
   try { const r = await api('/api/ui/preview-envs'); envs = (r && r.envs) || []; }
   catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '미리보기 목록을 불러오지 못했습니다'))); return; }
@@ -112,7 +112,7 @@ async function openPreviewEnvForm(p, reload) {
   function renderBranchList() {
     const q = branchFilter.value.trim().toLowerCase();
     if (!branchRepo) { branchList.replaceChildren(hintRow('먼저 위에서 코드 저장소를 골라 주세요.')); return; }
-    if (branchState === 'loading') { branchList.replaceChildren(hintRow('브랜치를 불러오는 중…')); return; }
+    if (branchState === 'loading') { busy(branchList, hintRow('브랜치를 불러오는 중…')); return; }
     if (branchState === 'error') { branchList.replaceChildren(hintRow('브랜치를 불러오지 못했습니다 — 저장소 연결을 확인해 주세요.')); return; }
     const names = branchOpts.map((b) => b.name);
     const extra = [...picked].filter((n) => !names.includes(n)).map((n) => ({ name: n, missing: true })); // 저장돼 있지만 지금 목록에 없는 것

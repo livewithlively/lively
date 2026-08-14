@@ -29,6 +29,7 @@ export const CRON_ACTION_ALLOWLIST = [
   "run_managers",          // #1419 T5 — 관리기 실행(어긋남·아웃데이티드·모순·코드괴리)
   "agent_inject", "agent_headless",
   "ensure_managed_sessions", "wikilink_sweep", "preview_reconcile",
+  "run_canary",            // #1657 — 상류 회귀 자동탐지(카나리)
 ] as const;
 
 export async function initSessionsInfra(pool: Pool): Promise<void> {
@@ -281,6 +282,7 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
       -- 노드가 hello 로 선언한 op 목록(#905 C4). 오프라인 노드의 능력도 관리탭에서 보이게 저장한다.
       --  NULL = 아직 선언한 적 없음(구 에이전트) → 코드가 v1 기준선으로 해석(protocol.nodeCaps).
       agent_caps TEXT[],
+      agent_harnesses TEXT[],
       host TEXT,
       last_seen TIMESTAMPTZ,
       created_by TEXT,
@@ -289,6 +291,8 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   
     -- 기존 테이블에도 붙인다(#905 C4) — CREATE TABLE IF NOT EXISTS 는 이미 있는 테이블을 안 고친다.
     ALTER TABLE org_node ADD COLUMN IF NOT EXISTS agent_caps TEXT[];
+    -- #1713 — 이 노드에서 실제로 띄울 수 있는 하네스(번들 카탈로그 ∩ PATH). 미보고(구 번들)면 NULL → 기준선으로 본다.
+    ALTER TABLE org_node ADD COLUMN IF NOT EXISTS agent_harnesses TEXT[];
 
     -- shared 이관(#1540) — **컬럼을 방금 만든 경우에만** 백필한다.
     --  ⚠ 조건 없이 UPDATE 로 두면, 관리자가 공유를 끈 worker 노드가 게이트웨이 재시작마다 다시 공유로

@@ -6,7 +6,7 @@
 //   모듈 평가만으로 boot()·전역 리스너 등록이 재실행된다. 새 탭은 아래 route() 에 분기를 더해 붙인다.
 //  ⚠ 실행 순서가 계약이다: 아래 setUnauthorizedHandler 가 이 파일의 첫 실행문이어야 하고, boot() 는 맨 끝이다.
 import { $view, TOKEN_KEY, api, apiUrl, el, errorNote, hideGate, loadPeopleAvatars, markSecretInput, navOn, profileAvatar, showGate, state } from './core.js';
-import { renderContext } from './context.js'; // #1419 T6 맥락 관리 — 수집·증류·분류·관리 파이프라인
+import { isDistillerDetailPath, renderContext } from './context.js'; // #1419 T6 맥락 관리 — 수집·증류·분류·관리 파이프라인
 import { renderWiki, renderWikiTrash } from './wiki.js'; // #764 WIKI 탭 전면 재구축(사이드바 유지)
 import { consumeWikiPeekGuard, dismissWikiPeek, renderWikiDocPage } from './wiki-doc.js';
 import { wkRouteCleanup } from './wiki-data.js'; // #764 — 라우트 이탈 시 위키 에디터/팝오버 청소
@@ -19,6 +19,7 @@ import { renderSessions } from './sessions.js'; // #/sessions — 세션이력 �
 import { renderFilePage } from './filepage.js'; // #/f — 공유 링크 착지(#1436): 내비 없는 전체페이지 파일 미리보기
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard, startDashboardSessionTour } from './dashboard-home.js';
+import { renderLiv } from './liv.js'; // #1631 리브 — 독립 전체화면(#/liv). 홈을 덮지 않는다.
 import { renderTerminal, startTerminalTour } from './terminal.js';
 import { changePasswordModal, openMyProfileModal, renderSystem } from './admin.js';
 import { endTour } from './tour.js';
@@ -107,8 +108,18 @@ async function route() {
     if (mainEl)
         mainEl.classList.toggle('doc-mode', page === 'knowledge' || page === 'k' || page === 'k-edit' || page === 'trash');
     try {
-        if (page === 'dashboard') {
+        if (page === 'liv') {
+            // 리브(#1631) — **독립 전체화면**이다. 상단 내비·푸터를 걷고 화면 전부를 쓴다(웹 세션 페이지와 같은 결).
+            //  대화가 주인공인 화면이라 크롬이 높이를 먹으면 정작 말하기가 불편해진다. 나가는 길은 화면 안의
+            //  [← 라이블리] 하나로 충분하다 — 탭을 그려 두면 "여기가 어느 탭인가"를 되묻게 만든다.
+            setActiveTab('liv');
+            await renderLiv(view);
+        }
+        else if (page === 'dashboard') {
             setActiveTab('dashboard'); // 대시보드 — 옛 '시작하기' 탭 자리를 개편(#617). 현재는 자리표시.
+            // ⚠ #1631 — 여기 있던 '리브 홈 진입 게이트'를 걷어냈다(대표 결정). 상태를 보고 홈을 리브로 갈아치웠는데,
+            //  **홈을 덮는 것은 과했다** — 사람이 기대한 화면이 아닌 게 뜨는 건 그 자체로 고장으로 읽힌다.
+            //  리브는 이제 상단 내비의 [리브] 버튼으로 들어가는 **독립 전체화면**(#/liv)이다.
             await renderMyDashboard(view);
             // 사용 가이드 [내 AI 세션 생성]의 '따라하며 만들기 →'(#/dashboard?tour=1) — 홈에서 세션 만들기 투어를 켠다(#780).
             //  쿼리는 새로고침 재실행 방지를 위해 조용히 제거(해시만 갱신 — hashchange/재라우팅 없음).
@@ -208,9 +219,11 @@ async function route() {
         else if (page === 'context') {
             setActiveTab('context'); // 맥락 관리 — 수집→증류→분류→관리 파이프라인(index.html data-tab="context")
             // 증류기 설정(#/context/distill/<key>, #1564)은 3단 전폭 도구 화면이라 main 의 1200px 상한을 풀어야 한다.
-            //  라우트를 세분화해 CSS 가 그 페이지에서만 캡을 풀게 한다 — 목록은 종전 1160 컬럼 그대로여야
+            //  라우트를 세분화해 CSS 가 그 페이지에서만 캡을 풀게 한다 — 목록은 종전 본문 컬럼 그대로여야
             //  탭을 오갈 때 폭이 출렁이지 않는다(projects2 가 상세/보드를 가르는 것과 같은 수법).
-            if (segs[1] === 'distill' && segs[2])
+            //  ⚠ 세그먼트 3개짜리 URL 이 전부 증류기 상세는 아니다(#1584 — #/context/distill/ingest-policy 는
+            //   증류 단계의 한 화면이다). 판정은 화면 표를 가진 context.ts 한 곳에서만 한다.
+            if (isDistillerDetailPath(segs[1], segs[2]))
                 document.body.dataset.route = 'context-distiller';
             await renderContext(view, segs[1] || null, segs[2] || null);
         }

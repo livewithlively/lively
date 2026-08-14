@@ -1,7 +1,7 @@
 // projects/fields-editors.ts — #1405 W2: fields.ts 분할 ②.
 //  값 편집 컨트롤 한 벌 — 타입별 인라인 에디터(텍스트·날짜·진행률·티셔츠·파일·관계·드롭다운·라벨)와 옵션 행 추가.
 //  의존은 단방향: fields-editors → fields-types.
-import { api, el, safeHref, toast } from '../core.js';
+import { api, busy, el, safeHref, toast } from '../core.js';
 import { pjvPopover } from './popover.js';
 import { pjvCheckGlyph, pjvCheckMini, pjvStarGlyph } from './icons.js';
 import { authDownload, fileIconSvg, fmtSize } from './files.js';
@@ -216,7 +216,7 @@ function pjvFieldFilesEditor(anchor, t, field, value, persist) {
     }
   };
   const load = async () => {
-    rowsBox.replaceChildren(el('div', { class: 'pjv-files-empty', text: '불러오는 중…' }));
+    busy(rowsBox, el('div', { class: 'pjv-files-empty', text: '불러오는 중…' }));
     try { curData = await api(B + '/files?path=' + encodeURIComponent(curPath)); }
     catch (e) { curData = { items: [] }; renderCrumb(); rowsBox.replaceChildren(el('div', { class: 'pjv-files-empty', text: '공유 폴더를 불러오지 못했어요' })); return; }
     renderCrumb(); refreshRows();

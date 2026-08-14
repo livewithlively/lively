@@ -43,6 +43,8 @@
 <link rel="stylesheet" href="./styles/31-context-pipeline.css">
 <link rel="stylesheet" href="./styles/32-file-share.css">
 <link rel="stylesheet" href="./styles/33-distiller-page.css">
+<link rel="stylesheet" href="./styles/34-service-logins.css">
+<link rel="stylesheet" href="./styles/35-liv.css">
 <style>
   /* 한글 코딩 글꼴 D2Coding — 자체호스팅(public/fonts, OFL). #279 한글 가독성 (터미널 탭) */
   @font-face { font-family: 'D2Coding'; src: url('fonts/D2Coding.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: swap; }
@@ -132,6 +134,10 @@
       <!-- 사용량 칩(#1454 S5) — boot() 가 /api/ui/me 의 usage_url 로 href 를 채우고 노출(기본 null = 숨김 유지).
            help-link 와 같은 알약 스타일 재사용(02-shell.css). data-tab 없음 — setActiveTab 의 활성 표시 대상 아님. -->
       <a id="usage-chip" class="help-link" hidden target="_blank" rel="noopener">사용량</a>
+      <!-- 리브(#1631) — 워크스페이스를 대신 손봐 주는 담당자. **탭이 아니라 오른쪽 보조 버튼**이다:
+           탭 줄(홈·AI세션·프로젝트·WIKI·맥락관리)은 '무엇을 보는가'의 축인데 리브는 '누구에게 맡기는가'라서
+           같은 줄에 두면 축이 섞인다. 살아있음 표시 점을 달아 사람이 아니라 담당자임을 알린다. -->
+      <a class="help-link liv-nav" href="#/liv" data-tab="liv" title="리브 — 이 워크스페이스를 대신 손봐 드립니다"><span class="liv-nav-dot" aria-hidden="true"></span>리브</a>
       <a class="help-link" href="#/learn" data-tab="learn">사용 가이드</a>
       <button type="button" class="user-email" id="user-email" hidden aria-haspopup="dialog" title="내 프로필 — 표시 이름·개인 레이어 편집"></button>
       <button type="button" id="logout-btn" class="logout-btn" hidden>로그아웃</button>

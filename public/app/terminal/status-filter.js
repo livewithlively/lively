@@ -3,7 +3,9 @@
 //  아무것도 import 하지 않는 최하층이다(위층이 이 파일을 본다).
 import { el } from '../core.js';
 import { SESS_STATES, SESS_STATE_KEYS, sessStateKey, sessIsDead as sessDeadShared } from '../session-status.js'; // #1059 P1 — 상태 어휘는 대시보드와 한 벌
-import { confirmDialog } from '../admin.js';
+// #1582 — 종료 확인창의 정의는 web/session-actions.ts 로 옮겼다(대시보드·프로젝트 상세가 같은 것을 쓰게).
+//  여기 남은 tsessConfirmEnd 는 이 탭 호출부의 이름을 지키는 얇은 위임일 뿐이다.
+import { confirmSessionEnd } from '../session-actions.js';
 // ── 세션 라이브 상태(#745, #1015 E 로 5단계) — 게이트웨이 백엔드의 agentState 를 그대로 쓴다. ──
 //  busy=작업 중(스피너 관측) · waiting=확인 필요(승인·선택 대기) · idle=대기 중(에이전트 살아있음)
 //  exited=종료됨(하네스가 끝나 셸만 남음 — 이 세션에선 AI 가 더 안 돈다) · offline=연결 끊김(원격 노드 미연결).
@@ -14,13 +16,11 @@ import { confirmDialog } from '../admin.js';
 const TSESS_STATUS = SESS_STATES; // #1059 P1 — 공용 정의(web/session-status.ts). 두 화면이 갈라지지 않게 여기서 만들지 않는다.
 // 종료 확인 다이얼로그 — 카드/일괄 공통. 브라우저 confirm 대신 라이블리 확인 모달(#1062).
 //  '삭제'가 아니라 '끝내기'이고 대화록은 남는다는 걸 여기서 못 박는다.
-function tsessConfirmEnd(title, extraLines = []) {
-    return confirmDialog({
-        title, danger: true, confirmText: '종료', cancelText: '취소',
-        message: '실행 중인 작업이 있으면 함께 중단됩니다.',
-        lines: extraLines,
-        note: '대화록은 지워지지 않아요 — 📜 세션 기록에 남고, 거기서 “💬 이어 질문하기”로 이어받을 수 있습니다.',
-    });
+//  #1582 — 문구를 여기서 만들지 않고 공용 정의에 위임한다. 종전엔 "대화록은 지워지지 않아요"를 **무조건** 말했는데,
+//   조직이 세션 공유를 안 켰거나 그 하네스가 캡처 대상이 아니면 거짓이 된다(라이블리는 다른 조직에도 배포된다).
+//   sessions 를 넘겨 그 세션에서 참인 문장만 나가게 한다.
+function tsessConfirmEnd(title, extraLines = [], sessions) {
+    return confirmSessionEnd({ title, lines: extraLines, sessions });
 }
 // 세션이 '이제 AI 가 안 도는' 상태인가 — 일괄 종료 대상·'끝남' 뷰 판정. exited(셸만 남음)·restorable(#1059 E, tmux 죽음).
 //  ⚠ offline 은 제외한다 — 그건 '아무도 안 보는 중'이지 끝난 게 아니다(프로세스는 대개 살아 있다).

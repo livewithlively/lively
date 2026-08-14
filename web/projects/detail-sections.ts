@@ -6,7 +6,7 @@
 //   · 터미널 세션(projectTerminalSection) + 세션 폼(openProjectSessionForm)·provision 폴링(watchProvision)
 //   · 작업 타임라인(projectTimelineSection)
 //  ⚠ watchProvision 의 폴링 타이머는 이 모듈이 소유한다(노드가 DOM 에서 빠지면 스스로 멈춘다).
-import { api, el, errorNote, toast } from '../core.js';
+import { api, busy, el, errorNote, toast } from '../core.js';
 import { activityTimelineRow } from '../activity-view.js';
 import { overlayBox, skeletonRows } from '../learn.js';
 import { memberPicker } from './files.js';
@@ -162,7 +162,7 @@ function companyTimelineSection() {
   return card;
 
   async function load(more?: boolean) {
-    if (!more) { acts = []; atEnd = false; body.replaceChildren(skeletonRows(6)); }
+    if (!more) { acts = []; atEnd = false; busy(body, skeletonRows(6)); }
     try {
       const qs = '?limit=' + CTL_PAGE + '&offset=' + acts.length + (st.type ? '&type=' + encodeURIComponent(st.type) : '');
       const got = await api('/api/ui/activity/list' + qs).then((d) => (Array.isArray(d) ? d : (d && d.rows) || []));
@@ -218,7 +218,7 @@ function projectTimelineSection(id, members, base) {
   return card;
 
   async function load() {
-    body.replaceChildren(skeletonRows(3));
+    busy(body, skeletonRows(3));
     try {
       const qs = st.person ? ('?author_person=' + encodeURIComponent(st.person)) : '';
       const acts = await api(B + id + '/activity' + qs).then((d) => (d && d.activities) || []);

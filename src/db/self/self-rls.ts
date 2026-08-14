@@ -214,7 +214,7 @@ export async function plantScope(client: Pick<pg.PoolClient, "query">, viewer: V
   if (rows.length > MAX_SCOPE_ROWS) {
     throw new Error(
       `공개범위가 지정된 항목이 너무 많아(${rows.length}건) self 소스를 이 방식으로 필터할 수 없습니다 — ` +
-      "필요하면 긴급 열람(vis_break_glass_start)을 사유와 함께 여세요.");
+      "필요하면 관리자에게 공개범위 조정을 요청하거나, 긴급 열람(vis_break_glass_start · Enterprise)을 사유와 함께 여세요.");
   }
   if (rows.length) {
     // 한 방에 심는다 — 행마다 왕복하면 잠금이 늘수록 느려진다.

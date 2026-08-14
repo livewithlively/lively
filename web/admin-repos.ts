@@ -2,7 +2,7 @@
 //  등록 · git 연결(목록 픽커 · 연결 확인) · 폐기/복귀 · 영구삭제 + 공유 클론 최신화.
 //  셸을 역호출하지 않는 자족 패널이다 — 재렌더는 자기 자신(reposPanel)을 다시 부르는 reload 클로저로 끝난다.
 //  ⚠ 게이트웨이 git 자격 오버레이(openGitCredentialManager)는 R38 의 admin-credentials 가 소유한다 — 여기선 받아 쓴다.
-import { api, el, errorNote, state, toast, uiText } from './core.js';
+import { api, busy, el, errorNote, state, toast, uiText } from './core.js';
 import { overlay, overlayBox, skeleton } from './ui-primitives.js';
 import { psBlock, psInputStyle, sectionHead } from './admin-widgets.js';
 import { openGitCredentialManager } from './admin-credentials.js';
@@ -14,7 +14,7 @@ import { openGitCredentialManager } from './admin-credentials.js';
 async function reposPanel(detail, data) {
   const canEdit = state.admin.canContext;
   const reload = () => reposPanel(detail, data);
-  detail.replaceChildren(el('div', { class: 'card' }, skeleton('레포를 불러오는 중')));
+  busy(detail, el('div', { class: 'card' }, skeleton('레포를 불러오는 중')));
   let repos;
   try { const r = await api('/api/ui/repos'); repos = (r && r.domainmapRepos) || []; }
   catch (e) { detail.replaceChildren(el('div', { class: 'card' }, errorNote(e, '레포를 불러오지 못했습니다'))); return; }

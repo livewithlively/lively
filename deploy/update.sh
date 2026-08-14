@@ -19,6 +19,24 @@ cd "$APP_DIR"
 
 [ -f "$APP_DIR/.env" ] || die ".env 없음 — 최초 설치가 안 된 호스트입니다. install.sh 를 쓰세요."
 
+# ── blue-green 박스에서의 오용 차단 ────────────────────────────────────────────
+#  update.sh 는 **단일 유닛(lively-gateway) 모델** 전용이다 — APP_DIR 을 제자리에서 빌드하고 그 유닛을 재시작한다.
+#  blue-green 레이아웃(deploy/migrate-to-bluegreen.sh 로 흡수한 박스)에서 이걸 돌리면 두 모델이 충돌한다:
+#   ① render_service_unit 이 lively-gateway.service 를 되살려 .env 의 PORT(기본 8080)에 bind 를 시도 → 그 포트는
+#      loopback forwarder(lively-loopback.socket) 가 쥐고 있어 EADDRINUSE 크래시루프(Restart=always).
+#   ② 정작 트래픽을 받는 건 active color 인스턴스(lively-gateway@blue|green)라 **코드가 안 바뀐다** —
+#      운영자는 "업데이트했다"고 믿는데 서빙되는 건 구 릴리스인 silent no-op 가 가장 위험한 결과다.
+#  그래서 레이아웃이 보이면 여기서 멈추고 올바른 경로(deploy-release.sh)를 알린다. 판정은 두 신호의 OR —
+#  active-color(레이아웃 상태파일)와 템플릿 유닛 파일(LIVELY_ROOT 를 모르는 채 흡수된 박스도 잡힌다).
+BG_ROOT="${LIVELY_ROOT:-/opt/lively}"
+if [ "${LIVELY_ALLOW_SINGLE_UPDATE:-0}" != "1" ] \
+   && { [ -e "$BG_ROOT/active-color" ] || [ -f "/etc/systemd/system/lively-gateway@.service" ]; }; then
+  die "blue-green 레이아웃이 감지됐습니다($BG_ROOT/active-color 또는 lively-gateway@.service) — update.sh 는 단일 유닛 전용입니다.
+  이 박스는 'bash deploy/deploy-release.sh --release <준비된 릴리스 dir> --tg-arn <ALB 타깃그룹 ARN>' 로 배포하세요(deploy/README.md 의 blue-green 절 참조).
+  그대로 강행하면 lively-gateway.service 가 포트를 두고 forwarder 와 충돌하고, 정작 서빙 중인 active color 는 구 릴리스로 남습니다.
+  단일 유닛으로 되돌린 박스라 확신하면 LIVELY_ALLOW_SINGLE_UPDATE=1 로 강행할 수 있습니다."
+fi
+
 ensure_env_secret CONNECTOR_SECRET_KEY    # secret-box 마스터키 백필(#540 git 자격·#541 커넥터 토큰) — 기존값 보존, 재시작이 반영
 
 phase "1/3 의존성 + 빌드"

@@ -83,7 +83,11 @@
 .term-proj-lock-head .pill { margin-left: auto; flex: none; }
 .term-proj-lock .term-runhere { margin-top: 8px; }
 .term-proj-why { margin: 8px 0 0 16px; padding: 0; font-size: 12px; color: var(--muted-head); line-height: 1.7; }
-/* 프로젝트 세션의 초대칸 — 남기되 못 쓰게. 가시성은 리스트 공개범위가 정하므로 여기 입력은 효과가 없다. */
+/* 프로젝트 세션의 초대칸 — 남기되 못 쓰게. 가시성은 리스트 공개범위가 정하므로 여기 입력은 효과가 없다.
+   그 사실을 잠근 칸 위에 한 줄로 적는다(.term-lock-note) — 잠긴 이유를 말하지 않으면 고장으로 읽힌다. */
+.term-lock-note { display: flex; align-items: flex-start; gap: 7px; padding: 6px 10px; font-size: 12px; line-height: 1.6;
+  color: var(--ink-sub); background: var(--bg-tint); border: 1px solid var(--line); border-radius: 7px; }
+.term-lock-note b { color: var(--ink); }
 .term-invite-off { opacity: .5; pointer-events: none; margin-top: 6px; }
 /* 내 PC 안내 — 세션을 만들지 않고 붙여넣을 한 줄만 준다. */
 .term-local-guide { border: 1px solid var(--line); border-radius: 11px; padding: 12px 13px; }

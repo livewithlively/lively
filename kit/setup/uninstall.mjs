@@ -12,7 +12,7 @@
 // 플래그:
 //   --dry-run            무엇을 지울지 출력만, 변경 없음.
 //   --purge              ~/.lively 를 휴지통 이동 대신 하드 삭제(백업 포함 완전 제거).
-//   --harness claude|codex|all   대상 하네스 한정(기본 all — 감지된 것 모두).
+//   --harness claude|codex|opencode|antigravity|grok|all   대상 하네스 한정(기본 all — 감지된 것 모두).
 //
 // 샌드박스/테스트: env LIVELY_HOME=<dir> 로 HOME 전체를 리다이렉트(라이브 dogfood 보호). 미지정 시 os.homedir().
 //   ※ 스크립트는 런타임 실행이므로 stamp(Date)·env 읽기 허용(워크플로 스크립트와 달리 결정성 제약 없음). LLM/모델 호출 없음.
@@ -26,6 +26,8 @@ import { join } from "node:path";
 import { uninstallClaude } from "../adapters/claude/uninstall.mjs";
 import { uninstallCodex } from "../adapters/codex/uninstall.mjs";
 import { uninstallOpencode } from "../adapters/opencode/uninstall.mjs";
+import { uninstallAntigravity } from "../adapters/antigravity/uninstall.mjs";
+import { uninstallGrok } from "../adapters/grok/uninstall.mjs";
 
 // kit 안 오케스트레이터 — 하네스별 어댑터(adapters/claude·codex/uninstall.mjs)를 import 해 dispatch 한다.
 //  (install 의 user-install.mjs → adapters/*/install.mjs 와 같은 미러 관계.)
@@ -138,6 +140,21 @@ const HARNESS_UNINSTALL = {
     //  '우리 것이 있나'의 신호로 약하다 — 플러그인 파일은 우리만 놓는다.
     detect: () => existsSync(join(HOME, ".config", "opencode", "plugin", "lively.js")),
     run: uninstallOpencode,
+  },
+  antigravity: {
+    label: "Antigravity",
+    // 플러그인 디렉터리는 우리만 만든다(#1689 plugin-dir 배선) — hooks.json 존재가 곧 배선 신호.
+    detect: () => existsSync(join(HOME, ".gemini", "config", "plugins", "lively")),
+    run: uninstallAntigravity,
+  },
+  grok: {
+    label: "Grok Build",
+    // 훅 파일은 우리만 만든다(#1701 hook-file 배선) — lively-grok.json 존재가 곧 배선 신호.
+    //  홈 계산은 어댑터와 동일(GROK_HOME > ~/.grok, LIVELY_HOME 격리 시 GROK_HOME 무시).
+    detect: () => existsSync(join(
+      process.env.LIVELY_HOME ? join(HOME, ".grok") : (process.env.GROK_HOME || join(HOME, ".grok")),
+      "hooks", "lively-grok.json")),
+    run: uninstallGrok,
   },
 };
 // 제거 어댑터를 가진 하네스 = 이 파일이 다룰 수 있는 전부(install 측 범위와 같아야 한다).

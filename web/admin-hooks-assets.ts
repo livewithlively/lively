@@ -120,7 +120,7 @@ function hookForm(root, h, data, detail, isNew) {
   const labelIn = el('input', { type: 'text', value: h.label || '', placeholder: '표시 이름(선택)' });
   // 구성원 화면([내 스킬·훅])에 보이는 쉬운 한 줄(#1085) — 스킬과 같은 규격.
   const hSumIn = el('input', { type: 'text', value: h.summary || '', placeholder: '예: 세션이 끝날 때 기록을 남겼는지 점검합니다' });
-  const harnessSel = el('select', {}, ...['all', 'claude', 'codex', 'openclaw'].map((x) => el('option', { value: x, text: x })));
+  const harnessSel = el('select', {}, ...['all', 'claude', 'codex', 'openclaw', 'opencode', 'antigravity', 'grok'].map((x) => el('option', { value: x, text: x })));
   harnessSel.value = h.harness || 'all';
   const eventSel = el('select', {}, ...['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop', 'Notification'].map((x) => el('option', { value: x, text: x })));
   eventSel.value = h.event || 'PostToolUse';
@@ -220,7 +220,7 @@ function assetForm(root, a, data, detail, isNew) {
   const labelIn = el('input', { type: 'text', value: a.label || '', placeholder: '표시 이름(선택)' });
   const kindSel = el('select', {}, ...[['skill', '스킬'], ['subagent', '서브에이전트'], ['command', '슬래시커맨드']].map(([v, t]) => el('option', { value: v, text: t })));
   kindSel.value = a.kind || 'skill';
-  const harnessSel = el('select', {}, ...['all', 'claude', 'codex'].map((x) => el('option', { value: x, text: x })));
+  const harnessSel = el('select', {}, ...['all', 'claude', 'codex', 'openclaw', 'opencode', 'antigravity', 'grok'].map((x) => el('option', { value: x, text: x })));
   harnessSel.value = a.harness || 'all';
   const descIn = el('input', { type: 'text', value: a.description || '', placeholder: 'AI가 이것을 언제 쓸지 판단하는 한 줄 설명(상시 노출)' });
   // 표시용 한 줄(#1085) — 위 '설명'은 AI 트리거 문장이라 길고 기술적이다. 사람 화면([내 스킬·훅])에는 이걸 보여준다.

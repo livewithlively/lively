@@ -139,6 +139,75 @@ ssh -i ~/.ssh/<key> ubuntu@<host> 'cd <APP_DIR> && bash deploy/update.sh --kit'
 - **빌드 실패 시**: `update.sh` 가 재시작 전에 중단 → 기존 게이트웨이 계속 가동(다운 없음).
 - **롤백**: 이전 main 커밋을 rsync 후 다시 `update.sh`.
 - **git clone 박스**라면 1) 대신 `git pull` 후 `update.sh`.
+- ⚠ **blue-green 박스에서는 `update.sh` 가 거부한다** — 그 박스의 배포 경로는 `deploy-release.sh` 다(바로 아래 절).
+
+## 무중단 배포 (blue-green) — **opt-in · AWS ALB 앞단 전용**
+
+기본 배포(`update.sh`)는 게이트웨이를 **제자리에서 재시작**하므로 수 초의 다운타임이 있다. 게이트웨이가
+웹터미널 PTY/tmux 를 프로세스 안에 들고 있어, 조직 전원 + 세션 MCP 가 붙는 라이브 표면에서는 그 순단이
+문제가 된다. blue-green 은 **한 박스 안에서 두 색(blue/green)을 번갈아 띄워** 그 순단을 없앤다.
+
+### 적용 범위 — 아무 셀프호스트 박스에나 켜는 기능이 아니다
+
+| 전제 | 내용 |
+|---|---|
+| OS | Linux/systemd 전용(mac 은 단일 launchd — 스크립트가 `die` 한다) |
+| 앞단 | **AWS ALB 가 인스턴스 타깃에 직결**돼 있어야 한다. flip primitive 자체가 *ALB 타깃 그룹의 타깃 포트 스왑*이라, `--tg-arn` 없이는 실행되지 않는다(Caddy·nginx·traefik 앞단은 지원 대상 아님) |
+| TG 설정 | 헬스체크가 `traffic-port` 여야 한다(고정 포트면 포트별 판정이 성립하지 않아 flip 후 전면 outage). 진입 전 preflight 로 단언하고, 아니면 중단한다 |
+| IAM | 박스 instance role 에 해당 TG 한정 `elbv2:RegisterTargets` · `DeregisterTargets` · `DescribeTargetHealth` · `DescribeTargetGroups` |
+| 릴리스 | 배포할 코드(dist + node_modules)가 **이미 준비된 디렉터리**로 박스에 있어야 한다. 릴리스 디렉터리를 만드는 일(빌드·전달)은 이 스크립트 밖이다 |
+
+즉 이 모드는 **Lively 를 AWS ALB 뒤에서 운영하는 배포에 한정된 opt-in 경로**다. 흡수를 돌리지 않은 박스는
+아무 영향을 받지 않는다(레이아웃도, 유닛도 생기지 않는다).
+
+### 토폴로지
+
+```
+ALB:443 ─▶ 인스턴스 타깃 (blue:8081 | green:8082)     flip = ALB 타깃 포트 스왑
+localhost:8080 ─▶ loopback alias ─▶ 현재 active color   세션 클라 핀(~/.lively/gateway-url)의 고정 진입점
+```
+
+`:8080` 은 flip pool 에서 빠져 **loopback alias 전용**이 된다(`systemd-socket-proxyd`). 세션이 핀해 둔
+`localhost:8080` 이 포트가 바뀌어도 계속 현재 active 를 향하게 하려는 것 — 이게 없으면 flip 이 전 세션의
+재연결을 끊는다(2026-08-03 실제 사고).
+
+### 레이아웃 (`${LIVELY_ROOT:-/opt/lively}`)
+
+```
+releases/<id>/            릴리스별 코드(dist·node_modules)
+shared/{.env,data}        공유 상태(배포마다 보존). items-db 는 docker named volume 이라 애초에 이 밖
+logs/gateway-<color>.log  공유 로그      color-env/<color>.env   per-color PORT
+<color> → releases/<id>   color→릴리스   active-color            상태파일(blue|green)
+current / previous        편의 심볼릭(previous = 즉시 롤백 대상)
+```
+
+### 절차
+
+```bash
+# ① 1회성 흡수 — 기존 단일유닛 설치를 blue-green 레이아웃으로. 백업 먼저, flip 안 함(구 유닛이 계속 서빙).
+bash deploy/migrate-to-bluegreen.sh              # 계획만(dry-run)
+bash deploy/migrate-to-bluegreen.sh --confirm
+
+# ② 이후 매 배포 — idle color 에 올려 로컬 /readyz 통과 후에만 ALB flip.
+bash deploy/deploy-release.sh --release <준비된 릴리스 dir> --tg-arn <ALB 타깃그룹 ARN>
+
+# ③ 롤백 — previous 로 같은 명령을 재실행(재빌드 없이 수 초).
+bash deploy/deploy-release.sh --release "$LIVELY_ROOT/previous" --tg-arn <ALB 타깃그룹 ARN>
+```
+
+**롤백 안전 불변식**: ALB register(+healthy 확인)가 구 포트 deregister보다 **먼저**, active-color 커밋은
+deregister 성공 **뒤**, old 유닛 stop 이 **맨 마지막**. 어느 단계에서 실패하든 old color 가 계속 서빙한다
+(= flip 을 안 하는 것이 곧 자동 롤백). 순수 결정 로직은 `deploy/lib/bluegreen.sh`, 계약은
+`deploy/bluegreen-logic.test.mjs` 가 락한다.
+
+### 무중단의 실제 범위 (과장하지 않기)
+
+| 경로 | 보장 |
+|---|---|
+| ALB → HTTP·MCP | 무중단. 두 포트가 겹치는 구간이 있고 구 포트는 ALB dereg delay(기본 300s) 동안 draining |
+| 웹터미널 WS | **끊긴다 → 재접속.** tmux 세션은 `KillMode=process` 로 살아남아 그대로 re-attach |
+| `localhost:8080` 핀 | 새 연결은 무중단(socket 은 상시 listen). flip 순간의 **in-flight 연결은 끊긴다**(forwarder 재지정 = 프록시 재시작) |
+| `--drain-seconds`(기본 5) | old 유닛을 5초 뒤 정지한다 — ALB 의 300s draining 보다 훨씬 짧다. 긴 커넥션을 온전히 흘리려면 `--keep-old` 로 남기고 나중에 수동 정지(대신 그동안 게이트웨이 2개 = 메모리 2배) |
 
 ### 서비스 이름 전환 (레포명 `lively` 로 바뀐 뒤 첫 업데이트)
 
