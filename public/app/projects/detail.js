@@ -12,9 +12,8 @@ import { api, applyReveal, el, errorNote, personFace, state, toast } from '../co
 import { skeleton } from '../learn.js';
 import { projectBodyCommentRow, projectBodySection, projectKnowledgeSection } from './detail-body.js';
 import { pjvProjMetaPanel } from './detail-meta.js';
-import { openLocalWorkModal, openProjectSessionForm, openProjectSettings, projectFolderSection, projectTerminalSection, projectTimelineSection } from './detail-sections.js';
+import { openProjectSessionForm, openProjectSettings, projectFolderSection, projectTerminalSection, projectTimelineSection } from './detail-sections.js';
 import { pjvTasksSection } from './detail-tasks.js';
-import { pjvPopover } from './popover.js';
 import { pjvSelReset } from './selection.js';
 import { clearSortCtx, consumeKeepScroll, pjvRestoreScroll } from './state.js';
 import { pjvLoadStatusTemplates, pjvRegisterProjList, pjvSetStatusRegistry, pjvStatusReg } from './status.js';
@@ -76,22 +75,13 @@ function demoFolderCard() {
 //  세션 목록은 fetch 없이 팀원 진열만. 만들기 팝업은 제출 안 하고 취소로 끝나므로 데모 id 여도 안전.
 function demoTerminalCard(members, meId) {
     const card = el('div', { class: 'card proj-term-card', style: 'margin-bottom:18px' });
+    // 실제 화면과 **같은 통합 모달**을 연다(#1145) — 종전엔 '내 PC / 웹' 드롭다운을 거쳤지만 그 선택은
+    //  이제 모달 안(제목 줄 pill)에 있다. 데모도 실제와 같은 흐름이어야 투어가 거짓말을 하지 않는다.
+    //  세션 이름은 프로젝트명이 아니라 '이 세션이 하는 일'로 프리필한다(#1009).
     const newBtn = el('button', { class: 'btn btn-ghost btn-sm', 'data-tour': 'proj-new-session', text: '＋ 새 세션' });
     newBtn.onclick = (e) => {
         e.stopPropagation();
-        const menu = el('div', { class: 'pjv-menu pjv-sess-menu' });
-        const close = pjvPopover(newBtn, menu, { align: 'right' });
-        const mkItem = (icon, label, desc, fn) => {
-            const item = el('button', { class: 'pjv-menu-item', type: 'button' }, el('span', { class: 'pjv-sess-ico', text: icon }), el('span', { style: 'display:flex;flex-direction:column;gap:1px;min-width:0' }, el('span', { text: label }), el('span', { class: 'caption', text: desc })));
-            item.onclick = (ev) => { ev.stopPropagation(); close(); fn(); };
-            return item;
-        };
-        const localItem = mkItem('💻', '내 PC에서 열기', '개발자용 · 직접 설치해 실행', () => openLocalWorkModal('__demo__', { id: '__demo__', name: DEMO_PROJECT.name, repos: [] }));
-        const webItem = mkItem('☁️', '웹에서 바로 열기', '설치 불필요 · 팀 공용', 
-        // 세션 이름은 프로젝트명이 아니라 '이 세션이 하는 일'로 프리필한다(투어 sess-name 코치마크 예시와 일치, #1009).
-        () => openProjectSessionForm('__demo__', () => { }, '/api/ui/v6/projects/', DEMO_SESSION_NAME, []));
-        webItem.dataset.tour = 'sess-web';
-        menu.append(localItem, webItem);
+        openProjectSessionForm('__demo__', () => { }, '/api/ui/v6/projects/', DEMO_SESSION_NAME, []);
     };
     card.append(el('div', { class: 'card-head' }, el('h3', { text: '터미널 세션' }), el('div', { class: 'card-head-actions' }, newBtn)));
     const person = (m) => el('div', { class: 'proj-person' }, personFace(m.member_id, 'proj-avatar', m.display_name || m.member_id), el('div', { class: 'proj-person-name', text: m.display_name || m.member_id }), el('div', { class: 'proj-person-status empty', text: m.member_id === meId ? '✎ 상태 남기기' : '' }));

@@ -147,37 +147,30 @@ const SCENES: any[] = [
           body: el('p', { class: 'tour-p' }, '이 프로젝트에서 여는 ', b('AI 작업 세션'), '이에요. 팀원별로 모여 보여서 누가 무슨 일을 하고 있는지 한눈에 알 수 있어요.') });
         steps.push({ target: '[data-tour="proj-new-session"]', placement: 'left', advanceOn: 'click',
           title: '세션 만들기 ① — ＋ 새 세션', body: '오른쪽 위 [＋ 새 세션]을 눌러 볼게요.' });
-        // 드롭다운: 두 옵션을 설명하되 클릭 진행은 '웹에서 바로 열기'에만 건다 — '내 PC' 항목은 딤에 가려 못 눌러
-        //  오작동(로컬 모달 오픈)이 원천 차단되고, 설명 단계와 클릭 단계를 하나로 합쳐 순서 어긋남도 없앤다.
-        steps.push({ target: '[data-tour="sess-web"]', placement: 'left', advanceOn: 'click',
-          title: '세션 만들기 ② — 어디서 켤까',
-          body: [
-            p('두 가지가 떠요:'),
-            el('p', { class: 'tour-p' }, b('💻 내 PC'), ' — 개발자용이에요. 내 컴퓨터에 설치해서 써요.'),
-            el('p', { class: 'tour-p' }, b('☁️ 웹에서 바로'), ' — 설치 없이 중앙에서 열리는 팀 공용 세션이에요. 비개발자는 이게 쉬워요.'),
-            el('p', { class: 'tour-p' }, '밝은 ', b('[☁️ 웹에서 바로 열기]'), '를 눌러 볼게요.'),
-          ] });
-        // 프리필 값은 projects.ts 의 DEMO_SESSION_NAME('출시 안내 메일 초안') — 아래 예시와 반드시 일치시킨다(#1009).
-        steps.push({ target: '[data-tour="sess-name"]', placement: 'right', scrollIntoView: true,
+        // #1145 — '내 PC / 웹' 드롭다운은 없어졌다(그 선택은 이제 모달 제목 줄의 pill). 스텝도 함께 걷는다.
+        steps.push({ target: '[data-tour="label"]', placement: 'right', scrollIntoView: true,
           title: '만들기 창 — 세션 이름',
           body: el('p', { class: 'tour-p' }, '무슨 일을 하는 세션인지 알아보기 쉽게 이름을 정해요. 여기선 예시로 ', b('“출시 안내 메일 초안”'), ' 을 넣어 뒀어요.') });
-        steps.push({ target: '[data-tour="sess-repos"]', placement: 'right', scrollIntoView: true,
-          title: '코드 저장소 (선택)',
+        // #1145 — 옛 프로젝트 전용 폼(코드 저장소 고르기·실행 설정 프리셋)은 사라졌다. 저장소는 이제 **묻지 않는다**:
+        //  세션이 코드가 필요해진 순간 스스로 워크트리를 뜬다(#918). 그 자리를 대신하는 건 '어디서 열리는지'다.
+        steps.push({ target: '[data-tour="folder"]', placement: 'right', scrollIntoView: true,
+          title: '어디서 열리나요',
           body: [
-            p('코드 작업이면 저장소를 고르세요. 박스가 그 코드를 자동으로 가져와 준비해 둬요.'),
-            el('p', { class: 'tour-p' }, b('코드 작업이 아니면 비워도 돼요.')),
+            el('p', { class: 'tour-p' }, '프로젝트에서 열면 ', b('이 프로젝트 폴더'), '에서 열려요 — 폴더를 고를 필요가 없어요.'),
+            p('프로젝트 본문·연결된 지식도 세션에 자동으로 들어가요. 코드가 필요해지면 세션이 알아서 가져옵니다.'),
           ] });
-        steps.push({ target: '.proj-sess-preset', placement: 'right', scrollIntoView: true,
-          title: '실행 설정',
-          body: el('p', { class: 'tour-p' }, '함께 일할 ', b('AI·모델'), '과 자동 승인 여부를 고르는 곳이에요. 이전 설정을 기억하니 보통 그대로 둬도 돼요.') });
-        steps.push({ target: '[data-tour="sess-create"]', placement: 'top', scrollIntoView: true,
+        steps.push({ target: '[data-tour="preset"]', placement: 'right', scrollIntoView: true,
+          title: '고급 설정 (선택)',
+          body: el('p', { class: 'tour-p' }, '함께 일할 ', b('AI·모델'), '과 자동 승인 같은 건 여기 접혀 있어요. 접힌 줄에 지금 값이 요약돼 있어서 ', b('열지 않아도'), ' 무엇으로 뜨는지 알 수 있어요.') });
+        steps.push({ target: '[data-tour="create"]', placement: 'top', scrollIntoView: true,
           title: '만들면 이렇게 돼요',
           body: [
-            el('p', { class: 'tour-p' }, b('[만들고 입장]'), '을 누르면 새 탭에 터미널이 열려요 — AI에게 바로 말을 걸면 돼요.'),
+            el('p', { class: 'tour-p' }, b('[생성하기]'), '를 누르면 새 탭에 터미널이 열려요 — AI에게 바로 말을 걸면 돼요.'),
             p('회사·이 프로젝트 맥락은 이미 들어가 있어요.'),
           ] });
-        steps.push({ target: '[data-tour="sess-cancel"]', placement: 'top', advanceOn: 'click',
-          title: '둘러보기라 여기까지', body: '실제로 만들지는 않을게요 — [취소]로 닫고 계속할게요.' });
+        // 새 모달엔 [취소] 버튼이 없다 — 닫기는 제목 줄의 [닫기] 하나다(overlay 셸). 그걸 그대로 가리킨다.
+        steps.push({ target: () => document.querySelector('.ov-back .ov-head .btn'), placement: 'bottom', advanceOn: 'click',
+          title: '둘러보기라 여기까지', body: '실제로 만들지는 않을게요 — [닫기]로 닫고 계속할게요.' });
       }
       return steps.concat(tail(ctx));
     },
@@ -272,18 +265,15 @@ const SCENES: any[] = [
         steps.push({ target: '[data-tour="proj-new-session"]', placement: 'left' as const, scrollIntoView: true, advanceOn: 'click' as const,
           title: '② 이 프로젝트에서 AI 켜기',
           body: el('p', { class: 'tour-p' }, '이 프로젝트 맥락(본문·연결된 지식)을 다 아는 ', b('AI 작업 세션'), '을 열 수 있어요. ', b('[＋ 새 세션]'), ' 을 눌러 보세요.') });
-        steps.push({ target: '[data-tour="sess-web"]', placement: 'left' as const, advanceOn: 'click' as const,
-          title: '☁️ 웹에서 바로 열기',
-          body: el('p', { class: 'tour-p' }, '설치 없이 중앙에서 열리는 세션이에요. 밝은 ', b('[☁️ 웹에서 바로 열기]'), ' 를 누르세요.') });
-        steps.push({ target: '[data-tour="sess-name"]', placement: 'right' as const, scrollIntoView: true,
+        steps.push({ target: '[data-tour="label"]', placement: 'right' as const, scrollIntoView: true,
           title: '세션 이름',
           body: el('p', { class: 'tour-p' }, '무슨 일을 시킬지 알아보기 쉽게 이름을 지어요. 예: ', b('“자료 조사”'), '. 저장소·실행 설정은 필요할 때만 만지면 돼요.') });
-        steps.push({ target: '[data-tour="sess-create"]', placement: 'top' as const, scrollIntoView: true,
+        steps.push({ target: '[data-tour="create"]', placement: 'top' as const, scrollIntoView: true,
           advanceWhen: () => !q('.ov-back'),
           title: '만들어 볼까요?',
           body: [
-            el('p', { class: 'tour-p' }, b('[만들고 입장]'), ' 을 누르면 진짜 세션이 ', b('새 탭'), '에서 열려요 — 이 화면은 그대로라 체험은 계속돼요.'),
-            p('지금은 만들기 싫으면 [취소]로 닫아도 돼요. 창이 닫히면 다음으로 넘어가요.'),
+            el('p', { class: 'tour-p' }, b('[생성하기]'), ' 를 누르면 진짜 세션이 ', b('새 탭'), '에서 열려요 — 이 화면은 그대로라 체험은 계속돼요.'),
+            p('지금은 만들기 싫으면 [닫기]로 닫아도 돼요. 창이 닫히면 다음으로 넘어가요.'),
           ],
         });
       }

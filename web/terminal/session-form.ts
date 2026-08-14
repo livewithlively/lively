@@ -97,11 +97,22 @@ function fieldInfo(label, tip, control) {
 
 // 새 세션 — 기본 비공개. 초대 피커에서 멤버를 고르면 그 사람도 보고 열 수 있다.
 // onCreated(out) — 있으면 생성 후 그걸 호출(대시보드에서 재사용: 세션 위젯 새로고침). 없으면 터미널 뷰 재렌더.
-function openTermCreateForm(cfg, view, onCreated?) {
+//
+// opts.project = { id, name, base } — 프로젝트에서 열었으면 그 맥락(#1145). 주면 폼이 이렇게 바뀐다:
+//   · 폴더를 묻지 않는다 — 그 프로젝트 폴더에서 열린다(고를 여지가 없으므로 카드로 사실만 보여준다).
+//   · 초대를 묻지 않는다 — 프로젝트 세션의 가시성은 **리스트 공개범위**가 정하고 invites 는 보지도 않는다
+//     (canSeeSession, terminal/write-cap.ts). 효과 없는 칸을 활성으로 두면 '초대한 사람만 본다'고 오해한다.
+//   · 생성은 POST <base><id>/sessions 로 간다(자유 세션은 /api/ui/terminal/sessions).
+// 이 모달 하나가 '웹/내 PC'와 '프로젝트/자유'를 모두 받는다 — 종전엔 경로마다 다른 모달이 떴다(#1145 안 1).
+function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any; name?: string; base?: string } }) {
+  const project = opts && opts.project;
   const roots = cfg.roots || [];
   const harnesses = cfg.harnesses || [];
   const prefs = termCreatePrefs();
+  // 프로젝트에서 열었으면 이름을 **프로젝트 제목으로 프리필**한다(#1145) — 그대로 [생성하기] 를 눌러 끝낼 수 있게.
+  //  (데모는 호출부가 '이 세션이 하는 일' 예시를 projectName 으로 넘긴다 — 투어가 가르치려는 작명이 그거다, #1009.)
   const labelI = el('input', { class: 'term-input', type: 'text', placeholder: '예: 랜딩 카피 수정' });
+  if (project && project.name) labelI.value = project.name;
   // #853 작업 위치 = 공유/개인 2택 → 드롭다운 대신 세그먼트 토글(둘 중 하나를 명확히 고르게). 아래 '폴더'는 이 안의 하위 폴더.
   let rootKey = (roots[0] && roots[0].key) || 'personal';
   const rootBtns: Record<string, any> = {};
@@ -125,7 +136,7 @@ function openTermCreateForm(cfg, view, onCreated?) {
   //  공유 노드는 남의 컴퓨터일 수 있으니 라벨에 표시한다. 오프라인 노드는 비활성(에이전트가 게이트웨이에
   //  연결돼 있어야 생성 가능 — 서버도 409 재검증).
   const nodes = cfg.nodes || [];
-  const nodeSel = el('select', { class: 'term-input' },
+  const nodeSel = el('select', { class: 'term-input ig-sel' },
     el('option', { value: '' }, '중앙 컴퓨터 (기본)'),
     ...nodes.map((n) => {
       const o = el('option', { value: n.id }, '🖥 ' + (n.name || n.id) + (n.shared ? ' (공유)' : '') + (n.online ? '' : ' — 오프라인'));
@@ -138,7 +149,7 @@ function openTermCreateForm(cfg, view, onCreated?) {
     if (nodeSel.value) pickerBox.replaceChildren(remoteSubI, el('div', { class: 'caption', text: '노드 로컬 경로 — 노드 머신의 선택한 루트(공유/개인 워크스페이스) 기준입니다.' }));
     else loadPicker();
   };
-  const harnessSel = el('select', { class: 'term-input' }, ...harnesses.map((h) => el('option', { value: h.key }, h.label)));
+  const harnessSel = el('select', { class: 'term-input ig-sel' }, ...harnesses.map((h) => el('option', { value: h.key }, h.label)));
   // 실행 위치에 따라 **고를 수 있는 AI 가 달라진다**(#1713). 노드는 남의 PC 라 그 PC 에 깔린 것만 뜬다 —
   //  노드가 hello 로 보고한 목록(cfg.nodes[].harnesses)을 그대로 쓴다. 종전엔 중앙 기준 목록을 그대로 보여줘서,
   //  그 노드가 모르는 하네스를 고르고 [생성하기]를 누른 **뒤에야** 알았다(옛 번들 → 502, 바이너리 부재 → 세션 즉사).
@@ -161,13 +172,25 @@ function openTermCreateForm(cfg, view, onCreated?) {
   const inviteBox = buildInvitePicker(cfg, new Set()); // 기본 비공개(아무도 선택 안 됨)
   // 한 줄 배치(#1145)는 인라인으로도 못 박는다 — styles 는 브라우저가 오래 캐시해 클래스 규칙만으로는
   //  '새 JS + 옛 CSS' 조합에서 레이아웃이 무너진다(실측). 클래스(.term-preset-row)는 그대로 두되 값은 여기서 확정.
-  const flagsBox = el('div', { class: 'term-flags', style: 'display:flex;gap:10px;flex-wrap:wrap;flex:2 1 240px;min-width:0' });
+  //  ⚠ flex-direction 을 **반드시 명시**한다 — public/index.html 의 인라인 <style> 에 `.term-flags { flex-direction: column }`
+  //  이 살아 있어서(외부 CSS 는 그 속성을 안 건드린다) 방향을 안 주면 모델·추론강도가 세로로 쌓인다(#1145 실측).
+  // 문장 격자(#1145 안 2)의 **셀로 직접 참여**한다 — display:contents 라 이 div 자체는 레이아웃에서 사라지고
+  //  자식(앞말·드롭다운·중간말·드롭다운·끝말)이 부모 .ig-grid 의 열에 그대로 붙는다. 값 읽기는 종전대로
+  //  flagsBox.querySelectorAll('[data-flag]') 로 하므로 제출 코드는 한 글자도 안 바뀐다.
+  const flagsBox = el('div', { class: 'term-flags', style: 'display:contents' });
   // 자동 승인은 기본 꺼짐이되, 내가 지난번에 켰다면 켠 채로 복원한다(#782 — 사용자별 기억).
   //  (#673 의 'git 워크트리에서 작업' 체크박스는 #918 에서 제거 — 서버측 근거가 사라졌다: terminal-sessions 참조.)
   const autoCb = el('input', { type: 'checkbox' });
   autoCb.checked = prefs.autoApprove === true;
   const autoWrap = el('label', { class: 'term-auto' }, autoCb,
     el('span', { text: ' 자동 승인 — 확인 없이 바로 실행해 빨라요. 공유 폴더에선 꺼 두는 걸 권해요.' }));
+  // 설정 기억(#1145) — 켜고 생성하면 이 폼에서 고른 값을 **전부** 저장해, 다음에 새 AI 세션을 열 때 그대로 채운다.
+  //  종전에도 하네스·모델·추론강도·자동 승인은 늘 기억했지만(#673/#782), 실행 위치·폴더·모드·기록 범위는 매번 처음부터였다.
+  //  체크를 끄고 생성하면 저장해 둔 값을 지운다 — '기억하지 않기'가 곧 '지금까지 기억한 것도 잊기'가 되도록.
+  const rememberCb = el('input', { type: 'checkbox' });
+  rememberCb.checked = prefs.rememberAll === true;
+  const rememberWrap = el('label', { class: 'term-auto' }, rememberCb,
+    el('span', { text: ' 이 설정을 기억하기 — 다음에 새 AI 세션을 열면 지금 고른 값이 그대로 채워집니다.' }));
   // 라이블리 모드(#1007+) — 이 세션이 라이블리와 얼마나 상호작용하나. 기본 일반, prefs 에 기억하지 않음(매번 명시 — 보안 모드라 의도적).
   //  claude-code 만 동작(codex 는 정적 헤더 → renderFlags 에서 숨김). '어디서 실행할까요'(rootSeg)와 같은 term-seg 선택 카드로 통일 —
   //  체크박스용 term-auto 에 얹은 인라인 <select> 는 라벨이 줄바꿈되고 카드 UI 와 이질적이었다(디자인 통일 요청).
@@ -177,115 +200,154 @@ function openTermCreateForm(cfg, view, onCreated?) {
     { key: 'readonly', lbl: '읽기전용', sub: '읽되 쓰지 않음 · 기밀 작업' },
     { key: 'incognito', lbl: '인코그니토', sub: '라이블리 전혀 안 씀 · 클린룸' },
   ];
-  const modeBtns: Record<string, any> = {};
-  // 아이콘 없이 텍스트(제목·부제) + 라디오만 — 카드 구조·정렬은 term-seg 그대로(요청: 이모지 아이콘 제거).
-  const modeSeg = el('div', { class: 'term-seg' }, ...modeOpts.map((m) => {
-    const b = el('button', { class: 'term-seg-btn', type: 'button' },
-      el('span', { class: 'term-seg-txt' },
-        el('span', { class: 'term-seg-lbl', text: m.lbl }),
-        el('span', { class: 'term-seg-sub', text: m.sub })),
-      el('span', { class: 'term-seg-check' }));
-    b.onclick = () => { if (modeVal === m.key) return; modeVal = m.key; for (const k in modeBtns) modeBtns[k].classList.toggle('active', k === modeVal); };
-    modeBtns[m.key] = b; return b;
-  }));
-  modeBtns[modeVal].classList.add('active');
-  const modeField = el('div', { 'data-tour': 'mode' }, field('라이블리 모드', modeSeg));
+  // 고급 설정 안에서는 **드롭다운**이다(#1145) — 종전엔 모드 3카드 + 기록 범위 4카드 = 7카드가 세로를 190px 잡아먹고
+  //  드롭다운·카드·체크박스가 뒤섞여 산만했다. 카드는 기본 화면의 갈림길(공유/개인 폴더)에만 남긴다.
+  //  선택지 설명은 옵션 텍스트에 붙이고(`일반 — 읽고 씁니다`) 자세한 건 라벨 옆 ⓘ 가 맡는다.
+  const modeSel = el('select', { class: 'term-input ig-sel' },
+    ...modeOpts.map((m) => el('option', { value: m.key }, m.lbl + ' — ' + m.sub)));
+  modeSel.value = modeVal;
+  modeSel.addEventListener('change', () => { modeVal = modeSel.value; syncWriteVis(); });
+  const MODE_TIP = '이 세션이 라이블리(회사 맥락)를 얼마나 쓸지, 남긴 기록을 누가 볼지 정합니다.\n\n· **일반** — 읽고 씁니다.\n· **읽기전용** — 읽기만 하고 쓰지 않습니다. 기밀 작업에 씁니다.\n· **인코그니토** — 라이블리를 아예 쓰지 않습니다.\n\n**기록 범위**는 이 세션의 AI 가 내 승인 없이 남기는 기록의 최대 공개 범위입니다 — 「자동」은 실행 폴더를 따릅니다(프로젝트 폴더면 그 프로젝트 범위, 그 밖은 전체 공개). 읽기전용·인코그니토에서는 기록하지 않아 고를 수 없습니다.';
+  // 라이블리 모드 + 기록 범위를 한 문장으로(#1145 안 2) — 라벨 없이 읽히고, 축이 꺼지거나 하네스가 바뀌면 문장이 다시 조립된다.
+  const modeRow = el('div', { 'data-tour': 'mode', style: 'display:contents' });
 
   // 기록 범위(#1291 v2) — 이 세션의 AI 가 **내 승인 없이** 만들 수 있는 맥락의 최대 공개범위.
   //  모드(읽기전용/인코그니토)와 직교한다: 모드는 '쓰나 마나', 이건 '쓴다면 누구에게 보이게'.
   //  기본은 '자동' — 실행 위치 폴더를 따른다(프로젝트 폴더면 그 프로젝트 범위, 그 밖은 전체 공개).
   let writeVisVal = '';
+  // 부제는 **카드 한 줄에 들어가는 길이**로 — 4열이라 카드가 좁다. 자세한 설명은 라벨 옆 ⓘ 가 맡는다.
+  //  다만 짧게 줄인다고 명사로 끊지 않는다 — 화면 문구는 어미까지 끝맺는다(상민님 지시, 반복).
   const writeVisOpts = [
-    { v: '', t: '자동', d: '실행 위치 따름 — 프로젝트 폴더면 그 프로젝트' },
-    { v: 'open', t: '전체 공개', d: '조직 전체가 봄' },
-    { v: 'audience', t: '프로젝트 범위', d: '그 프로젝트를 볼 수 있는 사람만' },
-    { v: 'private', t: '나만', d: '나만 봄' },
+    { v: '', t: '자동', d: '위치를 따릅니다' },
+    { v: 'open', t: '전체 공개', d: '누구나 봅니다' },
+    { v: 'audience', t: '프로젝트', d: '그 팀만 봅니다' },
+    { v: 'private', t: '나만', d: '나만 봅니다' },
   ];
-  const writeVisBtns: any[] = [];
-  // 카드 언어는 '라이블리 모드'(modeSeg)와 **같은 클래스**를 쓴다(#1145) — 종전의 term-seg-item/-t/-d/.on 은
-  //  CSS 에 정의가 아예 없어 스타일이 하나도 안 먹었다(맨 버튼 4개). 4택이라 term-seg--wrap 으로 2×2 로 접는다.
-  const writeVisSeg = el('div', { class: 'term-seg term-seg--wrap' },
-    ...writeVisOpts.map((o) => {
-      const b = el('button', { class: 'term-seg-btn', type: 'button' },
-        el('span', { class: 'term-seg-txt' },
-          el('span', { class: 'term-seg-lbl', text: o.t }),
-          el('span', { class: 'term-seg-sub', text: o.d })),
-        el('span', { class: 'term-seg-check' }));
-      b.onclick = (e: any) => {
-        e.preventDefault();
-        if (writeVisVal === o.v) return;
-        writeVisVal = o.v;
-        writeVisBtns.forEach((c, i) => c.classList.toggle('active', writeVisOpts[i].v === writeVisVal));
-      };
-      if (o.v === writeVisVal) b.classList.add('active');
-      writeVisBtns.push(b); return b;
-    }));
-  const writeVisField = el('div', {}, fieldInfo('기록 범위',
-    '이 세션의 AI 가 **내 승인 없이** 남길 수 있는 기록의 최대 공개 범위입니다.\n\n· **자동** — 실행 폴더를 따릅니다. 프로젝트 폴더면 그 프로젝트 범위, 그 밖은 전체 공개.\n· **전체 공개** — 조직 누구나 봅니다.\n· **프로젝트 범위** — 그 프로젝트를 볼 수 있는 사람만 봅니다.\n· **나만** — 나만 볼 수 있게 남깁니다.\n\n「라이블리 모드」가 **쓸지 말지**를 정한다면, 이건 **쓴다면 누구에게 보이게**를 정합니다.',
-    writeVisSeg));
+  const writeVisSel = el('select', { class: 'term-input ig-sel' },
+    ...writeVisOpts.map((o) => el('option', { value: o.v }, o.t + ' — ' + o.d)));
+  writeVisSel.value = writeVisVal;
+  writeVisSel.addEventListener('change', () => { writeVisVal = writeVisSel.value; advSummary(); });
 
-  // '실행 설정'(하네스·모델·effort) — 접이식 프리셋으로 묶어 세로를 아끼고, 이전 설정을 기억한다(#673). 기본 접힘.
-  const presetSum = el('div', { class: 'term-preset-sum' });
-  const presetChev = el('span', { class: 'term-preset-chev', text: '▾' });
-  const presetToggle = el('button', { class: 'term-preset-toggle', type: 'button', 'data-tour': 'preset' }, presetSum, presetChev);
-  // 실행(AI)·모델·추론강도는 짧은 드롭다운 셋 — 각자 한 줄을 차지할 이유가 없어 한 줄에 나란히 둔다(#1145).
-  const presetBody = el('div', { class: 'term-preset-body', 'data-tour': 'model' },
-    el('div', { class: 'term-preset-row', style: 'display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start' },
-      el('div', { 'data-tour': 'harness', style: 'flex:1 1 120px;min-width:0' }, field('실행 (AI)', harnessSel)),
-      flagsBox),
-    profileNoteEl(cfg));
-  let presetOpen = false;
-  const applyPreset = () => { presetBody.style.display = presetOpen ? '' : 'none'; presetChev.textContent = presetOpen ? '▴' : '▾'; };
-  presetToggle.onclick = () => { presetOpen = !presetOpen; applyPreset(); };
+  // 읽기전용·인코그니토면 기록 범위는 **고를 수 없다**(#1145) — readOnly 는 쓰기 툴이 소거되고(capabilities/index.ts)
+  //  incognito 는 라이블리 접근 자체가 막히므로, '쓴다면 누구에게 보이게'라는 이 축은 그때 아무 효과가 없다.
+  //  효과 없는 컨트롤을 남겨두면 사람은 그게 먹는다고 믿는다 — 자리에 이유를 적어 잠근다.
+  const writeVisHost = el('div', {});
+  function writeVisLocked() { return modeVal !== 'normal'; }
+  // 「라이블리는 [모드] 모드로 쓰고, 기록은 [기록범위] 범위로 남깁니다.」 — 축이 꺼졌거나 셸이면 문장을 줄인다.
+  function paintModeRow() {
+    if (!mcpWired(harnessOf())) { modeRow.replaceChildren(); return; }
+    const showVis = visAxisOn('session_cap');
+    modeRow.replaceChildren(
+      el('span', { class: 'ig-lead', text: '라이블리는' }),
+      modeSel,
+      el('span', { class: 'ig-mid', text: showVis ? '모드로 쓰고, 기록은' : '모드로 씁니다.' }),
+      showVis ? writeVisHost : el('span'),
+      el('span', { class: 'ig-tail' },
+        showVis ? document.createTextNode('범위로 남깁니다.') : null,
+        infoPop(MODE_TIP)));
+  }
+  function syncWriteVis() {
+    writeVisSel.disabled = writeVisLocked();
+    if (writeVisLocked()) {
+      writeVisHost.replaceChildren(writeVisSel,
+        el('div', { class: 'caption', text: '이 모드에서는 기록하지 않아 고를 수 없습니다.' }));
+    } else writeVisHost.replaceChildren(writeVisSel);
+    advSummary();
+  }
 
+  // 실행(AI)·모델·추론강도 — 짧은 드롭다운 셋이라 한 줄에 나란히 둔다(#1145).
+  //  ⚠ flagsBox 의 flex-direction 을 인라인으로 주는 이유는 그 정의부 주석 참조(index.html 인라인 style).
+
+  // ── 고급 설정(#1145 안 C) — 기본 화면은 '이름·폴더·초대' 셋만 두고, 나머지는 이 한 줄 뒤로 접는다.
+  //  접힌 줄에 **지금 값**을 요약해 둔다: 열지 않아도 무엇으로 뜨는지(모드·기록·모델) 알 수 있어야 한다.
+  const advSum = el('span', { class: 'term-fold-sum' });
+  const advCaret = el('span', { class: 'term-fold-caret', text: '▸' });
+  const advToggle = el('button', { class: 'term-fold', type: 'button', 'data-tour': 'preset' },
+    advCaret, el('b', { text: '고급 설정' }), advSum);
   const harnessOf = () => harnesses.find((x) => x.key === harnessSel.value) || {};
-  function presetSummary() {
+  // 라이블리 모드·기록 범위를 물을 수 있는 하네스인가 — **라이블리 MCP 가 붙는가**로 판정한다(셸만 제외, #1711).
+  //  종전 기준은 `=== 'claude'` 였고 근거는 "codex 는 정적 헤더라 세션 env 를 못 싣는다" 였는데, 그 사이 네 하네스가
+  //  전부 stdio 프록시(`lively mcp`)로 붙게 됐다 — 프록시가 상속한 env(LIVELY_MODE·LIVELY_SESSION_ID)를 읽어
+  //  상류 헤더에 붙이므로 모드·기록범위가 codex·opencode·antigravity 에서도 그대로 선다. 낡은 근거로 컨트롤을
+  //  숨기면 되는 기능을 없는 것처럼 보이게 한다. 셸엔 MCP 자체가 없어 강제할 레일이 없다.
+  const mcpWired = (h: any) => !!h && h.key !== 'shell';
+  function advSummary() {
     const h = harnessOf();
     const parts = [h.label || harnessSel.value];
     for (const f of (h.flags || [])) {
       if (f.name !== '--model' && f.name !== '--effort') continue;
       const c = flagsBox.querySelector('[data-flag="' + f.name + '"]') as any;
-      // 접힌 요약줄도 드롭다운과 같은 말로 — 라벨은 '추론강도', 빈 값은 '(자동)'.
-      parts.push((f.name === '--model' ? '모델 ' : '추론강도 ') + ((c && c.value) || '자동'));
+      // 요약줄도 드롭다운과 같은 말로 — 라벨은 '추론강도', 빈 값은 '지난번 그대로'.
+      parts.push((f.name === '--model' ? '모델 ' : '추론강도 ') + ((c && c.value) || '지난번 그대로'));
     }
-    presetSum.replaceChildren(el('b', { text: '실행 설정' }), document.createTextNode(' · ' + parts.join(' · ')));
+    if (mcpWired(h)) {
+      parts.push((modeOpts.find((m) => m.key === modeVal) || {}).lbl || '일반');
+      if (visAxisOn('session_cap')) {
+        parts.push(writeVisLocked() ? '기록 안 함'
+          : '기록 ' + ((writeVisOpts.find((o) => o.v === writeVisVal) || {}).t || '자동'));
+      }
+    }
+    advSum.textContent = ' · ' + parts.join(' · ');
   }
+  // presetSummary 라는 이름으로 부르던 곳(renderFlags)이 그대로 동작하도록 별칭을 둔다.
+  const presetSummary = advSummary;
 
   function renderFlags() {
     const h = harnessOf();
     flagsBox.replaceChildren();
+    const ctrls: Array<{ f: any; ctrl: any }> = [];
     for (const f of (h.flags || [])) {
       let ctrl: any;
-      // 빈 값 = 그 플래그를 아예 안 넘김(하네스가 알아서) — '기본'보다 '자동'이 그 뜻에 가깝다(#1145).
-      //  카탈로그가 그 하네스의 기본값을 알려주면 '(자동 · gpt-5.5)' 처럼 **무엇으로 뜨는지**까지 보여준다.
-      //  값을 고정하는 게 아니라 표기만 하는 것 — 하네스가 기본을 올리면 실제로는 새 기본으로 뜬다(표기만 낡는다).
-      const autoLabel = f.default ? '(자동 · ' + f.default + ')' : '(자동)';
+      // 빈 값 = 그 플래그를 **안 넘긴다** → 하네스가 자기 설정을 쓴다. claude 는 마지막에 고른 모델·effort 를
+      //  settings.json(model·effortLevel)에 저장하므로, 실제 의미는 '그 계정이 **지난번 쓰던 그대로**'다(실측).
+      //  그래서 '(자동)' 같은 말 대신 그 뜻을 그대로 적는다(#1145 — "아무도 이해 못할 말").
+      //  ⚠ 프리필은 불가: 그 값은 격리 계정 홈(box_ 700)에 있어 게이트웨이가 못 읽고, 웹이 아는 값을 명시해 넘기면
+      //   세션 안에서 /model 로 바꿔둔 실제 설정을 덮어쓴다.
+      const autoLabel = '지난번 그대로';
       if (f.type === 'select') ctrl = el('select', { class: 'term-input', 'data-flag': f.name }, ...(f.choices || []).map((c) => el('option', { value: c }, c || autoLabel)));
       else if (f.type === 'bool') ctrl = el('input', { type: 'checkbox', 'data-flag': f.name });
       else ctrl = el('input', { class: 'term-input', type: 'text', 'data-flag': f.name, placeholder: f.desc || '' });
       const saved = prefs.flags && prefs.flags[f.name]; // 이전 설정 복원(#673)
       if (saved != null) { if (ctrl.type === 'checkbox') ctrl.checked = !!saved; else ctrl.value = saved; }
       ctrl.addEventListener('change', presetSummary);
-      // 폭도 인라인으로 — 모델·추론강도가 실행(AI)과 같은 줄에서 균등하게 나뉘도록(옛 CSS 캐시에도 안전).
-      flagsBox.append(el('div', { class: 'field', style: 'flex:1 1 110px;min-width:0;margin:8px 0 0' }, el('label', { class: 'field-label', text: f.label }), ctrl, f.desc ? el('div', { class: 'caption', text: f.desc }) : null));
+      ctrl.classList.add('ig-sel');
+      ctrls.push({ f, ctrl });
+    }
+    // 문장으로 조립한다 — 「모델은 [ ] , 추론강도는 [ ] 를 씁니다.」. 플래그가 하나뿐인 하네스(codex)면
+    //  뒤 두 칸을 비워 열 정렬을 유지하고, 아예 없으면(shell) 이 줄 자체를 안 만든다.
+    const tip = ctrls.map(({ f }) => f.desc).filter(Boolean).join('\n');
+    if (ctrls.length) {
+      flagsBox.append(
+        el('span', { class: 'ig-lead', text: ctrls[0].f.label + '은' }),
+        ctrls[0].ctrl,
+        el('span', { class: 'ig-mid', text: ctrls[1] ? ', ' + ctrls[1].f.label + '는' : '' }),
+        ctrls[1] ? ctrls[1].ctrl : el('span'),
+        el('span', { class: 'ig-tail' }, document.createTextNode('를 씁니다.'), tip ? infoPop(tip) : null));
     }
     autoWrap.style.display = h.hasAutoApprove ? '' : 'none';
     //  기록 범위 축이 꺼져 있으면 아예 안 보인다(#1291) — 고른 값이 강제되지 않는 컨트롤을 남기지 않는다.
-    // #1711 — 판정 기준은 '**라이블리 MCP 가 붙는 하네스인가**'다(셸만 제외). 종전엔 `=== 'claude'` 였고 근거는
-    //  "codex 는 정적 헤더라 세션 env 를 못 싣는다" 였는데, 그 사이 네 하네스가 전부 **stdio 프록시(`lively mcp`)**
-    //  로 붙게 됐다 — 프록시는 자기가 상속한 env(LIVELY_MODE·LIVELY_SESSION_ID)를 읽어 상류 헤더에 붙이므로
-    //  모드·기록범위가 codex·opencode·antigravity 에서도 그대로 선다(설치기 주석: "codex 는 per-session 실행 모드
-    //  미지원" 한계가 프록시로 풀렸다). 낡은 근거로 컨트롤을 숨기면 되는 기능을 없는 것처럼 보이게 한다.
-    const wired = h.key !== 'shell';   // 셸 세션엔 MCP 자체가 없다(모드를 강제할 레일이 없음)
-    //  기록 범위 축이 꺼져 있으면 아예 안 보인다(#1291) — 고른 값이 강제되지 않는 컨트롤을 남기지 않는다.
-    writeVisField.style.display = (wired && visAxisOn('session_cap')) ? '' : 'none';
-    modeField.style.display = wired ? '' : 'none';
+    //  (그 판정은 문장 자체를 조립하는 paintModeRow 가 mcpWired() 로 한다 — #1145 이후 이 줄엔 개별 필드가 없다.)
+    paintModeRow(); // 라이블리 모드/기록 범위 줄 — 셸이면 아예 안 만든다(MCP 레일이 없어 강제할 방법이 없다)
     presetSummary();
   }
   harnessSel.addEventListener('change', renderFlags);
   if (prefs.harness && harnesses.some((h) => h.key === prefs.harness)) harnessSel.value = prefs.harness; // 이전 하네스 복원
   renderFlags();
-  applyPreset();
+
+  // '이 설정을 기억하기'로 남겨둔 스냅샷 복원(#1145) — 실행 위치·폴더·모드·기록 범위.
+  //  없어진 것(삭제된 노드·지워진 폴더)은 조용히 건너뛴다: 저장값 때문에 폼이 못 열리면 안 된다.
+  //  폴더는 여기서 pickerPath 만 세팅하고, 아래 loadPicker() 첫 호출이 그 경로로 연다(없으면 그 자리에서 오류 문구).
+  if (prefs.rememberAll && prefs.snap) {
+    const s = prefs.snap;
+    if (s.node && nodes.some((n) => n.id === s.node && n.online)) nodeSel.value = s.node;
+    if (s.rootKey && rootBtns[s.rootKey]) {
+      rootKey = s.rootKey;
+      for (const k in rootBtns) rootBtns[k].classList.toggle('active', k === rootKey);
+    }
+    if (s.subpath) { if (nodeSel.value) remoteSubI.value = s.subpath; else pickerPath = s.subpath; }
+    if (s.mode && modeOpts.some((m) => m.key === s.mode)) { modeVal = s.mode; modeSel.value = modeVal; }
+    if (writeVisOpts.some((o) => o.v === (s.writeVis || ''))) { writeVisVal = s.writeVis || ''; writeVisSel.value = writeVisVal; }
+  }
 
   // 작업 폴더 = 선택한 루트(공유/개인) 안을 드롭다운으로 재귀 탐색.
   async function loadPicker() {
@@ -327,42 +389,182 @@ function openTermCreateForm(cfg, view, onCreated?) {
     try { await api('/api/ui/terminal/browse/mkdir?root=' + encodeURIComponent(rootKey) + '&path=' + encodeURIComponent(rel), { method: 'POST' }); pickerPath = rel; loadPicker(); }
     catch (e) { toast('폴더 생성 실패 — ' + e.message, true); }
   }
-  loadPicker();
+  paintPicker(); // 스냅샷으로 노드가 복원됐으면 원격 경로 입력, 아니면 폴더 브라우저(#1145)
+  paintHarnesses(); // 그 노드에 없는 AI 는 목록에서 뺀다(#1713) — nodeSel.change 와 같은 짝이라 복원 경로도 새지 않는다
 
-  // 폼 순서(#673) — 무엇(이름) → 어디(폴더) → 어떻게(실행 옵션 체크박스 · 실행 설정 프리셋) → 누구(초대는 맨 아래).
-  //  온보딩 투어(#517)의 data-tour 앵커도 이 순서에 맞춘다: label → node → folder → options → preset → invite → create.
-  const back = overlay('새 세션',
-    el('div', { 'data-tour': 'label' }, field('이름', labelI)),
-    el('div', { 'data-tour': 'node' }, fieldInfo('실행 위치',
-      'AI 가 실제로 돌아가는 컴퓨터입니다.\n\n· **중앙 컴퓨터**(기본) — 내 노트북을 꺼도 세션은 계속 실행됩니다.\n· **내 PC** — 노드로 등록해 두었다면 골라서 그 컴퓨터에서 실행합니다.',
-      nodeSel), nodeHint), // #869 중앙 컴퓨터/등록 노드 — 항상 노출: 투어 ③'실행 위치' 스텝의 대상(#req). 등록 노드가 없으면 '중앙 컴퓨터(기본)' 한 줄만 보인다(submit 값은 기존과 동일 ''). nodeHint(#1713) = 그 PC 에 없어서 못 고르는 AI 안내.
-    // #853 작업 위치(공유/개인 토글) + 그 안의 폴더를 한 블록으로 — '이 폴더에서 AI를 실행한다'는 직관.
-    el('div', { 'data-tour': 'folder' }, fieldInfo('어디서 실행할까요',
-      'AI 는 폴더 하나를 정해 그 안에서 일합니다.\n\n· 여기서 고른 폴더가 이 세션의 **작업 공간**이 됩니다.\n· 그 안의 파일과 하위 폴더는 AI 가 **자유롭게 열어 봅니다**.\n· 「공유 워크스페이스」는 팀과 함께 쓰는 폴더, 「개인 폴더」는 나만 쓰는 폴더입니다.',
-      el('div', { class: 'term-loc' }, rootSeg, el('div', { class: 'term-loc-folder' }, pickerBox)))),
-    modeField, // 라이블리 모드 — '어디서 실행할까요'와 같은 카드 언어로, 그 아래 독립 필드(#1007+ 디자인 통일)
-    writeVisField, // 기록 범위(#1291 v2) — 모드와 직교(쓰나 마나 vs 쓴다면 누구에게)
-    el('div', { class: 'term-checks', 'data-tour': 'options' }, autoWrap),
-    presetToggle, presetBody,
-    el('div', { 'data-tour': 'invite' }, field('초대 (비우면 나만 보는 비공개 세션)', inviteBox.box)),
+  // ── 어떻게 열까요(#1145 안 1) — 웹 / 내 PC. 종전엔 프로젝트 상세에서 드롭다운으로 먼저 고른 뒤에야
+  //  모달이 떴다(경로마다 다른 모달). 이제 이 모달 한 장이 두 경우를 다 받는다.
+  //  내 PC 는 세션을 만들지 않는다 — 그 사람 터미널에 붙여넣을 `lively run` 한 줄을 만들어 줄 뿐이다.
+  const bodyHost = el('div', {});   // 웹/내 PC 에 따라 통째로 갈리는 본문(applyWhere)
+  let openWhere: 'web' | 'local' = 'web';
+  const whereOpts = [
+    { key: 'web', ico: '☁️', lbl: '웹에서 열기', sub: '설치 없이 바로 씁니다' },
+    { key: 'local', ico: '💻', lbl: '내 PC에서 열기', sub: '실행 명령을 알려드립니다' },
+  ];
+  const whereBtns: Record<string, any> = {};
+  // 이 2택은 폼 전체를 갈아끼우므로 **다른 필드보다 위계가 높아야 한다**(#1145).
+  //  두 가지 모양을 만들어 두고 상수 하나로 고른다 — 바꾸고 싶으면 이 값만 'tabs' 로:
+  //   · 'pill'(현재) — 모달 제목 줄의 pill 세그먼트. 가장 짧다(모달 −77px). 한 번 고르면 잘 안 바꾸는 사람 기준.
+  //   · 'tabs'      — 제목 아래 밑줄 탭(.seg-tabs 재사용). 발견성이 높고 좁은 폭에서 헤더가 안 접힌다.
+  const WHERE_UI = 'pill' as 'pill' | 'tabs';
+  const mkWhereBtn = (w, cls: string, body: any[]) => {
+    const b = el('button', { class: cls + (w.key === openWhere ? (cls === 'where-pill-btn' ? ' on' : ' active') : ''), type: 'button' }, ...body);
+    b.onclick = (e: any) => {
+      e.preventDefault();
+      if (openWhere === w.key) return;
+      openWhere = w.key as any;
+      for (const k in whereBtns) whereBtns[k].classList.toggle(cls === 'where-pill-btn' ? 'on' : 'active', k === openWhere);
+      applyWhere();
+    };
+    whereBtns[w.key] = b; return b;
+  };
+  const whereSeg = WHERE_UI === 'pill'
+    ? el('div', { class: 'where-pill' }, ...whereOpts.map((w) =>
+      mkWhereBtn(w, 'where-pill-btn', [el('span', { text: w.ico + ' ' + (w.key === 'web' ? '웹' : '내 PC') })])))
+    : el('div', { class: 'seg-tabs where-tabs' }, ...whereOpts.map((w) =>
+      mkWhereBtn(w, 'where-tab-btn', [el('span', { text: w.ico + '  ' + w.lbl })])));
+
+  // 내 PC 안내 — `lively run <프로젝트번호|폴더>` 한 줄. work.mjs 가 공유폴더 pull·레포·마커·실행까지 한다.
+  // ⚠ 인자 규약(kit/cli/lively.mjs:1268 · kit/setup/work.mjs:47): `lively run <프로젝트#>` 는 work.mjs 로 가고
+  //  **숫자 id 만** 받는다(공유폴더 pull·레포·마커까지 자동). 프로젝트가 없으면 인자 없이 `lively run` —
+  //  지금 폴더에서 하네스를 띄운다. '.' 같은 걸 넣으면 하네스 인자로 흘러가 엉뚱하게 동작한다.
+  const localCmd = () => (project && /^\d+$/.test(String(project.id)) ? 'lively run ' + project.id : 'lively run');
+  const localBox = el('div', { class: 'term-local-guide' },
+    el('p', { class: 'caption', text: '내 PC 터미널에 붙여넣어 실행하세요(Mac·Windows 동일). 웹은 그 화면을 보지 않습니다 — 세션은 내 컴퓨터에서 돕니다.' }),
+    el('pre', { class: 'term-cmd' }, el('code', { text: localCmd() })),
+    el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' },
+      el('button', {
+        class: 'btn btn-ghost btn-sm', type: 'button', text: '명령 복사',
+        onclick: () => {
+          const t = localCmd();
+          try { navigator.clipboard.writeText(t).then(() => toast('명령을 복사했어요')).catch(() => toast('복사 실패 — 직접 드래그해 복사하세요', true)); }
+          catch (_) { toast('복사 실패 — 직접 드래그해 복사하세요', true); }
+        },
+      }),
+      el('span', { class: 'caption', text: "'lively: command not found' 가 나오면 아직 설치 전이에요 — [사용 가이드 ▸ 내 AI 세션 생성] 을 먼저 따라 하세요." })));
+
+  // 고급 설정 안(#1145) — 기본 화면엔 '이름·어디서·초대'만 두고, 나머지는 이 블록에 접어 둔다.
+  //  실행 위치·라이블리 모드·기록 범위·실행(AI)/모델/추론강도·자동 승인이 여기 들어간다.
+  //  드롭다운 6개를 2줄 격자로 — 실행 위치·모드·기록 범위 / 실행(AI)·모델·추론강도. 한 가지 언어로 통일한다(#1145).
+  const advBody = el('div', { class: 'term-adv-body', hidden: '' },
+    // 문장 격자(#1145 안 2) — 라벨 6개를 세우는 대신 세 문장으로 읽힌다. 5열(앞말·값·중간말·값·끝말)이라
+    //  줄이 달라도 드롭다운이 세로로 정렬된다(라벨형 격자가 '들쭉날쭉'했던 이유가 그 정렬 부재였다).
+    el('div', { class: 'ig-grid' },
+      el('span', { class: 'ig-lead', text: '이 세션은' }),
+      nodeSel, // #869 등록 노드가 없으면 '중앙 컴퓨터(기본)' 한 줄만 보인다(submit 값은 기존과 동일 '')
+      el('span', { class: 'ig-mid', text: '에서' }),
+      harnessSel,
+      el('span', { class: 'ig-tail' }, document.createTextNode('로 실행됩니다.'),
+        infoPop('**어느 컴퓨터에서 어떤 AI 로** 실행할지 정합니다.\n\n· **중앙 컴퓨터**(기본) — 내 노트북을 꺼도 세션은 계속 실행됩니다.\n· **내 PC** — 노드로 등록해 두었다면 골라서 그 컴퓨터에서 실행할 수 있습니다.')),
+      flagsBox,  // 「모델은 [ ] , 추론강도는 [ ] 를 씁니다.」 — renderFlags 가 채운다
+      modeRow),  // 「라이블리는 [ ] 모드로 쓰고, 기록은 [ ] 범위로 남깁니다.」
+    //  #1713 — 고른 컴퓨터에 안 깔려서 못 고르는 AI 안내. 격자 **밖** 한 줄이다(5열 정렬을 깨지 않게).
+    nodeHint,
+    profileNoteEl(cfg),
+    el('div', { class: 'term-checks', 'data-tour': 'options' }, autoWrap));
+  const advOpen = () => { advBody.removeAttribute('hidden'); advCaret.textContent = '▾'; };
+  advToggle.onclick = () => {
+    if (advBody.hasAttribute('hidden')) advOpen();
+    else { advBody.setAttribute('hidden', ''); advCaret.textContent = '▸'; }
+  };
+  advSummary();
+  syncWriteVis(); // 초기 상태(일반=카드 노출)를 그려 둔다 — 요약줄도 여기서 함께 채워진다
+
+  // 웹/내 PC 에 따라 본문을 통째로 갈아끼운다. 내 PC 는 명령 한 줄이 전부라 나머지를 물을 이유가 없다.
+  function applyWhere() {
+    if (openWhere === 'local') { bodyHost.replaceChildren(localBox); return; }
+    bodyHost.replaceChildren(
+      el('div', { 'data-tour': 'label' }, field('이름', labelI)),
+      project
+        // 프로젝트 맥락 — 고를 게 없으니 '무엇이 정해졌는지'를 보여준다.
+        ? el('div', { 'data-tour': 'folder' }, fieldInfo('어디서 실행할까요',
+          '이 세션은 **이 프로젝트의 폴더**에서 열립니다 — 폴더를 따로 고르지 않습니다.\n\n· 프로젝트 본문·연결된 지식·프로젝트 규칙이 세션에 자동으로 들어갑니다.\n· 이 프로젝트를 볼 수 있는 사람은 모두 이 세션을 보고 이어받을 수 있습니다.',
+          projCard()))
+        // #853 작업 위치(공유/개인 토글) + 그 안의 폴더를 한 블록으로 — '이 폴더에서 AI를 실행한다'는 직관.
+        : el('div', { 'data-tour': 'folder' }, fieldInfo('어디서 실행할까요',
+          'AI 는 폴더 하나를 정해 그 안에서 일합니다.\n\n· 여기서 고른 폴더가 이 세션의 **작업 공간**이 됩니다.\n· 그 안의 파일과 하위 폴더는 AI 가 **자유롭게 열어 볼 수 있습니다**.\n· 「공유 워크스페이스」는 팀과 함께 쓰는 폴더이고, 「개인 폴더」는 나만 쓰는 폴더입니다.',
+          el('div', { class: 'term-loc' }, rootSeg, el('div', { class: 'term-loc-folder' }, pickerBox)))),
+      project
+        ? el('div', { 'data-tour': 'invite' }, field('초대', projInvite()))
+        : el('div', { 'data-tour': 'invite' }, field('초대 (비우면 나만 보는 비공개 세션)', inviteBox.box)),
+      advToggle, advBody,
+      // '이 설정을 기억하기'는 고급 설정 밖 맨 아래 — 고급을 펼치지 않아도 켤 수 있어야 한다.
+      el('div', { class: 'term-checks' }, rememberWrap));
+  }
+
+  // 프로젝트에서 열었으면 폴더를 고를 여지가 없다 — 빈 자리를 남기는 대신 **무엇이 정해졌고 그래서 뭐가 좋은지**를 채운다.
+  //  (비활성 회색이 아니라 강조 카드인 이유: 뺏긴 게 아니라 얻은 것이다.)
+  const projCard = () => el('div', { class: 'term-proj-lock' },
+    el('div', { class: 'term-proj-lock-head' },
+      el('span', { text: '🗂' }),
+      el('b', { text: project!.name || ('프로젝트 ' + project!.id) }),
+      el('span', { class: 'pill', text: '프로젝트 세션' })),
+    el('div', { class: 'term-runhere' },
+      el('span', { class: 'term-runhere-ic', text: '▶' }),
+      el('span', { class: 'term-runhere-txt' }, el('b', { text: '이 폴더에서 AI 실행 · project/' + project!.id }))),
+    el('ul', { class: 'term-proj-why' },
+      el('li', { text: '이 프로젝트 폴더에서 열립니다 — 폴더를 고르지 않아도 됩니다.' }),
+      el('li', { text: '프로젝트 본문·연결된 지식·규칙이 세션에 자동으로 들어갑니다.' }),
+      el('li', { text: '이 프로젝트를 볼 수 있는 사람은 모두 이 세션을 보고 이어받을 수 있습니다.' })));
+
+  // 프로젝트 세션의 '초대' — 칸은 남기되 사실을 적고 잠근다. 넣어도 가시성이 안 바뀌기 때문이다(위 주석 참조).
+  const projInvite = () => el('div', {},
+    el('div', { class: 'term-lock-note' },
+      el('span', { text: '🗂' }),
+      el('span', {}, el('b', { text: '이 프로젝트를 볼 수 있는 사람은 모두' }),
+        document.createTextNode(' 이 세션을 봅니다 — 따로 초대하지 않아도 됩니다.'))),
+    el('div', { class: 'term-invite-off' }, inviteBox.box));
+
+  // 폼 순서(#1145 안 C+1) — 어떻게(웹/내 PC) → 무엇(이름) → 어디(폴더) → 누구(초대) → 그 밖(고급 설정) → 기억 → 만들기.
+  //  온보딩 투어(#517) 앵커: label → folder → invite → preset(=고급 설정, 열리면 node·options 도 그 안에) → create.
+  applyWhere();
+  const back = overlay(project ? '새 AI 세션 · ' + (project.name || ('프로젝트 ' + project.id)) : '새 AI 세션',
+    // 'tabs' 모드일 때만 본문 맨 위에 둔다 — 'pill' 은 아래에서 헤더(제목 줄)로 옮긴다.
+    WHERE_UI === 'tabs' ? whereSeg : null,
+    bodyHost,
     el('div', { class: 'ov-actions' },
       el('button', { class: 'btn btn-primary', 'data-tour': 'create', text: '생성하기', onclick: async (ev) => {
+        if (openWhere === 'local') { toast('위 명령을 내 PC 터미널에 붙여넣어 실행하세요'); return; }
         const btn = ev.currentTarget; btn.disabled = true;
         const fromTour = isTourActive(); // 클릭 순간(투어 종료 전)에 캡처 — 따라하기면 완료 안내를 새 터미널 탭에 띄운다(#673)
         const flags = {};
         for (const c of flagsBox.querySelectorAll('[data-flag]')) flags[c.dataset.flag] = (c.type === 'checkbox') ? c.checked : c.value;
         const nodeId = nodeSel.value || ''; // #869 노드면 원격 경로(remoteSubI), 아니면 로컬 폴더(pickerPath)
         const mode = modeVal; // #1007+ 라이블리 모드 → readOnly/incognito 불리언(서버 CreateInput)
-        const payload = { label: labelI.value, rootKey, subpath: nodeId ? remoteSubI.value.trim() : pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, readOnly: mode === 'readonly', incognito: mode === 'incognito', writeVis: writeVisVal || undefined, invites: inviteBox.selected(), node: nodeId || undefined };
+        // 잠긴 상태(읽기전용·인코그니토)면 기록 범위는 보내지 않는다 — 화면에서 못 고르는 값을 몰래 실어 보내지 않는다(#1145).
+        const writeVisOut = writeVisLocked() ? '' : writeVisVal;
+        // 프로젝트 세션은 폴더·초대를 안 받는다(그 프로젝트 폴더에서 열리고, 가시성은 리스트 공개범위가 정한다).
+        const payload: any = project
+          ? { label: labelI.value, harness: harnessSel.value, flags, autoApprove: autoCb.checked, readOnly: mode === 'readonly', incognito: mode === 'incognito', writeVis: writeVisOut || undefined, node: nodeId || undefined }
+          : { label: labelI.value, rootKey, subpath: nodeId ? remoteSubI.value.trim() : pickerPath, harness: harnessSel.value, flags, autoApprove: autoCb.checked, readOnly: mode === 'readonly', incognito: mode === 'incognito', writeVis: writeVisOut || undefined, invites: inviteBox.selected(), node: nodeId || undefined };
         try {
-          const out = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify(payload) });
-          saveTermCreatePrefs({ harness: harnessSel.value, flags, autoApprove: autoCb.checked }); // 이 설정을 다음 생성 때 기본값으로 기억(#673, 자동 승인은 #782)
+          // 프로젝트 세션은 그 프로젝트 엔드포인트로 만든다 — 서버가 폴더·가시성·맥락 주입을 그쪽에서 붙인다.
+          const url = project ? ((project.base || '/api/ui/v6/projects/') + project.id + '/sessions') : '/api/ui/terminal/sessions';
+          const out = await api(url, { method: 'POST', body: JSON.stringify(payload) });
+          // 하네스·모델·추론강도·자동 승인은 종전대로 늘 기억한다(#673/#782).
+          //  '이 설정을 기억하기'를 켰으면 나머지(실행 위치·폴더·모드·기록 범위)까지 스냅샷으로 함께 남긴다(#1145).
+          saveTermCreatePrefs({
+            harness: harnessSel.value, flags, autoApprove: autoCb.checked,
+            rememberAll: rememberCb.checked,
+            snap: rememberCb.checked
+              ? { node: nodeId, rootKey, subpath: nodeId ? remoteSubI.value.trim() : pickerPath, mode: modeVal, writeVis: writeVisVal }
+              : undefined,
+          });
           back.remove();
           toast('세션 생성됨');
           if (out && out.session) window.open(termUrl(out.session.id, out.session.label, nodeId, fromTour ? '&welcome=1' : ''), '_blank');
           if (onCreated) onCreated(out); else renderTerminal(view);
         } catch (e) { btn.disabled = false; toast('생성 실패 — ' + e.message, true); }
       } })));
+  // pill 모드 — 제목 줄(.ov-head)의 [닫기] 앞에 끼운다. overlay() 가 헤더를 만들어 주므로 만든 뒤 옮긴다.
+  //  헤더에 두면 가장 짧지만(모달 −77px) 좁은 폭에서 헤더가 2줄로 접힌다 — CSS 가 그때 전체폭으로 떨어뜨린다.
+  back.classList.add('ov-back--center'); // 세로 중앙(#1145) — 짧은 모달이 위로 쏠려 어색하던 것. 긴 모달은 종전대로 위에서 시작.
+  if (WHERE_UI === 'pill') {
+    const head = back.querySelector('.ov-head');
+    const closeBtn = head?.querySelector('.btn');
+    if (head) head.insertBefore(whereSeg, closeBtn || null);
+  }
+  return back;
 }
 
 // 노드 관리(#869) — 내 PC·서버를 노드로 연결(상태·추가안내·토큰회전·활성토글·삭제). 등록 자체는 그 머신에서
