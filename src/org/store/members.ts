@@ -112,6 +112,7 @@ export interface LivDeclined { at: string; key: string; why?: string }
  */
 export interface LivSecretAsk {
   at: string;
+  kind?: "secret";
   /** 어디에 넣을 것인가 — 지금은 수집기뿐이다(collector.id + 그 프리셋의 시크릿 필드 key). */
   collector_id: number;
   field: string;
@@ -122,22 +123,119 @@ export interface LivSecretAsk {
   hint?: string;
 }
 
+/**
+ * **객관식 질문**(#1631) — 리브가 묻고 사람은 고르기만 한다.
+ *
+ * 왜 객관식인가: 실측에서 사람이 가장 오래 멈춘 자리가 **자유서술**이었다("어디에 쌓고 계셨나요?").
+ *  없는 말을 지어내야 하니 어렵고, 답이 제각각이라 우리도 통계를 못 낸다. 고르게 하면 둘 다 풀린다 —
+ *  사람은 쉽고, **답이 저절로 구조화된다**(아래 LivAnswer). 그게 이 둘을 한 기능으로 묶은 이유다.
+ */
+export interface LivChoiceAsk {
+  at: string;
+  kind: "choice";
+  /** 통계의 축이 되는 안정된 key(예: `context_sources`). 문구가 바뀌어도 이건 안 바뀐다. */
+  key: string;
+  question: string;
+  why?: string;
+  options: Array<{ id: string; label: string; hint?: string }>;
+  /** 복수 선택 허용(예: 쓰는 도구를 다 고르기). */
+  multi?: boolean;
+  /** '그 외' 자유입력 허용 — 목록에 없는 소스를 놓치지 않기 위한 탈출구. */
+  allow_other?: boolean;
+}
+
+/** **파일 올리기**(#1631) — 로컬 폴더를 뒤지는 대신 사람이 끌어다 놓는다. */
+export interface LivUploadAsk {
+  at: string;
+  kind: "upload";
+  label: string;
+  why?: string;
+  /** 사람에게 보여줄 허용 형식 안내(실제 차단은 화면이 한다). */
+  accept_hint?: string;
+}
+
+export type LivAsk = LivSecretAsk | LivChoiceAsk | LivUploadAsk;
+
+/**
+ * 사람이 고른 답 — **통계의 원재료**.
+ *
+ * `key` 가 축이고 `choices` 가 값이라, 워크스페이스 전체에서 SQL 한 줄로 집계된다
+ * (예: 어떤 소스를 쓰는 사람이 몇 %인가 · 커넥터 없는 소스로 무엇을 적어내나).
+ */
+export interface LivAnswer {
+  at: string;
+  key: string;
+  choices: string[];
+  /** '그 외'로 적어낸 자유입력. **여기 쌓이는 것이 곧 다음에 만들 커넥터 후보다.** */
+  other?: string;
+  question?: string;
+}
+
 export interface LivProfile {
   work?: LivWork; decisions?: LivDecision[]; declined?: LivDeclined[];
-  /** 대기 중인 자격 요청. 받으면 즉시 지운다(값은 여기 오지 않는다). */
-  secret_ask?: LivSecretAsk | null;
+  /** 대기 중인 요청(자격·객관식·업로드) 하나. 받으면 즉시 지운다 — 시크릿 값은 여기 오지 않는다. */
+  secret_ask?: LivAsk | null;
+  /** 사람이 고른 답들. 뒤에 쌓인다. */
+  answers?: LivAnswer[];
 }
 
 const LIV_LIST_CAP = 50; // 결정·거절 이력 상한 — 오래된 것부터 버린다(프로필은 로그가 아니다)
 
-/** 자격 요청을 걸거나(ask) 지운다(null). 값은 절대 지나가지 않는다. */
-export async function setLivSecretAsk(id: string, ask: LivSecretAsk | null): Promise<LivProfile> {
+/** 요청을 걸거나(ask) 지운다(null). 시크릿 값은 절대 지나가지 않는다. */
+export async function setLivSecretAsk(id: string, ask: LivAsk | null): Promise<LivProfile> {
   const cur = await getLivProfile(id);
   const next: LivProfile = { ...cur, secret_ask: ask };
   const r = await itemsPool.query(
     `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
   if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
   return (r.rows[0].liv_profile ?? {}) as LivProfile;
+}
+
+/**
+ * 고른 답을 남기고 그 요청을 내린다(한 트랜잭션의 뜻 — 답했으면 질문은 사라져야 한다).
+ *
+ * ⚠ **같은 key 는 갈아끼운다.** 다시 물어 다시 답했으면 최신 하나만 의미가 있고,
+ *  두 줄이 남으면 집계가 사람 수보다 커진다(통계가 틀어지는 가장 흔한 경로).
+ */
+export async function appendLivAnswer(id: string, answer: LivAnswer): Promise<LivProfile> {
+  const cur = await getLivProfile(id);
+  const rest = (cur.answers ?? []).filter((a) => a.key !== answer.key);
+  const next: LivProfile = { ...cur, answers: [...rest, answer].slice(-LIV_LIST_CAP), secret_ask: null };
+  const r = await itemsPool.query(
+    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
+  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+}
+
+/**
+ * 워크스페이스 전체 답변 집계 — **개선점을 찾는 자리**.
+ *
+ * 특히 `other`(목록에 없어 직접 적어낸 것)가 중요하다: 거기 쌓이는 이름이 **다음에 만들 커넥터 후보**다.
+ * 사람 이름은 내보내지 않는다(누가 답했는지가 아니라 무엇이 몇 번인지가 알고 싶은 것이다).
+ */
+export async function livAnswerStats(): Promise<Array<{
+  key: string; question: string | null; responders: number;
+  choices: Array<{ id: string; n: number }>; others: Array<{ text: string; n: number }>;
+}>> {
+  const r = await itemsPool.query<{ liv_profile: LivProfile }>(
+    `SELECT liv_profile FROM org_member WHERE liv_profile ? 'answers'`);
+  const byKey = new Map<string, { question: string | null; responders: number; c: Map<string, number>; o: Map<string, number> }>();
+  for (const row of r.rows) {
+    for (const a of row.liv_profile?.answers ?? []) {
+      let e = byKey.get(a.key);
+      if (!e) { e = { question: a.question ?? null, responders: 0, c: new Map(), o: new Map() }; byKey.set(a.key, e); }
+      e.responders++;
+      if (a.question && !e.question) e.question = a.question;
+      for (const c of a.choices ?? []) e.c.set(c, (e.c.get(c) ?? 0) + 1);
+      if (a.other) e.o.set(a.other, (e.o.get(a.other) ?? 0) + 1);
+    }
+  }
+  const sort = <T extends { n: number }>(xs: T[]): T[] => xs.sort((x, y) => y.n - x.n);
+  return [...byKey.entries()].map(([key, e]) => ({
+    key, question: e.question, responders: e.responders,
+    choices: sort([...e.c].map(([id, n]) => ({ id, n }))),
+    others: sort([...e.o].map(([text, n]) => ({ text, n }))),
+  }));
 }
 
 export async function getLivProfile(id: string): Promise<LivProfile> {

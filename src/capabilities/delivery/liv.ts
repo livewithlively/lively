@@ -73,9 +73,11 @@ export const livCapabilities: Capability[] = [
       const secretAsk = await (async () => {
         const ask = profile.secret_ask;
         if (!ask) return null;
+        // 객관식·업로드는 대상 검증이 필요 없다 — 시크릿만 "이미 채워졌나"를 확인한다.
+        if (ask.kind && ask.kind !== "secret") return ask;
         try {
           const { listCollectors } = await import("../../org/store/collectors.js");
-          return askStillOpen(ask, await listCollectors()) ? ask : null;
+          return askStillOpen(ask as { collector_id: number; field: string }, await listCollectors()) ? ask : null;
         } catch { return null; }
       })();
 
@@ -224,7 +226,8 @@ export const livCapabilities: Capability[] = [
       if (!userId) throw new HttpError(401, "인증이 필요합니다");
       const { getLivProfile, setLivSecretAsk } = await import("../../org/store.js");
       const ask = (await getLivProfile(userId)).secret_ask;
-      if (!ask) throw new HttpError(409, "지금 받기로 한 자격이 없습니다");
+      // 대기 중인 게 **자격 요청일 때만** 받는다 — 객관식·업로드가 떠 있는데 값이 날아오면 그건 잘못된 호출이다.
+      if (!ask || (ask.kind && ask.kind !== "secret")) throw new HttpError(409, "지금 받기로 한 자격이 없습니다");
 
       const value = String(input.value ?? "");
       if (!value.trim()) throw new HttpError(400, "값이 비어 있습니다");
@@ -238,5 +241,122 @@ export const livCapabilities: Capability[] = [
       return { ok: true, field: ask.field };  // 값은 절대 되돌려주지 않는다
     }, false, {
       value: z.string().describe("사람이 입력한 자격 값. 서버가 즉시 암호화해 저장하고 버린다."),
+    }),
+
+  // ── 객관식으로 묻기(#1631) — **사람은 고르기만, 답은 저절로 구조화** ──────────────────
+  //
+  //  실측에서 사람이 가장 오래 멈춘 자리가 자유서술이었다("지금까지 어디에 쌓고 계셨나요?").
+  //   없는 말을 지어내야 해서 어렵고, 답이 제각각이라 우리도 개선점을 못 뽑는다. 고르게 하면 둘 다 풀린다.
+  //  ⚠ `key` 는 통계의 축이다 — 문구를 다듬어도 key 는 바꾸지 마라(집계가 갈라진다).
+  restRead("me_liv_ask_choice", "객관식으로 묻기",
+    "리브 화면에 **고르는 질문**을 띄운다. 사람이 고르면 그 답이 구조화돼 쌓이고(통계), 너에게도 전달된다. " +
+    "⚠ 사람에게 자유서술을 시키지 마라 — 없는 말을 지어내는 건 어렵다. 선택지를 주는 게 기본이다. " +
+    "목록에 없을 수 있으면 allow_other 로 탈출구를 열어라(거기 적히는 것이 다음에 만들 커넥터 후보다).",
+    [{ method: "POST", paths: ["/api/ui/me/liv-choice-ask"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const { setLivSecretAsk } = await import("../../org/store.js");
+      if (input.cancel === true) return { ask: null, profile: await setLivSecretAsk(userId, null) };
+
+      const key = String(input.key ?? "").trim().slice(0, 60);
+      const question = String(input.question ?? "").trim().slice(0, 300);
+      if (!/^[a-z0-9_.-]+$/.test(key)) throw new HttpError(400, "key 는 소문자·숫자·_.- 만 씁니다(통계 축이라 안정적이어야 합니다)");
+      if (!question) throw new HttpError(400, "question 이 필요합니다");
+      const raw = Array.isArray(input.options) ? input.options : [];
+      const options = raw.slice(0, 12).map((o) => {
+        const r = (o ?? {}) as Record<string, unknown>;
+        const id = String(r.id ?? "").trim().slice(0, 40);
+        const label = String(r.label ?? "").trim().slice(0, 80);
+        if (!/^[a-z0-9_.-]+$/.test(id) || !label) throw new HttpError(400, "각 선택지에는 id(소문자 슬러그)와 label 이 필요합니다");
+        const hint = String(r.hint ?? "").trim().slice(0, 120);
+        return hint ? { id, label, hint } : { id, label };
+      });
+      if (options.length < 2) throw new HttpError(400, "선택지는 2개 이상이어야 합니다");
+      if (new Set(options.map((o) => o.id)).size !== options.length) throw new HttpError(400, "선택지 id 가 중복입니다");
+
+      const ask = {
+        at: new Date().toISOString(), kind: "choice" as const, key, question,
+        why: String(input.why ?? "").trim().slice(0, 300) || undefined,
+        options, multi: input.multi === true, allow_other: input.allow_other === true,
+      };
+      await setLivSecretAsk(userId, ask);
+      return { ask };
+    }, true, {
+      key: z.string().optional().describe("통계 축이 되는 안정된 key(예: context_sources). 문구가 바뀌어도 유지한다."),
+      question: z.string().optional().describe("사람에게 보일 질문 한 줄."),
+      why: z.string().optional().describe("왜 묻는지 한 줄."),
+      options: z.array(z.object({ id: z.string(), label: z.string(), hint: z.string().optional() })).optional()
+        .describe("선택지 2~12개. id 는 소문자 슬러그(집계 값), label 은 사람 말."),
+      multi: z.boolean().optional().describe("복수 선택 허용(쓰는 도구를 다 고르기 등)."),
+      allow_other: z.boolean().optional().describe("'그 외' 자유입력 허용 — 목록에 없는 것을 놓치지 않는다."),
+      cancel: z.boolean().optional().describe("true 면 대기 중인 질문을 내린다."),
+    }),
+
+  restRead("me_liv_answer", "고른 답 저장(화면 전용)",
+    "리브 화면에서 사람이 고른 답을 남긴다. 같은 key 는 최신 하나로 갈아끼운다. (사람이 쓰는 자리다.)",
+    [{ method: "POST", paths: ["/api/ui/me/liv-answer"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const { getLivProfile, appendLivAnswer } = await import("../../org/store.js");
+      const ask = (await getLivProfile(userId)).secret_ask;
+      if (!ask || ask.kind !== "choice") throw new HttpError(409, "지금 답할 질문이 없습니다");
+
+      // ⚠ 무엇을 골랐는지는 **저장된 질문의 선택지 안에서만** 인정한다 — 브라우저가 임의 값을 넣어
+      //  집계를 오염시키지 못하게. 목록 밖은 other(자유입력)로만 들어온다.
+      const valid = new Set(ask.options.map((o) => o.id));
+      const picked = (Array.isArray(input.choices) ? input.choices : []).map(String).filter((c) => valid.has(c));
+      const other = ask.allow_other ? String(input.other ?? "").trim().slice(0, 200) : "";
+      if (!picked.length && !other) throw new HttpError(400, "하나 이상 고르거나 직접 적어 주세요");
+      if (!ask.multi && picked.length > 1) throw new HttpError(400, "이 질문은 하나만 고를 수 있습니다");
+
+      const profile = await appendLivAnswer(userId, {
+        at: new Date().toISOString(), key: ask.key, question: ask.question,
+        choices: picked, ...(other ? { other } : {}),
+      });
+      // 리브가 무엇이 골라졌는지 알아야 이어갈 수 있으므로 라벨까지 되돌려준다.
+      const labels = ask.options.filter((o) => picked.includes(o.id)).map((o) => o.label);
+      return { ok: true, key: ask.key, choices: picked, labels, other: other || undefined, answers: profile.answers };
+    }, false, {
+      choices: z.array(z.string()).optional().describe("고른 선택지 id 들."),
+      other: z.string().optional().describe("'그 외'로 직접 적은 것."),
+    }),
+
+  restRead("org_liv_answers", "사람들이 고른 답 집계",
+    "워크스페이스 구성원들이 리브의 질문에 무엇을 골랐는지 집계한다 — 개선점을 찾는 자리. " +
+    "특히 `others`(목록에 없어 직접 적어낸 것)가 **다음에 만들 커넥터 후보**다. 사람 이름은 담기지 않는다.",
+    [{ method: "GET", paths: ["/api/ui/org/liv-answers"], parse: () => ({}) }],
+    async (_input: unknown, user: LivelyUser) => {
+      if (!(user.scopes ?? []).includes("admin")) throw new HttpError(403, "관리자만 볼 수 있습니다");
+      const { livAnswerStats } = await import("../../org/store.js");
+      return { stats: await livAnswerStats() };
+    }, true, {}),
+
+  // ── 파일 올리기(#1631) — **로컬 폴더를 뒤지는 대신 사람이 끌어다 놓는다** ──────────────
+  //  종전 설계는 노드를 켜고 그 PC 를 훑는 것이었는데, 컴맹에게 설치·노드 등록을 시키는 값이 너무 크다.
+  //  파일 몇 개면 끝나는 일이면 **끌어다 놓는 게 훨씬 간편하다**(대표 판단).
+  restRead("me_liv_ask_upload", "파일 올리기 요청",
+    "리브 화면에 **파일 올리는 자리**를 띄운다. 사람이 올린 파일은 자료(source)로 저장돼 증류 대상이 된다. " +
+    "⚠ 로컬 폴더를 뒤지려 하지 마라 — 파일 몇 개면 이게 훨씬 간편하다. 글자 파일만 된다(문서·메모·마크다운·CSV).",
+    [{ method: "POST", paths: ["/api/ui/me/liv-upload-ask"], parse: (req) => req.body ?? {} }],
+    async (input: Record<string, unknown>, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const { setLivSecretAsk } = await import("../../org/store.js");
+      if (input.cancel === true) return { ask: null, profile: await setLivSecretAsk(userId, null) };
+      const ask = {
+        at: new Date().toISOString(), kind: "upload" as const,
+        label: String(input.label ?? "").trim().slice(0, 80) || "파일 올리기",
+        why: String(input.why ?? "").trim().slice(0, 300) || undefined,
+        accept_hint: String(input.accept_hint ?? "").trim().slice(0, 120) || undefined,
+      };
+      await setLivSecretAsk(userId, ask);
+      return { ask };
+    }, true, {
+      label: z.string().optional().describe("올리는 자리의 이름(예: 회의록 파일)."),
+      why: z.string().optional().describe("왜 필요한지 한 줄."),
+      accept_hint: z.string().optional().describe("어떤 파일을 올리면 되는지 한 줄."),
+      cancel: z.boolean().optional(),
     }),
 ];

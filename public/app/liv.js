@@ -143,13 +143,144 @@ async function fillLivCards(host) {
         host.replaceChildren(el('div', { class: 'liv-note', text: '지금 상태를 읽지 못했습니다. 옆에서 리브에게 직접 물어보셔도 됩니다.' }));
         return;
     }
-    // 자격 입력칸은 **항상 맨 위**다 — 이게 떠 있으면 리브는 그걸 기다리느라 멈춰 있다.
-    const ask = st.secretAsk ? livSecretCard(st.secretAsk, host) : null;
+    // 리브가 기다리는 것은 **항상 맨 위**다 — 이게 떠 있으면 리브는 그걸 기다리느라 멈춰 있다.
+    const ask = st.secretAsk
+        ? (st.secretAsk.kind === 'choice' ? livChoiceCard(st.secretAsk, host)
+            : st.secretAsk.kind === 'upload' ? livUploadCard(st.secretAsk, host)
+                : livSecretCard(st.secretAsk, host))
+        : null;
     if (!st.findings.length) {
         host.replaceChildren(...(ask ? [ask] : []), el('div', { class: 'liv-note' }, el('b', { text: '지금 손볼 것은 없습니다.' }), el('span', { text: ' 옆에서 리브에게 무엇이든 물어보세요.' })));
         return;
     }
     host.replaceChildren(...(ask ? [ask] : []), el('div', { class: 'liv-cards-title', text: `지금 손볼 것 ${st.total}` }), ...st.findings.map((f) => livCard(f, host)));
+}
+/**
+ * 객관식 질문 — **사람은 고르기만 한다.**
+ *
+ * 실측에서 사람이 가장 오래 멈춘 자리가 자유서술이었다("어디에 쌓고 계셨나요?"). 없는 말을 지어내야 하니
+ * 어렵고, 답이 제각각이라 우리도 개선점을 못 뽑는다. 고르게 하면 둘 다 풀린다 — 쉽고, **답이 저절로
+ * 구조화된다**. 그래서 이 카드가 곧 통계 수집기다.
+ */
+function livChoiceCard(ask, host) {
+    const picked = new Set();
+    const opts = el('div', { class: 'liv-ask-opts' });
+    const send = el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '이걸로' });
+    // 복수 선택이면 고른 게 있어야 보낼 수 있다. 단일 선택은 누르는 즉시 보낸다(한 번 덜 누르게).
+    const sync = () => { send.disabled = picked.size === 0 && !otherIn.value.trim(); };
+    const submit = async () => {
+        send.disabled = true;
+        const was = send.textContent;
+        send.textContent = '보내는 중…';
+        try {
+            const r = await api('/api/ui/me/liv-answer', {
+                method: 'POST',
+                body: JSON.stringify({ choices: [...picked], other: otherIn.value.trim() || undefined }),
+            });
+            const said = [...(r.labels ?? []), ...(r.other ? [r.other] : [])].join(', ');
+            // ⚠ 비우고 포커스를 뗀다 — 안 그러면 '타이핑 중이면 갱신하지 않는다' 가드에 걸려
+            //  답을 보냈는데도 질문 카드가 그대로 남는다(실측).
+            otherIn.value = '';
+            otherIn.blur();
+            livToast('고르신 걸 전했습니다.');
+            // 사람이 다시 타이핑하지 않아도 대화가 이어지게 — 무엇을 골랐는지 리브에게 그대로 말해 준다.
+            if (livSessionId && said)
+                await livSendPrompt(livSessionId, said).catch(() => { });
+            setTimeout(() => void fillLivCards(host), 600);
+        }
+        catch (e) {
+            send.disabled = false;
+            send.textContent = was ?? '이걸로';
+            livToast(String(e?.message ?? e));
+        }
+    };
+    for (const o of ask.options ?? []) {
+        const b = el('button', { class: 'btn btn-sm liv-opt', type: 'button' }, el('b', { text: o.label }), o.hint ? el('span', { class: 'liv-opt-hint', text: o.hint }) : null);
+        b.onclick = () => {
+            if (ask.multi) {
+                if (picked.has(o.id)) {
+                    picked.delete(o.id);
+                    b.classList.remove('liv-opt-on');
+                }
+                else {
+                    picked.add(o.id);
+                    b.classList.add('liv-opt-on');
+                }
+                sync();
+            }
+            else {
+                picked.clear();
+                picked.add(o.id);
+                void submit();
+            }
+        };
+        opts.append(b);
+    }
+    const otherIn = el('input', {
+        class: 'liv-ask-input', type: 'text', autocomplete: 'off',
+        placeholder: '목록에 없으면 여기 적어 주세요', 'aria-label': '그 외',
+    });
+    otherIn.oninput = sync;
+    otherIn.onkeydown = (ev) => { if (ev.key === 'Enter') {
+        ev.preventDefault();
+        void submit();
+    } };
+    send.onclick = () => void submit();
+    sync();
+    return el('div', { class: 'liv-card liv-ask' }, el('div', { class: 'liv-ask-head' }, el('b', { text: ask.question ?? '' })), ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null, opts, 
+    // '그 외'는 탈출구다 — 여기 적히는 것이 곧 다음에 만들 커넥터 후보라 버리지 않고 쌓는다.
+    ask.allow_other ? el('div', { class: 'liv-ask-row' }, otherIn) : null, (ask.multi || ask.allow_other) ? el('div', { class: 'liv-ask-row' }, send) : null, ask.multi ? el('div', { class: 'liv-ask-note', text: '해당하는 걸 모두 고르셔도 됩니다.' }) : null);
+}
+/**
+ * 파일 올리기 — **로컬 폴더를 뒤지는 대신 끌어다 놓는다**(대표 판단).
+ *
+ * 글자 파일만 받는다. PDF·이미지는 브라우저에서 글자를 못 뽑아 **올린 척만 하고 빈 자료가 쌓이므로**,
+ * 되는 척하지 않고 그 자리에서 거른다.
+ */
+function livUploadCard(ask, host) {
+    const TEXT_RE = /\.(md|markdown|txt|csv|tsv|json|ya?ml|log|rtf|html?|tex|org)$/i;
+    const msg = el('div', { class: 'liv-ask-msg' });
+    const input = el('input', { class: 'liv-upload-in', type: 'file', multiple: 'multiple' });
+    input.onchange = async () => {
+        const files = [...(input.files ?? [])];
+        if (!files.length)
+            return;
+        const ok = files.filter((f) => TEXT_RE.test(f.name));
+        const skipped = files.filter((f) => !TEXT_RE.test(f.name));
+        input.disabled = true;
+        let saved = 0;
+        const failed = [];
+        for (const f of ok) {
+            try {
+                const body_md = await f.text();
+                if (!body_md.trim()) {
+                    failed.push(`${f.name}(비어 있음)`);
+                    continue;
+                }
+                await api('/api/ui/sources', { method: 'POST', body: JSON.stringify({
+                        kind: 'upload', title: f.name, body_md,
+                        occurred_at: new Date(f.lastModified).toISOString(),
+                    }) });
+                saved++;
+            }
+            catch (e) {
+                failed.push(`${f.name}(${e?.message ?? e})`);
+            }
+        }
+        input.disabled = false;
+        input.value = '';
+        const parts = [`${saved}개 올렸습니다`];
+        if (skipped.length)
+            parts.push(`${skipped.length}개는 글자 파일이 아니라 건너뛰었습니다`);
+        if (failed.length)
+            parts.push(`${failed.length}개 실패`);
+        msg.replaceChildren(el('span', { class: failed.length ? 'liv-ask-err' : 'liv-ask-ok', text: parts.join(' · ') }));
+        if (saved && livSessionId) {
+            await livSendPrompt(livSessionId, `파일 ${saved}개 올렸어요: ${ok.slice(0, 10).map((f) => f.name).join(', ')}`).catch(() => { });
+            setTimeout(() => void fillLivCards(host), 1200);
+        }
+    };
+    return el('div', { class: 'liv-card liv-ask' }, el('div', { class: 'liv-ask-head' }, el('b', { text: ask.label ?? '파일 올리기' })), ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null, el('div', { class: 'liv-ask-row' }, input), el('div', { class: 'liv-ask-note', text: ask.accept_hint || '글자로 된 파일만 됩니다 — 메모·문서(.txt·.md)·표(.csv) 등. PDF·이미지는 아직 안 됩니다.' }), msg);
 }
 /**
  * 자격 입력칸 — **이 화면에서 끝내기 위한 장치**.

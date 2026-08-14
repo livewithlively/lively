@@ -70,3 +70,17 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 .liv-ask-msg:not(:empty) { font-size: 12px; margin-top: 6px; line-height: 1.5; }
 .liv-ask-ok { color: var(--mint-deep); }
 .liv-ask-err { color: var(--danger, #B4433A); }
+
+/* 객관식 — **고르는 것이 기본**이다(자유서술은 사람이 가장 오래 멈추는 자리였다).
+   버튼을 세로로 쌓는다: 좁은 레일에서 가로로 흘리면 라벨이 잘리고, 잘린 선택지는 안 골라진다. */
+.liv-ask-opts { display: flex; flex-direction: column; gap: 5px; margin-top: 9px; }
+.liv-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  text-align: left; white-space: normal; line-height: 1.45; padding: 7px 10px; height: auto; }
+.liv-opt-hint { color: var(--muted); font-size: 11px; }
+/* 고른 것은 색이 아니라 **테두리와 굵기**로도 표시한다 — 색만으로는 색각 이상에서 사라진다. */
+.liv-opt-on { border-color: var(--mint-deep); box-shadow: inset 0 0 0 1px var(--mint-deep); }
+.liv-opt-on b::before { content: "✓ "; color: var(--mint-deep); }
+
+/* 파일 올리기 — 로컬 폴더를 뒤지는 대신 끌어다 놓는다. */
+.liv-upload-in { flex: 1 1 100%; min-width: 0; font-size: 12px; color: var(--ink-sub); }
+.liv-upload-in:focus-visible { outline: 2px solid var(--mint-deep); outline-offset: 2px; border-radius: 4px; }
