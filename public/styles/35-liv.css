@@ -1,10 +1,21 @@
-/* ── 리브(#/liv, #1631) — 액션카드 + 대화 ──────────────────────────────────────
-   레이아웃 계약은 대시보드와 같다: **페이지 스크롤 없음.** 위(카드)는 내용맞춤이고 아래(대화)가 남은
-   높이를 전부 먹는다 — 대화는 터미널이라 잘리면 못 쓴다. 카드가 많아지면 카드 영역 '안에서만' 스크롤한다.
-   §0.5 채색 예산: 이 화면에서 채운 색은 살아있음 표시 점과 [리브에게 맡기기] 뿐이다. */
+/* ── 리브(#/liv, #1631) — **독립 전체화면**: 액션카드 + 대화 ─────────────────────
+   레이아웃 계약: **페이지 스크롤 없음.** 왼쪽 레일은 내용맞춤이고 대화가 남은 폭·높이를 전부 먹는다 —
+   대화는 터미널이라 잘리면 못 쓴다. 카드가 많아지면 레일 '안에서만' 스크롤한다.
+   §0.5 채색 예산: 이 화면에서 채운 색은 살아있음 표시 점과 [리브에게 맡기기] 뿐이다.
+
+   ⚠ **상단 내비·푸터를 걷는다**(대표 결정 — 웹 세션 페이지와 같은 결).
+    처음엔 이 화면이 홈을 갈아치웠는데 그건 과했고, 이제 자기 페이지다. 자기 페이지가 된 대신 크롬을
+    걷어 화면 전부를 쓴다 — 대화가 주인공인 화면에서 탭 줄과 푸터는 높이만 먹는다.
+    나가는 길은 화면 안의 [← 라이블리] 하나다(liv.ts). */
 body[data-route="liv"] { height: 100vh; overflow: hidden; }
 body[data-route="liv"] #app { height: 100%; display: flex; flex-direction: column; }
+body[data-route="liv"] .topbar,
+body[data-route="liv"] .app-foot { display: none; }
 body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0; padding: 14px 18px 16px; background: #F4F7FC; }
+
+/* 상단 내비의 [리브] 버튼 — 탭이 아니라 오른쪽 보조 버튼(축이 다르다: 탭=무엇을 보는가 / 리브=누구에게 맡기는가). */
+.liv-nav { display: inline-flex; align-items: center; gap: 5px; }
+.liv-nav-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--mint-deep); flex: none; }
 
 .liv-wrap { height: 100%; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
 .liv-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -53,3 +64,34 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
   .liv-rail { overflow: visible; }
   .liv-chat { min-height: 420px; }
 }
+
+/* ── 자격 입력칸(#1631) — **사람을 다른 탭으로 보내지 않기 위한 자리** ─────────────────
+   리브가 "무엇이 필요한지"만 말하면 여기 칸이 뜬다. 값은 곧바로 금고로 가고 대화에는 안 남는다.
+   레일에서 유일하게 **테두리를 강조하는 카드**다 — 이게 떠 있는 동안 리브는 이걸 기다리며 멈춰 있다. */
+.liv-ask { border-color: var(--mint-deep); border-width: 1px; }
+.liv-ask-head { font-size: 13px; line-height: 1.45; }
+.liv-ask-why { color: var(--ink-sub); font-size: 12px; margin-top: 4px; line-height: 1.5; }
+/* 좁은 레일이라 칸과 버튼이 줄바꿈된다 — 칸이 먼저 한 줄을 다 쓰고 버튼이 아래로 흐른다. */
+.liv-ask-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.liv-ask-input { flex: 1 1 100%; min-width: 0; font-family: inherit; font-size: 12px;
+  padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
+.liv-ask-input:focus-visible { outline: 2px solid var(--mint-deep); outline-offset: 1px; }
+.liv-ask-input:disabled { opacity: .6; }
+.liv-ask-note { color: var(--muted); font-size: 11px; margin-top: 6px; line-height: 1.5; }
+.liv-ask-msg:not(:empty) { font-size: 12px; margin-top: 6px; line-height: 1.5; }
+.liv-ask-ok { color: var(--mint-deep); }
+.liv-ask-err { color: var(--danger, #B4433A); }
+
+/* 객관식 — **고르는 것이 기본**이다(자유서술은 사람이 가장 오래 멈추는 자리였다).
+   버튼을 세로로 쌓는다: 좁은 레일에서 가로로 흘리면 라벨이 잘리고, 잘린 선택지는 안 골라진다. */
+.liv-ask-opts { display: flex; flex-direction: column; gap: 5px; margin-top: 9px; }
+.liv-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  text-align: left; white-space: normal; line-height: 1.45; padding: 7px 10px; height: auto; }
+.liv-opt-hint { color: var(--muted); font-size: 11px; }
+/* 고른 것은 색이 아니라 **테두리와 굵기**로도 표시한다 — 색만으로는 색각 이상에서 사라진다. */
+.liv-opt-on { border-color: var(--mint-deep); box-shadow: inset 0 0 0 1px var(--mint-deep); }
+.liv-opt-on b::before { content: "✓ "; color: var(--mint-deep); }
+
+/* 파일 올리기 — 로컬 폴더를 뒤지는 대신 끌어다 놓는다. */
+.liv-upload-in { flex: 1 1 100%; min-width: 0; font-size: 12px; color: var(--ink-sub); }
+.liv-upload-in:focus-visible { outline: 2px solid var(--mint-deep); outline-offset: 2px; border-radius: 4px; }

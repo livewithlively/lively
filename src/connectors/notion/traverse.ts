@@ -12,6 +12,7 @@ import type { Rec } from "./client.js";
 import { dbNode, dsOwnerDb, isChanged, pageNode } from "./state.js";
 import type { DbNode, PageNode, Traversal } from "./state.js";
 import { underExcluded } from "./scope.js";
+import { isInvalidCredential, allScopedRootsFailed } from "../failure-class.js";
 
 const MAX_BLOCK_DEPTH = 64; // 순환 방지 가드(정상 문서는 도달 불가 — 구버전의 '깊이 5 절단'과 달리 손실 아님)
 const PAGE_FETCH_RETRY = 2; // 페이지 단위 재시도(블록 트리 등) — 그 후 실패는 failures 로 집계(미방출)
@@ -377,21 +378,37 @@ export async function processDb(t: Traversal, node: DbNode): Promise<void> {
 // 루트 발견 — NOTION_ROOT_PAGES 지정 시 그 서브트리만, 아니면 search(page + data_source 2패스).
 export async function discoverSeeds(t: Traversal): Promise<void> {
   if (t.cfg.rootIds.length) {
+    // ⚠ 여기가 **"0건입니다"로 위장되던 자리**다(#1631 실측). 루트 접근 실패를 항목 하나의 실패로 집계하고
+    //  조용히 넘어가면, 토큰이 무효여도 호출부는 정상 종료를 보고 `{"ok":true,"sample":[]}` 를 돌려준다.
+    //  사람은 "아직 아무것도 안 들어왔네"로 읽고 진짜 이유를 영영 못 듣는다(페르소나가 이탈한 자리).
+    //  그래서 두 경우는 **던진다**: ① 자격 자체가 무효(401) ② 지정한 범위가 통째로 실패.
+    let failedRoots = 0;
     for (const id of t.cfg.rootIds) {
       try {
         const p = (await notionFetch(t.cfg, `/pages/${id}`)) as NotionPage;
         pageNode(t, normalizeNotionId(p.id)).page = p;
-      } catch {
+      } catch (first) {
+        // 토큰이 무효면 database 로 재시도해도 같은 401 이다 — 요청만 낭비하고 원인은 그대로 묻힌다.
+        if (isInvalidCredential(first)) throw first;
         try {
           const d = (await notionFetch(t.cfg, `/databases/${id}`)) as NotionDatabase;
           dbNode(t, normalizeNotionId(d.id)).db = d;
         } catch (err) {
+          if (isInvalidCredential(err)) throw err;
+          failedRoots++;
           t.stats.failures++;
           t.stats.unattributed++; // 발견 자체 실패 — 귀속 재시도 불가, 커서 동결 유지
           t.stats.failedIds.push(id);
           console.error(`[notion] 루트 ${id} 접근 실패(page/database 둘 다 아님):`, (err as Error)?.message ?? err);
         }
       }
+    }
+    // 401 이 아니어도(403 미연결 · 404 오타 id) **지정한 게 전부 안 잡히면 가져올 것이 없다** — 성공이 아니다.
+    if (allScopedRootsFailed(t.cfg.rootIds.length, failedRoots)) {
+      throw new Error(
+        `지정한 노션 페이지 ${t.cfg.rootIds.length}개에 전부 접근하지 못했습니다. ` +
+        `노션에서 그 페이지의 ⋯ ▸ 연결(Connections)로 이 통합을 추가했는지, 페이지 주소가 맞는지 확인해 주세요. ` +
+        `(실패: ${t.stats.failedIds.slice(0, 5).join(", ")})`);
     }
     return;
   }

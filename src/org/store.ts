@@ -29,7 +29,7 @@ export {
   getHarnessSnapshots, setHarnessSnapshot, removeHarnessMachine,
   getHarnessMachineAlias, setHarnessMachineAlias,
   getHarnessLocalPref, setHarnessLocalPref,
-  getLivProfile, appendLivProfile,
+  getLivProfile, appendLivProfile, setLivSecretAsk, appendLivAnswer, livAnswerStats,
   memberIdByEmail, upsertMember, removeMember,
 } from "./store/members.js";
 export type {

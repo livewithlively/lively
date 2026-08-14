@@ -1318,6 +1318,76 @@
   "input_hash": "28ae905489e3aa6c"
  },
  {
+  "name": "me_liv_ask_secret",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/liv-secret-ask"
+  ],
+  "input_hash": "8a95e0e48664c1f0"
+ },
+ {
+  "name": "me_liv_put_secret",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/liv-secret"
+  ],
+  "input_hash": "d88e2cad56f58113"
+ },
+ {
+  "name": "me_liv_ask_choice",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/liv-choice-ask"
+  ],
+  "input_hash": "075764db659fd915"
+ },
+ {
+  "name": "me_liv_answer",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/liv-answer"
+  ],
+  "input_hash": "9e7578dfd73f3b4a"
+ },
+ {
+  "name": "me_liv_record_answer",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/liv-record-answer"
+  ],
+  "input_hash": "2c7885f5c7f6812e"
+ },
+ {
+  "name": "org_liv_answers",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/liv-answers"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_liv_ask_upload",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/liv-upload-ask"
+  ],
+  "input_hash": "8e55d1d5c440991e"
+ },
+ {
   "name": "org_connector_members",
   "scope": "admin",
   "mcp": true,
