@@ -14,6 +14,7 @@ import { ROOTS, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited } from "../sessions/session-state.js"; // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
 import { listManagedSessions } from "../sessions/managed-sessions.js"; // #1059 F — 관리탭 세션목록에서 managed 표시(회수 제외)
+import { mergeSessionViews } from "../sessions/session-merge.js"; // #1716 — 출처가 겹쳐도 세션 카드는 1장
 import { sessionPrompts, searchPrompts, searchPromptsHybrid, transcriptExists } from "./terminal-transcript.js";
 import { activeEmbeddingProvider } from "../v6/search-util.js";
 import { setupPtyUpgrade, type TicketLookup } from "./terminal-pty.js";
@@ -228,7 +229,10 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const keep = (s: SessionInfo): boolean => includeProjects || !proj(s) || (ownedProjectsOnly && !!s.owned);
     const local = all.filter(keep);
     const localRestorable = restorable.filter(keep);
-    res.json({ sessions: [...local, ...localRestorable, ...remote] });
+    // 같은 세션이 두 출처에 잡히면 카드 1장으로 접는다(#1716) — 인자 순서가 곧 우선순위(라이브 관측 > 기억).
+    //  게이트웨이와 노드 에이전트가 같은 박스에서 돌면 **같은 tmux 서버**를 보므로 local 과 remote 에 같은 id 가
+    //  동시에 잡힌다(실측: AI 세션 탭 카드가 전부 2장씩). liveIds 로 restorable 만 걸러선 이 짝을 못 막는다.
+    res.json({ sessions: mergeSessionViews(local, remote, localRestorable) });
   }));
   // 세션 종료 확인창이 '대화 기록이 남는지'를 **사실대로** 말하기 위한 최소 정책 조회(#1582).
   //  왜 필요한가: 종전 확인창은 전 화면에서 "되돌릴 수 없어요"라고 단언했지만, 종료(DELETE)는 tmux 를 죽이고
