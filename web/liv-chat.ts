@@ -68,16 +68,24 @@ function toolLabel(name: string): string {
  * 상태는 색이 아니라 **표식과 글자**로 간다(●하는 중 / ✓했음 / ✕실패) — 색각 계약(35-liv.css §0.5).
  */
 function actionCard(name: string, input: unknown): HTMLElement {
+  // 한 줄에 다 담는다 — 접힘을 아랫줄로 내리면 슬립 하나가 대화를 두 배로 밀어낸다(대표 지적).
+  //  `보낸 것`·`돌아온 것`은 상태(했음) **왼쪽**에 붙고, 펼친 것만 아랫줄로 자리를 넓힌다.
   const card = el('div', { class: 'livc-slip' },
     el('div', { class: 'livc-slip-head' },
       el('span', { class: 'livc-slip-mark livc-slip-run', 'aria-hidden': 'true', text: '●' }),
       el('span', { class: 'livc-slip-name', text: toolLabel(name) }),
-      el('span', { class: 'livc-slip-state', text: '하는 중' })),
-    el('div', { class: 'livc-slip-more' },
       el('details', { class: 'livc-slip-raw' },
-        el('summary', { text: '보낸 것' }),
-        el('pre', { text: JSON.stringify(input ?? {}, null, 2).slice(0, 4000) }))));
+        el('summary', { text: '자세히' }),
+        rawPart('보낸 것', JSON.stringify(input ?? {}, null, 2))),
+      el('span', { class: 'livc-slip-state', text: '하는 중' })));
   return card;
+}
+
+/** '자세히' 안의 한 토막 — 무엇을 보여주는지 작은 이름표를 달아 둘을 한 접힘에 담는다. */
+function rawPart(cap: string, body: string): HTMLElement {
+  return el('div', { class: 'livc-raw-part' },
+    el('div', { class: 'livc-raw-cap', text: cap }),
+    el('pre', { text: String(body ?? '').slice(0, 4000) }));
 }
 
 function finishCard(card: HTMLElement, output: string, isError: boolean): void {
@@ -86,9 +94,9 @@ function finishCard(card: HTMLElement, output: string, isError: boolean): void {
   const state = card.querySelector('.livc-slip-state');
   if (state) state.textContent = isError ? '실패' : '했음';
   card.classList.add(isError ? 'livc-slip-err' : 'livc-slip-done');
-  card.querySelector('.livc-slip-more')?.append(el('details', { class: 'livc-slip-raw' },
-    el('summary', { text: isError ? '무엇이 잘못됐는지' : '돌아온 것' }),
-    el('pre', { text: output.slice(0, 4000) })));
+  // 접힘은 **하나**다 — 보낸 것과 돌아온 것을 따로 열게 하면 토글이 둘이고 줄도 둘이 된다.
+  //  같은 '자세히' 안에 이어 붙이고, 안에서 작은 이름표로 가른다.
+  card.querySelector('.livc-slip-raw')?.append(rawPart(isError ? '무엇이 잘못됐는지' : '돌아온 것', output));
 }
 
 /**
@@ -169,15 +177,23 @@ function applyStream(ev: any, work: HTMLElement, r: TurnRender): void {
   }
 }
 
-/** 완성본 한 줄을 그 턴의 괘선 안에 반영한다. */
+/**
+ * 완성본 한 줄을 그 턴의 괘선 안에 반영한다.
+ *
+ * ⚠ **글은 `assistant` 것만 그린다.** user 역할 메시지에도 text 블록이 실리는데 그건 리브가 한 말이
+ *  아니라 **하네스가 밀어 넣은 것**이다 — 스킬을 부르면 그 스킬 본문이 통째로 user text 로 들어온다
+ *  (실측 2026-08-15: 한 턴에 11,528자). 역할을 안 가리고 그리면 그 전문이 리브의 말인 양 화면에 쏟아진다.
+ *  user 메시지에서 우리가 볼 것은 `tool_result` 하나뿐이다.
+ */
 function applyEvent(ev: any, list: HTMLElement, r: TurnRender): { text?: string } {
   const cards = r.cards;
   let lastText: string | undefined;
   const content = ev?.message?.content;
-  const already = ev?.type === 'assistant' && r.streamed.has(String(ev?.message?.id ?? ''));
+  const isAssistant = ev?.type === 'assistant';
+  const already = isAssistant && r.streamed.has(String(ev?.message?.id ?? ''));
   if (Array.isArray(content)) {
     for (const b of content) {
-      if (b?.type === 'text' && String(b.text ?? '').trim()) {
+      if (b?.type === 'text' && isAssistant && String(b.text ?? '').trim()) {
         lastText = String(b.text);
         if (!already) list.append(livSaid(lastText));   // 조각으로 이미 그렸으면 건너뛴다(같은 글이다)
       } else if (b?.type === 'tool_use') {
@@ -205,13 +221,60 @@ export function mountLivChat(host: HTMLElement, askHost: HTMLElement): void {
   const send = el('button', { class: 'btn btn-sm livc-send', type: 'submit', text: '보내기' }) as HTMLButtonElement;
   const note = el('div', { class: 'livc-note' });
 
-  const form = el('form', { class: 'livc-compose' }, input, send) as HTMLFormElement;
-  host.replaceChildren(el('div', { class: 'livc-wrap' }, list, askHost, note, form));
+  /**
+   * 스크롤 — **사람이 읽고 있으면 잡아채지 않는다.**
+   *
+   * 종전엔 진행을 그릴 때마다(400ms 마다) 무조건 바닥으로 끌어내렸다. 위로 올려 뭘 읽고 있으면
+   * 그때마다 아래로 끌려간다 — 읽을 수가 없다(대표 지적). 그래서 **바닥에 붙어 있을 때만** 따라간다.
+   * 떨어져 있으면 따라가지 않고, 대신 새 내용이 왔다는 것과 돌아가는 길을 버튼으로 띄운다.
+   */
+  const NEAR_BOTTOM = 48;   // 이 안쪽이면 '바닥을 보고 있다'로 친다(정확히 0 을 요구하면 관성 스크롤에서 어긋난다)
+  let stick = true;
+  const jump = el('button', {
+    class: 'livc-jump', type: 'button', hidden: true, text: '최신 대화로 ↓',
+    onclick: () => { stick = true; list.scrollTop = list.scrollHeight; jump.hidden = true; },
+  }) as HTMLButtonElement;
 
-  const scroll = (): void => { list.scrollTop = list.scrollHeight; };
+  list.addEventListener('scroll', () => {
+    stick = list.scrollHeight - list.scrollTop - list.clientHeight <= NEAR_BOTTOM;
+    if (stick) jump.hidden = true;
+  });
+
+  const scroll = (): void => {
+    if (stick) { list.scrollTop = list.scrollHeight; jump.hidden = true; return; }
+    jump.hidden = false;     // 안 따라가는 대신, 새 내용이 있다는 걸 알린다
+  };
+
+  const form = el('form', { class: 'livc-compose' }, input, send) as HTMLFormElement;
+  host.replaceChildren(el('div', { class: 'livc-wrap' }, el('div', { class: 'livc-scroller' }, list, jump), askHost, note, form));
+
+  // 지금 도는 턴 — 멈추려면 무엇을 멈출지 알아야 한다.
+  let running: string | null = null;
+  let stopping = false;
+
+  /**
+   * 하던 것 멈추기 — **시작만 할 수 있고 멈추지는 못하면 그건 대화가 아니다.**
+   * 리브가 엉뚱한 길로 갔거나 오래 걸릴 때 끊을 수 있어야 한다. 터미널에서 Esc 로 하던 그 일이다.
+   */
+  async function stopTurn(): Promise<void> {
+    if (!running || stopping) return;
+    stopping = true;
+    note.textContent = '멈추는 중…';
+    // ⚠ 못 멈췄으면 **못 멈췄다고 말한다.** 눌렀는데 아무 일도 안 나면 사람은 자기가 잘못 눌렀다고 생각한다.
+    const r = await api(`/api/ui/me/liv/turn/${encodeURIComponent(running)}/stop`, { method: 'POST', body: '{}' })
+      .catch((e) => ({ stopped: false, reason: (e as Error).message })) as { stopped?: boolean; reason?: string };
+    if (!r?.stopped) {
+      note.textContent = r?.reason || '멈추지 못했습니다 — 리브가 계속 일하고 있습니다.';
+      stopping = false;                       // 다시 눌러 볼 수 있게 둔다
+    }
+  }
+
   const busy = (on: boolean): void => {
-    input.disabled = on; send.disabled = on;
-    send.textContent = on ? '…' : '보내기';
+    input.disabled = on;
+    send.disabled = false;                      // 도는 동안에도 누를 수 있어야 한다 — 그때는 '멈춤'이다
+    send.textContent = on ? '멈춤' : '보내기';
+    send.type = on ? 'button' : 'submit';
+    send.classList.toggle('livc-send-stop', on);
     // 답을 기다리는 동안 입력을 막는 이유는 예의가 아니라 **정합성**이다 — 턴이 겹치면 이어받기가 꼬인다.
     //  ⚠ 그 사실을 별도 안내줄로 말하지 않는다. 이름표 옆 깜빡이는 점이 이미 "하는 중"을 말하고 있어
     //   같은 말이 두 번 나온다. **못 치는 이유는 못 치는 칸이 말하는 게 맞다** — 시선이 거기 있다.
@@ -348,15 +411,32 @@ export function mountLivChat(host: HTMLElement, askHost: HTMLElement): void {
     scroll(); busy(true);
     try {
       const t = await api('/api/ui/me/liv/turn', { method: 'POST', body: JSON.stringify({ text }) }) as TurnStart;
+      running = t.turn_id; stopping = false;
       await drain(t.turn_id, work);
     } catch (e) {
       work.append(el('div', { class: 'livc-err', text: `보내지 못했습니다. ${(e as Error).message}` }));
       scroll();
     } finally {
+      running = null; stopping = false;
       work.classList.remove('livc-work-busy');
       busy(false); input.focus();
     }
   }
+
+  send.addEventListener('click', (e) => {
+    if (send.type !== 'button') return;         // 평소엔 폼 제출이 처리한다
+    e.preventDefault();
+    void stopTurn();
+  });
+
+  // Esc 로도 멈춘다 — 터미널에서 하던 그 손버릇 그대로. 입력칸이 잠겨 있어 키를 못 받으므로 문서에서 듣는다.
+  const onEsc = (e: KeyboardEvent): void => {
+    if (e.key !== 'Escape' || !running) return;
+    if (document.body.dataset.route !== 'liv') return;
+    e.preventDefault();
+    void stopTurn();
+  };
+  document.addEventListener('keydown', onEsc);
 
   form.addEventListener('submit', (e) => {
     e.preventDefault();

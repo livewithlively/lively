@@ -1408,6 +1408,16 @@
   "input_hash": "71d627e9a9d1759c"
  },
  {
+  "name": "me_liv_turn_stop",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/liv/turn/:id/stop"
+  ],
+  "input_hash": "972fb036fe1be6a0"
+ },
+ {
   "name": "me_liv_chat",
   "scope": null,
   "mcp": false,
