@@ -25,7 +25,7 @@ import {
   type GwToNodeMsg, type NodeToGwMsg, type ReqMsg,
 } from "./protocol.js";
 // 위탁 태스크(P2) — 러너/리소스 샘플러는 중앙(게이트웨이 내장 노드)과 공유(node/tasks.ts).
-import { sampleResources, detectDocker, spawnTaskSession, checkTask, tailTask, type TaskWatch, type RunTaskInput } from "./tasks.js";
+import { sampleResources, detectDocker, detectHarnesses, spawnTaskSession, checkTask, tailTask, type TaskWatch, type RunTaskInput } from "./tasks.js";
 import { provisionProjectRepos, markProvisionPending, type RepoSpec as ProvisionRepoSpec } from "../project/project-provision.js";
 import { logger } from "../log.js";
 
@@ -284,11 +284,12 @@ function connect(): void {
     logger.info({ url }, "게이트웨이 연결됨");
     void (async () => {
       const hasDocker = await detectDocker();
+      const harnesses = await detectHarnesses();   // #1713 — 이 PC 에 실제로 있는 하네스(폼이 이걸로 선택지를 거른다)
       ws.send(JSON.stringify({
         t: "hello", ver: PROTO_VER, node: NODE_ID, platform: process.platform, host: os.hostname(), hasDocker,
         // agentVer = 이 번들의 지문 · caps = **이 빌드가 실제로 구현한 op**(protocol.NODE_OPS — 목록과 타입이 한 출처).
         //  둘 다 없으면 게이트웨이는 "이 노드가 무엇인지·무엇을 하는지" 알 방법이 없어, 미지원을 실패와 구별 못 한다.
-        ...(AGENT_VER ? { agentVer: AGENT_VER } : {}), caps: [...NODE_OPS],
+        ...(AGENT_VER ? { agentVer: AGENT_VER } : {}), caps: [...NODE_OPS], harnesses,
       } satisfies NodeToGwMsg));
       await pushState(true);
       pusher = setInterval(() => { void pushState(); }, STATE_PUSH_MS);

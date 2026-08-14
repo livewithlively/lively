@@ -9,7 +9,7 @@ import type { Duplex } from "node:stream";
 import { logger } from "../log.js";
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
 import {
-  NODE_WS_PATH, PROTO_VER, decodeChanFrame, parseMsg, nodeSessionVisible, nodeCaps, NODE_BASELINE_OPS,
+  NODE_WS_PATH, PROTO_VER, decodeChanFrame, parseMsg, nodeSessionVisible, nodeCaps, nodeHarnesses, NODE_BASELINE_OPS, NODE_BASELINE_HARNESSES,
   type NodeToGwMsg, type GwToNodeMsg, type NodeOp, type NodeResources, type TaskDoneMsg,
 } from "./protocol.js";
 import { authNodeToken, touchNode, type OrgNode } from "./store.js";
@@ -40,6 +40,7 @@ interface NodeConn {
   // 이 노드가 실제로 할 수 있는 op(#905 C4). hello 전에는 **기준선으로 시작한다** — hello 는 연결 직후 오지만
   //  그 사이 도착한 req 를 "미지원"으로 오판해 떨구면 안 되기 때문(구 노드도 기준선은 전부 한다).
   caps: Set<string>;
+  harnesses: string[];   // #1713 — 이 노드가 실제로 띄울 수 있는 하네스(hello 보고 · 미보고면 기준선)
 }
 
 // 노드 세션 스냅샷 — 노드가 끊겨도 유지해 '오프라인 노드의 세션'을 계속 보여준다(게이트웨이 재시작 시 리셋, 도그푸드 OK).
@@ -245,7 +246,10 @@ function onNodeMessage(c: NodeConn, raw: unknown, isBinary: boolean): void {
     }
     c.hasDocker = !!m.hasDocker;
     c.caps = nodeCaps(m.caps);   // 미전송(구 노드) → v1 기준선. 기준선 밖 op 는 선언한 노드에만 간다.
-    void touchNode(c.node.id, { platform: m.platform, agentVer: m.agentVer, host: m.host, caps: [...c.caps] })
+    // #1713 — 이 PC 에서 실제로 띄울 수 있는 하네스. 미전송(구 번들) → 기준선(claude·codex·shell)으로 본다.
+    //  세션 폼이 이 값으로 선택지를 거른다 — 없는 하네스를 고르고 [생성하기] 뒤에 502 를 보던 것을 사전에 막는다.
+    c.harnesses = nodeHarnesses(m.harnesses);
+    void touchNode(c.node.id, { platform: m.platform, agentVer: m.agentVer, host: m.host, caps: [...c.caps], harnesses: [...c.harnesses] })
       .catch(() => { /* 비치명 */ });
     return;
   }
@@ -305,7 +309,7 @@ export function setupNodeUpgrade(server: Server): void {
         //  hello 를 받으면 그 노드가 선언한 실제 목록으로 교체된다.
         const c: NodeConn = {
           node, ws: ws as LiveWS, nextReq: 1, pending: new Map(), nextChan: 1, chans: new Map(),
-          lastTouch: Date.now(), hasDocker: false, caps: new Set(NODE_BASELINE_OPS),
+          lastTouch: Date.now(), hasDocker: false, caps: new Set(NODE_BASELINE_OPS), harnesses: [...NODE_BASELINE_HARNESSES],
         };
         conns.set(node.id, c);
         (ws as LiveWS).isAlive = true;

@@ -138,8 +138,26 @@ function openTermCreateForm(cfg, view, onCreated?) {
     if (nodeSel.value) pickerBox.replaceChildren(remoteSubI, el('div', { class: 'caption', text: '노드 로컬 경로 — 노드 머신의 선택한 루트(공유/개인 워크스페이스) 기준입니다.' }));
     else loadPicker();
   };
-  nodeSel.addEventListener('change', paintPicker);
   const harnessSel = el('select', { class: 'term-input' }, ...harnesses.map((h) => el('option', { value: h.key }, h.label)));
+  // 실행 위치에 따라 **고를 수 있는 AI 가 달라진다**(#1713). 노드는 남의 PC 라 그 PC 에 깔린 것만 뜬다 —
+  //  노드가 hello 로 보고한 목록(cfg.nodes[].harnesses)을 그대로 쓴다. 종전엔 중앙 기준 목록을 그대로 보여줘서,
+  //  그 노드가 모르는 하네스를 고르고 [생성하기]를 누른 **뒤에야** 알았다(옛 번들 → 502, 바이너리 부재 → 세션 즉사).
+  //  ⚠ 못 고르게만 하고 끝내지 않는다 — 왜 없는지 한 줄로 말해 준다(모르면 '이 AI 는 원래 안 되나?'로 오해한다).
+  const nodeHint = el('div', { class: 'caption', style: 'margin-top:4px' });
+  const paintHarnesses = () => {
+    const n = nodes.find((x) => x.id === nodeSel.value);
+    const allow: string[] | null = n ? (Array.isArray(n.harnesses) && n.harnesses.length ? n.harnesses : null) : null;
+    const want = harnessSel.value;
+    const usable = harnesses.filter((h) => !allow || allow.includes(h.key));
+    harnessSel.replaceChildren(...usable.map((h) => el('option', { value: h.key }, h.label)));
+    harnessSel.value = usable.some((h) => h.key === want) ? want : (usable[0]?.key || '');
+    const missing = allow ? harnesses.filter((h) => !allow.includes(h.key)).map((h) => h.label) : [];
+    nodeHint.textContent = missing.length
+      ? `이 컴퓨터에 설치되지 않아 못 고르는 AI: ${missing.join(' · ')} — 그 PC 에 설치하거나, 노드를 최신으로 다시 켜면 나타납니다.`
+      : '';
+    renderFlags();
+  };
+  nodeSel.addEventListener('change', () => { paintPicker(); paintHarnesses(); });
   const inviteBox = buildInvitePicker(cfg, new Set()); // 기본 비공개(아무도 선택 안 됨)
   // 한 줄 배치(#1145)는 인라인으로도 못 박는다 — styles 는 브라우저가 오래 캐시해 클래스 규칙만으로는
   //  '새 JS + 옛 CSS' 조합에서 레이아웃이 무너진다(실측). 클래스(.term-preset-row)는 그대로 두되 값은 여기서 확정.
@@ -317,7 +335,7 @@ function openTermCreateForm(cfg, view, onCreated?) {
     el('div', { 'data-tour': 'label' }, field('이름', labelI)),
     el('div', { 'data-tour': 'node' }, fieldInfo('실행 위치',
       'AI 가 실제로 돌아가는 컴퓨터입니다.\n\n· **중앙 컴퓨터**(기본) — 내 노트북을 꺼도 세션은 계속 실행됩니다.\n· **내 PC** — 노드로 등록해 두었다면 골라서 그 컴퓨터에서 실행합니다.',
-      nodeSel)), // #869 중앙 컴퓨터/등록 노드 — 항상 노출: 투어 ③'실행 위치' 스텝의 대상(#req). 등록 노드가 없으면 '중앙 컴퓨터(기본)' 한 줄만 보인다(submit 값은 기존과 동일 '').
+      nodeSel), nodeHint), // #869 중앙 컴퓨터/등록 노드 — 항상 노출: 투어 ③'실행 위치' 스텝의 대상(#req). 등록 노드가 없으면 '중앙 컴퓨터(기본)' 한 줄만 보인다(submit 값은 기존과 동일 ''). nodeHint(#1713) = 그 PC 에 없어서 못 고르는 AI 안내.
     // #853 작업 위치(공유/개인 토글) + 그 안의 폴더를 한 블록으로 — '이 폴더에서 AI를 실행한다'는 직관.
     el('div', { 'data-tour': 'folder' }, fieldInfo('어디서 실행할까요',
       'AI 는 폴더 하나를 정해 그 안에서 일합니다.\n\n· 여기서 고른 폴더가 이 세션의 **작업 공간**이 됩니다.\n· 그 안의 파일과 하위 폴더는 AI 가 **자유롭게 열어 봅니다**.\n· 「공유 워크스페이스」는 팀과 함께 쓰는 폴더, 「개인 폴더」는 나만 쓰는 폴더입니다.',
