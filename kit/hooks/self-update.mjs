@@ -120,9 +120,15 @@ function installedHarnesses() {
   const out = [];
   try { if (readFileSync(join(CLAUDE_DIR, "settings.json"), "utf8").includes(".lively/hooks/")) out.push("claude"); } catch { /* 미배선 */ }
   try { if (readFileSync(join(CODEX_DIR, "config.toml"), "utf8").includes("lively-managed")) out.push("codex"); } catch { /* 미배선 */ }
+  // opencode: 어댑터 파일 = 우리만 놓는 배선 신호(설치기와 같은 XDG 계산 — LIVELY_HOME 격리 우선).
+  //  antigravity: 플러그인 hooks.json(#1689 plugin-dir). ⚠ 이 두 감지가 없으면 그 하네스만 쓰는 머신은
+  //  자동 업데이트가 --harness 빈 목록으로 돌아 배선이 영영 안 갱신된다(#1519 가 남긴 갭 — #1689 에서 채움).
+  const XDGBASE = process.env.LIVELY_HOME ? join(HOME, ".config") : (process.env.XDG_CONFIG_HOME || join(HOME, ".config"));
+  try { if (existsSync(join(XDGBASE, "opencode", "plugin", "lively.js"))) out.push("opencode"); } catch { /* 미배선 */ }
+  try { if (existsSync(join(HOME, ".gemini", "config", "plugins", "lively"))) out.push("antigravity"); } catch { /* 미배선 */ }
   if (!out.length) {
     const h = (argOf("--harness") || process.env.LIVELY_HARNESS || "").toLowerCase();
-    if (h === "claude" || h === "codex") out.push(h); // 배선을 못 읽었지만 그 하네스 세션에서 불려왔다
+    if (["claude", "codex", "opencode", "antigravity"].includes(h)) out.push(h); // 배선을 못 읽었지만 그 하네스 세션에서 불려왔다
   }
   return out;
 }

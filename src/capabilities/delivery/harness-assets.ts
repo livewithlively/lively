@@ -79,7 +79,7 @@ export const harnessAssetsCapabilities: Capability[] = [
       body: z.string().optional().describe("자산 본문 — 멤버 디스크에 파일로 materialize 된다. 평문 시크릿 hard-block"),
       description: z.string().optional().describe("자산 설명(하네스가 소환 판단에 쓴다)"),
       frontmatter: z.record(z.unknown()).optional().describe("자산 frontmatter(키:값 객체, 32키 이하)"),
-      harness: z.enum(["claude", "codex", "openclaw", "all"]).optional().describe("대상 하네스(기본 all)"),
+      harness: z.enum(["claude", "codex", "openclaw", "opencode", "antigravity", "all"]).optional().describe("대상 하네스(기본 all)"),
       target_members: z.array(z.string()).nullable().optional().describe("이 자산을 받을 멤버 id 배열. null/빈=전원, 미전송=기존 유지(#699)"),
       paired_hook_id: z.string().nullable().optional().describe("짝훅 id — 자산의 위험 enforcement 담당(fail-CLOSED 런너)"),
       label: z.string().optional().describe("자산 라벨(표시명)"),
