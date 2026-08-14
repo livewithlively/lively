@@ -86,7 +86,10 @@ const DASH_LAYOUT_KEY = 'dash_layout_v1';
 // 4 = '최신 알림' hidden 구제(#1570) — 알림 개편(#1571)의 과도기(최신 알림→통합 인박스 대체 후 원복) 상태를
 //  연 브라우저에 notif 가 hidden 으로 저장돼 남았다("숨긴 적 없는데 사라짐"). v3 때와 같은 되돌리기를 반대
 //  방향으로 한 번 한다(shell.ts dashLayout 마이그레이션).
-const DASH_LAYOUT_VER = 4;
+// 5 = 3열 상단 교체(#1715) — '라이블리 로그'(lvlogd)가 기본으로 올라오고 '내 라이블리 사용 내역'(lvlog)이
+//  기본 숨김이 됐다. 이관은 판별로 한 번씩만 걸리게 바뀌었다(shell.ts DEMOTED/PROMOTED) — 그전엔 버전이
+//  다르기만 하면 off 위젯을 전부 숨김으로 되돌려, 일부러 꺼내 둔 위젯이 판 올릴 때마다 사라졌다.
+const DASH_LAYOUT_VER = 5;
 function dashSaveLayout(lay) { try {
     localStorage.setItem(DASH_LAYOUT_KEY, JSON.stringify({ v: DASH_LAYOUT_VER, ...lay }));
 }
