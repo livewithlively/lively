@@ -34,6 +34,9 @@ if (existsSync(join(LIVELY, "token")) && !owned.includes("token")) {
 }
 
 const openBrowser = (url) => {
+  // CLI 와 **같은 스위치**를 본다(#1717) — 서버 계약이 하나이듯 부작용 계약도 하나여야 갈라지지 않는다.
+  //  사람이 안 보는 자리(테스트·CI)에서 남의 화면에 탭을 띄우지 않기 위한 것. URL·코드는 위에서 이미 찍었다.
+  if (process.env.LIVELY_NO_BROWSER || process.env.CI) return;
   const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
   try { spawn(cmd, [url], { stdio: "ignore", detached: true, shell: process.platform === "win32" }).unref(); } catch { /* 부가기능 */ }
 };

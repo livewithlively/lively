@@ -199,7 +199,11 @@ if (jobs === 1) {
           continue;
         }
         const t = Date.now();
-        const child = spawn(process.execPath, argsFor(f), { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+        // LIVELY_NO_BROWSER: 어떤 테스트가 lively CLI 를 프로세스로 띄우든 **실행한 사람의 브라우저를 못 열게**
+        //  한다(#1717 — device 로그인이 승인 URL 을 `open` 으로 띄워 `npm test` 한 번에 실 탭 5개가 떴다).
+        //  개별 테스트도 noBrowserEnv() 로 각자 거는 게 원칙이지만(직접 실행 경로), 여기서 한 번 더 덮어
+        //  **새로 추가되는 테스트가 이 관례를 몰라도** 러너 경로에선 안 뚫린다.
+        const child = spawn(process.execPath, argsFor(f), { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, LIVELY_NO_BROWSER: "1" } });
         live.set(child, idx);
         const chunks = [];
         child.stdout.on("data", (d) => chunks.push(d));
