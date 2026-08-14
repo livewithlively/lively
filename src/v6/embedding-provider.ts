@@ -6,6 +6,8 @@
 //  · 기본 OFF(provider='off') — 켜기 전엔 현행 grep/ILIKE 그대로(무중단·하위호환). 벡터는 opt-in.
 //  config SoT: org_runtime_config.embedding_config(DB, 무재시작) — 비어있으면 env 부트스트랩(EMBEDDINGS_*)이 시드.
 //   (이 모듈은 store 를 import 하지 않는다 — getRuntimeConfig 가 resolveEmbeddingConfig 로 정규화해 들고 온다. 무순환.)
+import { createHmac } from "node:crypto";
+import { currentTenant } from "../org/tenant-context.js";
 import type pg from "pg";
 
 // 'off' = 벡터 비활성(렉시컬만). 'http' = OpenAI-compatible /v1/embeddings 엔드포인트(원격/로컬 사이드카 공통).
@@ -136,6 +138,22 @@ function isContextLengthError(e: unknown): boolean {
 }
 
 // ── OpenAI-compatible HTTP provider — 원격/로컬 사이드카 공통(fetch, 새 의존성 0; Node22 global fetch). ──
+/**
+ * env 에서 읽은 키를 **이 워크스페이스 것으로** 좁힌다(순수).
+ *
+ * ★ 프로세스 하나가 여러 워크스페이스를 서비스하면 env 는 값을 하나만 담을 수 있다. 그 하나를
+ *  그대로 쓰면 **모든 워크스페이스가 같은 키로 상류에 붙는다** — 상류(임베딩 프록시)는 키로
+ *  사용량을 계량하고 rate limit 을 거는데, 그러면 누구의 사용량인지 구분이 사라지고
+ *  한 워크스페이스가 전체 한도를 태워버릴 수 있다.
+ *
+ * 저장하지 않고 **유도**한다: 상류가 같은 방식으로 유도해 검증하면 새 저장소가 필요 없다.
+ *  컨텍스트가 없으면(단일 테넌트) 값 그대로 — 종전 동작이다.
+ */
+export function tenantScopedKey(raw: string | undefined, tenantId = currentTenant()?.id ?? null): string {
+  if (!raw || !tenantId) return raw ?? "";
+  return createHmac("sha256", raw).update(`embed:${tenantId}`).digest("hex");
+}
+
 class HttpEmbeddingProvider implements EmbeddingProvider {
   readonly kind = "http" as const;
   readonly model: string;
@@ -159,7 +177,7 @@ class HttpEmbeddingProvider implements EmbeddingProvider {
   // 시크릿은 런타임에 env 이름에서 해소(DB/설정엔 키 값 미저장). 키 없으면 헤더 생략(무인증 사이드카 허용).
   private authHeader(): Record<string, string> {
     if (!this.authEnvRef) return {};
-    const key = process.env[this.authEnvRef];
+    const key = tenantScopedKey(process.env[this.authEnvRef]);
     return key ? { authorization: `Bearer ${key}` } : {};
   }
 

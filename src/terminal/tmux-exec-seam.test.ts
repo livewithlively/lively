@@ -4,6 +4,7 @@ import { strict as assert } from "node:assert";
 import test, { afterEach } from "node:test";
 import fs from "node:fs";
 import os from "node:os";
+import { installTenantSlugResolver } from "./catalog.js";
 import path from "node:path";
 import { tmux, tmuxExecArgv } from "./tmux-exec.js";
 
@@ -97,4 +98,55 @@ test("★ attach 경로가 같은 seam 값을 읽는다(설정이 하나여야 �
   //  여기서 고정하는 건 **seam 함수가 하나뿐**이라는 사실이다 — tmux-exec 이 유일한 출처다.
   assert.equal(typeof tmuxExecArgv, "function");
   if (mod) assert.ok(true, "attach 모듈이 같은 tmux-exec 을 import 한다(tsc 가 보장)");
+});
+
+// ── ★★ 테넌트별 tmux 중계(#1437 v1 5단계) ──────────────────────────────────
+// 게이트웨이 하나가 여러 워크스페이스를 서비스하면 tmux 서버도 워크스페이스마다 다르다.
+
+test("★ {slug} 없는 중계는 종전 그대로(치환하지 않는다)", () => {
+  const saved = process.env.LIVELY_TMUX_EXEC;
+  process.env.LIVELY_TMUX_EXEC = "ssh box tmux";
+  installTenantSlugResolver(() => "acme");
+  try {
+    assert.deepEqual(tmuxExecArgv(), ["ssh", "box", "tmux"]);
+  } finally {
+    installTenantSlugResolver(() => null);
+    if (saved === undefined) delete process.env.LIVELY_TMUX_EXEC; else process.env.LIVELY_TMUX_EXEC = saved;
+  }
+});
+
+test("★★ {slug} 가 그 요청의 테넌트로 치환된다", () => {
+  process.env.LIVELY_TMUX_EXEC = "docker exec lvly-s-{slug}-tmux tmux";
+  installTenantSlugResolver(() => "acme-1a2b");
+  try {
+    assert.deepEqual(tmuxExecArgv(), ["docker", "exec", "lvly-s-acme-1a2b-tmux", "tmux"]);
+  } finally {
+    installTenantSlugResolver(() => null);
+    delete process.env.LIVELY_TMUX_EXEC;
+  }
+});
+
+// ★★★ 여기서 로컬 tmux 로 폴백하면 ⓐ 세션이 엉뚱한 자리에 생기고 ⓑ **모든 테넌트가 같은 tmux
+//  서버를 공유**한다(= 남의 세션이 목록에 보인다). 배선 버그는 오류로 드러나야 한다.
+test("★★★ 컨텍스트가 없으면 던진다 — 로컬 tmux 로 폴백하지 않는다", () => {
+  process.env.LIVELY_TMUX_EXEC = "docker exec lvly-s-{slug}-tmux tmux";
+  installTenantSlugResolver(() => null);
+  try {
+    assert.throws(() => tmuxExecArgv(), /테넌트 컨텍스트/);
+  } finally {
+    delete process.env.LIVELY_TMUX_EXEC;
+  }
+});
+
+test("★ 형식이 안 맞는 슬러그도 던진다(컨테이너 이름에 들어가는 값이다)", () => {
+  process.env.LIVELY_TMUX_EXEC = "docker exec lvly-s-{slug}-tmux tmux";
+  try {
+    for (const bad of ["../x", "a b", "A-UP", ""]) {
+      installTenantSlugResolver(() => bad);
+      assert.throws(() => tmuxExecArgv(), /테넌트 컨텍스트/, `허용되면 안 됨: ${bad}`);
+    }
+  } finally {
+    installTenantSlugResolver(() => null);
+    delete process.env.LIVELY_TMUX_EXEC;
+  }
 });

@@ -24,14 +24,76 @@ export const PANE_LOCALE: string = (() => {
 
 // ── 큐레이트 허용 루트 ──
 export interface Root { key: string; label: string; base: string; perUser?: boolean; }
-export const ROOTS: Root[] = [
-  { key: "shared", label: "공유 워크스페이스", base: process.env.TERMINAL_ROOT_SHARED || path.join(os.homedir(), "workspace") },  // 폴백 = deploy 관례($HOME/workspace)
-  { key: "personal", label: "개인 폴더", base: process.env.TERMINAL_ROOT_PERSONAL || path.join(os.homedir(), "box"), perUser: true },
-];
+
+// ── 왜 상수가 아니라 함수인가 ───────────────────────────────────────────────
+//
+// 종전엔 `export const ROOTS = [...]` 였다. 모듈 로드 시점에 `process.env` 한 번 읽고 끝 — 즉
+//  **프로세스 하나 = 워크스페이스 하나**라는 가정이 이 상수에 굳어 있었다.
+//
+// 게이트웨이 하나가 여러 워크스페이스를 서비스하는 배포에서는 그 가정이 곧 사고다: 파일 탐색기·
+//  세션 생성·디스크 가드가 전부 **첫 번째로 로드될 때의 테넌트** 경로를 본다. 남의 파일이 보인다.
+//
+// 그래서 값을 **호출 시점에** 만든다. 상수를 남겨두지 않는 것이 중요하다 — 남겨두면 누군가
+//  그걸 쓰고, 그 한 곳이 유출 경로가 된다("빠뜨릴 곳이 존재하지 않게" 가 이 설계 전체의 규율이다).
+//
+// ⚠ 이 파일은 terminal 모듈들이 전부 딛고 서는 **leaf** 다(머리말) — `org/tenant-context.js` 를
+//  import 하면 역방향 의존이 된다. 그래서 슬러그는 **주입**받는다(부팅 배선이 꽂는다).
+
+/** 이 요청의 테넌트 슬러그. 단일 테넌트 배포에서는 언제나 null(종전 동작). */
+export type TenantSlugResolver = () => string | null;
+let slugResolver: TenantSlugResolver = () => null;
+
+/** 부팅 배선이 한 번 꽂는다. 안 꽂으면 단일 테넌트 그대로다. */
+export function installTenantSlugResolver(fn: TenantSlugResolver): void {
+  slugResolver = fn;
+}
+
+/** 슬러그는 경로에 들어간다 — 형식을 통과 못 하면 **테넌트 경로를 쓰지 않는다**(폴백이 아니라 무시). */
+const SAFE_SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+/**
+ * 지금 이 요청의 테넌트 슬러그(형식 검증 통과분만). 없으면 null = 단일 테넌트.
+ *  ⚠ 이 값은 경로·컨테이너 이름에 들어가므로 **여기서 한 번만** 검증한다 — 호출부마다 다시 재면 갈린다.
+ */
+export function tenantSlug(): string | null {
+  const s = slugResolver();
+  return s && SAFE_SLUG.test(s) ? s : null;
+}
+
+/**
+ * 테넌트별 루트의 base 디렉터리. 템플릿에 `{slug}` 를 넣어 쓴다
+ * (예: `LIVELY_TENANT_ROOT_TEMPLATE=/var/lib/lvly/tenants/{slug}/work`).
+ * 템플릿이 없거나 컨텍스트가 없으면 null → 종전 경로.
+ */
+function tenantRootBase(): string | null {
+  const tpl = process.env.LIVELY_TENANT_ROOT_TEMPLATE;
+  if (!tpl || !tpl.includes("{slug}")) return null;
+  const slug = tenantSlug();
+  if (!slug) return null;
+  return tpl.replace("{slug}", slug);
+}
+
+/** 지금 이 요청이 볼 수 있는 루트들. **호출 시점**에 만든다(위 머리말). */
+export function roots(): Root[] {
+  const t = tenantRootBase();
+  if (t) {
+    return [
+      { key: "shared", label: "공유 워크스페이스", base: path.join(t, "shared") },
+      { key: "personal", label: "개인 폴더", base: path.join(t, "personal"), perUser: true },
+    ];
+  }
+  return [
+    { key: "shared", label: "공유 워크스페이스", base: process.env.TERMINAL_ROOT_SHARED || path.join(os.homedir(), "workspace") },  // 폴백 = deploy 관례($HOME/workspace)
+    { key: "personal", label: "개인 폴더", base: process.env.TERMINAL_ROOT_PERSONAL || path.join(os.homedir(), "box"), perUser: true },
+  ];
+}
 
 // 공유 워크스페이스 루트 — 공유 빌드 캐시(#813)가 이 아래 `.cache` 로 산다.
 //  그 디렉터리의 그룹·setgid 권한을 물려받아야 멤버별 격리 OS 유저(#524)들이 캐시를 함께 쓸 수 있다.
-export const SHARED_ROOT: Root = ROOTS.find((r) => r.key === "shared") ?? ROOTS[0];
+export function sharedRoot(): Root {
+  const all = roots();
+  return all.find((r) => r.key === "shared") ?? all[0]!;
+}
 
 // ── 하네스 플래그 카탈로그(보수적 화이트리스트) ──
 export interface FlagDef { name: string; label: string; desc: string; type: "select" | "bool" | "text"; choices?: string[]; default?: string; }

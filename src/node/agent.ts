@@ -14,7 +14,7 @@ import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";   // #1713 자가 갱신 — 받은 tar.gz 해제
 import {
   listSessionsRaw, createSession, killSession, editSession, applyValidatedInvites,
-  sessionGone, getSessionLabel, killEmptyTmuxServer, sessionDir, SHARED_ROOT,
+  sessionGone, getSessionLabel, killEmptyTmuxServer, sessionDir, sharedRoot,
   markSessionActive, isReportedPhase, type CreateInput,
 } from "../terminal/terminal-sessions.js";
 import { attachSession, killAttachedPtys, type AttachSocket } from "../terminal/terminal-pty.js";
@@ -310,7 +310,7 @@ function connect(): void {
     if (ws.readyState !== WebSocket.OPEN) return;
     try {
       // 리소스 상시 노출(§10) + 세션 스냅샷. res 는 매 push 변하므로 dedup 은 세션 부분만 본다.
-      const [sessions, res] = await Promise.all([listSessionsRaw(), sampleResources(SHARED_ROOT.base)]);
+      const [sessions, res] = await Promise.all([listSessionsRaw(), sampleResources(sharedRoot().base)]);
       const sesKey = JSON.stringify(sessions);
       const skip = !force && sesKey === lastPushed && trackedTasks.size === 0;
       lastPushed = sesKey;

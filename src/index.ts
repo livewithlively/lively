@@ -6,6 +6,7 @@ import { registerOAuthConsent } from "./org/auth/oauth-consent.js";
 import { itemsPool } from "./db/client.js";
 import { buildToolCandidates, registry } from "./capabilities/index.js";
 import { installTenantBinding } from "./db/tenant-binding-boot.js";
+import { tenantContextMiddleware } from "./org/tenant-middleware.js";
 import { setToolCandidates } from "./mcp/mcp-surface.js";
 import { finishConsent, abandonConsent } from "./org/credentials/oauth-broker.js";
 import { buildInstallBundle } from "./org/delivery/publish.js";
@@ -21,7 +22,7 @@ import { isProjectMember as v6IsProjectMember } from "./v6/project-session-store
 import { listProjectActivities } from "./v6/project-activity-store.js";
 import { createProjectFolder } from "./project/project-fs.js";
 import { stateRoot } from "./ops/state-dir.js";
-import { ROOTS } from "./terminal/terminal-sessions.js";
+import { roots } from "./terminal/terminal-sessions.js";
 import { readyReport } from "./ops/health.js";
 import { buildInfo } from "./build-info.js";
 import { effectiveStoragePolicy } from "./org/policies/storage-policy.js";
@@ -56,6 +57,11 @@ console.log(`[boot] ${installTenantBinding()}`);
 
 const app = express();
 
+// ★★ 테넌트 컨텍스트를 **가장 바깥**에서 연다(#1437 v1 5단계). 라우터마다 붙이면 새로 만든 라우터가
+//  빠지고, 빠뜨림이 곧 유출인 구조는 사람 규율로 못 지킨다. 웹훅(아래)보다도 앞이다 — 그 경로도
+//  DB 를 쓴다. `LIVELY_TENANT_HEADER_SECRET` 이 없으면 아무것도 하지 않는다(자가호스팅 무회귀).
+app.use(tenantContextMiddleware());
+
 // domainmap 웹훅(:7700 시절과 동일 경로) — 반드시 전역 express.json() '이전'에 마운트:
 // HMAC 은 정확한 raw bytes 대상이라 JSON 파서가 스트림을 먼저 소비하면 검증이 영원히 실패한다.
 // bearer 인증 밖(구 :7700 과 동일 — HMAC 자체가 fail-closed 인증). raw 파싱은 라우터 내부 소유.
@@ -85,7 +91,7 @@ app.get("/readyz", async (_req, res) => {
     const policy = await effectiveStoragePolicy(loadStoragePolicy);
     const report = await readyReport({
       pool: itemsPool,
-      paths: [stateRoot(), ...ROOTS.map((r) => r.base)],
+      paths: [stateRoot(), ...roots().map((r) => r.base)],
       thresholds: { warnPct: policy.disk_warn_pct, criticalPct: policy.disk_critical_pct },
     });
     // 배포 신원(#1289) — "지금 도는 게 몇 버전인가"를 밖에서 한 번에. 없으면 null 로 정직하게 낸다.

@@ -16,7 +16,7 @@ import { getRuntimeConfig } from "../org/store.js";
 import { appendSessionLog, sessionLogWatermark, sessionOwner, sessionParent, readSessionLog, listSessionsForOwner, listSessionsForProject, listSubagentsForSession } from "../v6/session-log-store.js";
 import { sessionBoundToMemberProject, isProjectMember, recordSessionProject, latestProjectForSession } from "../v6/project-session-store.js";   // #1313 R21 — 세션 바인딩만(PM 스토어 전체 미적재)
 import { renderTranscript, firstTranscriptCwd, materializeTranscriptIfMissing } from "../terminal/terminal-transcript.js";
-import { createSession, SHARED_ROOT } from "../terminal/terminal-sessions.js";
+import { createSession, sharedRoot } from "../terminal/terminal-sessions.js";
 import path from "node:path";
 import { getSessionState } from "./session-state.js";
 
@@ -236,7 +236,7 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     const cwd = firstTranscriptCwd(log.data.toString("utf8"));
     const proj = await latestProjectForSession(sessionId);
     const user = userOf(req);
-    const sharedBase = SHARED_ROOT.base;
+    const sharedBase = sharedRoot().base;
     const underShared = !!cwd && (cwd === sharedBase || cwd.startsWith(sharedBase + "/"));
 
     // 원본이 이 박스이고 cwd 가 공유 루트 아래 → 원본 경로에서 이어받기(로컬 없으면 중앙본 물질화).

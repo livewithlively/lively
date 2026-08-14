@@ -23,7 +23,7 @@ import { startTaskScheduler } from "../node/task-scheduler.js";
 import { backfillMarkerSync, backfillSharedGroupWrite } from "../project/project-fs.js";
 import { startScheduler } from "../scheduler/index.js";
 import { ensureStateDirs, stateRoot } from "../ops/state-dir.js";
-import { ROOTS, SHARED_ROOT } from "../terminal/terminal-sessions.js";
+import { roots, sharedRoot } from "../terminal/terminal-sessions.js";
 import { startLogJanitor } from "../ops/log-janitor.js";
 import { startCallLogPrune } from "../org/policies/call-log-prune.js";
 import { effectiveStoragePolicy } from "../org/policies/storage-policy.js";
@@ -137,7 +137,7 @@ export const DB_BOOT_STEPS: BootStep[] = [
 
 async function ensureSharedBuildCache(): Promise<void> {
   const sp = await effectiveStoragePolicy(loadStoragePolicy);
-  await ensureSharedCache(SHARED_ROOT.base, {
+  await ensureSharedCache(sharedRoot().base, {
     enabled: sp.shared_cache_enabled,
     relocateHome: sp.shared_cache_relocate_home,
   });
@@ -146,7 +146,7 @@ async function ensureSharedBuildCache(): Promise<void> {
 function startBoxWatchStep(): void {
   startBoxWatch({
     pool: itemsPool,
-    paths: () => [stateRoot(), ...ROOTS.map((r) => r.base)],
+    paths: () => [stateRoot(), ...roots().map((r) => r.base)],
     loadThresholds: async () => {
       const sp = await effectiveStoragePolicy(loadStoragePolicy);
       return { warnPct: sp.disk_warn_pct, criticalPct: sp.disk_critical_pct };

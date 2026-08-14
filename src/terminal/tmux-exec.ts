@@ -6,7 +6,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import os from "node:os";
-import { TMUX_BIN } from "./catalog.js";
+import { TMUX_BIN, tenantSlug } from "./catalog.js";
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 
 const execFileAsync = promisify(execFile);
@@ -41,7 +41,18 @@ const TMUX_ENV: NodeJS.ProcessEnv = (() => {
  */
 export function tmuxExecArgv(): string[] {
   const raw = (process.env.LIVELY_TMUX_EXEC || "").trim();
-  return raw ? raw.split(/\s+/) : [];
+  if (!raw) return [];
+  if (!raw.includes("{slug}")) return raw.split(/\s+/);
+  // ── 테넌트별 중계(#1437 v1 5단계) ──
+  //  게이트웨이 하나가 여러 워크스페이스를 서비스하면 **tmux 서버도 워크스페이스마다 다르다.**
+  //  중계 명령에 `{slug}` 를 넣어 그 테넌트의 tmux 컨테이너를 가리키게 한다.
+  //   예: `docker exec -u 200001 lvly-s-{slug}-tmux tmux`
+  const slug = tenantSlug();
+  // ★★ **로컬 tmux 로 폴백하지 않는다.** 폴백하면 게이트웨이 호스트에서 tmux 가 돌아
+  //  ⓐ 그 세션이 엉뚱한 자리에 생기고 ⓑ 모든 테넌트가 **같은 tmux 서버**를 공유하게 된다
+  //  (= 남의 세션이 목록에 보인다). 컨텍스트를 잃은 건 배선 버그이고, 배선 버그는 오류로 드러나야 한다.
+  if (!slug) throw new Error("tmux 중계에 테넌트 컨텍스트가 필요합니다 — 컨텍스트 밖에서 호출됐습니다");
+  return raw.replace("{slug}", slug).split(/\s+/);
 }
 
 export async function tmux(args: string[]): Promise<string> {
