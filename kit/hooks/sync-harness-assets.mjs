@@ -115,6 +115,8 @@ const COMPOSERS = {
   "codex-prompt": composeCodexPrompt,
   "opencode-agent": composeOpencodeAgent,
   "opencode-command": composeOpencodeCommand,
+  "antigravity-agent": composeAntigravityAgent,
+  "antigravity-workflow": composeAntigravityWorkflow,
 };
 // opencode 서브에이전트 = md 지만 **frontmatter 스키마가 claude 와 다르다.**
 //  실측(1.18.12): `tools` 는 배열이 아니라 객체 · `color` 는 hex 또는 지정 enum · `model` 은 `provider/model` 형식.
@@ -130,6 +132,24 @@ function composeOpencodeAgent(asset) {
 // opencode 커맨드 — 같은 이유로 description 만 넘긴다(claude 의 argument-hint·allowed-tools 는 opencode 스키마에 없다).
 //  본문은 `template` 이 된다.
 function composeOpencodeCommand(asset) {
+  const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
+  const desc = asset.description != null ? String(asset.description) : String(fm.description ?? "");
+  return `---\ndescription: ${yamlValue(desc)}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
+}
+
+// antigravity 서브에이전트(agents/<n>/agent.md) — 실측(#1689)으로 안전 확인된 name·description 만 이식한다.
+//  claude 의 tools·color·model 은 antigravity 스키마 미확인이라 싣지 않는다(codex·opencode 와 같은 판단 —
+//  잘못된 frontmatter 의 폭발 반경이 하네스마다 달라도, 이식 가능 최소셋만 넘기는 규칙은 같다).
+function composeAntigravityAgent(asset) {
+  const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
+  const desc = asset.description != null ? String(asset.description) : String(fm.description ?? "");
+  const name = fm.name != null ? String(fm.name) : String(asset.id || "");
+  return `---\nname: ${yamlValue(name)}\ndescription: ${yamlValue(desc)}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
+}
+
+// antigravity 워크플로우(workflows/<n>.md — 슬래시커맨드 등가, `/<이름>` 으로 호출) — description + 본문만.
+//  실측(#1689): description frontmatter 워크플로우가 print 모드 포함 정상 실행. argument-hint 류는 미지원이라 제외.
+function composeAntigravityWorkflow(asset) {
   const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
   const desc = asset.description != null ? String(asset.description) : String(fm.description ?? "");
   return `---\ndescription: ${yamlValue(desc)}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
@@ -289,6 +309,10 @@ function scanLocalHooksCodex() {
 
 function scanLocalHooks() {
   if (HARNESS === "codex") return scanLocalHooksCodex();
+  // settings-merge(claude) 가 아닌 하네스(opencode·antigravity)는 claude settings 를 읽으면 **남의 하네스 훅**을
+  //  이 하네스 것으로 잘못 보고한다 — 로컬 훅 스캐너가 없는 하네스는 정직하게 빈 목록(#1689, 종전엔 opencode 가
+  //  이 폴스루로 claude settings 를 읽었다).
+  if (harness(HARNESS).wiring !== "settings-merge") return [];
   let cfg;
   try { cfg = JSON.parse(readFileSync(join(CLAUDE_DIR, "settings.json"), "utf8")); } catch { return []; }
   const hooksCfg = cfg && typeof cfg === "object" ? cfg.hooks : null;

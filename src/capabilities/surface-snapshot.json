@@ -1346,7 +1346,7 @@
   "rest": [
    "POST /api/ui/org/hook"
   ],
-  "input_hash": "394f2f91a596c49d"
+  "input_hash": "3290957bf838ff3f"
  },
  {
   "name": "org_hook_remove",
@@ -1486,7 +1486,7 @@
   "rest": [
    "POST /api/ui/org/harness-asset"
   ],
-  "input_hash": "249bcfb54fd37a9e"
+  "input_hash": "30cad04e51649f01"
  },
  {
   "name": "org_harness_asset_remove",
