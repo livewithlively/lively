@@ -2159,9 +2159,12 @@ export function goneMode(meta, isNode, alreadyRestored, typed) {
   //  ⚠ exitedByUser 를 loop 보다 앞세운다: 복원해서 쓰다가 또 exit 한 경우까지 loop 로 잡으면 '대화를 못 찾았다'는
   //   엉뚱한 설명이 뜬다(2026-07-28 실측 신고).
   if (meta.exitedByUser || typed) return 'ask';
-  // claude 가 아닌 세션(셸·코덱스)은 자동 복원하지 않는다. ① 이어받을 대화가 없어 복원의 이득이 없고(--resume 무의미)
-  //  ② claude 훅이 없어 '사용자가 exit 했다'를 **원리적으로** 기록할 수 없다 → 자동 복원하면 셸에서 exit 한 것을
-  //  무조건 되살려 exit 가 안 먹히는 UX 가 된다(실측 신고: 셸에서 exit → 자동 복원 → 또 exit → 루프 배너).
+  // claude 가 아닌 세션은 **자동** 복원하지 않는다(사용자가 버튼을 누르면 복원되고, 그때는 대화도 이어받는다).
+  //  ⚠ #1711 근거 갱신: 종전 근거 ①"이어받을 대화가 없어 복원의 이득이 없다(--resume 무의미)"는 **더 이상 참이
+  //   아니다** — 카탈로그 resumeArgv 로 codex·opencode·antigravity 도 각자 수단으로 그 대화를 이어받는다.
+  //   남은 진짜 이유는 ②다: '사용자가 직접 exit 했다'(exitedByUser)를 채우려면 SessionEnd 등가 이벤트가 필요한데
+  //   그게 없는 하네스가 있다(antigravity 훅은 5이벤트뿐 — SessionEnd 등가물 없음, #1689 실측). 그 신호 없이
+  //   자동 복원하면 사용자가 끝낸 세션을 되살려 exit 가 안 먹히는 UX 가 된다(실측 신고: 셸에서 exit → 자동 복원 → 루프).
   if (meta.harness && meta.harness !== 'claude') return 'ask';
   if (alreadyRestored) return 'loop';             // 복원으로 열린 세션이 사용자 의도 없이 또 끊겼다 — 루프 차단
   return 'auto';                                  // 중단됨(재부팅·자동회수)인 claude 세션 = 자동 복원의 정확한 타깃
@@ -2194,10 +2197,14 @@ async function onSessionGone() {
   }
   if (mode === 'ask') {
     // 같은 'ask' 라도 왜 멈췄는지가 다르다 — 사유를 정확히 말한다(틀린 설명이 오해를 만든다).
-    const shellish = !!(meta.harness && meta.harness !== 'claude');
-    endSession(shellish
+    // #1711 — '이어받을 대화가 없다'는 **셸에만** 참이다. 종전엔 claude 가 아니면 전부 이 문구를 써서,
+    //  codex·opencode·antigravity 세션에 "이어받을 대화가 없는 세션이에요"라고 **되는 기능을 없다고** 말했다
+    //  (2026-08-14 상민님 신고: antigravity 세션을 exit 하고 이어 열면 대화가 안 이어진다 — 서버 하드코딩과
+    //  이 문구가 같은 오해의 양면이었다).
+    const noResume = meta.harness === 'shell';
+    endSession(noResume
       ? { info: true, title: '이 세션은 종료되었습니다.',
-          body: '이어받을 대화가 없는 세션(' + (meta.harness === 'shell' ? '셸' : meta.harness) + ')이에요. 같은 폴더·설정으로 다시 열 수 있습니다.',
+          body: '이어받을 대화가 없는 세션(셸)이에요. 같은 폴더·설정으로 다시 열 수 있습니다.',
           restoreBtn: true, restoreLabel: '다시 열기' }
       : meta.exitedByUser
       ? { info: true, title: '이 세션은 종료되었습니다.',

@@ -468,10 +468,17 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     //   홈이 따로라 남의 홈 대화를 집을 수 있고, 그러면 그 세션은 못 읽어 claude 가 "No conversation found" 로
     //   즉시 죽는다(마이크 실측 사고) ② 소유자로 스코프해도 **같은 폴더의 다른 대화**를 '최신'이라며 집을 수 있다
     //   — 그럴싸하게 틀리는 쪽이 picker 한 번 고르는 것보다 나쁘다(상민님 판단). 추측하지 않는다.
-    //  claude 하네스에만 해당한다(셸·코덱스는 --resume 이 무의미).
-    const resumeUuid = st.harness === "claude" && st.claude_session_id
-      && await transcriptExists(st.dir || "", st.claude_session_id, st.owner).catch(() => false)
-      ? st.claude_session_id : null;
+    //  ⚠ #1711 — 종전엔 여기에 `st.harness === "claude"` 가 걸려 있어 **claude 세션만** 정밀 복원됐다. 그래서
+    //   antigravity·codex·opencode 세션은 '이어서 열기'를 해도 늘 새 대화로 열렸다(상민님 신고). 매핑 컬럼
+    //   claude_session_id 는 이름만 claude 일 뿐 값은 **그 하네스의 대화 id** 다 — work-flag 훅이 하네스와 무관하게
+    //   보고하고(어댑터가 conversationId·sessionID 를 session_id 로 넘긴다), 이어받기 argv 는 카탈로그가 만든다.
+    //  ⚠ 대화 존재 확인(transcriptExists)은 claude 의 `~/.claude/projects` 규약 전용이라 claude 에서만 한다.
+    //   다른 하네스는 저장 위치 규약을 실측하기 전까지 검사 없이 시도한다 — 없는 id 로 시작해도 #1516 런처가
+    //   세션을 살려 두고 하네스의 원문 에러를 화면에 남기므로, 종전의 '복원 루프'(즉사→재복원)는 구조적으로 끊겨 있다.
+    const mappedId = st.claude_session_id || null;
+    const resumeUuid = mappedId
+      && (st.harness !== "claude" || await transcriptExists(st.dir || "", mappedId, st.owner).catch(() => false))
+      ? mappedId : null;
     const precise = !!resumeUuid;
     const session = await createSession(owner, {
       label: st.label || id, rootKey: st.root_key || "shared", subpath: st.subpath || "",

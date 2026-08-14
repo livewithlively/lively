@@ -347,10 +347,15 @@ if (failedRepos.length) {
 // 하네스 인자 — 모델/자동승인(웹 터미널 카탈로그와 동일 규칙: claude=--dangerously-skip-permissions, codex=--yolo).
 //  바이너리명은 하네스 id 와 다를 수 있다(antigravity → agy, #1689) — id 로 spawn 하면 ENOENT 다.
 const HARNESS_BIN = { claude: "claude", codex: "codex", opencode: "opencode", antigravity: "agy" };
+// 자동승인 플래그도 **하네스마다 다르다**(#1711). 종전엔 `codex ? "--yolo" : "--dangerously-skip-permissions"` 라
+//  opencode 에 존재하지 않는 플래그를 줘, `lively run … --auto-approve` 가 그 하네스에서 조용히 어긋났다.
+//  ⚠ 값은 서버 카탈로그(src/terminal/catalog.ts HARNESSES)와 같아야 한다 — 웹에서 만든 명령과 로컬 실행이 갈리면
+//   같은 체크박스가 기계마다 다른 뜻이 된다. 표에 없는 하네스면 **아무 플래그도 주지 않는다**(추측 금지).
+const HARNESS_AUTO = { claude: "--dangerously-skip-permissions", codex: "--yolo", opencode: "--auto", antigravity: "--dangerously-skip-permissions" };
 const hbin = HARNESS_BIN[harness] || harness;
 const hargs = [];
 if (args.model) hargs.push("--model", args.model);
-if (args.autoApprove) hargs.push(harness === "codex" ? "--yolo" : "--dangerously-skip-permissions");
+if (args.autoApprove && HARNESS_AUTO[harness]) hargs.push(HARNESS_AUTO[harness]);
 const hcmd = [hbin, ...hargs].join(" ");
 if (!args.launch) { log(`준비 완료. 시작: cd "${projDir}" && ${hcmd}`); process.exit(0); }
 log(`${hcmd} 실행 → ${projDir}`);
