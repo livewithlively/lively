@@ -28,7 +28,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { spawnSync, spawn } from "node:child_process";
 import { ReadStream, WriteStream } from "node:tty";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import crypto from "node:crypto";
 
 // ── 0. 상수 · 경로 ──────────────────────────────────────────────────────────
@@ -472,6 +472,24 @@ function detectHarnesses() {
   return [...out];
 }
 
+// 다운받은 **번들의 레지스트리**로 하네스 목록을 재계산해 보탠다(#1689 실측 UX 갭).
+//  왜: update 의 배선 대상 목록은 "지금 실행 중인 CLI" 의 detectHarnesses() 가 계산하는데, 그 CLI 가 새 하네스를
+//  모르는 구버전이면(새 하네스 지원이 이번 번들에서 처음 들어온 경우가 정확히 그렇다) 새 키트를 깔면서도 그
+//  하네스 배선만 조용히 빠진다 → 멤버가 update 를 **두 번** 돌려야 했다. 번들 레지스트리는 항상 최신이므로
+//  그 기준으로 "PATH 에 바이너리가 있는데 목록에 없는 하네스"를 추가한다. 실패는 전부 무해(구 번들엔
+//  레지스트리가 없다 — 종전 목록 그대로).
+export async function augmentHarnessesFromBundle(root, harnesses) {
+  try {
+    const reg = await import(pathToFileURL(join(root, ".claude", "hooks", "harness-registry.mjs")).href); // ⚠ pathToFileURL — 윈도우 드라이브문자
+    const added = [];
+    for (const id of reg.HARNESS_IDS || []) {
+      const bin = reg.HARNESS?.[id]?.bin;
+      if (typeof bin === "string" && bin && !harnesses.includes(id) && has(bin)) { harnesses.push(id); added.push(id); }
+    }
+    return added;
+  } catch { return []; } // 레지스트리 없음(구 번들)·import 실패 — 종전 목록 유지
+}
+
 // ── 6. 번들 — 다운로드 · 검증 ───────────────────────────────────────────────
 async function downloadBundle() {
   const gw = gateway(), tok = token();
@@ -686,6 +704,9 @@ async function syncKit({ label, offerHarness }) {
   try {
     const version = verifyBundle(root);
     ok(`키트 검증 완료${version ? "  " + dim("(" + version + ")") : ""}`);
+    // 번들 레지스트리 기준으로 하네스 목록 재계산 — 구 CLI 로 돌려도 새 하네스 배선이 빠지지 않게(#1689).
+    const late = await augmentHarnessesFromBundle(root, harnesses);
+    if (late.length) say(dim(`  (이 번들이 새로 지원하는 하네스 감지: ${late.join(", ")} — 함께 배선합니다)`));
     step("kit-download", "키트 내려받는 중", "done", 1);
 
     say(dim("  [2/3] 설치 중…"));
