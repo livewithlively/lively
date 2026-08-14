@@ -83,7 +83,9 @@ export async function detectHarnesses(): Promise<string[]> {
 // ── 태스크 스폰 ──
 export interface RunTaskInput {
   user: LivelyUser;            // 의뢰자(과금·귀속 신원 — D1: 의뢰자 시트)
-  taskId: number;
+  // 작업 폴더 이름이 되는 id. 위탁은 org_task 의 숫자 id, 리브 대화 턴(#1631)은 문자열 턴 id 다
+  //  (턴은 org_task 행을 만들지 않는다 — 배치 의미(재시도·용량·타임아웃)가 채팅 한 턴에 안 맞는다).
+  taskId: number | string;
   rootKey: string;             // v1: 'shared' 만 허용(검증은 호출부)
   subpath: string;             // 공유 루트 하위 작업 폴더(비우면 delegated/<id>)
   prompt: string;
@@ -91,6 +93,12 @@ export interface RunTaskInput {
   repo?: string | null;        // 지정 시 게이트웨이가 공유 base clone→worktree 자동 provision, cwd=worktree(#458 재사용)
   gitRef?: string | null;      // worktree 분기 기준 브랜치(origin/<ref>) — 없으면 base HEAD
   flags?: Record<string, string>;  // 화이트리스트(--model/--effort)만 적용
+  // 리브 대화 턴(#1631) 전용 축 — **사람이 준 값이 아니라 코드가 만든 인자**를 화이트리스트 밖으로 싣는다
+  //  (--disallowedTools 거부 목록 · --session-id/--resume). 위탁은 안 쓴다(undefined).
+  //  ⚠ 여기 사람 텍스트를 넣지 마라 — 이 배열은 셸 명령줄에 그대로 펼쳐진다. 사람 텍스트는 프롬프트 파일뿐이다.
+  extraFlags?: string[];
+  // 승인 우회(기본 true = 위탁). 리브는 false — 사람이 화면에서 보고 있다(taskScript 주석 참조).
+  bypassPermissions?: boolean;
   env?: Record<string, string>;    // 자격 리스(CLAUDE_CODE_OAUTH_TOKEN 등) — 값은 세션 env 로만
   // 레포 provision 주입(#905 C4) — **노드엔 DB 가 없다**. 게이트웨이가 레지스트리 git_url + (의뢰자 본인) git 자격을
   //  조회해 실어 보낸다. 없으면 노드는 종전대로 DB 를 읽으려다 실패하고 "레지스트리에 없다"는 오진을 낸다.
@@ -247,7 +255,14 @@ export async function prepareTaskDir(baseWs: string, sharedBase: string, taskId:
 }
 
 export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResult> {
-  if (input.rootKey !== "shared") throw new Error("위탁 워크스페이스는 공유 루트(shared)만 지원합니다(v1)");
+  // 루트 축 — 위탁(delegate)은 **공유 루트**다: 결과물이 남고 팀이 본다.
+  //  리브 대화 턴(#1631)만 **개인 루트**다. 두 가지 이유이고 둘 다 축소하면 안 된다:
+  //   ① 세션 시작 훅의 리브 게이트가 `basename(cwd) === "liv"` 라, 그 폴더에서 돌아야 리브가 리브가 된다.
+  //   ② 웹터미널 리브 세션과 **같은 자리**를 써야 두 표면이 한 대화로 보인다.
+  //  그 외 값은 계속 막는다 — 임의 루트를 여는 순간 이 함수가 범용 실행기가 된다.
+  if (input.rootKey !== "shared" && input.rootKey !== "personal") {
+    throw new Error(`위탁 워크스페이스 루트는 shared·personal 만 지원합니다: ${input.rootKey}`);
+  }
   const harness = HARNESSES.find((h) => h.key === input.harness);
   // #1710 — 위탁 가능 여부는 '헤드리스 규약을 아는가'(HEADLESS 표)로 판정한다. 종전엔 `!== "claude"` 로 잠겨 있어,
   //  세션은 네 하네스로 열리는데 **위탁만 claude 전용**이었다. 표에 없는 하네스는 규약을 실측하지 않은 것이므로
@@ -269,13 +284,19 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
   // 격리 게이트 — createSession 과 동일 seam(#524): Linux+인프라면 box_ 유저로 drop, 아니면 null(비격리 폴백).
   const osUser = await ensureMemberOsUser(user).catch(() => null);
   const sub = (input.subpath || "").trim() || `delegated/task-${input.taskId}`;
-  const { base: sharedBase, abs: baseWs } = await resolveRootPath(user, "shared", sub, osUser ?? null);
+  const { base: sharedBase, abs: baseWs } = await resolveRootPath(user, input.rootKey, sub, osUser ?? null);
   // 레포 지정(#458 재사용) — 공유 base clone→worktree 자동 provision, 워커 cwd=worktree. .lively-task 는 worktree 밖(baseWs)에
   //  둬 레포를 오염시키지 않는다(untracked). 미지정이면 빈 워크스페이스(cwd=baseWs, 프롬프트가 알아서 준비).
   let workspace = baseWs;
   if (input.repo) {
+    // 레포 준비는 **위탁 전용 경로**다(리브 대화 턴은 레포를 안 쓴다). 그쪽 id 는 org_task 의 숫자라
+    //  여기서 그 계약을 명시적으로 지킨다 — 문자열 id 가 흘러들면 조용히 NaN 폴더가 생기는 대신 여기서 멈춘다.
+    const numericTaskId = Number(input.taskId);
+    if (!Number.isInteger(numericTaskId)) {
+      throw new Error(`레포를 준비하는 작업은 숫자 taskId 가 필요합니다(위탁 전용): ${input.taskId}`);
+    }
     workspace = await provisionTaskRepo(
-      baseWs, input.taskId, String(input.repo), input.gitRef ?? null, (user.userId || user.email || null),
+      baseWs, numericTaskId, String(input.repo), input.gitRef ?? null, (user.userId || user.email || null),
       input.repoAuth,   // 노드 실행이면 게이트웨이가 실어 보낸 주입(없으면 중앙 실행 → DB 직접 읽기)
     );
   }
@@ -290,6 +311,11 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
     if (!def || !v || (def.choices && !def.choices.includes(v))) continue;
     flags.push(name, v);
   }
+  // 화이트리스트 밖 인자(리브 전용). ⚠ 리브의 거부 목록은 **가변인자**(<tools...>)라 뒤에 오는 첫 `--플래그`
+  //  에서 끊긴다 — 목록이 배열 끝에 오면 taskScript 가 뒤에 붙이는 --output-format 까지 도구 이름으로 먹혀
+  //  **안전선이 조용히 반쪽이 된다**(그래도 실행은 되고 답도 나온다 = 무증상). 그래서 livTurnArgs 가 거부 목록
+  //  **다음에** --session-id/--resume 를 두어 그 자리에서 끊고, 그 순서를 liv-turn.test 가 고정한다.
+  if (input.extraFlags?.length) flags.push(...input.extraFlags);
 
   const args = ["new-session", "-d", "-s", id];
   args.push("-e", `LANG=${PANE_LOCALE}`, "-e", `LC_CTYPE=${PANE_LOCALE}`, "-e", `LC_ALL=${PANE_LOCALE}`);
@@ -303,7 +329,7 @@ export async function spawnTaskSession(input: RunTaskInput): Promise<RunTaskResu
     if (!/^[A-Z][A-Z0-9_]{0,63}$/.test(k)) continue;
     args.push("-e", `${k}=${v}`);
   }
-  const script = taskScript(harness.key, harness.bin, flags, taskDir);
+  const script = taskScript(harness.key, harness.bin, flags, taskDir, { bypassPermissions: input.bypassPermissions });
   if (osUser) {
     args.push(...wrapAsMember(osUser, ["sh", "-lc", script], workspace));
   } else {
