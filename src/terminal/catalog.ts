@@ -277,7 +277,51 @@ export function harnessFailNotice(harnessKey: string): string {
   return [line, ...body, line].join("\n");
 }
 
-// 하네스 실행 argv → 런처로 감싼 argv. cmd 가 비면(셸 세션) 감싸지 않는다 — 감쌀 하네스가 없다.
+// Windows pane 셸의 UTF-8 프렐류드(#1541) — POSIX 의 PANE_LOCALE(#633)에 대응하는 **Windows 축**이다.
+//
+// ★ 실측(2026-08-14, hammurabi 실기기): 노드 pane 은 `chcp 949` · `[Console]::OutputEncoding =
+//  ks_c_5601-1987` 로 시작한다. 그래서 **우리가 내보내는 UTF-8 을 pane 의 소비자가 cp949 로 디코드**한다:
+//    Write-Host "한글"          → 정상 (PowerShell → WriteConsoleW)
+//    node x.mjs                 → 정상 (Node → WriteConsoleW)
+//    node x.mjs | Out-String    → **깨짐** (`NODE吏곸젒: ?쒓?媛€?섎떎`)
+//    type <UTF-8 로그파일>      → **깨짐**  ← 우리가 `lively node start` 로 안내해 온 바로 그 명령
+//  즉 파일도 프로그램도 정상인데 **읽는 층**만 틀렸다. 파이프는 AI 하네스가 상시로 쓰는 경로다.
+//
+// ⚠ `chcp 65001` **만으로는 안 고쳐진다** — PowerShell 은 시작 시 `[Console]::OutputEncoding` 을 캐시하므로
+//  네이티브 출력 디코드는 여전히 cp949 다(실측). 두 층을 **다** 세워야 한다:
+//   · `chcp 65001`               → 네이티브 자식(`type`·findstr…)의 콘솔 입출력
+//   · `[Console]::OutputEncoding` → PowerShell 이 **네이티브 출력을 디코드**할 때 (= 파이프 정상화)
+//   · `[Console]::InputEncoding`  → 사람이 pane 에 타이핑한 한글이 네이티브 자식에게 갈 때
+//   · `$OutputEncoding`           → PowerShell 이 네이티브 자식의 **stdin 으로 보낼** 때
+//
+// ⚠ 사용자 셸 전역이 아니라 **이 pane 만** 바뀐다(실측: 프렐류드를 넣은 A 세션은 utf-8, 동시에 뜬 B 세션은
+//  949 그대로). 세션스코프라는 점에서 `-e LANG=…`(#633)과 성질이 같다.
+//
+// ⚠ 설정마다 개별 try/catch — 구 PowerShell·핸들 무효로 한 줄이 실패해도 **셸은 떠야 한다**(프렐류드는
+//  편의지 전제가 아니다). 프로필(`-NoProfile` 안 씀)은 그대로 로드해 사용자 설정이 이긴다.
+const WIN_UTF8_PS = [
+  "try{chcp 65001|Out-Null}catch{}",
+  "try{$u=New-Object System.Text.UTF8Encoding($false)}catch{$u=$null}",
+  "if($u){try{[Console]::OutputEncoding=$u}catch{};try{[Console]::InputEncoding=$u}catch{};try{$OutputEncoding=$u}catch{}}",
+].join("\n");
+
+// `-EncodedCommand`(UTF-16LE base64)로 넘긴다 — **인용부호를 아예 안 쓰기 위해서**다.
+//  psmux 3.3.7 은 인자의 `"` · `'` · 탭을 삼키고(opt-json.test.ts 가 세운 계약), 공백은 인자를 쪼갠다.
+//  base64 는 그 문자를 하나도 안 쓰므로 psmux 를 통과해도 스크립트가 원형 그대로 도착한다.
+//  (여기엔 보간할 값이 없다 — 위 상수 하나뿐이라 아래 인젝션 경계 규칙과 어긋나지 않는다.)
+const WIN_UTF8_B64 = Buffer.from(WIN_UTF8_PS, "utf16le").toString("base64");
+
+/**
+ * Windows 셸 세션이 실행할 argv. 토큰에 `"` `'` 탭 **공백**이 하나도 없어야 한다(psmux 통과 조건).
+ *
+ * `powershell`(5.1)을 명시한다 — psmux 의 Windows 기본 셸과 같고 어느 Windows 에나 있다(pwsh 는 없을 수 있다).
+ */
+export function winShellArgv(): string[] {
+  return ["powershell", "-NoLogo", "-NoExit", "-EncodedCommand", WIN_UTF8_B64];
+}
+
+// 하네스 실행 argv → 런처로 감싼 argv. cmd 가 비면(셸 세션) 감쌀 하네스는 없지만, Windows 는 UTF-8
+//  프렐류드를 세운 셸을 띄운다(위 WIN_UTF8_PS).
 //
 // ⚠ Windows(psmux 노드)에서는 감싸지 않는다 (#1541 실측). 이 런처는 **POSIX 셸 스크립트**인데
 //  Windows 노드의 pane 셸은 PowerShell 이라 그 스크립트가 그대로 파싱된다 → 하네스는 시작조차 못 하고
@@ -288,10 +332,16 @@ export function harnessFailNotice(harnessKey: string): string {
 //  세션은 셸로 남는다)이 Windows 에선 없다 — 그건 알려진 갭이고, PowerShell 판 런처는 별도로 만들어야 한다.
 //  ⚠ 여기서 문자열 보간으로 PowerShell 스크립트를 조립하지 말 것: 이 자리는 하네스·플래그가 위치인자로만
 //   들어가야 하는 인젝션 경계다(위 LAUNCH_SH 주석). 검증 없이 급조한 래퍼를 끼우는 것보다 안 감싸는 게 낫다.
+//   → 그래서 UTF-8 프렐류드(#1541)도 **하네스 세션엔 넣지 않는다**: 하네스를 감싸려면 그 argv 를
+//     PowerShell 문자열에 이어붙여야 하고, 그게 정확히 이 규칙이 막는 것이다. 셸 세션(cmd 가 빈 경우)은
+//     이어붙일 값이 없어(상수 하나) 안전하다 — 그쪽만 세운다.
+//   하네스 세션은 프렐류드 없이도 화면이 정상이다: 하네스는 ConPTY 에 UTF-8 을 직접 쓰고 xterm.js 가
+//    UTF-8 로 디코드한다. 콘솔 코드페이지는 **파이프·네이티브 자식**을 읽을 때만 문제가 된다.
 export function harnessLaunchArgv(harnessKey: string, cmd: string[], platform: string = process.platform): string[] {
-  if (!cmd.length) return cmd;
-  if (platform === "win32") return cmd;
-  return ["sh", "-c", LAUNCH_SH, "lively-launch", harnessFailNotice(harnessKey), ...cmd];
+  const argv = Array.isArray(cmd) ? cmd : [];
+  if (platform === "win32") return argv.length ? argv : winShellArgv();
+  if (!argv.length) return argv;
+  return ["sh", "-c", LAUNCH_SH, "lively-launch", harnessFailNotice(harnessKey), ...argv];
 }
 
 // 로그인 전용 세션(#1516) — 관리탭 [연결된 AI 계정]의 [로그인]이 여는 세션.
