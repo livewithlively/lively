@@ -5,6 +5,7 @@ import { oauthAuthorizationServer, clientSecretGate } from "./org/auth/oauth-rou
 import { registerOAuthConsent } from "./org/auth/oauth-consent.js";
 import { itemsPool } from "./db/client.js";
 import { buildToolCandidates, registry } from "./capabilities/index.js";
+import { installTenantBinding } from "./db/tenant-binding-boot.js";
 import { setToolCandidates } from "./mcp/mcp-surface.js";
 import { finishConsent, abandonConsent } from "./org/credentials/oauth-broker.js";
 import { buildInstallBundle } from "./org/delivery/publish.js";
@@ -48,6 +49,10 @@ await loadEnterprise();
 
 // 부팅 시 MCP 툴 후보 주입 — registry(정적) + db 직접등록. 웹 도구탭(org_tools)·검증(org_tool_upsert)·http_proxy 섀도잉 차단이 참조.
 setToolCandidates(buildToolCandidates());
+
+// 테넌트 바인딩(#1437) — **DB 를 처음 쓰기 전에** 꽂아야 한다. 미설정이면 no-op 이고(자가호스팅 기본),
+//  값이 이상하면 여기서 던져 기동을 막는다(조용히 안 켜지면 그게 곧 유출이다).
+console.log(`[boot] ${installTenantBinding()}`);
 
 const app = express();
 

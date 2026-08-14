@@ -6,7 +6,7 @@
 //  (실기기 e2e 는 별도 — Windows VM 에서 등록·기동까지 확인한다.)
 // 실행: node kit/cli/node-win-contract.test.mjs
 import assert from "node:assert/strict";
-import { muxCandidates, winTaskXml, winRunnerCmd, resolveWinUserId, winInstallArgv, nodeDaemonArtifact, nodeProcProbe, parseProcCount, winStartupDir, winStartupVbs, tailLines, lastConnectedAt } from "./cmd-node.mjs";
+import { muxCandidates, winTaskXml, winRunnerCmd, resolveWinUserId, winInstallArgv, nodeDaemonArtifact, nodeProcProbe, parseProcCount, winStartupDir, winStartupVbs, tailLines, lastConnectedAt, logTailHint } from "./cmd-node.mjs";
 
 let pass = 0;
 const t = (name, fn) => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -311,6 +311,31 @@ t('F2 로그 꼬리 — 빈 줄을 빼고 마지막 n줄만(실패를 그 자리
   assert.deepEqual(tailLines("a\n\nb\r\nc\n", 2), ["b", "c"]);
   assert.deepEqual(tailLines("", 5), [], "로그가 비어도 throw 하지 않는다");
   assert.equal(tailLines("x\n".repeat(50), 12).length, 12);
+});
+
+// ── G. 로그 확인 안내 문구 — 한글이 안 깨지는 명령이어야 한다 (#1541) ────────────
+// 계기(실측): Windows 안내가 `type <로그>` 였다. 로그는 UTF-8 인데 한국어 콘솔은 chcp 949 로 시작해
+//  `type` 이 그 바이트를 cp949 로 읽는다 → 한글 전부 깨짐. 파일도 우리 출력도 정상이고 **안내가 틀렸다**.
+t("G1 Windows — type 이 아니라 UTF-8 을 명시 디코드하는 명령을 안내한다", () => {
+  const h = logTailHint("C:\\Users\\yoon\\.lively\\logs\\node-agent.log", "win32");
+  assert.ok(!/^type\b/.test(h), `🔴 여전히 type 을 안내한다(cp949 로 깨진다): ${h}`);
+  assert.match(h, /-Encoding\s+utf8/, `UTF-8 디코드를 명시하지 않는다: ${h}`);
+  assert.match(h, /Get-Content/, h);
+  assert.ok(h.includes("node-agent.log"), h);
+});
+
+t("G2 Windows — 따라가기(-Wait)로 tail -f 와 같은 역할", () => {
+  assert.match(logTailHint("C:\\x.log", "win32"), /-Wait/);
+});
+
+t("G3 경로에 공백이 있어도 한 인자로 유지된다(따옴표)", () => {
+  const h = logTailHint("C:\\Users\\First Last\\.lively\\logs\\node-agent.log", "win32");
+  assert.match(h, /'C:\\Users\\First Last\\[^']*'/, `공백 경로가 안 감싸졌다: ${h}`);
+});
+
+t("G4 POSIX 는 종전 그대로 tail -f (무회귀)", () => {
+  assert.equal(logTailHint("/home/y/.lively/logs/node-agent.log", "darwin"), "tail -f /home/y/.lively/logs/node-agent.log");
+  assert.equal(logTailHint("/x.log", "linux"), "tail -f /x.log");
 });
 
 console.log(`\n${pass} passed`);

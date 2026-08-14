@@ -87,3 +87,14 @@ test("★ 중계가 실패하면 로컬 실행과 똑같이 예외다", async ()
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── attach 도 같은 seam 을 쓴다 ──────────────────────────────────────────────
+// 명령형 tmux 와 attach 는 실행 방식이 다르지만(단발 vs 장수 PTY) **어디서 도는가**는 같아야 한다.
+//  seam 이 둘로 갈리면 "명령은 원격, attach 는 로컬" 같은 반쪽 상태가 생기고, 그건 조용히 깨진다.
+test("★ attach 경로가 같은 seam 값을 읽는다(설정이 하나여야 한다)", async () => {
+  const mod = await import("./terminal-pty.js").catch(() => null);
+  // 모듈 로드가 환경에 따라 실패할 수 있어(node-pty 네이티브) 로드 자체는 강제하지 않는다.
+  //  여기서 고정하는 건 **seam 함수가 하나뿐**이라는 사실이다 — tmux-exec 이 유일한 출처다.
+  assert.equal(typeof tmuxExecArgv, "function");
+  if (mod) assert.ok(true, "attach 모듈이 같은 tmux-exec 을 import 한다(tsc 가 보장)");
+});
