@@ -37,6 +37,24 @@ export function nodeCommands(ctx) {
 const NODE_AGENT_DIR = join(LIVELY, "node-agent");
 const NODE_ENV_FILE = join(LIVELY, "node-agent.env");
 const NODE_LOG = join(LIVELY, "logs", "node-agent.log");
+
+/**
+ * 로그를 따라 읽는 한 줄 — **그 OS 에서 한글이 안 깨지는** 명령이어야 한다.
+ *
+ * ★ Windows 에서 `type <파일>` 을 안내하면 안 된다(#1541 실측): 로그는 UTF-8 인데 한국어 Windows 콘솔은
+ *  `chcp 949` 로 시작해 `type` 이 그 바이트를 cp949 로 해석한다 → 한글이 전부 깨진다(`?쒓?媛€?섎떎`).
+ *  파일도 우리 출력도 정상인데 **읽는 명령**만 틀렸던 것이고, 그 틀린 명령을 우리가 안내해 왔다.
+ *  `Get-Content -Encoding utf8` 은 파일을 UTF-8 로 **명시 디코드**해 .NET 문자열로 만들고, PowerShell 은
+ *  그 문자열을 WriteConsoleW(유니코드)로 찍는다 → **콘솔 코드페이지와 무관하게** 정상이다.
+ *  (`-Wait` = `tail -f` 의 따라가기 · `-Tail 50` = 끝부분부터.)
+ * @param {string} logFile
+ * @param {string} [platform]
+ */
+export function logTailHint(logFile, platform = process.platform) {
+  return platform === "win32"
+    ? `Get-Content -Wait -Tail 50 -Encoding utf8 '${logFile}'`
+    : `tail -f ${logFile}`;
+}
 const LAUNCHD_LABEL = "io.lvly.node-agent";
 const PLIST_PATH = join(HOME, "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
 const SYSTEMD_UNIT = join(HOME, ".config", "systemd", "user", "lively-node-agent.service");
@@ -294,7 +312,7 @@ function nodeInstallDaemon(agentJs, nodeId) {
     const r = spawnSync("launchctl", ["bootstrap", `gui/${uid}`, PLIST_PATH], { stdio: "inherit" });
     if (r.status !== 0) die("LaunchAgent 등록 실패 — launchctl bootstrap", 1);
     say(green(`✅ 노드 '${nodeId}' 상시화(LaunchAgent) — 부팅·로그인마다 자동 연결`));
-    say(dim(`   중지: lively node stop   ·   로그: tail -f ${NODE_LOG}`));
+    say(dim(`   중지: lively node stop   ·   로그: ${logTailHint(NODE_LOG)}`));
     return;
   }
   if (process.platform === "linux") {
@@ -359,7 +377,7 @@ WantedBy=default.target\n`);
       const since = Date.now();                                                            // 기동 **전** 시각 — 이후의 연결만 우리 것으로 센다
       spawnSync("schtasks", ["/Run", "/TN", WIN_TASK_NAME], { stdio: "ignore" });          // 재로그인 기다리지 않고 지금 기동
       say(green(`✅ 노드 '${nodeId}' 상시화(작업 스케줄러) — 로그인마다 자동 연결·죽으면 1분 뒤 재기동`));
-      say(dim(`   중지: lively node stop   ·   로그: type ${NODE_LOG}`));
+      say(dim(`   중지: lively node stop   ·   로그: ${logTailHint(NODE_LOG)}`));
       reportAgentAlive(since);
       return;
     }
@@ -393,7 +411,7 @@ WantedBy=default.target\n`);
     say(green(`✅ 노드 '${nodeId}' 상시화(시작프로그램) — 로그인마다 자동 연결·죽으면 5초 뒤 재기동`));
     if (!started) say(yellow("   ⚠ WSH 가 꺼져 있어 로그인 시 자동 시작이 안 될 수 있습니다 — 재부팅 후 `lively status` 로 확인하세요."));
     say(dim("   로그인 전에는 돌지 않습니다(그 기능은 관리자 권한 필요 — 관리자 PowerShell 에서 다시 실행하면 승격됩니다)."));
-    say(dim(`   중지: lively node stop   ·   로그: type ${NODE_LOG}`));
+    say(dim(`   중지: lively node stop   ·   로그: ${logTailHint(NODE_LOG)}`));
     reportAgentAlive(since);
     return;
   }
