@@ -26,7 +26,7 @@ import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.
 import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
 import { memberMkdir } from "./terminal-member-fs.js";
 import { materializeMemberGit, ensureGitSafeDirectory } from "../org/credentials/git-credential-materialize.js";
-import { roots, sharedRoot, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput } from "./catalog.js";
+import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput } from "./catalog.js";
 import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson } from "./tmux-exec.js";
 import {
   sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
@@ -352,6 +352,15 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  ⚠ 격리(sudo → box-spawn) 분기는 env_reset 이 털어가므로 sudoers 가 명시 보존해야 한다(deploy/linux/sudoers-lively).
   //   구 sudoers 면 미보존 → 헤더 빈 값 → 미기록 = 종전 동작(무회귀).
   args.push("-e", `LIVELY_SESSION_ID=${id}`);
+  // 테넌트 소속(#1437 v1 5단계) — 게이트웨이 하나가 여러 워크스페이스를 서비스할 때, **세션 spawn 훅이
+  //  어느 테넌트의 브로커 소켓에 붙어야 하는지**를 알려준다. 훅은 게이트웨이 프로세스의 env 를 물려받는데
+  //  공유 게이트웨이에서는 그 env 가 전역이라 테넌트를 구분할 수 없다 — 세션스코프 -e 가 유일한 통로다.
+  //  단일 테넌트 배포에서는 컨텍스트가 없어 **아무것도 안 넣는다**(무회귀).
+  //  ⚠ 이 값이 없는데 훅이 테넌트별 소켓을 기대하면 훅이 실패해야 한다(조용한 폴백 금지) — 그건 훅 쪽 계약이다.
+  {
+    const slug = tenantSlug();
+    if (slug) args.push("-e", `LVLY_TENANT_SLUG=${slug}`);
+  }
   // 실행 모드 세션(#1007+) — 이 pane 의 하네스만 그 모드로. MCP 헤더 `x-lively-mode: ${LIVELY_MODE:-}` 가 이 env 를 확장해
   //  게이트웨이가 이 세션의 요청에만 모드를 강제한다(readonly=쓰기 툴 소거 · incognito=lively 전체 차단). **per-session env 라 동시 실행 세션 중 이것만, 나머지는 정상**(사용자 요구).
   //  ⚠ pane env 는 exec 시점 고정 → **새 세션부터** 적용(LANG #633·TZ #778·SESSION_ID #852 와 동일 성질).
