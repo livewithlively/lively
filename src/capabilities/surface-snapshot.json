@@ -1310,7 +1310,7 @@
  {
   "name": "me_liv_profile_set",
   "scope": null,
-  "mcp": false,
+  "mcp": true,
   "mutates": true,
   "rest": [
    "POST /api/ui/me/liv-profile"
