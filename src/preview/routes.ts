@@ -14,6 +14,7 @@ import type { BearerVerifier } from "../auth/bearer.js";
 import { sessionOrBearer } from "../auth/http-auth.js";
 import { getPreviewEnv } from "./preview-envs.js";
 import { portOf } from "./preview-proc.js";
+import { withPreviewFavicon, isRewritableHtml } from "./preview-favicon.js";
 
 const TYPES: Record<string, string> = {
   ".js": "application/javascript; charset=utf-8", ".mjs": "application/javascript; charset=utf-8",
@@ -23,15 +24,22 @@ const TYPES: Record<string, string> = {
   ".map": "application/json; charset=utf-8", ".txt": "text/plain; charset=utf-8",
 };
 const ID_CAP = "([a-z0-9][a-z0-9_-]{0,63})";
+export const HTML_REWRITE_CAP = 4 * 1024 * 1024; // 파비콘 치환을 위해 버퍼링할 HTML 상한 — 넘으면 원본 스트리밍으로 되돌린다
 
-function serveStatic(publicDir: string, rel: string, res: express.Response): void {
+// serveStatic·proxyTo 는 라우트 내부 함수지만 **테스트가 실물 HTTP 로 붙을 수 있게** export 한다(#1572).
+//  registerPreviewRoutes 로는 DB(getPreviewEnv) 없이 못 부르는데, 정작 검증이 필요한 건 그 아래의
+//  응답 처리(HTML 만 치환·압축은 통과·큰 바디는 스트리밍 복귀·바디 없는 응답)라서다.
+export function serveStatic(publicDir: string, rel: string, res: express.Response): void {
   const full = path.resolve(publicDir, rel || "index.html");
   if (full !== publicDir && !full.startsWith(publicDir + path.sep)) { res.status(400).end(); return; } // 경로 이탈 차단
   let st: Stats;
   try { st = statSync(full); } catch { res.status(404).type("text/plain; charset=utf-8").send("파일 없음"); return; }
   if (!st.isFile()) { res.status(404).end(); return; }
   res.setHeader("Cache-Control", "no-store"); // 프리뷰는 항상 워크트리의 현재 빌드
-  res.type(TYPES[path.extname(full).toLowerCase()] || "application/octet-stream");
+  const ext = path.extname(full).toLowerCase();
+  res.type(TYPES[ext] || "application/octet-stream");
+  // HTML 은 파비콘만 미리보기 아이콘으로 갈아끼워 내보낸다(#1572) — 워크트리 원본은 건드리지 않는다.
+  if (ext === ".html" || ext === ".htm") { res.send(withPreviewFavicon(readFileSync(full, "utf8"))); return; }
   res.send(readFileSync(full));
 }
 
@@ -67,7 +75,7 @@ export function rePathCookie(setCookie: string, prefix: string): string {
 
 // base(http(s)://host:port) 로 HTTP 프록시 — rest 경로 + 쿼리 보존, JSON body 재직렬화, 응답 스트림 파이프.
 //  prefix = `/preview/<id>` — 자식 응답의 Location·Set-Cookie Path 를 이 아래로 되돌리는 데 쓴다.
-function proxyTo(base: string, rest: string, req: express.Request, res: express.Response, prefix: string): void {
+export function proxyTo(base: string, rest: string, req: express.Request, res: express.Response, prefix: string): void {
   let target: URL;
   const qi = req.originalUrl.indexOf("?");
   const search = qi >= 0 ? req.originalUrl.slice(qi) : "";
@@ -92,7 +100,34 @@ function proxyTo(base: string, rest: string, req: express.Request, res: express.
       const sc: unknown = out["set-cookie"];
       if (Array.isArray(sc)) out["set-cookie"] = sc.map((c) => rePathCookie(String(c), prefix));
       else if (typeof sc === "string") out["set-cookie"] = [rePathCookie(sc, prefix)];
-      res.writeHead(r.statusCode || 502, out); r.pipe(res);
+      const code = r.statusCode || 502;
+      // HTML 화면이면 파비콘만 미리보기 아이콘으로 갈아끼운다(#1572). 바디가 없는 응답(HEAD·204·304)과
+      //  압축·비 utf-8·비 HTML 은 손대지 않고 그대로 흘린다.
+      const bodyless = req.method === "HEAD" || code === 204 || code === 304;
+      if (bodyless || !isRewritableHtml(out["content-type"], out["content-encoding"])) {
+        res.writeHead(code, out); r.pipe(res); return;
+      }
+      const chunks: Buffer[] = [];
+      let size = 0, streaming = false;
+      r.on("data", (c: Buffer) => {
+        if (streaming) return;
+        chunks.push(c); size += c.length;
+        if (size <= HTML_REWRITE_CAP) return;
+        // 화면치고 지나치게 큰 HTML — 통째로 들고 있지 않고 여기서 원본 스트리밍으로 되돌린다(파비콘은 포기).
+        streaming = true;
+        res.writeHead(code, out);
+        for (const b of chunks) res.write(b);
+        chunks.length = 0;
+        r.pipe(res);
+      });
+      r.on("end", () => {
+        if (streaming) return;
+        const body = Buffer.from(withPreviewFavicon(Buffer.concat(chunks).toString("utf8")), "utf8");
+        delete out["transfer-encoding"]; // 우리가 길이를 아는 완결 바디로 바꿔 보낸다
+        out["content-length"] = String(body.length);
+        res.writeHead(code, out);
+        res.end(body);
+      });
     });
   // ⚠ charset 필수 — 이 경로가 사용자가 **실제로 가장 자주 만나는** 에러다(게이트웨이가 재시작되면 spawn 자식이
   //  함께 죽어 여기로 온다). 위 502/409 는 charset 을 붙이는데 여기만 raw res.end() 라 브라우저가 인코딩을
