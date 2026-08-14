@@ -29,6 +29,9 @@ import { api, el, renderMarkdown } from './core.js';
  *  20초 빈 화면과 비교하면 큰 차이지만, 더 매끄럽게 하려면 그때는 전송 방식을 바꿔야 한다.
  */
 const POLL_MS = 400;
+/** 진행 읽기가 연달아 몇 번까지 실패해도 버티나. 배포·네트워크 blip 은 몇 초면 지나간다 —
+ *  그 사이에 포기하면 서버에서 멀쩡히 만들어진 답을 화면이 버리는 꼴이다. */
+const RETRY_MAX = 6;
 /**
  * 도구 이름을 사람 말로.
  *
@@ -220,13 +223,24 @@ export function mountLivChat(host, askHost) {
         let from = 0;
         const r = { cards: new Map(), blocks: new Map(), msgId: null, streamed: new Set() };
         let sawText = false;
+        let fails = 0;
         for (;;) {
             let tail;
             try {
                 tail = await api(`/api/ui/me/liv/turn/${encodeURIComponent(turnId)}?from=${from}`);
+                fails = 0;
             }
             catch (e) {
-                work.append(el('div', { class: 'livc-err', text: `진행을 읽지 못했습니다. ${e.message}` }));
+                // ⚠ **한 번 끊겼다고 턴을 버리지 않는다.** 이 요청이 실패해도 리브는 서버에서 계속 일하고 진행도
+                //  계속 파일에 쌓인다 — 화면만 포기하면 그 답을 통째로 잃는다(실측: 게이트웨이를 재배포하는 몇 초
+                //  동안 프록시가 502 를 냈고, 그 한 번에 대화가 끊겼다). 오프셋을 그대로 들고 물러났다가 다시 붙는다.
+                fails++;
+                if (fails <= RETRY_MAX) {
+                    await new Promise((s) => setTimeout(s, Math.min(POLL_MS * 2 ** (fails - 1), 5000)));
+                    continue;
+                }
+                work.append(el('div', { class: 'livc-err',
+                    text: '진행을 따라가지 못했습니다. 리브는 계속 일하고 있을 수 있으니, 화면을 새로고침하면 이어서 보입니다.' }));
                 scroll();
                 return;
             }
@@ -278,6 +292,63 @@ export function mountLivChat(host, askHost) {
             await new Promise((s) => setTimeout(s, POLL_MS));
         }
     }
+    /**
+     * 지난 대화를 되그린다 — **일지인데 지난 장을 못 펼치면 일지가 아니다.**
+     *
+     * 본문은 서버에 복제해 두지 않았다(진행 파일이 정본이다). 그래서 턴 목록만 받아 각 턴의 진행을
+     * 처음부터 한 번씩 읽어 같은 방식으로 그린다. 조각(stream_event)은 **건너뛴다** — 다 끝난 턴이라
+     * 완성본에 같은 글이 이미 있고, 되그리기에서까지 조각을 재생할 이유가 없다.
+     * 마지막 턴이 아직 돌고 있으면(새로고침 중에도 리브는 일한다) 거기서부터 **live 로 이어붙는다.**
+     */
+    async function replayHistory() {
+        let chat = null;
+        try {
+            chat = (await api('/api/ui/me/liv/chat')).chat;
+        }
+        catch {
+            return;
+        }
+        const turns = chat?.turns ?? [];
+        if (!turns.length)
+            return;
+        list.querySelector('.livc-open')?.remove();
+        for (const t of turns) {
+            const { root, work } = turnBlock(t.text);
+            list.append(root);
+            let tail = null;
+            try {
+                tail = await api(`/api/ui/me/liv/turn/${encodeURIComponent(t.id)}?from=0`);
+            }
+            catch {
+                work.remove();
+                continue;
+            } // 그 턴의 기록이 사라졌다 — 사람 말만 남기고 넘어간다
+            const r = { cards: new Map(), blocks: new Map(), msgId: null, streamed: new Set() };
+            for (const line of String(tail.chunk ?? '').split('\n')) {
+                if (!line.trim())
+                    continue;
+                let ev;
+                try {
+                    ev = JSON.parse(line);
+                }
+                catch {
+                    continue;
+                }
+                if (ev.type === 'stream_event')
+                    continue; // 완성본에 같은 글이 있다
+                if (ev.type === 'result')
+                    continue;
+                applyEvent(ev, work, r);
+            }
+            work.classList.remove('livc-work-busy');
+            if (!tail.done) { // 아직 도는 중 — 새로고침해도 이어서 따라간다
+                work.classList.add('livc-work-busy');
+                busy(true);
+                void drain(t.id, work).finally(() => { work.classList.remove('livc-work-busy'); busy(false); });
+            }
+            scroll();
+        }
+    }
     async function sendTurn(text) {
         // 첫 말을 걸면 빈 화면의 초대는 물러난다 — 할 일이 생겼는데 안내가 자리를 차지할 이유가 없다.
         list.querySelector('.livc-open')?.remove();
@@ -323,6 +394,7 @@ export function mountLivChat(host, askHost) {
         input.style.height = 'auto';
         input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
     });
+    void replayHistory();
     input.focus();
 }
 /**

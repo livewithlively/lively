@@ -182,10 +182,20 @@ export interface LivAnswer {
 /** 리브와의 대화 한 줄기(#1631 v1 채팅). **세션이 아니라 여기 산다** — 게이트웨이가 재시작해도
  *  다음 턴이 같은 대화를 이어받는다(`--resume <session_id>`). 대화 내용은 담지 않는다:
  *  본문은 하네스가 자기 트랜스크립트에 갖고 있고, 여기 복제하면 진실이 둘이 된다. */
+/** 지나간 턴 한 건 — **본문이 아니라 어디서 읽을지**만 담는다(본문은 그 턴의 진행 파일에 있다). */
+export interface LivTurnRef {
+  id: string;      // 턴 id(그 턴의 작업 폴더 이름)
+  text: string;    // 사람이 한 말 — 이건 어디에도 안 남아서 여기 담는다(리브의 말은 진행 파일에 있다)
+  at: string;
+}
+
 export interface LivChat {
   /** claude 대화 세션 uuid. 첫 턴이 만들고 이후 턴이 이어받는다. */
   session_id: string;
   started_at: string;
+  /** 이 대화의 턴들(오래된 것부터). **화면이 새로고침 뒤 기록을 되그리는 근거**다.
+   *  ⚠ 리브의 말을 여기 복제하지 않는다 — 진행 파일이 정본이고, 복제하면 진실이 둘이 된다. */
+  turns?: LivTurnRef[];
 }
 
 export interface LivProfile {
@@ -213,6 +223,19 @@ export async function setLivSecretAsk(id: string, ask: LivAsk | null): Promise<L
 /** 이어갈 대화를 정한다(null = 다음 턴이 첫 턴). 대화 **본문은 저장하지 않는다** — 이어받을 열쇠만.
  *  ⚠ 이 함수는 읽고-쓰기라, 같은 사람이 동시에 두 턴을 시작하면 뒤가 앞을 덮는다. 리브 화면은 답을
  *   기다리는 동안 입력을 막으므로 v1 에선 그 경합이 생기지 않는다(막는 게 풀리면 여기부터 다시 봐야 한다). */
+/** 이 대화에 턴 하나를 잇는다. 되그릴 수 있는 만큼만 들고 있는다(오래된 것부터 버린다). */
+export async function appendLivTurn(id: string, turn: LivTurnRef, cap = 30): Promise<LivProfile> {
+  const cur = await getLivProfile(id);
+  const chat = cur.chat;
+  if (!chat) return cur;                       // 대화가 없으면 이을 곳도 없다
+  const turns = [...(chat.turns ?? []), turn].slice(-cap);
+  const next: LivProfile = { ...cur, chat: { ...chat, turns } };
+  const r = await itemsPool.query(
+    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
+  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+}
+
 export async function setLivChat(id: string, chat: LivChat | null): Promise<LivProfile> {
   const cur = await getLivProfile(id);
   const next: LivProfile = { ...cur, chat };
