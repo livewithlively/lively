@@ -19,14 +19,14 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { taskScript, HEADLESS, ARGV_PROMPT_MAX } from "./tasks.js";
+import { taskScript, HEADLESS, ARGV_PROMPT_MAX, type TaskScriptOpts } from "./tasks.js";
 
 const ARG_MAX_STRLEN = 131_072;   // exec 인자 1개 상한(실측)
 let pass = 0;
 const t = (name: string, fn: () => void): void => { fn(); pass++; console.log(`ok  ${name}`); };
 
 // 스텁 하네스 — stdin 을 통째로 받아 파일로 남기고, argv 도 남기고, 지정 코드로 끝난다.
-function setup(harness: string, prompt: string, exitCode = 0): { dir: string; run: () => number; got: () => string; argv: () => string } {
+function setup(harness: string, prompt: string, exitCode = 0, opts?: TaskScriptOpts): { dir: string; run: () => number; got: () => string; argv: () => string } {
   const root = mkdtempSync(path.join(tmpdir(), "taskscript-"));
   const taskDir = path.join(root, "task"); mkdirSync(taskDir);
   const ws = path.join(root, "ws"); mkdirSync(ws);
@@ -34,7 +34,7 @@ function setup(harness: string, prompt: string, exitCode = 0): { dir: string; ru
   writeFileSync(bin, `#!/bin/sh\ncat > "${root}/got.txt"\nprintf '%s' "$*" > "${root}/argv.txt"\nexit ${exitCode}\n`);
   chmodSync(bin, 0o755);
   writeFileSync(path.join(taskDir, "prompt.txt"), prompt);
-  const script = taskScript(harness, bin, ["--model", "opus"], taskDir);
+  const script = taskScript(harness, bin, ["--model", "opus"], taskDir, opts);
   return {
     dir: taskDir,
     run: () => {
@@ -173,6 +173,72 @@ t("S10 하네스별 최종 응답 추출", () => {
 t("S11 argv 하네스 프롬프트 상한이 exec 상한보다 안전하게 작다", () => {
   assert.ok(ARGV_PROMPT_MAX < ARG_MAX_STRLEN, "상한이 exec 한계 이상이면 가드가 아무것도 막지 못한다");
   assert.ok(Object.values(HEADLESS).some((s) => s.promptViaArgv), "argv 하네스가 하나도 없으면 이 상한은 죽은 코드다");
+});
+
+// ── #1631 승인 자세는 호출자가 정한다 ───────────────────────────────────────────────
+// 왜: 우회 플래그가 각 run 문자열에 **박혀** 있어 "우회는 항상 켜짐"이 구조였다. 위탁(사람이 안 보는 배치)엔
+//  맞지만, 리브는 사람이 화면에서 보고 있는 대화형이라 승인 없이 셸·파일을 만지게 두면 안 된다.
+//  그래서 축을 세웠는데, 이 축에는 **양방향 실패**가 있다:
+//   ① 우회가 조용히 꺼지면 → 위탁이 승인 프롬프트에서 영원히 매달린다(타임아웃까지 '실행 중'. 가장 나쁜 실패).
+//   ② 우회가 조용히 켜지면 → 리브가 사람 앞에서 승인 없이 파일을 만진다.
+//  둘 다 **스크립트를 눈으로 봐선 안 보인다** → 스텁 하네스 argv 로 실측한다.
+//
+// | # | 하네스 | opts | 기대 |
+// |---|---|---|---|
+// | S12 | 4종 전부 | 미전달(위탁 기본) | 그 하네스의 우회 플래그가 argv 에 **도달** |
+// | S13 | 4종 전부 | bypassPermissions:false | 우회 플래그가 argv 에 **없음** |
+// | S14 | claude | 양쪽 | 켜면 종전과 **바이트 동일**, 끄면 그 자리에 공백만 남고 이중 공백 없음 |
+// | S15 | claude·codex | false | 우회를 꺼도 프롬프트 전달·exit 규약은 그대로 |
+// | S16 | 4종 전부 | — | bypassFlag 가 비어 있지 않다(빈 값이면 축이 죽어 ①이 무증상으로 난다) |
+
+const BYPASS: Array<[string, string]> = [
+  ["claude", "--dangerously-skip-permissions"],
+  ["codex", "--dangerously-bypass-approvals-and-sandbox"],
+  ["antigravity", "--dangerously-skip-permissions"],
+  ["grok", "--always-approve"],
+];
+
+t("S12 기본(위탁)은 하네스별 우회 플래그가 실제로 하네스에 도달한다", () => {
+  for (const [harness, flag] of BYPASS) {
+    const s = setup(harness, "x");
+    s.run();
+    assert.ok(s.argv().includes(flag),
+      `${harness}: 우회 플래그가 안 갔다 — 위탁이 승인 프롬프트에서 매달린다(argv=${s.argv()})`);
+  }
+});
+
+t("S13 bypassPermissions:false 면 우회 플래그가 하네스에 가지 않는다", () => {
+  for (const [harness, flag] of BYPASS) {
+    const s = setup(harness, "x", 0, { bypassPermissions: false });
+    s.run();
+    assert.ok(!s.argv().includes(flag),
+      `${harness}: 우회 플래그가 갔다 — 리브가 사람 앞에서 승인 없이 돈다(argv=${s.argv()})`);
+  }
+});
+
+t("S14 우회를 켜면 종전 스크립트와 바이트 동일, 끄면 이중 공백이 안 생긴다", () => {
+  const on = taskScript("claude", "/b/claude", ["--model", "opus"], "/t");
+  assert.ok(on.includes('--verbose --dangerously-skip-permissions < "/t/prompt.txt"'),
+    "위탁의 기존 명령줄이 한 글자라도 바뀌면 안 된다(이 리팩터의 계약)");
+  const off = taskScript("claude", "/b/claude", ["--model", "opus"], "/t", { bypassPermissions: false });
+  assert.ok(off.includes('--verbose < "/t/prompt.txt"'),
+    "우회를 끈 자리에 공백이 하나만 남아야 한다 — 이중 공백은 배선을 잘못 이었다는 신호다");
+});
+
+t("S15 우회를 꺼도 프롬프트 전달·종료코드 규약은 그대로다", () => {
+  for (const harness of ["claude", "codex"]) {
+    const p = `${harness} 우회 없는 프롬프트`;
+    const s = setup(harness, p, 3, { bypassPermissions: false });
+    assert.equal(s.run(), 3, `${harness}: 종료코드가 하네스의 것이 아니면 실패가 어디에도 안 남는다`);
+    assert.equal(s.got(), p, `${harness}: 우회를 껐다고 프롬프트가 새면 안 된다`);
+  }
+});
+
+t("S16 모든 하네스가 우회 플래그를 선언한다(빈 값이면 축이 죽는다)", () => {
+  for (const [key, spec] of Object.entries(HEADLESS)) {
+    assert.ok(spec.bypassFlag && spec.bypassFlag.startsWith("--"),
+      `${key}: bypassFlag 가 없다 — 위탁이 우회 없이 돌아 승인 프롬프트에서 매달린다`);
+  }
 });
 
 console.log(`task-script.test: ok (${pass})`);

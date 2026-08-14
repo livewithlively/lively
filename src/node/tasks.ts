@@ -125,8 +125,15 @@ const flagWhitelist = (key: string): Map<string, { name: string; type: string; c
 //  그 실패는 **하네스가 실행조차 안 되는** 형태라 조용하다(stream 0줄·배치 무한 재시도, #1289 사고와 동형).
 //  그래서 그런 하네스는 접수 시점에 크기를 재서 **미리 거부**한다(spawnTaskSession) — 뒤늦게 죽게 두지 않는다.
 export interface HeadlessSpec {
-  /** 하네스 실행 부분(리다이렉션 앞까지). promptPath 는 숫자 taskId 로만 구성된 화이트리스트 경로다. */
-  run: (bin: string, flags: string, promptPath: string) => string;
+  /** 하네스 실행 부분(리다이렉션 앞까지). promptPath 는 숫자 taskId 로만 구성된 화이트리스트 경로다.
+   *  bypass = 승인 우회 플래그 조각(**앞 공백 포함**, 또는 빈 문자열) — taskScript 가 만들어 넣는다. */
+  run: (bin: string, flags: string, promptPath: string, bypass: string) => string;
+  /** 사람이 안 보는 배치에서 승인을 우회하는 플래그 — **하네스마다 이름이 다르다.**
+   *  종전엔 이 플래그가 각 run 문자열에 박혀 있어 "우회는 항상 켜짐"이 구조였다. 위탁(배치)에는 맞지만
+   *  **리브(#1631)처럼 사람이 화면에서 보고 있는 대화형**에는 그대로 쓰면 안 된다 — 승인 없이 셸·파일을
+   *  만지는 에이전트를 사람 앞에 앉히는 꼴이다. 그래서 우회 여부를 **호출자가 정하게** 축으로 세웠다
+   *  (taskScript 의 bypassPermissions). 우회를 끄는 쪽은 대신 허용 도구를 좁혀서 위험을 줄인다. */
+  bypassFlag: string;
   /** 진행 스트림(JSONL)에서 최종 응답 텍스트를 뽑는다 — 스키마가 하네스마다 다르다. */
   extract: (jsonl: string) => string;
   /** 프롬프트가 argv 로 가는 하네스인가(=크기 상한이 걸린다). */
@@ -145,13 +152,15 @@ const lastMatch = (jsonl: string, pick: (ev: Record<string, unknown>) => string 
 };
 export const HEADLESS: Record<string, HeadlessSpec> = {
   claude: {
-    run: (bin, f, p) => `${bin} -p ${f} --output-format stream-json --verbose --dangerously-skip-permissions < "${p}"`,
+    run: (bin, f, p, bypass) => `${bin} -p ${f} --output-format stream-json --verbose${bypass} < "${p}"`,
+    bypassFlag: "--dangerously-skip-permissions",
     extract: (j) => lastMatch(j, (ev) => (ev.type === "result" ? (typeof ev.result === "string" ? ev.result : JSON.stringify(ev)) : null)),
   },
   codex: {
     // exec = codex 의 헤드리스 서브커맨드. `--json` 이 진행 이벤트를 JSONL 로 뱉고, 프롬프트는 stdin 으로 받는다
     //  ("instructions are read from stdin" — --help). 승인 우회는 세션의 --yolo 가 아니라 이 플래그다.
-    run: (bin, f, p) => `${bin} exec --json --dangerously-bypass-approvals-and-sandbox ${f} < "${p}"`,
+    run: (bin, f, p, bypass) => `${bin} exec --json${bypass} ${f} < "${p}"`,
+    bypassFlag: "--dangerously-bypass-approvals-and-sandbox",
     extract: (j) => lastMatch(j, (ev) => {
       const it = ev.item as { type?: string; text?: string } | undefined;
       return ev.type === "item.completed" && it?.type === "agent_message" && typeof it.text === "string" ? it.text : null;
@@ -163,7 +172,8 @@ export const HEADLESS: Record<string, HeadlessSpec> = {
     //  ⚠ `[ -s ]` 가드는 장식이 아니다: stdin 리다이렉션(`< file`)은 파일이 없으면 **셸이 그 자리에서 실패**시키는데,
     //   명령치환은 cat 이 실패해도 **빈 프롬프트로 하네스가 그냥 돌아** exit 0 이 된다 → 빈 배치가 '성공'으로 집계된다.
     //   그 무증상 성공은 실패보다 나쁘다(#1289 의 교훈: 실패는 반드시 exit 에 남아야 한다).
-    run: (bin, f, p) => `[ -s "${p}" ] && ${bin} --print "$(cat "${p}")" ${f} --output-format stream-json --dangerously-skip-permissions`,
+    run: (bin, f, p, bypass) => `[ -s "${p}" ] && ${bin} --print "$(cat "${p}")" ${f} --output-format stream-json${bypass}`,
+    bypassFlag: "--dangerously-skip-permissions",
     extract: (j) => lastMatch(j, (ev) => {
       const r = ev.result as { response?: string } | undefined;
       return ev.event === "result" && typeof r?.response === "string" ? r.response : null;
@@ -176,14 +186,21 @@ export const HEADLESS: Record<string, HeadlessSpec> = {
     //  `{type:"result", subtype:"success", result:"…"}` — claude 의 stream-json 과 같은 추출 스키마다
     //  (실측 2026-08-14, grok 1.0.3 실계정 1회 실행). `[ -s ]` 가드는 antigravity 와 같은 이유: 빈/부재 프롬프트로
     //  하네스가 그냥 돌아 exit 0 이 되는 무증상 성공을 막는다(실패는 반드시 exit 에 남아야 한다 — #1289).
-    run: (bin, f, p) => `[ -s "${p}" ] && ${bin} --prompt-file "${p}" ${f} --output-format streaming-messages-json --always-approve`,
+    run: (bin, f, p, bypass) => `[ -s "${p}" ] && ${bin} --prompt-file "${p}" ${f} --output-format streaming-messages-json${bypass}`,
+    bypassFlag: "--always-approve",
     extract: (j) => lastMatch(j, (ev) => (ev.type === "result" ? (typeof ev.result === "string" ? ev.result : JSON.stringify(ev)) : null)),
   },
 };
 // argv 로 프롬프트를 넘기는 하네스의 상한 — 실측 상한(131,072B)에서 인자·환경 몫을 빼고 여유를 둔다.
 export const ARGV_PROMPT_MAX = 100_000;
 
-export function taskScript(harnessKey: string, bin: string, flags: string[], taskDir: string): string {
+export interface TaskScriptOpts {
+  /** 승인을 우회할까. **기본 true = 종전 위탁 동작**(사람이 안 보는 배치라 우회가 맞다).
+   *  false 는 사람이 화면에서 보고 있는 대화형(리브 #1631) — 우회 없이 돌고, 허용 도구를 좁혀 위험을 줄인다. */
+  bypassPermissions?: boolean;
+}
+
+export function taskScript(harnessKey: string, bin: string, flags: string[], taskDir: string, opts?: TaskScriptOpts): string {
   // 사용자 텍스트는 프롬프트 파일 안에만 있다 — 이 문자열의 가변부는 숫자/화이트리스트 경로뿐.
   //  stream-json = 진행 이벤트를 stream.jsonl 에 줄단위 append → logs tail(파일 오프셋)로 실시간 미러(§11).
   //  최종 결과(type=result)도 그 마지막 줄에 온다. exec $SHELL 로 세션 잔존(실패 시 사후 검시).
@@ -198,7 +215,10 @@ export function taskScript(harnessKey: string, bin: string, flags: string[], tas
   const f = flags.join(" ");
   const spec = HEADLESS[harnessKey];
   if (!spec) throw new Error(`위탁을 지원하지 않는 하네스입니다: ${harnessKey}`);
-  return `cd "$LIVELY_TASK_WS" && ${spec.run(bin, f, `${taskDir}/prompt.txt`)} > "${taskDir}/stream.jsonl" 2> "${taskDir}/stderr.log"; echo $? > "${taskDir}/exit"; exec "\${SHELL:-sh}"`;
+  // 우회 조각은 **앞 공백을 여기서 붙인다** — 끄면 빈 문자열이라 이중 공백이 안 생기고,
+  //  켜면 종전 스크립트와 바이트 동일하다(위탁의 기존 동작을 한 글자도 안 바꾼다는 것이 이 리팩터의 계약).
+  const bypass = opts?.bypassPermissions === false ? "" : ` ${spec.bypassFlag}`;
+  return `cd "$LIVELY_TASK_WS" && ${spec.run(bin, f, `${taskDir}/prompt.txt`, bypass)} > "${taskDir}/stream.jsonl" 2> "${taskDir}/stderr.log"; echo $? > "${taskDir}/exit"; exec "\${SHELL:-sh}"`;
 }
 
 // 위탁 작업 폴더(.lively-task/<id>) 준비 — 워커가 결과를 쓸 수 있는 상태로 만든다. 테스트 seam(tasks.test).
