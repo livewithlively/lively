@@ -1408,6 +1408,16 @@
   "input_hash": "71d627e9a9d1759c"
  },
  {
+  "name": "me_liv_ask_dismiss",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/liv/ask-dismiss"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
   "name": "me_liv_chat_reset",
   "scope": null,
   "mcp": false,
