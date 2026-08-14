@@ -38,6 +38,19 @@ export function statusForReason(reason: string): number {
 }
 
 /**
+ * 테넌트와 무관한 경로 — 컨텍스트 없이 통과시킨다(순수).
+ *
+ * ⚠ 목록을 **아주 좁게** 유지한다. 여기 들어간 경로는 "테넌트를 모르는 상태"로 앱에 들어가므로,
+ *  그 경로가 DB 를 만지면 그 순간 단일 테넌트 폴백으로 떨어진다. 헬스체크처럼 **아무 데이터도
+ *  안 만지는** 것만 넣는다.
+ *  (실측: 이게 없으면 기동 스크립트·모니터링의 healthz 가 전부 401 이라 컨테이너가 죽은 것처럼 보인다.)
+ */
+export function isTenantAgnosticPath(path: string): boolean {
+  const p = (path || "").split("?")[0];
+  return p === "/healthz" || p === "/__router/healthz";
+}
+
+/**
  * 컨텍스트를 여는 미들웨어.
  *
  * ⚠ `withTenant` 안에서 `next()` 를 부른다 — 그래야 **그 뒤의 모든 핸들러**가 같은 비동기 체인에
@@ -45,6 +58,7 @@ export function statusForReason(reason: string): number {
  */
 export function tenantContextMiddleware(env: NodeJS.ProcessEnv = process.env): RequestHandler {
   return (req, res, next) => {
+    if (isTenantAgnosticPath(req.url || "")) { next(); return; }
     const r = resolveTenantFromHeaders(req.headers as Record<string, string | string[] | undefined>, env);
     if (!r.ok) {
       // `disabled` = 단일 테넌트 배포. 유일하게 그냥 통과시키는 경우다.
