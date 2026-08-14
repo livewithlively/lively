@@ -18,7 +18,7 @@
 //  · **답을 기다리는 동안 입력을 막는다.** 턴이 겹치면 대화 이어받기(--resume)가 꼬인다.
 //  · **한글 입력 중 Enter 는 전송이 아니다**(IME 조합 확정 Enter — 레포 불변식).
 //  · **실패를 조용히 삼키지 않는다.** exit≠0 이면 그 자리에 말한다.
-import { api, el } from './core.js';
+import { api, el, renderMarkdown } from './core.js';
 /** 진행을 다시 물어보는 간격. 사람이 기다리는 화면이라 짧게, 그러나 서버를 때리지 않게. */
 const POLL_MS = 900;
 /**
@@ -68,9 +68,16 @@ function finishCard(card, output, isError) {
     card.classList.add(isError ? 'livc-slip-err' : 'livc-slip-done');
     card.querySelector('.livc-slip-more')?.append(el('details', { class: 'livc-slip-raw' }, el('summary', { text: isError ? '무엇이 잘못됐는지' : '돌아온 것' }), el('pre', { text: output.slice(0, 4000) })));
 }
-/** 리브가 한 말 한 덩이. 말풍선이 아니라 **일지의 한 줄**이다(아래 turnBlock 주석 참조). */
+/**
+ * 리브가 한 말 한 덩이. 말풍선이 아니라 **일지의 한 줄**이다(아래 turnBlock 주석 참조).
+ *
+ * ⚠ 리브는 마크다운으로 쓴다(LLM 이 그렇게 쓴다). 날글로 그리면 화면에 `**굵게**` 와 백틱이 그대로 뜬다 —
+ *  실측에서 답 한 통이 별표투성이로 나왔다. 제품 렌더러를 쓴다: 그쪽은 **innerHTML 을 아예 안 쓰고**
+ *  전부 textContent/createElement 로만 짓는 것이 불변식이라(lib/markdown.ts P4b), 모델 출력을 그려도
+ *  HTML 이 주입될 길이 없다. 새로 파서를 짜서 그 보장을 잃을 이유가 없다.
+ */
 function livSaid(text) {
-    return el('div', { class: 'livc-said', text });
+    return el('div', { class: 'livc-said' }, renderMarkdown(text));
 }
 /**
  * 한 턴 = 사람의 말 한 마디 + 그 말에 리브가 한 **모든 것**.

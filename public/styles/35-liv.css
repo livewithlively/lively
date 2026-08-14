@@ -220,3 +220,18 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 /* 대화 칸은 레일보다 넓다 — 선택지를 세로로 길게 쌓지 말고 흐르게 둔다(9개가 화면을 먹지 않게). */
 .liv-askdock .liv-ask-opts { flex-direction: row; flex-wrap: wrap; gap: 6px; }
 .liv-askdock .liv-opt { flex: 0 1 auto; }
+
+/* 리브의 말은 마크다운이다 — 제품 렌더러(.md)를 이 대화의 리듬에 맞춘다.
+   목록·강조는 살리되 제목이 커져서 대화가 문서처럼 보이지 않게 눌러 둔다. */
+.livc-said .md > :first-child { margin-top: 0; }
+.livc-said .md > :last-child { margin-bottom: 0; }
+.livc-said .md p { margin: 0 0 .55em; line-height: 1.78; }
+.livc-said .md ul, .livc-said .md ol { margin: .35em 0 .6em; padding-left: 1.25em; }
+.livc-said .md li { margin: .18em 0; line-height: 1.7; }
+.livc-said .md h1, .livc-said .md h2, .livc-said .md h3, .livc-said .md h4 {
+  font-size: 14px; font-weight: 700; margin: .8em 0 .3em; }
+.livc-said .md code { font-family: var(--livc-mono); font-size: .92em;
+  background: var(--bg-tint); border-radius: 4px; padding: 1px 4px; }
+.livc-said .md pre { background: var(--bg-tint); border: 1px solid var(--line);
+  border-radius: 6px; padding: 9px 10px; overflow: auto; }
+.livc-said .md pre code { background: none; padding: 0; }
