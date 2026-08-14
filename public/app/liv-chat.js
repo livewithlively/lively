@@ -44,25 +44,51 @@ function toolLabel(name) {
         return '연결한 도구 사용';
     return TOOL_LABELS[name] ?? name;
 }
-/** 액션카드 하나. 시작할 때 만들고 결과가 오면 그 자리를 채운다(새 카드를 또 만들지 않는다). */
+/**
+ * 작업 슬립 — 이 화면의 시그니처.
+ *
+ * 리브의 제품적 주장은 "안내가 아니라 **수행**"이다. 그 주장이 눈에 보이는 자리가 여기다:
+ * 리브가 무언가 할 때마다 슬립이 한 장 끼어들고, **무엇을 보냈고 무엇이 돌아왔는지**가 그 안에 접혀 있다.
+ * 접는 이유는 숨겨야 해서가 아니라 그 원문이 이 사람의 언어가 아니어서다 — 펼치면 그게 증거다.
+ * 상태는 색이 아니라 **표식과 글자**로 간다(●하는 중 / ✓했음 / ✕실패) — 색각 계약(35-liv.css §0.5).
+ */
 function actionCard(name, input) {
-    const card = el('div', { class: 'livc-act' }, el('div', { class: 'livc-act-head' }, el('span', { class: 'livc-act-spin', 'aria-hidden': 'true' }), el('b', { text: toolLabel(name) }), el('span', { class: 'livc-act-state', text: '하는 중…' })), el('details', { class: 'livc-act-raw' }, el('summary', { text: '무엇을 보냈는지 보기' }), el('pre', { text: JSON.stringify(input ?? {}, null, 2).slice(0, 4000) })));
+    const card = el('div', { class: 'livc-slip' }, el('div', { class: 'livc-slip-head' }, el('span', { class: 'livc-slip-mark livc-slip-run', 'aria-hidden': 'true', text: '●' }), el('span', { class: 'livc-slip-name', text: toolLabel(name) }), el('span', { class: 'livc-slip-state', text: '하는 중' })), el('div', { class: 'livc-slip-more' }, el('details', { class: 'livc-slip-raw' }, el('summary', { text: '보낸 것' }), el('pre', { text: JSON.stringify(input ?? {}, null, 2).slice(0, 4000) }))));
     return card;
 }
 function finishCard(card, output, isError) {
-    const spin = card.querySelector('.livc-act-spin');
-    if (spin)
-        spin.remove();
-    const state = card.querySelector('.livc-act-state');
+    const mark = card.querySelector('.livc-slip-mark');
+    if (mark) {
+        mark.classList.remove('livc-slip-run');
+        mark.textContent = isError ? '✕' : '✓';
+    }
+    const state = card.querySelector('.livc-slip-state');
     if (state)
         state.textContent = isError ? '실패' : '했음';
-    card.classList.add(isError ? 'livc-act-err' : 'livc-act-done');
-    card.append(el('details', { class: 'livc-act-raw' }, el('summary', { text: isError ? '무엇이 잘못됐는지 보기' : '무엇이 돌아왔는지 보기' }), el('pre', { text: output.slice(0, 4000) })));
+    card.classList.add(isError ? 'livc-slip-err' : 'livc-slip-done');
+    card.querySelector('.livc-slip-more')?.append(el('details', { class: 'livc-slip-raw' }, el('summary', { text: isError ? '무엇이 잘못됐는지' : '돌아온 것' }), el('pre', { text: output.slice(0, 4000) })));
 }
-function bubble(role, text) {
-    return el('div', { class: `livc-msg livc-msg-${role}` }, el('div', { class: 'livc-bubble', text }));
+/** 리브가 한 말 한 덩이. 말풍선이 아니라 **일지의 한 줄**이다(아래 turnBlock 주석 참조). */
+function livSaid(text) {
+    return el('div', { class: 'livc-said', text });
 }
-/** 스트림 한 줄을 화면에 반영한다. cards = tool_use id → 그 카드(결과가 왔을 때 찾아 채운다). */
+/**
+ * 한 턴 = 사람의 말 한 마디 + 그 말에 리브가 한 **모든 것**.
+ *
+ * ⚠ 좌우 말풍선을 쓰지 않는다. 말풍선은 "친구와의 대화"라는 관계를 들여오는데, 리브는 친구가 아니라
+ *  **담당자**다. 그리고 이 제품의 원칙은 "이 대화는 사라지고 기록만 남는다"(#1663)라, 정직한 형태는
+ *  채팅이 아니라 **일지**다. 그래서:
+ *   · 사람의 말은 굵게, 바깥에 — 일지의 항목 제목처럼
+ *   · 리브가 한 일은 **하나의 세로 괘선**에 전부 매단다. 그 선의 길이가 곧 "이 한 마디에 리브가 한 일의
+ *     범위"라 장식이 아니라 정보다(말·슬립·말이 섞여도 한 덩이로 읽힌다).
+ *   · 누가 말했는지는 위치가 아니라 **이름표**로 밝힌다 — 위치로만 가르면 화면을 못 보는 사람에게 사라진다.
+ */
+function turnBlock(userText) {
+    const work = el('div', { class: 'livc-work livc-work-busy' }, el('div', { class: 'livc-who', text: '리브' }));
+    const root = el('section', { class: 'livc-turn' }, el('div', { class: 'livc-ask' }, el('div', { class: 'livc-who', text: '나' }), el('div', { class: 'livc-ask-text', text: userText })), work);
+    return { root, work };
+}
+/** 스트림 한 줄을 그 턴의 괘선 안에 반영한다. cards = tool_use id → 그 슬립(결과가 오면 찾아 채운다). */
 function applyEvent(ev, list, cards) {
     let lastText;
     const content = ev?.message?.content;
@@ -70,7 +96,7 @@ function applyEvent(ev, list, cards) {
         for (const b of content) {
             if (b?.type === 'text' && String(b.text ?? '').trim()) {
                 lastText = String(b.text);
-                list.append(bubble('liv', lastText));
+                list.append(livSaid(lastText));
             }
             else if (b?.type === 'tool_use') {
                 const card = actionCard(String(b.name ?? '도구'), b.input);
@@ -88,27 +114,46 @@ function applyEvent(ev, list, cards) {
     }
     return { text: lastText };
 }
-export function mountLivChat(host) {
+/** askHost = 리브가 던진 물음이 앉는 자리. **대화와 같은 칸, 입력 바로 위**에 끼운다 —
+ *  물음이 다른 칸에 있으면 그건 대화가 아니라 서식이고, 스크롤 안에 있으면 답하려는 순간 떠내려간다. */
+export function mountLivChat(host, askHost) {
     const list = el('div', { class: 'livc-list' });
     const input = el('textarea', {
-        class: 'livc-input', rows: '1', placeholder: '리브에게 말해 보세요 — 예: 지금 뭐부터 하면 돼요?',
+        class: 'livc-input', rows: '1', placeholder: '리브에게 말하기',
         'aria-label': '리브에게 보낼 말',
     });
     const send = el('button', { class: 'btn btn-sm livc-send', type: 'submit', text: '보내기' });
     const note = el('div', { class: 'livc-note' });
     const form = el('form', { class: 'livc-compose' }, input, send);
-    host.replaceChildren(el('div', { class: 'livc-wrap' }, list, note, form));
+    host.replaceChildren(el('div', { class: 'livc-wrap' }, list, askHost, note, form));
     const scroll = () => { list.scrollTop = list.scrollHeight; };
     const busy = (on) => {
         input.disabled = on;
         send.disabled = on;
         send.textContent = on ? '…' : '보내기';
         // 답을 기다리는 동안 입력을 막는 이유는 예의가 아니라 **정합성**이다 — 턴이 겹치면 이어받기가 꼬인다.
-        note.textContent = on ? '리브가 하는 중입니다…' : '';
+        //  ⚠ 그 사실을 별도 안내줄로 말하지 않는다. 이름표 옆 깜빡이는 점이 이미 "하는 중"을 말하고 있어
+        //   같은 말이 두 번 나온다. **못 치는 이유는 못 치는 칸이 말하는 게 맞다** — 시선이 거기 있다.
+        input.placeholder = on ? '리브가 하는 중…' : '리브에게 말하기';
     };
-    // 첫 인사는 사람이 먼저 말을 걸게 둔다 — 열자마자 리브가 떠들면 그것도 무섭다.
-    list.append(el('div', { class: 'livc-hello' }, el('b', { text: '리브예요.' }), el('p', { text: '이 워크스페이스를 대신 손봐 드립니다. 무엇을 도와드릴지 편하게 말씀해 주세요.' })));
-    async function drain(turnId) {
+    /**
+     * 빈 화면 — **행동으로의 초대**여야 한다(설명이 아니라).
+     *
+     * 종전엔 "무엇을 도와드릴지 편하게 말씀해 주세요"였는데, 그건 어떤 제품에 붙여도 되는 말이라
+     * 아무것도 알려주지 않는다. 그리고 이 화면의 진짜 문제는 **말을 걸 줄 모르는 것**이다 — 라이블리를
+     * 처음 본 사람은 무엇을 부탁해도 되는지 감이 없다.
+     * 그래서 리브가 실제로 할 수 있는 세 마디를 **눌러서 채워지는** 보기로 둔다. 예시가 곧 사용법이다.
+     * 앞의 라벨(점검·연결·기록)은 장식이 아니라 **리브가 하는 일의 세 갈래**다 — 세 줄이 예시 목록이 아니라
+     * '내가 부탁할 수 있는 것의 지도'가 된다. '연결'은 제품이 정한 사람 말이다(수집기라고 하지 않는다).
+     */
+    const STARTERS = [
+        ['점검', '지금 뭐부터 하면 돼요?'],
+        ['연결', '쓰던 노션이랑 연결해 주세요'],
+        ['기록', '매주 회의록을 여기 쌓고 싶어요'],
+    ];
+    const fill = (t) => { input.value = t; input.focus(); form.requestSubmit(); };
+    list.append(el('div', { class: 'livc-open' }, el('div', { class: 'livc-open-lede' }, el('b', { text: '말씀하시면 제가 합니다.' }), el('p', { text: '설명서를 드리는 게 아니라, 이 워크스페이스를 직접 손봅니다.' })), el('ul', { class: 'livc-open-list' }, ...STARTERS.map(([kind, t]) => el('li', {}, el('button', { class: 'livc-open-btn', type: 'button', onclick: () => fill(t) }, el('span', { class: 'livc-open-kind', text: kind }), el('span', { class: 'livc-open-say', text: t })))))));
+    async function drain(turnId, work) {
         let from = 0;
         const cards = new Map();
         let sawText = false;
@@ -118,7 +163,7 @@ export function mountLivChat(host) {
                 r = await api(`/api/ui/me/liv/turn/${encodeURIComponent(turnId)}?from=${from}`);
             }
             catch (e) {
-                list.append(el('div', { class: 'livc-err', text: `진행을 읽지 못했습니다: ${e.message}` }));
+                work.append(el('div', { class: 'livc-err', text: `진행을 읽지 못했습니다. ${e.message}` }));
                 scroll();
                 return;
             }
@@ -136,10 +181,10 @@ export function mountLivChat(host) {
                     if (ev.type === 'result') {
                         // 앞에서 글이 하나도 안 나왔을 때만 최종 result 를 쓴다(보통은 중복이다).
                         if (!sawText && String(ev.result ?? '').trim())
-                            list.append(bubble('liv', String(ev.result)));
+                            work.append(livSaid(String(ev.result)));
                         continue;
                     }
-                    if (applyEvent(ev, list, cards).text)
+                    if (applyEvent(ev, work, cards).text)
                         sawText = true;
                 }
                 from = r.next ?? from;
@@ -147,7 +192,8 @@ export function mountLivChat(host) {
             }
             if (r.done) {
                 if (r.exit != null && r.exit !== 0) {
-                    list.append(el('div', { class: 'livc-err', text: `이번 요청이 끝까지 가지 못했습니다(코드 ${r.exit}). 다시 말씀해 주시면 이어서 해 보겠습니다.` }));
+                    // 실패를 조용히 삼키지 않는다. 다만 코드만 던지지 말고 **다음에 할 일**을 준다.
+                    work.append(el('div', { class: 'livc-err', text: '이번 요청은 끝까지 가지 못했습니다. 다시 말씀해 주시면 이어서 해 보겠습니다.' }));
                     scroll();
                 }
                 return;
@@ -156,18 +202,22 @@ export function mountLivChat(host) {
         }
     }
     async function sendTurn(text) {
-        list.append(bubble('me', text));
+        // 첫 말을 걸면 빈 화면의 초대는 물러난다 — 할 일이 생겼는데 안내가 자리를 차지할 이유가 없다.
+        list.querySelector('.livc-open')?.remove();
+        const { root, work } = turnBlock(text);
+        list.append(root);
         scroll();
         busy(true);
         try {
             const t = await api('/api/ui/me/liv/turn', { method: 'POST', body: JSON.stringify({ text }) });
-            await drain(t.turn_id);
+            await drain(t.turn_id, work);
         }
         catch (e) {
-            list.append(el('div', { class: 'livc-err', text: `보내지 못했습니다: ${e.message}` }));
+            work.append(el('div', { class: 'livc-err', text: `보내지 못했습니다. ${e.message}` }));
             scroll();
         }
         finally {
+            work.classList.remove('livc-work-busy');
             busy(false);
             input.focus();
         }
