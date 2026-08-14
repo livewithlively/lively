@@ -35,7 +35,28 @@ export const SHARED_ROOT: Root = ROOTS.find((r) => r.key === "shared") ?? ROOTS[
 
 // ── 하네스 플래그 카탈로그(보수적 화이트리스트) ──
 export interface FlagDef { name: string; label: string; desc: string; type: "select" | "bool" | "text"; choices?: string[]; default?: string; }
-export interface Harness { key: string; label: string; bin: string; autoApproveFlag?: string; flags: FlagDef[]; }
+export interface Harness {
+  key: string; label: string; bin: string; autoApproveFlag?: string; flags: FlagDef[];
+  // #1516 런처 안내의 하네스별 부분(harnessFailNotice 가 읽는다 — 문구를 그 함수에 하드코딩하지 않는다).
+  //  · loginCmd: 비정상 종료의 주원인이 '자격 만료'이고 **셸에서 한 줄로** 복구되는 하네스(codex)만. 있으면
+  //    안내가 재시작 대신 이 명령을 준다.
+  //  · failHint: 재시작 안내(`<bin>` 입력) 뒤에 덧붙일 줄들. 하네스마다 로그인 절차가 달라서 있는 값.
+  loginCmd?: string;
+  failHint?: string[];
+  // 이어받기(#1711) — '이어서 열기'(복원)가 **같은 대화를 이어서** 열게 하는 argv 조각.
+  //  id 를 주면 그 대화, 없으면 '가장 최근 대화 또는 피커'. 하네스마다 수단이 완전히 다르다(실측 2026-08-14):
+  //   claude `--resume <uuid>` / `--resume`(피커) · codex **서브커맨드** `resume <id>` / `resume --last`
+  //   · opencode `--session <id>` / `--continue` · antigravity `--conversation <id>` / `--continue`
+  //  ⚠ 반환 argv 는 bin **바로 뒤**에 붙는다 — codex 는 플래그가 아니라 서브커맨드라 그 위치가 계약이다
+  //   (`codex resume <id> --model x` 는 유효하다 — resume 이 --model 을 받는 것을 --help 로 확인했다).
+  //  ⚠ 종전엔 이 로직이 sessions.ts 에 `harness.key === "claude"` 로 박혀 있어, **claude 아닌 세션은 복원해도
+  //   늘 새 대화로 시작**했다(2026-08-14 상민님 신고: antigravity 세션을 /exit 로 닫고 이어 열면 대화가 없다).
+  resumeArgv?: (id?: string) => string[];
+}
+// 이어받기 대화 id 형식 — 하네스가 만든 값이라 제각각이다(claude·agy=UUID · opencode=`ses_…`).
+//  ⚠ `_` 를 허용한다: 종전 정규식(sessions.ts)엔 없어서 opencode 세션 id 가 형식 오류로 400 이 날 자리였다(#1711).
+//  셸 인젝션 표면은 없다(argv 로만 전달) — 이 검증은 하네스에 쓰레기 값을 넘기지 않기 위한 것이다.
+export const RESUME_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 export const HARNESSES: Harness[] = [
   {
     key: "claude", label: "Claude Code", bin: "claude",
@@ -45,6 +66,8 @@ export const HARNESSES: Harness[] = [
       { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "opus", "sonnet", "haiku"] },
       { name: "--effort", label: "추론강도(effort)", desc: "무거운 작업(부트스트랩·분류 등)은 xhigh 권장", type: "select", choices: ["", "low", "medium", "high", "xhigh", "max"] },
     ],
+    failHint: ["로그인이 필요하다고 나오면 claude 를 실행한 뒤 /login 을 입력하세요."],
+    resumeArgv: (id) => (id ? ["--resume", id] : ["--resume"]),   // 인자 없는 --resume = 이 폴더의 대화 피커
   },
   {
     key: "codex", label: "Codex", bin: "codex",
@@ -52,6 +75,37 @@ export const HARNESSES: Harness[] = [
     // default 는 **표기용**이다(#1145) — 빈 값 옵션을 '(자동 · gpt-5.5)' 로 보여줄 뿐, 이 값을 argv 로 넘기지는 않는다.
     //  넘기는 순간 그 모델에 고정돼, codex 가 기본을 올려도 여기 적힌 낡은 문자열에 사용자가 묶인다.
     flags: [{ name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"], default: "gpt-5.5" }],
+    loginCmd: "codex logout && codex login --device-auth",
+    resumeArgv: (id) => (id ? ["resume", id] : ["resume", "--last"]),   // 피커는 대화형이라 무인 복원엔 --last
+  },
+  {
+    // #1519 로 배선(훅·MCP·자산)은 이미 붙어 있는데 **웹 세션 카탈로그에만** 빠져 있던 자리(#1695).
+    //  모델은 `provider/model` 형식이라 화이트리스트로 못 박기 어렵다(제공자마다 다름) → 여기선 안 받는다.
+    //  opencode 안에서 고르면 되고, 반쯤 맞는 목록을 주는 것보다 안 주는 게 정직하다.
+    key: "opencode", label: "OpenCode", bin: "opencode",
+    autoApproveFlag: "--auto",   // 실측(1.18.x --help): 명시 deny 가 아닌 권한을 자동 승인
+    flags: [],
+    // 셸에서 그대로 치는 명령은 **명령 줄**로 준다(복사해 붙여넣게) — claude 의 /login 은 TUI 안 입력이라 문장으로 둔다.
+    failHint: ["로그인이 필요하다고 나오면 아래를 입력해 제공자를 고르세요:", "", "    opencode auth login"],
+    resumeArgv: (id) => (id ? ["--session", id] : ["--continue"]),
+  },
+  {
+    // #1689 로 배선 완료 → 이 카탈로그가 웹 세션(AI 세션 탭·프로젝트 화면)의 마지막 조각이다(#1695).
+    //  bin 은 key 와 다르다(agy). 안내·재시작 문구를 key 로 만들면 없는 명령을 안내하게 된다(harnessFailNotice 참조).
+    key: "antigravity", label: "Antigravity", bin: "agy",
+    autoApproveFlag: "--dangerously-skip-permissions",   // 실측(agy 1.1.13 --help)
+    // 모델은 `agy models` 실측 목록에서 **현행 대표만** 큐레이트한다(구세대 flash 3.5/3.6 은 뺀다).
+    //  codex 와 같은 이유로 빈 값(=하네스 기본)을 기본으로 두어 낡은 문자열에 사용자를 묶지 않는다.
+    flags: [
+      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gemini-3.1-pro-high", "gemini-3.1-pro-low", "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low", "claude-opus-4-6-thinking", "claude-sonnet-4-6", "gpt-oss-120b-medium"] },
+      { name: "--effort", label: "추론강도(effort)", desc: "", type: "select", choices: ["", "low", "medium", "high"] },   // claude 와 달리 3단계(실측)
+    ],
+    failHint: ["로그인이 필요하다고 나오면 화면에 뜨는 주소를 브라우저에서 열고, 함께 표시되는 코드를 입력하세요."],
+    // ⚠ id 없는 폴백(`--continue`)은 **가장 최근 대화**를 잡는데, agy 의 대화 저장(~/.gemini/antigravity-cli/brain/)은
+    //  워크스페이스별이 아니라 **전역**이다(실측) → 세션을 여러 개 돌리면 남의 대화를 이어받을 수 있다.
+    //  그래서 antigravity 는 id 복원이 정상 경로이고(어댑터가 conversationId 를 세션 id 로 보고한다 — 매핑 존재),
+    //  폴백은 매핑이 없을 때의 차선이다.
+    resumeArgv: (id) => (id ? ["--conversation", id] : ["--continue"]),
   },
   { key: "shell", label: "셸 (에이전트 없음)", bin: "", flags: [] },
 ];
@@ -174,36 +228,36 @@ const LAUNCH_SH = [
 //  `http://localhost:1455`(서버의 localhost) 에 사용자 브라우저가 닿지 못한다. device-auth 는 주소+일회용 코드라
 //  어느 브라우저에서든 된다(실측). 만료 케이스는 logout 이 선행돼야 한다 — codex 안내문("Please log out and
 //  sign in again")과 같은 처방.
+//
+// ⚠ 문구는 **표(HARNESSES)에서 파생**한다(#1695). 종전엔 codex·claude 문장을 이 함수에 하드코딩하고 나머지는
+//  `${harnessKey}` 로 폴백했는데, 그 폴백은 **key 를 실행 명령으로 안내**한다 — antigravity 는 bin 이 `agy` 라
+//  "antigravity 를 입력하면 다시 시작합니다"가 되어 **없는 명령**을 시킨다(command not found → 사용자는 두 번 막힌다).
+//  라벨 뒤 조사(이/가)도 라벨마다 갈리므로 문장을 `<라벨> — <서술>` 로 두어 하네스가 늘어도 한국어가 안 깨지게 한다.
 export function harnessFailNotice(harnessKey: string): string {
   const line = "─".repeat(60);
-  const body = harnessKey === "codex"
+  const h = HARNESSES.find((x) => x.key === harnessKey);
+  const label = h?.label || harnessKey;
+  const bin = h?.bin || harnessKey;   // 모르는 하네스·실행 파일이 빈 하네스면 key 로 폴백(빈 명령 줄을 안내하지 않는다)
+  const body = h?.loginCmd
     ? [
-      "Codex 가 시작하지 못하고 종료됐습니다 — 위 영문 메시지가 원인입니다.",
+      // 자격 만료가 주원인이고 셸 한 줄로 복구되는 하네스(codex) — 재시작보다 로그인이 먼저다.
+      `${label} — 시작하지 못하고 종료됐습니다. 위 영문 메시지가 원인입니다.`,
       "",
       "로그인이 만료됐을 때 가장 흔합니다. 아래 한 줄을 복사해 붙여넣고 Enter 를 누르세요:",
       "",
-      "    codex logout && codex login --device-auth",
+      `    ${h.loginCmd}`,
       "",
       "화면에 주소와 일회용 코드가 나옵니다 → 브라우저에서 그 주소를 열고 코드를 입력하면 로그인이 끝납니다.",
-      "로그인한 뒤  codex  를 입력하면 이 세션에서 그대로 이어서 쓸 수 있습니다.",
+      `로그인한 뒤  ${bin}  를 입력하면 이 세션에서 그대로 이어서 쓸 수 있습니다.`,
     ]
-    : harnessKey === "claude"
-      ? [
-        "Claude Code 가 예기치 않게 종료됐습니다 — 위 메시지가 원인입니다.",
-        "",
-        "이 세션은 살아 있습니다. 아래를 입력하면 다시 시작합니다:",
-        "",
-        "    claude",
-        "",
-        "로그인이 필요하다고 나오면 claude 를 실행한 뒤 /login 을 입력하세요.",
-      ]
-      : [
-        `${harnessKey} 이(가) 예기치 않게 종료됐습니다 — 위 메시지가 원인입니다.`,
-        "",
-        "이 세션은 살아 있습니다. 아래를 입력하면 다시 시작합니다:",
-        "",
-        `    ${harnessKey}`,
-      ];
+    : [
+      `${label} — 예기치 않게 종료됐습니다. 위 메시지가 원인입니다.`,
+      "",
+      "이 세션은 살아 있습니다. 아래를 입력하면 다시 시작합니다:",
+      "",
+      `    ${bin}`,
+      ...(h?.failHint?.length ? ["", ...h.failHint] : []),
+    ];
   // 세션이 살아 있다는 사실 자체가 안내의 절반이다 — 종전엔 창이 사라져 사용자가 '내가 뭘 잘못했나'로 끝났다.
   return [line, ...body, line].join("\n");
 }
@@ -231,6 +285,12 @@ export function harnessLaunchArgv(harnessKey: string, cmd: string[], platform: s
 //  **셸에서 로그인 명령을 직접** 돌려야 한다.
 //  codex: logout(만료 자격 제거) → device-auth 로그인 → 끝나면 셸로 남아 바로 `codex` 를 칠 수 있다.
 //  claude: 로그인이 TUI 안 슬래시 커맨드(/login)라 자동화할 수 없다 → null(종전대로 claude 세션을 연다).
+//  ⚠ 나머지 하네스도 **지금은 전부 null 이 정답**이다(#1695 실측). 여기 채우려면 '무인으로 한 줄' 이어야 하는데:
+//   · antigravity(agy): 로그인 서브커맨드 자체가 없다(agy 1.1.13 --help — install·update·plugin·models·agent·changelog뿐).
+//     인증은 하네스를 켜면 하네스가 띄운다(원격이면 주소+코드). 그래서 '로그인 전용 세션'을 만들 대상이 아니고,
+//     대신 하네스가 죽었을 때의 안내(failHint)로 그 절차를 알려 준다.
+//   · opencode: `opencode auth login` 이 있으나 **제공자를 고르는 대화형 TUI** 라 codex 의 device-auth 처럼
+//     비대화형 한 줄이 아니다(실측). 셸에서 그대로 치는 게 나아 failHint 로 안내한다.
 const LOGIN_SH = [
   'printf \'\\n%s\\n\\n\' "$1"',
   'codex logout >/dev/null 2>&1 || true',

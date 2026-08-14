@@ -19,7 +19,7 @@ import { renderSessions } from './sessions.js'; // #/sessions — 세션이력 �
 import { renderFilePage } from './filepage.js'; // #/f — 공유 링크 착지(#1436): 내비 없는 전체페이지 파일 미리보기
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard, startDashboardSessionTour } from './dashboard-home.js';
-import { renderLiv } from './liv.js'; // #1631 리브 — 독립 전체화면(#/liv). 홈을 덮지 않는다.
+import { livHomeGate, livSetChoice, renderLiv } from './liv.js'; // #1631 리브 — 홈 진입 게이트 + 화면
 import { renderTerminal, startTerminalTour } from './terminal.js';
 import { changePasswordModal, openMyProfileModal, renderSystem } from './admin.js';
 import { endTour } from './tour.js';
@@ -109,17 +109,24 @@ async function route() {
         mainEl.classList.toggle('doc-mode', page === 'knowledge' || page === 'k' || page === 'k-edit' || page === 'trash');
     try {
         if (page === 'liv') {
-            // 리브(#1631) — **독립 전체화면**이다. 상단 내비·푸터를 걷고 화면 전부를 쓴다(웹 세션 페이지와 같은 결).
-            //  대화가 주인공인 화면이라 크롬이 높이를 먹으면 정작 말하기가 불편해진다. 나가는 길은 화면 안의
-            //  [← 라이블리] 하나로 충분하다 — 탭을 그려 두면 "여기가 어느 탭인가"를 되묻게 만든다.
-            setActiveTab('liv');
+            // 리브(#1631) — 워크스페이스가 아직 굴러가지 않을 때 홈을 대신 채우는 화면. 사람이 직접 열 수도 있다.
+            setActiveTab('dashboard');
+            livSetChoice('liv'); // 명시적으로 들어왔으면 그게 선택이다 — 다음부터 홈은 리브다.
             await renderLiv(view);
         }
         else if (page === 'dashboard') {
             setActiveTab('dashboard'); // 대시보드 — 옛 '시작하기' 탭 자리를 개편(#617). 현재는 자리표시.
-            // ⚠ #1631 — 여기 있던 '리브 홈 진입 게이트'를 걷어냈다(대표 결정). 상태를 보고 홈을 리브로 갈아치웠는데,
-            //  **홈을 덮는 것은 과했다** — 사람이 기대한 화면이 아닌 게 뜨는 건 그 자체로 고장으로 읽힌다.
-            //  리브는 이제 상단 내비의 [리브] 버튼으로 들어가는 **독립 전체화면**(#/liv)이다.
+            // #1631 홈 진입 게이트 — 상태가 정하되 사람의 선택이 이긴다. 판정은 서버가 하고(화면이 자기 판정을
+            //  가지면 리브와 다른 답을 한다), 실패하면 대시보드로 떨어진다(홈이 안 열리는 게 더 나쁘다).
+            const livMode = await livHomeGate();
+            if (livMode === 'liv') {
+                location.replace('#/liv');
+                return;
+            }
+            if (livMode === 'login') {
+                location.replace('#/start');
+                return;
+            } // 리브를 띄우려면 AI 로그인이 먼저다
             await renderMyDashboard(view);
             // 사용 가이드 [내 AI 세션 생성]의 '따라하며 만들기 →'(#/dashboard?tour=1) — 홈에서 세션 만들기 투어를 켠다(#780).
             //  쿼리는 새로고침 재실행 방지를 위해 조용히 제거(해시만 갱신 — hashchange/재라우팅 없음).

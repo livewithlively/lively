@@ -30,6 +30,7 @@ import { mcpServersCapabilities } from "./delivery/mcp-servers.js";
 import { ingestDistillersCapabilities } from "./delivery/ingest-distillers.js";
 import { hooksCapabilities } from "./delivery/hooks.js";
 import { toolsCapabilities } from "./delivery/tools.js";
+import { canaryCapabilities } from "./delivery/canary.js";
 import { harnessAssetsCapabilities } from "./delivery/harness-assets.js";
 import { dbSourcesCapabilities } from "./delivery/db-sources.js";
 import { auditCapabilities } from "./delivery/audit.js";
@@ -66,6 +67,7 @@ export const deliveryCapabilities: Capability[] = [
   ...connectorMembersCapabilities,
   ...hooksCapabilities,
   ...toolsCapabilities,
+  ...canaryCapabilities, // #1657: 상류 회귀 자동탐지(카나리) — 프로브 정의·현황·실행
   ...harnessAssetsCapabilities,
   ...dbSourcesCapabilities,
   ...auditCapabilities,

@@ -16,6 +16,7 @@ import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { viewerOf } from "../capabilities/principal.js";
 import { canAttach, sessionDir, resolveRootPath, rootRelOf, sessionOsUser, userOsUser } from "./terminal-sessions.js";
+import { resolveSessionDir } from "../sessions/session-desired.js";
 import { memberLs, memberStat, memberMkdir, memberMv, memberRm, memberReadTo, type LsEntry } from "./terminal-member-fs.js";
 import { receiveUpload, uploadError, nfcPath } from "./upload-file.js";
 import { nodeCanAttach, nodeRpc } from "../node/registry.js";
@@ -38,7 +39,9 @@ const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 async function resolveInSession(req: express.Request, requireFile: boolean, canonical = false): Promise<{ base: string; abs: string }> {
   const id = req.params.id;
   if (!(await canAttach(id, idOf(userOf(req))))) throw new HttpError(403, "세션 접근 권한이 없습니다");
-  const base = path.resolve(await sessionDir(id));
+  // desired(DB) 우선 · tmux 폴백 — 이 값이 **파일 샌드박스의 base** 다. tmux 가 안 잡히면 홈으로 넓어지므로
+  //  DB 가 답할 수 있으면 DB 가 답해야 한다(공유 게이트웨이는 그 tmux 서버 문맥 밖에 있다).
+  const base = path.resolve(await resolveSessionDir(id, () => sessionDir(id)));
   const raw = canonical ? nfcPath(req.query.path) : String(req.query.path ?? "");   // 생성만 NFC 정본(#1278b)
   const rel = raw.replace(/^[/\\]+/, "");
   const abs = path.resolve(base, rel);

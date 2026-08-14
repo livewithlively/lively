@@ -217,7 +217,7 @@ function copyPs1WithHeader(srcAbs, destAbs, srcLabel, orgLabel) {
 //   보면 detached 로 띄우는 백그라운드 프로세스다. 번들·설치 대상엔 들어가되 settings 훅 목록엔 안 들어간다.
 // ⚠ harness-registry.mjs 는 훅이 아니라 훅들이 import 하는 모듈이다 — 발행물에 동봉되지 않으면 설치된 훅이
 //  ERR_MODULE_NOT_FOUND 로 죽는다(user-install.HOOK_SCRIPTS 와 **같은 목록**이어야 한다).
-const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs", "harness-registry.mjs", "opencode-plugin.js"];
+const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs", "harness-registry.mjs", "opencode-plugin.js", "antigravity-adapter.mjs"];
 
 function emitHooks(targetDir, orgLabel) {
   const hooksDir = join(targetDir, ".claude", "hooks");
@@ -346,9 +346,23 @@ function emitCodexArtifact({ copied }) {
   );
 }
 
+// opencode·antigravity 는 codex 와 같은 no-op 프린터다 — 발행물에 하네스 전용 추가 파일이 없고
+//  (어댑터는 HOOK_SCRIPTS 로 이미 동봉) 배선은 user-install.mjs 가 한다. 엔트리가 없으면 dispatchEmit 이
+//  exit(1) 로 발행 자체를 죽인다(#1519 가 남긴 갭 — #1689 에서 채움).
+function emitOpencodeArtifact({ copied }) {
+  const ok = copied.includes("setup/user-install.mjs");
+  console.log(`  ▶ harness=opencode → 발행물 동봉 user-install.mjs(--harness opencode)${ok ? "" : " ⚠️ user-install.mjs 미동봉 — claude 와 함께 발행하세요"} + 어댑터(opencode-plugin.js)는 훅 목록에 동봉.`);
+}
+function emitAntigravityArtifact({ copied }) {
+  const ok = copied.includes("setup/user-install.mjs");
+  console.log(`  ▶ harness=antigravity → 발행물 동봉 user-install.mjs(--harness antigravity)${ok ? "" : " ⚠️ user-install.mjs 미동봉 — claude 와 함께 발행하세요"} + 어댑터(antigravity-adapter.mjs)는 훅 목록에 동봉.`);
+}
+
 const HARNESS_EMIT = {
   claude: emitClaudeArtifact,
   codex: emitCodexArtifact,
+  opencode: emitOpencodeArtifact,
+  antigravity: emitAntigravityArtifact,
 };
 
 // 다중 하네스 발행: --harness claude,codex → 두 emit 을 순서대로 실행(같은 발행물에 양쪽 설정 추가).

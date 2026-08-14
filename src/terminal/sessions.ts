@@ -1,7 +1,9 @@
 // 중앙 박스 — tmux 세션 매니저(목록·생성·수정·삭제·초대·입장 판정). terminal-sessions.ts 분할(#1313 R15).
 // 모든 tmux 호출은 execFile argv(셸 미경유) — 인젝션 차단. 세션은 box-<userSlug>-* 네임스페이스.
-// 메타는 tmux @box_* user-option 에 저장(재기동 생존, tmux SoT — DB 미사용).
-// 접근 모델: 소유자 + 초대된 멤버(@box_invites). 기본 비공개(초대 없음 = 소유자만). 공개/팀 개념 없음.
+// 메타는 **두 축**이다: desired(누가·무슨 하네스·어디서·누구에게 — DB org_session_state) / observed(붙어 있나·
+//  지금 뭘 돌리나 — tmux). 읽기는 session-desired.resolveDesired 가 단일 창구이고 **DB 가 기본, tmux 가 폴백**이다.
+//  쓰기는 아직 양쪽에 한다(tmux @box_* + DB upsert) — 폴백이 살아 있어야 자가호스팅 업그레이드가 안 깨진다.
+// 접근 모델: 소유자 + 초대된 멤버(invites). 기본 비공개(초대 없음 = 소유자만). 공개/팀 개념 없음.
 import fsp from "node:fs/promises";
 import crypto from "node:crypto";
 import type { LivelyUser } from "../context.js";
@@ -24,7 +26,7 @@ import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.
 import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
 import { memberMkdir } from "./terminal-member-fs.js";
 import { materializeMemberGit, ensureGitSafeDirectory } from "../org/credentials/git-credential-materialize.js";
-import { ROOTS, SHARED_ROOT, HARNESSES, PANE_LOCALE, modeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput } from "./catalog.js";
+import { ROOTS, SHARED_ROOT, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput } from "./catalog.js";
 import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson } from "./tmux-exec.js";
 import {
   sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
@@ -32,6 +34,7 @@ import {
 } from "./phase.js";
 import { userSlug, ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir } from "./profiles.js";
 import { canSeeSession } from "./write-cap.js";
+import { loadDesiredMap, loadDesiredOne, resolveDesired, resolveSessionDir } from "../sessions/session-desired.js";
 
 export const sessionPrefix = (u: LivelyUser): string => `box-${userSlug(u)}-`;
 const ID_RE = SESSION_ID_RE;   // 세션 id 형식의 단일 진실원천 — 게이트웨이가 헤더로 받은 세션도 같은 자로 잰다(#852)
@@ -131,12 +134,13 @@ async function collectSessions(me: string | null): Promise<SessionInfo[]> {
     catch (e) { hiddenUnknown = true; console.warn(`[visibility] 프로젝트 공개범위 판정 실패 — 프로젝트 세션을 숨깁니다: ${(e as Error)?.message}`); }
   }
   const nowSec = Math.floor(Date.now() / 1000);
-  // 1차: 파싱 + 전역 lastBusy 갱신(스피너 기반, 뷰어 무관 — 정렬 recency 일관성). 보이는 세션만 rows 로.
+  // 1차: 파싱 + 전역 lastBusy 갱신(스피너 기반, 뷰어 무관 — 정렬 recency 일관성).
+  const parsed: Array<Record<string, any>> = [];
+  // 2차 산출: desired 해소 + 가시성 필터를 통과한 것만.
   const rows: Array<Record<string, any>> = [];
   for (const line of out.split("\n")) {
     if (!line.startsWith("box-")) continue;
     const [name, created, attached, owner, harness, dir, auto, flagsRaw, invitesRaw, projectRaw, paneCmdRaw, lastAttachedRaw, lastBusyRaw, stateRaw, paneTitleRaw, ...labelParts] = line.split("\t");
-    const owned = me !== null && !!owner && owner === me;
     const invites = parseInvites(invitesRaw);
     const offline = isAgentOffline(harness, paneCmdRaw);
     const busy = !offline && isSpinning(paneTitleRaw);
@@ -161,12 +165,44 @@ async function collectSessions(me: string | null): Promise<SessionInfo[]> {
         void touchSessionBusy(name, nowSec).catch(() => { /* 비치명 — desired-state 없음(구 세션·노드)·DB 다운 */ }); // #1059 E — restorable 카드 시간표시 미러(같은 스로틀)
       }
     }
+    // ⚠ 가시성 판정은 여기서 하지 않는다 — desired(소유자·초대·프로젝트)를 **DB 로 해소한 뒤**여야 한다.
+    //  tmux 값으로 먼저 거르면 DB 에서 초대가 추가된 세션이 목록에 아예 안 올라온다(2차 패스로 미룬다).
+    parsed.push({
+      name, created, attached, paneTitleRaw, offline, busy, shellWorking, lastBusy, reportedFresh,
+      lastAttached: Number(lastAttachedRaw) || 0,
+      tmuxDesired: {
+        owner: owner || "",
+        label: labelParts.join("\t") || null,
+        harness: harness || "shell",
+        dir: dir || null,
+        autoApprove: auto === "1",
+        // 적용 플래그 메타 — 신=base64 · 구=평문 JSON, 못 읽으면 빈 객체(구버전 세션) (#1541)
+        flags: decodeOptJson<Record<string, string>>(flagsRaw, {} as Record<string, string>),
+        invites,
+        projectId: Number(projectRaw) || null,
+      },
+    });
+  }
+
+  // ── desired 해소: DB 가 기본, tmux 는 폴백 ──────────────────────────────────
+  // 한 쿼리로 전부 가져온다(폴링 경로라 세션 수만큼 쿼리를 치면 안 된다). DB 가 죽으면 빈 맵이 와서
+  //  전부 tmux 폴백으로 흐른다 — 목록은 장애 중에도 보여야 한다(그게 복구를 하는 자리다).
+  const desiredMap = await loadDesiredMap(parsed.map((p) => p.name));
+  for (const p of parsed) {
+    const d = resolveDesired(desiredMap.get(p.name), p.tmuxDesired);
+    const owned = me !== null && !!d.owner && d.owner === me;
     // 가시성 판정은 canSeeSession 단일 술어로(#1291) — 예전엔 여기 인라인 사본이 있어 라이브 목록과 복원 목록이
     //  갈릴 수 있었다(위 주석이 경계하던 바로 그 이중구현).
     //  me=null(노드 raw 수집 #869)은 필터 없이 전부 — 가시성은 게이트웨이가 판정.
-    if (me !== null && hiddenUnknown && dirToProjectFolder(dir || "")) continue;
-    if (me !== null && !canSeeSession({ dir, owner, invites, projectId: Number(projectRaw) || 0 }, me, hidden)) continue;
-    rows.push({ name, created, attached, owner, owned, harness, dir, auto, flagsRaw, invites, projectRaw, paneTitleRaw, labelParts, offline, busy, shellWorking, lastBusy, reportedFresh, lastAttached: Number(lastAttachedRaw) || 0 });
+    if (me !== null && hiddenUnknown && dirToProjectFolder(d.dir || "")) continue;
+    if (me !== null && !canSeeSession({ dir: d.dir ?? "", owner: d.owner, invites: d.invites, projectId: d.projectId ?? 0 }, me, hidden)) continue;
+    rows.push({
+      name: p.name, created: p.created, attached: p.attached, paneTitleRaw: p.paneTitleRaw,
+      offline: p.offline, busy: p.busy, shellWorking: p.shellWorking, lastBusy: p.lastBusy,
+      reportedFresh: p.reportedFresh, lastAttached: p.lastAttached,
+      owner: d.owner, owned, harness: d.harness, dir: d.dir ?? "", autoApprove: d.autoApprove,
+      flags: d.flags, invites: d.invites, projectId: d.projectId ?? 0, label: d.label,
+    });
   }
   // 2차: '확인 필요' 감지 — 비offline & 비busy 세션 전부 capture-pane(병렬). #req 접속 안 해도 떠야 하므로 접속 게이트 제거(알림 성격).
   //  #1221 — **하네스가 이미 답을 준 세션은 화면을 안 본다.** 신선한 busy·waiting 보고는 우선순위표에서 스크래핑
@@ -177,8 +213,7 @@ async function collectSessions(me: string | null): Promise<SessionInfo[]> {
   await Promise.all(needScrape.map(async (r) => { if (await paneAwaitingInput(r.name)) waitingIds.add(r.name); }));
   const sessions: SessionInfo[] = [];
   for (const r of rows) {
-    // 적용 플래그 메타 — 신=base64 · 구=평문 JSON, 못 읽으면 빈 객체(구버전 세션) (#1541)
-    const flags = decodeOptJson<Record<string, string>>(r.flagsRaw, {} as Record<string, string>);
+    const flags = r.flags as Record<string, string>;   // desired 해소 단계에서 이미 디코드됐다
     // 온라인/오프라인 판정 = **지금 브라우저 탭에 열려 있나**(attached). 상민님 확정(2026-07-23):
     //  "나·누군가의 PC 어딘가에 탭으로 열려 있는 세션만 온라인, 나머지는 다 오프라인(회색)".
     //  attached 는 그 뜻을 정확히 준다 — 탭이 WS 로 tmux 클라이언트를 붙이고(terminal-pty), 탭을 닫으면
@@ -199,10 +234,10 @@ async function collectSessions(me: string | null): Promise<SessionInfo[]> {
       : Number(r.attached) <= 0 ? "offline"
       : phase;
     sessions.push({
-      id: r.name, label: (r.labelParts.join("\t") || r.name), harness: r.harness || "shell", dir: r.dir || "",
-      autoApprove: r.auto === "1", owner: r.owner || "", owned: r.owned,
+      id: r.name, label: (r.label || r.name), harness: r.harness || "shell", dir: r.dir || "",
+      autoApprove: r.autoApprove, owner: r.owner || "", owned: r.owned,
       created: Number(r.created) || 0, attached: Number(r.attached) > 0, invites: r.invites, flags,
-      projectId: Number(r.projectRaw) || 0,
+      projectId: r.projectId || 0,
       agentState: state,
       // 회수(F)가 보는 두 신호는 **접속과 무관**해야 하고(탭=온라인 규칙이 busy·waiting 을 offline 으로 덮으므로),
       //  두 출처를 **합집합**으로 본다 — 죽이면 되돌릴 수 없는 판정이라 과보호가 옳은 실패 방향이다.
@@ -265,17 +300,17 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   const appliedFlags: Record<string, string> = {}; // 생성 시 적용한 플래그 — @box_flags 로 저장(수정 팝업 표시용).
   if (harness.bin) {
     cmd.push(harness.bin);
-    // 이어받기(#905 C1) — claude 하네스에 한해 --resume <sid> 주입(그 세션 대화를 이어서 연다). sid 형식 검증.
-    //  ⚠ 여기의 <sid> 는 **claude 자신의 세션 UUID** 여야 한다(세션이력 캡처가 claude session_id 로 키잉 — #905).
-    //   tmux box-id 를 주면 claude 가 못 찾아 검색-결과없음 picker 가 뜬다(#1059 사용자 신고). 그 경우엔 resumePick 을 쓴다.
-    if (input.resume && harness.key === "claude") {
-      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(input.resume)) throw new HttpError(400, "resume 세션 id 형식이 잘못되었습니다");
-      cmd.push("--resume", input.resume);
-    } else if (input.resumePick && harness.key === "claude") {
-      // #1059 — 정확한 claude UUID 를 모를 때(예: restorable 복원, box-id 만 있음): 인자 없는 --resume 로 **후보 picker** 를
-      //  바로 띄운다. box-id 를 넘겨 "검색 결과 없음"에 빠뜨리는 대신, 이 작업폴더의 실제 대화 후보에서 사용자가 고른다.
-      //  (제로클릭 정밀 복원은 box-id↔claude-UUID 매핑 저장이 선행 — 후속.)
-      cmd.push("--resume");
+    // 이어받기(#905 C1 · #1711 표 구동) — 그 하네스의 이어받기 수단을 **카탈로그에서** 만든다.
+    //  ⚠ 여기의 <sid> 는 **그 하네스 자신의 대화 id** 여야 한다(claude UUID · agy conversationId · opencode sessionID).
+    //   세션이력 캡처도 같은 id 로 키잉된다(#905). tmux box-id 를 주면 하네스가 못 찾아 "검색 결과 없음"이 된다
+    //   (#1059 사용자 신고) — 그 경우엔 resumePick(피커·최근 대화)으로 폴백한다.
+    //  ⚠ 종전엔 이 두 분기가 `harness.key === "claude"` 로 잠겨 있어, **claude 아닌 세션은 복원해도 늘 새 대화**로
+    //   시작했다(2026-08-14 상민님 신고 — antigravity 세션을 /exit 로 닫고 '이어서 열기' 해도 대화가 없다).
+    if (input.resume) {
+      if (!RESUME_ID_RE.test(input.resume)) throw new HttpError(400, "resume 세션 id 형식이 잘못되었습니다");
+      cmd.push(...(harness.resumeArgv?.(input.resume) ?? []));
+    } else if (input.resumePick) {
+      cmd.push(...(harness.resumeArgv?.() ?? []));
     }
     for (const def of harness.flags) {
       const raw = input.flags?.[def.name];
@@ -430,6 +465,10 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
 interface OwnerMeta { owner: string; invites: string[]; }
 async function ownerMeta(id: string): Promise<OwnerMeta | null> {
   if (!ID_RE.test(id)) return null;
+  // desired(DB) 우선 — 공유 게이트웨이는 그 세션의 tmux 서버 문맥 밖에 있어도 이 질문에 답할 수 있어야 한다.
+  //  ⚠ DB 오류는 undefined 로 와서 tmux 폴백으로 흐른다(종전 진실). 판정이 느슨해지는 방향이 아니다.
+  const db = await loadDesiredOne(id);
+  if (db?.owner) return { owner: db.owner, invites: db.invites };
   const owner = await getOpt(id, "@box_owner");
   if (!owner) return null; // box 세션이지만 메타 없음(우리 것 아님) → 거부
   return { owner, invites: parseInvites(await getOpt(id, "@box_invites")) };
@@ -441,7 +480,7 @@ export async function canAttach(id: string, userId: string): Promise<boolean> {
   // 프로젝트 폴더 세션은 '공동 세션' — 어사이니/멤버십과 무관하게 로그인한 누구나 입장·조작·파일접근 가능(#452).
   //  단 공개범위가 걸린 프로젝트라면 그 대상만(#1291) — 입장하면 그 프로젝트의 파일·대화를 그대로 보게 되므로
   //  목록에서만 감추는 건 의미가 없다. 판정 불가(DB 다운)면 거부한다 — 여기서 열어주면 잠금이 뚫린다.
-  const folder = dirToProjectFolder(await sessionDir(id));
+  const folder = dirToProjectFolder(await resolveSessionDir(id, () => sessionDir(id)));
   if (folder) {
     try {
       const hidden = await hiddenProjects(userId);

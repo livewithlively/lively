@@ -29,6 +29,7 @@ export const CRON_ACTION_ALLOWLIST = [
   "run_managers",          // #1419 T5 — 관리기 실행(어긋남·아웃데이티드·모순·코드괴리)
   "agent_inject", "agent_headless",
   "ensure_managed_sessions", "wikilink_sweep", "preview_reconcile",
+  "run_canary",            // #1657 — 상류 회귀 자동탐지(카나리)
 ] as const;
 
 export async function initSessionsInfra(pool: Pool): Promise<void> {

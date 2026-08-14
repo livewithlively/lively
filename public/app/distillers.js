@@ -658,6 +658,10 @@ async function runJobCard(rerender) {
             note: '켜진 증류기별로 미증류 자료 배치를 헤드리스 AI 세션에 접수. 증류기가 없으면 전 자료 공통 기본 증류.',
         },
         missingLine: '증류 자동 실행이 없습니다 — 증류기를 만들어도 자료가 지식이 되지 않습니다.',
+        // 분류와 같은 이유 — 구 세션주입판(distill_sources)은 params.session 이 있어야 돈다.
+        unrunnable: (j) => (j.action === 'distill_sources' && !(j.params && j.params.session))
+            ? '지금 등록된 증류 잡은 상시 세션이 있어야 도는 구 방식인데, 그 세션이 지정돼 있지 않습니다 — 이대로 켜면 매번 실패합니다.'
+            : null,
         usesAi: true,
     }, rerender);
 }

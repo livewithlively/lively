@@ -136,6 +136,8 @@ function provisionStatus(projectId: number): ProvisionJob & { known: boolean } {
 }
 
 // 세션 작업폴더(@box_dir) 기준 안전 경로(#875) — .. 탈출 거부. requireSub 면 base 자체(빈 경로)는 파일 op 대상 불가로 거부.
+// ⚠ 여기는 **tmux 가 유일한 진실**이다 — 게이트웨이 쪽은 desired(DB) 우선으로 바뀌었지만(session-desired.ts),
+//  노드에는 DB 가 없다(설계: 노드에 DB 자격을 주지 않는다). resolveSessionDir 로 "통일"하지 마라 — 노드에서 그건 못 돈다.
 async function nodeSessionAbs(id: string, sub: string, requireSub = false): Promise<{ base: string; abs: string }> {
   const base = path.resolve(await sessionDir(id));
   const rel = String(sub || "").replace(/^[/\\]+/, "");
@@ -153,11 +155,11 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
     case "runTask": {
       const input = args as unknown as RunTaskInput;
       const r = await spawnTaskSession(input);
-      trackedTasks.set(input.taskId, { taskId: input.taskId, sessionId: r.sessionId, taskDir: r.taskDir });
+      trackedTasks.set(input.taskId, { taskId: input.taskId, sessionId: r.sessionId, taskDir: r.taskDir, harness: input.harness });   // #1710 — 결과 스키마가 하네스별이라 함께 들고 있어야 요약을 뽑는다
       return r;
     }
     case "watchTask": {
-      const w = { taskId: Number(args.taskId), sessionId: String(args.sessionId), taskDir: String(args.taskDir) };
+      const w = { taskId: Number(args.taskId), sessionId: String(args.sessionId), taskDir: String(args.taskDir), harness: args.harness ? String(args.harness) : undefined };   // #1710
       if (w.taskId && w.taskDir) trackedTasks.set(w.taskId, w);
       return { ok: true };
     }

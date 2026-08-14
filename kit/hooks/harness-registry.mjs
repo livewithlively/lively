@@ -15,7 +15,7 @@
 
 // ── 하네스 식별 ────────────────────────────────────────────────────────────
 // 지원 목록. 새 하네스는 여기 + 아래 표에만 추가하면 된다.
-export const HARNESS_IDS = ["claude", "codex", "opencode"];
+export const HARNESS_IDS = ["claude", "codex", "opencode", "antigravity"];
 
 // 하네스 결정 — argv `--harness <n>` > env LIVELY_HARNESS > 기본 claude.
 //  ⚠ 기본이 claude 인 건 종전 규약이다(미설정 = claude). 바꾸면 구설치가 조용히 다른 하네스로 취급된다.
@@ -174,6 +174,65 @@ export const HARNESS = {
       PermissionRequest: "permission.ask",
     },
   },
+
+  antigravity: {
+    id: "antigravity",
+    label: "Antigravity CLI",
+    bin: "agy",
+    // `~/.gemini` — env 경로 오버라이드 **없음**(agy 1.1.13 실측: $HOME 만 본다. XDG 무관 — opencode 와 다르다).
+    //  글로벌 커스터마이제이션 루트는 <home>/config (skills/·agents/·workflows/·plugins/·hooks.json·mcp_config.json).
+    home: (HOME) => j(HOME, ".gemini"),
+    // 진단·배선 판정 대상 = CLI 승인 설정(permissions.allow). 훅·MCP 는 플러그인 디렉터리에 있다(아래 pluginDir).
+    configFile: (home) => j(home, "antigravity-cli", "settings.json"),
+    configFormat: "json",
+    // 배선 방식 4번째(plugin-dir): MCP·룰은 **우리 소유 플러그인 디렉터리**(비파괴가 구조로 보장),
+    //  ⚠ 훅만은 글로벌 `<home>/config/hooks.json` 에 top-level 키("lively") 단위 비파괴 머지다 —
+    //  문서는 플러그인 hooks.json 도 읽는다지만 실기기(1.1.13) 훅 스캐너는 글로벌 루트·워크스페이스만 봤다(#1689 E2E).
+    wiring: "plugin-dir",
+    pluginDir: (home) => j(home, "config", "plugins", "lively"),
+    assets: {
+      // 스킬은 Agent Skills 오픈표준 = claude 와 같은 파일(#1689 실측: 글로벌 skills/ 광고 확인).
+      // ⚠ opencode 와 달리 `~/.claude/skills` 자동 로드가 **없다** — antigravity 자리에 별도 materialize 필수.
+      skill: { root: (h) => j(h, "config", "skills"), dir: true, ext: "", compose: "markdown" },
+      // 서브에이전트는 **디렉터리형인데 엔트리 파일명이 agent.md** 다(skills 의 SKILL.md 와 다름 — dirFile 축).
+      subagent: { root: (h) => j(h, "config", "agents"), dir: true, ext: "", dirFile: "agent.md", compose: "antigravity-agent" },
+      // 커맨드 등가 = workflows/*.md — `/이름` 으로 호출된다(#1689 실측: print 모드 포함).
+      command: { root: (h) => j(h, "config", "workflows"), dir: false, ext: ".md", compose: "antigravity-workflow" },
+    },
+    tools: {
+      // 실측(#1689): 신규 파일 생성 = write_to_file. replace_file_content 는 바이너리 강정황(발화 미실측).
+      //  ⚠ 스텝타입 유도 목록(propose_code 등)에 없는 이름이었다 — 툴 이름은 실측만 믿는다.
+      edit: ["write_to_file", "replace_file_content"],
+      shell: ["run_command"],
+      read: ["view_file", "grep_search", "list_dir"],
+      skill: [],                           // 전용 Skill 툴 없음 — 스킬 본문은 view_file(IsSkillFile) 로 읽는다
+      // ⚠ antigravity 의 MCP 호출은 이름이 전부 `call_mcp_tool` 이고 서버·툴은 args(ServerName/ToolName)에 온다
+      //  — 이름 접두어 파싱이 원리적으로 불가하다. **어댑터(antigravity-adapter.mjs)가 args 를 읽어
+      //  `mcp__<server>__<tool>`(claude 형)로 정규화한 뒤** 러너에 넘기므로, 표의 mcp 축은 claude 형이다.
+      //  이 정규화 계약은 antigravity-adapter.test.mjs 가 고정한다.
+      mcp: (server, tool = "") => `mcp__${server}__${tool}`,
+      mcpMatcher: (server) => `mcp__${server}__.*`,
+    },
+    // MCP 는 플러그인 디렉터리의 mcp_config.json 파일로 등록(파일이 통째로 우리 것 — 머지 불요).
+    //  스키마: command=**문자열** + args=배열(codex 형과 같고 opencode 의 command 배열과 다름) 또는 serverUrl.
+    mcp: { style: "plugin-mcp-file", commandShape: "string+args" },
+    // 승인은 CLI settings.json 의 permissions.allow — 규칙 문법이 `mcp(<server>/<tool>)` 다(와일드카드 `*` 성립, #1689 실측).
+    autoApprove: { kind: "agy-settings-allow", key: (server, tool) => `mcp(${server}/${tool || "*"})` },
+    // 정적 컨텍스트는 플러그인 rules/AGENTS.md 로 싣는다(네이티브 로드·경로 dedup — opencode 의 file 봉투와 동형).
+    //  PreInvocation injectSteps 는 **매 모델 호출마다** 발화라 org-context 를 싣기에 부적합(#1689 실측).
+    contextEnvelope: "file",
+    contextFile: (home) => j(home, "config", "plugins", "lively", "rules", "AGENTS.md"),
+    reloadAssets: false,                   // hot-reload 미확인(#1689) — 보수적으로 false
+    // 러너 배선 대상 — agy 훅 이벤트는 5종뿐(PreToolUse·PostToolUse·PreInvocation·PostInvocation·Stop).
+    //  UserPromptSubmit·SessionEnd 등가물 없음(정직 표기). SessionStart 는 PreInvocation 의 invocationNum==0 판정.
+    events: ["SessionStart", "PreToolUse", "PostToolUse", "Stop"],
+    eventMap: {
+      SessionStart: "PreInvocation#0",     // invocationNum==0 인 PreInvocation — 어댑터가 판정
+      PreToolUse: "PreToolUse",
+      PostToolUse: "PostToolUse",
+      Stop: "Stop",
+    },
+  },
 };
 
 // ── 파생 헬퍼 — 호출부가 표를 직접 뒤지지 않게 한다(분기가 다시 흩어지는 걸 막는 자리) ──
@@ -190,7 +249,9 @@ export function placementFor(id, kind, assetId, HOME, env = process.env) {
   if (!spec) return null;
   const home = h.home(HOME, env);
   const root = spec.root(home);
-  if (spec.dir) return { file: j(root, assetId, "SKILL.md"), skillDir: j(root, assetId), root };
+  // 디렉터리형 자산의 엔트리 파일명은 기본 SKILL.md(스킬 표준). antigravity 서브에이전트처럼 다른 이름
+  //  (agents/<n>/agent.md)이면 표의 dirFile 축이 답한다 — 파일명을 여기 하드코딩하면 그 하네스에서만 조용히 빗나간다.
+  if (spec.dir) return { file: j(root, assetId, spec.dirFile || "SKILL.md"), skillDir: j(root, assetId), root };
   return { file: j(root, `${assetId}${spec.ext}`), root };
 }
 

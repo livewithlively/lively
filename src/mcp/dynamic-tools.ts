@@ -11,6 +11,7 @@ import { redactDeep } from "../org/ingest/redact.js";
 import { scrubPii } from "../org/ingest/pii-scrub.js";
 import { markExternalTool } from "../org/policies/tool-log.js";
 import { resolveMemberSecret } from "../org/credentials/member-secret-store.js";
+import { resolveProxyBearer } from "../org/credentials/oauth-proxy-auth.js";
 import { resolveUser, requireScope, type LivelyUser } from "../context.js";
 import { HttpError } from "../http/rest-util.js";
 import { isScope } from "../auth/scopes.js";
@@ -65,6 +66,71 @@ export function jsonSchemaToZodShape(schema: unknown): ZodRawShape {
 
 export interface ProxyResult { status: number; body: string; truncated: boolean; ok: boolean }
 
+// ── 경로 템플릿(#1655) ──────────────────────────────────────────────────────────────────────
+//  B17 은 "인자로 scheme/host/path 를 **바꾸지 못한다**" 였고 그건 그대로다. 다만 구글 클래식 API 는 리소스 id 가
+//  경로에 있어(`/drive/v3/files/{fileId}`, `/gmail/v1/users/me/messages/{id}`) 고정 URL 만으로는 **검색은 되는데
+//  읽기가 안 된다.** 그래서 '관리자가 URL 에 명시적으로 뚫어 둔 자리'에 한해, 인자가 **경로 한 칸**을 채우게 한다.
+//
+//  안전 규칙 — 자리표시가 경로 조작 통로가 되지 않게 세 겹으로 막는다:
+//   ① 값은 encodeURIComponent — 슬래시·물음표·샵이 전부 인코딩돼 한 칸을 못 넘는다.
+//   ② `.`·`..` 는 인코딩돼도 그대로라 URL 정규화가 상위로 올려버린다 → 값 단계에서 거부.
+//   ③ 치환 후 최종 URL 의 origin + 고정 prefix 를 템플릿과 대조 — ①② 를 빠져나간 무엇이 있어도 여기서 걸린다.
+const URL_PLACEHOLDER_RE = /\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+
+/** 이 URL 이 경로 자리표시를 쓰는가(저장 검증·등록 경로가 묻는다). */
+export function urlTemplateKeys(rawUrl: string): string[] {
+  return [...String(rawUrl ?? "").matchAll(URL_PLACEHOLDER_RE)].map((m) => m[1]);
+}
+
+/**
+ * 템플릿 URL + 인자 → 최종 URL. 자리표시가 없으면 종전과 완전히 동일하게 동작한다(무회귀).
+ *  consumed = 경로로 소비된 키 — 호출자는 이 키를 query/body 에 **다시 싣지 않는다**(중복 방지).
+ */
+export function applyUrlTemplate(rawUrl: string, args: Record<string, unknown>): { url: URL; consumed: Set<string> } {
+  const consumed = new Set<string>();
+  const keys = urlTemplateKeys(rawUrl);
+  if (keys.length === 0) return { url: new URL(rawUrl), consumed }; // 자리표시 없음 — 종전 경로
+
+  const fixedPrefix = rawUrl.slice(0, rawUrl.indexOf("{")); // 첫 자리표시 앞까지는 어떤 인자로도 바뀌지 않아야 한다
+  const filled = rawUrl.replace(URL_PLACEHOLDER_RE, (_m, key: string) => {
+    const raw = args?.[key];
+    if (raw === undefined || raw === null || (typeof raw !== "string" && typeof raw !== "number")) {
+      throw new Error(`경로 인자 '${key}' 가 필요합니다`);
+    }
+    const v = String(raw);
+    if (!v) throw new Error(`경로 인자 '${key}' 가 비어 있습니다`);
+    if (v === "." || v === "..") throw new Error(`경로 인자 '${key}' 값이 허용되지 않습니다`);
+    consumed.add(key);
+    return encodeURIComponent(v);
+  });
+
+  const url = new URL(filled);
+  const base = new URL(rawUrl.replace(URL_PLACEHOLDER_RE, "x")); // 템플릿의 origin(자리표시를 무해한 값으로 채워 파싱)
+  // ③ 최종 대조 — origin 이 그대로이고 고정 prefix 가 살아 있어야 한다(정규화로 경로가 깎이면 여기서 걸린다).
+  if (url.origin !== base.origin) throw new Error("경로 인자가 대상 호스트를 바꾸려 했습니다");
+  if (!`${url.origin}${url.pathname}`.startsWith(fixedPrefix)) throw new Error("경로 인자가 고정 경로를 벗어나려 했습니다");
+  return { url, consumed };
+}
+
+/**
+ * 실제로 나가는 요청(URL·본문) 조립 — runHttpProxyTool 이 그대로 쓴다.
+ *  분리한 이유는 테스트다: 이걸 호출부 안에 두면 테스트가 조립 규칙을 **재구현**하게 되고, 그 순간 관측 장치가
+ *  실물이 아니라 사본을 보게 된다(실제로 그렇게 썼다가 '경로 키를 query 에 중복 적재' mutation 을 놓쳤다).
+ */
+export function buildProxyRequest(rawUrl: string, method: string, args: Record<string, unknown>): { url: URL; body?: string } {
+  const { url, consumed } = applyUrlTemplate(rawUrl, args ?? {});
+  const m = (method || "GET").toUpperCase();
+  if (m === "GET" || m === "DELETE" || m === "HEAD") {
+    for (const [k, v] of Object.entries(args ?? {})) {
+      if (consumed.has(k)) continue; // 경로로 이미 쓴 키 — query 에 중복해 싣지 않는다
+      if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+    }
+    return { url };
+  }
+  const rest = Object.fromEntries(Object.entries(args ?? {}).filter(([k]) => !consumed.has(k)));
+  return { url, body: JSON.stringify(rest) };
+}
+
 // P1·P2(#746) — 커넥터 툴의 vault 자격 해소 폴백 정책은 등급이 정한다(순수, 테스트용 export):
 //  L0/L1/미지정(비-PII read)=true(통합 폴백 허용) / L2 및 그 외 모든 값=false(per-user 필수 — 사칭 방지).
 //  allow-list 로 판정(deny-list 아님) — 예상 밖 등급값이 들어와도 fail-closed(폴백 금지) 쪽으로.
@@ -107,9 +173,11 @@ export async function runHttpProxyTool(tool: OrgTool, args: Record<string, unkno
                        : "이 등급(L2/집행)은 개인 자격이 필수입니다 — '내 자격'(me_credential_set)에 등록하세요."),
       );
     }
-    const built = buildProxyAuthHeaders(resolved.meta, resolved.secret);
+    // OAuth 자격이면 묶음에서 access token 을 뽑고(만료면 갱신) 그것만 싣는다(#1654). 정적 토큰은 그대로 통과.
+    const bearer = await resolveProxyBearer(resolved, tool.auth_kind);
+    const built = buildProxyAuthHeaders(resolved.meta, bearer);
     Object.assign(headers, built.headers);
-    injectedSecret = resolved.secret;
+    injectedSecret = bearer; // 응답 스크럽 대상은 **실제로 실린 값** — 묶음 전체가 아니라 access token(갱신됐으면 새 것)
     sensitiveHeaders.push(built.headerName); // 커스텀 헤더명(PRIVATE-TOKEN 등)도 리다이렉트에서 벗기게(#746)
   } else if (tool.auth_env) {
     // auth_env 는 운영자 화이트리스트(allowed_auth_envs)에 등록된 이름만 — 인프라 시크릿명(DATABASE_URL 등) 차단.
@@ -121,14 +189,9 @@ export async function runHttpProxyTool(tool: OrgTool, args: Record<string, unkno
   }
 
   const method = (tool.method || "GET").toUpperCase();
-  const base = new URL(tool.url); // scheme/host/path 는 저장값 고정 — args 로 변경 불가(B17)
-  let body: string | undefined;
-  if (method === "GET" || method === "DELETE" || method === "HEAD") {
-    for (const [k, v] of Object.entries(args ?? {})) if (v !== undefined && v !== null) base.searchParams.set(k, String(v));
-  } else {
-    headers["Content-Type"] = "application/json";
-    body = JSON.stringify(args ?? {});
-  }
+  // scheme/host 는 저장값 고정(B17). path 는 관리자가 URL 에 뚫어 둔 자리표시에 한해 인자가 **한 칸**을 채운다(#1655).
+  const { url: base, body } = buildProxyRequest(tool.url, method, args ?? {});
+  if (body !== undefined) headers["Content-Type"] = "application/json";
 
   const res = await safeFetch(base.toString(), {
     method, headers, body,

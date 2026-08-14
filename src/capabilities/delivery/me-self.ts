@@ -209,7 +209,11 @@ export const meSelfCapabilities: Capability[] = [
       const snap = {
         at: new Date().toISOString(),
         host: input.host == null ? undefined : str(input.host, "host", 200).trim() || undefined,
-        harness: input.harness === "codex" ? "codex" : "claude",
+        // #1711 — 종전 2분법(`codex ? codex : claude`)은 opencode·antigravity 세션의 보고를 전부 **claude 로 기록**해
+        //  관리탭 [내 하네스]의 하네스 축을 틀리게 만들었다(보고 자체는 그 하네스에서 정상적으로 오고 있었다).
+        //  화이트리스트로 받되 'all'(대상 지정자, 하네스 아님)은 제외하고, 모르는 값은 종전대로 claude 로 폴백한다.
+        harness: typeof input.harness === "string" && input.harness !== "all" && HOOK_HARNESSES.has(input.harness)
+          ? input.harness : "claude",
         assets,
       };
       // machine_id — 한 멤버의 여러 PC 를 구분(훅이 ~/.lively/machine-id 에 UUID 생성). 없으면 host 로 폴백(구 훅 호환).

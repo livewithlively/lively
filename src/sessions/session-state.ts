@@ -43,7 +43,8 @@ export interface SessionState {
 //  exit_reason 은 생성 시점엔 미상(훅이 세션 시작/종료 때 사후 채움) — 전부 입력에서 제외(생성 시 NULL).
 export type SessionStateInput = Omit<SessionState, "last_seen" | "claude_session_id" | "exited_at" | "exit_reason">;
 
-function rowToState(r: Record<string, any>): SessionState {
+// export: session-desired.ts 가 자기 쿼리 결과를 같은 규칙으로 해석해야 한다(파싱이 두 벌이 되면 갈린다).
+export function rowToState(r: Record<string, any>): SessionState {
   return {
     id: r.id, owner: r.owner, label: r.label ?? null, harness: r.harness || "claude",
     dir: r.dir ?? null, root_key: r.root_key ?? null, subpath: r.subpath ?? null,

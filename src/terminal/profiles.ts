@@ -14,6 +14,7 @@ import { DANGEROUS_SCOPES, isScope } from "../auth/scopes.js";
 import { resolveMemberOsUser, wrapAsMember, osUsername, isolationInfraReady, osUserExists } from "./terminal-isolation.js";
 import { ROOTS, HARNESSES } from "./catalog.js";
 import { getOpt } from "./tmux-exec.js";
+import { loadDesiredOne } from "../sessions/session-desired.js";
 
 const execFileAsync = promisify(execFile);
 const ID_RE = SESSION_ID_RE;   // 세션 id 형식의 단일 진실원천 — 게이트웨이가 헤더로 받은 세션도 같은 자로 잰다(#852)
@@ -204,6 +205,11 @@ export async function provisionMemberOs(memberId: string, opts?: { includeContro
 
 // 하네스별 자격증명 파일(홈 기준 상대경로) — 로그인 여부 판정·로그아웃 대상의 단일 출처.
 //  ⚠ 값은 이 상수에서만 온다(사용자 입력이 셸 문자열에 들어가지 않는다).
+// ⚠ #1695 판정: 세션 카탈로그에 opencode·antigravity 를 넣었지만 **이 표에는 넣지 않는다.**
+//  여기 실리면 [연결된 AI 계정]이 '그 파일이 있나'로 로그인 여부를 말하는데, agy 는 자격을 keyring 에 두고
+//  (~/.gemini 트리에 자격 파일이 없다 — 실측) opencode 는 제공자마다 자리가 갈린다. 없는 파일을 기준으로 하면
+//  로그인돼 있는 사람에게 '연결 안 됨'이라고 **거짓말**을 한다(맥 claude 키체인에서 이미 겪은 실패 — 아래 참조).
+//  표에 없으면 aiAccountStatus 가 그 하네스를 건너뛴다 = 목록에 안 나온다(정직한 침묵). 자격 위치를 실측하면 그때 연다.
 const HARNESS_CRED: Record<string, string> = {
   claude: ".claude/.credentials.json",
   codex: ".codex/auth.json",
@@ -386,7 +392,9 @@ export async function ensureMemberOsUser(user: LivelyUser): Promise<string | nul
 //  누가 브라우징하든(초대 멤버 포함) op 는 owner osUser 로 수행해야 소유·권한이 맞다. off/미프로비저닝=null(게이트웨이 직접).
 export async function sessionOsUser(id: string): Promise<string | null> {
   if (!ID_RE.test(id)) return null;
-  const owner = await getOpt(id, "@box_owner");
+  // desired(DB) 우선 · tmux 폴백 — ownerMeta 와 같은 규율(파일 op 의 uid 도 소유자 판정이다).
+  const db = await loadDesiredOne(id);
+  const owner = db?.owner || (await getOpt(id, "@box_owner"));
   if (!owner) return null;
   return resolveMemberOsUser(slug(owner));
 }

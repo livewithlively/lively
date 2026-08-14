@@ -19,6 +19,10 @@ const KNOWN_HARNESSES: ReadonlyArray<readonly [pattern: string, id: string]> = [
   ["claudecode", "claude-code"],
   ["claude", "claude-code"],
   ["codex", "codex"],
+  // #1689 — antigravity(agy)·opencode 보강(둘 다 stdio 프록시가 x-lively-harness 로 stamp 한다).
+  ["antigravity", "antigravity"],
+  ["agy", "antigravity"],
+  ["opencode", "opencode"],
   ["cursor", "cursor"],
   ["cline", "cline"],
   ["windsurf", "windsurf"],

@@ -28,7 +28,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { spawnSync, spawn } from "node:child_process";
 import { ReadStream, WriteStream } from "node:tty";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import crypto from "node:crypto";
 
 // ── 0. 상수 · 경로 ──────────────────────────────────────────────────────────
@@ -49,6 +49,9 @@ const CODEX_CFG = join(HOME, ".codex", "config.toml");
 //  이 계산은 플랫폼 무관이다(#1519 실측). 설치기·제거기와 같은 계산이어야 진단이 실제 배선을 본다.
 const OPENCODE_DIR = join(process.env.LIVELY_HOME ? join(HOME, ".config") : (process.env.XDG_CONFIG_HOME || join(HOME, ".config")), "opencode"); // LIVELY_HOME 격리 우선(설치기와 동일)
 const OPENCODE_PLUGIN = join(OPENCODE_DIR, "plugin", "lively.js");
+// antigravity(#1689) — `~/.gemini` 고정($HOME 만 봄, env 오버라이드 없음). 배선 신호는 우리 플러그인 디렉터리다
+//  (plugin-dir 배선 — 그 안의 hooks.json·mcp_config.json 은 전부 우리 파일이라 '우리 것이 있나' 신호가 강하다).
+const AGY_PLUGIN_DIR = join(HOME, ".gemini", "config", "plugins", "lively");
 // 자동 업데이터(self-update.mjs)와 **같은 필수 훅 목록**을 쓴다 — 손상 번들 판정 기준이 갈리면 안 된다.
 //  self-update.mjs 자신은 목록에 없다(구 게이트웨이로 롤백 시 '손상'으로 오판해 영구 고착되는 걸 막기 위함 — #858).
 const REQUIRED_HOOKS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs"];
@@ -463,7 +466,28 @@ function detectHarnesses() {
   // opencode: 배선의 신호는 **어댑터 파일**이다(설정 파일은 opencode 가 빈 것도 만들어서 신호가 약하다).
   if (has("opencode")) out.add("opencode");
   try { if (existsSync(OPENCODE_PLUGIN)) out.add("opencode"); } catch { /* */ }
+  // antigravity: 바이너리는 agy 다(#1689 — 하네스 id 로 command -v 하면 영영 미감지). 배선 신호는 플러그인 디렉터리.
+  if (has("agy")) out.add("antigravity");
+  try { if (existsSync(AGY_PLUGIN_DIR)) out.add("antigravity"); } catch { /* */ }
   return [...out];
+}
+
+// 다운받은 **번들의 레지스트리**로 하네스 목록을 재계산해 보탠다(#1689 실측 UX 갭).
+//  왜: update 의 배선 대상 목록은 "지금 실행 중인 CLI" 의 detectHarnesses() 가 계산하는데, 그 CLI 가 새 하네스를
+//  모르는 구버전이면(새 하네스 지원이 이번 번들에서 처음 들어온 경우가 정확히 그렇다) 새 키트를 깔면서도 그
+//  하네스 배선만 조용히 빠진다 → 멤버가 update 를 **두 번** 돌려야 했다. 번들 레지스트리는 항상 최신이므로
+//  그 기준으로 "PATH 에 바이너리가 있는데 목록에 없는 하네스"를 추가한다. 실패는 전부 무해(구 번들엔
+//  레지스트리가 없다 — 종전 목록 그대로).
+export async function augmentHarnessesFromBundle(root, harnesses) {
+  try {
+    const reg = await import(pathToFileURL(join(root, ".claude", "hooks", "harness-registry.mjs")).href); // ⚠ pathToFileURL — 윈도우 드라이브문자
+    const added = [];
+    for (const id of reg.HARNESS_IDS || []) {
+      const bin = reg.HARNESS?.[id]?.bin;
+      if (typeof bin === "string" && bin && !harnesses.includes(id) && has(bin)) { harnesses.push(id); added.push(id); }
+    }
+    return added;
+  } catch { return []; } // 레지스트리 없음(구 번들)·import 실패 — 종전 목록 유지
 }
 
 // ── 6. 번들 — 다운로드 · 검증 ───────────────────────────────────────────────
@@ -680,6 +704,9 @@ async function syncKit({ label, offerHarness }) {
   try {
     const version = verifyBundle(root);
     ok(`키트 검증 완료${version ? "  " + dim("(" + version + ")") : ""}`);
+    // 번들 레지스트리 기준으로 하네스 목록 재계산 — 구 CLI 로 돌려도 새 하네스 배선이 빠지지 않게(#1689).
+    const late = await augmentHarnessesFromBundle(root, harnesses);
+    if (late.length) say(dim(`  (이 번들이 새로 지원하는 하네스 감지: ${late.join(", ")} — 함께 배선합니다)`));
     step("kit-download", "키트 내려받는 중", "done", 1);
 
     say(dim("  [2/3] 설치 중…"));
@@ -994,6 +1021,9 @@ async function gatherStatus() {
       //  mcp 초기값이 null 인 것도 codex 와 같은 이유다: 설정을 **못 읽었을 때**(주석 든 .jsonc 등)를
       //  '미등록'으로 단정하면 "lively update" 헛다리 조치를 부른다. 모르면 물음표로 적는다.
       opencode: { installed: has("opencode"), wired: false, mcp: null, mcpConnected: null, configOk: null, transport: null, assets: null },
+      // antigravity(#1689) — 설치 판정은 **agy** 바이너리다. configOk = 우리 플러그인 JSON(hooks/mcp_config)이
+      //  파싱되는가(깨진 파일은 fail-open 이라 세션은 살지만 그 기능만 조용히 빠진다 — 그걸 여기서 드러낸다).
+      antigravity: { installed: has("agy"), wired: false, mcp: null, mcpConnected: null, configOk: null, transport: null, assets: null },
     },
     hooks: { installed: 0, expected: REQUIRED_HOOKS.length },
     // 노드 축(#1541 T4) — 데스크톱 앱이 폴링한다. 부트스트랩 직후엔 cmd-node.mjs 가 아직 없을 수 있으므로
@@ -1077,6 +1107,29 @@ async function gatherStatus() {
   //  실측: 이 호출 때문에 `lively status` 를 돌리는 테스트들이 XDG 경로를 오염시켰다.
   //  → 등록 여부는 위에서 **설정 파일을 읽어** 확정하고, 연결은 `null`(모름)로 둔다. 모르는 걸 아는 척하지
   //   않는 게 이 화면의 규칙이고(codex 의 enabled 를 null 로 둔 것과 같은 이유), 부작용 없는 진단이 우선이다.
+  // antigravity — 배선·MCP 전부 **우리 플러그인 파일**에서 읽는다(파일 읽기라 비용 0 · 부작용 0).
+  //  연결 확인은 하지 않는다: agy 를 띄우는 프로브는 설정 트리를 만들고(진단이 상태를 바꿈, #1689 실측)
+  //  모델 세션 없이는 MCP 를 안 붙인다 → null(모름)로 둔다.
+  {
+    const ag = st.harness.antigravity;
+    // 훅 배선은 글로벌 hooks.json 의 "lively" 키다(#1689 — 플러그인 훅은 CLI 가 안 읽는다).
+    const hooksJson = join(HOME, ".gemini", "config", "hooks.json");
+    const mcpJson = join(AGY_PLUGIN_DIR, "mcp_config.json");
+    try { ag.wired = !!(JSON.parse(readFileSync(hooksJson, "utf8")) || {}).lively; } catch { /* 없음/파싱실패 → 미배선 */ }
+    if (!existsSync(AGY_PLUGIN_DIR)) { ag.mcp = false; }   // 플러그인 자체가 없다 = 배선한 적 없다(확정)
+    else {
+      let ok = true;
+      try { if (existsSync(hooksJson)) JSON.parse(readFileSync(hooksJson, "utf8")); } catch { ok = false; }
+      try {
+        if (existsSync(mcpJson)) {
+          const mc = JSON.parse(readFileSync(mcpJson, "utf8"));
+          ag.mcp = !!(mc && mc.mcpServers && mc.mcpServers.lively);
+          ag.transport = ag.mcp ? "stdio" : null;
+        } else ag.mcp = false;
+      } catch { ok = false; ag.mcp = null; }               // 파일은 있는데 못 읽음 — 모름으로 둔다
+      ag.configOk = ok;
+    }
+  }
   if (!gw) { st.gateway.error = "게이트웨이 미설정"; return st; }
   if (!tok) { st.gateway.error = "로그인 필요"; return st; }
   try {
@@ -1097,7 +1150,7 @@ async function gatherStatus() {
     //   (자산 sync 는 실패해도 조용하다 — 세션을 막지 않는 게 설계라서. 그래서 '조용한 실패'가 기본값이다.)
     //  로컬 0 / 서버 N 이면 그 머신에서 materialize 가 한 번도 성공한 적 없다는 뜻이고, 그게 곧 신고 전에 잡을 신호다.
     const manifest = (() => { try { return JSON.parse(readFileSync(join(LIVELY, "managed-harness-assets.json"), "utf8")) || {}; } catch { return {}; } })();
-    for (const h of ["claude", "codex", "opencode"]) {
+    for (const h of ["claude", "codex", "opencode", "antigravity"]) {
       if (!st.harness[h].installed) continue;               // 안 깔린 하네스는 물어볼 것도 없다
       try {
         const r = await api(`/api/ui/org/runner/assets?harness=${h}`, { timeoutMs: 8000 });
@@ -1244,6 +1297,15 @@ async function cmdStatus(opts) {
       : "";
     say(`  opencode      ${mark(oc.installed)} 설치   ${ocWired}${ocMcp}${connOf(oc)}${assetsOf(oc)}`);
   }
+  // antigravity — 같은 형태(#1689). 배선 신호는 플러그인 hooks.json, configOk 는 우리 플러그인 JSON 파싱.
+  const ag = st.harness.antigravity;
+  if (ag.installed || ag.wired) {
+    const agWired = ag.configOk === false ? `${red("✘")} 배선 ${red("(플러그인 JSON 이 깨짐 — 그 기능만 조용히 빠집니다)")}` : `${mark(ag.wired)} 배선`;
+    const agMcp = ag.configOk !== false
+      ? (ag.mcp === null ? `   ${dim("? MCP 등록")}` : `   ${mark(ag.mcp)} MCP 등록${ag.mcp && ag.transport ? dim(`(${ag.transport})`) : ""}`)
+      : "";
+    say(`  antigravity   ${mark(ag.installed)} 설치   ${agWired}${agMcp}${connOf(ag)}${assetsOf(ag)}`);
+  }
   if (st.kit.autoUpdate !== null) say(`  자동 업데이트 ${st.kit.autoUpdate ? green("켜짐") : yellow("꺼짐")}`);
   // 노드(#1541 T4) — **등록됐을 때만** 뜻이 있다. 실행 여부를 못 재면 `?` 로 적는다(모르는 걸 '정지' 로 쓰면 거짓말).
   if (st.node?.registered) {
@@ -1256,10 +1318,11 @@ async function cmdStatus(opts) {
   else if (st.kit.remote && !st.kit.current) say(dim("  → ") + bold("lively update") + dim(" 로 최신화할 수 있습니다."));
   else if (st.harness.codex.configOk === false) say(dim("  → codex 가 config.toml 을 못 읽습니다(그 파일의 MCP·훅이 전부 무효): ") + bold("lively update"));
   else if (st.harness.opencode.configOk === false) say(dim("  → opencode 가 opencode.json 을 못 읽습니다(그 파일의 MCP·플러그인이 전부 무효): ") + bold("lively update"));
+  else if (st.harness.antigravity.configOk === false) say(dim("  → antigravity 플러그인 JSON 이 깨졌습니다(그 파일의 훅/MCP 만 조용히 빠짐): ") + bold("lively update"));
   else if (st.harness.claude.installed && !st.harness.claude.mcp) say(dim("  → MCP 등록이 안 돼 있습니다: ") + bold("lively update"));
   else {
     // 자산은 설치기가 아니라 **세션 시작 훅**이 내린다 — 업데이트만 하고 세션을 안 켜면 0 인 채로 남는다.
-    const short = ["claude", "codex", "opencode"].filter((h) => st.harness[h].assets && st.harness[h].assets.local < st.harness[h].assets.server);
+    const short = ["claude", "codex", "opencode", "antigravity"].filter((h) => st.harness[h].assets && st.harness[h].assets.local < st.harness[h].assets.server);
     if (short.length) say(dim("  → 조직 자산이 덜 깔렸습니다(") + short.join("·") + dim("). 새 세션을 한 번 켜면 내려옵니다 — 그래도 그대로면 ") + bold("lively doctor"));
     // ⚠ 진단이 거짓말하지 않게 — opencode 는 `~/.claude/skills` 를 **자동으로도** 읽는다(#1519 결정: 스킬 격리 안 함).
     //  위 수치는 우리가 심은 매니페스트만 센 것이라, opencode 세션에서 실제로 보이는 스킬은 이보다 많을 수 있다.
@@ -1340,9 +1403,23 @@ async function cmdDoctor(opts) {
       }
     }
   }
+  // antigravity(#1689) — 배선(플러그인 hooks.json)·config 유효(우리 플러그인 JSON 파싱)·MCP 등록(mcp_config.json).
+  if (st.harness.antigravity.installed || st.harness.antigravity.wired) {
+    chk("Antigravity 배선", st.harness.antigravity.wired,
+      st.harness.antigravity.wired ? "hooks.json 에 lively 훅 있음" : "훅 미배선 — 훅이 하나도 안 돕니다", "lively install");
+    if (st.harness.antigravity.configOk !== null) {
+      chk("Antigravity config 유효", st.harness.antigravity.configOk,
+        st.harness.antigravity.configOk ? "플러그인 JSON 읽힘" : "플러그인 JSON 이 깨졌습니다 — 깨진 파일의 훅/MCP 만 조용히 빠집니다(fail-open)",
+        "lively update");
+    }
+    if (st.harness.antigravity.configOk !== false && st.harness.antigravity.mcp !== null) {
+      chk("Antigravity MCP 등록", st.harness.antigravity.mcp,
+        st.harness.antigravity.mcp ? `lively 등록됨${st.harness.antigravity.transport ? ` (${st.harness.antigravity.transport})` : ""}` : "미등록", "lively update");
+    }
+  }
   // 조직 자산이 이 머신에 실제로 깔렸나(#1475) — 서버가 주는 수 ↔ 우리가 심은 수. 어긋나면 신고 전에 여기서 드러난다.
   //  ⚠ 자산은 설치기가 아니라 **세션 시작 훅**이 내린다 → 업데이트 직후엔 정상적으로 어긋날 수 있다(해결 문구에 그 사실을 담는다).
-  for (const h of ["claude", "codex"]) {
+  for (const h of ["claude", "codex", "opencode", "antigravity"]) {   // #1689 — opencode 도 종전 누락분 보강
     const a = st.harness[h].assets;
     if (!a) continue;
     chk(`조직 자산(${h})`, a.local >= a.server, `${a.local}/${a.server} 설치됨`,
@@ -1464,7 +1541,7 @@ function modeEnv(mode) {
   return {};
 }
 
-// `lively run [--mode M | --readonly | --incognito] [<프로젝트#> [work.mjs 인자…] | [--harness claude|codex] [하네스 인자…]]`
+// `lively run [--mode M | --readonly | --incognito] [<프로젝트#> [work.mjs 인자…] | [--harness claude|codex|opencode|antigravity] [하네스 인자…]]`
 //  · 프로젝트# 있으면 work.mjs(공유폴더 pull · 레포 clone/worktree · 하네스 실행) — 종전 표면.
 //  · 없으면 하네스를 **바로** 실행한다(프로젝트 없이 — 사용자 요청). 기본 claude, --harness 로 변경.
 //  두 경로 모두 모드 env 를 세팅 → 그 세션만 읽기전용/인코그니토가 헤더로 게이트웨이에 전달된다(per-session).
@@ -1688,7 +1765,7 @@ ${bold("설치 · 유지보수")}
   install                키트 설치 / 재설치 (멱등)
   update                 지금 최신으로 맞춤 ${dim("(MCP 재등록 포함 — 자동 업데이트가 못 하는 축)")}
       --check            확인만 하고 설치하지 않음
-  uninstall              제거 ${dim("--dry-run  --purge  --yes  --harness claude|codex|all")}
+  uninstall              제거 ${dim("--dry-run  --purge  --yes  --harness claude|codex|opencode|antigravity|all")}
 
 ${bold("확인")}
   status                 설치 · 버전 · 하네스 · MCP 상태  ${dim("--json")}

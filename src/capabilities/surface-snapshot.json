@@ -1416,7 +1416,7 @@
   "rest": [
    "POST /api/ui/org/hook"
   ],
-  "input_hash": "394f2f91a596c49d"
+  "input_hash": "3290957bf838ff3f"
  },
  {
   "name": "org_hook_remove",
@@ -1479,6 +1479,26 @@
   "input_hash": "01ca33da965f9838"
  },
  {
+  "name": "org_http_tool_presets",
+  "scope": "runtime",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/http-tool-presets"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_http_tool_preset_apply",
+  "scope": "runtime",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/http-tool-presets/apply"
+  ],
+  "input_hash": "2dcad916c979d382"
+ },
+ {
   "name": "org_tool_remove",
   "scope": "runtime",
   "mcp": true,
@@ -1487,6 +1507,36 @@
    "POST /api/ui/org/tool/remove"
   ],
   "input_hash": "28bad6be76e14faa"
+ },
+ {
+  "name": "org_canary_status",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/canary"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_canary_run",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/canary/run"
+  ],
+  "input_hash": "4e46462cece225b5"
+ },
+ {
+  "name": "org_canary_probes",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/org/canary/probes"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
  },
  {
   "name": "org_harness_assets",
@@ -1506,7 +1556,7 @@
   "rest": [
    "POST /api/ui/org/harness-asset"
   ],
-  "input_hash": "249bcfb54fd37a9e"
+  "input_hash": "30cad04e51649f01"
  },
  {
   "name": "org_harness_asset_remove",

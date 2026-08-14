@@ -253,8 +253,15 @@ function openTermCreateForm(cfg, view, onCreated?) {
     }
     autoWrap.style.display = h.hasAutoApprove ? '' : 'none';
     //  기록 범위 축이 꺼져 있으면 아예 안 보인다(#1291) — 고른 값이 강제되지 않는 컨트롤을 남기지 않는다.
-    writeVisField.style.display = (h.key === 'claude' && visAxisOn('session_cap')) ? '' : 'none'; // 모드와 같은 이유(MCP 헤더 레일이 claude 만)
-    modeField.style.display = h.key === 'claude' ? '' : 'none'; // 라이블리 모드는 claude-code 만 동작(codex 정적 헤더·shell 무 MCP) — 안 되는 하네스엔 안 보여 오해 방지(#1007+)
+    // #1711 — 판정 기준은 '**라이블리 MCP 가 붙는 하네스인가**'다(셸만 제외). 종전엔 `=== 'claude'` 였고 근거는
+    //  "codex 는 정적 헤더라 세션 env 를 못 싣는다" 였는데, 그 사이 네 하네스가 전부 **stdio 프록시(`lively mcp`)**
+    //  로 붙게 됐다 — 프록시는 자기가 상속한 env(LIVELY_MODE·LIVELY_SESSION_ID)를 읽어 상류 헤더에 붙이므로
+    //  모드·기록범위가 codex·opencode·antigravity 에서도 그대로 선다(설치기 주석: "codex 는 per-session 실행 모드
+    //  미지원" 한계가 프록시로 풀렸다). 낡은 근거로 컨트롤을 숨기면 되는 기능을 없는 것처럼 보이게 한다.
+    const wired = h.key !== 'shell';   // 셸 세션엔 MCP 자체가 없다(모드를 강제할 레일이 없음)
+    //  기록 범위 축이 꺼져 있으면 아예 안 보인다(#1291) — 고른 값이 강제되지 않는 컨트롤을 남기지 않는다.
+    writeVisField.style.display = (wired && visAxisOn('session_cap')) ? '' : 'none';
+    modeField.style.display = wired ? '' : 'none';
     presetSummary();
   }
   harnessSel.addEventListener('change', renderFlags);

@@ -11,6 +11,7 @@ import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { logger } from "../log.js";
 import { ROOTS, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, validateInvites, type SessionInfo, type CreateInput, normalizeCap } from "./terminal-sessions.js";
+import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited } from "../sessions/session-state.js"; // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
 import { listManagedSessions } from "../sessions/managed-sessions.js"; // #1059 F — 관리탭 세션목록에서 managed 표시(회수 제외)
 import { sessionPrompts, searchPrompts, searchPromptsHybrid, transcriptExists } from "./terminal-transcript.js";
@@ -115,7 +116,10 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
     res.setHeader("Cache-Control", "no-store");
     res.json({
       roots: ROOTS.map((r) => ({ key: r.key, label: r.label })),
-      harnesses: HARNESSES.map((h) => ({ key: h.key, label: h.label, hasAutoApprove: !!h.autoApproveFlag, flags: h.flags })),
+      // bin·autoApproveFlag 를 함께 준다(#1695) — 프로젝트 화면의 '내 컴퓨터에서 작업'이 자동승인 설명에 **그 하네스의
+      //  실제 플래그**를 적기 위해서다. 종전엔 웹이 'claude --dangerously-skip-permissions / codex --yolo' 를 문장에
+      //  하드코딩해, 하네스가 늘 때마다 그 문장이 조용히 틀려졌다. 둘 다 우리 상수라 노출에 위험이 없다.
+      harnesses: HARNESSES.map((h) => ({ key: h.key, label: h.label, bin: h.bin, hasAutoApprove: !!h.autoApproveFlag, autoApproveFlag: h.autoApproveFlag ?? "", flags: h.flags })),
       members,
       // 멀티프로필(#346): 이 세션이 '내 계정'(프로필 로그인됨)으로 뜰지, '공유 계정'으로 폴백할지 UI 표시.(레거시 폴백)
       profile: await profileStatus(userOf(req)),
@@ -295,7 +299,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       res.setHeader("Cache-Control", "no-store"); res.json(out); return;
     }
     if (!(await canAttach(req.params.id, uid))) throw new HttpError(403, "세션에 접근할 수 없습니다");
-    const out = await sessionPrompts(await sessionDir(req.params.id));
+    const out = await sessionPrompts(await resolveSessionDir(req.params.id, () => sessionDir(req.params.id)));
     res.setHeader("Cache-Control", "no-store");
     res.json(out);
   }));
@@ -465,10 +469,17 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     //   홈이 따로라 남의 홈 대화를 집을 수 있고, 그러면 그 세션은 못 읽어 claude 가 "No conversation found" 로
     //   즉시 죽는다(마이크 실측 사고) ② 소유자로 스코프해도 **같은 폴더의 다른 대화**를 '최신'이라며 집을 수 있다
     //   — 그럴싸하게 틀리는 쪽이 picker 한 번 고르는 것보다 나쁘다(상민님 판단). 추측하지 않는다.
-    //  claude 하네스에만 해당한다(셸·코덱스는 --resume 이 무의미).
-    const resumeUuid = st.harness === "claude" && st.claude_session_id
-      && await transcriptExists(st.dir || "", st.claude_session_id, st.owner).catch(() => false)
-      ? st.claude_session_id : null;
+    //  ⚠ #1711 — 종전엔 여기에 `st.harness === "claude"` 가 걸려 있어 **claude 세션만** 정밀 복원됐다. 그래서
+    //   antigravity·codex·opencode 세션은 '이어서 열기'를 해도 늘 새 대화로 열렸다(상민님 신고). 매핑 컬럼
+    //   claude_session_id 는 이름만 claude 일 뿐 값은 **그 하네스의 대화 id** 다 — work-flag 훅이 하네스와 무관하게
+    //   보고하고(어댑터가 conversationId·sessionID 를 session_id 로 넘긴다), 이어받기 argv 는 카탈로그가 만든다.
+    //  ⚠ 대화 존재 확인(transcriptExists)은 claude 의 `~/.claude/projects` 규약 전용이라 claude 에서만 한다.
+    //   다른 하네스는 저장 위치 규약을 실측하기 전까지 검사 없이 시도한다 — 없는 id 로 시작해도 #1516 런처가
+    //   세션을 살려 두고 하네스의 원문 에러를 화면에 남기므로, 종전의 '복원 루프'(즉사→재복원)는 구조적으로 끊겨 있다.
+    const mappedId = st.claude_session_id || null;
+    const resumeUuid = mappedId
+      && (st.harness !== "claude" || await transcriptExists(st.dir || "", mappedId, st.owner).catch(() => false))
+      ? mappedId : null;
     const precise = !!resumeUuid;
     const session = await createSession(owner, {
       label: st.label || id, rootKey: st.root_key || "shared", subpath: st.subpath || "",

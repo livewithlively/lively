@@ -40,6 +40,16 @@ export interface StageJobSpec {
   create?: { id: string; label: string; action: string; params?: Record<string, unknown>; interval_sec: number; note: string };
   /** 잡이 하나도 없을 때 — 왜 이게 문제인지 한 줄. */
   missingLine: string;
+  /**
+   * 찾은 잡이 **지금 이 조직에서 돌 수 없는** 상태인가 — 돌 수 없으면 그 이유, 아니면 null.
+   *
+   * ⚠ 왜 필요한가: 잡이 '있다'와 '돌 수 있다'는 다르다. 신규 워크스페이스에는 구 세션주입판
+   *  (classify_knowledge·distill_sources)이 **꺼진 채 시드**돼 있는데, 그건 params.session 이 필수라
+   *  상시 세션을 먼저 등록하지 않으면 켜는 순간 매 틱 error 를 낸다("타깃 상시 세션 미설정").
+   *  이걸 모르면 카드는 "꺼져 있어 안 돕니다 [켜기]"라는 **못 지킬 약속**을 하게 된다 — 눌러도 안 돌고,
+   *  사람은 자기가 뭘 잘못했는지 모른다. 그래서 그런 잡엔 '켜기' 대신 **현행 경로로 전환**을 준다.
+   */
+  unrunnable?: (job: any) => string | null;
   /** 잡을 이 화면이 만들지 않는 단계의 안내(수집: 수집기를 켜면 자동). */
   managedElsewhere?: string;
   /**
@@ -140,6 +150,28 @@ export async function stageJobCard(spec: StageJobSpec, rerender: () => void): Pr
     const others = found.length - 1;
     if (others > 0) card.append(el('p', { class: 'admin-hint', text: `자동 수집 잡 ${found.length}개 중 켜진 것 ${found.filter((j) => j.enabled).length}개 — 위 목록의 수집기와 1:1 입니다.` }));
     if (spec.managedElsewhere) card.append(el('p', { class: 'admin-hint', text: spec.managedElsewhere }));
+    return card;
+  }
+
+  // 돌 수 없는 잡(구 세션주입판 등) — '켜기'를 주면 안 된다. 눌러도 매 틱 error 를 낼 뿐이다.
+  //  대신 현행 경로(create 명세 = 헤드리스판)로 **전환**을 준다. 구 잡은 꺼진 채 남겨 둔다 —
+  //  나중에 상시 세션을 붙여 쓰고 싶을 수 있고, 남의 설정을 대신 지우지 않는다.
+  const blocked = spec.unrunnable?.(job) ?? null;
+  if (blocked && spec.create && spec.create.id !== job.id) {
+    const c = spec.create;
+    const sw = el('button', { class: 'btn btn-primary btn-sm', text: `${spec.stage} 자동 실행 켜기 (지금 방식으로)` });
+    sw.addEventListener('click', async () => {
+      (sw as HTMLButtonElement).disabled = true;
+      try {
+        await patch(c.id, { label: c.label, action: c.action, params: c.params ?? {}, interval_sec: c.interval_sec, enabled: true, note: c.note });
+        toast(`${spec.stage} 자동 실행을 켰습니다`); rerender();
+      } catch (e) { toast('실패 — ' + (e as Error).message, true); (sw as HTMLButtonElement).disabled = false; }
+    });
+    card.append(
+      el('p', { class: 'admin-hint' }, el('b', { text: blocked })),
+      el('div', { style: 'margin-top:8px' }, sw),
+      el('p', { class: 'admin-hint', style: 'margin-top:8px',
+        text: `위 ${job.id} 는 꺼진 채로 둡니다 — 나중에 상시 세션을 붙여 쓰고 싶으면 그때 켜세요.` }));
     return card;
   }
 

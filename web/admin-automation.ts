@@ -257,14 +257,44 @@ function openManagedSessionForm(m, reload) {
   const labelInp = el('input', { type: 'text', style: psInputStyle, value: (m && m.label) || '', placeholder: '도메인 분류 배치 LLM' });
   const account = memberCombo({ value: (m && m.account) || '', placeholder: '구성원 id 선택/검색 (예: daon)' });
   const wsInp = el('input', { type: 'text', style: psInputStyle, value: (m && m.workspace_subpath) || '', placeholder: '비우면 managed/<id>' });
+  // 하네스·플래그는 **서버 카탈로그**(/api/ui/terminal/config)에서 온다(#1711). 종전엔 ['claude','codex','shell'] 과
+  //  claude 의 모델·effort 목록이 이 폼에 박혀 있어, 상시 세션을 opencode·antigravity 로 띄울 수 없었고(선택지 부재)
+  //  하네스가 늘 때마다 이 폼이 조용히 낡았다. 카탈로그를 못 읽으면 아래 폴백으로 종전 동작을 유지한다.
   const harnessSel = el('select', { style: psInputStyle });
-  for (const h of ['claude', 'codex', 'shell']) harnessSel.append(el('option', { value: h, text: h, ...((m && m.harness === h) ? { selected: true } : {}) }));
-  // 모델·effort = claude 하네스 플래그(--model/--effort) → flags JSONB. 세션 스폰 시 claude argv 로 적용.
   const mflags = (m && m.flags) || {};
-  const modelSel = el('select', { style: psInputStyle });
-  for (const v of ['', 'opus', 'sonnet', 'haiku']) modelSel.append(el('option', { value: v, text: v || '(기본)', ...((mflags['--model'] === v) ? { selected: true } : {}) }));
-  const effortSel = el('select', { style: psInputStyle });
-  for (const v of ['', 'low', 'medium', 'high', 'xhigh', 'max']) effortSel.append(el('option', { value: v, text: v || '(기본)', ...((mflags['--effort'] === v) ? { selected: true } : {}) }));
+  const flagsWrap = el('div', {});   // 선택한 하네스의 플래그(모델·effort…)를 여기에 그린다
+  let hcat: any[] = [{ key: 'claude', label: 'claude', flags: [
+    { name: '--model', label: '모델', choices: ['', 'opus', 'sonnet', 'haiku'], type: 'select' },
+    { name: '--effort', label: 'effort', choices: ['', 'low', 'medium', 'high', 'xhigh', 'max'], type: 'select' },
+  ] }, { key: 'codex', label: 'codex', flags: [] }, { key: 'shell', label: 'shell', flags: [] }];
+  const flagCtrls: Record<string, any> = {};
+  const autoFlagText = el('span', { text: ' 권한 확인 건너뛰기' });   // 하네스별 실제 플래그로 갱신된다
+  const renderHarnessFlags = () => {
+    const h = hcat.find((x) => x.key === harnessSel.value) || { flags: [] };
+    autoFlagText.textContent = h.autoApproveFlag ? ' ' + h.autoApproveFlag : (h.hasAutoApprove === false ? ' 이 하네스는 자동 승인 플래그가 없습니다.' : ' 권한 확인 건너뛰기');
+    for (const k of Object.keys(flagCtrls)) delete flagCtrls[k];
+    flagsWrap.replaceChildren(...(h.flags || []).filter((f) => f.type === 'select').map((f) => {
+      const sel = el('select', { style: psInputStyle });
+      for (const v of (f.choices || [''])) sel.append(el('option', { value: v, text: v || '(기본)', ...((mflags[f.name] === v) ? { selected: true } : {}) }));
+      flagCtrls[f.name] = sel;
+      return psBlock(`${f.label} (${h.key})`, f.desc || '비우면 하네스 기본값.', sel);
+    }));
+  };
+  const fillHarness = () => {
+    const want = harnessSel.value || (m && m.harness) || 'claude';
+    harnessSel.replaceChildren(...hcat.map((h) => el('option', { value: h.key, text: h.label || h.key })));
+    if (hcat.some((h) => h.key === want)) harnessSel.value = want;
+    renderHarnessFlags();
+  };
+  harnessSel.addEventListener('change', renderHarnessFlags);
+  fillHarness();
+  (async () => {
+    try {
+      const cfg = await api('/api/ui/terminal/config');
+      const list = ((cfg && cfg.harnesses) || []).filter((h) => h && h.key);
+      if (list.length) { hcat = list; fillHarness(); }
+    } catch (_) { /* graceful — 폴백 목록 유지 */ }
+  })();
   const autoChk = el('input', { type: 'checkbox', ...((m ? m.auto_approve : true) ? { checked: true } : {}) });
   const enabledChk = el('input', { type: 'checkbox', ...((m ? m.enabled : true) ? { checked: true } : {}) });
   const saveBtn = el('button', { class: 'btn btn-primary btn-sm', text: isNew ? '상시 세션 추가' : '저장' });
@@ -274,9 +304,8 @@ function openManagedSessionForm(m, reload) {
     psBlock('라이블리 계정/프로필', '이 세션을 띄울 클로드 로그인(프로필=구성원). 목록에서 고르거나 입력. 각 프로필은 provision + 웹터미널 /login 후 사용.', account.el),
     psBlock('격리 워크스페이스(하위경로)', '공유폴더 아래 이 세션 전용 작업폴더. 비우면 managed/<id>.', wsInp),
     psBlock('하네스', '', harnessSel),
-    psBlock('모델 (claude)', '이 세션의 claude 모델. 판단 무거운 작업(부트스트랩·분류)은 opus 권장. 비우면 기본.', modelSel),
-    psBlock('effort (claude)', '추론 강도(low~max). 무거운 판단은 high+ 권장. 비우면 기본.', effortSel),
-    psBlock('자동 승인', '도구 실행을 묻지 않고 진행(무인 작업에 필요).', el('label', { class: 'inline' }, autoChk, el('span', { text: ' --dangerously-skip-permissions' }))),
+    flagsWrap,
+    psBlock('자동 승인', '도구 실행을 묻지 않고 진행(무인 작업에 필요).', el('label', { class: 'inline' }, autoChk, autoFlagText)),
     psBlock('항상 켬(keep-alive)', '죽으면 재생성.', el('label', { class: 'inline' }, enabledChk, el('span', { text: ' enabled' }))),
     el('div', { class: 'ps-rules-actions' }, saveBtn));
   const back = overlayBox(isNew ? '상시 세션 추가' : '상시 세션 수정 — ' + m.id, form);
@@ -284,15 +313,14 @@ function openManagedSessionForm(m, reload) {
   saveBtn.onclick = async () => {
     const id = idInp.value.trim();
     if (!id) { toast('세션 id 가 필요합니다', true); return; }
+    // #1711 — 전송할 플래그는 **그 하네스가 실제로 받는 것**만(카탈로그 정의에서 그린 컨트롤이 곧 그 목록이다).
+    //  종전엔 claude 일 때만 model/effort 를 보내고 다른 하네스엔 flags 자체를 안 보냈다 — antigravity 처럼
+    //  자기 모델·effort 를 받는 하네스에서 그 설정이 통째로 사라졌다.
     const flags: Record<string, string> = {};
-    if (harnessSel.value === 'claude') { // model/effort 는 claude 플래그 — 다른 하네스엔 flags 미전송(기존 보존)
-      if (modelSel.value) flags['--model'] = modelSel.value;
-      if (effortSel.value) flags['--effort'] = effortSel.value;
-    }
+    for (const [name, ctrl] of Object.entries(flagCtrls)) if (ctrl && ctrl.value) flags[name] = ctrl.value;
     const body = { id, label: labelInp.value.trim() || null, account: account.value() || null,
       workspace_subpath: wsInp.value.trim() || null, harness: harnessSel.value,
-      auto_approve: autoChk.checked, enabled: enabledChk.checked,
-      ...(harnessSel.value === 'claude' ? { flags } : {}) };
+      auto_approve: autoChk.checked, enabled: enabledChk.checked, flags };
     saveBtn.disabled = true;
     try { await api('/api/ui/managed-sessions', { method: 'POST', body: JSON.stringify(body) }); toast(isNew ? '추가했습니다 (켜져 있으면 곧 keep-alive 가 띄웁니다)' : '저장했습니다'); back.remove(); reload(); }
     catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; }
