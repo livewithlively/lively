@@ -858,7 +858,16 @@ const s256 = (verifier) => crypto.createHash("sha256").update(verifier).digest("
 
 // 브라우저 자동 오픈 — best-effort·detached·비블로킹·전 에러 무시(폴 루프를 절대 안 막음, 설계 V2).
 //  darwin `open` · win `cmd /c start "" <url>`(빈 title 필수) · linux `xdg-open`(단 $DISPLAY 있을 때만 — headless no-op).
+//
+// 자동 오픈을 끄는 스위치 — 사람이 안 보는 자리(테스트·CI·원격 셸)에서 남의 화면에 탭을 띄우지 않기 위한 것.
+//  ⚠ 편의 옵션이 아니라 격리다: 이게 없던 동안 `npm test` 한 번이 실행한 사람의 브라우저에 픽스처 URL 탭을
+//   최대 5개 띄웠다(#1717 — device 흐름을 실 프로세스로 태우는 테스트들. 테스트의 PATH 샌드박스는
+//   /usr/bin·System32 를 일부러 남기므로 PATH 로는 못 막고, 여기서 끊는 수밖에 없다).
+//  안 열려도 로그인은 막히지 않는다 — URL·코드는 호출부가 화면에 **먼저** 찍고, 승인은 어느 브라우저에서 해도 된다.
+//  빈 문자열은 '안 켬'으로 본다(테스트가 LIVELY_TOKEN:"" 로 끄는 관례와 같다).
+const NO_BROWSER = !!(process.env.LIVELY_NO_BROWSER || process.env.CI);
 function openBrowser(url) {
+  if (NO_BROWSER) return;
   try {
     let cmd, args;
     if (process.platform === "darwin") { cmd = "open"; args = [url]; }
@@ -937,7 +946,11 @@ async function deviceLogin(gw) {
   say("  아래 주소를 브라우저에서 열어 승인하세요:");
   say("    " + bold(start.verification_uri));
   say("    코드: " + bold(start.user_code));
-  say(dim("  (브라우저가 자동으로 열립니다. 안 열리면 위 주소를 직접 여세요.)"));
+  // 누가 여는지에 따라 안내가 달라진다 — 앱이 몰면 앱이, 터미널이면 CLI 가 연다. 억제 중이면 아무도 안 여니
+  //  "자동으로 열립니다" 는 거짓말이 된다(#1717).
+  say(dim(PROMPTER || !NO_BROWSER
+    ? "  (브라우저가 자동으로 열립니다. 안 열리면 위 주소를 직접 여세요.)"
+    : "  (자동 열기가 꺼져 있습니다 — 위 주소를 직접 여세요.)"));
   // 앱은 코드·주소를 **이벤트로** 받는다(#1541 T1) — 사람용 문구를 파싱하게 두면 문구를 못 고친다.
   //  답을 기다리지 않는 통지형이다: 승인은 브라우저에서 일어나고, CLI 는 아래 폴 루프로 그걸 안다.
   //  ⚠ device_code(비밀)는 싣지 않는다 — 앱이 알 이유가 없고, 새면 그 로그인을 가로챌 수 있다.
@@ -948,7 +961,10 @@ async function deviceLogin(gw) {
       expires_in: Number(start.expires_in) || null, gateway: gw,
     });
   }
-  openBrowser(start.verification_uri_complete || start.verification_uri);
+  // 브라우저는 **한 쪽만** 연다(#1717). 앱이 몰고 있으면(PROMPTER) 위 이벤트를 받은 앱이 shell.openExternal
+  //  로 연다(desktop/main/main.mjs 의 askUser) — 여기서도 열면 같은 URL 탭이 **두 개** 뜬다.
+  //  앱이 몰 때 UX 통제권은 앱 몫이다: 창을 띄우고 어느 브라우저로 보낼지 정하는 건 그쪽이 안다.
+  if (!PROMPTER) openBrowser(start.verification_uri_complete || start.verification_uri);
   say(dim("  · 브라우저에서 승인을 기다리는 중… (이 창은 열어 두세요)"));
   if (EV) EV.step("device-approve", "브라우저에서 승인 대기", "start");
 

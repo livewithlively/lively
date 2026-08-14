@@ -11,10 +11,26 @@ import { mkdtempSync, rmSync, readFileSync, existsSync, copyFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { closedPath } from "../testlib/os-sandbox.mjs";   // 실제 claude·codex 를 PATH 에서 가린다(#1431 관례)
+import { closedPath, writeStubBin, noBrowserEnv, sandboxEnv, WIN } from "../testlib/os-sandbox.mjs";   // 실제 claude·codex 를 PATH 에서 가린다(#1431 관례)
 
 const CLI = join(fileURLToPath(import.meta.url), "..", "lively.mjs");
+// 플러그인 로그인 — CLI 와 **같은 서버 흐름**을 자체완결로 재현하는 스크립트(#1473). D8 에서 '터미널형' 경로의
+//  표본으로 쓴다: PROMPTER 개념이 없어 언제나 자기가 브라우저를 열고, 끄는 수단은 LIVELY_NO_BROWSER 뿐이다.
+const PLUGIN_LOGIN = join(fileURLToPath(import.meta.url), "..", "..", "..", "plugins", "lively", "scripts", "login.mjs");
 const BOX = mkdtempSync(join(tmpdir(), "lively-ev-test-"));
+
+// ── 브라우저 가로채기 — 이 파일은 device-code 로그인을 **실 프로세스로** 여러 번 완주시킨다. CLI 는 승인 URL 을
+//  `open`(darwin)·`xdg-open`(linux) 으로 띄우므로 막지 않으면 **사람의 진짜 브라우저에** 픽스처 URL 탭이 뜬다
+//  (#1717). PATH 만으론 못 막으니(closedPath 가 /usr/bin 을 남긴다 — os-sandbox.mjs noBrowserEnv 주석) 스텁으로
+//  가로채고, 호출 여부까지 **세어서** 아래 D8 이 판정한다. 가로채기가 있어 억제가 깨져도 실 탭은 안 뜬다(이중 방어).
+//  윈도우는 cmd.exe 를 가로채지 않는다(그 자리를 스텁으로 덮으면 다른 시스템 호출까지 먹는다) → D8 은 스킵.
+const BIN = join(BOX, "bin");
+const BROWSER_CMD = process.platform === "darwin" ? "open" : "xdg-open";
+const OPENED = join(BOX, "browser-opened.log");
+if (!WIN) {
+  writeStubBin(BIN, BROWSER_CMD, `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(OPENED)}, process.argv.slice(2).join(" ") + "\\n");`);
+}
+const openedCount = () => (existsSync(OPENED) ? readFileSync(OPENED, "utf8").split("\n").filter((l) => l.trim()).length : 0);
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
 const bad = (n, why) => { fail++; console.error(`FAIL ${n} — ${why}`); };
@@ -42,13 +58,19 @@ const GW = `http://127.0.0.1:${srv.address().port}`;
 /**
  * CLI 1회 실행. answers: prompt 이벤트를 받아 답(value)을 돌려주는 함수(undefined 면 무응답).
  * closeStdinOnPrompt: 답 대신 stdin 을 닫는다(= 앱이 죽은 상황 재현).
+ * allowBrowser: 브라우저 억제를 끈다 — D8 의 **대조군 전용**(스텁 가로채기가 살아 있는지 확인). 평시엔 끄지 않는다.
+ *   ⚠ 안 얹는 것만으론 부족해 **명시적으로 지운다**: 러너가 자식 env 에 LIVELY_NO_BROWSER=1 을 미리 걸고(#1717
+ *   run-tests.mjs), CI 러너엔 CI=1 이 있다. 그대로 상속하면 대조군이 조용히 억제돼 D8-a 가 깨지고,
+ *   그러면 D8-b 의 '0건' 도 근거를 잃는다(실측: 단독 실행은 통과 · `npm test` 경로에서만 exit 1).
  * ⚠ killed 를 함께 돌려준다 — 타임아웃 SIGKILL 로 끝난 걸 '정상 종료'로 읽으면 무한대기 결함을 놓친다.
  */
-function runCli(args, { home, answers, closeStdinOnPrompt = false, timeoutMs = 20000, cliPath = CLI } = {}) {
+function runCli(args, { home, answers, closeStdinOnPrompt = false, timeoutMs = 20000, cliPath = CLI, allowBrowser = false } = {}) {
   return new Promise((resolve) => {
     const p = spawn(process.execPath, [cliPath, ...args], {
       // PATH: 닫힌 PATH — 사람의 로컬 하네스 설치·MCP 설정에 결과와 시간이 의존하지 않게(#1431).
-      env: { ...process.env, PATH: closedPath(join(BOX, "bin")), LIVELY_HOME: home || join(BOX, "h"), LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "", NO_COLOR: "1" },
+      // DISPLAY 는 **일부러 세운다** — linux 의 헤드리스 no-op 에 가려지면 "억제가 먹어서 0건"인지
+      //  "$DISPLAY 가 없어서 0건"인지 구분이 안 돼 D8 이 공허해진다(darwin·win 은 무시하는 값).
+      env: { ...process.env, PATH: closedPath(BIN), LIVELY_HOME: home || join(BOX, "h"), LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "", NO_COLOR: "1", DISPLAY: ":0", ...(allowBrowser ? { LIVELY_NO_BROWSER: "", CI: "" } : noBrowserEnv()) },
       stdio: ["pipe", "pipe", "pipe"],
     });
     let out = "", err = "", buf = "", killed = false;
@@ -78,6 +100,28 @@ function runCli(args, { home, answers, closeStdinOnPrompt = false, timeoutMs = 2
     p.stderr.setEncoding("utf8");
     p.stderr.on("data", (d) => { err += d; });
     p.on("close", (code) => { clearTimeout(timer); resolve({ code, killed, out, err, events, lines: out.split("\n").filter((l) => l.trim()) }); });
+  });
+}
+
+/**
+ * 플러그인 로그인 1회. CLI 와 달리 이벤트·프롬프트가 없어 **터미널형 부작용**을 그대로 낸다.
+ * ⚠ 이 스크립트는 LIVELY_HOME 이 아니라 homedir() 를 본다 — 홈 격리는 sandboxEnv 로 해야 실기기를 안 건드린다.
+ */
+function runPluginLogin(home, { noBrowser }) {
+  return new Promise((resolve) => {
+    const p = spawn(process.execPath, [PLUGIN_LOGIN, GW], {
+      env: {
+        ...process.env, ...sandboxEnv({ home }), PATH: closedPath(BIN), NO_COLOR: "1", DISPLAY: ":0",
+        CLAUDE_PLUGIN_OPTION_GATEWAY_URL: "",
+        ...(noBrowser ? noBrowserEnv() : { LIVELY_NO_BROWSER: "", CI: "" }),   // 대조군은 러너·CI 의 억제를 명시적으로 지운다
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "", err = "";
+    p.stdout.on("data", (d) => { out += d; });
+    p.stderr.on("data", (d) => { err += d; });
+    const timer = setTimeout(() => { try { p.kill("SIGKILL"); } catch { /* */ } }, 20000);
+    p.on("close", (code) => { clearTimeout(timer); resolve({ code, out, err }); });
   });
 }
 
@@ -159,6 +203,44 @@ function runCli(args, { home, answers, closeStdinOnPrompt = false, timeoutMs = 2
   const tokenFile = join(home, ".lively", "token");
   check("C4-통합 ★ 확인 중 앱이 끊기면 토큰을 저장하지 않는다(fail-closed)", !existsSync(tokenFile), "무응답인데 로그인이 저장됐다");
   check("C4-b 그리고 실패로 끝난다(성공으로 위장하지 않는다)", r.code !== 0 && !r.killed, `exit=${r.code} killed=${r.killed}`);
+}
+
+// ── D8. ★ 로그인이 실행한 사람의 브라우저를 열지 않는다(#1717) ──────────────
+// 두 경로를 **따로** 잰다 — 원인이 다르면 처방도 다르고, 한쪽만 보면 다른 쪽이 조용히 열린다.
+//  · 터미널형(플러그인 로그인): 여는 게 정상이다. 끄는 수단은 LIVELY_NO_BROWSER 하나뿐.
+//  · 앱 모드(--json-events): 이벤트를 받은 앱이 shell.openExternal 로 연다(desktop/main/main.mjs 의 askUser)
+//    → **CLI 는 열면 안 된다.** 둘 다 열면 같은 URL 탭이 두 개 뜬다.
+// 터미널형이 대조군을 겸한다: 거기서 실제로 1건이 잡혀야 나머지 '0건'들이 공허하지 않다
+//  (os-sandbox.mjs 머리 주석 ②의 함정 — 가로채기가 조용히 실패하면 아무것도 안 잡히고 전부 통과한다).
+if (WIN) {
+  console.log("skip D8 — 윈도우는 cmd.exe 를 가로채지 않는다(억제·중복회피 코드 자체는 플랫폼 공통이다)");
+} else {
+  approved = false;
+  let base = openedCount();
+  const opened = await runPluginLogin(join(BOX, "plugin-open"), { noBrowser: false });
+  // openBrowser 는 detached·unref 라 프로세스 종료와 스텁의 기록 사이에 레이스가 있다 — 늘 때까지 기다린다.
+  for (let i = 0; i < 60 && openedCount() === base; i++) await new Promise((r) => setTimeout(r, 50));
+  check("D8-a 대조군: 터미널형 경로는 실제로 브라우저를 연다(= 가로채기가 살아 있다)",
+    openedCount() > base, `호출 ${openedCount() - base}건 exit=${opened.code} — 여기서 0 이면 아래 판정은 전부 공허하다`);
+
+  approved = false;
+  base = openedCount();
+  const quiet = await runPluginLogin(join(BOX, "plugin-quiet"), { noBrowser: true });
+  await new Promise((r) => setTimeout(r, 1000));      // 대조군과 같은 여유를 주고도 0 이어야 한다
+  check("D8-b ★ LIVELY_NO_BROWSER 를 켜면 터미널형 경로도 안 연다",
+    openedCount() === base, `호출 ${openedCount() - base}건 exit=${quiet.code}`);
+
+  approved = false;
+  base = openedCount();
+  const home = join(BOX, "app-mode");
+  // ★ 억제를 **꺼고도** 0 이어야 한다 — 여기서 안 여는 이유는 억제가 아니라 '앱이 열기 때문' 이다.
+  const r = await runCli(["login", "--gateway", GW, "--json-events"],
+    { home, answers: (e) => (e.kind === "confirm" ? true : undefined), allowBrowser: true });
+  await new Promise((res) => setTimeout(res, 1000));
+  check("D8-c ★ 앱이 몰 때는 CLI 가 안 연다(앱이 연다 — 둘 다 열면 같은 URL 탭이 두 개)",
+    openedCount() === base, `호출 ${openedCount() - base}건 — main.mjs 의 askUser 와 중복된다`);
+  check("D8-d 안 여는 것과 못 하는 것은 다르다 — 로그인은 그대로 완주한다",
+    r.code === 0 && existsSync(join(home, ".lively", "token")), `exit=${r.code}`);
 }
 
 // ── B. ★ 부트스트랩 단계 — lively.mjs **한 파일만** 있어도 동작하나 ─────────

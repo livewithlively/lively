@@ -14,10 +14,24 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCli, reduceProgress } from "./cli-runner.mjs";
 import { argvFor } from "./ipc-contract.mjs";
-import { closedPath } from "../../kit/testlib/os-sandbox.mjs";
+import { closedPath, writeStubBin, noBrowserEnv, WIN } from "../../kit/testlib/os-sandbox.mjs";
 
 const CLI = join(fileURLToPath(import.meta.url), "..", "..", "..", "kit", "cli", "lively.mjs");
 const BOX = mkdtempSync(join(tmpdir(), "lively-onboard-e2e-"));
+
+// 브라우저 가로채기 — 이 파일도 device-code 로그인을 **실 프로세스로** 세 번 완주시킨다(#1717).
+//  1차 방어는 억제 env(noBrowserEnv), 2차가 이 스텁이다: 억제가 깨져도 사람 화면 대신 여기 기록만 남고
+//  아래 ⑫ 가 그걸 잡는다. 억제 자체의 본 판정은 kit/cli/lively-json-events.test.mjs 의 D8(대조군 포함)이 한다.
+const BIN = join(BOX, "bin");
+const OPENED = join(BOX, "browser-opened.log");
+if (!WIN) {
+  writeStubBin(BIN, process.platform === "darwin" ? "open" : "xdg-open",
+    `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(OPENED)}, process.argv.slice(2).join(" ") + "\\n");`);
+}
+// POSIX 에선 억제를 **끄고** 돌린다 — 그래야 ⑫ 의 '0건' 이 "억제 덕분" 이 아니라 "앱이 몰 때 CLI 는 안 연다"는
+//  증거가 된다(러너·CI 가 걸어 둔 값을 상속하지 않도록 명시적으로 비운다). 혹시 열어도 스텁이 받아 실 탭은 없다.
+//  윈도우는 cmd.exe 를 안 가로채므로 실기기 보호를 우선해 억제를 유지한다(그쪽 판정은 ⑫ 를 건너뛴다).
+const BROWSER_ENV = WIN ? noBrowserEnv() : { LIVELY_NO_BROWSER: "", CI: "" };
 let pass = 0, fail = 0;
 const ok = (n) => { pass++; console.log(`ok  ${n}`); };
 const bad = (n, why) => { fail++; console.error(`FAIL ${n} — ${why}`); };
@@ -45,7 +59,8 @@ function driveLogin(home, { answer = true, ignorePrompt = false } = {}) {
     cli: process.execPath,
     // ⚠ 앱은 `lively` 심을 띄우지만 테스트는 node + lively.mjs 로 같은 코드를 띄운다(심 설치를 전제하지 않게).
     args: [CLI, ...argvFor("login", { gateway: GW })],
-    env: { ...process.env, PATH: closedPath(join(BOX, "bin")), LIVELY_HOME: home, LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "", NO_COLOR: "1" },
+    // DISPLAY 를 일부러 세운다 — linux 의 헤드리스 no-op 에 가려지면 ⑫ 의 '0건'이 억제 덕인지 구분되지 않는다.
+    env: { ...process.env, PATH: closedPath(BIN), LIVELY_HOME: home, LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "", NO_COLOR: "1", DISPLAY: ":0", ...BROWSER_ENV },
     onEvent: (e) => { prog = reduceProgress(prog, e); },
     onPrompt: (p) => { seen.push(p); if (ignorePrompt) return undefined; return p.kind === "confirm" ? answer : undefined; },
     timeoutMs: 30_000,
@@ -86,13 +101,21 @@ function driveLogin(home, { answer = true, ignorePrompt = false } = {}) {
   const r = await runCli({
     cli: process.execPath,
     args: [CLI, ...argvFor("login", { gateway: GW })],
-    env: { ...process.env, PATH: closedPath(join(BOX, "bin")), LIVELY_HOME: home, LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "", NO_COLOR: "1" },
+    env: { ...process.env, PATH: closedPath(BIN), LIVELY_HOME: home, LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "", NO_COLOR: "1", DISPLAY: ":0", ...BROWSER_ENV },
     onPrompt: (p) => { seen.push(p); return undefined; },
     onHandle: (h) => { setTimeout(() => h.cancel(), 4000); },
     timeoutMs: 30_000,
   });
   check("⑩ ★ 답 없이 끊기면 토큰을 저장하지 않는다(fail-closed)", !existsSync(join(home, ".lively", "token")), "무응답인데 저장됐다");
   check("⑪ 그 사실이 실패로 보고된다", r.ok === false, `ok=${r.ok} error=${r.error}`);
+}
+
+// ── ⑫ 부작용 — 위 세 번의 로그인이 사람 화면에 탭을 띄우지 않았다(#1717) ────
+{
+  const opened = !WIN && existsSync(OPENED) ? readFileSync(OPENED, "utf8").trim() : "";
+  // 억제를 끈 상태다 — 그래도 0 이어야 한다. 여는 쪽은 앱(main.mjs 의 askUser → shell.openExternal)이고,
+  //  CLI 까지 열면 같은 URL 탭이 두 개 뜬다(#1717).
+  if (!WIN) check("⑫ 앱이 CLI 를 세 번 모는 동안 CLI 는 브라우저를 안 열었다(여는 건 앱 몫)", !opened, `열린 URL: ${opened.slice(0, 200)}`);
 }
 
 srv.close();
