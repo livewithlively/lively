@@ -136,6 +136,8 @@ function provisionStatus(projectId: number): ProvisionJob & { known: boolean } {
 }
 
 // 세션 작업폴더(@box_dir) 기준 안전 경로(#875) — .. 탈출 거부. requireSub 면 base 자체(빈 경로)는 파일 op 대상 불가로 거부.
+// ⚠ 여기는 **tmux 가 유일한 진실**이다 — 게이트웨이 쪽은 desired(DB) 우선으로 바뀌었지만(session-desired.ts),
+//  노드에는 DB 가 없다(설계: 노드에 DB 자격을 주지 않는다). resolveSessionDir 로 "통일"하지 마라 — 노드에서 그건 못 돈다.
 async function nodeSessionAbs(id: string, sub: string, requireSub = false): Promise<{ base: string; abs: string }> {
   const base = path.resolve(await sessionDir(id));
   const rel = String(sub || "").replace(/^[/\\]+/, "");
