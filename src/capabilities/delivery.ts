@@ -20,6 +20,7 @@ import { classifiersCapabilities } from "./delivery/classifiers.js"; // #1419 T4
 import { managersCapabilities } from "./delivery/managers.js"; // #1419 T5 — 관리기 4종 + 발견 큐
 import { pipelineCapabilities } from "./delivery/pipeline.js"; // #1419 T6 — 파이프라인 현황 한 번에
 import { livCapabilities } from "./delivery/liv.js"; // #1631 — 리브 홈 현황(모드 + 지금 손볼 것)
+import { livChatCapabilities } from "./delivery/liv-chat.js"; // #1631 v1 — 리브와의 대화 한 턴(헤드리스)
 import { meProfileCapabilities, meSelfCapabilities } from "./delivery/me-self.js";
 import { gitCredentialCapabilities } from "./delivery/git-credentials.js";
 import { runtimeConfigCapabilities } from "./delivery/runtime-config.js";
@@ -64,6 +65,7 @@ export const deliveryCapabilities: Capability[] = [
   ...managersCapabilities,
   ...pipelineCapabilities,
   ...livCapabilities,
+  ...livChatCapabilities,
   ...connectorMembersCapabilities,
   ...hooksCapabilities,
   ...toolsCapabilities,

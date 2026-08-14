@@ -201,7 +201,10 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
     case "runTask": {
       const input = args as unknown as RunTaskInput;
       const r = await spawnTaskSession(input);
-      trackedTasks.set(input.taskId, { taskId: input.taskId, sessionId: r.sessionId, taskDir: r.taskDir, harness: input.harness });   // #1710 — 결과 스키마가 하네스별이라 함께 들고 있어야 요약을 뽑는다
+      // 노드가 받는 runTask 는 **위탁뿐**이고 그 id 는 org_task 의 숫자다(리브 대화 턴은 이 op 를 안 탄다 —
+      //  게이트웨이 로컬에서 spawnTaskSession 을 직접 부른다). 추적 맵은 그 숫자 계약 위에 있으므로 여기서 좁힌다.
+      const taskId = Number(input.taskId);
+      trackedTasks.set(taskId, { taskId, sessionId: r.sessionId, taskDir: r.taskDir, harness: input.harness });   // #1710 — 결과 스키마가 하네스별이라함께 들고 있어야 요약을 뽑는다
       return r;
     }
     case "watchTask": {
