@@ -54,7 +54,7 @@ export const livChatCapabilities: Capability[] = [
       if (!text) throw new HttpError(400, "할 말이 비어 있습니다");
       if (text.length > TURN_MAX) throw new HttpError(400, `한 번에 보낼 수 있는 글자 수를 넘었습니다(${text.length} > ${TURN_MAX})`);
 
-      const { getLivProfile, setLivChat } = await import("../../org/store.js");
+      const { getLivProfile, setLivChat, appendLivTurn } = await import("../../org/store.js");
       const prof = await getLivProfile(userId);
       // 이어갈 대화가 있으면 이어받고, 없거나 restart 면 새로 만든다.
       //  ⚠ 첫 턴과 이어가는 턴은 **주는 플래그가 다르다**(--session-id ↔ --resume). 이걸 뒤집으면
@@ -74,7 +74,10 @@ export const livChatCapabilities: Capability[] = [
       });
 
       // 스폰이 성공한 뒤에 기억한다 — 실패한 턴의 세션 id 를 남기면 다음 턴이 없는 대화를 이어받으려 한다.
-      if (!resume) await setLivChat(userId, { session_id: sessionId, started_at: new Date().toISOString() });
+      const now = new Date().toISOString();
+      if (!resume) await setLivChat(userId, { session_id: sessionId, started_at: now, turns: [] });
+      // 되그릴 수 있게 턴을 잇는다. **사람이 한 말만** 담는다 — 리브의 말은 그 턴의 진행 파일이 정본이다.
+      await appendLivTurn(userId, { id: turnId, text, at: now });
       return { turn_id: turnId, resumed: resume };
     },
     false,  // mcp:false — 이건 **화면이 리브를 부르는 문**이다. 리브가 자기를 다시 부르면 턴이 겹쳐 돈다.
@@ -102,6 +105,19 @@ export const livChatCapabilities: Capability[] = [
     {
       id: z.string().describe("턴 id(me_liv_turn 이 준 값)"),
       from: z.number().optional().describe("이어 읽기 시작할 바이트 오프셋(기본 0)"),
+    }),
+
+  restRead("me_liv_chat", "지금 이어가는 대화",
+    "이 사람이 이어가고 있는 대화와 그 턴 목록. 화면이 **새로고침 뒤 기록을 되그리는** 근거다 — " +
+    "본문은 담지 않는다(각 턴의 진행을 me_liv_turn_log 로 읽어 그린다).",
+    [{ method: "GET", paths: ["/api/ui/me/liv/chat"], parse: () => ({}) }],
+    async (_input: unknown, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const { getLivProfile } = await import("../../org/store.js");
+      const chat = (await getLivProfile(userId)).chat ?? null;
+      // 되그리기는 **최근 것부터 값이 있다** — 오래된 턴까지 다 읽으면 화면이 뜨는 데 오래 걸린다.
+      return { chat: chat ? { ...chat, turns: (chat.turns ?? []).slice(-12) } : null };
     }),
 
   restRead("me_liv_ask_dismiss", "물음 접어두기",
