@@ -77,7 +77,7 @@ try {
     const list = [];
     await augmentHarnessesFromBundle(root, list);
     // 이 테스트는 node 로 돌므로 최소한 'PATH 에 있는 하네스만' 들어와야 한다 — 모르는 id·빈 값이 섞이면 안 된다.
-    const known = new Set(["claude", "codex", "opencode", "antigravity"]);
+    const known = new Set(["claude", "codex", "opencode", "antigravity", "grok"]);   // #1701 — grok(5번째 하네스)
     eq("R6 실 레지스트리 — 알려진 id 만", list.every((x) => known.has(x)), true);
   }
 } finally { rmSync(SB, { recursive: true, force: true }); }

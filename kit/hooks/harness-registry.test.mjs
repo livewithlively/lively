@@ -246,13 +246,14 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
   // E27 auto-approve 표면 — 하네스마다 다른 전략 키를 갖는다(같으면 한쪽이 엉뚱한 파일에 쓴다).
   eq("H9[E27] auto-approve kind 가 하네스별로 다름",
     HARNESS_IDS.map((id) => HARNESS[id].autoApprove.kind),
-    ["settings-allow", "toml-approval", "config-permission", "agy-settings-allow"]);
+    ["settings-allow", "toml-approval", "config-permission", "agy-settings-allow", "grok-permission-allow"]);
   eq("H10[E27] auto-approve 키 형태", [
     HARNESS.claude.autoApprove.key("lively", "whoami"),
     HARNESS.codex.autoApprove.key("lively", "whoami"),
     HARNESS.opencode.autoApprove.key("lively", "whoami"),
     HARNESS.antigravity.autoApprove.key("lively", "whoami"),
-  ], ["mcp__lively__whoami", "whoami", "lively_whoami", "mcp(lively/whoami)"]);
+    HARNESS.grok.autoApprove.key("lively", "whoami"),
+  ], ["mcp__lively__whoami", "whoami", "lively_whoami", "mcp(lively/whoami)", "MCPTool(lively__whoami)"]);
   // #1689 — 어댑터가 정규화한 이름은 claude 형이므로 mcpToolName 이 그대로 벗겨야 work-flag 기록 인정이 산다.
   eq("H11[E33] antigravity 정규화 이름을 벗긴다", mcpToolName("antigravity", "lively", "mcp__lively__knowledge_save"), "knowledge_save");
 }

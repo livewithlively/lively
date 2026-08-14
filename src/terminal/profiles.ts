@@ -213,6 +213,8 @@ export async function provisionMemberOs(memberId: string, opts?: { includeContro
 const HARNESS_CRED: Record<string, string> = {
   claude: ".claude/.credentials.json",
   codex: ".codex/auth.json",
+  // grok 은 자격이 **파일**이다(#1701 실측: `grok login` 이 ~/.grok/auth.json 0600 을 만든다 — agy 의 keyring 과 다름).
+  grok: ".grok/auth.json",
 };
 
 // box_ 홈의 파일 존재 — ⚠ 게이트웨이(lively)는 멤버 700 홈을 '읽지' 못한다(격리의 본질). 대신 box_ 로 drop-priv 해서

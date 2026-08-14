@@ -113,6 +113,7 @@ const flagWhitelist = (key: string): Map<string, { name: string; type: string; c
 //  claude       `claude -p … --output-format stream-json --verbose` · stdin ○ · `{type:"result", result:"…"}`
 //  codex        `codex exec --json …`                                · stdin ○ · `{type:"item.completed", item:{type:"agent_message", text}}`
 //  antigravity  `agy --print "<프롬프트>" --output-format stream-json` · stdin **✗**(flag needs an argument) · `{event:"result", result:{response}}`
+//  grok         `grok --prompt-file <p> --output-format streaming-messages-json` · stdin ✗ 대신 **--prompt-file**(argv 상한 무관) · `{type:"result", result:"…"}`
 //  opencode     `opencode run --format json "<메시지>"`                · **표에 없다** — 아래 참조
 //
 // ⚠ opencode 를 넣지 않은 이유(정직 표기): 규약(`run` 서브커맨드 · `--format json`)은 --help 로 알지만,
@@ -168,6 +169,15 @@ export const HEADLESS: Record<string, HeadlessSpec> = {
       return ev.event === "result" && typeof r?.response === "string" ? r.response : null;
     }),
     promptViaArgv: true,
+  },
+  grok: {
+    // grok 헤드리스는 **stdin 프롬프트를 읽지 않지만**(문서·#1701 실측) `--prompt-file` 이 있어 argv 상한도
+    //  안 걸린다(경로만 argv 로 간다). streaming-messages-json 은 Messages 호환 JSONL 로 진행을 뱉고 마지막 줄이
+    //  `{type:"result", subtype:"success", result:"…"}` — claude 의 stream-json 과 같은 추출 스키마다
+    //  (실측 2026-08-14, grok 1.0.3 실계정 1회 실행). `[ -s ]` 가드는 antigravity 와 같은 이유: 빈/부재 프롬프트로
+    //  하네스가 그냥 돌아 exit 0 이 되는 무증상 성공을 막는다(실패는 반드시 exit 에 남아야 한다 — #1289).
+    run: (bin, f, p) => `[ -s "${p}" ] && ${bin} --prompt-file "${p}" ${f} --output-format streaming-messages-json --always-approve`,
+    extract: (j) => lastMatch(j, (ev) => (ev.type === "result" ? (typeof ev.result === "string" ? ev.result : JSON.stringify(ev)) : null)),
   },
 };
 // argv 로 프롬프트를 넘기는 하네스의 상한 — 실측 상한(131,072B)에서 인자·환경 몫을 빼고 여유를 둔다.

@@ -107,6 +107,21 @@ export const HARNESSES: Harness[] = [
     //  폴백은 매핑이 없을 때의 차선이다.
     resumeArgv: (id) => (id ? ["--conversation", id] : ["--continue"]),
   },
+  {
+    // #1701 로 배선 완료(hook-file + config.toml 센티넬 + rules 주입) — 5번째 하네스.
+    key: "grok", label: "Grok Build", bin: "grok",
+    autoApproveFlag: "--always-approve",   // 실측(grok 1.0.3 --help; --yolo 는 별칭이지만 제품 표기가 always-approve)
+    // 모델은 실측으로 확인된 현행 id 만 큐레이트한다(기본 grok-4.5 · 실세션 관측 grok-4.6). codex 와 같은 이유로
+    //  빈 값(=하네스 기본)을 기본으로 두어 낡은 문자열에 사용자를 묶지 않는다. effort 는 모델마다 허용 단계가
+    //  달라(문서: "a model only accepts the levels its menu advertises") 반쯤 맞는 목록을 주느니 안 준다(opencode 판단).
+    flags: [
+      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "grok-4.6", "grok-4.5"] },
+    ],
+    failHint: ["로그인이 필요하다고 나오면 아래를 입력해 브라우저 없이 로그인하세요:", "", "    grok login --device-code"],
+    // 실측(#1701): `-r <id>` 는 세션 id(UUID) 재개, id 없으면 `-c` = 이 폴더의 최근 세션. 어댑터가 sessionId 를
+    //  세션 매핑으로 보고하므로 id 복원이 정상 경로다(antigravity 와 같은 구조).
+    resumeArgv: (id) => (id ? ["--resume", id] : ["--continue"]),
+  },
   { key: "shell", label: "셸 (에이전트 없음)", bin: "", flags: [] },
 ];
 
