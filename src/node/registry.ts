@@ -7,6 +7,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import type { Server, IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { logger } from "../log.js";
+import { servedAgentVersion } from "./agent-bundle.js";   // #1713 — 노드에게 알려줄 서빙 번들 지문(단일 출처)
 import type { SessionInfo } from "../terminal/terminal-sessions.js";
 import {
   NODE_WS_PATH, PROTO_VER, decodeChanFrame, parseMsg, nodeSessionVisible, nodeCaps, nodeHarnesses, NODE_BASELINE_OPS, NODE_BASELINE_HARNESSES,
@@ -251,6 +252,10 @@ function onNodeMessage(c: NodeConn, raw: unknown, isBinary: boolean): void {
     c.harnesses = nodeHarnesses(m.harnesses);
     void touchNode(c.node.id, { platform: m.platform, agentVer: m.agentVer, host: m.host, caps: [...c.caps], harnesses: [...c.harnesses] })
       .catch(() => { /* 비치명 */ });
+    // #1713 — "지금 서빙 중인 번들의 지문". 노드가 이걸 받아 자기와 비교해 스스로 갱신한다.
+    //  구 노드는 모르는 t 를 무시하므로 안전하다(무회귀).
+    try { c.ws.send(JSON.stringify({ t: "helloOk", agentVerLatest: servedAgentVersion() } satisfies GwToNodeMsg)); }
+    catch { /* 전송 실패는 비치명 — 다음 재연결에 다시 알린다 */ }
     return;
   }
   if (m.t === "taskdone") {

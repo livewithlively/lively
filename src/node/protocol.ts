@@ -75,6 +75,11 @@ export interface OpenMsg { t: "open"; chan: number; session: string }
 export interface CtlMsg { t: "ctl"; chan: number; m: Record<string, unknown> } // 브라우저 제어(i/r/cap) 포워딩
 // 양방향
 export interface CloseChanMsg { t: "close"; chan: number }
+// 게이트웨이 → 노드, hello 직후 1회(#1713) — "지금 서빙 중인 번들은 이 지문이다".
+//  노드는 자기 AGENT_VER 와 비교해 다르면 스스로 새 번들을 받아 교체하고 종료한다(런처가 되살린다).
+//  ⚠ 이게 없으면 노드는 자기가 낡았다는 걸 알 방법이 없다 — 실측(#1713): launchd 는 `lively node` CLI 가 아니라
+//   받아 둔 agent.mjs 를 **직접** 실행하므로 재시작해도 pull 이 일어나지 않아, 노드가 영원히 옛 번들로 돈다.
+export interface HelloOkMsg { t: "helloOk"; agentVerLatest?: string | null }
 
 // runTask = 위탁 태스크 실행(P2) · watchTask = 노드 재연결 시 진행중 태스크 감시 재장전(에이전트 재시작 복구)
 //  · tailTask = 진행 로그(stream.jsonl) 오프셋 tail 릴레이(§11 CLI 미러링).
@@ -137,7 +142,7 @@ export function agentIsLatest(nodeVer: string | null | undefined, servedVer: str
 }
 
 export type NodeToGwMsg = HelloMsg | StateMsg | ResMsg | OpenedMsg | OpenFailMsg | CloseChanMsg | TaskDoneMsg;
-export type GwToNodeMsg = ReqMsg | OpenMsg | CtlMsg | CloseChanMsg;
+export type GwToNodeMsg = ReqMsg | OpenMsg | CtlMsg | CloseChanMsg | HelloOkMsg;
 
 export function parseMsg<T>(raw: unknown): T | null {
   try {
