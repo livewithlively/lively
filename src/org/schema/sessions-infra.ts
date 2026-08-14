@@ -82,7 +82,7 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
        'map_unmapped 의 지식판 — 카테고리 0건 지식(노션 미러 등 인입분)을 상시 세션에 주입해 카테고리(사업·제품·시스템 전체)로 분류(propose+근거→proposed). 미분류=recall INNER JOIN 에서 소환 불가라 편입의 핵심. 활성화 전 params.session 설정 필요 → 기본 enabled=false.'),
       ('keepalive-managed-sessions','상시 세션 keep-alive','ensure_managed_sessions',120,true,
        'enabled 상시 세션(org_managed_session)의 tmux 세션을 보장 — 죽었으면 격리 워크스페이스에 재생성. 등록된 상시 세션 없으면 no-op.')
-    ON CONFLICT (tenant_id, id) DO NOTHING;
+    ON CONFLICT DO NOTHING;
   `);
   // #177 아웃바운드 푸시 잡 — external_outbox(우리 편집)→ClickUp. 우리 DB=master 반영. params.system='clickup'(run-push 는 clickup 전용).
   //  검증 전이라 기본 enabled=false — 수동 run-push 1회 확인 후 관리탭/DB 로 활성화. 별도 INSERT(params 컬럼 포함).
@@ -92,7 +92,7 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
        'external_outbox(pending) 드레인 → ClickUp create/update/delete. 로컬 편집을 미러에 반영(멱등, 부모 미푸시면 다음 틱 수렴). 검증 후 enabled=true.'),
       ('push-wiki-notion','위키 아웃바운드 푸시 (산출 지식→노션 피드, #976)','wiki_push','{}'::jsonb,600,false,
        '등록 노션 feed_target(category_feed N:M 매핑)으로 정본·authored 지식을 피드 카드로 투영. 옵트인: 매핑 없으면 무동작. 멱등(content_hash skip). 피드 DB 부트스트랩+exclude_pages 등록·라이브 E2E 검증 후 enabled=true.')
-    ON CONFLICT (tenant_id, id) DO NOTHING;
+    ON CONFLICT DO NOTHING;
   `);
   // #177 #6d 인바운드 싱크 잡 — ClickUp→우리, external_base 3-way 머지(name/desc/status_category). 충돌=우리 DB master.
   //  검증 전 기본 enabled=false. 아웃바운드(push-clickup)와 함께 가동하면 <5분 양방향 항상 싱크.
@@ -100,7 +100,7 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
     INSERT INTO org_cron(id, label, action, params, interval_sec, enabled, note) VALUES
       ('sync-clickup','ClickUp 인바운드 싱크 (ClickUp→우리, 3-way 머지)','connector_sync','{"system":"clickup"}'::jsonb,240,false,
        'run-sync clickup — 컨테이너 Task 당겨 external_base 3-way 머지(theirs==base→ours, ours==base→theirs, 충돌→ours). 검증 후 enabled=true.')
-    ON CONFLICT (tenant_id, id) DO NOTHING;
+    ON CONFLICT DO NOTHING;
   `);
   // #1289 자료 증류 잡 — ⚠ **여기서 시드하지 않는다.** 이 잡이 어느 박스에도 없어서 증류가 0이었으니(고객사 A 실측:
   //  10,900건 중 13건) 시드가 자연스러워 보이지만, 그러면 이 릴리스가 **롤백 불가**가 된다:
@@ -251,7 +251,7 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
        '프론트(public/)만 서빙 — /api 는 게이트웨이 자신. 별도 프로세스·포트 없음(가장 싸고 안전).'),
       ('co-fullstack','context-ontology 풀스택 (throwaway 게이트웨이)','context-ontology',false,'node dist/index.js','npm run build','PORT','{"LIVELY_NO_SCHEDULER":"1"}'::jsonb,'/healthz',
        '자체 게이트웨이 프로세스를 워크트리에서 기동 — 백엔드 변경까지 격리 확인. DB 등 backing 은 env 로 지정(라이브 DB 쓰기 금지).')
-    ON CONFLICT (tenant_id, id) DO NOTHING;
+    ON CONFLICT DO NOTHING;
   `);
   // 기존 프리셋 보정 — 위 INSERT 는 ON CONFLICT DO NOTHING 이라 이미 있던 행엔 build_cmd 가 안 들어간다.
   //  운영자가 직접 채운 값은 건드리지 않는다(IS NULL 조건).

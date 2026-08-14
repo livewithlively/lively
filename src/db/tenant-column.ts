@@ -50,9 +50,16 @@ export interface TenantColumnPlan {
 
 /**
  * 자연키 판정(순수) — 공용 테이블에서 UNIQUE 가 안전한 조건은 "컬럼 중 하나라도 전역 유일".
- *  ⓐ 대리키(단일컬럼 UNIQUE + 기본값/identity) — 전역 시퀀스라 `id serial PRIMARY KEY` 는 그대로 유효
+ *  ⓐ 대리키(단일컬럼 UNIQUE + **전역 생성기** 기본값/identity) — `id serial PRIMARY KEY` 가 그대로 유효한 이유
  *  ⓑ 그 대리키를 가리키는 FK — `project_member(project_id, member_id)` 가 안전한 이유
  * 둘 다 없으면 자연키다: 두 테넌트가 **같은 값을 쓰고 싶어 한다**.
+ *
+ * ★★ "기본값이 있으면 대리키" 는 **틀린 규칙**이다(실측으로 밟았다). 싱글턴 테이블의
+ *  `id integer PRIMARY KEY DEFAULT 1` 도 기본값이 있지만 그 값은 **모든 테넌트가 똑같이 1** 이다 —
+ *  전역 유일이 아니라 전역 **충돌**이다. 실 DB 에서 org_profile·org_runtime_config·
+ *  knowledge_view_config 셋이 여기 해당했고, 그래서 두 번째 테넌트를 만들면 프로비저닝이
+ *  `23505 duplicate key` 로 죽었다. `project_status_template.is_default DEFAULT false` 도 같은 부류다.
+ *  판정 기준은 "기본값의 유무"가 아니라 **그 기본값이 값을 새로 만들어내는가**(SURROGATE_GEN_RE)다.
  */
 export function isNaturalKey(table: string, columns: string[], globalColumns: ReadonlySet<string>): boolean {
   return !columns.some((c) => globalColumns.has(`${table}.${c}`));
@@ -118,10 +125,18 @@ const SQL_TABLES = `SELECT c.relname::text t FROM pg_class c JOIN pg_namespace n
   WHERE n.nspname='public' AND c.relkind='r' AND NOT c.relispartition
     AND NOT EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attname='tenant_id' AND a.attnum>0 AND NOT a.attisdropped)`;
 
+/**
+ * 전역 유일을 **만들어내는** 기본값만 인정한다. 상수(`1`, `false`)는 값을 만들지 않으므로 제외 —
+ *  그게 싱글턴 테이블을 대리키로 오인하던 구멍이었다(isNaturalKey 머리말).
+ */
+export const SURROGATE_GEN_RE = "(nextval|gen_random_uuid|uuid_generate)";
+
 const SQL_SURROGATE = `SELECT c.relname::text t, a.attname::text col FROM pg_class c
   JOIN pg_namespace n ON n.oid=c.relnamespace
   JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped
-  WHERE n.nspname='public' AND c.relkind='r' AND (a.atthasdef OR a.attidentity<>'') AND a.attname<>'tenant_id'
+  LEFT JOIN pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum
+  WHERE n.nspname='public' AND c.relkind='r' AND a.attname<>'tenant_id'
+    AND (a.attidentity<>'' OR pg_get_expr(d.adbin,d.adrelid) ~* '${SURROGATE_GEN_RE}')
     AND EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid=c.oid AND i.indisunique
                   AND array_length(i.indkey::int2[],1)=1 AND a.attnum=ANY(i.indkey::int2[]))`;
 

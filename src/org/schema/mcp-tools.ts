@@ -266,7 +266,7 @@ export async function initToolAndAssetRegistry(pool: Pool): Promise<void> {
       ('source_delete','builtin',true,true),
       -- #1072 whoami: 자기 신원 조회(읽기·인자 없음·부작용 0). 상시로드 툴이라 매 호출 컨펌은 순수 마찰 → 자동승인.
       ('whoami','builtin',true,true)
-    ON CONFLICT (tenant_id, name) DO NOTHING;
+    ON CONFLICT DO NOTHING;
   `);
 }
 
