@@ -35,7 +35,7 @@ export async function syncMirrorTags(
     if (ours.includes(key)) continue;
     const tag = await client.query(
       `INSERT INTO task_tag(name, color) VALUES($1,$2)
-       ON CONFLICT (lower(name)) DO UPDATE SET color=COALESCE(task_tag.color, EXCLUDED.color)
+       ON CONFLICT (tenant_id, lower(name)) DO UPDATE SET color=COALESCE(task_tag.color, EXCLUDED.color)
        RETURNING id`,
       [displayOf.get(key) ?? key, colorOf.get(key) ?? null]);
     await client.query(
@@ -65,7 +65,7 @@ export async function syncMirrorChecklists(
     const r = await client.query(
       `INSERT INTO task_checklist(task_id, name, sort, external_id)
         VALUES($1,$2,$3,$4)
-       ON CONFLICT (external_id) WHERE external_id IS NOT NULL
+       ON CONFLICT (tenant_id, external_id) WHERE external_id IS NOT NULL
        DO UPDATE SET task_id=EXCLUDED.task_id, name=EXCLUDED.name, sort=EXCLUDED.sort
        RETURNING id`,
       [taskId, redactString(String(cl.name ?? "")), Math.round(Number(cl.orderindex ?? 0)) || 0, cl.external_id]);
@@ -79,7 +79,7 @@ export async function syncMirrorChecklists(
       await client.query(
         `INSERT INTO task_checklist_item(checklist_id, name, done, assignee, sort, external_id)
           VALUES($1,$2,$3,$4,$5,$6)
-         ON CONFLICT (external_id) WHERE external_id IS NOT NULL
+         ON CONFLICT (tenant_id, external_id) WHERE external_id IS NOT NULL
          DO UPDATE SET checklist_id=EXCLUDED.checklist_id, name=EXCLUDED.name, done=EXCLUDED.done,
             assignee=EXCLUDED.assignee, sort=EXCLUDED.sort`,
         [clId, redactString(String(item.name ?? "")), !!item.resolved, assignee,
@@ -144,7 +144,7 @@ export async function syncMirrorAttachments(
       await client.query(
         `INSERT INTO task_attachment(task_id, external_id, title, url, mimetype, extension, size, source, thumbnail, parent_type, raw)
           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb)
-         ON CONFLICT (external_id) WHERE external_id IS NOT NULL
+         ON CONFLICT (tenant_id, external_id) WHERE external_id IS NOT NULL
          DO UPDATE SET task_id=EXCLUDED.task_id, title=EXCLUDED.title, url=EXCLUDED.url, mimetype=EXCLUDED.mimetype,
             extension=EXCLUDED.extension, size=EXCLUDED.size, thumbnail=EXCLUDED.thumbnail, raw=EXCLUDED.raw`,
         [taskId, a.external_id, a.title ?? null, a.url ?? null, a.mimetype ?? null, a.extension ?? null,

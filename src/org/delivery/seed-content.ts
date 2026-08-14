@@ -86,7 +86,7 @@ export async function seedDefaultContent(): Promise<SeedResult> {
       const r = await itemsPool.query(
         `INSERT INTO org_harness_asset(id, kind, label, harness, description, body, frontmatter, paired_hook_id, enabled, sort, version, content_hash, created_by, updated_at, updated_by)
            VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,1,$11,'system',now(),'system')
-         ON CONFLICT (id) DO UPDATE
+         ON CONFLICT (tenant_id, id) DO UPDATE
            SET kind = EXCLUDED.kind, label = EXCLUDED.label, harness = EXCLUDED.harness,
                description = EXCLUDED.description, body = EXCLUDED.body, frontmatter = EXCLUDED.frontmatter,
                paired_hook_id = EXCLUDED.paired_hook_id, sort = EXCLUDED.sort,
@@ -119,7 +119,7 @@ export async function seedDefaultContent(): Promise<SeedResult> {
       const r = await itemsPool.query(
         `INSERT INTO knowledge(name, title, body_md, injection, provenance, lifecycle, is_wiki, type, updated_by)
            VALUES($1,$2,$3,$4,$5,$6,$7,$8,'system')
-         ON CONFLICT (name) DO UPDATE
+         ON CONFLICT (tenant_id, name) DO UPDATE
            SET title = EXCLUDED.title,
                body_md = EXCLUDED.body_md,
                is_wiki = EXCLUDED.is_wiki,

@@ -36,7 +36,7 @@ export async function setKnowledgeViewConfig(hiddenProps: string[], ctx?: WriteC
   await itemsPool.query(
     `INSERT INTO knowledge_view_config(id, hidden_props, updated_at, updated_by)
      VALUES(1, $1::jsonb, now(), $2)
-     ON CONFLICT (id) DO UPDATE SET hidden_props=EXCLUDED.hidden_props, updated_at=now(), updated_by=EXCLUDED.updated_by`,
+     ON CONFLICT (tenant_id, id) DO UPDATE SET hidden_props=EXCLUDED.hidden_props, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [JSON.stringify(keys), ctx?.actor ?? null]);
   const after = await getKnowledgeViewConfig();
   await auditOrgContent("knowledge_view_config", "1", "update", before, after, ctx);

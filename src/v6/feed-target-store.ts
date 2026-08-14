@@ -20,7 +20,7 @@ export async function createFeedTarget(t: {
   const r = await one(itemsPool,
     `INSERT INTO feed_target(system, instance, target_id, data_source_id, parent_page_id, title, created_at, updated_at)
      VALUES($1,$2,$3,$4,$5,$6,now(),now())
-     ON CONFLICT (system, target_id) DO UPDATE SET
+     ON CONFLICT (tenant_id, system, target_id) DO UPDATE SET
        data_source_id=COALESCE(EXCLUDED.data_source_id, feed_target.data_source_id),
        parent_page_id=COALESCE(EXCLUDED.parent_page_id, feed_target.parent_page_id),
        title=COALESCE(EXCLUDED.title, feed_target.title), updated_at=now()

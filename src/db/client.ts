@@ -148,6 +148,25 @@ export function tenantBindingSql(): TenantBindingSql | null {
   return { sql: "SELECT set_config('app.tenant_id', $1, true)", params: [id] };
 }
 
+// ── ★★ 고정 바인딩은 **여기서 자가 설치**한다 ────────────────────────────────
+//
+// 실측으로 밟았다(E2E): 게이트웨이 부팅(`index.ts`)에서만 리졸버를 꽂았더니, **DB 를 만지는 다른
+//  진입점**이 바인딩 없이 돌았다 — `deploy/bootstrap-admin.mjs` 가 그것이다. 그 스크립트는
+//  게이트웨이가 아니라 별도 프로세스라 부팅 코드를 안 탄다. 결과:
+//    error: unrecognized configuration parameter "app.tenant_id"
+//  다행히 **시끄럽게** 실패했다(정책이 그렇게 설계됐다). 조용히 남의 데이터를 읽는 대신.
+//
+// 고정 모드는 env 하나로 결정되고 상위 계층이 필요 없다 → leaf 에서 스스로 켤 수 있다.
+//  그러면 게이트웨이·부트스트랩·CLI 등 **모든 진입점**이 자동으로 덮인다.
+//  (요청별 모드는 AsyncLocalStorage 가 필요해 상위가 주입한다 — 게이트웨이 부팅이 이걸 덮어쓴다.)
+(() => {
+  const mode = (process.env.LIVELY_TENANT_BINDING || "").trim().toLowerCase();
+  if (mode !== "rls") return;
+  const id = (process.env.LIVELY_TENANT_ID || "").trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return;
+  installTenantResolver(() => id);
+})();
+
 export type Db = pg.Pool | pg.PoolClient;
 
 // store-core.mjs 의 q/one 과 동일한 헬퍼 — 단 db 를 첫 인자로 명시(기본 pool 숨김 의존 제거).

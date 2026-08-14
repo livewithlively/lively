@@ -19,7 +19,7 @@ export async function initOrgCore(pool: Pool): Promise<void> {
       version INT NOT NULL DEFAULT 1,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT);
-    INSERT INTO org_profile(id) VALUES(1) ON CONFLICT (id) DO NOTHING;
+    INSERT INTO org_profile(id) VALUES(1) ON CONFLICT DO NOTHING;
     ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS timezone TEXT;
   `);
 

@@ -64,7 +64,7 @@ export async function initV6UiVis(pool: Pool): Promise<void> {
       hidden_props JSONB NOT NULL DEFAULT '[]'::jsonb,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT);
-    INSERT INTO knowledge_view_config(id) VALUES(1) ON CONFLICT (id) DO NOTHING;
+    INSERT INTO knowledge_view_config(id) VALUES(1) ON CONFLICT DO NOTHING;
   `);
 
   // ── ⑬ 임베딩(pgvector) — 벡터검색(#172) opt-in. provider≠off 일 때만 확장/컬럼(embedding_vector)/HNSW 인덱스 생성. ──

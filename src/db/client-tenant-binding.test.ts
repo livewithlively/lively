@@ -54,3 +54,35 @@ test("리졸버는 호출 시점마다 다시 읽힌다 — 요청마다 다른 
   who = "b";
   assert.deepEqual(tenantBindingSql()!.params, ["b"]);
 });
+
+// ★★ 실측(E2E)으로 밟은 구멍 — 게이트웨이 부팅에서만 꽂으면 **DB 를 만지는 다른 진입점**이
+//  바인딩 없이 돈다(deploy/bootstrap-admin.mjs 가 그랬다). 고정 모드는 env 하나로 결정되므로
+//  leaf 가 스스로 켤 수 있고, 그러면 모든 진입점이 자동으로 덮인다.
+test("★★ 고정 바인딩은 모듈 로드에서 자가 설치된다(모든 진입점을 덮는다)", async () => {
+  const id = "33333333-4444-4555-8666-777777777777";
+  const prevMode = process.env.LIVELY_TENANT_BINDING, prevId = process.env.LIVELY_TENANT_ID;
+  process.env.LIVELY_TENANT_BINDING = "rls";
+  process.env.LIVELY_TENANT_ID = id;
+  try {
+    // 모듈 캐시를 우회해 새로 평가한다(자가 설치가 로드 시점에 도는지 보려면 새 인스턴스가 필요하다).
+    const fresh = await import(`./client.js?fresh=${Date.now()}`);
+    assert.equal(fresh.tenantBindingActive(), true, "로드만으로 켜져야 한다");
+    assert.deepEqual(fresh.tenantBindingSql()?.params, [id]);
+  } finally {
+    if (prevMode === undefined) delete process.env.LIVELY_TENANT_BINDING; else process.env.LIVELY_TENANT_BINDING = prevMode;
+    if (prevId === undefined) delete process.env.LIVELY_TENANT_ID; else process.env.LIVELY_TENANT_ID = prevId;
+  }
+});
+
+test("★ 형식이 틀린 id 면 자가 설치하지 않는다(잘못된 소속으로 도는 것보다 안 켜지는 게 낫다)", async () => {
+  const prev = process.env.LIVELY_TENANT_ID;
+  process.env.LIVELY_TENANT_BINDING = "rls";
+  process.env.LIVELY_TENANT_ID = "not-a-uuid";
+  try {
+    const fresh = await import(`./client.js?bad=${Date.now()}`);
+    assert.equal(fresh.tenantBindingActive(), false);
+  } finally {
+    delete process.env.LIVELY_TENANT_BINDING;
+    if (prev === undefined) delete process.env.LIVELY_TENANT_ID; else process.env.LIVELY_TENANT_ID = prev;
+  }
+});

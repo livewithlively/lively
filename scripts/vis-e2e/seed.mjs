@@ -8,7 +8,7 @@ const one = async (sql, args = []) => (await pool.query(sql, args)).rows[0];
 const member = async (id, scopes) => pool.query(
   `INSERT INTO org_member(id, kind, display_name, email, state, scopes)
      VALUES($1,'human',$1,$1||'@example.invalid','active',$2::jsonb)
-   ON CONFLICT (id) DO UPDATE SET state='active', scopes=$2::jsonb`, [id, JSON.stringify(scopes)]);
+   ON CONFLICT ON CONSTRAINT org_member_pkey DO UPDATE SET state='active', scopes=$2::jsonb`, [id, JSON.stringify(scopes)]);
 
 // DB 토큰 발급 — 정적 토큰(AUTH_TOKENS_JSON)은 admin/runtime 이 의도적으로 제거되므로 admin 검증에 못 쓴다.
 //  실효 권한 = intersection(토큰, 멤버)라 멤버 scope 도 같이 넣는다.
@@ -80,12 +80,12 @@ try {
   const srcEng = await one(`INSERT INTO source(kind, title, body_md, provenance, external_system, external_instance, external_id, fields)
       VALUES('message','V4_SRC_ENG','엔지니어 채널 원문','observed','slack','t1','v4-eng-1',
              '{"container_ref":"C-ENG","container_name":"eng-only"}'::jsonb)
-      ON CONFLICT (external_system, external_instance, external_id) WHERE external_id IS NOT NULL
+      ON CONFLICT (tenant_id, external_system, external_instance, external_id) WHERE external_id IS NOT NULL
       DO UPDATE SET visibility='open', updated_at=now() RETURNING id`);
   const srcGen = await one(`INSERT INTO source(kind, title, body_md, provenance, external_system, external_instance, external_id, fields)
       VALUES('message','V4_SRC_GEN','일반 채널 원문','observed','slack','t1','v4-gen-1',
              '{"container_ref":"C-GEN","container_name":"general"}'::jsonb)
-      ON CONFLICT (external_system, external_instance, external_id) WHERE external_id IS NOT NULL
+      ON CONFLICT (tenant_id, external_system, external_instance, external_id) WHERE external_id IS NOT NULL
       DO UPDATE SET visibility='open', updated_at=now() RETURNING id`);
 
   Object.assign(out, {

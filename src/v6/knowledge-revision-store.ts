@@ -70,7 +70,7 @@ export async function proposeRevision(input: ProposeRevisionInput): Promise<Know
     `INSERT INTO knowledge_revision(name, mode, status, base_version, base_title, base_body_md, base_confidence,
        new_title, new_body_md, new_summary, new_type, proposed_by, actor_kind, agent, rule_id, note)
      VALUES($1,$2,'pending',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-     ON CONFLICT (name) WHERE status='pending' DO UPDATE SET
+     ON CONFLICT (tenant_id, name) WHERE status='pending' DO UPDATE SET
        mode=EXCLUDED.mode,
        new_title=EXCLUDED.new_title, new_body_md=EXCLUDED.new_body_md,
        new_summary=EXCLUDED.new_summary, new_type=EXCLUDED.new_type,

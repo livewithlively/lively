@@ -120,7 +120,7 @@ export async function addTaskTag(taskId: number, input: { tagId?: number; name?:
     if (!name) throw new Error("태그 이름이 필요합니다");
     const row: any = await one(itemsPool,
       `INSERT INTO task_tag(name, color) VALUES($1,$2)
-       ON CONFLICT (lower(name)) DO UPDATE SET color=COALESCE(EXCLUDED.color, task_tag.color)
+       ON CONFLICT (tenant_id, lower(name)) DO UPDATE SET color=COALESCE(EXCLUDED.color, task_tag.color)
        RETURNING id`, [name, input.color ?? null]);
     tagId = row.id;
   } else if (input.color !== undefined) {
