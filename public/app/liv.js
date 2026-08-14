@@ -41,12 +41,15 @@ export async function renderLiv(view) {
     // 카드는 **왼쪽 레일**(이슈 목록 문법), 대화가 남은 폭·높이를 전부 먹는다. 카드가 위에 있으면 대화가
     //  절반으로 눌려 정작 리브와 말하기가 불편해진다 — 이 화면의 주인공은 대화다.
     const cards = el('div', { class: 'liv-cards' }, skeletonLine(), skeletonLine());
+    // 리브가 던진 물음이 앉는 자리 — 대화와 **같은 칸**, 입력 바로 위(스크롤에 떠내려가지 않는다).
+    const askHost = el('div', { class: 'liv-askdock' });
     const chatWrap = el('div', { class: 'liv-chat' }, el('div', { class: 'liv-chat-body', id: 'liv-chat-body' }, el('div', { class: 'liv-chat-boot', text: '세션을 준비하고 있습니다…' })));
     view.append(el('div', { class: 'liv-wrap' }, head, el('div', { class: 'liv-body' }, el('aside', { class: 'liv-rail' }, cards), chatWrap)));
     // 카드와 세션은 **독립적으로** 로드한다. 세션이 못 떠도 무엇이 문제인지는 보여야 하고,
     //  카드 조회가 느려도 대화는 먼저 시작될 수 있다(위젯 독립 실패 원칙과 같은 결).
-    void fillLivCards(cards);
-    mountLivChat(chatWrap.querySelector('.liv-chat-body'));
+    refreshLiv = () => { void fillLivCards(cards, askHost); };
+    refreshLiv();
+    mountLivChat(chatWrap.querySelector('.liv-chat-body'), askHost);
     // 리브가 대화 중에 자격을 요청하면(me_liv_ask_secret) 화면이 그걸 알아야 입력칸이 뜬다.
     //  터미널은 iframe 이라 출력에서 신호를 읽을 수 없다 — 서버 상태를 가볍게 되묻는 쪽이 견고하다.
     //  ⚠ 사람이 타이핑 중인 입력칸을 갈아치우지 않는다(fillLivCards 가 그 경우 그냥 넘어간다).
@@ -55,13 +58,24 @@ export async function renderLiv(view) {
             clearInterval(poll);
             return;
         } // 라우트를 떠나면 끝
-        void fillLivCards(cards);
+        refreshLiv();
     }, 6000);
 }
+/** 화면 갱신 진입점 하나. 카드가 제출 뒤 자기 자신을 새로 그릴 때 **어느 칸에 사는지 알 필요가 없다** —
+ *  물음은 대화 칸, 할 일은 레일로 갈렸는데 그 사실을 카드마다 인자로 나르면 한 자리만 틀려도 조용히 안 갱신된다. */
+let refreshLiv = () => { };
 function skeletonLine() { return el('div', { class: 'liv-card liv-card-skel' }); }
-async function fillLivCards(host) {
+/**
+ * 레일에는 **서 있는 일**(지금 손볼 것)만 그린다. 리브가 지금 던진 물음은 여기가 아니다 — askHost 로 간다.
+ *
+ * ⚠ 왜 갈랐나(실측 2026-08-15): 리브가 "어디에 쌓아 두셨어요?"를 물었는데 그 물음이 **대화와 다른 칸**에
+ *  떴다. 사람은 오른쪽에서 리브의 말을 읽는데 정작 고를 것은 왼쪽 끝에 있었고, 선택지 9개가 레일을 통째로
+ *  먹어 '지금 손볼 것'을 화면 밖으로 밀어냈다. 물음이 대화 밖에 있으면 그건 대화가 아니라 서식이다.
+ *  → 리브가 던진 물음은 **말하는 자리 바로 위**에 붙인다(대화와 같은 칸, 스크롤에 떠내려가지 않는 자리).
+ */
+async function fillLivCards(host, askHost) {
     // 사람이 자격을 입력하는 중이면 손대지 않는다 — 다시 그리면 타이핑하던 값이 사라진다.
-    const typing = host.querySelector('.liv-ask-input');
+    const typing = askHost.querySelector('.liv-ask-input');
     if (typing && (typing.value !== '' || document.activeElement === typing))
         return;
     let st;
@@ -72,17 +86,18 @@ async function fillLivCards(host) {
         host.replaceChildren(el('div', { class: 'liv-note', text: '지금 상태를 읽지 못했습니다. 옆에서 리브에게 직접 물어보셔도 됩니다.' }));
         return;
     }
-    // 리브가 기다리는 것은 **항상 맨 위**다 — 이게 떠 있으면 리브는 그걸 기다리느라 멈춰 있다.
+    // 리브가 기다리는 물음 — 대화 칸의 입력 바로 위에. 이게 떠 있으면 리브는 그걸 기다리느라 멈춰 있다.
     const ask = st.secretAsk
-        ? (st.secretAsk.kind === 'choice' ? livChoiceCard(st.secretAsk, host)
-            : st.secretAsk.kind === 'upload' ? livUploadCard(st.secretAsk, host)
-                : livSecretCard(st.secretAsk, host))
+        ? (st.secretAsk.kind === 'choice' ? livChoiceCard(st.secretAsk, askHost)
+            : st.secretAsk.kind === 'upload' ? livUploadCard(st.secretAsk, askHost)
+                : livSecretCard(st.secretAsk, askHost))
         : null;
+    askHost.replaceChildren(...(ask ? [ask] : []));
     if (!st.findings.length) {
-        host.replaceChildren(...(ask ? [ask] : []), el('div', { class: 'liv-note' }, el('b', { text: '지금 손볼 것은 없습니다.' }), el('span', { text: ' 옆에서 리브에게 무엇이든 물어보세요.' })));
+        host.replaceChildren(el('div', { class: 'liv-note' }, el('b', { text: '지금 손볼 것은 없습니다.' }), el('span', { text: ' 옆에서 리브에게 무엇이든 물어보세요.' })));
         return;
     }
-    host.replaceChildren(...(ask ? [ask] : []), el('div', { class: 'liv-cards-title', text: `지금 손볼 것 ${st.total}` }), ...st.findings.map((f) => livCard(f, host)));
+    host.replaceChildren(el('div', { class: 'liv-cards-title', text: `지금 손볼 것 ${st.total}` }), ...st.findings.map((f) => livCard(f, host)));
 }
 /**
  * 객관식 질문 — **사람은 고르기만 한다.**
@@ -115,7 +130,7 @@ function livChoiceCard(ask, host) {
             // 사람이 다시 타이핑하지 않아도 대화가 이어지게 — 무엇을 골랐는지 리브에게 그대로 말해 준다.
             if (said)
                 livChatAsk(said);
-            setTimeout(() => void fillLivCards(host), 600);
+            setTimeout(() => refreshLiv(), 600);
         }
         catch (e) {
             send.disabled = false;
@@ -206,7 +221,7 @@ function livUploadCard(ask, host) {
         msg.replaceChildren(el('span', { class: failed.length ? 'liv-ask-err' : 'liv-ask-ok', text: parts.join(' · ') }));
         if (saved) {
             livChatAsk(`파일 ${saved}개 올렸어요: ${ok.slice(0, 10).map((f) => f.name).join(', ')}`);
-            setTimeout(() => void fillLivCards(host), 1200);
+            setTimeout(() => refreshLiv(), 1200);
         }
     };
     return el('div', { class: 'liv-card liv-ask' }, el('div', { class: 'liv-ask-head' }, el('b', { text: ask.label ?? '파일 올리기' })), ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null, el('div', { class: 'liv-ask-row' }, input), el('div', { class: 'liv-ask-note', text: ask.accept_hint || '글자로 된 파일만 됩니다 — 메모·문서(.txt·.md)·표(.csv) 등. PDF·이미지는 아직 안 됩니다.' }), msg);
@@ -244,7 +259,7 @@ function livSecretCard(ask, host) {
             livToast('저장했습니다. 리브가 이어서 확인합니다.');
             // 사람이 다시 타이핑하지 않아도 대화가 이어지게 한마디 건넨다 — 값은 절대 안 보낸다.
             livChatAsk('자격 저장했어요. 확인해 주세요.');
-            setTimeout(() => void fillLivCards(host), 600);
+            setTimeout(() => refreshLiv(), 600);
         }
         catch (e) {
             save.disabled = false;
@@ -276,7 +291,7 @@ function livCard(f, host) {
     acts.append(el('button', {
         class: 'btn btn-sm btn-ghost', type: 'button', text: '나중에',
         onclick: (ev) => { ev.currentTarget.closest('.liv-card')?.remove(); if (!host.querySelector('.liv-card'))
-            void fillLivCards(host); },
+            refreshLiv(); },
     }));
     return el('div', { class: 'liv-card liv-card-' + f.severity }, el('div', { class: 'liv-card-title' }, el('span', { class: 'liv-card-mark', text: f.severity === 'p0' ? '!' : '·' }), el('b', { text: f.title })), f.detail ? el('div', { class: 'liv-card-detail', text: f.detail }) : null, acts);
 }
