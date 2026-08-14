@@ -22,6 +22,8 @@ const KNOWN_HARNESSES: ReadonlyArray<readonly [pattern: string, id: string]> = [
   // #1689 — antigravity(agy)·opencode 보강(둘 다 stdio 프록시가 x-lively-harness 로 stamp 한다).
   ["antigravity", "antigravity"],
   ["agy", "antigravity"],
+  // #1701 — grok(Grok Build). UA 는 `grok-shell/<ver>` 형(실측)이지만 stdio 프록시의 x-lively-harness stamp 가 정본.
+  ["grok", "grok"],
   ["opencode", "opencode"],
   ["cursor", "cursor"],
   ["cline", "cline"],

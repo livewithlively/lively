@@ -24,7 +24,11 @@ import { fileURLToPath } from "node:url";
 //  ⚠ HARNESS 상수 자체는 **종전 계산식을 유지**한다(빈 문자열 가능): 이 값은 self-update 인자로도 넘어가는데,
 //   여기서 "claude" 로 기본값을 채우면 종전에 인자를 안 넘기던 경로가 넘기게 되어 동작이 바뀐다.
 //   표 조회(harness())가 알아서 claude 로 폴백하므로 분기 결과는 종전과 같다.
-import { harness } from "./harness-registry.mjs";
+import { harness, isForeignGrokInvocation } from "./harness-registry.mjs";
+
+// grok compat 이중발화 가드(#1701) — grok 은 ~/.claude/settings.json 의 우리 훅을 기본값으로 그대로 실행한다.
+//  그 사본이면 조용히 비켜선다(정본은 grok-adapter 가 LIVELY_HARNESS=grok 으로 스폰하는 경로).
+if (isForeignGrokInvocation()) process.exit(0);
 
 const OFF = process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1";
 // 읽기전용 세션(#1007+) — 세션 pane 에 -e LIVELY_MODE=readonly 로 주입된다(게이트웨이 헤더 x-lively-mode 와 같은 값).

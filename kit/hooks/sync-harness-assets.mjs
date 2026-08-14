@@ -27,7 +27,11 @@ import { join, dirname, relative, isAbsolute } from "node:path";
 //  따로 하드코딩돼 어긋날 수 있었다(어긋나면 관측·로컬토글에서 그 종류가 통째로 안 보인다).
 //  ⚠ 이 import 가 성립하려면 harness-registry.mjs 가 이 파일과 **같은 디렉터리**로 설치돼야 한다
 //   (설치 시 ~/.lively/hooks/ 로 평평하게 복사되므로) → user-install 의 HOOK_SCRIPTS 에 등재돼 있다.
-import { resolveHarness, harness, placementFor, assetDirsFor, assetDirNames } from "./harness-registry.mjs";
+import { resolveHarness, harness, placementFor, assetDirsFor, assetDirNames, isForeignGrokInvocation } from "./harness-registry.mjs";
+
+// grok compat 이중발화 가드(#1701) — grok 이 ~/.claude/settings.json 의 우리 훅을 그대로 실행한 사본이면
+//  비켜선다(사본은 --harness 없이 돌아 claude 자리에 sync 하므로 grok 세션에서 무의미 + 이중 fetch).
+if (isForeignGrokInvocation()) process.exit(0);
 
 const OFF = process.env.LIVELY_OFF === "1" || process.env.LIVELY_HOOKS_OFF === "1";
 if (OFF) process.exit(0);
@@ -117,6 +121,7 @@ const COMPOSERS = {
   "opencode-command": composeOpencodeCommand,
   "antigravity-agent": composeAntigravityAgent,
   "antigravity-workflow": composeAntigravityWorkflow,
+  "grok-agent": composeGrokAgent,
 };
 // opencode 서브에이전트 = md 지만 **frontmatter 스키마가 claude 와 다르다.**
 //  실측(1.18.12): `tools` 는 배열이 아니라 객체 · `color` 는 hex 또는 지정 enum · `model` 은 `provider/model` 형식.
@@ -153,6 +158,16 @@ function composeAntigravityWorkflow(asset) {
   const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
   const desc = asset.description != null ? String(asset.description) : String(fm.description ?? "");
   return `---\ndescription: ${yamlValue(desc)}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
+}
+
+// grok 서브에이전트(agents/<id>.md) — frontmatter 파서는 관용(#1701 실측: 미지 필드·claude 필드 로드됨,
+//  이웃 무해)이지만, claude 의 model 슬러그("sonnet")·tools 이름의 **런타임 의미**는 미실측이다.
+//  codex·opencode·antigravity 와 같은 판단으로 이식 가능 최소셋(name·description·본문)만 넘긴다.
+function composeGrokAgent(asset) {
+  const fm = (asset.frontmatter && typeof asset.frontmatter === "object" && !Array.isArray(asset.frontmatter)) ? asset.frontmatter : {};
+  const desc = asset.description != null ? String(asset.description) : String(fm.description ?? "");
+  const name = fm.name != null ? String(fm.name) : String(asset.id || "");
+  return `---\nname: ${yamlValue(name)}\ndescription: ${yamlValue(desc)}\n---\n\n<!-- ${PROVENANCE} -->\n\n${asset.body || ""}\n`;
 }
 
 function composeFile(asset) {

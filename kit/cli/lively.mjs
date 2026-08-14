@@ -52,6 +52,12 @@ const OPENCODE_PLUGIN = join(OPENCODE_DIR, "plugin", "lively.js");
 // antigravity(#1689) — `~/.gemini` 고정($HOME 만 봄, env 오버라이드 없음). 배선 신호는 우리 플러그인 디렉터리다
 //  (plugin-dir 배선 — 그 안의 hooks.json·mcp_config.json 은 전부 우리 파일이라 '우리 것이 있나' 신호가 강하다).
 const AGY_PLUGIN_DIR = join(HOME, ".gemini", "config", "plugins", "lively");
+// grok(#1701) — Grok Build(xAI). 홈은 `$GROK_HOME > ~/.grok` 인데, LIVELY_HOME(샌드박스 격리)이 켜져 있으면
+//  GROK_HOME 을 **무시**한다 — 개발자 실환경의 GROK_HOME 이 테스트 격리를 뚫으면 실 grok 홈을 오염시킨다
+//  (opencode 의 XDG 처리와 같은 원칙 · 레지스트리/설치기와 같은 계산이어야 진단이 실제 배선을 본다).
+const GROK_DIR = process.env.LIVELY_HOME ? join(HOME, ".grok") : (process.env.GROK_HOME || join(HOME, ".grok"));
+// 배선 신호는 **통째로 우리 소유**인 훅 배선 파일이다(user-install.mjs installGrok 이 심는다).
+const GROK_HOOKS_JSON = join(GROK_DIR, "hooks", "lively-grok.json");
 // 자동 업데이터(self-update.mjs)와 **같은 필수 훅 목록**을 쓴다 — 손상 번들 판정 기준이 갈리면 안 된다.
 //  self-update.mjs 자신은 목록에 없다(구 게이트웨이로 롤백 시 '손상'으로 오판해 영구 고착되는 걸 막기 위함 — #858).
 const REQUIRED_HOOKS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs"];
@@ -469,6 +475,9 @@ function detectHarnesses() {
   // antigravity: 바이너리는 agy 다(#1689 — 하네스 id 로 command -v 하면 영영 미감지). 배선 신호는 플러그인 디렉터리.
   if (has("agy")) out.add("antigravity");
   try { if (existsSync(AGY_PLUGIN_DIR)) out.add("antigravity"); } catch { /* */ }
+  // grok: 바이너리 이름이 그대로 grok 이다(#1701). 배선 신호는 우리 소유 훅 파일(lively-grok.json).
+  if (has("grok")) out.add("grok");
+  try { if (existsSync(GROK_HOOKS_JSON)) out.add("grok"); } catch { /* */ }
   return [...out];
 }
 
@@ -1024,6 +1033,9 @@ async function gatherStatus() {
       // antigravity(#1689) — 설치 판정은 **agy** 바이너리다. configOk = 우리 플러그인 JSON(hooks/mcp_config)이
       //  파싱되는가(깨진 파일은 fail-open 이라 세션은 살지만 그 기능만 조용히 빠진다 — 그걸 여기서 드러낸다).
       antigravity: { installed: has("agy"), wired: false, mcp: null, mcpConnected: null, configOk: null, transport: null, assets: null },
+      // grok(#1701) — configOk = 우리 훅 배선 파일(lively-grok.json)이 JSON 으로 파싱되는가. grok 은 깨진 훅
+      //  파일을 **조용히 건너뛰므로**(fail-open) 깨짐 = 우리 훅이 통째로 소리 없이 빠진 상태 — 그걸 여기서 드러낸다.
+      grok: { installed: has("grok"), wired: false, mcp: null, mcpConnected: null, configOk: null, transport: null, assets: null },
     },
     hooks: { installed: 0, expected: REQUIRED_HOOKS.length },
     // 노드 축(#1541 T4) — 데스크톱 앱이 폴링한다. 부트스트랩 직후엔 cmd-node.mjs 가 아직 없을 수 있으므로
@@ -1130,6 +1142,32 @@ async function gatherStatus() {
       ag.configOk = ok;
     }
   }
+  // grok(#1701) — 배선·config 유효·MCP 등록 전부 **파일**에서 읽는다(비용 0 · 부작용 0).
+  //  ⚠ 연결(mcpConnected)은 확인하지 않는다 — `grok mcp doctor --json` 이 있지만 실행 비용이 미지수이고,
+  //   grok 은 **어떤 호출이든** 설정 트리(docs/·active_sessions)를 만든다(진단이 상태를 바꿈 — opencode 에서
+  //   이미 겪은 함정). 런북 규칙대로 모르는 건 null 물음표로 둔다 — pass/fail 로 단정하지 않는다.
+  {
+    const gk = st.harness.grok;
+    // 배선 신호 = 우리 소유 훅 파일의 존재. configOk = 그 파일이 JSON 으로 파싱되는가 — grok 은 깨진 훅 파일을
+    //  조용히 건너뛰므로(fail-open) 파싱 실패 = 우리 훅이 통째로 소리 없이 빠진 상태다.
+    //  ⚠ config.toml 전체의 TOML 유효성은 여기 안 싣는다 — 값싼 파서가 없고(codex 는 `codex mcp get` 으로
+    //   파서에게 직접 물었지만 grok 프로브는 위 부작용 때문에 금지) 모르는 축은 만들지 않는다.
+    try { gk.wired = existsSync(GROK_HOOKS_JSON); } catch { /* */ }
+    if (gk.wired) {
+      try { JSON.parse(readFileSync(GROK_HOOKS_JSON, "utf8")); gk.configOk = true; }
+      catch { gk.configOk = false; }                       // 파일은 있는데 JSON 이 깨짐 — 훅만 조용히 죽은 상태
+    }
+    // MCP 등록 = 사용자 config.toml 에 우리 센티넬 블록 + [mcp_servers.lively] 가 있다(설치기가 심는 유일한 형태).
+    const grokToml = join(GROK_DIR, "config.toml");
+    try {
+      if (!existsSync(grokToml)) gk.mcp = false;           // 파일 자체가 없다 = 배선한 적 없다(확정)
+      else {
+        const t = readFileSync(grokToml, "utf8");
+        gk.mcp = t.includes("lively-managed") && t.includes("[mcp_servers.lively]");
+        gk.transport = gk.mcp ? "stdio" : null;            // command 형(stdio 프록시)만 설치한다 — 등록됐으면 stdio
+      }
+    } catch { /* 파일은 있는데 못 읽음 — null 유지(모름) */ }
+  }
   if (!gw) { st.gateway.error = "게이트웨이 미설정"; return st; }
   if (!tok) { st.gateway.error = "로그인 필요"; return st; }
   try {
@@ -1150,7 +1188,7 @@ async function gatherStatus() {
     //   (자산 sync 는 실패해도 조용하다 — 세션을 막지 않는 게 설계라서. 그래서 '조용한 실패'가 기본값이다.)
     //  로컬 0 / 서버 N 이면 그 머신에서 materialize 가 한 번도 성공한 적 없다는 뜻이고, 그게 곧 신고 전에 잡을 신호다.
     const manifest = (() => { try { return JSON.parse(readFileSync(join(LIVELY, "managed-harness-assets.json"), "utf8")) || {}; } catch { return {}; } })();
-    for (const h of ["claude", "codex", "opencode", "antigravity"]) {
+    for (const h of ["claude", "codex", "opencode", "antigravity", "grok"]) {   // #1701 — grok 도 같은 자산 축
       if (!st.harness[h].installed) continue;               // 안 깔린 하네스는 물어볼 것도 없다
       try {
         const r = await api(`/api/ui/org/runner/assets?harness=${h}`, { timeoutMs: 8000 });
@@ -1306,6 +1344,15 @@ async function cmdStatus(opts) {
       : "";
     say(`  antigravity   ${mark(ag.installed)} 설치   ${agWired}${agMcp}${connOf(ag)}${assetsOf(ag)}`);
   }
+  // grok — 같은 형태(#1701). 배선 신호는 우리 소유 훅 파일(lively-grok.json), configOk 는 그 JSON 파싱.
+  const gk = st.harness.grok;
+  if (gk.installed || gk.wired) {
+    const gkWired = gk.configOk === false ? `${red("✘")} 배선 ${red("(lively-grok.json 이 깨짐 — 우리 훅만 조용히 빠집니다)")}` : `${mark(gk.wired)} 배선`;
+    const gkMcp = gk.configOk !== false
+      ? (gk.mcp === null ? `   ${dim("? MCP 등록")}` : `   ${mark(gk.mcp)} MCP 등록${gk.mcp && gk.transport ? dim(`(${gk.transport})`) : ""}`)
+      : "";
+    say(`  grok          ${mark(gk.installed)} 설치   ${gkWired}${gkMcp}${connOf(gk)}${assetsOf(gk)}`);
+  }
   if (st.kit.autoUpdate !== null) say(`  자동 업데이트 ${st.kit.autoUpdate ? green("켜짐") : yellow("꺼짐")}`);
   // 노드(#1541 T4) — **등록됐을 때만** 뜻이 있다. 실행 여부를 못 재면 `?` 로 적는다(모르는 걸 '정지' 로 쓰면 거짓말).
   if (st.node?.registered) {
@@ -1319,10 +1366,11 @@ async function cmdStatus(opts) {
   else if (st.harness.codex.configOk === false) say(dim("  → codex 가 config.toml 을 못 읽습니다(그 파일의 MCP·훅이 전부 무효): ") + bold("lively update"));
   else if (st.harness.opencode.configOk === false) say(dim("  → opencode 가 opencode.json 을 못 읽습니다(그 파일의 MCP·플러그인이 전부 무효): ") + bold("lively update"));
   else if (st.harness.antigravity.configOk === false) say(dim("  → antigravity 플러그인 JSON 이 깨졌습니다(그 파일의 훅/MCP 만 조용히 빠짐): ") + bold("lively update"));
+  else if (st.harness.grok.configOk === false) say(dim("  → grok 훅 파일(lively-grok.json)이 깨졌습니다(우리 훅만 조용히 빠짐): ") + bold("lively update"));
   else if (st.harness.claude.installed && !st.harness.claude.mcp) say(dim("  → MCP 등록이 안 돼 있습니다: ") + bold("lively update"));
   else {
     // 자산은 설치기가 아니라 **세션 시작 훅**이 내린다 — 업데이트만 하고 세션을 안 켜면 0 인 채로 남는다.
-    const short = ["claude", "codex", "opencode", "antigravity"].filter((h) => st.harness[h].assets && st.harness[h].assets.local < st.harness[h].assets.server);
+    const short = ["claude", "codex", "opencode", "antigravity", "grok"].filter((h) => st.harness[h].assets && st.harness[h].assets.local < st.harness[h].assets.server); // #1701 — grok 포함
     if (short.length) say(dim("  → 조직 자산이 덜 깔렸습니다(") + short.join("·") + dim("). 새 세션을 한 번 켜면 내려옵니다 — 그래도 그대로면 ") + bold("lively doctor"));
     // ⚠ 진단이 거짓말하지 않게 — opencode 는 `~/.claude/skills` 를 **자동으로도** 읽는다(#1519 결정: 스킬 격리 안 함).
     //  위 수치는 우리가 심은 매니페스트만 센 것이라, opencode 세션에서 실제로 보이는 스킬은 이보다 많을 수 있다.
@@ -1417,9 +1465,25 @@ async function cmdDoctor(opts) {
         st.harness.antigravity.mcp ? `lively 등록됨${st.harness.antigravity.transport ? ` (${st.harness.antigravity.transport})` : ""}` : "미등록", "lively update");
     }
   }
+  // grok(#1701) — 배선(우리 훅 파일 lively-grok.json)·config 유효(그 JSON 파싱)·MCP 등록(config.toml 센티넬).
+  //  연결(mcpConnected)은 항상 null 이라 체크를 만들지 않는다 — `grok mcp doctor --json` 이 있지만 실행 비용이
+  //  미지수이고 grok 은 어떤 호출이든 설정 트리를 만든다(진단이 상태를 바꿈). 모르는 걸 pass/fail 로 단정하지 않는다.
+  if (st.harness.grok.installed || st.harness.grok.wired) {
+    chk("Grok Build 배선", st.harness.grok.wired,
+      st.harness.grok.wired ? "hooks/lively-grok.json 있음" : "훅 미배선 — 훅이 하나도 안 돕니다", "lively install");
+    if (st.harness.grok.configOk !== null) {
+      chk("Grok Build config 유효", st.harness.grok.configOk,
+        st.harness.grok.configOk ? "훅 JSON 읽힘" : "lively-grok.json 이 깨졌습니다 — grok 이 조용히 건너뛰어 우리 훅만 빠집니다(fail-open)",
+        "lively update");
+    }
+    if (st.harness.grok.configOk !== false && st.harness.grok.mcp !== null) {
+      chk("Grok Build MCP 등록", st.harness.grok.mcp,
+        st.harness.grok.mcp ? `lively 등록됨${st.harness.grok.transport ? ` (${st.harness.grok.transport})` : ""}` : "미등록", "lively update");
+    }
+  }
   // 조직 자산이 이 머신에 실제로 깔렸나(#1475) — 서버가 주는 수 ↔ 우리가 심은 수. 어긋나면 신고 전에 여기서 드러난다.
   //  ⚠ 자산은 설치기가 아니라 **세션 시작 훅**이 내린다 → 업데이트 직후엔 정상적으로 어긋날 수 있다(해결 문구에 그 사실을 담는다).
-  for (const h of ["claude", "codex", "opencode", "antigravity"]) {   // #1689 — opencode 도 종전 누락분 보강
+  for (const h of ["claude", "codex", "opencode", "antigravity", "grok"]) {   // #1689 — opencode 도 종전 누락분 보강 · #1701 — grok
     const a = st.harness[h].assets;
     if (!a) continue;
     chk(`조직 자산(${h})`, a.local >= a.server, `${a.local}/${a.server} 설치됨`,
@@ -1541,7 +1605,7 @@ function modeEnv(mode) {
   return {};
 }
 
-// `lively run [--mode M | --readonly | --incognito] [<프로젝트#> [work.mjs 인자…] | [--harness claude|codex|opencode|antigravity] [하네스 인자…]]`
+// `lively run [--mode M | --readonly | --incognito] [<프로젝트#> [work.mjs 인자…] | [--harness claude|codex|opencode|antigravity|grok] [하네스 인자…]]`
 //  · 프로젝트# 있으면 work.mjs(공유폴더 pull · 레포 clone/worktree · 하네스 실행) — 종전 표면.
 //  · 없으면 하네스를 **바로** 실행한다(프로젝트 없이 — 사용자 요청). 기본 claude, --harness 로 변경.
 //  두 경로 모두 모드 env 를 세팅 → 그 세션만 읽기전용/인코그니토가 헤더로 게이트웨이에 전달된다(per-session).
@@ -1765,7 +1829,7 @@ ${bold("설치 · 유지보수")}
   install                키트 설치 / 재설치 (멱등)
   update                 지금 최신으로 맞춤 ${dim("(MCP 재등록 포함 — 자동 업데이트가 못 하는 축)")}
       --check            확인만 하고 설치하지 않음
-  uninstall              제거 ${dim("--dry-run  --purge  --yes  --harness claude|codex|opencode|antigravity|all")}
+  uninstall              제거 ${dim("--dry-run  --purge  --yes  --harness claude|codex|opencode|antigravity|grok|all")}
 
 ${bold("확인")}
   status                 설치 · 버전 · 하네스 · MCP 상태  ${dim("--json")}
