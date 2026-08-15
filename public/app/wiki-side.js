@@ -4,7 +4,7 @@
 //  콘텐츠와의 접점은 3개뿐: ① [data-cat-val] 클릭 위임(onSelect) ② 문서 열기(onOpen) ③ rebuild().
 import { api, busy, el, keepSideScroll, state, sv } from './core.js';
 import { reviewNavBadge } from './review.js'; // #837 검토 대기 배지(대기 0이면 안 그려진다)
-import { isCategoryHomeDoc, KN_UNCAT, knFetchAuthoredTree, knFetchCategoryIndex, knFetchUncategorizedCount, knFolderFirstSort, knPageIcon, SPACE_LABEL } from './wiki-data.js';
+import { isCategoryHomeDoc, KN_UNCAT, knFetchAuthoredTree, knFetchCategoryIndex, knFetchUncategorizedCount, knFolderFirstSort, knPageIcon, knSortByCatOrder, SPACE_LABEL } from './wiki-data.js';
 // WIKI 인덱스(#336) — '전체' 하위 '인덱스(핀)' 필터의 가짜 카테고리 센티넬. data-cat-val 위임에 실린다.
 const KN_INDEXED = '__indexed__';
 // 내 소유 카테고리 대시보드(#1685) 센티넬 — '★ 내 소유 카테고리' 구역 헤더 클릭이 이 값으로 위임된다.
@@ -160,7 +160,8 @@ function buildKnowledgeNav(nav, bySpace, selected, myIds, opts) {
     const favOpts = { favCatIds: ownedIds, onToggleFav };
     {
         const allCats = ['business', 'product', 'system'].flatMap((sk) => bySpace[sk] || []);
-        const favCats = allCats.filter((c) => ownedIds.has(String(c.id)));
+        // 순서 = 사용자 드래그 순서(홈 카드·대시보드와 같은 키, #1685) — 세 화면이 같은 순서를 보여야 공간 기억이 이어진다.
+        const favCats = knSortByCatOrder(allCats.filter((c) => ownedIds.has(String(c.id))));
         if (favCats.length) {
             // #1685 구역 헤더 = 대시보드 진입 링크 — 라벨(장식)에서 행(컨트롤)으로 승격. data-cat-val 위임을 그대로 탄다.
             nav.append(el('a', { class: 'pjv-side-favhead fav-blue kn-favhead' + (selected === KN_MINE ? ' active' : ''),
