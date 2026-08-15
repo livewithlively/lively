@@ -909,10 +909,14 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
 
 .wk-mine-tail { margin-top: 34px; }
 
-/* 사이드바 ★구역 헤더 — 장식에서 컨트롤로(#1685). 기본 모양(.pjv-side-favhead)은 그대로, 상호작용만 얹는다. */
-.kn-favhead { cursor: pointer; text-decoration: none; border-radius: 8px; margin: 2px 4px 0; }
-.kn-favhead:hover { background: var(--bg-tint); color: var(--muted-head); }
-.kn-favhead.active { background: var(--bg-sel); color: var(--ink-sub); }
+/* 사이드바 ★구역 헤더 — 장식에서 컨트롤로(#1685). 원래 .pjv-side-favhead 는 11px uppercase 아이브로우
+   '라벨'이었는데, 이제 맨 위의 일급 진입점이라 그 크기면 아래 행(14px)보다 작아 이상하다 —
+   스페이스 헤더(사업·제품·시스템, .kn-space-head 14px/700)와 같은 급으로 올린다. */
+.kn-favhead { cursor: pointer; text-decoration: none; border-radius: 8px; margin: 2px 4px 0; padding: 6px 10px;
+  font-size: 14px; font-weight: 700; letter-spacing: normal; text-transform: none; color: var(--ink-sub); gap: 7px; }
+.kn-favhead .pjv-side-favhead-ic { font-size: 12.5px; line-height: 1; }
+.kn-favhead:hover { background: var(--bg-tint); color: var(--ink); }
+.kn-favhead.active { background: var(--bg-sel); color: var(--ink); }
 .kn-favhead:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 
 @media (max-width: 1100px) {
