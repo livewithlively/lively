@@ -868,52 +868,78 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
 
 
 /* ════════════════════════════════════════════════════════════════════════════
-   #1685 내 소유 카테고리 대시보드 — WIKI 맨 진입 랜딩(+ 사이드바 ★구역 헤더 착지점).
-   v3: 위키 탭의 기존 문법 재사용 — 컨테이너=홈 컬럼(wk-home), 히어로=홈과 동일, 레인=홈 카드(wk-ccard)의
-   열린 형태(오로라 커버+겹친 아이콘 타일+wk-row 목록). 신설 클래스는 칩 스트립·레인 골격뿐이다.
+   #1685 내 소유 카테고리 대시보드 — v4 한 화면 콕핏(마스터-디테일).
+   왼쪽 = 전체 최신 + 카테고리 목록(선택·드래그 정렬), 오른쪽 = 선택 항목의 최근 문서.
+   두 패널은 뷰포트 높이에 맞춰 서고 각자 스크롤한다(높이는 JS fit — 모바일은 자연 흐름).
+   장식은 디테일 헤더의 오로라 밴드 하나뿐 — 나머지는 위키 공통 부품(wk-row·wk-sec-act·mono 메타).
    ════════════════════════════════════════════════════════════════════════════ */
-
-/* 칩 스트립 — '이어서' 필과 같은 필 언어 + 끌어서 순서 변경(순서 편집기) */
-.wk-mn-strip { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0 0 14px; min-height: 26px; }
-.wk-mn-chipslot { position: relative; display: flex; }
-.wk-mn-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; padding: 3px 10px;
-  border: 1px solid var(--line); border-radius: 999px; background: var(--bg); cursor: grab;
-  font-size: 12px; font-weight: 600; color: var(--ink-sub); }
-.wk-mn-chip:hover { border-color: var(--line-net); background: var(--bg-tint); color: var(--ink); }
-.wk-mn-chip:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-.wk-mn-chip:active { cursor: grabbing; }
-.wk-mn-chip-ic { font-size: 12px; line-height: 1; flex: none; }
-.wk-mn-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wk-mn-chip .wk-row-m { font-size: 10.5px; }
-.wk-mn-chipslot.drag-src { opacity: .4; }
-.wk-mn-chipslot.drop-before::before, .wk-mn-chipslot.drop-after::after { content: ''; position: absolute;
-  top: 2px; bottom: 2px; width: 2px; border-radius: 2px; background: var(--blue); }
-.wk-mn-chipslot.drop-before::before { left: -4px; }
-.wk-mn-chipslot.drop-after::after { right: -4px; }
-.wk-mn-striptail { margin-left: auto; }
+.wk-mc { max-width: var(--wk-wide); margin: 0 auto; padding: 26px 36px 28px; }
+.wk-mc-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.wk-mc-title { margin: 0; font-size: 16px; font-weight: 800; letter-spacing: -.2px; color: var(--ink); }
+.wk-mc-stats { display: inline-flex; align-items: center; gap: 14px; }
+.wk-mc-sp { flex: 1; }
+.wk-mc-search { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--bg); cursor: pointer;
+  color: var(--muted); font-size: 12.5px; font-weight: 500; }
+.wk-mc-search:hover { border-color: var(--line-net); background: var(--bg-tint); }
+.wk-mc-search:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.wk-mc-new { display: inline-flex; align-items: center; min-height: 32px; padding: 0 13px; border-radius: 10px; font-size: 12.5px; }
+.wk-mc .wk-resume { margin: 10px 0 0; }
 .wk-m-new { color: var(--mint-deep); }
 .wk-m-new:empty { display: none; }
 
-/* 레인 — 홈 카드(wk-ccard) 문법의 '열린 카드': 오로라 커버 + 겹친 아이콘 타일 + 행 목록.
-   그리드 리듬도 홈(2열 카드 그리드, gap 14 · ≤1000px 1열)과 동일하게. */
-.wk-mn-lanes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
-.wk-lane3 { border: 1px solid var(--line); border-radius: 14px; background: var(--bg); overflow: hidden; scroll-margin-top: 84px; }
-.wk-lane3-cover { height: 58px; cursor: pointer; }
-.wk-lane3-cover .wk-aurora-wm { font-size: 44px; bottom: -9px; }
-.wk-lane3-cover:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
-.wk-lane3-body { position: relative; padding: 0 16px 10px; }
-.wk-lane3-headrow { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.wk-lane3-headrow .wk-ccard-ic { margin-top: -16px; flex: none; }
-.wk-lane3-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: none;
-  padding: 9px 0 7px; font-size: 15.5px; font-weight: 700; letter-spacing: -.1px; color: var(--ink); }
-.wk-lane3-name:hover { color: var(--blue); }
-.wk-lane3-name:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 4px; }
-.wk-lane3-hm { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 10px; padding: 9px 0 7px; }
-.wk-lane3-list { padding-top: 1px; }
-.wk-lane3-list .wk-row-meta .wk-row-m:last-child { min-width: 54px; text-align: right; font-variant-numeric: tabular-nums; }
-.wk-lane3-foot { display: flex; align-items: center; gap: 6px; padding-top: 3px; }
-.wk-lane3 .wk-empty { padding: 8px 0 10px; font-size: 13px; }
-.wk-mine-tail { margin-top: 34px; }
+/* 분할 — 마스터 248px + 디테일. 높이는 renderMineSurface 의 fit() 이 뷰포트에 맞춘다. */
+.wk-mc-split { display: grid; grid-template-columns: 248px minmax(0, 1fr); gap: 16px; margin-top: 14px; min-height: 420px; }
+
+/* 마스터 — 카테고리 선택 목록(행 = 선택 + 드래그 순서 단위) */
+.wk-mc-master { display: flex; flex-direction: column; min-height: 0; min-width: 0;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--bg); padding: 8px; }
+.wk-mc-mlist { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+.wk-mc-mrow { position: relative; display: flex; align-items: center; gap: 8px; min-width: 0; text-align: left;
+  border: none; background: none; padding: 8px 10px; border-radius: 9px; cursor: pointer;
+  font-size: 13.5px; font-weight: 650; color: var(--ink-sub); }
+.wk-mc-mrow:hover { background: var(--bg-tint); }
+.wk-mc-mrow[aria-selected="true"] { background: var(--bg-sel); color: var(--ink); box-shadow: inset 2px 0 0 var(--blue); }
+.wk-mc-mrow:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.wk-mc-mrow[draggable="true"] { cursor: pointer; }
+.wk-mc-mic { flex: none; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 13px; line-height: 1; }
+.wk-mc-mic.letter { font-size: 10.5px; font-weight: 800; color: var(--muted); background: var(--bg-tint-2); border-radius: 6px; }
+.wk-mc-mall .wk-mc-mic { color: var(--muted-2); font-size: 15px; }
+.wk-mc-mname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wk-mc-mmeta { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 7px; padding-left: 8px; }
+.wk-mc-mdiv { flex: none; height: 1px; margin: 5px 8px; background: var(--line-row); }
+.wk-mc-mrow.drag-src { opacity: .4; }
+.wk-mc-mrow.drop-before::before, .wk-mc-mrow.drop-after::after { content: ''; position: absolute; left: 6px; right: 6px;
+  height: 2px; border-radius: 2px; background: var(--blue); z-index: 2; }
+.wk-mc-mrow.drop-before::before { top: -1.5px; }
+.wk-mc-mrow.drop-after::after { bottom: -1.5px; }
+.wk-mc-mfoot { flex: none; display: flex; align-items: center; padding: 6px 6px 2px; }
+.wk-mc-mfoot .wk-sec-hint { font-size: 11px; }
+
+/* 디테일 — 헤더 밴드(카테고리 = 오로라 · 전체 최신 = 중립) + 스크롤 본문 */
+.wk-mc-detail { display: flex; flex-direction: column; min-height: 0; min-width: 0;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--bg); overflow: hidden; }
+.wk-mc-dhead { position: relative; flex: none; }
+.wk-mc-dcover { position: absolute; inset: 0; }
+.wk-mc-dcover .wk-aurora-wm { font-size: 64px; bottom: -16px; right: 14px; opacity: .12; }
+.wk-mc-dbar { position: relative; display: flex; align-items: center; gap: 11px; min-width: 0; padding: 14px 18px; }
+.wk-mc-dbar.plain { background: var(--bg-tint); }
+.wk-mc-dic { flex: none; width: 36px; height: 36px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line-row);
+  box-shadow: 0 1px 4px rgba(21, 35, 59, .08); display: inline-flex; align-items: center; justify-content: center; font-size: 18px; }
+.wk-mc-dic.letter { font-size: 14px; font-weight: 800; color: var(--ink-sub); background: var(--bg-tint-2); }
+.wk-mc-dmain { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.wk-mc-dname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: none;
+  font-size: 16.5px; font-weight: 800; letter-spacing: -.2px; color: var(--ink); }
+a.wk-mc-dname:hover { color: var(--blue); }
+a.wk-mc-dname:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 4px; }
+.wk-mc-dmeta { display: inline-flex; align-items: center; gap: 12px; min-width: 0; flex-wrap: wrap; }
+.wk-mc-dacts { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 2px; }
+.wk-mc-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.wk-mc-body { padding: 8px 18px 14px; }
+.wk-mc-body .wk-row-meta .wk-row-m:last-child { min-width: 54px; text-align: right; font-variant-numeric: tabular-nums; }
+.wk-mc-body .wk-empty { padding: 14px 2px; font-size: 13.5px; }
+.wk-mc-more { padding: 6px 0 2px; }
 
 /* 사이드바 ★그룹 헤더(#1685) — 원래 .pjv-side-favhead 는 11px uppercase 아이브로우 '라벨'이었는데,
    이제 맨 위의 일급 진입점이라 그 크기면 아래 행(14px)보다 작아 이상하다 —
@@ -925,10 +951,15 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
 .kn-favhead.active { background: var(--bg-sel); color: var(--ink); }
 .kn-favhead:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 
-@media (max-width: 1000px) {
-  .wk-mn-lanes { grid-template-columns: 1fr; }
-}
-@media (max-width: 700px) {
-  .wk-mn-strip { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 4px; }
-  .wk-mn-striptail { display: none; }
+@media (max-width: 900px) {
+  .wk-mc { padding: 18px 16px 64px; }
+  .wk-mc-split { display: block; min-height: 0; }
+  .wk-mc-master { flex-direction: row; align-items: center; padding: 6px; margin-bottom: 12px; }
+  .wk-mc-mlist { flex-direction: row; overflow-x: auto; overflow-y: hidden; gap: 4px; }
+  .wk-mc-mrow { flex: none; padding: 6px 10px; }
+  .wk-mc-mname { max-width: 130px; }
+  .wk-mc-mdiv { width: 1px; height: auto; align-self: stretch; margin: 4px 4px; }
+  .wk-mc-mfoot { display: none; }
+  .wk-mc-scroll { overflow: visible; }
+  .wk-mc-detail { min-height: 0; }
 }
