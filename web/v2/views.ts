@@ -1,9 +1,9 @@
 // v2/views.ts — 새 셸의 중앙 화면 셋(#1719): 홈(미선택) · 프로젝트 · 세션. 데이터는 main.ts 가 모아 넘긴다(V2Data).
-//  중앙은 '리브와 대화하는 창'이 주인이다 — 홈은 리브 대화(web/liv-chat.ts mountLivChat 을 그대로 마운트)로 시작하고,
-//  프로젝트는 개요+세션, 세션은 그 세션 자체(라이브 터미널 또는 중앙 기록 대화)를 실는다.
+//  홈은 **입력창 하나**(claude.ai 홈처럼 — Enter 로 프로젝트 없는 세션이 열린다, v2/quick-session.ts)이고,
+//  프로젝트는 개요+세션, 세션은 그 세션 자체(대화창 — 라이브 또는 중앙 기록)를 실는다. 리브 대화는 #/liv 에 있다.
 //  클래식 모듈을 **복제하지 않는다** — 대화·세션 목록·프로젝트 상세는 이미 있는 것을 가져다 붙인다.
 import { api, el, errorNote, relTime, state, toast } from '../core.js';
-import { mountLivChat, livChatAsk } from '../liv-chat.js';
+import { isCreatingQuickSession, openQuickSession, takeFirstPrompt } from './quick-session.js';
 import { mountSessionChat, type SessionChatHandle } from '../session-chat.js';
 import { sessIsDead, sessLabel, sessStateKey } from '../session-status.js';
 import { terminalUrl } from './apps.js';
@@ -35,32 +35,46 @@ export function dotCls(stateKey: string): string {
 }
 const when = (ms: number) => (ms ? relTime(new Date(ms).toISOString()) : '');
 
-// ── 홈(미선택) — 인사 + 리브 대화 + '지금' ──────────────────────────────────
+// ── 홈(미선택) — 인사 + **입력창 하나**(claude.ai 홈처럼) + '지금 도는 세션' ──────────────
+//  리브 대화는 홈에 두지 않는다(사이드바 [리브] → #/liv 가 그 자리). 홈은 "무엇이든 시키는 창" 하나가 주인이고,
+//  Enter 는 프로젝트를 **묻지 않고** 세션을 연다(v2/quick-session.ts — 세션 전용 폴더, 프로젝트는 나중에 언제든).
 export function renderHome(host: HTMLElement, data: V2Data): void {
   const me = state.me || {};
   const name = String(me.display_name || me.email || me.userId || '');
   const live = data.sessions.filter((s) => s.live && s.alive);
   const busy = live.filter((s) => s.stateKey === 'busy').length;
   const waiting = live.filter((s) => s.stateKey === 'waiting').length;
-  const h = new Date().getHours(); const tod = h < 12 ? '오전' : h < 18 ? '오후' : '저녁';
+  // 오전이에요 · 오후예요 · 저녁이에요 — 받침 유무로 '이에요/예요'가 갈린다(오후는 받침이 없다).
+  const h = new Date().getHours(); const tod = h < 12 ? '오전이에요' : h < 18 ? '오후예요' : '저녁이에요';
   const lead = busy || waiting
-    ? `${name ? name + '님, ' : ''}${tod}이에요. ${busy ? `세션 ${busy}개가 돌고 있고` : '도는 세션은 없고'}${waiting ? ` ${waiting}개는 답을 기다려요.` : ' 기다리는 건 없어요.'}`
-    : `${name ? name + '님, ' : ''}${tod}이에요. 무엇이든 시키세요 — 리브가 받아 정리하고, 필요하면 세션을 엽니다.`;
-  const chatBody = el('div', { class: 'v2-chat-body' });
-  const askHost = el('div', { class: 'liv-askdock v2-askdock' });
+    ? `${name ? name + '님, ' : ''}${tod}. ${busy ? `세션 ${busy}개가 돌고 있고` : '도는 세션은 없고'}${waiting ? ` ${waiting}개는 답을 기다려요.` : ' 기다리는 건 없어요.'}`
+    : `${name ? name + '님, ' : ''}${tod}. 무엇을 할까요?`;
+  const ta = el('textarea', { class: 'v2-compose-in', rows: '2', placeholder: '무엇이든 시키세요 — Enter 로 새 세션이 열립니다', 'aria-label': '무엇이든 시키기' }) as HTMLTextAreaElement;
+  const send = el('button', { class: 'btn btn-primary btn-sm v2-compose-send', type: 'button', text: '시키기' }) as HTMLButtonElement;
+  const hint = el('span', { class: 'v2-compose-hint', text: 'Enter 보내기 · Shift+Enter 줄바꿈 · 프로젝트는 나중에 언제든 붙일 수 있어요' });
+  const grow = (): void => { ta.style.height = 'auto'; ta.style.height = Math.min(220, ta.scrollHeight) + 'px'; };
+  const submit = async (): Promise<void> => {
+    const text = ta.value.trim();
+    if (!text || isCreatingQuickSession()) return;
+    send.disabled = true; ta.disabled = true; send.textContent = '여는 중…';
+    const ok = await openQuickSession(text);
+    if (!ok) { send.disabled = false; ta.disabled = false; send.textContent = '시키기'; ta.focus(); }
+    // 성공이면 라우터가 세션 화면으로 갈아 끼운다 — 이 요소들은 사라진다.
+  };
+  send.onclick = () => { void submit(); };
+  ta.addEventListener('input', grow);
+  // IME 조합 중 Enter(한글 마지막 글자 확정)는 보내지 않는다 — isComposing 이 그 신호다.
+  ta.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); void submit(); }
+  });
   host.replaceChildren(
-    el('section', { class: 'v2-home' },
-      el('div', { class: 'v2-home-lead' },
-        el('span', { class: 'v2-liv-tag' }, el('span', { class: 'liv-dot' }), '리브'),
-        el('h1', { class: 'v2-h1', text: lead })),
-      el('div', { class: 'v2-sugs' },
-        ...['지난주 회의 결정 모아 줘', '연결한 서비스 상태 봐 줘', '내 세션 지금 뭐 하고 있어?', '오늘 새로 들어온 자료 정리해 줘']
-          .map((t) => el('button', { class: 'chip', type: 'button', text: t, onclick: () => livChatAsk(t) }))),
-      el('div', { class: 'v2-chat liv-chat' }, chatBody),
-      askHost,
+    el('section', { class: 'v2-home v2-home-compose' },
+      el('div', { class: 'v2-home-lead' }, el('h1', { class: 'v2-h1', text: lead })),
+      el('div', { class: 'v2-compose' },
+        ta,
+        el('div', { class: 'v2-compose-row' }, hint, send)),
       nowList(data)));
-  // 리브 대화 — 클래식 #/liv 와 같은 마운트 함수. 기억은 서버에 산다(리브 v1 불변식)라 어느 셸에서 열어도 같은 대화다.
-  mountLivChat(chatBody, askHost);
+  window.setTimeout(() => { grow(); ta.focus(); }, 30);
 }
 
 function nowList(data: V2Data): HTMLElement {
@@ -129,6 +143,8 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string): void
   sessChat = mountSessionChat(host, { ...s, projectName: projName(data, s.projectId) }, {
     terminalSrc: termSrc,
     openHref: s.live ? termSrc : (location.pathname + '?ui=classic#/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node) : '')),
+    // 홈 입력창이 방금 연 세션이면 그 첫 지시를 낙관적으로 먼저 그린다(서버가 하네스 입력창이 뜬 뒤 실제로 넣는다).
+    firstPrompt: takeFirstPrompt(s.id),
   });
 }
 /** 목록이 새로 왔을 때(20초 폴링) 열려 있는 세션 화면의 상태 표시를 갱신한다. 본문은 화면 자신이 대화 파일을 폴링한다. */

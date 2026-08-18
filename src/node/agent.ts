@@ -20,6 +20,7 @@ import {
 } from "../terminal/terminal-sessions.js";
 import { attachSession, killAttachedPtys, type AttachSocket } from "../terminal/terminal-pty.js";
 import { sendKeysToSession } from "../terminal/send-keys.js";
+import { applySessionProject } from "../terminal/session-project.js";   // #1719 세션 프로젝트 소속(노드 로컬 적용)
 import { sessionPrompts } from "../terminal/terminal-transcript.js";
 import type { LivelyUser } from "../context.js";
 import {
@@ -234,6 +235,12 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
     case "sendKeys": {
       await sendKeysToSession(String(args.id), String(args.text ?? ""));
       return { ok: true };
+    }
+    // #1719 — 세션 프로젝트 소속(붙이기·떼기). 게이트웨이가 소유·프로젝트 멤버십을 검증하고 프로젝트 폴더(상대경로 folder)를
+    //  실어 보낸다 — 노드는 자기 워크스페이스에서 그 폴더를 찾아(있으면) 링크를 걸고, 없으면 마커·옵션만 적용한다.
+    case "setProject": {
+      const b = args.bind as { projectId: number; folder: string; name?: string | null; src?: "v6" | "org" } | null | undefined;
+      return applySessionProject(user, String(args.id), b && Number(b.projectId) > 0 ? b : null);
     }
     case "create": {
       const session = await createSession(user, args.input as CreateInput);

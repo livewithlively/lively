@@ -1,7 +1,7 @@
 // v2/main.ts — 새 1탭 셸(#1719)의 뿌리. main.ts boot() 가 ui_mode 로 고른 뒤 bootV2() 를 부른다.
 //  구조(마진 없는 풀스크린 · 상단/하단 바 없음):
 //    좌 사이드바 — 로고(→홈) · 리브(→리브 페이지) · 프로젝트(워크스페이스 전체) ▸ 살아 있는 세션 트리(web/v2/side.ts) · 앱(런치패드) · 나/로그아웃
-//    중앙        — 리브와 대화(홈) / 프로젝트 / 세션 / 앱 프레임(클래식 화면 임베드) / 리브 페이지
+//    중앙        — 입력창 하나(홈 — Enter 로 프로젝트 없는 세션, #1719) / 프로젝트 / 세션(대화창) / 앱 프레임(클래식 화면 임베드) / 리브 페이지
 //    우측        — 이 선택의 지식(프로젝트 필요·산출) · 리브 카드(홈)
 //  라우트: #/ #/dashboard → 홈 · #/liv · #/p/<id> · #/s/<sid> · #/app/<key>[/…] · 그 밖의 클래식 해시 → 같은 해시로 앱 프레임.
 //  데스크톱(일렉트론)에서 그대로 쓰기 위한 규약: 정적 자산 + 해시 라우트 + api()(상대 경로·bearer/쿠키)만 쓴다.
@@ -33,12 +33,21 @@ export async function bootV2() {
     window.addEventListener('hashchange', () => { void route(); });
     await route();
     // 사이드바 상태점 — 라이브 세션은 자주 바뀐다. 20초 폴링(가벼운 목록 두 개). 탭이 숨어 있으면 건너뛴다.
-    setInterval(() => { if (document.hidden)
-        return; void loadData().then(() => { drawSide(); const c = parse(); if (c.segs[0] === 's' && c.segs[1]) {
-        const sid = decodeURIComponent(c.segs[1]);
-        refreshSession(data, sid);
-        drawAsideSession(data.sessions.find((x) => x.id === sid || x.logId === sid) || null);
-    } }); }, 20000);
+    setInterval(() => {
+        if (document.hidden)
+            return;
+        void loadData().then(() => {
+            drawSide();
+            const c = parse();
+            if (c.segs[0] === 's' && c.segs[1]) {
+                const sid = decodeURIComponent(c.segs[1]);
+                refreshSession(data, sid);
+                // 우측 '이 세션'도 — 단 사람이 프로젝트 select 를 만지는 중이면 되그리지 않는다(선택이 날아간다, #1719).
+                if (!(document.activeElement && document.activeElement.classList.contains('v2-pj-sel')))
+                    drawAsideSession(data.sessions.find((x) => x.id === sid || x.logId === sid) || null);
+            }
+        });
+    }, 20000);
 }
 // ── 데이터 ──
 async function loadData(opts) {
@@ -185,8 +194,10 @@ function drawAsideHome() {
         return;
     const cards = el('div', { class: 'liv-cards v2-liv-cards' });
     asideEl.replaceChildren(el('div', { class: 'v2-aside-h' }, el('b', { text: '리브가 지금 보는 것' })), cards, el('div', { class: 'v2-aside-h', style: 'margin-top:14px' }, el('b', { text: '앱' }), el('span', { class: 'v2-k', text: '옛 화면 그대로' })), el('div', { class: 'v2-applist' }, ...visibleApps().slice(0, 6).map((a) => el('a', { class: 'v2-applink', href: '#/app/' + a.key }, appIcon(a.icon), el('span', { text: a.title })))), el('button', { class: 'btn-text', type: 'button', text: '전체 앱 보기 →', onclick: () => openLaunchpad() }));
-    const askHost = (centerEl && centerEl.querySelector('.v2-askdock'));
-    void fillLivCards(cards, askHost || el('div', {}));
+    // 리브가 기다리는 물음(자격·선택·업로드 카드)은 이제 홈 가운데가 아니라 여기(우측) 카드 위에 붙는다 — 홈 가운데는 입력창 하나다.
+    const askHost = el('div', { class: 'liv-askdock v2-askdock' });
+    cards.before(askHost);
+    void fillLivCards(cards, askHost);
 }
 function drawAsideProject(detail, id) {
     if (!asideEl)
@@ -209,9 +220,47 @@ function drawAsideSession(s) {
         ['하네스', String(raw.harness || '—')], ['노드', String(s.node || '이 박스')],
         ['소유', s.owned ? '나' : String(raw.owner || raw.owner_name || '—')],
     ];
-    asideEl.replaceChildren(el('div', { class: 'v2-aside-h' }, el('b', { text: '이 세션' })), el('dl', { class: 'v2-facts' }, ...facts.flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: v })])), 
+    asideEl.replaceChildren(el('div', { class: 'v2-aside-h' }, el('b', { text: '이 세션' })), el('dl', { class: 'v2-facts' }, ...facts.flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: v })])), projectPicker(s), 
     // ⚠ replaceChildren 에 null 을 넘기면 글자 "null" 이 그려진다(el() 과 달리 걸러 주지 않는다) — 프로젝트 없는 세션에서 실측.
     ...(s.projectId ? [el('a', { class: 'btn btn-ghost btn-sm', href: '#/p/' + s.projectId, text: '프로젝트로' })] : []), el('p', { class: 'v2-fine', text: '이 세션이 읽고 찾은 지식(get·search)은 다음 단계에서 여기에 순서대로 붙습니다.' }));
+}
+// 세션의 프로젝트 소속 — 내 세션이면 여기서 **언제든** 붙이고 뗀다(#1719: 홈 입력창은 프로젝트를 묻지 않고 연다).
+//  POST terminal/sessions/:id/project — 서버가 tmux 표시값·세션 폴더 안 마커/링크·DB 구간을 함께 바꾼다(cwd 는 그대로).
+//  목록은 '내 프로젝트'(사이드바와 같은 집합) — 서버도 같은 기준(생성자·팀원)으로 막는다.
+function projectPicker(s) {
+    if (!s.owned || !s.live)
+        return el('div', {});
+    const sel = el('select', { class: 'v2-pj-sel', 'aria-label': '이 세션의 프로젝트' });
+    sel.append(el('option', { value: '', text: '프로젝트 없음' }));
+    const mine = [...data.projects].sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+    for (const p of mine)
+        sel.append(el('option', { value: String(p.id), text: p.name }));
+    if (s.projectId && !mine.some((p) => Number(p.id) === Number(s.projectId)))
+        sel.append(el('option', { value: String(s.projectId), text: projName(data, s.projectId) }));
+    sel.value = s.projectId ? String(s.projectId) : '';
+    const note = el('span', { class: 'v2-fine v2-pj-note' });
+    sel.onchange = async () => {
+        const pid = Number(sel.value) || 0;
+        sel.disabled = true;
+        note.textContent = '바꾸는 중…';
+        try {
+            const r = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/project', { method: 'POST', body: JSON.stringify({ projectId: pid || null }) });
+            toast(pid ? `프로젝트에 붙였어요${r && r.linked ? ' — 세션 폴더의 ./project 로 프로젝트 폴더에 갑니다' : ''}.` : '프로젝트에서 뗐어요.');
+            note.textContent = '';
+            await loadData();
+            drawSide();
+            const cur = data.sessions.find((x) => x.id === s.id) || null;
+            drawAsideSession(cur);
+            refreshSession(data, s.id);
+        }
+        catch (e) {
+            note.textContent = '';
+            sel.disabled = false;
+            sel.value = s.projectId ? String(s.projectId) : '';
+            toast('프로젝트를 바꾸지 못했습니다 — ' + (e && e.message ? e.message : e), true);
+        }
+    };
+    return el('div', { class: 'v2-pj-pick' }, el('span', { class: 'v2-k', text: '프로젝트' }), sel, note);
 }
 // 미사용 경고 방지 — 라우터 밖에서도 뷰를 갱신하고 싶을 때 쓰는 진입점(툴바 등 후속용).
 export function v2Refresh() { void loadData().then(() => { drawSide(); void route(); }); }

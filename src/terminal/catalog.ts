@@ -254,7 +254,15 @@ export interface CreateInput { label: string; rootKey: string; subpath: string; 
   // #1516 — 로그인 전용 세션: 이 하네스의 **로그인 명령**을 셸에서 돌린다(하네스 TUI 를 띄우지 않는다).
   //  자격이 만료된 상태에서 그 하네스로 세션을 열면 즉사해 로그인 자체가 불가능하기 때문(harnessLoginArgv 주석).
   //  harness 는 'shell' 로 보낸다 — 이 세션은 AI 세션이 아니라 로그인 절차용이다.
-  loginFor?: string; }
+  loginFor?: string;
+  // #1719 홈 입력창 — **세션 전용 폴더**에서 연다: cwd = <rootKey 루트>/sessions/<세션id>(폴더를 고르지 않는다).
+  //  프로젝트 소속은 만들 때 정하지 않고 나중에 POST /terminal/sessions/:id/project 로 붙인다(session-project.ts) —
+  //  cwd 는 세션의 것이라 프로젝트가 바뀌어도 그대로다(실행 중 프로세스의 cwd 는 inode 참조라 어차피 안 따라온다).
+  //  subpath 는 무시된다. 라벨·하네스·플래그는 종전과 같다.
+  sessionDir?: boolean;
+  // #1719 홈 입력창 — 첫 지시. 세션을 띄운 뒤 하네스 입력창이 뜨는 걸 **보고 나서** 주입한다(session-first-prompt.ts).
+  //  생성 응답은 기다리지 않는다(주입은 백그라운드) — 화면은 세션 대화창으로 가서 대화 파일에 나타나는 걸 따라간다.
+  initialPrompt?: string; }
 
 // ── 세션 런처(#1516) — 하네스가 죽어도 세션은 산다 ──
 //

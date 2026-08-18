@@ -159,11 +159,13 @@ export async function upsertSessionState(s: SessionStateInput): Promise<void> {
 }
 
 // 라벨/초대 변경(editSession) 미러. 레코드 없으면 no-op(구 세션은 다음 upsert 계기에 편입).
-export async function updateSessionStateMeta(id: string, patch: { label?: string; invites?: string[] }): Promise<void> {
+export async function updateSessionStateMeta(id: string, patch: { label?: string; invites?: string[]; project_id?: number | null; project_src?: "v6" | "org" | null }): Promise<void> {
   const sets: string[] = [];
   const vals: unknown[] = [id];
   if (patch.label !== undefined) { vals.push(patch.label); sets.push(`label=$${vals.length}`); }
   if (patch.invites !== undefined) { vals.push(JSON.stringify(patch.invites)); sets.push(`invites=$${vals.length}::jsonb`); }
+  // #1719 — 프로젝트 소속 변경(session-project). 복원(restore)이 이 값으로 @box_project 를 되살린다. null = 뗌.
+  if (patch.project_id !== undefined) { vals.push(patch.project_id); sets.push(`project_id=$${vals.length}`); vals.push(patch.project_id ? (patch.project_src ?? "v6") : null); sets.push(`project_src=$${vals.length}`); }
   if (!sets.length) return;
   sets.push("updated_at=now()");
   await itemsPool.query(`UPDATE org_session_state SET ${sets.join(", ")} WHERE id=$1`, vals);
