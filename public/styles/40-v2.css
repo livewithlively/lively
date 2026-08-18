@@ -250,6 +250,81 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-facts dt { color: var(--muted); }
 .v2-facts dd { margin: 0; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* ── 우패널 타임라인(#1719) — 프로젝트·세션·워크스페이스가 같은 부품 ──
+   위계는 생김새로: 1 남긴 것 = 큰 점 + 카드 · 2 한 일 = 작은 점 + 한 줄 · 3 오간 말 = 잔 눈금.
+   색은 종류(kind)가 아니라 **위계**가 쓴다 — 종류까지 색으로 가르면 316px 안이 무지개가 된다. */
+.tl-wrap { display: flex; flex-direction: column; gap: 8px; flex: none; }
+.tl-scope { font-size: 11.5px; color: var(--muted); }
+.tl-wrap .v2-aside-h .v2-k { margin-left: auto; }
+.tl-seg { display: flex; align-items: center; gap: 2px; background: var(--bg, #fff); border: 1px solid var(--line); border-radius: 9px; padding: 2px; }
+.tl-seg-b { flex: 1; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 24px; padding: 0 6px; border: 0; border-radius: 7px; background: none; font: inherit; font-size: 11.5px; font-weight: 600; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.tl-seg-b:hover { color: var(--ink); }
+.tl-seg-b.on { background: var(--bg-tint-2, #EEF5FF); color: var(--ink); }
+.tl-seg-b .n { font-family: var(--mono, ui-monospace, monospace); font-size: 10px; color: var(--muted-2, #a6b2c8); }
+.tl-seg-b.on .n { color: var(--blue); }
+.tl-kind-b { flex: none; height: 24px; padding: 0 8px; border: 0; border-left: 1px solid var(--line); border-radius: 0 7px 7px 0; background: none; font: inherit; font-size: 11.5px; font-weight: 600; color: var(--muted); cursor: pointer; }
+.tl-kind-b:hover, .tl-kind-b.open { color: var(--ink); }
+.tl-kind-b.on { color: var(--blue); }
+.tl-kinds { display: flex; flex-wrap: wrap; gap: 4px; }
+.tl-kchip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border: 1px solid transparent; border-radius: 999px; background: none; font: inherit; font-size: 11px; color: var(--ink-sub); cursor: pointer; }
+.tl-kchip:hover { background: var(--bg, #fff); }
+.tl-kchip.on { background: var(--bg, #fff); border-color: var(--line-net-2, #CFE0F7); color: var(--ink); font-weight: 600; }
+.tl-kchip .n { font-family: var(--mono, ui-monospace, monospace); font-size: 10px; color: var(--muted-2, #a6b2c8); }
+.tl-list { display: flex; flex-direction: column; min-height: 0; }
+.tl-day { display: flex; align-items: center; gap: 8px; padding: 10px 2px 4px; font-size: 10.5px; font-weight: 600; color: var(--muted-2, #a6b2c8); }
+.tl-day::after { content: ""; flex: 1; height: 1px; background: var(--line-net, #DCE6F5); }
+
+/* 세로 레일 — 점은 레일 위에 얹힌다(맥락 파이프라인 §ctx-stage 와 같은 방식). */
+.tl-rail { position: relative; padding-left: 18px; display: flex; flex-direction: column; }
+.tl-rail::before { content: ""; position: absolute; left: 4px; top: 8px; bottom: 8px; width: 1px; background: var(--line-net, #DCE6F5); }
+.tl-ev { position: relative; text-decoration: none; color: inherit; }
+.tl-ev::before { content: ""; position: absolute; left: -16px; width: 7px; height: 7px; border-radius: 50%; background: var(--bg, #fff); border: 1.5px solid var(--muted-2, #a6b2c8); box-sizing: border-box; }
+
+/* 1단 — 남긴 것 */
+.tl-ev.t1 { padding: 4px 0; }
+.tl-ev.t1::before { left: -17px; top: 13px; width: 9px; height: 9px; background: var(--mint-deep, #0FA37E); border-color: var(--mint-deep, #0FA37E); box-shadow: 0 0 0 3px color-mix(in srgb, var(--mint-deep, #0FA37E) 14%, transparent); }
+.tl-ev.t1.tlk-activity::before, .tl-ev.t1.tlk-cmd::before { background: var(--blue); border-color: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 14%, transparent); }
+.tl-card { background: var(--bg, #fff); border: 1px solid var(--line); border-radius: 9px; padding: 7px 9px; display: flex; flex-direction: column; gap: 2px; }
+.tl-ev.go:hover .tl-card { border-color: var(--line-net-2, #CFE0F7); box-shadow: var(--shadow-1, 0 1px 3px rgba(21,35,59,.06)); }
+.tl-c-top { display: flex; align-items: baseline; gap: 5px; }
+.tl-verb { font-size: 10.5px; font-weight: 700; color: var(--mint-deep, #0FA37E); flex: none; }
+.tl-ev.tlk-activity .tl-verb, .tl-ev.tlk-cmd .tl-verb { color: var(--blue); }
+.tl-tm { font-family: var(--mono, ui-monospace, monospace); font-size: 10px; color: var(--muted-2, #a6b2c8); margin-left: auto; flex: none; }
+.tl-ttl { font-size: 12.5px; font-weight: 600; line-height: 1.4; color: var(--ink); word-break: break-word; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.tl-sub { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; font-size: 11px; color: var(--muted); }
+.tl-ai { font-family: var(--mono, ui-monospace, monospace); font-size: 9.5px; color: var(--muted-2, #a6b2c8); border: 1px solid var(--line-net, #DCE6F5); border-radius: 4px; padding: 0 4px; line-height: 14px; }
+.tl-x { font-family: var(--mono, ui-monospace, monospace); font-size: 10px; color: var(--muted-2, #a6b2c8); flex: none; }
+.tl-err { font-size: 10px; font-weight: 700; color: var(--coral-text, #B84E44); }
+
+/* 2단 — 한 일 */
+.tl-ev.t2 { display: flex; align-items: center; gap: 6px; padding: 3px 0; min-height: 22px; }
+.tl-ev.t2::before { top: 8px; }
+.tl-ev.t2 .tl-verb { color: var(--ink-sub); font-weight: 600; }
+.tl-ev.t2 .tl-ttl { flex: 1; min-width: 0; font-size: 12px; font-weight: 500; color: var(--ink-sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-ev.t2.go:hover .tl-ttl { color: var(--blue); }
+.tl-ev.t2.err .tl-ttl { color: var(--coral-text, #B84E44); }
+
+/* 3단 — 오간 말·잔 변경 */
+.tl-ev.t3 { display: flex; align-items: center; gap: 6px; padding: 1px 0; min-height: 18px; }
+.tl-ev.t3::before { left: -15px; top: 7px; width: 5px; height: 5px; border-color: var(--line-net, #DCE6F5); }
+.tl-ev.t3 .tl-ttl { flex: 1; min-width: 0; font-size: 11px; font-weight: 400; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.tl-face { width: 15px; height: 15px; border-radius: 50%; font-size: 8.5px; font-weight: 700; flex: none; display: inline-grid; place-items: center; color: #fff; overflow: hidden; }
+.tl-face img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tl-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted-2, #a6b2c8); flex: none; display: inline-block; }
+/* ⚠ 접두어 tlk- 인 이유: 옛 발자취 CSS 에 **범위 없는** .k-file/.k-task 규칙이 살아 있어(.k-task{background:coral})
+   행에 k-task 를 붙이면 행 전체가 산호색으로 칠해진다(실측 — 빨강·초록 띠). 우리 클래스는 우리 접두어를 쓴다. */
+.tl-dot.tlk-file { background: var(--ink-sub); }
+.tl-dot.tlk-knowledge { background: var(--blue); }
+.tl-dot.tlk-activity { background: var(--mint-deep, #0FA37E); }
+.tl-dot.tlk-cmd { background: var(--muted-head, #7A88A3); }
+.tl-dot.tlk-task { background: var(--teal, #1BAEB0); }
+.tl-dot.tlk-project { background: var(--blue-deep, #1E54CC); }
+.tl-dot.tlk-source { background: var(--node-blue-soft, #9DBDF2); }
+.tl-dot.tlk-say, .tl-dot.tlk-meta { background: var(--muted-2, #a6b2c8); }
+.tl-dot.tlk-all { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-2, #a6b2c8); }
+.v2-kn-foot { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+
 /* ── 런치패드 ── */
 .v2-pad { position: fixed; inset: 0; z-index: 900; background: rgba(21, 35, 59, .28); backdrop-filter: blur(6px); display: flex; flex-direction: column; align-items: center; padding: 48px 24px; overflow: auto; }
 .v2-pad-top { width: min(920px, 100%); display: flex; align-items: center; gap: 12px; margin-bottom: 18px; background: var(--bg, #fff); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; }

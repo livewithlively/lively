@@ -8,10 +8,11 @@
 //   서버 템플릿 의존 0, window.open 대신 <a target=_blank>(일렉트론이 새 창 정책으로 받는다).
 import { $view, anchoredPopover, api, el, toast } from '../core.js';
 import { fillLivCards, renderLiv } from '../liv.js';
-import { CLASSIC_PAGES, appByKey, appFrame, appIcon, openLaunchpad, visibleApps } from './apps.js';
+import { CLASSIC_PAGES, appByKey, appFrame } from './apps.js';
 import { drawSide as drawSideTree, projectOrder } from './side.js';
 import { dotCls, mergeSessions, projName, refreshSession, renderHome, renderProject, renderSession, unmountSession, type Sess, type V2Data } from './views.js';
-import { createTrailWidget, type TrailWidget } from '../session-trail.js';
+import { createTimeline, type TimelineHandle } from '../timeline.js';
+import { loadProjectTimeline, loadSessionActivities, loadWorkspaceTimeline } from '../timeline-sources.js';
 import { makeSplitter } from './split.js';
 
 let root: HTMLElement | null = null;
@@ -167,45 +168,41 @@ function knItem(name: string, rel: 'req' | 'prod'): HTMLElement {
 }
 function drawAsideHome(): void {
   if (!asideEl) return;
-  const cards = el('div', { class: 'liv-cards v2-liv-cards' });
-  asideEl.replaceChildren(
-    el('div', { class: 'v2-aside-h' }, el('b', { text: '리브가 지금 보는 것' })),
-    cards,
-    el('div', { class: 'v2-aside-h', style: 'margin-top:14px' }, el('b', { text: '앱' }), el('span', { class: 'v2-k', text: '옛 화면 그대로' })),
-    el('div', { class: 'v2-applist' }, ...visibleApps().slice(0, 6).map((a) => el('a', { class: 'v2-applink', href: '#/app/' + a.key }, appIcon(a.icon), el('span', { text: a.title })))),
-    el('button', { class: 'btn-text', type: 'button', text: '전체 앱 보기 →', onclick: () => openLaunchpad() }));
-  // 리브가 기다리는 물음(자격·선택·업로드 카드)은 이제 홈 가운데가 아니라 여기(우측) 카드 위에 붙는다 — 홈 가운데는 입력창 하나다.
+  // 우패널은 세 화면이 같은 것을 쓴다(#1719 상민님) — 홈에서는 **워크스페이스에서 일어난 일**.
+  //  리브가 기다리는 물음(자격·선택·업로드)은 답해야 하는 것이라 타임라인 위에 그대로 둔다.
   const askHost = el('div', { class: 'liv-askdock v2-askdock' });
-  cards.before(askHost);
+  const cards = el('div', { class: 'liv-cards v2-liv-cards', hidden: true });   // 카드는 리브 페이지(#/liv)가 보여준다 — 여기선 물음만 건진다
+  asideEl.replaceChildren(askHost, cards);
+  const tl = createTimeline(asideEl, { scope: '워크스페이스', showActors: true, empty: '아직 남은 작업 기록이 없어요 — 세션이 일하고 기록하면 여기에 쌓입니다.' });
   void fillLivCards(cards, askHost);
+  void loadWorkspaceTimeline(60).then((items) => tl.addAll(items));
 }
-// 리브 페이지의 우측 패널 — 홈 패널과 같은 자리·같은 카드("리브가 지금 보는 것"). 카드 본체는 renderLiv 가 채운다.
+// 리브 페이지의 우측 패널 — 홈과 같은 타임라인. "지금 손볼 것" 카드는 본문(renderLiv 가 rail 없이 그리는 왼쪽 레일)로 돌아간다.
 function drawAsideLiv(): HTMLElement | null {
   if (!asideEl) return null;
-  const rail = el('div', { class: 'liv-rail v2-liv-rail' });
-  asideEl.replaceChildren(
-    el('div', { class: 'v2-aside-h' }, el('b', { text: '리브가 지금 보는 것' }), el('span', { class: 'v2-k', text: '손볼 것' })),
-    rail,
-    el('p', { class: 'v2-fine', text: '리브가 던진 물음은 대화 입력 바로 위에 뜹니다.' }));
-  return rail;
+  asideEl.replaceChildren();
+  const tl = createTimeline(asideEl, { scope: '워크스페이스', showActors: true, empty: '아직 남은 작업 기록이 없어요.' });
+  void loadWorkspaceTimeline(60).then((items) => tl.addAll(items));
+  return null;   // rail 을 주지 않는다 = 카드는 본문에
 }
 function drawAsideProject(detail: any, id: number): void {
   if (!asideEl) return;
+  asideEl.replaceChildren();
+  const tl = createTimeline(asideEl, { scope: '프로젝트 #' + id, showActors: true, empty: '아직 이 프로젝트에서 일어난 일이 없어요.' });
   const kn = detail && detail.project && detail.project.knowledge;
   const req: any[] = (kn && kn.required) || [];
   const prod: any[] = (kn && kn.produced) || [];
-  asideEl.replaceChildren(
-    el('div', { class: 'v2-aside-h' }, el('b', { text: '이 프로젝트의 지식' }), el('span', { class: 'v2-k', text: `필요 ${req.length} · 산출 ${prod.length}` })),
-    el('div', { class: 'v2-kn-sec' }, el('span', { class: 'v2-k', text: '필요지식' }),
-      req.length ? el('div', { class: 'v2-kn-list' }, ...req.map((k) => knItem(k.name, 'req'))) : el('p', { class: 'v2-empty', text: '아직 없어요 — 세션에서 리브가 읽은 것부터 채워집니다.' })),
-    el('div', { class: 'v2-kn-sec' }, el('span', { class: 'v2-k', text: '산출지식' }),
-      prod.length ? el('div', { class: 'v2-kn-list' }, ...prod.map((k) => knItem(k.name, 'prod'))) : el('p', { class: 'v2-empty', text: '세션이 끝나면 여기에 쌓입니다.' })),
-    el('a', { class: 'btn btn-ghost btn-sm', href: '#/projects2/p/' + id, text: '프로젝트 앱에서 지식 연결' }));
+  // 지식 목록은 사라지지 않는다 — 타임라인 아래 한 줄 요약 + 프로젝트 앱으로. (시각이 없어 타임라인에 못 꽂는다)
+  asideEl.append(el('div', { class: 'v2-kn-foot' },
+    el('span', { class: 'v2-k', text: `지식 · 필요 ${req.length} · 산출 ${prod.length}` }),
+    el('div', { class: 'v2-kn-list' }, ...[...req.map((k: any) => knItem(k.name, 'req')), ...prod.map((k: any) => knItem(k.name, 'prod'))].slice(0, 6)),
+    el('a', { class: 'btn btn-ghost btn-sm', href: '#/projects2/p/' + id, text: '프로젝트 앱에서 열기' })));
+  void loadProjectTimeline(id, detail).then((items) => tl.addAll(items));
 }
-// 세션 우패널 = 짧은 사실 줄 + **발자취**(session-trail.ts — 이 세션이 읽고 쓴 파일·지식·활동·프로젝트·태스크·자료).
-//  같은 세션이면 위젯을 **다시 만들지 않는다**(20초 폴링이 상태만 갱신) — 새로 만들면 쌓인 발자취가 사라진다.
-let asideTrail: { id: string; w: TrailWidget; facts: HTMLElement } | null = null;
-function drawAsideSession(s: Sess | null): TrailWidget | null {
+// 세션 우패널 = 짧은 사실 줄 + **타임라인**(이 세션이 한 일 — 트랜스크립트 도구 사용 + 이 세션이 남긴 작업 기록).
+//  같은 세션이면 위젯을 **다시 만들지 않는다**(20초 폴링이 상태만 갱신) — 새로 만들면 쌓인 것이 사라진다.
+let asideTrail: { id: string; w: TimelineHandle; facts: HTMLElement } | null = null;
+function drawAsideSession(s: Sess | null): TimelineHandle | null {
   if (!asideEl) return null;
   if (!s) { asideTrail = null; asideEl.replaceChildren(el('p', { class: 'v2-empty', text: '세션 정보를 찾을 수 없어요.' })); return null; }
   const raw = s.raw || {};
@@ -217,8 +214,9 @@ function drawAsideSession(s: Sess | null): TrailWidget | null {
     !s.owned && (raw.owner_name || raw.owner) ? [el('span', { class: 'sep', text: '·' }), el('span', { text: String(raw.owner_name || raw.owner) })] : null);
   if (asideTrail && asideTrail.id === s.id && asideTrail.w.root.isConnected) { asideTrail.facts.replaceWith(factsEl); asideTrail.facts = factsEl; return asideTrail.w; }
   asideEl.replaceChildren(factsEl);   // 프로젝트 붙이기는 상단바 [프로젝트 연결](#1749)
-  const w = createTrailWidget(asideEl, { sessionId: s.id, live: s.live });
+  const w = createTimeline(asideEl, { scope: '이 세션', empty: '아직 한 일이 없어요 — 세션이 일하면 여기에 쌓입니다.' });
   asideTrail = { id: s.id, w, facts: factsEl };
+  void loadSessionActivities(s.id).then((items) => w.addAll(items));
   return w;
 }
 // 세션의 프로젝트 소속(#1749) — 상단바 [프로젝트 연결]/[▾] 이 여는 **검색 드롭다운**. 내 세션이면 언제든 붙이고 뗀다.
