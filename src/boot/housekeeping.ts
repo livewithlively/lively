@@ -10,6 +10,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { BearerVerifier } from "../auth/bearer.js";
 import { registryModeActive } from "../org/tenancy/state.js";
+import { autoActivateWorkspaceRegistry } from "../org/tenancy/activate.js";
 import { itemsPool } from "../db/client.js";
 import { reapDeviceAuth } from "../org/auth/device-auth.js";
 import { reapOAuth } from "../org/store/oauth.js";
@@ -132,6 +133,20 @@ export const DB_BOOT_STEPS: BootStep[] = [
   //  실패해도 부팅을 막지 않는다(그 경우 self 는 v2 처럼 '잠긴 맥락이 있으면 닫힘'으로 폴백).
   //  registry 모드에선 자식(schema-init-child)이 소유자로 이미 돌렸다 — 여기서 또 하면 DDL 권한 오류만 난다.
   { name: "self-rls", gate: "always", run: () => registryModeActive() ? Promise.resolve() : ensureSelfRls().then((ok) => logger.info({ rowLevel: ok }, "self 소스 공개범위 준비됨")) },
+  // ── 다중 워크스페이스 자동 활성화(#1750 후속) — **사람 손 0.** 단일 모드 부팅이 여기서 스스로 활성화하고
+  //  1회 재기동한다(앱 role 재배선은 첫 import 시점이라 살아 있는 프로세스에선 불가). 신규 설치는 첫 부팅에,
+  //  기존 박스는 다음 업데이트에 자동으로 넘어온다 — 설치·업데이트 스크립트는 이 존재를 몰라도 된다.
+  //  자리 근거: self-rls **뒤**(lively_reader 가 있어야 RESTRICTIVE reader 정책까지 첫 판에 걸린다) ·
+  //  시딩 **앞**(어차피 재기동 후 다시 도는 스텝들 앞에서 끊는 게 낭비가 적다).
+  //  실패는 fail-closed — 검증을 못 넘으면 상태파일이 없으니 단일 모드 그대로다(경고 + 상태 API 노출).
+  //  대상 판정(매니지드·바인딩·opt-out 제외)은 autoActivationEligible 한 곳.
+  { name: "workspace-registry", gate: "always", run: async () => {
+    const r = await autoActivateWorkspaceRegistry();
+    if (r.status !== "activated") return;
+    logger.info("다중 워크스페이스 활성화 완료 — 앱 role 재배선을 위해 재기동합니다(상시구동 슈퍼바이저가 다시 띄웁니다. 수동 실행이면 다시 시작하세요)");
+    // 로그 flush·진행 중 healthz 응답 여유만 주고 끝낸다. 종료코드 0 = 의도된 재기동(launchd/systemd KeepAlive).
+    setTimeout(() => process.exit(0), 500);
+  } },
   // 프로비저닝 디폴트 콘텐츠 시딩(#713) — 코드가 이름으로 전제하는 지식·훅·스킬(예: 모든 프로젝트 AGENTS.md 가
   //  가리키는 project-closeout 스킬(#878), 도메인맵 is-부트스트랩 런북 2개, 커스텀훅·스킬)을 신규 게이트웨이에
   //  idempotent 주입한다(없을 때만 — 운영자 토글·편집 보존). org(훅·스킬)+v6(지식) 스키마가 모두 준비된 뒤. 비치명.

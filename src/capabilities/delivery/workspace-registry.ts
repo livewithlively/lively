@@ -15,7 +15,7 @@ import { HttpError } from "../rest-util.js";
 import type { LivelyUser } from "../../context.js";
 import { restRead, restWork, restOnly, actorOf } from "./shared.js";
 import { registryModeActive } from "../../org/tenancy/state.js";
-import { activateWorkspaceRegistry } from "../../org/tenancy/activate.js";
+import { activateWorkspaceRegistry, lastActivationError } from "../../org/tenancy/activate.js";
 import {
   PRIMARY_SLUG, PRIMARY_TENANT_ID, normalizeWorkspaceSlug, listWorkspacesForMember, getWorkspaceBySlug,
   insertWorkspace, updateWorkspaceName, archiveWorkspace, addWorkspaceMember, removeWorkspaceMember,
@@ -59,8 +59,12 @@ async function findWs(slugRaw: unknown): Promise<RegistryWorkspace> {
 
 const requireRegistry = (): void => {
   if (!registryModeActive()) {
+    // 보통은 여기 올 일이 없다 — 부팅이 자동 활성화한다(boot/housekeeping 'workspace-registry' 스텝).
+    //  왔다는 건 자동 활성화가 실패했거나(사유는 workspace_registry_status 의 activation_error) 매니지드라는 뜻.
+    const err = lastActivationError();
     throw new HttpError(400,
-      "다중 워크스페이스가 아직 활성화되지 않았습니다 — 관리자가 workspace_activate 를 먼저 실행하세요" +
+      "다중 워크스페이스가 아직 활성화되지 않았습니다 — 부팅 자동 활성화가 안 됐다면 사유를 확인하세요" +
+      (err ? ` (마지막 실패: ${err})` : "") +
       " (매니지드 워크스페이스라면 app.lvly.io 홈에서 만듭니다)");
   }
 };
@@ -75,7 +79,11 @@ export const workspaceRegistryCapabilities: Capability[] = [
       const managed = !!(process.env.LIVELY_TENANT_HEADER_SECRET || "").trim();
       const mode = managed ? "managed" : registryModeActive() ? "registry" : "single";
       const current = currentTenant()?.slug ?? PRIMARY_SLUG;
-      if (mode !== "registry") return { mode, current, workspaces: [] };
+      if (mode !== "registry") {
+        // single = 자동 활성화가 아직/실패 — 실패 사유는 admin 에게만(오류 문구에 DSN 호스트 등이 실릴 수 있다).
+        const err = (user.scopes || []).includes("admin") ? lastActivationError() : null;
+        return { mode, current, workspaces: [], ...(err ? { activation_error: err } : {}) };
+      }
       const mine = await listWorkspacesForMember(id);
       // primary 는 명부 없이도 모두의 것 — 명부에 없어도 목록 맨 앞에 세운다(박스 로그인 = primary 접근).
       const rows = mine.some((w) => w.id === PRIMARY_TENANT_ID) ? mine
@@ -83,11 +91,11 @@ export const workspaceRegistryCapabilities: Capability[] = [
       return { mode, current, workspaces: rows.map(wsView) };
     }, true),
 
-  restOnly("workspace_activate", "다중 워크스페이스 활성화",
-    "셀프호스트 게이트웨이를 다중 워크스페이스 모드로 전환한다(1회). DB 에 앱 role(lvly_app)을 만들고 전 콘텐츠 " +
-    "테이블에 격리 정책(RLS)을 건 뒤, 기존 데이터를 primary 워크스페이스로 시드하고 **프로세스를 재기동**한다" +
-    "(상시구동 슈퍼바이저 전제 — launchd/systemd 가 새 모드로 다시 띄운다). 격리 검증이 실패하면 아무것도 바꾸지 않는다. " +
-    "app_dsn: 소켓 DSN 등 자동 변환이 안 될 때 앱 role 접속 DSN 직접 지정.",
+  restOnly("workspace_activate", "다중 워크스페이스 활성화(수동 — 보통 불필요)",
+    "**보통은 부팅이 자동으로 한다** — 이 op 는 자동 활성화가 실패한 박스의 수동 복구용이다(사유는 workspace_registry_status 의 " +
+    "activation_error). DB 에 앱 role 을 만들고 전 콘텐츠 테이블에 격리 정책(RLS)을 건 뒤, 기존 데이터를 primary 워크스페이스로 " +
+    "시드하고 **프로세스를 재기동**한다(상시구동 슈퍼바이저 전제). 격리 검증이 실패하면 아무것도 바꾸지 않는다. " +
+    "app_dsn: 소켓 DSN 등 자동 변환이 안 될 때 앱 role 접속 DSN 직접 지정 — 자동 활성화가 실패하는 대표 사유.",
     [{ method: "POST", paths: ["/api/ui/org/workspaces/activate"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser) => {
       const id = requireMember(user);
