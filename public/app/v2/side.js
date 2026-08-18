@@ -314,14 +314,8 @@ function projRow(r, sess, activeKey) {
         : ['프로젝트에 붙지 않은 세션 — AI 세션 앱에서 전부 봅니다'];
     // 이름은 언제나 같은 잉크색이다 — 완료·조용함은 태그·시각이 말한다(연회색 본문이 목록 절반이면 전체가 바래 보인다).
     const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : ''), href, 'data-nav': p ? pk : 'app:terminal', title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') + '\n프로젝트 화면을 엽니다' }, caret, glyph('folder', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }), r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null, sess.length ? sumEl(sess) : (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null));
-    // 글을 먼저 다 뽑아 **형제끼리 겹치는지** 본다 — 한 가지 일을 두 세션이 이어받으면 '지금 하는 일'이 똑같아진다(실측).
-    //  그럴 때만 마지막 작업 시각을 덧대 구분한다(항상 붙이면 그게 또 잡음이다).
     const head = sess.slice(0, MAX_SESS);
-    const texts = head.map((s) => sessText(s, p ? p.name : ''));
-    const dupes = new Map();
-    for (const t of texts)
-        dupes.set(t.main, (dupes.get(t.main) || 0) + 1);
-    const list = sess.length ? el('div', { class: 'v2-ss-list', role: 'group', hidden: !isOpen }, ...head.map((s, i) => sessRow(s, activeKey, texts[i], (dupes.get(texts[i].main) || 0) > 1)), sess.length > MAX_SESS ? el('a', { class: 'v2-ss-more', href, text: `외 ${sess.length - MAX_SESS}개` }) : null) : null;
+    const list = sess.length ? el('div', { class: 'v2-ss-list', role: 'group', hidden: !isOpen }, ...head.map((s) => sessRow(s, activeKey, sessText(s, p ? p.name : ''))), sess.length > MAX_SESS ? el('a', { class: 'v2-ss-more', href, text: `외 ${sess.length - MAX_SESS}개` }) : null) : null;
     return el('div', { class: 'v2-pj' + (isOpen ? ' open' : ''), role: 'treeitem', 'aria-expanded': sess.length ? String(isOpen) : null }, row, list);
 }
 // 프로젝트 행 오른쪽 — 숫자를 늘어놓지 않는다. **볼 일이 있는 것만**: 확인 필요(호박)·작업 중(파랑).
@@ -342,7 +336,7 @@ function sumEl(sess) {
     return el('span', { class: 'v2-sums', 'aria-label': `세션 ${sess.length}` }, part(c.wait, 'wait', '확인 필요'), part(c.busy, 'busy', '작업 중'), (!c.wait && !c.busy && c.rest) ? el('span', { class: 'v2-sum idle', title: `살아 있는 세션 ${c.rest}` }, String(c.rest)) : null);
 }
 // 세션 행 — 상태점 · 세션을 실제로 구분해 주는 글(sessText) · 남의 세션이면 소유자 얼굴 · 상태어.
-function sessRow(s, activeKey, text, dup) {
+function sessRow(s, activeKey, text) {
     const st = SESS_STATES[s.stateKey];
     const cls = dotCls(s.stateKey);
     const raw = s.raw || {};
@@ -350,8 +344,10 @@ function sessRow(s, activeKey, text, dup) {
     // 프로젝트명 반복을 걷어낸 뒤의 이름·'지금 하는 일'(하네스 pane 제목 = 클래식 카드의 💬 줄).
     //  끝난 세션은 트리에 없으니 '마지막으로 하던 일'로 읽어도 틀리지 않는다.
     const main = text.main;
-    const sub = text.sub || (dup && s.lastSeen ? when(s.lastSeen) : '');
+    const sub = text.sub;
     const tip = [s.label, raw.title && String(raw.title) !== s.label ? String(raw.title) : '', `${st ? st.label : s.stateLabel}${s.lastSeen ? ' · ' + when(s.lastSeen) : ''}`, s.owned ? '내 세션' : `${owner}의 세션`, raw.harness ? String(raw.harness) : '', s.node ? '노드 ' + s.node : ''].filter(Boolean).join('\n');
-    const showWord = s.stateKey === 'waiting' || s.stateKey === 'busy'; // 상태어는 지금 볼 일이 있는 것만 — 나머지는 점이 말한다
-    return el('a', { class: 'v2-ss-row' + (activeKey === 's:' + s.id ? ' on' : '') + (s.owned ? '' : ' other'), href: '#/s/' + encodeURIComponent(s.id), 'data-nav': 's:' + s.id, title: tip + '\n세션 대화를 엽니다', role: 'treeitem' }, el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }), el('span', { class: 'v2-ss-main' }, el('span', { class: 't', text: main }), sub ? el('span', { class: 'sub', text: sub }) : null), s.owned ? null : personFace(String(raw.owner || ''), 'v2-ss-face', owner), showWord ? el('span', { class: 'w ' + cls, text: st ? st.label : s.stateLabel }) : glyph('chat', 'v2-ss-go'));
+    return el('a', { class: 'v2-ss-row' + (activeKey === 's:' + s.id ? ' on' : '') + (s.owned ? '' : ' other'), href: '#/s/' + encodeURIComponent(s.id), 'data-nav': 's:' + s.id, title: tip + '\n세션 대화를 엽니다', role: 'treeitem' }, el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }), el('span', { class: 'v2-ss-main' }, el('span', { class: 't', text: main }), sub ? el('span', { class: 'sub', text: sub }) : null), s.owned ? null : personFace(String(raw.owner || ''), 'v2-ss-face', owner), 
+    // 오른쪽 끝은 **한 자리**로 고정한다 — 상태어를 조건부로 넣으면 행마다 길이가 달라 목록이 들쭉날쭉해진다(상민님 2026-08-18).
+    //  상태는 왼쪽 점이, 개수는 프로젝트 행이 말한다. 여기는 '누르면 대화로 간다'는 표식만(hover 때 보인다).
+    glyph('chat', 'v2-ss-go'));
 }
