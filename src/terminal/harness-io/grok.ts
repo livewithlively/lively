@@ -94,6 +94,7 @@ export const grokIo: HarnessSessionAdapter = {
   roots: (homes) => homes.map((h) => path.join(h, ".grok", "sessions")),
   filePattern: /^updates\.jsonl$/,
   pathFor: (root, { cwd, convId }) => (cwd && CONV_ID_RE.test(convId) ? path.join(root, encodeURIComponent(cwd), convId, "updates.jsonl") : null),
+  latest: null,
   parse: parseGrok,
   answer: null,
 };

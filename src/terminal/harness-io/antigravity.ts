@@ -107,6 +107,7 @@ export const antigravityIo: HarnessSessionAdapter = {
   roots: (homes) => homes.map((h) => path.join(h, ".gemini", "antigravity-cli", "brain")),
   filePattern: /^transcript(_full)?\.jsonl$/,
   pathFor: (root, { convId }) => (CONV_ID_RE.test(convId) ? path.join(root, convId, ".system_generated", "logs", "transcript_full.jsonl") : null),
+  latest: null,
   parse: parseAntigravity,
   answer: null,
 };
