@@ -1,14 +1,16 @@
 // v2/side.ts — 새 셸 좌측 사이드바(#1719): 워크스페이스 **전체** 프로젝트 ▸ 살아 있는 세션 트리.
-//  규칙(상민님 2026-08-18):
-//   · 프로젝트는 워크스페이스 전체가 보인다(내 것만이 아니다). '내 프로젝트만'은 토글.
-//   · 프로젝트 아래엔 **끝나지 않은 세션만**(살아 있는 박스 — 중단됨·종료됨·기록만 남은 대화는 빼고). 끝난 것은 프로젝트 화면·세션 이력에서.
-//   · 완료 프로젝트는 기본 숨김 — [완료 숨김] 필터를 풀 때만 보인다. 단 완료인데 살아 있는 세션이 있으면 보인다(도는 게 있으면 사실상 진행 중).
-//   · 정렬 = 그 프로젝트 세션들의 **마지막 작업 시각**(work-flag 훅 보고 = lastActive, 기록은 last_seen) 내림차순.
-//     끝난 세션도 시각엔 센다(마지막으로 일한 프로젝트가 위로) — 세션이 하나도 없는 프로젝트는 그 뒤에 updated_at 순.
-//   · 한눈에 상태: 맨 위 상태 칩(확인 필요·작업 중·… 개수, 누르면 그 상태만), 프로젝트 행에 상태별 개수, 세션 행에 상태점+상태어,
-//     남이 만든 세션엔 소유자 얼굴(내 것은 표시 없음). 상태 어휘는 web/session-status.ts 한 벌(AI 세션 탭·대시보드와 같다).
+//  규칙(상민님 2026-08-18, 같은 날 재구성 지시로 갱신):
+//   · 프로젝트는 워크스페이스 전체가 보인다(내 것만이 아니다). '내 프로젝트만'은 필터 안의 토글.
+//   · 프로젝트 아래엔 **끝나지 않은 세션만**(살아 있는 박스). 끝난 것은 프로젝트 화면·세션 이력에서.
+//   · 완료 프로젝트는 기본 숨김(살아 있는 세션이 있으면 예외로 보인다). 정렬 = 마지막 작업 시각 내림차순.
+//   · **기본 화면은 목록 하나다** — 상태 칩·완료 숨김·내 프로젝트만 같은 필터는 전부 [필터] 버튼 속 팝오버로
+//     들어간다(밖에 늘어놓으면 목록보다 조작부가 먼저 읽힌다 — 번잡함의 주범이었다).
+//   · **위계가 시각으로 갈린다**: 프로젝트 행 = 폴더 아이콘 + 굵은 글씨 → 누르면 프로젝트 화면.
+//     세션 행 = 들여쓴 레일 + 상태점 + 보통 글씨 → 누르면 그 세션의 대화. 서로 다른 곳으로 간다는 게 생김새에서 보인다.
+//   · 흐린 회색 본문 금지 — 완료·조용한 프로젝트도 이름은 같은 잉크색이고, 상태는 작은 태그·시각으로만 구분한다
+//     (연회색 글씨가 목록의 절반을 차지하면 전체가 바래 보인다).
 //  main.ts 가 데이터·활성 키를 넘기고, 필터·펼침 같은 사이드바 자체 상태는 여기 산다(브라우저에 기억).
-import { el, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTime, setUiModeOverride, state } from '../core.js';
+import { el, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTime, setUiModeOverride, state, sv } from '../core.js';
 import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls } from './views.js';
@@ -113,6 +115,15 @@ function redraw() { if (last)
     render(); }
 let treeEl = null;
 let countEl = null;
+let filterOpen = false; // [필터] 팝오버 — 열림은 잠깐의 상태라 브라우저에 기억하지 않는다
+let outsideBound = false;
+// 위계 아이콘 — 프로젝트는 폴더, 세션은 말풍선. 같은 24 뷰박스·현재색 스트로크(붓은 하나).
+function glyph(kind, cls) {
+    const d = kind === 'folder'
+        ? 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'
+        : 'M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z';
+    return sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, sv('path', { d }));
+}
 function render() {
     if (!last)
         return;
@@ -132,9 +143,10 @@ function render() {
         oninput: (e) => { sideFilter = e.target.value; renderTree(); if (treeEl)
             treeEl.scrollTop = 0; } });
     const doneCount = rows.filter((r) => r.done).length;
+    const fltN = (stateFilter ? 1 : 0) + (mineOnly ? 1 : 0) + (showDone ? 1 : 0);
     host.replaceChildren(el('div', { class: 'v2-side-top' }, el('a', { class: 'v2-logo', href: '#/', title: '홈으로', 'data-nav': 'home' }, 'Lively', el('span', { class: 'pulse-dot', 'aria-hidden': 'true' }))), 
     // ⚠ replaceChildren 은 null 을 글자 "null" 로 그린다(el() 과 다르다) — 조건부 자식은 스프레드로.
-    ...(livOn ? [el('a', { class: 'v2-liv-btn' + (last.activeKey() === 'liv' ? ' on' : ''), href: '#/liv', 'data-nav': 'liv' }, el('span', { class: 'lm', text: 'L' }), el('span', { text: '리브' }), el('span', { class: 'sub', text: '워크스페이스 담당자' }))] : []), el('div', { class: 'v2-side-sec' }, countEl, el('a', { class: 'v2-add', href: '#/projects2', text: '+ 새 프로젝트', title: '프로젝트 앱(보드)에서 만듭니다' })), el('div', { class: 'v2-find' }, findIn), ...stateChips(liveAll), el('div', { class: 'v2-side-flt', role: 'group', 'aria-label': '필터' }, toggle('완료 숨김', !showDone, doneCount ? String(doneCount) : '', '완료된 프로젝트를 목록에서 뺍니다(살아 있는 세션이 있으면 그래도 보여요). 누르면 완료도 보입니다.', () => { showDone = !showDone; saveFlag(DONE_KEY, showDone); redraw(); }), toggle('내 프로젝트만', mineOnly, '', '내가 만들었거나 팀원인 프로젝트만 봅니다.', () => { mineOnly = !mineOnly; saveFlag(MINE_KEY, mineOnly); redraw(); })), treeEl, el('div', { class: 'v2-side-foot' }, el('button', { class: 'v2-apps-btn', type: 'button', onclick: () => openLaunchpad(), title: '앱 — 아직 새 화면으로 옮기지 않은 것들' }, appIcon('proj', 'v2-apps-ic'), el('span', { text: '앱' }), el('span', { class: 'v2-cnt', text: String(visibleApps().length) })), el('div', { class: 'v2-me' }, profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }), el('span', { class: 'v2-me-name', text: name }), el('button', { class: 'btn-text', type: 'button', text: '로그아웃', onclick: () => void logout() })), el('button', { class: 'v2-classic-link', type: 'button', text: '클래식 화면으로 (이 브라우저)', title: '이 브라우저에서만 옛 화면으로 봅니다. 관리탭 [화면] 에서 되돌릴 수 있어요.', onclick: () => { setUiModeOverride('classic'); location.replace(location.pathname + '#/dashboard'); location.reload(); } })));
+    ...(livOn ? [el('a', { class: 'v2-liv-btn' + (last.activeKey() === 'liv' ? ' on' : ''), href: '#/liv', 'data-nav': 'liv' }, el('span', { class: 'lm', text: 'L' }), el('span', { text: '리브' }), el('span', { class: 'sub', text: '워크스페이스 담당자' }))] : []), el('div', { class: 'v2-side-sec' }, countEl, filterBtn(fltN, liveAll, doneCount), el('a', { class: 'v2-add', href: '#/projects2', text: '+ 새 프로젝트', title: '프로젝트 앱(보드)에서 만듭니다' })), el('div', { class: 'v2-find' }, findIn), ...(fltN ? [filterSummary(fltN)] : []), treeEl, el('div', { class: 'v2-side-foot' }, el('button', { class: 'v2-apps-btn', type: 'button', onclick: () => openLaunchpad(), title: '앱 — 아직 새 화면으로 옮기지 않은 것들' }, appIcon('proj', 'v2-apps-ic'), el('span', { text: '앱' }), el('span', { class: 'v2-cnt', text: String(visibleApps().length) })), el('div', { class: 'v2-me' }, profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }), el('span', { class: 'v2-me-name', text: name }), el('button', { class: 'btn-text', type: 'button', text: '로그아웃', onclick: () => void logout() })), el('button', { class: 'v2-classic-link', type: 'button', text: '클래식 화면으로 (이 브라우저)', title: '이 브라우저에서만 옛 화면으로 봅니다. 관리탭 [화면] 에서 되돌릴 수 있어요.', onclick: () => { setUiModeOverride('classic'); location.replace(location.pathname + '#/dashboard'); location.reload(); } })));
     renderTree(rows);
     treeEl.scrollTop = prevScroll;
     if (findHad) {
@@ -143,28 +155,52 @@ function render() {
             findIn.setSelectionRange(findSel[0], findSel[1]);
     }
 }
-// 상태 칩 — 살아 있는 세션 전부의 상태별 개수. rank 순('지금 볼 것 먼저'). 누르면 그 상태 세션이 있는 프로젝트·그 세션만 남는다.
-function stateChips(liveAll) {
+// [필터] 버튼 + 팝오버 — 조작부는 여기 다 모인다. 목록 표면에는 필터가 없다(켜져 있으면 요약 한 줄만).
+function filterBtn(activeN, liveAll, doneCount) {
     const counts = new Map();
     for (const s of liveAll)
         counts.set(s.stateKey, (counts.get(s.stateKey) || 0) + 1);
     if (stateFilter && !counts.has(stateFilter))
-        counts.set(stateFilter, 0); // 켜 둔 필터의 상태가 0이 돼도 칩은 남겨 끌 수 있게
+        counts.set(stateFilter, 0); // 켜 둔 상태가 0이 돼도 끌 수 있게 남긴다
     const keys = [...counts.keys()].sort((a, b) => rankOf(a) - rankOf(b));
-    if (!keys.length)
-        return [];
-    return [el('div', { class: 'v2-side-sum', role: 'group', 'aria-label': '세션 상태' }, ...keys.map((k) => {
+    const wrap = el('div', { class: 'v2-flt' });
+    const btn = el('button', {
+        class: 'v2-flt-btn' + (activeN ? ' has' : '') + (filterOpen ? ' open' : ''), type: 'button',
+        'aria-haspopup': 'true', 'aria-expanded': String(filterOpen), title: '보기 조건 — 상태·범위·완료',
+        onclick: (e) => { e.stopPropagation(); filterOpen = !filterOpen; redraw(); }
+    }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-flt-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M4 6h16M7 12h10M10 18h4' })), el('span', { text: '필터' }), activeN ? el('b', { class: 'v2-flt-n', text: String(activeN) }) : null);
+    wrap.append(btn);
+    if (filterOpen) {
+        const opt = (on, label, cnt, dot, onclick) => el('button', { class: 'v2-fo' + (on ? ' on' : ''), type: 'button', 'aria-pressed': String(on), onclick }, dot ? el('span', { class: 'v2-dot ' + dot, 'aria-hidden': 'true' }) : el('span', { class: 'v2-fo-pad', 'aria-hidden': 'true' }), el('span', { class: 'n', text: label }), cnt ? el('span', { class: 'v2-cnt', text: cnt }) : null, on ? el('span', { class: 'v2-fo-ck', text: '✓', 'aria-hidden': 'true' }) : null);
+        wrap.append(el('div', { class: 'v2-flt-pop', role: 'menu', onclick: (e) => e.stopPropagation() }, el('div', { class: 'v2-flt-k', text: '세션 상태' }), opt(!stateFilter, '전체', '', null, () => { stateFilter = null; redraw(); }), ...keys.map((k) => {
             const st = SESS_STATES[k];
-            const on = stateFilter === k;
-            return el('button', {
-                class: 'v2-stchip ' + dotCls(k) + (on ? ' on' : ''), type: 'button', 'aria-pressed': String(on),
-                title: (st ? st.hint : k) + (on ? ' — 다시 누르면 전체' : ' — 누르면 이 상태만'),
-                onclick: () => { stateFilter = on ? null : k; redraw(); }
-            }, el('span', { class: 'v2-dot ' + dotCls(k), 'aria-hidden': 'true' }), el('span', { text: st ? st.label : k }), el('b', { text: String(counts.get(k) || 0) }));
-        }))];
+            return opt(stateFilter === k, st ? st.label : k, String(counts.get(k) || 0), dotCls(k), () => { stateFilter = stateFilter === k ? null : k; redraw(); });
+        }), el('div', { class: 'v2-flt-k', text: '범위' }), opt(mineOnly, '내 프로젝트만', '', null, () => { mineOnly = !mineOnly; saveFlag(MINE_KEY, mineOnly); redraw(); }), opt(showDone, '완료 프로젝트도 보기', doneCount ? String(doneCount) : '', null, () => { showDone = !showDone; saveFlag(DONE_KEY, showDone); redraw(); }), el('div', { class: 'v2-flt-foot' }, el('button', { class: 'btn-text', type: 'button', text: '전부 지우기', onclick: () => { stateFilter = null; mineOnly = false; showDone = false; saveFlag(MINE_KEY, false); saveFlag(DONE_KEY, false); redraw(); } }), el('button', { class: 'btn-text', type: 'button', text: '닫기', onclick: () => { filterOpen = false; redraw(); } }))));
+        if (!outsideBound) {
+            outsideBound = true;
+            document.addEventListener('click', (e) => {
+                if (filterOpen && !e.target?.closest?.('.v2-flt')) {
+                    filterOpen = false;
+                    redraw();
+                }
+            });
+        }
+    }
+    return wrap;
 }
-function toggle(label, on, cnt, tip, onclick) {
-    return el('button', { class: 'v2-tg' + (on ? ' on' : ''), type: 'button', 'aria-pressed': String(on), title: tip, onclick }, el('span', { class: 'v2-tg-mark', 'aria-hidden': 'true' }), el('span', { text: label }), cnt ? el('span', { class: 'v2-cnt', text: cnt }) : null);
+// 필터가 켜져 있을 때만 나오는 한 줄 — 무엇으로 걸러 보고 있는지 + 한 번에 끄기.
+function filterSummary(n) {
+    const bits = [];
+    if (stateFilter) {
+        const st = SESS_STATES[stateFilter];
+        bits.push((st ? st.label : stateFilter) + ' 세션만');
+    }
+    if (mineOnly)
+        bits.push('내 프로젝트만');
+    if (showDone)
+        bits.push('완료 포함');
+    return el('div', { class: 'v2-flt-sum' }, el('span', { text: bits.join(' · ') }), el('button', { class: 'btn-text', type: 'button', text: '지우기', title: `필터 ${n}개를 끕니다`,
+        onclick: () => { stateFilter = null; mineOnly = false; showDone = false; saveFlag(MINE_KEY, false); saveFlag(DONE_KEY, false); redraw(); } }));
 }
 // 트리(프로젝트 ▸ 세션) — 검색은 여기만 다시 그린다(입력칸 포커스를 잃지 않게).
 function renderTree(rowsIn) {
@@ -223,28 +259,27 @@ function projRow(r, sess, activeKey) {
     const tipBits = p
         ? [`#${p.id} · ${p.status_category === 'done' ? '완료' : p.status_category === 'unstarted' ? '시작 전' : '진행 중'}`, r.lastWork ? '마지막 작업 ' + when(r.lastWork) : '세션 없음', r.mine ? '내 프로젝트' : (p.created_by ? `${(people[p.created_by] && people[p.created_by].display_name) || p.created_by} 만듦` : '')]
         : ['프로젝트에 붙지 않은 세션 — AI 세션 앱에서 전부 봅니다'];
-    // 살아 있는 세션이 없는 프로젝트는 한 톤 조용히(quiet) + 오른쪽에 '마지막 작업' 시각 — 왜 이 자리에 있는지(정렬 근거)가 보인다.
-    const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : '') + (r.done ? ' is-done' : '') + (sess.length ? '' : ' quiet'), href, 'data-nav': p ? pk : 'app:terminal', title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') }, caret, el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }), r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null, sess.length ? sumEl(sess) : (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null));
+    // 이름은 언제나 같은 잉크색이다 — 완료·조용함은 태그·시각이 말한다(연회색 본문이 목록 절반이면 전체가 바래 보인다).
+    const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : ''), href, 'data-nav': p ? pk : 'app:terminal', title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') + '\n프로젝트 화면을 엽니다' }, caret, glyph('folder', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }), r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null, sess.length ? sumEl(sess) : (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null));
     const list = sess.length ? el('div', { class: 'v2-ss-list', role: 'group', hidden: !isOpen }, ...sess.slice(0, MAX_SESS).map((s) => sessRow(s, activeKey)), sess.length > MAX_SESS ? el('a', { class: 'v2-ss-more', href, text: `외 ${sess.length - MAX_SESS}개` }) : null) : null;
     return el('div', { class: 'v2-pj' + (isOpen ? ' open' : ''), role: 'treeitem', 'aria-expanded': sess.length ? String(isOpen) : null }, row, list);
 }
-// 프로젝트 행 오른쪽 — 상태별 개수(확인 필요·작업 완료·작업 중은 색으로, 그 밖의 살아 있는 것은 회색 하나로).
+// 프로젝트 행 오른쪽 — 숫자를 늘어놓지 않는다. **볼 일이 있는 것만**: 확인 필요(호박)·작업 중(파랑).
+//  그 밖의 살아 있는 세션은 개수 하나(회색). 상태별 전체 분포는 [필터] 팝오버가 보여 준다.
 function sumEl(sess) {
     if (!sess.length)
         return null;
-    const c = { wait: 0, done: 0, busy: 0, rest: 0 };
+    const c = { wait: 0, busy: 0, rest: 0 };
     for (const s of sess) {
         if (s.stateKey === 'waiting')
             c.wait++;
-        else if (s.stateKey === 'done')
-            c.done++;
         else if (s.stateKey === 'busy')
             c.busy++;
         else
             c.rest++;
     }
     const part = (n, cls, label) => (n ? el('span', { class: 'v2-sum ' + cls, title: `${label} ${n}` }, el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }), String(n)) : null);
-    return el('span', { class: 'v2-sums', 'aria-label': `세션 ${sess.length}` }, part(c.wait, 'wait', '확인 필요'), part(c.done, 'done', '작업 완료'), part(c.busy, 'busy', '작업 중'), part(c.rest, 'idle', '대기·오프라인·셸'));
+    return el('span', { class: 'v2-sums', 'aria-label': `세션 ${sess.length}` }, part(c.wait, 'wait', '확인 필요'), part(c.busy, 'busy', '작업 중'), (!c.wait && !c.busy && c.rest) ? el('span', { class: 'v2-sum idle', title: `살아 있는 세션 ${c.rest}` }, String(c.rest)) : null);
 }
 // 세션 행 — 상태점 · 이름(+ 아래에 '지금 하는 일' 한 줄) · 남의 세션이면 소유자 얼굴 · 상태어.
 function sessRow(s, activeKey) {
@@ -256,5 +291,6 @@ function sessRow(s, activeKey) {
     //  이 줄이 사실상 세션을 구분해 준다. 끝난 세션은 트리에 없으니 '마지막으로 하던 일'로 읽어도 틀리지 않는다.
     const sub = raw.title && String(raw.title) !== s.label ? String(raw.title) : '';
     const tip = [s.label, `${st ? st.label : s.stateLabel}${s.lastSeen ? ' · ' + when(s.lastSeen) : ''}`, s.owned ? '내 세션' : `${owner}의 세션`, raw.harness ? String(raw.harness) : '', s.node ? '노드 ' + s.node : ''].filter(Boolean).join('\n');
-    return el('a', { class: 'v2-ss-row' + (activeKey === 's:' + s.id ? ' on' : '') + (s.owned ? '' : ' other'), href: '#/s/' + encodeURIComponent(s.id), 'data-nav': 's:' + s.id, title: tip, role: 'treeitem' }, el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }), el('span', { class: 'v2-ss-main' }, el('span', { class: 't', text: s.label }), sub ? el('span', { class: 'sub', text: sub }) : null), s.owned ? null : personFace(String(raw.owner || ''), 'v2-ss-face', owner), el('span', { class: 'w ' + cls, text: st ? st.label : s.stateLabel }));
+    const showWord = s.stateKey === 'waiting' || s.stateKey === 'busy'; // 상태어는 지금 볼 일이 있는 것만 — 나머지는 점이 말한다
+    return el('a', { class: 'v2-ss-row' + (activeKey === 's:' + s.id ? ' on' : '') + (s.owned ? '' : ' other'), href: '#/s/' + encodeURIComponent(s.id), 'data-nav': 's:' + s.id, title: tip + '\n세션 대화를 엽니다', role: 'treeitem' }, el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }), el('span', { class: 'v2-ss-main' }, el('span', { class: 't', text: s.label }), sub ? el('span', { class: 'sub', text: sub }) : null), s.owned ? null : personFace(String(raw.owner || ''), 'v2-ss-face', owner), showWord ? el('span', { class: 'w ' + cls, text: st ? st.label : s.stateLabel }) : glyph('chat', 'v2-ss-go'));
 }
