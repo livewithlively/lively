@@ -172,12 +172,15 @@ let treeEl = null;
 let countEl = null;
 let filterOpen = false; // [필터] 팝오버 — 열림은 잠깐의 상태라 브라우저에 기억하지 않는다
 let outsideBound = false;
-// 위계 아이콘 — 프로젝트는 폴더, 세션은 말풍선. 같은 24 뷰박스·현재색 스트로크(붓은 하나).
+// 위계 아이콘 — 프로젝트는 폴더(펼치면 열린 폴더), 세션은 말풍선. 같은 24 뷰박스·현재색 스트로크(붓은 하나).
 function glyph(kind, cls) {
-    const d = kind === 'folder'
-        ? 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'
-        : 'M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z';
-    return sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, sv('path', { d }));
+    const D = {
+        folder: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
+        // 뚜껑이 젖혀진 열린 폴더 — 카드가 열려 있다는 것을 아이콘도 함께 말한다(안 1 '방').
+        'folder-open': ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1', 'M3 17l2.3-6.6A2 2 0 0 1 7.2 9H21l-2.4 7.6a2 2 0 0 1-1.9 1.4H5a2 2 0 0 1-2-1z'],
+        chat: ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z'],
+    };
+    return sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, ...D[kind].map((d) => sv('path', { d })));
 }
 function render() {
     if (!last)
@@ -391,7 +394,7 @@ function projRow(r, sess, activeKey) {
         ? [`#${p.id} · ${p.status_category === 'done' ? '완료' : p.status_category === 'unstarted' ? '시작 전' : '진행 중'}`, r.lastWork ? '마지막 작업 ' + when(r.lastWork) : '세션 없음', r.mine ? '내 프로젝트' : (p.created_by ? `${(people[p.created_by] && people[p.created_by].display_name) || p.created_by} 만듦` : '')]
         : ['프로젝트에 붙지 않은 세션 — AI 세션 앱에서 전부 봅니다'];
     // 이름은 언제나 같은 잉크색이다 — 완료·조용함은 태그·시각이 말한다(연회색 본문이 목록 절반이면 전체가 바래 보인다).
-    const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : ''), href, 'data-nav': p ? pk : 'app:terminal', title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') + '\n프로젝트 화면을 엽니다' }, caret, glyph('folder', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }), r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null, sess.length ? sumEl(sess) : (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null));
+    const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : ''), href, 'data-nav': p ? pk : 'app:terminal', title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') + '\n프로젝트 화면을 엽니다' }, caret, glyph(isOpen ? 'folder-open' : 'folder', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }), r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null, sess.length ? sumEl(sess) : (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null));
     const head = sess.slice(0, MAX_SESS);
     const list = sess.length ? el('div', { class: 'v2-ss-list', role: 'group', hidden: !isOpen }, ...head.map((s) => sessRow(s, activeKey, sessText(s, p ? p.name : ''))), sess.length > MAX_SESS ? el('a', { class: 'v2-ss-more', href, text: `외 ${sess.length - MAX_SESS}개` }) : null) : null;
     return el('div', { class: 'v2-pj' + (isOpen ? ' open' : ''), role: 'treeitem', 'aria-expanded': sess.length ? String(isOpen) : null }, row, list);
