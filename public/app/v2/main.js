@@ -139,7 +139,7 @@ async function route() {
             if (detail && !data.projects.some((p) => p.id === id))
                 void loadData({ projects: true }).then(() => drawSide());
             // 프로젝트 화면(#1757) = 짧은 개요 + 리브 대화. 리브가 본문·태스크를 바꾸면(턴 끝) 목록·사이드바도 다시 당긴다.
-            projView = mountProjectView(centerEl, { data, id, detail, onProjectChanged: () => { void loadData({ projects: true }).then(() => drawSide()); } });
+            projView = mountProjectView(centerEl, { data: () => data, id, detail, onProjectChanged: () => { void loadData({ projects: true }).then(() => drawSide()); } });
             drawAsideProject(detail, id);
         }
         else if (page === 's' && segs[1]) {

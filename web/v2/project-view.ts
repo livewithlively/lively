@@ -1,32 +1,32 @@
-// v2/project-view.ts — 새 셸의 **프로젝트 화면**(#1757, 처음부터 다시 잡음).
+// v2/project-view.ts — 새 셸의 **프로젝트 화면 = 방**(#1757 v3, 상민님 "일마다 방을 준다").
 //
-//  ── 화면의 문법 ──
-//  홈(입력창)·세션(대화창)과 같은 문법으로 맞춘다: 위는 **짧은 개요**, 아래는 **리브와의 대화 + 입력칸**.
-//   ┌ 개요 — 번호·상태·리스트 / 제목 [편집] / 본문(몇 줄만, 더 보기) / [＋ 새 세션][공유 폴더][보드] · 세션 n ▾ 태스크 n ▾ 지식 n
-//   ├ (펼친 목록 — 세션·태스크는 눌렀을 때만 한 칸 펼친다. 늘 펼쳐 두면 옛 화면처럼 길어진다)
-//   └ 대화 — 리브(프로젝트 폴더에서 도는 턴, web/project-chat.ts). 빈 대화엔 상태에 맞는 제안 칩. 입력칸은 맨 아래 고정.
-//
-//  ── 본문은 누가 쓰나 ──
-//  둘 다. 리브가 대화로 정돈해서 쓰는 것이 기본 길(칩 '본문 정리' · 바의 [본문 정리])이고, 사람은 [편집]으로 언제든 직접 고친다.
-//  그래서 리브의 턴이 끝날 때마다 개요를 서버에서 다시 읽는다(리브가 본문·태스크·상태를 바꿨을 수 있다) — 대화는 그대로 두고 개요만.
+//  ── 방의 문법 ──
+//  프로젝트가 방이다 — 그 방에 들어가면 이 일의 모든 것이 구역으로 나뉘어 그 안에 있다. 방 밖에는 아무것도 두지 않는다.
+//   ┌ 방 머리 — #번호·상태·리스트 / 제목 / **방 현황 한 줄**(지금 도는 것 · 세션 · 할 일 · 자료 · 지식 · 사람)
+//   ├ 구역 넷(남는 높이를 대화 바로 위까지, 각자 안에서 스크롤):
+//   │   [본문]   — 정돈된 마크다운(리브가 쓰는 게 기본 길) · [편집]으로 그 자리 직접 수정      [코멘트] — 사람들끼리 남기는 말 + 쓰는 칸
+//   │   [공유 폴더] — 그 자리 탐색·업로드·미리보기                                        [세션]  — 이 방에서 돈 AI 세션 · [＋ 새 세션]
+//   └ 리브 대화 + 입력칸 — 방의 바닥. 대화가 생기면 구역|대화 경계를 끌어 조정(기억).
 //
 //  ── 이 파일이 모르는 것 ──
-//  대화의 읽기·쓰기(project-chat.ts) · 세션 생성(quick-session.ts) · 공유 폴더 브라우저(projects/files.ts openFolderGrid — 클래식 모달 재사용).
+//  대화의 읽기·쓰기(web/project-chat.ts) · 세션 생성(quick-session.ts) · 업로드 전송·파일 미리보기(projects/files.ts 헬퍼).
 import { api, el, relTime, renderMarkdown, toast } from '../core.js';
-import { openFolderGrid } from '../projects/files.js';
+import { UP_CONFIRM, fileIconSvg, fmtFileDateFull, fmtSize, openFileViewer, openFolderGrid, upControl, upDropZone, upPrecheckOverwrite, upProgress, upSend, upToast, type UpItem } from '../projects/files.js';
 import { mountProjectChat, type ProjectChatHandle } from '../project-chat.js';
 import { openProjectSession } from './quick-session.js';
+import { sessText } from './side.js';
+import { makeSplitter } from './split.js';
 import { dotCls, type Sess, type V2Data } from './views.js';
 
 export interface ProjectViewOpts {
-  data: V2Data;
+  data: () => V2Data;                 // 최신 목록(main.ts 가 20초마다 갱신) — 구역이 되그릴 때마다 새로 읽는다
   id: number;
   detail: any;                        // GET v6/projects/:id 응답(없으면 여기서 읽는다)
   onProjectChanged?: () => void;      // 본문·태스크·상태가 바뀌었다 — 사이드바 등 바깥이 갱신할 신호
 }
 export interface ProjectViewHandle { destroy(): void; }
 
-/** 본문 정돈 — 칩·바 버튼이 같은 말을 쓴다(둘이 다르면 리브가 다르게 움직인다). */
+/** 리브에게 보내는 정형 지시 — 칩·바 버튼이 같은 말을 쓴다(둘이 다르면 리브가 다르게 움직인다). */
 const SAY_TIDY_NEW = '이 프로젝트의 본문을 정돈된 형식으로 써 줘. 이름·태스크·연결된 지식에서 읽히는 만큼만 — 없는 사실은 지어내지 말고, 모르는 항목은 비워 둬.';
 const SAY_TIDY = '본문을 정돈된 형식으로 다시 써 줘. 원문의 사실·결정·링크는 하나도 잃지 말고, 산만한 문장만 정리해.';
 const SAY_NEXT = '지금 상태를 읽고 다음에 할 일 2~3개를 제안해 줘. 각각 한 줄로, 바로 시킬 수 있게.';
@@ -34,71 +34,109 @@ const SAY_SPLIT = '이 프로젝트를 태스크로 나눠 줘. 만들기 전에
 const SAY_CHECK = '상태·마감·담당·우선순위를 점검하고, 비어 있거나 어긋난 게 있으면 정리해 줘.';
 
 const stateWord = (cat: string | null | undefined): { word: string; dot: string } =>
-  cat === 'done' ? { word: '끝남', dot: 'done' } : cat === 'unstarted' ? { word: '시작 전', dot: '' } : { word: '진행 중', dot: 'idle' };
+  cat === 'done' ? { word: '끝남', dot: 'done' } : cat === 'unstarted' ? { word: '시작 전', dot: '' } : { word: '진행 중', dot: 'busy' };
 const when = (ms: number) => (ms ? relTime(new Date(ms).toISOString()) : '');
+const joinPath = (a: string, b: string): string => (a ? a + '/' + b : b);
+
+interface FeedComment { kind: string; id: number; ts: string; actor: string; display_name?: string; body: string }
 
 export function mountProjectView(host: HTMLElement, opts: ProjectViewOpts): ProjectViewHandle {
   const id = opts.id;
   let detail: any = opts.detail;
   let editing = false;
-  let expanded = false;
-  let panel: 'sessions' | 'tasks' | null = null;
   let chat: ProjectChatHandle | null = null;
   let dead = false;
+  let fileTotal: number | null = null;   // 공유 폴더 재귀 파일 수(자료 n) — 마운트 때 한 번 잰다
 
-  const top = el('div', { class: 'pv-top' });
+  // ── 골격 — 방 머리(고정) → 구역 그리드(남는 높이) → [경계 손잡이] → 대화 ──
+  const headEl = el('div', { class: 'pv-head' });
+  const room = el('div', { class: 'pv-room' });
+  const top = el('div', { class: 'pv-top' }, headEl, room);
   const chatHost = el('div', { class: 'pv-chat' });
-  const wrap = el('div', { class: 'pv-wrap' }, top, chatHost);
+  const wrap = el('div', { class: 'pv-wrap' }, top) as HTMLElement;
+  wrap.append(makeSplitter({ axis: 'y', key: 'pv-chat-h', cssVar: '--pv-chat-h', target: wrap, def: 340, min: 180, max: 640, grow: -1, label: '대화 칸 높이' }), chatHost);
   host.replaceChildren(wrap);
 
-  // ── 데이터 접근(항상 최신 detail 에서) ──
-  const pj = (): any => (detail && detail.project) || opts.data.projects.find((x) => Number(x.id) === id) || { id, name: `프로젝트 #${id}` };
+  // ── 데이터 접근 ──
+  const pj = (): any => (detail && detail.project) || opts.data().projects.find((x) => Number(x.id) === id) || { id, name: `프로젝트 #${id}` };
   const tasksOf = (): any[] => (Array.isArray(detail?.project?.tasks) ? detail.project.tasks : []);
-  const sessOf = (): Sess[] => opts.data.sessions.filter((s) => Number(s.projectId) === id).sort((a, b) => Number(b.live && b.alive) - Number(a.live && a.alive) || b.lastSeen - a.lastSeen);
-  const knOf = (): { req: any[]; prod: any[] } => { const k = detail?.project?.knowledge || {}; return { req: k.required || [], prod: k.produced || [] }; };
+  const sessOf = (): Sess[] => opts.data().sessions.filter((s) => Number(s.projectId) === id)
+    .sort((a, b) => Number(b.live && b.alive) - Number(a.live && a.alive) || b.lastSeen - a.lastSeen);
 
-  // ── 개요 ──
-  function paintTop(): void {
+  // ══ 방 머리 — 번호·상태 / 제목 / 방 현황 한 줄 ═══════════════════════════════════════════════
+  function paintHead(): void {
     const p = pj();
     const st = stateWord(p.status_category);
     const tasks = tasksOf();
-    const done = tasks.filter((t) => t.status_category === 'done' || t.status === 'done').length;
+    const tdone = tasks.filter((t) => t.status_category === 'done' || t.status === 'done').length;
     const sess = sessOf();
-    const live = sess.filter((s) => s.live && s.alive);
-    const kn = knOf();
-    const desc = String(p.description || '');
+    const busy = sess.filter((s) => s.live && s.alive && s.stateKey === 'busy').length;
+    const kn = detail?.project?.knowledge || {};
+    const knN = ((kn.required || []).length + (kn.produced || []).length) || 0;
+    const members: any[] = Array.isArray(detail?.project?.members) ? detail.project.members : [];
 
-    // 번호 · 상태 · 리스트 · 마지막 수정
-    const eyebrow = el('div', { class: 'pv-eyebrow' },
-      el('span', { class: 'mono', text: '#' + p.id }),
-      el('span', { class: 'sep', text: '·' }),
-      el('span', { class: 'pv-state' }, el('span', { class: 'v2-dot ' + st.dot, 'aria-hidden': 'true' }), el('span', { text: st.word })),
-      p.list && p.list.name ? [el('span', { class: 'sep', text: '·' }), el('span', { text: p.list.name })] : null,
-      p.updated_at ? [el('span', { class: 'sep', text: '·' }), el('span', { class: 'pv-when', text: '수정 ' + relTime(p.updated_at) })] : null);
+    const stat = (label: string, val: string, extra?: HTMLElement | null): HTMLElement =>
+      el('span', { class: 'pv-stat' }, el('span', { class: 'k', text: label }), el('b', { text: val }), extra ?? null);
+    const stats = el('div', { class: 'pv-stats' },
+      busy ? el('span', { class: 'pv-stat live' }, el('span', { class: 'v2-dot busy', 'aria-hidden': 'true' }), el('b', { text: `지금 ${busy}개 작업 중` })) : null,
+      stat('세션', String(sess.length)),
+      tasks.length
+        ? el('a', { class: 'pv-stat', href: '#/app/projects2/p/' + id, title: '보드에서 열기' },
+            el('span', { class: 'k', text: '할 일' }), el('b', { text: `${tdone}/${tasks.length}` }),
+            el('span', { class: 'pv-minibar', 'aria-hidden': 'true' }, el('span', { class: 'f', style: 'width:' + Math.round((tdone / tasks.length) * 100) + '%' })))
+        : stat('할 일', '0'),
+      stat('자료', fileTotal == null ? '…' : String(fileTotal)),
+      stat('지식', String(knN)),
+      members.length ? el('span', { class: 'pv-stat' }, el('span', { class: 'k', text: '사람' }), el('b', { text: String(members.length) })) : null,
+      el('span', { class: 'pv-stats-sp' }),
+      p.updated_at ? el('span', { class: 'pv-when', text: '수정 ' + relTime(p.updated_at) }) : null);
 
-    // 제목 + [편집]
-    const editBtn = el('button', { class: 'pv-act', type: 'button', text: editing ? '편집 중' : '편집', title: '본문을 직접 고칩니다', disabled: editing, onclick: () => startEdit() });
-    const titleRow = el('div', { class: 'pv-title-row' }, el('h1', { class: 'pv-title', text: p.name }), el('div', { class: 'pv-head-acts' }, editBtn));
+    headEl.replaceChildren(
+      el('div', { class: 'pv-eyebrow' },
+        el('span', { class: 'pv-idchip mono', text: '#' + p.id }),
+        el('span', { class: 'pv-state' }, el('span', { class: 'v2-dot ' + st.dot, 'aria-hidden': 'true' }), el('span', { text: st.word })),
+        p.list && p.list.name ? el('span', { class: 'pv-crumbsep', text: p.list.name }) : null),
+      el('h1', { class: 'pv-title', text: p.name }),
+      stats);
+  }
 
-    // 본문 — 몇 줄만(clamp) + 더 보기 / 편집 중이면 textarea
-    let bodyWrap: HTMLElement;
+  // ══ 구역 공통 뼈대 — 라벨·개수·액션 헤더 + 안에서 구르는 몸통 (+선택: 바닥 줄) ═══════════════════
+  function zone(label: string): { root: HTMLElement; count: HTMLElement; acts: HTMLElement; sub: HTMLElement; body: HTMLElement; foot: HTMLElement } {
+    const count = el('span', { class: 'pv-panel-n' });
+    const acts = el('div', { class: 'pv-panel-acts' });
+    const sub = el('div', { class: 'pv-panel-sub', hidden: true });
+    const body = el('div', { class: 'pv-panel-b' });
+    const foot = el('div', { class: 'pv-panel-f', hidden: true });
+    const root = el('section', { class: 'pv-panel', 'aria-label': label },
+      el('div', { class: 'pv-panel-h' }, el('span', { class: 'pv-panel-k', text: label }), count, acts), sub, body, foot);
+    return { root, count, acts, sub, body, foot };
+  }
+
+  // ══ 구역 ① 본문 — 리브가 쓰는 게 기본 길, [편집]으로 직접 수정 ══════════════════════════════════
+  const bz = zone('본문');
+  const editBtn = el('button', { class: 'pv-btn', type: 'button', text: '편집', title: '본문을 직접 고칩니다', onclick: () => startEdit() }) as HTMLButtonElement;
+  bz.acts.append(editBtn);
+  function paintBody(): void {
+    const desc = String(pj().description || '');
+    editBtn.disabled = editing;
+    editBtn.textContent = editing ? '편집 중' : '편집';
     if (editing) {
-      const ta = el('textarea', { class: 'pv-edit-ta', rows: '8', 'aria-label': '본문 편집', placeholder: '이 프로젝트가 무엇을 왜 하는지 — 마크다운' }) as HTMLTextAreaElement;
+      const ta = el('textarea', { class: 'pv-edit-ta', 'aria-label': '본문 편집', placeholder: '이 프로젝트가 무엇을 왜 하는지 — 마크다운' }) as HTMLTextAreaElement;
       ta.value = desc;
       const save = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '저장' }) as HTMLButtonElement;
-      const cancel = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '취소', onclick: () => { editing = false; paintTop(); } });
+      const cancel = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '취소', onclick: () => { editing = false; paintBody(); } });
       const doSave = async (): Promise<void> => {
         const v = ta.value.trim();
-        if (v === desc.trim()) { editing = false; paintTop(); return; }
+        if (v === desc.trim()) { editing = false; paintBody(); return; }
         save.disabled = true; save.textContent = '저장 중…';
         try {
           await api('/api/ui/v6/projects/' + id, { method: 'POST', body: JSON.stringify({ description: v || null }) });
           if (detail && detail.project) detail.project.description = v || null;
-          editing = false; expanded = false;
+          editing = false;
           toast('본문을 저장했어요.');
-          paintTop();
+          paintBody();
           opts.onProjectChanged?.();
-          void reloadDetail();
+          void reload();
         } catch (e: any) {
           save.disabled = false; save.textContent = '저장';
           toast('본문을 저장하지 못했습니다 — ' + (e && e.message ? e.message : e), true);
@@ -107,97 +145,216 @@ export function mountProjectView(host: HTMLElement, opts: ProjectViewOpts): Proj
       save.onclick = () => { void doSave(); };
       ta.addEventListener('keydown', (e: KeyboardEvent) => {
         if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); void doSave(); }
-        if (e.key === 'Escape') { e.preventDefault(); editing = false; paintTop(); }
+        if (e.key === 'Escape') { e.preventDefault(); editing = false; paintBody(); }
       });
-      const grow = (): void => { ta.style.height = 'auto'; ta.style.height = Math.min(420, Math.max(140, ta.scrollHeight)) + 'px'; };
-      ta.addEventListener('input', grow);
-      bodyWrap = el('div', { class: 'pv-edit' }, ta,
-        el('div', { class: 'pv-edit-acts' },
-          el('span', { class: 'pv-edit-hint', text: '마크다운 · ⌘⏎ 저장 · Esc 취소 · 정돈은 리브에게 「본문 정리해 줘」' }),
-          cancel, save));
-      window.setTimeout(() => { grow(); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }, 0);
-    } else if (desc.trim()) {
-      const body = el('div', { class: 'pv-body' + (expanded ? '' : ' clamp') }, renderMarkdown(desc));
-      const more = el('button', { class: 'pv-more', type: 'button', hidden: true, text: expanded ? '접기 ▴' : '더 보기 ▾',
-        onclick: () => { expanded = !expanded; paintTop(); } });
-      bodyWrap = el('div', { class: 'pv-body-wrap' }, body, more);
-      // 넘칠 때만 [더 보기] — 몇 줄짜리 본문에 버튼이 붙어 있으면 그게 곧 잡음이다. 붙인 뒤에 재야 한다.
-      requestAnimationFrame(() => { if (expanded || body.scrollHeight > body.clientHeight + 6) more.hidden = false; });
+      bz.body.replaceChildren(el('div', { class: 'pv-edit' }, ta));
+      bz.foot.hidden = false;
+      bz.foot.replaceChildren(el('span', { class: 'pv-edit-hint', text: '마크다운 · ⌘⏎ 저장 · Esc 취소' }), cancel, save);
+      window.setTimeout(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }, 0);
+      return;
+    }
+    bz.foot.hidden = true; bz.foot.replaceChildren();
+    if (desc.trim()) {
+      bz.body.replaceChildren(el('div', { class: 'pv-body' }, renderMarkdown(desc)));
     } else {
-      bodyWrap = el('p', { class: 'pv-empty-body' },
-        el('span', { text: '아직 본문이 없어요. ' }),
-        el('button', { class: 'pv-link', type: 'button', text: '리브에게 써 달라고 하기', onclick: () => chat?.say(SAY_TIDY_NEW) }),
-        el('span', { text: ' 또는 ' }),
-        el('button', { class: 'pv-link', type: 'button', text: '직접 쓰기', onclick: () => startEdit() }));
+      bz.body.replaceChildren(el('div', { class: 'pv-blank' },
+        el('p', { text: '아직 본문이 없어요.' }),
+        el('p', { class: 'sub' },
+          el('button', { class: 'pv-link', type: 'button', text: '리브에게 써 달라고 하기', onclick: () => chat?.say(SAY_TIDY_NEW) }),
+          el('span', { text: ' 또는 ' }),
+          el('button', { class: 'pv-link', type: 'button', text: '직접 쓰기', onclick: () => startEdit() }))));
     }
+  }
+  function startEdit(): void { if (editing) return; editing = true; paintBody(); }
 
-    // 여는 길 + 사실 한 줄
-    const factBtn = (key: 'sessions' | 'tasks', label: string): HTMLElement =>
-      el('button', { class: 'pv-fact' + (panel === key ? ' on' : ''), type: 'button', 'aria-expanded': String(panel === key),
-        onclick: () => { panel = panel === key ? null : key; paintTop(); } },
-        el('span', { text: label }), el('span', { class: 'car', 'aria-hidden': 'true', text: panel === key ? '▴' : '▾' }));
-    const tools = el('div', { class: 'pv-tools' },
-      el('div', { class: 'pv-tools-l' },
-        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '＋ 새 세션', title: '이 프로젝트에 붙은 AI 세션을 엽니다',
-          onclick: (e: MouseEvent) => { const b = e.currentTarget as HTMLButtonElement; b.disabled = true; void openProjectSession(id, String(p.name || '')).then((ok) => { if (!ok) b.disabled = false; }); } }),
-        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '공유 폴더', title: '이 프로젝트의 공유 폴더(파일 올리기·내려받기)',
-          onclick: () => openFolderGrid(id, '', '/api/ui/projects/', p.folder || undefined) }),
-        el('a', { class: 'btn btn-ghost btn-sm', href: '#/app/projects2/p/' + id, text: '보드 ↗', title: '프로젝트 앱(보드·태스크·타임라인)에서 열기' })),
-      el('div', { class: 'pv-facts' },
-        factBtn('sessions', live.length ? `세션 ${sess.length} · 작업 중 ${live.filter((s) => s.stateKey === 'busy').length || live.length}` : `세션 ${sess.length}`),
-        factBtn('tasks', tasks.length ? `태스크 ${done}/${tasks.length}` : '태스크 0'),
-        el('span', { class: 'pv-fact-plain', text: `지식 ${kn.req.length + kn.prod.length}`, title: `필요 ${kn.req.length} · 산출 ${kn.prod.length} — 우측 타임라인 아래` })));
-
-    // 펼친 목록(하나만)
-    let panelEl: HTMLElement | null = null;
-    if (panel === 'sessions') {
-      panelEl = el('div', { class: 'pv-panel' },
-        sess.length ? sess.slice(0, 30).map((s) => el('a', { class: 'v2-row', href: '#/s/' + encodeURIComponent(s.id) },
-          el('span', { class: 'v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' }),
-          el('div', { class: 'v2-row-main' }, el('div', { class: 't', text: s.label }), el('div', { class: 'm', text: `${s.stateLabel}${s.live ? '' : ' · 기록만'} · ${when(s.lastSeen)}` })),
-          el('span', { class: 'v2-row-r', text: '›' })))
-        : el('p', { class: 'v2-empty', text: '이 프로젝트에 붙은 세션이 아직 없어요 — [＋ 새 세션]으로 시작하면 여기에 쌓입니다.' }));
-    } else if (panel === 'tasks') {
-      const rows = [...tasks].sort((a, b) => Number(a.status_category === 'done') - Number(b.status_category === 'done'));
-      panelEl = el('div', { class: 'pv-panel' },
-        rows.length ? rows.map((t) => el('a', { class: 'v2-row', href: '#/app/projects2/t/' + t.id },
-          el('span', { class: 'v2-dot ' + (t.status_category === 'done' ? 'done' : t.status_category === 'started' ? 'idle' : ''), 'aria-hidden': 'true' }),
-          el('div', { class: 'v2-row-main' }, el('div', { class: 't', text: t.name }), el('div', { class: 'm', text: t.status || t.status_category || '' })),
-          el('span', { class: 'v2-row-r', text: '›' })))
-        : el('p', { class: 'v2-empty' }, el('span', { text: '태스크가 아직 없어요 — ' }),
-          el('button', { class: 'pv-link', type: 'button', text: '리브에게 나눠 달라고 하기', onclick: () => chat?.say(SAY_SPLIT) })),
-        el('a', { class: 'v2-more', href: '#/app/projects2/p/' + id, text: '보드에서 열기 →' }));
+  // ══ 구역 ② 코멘트 — 사람들끼리 남기는 말(피드의 comment 만) + 쓰는 칸 ═══════════════════════════
+  const cz = zone('코멘트');
+  const cIn = el('textarea', { class: 'pv-cmt-in', rows: '1', placeholder: '코멘트 남기기', 'aria-label': '코멘트 남기기' }) as HTMLTextAreaElement;
+  const cSend = el('button', { class: 'pv-btn', type: 'button', text: '남기기' }) as HTMLButtonElement;
+  cz.foot.hidden = false;
+  cz.foot.replaceChildren(cIn, cSend);
+  function paintComments(list: FeedComment[]): void {
+    cz.count.textContent = list.length ? String(list.length) : '';
+    if (!list.length) {
+      cz.body.replaceChildren(el('div', { class: 'pv-blank' },
+        el('p', { text: '아직 코멘트가 없어요.' }),
+        el('p', { class: 'sub', text: '결정·부탁·메모를 여기 남기면 이 방의 모두가 봅니다.' })));
+      return;
     }
+    cz.body.replaceChildren(...list.map((c) => el('div', { class: 'pv-cmt' },
+      el('div', { class: 'pv-cmt-h' },
+        el('b', { text: c.display_name || c.actor || '?' }),
+        el('span', { class: 'pv-cmt-ts', text: relTime(c.ts) })),
+      el('div', { class: 'pv-cmt-b', text: c.body }))));
+    cz.body.scrollTop = cz.body.scrollHeight;
+  }
+  function commentsFrom(feed: any[]): FeedComment[] { return (feed || []).filter((f) => f && f.kind === 'comment'); }
+  async function loadComments(): Promise<void> {
+    try {
+      const d: any = await api('/api/ui/v6/projects/' + id + '/comments?limit=300');
+      if (dead) return;
+      paintComments(commentsFrom(d && d.feed));
+    } catch { if (!dead) cz.body.replaceChildren(el('div', { class: 'pv-blank' }, el('p', { text: '코멘트를 불러오지 못했어요.' }))); }
+  }
+  async function sendComment(): Promise<void> {
+    const text = cIn.value.trim();
+    if (!text || cSend.disabled) return;
+    cSend.disabled = true; cIn.disabled = true;
+    try {
+      // 프로젝트 행도 같은 task 표라 태스크 댓글 쓰기를 그대로 쓴다(코멘트 드로어와 같은 문 — task-detail-v6).
+      const d: any = await api('/api/ui/v6/tasks/' + id + '/comments', { method: 'POST', body: JSON.stringify({ text }) });
+      cIn.value = '';
+      paintComments(commentsFrom(d && d.feed));
+    } catch (e: any) {
+      toast('코멘트를 남기지 못했습니다 — ' + (e && e.message ? e.message : e), true);
+    } finally { cSend.disabled = false; cIn.disabled = false; cIn.focus(); }
+  }
+  cSend.onclick = () => { void sendComment(); };
+  cIn.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); void sendComment(); }   // 한글 조합 Enter 가드(레포 불변식)
+  });
 
-    top.replaceChildren(eyebrow, titleRow, bodyWrap, tools, panelEl ?? el('div', { hidden: true }));
+  // ══ 구역 ③ 공유 폴더 — 그 자리 탐색·업로드·미리보기 ═══════════════════════════════════════════
+  const fz = zone('공유 폴더');
+  const F = '/api/ui/v6/projects/';   // 파일 라우트는 v6 만 등록돼 있다(클래식 상세의 V6_BASE 와 동일)
+  const fst = { path: '' };
+  let folderItems: any[] = [];   // 현재 폴더 목록 — 업로드 덮어쓰기 사전확인(#877)·되그리기용
+  const progBox = el('div', { class: 'pv-upprog' });
+  {
+    const up = upControl((items) => void uploadHere(items, []), { className: 'pv-btn', label: '올리기' });
+    const allBtn = el('button', { class: 'pv-btn', type: 'button', text: '전체 보기', title: '넓은 화면에서 검색·정렬·일괄 작업',
+      onclick: () => openFolderGrid(id, fst.path, F, pj().folder || undefined) });
+    fz.acts.append(up.btn, allBtn, up.fileIn, up.dirIn);
+    fz.sub.hidden = false;
+    // 구역 전체가 드롭존 — 파일을 끌어다 놓으면 지금 보는 폴더로 올라간다(#781 detail-folder 와 같은 손).
+    upDropZone(fz.root, fz.root, (items, emptyDirs) => void uploadHere(items, emptyDirs));
+  }
+  function paintCrumb(): void {
+    const segs = fst.path ? fst.path.split('/') : [];
+    const kids: HTMLElement[] = [el('button', { class: 'pv-crumb' + (segs.length ? '' : ' cur'), type: 'button', text: '⌂', title: '루트로',
+      onclick: () => { fst.path = ''; void loadFolder(); } })];
+    segs.forEach((seg, i) => {
+      kids.push(el('span', { class: 'pv-crumb-sep', 'aria-hidden': 'true', text: '/' }));
+      const cur = i === segs.length - 1;
+      kids.push(el('button', { class: 'pv-crumb' + (cur ? ' cur' : ''), type: 'button', text: seg, disabled: cur,
+        onclick: () => { fst.path = segs.slice(0, i + 1).join('/'); void loadFolder(); } }));
+    });
+    fz.sub.replaceChildren(el('div', { class: 'pv-crumbs' }, ...kids), progBox);
+  }
+  function paintFolder(items: any[]): void {
+    folderItems = items || [];
+    fz.count.textContent = folderItems.length ? String(folderItems.length) : '';
+    paintCrumb();
+    if (!folderItems.length) {
+      fz.body.replaceChildren(el('div', { class: 'pv-blank' },
+        el('p', { text: fst.path ? '빈 폴더예요.' : '아직 파일이 없어요.' }),
+        el('p', { class: 'sub', text: '파일이나 폴더를 이 칸에 끌어다 놓으면 올라갑니다.' })));
+      return;
+    }
+    const sorted = [...folderItems].sort((a, b) => Number(b.type === 'dir') - Number(a.type === 'dir') || String(a.name).localeCompare(String(b.name), 'ko'));
+    fz.body.replaceChildren(...sorted.map((it) => {
+      const isDir = it.type === 'dir';
+      const rel = joinPath(fst.path, it.name);
+      return el('button', { class: 'pv-row pv-frow', type: 'button', title: it.name,
+        onclick: () => { if (isDir) { fst.path = rel; void loadFolder(); } else { void openFileViewer(id, rel, it.name, () => void loadFolder(), F, pj().folder || undefined); } } },
+        el('span', { class: 'pv-fic', 'aria-hidden': 'true' }, fileIconSvg(it.name, isDir)),
+        el('span', { class: 'pv-row-main' }, el('span', { class: 't', text: it.name })),
+        el('span', { class: 'pv-fmeta', text: isDir ? '폴더' : fmtSize(it.size), title: it.mtime ? fmtFileDateFull(it.mtime) : '' }),
+        isDir ? el('span', { class: 'pv-row-go', 'aria-hidden': 'true', text: '›' }) : el('span', { class: 'pv-row-go', 'aria-hidden': 'true' }));
+    }));
+  }
+  async function loadFolder(): Promise<void> {
+    try {
+      const d: any = await api(F + id + '/files?path=' + encodeURIComponent(fst.path));
+      if (dead) return;
+      paintFolder((d && d.items) || []);
+    } catch (e: any) {
+      if (dead) return;
+      fz.body.replaceChildren(el('div', { class: 'pv-blank' }, el('p', { text: '폴더를 불러오지 못했어요 — ' + (e && e.message ? e.message : e) })));
+    }
+  }
+  async function uploadHere(items: UpItem[], emptyDirs: string[]): Promise<void> {
+    const arr = items || [];
+    if (!arr.length && !(emptyDirs || []).length) { toast('올릴 파일이 없습니다', true); return; }
+    const pc = upPrecheckOverwrite(arr, folderItems);   // 겹치면 무엇이 덮이는지 보여주고 확인(#877)
+    if (!pc.go) return;
+    if (arr.length > UP_CONFIRM && !confirm(arr.length + '개 파일을 업로드합니다. 계속할까요?')) return;
+    const dest = fst.path;   // 업로드 중 다른 폴더로 들어가도 '떨어뜨린 그 폴더'로 간다
+    const ac = new AbortController();
+    const bar = upProgress(arr.length, () => ac.abort());
+    progBox.append(bar.row);
+    const r = await upSend({
+      items: arr, emptyDirs: emptyDirs || [], signal: ac.signal, overwriteNames: pc.over,
+      fileUrl: (rel) => F + id + '/file?path=' + encodeURIComponent((dest ? dest + '/' : '') + rel),
+      dirUrl: (d) => F + id + '/folder?path=' + encodeURIComponent((dest ? dest + '/' : '') + d),
+      onProgress: (i, rel, pct) => bar.set(i, rel, pct),
+    });
+    bar.row.remove();
+    upToast(r);
+    void loadFolder();
+    void loadFileTotal();
+  }
+  async function loadFileTotal(): Promise<void> {
+    // 자료 n(방 현황) = 공유 폴더 재귀 파일 수 — 마운트·업로드 때만 잰다(재귀 walk 라 폴링엔 안 태운다).
+    try { const d: any = await api(F + id + '/shared/manifest'); if (!dead && d && typeof d.count === 'number') { fileTotal = d.count; paintHead(); } }
+    catch { /* 현황 줄만 '…' 로 남는다 */ }
   }
 
-  function startEdit(): void { if (editing) return; editing = true; paintTop(); }
+  // ══ 구역 ④ 세션 — 이 방에서 돈 AI 세션 ═══════════════════════════════════════════════════════
+  const sz = zone('세션');
+  {
+    const btn = el('button', { class: 'pv-btn-main', type: 'button', text: '＋ 새 세션', title: '이 프로젝트에 붙은 AI 세션을 엽니다' }) as HTMLButtonElement;
+    btn.onclick = () => { btn.disabled = true; void openProjectSession(id, String(pj().name || '')).then((ok) => { if (!ok) btn.disabled = false; }); };
+    sz.acts.append(btn);
+  }
+  function paintSessions(): void {
+    const sess = sessOf();
+    const live = sess.filter((s) => s.live && s.alive);
+    sz.count.textContent = sess.length ? String(sess.length) + (live.length ? ` · 살아 있음 ${live.length}` : '') : '';
+    if (!sess.length) {
+      sz.body.replaceChildren(el('div', { class: 'pv-blank' },
+        el('p', { text: '아직 이 방에서 돈 세션이 없어요.' }),
+        el('p', { class: 'sub', text: '[＋ 새 세션]으로 시작하거나, 아래에서 리브에게 먼저 계획을 시켜 보세요.' })));
+      return;
+    }
+    const pname = String(pj().name || '');
+    sz.body.replaceChildren(...sess.slice(0, 60).map((s) => {
+      const raw = (s.raw || {}) as any;
+      // 사이드바와 같은 규칙(side.ts sessText) — 프로젝트명 되풀이를 걷어내고 '지금 하는 일'이 이름 자리를 받는다.
+      const tx = sessText(s, pname);
+      const owner = !s.owned && (raw.owner_name || raw.owner) ? String(raw.owner_name || raw.owner) : '';
+      return el('a', { class: 'pv-row' + (s.live && s.alive ? '' : ' dim'), href: '#/s/' + encodeURIComponent(s.id), title: s.label },
+        el('span', { class: 'v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' }),
+        el('span', { class: 'pv-row-main' },
+          el('span', { class: 't', text: tx.main }),
+          el('span', { class: 'm', text: [tx.sub, s.stateLabel + (s.live ? '' : ' · 기록만'), when(s.lastSeen), owner].filter(Boolean).join(' · ') })),
+        el('span', { class: 'pv-row-go', 'aria-hidden': 'true', text: '›' }));
+    }));
+  }
 
-  /** 리브의 턴이 끝났거나 사람이 저장했다 — 개요를 서버에서 다시 읽는다(대화는 건드리지 않는다). 편집 중이면 미룬다(입력을 덮지 않는다). */
-  async function reloadDetail(): Promise<void> {
+  room.replaceChildren(bz.root, cz.root, fz.root, sz.root);
+
+  /** 리브 턴이 끝났거나 사람이 저장했다 — 방을 서버에서 다시 읽는다(대화는 건드리지 않는다). 편집 중이면 본문은 미룬다. */
+  async function reload(): Promise<void> {
     try {
       const d = await api('/api/ui/v6/projects/' + id);
       if (dead) return;
-      if (d && d.project) { detail = d; if (!editing) paintTop(); }
+      if (d && d.project) { detail = d; paintHead(); if (!editing) paintBody(); paintSessions(); }
     } catch { /* 다음 턴에 다시 */ }
   }
 
-  // ── 대화 ──
+  // ══ 대화 — 방의 바닥. 빈 대화엔 제안 칩(입력칸 위), 대화가 생기면 경계 손잡이가 나타난다 ══════════
   function opening(): HTMLElement {
-    const p = pj();
-    const desc = String(p.description || '').trim();
-    // 상태에 맞는 제안 셋 — 칩 글은 짧게, 실제 보내는 말(title)은 온전한 지시.
+    const desc = String(pj().description || '').trim();
     const chips: Array<[string, string]> = [
       desc ? ['본문 정돈해 줘', SAY_TIDY] : ['본문 써 줘', SAY_TIDY_NEW],
       tasksOf().length ? ['다음 할 일 제안', SAY_NEXT] : ['태스크로 나눠 줘', SAY_SPLIT],
       ['상태·마감 점검', SAY_CHECK],
     ];
     return el('div', { class: 'pv-open' },
-      el('div', { class: 'pv-open-lede' },
-        el('b', { text: '리브에게 이 프로젝트를 시키세요.' }),
-        el('span', { text: ' 본문·태스크·상태·지식 연결을 대화로 고칩니다 — 이 프로젝트의 기록만 만지고, 셸·파일은 건드리지 않아요.' })),
-      el('div', { class: 'pv-chips' }, ...chips.map(([label, say]) => el('button', { class: 'chip', type: 'button', text: label, title: say, onclick: () => chat?.say(say) }))));
+      el('span', { class: 'pv-open-lede' },
+        el('b', { text: '리브' }), el('span', { text: ' — 본문·태스크·상태·지식 연결을 대화로 고칩니다. 이 방의 기록만 만지고, 셸·파일은 건드리지 않아요.' })),
+      el('span', { class: 'pv-chips' }, ...chips.map(([label, say]) => el('button', { class: 'pv-chip', type: 'button', text: label, title: say, onclick: () => chat?.say(say) }))));
   }
   const barNote = el('span', { class: 'pv-bar-note', text: '리브 · 라이블리 도구만 · 이 프로젝트 폴더에서' });
   const barTidy = el('button', { class: 'pv-bar-btn', type: 'button', text: '본문 정리', title: '리브가 본문을 정돈된 형식으로 다시 씁니다', onclick: () => chat?.say(String(pj().description || '').trim() ? SAY_TIDY : SAY_TIDY_NEW) });
@@ -206,11 +363,21 @@ export function mountProjectView(host: HTMLElement, opts: ProjectViewOpts): Proj
     projectId: id,
     opening: opening(),
     bar: { left: barNote, right: el('span', { class: 'pv-bar-r' }, barTidy, barNew) },
-    onTurnDone: () => { void reloadDetail(); opts.onProjectChanged?.(); },
+    onTurnDone: () => { void reload(); opts.onProjectChanged?.(); },
+    onHasTurns: (has) => wrap.classList.toggle('has-turns', has),
   });
 
-  paintTop();
+  paintHead();
+  paintBody();
+  paintSessions();
+  paintCrumb();
+  void loadFolder();
+  void loadComments();
+  void loadFileTotal();
+  // 세션·현황의 상태점은 라이브를 따라간다 — main.ts 가 20초마다 갱신하는 목록을 25초마다 다시 그린다(요청 없음).
+  const tick = window.setInterval(() => { if (!document.hidden) { paintSessions(); paintHead(); } }, 25000);
+
   return {
-    destroy(): void { dead = true; if (chat) { chat.destroy(); chat = null; } },
+    destroy(): void { dead = true; window.clearInterval(tick); if (chat) { chat.destroy(); chat = null; } },
   };
 }
