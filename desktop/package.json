@@ -67,7 +67,6 @@
       "oneClick": true,
       "perMachine": false,
       "runAfterFinish": true,
-      "createDesktopShortcut": false,
       "artifactName": "${productName}-Setup-${version}.${ext}"
     }
   },

@@ -52,6 +52,15 @@ export function manifestProblems(yamlText, files) {
         : `이름에 GitHub 이 바꾸는 문자가 있다(허용: 영숫자 . _ -): ${name}`);
     }
   }
+  // 차등 다운로드 재료(#1541): 설치기 옆에 `<이름>.blockmap` 이 있어야 다음 업데이트가 전체(~100MB)가 아니라 차등이 된다.
+  //  Windows 설치기(.exe)는 **필수** — 자동 업데이트가 실제로 도는 축이고, electron-builder 는 nsis.differentialPackage 가
+  //  false 가 아니면 늘 만든다. 없다는 건 설정이 바뀌었거나 업로드 목록에서 빠진 것 = 조용히 100MB 로 되돌아간다.
+  //  (mac zip 도 만들어지지만 mac 자동 업데이트는 미서명이라 꺼져 있다 — 여기선 강제하지 않는다.)
+  for (const name of new Set(refs)) {
+    if (/\.exe$/i.test(name) && !have.has(`${name}.blockmap`)) {
+      problems.push(`차등 다운로드용 ${name}.blockmap 이 release/ 에 없다 — 업데이트마다 설치기 전체를 받게 된다`);
+    }
+  }
   return problems;
 }
 

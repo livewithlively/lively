@@ -42,6 +42,11 @@ export function trayMenuModel(st) {
     items.push({ id: "apply-update", label: `업데이트 적용 — 앱 다시 시작 (${s.updateReady})`, enabled: !busy });
     items.push({ type: "separator" });
   }
+  // 다른 자리에 옛 설치본이 남아 있으면(Windows, win-stale-install.mjs) — 옛 바로가기가 옛 버전을 연다. 사람이 누를 때만.
+  if (s.staleVersions) {
+    items.push({ id: "cleanup-stale", label: `이전 버전 정리… (${s.staleVersions})`, enabled: !busy });
+    items.push({ type: "separator" });
+  }
 
   if (!s.cliFound || s.cliOutdated || s.cliBroken || !s.loggedIn || !s.kitInstalled) {
     items.push({

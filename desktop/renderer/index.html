@@ -79,6 +79,15 @@
         <span class="hint">(노드는 앱과 무관하게 계속 실행됩니다)</span></label>
     </section>
 
+    <!-- Windows: 다른 자리에 남은 옛 설치본(win-stale-install.mjs) — 옛 바로가기가 옛 버전을 연다. 사람이 누를 때만 정리(UAC 1회). -->
+    <section id="stale-card" class="card hidden">
+      <h2>이전 버전이 남아 있습니다</h2>
+      <p class="hint" id="stale-note"></p>
+      <div class="row">
+        <button id="stale-clean" class="primary">이전 버전 정리</button>
+      </div>
+    </section>
+
     <!-- 점검·계정 — 설치가 끝난 뒤에만 의미가 있다 -->
     <section id="tools-card" class="card hidden">
       <h2>점검과 계정</h2>
