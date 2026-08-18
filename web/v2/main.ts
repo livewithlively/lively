@@ -1,30 +1,31 @@
 // v2/main.ts — 새 1탭 셸(#1719)의 뿌리. main.ts boot() 가 ui_mode 로 고른 뒤 bootV2() 를 부른다.
 //  구조(마진 없는 풀스크린 · 상단/하단 바 없음):
-//    좌 사이드바 — 로고(→홈) · 리브(→리브 페이지) · 내 프로젝트 ▸ 세션 트리 · 앱(런치패드) · 나/로그아웃
+//    좌 사이드바 — 로고(→홈) · 리브(→리브 페이지) · 프로젝트(워크스페이스 전체) ▸ 살아 있는 세션 트리(web/v2/side.ts) · 앱(런치패드) · 나/로그아웃
 //    중앙        — 리브와 대화(홈) / 프로젝트 / 세션 / 앱 프레임(클래식 화면 임베드) / 리브 페이지
 //    우측        — 이 선택의 지식(프로젝트 필요·산출) · 리브 카드(홈)
 //  라우트: #/ #/dashboard → 홈 · #/liv · #/p/<id> · #/s/<sid> · #/app/<key>[/…] · 그 밖의 클래식 해시 → 같은 해시로 앱 프레임.
 //  데스크톱(일렉트론)에서 그대로 쓰기 위한 규약: 정적 자산 + 해시 라우트 + api()(상대 경로·bearer/쿠키)만 쓴다.
 //   서버 템플릿 의존 0, window.open 대신 <a target=_blank>(일렉트론이 새 창 정책으로 받는다).
-import { $view, api, el, logout, navOn, profileAvatar, setUiModeOverride, state, toast } from '../core.js';
+import { $view, api, el, toast } from '../core.js';
 import { fillLivCards, renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame, appIcon, openLaunchpad, visibleApps } from './apps.js';
-import { dotCls, mergeSessions, projName, refreshSession, renderHome, renderProject, renderSession, unmountSession, type Proj, type Sess, type V2Data } from './views.js';
+import { drawSide as drawSideTree } from './side.js';
+import { mergeSessions, projName, refreshSession, renderHome, renderProject, renderSession, unmountSession, type Sess, type V2Data } from './views.js';
 
-const OPEN_KEY = 'lively_v2_open';
 let root: HTMLElement | null = null;
 let sideEl: HTMLElement | null = null;
 let centerEl: HTMLElement | null = null;
 let asideEl: HTMLElement | null = null;
 let data: V2Data = { projects: [], sessions: [], loadedAt: 0 };
-let openSet = new Set<string>();
-let sideFilter = '';
+let projLoadedAt = 0;
 let routeSeq = 0;
+// 프로젝트 목록은 워크스페이스 전체(수백 건·설명 포함이라 1MB 를 넘는다) — 세션처럼 20초마다 당기지 않는다.
+//  5분에 한 번, 그리고 세션이 모르는 프로젝트를 가리킬 때(그새 생긴 프로젝트) 한 번 더.
+const PROJ_TTL_MS = 5 * 60 * 1000;
 
 export async function bootV2(): Promise<void> {
   root = document.getElementById('v2-root');
   if (!root) return;
-  try { openSet = new Set(JSON.parse(localStorage.getItem(OPEN_KEY) || '[]')); } catch (_) { openSet = new Set(); }
   root.hidden = false;
   root.replaceChildren(
     sideEl = el('nav', { class: 'v2-side', 'aria-label': '탐색' }),
@@ -40,16 +41,30 @@ export async function bootV2(): Promise<void> {
 }
 
 // ── 데이터 ──
-async function loadData(): Promise<void> {
+async function loadData(opts?: { projects?: boolean }): Promise<void> {
+  const wantProj = opts && opts.projects != null ? opts.projects : (Date.now() - projLoadedAt > PROJ_TTL_MS);
   const [pj, live, logs] = await Promise.all([
-    api('/api/ui/v6/projects?mine=1').then((d) => (d && d.projects) || []).catch(() => data.projects),
+    // 워크스페이스 **전체** 프로젝트(mine=1 아님) — 사이드바가 남의 프로젝트·세션까지 한 트리로 보여준다(상민님 2026-08-18).
+    //  가시성은 서버가 시행한다(#1291 — 안 보이는 리스트의 프로젝트는 애초에 안 온다).
+    wantProj ? api('/api/ui/v6/projects').then((d) => (d && d.projects) || null).catch(() => null) : Promise.resolve(null),
     // includeProjects=1 — 프로젝트 폴더 세션까지(기본은 '내 개인 세션'만이라 프로젝트 트리 아래 라이브 세션이 통째로 빠졌다).
     //  프로젝트 세션은 로그인한 전원에게 보인다(#452) — 클래식 AI 세션 탭과 같은 목록이다.
     api('/api/ui/terminal/sessions?includeProjects=1').then((d) => (d && d.sessions) || []).catch(() => []),
     api('/api/ui/v6/sessions').then((d) => (d && d.sessions) || []).catch(() => []),
   ]);
-  const projects: Proj[] = (pj as any[]).map((p) => ({ id: Number(p.id), name: String(p.name || ''), status: p.status ?? null, status_category: p.status_category ?? null, my_session_count: p.my_session_count, description: p.description ?? null, list_id: p.list_id ?? null, updated_at: p.updated_at ?? null }));
-  data = { projects, sessions: mergeSessions(live as any[], logs as any[]), loadedAt: Date.now() };
+  let projects = data.projects;
+  if (Array.isArray(pj)) {
+    projects = (pj as any[]).map((p) => ({ id: Number(p.id), name: String(p.name || ''), status: p.status ?? null, status_category: p.status_category ?? null, description: p.description ?? null, list_id: p.list_id ?? null, updated_at: p.updated_at ?? null,
+      created_by: p.created_by != null ? String(p.created_by) : null, member_ids: Array.isArray(p.members) ? p.members.map((m: any) => String(m && m.member_id != null ? m.member_id : m)) : [] }));
+    projLoadedAt = Date.now();
+  }
+  const sessions = mergeSessions(live as any[], logs as any[]);
+  data = { projects, sessions, loadedAt: Date.now() };
+  // 세션이 가리키는데 목록에 없는 프로젝트(방금 만든 것) — 한 번 더 당긴다. 30초 안에 또 없으면 그건 진짜 안 보이는 프로젝트(가시성)라 그만.
+  if (!wantProj && Date.now() - projLoadedAt > 30_000) {
+    const known = new Set(projects.map((p) => p.id));
+    if (sessions.some((s) => s.projectId && !known.has(s.projectId))) { await loadData({ projects: true }); }
+  }
 }
 
 // ── 라우터 ──
@@ -85,6 +100,8 @@ async function route(): Promise<void> {
       let detail: any = null;
       try { detail = await api('/api/ui/v6/projects/' + id); } catch (_) { detail = null; }
       if (seq !== routeSeq) return;
+      // 목록에 없는 프로젝트(방금 만든 것·딥링크) — 사이드바 트리에도 나오게 목록을 한 번 더 당긴다.
+      if (detail && !data.projects.some((p) => p.id === id)) void loadData({ projects: true }).then(() => drawSide());
       await renderProject(centerEl, data, id, detail);
       drawAsideProject(detail, id);
     } else if (page === 's' && segs[1]) {
@@ -117,67 +134,19 @@ async function route(): Promise<void> {
   }
 }
 
-// ── 사이드바 ──
+// ── 사이드바 ── (트리·필터·펼침은 web/v2/side.ts — 여기선 활성 표시와 활성 키 계산만)
 function markActive(key: string): void {
   if (!sideEl) return;
-  for (const a of Array.from(sideEl.querySelectorAll<HTMLElement>('[data-nav]'))) a.classList.toggle('on', a.dataset.nav === key);
+  let hit: HTMLElement | null = null;
+  for (const a of Array.from(sideEl.querySelectorAll<HTMLElement>('[data-nav]'))) { const on = a.dataset.nav === key; a.classList.toggle('on', on); if (on && !hit) hit = a; }
+  // 트리는 수백 행이라 지금 보는 것이 화면 밖일 수 있다 — 라우트가 바뀔 때만 그 행이 보이게 살짝 굴린다(폴링 재렌더에선 안 건드린다).
+  if (hit && key !== 'home' && key !== 'liv') hit.scrollIntoView({ block: 'nearest' });
 }
-function saveOpen(): void { try { localStorage.setItem(OPEN_KEY, JSON.stringify([...openSet])); } catch (_) { /* noop */ } }
-function drawSide(): void {
-  if (!sideEl) return;
-  const me = state.me || {};
-  const name = String(me.display_name || me.email || me.userId || '');
+function activeKey(): string {
   const cur = parse();
-  const activeKey = cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
-  const liveByProj = new Map<number, Sess[]>();
-  const noProj: Sess[] = [];
-  for (const s of data.sessions) { if (s.projectId) { const arr = liveByProj.get(s.projectId) || []; arr.push(s); liveByProj.set(s.projectId, arr); } else noProj.push(s); }
-  const q = sideFilter.trim().toLowerCase();
-  const projects = [...data.projects].filter((p) => !q || p.name.toLowerCase().includes(q) || String(p.id) === q).sort((a, b) => {
-    const la = (liveByProj.get(a.id) || []).some((s) => s.live && s.alive) ? 1 : 0, lb = (liveByProj.get(b.id) || []).some((s) => s.live && s.alive) ? 1 : 0;
-    if (la !== lb) return lb - la;
-    return String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
-  });
-  const projRow = (p: Proj) => {
-    const sess = (liveByProj.get(p.id) || []).sort((a, b) => Number(b.live) - Number(a.live) || b.lastSeen - a.lastSeen);
-    const pk = 'p:' + p.id;
-    const isOpen = openSet.has(pk);
-    const worst = sess.some((s) => s.alive && s.stateKey === 'waiting') ? 'wait' : sess.some((s) => s.alive && s.stateKey === 'busy') ? 'busy' : p.status_category === 'done' ? 'done' : '';
-    const caret = el('button', { class: 'v2-car', type: 'button', 'aria-label': isOpen ? '접기' : '펼치기', 'aria-expanded': String(isOpen), text: '›', onclick: (e: Event) => { e.preventDefault(); e.stopPropagation(); if (openSet.has(pk)) openSet.delete(pk); else openSet.add(pk); saveOpen(); drawSide(); } });
-    const row = el('a', { class: 'v2-pj-row' + (activeKey === pk ? ' on' : ''), href: '#/p/' + p.id, 'data-nav': pk }, caret,
-      el('span', { class: 'n', text: p.name }), sess.length ? el('span', { class: 'v2-cnt', text: String(sess.length) }) : null,
-      el('span', { class: 'v2-dot ' + worst }));
-    const list = el('div', { class: 'v2-ss-list', hidden: !isOpen },
-      ...sess.slice(0, 12).map((s) => el('a', { class: 'v2-ss-row' + (activeKey === 's:' + s.id ? ' on' : ''), href: '#/s/' + encodeURIComponent(s.id), 'data-nav': 's:' + s.id, title: s.label },
-        el('span', { class: 'v2-dot ' + dotCls(s.stateKey) }), el('span', { class: 't', text: s.label }), el('span', { class: 'w', text: s.live ? s.stateLabel : '기록' }))),
-      sess.length > 12 ? el('a', { class: 'v2-ss-more', href: '#/p/' + p.id, text: `외 ${sess.length - 12}개` }) : null);
-    return el('div', { class: 'v2-pj' + (isOpen ? ' open' : '') }, row, list);
-  };
-  const livOn = navOn('liv') !== false;
-  sideEl.replaceChildren(
-    el('div', { class: 'v2-side-top' },
-      el('a', { class: 'v2-logo', href: '#/', title: '홈으로', 'data-nav': 'home' }, 'Lively', el('span', { class: 'pulse-dot', 'aria-hidden': 'true' }))),
-    // ⚠ replaceChildren 은 null 을 글자 "null" 로 그린다(el() 과 다르다) — 조건부 자식은 스프레드로.
-    ...(livOn ? [el('a', { class: 'v2-liv-btn' + (activeKey === 'liv' ? ' on' : ''), href: '#/liv', 'data-nav': 'liv' },
-      el('span', { class: 'lm', text: 'L' }), el('span', { text: '리브' }), el('span', { class: 'sub', text: '워크스페이스 담당자' }))] : []),
-    el('div', { class: 'v2-side-sec' }, el('span', { class: 'v2-k', text: `내 프로젝트 · ${data.projects.length}` }),
-      el('a', { class: 'v2-add', href: '#/projects2', text: '+ 새 프로젝트', title: '프로젝트 앱(보드)에서 만듭니다' })),
-    ...(data.projects.length > 12 ? [el('div', { class: 'v2-find' }, el('input', { class: 'v2-find-in', type: 'search', placeholder: '프로젝트 찾기', 'aria-label': '프로젝트 찾기', value: sideFilter, oninput: (e: any) => { sideFilter = e.target.value; drawSide(); const i = sideEl!.querySelector('.v2-find-in') as HTMLInputElement | null; if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } } }))] : []),
-    el('div', { class: 'v2-tree' },
-      ...projects.map(projRow),
-      noProj.length ? el('div', { class: 'v2-pj open' },
-        el('a', { class: 'v2-pj-row' + (activeKey === 'app:terminal' ? '' : ''), href: '#/app/terminal', 'data-nav': 'app:terminal' }, el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '›' }), el('span', { class: 'n', text: '프로젝트 없는 세션' }), el('span', { class: 'v2-cnt', text: String(noProj.length) })),
-        el('div', { class: 'v2-ss-list' }, ...noProj.sort((a, b) => b.lastSeen - a.lastSeen).slice(0, 8).map((s) => el('a', { class: 'v2-ss-row' + (activeKey === 's:' + s.id ? ' on' : ''), href: '#/s/' + encodeURIComponent(s.id), 'data-nav': 's:' + s.id, title: s.label },
-          el('span', { class: 'v2-dot ' + dotCls(s.stateKey) }), el('span', { class: 't', text: s.label }), el('span', { class: 'w', text: s.live ? s.stateLabel : '기록' }))))) : null,
-      !projects.length && !noProj.length ? el('p', { class: 'v2-tree-note', text: '아직 프로젝트가 없어요. 리브에게 무엇이든 시키거나, [+ 새 프로젝트]로 시작하세요.' }) : null),
-    el('div', { class: 'v2-side-foot' },
-      el('button', { class: 'v2-apps-btn', type: 'button', onclick: () => openLaunchpad(), title: '앱 — 아직 새 화면으로 옮기지 않은 것들' }, appIcon('proj', 'v2-apps-ic'), el('span', { text: '앱' }), el('span', { class: 'v2-cnt', text: String(visibleApps().length) })),
-      el('div', { class: 'v2-me' },
-        profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }),
-        el('span', { class: 'v2-me-name', text: name }),
-        el('button', { class: 'btn-text', type: 'button', text: '로그아웃', onclick: () => void logout() })),
-      el('button', { class: 'v2-classic-link', type: 'button', text: '클래식 화면으로 (이 브라우저)', title: '이 브라우저에서만 옛 화면으로 봅니다. 관리탭 [화면] 에서 되돌릴 수 있어요.', onclick: () => { setUiModeOverride('classic'); location.replace(location.pathname + '#/dashboard'); location.reload(); } })));
+  return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
 }
+function drawSide(): void { if (sideEl) drawSideTree(sideEl, data, activeKey); }
 
 // ── 우측 ──
 function knItem(name: string, rel: 'req' | 'prod'): HTMLElement {

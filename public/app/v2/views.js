@@ -8,13 +8,21 @@ import { mountSessionChat } from '../session-chat.js';
 import { sessIsDead, sessLabel, sessStateKey } from '../session-status.js';
 import { terminalUrl } from './apps.js';
 const dot = (k) => el('span', { class: 'v2-dot ' + dotCls(k), 'aria-hidden': 'true' });
+// 상태 key(web/session-status.ts) → 점 색 클래스. 눈에 띄어야 할 셋만 색이다 — 작업 중(파랑·깜빡)·확인 필요(앰버)·작업 완료(민트 링).
+//  나머지 살아 있는 것(대기·오프라인·셸)은 회색 계열로 조용히, 끝난 것(중단됨·종료됨·기록)은 빈 점.
 export function dotCls(stateKey) {
     if (stateKey === 'busy')
         return 'busy';
     if (stateKey === 'waiting')
         return 'wait';
-    if (stateKey === 'done' || stateKey === 'idle')
+    if (stateKey === 'done')
         return 'done';
+    if (stateKey === 'idle')
+        return 'idle';
+    if (stateKey === 'offline')
+        return 'off';
+    if (stateKey === 'shell')
+        return 'shell';
     return '';
 }
 const when = (ms) => (ms ? relTime(new Date(ms).toISOString()) : '');

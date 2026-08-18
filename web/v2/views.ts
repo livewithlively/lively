@@ -8,7 +8,11 @@ import { mountSessionChat, type SessionChatHandle } from '../session-chat.js';
 import { sessIsDead, sessLabel, sessStateKey } from '../session-status.js';
 import { terminalUrl } from './apps.js';
 
-export interface Proj { id: number; name: string; status?: string | null; status_category?: string | null; my_session_count?: number; description?: string | null; list_id?: number | null; updated_at?: string | null; }
+export interface Proj {
+  id: number; name: string; status?: string | null; status_category?: string | null; description?: string | null; list_id?: number | null; updated_at?: string | null;
+  // 사이드바 '내 프로젝트만'(side.ts) — 만든 사람 + 팀원 id. 서버 mine=1 과 같은 술어(생성자이거나 팀원)를 프론트에서 그대로 판정한다.
+  created_by?: string | null; member_ids?: string[];
+}
 export interface Sess {
   id: string; label: string; projectId: number | null; node: string | null;
   live: boolean; alive: boolean; owned: boolean; stateKey: string; stateLabel: string; lastSeen: number; raw: any;
@@ -18,10 +22,15 @@ export interface Sess {
 export interface V2Data { projects: Proj[]; sessions: Sess[]; loadedAt: number; }
 
 const dot = (k: string) => el('span', { class: 'v2-dot ' + dotCls(k), 'aria-hidden': 'true' });
+// 상태 key(web/session-status.ts) → 점 색 클래스. 눈에 띄어야 할 셋만 색이다 — 작업 중(파랑·깜빡)·확인 필요(앰버)·작업 완료(민트 링).
+//  나머지 살아 있는 것(대기·오프라인·셸)은 회색 계열로 조용히, 끝난 것(중단됨·종료됨·기록)은 빈 점.
 export function dotCls(stateKey: string): string {
   if (stateKey === 'busy') return 'busy';
   if (stateKey === 'waiting') return 'wait';
-  if (stateKey === 'done' || stateKey === 'idle') return 'done';
+  if (stateKey === 'done') return 'done';
+  if (stateKey === 'idle') return 'idle';
+  if (stateKey === 'offline') return 'off';
+  if (stateKey === 'shell') return 'shell';
   return '';
 }
 const when = (ms: number) => (ms ? relTime(new Date(ms).toISOString()) : '');
