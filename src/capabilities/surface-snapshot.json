@@ -2627,6 +2627,16 @@
   "input_hash": "00961fd848a14658"
  },
  {
+  "name": "project_similar",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/v6/projects/similar"
+  ],
+  "input_hash": "29824a065259c10a"
+ },
+ {
   "name": "project_get_v6",
   "scope": "memory",
   "mcp": true,
