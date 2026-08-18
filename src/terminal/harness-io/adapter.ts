@@ -27,6 +27,18 @@ export type ChatAction = "approve" | "deny" | "interrupt";
 export const CHAT_ACTIONS: readonly ChatAction[] = ["approve", "deny", "interrupt"];
 export const isChatAction = (v: unknown): v is ChatAction => (CHAT_ACTIONS as readonly string[]).includes(String(v));
 
+/**
+ * 화면 판정(#1719 계약 축) — pane 하단(라이브 UI)이 지금 어떤 상태인가.
+ *  · ready  = 입력창이 떠 있어 **텍스트를 넣어도 되는** 상태(하네스가 도는 중이어도 큐잉을 보장하면 ready)
+ *  · busy   = 돌고 있고 **큐잉 보장이 없어** 기다렸다 넣어야 하는 상태
+ *  · dialog = 사람의 선택을 기다리는 대화상자(신뢰·승인·질문) — 절대 텍스트를 넣지 않는다
+ *  · auth   = 로그인·인증 검증 중 — 넣으면 거부되거나 사라진다(antigravity 실측 2026-08-18)
+ *  · null   = 이 화면으로는 판정 불가(부팅·미지의 화면) — 호출자가 보수적으로 기다린다
+ *  screen: null = **이 하네스는 화면 판정이 미실측**이라는 명시적 선언(있는 척 금지). 그 하네스는 폴백
+ *  휴리스틱(포그라운드 관찰 + 정착 대기)을 타며, 실측이 생기면 여기에 채우고 계약 테스트에 표를 더한다.
+ */
+export type ScreenState = "ready" | "busy" | "dialog" | "auth";
+
 export interface HarnessSessionAdapter {
   key: string;
   label: string;
@@ -35,6 +47,7 @@ export interface HarnessSessionAdapter {
   pathFor: ((root: string, ctx: { cwd: string; convId: string }) => string | null) | null;
   parse: ((text: string, state: ParseState) => ParseResult) | null;
   answer: ((action: ChatAction) => ChatKey) | null;
+  screen: ((tail: string[]) => ScreenState | null) | null;
 }
 
 // 아직 파서·승인 실측이 없는 하네스 — 축을 **명시적으로 null** 로 답한다(있는 척 금지 · 목록에서 빠지지도 않는다).
@@ -45,17 +58,17 @@ const codexIo: HarnessSessionAdapter = {
   key: "codex", label: "Codex",
   roots: (homes) => homes.map((h) => path.join(h, ".codex", "sessions")),
   filePattern: /^rollout-.*\.jsonl$/,
-  pathFor: null, parse: null, answer: null,
+  pathFor: null, parse: null, answer: null, screen: null,
 };
 const opencodeIo: HarnessSessionAdapter = {
   key: "opencode", label: "OpenCode",
   roots: () => [],
   filePattern: /\.jsonl$/,
-  pathFor: null, parse: null, answer: null,
+  pathFor: null, parse: null, answer: null, screen: null,
 };
 // 셸 세션 — AI 없음. 대화 파일도 승인도 없다.
 const shellIo: HarnessSessionAdapter = {
-  key: "shell", label: "셸", roots: () => [], filePattern: /$^/, pathFor: null, parse: null, answer: null,
+  key: "shell", label: "셸", roots: () => [], filePattern: /$^/, pathFor: null, parse: null, answer: null, screen: null,
 };
 
 export const HARNESS_IO: readonly HarnessSessionAdapter[] = [claudeIo, codexIo, opencodeIo, antigravityIo, grokIo, shellIo];

@@ -13,6 +13,7 @@
 //  ⚠ 신뢰 대화상자 자동 수락은 **세션 전용 폴더일 때만**(라이블리가 방금 만든 빈 폴더 — 신뢰할 파일 자체가 없다).
 //   사람이 고른 폴더는 그 사람의 판단이라 대신 누르지 않는다(대화창의 '확인 대기' 배너가 Enter 를 대신 눌러 준다).
 import { SHELL_CMDS } from "./phase.js";
+import { harnessIo } from "./harness-io/adapter.js";
 import { tmux } from "./tmux-exec.js";
 import { sendKeysToSession, sendKeyToSession } from "./send-keys.js";
 
@@ -46,6 +47,13 @@ export function firstPromptStep(i: { pane: string; harness: string; paneCmd: str
   const tail = tailOf(i.pane);
   const tailText = tail.join("\n");
   if (TRUST_DIALOG.test(tailText)) return i.trustOk ? "accept-trust" : "wait";
+  // 하네스가 화면 판정을 선언했으면(#1719 계약 축 screen) 그것이 정본이다 — 휴리스틱보다 먼저.
+  //  auth(로그인·인증 검증)에 넣으면 거부돼 사라지고(antigravity 실측 — "아직 인증 확인중" 거부), dialog 에 넣으면
+  //  대화상자가 삼킨다. busy 는 큐잉 보장이 없으면 기다렸다 넣는다. 판정 불가(null)면 아래 폴백으로.
+  const scr = harnessIo(i.harness)?.screen?.(tail) ?? null;
+  if (scr === "ready") return "send";
+  if (scr === "auth" || scr === "busy") return "wait";
+  if (scr === "dialog") return "wait";                        // 신뢰 대화상자는 위에서 이미 갈랐다 — 그 밖의 대화상자는 대신 안 누른다
   if (i.harness === "claude") return tail.some((l) => INPUT_BOX.test(l)) ? "send" : "wait";
   // 그 밖의 하네스 — 입력창 문구를 모른다. 포그라운드가 셸이 아니게 된 뒤(하네스가 떴다) 조금 기다렸다 넣는다.
   const fg = (i.paneCmd || "").trim();

@@ -73,9 +73,13 @@ export async function enqueuePrompt(sessionId: string, text: string, opts?: { tr
 /** 화면용 — 아직 끝나지 않은 것(queued·sending·failed)만. delivered/sent 는 트랜스크립트가 이미 보여준다.
  *  control(설정 명령)은 뺀다 — 대화창은 **사람이 보낸 말**의 큐이고, 거기 `/model opus` 가 말풍선으로 뜨면
  *  사람이 그렇게 말한 것처럼 보인다. 그 결말은 부른 쪽(POST …/runtime)이 waitOutboxSettled 로 그 자리에서 본다. */
+// 화면용 — 미완(queued·sending·failed) + **에코 미확인**(sent·echo-unconfirmed). 후자를 숨기면 "보낸 걸로 떠서 영영
+//  대답을 못 받는" 거짓 화면이 된다(antigravity 인증 거부 실측 2026-08-18) — 재시도·지우기를 사람 손에 준다.
+//  (echo-unreadable 은 파일을 못 읽는 자리의 정상적 '모름' — 표시하지 않는다.)
 export async function listOutbox(sessionId: string): Promise<OutboxRow[]> {
   const r = await itemsPool.query(
-    `SELECT * FROM org_session_outbox WHERE session_id=$1 AND kind='prompt' AND status IN ('queued','sending','failed') ORDER BY seq`,
+    `SELECT * FROM org_session_outbox WHERE session_id=$1 AND kind='prompt' AND
+       (status IN ('queued','sending','failed') OR (status='sent' AND last_error='echo-unconfirmed')) ORDER BY seq`,
     [sessionId]);
   return r.rows.map(rowToOutbox);
 }
@@ -103,7 +107,7 @@ export async function waitOutboxSettled(ids: number[], maxMs: number): Promise<{
 export async function retryOutbox(sessionId: string, id: number): Promise<boolean> {
   const r = await itemsPool.query(
     `UPDATE org_session_outbox SET status='queued', attempts=0, last_error=NULL, created_at=now(), updated_at=now()
-     WHERE session_id=$1 AND id=$2 AND status='failed'`,
+     WHERE session_id=$1 AND id=$2 AND (status='failed' OR (status='sent' AND last_error='echo-unconfirmed'))`,
     [sessionId, id]);
   if ((r.rowCount ?? 0) > 0) { kickOutbox(sessionId); return true; }
   return false;
@@ -111,7 +115,7 @@ export async function retryOutbox(sessionId: string, id: number): Promise<boolea
 
 export async function discardOutbox(sessionId: string, id: number): Promise<boolean> {
   const r = await itemsPool.query(
-    `DELETE FROM org_session_outbox WHERE session_id=$1 AND id=$2 AND status IN ('queued','failed')`,
+    `DELETE FROM org_session_outbox WHERE session_id=$1 AND id=$2 AND (status IN ('queued','failed') OR (status='sent' AND last_error='echo-unconfirmed'))`,
     [sessionId, id]);
   return (r.rowCount ?? 0) > 0;
 }
