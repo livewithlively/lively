@@ -410,6 +410,35 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
       "E14l 경로·공백·빈값은 막는다");
   }
 
+  // ⚠ 소켓 경로는 짧아야 한다(unix sun_path ≈104바이트). macOS 의 tmpdir() 은 /var/folders/… 라 길어서 실패한다.
+  const E12_SOCK = `/tmp/lv-e12-${process.pid}.sock`;
+  // E12 를 실 tmux 로 돌려도 되는가 — 되면 null, 안 되면 건너뛰는 이유(사람 말). 게으른 인자(version·probe)는
+  //  **플랫폼 판정을 통과한 뒤에만** 호출된다 — 윈도우에선 tmux(=psmux)를 한 번도 spawn 하지 않는다(실 mux 에 부작용 0:
+  //  실측에선 테스트가 돈 뒤 `__warm__` 보조 서버 프로세스까지 남아 있었다).
+  //  · version: `tmux -V` 가 0 으로 끝났으면 그 출력, 아니면 null(tmux 없음)
+  //  · probe:   전용 소켓으로 `list-sessions` 가 0 으로 끝났으면 그 출력, 아니면 null(= "no server running" — 격리된 새 소켓의 정상 응답)
+  function e12SkipReason(platform: NodeJS.Platform, version: () => string | null, probe: () => string | null): string | null {
+    if (platform === "win32") return "윈도우 — 네이티브 mux(psmux)는 -S 소켓 격리가 없어 kill-server 가 PC 의 모든 세션을 죽인다";
+    const v = version();
+    if (v === null) return "tmux 없음(최소 컨테이너)";
+    if (/psmux/i.test(v)) return "psmux — -S 소켓 격리를 무시한다(kill-server = 전 세션 종료)";
+    const seen = probe();
+    if (seen !== null && seen.trim() !== "") return "전용 소켓에서 이미 세션이 보인다 — 소켓 격리가 안 되는 mux 라 kill-server 를 칠 수 없다";
+    return null;
+  }
+  // 판정 픽스처 — 이 표가 틀리면 아래 실행이 개발자 PC 의 세션을 죽인다. 실행 여부와 무관하게 늘 검사한다.
+  {
+    let spawned = 0;
+    const V_TMUX = "tmux 3.4";
+    const V_PSMUX = "tmux 3.3.7\npsmux 3.3.7 (05cc5d4 2026-07-20)";   // 실측(hammurabi)
+    ok2(e12SkipReason("win32", () => { spawned++; return V_PSMUX; }, () => { spawned++; return "box-yoon-1: 1 windows"; }) !== null, "E12g 윈도우는 무조건 건너뛴다");
+    ok2(spawned === 0, "E12g 윈도우 판정은 tmux 를 spawn 하지 않는다(실 mux 에 부작용 0)");
+    ok2(e12SkipReason("linux", () => null, () => null) !== null, "E12g tmux 가 없으면 건너뛴다");
+    ok2(e12SkipReason("darwin", () => V_PSMUX, () => null) !== null, "E12g -V 가 psmux 를 밝히면 플랫폼과 무관하게 건너뛴다");
+    ok2(e12SkipReason("linux", () => V_TMUX, () => "box-yoon-1: 1 windows (created …)") !== null, "E12g 전용 소켓 ls 에 실 세션이 보이면 격리 실패 — 건너뛴다");
+    ok2(e12SkipReason("linux", () => V_TMUX, () => null) === null, "E12g 진짜 tmux + 새 소켓('no server running') 이면 돈다");
+    ok2(e12SkipReason("linux", () => V_TMUX, () => "") === null, "E12g 전용 소켓이 비어 있으면(0 세션) 돈다");
+  }
   // E12 — 런처의 **부작용**: pane 의 foreground 프로세스가 무엇으로 보이는가 (#1535).
   //  래퍼를 씌운다는 건 pane 에 프로세스를 하나 더 만든다는 뜻이다. job control 이 없으면 그 래퍼
   //  (`sh` — macOS 실체는 bash)가 tty 의 foreground pgrp 리더로 눌러앉아, 하네스가 도는 중에도 tmux 의
@@ -419,12 +448,24 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
   //   · isAgentOffline — 살아있는 하네스를 '종료됨'으로 표시
   //  둘 다 **웹 UI 에서만** 보이는 증상이라 서버 테스트로는 안 잡힌다 → 계약을 여기서 tmux 로 직접 고정한다.
   //  (문자열 검사로는 못 한다. `set -m` 이 든 스크립트를 확인해봐야 그게 정말 pgrp 을 옮겼는지는 tmux 만 안다.)
+  //  ⚠⚠ 이 블록은 **실 tmux 에 kill-server 를 친다.** 그래서 전용 소켓(-S)으로 격리하는데, 그 격리가 성립하는지를
+  //   실행 전에 반드시 확인한다 — 2026-08-18 실측(hammurabi, Windows 노드): psmux 는 `tmux -V` 에 "tmux 3.3.7" 로 답해
+  //   종전 haveTmux 게이트를 통과했고 `-S <sock>` 은 **무시**한다(전용 소켓 ls 가 실 세션을 그대로 나열). 그 상태의
+  //   kill-server 는 psmux 문서 그대로 "Kill all sessions and the server" — 테스트를 돌린 세션 자신을 포함해 그 PC 의
+  //   라이블리 세션 5개가 한 번에 죽었고, 웹은 그 세션들을 "세션을 찾을 수 없어요"로 보였다. 판정은 순수 함수
+  //   (e12SkipReason)로 떼어 픽스처로 고정하고, 실행 직전에 실측값으로 한 번 더 판정한다. 윈도우는 아무것도 spawn
+  //   하지 않고 건너뛴다.
   {
-    const haveTmux = spawnSync("tmux", ["-V"], { encoding: "utf8" }).status === 0;
-    if (!haveTmux) console.log("skip E12 (tmux 없음 — 윈도우/최소 컨테이너)");
+    const skip = e12SkipReason(process.platform, () => {
+      const v = spawnSync("tmux", ["-V"], { encoding: "utf8" });
+      return v.status === 0 ? (v.stdout || "") + (v.stderr || "") : null;
+    }, () => {
+      const probe = spawnSync("tmux", ["-S", E12_SOCK, "list-sessions"], { encoding: "utf8" });
+      return probe.status === 0 ? (probe.stdout || "") : null;
+    });
+    if (skip) console.log(`skip E12 (${skip})`);
     else {
-      // ⚠ 소켓 경로는 짧아야 한다(unix sun_path ≈104바이트). macOS 의 tmpdir() 은 /var/folders/… 라 길어서 실패한다.
-      const sock = `/tmp/lv-e12-${process.pid}.sock`;
+      const sock = E12_SOCK;
       const tmux = (...a: string[]): string =>
         (spawnSync("tmux", ["-S", sock, ...a], { encoding: "utf8" }).stdout || "").trim();
       // pane 기동을 기다린다(최대 ~3s) — done(cmd) 이 참이 되면 즉시 반환. 고정 sleep 은 느리거나 불안정하다.
