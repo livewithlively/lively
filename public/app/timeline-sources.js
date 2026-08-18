@@ -96,8 +96,6 @@ export async function loadProjectTimeline(id, detail) {
     const producedOf = (a) => (Array.isArray(a.refs) ? a.refs : [])
         .filter((r) => r.relation === 'produced')
         .map((r) => ({ verb: '지식', label: humanSummary(r.title || r.name, 38), href: r.name ? '#/k/' + encodeURIComponent(s(r.name)) : null }));
-    /** 이 기록이 '남긴 것'을 갖고 있나 — 커밋·산출지식·코드 변경. 없으면 겉면에 설 자격이 없다. */
-    const hasResult = (a) => !!(a.commit_sha || a.touchCount || producedOf(a).length);
     // ① 프로젝트 자체의 변화 — 가장 높은 위계. 잦은 편집(설명 등)은 하루 한 줄로 묶는다.
     const edits = new Map();
     for (const f of feedRes) {
@@ -159,11 +157,35 @@ export async function loadProjectTimeline(id, detail) {
         const who = { id: s(t.assignee || t.created_by) || null, name: personName(t.assignee || t.created_by) || null, agent: null };
         out.push({ id: 'tk-done:' + t.id, kind: 'task', verb: '끝냄', label: humanSummary(t.name, 44), key: 'tk|done|' + t.id, ts: s(t.completed_at), actor: who, href: '#/projects2/t/' + t.id, children: kids.slice(0, 10) });
     }
-    // ③ 프로젝트에 직접 달린 기록 중 **남긴 것이 있는 것만**.
+    // ③ 프로젝트에 직접 달린 기록 — 여기가 벽이 되기 쉽다. 두 갈래로만 남긴다.
+    //  ⓐ **새로 남은 산출물(지식)** — 같은 지식을 여러 번 갱신한 것은 사건이 아니라 반복이다(시안 5차 = 지식 1장).
+    //     그래서 activity 가 아니라 **지식 자체**를 항목으로 세우고 슬러그로 합친다(위젯이 key 로 ×N 처리).
+    //  ⓑ **코드 작업** — 하나하나는 프로젝트에서 볼 것이 아니다. **하루 한 줄**로 묶고 펼치면 무엇을 했는지 나온다.
+    const codeByDay = new Map();
     for (const a of direct) {
-        if (!hasResult(a))
+        const produced = producedOf(a);
+        if (a.commit_sha) {
+            const day = s(a.committed_at || a.created_at).slice(0, 10);
+            const cur = codeByDay.get(day) || { n: 0, commits: 0, ts: s(a.committed_at || a.created_at), actor: { id: s(a.author_person) || null, name: personName(a.author_person), agent: s(a.author_agent) || null }, kids: [] };
+            cur.n++;
+            cur.commits++;
+            if (s(a.committed_at || a.created_at) > cur.ts)
+                cur.ts = s(a.committed_at || a.created_at);
+            if (cur.kids.length < 12)
+                cur.kids.push({ verb: TYPE_VERB[s(a.type)] || '했음', label: humanSummary(a.summary || a.title, 40) });
+            codeByDay.set(day, cur);
             continue;
-        out.push(fromActivity(a));
+        }
+        for (const k of produced) {
+            const slug = decodeURIComponent(s(k.href).replace('#/k/', ''));
+            out.push({ id: 'kn:' + slug, kind: 'knowledge', verb: '남김', label: k.label, key: 'kn|' + slug, ts: s(a.committed_at || a.created_at),
+                actor: { id: s(a.author_person) || null, name: personName(a.author_person), agent: s(a.author_agent) || null }, href: k.href });
+        }
+        // 커밋도 산출지식도 없는 기록은 프로젝트 화면의 사건이 아니다 — 싣지 않는다.
+    }
+    for (const [day, c] of codeByDay) {
+        out.push({ id: 'code:' + day, kind: 'cmd', verb: '코드', label: '코드 작업 ' + c.n + '번', key: 'code|' + day, ts: c.ts, actor: c.actor,
+            detail: '커밋 ' + c.commits, children: c.kids });
     }
     return out;
 }
