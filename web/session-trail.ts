@@ -36,8 +36,8 @@ const CMD_RULES: Array<{ re: RegExp; f: (m: RegExpMatchArray) => TrailClass }> =
   // 커밋 — 메시지 한 줄만. sha·레포는 사람이 읽을 것이 아니다(툴팁에도 안 넣는다).
   //  ⚠ -m "$(cat <<'EOF' …)" 로 쓴 커밋은 따옴표 뒤가 명령 치환이라 그걸 제목으로 삼으면 안 된다(실측: 제목이 `$(cat <<'EOF'` 가 됐다).
   //   그런 꼴은 건너뛰고 아래 heredoc 규칙이 **본문 첫 줄**을 집게 한다.
-  { re: /\bgit commit\b[\s\S]*?-m\s+["'](?!\$\()([^"'\n]+)/, f: (m) => mk('cmd', '커밋', humanTitle(m[1])) },
-  { re: /\bgit commit\b[\s\S]*?<<\s*'?\w+'?\s*\n([^\n]+)/, f: (m) => mk('cmd', '커밋', humanTitle(m[1])) },
+  { re: /\bgit commit\b[\s\S]*?-m\s+["'](?!\$\()([^"'\n]+)/, f: (m) => commitItem(m[1]) },
+  { re: /\bgit commit\b[\s\S]*?<<\s*'?\w+'?\s*\n([^\n]+)/, f: (m) => commitItem(m[1]) },
   // 파일 — 대상이 명령에 드러난 경우만. (python heredoc 편집이 실제로 가장 흔하다)
   { re: /p\s*=\s*['"]([^'"\n]+)['"][\s\S]{0,4000}?open\(\s*p\s*,\s*['"]w/, f: (m) => mk('file', '고침', tailPath(m[1])) },
   { re: /open\(\s*['"]([^'"\n]+)['"]\s*,\s*['"]w/, f: (m) => mk('file', '고침', tailPath(m[1])) },
@@ -45,6 +45,13 @@ const CMD_RULES: Array<{ re: RegExp; f: (m: RegExpMatchArray) => TrailClass }> =
   { re: /(?:^|\n|&&|\|\|)\s*cat\s*>\s*([\w./~-]+)/, f: (m) => mk('file', '씀', tailPath(m[1])) },
   { re: /\bsed\s+-i\b[^\n]*?\s([\w./~-]+)\s*$/m, f: (m) => mk('file', '고침', tailPath(m[1])) },
 ];
+// 커밋이 다 같은 무게는 아니다 — 메시지의 관례 접두어가 이미 '무엇이 생겼다'와 '치웠다'를 가른다.
+//  feat·design·fix·perf 는 화면에 남고, chore·docs·test·build·ci·style·refactor·revert 는 과정으로 접힌다.
+//  접두어가 없으면 사람이 자기 말로 쓴 것이니 남기는 쪽(결과)으로 둔다 — 놓치는 것보다 낫다.
+const COMMIT_CHORE = /^(chore|docs|test|build|ci|style|refactor|revert|wip)\b/i;
+const commitItem = (raw: string): TrailClass =>
+  mk('cmd', '커밋', humanTitle(raw), { tier: COMMIT_CHORE.test(String(raw).trim()) ? 3 : 1 });
+
 function classifyBash(cmd: string): TrailClass | null {
   const c = String(cmd || '');
   if (!c.trim()) return null;

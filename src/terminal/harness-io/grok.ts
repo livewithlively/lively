@@ -96,5 +96,13 @@ export const grokIo: HarnessSessionAdapter = {
   pathFor: (root, { cwd, convId }) => (cwd && CONV_ID_RE.test(convId) ? path.join(root, encodeURIComponent(cwd), convId, "updates.jsonl") : null),
   parse: parseGrok,
   answer: null,
-  screen: null,   // 화면 판정 미실측(#1719) — 폴백 휴리스틱
+  // 실측 2026-08-18(box-yoon-bf4872dd): 응답 중엔 "⠹ Responding… 6.5s … [stop]" + 푸터에 "Esc:cancel",
+  // 준비되면 푸터가 "Shift+Tab:mode │ (Ctrl+;:queue │) Ctrl+.:shortcuts" 로 돌아온다(둘 다 입력박스 ❯ 는 늘 그려짐 —
+  // 그래서 busy 마커를 먼저 본다). 부팅 오버레이 메뉴(New worktree…·"Grok Build 1.0.3 [stable]")엔 둘 다 없어 null(대기).
+  screen: (tail) => {
+    const s = tail.join("\n");
+    if (/Responding…|Esc:cancel/.test(s)) return "busy";
+    if (/Shift\+Tab:mode/.test(s)) return "ready";
+    return null;
+  },
 };

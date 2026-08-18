@@ -185,20 +185,39 @@ export function createTimeline(host, ctx) {
     //  상민님: "결과물 위주로. 사소한 건 됐고, 전체 맥락에 중요한 영향 끼칠 것만."
     //  ① 같은 대상은 한 장으로 접는다(같은 파일을 열 번 고쳤어도 그 파일은 하나다 — 횟수는 ×N 으로).
     //  ② 지시는 결과물이 아니다(무엇을 시켰나는 가운데 대화가 말한다).
-    //  ③ 무게가 낮은 것은 지우지 않고 **접는다** — 한 번 스친 파일까지 늘어놓으면 중요한 게 묻힌다.
-    const WEIGHT_KEEP = 55;
-    function weightOf(it) {
-        if (it.kind === 'activity')
-            return 100; // 사람이 남긴 작업 기록 = 가장 무겁다
-        if (it.kind === 'knowledge')
-            return 95; // 조직에 남는 것
-        if (it.kind === 'project' || it.kind === 'task')
-            return 90; // 일의 뼈대가 바뀐 것
-        if (it.kind === 'cmd')
-            return 85; // 커밋 — 밖으로 나간 결과
-        if (it.kind === 'file')
-            return (it.verb === '씀' ? 70 : 45) + Math.min(20, (it.count - 1) * 5);
-        return 30;
+    //  ③ 남는 것과 과정을 **종류로 가른다** — 무게 점수는 통하지 않았다(아래).
+    //
+    //  ★ 무엇이 카드가 되나 (상민님 2026-08-18, 두 차례 되돌아온 피드백)
+    //    "정말로 누가 봐도 유의미한 변화가 있는 것만 올라가야지 그냥 다 올라가잖아."
+    //    "커밋도 솔직히 별로 쓸데없지. 추가된 기능 정도만 보이면 되잖아."
+    //   처음엔 무게 점수(파일 45 + 반복 가산, 55점 이상 노출)로 걸렀는데 **여러 번 고친 파일이 그대로 통과**해
+    //   결국 다 올라오는 화면이 됐다(실측: 이 화면을 만든 세션은 도구 호출 109건 중 대부분이 파일 편집 —
+    //   파일 4개를 14번 고쳤고 커밋·지식은 몇 건뿐이었다). 그래서 점수가 아니라 **종류**로 가른다:
+    //   그런데 종류로 뭉텅이로 자르면 **중요한 커밋까지 같이 사라진다**(상민님: "커밋 중요한 것도 있을 텐데
+    //   다 빼면 어떡해"). 그래서 종류로 자르는 게 아니라 **항목마다 판단한다**:
+    //     · 조직에 남는 것(작업 기록·지식·프로젝트·태스크) — 언제나 결과다.
+    //     · 커밋 — 메시지가 말해 준다. 개발 관례(feat·design·fix…)가 이미 '기능이 생겼다'와
+    //       '치우는 일'을 가르고 있으므로 그 판정을 그대로 쓴다(session-trail.ts 가 tier 로 실어 보낸다).
+    //     · 파일 — **새로 만든 것**은 결과(없던 게 생겼다), **고친 것**은 과정(몇 번 고쳤나는 결과가 아니다).
+    //   나머지는 지우지 않고 접는다 — 안 보이는 것과 없는 것은 다르고, 접힘 줄은 무엇을 접었는지 그대로 말한다.
+    const OUTCOME_KINDS = new Set(['activity', 'knowledge', 'project', 'task']);
+    const isOutcome = (it) => OUTCOME_KINDS.has(it.kind) ? true
+        : it.kind === 'cmd' ? (it.verb === '커밋' && tierOf(it) === 1) // 기능·수정 커밋만(치우는 커밋은 접힘)
+            : it.kind === 'file' ? it.verb === '씀' // 새로 만든 파일만
+                : false;
+    /** 접힌 것의 이름 — '그 밖에 N개'는 열어 보기 전엔 아무 뜻이 없다. */
+    function restLabel(rest) {
+        const files = rest.filter((it) => it.kind === 'file').length;
+        const commits = rest.filter((it) => it.kind === 'cmd' && it.verb === '커밋').length;
+        const etc = rest.length - files - commits;
+        const parts = [];
+        if (files)
+            parts.push(`손댄 파일 ${files}개`);
+        if (commits)
+            parts.push(`커밋 ${commits}개`);
+        if (etc)
+            parts.push(`그 밖 ${etc}개`);
+        return parts.join(' · ') + ' 보기';
     }
     let restOpen = false;
     function outcomes() {
@@ -221,7 +240,7 @@ export function createTimeline(host, ctx) {
                 cur.children = [...(cur.children || []), ...it.children];
         }
         const all = [...by.values()].sort((a2, b2) => tsNum(a2.ts) - tsNum(b2.ts));
-        return { keep: all.filter((it) => weightOf(it) >= WEIGHT_KEEP), rest: all.filter((it) => weightOf(it) < WEIGHT_KEEP) };
+        return { keep: all.filter(isOutcome), rest: all.filter((it) => !isOutcome(it)) };
     }
     function paintOutcomes() {
         const { keep, rest } = outcomes();
@@ -246,85 +265,6 @@ export function createTimeline(host, ctx) {
             const who = String((it.actor && it.actor.id) || '');
             rail.append(card(it, [], who === lastWho));
             lastWho = who;
-        }
-        if (rest.length) {
-            kids.push(el('button', {
-                class: 'tl-rest', type: 'button', 'aria-expanded': String(restOpen),
-                onclick: () => { restOpen = !restOpen; paint(); },
-            }, restOpen ? '덜 중요한 변화 접기' : `덜 중요한 변화 ${rest.length}개 보기`));
-        }
-        list.replaceChildren(...kids);
-    }
-    // ── 결과물 보기(#1756) — 상민님: "결과물 위주로. 사소한 건 됐고, 전체 맥락에 중요한 영향 끼칠 것만." ──
-    //  ① 같은 대상은 한 장으로 접는다(같은 파일을 열 번 고쳤어도 그 파일은 하나다 — 횟수는 카드 안에).
-    //  ② 지시는 결과물이 아니다(무엇을 시켰나는 대화가 말한다).
-    //  ③ 무게가 낮은 것은 지우지 않고 **접는다** — 한 번 스친 파일까지 늘어놓으면 중요한 게 묻힌다.
-    //  ★ 무엇이 카드가 되나 — 점수가 아니라 **종류**로 가른다(#1756, 상민님: "정말로 누가 봐도
-    //    유의미한 변화가 있는 것만 올라가야지 그냥 다 올라가잖아").
-    //    실측(이 화면을 만든 세션): 도구 호출 109건 중 대부분이 파일 편집이었고 커밋·지식은 몇 건뿐이었다.
-    //    이어서: "커밋도 솔직히 별로 쓸데없지. 추가된 기능 정도만 보이면 되잖아."
-    //    파일을 몇 번 고쳤나도, 그걸 몇 번 커밋했나도 **과정**이다 — 읽는 사람이 알고 싶은 것은 "무엇이 생겼나"다.
-    //    그래서 카드가 되는 것은 이 넷뿐이다:
-    //      · 작업 기록(무엇을 했다고 남긴 것)  · 지식(조직에 남는 것)  · 프로젝트  · 태스크(일의 뼈대)
-    //    파일 편집·커밋·그 밖의 명령은 지우지 않고 **접는다** — 안 보이는 것과 없는 것은 다르다.
-    const OUTCOME_KINDS = new Set(['activity', 'knowledge', 'project', 'task']);
-    const isOutcome = (it) => OUTCOME_KINDS.has(it.kind);
-    let restOpen = false;
-    function outcomes() {
-        const by = new Map();
-        for (const it of items) {
-            if (it.kind === 'say')
-                continue; // 지시는 결과물이 아니다(가운데 대화가 말한다)
-            const k = it.kind + '|' + it.label;
-            const cur = by.get(k);
-            if (!cur) {
-                by.set(k, { ...it });
-                continue;
-            }
-            cur.count += it.count;
-            if (tsNum(it.ts) > tsNum(cur.ts))
-                cur.ts = it.ts;
-            if (it.verb === '씀' || it.verb === '만듦')
-                cur.verb = it.verb; // 만든 것이 고친 것을 이긴다
-            if (it.children && it.children.length)
-                cur.children = [...(cur.children || []), ...it.children];
-        }
-        const all = [...by.values()].sort((a, b) => tsNum(a.ts) - tsNum(b.ts));
-        return { keep: all.filter(isOutcome), rest: all.filter((it) => !isOutcome(it)) };
-    }
-    /** 접힌 것의 이름 — 무엇을 접었는지 그대로 말한다('그 밖에 N개'는 열어 보기 전엔 아무 뜻이 없다). */
-    function restLabel(rest) {
-        const files = rest.filter((it) => it.kind === 'file').length;
-        const commits = rest.filter((it) => it.kind === 'cmd' && it.verb === '커밋').length;
-        const etc = rest.length - files - commits;
-        const parts = [];
-        if (files)
-            parts.push(`손댄 파일 ${files}개`);
-        if (commits)
-            parts.push(`커밋 ${commits}개`);
-        if (etc)
-            parts.push(`그 밖 ${etc}개`);
-        return parts.join(' · ') + ' 보기';
-    }
-    function paintOutcomes() {
-        const { keep, rest } = outcomes();
-        countEl.textContent = String(keep.length);
-        emptyEl.hidden = keep.length > 0 || rest.length > 0;
-        const kids = [];
-        let day = ' ';
-        let rail = el('div', { class: 'tl-rail' });
-        const shown = restOpen ? [...keep, ...rest].sort((a, b) => tsNum(a.ts) - tsNum(b.ts)) : keep;
-        for (let i = shown.length - 1; i >= 0; i--) { // 최신이 위
-            const it = shown[i];
-            const d = dayOf(it.ts);
-            if (d !== day) {
-                day = d;
-                if (d)
-                    kids.push(el('div', { class: 'tl-day' }, el('span', { text: dayLabel(d) })));
-                rail = el('div', { class: 'tl-rail' });
-                kids.push(rail);
-            }
-            rail.append(card(it, []));
         }
         if (rest.length) {
             kids.push(el('button', {
