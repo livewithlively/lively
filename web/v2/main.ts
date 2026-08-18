@@ -16,12 +16,14 @@ import { createTimeline, type TimelineHandle } from '../timeline.js';
 import { loadProjectTimeline, loadSessionActivities, loadWorkspaceTimeline } from '../timeline-sources.js';
 import { makeSplitter } from './split.js';
 import { createTabs, routeKey, type ShellTab, type TabsApi } from './tabs.js';
+import { mountMobileChrome, type MobileChrome } from './mobile.js';
 
 let root: HTMLElement | null = null;
 let sideEl: HTMLElement | null = null;
 let centerEl: HTMLElement | null = null;
 let asideEl: HTMLElement | null = null;
 let tabsApi: TabsApi | null = null;
+let mobile: MobileChrome | null = null;   // ≤900px 모바일 크롬(#1777) — 상단 바·서랍. 데스크톱에선 보이지 않는 채로 달려 있다.
 let data: V2Data = { projects: [], sessions: [], loadedAt: 0 };
 let projLoadedAt = 0;
 const projRetried = new Set<number>();   // 목록에 없어 한 번 더 당겨 본 프로젝트 id(같은 id 로 반복 재조회 방지)
@@ -39,6 +41,10 @@ export async function bootV2(): Promise<void> {
     centerEl = el('div', { class: 'v2-main', id: 'v2-main' }),
     makeSplitter({ axis: 'x', key: 'aside-w', cssVar: '--v2-aside-w', target: root, def: 316, min: 240, max: 720, grow: -1, label: '우패널 너비' }),
     asideEl = el('aside', { class: 'v2-aside', 'aria-label': '이 선택의 맥락' }));
+  // 모바일 크롬(#1777) — 바는 그리드 맨 앞, 배경막은 맨 뒤. 데스크톱에선 둘 다 display:none 이라 그리드 열 순서에 안 낀다.
+  mobile = mountMobileChrome(root, sideEl!, asideEl!);
+  root.prepend(mobile.bar);
+  root.append(mobile.scrim);
 
   tabsApi = createTabs(centerEl!, asideEl!, {
     titleFor,
@@ -53,6 +59,8 @@ export async function bootV2(): Promise<void> {
     onClose: (tab) => { if (tab.chat) { tab.chat.destroy(); tab.chat = null; } drawSide(); },
   });
   centerEl!.prepend(tabsApi.strip);   // 탭 줄은 가운데 열 맨 위(탭 패널들은 tabs.ts 가 이미 뒤에 붙였다)
+  // 모바일이면 탭 줄이 상단 바 가운데로 옮겨 간다(#1777) — 데스크톱으로 돌아오면 여기(가운데 열 맨 위)로 되돌린다.
+  mobile.adoptStrip(tabsApi.strip, () => centerEl!.prepend(tabsApi!.strip));
 
   drawSide(); // 데이터 전 골격(로고·리브·앱)부터 — 빈 화면을 오래 두지 않는다
   await loadData();
@@ -131,6 +139,7 @@ function titleFor(route: string): { title: string; noAside: boolean } {
 }
 function applyTabChrome(tab: ShellTab): void {
   root!.classList.toggle('no-aside', tab.noAside);
+  if (mobile) mobile.setAside(!tab.noAside);   // 모바일 상단 바의 [타임라인] — 우패널이 없는 화면(앱 프레임)에선 버튼도 없다
   // 리브 페이지를 떠나면 그 폴링이 멈추게(liv.ts 는 body.dataset.route==='liv' 동안만 폴링).
   document.body.dataset.route = routeKey(tab.route) === 'raw:liv' || parseRoute(tab.route).segs[0] === 'liv' ? 'liv' : 'v2';
 }
@@ -146,8 +155,8 @@ async function onHash(): Promise<void> {
   if (other) { tabsApi.activate(other); return; }   // 같은 화면(같은 세션·프로젝트)은 그 탭으로 — 두 번 그리지 않는다
   if (cur.chat) { cur.chat.destroy(); cur.chat = null; }   // 세션 화면을 떠나면 그 폴링·리스너를 끈다
   cur.route = hash;
+  tabsApi.routed(cur);     // 제목·noAside 를 새 라우트로 먼저 — 그 뒤에 크롬을 맞춘다(거꾸로 하면 no-aside 가 한 화면 늦게 따라온다, 실측 #1777)
   applyTabChrome(cur);
-  tabsApi.routed(cur);
   await renderRoute(cur);
   drawSide();
 }
@@ -221,7 +230,8 @@ function markActive(key: string): void {
   if (!sideEl) return;
   let hit: HTMLElement | null = null;
   for (const a of Array.from(sideEl.querySelectorAll<HTMLElement>('[data-nav]'))) { const on = a.dataset.nav === key; a.classList.toggle('on', on); if (on && !hit) hit = a; }
-  if (hit && key !== 'home' && key !== 'liv') hit.scrollIntoView({ block: 'nearest' });
+  //  모바일 서랍이 닫혀 있을 땐 굴리지 않는다(#1777) — 화면 밖에 고정된 서랍을 향해 굴리면 문서 자체가 밀린다. 서랍을 열 때 mobile.ts 가 굴린다.
+  if (hit && key !== 'home' && key !== 'liv' && !(mobile && mobile.isMobile() && !root!.classList.contains('m-side'))) hit.scrollIntoView({ block: 'nearest' });
 }
 function activeKey(): string {
   // 부작용 없는 조회 — 부팅 중(활성 탭 확정 전)의 drawSide 가 탭을 만들어 버리면 딥링크가 죽는다(실측).

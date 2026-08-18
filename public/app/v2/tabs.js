@@ -128,6 +128,10 @@ export function createTabs(centerHost, asideHost, hooks) {
             onclick: () => add('#/'),
         }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-tab-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' }))));
         strip.replaceChildren(...kids);
+        // 탭이 줄 폭을 넘치면(모바일 상단 바·좁은 창) 활성 탭이 보이게 가로로만 굴린다 — 세로는 건드리지 않는다(nearest = 이미 보이면 0).
+        const on = strip.querySelector('.v2-tab.on');
+        if (on && strip.scrollWidth > strip.clientWidth)
+            on.scrollIntoView({ inline: 'nearest', block: 'nearest' });
     }
     // 저장된 탭 복원 — 라우트·제목만(내용은 처음 누를 때 그린다). 못 읽으면 빈 채로 시작.
     let restoredActive = 0;

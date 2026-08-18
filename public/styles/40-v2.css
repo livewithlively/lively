@@ -220,6 +220,8 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-tab .x:hover { background: var(--bg-punch); color: var(--ink); }
 .v2-tab-xic { width: 10px; height: 10px; stroke: currentColor; stroke-width: 2.2; fill: none; stroke-linecap: round; }
 .v2-tab-add { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 7px; color: var(--ink-sub); flex: none; }
+/* 탭의 × · ＋ 는 <button> — 브라우저 기본 버튼 테두리·회색 바탕을 벗긴다(안 벗기면 탭 안에 상자가 하나 더 그려진다, 모바일 크롬에서 두드러졌다 #1777). */
+.v2-tab .x, .v2-tab-add { border: 0; background: none; padding: 0; font: inherit; cursor: pointer; appearance: none; -webkit-appearance: none; }
 .v2-tab-add:hover { background: var(--bg-tint); color: var(--ink); }
 /* 탭 패널 — 탭마다 한 벌(가운데·우패널). 숨긴 것은 자리도 차지하지 않는다. 스크롤은 패널 자기 것(탭마다 보존). */
 .v2-tabpane { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
@@ -553,8 +555,15 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-pad-desc { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
 .v2-pad-empty { color: #fff; font-size: 13px; }
 
-@media (max-width: 1100px) { #v2-root { grid-template-columns: 232px minmax(0, 1fr) 280px; } .v2-center { padding-left: 24px; padding-right: 24px; } }
-@media (max-width: 900px) { #v2-root, #v2-root.no-aside { grid-template-columns: 220px 6px minmax(0, 1fr) 0 0; } .v2-aside, #v2-root > .v2-split-x + .v2-main + .v2-split-x { display: none; } }
+/* 901~1100px(작은 노트북 창·아이패드 가로) — 옆 두 칸을 좁힌다. ⚠ 열은 다섯(사이드바·손잡이·가운데·손잡이·우패널)이라 셋만 적으면
+   가운데가 셋째 열(280px)에 앉고 우패널이 다음 줄로 떨어진다(1024px 실측 #1777 — 손잡이가 생기기 전 규칙이 남아 있었다).
+   손잡이가 인라인 변수로 너비를 쥐므로 변수를 덮지 않고 min() 으로 상한만 건다(더 좁히는 건 여전히 된다). */
+@media (max-width: 1100px) {
+  #v2-root { grid-template-columns: min(var(--v2-side-w), 232px) 6px minmax(0, 1fr) 6px min(var(--v2-aside-w), 280px); }
+  #v2-root.no-aside { grid-template-columns: min(var(--v2-side-w), 232px) 6px minmax(0, 1fr) 0 0; }
+  .v2-center { padding-left: 24px; padding-right: 24px; }
+}
+/* (≤900px 는 파일 끝 '모바일' 블록이 통째로 맡는다 — 종전의 '사이드바 220px + 우패널 숨김' 규칙은 #1777 에서 서랍 셸로 대체됐다.) */
 
 /* ── 세션 우패널: 사실 한 줄 + 발자취(web/session-trail.ts) ── */
 .v2-sfacts { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--ink-sub); padding: 0; }
@@ -598,3 +607,119 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .tr-md { font-size: 12.5px; line-height: 1.7; max-height: 480px; overflow: auto; }
 .tr-md .md > :first-child { margin-top: 0; }
 .tr-body .btn { align-self: flex-start; }
+
+/* ═══ 모바일(≤900px, #1777 — 상민님 2026-08-19 "모바일 화면 대응, 특히 세션뷰") ═══
+   세 칸 그리드 → **1열 + 서랍 둘 + 상단 바 하나**. JS 짝: web/v2/mobile.ts(같은 문턱을 matchMedia 로 본다).
+   문턱 900 = 종전에 우패널을 숨기던 그 문턱이다 — 폰(≤430)만이 아니라 태블릿 세로(768~834)도 여기 든다. 사이드바 220px 를 그리드에
+   남기고 우패널을 숨기던 종전 태블릿 그림은, 대화창이 좁아지고 타임라인엔 닿을 길이 없었다. 서랍 둘이면 둘 다 산다.
+   원칙: 기능을 숨기지 않는다(사이드바·우패널은 서랍으로 살아 있다) · 데스크톱(>900) 그림은 한 픽셀도 안 바뀐다(전부 미디어쿼리 안) ·
+   가로 스크롤은 의도한 상자(탭 줄·코드) 안에서만. 상태 = #v2-root.m-side / .m-aside(서랍 열림). */
+.v2-mbar, .v2-scrim { display: none; }   /* 데스크톱엔 없다 — 그리드 열 순서에 안 낀다 */
+@media (max-width: 900px) {
+  /* 뿌리 — 100dvh: iOS 사파리 주소창이 접히고 펴져도 입력칸이 화면 밖으로 안 밀린다(100vh 는 주소창을 포함한 높이). */
+  body[data-ui="v2"], body[data-ui="v2"] #app { height: 100dvh; }
+  #v2-root, #v2-root.no-aside { display: flex; flex-direction: column; height: 100dvh; grid-template-columns: none; }
+  #v2-root > .v2-split-x { display: none; }
+  .v2-main { flex: 1; min-height: 0; }
+  /* 상단 바 — [☰] [탭 줄] [타임라인]. 상태 표시줄(노치) 아래로 내려앉는다(viewport-fit=cover 일 때만 값이 있다). */
+  .v2-mbar { display: flex; align-items: center; gap: 2px; flex: none; height: 46px; padding: 0 4px; padding-top: env(safe-area-inset-top, 0px);
+    box-sizing: content-box; border-bottom: 1px solid var(--line); background: var(--canvas, #F4F7FC); }
+  .v2-mbar-btn { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border: 0; border-radius: 10px; background: none;
+    color: var(--ink-sub); cursor: pointer; flex: none; -webkit-tap-highlight-color: transparent; }
+  .v2-mbar-btn:active, .v2-mbar-btn[aria-expanded="true"] { background: var(--bg, #fff); color: var(--ink); }
+  .v2-mbar-btn[hidden] { display: none; }
+  .v2-mbar-ic { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .v2-mbar-slot { flex: 1; min-width: 0; align-self: stretch; display: flex; align-items: center; }
+  /* 탭 줄이 바 가운데에 산다 — 제 테두리·바탕은 벗고 가로로만 굴린다. 탭은 조금 크게(손가락). 닫기 × 는 활성 탭에만(호버가 없다). */
+  .v2-mbar .v2-tabs { flex: 1; min-width: 0; height: 100%; padding: 0 2px; border: 0; background: none; gap: 2px; }
+  .v2-mbar .v2-tab { max-width: 172px; min-height: 34px; padding: 5px 6px 5px 9px; font-size: 13px; }
+  .v2-mbar .v2-tab .x { width: 22px; height: 22px; }
+  .v2-mbar .v2-tab-xic { width: 12px; height: 12px; }
+  .v2-mbar .v2-tab-add { width: 32px; height: 32px; }
+  /* 배경막 */
+  .v2-scrim { display: block; position: fixed; inset: 0; z-index: 39; background: rgba(21, 35, 59, .42); }
+  .v2-scrim[hidden] { display: none; }
+  /* 서랍 — 사이드바(왼쪽)·우패널(오른쪽). 닫힘 = 화면 밖 + visibility:hidden(초점·스크린리더에서도 빠진다).
+     900px 규칙이 우패널을 display:none 으로 껐던 것을 되살린다(no-aside 는 여전히 꺼져 있고 버튼도 없다). */
+  .v2-side, .v2-aside { position: fixed; top: 0; bottom: 0; z-index: 40; width: min(86vw, 336px); max-width: 100vw; visibility: hidden;
+    transition: transform .22s ease, visibility 0s linear .22s; overscroll-behavior: contain; }
+  .v2-side { left: 0; transform: translateX(-100%); border-right: 0; padding-top: env(safe-area-inset-top, 0px); }
+  .v2-aside { display: flex; right: 0; transform: translateX(100%); border-left: 0; padding-top: env(safe-area-inset-top, 0px); }
+  #v2-root.m-side .v2-side, #v2-root.m-aside .v2-aside { transform: none; visibility: visible; transition: transform .22s ease, visibility 0s;
+    box-shadow: 0 0 0 1px var(--line), 0 18px 48px rgba(21, 35, 59, .24); }
+  .v2-side:focus, .v2-aside:focus { outline: none; }   /* 서랍 컨테이너의 프로그램 포커스(tabindex=-1)엔 링을 안 그린다 — 안의 첫 항목부터가 조작면이다 */
+  .v2-side-foot { padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
+  .v2-aside-pane { padding-bottom: env(safe-area-inset-bottom, 0px); }
+  /* 서랍 안 손가락 크기 — 행 44px 안팎(iOS HIG). 글자도 본문(15px)에 맞춘다. */
+  .v2-side-top { padding: 12px 12px 6px; }
+  .v2-liv-btn { padding: 11px 12px; font-size: 15px; }
+  .v2-side-sec { padding: 12px 14px 6px 18px; }
+  .v2-find-in { height: 40px; }
+  .v2-pj-row { padding: 11px 10px 11px 6px; font-size: 15px; }
+  .v2-pj.open > .v2-pj-row { padding: 11px 12px 8px 8px; }
+  .v2-car { width: 30px; height: 30px; font-size: 17px; }
+  .v2-ss-row { min-height: 42px; padding: 8px 10px 8px 14px; font-size: 14.5px; }
+  .v2-ss-row .sub { font-size: 12.5px; }
+  .v2-ss-go { opacity: 1; }                       /* 호버가 없다 — 가는 길(말풍선)은 늘 보인다 */
+  .v2-ss-more, .v2-tree-more, .v2-tree-note { font-size: 14px; }
+  .v2-pin .v2-ss-row { min-height: 42px; }
+  .v2-apps-btn { padding: 12px 12px; font-size: 15px; }
+  .v2-me { padding: 8px 4px; font-size: 14.5px; }
+  .v2-me .btn-text { padding: 8px 10px; }
+  .v2-classic-link { padding: 6px 4px 2px; }
+  .v2-flt-pop { right: 0; width: min(240px, calc(100vw - 32px)); }
+  .v2-fo { padding: 9px 10px; font-size: 14px; }
+  .v2-ws-menu { max-width: calc(100vw - 16px); }
+  /* 우패널(타임라인) 서랍 — 머리를 상단 바 높이에 맞춘다(같은 줄로 읽힌다). */
+  .v2-aside > .v2-aside-pane > .tl-wrap > .v2-aside-h, .v2-aside .v2-aside-h { min-height: 46px; padding-left: 16px; }
+  .tl-card { padding: 10px 8px 10px 6px; }
+  .tl-ttl { font-size: 14px; }
+  .tl-sub { min-height: 32px; }
+  .tl-sub-t { font-size: 13.5px; }
+  .tl-scroll { padding: 10px 12px calc(22px + env(safe-area-inset-bottom, 0px)); }
+  /* 가운데 화면들 — 여백을 좁히고 글자는 본문 크기 유지. */
+  .v2-center { padding: 18px 16px 32px; }
+  .v2-title { font-size: 21px; }
+  .v2-row { padding: 12px 12px; }
+  .v2-home { padding: 18px 16px 16px; }
+  .v2-home-launch { padding-top: clamp(16px, 6vh, 56px); }
+  .v2-home-launch .v2-h1, .v2-home-sub { font-size: 24px; }
+  .v2-launch { margin-top: 18px; padding: 12px 12px 10px; border-radius: 16px; }
+  .v2-launch-in { min-height: 64px; }
+  .v2-launch-row { flex-wrap: wrap; }
+  .v2-launch-row > .v2-launch-send { margin-left: auto; height: 38px; }
+  .v2-dest-chip { max-width: min(300px, calc(100vw - 120px)); }
+  .v2-dest-pop { left: 8px; bottom: 56px; width: calc(100% - 16px); }
+  .v2-dest-q { height: 36px; }
+  .v2-now { margin-top: 26px; }
+  .v2-now-row { padding: 10px 8px; }
+  .v2-now-row .tw { flex-wrap: wrap; row-gap: 2px; }
+  .v2-now-row .p { max-width: 100%; }
+  .v2-livpage { padding: 8px 10px 10px; }
+  .v2-frame-h { flex-wrap: wrap; row-gap: 4px; padding: 8px 12px; }
+  .v2-frame-sub { display: none; }              /* '클래식 화면 · 그대로 실림' — 폰에선 제목과 [새 탭] 만 남긴다 */
+  /* 런치패드 — 화면 가득, 격자는 촘촘히. */
+  .v2-pad { padding: calc(12px + env(safe-area-inset-top, 0px)) 12px calc(16px + env(safe-area-inset-bottom, 0px)); }
+  .v2-pad-top { flex-wrap: wrap; gap: 8px 12px; padding: 10px 12px; margin-bottom: 12px; }
+  .v2-pad-search { flex: 1 1 100%; min-width: 0; height: 40px; }
+  .v2-pad-grid { grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 10px; }
+  .v2-pad-item { padding: 14px 10px 12px; }
+  /* 프로젝트 연결 드롭다운(세션 상단바) */
+  .v2-pjpick { width: min(360px, calc(100vw - 16px)); }
+  .v2-pjpick-in { height: 38px; }
+  .v2-pjpick-row { padding: 10px 8px; }
+  /* 손잡이(경계 끌기)는 폰에 없다 */
+  .v2-split { display: none; }
+}
+@media (max-width: 900px) and (prefers-reduced-motion: reduce) {
+  .v2-side, .v2-aside, #v2-root.m-side .v2-side, #v2-root.m-aside .v2-aside { transition: none; }
+}
+/* 터치 화면(호버 없음) — 탭 닫기 ×·세션 행의 가는 길은 호버 없이도 보인다(태블릿 가로도 여기 든다). */
+@media (hover: none) {
+  .v2-tab .x { visibility: visible; }
+  .v2-ss-go { opacity: 1; }
+}
+/* 터치 기기(폭 무관) — 입력칸 글자 16px: iOS 사파리는 16px 미만 입력칸에 포커스가 가면 화면을 확대한다(돌아오지 않는다). */
+@media (pointer: coarse) {
+  .v2-find-in, .v2-launch-in, .v2-dest-q, .v2-pad-search, .v2-pjpick-in, .v2-ws-in, #gate-input, #gate-email, #gate-password { font-size: 16px; }
+}
