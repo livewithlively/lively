@@ -145,6 +145,15 @@ jobs:
         working-directory: desktop
         run: npm run icon && npx electron-builder --linux --publish never
 
+      # ★ 업데이트 매니페스트(latest*.yml)가 가리키는 이름이 **실제 자산 이름과 같은지** 본다 — 여기서 갈리면
+      #  업데이터가 404 를 받고, 그 사용자는 영영 새 버전을 못 받는다(실측 2026-08-18: 앱 0.1.320 이
+      #  `Lively-Setup-0.1.323.exe` 를 요청 · 릴리스엔 `Lively.Setup.0.1.323.exe`). 우리는 electron-builder 의
+      #  GitHub 퍼블리셔가 아니라 action-gh-release 로 **파일 이름 그대로** 올리므로, 이름에 공백 등 GitHub 이
+      #  바꾸는 문자가 있으면 매니페스트와 자산이 어긋난다. 실패하면 릴리스를 막는다(continue-on-error 금지).
+      - name: 업데이트 매니페스트 ↔ 자산 이름 검증
+        working-directory: desktop
+        run: node verify-update-manifest.mjs
+
       # ★ 산출물이 **실제로 뜨는지** 본다 — electron-builder 는 files 글롭이 틀려 렌더러가 통째로 빠져도
       #  성공으로 끝난다. 빌드 로그가 아니라 뜬 앱의 DOM 으로 판정한다(desktop/verify-packaged.mjs).
       #  헤드리스 러너라 리눅스는 xvfb 가 필요하고, 그마저 불안정하면 이 스텝만 실패해도 에셋은 남긴다.
