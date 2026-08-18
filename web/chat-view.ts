@@ -36,6 +36,14 @@ export interface ChatViewOpts {
   opening?: HTMLElement | null;                    // 빈 화면(첫 대화 전) — 없으면 아무것도 안 그린다
   askHost?: HTMLElement | null;                    // 리브의 물음이 앉는 자리(입력 바로 위)
   footer?: HTMLElement | null;                     // 입력칸 대신 앉힐 것(끝난 세션의 '이어서 대화하기' 바 등)
+  /**
+   * 그림 방식.
+   *  · journal(기본) — 리브(#1631): 사람 말은 제목처럼, AI 가 한 일은 세로 괘선에, 이름표로 화자를 밝힘, 도구는 슬립 한 장씩.
+   *  · desktop — Claude Desktop(Claude Code) 문법(#1719 상민님 지시): 내 말은 오른쪽 회색 말풍선, AI 는 왼쪽에 이름표 없이 글만,
+   *    **연속된 도구 사용은 한 줄로 접음**("도구 N개 사용함 ›" — 펼치면 하나씩), 도는 중엔 ✻ 표식, 입력칸은 둥근 상자 + 아래 얇은 바.
+   */
+  style?: 'journal' | 'desktop';
+  bar?: { left?: HTMLElement | null; right?: HTMLElement | null };   // desktop 입력칸 아래 바에 앉힐 것(모드·모델 등 — 호출자가 채움)
 }
 
 /** 한 턴을 그리는 동안 들고 있는 것 — 조각(스트리밍)과 완성본이 **같은 글**이라 겹치지 않게 하는 게 핵심. */
@@ -164,12 +172,22 @@ const fmtDur = (ms: number): string => {
 
 // ── 컴포넌트 ─────────────────────────────────────────────────────────────────────────────
 export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView {
+  const desktop = opts.style === 'desktop';
   const list = el('div', { class: 'livc-list' });
   const input = el('textarea', { class: 'livc-input', rows: '1', placeholder: opts.placeholder, 'aria-label': opts.placeholder }) as HTMLTextAreaElement;
-  const send = el('button', { class: 'btn btn-sm livc-send', type: 'submit', text: '보내기' }) as HTMLButtonElement;
-  const stop = el('button', { class: 'btn btn-sm livc-send livc-send-stop', type: 'button', text: '멈춤', hidden: true, title: 'Esc' }) as HTMLButtonElement;
+  // desktop: 보내기는 ⏎ 글리프 아이콘 버튼(입력 상자 안 오른쪽), 멈춤은 ■ — Claude Desktop 과 같은 자리·같은 문법.
+  const send = desktop
+    ? el('button', { class: 'dt-send', type: 'submit', title: '보내기 (Enter)', 'aria-label': '보내기', text: '⏎' }) as HTMLButtonElement
+    : el('button', { class: 'btn btn-sm livc-send', type: 'submit', text: '보내기' }) as HTMLButtonElement;
+  const stop = desktop
+    ? el('button', { class: 'dt-send dt-stop', type: 'button', title: '멈춤 (Esc)', 'aria-label': '멈춤', hidden: true, text: '■' }) as HTMLButtonElement
+    : el('button', { class: 'btn btn-sm livc-send livc-send-stop', type: 'button', text: '멈춤', hidden: true, title: 'Esc' }) as HTMLButtonElement;
   const note = el('div', { class: 'livc-note' });
-  const form = el('form', { class: 'livc-compose' }, input, stop, send) as HTMLFormElement;
+  const form = desktop
+    ? el('form', { class: 'livc-compose dt-compose' },
+        el('div', { class: 'dt-box' }, input, el('div', { class: 'dt-box-acts' }, stop, send)),
+        el('div', { class: 'dt-bar' }, el('div', { class: 'dt-bar-l' }, opts.bar?.left ?? undefined), el('div', { class: 'dt-bar-r' }, opts.bar?.right ?? undefined))) as HTMLFormElement
+    : el('form', { class: 'livc-compose' }, input, stop, send) as HTMLFormElement;
   const footSlot = el('div', { class: 'livc-foot' }, form);
 
   // 스크롤 — 사람이 읽고 있으면 잡아채지 않는다.
@@ -194,7 +212,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     jump.hidden = false;
   };
 
-  const root = el('div', { class: 'livc-wrap' }, el('div', { class: 'livc-scroller' }, list, jump), opts.askHost ?? undefined, note, footSlot);
+  const root = el('div', { class: 'livc-wrap' + (desktop ? ' livc-desktop' : '') }, el('div', { class: 'livc-scroller' }, list, jump), opts.askHost ?? undefined, note, footSlot);
   host.replaceChildren(root);
   if (opts.opening) list.append(opts.opening);
   if (opts.footer) { form.hidden = true; footSlot.append(opts.footer); }
@@ -211,7 +229,9 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     input.placeholder = lock ? (opts.busyPlaceholder || opts.placeholder) : opts.placeholder;
     stop.hidden = !(on && opts.onStop);
     // 리브(보내기 잠금)에서는 멈춤이 보내기 자리를 차지한다 — 버튼이 둘이면 잠긴 칸 옆에 죽은 버튼이 하나 남는다.
+    //  desktop 도 같은 문법(Claude Desktop: 도는 동안 보내기 자리가 멈춤이 된다) — 단 보낼 수 있으면(큐잉) 둘 다 둔다.
     send.hidden = lock && !!opts.onStop;
+    if (desktop) form.classList.toggle('dt-busy', on);
   };
 
   const tickLive = (): void => {
@@ -221,6 +241,12 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     const doing = busyCard ? (busyCard.querySelector('.livc-slip-name')?.textContent || '') : '';
     // 사람 말 없이 중간부터 읽은 턴(창의 첫 턴)은 시작 시각을 모른다 — 경과 시간을 지어내지 않는다.
     const dur = t.ask ? fmtDur(Date.now() - t.startedAt) : '작업 중';
+    if (desktop) {
+      // ✻ 표식 + 작은 상태 글자. 도구가 도는 중이면 그 이름은 접힌 도구 줄이 이미 말하고 있어 여기선 시간만.
+      const txt = t.live!.querySelector('.dt-live-t');
+      if (txt) txt.textContent = `${dur}${opts.onStop ? ' · Esc 로 멈춤' : ''}`;
+      return;
+    }
     t.live!.textContent = `${doing ? doing + ' · ' : ''}${dur}${opts.onStop ? ' · Esc 로 멈춤' : ''}`;
   };
   const running = (t: ChatTurn | null): void => {
@@ -232,19 +258,30 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
     if (ticker) { clearInterval(ticker); ticker = null; }
     if (!t) return;
     t.work.classList.add('livc-work-busy');
-    const live = t.live ?? (t.live = el('div', { class: 'livc-live', 'aria-live': 'polite' }) as HTMLElement);
+    const live = t.live ?? (t.live = (desktop
+      ? el('div', { class: 'dt-live', 'aria-live': 'polite' }, el('span', { class: 'dt-spin', 'aria-hidden': 'true', text: '✻' }), el('span', { class: 'dt-live-t' }))
+      : el('div', { class: 'livc-live', 'aria-live': 'polite' })) as HTMLElement);
     t.work.append(live);              // 항상 괘선의 맨 아래(새 내용이 오면 다시 내려간다 — event() 참고)
     tickLive();
     ticker = window.setInterval(tickLive, 1000);
   };
 
   function turn(userText: string | null, o?: { ts?: string; at?: 'end' | 'start' }): ChatTurn {
-    const work = el('div', { class: 'livc-work' }, el('div', { class: 'livc-who', text: opts.who.ai }));
-    let ask: HTMLElement | null = null;
-    if (userText !== null) {
-      ask = el('div', { class: 'livc-ask' },
-        el('div', { class: 'livc-who' }, el('span', { text: opts.who.me }), o?.ts ? el('time', { class: 'livc-ts', datetime: o.ts, title: new Date(o.ts).toLocaleString(), text: fmtClock(o.ts) }) : null),
-        el('div', { class: 'livc-ask-text', text: userText }));
+    let work: HTMLElement; let ask: HTMLElement | null = null;
+    if (desktop) {
+      // Claude Desktop 문법 — 내 말은 오른쪽 말풍선(이름표 없음, 시각은 title 로만), AI 는 왼쪽에 글만.
+      work = el('div', { class: 'livc-work dt-ai' });
+      if (userText !== null) {
+        ask = el('div', { class: 'livc-ask dt-user' },
+          el('div', { class: 'livc-ask-text dt-bubble', text: userText, title: o?.ts ? new Date(o.ts).toLocaleString() : undefined }));
+      }
+    } else {
+      work = el('div', { class: 'livc-work' }, el('div', { class: 'livc-who', text: opts.who.ai }));
+      if (userText !== null) {
+        ask = el('div', { class: 'livc-ask' },
+          el('div', { class: 'livc-who' }, el('span', { text: opts.who.me }), o?.ts ? el('time', { class: 'livc-ts', datetime: o.ts, title: new Date(o.ts).toLocaleString(), text: fmtClock(o.ts) }) : null),
+          el('div', { class: 'livc-ask-text', text: userText }));
+      }
     }
     const root0 = el('section', { class: 'livc-turn' + (ask ? '' : ' livc-turn-cont') }, ask, work);
     // 경과 시간의 기준 — 사람 말의 시각이 있으면 그것(화면을 나중에 열어도 '이 턴이 얼마나 됐나'가 맞다), 없으면 지금.
@@ -258,6 +295,45 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
   function appendWork(t: ChatTurn, node: HTMLElement): void {
     if (t.live && t.live.parentElement === t.work) t.work.insertBefore(node, t.live);
     else t.work.append(node);
+  }
+
+  /**
+   * desktop — 연속된 도구 사용을 **한 줄**로 접는다("도구 N개 사용함 ›"). 도구 이력이 슬립 한 장씩 늘어서면 대화가 슬립에
+   * 묻힌다(실측 지적: "너무 많이 뜬다"). 글(text)이 끼면 거기서 묶음이 끊기고 새 묶음이 시작된다 — 무엇을 하고 무엇을 말했는지의
+   * 순서는 그대로 남는다. 펼치면 슬립이 그대로 있다(원문은 버리지 않는다).
+   */
+  function addToToolGroup(t: ChatTurn, card: HTMLElement, lab: ToolLabel): void {
+    let last: Element | null = t.work.lastElementChild;
+    if (last && last === t.live) last = last.previousElementSibling;
+    let group: HTMLElement | null = last && last.classList.contains('dt-tools') ? (last as HTMLElement) : null;
+    if (!group) {
+      const g = el('details', { class: 'dt-tools' },
+        el('summary', { class: 'dt-tools-sum' }, el('span', { class: 'dt-tools-mark', 'aria-hidden': 'true' }), el('span', { class: 'dt-tools-t' }), el('span', { class: 'dt-tools-chev', 'aria-hidden': 'true', text: '›' })),
+        el('div', { class: 'dt-tools-body' })) as HTMLElement;
+      appendWork(t, g);
+      group = g;
+    }
+    (group.querySelector('.dt-tools-body') as HTMLElement).append(card);
+    card.dataset.label = lab.label; card.dataset.detail = lab.detail || '';
+    refreshToolGroup(group);
+  }
+  function refreshToolGroup(group: HTMLElement | null): void {
+    if (!group) return;
+    const cards = Array.from(group.querySelectorAll(':scope > .dt-tools-body > .livc-slip')) as HTMLElement[];
+    const n = cards.length;
+    const running = cards.filter((c) => c.querySelector('.livc-slip-run'));
+    const errs = cards.filter((c) => c.classList.contains('livc-slip-err')).length;
+    const t = group.querySelector('.dt-tools-t') as HTMLElement;
+    const mark = group.querySelector('.dt-tools-mark') as HTMLElement;
+    const one = (c: HTMLElement): string => `${c.dataset.label || '도구'}${c.dataset.detail ? ' ' + c.dataset.detail : ''}`;
+    if (running.length) {
+      const cur = running[running.length - 1];
+      t.textContent = n === 1 ? `${one(cur)} 실행 중` : `${cur.dataset.label || '도구'} 실행 중 · ${n}개째`;
+      mark.textContent = '●'; mark.className = 'dt-tools-mark run';
+    } else {
+      t.textContent = (n === 1 ? `${one(cards[0])} 사용함` : `도구 ${n}개 사용함`) + (errs ? ` · 실패 ${errs}` : '');
+      mark.textContent = errs ? '✕' : '✓'; mark.className = 'dt-tools-mark' + (errs ? ' err' : ' ok');
+    }
   }
 
   function event(t: ChatTurn, ev: any): { text?: string } {
@@ -275,15 +351,16 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
         } else if (b.type === 'thinking' && isAssistant) {
           if (opts.thinking === 'fold' && String(b.thinking ?? '').trim()) appendWork(t, thinkCard(String(b.thinking)));
         } else if (b.type === 'tool_use') {
-          const card = actionCard(opts.toolLabel(String(b.name ?? '도구'), b.input), b.input);
+          const lab = opts.toolLabel(String(b.name ?? '도구'), b.input);
+          const card = actionCard(lab, b.input);
           if (b.id) r.cards.set(String(b.id), card);
-          appendWork(t, card);
+          if (desktop) addToToolGroup(t, card, lab); else appendWork(t, card);
         } else if (b.type === 'tool_result') {
           const card = b.tool_use_id ? r.cards.get(String(b.tool_use_id)) : null;
           const out = typeof b.content === 'string' ? b.content
             : Array.isArray(b.content) ? b.content.map((c: any) => (c && c.type === 'text' ? String(c.text ?? '') : c && c.type === 'image' ? '[이미지]' : pretty(c))).join('\n')
             : pretty(b.content ?? '');
-          if (card) finishCard(card, out, !!b.is_error);
+          if (card) { finishCard(card, out, !!b.is_error); if (desktop) refreshToolGroup(card.closest('.dt-tools') as HTMLElement | null); }
         }
       }
     }
@@ -326,6 +403,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
       t.r.blocks.delete(i);
     }
     t.work.querySelectorAll('.livc-slip-run').forEach((m) => { const c = m.closest('.livc-slip'); if (c) settleCard(c as HTMLElement); });
+    if (desktop) t.work.querySelectorAll('.dt-tools').forEach((g) => refreshToolGroup(g as HTMLElement));
     if (t === runningTurn) running(null);
     if (o?.interrupted) appendWork(t, el('div', { class: 'livc-mark', text: '중단함' }));
     if (o?.exit != null && o.exit !== 0) appendWork(t, el('div', { class: 'livc-err', text: '이번 요청은 끝까지 가지 못했습니다. 다시 말씀해 주시면 이어서 해 보겠습니다.' }));
