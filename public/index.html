@@ -45,6 +45,7 @@
 <link rel="stylesheet" href="./styles/33-distiller-page.css">
 <link rel="stylesheet" href="./styles/34-service-logins.css">
 <link rel="stylesheet" href="./styles/35-liv.css">
+<link rel="stylesheet" href="./styles/40-v2.css">
 <style>
   /* 한글 코딩 글꼴 D2Coding — 자체호스팅(public/fonts, OFL). #279 한글 가독성 (터미널 탭) */
   @font-face { font-family: 'D2Coding'; src: url('fonts/D2Coding.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: swap; }
@@ -145,6 +146,9 @@
   </header>
   <main id="view"></main>
   <footer class="app-foot"></footer>
+  <!-- 새 1탭 셸(#1719) — boot() 가 ui_mode=v2 면 여기에 그리고 위 클래식 크롬(배너·상단바·view·푸터)은 40-v2.css 가 숨긴다.
+       클래식 페이지는 그대로 남아 ?embed=1 로 이 같은 문서를 iframe 에 실어 '앱'으로 뜬다(런치패드). -->
+  <div id="v2-root" hidden></div>
 </div>
 
 <div id="toasts" aria-live="polite"></div>

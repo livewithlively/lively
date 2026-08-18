@@ -90,7 +90,7 @@ function skeletonLine() { return el('div', { class: 'liv-card liv-card-skel' });
  *  먹어 '지금 손볼 것'을 화면 밖으로 밀어냈다. 물음이 대화 밖에 있으면 그건 대화가 아니라 서식이다.
  *  → 리브가 던진 물음은 **말하는 자리 바로 위**에 붙인다(대화와 같은 칸, 스크롤에 떠내려가지 않는 자리).
  */
-async function fillLivCards(host, askHost) {
+export async function fillLivCards(host, askHost) {
     // 사람이 자격을 입력하는 중이면 손대지 않는다 — 다시 그리면 타이핑하던 값이 사라진다.
     const typing = askHost.querySelector('.liv-ask-input');
     if (typing && (typing.value !== '' || document.activeElement === typing))
