@@ -416,6 +416,15 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (pd.t === cur?.t) { running = false; view.settle(pd.t); view.busy(false); }
       return;
     }
+    // 보냈는데 **기록에서 확인되지 않음**(sent·echo-unconfirmed) — 안 들어갔을 수 있다(antigravity 인증 거부 실측:
+    //  거부돼 사라졌는데 화면은 '보낸 걸로' 떠 영영 답을 못 받았다). 사실대로 말하고 재시도·지우기를 준다.
+    if (row.status === 'sent') {
+      const retry = el('button', { class: 'btn-text dt-qact', type: 'button', text: '다시 보내기', onclick: () => { void outboxAct(pd, 'retry'); } });
+      const drop = el('button', { class: 'btn-text dt-qact', type: 'button', text: '지우기', onclick: () => { void outboxAct(pd, 'discard'); } });
+      pd.state.replaceChildren(el('span', { class: 'dt-qfail', text: '보냈지만 세션 기록에서 확인되지 않았어요 — 안 들어갔을 수 있어요 ' }), retry, drop);
+      if (pd.t === cur?.t) { running = false; view.settle(pd.t); view.busy(false); }
+      return;
+    }
     // 오래 못 들어가고 있다(로그인·대화상자 의심) — 글자만 두지 않는다: 눌러서 그 화면(터미널)을 바로 연다(막다른 안내 금지).
     //  터미널은 이 페이지 아래 분할로 열리므로 '웹 안에서' 로그인까지 끝낼 수 있다.
     const stuck = row.status === 'queued' && row.last_error === 'not-ready' && Date.now() - Date.parse(row.created_at) > 60_000;
