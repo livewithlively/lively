@@ -72,6 +72,12 @@ details.livc-divider > summary::before, details.livc-divider > summary::after { 
 .sc-term[hidden] { display: none; }
 .sc-wrap > .v2-split-y[hidden] { display: none; }
 .sc-term-frame { flex: 1; width: 100%; border: 0; background: var(--bg, #fff); }
+/* 터미널 기본 모드(상민님 지시 2026-08-18) — 대화는 숨고 터미널이 본문을 다 차지한다. */
+.sc-mode-term .sc-term { flex: 1; height: auto; border-top: 0; }
+/* '베타' 뱃지 — 대화 인터페이스가 아직 다듬는 중임을 알리는 칩(버튼 안·제목 옆 공용). */
+.sc-beta { font-size: 10px; font-weight: 800; line-height: 1; padding: 2px 5px 1px; border-radius: 999px; background: var(--bg-note); color: var(--ink-sub); border: 1px solid var(--line); letter-spacing: .02em; flex: none; margin-left: 4px; }
+.sc-beta[hidden] { display: none; }
+.sc-act .sc-beta { margin-left: 2px; }
 
 .sc-wait { display: flex; align-items: center; gap: 12px; padding: 9px 16px; border-bottom: 1px solid var(--line); background: var(--bg-note); flex: none; }
 .sc-wait[hidden] { display: none; }
