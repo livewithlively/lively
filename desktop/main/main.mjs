@@ -11,7 +11,7 @@
 //  ③ 렌더러는 신뢰하지 않는다 — contextIsolation·sandbox 켜고, argv 는 메인이 만든다(ipc-contract).
 import { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, dialog, screen } from "electron";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn, execFile } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
@@ -21,9 +21,10 @@ import { runCli, reduceProgress, cliContractVerdict } from "./cli-runner.mjs";
 import { trayMenuModel } from "./tray-menu.mjs";
 import { IPC, RUN_KINDS, RETRYABLE_KINDS, argvFor } from "./ipc-contract.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
-import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, shouldAutoApplyUpdate, AUTO_APPLY_DELAY_MS, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
+import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, shouldAutoApplyUpdate, downloadProgressNote, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
 import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
+import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, staleCleanupPs, staleInstallNote } from "./win-stale-install.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LIVELY_DIR = join(process.env.LIVELY_HOME || homedir(), ".lively");
@@ -37,6 +38,10 @@ let updateNote = null;              // 업데이트 확인 결과 한 줄(사람
 let updateReady = null;             // 받아 둔 새 버전(문자열) — 있으면 '적용(다시 시작)' 이 뜬다
 let updater = null;                 // electron-updater 인스턴스 — **한 번만** 만들고 리스너도 한 번만 건다(재확인마다 걸면 누적된다)
 let autoApplyTimer = null;          // 창이 안 보일 때 자동 적용 예약
+let progressNoteAt = 0;             // 진행률 문구를 마지막으로 그린 시각(스로틀)
+let updateVersion = "";             // 지금 받는 중인 새 버전(진행률 문구용)
+let staleInstalls = [];             // Windows: 다른 자리에 남은 옛 설치본(win-stale-install.mjs) — 있으면 정리 카드가 뜬다
+let staleCheckedAt = 0;
 let state = {                       // 트레이·렌더러가 함께 보는 스냅샷
   cliPath: null, cliFound: false, gatewayUrl: null, loggedIn: false, kitInstalled: false,
   nodeRegistered: false, nodeDaemon: false, nodeRunning: false, busy: false,
@@ -62,6 +67,8 @@ async function refreshState({ deep = false } = {}) {
   next.kitVersion = readTrim(join(LIVELY_DIR, "kit-version"));
   next.updateNote = updateNote;
   next.updateReady = updateReady;
+  next.staleVersions = staleInstalls.length ? staleInstalls.map((e) => e.version).filter(Boolean).join(", ") || "이전 버전" : null;
+  next.staleInstall = staleInstallNote(staleInstalls);
   // 재시도는 **실패한 게 있고 그게 안전한 작업일 때만** 제안한다(렌더러가 판단하지 않는다).
   next.retryable = !!(lastRun && RETRYABLE_KINDS.includes(lastRun.kind));
   next.logViews = LOG_VIEWS.map((v) => ({ id: v.id, label: v.label }));
@@ -139,6 +146,7 @@ function onMenu(id) {
   if (id === "open") return showWindow();
   if (id === "quit") { quitting = true; return app.quit(); }
   if (id === "apply-update") return applyUpdate();
+  if (id === "cleanup-stale") return cleanupStaleInstall();
   if (id === "logs") return shell.openPath(join(LIVELY_DIR, "logs"));
   if (id === "open-web") return state.gatewayUrl && shell.openExternal(state.gatewayUrl);
   if (id === "setup") { showWindow(); return start("setup", {}); }
@@ -201,7 +209,23 @@ async function getUpdater() {
   autoUpdater.autoInstallOnAppQuit = true;   // 사람이 먼저 끄면 그때라도 설치한다(폴백) — 주 경로는 applyUpdate
   autoUpdater.on("error", (e) => { updateFailed = true; updateNote = updateFailureNote(e); send(IPC.LOG, { stream: "raw", line: updateNote }); void refreshState(); });
   autoUpdater.on("update-not-available", () => { updateNote = "최신 버전입니다."; void refreshState(); });
-  autoUpdater.on("update-available", (i) => { updateNote = `새 버전 ${i?.version || ""} 을 받는 중…`; void refreshState(); });
+  autoUpdater.on("checking-for-update", () => { updateNote = "업데이트 확인 중…"; void refreshState(); });
+  autoUpdater.on("update-available", (i) => {
+    // 확인은 여기서 끝난다 — 이 뒤는 **받는 중**이다. 그 사실과 크기를 화면·로그에 남긴다(종전엔 이 구간이 침묵이라
+    //  사람이 "확인이 3분째"라고 읽었다). 크기는 files[0].size(바이트) — 없으면 생략.
+    const size = i?.files?.[0]?.size;
+    updateVersion = String(i?.version || "");
+    updateNote = downloadProgressNote(i?.version, { percent: 0, transferred: 0, total: size });
+    send(IPC.LOG, { stream: "raw", line: `새 버전 ${i?.version || ""} 발견 — 받는 중${size ? ` (${(size / 1048576).toFixed(0)}MB)` : ""}` });
+    progressNoteAt = 0; void refreshState();
+  });
+  autoUpdater.on("download-progress", (p) => {
+    const now = Date.now();
+    if (now - progressNoteAt < PROGRESS_NOTE_MIN_MS) return;   // 초당 수십 번 온다 — 트레이·렌더러를 그 속도로 그리지 않는다
+    progressNoteAt = now;
+    updateNote = downloadProgressNote(updateVersion, p);
+    void refreshState();
+  });
   autoUpdater.on("update-downloaded", (i) => {
     updateReady = String(i?.version || "") || "새 버전";
     updateNote = updateReadyNote(i?.version);
@@ -243,6 +267,64 @@ function scheduleAutoApply() {
     if (shouldAutoApplyUpdate({ ready: !!updateReady, busy: !!running, windowVisible: !!(win && win.isVisible()), promptsPending: pendingPrompts.size })) void applyUpdate();
   }, AUTO_APPLY_DELAY_MS);
 }
+// ── Windows: 다른 자리에 남은 옛 설치본 (#1541 · win-stale-install.mjs 머리말) ────────────────
+/** 감지 — 패키지된 Windows 앱에서만. 실패는 '없음' 으로(감지 못 한다고 앱을 막지 않는다). 5분에 한 번이면 충분하다. */
+async function detectStaleInstall({ force = false } = {}) {
+  if (process.platform !== "win32" || !app.isPackaged) return;
+  if (!force && Date.now() - staleCheckedAt < 5 * 60_000) return;
+  staleCheckedAt = Date.now();
+  const out = await new Promise((resolve) => {
+    try {
+      execFile("powershell", ["-NoProfile", "-NonInteractive", "-Command", STALE_QUERY_PS],
+        { windowsHide: true, timeout: 20_000, maxBuffer: 1 << 20 }, (err, stdout) => resolve(err ? "" : String(stdout || "")));
+    } catch { resolve(""); }
+  });
+  staleInstalls = pickStaleInstalls(parseStaleQuery(out), process.execPath);
+  if (staleInstalls.length) send(IPC.LOG, { stream: "raw", line: staleInstallNote(staleInstalls) });
+  void refreshState();
+}
+/** 우리 exe 로 바탕화면 바로가기·로그인 자동시작을 잇는다 — 옛 설치본을 지우면 그쪽 바로가기는 사라진다. */
+function repointToSelf() {
+  const notes = [];
+  try {
+    const lnk = join(app.getPath("desktop"), "Lively.lnk");
+    if (shell.writeShortcutLink(lnk, "create", { target: process.execPath, description: "라이블리" })) notes.push("바탕화면 바로가기를 이 버전으로 만들었습니다.");
+  } catch (e) { notes.push(`바탕화면 바로가기 생성 실패: ${String(e?.message || e).slice(0, 120)}`); }
+  try {
+    // 로그인 자동시작(Run 키)이 **다른 exe** 를 가리키면 우리 exe 로 덮는다(같은 값 이름이라 setLoginItemSettings 가 덮어쓴다).
+    const st = app.getLoginItemSettings();
+    const items = Array.isArray(st.launchItems) ? st.launchItems : [];
+    const other = items.find((i) => /lively/i.test(String(i.name || "") + String(i.path || "")) && String(i.path || "").toLowerCase() !== process.execPath.toLowerCase());
+    if (other || st.openAtLogin) { app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true }); if (other) notes.push("로그인 자동 시작을 이 버전으로 바꿨습니다."); }
+  } catch (e) { notes.push(`자동 시작 갱신 실패: ${String(e?.message || e).slice(0, 120)}`); }
+  return notes;
+}
+/**
+ * 정리 — 사람이 눌렀을 때만(UAC 가 뜬다). 옛 언인스톨러를 권한상승·조용히 돌리고 우리를 다시 띄우는 스크립트를
+ *  **앱 밖(PowerShell)** 에서 돌린다: 옛 언인스톨러의 CHECK_APP_RUNNING 이 같은 이름의 우리 프로세스도 죽이기 때문이다.
+ *  -EncodedCommand(UTF-16LE base64) — 인용부호를 argv 에 싣지 않는다(값은 psQuote 로 스크립트 안에서만 리터럴이 된다).
+ */
+async function cleanupStaleInstall() {
+  if (process.platform !== "win32") return { ok: false, error: "Windows 에서만 필요한 작업입니다." };
+  if (!staleInstalls.length) return { ok: false, error: "정리할 옛 설치본이 없습니다." };
+  if (running) return { ok: false, error: "작업이 끝난 뒤에 정리합니다." };
+  const notes = repointToSelf();
+  for (const n of notes) send(IPC.LOG, { stream: "raw", line: n });
+  const script = staleCleanupPs({ stale: staleInstalls, ownExe: process.execPath });
+  const b64 = Buffer.from(script, "utf16le").toString("base64");
+  try {
+    send(IPC.LOG, { stream: "raw", line: `이전 버전(${staleInstalls.map((e) => e.version).join(", ")}) 제거 — 관리자 확인 창이 뜹니다. 끝나면 앱이 다시 열립니다.` });
+    quitting = true;   // 언인스톨러가 우리를 닫는다 — 창 close 가 숨기기로 가로채지 않게
+    const child = spawn("powershell", ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", b64], { detached: true, stdio: "ignore", windowsHide: true });
+    child.unref();
+    return { ok: true };
+  } catch (e) {
+    quitting = false;
+    const line = `정리 실패: ${String(e?.message || e).slice(0, 200)}`;
+    send(IPC.LOG, { stream: "raw", line });
+    return { ok: false, error: line };
+  }
+}
 /** mac 서명 여부 — 서명되지 않은 번들은 codesign 검증에 실패한다. 못 재면 '서명 안 됨' 으로 본다(안전측). */
 function isMacSigned() {
   try {
@@ -252,6 +334,7 @@ function isMacSigned() {
 
 // ── 창 ──────────────────────────────────────────────────────────────────────
 function showWindow() {
+  void detectStaleInstall();   // 5분 스로틀 — 정리 뒤 다시 열렸을 때 카드가 사라지게(강제 아님)
   if (win) { win.show(); win.focus(); return win; }
   // 지난번 자리·크기로 연다. 모니터를 뺐거나 해상도가 바뀌었으면 좌표를 버린다(window-bounds.mjs) —
   //  안 그러면 창이 보이지 않는 곳에 떠서 사용자에겐 "앱이 안 열린다" 로 보인다.
@@ -410,6 +493,7 @@ ipcMain.handle(IPC.READ_LOG, (_e, { id }) => {
 });
 ipcMain.handle(IPC.CHECK_UPDATE, async () => { updateFailed = false; await checkUpdates(); return { ok: true, note: updateNote }; });
 ipcMain.handle(IPC.APPLY_UPDATE, async () => applyUpdate());
+ipcMain.handle(IPC.CLEANUP_STALE, async () => cleanupStaleInstall());
 ipcMain.handle(IPC.SET_APP_AUTOLAUNCH, (_e, { on }) => { setAppAutoLaunch(!!on); return { ok: true, on: appAutoLaunchEnabled() }; });
 // 외부 링크는 메인만 연다 — 렌더러에 shell 을 노출하면 임의 URL·파일 열기가 된다.
 ipcMain.handle(IPC.OPEN_EXTERNAL, (_e, { url }) => {
@@ -435,6 +519,8 @@ else {
     const poll = setInterval(() => { if (!running) void refreshState({ deep: true }); }, 30_000);
     if (poll.unref) poll.unref();
     void checkUpdates();
+    // Windows: 다른 자리에 옛 설치본이 남아 있나 — 있으면 정리 카드·트레이 항목이 뜬다(옛 바로가기가 옛 버전을 여는 것의 뿌리).
+    void detectStaleInstall({ force: true });
     const up = setInterval(() => void checkUpdates(), UPDATE_INTERVAL_MS);
     if (up.unref) up.unref();
   });

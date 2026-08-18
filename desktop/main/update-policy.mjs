@@ -43,7 +43,7 @@ export const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
  */
 export function updateStatusNote(reason) {
   switch (reason) {
-    case "ok": return "업데이트를 확인합니다.";
+    case "ok": return "업데이트 확인 중…";   // 확인이 끝나면 이벤트가 결과 문구로 덮는다(update-policy 아래 진행률 절)
     case "opt-out": return `자동 업데이트가 꺼져 있습니다(${UPDATE_OPT_OUT_ENV}).`;
     case "dev-run": return "개발 실행 중이라 업데이트를 확인하지 않습니다.";
     case "no-publish-config": return "이 빌드에는 업데이트 받을 곳이 없습니다(설치기로 깐 버전이 아닙니다).";
@@ -108,3 +108,28 @@ export function shouldAutoApplyUpdate(o) {
   if (s.windowVisible) return false;
   return true;
 }
+
+// ── 받는 동안의 문구 — "확인합니다"에 멈춰 보이던 자리 (#1541) ──────────────────────────
+// ★ 실측(2026-08-18, 사용자 Windows 0.1.324): "업데이트 확인 누르면 '확인 중…' 잠깐 뜨다가 '업데이트를 확인합니다.'
+//  가 뜨고, 5번 눌러 3분을 기다려도 그대로." — 확인은 1초 만에 끝났고 그 뒤 **100MB 설치기를 받는 중**이었다.
+//  진행률 이벤트를 안 받아 화면이 그 사실을 말하지 못했다(사람은 '확인이 오래 걸린다'고 읽는다).
+//  같은 CDN 에서 이 맥은 8초, 그 PC 는 3분+ — 회선에 따라 다르므로 **속도와 남은 양**을 보여줘야 사람이 판단한다.
+
+const mb = (n) => (Number(n || 0) / 1048576).toFixed(1);
+
+/**
+ * download-progress 이벤트 → 사람용 한 줄. electron-updater 페이로드 { percent, transferred, total, bytesPerSecond }.
+ * 필드가 비어도(초기 이벤트·구버전) 크래시하지 않고 아는 만큼만 적는다.
+ */
+export function downloadProgressNote(version, p) {
+  const v = String(version || "").trim();
+  const i = p || {};
+  const pct = Number.isFinite(i.percent) ? `${Math.max(0, Math.min(100, Math.floor(i.percent)))}%` : "";
+  const size = Number.isFinite(i.total) && i.total > 0 ? `${mb(i.transferred)}/${mb(i.total)}MB` : "";
+  const speed = Number.isFinite(i.bytesPerSecond) && i.bytesPerSecond > 0 ? `${mb(i.bytesPerSecond)}MB/s` : "";
+  const parts = [pct, size, speed].filter(Boolean).join(" · ");
+  return `새 버전 ${v ? v + " " : ""}받는 중…${parts ? " " + parts : ""}`;
+}
+
+/** 진행률 화면 갱신 최소 간격 — 이벤트는 초당 수십 번 온다. 트레이·렌더러를 그 속도로 다시 그리지 않는다. */
+export const PROGRESS_NOTE_MIN_MS = 500;

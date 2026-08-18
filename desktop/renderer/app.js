@@ -47,6 +47,9 @@ function renderState(s) {
   show($("done-card"), ready && !s?.busy && justFinished);
   show($("node-card"), ready);
   show($("tools-card"), ready);
+  show($("stale-card"), !!s?.staleInstall);
+  $("stale-note").textContent = s?.staleInstall || "";
+  $("stale-clean").disabled = !!s?.busy;
   // 버전은 늘 보인다 — 제보할 때 가장 먼저 묻는 값이다. 앱과 키트는 갱신 주기가 달라 따로 적는다.
   $("ver").textContent = `앱 ${s?.appVersion || "알 수 없음"} · ${s?.kitVersion ? "키트 " + s.kitVersion : "키트 미설치"}`;
   $("upd-note").textContent = s?.updateNote || "";
@@ -151,6 +154,12 @@ $("logout").addEventListener("click", async () => {
   const r = await window.lively.run("logout");
   if (r?.error) log("✗ " + r.error);
 });
+$("stale-clean").addEventListener("click", async () => {
+  $("stale-clean").disabled = true;
+  const r = await window.lively.cleanupStale();
+  if (r?.error) { log("✗ " + r.error); $("stale-clean").disabled = false; }
+  else log("이전 버전을 제거합니다 — 관리자 확인 창이 뜨면 '예'를 누르세요. 끝나면 앱이 다시 열립니다.");
+});
 $("apply-update").addEventListener("click", async () => {
   $("apply-update").disabled = true;
   $("upd-note").textContent = "앱을 다시 시작해서 적용합니다…";
@@ -158,9 +167,13 @@ $("apply-update").addEventListener("click", async () => {
   if (r?.error) { $("upd-note").textContent = r.error; $("apply-update").disabled = false; }
 });
 $("check-update").addEventListener("click", async () => {
-  $("upd-note").textContent = "확인 중…";
-  const r = await window.lively.checkUpdate();
-  if (r?.note) $("upd-note").textContent = r.note;
+  // 문구는 **상태(state.updateNote)가 주도**한다 — 메인이 확인 중·받는 중(진행률)·준비됨을 순서대로 밀어준다.
+  //  종전엔 여기서 IPC 응답의 문구를 다시 써서, 그 사이 도착한 진행률 문구를 옛 문구로 덮었다.
+  //  IPC 는 '확인'이 끝나면 돌아온다(다운로드는 뒤에서 계속) — 그동안 버튼만 잠근다.
+  const btn = $("check-update");
+  btn.disabled = true; const label = btn.textContent; btn.textContent = "확인 중…";
+  try { const r = await window.lively.checkUpdate(); if (r?.error) $("upd-note").textContent = r.error; }
+  finally { btn.disabled = false; btn.textContent = label; }
 });
 
 // ── 로그 두 축 ──────────────────────────────────────────────────────────────
