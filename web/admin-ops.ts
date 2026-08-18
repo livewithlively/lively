@@ -165,14 +165,15 @@ function sessionsAdminEditor(detail, data) {
 }
 
 // 세션 공유(세션이력 캡처) 정책(#905 C1) — 관리탭 ▸ 세션 공유. runtimeConfig.session_share 를 읽고 POST 로 저장.
-//  프라이버시가 걸린 설정이라 **무엇이 캡처되는지·기본이 꺼짐인지**를 화면에서 분명히 말한다.
+//  프라이버시가 걸린 설정이라 **무엇이 캡처되는지·기본이 켜짐(#1752)인지·어떻게 끄는지**를 화면에서 분명히 말한다.
 function sessionShareEditor(detail, data) {
   const rc = data.runtimeConfig;                 // admin 만 non-null
   const canEdit = !!data.canEdit && !!rc;
-  const DEF = { enabled: false, harnesses: ['claude'], scope: 'main', store: 'slim', retention_days: 30, view_policy: 'attach', resume_policy: 'owner' };
+  // 화면 폴백 기본값 — 서버 DEFAULT_SESSION_SHARE(src/sessions/session-share.ts #1752)와 같은 값이어야 한다(어긋나면 화면이 거짓말).
+  const DEF = { enabled: true, harnesses: ['claude'], scope: 'main', store: 'slim', retention_days: 0, view_policy: 'attach', resume_policy: 'owner' };
   const body = el('div');
   detail.replaceChildren(
-    sectionHead('세션 공유', '구성원의 AI 대화 기록을 중앙에 모아, 다른 컴퓨터·다른 사람이 이어서 보고 이어받게 합니다. 대화 전문이 저장되므로 기본은 꺼져 있습니다.'),
+    sectionHead('세션 공유', '구성원의 AI 대화 기록을 중앙에 모아, 컴퓨터가 꺼져 있어도 기록을 읽고 이어받게 합니다. 대화 전문이 이 조직의 저장소에 남으며 기본은 켜져 있습니다 — 끄면 그때부터 수집하지 않습니다.'),
     el('div', { class: 'card' }, cardHead('세션 공유 설정'), body));
   if (!rc) { body.append(el('p', { class: 'admin-hint' }, ...uiText('이 설정은 관리자(admin)만 볼 수 있습니다.'))); return; }
   build();
@@ -209,7 +210,7 @@ function sessionShareEditor(detail, data) {
     const storeSel = sel([['slim', '슬림 — 서명·툴결과·토큰통계 제거(본문 유지, 용량↓)'], ['raw', '원본 그대로(용량↑)']], ss.store);
     const viewSel = sel([['attach', '세션 입장 가능자'], ['owner', '세션 소유자만']], ss.view_policy);
     const retIn = el('input', { class: 'input input-num', type: 'number', min: '0', max: '3650' });
-    retIn.value = String(ss.retention_days ?? 30); retIn.disabled = !canEdit;
+    retIn.value = String(ss.retention_days ?? 0); retIn.disabled = !canEdit;   // 폴백도 DEF(0=무제한, #1752)와 일치
 
     const field = (label, ctrl, hint) => el('div', { class: 'admin-field' },
       el('label', { class: 'admin-field-label', text: label }), ctrl,
@@ -239,7 +240,7 @@ function sessionShareEditor(detail, data) {
       field('수집할 하네스', harnessRows, null),
       field('수집 범위', scopeSel, null),
       field('저장 형태', storeSel, null),
-      field('보존 기간(일)', retIn, '0 = 무제한(디스크 주의). 지난 기록은 자동 정리됩니다.'),
+      field('보존 기간(일)', retIn, '0 = 무제한(기본 — 기록이 계속 남습니다). 일수를 정하면 그보다 오래 쉰 세션의 기록은 자동 정리되고, 목록에서도 사라집니다.'),
       field('기록 열람 권한', viewSel, '중앙에 모인 대화를 누가 열람·이어받을 수 있는지.'),
       canEdit ? el('div', { class: 'admin-actions' }, saveBtn)
         : el('p', { class: 'admin-hint' }, ...uiText('읽기 전용 — 변경은 관리자(admin) 권한이 필요합니다.')));
