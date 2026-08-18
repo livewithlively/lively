@@ -252,7 +252,7 @@ function drawAsideSession(s) {
         return asideTrail.w;
     }
     asideEl.replaceChildren(); // 프로젝트 붙이기는 상단바 [프로젝트 연결](#1749)
-    const w = createTimeline(asideEl, { scope: '이 세션', chapters: true, empty: '아직 한 일이 없어요 — 세션이 일하면 여기에 쌓입니다.' });
+    const w = createTimeline(asideEl, { scope: '이 세션', outcomes: true, empty: '아직 남은 것이 없어요 — 세션이 만들고 고친 것이 여기에 쌓입니다.' });
     w.setMeta(factsEl);
     asideTrail = { id: s.id, w };
     void loadSessionActivities(s.id).then((items) => w.addAll(items));
