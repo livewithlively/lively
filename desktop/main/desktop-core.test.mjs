@@ -747,6 +747,23 @@ t('N1 트레이 — running 인데 connected=false 면 "연결 끊김" + 다시 
   assert.match(js, /"노드 다시 시작"/, '좀비면 버튼이 다시 시작이어야 한다');
 });
 
+t('U14 업데이트 적용 재시작 후 창 복원 — 창에서 눌렀을 때만 마커, 시작 때 마커 소비 후 창 (#1541 실측: 트레이에만 떠 손으로 열었다)', () => {
+  const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
+  // applyUpdate: 창이 보일 때만 마커 — 자동 적용(창 숨김)이 마커를 남기면 안 보는 사람 앞에 창이 튀어나온다
+  const ap = main.slice(main.indexOf('async function applyUpdate'), main.indexOf('async function applyUpdate') + 1600);
+  const mk = ap.indexOf('desktop-reopen');
+  assert.ok(mk >= 0, 'applyUpdate 가 재열기 마커를 안 남긴다');
+  assert.match(ap.slice(Math.max(0, mk - 200), mk), /win\.isVisible\(\)/, '창 표시 여부 확인 없이 마커를 남긴다');
+  assert.ok(ap.indexOf('desktop-reopen') < ap.indexOf('quitAndInstall'), '마커는 quitAndInstall 전에 남겨야 한다(후엔 프로세스가 죽는다)');
+  // 시작: 마커가 있으면 지우고 창을 연다(지우지 않으면 다음 시작마다 창이 뜬다)
+  const boot = main.slice(main.indexOf('app.whenReady'), main.indexOf('app.whenReady') + 2000);
+  const bm = boot.indexOf('desktop-reopen');
+  assert.ok(bm >= 0, '시작 경로가 마커를 확인하지 않는다');
+  const after = boot.slice(bm, bm + 200);
+  assert.match(after, /rmSync/, '마커를 지우지 않는다 — 다음 시작마다 창이 뜬다');
+  assert.match(after, /showWindow\(\)/, '마커를 보고도 창을 안 연다');
+});
+
 t('D6 ★ 답한 프롬프트는 다시 뜨지 않는다(리듀서가 옛 prompt 를 물고 있으면 안 된다)', () => {
   // 실측(맥 풀 플로우): '예' 를 누르고 나서도 다음 step 이벤트마다 확인 카드가 되살아나 세 번 눌러야 했다.
   //  리듀서는 prompt 를 end 까지 들고 있으므로, **답한 순간** 메인이 그 자리를 비워 줘야 한다.
