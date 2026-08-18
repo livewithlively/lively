@@ -79,13 +79,25 @@ export function mountSessionChat(host, first, opts) {
     const waitBar = el('div', { class: 'sc-wait', hidden: true });
     const wrap = el('div', { class: 'sc-wrap' }, head, waitBar, chatHost, termHost);
     host.replaceChildren(wrap);
+    // 입력칸 아래 바(Claude Desktop 의 '자동 · Opus 5 · 엑스트라' 자리) — 이 세션이 실제로 도는 모드·모델·노력. 트랜스크립트 줄에서
+    //  읽어 채운다(user.permissionMode · assistant.message.model · assistant.effort). **바꾸는 컨트롤이 아니라 사실 표시**다 —
+    //  이 값은 터미널(/model·/effort)에서만 바뀐다. 눌러도 되는 척하는 버튼은 두지 않는다(막다른 컨트롤 금지).
+    const chipMode = el('span', { class: 'dt-chip', hidden: true });
+    const chipModel = el('span', { class: 'dt-chip', hidden: true });
+    const chipEffort = el('span', { class: 'dt-chip', hidden: true });
+    const chip = (n, v) => { n.textContent = v; n.hidden = !v; };
+    const MODE_KO = { default: '기본', auto: '자동', acceptEdits: '수정 자동승인', bypassPermissions: '전부 자동', plan: '계획', dontAsk: '묻지 않음' };
+    const EFFORT_KO = { low: '낮음', medium: '보통', high: '높음', xhigh: '매우 높음', max: '최대' };
+    const prettyModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '').split('-').map((w) => (/^\d/.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1))).join(' ');
     // 대화창 ————
     const view = createChatView(chatHost, {
         who: { me: '나', ai: 'AI' },
-        placeholder: target.node ? '이 세션에 보내기(그 컴퓨터로 전달)' : '이 세션에 보내기 — Enter 로 보냄, Shift+Enter 줄바꿈',
+        placeholder: target.node ? '이 세션에 보내기(그 컴퓨터로 전달)' : '이 세션에 보내기',
         toolLabel,
         thinking: 'fold',
         sendWhileBusy: true,
+        style: 'desktop',
+        bar: { right: el('span', { class: 'dt-chips' }, chipMode, chipModel, chipEffort) },
         onSend: (text) => sendPrompt(text),
         onStop: canKeys() ? () => sendKey('Escape') : undefined,
         escActive: () => !termHost.hidden ? false : true,
@@ -167,6 +179,8 @@ export function mountSessionChat(host, first, opts) {
                 lastLineAt = ms;
         }
         if (o.type === 'user') {
+            if (o.permissionMode)
+                chip(chipMode, MODE_KO[String(o.permissionMode)] || String(o.permissionMode));
             const { text, results } = userText(o);
             if (results.length) {
                 if (!cur)
@@ -206,6 +220,10 @@ export function mountSessionChat(host, first, opts) {
             return;
         }
         if (o.type === 'assistant') {
+            if (o.message?.model)
+                chip(chipModel, prettyModel(String(o.message.model)));
+            if (o.effort)
+                chip(chipEffort, EFFORT_KO[String(o.effort)] || String(o.effort));
             if (!cur)
                 cur = newRec(null);
             cur.evs.push(o);
