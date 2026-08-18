@@ -84,6 +84,14 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   }));
 
   // ── 로컬 로그인/로그아웃/비번변경(P4). 로그인은 미인증 접근(cap 마운트보다 먼저). ──
+  // 매니지드(요청별 테넌시) 배포 노브 — 미인증 방문을 컨트롤플레인으로 돌려보낸다(#1437).
+  //  테넌트의 자체 로그인 화면은 셀프호스팅용이다: 매니지드에선 계정이 CP(app.lvly.io)에 있어
+  //  그 화면이 막다른 길이 된다. 값이 없으면(셀프호스팅) null — 프론트 게이트가 종전대로 뜬다.
+  //  인증 불요(공개 설정값 하나뿐) · DB 무접촉(테넌트 컨텍스트 무관).
+  app.get("/api/ui/auth-config", (_req, res) => {
+    res.json({ login_redirect_url: process.env.LIVELY_LOGIN_REDIRECT_URL || null });
+  });
+
   app.post("/api/ui/login", wrap(async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const result = await verifyLogin(String(body.email ?? ""), String(body.password ?? ""));

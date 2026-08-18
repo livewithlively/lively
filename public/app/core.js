@@ -21,7 +21,18 @@
 import { TOKEN_KEY, apiUrl } from './lib/net.js';
 import { state } from './lib/state.js';
 // ── 토큰 게이트 ──
+let gateRedirectChecked = false;
 function showGate(message) {
+    // 매니지드 배포: 이 화면 대신 CP 로 — 자체 로그인은 셀프호스팅용이라 여기선 막다른 길이다(#1437).
+    //  실패·null 이면 종전 게이트 그대로(셀프호스팅 무영향). 1회만 조회.
+    if (!gateRedirectChecked) {
+        gateRedirectChecked = true;
+        fetch('/api/ui/auth-config').then((r) => r.ok ? r.json() : null).then((c) => {
+            const u = c && typeof c.login_redirect_url === 'string' ? c.login_redirect_url : '';
+            if (u && new URL(u, location.href).host !== location.host)
+                location.replace(u);
+        }).catch(() => { });
+    }
     document.getElementById('app').hidden = true;
     const gate = document.getElementById('gate');
     gate.hidden = false;
