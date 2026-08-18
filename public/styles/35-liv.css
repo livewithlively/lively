@@ -28,6 +28,9 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
    대화가 남은 폭·높이를 전부 먹는다. 카드를 위에 쌓으면 대화가 절반으로 눌려 정작 말하기가 불편해진다. */
 .liv-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 10px; }
 .liv-rail { min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+/* 카드가 바깥(셸의 우측 패널)에 살 때 — 본문은 대화 한 열(#1719 v2). */
+.liv-body-solo { grid-template-columns: minmax(0, 1fr); }
+.liv-title-sub { font-size: 12px; font-weight: 500; color: var(--ink-sub); margin-left: 4px; }
 
 .liv-cards { display: flex; flex-direction: column; gap: 6px; }
 .liv-cards-title { font-size: 11px; color: var(--muted); letter-spacing: .02em; margin: 2px 0 2px 2px; }

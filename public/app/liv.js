@@ -18,23 +18,14 @@ import { mountLivChat, livChatAsk } from './liv-chat.js';
 export async function livStatus() {
     return await api('/api/ui/me/liv');
 }
-// ── 대화 ─────────────────────────────────────────────────────────────────────
-// v0 는 웹터미널 세션을 재사용했다(두뇌를 먼저 검증하려는 선택이었고, 그건 성공했다).
-// v1 부터는 **세션을 만들지 않는다** — 턴마다 서버가 헤드리스를 띄우고 진행을 JSONL 로 남기며,
-// 화면은 그걸 말풍선·액션카드로 그린다(web/liv-chat.ts). 그래서 여기 있던 것들이 통째로 사라졌다:
-//   · 세션 찾기·만들기·죽은 세션 청소   → 세션이 없으니 청소할 것도 없다
-//   · 여는 말 주입과 도달 확인 폴링      → 사람이 먼저 말을 건다(열자마자 리브가 떠들지 않는다)
-//   · 프롬프트 주입(send-keys 규약)      → 대화창이 곧 입력이다
-// 리브의 기억이 세션이 아니라 서버에 산다는 불변식(#1663) 덕분에 이 교체가 무손실이다.
-// ── 화면 ─────────────────────────────────────────────────────────────────────
-export async function renderLiv(view) {
+export async function renderLiv(view, opts = {}) {
     if (!view)
         return; // 라우터가 넘기는 $view() 는 셸이 아직 없으면 null 이다(대시보드와 같은 계약)
     view.replaceChildren();
     document.body.dataset.route = 'liv';
     // 상단 내비를 걷었으니 **나가는 길이 화면 안에 있어야 한다** — 없으면 사람이 뒤로가기를 찾는다.
     //  하나만 둔다: 어디로 가는지가 분명한 [← 라이블리]. 탭을 여기 다시 그리면 크롬을 걷은 뜻이 없어진다.
-    const head = el('div', { class: 'liv-head' }, el('div', { class: 'liv-title' }, el('span', { class: 'liv-dot' }), el('b', { text: '리브' })), el('div', { class: 'liv-head-acts' }, el('a', {
+    const head = el('div', { class: 'liv-head' }, el('div', { class: 'liv-title' }, el('span', { class: 'liv-dot' }), el('b', { text: '리브' }), opts.embedded ? el('span', { class: 'liv-title-sub', text: '워크스페이스 담당자' }) : null), opts.embedded ? null : el('div', { class: 'liv-head-acts' }, el('a', {
         class: 'btn btn-sm btn-ghost', href: '#/dashboard', text: '← 라이블리',
         title: '라이블리 홈으로 돌아갑니다. 리브는 상단 [리브] 버튼으로 다시 열 수 있습니다.',
     })));
@@ -44,7 +35,14 @@ export async function renderLiv(view) {
     // 리브가 던진 물음이 앉는 자리 — 대화와 **같은 칸**, 입력 바로 위(스크롤에 떠내려가지 않는다).
     const askHost = el('div', { class: 'liv-askdock' });
     const chatWrap = el('div', { class: 'liv-chat' }, el('div', { class: 'liv-chat-body', id: 'liv-chat-body' }, el('div', { class: 'liv-chat-boot', text: '세션을 준비하고 있습니다…' })));
-    view.append(el('div', { class: 'liv-wrap' }, head, el('div', { class: 'liv-body' }, el('aside', { class: 'liv-rail' }, cards), chatWrap)));
+    // rail 을 받았으면 카드는 그쪽(셸의 우측 패널)에, 본문은 대화 한 열. 안 받았으면 종전 그대로 왼쪽 레일.
+    if (opts.rail) {
+        opts.rail.replaceChildren(cards);
+        view.append(el('div', { class: 'liv-wrap' }, head, el('div', { class: 'liv-body liv-body-solo' }, chatWrap)));
+    }
+    else {
+        view.append(el('div', { class: 'liv-wrap' }, head, el('div', { class: 'liv-body' }, el('aside', { class: 'liv-rail' }, cards), chatWrap)));
+    }
     // 카드와 세션은 **독립적으로** 로드한다. 세션이 못 떠도 무엇이 문제인지는 보여야 하고,
     //  카드 조회가 느려도 대화는 먼저 시작될 수 있다(위젯 독립 실패 원칙과 같은 결).
     refreshLiv = () => { void fillLivCards(cards, askHost); };

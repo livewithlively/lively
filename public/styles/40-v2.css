@@ -206,6 +206,8 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-aside-h b { font-size: 13.5px; font-weight: 800; }
 .v2-aside-h .v2-k { margin-left: auto; }
 .v2-liv-cards { gap: 6px; }
+.v2-liv-rail { overflow: visible; }
+.v2-liv-rail .liv-cards { gap: 6px; }
 .v2-kn-sec .v2-k { display: block; margin: 6px 2px 6px; }
 .v2-kn-list { display: flex; flex-direction: column; gap: 6px; }
 .v2-kn { display: flex; align-items: baseline; gap: 8px; background: var(--bg, #fff); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; text-decoration: none; color: inherit; }
