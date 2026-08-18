@@ -20,9 +20,18 @@ export interface Prompt { text: string; ts: string; author?: string; }
 //  CLAUDE_CONFIG_DIR=<PROFILES_ROOT>/<슬러그>/claude 로 실행된다). 예전엔 공유 하나만 봐서, 세션에서 오간
 //  질문 대부분이(특히 남이 던진 것) 팝업에 아예 안 떴다 — 실측: project/1045 는 공유 7 + yoon 프로필 3 = 대화
 //  10개인데 공유의 최신 1개만 읽고 있었다.
-const PROFILES_ROOT = process.env.LIVELY_PROFILES_ROOT || path.join(os.homedir(), ".lively", "profiles");
+export const PROFILES_ROOT = process.env.LIVELY_PROFILES_ROOT || path.join(os.homedir(), ".lively", "profiles");
+// #1746 하네스 세션 I/O 어댑터(harness-io/claude.ts)가 쓰는 규약 조각 — 이 파일의 경로 지식을 한 곳에 둔다(어댑터가 다시 적지 않게).
+export const claudeProjectsDirName = (cwd: string): string => cwd.replace(/[/.]/g, "-");
+/** 이 소유자의 세션이 볼 수 있는 claude 대화 뿌리들 — 공유 홈 + 멤버 프로필(CLAUDE_CONFIG_DIR) + (격리 홈은 homes 로 받는다). */
+export function claudeTranscriptRoots(homes: string[], owner: string): string[] {
+  const out = homes.map((h) => path.join(h, ".claude", "projects"));
+  const me = String(owner || "").trim();
+  if (me) out.push(path.join(PROFILES_ROOT, me, "claude", "projects"));
+  return out;
+}
 const MAX_TRANSCRIPT_FILES = 20;   // 한 세션(cwd)당 읽을 대화 파일 상한 — 최근 수정순. 통합검색이 전 세션을 훑으므로 상한을 둔다.
-const MEMBER_HOME_BASE = process.env.LIVELY_MEMBER_HOME_BASE || "/home";   // 격리 ON(리눅스): useradd -m -d /home/box_<slug>
+export const MEMBER_HOME_BASE = process.env.LIVELY_MEMBER_HOME_BASE || "/home";   // 격리 ON(리눅스): useradd -m -d /home/box_<slug>
 async function transcriptRoots(): Promise<Array<{ dir: string; author: string }>> {
   const roots = [{ dir: CLAUDE_PROJECTS, author: "" }];   // author='' = 공유(누구 프로필인지 알 수 없음)
   let slugs: string[] = [];

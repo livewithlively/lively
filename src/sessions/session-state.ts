@@ -35,13 +35,16 @@ export interface SessionState {
   last_busy: number | null;   // @box_last_busy(마지막 작업 epoch초) — restorable 카드 시간표시용
   last_seen: string | null;   // 마지막 라이브(tmux) 관측 시각(진단용)
   claude_session_id: string | null; // #1059 정밀복원 — 이 box 가 현재 도는 claude 세션 UUID(work-flag 훅 보고, last-write-wins). null=미상→picker.
+                                    //  ⚠ 이름만 claude 다 — 값은 **그 하네스의 대화 id**(codex·opencode·agy·grok 어댑터가 자기 id 를 같은 통로로 보고, #1711).
+  transcript_path: string | null;   // #1746 — 그 대화 파일의 절대경로(훅 페이로드 transcript_path, 세션 안에서 보고 → 어느 홈인지 서버가 짐작 안 함).
+                                    //  대화창이 이걸로 읽는다(harness-io/locate.ts 가 소유자 뿌리 안인지 검증). null=미보고 → 규약 폴백.
   exited_at: string | null;   // #1059 — 사용자 정상 종료(/exit·logout) 표시. null=재부팅·회수(중단됨). 복원목록 라벨 구분용.
   exit_reason: string | null; // #1059 — 종료 사유(prompt_input_exit·logout, 진단용).
 }
 
 // createSession 이 넘기는 desired-state(생성/재생성 시 upsert). last_seen 은 서버가 now(), claude_session_id·exited_at·
 //  exit_reason 은 생성 시점엔 미상(훅이 세션 시작/종료 때 사후 채움) — 전부 입력에서 제외(생성 시 NULL).
-export type SessionStateInput = Omit<SessionState, "last_seen" | "claude_session_id" | "exited_at" | "exit_reason">;
+export type SessionStateInput = Omit<SessionState, "last_seen" | "claude_session_id" | "transcript_path" | "exited_at" | "exit_reason">;
 
 // export: session-desired.ts 가 자기 쿼리 결과를 같은 규칙으로 해석해야 한다(파싱이 두 벌이 되면 갈린다).
 export function rowToState(r: Record<string, any>): SessionState {
@@ -59,6 +62,7 @@ export function rowToState(r: Record<string, any>): SessionState {
     last_busy: r.last_busy != null ? Number(r.last_busy) : null,
     last_seen: r.last_seen ? new Date(r.last_seen).toISOString() : null,
     claude_session_id: r.claude_session_id ?? null,
+    transcript_path: r.transcript_path ?? null,
     exited_at: r.exited_at ? new Date(r.exited_at).toISOString() : null,
     exit_reason: r.exit_reason ?? null,
   };
@@ -67,10 +71,13 @@ export function rowToState(r: Record<string, any>): SessionState {
 // #1059 정밀복원 — work-flag 훅이 (box-id, claude session UUID)를 보고. **owner-gated**(호출자가 그 box 소유자일 때만) +
 //  레코드 존재 시에만 갱신(UPDATE, INSERT 안 함 — 미러 없는 세션엔 안 만든다). last-write-wins(UUID 변경 시 최신으로).
 //  반환 rowCount>0 = 갱신됨(권한·존재 확인 결과). best-effort 호출(실패 무해).
-export async function setClaudeSessionId(id: string, claudeUuid: string, owner: string): Promise<boolean> {
+//  #1746 — transcript_path(그 대화 파일의 절대경로)를 함께 받는다. 안 주면(구 훅) 기존 값을 보존하고, 주면 덮는다(같은 대화 id 라도
+//  파일 위치가 바뀔 수 있다 — /clear·resume 은 uuid 자체가 바뀌므로 어차피 새 보고). 검증(뿌리 안인지)은 읽는 쪽(locate.ts)이 한다 —
+//  저장은 문자열일 뿐이고, 읽을 때 소유자·하네스 기준으로 걸러야 뜻이 있다.
+export async function setClaudeSessionId(id: string, claudeUuid: string, owner: string, transcriptPath?: string | null): Promise<boolean> {
   const r = await itemsPool.query(
-    "UPDATE org_session_state SET claude_session_id=$2, updated_at=now() WHERE id=$1 AND owner=$3",
-    [id, claudeUuid, owner],
+    "UPDATE org_session_state SET claude_session_id=$2, transcript_path=COALESCE($4, transcript_path), updated_at=now() WHERE id=$1 AND owner=$3",
+    [id, claudeUuid, owner, transcriptPath ?? null],
   );
   return (r.rowCount ?? 0) > 0;
 }

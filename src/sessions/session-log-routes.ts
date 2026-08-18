@@ -13,7 +13,11 @@ import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { getRuntimeConfig } from "../org/store.js";
-import { appendSessionLog, sessionLogWatermark, sessionOwner, sessionParent, readSessionLog, listSessionsForOwner, listSessionsForProject, listSubagentsForSession } from "../v6/session-log-store.js";
+import { appendSessionLog, sessionLogWatermark, sessionOwner, sessionParent, sessionHarness, readSessionLog, listSessionsForOwner, listSessionsForProject, listSubagentsForSession } from "../v6/session-log-store.js";
+import { harnessIo } from "../terminal/harness-io/adapter.js";        // #1746 — 하네스별 파서로 공통 ChatLine
+import { readAlignedWindow } from "../terminal/harness-io/window.js";
+import { parseWindow } from "../terminal/harness-io/parse-cache.js";
+import { toNdjson } from "../terminal/harness-io/chat-line.js";
 import { sessionBoundToMemberProject, isProjectMember, recordSessionProject, latestProjectForSession } from "../v6/project-session-store.js";   // #1313 R21 — 세션 바인딩만(PM 스토어 전체 미적재)
 import { renderTranscript, firstTranscriptCwd, materializeTranscriptIfMissing } from "../terminal/terminal-transcript.js";
 import { createSession, sharedRoot } from "../terminal/terminal-sessions.js";
@@ -186,14 +190,30 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
 
     // #1719 세션 대화창 — to/tail 이 오면 창(window)으로 읽는다(꼬리부터, 상한 4MB — transcript-range.ts).
     //  둘 다 없으면 종전대로 from 부터 끝까지(클래식 대화록 뷰어·이어받기가 전문을 쓴다 — 그 경로는 손대지 않는다).
+    // #1746 — 창 읽기와 웹뷰 렌더는 **하네스 어댑터 파서**를 거친다: 저장은 원본 바이트(하네스마다 다른 스키마)지만 화면은 공통
+    //  ChatLine 만 안다. 창은 줄 경계로 맞춰(window.ts) X-Log-From/To 를 준다 — 화면은 그 값을 다음 창의 경계로 그대로 쓴다.
+    //  파서 없는 하네스(미보고 구 행 포함)는 종전대로 원본을 준다(claude 원본은 ChatLine 의 상위집합이라 화면이 그대로 그린다).
+    //  ⚠ to/tail/fmt 없는 GET 은 **원본 바이트** 그대로다 — CLI(`lively resume`)가 그 바이트로 로컬 파일을 물질화한다. 대화창은
+    //   증분 폴(from 만)에도 fmt=chat 을 붙여 공통 ChatLine 을 받는다.
     const windowed = req.query.to !== undefined || req.query.tail !== undefined;
+    const chatFmt = windowed || req.query.fmt === "chat";
+    const io = harnessIo(await sessionHarness(nodeId, sessionId));
     let log: { from: number; bytes: number; data: Buffer };
     let winEnd: number | undefined;
-    if (windowed) {
+    let ndjson: string | undefined;            // 어댑터를 거친 공통 ChatLine 본문(있으면 이걸 낸다)
+    if (chatFmt) {
       const total = await sessionLogWatermark(nodeId, sessionId);
       const rng = transcriptRange(total, { from: req.query.from, to: req.query.to, tail: req.query.tail });
-      log = await readSessionLog(nodeId, sessionId, rng.start, rng.end);
-      winEnd = rng.end;
+      if (io?.parse) {
+        const reader = { read: (s: number, e: number) => readSessionLog(nodeId, sessionId, s, e).then((r) => r.data) };
+        const win = rng.end > rng.start ? await readAlignedWindow(reader, total, rng.start, rng.end, req.query.to !== undefined) : { from: rng.start, to: rng.start, data: Buffer.alloc(0) };
+        const lines = win.data.length ? parseWindow(io.parse, `log|${nodeId}|${sessionId}`, win.from, win.to, win.data.toString("utf8")) : [];
+        ndjson = toNdjson(lines);
+        log = { from: win.from, bytes: total, data: win.data }; winEnd = win.to;
+      } else {
+        log = await readSessionLog(nodeId, sessionId, rng.start, rng.end);
+        winEnd = rng.end;
+      }
     } else {
       log = await readSessionLog(nodeId, sessionId, from);
     }
@@ -201,13 +221,17 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     if (req.query.view === "render") {   // 웹뷰: 사람이 읽을 항목으로 파싱(채널필터) — 툴결과·노이즈 제거.
       // 서브에이전트 트랜스크립트(#905 C1 슬⑥)는 전 줄이 isSidechain 이라, 서브에이전트일 때만 sidechain 포함해 렌더.
       const includeSidechain = !!(await sessionParent(nodeId, sessionId));
-      res.json({ from: log.from, bytes: log.bytes, items: renderTranscript(log.data.toString("utf8"), 5000, { includeSidechain }) });
+      // 비-claude 는 어댑터로 공통 ChatLine 을 만든 뒤 렌더(renderTranscript 는 ChatLine 문법을 읽는다). claude 는 원본 그대로.
+      const text = (io && io.parse && io.key !== "claude") ? toNdjson(io.parse(log.data.toString("utf8"), {}).lines) : log.data.toString("utf8");
+      res.json({ from: log.from, bytes: log.bytes, items: renderTranscript(text, 5000, { includeSidechain }) });
       return;
     }
     res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
     res.setHeader("X-Log-Bytes", String(log.bytes));   // 전체 워터마크 — UI 가 증분 tail 에 쓴다
     res.setHeader("X-Log-From", String(log.from));
     if (winEnd !== undefined) res.setHeader("X-Log-To", String(winEnd));
+    if (io) res.setHeader("X-Harness", io.key);
+    if (ndjson !== undefined) { res.end(ndjson); return; }
     res.end(log.data);
   }));
 
