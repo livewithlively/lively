@@ -24,18 +24,101 @@ export const PANE_LOCALE: string = (() => {
 
 // ── 큐레이트 허용 루트 ──
 export interface Root { key: string; label: string; base: string; perUser?: boolean; }
-export const ROOTS: Root[] = [
-  { key: "shared", label: "공유 워크스페이스", base: process.env.TERMINAL_ROOT_SHARED || path.join(os.homedir(), "workspace") },  // 폴백 = deploy 관례($HOME/workspace)
-  { key: "personal", label: "개인 폴더", base: process.env.TERMINAL_ROOT_PERSONAL || path.join(os.homedir(), "box"), perUser: true },
-];
+
+// ── 왜 상수가 아니라 함수인가 ───────────────────────────────────────────────
+//
+// 종전엔 `export const ROOTS = [...]` 였다. 모듈 로드 시점에 `process.env` 한 번 읽고 끝 — 즉
+//  **프로세스 하나 = 워크스페이스 하나**라는 가정이 이 상수에 굳어 있었다.
+//
+// 게이트웨이 하나가 여러 워크스페이스를 서비스하는 배포에서는 그 가정이 곧 사고다: 파일 탐색기·
+//  세션 생성·디스크 가드가 전부 **첫 번째로 로드될 때의 테넌트** 경로를 본다. 남의 파일이 보인다.
+//
+// 그래서 값을 **호출 시점에** 만든다. 상수를 남겨두지 않는 것이 중요하다 — 남겨두면 누군가
+//  그걸 쓰고, 그 한 곳이 유출 경로가 된다("빠뜨릴 곳이 존재하지 않게" 가 이 설계 전체의 규율이다).
+//
+// ⚠ 이 파일은 terminal 모듈들이 전부 딛고 서는 **leaf** 다(머리말) — `org/tenant-context.js` 를
+//  import 하면 역방향 의존이 된다. 그래서 슬러그는 **주입**받는다(부팅 배선이 꽂는다).
+
+/** 이 요청의 테넌트 슬러그. 단일 테넌트 배포에서는 언제나 null(종전 동작). */
+export type TenantSlugResolver = () => string | null;
+let slugResolver: TenantSlugResolver = () => null;
+
+/** 부팅 배선이 한 번 꽂는다. 안 꽂으면 단일 테넌트 그대로다. */
+export function installTenantSlugResolver(fn: TenantSlugResolver): void {
+  slugResolver = fn;
+}
+
+/** 슬러그는 경로에 들어간다 — 형식을 통과 못 하면 **테넌트 경로를 쓰지 않는다**(폴백이 아니라 무시). */
+const SAFE_SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+/**
+ * 지금 이 요청의 테넌트 슬러그(형식 검증 통과분만). 없으면 null = 단일 테넌트.
+ *  ⚠ 이 값은 경로·컨테이너 이름에 들어가므로 **여기서 한 번만** 검증한다 — 호출부마다 다시 재면 갈린다.
+ */
+export function tenantSlug(): string | null {
+  const s = slugResolver();
+  return s && SAFE_SLUG.test(s) ? s : null;
+}
+
+/**
+ * 테넌트별 루트의 base 디렉터리. 템플릿에 `{slug}` 를 넣어 쓴다
+ * (예: `LIVELY_TENANT_ROOT_TEMPLATE=/var/lib/lvly/tenants/{slug}/work`).
+ * 템플릿이 없거나 컨텍스트가 없으면 null → 종전 경로.
+ */
+function tenantRootBase(): string | null {
+  const tpl = process.env.LIVELY_TENANT_ROOT_TEMPLATE;
+  if (!tpl || !tpl.includes("{slug}")) return null;
+  const slug = tenantSlug();
+  if (!slug) return null;
+  return tpl.replace("{slug}", slug);
+}
+
+/** 지금 이 요청이 볼 수 있는 루트들. **호출 시점**에 만든다(위 머리말). */
+export function roots(): Root[] {
+  const t = tenantRootBase();
+  if (t) {
+    return [
+      { key: "shared", label: "공유 워크스페이스", base: path.join(t, "shared") },
+      { key: "personal", label: "개인 폴더", base: path.join(t, "personal"), perUser: true },
+    ];
+  }
+  return [
+    { key: "shared", label: "공유 워크스페이스", base: process.env.TERMINAL_ROOT_SHARED || path.join(os.homedir(), "workspace") },  // 폴백 = deploy 관례($HOME/workspace)
+    { key: "personal", label: "개인 폴더", base: process.env.TERMINAL_ROOT_PERSONAL || path.join(os.homedir(), "box"), perUser: true },
+  ];
+}
 
 // 공유 워크스페이스 루트 — 공유 빌드 캐시(#813)가 이 아래 `.cache` 로 산다.
 //  그 디렉터리의 그룹·setgid 권한을 물려받아야 멤버별 격리 OS 유저(#524)들이 캐시를 함께 쓸 수 있다.
-export const SHARED_ROOT: Root = ROOTS.find((r) => r.key === "shared") ?? ROOTS[0];
+export function sharedRoot(): Root {
+  const all = roots();
+  return all.find((r) => r.key === "shared") ?? all[0]!;
+}
 
 // ── 하네스 플래그 카탈로그(보수적 화이트리스트) ──
 export interface FlagDef { name: string; label: string; desc: string; type: "select" | "bool" | "text"; choices?: string[]; default?: string; }
-export interface Harness { key: string; label: string; bin: string; autoApproveFlag?: string; flags: FlagDef[]; }
+export interface Harness {
+  key: string; label: string; bin: string; autoApproveFlag?: string; flags: FlagDef[];
+  // #1516 런처 안내의 하네스별 부분(harnessFailNotice 가 읽는다 — 문구를 그 함수에 하드코딩하지 않는다).
+  //  · loginCmd: 비정상 종료의 주원인이 '자격 만료'이고 **셸에서 한 줄로** 복구되는 하네스(codex)만. 있으면
+  //    안내가 재시작 대신 이 명령을 준다.
+  //  · failHint: 재시작 안내(`<bin>` 입력) 뒤에 덧붙일 줄들. 하네스마다 로그인 절차가 달라서 있는 값.
+  loginCmd?: string;
+  failHint?: string[];
+  // 이어받기(#1711) — '이어서 열기'(복원)가 **같은 대화를 이어서** 열게 하는 argv 조각.
+  //  id 를 주면 그 대화, 없으면 '가장 최근 대화 또는 피커'. 하네스마다 수단이 완전히 다르다(실측 2026-08-14):
+  //   claude `--resume <uuid>` / `--resume`(피커) · codex **서브커맨드** `resume <id>` / `resume --last`
+  //   · opencode `--session <id>` / `--continue` · antigravity `--conversation <id>` / `--continue`
+  //  ⚠ 반환 argv 는 bin **바로 뒤**에 붙는다 — codex 는 플래그가 아니라 서브커맨드라 그 위치가 계약이다
+  //   (`codex resume <id> --model x` 는 유효하다 — resume 이 --model 을 받는 것을 --help 로 확인했다).
+  //  ⚠ 종전엔 이 로직이 sessions.ts 에 `harness.key === "claude"` 로 박혀 있어, **claude 아닌 세션은 복원해도
+  //   늘 새 대화로 시작**했다(2026-08-14 상민님 신고: antigravity 세션을 /exit 로 닫고 이어 열면 대화가 없다).
+  resumeArgv?: (id?: string) => string[];
+}
+// 이어받기 대화 id 형식 — 하네스가 만든 값이라 제각각이다(claude·agy=UUID · opencode=`ses_…`).
+//  ⚠ `_` 를 허용한다: 종전 정규식(sessions.ts)엔 없어서 opencode 세션 id 가 형식 오류로 400 이 날 자리였다(#1711).
+//  셸 인젝션 표면은 없다(argv 로만 전달) — 이 검증은 하네스에 쓰레기 값을 넘기지 않기 위한 것이다.
+export const RESUME_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 export const HARNESSES: Harness[] = [
   {
     key: "claude", label: "Claude Code", bin: "claude",
@@ -45,6 +128,8 @@ export const HARNESSES: Harness[] = [
       { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "opus", "sonnet", "haiku"] },
       { name: "--effort", label: "추론강도(effort)", desc: "무거운 작업(부트스트랩·분류 등)은 xhigh 권장", type: "select", choices: ["", "low", "medium", "high", "xhigh", "max"] },
     ],
+    failHint: ["로그인이 필요하다고 나오면 claude 를 실행한 뒤 /login 을 입력하세요."],
+    resumeArgv: (id) => (id ? ["--resume", id] : ["--resume"]),   // 인자 없는 --resume = 이 폴더의 대화 피커
   },
   {
     key: "codex", label: "Codex", bin: "codex",
@@ -52,6 +137,52 @@ export const HARNESSES: Harness[] = [
     // default 는 **표기용**이다(#1145) — 빈 값 옵션을 '(자동 · gpt-5.5)' 로 보여줄 뿐, 이 값을 argv 로 넘기지는 않는다.
     //  넘기는 순간 그 모델에 고정돼, codex 가 기본을 올려도 여기 적힌 낡은 문자열에 사용자가 묶인다.
     flags: [{ name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"], default: "gpt-5.5" }],
+    loginCmd: "codex logout && codex login --device-auth",
+    resumeArgv: (id) => (id ? ["resume", id] : ["resume", "--last"]),   // 피커는 대화형이라 무인 복원엔 --last
+  },
+  {
+    // #1519 로 배선(훅·MCP·자산)은 이미 붙어 있는데 **웹 세션 카탈로그에만** 빠져 있던 자리(#1695).
+    //  모델은 `provider/model` 형식이라 화이트리스트로 못 박기 어렵다(제공자마다 다름) → 여기선 안 받는다.
+    //  opencode 안에서 고르면 되고, 반쯤 맞는 목록을 주는 것보다 안 주는 게 정직하다.
+    key: "opencode", label: "OpenCode", bin: "opencode",
+    autoApproveFlag: "--auto",   // 실측(1.18.x --help): 명시 deny 가 아닌 권한을 자동 승인
+    flags: [],
+    // 셸에서 그대로 치는 명령은 **명령 줄**로 준다(복사해 붙여넣게) — claude 의 /login 은 TUI 안 입력이라 문장으로 둔다.
+    failHint: ["로그인이 필요하다고 나오면 아래를 입력해 제공자를 고르세요:", "", "    opencode auth login"],
+    resumeArgv: (id) => (id ? ["--session", id] : ["--continue"]),
+  },
+  {
+    // #1689 로 배선 완료 → 이 카탈로그가 웹 세션(AI 세션 탭·프로젝트 화면)의 마지막 조각이다(#1695).
+    //  bin 은 key 와 다르다(agy). 안내·재시작 문구를 key 로 만들면 없는 명령을 안내하게 된다(harnessFailNotice 참조).
+    key: "antigravity", label: "Antigravity", bin: "agy",
+    autoApproveFlag: "--dangerously-skip-permissions",   // 실측(agy 1.1.13 --help)
+    // 모델은 `agy models` 실측 목록에서 **현행 대표만** 큐레이트한다(구세대 flash 3.5/3.6 은 뺀다).
+    //  codex 와 같은 이유로 빈 값(=하네스 기본)을 기본으로 두어 낡은 문자열에 사용자를 묶지 않는다.
+    flags: [
+      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "gemini-3.1-pro-high", "gemini-3.1-pro-low", "gemini-3.7-flash-high", "gemini-3.7-flash-medium", "gemini-3.7-flash-low", "claude-opus-4-6-thinking", "claude-sonnet-4-6", "gpt-oss-120b-medium"] },
+      { name: "--effort", label: "추론강도(effort)", desc: "", type: "select", choices: ["", "low", "medium", "high"] },   // claude 와 달리 3단계(실측)
+    ],
+    failHint: ["로그인이 필요하다고 나오면 화면에 뜨는 주소를 브라우저에서 열고, 함께 표시되는 코드를 입력하세요."],
+    // ⚠ id 없는 폴백(`--continue`)은 **가장 최근 대화**를 잡는데, agy 의 대화 저장(~/.gemini/antigravity-cli/brain/)은
+    //  워크스페이스별이 아니라 **전역**이다(실측) → 세션을 여러 개 돌리면 남의 대화를 이어받을 수 있다.
+    //  그래서 antigravity 는 id 복원이 정상 경로이고(어댑터가 conversationId 를 세션 id 로 보고한다 — 매핑 존재),
+    //  폴백은 매핑이 없을 때의 차선이다.
+    resumeArgv: (id) => (id ? ["--conversation", id] : ["--continue"]),
+  },
+  {
+    // #1701 로 배선 완료(hook-file + config.toml 센티넬 + rules 주입) — 5번째 하네스.
+    key: "grok", label: "Grok Build", bin: "grok",
+    autoApproveFlag: "--always-approve",   // 실측(grok 1.0.3 --help; --yolo 는 별칭이지만 제품 표기가 always-approve)
+    // 모델은 실측으로 확인된 현행 id 만 큐레이트한다(기본 grok-4.5 · 실세션 관측 grok-4.6). codex 와 같은 이유로
+    //  빈 값(=하네스 기본)을 기본으로 두어 낡은 문자열에 사용자를 묶지 않는다. effort 는 모델마다 허용 단계가
+    //  달라(문서: "a model only accepts the levels its menu advertises") 반쯤 맞는 목록을 주느니 안 준다(opencode 판단).
+    flags: [
+      { name: "--model", label: "모델", desc: "", type: "select", choices: ["", "grok-4.6", "grok-4.5"] },
+    ],
+    failHint: ["로그인이 필요하다고 나오면 아래를 입력해 브라우저 없이 로그인하세요:", "", "    grok login --device-code"],
+    // 실측(#1701): `-r <id>` 는 세션 id(UUID) 재개, id 없으면 `-c` = 이 폴더의 최근 세션. 어댑터가 sessionId 를
+    //  세션 매핑으로 보고하므로 id 복원이 정상 경로다(antigravity 와 같은 구조).
+    resumeArgv: (id) => (id ? ["--resume", id] : ["--continue"]),
   },
   { key: "shell", label: "셸 (에이전트 없음)", bin: "", flags: [] },
 ];
@@ -174,44 +305,105 @@ const LAUNCH_SH = [
 //  `http://localhost:1455`(서버의 localhost) 에 사용자 브라우저가 닿지 못한다. device-auth 는 주소+일회용 코드라
 //  어느 브라우저에서든 된다(실측). 만료 케이스는 logout 이 선행돼야 한다 — codex 안내문("Please log out and
 //  sign in again")과 같은 처방.
+//
+// ⚠ 문구는 **표(HARNESSES)에서 파생**한다(#1695). 종전엔 codex·claude 문장을 이 함수에 하드코딩하고 나머지는
+//  `${harnessKey}` 로 폴백했는데, 그 폴백은 **key 를 실행 명령으로 안내**한다 — antigravity 는 bin 이 `agy` 라
+//  "antigravity 를 입력하면 다시 시작합니다"가 되어 **없는 명령**을 시킨다(command not found → 사용자는 두 번 막힌다).
+//  라벨 뒤 조사(이/가)도 라벨마다 갈리므로 문장을 `<라벨> — <서술>` 로 두어 하네스가 늘어도 한국어가 안 깨지게 한다.
 export function harnessFailNotice(harnessKey: string): string {
   const line = "─".repeat(60);
-  const body = harnessKey === "codex"
+  const h = HARNESSES.find((x) => x.key === harnessKey);
+  const label = h?.label || harnessKey;
+  const bin = h?.bin || harnessKey;   // 모르는 하네스·실행 파일이 빈 하네스면 key 로 폴백(빈 명령 줄을 안내하지 않는다)
+  const body = h?.loginCmd
     ? [
-      "Codex 가 시작하지 못하고 종료됐습니다 — 위 영문 메시지가 원인입니다.",
+      // 자격 만료가 주원인이고 셸 한 줄로 복구되는 하네스(codex) — 재시작보다 로그인이 먼저다.
+      `${label} — 시작하지 못하고 종료됐습니다. 위 영문 메시지가 원인입니다.`,
       "",
       "로그인이 만료됐을 때 가장 흔합니다. 아래 한 줄을 복사해 붙여넣고 Enter 를 누르세요:",
       "",
-      "    codex logout && codex login --device-auth",
+      `    ${h.loginCmd}`,
       "",
       "화면에 주소와 일회용 코드가 나옵니다 → 브라우저에서 그 주소를 열고 코드를 입력하면 로그인이 끝납니다.",
-      "로그인한 뒤  codex  를 입력하면 이 세션에서 그대로 이어서 쓸 수 있습니다.",
+      `로그인한 뒤  ${bin}  를 입력하면 이 세션에서 그대로 이어서 쓸 수 있습니다.`,
     ]
-    : harnessKey === "claude"
-      ? [
-        "Claude Code 가 예기치 않게 종료됐습니다 — 위 메시지가 원인입니다.",
-        "",
-        "이 세션은 살아 있습니다. 아래를 입력하면 다시 시작합니다:",
-        "",
-        "    claude",
-        "",
-        "로그인이 필요하다고 나오면 claude 를 실행한 뒤 /login 을 입력하세요.",
-      ]
-      : [
-        `${harnessKey} 이(가) 예기치 않게 종료됐습니다 — 위 메시지가 원인입니다.`,
-        "",
-        "이 세션은 살아 있습니다. 아래를 입력하면 다시 시작합니다:",
-        "",
-        `    ${harnessKey}`,
-      ];
+    : [
+      `${label} — 예기치 않게 종료됐습니다. 위 메시지가 원인입니다.`,
+      "",
+      "이 세션은 살아 있습니다. 아래를 입력하면 다시 시작합니다:",
+      "",
+      `    ${bin}`,
+      ...(h?.failHint?.length ? ["", ...h.failHint] : []),
+    ];
   // 세션이 살아 있다는 사실 자체가 안내의 절반이다 — 종전엔 창이 사라져 사용자가 '내가 뭘 잘못했나'로 끝났다.
   return [line, ...body, line].join("\n");
 }
 
-// 하네스 실행 argv → 런처로 감싼 argv. cmd 가 비면(셸 세션) 감싸지 않는다 — 감쌀 하네스가 없다.
-export function harnessLaunchArgv(harnessKey: string, cmd: string[]): string[] {
-  if (!cmd.length) return cmd;
-  return ["sh", "-c", LAUNCH_SH, "lively-launch", harnessFailNotice(harnessKey), ...cmd];
+// Windows pane 셸의 UTF-8 프렐류드(#1541) — POSIX 의 PANE_LOCALE(#633)에 대응하는 **Windows 축**이다.
+//
+// ★ 실측(2026-08-14, hammurabi 실기기): 노드 pane 은 `chcp 949` · `[Console]::OutputEncoding =
+//  ks_c_5601-1987` 로 시작한다. 그래서 **우리가 내보내는 UTF-8 을 pane 의 소비자가 cp949 로 디코드**한다:
+//    Write-Host "한글"          → 정상 (PowerShell → WriteConsoleW)
+//    node x.mjs                 → 정상 (Node → WriteConsoleW)
+//    node x.mjs | Out-String    → **깨짐** (`NODE吏곸젒: ?쒓?媛€?섎떎`)
+//    type <UTF-8 로그파일>      → **깨짐**  ← 우리가 `lively node start` 로 안내해 온 바로 그 명령
+//  즉 파일도 프로그램도 정상인데 **읽는 층**만 틀렸다. 파이프는 AI 하네스가 상시로 쓰는 경로다.
+//
+// ⚠ `chcp 65001` **만으로는 안 고쳐진다** — PowerShell 은 시작 시 `[Console]::OutputEncoding` 을 캐시하므로
+//  네이티브 출력 디코드는 여전히 cp949 다(실측). 두 층을 **다** 세워야 한다:
+//   · `chcp 65001`               → 네이티브 자식(`type`·findstr…)의 콘솔 입출력
+//   · `[Console]::OutputEncoding` → PowerShell 이 **네이티브 출력을 디코드**할 때 (= 파이프 정상화)
+//   · `[Console]::InputEncoding`  → 사람이 pane 에 타이핑한 한글이 네이티브 자식에게 갈 때
+//   · `$OutputEncoding`           → PowerShell 이 네이티브 자식의 **stdin 으로 보낼** 때
+//
+// ⚠ 사용자 셸 전역이 아니라 **이 pane 만** 바뀐다(실측: 프렐류드를 넣은 A 세션은 utf-8, 동시에 뜬 B 세션은
+//  949 그대로). 세션스코프라는 점에서 `-e LANG=…`(#633)과 성질이 같다.
+//
+// ⚠ 설정마다 개별 try/catch — 구 PowerShell·핸들 무효로 한 줄이 실패해도 **셸은 떠야 한다**(프렐류드는
+//  편의지 전제가 아니다). 프로필(`-NoProfile` 안 씀)은 그대로 로드해 사용자 설정이 이긴다.
+const WIN_UTF8_PS = [
+  "try{chcp 65001|Out-Null}catch{}",
+  "try{$u=New-Object System.Text.UTF8Encoding($false)}catch{$u=$null}",
+  "if($u){try{[Console]::OutputEncoding=$u}catch{};try{[Console]::InputEncoding=$u}catch{};try{$OutputEncoding=$u}catch{}}",
+].join("\n");
+
+// `-EncodedCommand`(UTF-16LE base64)로 넘긴다 — **인용부호를 아예 안 쓰기 위해서**다.
+//  psmux 3.3.7 은 인자의 `"` · `'` · 탭을 삼키고(opt-json.test.ts 가 세운 계약), 공백은 인자를 쪼갠다.
+//  base64 는 그 문자를 하나도 안 쓰므로 psmux 를 통과해도 스크립트가 원형 그대로 도착한다.
+//  (여기엔 보간할 값이 없다 — 위 상수 하나뿐이라 아래 인젝션 경계 규칙과 어긋나지 않는다.)
+const WIN_UTF8_B64 = Buffer.from(WIN_UTF8_PS, "utf16le").toString("base64");
+
+/**
+ * Windows 셸 세션이 실행할 argv. 토큰에 `"` `'` 탭 **공백**이 하나도 없어야 한다(psmux 통과 조건).
+ *
+ * `powershell`(5.1)을 명시한다 — psmux 의 Windows 기본 셸과 같고 어느 Windows 에나 있다(pwsh 는 없을 수 있다).
+ */
+export function winShellArgv(): string[] {
+  return ["powershell", "-NoLogo", "-NoExit", "-EncodedCommand", WIN_UTF8_B64];
+}
+
+// 하네스 실행 argv → 런처로 감싼 argv. cmd 가 비면(셸 세션) 감쌀 하네스는 없지만, Windows 는 UTF-8
+//  프렐류드를 세운 셸을 띄운다(위 WIN_UTF8_PS).
+//
+// ⚠ Windows(psmux 노드)에서는 감싸지 않는다 (#1541 실측). 이 런처는 **POSIX 셸 스크립트**인데
+//  Windows 노드의 pane 셸은 PowerShell 이라 그 스크립트가 그대로 파싱된다 → 하네스는 시작조차 못 하고
+//  세션이 즉사한다. 사용자가 본 화면 그대로:
+//    위치 줄:5 문자:2  + [ "$rc" -eq 0 ] && exit 0
+//    '[' 뒤에 형식 이름이 없습니다. / '&&' 토큰은 이 버전에서 올바른 문 구분 기호가 아닙니다.
+//  감싸지 않으면 하네스가 **직접** 뜬다(정상 동작 회복). 대신 #1516 의 사후회복(하네스가 비정상 종료해도
+//  세션은 셸로 남는다)이 Windows 에선 없다 — 그건 알려진 갭이고, PowerShell 판 런처는 별도로 만들어야 한다.
+//  ⚠ 여기서 문자열 보간으로 PowerShell 스크립트를 조립하지 말 것: 이 자리는 하네스·플래그가 위치인자로만
+//   들어가야 하는 인젝션 경계다(위 LAUNCH_SH 주석). 검증 없이 급조한 래퍼를 끼우는 것보다 안 감싸는 게 낫다.
+//   → 그래서 UTF-8 프렐류드(#1541)도 **하네스 세션엔 넣지 않는다**: 하네스를 감싸려면 그 argv 를
+//     PowerShell 문자열에 이어붙여야 하고, 그게 정확히 이 규칙이 막는 것이다. 셸 세션(cmd 가 빈 경우)은
+//     이어붙일 값이 없어(상수 하나) 안전하다 — 그쪽만 세운다.
+//   하네스 세션은 프렐류드 없이도 화면이 정상이다: 하네스는 ConPTY 에 UTF-8 을 직접 쓰고 xterm.js 가
+//    UTF-8 로 디코드한다. 콘솔 코드페이지는 **파이프·네이티브 자식**을 읽을 때만 문제가 된다.
+export function harnessLaunchArgv(harnessKey: string, cmd: string[], platform: string = process.platform): string[] {
+  const argv = Array.isArray(cmd) ? cmd : [];
+  if (platform === "win32") return argv.length ? argv : winShellArgv();
+  if (!argv.length) return argv;
+  return ["sh", "-c", LAUNCH_SH, "lively-launch", harnessFailNotice(harnessKey), ...argv];
 }
 
 // 로그인 전용 세션(#1516) — 관리탭 [연결된 AI 계정]의 [로그인]이 여는 세션.
@@ -220,6 +412,12 @@ export function harnessLaunchArgv(harnessKey: string, cmd: string[]): string[] {
 //  **셸에서 로그인 명령을 직접** 돌려야 한다.
 //  codex: logout(만료 자격 제거) → device-auth 로그인 → 끝나면 셸로 남아 바로 `codex` 를 칠 수 있다.
 //  claude: 로그인이 TUI 안 슬래시 커맨드(/login)라 자동화할 수 없다 → null(종전대로 claude 세션을 연다).
+//  ⚠ 나머지 하네스도 **지금은 전부 null 이 정답**이다(#1695 실측). 여기 채우려면 '무인으로 한 줄' 이어야 하는데:
+//   · antigravity(agy): 로그인 서브커맨드 자체가 없다(agy 1.1.13 --help — install·update·plugin·models·agent·changelog뿐).
+//     인증은 하네스를 켜면 하네스가 띄운다(원격이면 주소+코드). 그래서 '로그인 전용 세션'을 만들 대상이 아니고,
+//     대신 하네스가 죽었을 때의 안내(failHint)로 그 절차를 알려 준다.
+//   · opencode: `opencode auth login` 이 있으나 **제공자를 고르는 대화형 TUI** 라 codex 의 device-auth 처럼
+//     비대화형 한 줄이 아니다(실측). 셸에서 그대로 치는 게 나아 failHint 로 안내한다.
 const LOGIN_SH = [
   'printf \'\\n%s\\n\\n\' "$1"',
   'codex logout >/dev/null 2>&1 || true',

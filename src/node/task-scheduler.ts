@@ -9,7 +9,7 @@
 //     ⚠ 종전 규칙은 `리스 있으면 아무 노드나` 였다 — 리스 하나로 남의 노트북이 열렸다(#1540 이 닫은 구멍).
 //  단일 프로세스 전제(기존 스케줄러와 동일) — LIVELY_NO_SCHEDULER=1 이면 기동 안 함.
 import { logger } from "../log.js";
-import { SHARED_ROOT } from "../terminal/terminal-sessions.js";
+import { sharedRoot } from "../terminal/terminal-sessions.js";
 import { effectiveDelegatePolicy, type DelegatePolicy } from "../org/policies/delegate-policy.js";
 import { getMemberSecret, memberOwner } from "../org/credentials/member-secret-store.js";
 import { getRuntimeConfig } from "../org/store.js";
@@ -156,7 +156,7 @@ async function candidatesFor(t: DelegateTask, counts: Map<string, number>, extra
     if (centralDocker === null) centralDocker = await detectDocker();
     nodes.push({
       id: CENTRAL_NODE_ID, kind: "central", central: true, hasDocker: centralDocker,
-      res: await sampleResources(SHARED_ROOT.base).catch(() => null), capacity: CAP_CENTRAL, running: running(CENTRAL_NODE_ID),
+      res: await sampleResources(sharedRoot().base).catch(() => null), capacity: CAP_CENTRAL, running: running(CENTRAL_NODE_ID),
     });
   }
   const rows = new Map((await listNodes().catch(() => [])).map((n) => [n.id, n]));
@@ -258,7 +258,7 @@ async function watchRunning(): Promise<void> {
       }
       if (t.node_id === CENTRAL_NODE_ID) {
         // 중앙(내장 노드)은 스케줄러가 직접 감시 — 원격은 에이전트가 taskdone 을 push.
-        const out = await checkTask({ taskId: t.id, sessionId: t.session_id ?? "", taskDir: t.task_dir ?? "" });
+        const out = await checkTask({ taskId: t.id, sessionId: t.session_id ?? "", taskDir: t.task_dir ?? "", harness: t.harness ?? undefined });   // #1710 — 하네스별 결과 스키마
         if (out) await finish(t, out.ok, out.exit, out.summary, out.error);
         continue;
       }
@@ -278,7 +278,7 @@ async function watchRunning(): Promise<void> {
       }
       if (t.node_lost_at) {
         // 복귀 — 에이전트 재시작으로 감시 목록이 비었을 수 있어 재장전(멱등).
-        await nodeRpc(t.node_id!, "watchTask", { taskId: t.id, sessionId: t.session_id, taskDir: t.task_dir }).catch(() => { /* 다음 tick */ });
+        await nodeRpc(t.node_id!, "watchTask", { taskId: t.id, sessionId: t.session_id, taskDir: t.task_dir, harness: t.harness }).catch(() => { /* 다음 tick */ });
         await setNodeLost(t.id, false);
         logger.info({ task: t.id, node: t.node_id }, "노드 복귀 — 작업 계속");
       }

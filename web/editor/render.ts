@@ -1,6 +1,6 @@
 // editor/render.ts — 블록 DOM 생성 + 카드/컬렉션/raw 미리보기(#1313 R58 — block-editor.ts '블록 DOM 생성' 절 verbatim 적출).
 //  보안 불변식 유지: innerHTML 금지 — 모든 DOM 은 el/renderInline/renderMarkdown(전부 textContent 기반)로만.
-import { api, el, renderCollection, renderInline, renderMarkdown } from '../core.js';
+import { api, busy, el, renderCollection, renderInline, renderMarkdown } from '../core.js';
 import { overlayBox } from '../learn.js';
 import { openEmojiPicker } from '../page-decor.js';
 import { CALLOUT_COLORS } from './model.js';
@@ -264,7 +264,7 @@ export function createRender(ctx: EditorCtx) {
     let t: any = null;
     async function search() {
       const q = qIn.value.trim();
-      results.replaceChildren(el('div', { class: 'empty', text: '불러오는 중…' }));
+      busy(results, el('div', { class: 'empty', text: '불러오는 중…' }));
       try {
         const url = q ? ('/api/ui/knowledge/search?' + new URLSearchParams({ q, limit: '12', mode: 'names' }))
           : ('/api/ui/knowledge?' + new URLSearchParams({ limit: '12', orderBy: 'updated_at', injection: 'recalled' }));

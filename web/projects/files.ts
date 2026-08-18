@@ -2,7 +2,7 @@
 //  파일/업로드 일체 — 인증 다운로드·업로드(진행률·취소) · 포맷터 · 정렬 · 파일 아이콘/썸네일 ·
 //  뷰어 · UpItem 파이프라인(수집→정규화→전송→토스트) · 폴더 그리드 오버레이 + 사람/팀 피커.
 //  ⚠ 썸네일 지연로딩 IntersectionObserver(_thumbObserver)는 이 모듈이 **단독 소유**한다(모듈 전역 1개, 밖으로 새지 않는다).
-import { api, el, errorNote, personFace, state, toast } from '../core.js';
+import { api, busy, el, errorNote, personFace, state, toast } from '../core.js';
 import { avatarColor, initials } from '../lib/avatar.js'; // R29b: 구 로컬 사본(바이트 동일)을 지우고 단일 정의로 — 아래에서 그대로 재수출
 import { overlayBox, skeletonRows } from '../learn.js';
 import { fileSortApply, fileSortBtn, fileSortLoad, fileSortSave } from './files-format.js';
@@ -215,7 +215,7 @@ function openFolderGrid(id, startPath, base, shareBase?) {
     saveBtn.onclick = go; nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
   }
   async function load() {
-    listBox.replaceChildren(skeletonRows(5));
+    busy(listBox, skeletonRows(5));
     const qs = st.q ? ('?q=' + encodeURIComponent(st.q)) : ('?path=' + encodeURIComponent(st.path));
     let data: any;
     try { data = await api(B + id + '/files' + qs); }

@@ -15,6 +15,7 @@ import { projectAbsPath, grantSharedGroupWrite } from "./project-fs.js";
 import { canSeeProjectRow, effectiveViewer } from "../v6/visibility.js";
 import { viewerOf } from "../capabilities/principal.js";
 import { listSessions, listRestorableSessions, createSession, validateInvites, type CreateInput, normalizeCap } from "../terminal/terminal-sessions.js";
+import { mergeSessionViews } from "../sessions/session-merge.js"; // #1716 — 출처가 겹쳐도 세션 카드는 1장
 import { ensureAgentsMd, readProjectAgentsMd } from "../v6/agents-md.js";
 import { provisionProjectRepos } from "./project-provision.js";
 import { startProjectProvision, projectProvisionStatus } from "./project-provision-jobs.js";
@@ -267,7 +268,9 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     // 노드 프로젝트 세션(#905 C4) 병합 — 노드에서 연 이 프로젝트 세션도 목록에 보이게(가시성=invites 스냅샷 판정).
     //  각 항목의 .node 로 프론트가 &node= 입장/삭제를 릴레이한다. 로컬은 dir 로, 노드는 projectId 로 좁힌다.
     const remote = nodeProjectSessions(idOf(userOf(req)), Number(req.params.id));
-    res.json({ sessions: [...local, ...restorable, ...remote] });
+    // AI 세션 탭과 같은 규칙으로 이중표기를 접는다(#1716) — 게이트웨이와 노드가 같은 박스면 같은 tmux 세션이
+    //  local·remote 양쪽에 잡힌다. 인자 순서 = 우선순위(로컬 라이브 > 노드 스냅샷 > 복원 가능).
+    res.json({ sessions: mergeSessionViews(local, remote, restorable) });
   }));
   app.post(`${prefix}/:id/sessions`, auth, wrap(async (req, res) => {
     const { project } = await projBase(Number(req.params.id), req);

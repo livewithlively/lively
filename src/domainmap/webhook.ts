@@ -4,6 +4,7 @@
 // → ensureClone(git execFile argv, 토큰/URL 절대 비로깅) → git diff 파싱 → core.refresh.
 // raw bytes 가 HMAC 의 대상이므로 express.raw 를 이 라우터 안에서 마운트한다 — index.ts 는
 // 이 라우터를 전역 express.json() '이전'에 mount 해야 한다(스트림 선소비 방지).
+import { currentTenant } from "../org/tenant-context.js";
 import express from "express";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { httpErr } from "./core/types.js";
@@ -91,6 +92,22 @@ async function ensureClone(repoName: string, gitUrl: string): Promise<string> {
   });
 }
 
+
+/**
+ * 이 워크스페이스의 웹훅 비밀(순수).
+ *
+ * ★★ 공유 게이트웨이에서 비밀을 **공유하면 교차 쓰기가 된다.** A 가 자기 비밀로 페이로드를 서명해
+ *  B 의 웹훅 URL 로 보내면 B 의 데이터가 바뀐다 — 라우팅은 호스트명으로 갈리지만 서명은 안 갈리므로
+ *  "남의 데이터가 보인다" 가 아니라 **"남의 데이터를 쓴다"** 다.
+ *
+ * 저장하지 않고 **유도**한다: 워크스페이스마다 서로 다른 값이 되면서 새 저장소·회전 절차가 필요 없다.
+ *  컨텍스트가 없으면(단일 테넌트) 설정값 그대로 — 종전 동작이다.
+ */
+export function webhookSecretFor(base: string, tenantId: string | null): string {
+  if (!base || !tenantId) return base;
+  return createHmac("sha256", base).update(`webhook:${tenantId}`).digest("hex");
+}
+
 async function handleWebhook(req: express.Request, res: express.Response, provider: string): Promise<void> {
   if (provider !== "github" && provider !== "gitlab") { res.status(404).json({ error: "unknown provider" }); return; }
 
@@ -98,7 +115,7 @@ async function handleWebhook(req: express.Request, res: express.Response, provid
   const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
 
   // Secret required (fail-closed): unconfigured => 503, not 401.
-  const secret = (process.env.WEBHOOK_SECRET || "").toString();
+  const secret = webhookSecretFor((process.env.WEBHOOK_SECRET || "").toString(), currentTenant()?.id ?? null);
   if (!secret) { res.status(503).json({ error: "webhook not configured" }); return; }
 
   // Verify signature/token (constant-time). Any failure => 401, no detail.

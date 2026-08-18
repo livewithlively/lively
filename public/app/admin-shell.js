@@ -7,7 +7,7 @@
 //   등록 블록이 그 유일한 접점이다. 새 패널을 붙일 땐 여기 한 줄만 늘린다.
 //  병합 섹션 껍데기(membersSection·toolsSection…)도 셸이 갖는다 — 그건 패널이 아니라 **화면 구성**이기 때문이다
 //   (#837: 합치는 건 화면이지 데이터가 아니다 — 새 진실 출처 0).
-import { applyReveal, cardHead, el, errorNote, hasScope, state, toast } from './core.js';
+import { applyReveal, cardHead, el, errorNote, hasScope, keepSideScroll, state, toast } from './core.js';
 import { skeleton } from './ui-primitives.js';
 import { visibilityAxesPanel } from './visibility-axes.js';
 import { loadAdmin, registerPanel, rerenderPanel } from './admin-rerender.js'; // 패널 재렌더 레지스트리(셸↔패널 순환 절단)
@@ -146,12 +146,18 @@ const ADMIN_SECTIONS = [
     // 회사 계정 로그인(#1520) — '누가 어떻게 들어오나'라서 구성원 옆에 둔다. 시크릿을 다루므로 ADMIN_ONLY.
     { key: 'login-idp', label: '로그인 · 회사 계정', meaning: null, group: 'org' },
     // ── AI 맥락 ──
-    //  항상-주입 섹션 문서(injection=always)는 지도에서 직접 추가/편집/삭제/재정렬한다(#335).
-    { key: 'injection-map', label: '세션 주입', meaning: null, group: 'context' },
-    // 맥락 공개범위(#1291) — 유형별로 이 기능을 **쓸지 말지** 정한다. 개별 항목을 잠그는 건 각 화면에서 하고,
-    //  여기선 축 자체를 켜고 끈다. 축이 5개(프로젝트·지식·자료·공유폴더·세션 기록범위)로 늘면서 전부가
-    //  필요하지 않은 조직엔 정보 흐름만 복잡해지기 때문이다.
-    { key: 'visibility-axes', label: '맥락 공개범위', meaning: null, group: 'context' },
+    //  ⚠ 이 그룹은 **비었다**(#1618). 세 화면(세션 주입·의미 검색·맥락 공개범위)이 전부 [맥락 관리 ▸ 전달]로
+    //   갔다. #1419 가 파이프라인 4단계를 이 탭에서 [맥락 관리]로 옮길 때 이 셋만 남겨 뒀는데, 그래서
+    //   **맥락 화면이 두 탭에 갈렸다** — 자료를 지식으로 만드는 구간은 저쪽, 그 지식이 AI 에 닿는 구간은 이쪽.
+    //   #1419 가 세운 판단("파이프라인 단계에 속한 설정이 [설정] 탭에도 남아 있으면 입구가 둘이 되고, 그
+    //   단계를 보면서 앞뒤를 못 본다")은 이 셋에도 그대로 적용된다. 옛 URL 은 SECTION_EXIT 가 넘긴다.
+    //   그룹 키('context')는 남겨 둔다 — 지우면 그룹 표를 읽는 자리마다 분기가 생기고, 나중에 이 축에
+    //   맞는 화면이 새로 생겼을 때 되살릴 자리가 없어진다. 항목이 0이면 사이드바에 그려지지 않는다.
+    //  (항상-주입 섹션 문서(injection=always)의 추가/편집/삭제/재정렬은 그대로 injectionMap 이 한다 — #335.
+    //   화면이 옮겨 갔을 뿐 패널·저장 경로는 그대로다. 합치는 건 화면이지 데이터가 아니다.)
+    // 맥락 공개범위(#1291)도 여기서 **뺐다**(#1618) — [맥락 관리 ▸ 전달 ▸ 공개범위]로.
+    //  '자료' 축은 이미 #1419 에서 [수집]으로 갔는데(생산 지점) 축 토글만 여기 남아 한 기능이 두 탭에 갈려
+    //  있었다. 유형별로 이 기능을 쓸지 말지 정하는 자리라, 맥락이 누구에게 닿는지를 다루는 '전달'이 제자리다.
     // 자료 공개범위(#1291 v4)는 여기서 **뺐다**(#1419) — [맥락 관리 ▸ 수집 ▸ 자료 공개범위]로 옮겼다.
     //  이 정책은 match_system(+채널)으로 매칭해 **자료가 태어날 때**(mirror INSERT) 공개범위를 새긴다 —
     //  생산 지점이 곧 수집이라, 수집기 옆이 제자리다. 편집은 admin 유지(누가 볼 수 있는지를 정하는 보안 경계).
@@ -166,8 +172,10 @@ const ADMIN_SECTIONS = [
     //  입구가 둘이면 둘 중 어느 쪽이 정본인지 아무도 모르고, 한쪽만 고치는 사고가 난다. 파이프라인 순서
     //  (수집→증류→분류→관리) 안에 있어야 '앞뒤로 무엇이 있는지'가 함께 보이므로 그쪽을 남겼다.
     //  옛 URL(#/system/distillers)은 아래 SECTION_EXIT 가 그 자리로 넘긴다 — 북마크가 끊기지 않게.
-    // 벡터 검색(#172) — 의미검색·유사도의 임베딩 provider + 백필. AI가 지식을 '뜻으로' 찾는 능력이라 맥락 그룹.
-    { key: 'embeddings', label: '의미 검색', meaning: null, group: 'context' },
+    // 벡터 검색(#172)도 여기서 **뺐다**(#1618) — [맥락 관리 ▸ 전달 ▸ 의미 검색]으로.
+    //  AI 가 지식을 '뜻으로' 찾는 능력이라 맥락 그룹인 건 맞았지만, 그 능력이 켜졌는지는 파이프라인을 보며
+    //  판단할 일이다: provider 기본값이 off 라 새 조직은 꺼진 채 출발하고, knowledge_search 는 그때
+    //  실패하지 않고 조용히 단어 일치로 폴백한다(사용자에겐 "검색이 좀 안 맞네"로만 보인다).
     // ── AI 능력 ──
     // 도구 — 구 [AI 도구(MCP)] + [MCP 서버]. 둘 다 이름에 MCP 가 붙어 헷갈렸지만 다른 것이었다:
     //  전자=우리가 정의해 노출하는 도구(사내 API·빌트인), 후자=외부 MCP 서버 등록. 한 화면의 서브탭으로.
@@ -246,7 +254,12 @@ const SECTION_EXIT = { 'review-queue': '#/knowledge/review', 'wiki-categories': 
     'ingest-policy': '#/context/distill/ingest-policy',
     'connectors': '#/context/collect/collectors',
     'collector-presets': '#/context/collect/presets',
-    'source-vis-policy': '#/context/collect/source-vis' };
+    'source-vis-policy': '#/context/collect/source-vis',
+    // #1618 — 구 [설정 ▸ AI 맥락] 3화면이 [맥락 관리 ▸ 전달]로. 같은 이유(입구 이중화 + 앞뒤를 못 봄)에
+    //  같은 처방이다. injection-map 은 온보딩·가이드 문서가 '#/system' 으로 보내던 자리라 특히 중요하다.
+    'injection-map': '#/context/deliver/injection',
+    'embeddings': '#/context/deliver/embeddings',
+    'visibility-axes': '#/context/deliver/visibility' };
 // admin 권한 전용(쓰기·인프라·감사). #318 호출통계·#549 변경감사는 전 구성원의 변경·before/after 를 노출하므로 admin.
 // (증류기는 #1419 에서 [맥락 관리 ▸ 증류]로 이관 — 여기 목록에 없다. 서버 scope 도 memory(워킹레벨)라
 //  애초에 관리자 전용이 아니었다: 팀이 자기 채널의 증류 기준을 직접 조절하는 게 그 기능의 취지다.)
@@ -276,6 +289,12 @@ function navPermBadge(key) {
 //  (uiProfilePersonal=false) — 셀프호스트 무회귀. 숨김은 sectionHidden 한 곳이라 사이드바·기본선택·딥링크
 //  폴백(renderAdmin 의 visibleSections·첫 노출 섹션 선택)이 전부 일관되게 따라온다.
 const PERSONAL_HIDDEN = [
+    // [로그인 · 회사 계정](#1520 IdP/OIDC) — 개인 워크스페이스에서 **숨기는 게 아니라 막는 것에 가깝다**.
+    //  매니지드 배포에서 이 워크스페이스로 들어오는 길은 컨트롤플레인 계정 + SSO 브리지 하나뿐이고,
+    //  구성원은 초대로만 늘어난다(운영자가 인원을 통제한다). 워크스페이스가 자기 IdP 를 따로 붙이면
+    //  **두 번째 신원 축**이 생기고, 그 화면의 도메인 allowlist 자동 가입을 켜는 순간 그 도메인 사람이
+    //  초대 없이 구성원이 된다 = 초대제 우회. 그래서 개인 프로필에서는 입구 자체를 두지 않는다.
+    'login-idp', // 로그인 · 회사 계정(조직 IdP)
     'injection-map', // 세션 주입
     'visibility-axes', // 맥락 공개범위
     'embeddings', // 의미 검색
@@ -346,6 +365,9 @@ async function renderAdmin(view, sub) {
     //  위계 2단을 사이드바 하나가 전담한다: 그룹명은 소제목, 섹션은 그 아래 항목. 전 그룹이 항상 펼쳐져 있어
     //  '어디에 뭐가 있는지'가 한눈에 보인다. 권한으로 섹션이 0개인 그룹은 통째로 숨는다.
     const side = el('nav', { class: 'docs-side admin-side', 'aria-label': '관리 섹션' });
+    // 섹션을 고르면 이 화면 전체를 다시 그리므로 사이드바도 새 노드가 된다 → 자체 스크롤이 0 으로 돌아갔다
+    //  (실측 #1635: 300→0). 항목이 20개 넘어 늘 스크롤돼 있는 사이드바라 '방금 누른 자리'를 잃었다.
+    keepSideScroll(side, 'admin');
     for (const g of ADMIN_GROUPS) {
         const items = visibleSections.filter((s) => s.group === g.key);
         if (!items.length)

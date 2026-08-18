@@ -12,6 +12,7 @@ import { initOrgSchema } from "../org/schema.js";
 import { init as initDomainmapSchema } from "../domainmap/core/schema.js";
 import { initActivitySchema } from "../activity/schema.js";
 import { initV6Schema } from "../v6/schema.js";
+import { ensureTenantColumn } from "../db/tenant-column.js";
 import { logger } from "../log.js";
 
 // 직렬 체인 — 멱등(부팅마다·단독 CLI 신규 DB 에서도 성립). quiet: run-sync CLI 는 종전대로 무로그(부팅 로그는 유지).
@@ -31,4 +32,8 @@ export async function initAllSchemas(opts?: { quiet?: boolean }): Promise<void> 
   note("activity schema ready");
   await initV6Schema();
   note("v6 schema ready");
+  // #1437 — `tenant_id` 와 복합 UNIQUE 보장. **모든 스키마가 만들어진 뒤**여야 한다(카탈로그를 읽으므로).
+  //  단일 테넌트에서는 값이 상수라 동작이 달라지지 않는다 — SQL 방언을 하나로 유지하기 위한 것이다.
+  const tc = await ensureTenantColumn();
+  if (tc.ddl) note(`tenant column ready (테이블 ${tc.tables} · DDL ${tc.ddl})`);
 }

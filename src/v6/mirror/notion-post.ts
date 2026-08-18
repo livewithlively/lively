@@ -25,7 +25,7 @@ export async function materializeNotionLinks(db: pg.Pool): Promise<number> {
       AND t.external_id = l.link->>'target_external_id'
       AND t.name <> k.name
      WHERE k.external_system='notion'
-     ON CONFLICT (from_name, to_name, relation) DO NOTHING`, // 같은 쌍의 사람(user) 링크가 이미 있으면 그대로 존중
+     ON CONFLICT (tenant_id, from_name, to_name, relation) DO NOTHING`, // 같은 쌍의 사람(user) 링크가 이미 있으면 그대로 존중
     );
     await client.query("COMMIT");
     return r.rowCount ?? 0;

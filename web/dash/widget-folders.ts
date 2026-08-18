@@ -4,7 +4,7 @@
 //  프로젝트 공유 폴더(#781·#795·#797)에서 검증된 것을 그대로 재사용한다 — 취소·진행바를 화면마다 따로 만들지 않는다.
 //  공개범위 폼 프리미티브(compactPicker·memberPicker)도 같은 이유로 재사용(#1291) — 리스트·스페이스·공유폴더가
 //  '누가 보나'를 **같은 컨트롤**로 물어봐야 사용자가 규칙을 한 번만 배운다.
-import { TOKEN_KEY, api, apiUrl, el, errorNote, toast, visAxisOn } from '../core.js';
+import { api, apiUrl, busy, el, errorNote, toast, TOKEN_KEY, visAxisOn } from '../core.js';
 import { skeleton } from '../learn.js';
 import { overlay } from '../admin.js';            // 공개범위 폼 등 — 다른 모달과 같은 프리미티브(#853)
 import { UP_CONFIRM, authDownload, compactPicker, fileSortApply, fileSortBtn, fileSortLoad, fileSortSave, fmtFileDateFull, fmtSize, memberPicker, upControl, upDropZone, upPrecheckOverwrite, upProgress, upSend, upToast, type UpItem } from '../projects.js';
@@ -199,16 +199,16 @@ async function openFolderVisibilityForm(root, rel, name, onSaved) {
     el('div', { class: 'pjv-side-nav-hint', style: 'margin-top:10px', text: '공개범위는 사람과 그 사람의 AI 에 똑같이 적용돼요 — 웹에서 안 보이면 MCP 로도 안 보여요.' }),
     el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
   cancelBtn.onclick = () => back.remove();
-  let busy = false;   // 재진입 가드 — 이중 제출로 대상 교체가 두 번 돌지 않게.
+  let saving = false;   // 재진입 가드 — 이중 제출로 대상 교체가 두 번 돌지 않게.
   saveBtn.onclick = async () => {
-    if (busy) return;
-    busy = true; saveBtn.disabled = true;
+    if (saving) return;
+    saving = true; saveBtn.disabled = true;
     try {
       await api(aclUrl, { method: 'POST', body: JSON.stringify({ visibility: vis, members: vis === 'members' ? picker.getSelected() : [] }) });
       back.remove();
       toast(vis === 'members' ? '이제 지정한 사람에게만 보여요' : '전체 공개로 바꿨어요');
       if (onSaved) onSaved();
-    } catch (e: any) { toast('저장 실패 — ' + e.message, true); busy = false; saveBtn.disabled = false; }
+    } catch (e: any) { toast('저장 실패 — ' + e.message, true); saving = false; saveBtn.disabled = false; }
   };
 }
 
@@ -220,23 +220,23 @@ function dashFolderBrowser(root, startPath) {
   let curPath = startPath || '';
   const qp = (p) => 'root=' + encodeURIComponent(root) + '&path=' + encodeURIComponent(p);
   const relOf = (name) => (curPath ? curPath + '/' : '') + name;
-  const busy = (on) => { if (on) container.setAttribute('aria-busy', 'true'); else container.removeAttribute('aria-busy'); };
+  const setBusy = (on) => { if (on) container.setAttribute('aria-busy', 'true'); else container.removeAttribute('aria-busy'); };
 
   const load = async () => {
-    container.replaceChildren(el('div', { class: 'dash-fb-load' }, skeleton('불러오는 중')));
+    busy(container, el('div', { class: 'dash-fb-load' }, skeleton('불러오는 중')));
     let data;
     try { data = await api('/api/ui/terminal/browse?' + qp(curPath)); }
-    catch (e) { busy(false); container.replaceChildren(errorNote(e, '폴더를 불러오지 못했습니다')); return; }
+    catch (e) { setBusy(false); container.replaceChildren(errorNote(e, '폴더를 불러오지 못했습니다')); return; }
     curPath = data.path || '';
     render(data);
-    busy(false); // 새 상태 렌더 완료 → 진행중 표시 해제(성공 경로에서도 반드시 — 안 그러면 pointer-events:none 이 남아 잠김).
+    setBusy(false); // 새 상태 렌더 완료 → 진행중 표시 해제(성공 경로에서도 반드시 — 안 그러면 pointer-events:none 이 남아 잠김).
   };
   const newFolder = async () => {
     const name = (prompt('새 폴더 이름') || '').trim();
     if (!name) return;
-    busy(true);
+    setBusy(true);
     try { await api('/api/ui/terminal/browse/mkdir?' + qp(relOf(name)), { method: 'POST' }); await load(); }
-    catch (e) { toast('폴더 생성 실패 — ' + e.message, true); busy(false); }
+    catch (e) { toast('폴더 생성 실패 — ' + e.message, true); setBusy(false); }
   };
   // ── 업로드: 파일 + '폴더' + 드래그앤드롭 (#795) — 프로젝트 공유 폴더(#781)의 프리미티브를 그대로 쓴다. ──
   //  items[].rel = 현재 폴더 기준 상대경로. 폴더를 올리면 'sub/child/a.png' 처럼 중첩 경로가 들어오고,
@@ -279,15 +279,15 @@ function dashFolderBrowser(root, startPath) {
   const renameItem = async (name) => {
     const to = (prompt('새 이름', name) || '').trim();
     if (!to || to === name) return;
-    busy(true);
+    setBusy(true);
     try { await api('/api/ui/terminal/browse/rename?' + qp(relOf(name)) + '&to=' + encodeURIComponent(to), { method: 'POST' }); await load(); }
-    catch (e) { toast('이름 변경 실패 — ' + e.message, true); busy(false); }
+    catch (e) { toast('이름 변경 실패 — ' + e.message, true); setBusy(false); }
   };
   const deleteItem = async (name, isDir) => {
     if (!confirm((isDir ? '폴더' : '파일') + ' ‘' + name + '’' + (isDir ? ' 및 그 안의 모든 내용' : '') + '을(를) 삭제할까요? 되돌릴 수 없어요.')) return;
-    busy(true);
+    setBusy(true);
     try { await api('/api/ui/terminal/browse?' + qp(relOf(name)), { method: 'DELETE' }); await load(); }
-    catch (e) { toast('삭제 실패 — ' + e.message, true); busy(false); }
+    catch (e) { toast('삭제 실패 — ' + e.message, true); setBusy(false); }
   };
   const download = (name) => authDownload('/api/ui/terminal/browse/file?download=1&' + qp(relOf(name)), name);
 

@@ -10,7 +10,7 @@
 //   · 행 본체: pjvProjRow · pjvProjTaskRow · pjvProjGroup · 인라인 추가행(pjvProjAddRow)
 //  ⚠ pjvOpenTaskModal 은 **배럴(../projects.js) 경유**로 받는다 — 기존 projects↔taskmodal 순환을 새 직접
 //   엣지(rows→taskmodal)로 늘리지 않기 위해서다(순환 축소는 R56 소관).
-import { api, appUrl, el, personFace, toast } from '../core.js';
+import { api, appUrl, busy, el, personFace, toast } from '../core.js';
 import { openProjectSessionForm, pjvAddTask, pjvOpenTaskModal, pjvRowMore, pjvSetProjStatusCustom, } from '../projects.js';
 import { pjvIcon, pjvSubtaskIcon } from './icons.js';
 import { pjvPopover } from './popover.js';
@@ -409,7 +409,7 @@ function pjvProjTeamControl(currentMembers, applyIds) {
         };
         function rebuild() {
             if (!all) {
-                listBox.replaceChildren(el('div', { class: 'pjv-menu-empty', text: '불러오는 중…' }));
+                busy(listBox, el('div', { class: 'pjv-menu-empty', text: '불러오는 중…' }));
                 return;
             }
             const selIds = new Set(members.map((m) => m.id));
@@ -646,7 +646,7 @@ function pjvProjRow(p, reload, select, canDelete, fields, anchorId, taskCtx) {
             if (loading)
                 return;
             loading = true;
-            subBox.replaceChildren(el('div', { class: 'pjv-proj-subnote', text: '태스크 불러오는 중…' }));
+            busy(subBox, el('div', { class: 'pjv-proj-subnote', text: '태스크 불러오는 중…' }));
             try {
                 const d = await taskCtx.fetchProjTasks(p.id);
                 const all = (d && d.tasks) || [];
@@ -907,7 +907,8 @@ function pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDele
             toast('태스크 추가 실패 — ' + err.message, true);
             input.disabled = false;
             busyTask = false;
-        }
+            input.focus();
+        } // focus 는 실패 후 blur 자동커밋 재진입을 막는다(아래 commit 의 catch 주석)
     };
     // Enter / 바깥클릭(blur) → **설정 팝업 없이 바로 생성**(#1067). 프리필(이름 + 그룹 상태 + 인라인 드래프트[팀원·마감·우선순위])
     //  대로 만들고, 태스크 추가행(pjvAddRow)과 똑같이 새 행을 그 자리에 끼운 뒤 입력을 열어 둬(keepOpen) 다음 프로젝트를
@@ -994,6 +995,10 @@ function pjvProjAddRow(statusKey, reload, body, countEl, fields, select, canDele
                 }
             }
         })();
+        // ⚠ #1614(실패 시 포커스 복원)는 여기서 **구조적으로** 해소된다 — 그 버그의 원인이던 `input.disabled = true`
+        //  자체를 안 쓰기 때문이다(#1581 낙관적 생성). 잠금이 없으니 blur 가 안 뜨고, 그래서 바깥클릭 130ms
+        //  자동커밋이 예약될 일도, 같은 이름이 두 번 커밋돼 실패 토스트가 겹칠 일도 없다. 실패 경로가 이름을
+        //  되돌리며 focus() 하는 것도 그대로다(위 catch).
     };
     // 바깥클릭 — 드래프트 셀 팝오버가 열려 있거나 행 내부 포커스면 보류. 이름 있으면 생성(접기), 없으면 접기.
     //  ⚠ 팀원·마감·우선순위 팝오버는 `.pjv-pop` 이 아니라 `.pjv-menu`(마감=`.pjv-date-pop`) 를 쓴다 — `.pjv-pop` 만

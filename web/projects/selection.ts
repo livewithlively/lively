@@ -8,7 +8,7 @@
 //    · pjvDrag._init — pjvDragInit() 이 pointerover/pointerup 을 1회만
 //    · pjvReorder._init — pjvReorderInit() 이 pointermove/pointerup 을 1회만
 //   따라서 플래그(pjvDrag·pjvReorder·pjvBulkBarEl)와 그 init 함수는 절대 갈라놓지 않는다.
-import { api, appUrl, el, personFace, state, sv, toast } from '../core.js';
+import { api, appUrl, el, infoPop, personFace, state, sv, toast } from '../core.js';
 import { overlayBox } from '../learn.js';
 //  ⚠ 배럴(../projects.js) 경유 — copyText·openLocalWorkModal 의 소유는 projects/detail-sections.ts(R35) 지만
 //   그쪽은 detail.ts 를 되짚는 상세 서브트리라, 직결하면 selection→detail-sections→detail→selection 순환이
@@ -281,25 +281,39 @@ async function pjvBulkRunDefaultsModal(ctx) {
 
   const d = pjvRunDefaults(pid, projectRepos);
 
-  // 실행 위치(웹 중앙 컴퓨터 / 내 PC 로컬)
-  const whereWeb = el('input', { type: 'radio', name: 'rcd-where', value: 'web' });
-  const whereLocal = el('input', { type: 'radio', name: 'rcd-where', value: 'local' });
-  (d.where === 'local' ? whereLocal : whereWeb).checked = true;
-  const whereRow = el('div', { class: 'field', style: 'margin-top:2px' },
-    el('label', { class: 'field-label', text: '실행 위치' }),
-    el('label', { class: 'proj-sess-auto', style: 'margin-top:2px' }, whereWeb, el('span', { text: ' 웹(중앙 컴퓨터) — 누르면 곧장 세션을 만들어 실행 (설치 불필요·권장)' })),
-    el('label', { class: 'proj-sess-auto', style: 'margin-top:2px' }, whereLocal, el('span', { text: ' 내 PC(로컬) — 누르면 태스크 내용을 복사하고 내 PC 실행 안내를 띄움' })));
+  // ── 아래 UI 는 '새 AI 세션' 모달과 같은 언어를 쓴다(#1145) — 같은 일을 정하는 화면이 서로 다르게 생기면
+  //  사용자는 매번 새로 배워야 한다. 웹/내 PC 는 제목 줄 pill, 나머지는 문장 격자(.ig-grid).
 
-  // 실행기 + 모델 + 자동승인
-  const HKEYS = ['claude', 'codex'].filter((k) => harnessCat[k]);
-  const harnessSel = el('select', {}, ...HKEYS.map((k) => el('option', { value: k, text: harnessCat[k].label || k })));
-  const modelSel = el('select', {});
+  // 실행 위치(웹 중앙 컴퓨터 / 내 PC 로컬) — 제목 줄 pill 로. 아래 '코드 저장소 준비'가 이 값에 종속된다.
+  let whereVal: 'web' | 'local' = d.where === 'local' ? 'local' : 'web';
+  const whereBtns: Record<string, any> = {};
+  const whereSeg = el('div', { class: 'where-pill' }, ...[
+    { k: 'web', t: '☁️ 웹' }, { k: 'local', t: '💻 내 PC' },
+  ].map((w) => {
+    const b = el('button', { class: 'where-pill-btn' + (w.k === whereVal ? ' on' : ''), type: 'button', text: w.t });
+    b.onclick = (e: any) => {
+      e.preventDefault();
+      if (whereVal === w.k) return;
+      whereVal = w.k as any;
+      for (const k in whereBtns) whereBtns[k].classList.toggle('on', k === whereVal);
+      syncRepoField();
+    };
+    whereBtns[w.k] = b; return b;
+  }));
+
+  // 실행기 + 모델 — 세션 모달과 같은 문장 격자. 빈 모델은 '지난번 그대로'(그 뜻 그대로다 — 세션 모달 주석 참조).
+  //  #1695 — 목록은 **서버 카탈로그가 준 것 전부**(셸만 제외)다. 종전엔 ['claude','codex'] 를 여기 하드코딩해,
+  //   배선이 다 끝난 하네스(opencode #1519 · antigravity #1689)가 이 화면에서만 존재하지 않았다.
+  //   폴백 카탈로그(위)가 claude·codex 를 담고 있으므로 서버를 못 읽어도 종전 선택지는 그대로 뜬다.
+  const HKEYS = Object.keys(harnessCat).filter((k) => k !== 'shell');
+  const harnessSel = el('select', { class: 'term-input ig-sel' }, ...HKEYS.map((k) => el('option', { value: k, text: harnessCat[k].label || k })));
+  const modelSel = el('select', { class: 'term-input ig-sel' });
   const autoCb = el('input', { type: 'checkbox' });
-  const autoRow = el('label', { class: 'proj-sess-auto', style: 'margin-top:10px' }, autoCb, el('span', { text: ' 자동 승인 — 권한 확인 없이 바로 실행 (신뢰하는 작업에만)' }));
+  const autoRow = el('label', { class: 'term-auto' }, autoCb, el('span', { text: ' 자동 승인 — 권한 확인 없이 바로 실행해 빨라요. 신뢰하는 작업에만 켜세요.' }));
   const renderModels = () => {
     const cat = harnessCat[harnessSel.value] || { models: [''] };
     const cur = modelSel.value;
-    modelSel.replaceChildren(...(cat.models || ['']).map((m) => el('option', { value: m, text: m || '기본 모델' })));
+    modelSel.replaceChildren(...(cat.models || ['']).map((m) => el('option', { value: m, text: m || '지난번 그대로' })));
     if ((cat.models || []).includes(cur)) modelSel.value = cur;
     autoRow.style.display = (cat.hasAuto === false) ? 'none' : '';
   };
@@ -309,49 +323,67 @@ async function pjvBulkRunDefaultsModal(ctx) {
   if (((harnessCat[harnessSel.value] || { models: [] }).models || []).includes(d.model)) modelSel.value = d.model;
   autoCb.checked = d.autoApprove === true;   // #782 기본 해제(저장된 값이 있을 때만 켬)
 
-  // 워크트리 — 이 프로젝트 전용 작업 공간을 자동 준비(있으면 재사용). 브랜치명(project/<id>)은 프로젝트에서 자동 파생되므로 사용자에게 안 물어본다(#514 후속 피드백).
+  const runGrid = el('div', { class: 'ig-grid' },
+    el('span', { class: 'ig-lead', text: '실행은' }),
+    harnessSel,
+    el('span', { class: 'ig-mid', text: '로 실행하고, 모델은' }),
+    modelSel,
+    el('span', { class: 'ig-tail' }, document.createTextNode('를 씁니다.'),
+      infoPop('선택한 태스크를 맡길 **AI 와 모델**입니다.\n\n모델의 「지난번 그대로」는 그 값을 **넘기지 않는다**는 뜻입니다 — 그 AI 가 자기 설정(마지막에 고른 모델)으로 뜹니다.')));
+
+  // 워크트리 — 이 프로젝트 전용 작업 공간을 자동 준비(있으면 재사용). 브랜치명(project/<id>)은 자동 파생이라 안 묻는다(#514 후속).
   const wtChk = el('input', { type: 'checkbox' }); wtChk.checked = d.worktree !== false;
-  const wtRow = el('label', { class: 'proj-sess-auto', style: 'margin-top:2px' }, wtChk,
-    el('span', { text: ' 이 프로젝트 전용 작업 공간에서 격리 실행 — 매번 자동으로 준비되고(있으면 재사용) 다른 작업과 안 섞여요 (권장)' }));
-  const wtHint = el('div', { class: 'caption', style: 'margin-top:2px' },
-    '작업 공간은 프로젝트에 맞춰 자동으로 준비돼요 — 이름을 따로 정할 필요 없어요. (개발자용: git worktree · 브랜치 project/' + pid + ')');
+  const wtRow = el('label', { class: 'term-auto' }, wtChk,
+    el('span', { text: ' 이 프로젝트 전용 작업 공간에서 격리 실행 — 자동으로 준비되고(있으면 재사용) 다른 작업과 안 섞여요.' }));
 
   // 레포 선택 — 실행 전에 자동으로 가져올(provision) 레포. 기본은 관련 레포 전부.
   const repoChecks = projectRepos.map((n) => {
     const cb = el('input', { type: 'checkbox' });
     cb.checked = (d.repos === null) ? true : d.repos.includes(n);
-    return { n, cb, row: el('label', { class: 'proj-sess-auto', style: 'margin-top:2px' }, cb, el('span', { text: ' ' + n })) };
+    return { n, cb, row: el('label', { class: 'term-auto' }, cb, el('span', { text: ' ' + n })) };
   });
   const repoBox = projectRepos.length
-    ? el('div', {}, ...repoChecks.map((r) => r.row))
+    ? el('div', { class: 'term-checks' }, ...repoChecks.map((r) => r.row))
     : el('div', { class: 'caption', text: '이 프로젝트에 연결된 레포가 없어요 — 레포 없이 실행됩니다.' });
 
   // 코드 저장소 준비는 '내 PC' 실행 전용이다(#918) — work.mjs 한 줄(--worktree/--branch/레포)에만 실린다.
   //  웹(박스) 세션은 코드를 미리 받지 않고, 세션이 코드가 필요해진 시점에 lively_local_repo_worktree 로 스스로 뜬다.
   //  그래서 웹을 고른 상태에선 숨긴다 — 남겨두면 '준비해준다'는 거짓 약속이 된다(웹에선 아무 효과도 없다).
-  const repoField = el('div', { class: 'field', style: 'margin-top:14px' },
-    el('label', { class: 'field-label', text: '코드 저장소 준비 (내 PC 실행 시)' }),
-    el('div', { class: 'caption', text: '내 PC에서 실행할 때 아래 레포를 준비합니다(있으면 재사용). 코드 작업이 아니면 모두 꺼도 돼요.' }),
-    wtRow, wtHint,
-    el('div', { style: 'margin-top:8px' }, repoBox));
-  const syncRepoField = () => { repoField.style.display = whereLocal.checked ? '' : 'none'; };
-  whereWeb.onchange = syncRepoField; whereLocal.onchange = syncRepoField; syncRepoField();
+  //  세션 모달에서 레포·워크트리를 걷어낸 것과 같은 이유로 **기본 화면에서는 접어 둔다**(#1145).
+  const repoBody = el('div', { class: 'term-adv-body', hidden: '' },
+    el('div', { class: 'caption', text: '내 PC에서 실행할 때 아래 레포를 준비합니다(있으면 재사용). 코드 작업이 아니면 그대로 두세요 — 세션이 필요해지면 스스로 가져옵니다.' }),
+    el('div', { class: 'term-checks' }, wtRow),
+    repoBox);
+  const repoCaret = el('span', { class: 'term-fold-caret', text: '▸' });
+  const repoToggle = el('button', { class: 'term-fold', type: 'button' }, repoCaret, el('b', { text: '코드 저장소 준비' }),
+    el('span', { class: 'term-fold-sum', text: ' · 내 PC 실행에만 적용' }));
+  repoToggle.onclick = (e: any) => {
+    e.preventDefault();
+    const o = repoBody.hasAttribute('hidden');
+    if (o) repoBody.removeAttribute('hidden'); else repoBody.setAttribute('hidden', '');
+    repoCaret.textContent = o ? '▾' : '▸';
+  };
+  const repoField = el('div', {}, repoToggle, repoBody);
+  const syncRepoField = () => { repoField.style.display = whereVal === 'local' ? '' : 'none'; };
+  syncRepoField();
 
   const saveBtn = el('button', { class: 'btn btn-primary', text: '기본값 저장' });
   const cancelBtn = el('button', { class: 'btn btn-ghost', text: '취소', onclick: () => back.remove() });
   const back = overlayBox('클로드로 실행 — 기본값',
     el('p', { class: 'admin-hint', text: '‘클로드로 실행’(플로팅 바)을 누를 때 쓰는 기본값이에요. 여기서 바꾸면 다음 실행부터 이 값으로 준비됩니다. (이 프로젝트에만 적용)' }),
-    whereRow,
-    el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '실행기' }), harnessSel),
-    el('div', { class: 'field', style: 'margin-top:12px' }, el('label', { class: 'field-label', text: '모델' }), modelSel),
-    autoRow,
+    runGrid,
+    el('div', { class: 'term-checks' }, autoRow),
     repoField,
     el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
+  back.classList.add('ov-back--center');   // 세션 모달과 같은 세로 정렬(#1145)
+  const head = back.querySelector('.ov-head');
+  if (head) head.insertBefore(whereSeg, head.querySelector('.btn') || null);   // 제목 줄 pill
+
   saveBtn.onclick = () => {
     const chosen = repoChecks.filter((r) => r.cb.checked).map((r) => r.n);
     const allChosen = projectRepos.length > 0 && chosen.length === projectRepos.length;
     pjvSaveRunDefaults(pid, {
-      where: whereLocal.checked ? 'local' : 'web',
+      where: whereVal,
       harness: harnessSel.value,
       model: modelSel.value || '',
       autoApprove: autoCb.checked,

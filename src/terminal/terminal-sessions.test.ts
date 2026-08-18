@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { detectAwaiting, modeEnvArgs, canSeeSession, resolveAgentPhase, parseReportedPhase, isPhaseFresh, isActivityProgress, PHASE_TTL_SEC } from "./terminal-sessions.js";
 // 배럴(terminal-sessions.ts)엔 새 심볼을 늘리지 않는다 — 그 파일의 재수출 집합은 #1313 R15 분할의 계약이다.
-import { harnessLaunchArgv, harnessLoginArgv, harnessFailNotice } from "./catalog.js";
+import { harnessLaunchArgv, harnessLoginArgv, harnessFailNotice, HARNESSES, RESUME_ID_RE } from "./catalog.js";
 import { SHELL_CMDS, isAgentOffline } from "./phase.js";  // E12 — 런처가 pane 포그라운드를 무엇으로 보이게 하는가(#1535)
 
 let pass = 0;
@@ -246,8 +246,66 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
     const out = runLaunch(harnessLaunchArgv("codex", ["sh", "-c", "exit 127"]), ALIVE);
     ok2(/SHELL_ALIVE/.test(out), "E3 다른 실패 코드(127)도 세션을 살린다(코드 값에 무관)");
   }
-  // E4 — 새로 도입한 헬퍼의 **빈 입력**: 셸 세션은 감쌀 하네스가 없다.
-  ok2(harnessLaunchArgv("shell", []).length === 0, "E4 셸 세션(빈 cmd)은 감싸지 않는다");
+  // E4 — 새로 도입한 헬퍼의 **빈 입력**: POSIX 셸 세션은 감쌀 하네스가 없다.
+  ok2(harnessLaunchArgv("shell", [], "linux").length === 0, "E4 POSIX 셸 세션(빈 cmd)은 감싸지 않는다");
+  ok2(harnessLaunchArgv("shell", [], "darwin").length === 0, "E4 darwin 도 동일");
+
+  // ── E4c ★ Windows pane 셸의 UTF-8 프렐류드(#1541) ──────────────────────────────
+  //  계기(실측 hammurabi): pane 은 chcp 949 · [Console]::OutputEncoding=ks_c_5601-1987 로 시작해
+  //   `node x.mjs | Out-String` 과 `type <UTF-8 로그>` 의 한글이 깨졌다(직접 출력은 정상 — 읽는 층만 틀렸다).
+  //  이 분기는 mac/linux CI 에서 **한 번도 실행되지 않으므로**(#1510 §5) 계약을 정적으로 못박는다.
+  {
+    const sh = harnessLaunchArgv("shell", [], "win32");
+    // 배선 단언 — argv 가 비면 아래 루프·정규식이 **아무것도 검사하지 않고 통과한다**(실측: red 상태에서
+    //  빈 배열이면 `.test(undefined)` 가 "undefined" 를 검사해 true 가 됐다). 먼저 존재를 못박는다.
+    ok2(sh.length === 5, `E4c 배선: Windows 셸 argv 가 5토큰이어야 한다 — 실제 ${sh.length}: ${JSON.stringify(sh)}`);
+    ok2(sh[0] === "powershell", `E4c Windows 셸 세션은 powershell 을 띄운다: ${sh[0]}`);
+    ok2(sh.includes("-NoExit"), "E4c -NoExit — 프렐류드 뒤 대화형 프롬프트로 남는다(셸 세션이니까)");
+    ok2(!sh.includes("-NoProfile"), "E4c 사용자 프로필은 그대로 로드한다(사용자 설정이 이긴다)");
+    const i = sh.indexOf("-EncodedCommand");
+    ok2(i > 0 && i === sh.length - 2, "E4c -EncodedCommand 페이로드는 마지막 토큰이다");
+
+    // ★ psmux 통과 조건 — 이 계약이 깨지면 스크립트가 pane 에 도착하지 못한다.
+    //  psmux 3.3.7 은 인자의 `"` · `'` · 탭을 삼키고(opt-json.test.ts), 공백은 인자를 쪼갠다.
+    for (const tok of sh) {
+      ok2(!/["'\t ]/.test(tok), `E4c ★ 토큰에 psmux 소실·분해 문자가 없다: ${JSON.stringify(tok)}`);
+    }
+    const b64 = sh[sh.length - 1];
+    ok2(/^[A-Za-z0-9+/]+={0,2}$/.test(b64), `E4c ★ 페이로드는 base64 알파벳만 (${b64.length}자)`);
+
+    // 페이로드가 **실제로 네 축을 다 세우는지** — UTF-16LE 로 되돌려 내용을 본다(문구가 아니라 설정 대상).
+    const ps = Buffer.from(b64, "base64").toString("utf16le");
+    ok2(/chcp\s+65001/.test(ps), `E4c 네이티브 자식용 콘솔 코드페이지(chcp 65001)를 세운다`);
+    ok2(/\[Console\]::OutputEncoding\s*=/.test(ps), "E4c ★ 파이프 정상화의 핵심([Console]::OutputEncoding)을 세운다 — chcp 만으론 안 고쳐진다(실측)");
+    ok2(/\[Console\]::InputEncoding\s*=/.test(ps), "E4c 타이핑한 한글이 네이티브 자식에게 갈 때(InputEncoding)");
+    ok2(/\$OutputEncoding\s*=/.test(ps), "E4c 네이티브 자식 stdin 으로 보낼 때($OutputEncoding)");
+    ok2(/UTF8Encoding\(\$false\)/.test(ps), "E4c BOM 없는 UTF-8 (BOM 이 붙으면 파이프 첫 바이트가 오염된다)");
+    // 프렐류드가 실패해도 셸은 떠야 한다 — 설정마다 try/catch.
+    ok2((ps.match(/try\{/g) || []).length >= 4, "E4c 설정마다 try/catch — 한 줄이 실패해도 셸은 뜬다");
+
+    // 하네스 세션은 감싸지 않는다 — 감싸려면 하네스 argv 를 PowerShell 문자열에 이어붙여야 하고
+    //  그게 catalog.ts 가 막는 인젝션 경계다(E4b 와 같은 규칙).
+    const h = harnessLaunchArgv("claude", ["claude", "--model", "opus"], "win32");
+    ok2(h.join(" ") === "claude --model opus", `E4c 하네스 세션엔 프렐류드를 끼우지 않는다: ${h.join(" ")}`);
+    ok2(!h.includes("-EncodedCommand"), "E4c ★ 하네스 argv 가 PowerShell 스크립트에 섞이지 않는다");
+
+    // 엣지: 새로 도입한 분기에 cmd 가 아예 없을 때(null/undefined) 크래시하지 않는다.
+    ok2(harnessLaunchArgv("shell", null as unknown as string[], "win32")[0] === "powershell", "E4c cmd=null 도 셸 세션으로 취급");
+    ok2(harnessLaunchArgv("shell", undefined as unknown as string[], "linux").length === 0, "E4c POSIX cmd=undefined 는 빈 argv");
+    // 경계: 빈 문자열 한 개는 length>0 이므로 하네스 취급(프렐류드로 갈아치우지 않는다).
+    ok2(harnessLaunchArgv("shell", [""], "win32").length === 1, "E4c cmd=[''] 는 하네스 취급(길이 1 유지)");
+  }
+  // E4b ★ Windows(psmux 노드)는 감싸지 않는다 (#1541 실측) — 이 런처는 POSIX 셸 스크립트인데 pane 셸이
+  //  PowerShell 이라 그대로 파싱돼(`'[' 뒤에 형식 이름이 없습니다`) 하네스가 시작조차 못 하고 세션이 즉사했다.
+  //  Windows 분기는 mac/linux CI 에서 한 번도 실행되지 않으므로(#1510 §5) 계약을 여기서 못박는다.
+  {
+    const win = harnessLaunchArgv("claude", ["claude", "--model", "opus"], "win32");
+    ok2(win.join(" ") === "claude --model opus", "E4b Windows 는 하네스를 직접 띄운다(sh 래퍼 없음)");
+    ok2(!win.includes("sh") && !win.some((a) => a.includes('[ "$rc"')), "E4b Windows argv 에 POSIX 스크립트가 섞이지 않는다");
+    // POSIX 는 종전 그대로 감싼다(#1516 사후회복 유지) — 회귀 방지.
+    const posix = harnessLaunchArgv("claude", ["claude"], "linux");
+    ok2(posix[0] === "sh" && posix[1] === "-c" && posix[2].includes('[ "$rc" -eq 0 ]'), "E4b POSIX 는 종전대로 런처로 감싼다");
+  }
   // E5 — 인젝션: 하네스·플래그는 위치인자로만 들어가 셸이 값을 해석하지 않는다.
   {
     const out = runLaunch(harnessLaunchArgv("codex", ["echo", "$(echo PWNED)"]));
@@ -270,6 +328,77 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
   ok2(harnessFailNotice("codex").includes("device-auth"), "E11a codex 안내는 device-auth 를 지목한다");
   ok2(harnessFailNotice("claude").includes("/login"), "E11b claude 안내는 TUI 안 /login 을 지목한다");
   ok2(harnessFailNotice("gemini").includes("gemini"), "E11c 모르는 하네스도 그 이름으로 재실행 안내를 준다");
+  // E11d~ (#1695) — 안내에 적히는 명령은 **사용자가 그대로 치는 문자열**이다. 라벨도 내부 식별자도 아닌
+  //  실행 파일이어야 한다: antigravity 의 명령은 `agy` 라, 종전 폴백('그 이름으로 재실행')을 그대로 두면
+  //  하네스가 죽은 뒤 안내대로 쳤는데 command not found 로 **두 번** 막힌다.
+  //  ⚠ 명령 줄은 4칸 들여쓰기 한 줄이다 — 그 형태로 봐야 '문구 어딘가에 단어가 있다'와 구분된다.
+  const cmdLines = (notice: string): string[] =>
+    notice.split("\n").filter((l) => /^ {4}\S/.test(l)).map((l) => l.trim());
+  {
+    const n = harnessFailNotice("antigravity");
+    ok2(cmdLines(n).includes("agy"), "E11d antigravity 안내가 주는 명령은 실행 파일(agy)");
+    ok2(!cmdLines(n).includes("antigravity"), "E11e 내부 식별자를 명령으로 주지 않는다(command not found)");
+    ok2(n.includes("Antigravity"), "E11f 무엇이 죽었는지는 사람이 읽는 이름으로 알린다");
+    ok2(/주소|코드/.test(n), "E11g agy 는 로그인 명령이 없어 하네스가 띄우는 절차를 대신 안내한다");
+  }
+  ok2(cmdLines(harnessFailNotice("opencode")).some((c) => c.startsWith("opencode auth login")),
+    "E11h opencode 안내는 제공자 로그인 명령을 지목한다");
+  ok2(cmdLines(harnessFailNotice("codex")).some((c) => c.includes("codex login --device-auth")),
+    "E11i codex 는 종전대로 로그인 한 줄이 먼저다(무회귀)");
+  // 새로 도입한 '로그인 힌트' 필드가 **없는** 하네스 — 꼬리에 빈 줄·빈 항목이 붙으면 안 된다.
+  //  (필드를 도입하면 '그 필드가 빈 경우'라는 엣지가 새로 생긴다.)
+  {
+    const n = harnessFailNotice("shell");
+    ok2(!/\n\n─+$/.test(n) && !/\n\n\n/.test(n), "E11j 힌트 없는 하네스는 안내 꼬리에 빈 줄이 안 붙는다");
+    // ⚠ '빈 명령 줄이 없다'만 단언하면 vacuous 다 — 빈 줄은 cmdLines 필터에 애초에 안 잡혀 항상 통과한다(실측).
+    //  실행 파일이 비어도 **무언가 칠 것**을 줘야 한다는 쪽으로 단언한다.
+    ok2(cmdLines(n).includes("shell") && !/^ {4}\s*$/m.test(n),
+      "E11k 실행 파일이 빈 하네스는 빈 명령 줄 대신 그 이름으로 안내한다");
+  }
+
+  // E13 (#1695) — 웹 세션 카탈로그: **배선이 끝난 하네스로 세션을 만들 수 있는가.**
+  //  #1519(opencode)·#1689(antigravity) 로 훅·MCP·자산은 다 붙었는데 이 표에만 없어서, 웹에서는 그 하네스로
+  //  세션을 여는 것 자체가 불가능했다(선택지에 없으면 서버 검증이 400 을 낸다).
+  {
+    const keys = HARNESSES.map((h) => h.key);
+    ok2(keys.includes("opencode") && keys.includes("antigravity"), "E13a 배선된 4하네스가 모두 세션 선택지에 있다");
+    const agy = HARNESSES.find((h) => h.key === "antigravity");
+    ok2(agy?.bin === "agy", "E13b antigravity 의 실행 파일은 agy(key 로 spawn 하면 ENOENT)");
+    ok2(agy?.autoApproveFlag === "--dangerously-skip-permissions", "E13c 자동승인은 그 하네스가 실제로 받는 플래그");
+    ok2((agy?.flags.find((f) => f.name === "--effort")?.choices || []).join(",") === ",low,medium,high",
+      "E13d agy 의 추론강도는 3단계 — 다른 하네스의 목록을 복사해 두면 고른 값이 거부된다");
+    ok2(HARNESSES.find((h) => h.key === "opencode")?.autoApproveFlag === "--auto", "E13e opencode 자동승인은 --auto");
+    ok2(HARNESSES.every((h) => h.key === "shell" || !!h.bin), "E13f 셸 말고는 실행 파일이 반드시 있다");
+    // 어느 하네스든 '하네스 기본'을 고를 수 있어야 낡은 모델 문자열에 사용자가 묶이지 않는다.
+    const modelFlags = HARNESSES.flatMap((h) => h.flags.filter((f) => f.name === "--model"));
+    ok2(modelFlags.length > 0 && modelFlags.every((f) => (f.choices || [])[0] === ""),
+      "E13g 모델 목록의 첫 옵션은 언제나 '하네스 기본'(빈 값)");
+  }
+  ok2(harnessLoginArgv("antigravity") === null, "E13h agy 는 로그인 서브커맨드가 없어 로그인 전용 세션을 만들지 않는다");
+  ok2(harnessLoginArgv("opencode") === null, "E13i opencode 로그인은 대화형 제공자 선택이라 무인 한 줄이 아니다");
+
+  // E14 (#1711) — **이어서 열기가 그 대화를 실제로 이어받는가.** 종전엔 이 주입이 sessions.ts 에서
+  //  `harness.key === "claude"` 로 잠겨 있어, 다른 하네스는 복원해도 늘 새 대화로 시작했다(상민님 신고).
+  //  수단은 하네스마다 다르고 **위치도 다르다**(codex 는 플래그가 아니라 서브커맨드).
+  {
+    const r = (k: string, id?: string): string[] => HARNESSES.find((h) => h.key === k)?.resumeArgv?.(id) ?? [];
+    ok2(r("claude", "u1").join(" ") === "--resume u1", "E14a claude 는 --resume <id>");
+    ok2(r("claude").join(" ") === "--resume", "E14b id 를 모르면 피커(인자 없는 --resume)");
+    ok2(r("codex", "s1")[0] === "resume", "E14c codex 는 서브커맨드 — bin 바로 뒤 첫 자리여야 한다(플래그가 아니다)");
+    ok2(r("codex").join(" ") === "resume --last", "E14d codex 피커는 대화형이라 무인 복원엔 --last");
+    ok2(r("opencode", "ses_1").join(" ") === "--session ses_1", "E14e opencode 는 --session <id>");
+    ok2(r("antigravity", "c1").join(" ") === "--conversation c1", "E14f antigravity 는 --conversation <id>");
+    ok2(r("antigravity").join(" ") === "--continue", "E14g id 를 모르면 가장 최근 대화");
+    ok2(r("shell", "x").length === 0 && r("shell").length === 0, "E14h 셸은 이어받을 대화가 없다 — 아무 인자도 만들지 않는다");
+    // 새 하네스가 조용히 빠지지 않게 — 빠지면 그 하네스만 '이어서 열기'가 새 대화로 열린다(발견이 어렵다).
+    ok2(HARNESSES.filter((h) => h.bin).every((h) => typeof h.resumeArgv === "function"),
+      "E14i 실행 파일이 있는 하네스는 모두 이어받기 수단을 가진다");
+    // id 형식은 하네스마다 다르다 — 하나라도 막히면 그 하네스는 정밀 복원이 통째로 400 이 된다.
+    ok2(RESUME_ID_RE.test("ses_8f3a_bc"), "E14j opencode 형 id(밑줄)가 형식 검증을 통과한다");
+    ok2(RESUME_ID_RE.test("0199b1a2-1f3e-7c44-9c2a-3b0f5d6e7a8b"), "E14k UUID 형 id 가 통과한다");
+    ok2(!RESUME_ID_RE.test("../etc/passwd") && !RESUME_ID_RE.test("a b") && !RESUME_ID_RE.test(""),
+      "E14l 경로·공백·빈값은 막는다");
+  }
 
   // E12 — 런처의 **부작용**: pane 의 foreground 프로세스가 무엇으로 보이는가 (#1535).
   //  래퍼를 씌운다는 건 pane 에 프로세스를 하나 더 만든다는 뜻이다. job control 이 없으면 그 래퍼

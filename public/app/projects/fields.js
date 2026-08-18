@@ -10,7 +10,7 @@
 //  백엔드 task_field/task_field_value(루트 프로젝트 단위 정의 + 태스크별 값). FIELD_TYPES 는 store 의 것과 1:1.
 //  아이콘은 우리 서비스 톤(단색 라인, currentColor, 형태로 구분 — 컬러 이모지 금지)으로 직접 제작.
 // ════════════════════════════════════════════════════════════════════════════
-import { api, el, toast } from '../core.js';
+import { api, busy, el, toast } from '../core.js';
 import { overlayBox } from '../learn.js';
 import { pjvPopover } from './popover.js';
 import { pjvFieldIcon, pjvPlusIcon } from './icons.js';
@@ -173,7 +173,7 @@ function pjvOpenFieldsPanel(anchor, projectId, reload, listId) {
             }
         };
         const renderExisting = async () => {
-            list.replaceChildren(el('div', { class: 'pjv-fields-empty', text: '불러오는 중…' }));
+            busy(list, el('div', { class: 'pjv-fields-empty', text: '불러오는 중…' }));
             if (catalog === null) {
                 try {
                     catalog = await api('/api/ui/v6/projects/' + projectId + '/field-catalog').then((d) => d.fields || []);

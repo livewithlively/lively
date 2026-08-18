@@ -6,7 +6,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import os from "node:os";
-import { TMUX_BIN } from "./catalog.js";
+import { TMUX_BIN, tenantSlug } from "./catalog.js";
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 
 const execFileAsync = promisify(execFile);
@@ -25,13 +25,70 @@ const TMUX_ENV: NodeJS.ProcessEnv = (() => {
   return env;
 })();
 
+/**
+ * tmux 실행 seam — 기본은 **로컬 execFile**(설정 없으면 종전과 완전히 동일하다).
+ *
+ * 왜 필요한가: 게이트웨이가 tmux 서버와 **같은 호스트에 있다**는 가정이 이 함수에 박혀 있다.
+ *  그 가정이 성립하지 않는 배포가 있다 — 예컨대 게이트웨이는 컨테이너 안, tmux 서버는 호스트에 두는 형태.
+ *  그때 여기만 갈아끼우면 상위 모듈(phase·profiles·write-cap·sessions)은 한 줄도 안 바뀐다.
+ *
+ * 계약: 지정한 프로그램에 **tmux argv 를 그대로 이어 붙여** 실행한다. stdout 이 tmux 의 stdout 이고,
+ *  0 이 아닌 종료코드는 예외다(로컬 실행과 같은 규약 — 상위의 try/catch 가 그대로 동작해야 한다).
+ *
+ * ⚠ **호출 시점에 읽는다.** 모듈 로드 시점에 굳히면 부팅 순서·테스트에서 값이 안 먹는다
+ *  (세션 spawn 훅에서 같은 함정을 밟았다).
+ * ⚠ attach(`tmux -CC`)는 이 경로가 아니다 — 그건 PTY 라 terminal-pty 가 따로 다룬다.
+ */
+export function tmuxExecArgv(): string[] {
+  const raw = (process.env.LIVELY_TMUX_EXEC || "").trim();
+  if (!raw) return [];
+  if (!raw.includes("{slug}")) return raw.split(/\s+/);
+  // ── 테넌트별 중계(#1437 v1 5단계) ──
+  //  게이트웨이 하나가 여러 워크스페이스를 서비스하면 **tmux 서버도 워크스페이스마다 다르다.**
+  //  중계 명령에 `{slug}` 를 넣어 그 테넌트의 tmux 컨테이너를 가리키게 한다.
+  //   예: `docker exec -u 200001 lvly-s-{slug}-tmux tmux`
+  const slug = tenantSlug();
+  // ★★ **로컬 tmux 로 폴백하지 않는다.** 폴백하면 게이트웨이 호스트에서 tmux 가 돌아
+  //  ⓐ 그 세션이 엉뚱한 자리에 생기고 ⓑ 모든 테넌트가 **같은 tmux 서버**를 공유하게 된다
+  //  (= 남의 세션이 목록에 보인다). 컨텍스트를 잃은 건 배선 버그이고, 배선 버그는 오류로 드러나야 한다.
+  if (!slug) throw new Error("tmux 중계에 테넌트 컨텍스트가 필요합니다 — 컨텍스트 밖에서 호출됐습니다");
+  return raw.replace("{slug}", slug).split(/\s+/);
+}
+
 export async function tmux(args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync(TMUX_BIN, args, { timeout: 5000, env: TMUX_ENV });
+  const relay = tmuxExecArgv();
+  const [bin, ...prefix] = relay.length ? relay : [TMUX_BIN];
+  const { stdout } = await execFileAsync(bin!, [...prefix, ...args], { timeout: 5000, env: TMUX_ENV });
   return stdout;
 }
 export async function tmuxQuiet(args: string[]): Promise<void> { try { await tmux(args); } catch { /* 비치명 */ } }
 export async function getOpt(name: string, opt: string): Promise<string> {
   try { return (await tmux(["show-options", "-t", name, "-v", opt])).trim(); } catch { return ""; }
+}
+
+// ── 구조값(JSON)을 user option 에 싣는 단일 통로 (#1541) ──────────────────────
+// **왜 평문 JSON 을 그대로 안 쓰나** — Windows 네이티브 노드가 쓰는 멀티플렉서(psmux)는 옵션 값에서
+//  따옴표를 벗긴다. 실측(psmux 3.3.7, Windows Server 2022):
+//     보냄 {"readonly":true} → 받음 {readonly:true}   ·   보냄 ["yoon","jang"] → 받음 [yoon,jang]
+//  그 값은 JSON.parse 가 안 되므로 세션 플래그·초대 목록이 통째로 유실된다(초대 유실 = 접근이 조용히
+//  비공개로 떨어진다 — 보안 방향으로는 안전하지만 기능은 죽는다). tmux 는 안 벗기지만, **같은 게이트웨이
+//  코드가 두 구현을 모두 상대**하므로 양쪽에서 무손실인 표현으로 통일한다.
+//  base64 는 같은 실측에서 왕복 무손실이었다(백슬래시·한글·`$`·`#{}`·`;`·`=` 도 안전, 따옴표·탭만 소실).
+export function encodeOptJson(value: unknown): string {
+  return Buffer.from(JSON.stringify(value), "utf8").toString("base64");
+}
+// 읽기는 **구·신 둘 다** 받는다. 이미 떠 있는 세션엔 평문 JSON 이 들어 있고, 그 세션들은 재생성 없이
+//  계속 살아야 한다(tmux 서버는 게이트웨이보다 오래 산다 — 배포로 세션을 잃게 만들면 안 된다).
+//  판별은 첫 글자로 한다: base64 알파벳엔 `{`·`[` 가 없으므로 그 둘로 시작하면 레거시 평문이 확실하다.
+//  ⚠ 따옴표가 벗겨진 값(`{readonly:true}`)도 `{` 로 시작해 평문 경로로 가고, 거기서 JSON.parse 가 실패해
+//   fallback 으로 떨어진다 — 즉 psmux 에 쓰인 옛 값도 '조용한 오독' 없이 안전하게 기본값이 된다.
+export function decodeOptJson<T>(raw: string, fallback: T): T {
+  const s = (raw || "").trim();
+  if (!s) return fallback;
+  try {
+    const text = (s[0] === "{" || s[0] === "[") ? s : Buffer.from(s, "base64").toString("utf8");
+    return JSON.parse(text) as T;
+  } catch { return fallback; }
 }
 
 const ID_RE = SESSION_ID_RE;   // 세션 id 형식의 단일 진실원천 — 게이트웨이가 헤더로 받은 세션도 같은 자로 잰다(#852)

@@ -24,7 +24,7 @@ const url = `postgres://postgres:pw@127.0.0.1:${PORT}/postgres`;
 let pass = 0; const ok = (n) => { pass++; console.log(`ok  ${n}`); };
 const sh = (c) => execSync(c, { stdio: ["ignore", "pipe", "pipe"] }).toString();
 
-try { sh(`docker rm -f ${CNAME} 2>/dev/null`); } catch { /* */ }
+try { sh(`docker rm -f -v ${CNAME} 2>/dev/null`); } catch { /* */ }
 console.log("· pg 컨테이너 기동…");
 execFileSync("docker", ["run", "-d", "--name", CNAME, "-e", "POSTGRES_PASSWORD=pw",
   "-p", `${PORT}:5432`, "postgres:16-alpine"], { stdio: "ignore" });
@@ -186,5 +186,5 @@ try {
   //  'Connection terminated unexpectedly' 로 종료코드가 1 이 된다(단언은 전부 통과했는데 실패로 보인다).
   await itemsPool.end();
 } finally {
-  try { sh(`docker rm -f ${CNAME}`); } catch { /* */ }
+  try { sh(`docker rm -f -v ${CNAME}`); } catch { /* */ }
 }

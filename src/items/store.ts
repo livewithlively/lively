@@ -179,7 +179,7 @@ export async function setConnectorState(
 ): Promise<void> {
   await itemsPool.query(
     `INSERT INTO connector_state(system, instance, cursor) VALUES($1,$2,$3::jsonb)
-     ON CONFLICT (system, instance) DO UPDATE SET cursor=EXCLUDED.cursor, updated_at=now()`,
+     ON CONFLICT (tenant_id, system, instance) DO UPDATE SET cursor=EXCLUDED.cursor, updated_at=now()`,
     [system, instance, JSON.stringify(cursor)],
   );
 }
@@ -251,7 +251,7 @@ async function resolveActor(
       const joined = (await client.query(
         `INSERT INTO person_identity(person_id, system, instance, external_id, email, display_name, origin, state)
          VALUES($1,$2,$3,$4,$5,$6,'email-join','proposed')
-         ON CONFLICT (system, external_id) DO NOTHING
+         ON CONFLICT (tenant_id, system, external_id) DO NOTHING
          RETURNING person_id`,
         [personId, system, instance, actor.external_id, newEmail, newName],
       )).rows[0] as { person_id: string } | undefined;
@@ -277,13 +277,13 @@ async function resolveActor(
   const kind = actor.is_bot ? "agent" : "human";
   await client.query(
     `INSERT INTO person(id, display_name, kind) VALUES($1,$2,$3)
-       ON CONFLICT (id) DO UPDATE SET display_name = COALESCE(EXCLUDED.display_name, person.display_name)`,
+       ON CONFLICT (tenant_id, id) DO UPDATE SET display_name = COALESCE(EXCLUDED.display_name, person.display_name)`,
     [fallbackId, newName, kind],
   );
   const ins = (await client.query(
     `INSERT INTO person_identity(person_id, system, instance, external_id, email, display_name, origin, state)
      VALUES($1,$2,$3,$4,$5,$6,'observed','proposed')
-     ON CONFLICT (system, external_id) DO UPDATE SET
+     ON CONFLICT (tenant_id, system, external_id) DO UPDATE SET
        email = COALESCE(EXCLUDED.email, person_identity.email),
        display_name = COALESCE(EXCLUDED.display_name, person_identity.display_name),
        updated_at = now()

@@ -19,7 +19,7 @@ export async function initOrgCore(pool: Pool): Promise<void> {
       version INT NOT NULL DEFAULT 1,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_by TEXT);
-    INSERT INTO org_profile(id) VALUES(1) ON CONFLICT (id) DO NOTHING;
+    INSERT INTO org_profile(id) VALUES(1) ON CONFLICT DO NOTHING;
     ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS timezone TEXT;
   `);
 
@@ -72,6 +72,17 @@ export async function initOrgCore(pool: Pool): Promise<void> {
     -- harness_machine_alias = 머신별 사용자 지정 별명(#893 후속). 형태: { "<machine_id>": "집 맥북" }.
     --  관측(host)과 별개다 — 세션 report 는 host 만 관측하고 이 별명은 안 건드린다(사용자가 직접 지정, 리포트에 안 실림).
     ALTER TABLE org_member ADD COLUMN IF NOT EXISTS harness_machine_alias JSONB NOT NULL DEFAULT '{}'::jsonb;
+    -- liv_profile = 리브(#1631)가 **이 사람에 대해 아는 것**. 형태:
+    --   { "work": { "asis": "…", "tobe": "…", "at": "<iso>", "by": "ai"|"self" },
+    --     "decisions": [ { "at", "what", "why", "by" } ],
+    --     "declined":  [ { "at", "key", "why" } ] }
+    -- ⚠ **리브의 기억은 대화가 아니라 여기 있다.** 세션은 죽고 컨텍스트는 날아가므로, 다음 세션의 리브가
+    --  다시 묻지 않으려면 그 사이의 앎이 서버에 남아야 한다(기획 불변식: 리브 세션은 교체 가능하다).
+    -- ⚠ **서버가 이미 아는 것은 절대 복제하지 않는다** — 온보딩 진행·파이프라인·하네스 인벤토리는 각자 자기
+    --  자리에서 라이브 계산된다. 여기 담는 건 서버가 **볼 수 없는 것**뿐이다: 그 사람의 업무 방식(ASIS/TOBE),
+    --  왜 그렇게 설정했는지, 그리고 **무엇을 거절했는지**. declined 가 없으면 리브는 매번 같은 걸 권하는
+    --  잔소리꾼이 된다(#850 이 멤버 온보딩을 세션 주입에서 뺀 이유와 같은 함정, 상시 에이전트라 더 크다).
+    ALTER TABLE org_member ADD COLUMN IF NOT EXISTS liv_profile JSONB NOT NULL DEFAULT '{}'::jsonb;
   `);
   await pool.query(`
     ${ensureCheck("org_member", {

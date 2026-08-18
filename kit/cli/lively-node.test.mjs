@@ -12,13 +12,16 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
-// `lively node`(워커 노드 상시화)는 **POSIX 전용 사양**이다 — tmux 로 세션을 띄우고 launchd/systemd 로
-//  상시화하며, 정지는 pkill 로 한다. 제품이 그렇게 선언한다(cmd-node.mjs: "미지원 OS: win32 — Windows 는
-//  WSL2 안에서 실행하세요"). 그러니 윈도우에서 이 테스트가 빨간불인 건 **결함이 아니라 비목표**다.
-//  가드를 명시해 둔다(짝인 bootstrap-node-gate.test.mjs 와 같은 관례) — 안 그러면 CI 를 필수 게이트로
-//  올릴 수 없고, 매번 "이건 원래 안 되는 거였나"를 다시 조사하게 된다(#1510).
+// 이 파일은 **POSIX 상시화 경로의 e2e** 다 — tmux + launchd/systemd + pkill 을 스텁으로 가로채 검증한다.
+//  ⚠ 2026-08-05(#1541) 사양 변경: Windows 는 더 이상 비목표가 아니다. psmux(ConPTY 네이티브 tmux 구현) +
+//   작업 스케줄러로 **네이티브 지원**한다(WSL2 아님). 다만 그 경로는 여기서 못 돈다 — launchctl/systemctl
+//   스텁도, pkill 도 Windows 엔 없다. 그래서 갈라 둔다:
+//     · Windows 계약(경로 탐지·작업 스케줄러 XML) → `kit/cli/node-win-contract.test.mjs`(순수함수, 전 플랫폼)
+//     · Windows 실기기 등록·기동                  → Windows VM e2e(프로젝트 #1541)
+//  가드를 명시해 두는 관례는 유지한다(짝인 bootstrap-node-gate.test.mjs 와 동일) — 안 그러면 매번
+//  "이건 원래 안 되는 거였나"를 다시 조사하게 된다(#1510).
 if (process.platform === "win32") {
-  console.log("skip — `lively node` 는 POSIX 전용(tmux·launchd/systemd·pkill). Windows 는 WSL2 안에서 실행한다(사양 비목표).");
+  console.log("skip — 이 파일은 POSIX 상시화 e2e(launchd/systemd/pkill 스텁). Windows 경로는 node-win-contract.test.mjs + 실기기 e2e 가 덮는다.");
   process.exit(0);
 }
 

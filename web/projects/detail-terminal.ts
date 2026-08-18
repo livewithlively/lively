@@ -1,16 +1,15 @@
 // projects/detail-terminal.ts — #1405 W1: detail-sections.ts 분할 ③.
-//  프로젝트 상세 ② '터미널 세션' 섹션 + 세션 생성/이름변경/삭제 폼.
-//  ⚠ watchProvision 의 폴링 타이머는 이 모듈이 소유한다(노드가 DOM 에서 빠지면 스스로 멈춘다).
-//  본문은 원문 그대로 옮겼다(verbatim).
-import { api, appUrl, el, errorNote, personFace, relTime, toast } from '../core.js';
-import { field } from '../admin.js';
+//  프로젝트 상세 ② '터미널 세션' 섹션 + 세션 이름변경/삭제 폼.
+//  세션 만들기는 자체 폼을 두지 않고 '새 AI 세션' 모달 하나로 위임한다(#1145) — 그때 레포 미리받기(provision)와
+//  그 진행을 지켜보던 watchProvision 폴링도 함께 사라졌다(세션이 필요할 때 스스로 워크트리를 뜬다, #918).
+import { api, appUrl, busy, el, errorNote, personFace, relTime, toast } from '../core.js';
 import { overlayBox, skeletonRows } from '../learn.js';
 import { openProjectSessionsModal } from '../sessions.js';
-import { saveTermCreatePrefs, termCreatePrefs } from '../terminal.js';
+import { openTermCreateForm } from '../terminal.js';
 import { openProjectPreviewModal } from './detail-preview.js';
-import { pjvPopover } from './popover.js';
 import { pjvMemberDirectory } from './task-controls.js';
-import { openLocalWorkModal } from './detail-local-work.js';
+// #1582 — 세션 종료 확인창·완료 토스트는 전 화면 공용 정의 하나만 쓴다(AI 세션 탭·대시보드와 같은 말).
+import { confirmSessionEnd, endedToast } from '../session-actions.js';
 
 // ── 상세 ② 터미널 세션 — 팀원 프로필(아바타) 그리드 → 클릭 시 그 사람 세션 펼침(페이지 내). 본인은 상태메시지 공유. ──
 function projectTerminalSection(id, members, meId, base, projectName, project?) {
@@ -18,29 +17,18 @@ function projectTerminalSection(id, members, meId, base, projectName, project?) 
   const projectRepos = (project && project.repos) || [];
   const card = el('div', { class: 'card proj-term-card', style: 'margin-bottom:18px' });
   const body = el('div', {});
-  // '＋ 새 세션' — 곧장 폼이 아니라 드롭다운으로 '어디서 작업할지' 먼저 고른다.
-  //  · 내 컴퓨터에서 작업 — 내 PC 터미널 실행 명령을 안내(openLocalWorkModal). 웹은 원격 PC를 스트리밍하지 않음.
-  //  · 중앙 컴퓨터에서 작업 — 중앙(박스)에서 공동 세션을 바로 생성(openProjectSessionForm). 관련 레포가 기본값.
+  // '＋ 새 세션' — 대시보드와 **같은 모달**을 연다(#1145 안 1). 종전엔 드롭다운으로 '내 PC / 웹'을 먼저 고른
+  //  뒤에야 (그것도 서로 다른) 모달이 떴다 — 경로마다 다른 폼이 뜨는 게 이 프로젝트가 없애려던 바로 그 문제다.
+  //  이제 웹/내 PC 는 그 모달 **맨 위 2택**이고, 프로젝트 맥락(폴더 고정·가시성)은 opts.project 로 넘긴다.
   const newBtn = el('button', { class: 'btn btn-ghost btn-sm', 'data-tour': 'proj-new-session', text: '＋ 새 세션' });
-  newBtn.onclick = (e) => {
+  newBtn.onclick = async (e) => {
     e.stopPropagation();
-    const menu = el('div', { class: 'pjv-menu pjv-sess-menu' });
-    const close = pjvPopover(newBtn, menu, { align: 'right' });  // 우상단 '＋ 새 세션' 버튼 아래 우측정렬(#481 위치 어색 수정)
-    const mkItem = (icon, label, desc, fn) => {
-      const item = el('button', { class: 'pjv-menu-item', type: 'button' },
-        icon ? el('span', { class: 'pjv-sess-ico', text: icon }) : null,
-        el('span', { style: 'display:flex;flex-direction:column;gap:1px;min-width:0' },
-          el('span', { text: label }),
-          desc ? el('span', { class: 'caption', text: desc }) : null));
-      item.onclick = (ev) => { ev.stopPropagation(); close(); fn(); };
-      return item;
-    };
-    const localItem = mkItem('💻', '내 PC에서 열기', '개발자용 · 직접 설치해 실행',
-      () => openLocalWorkModal(id, project || { id, name: projectName, repos: projectRepos }));
-    const webItem = mkItem('☁️', '웹에서 바로 열기', '설치 불필요 · 팀 공용',
-      () => openProjectSessionForm(id, load, B, projectName, projectRepos));
-    webItem.dataset.tour = 'sess-web';  // Lively 둘러보기(#761) 앵커 — 이 항목을 눌러 만들기 창을 띄운다
-    menu.append(localItem, webItem);
+    newBtn.disabled = true;
+    try {
+      const cfg = await api('/api/ui/terminal/config');
+      openTermCreateForm(cfg, null, () => load(), { project: { id, name: projectName, base: B } });
+    } catch (err: any) { toast('세션 설정을 불러오지 못했습니다 — ' + ((err && err.message) || err), true); }
+    finally { newBtn.disabled = false; }
   };
   // 세션 기록(#905 C1) — 끝난 세션 포함 중앙 대화록. 공간 아끼려 섹션 대신 여기 버튼→모달.
   const sessLogBtn = el('button', { class: 'btn btn-ghost btn-sm', text: '📜 세션 기록' });
@@ -78,7 +66,7 @@ function projectTerminalSection(id, members, meId, base, projectName, project?) 
   return card;
 
   async function load() {
-    body.replaceChildren(skeletonRows(2));
+    busy(body, skeletonRows(2));
     try { sessions = await api(B + id + '/sessions').then((d) => (d && d.sessions) || []); }
     catch (e) { body.replaceChildren(errorNote(e, '세션을 불러오지 못했습니다')); return; }
     // 팀원 아닌 주인이 섞여 있으면 이름을 구성원 디렉터리에서 채운다(1회 캐시). 실패해도 id 로 그린다.
@@ -154,7 +142,7 @@ function projectTerminalSection(id, members, meId, base, projectName, project?) 
     const acts: any[] = [];
     if (s.owned) acts.push(
       el('button', { class: 'btn btn-ghost btn-sm', text: '이름변경', onclick: () => openSessionRename(s, load) }),
-      el('button', { class: 'btn btn-ghost btn-sm', text: '삭제', onclick: () => removeSession(s, load) }));
+      el('button', { class: 'btn btn-ghost btn-sm', title: '이 세션을 끝냅니다 — 작업 폴더·파일은 그대로, 대화록은 세션 기록에 남습니다', text: '종료', onclick: () => removeSession(s, load) }));
     acts.push(el('button', { class: 'btn btn-ghost btn-sm', text: 'ℹ 정보', onclick: () => openSessionInfo(s) }));  // 세션 메타 팝업(#480 요청2)
     // 노드 세션(#905 C4)은 &node= 로 입장해야 게이트웨이가 그 노드로 attach 를 릴레이한다.
     const openQ = appUrl('/ui/terminal.html?session=') + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || '') + (s.node ? '&node=' + encodeURIComponent(s.node.id) : '');
@@ -216,213 +204,21 @@ function projectTerminalSection(id, members, meId, base, projectName, project?) 
 
 // 새 프로젝트 세션 오버레이 — 터미널 탭과 같은 정보(실행기·모델 등 플래그·자동승인). 폴더는 프로젝트 폴더 고정,
 //  공개범위는 '팀원 공동'(별도 입력 없음). 생성 후 새 탭 입장.
-async function openProjectSessionForm(id, reload, base, projectName, projectRepos?) {
-  const B = base || '/api/ui/projects/';
+// 프로젝트 세션 만들기 — **대시보드와 같은 모달**로 위임한다(#1145 안 1).
+//  종전엔 여기에 자체 폼이 있었다(레포 선택·워크트리·경로·브랜치·노드·실행설정). 그 폼이 사라진 이유:
+//   · 레포·워크트리는 사람이 세션 만들기 전에 정할 일이 아니다 — 코드가 필요해진 순간 세션이 스스로
+//     워크트리를 뜬다(lively_local_repo_worktree, #918). 미리 받기는 #1180 이후 기다리지도 않는다.
+//   · 경로마다 다른 폼이 뜨는 것 자체가 #1145 가 없애려던 문제였다.
+//  시그니처는 그대로 두어 호출부(목록 '내 세션' 셀·대시보드 위젯·데모)를 건드리지 않는다.
+async function openProjectSessionForm(id, reload, base, projectName, _projectRepos?) {
   let cfg: any;
   try { cfg = await api('/api/ui/terminal/config'); }
-  catch (e) { toast('세션 설정을 불러오지 못했습니다 — ' + e.message, true); return; }
-  const harnesses = cfg.harnesses || [];
-  const prefs = termCreatePrefs();   // 이전 '실행 설정'(터미널 탭 새 세션과 같은 기억 — #673/#req) 프리필
-  const nameIn = el('input', { type: 'text', value: projectName || '', placeholder: '세션 이름 (예: 개발, 빌드)', maxlength: '80' });
-  const harnessSel = el('select', { class: 'term-input' }, ...harnesses.map((h) => el('option', { value: h.key, text: h.label })));
-  const flagsBox = el('div', { class: 'term-flags' });
-  const autoCb = el('input', { type: 'checkbox' });
-  // #782: 자동 승인 기본 해제(옛 #480 의 '기본 켬' 철회) — 켠 적이 있는 사람만 그 선택이 이어진다(사용자별 기억).
-  autoCb.checked = prefs.autoApprove === true;
-  const autoRow = el('label', { class: 'proj-sess-auto' }, autoCb, el('span', { text: ' 자동 승인 — 파일 수정·명령 실행을 매번 묻지 않고 바로 진행 (신뢰하는 작업에만)' }));
-  // '실행 설정' — 터미널 탭 새 세션 팝업의 프리셋 UI 그대로(#req — 같은 term-preset-* 컴포넌트/요약줄).
-  //  요약줄이 프리필 값(하네스·모델·effort)을 그대로 보여주므로 기본 '접힘'(#req 후속 — 터미널 탭과 동일), 클릭으로 펼침.
-  const presetSum = el('div', { class: 'term-preset-sum' });
-  const presetChev = el('span', { class: 'term-preset-chev' });
-  const presetToggle = el('button', { class: 'term-preset-toggle', type: 'button' }, presetSum, presetChev);
-  const presetBody = el('div', { class: 'term-preset-body' },
-    field('실행 (AI)', harnessSel),
-    flagsBox,
-    el('div', { style: 'margin-top:10px' }, autoRow));
-  let presetOpen = false;   // 기본 접힘(#req 후속) — 프리필 값이 요약줄에 이미 보여 펼칠 필요가 없다.
-  const applyPreset = () => { presetBody.style.display = presetOpen ? '' : 'none'; presetChev.textContent = presetOpen ? '▴' : '▾'; };
-  presetToggle.onclick = () => { presetOpen = !presetOpen; applyPreset(); };
-  const harnessOf = () => harnesses.find((x) => x.key === harnessSel.value) || {};
-  function presetSummary() {
-    const h = harnessOf();
-    const parts = [h.label || harnessSel.value];
-    for (const f of (h.flags || [])) {
-      if (f.name !== '--model' && f.name !== '--effort') continue;
-      const c = flagsBox.querySelector('[data-flag="' + f.name + '"]') as any;
-      parts.push((f.name === '--model' ? '모델 ' : 'effort ') + ((c && c.value) || '기본'));
-    }
-    presetSum.replaceChildren(el('b', { text: '실행 설정' }), document.createTextNode(' · ' + parts.join(' · ')));
-  }
-  function renderFlags() {
-    const h = harnessOf();
-    flagsBox.replaceChildren();
-    for (const f of (h.flags || [])) {
-      let ctrl: any;
-      if (f.type === 'select') ctrl = el('select', { class: 'term-input', 'data-flag': f.name }, ...(f.choices || []).map((c) => el('option', { value: c, text: c || '(기본)' })));
-      else if (f.type === 'bool') ctrl = el('input', { type: 'checkbox', 'data-flag': f.name });
-      else ctrl = el('input', { class: 'term-input', type: 'text', 'data-flag': f.name, placeholder: f.desc || '' });
-      const saved = prefs.flags && prefs.flags[f.name];   // 이전 설정 프리필(#673/#req)
-      if (saved != null) { if (ctrl.type === 'checkbox') ctrl.checked = !!saved; else ctrl.value = saved; }
-      ctrl.addEventListener('change', presetSummary);
-      flagsBox.append(el('div', { class: 'field', style: 'margin-top:12px' },
-        el('label', { class: 'field-label', text: f.label }), ctrl, f.desc ? el('div', { class: 'caption', text: f.desc }) : null));
-    }
-    autoRow.style.display = h.hasAutoApprove ? '' : 'none';
-    presetSummary();
-  }
-  harnessSel.addEventListener('change', renderFlags);
-  if (prefs.harness && harnesses.some((h) => h.key === prefs.harness)) harnessSel.value = prefs.harness;   // 이전 하네스 프리필
-  renderFlags();
-  applyPreset();
-
-  // ── 레포에서 작업 (선택, 여러 개) — '내 컴퓨터에서 작업'(work.mjs)과 동일 수준: 박스가 각 레포를 준비(입력 경로에
-  //  없으면 레지스트리 clone_url 로 clone)한다. 워크트리면 project/<id>/<repo> 격리 폴더(브랜치 project/<id>). 세션은
-  //  프로젝트 폴더에서 열리고 — 워크트리는 그 하위라 접근됨, 비워크트리 클론은 add-dir(.claude/settings.local.json)로 접근. ──
-  const boxPathKey = (repo) => 'lively:boxpath:' + repo;            // 박스 경로 기억(로컬PC 경로와 별개 키)
-  const savedBoxPath = (repo) => { try { return repo ? (localStorage.getItem(boxPathKey(repo)) || '') : ''; } catch (_) { return ''; } };
-  const cloneRepoNames: string[] = [];
-  const reposWrap = el('div', {});
-  let rrows: any[] = [];
-  const fillRepoSel = (sel) => {
-    const cur = sel.value;
-    sel.replaceChildren(el('option', { value: '', text: '— 코드 저장소 선택 —' }));
-    cloneRepoNames.forEach((n) => sel.append(el('option', { value: n, text: n })));
-    if (cloneRepoNames.includes(cur)) sel.value = cur;
-  };
-  const addRepoRow = (initRepo = '') => {
-    const sel = el('select', {});
-    const pathInp = el('input', { type: 'text', placeholder: '코드를 둘 위치 (비워두면 자동 — 보통 안 건드려도 돼요)' });
-    const wtChk = el('input', { type: 'checkbox' }); wtChk.checked = true;
-    const branchInp = el('input', { type: 'text', value: 'project/' + id });
-    const rmBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '✕' });
-    fillRepoSel(sel); if (initRepo) sel.value = initRepo;
-    pathInp.value = savedBoxPath(sel.value);
-    const branchWrap = el('div', { class: 'field', style: 'margin-top:6px' }, el('label', { class: 'field-label', text: '작업 공간 이름 (자동 · 보통 그대로 두세요)' }), branchInp);
-    const pathField = el('div', { class: 'field' }, el('label', { class: 'field-label', text: '코드 저장 위치 (선택)' }), pathInp);
-    // 워크트리(격리) 체크 — 기본 화면에선 숨기고 '고급 설정' 안으로 넣는다. 기본값은 체크(권장)라 안 열어도 워크트리로 준비됨.
-    const wtRow = el('label', { class: 'proj-sess-auto', style: 'margin-top:2px' }, wtChk, el('span', { text: ' 워크트리 — 다른 작업과 안 섞임 (권장)' }));
-    // 고급 설정 — 워크트리·경로·작업공간 이름을 하나의 토글로 접어둔다(기본 닫힘, 중첩 없음). 기본 화면엔 저장소 선택만.
-    const advBox = el('div', { style: 'display:none;margin-top:8px' }, wtRow, pathField, branchWrap);
-    const advToggle = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '▸ 고급 설정' });
-    let advOpen = false;
-    advToggle.onclick = () => { advOpen = !advOpen; advBox.style.display = advOpen ? '' : 'none'; advToggle.textContent = (advOpen ? '▾' : '▸') + ' 고급 설정'; };
-    const branchVis = () => { branchWrap.style.display = wtChk.checked ? '' : 'none'; };
-    const ro: any = { sel, pathInp, wtChk, branchInp };
-    rrows.push(ro);
-    sel.addEventListener('change', () => { pathInp.value = savedBoxPath(sel.value); });               // 레포 바꾸면 그 레포의 마지막 경로로
-    pathInp.addEventListener('change', () => { if (sel.value && pathInp.value.trim()) { try { localStorage.setItem(boxPathKey(sel.value), pathInp.value.trim()); } catch (_) { /* */ } } });
-    wtChk.addEventListener('change', branchVis);
-    const rowEl = el('section', { class: 'ps-block', style: 'border:1px solid rgba(127,127,127,.18);border-radius:8px;padding:10px;margin-top:8px' },
-      el('div', { style: 'display:flex;gap:8px;align-items:center' }, sel, rmBtn),
-      el('div', { style: 'margin-top:8px' }, advToggle),
-      advBox);
-    ro.el = rowEl;
-    rmBtn.onclick = () => { rowEl.remove(); rrows = rrows.filter((r) => r !== ro); };
-    branchVis(); reposWrap.append(rowEl);
-  };
-  const addRepoBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '+ 레포 추가', onclick: () => addRepoRow() });
-  try {
-    const rr = await api('/api/ui/repos');
-    ((rr && rr.domainmapRepos) || []).forEach((it) => { if (it && it.name) cloneRepoNames.push(it.name); });
-  } catch (_) { /* graceful: 레포 없음 */ }
-  // 이 프로젝트의 관련 레포를 기본 행으로(있으면) — 없으면 빈 채로 '+ 레포 추가' 안내.
-  (projectRepos || []).filter((n) => cloneRepoNames.includes(n)).forEach((n) => addRepoRow(n));
-
-  // 실행 위치(#905 C4) — 기본 중앙 박스. 등록된 노드를 고르면 그 노드에서 레포 provision + 세션 생성.
-  //  usable=1 = **내가 등록한 노드 ∪ 관리자가 공유로 지정한 노드**(#1540 — 서버의 provision 게이트와 같은 술어라
-  //  목록에 보이면 반드시 열린다). provision 능력 없는 구 번들·오프라인 노드는 disabled 로 이유를 보인다.
-  let usableNodes: any[] = [];
-  try { usableNodes = (await api('/api/ui/nodes?usable=1')).nodes || []; } catch (_) { /* graceful: 노드 없음 */ }
-  const nodeSel = el('select', { class: 'term-input' },
-    el('option', { value: '', text: '중앙 컴퓨터 (기본)' }),
-    ...usableNodes.map((n) => {
-      const caps = Array.isArray(n.agent_caps) ? n.agent_caps : [];
-      const suffix = caps.indexOf('provision') < 0 ? ' — 에이전트 업데이트 필요' : (!n.online ? ' — 오프라인' : '');
-      // 공유 노드는 '남의 컴퓨터일 수 있다'가 고를 때 중요한 정보라 라벨에 함께 보인다(종류보다 앞).
-      const scope = n.shared ? ' (공유)' : (n.kind === 'worker' ? ' (워커)' : '');
-      const o = el('option', { value: n.id, text: '🖥 ' + (n.name || n.id) + scope + suffix });
-      if (suffix) o.disabled = true;
-      return o;
-    }));
-  const nodeField = el('div', { class: 'field', style: 'margin-top:12px' },
-    el('label', { class: 'field-label', text: '실행 위치' }), nodeSel,
-    el('div', { class: 'caption', text: '기본은 중앙 컴퓨터입니다. 등록된 워커/멤버 노드를 고르면 그 노드에서 레포를 받아 세션을 엽니다(provision 지원 노드만 고를 수 있어요).' }));
-
-  const saveBtn = el('button', { class: 'btn btn-primary', 'data-tour': 'sess-create', text: '만들고 입장' });
-  const cancelBtn = el('button', { class: 'btn btn-ghost', 'data-tour': 'sess-cancel', text: '취소', onclick: () => back.remove() });
-  // 옛 '▸ 고급 설정 (실행기·모델·자동 승인)' 접이 토글 폐기(#req) — 터미널 탭과 동일한 '실행 설정' 프리셋을
-  //  기본 펼침으로 바로 노출(presetToggle + presetBody 위에서 구성). 이전 설정 프리필이라 대부분 그대로 만들면 된다.
-  const back = overlayBox('새 터미널 세션',
-    el('p', { class: 'admin-hint', text: '이 프로젝트 폴더에서 시작하는 공동 세션입니다 — 프로젝트 팀원만 보고 입장할 수 있어요.' }),
-    el('div', { class: 'field', 'data-tour': 'sess-name' }, el('label', { class: 'field-label', text: '이름' }), nameIn),
-    ...(usableNodes.length ? [nodeField] : []),
-    el('div', { class: 'field', 'data-tour': 'sess-repos', style: 'margin-top:12px' },
-      el('label', { class: 'field-label', text: '코드 저장소 미리 받기 (선택 — 대개 필요 없어요)' }),
-      el('div', { class: 'caption', text: '코드 작업이어도 고를 필요 없어요 — 세션이 코드가 필요해지면 스스로 가져옵니다(프로젝트에 연결된 저장소가 없어도 후보를 찾아 물어봐요). 큰 저장소라 받는 데 오래 걸려서 세션 시작 전에 미리 받아두고 싶을 때만 쓰세요.' }),
-      reposWrap, el('div', { style: 'margin-top:8px' }, addRepoBtn)),
-    el('div', { class: 'term-preset proj-sess-preset', style: 'margin-top:12px' }, presetToggle, presetBody),
-    el('div', { class: 'ov-actions' }, saveBtn, cancelBtn));
-  setTimeout(() => nameIn.focus(), 0);
-  saveBtn.onclick = async () => {
-    saveBtn.disabled = true;
-    const flags = {};
-    for (const ctrl of flagsBox.querySelectorAll('[data-flag]')) {
-      const k = ctrl.getAttribute('data-flag');
-      const v = ctrl.type === 'checkbox' ? (ctrl.checked ? 'true' : '') : ctrl.value;
-      if (v) flags[k] = v;
-    }
-    saveTermCreatePrefs({ harness: harnessSel.value, flags, autoApprove: autoCb.checked });   // 다음 생성 때 기본값(터미널 탭과 공유 — #673/#req, 자동 승인은 #782)
-    try {
-      // 선택한 레포(들)를 먼저 provision(clone/worktree + 비워크트리 add-dir). node 를 고르면 그 노드에서, 아니면 중앙 박스에서.
-      //  세션도 같은 node 로 열어야 provision 된 폴더에서 열린다(node 없으면 중앙 — 무회귀).
-      const node = nodeSel.value || undefined;
-      const specs = rrows.map((r) => ({ name: r.sel.value, path: r.pathInp.value.trim(), worktree: r.wtChk.checked, branch: r.branchInp.value.trim() })).filter((s) => s.name);
-      // #1180 — 레포 준비를 **기다리지 않는다**. clone 은 분 단위일 수 있는데 그동안 브라우저 요청을 붙들고
-      //  사람을 세워두는 건 그 자체가 나쁜 경험이고 프록시 타임아웃 위험도 있다. 시작만 시키고 세션을 바로 연다.
-      //  세션 cwd 는 레포가 아니라 프로젝트 폴더라(#918) 워크트리가 뒤늦게 생겨도 안전하고, 그 사이 세션엔
-      //  마커(repos_pending)→프리로드가 "받는 중 · 직접 clone 금지"를 알린다(#1155 레일 재사용).
-      //  ⚠ 시작 자체의 실패(노드 오프라인·권한 등)는 여기서 그대로 throw 되어 아래 catch 로 간다 — 그건 알아야 한다.
-      if (specs.length) {
-        saveBtn.textContent = node ? '노드에 레포 준비 요청 중…' : '레포 준비 시작 중…';
-        await api(B + id + '/provision', { method: 'POST', body: JSON.stringify({ repos: specs, node, async: true }) });
-      }
-      saveBtn.textContent = node ? '노드에서 세션 여는 중…' : '세션 여는 중…';
-      const r = await api(B + id + '/sessions', { method: 'POST', body: JSON.stringify({
-        label: nameIn.value.trim(), harness: harnessSel.value, flags, autoApprove: autoCb.checked, node,
-      }) });
-      back.remove();
-      toast(specs.length ? ('세션을 만들었습니다 · 레포 ' + specs.length + '개는 백그라운드에서 준비 중입니다') : '세션을 만들었습니다');
-      if (specs.length) watchProvision(B, id, node, reload);   // 완료·실패를 폴링해 알려준다(페이지가 열려 있는 동안)
-      // 노드 세션(#905 C4)은 &node= 로 열어야 게이트웨이가 그 노드로 attach WS 를 릴레이한다(public/terminal.js).
-      if (r && r.session && r.session.id) window.open(appUrl('/ui/terminal.html?session=') + encodeURIComponent(r.session.id) + '&label=' + encodeURIComponent(r.session.label || '') + (node ? '&node=' + encodeURIComponent(node) : ''), '_blank');
-      reload();
-    } catch (e) { toast('실패 — ' + e.message, true); saveBtn.disabled = false; saveBtn.textContent = '만들고 입장'; }
-  };
+  catch (e: any) { toast('세션 설정을 불러오지 못했습니다 — ' + ((e && e.message) || e), true); return; }
+  openTermCreateForm(cfg, null, () => reload && reload(), {
+    project: { id, name: projectName, base: base || '/api/ui/v6/projects/' },
+  });
 }
 
-// 비동기 provision 진행 감시(#1180) — 세션은 이미 열렸고, 여기선 **알림만** 한다(화면을 막지 않는다).
-//  페이지를 닫으면 폴링도 끝난다 — 그래도 결과는 잃지 않는다: 완료/실패는 프로젝트 폴더 마커에 남고,
-//  그 세션의 AI 는 시작 시 주입으로, 사람은 다음 진입 때 목록으로 본다. 이 폴링은 '지금 보고 있는 사람'에게만 주는 편의다.
-function watchProvision(B, id, node, reload) {
-  const url = B + id + '/provision/status' + (node ? '?node=' + encodeURIComponent(node) : '');
-  const started = Date.now();
-  const CAP_MS = 10 * 60 * 1000;          // 10분이면 대형 레포 첫 clone 도 끝난다 — 넘으면 조용히 손 뗀다(서버는 계속 진행)
-  const tick = async () => {
-    if (Date.now() - started > CAP_MS) return;
-    let st;
-    try { st = await api(url); } catch (_) { return; }   // 네트워크·로그아웃 — 조용히 중단(알림용 폴링일 뿐)
-    if (!st || st.state === 'running') { setTimeout(tick, 3000); return; }
-    if (!st.known) return;                                 // 실행 주체가 재시작돼 기억 상실 — 다음 진입 때 다시 시도하면 된다
-    if (st.state === 'error') { toast('레포 준비를 시작하지 못했습니다 — ' + (st.error || '알 수 없는 오류'), true); return; }
-    const failed = Array.isArray(st.failed) ? st.failed : [];
-    if (failed.length) toast('레포 ' + failed.length + '개를 준비하지 못했습니다(' + failed.map((f) => f.name).join(', ') + ') — 열린 세션 안에서 복구 방법을 안내합니다.', true);
-    else toast('레포 준비 완료 — 세션에서 바로 쓸 수 있어요');
-    if (typeof reload === 'function') reload();
-  };
-  setTimeout(tick, 1500);
-}
-
-// 세션 이름 변경 오버레이 — 기존 터미널 세션 API 재사용(소유자만, 서버가 강제).
 function openSessionRename(s, reload) {
   const nameIn = el('input', { type: 'text', value: s.label || '', placeholder: '세션 이름', maxlength: '80' });
   const saveBtn = el('button', { class: 'btn btn-primary', text: '저장' });
@@ -445,13 +241,16 @@ function openSessionRename(s, reload) {
   nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
 }
 
-// 세션 삭제 — 확인 후 tmux 세션 종료(소유자만). 실행 중 작업도 종료됨.
+// 세션 종료 — 확인 후 tmux 세션 종료(소유자만). 실행 중 작업도 함께 끝난다.
+//  #1582 — '삭제' + 브라우저 confirm + "되돌릴 수 없음" 이었다. 셋 다 사실과 어긋나 고쳤다: 이 동작은 작업
+//  폴더·파일·대화록을 지우지 않고(killSession 은 tmux 와 desired-state 만 건드린다), 확인창은 AI 세션 탭·
+//  대시보드와 **같은 공용 정의**를 쓴다. 근거는 session-actions.ts 헤더.
 async function removeSession(s, reload) {
-  if (!confirm('세션 ‘' + (s.label || s.id) + '’을(를) 삭제할까요?\n\n실행 중인 작업이 함께 종료됩니다(되돌릴 수 없음).')) return;
+  if (!await confirmSessionEnd({ title: '‘' + (s.label || s.id) + '’ 세션을 종료할까요?', sessions: [s] })) return;
   try {
-    // 노드 세션(#905 C4)은 ?node= 로 삭제를 그 노드에 위임한다(터미널 탭과 동일).
+    // 노드 세션(#905 C4)은 ?node= 로 종료를 그 노드에 위임한다(터미널 탭과 동일).
     await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node.id) : ''), { method: 'DELETE' });
-    toast('세션을 삭제했습니다'); reload();
+    toast(await endedToast(1, [s])); reload();
   } catch (e) { toast('실패 — ' + e.message, true); }
 }
 

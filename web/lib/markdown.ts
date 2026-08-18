@@ -11,6 +11,9 @@ import { el } from './dom.js';
 import { relTime } from './format.js';
 import { uiKeyCls } from './uitext.js';
 
+// :::shot 첫 만남 시연을 이미 튼 라우트(#1107 v2) — 같은 페이지에서 한 번만, 재방문에도 다시 안 튼다.
+let shotDemoRoute = '';
+
 // ── 안전 마크다운 렌더러 ──
 // 비개발자 친화: body_md(raw 마크다운)을 실제 서식으로 보여준다. 의존성 0 — 작은 서브셋을
 // 직접 파싱한다. 보안 불변식(P4b): **모든 텍스트는 textContent/createTextNode 만** 거치고
@@ -280,12 +283,11 @@ function renderContainer(type, rest, bodyLines) {
       const rendered = inner();
       const panes = Array.from(rendered.children).filter((n: any) => n.classList && n.classList.contains('md-tabpane'));
       if (!panes.length) return moveChildren(rendered, el('div', { class: 'md-tabs-fallback' }));
-      const hue = (summary || '').split(/\s+/).includes('hue');  // :::tabs hue — 탭을 스크린샷 구역색(is-cN)과 1:1 연결 (#1013)
       const bar = el('div', { class: 'md-tabs-bar', role: 'tablist' });
       const body = el('div', { class: 'md-tabs-body' });
       const btns: any[] = [];
       panes.forEach((p: any, idx: number) => {
-        const btn = el('button', { class: 'md-tab-btn' + (idx === 0 ? ' active' : '') + (hue ? ' is-c' + (idx % 5) : ''), type: 'button', role: 'tab',
+        const btn = el('button', { class: 'md-tab-btn' + (idx === 0 ? ' active' : ''), type: 'button', role: 'tab',
           'aria-selected': idx === 0 ? 'true' : 'false', text: p.getAttribute('data-tab-label') || '탭 ' + (idx + 1) });
         btn.onclick = () => btns.forEach((b, k) => {
           const on = b === btn;
@@ -296,7 +298,7 @@ function renderContainer(type, rest, bodyLines) {
         if (idx > 0) p.style.display = 'none';
         bar.append(btn); body.append(p);
       });
-      return el('div', { class: 'md-tabs' + (hue ? ' md-tabs--hue' : '') }, bar, body);
+      return el('div', { class: 'md-tabs' }, bar, body);
     }
     case 'tab': {
       const pane = el('div', { class: 'md-tabpane' });
@@ -423,47 +425,360 @@ function renderContainer(type, rest, bodyLines) {
       return frame;
     }
     case 'shot': {
-      // 주석 스크린샷(#853) — 위에 **구획 박스**(영역을 감싼 색 사각형+번호)를 얹은 실제 화면, 아래에 **번호마다 1:1 상세 설명 카드**.
+      // 주석 스크린샷 v2(#1107) — 쉬는 상태는 깨끗한 화면 + 파란 번호 마커만. 범례 항목이나 마커를
+      //  짚으면(hover·focus·탭) 그 영역만 스포트라이트로 밝히고 나머지를 딤 처리한다 — 제품의
+      //  둘러보기(guide-tour) 스포트라이트와 같은 시각언어, 색은 블루 단색(컬러 예산 §0.5).
       //  속성: src=이미지(필수) alt caption. 본문 = 구획 목록:
-      //    좌표줄  'left% | top% | width% | height% | 제목'   (전부 이미지 기준 %; 캡처 시 요소 실측)
-      //    상세줄  그 아래 들여쓴/일반 줄들 = 그 번호의 설명 문단(여러 줄 = 여러 문단). 다음 좌표줄 전까지.
-      //  박스·번호·상세 카드는 5색(is-cN)을 돌려 1:1로 색까지 맞춘다. 이미지는 데이터 마스킹된 정적 자산.
+      //    좌표줄  'left% | top% | width% | height% | 제목 ~ 한 줄 설명'  (전부 이미지 기준 %)
+      //    상세줄  그 아래 일반 줄들 = 그 번호의 추가 문단. 다음 좌표줄 전까지.
+      //  클릭은 고정 토글(터치 대응) — 같은 항목을 다시 누르면 해제. 이미지는 데이터 마스킹된 정적 자산.
       const items: any[] = [];
       for (const raw of bodyLines) {
         const t = (raw || '').trim();
         if (!t || t === ':::') continue;
+        // 요소줄(v3): '@ x% | y% | 이름 ~ 설명' — 직전 구역 안의 세부 요소(말풍선 콜아웃) 앵커.
+        //  요소줄이 하나라도 있으면 그 shot 은 v3(구역 탭 + 콜아웃 패널)로 렌더된다. 없으면 v2 범례 그대로.
+        if (t.startsWith('@') && items.length) {
+          const parts = t.slice(1).split('|').map((s) => s.trim());
+          const nmRaw = parts.slice(2).join(' | ');
+          const cut = nmRaw.indexOf('~');   // 첫 물결표만 구분자 — 설명 안의 '①~④' 같은 표기를 살린다
+          const name = (cut < 0 ? nmRaw : nmRaw.slice(0, cut)).trim();
+          const desc = cut < 0 ? '' : nmRaw.slice(cut + 1).trim();
+          items[items.length - 1].elems.push({ x: parseFloat(parts[0]), y: parseFloat(parts[1]), name: name || '', desc: desc || '' });
+          continue;
+        }
         const isCoord = /^[\d.]+\s*\|/.test(t) && t.split('|').length >= 5;
         if (isCoord) {
           const parts = t.split('|').map((s) => s.trim());
           const n = parts.map((c) => parseFloat(c));
-          // 제목에 '~' 가 있으면(구형식) 왼쪽=제목·오른쪽=첫 상세문단으로.
           const titleRaw = parts.slice(4).join(' | ');
-          const [title, sub] = titleRaw.split('~').map((s) => s.trim());
-          items.push({ l: n[0], t: n[1], w: n[2], h: n[3], title, detail: sub ? [sub] : [] });
+          const rc = titleRaw.indexOf('~');
+          const title = (rc < 0 ? titleRaw : titleRaw.slice(0, rc)).trim();
+          const sub = rc < 0 ? '' : titleRaw.slice(rc + 1).trim();
+          items.push({ l: n[0], t: n[1], w: n[2], h: n[3], title, detail: sub ? [sub] : [], elems: [] });
         } else if (items.length) {
           items[items.length - 1].detail.push(t);
         }
       }
-      const wrap = el('span', { class: 'md-shot-imgwrap' },
+      const hasElems = items.some((s0) => s0.elems.length > 0);
+      const stage = el('div', { class: 'md-shot-stage' },
         el('img', { class: 'md-shot-img', src: attrs.src || '', alt: attrs.alt || '화면 스크린샷', loading: 'lazy' }));
+      const fig = el('figure', { class: 'md-shot' }, stage);
+      const hits: any[] = [], marks: any[] = [], rows: any[] = [];
+      // 스포트라이트 구멍은 하나(v2.2) — 구역을 오가면 딤은 유지된 채 구멍이 미끄러진다(꺼졌다 켜지는
+      //  번쩍임 제거). 진입은 짧은 머뭇(의도 판정) 뒤에 켜고, 이탈은 유예를 두고 끈다 — 마우스가 스쳐
+      //  지나가거나 구역 사이 틈을 건널 때 딤이 펄럭이지 않게.
+      const hl = el('span', { class: 'md-shot-hl', 'aria-hidden': 'true' });
+      let sticky = -1;   // v2: 클릭 고정된 항목(없으면 -1). v3: 현재 선택된 구역 탭(항상 ≥0)
+      let active = -1;
+      let selectTab: ((i: number) => void) | null = null;   // v3 에서만 할당 — wire 의 클릭이 여기로 온다
+      let pend: any = 0, clr: any = 0;
+      const place = (s0: any) => { hl.style.left = s0.l + '%'; hl.style.top = s0.t + '%';
+        hl.style.width = s0.w + '%'; hl.style.height = s0.h + '%'; };
+      const setOn = (i: number) => {   // 즉시 적용 — 시연·클릭 고정용. hover 는 아래 enter/leave 타이머를 거친다
+        clearTimeout(pend); clearTimeout(clr); pend = clr = 0;
+        const ok = i >= 0 && items[i] && Number.isFinite(items[i].l);
+        if (ok) {
+          if (active < 0) { hl.style.transition = 'none'; place(items[i]); void hl.offsetWidth; hl.style.transition = ''; }
+          else place(items[i]);   // 켜진 채 이동 → CSS 가 구멍을 미끄러뜨린다
+        }
+        hl.classList.toggle('is-on', ok);
+        active = ok ? i : -1;
+        stage.classList.toggle('has-on', ok);
+        marks.forEach((m, k) => m.classList.toggle('is-on', k === active));
+        rows.forEach((r, k) => r.classList.toggle('is-on', k === active));
+      };
+      const enter = (i: number) => {
+        if (sticky >= 0 && !hasElems) return;              // v2 고정 중엔 hover 무시. v3 는 고정(탭) 위로 미리보기 허용
+        clearTimeout(clr); clr = 0;                        // 유예 중 재진입 — 딤을 끊지 않는다
+        if (active === i) { clearTimeout(pend); pend = 0; return; }
+        clearTimeout(pend);
+        pend = setTimeout(() => setOn(i), active >= 0 ? 60 : 130);   // 첫 점등은 머뭇, 이동은 빠르게
+      };
+      const leave = () => {
+        if (sticky >= 0 && !hasElems) return;
+        clearTimeout(pend); pend = 0;
+        clearTimeout(clr);
+        clr = setTimeout(() => setOn(hasElems ? sticky : -1), 200);  // v3: 손을 떼면 선택된 탭 구역으로 복귀
+      };
+      const toggle = (i: number) => { sticky = sticky === i ? -1 : i; setOn(sticky); };
+      const wire = (i: number) => ({ onmouseenter: () => enter(i), onmouseleave: leave,
+        onclick: () => { if (hasElems && selectTab) selectTab(i); else toggle(i); },
+        onfocus: () => enter(i), onblur: leave });
       items.forEach((s0, i) => {
-        const box = [s0.l, s0.t, s0.w, s0.h].every((v) => Number.isFinite(v));
-        if (box) wrap.append(el('span', { class: 'md-shot-box is-c' + (i % 5), style: `left:${s0.l}%; top:${s0.t}%; width:${s0.w}%; height:${s0.h}%`, 'aria-hidden': 'true' },
-          el('span', { class: 'md-shot-bnum', text: String(i + 1) })));
-        else if (Number.isFinite(s0.l) && Number.isFinite(s0.t)) wrap.append(el('span', { class: 'md-shot-pin is-c' + (i % 5), style: `left:${s0.l}%; top:${s0.t}%`, 'aria-hidden': 'true', text: String(i + 1) }));
+        if (![s0.l, s0.t, s0.w, s0.h].every((v) => Number.isFinite(v))) return;
+        // 구역 자체가 포인터 표적(#1107 v2) — 보이지 않는 히트 영역으로 이미지 위 직접 탐색·탭을 받는다.
+        //  키보드·스크린리더 동선은 범례 버튼이 전담하므로 여긴 aria-hidden 포인터 전용으로 둔다.
+        hits.push(el('span', { class: 'md-shot-hit', 'aria-hidden': 'true',
+          style: `left:${s0.l}%; top:${s0.t}%; width:${s0.w}%; height:${s0.h}%`, ...wire(i) }));
+        // 마커는 영역 좌상단 모서리에 걸친다 — 이미지 가장자리에 붙은 영역은 잘리지 않게 살짝 안쪽으로.
+        marks.push(el('button', { type: 'button', class: 'md-shot-marker', text: String(i + 1),
+          'aria-label': (i + 1) + '. ' + (s0.title || ''), style: `left:${Math.max(s0.l, 1.1)}%; top:${Math.max(s0.t, 1.6)}%`,
+          ...wire(i) }));
       });
-      const fig = el('figure', { class: 'md-shot' }, wrap);
-      if (attrs.caption || summary) fig.append(el('figcaption', { class: 'md-shot-cap' }, ...renderInline(attrs.caption ? String(attrs.caption).replace(/_/g, ' ') : summary)));
-      // 번호별 상세 카드(1:1) — 번호 배지 + 제목 + 설명 문단들.
-      //  legend=off 면 이 카드 목록을 생략한다(옵트인) — 스크린샷 아래 설명을 탭 등 다른 표면이 대신할 때(#1013 홈).
-      if (String(attrs.legend || '').toLowerCase() !== 'off') {
-        const details = el('div', { class: 'md-shot-details' }, ...items.map((s0, i) => {
-          const main = el('div', { class: 'md-shot-dmain' }, el('div', { class: 'md-shot-dtitle' }, ...renderInline(s0.title || '')));
-          for (const d of s0.detail) if (d) main.append(el('p', { class: 'md-shot-dbody' }, ...renderInline(d)));
-          return el('div', { class: 'md-shot-detail is-c' + (i % 5) },
-            el('span', { class: 'md-shot-dnum', text: String(i + 1) }), main);
-        }));
-        fig.append(details);
+      stage.append(...hits, hl, ...marks);
+      if (attrs.caption || summary) fig.append(el('figcaption', { class: 'md-shot-cap' },
+        el('span', { class: 'md-shot-capt' }, ...renderInline(attrs.caption ? String(attrs.caption).replace(/_/g, ' ') : summary)),
+        items.length ? el('span', { class: 'md-shot-hint', 'aria-hidden': 'true',
+          text: hasElems ? '아래 탭이나 화면 위 번호를 눌러 구역을 하나씩 살펴보세요' : '화면이나 항목을 짚으면 그 영역만 밝혀집니다' }) : null));
+      // 범례 — 번호와 1:1 로 묶인 부품 목록(2열 그리드). 짚으면 위 화면의 해당 영역이 밝혀진다.
+      //  v3(요소줄 있음)에선 범례 대신 아래 구역 탭 + 콜아웃 패널이 그 역할을 맡는다.
+      if (items.length && !hasElems) {
+        fig.append(el('div', { class: 'md-shot-legend' }, ...items.map((s0, i) => {
+          const body = el('span', { class: 'md-shot-pbody' },
+            el('span', { class: 'md-shot-ptitle' }, ...renderInline(s0.title || '')));
+          for (const d of s0.detail) if (d) body.append(el('span', { class: 'md-shot-pdesc' }, ...renderInline(d)));
+          const r = el('button', { type: 'button', class: 'md-shot-part', ...wire(i) },
+            el('span', { class: 'md-shot-pnum', 'aria-hidden': 'true', text: String(i + 1) }), body);
+          rows.push(r);
+          return r;
+        })));
+      }
+      // 첫 만남 시연(#1107 v2) — 데스크톱 쉬는 상태는 마커까지 숨긴 완전한 화면이라, '짚으면 밝아진다'는
+      //  대응을 처음 한 번은 보여줘야 한다: 이 라우트에서 처음 화면에 들어온 shot 하나만 마커를 띄우고
+      //  1번 구역을 잠깐 밝혔다 놓는다. 사용자가 만지기 시작하면 즉시 중단, 모션 축소 설정이면 생략
+      //  (그땐 마커·범례 숫자가 상시 대응을 대신한다 — 아래 CSS reduced-motion 참조).
+      if (items.length && !hasElems && typeof IntersectionObserver !== 'undefined'
+          && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        const io = new IntersectionObserver((es) => {
+          if (!es.some((e0) => e0.isIntersecting)) return;
+          io.disconnect();
+          if (shotDemoRoute === location.hash || sticky >= 0) return;
+          shotDemoRoute = location.hash;
+          const timers = [
+            setTimeout(() => { if (sticky < 0) setOn(0); }, 380),
+            setTimeout(() => { if (sticky < 0) setOn(-1); }, 1550),
+            setTimeout(() => stage.classList.remove('is-demo'), 1950),
+          ];
+          const cancelDemo = () => { timers.forEach(clearTimeout); stage.classList.remove('is-demo'); if (sticky < 0) setOn(-1); };
+          stage.classList.add('is-demo');
+          fig.addEventListener('pointerenter', cancelDemo, { once: true });
+          fig.addEventListener('pointerdown', cancelDemo, { once: true });
+        }, { threshold: 0.3 });
+        io.observe(stage);
+      }
+      // ── v3(#1107) 구역 탭 + 콜아웃 패널 — 요소줄이 있는 shot 만. 위 화면은 지도(스포트라이트 유지),
+      //  아래 패널은 선택한 구역의 확대 크롭 + 말풍선이다. 크롭은 같은 스크린샷을 background-position 으로
+      //  오려내 추가 자산이 없고, 말풍선은 절대배치가 아니라 일반 플로우(행/열)라 서로 겹칠 수 없다.
+      //  안내선(SVG)은 레이아웃이 잡힌 뒤 실측 좌표로 말풍선과 화면 속 지점을 잇는다.
+      if (hasElems) {
+        fig.classList.add('md-shot--x');
+        const img0 = stage.querySelector('img') as HTMLImageElement;
+        const tabBtns: any[] = [];
+        const panel = el('section', { class: 'md-shotx-panel', role: 'tabpanel' });
+        let ro: any = null;
+        const renderPanel = (i: number) => {
+          if (ro) { ro.disconnect(); ro = null; }
+          panel.textContent = '';
+          const s0 = items[i];
+          if (!s0) return;
+          if (s0.detail.length) {
+            const lead = el('p', { class: 'md-shotx-lead' });
+            s0.detail.forEach((d: string, k: number) => { if (d) { if (k) lead.append(' '); lead.append(...renderInline(d)); } });
+            panel.append(lead);
+          }
+          const iw = (img0 && img0.naturalWidth) || 1440, ih = (img0 && img0.naturalHeight) || 900;
+          const imgAspect = iw / ih;
+          // 크롭 사각형 — 구역 rect 에 약간의 프레이밍 여백(이미지 가장자리는 클램프)
+          const px = 0.6, py = px * imgAspect;
+          const l2 = Math.max(0, s0.l - px), t2 = Math.max(0, s0.t - py);
+          const w2 = Math.min(100, s0.l + s0.w + px) - l2;
+          let h2 = Math.min(100, s0.t + s0.h + py) - t2;
+          let t2b = t2;
+          // 아주 홀쭉한 구역(사이드바 등)은 통째로 오리면 글씨가 안 보일 만큼 작아진다 —
+          //  짚는 지점들이 담기는 만큼만 세로로 잘라 확대 배율을 지킨다(구역 표시 자체는 원래 크기 그대로).
+          if ((w2 / h2) * imgAspect < 0.5 && s0.elems.length) {
+            const need = (w2 * imgAspect) / 0.5;                 // 가로세로비 0.5 를 만드는 높이
+            const ys = s0.elems.map((e0: any) => e0.y);
+            const mid = (Math.min(...ys) + Math.max(...ys)) / 2;
+            const span = Math.max(need, Math.max(...ys) - Math.min(...ys) + 2 * py);
+            t2b = Math.min(Math.max(t2, mid - span / 2), t2 + h2 - Math.min(span, h2));
+            h2 = Math.min(span, h2);
+          }
+          const cropAspect = (w2 / h2) * imgAspect;
+          const wideLayout = cropAspect >= 1.55;   // 가로형 → 말풍선 위/아래 행, 세로형 → 크롭 왼쪽 + 말풍선 오른쪽 열
+          const crop = el('div', { class: 'md-shotx-crop', 'aria-hidden': 'true',
+            style: `aspect-ratio:${(w2 * imgAspect).toFixed(3)} / ${h2.toFixed(3)};`
+              + `background-image:url('${attrs.src || ''}');`
+              + `background-size:${(10000 / w2).toFixed(2)}% ${(10000 / h2).toFixed(2)}%;`
+              + `background-position:${w2 >= 100 ? 0 : (l2 / (100 - w2) * 100).toFixed(2)}% ${h2 >= 100 ? 0 : (t2b / (100 - h2) * 100).toFixed(2)}%` });
+          const pairs: any[] = [];
+          const mkPair = (e0: any) => {
+            const d0 = el('span', { class: 'md-shotx-dot',
+              style: `left:${((e0.x - l2) / w2 * 100).toFixed(2)}%; top:${((e0.y - t2b) / h2 * 100).toFixed(2)}%` });
+            const b0 = el('div', { class: 'md-shotx-bl' },
+              el('span', { class: 'md-shotx-bn', 'aria-hidden': 'true' }),
+              el('span', { class: 'md-shotx-bt' }, ...renderInline(e0.name)),
+              e0.desc ? el('span', { class: 'md-shotx-bd' }, ...renderInline(e0.desc)) : null);
+            crop.append(d0);
+            pairs.push({ b0, d0, e0, line: null });
+            return b0;
+          };
+          // 말풍선 자리 = 짚는 지점을 따라간다(교차·엇갈림 방지). 가로형은 지점이 위 절반이면 위 행,
+          //  아래 절반이면 아래 행 — 가까운 변으로 나간다. 아주 납작한 스트립은 위/아래 교대로 균형을 잡는다.
+          const rel = (e0: any) => ({ rx: (e0.x - l2) / w2, ry: (e0.y - t2b) / h2 });
+          const elems = s0.elems.slice().sort((a: any, b1: any) => (wideLayout ? a.x - b1.x : a.y - b1.y));
+          const body = el('div', { class: 'md-shotx-body ' + (wideLayout ? 'is-wide' : 'is-tall') });
+          const groups: { box: any; list: any[]; side: string }[] = [];
+          if (wideLayout) {
+            const thin = cropAspect > 4;
+            const top: any[] = [], bot: any[] = [];
+            elems.forEach((e0: any, k: number) => ((thin ? k % 2 === 0 : rel(e0).ry < 0.5) ? top : bot).push(e0));
+            // 한 행에 너무 몰리면(4개 이상) 가운데에 가까운 것부터 반대 행으로 넘긴다 — 말풍선이 잘게 쪼개지지 않게.
+            const spill = (from: any[], to: any[], toTop: boolean) => {
+              while (from.length > 3) {
+                from.sort((a: any, b1: any) => (toTop ? rel(a).ry - rel(b1).ry : rel(b1).ry - rel(a).ry));
+                to.push(from.pop());
+              }
+            };
+            spill(top, bot, false); spill(bot, top, true);
+            top.sort((a: any, b1: any) => a.x - b1.x); bot.sort((a: any, b1: any) => a.x - b1.x);
+            const mkRow = (list: any[], side: string) => {
+              const box = el('div', { class: 'md-shotx-row is-' + side }, ...list.map(mkPair));
+              groups.push({ box, list, side });
+              return box;
+            };
+            if (top.length) body.append(mkRow(top, 'top'));
+            body.append(crop);
+            if (bot.length) body.append(mkRow(bot, 'bot'));
+          } else {
+            const box = el('div', { class: 'md-shotx-col' }, ...elems.map(mkPair));
+            groups.push({ box, list: elems, side: 'right' });
+            body.append(crop, box);
+          }
+          const NS = 'http://www.w3.org/2000/svg';
+          const net = document.createElementNS(NS, 'svg');
+          net.setAttribute('class', 'md-shotx-net');
+          net.setAttribute('aria-hidden', 'true');
+          body.append(net);
+          panel.append(body);
+          // 말풍선 ↔ 지점 짝 강조 — 어느 쪽을 짚어도 둘 다 밝아진다
+          pairs.forEach((p0) => {
+            const hot = (on: boolean) => () => { p0.b0.classList.toggle('is-hot', on); p0.d0.classList.toggle('is-hot', on);
+              if (p0.line) p0.line.classList.toggle('is-hot', on); };
+            p0.b0.onmouseenter = hot(true); p0.b0.onmouseleave = hot(false);
+            p0.d0.onmouseenter = hot(true); p0.d0.onmouseleave = hot(false);
+          });
+          // 1차원 자리잡기 — 원하는 위치(짚는 지점)에 최대한 붙이되 서로 겹치지 않게 밀어낸다.
+          const spread = (arr: { want: number; size: number; pos: number }[], min: number, max: number, gap: number) => {
+            arr.sort((a, b1) => a.want - b1.want);
+            let cur = min;                       // ① 앞에서부터 — 원하는 자리, 겹치면 뒤로 민다
+            for (const it of arr) { it.pos = Math.max(it.want - it.size / 2, cur); cur = it.pos + it.size + gap; }
+            cur = max;                           // ② 뒤에서부터 — 끝을 넘긴 만큼 되민다(칸에 다 들어가게)
+            for (let i = arr.length - 1; i >= 0; i--) { arr[i].pos = Math.min(arr[i].pos, cur - arr[i].size); cur = arr[i].pos - gap; }
+          };
+          const GAP = 12;
+          const place = () => {
+            const bw = body.clientWidth;
+            if (!bw) return;
+            for (const g of groups) {
+              const gr = g.box.getBoundingClientRect();
+              if (g.side === 'right') {   // 세로형 — 오른쪽 열, 지점의 높이를 따라 배치
+                const arr = g.list.map((e0: any) => {
+                  const b0 = pairs.find((p1: any) => p1.e0 === e0).b0;
+                  return { b0, want: rel(e0).ry * crop.offsetHeight, size: 0, pos: 0 };
+                });
+                arr.forEach((it) => { it.size = it.b0.offsetHeight; });
+                const need = arr.reduce((a, it) => a + it.size, 0) + GAP * (arr.length - 1);
+                const H = Math.max(crop.offsetHeight, need);
+                g.box.style.height = H + 'px';
+                spread(arr as any, 0, H, GAP);
+                arr.forEach((it) => { it.b0.style.top = it.pos + 'px'; });
+              } else {                    // 가로형 — 행 안에서 지점의 x 를 따라 배치
+                const n0 = g.list.length;
+                const w = Math.max(150, Math.min(320, (gr.width - GAP * (n0 - 1)) / n0));
+                const arr = g.list.map((e0: any) => {
+                  const b0 = pairs.find((p1: any) => p1.e0 === e0).b0;
+                  b0.style.width = w + 'px';
+                  return { b0, want: rel(e0).rx * crop.offsetWidth + (crop.getBoundingClientRect().left - gr.left), size: w, pos: 0 };
+                });
+                let h = 0;
+                arr.forEach((it) => { h = Math.max(h, it.b0.offsetHeight); });
+                g.box.style.height = h + 'px';
+                spread(arr as any, 0, gr.width, GAP);
+                arr.forEach((it) => { it.b0.style.left = it.pos + 'px';
+                  it.b0.style.top = (g.side === 'top' ? h - it.b0.offsetHeight : 0) + 'px'; });
+              }
+            }
+          };
+          // 안내선 — 이미지 안에서는 한 방향(가로형=세로선 / 세로형=가로선)으로만 뻗고, 꺾임은 이미지 밖
+          //  여백(도랑)에서 처리한다. 도랑 높이·깊이를 항목마다 조금씩 어긋내 선끼리 겹치지 않는다.
+          const poly = (pts: number[][], r: number) => {
+            const p1 = pts.filter((pt, k) => !k || Math.abs(pt[0] - pts[k - 1][0]) > 0.5 || Math.abs(pt[1] - pts[k - 1][1]) > 0.5);
+            if (p1.length < 2) return '';
+            let d = `M ${p1[0][0].toFixed(1)} ${p1[0][1].toFixed(1)}`;
+            for (let k = 1; k < p1.length - 1; k++) {
+              const [ax, ay] = p1[k - 1], [cx, cy] = p1[k], [nx, ny] = p1[k + 1];
+              const d1 = Math.hypot(cx - ax, cy - ay), d2 = Math.hypot(nx - cx, ny - cy);
+              const rr = Math.min(r, d1 / 2, d2 / 2);
+              d += ` L ${(cx + (ax - cx) / d1 * rr).toFixed(1)} ${(cy + (ay - cy) / d1 * rr).toFixed(1)}`
+                + ` Q ${cx.toFixed(1)} ${cy.toFixed(1)} ${(cx + (nx - cx) / d2 * rr).toFixed(1)} ${(cy + (ny - cy) / d2 * rr).toFixed(1)}`;
+            }
+            const last = p1[p1.length - 1];
+            return d + ` L ${last[0].toFixed(1)} ${last[1].toFixed(1)}`;
+          };
+          const draw = () => {
+            const bb = body.getBoundingClientRect();
+            if (!bb.width) return;
+            net.setAttribute('viewBox', `0 0 ${bb.width} ${bb.height}`);
+            net.textContent = '';
+            const cr = crop.getBoundingClientRect();
+            for (const g of groups) {
+              g.list.forEach((e0: any, k: number) => {
+                const p0 = pairs.find((p1: any) => p1.e0 === e0);
+                if (!p0) return;
+                const br = p0.b0.getBoundingClientRect(), dr = p0.d0.getBoundingClientRect();
+                const dx2 = dr.left + dr.width / 2 - bb.left, dy2 = dr.top + dr.height / 2 - bb.top;
+                const stag = 9 + (k % 3) * 7;   // 도랑 어긋내기 — 나란한 선이 겹쳐 한 줄로 보이지 않게
+                let pts: number[][];
+                if (g.side === 'right') {
+                  const gx = cr.right - bb.left + stag;
+                  const by = Math.min(Math.max(dy2, br.top - bb.top + 14), br.bottom - bb.top - 14);
+                  pts = [[dx2, dy2], [gx, dy2], [gx, by], [br.left - bb.left, by]];
+                } else {
+                  const top = g.side === 'top';
+                  const gy = (top ? br.bottom - bb.top + stag : br.top - bb.top - stag);
+                  const bx = Math.min(Math.max(dx2, br.left - bb.left + 20), br.right - bb.left - 20);
+                  pts = [[dx2, dy2], [dx2, gy], [bx, gy], [bx, top ? br.bottom - bb.top : br.top - bb.top]];
+                }
+                const path = document.createElementNS(NS, 'path');
+                path.setAttribute('d', poly(pts, 7));
+                path.setAttribute('class', 'md-shotx-line');
+                net.append(path);
+                p0.line = path;
+              });
+            }
+          };
+          let lastW = 0, raf = 0;
+          const relayout = (force: boolean) => {
+            const w = body.clientWidth;
+            if (!force && w === lastW) return;
+            lastW = w; place(); draw();
+          };
+          requestAnimationFrame(() => relayout(true));
+          if (typeof ResizeObserver !== 'undefined') {
+            ro = new ResizeObserver(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => relayout(false)); });
+            ro.observe(body);
+          }
+        };
+        const tabs = el('nav', { class: 'md-shotx-tabs', role: 'tablist', 'aria-label': '화면 구역' });
+        items.forEach((s0, i) => {
+          const b0 = el('button', { type: 'button', class: 'md-shotx-tab', role: 'tab', 'aria-selected': 'false',
+            onclick: () => { if (selectTab) selectTab(i); } },
+            el('span', { class: 'md-shotx-tno', 'aria-hidden': 'true', text: String(i + 1) }),
+            el('span', { class: 'md-shotx-tlab', text: s0.title || '' }));
+          tabBtns.push(b0);
+          tabs.append(b0);
+        });
+        selectTab = (i: number) => {
+          sticky = i;
+          setOn(i);
+          tabBtns.forEach((b0, k) => { b0.classList.toggle('is-on', k === i); b0.setAttribute('aria-selected', k === i ? 'true' : 'false'); });
+          renderPanel(i);
+        };
+        fig.append(tabs, panel);
+        if (img0 && !img0.complete) img0.addEventListener('load', () => { if (selectTab) selectTab(sticky); }, { once: true });
+        selectTab(0);
       }
       return fig;
     }

@@ -13,7 +13,7 @@
 //  (f) ~/.lively/lib+bin      ← lively CLI + 런처 심 + PATH rc 배선 (#864 — installCli)
 //  MCP 등록은 `lively install`(CLI) 또는 박스의 register-clients.sh 가 담당(여기서 호출 안 함).
 //
-// 사용법(보통은 `lively install` 또는 deploy/install-kit.sh 가 호출): node setup/user-install.mjs [--harness claude|codex|claude,codex] [--work-root <abs>]…
+// 사용법(보통은 `lively install` 또는 deploy/install-kit.sh 가 호출): node setup/user-install.mjs [--harness claude|codex|opencode|antigravity|grok|claude,codex,…] [--work-root <abs>]…
 //   --clone-root <dir> 로 발행물 루트 지정(기본: 이 스크립트의 ../). --harness 미지정 시 claude.
 //   Codex(--harness codex): 같은 ~/.lively 자산 + ~/.codex/config.toml([hooks]+[mcp_servers.*]) + ~/.codex/AGENTS.md.
 //     **codex 배선의 정본은 이 파일 하나다** — adapters/codex/install.mjs 라는 형제 설치기가 있었지만 아무도
@@ -46,7 +46,7 @@ const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || join(HOME, ".claude");
 //  복사되므로 같은 목록에 있어야 하고, 빠지면 sync-harness-assets 가 ERR_MODULE_NOT_FOUND 로 **통째로 죽는다**
 //  (그러면 조직 자산이 한 개도 안 깔린다 — 게다가 자산 sync 는 조용히 실패하는 게 설계라 아무 신호가 없다).
 //  이 등재 누락은 kit/hooks/harness-registry.test.mjs 가 잡는다.
-const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs", "harness-registry.mjs", "opencode-plugin.js"];
+const HOOK_SCRIPTS = ["session-preload.mjs", "work-flag.mjs", "stop-writeback-gate.mjs", "run-custom.mjs", "sync-harness-assets.mjs", "self-update.mjs", "harness-registry.mjs", "opencode-plugin.js", "antigravity-adapter.mjs", "grok-adapter.mjs"];
 
 // 발행물 루트: --clone-root 우선, 없으면 이 스크립트의 ../ (setup/ 의 부모).
 const CLONE_ROOT = resolve(getOpt("--clone-root") || join(dirname(fileURLToPath(import.meta.url)), ".."));
@@ -164,6 +164,10 @@ function mergeAutoApprove() {
   for (const e of want) if (!next.includes(e)) next.push(e);
   cur.permissions.allow = next;
   try {
+    // #1701 — grok 단독 설치(--harness grok)에선 claude 배선(safeMergeUserSettings)이 안 돌아 ~/.claude 가
+    //  없을 수 있다. 그때 writeFileSync 가 ENOENT 로 죽어 auto-approve 가 **조용히** 빠졌다(grok 은 이 파일을
+    //  compat 로 읽는 게 승인 채널이라 grok 승인 전체가 무음 탈락). 디렉터리를 보장하고 쓴다.
+    mkdirSync(dirname(sp), { recursive: true });
     writeFileSync(sp, JSON.stringify(cur, null, 2) + "\n");
     writeFileSync(prevPath, JSON.stringify(want, null, 2)); chmodSync(prevPath, 0o600);
   } catch (e) { console.warn(`  ⚠️ auto-approve 반영 실패: ${e.message}`); return; }
@@ -799,6 +803,301 @@ function installOpencode(ctx) {
   } catch (e) { console.warn(`  ⚠️ ${cfgPath.replace(HOME, "~")} 쓰기 실패: ${e.message}`); }
 }
 
+// ── Antigravity CLI user-level 설치 (#1689) ──────────────────────────────────
+//  배선 방식 4번째(plugin-dir): 훅·MCP·컨텍스트를 **우리 소유 플러그인 디렉터리 하나**에 담는다
+//  (~/.gemini/config/plugins/lively/ — antigravity 가 자동 발견·로드, #1689 실기기 실측). 사용자 파일을 만지는 건
+//  auto-approve(antigravity-cli/settings.json 의 permissions.allow) 하나뿐이라 비파괴가 구조로 보장된다.
+//  ⚠ 경로 env 오버라이드 없음(agy 1.1.13 실측 — $HOME 만 본다). LIVELY_HOME 리다이렉트는 HOME 경유로 그대로 성립.
+const GEMINI = join(HOME, ".gemini");
+const AGY_PLUGIN = join(GEMINI, "config", "plugins", "lively");
+const AGY_SETTINGS = join(GEMINI, "antigravity-cli", "settings.json");
+// ⚠ 훅만은 플러그인이 아니라 **글로벌 루트의 hooks.json** 이다 — 문서는 plugins/<n>/hooks.json 도 로드된다지만
+//  실기기(1.1.13) 훅 스캐너는 글로벌 루트·워크스페이스만 본다("loaded 0 named hooks from 0 hooks.json file(s)"
+//  — #1689 실기기 E2E 에서 잡음). 룰·스킬·MCP 는 플러그인에서 정상 로드되므로 훅 파일 하나만 밖에 둔다.
+//  공유 파일이라 top-level 키("lively") 단위로 비파괴 머지한다(사용자의 다른 이름 훅 보존).
+const AGY_HOOKS = join(GEMINI, "config", "hooks.json");
+
+// 어댑터 호출 command — claude hookCmd 와 같은 규약(#355 번들 node 절대경로 · $HOME 은 sh -c 확장).
+//  antigravity 는 훅 command 를 `sh -c`(win: cmd /c) 로 실행하고 cwd 를 hooks.json 디렉터리로 둔다(#1689 실측).
+const agyHookCmd = (event) => WIN
+  ? `node "${hookAbs("antigravity-adapter.mjs")}" ${event}`
+  : `"${NODEBIN}" "$HOME/.lively/hooks/antigravity-adapter.mjs" ${event}`;
+
+// hooks.json — top-level 키가 '이름 있는 훅'이다. 파일이 통째로 우리 플러그인 안이라 머지가 필요 없다.
+//  ⚠⚠ PreToolUse 는 출력이 invalid 면 **전 툴 fail-closed deny**(#1689 실측) — 어댑터가 유효 decision 을 보장하고,
+//   여기 timeout 은 어댑터 내부 러너 타임박스 합보다 넉넉히 잡는다(초과 시 antigravity 가 훅을 죽인다).
+function agyHooksJson() {
+  return {
+    lively: {
+      // SessionStart 등가 — 매 모델 호출마다 발화하므로 어댑터가 invocationNum==0 만 부수효과를 건다.
+      PreInvocation: [{ type: "command", command: agyHookCmd("PreInvocation"), timeout: 75 }],
+      PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command: agyHookCmd("PreToolUse"), timeout: 25 }] }],
+      PostToolUse: [{ matcher: "*", hooks: [{ type: "command", command: agyHookCmd("PostToolUse"), timeout: 25 }] }],
+      Stop: [{ type: "command", command: agyHookCmd("Stop"), timeout: 40 }],
+    },
+  };
+}
+
+// MCP — codex·opencode 와 같은 이유로 stdio 프록시(`lively mcp`): 세션·모드 헤더가 따라가고 토큰이 설정에 안 굽힌다.
+//  스키마(#1689 실측): command=**문자열** + args=배열(+env). serverUrl 과 양립 불가("must have either command or serverUrl").
+//  추가 org MCP 서버(.lively/mcp-servers.json)는 stdio 만 싣는다 — url 형은 headers 인증이 미실측이라 보류(정직 표기).
+function agyMcpConfig() {
+  const shim = fwd(join(LIVELY, "bin", WIN ? "lively.cmd" : "lively"));
+  const servers = { lively: { command: shim, args: ["mcp"], env: { LIVELY_HARNESS: "antigravity" } } };
+  try {
+    const d = JSON.parse(readFileSync(cloneAbs(join(".lively", "mcp-servers.json")), "utf8"));
+    for (const s of (d.servers || [])) {
+      if (s.enabled === false || !s.name || servers[s.name]) continue;
+      if (!/^[A-Za-z0-9_-]+$/.test(s.name)) continue;
+      if (s.transport === "stdio" && s.command) {
+        const parts = String(s.command).trim().split(/\s+/).filter(Boolean);
+        servers[s.name] = { command: parts[0], ...(parts.length > 1 ? { args: parts.slice(1) } : {}) };
+      } else if (s.url) {
+        console.log(`  · antigravity MCP '${s.name}' 보류(url 형 — headers 인증 미검증, #1689 §9)`);
+      }
+    }
+  } catch { /* 없으면 lively 만 */ }
+  return { mcpServers: servers };
+}
+
+// auto-approve(antigravity) — 발행 묶음 .lively/auto-approve.json 의 'mcp__lively__<tool>' 을
+//  antigravity 규칙(`mcp(lively/<tool>)`)으로 옮겨 settings.json permissions.allow 에 반영(#1689 실측 문법).
+//  회수: 우리가 넣은 규칙 목록을 ~/.lively/managed-antigravity-permission.json 에 남겨 다음 설치 때
+//  '더는 원치 않는 것'만 걷는다(멤버가 손으로 넣은 규칙은 목록 밖이라 보존 — claude·opencode 와 동형).
+function agyMergePermissions() {
+  let want = [];
+  try {
+    const d = JSON.parse(readFileSync(cloneAbs(join(".lively", "auto-approve.json")), "utf8"));
+    want = (Array.isArray(d.allow) ? d.allow : [])
+      .map((s) => (typeof s === "string" ? /^mcp__lively__(.+)$/.exec(s) : null))
+      .filter(Boolean).map((m) => `mcp(lively/${m[1]})`);
+  } catch { /* 번들에 없으면 회수만 수행 */ }
+  const prevPath = join(LIVELY, "managed-antigravity-permission.json");
+  let prev = []; try { prev = JSON.parse(readFileSync(prevPath, "utf8")); if (!Array.isArray(prev)) prev = []; } catch { /* */ }
+  let cur = {};
+  if (existsSync(AGY_SETTINGS)) {
+    const backupDir = join(LIVELY, "backups"); mkdirSync(backupDir, { recursive: true });
+    try { copyFileSync(AGY_SETTINGS, join(backupDir, "antigravity-settings.json.bak")); }
+    catch (e) { console.warn(`  ⚠️ ${AGY_SETTINGS.replace(HOME, "~")} 백업 실패 — 승인 머지 건너뜀: ${e.message}`); return; }
+    try { cur = JSON.parse(readFileSync(AGY_SETTINGS, "utf8")); }
+    catch { console.warn(`  ⚠️ ${AGY_SETTINGS.replace(HOME, "~")} JSON 파싱 실패 — 승인 머지 건너뜀(기존 파일 무수정)`); return; }
+  }
+  if (!cur || typeof cur !== "object" || Array.isArray(cur)) { console.warn("  ⚠️ antigravity settings.json 이 객체가 아님 — 승인 머지 건너뜀"); return; }
+  cur.permissions = (cur.permissions && typeof cur.permissions === "object" && !Array.isArray(cur.permissions)) ? cur.permissions : {};
+  const allow = Array.isArray(cur.permissions.allow) ? cur.permissions.allow : [];
+  const wantSet = new Set(want); const prevSet = new Set(prev);
+  let next = allow.filter((e) => !(prevSet.has(e) && !wantSet.has(e)));   // 우리가 넣었다 뺀 것만 회수
+  for (const e of want) if (!next.includes(e)) next.push(e);
+  cur.permissions.allow = next;
+  try {
+    mkdirSync(dirname(AGY_SETTINGS), { recursive: true });
+    writeFileSync(AGY_SETTINGS, JSON.stringify(cur, null, 2) + "\n");
+    writeFileSync(prevPath, JSON.stringify(want, null, 2)); chmodSync(prevPath, 0o600);
+    console.log(`  ✓ ~/.gemini/antigravity-cli/settings.json (auto-approve ${want.length}건 반영 · 사용자 규칙 보존)`);
+  } catch (e) { console.warn(`  ⚠️ antigravity 승인 반영 실패: ${e.message}`); }
+}
+
+// 글로벌 hooks.json 에 우리 이름("lively") 키만 비파괴 머지. 못 읽는 파일은 무수정+안내(비파괴 불변식).
+function agyMergeHooks() {
+  let cur = {};
+  if (existsSync(AGY_HOOKS)) {
+    const backupDir = join(LIVELY, "backups"); mkdirSync(backupDir, { recursive: true });
+    try { copyFileSync(AGY_HOOKS, join(backupDir, "antigravity-hooks.json.bak")); }
+    catch (e) { console.warn(`  ⚠️ ${AGY_HOOKS.replace(HOME, "~")} 백업 실패 — 훅 머지 건너뜀: ${e.message}`); return; }
+    try { cur = JSON.parse(readFileSync(AGY_HOOKS, "utf8")); }
+    catch { console.warn(`  ⚠️ ${AGY_HOOKS.replace(HOME, "~")} JSON 파싱 실패 — 훅 머지 건너뜀(기존 파일 무수정)`); return; }
+  }
+  if (!cur || typeof cur !== "object" || Array.isArray(cur)) { console.warn("  ⚠️ antigravity hooks.json 이 객체가 아님 — 훅 머지 건너뜀"); return; }
+  cur.lively = agyHooksJson().lively;   // 우리 키만 교체 — 사용자의 다른 이름 훅은 불변
+  try {
+    mkdirSync(dirname(AGY_HOOKS), { recursive: true });
+    writeFileSync(AGY_HOOKS, JSON.stringify(cur, null, 2) + "\n");
+    console.log("  ✓ ~/.gemini/config/hooks.json (lively 훅 배선 — 사용자 훅 보존)");
+  } catch (e) { console.warn(`  ⚠️ antigravity 훅 배선 실패: ${e.message}`); }
+}
+
+function installAntigravity(ctx) {
+  // (a) 플러그인 디렉터리 — plugin.json + mcp_config.json + rules/AGENTS.md. 전부 우리 소유라
+  //  사용자 파일 충돌이 없고, 재설치 = 통째 재생성(멱등), 제거 = 디렉터리 삭제.
+  //  훅은 여기가 아니라 글로벌 hooks.json 이다(AGY_HOOKS 주석 — 실기기에서 플러그인 훅이 안 읽혔다).
+  mkdirSync(join(AGY_PLUGIN, "rules"), { recursive: true });
+  writeFileSync(join(AGY_PLUGIN, "plugin.json"), JSON.stringify({ name: "lively" }, null, 2) + "\n");
+  const adapterSrc = join(LIVELY, "hooks", "antigravity-adapter.mjs");
+  if (existsSync(adapterSrc)) {
+    agyMergeHooks();
+  } else {
+    console.warn("  ⚠️ antigravity 어댑터 미동봉(구버전 번들) — 훅이 배선되지 않습니다. MCP·컨텍스트·자산만 적용됩니다.");
+  }
+  writeFileSync(join(AGY_PLUGIN, "mcp_config.json"), JSON.stringify(agyMcpConfig(), null, 2) + "\n");
+  console.log("  ✓ ~/.gemini/config/plugins/lively/mcp_config.json (MCP stdio 프록시)");
+
+  // (b) rules/AGENTS.md — org-context. antigravity 가 플러그인 rules 를 네이티브 로드한다(경로 dedup — #1689 실측).
+  //  파일이 우리 것이라 머지가 불요하지만 codex·opencode 와 같은 센티넬 규약을 유지한다(갱신 코드 공유·검사 동형).
+  if (ctx) {
+    writeFileSync(join(AGY_PLUGIN, "rules", "AGENTS.md"), agentsMerge("", ctx));
+    console.log(`  ✓ ~/.gemini/config/plugins/lively/rules/AGENTS.md (org-context ${(Buffer.byteLength(ctx, "utf8") / 1024).toFixed(1)} KiB)`);
+  } else {
+    console.log("  · antigravity org-context 시드 보류(오프라인) — 다음 설치/업데이트가 채움");
+  }
+
+  // (c) auto-approve — 유일한 사용자 공유 파일 터치(비파괴 머지 + 회수 원장).
+  agyMergePermissions();
+}
+
+// ── Grok Build user-level 설치 (#1701) ───────────────────────────────────────
+//  배선([[grok-harness-spec-1701]]): 훅은 **우리 소유 JSON 파일**(<grok home>/hooks/lively-grok.json — 파일이
+//  통째로 우리 것이라 비파괴가 구조로 보장), MCP 는 config.toml 센티넬 머지(codex 와 같은 TOML·같은 스키마),
+//  컨텍스트는 <grok home>/rules/lively.md(전 프로젝트 글로벌 주입 — 실측), auto-approve 는 ~/.claude/settings.json
+//  permissions 를 grok 이 compat 로 읽는 경로(mcp__lively__* → lively__* 재작성은 permission rules 에만 있다).
+//  ⚠ 홈 결정은 harness-registry 의 grok.home 과 같은 계약 — GROK_HOME > ~/.grok, 단 LIVELY_HOME(샌드박스 격리)
+//   이 설정되면 GROK_HOME 을 따르지 않는다(개발자 실환경 오염 방지 — opencode 의 XDG 와 동형).
+const GROK = process.env.LIVELY_HOME ? join(HOME, ".grok") : (process.env.GROK_HOME || join(HOME, ".grok"));
+const GRK_BEGIN = "# >>> lively-managed (auto-generated by workflow-std/adapters/grok — do not edit) >>>";
+const GRK_END = "# <<< lively-managed <<<";
+
+// 어댑터 호출 command — claude hookCmd 와 같은 규약(#355 번들 node 절대경로 · $HOME 은 sh -c 확장).
+//  grok 은 command 에 공백·$ 이 있으면 `sh -c`(win: git-bash/pwsh 자동)로 실행한다(#1701 소스검증) — 이 형태는
+//  항상 그 경로를 탄다. ⚠ 미설정 env 참조($VAR)가 있으면 훅 스폰 자체가 거부되므로 $HOME 외에는 쓰지 않는다.
+const grokHookCmd = (event) => WIN
+  ? `node "${hookAbs("grok-adapter.mjs")}" ${event}`
+  : `"${NODEBIN}" "$HOME/.lively/hooks/grok-adapter.mjs" ${event}`;
+
+// lively-grok.json — claude 와 동형의 훅 JSON(이벤트명 1:1). timeout 은 어댑터 내부 러너 타임박스 합보다 넉넉히
+//  (grok 기본 5s 는 우리 SessionStart 부수효과에 부족하다 — 초과 시 grok 이 훅을 죽이고 fail-open 으로 넘어간다).
+//  matcher 는 걸지 않는다 — PostToolUse 의 work-flag 범위 축소는 어댑터가 내부에서 한다(러너 스폰 자체는
+//  run-custom 이 전 툴 대상이라 claude 의 matcher ".*" 와 같은 범위).
+function grokHooksJson() {
+  const entry = (event, timeout) => [{ hooks: [{ type: "command", command: grokHookCmd(event), timeout }] }];
+  return {
+    hooks: {
+      SessionStart: entry("SessionStart", 75),
+      UserPromptSubmit: entry("UserPromptSubmit", 25),
+      PreToolUse: entry("PreToolUse", 25),
+      PostToolUse: entry("PostToolUse", 25),
+      Stop: entry("Stop", 40),
+      SessionEnd: entry("SessionEnd", 15),
+      Notification: entry("Notification", 15),
+      SubagentStop: entry("SubagentStop", 20),
+      PreCompact: entry("PreCompact", 20),
+      PostCompact: entry("PostCompact", 20),
+    },
+  };
+}
+
+// 추가 MCP 서버(org_mcp_server) TOML 라인 — stdio 만 싣는다. grok 의 url 형(headers 인증)은 문서상 지원되지만
+//  우리 실측이 없어 보류한다(antigravity 와 같은 정직 표기 — 넣으면 되는 척하다 조용히 안 되는 게 최악).
+function grokExtraMcpLines() {
+  const out = [];
+  const seen = new Set(["lively"]);
+  try {
+    const d = JSON.parse(readFileSync(cloneAbs(join(".lively", "mcp-servers.json")), "utf8"));
+    for (const s of (d.servers || [])) {
+      if (s.enabled === false || !s.name || seen.has(s.name)) continue;
+      if (!/^[A-Za-z0-9_-]+$/.test(s.name)) continue;
+      seen.add(s.name);
+      if (s.transport === "stdio" && s.command) {
+        const parts = String(s.command).trim().split(/\s+/).filter(Boolean);
+        out.push(`[mcp_servers.${s.name}]`);
+        out.push(`command = ${JSON.stringify(parts[0])}`);
+        if (parts.length > 1) out.push(`args = [${parts.slice(1).map((p) => JSON.stringify(p)).join(", ")}]`);
+        out.push("");
+      } else if (s.url) {
+        console.log(`  · grok MCP '${s.name}' 보류(url 형 — headers 인증 미실측, #1701 §9)`);
+      }
+    }
+  } catch { /* 없으면 lively 만 */ }
+  return out;
+}
+
+// config.toml 센티넬 블록 — **MCP 만** 싣는다. ⚠ [permission]·[compat] 같은 최상위 공유 테이블은 여기 넣지
+//  않는다: 사용자가 자기 config.toml 에 같은 테이블을 갖고 있으면 TOML 재정의 에러로 **config 전체가 죽는다**
+//  (grok 은 미지 '키'엔 관용이지만 테이블 중복은 문법 오류다). 훅도 여기가 아니라 lively-grok.json(파일 소유)이다.
+function grokManagedBlock() {
+  const shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively");
+  return [
+    GRK_BEGIN, "",
+    // stdio 프록시(`lively mcp`) — codex 와 같은 이유(①세션·모드 헤더 ②게이트웨이 미도달에도 connected
+    //  ③토큰을 설정에 안 굽는다). 스키마도 codex 와 같은 형: command=문자열 + args 배열(+env 테이블).
+    "[mcp_servers.lively]",
+    `command = ${JSON.stringify(fwd(shim))}`,
+    'args = ["mcp"]', "",
+    "[mcp_servers.lively.env]",
+    'LIVELY_HARNESS = "grok"', "",
+    ...grokExtraMcpLines(),
+    GRK_END,
+  ].join("\n");
+}
+
+function grokStripManaged(text) {
+  const bi = text.indexOf(GRK_BEGIN);
+  if (bi === -1) return { user: text, had: false };
+  const ei = text.indexOf(GRK_END, bi);
+  if (ei === -1) {
+    // END 손상 — BEGIN 한 줄만 제거하고 아래 사용자 키 보존(codexStripManaged 와 동형).
+    const eol = text.indexOf("\n", bi);
+    const after = eol === -1 ? "" : text.slice(eol + 1);
+    return { user: (text.slice(0, bi) + after).replace(/\n{3,}/g, "\n\n").trim() + "\n", had: true };
+  }
+  return { user: (text.slice(0, bi) + text.slice(ei + GRK_END.length)).replace(/\n{3,}/g, "\n\n").trim() + "\n", had: true };
+}
+
+function installGrok(ctx) {
+  // (a) 훅 파일 — <grok home>/hooks/lively-grok.json. 파일이 통째로 우리 것이라 재설치 = 재생성(멱등),
+  //  제거 = 파일 삭제. ⚠ 심링크 금지(#1701 실측: grok 은 정규 파일·비심링크·nlink==1 만 로드, 무음 스킵) —
+  //  writeFileSync 가 곧 그 계약을 지킨다.
+  const adapterSrc = join(LIVELY, "hooks", "grok-adapter.mjs");
+  if (existsSync(adapterSrc)) {
+    mkdirSync(join(GROK, "hooks"), { recursive: true });
+    writeFileSync(join(GROK, "hooks", "lively-grok.json"), JSON.stringify(grokHooksJson(), null, 2) + "\n");
+    console.log("  ✓ ~/.grok/hooks/lively-grok.json (훅 배선 — 파일 통째 소유 · 사용자 훅 무접촉)");
+  } else {
+    console.warn("  ⚠️ grok 어댑터 미동봉(구버전 번들) — 훅이 배선되지 않습니다. MCP·컨텍스트·자산만 적용됩니다.");
+  }
+
+  // (b) config.toml 센티넬 surgical merge(백업 먼저) — MCP 등록. codex 와 같은 절차.
+  const cfgPath = join(GROK, "config.toml");
+  const shim = join(LIVELY, "bin", WIN ? "lively.cmd" : "lively");
+  if (!existsSync(shim)) {
+    console.warn("  ⚠️ lively CLI 심 미설치 — grok MCP 등록 보류(http 직결은 세션 헤더·토큰 관리가 안 돼 싣지 않는다).");
+  } else {
+    let raw = "";
+    if (existsSync(cfgPath)) {
+      const backupDir = join(LIVELY, "backups"); mkdirSync(backupDir, { recursive: true });
+      try {
+        const orig = join(backupDir, "config.toml.grok.orig");
+        if (!existsSync(orig)) copyFileSync(cfgPath, orig);
+        copyFileSync(cfgPath, join(backupDir, "config.toml.grok.bak"));
+      } catch (e) { console.error(`✗ ~/.grok/config.toml 백업 실패 — 중단: ${e.message}`); process.exit(1); }
+      raw = readFileSync(cfgPath, "utf8");
+    }
+    const { user, had } = grokStripManaged(raw);
+    // TOML 재정의 충돌은 [mcp_servers.lively] 중복뿐 — 그 경우만 머지 건너뜀(codex 와 동형).
+    if (/^\s*\[mcp_servers\.lively\]\s*$/m.test(user)) {
+      console.warn("  ⚠️ ~/.grok/config.toml 사용자 영역에 [mcp_servers.lively] 충돌 — 머지 건너뜀(해당 테이블 제거 후 재실행).");
+    } else {
+      const ut = user.replace(/\s+$/, "");
+      mkdirSync(dirname(cfgPath), { recursive: true });
+      writeFileSync(cfgPath, (ut ? ut + "\n\n" : "") + grokManagedBlock() + "\n");
+      chmodSync(cfgPath, 0o600);
+      console.log(`  ✓ ~/.grok/config.toml (lively-managed 블록 ${had ? "교체" : "추가"} · 사용자 키 보존 · 토큰 리터럴 없음)`);
+    }
+  }
+
+  // (c) rules/lively.md — org-context. grok 이 <home>/rules/*.md 를 **전 프로젝트 글로벌**로 항상 스캔한다(실측).
+  //  파일이 우리 것이라 머지가 불요하지만 codex·antigravity 와 같은 센티넬 규약을 유지한다(갱신 코드 공유·검사 동형).
+  if (ctx) {
+    mkdirSync(join(GROK, "rules"), { recursive: true });
+    writeFileSync(join(GROK, "rules", "lively.md"), agentsMerge("", ctx));
+    console.log(`  ✓ ~/.grok/rules/lively.md (org-context ${(Buffer.byteLength(ctx, "utf8") / 1024).toFixed(1)} KiB)`);
+  } else {
+    console.log("  · grok org-context 시드 보류(오프라인) — 다음 설치/업데이트가 채움");
+  }
+
+  // (d) auto-approve — grok 은 ~/.claude/settings.json 의 permissions.allow(mcp__lively__*)를 compat 로 읽어
+  //  lively__* 로 재작성한다(#1701 실측 — 이 재작성은 permission rules 에만 있고 훅 matcher 엔 없다).
+  //  네이티브 [permission] 테이블은 위 (b) 주석의 이유로 싣지 않는다 — WIRING 이 mergeAutoApprove() 를 호출한다.
+}
+
 // 설치-시 org-context 시드 — 세션 훅(session-preload)과 동일 라이브 소스(/api/ui/org/preview)를 1회 fetch.
 //  토큰·게이트웨이는 setup 이 먼저 ~/.lively 에 기록하므로 거기서 읽는다. fail-soft(오프라인/무토큰/구 node → "").
 async function fetchOrgSeed() {
@@ -911,6 +1210,16 @@ async function main() {
       console.log("  ── OpenCode ──");
       installOpencode(ctx);
     },
+    antigravity: () => {
+      console.log("  ── Antigravity ──");
+      installAntigravity(ctx);
+    },
+    grok: () => {
+      console.log("  ── Grok Build ──");
+      installGrok(ctx);
+      // auto-approve 는 ~/.claude/settings.json permissions 경유(installGrok (d) 주석) — grok 이 compat 로 읽는다.
+      mergeAutoApprove();
+    },
   };
   const unknown = [];
   for (const h of harnesses) {
@@ -923,7 +1232,7 @@ async function main() {
   //  `lively install` 경로에선 바로 다음 단계인 CLI 의 [3/3] 이 등록한다 — 화면상 이 줄 **바로 아래**에서
   //  "✓ MCP 등록: lively" 가 뜨므로 사용자는 서로 모순된 두 문장을 연달아 읽었다. 게다가 윈도우 사용자에겐
   //  실행조차 못 하는 `.sh` 를 가리켰다. 설치 화면의 거짓 안내는 장애 진단을 통째로 헛돌게 만든다.
-  console.log("  · Claude MCP 등록은 여기서 하지 않습니다 — 이어지는 `lively install` 단계(또는 박스 프로비저닝)가 처리합니다. Codex MCP 는 위 config.toml 에 포함.");
+  console.log("  · Claude MCP 등록은 여기서 하지 않습니다 — 이어지는 `lively install` 단계(또는 박스 프로비저닝)가 처리합니다. Codex MCP 는 위 config.toml 에, OpenCode·Antigravity MCP 는 각 설정/플러그인에 포함.");
   console.log("✓ user-level 설치 완료 — 다음 세션부터 적용(현 세션은 안전).");
 }
 

@@ -323,7 +323,12 @@ function projDraw(ctx: ProjCtx) {
   }
   // 개요 카드 후보 = 내 프로젝트가 있는 리스트 + 직접 고른 리스트(pinned) + 이 화면에서 방금 만든 리스트(#762).
   //  조직의 모든 리스트를 무조건 늘어놓지는 않는다 — 그건 ⚙ 트리에서 사람이 고른다.
-  const base = [...ctx.lists.filter((l) => byList.has(l.id) || pinned.has(Number(l.id)) || ctx.justCreated.has(l.id)).map((l) => l.id), ...(byList.has(0) ? [0] : [])];
+  //  ⚠ 후보 판정은 **상태 필터(전체/진행 중)와 무관**해야 한다(위 autoIds 주석의 의도) → byList 가 아니라 byListAll(모드 미적용).
+  //   byList 로 판정하면 '진행 중'에서 안 보이던 리스트(완료 프로젝트만 있는 리스트)가 <전체> 를 누를 때마다 후보로 새로
+  //   튀어나오고, 사람은 그걸 본 적이 없어 숨길 수도 없었으니 ✕ 정리를 필터 전환마다 다시 해야 했다(#1129).
+  //   위계: 카드 집합은 사람이 정하고(hidden/pinned), 상태 필터는 그 **카드 안의 프로젝트 목록**만 거른다.
+  //   (⚙ 트리 체크 상태 isOn 은 이미 autoIds 기준이라, 팝오버는 '켜짐'인데 카드는 사라지던 불일치도 함께 해소된다.)
+  const base = [...ctx.lists.filter((l) => byListAll.has(l.id) || pinned.has(Number(l.id)) || ctx.justCreated.has(l.id)).map((l) => l.id), ...(byListAll.has(0) ? [0] : [])];
   ctx.currentOrder = dashApplyListOrder(base);
   // 숨긴 개요 카드 제외(#671). 선택된 리스트가 숨겨졌거나 사라졌으면 보이는 첫 카드로 폴백.
   const hiddenOv = dashOvHidden();

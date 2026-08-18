@@ -216,6 +216,68 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-rvw-cat { flex: none; max-width: 30%; font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dash-rvw-when { flex: none; font-size: 11.5px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
 
+/* ── 내 라이블리 사용 내역(#1570, 시안 A '브리핑') + 라이블리 로그(시안 D '정돈된 로그') ──
+   §0.5 채색 예산: 자기홍보로 읽히지 않게 강조는 잉크 위계로 — 색은 유형 식별(점·바)에만 쓴다.
+   유형 4색(blue·mint-deep·violet·coral)은 CVD 검증 통과 조합(#1570) — coral 은 대비 2.9:1이라 라벨 병기 필수. */
+.dash-lvl { display: flex; flex-direction: column; }
+/* 유형 색 어휘 한 벌 — 점(dash-dot-s)·구성 바(dash-lvl-comp i)가 같은 클래스를 본다. violet/amber 리터럴은 tn-* 과 동일 값 */
+.dash-lvl .k-read { background: var(--blue); } .dash-lvl .k-write { background: var(--mint-deep); }
+.dash-lvl .k-work { background: #8B7BD8; } .dash-lvl .k-db { background: var(--coral); }
+.dash-lvl .k-etc { background: var(--muted-3); }
+.dash-dot-s { width: 7px; height: 7px; border-radius: 50%; flex: none; display: inline-block; }
+.dash-dot-s.fail { outline: 2px solid var(--coral); outline-offset: 1px; }
+.dash-lvl-why { padding: 14px 10px; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+.dash-lvl-foot { padding: 8px; font-size: 11.5px; color: var(--muted-2); }
+.dash-lvl-more { display: block; width: calc(100% - 16px); margin: 8px; padding: 7px; font: inherit; font-size: 12.5px;
+  color: var(--ink-sub); background: transparent; border: 1px solid var(--line); border-radius: 7px; cursor: pointer; }
+.dash-lvl-more:hover { background: var(--bg-tint); }
+
+/* — 브리핑(lvlog) — */
+.dash-lvl-lead { padding: 8px 2px 2px; font-size: 14px; line-height: 1.65; color: var(--ink); }
+.dash-lvl-lead b { font-weight: 800; font-variant-numeric: tabular-nums; }
+.dash-lvl-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+.dash-lvl-tile { background: var(--bg-tint); border-radius: 9px; padding: 10px 12px 9px; }
+.dash-lvl-tile .v { font-size: 22px; font-weight: 800; letter-spacing: -.3px; font-variant-numeric: tabular-nums; }
+.dash-lvl-tile .l { font-size: 11.5px; color: var(--ink-sub); margin-top: 1px; }
+.dash-lvl-tile .d { font-size: 11px; color: var(--muted); margin-top: 3px; min-height: 14px; }
+/* 검토 대기 배지 — 채운 필 금지(§0.5): 텍스트 링크형. 색은 검토 톤(tn-amber 텍스트값)과 같은 어휘 */
+.dash-lvl-pend { display: block; margin-top: 3px; padding: 0; font: inherit; font-size: 11px; font-weight: 800;
+  color: #C68A2E; background: none; border: 0; cursor: pointer; text-align: left; }
+.dash-lvl-pend:hover { text-decoration: underline; }
+.dash-lvl-pop-row { text-decoration: none; }
+.dash-lvl-pop-go { display: block; padding: 8px 10px 6px; font-size: 12px; font-weight: 700; color: var(--blue-deep);
+  text-decoration: none; border-top: 1px solid var(--line-row); margin-top: 4px; }
+.dash-lvl-pop-go:hover { text-decoration: underline; }
+.dash-lvl-comp { display: flex; height: 14px; border-radius: 4px; overflow: hidden; gap: 2px; margin-top: 2px; }
+.dash-lvl-comp i { display: block; height: 100%; }
+.dash-lvl-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 8px 0 2px; }
+.dash-lvl-legend span { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-sub); }
+.dash-lvl-legend b { font-weight: 700; font-variant-numeric: tabular-nums; }
+.dash-lvl-rows { margin-top: 2px; }
+.dash-lvl-krow { display: flex; align-items: center; gap: 8px; padding: 6px 2px; border-top: 1px solid var(--line-row);
+  color: inherit; text-decoration: none; border-radius: 6px; }
+a.dash-lvl-krow:hover { background: var(--bg-tint); }
+.dash-lvl-krow:first-child { border-top: 0; }
+.dash-lvl-krow .t { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-lvl-krow .v { flex: none; font-size: 12px; color: var(--ink-sub); font-variant-numeric: tabular-nums; }
+
+/* — 로그(lvlogd) — */
+.dash-lvl-kpis { display: flex; border: 1px solid var(--line-row); border-radius: 9px; overflow: hidden; margin-top: 8px; }
+.dash-lvl-kpi { flex: 1; padding: 8px 10px 7px; background: var(--bg-tint); border-left: 1px solid var(--line-row); }
+.dash-lvl-kpi:first-child { border-left: 0; }
+.dash-lvl-kpi .v { font-size: 17px; font-weight: 800; letter-spacing: -.2px; }
+.dash-lvl-kpi .l { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--ink-sub); margin-top: 1px; white-space: nowrap; }
+.dash-lvl-day { padding: 12px 2px 4px; font-size: 11.5px; font-weight: 800; color: var(--muted); }
+.dash-lvl-erow { display: grid; grid-template-columns: 40px 10px 1fr auto; gap: 0 8px; align-items: baseline; padding: 5px 2px; border-radius: 6px;
+  color: inherit; text-decoration: none; }
+a.dash-lvl-erow:hover, div.dash-lvl-erow:hover { background: var(--bg-tint); }
+.dash-lvl-erow .tm { font-size: 11px; color: var(--muted-2); text-align: right; font-variant-numeric: tabular-nums; }
+.dash-lvl-erow .dash-dot-s { align-self: center; }
+.dash-lvl-erow .body { min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-lvl-erow .body .verb { color: var(--ink-sub); }
+.dash-lvl-erow .body .obj { font-weight: 650; color: var(--ink); }
+.dash-lvl-erow .x { font-size: 11px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
+
 /* ── 대시보드 편집(#1232) — 창 자체가 대시보드의 축소판: 3열 + 아래 '숨긴 위젯' 트레이 ── */
 .dash-lay { display: flex; flex-direction: column; gap: 12px; }
 .dash-lay-hint { margin: 0; font-size: 13px; line-height: 1.6; color: var(--muted); }

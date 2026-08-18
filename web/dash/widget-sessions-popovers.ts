@@ -18,6 +18,8 @@ import { SESS_STATES, SESS_STATE_KEYS } from '../session-status.js';
 import { dashSaveSessDensity, dashSaveSessFilter2, dashSaveSessOnlineOnly, dashSaveSessShowClosed, dashSaveSessSort } from './prefs.js';
 import { dashSessDead, dashSessState } from './status.js';
 import { dashPopover } from './chrome.js';
+// #1582 — 세션 종료·목록제거 확인창은 전 화면 공용 정의 하나만 쓴다.
+import { confirmSessionEnd, confirmSessionForget, endedToast } from '../session-actions.js';
 import type { SessCtx } from './widget-sessions.js';
 
 // #1098 출처 버킷 — 모든 세션이 정확히 하나에 속한다(상호배타). 초대받은 남의 세션 / 내 프로젝트 세션 / 내 개인 세션.
@@ -197,7 +199,7 @@ function openSessRename(s, onChange) {
   setTimeout(() => { input.focus(); input.select(); }, 0);
 }
 
-// 세션 '⋯' 메뉴 — 이름 수정 · 내 질문 보기 · 삭제. 이름 수정/삭제는 소유자만(서버도 비소유 403 재검증).
+// 세션 '⋯' 메뉴 — 이름 수정 · 내 질문 보기 · 종료. 이름 수정/종료는 소유자만(서버도 비소유 403 재검증).
 //  '내 질문'은 터미널 탭의 팝업(openSessPrompts, #745)을 그대로 재사용 — 접근통제는 서버 canAttach.
 function openSessMenu(anchor, s, onChange) {
   const panel = el('div', { class: 'dash-pop-panel' });
@@ -209,14 +211,21 @@ function openSessMenu(anchor, s, onChange) {
   };
   if (s.owned) item('이름 수정', null, false, () => openSessRename(s, onChange));
   item('질문 보기', '이 세션에서 AI 에게 보낸 질문 전부(누가 보냈든) 모아보기', false, () => openSessPrompts(s));
-  // #1059 E — restorable(이미 꺼진) 세션은 '복원 목록에서 제거'(desired-state 삭제), 라이브 세션은 '삭제'(작업 종료).
-  if (s.owned) item(s.restorable ? '복원 목록에서 제거' : '삭제', s.restorable ? '이 세션을 더는 복원하지 않습니다' : null, true, async () => {
-    const msg = s.restorable
-      ? '세션 ‘' + (s.label || '(이름 없음)') + '’을(를) 복원 목록에서 제거할까요?\n더는 복원할 수 없어요 (되돌릴 수 없어요).'
-      : '세션 ‘' + (s.label || '(이름 없음)') + '’을(를) 삭제할까요?\n실행 중인 작업도 함께 종료됩니다 (되돌릴 수 없어요).';
-    if (!confirm(msg)) return;
-    try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'DELETE' }); toast(s.restorable ? '복원 목록에서 제거했어요' : '세션을 삭제했어요'); onChange && onChange(); }
-    catch (e: any) { toast('삭제 실패 — ' + (e && e.message || e), true); }
+  // #1059 E — restorable(이미 꺼진) 세션은 '복원 목록에서 지우기'(desired-state 삭제), 라이브 세션은 '종료'(작업 끝내기).
+  // #1582 — '삭제'라는 이름과 "되돌릴 수 없어요"를 걷어냈다: 이 동작은 작업 폴더·파일·대화록을 지우지 않는다.
+  //  확인창은 전 화면 공용 정의(session-actions)를 쓴다 — 같은 동작이 화면마다 다른 말을 하면 한쪽이 거짓이 된다.
+  if (s.owned) item(s.restorable ? '복원 목록에서 지우기' : '종료',
+    s.restorable ? '이 세션을 더는 복원하지 않습니다(대화록은 남아요)' : '이 세션을 끝냅니다(작업 폴더·대화록은 남아요)', true, async () => {
+    const name = '‘' + (s.label || '(이름 없음)') + '’';
+    const ok = s.restorable
+      ? await confirmSessionForget({ title: name + ' 을(를) 복원 목록에서 지울까요?', sessions: [s] })
+      : await confirmSessionEnd({ title: name + ' 세션을 종료할까요?', sessions: [s] });
+    if (!ok) return;
+    try {
+      await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id), { method: 'DELETE' });
+      toast(s.restorable ? '복원 목록에서 지웠어요' : await endedToast(1, [s]));
+      onChange && onChange();
+    } catch (e: any) { toast((s.restorable ? '지우기' : '종료') + ' 실패 — ' + (e && e.message || e), true); }
   });
   close = dashPopover(anchor, panel);
 }

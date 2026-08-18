@@ -92,6 +92,224 @@ export async function setMemberOnboardingStep(
   return (r.rows[0].onboarding ?? {}) as Record<string, ReportedStep>;
 }
 
+// ── 리브 프로필(#1631) — **리브가 이 사람에 대해 아는 것**이 사는 자리 ──────────────
+//  리브의 기억은 대화가 아니라 여기 있다(세션은 교체 가능하다는 기획 불변식). 그래서 담는 것은
+//  서버가 **볼 수 없는 것**뿐이다 — 온보딩·파이프라인·하네스 인벤토리는 각자 자기 자리에서 라이브
+//  계산되므로 여기 복제하면 두 개의 진실이 생긴다(#850 이 온보딩에서 이미 내린 결론).
+export interface LivWork { asis?: string; tobe?: string; at?: string; by?: "ai" | "self" }
+export interface LivDecision { at: string; what: string; why?: string; by?: string }
+/** 사람이 "그건 안 할게요"라고 한 것. `key` 는 카드 key(예: `org.embeddings`). */
+export interface LivDeclined { at: string; key: string; why?: string }
+/**
+ * 리브가 **지금 사람에게 받아야 하는 자격 하나**(#1631).
+ *
+ * ⚠ 여기 담기는 것은 "무엇이 필요한가"뿐이다 — **값은 절대 담기지 않는다.** 값은 화면이 받아
+ *  곧바로 금고(수집기 secrets)로 보내고, 이 요청은 지워진다. 리브는 값을 보지 못한다.
+ *
+ * 왜 프로필에 얹었나: 이건 지식이 아니라 **일시 상태**라 원래는 남의 자리다. 그럼에도 여기 둔 이유는
+ *  ① 사람 축으로 정확히 하나이고 ② 새로고침을 견뎌야 하며(사람이 창을 다시 열 수 있다)
+ *  ③ 리브 화면이 이미 이 레코드를 읽고 있어서다. 테이블을 하나 더 만들 값어치가 없다.
+ */
+export interface LivSecretAsk {
+  at: string;
+  kind?: "secret";
+  /** 어디에 넣을 것인가 — 지금은 수집기뿐이다(collector.id + 그 프리셋의 시크릿 필드 key). */
+  collector_id: number;
+  field: string;
+  /** 사람에게 보일 것. label = 칸 이름, why = 왜 필요한지 한 줄. */
+  label: string;
+  why?: string;
+  /** 값이 어떻게 생겼는지(예: `ntn_` 로 시작하는 긴 문자열). 사람이 맞게 복사했는지 스스로 확인한다. */
+  hint?: string;
+}
+
+/**
+ * **객관식 질문**(#1631) — 리브가 묻고 사람은 고르기만 한다.
+ *
+ * 왜 객관식인가: 실측에서 사람이 가장 오래 멈춘 자리가 **자유서술**이었다("어디에 쌓고 계셨나요?").
+ *  없는 말을 지어내야 하니 어렵고, 답이 제각각이라 우리도 통계를 못 낸다. 고르게 하면 둘 다 풀린다 —
+ *  사람은 쉽고, **답이 저절로 구조화된다**(아래 LivAnswer). 그게 이 둘을 한 기능으로 묶은 이유다.
+ */
+export interface LivChoiceAsk {
+  at: string;
+  kind: "choice";
+  /** 통계의 축이 되는 안정된 key(예: `context_sources`). 문구가 바뀌어도 이건 안 바뀐다. */
+  key: string;
+  question: string;
+  why?: string;
+  options: Array<{ id: string; label: string; hint?: string }>;
+  /** 복수 선택 허용(예: 쓰는 도구를 다 고르기). */
+  multi?: boolean;
+  /** '그 외' 자유입력 허용 — 목록에 없는 소스를 놓치지 않기 위한 탈출구. */
+  allow_other?: boolean;
+}
+
+/** **파일 올리기**(#1631) — 로컬 폴더를 뒤지는 대신 사람이 끌어다 놓는다. */
+export interface LivUploadAsk {
+  at: string;
+  kind: "upload";
+  label: string;
+  why?: string;
+  /** 사람에게 보여줄 허용 형식 안내(실제 차단은 화면이 한다). */
+  accept_hint?: string;
+}
+
+export type LivAsk = LivSecretAsk | LivChoiceAsk | LivUploadAsk;
+
+/**
+ * 사람이 고른 답 — **통계의 원재료**.
+ *
+ * `key` 가 축이고 `choices` 가 값이라, 워크스페이스 전체에서 SQL 한 줄로 집계된다
+ * (예: 어떤 소스를 쓰는 사람이 몇 %인가 · 커넥터 없는 소스로 무엇을 적어내나).
+ */
+export interface LivAnswer {
+  at: string;
+  key: string;
+  choices: string[];
+  /** '그 외'로 적어낸 자유입력. **여기 쌓이는 것이 곧 다음에 만들 커넥터 후보다.** */
+  other?: string;
+  question?: string;
+  /**
+   * 누가 기록했나 — `self`(사람이 버튼을 눌렀다) · `liv`(사람이 채팅으로 답한 걸 리브가 옮겨 적었다).
+   *
+   * ⚠ 왜 나눠야 하나: 리브가 옮겨 적는 걸 허용하지 않으면 **채팅으로 답한 사람의 답이 통째로 유실된다**
+   *  (실측: 카톡·네이버밴드를 쓴다고 말했는데 버튼을 안 눌러 통계에 한 줄도 안 남았다). 그렇다고 섞어
+   *  버리면 리브가 잘못 옮긴 것과 사람이 직접 고른 것을 구분할 수 없다 — 그래서 표시해 두고 따로 센다.
+   */
+  by?: "self" | "liv";
+}
+
+/** 리브와의 대화 한 줄기(#1631 v1 채팅). **세션이 아니라 여기 산다** — 게이트웨이가 재시작해도
+ *  다음 턴이 같은 대화를 이어받는다(`--resume <session_id>`). 대화 내용은 담지 않는다:
+ *  본문은 하네스가 자기 트랜스크립트에 갖고 있고, 여기 복제하면 진실이 둘이 된다. */
+/** 지나간 턴 한 건 — **본문이 아니라 어디서 읽을지**만 담는다(본문은 그 턴의 진행 파일에 있다). */
+export interface LivTurnRef {
+  id: string;      // 턴 id(그 턴의 작업 폴더 이름)
+  text: string;    // 사람이 한 말 — 이건 어디에도 안 남아서 여기 담는다(리브의 말은 진행 파일에 있다)
+  at: string;
+  /** 그 턴이 도는 세션 id. **멈추려면 이게 있어야 한다** — 없으면 사람은 시작만 하고 못 멈춘다.
+   *  본인 프로필에서만 나오므로 남의 턴은 구조상 못 건드린다. */
+  sid?: string;
+}
+
+export interface LivChat {
+  /** claude 대화 세션 uuid. 첫 턴이 만들고 이후 턴이 이어받는다. */
+  session_id: string;
+  started_at: string;
+  /** 이 대화의 턴들(오래된 것부터). **화면이 새로고침 뒤 기록을 되그리는 근거**다.
+   *  ⚠ 리브의 말을 여기 복제하지 않는다 — 진행 파일이 정본이고, 복제하면 진실이 둘이 된다. */
+  turns?: LivTurnRef[];
+}
+
+export interface LivProfile {
+  work?: LivWork; decisions?: LivDecision[]; declined?: LivDeclined[];
+  /** 대기 중인 요청(자격·객관식·업로드) 하나. 받으면 즉시 지운다 — 시크릿 값은 여기 오지 않는다. */
+  secret_ask?: LivAsk | null;
+  /** 사람이 고른 답들. 뒤에 쌓인다. */
+  answers?: LivAnswer[];
+  /** 지금 이어가고 있는 대화. 새로 시작하면 갈아끼운다(null 이면 다음 턴이 첫 턴). */
+  chat?: LivChat | null;
+}
+
+const LIV_LIST_CAP = 50; // 결정·거절 이력 상한 — 오래된 것부터 버린다(프로필은 로그가 아니다)
+
+/** 요청을 걸거나(ask) 지운다(null). 시크릿 값은 절대 지나가지 않는다. */
+export async function setLivSecretAsk(id: string, ask: LivAsk | null): Promise<LivProfile> {
+  const cur = await getLivProfile(id);
+  const next: LivProfile = { ...cur, secret_ask: ask };
+  const r = await itemsPool.query(
+    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
+  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+}
+
+/** 이어갈 대화를 정한다(null = 다음 턴이 첫 턴). 대화 **본문은 저장하지 않는다** — 이어받을 열쇠만.
+ *  ⚠ 이 함수는 읽고-쓰기라, 같은 사람이 동시에 두 턴을 시작하면 뒤가 앞을 덮는다. 리브 화면은 답을
+ *   기다리는 동안 입력을 막으므로 v1 에선 그 경합이 생기지 않는다(막는 게 풀리면 여기부터 다시 봐야 한다). */
+/** 이 대화에 턴 하나를 잇는다. 되그릴 수 있는 만큼만 들고 있는다(오래된 것부터 버린다). */
+export async function appendLivTurn(id: string, turn: LivTurnRef, cap = 30): Promise<LivProfile> {
+  const cur = await getLivProfile(id);
+  const chat = cur.chat;
+  if (!chat) return cur;                       // 대화가 없으면 이을 곳도 없다
+  const turns = [...(chat.turns ?? []), turn].slice(-cap);
+  const next: LivProfile = { ...cur, chat: { ...chat, turns } };
+  const r = await itemsPool.query(
+    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
+  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+}
+
+export async function setLivChat(id: string, chat: LivChat | null): Promise<LivProfile> {
+  const cur = await getLivProfile(id);
+  const next: LivProfile = { ...cur, chat };
+  const r = await itemsPool.query(
+    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
+  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+}
+
+/**
+ * 고른 답을 남기고 그 요청을 내린다(한 트랜잭션의 뜻 — 답했으면 질문은 사라져야 한다).
+ *
+ * ⚠ **같은 key 는 갈아끼운다.** 다시 물어 다시 답했으면 최신 하나만 의미가 있고,
+ *  두 줄이 남으면 집계가 사람 수보다 커진다(통계가 틀어지는 가장 흔한 경로).
+ */
+export async function appendLivAnswer(id: string, answer: LivAnswer): Promise<LivProfile> {
+  const cur = await getLivProfile(id);
+  const { mergeAnswer } = await import("../delivery/liv-secret.js");
+  const next: LivProfile = { ...cur, answers: mergeAnswer(cur.answers ?? [], answer, LIV_LIST_CAP) as LivAnswer[], secret_ask: null };
+  const r = await itemsPool.query(
+    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
+  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+}
+
+/**
+ * 워크스페이스 전체 답변 집계 — **개선점을 찾는 자리**.
+ *
+ * 특히 `other`(목록에 없어 직접 적어낸 것)가 중요하다: 거기 쌓이는 이름이 **다음에 만들 커넥터 후보**다.
+ * 사람 이름은 내보내지 않는다(누가 답했는지가 아니라 무엇이 몇 번인지가 알고 싶은 것이다).
+ */
+export async function livAnswerStats(): Promise<Array<{
+  key: string; question: string | null; responders: number; by_self: number; by_liv: number;
+  choices: Array<{ id: string; n: number }>; others: Array<{ text: string; n: number }>;
+}>> {
+  const r = await itemsPool.query<{ liv_profile: LivProfile }>(
+    `SELECT liv_profile FROM org_member WHERE liv_profile ? 'answers'`);
+  const { foldAnswerStats } = await import("../delivery/liv-secret.js");
+  return foldAnswerStats(r.rows.map((row) => row.liv_profile?.answers ?? []));
+}
+
+export async function getLivProfile(id: string): Promise<LivProfile> {
+  const r = await itemsPool.query(`SELECT liv_profile FROM org_member WHERE id=$1`, [id]);
+  const v = r.rows[0]?.liv_profile as unknown;
+  return (v && typeof v === "object" && !Array.isArray(v)) ? v as LivProfile : {};
+}
+
+/**
+ * 프로필을 **덧붙인다**(replace 아님).
+ *
+ * - `work` 는 주면 통째로 갈아끼운다(ASIS/TOBE 는 최신 하나만 의미가 있다).
+ * - `decision`·`declined` 는 **뒤에 쌓는다**. 같은 key 의 거절이 이미 있으면 갱신한다 —
+ *   두 번 거절했다고 두 줄이 남을 이유가 없고, 중복이 쌓이면 상한에 걸려 옛 결정이 밀려난다.
+ */
+export async function appendLivProfile(
+  id: string, patch: { work?: LivWork; decision?: LivDecision; declined?: LivDeclined },
+): Promise<LivProfile> {
+  const cur = await getLivProfile(id);
+  const next: LivProfile = { ...cur };
+  if (patch.work) next.work = { ...patch.work, at: patch.work.at ?? new Date().toISOString() };
+  if (patch.decision) next.decisions = [...(cur.decisions ?? []), patch.decision].slice(-LIV_LIST_CAP);
+  if (patch.declined) {
+    const rest = (cur.declined ?? []).filter((d) => d.key !== patch.declined!.key);
+    next.declined = [...rest, patch.declined].slice(-LIV_LIST_CAP);
+  }
+  const r = await itemsPool.query(
+    `UPDATE org_member SET liv_profile=$2::jsonb WHERE id=$1 RETURNING liv_profile`, [id, JSON.stringify(next)]);
+  if (!r.rows[0]) throw new Error("구성원 정보를 찾을 수 없습니다");
+  return (r.rows[0].liv_profile ?? {}) as LivProfile;
+}
+
 // ── 로컬 하네스 관측 스냅샷(#891 온보딩 C) — 세션훅이 push, 웹이 라이블리 자산과 대조 ──
 //  ⚠ 관측이지 보고가 아니다(onboarding 과 별 컬럼). **메타만**(id·kind·managed) — 스킬 본문·메모리는 절대 안 담는다.
 //  ⚠ **머신별 맵**이다 — 한 멤버가 PC 여러 대(집·회사)를 쓰면 각각 다른 로컬 환경이다. machine_id(훅이
@@ -229,7 +447,7 @@ export async function upsertMember(m: MemberInput, actor?: string, source?: stri
   await itemsPool.query(
     `INSERT INTO org_member(id, kind, display_name, nickname, email, identities, body_md, avatar, avatar_char, avatar_color, state, scopes, sort, version, updated_at, updated_by)
        VALUES($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12::jsonb,$13,1,now(),$14)
-     ON CONFLICT (id) DO UPDATE SET
+     ON CONFLICT (tenant_id, id) DO UPDATE SET
        kind=EXCLUDED.kind, display_name=EXCLUDED.display_name, nickname=EXCLUDED.nickname, email=EXCLUDED.email,
        identities=EXCLUDED.identities, body_md=EXCLUDED.body_md, avatar=EXCLUDED.avatar,
        avatar_char=EXCLUDED.avatar_char, avatar_color=EXCLUDED.avatar_color, state=EXCLUDED.state, scopes=EXCLUDED.scopes, sort=EXCLUDED.sort,
@@ -283,7 +501,7 @@ async function syncMemberToPerson(m: OrgMember): Promise<void> {
   const dn = m.display_name ?? m.id;
   await itemsPool.query(
     `INSERT INTO person(id, display_name, kind) VALUES($1,$2,$3)
-       ON CONFLICT (id) DO UPDATE SET display_name=EXCLUDED.display_name, kind=EXCLUDED.kind`,
+       ON CONFLICT (tenant_id, id) DO UPDATE SET display_name=EXCLUDED.display_name, kind=EXCLUDED.kind`,
     [m.id, dn, m.kind],
   );
   for (const idn of m.identities) {
@@ -291,7 +509,7 @@ async function syncMemberToPerson(m: OrgMember): Promise<void> {
     await itemsPool.query(
       `INSERT INTO person_identity(person_id, system, instance, external_id, email, display_name, origin, state)
          VALUES($1,$2,$3,$4,$5,$6,'manual','confirmed')
-       ON CONFLICT (system, external_id) DO UPDATE SET
+       ON CONFLICT (tenant_id, system, external_id) DO UPDATE SET
          person_id=EXCLUDED.person_id,
          instance=COALESCE(EXCLUDED.instance, person_identity.instance),
          email=COALESCE(EXCLUDED.email, person_identity.email),

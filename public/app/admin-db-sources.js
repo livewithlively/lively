@@ -5,7 +5,7 @@
 //  ②③은 감사 화면(admin-audit.ts)이 아니라 여기 산다 — 서버도 /org/db-source/* 의 하위 리소스로 본다.
 //  ⚠ 접속 비밀번호는 **값을 저장하지 않는다** — 환경변수 이름(auth_ref)만 저장하고, 그 이름조차
 //   allowed_db_secret_refs allowlist 안에 있어야 한다. 고객 DB 는 무수정, 집행은 전부 게이트웨이가 한다.
-import { api, cardHead, el, errorNote, memberCombo, relTime, selectFilter, state, toast, uiText } from './core.js';
+import { api, busy, cardHead, el, errorNote, memberCombo, relTime, selectFilter, state, toast, uiText } from './core.js';
 import { field } from './ui-primitives.js';
 import { loadAdmin, rerenderPanel } from './admin-rerender.js';
 import { allowlistCard, sectionHead, sectionTitle } from './admin-widgets.js';
@@ -143,7 +143,7 @@ function dbSourceForm(root, s, data, detail, isNew) {
 }
 // ── 테이블 정책 · 컬럼 마스킹 패널(#186) — 라이브 스키마 오버레이. 고객 DB 무수정, 게이트웨이 집행. ──
 async function renderDbPolicyPanel(panel, source) {
-    panel.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('스키마 불러오는 중…')));
+    busy(panel, el('p', { class: 'admin-hint' }, ...uiText('스키마 불러오는 중…')));
     let ov;
     try {
         ov = await api('/api/ui/org/db-source/schema?source=' + encodeURIComponent(source));
@@ -178,7 +178,7 @@ async function renderDbPolicyPanel(panel, source) {
     panel.append(tbl);
 }
 async function renderColumnMasks(cell, panel, source, table) {
-    cell.replaceChildren(el('span', { class: 'admin-hint' }, ...uiText('컬럼 불러오는 중…')));
+    busy(cell, el('span', { class: 'admin-hint' }, ...uiText('컬럼 불러오는 중…')));
     let ov;
     try {
         ov = await api('/api/ui/org/db-source/schema?source=' + encodeURIComponent(source) + '&table=' + encodeURIComponent(table));
@@ -221,7 +221,7 @@ async function setColumnMask(source, table, column, style) {
     }
 }
 async function renderSubjectKeyPanel(panel, source, data) {
-    panel.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('식별자 설정 불러오는 중…')));
+    busy(panel, el('p', { class: 'admin-hint' }, ...uiText('식별자 설정 불러오는 중…')));
     let keys = [];
     let schema = null;
     try {
@@ -278,7 +278,7 @@ async function renderSubjectKeyPanel(panel, source, data) {
 //  직무상 raw PII 가 필요한 사람(심사역·CS 등)용. 만료(JIT) 드롭다운·승인자 기록(maker-checker). 텍스트 최소.
 const GRANT_EXPIRY = [['72h', '3일 (권장)'], ['24h', '1일'], ['7d', '7일'], ['30d', '30일'], ['', '무기한 (지양)']];
 async function renderUnmaskGrantPanel(panel, source, data) {
-    panel.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('언마스크 권한 불러오는 중…')));
+    busy(panel, el('p', { class: 'admin-hint' }, ...uiText('언마스크 권한 불러오는 중…')));
     let grants = [];
     let schema = null;
     try {

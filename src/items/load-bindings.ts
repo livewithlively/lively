@@ -210,7 +210,7 @@ export async function loadBindings(
   for (const p of persons) {
     const pr = await client.query(
       `INSERT INTO person(id, display_name, kind) VALUES($1,$2,$3)
-         ON CONFLICT (id) DO UPDATE SET display_name=EXCLUDED.display_name, kind=EXCLUDED.kind
+         ON CONFLICT (tenant_id, id) DO UPDATE SET display_name=EXCLUDED.display_name, kind=EXCLUDED.kind
          WHERE person.display_name IS DISTINCT FROM EXCLUDED.display_name
             OR person.kind IS DISTINCT FROM EXCLUDED.kind
        RETURNING (xmax=0) AS inserted`,
@@ -228,7 +228,7 @@ export async function loadBindings(
       const ir = await client.query(
         `INSERT INTO person_identity(person_id, system, instance, external_id, email, display_name, origin, state)
          VALUES($1,$2,$3,$4,$5,$6,'manual','confirmed')
-         ON CONFLICT (system, external_id) DO UPDATE SET
+         ON CONFLICT (tenant_id, system, external_id) DO UPDATE SET
            person_id = EXCLUDED.person_id,
            instance = COALESCE(EXCLUDED.instance, person_identity.instance),
            email = COALESCE(EXCLUDED.email, person_identity.email),

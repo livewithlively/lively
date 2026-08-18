@@ -35,7 +35,7 @@ export async function setFavorite(memberId: string, kind: FavoriteKind, targetId
   if (on) {
     await q(itemsPool,
       `INSERT INTO member_favorite(member_id, target_kind, target_id) VALUES ($1,$2,$3)
-       ON CONFLICT (member_id, target_kind, target_id) DO NOTHING`, [memberId, kind, id]);
+       ON CONFLICT (tenant_id, member_id, target_kind, target_id) DO NOTHING`, [memberId, kind, id]);
   } else {
     await q(itemsPool,
       `DELETE FROM member_favorite WHERE member_id=$1 AND target_kind=$2 AND target_id=$3`, [memberId, kind, id]);

@@ -15,7 +15,7 @@ export { previewEnvsPanel } from './admin-preview.js';
 export { AWS_REGIONS, CRED_KINDS, awsRoleCard, catalogStatusCard, credVaultCard, credentialsEditor, openGitCredentialManager, svcTokenForm } from './admin-credentials.js';
 export { PROF_DEV, PROF_LANG, PROF_TONE, applyMyProfileSaved, avatarEditor, changePasswordModal, openMyProfileModal, parseMyProfile, profChips } from './me-profile.js';
 export { myAiSection } from './me-ai.js';
-export { CH_TYPE_LABEL, LOGIN_SERVICES, addPanel, channelRuleExplainer, myLoginsSection, renderServiceTabs, servicePanel, slackChannelPolicyCard } from './me-logins.js';
+export { CH_TYPE_LABEL, LOGIN_SERVICES, channelRuleExplainer, myLoginsSection, renderServices, slackChannelPolicyCard } from './me-logins.js';
 export { myAssetsSection } from './me-assets.js';
 export { memberForm, memberRead, membersEditor, openMemberModal, profileEditor, profilesEditor, teamsPanel, tokensPanel } from './admin-members.js';
 export { reposPanel } from './admin-repos.js';

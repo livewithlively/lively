@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerDbTools } from "./tools/db.js";
 import { registerMcpCapabilities } from "./capabilities/index.js";
 import { resolveUser } from "./context.js";
-import { logToolCall } from "./org/policies/tool-log.js";
+import { logToolCall, toolResultFailure } from "./org/policies/tool-log.js";
 
 // memory_* 폐기(2026-06-24) — knowledge_*(v6)로 통일(ctx_* 가 간 길). org_memory 웹 표면('WIKI 인덱스')은 delivery REST(/api/ui/org/memory) 유지.
 // code_*: 보류 (개발자는 레포 내 네이티브 툴; 필요시 공식 GitHub MCP 래핑)
@@ -10,7 +10,10 @@ import { logToolCall } from "./org/policies/tool-log.js";
 type ToolHandler = (args: Record<string, unknown>, extra: unknown) => Promise<unknown>;
 
 // 호출 계측(프로젝트 #318) — 핸들러를 감싸 한 건의 tools/call 을 mcp_call_log 에 적재한다.
-//  · 측정: 핸들러 실행 전후로 소요시간(ms)·성공/실패(throw 여부)·에러 메시지를 잡는다.
+//  · 측정: 핸들러 실행 전후로 소요시간(ms)·성공/실패·에러 메시지를 잡는다.
+//    성공/실패는 **두 축**이다(#1653) — 예외를 던졌는가(아래 catch) + 결과가 isError:true 인가(toolResultFailure).
+//    프록시 계열은 상류 실패를 예외가 아니라 isError:true **정상 반환**으로 돌려주므로, throw 여부만 보면
+//    커넥터가 전부 죽어 있어도 오류 수가 0 으로 적재된다(실측: 구글 3종 403 이 전부 ok=true).
 //  · 신원: harness=이 요청의 접속 신원(buildServer 인자, agentFromHeaders 파생), actor=토큰 principal(resolveUser).
 //  · 비침습: 적재는 fire-and-forget(logToolCall 내부에서 await 안 함) — 응답 지연 0, 적재 실패는 무시(fail-open).
 //   계측이 핸들러 결과/예외를 바꾸지 않는다(성공값 그대로 반환, 예외 그대로 재던짐).
@@ -25,7 +28,11 @@ function instrument(name: string, handler: ToolHandler, harness?: string | null)
     }
     try {
       const out = await handler(args, extra);
-      logToolCall({ tool: name, harness: harness ?? null, actor, args, ok: true, durationMs: Date.now() - started });
+      const failure = toolResultFailure(out); // 정상 반환이어도 isError:true 면 실패로 적재(#1653)
+      logToolCall({
+        tool: name, harness: harness ?? null, actor, args,
+        ok: failure === null, error: failure, durationMs: Date.now() - started,
+      });
       return out;
     } catch (err) {
       logToolCall({

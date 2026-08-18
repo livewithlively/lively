@@ -15,7 +15,7 @@ let itemsPool, recordSessionProject, listProjectActivities;
 
 // 도커 pg 기동 + 스텁 테이블 + dist 로드. 반환: 아무것도(헬퍼가 모듈 상태를 씀).
 export async function setup() {
-  try { sh(`docker rm -f ${CNAME} 2>/dev/null`); } catch { /* */ }
+  try { sh(`docker rm -f -v ${CNAME} 2>/dev/null`); } catch { /* */ }
   execFileSync("docker", ["run", "-d", "--name", CNAME, "-e", "POSTGRES_PASSWORD=pw",
     "-p", `${PORT}:5432`, "postgres:16-alpine"], { stdio: "ignore" });
   let ready = false;
@@ -55,7 +55,7 @@ export async function setup() {
 
 export async function teardown() {
   try { if (itemsPool) await itemsPool.end(); } catch { /* */ }
-  try { sh(`docker rm -f ${CNAME}`); } catch { /* */ }
+  try { sh(`docker rm -f -v ${CNAME}`); } catch { /* */ }
 }
 
 // ── 조작 헬퍼(시나리오가 쓰는 유일한 표면) ──

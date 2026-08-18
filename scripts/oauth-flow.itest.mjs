@@ -52,7 +52,7 @@ try {
   await itemsPool.query(
     `INSERT INTO org_member(id, kind, display_name, email, state, scopes)
        VALUES($1,'human','OAuth통합테스트',$2,'active','["items","context","admin"]'::jsonb)
-     ON CONFLICT (id) DO UPDATE SET state='active', email=$2, scopes='["items","context","admin"]'::jsonb`,
+     ON CONFLICT ON CONSTRAINT org_member_pkey DO UPDATE SET state='active', email=$2, scopes='["items","context","admin"]'::jsonb`,
     [MID, EMAIL]);
   await setMemberPassword(MID, PASSWORD, { mustChange: false, actor: "itest" });
 

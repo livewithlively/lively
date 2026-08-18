@@ -91,19 +91,24 @@ export const API_PREFIX = (() => {
 })();
 // 루트 절대경로만 접두사를 받는다(상대·절대URL 은 그대로). fetch 와 내비게이션 둘 다 같은 규칙.
 export const apiUrl = (path) => (API_PREFIX && String(path).charAt(0) === '/' ? API_PREFIX + path : path);
-// ⚠ WS(/terminal/ws)에는 붙이지 않는다 — PTY 세션 실체는 게이트웨이 본체에 있고 프리뷰 라우트는 upgrade 를
-//  처리하지 않는다(#1169 와 같은 판단). 그래서 프리뷰에서도 4410 은 본체에서 정상적으로 온다.
+// WS(/terminal/ws)도 **같은 접두사**를 받는다 — 티켓·WS·세션이 한 프로세스에 모여야 한다.
+//  ⚠ 한때는 반대로 했다(WS 만 본체로). 프리뷰 라우트가 upgrade 를 처리하지 못했기 때문인데, 그 한계가
+//   preview/ws-proxy.ts 로 사라졌다. 그리고 그 우회는 **노드 세션에서 틀렸다**(실측 #1541):
+//   노드 에이전트는 자기가 등록한 게이트웨이(프리뷰 자식)의 인메모리 레지스트리에 붙어 있는데, 브라우저 WS 만
+//   본체로 가면 본체는 그 노드를 모른다 → 4462(노드 오프라인) → "연결 끊김·재연결 중" 무한 반복.
+//   프리뷰에서 노드 세션을 여는 것이 정확히 이 프로젝트의 검증 시나리오라, 우회를 남겨두면 검증 자체가 불가능하다.
 
 function authHeaders(extra) {
   const t = localStorage.getItem(TOKEN_KEY);
   return Object.assign({}, extra, t ? { Authorization: 'Bearer ' + t } : {});
 }
-// opts.mainOrigin=true 면 프리뷰 접두사를 붙이지 않고 **게이트웨이 본체**로 보낸다 — WS 와 짝이어야 하는 요청(티켓)용.
-//  붙이면 티켓은 프리뷰 자식에 발급되는데 WS 는 본체로 붙어(아래 주석) 본체가 그 티켓을 몰라 계속 재연결한다(실측).
+// 모든 요청이 apiUrl 을 탄다 — 티켓도 WS 도 **화면이 놓인 곳**(프리뷰면 프리뷰 자식)으로 간다.
+//  ⚠ 이 둘은 반드시 같은 프로세스여야 한다: 티켓은 인메모리라, 발급한 쪽과 WS 가 붙는 쪽이 갈리면
+//   받는 쪽이 그 티켓을 몰라 계속 재연결한다(실측). 한쪽만 바꾸지 마라.
 async function api(path, opts: any = {}) {
   const headers = authHeaders(opts.headers);
   if (opts.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-  const res = await fetch(opts.mainOrigin ? path : apiUrl(path), Object.assign({}, opts, { headers }));
+  const res = await fetch(apiUrl(path), Object.assign({}, opts, { headers }));
   const data = await res.json().catch(() => null);
   if (!res.ok) throw new Error((data && data.error) || ('요청 실패 ' + res.status));
   return data;
@@ -187,7 +192,14 @@ function makeControl(opts) {
   // opts: { write(string), backfill(string), onExit() }
   let mode = null;                  // null=미정, 'control', 'raw'
   let pending = new Uint8Array(0);  // 부분 줄/도입자 판별용 바이트 잔여
-  let inBlock = false, blockNum = '', blockParts = [];
+  let inBlock = false, blockNum = '', blockParts = [], blockAt = 0;
+  // 미완결 블록 탈출 시한 (#1541 실측). tmux control mode 의 `%begin`은 반드시 같은 번호의 `%end`/`%error`로
+  //  닫히는데, **psmux 는 alt-screen 팬의 capture-pane 에서 `%begin` 만 보내고 영영 닫지 않는다**(실측 트레이스:
+  //  348ms `%begin` 이후 9초간 `%end` 없음). 파서는 블록 안에 있는 동안 `%output` 까지 전부 블록 내용으로
+  //  삼키므로, 한 번 갇히면 **그 뒤 앱 출력이 화면에 영영 안 나온다** — 새로고침 후 하얀 화면 + 조각 하나,
+  //  타이핑해도 반응 없음, 넛지로 앱이 다시 그려도 안 보임의 진짜 원인이 이것이다.
+  //  진짜 캡처는 한 번에 밀려오므로(수 ms) 이 시한이 정상 백필을 자르는 일은 없다.
+  const BLOCK_MAX_MS = 1500;
   const outDec = new TextDecoder('utf-8'); // 라이브 %output 전용 — stream:true 로 %output 경계 분할 재조립
   const rawDec = new TextDecoder('utf-8'); // legacy raw 모드 전용 streaming 디코더
   const ascii = (b, s, e) => { let r = ''; for (let i = s; i < e; i++) r += String.fromCharCode(b[i]); return r; };
@@ -210,10 +222,15 @@ function makeControl(opts) {
   }
   function handleLine(s, e0) { // pending[s,e0) — 줄(개행 제외). 끝 \r 제거.
     let e = e0; if (e > s && pending[e - 1] === 0x0d) e--;
+    // 닫히지 않는 블록에서 빠져나온다 — 이 줄부터는 평소대로(=%output 은 화면에 쓴다) 처리한다.
+    if (inBlock && blockAt && Date.now() - blockAt > BLOCK_MAX_MS) {
+      inBlock = false; blockParts = []; blockAt = 0;
+      if (opts.blockLost) opts.blockLost();
+    }
     if (inBlock) {
       const head = ascii(pending, s, Math.min(e, s + 8));
       if ((head.startsWith('%end ') || head.startsWith('%error ')) && ascii(pending, s, e).split(' ')[2] === blockNum) {
-        inBlock = false;
+        inBlock = false; blockAt = 0;
         // 블록(capture 백필) 내용 = 실제 ESC + 리터럴 멀티바이트(줄 안에선 안 쪼개짐). 줄 사이 구분자는
         //  `\e[0m\r\n`(SGR 리셋 + CRLF) — capture-pane -N 으로 보존한 줄 끝 배경색이 '다음 줄'로 새지 않게 한다.
         const SEP = [0x1b, 0x5b, 0x30, 0x6d, 0x0d, 0x0a]; // \e[0m\r\n
@@ -237,7 +254,7 @@ function makeControl(opts) {
       return;
     }
     const head = ascii(pending, s, Math.min(e, s + 18));
-    if (head.startsWith('%begin ')) { inBlock = true; blockNum = ascii(pending, s, e).split(' ')[2] || ''; blockParts = []; }
+    if (head.startsWith('%begin ')) { inBlock = true; blockAt = Date.now(); blockNum = ascii(pending, s, e).split(' ')[2] || ''; blockParts = []; }
     else if (head.startsWith('%extended-output ')) {            // pause-after 형태: `... : <value>`
       const full = ascii(pending, s, Math.min(e, s + 200)); const mk = full.indexOf(' : ');
       if (mk >= 0) { const str = outDec.decode(octalDecode(pending, s + mk + 3, e), { stream: true }); if (str) opts.write(str); }
@@ -276,6 +293,89 @@ let syncedThisConn = false;           // 이 연결에서 재접속 상태동기
 //  cap 을 보내면(옛 서버로의 degrade 는 예외 — 그땐 상태 자체가 안 옴), state-only(t:'st')가 남긴 stale 커서가
 //  엉뚱한 백필에 적용돼 이 버그(커서 desync)가 재발한다. 새 cap 송신부를 추가하면 st:1 을 반드시 함께.
 let pendingPaneState = null, lastStateAt = 0, lastMouseResetAt = 0, lastMouseProbeAt = 0, mouseResetTries = 0;
+// ── 캡처가 불가능한 백엔드를 위한 폴백 (#1541 실측) ──────────────────────────────────────────
+// psmux(Windows 노드)는 **alt-screen 팬의 capture-pane 에 빈 응답**을 준다(tmux 는 내용을 준다).
+//  A/B 실측 — 같은 노드, 같은 요청: 셸 팬(alt=0) → 상태 블록 + 캡처 44줄 / claude 팬(alt=1) → 상태 블록만.
+//  그래서 새로고침하면 복원할 내용이 없어 화면이 비고, TUI 는 '바뀐 부분만' 다시 그리므로 영영 안 채워진다.
+//  사용자가 본 화면: 하얀 바탕에 방금 그려진 조각 하나(까만 네모). 입력은 앱에 정상 도달하는데(커서 좌표로 확인)
+//  결과가 안 보이니 "타이핑이 안 된다 · 클로드가 죽은 것 같다" 로 보였다.
+// 해법: 캡처로 못 채우면 **앱이 스스로 다시 그리게** 한다 — 크기를 1줄 줄였다 되돌리면 앱이 리사이즈를 받고
+//  화면 전체를 다시 그린다(정상적인 TUI 의 보편 동작). 캡처가 되는 백엔드에선 이 경로가 아예 안 탄다.
+// ⚠ 게이트는 '플랫폼'이 아니라 **관측된 사실**이다: alt-screen 인데 백필이 안 왔다. tmux 에선 그 조합이
+//  발생하지 않으므로 자동으로 무영향이고, 백엔드 종류를 클라가 알 필요도 없다.
+const BACKFILL_WAIT_MS = 900;   // 상태 블록 뒤 이 시간 안에 백필이 없으면 '캡처 불가'로 본다
+const MAX_NUDGES = 3;           // 연결당 상한 — 회복이 안 될 때 화면이 무한히 깜빡이지 않게
+let backfillWatch = null, nudgeTries = 0, needBackfill = false, lastKnownState = null;
+// forceRedraw 가 '백엔드를 몰라' 미뤄둔 재캡처 — 상태블록이 오면 그 사실로 캡처/넛지를 판정한다(아래 state 핸들러).
+let wantRedrawCap = false;
+function clearBackfillWatch() { if (backfillWatch) { clearTimeout(backfillWatch); backfillWatch = null; } }
+// 크기 넛지 — r-1 로 줄였다 되돌린다. 순수 계산부는 아래 nudgeSizes(테스트가 이 표를 지킨다).
+export function nudgeSizes(cols, rows) {
+  const c = Math.trunc(cols) || 0, r = Math.trunc(rows) || 0;
+  if (c < 1 || r < 2) return null;             // 1줄짜리는 줄일 수 없다 — 넛지 불가(그냥 포기)
+  return [{ t: 'r', c, r: r - 1 }, { t: 'r', c, r }];
+}
+/** 포그라운드 명령이 **셸**인가 — 팬에 전화면 앱이 도는지 가르는 축. 순수(전역 의존 없음).
+ *  경로·선행 하이픈(로그인 셸)·`.exe` 를 벗겨 이름만 본다. Windows 셸(powershell/pwsh/cmd)도 셸이다. */
+export function isShellCmd(cmd) {
+  const c = String(cmd || '').replace(/^-/, '').replace(/^.*[\\/]/, '').replace(/\.exe$/i, '').toLowerCase();
+  return ['zsh', 'bash', 'sh', 'fish', 'dash', 'ksh', 'tcsh', 'csh', 'ash', 'powershell', 'pwsh', 'cmd'].indexOf(c) >= 0;
+}
+/** 이 **백엔드**가 capture-pane 을 무조건 감당하나 — '멀티플렉서 정체'만 본다(팬 상태 아님). 순수.
+ *  정체는 세션 내내 안 변하므로 **최근 상태 사본**으로 판단해도 stale 하지 않다. 팬 상태(alt·cmd)는 매 순간
+ *  변하니 사본으로 믿으면 안 된다 — 그래서 psmux 는 여기서 false 를 받고, 갓 받은 상태로 다시 판정한다.
+ *  ⚠ 미상(st 없음)은 **금지**로 접는다 — fail-open 이면 첫 상태블록이 오기 전 창(원격 노드는 RTT 만큼 길다)에
+ *   캡처가 나가 psmux 를 잠근다. 이것이 #1541 '새로고침하면 하얀 화면'의 직접 원인이었다. */
+export function captureSafeBackend(st) {
+  if (!st) return false;                         // 백엔드 미상 — 알고 나서 결정한다(상태 먼저 질의)
+  if (st.mux) return st.mux !== 'psmux';         // 서버가 백엔드를 알려줬으면 그게 답
+  return !st.flagsMissing;                       // 구 노드 번들 — 지문으로 판별(위 주석)
+}
+/** 지금 이 팬에 capture-pane 을 걸어도 되나 — **갓 받은 상태**로만 판단한다(stale 사본 금지). 순수.
+ *
+ *  ⚠ 판별축은 alt-screen 이 **아니다**(2026-08-11 실기기 실측으로 뒤집힘). 같은 노드·같은 분에 잰 결과:
+ *   - powershell 팬(앱 없음) → capture 40줄 정상, 블록 정상 종료, 이후 리사이즈 %output 도 정상.
+ *   - Claude Code 가 도는 팬 → **`alt=0` 으로 보고되는데도** capture 블록이 끝내 안 닫히고 제어 스트림이 멈춘다.
+ *  Windows 는 ConPTY 가 앱 출력을 커서이동+`[K` 로 정규화해 `1049h` 가 아예 흐르지 않는다 → psmux 의
+ *  `alternate_on` 은 **사실상 항상 0**이다. 그래서 alt 로 가르던 종전 게이트는 한 번도 발동하지 못했고, 앱이 도는
+ *  팬마다 캡처가 나가 스트림이 얼어붙었다(= 새로고침하면 하얀 화면, ⟳ 로만 풀림 — 그건 새 attach 라서).
+ *
+ *  대신 **포그라운드가 셸인지**로 가른다. 이 축은 두 방향 모두에서 맞다:
+ *   - 셸 팬은 캡처가 정상이고, 셸은 SIGWINCH 로 다시 그리지 않으므로 **캡처 말고는 복원 수단이 없다**.
+ *   - 앱 팬은 캡처가 스트림을 잠그지만, 앱은 리사이즈에 전체를 다시 그리므로 **넛지로 복원된다**.
+ *  (같은 축을 paneMouseMode 도 이미 쓴다 — tmux flag 가 stale 인지 가리는 단서.) */
+export function captureAllowed(st) {
+  if (!st) return false;                         // 미상이면 걸지 않는다(위 fail-open 함정)
+  if (captureSafeBackend(st)) return true;       // tmux — 앱이 돌든 말든 캡처가 정상
+  return isShellCmd(st.cmd);                     // psmux — 포그라운드가 셸일 때만(cmd 미상이면 금지)
+}
+// 크기 넛지 실행 — 앱이 리사이즈를 두 번 받아 화면 전체를 다시 그린다.
+function doNudge() {
+  if (++nudgeTries > MAX_NUDGES) return;
+  // ⚠ 넛지 직전에 fit 을 확정한다 — 폰트 정착 전 크기로 넛지하면 앱이 **다른 크기로** 전체를 그려
+  //  클라 화면과 어긋난다(실측: 상단 일부가 화면 위로 벗어남). 넛지는 '지금 확정된 크기'를 기준으로만 의미가 있다.
+  try { if (fit) fit.fit(); } catch (_) { /* noop */ }
+  const msgs = nudgeSizes(term && term.cols, term && term.rows);
+  if (!msgs || !ws || ws.readyState !== 1) return;
+  dlog('nudge', '#' + nudgeTries + ' ' + msgs[1].c + 'x' + msgs[1].r);
+  try { ws.send(JSON.stringify(msgs[0])); } catch (_) { /* noop */ }
+  setTimeout(() => { try { if (ws && ws.readyState === 1) ws.send(JSON.stringify(msgs[1])); } catch (_) { /* noop */ } }, 140);
+  lastCols = 0; lastRows = 0;
+}
+function armBackfillWatch() {
+  clearBackfillWatch();
+  backfillWatch = setTimeout(() => {
+    backfillWatch = null;
+    const st = pendingPaneState;
+    if (!st) return;                           // 캡처가 도착해 소비됐다 — 할 일 없음
+    // ⚠ 종전엔 여기서 `|| !st.alt` 로 한 번 더 걸렀는데, psmux 는 alt 를 사실상 항상 0 으로 보고하므로(ConPTY 가
+    //  1049h 를 안 흘린다 — captureAllowed 주석의 실측) **이 폴백이 한 번도 발동하지 못했다**. 캡처를 보냈는데
+    //  안 돌아왔다는 사실 자체가 이미 이상 신호다 — 팬 상태와 무관하게 재그리기를 시도한다.
+    pendingPaneState = null;                   // 이 백필은 오지 않는다 — 커서 복원 대상도 없다
+    dlog('backfill', '보낸 캡처가 안 돌아왔다 → 크기 넛지로 재그리기 유도');
+    doNudge();
+  }, BACKFILL_WAIT_MS);
+}
 function parsePaneState(line) {
   const m: any = {};
   for (const tok of String(line).trim().split(/\s+/)) { const i = tok.indexOf('='); if (i > 0) m[tok.slice(0, i)] = tok.slice(i + 1); }
@@ -285,6 +385,10 @@ function parsePaneState(line) {
     alt: num('alt') === 1,
     mouseOn: any === 1 || btn === 1 || std === 1,   // 1003/1002/1000 중 하나라도 = tmux flag 상 마우스 리포트 요구
     any: any === 1, btn: btn === 1, std: std === 1, sgr: sgr === 1,
+    mux: m.mux || '',                               // 백엔드(tmux|psmux) — 서버가 알려주면 이게 답
+    // 구 노드 번들엔 mux 토큰이 없다 → 지문으로 판별한다: psmux 는 마우스 flag 포맷변수를 구현하지 않아
+    //  `any= btn= std= sgr=` 처럼 **전부 빈 값**으로 온다(실측). tmux 는 0/1 을 준다.
+    flagsMissing: any === null && btn === null && std === null && sgr === null,
     cmd: m.cmd || '',                               // foreground 프로세스 — flag 가 stale 인지 가리는 단서(paneMouseMode)
     cx, cy, hasCursor: cx !== null && cy !== null,
   };
@@ -300,8 +404,7 @@ function parsePaneState(line) {
 //  cmd 가 비면(구 서버 — 마커에 cmd 없음) 게이팅하지 않고 옛 동작으로 degrade 한다.
 export function paneMouseMode(st) {
   if (!st || !(st.any || st.btn || st.std)) return 'none';
-  const cmd = String(st.cmd || '').replace(/^-/, '').replace(/^.*\//, '').toLowerCase();
-  if (cmd && ['zsh', 'bash', 'sh', 'fish', 'dash', 'ksh', 'tcsh', 'csh', 'ash'].indexOf(cmd) >= 0) return 'none';
+  if (isShellCmd(st.cmd)) return 'none';              // 셸이 포그라운드 = 죽은 앱이 남긴 flag(위 주석)
   return st.any ? 'any' : st.btn ? 'drag' : 'vt200';  // 1003 > 1002 > 1000 (상위모드 우선)
 }
 // xterm 이 내보낸 데이터가 마우스 리포트인가 — SGR(1006) `\e[<b;x;yM|m` · urxvt(1015) `\e[b;x;yM` · X10 `\e[M`+3바이트.
@@ -310,14 +413,15 @@ export function isMouseReport(d) { return /^\x1b\[(<[0-9;]+[Mm]|[0-9;]+M|M)/.tes
 // 클라 xterm 상태를 tmux pane 실상태에 맞춘다. 모든 쓰기는 '실제 불일치일 때만'(가드) — 일치하면 no-op.
 export function applyPaneState(st) {
   if (!term || !st) return;
+  lastKnownState = st;   // 소비되지 않는 사본 — forceRedraw 가 '캡처를 걸어도 되나'를 판단하는 근거
   pendingPaneState = st; // 바로 뒤따르는 백필의 커서 복원용
   lastStateAt = Date.now();
   // alt-screen 동기화 — 추측(옛 #252)이 아니라 tmux 실상태로. 앱 alt인데 클라 normal → 진입(#252 재접속 보정),
   //  앱 normal인데 클라 alt(stuck) → 복귀(프롬프트/입력 위·아래 어긋남 = 버그2 계열의 한 원인).
   try {
     const isAlt = !!(term.buffer && term.buffer.active && term.buffer.active.type === 'alternate');
-    if (st.alt && !isAlt) term.write('\x1b[?1049h');
-    else if (!st.alt && isAlt) term.write('\x1b[?1049l');
+    if (st.alt && !isAlt) { dlog('alt', '1049h (앱 alt · 클라 normal)'); term.write('\x1b[?1049h'); }
+    else if (!st.alt && isAlt) { dlog('alt', '1049l (앱 normal · 클라 alt)'); term.write('\x1b[?1049l'); }
   } catch (_) { /* noop */ }
   // 마우스모드 동기화 — 앱이 mouse-off 했는데(재접속 갭에 1003l 놓침) 클라가 ON으로 굳으면 마우스 이동마다 셸에
   //  SGR 리포트가 주입돼 `;EB1` 류 garbage(버그1). tmux 실상태의 '트래킹 모드'(any>drag>std 우선)로 정확히 맞춘다 —
@@ -361,6 +465,7 @@ function applyFit() {
   try { fit.fit(); } catch (_) { /* noop */ }
   if (ws && ws.readyState === 1 && (term.cols !== lastCols || term.rows !== lastRows)) {
     lastCols = term.cols; lastRows = term.rows;
+    dlog('fit', term.cols + 'x' + term.rows);
     try { ws.send(JSON.stringify({ t: 'r', c: term.cols, r: term.rows })); } catch (_) { /* noop */ }
   }
 }
@@ -375,7 +480,26 @@ function forceRedraw() {
   if (ws && ws.readyState === 1) {
     lastCols = term.cols; lastRows = term.rows;
     try { ws.send(JSON.stringify({ t: 'r', c: term.cols, r: term.rows })); } catch (_) { /* noop */ }
-    if (ctrl && ctrl.isControl()) { try { ws.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES, st: 1 })); } catch (_) { /* noop */ } } // 깨끗이 재캡처(+상태 동기화)
+    // 깨끗이 재캡처(+상태 동기화). ⚠ 단, **캡처가 스트림을 멈추는 조합엔 절대 보내지 않는다**(#1541) —
+    //  이 경로는 새로고침 직후 자동(initialSettleRedraw)으로도, 탭 복귀(visibilitychange·focus)로도 돈다.
+    //  여기가 안 막히면 방금 살려낸 스트림을 다시 잠근다(실측: 강력 새로고침 3회 중 2회 화면 상단이 어긋남).
+    // ⚠⚠ '무조건 안전한 백엔드로 **확인된** 경우에만' 즉시 캡처한다 — 모르면 미룬다. 종전엔 미상을 '안전'으로
+    //  접었는데(captureUnsafe(null)=false), 이 경로는 **첫 상태블록이 도착하기 전에** 먼저 돈다(폰트 로드는 캐시가
+    //  더우면 수십 ms, 상태블록은 원격 노드 왕복이라 수백 ms). 그래서 새로고침마다 psmux 팬에 캡처가 나가 제어
+    //  스트림이 통째로 멈췄고, 그 뒤 넛지·리사이즈가 전부 무시돼 화면이 빈 채로 굳었다(#1541 '하얀 화면'의 직접 원인).
+    //  ⟳ 버튼(softReconnect)만 듣던 이유도 이것 — 그 경로는 새 attach 라 스트림이 새로 열린다.
+    //  psmux 는 '지금 그 팬에 앱이 도는가'까지 봐야 하는데 그건 사본으로 못 믿는다 → 상태를 새로 물어 판정한다.
+    if (ctrl && ctrl.isControl()) {
+      if (!captureSafeBackend(lastKnownState)) {
+        // 백엔드 미상 or psmux — 지금 캡처를 걸지 않는다. 상태를 먼저 물어 **갓 받은 사실**로 판정한다(state 핸들러).
+        dlog('redraw', 'cap 보류 — 상태 질의 후 판정(backend=' + ((lastKnownState && lastKnownState.mux) || '미상') + ')');
+        wantRedrawCap = true;
+        try { ws.send(JSON.stringify({ t: 'st' })); } catch (_) { /* noop */ }
+      } else {
+        dlog('redraw', 'cap 전송(backend=' + lastKnownState.mux + ')');
+        try { ws.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES, st: 1 })); armBackfillWatch(); } catch (_) { /* noop */ }
+      }
+    }
   }
   try { term.refresh(0, term.rows - 1); } catch (_) { /* noop */ }
 }
@@ -1910,10 +2034,17 @@ let reconnectTimer = null, reconnectDelay = 1500, wasConnected = false, connecti
 //  받았을 때만 보낸다. 그래야 '살아있는데 죽었다고 오인'(#687) 없이 '죽었는데 영원히 재접속중'을 없앨 수 있다.
 let denyRetries = 0; const MAX_DENY_RETRIES = 5;
 let sessionEnded = false; // 4410 수신 = 세션 종료 확정 → 재연결 영구 중단(아래 endSession)
+// 게이트웨이가 아예 응답하지 않을 때 **언젠가는 포기한다**. 예전엔 5초 간격으로 영원히 재시도했는데,
+//  그러면 서버가 죽었든 노트북이 절전에서 깼든 화면은 똑같이 '재연결 중… (417회째)' 만 돈다 —
+//  사용자는 기다려야 하는지 새로고침해야 하는지 알 수 없고, 탭을 열어둔 채로 무한히 요청이 나간다.
+//  40회면 백오프 포함 약 3분이다. 그 뒤엔 멈추고 '다시 시도'를 사람 손에 넘긴다.
+const MAX_RECONNECT_ATTEMPTS = 40;
+let gaveUp = false;
 function scheduleReconnect(label) {
   clearTimeout(reconnectTimer);
-  if (sessionEnded) return;
+  if (sessionEnded || gaveUp) return;
   attempts++;
+  if (attempts > MAX_RECONNECT_ATTEMPTS) { giveUpReconnect(); return; }
   // 재시도 횟수를 같이 보여준다 — '멈춘 것처럼 보이는 재접속중'이 아니라 '지금 몇 번째로 시도 중'임을 알린다.
   try {
     statusEl.textContent = label + (attempts > 1 ? ' (' + attempts + '회째)' : '');
@@ -1921,6 +2052,64 @@ function scheduleReconnect(label) {
   } catch (_) { /* noop */ }
   reconnectTimer = setTimeout(connectNow, reconnectDelay);
   reconnectDelay = Math.min(Math.round(reconnectDelay * 1.6), 5000); // 지수 백오프, 최대 5s
+}
+
+/**
+ * 재연결 포기 — 단, **포기하기 전에 서버에게 한 번 물어본다**.
+ *
+ * 게이트웨이가 `/healthz` 에 503 + `Retry-After` 로 답하면 그건 "죽었다"가 아니라 "지금 준비 중이니
+ *  그만큼 뒤에 오라"는 표준 HTTP 응답이다(절전에서 깨는 중·기동 중·배포 중). 그 말을 들었으면
+ *  포기하지 않고 서버가 말한 간격으로 계속 기다린다 — 대신 문구를 '준비 중'으로 바꿔서, 사용자가
+ *  '고장'과 '기다리면 되는 상태'를 구별할 수 있게 한다.
+ *
+ * 아무 답도 없으면(연결 자체가 안 되면) 거기서 멈추고 결정권을 사람에게 넘긴다.
+ */
+async function giveUpReconnect() {
+  let retryAfterMs = 0;
+  try {
+    const r = await fetch(apiUrl('/healthz'), { cache: 'no-store' });
+    if (r.status === 503) {
+      const ra = Number(r.headers.get('retry-after') || 0);
+      retryAfterMs = Math.min(Math.max(ra > 0 ? ra * 1000 : 5000, 1000), 30_000);
+    }
+  } catch (_) { /* 도달 자체가 안 됨 → 아래에서 포기 */ }
+
+  if (retryAfterMs) {
+    attempts = 0;                       // 서버가 기다리라고 했다 — 예산을 되돌려준다
+    reconnectDelay = retryAfterMs;
+    try {
+      statusEl.textContent = '서버가 준비 중입니다 — 잠시 후 자동으로 연결됩니다';
+      statusEl.className = 'status err';
+    } catch (_) { /* noop */ }
+    reconnectTimer = setTimeout(connectNow, retryAfterMs);
+    return;
+  }
+
+  gaveUp = true;
+  clearTimeout(reconnectTimer);
+  try {
+    statusEl.textContent = '연결할 수 없음';
+    statusEl.className = 'status err';
+  } catch (_) { /* noop */ }
+  showRetryBar();
+}
+
+/** 포기 상태의 유일한 출구. 터미널 내용은 지우지 않는다 — 마지막 출력이 사용자에게 가장 필요한 정보다. */
+function showRetryBar() {
+  if (document.getElementById('retry-bar')) return;
+  const bar = el('div', { class: 'ended-bar', id: 'retry-bar' },
+    el('span', { text: '서버에 연결하지 못했습니다. 네트워크나 게이트웨이 상태를 확인한 뒤 다시 시도해 주세요.' }),
+    el('button', {
+      class: 'gate-retry', text: '다시 시도',
+      onclick: () => {
+        const b = document.getElementById('retry-bar');
+        if (b && b.parentNode) b.parentNode.removeChild(b);
+        gaveUp = false; attempts = 0; reconnectDelay = 1500;
+        connectNow();
+      },
+    }));
+  const root = document.getElementById('root');
+  if (root) root.insertBefore(bar, root.firstChild);
 }
 // 세션 종료 확정(#835) — 재연결을 멈추고 '닫힘'을 명시한다. 게이트로 화면을 덮지 않는 이유: 마지막 출력이
 //  사용자에게 가장 필요한 정보다(무슨 일이 있었는지 읽고 복사해야 한다). 그래서 터미널은 그대로 두고
@@ -1970,9 +2159,12 @@ export function goneMode(meta, isNode, alreadyRestored, typed) {
   //  ⚠ exitedByUser 를 loop 보다 앞세운다: 복원해서 쓰다가 또 exit 한 경우까지 loop 로 잡으면 '대화를 못 찾았다'는
   //   엉뚱한 설명이 뜬다(2026-07-28 실측 신고).
   if (meta.exitedByUser || typed) return 'ask';
-  // claude 가 아닌 세션(셸·코덱스)은 자동 복원하지 않는다. ① 이어받을 대화가 없어 복원의 이득이 없고(--resume 무의미)
-  //  ② claude 훅이 없어 '사용자가 exit 했다'를 **원리적으로** 기록할 수 없다 → 자동 복원하면 셸에서 exit 한 것을
-  //  무조건 되살려 exit 가 안 먹히는 UX 가 된다(실측 신고: 셸에서 exit → 자동 복원 → 또 exit → 루프 배너).
+  // claude 가 아닌 세션은 **자동** 복원하지 않는다(사용자가 버튼을 누르면 복원되고, 그때는 대화도 이어받는다).
+  //  ⚠ #1711 근거 갱신: 종전 근거 ①"이어받을 대화가 없어 복원의 이득이 없다(--resume 무의미)"는 **더 이상 참이
+  //   아니다** — 카탈로그 resumeArgv 로 codex·opencode·antigravity 도 각자 수단으로 그 대화를 이어받는다.
+  //   남은 진짜 이유는 ②다: '사용자가 직접 exit 했다'(exitedByUser)를 채우려면 SessionEnd 등가 이벤트가 필요한데
+  //   그게 없는 하네스가 있다(antigravity 훅은 5이벤트뿐 — SessionEnd 등가물 없음, #1689 실측). 그 신호 없이
+  //   자동 복원하면 사용자가 끝낸 세션을 되살려 exit 가 안 먹히는 UX 가 된다(실측 신고: 셸에서 exit → 자동 복원 → 루프).
   if (meta.harness && meta.harness !== 'claude') return 'ask';
   if (alreadyRestored) return 'loop';             // 복원으로 열린 세션이 사용자 의도 없이 또 끊겼다 — 루프 차단
   return 'auto';                                  // 중단됨(재부팅·자동회수)인 claude 세션 = 자동 복원의 정확한 타깃
@@ -2005,10 +2197,14 @@ async function onSessionGone() {
   }
   if (mode === 'ask') {
     // 같은 'ask' 라도 왜 멈췄는지가 다르다 — 사유를 정확히 말한다(틀린 설명이 오해를 만든다).
-    const shellish = !!(meta.harness && meta.harness !== 'claude');
-    endSession(shellish
+    // #1711 — '이어받을 대화가 없다'는 **셸에만** 참이다. 종전엔 claude 가 아니면 전부 이 문구를 써서,
+    //  codex·opencode·antigravity 세션에 "이어받을 대화가 없는 세션이에요"라고 **되는 기능을 없다고** 말했다
+    //  (2026-08-14 상민님 신고: antigravity 세션을 exit 하고 이어 열면 대화가 안 이어진다 — 서버 하드코딩과
+    //  이 문구가 같은 오해의 양면이었다).
+    const noResume = meta.harness === 'shell';
+    endSession(noResume
       ? { info: true, title: '이 세션은 종료되었습니다.',
-          body: '이어받을 대화가 없는 세션(' + (meta.harness === 'shell' ? '셸' : meta.harness) + ')이에요. 같은 폴더·설정으로 다시 열 수 있습니다.',
+          body: '이어받을 대화가 없는 세션(셸)이에요. 같은 폴더·설정으로 다시 열 수 있습니다.',
           restoreBtn: true, restoreLabel: '다시 열기' }
       : meta.exitedByUser
       ? { info: true, title: '이 세션은 종료되었습니다.',
@@ -2058,22 +2254,41 @@ async function connectNow() {
   connecting = true;
   clearTimeout(reconnectTimer);
   // 재기동 시 인메모리 티켓이 비워지므로 매 연결마다 티켓을 새로 발급받는다.
-  //  ⚠ 티켓은 **본체**에 발급받는다(mainOrigin) — 바로 아래 WS 가 본체로 붙으므로 짝이 맞아야 한다.
-  try { await api('/api/ui/terminal/ticket', { method: 'POST', mainOrigin: true }); }
+  //  ⚠ 티켓과 WS 는 **같은 곳**(화면이 놓인 오리진+접두사)으로 간다 — 둘 다 apiUrl 을 탄다. 짝이 갈리면
+  //   받는 쪽이 티켓을 모르고, 노드 세션이면 노드까지 못 찾는다(4462). 한쪽만 고치지 마라.
+  try { await api('/api/ui/terminal/ticket', { method: 'POST' }); }
   catch (e) { connecting = false; scheduleReconnect('게이트웨이 응답 없음 — 재연결 중…'); return; }
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const sock = new WebSocket(proto + '://' + location.host + '/terminal/ws?session=' + encodeURIComponent(SESSION_ID) + nodeQ('&'));
+  const sock = new WebSocket(proto + '://' + location.host + apiUrl('/terminal/ws') + '?session=' + encodeURIComponent(SESSION_ID) + nodeQ('&'));
   sock.binaryType = 'arraybuffer'; // 서버가 raw 바이트(바이너리)로 보냄 → 바이트 레벨 파싱(멀티바이트 경계 안전)
   ws = sock;
   // 연결마다 새 control 파서(각 tmux -CC 스트림은 자기 도입자로 시작). 도입자 없으면 raw 모드로 자동 폴백.
   ctrl = makeControl({
     write: (str) => { try { term.write(str); } catch (_) { /* noop */ } },
     // 상태 블록(백필 직전) — tmux pane 실상태로 alt-screen·마우스모드를 '지금' 동기화하고, 커서 좌표를 백필용으로 담아둠(#1092).
-    state: (line) => { try { dlog('state', diagPreview(line, 96)); applyPaneState(parsePaneState(line)); } catch (_) { /* noop */ } },
+    state: (line) => {
+      try {
+        dlog('state', diagPreview(line, 96));
+        const st = parsePaneState(line);
+        applyPaneState(st);
+        // 캡처를 원하는 두 갈래 — ① 첫 연결 백필(needBackfill) ② forceRedraw 가 백엔드를 몰라 미뤄둔 재캡처.
+        //  둘 다 '갓 받은 이 상태'로 판정한다(stale 사본으로 판단하지 않는다 — captureSafeBackend 주석 참조).
+        const wantCap = needBackfill || wantRedrawCap;
+        needBackfill = false; wantRedrawCap = false;
+        if (!wantCap) return;
+        // 캡처를 걸어도 되는가 — **관측된 백엔드·alt 조합**으로만 판단한다(추측 없음).
+        //  psmux + alt-screen 은 캡처가 스트림을 잠그므로 아예 보내지 않고, 앱이 스스로 다시 그리게 넛지한다.
+        if (!captureAllowed(st)) { dlog('backfill', '캡처 불가(psmux + 앱 팬) → 넛지로 재그리기 · cmd=' + (st.cmd || '?')); doNudge(); return; }
+        try { if (ws && ws.readyState === 1) { ws.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES, st: 1 })); armBackfillWatch(); } } catch (_) { /* noop */ }
+      } catch (_) { /* noop */ }
+    },
+    // 닫히지 않는 블록을 포기했다 — 백필은 오지 않는다. 앱이 스스로 다시 그리게 넛지한다.
+    blockLost: () => { try { dlog('backfill', '미완결 블록 포기 → 넛지로 재그리기 유도'); doNudge(); } catch (_) { /* noop */ } },
     // 백필(capture 스냅샷)은 '현재 화면 전체'다 → 쓰기 전 화면+스크롤백을 비워(\e[H\e[2J\e[3J) 첫 연결 중
     //  attach~capture 사이에 먼저 흘러든 라이브 %output 과 겹쳐 줄이 중복되는 것을 막는다. 이후 라이브는 그대로 append.
     backfill: (text) => {
       try {
+        clearBackfillWatch();                  // 캡처가 왔다 — 넛지 폴백은 필요 없다
         const st = pendingPaneState; pendingPaneState = null;
         dlog('backfill', 'len=' + text.length + (st ? ' +state' : ''));
         // 상태 블록을 받았으면 alt/mouse 는 applyPaneState 가 이미 진실로 동기화함(이 백필 직전). 못 받은 경우(구 서버)만
@@ -2096,8 +2311,10 @@ async function connectNow() {
   });
   sock.onopen = () => {
     dlog('ws', 'open');
-    connecting = false; wasConnected = true; reconnectDelay = 1500; denyRetries = 0; attempts = 0; // 붙었으면 입장 허용 확정 → 거부 카운트 리셋
+    connecting = false; wasConnected = true; reconnectDelay = 1500; denyRetries = 0; attempts = 0; gaveUp = false; // 붙었으면 입장 허용 확정 → 거부·포기 카운트 리셋
     syncedThisConn = false; // 이 연결에서 재접속 상태동기(t:'st')를 아직 안 보냄
+    nudgeTries = 0; needBackfill = !didBackfill; wantRedrawCap = false; // 넛지 상한·백필/재캡처 대기는 '연결 단위'
+    lastKnownState = null;  // 백엔드·팬 상태는 이 연결에서 다시 관측한다(옛 연결 사본으로 캡처를 판정하지 않는다)
     mouseResetTries = 0;    // 복구 시도 상한은 '연결 단위' — 새로 붙으면 다시 시도한다(그 사이 환경이 달라졌을 수 있다)
     statusEl.textContent = '연결됨'; statusEl.className = 'status ok';
     lastCols = 0; lastRows = 0; // 재attach 후 사이즈 강제 재동기화(→ control mode: refresh-client -C 재전송)
@@ -2114,7 +2331,10 @@ async function connectNow() {
     if (ctrl.isControl()) {
       // 첫 연결: 현재 화면+스크롤백 백필(상태 포함). 재연결: 백필은 생략(스크롤백 truncate 방지 — 중복 방지)하되
       //  상태만(t:'st') 1회 동기화해 재접속 갭에 놓친 마우스-off/alt-off 로 인한 stuck 을 해소(#1092 버그1).
-      if (!didBackfill) { didBackfill = true; try { sock.send(JSON.stringify({ t: 'cap', n: BACKFILL_LINES, st: 1 })); } catch (_) { /* noop */ } }
+      // ⚠ 첫 연결에서 **캡처를 곧바로 걸지 않는다** (#1541 실측). psmux 는 alt-screen 팬에 capture-pane 을
+      //  걸면 제어 스트림 전체가 멈춘다(`%begin` 뒤 무한 무응답 — 앱 출력·리사이즈까지 통째로 막힌다).
+      //  그래서 먼저 상태만 물어(t:'st') 백엔드와 alt 여부를 확인하고, 안전할 때만 캡처를 건다(아래 state 핸들러).
+      if (!didBackfill) { didBackfill = true; try { sock.send(JSON.stringify({ t: 'st' })); } catch (_) { /* noop */ } }
       else if (!syncedThisConn) { syncedThisConn = true; try { sock.send(JSON.stringify({ t: 'st' })); } catch (_) { /* noop */ } }
     }
   };
@@ -2131,6 +2351,10 @@ async function connectNow() {
       gate('이 세션에 입장할 수 없습니다.\n\n프로젝트 팀원만 입장할 수 있어요. 또는 이 세션이 더 이상 프로젝트에 연결되어 있지 않을 수 있습니다(폴더 이동·프로젝트 삭제 등). 프로젝트 페이지에서 세션을 다시 확인해 주세요.');
       return;
     }
+    // 4462(노드 오프라인) — 재시도는 **유지**한다(노드가 켜지면 그대로 붙는다. 그게 이 코드의 정책이다).
+    //  다만 이유는 말한다: 지금까지는 원인 불명의 '재연결 중…' 만 떠서, 사용자도 우리도 무엇이 문제인지
+    //  화면만 보고는 알 수 없었다(실측 #1541 — 노드가 다른 게이트웨이에 붙어 있던 걸 이 화면으로는 끝내 못 봤다).
+    if (e && e.code === 4462) { scheduleReconnect('이 세션의 노드가 연결돼 있지 않습니다 — 재연결 중…'); return; }
     scheduleReconnect(wasConnected ? '연결 끊김 — 재연결 중…' : '재연결 중…');
   };
   sock.onerror = () => { /* onclose 가 뒤따른다 */ };

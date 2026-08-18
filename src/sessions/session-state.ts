@@ -43,7 +43,8 @@ export interface SessionState {
 //  exit_reason 은 생성 시점엔 미상(훅이 세션 시작/종료 때 사후 채움) — 전부 입력에서 제외(생성 시 NULL).
 export type SessionStateInput = Omit<SessionState, "last_seen" | "claude_session_id" | "exited_at" | "exit_reason">;
 
-function rowToState(r: Record<string, any>): SessionState {
+// export: session-desired.ts 가 자기 쿼리 결과를 같은 규칙으로 해석해야 한다(파싱이 두 벌이 되면 갈린다).
+export function rowToState(r: Record<string, any>): SessionState {
   return {
     id: r.id, owner: r.owner, label: r.label ?? null, harness: r.harness || "claude",
     dir: r.dir ?? null, root_key: r.root_key ?? null, subpath: r.subpath ?? null,
@@ -125,7 +126,7 @@ export async function upsertSessionState(s: SessionStateInput): Promise<void> {
   await itemsPool.query(
     `INSERT INTO org_session_state(id, owner, label, harness, dir, root_key, subpath, flags, auto_approve, invites, project_id, project_src, read_only, incognito, write_vis, restrict_read, created, last_busy, last_seen, updated_at)
      VALUES($1,$2,$3,COALESCE($4,'claude'),$5,$6,$7,COALESCE($8,'{}')::jsonb,COALESCE($9,false),COALESCE($10,'[]')::jsonb,$11,$12,COALESCE($13,false),COALESCE($14,false),$15,COALESCE($16,false),$17,$18,now(),now())
-     ON CONFLICT (id) DO UPDATE SET
+     ON CONFLICT (tenant_id, id) DO UPDATE SET
        owner=EXCLUDED.owner, label=EXCLUDED.label, harness=EXCLUDED.harness, dir=EXCLUDED.dir,
        root_key=EXCLUDED.root_key, subpath=EXCLUDED.subpath, flags=EXCLUDED.flags, auto_approve=EXCLUDED.auto_approve,
        invites=EXCLUDED.invites, project_id=EXCLUDED.project_id, project_src=EXCLUDED.project_src,

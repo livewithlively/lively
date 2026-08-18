@@ -114,6 +114,8 @@ export function uninstallClaudeSettings({ dry = DRY } = {}) {
 
 // claude mcp remove lively — install 의 `claude mcp add --scope user lively` 역연산. idempotent.
 //  자식 프로세스 HOME 을 모듈 HOME(=LIVELY_HOME or os.homedir())으로 명시 주입 → 샌드박스면 라이브 무접촉.
+//  ⚠ USERPROFILE 도 함께 — 윈도우의 os.homedir() 는 HOME 이 아니라 USERPROFILE 을 본다. HOME 만 주면
+//   윈도우에선 격리가 조용히 무효가 되어 **샌드박스 제거가 실사용자 MCP 등록을 지운다**(#1593 · testlib/os-sandbox.mjs).
 export function deregisterClaudeMcp({ dry = DRY } = {}) {
   const cmd = ["mcp", "remove", "lively", "--scope", "user"];
   if (dry) {
@@ -122,7 +124,7 @@ export function deregisterClaudeMcp({ dry = DRY } = {}) {
   }
   try {
     // execFileSync — 셸 인젝션 없음. stdio 캡처(토큰 등 비노출). HOME=모듈HOME → claude CLI 가 그 HOME 의 ~/.claude.json 조작.
-    execFileSync("claude", cmd, { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, HOME } });
+    execFileSync("claude", cmd, { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, HOME, USERPROFILE: HOME } });
     log(`  ✓ claude mcp remove lively --scope user (HOME=${HOME})`);
   } catch (e) {
     const msg = String(e.stderr || e.stdout || e.message || "");

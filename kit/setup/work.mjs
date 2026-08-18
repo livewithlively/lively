@@ -6,9 +6,9 @@
 //   3) 코드 레포: --repo-path 사용(없거나 비면 --git-url 로 clone 폴백). --worktree 면 프로젝트폴더 아래 worktree, 아니면 add-dir
 //      ⚠ 이 단계 실패는 **치명이 아니다**(#1155) — 아래 '레포 준비 실패는 fail-open' 참고.
 //   4) 마커 ~/lively/projects/<id>/.lively/project.json 기록(project_id, last_pull=매니페스트 newest)
-//   5) 그 폴더에서 하네스(claude|codex) 실행
+//   5) 그 폴더에서 하네스(claude|codex|opencode|antigravity) 실행
 //  ⚠ 코드(레포/worktree)는 git, 공유폴더만 pull. push 없음(pull-only). 외부 바이너리 의존 없음(node + git 만).
-//  사용: node work.mjs <projectId> [--repo-path <p>] [--worktree] [--branch <b>] [--git-url <u>] [--harness claude|codex] [--no-launch] [--require-repo]
+//  사용: node work.mjs <projectId> [--repo-path <p>] [--worktree] [--branch <b>] [--git-url <u>] [--harness claude|codex|opencode|antigravity] [--no-launch] [--require-repo]
 //        node work.mjs <projectId> --pull-only   # 공유폴더만 다시 pull(하네스·레포 provision 없이) — 세션 중 수동 '지금 동기화'
 //  ⚠ --status 는 폐지됨(#905 C5a) — 같은 내용을 `lively status` 의 프로젝트 섹션이 보여준다(sync 모드까지).
 //     이 명령은 호출자가 0이었다(사람이 안 침). 사람이 실제로 치는 표면 하나로 흡수했다.
@@ -46,7 +46,9 @@ const args = parseArgs(process.argv.slice(2));
 const projectId = String(args._[0] || "").trim();
 if (!/^\d+$/.test(projectId)) die("프로젝트 id 가 필요합니다. 사용: node work.mjs <projectId> [--repo-path ..] [--worktree] [--git-url ..]");
 const branch = args.branch || `project/${projectId}`;
-const harness = args.harness === "codex" ? "codex" : "claude";
+// 하네스 선택 — 알려진 값이면 그대로, 모르면 claude(종전 기본). ⚠ 종전 코드는 codex 외 전부 claude 로
+//  강제해 opencode·antigravity 프로젝트 세션을 영영 못 띄웠다(#1689 — 조용한 목록 사본).
+const harness = ["claude", "codex", "opencode", "antigravity", "grok"].includes(args.harness) ? args.harness : "claude";
 // 마커의 싱크 모드(#905 P1-②) — pull 훅이 "이 폴더에 서버 파일을 써도 되나"를 이걸로 판정한다.
 //  work.mjs 가 만드는 ~/lively/projects/<id> 는 **공유폴더 그 자체**(라이블리 소유)라 pull 이 기본이다.
 //  ⚠ 사용자 자기 폴더에 마커를 심는 `lively init`(C2a)의 기본값은 반대로 "none" 이어야 한다 — 그쪽은
@@ -343,13 +345,22 @@ if (failedRepos.length) {
 
 // ── 5) 하네스 실행(프로젝트 폴더에서) ──
 // 하네스 인자 — 모델/자동승인(웹 터미널 카탈로그와 동일 규칙: claude=--dangerously-skip-permissions, codex=--yolo).
+//  바이너리명은 하네스 id 와 다를 수 있다(antigravity → agy, #1689) — id 로 spawn 하면 ENOENT 다.
+const HARNESS_BIN = { claude: "claude", codex: "codex", opencode: "opencode", antigravity: "agy", grok: "grok" };
+// 자동승인 플래그도 **하네스마다 다르다**(#1711). 종전엔 `codex ? "--yolo" : "--dangerously-skip-permissions"` 라
+//  opencode 에 존재하지 않는 플래그를 줘, `lively run … --auto-approve` 가 그 하네스에서 조용히 어긋났다.
+//  ⚠ 값은 서버 카탈로그(src/terminal/catalog.ts HARNESSES)와 같아야 한다 — 웹에서 만든 명령과 로컬 실행이 갈리면
+//   같은 체크박스가 기계마다 다른 뜻이 된다. 표에 없는 하네스면 **아무 플래그도 주지 않는다**(추측 금지).
+//  grok 은 --always-approve(#1701 실측 — --yolo 는 별칭이지만 제품 표기가 always-approve 다).
+const HARNESS_AUTO = { claude: "--dangerously-skip-permissions", codex: "--yolo", opencode: "--auto", antigravity: "--dangerously-skip-permissions", grok: "--always-approve" };
+const hbin = HARNESS_BIN[harness] || harness;
 const hargs = [];
 if (args.model) hargs.push("--model", args.model);
-if (args.autoApprove) hargs.push(harness === "codex" ? "--yolo" : "--dangerously-skip-permissions");
-const hcmd = [harness, ...hargs].join(" ");
+if (args.autoApprove && HARNESS_AUTO[harness]) hargs.push(HARNESS_AUTO[harness]);
+const hcmd = [hbin, ...hargs].join(" ");
 if (!args.launch) { log(`준비 완료. 시작: cd "${projDir}" && ${hcmd}`); process.exit(0); }
 log(`${hcmd} 실행 → ${projDir}`);
 // 윈도우는 claude/codex 가 .cmd/.ps1 셰임이라 shell:true 로 실행해야 PATH·확장자 해석이 됨(node spawn 직접실행 불가).
-const child = spawn(harness, hargs, { cwd: projDir, stdio: "inherit", shell: process.platform === "win32" });
-child.on("error", (e) => die(`${harness} 실행 실패(${e.message}). 직접: cd "${projDir}" && ${hcmd}`));
+const child = spawn(hbin, hargs, { cwd: projDir, stdio: "inherit", shell: process.platform === "win32" });
+child.on("error", (e) => die(`${hbin} 실행 실패(${e.message}). 직접: cd "${projDir}" && ${hcmd}`));
 child.on("exit", (code) => process.exit(code ?? 0));

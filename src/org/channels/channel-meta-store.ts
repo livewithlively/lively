@@ -70,7 +70,7 @@ export async function upsertChannelMeta(
     await itemsPool.query(
       `INSERT INTO member_channel_meta(member_id, system, channel_id, channel_name, channel_type, peer_id, synced_at)
          VALUES ($1,$2,$3,$4,$5,$6, now())
-       ON CONFLICT (member_id, system, channel_id) DO UPDATE
+       ON CONFLICT (tenant_id, member_id, system, channel_id) DO UPDATE
          SET channel_name=COALESCE(EXCLUDED.channel_name, member_channel_meta.channel_name),
              channel_type=EXCLUDED.channel_type,
              peer_id=COALESCE(EXCLUDED.peer_id, member_channel_meta.peer_id),

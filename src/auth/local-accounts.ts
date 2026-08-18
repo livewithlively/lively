@@ -45,7 +45,7 @@ export async function setMemberPassword(
   await itemsPool.query(
     `INSERT INTO member_credential(member_id, password_hash, must_change, failed_attempts, locked_until, updated_at, updated_by)
        VALUES($1,$2,$3,0,NULL,now(),$4)
-     ON CONFLICT (member_id) DO UPDATE SET
+     ON CONFLICT (tenant_id, member_id) DO UPDATE SET
        password_hash=EXCLUDED.password_hash, must_change=EXCLUDED.must_change,
        failed_attempts=0, locked_until=NULL, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [memberId, hash, opts?.mustChange ?? false, opts?.actor ?? null],

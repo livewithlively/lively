@@ -7,7 +7,7 @@ import type { LivelyUser } from "../../context.js";
 import { checkDisks } from "../../ops/health.js";
 import { listLogs } from "../../ops/log-janitor.js";
 import { stateRoot, logRoot } from "../../ops/state-dir.js";
-import { ROOTS as TERMINAL_ROOTS, SHARED_ROOT as TERMINAL_SHARED_ROOT, listSessionsRaw } from "../../terminal/terminal-sessions.js";
+import { roots as terminalRoots, sharedRoot as terminalSharedRoot, listSessionsRaw } from "../../terminal/terminal-sessions.js";
 import { sharedCacheRoot, sessionCacheEnv, dirSize } from "../../ops/build-cache.js";
 // 경보 알림(#813) — 웹훅 URL 은 시크릿이라 값이 응답·감사에 절대 나가지 않는다(alerts.ts 머리주석 참조).
 import { loadAlertChannel, saveAlertChannel, removeAlertChannel, sendTestAlert } from "../../ops/alerts.js";
@@ -101,13 +101,13 @@ export const boxStatusCapabilities: Capability[] = [
       const cfg = await getRuntimeConfig();
       const p = cfg.storage_policy;
       const disks = await checkDisks(
-        [stateRoot(), logRoot(), ...TERMINAL_ROOTS.map((r) => r.base)],
+        [stateRoot(), logRoot(), ...terminalRoots().map((r) => r.base)],
         { warnPct: p.disk_warn_pct, criticalPct: p.disk_critical_pct },
       );
       const files = await listLogs(logRoot());
       // 공유 빌드 캐시(#813 T3) — 지금 얼마나 쌓였나 + 어떤 env 를 세션에 주입 중인가(관리자가 눈으로 확인).
       const cacheOpts = { enabled: p.shared_cache_enabled, relocateHome: p.shared_cache_relocate_home };
-      const cacheRoot = sharedCacheRoot(TERMINAL_SHARED_ROOT.base);
+      const cacheRoot = sharedCacheRoot(terminalSharedRoot().base);
       // #1059 G1 — 박스 메모리 status(가시화). #1059 다운의 두 축(만성 세션 baseline·급성 Ollama 스파이크)을 한 화면에.
       //  available/total = OOM 근접도(회수 가능 캐시 포함, host-mem) · session_count = baseline 드라이버(중앙 세션 수) ·
       //  ollama = 급성 스파이크(로드 모델·용량, best-effort). 전부 비파괴 조회. 실패해도 status 전체를 막지 않게 방어.
@@ -187,7 +187,7 @@ export const boxStatusCapabilities: Capability[] = [
         cache: {
           root: cacheRoot,
           // 세션에 실제로 주입되는 변수 이름들(값=경로는 안 민감하지만 이름만으로 충분히 설명된다).
-          vars: Object.keys(sessionCacheEnv(TERMINAL_SHARED_ROOT.base, cacheOpts)).sort(),
+          vars: Object.keys(sessionCacheEnv(terminalSharedRoot().base, cacheOpts)).sort(),
           bytes: await dirSize(cacheRoot),
         },
       };

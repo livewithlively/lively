@@ -39,8 +39,40 @@ export const BOX_SPAWN = process.env.LIVELY_BOX_SPAWN || "/opt/lively/libexec/bo
 //  비-root 게이트웨이는 polkit 때문에 cgroup 불가 → root wrapper). sudoers Cmnd·설치경로와 문자열 일치(불변식).
 export const BOX_CGSPAWN = process.env.LIVELY_BOX_CGSPAWN || "/opt/lively/libexec/box-cgspawn";
 
+// 세션을 **어디에 담아 띄울지**를 배포자가 갈아끼우는 확장점(선택). 설정되면 위 두 경로보다 우선한다.
+//
+//  기본 배포에서는 비어 있고 아무것도 바뀌지 않는다. 값을 주면 세션 프로세스를 그 실행파일에 맡긴다 —
+//  예: 세션 하나를 컨테이너/마이크로VM 안에서 띄우는 배포.
+//
+//  ⚠ 왜 box-cgspawn 을 재사용하지 않고 별도 훅인가. 그렇게 해봤고, 두 가지가 걸렸다:
+//   ① box-cgspawn 갈래는 `cg`(메모리 캡)가 있을 때만 탄다 — 컨테이너로 띄우려는 배포가 메모리 캡을
+//      안 쓰면 훅이 **영영 호출되지 않는다**. 캡을 켜려고 더미 값을 심어 두는 편법이 생긴다.
+//   ② box-cgspawn 은 `existsSync` 게이트가 있어 설치 경로까지 흉내내야 한다.
+//  둘 다 "cgroup 을 건다"는 원래 의미와 무관한 우회다. 의도가 다르면 훅도 달라야 한다.
+//
+//  ⚠ **권한 강하는 이 실행파일의 책임이다.** 게이트웨이 권한으로 실행되므로, 훅이 uid 를 안 낮추면
+//   세션이 게이트웨이 권한으로 돈다(= 멤버 격리 없음). 인자로 osUser 를 받는 이유가 그것이다.
+//
+//  ⚠ **세션에만 적용된다**(wrapAsMember 의 opts.session). wrapAsMember 는 세션 spawn 말고도
+//   파일 브리지(profiles 의 존재 확인·삭제, terminal-member-fs 의 탐색기 op)에서 불리는데, 그건
+//   멤버 uid 로 잠깐 도는 일회성 exec 이지 "세션"이 아니다. 처음엔 이 구분 없이 전부 훅으로 보냈다가
+//   파일 op 마다 세션 컨테이너를 띄우려 해서 깨졌다(실측). 훅을 쓰는 배포가 "세션 하나 = 컨테이너 하나"
+//   같은 무거운 일을 한다면, 그 무거운 일이 파일 존재 확인에서도 벌어지면 안 된다.
+//  ⚠ 위 둘과 달리 **호출 시점에 읽는다**. BOX_SPAWN/BOX_CGSPAWN 은 설치 경로(정적)지만 이건 배포 정책
+//   스위치라, 프로세스 수명 중 바뀔 수 있는 값으로 다루는 편이 정직하고 테스트도 모듈 캐시를 안 건드린다.
+export function sessionSpawnPath(): string { return process.env.LIVELY_SESSION_SPAWN || ""; }
+
 // per-session 메모리 한도(#1059 D) — MemoryHigh/Max(MB). 0/미지정 = 그 축 무제한(box-cgspawn 이 생략).
 export interface CgroupLimit { highMb?: number; maxMb?: number; }
+
+export interface WrapOptions {
+  /**
+   * 이 argv 가 **사용자 세션**인가(터미널/하네스), 아니면 일회성 exec 인가(파일 존재 확인 등).
+   * 세션 spawn 훅(LIVELY_SESSION_SPAWN)은 이게 true 일 때만 탄다 — 훅을 쓰는 배포는 세션마다
+   * 무거운 일(컨테이너 기동 등)을 하므로, 파일 op 에서까지 그 비용을 치르면 안 된다.
+   */
+  session?: boolean;
+}
 
 // cgroup 인프라 준비됨? (활성 + Linux + box-cgspawn 설치). systemd-run/cgroup2 실제 가용성은 box-cgspawn 이
 //  런타임에 재확인(부재 시 runuser 폴백)하므로 여기선 wrapper 설치 여부만 본다(BOX_SPAWN 게이트와 동형).
@@ -65,10 +97,19 @@ function memArg(mb?: number): string {
 //   → root box-cgspawn 이 systemd-run --scope 로 세션을 메모리 scope 에 가두고, uid 강하는 그 안에서 setpriv 로 한다
 //     (systemd-run --uid 는 scope 모드라 initgroups 를 안 해 멤버그룹 누락·root그룹 잔류 — box-cgspawn 헤더 참조).
 //   cg 없음(캡 미설정) 또는 인프라 미설치면 종전 sudo -u 경로 = **무회귀**(cap-gated — 운영자가 캡을 걸 때만 경유).
-export function wrapAsMember(osUser: string, argv: string[], cwd?: string, cg?: CgroupLimit): string[] {
+export function wrapAsMember(osUser: string, argv: string[], cwd?: string, cg?: CgroupLimit, opts?: WrapOptions): string[] {
+  if (opts?.session && sessionSpawnPath()) return sessionSpawnArgv(osUser, argv, cwd, cg);
   if (cg && cgroupInfraReady()) return cgspawnArgv(osUser, argv, cwd, cg);
   const pre = cwd ? ["--cwd", cwd] : [];
   return ["sudo", "-n", "-u", osUser, "--", BOX_SPAWN, ...pre, ...argv];
+}
+
+// (순수 — 테스트 seam) 세션 spawn 훅 argv 조립.
+//  결과: [SESSION_SPAWN, osUser, <high>, <max>, "--", ("--cwd",cwd)?, ...argv]
+//  메모리 인자는 캡이 없으면 "0"(무제한) — box-cgspawn 과 **같은 인자 순서**라 기존 래퍼를 그대로 쓸 수 있다.
+export function sessionSpawnArgv(osUser: string, argv: string[], cwd: string | undefined, cg?: CgroupLimit): string[] {
+  const pre = cwd ? ["--cwd", cwd] : [];
+  return [sessionSpawnPath(), osUser, memArg(cg?.highMb), memArg(cg?.maxMb), "--", ...pre, ...argv];
 }
 
 // (순수 — 테스트 seam) box-cgspawn 경유 argv 조립. 게이트(cgroupInfraReady: platform·existsSync 의존)와 분리해

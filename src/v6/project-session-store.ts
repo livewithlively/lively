@@ -49,7 +49,7 @@ export async function recordSessionProject(sessionId: string, projectId: number)
      SELECT $1::text, $2::int
       WHERE (SELECT sp.project_id FROM session_project sp
               WHERE sp.session_id = $1 ORDER BY sp.valid_from DESC LIMIT 1) IS DISTINCT FROM $2::int
-     ON CONFLICT (session_id, valid_from) DO NOTHING`,
+     ON CONFLICT (tenant_id, session_id, valid_from) DO NOTHING`,
     [sessionId, projectId]);
 }
 

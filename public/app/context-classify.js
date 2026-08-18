@@ -1,11 +1,12 @@
 // context-classify.ts — 분류기 관리(#1419 T4). [맥락 관리 ▸ 분류] 화면의 '분류기' 서브탭.
 //  (같은 화면의 '분류축' 서브탭은 기존 categories.ts 를 그대로 재사용한다 — 합치는 건 화면이지 데이터가 아니다.)
-import { api, cardHead, el, fmtNum, relTime, toast, uiText } from './core.js';
+import { api, busy, cardHead, el, fmtNum, relTime, toast, uiText } from './core.js';
 import { confirmDialog } from './admin.js';
+import { stageJobCard } from './context-stage-job.js'; // 단계 공용 '언제 도나' 카드(#1618)
 let editingKey = null;
 let creating = false;
 export async function renderClassifiers(host) {
-    host.replaceChildren(el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '분류기를 불러오는 중…' })));
+    busy(host, el('div', { class: 'card' }, el('p', { class: 'admin-hint', text: '분류기를 불러오는 중…' })));
     let d;
     try {
         d = await api('/api/ui/org/classifiers');
@@ -43,51 +44,30 @@ export async function renderClassifiers(host) {
         body.append(el('div', { class: 'ctx-actions' }, add));
     }
     host.replaceChildren(body);
-    // '언제 도나' — 증류기 화면에 있고 여기엔 없어서, 이 탭 안에서는 분류가 **실제로 도는지** 알 수 없었다.
-    //  설정(분류기)과 실행(잡)은 별개 축이라 둘 다 안 보이면 "설정했는데 왜 안 되지"의 답이 화면에 없다.
-    //  host 를 이미 교체한 뒤 비동기로 붙인다 — 크론 조회(권한 없으면 403)가 이 탭 전체를 막지 않게.
-    body.append(await classifyJobCard(reload));
-}
-/** 분류 잡 상태 — 분류기 유무와 무관하게 '지금 무엇이 돌고 있나'를 잰다(증류기 runJobCard 와 같은 시각 언어). */
-async function classifyJobCard(rerender) {
-    const card = el('div', { class: 'card', style: 'margin-top:14px' }, cardHead('언제 도나'));
-    let jobs = [];
-    try {
-        const r = await api('/api/ui/cron');
-        jobs = (r && r.jobs) || [];
-    }
-    catch {
-        card.append(el('p', { class: 'admin-hint', text: '스케줄 잡 상태를 볼 권한이 없습니다(관리자에게 문의).' }));
-        return card;
-    }
-    // 헤드리스판을 먼저 찾는다 — 둘 다 있으면 그쪽이 현행 경로다(#1061: 매 배치 새 세션이라 관성이 없다).
-    const job = jobs.find((j) => j.action === 'classify_knowledge_headless')
-        ?? jobs.find((j) => j.action === 'classify_knowledge');
-    if (!job) {
-        card.append(el('p', { class: 'admin-hint', text: '분류 잡이 등록돼 있지 않습니다 — 분류기를 만들어도 아무것도 돌지 않습니다. [설정 ▸ 자동화]에서 만드세요.' }));
-        return card;
-    }
-    card.append(el('div', { class: 'mini-meta' }, el('span', { class: 'pill' + (job.enabled ? ' pill-ok' : ''), text: job.enabled ? '켜짐' : '꺼짐' }), el('span', { class: 'pill', text: job.id }), el('span', { class: 'pill', text: Math.round((job.interval_sec || 0) / 60) + '분마다' }), el('span', { text: job.last_run_at ? ('  마지막 실행 ' + relTime(job.last_run_at) + ' · ' + (job.last_status || '')) : '  아직 실행 전' })));
-    if (!job.enabled) {
-        const on = el('button', { class: 'btn btn-sm', text: '분류 잡 켜기' });
-        on.addEventListener('click', async () => {
-            on.disabled = true;
-            try {
-                await api('/api/ui/cron', { method: 'POST', body: JSON.stringify({ id: job.id, enabled: true }) });
-                toast('분류 잡을 켰습니다');
-                rerender();
-            }
-            catch (e) {
-                toast(e.message, true);
-                on.disabled = false;
-            }
-        });
-        card.append(el('p', { class: 'admin-hint' }, el('span', { text: '잡이 꺼져 있어 분류가 돌지 않습니다.  ' }), on));
-    }
-    card.append(el('p', { class: 'admin-hint', text: job.action === 'classify_knowledge_headless'
-            ? '주기·모델은 [설정 ▸ 자동화]에서 조정합니다. 분류기를 지정하지 않으면 켜진 분류기 전부가 매 주기 각각 접수됩니다(분류기가 없으면 전역 기본 분류).'
-            : '이 잡은 상시 세션에 주입하는 구 방식입니다 — 매 배치 새 세션인 헤드리스판(classify_knowledge_headless)이 분류기별 실행과 관성 대응에 맞습니다. [설정 ▸ 자동화]에서 바꿀 수 있습니다.' }));
-    return card;
+    // '언제 도나' — 설정(분류기)과 실행(잡)은 별개 축이라 둘 다 안 보이면 "설정했는데 왜 안 되지"의 답이
+    //  화면에 없다. host 를 이미 교체한 뒤 비동기로 붙인다 — 크론 조회(권한 없으면 403)가 이 탭 전체를 막지 않게.
+    //  #1618: 종전엔 잡이 없을 때 "[설정 ▸ 자동화]에서 만드세요"라는 **문장만** 줬다(만들기 버튼도, 주기
+    //   조절도 없었다). 그래서 분류를 세우려면 이 탭을 떠나야 했고, 떠나면 무엇이 밀렸는지를 못 본 채
+    //   크론 목록에서 액션 이름을 골라야 했다. 이제 여기서 끝난다.
+    body.append(await stageJobCard({
+        stage: '분류',
+        // 헤드리스판이 현행 권장 경로다(#1061 — 매 배치 새 세션이라 옛 should 로 판단하는 관성이 없다).
+        //  구 세션주입판(classify_knowledge)이 켜져 있으면 그쪽을 그대로 보여 준다(멋대로 갈아타지 않는다).
+        actions: ['classify_knowledge_headless', 'classify_knowledge'],
+        create: {
+            id: 'classify-knowledge-headless', label: '미분류 지식 분류 (헤드리스)',
+            action: 'classify_knowledge_headless', params: {}, interval_sec: 3600,
+            note: '켜진 분류기별로 미분류 지식 배치를 헤드리스 AI 세션에 접수. 분류기가 없으면 전역 기본 분류.',
+        },
+        missingLine: '분류 자동 실행이 없습니다 — 분류기를 만들어도 아무것도 분류되지 않습니다.',
+        // 신규 워크스페이스에 **꺼진 채 시드되는** 구 세션주입판(classify-unmapped-knowledge)이 이 자리에 앉는다.
+        //  그건 params.session 이 필수라, 상시 세션을 먼저 등록하지 않고 켜면 매 틱 "타깃 상시 세션 미설정"
+        //  error 를 낸다. 그 상태에서 '켜기'를 보여주면 못 지킬 약속이 된다.
+        unrunnable: (j) => (j.action === 'classify_knowledge' && !(j.params && j.params.session))
+            ? '지금 등록된 분류 잡은 상시 세션이 있어야 도는 구 방식인데, 그 세션이 지정돼 있지 않습니다 — 이대로 켜면 매번 실패합니다.'
+            : null,
+        usesAi: true,
+    }, reload));
 }
 const TARGET_LABEL = {
     unmapped: '미분류 지식', low_confidence: '확신도 낮은 분류 재검토', both: '미분류 + 재검토',

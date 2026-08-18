@@ -3,7 +3,7 @@
 //   읽는 쪽은 projects/detail-knowledge.ts 하나뿐이었다. 폼 모듈에 남겨 두면 '지식 흐름' 섹션이
 //   project-form → rows → filters/selection 을 되짚어 새 순환 경로가 생긴다.
 //   #1313 §1 의 판정 기준('읽는 쪽이 하나뿐인가')대로 소비자 쪽 잎으로 내렸다.
-import { api, el, errorNote, toast } from '../core.js';
+import { api, busy, el, errorNote, toast } from '../core.js';
 import { overlayBox } from '../learn.js';
 import { debounce } from './files.js';
 
@@ -67,7 +67,7 @@ function openKnowledgePicker(id, relation, linkedNames, onLinked) {
 
   async function loadRecs() {
     recHead.style.display = '';
-    results.replaceChildren(el('span', { class: 'admin-hint', text: '추천을 불러오는 중…' }));
+    busy(results, el('span', { class: 'admin-hint', text: '추천을 불러오는 중…' }));
     let recs: any;
     try { recs = await api('/api/ui/v6/projects/' + id + '/recommend-knowledge?limit=10').then((d) => (d && d.entries) || []); }
     catch (e) { results.replaceChildren(errorNote(e, '추천을 불러오지 못했습니다')); return; }
@@ -84,7 +84,7 @@ function openKnowledgePicker(id, relation, linkedNames, onLinked) {
     const q = searchIn.value.trim();
     if (!q) { loadRecs(); return; }  // 검색어 지우면 추천으로 복귀.
     recHead.style.display = 'none';
-    results.replaceChildren(el('span', { class: 'admin-hint', text: '검색 중…' }));
+    busy(results, el('span', { class: 'admin-hint', text: '검색 중…' }));
     let matches: any;
     // 의미검색(하이브리드 RRF, #1133) — 자연어·다른 표현도 회수. 임베딩 off 환경은 서버가 grep 으로 폴백.
     try { matches = await api('/api/ui/knowledge/semantic?q=' + encodeURIComponent(q) + '&limit=20').then((d) => (d && d.entries) || []); }

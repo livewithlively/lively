@@ -2,7 +2,7 @@
 //  사용자가 명시적으로 유지하라고 한 표면이라 마크업·클래스·동작을 바꾸지 않는다(검색·★내소유·space 그룹·트리 펼침·
 //  도구 섹션·폭 리사이즈(--pjv-side-w, localStorage 'pjv:sideW' — 프로젝트 탭 공유)·접기).
 //  콘텐츠와의 접점은 3개뿐: ① [data-cat-val] 클릭 위임(onSelect) ② 문서 열기(onOpen) ③ rebuild().
-import { api, el, state, sv } from './core.js';
+import { api, busy, el, keepSideScroll, state, sv } from './core.js';
 import { reviewNavBadge } from './review.js'; // #837 검토 대기 배지(대기 0이면 안 그려진다)
 import { isCategoryHomeDoc, KN_UNCAT, knFetchAuthoredTree, knFetchCategoryIndex, knFetchUncategorizedCount, knFolderFirstSort, knPageIcon, SPACE_LABEL } from './wiki-data.js';
 // WIKI 인덱스(#336) — '전체' 하위 '인덱스(핀)' 필터의 가짜 카테고리 센티넬. data-cat-val 위임에 실린다.
@@ -71,7 +71,7 @@ function knNavCatNode(c, on, onOpen, isMine, favOpts) {
         tw.setAttribute('aria-expanded', String(opened));
         if (!opened || loaded)
             return;
-        kids.replaceChildren(el('div', { class: 'kn-nav-note', text: '불러오는 중…' }));
+        busy(kids, el('div', { class: 'kn-nav-note', text: '불러오는 중…' }));
         try {
             const rows = await knFetchCategoryIndex(c.id);
             const names = new Set(rows.map((r) => r.name));
@@ -123,7 +123,7 @@ function knNavDocNode(r, depth, onOpen, childN) {
         tw.setAttribute('aria-expanded', String(opened));
         if (!opened || loaded)
             return;
-        kids.replaceChildren(el('div', { class: 'kn-nav-note', text: '불러오는 중…' }));
+        busy(kids, el('div', { class: 'kn-nav-note', text: '불러오는 중…' }));
         try {
             const sub = (await knFetchAuthoredTree()).filter((t) => t.parent_name === r.name).slice().sort(knFolderFirstSort);
             loaded = true;
@@ -364,6 +364,9 @@ function knApplySideW(shell) {
 const KN_SIDE_COLLAPSE_KEY = 'kn-doc-side-collapsed';
 function createWikiSide(opts) {
     const side = el('aside', { class: 'kn-side' });
+    // 목록 셸 안에서 카테고리를 고를 땐 이 노드가 살아남지만(동기 rebuild), 문서 페이지로 이동하면
+    //  셸째로 다시 그려져 새 노드가 된다 → 자체 스크롤이 0 으로 돌아갔다(실측 #1635: 300→0).
+    keepSideScroll(side, 'wiki');
     const nav = el('nav', { class: 'browse-tree', 'aria-label': '카테고리' });
     const sideState = { q: '' };
     const myIds = myCatIdSet();

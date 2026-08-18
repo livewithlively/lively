@@ -51,6 +51,15 @@ export function closedPath(dir) {
   return [dir, join(root, "System32"), root, join(root, "System32", "Wbem")].join(delimiter);
 }
 
+// 실 브라우저를 못 열게 하는 env 조각 — **lively CLI 를 프로세스로 띄우는 테스트는 반드시 얹는다.**
+//  왜 PATH 로 안 되나: device-code 로그인은 승인 URL 을 `open`(darwin)·`cmd /c start`(win)·`xdg-open`(linux)
+//   으로 띄우는데, 위 closedPath() 는 /usr/bin·System32 를 **일부러 남긴다**(where.exe·cmd.exe 가 거기 있다).
+//   그래서 스텁을 심지 않는 한 진짜 `open` 이 잡히고, 테스트가 **실행하는 사람의 브라우저에** 픽스처 URL
+//   탭을 띄운다(#1717 실측: `npm test` 한 번에 5개 — http://127.0.0.1/device?c=WXYZ-8899 등).
+//   홈·임시폴더와 같은 종류의 샌드박스 탈출이라 같은 자리에 관례로 못박는다.
+//  ⚠ 이건 '테스트 편의'가 아니라 격리다 — URL·코드는 CLI 가 화면에 먼저 찍으므로 안 열려도 로그인은 완주한다.
+export const noBrowserEnv = () => ({ LIVELY_NO_BROWSER: "1" });
+
 // 실행 가능한 스텁 명령을 만든다 — **로직은 JS 한 벌**로 쓰고 런처만 플랫폼별로 낸다.
 //  종전처럼 스텁 본문을 sh 스크립트로 쓰면 윈도우 분량을 배치로 한 벌 더 써야 하고, 그 두 벌은 반드시 어긋난다.
 //  jsBody 는 node 로 실행되는 ESM 소스이며 인자는 process.argv.slice(2) 로 받는다.

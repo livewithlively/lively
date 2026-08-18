@@ -2,7 +2,7 @@
 //  (#1313 R38, admin.ts 에서 verbatim 분리).
 //  개인 레이어(org_member.body_md)의 선택지·직렬화·복원은 me-profile.ts 소유를 그대로 쓴다(PROF_* · profChips ·
 //   parseMyProfile) — 규약이 두 벌이 되면 [내 정보] 모달과 이 화면의 저장이 서로를 지운다.
-import { api, appUrl, cardHead, el, errorNote, state, toast, uiText, withTip } from './core.js';
+import { api, appUrl, busy, cardHead, el, errorNote, state, toast, uiText, withTip } from './core.js';
 import { field, skeleton } from './ui-primitives.js';
 import { sectionHead } from './admin-widgets.js';
 import { PROF_DEV, PROF_LANG, PROF_TONE, parseMyProfile, profChips } from './me-profile.js';
@@ -94,7 +94,7 @@ function myAiAccountsCard() {
     //  것이고 내가 연결한 게 아니다(사용자 지적: "Codex는 내가 연결한 적 없"). 중립 제목 + 상황별 배너로 바로잡는다.
     const card = el('div', { class: 'card' }, cardHead('연결된 AI 계정', '내 AI 세션이 이 계정으로 실행됩니다. 계정이 구성원별로 갈리지 않는 서버에서는 \'서버 공용\' 표시가 붙습니다.'), body);
     const load = async () => {
-        body.replaceChildren(el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
+        busy(body, el('p', { class: 'admin-hint' }, ...uiText('불러오는 중…')));
         try {
             // 세션은 실패해도 계정 카드는 보여준다(개수는 부가정보) — 터미널이 없는 배포에서도 로그인 상태는 유효하다.
             const [acc, ses] = await Promise.all([
@@ -127,7 +127,7 @@ function myAiAccountsCard() {
 //   · 담당 영역 — 팀·카테고리 오너십(${team})이 이미 주입한다(중복).
 //   · 자주 쓰는 도구·레포 — 세션이 열린 폴더·레포가 말해 준다(중복).
 async function myAiSection(detail) {
-    detail.replaceChildren(el('div', { class: 'card' }, skeleton('내 AI 설정을 불러오는 중')));
+    busy(detail, el('div', { class: 'card' }, skeleton('내 AI 설정을 불러오는 중')));
     let data;
     try {
         data = await api('/api/ui/me/profile');

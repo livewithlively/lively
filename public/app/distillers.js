@@ -20,8 +20,9 @@
 //   · **사각지대를 맨 위에** — "증류기를 켰는데 왜 안 줄지?"의 답이 목록보다 먼저 보인다.
 //   · **채널은 고르는 것** — 실재하는 채널 목록(건수·잔량 포함)에서 눌러 담는다(오타 원천 차단).
 //   · **반사판은 늘 곁에** — 설정을 만지는 내내 "지금 이게 무엇을 집는가"가 오른쪽에 붙어 있다.
-import { api, cardHead, el, relTime, toast } from './core.js';
+import { api, busy, cardHead, el, keepSideScroll, relTime, toast } from './core.js';
 import { confirmDialog, skeleton } from './ui-primitives.js';
+import { stageJobCard } from './context-stage-job.js'; // 단계 공용 '언제 도나' 카드(#1618)
 const PAGE_TYPES = ['', 'decision', 'concept', 'how-to', 'reference', 'research', 'entity'];
 const KINDS = ['slack', 'email', 'discord', 'transcript', 'minutes', 'notion_doc', 'clickup_doc', 'drive_file', 'other'];
 /** 목록 주소. */
@@ -53,7 +54,7 @@ window.addEventListener('hashchange', () => {
 // ══════════════════════════════════════════════════════════════════════════
 export async function distillersPanel(detail, data) {
     const head = () => el('div', { class: 'admin-sechead' }, el('div', { class: 'section-title' }, el('h2', { text: '자료 증류기' })), el('p', { class: 'admin-hint', text: '수집된 원본 자료를 무슨 기준으로 어떤 형식의 지식으로 만들지 정합니다. 팀·채널마다 다르게 여러 개 만들 수 있습니다.' }));
-    detail.replaceChildren(head(), el('div', { class: 'card' }, skeleton('증류기 불러오는 중')));
+    busy(detail, head(), el('div', { class: 'card' }, skeleton('증류기 불러오는 중')));
     let res;
     try {
         res = await api('/api/ui/org/distillers');
@@ -516,6 +517,7 @@ function editorPage(d, isNew) {
     ];
     const panes = {};
     const side = el('nav', { class: 'docs-side dst-side', 'aria-label': '설정 단계' });
+    keepSideScroll(side, 'distiller'); // 단계를 고르면 화면을 다시 그려 사이드바가 새 노드가 된다(#1635)
     const sideGroup = el('div', { class: 'docs-side-group' }, el('div', { class: 'docs-side-title', text: '설정' }));
     for (const s of STEPS) {
         const b = el('button', { type: 'button', class: 'docs-item', 'data-step': s.key, text: s.label });
@@ -642,58 +644,24 @@ function editorPage(d, isNew) {
     return page;
 }
 // ── 실행 잡 ────────────────────────────────────────────────────────────────
-const DISTILL_JOB_ID = 'distill-sources-headless';
+//  #1618 에서 단계 공용 카드(context-stage-job.ts)로 갈아탔다. 종전 전용 구현과 달라진 것 셋:
+//   · 만들면 **켠다**(종전엔 꺼진 채 만들고 다시 켜기를 눌러야 했다 — 화면이 경고하는 '멈춤' 상태를 손수 만드는 셈).
+//   · 주기·끄기·지금 실행이 카드 안에 있다(종전엔 "[AI 능력 ▸ 자동화]에서 조정합니다"라고 내보냈다).
+//   · 의뢰자 부재를 잡아 그 자리에서 지정하게 한다(없으면 매 주기 조용히 error 였다).
 async function runJobCard(rerender) {
-    const card = el('div', { class: 'card', style: 'margin-top:14px' }, cardHead('언제 도나'));
-    let jobs = [];
-    try {
-        const r = await api('/api/ui/cron');
-        jobs = (r && r.jobs) || [];
-    }
-    catch {
-        card.append(el('p', { class: 'admin-hint', text: '스케줄 잡 상태를 볼 권한이 없습니다(관리자에게 문의).' }));
-        return card;
-    }
-    const job = jobs.find((j) => j.action === 'distill_sources_headless' || j.action === 'distill_sources');
-    if (job) {
-        card.append(el('div', { class: 'mini-meta' }, el('span', { class: 'pill' + (job.enabled ? ' pill-ok' : ''), text: job.enabled ? '켜짐' : '꺼짐' }), el('span', { class: 'pill', text: job.id }), el('span', { class: 'pill', text: Math.round((job.interval_sec || 0) / 60) + '분마다' }), el('span', { text: job.last_run_at ? ('  마지막 실행 ' + relTime(job.last_run_at) + ' · ' + (job.last_status || '')) : '  아직 실행 전' })));
-        if (!job.enabled) {
-            const on = el('button', { class: 'btn btn-sm', text: '증류 잡 켜기' });
-            on.addEventListener('click', async () => {
-                on.disabled = true;
-                try {
-                    await api('/api/ui/cron', { method: 'POST', body: JSON.stringify({ id: job.id, enabled: true }) });
-                    toast('증류 잡을 켰습니다');
-                    rerender();
-                }
-                catch (e) {
-                    toast(e.message, true);
-                    on.disabled = false;
-                }
-            });
-            card.append(el('p', { class: 'admin-hint' }, el('span', { text: '잡이 꺼져 있어 증류가 돌지 않습니다.  ' }), on));
-        }
-        card.append(el('p', { class: 'admin-hint', text: '주기·의뢰자는 [AI 능력 ▸ 자동화]에서 조정합니다. 증류기를 지정하지 않으면 켜진 증류기 전부가 매 주기 각각 접수됩니다(병렬).' }));
-        return card;
-    }
-    card.append(el('p', { class: 'admin-hint' }, el('b', { text: '증류 스케줄 잡이 없습니다 — 증류기를 만들어도 아무것도 돌지 않습니다.' }), el('span', { text: ' 증류기는 "무엇을 어떻게"만 정하고, 실제로 자료를 집어 AI에게 넘기는 건 스케줄 잡입니다.' })));
-    const mk = el('button', { class: 'btn', text: '증류 잡 만들기 (30분마다, 꺼진 상태로)' });
-    mk.addEventListener('click', async () => {
-        mk.disabled = true;
-        try {
-            await api('/api/ui/cron', { method: 'POST', body: JSON.stringify({
-                    id: DISTILL_JOB_ID, label: '자료 증류 (수집된 원본→지식, 헤드리스)',
-                    action: 'distill_sources_headless', params: {}, interval_sec: 1800, enabled: false,
-                    note: '켜진 증류기별로 미증류 자료 배치를 헤드리스 AI 세션에 접수. 증류기가 없으면 전 자료 공통 기본 증류.',
-                }) });
-            toast('증류 잡을 만들었습니다 — 증류기를 설정한 뒤 켜세요');
-            rerender();
-        }
-        catch (e) {
-            toast('실패 — ' + e.message, true);
-            mk.disabled = false;
-        }
-    });
-    card.append(el('div', { style: 'margin-top:10px' }, mk));
-    return card;
+    return stageJobCard({
+        stage: '증류',
+        actions: ['distill_sources_headless', 'distill_sources'],
+        create: {
+            id: 'distill-sources-headless', label: '자료 증류 (수집된 원본→지식, 헤드리스)',
+            action: 'distill_sources_headless', params: {}, interval_sec: 1800,
+            note: '켜진 증류기별로 미증류 자료 배치를 헤드리스 AI 세션에 접수. 증류기가 없으면 전 자료 공통 기본 증류.',
+        },
+        missingLine: '증류 자동 실행이 없습니다 — 증류기를 만들어도 자료가 지식이 되지 않습니다.',
+        // 분류와 같은 이유 — 구 세션주입판(distill_sources)은 params.session 이 있어야 돈다.
+        unrunnable: (j) => (j.action === 'distill_sources' && !(j.params && j.params.session))
+            ? '지금 등록된 증류 잡은 상시 세션이 있어야 도는 구 방식인데, 그 세션이 지정돼 있지 않습니다 — 이대로 켜면 매번 실패합니다.'
+            : null,
+        usesAi: true,
+    }, rerender);
 }

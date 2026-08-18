@@ -19,6 +19,7 @@ import { renderSessions } from './sessions.js'; // #/sessions — 세션이력 �
 import { renderFilePage } from './filepage.js'; // #/f — 공유 링크 착지(#1436): 내비 없는 전체페이지 파일 미리보기
 import { resumeGuideTour } from './guide-tour.js'; // Lively 둘러보기(#761) — 라우팅 후 장면 재개
 import { renderMyDashboard, startDashboardSessionTour } from './dashboard-home.js';
+import { renderLiv } from './liv.js'; // #1631 리브 — 독립 전체화면(#/liv). 홈을 덮지 않는다.
 import { renderTerminal, startTerminalTour } from './terminal.js';
 import { changePasswordModal, openMyProfileModal, renderSystem } from './admin.js';
 import { endTour } from './tour.js';
@@ -101,8 +102,17 @@ async function route() {
   if (mainEl) mainEl.classList.toggle('doc-mode',
     page === 'knowledge' || page === 'k' || page === 'k-edit' || page === 'trash');
   try {
-    if (page === 'dashboard') {
+    if (page === 'liv') {
+      // 리브(#1631) — **독립 전체화면**이다. 상단 내비·푸터를 걷고 화면 전부를 쓴다(웹 세션 페이지와 같은 결).
+      //  대화가 주인공인 화면이라 크롬이 높이를 먹으면 정작 말하기가 불편해진다. 나가는 길은 화면 안의
+      //  [← 라이블리] 하나로 충분하다 — 탭을 그려 두면 "여기가 어느 탭인가"를 되묻게 만든다.
+      setActiveTab('liv');
+      await renderLiv(view);
+    } else if (page === 'dashboard') {
       setActiveTab('dashboard'); // 대시보드 — 옛 '시작하기' 탭 자리를 개편(#617). 현재는 자리표시.
+      // ⚠ #1631 — 여기 있던 '리브 홈 진입 게이트'를 걷어냈다(대표 결정). 상태를 보고 홈을 리브로 갈아치웠는데,
+      //  **홈을 덮는 것은 과했다** — 사람이 기대한 화면이 아닌 게 뜨는 건 그 자체로 고장으로 읽힌다.
+      //  리브는 이제 상단 내비의 [리브] 버튼으로 들어가는 **독립 전체화면**(#/liv)이다.
       await renderMyDashboard(view);
       // 사용 가이드 [내 AI 세션 생성]의 '따라하며 만들기 →'(#/dashboard?tour=1) — 홈에서 세션 만들기 투어를 켠다(#780).
       //  쿼리는 새로고침 재실행 방지를 위해 조용히 제거(해시만 갱신 — hashchange/재라우팅 없음).

@@ -18,7 +18,7 @@
 //   들어가 보기 전에는 보이지 않았다. 좌측으로 펴면 화면 11개가 항상 한눈에 보인다
 //   (관리탭이 #827 에서 가로 중분류 바를 폐지하고 .docs-side 로 편 것과 같은 방향·같은 시각 언어).
 //   위→아래 순서가 곧 파이프라인 순서라 '순서 자체가 정보'라는 성질도 그대로 남는다(번호로 못박는다).
-import { el, sv } from './core.js';
+import { el, hasScope, keepSideScroll, sv } from './core.js';
 import { sectionHead } from './admin-widgets.js';
 import { skeleton } from './ui-primitives.js';
 import { renderPipeline } from './context-pipeline.js';
@@ -30,6 +30,10 @@ import { distillerPage, distillersPanel } from './distillers.js';
 import { collectorPresetEditor } from './admin-collector-presets.js';  // 수집 방식(커스텀 프리셋) — 수집 단계 안으로(#1419)
 import { sourceVisPolicyPanel } from './source-vis-policy.js';         // 자료 공개범위(#1291 v4) — 생산 지점이 수집이다
 import { ingestPolicyPanel } from './review.js';                       // 지식 검토 정책(#638) — 증류 산출물이 통과하는 밸브
+// ── 5단계 '전달'(#1618) — 구 [설정 ▸ AI 맥락] 3화면. 관리탭 패널을 그대로 부른다(복제 0, #837 불변식).
+import { injectionMap } from './admin-injection.js';                   // 세션 주입 — 항상 주입되는 조직 정체성
+import { embeddingsEditor } from './admin-embeddings.js';              // 의미 검색 — 임베딩 provider·백필(기본 off)
+import { visibilityAxesPanel } from './visibility-axes.js';            // 공개범위 — 유형별 축 on/off
 import { loadAdmin } from './admin-rerender.js';
 
 /** 관리탭 패널이 요구하는 admin 데이터 — 없으면 빈 객체(패널이 자기 API 로 그린다). */
@@ -45,6 +49,10 @@ type CtxItem = {
    *  hint 도 마찬가지다 — 파이프라인 화면 대부분은 본문 첫 줄에 자기 설명을 이미 갖고 있어서(실측: 수집기·
    *  분류기·발견·관리기 넷 다) 셸이 한 줄 더 얹으면 같은 말이 두 번 나온다. 제목만 주고 설명은 본문에 맡긴다. */
   head?: { title: string; hint?: string | null };
+  /** 관리자만 **조회**까지 되는 화면(#1618). 단계 단위 adminEdit('보긴 다 보고 고치는 건 관리자')과 다른 축이다 —
+   *  이건 서버가 GET 부터 admin scope 로 막는 화면이라, 비-admin 에게 항목을 보여 주면 눌렀을 때 403 만
+   *  남는다. 구 [설정] 탭에서 ADMIN_ONLY 로 **아예 숨겨져 있던** 것들이라 숨김이 곧 종전 동작이기도 하다. */
+  adminOnly?: boolean;
   draw: (b: HTMLElement) => Promise<void>;
 };
 type CtxStage = {
@@ -113,6 +121,28 @@ const STAGES: CtxStage[] = [
       { key: 'managers', label: '관리기', head: { title: '관리기' }, draw: (b) => renderManagers(b) },
     ],
   },
+  // ── 5단계 전달(#1618) — 설정탭 'AI 맥락' 그룹 3화면을 여기로 옮겼다. ─────────────────────────
+  //  왜 5단계인가: 1~4 는 '자료를 쓸 만한 지식으로 만드는' 생산 라인이고, 이 셋은 **그 지식이 실제로
+  //   AI 에게 닿는 경로**다 — 항상 주입되는 것(세션 주입) · 필요할 때 찾아지는 것(의미 검색) · 누구에게
+  //   닿는지(공개범위). 라인이 아무리 잘 돌아도 이 단계가 비면 AI 는 그 지식을 못 쓴다. 실제로 임베딩
+  //   기본값이 off 라, 새 조직은 의미 검색이 꺼진 채 출발하는데 knowledge_search 는 실패하지 않고
+  //   조용히 단어 일치로 폴백한다 — 이 자리가 없으면 그 사실을 알 방법이 없었다.
+  //  왜 옮겼나: 맥락 화면이 두 탭에 갈려 있었다. 이 탭의 존재 이유가 '단계를 보면서 앞뒤를 함께 보는 것'
+  //   인데(위 STAGES 주석), 정작 맥락이 AI 에 닿는 마지막 구간만 다른 탭에 있었다. 복제가 아니라 이관이다
+  //   — 관리탭의 같은 패널을 그대로 부르고(코드 복제 0), 옛 URL 은 admin-shell 의 SECTION_EXIT 가 여기로 넘긴다.
+  {
+    key: 'deliver', label: '전달', step: 5, adminEdit: true,
+    items: [
+      // 세션 주입 — 매 세션 항상 들어가는 조직 정체성(org-defaults 등 injection='always').
+      //  구 [설정]에서도 ADMIN_ONLY 가 아니었다(전 구성원이 무엇이 주입되는지 볼 수 있어야 한다) → 그대로.
+      { key: 'injection', label: '세션 주입', draw: async (b) => { await injectionMap(b, await adminData()); } },
+      // 의미 검색 — 임베딩 provider·백필. 기본 off(뜻으로 찾기가 꺼진 상태). 서버가 GET 부터 admin.
+      { key: 'embeddings', label: '의미 검색', adminOnly: true, draw: async (b) => { await embeddingsEditor(b, await adminData()); } },
+      // 공개범위 — 어떤 유형에 공개범위 축을 쓸지. 자료 축은 이미 [수집 ▸ 자료 공개범위]에 있다(생산 지점).
+      //  누가 무엇을 볼 수 있는지를 정하는 보안 경계라 구 [설정]에서도 ADMIN_ONLY 였다 → 그대로.
+      { key: 'visibility', label: '공개범위', adminOnly: true, draw: async (b) => { await visibilityAxesPanel(b); } },
+    ],
+  },
 ];
 
 /**
@@ -135,7 +165,13 @@ export async function renderContext(view: HTMLElement, sub?: string | null, sub2
   if (isDistillerDetailPath(sub, sub2)) { await distillerPage(view, String(sub2)); return; }
 
   const stage = STAGES.find((s) => s.key === sub) ?? STAGES[0];
-  const item = stage.items.find((i) => i.key === sub2) ?? stage.items[0];
+  // adminOnly 화면(#1618)은 비-admin 에게 **주소로도** 열리지 않는다 — 내비에서 숨기기만 하면 옛 북마크·
+  //  공유 링크로 들어와 403 카드만 보게 된다(구 [설정] 탭도 숨김+게이트 둘 다 했다). 그 단계의 첫 볼 수 있는
+  //  화면으로 떨군다. 서버가 이미 막고 있으므로 이건 보안이 아니라 '막다른 화면을 안 보여주는' 처리다.
+  const canSee = (i: CtxItem) => !i.adminOnly || hasScope('admin');
+  const visible = stage.items.filter(canSee);
+  const asked = stage.items.find((i) => i.key === sub2);
+  const item = (asked && canSee(asked) ? asked : null) ?? visible[0] ?? stage.items[0];
 
   const host = el('div', {}, skeleton('불러오는 중'));
   const body = el('div', { class: 'ctx-body' },
@@ -185,6 +221,7 @@ function stageCrumb(stage: CtxStage): HTMLElement | null {
  */
 function buildSide(selStage: CtxStage, selItem: CtxItem): HTMLElement {
   const side = el('nav', { class: 'docs-side ctx-side', 'aria-label': '맥락 관리 단계' });
+  keepSideScroll(side, 'context');   // 단계를 고르면 화면을 다시 그려 사이드바가 새 노드가 된다(#1635)
   const curStep = selStage.step ?? 0;
   for (const s of STAGES) {
     // 개요는 목록의 한 줄이 아니라 **눌러서 들어가는 입구**다(#1584 사용자 지적: "누를 수 있는 버튼 같지가
@@ -210,6 +247,7 @@ function buildSide(selStage: CtxStage, selItem: CtxItem): HTMLElement {
           : null));
     }
     for (const it of s.items) {
+      if (it.adminOnly && !hasScope('admin')) continue;   // #1618 — 눌러도 403 인 자리는 아예 안 그린다
       const on = s.key === selStage.key && it.key === selItem.key;
       box.append(el('a', {
         class: 'docs-item' + (on ? ' active' : ''),

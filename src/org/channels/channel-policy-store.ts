@@ -110,7 +110,7 @@ export async function setChannelPolicy(
   const r = await itemsPool.query<ChannelPolicyRow>(
     `INSERT INTO member_channel_policy(member_id, system, channel_id, channel_name, peer_id, allow_read, allow_write, legacy, updated_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,false,$8)
-     ON CONFLICT (member_id, system, channel_id) DO UPDATE
+     ON CONFLICT (tenant_id, member_id, system, channel_id) DO UPDATE
        SET channel_name=COALESCE(EXCLUDED.channel_name, member_channel_policy.channel_name),
            peer_id=COALESCE(EXCLUDED.peer_id, member_channel_policy.peer_id),
            allow_read=EXCLUDED.allow_read, allow_write=EXCLUDED.allow_write, legacy=false,

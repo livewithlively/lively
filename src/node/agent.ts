@@ -11,20 +11,22 @@ import path from "node:path";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import crypto from "node:crypto";
+import { spawnSync } from "node:child_process";   // #1713 자가 갱신 — 받은 tar.gz 해제
 import {
   listSessionsRaw, createSession, killSession, editSession, applyValidatedInvites,
-  sessionGone, getSessionLabel, killEmptyTmuxServer, sessionDir, SHARED_ROOT,
+  sessionGone, getSessionLabel, killEmptyTmuxServer, sessionDir, sharedRoot,
   markSessionActive, isReportedPhase, type CreateInput,
 } from "../terminal/terminal-sessions.js";
 import { attachSession, killAttachedPtys, type AttachSocket } from "../terminal/terminal-pty.js";
+import { sendKeysToSession } from "../terminal/send-keys.js";
 import { sessionPrompts } from "../terminal/terminal-transcript.js";
 import type { LivelyUser } from "../context.js";
 import {
-  NODE_WS_PATH, PROTO_VER, NODE_OPS, encodeChanFrame, decodeChanFrame, parseMsg,
+  nodeWsUrl, PROTO_VER, NODE_OPS, encodeChanFrame, decodeChanFrame, parseMsg,
   type GwToNodeMsg, type NodeToGwMsg, type ReqMsg,
 } from "./protocol.js";
 // 위탁 태스크(P2) — 러너/리소스 샘플러는 중앙(게이트웨이 내장 노드)과 공유(node/tasks.ts).
-import { sampleResources, detectDocker, spawnTaskSession, checkTask, tailTask, type TaskWatch, type RunTaskInput } from "./tasks.js";
+import { sampleResources, detectDocker, detectHarnesses, spawnTaskSession, checkTask, tailTask, type TaskWatch, type RunTaskInput } from "./tasks.js";
 import { provisionProjectRepos, markProvisionPending, type RepoSpec as ProvisionRepoSpec } from "../project/project-provision.js";
 import { logger } from "../log.js";
 
@@ -43,6 +45,51 @@ const AGENT_VER: string | null = (() => {
     return crypto.createHash("sha256").update(fs.readFileSync(self)).digest("hex").slice(0, 12);
   } catch { return null; }
 })();
+// ── 자가 갱신(#1713) ─────────────────────────────────────────────────────────────────
+// 왜: 런처(launchd KeepAlive · systemd Restart)는 `lively node` CLI 가 아니라 **받아 둔 agent.mjs 를 직접**
+//  실행한다 → 재시작해도 번들 pull 이 일어나지 않아 노드가 영원히 옛 바이트로 돈다. 실측(2026-08-14):
+//  라이브 노드 4대가 전부 옛 번들이라, 게이트웨이가 지원하는 하네스(antigravity)를 **그 PC 에서만** 못 골랐다
+//  (세션 생성이 502 "허용되지 않은 하네스"). 사람이 눈치채기도 어렵다 — 노드는 멀쩡히 '연결됨'이니까.
+// 그래서 게이트웨이가 hello 응답(helloOk)으로 서빙 지문을 알려주고, 다르면 여기서 스스로 받아 교체한 뒤
+//  종료한다. 런처가 즉시 되살리므로 다음 프로세스는 새 바이트로 뜬다(tmux 세션은 별도 프로세스라 보존된다).
+// 안전장치 — 자가 갱신은 잘못 만들면 재시작 스톰이 된다:
+//  ① 지문이 같거나 모르면 아무것도 안 한다  ② 받은 바이트를 **해시로 검증**하고 다르면 교체하지 않는다
+//  ③ 시도 쿨다운 10분(플래그 mtime) — 서버가 계속 다른 지문을 줘도 재시작이 분당 반복되지 않는다
+//  ④ 교체는 임시파일 → rename(원자적). node_modules/node-pty 는 **건드리지 않는다**(네이티브 로드 중 교체 위험).
+const SELF_UPDATE_COOLDOWN_MS = 10 * 60 * 1000;
+let selfUpdating = false;
+async function maybeSelfUpdate(latest: string | null | undefined): Promise<void> {
+  if (selfUpdating || !latest || !AGENT_VER || latest === AGENT_VER) return;
+  const self = process.argv[1];
+  if (!self) return;
+  const tryFlag = `${self}.update-try`;
+  try {
+    const st = fs.statSync(tryFlag);
+    if (Date.now() - st.mtimeMs < SELF_UPDATE_COOLDOWN_MS) return;   // 최근에 시도했다 — 스톰 방지
+  } catch { /* 첫 시도 */ }
+  selfUpdating = true;
+  try {
+    fs.writeFileSync(tryFlag, "");
+    logger.info({ have: AGENT_VER, want: latest }, "노드 프로그램이 낡았다 — 새 번들을 받는다");
+    const res = await fetch(`${GW_URL.replace(/\/$/, "")}/node/agent-bundle`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+    if (!res.ok) { logger.warn({ status: res.status }, "번들 다운로드 실패 — 다음 연결에 다시 시도"); return; }
+    const tgz = Buffer.from(await res.arrayBuffer());
+    const tmpDir = fs.mkdtempSync(path.join(path.dirname(self), ".update-"));
+    try {
+      const tar = spawnSync("tar", ["-xzf", "-", "-C", tmpDir], { input: tgz });
+      if (tar.status !== 0) { logger.warn({ status: tar.status }, "번들 해제 실패 — 교체하지 않는다"); return; }
+      const got = path.join(tmpDir, path.basename(self));
+      const ver = crypto.createHash("sha256").update(fs.readFileSync(got)).digest("hex").slice(0, 12);
+      if (ver !== latest) { logger.warn({ got: ver, want: latest }, "받은 번들 지문이 다르다 — 교체하지 않는다"); return; }
+      fs.renameSync(got, self);   // 같은 파일시스템 → 원자적
+      logger.info({ ver }, "노드 프로그램 갱신 완료 — 다시 시작한다(런처가 되살린다)");
+      setTimeout(() => process.exit(0), 300);   // 로그가 나갈 틈만 주고 종료
+    } finally { fs.rmSync(tmpDir, { recursive: true, force: true }); }
+  } catch (e) {
+    logger.warn({ err: (e as Error)?.message }, "자가 갱신 실패 — 다음 연결에 다시 시도");
+  } finally { selfUpdating = false; }
+}
+
 if (!GW_URL || !TOKEN) {
   console.error("LIVELY_GATEWAY_URL / LIVELY_NODE_TOKEN 이 필요합니다");
   process.exit(2);
@@ -51,14 +98,6 @@ if (!GW_URL || !TOKEN) {
 const STATE_PUSH_MS = 3_000;
 const BACKOFF_MIN_MS = 1_000;
 const BACKOFF_MAX_MS = 30_000;
-
-function wsUrl(base: string): string {
-  const u = new URL(base);
-  u.protocol = u.protocol === "http:" ? "ws:" : u.protocol === "https:" ? "wss:" : u.protocol;
-  u.pathname = NODE_WS_PATH;
-  u.search = "";
-  return u.toString();
-}
 
 // ── attach 채널 어댑터 — 게이트웨이행 단일 WSS 위의 가상 채널을 AttachSocket 으로 위장해
 //    terminal-pty.attachSession(tmux -CC · 큐잉 · 정리)을 그대로 재사용한다. ──
@@ -143,6 +182,8 @@ function provisionStatus(projectId: number): ProvisionJob & { known: boolean } {
 }
 
 // 세션 작업폴더(@box_dir) 기준 안전 경로(#875) — .. 탈출 거부. requireSub 면 base 자체(빈 경로)는 파일 op 대상 불가로 거부.
+// ⚠ 여기는 **tmux 가 유일한 진실**이다 — 게이트웨이 쪽은 desired(DB) 우선으로 바뀌었지만(session-desired.ts),
+//  노드에는 DB 가 없다(설계: 노드에 DB 자격을 주지 않는다). resolveSessionDir 로 "통일"하지 마라 — 노드에서 그건 못 돈다.
 async function nodeSessionAbs(id: string, sub: string, requireSub = false): Promise<{ base: string; abs: string }> {
   const base = path.resolve(await sessionDir(id));
   const rel = String(sub || "").replace(/^[/\\]+/, "");
@@ -160,11 +201,14 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
     case "runTask": {
       const input = args as unknown as RunTaskInput;
       const r = await spawnTaskSession(input);
-      trackedTasks.set(input.taskId, { taskId: input.taskId, sessionId: r.sessionId, taskDir: r.taskDir });
+      // 노드가 받는 runTask 는 **위탁뿐**이고 그 id 는 org_task 의 숫자다(리브 대화 턴은 이 op 를 안 탄다 —
+      //  게이트웨이 로컬에서 spawnTaskSession 을 직접 부른다). 추적 맵은 그 숫자 계약 위에 있으므로 여기서 좁힌다.
+      const taskId = Number(input.taskId);
+      trackedTasks.set(taskId, { taskId, sessionId: r.sessionId, taskDir: r.taskDir, harness: input.harness });   // #1710 — 결과 스키마가 하네스별이라함께 들고 있어야 요약을 뽑는다
       return r;
     }
     case "watchTask": {
-      const w = { taskId: Number(args.taskId), sessionId: String(args.sessionId), taskDir: String(args.taskDir) };
+      const w = { taskId: Number(args.taskId), sessionId: String(args.sessionId), taskDir: String(args.taskDir), harness: args.harness ? String(args.harness) : undefined };   // #1710
       if (w.taskId && w.taskDir) trackedTasks.set(w.taskId, w);
       return { ok: true };
     }
@@ -181,6 +225,13 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
     case "markActive": {
       const st = args.state;
       await markSessionActive(String(args.id), isReportedPhase(st) ? st : undefined);
+      return { ok: true };
+    }
+    // #1664 — 게이트웨이가 이 노드의 세션 PTY 에 프롬프트를 넣는다(크론 주입·리브). 인가(소유·초대)는
+    //  게이트웨이가 끝냈다는 전제(F7). mux 표면 분기(tmux `-l` vs psmux 코드포인트)와 flush 지연 규약은
+    //  terminal/send-keys 안에 갇혀 있어 게이트웨이 로컬 주입과 **같은 코드**로 돈다.
+    case "sendKeys": {
+      await sendKeysToSession(String(args.id), String(args.text ?? ""));
       return { ok: true };
     }
     case "create": {
@@ -249,7 +300,7 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
 
 let attempt = 0;
 function connect(): void {
-  const url = wsUrl(GW_URL);
+  const url = nodeWsUrl(GW_URL);
   const ws = new WebSocket(url, { headers: { Authorization: `Bearer ${TOKEN}` }, handshakeTimeout: 10_000 });
   const chans = new Map<number, ChanSocket>();
   let pusher: NodeJS.Timeout | null = null;
@@ -259,7 +310,7 @@ function connect(): void {
     if (ws.readyState !== WebSocket.OPEN) return;
     try {
       // 리소스 상시 노출(§10) + 세션 스냅샷. res 는 매 push 변하므로 dedup 은 세션 부분만 본다.
-      const [sessions, res] = await Promise.all([listSessionsRaw(), sampleResources(SHARED_ROOT.base)]);
+      const [sessions, res] = await Promise.all([listSessionsRaw(), sampleResources(sharedRoot().base)]);
       const sesKey = JSON.stringify(sessions);
       const skip = !force && sesKey === lastPushed && trackedTasks.size === 0;
       lastPushed = sesKey;
@@ -282,11 +333,12 @@ function connect(): void {
     logger.info({ url }, "게이트웨이 연결됨");
     void (async () => {
       const hasDocker = await detectDocker();
+      const harnesses = await detectHarnesses();   // #1713 — 이 PC 에 실제로 있는 하네스(폼이 이걸로 선택지를 거른다)
       ws.send(JSON.stringify({
         t: "hello", ver: PROTO_VER, node: NODE_ID, platform: process.platform, host: os.hostname(), hasDocker,
         // agentVer = 이 번들의 지문 · caps = **이 빌드가 실제로 구현한 op**(protocol.NODE_OPS — 목록과 타입이 한 출처).
         //  둘 다 없으면 게이트웨이는 "이 노드가 무엇인지·무엇을 하는지" 알 방법이 없어, 미지원을 실패와 구별 못 한다.
-        ...(AGENT_VER ? { agentVer: AGENT_VER } : {}), caps: [...NODE_OPS],
+        ...(AGENT_VER ? { agentVer: AGENT_VER } : {}), caps: [...NODE_OPS], harnesses,
       } satisfies NodeToGwMsg));
       await pushState(true);
       pusher = setInterval(() => { void pushState(); }, STATE_PUSH_MS);
@@ -297,6 +349,8 @@ function connect(): void {
     if (isBinary) { decodeChanFrame(raw as Buffer); return; } // 현재 게이트웨이→노드 바이너리는 없음(제어는 ctl)
     const m = parseMsg<GwToNodeMsg>(raw);
     if (!m) return;
+    // #1713 — 게이트웨이가 알려준 서빙 지문. 내가 낡았으면 스스로 받아 교체하고 종료한다(런처가 되살린다).
+    if (m.t === "helloOk") { void maybeSelfUpdate(m.agentVerLatest); return; }
     if (m.t === "req") {
       const req = m as ReqMsg;
       void runOp(req.op, req.args ?? {})

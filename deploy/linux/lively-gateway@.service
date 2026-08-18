@@ -1,0 +1,40 @@
+[Unit]
+# Blue-green 인스턴스 유닛 — %i = color(blue|green). 두 인스턴스가 서로 다른 릴리스 코드를 동시에 물 수 있어
+#  무중단 flip 이 가능하다(단일 lively-gateway.service 는 dist 를 통째로 갈아엎어 다운타임이 생겼다).
+Description=Lively gateway (blue-green instance %i)
+Documentation=file://@LIVELY_ROOT@/%i/deploy/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# ⚠ KillMode=process — 단일 유닛과 동일한 이유. 중앙박스 세션은 게이트웨이(node)가 spawn 한 tmux 서버가 붙든다.
+#   기본값(control-group)이면 stop/restart 가 cgroup 전체(tmux 서버까지) SIGTERM → 웹터미널 세션 전멸. main PID 만
+#   내려 tmux 를 살린다. (drain·flip 중 idle→active 전환 시 잔여 세션이 죽지 않게 하는 것도 이 설정에 의존.)
+KillMode=process
+MemoryAccounting=yes
+@MEMORY_HIGH_LINE@
+User=@APP_USER@
+# WorkingDirectory = color 심볼릭(@LIVELY_ROOT@/<color>) → 이 color 가 현재 가리키는 릴리스 디렉토리. 그 안의
+#  .env·data·logs 는 공유 루트로 향하는 심볼릭이라 배포마다 보존된다(코드만 릴리스별, 상태는 공유). systemd 가 %i 를
+#  인스턴스명(blue|green)으로 확장한다.
+WorkingDirectory=@LIVELY_ROOT@/%i
+# per-color 환경파일 — 최소한 PORT(blue:8081|green:8082). 실제 프로세스 env 라 --env-file(.env)의 PORT 보다 우선한다
+#  (Node: 이미 설정된 env 가 --env-file 값을 이긴다 — 검증됨). 그래서 공유 .env 는 그대로 두고 여기서만 포트를 가른다.
+EnvironmentFile=@LIVELY_ROOT@/color-env/%i.env
+ExecStart=@NODE_BIN@ --env-file-if-exists=.env dist/index.js
+Restart=always
+RestartSec=10
+LimitNOFILE=8192
+# ⚠ UTF-8 로케일 불변식(단일 유닛과 동일) — 없으면 tmux list-sessions 출력의 탭·한글이 '_' 로 치환돼 웹터미널 입장 불가.
+Environment=LANG=C.UTF-8
+Environment=LC_ALL=C.UTF-8
+Environment=LC_CTYPE=C.UTF-8
+# 터미널 세션이 spawn 하는 claude/codex/git/tmux 를 찾도록 넉넉한 PATH(render_bluegreen_unit 이 치환).
+Environment=PATH=@PATH@
+# per-color 로그(gateway-blue.log|gateway-green.log) = 공유 로그 디렉토리. /tmp 금지(재부팅 증발).
+StandardOutput=append:@LIVELY_ROOT@/logs/gateway-%i.log
+StandardError=append:@LIVELY_ROOT@/logs/gateway-%i.log
+
+[Install]
+WantedBy=multi-user.target

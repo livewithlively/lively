@@ -25,7 +25,7 @@ const pool = new pg.Pool({ connectionString: process.env.ITEMS_DATABASE_URL, max
 const r = await pool.query(
   `INSERT INTO org_hook(id,label,harness,event,matcher,source_code,timeout_sec,note,enabled,sort,version,content_hash,created_by,updated_at,updated_by)
      VALUES($1,$2,'claude','UserPromptSubmit',NULL,$3,5,$4,$5,20,1,$6,'system',now(),'system')
-   ON CONFLICT (id) DO UPDATE SET
+   ON CONFLICT ON CONSTRAINT org_hook_pkey DO UPDATE SET
      label=EXCLUDED.label, harness=EXCLUDED.harness, event=EXCLUDED.event, source_code=EXCLUDED.source_code,
      timeout_sec=EXCLUDED.timeout_sec, note=EXCLUDED.note, enabled=EXCLUDED.enabled,
      content_hash=EXCLUDED.content_hash, version=org_hook.version+1, updated_at=now()

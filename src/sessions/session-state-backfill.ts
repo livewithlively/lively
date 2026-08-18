@@ -14,7 +14,7 @@
 //  `project_src` 도 tmux 에서 안 읽고 있어 v6 로 가정한다(대다수) — org 프로젝트 세션이면 프로젝트 링크만 어긋난다.
 import path from "node:path";
 import { logger } from "../log.js";
-import { ROOTS, listSessionsRaw, resolveRootPath, type SessionInfo } from "../terminal/terminal-sessions.js";
+import { roots, listSessionsRaw, resolveRootPath, type SessionInfo } from "../terminal/terminal-sessions.js";
 import type { LivelyUser } from "../context.js";
 import { listAllSessionStates, upsertSessionState } from "./session-state.js";
 import { listManagedSessions } from "./managed-sessions.js";
@@ -41,7 +41,7 @@ export function splitByBases(dir: string, bases: RootBase[]): { rootKey: string;
 //  정방향 산출을 그대로 역대조에 쓴다(경로 규칙을 여기서 다시 쓰면 두 곳이 갈라진다).
 async function basesFor(owner: string, resolve = resolveRootPath): Promise<RootBase[]> {
   const out: RootBase[] = [];
-  for (const r of ROOTS) {
+  for (const r of roots()) {
     try {
       const { base } = await resolve({ userId: owner } as LivelyUser, r.key, "", undefined);
       out.push({ key: r.key, base });
