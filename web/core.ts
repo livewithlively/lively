@@ -88,3 +88,5 @@ export {
 } from './lib/widgets.js';
 //  마크다운 렌더러(R28) — 소비 15+ 파일이 종전대로 여기서 받는다.
 export { renderCollection, renderInline, renderMarkdown, safeHref } from './lib/markdown.js';
+//  화면 테마(#1683 다크모드) — 설정값·적용·토글 UI. 첫 페인트 선반영은 index.html 인라인 스크립트.
+export { initTheme, setThemePref, themeApplied, themeControl, themePref } from './lib/theme.js';

@@ -50,7 +50,7 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-ws-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14.5px; font-weight: 700; color: var(--ink); }
 .v2-ws-car { font-size: 10px; color: var(--muted-2, #a6b2c8); flex: none; margin-right: auto; }
 .v2-ws-badge { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 9.5px; letter-spacing: .04em; font-weight: 700; padding: 1px 5px; border-radius: 5px; border: 1px solid transparent; }
-.v2-ws-badge.personal { color: var(--mint-deep, #0FA37E); background: var(--bg-success, #F3FBF8); border-color: #CDEFE3; }
+.v2-ws-badge.personal { color: var(--mint-deep, #0FA37E); background: var(--bg-success, #F3FBF8); border-color: var(--success-line); }
 .v2-ws-badge.team { color: var(--blue); background: var(--bg-tint, #F6FAFF); border-color: var(--line-net-2, #CFE0F7); }
 /* 스위처 메뉴(fixed, body 부착) */
 .v2-ws-menu { z-index: 60; background: var(--bg, #fff); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow-2, 0 8px 30px rgba(21,35,59,.14)); padding: 6px; max-width: 380px; max-height: 74vh; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
@@ -68,7 +68,7 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-ws-team-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; text-decoration: none; color: var(--ink); font-size: 12.5px; font-weight: 600; }
 .v2-ws-err { flex: none; width: 15px; height: 15px; border-radius: 50%; background: var(--coral, #E5484D); color: #fff; font-size: 10px; font-weight: 800; display: grid; place-items: center; }
 .v2-ws-auto { flex: none; font-size: 10.5px; font-weight: 700; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
-.v2-ws-auto.on { color: var(--mint-deep, #0FA37E); border-color: #CDEFE3; background: var(--bg-success, #F3FBF8); }
+.v2-ws-auto.on { color: var(--mint-deep, #0FA37E); border-color: var(--success-line); background: var(--bg-success, #F3FBF8); }
 .v2-ws-del { flex: none; width: 22px; border: 0; background: none; color: var(--muted-2, #a6b2c8); font-size: 12px; cursor: pointer; border-radius: 6px; }
 .v2-ws-del:hover { color: var(--coral, #E5484D); background: var(--bg-tint, #F6FAFF); }
 .v2-ws-linkform { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px 8px; }
@@ -94,8 +94,8 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-mark-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--mint-deep, #0FA37E); display: block; }
 .v2-mark:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .v2-liv-btn { margin: 5px 8px 2px; display: flex; align-items: center; gap: 10px; padding: 10px 11px; border-radius: 10px; border: 1px solid transparent; font-weight: 700; font-size: 14.5px; color: var(--ink); text-decoration: none; }
-.v2-liv-btn:hover, .v2-liv-btn.on { background: var(--bg, #fff); border-color: #CDEFE3; }
-.v2-liv-btn .lm { width: 24px; height: 24px; border-radius: 50%; background: var(--bg-success, #F3FBF8); border: 1px solid #CDEFE3; display: grid; place-items: center; color: var(--mint-deep, #0FA37E); font-weight: 800; font-size: 11px; flex: none; }
+.v2-liv-btn:hover, .v2-liv-btn.on { background: var(--bg, #fff); border-color: var(--success-line); }
+.v2-liv-btn .lm { width: 24px; height: 24px; border-radius: 50%; background: var(--bg-success, #F3FBF8); border: 1px solid var(--success-line); display: grid; place-items: center; color: var(--mint-deep, #0FA37E); font-weight: 800; font-size: 11px; flex: none; }
 .v2-liv-btn .sub { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--muted); }
 .v2-side-sec { padding: 16px 12px 6px 18px; display: flex; align-items: center; gap: 2px; flex-wrap: nowrap; }
 .v2-side-sec .v2-k { margin-right: 6px; }
@@ -121,7 +121,7 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-flt-btn:hover, .v2-flt-btn.open { color: var(--ink); background: var(--bg, #fff); border-color: var(--line, #E6ECF5); }
 .v2-flt-btn.has { color: var(--blue-deep, #1E54CC); }
 .v2-flt-ic { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
-.v2-flt-n { min-width: 15px; height: 15px; border-radius: 999px; background: var(--blue); color: #fff; font-size: 10px; font-weight: 800; display: inline-grid; place-items: center; padding: 0 3px; }
+.v2-flt-n { min-width: 15px; height: 15px; border-radius: 999px; background: var(--blue-fill); color: #fff; font-size: 10px; font-weight: 800; display: inline-grid; place-items: center; padding: 0 3px; }
 .v2-flt-pop { position: absolute; top: calc(100% + 6px); right: -40px; width: 236px; z-index: 30; background: var(--bg, #fff); border: 1px solid var(--line, #E6ECF5); border-radius: 12px; box-shadow: 0 12px 32px rgba(21, 35, 59, .14); padding: 6px; }
 .v2-flt-k { font-family: var(--mono, ui-monospace, monospace); font-size: 11px; letter-spacing: .06em; color: var(--muted); padding: 8px 10px 3px; }
 .v2-fo { display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 10px; border: 0; border-radius: 8px; background: none; font: inherit; font-size: 13.5px; font-weight: 600; color: var(--ink-sub); cursor: pointer; text-align: left; }
@@ -231,7 +231,7 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-home-sub { margin: 2px 0 0; font-size: 29px; font-weight: 750; letter-spacing: -.7px; line-height: 1.28; color: var(--muted-2, #A6B2C8); }
 .v2-launch { position: relative; margin-top: 26px; border: 1px solid var(--line-net, #D5DDEA); border-radius: 18px; background: var(--bg, #fff);
   box-shadow: 0 1px 2px rgba(21, 35, 59, .04), 0 14px 40px -24px rgba(21, 35, 59, .16); padding: 16px 16px 12px; }
-.v2-launch:focus-within { border-color: color-mix(in srgb, var(--blue) 55%, var(--line-net, #D5DDEA)); box-shadow: 0 1px 2px rgba(21, 35, 59, .04), 0 14px 40px -22px rgba(45, 107, 240, .22); }
+.v2-launch:focus-within { border-color: color-mix(in srgb, var(--blue) 55%, var(--line-net, #D5DDEA)); box-shadow: 0 1px 2px rgba(21, 35, 59, .04), 0 14px 40px -22px color-mix(in srgb, var(--blue) 22%, transparent); }
 .v2-launch-in { display: block; width: 100%; resize: none; border: 0; outline: 0; background: transparent; font: inherit; font-size: 15.5px; line-height: 1.65; min-height: 56px; }
 .v2-launch-in::placeholder { color: var(--muted-2, #a6b2c8); }
 .v2-launch-in:disabled { opacity: .55; }

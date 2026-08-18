@@ -5,7 +5,7 @@
 //  import 방향: main → 각 탭 모듈(단방향). **역으로 어떤 모듈도 main 을 import 하지 않는다** — 그러면
 //   모듈 평가만으로 boot()·전역 리스너 등록이 재실행된다. 새 탭은 아래 route() 에 분기를 더해 붙인다.
 //  ⚠ 실행 순서가 계약이다: 아래 setUnauthorizedHandler 가 이 파일의 첫 실행문이어야 하고, boot() 는 맨 끝이다.
-import { $view, TOKEN_KEY, api, apiUrl, el, errorNote, hideGate, loadPeopleAvatars, markSecretInput, navOn, profileAvatar, showGate, state } from './core.js';
+import { $view, TOKEN_KEY, api, apiUrl, el, errorNote, hideGate, initTheme, loadPeopleAvatars, markSecretInput, navOn, profileAvatar, showGate, state, themeControl } from './core.js';
 import { isDistillerDetailPath, renderContext } from './context.js';   // #1419 T6 맥락 관리 — 수집·증류·분류·관리 파이프라인
 import { renderWiki, renderWikiTrash } from './wiki.js';   // #764 WIKI 탭 전면 재구축(사이드바 유지)
 import { consumeWikiPeekGuard, dismissWikiPeek, renderWikiDocPage } from './wiki-doc.js';
@@ -38,6 +38,10 @@ setUnauthorizedHandler(() => {
   state.me = null;
   showGate('세션이 만료되었습니다. 다시 로그인하세요.');
 });
+
+// 화면 테마(#1683) — 인라인 선반영(index.html) 뒤의 구독(시스템 변경·다른 탭 동기화)만 보탠다. 인증과 무관하게
+//  게이트(로그인 화면)에도 걸려야 하므로 boot() 안이 아니라 여기서 즉시.
+initTheme();
 
 // ── 라우터 ──
 function parseHash() {
@@ -284,6 +288,8 @@ async function boot() {
     const nm = state.me.display_name || state.me.email || state.me.userId || '';
     userBtn.replaceChildren(profileAvatar(state.me.avatar, nm, state.me.userId, 'topbar-ava', { char: state.me.avatar_char, color: state.me.avatar_color }), el('span', { text: nm }));
     userBtn.hidden = false;
+    // 테마 토글(#1683) — 텍스트 유틸(사용량·리브·사용 가이드) 뒤, 내 프로필 앞. 재부팅(로그인 갱신) 시 중복 삽입 방지.
+    if (!document.querySelector('.topbar-right .theme-seg')) userBtn.before(themeControl());
   }
   loadPeopleAvatars(); // 사람 아바타 맵 선로드(칩·얼굴·작성자 아바타가 커스텀 글자·색·이미지로 뜨게 — #473 후속)
   // '관리' 탭은 모든 인증 사용자에게 — admin 은 편집, 그 외는 읽기 전용(서버가 쓰기를 강제 차단).

@@ -39,13 +39,13 @@
 .audit-table th { text-align:left; padding:6px 9px; font-size:11px; font-weight:700; color:var(--muted); border-bottom:1px solid var(--line); white-space:nowrap; }
 .audit-table td { padding:5px 9px; border-bottom:1px solid var(--line); color:var(--ink); vertical-align:top; }
 .audit-table tr:hover td { background:var(--bg-tint); }
-.audit-row-bad td { background:#FEF4F4; }
-.audit-row-bad:hover td { background:#FDEBEB; }
+.audit-row-bad td { background:var(--bg-danger); }
+.audit-row-bad:hover td { background:var(--bg-danger); }
 .audit-num { text-align:right; font-variant-numeric:tabular-nums; color:var(--ink-sub); }
 .audit-time { color:var(--muted); white-space:nowrap; }
 .audit-tables { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:11.5px; }
 .audit-ok { color:var(--mint-deep); font-weight:600; }
-.audit-bad { color:#C0392B; font-weight:600; }
+.audit-bad { color:var(--danger-text); font-weight:600; }
 .addbox-h { font-size:12.5px; font-weight:700; color:var(--ink); margin-bottom:10px; }
 
 /* ══ 감사 로그 3탭 공용 컨트롤 (#1085) ══════════════════════════════════════
@@ -87,7 +87,7 @@ select.aud-sel {
 .aud-pager { display:flex; gap:5px; align-items:center; flex-wrap:wrap; margin-top:12px; }
 .aud-pg { min-width:32px; height:32px; padding:0 10px; border:1px solid var(--line); border-radius:9px; background:var(--bg); color:var(--ink); font:inherit; font-size:12.5px; font-weight:600; cursor:pointer; font-variant-numeric:tabular-nums; }
 .aud-pg:hover { border-color:var(--blue); }
-.aud-pg-on { background:var(--blue); border-color:var(--blue); color:#fff; cursor:default; }
+.aud-pg-on { background:var(--blue-fill); border-color:var(--blue); color:#fff; cursor:default; }
 .aud-pg-on:hover { border-color:var(--blue); }
 .aud-pg-off { opacity:.38; cursor:default; }
 .aud-pg-off:hover { border-color:var(--line); }

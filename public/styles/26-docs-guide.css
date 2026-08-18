@@ -165,7 +165,7 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .docs-linkcard-d { display: block; margin-top: 4px; font-size: 13px; line-height: 1.55; color: var(--ink-sub); }
 
 /* 콜아웃 — 팁·알아두기. '딱 한 줄'(guide-remember)과 같은 파란 틴트 박스. */
-.docs-md .md-quote { background: rgba(45,107,240,.05); border: 1px solid var(--line-note);
+.docs-md .md-quote { background: color-mix(in srgb, var(--blue) 5%, transparent); border: 1px solid var(--line-note);
   border-radius: 12px; padding: 12px 15px; margin: 14px 0; color: var(--ink-sub); font-size: 14px; line-height: 1.65; }
 .docs-md .md-quote .md-p { margin: 0; }
 .docs-md .md-quote strong { color: var(--ink); }

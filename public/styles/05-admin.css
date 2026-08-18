@@ -95,7 +95,7 @@
 .admin-member-search { width: 100%; box-sizing: border-box; padding-left: 34px; font-weight: 500;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23A6B2C8' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M20.5 20.5l-4-4'/%3E%3C/svg%3E");
   background-repeat: no-repeat; background-position: 11px 50%; }
-.admin-member-search:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.12); }
+.admin-member-search:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 12%, transparent); }
 .admin-member-empty { padding: 20px 6px; color: var(--ink-sub); font-size: 13px; font-weight: 600; }
 /* 아바타가 붙는 구성원 행/카드 — 아바타 왼쪽, 이름·메타 오른쪽(길면 말줄임) */
 .member-row { display: flex; align-items: center; gap: 10px; }
@@ -142,23 +142,23 @@
 /* pill */
 .pill { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 20px; background: var(--bg-tint-2); color: var(--muted-head); }
 .pill-ok { background: var(--bg-success); color: var(--mint-deep); }
-.pill-warn { background: #FFF6E9; color: #B5791E; }
+.pill-warn { background: var(--amber-bg); color: var(--amber-mid); }
 
 /* ── 의미 패널(meaning) — '구성원에게 미치는 효과'. 의미 인지의 핵심. ── */
 .meaning { margin-top: 18px; border: 1px solid var(--line-note); border-radius: 13px; background: var(--bg-note); padding: 15px 17px; }
 .meaning-head { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; }
 .meaning-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--blue); flex: 0 0 auto; }
 .meaning-title { font-size: 12.5px; font-weight: 800; color: var(--ink-note); letter-spacing: -0.2px; }
-.meaning-tag { font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 20px; background: #fff; color: var(--ink-note); border: 1px solid var(--line-note); margin-left: auto; }
+.meaning-tag { font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 20px; background: var(--bg); color: var(--ink-note); border: 1px solid var(--line-note); margin-left: auto; }
 .meaning-what { font-size: 14px; font-weight: 600; color: var(--ink); margin: 0 0 11px; line-height: 1.55; }
 .meaning-grid { display: flex; flex-direction: column; gap: 6px; margin-bottom: 11px; }
 .meaning-row { display: flex; gap: 12px; align-items: baseline; font-size: 13px; }
 .meaning-k { flex: 0 0 92px; font-weight: 700; color: var(--muted-head); }
 .meaning-v { color: var(--ink-sub); }
-.meaning-ex { font-size: 13px; color: var(--ink-sub); background: #fff; border-radius: 9px; padding: 10px 12px; line-height: 1.55; }
+.meaning-ex { font-size: 13px; color: var(--ink-sub); background: var(--bg); border-radius: 9px; padding: 10px 12px; line-height: 1.55; }
 .meaning-ex-label { font-weight: 800; color: var(--blue-deep); margin-right: 8px; }
 /* tone 변주: 절대 규칙은 코랄, 신원은 민트, 연결은 청록 */
-.meaning-critical { border-color: #F3D2CD; background: #FFF6F4; }
+.meaning-critical { border-color: var(--danger-line); background: var(--bg-danger); }
 .meaning-critical .meaning-dot { background: var(--coral); }
 .meaning-critical .meaning-ex-label { color: var(--coral-text); }
 .meaning-identity { border-color: var(--line-net-2); background: var(--bg-success); }
@@ -210,7 +210,7 @@
 .sess-side-copy:hover { opacity: 1; }
 .sess-main { flex: 1; min-width: 0; padding-left: 22px; }
 .sess-bubble { border-radius: 6px; padding: 8px 12px; margin: 8px 0; }
-.sess-user { background: rgba(37,99,235,.10); border-left: 3px solid #2563eb; }
+.sess-user { background: color-mix(in srgb, var(--blue) 10%, transparent); border-left: 3px solid var(--blue); }
 .sess-ai { color: var(--fg, #333); margin-left: 8px; }
 .sess-body { line-height: 1.5; }   /* 한 섹션(문단) 안의 줄 간격 */
 .sess-body.clamp { max-height: 12em; overflow: hidden; -webkit-mask-image: linear-gradient(180deg, #000 80%, transparent); mask-image: linear-gradient(180deg, #000 80%, transparent); }
@@ -225,14 +225,14 @@
 .sess-line:hover > .sess-line-copy { opacity: .5; }
 .sess-line-copy:hover { opacity: 1; }
 .sess-flash { animation: sessFlash 2.5s ease-out; border-radius: 4px; }
-@keyframes sessFlash { 0% { background: rgba(37,99,235,.28); } 100% { background: transparent; } }
+@keyframes sessFlash { 0% { background: color-mix(in srgb, var(--blue) 28%, transparent); } 100% { background: transparent; } }
 @media (max-width: 820px) {
   .sess-layout { flex-direction: column; }
   .sess-side { position: static; width: auto; flex: none; max-height: 30vh; border-right: none; border-bottom: 1px solid rgba(127,127,127,.15); padding-right: 0; padding-bottom: 8px; }
   .sess-main { padding-left: 20px; }
 }
 .admin-preview { background: var(--dark-1); color: #E8EEF8; border-radius: 11px; padding: 16px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; max-height: 56vh; overflow: auto; margin: 6px 0 12px; }
-.admin-warn { font-size: 12.5px; font-weight: 600; color: var(--coral-text); background: #FFF6F4; border: 1px solid #F3D2CD; border-radius: 9px; padding: 9px 12px; margin: 4px 0 10px; line-height: 1.5; }
+.admin-warn { font-size: 12.5px; font-weight: 600; color: var(--coral-text); background: var(--bg-danger); border: 1px solid var(--danger-line); border-radius: 9px; padding: 9px 12px; margin: 4px 0 10px; line-height: 1.5; }
 
 /* (관리 가로 중분류 바(.admin-cats)는 #827 로 폐지 — 위계 2단을 좌측 사이드바(.admin-side)가 전담한다.) */
 
@@ -260,8 +260,8 @@
   background: var(--bg-tint); border: 1px solid var(--line); cursor: pointer;
   transition: color .14s, border-color .14s, background .14s, box-shadow .14s;
 }
-.sub-graph-btn:hover { color: var(--ink); border-color: #16C79A; background: #fff; box-shadow: 0 2px 12px rgba(22,199,154,.16); }
-.sub-graph-btn .sub-graph-ic { color: #16C79A; flex: none; }
+.sub-graph-btn:hover { color: var(--ink); border-color: var(--mint); background: var(--bg); box-shadow: 0 2px 12px color-mix(in srgb, var(--mint) 16%, transparent); }
+.sub-graph-btn .sub-graph-ic { color: var(--mint); flex: none; }
 @media (max-width: 560px) { .sub-graph-btn { margin-left: 0; padding: 7px 11px; font-size: 12.5px; } }
 
 /* 가이드(#/learn) — 목적 카드 + '지식 하나' 예시 + 쉬운 용어집 */
@@ -304,6 +304,6 @@
 .svp-row-actions { display: flex; gap: 6px; flex: none; }
 .svp-actions { display: flex; gap: 8px; margin-top: 14px; }
 .svp-warn { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 8px; margin-bottom: 12px;
-  background: var(--warn-bg, rgba(255,176,32,.12)); border: 1px solid var(--warn-line, rgba(255,176,32,.35)); }
+  background: var(--warn-bg, color-mix(in srgb, var(--warn-strong) 12%, transparent)); border: 1px solid var(--warn-line, color-mix(in srgb, var(--warn-strong) 35%, transparent)); }
 .svp-warn span { font-size: 13px; opacity: .85; }
 .svp-dry { margin: 12px 0; }

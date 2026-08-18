@@ -14,7 +14,7 @@
 @media (max-width: 560px) { .term-seg { flex-direction: column; } }
 .term-seg-btn { flex: 1; display: flex; align-items: center; gap: 10px; padding: 12px 13px; border: 1.5px solid var(--line-net); border-radius: 11px; background: var(--bg); color: var(--ink); cursor: pointer; font-family: inherit; text-align: left; transition: border-color .14s ease, background-color .14s ease, box-shadow .14s ease; }
 .term-seg-btn:hover { border-color: var(--line-net-2); background: var(--bg-tint); }
-.term-seg-btn.active { border-color: var(--blue); background: var(--bg-tint); box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
+.term-seg-btn.active { border-color: var(--blue); background: var(--bg-tint); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 10%, transparent); }
 .term-seg-ico { flex: none; font-size: 18px; line-height: 1.15; }
 .term-seg-txt { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .term-seg-lbl { font-size: 13.5px; font-weight: 700; color: var(--ink); }
@@ -109,7 +109,7 @@
 .term-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; white-space: nowrap; }
 .term-badge.author { color: var(--ink-note); background: var(--bg-tint-2); }
 .term-badge.owner { color: var(--ink-note); background: var(--bg-tint-2); border-color: var(--line-note); }
-.term-badge.danger { color: #9A5B2E; background: #FBF1E7; border-color: #F0DCC4; }
+.term-badge.danger { color: var(--amber-text); background: var(--amber-bg); border-color: var(--amber-line); }
 /* ════ 터미널 탭 세션 보드(#745) — 라이브 상태(작업중/대기/오프라인) + 프로젝트 할당 미션컨트롤 ════ */
 /* 상태칩(=카운트 요약) + 우측 프로젝트필터/선택토글 */
 .tsess-controls { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 14px; }
@@ -197,7 +197,7 @@
 .tsess-sect-n { font-weight: 600; color: var(--ink-note); font-variant-numeric: tabular-nums; }
 /* 카드 = 좌측 상태색 바 + 정보(2행) + 우측 액션. 오프라인은 옅게(흰 배경). 접속중은 민트 인셋. */
 .tsess-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--muted-3); border-radius: 12px; background: var(--bg-tint); }
-.tsess-card.tsess-busy { border-left-color: #f59e0b; }
+.tsess-card.tsess-busy { border-left-color: var(--warn-strong); }
 .tsess-card.tsess-waiting { border-left-color: var(--coral, #e5484d); }
 .tsess-card.tsess-idle { border-left-color: var(--mint-deep); }
 .tsess-card.tsess-restorable { border-left-color: var(--accent, #5b6cff); background: color-mix(in srgb, var(--accent, #5b6cff) 4%, var(--bg)); } /* #1059 E 복원 가능 */
@@ -211,7 +211,7 @@
 .tsess-name { font-size: 14.5px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px; }
 .tsess-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--muted-2); }
 /* 상태 포인트 컬러 = 대시보드 '내 AI 세션'(dash-scard)과 통일: busy=주황·waiting=코랄·idle=민트·offline=회색. */
-.tsess-dot-busy { background: #f59e0b; box-shadow: 0 0 0 3px color-mix(in srgb, #f59e0b 22%, transparent); }
+.tsess-dot-busy { background: var(--warn-strong); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn-strong) 22%, transparent); }
 .tsess-dot-waiting { background: var(--coral, #e5484d); box-shadow: 0 0 0 3px color-mix(in srgb, var(--coral, #e5484d) 22%, transparent); }
 .tsess-dot-idle { background: var(--mint-deep); }
 .tsess-dot-restorable { background: var(--accent, #5b6cff); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #5b6cff) 20%, transparent); } /* #1059 E */
@@ -224,19 +224,19 @@
 /* 내가 exit 한 세션: 복원 가능계(강조색)와 같은 뿌리지만 테두리만 — '내가 끝냈다'를 조용히 표시. */
 .tsess-dot-exited-user { background: transparent; box-shadow: inset 0 0 0 2px var(--accent, #5b6cff); }
 /* #1251 — 메모리 부족: 빈 점(복원 가능계와 같은 형태)이되 경고색으로 구분. */
-.tsess-dot-oom-killed { background: transparent; box-shadow: inset 0 0 0 2px #9A5B2E; }
+.tsess-dot-oom-killed { background: transparent; box-shadow: inset 0 0 0 2px var(--amber-text); }
 .tsess-dot-offline { background: var(--muted-2); }   /* 오프라인(아무도 안 보는 중·노드 미연결) = 회색 점 */
 .tsess-proj { display: inline-flex; align-items: center; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; font-weight: 700; color: var(--blue); background: var(--bg-punch); border: 1px solid color-mix(in srgb, var(--blue) 28%, var(--bg)); border-radius: 999px; padding: 2px 9px; }
 .tsess-proj.mine { color: var(--accent, #5b6cff); border-color: color-mix(in srgb, var(--accent, #5b6cff) 42%, var(--bg)); background: color-mix(in srgb, var(--accent, #5b6cff) 9%, transparent); }
 .tsess-badge { flex: none; font-size: 11px; font-weight: 700; color: var(--ink-sub); background: var(--bg-tint-2); border: 1px solid var(--line); border-radius: 999px; padding: 1.5px 8px; white-space: nowrap; }
 .tsess-badge.live { color: var(--mint-deep); background: var(--bg-success); border-color: color-mix(in srgb, var(--mint-deep) 35%, var(--bg)); }
 .tsess-badge.live::before { content: "●"; font-size: 8px; margin-right: 3px; vertical-align: 1px; }
-.tsess-badge.danger { color: #9A5B2E; background: #FBF1E7; border-color: #F0DCC4; }
+.tsess-badge.danger { color: var(--amber-text); background: var(--amber-bg); border-color: var(--amber-line); }
 .tsess-meta { margin-top: 5px; display: flex; align-items: center; flex-wrap: wrap; gap: 5px; font-size: 12px; color: var(--muted); min-width: 0; }
 .tsess-meta .tsess-dir { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 280px; }
 .tsess-sep { color: var(--muted-3); }
 .tsess-stat { font-weight: 800; }
-.tsess-stat-busy { color: #d97706; }
+.tsess-stat-busy { color: var(--amber-mid); }
 .tsess-stat-waiting { color: var(--coral, #e5484d); }
 .tsess-stat-idle { color: var(--mint-deep); }
 .tsess-stat-restorable { color: var(--accent, #5b6cff); } /* #1059 E */
@@ -245,7 +245,7 @@
 .tsess-stat-exited-user { color: var(--accent, #5b6cff); }      /* 내가 exit = 복원 가능계 */
 /* #1251 — 메모리 부족(OS 강제 종료). '중단됨'(재부팅·회수, 강조색)과 **다른 사실**이라 색을 가른다:
    저건 시스템 사정이고 이건 사용자가 당한 사고다. danger 배지와 같은 경고 톤을 쓴다. */
-.tsess-stat-oom-killed { color: #9A5B2E; }
+.tsess-stat-oom-killed { color: var(--amber-text); }
 /* '지금 하는 일' 실시간 요약(백엔드 title) — 라벨 아래 한 줄. */
 .tsess-worktitle { margin-top: 4px; font-size: 12.5px; font-weight: 600; color: var(--ink-note); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 620px; }
 
@@ -254,8 +254,8 @@
 .tsess-open:hover { background: var(--bg-punch); }
 .tsess-icon { font-size: 12.5px; font-weight: 600; color: var(--ink-sub); border: 1px solid var(--line); border-radius: 8px; padding: 6px 11px; background: var(--bg); cursor: pointer; font-family: inherit; }
 .tsess-icon:hover { color: var(--ink); border-color: var(--muted-2); background: var(--bg-tint); }
-.tsess-icon.danger { color: var(--coral-text); border-color: #F0DCC4; }
-.tsess-icon.danger:hover { background: #FBF1E7; }
+.tsess-icon.danger { color: var(--coral-text); border-color: var(--amber-line); }
+.tsess-icon.danger:hover { background: var(--amber-bg); }
 .tsess-icon.tsess-q { white-space: nowrap; }
 /* '내 질문' 팝아웃(#745) — 이 세션에 보낸 질문만 시간순(위=최근). #853 뷰티파이. */
 .tsess-qbody { min-width: min(560px, 84vw); max-width: 640px; }

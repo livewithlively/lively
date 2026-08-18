@@ -13,7 +13,7 @@ body[data-route="liv"] { height: 100vh; overflow: hidden; }
 body[data-route="liv"] #app { height: 100%; display: flex; flex-direction: column; }
 body[data-route="liv"] .topbar,
 body[data-route="liv"] .app-foot { display: none; }
-body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0; padding: 14px 18px 16px; background: #F4F7FC; }
+body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0; padding: 14px 18px 16px; background: var(--bg-wash); }
 
 /* 상단 내비의 [리브] 버튼 — 탭이 아니라 오른쪽 보조 버튼(축이 다르다: 탭=무엇을 보는가 / 리브=누구에게 맡기는가). */
 .liv-nav { display: inline-flex; align-items: center; gap: 5px; }

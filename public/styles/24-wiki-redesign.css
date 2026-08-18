@@ -121,7 +121,7 @@
 .wk-bulkbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; margin: 0 0 10px;
   border: 1px solid var(--line-net); border-radius: 10px; background: var(--bg-sel); }
 .wk-bulk-info { font-size: 13px; font-weight: 600; color: var(--ink-note); }
-.wk-bulk-del:hover { background: #FDF3F2; color: var(--coral-text); }
+.wk-bulk-del:hover { background: var(--bg-danger); color: var(--coral-text); }
 
 /* ════════ 카테고리 페이지 — 카테고리를 연다 = 그 페이지를 연다 ════════ */
 .wk-cat { padding: 0 0 88px; }
@@ -289,7 +289,7 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
 .wk-morepop-item { display: block; width: 100%; text-align: left; border: none; background: none; cursor: pointer;
   font-size: 13px; font-weight: 600; color: var(--ink-sub); padding: 8px 10px; border-radius: 7px; }
 .wk-morepop-item:hover { background: var(--bg-tint); color: var(--ink); }
-.wk-morepop-item.danger:hover { background: #FDF3F2; color: var(--coral-text); }
+.wk-morepop-item.danger:hover { background: var(--bg-danger); color: var(--coral-text); }
 .wk-propspop { position: fixed; z-index: 1400; width: min(400px, 92vw); max-height: min(560px, 80vh); overflow-y: auto;
   background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
   box-shadow: 0 16px 40px rgba(21, 35, 59, .16); padding: 14px 16px; }
@@ -364,40 +364,40 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
 .wk-aurora-wm { position: absolute; right: 8px; bottom: -12px; font-size: 56px; font-weight: 800; line-height: 1;
   color: var(--ink); opacity: .14; pointer-events: none; user-select: none; letter-spacing: -2px; }
 .wk-aur-product-1 { background:
-  radial-gradient(90% 130% at 12% -15%, rgba(45,107,240,.30), transparent 55%),
-  radial-gradient(110% 140% at 92% 118%, rgba(22,199,154,.28), transparent 52%),
+  radial-gradient(90% 130% at 12% -15%, color-mix(in srgb, var(--blue) 30%, transparent), transparent 55%),
+  radial-gradient(110% 140% at 92% 118%, color-mix(in srgb, var(--mint) 28%, transparent), transparent 52%),
   linear-gradient(135deg, #E9F1FF 0%, #DEF6EE 100%); }
 .wk-aur-product-2 { background:
-  radial-gradient(85% 120% at 85% -20%, rgba(27,174,176,.30), transparent 55%),
-  radial-gradient(100% 130% at 6% 125%, rgba(45,107,240,.22), transparent 52%),
+  radial-gradient(85% 120% at 85% -20%, color-mix(in srgb, var(--teal) 30%, transparent), transparent 55%),
+  radial-gradient(100% 130% at 6% 125%, color-mix(in srgb, var(--blue) 22%, transparent), transparent 52%),
   linear-gradient(150deg, #E4EEFF 0%, #E7FAF4 100%); }
 .wk-aur-product-3 { background:
-  radial-gradient(80% 110% at 50% -25%, rgba(54,224,168,.26), transparent 55%),
+  radial-gradient(80% 110% at 50% -25%, color-mix(in srgb, var(--mint-bright) 26%, transparent), transparent 55%),
   radial-gradient(90% 120% at 100% 100%, rgba(30,84,204,.16), transparent 52%),
-  linear-gradient(118deg, #EEF4FF 0%, #E1F4FA 100%); }
+  linear-gradient(118deg, var(--bg-punch) 0%, #E1F4FA 100%); }
 .wk-aur-business-1 { background:
-  radial-gradient(90% 130% at 14% -15%, rgba(245,158,11,.28), transparent 55%),
-  radial-gradient(100% 130% at 92% 115%, rgba(45,107,240,.10), transparent 52%),
+  radial-gradient(90% 130% at 14% -15%, color-mix(in srgb, var(--warn-strong) 28%, transparent), transparent 55%),
+  radial-gradient(100% 130% at 92% 115%, color-mix(in srgb, var(--blue) 10%, transparent), transparent 52%),
   linear-gradient(135deg, #FFF4E1 0%, #FFEBD2 100%); }
 .wk-aur-business-2 { background:
   radial-gradient(85% 120% at 86% -18%, rgba(255,171,64,.30), transparent 55%),
-  radial-gradient(90% 120% at 8% 120%, rgba(228,117,107,.12), transparent 52%),
+  radial-gradient(90% 120% at 8% 120%, color-mix(in srgb, var(--coral) 12%, transparent), transparent 52%),
   linear-gradient(150deg, #FFF7E9 0%, #FDEBD3 100%); }
 .wk-aur-business-3 { background:
-  radial-gradient(80% 110% at 45% -22%, rgba(245,158,11,.24), transparent 55%),
-  radial-gradient(90% 130% at 98% 105%, rgba(22,199,154,.10), transparent 52%),
+  radial-gradient(80% 110% at 45% -22%, color-mix(in srgb, var(--warn-strong) 24%, transparent), transparent 55%),
+  radial-gradient(90% 130% at 98% 105%, color-mix(in srgb, var(--mint) 10%, transparent), transparent 52%),
   linear-gradient(120deg, #FFF3DE 0%, #FFF0E4 100%); }
 .wk-aur-system-1 { background:
   radial-gradient(90% 130% at 12% -15%, rgba(139,92,246,.26), transparent 55%),
-  radial-gradient(100% 130% at 92% 115%, rgba(45,107,240,.14), transparent 52%),
+  radial-gradient(100% 130% at 92% 115%, color-mix(in srgb, var(--blue) 14%, transparent), transparent 52%),
   linear-gradient(135deg, #F1EEFF 0%, #E8F2FF 100%); }
 .wk-aur-system-2 { background:
   radial-gradient(85% 120% at 85% -20%, rgba(124,77,255,.24), transparent 55%),
-  radial-gradient(95% 120% at 6% 120%, rgba(27,174,176,.14), transparent 52%),
+  radial-gradient(95% 120% at 6% 120%, color-mix(in srgb, var(--teal) 14%, transparent), transparent 52%),
   linear-gradient(150deg, #F3F0FF 0%, #EAF6FF 100%); }
 .wk-aur-system-3 { background:
   radial-gradient(80% 115% at 50% -20%, rgba(139,92,246,.22), transparent 55%),
-  radial-gradient(90% 125% at 100% 105%, rgba(54,224,168,.12), transparent 52%),
+  radial-gradient(90% 125% at 100% 105%, color-mix(in srgb, var(--mint-bright) 12%, transparent), transparent 52%),
   linear-gradient(120deg, #EFECFF 0%, #EDF3FF 100%); }
 
 /* ── 히어로 — 첫 화면의 큰 문(검색) + 첫 행동(새 페이지) + mono 현황 한 줄. ── */
@@ -596,7 +596,7 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
 .wk-c4-num { flex: none; width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center;
   justify-content: center; font-family: var(--wkm); font-size: 11.5px; font-weight: 700; color: var(--ink-note);
   background: var(--bg); border: 1px solid var(--line-net); margin-top: 1px; }
-.wk-c4-it.read .wk-c4-num { color: #fff; background: var(--mint); border-color: var(--mint); }
+.wk-c4-it.read .wk-c4-num { color: #fff; background: var(--mint-fill); border-color: var(--mint); }
 .wk-c4-title { font-size: 13.5px; font-weight: 600; line-height: 1.45; color: var(--ink); letter-spacing: -.1px;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .wk-c4-it.read .wk-c4-title { color: var(--ink-sub); font-weight: 500; }
@@ -631,7 +631,7 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
 .wk-ev-dot { position: relative; width: 7px; height: 7px; border-radius: 50%; background: var(--bg);
   border: 1.5px solid var(--line-net); box-sizing: border-box; }
 .wk-ev-dot.last { width: 11px; height: 11px; background: var(--blue); border-color: var(--blue); }
-.wk-ev-dot.last.live { background: var(--mint); border-color: var(--mint); box-shadow: 0 0 0 3px rgba(22, 199, 154, .18); }
+.wk-ev-dot.last.live { background: var(--mint); border-color: var(--mint); box-shadow: 0 0 0 3px color-mix(in srgb, var(--mint) 18%, transparent); }
 .wk-ev-gap { position: relative; font-family: var(--wkm); font-size: 10px; color: var(--muted-2);
   background: var(--bg); padding: 0 2px; }
 .wk-ev-meta { display: flex; gap: 10px; align-items: baseline; padding: 5px 14px 0; }
@@ -726,8 +726,8 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
 
 /* 편집 토글 · 힌트 */
 .wk-bld-mode { margin-left: 2px; }
-.wk-bld-mode.on { background: var(--blue); color: #fff; border-color: var(--blue); }
-.wk-bld-mode.on:hover { background: var(--blue-deep); border-color: var(--blue-deep); }
+.wk-bld-mode.on { background: var(--blue-fill); color: #fff; border-color: var(--blue); }
+.wk-bld-mode.on:hover { background: var(--blue-fill-hover); border-color: var(--blue-fill-hover); }
 .wk-bld-hint { display: none; align-items: center; gap: 9px; margin: 6px 0 24px; padding: 12px 16px;
   background: var(--bg-tint); border: 1px solid var(--line-row); border-radius: 12px; font-size: 13px;
   color: var(--ink-sub); line-height: 1.6; }
@@ -822,7 +822,7 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
   opacity: .55; transition: opacity .12s, background .12s, color .12s; }
 .wk-blk:hover .wk-blk-cbtn { opacity: 1; }
 .wk-blk-cbtn:hover { background: var(--bg-tint); border-color: var(--line); color: var(--ink); opacity: 1; }
-.wk-blk-cbtn.warn:hover { background: #fdecea; border-color: #f3c0bb; color: #d23b2f; }
+.wk-blk-cbtn.warn:hover { background: var(--bg-danger); border-color: var(--danger-line); color: var(--danger-text); }
 
 /* 블록 추가 */
 .wk-blk-add-slot { grid-column: span 2; }

@@ -126,7 +126,7 @@
 /* 오늘 — 세로선 + 배지. 좌측 시트(z-index 3)보다 아래로 깔려 시트를 뚫지 않는다. */
 .pjv-gt-todayline { position: absolute; top: 44px; bottom: 0; width: 1px; background: var(--blue); opacity: .5; z-index: 2; }
 .pjv-gt-todaybadge { position: absolute; top: 26px; transform: translateX(-1px); z-index: 7;
-  background: var(--blue); color: #fff; font-size: 10px; font-weight: 700; line-height: 1;
+  background: var(--blue-fill); color: #fff; font-size: 10px; font-weight: 700; line-height: 1;
   padding: 3px 5px; border-radius: 3px; white-space: nowrap; }
 
 /* ── 간트: 계획을 '만드는' 부분 (#1067) ── */
@@ -267,7 +267,7 @@
 .vax-none, .vax-off { font-size: 12px; opacity: .6; }
 /* 끄기 확인 — 경고는 눈에 띄어야 하지만 겁주는 색만으로는 부족해 무엇이 열리는지 이름을 함께 준다. */
 .vax-warn { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 8px;
-  background: var(--warn-bg, rgba(255,176,32,.12)); border: 1px solid var(--warn-line, rgba(255,176,32,.35)); }
+  background: var(--warn-bg, color-mix(in srgb, var(--warn-strong) 12%, transparent)); border: 1px solid var(--warn-line, color-mix(in srgb, var(--warn-strong) 35%, transparent)); }
 .vax-warn span { font-size: 13px; opacity: .85; }
 .vax-samples { margin: 10px 0 0; padding-left: 20px; font-size: 13px; max-height: 180px; overflow-y: auto; }
 .vax-samples li { margin: 2px 0; }

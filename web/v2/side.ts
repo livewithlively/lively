@@ -10,7 +10,7 @@
 //   · 흐린 회색 본문 금지 — 완료·조용한 프로젝트도 이름은 같은 잉크색이고, 상태는 작은 태그·시각으로만 구분한다
 //     (연회색 글씨가 목록의 절반을 차지하면 전체가 바래 보인다).
 //  main.ts 가 데이터·활성 키를 넘기고, 필터·펼침 같은 사이드바 자체 상태는 여기 산다(브라우저에 기억).
-import { el, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTime, setUiModeOverride, state, sv } from '../core.js';
+import { el, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTime, setUiModeOverride, state, sv, themeControl } from '../core.js';
 import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls, type Proj, type Sess, type V2Data } from './views.js';
@@ -200,6 +200,7 @@ function render(): void {
         profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }),
         el('span', { class: 'v2-me-name', text: name }),
         el('button', { class: 'btn-text', type: 'button', text: '로그아웃', onclick: () => void logout() })),
+      themeControl('v2-theme'),   // 화면 테마(#1683) — 시스템|라이트|다크. 이 브라우저에만 기억된다.
       el('button', { class: 'v2-classic-link', type: 'button', text: '클래식 화면으로 (이 브라우저)', title: '이 브라우저에서만 옛 화면으로 봅니다. 관리탭 [화면] 에서 되돌릴 수 있어요.', onclick: () => { setUiModeOverride('classic'); location.replace(location.pathname + '#/dashboard'); location.reload(); } })));
   renderTree(rows);
   treeEl!.scrollTop = prevScroll;

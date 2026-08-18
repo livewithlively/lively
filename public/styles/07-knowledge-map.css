@@ -110,9 +110,9 @@
 .rev-ver { font-weight: 700; color: var(--ink); }
 .rev-op { color: var(--ink-sub); font-weight: 600; }
 .rev-badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 10px; background: var(--bg-tint-2); color: var(--ink-note); }
-.rev-actor-ai { background: #EEF4FF; color: var(--blue-deep); }
+.rev-actor-ai { background: var(--bg-punch); color: var(--blue-deep); }
 .rev-actor-human { background: var(--bg-success); color: var(--mint-deep); }
-.rev-actor-connector { background: #FBF3EE; color: var(--coral-text); }
+.rev-actor-connector { background: var(--bg-danger); color: var(--coral-text); }
 .rev-actor-system { background: var(--bg-tint-2); color: var(--muted-head); }
 .rev-chan { background: var(--bg-tint); color: var(--ink-sub); }
 .rev-meta { margin-top: 3px; color: var(--muted); }
@@ -135,17 +135,17 @@
 .kn-chip { display: inline-flex; align-items: center; font-size: 11px; font-weight: 700; line-height: 1.7;
   border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; color: var(--ink-sub); white-space: nowrap; vertical-align: middle; }
 /* 주입 = 항상(민트 계열, 서비스 포인트 — '늘 곁에 있는 규칙') / 검색(중립 — 필요할 때 소환) */
-.kn-inject-always { color: var(--mint-deep); background: #F2FBF8; border-color: #DCEFE8; }
+.kn-inject-always { color: var(--mint-deep); background: var(--bg-success); border-color: var(--success-line); }
 .kn-inject-recalled { color: var(--ink-sub); background: var(--bg-tint); border-color: var(--line); }
 /* 출처 = 저작(중립 푸른 계열) / 외부 미러(흐린 회색 — 큐레이션 아님, 외부 진실) */
 .kn-prov-authored { color: var(--blue); background: var(--bg-tint-2); border-color: var(--line-net-2); }
 .kn-prov-observed { color: var(--muted-2); background: var(--bg-tint); border-color: var(--line); }
 /* 작성 주체(#449) = 사람(민트 — 직접 저작·큐레이션, 드물어 눈에 띔) / AI(중립 — 사후 검토 대상). 지식 탭에서 주입 칩을 대체. */
-.kn-author-human { color: var(--mint-deep); background: #F2FBF8; border-color: #DCEFE8; }
+.kn-author-human { color: var(--mint-deep); background: var(--bg-success); border-color: var(--success-line); }
 .kn-author-ai { color: var(--ink-sub); background: var(--bg-tint); border-color: var(--line); }
 .kn-author-rule, .kn-author-observed { color: var(--muted-2); background: var(--bg-tint); border-color: var(--line); }
 /* 핀(WIKI 인덱스) 뱃지 — 항상-주입이라 inject-always 와 같은 민트 계열로 묶는다('늘 곁에' 의미 일관). */
-.kn-pin { color: var(--mint-deep); background: #F2FBF8; border-color: #DCEFE8; }
+.kn-pin { color: var(--mint-deep); background: var(--bg-success); border-color: var(--success-line); }
 .kn-cat-list { display: flex; flex-wrap: wrap; gap: 7px; margin: 4px 0 2px; }
 .kn-cat-chip { color: var(--ink-sub); background: var(--bg-tint); }
 .kn-cat-empty { font-size: 13px; color: var(--muted-2); margin: 4px 0 2px; }
@@ -164,13 +164,13 @@
 .kn-linkrow-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; line-height: 1.55; }
 .kn-linkrow:hover .kn-linkrow-title { color: var(--blue); }
 .kn-link-rel { flex: none; font-size: 10px; font-weight: 800; padding: 0 5px; border-radius: 5px; color: var(--blue-deep); background: var(--bg-punch); letter-spacing: -.2px; }
-.kn-link-rel.kn-link-contradicts { color: var(--coral-text); background: #FCF1EF; }
+.kn-link-rel.kn-link-contradicts { color: var(--coral-text); background: var(--bg-danger); }
 .kn-link-rel.kn-link-source { color: var(--ink-sub); background: var(--bg-tint-2); }
 /* #907 본문 [[…]] 파생 엣지 '본문' 배지 — 출처자료(kn-link-source)와 지금은 같은 톤이지만 별개 개념이라 클래스를 나눈다. */
 .kn-link-rel.kn-link-auto { color: var(--ink-sub); background: var(--bg-tint-2); }
 .kn-linkrow-x { flex: none; width: 18px; height: 18px; border: none; background: transparent; color: var(--muted-2); cursor: pointer; border-radius: 5px; font-size: 11px; line-height: 1; opacity: 0; transition: opacity .12s; }
 .kn-linkrow:hover .kn-linkrow-x { opacity: 1; }
-.kn-linkrow-x:hover { background: #FDECEC; color: #D6453C; }
+.kn-linkrow-x:hover { background: var(--bg-danger); color: var(--danger); }
 /* 비슷한 지식(벡터 #172, 자동) — 같은 컴팩트 리스트 행 재사용. % pill은 '관계'가 아니라 유사도라 색을 구분. */
 .kn-link-rel.kn-link-sim { color: var(--muted-head); background: var(--bg-tint-2); font-variant-numeric: tabular-nums; min-width: 30px; text-align: center; }
 .kn-sim-hint { flex: none; font-size: 11px; font-weight: 600; color: var(--muted-2); }
@@ -181,7 +181,7 @@
 .kn-projlink-group { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
 .kn-projlink-rel { flex: none; font-size: 11px; font-weight: 800; padding: 1px 7px; border-radius: 6px; letter-spacing: -.2px; }
 .kn-projlink-rel-required { color: var(--blue); background: var(--bg-tint-2); border: 1px solid var(--line-net-2); }
-.kn-projlink-rel-produced { color: #1F9D6B; background: var(--bg-success, #F0FAF5); border: 1px solid #CFEBDF; }
+.kn-projlink-rel-produced { color: var(--success-text); background: var(--bg-success, #F0FAF5); border: 1px solid var(--success-line); }
 .kn-projchip { gap: 6px; padding: 1px 4px 1px 9px; }
 .kn-projchip-link { color: var(--ink); text-decoration: none; max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kn-projchip-link:hover { color: var(--blue); }

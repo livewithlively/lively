@@ -1,0 +1,151 @@
+/* ════════════════════════════════════════════════════════════════════════════
+   90-theme.css — 화면 테마(#1683 다크모드). 캐스케이드 **맨 뒤**(40-v2 다음)가 계약이다.
+
+   구조 —
+   ① :root 신규 토큰 선언: 지금까지 폴백으로만 살던 유령 변수(--accent 등, #1585 A1)와
+      명암 분리에 필요한 시맨틱 토큰(--blue-fill 등). **라이트 값은 오늘 렌더와 동일**하게 잡아
+      라이트 모드는 픽셀 불변이다(유일한 의도적 변화: --accent 가 폴백 #5b6cff 대신 브랜드 블루 —
+      #1585 A1 에서 승인된 방향).
+   ② html[data-theme="dark"] 토큰 오버라이드: 다크 팔레트 전체가 여기 한 곳에 산다.
+      data-theme 는 index.html <head> 인라인 스크립트(첫 페인트 전)와 web/lib/theme.ts 가
+      **해석된 값**(light|dark)만 싣는다 — CSS 는 system 을 모른다.
+   ③ 테마 토글 UI(.theme-seg — 클래식 상단바·v2 사이드바 공용).
+   ④ 다크 표면 패치: 토큰으로 못 담는 리터럴 색 컴포넌트의 다크 보정. 표면별 섹션 주석 유지.
+
+   ⚠ 규칙 — 새 화면·새 색을 만들 때:
+   · 색은 토큰으로만. 리터럴을 쓰면 그 표면은 다크에서 깨진다(이 파일의 ④가 커지는 건 실패 신호).
+   · '채운 브랜드색 + 흰 글자' 조합은 --blue 가 아니라 --blue-fill 로 채워라 — 다크에서 --blue 는
+     글자용으로 밝아지므로(#619AF6) 흰 글자를 얹으면 대비가 무너진다. fill 토큰은 다크에서도
+     흰 글자가 서는 짙은 채움을 유지한다.
+   · 터미널 워크스페이스(terminal.html — 자체 테마)와 아틀라스(graph.html — 상시 다크)는 이 축 밖.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* ── ① 신규 토큰 (라이트 = 오늘 값 그대로) ── */
+:root {
+  color-scheme: light; /* 네이티브 폼 컨트롤·스크롤바 명암 — 다크 블록이 dark 로 뒤집는다 */
+
+  /* 유령 변수 정식 선언(#1585 D13/A1) — 지금까지 var(fallback) 로만 렌더되던 것들.
+     ⚠ JS 가 setProperty/style 로 싣는 동적 변수(--tag/--opt/--sc/--list-color/--svc-brand/--pjv-*)는
+       선언 금지 — 표면별 폴백이 기본값 역할이라 선언하는 순간 다른 표면이 바뀐다(01-base 주석·#1585). */
+  --accent: var(--blue);                    /* 44곳이 폴백 #5b6cff 로 오렌더되던 것 → 브랜드 블루 정렬 */
+  --line-soft: var(--bg-tint-2);
+  --danger: #D6453C;
+  --bg-danger: #FDECEC;
+  --amber: #C98A16;
+  --warn-fg: #B26A00;
+  --warn-bg: rgba(255, 176, 32, .12);
+  --warn-line: rgba(255, 176, 32, .35);
+  --hover: rgba(128, 128, 128, .06);
+  --shadow-1: 0 2px 8px rgba(21, 35, 59, .05);
+  --shadow-2: 0 8px 30px rgba(21, 35, 59, .14);
+  --dur-base: 150ms;
+  --dur-slow: 250ms;
+  --mono: ui-monospace, monospace;
+
+  /* 채움/글자 명암 분리 — 라이트에선 같은 값이라 렌더 불변, 다크에서 갈라진다(머리말 규칙 참조). */
+  --blue-fill: var(--blue);
+  --blue-fill-hover: var(--blue-deep);
+  --mint-fill: var(--mint);
+
+  /* 상태 패밀리 수렴(#1585 A4 방향) — 화면마다 미세하게 다르던 근접 중복 리터럴(앰버 7종·빨강 8종류)을
+     대푯값 하나로 모은다. 라이트 렌더 변화는 지각 불가 수준(ΔE 미세)이고, 화면 간 상태색이 처음으로 일치한다. */
+  --warn-strong:  #F59E0B;   /* 작업 중 점·게이지·바 */
+  --amber-mid:    #C2822F;   /* 중간 앰버 텍스트·아이콘(should·debt·busy 라벨) */
+  --amber-text:   #9A5B2E;   /* 갈색 계열 경고 텍스트(OOM·부채 칩) */
+  --warn-ink:     #6B4E00;   /* 앰버 틴트 위 진한 본문 */
+  --amber-bg:     #FFF6E6;   /* 앰버 틴트 배경 */
+  --amber-line:   #F0D59A;   /* 앰버 틴트 보더 */
+  --success-text: #1F9D6B;   /* 완료·성공 텍스트 */
+  --success-line: #CDEFE3;   /* 성공 틴트 보더 */
+  --danger-text:  #B0503F;   /* 위반·오류 텍스트(코랄 텍스트보다 깊음) */
+  --danger-line:  #F3D2CD;   /* 위험 틴트 보더 */
+  --violet:       #8B7BD8;   /* 시스템 space·활동 톤 */
+  --fav:          #F5A623;   /* 즐겨찾기 별 */
+  --mark:         #FFF3C4;   /* 형광펜 하이라이트 */
+  --bg-wash:      #F4F7FC;   /* 페이지 워시(홈·리브 등 전면 배경) */
+}
+
+/* ── ② 다크 팔레트 — 네이비 캄(브랜드 잉크 #15233B 계열에서 파생). 본문 대비 ≥4.5:1. ── */
+html[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* 베이스 */
+  --bg:            #121A2B;
+  --bg-tint:       #17223A;
+  --bg-tint-2:     #1C2A47;
+  --bg-punch:      #1B2946;
+  --bg-note:       #192743;
+  --bg-success:    #132A22;
+  --bg-sel:        #1C2C4E;
+  --canvas:        #0B1120;
+
+  /* 브랜드 — 글자·선 역할이라 다크에선 밝아진다. 채움은 --*-fill 이 짙게 남는다. */
+  --blue:          #619AF6;
+  --blue-deep:     #8AB2F8;
+  --mint:          #22D3A5;
+  --mint-deep:     #37CFA3;
+  --teal:          #38C2C4;
+  --coral:         #EE8579;
+  --coral-text:    #F1998F;
+
+  /* 텍스트 */
+  --ink:           #E9EFFA;
+  --ink-sub:       #A8B6CF;
+  --ink-note:      #C5D4F0;
+  --muted:         #8394AF;
+  --muted-2:       #64748F;
+  --muted-3:       #47536C;
+  --muted-head:    #8C9BB7;
+
+  /* 라인/보더 */
+  --line:          #263349;
+  --line-row:      #1F2A3F;
+  --line-net:      #2D3C59;
+  --line-net-2:    #364A6E;
+  --line-note:     #2C3F66;
+
+  /* 네트워크 보조 노드 */
+  --node-blue-soft:#40609A;
+  --node-mint-soft:#2B6F5B;
+
+  /* 시맨틱 */
+  --danger:        #E9695E;
+  --bg-danger:     #3B2226;
+  --amber:         #D9A64A;
+  --warn-fg:       #E2AC55;
+  --hover:         rgba(148, 163, 190, .09);
+  --shadow-1:      0 2px 8px rgba(0, 0, 0, .32);
+  --shadow-2:      0 10px 34px rgba(0, 0, 0, .5);
+
+  /* 채움 — 흰 글자가 서는 짙은 채움 유지 */
+  --blue-fill:       #2461E8;
+  --blue-fill-hover: #1E54CC;
+  --mint-fill:       #0FA37E;
+
+  /* 상태 패밀리 */
+  --warn-strong:  #EFA93C;
+  --amber-mid:    #DCA55E;
+  --amber-text:   #DFB08A;
+  --warn-ink:     #EFC97F;
+  --amber-bg:     #33270F;
+  --amber-line:   #574419;
+  --success-text: #45CD9C;
+  --success-line: #1E4636;
+  --danger-text:  #F09489;
+  --danger-line:  #5A2B2B;
+  --violet:       #A79AE8;
+  --fav:          #F5B84A;
+  --mark:         #4D3F14;
+  --bg-wash:      #0E1626;
+}
+
+/* ── ③ 테마 토글 — 시스템|라이트|다크 세그먼트(web/lib/theme.ts themeControl) ── */
+.theme-seg { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); }
+.theme-seg-btn { border: 0; background: none; font: inherit; font-size: 11.5px; font-weight: 600; color: var(--ink-sub); padding: 3px 10px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
+.theme-seg-btn:hover { color: var(--ink); background: var(--bg-tint); }
+.theme-seg-btn.on { background: var(--bg-tint-2); color: var(--ink); font-weight: 700; }
+/* v2 사이드바 발치 — 로그아웃 줄 아래 한 줄을 온전히 쓴다(사이드바 폭에 맞춰 늘어남) */
+.v2-theme { display: flex; align-self: stretch; }
+.v2-theme .theme-seg-btn { flex: 1; text-align: center; }
+
+/* ── ④ 다크 표면 패치 — 토큰으로 못 담는 리터럴 색 컴포넌트의 보정(표면별 섹션) ── */

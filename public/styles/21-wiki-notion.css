@@ -55,7 +55,7 @@
 .pd-pop-head { display: flex; justify-content: space-between; align-items: center;
   font-size: 12.5px; font-weight: 700; color: var(--ink-sub); padding: 0 2px 8px; }
 .pd-pop-clear { border: none; background: none; color: var(--coral-text); font-size: 12px; cursor: pointer; border-radius: 5px; padding: 2px 6px; }
-.pd-pop-clear:hover { background: #FDF3F2; }
+.pd-pop-clear:hover { background: var(--bg-danger); }
 .pd-emoji-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; max-height: 208px; overflow: auto; }
 .pd-emoji-btn { border: none; background: none; font-size: 18px; padding: 4px 2px; cursor: pointer; border-radius: 6px; line-height: 1.2; }
 .pd-emoji-btn:hover { background: var(--bg-sel); }
@@ -168,7 +168,7 @@
 
 /* 크로스 블록 선택 — 블록 경계를 넘는 드래그·⌘A 2차가 만드는 '블록 범위' 하이라이트.
    선택 중에는 브라우저 문자 선택을 억눌러 두 겹으로 칠해지지 않게 한다(interactions.ts 가 range 도 걷는다). */
-.be-block.be-bsel { background: var(--node-blue-soft, rgba(45,107,240,.10)); border-radius: 6px; }
+.be-block.be-bsel { background: var(--node-blue-soft, color-mix(in srgb, var(--blue) 10%, transparent)); border-radius: 6px; }
 .be.be-bselecting .be-text { user-select: none; -webkit-user-select: none; }
 .be.be-bselecting .be-text::selection { background: transparent; }
 
@@ -188,7 +188,7 @@
 /* ── 인라인 서식 툴바(다크 플로팅) ── */
 .be-tools { position: fixed; z-index: 1300; display: flex; gap: 2px; background: var(--ink); border-radius: 9px;
   padding: 4px; box-shadow: 0 10px 30px rgba(13, 22, 40, .32); }
-.be-tool { border: none; background: none; color: #E7EDF7; min-width: 27px; height: 26px; border-radius: 6px;
+.be-tool { border: none; background: none; color: var(--bg-tint); /* 잉크 반전 툴바 위 — 다크에선 잉크가 밝아지므로 글자는 틴트가 어두워져 따라온다(#1683) */ min-width: 27px; height: 26px; border-radius: 6px;
   cursor: pointer; font-size: 12.5px; font-family: inherit; padding: 0 6px; }
 .be-tool:hover { background: rgba(255, 255, 255, .16); }
 .be-tool-b { font-weight: 800; }
@@ -285,7 +285,7 @@ main.doc-mode .btn-primary { background: var(--wk-navy); box-shadow: 0 1px 2px r
 main.doc-mode .btn-primary:hover { background: var(--wk-navy-deep); }
 /* 삭제 — 상시 붉은 pill 대신 조용한 고스트, 위험색은 hover 에서만 */
 main.doc-mode .btn-danger { background: var(--wk-card); border: 1px solid var(--wk-line); color: var(--wk-ink-soft); }
-main.doc-mode .btn-danger:hover { border-color: var(--coral); color: var(--coral-text); background: #FDF4F2; }
+main.doc-mode .btn-danger:hover { border-color: var(--coral); color: var(--coral-text); background: var(--bg-danger); }
 
 /* ── 입력·필터 ── */
 main.doc-mode input[type="text"], main.doc-mode input[type="search"], main.doc-mode input[type="password"],
@@ -329,11 +329,11 @@ main.doc-mode .sec-label { font-family: var(--wk-mono); font-size: 12px; font-we
 .qk-panel { border-radius: 16px; box-shadow: 0 30px 70px rgba(27,30,39,.28); }
 .qk-input { font-size: 17px; }
 .qk-esc { font-family: 'D2Coding', ui-monospace, Menlo, monospace; font-size: 10px; }
-.qk-hint { font-family: 'D2Coding', ui-monospace, Menlo, monospace; font-size: 11.5px; color: #9A9AA3; letter-spacing: .1px; }
-.qk-row.on, .qk-row:hover { background: #F4F8FF; }
+.qk-hint { font-family: 'D2Coding', ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--muted); letter-spacing: .1px; }
+.qk-row.on, .qk-row:hover { background: var(--bg-sel); }
 .qk-row-title { font-weight: 600; }
 /* 스니펫은 사람 산문 미리보기 — mono(색인 목소리) 대신 sans 로 가독(#657r). mono 는 esc/hint 등 기계 데이터에만. */
-.qk-row-snip { font-size: 12px; color: #8B8B93; }
+.qk-row-snip { font-size: 12px; color: var(--muted); }
 
 /* ── 작성/편집 페이지 ── */   /* (#req) 편집창 속성 라벨 — 작은 mono 대신 읽히게 */
 
@@ -404,7 +404,7 @@ main.doc-mode .kn-side-tools .kn-side-toolitem:hover { background: var(--bg-tint
 .be-bm-item { display: flex; align-items: center; gap: 9px; width: 100%; border: none; background: none; text-align: left;
   padding: 7px 9px; border-radius: 8px; cursor: pointer; font-size: 13px; color: var(--ink); font-family: inherit; }
 .be-bm-item:hover { background: var(--bg-sel); }
-.be-bm-item.danger:hover { background: #FDF3F2; color: var(--coral-text); }
+.be-bm-item.danger:hover { background: var(--bg-danger); color: var(--coral-text); }
 .be-bm-ic { width: 18px; text-align: center; font-size: 12px; color: var(--ink-sub); flex: none; }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -476,9 +476,9 @@ main.doc-mode .kn-side-tools .kn-side-toolitem:hover { background: var(--bg-tint
   border: 1px solid var(--line); border-radius: 10px; padding: 7px; box-shadow: 0 16px 40px rgba(21, 35, 59, .16); }
 .be-linkpop-in { width: 240px; border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px; font-size: 13px; font-family: inherit; }
 .be-linkpop-in:focus { outline: none; border-color: var(--blue); }
-.be-linkpop-btn { border: none; background: var(--blue); color: #fff; border-radius: 7px; padding: 6px 11px;
+.be-linkpop-btn { border: none; background: var(--blue-fill); color: #fff; border-radius: 7px; padding: 6px 11px;
   font-size: 12.5px; font-weight: 700; cursor: pointer; font-family: inherit; }
-.be-linkpop-btn:hover { background: var(--blue-deep); }
+.be-linkpop-btn:hover { background: var(--blue-fill-hover); }
 .be-linkpop-un { background: var(--bg); color: var(--ink-sub); border: 1px solid var(--line); }
 .be-linkpop-un:hover { background: var(--bg-tint); color: var(--ink); }
 

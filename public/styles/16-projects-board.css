@@ -59,7 +59,7 @@
 /* 그룹 헤더 전체선택(#664) — 그룹 헤더 호버 시 표시(행 체크박스와 동일 결). */
 .pjv-tgroup-head:hover .pjv-group-check { opacity: 1; }
 .pjv-row-check:hover { border-color: var(--blue); }
-.pjv-row-check.on { background: var(--blue); border-color: var(--blue); }
+.pjv-row-check.on { background: var(--blue-fill); border-color: var(--blue); }
 .pjv-row-check.on::after { content: '✓'; }
 .pjv-trow-wrap.pjv-row-selected > .pjv-trow { background: var(--bg-sel); box-shadow: inset 2px 0 0 var(--blue); }
 /* 드래그 다중선택(#366) — 끄는 동안 텍스트 선택 방지 + 지나온 행 체크박스는 계속 보이게. */
@@ -95,8 +95,8 @@ body.pjv-col-resizing { cursor: col-resize; user-select: none; -webkit-user-sele
 .pjv-row-grip:active { cursor: grabbing; }
 .pjv-reorder-src { opacity: .4; }
 /* 놓일 자리 가로 삽입선 + 커서 따라다니는 고스트('N개 태스크'). */
-.pjv-reorder-marker { height: 2px; margin: -1px 0; background: var(--blue); border-radius: 2px; box-shadow: 0 0 0 1px rgba(45,107,240,.25); pointer-events: none; }
-.pjv-reorder-ghost { position: fixed; z-index: 10000; pointer-events: none; background: var(--blue); color: #fff;
+.pjv-reorder-marker { height: 2px; margin: -1px 0; background: var(--blue); border-radius: 2px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--blue) 25%, transparent); pointer-events: none; }
+.pjv-reorder-ghost { position: fixed; z-index: 10000; pointer-events: none; background: var(--blue-fill); color: #fff;
   padding: 3px 11px; border-radius: 7px; font-size: 12.5px; font-weight: 600; box-shadow: 0 6px 20px rgba(0,0,0,.28);
   white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 /* 제목 우측 아이콘 3개 — margin-left:auto 로 제목셀 우측 끝에. 평소 숨김, 행 호버 시 표시. */
@@ -144,14 +144,14 @@ body.pjv-col-resizing { cursor: col-resize; user-select: none; -webkit-user-sele
 .pjv-bulkbar { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(16px); z-index: 1200; display: none; align-items: center; gap: 6px; padding: 10px 12px 10px 20px; background: #1B2942; color: #fff; border-radius: 16px; box-shadow: 0 14px 40px rgba(13,22,40,.4); opacity: 0; transition: opacity .16s ease, transform .16s ease; max-width: calc(100vw - 32px); }
 .pjv-bulkbar.show { display: inline-flex; opacity: 1; transform: translateX(-50%) translateY(0); }
 .pjv-bulk-count { display: inline-flex; align-items: center; gap: 9px; font-size: 15px; font-weight: 600; padding-right: 8px; }
-.pjv-bulk-n { display: inline-flex; align-items: center; justify-content: center; min-width: 26px; height: 26px; padding: 0 8px; border-radius: 8px; background: var(--blue); color: #fff; font-size: 14px; font-weight: 700; }
+.pjv-bulk-n { display: inline-flex; align-items: center; justify-content: center; min-width: 26px; height: 26px; padding: 0 8px; border-radius: 8px; background: var(--blue-fill); color: #fff; font-size: 14px; font-weight: 700; }
 .pjv-bulk-lbl { color: #C7D2E6; font-weight: 500; white-space: nowrap; }
 .pjv-bulk-x { width: 28px; height: 28px; border: none; background: rgba(255,255,255,.08); color: #C7D2E6; border-radius: 8px; cursor: pointer; font-size: 14px; line-height: 1; }
 .pjv-bulk-x:hover { background: rgba(255,255,255,.16); color: #fff; }
 .pjv-bulk-actions { display: inline-flex; align-items: center; gap: 3px; padding-left: 8px; border-left: 1px solid rgba(255,255,255,.12); }
 .pjv-bulk-btn { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px; border: none; background: none; color: #E4EAF4; border-radius: 10px; cursor: pointer; font-size: 14.5px; font-weight: 500; white-space: nowrap; }
 .pjv-bulk-btn:hover { background: rgba(255,255,255,.12); color: #fff; }
-.pjv-bulk-btn.danger:hover { background: rgba(228,117,107,.22); color: #FFB3AC; }
+.pjv-bulk-btn.danger:hover { background: color-mix(in srgb, var(--coral) 22%, transparent); color: #FFB3AC; }
 .pjv-bulk-btn svg { width: 19px; height: 19px; flex: none; color: currentColor; }
 .pjv-bulkbar .pjv-cell-ico { color: currentColor; }
 /* 메인 액션 — 선택 태스크를 클로드로 실행. 어두운 바 위에서 확 튀게: 밝은 그라데이션 + 글로우 + 은은한 펄스. 보조 버튼들과 간격으로 분리. */
@@ -175,7 +175,7 @@ body.pjv-col-resizing { cursor: col-resize; user-select: none; -webkit-user-sele
 /* 선택(일괄삭제) 모드 체크박스 — 상태 동그라미 자리 */
 .pjv-proj-check { flex: none; width: 18px; height: 18px; border-radius: 6px; border: 1.6px solid var(--muted-3); background: var(--bg); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; color: #fff; font-size: 11px; line-height: 1; }
 .pjv-proj-check:hover { border-color: var(--blue); }
-.pjv-proj-check.on { background: var(--blue); border-color: var(--blue); }
+.pjv-proj-check.on { background: var(--blue-fill); border-color: var(--blue); }
 .pjv-proj-check.disabled { cursor: default; opacity: .4; }
 
 /* ── 세션 주입 지도(injectionMap) — 주입 시점별 블록 + 조각 + 딥링크 (2026-06-26) ── */
@@ -283,7 +283,7 @@ body.pjv-col-resizing { cursor: col-resize; user-select: none; -webkit-user-sele
 
 /* 토글 스위치(iOS 형) */
 .pjv-switch { flex: none; width: 34px; height: 20px; border-radius: 999px; background: var(--line-net, #d9dee6); position: relative; transition: background .15s ease; }
-.pjv-view-item.on .pjv-switch { background: var(--blue); }
+.pjv-view-item.on .pjv-switch { background: var(--blue-fill); }
 .pjv-switch-knob { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(20,35,59,.28); transition: transform .15s ease; }
 .pjv-view-item.on .pjv-switch-knob { transform: translateX(14px); }
 
@@ -497,8 +497,8 @@ body.pjv-side-resizing { cursor: col-resize; user-select: none; -webkit-user-sel
    프로젝트 탭 사이드바는 행 별을 제거(#1115 — 토글은 ⋯ 리스트 설정 메뉴로), 지금은 WIKI 사이드바(.fav-blue)만 쓴다. */
 .pjv-side-navfav { position: absolute; right: 30px; top: 50%; transform: translateY(-50%); width: 21px; height: 21px; display: inline-flex; align-items: center; justify-content: center; border: none; border-radius: 6px; background: none; color: var(--muted-3); cursor: pointer; font-size: 12.5px; line-height: 1; padding: 0; opacity: 0; transition: opacity .12s ease, color .12s ease, background .12s ease; }
 .pjv-side-navitem:hover .pjv-side-navfav, .pjv-side-navfav:focus-visible { opacity: 1; }
-.pjv-side-navfav:hover { background: var(--bg); color: #f5a623; }
-.pjv-side-navfav.on { opacity: 1; color: #f5a623; }
+.pjv-side-navfav:hover { background: var(--bg); color: var(--fav); }
+.pjv-side-navfav.on { opacity: 1; color: var(--fav); }
 /* WIKI '내 소유 카테고리'(#670 후속) — 프로젝트 탭 즐겨찾기(노란 별)와 완전히 같은 컴포넌트·로직, 색만 파란색. */
 .pjv-side-navfav.fav-blue:hover { color: var(--blue); }
 .pjv-side-navfav.fav-blue.on { color: var(--blue); }
@@ -517,7 +517,7 @@ body.pjv-side-resizing { cursor: col-resize; user-select: none; -webkit-user-sel
    자식(즐겨찾기 리스트)은 sub/depth 1 로 들여써 격자·세로선이 소속을 그린다 — 폴더›리스트와 같은 위계 언어.
    별은 이모지가 아니라 우리 SVG 별(pjvTbIcon 'star-on' — 브레드크럼 ★ 토글과 같은 도형)이고, 금색은 기존 별 색과 동일. */
 .pjv-side-favsec { font-weight: 700; color: var(--ink); margin-top: 2px; cursor: pointer; }
-.pjv-side-favsec .pjv-side-favsec-ic { flex: none; width: 17px; height: 17px; color: #f5a623; }
+.pjv-side-favsec .pjv-side-favsec-ic { flex: none; width: 17px; height: 17px; color: var(--fav); }
 .pjv-side-favsec:hover { background: var(--bg-tint); }
 /* 개수는 호버에도 유지 — 전역 규칙은 호버 시 개수를 숨겨 ⋯ 자리를 내주지만, 이 헤더엔 ⋯ 가 없어 숨길 이유가 없다. */
 .pjv-side-favsec .pjv-side-navcount, .pjv-side-favsec:hover .pjv-side-navcount { opacity: 1; color: var(--muted-2); }

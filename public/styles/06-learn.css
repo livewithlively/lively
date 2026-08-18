@@ -1,6 +1,6 @@
 /* ════════ 사용 가이드(#/learn) 전면 재구성 — 비개발자용(2026-06-30) ════════ */
 /* ① 히어로 — 서비스를 관통하는 한 문장 + 작동 3단계 */
-.guide-hero { background: linear-gradient(135deg, #F4F8FF 0%, #F1FBF7 100%); border-color: var(--line-net); padding: 28px 28px 24px; }
+.guide-hero { background: linear-gradient(135deg, var(--bg-sel) 0%, #F1FBF7 100%); border-color: var(--line-net); padding: 28px 28px 24px; }
 .guide-hero-eyebrow { font-size: 12px; font-weight: 800; letter-spacing: 2px; color: var(--muted-head); text-transform: uppercase; margin: 0 0 11px; }
 /* .card h2(0,1,1) 보다 높은 특이도로 히어로 제목 크기를 유지(.guide-hero .guide-hero-title = 0,2,0). */
 .guide-hero .guide-hero-title { font-size: 25px; font-weight: 800; line-height: 1.4; letter-spacing: -0.6px; color: var(--ink); margin: 0 0 13px; }
@@ -57,9 +57,9 @@
 
 /* '딱 한 줄' 강조 */
 .guide-remember { display: flex; align-items: center; gap: 12px; margin-top: 20px; padding: 13px 16px;
-  background: rgba(45,107,240,.06); border: 1px solid var(--line-note); border-radius: 12px; }
+  background: color-mix(in srgb, var(--blue) 6%, transparent); border: 1px solid var(--line-note); border-radius: 12px; }
 .guide-remember-key { flex: none; font-size: 11.5px; font-weight: 800; letter-spacing: .5px; color: #fff;
-  background: var(--blue); border-radius: 999px; padding: 4px 11px; }
+  background: var(--blue-fill); border-radius: 999px; padding: 4px 11px; }
 .guide-remember p { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.55; color: var(--ink); }
 
 /* ② 메뉴 한눈에 보기 — 탭 카드 그리드(2열, 좁아지면 1열) */
@@ -91,7 +91,7 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .guide-path-step { display: flex; gap: 14px; align-items: flex-start; padding: 15px 16px;
   border: 1px solid var(--line-net); border-radius: 13px; background: var(--bg-tint); }
 .guide-path-num { flex: none; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
-  font-size: 14px; font-weight: 800; color: #fff; background: var(--blue); border-radius: 999px; }
+  font-size: 14px; font-weight: 800; color: #fff; background: var(--blue-fill); border-radius: 999px; }
 .guide-path-body { min-width: 0; flex: 1; }
 .guide-path-title { font-size: 15px; font-weight: 800; color: var(--ink); margin-bottom: 3px; }
 .guide-path-desc { font-size: 13.5px; line-height: 1.6; color: var(--ink-sub); margin: 0 0 10px; }
@@ -157,7 +157,7 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
   display: flex; flex-direction: column; justify-content: center; gap: 11px; min-height: 98px;
   background: var(--bg); transition: border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease; }
 .mode-card:hover { border-color: var(--line-net-2); background: var(--bg-tint); }
-.mode-card.active { border-color: var(--blue); background: var(--bg-tint); box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
+.mode-card.active { border-color: var(--blue); background: var(--bg-tint); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 10%, transparent); }
 .mode-card-radio { position: absolute; top: 15px; right: 15px; flex: none; width: 17px; height: 17px; border-radius: 999px; border: 2px solid var(--line-net-2); background: var(--bg); }
 .mode-card.active .mode-card-radio { border-color: var(--blue); box-shadow: inset 0 0 0 3px var(--bg), inset 0 0 0 9px var(--blue); }
 /* 제목 + 부제(회색) 한 묶음 — 타이트하게. 제목은 우측 라디오와 안 겹치게 여백. */
@@ -192,7 +192,7 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .step { display: flex; gap: 14px; align-items: flex-start; padding: 18px 0; border-top: 1px solid var(--line-row); }
 .step:first-child { border-top: none; padding-top: 6px; }
 .step-num { flex: none; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
-  font-size: 14px; font-weight: 800; color: #fff; background: var(--blue); border-radius: 999px; }
+  font-size: 14px; font-weight: 800; color: #fff; background: var(--blue-fill); border-radius: 999px; }
 .step-body { min-width: 0; flex: 1; }
 .step-title { font-size: 15.5px; font-weight: 800; color: var(--ink); margin-bottom: 6px; }
 .step-p { font-size: 14px; line-height: 1.6; color: var(--ink); margin: 0 0 6px; }
@@ -247,7 +247,7 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { font: inherit; font-size: 12.5px; font-weight: 600; padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink-sub); cursor: pointer; transition: border-color .12s, color .12s, background .12s; }
 .chip:hover { border-color: var(--muted-3); color: var(--ink); }
-.chip.on { background: var(--blue); border-color: var(--blue); color: #fff; }
+.chip.on { background: var(--blue-fill); border-color: var(--blue); color: #fff; }
 /* 서비스 로그인 아이템 행(등록 자격·OAuth 커넥터 공통) — 카드 안 목록을 균일한 보더 행으로(#762). */
 .svc-list { display: flex; flex-direction: column; gap: 8px; }
 .svc-item { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 11px 13px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
@@ -281,9 +281,9 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 /* 켬/끔 스위치 — 현재 상태는 형태로(파랑·오른쪽=켜짐), 기본값·내 변경 여부는 옆 글이 말한다(#1085). */
 .sw { position: relative; flex: none; width: 40px; height: 23px; padding: 0; border: 0; border-radius: 999px;
   background: var(--muted-3); cursor: pointer; transition: background .15s ease; }
-.sw.on { background: var(--blue); }
+.sw.on { background: var(--blue-fill); }
 .sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 17px; height: 17px; border-radius: 50%;
-  background: #fff; box-shadow: 0 1px 2px rgba(21, 35, 59, .25); transition: transform .15s ease; }
+  background: var(--bg); box-shadow: 0 1px 2px rgba(21, 35, 59, .25); transition: transform .15s ease; }
 .sw.on::after { transform: translateX(17px); }
 .sw:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 /* 라벨은 스위치 **왼쪽**에서 오른쪽 정렬 — 스위치가 항상 행의 같은 자리(맨 오른쪽)에 서서, 글자 길이에
@@ -356,13 +356,13 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .svc-panel-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .svc-panel-ic { font-size: 22px; line-height: 1; flex: none; }
 .svc-panel-nm { font-size: 16px; font-weight: 800; color: var(--ink); }
-.warn-badge { background: #FFF6E9; color: #B5791E; border: 1px solid #F0DBB0; border-radius: 9px; padding: 9px 12px; font-size: 13px; font-weight: 700; margin-bottom: 12px; }
+.warn-badge { background: var(--amber-bg); color: var(--amber-mid); border: 1px solid var(--amber-line); border-radius: 9px; padding: 9px 12px; font-size: 13px; font-weight: 700; margin-bottom: 12px; }
 /* 훅 정책·건강 카드(#892) — 본문 안에 접히는 보조 블록. warn-badge 는 한 줄 배지라 여러 행을 담지 못한다. */
 .admin-subcard { border: 1px solid var(--line-note); border-radius: 11px; background: var(--bg-note); padding: 13px 15px; margin-bottom: 14px; }
 .admin-subcard h4 { margin: 0 0 6px; font-size: 13.5px; font-weight: 800; color: var(--ink); }
 .admin-subcard .admin-check { display: flex; align-items: flex-start; margin: 7px 0; }
-.warn-badge-soft { border-color: #F0DBB0; background: #FFF6E9; }
-.warn-badge-soft h4 { color: #B5791E; }
+.warn-badge-soft { border-color: var(--amber-line); background: var(--amber-bg); }
+.warn-badge-soft h4 { color: var(--amber-mid); }
 .admin-pre { margin: 6px 0 0; padding: 8px 10px; border-radius: 7px; background: var(--bg-code, rgba(0,0,0,.04)); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; color: var(--ink-sub); }
 .builtin-toggles { margin-top: 10px; }
 .builtin-row { display: flex; align-items: center; gap: 16px; padding: 7px 0; border-bottom: 1px solid var(--line-row); }

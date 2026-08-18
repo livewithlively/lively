@@ -46,7 +46,7 @@ body[data-route="f"] main { max-width: none; margin: 0; padding: 0; flex: 1 1 au
 
 /* 타입별 표시면 */
 .fpg-img { max-width: 100%; max-height: 100%; margin: auto; border-radius: 8px; box-shadow: 0 2px 14px rgba(21, 35, 59, .14); }
-.fpg-pdf, .fpg-html { width: 100%; flex: 1 1 auto; min-height: 420px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.fpg-pdf, .fpg-html { width: 100%; flex: 1 1 auto; min-height: 420px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
 .fpg-video { max-width: 100%; max-height: 100%; margin: auto; border-radius: 8px; background: #000; }
 .fpg-audio { width: min(560px, 100%); margin: auto; }
 .fpg-code { margin: 0; width: 100%; max-width: 1100px; box-sizing: border-box; background: var(--bg-tint);
@@ -103,7 +103,7 @@ body[data-route="f"] main { max-width: none; margin: 0; padding: 0; flex: 1 1 au
    ⚠ 기존 셀렉터는 지우지 않는다 — scripts/check-css-drops.mjs 가 HEAD 셀렉터 유실을 실패로 잡는다. */
 .fp-wrap { width: 100%; }
 .fp-img { display: block; max-width: 100%; margin: 0 auto; border-radius: 8px; }
-.fp-pdf, .fp-html { display: block; width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.fp-pdf, .fp-html { display: block; width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
 .fp-video { display: block; max-width: 100%; margin: 0 auto; border-radius: 8px; background: #000; }
 .fp-audio { display: block; width: min(560px, 100%); margin: 12px auto; }
 .fp-code { margin: 0; width: 100%; box-sizing: border-box; overflow: auto; background: var(--bg-tint);

@@ -17,14 +17,14 @@
 .pulse-dot {
   width: 7px; height: 7px; border-radius: 50%; background: var(--mint);
   align-self: center;
-  box-shadow: 0 0 0 3px rgba(22, 199, 154, .16);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--mint) 16%, transparent);
   animation: breathe 2.8s ease-in-out infinite;
 }
 /* Lively · (초록 점) · for <조직명> 사이 여백 정돈: gap 을 10px 로 키우고, 숨쉬는 후광의 peak 를 5px 로 줄여
    pulse 가 커질 때 후광이 'Lively'·'for <조직명>' 글자에 부딪히지 않게(=여백이 부자연스럽던 원인 제거). */
 @keyframes breathe {
-  0%, 100% { box-shadow: 0 0 0 3px rgba(22, 199, 154, .18); }
-  50%      { box-shadow: 0 0 0 5px rgba(22, 199, 154, .07); }
+  0%, 100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--mint) 18%, transparent); }
+  50%      { box-shadow: 0 0 0 5px color-mix(in srgb, var(--mint) 7%, transparent); }
 }
 /* #req 좁아지면(반쪽 창) 탭 라벨이 글자 단위로 세로로 접히던 문제 — 탭은 안 찌그러지게(flex:none) + 라벨 nowrap,
    다 못 담으면 네비 자체가 가로 스크롤(스크롤바 숨김). 워드마크·우측은 안 밀리게 flex:none. */

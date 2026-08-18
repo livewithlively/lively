@@ -4,7 +4,7 @@
 p.md-p > .md-img:only-child { margin: 10px 0; }
 .md-del { color: var(--muted, #6b7a90); }
 .md-u { text-decoration: underline; text-underline-offset: 2px; }
-.md-mark { background: #FFF3C4; color: inherit; border-radius: 3px; padding: 0 2px; }
+.md-mark { background: var(--mark); color: inherit; border-radius: 3px; padding: 0 2px; }
 
 /* 체크박스(할 일) — 노션 to_do. 불릿 대신 체크박스만(이중 마커 방지). */
 .md-list li.md-task { list-style: none; margin-left: -18px; }
@@ -26,11 +26,11 @@ p.md-p > .md-img:only-child { margin: 10px 0; }
 .md-callout-body { min-width: 0; flex: 1; }
 .md-callout-body > :last-child, .md-callout-body .md > :last-child { margin-bottom: 0; }
 .md-callout-gray, .md-callout-brown { background: #F7F8FA; }
-.md-callout-orange, .md-callout-yellow { background: #FFF9EC; border-color: #F3E8CE; }
-.md-callout-green { background: var(--bg-success); border-color: #DCF0E8; }
+.md-callout-orange, .md-callout-yellow { background: var(--amber-bg); border-color: var(--amber-line); }
+.md-callout-green { background: var(--bg-success); border-color: var(--success-line); }
 .md-callout-blue, .md-callout-default { background: var(--bg-note); }
 .md-callout-purple, .md-callout-pink { background: #FAF6FD; border-color: #EDE4F6; }
-.md-callout-red { background: #FDF3F2; border-color: #F4DEDB; }
+.md-callout-red { background: var(--bg-danger); border-color: var(--danger-line); }
 /* 설명서 CTA 버튼(#879 :::button) — 문서 흐름 간격 + .docs-md a(블루)에 글자색을 뺏기지 않게 흰색 고정. */
 .md-cta { margin: 6px 0 14px; }
 .md-cta.btn-primary, .md-cta.btn-primary:hover { color: #fff; text-decoration: none; }
@@ -39,7 +39,7 @@ p.md-p > .md-img:only-child { margin: 10px 0; }
 .md-step { display: flex; gap: 14px; align-items: flex-start; padding: 16px 0; border-top: 1px solid var(--line-row); counter-increment: mdstep; }
 .md-step:first-child { border-top: none; padding-top: 4px; }
 .md-step-num { flex: none; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
-  font-size: 14px; font-weight: 800; color: #fff; background: var(--blue); border-radius: 999px; }
+  font-size: 14px; font-weight: 800; color: #fff; background: var(--blue-fill); border-radius: 999px; }
 .md-step-num::before { content: counter(mdstep); }
 .md-step-body { min-width: 0; flex: 1; }
 .md-step-body > :first-child { margin-top: 0; }
@@ -174,7 +174,7 @@ a.proj-att-chip:hover { border-color: var(--blue); }
 .pjv-kb-due { font-size: 11.5px; color: var(--muted-2); }
 .pjv-kb-due.overdue { color: var(--red, #e11d48); font-weight: 700; }
 .pjv-kb-prio { font-size: 11px; font-weight: 700; }
-.pjv-kb-prio.urgent { color: #e11d48; } .pjv-kb-prio.high { color: #f59e0b; } .pjv-kb-prio.normal { color: var(--blue); } .pjv-kb-prio.low { color: var(--muted-2); }
+.pjv-kb-prio.urgent { color: var(--danger); } .pjv-kb-prio.high { color: var(--warn-strong); } .pjv-kb-prio.normal { color: var(--blue); } .pjv-kb-prio.low { color: var(--muted-2); }
 .pjv-kb-faces { margin-left: auto; display: inline-flex; }
 .pjv-kb-faces .pjv-kb-face { width: 20px; height: 20px; border-radius: 50%; font-size: 9px; margin-left: -5px; border: 1.5px solid var(--bg); }
 .pjv-kb-empty { font-size: 12px; color: var(--muted-3); text-align: center; padding: 14px 0; }

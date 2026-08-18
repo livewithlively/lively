@@ -95,8 +95,8 @@
   padding: 9px 18px; font-size: 14px; white-space: nowrap; transition: background-color 150ms ease, border-color 150ms ease;
 }
 /* §0.5 예산: 채운 블루 primary 는 화면당 1개만 — 나머지는 전부 btn-ghost(화이트+헤어라인+잉크) */
-.btn-primary { background: var(--blue); color: #fff; }
-.btn-primary:hover { background: var(--blue-deep); }
+.btn-primary { background: var(--blue-fill); color: #fff; }
+.btn-primary:hover { background: var(--blue-fill-hover); }
 .btn-ghost { background: var(--bg); border: 1px solid var(--line); color: var(--ink); }
 .btn-ghost:hover { border-color: var(--blue); }
 .btn-sm { padding: 5px 13px; font-size: 13px; border-radius: 9px; }
@@ -164,9 +164,9 @@ label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; fo
 /* 내 스킬·훅 — 라이블리 자산이 깔린 PC 칩 + sync 경고 (#893 후속) */
 .pc-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .pc-chip { display: inline-flex; align-items: center; font-size: 11.5px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint, #F1F5FC); border: 1px solid var(--line-net); border-radius: 999px; padding: 2px 9px; white-space: nowrap; }
-.pc-chip.warn { color: #8a5a00; background: #fff6e6; border-color: #f0d59a; }
+.pc-chip.warn { color: var(--warn-ink); background: var(--amber-bg); border-color: var(--amber-line); }
 .pc-chip.muted { background: transparent; border-style: dashed; opacity: .75; }
-.sync-warn { padding: 10px 12px; background: #fff6e6; border: 1px solid #f0d59a; border-radius: 8px; margin-bottom: 10px; font-size: 13px; color: #6b4e00; line-height: 1.5; }
+.sync-warn { padding: 10px 12px; background: var(--amber-bg); border: 1px solid var(--amber-line); border-radius: 8px; margin-bottom: 10px; font-size: 13px; color: var(--warn-ink); line-height: 1.5; }
 /* 관리탭 [스킬·훅 ▸ 대상 구성원] — 정책(전원 켬/끔/지정) + 구성원별 예외 표 (#860) */
 .tm-policy { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--bg-tint, #F1F5FC); }
 .tm-members-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
@@ -175,7 +175,7 @@ label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; fo
 .tm-seg { display: inline-flex; gap: 2px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 2px; }
 .tm-seg-btn { font: inherit; font-size: 12.5px; font-weight: 700; color: var(--ink-sub); background: transparent; border: 0; border-radius: 6px; padding: 5px 11px; cursor: pointer; white-space: nowrap; }
 .tm-seg-btn:hover { background: var(--bg-tint, #F1F5FC); }
-.tm-seg-btn.on { background: var(--blue); color: #fff; }
+.tm-seg-btn.on { background: var(--blue-fill); color: #fff; }
 .tm-hint { font-size: 12.5px; color: var(--ink-sub); line-height: 1.5; margin: 8px 0 0; }
 /* 폼에 남는 요약 한 줄 — 구성원 표 자체는 모달로 뺐다(42명을 인라인으로 깔면 [저장]이 화면 밖으로 밀린다) */
 .tm-members { margin-top: 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -183,7 +183,7 @@ label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; fo
 .tm-list { max-height: 52vh; overflow-y: auto; }
 .tm-count { font-size: 12.5px; font-weight: 700; color: var(--muted-head); }
 .tm-search { font: inherit; font-size: 12.5px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 7px; width: 150px; }
-.tm-stale { padding: 8px 10px; background: #fff6e6; border: 1px solid #f0d59a; border-radius: 8px; margin-bottom: 8px; font-size: 12.5px; font-weight: 600; color: #6b4e00; }
+.tm-stale { padding: 8px 10px; background: var(--amber-bg); border: 1px solid var(--amber-line); border-radius: 8px; margin-bottom: 8px; font-size: 12.5px; font-weight: 600; color: var(--warn-ink); }
 /* 정책이 '저장 전'이면 아래 실효 상태는 아직 옛 정책 기준 — 흐리게 해서 화면이 거짓말하지 않게 */
 .tm-list-stale { opacity: .55; }
 .tm-row { display: flex; align-items: center; gap: 12px; padding: 7px 4px; border-top: 1px solid var(--line); }
@@ -194,7 +194,7 @@ label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; fo
 .tm-name { font-size: 13.5px; font-weight: 700; color: var(--ink); }
 .tm-id { font-size: 11.5px; font-weight: 600; color: var(--muted-2); }
 .tm-state { flex: 0 0 116px; display: flex; flex-direction: column; gap: 2px; }
-.tm-state .pill.tm-on { color: #1b6b3a; background: #e8f7ee; border-color: #a9dcbf; }
+.tm-state .pill.tm-on { color: var(--success-text); background: var(--bg-success); border-color: var(--success-line); }
 .tm-why { font-size: 11px; font-weight: 600; color: var(--muted-2); }
 .tm-seg-row { flex: none; }
 @media (max-width: 640px) {

@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Lively Context</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='5' fill='%2316C79A'/%3E%3C/svg%3E">
+<!-- 화면 테마(#1683) 선반영 — 스타일시트보다 먼저, 첫 페인트 전에 html[data-theme] 를 정한다(다크 사용자가
+     매 로드마다 흰 화면을 번쩍 보는 FOUC 방지). 판정 규칙은 web/lib/theme.ts 와 동일 계약: localStorage['lively_theme']
+     ∈ light|dark 는 그대로, 그 외(없음=system)는 기기 설정을 따른다. 구독·토글은 theme.ts 가 맡는다. -->
+<script>try{var t=localStorage.getItem('lively_theme');document.documentElement.dataset.theme=(t==='dark'||(t!=='light'&&matchMedia('(prefers-color-scheme: dark)').matches))?'dark':'light'}catch(e){document.documentElement.dataset.theme='light'}</script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@latest/dist/web/static/pretendard.min.css">
 <!-- 스타일시트 — 옛 단일 public/styles.css(8,600줄)를 섹션 주석 경계에서 화면별로 분할한 것(#1313 R50).
      ⚠ 이 <link> 나열 **순서가 곧 계약**이다: 파일 순서대로 이어붙인 합본이 옛 styles.css 와 byte 동일하며,
@@ -47,6 +51,7 @@
 <link rel="stylesheet" href="./styles/35-liv.css">
 <link rel="stylesheet" href="./styles/36-chat.css">
 <link rel="stylesheet" href="./styles/40-v2.css">
+<link rel="stylesheet" href="./styles/90-theme.css"><!-- 테마(#1683) — 다크 팔레트·토글·다크 패치. 반드시 맨 뒤. -->
 <style>
   /* 한글 코딩 글꼴 D2Coding — 자체호스팅(public/fonts, OFL). #279 한글 가독성 (터미널 탭) */
   @font-face { font-family: 'D2Coding'; src: url('fonts/D2Coding.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: swap; }
