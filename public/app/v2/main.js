@@ -6,10 +6,10 @@
 //  라우트: #/ #/dashboard → 홈 · #/liv · #/p/<id> · #/s/<sid> · #/app/<key>[/…] · 그 밖의 클래식 해시 → 같은 해시로 앱 프레임.
 //  데스크톱(일렉트론)에서 그대로 쓰기 위한 규약: 정적 자산 + 해시 라우트 + api()(상대 경로·bearer/쿠키)만 쓴다.
 //   서버 템플릿 의존 0, window.open 대신 <a target=_blank>(일렉트론이 새 창 정책으로 받는다).
-import { $view, api, el, toast } from '../core.js';
+import { $view, anchoredPopover, api, el, toast } from '../core.js';
 import { fillLivCards, renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame, appIcon, openLaunchpad, visibleApps } from './apps.js';
-import { drawSide as drawSideTree } from './side.js';
+import { drawSide as drawSideTree, projectOrder } from './side.js';
 import { dotCls, mergeSessions, projName, refreshSession, renderHome, renderProject, renderSession, unmountSession } from './views.js';
 import { createTrailWidget } from '../session-trail.js';
 import { makeSplitter } from './split.js';
@@ -46,9 +46,8 @@ export async function bootV2() {
             if (c.segs[0] === 's' && c.segs[1]) {
                 const sid = decodeURIComponent(c.segs[1]);
                 refreshSession(data, sid);
-                // 우측 '이 세션'도 — 단 사람이 프로젝트 select 를 만지는 중이면 되그리지 않는다(선택이 날아간다, #1719).
-                if (!(document.activeElement && document.activeElement.classList.contains('v2-pj-sel')))
-                    drawAsideSession(data.sessions.find((x) => x.id === sid || x.logId === sid) || null);
+                // 우측 '이 세션'도 — 프로젝트 드롭다운(#1749)은 body 에 뜨는 팝오버라 우측을 되그려도 안 닫힌다.
+                drawAsideSession(data.sessions.find((x) => x.id === sid || x.logId === sid) || null);
             }
         });
     }, 20000);
@@ -146,9 +145,9 @@ async function route() {
             }
             if (seq !== routeSeq)
                 return;
-            // 우패널(발자취)을 먼저 — 세션 화면이 대화 파일을 읽으며 거기로 흘려보낸다.
+            // 우패널(발자취)을 먼저 — 세션 화면이 대화 파일을 읽으며 거기로 흘려보낸다. 프로젝트 연결은 상단바 드롭다운(#1749).
             const trail = drawAsideSession(s || null);
-            renderSession(centerEl, data, id, trail);
+            renderSession(centerEl, data, id, trail, (anchor) => openProjectPicker(anchor, id));
         }
         else if (page === 'app' && segs[1]) {
             const a = appByKey(segs[1]);
@@ -243,48 +242,78 @@ function drawAsideSession(s) {
         asideTrail.facts = factsEl;
         return asideTrail.w;
     }
-    asideEl.replaceChildren(factsEl, projectPicker(s));
+    asideEl.replaceChildren(factsEl); // 프로젝트 붙이기는 상단바 [프로젝트 연결](#1749)
     const w = createTrailWidget(asideEl, { sessionId: s.id, live: s.live });
     asideTrail = { id: s.id, w, facts: factsEl };
     return w;
 }
-// 세션의 프로젝트 소속 — 내 세션이면 여기서 **언제든** 붙이고 뗀다(#1719: 홈 입력창은 프로젝트를 묻지 않고 연다).
+// 세션의 프로젝트 소속(#1749) — 상단바 [프로젝트 연결]/[▾] 이 여는 **검색 드롭다운**. 내 세션이면 언제든 붙이고 뗀다.
 //  POST terminal/sessions/:id/project — 서버가 tmux 표시값·세션 폴더 안 마커/링크·DB 구간을 함께 바꾼다(cwd 는 그대로).
-//  목록은 '내 프로젝트'(사이드바와 같은 집합) — 서버도 같은 기준(생성자·팀원)으로 막는다.
-function projectPicker(s) {
-    if (!s.owned || !s.live)
-        return el('div', {});
-    const sel = el('select', { class: 'v2-pj-sel', 'aria-label': '이 세션의 프로젝트' });
-    sel.append(el('option', { value: '', text: '프로젝트 없음' }));
-    const mine = [...data.projects].sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
-    for (const p of mine)
-        sel.append(el('option', { value: String(p.id), text: p.name }));
-    if (s.projectId && !mine.some((p) => Number(p.id) === Number(s.projectId)))
-        sel.append(el('option', { value: String(s.projectId), text: projName(data, s.projectId) }));
-    sel.value = s.projectId ? String(s.projectId) : '';
-    const note = el('span', { class: 'v2-fine v2-pj-note' });
-    sel.onchange = async () => {
-        const pid = Number(sel.value) || 0;
-        sel.disabled = true;
-        note.textContent = '바꾸는 중…';
+//  목록·정렬 = 좌측 사이드바와 같다(side.ts projectOrder — 마지막 작업 시각 ↓, 완료는 뒤로). 서버 게이트는 '내가 볼 수 있는 프로젝트'.
+function openProjectPicker(anchor, sessionId) {
+    const s = data.sessions.find((x) => x.id === sessionId);
+    if (!s)
+        return;
+    const rows = projectOrder(data);
+    const input = el('input', { class: 'v2-pjpick-in', type: 'search', placeholder: '프로젝트 검색', 'aria-label': '프로젝트 검색' });
+    const listEl = el('div', { class: 'v2-pjpick-list', role: 'listbox' });
+    const note = el('p', { class: 'v2-fine v2-pjpick-note' });
+    const panel = el('div', { class: 'v2-pjpick' }, input, listEl, note);
+    let closePop = null;
+    let busyPick = false;
+    async function pick(pid) {
+        if (busyPick)
+            return;
+        busyPick = true;
+        note.textContent = pid ? '붙이는 중…' : '떼는 중…';
         try {
-            const r = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/project', { method: 'POST', body: JSON.stringify({ projectId: pid || null }) });
+            const r = await api('/api/ui/terminal/sessions/' + encodeURIComponent(sessionId) + '/project', { method: 'POST', body: JSON.stringify({ projectId: pid }) });
             toast(pid ? `프로젝트에 붙였어요${r && r.linked ? ' — 세션 폴더의 ./project 로 프로젝트 폴더에 갑니다' : ''}.` : '프로젝트에서 뗐어요.');
-            note.textContent = '';
+            if (closePop)
+                closePop();
             await loadData();
             drawSide();
-            const cur = data.sessions.find((x) => x.id === s.id) || null;
-            drawAsideSession(cur);
-            refreshSession(data, s.id);
+            refreshSession(data, sessionId);
+            drawAsideSession(data.sessions.find((x) => x.id === sessionId) || null);
         }
         catch (e) {
+            busyPick = false;
             note.textContent = '';
-            sel.disabled = false;
-            sel.value = s.projectId ? String(s.projectId) : '';
             toast('프로젝트를 바꾸지 못했습니다 — ' + (e && e.message ? e.message : e), true);
         }
+    }
+    const renderList = () => {
+        const q = input.value.trim().toLowerCase();
+        const hits = rows.filter((r) => !q || r.proj.name.toLowerCase().includes(q) || String(r.proj.id) === q);
+        const kids = [];
+        // 떼기 — 붙어 있을 때만, 목록 맨 위(검색과 무관하게 항상 보인다: 검색은 '붙일 것'을 찾는 행위지 떼기를 가리는 행위가 아니다).
+        if (s.projectId)
+            kids.push(el('button', { class: 'v2-pjpick-row v2-pjpick-none', type: 'button', role: 'option', onclick: () => void pick(null) }, el('span', { class: 'n', text: '프로젝트에서 떼기' }), el('span', { class: 'm', text: '프로젝트 없음으로' })));
+        for (const r of hits.slice(0, 50)) {
+            const cur = Number(s.projectId) === Number(r.proj.id);
+            kids.push(el('button', { class: 'v2-pjpick-row' + (cur ? ' cur' : ''), type: 'button', role: 'option', 'aria-selected': String(cur), onclick: () => { if (!cur)
+                    void pick(r.proj.id); },
+                title: r.proj.name + ' · #' + r.proj.id }, el('span', { class: 'n', text: r.proj.name }), el('span', { class: 'm' }, el('span', { class: 'mono', text: '#' + r.proj.id }), r.done ? el('span', { class: 'v2-pjpick-done', text: '완료' }) : null, cur ? el('span', { class: 'v2-pjpick-cur', text: '✓ 지금' }) : null)));
+        }
+        if (hits.length > 50)
+            kids.push(el('p', { class: 'v2-fine', text: `외 ${hits.length - 50}개 — 더 좁혀 검색하세요.` }));
+        if (!kids.length)
+            kids.push(el('p', { class: 'v2-fine', text: '조건에 맞는 프로젝트가 없어요.' }));
+        listEl.replaceChildren(...kids);
     };
-    return el('div', { class: 'v2-pj-pick' }, el('span', { class: 'v2-k', text: '프로젝트' }), sel, note);
+    input.oninput = renderList;
+    // Enter = 첫 후보 선택(검색해서 바로 확정하는 손) · Esc 는 anchoredPopover 가 닫는다.
+    input.onkeydown = (e) => {
+        if (e.key === 'Enter' && !e.isComposing) {
+            e.preventDefault();
+            const first = listEl.querySelector('.v2-pjpick-row:not(.v2-pjpick-none):not(.cur)');
+            if (first)
+                first.click();
+        }
+    };
+    renderList();
+    closePop = anchoredPopover(anchor, panel);
+    window.setTimeout(() => input.focus(), 0);
 }
 // 미사용 경고 방지 — 라우터 밖에서도 뷰를 갱신하고 싶을 때 쓰는 진입점(툴바 등 후속용).
 export function v2Refresh() { void loadData().then(() => { drawSide(); void route(); }); }
