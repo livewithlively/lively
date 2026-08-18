@@ -1,50 +1,73 @@
 /* ─────────────────────────────────────────────────────────────────────────────
-   41-v2-project.css — 새 셸 프로젝트 화면 = 방 (web/v2/project-view.ts, #1757 v3).
-   방의 바닥은 옅은 틴트, 그 위에 구역 넷(본문·코멘트·공유 폴더·세션)이 흰 카드로 앉는다 — 대화 바로 위까지.
-   맨 아래는 리브 대화(36-chat desktop). 토큰은 01-base 것만. 채운 파랑은 화면당 하나(입력칸 보내기).
-   상태 = 점 + 글자(35-liv §0.5 색각 계약).
+   41-v2-project.css — 새 셸 프로젝트 화면 = 방 (web/v2/project-view.ts, #1757 v4 디자인 재작업).
+   구도: 문패(제목·상태 알약·현황 숫자 블록) → 방(본문=문서 시트 | 코멘트=게시판 / 세션=작업대) → 공유 폴더=선반(가로)
+        → 바닥(리브 대화). 구역마다 성격이 다르다 — 네 개가 같은 얼굴이면 방이 아니라 표다.
+   토큰은 01-base 것만. 채운 파랑은 화면당 하나(대화 입력칸 보내기). 상태 = 점 + 글자(35-liv §0.5 색각 계약).
    ───────────────────────────────────────────────────────────────────────────── */
 
-.pv-wrap { --pv-chat-h: 340px; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg, #fff); }
-/* 방 바닥 — 구역 카드가 흰색으로 도드라지는 옅은 틴트. 대화(아래)와 명확히 다른 바닥이다. */
-.pv-top { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 20px 24px 16px; background: var(--bg-tint); }
+.pv-wrap { --pv-chat-h: 320px; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg, #fff); }
+/* 방 바닥 — 위가 살짝 밝은 틴트(빛이 위에서 든다). 흰 구역 카드가 그 위에 앉는다. */
+.pv-top { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 18px 26px 14px;
+  background: linear-gradient(180deg, var(--bg-tint) 0%, var(--bg-tint-2, #EEF5FF) 100%); }
 
-/* ── 방 머리 ── */
-.pv-head { flex: none; padding: 0 4px; }
-.pv-eyebrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); line-height: 1.4; }
-.pv-idchip { font-size: 11.5px; letter-spacing: .02em; color: var(--ink-sub); background: var(--bg, #fff); border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px; }
-.pv-state { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-sub); font-weight: 600; }
-.pv-crumbsep::before { content: '·'; color: var(--muted-3, #C2CCDD); margin-right: 10px; }
-.pv-title { margin: 7px 0 0; font-size: 23px; font-weight: 800; letter-spacing: -.5px; line-height: 1.3; word-break: keep-all; text-wrap: balance; }
+/* ══ 문패 ══════════════════════════════════════════════════════════════════ */
+.pv-door { flex: none; padding: 2px 2px 0; }
+.pv-eyebrow { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--muted); line-height: 1.4; }
+.pv-idchip { font-size: 11px; letter-spacing: .03em; color: var(--muted-head, #7A88A3); background: none; border: 0; padding: 0; }
+.pv-listname::before { content: '·'; color: var(--muted-3, #C2CCDD); margin-right: 10px; }
+.pv-eyebrow-sp { flex: 1; }
+.pv-when { font-size: 11.5px; color: var(--muted-2, #A6B2C8); }
 
-/* 방 현황 한 줄 — 지금 도는 것 · 세션 · 할 일(진행 바) · 자료 · 지식 · 사람 · (오른쪽 끝) 수정시각 */
-.pv-stats { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 9px; font-size: 12.5px; line-height: 1.4; }
-.pv-stat { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-sub); text-decoration: none; }
-.pv-stat .k { color: var(--muted); }
-.pv-stat b { font-weight: 700; color: var(--ink-sub); font-variant-numeric: tabular-nums; }
-.pv-stat.live b { color: var(--ink); }
-a.pv-stat:hover b { color: var(--blue); }
-.pv-minibar { width: 52px; height: 4px; border-radius: 2px; background: var(--line-net, #DCE6F5); overflow: hidden; }
+.pv-title-line { display: flex; align-items: baseline; gap: 12px; margin-top: 4px; min-width: 0; }
+.pv-title { margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -.6px; line-height: 1.28; word-break: keep-all; min-width: 0; }
+/* 상태 알약 — 제목 옆에서 조용히. 색은 배경 틴트로만(글자는 잉크 계열 유지). */
+.pv-stpill { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; line-height: 1;
+  padding: 5px 10px; border-radius: 999px; transform: translateY(-3px); }
+.pv-stpill .d { width: 6px; height: 6px; border-radius: 50%; }
+.pv-stpill.run { background: var(--bg-punch); color: var(--blue-deep, #1E54CC); }
+.pv-stpill.run .d { background: var(--blue); animation: v2pulse 1.1s ease-in-out infinite; }
+.pv-stpill.done { background: var(--bg-success, #F3FBF8); color: var(--mint-deep, #0FA37E); }
+.pv-stpill.done .d { background: var(--mint-deep, #0FA37E); }
+.pv-stpill.todo { background: var(--bg, #fff); color: var(--ink-sub); border: 1px solid var(--line); }
+.pv-stpill.todo .d { background: var(--muted-2, #A6B2C8); }
+
+/* 현황 — 숫자가 말한다(목업의 "세션 3 · 지식 4 · 할 일 8"). 블록 사이는 가는 세로선. */
+.pv-vitals { display: flex; align-items: center; gap: 0; flex-wrap: wrap; margin-top: 13px; }
+.pv-live { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 700; color: var(--blue-deep, #1E54CC);
+  background: var(--bg, #fff); border: 1px solid var(--line-note, #D6E4FF); border-radius: 999px; padding: 7px 13px; margin-right: 18px; }
+.pv-vital { display: inline-flex; flex-direction: column; gap: 1px; padding: 0 18px; border-left: 1px solid var(--line-net, #DCE6F5); text-decoration: none; }
+.pv-live + .pv-vital, .pv-vitals > .pv-vital:first-child { border-left: 0; padding-left: 0; }
+.pv-vital .n { font-size: 17px; font-weight: 800; color: var(--ink); line-height: 1.15; font-variant-numeric: tabular-nums; letter-spacing: -.3px; }
+.pv-vital .k { font-family: var(--mono, ui-monospace, monospace); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+a.pv-vital:hover .n { color: var(--blue); }
+.pv-minibar { width: 46px; height: 3px; border-radius: 2px; background: var(--line-net, #DCE6F5); overflow: hidden; margin-top: 3px; }
 .pv-minibar .f { display: block; height: 100%; border-radius: 2px; background: var(--mint-deep, #0FA37E); }
-.pv-stats-sp { flex: 1; }
-.pv-when { font-size: 12px; color: var(--muted); }
+/* 사람 — 겹치는 얼굴. */
+.pv-faces { display: inline-flex; align-items: center; margin-left: 18px; padding-left: 18px; border-left: 1px solid var(--line-net, #DCE6F5); }
+.pv-face-s { width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 10.5px; font-weight: 700; color: #fff; border: 2px solid var(--bg-tint); margin-left: -7px; }
+.pv-faces .pv-face-s:first-child { margin-left: 0; }
+.pv-face-more { margin-left: 6px; font-size: 11px; color: var(--muted); }
 
-/* ── 구역 그리드 — 본문 | 코멘트 / 공유 폴더 | 세션. 남는 높이를 채우고, 각 구역이 안에서 구른다. ── */
-.pv-room { flex: 1 1 auto; min-height: 160px; display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
-  grid-template-rows: minmax(0, 6fr) minmax(0, 5fr); gap: 12px; margin-top: 14px; }
-.pv-panel { min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 13px; background: var(--bg, #fff); overflow: hidden;
-  box-shadow: 0 1px 2px rgba(21, 35, 59, .04); }
-.pv-panel-h { flex: none; display: flex; align-items: center; gap: 8px; padding: 9px 12px 8px 14px; border-bottom: 1px solid var(--line-row, #EDF1F8); }
-.pv-panel-k { font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--muted-head, #7A88A3); }
-.pv-panel-n { font-size: 11.5px; color: var(--muted); }
-.pv-panel-acts { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; }
-.pv-panel-sub { flex: none; padding: 6px 14px; border-bottom: 1px solid var(--line-row, #EDF1F8); }
-.pv-panel-sub[hidden] { display: none; }
-.pv-panel-b { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 6px 6px; }
-.pv-panel-f { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--line-row, #EDF1F8); }
-.pv-panel-f[hidden] { display: none; }
+/* ══ 방 — 구역 그리드: 본문(왼쪽 통짜) | 코멘트 / 세션 ═══════════════════════ */
+.pv-room { flex: 1 1 auto; min-height: 150px; display: grid; gap: 12px; margin-top: 16px;
+  grid-template-columns: minmax(0, 8fr) minmax(0, 5fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas: 'doc cmt' 'doc sess'; }
+.pv-zone { min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 14px;
+  background: var(--bg, #fff); overflow: hidden; box-shadow: 0 1px 2px rgba(21, 35, 59, .04), 0 4px 14px rgba(21, 35, 59, .03); }
+.pv-z-doc { grid-area: doc; }
+.pv-z-cmt { grid-area: cmt; }
+.pv-z-sess { grid-area: sess; }
 
-/* 구역 헤더 버튼 — 주 버튼(새 세션)은 틴트, 나머지는 조용한 고스트. 채운 파랑은 안 쓴다(그건 입력칸 몫). */
+.pv-z-h { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 12px 9px 16px; }
+.pv-z-k { margin: 0; font-size: 12.5px; font-weight: 800; letter-spacing: -.1px; color: var(--ink); }
+.pv-z-n { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pv-z-acts { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; }
+.pv-z-b { flex: 1; min-height: 0; overflow-y: auto; }
+.pv-z-f { flex: none; display: flex; align-items: center; gap: 6px; padding: 9px 12px; border-top: 1px solid var(--line-row, #EDF1F8); }
+.pv-z-f[hidden] { display: none; }
+
+/* 버튼 — 주 버튼(새 세션)은 틴트, 나머지는 고스트. 채운 파랑은 안 쓴다(그건 입력칸 몫). */
 .pv-btn { display: inline-flex; align-items: center; font: inherit; font-size: 12px; font-weight: 600; line-height: 1; padding: 6px 9px;
   border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--ink-sub); cursor: pointer; text-decoration: none; white-space: nowrap; }
 .pv-btn:hover { border-color: var(--muted-3); color: var(--ink); }
@@ -55,79 +78,106 @@ a.pv-stat:hover b { color: var(--blue); }
 .pv-btn-main:disabled { opacity: .55; cursor: default; }
 .pv-btn:focus-visible, .pv-btn-main:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
 
-/* ── 본문 구역 — 정돈된 마크다운이 구역 안에서 구른다(접기 불요 — 구역이 곧 창이다) ── */
-.pv-body { padding: 8px 10px 10px; font-size: 14px; line-height: 1.7; color: var(--ink-sub); word-break: keep-all; overflow-wrap: anywhere; max-width: 78ch; }
-.pv-body .md > :first-child { margin-top: 0; }
-.pv-body .md > :last-child { margin-bottom: 0; }
-.pv-body .md p { margin: 0 0 .5em; }
-.pv-body .md h1, .pv-body .md h2, .pv-body .md h3 { margin: .95em 0 .3em; font-size: 11.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: var(--muted-head, #7A88A3); }
-.pv-body .md ul, .pv-body .md ol { margin: 0 0 .5em; padding-left: 1.25em; }
-.pv-body .md li { margin: .1em 0; }
-.pv-body .md li::marker { color: var(--muted-2, #a6b2c8); }
-.pv-body .md a { color: var(--blue); text-decoration: none; }
-.pv-body .md a:hover { text-decoration: underline; }
-.pv-body .md hr { border: 0; border-top: 1px solid var(--line); margin: .75em 0; }
-.pv-link { font: inherit; font-size: inherit; color: var(--ink-sub); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--line-net-2, #CFE0F7); }
-.pv-link:hover { color: var(--blue); text-decoration-color: currentColor; }
+/* ── 본문 = 문서 시트 — 넓은 여백, 큰 행간. 읽는 벽. ── */
+.pv-z-doc .pv-z-h { border-bottom: 1px solid var(--line-row, #EDF1F8); }
+.pv-sheet { padding: 16px 24px 22px; font-size: 14.5px; line-height: 1.78; color: var(--ink-note, #2D4A7A); max-width: 76ch; word-break: keep-all; overflow-wrap: anywhere; }
+.pv-sheet .md > :first-child { margin-top: 0; }
+.pv-sheet .md > :last-child { margin-bottom: 0; }
+.pv-sheet .md p { margin: 0 0 .6em; }
+.pv-sheet .md h1, .pv-sheet .md h2, .pv-sheet .md h3 { margin: 1.2em 0 .35em; font-size: 11.5px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: var(--muted-head, #7A88A3); }
+.pv-sheet .md h1:first-child, .pv-sheet .md h2:first-child, .pv-sheet .md h3:first-child { margin-top: 0; }
+.pv-sheet .md ul, .pv-sheet .md ol { margin: 0 0 .6em; padding-left: 1.3em; }
+.pv-sheet .md li { margin: .14em 0; }
+.pv-sheet .md li::marker { color: var(--muted-2, #a6b2c8); }
+.pv-sheet .md a { color: var(--blue); text-decoration: none; }
+.pv-sheet .md a:hover { text-decoration: underline; }
+.pv-sheet .md hr { border: 0; border-top: 1px solid var(--line); margin: 1em 0; }
+.pv-sheet .md blockquote { margin: 0 0 .6em; padding: 2px 0 2px 12px; border-left: 2px solid var(--line-net-2, #CFE0F7); color: var(--ink-sub); }
+.pv-link { font: inherit; font-size: inherit; color: var(--blue-deep, #1E54CC); background: none; border: 0; padding: 0; cursor: pointer; font-weight: 600; }
+.pv-link:hover { text-decoration: underline; text-underline-offset: 3px; }
 
-/* 본문 편집 — 구역 몸통 전체가 편집칸이 된다(저장·취소는 구역 바닥 줄) */
-.pv-edit { height: 100%; display: flex; padding: 6px; }
-.pv-edit-ta { flex: 1; min-height: 0; resize: none; font-family: inherit; font-size: 13.5px; line-height: 1.65; color: var(--ink);
-  padding: 9px 11px; border: 1px solid var(--line-net); border-radius: 9px; background: var(--bg, #fff); }
+/* 본문 편집 — 시트 자리가 통째로 편집칸이 된다(저장·취소는 구역 바닥 줄) */
+.pv-edit { height: 100%; display: flex; padding: 10px 12px; box-sizing: border-box; }
+.pv-edit-ta { flex: 1; min-height: 0; resize: none; font-family: inherit; font-size: 13.5px; line-height: 1.7; color: var(--ink);
+  padding: 10px 12px; border: 1px solid var(--line-net); border-radius: 10px; background: var(--bg, #fff); }
 .pv-edit-ta:focus-visible { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px var(--bg-punch); }
-.pv-edit-hint { flex: 1; min-width: 0; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.pv-hint { flex: 1; min-width: 0; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
 
-/* ── 코멘트 구역 — 말은 위에 쌓이고, 쓰는 칸은 구역 바닥에 붙어 있다 ── */
-.pv-cmt { padding: 7px 9px; border-radius: 9px; }
+/* ── 코멘트 = 게시판 — 얼굴 + 말, 쓰는 칸은 바닥에. ── */
+.pv-z-cmt .pv-z-b { padding: 2px 8px 6px; }
+.pv-cmt { display: flex; gap: 9px; padding: 8px; border-radius: 10px; }
 .pv-cmt:hover { background: var(--bg-tint); }
-.pv-cmt-h { display: flex; align-items: baseline; gap: 8px; }
+.pv-cface { flex: none; width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 10.5px; font-weight: 700; color: #fff; margin-top: 1px; }
+.pv-cmt-main { flex: 1; min-width: 0; }
+.pv-cmt-h { display: flex; align-items: baseline; gap: 7px; }
 .pv-cmt-h b { font-size: 12.5px; font-weight: 700; color: var(--ink); }
-.pv-cmt-ts { font-size: 11px; color: var(--muted); }
-.pv-cmt-b { margin-top: 2px; font-size: 13px; line-height: 1.6; color: var(--ink-sub); white-space: pre-wrap; word-break: break-word; }
+.pv-cmt-h .ts { font-size: 10.5px; color: var(--muted-2, #A6B2C8); }
+.pv-cmt-b { margin-top: 1px; font-size: 13px; line-height: 1.6; color: var(--ink-sub); white-space: pre-wrap; word-break: break-word; }
+.pv-cmt-compose { flex: 1; display: flex; align-items: flex-end; gap: 6px; }
 .pv-cmt-in { flex: 1; min-width: 0; resize: none; font-family: inherit; font-size: 13px; line-height: 1.5; color: var(--ink);
-  padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg, #fff); }
+  padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-tint); }
 .pv-cmt-in::placeholder { color: var(--muted-2, #a6b2c8); }
-.pv-cmt-in:focus-visible { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px var(--bg-punch); }
+.pv-cmt-in:focus-visible { outline: none; border-color: var(--blue); background: var(--bg, #fff); box-shadow: 0 0 0 3px var(--bg-punch); }
+.pv-cmt-send { flex: none; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; font-size: 13px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--bg); color: var(--ink-sub); cursor: pointer; }
+.pv-cmt-send:hover { border-color: var(--blue); color: var(--blue-deep, #1E54CC); }
+.pv-cmt-send:disabled { opacity: .5; cursor: default; }
 
-/* ── 행(세션·파일 공용) — 굵은 제목 + 얇은 메타 두 층 ── */
-.pv-row { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; font: inherit; padding: 8px 9px; border: 0; border-radius: 9px;
-  background: none; color: inherit; text-decoration: none; cursor: pointer; }
+/* ── 세션 = 작업대 — 도는 것은 왼쪽 모서리에 색 띠, 상태 글자에도 색. ── */
+.pv-z-sess .pv-z-b { padding: 2px 8px 6px; }
+.pv-row { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; font: inherit; padding: 8px 10px;
+  border: 0; border-radius: 10px; background: none; color: inherit; text-decoration: none; cursor: pointer; }
 .pv-row:hover { background: var(--bg-tint); }
 .pv-row:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 .pv-row.dim .t { color: var(--ink-sub); font-weight: 600; }
+.pv-row.acc-busy { box-shadow: inset 3px 0 0 var(--blue); }
+.pv-row.acc-waiting { box-shadow: inset 3px 0 0 var(--amber, #C98A16); }
 .pv-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .pv-row-main .t { font-size: 13.5px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pv-row-main .m { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-row-main .m .st-busy { color: var(--blue-deep, #1E54CC); font-weight: 600; }
+.pv-row-main .m .st-waiting { color: var(--amber, #C98A16); font-weight: 600; }
 .pv-row-go { flex: none; width: 10px; color: var(--muted-2, #a6b2c8); opacity: 0; transition: opacity .1s; }
 .pv-row:hover .pv-row-go { opacity: 1; }
 
-/* 폴더 행 — 실제 타입 아이콘(files-icons fileIconSvg) + 크기/폴더 메타 오른쪽 정렬 */
-.pv-frow .pv-row-main .t { font-weight: 600; }
-.pv-fic { flex: none; display: inline-flex; }
-.pv-fic .fic { width: 17px; height: 17px; stroke-width: 1.7; }
-.pv-fmeta { flex: none; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* 빈 상태 — 행동으로의 초대 */
+.pv-blank { padding: 18px 16px; }
+.pv-blank .h { margin: 0; font-size: 13px; font-weight: 700; line-height: 1.6; color: var(--ink-sub); }
+.pv-blank .sub { margin: 4px 0 0; font-size: 12.5px; line-height: 1.65; color: var(--muted); }
 
-/* 브레드크럼(폴더 구역 둘째 줄) */
-.pv-crumbs { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; min-height: 18px; }
-.pv-crumb { font: inherit; font-size: 12px; color: var(--ink-sub); background: none; border: 0; padding: 1px 5px; border-radius: 5px; cursor: pointer; }
+/* ══ 공유 폴더 = 선반 — 파일이 가로로 꽂힌다 ═══════════════════════════════════ */
+.pv-shelf { flex: none; margin-top: 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg, #fff);
+  box-shadow: 0 1px 2px rgba(21, 35, 59, .04), 0 4px 14px rgba(21, 35, 59, .03); overflow: hidden; }
+.pv-shelf > .pv-z-h { padding-bottom: 6px; }
+.pv-shelf-b { display: flex; align-items: stretch; gap: 8px; overflow-x: auto; padding: 2px 14px 13px; scrollbar-width: thin; }
+.pv-file { flex: none; width: 104px; display: flex; flex-direction: column; align-items: center; gap: 5px; font: inherit; text-align: center;
+  padding: 11px 8px 9px; border: 1px solid var(--line-row, #EDF1F8); border-radius: 11px; background: var(--bg); color: inherit; cursor: pointer; }
+.pv-file:hover { border-color: var(--line-net-2, #CFE0F7); background: var(--bg-tint); }
+.pv-file:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.pv-file.dir { background: var(--bg-tint); }
+.pv-file.dir:hover { background: var(--bg-tint-2, #EEF5FF); }
+.pv-file .ic { display: inline-flex; }
+.pv-file .ic .fic { width: 26px; height: 26px; stroke-width: 1.5; }
+.pv-file .nm { font-size: 11.5px; font-weight: 600; line-height: 1.35; color: var(--ink); word-break: break-all;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.pv-file .mt { font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pv-shelf-blank { flex: 1; padding: 16px 4px 20px; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+.pv-shelf.drop-active { border-color: var(--blue); box-shadow: 0 0 0 3px var(--bg-punch); }
+
+/* 브레드크럼 — 선반 헤더 안(라벨 옆) */
+.pv-crumbs { display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; min-width: 0; overflow: hidden; }
+.pv-crumb { font: inherit; font-size: 11.5px; color: var(--ink-sub); background: none; border: 0; padding: 1px 5px; border-radius: 5px; cursor: pointer; white-space: nowrap; }
 .pv-crumb:hover { background: var(--bg-tint-2, #EEF5FF); color: var(--ink); }
 .pv-crumb.cur { color: var(--ink); font-weight: 700; cursor: default; background: none; }
-.pv-crumb-sep { font-size: 11px; color: var(--muted-3, #C2CCDD); }
-.pv-upprog:not(:empty) { margin-top: 4px; }
+.pv-crumb-sep { font-size: 10.5px; color: var(--muted-3, #C2CCDD); }
+.pv-upprog:not(:empty) { margin-left: 10px; flex: 1; min-width: 120px; }
 
-/* 드롭 하이라이트 — files-upload upDropZone 이 .drop-active 를 켠다 */
-.pv-panel.drop-active { border-color: var(--blue); box-shadow: 0 0 0 3px var(--bg-punch); }
-
-/* 빈 상태 — 행동으로의 초대(설명이 아니라) */
-.pv-blank { padding: 16px 14px; }
-.pv-blank p { margin: 0; font-size: 13px; line-height: 1.65; color: var(--ink-sub); }
-.pv-blank .sub { margin-top: 4px; font-size: 12px; color: var(--muted); }
-
-/* ── 대화 — 방의 바닥. 대화가 없으면 칩+입력칸만(내용 높이), 생기면 경계 손잡이 + 기억된 높이. ── */
+/* ══ 바닥 — 리브 대화. 대화가 없으면 칩+입력칸만, 생기면 경계 손잡이 + 기억된 높이 ══ */
 .pv-wrap > .v2-split-y { display: none; }
 .pv-wrap.has-turns > .v2-split-y { display: block; }
 .pv-chat { flex: none; display: flex; border-top: 1px solid var(--line); background: var(--bg, #fff); }
-.pv-wrap.has-turns .pv-chat { height: var(--pv-chat-h); min-height: 180px; }
+.pv-wrap.has-turns .pv-chat { height: var(--pv-chat-h); min-height: 170px; }
 .pv-chat > .livc-wrap { flex: 1; min-width: 0; }
 .pv-wrap:not(.has-turns) .pv-chat .livc-scroller { min-height: 0; }
 .pv-wrap:not(.has-turns) .pv-chat .livc-list { padding-top: 10px; padding-bottom: 0; }
@@ -148,5 +198,7 @@ a.pv-stat:hover b { color: var(--blue); }
 @media (max-width: 1280px) { .pv-room { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
 @media (max-width: 1100px) {
   .pv-top { padding-left: 18px; padding-right: 18px; }
-  .pv-room { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-auto-rows: minmax(150px, 1fr); }
+  .pv-room { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-auto-rows: minmax(150px, 1fr);
+    grid-template-areas: 'doc' 'cmt' 'sess'; }
+  .pv-vitals { row-gap: 10px; }
 }
