@@ -11,7 +11,8 @@ import { HttpError } from "../http-error.js";
 import { getMember, mintToken, listTokens, revokeToken } from "../org/store.js";
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 import { DANGEROUS_SCOPES, isScope } from "../auth/scopes.js";
-import { resolveMemberOsUser, wrapAsMember, osUsername, isolationInfraReady, osUserExists } from "./terminal-isolation.js";
+import { resolveMemberOsUser, osUsername, isolationInfraReady, osUserExists } from "./terminal-isolation.js";
+import { memberSh } from "./terminal-member-fs.js";
 import { roots, HARNESSES } from "./catalog.js";
 import { getOpt } from "./tmux-exec.js";
 import { loadDesiredOne } from "../sessions/session-desired.js";
@@ -219,17 +220,18 @@ const HARNESS_CRED: Record<string, string> = {
 
 // box_ 홈의 파일 존재 — ⚠ 게이트웨이(lively)는 멤버 700 홈을 '읽지' 못한다(격리의 본질). 대신 box_ 로 drop-priv 해서
 //  '존재'만 확인(내용은 안 봄). exit0=있음. 미프로비저닝/에러=false.
+//  memberSh(=memberSpawn seam)를 탄다 — 원격 중계 배포(LIVELY_MEMBER_EXEC)에서도 이 판정이 실행 노드에서
+//  돌아야 한다(로그인 판정이 게이트웨이 로컬 fs 를 보면 항상 false = #1471 부류의 거짓 '미로그인').
+//  경로는 $HOME 이 아니라 명시 /home/<osUser> — 중계 exec 환경엔 그 유저의 passwd 항목이 없어 $HOME 이 다르다.
 async function memberFileExists(osUser: string, rel: string): Promise<boolean> {
   try {
-    const w = wrapAsMember(osUser, ["sh", "-c", `test -f "$HOME/${rel}"`]);
-    await execFileAsync(w[0], w.slice(1), { timeout: 5000 });
+    await memberSh(osUser, `test -f "/home/${osUser}/${rel}"`);
     return true;
   } catch { return false; }
 }
 // box_ 홈의 파일 삭제(로그아웃) — 같은 drop-priv 경계. rm -f 라 없는 파일에도 성공(멱등).
 async function memberFileRemove(osUser: string, rel: string): Promise<void> {
-  const w = wrapAsMember(osUser, ["sh", "-c", `rm -f "$HOME/${rel}"`]);
-  await execFileAsync(w[0], w.slice(1), { timeout: 5000 });
+  await memberSh(osUser, `rm -f "/home/${osUser}/${rel}"`);
 }
 // UI 로그인 배너 숨김 판정용(claude 전용 축약 — 기존 호출부 유지).
 async function memberClaudeLoggedIn(osUser: string): Promise<boolean> {
