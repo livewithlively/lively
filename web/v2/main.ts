@@ -201,7 +201,7 @@ function drawAsideProject(detail: any, id: number): void {
 }
 // 세션 우패널 = 짧은 사실 줄 + **타임라인**(이 세션이 한 일 — 트랜스크립트 도구 사용 + 이 세션이 남긴 작업 기록).
 //  같은 세션이면 위젯을 **다시 만들지 않는다**(20초 폴링이 상태만 갱신) — 새로 만들면 쌓인 것이 사라진다.
-let asideTrail: { id: string; w: TimelineHandle; facts: HTMLElement } | null = null;
+let asideTrail: { id: string; w: TimelineHandle } | null = null;
 function drawAsideSession(s: Sess | null): TimelineHandle | null {
   if (!asideEl) return null;
   if (!s) { asideTrail = null; asideEl.replaceChildren(el('p', { class: 'v2-empty', text: '세션 정보를 찾을 수 없어요.' })); return null; }
@@ -212,10 +212,13 @@ function drawAsideSession(s: Sess | null): TimelineHandle | null {
     raw.harness ? [el('span', { class: 'sep', text: '·' }), el('span', { class: 'mono', text: String(raw.harness) })] : null,
     s.node ? [el('span', { class: 'sep', text: '·' }), el('span', { text: String(s.node) })] : null,
     !s.owned && (raw.owner_name || raw.owner) ? [el('span', { class: 'sep', text: '·' }), el('span', { text: String(raw.owner_name || raw.owner) })] : null);
-  if (asideTrail && asideTrail.id === s.id && asideTrail.w.root.isConnected) { asideTrail.facts.replaceWith(factsEl); asideTrail.facts = factsEl; return asideTrail.w; }
-  asideEl.replaceChildren(factsEl);   // 프로젝트 붙이기는 상단바 [프로젝트 연결](#1749)
+  // 사실 줄은 타임라인 **머리 바 아래 한 줄**로 들어간다(#1756) — 가운데 대화창의 머리와 같은 자리에 같은 선이
+  //  지나가야 두 열이 한 판으로 읽힌다(우패널이 따로 노는 상자가 아니게).
+  if (asideTrail && asideTrail.id === s.id && asideTrail.w.root.isConnected) { asideTrail.w.setMeta(factsEl); return asideTrail.w; }
+  asideEl.replaceChildren();   // 프로젝트 붙이기는 상단바 [프로젝트 연결](#1749)
   const w = createTimeline(asideEl, { scope: '이 세션', chapters: true, empty: '아직 한 일이 없어요 — 세션이 일하면 여기에 쌓입니다.' });
-  asideTrail = { id: s.id, w, facts: factsEl };
+  w.setMeta(factsEl);
+  asideTrail = { id: s.id, w };
   void loadSessionActivities(s.id).then((items) => w.addAll(items));
   return w;
 }

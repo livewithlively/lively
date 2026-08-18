@@ -128,6 +128,8 @@ export interface TimelineHandle {
   result(id: string, output: string, isError: boolean): void;
   addAll(items: Array<Omit<TlItem, 'count'> & { count?: number }>): void;
   setNote(note: string | null): void;
+  /** 머리 바 바로 아래 한 줄(세션 사실 등). null 이면 그 줄 자체가 없다. */
+  setMeta(node: HTMLElement | null): void;
   clear(): void;
   root: HTMLElement;
 }
@@ -142,9 +144,13 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
   const list = el('div', { class: 'tl-list' });
   const emptyEl = el('p', { class: 'v2-empty', text: ctx.empty || '아직 기록이 없어요.' });
   const noteEl = el('p', { class: 'v2-fine', hidden: true });
+  // 골격은 가운데 화면과 같다(#1756): [머리 바][사실 한 줄] + 본문만 스크롤.
+  //  가운데 대화창(sc-head → sc-chat)과 같은 자리에 같은 선이 지나가야 두 열이 한 판으로 읽힌다.
+  const metaEl = el('div', { class: 'tl-meta', hidden: true });
   const root = el('section', { class: 'tl-wrap' },
     el('div', { class: 'v2-aside-h' }, el('b', { text: '타임라인' }), el('span', { class: 'tl-scope', text: ctx.scope }), countEl),
-    list, emptyEl, noteEl);
+    metaEl,
+    el('div', { class: 'tl-body' }, list, emptyEl, noteEl));
   host.append(root);
 
   const isHead = (it: TlItem): boolean => !!ctx.chapters && it.kind === 'say' && it.verb === '지시';
@@ -304,6 +310,7 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
       schedule();
     },
     setNote(note) { noteEl.textContent = note || ''; noteEl.hidden = !note; },
+    setMeta(node) { metaEl.replaceChildren(...(node ? [node] : [])); metaEl.hidden = !node; },
     clear() { items = []; byId.clear(); byKey.clear(); open.clear(); schedule(); },
   };
   paint();
