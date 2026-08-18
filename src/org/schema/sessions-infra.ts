@@ -184,6 +184,28 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS write_vis TEXT;`);
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS restrict_read BOOLEAN NOT NULL DEFAULT false;`);
 
+  // ── org_session_outbox — 세션 프롬프트 아웃박스(#1719 #1753). ──
+  //  왜: send-keys 는 ack 가 없는 통로 — 로그인·대화상자에 멈춘 세션에 밀어 넣은 프롬프트가 조용히 사라졌다(실측).
+  //   보내기는 여기 쌓고, 박스별 배달자가 준비 판정(입력창 표식) 후 넣고 트랜스크립트 에코로 delivered 를 확정한다
+  //   (src/sessions/session-outbox.ts). 화면은 queued·failed 를 그대로 보여 새로고침에도 안 사라진다.
+  //  status: queued(대기) · sending(배달 중) · delivered(에코 확인) · sent(보냈으나 에코 미확인 — 재전송 금지) · failed(사유 last_error).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_session_outbox(
+      id BIGSERIAL PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      seq INT NOT NULL,
+      text TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      attempts INT NOT NULL DEFAULT 0,
+      trust_ok BOOLEAN NOT NULL DEFAULT false,
+      last_error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      delivered_at TIMESTAMPTZ);
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_session_outbox_session_idx ON org_session_outbox(session_id, status);`);
+  // 끝난 행(delivered·sent)은 하루 지나면 청소 대상 — resumeOutbox 가 부팅 때 지운다(무한 적재 방지).
+
   // ── org_preview_env — 프리뷰 환경(작업자별 격리 미리보기)의 desired state (#1036). 관리탭 CRUD. ──
   //  kind=work: 작업 워크트리(project/<id>)를 게이트웨이가 /preview/<id>/ 서브패스로 정적 서빙(shared-proxy — /api 는 게이트웨이 자신).
   //   프론트가 API 를 root-relative(/api/ui)로 부르므로 페이지가 서브패스에서 로드돼도 진짜 API 로 간다 → 별도 프로세스·포트·프록시 불필요.
