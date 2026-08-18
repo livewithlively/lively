@@ -30,7 +30,7 @@
 import crypto from "node:crypto";
 import pg from "pg";
 import { itemsPool } from "../../db/client.js";
-import { TENANT_COLUMN_EXEMPT, SINGLE_TENANT_ID } from "../../db/tenant-column.js";
+import { TENANT_COLUMN_EXEMPT, SINGLE_TENANT_ID, ensureTenantColumn } from "../../db/tenant-column.js";
 import { writeTenancyRuntime, readTenancyRuntimeSync } from "./state.js";
 import { PRIMARY_SLUG, invalidateRegistryCache } from "./registry.js";
 import { logger } from "../../log.js";
@@ -92,14 +92,23 @@ interface Q { query(sql: string, params?: unknown[]): Promise<{ rows: Array<Reco
 export async function ensureTenantPolicies(db: Q = itemsPool): Promise<{ tables: number; touched: number }> {
   const owner = String((await db.query("SELECT current_user AS u")).rows[0]?.u ?? "");
   if (!owner) throw new Error("current_user 를 조회할 수 없습니다");
+  // ★ 컬럼부터 다시 보장한다(멱등 introspection). 스키마 체인 밖에서 **지연 생성**되는 표가 실제로 있다 —
+  //  connector_run(런트래커 첫 사용 시 DDL)이 E2E 에서 정확히 이 자리로 걸어 들어왔다. 그런 표는 체인 말미의
+  //  ensureTenantColumn 이 못 봤으므로 여기서 한 번 더 돌려 붙인다. 그래도 없으면 아래에서 던진다(fail-closed).
+  await ensureTenantColumn();
+  // self-rls(#1291 v3)의 reader 역 — SET LOCAL ROLE 로 내려가는 SELECT 경로. 이 역에는 tenant_isolation
+  //  (TO lvly_app)이 **적용되지 않으므로**, 방치하면 self 소스 SQL 창이 전 워크스페이스 행을 본다(유출).
+  //  RESTRICTIVE 로 건다: permissive(lively_vis)와 OR 가 아니라 **AND** 로 겹쳐, 가시성 정책은 그대로 두고
+  //  테넌트 밖 행만 추가로 걸러낸다. 역이 없으면(self-rls 미준비) 건너뛴다 — 역이 생기는 건 ensureSelfRls 뒤고,
+  //  그 직후 이 함수가 다시 돈다(스키마 자식의 실행 순서).
+  const readerExists = (await db.query("SELECT 1 FROM pg_roles WHERE rolname='lively_reader'")).rows.length > 0;
   const rows = (await db.query(TABLE_STATUS_SQL)).rows as unknown as TableStatus[];
   let touched = 0, content = 0;
   for (const t of rows) {
     if (TENANT_COLUMN_EXEMPT.has(t.table) || IDENTITY_GLOBAL_TABLES.has(t.table)) continue;
     if (!t.has_tenant_id) {
-      // 컬럼이 없으면 정책 재료가 없다 = 그 표는 전 워크스페이스에 보인다. 조용히 넘기지 않는다 —
-      //  ensureTenantColumn(스키마 체인 말미)이 붙였어야 하므로, 여기 왔다는 건 순서가 깨졌다는 뜻이다.
-      throw new Error(`테이블 ${t.table} 에 tenant_id 가 없습니다 — 격리 불가(스키마 체인이 먼저 돌아야 합니다)`);
+      // 컬럼이 없으면 정책 재료가 없다 = 그 표는 전 워크스페이스에 보인다. 조용히 넘기지 않는다.
+      throw new Error(`테이블 ${t.table} 에 tenant_id 가 없습니다 — 격리 불가(ensureTenantColumn 재실행으로도 안 붙었다)`);
     }
     content++;
     const tbl = qi(t.table);
@@ -113,6 +122,10 @@ export async function ensureTenantPolicies(db: Q = itemsPool): Promise<{ tables:
     }
     if (!t.policies.includes("owner_all")) {
       stmts.push(`CREATE POLICY ${qi("owner_all")} ON ${tbl} FOR ALL TO ${qi(owner)} USING (true) WITH CHECK (true)`);
+    }
+    if (readerExists && !t.policies.includes("tenant_restrict_reader")) {
+      stmts.push(`CREATE POLICY ${qi("tenant_restrict_reader")} ON ${tbl} AS RESTRICTIVE FOR SELECT ` +
+        `TO ${qi("lively_reader")} USING (tenant_id = ${STRICT_EXPR})`);
     }
     if (!stmts.length) continue;
     for (const s of stmts) await db.query(s);

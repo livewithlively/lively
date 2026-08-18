@@ -40,6 +40,11 @@ export const TENANT_COLUMN_EXEMPT: ReadonlySet<string> = new Set([
   //  필수(안 하면 공용 DB 게이트가 프로비저닝을 fail-closed 로 막는다).
   "gw_workspace",
   "gw_workspace_member",
+  // #1291 v3 self-rls 의 스코프 전달 표 — **pg_backend_pid() 키** 프로세스 인프라다(각 백엔드가 제 pid 행만
+  //  본다). 테넌트 축을 붙이면 PK(pid,kind,key)가 자연키로 판정돼 (tenant_id,…) 재작성이 일어나는데,
+  //  이 표의 격리 축은 테넌트가 아니라 pid 라 재작성이 의미 없고 self-rls 의 정책 조인만 흔든다.
+  //  reader 역의 테넌트 격리는 정책 쪽(org/tenancy/activate.ts 의 RESTRICTIVE tenant_restrict_reader)이 담당.
+  "lively_vis_scope",
 ]);
 
 function qi(name: string): string {
