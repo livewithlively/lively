@@ -15,7 +15,7 @@ import { createNdjsonParser, runCli, reduceProgress, lastError, cliContractVerdi
 import { argvFor, RUN_KINDS, IPC } from "./ipc-contract.mjs";
 import { trayMenuModel, statusLabel } from "./tray-menu.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
-import { shouldCheckForUpdates, updateFailureNote, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
+import { shouldCheckForUpdates, updateFailureNote, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV, shouldAutoApplyUpdate, updateReadyNote, AUTO_APPLY_DELAY_MS } from "./update-policy.mjs";
 import { normalizeBounds, pickBounds, MIN_SIZE, DEFAULT_SIZE, MIN_VISIBLE } from "./window-bounds.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { manifestRefs, manifestProblems, GITHUB_SAFE } from "../verify-update-manifest.mjs";
@@ -539,6 +539,69 @@ t('U9 ★ 설치기 없는 빌드(app-update.yml 부재)는 확인하지 않는�
   const line = main.split('\n').find((l) => l.includes('hasPublishConfig:'));
   assert.ok(line && /existsSync/.test(line), `상수로 되돌아갔다: ${line}`);
   assert.ok(line.includes('app-update.yml'), line);
+});
+
+// ── U10~U12. 받은 업데이트의 **적용** — 앱이 스스로 닫고·설치하고·다시 뜬다 (#1541) ──────────────
+// 실측(2026-08-18, 사용자 Windows 0.1.320→0.1.324): "두 번 재시작해야 했고, 바로가기가 사라졌다고 나왔고,
+//  트레이에서 껐다 켜는 게 불편하다." 셋 다 한 원인 — 종전 안내("앱을 다시 켜면 적용")는 사람과 설치기를
+//  경쟁시켰다: 설치기(--updated)는 떠 있는 앱을 묻지 않고 죽이고(app-builder-lib CHECK_APP_RUNNING), 조용한
+//  설치(/S)는 --force-run 없이는 앱을 다시 띄우지 않는다. 그래서 적용은 앱이 quitAndInstall(true,true) 로 한다.
+t('U10 자동 적용 판정 — 엣지 표(창이 안 보일 때만 · 작업 중/질문 대기 중 금지 · 받은 게 없으면 금지)', () => {
+  const R = { ready: true, busy: false, windowVisible: false, promptsPending: 0 };
+  assert.equal(shouldAutoApplyUpdate(R), true, '트레이 상주(창 안 보임)·한가함 → 자동 적용');
+  assert.equal(shouldAutoApplyUpdate({ ...R, windowVisible: true }), false, '창을 보고 있으면 자동으로 사라지면 안 된다(버튼으로)');
+  assert.equal(shouldAutoApplyUpdate({ ...R, busy: true }), false, 'CLI 작업 중엔 재시작하면 작업이 끊긴다');
+  assert.equal(shouldAutoApplyUpdate({ ...R, promptsPending: 1 }), false, '사람의 답을 기다리는 질문이 있으면 금지');
+  assert.equal(shouldAutoApplyUpdate({ ...R, ready: false }), false, '받아 둔 게 없으면 적용할 게 없다');
+  // 새 헬퍼의 빈 입력 — undefined/빈 객체는 "하지 않는다"(안전측)
+  assert.equal(shouldAutoApplyUpdate(undefined), false);
+  assert.equal(shouldAutoApplyUpdate({}), false);
+  // 경계: promptsPending 0 은 허용, 1 부터 금지 · 지연은 '방금 닫은 창을 곧 다시 여는' 경우를 흡수할 만큼
+  assert.equal(shouldAutoApplyUpdate({ ...R, promptsPending: 0 }), true);
+  assert.ok(AUTO_APPLY_DELAY_MS >= 3000 && AUTO_APPLY_DELAY_MS <= 30_000, `지연이 비상식적: ${AUTO_APPLY_DELAY_MS}`);
+  // 문구: 종전의 함정 문구("다시 켜면")를 다시 쓰지 않는다 — 사람이 켜는 순간 설치기와 경쟁한다.
+  assert.match(updateReadyNote('0.1.325'), /0\.1\.325/);
+  assert.ok(!/다시 켜면/.test(updateReadyNote('0.1.325')), '사람에게 직접 켜라고 하면 종전 경쟁이 재현된다');
+  assert.match(updateReadyNote(''), /준비됨/);
+});
+
+t('U11 트레이 — 받아 둔 업데이트가 있으면 적용 항목이 **가장 위**에, 작업 중엔 잠긴다', () => {
+  const base = { cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true, nodeRunning: true };
+  const none = trayMenuModel(base);
+  assert.ok(!none.some((m) => m.id === 'apply-update'), '받은 게 없으면 항목이 없어야 한다');
+  const m = trayMenuModel({ ...base, updateReady: '0.1.325' });
+  const i = m.findIndex((x) => x.id === 'apply-update');
+  assert.ok(i >= 0, '적용 항목이 없다 — 트레이만 보는 사람에겐 유일한 입구다');
+  assert.ok(i < m.findIndex((x) => x.id === 'node-stop' || x.id === 'node-start'), '노드 항목보다 위여야 눈에 띈다');
+  assert.match(m[i].label, /0\.1\.325/, '어느 버전인지 적는다');
+  assert.notEqual(m[i].enabled, false);
+  assert.equal(trayMenuModel({ ...base, updateReady: '0.1.325', busy: true })[i].enabled, false, '작업 중엔 잠근다');
+});
+
+t('U12 ★ 배선 — 적용은 quitAndInstall(조용히+다시 띄우기)이고, "종료하면 설치" OS 알림은 쓰지 않는다', () => {
+  const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
+  // isSilent=true, isForceRunAfter=true — 둘 중 하나라도 빠지면 종전 경쟁이 그대로다(설치기가 앱을 안 띄우거나 UI 를 띄운다).
+  assert.match(main, /quitAndInstall\(\s*true\s*,\s*true\s*\)/, 'quitAndInstall(true, true) 가 아니다');
+  // checkForUpdatesAndNotify 는 "종료하면 설치됩니다" 알림을 띄워 사람을 종전 함정으로 부른다.
+  const code = main.split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');   // 주석 제외 — 코드만 본다
+  assert.ok(!/checkForUpdatesAndNotify/.test(code), 'checkForUpdatesAndNotify 를 다시 쓰고 있다');
+  // 리스너는 한 번만 — 확인할 때마다 on() 을 걸면 누적돼 같은 문구가 n 번 찍힌다.
+  const onCount = (main.match(/autoUpdater\.on\("update-downloaded"/g) || []).length;
+  assert.equal(onCount, 1, `update-downloaded 리스너 등록이 ${onCount}곳`);
+  assert.ok(/updater\s*=\s*autoUpdater/.test(main) && /if \(updater\) return updater/.test(main), '업데이터 인스턴스를 재사용하지 않는다');
+  // 창 숨김 → 자동 적용 예약 · 창 표시 → 취소 (사람이 보고 있으면 사라지지 않는다)
+  assert.match(main, /win\.on\("hide",\s*\(\)\s*=>\s*scheduleAutoApply\(\)\)/, '창을 숨길 때 자동 적용을 예약하지 않는다');
+  assert.match(main, /win\.on\("show"/, '창을 다시 열 때 예약을 취소하지 않는다');
+  // IPC·preload·렌더러가 같은 채널을 본다
+  assert.equal(IPC.APPLY_UPDATE, 'lively:apply-update');
+  assert.match(main, /ipcMain\.handle\(IPC\.APPLY_UPDATE/, '메인에 APPLY_UPDATE 핸들러가 없다');
+  const preload = readFileSync(fileURLToPath(new URL('../preload/preload.cjs', import.meta.url)), 'utf8');
+  assert.match(preload, /applyUpdate:/, 'preload 가 applyUpdate 를 노출하지 않는다');
+  const html = readFileSync(fileURLToPath(new URL('../renderer/index.html', import.meta.url)), 'utf8');
+  const js = readFileSync(fileURLToPath(new URL('../renderer/app.js', import.meta.url)), 'utf8');
+  assert.match(html, /id="apply-update"/, '렌더러에 적용 버튼이 없다');
+  assert.match(js, /window\.lively\.applyUpdate\(\)/, '버튼이 applyUpdate 를 부르지 않는다');
+  assert.match(js, /updateReady/, '렌더러가 updateReady 로 버튼을 보이지 않는다');
 });
 
 t('D6 ★ 답한 프롬프트는 다시 뜨지 않는다(리듀서가 옛 prompt 를 물고 있으면 안 된다)', () => {

@@ -50,6 +50,10 @@ function renderState(s) {
   // 버전은 늘 보인다 — 제보할 때 가장 먼저 묻는 값이다. 앱과 키트는 갱신 주기가 달라 따로 적는다.
   $("ver").textContent = `앱 ${s?.appVersion || "알 수 없음"} · ${s?.kitVersion ? "키트 " + s.kitVersion : "키트 미설치"}`;
   $("upd-note").textContent = s?.updateNote || "";
+  // 받아 둔 업데이트가 있으면 **적용 버튼**을 준다 — 앱이 스스로 닫고·설치하고·다시 뜬다. 종전 "다시 켜면 적용" 은
+  //  사람과 설치기를 경쟁시켰다(두 번 재시작·바로가기 오류). 창을 닫아 두면 자동으로도 적용된다.
+  show($("apply-update"), !!s?.updateReady);
+  $("apply-update").disabled = !!s?.busy;
   for (const id of ["doctor", "kit-update", "logout"]) $(id).disabled = !!s?.busy;
   // 실행 여부를 **모를 때**(측정 실패)는 버튼을 잠그지 않는다 — 모른다고 사용자를 가두면 안 된다.
   const running = s?.nodeRunning === true, stopped = s?.nodeRunning === false;
@@ -146,6 +150,12 @@ $("logout").addEventListener("click", async () => {
   if (!window.confirm("로그아웃하면 이 PC 의 토큰이 지워지고 다시 로그인해야 합니다.\n노드는 계속 실행됩니다.\n\n계속할까요?")) return;
   const r = await window.lively.run("logout");
   if (r?.error) log("✗ " + r.error);
+});
+$("apply-update").addEventListener("click", async () => {
+  $("apply-update").disabled = true;
+  $("upd-note").textContent = "앱을 다시 시작해서 적용합니다…";
+  const r = await window.lively.applyUpdate();
+  if (r?.error) { $("upd-note").textContent = r.error; $("apply-update").disabled = false; }
 });
 $("check-update").addEventListener("click", async () => {
   $("upd-note").textContent = "확인 중…";

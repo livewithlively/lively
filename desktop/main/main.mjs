@@ -21,7 +21,7 @@ import { runCli, reduceProgress, cliContractVerdict } from "./cli-runner.mjs";
 import { trayMenuModel } from "./tray-menu.mjs";
 import { IPC, RUN_KINDS, RETRYABLE_KINDS, argvFor } from "./ipc-contract.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
-import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
+import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, shouldAutoApplyUpdate, AUTO_APPLY_DELAY_MS, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
 import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 
@@ -34,6 +34,9 @@ let tray = null, win = null, quitting = false;
 let running = null;                 // { kind, handle } — 지금 도는 CLI(동시 1개)
 let lastRun = null;                 // 마지막으로 시도한 { kind, opts } — '다시 시도' 가 이걸 그대로 다시 돈다
 let updateNote = null;              // 업데이트 확인 결과 한 줄(사람용)
+let updateReady = null;             // 받아 둔 새 버전(문자열) — 있으면 '적용(다시 시작)' 이 뜬다
+let updater = null;                 // electron-updater 인스턴스 — **한 번만** 만들고 리스너도 한 번만 건다(재확인마다 걸면 누적된다)
+let autoApplyTimer = null;          // 창이 안 보일 때 자동 적용 예약
 let state = {                       // 트레이·렌더러가 함께 보는 스냅샷
   cliPath: null, cliFound: false, gatewayUrl: null, loggedIn: false, kitInstalled: false,
   nodeRegistered: false, nodeDaemon: false, nodeRunning: false, busy: false,
@@ -58,6 +61,7 @@ async function refreshState({ deep = false } = {}) {
   next.appVersion = safeAppVersion();
   next.kitVersion = readTrim(join(LIVELY_DIR, "kit-version"));
   next.updateNote = updateNote;
+  next.updateReady = updateReady;
   // 재시도는 **실패한 게 있고 그게 안전한 작업일 때만** 제안한다(렌더러가 판단하지 않는다).
   next.retryable = !!(lastRun && RETRYABLE_KINDS.includes(lastRun.kind));
   next.logViews = LOG_VIEWS.map((v) => ({ id: v.id, label: v.label }));
@@ -134,6 +138,7 @@ function renderTray() {
 function onMenu(id) {
   if (id === "open") return showWindow();
   if (id === "quit") { quitting = true; return app.quit(); }
+  if (id === "apply-update") return applyUpdate();
   if (id === "logs") return shell.openPath(join(LIVELY_DIR, "logs"));
   if (id === "open-web") return state.gatewayUrl && shell.openExternal(state.gatewayUrl);
   if (id === "setup") { showWindow(); return start("setup", {}); }
@@ -181,14 +186,62 @@ async function checkUpdates() {
   updateNote = updateStatusNote(verdict.reason);
   if (!verdict.ok) { send(IPC.LOG, { stream: "raw", line: updateNote }); void refreshState(); return; }
   try {
-    const { autoUpdater } = (await import("electron-updater")).default;
-    autoUpdater.autoDownload = true;
-    autoUpdater.on("error", (e) => { updateFailed = true; updateNote = updateFailureNote(e); send(IPC.LOG, { stream: "raw", line: updateNote }); void refreshState(); });
-    autoUpdater.on("update-not-available", () => { updateNote = "최신 버전입니다."; void refreshState(); });
-    autoUpdater.on("update-downloaded", (i) => { updateNote = `새 버전 ${i?.version || ""} 을 받았습니다 — 앱을 다시 켜면 적용됩니다.`; void refreshState(); });
-    await autoUpdater.checkForUpdatesAndNotify();
+    const u = await getUpdater();
+    // ⚠ checkForUpdatesAndNotify 가 아니다 — 그건 OS 알림으로 "종료하면 설치됩니다" 를 띄우는데, 이제 적용은
+    //  앱이 스스로 한다(applyUpdate). 그 문구가 사람을 종전의 함정(손으로 껐다 켜기)으로 다시 부른다.
+    await u.checkForUpdates();
   } catch (e) { updateFailed = true; updateNote = updateFailureNote(e); send(IPC.LOG, { stream: "raw", line: updateNote }); }
   void refreshState();
+}
+/** electron-updater — 한 번만 만들고 리스너도 한 번만. (종전엔 확인할 때마다 on() 을 다시 걸어 누적됐다.) */
+async function getUpdater() {
+  if (updater) return updater;
+  const { autoUpdater } = (await import("electron-updater")).default;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;   // 사람이 먼저 끄면 그때라도 설치한다(폴백) — 주 경로는 applyUpdate
+  autoUpdater.on("error", (e) => { updateFailed = true; updateNote = updateFailureNote(e); send(IPC.LOG, { stream: "raw", line: updateNote }); void refreshState(); });
+  autoUpdater.on("update-not-available", () => { updateNote = "최신 버전입니다."; void refreshState(); });
+  autoUpdater.on("update-available", (i) => { updateNote = `새 버전 ${i?.version || ""} 을 받는 중…`; void refreshState(); });
+  autoUpdater.on("update-downloaded", (i) => {
+    updateReady = String(i?.version || "") || "새 버전";
+    updateNote = updateReadyNote(i?.version);
+    send(IPC.LOG, { stream: "raw", line: updateNote });
+    void refreshState();
+    scheduleAutoApply();
+  });
+  updater = autoUpdater;
+  return updater;
+}
+/**
+ * 받아 둔 업데이트를 지금 적용 — 설치기가 앱을 닫고·설치하고·**다시 띄운다**(isSilent + isForceRunAfter).
+ *  종전 "앱을 다시 켜면 적용" 안내는 사람과 설치기를 경쟁시켰다(update-policy 머리말). 이제 사람은 아무것도 안 켠다.
+ */
+async function applyUpdate() {
+  if (!updateReady) return { ok: false, error: "받아 둔 업데이트가 없습니다." };
+  if (running) return { ok: false, error: "작업이 끝난 뒤에 적용합니다." };
+  try {
+    const u = await getUpdater();
+    quitting = true;                                   // 창 close 핸들러가 숨기기 대신 닫게
+    send(IPC.LOG, { stream: "raw", line: `업데이트 적용 — 앱을 다시 시작합니다 (${updateReady})…` });
+    u.quitAndInstall(true, true);                      // Windows: 설치기 /S --force-run · Linux AppImage: 교체 후 재실행
+    return { ok: true };
+  } catch (e) {
+    quitting = false;
+    const line = `업데이트 적용 실패: ${String(e?.message || e).slice(0, 200)}`;
+    send(IPC.LOG, { stream: "raw", line }); updateNote = line; void refreshState();
+    return { ok: false, error: line };
+  }
+}
+/** 창이 안 보이면(트레이 상주) 잠시 뒤 자동 적용 — 판단은 shouldAutoApplyUpdate(순수·표로 못박음). 창을 열면 취소. */
+function scheduleAutoApply() {
+  if (autoApplyTimer) { clearTimeout(autoApplyTimer); autoApplyTimer = null; }
+  const ok = shouldAutoApplyUpdate({ ready: !!updateReady, busy: !!running, windowVisible: !!(win && win.isVisible()), promptsPending: pendingPrompts.size });
+  if (!ok) return;
+  autoApplyTimer = setTimeout(() => {
+    autoApplyTimer = null;
+    // 예약 뒤 상황이 바뀌었을 수 있다(창을 열었다·작업을 시작했다) — 다시 판정한다.
+    if (shouldAutoApplyUpdate({ ready: !!updateReady, busy: !!running, windowVisible: !!(win && win.isVisible()), promptsPending: pendingPrompts.size })) void applyUpdate();
+  }, AUTO_APPLY_DELAY_MS);
 }
 /** mac 서명 여부 — 서명되지 않은 번들은 codesign 검증에 실패한다. 못 재면 '서명 안 됨' 으로 본다(안전측). */
 function isMacSigned() {
@@ -214,6 +267,9 @@ function showWindow() {
   // 창을 닫아도 앱은 트레이에 남는다 — 노드 리모컨이 사라지면 안 된다.
   //  ⚠ 자리는 **숨기기 직전에** 저장한다. 'closed' 는 트레이 상주라 앱 종료 때까지 안 올 수도 있다.
   win.on("close", (e) => { saveBounds(); if (!quitting) { e.preventDefault(); win.hide(); } });
+  // 업데이트 자동 적용은 '사람이 안 보고 있을 때'만 — 창을 숨기면 예약하고, 다시 보이면 취소한다.
+  win.on("hide", () => scheduleAutoApply());
+  win.on("show", () => { if (autoApplyTimer) { clearTimeout(autoApplyTimer); autoApplyTimer = null; } });
   win.on("closed", () => { win = null; });
   win.on("moved", saveBounds);
   win.on("resized", saveBounds);
@@ -245,6 +301,7 @@ async function start(kind, opts) {
     onPrompt: (p) => askUser(p),
   });
   running = null;
+  scheduleAutoApply();   // 작업 중엔 미뤄 둔 업데이트 적용을 다시 판정한다
   state = { ...state, busy: false };
   await refreshState({ deep: true });          // 방금 바꾼 상태를 **실측으로** 되읽는다(추측으로 그리지 않는다)
   renderTray(); send(IPC.STATE, state);
@@ -352,6 +409,7 @@ ipcMain.handle(IPC.READ_LOG, (_e, { id }) => {
   catch (e) { return { ok: false, error: String(e?.message || e) }; }
 });
 ipcMain.handle(IPC.CHECK_UPDATE, async () => { updateFailed = false; await checkUpdates(); return { ok: true, note: updateNote }; });
+ipcMain.handle(IPC.APPLY_UPDATE, async () => applyUpdate());
 ipcMain.handle(IPC.SET_APP_AUTOLAUNCH, (_e, { on }) => { setAppAutoLaunch(!!on); return { ok: true, on: appAutoLaunchEnabled() }; });
 // 외부 링크는 메인만 연다 — 렌더러에 shell 을 노출하면 임의 URL·파일 열기가 된다.
 ipcMain.handle(IPC.OPEN_EXTERNAL, (_e, { url }) => {
