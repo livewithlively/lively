@@ -341,9 +341,13 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
      항목 사이를 띄우고, 장은 카드처럼 바탕을 준다. 필터 줄은 없다(애초에 남은 것만 싣는다). */
 .tl-wrap { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 /* 머리 아래 한 줄 — 이 화면이 무엇을 보고 있는지의 사실(세션 상태·프로젝트·하네스). 가운데 대화창 머리와 같은 정보 층. */
-.tl-meta { flex: none; padding: 8px 16px; border-bottom: 1px solid var(--line-row, #EDF1F8); }
-.tl-meta[hidden] { display: none; }
-.tl-body { flex: 1; min-height: 0; overflow: auto; padding: 10px 16px 22px; }
+.tl-facts { flex: none; padding: 8px 16px; border-bottom: 1px solid var(--line-row, #EDF1F8); }
+.tl-facts[hidden] { display: none; }
+.tl-scroll { flex: 1; min-height: 0; overflow: auto; padding: 10px 16px 22px; }
+/* 무게가 낮아 접어 둔 것 — 지운 게 아니라 접었다는 표시(#1756). */
+.tl-rest { display: block; width: 100%; margin: 10px 0 0; padding: 8px 10px; border: 1px dashed var(--line-net, #DCE6F5); border-radius: 10px;
+  background: none; font: inherit; font-size: 12px; color: var(--muted); cursor: pointer; }
+.tl-rest:hover { color: var(--ink); background: var(--bg-tint, #F6FAFF); border-color: var(--line-net-2, #CFE0F7); }
 .tl-scope { font-size: 12px; color: var(--muted); }
 .tl-wrap .v2-aside-h .v2-k { margin-left: auto; }
 .tl-list { display: flex; flex-direction: column; min-height: 0; }
