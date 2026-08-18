@@ -52,7 +52,11 @@ const runRunner = (script, extraEnv, payload) => spawnSync(process.execPath, [jo
   // ⚠ tmpdir 리다이렉트는 세 변수 전부 — POSIX 는 TMPDIR 를 보지만 **Windows 의 os.tmpdir() 는 TMPDIR 를
   //  무시하고 TEMP→TMP 를 본다**(CI 윈도우 실측: TMPDIR 만 주면 러너가 실 TEMP 에 플래그를 써서 GG6b 가
   //  '플래그 0개'로 오판 — 런북 ⑥⑦과 같은 '윈도우에서만 조용히 빗나가는' 부류).
-  env: { ...process.env, LIVELY_HOME: HOME, TMPDIR: TMP, TEMP: TMP, TMP: TMP, GROK_HOOK_EVENT: "stop", LIVELY_HARNESS: "", ...extraEnv },
+  // ⚠ LIVELY_SESSION_ID·LIVELY_TOKEN 을 비운다 — 이 테스트가 **웹터미널 박스 안에서** 돌면(개발자가 세션에서 npm test) 러너가
+  //  process.env 의 박스 id 를 물려받고, work-flag 는 토큰을 실 홈(~/.lively/token — LIVELY_HOME 아님)에서 읽어 **실 게이트웨이에**
+  //  `session_id: "ggsid-open"` 을 그 박스의 대화 UUID 로 보고한다(2026-08-18 실측: dev 박스 3개의 claude_session_id 가 ggsid-open 으로
+  //  덮여 정밀 복원·세션 대화창(#1719)이 기록을 못 찾았다). 박스 밖(CI)에서는 원래 없던 값이라 무해하다.
+  env: { ...process.env, LIVELY_HOME: HOME, TMPDIR: TMP, TEMP: TMP, TMP: TMP, GROK_HOOK_EVENT: "stop", LIVELY_HARNESS: "", LIVELY_SESSION_ID: "", LIVELY_TOKEN: "", ...extraEnv },
 });
 
 // [GG6] 가드 발동 — 러너 5종: exit0 + stdout 빈 + 샌드박스( .lively + tmp ) 무변화.

@@ -9,7 +9,7 @@
 import { $view, api, el, logout, navOn, profileAvatar, setUiModeOverride, state, toast } from '../core.js';
 import { fillLivCards, renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame, appIcon, openLaunchpad, visibleApps } from './apps.js';
-import { dotCls, mergeSessions, projName, renderHome, renderProject, renderSession, type Proj, type Sess, type V2Data } from './views.js';
+import { dotCls, mergeSessions, projName, refreshSession, renderHome, renderProject, renderSession, unmountSession, type Proj, type Sess, type V2Data } from './views.js';
 
 const OPEN_KEY = 'lively_v2_open';
 let root: HTMLElement | null = null;
@@ -36,14 +36,16 @@ export async function bootV2(): Promise<void> {
   window.addEventListener('hashchange', () => { void route(); });
   await route();
   // 사이드바 상태점 — 라이브 세션은 자주 바뀐다. 20초 폴링(가벼운 목록 두 개). 탭이 숨어 있으면 건너뛴다.
-  setInterval(() => { if (document.hidden) return; void loadData().then(drawSide); }, 20000);
+  setInterval(() => { if (document.hidden) return; void loadData().then(() => { drawSide(); const c = parse(); if (c.segs[0] === 's' && c.segs[1]) { const sid = decodeURIComponent(c.segs[1]); refreshSession(data, sid); drawAsideSession(data.sessions.find((x) => x.id === sid || x.logId === sid) || null); } }); }, 20000);
 }
 
 // ── 데이터 ──
 async function loadData(): Promise<void> {
   const [pj, live, logs] = await Promise.all([
     api('/api/ui/v6/projects?mine=1').then((d) => (d && d.projects) || []).catch(() => data.projects),
-    api('/api/ui/terminal/sessions').then((d) => (d && d.sessions) || []).catch(() => []),
+    // includeProjects=1 — 프로젝트 폴더 세션까지(기본은 '내 개인 세션'만이라 프로젝트 트리 아래 라이브 세션이 통째로 빠졌다).
+    //  프로젝트 세션은 로그인한 전원에게 보인다(#452) — 클래식 AI 세션 탭과 같은 목록이다.
+    api('/api/ui/terminal/sessions?includeProjects=1').then((d) => (d && d.sessions) || []).catch(() => []),
     api('/api/ui/v6/sessions').then((d) => (d && d.sessions) || []).catch(() => []),
   ]);
   const projects: Proj[] = (pj as any[]).map((p) => ({ id: Number(p.id), name: String(p.name || ''), status: p.status ?? null, status_category: p.status_category ?? null, my_session_count: p.my_session_count, description: p.description ?? null, list_id: p.list_id ?? null, updated_at: p.updated_at ?? null }));
@@ -64,6 +66,7 @@ async function route(): Promise<void> {
   const page = segs[0] || '';
   // 리브 페이지를 떠나면 그 폴링이 멈추도록 route 표식을 되돌린다(liv.ts 는 body.dataset.route==='liv' 동안만 폴링).
   document.body.dataset.route = 'v2';
+  if (page !== 's') unmountSession();   // 세션 화면을 떠나면 그 폴링·리스너를 끈다(다음 렌더가 덮어써도 타이머는 남는다)
   markActive(page === 'p' ? 'p:' + segs[1] : page === 's' ? 's:' + decodeURIComponent(segs[1] || '') : page === 'liv' ? 'liv' : page === '' || page === 'dashboard' ? 'home' : '');
   root!.classList.toggle('no-aside', false);
   try {
@@ -86,8 +89,9 @@ async function route(): Promise<void> {
       drawAsideProject(detail, id);
     } else if (page === 's' && segs[1]) {
       const id = decodeURIComponent(segs[1]);
-      let s = data.sessions.find((x) => x.id === id);
-      if (!s) { await loadData(); drawSide(); s = data.sessions.find((x) => x.id === id); }
+      const find = (): Sess | undefined => data.sessions.find((x) => x.id === id) || data.sessions.find((x) => x.logId === id);
+      let s = find();
+      if (!s) { await loadData(); drawSide(); s = find(); }
       if (seq !== routeSeq) return;
       renderSession(centerEl, data, id);
       drawAsideSession(s || null);
@@ -153,11 +157,12 @@ function drawSide(): void {
   sideEl.replaceChildren(
     el('div', { class: 'v2-side-top' },
       el('a', { class: 'v2-logo', href: '#/', title: '홈으로', 'data-nav': 'home' }, 'Lively', el('span', { class: 'pulse-dot', 'aria-hidden': 'true' }))),
-    livOn ? el('a', { class: 'v2-liv-btn' + (activeKey === 'liv' ? ' on' : ''), href: '#/liv', 'data-nav': 'liv' },
-      el('span', { class: 'lm', text: 'L' }), el('span', { text: '리브' }), el('span', { class: 'sub', text: '워크스페이스 담당자' })) : null,
+    // ⚠ replaceChildren 은 null 을 글자 "null" 로 그린다(el() 과 다르다) — 조건부 자식은 스프레드로.
+    ...(livOn ? [el('a', { class: 'v2-liv-btn' + (activeKey === 'liv' ? ' on' : ''), href: '#/liv', 'data-nav': 'liv' },
+      el('span', { class: 'lm', text: 'L' }), el('span', { text: '리브' }), el('span', { class: 'sub', text: '워크스페이스 담당자' }))] : []),
     el('div', { class: 'v2-side-sec' }, el('span', { class: 'v2-k', text: `내 프로젝트 · ${data.projects.length}` }),
       el('a', { class: 'v2-add', href: '#/projects2', text: '+ 새 프로젝트', title: '프로젝트 앱(보드)에서 만듭니다' })),
-    data.projects.length > 12 ? el('div', { class: 'v2-find' }, el('input', { class: 'v2-find-in', type: 'search', placeholder: '프로젝트 찾기', 'aria-label': '프로젝트 찾기', value: sideFilter, oninput: (e: any) => { sideFilter = e.target.value; drawSide(); const i = sideEl!.querySelector('.v2-find-in') as HTMLInputElement | null; if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } } })) : null,
+    ...(data.projects.length > 12 ? [el('div', { class: 'v2-find' }, el('input', { class: 'v2-find-in', type: 'search', placeholder: '프로젝트 찾기', 'aria-label': '프로젝트 찾기', value: sideFilter, oninput: (e: any) => { sideFilter = e.target.value; drawSide(); const i = sideEl!.querySelector('.v2-find-in') as HTMLInputElement | null; if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } } }))] : []),
     el('div', { class: 'v2-tree' },
       ...projects.map(projRow),
       noProj.length ? el('div', { class: 'v2-pj open' },
@@ -216,7 +221,8 @@ function drawAsideSession(s: Sess | null): void {
   asideEl.replaceChildren(
     el('div', { class: 'v2-aside-h' }, el('b', { text: '이 세션' })),
     el('dl', { class: 'v2-facts' }, ...facts.flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: v })])),
-    s.projectId ? el('a', { class: 'btn btn-ghost btn-sm', href: '#/p/' + s.projectId, text: '프로젝트로' }) : null,
+    // ⚠ replaceChildren 에 null 을 넘기면 글자 "null" 이 그려진다(el() 과 달리 걸러 주지 않는다) — 프로젝트 없는 세션에서 실측.
+    ...(s.projectId ? [el('a', { class: 'btn btn-ghost btn-sm', href: '#/p/' + s.projectId, text: '프로젝트로' })] : []),
     el('p', { class: 'v2-fine', text: '이 세션이 읽고 찾은 지식(get·search)은 다음 단계에서 여기에 순서대로 붙습니다.' }));
 }
 

@@ -19,6 +19,7 @@ import { renderTranscript, firstTranscriptCwd, materializeTranscriptIfMissing } 
 import { createSession, sharedRoot } from "../terminal/terminal-sessions.js";
 import path from "node:path";
 import { getSessionState } from "./session-state.js";
+import { transcriptRange } from "./transcript-range.js";   // #1719 — 창 읽기(대화창)
 
 export const MAX_DELTA = 8 * 1024 * 1024;   // 한 번에 받는 델타 상한(8MB) — 큰 트랜스크립트도 청크로 나눠 보내게.
 
@@ -183,7 +184,19 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     const denied = checkViewGate({ requester, owner, viewPolicy: cfg.view_policy, isProjectMember });
     if (denied) throw new HttpError(denied.status, denied.message);
 
-    const log = await readSessionLog(nodeId, sessionId, from);
+    // #1719 세션 대화창 — to/tail 이 오면 창(window)으로 읽는다(꼬리부터, 상한 4MB — transcript-range.ts).
+    //  둘 다 없으면 종전대로 from 부터 끝까지(클래식 대화록 뷰어·이어받기가 전문을 쓴다 — 그 경로는 손대지 않는다).
+    const windowed = req.query.to !== undefined || req.query.tail !== undefined;
+    let log: { from: number; bytes: number; data: Buffer };
+    let winEnd: number | undefined;
+    if (windowed) {
+      const total = await sessionLogWatermark(nodeId, sessionId);
+      const rng = transcriptRange(total, { from: req.query.from, to: req.query.to, tail: req.query.tail });
+      log = await readSessionLog(nodeId, sessionId, rng.start, rng.end);
+      winEnd = rng.end;
+    } else {
+      log = await readSessionLog(nodeId, sessionId, from);
+    }
     res.setHeader("Cache-Control", "no-store");
     if (req.query.view === "render") {   // 웹뷰: 사람이 읽을 항목으로 파싱(채널필터) — 툴결과·노이즈 제거.
       // 서브에이전트 트랜스크립트(#905 C1 슬⑥)는 전 줄이 isSidechain 이라, 서브에이전트일 때만 sidechain 포함해 렌더.
@@ -194,6 +207,7 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
     res.setHeader("X-Log-Bytes", String(log.bytes));   // 전체 워터마크 — UI 가 증분 tail 에 쓴다
     res.setHeader("X-Log-From", String(log.from));
+    if (winEnd !== undefined) res.setHeader("X-Log-To", String(winEnd));
     res.end(log.data);
   }));
 
