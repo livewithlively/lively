@@ -192,26 +192,22 @@ export function createTimeline(host, ctx) {
     //  ① 같은 대상은 한 장으로 접는다(같은 파일을 열 번 고쳤어도 그 파일은 하나다 — 횟수는 카드 안에).
     //  ② 지시는 결과물이 아니다(무엇을 시켰나는 대화가 말한다).
     //  ③ 무게가 낮은 것은 지우지 않고 **접는다** — 한 번 스친 파일까지 늘어놓으면 중요한 게 묻힌다.
-    const WEIGHT_KEEP = 55;
-    function weightOf(it) {
-        if (it.kind === 'activity')
-            return 100; // 사람이 남긴 작업 기록 = 가장 무겁다
-        if (it.kind === 'knowledge')
-            return 95; // 조직에 남는 것
-        if (it.kind === 'project' || it.kind === 'task')
-            return 90; // 일의 뼈대가 바뀐 것
-        if (it.kind === 'cmd')
-            return 85; // 커밋 — 밖으로 나간 결과
-        if (it.kind === 'file')
-            return (it.verb === '씀' ? 70 : 45) + Math.min(20, (it.count - 1) * 5);
-        return 30; // 새로 만든 파일 > 여러 번 고친 파일 > 한 번 스친 파일
-    }
+    //  ★ 무엇이 카드가 되나 — 점수가 아니라 **종류**로 가른다(#1756, 상민님: "정말로 누가 봐도
+    //    유의미한 변화가 있는 것만 올라가야지 그냥 다 올라가잖아").
+    //    실측(이 화면을 만든 세션): 도구 호출 109건 중 대부분이 파일 편집이었고 커밋·지식은 몇 건뿐이었다.
+    //    이어서: "커밋도 솔직히 별로 쓸데없지. 추가된 기능 정도만 보이면 되잖아."
+    //    파일을 몇 번 고쳤나도, 그걸 몇 번 커밋했나도 **과정**이다 — 읽는 사람이 알고 싶은 것은 "무엇이 생겼나"다.
+    //    그래서 카드가 되는 것은 이 넷뿐이다:
+    //      · 작업 기록(무엇을 했다고 남긴 것)  · 지식(조직에 남는 것)  · 프로젝트  · 태스크(일의 뼈대)
+    //    파일 편집·커밋·그 밖의 명령은 지우지 않고 **접는다** — 안 보이는 것과 없는 것은 다르다.
+    const OUTCOME_KINDS = new Set(['activity', 'knowledge', 'project', 'task']);
+    const isOutcome = (it) => OUTCOME_KINDS.has(it.kind);
     let restOpen = false;
     function outcomes() {
         const by = new Map();
         for (const it of items) {
             if (it.kind === 'say')
-                continue;
+                continue; // 지시는 결과물이 아니다(가운데 대화가 말한다)
             const k = it.kind + '|' + it.label;
             const cur = by.get(k);
             if (!cur) {
@@ -227,7 +223,21 @@ export function createTimeline(host, ctx) {
                 cur.children = [...(cur.children || []), ...it.children];
         }
         const all = [...by.values()].sort((a, b) => tsNum(a.ts) - tsNum(b.ts));
-        return { keep: all.filter((it) => weightOf(it) >= WEIGHT_KEEP), rest: all.filter((it) => weightOf(it) < WEIGHT_KEEP) };
+        return { keep: all.filter(isOutcome), rest: all.filter((it) => !isOutcome(it)) };
+    }
+    /** 접힌 것의 이름 — 무엇을 접었는지 그대로 말한다('그 밖에 N개'는 열어 보기 전엔 아무 뜻이 없다). */
+    function restLabel(rest) {
+        const files = rest.filter((it) => it.kind === 'file').length;
+        const commits = rest.filter((it) => it.kind === 'cmd' && it.verb === '커밋').length;
+        const etc = rest.length - files - commits;
+        const parts = [];
+        if (files)
+            parts.push(`손댄 파일 ${files}개`);
+        if (commits)
+            parts.push(`커밋 ${commits}개`);
+        if (etc)
+            parts.push(`그 밖 ${etc}개`);
+        return parts.join(' · ') + ' 보기';
     }
     function paintOutcomes() {
         const { keep, rest } = outcomes();
@@ -253,7 +263,7 @@ export function createTimeline(host, ctx) {
             kids.push(el('button', {
                 class: 'tl-rest', type: 'button', 'aria-expanded': String(restOpen),
                 onclick: () => { restOpen = !restOpen; paint(); },
-            }, restOpen ? '덜 중요한 변화 접기' : `덜 중요한 변화 ${rest.length}개 보기`));
+            }, restOpen ? '과정 접기' : restLabel(rest)));
         }
         list.replaceChildren(...kids);
     }
