@@ -389,12 +389,15 @@ export function mountSessionChat(host, first, opts) {
                 schedule();
                 return;
             }
+            // ⚠ 압축(Compacting) 탓을 하지 않는다 — 압축은 새 uuid 파일로 이어지고 폴링이 그 전환을 따라간다(아래 poll()). 여기 닿는
+            //  '기록 없음'의 실제 원인은 대부분 ① 방금 연 세션(하네스 부팅 전) ② 로그인·신뢰 대화상자에 멈춤 — 둘 다 **터미널에만 보인다**.
+            //  그래서 문구가 터미널을 가리키고, 버튼도 이 경우에 항상 둔다(막다른 안내 금지 — 확인할 길을 같이 준다).
             const msg = !tries.length ? '이 세션의 대화 id 를 아직 몰라 여기서 읽을 수 없어요 — 첫 턴이 끝나면 중앙 기록으로 보입니다. 지금은 터미널로 보세요.'
-                : notYet ? (canType() ? '아직 대화 기록이 없어요 — 방금 열렸거나 맥락을 정리(압축)하는 중일 수 있어요. 기록이 생기면 바로 여기 보입니다.' : '이 세션의 대화 기록을 찾지 못했어요.')
+                : notYet ? (canType() ? '아직 대화 기록이 없어요. 세션이 방금 떴다면 곧 여기 보이고, 계속 비어 있으면 로그인·확인 대화상자에 멈춰 있는 것일 수 있어요 — 터미널로 확인해 보세요.' : '이 세션의 대화 기록을 찾지 못했어요.')
                     : unreadable ? String(lastErr.message)
                         : lastErr?.status === 409 ? '이 세션의 대화 파일은 그 컴퓨터에 있어 여기서 바로 읽지 못해요. 첫 턴이 끝나면 중앙 기록으로 보입니다.'
                             : `대화 기록을 불러오지 못했습니다. ${lastErr?.message || ''}`;
-            view.list.append(el('div', { class: 'livc-open sc-empty' }, el('p', { text: msg }), !notYet && opts.terminalSrc && isBox ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '터미널로 보기', onclick: () => toggleTerminal(true) }) : null));
+            view.list.append(el('div', { class: 'livc-open sc-empty' }, el('p', { text: msg }), opts.terminalSrc && isBox ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '터미널로 보기', onclick: () => toggleTerminal(true) }) : null));
             paintState();
             // 라이브 박스면 파일이 생기는 순간을 잡는다(사람이 터미널에서 먼저 말을 걸 수도 있다) — 첫 대화 뒤에 여기로 흘러든다.
             //  못 읽는 하네스면 기다려도 안 온다 — 폴링하지 않는다(보내기는 된다: 주입은 tmux 라 하네스 무관).
