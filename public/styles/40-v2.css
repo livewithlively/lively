@@ -210,42 +210,45 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 /* 홈 — 인사 + 입력창 하나(#1719, claude.ai 홈처럼) + 지금 도는 세션 */
 .v2-home { flex: 1; min-height: 0; display: flex; flex-direction: column; width: 100%; max-width: 780px; margin: 0 auto; padding: 34px 32px 18px; }
 /* 홈 = 런처(#1719 재설계) — 왼끝 정렬(가운데 정렬 낙수형 탈피), 입력 카드가 유일한 주인공. */
-.v2-home-launch { max-width: 720px; justify-content: flex-start; padding-top: clamp(36px, 13vh, 120px); }
+.v2-home-launch { max-width: 680px; justify-content: flex-start; padding-top: clamp(48px, 16vh, 150px); }
 .v2-home-eyebrow { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .v2-home-eyebrow .sep { color: var(--line-net-2, #CFE0F7); }
-.v2-home-eyebrow .st { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; color: var(--ink-sub); }
+.v2-home-eyebrow .st { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; color: var(--ink-sub); }
 .v2-home-eyebrow .st.wait { color: var(--amber, #B7791F); }
-.v2-home-launch .v2-h1 { font-size: 25px; letter-spacing: -.45px; margin: 8px 0 0; }
-.v2-launch { position: relative; margin-top: 16px; border: 1px solid var(--line-net, #D5DDEA); border-radius: 16px; background: var(--bg, #fff);
-  box-shadow: 0 1px 2px rgba(21, 35, 59, .05), 0 10px 30px -18px rgba(21, 35, 59, .18); padding: 14px 14px 10px; }
-.v2-launch:focus-within { border-color: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 14%, transparent), 0 10px 30px -18px rgba(21, 35, 59, .2); }
-.v2-launch-in { display: block; width: 100%; resize: none; border: 0; outline: 0; background: transparent; font: inherit; font-size: 15.5px; line-height: 1.6; min-height: 52px; }
+.v2-home-launch .v2-h1 { font-size: 29px; font-weight: 750; letter-spacing: -.7px; line-height: 1.28; margin: 14px 0 0; }
+.v2-home-sub { margin: 2px 0 0; font-size: 29px; font-weight: 750; letter-spacing: -.7px; line-height: 1.28; color: var(--muted-2, #A6B2C8); }
+.v2-launch { position: relative; margin-top: 26px; border: 1px solid var(--line-net, #D5DDEA); border-radius: 18px; background: var(--bg, #fff);
+  box-shadow: 0 1px 2px rgba(21, 35, 59, .04), 0 14px 40px -24px rgba(21, 35, 59, .16); padding: 16px 16px 12px; }
+.v2-launch:focus-within { border-color: color-mix(in srgb, var(--blue) 55%, var(--line-net, #D5DDEA)); box-shadow: 0 1px 2px rgba(21, 35, 59, .04), 0 14px 40px -22px rgba(45, 107, 240, .22); }
+.v2-launch-in { display: block; width: 100%; resize: none; border: 0; outline: 0; background: transparent; font: inherit; font-size: 15.5px; line-height: 1.65; min-height: 56px; }
 .v2-launch-in::placeholder { color: var(--muted-2, #a6b2c8); }
 .v2-launch-in:disabled { opacity: .55; }
-.v2-launch-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; border-top: 1px solid var(--line-row, #EDF1F8); padding-top: 9px; }
-/* 행선지 — "이 입력이 어디로 가는가"가 창 안에 산다. 칩이 곧 바꾸는 버튼이다. */
+.v2-launch-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; padding-top: 0; border-top: 0; }
+
+/* 행선지 — 컨트롤 줄에서 유일하게 '모양 있는' 칩. 나머지 실행 축은 글자만 남는다(전부 알약이면 카드가 폼으로 보인다). */
 .v2-dest { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.v2-dest-k { font-family: var(--mono, ui-monospace, monospace); font-size: 10px; letter-spacing: .06em; color: var(--muted); flex: none; }
-.v2-dest-chip { display: inline-flex; align-items: center; gap: 7px; max-width: 320px; height: 28px; padding: 0 10px; border: 1px solid var(--line, #E6ECF5); border-radius: 999px; background: var(--bg-tint, #F6FAFF); font: inherit; font-size: 12.5px; color: var(--ink); cursor: pointer; min-width: 0; }
-.v2-dest-chip:hover { border-color: var(--line-net-2, #CFE0F7); background: var(--bg, #fff); }
-.v2-dest-chip b { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.v2-dest-chip .car { color: var(--muted); font-size: 10px; flex: none; }
-.v2-dest-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line-net, #DCE6F5); flex: none; }
+.v2-dest-k { display: none; }
+.v2-dest-chip { display: inline-flex; align-items: center; gap: 7px; max-width: 300px; height: 30px; padding: 0 11px; border: 0; border-radius: 999px; background: var(--bg-tint, #F6FAFF); font: inherit; font-size: 12.5px; color: var(--ink); cursor: pointer; min-width: 0; }
+.v2-dest-chip:hover { background: var(--bg-tint-2, #EEF5FF); }
+.v2-dest-chip b { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.v2-dest-chip .car { color: var(--muted-2, #A6B2C8); font-size: 9px; flex: none; }
+.v2-dest-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted-3, #C2CCDD); flex: none; }
 .v2-dest-dot.on { background: var(--blue); }
-.v2-dest-why { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-/* [시키기] 왼쪽 컨트롤 띠(#1758) — 행선지 칩 + 제공자·모델·추론강도. 좁으면 줄바꿈하고 버튼은 늘 오른끝. */
-.v2-launch-ctl { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; flex: 1; min-width: 0; }
+.v2-dest-why { font-size: 11.5px; color: var(--muted-2, #A6B2C8); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.v2-dest-why:empty { display: none; }
+
+.v2-launch-ctl { display: flex; align-items: center; flex-wrap: wrap; gap: 3px 6px; flex: 1; min-width: 0; }
 .v2-launch-row > .v2-launch-send { align-self: flex-end; }
-.v2-run { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
-/* 행선지 칩(.v2-dest-chip)과 같은 몸통 — 한 줄에 서는 것들이라 크기·색이 갈리면 줄이 지저분해진다. */
-.v2-run-sel { appearance: none; -webkit-appearance: none; height: 28px; padding: 0 22px 0 10px; border: 1px solid var(--line, #E6ECF5); border-radius: 999px;
-  background-color: var(--bg-tint, #F6FAFF); color: var(--ink-sub, #5A6B85); font: inherit; font-size: 12.5px; max-width: 190px; cursor: pointer;
-  background-image: linear-gradient(45deg, transparent 50%, var(--muted, #7b879b) 50%), linear-gradient(135deg, var(--muted, #7b879b) 50%, transparent 50%);
-  background-position: calc(100% - 12px) 52%, calc(100% - 8px) 52%; background-size: 4px 4px, 4px 4px; background-repeat: no-repeat; }
-.v2-run-sel:hover:not(:disabled) { border-color: var(--line-net-2, #CFE0F7); background-color: var(--bg, #fff); color: var(--ink); }
+.v2-run { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; min-width: 0; }
+.v2-run-sel { appearance: none; -webkit-appearance: none; height: 30px; padding: 0 18px 0 8px; border: 0; border-radius: 8px;
+  background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M1 1l3 3 3-3' fill='none' stroke='%23A6B2C8' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 6px center;
+  font: inherit; font-size: 12px; color: var(--muted); cursor: pointer; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-run-sel:hover:not(:disabled) { color: var(--ink); background-color: var(--bg-tint, #F6FAFF); }
 .v2-run-sel:disabled { opacity: .55; cursor: default; }
-.v2-launch-send { flex: none; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 15px; }
-.v2-launch-send kbd { font-family: var(--mono, ui-monospace, monospace); font-size: 11px; opacity: .75; }
+.v2-run-sel:focus-visible { outline: 2px solid var(--blue); outline-offset: -1px; }
+
+.v2-launch-send { flex: none; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 16px; border-radius: 11px; font-weight: 650; }
+.v2-launch-send kbd { font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; opacity: .7; font-weight: 400; }
 .v2-dest-pop { position: absolute; left: 14px; bottom: 52px; width: min(360px, calc(100% - 28px)); z-index: 30; background: var(--bg, #fff); border: 1px solid var(--line, #E6ECF5); border-radius: 12px; box-shadow: 0 14px 36px rgba(21, 35, 59, .16); padding: 8px; }
 .v2-dest-q { width: 100%; height: 30px; border: 1px solid var(--line, #E6ECF5); border-radius: 8px; padding: 0 9px; font: inherit; font-size: 12.5px; background: var(--bg-tint, #F6FAFF); }
 .v2-dest-q:focus-visible { outline: 2px solid var(--blue); outline-offset: 0; border-color: transparent; }
