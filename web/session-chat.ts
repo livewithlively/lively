@@ -37,6 +37,7 @@ const WINDOW = 1_500_000;          // 첫 로드·[이전 불러오기] 한 번�
 const POLL_RUN_MS = 700;           // 도는 중(블록 단위로 즉시 쌓인다 — 이 값이 체감 지연)
 const POLL_IDLE_MS = 3000;         // 살아 있고 안 도는 중(다음 지시를 터미널에서 칠 수도 있다)
 const POLL_LOG_MS = 8000;          // 중앙 기록(턴 단위 — 자주 봐도 안 늘어난다)
+const POLL_LOG_LIVE_MS = 3000;     // 중앙 기록인데 살아서 도는 노드 세션(#1744) — 턴 끝나 올라오는 순간을 놓치지 않게 조금 촘촘히
 const INJECTED_RE = /^\s*(<command-name|<local-command-|<command-message|<command-args|<bash-|<task-notification|<system-reminder|Caveat:)/;
 const INTERRUPT_RE = /^\s*\[Request interrupted/;
 const CONTINUED_RE = /^\s*This session is being continued/;
@@ -48,7 +49,12 @@ async function rawGet(path: string): Promise<RawChunk> {
   const tok = localStorage.getItem(TOKEN_KEY); if (tok) headers.Authorization = 'Bearer ' + tok;
   const res = await fetch(apiUrl(path), { headers, credentials: 'same-origin' });
   const text = res.ok ? await res.text() : '';
-  if (!res.ok) { let msg = ''; try { msg = (await res.json())?.error || ''; } catch { /* */ } const e: any = new Error(msg || `요청 실패 (${res.status})`); e.status = res.status; throw e; }
+  if (!res.ok) {
+    let msg = ''; let j: any = null; try { j = await res.json(); msg = j?.error || ''; } catch { /* */ }
+    const e: any = new Error(msg || `요청 실패 (${res.status})`); e.status = res.status;
+    if (j && typeof j === 'object') { if (j.uuid) e.uuid = String(j.uuid); if (j.node) e.node = String(j.node); }   // 409 node(#1744) — 서버가 알려 주면 대화 uuid·노드
+    throw e;
+  }
   const n = (h: string): number => { const v = Number(res.headers.get(h)); return Number.isFinite(v) ? v : 0; };
   return { status: res.status, text, bytes: n('X-Log-Bytes'), from: n('X-Log-From'), to: n('X-Log-To') || (n('X-Log-From') + text.length), uuid: res.headers.get('X-Session-Uuid') || undefined, prev: res.headers.get('X-Prev-Session') || undefined };
 }
@@ -287,6 +293,15 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let cur: Rec | null = null;
   let src: Source | null = null;
   let loadedFrom = 0; let loadedTo = 0;
+  // 노드(멤버 PC) 세션의 중앙 기록 좌표(#1744) — 행이 아는 대화 uuid(logId·claudeSessionId) 또는 서버 409 `node` 응답이 준 uuid(nodeHint).
+  //  없으면 null(추측 금지). 노드 세션은 박스 대화 파일이 그 컴퓨터에 있어(409 node) 이 중앙 기록으로만 읽는다 — 박스 경로를 폴링하지 않는다.
+  let nodeHint: { uuid: string; node: string } | null = null;
+  const logSrc = (): Source | null => {
+    const sid = String(target.logId || target.raw?.claudeSessionId || nodeHint?.uuid || '');
+    if (!sid) return null;
+    return { kind: 'log', sid, node: String(target.logNode ?? nodeHint?.node ?? target.node ?? '') };
+  };
+  const sameSrc = (a: Source | null, b: Source | null): boolean => !!a && !!b && a.kind === b.kind && (a.kind === 'box' ? a.id === (b as { id: string }).id : a.sid === (b as { sid: string }).sid && a.node === (b as { node: string }).node);
   // 맥락 압축 사슬 — Claude Code 는 압축 때 새 uuid 의 새 파일을 연다(서버 findPrevTranscript 주석). curUuid = 지금 자라는 파일,
   //  oldestUuid/oldestPrev = 화면 맨 위 창이 속한 파일과 그 이전 파일(있으면 [압축 전 대화 불러오기]).
   let curUuid: string | null = null; let oldestUuid: string | null = null; let oldestPrev: string | null = null;
@@ -492,21 +507,32 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     return n;
   }
 
-  /** 첫 로드 — 어디서 읽을지 정하고 꼬리 창을 그린다. */
+  /** 첫 로드 — 어디서 읽을지 정하고 꼬리 창을 그린다. (뒤늦게 대화 uuid 를 알게 되면 update() 가 다시 부른다 — 노드 세션 #1744) */
+  let opening = false;
   async function open(): Promise<void> {
+    if (opening) return; opening = true;
+    try { await openInner(); } finally { opening = false; }
+  }
+  async function openInner(): Promise<void> {
     view.setNote('');
+    view.list.querySelector('.sc-empty')?.remove();     // 다시 여는 경우(대화 uuid 를 뒤늦게 앎, #1744) — 지난 '아직 없음' 안내는 물러난다
     const tries: Source[] = [];
     if (isBox) {
-      if (!target.node) tries.push({ kind: 'box', id: target.id });
-      const uuid = target.logId || target.raw?.claudeSessionId;
-      if (uuid) tries.push({ kind: 'log', sid: String(uuid), node: String(target.logNode ?? target.node ?? '') });
+      if (!target.node) tries.push({ kind: 'box', id: target.id });   // 노드 세션은 박스 경로를 묻지 않는다(늘 409 node — 파일이 그 컴퓨터에 있다)
+      const ls = logSrc(); if (ls) tries.push(ls);
     } else {
       tries.push({ kind: 'log', sid: target.id, node: String(target.node ?? '') });
     }
     let chunk: RawChunk | null = null; const errs: any[] = [];
     for (const s of tries) {
       try { chunk = await rawGet(srcPath(s, { tail: WINDOW })); src = s; break; }
-      catch (e: any) { errs.push(e); if (![403, 404, 409].includes(Number(e?.status))) break; }   // '없음·권한 아직 없음·딴 컴퓨터' 는 다음 후보로
+      catch (e: any) {
+        errs.push(e); if (![403, 404, 409].includes(Number(e?.status))) break;   // '없음·권한 아직 없음·딴 컴퓨터' 는 다음 후보로
+        if (s.kind === 'box' && Number(e?.status) === 409 && e?.message === 'node' && e?.uuid) {   // 서버가 대화 uuid 를 알려 줬다 — 그 중앙 기록을 후보에 잇는다
+          nodeHint = { uuid: String(e.uuid), node: String(e.node || target.node || '') };
+          const ls = logSrc(); if (ls && !tries.some((t) => sameSrc(t, ls))) tries.push(ls);
+        }
+      }
     }
     if (destroyed) return;
     if (!chunk) {
@@ -516,21 +542,29 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       const lastErr = boxErr ?? errs[errs.length - 1];
       const notYet = !errs.length || errs.every((e) => [403, 404].includes(Number(e?.status)));
       const unreadable = Number(lastErr?.status) === 409 && lastErr?.message !== 'node' && !!lastErr?.message;   // 409 = 'node'(그 컴퓨터) 또는 못 읽는 하네스(문장, #1746 — 폴링 무의미)
-      // 홈 입력창이 방금 연 세션 — 첫 지시는 서버가 넣는 중이다. '아직 없음' 대신 그 턴을 도는 모양으로 먼저 그린다.
-      //  하네스 부팅(수 초)+신뢰 대화상자를 지나 파일에 내 말이 나타나면 applyLine 이 이 턴을 재사용한다. 오래 안 나타나면 말한다.
-      if (notYet && firstPrompt && canType() && !target.node) {
-        addPending(firstPrompt); firstPrompt = null;              // 서버 큐(createSession 가 enqueue)가 곧 obId 를 붙인다(syncOutbox)
+      // 어디를 지켜볼까 — 박스 세션은 박스 파일, 노드 세션은 중앙 기록(대화 uuid 를 알 때만; 모르면 update() 가 가져올 때).
+      //  ⚠ 노드 세션에 박스 경로를 걸면 409 node 가 영원히 반복된다(실측 #1744: '진행을 따라가지 못하고…' 가 그 증상).
+      const watch = (): Source | null => target.node ? logSrc() : { kind: 'box', id: target.id };
+      // 홈 입력창이 방금 연 세션 — 첫 지시는 서버(또는 노드)가 넣는 중이다. '아직 없음' 대신 그 턴을 도는 모양으로 먼저 그린다.
+      if (notYet && firstPrompt && canType()) {
+        const pd = addPending(firstPrompt); firstPrompt = null;   // 박스면 서버 큐가 obId 를 붙인다(syncOutbox); 노드면 큐 없이 로컬 주입
+        if (target.node) pd.state.textContent = '그 컴퓨터로 전달했어요 — 답은 턴이 끝나면 중앙 기록으로 여기 보여요.';
         view.scrollToBottom();
         view.setNote('세션을 여는 중이에요 — AI 가 뜨면 첫 지시가 들어갑니다.');
         paintState();
-        src = { kind: 'box', id: target.id }; schedule();
+        src = watch(); if (src) schedule();
         void syncOutbox();
         return;
       }
       // ⚠ 압축(Compacting) 탓을 하지 않는다 — 압축은 새 uuid 파일로 이어지고 폴링이 그 전환을 따라간다(아래 poll()). 여기 닿는
       //  '기록 없음'의 실제 원인은 대부분 ① 방금 연 세션(하네스 부팅 전) ② 로그인·신뢰 대화상자에 멈춤 — 둘 다 **터미널에만 보인다**.
       //  그래서 문구가 터미널을 가리키고, 버튼도 이 경우에 항상 둔다(막다른 안내 금지 — 확인할 길을 같이 준다).
-      const msg = !tries.length ? '이 세션의 대화 id 를 아직 몰라 여기서 읽을 수 없어요 — 첫 턴이 끝나면 중앙 기록으로 보입니다. 지금은 터미널로 보세요.'
+      const nodeMsg = target.node && canType()
+        ? (tries.length ? '아직 중앙 기록이 없어요 — 그 컴퓨터의 세션은 턴이 끝날 때마다 기록이 올라와 여기 보여요. 지금 진행은 터미널로 보세요.'
+          : '이 세션의 대화 id 를 아직 몰라요 — 첫 턴이 끝나면 중앙 기록으로 여기 보여요. 지금은 터미널로 보세요.')
+        : null;
+      const msg = nodeMsg ? nodeMsg
+        : !tries.length ? '이 세션의 대화 id 를 아직 몰라 여기서 읽을 수 없어요 — 첫 턴이 끝나면 중앙 기록으로 보입니다. 지금은 터미널로 보세요.'
         : notYet ? (canType() ? '아직 대화 기록이 없어요. 세션이 방금 떴다면 곧 여기 보이고, 계속 비어 있으면 로그인·확인 대화상자에 멈춰 있는 것일 수 있어요 — 터미널로 확인해 보세요.' : '이 세션의 대화 기록을 찾지 못했어요.')
         : unreadable ? String(lastErr.message)
         : lastErr?.status === 409 ? '이 세션의 대화 파일은 그 컴퓨터에 있어 여기서 바로 읽지 못해요. 첫 턴이 끝나면 중앙 기록으로 보입니다.'
@@ -538,9 +572,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       view.list.append(el('div', { class: 'livc-open sc-empty' }, el('p', { text: msg }),
         opts.terminalSrc && isBox ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '터미널로 보기', onclick: () => toggleTerminal(true) }) : null));
       paintState();
-      // 라이브 박스면 파일이 생기는 순간을 잡는다(사람이 터미널에서 먼저 말을 걸 수도 있다) — 첫 대화 뒤에 여기로 흘러든다.
-      //  못 읽는 하네스면 기다려도 안 온다 — 폴링하지 않는다(보내기는 된다: 주입은 tmux 라 하네스 무관).
-      if (canType() && !target.node && !unreadable) { src = { kind: 'box', id: target.id }; schedule(); }
+      // 라이브면 기록이 생기는 순간을 잡는다 — 박스는 파일, 노드는 중앙 기록(uuid 를 알 때만). 못 읽는 하네스면 기다려도 안 온다(폴링 X).
+      if (canType() && !unreadable) { src = watch(); if (src) schedule(); }
       void syncOutbox();   // ⚠ 기록이 아직 없어도 큐엔 내 말이 있을 수 있다(다른 탭에서 보냄·막힌 세션) — 대기 말풍선을 되살린다
       return;
     }
@@ -671,7 +704,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   function schedule(): void {
     if (destroyed || !src) return;
     if (pollTimer) clearTimeout(pollTimer);
-    const ms = src.kind === 'log' ? POLL_LOG_MS : running ? POLL_RUN_MS : POLL_IDLE_MS;
+    const ms = src.kind === 'log' ? (running && !dead() ? POLL_LOG_LIVE_MS : POLL_LOG_MS) : running ? POLL_RUN_MS : POLL_IDLE_MS;
     if (dead() && src.kind === 'log' && !running) return;   // 죽은 세션의 중앙 기록은 더 안 는다
     pollTimer = window.setTimeout(() => { void poll(); }, ms);
   }
@@ -708,8 +741,19 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       }
     } catch (e: any) {
       fails++;
-      if (e?.status === 404 && src.kind === 'box') { /* 아직 파일 없음 — 계속 기다린다(첫 대화 뒤에 생긴다) */ }
-      else if (e?.status === 409 && src.kind === 'box' && e?.message && e.message !== 'node') { src = null; return; }   // 못 읽는 하네스 — 더 안 묻는다(#1746)
+      const st = Number(e?.status);
+      // '아직 없음'은 실패가 아니다 — 박스 파일은 첫 대화 뒤 생기고, 중앙 기록은 살아있는 세션이면 첫 턴이 끝나야 올라온다.
+      const notYet = (st === 404 && src.kind === 'box') || ((st === 404 || st === 403) && src.kind === 'log' && !dead());
+      if (notYet) { fails = 0; }
+      else if (st === 409 && src.kind === 'box' && e?.message === 'node') {
+        // 노드(그 컴퓨터) 세션(#1744) — 박스 경로는 영원히 409 다. 서버가 준 uuid(또는 행의 것)로 중앙 기록으로 갈아탄다. 모르면 멈춘다
+        //  (update() 가 목록에서 uuid 를 가져오면 다시 연다). 종전엔 이 409 를 세 번 세고 '진행을 따라가지 못하고…' 를 영영 띄웠다.
+        if (e?.uuid) nodeHint = { uuid: String(e.uuid), node: String(e.node || target.node || '') };
+        const ls = logSrc();
+        if (!ls) { src = null; return; }
+        src = ls; loadedFrom = loadedTo = 0; carry = ''; fails = 0;   // 다른 파일 — 오프셋은 처음부터
+      }
+      else if (st === 409 && src.kind === 'box' && e?.message) { src = null; return; }   // 못 읽는 하네스 — 더 안 묻는다(#1746)
       else if (fails === 3) view.setNote('진행을 따라가지 못하고 있어요 — 다시 붙는 중…');
     }
     schedule();
@@ -737,8 +781,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         pd.state.textContent = ''; running = false; view.settle(pd.t); view.busy(false);
         view.setNote('보냈어요 — 이 하네스의 답은 아직 여기 안 보여요. 터미널로 보세요.'); return;
       }
-      if (!src) { src = { kind: 'box', id: target.id }; }
-      schedule();
+      if (target.node) pd.state.textContent = '그 컴퓨터로 전달했어요 — 답은 턴이 끝나면 중앙 기록으로 여기 보여요.';   // 노드 세션(#1744): 큐 없이 곧장 넣었다
+      // 어디를 지켜볼까 — 박스 파일, 노드면 중앙 기록(uuid 를 알 때만; 모르면 update() 가 가져올 때). ⚠ 노드에 박스 경로를 걸면 409 반복.
+      if (!src) src = target.node ? logSrc() : { kind: 'box', id: target.id };
+      if (src) schedule();
       void syncOutbox();
     } catch (e: any) {
       const i = pending.indexOf(pd); if (i >= 0) pending.splice(i, 1);
@@ -801,6 +847,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       paintProject();
       paintState();
       if (!wasDead && dead()) { running = false; if (cur) view.settle(cur.t); }
+      // 노드 세션(#1744) — 열 때는 대화 uuid 를 몰랐는데 목록 갱신이 가져왔다(행 claudeSessionId·logId): 이제 중앙 기록을 연다.
+      //  같은 세션인데 uuid 가 바뀌었으면(/clear·압축) 새 기록으로 갈아탄다.
+      const ls = logSrc();
+      if (!destroyed && ls) {
+        if (!src && !!t.node && canType()) { void open(); }
+        else if (src && src.kind === 'log' && isBox && ls.kind === 'log' && src.sid !== ls.sid) { src = ls; loadedFrom = loadedTo = 0; carry = ''; if (pollTimer) clearTimeout(pollTimer); schedule(); }
+      }
     },
     destroy() { destroyed = true; if (pollTimer) clearTimeout(pollTimer); stopWatchOutbox(); view.destroy(); },
   };
