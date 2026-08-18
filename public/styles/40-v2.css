@@ -289,6 +289,13 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .tl-card.t1::before { background: var(--mint-deep, #0FA37E); border-color: var(--mint-deep, #0FA37E); }
 .tl-card.t1.tlk-activity::before, .tl-card.t1.tlk-cmd::before, .tl-card.tlk-activity::before { background: var(--blue); border-color: var(--blue); }
 .tl-card.tlk-task::before { background: var(--mint-deep, #0FA37E); border-color: var(--mint-deep, #0FA37E); }
+/* 프로젝트 자체의 변화가 위계의 꼭대기다(상민님) — 남색 점 + 남색 동사로 다른 것과 갈라 보이게. */
+.tl-card.tlk-project::before { background: var(--blue-deep, #1E54CC); border-color: var(--blue-deep, #1E54CC); }
+.tl-card.tlk-project .tl-verb { color: var(--blue-deep, #1E54CC); }
+.tl-card.tlk-knowledge::before { background: var(--teal, #1BAEB0); border-color: var(--teal, #1BAEB0); }
+.tl-card.tlk-knowledge .tl-verb { color: var(--teal, #1BAEB0); }
+.tl-card.tlk-meta::before { background: transparent; border-color: var(--muted-2, #a6b2c8); }
+.tl-card.tlk-meta .tl-ttl { color: var(--ink-sub); font-weight: 500; }
 .tl-card .tl-verb { color: var(--mint-deep, #0FA37E); }
 .tl-card.tlk-activity .tl-verb, .tl-card.tlk-cmd .tl-verb { color: var(--blue); }
 .tl-card.tlk-say .tl-verb, .tl-card.tlk-meta .tl-verb { color: var(--muted); }
