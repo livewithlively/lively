@@ -36,6 +36,12 @@ export function trayMenuModel(st) {
   const s = st || {};
   const busy = !!s.busy;
   const items = [{ id: "status", label: statusLabel(s), enabled: false }, { type: "separator" }];
+  // 받아 둔 업데이트가 있으면 **가장 위**에 — 트레이만 보는 사람에게 유일한 입구다. 창을 안 열면 자동으로도
+  //  적용되지만(update-policy shouldAutoApplyUpdate), 지금 당장 하고 싶을 때 누른다. 작업 중엔 잠근다(작업이 끊긴다).
+  if (s.updateReady) {
+    items.push({ id: "apply-update", label: `업데이트 적용 — 앱 다시 시작 (${s.updateReady})`, enabled: !busy });
+    items.push({ type: "separator" });
+  }
 
   if (!s.cliFound || s.cliOutdated || s.cliBroken || !s.loggedIn || !s.kitInstalled) {
     items.push({

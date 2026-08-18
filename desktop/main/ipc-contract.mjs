@@ -12,6 +12,7 @@ export const IPC = {
   RETRY: "lively:retry",               // 방금 실패한 작업을 **그대로** 다시 — kind·opts 는 메인이 기억한다
   READ_LOG: "lively:read-log",         // { id } — 화이트리스트된 로그의 꼬리(log-view.mjs)
   CHECK_UPDATE: "lively:check-update", // 사람이 누른 '지금 확인' — 자동 6시간 주기와 같은 판정을 쓴다
+  APPLY_UPDATE: "lively:apply-update", // 받아 둔 업데이트를 지금 적용 — 앱이 스스로 닫고·설치하고·다시 뜬다(update-policy 머리말)
 
   // 메인 → 렌더러 (send, 단방향)
   STATE: "lively:state",               // 상태 스냅샷 갱신
