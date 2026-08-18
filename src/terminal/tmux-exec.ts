@@ -41,7 +41,17 @@ const TMUX_ENV: NodeJS.ProcessEnv = (() => {
  */
 export function tmuxExecArgv(): string[] {
   const raw = (process.env.LIVELY_TMUX_EXEC || "").trim();
-  if (!raw) return [];
+  if (!raw) {
+    // ── 셀프호스트 registry(#1750 S3) — 같은 호스트에서 워크스페이스마다 tmux 서버를 가른다. ──
+    //  secondary 컨텍스트면 `-L lvly-<slug>` 전용 소켓: 세션 목록·옵션·attach 가 전부 그 서버 안이라
+    //  **다른 워크스페이스의 세션이 목록에 뜨는 일 자체가 없다**(이름 규약이 아니라 서버 격리).
+    //  primary(무컨텍스트)는 기본 소켓 = 종전 그대로(기존 세션 무회귀). 매니지드는 raw(중계)가 있어 여기 안 온다.
+    if ((process.env.LIVELY_TENANCY_MODE || "").trim().toLowerCase() === "registry") {
+      const slug = tenantSlug();
+      if (slug && slug !== "primary") return [TMUX_BIN, "-L", `lvly-${slug}`];
+    }
+    return [];
+  }
   if (!raw.includes("{slug}")) return raw.split(/\s+/);
   // ── 테넌트별 중계(#1437 v1 5단계) ──
   //  게이트웨이 하나가 여러 워크스페이스를 서비스하면 **tmux 서버도 워크스페이스마다 다르다.**

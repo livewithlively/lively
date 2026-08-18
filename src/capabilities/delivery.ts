@@ -37,6 +37,7 @@ import { harnessAssetsCapabilities } from "./delivery/harness-assets.js";
 import { dbSourcesCapabilities } from "./delivery/db-sources.js";
 import { auditCapabilities } from "./delivery/audit.js";
 import { workspaceLinkCapabilities } from "./delivery/workspace-link.js"; // #1750 — 연결한 팀 워크스페이스 + 개인→팀 승격
+import { workspaceRegistryCapabilities } from "./delivery/workspace-registry.js"; // #1750 S1 — 셀프호스트 다중 워크스페이스 CRUD
 export { resolveHookSource, resolveHookMatcher } from "./delivery/hooks.js"; // hook-source-resolve.test.ts 계약
 
 export const deliveryCapabilities: Capability[] = [
@@ -77,4 +78,5 @@ export const deliveryCapabilities: Capability[] = [
   ...dbSourcesCapabilities,
   ...auditCapabilities,
   ...workspaceLinkCapabilities, // #1750 — 연결한 워크스페이스 목록·등록·해제 + 승격(요청 큐·승인) — 맨 끝(표면 순서 보존)
+  ...workspaceRegistryCapabilities, // #1750 S1 — 셀프호스트 다중 워크스페이스 셀프서브 CRUD(활성화·만들기·명부)
 ];

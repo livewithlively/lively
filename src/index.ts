@@ -1,3 +1,7 @@
+// ★★ 첫 import 고정(#1750 S1) — 셀프호스트 다중 워크스페이스 활성화 상태파일을 읽어 DB 접속을 앱 role 로
+//  재배선한다. db/client.ts 가 모듈 로드 시점에 env 를 읽어 풀을 만들므로 **그 어떤 import 보다 먼저**여야
+//  한다(ESM 은 import 순서대로 실행). 상태파일이 없으면 아무것도 하지 않는다(단일 워크스페이스 종전 그대로).
+import "./boot/tenancy-env.js";
 import express from "express";
 import { BearerVerifier } from "./auth/bearer.js";
 import { bearerWithResourceMetadata } from "./auth/http-auth.js";
@@ -7,6 +11,7 @@ import { itemsPool } from "./db/client.js";
 import { buildToolCandidates, registry } from "./capabilities/index.js";
 import { installTenantBinding } from "./db/tenant-binding-boot.js";
 import { tenantContextMiddleware } from "./org/tenant-middleware.js";
+import { lookupWorkspace } from "./org/tenancy/registry.js";
 import { setToolCandidates } from "./mcp/mcp-surface.js";
 import { finishConsent, abandonConsent } from "./org/credentials/oauth-broker.js";
 import { buildInstallBundle } from "./org/delivery/publish.js";
@@ -60,7 +65,9 @@ const app = express();
 // ★★ 테넌트 컨텍스트를 **가장 바깥**에서 연다(#1437 v1 5단계). 라우터마다 붙이면 새로 만든 라우터가
 //  빠지고, 빠뜨림이 곧 유출인 구조는 사람 규율로 못 지킨다. 웹훅(아래)보다도 앞이다 — 그 경로도
 //  DB 를 쓴다. `LIVELY_TENANT_HEADER_SECRET` 이 없으면 아무것도 하지 않는다(자가호스팅 무회귀).
-app.use(tenantContextMiddleware());
+//  registry 모드(#1750 셀프호스트 다중 워크스페이스)에서는 x-lively-workspace 헤더를 등록부로 해석한다 —
+//  해석기는 여기서 주입한다(미들웨어 모듈이 스토어를 직접 물면 계층이 꼬인다).
+app.use(tenantContextMiddleware(process.env, lookupWorkspace));
 
 // domainmap 웹훅(:7700 시절과 동일 경로) — 반드시 전역 express.json() '이전'에 마운트:
 // HMAC 은 정확한 raw bytes 대상이라 JSON 파서가 스트림을 먼저 소비하면 검증이 영원히 실패한다.

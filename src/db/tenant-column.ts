@@ -32,7 +32,20 @@ export const TENANT_DEFAULT_EXPR =
   `COALESCE(current_setting('app.tenant_id', true), '${SINGLE_TENANT_ID}')::uuid`;
 
 /** 검사·변경에서 제외 — 테넌트 축이 없는 것이 정상인 테이블. */
-export const TENANT_COLUMN_EXEMPT: ReadonlySet<string> = new Set(["schema_migrations"]);
+export const TENANT_COLUMN_EXEMPT: ReadonlySet<string> = new Set([
+  "schema_migrations",
+  // #1750 S1 — 셀프호스트 워크스페이스 등록부: "이 배포에 어떤 워크스페이스가 있나"라는 배포 전체의
+  //  사실이라 테넌트 축 위에 놓을 수 없다(자기 자신을 못 찾는 부트스트랩 순환). 매니지드의 CP
+  //  tenants/workspaces 테이블에 해당하는 코어판. ⚠ lvly-cloud tenantrls.RLS_EXEMPT_TABLES 에도 등재
+  //  필수(안 하면 공용 DB 게이트가 프로비저닝을 fail-closed 로 막는다).
+  "gw_workspace",
+  "gw_workspace_member",
+  // #1291 v3 self-rls 의 스코프 전달 표 — **pg_backend_pid() 키** 프로세스 인프라다(각 백엔드가 제 pid 행만
+  //  본다). 테넌트 축을 붙이면 PK(pid,kind,key)가 자연키로 판정돼 (tenant_id,…) 재작성이 일어나는데,
+  //  이 표의 격리 축은 테넌트가 아니라 pid 라 재작성이 의미 없고 self-rls 의 정책 조인만 흔든다.
+  //  reader 역의 테넌트 격리는 정책 쪽(org/tenancy/activate.ts 의 RESTRICTIVE tenant_restrict_reader)이 담당.
+  "lively_vis_scope",
+]);
 
 function qi(name: string): string {
   if (!/^[A-Za-z_][A-Za-z0-9_$]*$/.test(name)) throw new Error(`안전하지 않은 식별자: ${name}`);
