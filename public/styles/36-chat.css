@@ -66,8 +66,10 @@ details.livc-divider > summary::before, details.livc-divider > summary::after { 
 .sc-chat { flex: 1; min-height: 0; display: flex; }
 .sc-chat[hidden] { display: none; }
 .sc-chat > .livc-wrap { flex: 1; }
-.sc-term { flex: 1; min-height: 0; display: flex; }
+.sc-wrap { --sc-term-h: 320px; }
+.sc-term { flex: none; height: var(--sc-term-h); min-height: 0; display: flex; border-top: 1px solid var(--line); }
 .sc-term[hidden] { display: none; }
+.sc-wrap > .v2-split-y[hidden] { display: none; }
 .sc-term-frame { flex: 1; width: 100%; border: 0; background: var(--bg, #fff); }
 
 .sc-wait { display: flex; align-items: center; gap: 12px; padding: 9px 16px; border-bottom: 1px solid var(--line); background: var(--bg-note); flex: none; }

@@ -5,6 +5,7 @@
 import { api, el, errorNote, relTime, state, toast } from '../core.js';
 import { isCreatingQuickSession, openQuickSession, takeFirstPrompt } from './quick-session.js';
 import { mountSessionChat, type SessionChatHandle } from '../session-chat.js';
+import type { TrailWidget } from '../session-trail.js';
 import { sessIsDead, sessLabel, sessStateKey } from '../session-status.js';
 import { terminalUrl } from './apps.js';
 
@@ -134,7 +135,8 @@ export async function renderProject(host: HTMLElement, data: V2Data, id: number,
 // ── 세션 — 그 세션 자체를 가운데에: **대화창**(web/session-chat.ts, 리브와 같은 컴포넌트)으로. 터미널은 헤더에서 토글 ─────────
 //  라이브면 박스의 대화 파일을 창으로 읽어 라이브로 따라가고 입력칸으로 보낸다(프롬프트 주입). 끝난 세션이면 기록 + [이어서 대화하기].
 let sessChat: SessionChatHandle | null = null;
-export function renderSession(host: HTMLElement, data: V2Data, id: string): void {
+//  trail = 우패널 '발자취' 위젯(main.ts 가 aside 에 만들어 넘긴다) — 대화 파일에서 읽는 도구 사용이 거기로 흘러든다.
+export function renderSession(host: HTMLElement, data: V2Data, id: string, trail?: TrailWidget | null): void {
   // 기록(uuid) 링크로 들어왔는데 그 대화를 도는 박스가 있으면 그 박스가 정본이다(mergeSessions 가 기록을 박스에 접었다) — 옛 링크가 산다.
   const s = data.sessions.find((x) => x.id === id) || data.sessions.find((x) => x.logId === id);
   if (sessChat) { sessChat.destroy(); sessChat = null; }
@@ -145,6 +147,7 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string): void
     openHref: s.live ? termSrc : (location.pathname + '?ui=classic#/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node) : '')),
     // 홈 입력창이 방금 연 세션이면 그 첫 지시를 낙관적으로 먼저 그린다(서버가 하네스 입력창이 뜬 뒤 실제로 넣는다).
     firstPrompt: takeFirstPrompt(s.id),
+    trail: trail || null,
   });
 }
 /** 목록이 새로 왔을 때(20초 폴링) 열려 있는 세션 화면의 상태 표시를 갱신한다. 본문은 화면 자신이 대화 파일을 폴링한다. */

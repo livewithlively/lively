@@ -21,6 +21,8 @@
 import { api, apiUrl, TOKEN_KEY, anchoredPopover, el, toast } from './core.js';
 import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
 import { toolLabel } from './session-tool-labels.js';
+import { classifyToolUse, type TrailWidget } from './session-trail.js';
+import { makeSplitter } from './v2/split.js';
 
 export interface SessionChatTarget {
   id: string; label: string; live: boolean; alive: boolean; node: string | null; owned: boolean;
@@ -39,7 +41,7 @@ const INTERRUPT_RE = /^\s*\[Request interrupted/;
 const CONTINUED_RE = /^\s*This session is being continued/;
 
 // ── 원문 읽기(ndjson + 워터마크 헤더) ────────────────────────────────────────────────────────
-interface RawChunk { status: number; text: string; bytes: number; from: number; to: number; uuid?: string }
+interface RawChunk { status: number; text: string; bytes: number; from: number; to: number; uuid?: string; prev?: string }
 async function rawGet(path: string): Promise<RawChunk> {
   const headers: Record<string, string> = {};
   const tok = localStorage.getItem(TOKEN_KEY); if (tok) headers.Authorization = 'Bearer ' + tok;
@@ -47,7 +49,7 @@ async function rawGet(path: string): Promise<RawChunk> {
   const text = res.ok ? await res.text() : '';
   if (!res.ok) { let msg = ''; try { msg = (await res.json())?.error || ''; } catch { /* */ } const e: any = new Error(msg || `요청 실패 (${res.status})`); e.status = res.status; throw e; }
   const n = (h: string): number => { const v = Number(res.headers.get(h)); return Number.isFinite(v) ? v : 0; };
-  return { status: res.status, text, bytes: n('X-Log-Bytes'), from: n('X-Log-From'), to: n('X-Log-To') || (n('X-Log-From') + text.length), uuid: res.headers.get('X-Session-Uuid') || undefined };
+  return { status: res.status, text, bytes: n('X-Log-Bytes'), from: n('X-Log-From'), to: n('X-Log-To') || (n('X-Log-From') + text.length), uuid: res.headers.get('X-Session-Uuid') || undefined, prev: res.headers.get('X-Prev-Session') || undefined };
 }
 type Source = { kind: 'box'; id: string } | { kind: 'log'; sid: string; node: string };
 const srcPath = (s: Source, q: Record<string, string | number>): string => {
@@ -60,7 +62,7 @@ const srcPath = (s: Source, q: Record<string, string | number>): string => {
 // ── 마운트 ────────────────────────────────────────────────────────────────────────────────
 // opts.firstPrompt — 홈 입력창(#1719 v2/quick-session)이 방금 연 세션의 첫 지시. 서버가 하네스 입력창이 뜬 뒤 실제로 넣으므로
 //  여기서는 **낙관적으로 그 턴을 먼저 그리고**(보낸 것과 같은 모양) 대화 파일에 나타나면 그 턴을 재사용한다(pendingSent 규약).
-export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, opts: { terminalSrc?: string | null; openHref?: string | null; firstPrompt?: string | null }): SessionChatHandle {
+export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, opts: { terminalSrc?: string | null; openHref?: string | null; firstPrompt?: string | null; trail?: TrailWidget | null }): SessionChatHandle {
   let target = first;
   const isBox = first.live;                     // 라이브 행(박스) — 죽었어도(restorable) 박스다
   const dead = (): boolean => !target.live || !target.alive || !!target.raw?.restorable;
@@ -93,7 +95,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const chatHost = el('div', { class: 'sc-chat' });
   const termHost = el('div', { class: 'sc-term', hidden: true });
   const waitBar = el('div', { class: 'sc-wait', hidden: true });
-  const wrap = el('div', { class: 'sc-wrap' }, head, waitBar, chatHost, termHost);
+  const wrap = el('div', { class: 'sc-wrap' }, head, waitBar, chatHost) as HTMLElement;
+  // 터미널은 대화 **아래**에 붙는다(둘 다 보인다) — 사이 경계는 끌어서 조정(#1719 '수평 경계').
+  const termSplit = makeSplitter({ axis: 'y', key: 'sc-term-h', cssVar: '--sc-term-h', target: wrap, def: 320, min: 120, max: 1200, grow: -1, label: '대화·터미널 경계' });
+  termSplit.hidden = true;
+  wrap.append(termSplit, termHost);
   host.replaceChildren(wrap);
 
   // 입력칸 아래 바(Claude Desktop 의 '자동 · Opus 5 · 엑스트라' 자리) — 이 세션이 실제로 도는 모드·모델·노력. 트랜스크립트 줄에서
@@ -118,7 +124,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     bar: { right: el('span', { class: 'dt-chips' }, chipMode, chipModel, chipEffort) },
     onSend: (text) => sendPrompt(text),
     onStop: canKeys() ? () => sendKey('interrupt') : undefined,
-    escActive: () => !termHost.hidden ? false : true,
+    escActive: () => true,
     opening: null,
   });
 
@@ -161,10 +167,11 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       termFrame = el('iframe', { class: 'sc-term-frame', src: opts.terminalSrc, title: '터미널', allow: 'clipboard-read; clipboard-write' }) as HTMLIFrameElement;
       termHost.append(termFrame);
     }
-    termHost.hidden = !show; chatHost.hidden = show;
-    termBtn.textContent = show ? '대화로' : '터미널';
+    termHost.hidden = !show; termSplit.hidden = !show;
+    termBtn.textContent = show ? '터미널 닫기' : '터미널';
     termBtn.classList.toggle('sc-act-on', show);
-    if (!show) { view.scrollToBottom(); view.input.focus(); }
+    view.scrollToBottom();
+    if (!show) view.input.focus();
   }
 
   // ── 대화 파일 → 대화창 ────────────────────────────────────────────────────────────────
@@ -173,6 +180,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let cur: Rec | null = null;
   let src: Source | null = null;
   let loadedFrom = 0; let loadedTo = 0;
+  // 맥락 압축 사슬 — Claude Code 는 압축 때 새 uuid 의 새 파일을 연다(서버 findPrevTranscript 주석). curUuid = 지금 자라는 파일,
+  //  oldestUuid/oldestPrev = 화면 맨 위 창이 속한 파일과 그 이전 파일(있으면 [압축 전 대화 불러오기]).
+  let curUuid: string | null = null; let oldestUuid: string | null = null; let oldestPrev: string | null = null;
   let carry = '';                             // 잘린 마지막 줄(다음 폴에서 이어 붙인다)
   let pendingSent: { text: string; t: ChatTurn } | null = null;   // 낙관적으로 그린 내 말 — 파일에 나타나면 그 턴을 재사용
   let firstPrompt: string | null = opts.firstPrompt ? String(opts.firstPrompt) : null;   // 홈 입력창의 첫 지시(한 번만 그린다)
@@ -196,7 +206,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (o.type === 'user') {
       if (o.permissionMode) chip(chipMode, MODE_KO[String(o.permissionMode)] || String(o.permissionMode));
       const { text, results } = userText(o);
-      if (results.length) { if (!cur) cur = newRec(null); cur.evs.push(o); view.event(cur.t, { type: 'user', message: { content: results } }); }
+      if (results.length) { if (!cur) cur = newRec(null); cur.evs.push(o); view.event(cur.t, { type: 'user', message: { content: results } }); trailResults(results); }
       if (o.isMeta || !text.trim()) return;
       if (INTERRUPT_RE.test(text)) { if (cur) view.settle(cur.t, { interrupted: true }); running = false; return; }
       if (CONTINUED_RE.test(text)) { view.divider('맥락 압축 — 이전 대화를 요약해 이어감', text); cur = newRec(null); running = true; return; }
@@ -216,6 +226,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (o.effort) chip(chipEffort, EFFORT_KO[String(o.effort)] || String(o.effort));
       if (!cur) cur = newRec(null);
       cur.evs.push(o); view.event(cur.t, o); running = true;
+      trailUses(o, 'end');
       return;
     }
     if (o.type === 'system') {
@@ -227,6 +238,24 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       return;
     }
   }
+  // 발자취(우패널) — 이 세션이 읽고 쓴 것. tool_use → 항목, tool_result → 그 항목의 본문. 대화창과 같은 줄에서 함께 뽑는다.
+  const trail = opts.trail || null;
+  const trailOut = (b: any): string => typeof b.content === 'string' ? b.content
+    : Array.isArray(b.content) ? b.content.map((c: any) => (c && c.type === 'text' ? String(c.text ?? '') : '')).join('\n') : '';
+  function trailUses(o: any, at: 'end' | 'start'): void {
+    if (!trail) return;
+    const c = o?.message?.content; if (!Array.isArray(c)) return;
+    for (const b of c) {
+      if (!b || b.type !== 'tool_use' || !b.id) continue;
+      const cls = classifyToolUse(String(b.name ?? ''), b.input);
+      if (cls) trail.add({ ...cls, id: String(b.id), ts: o.timestamp }, at);
+    }
+  }
+  function trailResults(results: any[]): void {
+    if (!trail) return;
+    for (const b of results) if (b?.tool_use_id) trail.result(String(b.tool_use_id), trailOut(b), !!b.is_error);
+  }
+
   function applyText(text: string): number {
     const chunk = carry + text;
     const lines = chunk.split('\n');
@@ -278,7 +307,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         return;
       }
       const msg = !tries.length ? '이 세션의 대화 id 를 아직 몰라 여기서 읽을 수 없어요 — 첫 턴이 끝나면 중앙 기록으로 보입니다. 지금은 터미널로 보세요.'
-        : notYet ? (canType() ? '아직 대화 기록이 없어요. 아래에 첫 지시를 적으면 여기서부터 쌓입니다.' : '이 세션의 대화 기록을 찾지 못했어요.')
+        : notYet ? (canType() ? '아직 대화 기록이 없어요 — 방금 열렸거나 맥락을 정리(압축)하는 중일 수 있어요. 기록이 생기면 바로 여기 보입니다.' : '이 세션의 대화 기록을 찾지 못했어요.')
         : unreadable ? String(lastErr.message)
         : lastErr?.status === 409 ? '이 세션의 대화 파일은 그 컴퓨터에 있어 여기서 바로 읽지 못해요. 첫 턴이 끝나면 중앙 기록으로 보입니다.'
         : `대화 기록을 불러오지 못했습니다. ${lastErr?.message || ''}`;
@@ -291,8 +320,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       return;
     }
     loadedFrom = chunk.from; loadedTo = chunk.to;      // 서버가 줄 경계로 맞춘 창 — 첫 줄 버리기·조각 이어붙이기가 필요 없다(#1746 window.ts)
+    curUuid = chunk.uuid || null; oldestUuid = curUuid; oldestPrev = chunk.from === 0 ? (chunk.prev || null) : null;
     applyText(chunk.text);
-    if (chunk.from > 0) olderBar();
+    olderBar();
     finishReplay();
     view.scrollToBottom();
     paintState();
@@ -316,23 +346,30 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let olderEl: HTMLElement | null = null;
   function olderBar(): void {
     olderEl?.remove();
-    if (loadedFrom <= 0) { olderEl = null; return; }
+    if (loadedFrom <= 0 && !oldestPrev) { olderEl = null; return; }
     const kb = Math.round(loadedFrom / 1024);
-    const btn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: `이전 대화 불러오기 (${kb >= 1024 ? (kb / 1024).toFixed(1) + 'MB' : kb + 'KB'} 더 있음)` }) as HTMLButtonElement;
+    const label = loadedFrom > 0 ? `이전 대화 불러오기 (${kb >= 1024 ? (kb / 1024).toFixed(1) + 'MB' : kb + 'KB'} 더 있음)` : '압축 전 대화 불러오기';
+    const btn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: label }) as HTMLButtonElement;
     btn.addEventListener('click', () => { void loadOlder(btn); });
     const bar = el('div', { class: 'sc-older' }, btn) as HTMLElement;
     olderEl = bar;
     view.list.prepend(bar);
   }
   async function loadOlder(btn: HTMLButtonElement): Promise<void> {
-    if (!src || loadedFrom <= 0) return;
+    if (!src || (loadedFrom <= 0 && !oldestPrev)) return;
     btn.disabled = true; btn.textContent = '불러오는 중…';
-    const from = Math.max(0, loadedFrom - WINDOW);
+    // 같은 파일의 앞 창, 또는(파일 머리에 닿았으면) 압축 전 파일의 꼬리 창.
+    const intoPrev = loadedFrom <= 0 && !!oldestPrev;
+    const q: Record<string, string | number> = intoPrev ? { uuid: oldestPrev as string, tail: WINDOW } : { from: Math.max(0, loadedFrom - WINDOW), to: loadedFrom };
+    if (!intoPrev && src.kind === 'box' && oldestUuid && oldestUuid !== curUuid) q.uuid = oldestUuid;
     let chunk: RawChunk;
-    try { chunk = await rawGet(srcPath(src, { from, to: loadedFrom })); }
+    try { chunk = await rawGet(srcPath(src, q)); }
     catch (e: any) { btn.disabled = false; btn.textContent = '다시 시도'; toast(e?.message || '이전 대화를 불러오지 못했습니다.'); return; }
     if (destroyed) return;
-    const text = chunk.text;                     // 서버가 줄 경계로 맞춘 창(#1746) — 첫 줄 버리기 없음
+    const from = chunk.from;                     // 서버가 줄 경계로 맞춘 창(#1746) — 첫 줄 버리기 없음
+    if (intoPrev) { oldestUuid = oldestPrev; oldestPrev = null; }
+    if (from === 0) oldestPrev = chunk.prev || null;
+    const text = chunk.text;
     // 줄 → 턴 묶음(사람 말 기준). 첫 묶음은 사람 말 없는 이어짐일 수 있다.
     type Bundle = { text: string | null; ts?: string; lines: any[]; kind: 'turn' | 'cont' | 'divider'; raw?: string };
     const bundles: Bundle[] = [];
@@ -353,6 +390,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         if (!b) { b = { text: null, lines: [], kind: 'cont' }; bundles.push(b); }
         b.lines.push(o);
       }
+    }
+    // 발자취 — 이 창의 도구 사용을 시간순으로 모았다가 **위에**(오래된 쪽) 끼운다(가장 최신 것부터 거꾸로 add 해야 순서가 맞다).
+    const olderUses: any[] = []; const olderResults: any[] = [];
+    for (const bd of bundles) for (const o of bd.lines) {
+      if (o.type === 'assistant') olderUses.push(o);
+      else if (o.type === 'user') { const { results } = userText(o); if (results.length) olderResults.push(...results); }
     }
     // 화면 맨 위가 '이어짐'(사람 말 없음)이었으면 그 내용은 이 창의 마지막 턴에 속한다 — 합친다.
     const firstRec = recs[0];
@@ -384,6 +427,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       loadedFrom = chunk.from;                  // 서버가 맞춘 경계(요청한 from 이 줄 중간이면 다음 줄부터)
       olderBar();
     });
+    for (let i = olderUses.length - 1; i >= 0; i--) trailUses(olderUses[i], 'start');
+    trailResults(olderResults);
     titleFromFirstAsk();
   }
 
@@ -400,12 +445,20 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (destroyed || !src) return;
     if (document.hidden) { schedule(); return; }
     try {
-      const c = await rawGet(srcPath(src, { from: loadedTo }));
+      let c = await rawGet(srcPath(src, { from: loadedTo }));
       fails = 0;
       if (destroyed) return;
-      if (c.bytes < loadedTo) {            // 파일이 줄었다(교체됨) — 처음부터 다시
+      if (src.kind === 'box' && c.uuid && curUuid && c.uuid !== curUuid) {
+        // 맥락 압축 — 박스가 새 uuid 의 새 파일로 넘어갔다. 화면을 비우지 않는다(지금까지가 곧 '압축 전 대화'다). 새 파일을 0 부터 이어 읽는다 —
+        //  그 첫 줄(compact_boundary + 요약)이 곧 구분선으로 그려진다.
+        curUuid = c.uuid; loadedTo = 0; carry = '';
+        c = await rawGet(srcPath(src, { from: 0 }));
+        if (destroyed) return;
+      } else if (c.bytes < loadedTo) {     // 같은 파일이 줄었다(교체됨) — 처음부터 다시
         clearAll(); await open(); return;
       }
+      if (!curUuid && c.uuid) { curUuid = c.uuid; oldestUuid = c.uuid; }   // 열 때는 파일이 없었다가 지금 생겼다
+      if (loadedTo === 0 && c.from === 0 && c.prev && !oldestPrev && oldestUuid === c.uuid) { oldestPrev = c.prev; olderBar(); }
       if (c.text) {
         view.list.querySelector('.sc-empty')?.remove();   // 파일이 생겼다 — '아직 없음' 안내는 물러난다
         const wasRunning = running;
@@ -429,6 +482,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   function clearAll(): void {
     recs.splice(0); cur = null; carry = ''; loadedFrom = loadedTo = 0; running = false;
     view.list.replaceChildren(); olderEl = null;
+    trail?.clear();
   }
 
   // ── 보내기·키·이어받기 ──────────────────────────────────────────────────────────────
