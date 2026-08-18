@@ -7,7 +7,7 @@
 // 실행: node kit/cli/node-win-contract.test.mjs
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { muxCandidates, winTaskXml, winRunnerCmd, resolveWinUserId, winInstallArgv, nodeDaemonArtifact, nodeProcProbe, parseProcCount, winStartupDir, winStartupVbs, tailLines, lastConnectedAt, logTailHint, nodeConnectedFrom, parseResidualProbe, winResidualAgentProcs, stopResidualNote } from "./cmd-node.mjs";
+import { muxCandidates, winTaskXml, winRunnerCmd, resolveWinUserId, winInstallArgv, nodeDaemonArtifact, nodeProcProbe, parseProcCount, winStartupDir, winStartupVbs, tailLines, lastConnectedAt, logTailHint, nodeConnectedFrom, parseResidualProbe, winResidualAgentProcs, stopResidualNote, decodeConsoleText } from "./cmd-node.mjs";
 
 let pass = 0;
 const t = (name, fn) => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -378,6 +378,25 @@ t("K2 ★ 남아 있으면 문구가 '살아 있다·관리자 PowerShell 에서
   const i = stopSeg.indexOf("winKillAgentProcs();"), j = stopSeg.indexOf("winResidualAgentProcs()"), k = stopSeg.indexOf("die(stopResidualNote");
   assert.ok(i >= 0 && j > i && k > j, "정지 경로: 죽이기 → 다시 세기 → 남으면 die 순서가 아니다");
   assert.ok(stopSeg.indexOf("✅ 노드 데몬 해제") > k, "✅ 가 검증보다 앞에 찍힌다 — 못 죽여도 성공이라 말하게 된다");
+});
+
+// ── M. 네이티브 출력 디코드 — cp949 를 utf8 로 읽어 깨진 글자를 사람에게 보여주지 않는다 (#1541) ──────
+// 실측: 앱 로그 "(schtasks: ����: �׼����� �źεǾ����ϴ�.)" — 한국어 Windows 의 schtasks stderr(cp949)를 utf8 강제 디코드.
+t("M1 decodeConsoleText — utf8 그대로 · cp949 는 euc-kr 로 복원 · 못 읽으면 침묵", () => {
+  assert.equal(decodeConsoleText(Buffer.from("오류: 액세스", "utf8")), "오류: 액세스");
+  // '오류: 액세스가 거부되었습니다.' 의 실제 cp949 바이트(python cp949 인코딩으로 생성)
+  const cp949 = Buffer.from("bfc0b7f93a20bed7bcbcbdbab0a120b0c5baceb5c7befabdc0b4cfb4d92e", "hex");
+  assert.equal(decodeConsoleText(cp949), "오류: 액세스가 거부되었습니다.");
+  // 어느 쪽으로도 안 읽히는 바이트 → 빈 문자열(깨진 글자를 보여주는 것보다 침묵)
+  assert.equal(decodeConsoleText(Buffer.from([0xff, 0xfe, 0x81, 0x00, 0x81])), "");
+  assert.equal(decodeConsoleText(null), ""); assert.equal(decodeConsoleText(undefined), "");
+  assert.equal(decodeConsoleText("이미 문자열"), "이미 문자열");
+  assert.equal(decodeConsoleText("깨진\uFFFD문자열"), "", "이미 깨진 문자열도 침묵");
+  // 배선: schtasks /Create 를 encoding 강제 없이(Buffer) 부르고, denied 는 decodeConsoleText 를 거친다
+  const src = readFileSync(new URL("./cmd-node.mjs", import.meta.url), "utf8");
+  const seg = src.slice(src.indexOf('spawnSync("schtasks", ["/Create"'), src.indexOf('spawnSync("schtasks", ["/Create"') + 1600);
+  assert.ok(!/encoding:\s*"utf8"/.test(seg), "schtasks 출력을 utf8 로 강제 디코드한다(cp949 가 깨진다)");
+  assert.match(seg, /decodeConsoleText\(r\.stderr\)/, "denied 가 디코더를 안 거친다");
 });
 
 console.log(`\n${pass} passed`);

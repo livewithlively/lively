@@ -48,4 +48,11 @@ t("L6 배선 — 에이전트가 ping·message 로 lastBeat 를 갱신하고, st
   assert.match(code, /setKeepAlive[?.]*\(true/, "TCP keepalive 를 켜지 않는다");
 });
 
+t("L7 ★ 재연결 타이머에 unref 금지 — 예약만 하고 프로세스가 끝나 재연결이 영영 안 돈다(실기기 로그: 끊김 뒤 항상 +5s 새 pid)", () => {
+  const src = readFileSync(fileURLToPath(new URL("../../src/node/agent.ts", import.meta.url)), "utf8");
+  const code = src.split("\n").map((l) => l.replace(/\/\/.*$/, "")).join("\n");
+  const seg = code.slice(code.indexOf("setTimeout(connect"), code.indexOf("setTimeout(connect") + 60);
+  assert.ok(!/unref/.test(seg), "재연결 setTimeout 이 unref 다 — teardown 뒤 유일한 핸들이라 프로세스가 먼저 끝난다");
+});
+
 console.log(`\n${pass} passed`);
