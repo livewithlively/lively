@@ -14,6 +14,7 @@ import { el, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTim
 import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls, type Proj, type Sess, type V2Data } from './views.js';
+import { switcherTop } from './switcher.js';
 
 const CLOSED_KEY = 'lively_v2_closed';    // 사용자가 직접 접은 프로젝트 — 살아 있는 세션이 있으면 기본이 '펼침'이라 '접음'만 기억하면 된다
 const DONE_KEY = 'lively_v2_side_done';   // '1' = 완료 프로젝트도 보인다(필터 풀림)
@@ -120,8 +121,7 @@ function render(): void {
   const doneCount = rows.filter((r) => r.done).length;
   const fltN = (stateFilter ? 1 : 0) + (mineOnly ? 1 : 0) + (showDone ? 1 : 0);
   host.replaceChildren(
-    el('div', { class: 'v2-side-top' },
-      el('a', { class: 'v2-logo', href: '#/', title: '홈으로', 'data-nav': 'home' }, 'Lively', el('span', { class: 'pulse-dot', 'aria-hidden': 'true' }))),
+    switcherTop(),   // 좌상단 워크스페이스 스위처(#1750) — 홈 워드마크 + 개인/팀 배지·전환·연결 메뉴
     // ⚠ replaceChildren 은 null 을 글자 "null" 로 그린다(el() 과 다르다) — 조건부 자식은 스프레드로.
     ...(livOn ? [el('a', { class: 'v2-liv-btn' + (last.activeKey() === 'liv' ? ' on' : ''), href: '#/liv', 'data-nav': 'liv' },
       el('span', { class: 'lm', text: 'L' }), el('span', { text: '리브' }), el('span', { class: 'sub', text: '워크스페이스 담당자' }))] : []),

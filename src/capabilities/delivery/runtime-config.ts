@@ -117,6 +117,8 @@ export const runtimeConfigCapabilities: Capability[] = [
         ui_profile?: UiProfile;
         usage_url?: string | null;
         ui_mode?: "v2" | "classic"; // #1719
+        workspace_kind?: "personal" | "team"; // #1750
+        workspace_hub_url?: string | null;    // #1750
       } = {};
       // 저장소 정책(#813) — 로그 상한·디스크 임계치. 잡값·뒤집힌 임계치(경고≥위험)는 normalize 가 잡는다.
       //  고객 박스는 .env 를 못 고치므로 **여기(관리탭)가 유일한 조절 창구**다.
@@ -288,6 +290,21 @@ export const runtimeConfigCapabilities: Capability[] = [
         const m = String(input.ui_mode);
         if (m !== "v2" && m !== "classic") throw new HttpError(400, "ui_mode 는 v2|classic 만 허용됩니다");
         patch.ui_mode = m;
+      }
+      // workspace_kind(#1750): 이 워크스페이스의 종류 — 'team'(기본, 기존 셀프호스트) | 'personal'(개인). 매니지드는 CP 가 push, 셀프호스트는 관리탭.
+      if (input.workspace_kind !== undefined) {
+        const k = String(input.workspace_kind);
+        if (k !== "personal" && k !== "team") throw new HttpError(400, "workspace_kind 는 personal|team 만 허용됩니다");
+        patch.workspace_kind = k;
+      }
+      // workspace_hub_url(#1750): 계정의 워크스페이스 목록·만들기 허브 링크(매니지드 app.lvly.io/home). null/'' = 링크 내리기. usage_url 과 같은 스킴 제한.
+      if (input.workspace_hub_url !== undefined) {
+        if (input.workspace_hub_url === null || input.workspace_hub_url === "") patch.workspace_hub_url = null;
+        else {
+          const u = String(input.workspace_hub_url).trim();
+          if (!/^https?:\/\//i.test(u) || u.length > 2048) throw new HttpError(400, "workspace_hub_url 은 http(s) 절대 URL 이어야 합니다");
+          patch.workspace_hub_url = u;
+        }
       }
       // usage_url(S5): 상단바 '사용량' 칩 링크. null/'' = 칩 내리기. href 와 같은 스킴 제한.
       if (input.usage_url !== undefined) {
@@ -514,6 +531,8 @@ export const runtimeConfigCapabilities: Capability[] = [
       ui_profile: z.enum(["full", "personal"]).optional().describe("S4 관리탭 프로파일 — personal 이면 조직 운영 섹션 숨김(기본 full = 현행)"),
       usage_url: z.string().nullable().optional().describe("S5 상단바 '사용량' 칩 링크 — null/'' 로 내림(기본 null = 미노출)"),
       ui_mode: z.enum(["v2", "classic"]).optional().describe("#1719 기본 화면 셸 — v2(새 1탭 셸, 기본) | classic(종전 탭 셸). 사람별 로컬 오버라이드는 브라우저에서"),
+      workspace_kind: z.enum(["personal", "team"]).optional().describe("#1750 이 워크스페이스의 종류 — team(기본: 여러 사람의 팀 워크스페이스, 기존 셀프호스트) | personal(한 사람의 개인 워크스페이스). 좌상단 스위처 배지·승격 동선의 근거"),
+      workspace_hub_url: z.string().nullable().optional().describe("#1750 계정의 워크스페이스 목록·만들기 허브 링크(매니지드 app.lvly.io/home). null/'' 로 내림(기본 null = 셀프호스트)"),
       writeback_notice: z.string().nullable().optional().describe("세션종료 너지 문구(null=기본값)"),
       work_roots: z.array(z.string()).optional().describe("작업 루트 디렉토리"),
       allowed_auth_envs: z.array(z.string()).optional().describe("http_proxy 참조 가능 env 이름 화이트리스트"),
