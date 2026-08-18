@@ -4,7 +4,7 @@
 //   · 매니지드면 [다른 워크스페이스 · 새로 만들기 →](허브) · 승인 대기 중인 승격 요청(있으면 배지+승인/거절).
 //  워크스페이스 1개 = 게이트웨이 1개라, '전환'은 그 게이트웨이 주소를 새 탭으로 여는 것이다(개인↔팀은 서로 다른 게이트웨이).
 //  메뉴는 body 에 떠서(fixed) 사이드바 20초 재렌더에 지워지지 않는다. 데이터(연결·승격)는 **열 때** 한 번만 당긴다.
-import { api, el, state, toast } from '../core.js';
+import { api, currentWorkspace, el, setCurrentWorkspace, state, toast } from '../core.js';
 let openPanel = null;
 function closeMenu() { if (openPanel) {
     openPanel.remove();
@@ -39,6 +39,19 @@ async function openMenu(anchor) {
     const panel = el('div', { class: 'v2-ws-menu', role: 'menu' });
     const email = String((state.me && state.me.email) || '');
     panel.append(email ? el('div', { class: 'v2-ws-acct', text: email }) : null, sectionLabel(w.kind === 'personal' ? '개인 워크스페이스' : '팀 워크스페이스'), el('div', { class: 'v2-ws-cur' }, el('span', { class: 'v2-ws-badge ' + w.kind, text: w.kind === 'personal' ? '개인' : '팀' }), el('span', { class: 'v2-ws-name', text: w.name }), el('span', { class: 'v2-ws-check', 'aria-hidden': 'true', text: '✓' })));
+    // ── 이 게이트웨이 안의 다중 워크스페이스(#1750 S1, 셀프호스트 registry 모드) — 전환·만들기·관리. ──
+    //  '연결한 팀'(다른 게이트웨이, 새 탭)과 축이 다르다: 이 목록은 **같은 게이트웨이의 다른 워크스페이스**라
+    //  전환 = 헤더 선택 + 리로드다. registry 가 아니면(단일·매니지드) 섹션 자체가 없다 — 종전 그대로.
+    const reg = (state.me && state.me.workspace_registry) || {};
+    if (reg.active) {
+        const mineWrap = el('div', { class: 'v2-ws-team' }, sectionLabel('내 워크스페이스'), el('p', { class: 'v2-ws-loading', text: '불러오는 중…' }));
+        panel.append(mineWrap);
+        const createForm = el('div', { class: 'v2-ws-linkform', hidden: true });
+        panel.append(el('button', { class: 'v2-ws-item add', type: 'button', text: '＋ 워크스페이스 만들기', onclick: () => { createForm.hidden = !createForm.hidden; if (!createForm.hidden)
+                createForm.querySelector('input')?.focus(); } }), createForm);
+        buildCreateForm(createForm);
+        void refreshMine(mineWrap);
+    }
     const teamWrap = el('div', { class: 'v2-ws-team' }, sectionLabel('연결한 팀 워크스페이스'), el('p', { class: 'v2-ws-loading', text: '불러오는 중…' }));
     panel.append(teamWrap);
     const linkForm = el('div', { class: 'v2-ws-linkform', hidden: true });
@@ -61,6 +74,83 @@ async function openMenu(anchor) {
     setTimeout(() => { document.addEventListener('mousedown', onDoc, true); document.addEventListener('keydown', onKey, true); }, 0);
     void refreshTeam(teamWrap);
     void refreshPromos(promoWrap);
+}
+// ── 내 워크스페이스(registry) — 전환·이름변경·보관 ──────────────────────────
+async function refreshMine(wrap) {
+    try {
+        const d = await api('/api/ui/me/workspaces');
+        const rows = (d && d.workspaces) || [];
+        const cur = currentWorkspace() || 'primary';
+        wrap.replaceChildren(sectionLabel('내 워크스페이스'), ...(rows.length ? rows.map((w) => mineRow(w, w.slug === cur || (w.is_primary && cur === 'primary'), wrap))
+            : [el('p', { class: 'v2-ws-empty', text: '목록을 불러오지 못했어요.' })]));
+    }
+    catch (_e) {
+        wrap.replaceChildren(sectionLabel('내 워크스페이스'), el('p', { class: 'v2-ws-empty', text: '목록을 불러오지 못했어요.' }));
+    }
+}
+function switchTo(slug) {
+    setCurrentWorkspace(slug === 'primary' ? '' : slug);
+    location.hash = '#/';
+    location.reload(); // 화면 전체가 그 워크스페이스의 데이터로 다시 선다 — 부분 갱신은 반쪽 상태를 만든다
+}
+function mineRow(w, active, wrap) {
+    const open = el('button', { class: 'v2-ws-team-open', type: 'button', title: active ? '지금 이 워크스페이스예요' : '이 워크스페이스로 전환',
+        onclick: () => { if (!active)
+            switchTo(String(w.slug)); } }, el('span', { class: 'v2-ws-badge ' + (w.kind === 'personal' ? 'personal' : 'team'), text: w.kind === 'personal' ? '개인' : '팀' }), el('span', { class: 'v2-ws-name', text: String(w.name || w.slug) }), active ? el('span', { class: 'v2-ws-check', 'aria-hidden': 'true', text: '✓' }) : null);
+    const acts = [];
+    if (w.role === 'owner' && !w.is_primary) {
+        acts.push(el('button', { class: 'v2-ws-auto', type: 'button', title: '이름 변경', text: '✎', onclick: async () => {
+                const name = prompt('워크스페이스 이름', String(w.name || ''));
+                if (!name || !name.trim())
+                    return;
+                try {
+                    await api('/api/ui/me/workspaces/update', { method: 'POST', body: JSON.stringify({ slug: w.slug, name: name.trim() }) });
+                    await refreshMine(wrap);
+                }
+                catch (e) {
+                    toast('바꾸지 못했어요 — ' + (e?.message || e), true);
+                }
+            } }));
+        acts.push(el('button', { class: 'v2-ws-del', type: 'button', title: '보관(스위처에서 숨김 — 데이터는 남아요)', text: '✕', onclick: async () => {
+                if (!confirm(`'${w.name || w.slug}' 워크스페이스를 보관할까요? 데이터는 지워지지 않아요.`))
+                    return;
+                try {
+                    await api('/api/ui/me/workspaces/delete', { method: 'POST', body: JSON.stringify({ slug: w.slug }) });
+                    if (active) {
+                        switchTo('primary');
+                        return;
+                    }
+                    await refreshMine(wrap);
+                }
+                catch (e) {
+                    toast('보관하지 못했어요 — ' + (e?.message || e), true);
+                }
+            } }));
+    }
+    return el('div', { class: 'v2-ws-team-row' }, open, ...acts);
+}
+function buildCreateForm(form) {
+    const name = el('input', { class: 'v2-ws-in', type: 'text', placeholder: '워크스페이스 이름', 'aria-label': '워크스페이스 이름' });
+    const kind = el('select', { class: 'v2-ws-in', 'aria-label': '종류' }, el('option', { value: 'personal', text: '개인 — 나만 봐요' }), el('option', { value: 'team', text: '팀 — 사람을 초대해요' }));
+    const note = el('span', { class: 'v2-ws-note' });
+    const go = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '만들기', onclick: async () => {
+            if (!name.value.trim()) {
+                note.textContent = '이름을 입력하세요.';
+                return;
+            }
+            go.setAttribute('disabled', '');
+            note.textContent = '만드는 중…';
+            try {
+                const d = await api('/api/ui/me/workspaces', { method: 'POST', body: JSON.stringify({ name: name.value.trim(), kind: kind.value }) });
+                toast(`'${d?.workspace?.name || name.value.trim()}' 워크스페이스를 만들었어요.`);
+                switchTo(String(d?.workspace?.slug || '')); // 만들자마자 그 워크스페이스로 — 빈 목록 앞에서 헤매지 않게
+            }
+            catch (e) {
+                note.textContent = e?.message || String(e);
+                go.removeAttribute('disabled');
+            }
+        } });
+    form.replaceChildren(name, kind, el('div', { class: 'v2-ws-formrow' }, go, note), el('p', { class: 'v2-ws-hint', text: '개인 워크스페이스는 관리자를 포함해 다른 사람에게 보이지 않아요. 팀은 만든 뒤 멤버를 초대할 수 있어요.' }));
 }
 async function refreshTeam(wrap) {
     try {

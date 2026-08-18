@@ -108,6 +108,10 @@ function upstreamHeaders() {
   if (sid) h["x-lively-session"] = sid;
   const mode = (process.env.LIVELY_MODE || "").trim();
   if (mode) h["x-lively-mode"] = mode;
+  // #1750 S3 — 셀프호스트 다중 워크스페이스: 세션 spawn 이 pane env 로 심은 소속(LVLY_TENANT_SLUG)을
+  //  그대로 알린다. 게이트웨이 미들웨어가 이 헤더로 그 워크스페이스 컨텍스트를 연다(없으면 primary = 종전).
+  const wsSlug = (process.env.LVLY_TENANT_SLUG || "").trim();
+  if (wsSlug) h["x-lively-workspace"] = wsSlug;
   return h;
 }
 

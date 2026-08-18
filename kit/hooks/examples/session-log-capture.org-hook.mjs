@@ -61,11 +61,16 @@ const MAX_DELTA = 8 * 1024 * 1024;  // 한 번에 올릴 상한(엔드포인트 
   base = base.replace(/\/?(mcp)?\/*$/i, "").replace(/\/+$/, "");
   const nodeId = (process.env.LIVELY_NODE_ID || "").trim() || readLocal("node-id") || "";   // '' = 게이트웨이 로컬(박스)
   const harness = (process.env.LIVELY_HARNESS || "claude").trim().toLowerCase();
+  // #1750 S3 — 셀프호스트 다중 워크스페이스: 이 세션의 소속(spawn 이 pane env 로 심음)을 헤더로 알린다.
+  //  없으면 안 붙인다(primary = 종전). 안 붙이면 secondary 세션의 기록이 primary 에 쌓인다(소속 불일치).
+  const wsSlug = (process.env.LVLY_TENANT_SLUG || "").trim();
   const jfetch = async (p, opts = {}) => {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), Math.max(500, Math.min(6000, BUDGET_MS - (Date.now() - startedAt))));
-    try { return await fetch(base + p, { ...opts, signal: ctl.signal, headers: { authorization: "Bearer " + token, ...(opts.headers || {}) } }); }
-    finally { clearTimeout(t); }
+    try {
+      return await fetch(base + p, { ...opts, signal: ctl.signal, headers: {
+        authorization: "Bearer " + token, ...(wsSlug ? { "x-lively-workspace": wsSlug } : {}), ...(opts.headers || {}) } });
+    } finally { clearTimeout(t); }
   };
   const q = (o) => new URLSearchParams(o).toString();
 

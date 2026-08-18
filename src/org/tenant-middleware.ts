@@ -23,6 +23,11 @@
 import type { RequestHandler } from "express";
 import { resolveTenantFromHeaders, withTenant, type TenantContext } from "./tenant-context.js";
 
+/** 셀프호스트 다중 워크스페이스(#1750 S1)의 요청 헤더 — 프론트 api()/하네스가 선택한 워크스페이스 slug. */
+export const WORKSPACE_HEADER = "x-lively-workspace";
+/** registry 모드에서 미들웨어가 쓰는 slug→워크스페이스 해석기(부팅이 주입 — org/tenancy/registry.lookupWorkspace). */
+export type WorkspaceLookup = (slug: string) => Promise<{ id: string; slug: string } | null>;
+
 /** 거절 사유별 HTTP 상태 — 운영이 로그만 보고 원인을 가를 수 있게 서로 다른 코드를 준다. */
 export function statusForReason(reason: string): number {
   switch (reason) {
@@ -56,7 +61,36 @@ export function isTenantAgnosticPath(path: string): boolean {
  * ⚠ `withTenant` 안에서 `next()` 를 부른다 — 그래야 **그 뒤의 모든 핸들러**가 같은 비동기 체인에
  *  들어와 컨텍스트를 본다. `next()` 를 밖에서 부르면 컨텍스트가 이 미들웨어에서 끝난다.
  */
-export function tenantContextMiddleware(env: NodeJS.ProcessEnv = process.env): RequestHandler {
+export function tenantContextMiddleware(env: NodeJS.ProcessEnv = process.env, lookup?: WorkspaceLookup): RequestHandler {
+  // ── registry 모드(#1750 S1, 셀프호스트 다중 워크스페이스) ──────────────────
+  //  CP 헤더 모드와 **배타**다: 앞단(CP 라우터)이 있는 배포는 서명 헤더가 권위이고, 셀프호스트는 앞단이
+  //  없어 **선택 헤더 + 등록부**가 권위다. 두 모드가 겹치면(둘 다 설정) CP 쪽이 이긴다 — 서명이 더 강한
+  //  권위라서가 아니라, 겹침 자체가 배선 오류이고 그때 안전한 쪽(요청을 위조 못 하는 쪽)이 서명이라서다.
+  //
+  //  판정: 헤더 없음/'primary' → 컨텍스트 없이 통과(= primary. 바인딩 리졸버의 primary 폴백이 받는다 —
+  //   구 클라이언트·하네스·크론 전부 종전 그대로). 헤더 있음 → 등록부에서 slug 해석: 있으면 그 컨텍스트,
+  //   없으면 404(조용히 primary 로 떨어뜨리지 않는다 — 오타·삭제된 워크스페이스로의 쓰기가 남의 자리(primary)에
+  //   꽂히는 것이 최악이다).
+  //  ⚠ 여기는 "어느 워크스페이스인가"만 정한다. "이 사람이 거기 멤버인가"는 인증이 끝나야 알 수 있으므로
+  //   **인증 계층의 게이트**(org/tenancy/gate.ts — userFromSession·BearerVerifier)가 담당한다. 게이트가
+  //   빠진 신규 인증 경로가 생기면 새는 것 아니냐 — 아니다: 인증 자체가 그 두 함수로 수렴한다(구조 테스트로 잠근다).
+  if ((env.LIVELY_TENANCY_MODE || "").trim().toLowerCase() === "registry" && lookup
+      && !(env.LIVELY_TENANT_HEADER_SECRET || "").trim()) {
+    return (req, res, next) => {
+      if (isTenantAgnosticPath(req.url || "")) { next(); return; }
+      const raw = req.headers[WORKSPACE_HEADER];
+      const slug = (Array.isArray(raw) ? raw[0] : raw || "").trim().toLowerCase();
+      if (!slug || slug === "primary") { next(); return; }
+      if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(slug)) { res.status(400).json({ message: "워크스페이스 이름 형식이 올바르지 않습니다" }); return; }
+      lookup(slug).then((w) => {
+        if (!w) { res.status(404).json({ message: `워크스페이스 '${slug}' 가 없습니다` }); return; }
+        withTenant({ id: w.id, slug: w.slug }, () => next());
+      }).catch((e) => {
+        console.warn(`[tenant] 워크스페이스 해석 실패 — ${e instanceof Error ? e.message : e}`);
+        res.status(500).json({ message: "워크스페이스를 확인하지 못했습니다" });
+      });
+    };
+  }
   return (req, res, next) => {
     if (isTenantAgnosticPath(req.url || "")) { next(); return; }
     const r = resolveTenantFromHeaders(req.headers as Record<string, string | string[] | undefined>, env);
