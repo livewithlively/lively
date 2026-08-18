@@ -122,6 +122,8 @@ export interface TimelineCtx {
   empty?: string;
   /** 세션처럼 '지시 하나 = 한 장'으로 묶을 화면이면 true. */
   chapters?: boolean;
+  /** 결과물 보기(#1756) — 무슨 일이 있었나가 아니라 **무엇이 남았나**. 세션 화면이 쓴다. */
+  outcomes?: boolean;
 }
 export interface TimelineHandle {
   add(item: { id: string; kind: string; verb: string; label: string; key: string; ts?: string; detail?: string; actor?: TlActor | null; href?: string | null; tier?: TlTier; children?: TlChild[] }, at?: 'end' | 'start'): void;
@@ -146,11 +148,11 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
   const noteEl = el('p', { class: 'v2-fine', hidden: true });
   // 골격은 가운데 화면과 같다(#1756): [머리 바][사실 한 줄] + 본문만 스크롤.
   //  가운데 대화창(sc-head → sc-chat)과 같은 자리에 같은 선이 지나가야 두 열이 한 판으로 읽힌다.
-  const metaEl = el('div', { class: 'tl-meta', hidden: true });
+  const factsEl = el('div', { class: 'tl-facts', hidden: true });
   const root = el('section', { class: 'tl-wrap' },
     el('div', { class: 'v2-aside-h' }, el('b', { text: '타임라인' }), el('span', { class: 'tl-scope', text: ctx.scope }), countEl),
-    metaEl,
-    el('div', { class: 'tl-body' }, list, emptyEl, noteEl));
+    factsEl,
+    el('div', { class: 'tl-scroll' }, list, emptyEl, noteEl));
   host.append(root);
 
   const isHead = (it: TlItem): boolean => !!ctx.chapters && it.kind === 'say' && it.verb === '지시';
@@ -228,8 +230,66 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
       el('span', { class: 'tl-bdg' }, el('span', { class: 'tl-dot tlk-' + dotOf(w), 'aria-hidden': 'true' }), w + ' ' + n)));
   }
 
+  // ── 결과물 보기(#1756) — 상민님: "결과물 위주로. 사소한 건 됐고, 전체 맥락에 중요한 영향 끼칠 것만." ──
+  //  ① 같은 대상은 한 장으로 접는다(같은 파일을 열 번 고쳤어도 그 파일은 하나다 — 횟수는 카드 안에).
+  //  ② 지시는 결과물이 아니다(무엇을 시켰나는 대화가 말한다).
+  //  ③ 무게가 낮은 것은 지우지 않고 **접는다** — 한 번 스친 파일까지 늘어놓으면 중요한 게 묻힌다.
+  const WEIGHT_KEEP = 55;
+  function weightOf(it: TlItem): number {
+    if (it.kind === 'activity') return 100;                       // 사람이 남긴 작업 기록 = 가장 무겁다
+    if (it.kind === 'knowledge') return 95;                       // 조직에 남는 것
+    if (it.kind === 'project' || it.kind === 'task') return 90;   // 일의 뼈대가 바뀐 것
+    if (it.kind === 'cmd') return 85;                             // 커밋 — 밖으로 나간 결과
+    if (it.kind === 'file') return (it.verb === '씀' ? 70 : 45) + Math.min(20, (it.count - 1) * 5);
+    return 30;                                                    // 새로 만든 파일 > 여러 번 고친 파일 > 한 번 스친 파일
+  }
+  let restOpen = false;
+  function outcomes(): { keep: TlItem[]; rest: TlItem[] } {
+    const by = new Map<string, TlItem>();
+    for (const it of items) {
+      if (it.kind === 'say') continue;
+      const k = it.kind + '|' + it.label;
+      const cur = by.get(k);
+      if (!cur) { by.set(k, { ...it }); continue; }
+      cur.count += it.count;
+      if (tsNum(it.ts) > tsNum(cur.ts)) cur.ts = it.ts;
+      if (it.verb === '씀' || it.verb === '만듦') cur.verb = it.verb;   // 만든 것이 고친 것을 이긴다
+      if (it.children && it.children.length) cur.children = [...(cur.children || []), ...it.children];
+    }
+    const all = [...by.values()].sort((a, b) => tsNum(a.ts) - tsNum(b.ts));
+    return { keep: all.filter((it) => weightOf(it) >= WEIGHT_KEEP), rest: all.filter((it) => weightOf(it) < WEIGHT_KEEP) };
+  }
+  function paintOutcomes(): void {
+    const { keep, rest } = outcomes();
+    countEl.textContent = String(keep.length);
+    emptyEl.hidden = keep.length > 0 || rest.length > 0;
+    const kids: HTMLElement[] = [];
+    let day = ' ';
+    let rail: HTMLElement = el('div', { class: 'tl-rail' });
+    const shown = restOpen ? [...keep, ...rest].sort((a, b) => tsNum(a.ts) - tsNum(b.ts)) : keep;
+    for (let i = shown.length - 1; i >= 0; i--) {                 // 최신이 위
+      const it = shown[i];
+      const d = dayOf(it.ts);
+      if (d !== day) {
+        day = d;
+        if (d) kids.push(el('div', { class: 'tl-day' }, el('span', { text: dayLabel(d) })));
+        rail = el('div', { class: 'tl-rail' });
+        kids.push(rail);
+      }
+      rail.append(card(it, []));
+    }
+    if (rest.length) {
+      kids.push(el('button', {
+        class: 'tl-rest', type: 'button', 'aria-expanded': String(restOpen),
+        onclick: () => { restOpen = !restOpen; paint(); },
+      }, restOpen ? '덜 중요한 변화 접기' : `덜 중요한 변화 ${rest.length}개 보기`));
+    }
+    list.replaceChildren(...kids);
+  }
+
   // ── 그리기 ──
   function paint(): void {
+    if (ctx.outcomes) { paintOutcomes(); return; }
     type Row = { head: TlItem; kids: TlItem[] } | { solo: TlItem };
     const rows: Row[] = [];
     let cur: { head: TlItem; kids: TlItem[] } | null = null;
@@ -310,7 +370,7 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
       schedule();
     },
     setNote(note) { noteEl.textContent = note || ''; noteEl.hidden = !note; },
-    setMeta(node) { metaEl.replaceChildren(...(node ? [node] : [])); metaEl.hidden = !node; },
+    setMeta(node) { factsEl.replaceChildren(...(node ? [node] : [])); factsEl.hidden = !node; },
     clear() { items = []; byId.clear(); byKey.clear(); open.clear(); schedule(); },
   };
   paint();
