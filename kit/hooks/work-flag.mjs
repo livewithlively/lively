@@ -249,7 +249,11 @@ try {
       if (!cooling(tryFlag, 60_000)) {
         mkdirSync(FLAG_DIR, { recursive: true, mode: 0o700 });
         writeFileSync(tryFlag, "");
-        if (await post("/claude-uuid", { uuid: sid })) writeFileSync(mappedFlag, "");
+        // #1746 — 대화 파일 경로도 함께 보고한다(payload 의 transcript_path: claude 원조 · grok/antigravity 어댑터가 transcriptPath 를
+        //  이 이름으로 번역). 세션 안에서 보고하므로 어느 홈(공유·프로필·격리)에 있는지 서버가 짐작하지 않아도 된다 — 대화창이 하네스
+        //  무관하게 그 파일을 읽는 근거(harness-io/locate.ts). 없으면 안 싣는다(서버가 규약으로 폴백).
+        const tpath = typeof input?.transcript_path === "string" && input.transcript_path.trim() ? input.transcript_path.trim() : "";
+        if (await post("/claude-uuid", tpath ? { uuid: sid, transcript_path: tpath } : { uuid: sid })) writeFileSync(mappedFlag, "");
       }
     }
     // #1059/#1221 — **상태 보고**: 이 세션이 지금 어느 단계인지(busy·waiting·idle)와 활동 시각을 알린다.

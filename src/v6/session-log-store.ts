@@ -52,6 +52,12 @@ export async function sessionOwner(nodeId: string, sessionId: string): Promise<s
   return (r.rows[0]?.owner as string | null) ?? null;
 }
 
+// 이 기록을 남긴 하네스(캡처 훅이 보고, #1746) — 읽을 때 어느 어댑터 파서로 공통 ChatLine 을 만들지 정한다. 미보고(구 행)면 null.
+export async function sessionHarness(nodeId: string, sessionId: string): Promise<string | null> {
+  const r = await itemsPool.query(`SELECT harness FROM session WHERE node_id=$1 AND session_id=$2`, [nodeId, sessionId]);
+  return (r.rows[0]?.harness as string | null) ?? null;
+}
+
 // 부모 세션 id — 서브에이전트면 부모(주) 세션 id, 최상위면 null(#905 C1 슬⑥). 렌더 시 sidechain 포함 여부 판정에 쓴다.
 export async function sessionParent(nodeId: string, sessionId: string): Promise<string | null> {
   const r = await itemsPool.query(`SELECT parent_session_id FROM session WHERE node_id=$1 AND session_id=$2`, [nodeId, sessionId]);
