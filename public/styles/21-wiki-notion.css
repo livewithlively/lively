@@ -137,6 +137,29 @@
 .be-raw-chip { position: absolute; top: -9px; left: 10px; background: var(--bg); color: var(--muted-2); font-size: 10px;
   padding: 0 7px; border: 1px solid var(--line); border-radius: 999px; letter-spacing: .5px; font-weight: 700; }
 .be-raw-view { cursor: pointer; font-size: 14.5px; }
+
+/* #1685 표 즉시 편집 — 셀이 곧 편집칸이다. raw 래퍼의 점선은 표에선 걷는다(원문 편집 상자가 아니라 '표'로 보여야 한다).
+   MD 칩은 남겨 두되 hover 때만 — 원문(파이프 정렬)을 직접 만지고 싶을 때의 탈출구다. */
+.be-raw.be-raw-table { border-color: transparent; padding: 4px 12px 8px; }
+.be-raw.be-raw-table:hover { border-color: var(--line); }
+.be-raw.be-raw-table .be-raw-chip { opacity: 0; cursor: pointer; transition: opacity .12s; }
+.be-raw.be-raw-table:hover .be-raw-chip { opacity: 1; }
+.be-raw.be-raw-table .be-raw-chip:hover { color: var(--ink); border-color: var(--line-note); }
+.be-tablewrap { position: relative; overflow-x: auto; }
+.be-table { margin: 0; }
+.be-table .be-tcell { outline: none; min-width: 64px; cursor: text; }
+.be-table .be-tcell:focus { background: var(--bg-sel); box-shadow: inset 0 0 0 2px var(--line-note); }
+.be-table .be-tcell:empty::after { content: ''; display: inline-block; min-height: 1.4em; }
+/* 헤더 없는 표(#551 노션 미러) — 헤더 행을 지우면 무손실이 깨지므로 칸은 남기고 시각적으로만 접는다. */
+.be-table-nohead thead th { background: transparent; opacity: .35; font-weight: 400; }
+.be-table-nohead thead th:focus { opacity: 1; }
+/* 컨트롤 바는 표 **아래**에 둔다 — 위쪽은 MD 칩·블록 삭제(✕)가 이미 쓰고 있어 겹치면 라벨이 잘린다.
+   자리는 늘 차지하고 보이기만 토글해 hover 때 레이아웃이 흔들리지 않게 한다. */
+.be-tctl { display: flex; gap: 4px; margin-top: 6px; opacity: 0; transition: opacity .12s; }
+.be-raw-table:hover .be-tctl, .be-raw-table:focus-within .be-tctl { opacity: 1; }
+.be-tctl-b { border: 1px solid var(--line); background: var(--bg); color: var(--muted-2); border-radius: 6px;
+  font-size: 11px; padding: 2px 7px; cursor: pointer; line-height: 1.6; }
+.be-tctl-b:hover { color: var(--ink); border-color: var(--line-note); }
 .be-raw-ta { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px;
   font: 12.5px/1.6 ui-monospace, Menlo, monospace; padding: 10px; resize: vertical; color: var(--ink); }
 .be-block-x { position: absolute; right: 2px; top: 4px; opacity: 0; border: none; background: var(--bg);
