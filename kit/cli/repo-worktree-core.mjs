@@ -148,7 +148,15 @@ function remoteDefaultBranch(ctx, base) {
 
 // 프로젝트의 **canonical 워크트리 슬롯** — <프로젝트 폴더>/<repo>. 서버 provisionProjectRepos 가 워크트리를
 //  두는 자리(path.join(projDir, name))와 **같은 자리**다. 마커 없으면(프로젝트 밖) null.
-const canonicalOf = (marker, repo) => (marker ? join(marker.dir, repo) : null);
+//  ⚠ 세션 전용 폴더의 마커(#1719, `kind:"session"`)는 **그 폴더가 프로젝트 폴더가 아니다** — 프로젝트 폴더는 마커의
+//   `project_dir` 가 가리킨다(세션이 나중에 프로젝트에 붙을 때 session-project.ts 가 적는다). 그걸 슬롯 기준으로 쓴다.
+//   project_dir 가 없으면(그 컴퓨터에 프로젝트 폴더가 없다) 슬롯도 없다 → cwd/<repo> + wt/<repo> 로 떨어진다.
+//   여기서 marker.dir 을 쓰면 sessions/<id>/<repo> 에 project/<id> 브랜치가 걸려 서버 provision 이 막힌다(#932 의 그 사고).
+const canonicalOf = (marker, repo) => {
+  if (!marker) return null;
+  if (marker.meta && marker.meta.kind === "session") return marker.meta.project_dir ? join(String(marker.meta.project_dir), repo) : null;
+  return join(marker.dir, repo);
+};
 
 // 워크트리 목표 경로 해석 — 지정 경로가 있으면 그대로(절대) 또는 cwd 기준(상대).
 //  미지정이면 **cwd 가 아니라 canonical 슬롯**(프로젝트 밖이면 cwd/<repo> 폴백).

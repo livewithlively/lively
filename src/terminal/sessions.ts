@@ -11,6 +11,7 @@ import { HttpError } from "../http-error.js";
 import { dirToProjectFolder } from "../project/project-fs.js";
 import { hiddenProjects, type HiddenProjects } from "../v6/visibility.js";
 import { recordSessionProject } from "../v6/project-session-store.js";   // #1313 R21 — 세션 바인딩만(PM 스토어 전체 미적재)
+import { SESSION_DIR_SUBDIR } from "./session-project.js";                // #1719 — 세션 전용 폴더 이름(<루트>/sessions/<id>)
 import { listMembers, getRuntimeConfig } from "../org/store.js";
 // 공유 빌드 캐시(#813 T3) — 세션이 의존성을 워크트리마다 새로 받지 않게 박스 전역 캐시를 가리킨다.
 import { sessionCacheEnv } from "../ops/build-cache.js";
@@ -281,7 +282,15 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  자동 격리(수동 버튼 불요). 인프라미설치/off/비멤버 = null 반환 = 비격리 폴백(무회귀).
   const osUser = await ensureMemberOsUser(user);
   const id = `${sessionPrefix(user)}${crypto.randomBytes(4).toString("hex")}`;
-  let { abs: target } = await resolveRootPath(user, input.rootKey, input.subpath, osUser);
+  // 세션 전용 폴더(#1719 홈 입력창) — cwd = <루트>/sessions/<세션id>. subpath 는 안 받는다(폴더를 고르지 않는 진입이라).
+  //  루트는 rootKey 그대로(기본 personal) — 격리 박스면 멤버 홈/box 아래, 관리형이면 멤버 홈이 그대로 마운트되는 자리다.
+  //  프로젝트 소속은 여기서 정하지 않는다: 나중에 session-project.ts 가 이 폴더 **안에** 마커·링크를 둔다(cwd 는 불변).
+  const rootKeyUsed = input.sessionDir ? (input.rootKey || "personal") : input.rootKey;
+  const subpathUsed = input.sessionDir ? `${SESSION_DIR_SUBDIR}/${id}` : input.subpath;
+  let { abs: target } = await resolveRootPath(user, rootKeyUsed, subpathUsed, osUser);
+  // 복원(restore)은 desired-state 의 root_key/subpath 로 같은 폴더에 **새 id** 로 다시 뜬다 — 그때도 세션 전용 폴더임을 알아야
+  //  프로젝트 붙이기가 계속 되므로, 플래그가 아니라 **자리**(<루트>/sessions/…)로 판정한다.
+  const isSessionDir = !!input.sessionDir || String(subpathUsed || "").replace(/^[/\\]+/, "").split(/[/\\]/)[0] === SESSION_DIR_SUBDIR;
   // 작업 디렉터리 확보. 격리면 멤버 uid 로 만든다 — 게이트웨이(비-멤버)는 멤버 700 홈 안에 mkdir 못 함(개인 폴더 세션 버그).
   if (osUser) await memberMkdir(osUser, target);
   else await fsp.mkdir(target, { recursive: true, mode: 0o700 });
@@ -432,6 +441,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   await tmux(["set-option", "-t", id, "@box_auto", input.autoApprove ? "1" : "0"]);
   await tmux(["set-option", "-t", id, "@box_flags", encodeOptJson(appliedFlags)]);
   await tmux(["set-option", "-t", id, "@box_invites", encodeOptJson(invites)]);
+  // 세션 전용 폴더 표식(#1719) — session-project.ts 가 **이 표식이 있을 때만** 폴더 안에 마커·링크를 쓴다
+  //  (cwd 가 프로젝트 폴더인 종전 세션에 같은 걸 쓰면 프로젝트 폴더를 오염시킨다).
+  if (isSessionDir) await tmux(["set-option", "-t", id, "@box_session_dir", "1"]);
   // 프로젝트 세션엔 프로젝트 id 를 박아둔다 — listSessions 의 projectId(프론트 세션 귀속·카운트) + 작업 타임라인 귀속용.
   //  (#452 이후 입장 게이트 canAttach 는 멤버십을 안 봄 — 이 id 는 표시·귀속 목적으로만 남는다.)
   if (input.projectId) {
@@ -460,7 +472,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     try {
       await upsertSessionState({
         id, owner: ownerId(user), label, harness: harness.key, dir: target,
-        root_key: input.rootKey || null, subpath: input.subpath || null,
+        root_key: rootKeyUsed || null, subpath: subpathUsed || null,   // 세션 전용 폴더는 실제 자리(sessions/<id>)를 남긴다 — 복원이 같은 폴더로 돌아오게
         flags: appliedFlags, auto_approve: !!input.autoApprove, invites,
         project_id: input.projectId || null, project_src: input.projectId ? (input.projectSrc === "org" ? "org" : "v6") : null,
         read_only: !!input.readOnly, incognito: !!input.incognito,
@@ -468,6 +480,15 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
         created: createdSec, last_busy: null,
       });
     } catch (e) { console.warn(`[terminal] 세션 desired-state 미러 실패(${id}) — 세션은 계속:`, (e as Error)?.message ?? e); }
+  }
+  // 첫 지시(#1719 홈 입력창) — 응답을 막지 않고 백그라운드에서 하네스 입력창이 뜨길 기다렸다 넣는다.
+  //  ⚠ 응답을 기다리게 하면 안 된다: 하네스 부팅(수 초)+신뢰 대화상자 동안 화면이 멈추고, 실패해도 세션은 이미 살아 있다.
+  //  동적 import — 정적으로 걸면 sessions → session-first-prompt → send-keys → terminal-pty → terminal-sessions → sessions 순환(check-imports).
+  if (input.initialPrompt && String(input.initialPrompt).trim() && harness.key !== "shell" && !input.loginFor) {
+    const prompt = String(input.initialPrompt);
+    void import("./session-first-prompt.js")
+      .then(({ injectFirstPrompt }) => injectFirstPrompt(id, harness.key, prompt, { trustOk: !!input.sessionDir }))
+      .catch((e) => { console.warn(`[terminal] 첫 지시 주입 실패(${id}) — 세션은 살아 있다:`, (e as Error)?.message ?? e); });
   }
   return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: createdSec, attached: false, invites, flags: appliedFlags };
 }

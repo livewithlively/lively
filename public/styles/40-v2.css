@@ -129,8 +129,27 @@ body[data-ui="v2"] #org-banner, body[data-ui="v2"] header.topbar, body[data-ui="
 .v2-row-r { color: var(--muted-2, #a6b2c8); }
 .v2-more { display: block; padding: 9px 14px; font-size: 12.5px; color: var(--muted); text-decoration: none; border-top: 1px solid var(--line-row, #EDF1F8); }
 
-/* 홈 — 인사 + 리브 대화 + 지금 */
+/* 홈 — 인사 + 입력창 하나(#1719, claude.ai 홈처럼) + 지금 도는 세션 */
 .v2-home { flex: 1; min-height: 0; display: flex; flex-direction: column; width: 100%; max-width: 780px; margin: 0 auto; padding: 34px 32px 18px; }
+.v2-home-compose { justify-content: flex-start; padding-top: clamp(40px, 16vh, 140px); }
+.v2-home-compose .v2-h1 { font-size: 24px; }
+.v2-compose { margin-top: 18px; border: 1px solid var(--line-net, #D5DDEA); border-radius: 16px; background: var(--bg, #fff);
+  padding: 12px 12px 10px; box-shadow: 0 1px 2px rgba(16, 24, 40, .04); }
+.v2-compose:focus-within { border-color: transparent; outline: 2px solid var(--blue); outline-offset: 0; }
+.v2-compose-in { display: block; width: 100%; resize: none; border: 0; outline: 0; background: transparent; font: inherit; font-size: 15px;
+  line-height: 1.6; color: var(--ink); min-height: 48px; max-height: 220px; padding: 2px 4px; }
+.v2-compose-in::placeholder { color: var(--muted-2, #a6b2c8); }
+.v2-compose-in:disabled { opacity: .55; }
+.v2-compose-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; }
+.v2-compose-hint { font-size: 12px; color: var(--muted); }
+.v2-compose-send { flex: none; }
+.v2-home-compose .v2-now { margin-top: 28px; }
+/* 우측 '이 세션' — 프로젝트 붙이기/떼기 */
+.v2-pj-pick { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 12px; }
+.v2-pj-sel { height: 32px; border: 1px solid var(--line-net, #D5DDEA); border-radius: 8px; padding: 0 8px; font: inherit; font-size: 13px;
+  background: var(--bg, #fff); color: var(--ink); max-width: 100%; }
+.v2-pj-sel:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; border-color: transparent; }
+.v2-pj-note:empty { display: none; }
 .v2-liv-tag { display: inline-flex; align-items: center; gap: 7px; color: var(--mint-deep, #0FA37E); font-weight: 800; font-size: 13px; }
 .v2-h1 { margin: 10px 0 0; font-size: 22px; font-weight: 800; letter-spacing: -.45px; line-height: 1.38; text-wrap: balance; word-break: keep-all; }
 .v2-title, .v2-desc { word-break: keep-all; }

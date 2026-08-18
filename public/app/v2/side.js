@@ -186,7 +186,7 @@ function renderTree(rowsIn) {
     const kids = shown.map((r) => projRow(r, stateOf(r), activeKey));
     if (!kids.length) {
         kids.push(!last.data.loadedAt ? el('p', { class: 'v2-tree-note', text: '불러오는 중…' }) : !last.data.projects.length
-            ? el('p', { class: 'v2-tree-note', text: '아직 프로젝트가 없어요. 리브에게 무엇이든 시키거나, [+ 새 프로젝트]로 시작하세요.' })
+            ? el('p', { class: 'v2-tree-note', text: '아직 프로젝트가 없어요. 가운데 입력창에 무엇이든 시키면 세션이 열리고, 프로젝트는 나중에 붙일 수 있어요.' })
             : el('div', { class: 'v2-tree-note' }, el('span', { text: '조건에 맞는 프로젝트가 없어요.' }), el('button', { class: 'btn-text', type: 'button', text: '필터 지우기', onclick: () => { sideFilter = ''; stateFilter = null; mineOnly = false; saveFlag(MINE_KEY, false); redraw(); } })));
     }
     if (hiddenDone)

@@ -30,6 +30,7 @@ import { nodeOpenTo } from "../node/node-access.js";
 import { translateNodeRpcError } from "../node/rpc-error.js";
 import { registerNodeRoutes } from "../node/routes.js";
 import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
+import { registerSessionProjectRoutes } from "./session-project-routes.js";   // #1719 — 세션 프로젝트 소속 바꾸기(홈 입력창 세션)
 import { claudeSessionIdsFor } from "../sessions/session-state.js";   // #1719 — 라이브 행에 대화 uuid
 
 // 노드 op 실패를 사용자에게 그대로 보여준다 — 노드측 예외(예: tmux 미설치 → spawn ENOENT)가 generic 500("internal_error")
@@ -92,6 +93,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
   registerSessionCrudRoutes(app, auth);
   registerRestoreReportRoutes(app, auth);
   registerSessionChatRoutes(app, auth);   // #1719 — /sessions/:id/transcript · /sessions/:id/keys (CRUD 뒤 — 경로가 겹치지 않는다)
+  registerSessionProjectRoutes(app, auth);   // #1719 — POST /sessions/:id/project (붙이기·떼기)
 
   registerTerminalFiles(app, verifier);
   registerNodeRoutes(app, verifier); // 분산 노드(#869) — /api/ui/nodes* (등록·회전·활성·삭제·현황)
@@ -395,6 +397,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       // #1516 — 로그인 전용 세션(관리탭 [연결된 AI 계정] ▸ 로그인). 값 검증은 harnessLoginArgv 가 한다
       //  (아는 하네스만 로그인 argv 를 내주고, 모르는 값은 평범한 셸 세션으로 접힌다 — 임의 문자열이 명령이 되지 않는다).
       loginFor: String(b.loginFor ?? "") || undefined,
+      // #1719 홈 입력창 — 세션 전용 폴더(폴더를 안 고른다) + 첫 지시(하네스 입력창이 뜬 뒤 주입). 노드 세션도 input 스프레드로 그대로 전파.
+      sessionDir: b.sessionDir === true,
+      initialPrompt: typeof b.initialPrompt === "string" && b.initialPrompt.trim() ? b.initialPrompt.slice(0, 20_000) : undefined,
     };
     const nodeId = String(b.node ?? "").trim();
     res.setHeader("Cache-Control", "no-store");

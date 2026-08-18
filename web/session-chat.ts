@@ -58,7 +58,9 @@ const srcPath = (s: Source, q: Record<string, string | number>): string => {
 };
 
 // ── 마운트 ────────────────────────────────────────────────────────────────────────────────
-export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, opts: { terminalSrc?: string | null; openHref?: string | null }): SessionChatHandle {
+// opts.firstPrompt — 홈 입력창(#1719 v2/quick-session)이 방금 연 세션의 첫 지시. 서버가 하네스 입력창이 뜬 뒤 실제로 넣으므로
+//  여기서는 **낙관적으로 그 턴을 먼저 그리고**(보낸 것과 같은 모양) 대화 파일에 나타나면 그 턴을 재사용한다(pendingSent 규약).
+export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, opts: { terminalSrc?: string | null; openHref?: string | null; firstPrompt?: string | null }): SessionChatHandle {
   let target = first;
   const isBox = first.live;                     // 라이브 행(박스) — 죽었어도(restorable) 박스다
   const dead = (): boolean => !target.live || !target.alive || !!target.raw?.restorable;
@@ -71,12 +73,14 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const titleEl = el('b', { class: 'sc-title', text: target.label });
   const idxBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '목차', title: '질문 목차', onclick: () => openIndex() }) as HTMLButtonElement;
   const termBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '터미널', title: '터미널로 보기(승인 대화상자 등은 터미널이 맞을 때가 있어요)', onclick: () => toggleTerminal() }) as HTMLButtonElement;
+  // 프로젝트 소속은 화면이 열린 뒤에도 바뀐다(#1719 우측 '이 세션' ▸ 프로젝트) — update() 가 이 링크를 되그린다.
+  const projLink = el('a', { href: target.projectId ? '#/p/' + target.projectId : '#/', text: target.projectName }) as HTMLAnchorElement;
   const head = el('div', { class: 'sc-head' },
     el('div', { class: 'sc-head-l' },
       dot, titleEl,
       el('span', { class: 'sc-meta' },
         stateEl, el('span', { class: 'sc-sep', text: '·' }),
-        el('a', { href: target.projectId ? '#/p/' + target.projectId : '#/', text: target.projectName }),
+        projLink,
         target.raw?.harness ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { class: 'mono', text: String(target.raw.harness) })] : null,
         target.node ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { text: String(target.node) })] : null)),
     el('div', { class: 'sc-head-r' },
@@ -170,6 +174,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let loadedFrom = 0; let loadedTo = 0;
   let carry = '';                             // 잘린 마지막 줄(다음 폴에서 이어 붙인다)
   let pendingSent: { text: string; t: ChatTurn } | null = null;   // 낙관적으로 그린 내 말 — 파일에 나타나면 그 턴을 재사용
+  let firstPrompt: string | null = opts.firstPrompt ? String(opts.firstPrompt) : null;   // 홈 입력창의 첫 지시(한 번만 그린다)
   let pollTimer: number | null = null;
   let destroyed = false;
   let lastLineAt = 0;
@@ -199,6 +204,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (pendingSent && flat(pendingSent.text) === flat(text)) {
         const rec = recs.find((r) => r.t === pendingSent!.t);
         pendingSent = null;
+        view.setNote('');                                        // '여는 중·아직 안 나타남' 안내는 내 말이 기록에 나타난 순간 물러난다
         if (rec) { cur = rec; rec.t.ts = o.timestamp; running = true; return; }
       }
       cur = newRec(text, o.timestamp); running = true;
@@ -253,6 +259,19 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       const boxErr = errs.find((e) => tries[errs.indexOf(e)]?.kind === 'box');
       const lastErr = boxErr ?? errs[errs.length - 1];
       const notYet = !errs.length || errs.every((e) => [403, 404].includes(Number(e?.status)));
+      // 홈 입력창이 방금 연 세션 — 첫 지시는 서버가 넣는 중이다. '아직 없음' 대신 그 턴을 도는 모양으로 먼저 그린다.
+      //  하네스 부팅(수 초)+신뢰 대화상자를 지나 파일에 내 말이 나타나면 applyLine 이 이 턴을 재사용한다. 오래 안 나타나면 말한다.
+      if (notYet && firstPrompt && canType() && !target.node) {
+        const rec = newRec(firstPrompt, new Date().toISOString());
+        pendingSent = { text: firstPrompt, t: rec.t }; cur = rec; running = true; firstPrompt = null;
+        view.running(rec.t); view.busy(true); view.scrollToBottom();
+        view.setNote('세션을 여는 중이에요 — AI 가 뜨면 첫 지시가 들어갑니다.');
+        const t0 = rec.t;
+        window.setTimeout(() => { if (!destroyed && pendingSent && pendingSent.t === t0) view.setNote('아직 첫 지시가 기록에 나타나지 않았어요 — 로그인이나 확인 대화상자에 멈춰 있을 수 있어요(터미널을 확인해 보세요).'); }, 60000);
+        paintState();
+        src = { kind: 'box', id: target.id }; schedule();
+        return;
+      }
       const msg = !tries.length ? '이 세션의 대화 id 를 아직 몰라 여기서 읽을 수 없어요 — 첫 턴이 끝나면 중앙 기록으로 보입니다. 지금은 터미널로 보세요.'
         : notYet ? (canType() ? '아직 대화 기록이 없어요. 아래에 첫 지시를 적으면 여기서부터 쌓입니다.' : '이 세션의 대화 기록을 찾지 못했어요.')
         : lastErr?.status === 409 ? '이 세션의 대화 파일은 그 컴퓨터에 있어 여기서 바로 읽지 못해요. 첫 턴이 끝나면 중앙 기록으로 보입니다.'
@@ -479,6 +498,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       const wasDead = dead();
       target = t;
       titleEl.textContent = t.label && !/^box-|^[0-9a-f-]{20,}$/i.test(t.label) ? t.label : titleEl.textContent;
+      projLink.textContent = t.projectName; projLink.href = t.projectId ? '#/p/' + t.projectId : '#/';
       paintState();
       if (!wasDead && dead()) { running = false; if (cur) view.settle(cur.t); }
     },
