@@ -70,6 +70,13 @@ function isDue(job: CronJob, now: number, tz: string): boolean {
   return now - last >= Math.max(60, Number(job.interval_sec) || 600) * 1000;
 }
 
+/**
+ * 틱 1회(#1437 중앙 모드) — **요청 컨텍스트 안에서** 부르면 itemsPool 파사드가 그 테넌트로 바인딩돼
+ *  org_cron 조회·실행 전부가 그 테넌트 스코프가 된다. 잡 실행은 fire-and-forget(내부 락이 중첩 방지)
+ *  이라 이 함수는 빨리 돌아온다 — HTTP 틱 엔드포인트에 그대로 얹어도 요청이 붙잡히지 않는다.
+ */
+export async function runSchedulerTickOnce(): Promise<void> { return tick(); }
+
 async function tick(): Promise<void> {
   let jobs: CronJob[];
   try { jobs = await q(itemsPool, `SELECT * FROM org_cron WHERE enabled=true`); }
