@@ -10,7 +10,9 @@ import { $view, api, el, toast } from '../core.js';
 import { fillLivCards, renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame, appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { drawSide as drawSideTree } from './side.js';
-import { mergeSessions, projName, refreshSession, renderHome, renderProject, renderSession, unmountSession, type Sess, type V2Data } from './views.js';
+import { dotCls, mergeSessions, projName, refreshSession, renderHome, renderProject, renderSession, unmountSession, type Sess, type V2Data } from './views.js';
+import { createTrailWidget, type TrailWidget } from '../session-trail.js';
+import { makeSplitter } from './split.js';
 
 let root: HTMLElement | null = null;
 let sideEl: HTMLElement | null = null;
@@ -28,10 +30,13 @@ export async function bootV2(): Promise<void> {
   root = document.getElementById('v2-root');
   if (!root) return;
   root.hidden = false;
+  // 세 칸 사이 경계는 끌어서 조정(#1719) — 사이드바·우패널 너비를 CSS 변수(--v2-side-w/--v2-aside-w)로, 손잡이가 바꾼다(기억됨).
   root.replaceChildren(
     sideEl = el('nav', { class: 'v2-side', 'aria-label': '탐색' }),
+    makeSplitter({ axis: 'x', key: 'side-w', cssVar: '--v2-side-w', target: root, def: 262, min: 180, max: 520, grow: 1, label: '사이드바 너비' }),
     centerEl = el('div', { class: 'v2-main', id: 'v2-main' }),
-    asideEl = el('aside', { class: 'v2-aside', 'aria-label': '이 선택의 지식' }));
+    makeSplitter({ axis: 'x', key: 'aside-w', cssVar: '--v2-aside-w', target: root, def: 316, min: 240, max: 720, grow: -1, label: '우패널 너비' }),
+    asideEl = el('aside', { class: 'v2-aside', 'aria-label': '이 선택의 맥락' }));
   drawSide(); // 데이터 전 골격(로고·리브·앱)부터 — 빈 화면을 오래 두지 않는다
   await loadData();
   drawSide();
@@ -115,8 +120,9 @@ async function route(): Promise<void> {
       let s = find();
       if (!s) { await loadData(); drawSide(); s = find(); }
       if (seq !== routeSeq) return;
-      renderSession(centerEl, data, id);
-      drawAsideSession(s || null);
+      // 우패널(발자취)을 먼저 — 세션 화면이 대화 파일을 읽으며 거기로 흘려보낸다.
+      const trail = drawAsideSession(s || null);
+      renderSession(centerEl, data, id, trail);
     } else if (page === 'app' && segs[1]) {
       const a = appByKey(segs[1]);
       const rest = segs.slice(2).join('/');
@@ -185,22 +191,24 @@ function drawAsideProject(detail: any, id: number): void {
       prod.length ? el('div', { class: 'v2-kn-list' }, ...prod.map((k) => knItem(k.name, 'prod'))) : el('p', { class: 'v2-empty', text: '세션이 끝나면 여기에 쌓입니다.' })),
     el('a', { class: 'btn btn-ghost btn-sm', href: '#/projects2/p/' + id, text: '프로젝트 앱에서 지식 연결' }));
 }
-function drawAsideSession(s: Sess | null): void {
-  if (!asideEl) return;
-  if (!s) { asideEl.replaceChildren(el('p', { class: 'v2-empty', text: '세션 정보를 찾을 수 없어요.' })); return; }
+// 세션 우패널 = 짧은 사실 줄 + **발자취**(session-trail.ts — 이 세션이 읽고 쓴 파일·지식·활동·프로젝트·태스크·자료).
+//  같은 세션이면 위젯을 **다시 만들지 않는다**(20초 폴링이 상태만 갱신) — 새로 만들면 쌓인 발자취가 사라진다.
+let asideTrail: { id: string; w: TrailWidget; facts: HTMLElement } | null = null;
+function drawAsideSession(s: Sess | null): TrailWidget | null {
+  if (!asideEl) return null;
+  if (!s) { asideTrail = null; asideEl.replaceChildren(el('p', { class: 'v2-empty', text: '세션 정보를 찾을 수 없어요.' })); return null; }
   const raw = s.raw || {};
-  const facts: Array<[string, string]> = [
-    ['상태', s.stateLabel], ['프로젝트', projName(data, s.projectId)],
-    ['하네스', String(raw.harness || '—')], ['노드', String(s.node || '이 박스')],
-    ['소유', s.owned ? '나' : String(raw.owner || raw.owner_name || '—')],
-  ];
-  asideEl.replaceChildren(
-    el('div', { class: 'v2-aside-h' }, el('b', { text: '이 세션' })),
-    el('dl', { class: 'v2-facts' }, ...facts.flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: v })])),
-    projectPicker(s),
-    // ⚠ replaceChildren 에 null 을 넘기면 글자 "null" 이 그려진다(el() 과 달리 걸러 주지 않는다) — 프로젝트 없는 세션에서 실측.
-    ...(s.projectId ? [el('a', { class: 'btn btn-ghost btn-sm', href: '#/p/' + s.projectId, text: '프로젝트로' })] : []),
-    el('p', { class: 'v2-fine', text: '이 세션이 읽고 찾은 지식(get·search)은 다음 단계에서 여기에 순서대로 붙습니다.' }));
+  const factsEl = el('div', { class: 'v2-sfacts' },
+    el('span', { class: 'v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' }), el('span', { text: s.stateLabel }),
+    el('span', { class: 'sep', text: '·' }), s.projectId ? el('a', { href: '#/p/' + s.projectId, text: projName(data, s.projectId) }) : el('span', { text: '프로젝트 없음' }),
+    raw.harness ? [el('span', { class: 'sep', text: '·' }), el('span', { class: 'mono', text: String(raw.harness) })] : null,
+    s.node ? [el('span', { class: 'sep', text: '·' }), el('span', { text: String(s.node) })] : null,
+    !s.owned && (raw.owner_name || raw.owner) ? [el('span', { class: 'sep', text: '·' }), el('span', { text: String(raw.owner_name || raw.owner) })] : null);
+  if (asideTrail && asideTrail.id === s.id && asideTrail.w.root.isConnected) { asideTrail.facts.replaceWith(factsEl); asideTrail.facts = factsEl; return asideTrail.w; }
+  asideEl.replaceChildren(factsEl, projectPicker(s));
+  const w = createTrailWidget(asideEl, { sessionId: s.id, live: s.live });
+  asideTrail = { id: s.id, w, facts: factsEl };
+  return w;
 }
 // 세션의 프로젝트 소속 — 내 세션이면 여기서 **언제든** 붙이고 뗀다(#1719: 홈 입력창은 프로젝트를 묻지 않고 연다).
 //  POST terminal/sessions/:id/project — 서버가 tmux 표시값·세션 폴더 안 마커/링크·DB 구간을 함께 바꾼다(cwd 는 그대로).
