@@ -83,22 +83,32 @@ export function humanTitle(raw, max = 44) {
 /** 작업 기록 요약 → 한 줄. '중분류 - 내용' 규약이면 내용이 본체다. */
 export function humanSummary(raw, max = 46) {
     let t = String(raw ?? '').replace(/\s+/g, ' ').trim();
-    const m = t.match(/^(.{2,14}?)\s+-\s+(.+)$/);
+    const m = t.match(/^(.{2,14}?)\s+-\s+(.+)$/); // '중분류 - 내용' 규약이면 내용이 본체
     if (m)
         t = m[2];
+    const c = t.match(/^([^:：]{2,24})[:：]\s+(.{6,})$/); // "as-built(#1437): 무엇을 했나" 처럼 앞이 꼬리표
+    if (c)
+        t = c[2];
     t = stripRefs(t);
-    // 개발자 요약은 "A — B · C · D" 처럼 겹쳐 쓰는 일이 잦다. 읽는 사람에게 필요한 건 첫 마디다.
-    const cut = (re) => { const i = t.search(re); if (i > 12)
-        t = t.slice(0, i); };
-    cut(/\s[—–]\s/);
-    cut(/\s·\s/);
-    // 괄호 주석은 **넘칠 때만** 통째로 뗀다 — 열린 채 잘리면 더 읽기 나쁘지만, 짧은 제목의 괄호는 정보다.
+    // 참조성 괄호는 길이와 무관하게 뗀다 — (#1719), (2026-08-18 · PR #164) 같은 건 읽는 사람 몫이 아니다.
+    t = t.replace(/\s*\((?=[^)]*(?:#\d|\d{4}-\d{2}))[^)]*\)?\s*/g, ' ').replace(/\s+/g, ' ').trim();
+    // 나머지는 **넘칠 때만** 자른다 — 짧은 제목의 부연·나열·괄호는 정보다.
+    if (t.length > max) {
+        const i = t.search(/\s[—–]\s/);
+        if (i > 8)
+            t = t.slice(0, i);
+    }
+    {
+        const i = t.search(/\s·\s/);
+        if (i > 8)
+            t = t.slice(0, i);
+    } // 나열(·)은 길이와 무관하게 첫 마디만 — 여러 건을 한 줄에 욱여넣은 표시다
     if (t.length > max) {
         const i = t.search(/\s*\(/);
         if (i >= 6)
             t = t.slice(0, i);
     }
-    t = t.replace(/[\s·,:=+-]+$/, '').trim();
+    t = stripRefs(t).replace(/[\s·,:=+-]+$/, '').trim();
     return t.length > max ? t.slice(0, max - 1).replace(/[\s·,]+$/, '') + '…' : t;
 }
 export function createTimeline(host, ctx) {
