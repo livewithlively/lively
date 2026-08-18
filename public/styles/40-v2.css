@@ -81,6 +81,8 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 
 .v2-tree { flex: 1; min-height: 0; overflow: auto; padding: 4px 8px 12px; }
 .v2-pj + .v2-pj { margin-top: 2px; }
+/* 세션을 펼친 프로젝트는 한 덩어리다 — 앞뒤로 더 띄워 어디까지가 그 프로젝트인지 눈으로 끊는다. */
+.v2-pj.open + .v2-pj, .v2-pj + .v2-pj.open { margin-top: 7px; }
 /* 프로젝트 행 — 폴더 + 굵은 이름. 누르면 **프로젝트 화면**. 완료·조용함도 이름은 같은 잉크색(태그·시각이 구분). */
 .v2-pj-row { display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 4px; border-radius: 8px; font-size: 13.5px; font-weight: 700; color: var(--ink); text-decoration: none; }
 .v2-pj-row:hover { background: var(--bg, #fff); }
@@ -100,11 +102,15 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-car:hover { color: var(--ink); background: var(--bg-tint-2, #EEF5FF); }
 .v2-car.none { visibility: hidden; cursor: default; }
 .v2-pj.open > .v2-pj-row .v2-car { transform: rotate(90deg); }
-/* 세션 행 — 들여쓴 레일 안, 상태점 + 보통 글씨. 누르면 **그 세션의 대화**. 프로젝트 행과 생김새가 다르다(위계). */
-.v2-ss-list { padding: 2px 0 6px 21px; }
-.v2-ss-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px 5px 11px; border-radius: 0 8px 8px 0; font-size: 12.5px; font-weight: 500; color: var(--ink-sub); border-left: 2px solid var(--line-net, #DCE6F5); margin-left: 7px; text-decoration: none; min-height: 26px; }
-.v2-ss-row:hover { background: var(--bg-tint, #F6FAFF); color: var(--ink); border-left-color: var(--muted-2, #a6b2c8); }
-.v2-ss-row.on { background: var(--bg-tint, #F6FAFF); color: var(--ink); font-weight: 700; border-left-color: var(--blue); }
+/* 세션 행 — 들여쓴 레일 안, 상태점 + 보통 글씨. 누르면 **그 세션의 대화**. 프로젝트 행과 생김새가 다르다(위계).
+   레일은 행마다 끊긴 테두리가 아니라 **그룹을 관통하는 선 하나**다 — 끊긴 선은 '매달린 가지'로 안 읽힌다. */
+.v2-ss-list { position: relative; padding: 1px 0 7px 20px; }
+.v2-ss-list::before { content: ''; position: absolute; left: 12px; top: 0; bottom: 10px; width: 1.5px; border-radius: 2px; background: var(--line-net, #DCE6F5); }
+.v2-ss-row { position: relative; display: flex; align-items: center; gap: 7px; padding: 4px 8px; border-radius: 7px; font-size: 12.5px; font-weight: 500; color: var(--ink-sub); text-decoration: none; min-height: 24px; }
+.v2-ss-row:hover { background: var(--bg-tint, #F6FAFF); color: var(--ink); }
+.v2-ss-row.on { background: var(--bg-tint, #F6FAFF); color: var(--ink); font-weight: 700; }
+/* 지금 보고 있는 세션 — 레일 그 자리를 파랗게 덮는다(선이 두 줄로 갈라지지 않게). */
+.v2-ss-row.on::before { content: ''; position: absolute; left: -8.75px; top: 3px; bottom: 3px; width: 2px; border-radius: 2px; background: var(--blue); }
 .v2-ss-go { width: 13px; height: 13px; flex: none; fill: none; stroke: var(--muted-2, #a6b2c8); stroke-width: 1.8; stroke-linejoin: round; opacity: 0; }
 .v2-ss-row:hover .v2-ss-go { opacity: 1; }
 .v2-ss-main { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
@@ -116,7 +122,7 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-ss-row .w.wait { color: var(--amber, #C98A16); }
 .v2-ss-row .w.busy { color: var(--blue); }
 .v2-ss-row .w.done { color: var(--mint-deep, #0FA37E); }
-.v2-ss-more { display: block; margin-left: 6px; padding: 4px 8px 4px 11px; font-size: 12px; color: var(--muted); text-decoration: none; }
+.v2-ss-more { display: block; padding: 4px 8px; font-size: 12px; color: var(--muted); text-decoration: none; }
 .v2-tree-note { margin: 10px 8px 0; padding: 9px 11px; border: 1px dashed var(--line-net, #DCE6F5); border-radius: 9px; font-size: 12px; color: var(--muted); line-height: 1.55; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
 .v2-tree-note .btn-text { font-size: 12px; padding: 0; }
 .v2-tree-more { display: block; width: 100%; margin-top: 8px; padding: 7px 8px; border: 1px dashed var(--line-net, #DCE6F5); border-radius: 8px; background: none; font: inherit; font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer; text-align: left; }
