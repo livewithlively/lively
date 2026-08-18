@@ -21,7 +21,10 @@ function ws() {
     const w = m.workspace || {};
     return { kind: w.kind === 'personal' ? 'personal' : 'team', hub: w.hub_url || null, name: String(m.org_name || m.email || '내 워크스페이스') };
 }
-// 상단 노드 — 홈 워드마크 + 워크스페이스 스위처 버튼. side.ts 가 이걸 v2-side-top 자리에 넣는다.
+// 상단 노드 — **한 줄**: 브랜드 심볼(=홈) + 워크스페이스 스위처. side.ts 가 이걸 v2-side-top 자리에 넣는다.
+//  ⚠ 예전엔 워드마크 'Lively' 줄과 스위처 줄이 **따로** 있었다. 그러면 조직 이름이 'Lively' 일 때
+//   같은 글자가 세로로 두 번 나오고(실측), 목록이 시작되기 전에 196px 를 머리로 쓴다(사이드바 높이의 20%).
+//   심볼이 홈을 겸하게 해 한 줄로 접었다 — 141px. 심볼에 글자를 넣지 않는 이유는 리브 아바타('L')와 겹치기 때문.
 export function switcherTop() {
     const w = ws();
     const kindText = w.kind === 'personal' ? '개인' : '팀';
@@ -30,7 +33,7 @@ export function switcherTop() {
         closeMenu();
         return;
     } openMenu(btn); };
-    return el('div', { class: 'v2-side-top' }, el('a', { class: 'v2-logo', href: '#/', title: '홈으로', 'data-nav': 'home' }, 'Lively', el('span', { class: 'pulse-dot', 'aria-hidden': 'true' })), btn);
+    return el('div', { class: 'v2-side-top' }, el('a', { class: 'v2-mark', href: '#/', title: '라이블리 홈으로', 'aria-label': '홈으로', 'data-nav': 'home' }, el('span', { class: 'v2-mark-dot', 'aria-hidden': 'true' })), btn);
 }
 function sectionLabel(text) { return el('div', { class: 'v2-ws-sec', text }); }
 async function openMenu(anchor) {
