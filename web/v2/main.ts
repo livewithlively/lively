@@ -18,6 +18,7 @@ let centerEl: HTMLElement | null = null;
 let asideEl: HTMLElement | null = null;
 let data: V2Data = { projects: [], sessions: [], loadedAt: 0 };
 let projLoadedAt = 0;
+const projRetried = new Set<number>();   // 목록에 없어 한 번 더 당겨 본 프로젝트 id(같은 id 로 반복 재조회 방지)
 let routeSeq = 0;
 // 프로젝트 목록은 워크스페이스 전체(수백 건·설명 포함이라 1MB 를 넘는다) — 세션처럼 20초마다 당기지 않는다.
 //  5분에 한 번, 그리고 세션이 모르는 프로젝트를 가리킬 때(그새 생긴 프로젝트) 한 번 더.
@@ -60,10 +61,12 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
   }
   const sessions = mergeSessions(live as any[], logs as any[]);
   data = { projects, sessions, loadedAt: Date.now() };
-  // 세션이 가리키는데 목록에 없는 프로젝트(방금 만든 것) — 한 번 더 당긴다. 30초 안에 또 없으면 그건 진짜 안 보이는 프로젝트(가시성)라 그만.
-  if (!wantProj && Date.now() - projLoadedAt > 30_000) {
+  // 세션이 가리키는데 목록에 없는 프로젝트(방금 만든 것) — 한 번 더 당긴다. 같은 id 로는 한 번만(그래도 없으면 안 보이는 프로젝트다 —
+  //  프로젝트 세션은 전원 공개(#452)인데 프로젝트 목록은 리스트 가시성(#1291)을 타서 그런 경우가 정상적으로 생긴다. 매 폴링마다 1.4MB 를 다시 당기지 않는다).
+  if (!wantProj) {
     const known = new Set(projects.map((p) => p.id));
-    if (sessions.some((s) => s.projectId && !known.has(s.projectId))) { await loadData({ projects: true }); }
+    const fresh = sessions.filter((s) => s.projectId && !known.has(s.projectId) && !projRetried.has(s.projectId)).map((s) => s.projectId as number);
+    if (fresh.length) { for (const id of fresh) projRetried.add(id); await loadData({ projects: true }); }
   }
 }
 
