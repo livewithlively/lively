@@ -36,58 +36,165 @@ export function dotCls(stateKey: string): string {
 }
 const when = (ms: number) => (ms ? relTime(new Date(ms).toISOString()) : '');
 
-// ── 홈(미선택) — 인사 + **입력창 하나**(claude.ai 홈처럼) + '지금 도는 세션' ──────────────
-//  리브 대화는 홈에 두지 않는다(사이드바 [리브] → #/liv 가 그 자리). 홈은 "무엇이든 시키는 창" 하나가 주인이고,
-//  Enter 는 프로젝트를 **묻지 않고** 세션을 연다(v2/quick-session.ts — 세션 전용 폴더, 프로젝트는 나중에 언제든).
+// ── 홈 = 런처 (#1719 재설계) — 입력창이 주인공이고, 입력이 **어디로 가는지**(행선지)가 창 안에 보인다 ──────────
+//  · 타이핑하는 동안 프로젝트 이름·번호가 글에 닿으면 행선지가 그 프로젝트로 자동으로 바뀐다(왜 골랐는지도 말한다).
+//    직접 고르면(칩 ▾) 자동 매칭은 물러난다. 행선지 없음 = 세션 전용 폴더, 프로젝트는 나중에.
+//  · Enter → 세션 생성(+행선지 프로젝트 붙이기) → 세션 대화 화면. 리브 대화는 홈에 두지 않는다(#/liv 가 그 자리).
+//  · '지금 도는 세션'은 **답 기다리는 것 먼저**, 세션 이름과 프로젝트가 같으면 한 번만 쓴다(같은 말 두 줄 금지).
+
+interface Dest { p: Proj | null; why: string; manual: boolean }
+
+/** 글에서 행선지 프로젝트 찾기 — 이름 토큰(한글 2자·영숫자 3자 이상)이나 #번호가 닿은 것 중 점수 최고.
+ *  점수 = 닿은 토큰 길이 합(전체 이름이 통째로 들어 있으면 +10, 최근 7일 작업 +2, 내 프로젝트 +1). 4점 미만은 못 믿는다(추측 금지). */
+export function matchProject(text: string, projects: Proj[], sessions: Sess[]): { p: Proj; why: string } | null {
+  const t = String(text || '').toLowerCase();
+  if (t.trim().length < 2) return null;
+  const idm = /#(\d{2,})/.exec(t);
+  const lastWork = new Map<number, number>();
+  for (const s of sessions) if (s.projectId) lastWork.set(s.projectId, Math.max(lastWork.get(s.projectId) || 0, s.lastSeen || 0));
+  let best: { p: Proj; score: number; hit: string } | null = null;
+  for (const p of projects) {
+    if (idm && String(p.id) === idm[1]) return { p, why: `#${p.id} 이 글에 있어요` };
+    const name = String(p.name || '');
+    let score = 0; let hit = '';
+    if (name.length >= 4 && t.includes(name.toLowerCase())) { score += 10 + name.length; hit = name; }
+    else {
+      for (const tok of name.split(/[^0-9A-Za-z가-힣]+/)) {
+        const ok = /[가-힣]/.test(tok) ? tok.length >= 2 : tok.length >= 3;
+        if (ok && t.includes(tok.toLowerCase())) { score += tok.length; if (tok.length > hit.length) hit = tok; }
+      }
+    }
+    if (!score) continue;
+    const lw = lastWork.get(Number(p.id)) || 0;
+    if (lw && Date.now() - lw < 7 * 86400e3) score += 2;
+    if (best === null || score > best.score) best = { p, score, hit };
+  }
+  if (!best || best.score < 4) return null;
+  return { p: best.p, why: `이름의 「${best.hit}」가 닿았어요` };
+}
+
 export function renderHome(host: HTMLElement, data: V2Data): void {
   const me = state.me || {};
   const name = String(me.display_name || me.email || me.userId || '');
   const live = data.sessions.filter((s) => s.live && s.alive);
   const busy = live.filter((s) => s.stateKey === 'busy').length;
   const waiting = live.filter((s) => s.stateKey === 'waiting').length;
-  // 오전이에요 · 오후예요 · 저녁이에요 — 받침 유무로 '이에요/예요'가 갈린다(오후는 받침이 없다).
-  const h = new Date().getHours(); const tod = h < 12 ? '오전이에요' : h < 18 ? '오후예요' : '저녁이에요';
-  const lead = busy || waiting
-    ? `${name ? name + '님, ' : ''}${tod}. ${busy ? `세션 ${busy}개가 돌고 있고` : '도는 세션은 없고'}${waiting ? ` ${waiting}개는 답을 기다려요.` : ' 기다리는 건 없어요.'}`
-    : `${name ? name + '님, ' : ''}${tod}. 무엇을 할까요?`;
-  const ta = el('textarea', { class: 'v2-compose-in', rows: '2', placeholder: '무엇이든 시키세요 — Enter 로 새 세션이 열립니다', 'aria-label': '무엇이든 시키기' }) as HTMLTextAreaElement;
-  const send = el('button', { class: 'btn btn-primary btn-sm v2-compose-send', type: 'button', text: '시키기' }) as HTMLButtonElement;
-  const hint = el('span', { class: 'v2-compose-hint', text: 'Enter 보내기 · Shift+Enter 줄바꿈 · 프로젝트는 나중에 언제든 붙일 수 있어요' });
+  const h = new Date().getHours(); const tod = h < 12 ? '좋은 아침이에요' : h < 18 ? '좋은 오후예요' : '좋은 저녁이에요';
+  const d = new Date(); const KO_DAY = ['일', '월', '화', '수', '목', '금', '토'];
+
+  const dest: Dest = { p: null, why: '', manual: false };
+  const ta = el('textarea', { class: 'v2-launch-in', rows: '2', placeholder: '무엇이든 시키세요 — 프로젝트 이름이 글에 있으면 알아서 그리로 열려요', 'aria-label': '무엇이든 시키기' }) as HTMLTextAreaElement;
+  const send = el('button', { class: 'btn btn-primary v2-launch-send', type: 'button' }, el('span', { text: '시키기' }), el('kbd', { text: '⏎' })) as HTMLButtonElement;
+  const destBtn = el('button', { class: 'v2-dest-chip', type: 'button', 'aria-haspopup': 'listbox' }) as HTMLButtonElement;
+  const destWhy = el('span', { class: 'v2-dest-why' });
+  const destRow = el('div', { class: 'v2-dest' }, el('span', { class: 'v2-dest-k', text: '여는 곳' }), destBtn, destWhy);
+  const pop = el('div', { class: 'v2-dest-pop', hidden: true });
+  const card = el('div', { class: 'v2-launch' }, ta, el('div', { class: 'v2-launch-row' }, destRow, send), pop);
+
+  const paintDest = (): void => {
+    destBtn.replaceChildren(
+      dest.p ? el('span', { class: 'v2-dest-dot on', 'aria-hidden': 'true' }) : el('span', { class: 'v2-dest-dot', 'aria-hidden': 'true' }),
+      el('b', { text: dest.p ? dest.p.name : '프로젝트 없이' }),
+      el('span', { class: 'car', text: '▾', 'aria-hidden': 'true' }));
+    destBtn.title = dest.p ? `새 세션이 「${dest.p.name}」 프로젝트에 붙습니다 — 눌러서 바꿀 수 있어요` : '세션 전용 폴더로 열립니다 — 눌러서 프로젝트를 고를 수 있어요';
+    destWhy.textContent = dest.p ? (dest.manual ? '직접 골랐어요' : dest.why) : '나중에 언제든 붙일 수 있어요';
+  };
+  const autoMatch = (): void => {
+    if (dest.manual) return;
+    const m = matchProject(ta.value, data.projects, data.sessions);
+    const next = m ? m.p : null;
+    if ((next && next.id) !== (dest.p && dest.p.id)) { dest.p = next; dest.why = m ? m.why : ''; paintDest(); }
+    else if (m && dest.why !== m.why) { dest.why = m.why; paintDest(); }
+  };
+
+  // 행선지 고르기 — 최근 일한 프로젝트가 위, 찾기 한 칸. '자동으로 되돌리기'가 수동 잠금을 푼다.
+  const openPop = (): void => {
+    const byWork = new Map<number, number>();
+    for (const s of data.sessions) if (s.projectId) byWork.set(s.projectId, Math.max(byWork.get(s.projectId) || 0, s.lastSeen || 0));
+    const sorted = [...data.projects].sort((a, b) => (byWork.get(Number(b.id)) || 0) - (byWork.get(Number(a.id)) || 0) || String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+    const q = el('input', { class: 'v2-dest-q', type: 'search', placeholder: '프로젝트 찾기', 'aria-label': '프로젝트 찾기' }) as HTMLInputElement;
+    const list = el('div', { class: 'v2-dest-list', role: 'listbox' });
+    const row = (label: string, sub: string, on: boolean, pick: () => void): HTMLElement =>
+      el('button', { class: 'v2-dest-opt' + (on ? ' on' : ''), type: 'button', role: 'option', onclick: pick },
+        el('span', { class: 'n', text: label }), sub ? el('span', { class: 's', text: sub }) : null, on ? el('span', { class: 'ck', text: '✓' }) : null);
+    const paintList = (): void => {
+      const f = q.value.trim().toLowerCase();
+      const shown = sorted.filter((p) => !f || p.name.toLowerCase().includes(f) || String(p.id) === f).slice(0, 12);
+      list.replaceChildren(
+        row('프로젝트 없이', '세션 전용 폴더 · 나중에 붙이기', !dest.p, () => { dest.p = null; dest.manual = true; close(); }),
+        ...shown.map((p) => row(p.name, byWork.get(Number(p.id)) ? '최근 작업 ' + when(byWork.get(Number(p.id)) || 0) : '', !!dest.p && dest.p.id === p.id,
+          () => { dest.p = p; dest.manual = true; close(); })),
+        dest.manual ? el('button', { class: 'v2-dest-opt auto', type: 'button', onclick: () => { dest.manual = false; close(); autoMatch(); } },
+          el('span', { class: 'n', text: '자동으로 되돌리기 — 글에서 찾아요' })) : null);
+    };
+    const close = (): void => { pop.hidden = true; paintDest(); ta.focus(); };
+    q.addEventListener('input', paintList);
+    pop.replaceChildren(q, list); paintList();
+    pop.hidden = false; q.focus();
+    const off = (e: MouseEvent): void => { if (!(e.target as HTMLElement | null)?.closest?.('.v2-dest-pop, .v2-dest-chip')) { pop.hidden = true; document.removeEventListener('click', off); } };
+    window.setTimeout(() => document.addEventListener('click', off), 0);
+  };
+  destBtn.onclick = (e) => { e.stopPropagation(); if (pop.hidden) openPop(); else pop.hidden = true; };
+
   const grow = (): void => { ta.style.height = 'auto'; ta.style.height = Math.min(220, ta.scrollHeight) + 'px'; };
   const submit = async (): Promise<void> => {
     const text = ta.value.trim();
     if (!text || isCreatingQuickSession()) return;
-    send.disabled = true; ta.disabled = true; send.textContent = '여는 중…';
-    const ok = await openQuickSession(text);
-    if (!ok) { send.disabled = false; ta.disabled = false; send.textContent = '시키기'; ta.focus(); }
-    // 성공이면 라우터가 세션 화면으로 갈아 끼운다 — 이 요소들은 사라진다.
+    send.disabled = true; ta.disabled = true; send.replaceChildren(el('span', { text: dest.p ? `「${dest.p.name.slice(0, 14)}${dest.p.name.length > 14 ? '…' : ''}」에 여는 중…` : '여는 중…' }));
+    const ok = await openQuickSession(text, dest.p ? { projectId: Number(dest.p.id), projectName: dest.p.name } : undefined);
+    if (!ok) { send.disabled = false; ta.disabled = false; send.replaceChildren(el('span', { text: '시키기' }), el('kbd', { text: '⏎' })); ta.focus(); }
   };
   send.onclick = () => { void submit(); };
-  ta.addEventListener('input', grow);
-  // IME 조합 중 Enter(한글 마지막 글자 확정)는 보내지 않는다 — isComposing 이 그 신호다.
+  ta.addEventListener('input', () => { grow(); autoMatch(); });
   ta.addEventListener('keydown', (e: KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); void submit(); }
   });
+
+  // 이어서 하기 칩 — 최근 일한 프로젝트 상위 2개. 누르면 행선지만 그리로 잠그고 입력에 포커스(글은 사람이 쓴다).
+  const byWork = new Map<number, number>();
+  for (const s of data.sessions) if (s.projectId) byWork.set(s.projectId, Math.max(byWork.get(s.projectId) || 0, s.lastSeen || 0));
+  const recent = [...data.projects].filter((p) => byWork.get(Number(p.id))).sort((a, b) => (byWork.get(Number(b.id)) || 0) - (byWork.get(Number(a.id)) || 0)).slice(0, 2);
+  const sugs = recent.length ? el('div', { class: 'v2-launch-sugs' }, el('span', { class: 'v2-k', text: '이어서' }),
+    ...recent.map((p) => el('button', { class: 'chip', type: 'button', text: p.name, title: `행선지를 「${p.name}」로 두고 입력으로 갑니다`,
+      onclick: () => { dest.p = p; dest.manual = true; paintDest(); ta.focus(); } }))) : null;
+
   host.replaceChildren(
-    el('section', { class: 'v2-home v2-home-compose' },
-      el('div', { class: 'v2-home-lead' }, el('h1', { class: 'v2-h1', text: lead })),
-      el('div', { class: 'v2-compose' },
-        ta,
-        el('div', { class: 'v2-compose-row' }, hint, send)),
+    el('section', { class: 'v2-home v2-home-launch' },
+      el('div', { class: 'v2-home-eyebrow' },
+        el('span', { text: `${d.getMonth() + 1}월 ${d.getDate()}일 ${KO_DAY[d.getDay()]}요일` }),
+        el('span', { class: 'sep', text: '·' }),
+        busy ? el('span', { class: 'st busy' }, dot('busy'), `작업 중 ${busy}`) : el('span', { text: '도는 세션 없음' }),
+        waiting ? el('span', { class: 'st wait' }, dot('waiting'), `답 기다림 ${waiting}`) : null),
+      el('h1', { class: 'v2-h1', text: `${tod}${name ? ', ' + name + '님' : ''}. 무엇을 할까요?` }),
+      card,
+      el('div', { class: 'v2-launch-hint', text: 'Enter 시키기 · Shift+Enter 줄바꿈' }),
+      sugs,
       nowList(data)));
+  paintDest();
   window.setTimeout(() => { grow(); ta.focus(); }, 30);
 }
 
 function nowList(data: V2Data): HTMLElement {
-  const rows = data.sessions.filter((s) => s.live && s.alive).sort((a, b) => b.lastSeen - a.lastSeen).slice(0, 6);
+  const rank = (s: Sess): number => (s.stateKey === 'waiting' ? 0 : s.stateKey === 'busy' ? 1 : 2);
+  const rows = data.sessions.filter((s) => s.live && s.alive).sort((a, b) => rank(a) - rank(b) || b.lastSeen - a.lastSeen).slice(0, 7);
   if (!rows.length) return el('div', {});
   return el('div', { class: 'v2-now' },
-    el('span', { class: 'v2-k', text: '지금 도는 세션' }),
-    ...rows.map((s) => el('a', { class: 'v2-now-row', href: '#/s/' + encodeURIComponent(s.id) },
-      dot(s.stateKey), el('span', { class: 't', text: s.label }),
-      el('span', { class: 'p', text: projName(data, s.projectId) }),
-      el('span', { class: 'st', text: `${s.stateLabel} · ${when(s.lastSeen)}` }))));
+    el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: `지금 도는 세션 · ${rows.length}` }),
+      el('a', { class: 'btn-text', href: '#/app/terminal', text: '전체 →' })),
+    ...rows.map((s) => {
+      const pn = projName(data, s.projectId);
+      const raw = (s.raw || {}) as any;
+      // 세션 이름이 프로젝트명 그대로면 한 번만 쓴다 — '지금 하는 일'(pane 제목)이 있으면 그게 더 세션답다.
+      const title = s.label === pn && raw.title && String(raw.title) !== s.label ? String(raw.title) : s.label;
+      const showProj = !!s.projectId && title !== pn;
+      return el('a', { class: 'v2-now-row' + (s.stateKey === 'waiting' ? ' wait' : ''), href: '#/s/' + encodeURIComponent(s.id) },
+        dot(s.stateKey), el('span', { class: 't', text: title }),
+        showProj ? el('span', { class: 'p', text: pn }) : null,
+        el('span', { class: 'st', text: `${s.stateLabel} · ${when(s.lastSeen)}` }),
+        s.stateKey === 'waiting' ? el('span', { class: 'go', text: '답하기 →' }) : null);
+    }));
 }
+
 export function projName(data: V2Data, id: number | null): string {
   if (!id) return '프로젝트 없음';
   const p = data.projects.find((x) => Number(x.id) === Number(id));
