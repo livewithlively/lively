@@ -219,18 +219,16 @@ export function projName(data: V2Data, id: number | null): string {
 
 // ── 프로젝트 화면은 v2/project-view.ts(#1757) — 짧은 개요 + 리브 대화. 여기 있던 renderProject(개요+세션+태스크 나열)는 거기로 갈음했다.
 
-// ── 세션 — 그 세션 자체를 가운데에: **대화창**(web/session-chat.ts, 리브와 같은 컴포넌트)으로. 터미널은 헤더에서 토글 ─────────
+// ── 세션 — 그 세션 자체를 가운데에: 터미널 기본 + 대화(베타)(web/session-chat.ts) ─────────
 //  라이브면 박스의 대화 파일을 창으로 읽어 라이브로 따라가고 입력칸으로 보낸다(프롬프트 주입). 끝난 세션이면 기록 + [이어서 대화하기].
-let sessChat: SessionChatHandle | null = null;
-//  trail = 우패널 '발자취' 위젯(main.ts 가 aside 에 만들어 넘긴다) — 대화 파일에서 읽는 도구 사용이 거기로 흘러든다.
-//  onPickProject = 상단바 [프로젝트 연결] 드롭다운(#1749) — main.ts 가 목록·실행·갱신을 쥔다.
-export function renderSession(host: HTMLElement, data: V2Data, id: string, trail?: TrailWidget | null, onPickProject?: (anchor: HTMLElement) => void): void {
+//  핸들은 **호출자(탭)가 쥔다**(#1719 탭 — 세션 화면이 탭마다 하나씩 동시에 산다). 파괴·갱신도 탭이 한다.
+//  trail = 우패널 '발자취' 위젯(main.ts 가 그 탭의 aside 에 만들어 넘긴다).
+export function renderSession(host: HTMLElement, data: V2Data, id: string, trail?: TrailWidget | null, onPickProject?: (anchor: HTMLElement) => void): SessionChatHandle | null {
   // 기록(uuid) 링크로 들어왔는데 그 대화를 도는 박스가 있으면 그 박스가 정본이다(mergeSessions 가 기록을 박스에 접었다) — 옛 링크가 산다.
   const s = data.sessions.find((x) => x.id === id) || data.sessions.find((x) => x.logId === id);
-  if (sessChat) { sessChat.destroy(); sessChat = null; }
-  if (!s) { host.replaceChildren(el('div', { class: 'v2-center' }, el('p', { class: 'v2-muted', text: '세션을 찾을 수 없어요. 목록을 새로고침해 주세요.' }))); return; }
+  if (!s) { host.replaceChildren(el('div', { class: 'v2-center' }, el('p', { class: 'v2-muted', text: '세션을 찾을 수 없어요. 목록을 새로고침해 주세요.' }))); return null; }
   const termSrc = s.live ? terminalUrl(s.id, s.label, s.node) : null;
-  sessChat = mountSessionChat(host, { ...s, projectName: projName(data, s.projectId) }, {
+  return mountSessionChat(host, { ...s, projectName: projName(data, s.projectId) }, {
     terminalSrc: termSrc,
     openHref: s.live ? termSrc : (location.pathname + '?ui=classic#/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node) : '')),
     // 홈 입력창이 방금 연 세션이면 그 첫 지시를 낙관적으로 먼저 그린다(서버가 하네스 입력창이 뜬 뒤 실제로 넣는다).
@@ -239,13 +237,6 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, trail
     onPickProject,   // 상단바 [프로젝트 연결] 드롭다운(#1749) — main.ts 가 목록·실행·갱신을 쥔다
   });
 }
-/** 목록이 새로 왔을 때(20초 폴링) 열려 있는 세션 화면의 상태 표시를 갱신한다. 본문은 화면 자신이 대화 파일을 폴링한다. */
-export function refreshSession(data: V2Data, id: string): void {
-  if (!sessChat) return;
-  const s = data.sessions.find((x) => x.id === id) || data.sessions.find((x) => x.logId === id);
-  if (s) sessChat.update({ ...s, projectName: projName(data, s.projectId) });
-}
-export function unmountSession(): void { if (sessChat) { sessChat.destroy(); sessChat = null; } }
 
 // ── 데이터 정규화 — 라이브(terminal/sessions) + 기록(v6/sessions) 를 한 목록으로 ─────────
 //  같은 세션이 두 목록에 있으면 한 장으로: 라이브 행의 claudeSessionId(박스가 도는 대화 uuid) == 기록 행의 session_id 면
