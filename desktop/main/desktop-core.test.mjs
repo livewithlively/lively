@@ -1226,4 +1226,187 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
   });
 }
 
+
+// ── H. 웹 UI 셸 (#1541 · web-shell.mjs) — 앱 창에 게이트웨이의 /ui/ 를 그대로 싣는다(화면 코드 두 벌 금지) ─────────
+{
+  const { appReady, webUiUrl, webOrigin, openTargetFor, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN } = await import("./web-shell.mjs");
+  const { IPC_WEB } = await import("./ipc-contract.mjs");
+  const GW = "https://dev.lvly.io";
+  const okState = { cliFound: true, cliOutdated: false, cliBroken: null, loggedIn: true, kitInstalled: true };
+
+  t("H1 준비 판정은 한 자리 — 다섯 축 중 하나라도 빠지면 false, 토큰 거부도 false", () => {
+    assert.equal(appReady(okState), true);
+    for (const k of ["cliFound", "loggedIn", "kitInstalled"]) assert.equal(appReady({ ...okState, [k]: false }), false, k);
+    assert.equal(appReady({ ...okState, cliOutdated: true }), false, "구 CLI 인데 준비됐다고 한다");
+    assert.equal(appReady({ ...okState, cliBroken: "spawn EINVAL" }), false, "못 띄우는 CLI 인데 준비됐다고 한다");
+    assert.equal(appReady({ ...okState, tokenRejected: true }), false, "게이트웨이가 토큰을 거부했는데 준비됐다고 한다");
+    assert.equal(appReady(null), false); assert.equal(appReady({}), false);
+    // ★ 세 곳(메인·트레이·렌더러)이 각자 식을 적지 않는다 — 트레이는 appReady 를 import 하고, 렌더러는 state.ready 를 받는다
+    const tray = readFileSync(fileURLToPath(new URL("./tray-menu.mjs", import.meta.url)), "utf8");
+    assert.match(tray, /import \{ appReady \} from "\.\/web-shell\.mjs"/, "트레이가 appReady 를 안 쓴다");
+    assert.ok(!/!s\.cliFound \|\| s\.cliOutdated \|\| s\.cliBroken \|\| !s\.loggedIn \|\| !s\.kitInstalled/.test(tray), "트레이에 준비 식이 따로 남아 있다");
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    assert.match(main, /next\.ready = appReady\(next\)/, "메인이 state.ready 를 안 채운다");
+    assert.ok(!/if \(!state\.cliFound \|\| state\.cliOutdated \|\| state\.cliBroken \|\| !state\.loggedIn \|\| !state\.kitInstalled\) showWindow\(\)/.test(main), "메인 시작 경로에 옛 준비 식이 남아 있다");
+    const js = readFileSync(fileURLToPath(new URL("../renderer/app.js", import.meta.url)), "utf8");
+    assert.match(js, /const ready = !!s\?\.ready;/, "렌더러가 state.ready 대신 자기 식을 쓴다");
+  });
+
+  t("H2 웹 UI 주소·출처 — 뒤 슬래시 정리·경로 접두 보존·형식 아니면 null", () => {
+    assert.equal(webUiUrl("https://dev.lvly.io"), "https://dev.lvly.io/ui/");
+    assert.equal(webUiUrl("https://dev.lvly.io///"), "https://dev.lvly.io/ui/");
+    assert.equal(webUiUrl("http://localhost:8080"), "http://localhost:8080/ui/");
+    assert.equal(webUiUrl("https://corp.example.com/lively"), "https://corp.example.com/lively/ui/", "경로 접두가 있는 게이트웨이를 잘랐다");
+    for (const bad of ["", null, "dev.lvly.io", "ftp://x", "https://a b", "https://x;rm -rf"]) assert.equal(webUiUrl(bad), null, String(bad));
+    assert.equal(webOrigin("https://dev.lvly.io/lively/"), "https://dev.lvly.io");
+    assert.equal(webOrigin("http://localhost:8080"), "http://localhost:8080");
+    assert.equal(webOrigin("nope"), null);
+  });
+
+  t("H3 ★ 창 열기 규칙 — 같은 출처는 앱 안 새 창, 다른 출처는 브라우저, http(s) 아니면 거부", () => {
+    assert.equal(openTargetFor("https://dev.lvly.io/ui/terminal.html?session=abc", GW), "child");
+    assert.equal(openTargetFor("https://dev.lvly.io/ui/#/k/foo", GW), "child");
+    assert.equal(openTargetFor("https://www.notion.so/page", GW), "external");
+    assert.equal(openTargetFor("https://accounts.google.com/o/oauth2", GW), "external");
+    assert.equal(openTargetFor("http://dev.lvly.io/ui/", GW), "external", "스킴이 다르면 다른 출처다");
+    assert.equal(openTargetFor("https://dev.lvly.io:444/ui/", GW), "external", "포트가 다르면 다른 출처다");
+    for (const bad of ["javascript:alert(1)", "file:///etc/passwd", "data:text/html,x", "about:blank", "", null]) assert.equal(openTargetFor(bad, GW), "deny", String(bad));
+    assert.equal(openTargetFor("https://dev.lvly.io/ui/", null), "external", "게이트웨이를 모르면 아무것도 앱 안에 열지 않는다");
+    // 배선: 모든 웹 컨텐츠에 같은 규칙 — window.open(child/external/deny) + 최상위 이동(will-navigate)
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    assert.match(main, /app\.on\("web-contents-created"/, "web-contents-created 훅이 없다 — 자식 창은 규칙 밖이 된다");
+    assert.match(main, /setWindowOpenHandler/, "window.open 을 다루지 않는다 — 터미널 새 창이 시스템 브라우저로 나간다");
+    assert.match(main, /wc\.on\("will-navigate"/, "최상위 이동을 막지 않는다 — 앱 창이 남의 사이트로 넘어갈 수 있다");
+    const seg = main.slice(main.indexOf("setWindowOpenHandler"), main.indexOf('wc.on("will-navigate"'));
+    assert.match(seg, /openTargetFor\(url, state\.gatewayUrl\)/, "핸들러가 openTargetFor 를 안 쓴다");
+    assert.match(seg, /shell\.openExternal\(url\); return \{ action: "deny" \}/, "외부 링크를 브라우저로 넘긴 뒤 거부하지 않는다");
+    assert.match(seg, /preload: WEB_PRELOAD, contextIsolation: true, nodeIntegration: false, sandbox: true/, "자식 창에 같은 preload·격리를 안 준다");
+  });
+
+  t("H4 시작 창 — 할 일 있으면 마법사(숨겨 떴어도), 갖춰졌으면 사람이 켰을 때만 라이블리 화면", () => {
+    assert.equal(startupWindow({ ready: false, startedHidden: false }), "setup");
+    assert.equal(startupWindow({ ready: false, startedHidden: true }), "setup", "할 일이 있는데 숨겨 뜨면 '앱이 안 켜진다' 로 보인다");
+    assert.equal(startupWindow({ ready: true, startedHidden: false }), "app");
+    assert.equal(startupWindow({ ready: true, startedHidden: true }), "none", "로그인 자동시작마다 창이 뜨면 방해다");
+    // 숨겨 떴나 — Windows 는 우리가 넣은 --hidden, macOS 는 로그인 항목 신호. 못 재면 false(창을 띄우는 쪽이 안전)
+    assert.equal(startedHiddenFrom({ platform: "win32", argv: ["Lively.exe", "--hidden"] }), true);
+    assert.equal(startedHiddenFrom({ platform: "win32", argv: ["Lively.exe"] }), false);
+    assert.equal(startedHiddenFrom({ platform: "darwin", argv: [], loginItem: { wasOpenedAsHidden: true } }), true);
+    assert.equal(startedHiddenFrom({ platform: "darwin", argv: [], loginItem: { wasOpenedAtLogin: true } }), true);
+    assert.equal(startedHiddenFrom({ platform: "darwin", argv: [], loginItem: {} }), false);
+    assert.equal(startedHiddenFrom({ platform: "linux", argv: [] }), false);
+    assert.deepEqual(AUTOLAUNCH_ARGS, ["--hidden"]);
+    // 배선: 등록·조회 둘 다 같은 인자(Windows 는 조회에도 args 를 줘야 openAtLogin 을 제대로 읽는다) + 시작 경로가 startupWindow 를 쓴다
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    assert.match(main, /setLoginItemSettings\(\{ openAtLogin: !!on, openAsHidden: true, args: AUTOLAUNCH_ARGS \}\)/, "등록에 --hidden 이 없다");
+    assert.match(main, /getLoginItemSettings\(\{ args: AUTOLAUNCH_ARGS \}\)\.openAtLogin/, "조회에 args 를 안 준다(Windows 에서 항상 꺼짐으로 읽힌다)");
+    const boot = main.slice(main.indexOf("app.whenReady"), main.indexOf("app.whenReady") + 2500);
+    assert.match(boot, /startupWindow\(\{ ready: state\.ready, startedHidden \}\)/, "시작 경로가 startupWindow 를 안 쓴다");
+    assert.match(boot, /if \(first === "setup"\) showWindow\(\); else if \(first === "app"\) showApp\(\);/, "판정대로 창을 안 연다");
+    assert.match(main, /app\.on\("second-instance", \(\) => showMain\(\)\)/, "두 번째 실행이 갖춰진 뒤에도 마법사를 연다");
+    assert.match(main, /app\.on\("activate", \(\) => showMain\(\)\)/, "dock 클릭이 갖춰진 뒤에도 마법사를 연다");
+  });
+
+  t("H5 ★ 토큰 거부 감지 — 그 게이트웨이의 /api/ui/* 401 만, /api/ui/login 은 제외, 다른 출처는 무시", () => {
+    assert.equal(isTokenRejection({ url: GW + "/api/ui/me", statusCode: 401 }, GW), true);
+    assert.equal(isTokenRejection({ url: GW + "/api/ui/v6/projects?mine=1", statusCode: 401 }, GW), true);
+    assert.equal(isTokenRejection({ url: GW + "/api/ui/login", statusCode: 401 }, GW), false, "비밀번호 틀림은 토큰과 무관하다");
+    assert.equal(isTokenRejection({ url: GW + "/api/ui/login?x=1", statusCode: 401 }, GW), false);
+    assert.equal(isTokenRejection({ url: GW + "/api/ui/me", statusCode: 200 }, GW), false);
+    assert.equal(isTokenRejection({ url: GW + "/api/ui/me", statusCode: 403 }, GW), false, "403 은 권한이지 로그인이 아니다");
+    assert.equal(isTokenRejection({ url: "https://other.example/api/ui/me", statusCode: 401 }, GW), false);
+    assert.equal(isTokenRejection({ url: GW + "/ui/", statusCode: 401 }, GW), false);
+    assert.equal(isTokenRejection(null, GW), false);
+    assert.deepEqual(tokenWatchFilter(GW + "/"), { urls: [GW + "/api/ui/*"] });
+    assert.equal(tokenWatchFilter(""), null);
+    // 배선: 응답을 바꾸지 않고 보기만(cb({})) · 거부된 **그 토큰**을 기억 · 파일 토큰이 바뀌면 저절로 풀림 · 준비 판정에 반영
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    const w = main.slice(main.indexOf("function watchTokenRejection"), main.indexOf('app.on("web-contents-created"'));
+    assert.match(w, /webRequest\.onHeadersReceived\(filter/, "onHeadersReceived 를 안 건다");
+    assert.match(w, /cb\(\{\}\);/, "응답을 그대로 통과시키지 않는다");
+    assert.match(w, /rejectedToken = tok;/, "거부된 토큰을 기억하지 않는다");
+    assert.match(main, /next\.tokenRejected = !!\(rejectedToken && readTrim\(join\(LIVELY_DIR, "token"\)\) === rejectedToken\)/, "파일 토큰과 비교하지 않는다(재로그인해도 안 풀린다)");
+    // 트레이·마법사 문구
+    assert.match(statusLabel({ ...okState, tokenRejected: true }), /다시 로그인/);
+    assert.ok(trayMenuModel({ ...okState, tokenRejected: true }).some((m) => m.id === "setup" && /다시 로그인/.test(m.label)), "트레이에 '다시 로그인…' 이 없다");
+    const js = readFileSync(fileURLToPath(new URL("../renderer/app.js", import.meta.url)), "utf8");
+    assert.match(js, /tokenRejected \? "로그인이 만료되었습니다/, "마법사가 만료를 '로그인 필요' 와 구분하지 않는다");
+  });
+
+  t("H6 preload 부팅 값 — 출처·토큰(공백은 없음으로)·버전·플랫폼. 토큰은 출처와 함께 가야 남의 사이트에 안 샌다", () => {
+    assert.deepEqual(webBootPayload({ gatewayUrl: GW + "/", token: " abc ", appVersion: "0.1.330", platform: "darwin" }), { origin: GW, token: "abc", appVersion: "0.1.330", platform: "darwin" });
+    assert.deepEqual(webBootPayload({ gatewayUrl: "bad", token: "  ", appVersion: null, platform: null }), { origin: null, token: null, appVersion: null, platform: null });
+    assert.deepEqual(webBootPayload({}), { origin: null, token: null, appVersion: null, platform: null });
+  });
+
+  t("H7 ★ 웹 preload — 채널이 IPC_WEB 과 정확히 같고, 마법사 채널(CLI 실행 통로)은 하나도 없다, ipcRenderer 를 안 넘긴다, 출처를 본다", () => {
+    const src = readFileSync(fileURLToPath(new URL("../preload/web.cjs", import.meta.url)), "utf8");
+    const found = new Set((src.match(/"lively-web:[a-z-]+"/g) || []).map((s) => s.slice(1, -1)));
+    for (const ch of Object.values(IPC_WEB)) assert.ok(found.has(ch), `web preload 에 없는 채널: ${ch}`);
+    for (const ch of found) assert.ok(Object.values(IPC_WEB).includes(ch), `contract 에 없는 채널: ${ch}`);
+    assert.ok(!/"lively:[a-z-]+"/.test(src), "웹 preload 에 마법사 채널이 있다 — 원격 페이지가 CLI 를 돌릴 수 있게 된다");
+    assert.ok(!/exposeInMainWorld\([^)]*ipcRenderer\s*[,)]/.test(src) && !/ipcRenderer\s*:/.test(src.slice(src.indexOf("exposeInMainWorld"))), "ipcRenderer 를 노출했다");
+    assert.match(src, /window\.location\.origin === boot\.origin/, "출처를 안 보고 토큰을 넣는다");
+    assert.match(src, /localStorage\.setItem\(TOKEN_KEY, boot\.token\)/, "토큰을 localStorage 에 안 넣는다");
+    assert.match(src, /"lively_ui_token"/, "웹이 보는 키(web/lib/net.ts TOKEN_KEY)와 다르다");
+    // 두 접두는 서로 겹치지 않는다(마법사 preload 계약 검사 G2 가 웹 채널을 오인하지 않게)
+    for (const ch of Object.values(IPC_WEB)) assert.ok(ch.startsWith("lively-web:") && !Object.values(IPC).includes(ch));
+    // 메인: BOOT 는 동기 응답, LOGOUT 은 CLI logout, 둘 다 게이트웨이 출처에서 온 요청에만
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    assert.match(main, /ipcMain\.on\(IPC_WEB\.BOOT, \(e\) => \{[\s\S]*?e\.returnValue = webBootPayload\(/, "BOOT 가 동기 응답이 아니다(비동기면 웹이 토큰 없이 부팅해 로그인 화면이 깜빡인다)");
+    const bootSeg = main.slice(main.indexOf("ipcMain.on(IPC_WEB.BOOT"), main.indexOf("ipcMain.handle(IPC_WEB.LOGOUT"));
+    assert.match(bootSeg, /fromGateway\(e\)/, "BOOT 가 보내는 프레임의 출처를 안 본다");
+    const lo = main.slice(main.indexOf("ipcMain.handle(IPC_WEB.LOGOUT"), main.indexOf("ipcMain.handle(IPC_WEB.LOGOUT") + 400);
+    assert.match(lo, /fromGateway\(e\)/); assert.match(lo, /start\("logout", \{\}\)/, "웹 로그아웃이 CLI 로그아웃으로 안 이어진다");
+    // 웹 쪽 다리: core.ts logout 이 데스크톱 안이면 먼저 앱을 부른다(브라우저에선 없는 다리 — 그대로 지나간다)
+    const core = readFileSync(fileURLToPath(new URL("../../web/core.ts", import.meta.url)), "utf8");
+    assert.match(core, /window as any\)\.livelyDesktop/, "web/core.ts 가 데스크톱 다리를 모른다");
+    assert.match(core, /desk\.logout\(\)/, "웹 logout 이 데스크톱 logout 을 안 부른다");
+    assert.match(src, /logout: \(\) => ipcRenderer\.invoke\("lively-web:logout"\)/, "preload 가 logout 다리를 안 준다");
+  });
+
+  t("H8 웹 창 배선 — 준비됐을 때만·/ui/·전용 preload·격리·주소/토큰 바뀌면 다시 싣기·실패는 마법사 카드로·닫아도 트레이", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    const a = main.slice(main.indexOf("function showApp"), main.indexOf("function loadAppBounds"));
+    assert.match(a, /if \(!state\.ready\) return \{ ok: false/, "준비 안 됐는데 웹 창을 연다");
+    assert.match(a, /const url = webUiUrl\(state\.gatewayUrl\)/, "주소를 webUiUrl 로 안 만든다");
+    assert.match(a, /preload: WEB_PRELOAD/, "웹 창이 마법사 preload 를 쓴다(원격 페이지에 CLI 통로가 열린다)");
+    assert.match(a, /contextIsolation: true, nodeIntegration: false, sandbox: true/, "웹 창 격리가 빠졌다");
+    assert.match(a, /if \(appLoaded\.url !== url \|\| appLoaded\.token !== token\)/, "재로그인·다른 게이트웨이에서 다시 싣지 않는다");
+    assert.match(a, /appWin\.webContents\.on\("did-fail-load"/, "못 실었을 때를 다루지 않는다(빈 창이 남는다)");
+    assert.match(a, /code === -3\) return/, "ERR_ABORTED 를 실패로 오인한다");
+    assert.match(a, /appWin\.on\("close", \(e\) => \{ saveAppBounds\(\); if \(!quitting\) \{ e\.preventDefault\(\); appWin\.hide\(\); \} \}\)/, "웹 창을 닫으면 앱이 죽거나 자리를 잃는다");
+    assert.match(a, /watchTokenRejection\(state\.gatewayUrl\)/, "401 감시를 안 건다");
+    assert.match(main, /const WEB_PRELOAD = join\(HERE, "\.\.", "preload", "web\.cjs"\)/);
+    // 마법사 창과 자리를 따로 기억하고, 크기 기본이 웹 셸에 맞다
+    assert.match(main, /APP_BOUNDS_FILE = join\(LIVELY_DIR, "desktop-app-window\.json"\)/);
+    assert.ok(APP_WINDOW_DEFAULT.width >= 1200 && APP_WINDOW_MIN.width >= 800, "웹 3열 셸이 접히는 크기다");
+    const nb = normalizeBounds(null, [{ x: 0, y: 0, width: 1920, height: 1080 }], { defaultSize: APP_WINDOW_DEFAULT, minSize: APP_WINDOW_MIN });
+    assert.deepEqual(nb, { width: 1280, height: 840 });
+    assert.deepEqual(normalizeBounds({ width: 100, height: 100 }, [], { defaultSize: APP_WINDOW_DEFAULT, minSize: APP_WINDOW_MIN }), { width: 900, height: 600 }, "웹 창 최소치가 안 먹는다");
+    assert.deepEqual(normalizeBounds(null, []), { width: DEFAULT_SIZE.width, height: DEFAULT_SIZE.height }, "옵션 없으면 마법사 기본 그대로");
+    // 준비 상태 전이 → 창 전환(syncWindows): 무너지면 웹 창 내리고 마법사, 마법사에서 갖춰지면 웹 창
+    const sy = main.slice(main.indexOf("function syncWindows"), main.indexOf("function syncWindows") + 900);
+    assert.match(sy, /if \(wasReady && !ready\)/); assert.match(sy, /appWin\.hide\(\); showWindow\(\);/);
+    assert.match(sy, /if \(!wasReady && ready && win/); assert.match(sy, /showApp\(\)/);
+    assert.match(main, /syncWindows\(wasReady\)/, "refreshState 가 전이를 안 본다");
+    // 업데이트 자동 적용의 '보고 있나' 는 두 창 다
+    assert.match(main, /windowVisible: anyWindowVisible\(\)/, "웹 창을 보는 중에도 자동 적용된다");
+    // 마법사: 카드·버튼·IPC
+    const html = readFileSync(fileURLToPath(new URL("../renderer/index.html", import.meta.url)), "utf8");
+    const js = readFileSync(fileURLToPath(new URL("../renderer/app.js", import.meta.url)), "utf8");
+    assert.match(html, /id="app-card"/); assert.match(html, /id="app-open"/); assert.match(html, /id="done-open"/);
+    assert.match(js, /window\.lively\.openApp\(\)/, "마법사 버튼이 openApp 을 안 부른다");
+    assert.match(js, /s\?\.webError/, "마법사가 못 실은 사유를 안 보여준다");
+    assert.match(main, /ipcMain\.handle\(IPC\.OPEN_APP, \(\) => showApp\(\)\)/);
+    // 트레이: 갖춰지면 '라이블리 열기' + '설치·노드 설정…'
+    const ready = trayMenuModel({ ...okState, nodeRunning: true, nodeRegistered: true, gatewayUrl: GW });
+    assert.ok(ready.some((m) => m.id === "open" && m.label === "라이블리 열기"));
+    assert.ok(ready.some((m) => m.id === "settings"), "갖춰진 뒤 마법사로 가는 문이 없다");
+    const not = trayMenuModel({ ...okState, loggedIn: false });
+    assert.ok(not.some((m) => m.id === "open" && m.label === "창 열기") && !not.some((m) => m.id === "settings"));
+    assert.match(main, /if \(id === "settings"\) return showWindow\(\)/);
+  });
+}
+
 console.log(`\n${pass} passed`);

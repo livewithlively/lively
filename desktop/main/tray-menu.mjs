@@ -5,6 +5,7 @@
 //
 // ⚠ 이 앱은 **상시성의 주체가 아니다.** 노드를 살려 두는 건 OS 데몬(launchd·systemd·작업 스케줄러)이고
 //  앱은 그 데몬을 켜고 끄는 리모컨이다 — 그래서 '앱 종료' 가 노드를 끄지 않는다는 걸 메뉴가 말해 준다.
+import { appReady } from "./web-shell.mjs";
 
 /** 상태 뱃지 문구 — 사람이 한 줄로 이해하는 축은 '노드가 지금 도는가' 다. */
 export function statusLabel(st) {
@@ -16,6 +17,8 @@ export function statusLabel(st) {
   // 못 띄우는 CLI 는 **없는 것보다 나쁘다** — 있는 줄 알고 화면이 아무 말도 안 하게 된다.
   if (s.cliBroken) return "라이블리 CLI 를 실행할 수 없음";
   if (!s.loggedIn) return "로그인 필요";
+  // 토큰이 있어도 게이트웨이가 거부했으면(만료·회수) 로그인이 필요한 상태다 — '실행 중' 뒤에 숨기면 화면이 거짓말한다.
+  if (s.tokenRejected) return "로그인 만료 — 다시 로그인 필요";
   if (!s.kitInstalled) return "키트 설치 필요";
   // 프로세스는 도는데 게이트웨이엔 안 붙어 있음(#1541 실측: 절전 뒤 좀비 3시간·나흘) — '실행 중' 이라 하면 거짓말이다.
   if (s.nodeRunning && s.nodeConnected === false) return "노드 연결 끊김 — 다시 시작 필요";
@@ -50,13 +53,15 @@ export function trayMenuModel(st) {
     items.push({ type: "separator" });
   }
 
-  if (!s.cliFound || s.cliOutdated || s.cliBroken || !s.loggedIn || !s.kitInstalled) {
+  const ready = appReady(s);   // 갖춰졌나 — 판정은 web-shell.appReady 한 자리(여기서 식을 다시 적지 않는다)
+  if (!ready) {
     items.push({
       id: "setup",
       // 문구가 곧 진단이다 — '오래됨'과 '못 띄움'은 사람이 할 일이 다르다(전자는 갱신, 후자는 재설치).
       label: s.cliBroken ? "라이블리 다시 설치…"
         : s.cliOutdated ? "라이블리 업데이트…"
-          : s.cliFound ? "설치 계속하기…" : "라이블리 설치…",
+          : s.tokenRejected ? "다시 로그인…"
+            : s.cliFound ? "설치 계속하기…" : "라이블리 설치…",
       enabled: !busy,
     });
   } else if (s.nodeRunning && s.nodeConnected === false) {
@@ -76,8 +81,11 @@ export function trayMenuModel(st) {
     items.push({ id: "app-autolaunch", label: "이 앱도 로그인할 때 시작", type: "checkbox", checked: !!s.appAutoLaunch, enabled: !busy });
   }
   items.push({ type: "separator" });
-  items.push({ id: "open", label: "창 열기" });
-  items.push({ id: "open-web", label: "웹에서 보기", enabled: !!s.gatewayUrl });
+  // 창은 둘이다 — '라이블리 열기' 는 갖춰졌으면 웹 UI 화면(web-shell), 아니면 마법사(할 일이 있다). '설치·노드 설정' 은
+  //  갖춰진 뒤에도 마법사(노드·점검·로그아웃)로 가는 문 — 웹 화면 안에는 이 PC 의 노드를 켜고 끄는 자리가 없다.
+  items.push({ id: "open", label: ready ? "라이블리 열기" : "창 열기" });
+  if (ready) items.push({ id: "settings", label: "설치·노드 설정…" });
+  items.push({ id: "open-web", label: "브라우저에서 열기", enabled: !!s.gatewayUrl });
   items.push({ id: "logs", label: "로그 폴더 열기" });
   items.push({ type: "separator" });
   // 버전은 **누를 수 없는 정보 항목**이다 — 제보할 때 가장 먼저 묻는 값인데 어디에도 안 보였다.

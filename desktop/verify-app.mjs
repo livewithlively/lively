@@ -65,7 +65,9 @@ const title = await evaluate("document.title");
 chk(ready === "complete" && title === "라이블리", "② 렌더러 문서가 로드됐다", `readyState=${ready} title=${JSON.stringify(title)}`);
 
 const bridge = await evaluate("Object.keys(window.lively||{}).sort().join(',')");
-const want = ["answer", "cancel", "checkUpdate", "getState", "onLog", "onProgress", "onState", "openExternal",
+// preload.cjs 가 노출하는 전부 — 하나 늘면 여기도 는다(늘어난 걸 모르고 지나가지 않게). applyUpdate·cleanupStale 는 종전에
+//  빠져 있어 이 검사가 실제와 어긋난 채 실패하고 있었다(#1541 웹 UI 창 작업에서 발견·정정). openApp = 라이블리 화면(웹 UI 창).
+const want = ["answer", "applyUpdate", "cancel", "checkUpdate", "cleanupStale", "getState", "onLog", "onProgress", "onState", "openApp", "openExternal",
   "readLog", "retry", "run", "setAppAutoLaunch", "setGateway"].join(",");
 chk(bridge === want, "③ preload 브리지가 정확히 그 함수들만 노출한다", `실제=${bridge}`);
 

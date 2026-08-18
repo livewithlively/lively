@@ -20,31 +20,41 @@ function renderState(s) {
     : s.cliOutdated ? "라이블리 CLI 업데이트가 필요합니다"
       : s.cliBroken ? "라이블리 CLI 를 실행할 수 없습니다"
         : !s.loggedIn ? "로그인이 필요합니다"
-          : !s.kitInstalled ? "키트 설치가 필요합니다"
-            : s.nodeRunning ? "노드 실행 중" : s.nodeRegistered ? "노드 정지됨" : "설치 완료";
+          // 토큰은 있는데 게이트웨이가 거부했다(만료·회수) — 웹 창이 401 을 만나면 메인이 이 축을 세운다(web-shell).
+          : s.tokenRejected ? "로그인이 만료되었습니다 — 다시 로그인하세요"
+            : !s.kitInstalled ? "키트 설치가 필요합니다"
+              : s.nodeRunning ? "노드 실행 중" : s.nodeRegistered ? "노드 정지됨" : "설치 완료";
   $("status").textContent = label;
   $("sub").textContent = s?.gatewayUrl || "";
   $("dot").className = "dot " + (s?.nodeRunning ? "on" : s?.loggedIn ? "warn" : "off");
   // 설치가 끝났나 — 이 한 줄이 마법사와 평상시 화면을 가른다.
-  // ⚠ ready 에 **계약 지원**을 넣는다. 빠뜨리면 구 CLI 인 PC 에서 '설치 완료' 화면이 뜨는데
-  //  버튼은 전부 조용히 아무 일도 안 한다(사람은 앱이 고장났다고 본다).
-  const ready = !!(s?.cliFound && !s?.cliOutdated && !s?.cliBroken && s?.loggedIn && s?.kitInstalled);
+  // ⚠ 판정은 **메인이 한다**(web-shell.appReady → state.ready). 렌더러가 식을 따로 적으면 한 축(계약 지원·토큰 거부)이
+  //  빠진 채 '설치 완료' 화면이 뜨고 버튼은 조용히 아무 일도 안 한다(실측: 구 CLI 인 PC 가 그랬다).
+  const ready = !!s?.ready;
   // 게이트웨이 카드는 아직 끝나지 않았을 때만 — 다 됐는데 또 물으면 사용자가 '뭘 잘못했나' 한다.
   show($("gw-card"), !ready && !s?.busy);
-  // 업데이트가 필요한 경우엔 **주소를 이미 안다** — 다시 치게 하지 않고 채워 두고, 무엇을 할지 문구로 바꾼다.
+  // 업데이트·재로그인이 필요한 경우엔 **주소를 이미 안다** — 다시 치게 하지 않고 채워 두고, 무엇을 할지 문구로 바꾼다.
   //  (사람이 편집 중이면 건드리지 않는다 — 입력을 덮어쓰는 화면만큼 짜증나는 게 없다.)
   const gwIn = $("gw");
-  const needsFix = s?.cliOutdated || s?.cliBroken;
+  const needsFix = s?.cliOutdated || s?.cliBroken || s?.tokenRejected;
   if (needsFix && s?.gatewayUrl && !gwIn.value && document.activeElement !== gwIn) { gwIn.value = s.gatewayUrl; preview(); }
-  $("gw-title").textContent = s?.cliBroken ? "라이블리 CLI 다시 설치" : s?.cliOutdated ? "라이블리 CLI 업데이트" : "회사 게이트웨이 주소";
+  $("gw-title").textContent = s?.cliBroken ? "라이블리 CLI 다시 설치" : s?.cliOutdated ? "라이블리 CLI 업데이트" : s?.tokenRejected ? "다시 로그인" : "회사 게이트웨이 주소";
   // 실패 이유를 그대로 보여준다 — 'spawn EINVAL' 같은 원문이 있어야 제보가 진단이 된다(숨기면 우리도 모른다).
   $("gw-hint").textContent = s?.cliBroken
     ? `설치된 CLI 를 실행할 수 없습니다(${s.cliBroken}). 아래 주소에서 다시 받아 이어서 진행합니다.`
     : s?.cliOutdated
       ? "설치된 CLI 가 이 앱보다 오래돼 앱이 진행 상황을 읽지 못합니다. 아래 주소에서 최신으로 받아 이어서 진행합니다."
-      : "관리자에게 받은 주소를 넣으면 브라우저로 로그인합니다.";
-  $("gw-go").textContent = s?.cliBroken ? "다시 설치" : s?.cliOutdated ? "업데이트" : "연결";
+      : s?.tokenRejected
+        ? "게이트웨이가 이 PC 의 로그인 토큰을 거부했습니다(만료 또는 회수). 다시 로그인하면 이어서 진행합니다."
+        : "관리자에게 받은 주소를 넣으면 브라우저로 로그인합니다.";
+  $("gw-go").textContent = s?.cliBroken ? "다시 설치" : s?.cliOutdated ? "업데이트" : s?.tokenRejected ? "다시 로그인" : "연결";
   show($("done-card"), ready && !s?.busy && justFinished);
+  // 라이블리 화면(웹 UI 창) — 갖춰졌을 때만 열 수 있다. 못 실은 사유(webError)가 있으면 그대로 적는다(메인이 준다).
+  show($("app-card"), ready && !justFinished);
+  $("app-note").textContent = s?.webError || "웹과 같은 화면을 이 앱 안에서 씁니다 — 세션·프로젝트·WIKI 전부.";
+  $("app-note").classList.toggle("err", !!s?.webError);
+  $("app-open").textContent = s?.webError ? "다시 시도" : "라이블리 열기";
+  $("app-open").disabled = !!s?.busy;
   show($("node-card"), ready);
   show($("tools-card"), ready);
   show($("stale-card"), !!s?.staleInstall);
@@ -140,6 +150,11 @@ $("gw-go").addEventListener("click", async () => {
   if (!r?.ok && r?.error) { $("gw-err").textContent = r.error; log("✗ " + r.error); }
 });
 $("done-web").addEventListener("click", () => { if (state?.gatewayUrl) window.lively.openExternal(state.gatewayUrl); });
+$("app-web").addEventListener("click", () => { if (state?.gatewayUrl) window.lively.openExternal(state.gatewayUrl); });
+// 라이블리 화면 = 웹 UI 창(메인이 연다 — 준비 안 됐으면 사유를 돌려준다). 못 열면 카드에 사유가 남는다.
+const openApp = async () => { const r = await window.lively.openApp(); if (r?.error) { $("app-note").textContent = r.error; log("✗ " + r.error); } };
+$("app-open").addEventListener("click", openApp);
+$("done-open").addEventListener("click", openApp);
 $("cancel").addEventListener("click", () => window.lively.cancel());
 const answer = (v) => { if (!prompt) return; answeredPrompts.add(prompt.id); window.lively.answer(prompt.id, v); renderPrompt(null); };
 $("prompt-yes").addEventListener("click", () => answer(true));
