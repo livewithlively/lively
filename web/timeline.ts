@@ -56,7 +56,11 @@ export const TL_KINDS: Array<{ key: TlKind; label: string }> = [
   { key: 'cmd', label: '명령' }, { key: 'task', label: '태스크' }, { key: 'project', label: '프로젝트' },
   { key: 'source', label: '자료' }, { key: 'say', label: '지시' }, { key: 'meta', label: '잔 변경' },
 ];
-const KIND_LABEL = new Map<TlKind, string>(TL_KINDS.map((k) => [k.key, k.label]));
+// 2행에 조용히 놓을 '무엇을 한 일인가' — 라벨이 아니라 문장의 한 조각이다.
+const KIND_WORD: Record<string, string> = {
+  task: '끝낸 일', knowledge: '남긴 지식', activity: '작업', cmd: '코드', file: '파일',
+  project: '프로젝트', say: '남긴 말', source: '자료', meta: '설정',
+};
 
 const hhmm = (iso?: string): string => {
   if (!iso) return '';
@@ -74,11 +78,6 @@ function dayLabel(key: string): string {
   return Number.isFinite(d.getTime()) ? (d.getMonth() + 1) + '월 ' + d.getDate() + '일' : key;
 }
 const tsNum = (iso?: string): number => { const n = Date.parse(iso || ''); return Number.isFinite(n) ? n : 0; };
-function span(a?: string, b?: string): string {
-  const m = Math.round((tsNum(b) - tsNum(a)) / 60000);
-  if (!Number.isFinite(m) || m <= 0) return '';
-  return m < 60 ? m + '분' : Math.floor(m / 60) + '시간' + (m % 60 ? ' ' + (m % 60) + '분' : '');
-}
 
 // ── 사람 말로 ───────────────────────────────────────────────────────────────
 //  개발 도구의 원문(커밋 문법 feat(ui):, 꼬리표 (#1719)·PR #146)을 그대로 붙여넣지 않는다.
@@ -150,41 +149,46 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
   const isHead = (it: TlItem): boolean => !!ctx.chapters && it.kind === 'say' && it.verb === '지시';
 
   // ── 한 항목 = 한 카드 ────────────────────────────────────────────────────
-  //  상민님 2026-08-18: "얇은 한 줄에 배경도 없이 다닥다닥 붙어 있으니 징그럽다.
-  //   중요한 내용이면 그만큼 공간을 차지하는 게 맞다 — 세로 공간을 너무 박하게 쓰지 마라."
-  //  → 모든 항목을 같은 카드로 그린다: [무엇을 했나] 제목(두 줄까지) / 아랫줄에 결과·사람·시각.
+  //  상민님 2026-08-18: "디자인이 클로드 딸깍 같고 촌스럽다."
+  //  → 제목이 주인공이 되게 바꾼다. 종전엔 [동사] 라벨이 맨 앞에서 제목을 밀고 색까지 써서 눈이 라벨로 갔다.
+  //    이제 1행은 **제목과 시각**뿐이고, 무엇을 한 일인지(종류)·누가·결과는 2행에 조용히 붙는다.
+  //    테두리를 걷고 옅은 그림자만 둬서 카드가 종이처럼 뜨게 하고, 색은 레일 점 하나에만 쓴다.
   const faceOf = (a?: TlActor | null): HTMLElement | null =>
     (ctx.showActors && a && (a.id || a.name) ? personFace(String(a.id || ''), 'tl-face', String(a.name || a.id || '')) : null);
 
-  function metaRow(it: TlItem, kids: TlItem[], canOpen: boolean, isOpen: boolean): HTMLElement {
-    const face = faceOf(it.actor);
-    const dur = kids.length ? span(it.ts, kids[kids.length - 1].ts) : '';
-    return el('div', { class: 'tl-meta' },
-      badges(kids, it.children),
-      dur ? el('span', { class: 'tl-dur', text: dur }) : null,
-      face, face && it.actor && it.actor.name ? el('span', { class: 'tl-who', text: String(it.actor.name) }) : null,
-      el('span', { class: 'tl-tm', text: hhmm(it.ts) }),
-      canOpen ? el('span', { class: 'tl-more', text: isOpen ? '접기' : '자세히' }) : null);
+  /** 2행에 들어갈 조용한 말 — "무엇을 한 일인가 · 남은 것". 개수 나열은 소음이라 최소로. */
+  function metaBits(it: TlItem, kids: TlItem[]): string {
+    const kn = kids.filter((k) => k.kind === 'knowledge').length + (it.children || []).filter((c) => c.verb === '지식').length;
+    const files = kids.filter((k) => k.kind === 'file').length + (it.children || []).filter((c) => c.verb === '파일').length;
+    const bits: string[] = [];
+    if (it.kind === 'cmd' && it.detail) bits.push(it.detail + '번');
+    else bits.push(KIND_WORD[it.kind] || '');
+    if (files) bits.push('파일 ' + files);
+    if (kn) bits.push('지식 ' + kn);
+    return bits.filter(Boolean).join(' · ');
   }
 
-  /** 카드 하나. kids 가 있으면 장(章)이 되어 눌러서 펼친다. */
-  function card(it: TlItem, kids: TlItem[]): HTMLElement {
-    const childRows = (it.children || []).length;
-    const canOpen = kids.length > 0 || childRows > 0;
+  function card(it: TlItem, kids: TlItem[], sameWho: boolean): HTMLElement {
+    const canOpen = kids.length > 0 || (it.children || []).length > 0;
     const isOpen = open.has(it.id);
     const body = canOpen
-      ? el('div', { class: 'tl-body', hidden: !isOpen },
-        ...kids.slice().reverse().map(sub), ...(it.children || []).map(childLine))
+      ? el('div', { class: 'tl-body', hidden: !isOpen }, ...kids.slice().reverse().map(sub), ...(it.children || []).map(childLine))
       : null;
-    const head = el('div', { class: 'tl-head' },
-      el('span', { class: 'tl-verb', text: it.verb }),
-      el('span', { class: 'tl-ttl', text: it.label || '(이름 없음)' }),
-      it.count > 1 ? el('span', { class: 'tl-x', text: '×' + it.count }) : null);
+    const face = sameWho ? null : faceOf(it.actor);
     const box = el(it.href && !canOpen ? 'a' : 'div', {
-      class: 'tl-card t' + tierOf(it) + ' tlk-' + it.kind + (canOpen ? ' can' : '') + (isOpen ? ' open' : '') + (it.href && !canOpen ? ' go' : '') + (it.error ? ' err' : ''),
+      class: 'tl-card tlk-' + it.kind + (canOpen ? ' can' : '') + (isOpen ? ' open' : '') + (it.href && !canOpen ? ' go' : '') + (it.error ? ' err' : ''),
       href: it.href && !canOpen ? it.href : null,
       title: [it.label, it.detail].filter(Boolean).join('\n'),
-    }, head, metaRow(it, kids, canOpen, isOpen), body);
+    },
+      el('div', { class: 'tl-head' },
+        el('span', { class: 'tl-ttl', text: it.label || '(이름 없음)' }),
+        it.count > 1 ? el('span', { class: 'tl-x', text: '×' + it.count }) : null,
+        el('span', { class: 'tl-tm', text: hhmm(it.ts) })),
+      el('div', { class: 'tl-meta' },
+        el('span', { class: 'tl-what', text: metaBits(it, kids) }),
+        face, face && it.actor && it.actor.name ? el('span', { class: 'tl-who', text: String(it.actor.name) }) : null,
+        canOpen ? el('span', { class: 'tl-car', 'aria-hidden': 'true', text: '›' }) : null),
+      body);
     if (canOpen) {
       box.setAttribute('role', 'button');
       box.setAttribute('tabindex', '0');
@@ -195,7 +199,7 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
     }
     return box;
   }
-  /** 펼친 카드 안의 한 줄(그 일에서 나온 것들) — 여기서는 촘촘해도 된다. 맥락이 이미 카드가 잡아 준다. */
+  /** 펼친 카드 안의 한 줄 — 맥락은 카드가 잡았으니 여기서는 촘촘해도 된다. */
   function sub(it: TlItem): HTMLElement {
     return el(it.href ? 'a' : 'div', { class: 'tl-sub' + (it.href ? ' go' : ''), href: it.href || null, title: it.label },
       el('span', { class: 'tl-sub-v tlk-' + it.kind, text: it.verb }),
@@ -206,20 +210,6 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
   function childLine(c: TlChild): HTMLElement {
     return el(c.href ? 'a' : 'div', { class: 'tl-sub' + (c.href ? ' go' : ''), href: c.href || null, title: c.label },
       el('span', { class: 'tl-sub-v', text: c.verb }), el('span', { class: 'tl-sub-t', text: c.label }));
-  }
-
-  // ── 결과 배지 ──
-  function badges(kids: TlItem[], extra?: TlChild[]): HTMLElement | null {
-    const c = new Map<string, number>();
-    for (const k of kids) {
-      const w = k.kind === 'file' ? '파일' : k.kind === 'knowledge' ? '지식' : k.kind === 'cmd' ? '커밋' : (KIND_LABEL.get(k.kind) || k.kind);
-      c.set(w, (c.get(w) || 0) + k.count);
-    }
-    for (const e of extra || []) c.set(e.verb, (c.get(e.verb) || 0) + 1);
-    if (!c.size) return null;
-    const dotOf = (w: string) => (w === '파일' ? 'file' : w === '지식' ? 'knowledge' : w === '커밋' ? 'cmd' : w === '코드' ? 'activity' : 'task');
-    return el('span', { class: 'tl-bdgs' }, ...[...c.entries()].slice(0, 3).map(([w, n]) =>
-      el('span', { class: 'tl-bdg' }, el('span', { class: 'tl-dot tlk-' + dotOf(w), 'aria-hidden': 'true' }), w + ' ' + n)));
   }
 
   // ── 그리기 ──
@@ -239,6 +229,7 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
 
     const kids: HTMLElement[] = [];
     let day = ' ';
+    let lastWho = '\u0000';                                  // 같은 사람이 이어지면 이름을 되풀이하지 않는다
     let rail: HTMLElement = el('div', { class: 'tl-rail' });
     for (let i = shownRows.length - 1; i >= 0; i--) {           // 최신이 위
       const r = shownRows[i];
@@ -249,8 +240,12 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
         if (d) kids.push(el('div', { class: 'tl-day' }, el('span', { text: dayLabel(d) })));
         rail = el('div', { class: 'tl-rail' });
         kids.push(rail);
+        lastWho = '\u0000';                                  // 날이 바뀌면 다시 밝힌다
       }
-      rail.append('solo' in r ? card(r.solo, []) : card(r.head, r.kids));
+      const it0 = 'solo' in r ? r.solo : r.head;
+      const who = String((it0.actor && it0.actor.id) || '');
+      rail.append('solo' in r ? card(r.solo, [], who === lastWho) : card(r.head, r.kids, who === lastWho));
+      lastWho = who;
     }
     list.replaceChildren(...kids);
   }
