@@ -108,7 +108,8 @@ export function humanSummary(raw: unknown, max = 46): string {
   const cut = (re: RegExp) => { const i = t.search(re); if (i > 12) t = t.slice(0, i); };
   cut(/\s[—–]\s/);
   cut(/\s·\s/);
-  cut(/\s*\(/);                          // 괄호 주석은 통째로 — 열린 채 잘리면 더 읽기 나쁘다
+  // 괄호 주석은 **넘칠 때만** 통째로 뗀다 — 열린 채 잘리면 더 읽기 나쁘지만, 짧은 제목의 괄호는 정보다.
+  if (t.length > max) { const i = t.search(/\s*\(/); if (i >= 6) t = t.slice(0, i); }
   t = t.replace(/[\s·,:=+-]+$/, '').trim();
   return t.length > max ? t.slice(0, max - 1).replace(/[\s·,]+$/, '') + '…' : t;
 }
