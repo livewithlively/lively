@@ -567,7 +567,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   // 목차 — 이 창에서 읽은 질문들. 누르면 그 턴으로.
   function openIndex(): void {
     const qs = recs.filter((r) => r.t.text);
-    const panel = el('div', { class: 'sc-idx' },
+    // dash-pop-panel — 배경·테두리·그림자는 이 클래스가 준다(anchoredPopover 는 위치만 잡는다). 없으면 글자가 본문 위에 투명하게 겹친다.
+    const panel = el('div', { class: 'dash-pop-panel sc-idx' },
       el('div', { class: 'sc-idx-h', text: qs.length ? `질문 ${qs.length}개${loadedFrom > 0 ? ' · 불러온 범위 안' : ''}` : '이 창에 질문이 없어요' }),
       ...qs.map((r, i) => el('button', { class: 'sc-idx-item', type: 'button', title: r.t.text, onclick: () => { close(); r.t.root.scrollIntoView({ behavior: 'smooth', block: 'start' }); r.t.root.classList.add('sc-flash'); setTimeout(() => r.t.root.classList.remove('sc-flash'), 1800); } },
         el('span', { class: 'sc-idx-n', text: String(i + 1) }), el('span', { class: 'sc-idx-t', text: r.t.text.length > 90 ? r.t.text.slice(0, 90) + '…' : r.t.text }))));
