@@ -11,12 +11,16 @@ let creating = false;
 let findingFilter: { kind: string; severity: string } = { kind: '', severity: '' };
 
 const KIND_LABEL: Record<string, string> = {
-  mismatch: '분류 어긋남 보정', outdated: '지식 아웃데이티드',
+  mismatch: '분류 어긋남 후보', outdated: '지식 아웃데이티드',
+  stale_ref: '사라진 코드 경로 인용',
   contradiction: '지식 간 모순', code_drift: '지식 ↔ 코드 비교',
 };
 const KIND_WHAT: Record<string, string> = {
-  mismatch: '지금 분류보다 다른 분류 정의에 더 가까운 지식을 찾습니다. 계산만으로 판정해 비용이 들지 않습니다.',
-  outdated: '근거 자료가 지식보다 더 최신인 것을 찾습니다. 계산만으로 판정해 비용이 들지 않습니다.',
+  // ⚠ 문구가 '찾습니다'에서 '후보를 냅니다'로 바뀐 이유 — 실측 정밀도가 2/21 이다(#1195, #1419 도그푸드).
+  //  '찾습니다'라고 쓰면 사람이 목록을 판정 결과로 읽고 그대로 옮긴다. 화면이 먼저 기대를 낮춰야 한다.
+  mismatch: '지금 분류보다 다른 분류 정의에 더 가까운 지식의 **후보**를 냅니다. 계산만으로 내므로 비용이 없지만, 실측 정밀도가 낮습니다(대략 10건 중 1~2건이 진짜) — 사람이 정의를 읽고 판정해야 합니다. 자동 적용은 하지 않습니다.',
+  outdated: '근거 자료가 지식보다 더 최신인 것을 찾습니다. 계산만으로 판정해 비용이 들지 않습니다. ⚠ **자료에서 증류된 지식만** 대상입니다 — 사람이 직접 쓴 지식은 비교할 원천이 없어 잡히지 않습니다.',
+  stale_ref: '런북·사양 문서가 인용한 코드 경로가 지금 레포에 없는 것을 찾습니다. 파일이 있나 없나만 보므로 계산만으로 판정하고, 파일이 옮겨진 경우엔 **새 자리까지 찍어 줍니다**. 과거를 서술하는 문서(결정·조사 기록)는 인용 경로가 사라져도 정상이라 대상에서 뺍니다.',
   contradiction: '서로 어긋나는 말을 하는 지식 쌍을 찾습니다. 닮은 쌍을 추린 뒤 AI 가 실제 상충인지 판정합니다.',
   code_drift: '도메인 정의와 실제 코드가 어긋난 곳을 찾습니다. AI 가 코드를 읽고 판정합니다.',
 };
@@ -255,7 +259,8 @@ function managerSummary(m: any, reload: () => void) {
     catch (e) { toast((e as Error).message, true); }
   });
   // 결정적 종류만 즉시 실행 — 판단이 필요한 종류는 배치라 여기서 못 끝낸다(버튼을 아예 안 만든다).
-  const instant = m.kind === 'mismatch' || m.kind === 'outdated';
+  // 결정적 종류 — [지금 실행]이 이 자리에서 끝난다(LLM 배치 접수가 아니다).
+  const instant = m.kind === 'mismatch' || m.kind === 'outdated' || m.kind === 'stale_ref';
   const run = el('button', { class: 'btn btn-ghost btn-sm', text: '지금 검사' });
   run.addEventListener('click', async () => {
     (run as HTMLButtonElement).disabled = true;
@@ -317,7 +322,7 @@ function managerEditor(m: any | null, reload: () => void) {
   const staleField = F('며칠 이상 뒤처지면', '근거 자료가 지식보다 이만큼 더 최신이면 낡았다고 봅니다. 비우면 30일.', staleIn);
   const syncSensitivity = () => {
     const k = kindSel.value;
-    thField.hidden = k === 'outdated' || k === 'code_drift';
+    thField.hidden = k === 'outdated' || k === 'code_drift' || k === 'stale_ref';
     staleField.hidden = k !== 'outdated';
     const lbl = thField.querySelector('.field-label') as HTMLElement | null;
     const hint = thField.querySelector('.ctx-field-hint') as HTMLElement | null;
