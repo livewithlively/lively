@@ -738,8 +738,12 @@ export function mountSessionChat(host, first, opts) {
     }
     function finishReplay() {
         // 창 안에서 끝나지 않은 마지막 턴 — 지금 도는 중이면 라이브 표시, 아니면(죽었거나 오래됐으면) 조용히 마감.
+        //  ⚠ 중앙 기록(노드 세션, src.kind==='log')은 **턴 종료 표시(turn_duration·stop_hook_summary)가 안 담긴다** — 그건 claude 가
+        //   Stop 훅 캡처 뒤에 .jsonl 에 쓰기 때문(#1744 실측: 중앙 로그에 그 줄이 0개). 그래서 '최근에 줄이 왔으니 도는 중'
+        //   휴리스틱(staleMs<120s)을 로그 소스엔 쓰지 않는다 — 세션이 idle(하네스가 markActive 로 보고) 이면 그 턴은 끝난 것이다.
         const staleMs = Date.now() - lastLineAt;
-        const looksLive = running && !dead() && (target.raw?.working || target.raw?.agentState === 'busy' || staleMs < 120_000);
+        const busy = !!(target.raw?.working || target.raw?.agentState === 'busy');
+        const looksLive = running && !dead() && (busy || (src?.kind !== 'log' && staleMs < 120_000));
         if (cur && looksLive) {
             view.running(cur.t);
             view.busy(true);
@@ -998,8 +1002,12 @@ export function mountSessionChat(host, first, opts) {
                 titleFromFirstAsk();
             }
             else if (running && cur && !dead()) {
-                // 새 줄이 없는데 도는 중 표시 — 오래 조용하면(120초) 상태 보고까지 안 바쁘다면 마감한다(터미널에서 Esc 했거나 죽은 경우)
-                if (Date.now() - lastLineAt > 120_000 && !(target.raw?.working || target.raw?.agentState === 'busy')) {
+                // 새 줄이 없는데 도는 중 표시 — 마감 조건: 세션이 idle(하네스 보고) + 조용함. 유예는 소스별로 다르다.
+                //  · 중앙 기록(노드 세션): 턴 경계로만 자라고 종료 표시가 안 담기므로(#1744), idle 이면 짧게(6초) 기다렸다 마감한다.
+                //  · 박스 파일: 스트리밍이라 잠깐 조용할 수 있어 보수적으로 120초(터미널에서 Esc 했거나 죽은 경우 대비).
+                const idle = !(target.raw?.working || target.raw?.agentState === 'busy');
+                const graceMs = src.kind === 'log' ? 6_000 : 120_000;
+                if (idle && Date.now() - lastLineAt > graceMs) {
                     running = false;
                     view.settle(cur.t);
                     view.busy(false);
