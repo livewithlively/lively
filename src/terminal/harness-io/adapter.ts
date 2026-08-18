@@ -16,10 +16,10 @@
 //   answer(action)               approve|deny|interrupt → 키. **null = 화면에서 대신 눌러줄 수 없다**(승인 UI 미실측). 있는 척하지 않는다.
 //  ⚠ 축을 하나 늘리면 **모든 하네스가 그 축을 답해야 한다**(null 도 답이다) — 그게 '빠진 자리'를 없애는 방법이다(harness-registry 원칙).
 //     계약 테스트(adapter.test.ts)가 catalog.ts HARNESSES 의 모든 key 가 여기 있는지 강제한다.
-import path from "node:path";
 import type { ChatKey } from "../send-keys.js";
 import type { ParseResult, ParseState } from "./chat-line.js";
 import { claudeIo } from "./claude.js";
+import { codexIo } from "./codex.js";
 import { grokIo } from "./grok.js";
 import { antigravityIo } from "./antigravity.js";
 
@@ -55,26 +55,8 @@ export interface HarnessSessionAdapter {
   screen: ((tail: string[]) => ScreenState | null) | null;
 }
 
-// 아직 파서·승인 실측이 없는 하네스 — 축을 **명시적으로 null** 로 답한다(있는 척 금지 · 목록에서 빠지지도 않는다).
-//  · codex: 대화 파일 `~/.codex/sessions/<Y>/<M>/<D>/rollout-<ts>-<id>.jsonl` — 이름에 시각이 들어 규약으로 못 만든다(훅 보고 경로 필요,
-//    Stop payload 의 transcript_path 유무가 지식 간 상충 — 실측 후). 파서 후속.
-//  · opencode: 단일 파일 계약 미확인(플러그인 event 스트림 → 파일로 떨구는 작업 선행, [[opencode-harness-spec-1519]] ⑤축).
-const codexIo: HarnessSessionAdapter = {
-  key: "codex", label: "Codex",
-  roots: (homes) => homes.map((h) => path.join(h, ".codex", "sessions")),
-  filePattern: /^rollout-.*\.jsonl$/,
-  pathFor: null, convIdOk: null, parse: null, answer: null,
-  // 실측 2026-08-18(box-yoon-355e7d10): 업데이트·신뢰 대화상자는 메뉴 꼬리가 공통("Press enter to continue"),
-  // 작업 중엔 "• Working (2s • esc to interrupt)", 준비되면 컴포저 캐럿(›)이 placeholder 와 함께 뜬다.
-  // ⚠ busy 중에도 컴포저(›)가 그려져 있다 — 판정 순서(dialog→busy→ready)가 곧 안전장치다.
-  screen: (tail) => {
-    const s = tail.join("\n");
-    if (/press enter to continue/i.test(s)) return "dialog";
-    if (/esc to interrupt/i.test(s)) return "busy";
-    if (/^\s*›/m.test(s)) return "ready";
-    return null;   // 부팅·로그인 등 미실측 화면 — 보수적으로 기다린다
-  },
-};
+// opencode: 단일 파일 계약 미확인(플러그인 event 스트림 → 파일로 떨구는 작업 선행, [[opencode-harness-spec-1519]] ⑤축) —
+//  parse·pathFor 는 명시적 null(있는 척 금지). codex 는 codex.ts(rollout 파서 실측, #1759).
 const opencodeIo: HarnessSessionAdapter = {
   key: "opencode", label: "OpenCode",
   roots: () => [],
