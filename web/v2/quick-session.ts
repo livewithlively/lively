@@ -39,11 +39,15 @@ export async function openQuickSession(text: string, opts?: { projectId?: number
     const run = opts && opts.run;
     const harness = run?.harness || (p.harness && p.harness !== 'shell' ? p.harness : 'claude');
     const flags = run ? run.flags : (p.flags && typeof p.flags === 'object' ? p.flags : {});
+    // 실행 노드(#1744) — '' = 중앙 컴퓨터(기본, 필드 생략). 노드면 그 PC 에서 세션이 뜨고 첫 지시는 노드가 로컬로 넣는다
+    //  (server createSession 이 노드에선 injectFirstPrompt 로, DB 아웃박스 대신). 노드가 없거나 안 고른 경우 run.node 는 ''.
+    const node = run ? run.node : '';
     const out: any = await api('/api/ui/terminal/sessions', {
       method: 'POST',
       body: JSON.stringify({
         label: labelFromPrompt(t), harness, flags,
         autoApprove: !!p.autoApprove, sessionDir: true, initialPrompt: t,
+        ...(node ? { node } : {}),
       }),
     });
     const id = out && out.session && out.session.id ? String(out.session.id) : '';
