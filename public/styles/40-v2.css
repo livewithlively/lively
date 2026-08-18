@@ -264,8 +264,13 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .tl-day::after { content: ""; flex: 1; height: 1px; background: var(--line-net, #DCE6F5); }
 
 /* 세로 레일 — 점이 레일 위에 얹힌다 */
-.tl-rail { position: relative; padding-left: 30px; display: flex; flex-direction: column; }
-.tl-rail::before { content: ""; position: absolute; left: 18px; top: 20px; bottom: 20px; width: 1px; background: var(--line-net, #DCE6F5); }
+/* 점과 선은 **한 좌표에서 파생**시킨다 — 따로 적어 두면 어느 한쪽만 고쳐져 어긋난다(실측: 선이 첫 점보다 2px 아래에서 시작).
+   --tl-cx = 레일 기준 점 중심 x · --tl-cy = 카드 기준 점 중심 y(제목 첫 줄 한가운데) · --tl-pad = 본문 들여쓰기 */
+.tl-rail { position: relative; --tl-pad: 30px; --tl-cx: 18.5px; --tl-cy: 22.5px; --tl-dot: 7px;
+  padding-left: var(--tl-pad); display: flex; flex-direction: column; }
+.tl-card::after { content: ""; position: absolute; left: calc(var(--tl-cx) - var(--tl-pad) - 0.5px); top: 0; bottom: 0; width: 1px; background: var(--line-net, #DCE6F5); }
+.tl-card:first-child::after { top: var(--tl-cy); }                      /* 선은 첫 점 **중심**에서 시작하고 */
+.tl-card:last-child::after { bottom: calc(100% - var(--tl-cy)); }       /*  마지막 점 중심에서 끝난다 */
 
 /* 하루 = 한 판, 그 안은 행 — 항목마다 흰 상자가 서서 말풍선이 줄줄이 붙던 것을 걷었다(상민님 2026-08-18).
    판 하나가 날짜를 대신 말하고, 항목은 얇은 선으로만 나뉜다. 색은 왼쪽 점 하나에만. */
@@ -277,7 +282,10 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 }
 .tl-card + .tl-card { box-shadow: inset 0 1px 0 var(--line-row, #EDF1F8); }
 .tl-card::before {
-  content: ""; position: absolute; left: -15px; top: 18px; width: 7px; height: 7px; border-radius: 50%;
+  content: ""; position: absolute; z-index: 1;
+  left: calc(var(--tl-cx) - var(--tl-pad) - var(--tl-dot) / 2);
+  top: calc(var(--tl-cy) - var(--tl-dot) / 2);
+  width: var(--tl-dot); height: var(--tl-dot); border-radius: 50%;
   background: var(--muted-2, #a6b2c8); box-shadow: 0 0 0 3px var(--bg, #fff); box-sizing: border-box;
 }
 .tl-card.can { cursor: pointer; }
@@ -305,7 +313,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .tl-card.tlk-knowledge::before { background: var(--teal, #1BAEB0); }
 .tl-card.tlk-file::before { background: var(--mint-deep, #0FA37E); }
 .tl-card.tlk-activity::before { background: var(--blue); }
-.tl-card.tlk-cmd::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-2, #a6b2c8), 0 0 0 3px var(--bg, #fff); }
+.tl-card.tlk-cmd::before { background: var(--bg, #fff); box-shadow: inset 0 0 0 1.5px var(--muted-2, #a6b2c8), 0 0 0 3px var(--bg, #fff); }
 .tl-card.tlk-project::before { background: var(--blue-deep, #1E54CC); }
 .tl-card.tlk-say::before, .tl-card.tlk-meta::before { background: var(--muted-3, #C2CCDD); }
 .tl-card.err .tl-ttl { color: var(--coral-text, #B84E44); }
