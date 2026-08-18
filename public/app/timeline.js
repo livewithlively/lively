@@ -6,7 +6,8 @@
 //    모두 한 줄 안에 요약하고, 자세한 건 눌러서."
 //   규칙 셋:
 //    ① 사건이 아닌 것은 **아예 안 적는다** — 임시파일·스크린샷·조회 명령은 일한 자취가 아니다(거르기는 session-trail.ts).
-//    ② 모든 줄은 **한 줄**이다 — 넘치면 자른다. 원문은 툴팁에.
+//    ② 한 항목은 **한 줄**이다 — 넘치면 자른다. 원문은 툴팁에. 다만 줄끼리는 숨 쉴 만큼 떨어뜨린다.
+//    ②' 필터는 두지 않는다 — 고를 필요가 없도록 애초에 남은 것만 싣는다(상민님 2026-08-18).
 //    ③ 일은 **장(章)으로 접힌다** — 세션은 지시 하나가 한 장, 프로젝트는 작업 기록 하나가 한 장.
 //       접힌 장에는 제목과 결과 배지(파일 4 · 커밋 1)만 보이고, 누르면 그 안이 펼쳐진다.
 //
@@ -15,7 +16,7 @@
 //    1 중요한 것(기본 보기) — 파일 씀·고침 · 지식 남김 · 커밋 · 작업 기록 · 태스크 끝냄 · 상태 바뀜
 //    2 한 일 — 읽음 · 찾아봄 · 검사(빌드·테스트)
 //    3 뒷일 — 지시·잔 편집·배관(머지·푸시·서버 반영)
-import { el, personFace, relTime } from './core.js';
+import { el, personFace } from './core.js';
 // ── 위계표 ──────────────────────────────────────────────────────────────────
 const KEEP_VERBS = new Set(['씀', '고침', '남김', '덧붙임', '만듦', '끝냄', '커밋', '기록', '바꿈']);
 const KIND_TIER = {
@@ -34,12 +35,6 @@ export const TL_KINDS = [
     { key: 'source', label: '자료' }, { key: 'say', label: '지시' }, { key: 'meta', label: '잔 변경' },
 ];
 const KIND_LABEL = new Map(TL_KINDS.map((k) => [k.key, k.label]));
-const VIEWS = [
-    { key: 'keep', label: '중요한 것', max: 1, hint: '남은 변화만 — 파일·지식·커밋·기록·완료' },
-    { key: 'work', label: '한 일', max: 2, hint: '남은 변화 + 그 과정(읽음·찾아봄·검사)' },
-    { key: 'all', label: '전부', max: 3, hint: '지시·잔 변경·배관까지 전부' },
-];
-const VIEW_KEY = 'lively_tl_view';
 const hhmm = (iso) => {
     if (!iso)
         return '';
@@ -92,110 +87,88 @@ export function humanSummary(raw, max = 46) {
     if (m)
         t = m[2];
     t = stripRefs(t);
+    // 개발자 요약은 "A — B · C · D" 처럼 겹쳐 쓰는 일이 잦다. 읽는 사람에게 필요한 건 첫 마디다.
+    const cut = (re) => { const i = t.search(re); if (i > 12)
+        t = t.slice(0, i); };
+    cut(/\s[—–]\s/);
+    cut(/\s·\s/);
+    cut(/\s*\(/); // 괄호 주석은 통째로 — 열린 채 잘리면 더 읽기 나쁘다
+    t = t.replace(/[\s·,:=+-]+$/, '').trim();
     return t.length > max ? t.slice(0, max - 1).replace(/[\s·,]+$/, '') + '…' : t;
 }
 export function createTimeline(host, ctx) {
     let items = []; // 시간순(오래된 → 최신). 화면은 최신이 위.
     const byId = new Map();
     const open = new Set(); // 펼친 장
-    let view = 'keep';
-    try {
-        const v = localStorage.getItem(VIEW_KEY);
-        if (v === 'keep' || v === 'work' || v === 'all')
-            view = v;
-    }
-    catch (_) { /* noop */ }
-    let kindFilter = null;
-    let kindsOpen = false;
     let dirty = false;
     const countEl = el('span', { class: 'v2-k' });
-    const seg = el('div', { class: 'tl-seg', role: 'group', 'aria-label': '무엇까지 볼지' });
-    const kindRow = el('div', { class: 'tl-kinds', hidden: true });
     const list = el('div', { class: 'tl-list' });
     const emptyEl = el('p', { class: 'v2-empty', text: ctx.empty || '아직 기록이 없어요.' });
     const noteEl = el('p', { class: 'v2-fine', hidden: true });
-    const root = el('section', { class: 'tl-wrap' }, el('div', { class: 'v2-aside-h' }, el('b', { text: '타임라인' }), el('span', { class: 'tl-scope', text: ctx.scope }), countEl), seg, kindRow, list, emptyEl, noteEl);
+    const root = el('section', { class: 'tl-wrap' }, el('div', { class: 'v2-aside-h' }, el('b', { text: '타임라인' }), el('span', { class: 'tl-scope', text: ctx.scope }), countEl), list, emptyEl, noteEl);
     host.append(root);
-    const visible = (it) => {
-        const max = (VIEWS.find((v) => v.key === view) || VIEWS[0]).max;
-        return tierOf(it) <= max && (!kindFilter || it.kind === kindFilter);
-    };
     const isHead = (it) => !!ctx.chapters && it.kind === 'say' && it.verb === '지시';
-    // ── 필터 ──
-    function drawSeg() {
-        const n = (max) => items.filter((it) => tierOf(it) <= max && (!kindFilter || it.kind === kindFilter)).length;
-        seg.replaceChildren(...VIEWS.map((v) => el('button', {
-            class: 'tl-seg-b' + (view === v.key ? ' on' : ''), type: 'button', 'aria-pressed': String(view === v.key), title: v.hint,
-            onclick: () => { view = v.key; try {
-                localStorage.setItem(VIEW_KEY, v.key);
-            }
-            catch (_) { /* noop */ } drawSeg(); paint(); },
-        }, el('span', { text: v.label }), el('span', { class: 'n', text: String(n(v.max)) }))), el('button', {
-            class: 'tl-kind-b' + (kindFilter ? ' on' : '') + (kindsOpen ? ' open' : ''), type: 'button',
-            'aria-expanded': String(kindsOpen), title: '종류로 좁혀 보기',
-            onclick: () => { kindsOpen = !kindsOpen; drawKinds(); drawSeg(); },
-        }, el('span', { text: kindFilter ? (KIND_LABEL.get(kindFilter) || '종류') : '종류' })));
+    // ── 한 항목 = 한 카드 ────────────────────────────────────────────────────
+    //  상민님 2026-08-18: "얇은 한 줄에 배경도 없이 다닥다닥 붙어 있으니 징그럽다.
+    //   중요한 내용이면 그만큼 공간을 차지하는 게 맞다 — 세로 공간을 너무 박하게 쓰지 마라."
+    //  → 모든 항목을 같은 카드로 그린다: [무엇을 했나] 제목(두 줄까지) / 아랫줄에 결과·사람·시각.
+    const faceOf = (a) => (ctx.showActors && a && (a.id || a.name) ? personFace(String(a.id || ''), 'tl-face', String(a.name || a.id || '')) : null);
+    function metaRow(it, kids, canOpen, isOpen) {
+        const face = faceOf(it.actor);
+        const dur = kids.length ? span(it.ts, kids[kids.length - 1].ts) : '';
+        return el('div', { class: 'tl-meta' }, badges(kids, it.children), dur ? el('span', { class: 'tl-dur', text: dur }) : null, face, face && it.actor && it.actor.name ? el('span', { class: 'tl-who', text: String(it.actor.name) }) : null, el('span', { class: 'tl-tm', text: hhmm(it.ts) }), canOpen ? el('span', { class: 'tl-more', text: isOpen ? '접기' : '자세히' }) : null);
     }
-    function drawKinds() {
-        kindRow.hidden = !kindsOpen;
-        if (!kindsOpen)
-            return;
-        const counts = new Map();
-        for (const it of items)
-            counts.set(it.kind, (counts.get(it.kind) || 0) + 1);
-        const mk = (key, label, n) => el('button', {
-            class: 'tl-kchip' + (kindFilter === key ? ' on' : ''), type: 'button', 'aria-pressed': String(kindFilter === key),
-            onclick: () => { kindFilter = key; drawKinds(); drawSeg(); paint(); },
-        }, el('span', { class: 'tl-dot tlk-' + (key || 'all'), 'aria-hidden': 'true' }), el('span', { text: label }), el('span', { class: 'n', text: String(n) }));
-        kindRow.replaceChildren(mk(null, '전체', items.length), ...TL_KINDS.filter((k) => counts.get(k.key)).map((k) => mk(k.key, k.label, counts.get(k.key) || 0)));
+    /** 카드 하나. kids 가 있으면 장(章)이 되어 눌러서 펼친다. */
+    function card(it, kids) {
+        const childRows = (it.children || []).length;
+        const canOpen = kids.length > 0 || childRows > 0;
+        const isOpen = open.has(it.id);
+        const body = canOpen
+            ? el('div', { class: 'tl-body', hidden: !isOpen }, ...kids.slice().reverse().map(sub), ...(it.children || []).map(childLine))
+            : null;
+        const head = el('div', { class: 'tl-head' }, el('span', { class: 'tl-verb', text: it.verb }), el('span', { class: 'tl-ttl', text: it.label || '(이름 없음)' }), it.count > 1 ? el('span', { class: 'tl-x', text: '×' + it.count }) : null);
+        const box = el(it.href && !canOpen ? 'a' : 'div', {
+            class: 'tl-card t' + tierOf(it) + ' tlk-' + it.kind + (canOpen ? ' can' : '') + (isOpen ? ' open' : '') + (it.href && !canOpen ? ' go' : '') + (it.error ? ' err' : ''),
+            href: it.href && !canOpen ? it.href : null,
+            title: [it.label, it.detail].filter(Boolean).join('\n'),
+        }, head, metaRow(it, kids, canOpen, isOpen), body);
+        if (canOpen) {
+            box.setAttribute('role', 'button');
+            box.setAttribute('tabindex', '0');
+            box.setAttribute('aria-expanded', String(isOpen));
+            const toggle = () => { if (isOpen)
+                open.delete(it.id);
+            else
+                open.add(it.id); paint(); };
+            box.addEventListener('click', (e) => { if (e.target.closest('a'))
+                return; toggle(); });
+            box.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                toggle();
+            } });
+        }
+        return box;
     }
-    // ── 한 줄 ──
-    function line(it) {
-        const tier = tierOf(it);
-        const face = ctx.showActors && it.actor && (it.actor.id || it.actor.name)
-            ? personFace(String(it.actor.id || ''), 'tl-face', String(it.actor.name || it.actor.id || '')) : null;
-        const tip = [it.label, it.detail, it.actor && it.actor.name ? String(it.actor.name) + (it.actor.agent ? ' · ' + it.actor.agent : '') : '', it.ts ? relTime(it.ts) : '']
-            .filter(Boolean).join('\n');
-        return el(it.href ? 'a' : 'div', {
-            class: 'tl-ev t' + tier + ' tlk-' + it.kind + (it.href ? ' go' : '') + (it.error ? ' err' : ''),
-            href: it.href || null, title: tip, 'data-kind': it.kind,
-        }, el('span', { class: 'tl-verb', text: it.verb }), el('span', { class: 'tl-ttl', text: it.label || '(이름 없음)' }), it.count > 1 ? el('span', { class: 'tl-x', text: '×' + it.count }) : null, face, el('span', { class: 'tl-tm', text: hhmm(it.ts) }));
+    /** 펼친 카드 안의 한 줄(그 일에서 나온 것들) — 여기서는 촘촘해도 된다. 맥락이 이미 카드가 잡아 준다. */
+    function sub(it) {
+        return el(it.href ? 'a' : 'div', { class: 'tl-sub' + (it.href ? ' go' : ''), href: it.href || null, title: it.label }, el('span', { class: 'tl-sub-v tlk-' + it.kind, text: it.verb }), el('span', { class: 'tl-sub-t', text: it.label }), it.count > 1 ? el('span', { class: 'tl-x', text: '×' + it.count }) : null, el('span', { class: 'tl-tm', text: hhmm(it.ts) }));
     }
     function childLine(c) {
-        return el(c.href ? 'a' : 'div', { class: 'tl-ev t2' + (c.href ? ' go' : ''), href: c.href || null, title: c.label }, el('span', { class: 'tl-verb', text: c.verb }), el('span', { class: 'tl-ttl', text: c.label }));
+        return el(c.href ? 'a' : 'div', { class: 'tl-sub' + (c.href ? ' go' : ''), href: c.href || null, title: c.label }, el('span', { class: 'tl-sub-v', text: c.verb }), el('span', { class: 'tl-sub-t', text: c.label }));
     }
-    // ── 장(章) ──
+    // ── 결과 배지 ──
     function badges(kids, extra) {
         const c = new Map();
         for (const k of kids) {
-            if (tierOf(k) !== 1)
-                continue;
-            const w = k.kind === 'cmd' ? k.verb : (KIND_LABEL.get(k.kind) || k.kind);
+            const w = k.kind === 'file' ? '파일' : k.kind === 'knowledge' ? '지식' : k.kind === 'cmd' ? '커밋' : (KIND_LABEL.get(k.kind) || k.kind);
             c.set(w, (c.get(w) || 0) + k.count);
         }
         for (const e of extra || [])
             c.set(e.verb, (c.get(e.verb) || 0) + 1);
         if (!c.size)
             return null;
-        const dotOf = (w) => (w === '파일' ? 'file' : w === '지식' ? 'knowledge' : w === '커밋' ? 'cmd' : w === '태스크' ? 'task' : 'activity');
-        return el('span', { class: 'tl-bdgs', title: [...c.entries()].map(([w, n]) => w + ' ' + n).join(' · ') }, ...[...c.entries()].slice(0, 3).map(([w, n]) => el('span', { class: 'tl-bdg' }, el('span', { class: 'tl-dot tlk-' + dotOf(w), 'aria-hidden': 'true' }), String(n))));
-    }
-    function chapter(head, kids) {
-        const id = head.id;
-        const isOpen = open.has(id);
-        const shownKids = kids.filter(visible);
-        const kidsBox = el('div', { class: 'tl-ch-body', hidden: !isOpen }, ...shownKids.slice().reverse().map(line), ...(head.children || []).map(childLine));
-        const car = el('button', {
-            class: 'tl-car', type: 'button', 'aria-expanded': String(isOpen), 'aria-label': isOpen ? '접기' : '펼치기', text: '›',
-            onclick: (e) => { e.preventDefault(); e.stopPropagation(); if (isOpen)
-                open.delete(id);
-            else
-                open.add(id); paint(); },
-        });
-        const dur = kids.length ? span(head.ts, kids[kids.length - 1].ts) : '';
-        const ttl = el(head.href ? 'a' : 'span', { class: 'tl-ch-ttl' + (head.href ? ' go' : ''), href: head.href || null, text: head.kind === 'activity' ? head.label : humanTitle(head.label, 40) });
-        const row = el('div', { class: 'tl-ch-top', title: [head.label, head.detail].filter(Boolean).join('\n') }, car, ttl, badges(kids, head.children), dur ? el('span', { class: 'tl-dur', text: dur }) : null, ctx.showActors && head.actor && head.actor.id ? personFace(String(head.actor.id), 'tl-face', String(head.actor.name || '')) : null, el('span', { class: 'tl-tm', text: hhmm(head.ts) }));
-        return el('div', { class: 'tl-ch' + (isOpen ? ' open' : '') }, row, kidsBox);
+        const dotOf = (w) => (w === '파일' ? 'file' : w === '지식' ? 'knowledge' : w === '커밋' ? 'cmd' : w === '코드' ? 'activity' : 'task');
+        return el('span', { class: 'tl-bdgs' }, ...[...c.entries()].slice(0, 3).map(([w, n]) => el('span', { class: 'tl-bdg' }, el('span', { class: 'tl-dot tlk-' + dotOf(w), 'aria-hidden': 'true' }), w + ' ' + n)));
     }
     // ── 그리기 ──
     function paint() {
@@ -212,8 +185,9 @@ export function createTimeline(host, ctx) {
             else
                 rows.push({ solo: it });
         }
-        const shownRows = rows.filter((r) => ('solo' in r ? visible(r.solo) : (r.kids.some(visible) || view === 'all')));
-        const shownCount = rows.reduce((n, r) => n + ('solo' in r ? (visible(r.solo) ? 1 : 0) : r.kids.filter(visible).length), 0);
+        // 장은 안에 남은 것이 있을 때만 세운다 — 아무것도 안 남은 지시는 타임라인의 사건이 아니다.
+        const shownRows = rows.filter((r) => ('solo' in r ? true : r.kids.length > 0));
+        const shownCount = rows.reduce((n, r) => n + ('solo' in r ? 1 : r.kids.length), 0);
         countEl.textContent = String(shownCount);
         emptyEl.hidden = shownCount > 0;
         const kids = [];
@@ -230,9 +204,7 @@ export function createTimeline(host, ctx) {
                 rail = el('div', { class: 'tl-rail' });
                 kids.push(rail);
             }
-            rail.append('solo' in r
-                ? (r.solo.children && r.solo.children.length ? chapter(r.solo, []) : line(r.solo))
-                : chapter(r.head, r.kids));
+            rail.append('solo' in r ? card(r.solo, []) : card(r.head, r.kids));
         }
         list.replaceChildren(...kids);
     }
@@ -240,16 +212,26 @@ export function createTimeline(host, ctx) {
         if (dirty)
             return;
         dirty = true;
-        requestAnimationFrame(() => { dirty = false; drawSeg(); drawKinds(); paint(); });
+        requestAnimationFrame(() => { dirty = false; paint(); });
     }
+    // 같은 것은 **떨어져 있어도** 한 줄로 합친다 — 한 지식을 세 번 덧붙였다고 세 줄이 되면 그건 사건이 아니라 반복이다.
+    //  합칠 때 맨 뒤로 옮겨, 지금 하는 일(마지막 장) 아래에 놓이게 한다.
+    const byKey = new Map();
     function merge(it, at) {
-        const nb = at === 'end' ? items[items.length - 1] : items[0];
-        if (!nb || nb.key !== it.key || nb.error || it.error)
+        const prev = byKey.get(it.key);
+        if (!prev || prev.error || it.error)
             return false;
-        nb.count++;
-        if (at === 'end' && it.ts)
-            nb.ts = it.ts;
-        byId.set(it.id, nb);
+        prev.count++;
+        if (at === 'end') {
+            if (it.ts)
+                prev.ts = it.ts;
+            const i = items.indexOf(prev);
+            if (i >= 0 && i !== items.length - 1) {
+                items.splice(i, 1);
+                items.push(prev);
+            }
+        }
+        byId.set(it.id, prev);
         return true;
     }
     const h = {
@@ -262,6 +244,7 @@ export function createTimeline(host, ctx) {
                 else
                     items.unshift(it);
                 byId.set(it.id, it);
+                byKey.set(it.key, it);
                 if (isHead(it) && at === 'end') {
                     open.clear();
                     open.add(it.id);
@@ -286,14 +269,14 @@ export function createTimeline(host, ctx) {
                 }
                 items.push(it);
                 byId.set(it.id, it);
+                byKey.set(it.key, it);
             }
             items.sort((a, b) => tsNum(a.ts) - tsNum(b.ts));
             schedule();
         },
         setNote(note) { noteEl.textContent = note || ''; noteEl.hidden = !note; },
-        clear() { items = []; byId.clear(); open.clear(); schedule(); },
+        clear() { items = []; byId.clear(); byKey.clear(); open.clear(); schedule(); },
     };
-    drawSeg();
     paint();
     return h;
 }
