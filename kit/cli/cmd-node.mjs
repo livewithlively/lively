@@ -682,6 +682,22 @@ export function parseProcCount(platform, stdout, status) {
 }
 
 /** 노드 상태 실측 — 앱·`status --json` 이 쓰는 단일 통로. 못 재는 축은 null(모르는 걸 false 로 눕히지 않는다). */
+/**
+ * 게이트웨이가 보는 이 노드의 연결 여부 — `/api/ui/nodes` 응답에서 id 로 찾는다. 순수.
+ *
+ * ★ 왜 이 축이 따로 필요한가(#1541 실측 2026-08-18): 노드 프로세스는 살아 있는데(running=true) 게이트웨이엔 3시간째
+ *  오프라인인 **좀비**가 있었다(PC 절전 뒤 소켓이 반쯤 열린 채 남음). 프로세스 실측만 보는 화면은 "노드 실행 중" 이라고
+ *  거짓말했다. '도는가' 와 '붙어 있는가' 는 다른 축이다 — 붙어 있지 않으면 사람은 다시 시작해야 한다.
+ * @returns true=붙어 있음 · false=목록엔 있는데 오프라인 · null=모름(목록에 없음·응답 이상)
+ */
+export function nodeConnectedFrom(payload, id) {
+  const list = Array.isArray(payload) ? payload : Array.isArray(payload?.nodes) ? payload.nodes : null;
+  if (!list || !id) return null;
+  const n = list.find((x) => x && String(x.id) === String(id));
+  if (!n) return null;
+  return typeof n.online === "boolean" ? n.online : null;
+}
+
 export function nodeStatus() {
   const artifact = nodeDaemonArtifact();
   const registered = existsSync(NODE_ENV_FILE);
@@ -694,6 +710,7 @@ export function nodeStatus() {
     running: null,
     id: registered ? readEnvFile(NODE_ENV_FILE, "LIVELY_NODE_ID") : null,
     gateway: registered ? readEnvFile(NODE_ENV_FILE, "LIVELY_GATEWAY_URL") : null,
+    connected: null,   // 게이트웨이가 보는 연결 여부 — lively.mjs 가 /api/ui/nodes 로 채운다(여긴 로컬 실측만)
   };
   try {
     const probe = nodeProcProbe();

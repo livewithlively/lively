@@ -60,11 +60,15 @@ function renderState(s) {
   for (const id of ["doctor", "kit-update", "logout"]) $(id).disabled = !!s?.busy;
   // 실행 여부를 **모를 때**(측정 실패)는 버튼을 잠그지 않는다 — 모른다고 사용자를 가두면 안 된다.
   const running = s?.nodeRunning === true, stopped = s?.nodeRunning === false;
+  // 프로세스는 도는데 게이트웨이엔 안 붙어 있음(절전 뒤 좀비 — 실측 3시간·나흘). '실행 중' 이라 그리면 거짓말이라 따로 말한다.
+  const zombie = running && s?.nodeConnected === false;
   $("node-state").textContent = !s?.nodeRegistered ? "아직 이 PC 는 노드로 등록되지 않았습니다."
     : s?.nodeRunning === null ? `노드 ${s?.nodeId || ""} — 실행 여부를 확인하지 못했습니다.`
-      : running ? `노드 ${s?.nodeId || ""} 실행 중${s?.nodeDaemon ? " · PC 켤 때 자동 시작" : " · 이 세션만"}`
-        : `노드 ${s?.nodeId || ""} 정지됨`;
-  $("node-start").disabled = !!s?.busy || running;
+      : zombie ? `노드 ${s?.nodeId || ""} — 프로세스는 돌지만 게이트웨이에 연결돼 있지 않습니다. 다시 시작하세요.`
+        : running ? `노드 ${s?.nodeId || ""} 실행 중${s?.nodeDaemon ? " · PC 켤 때 자동 시작" : " · 이 세션만"}`
+          : `노드 ${s?.nodeId || ""} 정지됨`;
+  $("node-start").textContent = zombie ? "노드 다시 시작" : "노드 시작";
+  $("node-start").disabled = !!s?.busy || (running && !zombie);
   $("node-stop").disabled = !!s?.busy || stopped || !s?.nodeRegistered;
   const al = $("app-autolaunch");
   al.closest("label").classList.toggle("hidden", s?.appAutoLaunch === null || s?.appAutoLaunch === undefined);
