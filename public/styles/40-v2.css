@@ -137,6 +137,15 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 
 .v2-tree { flex: 1; min-height: 0; overflow: auto; padding: 4px 8px 12px; }
 .v2-pj + .v2-pj { margin-top: 2px; }
+/* 카드(펼친 프로젝트)는 앞뒤로 더 띄운다 — 상자끼리 붙으면 한 덩어리로 뭉개진다. */
+.v2-pj.open + .v2-pj, .v2-pj + .v2-pj.open { margin-top: 8px; }
+/* ★펼친 프로젝트 = 흰 카드 그릇 (안 1 '방', 상민님 선택 2026-08-18) — 세션이 프로젝트의 **안**에
+   산다는 걸 면(面)이 말한다. 들여쓰기+세로선만으로는 "목록 둘이 이웃한 그림"으로 읽혔다(반려 사유).
+   접힌 프로젝트는 카드 없이 조용히 — 카드는 '열려 있음'의 표식이기도 하다. */
+.v2-pj.open { background: var(--bg, #fff); border: 1px solid var(--line-net, #DCE6F5); border-radius: 11px; }
+.v2-pj.open > .v2-pj-row { padding: 8px 10px 6px 6px; border-radius: 10px 10px 0 0; }
+.v2-pj.open > .v2-pj-row:hover { background: var(--bg-tint, #F6FAFF); }
+.v2-pj.open > .v2-pj-row.on { background: var(--bg-tint, #F6FAFF); box-shadow: none; }
 /* 프로젝트 행 — 폴더 + 굵은 이름. 누르면 **프로젝트 화면**. 완료·조용함도 이름은 같은 잉크색(태그·시각이 구분). */
 .v2-pj-row { display: flex; align-items: center; gap: 7px; padding: 8px 8px 8px 4px; border-radius: 8px; font-size: 14.5px; font-weight: 700; color: var(--ink); text-decoration: none; }
 .v2-pj-row:hover { background: var(--bg, #fff); }
@@ -156,16 +165,15 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-car:hover { color: var(--ink); background: var(--bg-tint-2, #EEF5FF); }
 .v2-car.none { visibility: hidden; cursor: default; }
 .v2-pj.open > .v2-pj-row .v2-car { transform: rotate(90deg); }
-/* 세션 행 — 들여쓴 레일 안, 상태점 + 보통 글씨. 누르면 **그 세션의 대화**. 프로젝트 행과 생김새가 다르다(위계).
-   레일은 행마다 끊긴 테두리가 아니라 **그룹을 관통하는 선 하나**다 — 끊긴 선은 '매달린 가지'로 안 읽힌다. */
-.v2-ss-list { position: relative; padding: 1px 0 7px 20px; }
-.v2-ss-list::before { content: ''; position: absolute; left: 12px; top: 0; bottom: 10px; width: 1.5px; border-radius: 2px; background: var(--line-net, #DCE6F5); }
-.v2-ss-row { position: relative; display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; font-size: 13.5px; font-weight: 500; color: var(--ink-sub); text-decoration: none; min-height: 30px; }
+/* 세션 목록 = 카드 몸통 — 담김은 카드(면)가 말하므로 세로선 레일은 뺀다(이중 표식은 잡음).
+   세션 행: 상태점 + 보통 글씨. 누르면 **그 세션의 대화**. 프로젝트 행과 생김새가 다르다(위계). */
+.v2-ss-list { padding: 0 6px 7px; }
+.v2-ss-row { position: relative; display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; border-radius: 7px; font-size: 13.5px; font-weight: 500; color: var(--ink-sub); text-decoration: none; min-height: 30px; }
 .v2-ss-row + .v2-ss-row { margin-top: 2px; }
 .v2-ss-row:hover { background: var(--bg-tint, #F6FAFF); color: var(--ink); }
 .v2-ss-row.on { background: var(--bg-tint, #F6FAFF); color: var(--ink); font-weight: 700; }
-/* 지금 보고 있는 세션 — 레일 그 자리를 파랗게 덮는다(선이 두 줄로 갈라지지 않게). */
-.v2-ss-row.on::before { content: ''; position: absolute; left: -8.75px; top: 3px; bottom: 3px; width: 2px; border-radius: 2px; background: var(--blue); }
+/* 지금 보고 있는 세션 — 행 왼쪽에 파란 마디. */
+.v2-ss-row.on::before { content: ''; position: absolute; left: 2px; top: 6px; bottom: 6px; width: 2.5px; border-radius: 2px; background: var(--blue); }
 .v2-ss-go { width: 14px; height: 14px; flex: none; fill: none; stroke: var(--muted-2, #a6b2c8); stroke-width: 1.8; stroke-linejoin: round; opacity: 0; }
 .v2-ss-row:hover .v2-ss-go { opacity: 1; }
 .v2-ss-main { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.35; }
@@ -177,7 +185,7 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-ss-row .w.wait { color: var(--amber, #C98A16); }
 .v2-ss-row .w.busy { color: var(--blue); }
 .v2-ss-row .w.done { color: var(--mint-deep, #0FA37E); }
-.v2-ss-more { display: block; padding: 6px 8px; font-size: 13px; color: var(--muted); text-decoration: none; }
+.v2-ss-more { display: block; padding: 6px 8px 6px 12px; font-size: 13px; color: var(--muted); text-decoration: none; }
 .v2-tree-note { margin: 10px 8px 0; padding: 10px 12px; border: 1px dashed var(--line-net, #DCE6F5); border-radius: 9px; font-size: 13px; color: var(--muted); line-height: 1.55; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
 .v2-tree-note .btn-text { font-size: 13px; padding: 0; }
 .v2-tree-more { display: block; width: 100%; margin-top: 8px; padding: 7px 8px; border: 1px dashed var(--line-net, #DCE6F5); border-radius: 8px; background: none; font: inherit; font-size: 13px; font-weight: 600; color: var(--muted); cursor: pointer; text-align: left; }

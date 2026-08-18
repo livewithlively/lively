@@ -136,12 +136,15 @@ let countEl: HTMLElement | null = null;
 let filterOpen = false;            // [필터] 팝오버 — 열림은 잠깐의 상태라 브라우저에 기억하지 않는다
 let outsideBound = false;
 
-// 위계 아이콘 — 프로젝트는 폴더, 세션은 말풍선. 같은 24 뷰박스·현재색 스트로크(붓은 하나).
-function glyph(kind: 'folder' | 'chat', cls: string): SVGElement {
-  const d = kind === 'folder'
-    ? 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'
-    : 'M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z';
-  return sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, sv('path', { d }));
+// 위계 아이콘 — 프로젝트는 폴더(펼치면 열린 폴더), 세션은 말풍선. 같은 24 뷰박스·현재색 스트로크(붓은 하나).
+function glyph(kind: 'folder' | 'folder-open' | 'chat', cls: string): SVGElement {
+  const D: Record<string, string[]> = {
+    folder: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
+    // 뚜껑이 젖혀진 열린 폴더 — 카드가 열려 있다는 것을 아이콘도 함께 말한다(안 1 '방').
+    'folder-open': ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1', 'M3 17l2.3-6.6A2 2 0 0 1 7.2 9H21l-2.4 7.6a2 2 0 0 1-1.9 1.4H5a2 2 0 0 1-2-1z'],
+    chat: ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z'],
+  };
+  return sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, ...D[kind].map((d) => sv('path', { d })));
 }
 
 function render(): void {
@@ -338,7 +341,7 @@ function projRow(r: Row, sess: Sess[], activeKey: string): HTMLElement {
     : ['프로젝트에 붙지 않은 세션 — AI 세션 앱에서 전부 봅니다'];
   // 이름은 언제나 같은 잉크색이다 — 완료·조용함은 태그·시각이 말한다(연회색 본문이 목록 절반이면 전체가 바래 보인다).
   const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : ''), href, 'data-nav': p ? pk : 'app:terminal', title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') + '\n프로젝트 화면을 엽니다' },
-    caret, glyph('folder', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }),
+    caret, glyph(isOpen ? 'folder-open' : 'folder', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }),
     r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null,
     sess.length ? sumEl(sess) : (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null));
   const head = sess.slice(0, MAX_SESS);
