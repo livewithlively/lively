@@ -14,3 +14,16 @@
 #  (윈도우가 실제로 CRLF 를 요구하는 산출물 — `~/.lively/bin/lively.cmd` — 은 레포 파일이 아니라
 #   user-install.mjs 가 `join("\r\n")` 으로 **생성**하므로 이 규칙의 영향을 받지 않는다.)
 * text=auto eol=lf
+
+# 빌드 산출물은 머지에서 마커를 만들지 않는다 (#1719, 2026-08-18 dev 하얀 화면 2회 실측)
+#
+# 왜 — dev 게이트웨이는 서빙 클론의 git 작업트리(public/)를 **그대로 정적 서빙**하는데, 이 산출물들은 git 에
+#  커밋되므로 stage 에 브랜치를 머지하는 순간 산출물 .js 에도 텍스트 충돌 마커(<<<<<<<)가 박혀 **그 상태가
+#  몇 분간 그대로 방송**된다(브라우저: Unexpected token '<<' → 하얀 화면). 산출물의 충돌 해소는 어차피
+#  "소스(web/*.ts) 해소 후 재빌드"가 유일한 정답이라, 머지가 산출물에 마커를 만들 이유가 없다.
+# 무엇 — merge 드라이버를 끈다(-merge = 바이너리 취급): 충돌 시 작업트리에는 **우리 쪽(멀쩡한 옛) 파일**이
+#  남고 UU 표시만 남는다 → 서빙은 안 깨지고, 해소(재빌드) 의무는 그대로다. diff 는 끄지 않는다(PR 리뷰에 유용).
+public/app/** -merge
+public/md.js -merge
+public/page-scrollbar.js -merge
+public/terminal.js -merge
