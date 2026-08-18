@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { reportedPathOk, ownerHomes, locateTranscript } from "./locate.js";
-import { harnessIo, type HarnessSessionAdapter } from "./adapter.js";
+import { harnessIo, HARNESS_IO, type HarnessSessionAdapter } from "./adapter.js";
 
 let pass = 0;
 const t = async (name: string, fn: () => Promise<void> | void): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
@@ -49,7 +49,7 @@ await t("[C6] locateTranscript — 보고 경로가 뿌리 안이고 존재 → 
   const evil = path.join(outside, "evil.jsonl"); fs.writeFileSync(evil, "ccc\n");
   // 테스트용 어댑터 — 뿌리 = <home>/.t, 규약 = <root>/<convId>/conv.jsonl. ownerHomes 는 실 홈을 보므로 roots 가 tmp 를 보게 어댑터로 고정.
   const io: HarnessSessionAdapter = { key: "t", label: "t", roots: () => [path.join(home, ".t")], filePattern: /\.jsonl$/,
-    pathFor: (root, { convId }) => path.join(root, convId, "conv.jsonl"), latest: null, parse: null, answer: null };
+    pathFor: (root, { convId }) => path.join(root, convId, "conv.jsonl"), parse: null, answer: null };
   const a = await locateTranscript(io, { cwd: "/w", convId: "conv-1", owner: "yoon", reportedPath: reported });
   assert.deepEqual(a, { file: reported, size: 2, via: "reported" });
   const b = await locateTranscript(io, { cwd: "/w", convId: "conv-1", owner: "yoon", reportedPath: evil });
@@ -61,25 +61,10 @@ await t("[C6] locateTranscript — 보고 경로가 뿌리 안이고 존재 → 
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-await t("claude latest — cwd 규약 폴더의 mtime 최신 .jsonl(빈 파일 제외), 폴더·cwd 없으면 null", async () => {
-  const { claudeIo } = await import("./claude.js");
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "liv-latest-"));
-  const home = path.join(tmp, "home");
-  const cwd = "/work/proj.a";
-  const dir = path.join(home, ".claude", "projects", cwd.replace(/[/.]/g, "-"));
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, "old-1111.jsonl"), "{}\n");
-  fs.writeFileSync(path.join(dir, "empty.jsonl"), "");                        // 빈 파일 — 제외
-  const now = Date.now();
-  fs.utimesSync(path.join(dir, "old-1111.jsonl"), new Date(now - 60000), new Date(now - 60000));
-  fs.writeFileSync(path.join(dir, "new-2222.jsonl"), "{}\n{}\n");
-  const roots = claudeIo.roots([home], "yoon");
-  const got = await claudeIo.latest!(roots, cwd);
-  assert.equal(got && got.convId, "new-2222");
-  assert.equal(got && path.basename(got.file), "new-2222.jsonl");
-  assert.equal(await claudeIo.latest!(roots, "/no/such/dir"), null);
-  assert.equal(await claudeIo.latest!(roots, ""), null);
-  fs.rmSync(tmp, { recursive: true, force: true });
+await t("[C7] 추측 금지 — 어댑터에 'cwd 폴더 훑어 최신 파일' 축을 두지 않는다 (#1719 회귀 방지)", () => {
+  // 대화 파일엔 박스 id 가 없고 cwd 폴더는 세션들이 공유한다 — mtime 최신은 소유 세션의 증거가 못 된다.
+  //  매핑(훅 보고)이 없으면 라우트가 404 로 답하는 것이 정답이다. 스캔 축이 다시 생기면 여기서 걸린다.
+  for (const io of HARNESS_IO) assert.equal("latest" in io, false, `${io.key} 에 폴더 스캔 축이 생겼다`);
 });
 
 console.log(`harness-io/locate: ${pass} passed`);

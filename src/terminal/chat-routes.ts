@@ -41,7 +41,7 @@ import { isChatKey, sendKeyToSession, type ChatKey } from "./send-keys.js";
 import { nodeOfSession, nodeCanAttach } from "../node/registry.js";
 import { transcriptRange } from "../sessions/transcript-range.js";
 import { harnessIo, isChatAction, type ChatAction } from "./harness-io/adapter.js";
-import { locateTranscript, ownerHomes } from "./harness-io/locate.js";
+import { locateTranscript } from "./harness-io/locate.js";
 import { readAlignedWindow, fileReader, type AlignedWindow } from "./harness-io/window.js";
 import { parseWindow } from "./harness-io/parse-cache.js";
 import { toNdjson } from "./harness-io/chat-line.js";
@@ -91,22 +91,21 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     //  안에서만 찾으므로 남의 대화를 가리킬 수 없다(박스 인가는 위 gateRead 가 이미 했다).
     const want = String(req.query.uuid ?? "").trim();
     if (want && !/^[A-Za-z0-9._-]{1,128}$/.test(want)) throw new HttpError(400, "uuid 형식 오류");
+    const uuid = want || mapped;
+    //  매핑이 없으면 **404 가 정답이다 — cwd 규약 폴더를 훑어 최신 파일을 집지 않는다**(#1719 회귀, 3b36df18 되돌림).
+    //  대화 파일엔 어느 박스의 것인지가 안 적혀 있고(claude jsonl 은 자기 conv uuid 만 안다), 폴더는 cwd 로만 갈려
+    //  프로젝트 폴더 하나를 세션 여럿이 공유한다 — mtime 최신은 '내 대화'가 아니라 '지금 제일 시끄러운 세션'이다.
+    //  실측(2026-08-18 dev): 그렇게 집었더니 남의 세션 대화가 폴링마다 갈아끼워져 한 화면에 쏟아지고(화면은 uuid 변화를
+    //  압축 경계로 읽어 매번 파일 전체를 되읽는다) transcript 요청이 분당 200건을 넘었다. 박스↔대화 결합을 아는 곳은
+    //  세션 **안에서** 도는 훅뿐이다(work-flag → POST …/claude-uuid, 실패해도 60초 뒤 다음 툴 사용에 재시도).
+    if (!uuid) throw new HttpError(404, "이 세션의 대화 id 를 아직 모릅니다(첫 대화가 오가면 생깁니다).");
     const harness = await harnessOf(id, st?.harness);
     const io = harnessIo(harness);
     if (!io || !io.parse) throw new HttpError(409, `${io?.label || harness || "이 하네스"} 의 대화는 아직 여기서 읽을 수 없습니다 — 터미널로 보세요.`);
     // 실행 폴더 — desired-state 미러가 있으면 그것, 없으면 tmux 옵션(라이브).
     const cwd = st?.dir || await resolveSessionDir(id, () => sessionDir(id)).catch(() => "");
-    let uuid = want || mapped;
-    let scanned: { convId: string; file: string; size: number } | null = null;
-    if (!uuid && io.latest) {
-      // 매핑(훅 보고)이 아직 없다 — 이 cwd 의 규약 폴더에서 최신 대화 파일을 찾는다(#1719: "터미널엔 보이는데 대화창이 비었다").
-      //  훅이 언젠가 보고하면 mapped 가 생겨 이 스캔은 다시 안 돈다. want(?uuid=)가 있으면 정확 요청이므로 스캔하지 않는다.
-      scanned = await io.latest(io.roots(ownerHomes(st?.owner || ""), st?.owner || ""), cwd).catch(() => null);
-      if (scanned) uuid = scanned.convId;
-    }
-    if (!uuid) throw new HttpError(404, "이 세션의 대화 id 를 아직 모릅니다(첫 대화가 오가면 생깁니다).");
     //  훅이 보고한 파일 경로는 **지금 매핑된 대화**의 것이다 — 다른 uuid(?uuid=, 압축 전 파일)를 찾을 땐 규약으로만(그 경로를 주면 엉뚱한 현재 파일을 읽는다).
-    const found = scanned ?? await locateTranscript(io, { cwd, convId: uuid, owner: st?.owner || "", reportedPath: uuid === mapped ? st?.transcript_path : null });
+    const found = await locateTranscript(io, { cwd, convId: uuid, owner: st?.owner || "", reportedPath: uuid === mapped ? st?.transcript_path : null });
     if (!found) throw new HttpError(404, "대화 기록 파일을 찾지 못했습니다(아직 한 줄도 안 쌓였거나 이 박스가 읽을 수 없는 곳에 있습니다).");
     const q = req.query as Record<string, unknown>;
     const { start, end } = transcriptRange(found.size, q);
