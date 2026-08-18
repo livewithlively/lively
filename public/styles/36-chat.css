@@ -183,3 +183,52 @@ details.livc-divider > summary::before, details.livc-divider > summary::after { 
 .dt-qfail { color: var(--coral-text); }
 .dt-qact { font-size: 11px; padding: 1px 6px; margin-left: 4px; }
 .livc-desktop .dt-user { flex-direction: column; align-items: flex-end; }
+
+/* ── 모바일(≤760px, #1777) — 세션 화면·대화창. 셸(서랍·상단 바)은 40-v2.css. ──
+ *  머리는 두 줄로 접는다(제목+동작 / 사실 줄) — 한 줄에 다 넣으면 제목이 두 글자로 남는다(실측 390px).
+ *  대화는 여백을 좁히고 말풍선을 넓힌다. 홈 인디케이터 여백. 터미널·대화는 종전대로 스왑. 입력칸 16px 은 아래 (pointer: coarse). */
+@media (max-width: 760px) {
+  .sc-head { flex-wrap: wrap; gap: 4px 8px; padding: 8px 12px 6px; min-height: 0; }
+  .sc-head-l { flex: 1 1 100%; flex-wrap: wrap; row-gap: 3px; }
+  .sc-title { font-size: 15px; flex: 1 1 auto; max-width: 100%; }
+  .sc-meta { flex: 1 1 100%; overflow: hidden; }
+  .sc-meta .sc-proj > a { max-width: min(240px, 46vw); }
+  .sc-head-r { flex: 1 1 100%; justify-content: flex-start; gap: 2px; margin-left: -6px; }
+  .sc-act { font-size: 13px; padding: 7px 9px; min-height: 36px; }
+  .sc-wait { flex-wrap: wrap; padding: 9px 12px; }
+  .sc-wait-t { flex: 1 1 100%; }
+  .sc-wait-acts { justify-content: flex-start; }
+  .sc-wait-acts .btn { min-height: 38px; }
+  .sc-bar { flex-wrap: wrap; padding: 10px 14px calc(12px + env(safe-area-inset-bottom, 0px)); }
+  .sc-bar-t { flex: 1 1 100%; }
+  .sc-idx { width: min(340px, calc(100vw - 16px)); max-height: 70dvh; }
+  .sc-idx-item { padding: 9px 8px; font-size: 13.5px; }
+  /* 대화 본문 */
+  .livc-list { padding: 14px 14px 8px; }
+  .livc-desktop .livc-list { padding: 14px 14px 8px; }
+  .livc-desktop .dt-bubble { max-width: 90%; font-size: 15px; }
+  .livc-desktop .livc-said { font-size: 15px; }
+  .livc-said .md pre { max-width: 100%; }
+  .livc-slip-detail { max-width: 100%; }
+  .livc-think-body, .livc-divider-body { max-height: 260px; }
+  .livc-copy { opacity: 1; }                       /* 호버가 없다 — 복사는 늘 보인다 */
+  .livc-jump { bottom: 8px; }
+  /* 입력 */
+  .livc-compose { padding: 8px 12px calc(10px + env(safe-area-inset-bottom, 0px)); }
+  .dt-compose { padding: 6px 10px calc(8px + env(safe-area-inset-bottom, 0px)); }
+  .dt-box { padding: 10px 46px 10px 12px; }
+  .dt-send { width: 34px; height: 34px; }
+  .dt-bar { flex-wrap: wrap; gap: 4px 8px; padding-top: 6px; }
+  .dt-chips { flex-wrap: wrap; gap: 6px 10px; }
+  .dt-chip-sel { max-width: 110px; }
+  .livc-desktop .livc-note:not(:empty) { padding: 2px 12px 0; }
+  .dt-qstate { font-size: 11px; }
+}
+/* 터치 화면(호버 없음) — 폭과 무관하게 호버로만 드러나던 것을 늘 보인다(태블릿 가로도 여기 든다). */
+@media (hover: none) {
+  .livc-copy { opacity: 1; }
+}
+/* 터치 기기(폭 무관) — 입력칸 16px: iOS 사파리는 16px 미만 입력칸에 포커스가 가면 화면을 확대한다(돌아오지 않는다). */
+@media (pointer: coarse) {
+  .livc-input, .dt-box .livc-input { font-size: 16px; }
+}

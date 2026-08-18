@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import type { Db } from "../../db/client.js";
 import {
-  SESSION_MINT_TTL_MS, genSessionMintCode, isSessionMintCodeShape, mintSessionCode, exchangeSessionCode,
+  SESSION_MINT_TTL_MS, genSessionMintCode, isSessionMintCodeShape, mintSessionCode, exchangeSessionCode, exchangeLandingPath,
 } from "./session-mint.js";
 
 let pass = 0;
@@ -166,6 +166,30 @@ const asDb = (f: ReturnType<typeof fakePool>): Db => f as unknown as Db;
   await exchangeSessionCode(good.code, {}, asDb(f));                      // 실패(재사용) — 무감사
   assert.equal(f.audits.length, 3, "감사 = 발급 2 + 성공 교환 1 (실패 교환 0)");
   ok("표13 — 실패 교환 무감사(발급·성공만 기록)");
+}
+
+// ── 표15: 착지 경로(#1771) — `?to=` 해시 경로만 /ui/ 뒤에 붙고, 그 외는 전부 기본 /ui/. ──
+//  엣지 표: 정상 해시 · 쿼리 든 해시(디바이스 승인 코드) · 빈값/비문자열 · 스킴 URL · 프로토콜 상대(//) ·
+//  `#//` · 공백/개행 · 512자 초과 · `#` 만 · 해시가 아닌 경로(/ui/…).
+{
+  assert.equal(exchangeLandingPath("#/context/collect"), "/ui/#/context/collect", "정상 해시 경로");
+  assert.equal(exchangeLandingPath("#/activate?code=GJSA-GTKT"), "/ui/#/activate?code=GJSA-GTKT", "🔴 쿼리 든 해시(디바이스 승인) 허용");
+  assert.equal(exchangeLandingPath("#/"), "/ui/#/", "루트 해시");
+  assert.equal(exchangeLandingPath(undefined), "/ui/", "없음 → 기본");
+  assert.equal(exchangeLandingPath(""), "/ui/", "빈값 → 기본");
+  assert.equal(exchangeLandingPath(["#/a"]), "/ui/", "비문자열(배열 쿼리) → 기본");
+  assert.equal(exchangeLandingPath("https://evil.example/#/x"), "/ui/", "🔴 절대 URL 거부");
+  assert.equal(exchangeLandingPath("//evil.example/"), "/ui/", "🔴 프로토콜 상대 거부");
+  assert.equal(exchangeLandingPath("#//evil.example"), "/ui/", "🔴 #// 거부");
+  assert.equal(exchangeLandingPath("#/a b"), "/ui/", "공백 거부");
+  assert.equal(exchangeLandingPath("#/a\nb"), "/ui/", "개행 거부");
+  assert.equal(exchangeLandingPath("#/a<script>"), "/ui/", "꺾쇠 거부");
+  assert.equal(exchangeLandingPath("#"), "/ui/", "# 만 → 기본");
+  assert.equal(exchangeLandingPath("/ui/#/x"), "/ui/", "해시 아님 → 기본");
+  assert.equal(exchangeLandingPath("#/" + "a".repeat(510)), "/ui/#/" + "a".repeat(510), "정확히 512자 허용(경계)");
+  assert.equal(exchangeLandingPath("#/" + "a".repeat(511)), "/ui/", "513자 → 기본(경계+1)");
+  assert.equal(exchangeLandingPath("#/" + "a".repeat(600)), "/ui/", "길이 초과 → 기본");
+  ok("표15 — 착지 경로: 해시 경로만 허용, 나머지 기본 /ui/");
 }
 
 console.log(`session-mint.test.ts OK (${pass} blocks)`);

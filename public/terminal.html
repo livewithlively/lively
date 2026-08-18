@@ -198,6 +198,26 @@
   .unsupported-title { font-weight: 600; font-size: 15px; margin-bottom: 4px; }
   .unsupported-sub { font-family: ui-monospace, monospace; font-size: 12px; color: var(--fg-dim); margin-bottom: 16px; }
   .unsupported-actions { display: flex; gap: 8px; justify-content: center; }
+
+  /* 모바일(≤760px, #1777) — 툴바가 한 줄에 안 들어가 글자가 세로로 낱자가 되던 것을 두 줄로 접는다:
+     1줄 = [탐색기] 제목(말줄임) 상태 · 2줄 = 동작 버튼들(가로 스크롤). 터미널 본체는 남는 높이 전부. 100dvh — iOS 주소창. */
+  @media (max-width: 760px) {
+    #ws { height: 100dvh; }
+    #explorer.open { width: min(86vw, 300px); }
+    .toolbar { flex-wrap: wrap; gap: 6px 6px; padding: 6px 8px; }
+    .toolbar .title { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+    .toolbar .spacer { display: none; }
+    .toolbar .status { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* 상태 다음(동작 버튼들)은 둘째 줄 — 컨테이너 ::before(플렉스 아이템이 된다)를 order 1 · 전폭으로 끼워 줄을 바꾼다 */
+    .toolbar::before { content: ''; order: 1; flex: 1 1 100%; height: 0; }
+    .toolbar .status ~ .tbtn { order: 2; flex: none; }
+    .tbtn { white-space: nowrap; padding: 7px 10px; font-size: 12.5px; min-height: 34px; }
+    #tabbar { min-height: 38px; }
+    .tab { padding: 0 10px; min-height: 38px; }
+    #term-host { padding: 4px 4px; }
+    .pop { width: min(360px, 94vw); }
+    .pop.pop-help, .pop.pop-hint { width: min(460px, 94vw); }
+  }
 </style>
 </head>
 <body>
