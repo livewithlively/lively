@@ -211,7 +211,7 @@ input.emb-num { width: 120px; flex: none; }
    화면을 스크린샷 그대로 두고, 이미지를 만지거나 범례를 짚거나 첫 시연(is-demo)일 때만 떠오른다.
    터치(hover 없음)는 탭 표적이라 항상 노출 — 유령 톤이라 화면을 덜 가린다. */
 .md-shot-marker { position: absolute; z-index: 2; transform: translate(-42%, -42%); width: 23px; height: 23px;
-  padding: 0; border: 0; border-radius: 999px; background: rgba(255, 255, 255, .94); color: var(--blue); cursor: pointer;
+  padding: 0; border: 0; border-radius: 999px; background: color-mix(in srgb, var(--bg) 94%, transparent); color: var(--blue); cursor: pointer;
   font-family: inherit; font-size: 12px; font-weight: 800; line-height: 23px; text-align: center;
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--blue) 42%, transparent), 0 1px 5px rgba(21, 35, 59, .2);
   transition: opacity var(--dur-base, 150ms) ease, transform var(--dur-base, 150ms) ease,
@@ -287,10 +287,10 @@ input.emb-num { width: 120px; flex: none; }
 .md-shotx-body.is-tall .md-shotx-crop { height: 400px; max-height: 52vh; }
 /* 지점 표시는 속이 빈 고리 — 짚은 자리를 가리지 않고 테두리만 두른다(작은 버튼·글자 위에 놓여도 읽힌다). */
 .md-shotx-dot { position: absolute; width: 13px; height: 13px; border-radius: 999px; background: transparent;
-  border: 2.5px solid var(--blue); box-shadow: 0 0 0 1.5px rgba(255, 255, 255, .95), 0 0 0 3.5px color-mix(in srgb, var(--blue) 16%, transparent);
+  border: 2.5px solid var(--blue); box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--bg) 95%, transparent), 0 0 0 3.5px color-mix(in srgb, var(--blue) 16%, transparent);
   transform: translate(-50%, -50%); cursor: default; transition: transform .15s ease, box-shadow .15s ease; z-index: 2; }
 .md-shotx-dot.is-hot { transform: translate(-50%, -50%) scale(1.3);
-  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, .95), 0 0 0 5px color-mix(in srgb, var(--blue) 28%, transparent); }
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--bg) 95%, transparent), 0 0 0 5px color-mix(in srgb, var(--blue) 28%, transparent); }
 /* 말풍선 — 이름(굵게) + 한두 문장. 짝 지점을 짚으면 함께 밝아진다 */
 .md-shotx-bl { position: relative; padding: 10px 13px 11px 27px; border: 1px solid var(--line); border-radius: 9px;
   background: var(--bg); box-shadow: 0 1px 3px rgba(21, 35, 59, .05); transition: border-color .15s ease, box-shadow .15s ease; }

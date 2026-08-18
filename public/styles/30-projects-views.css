@@ -141,7 +141,7 @@
 .pjv-gt-bar.dragging { cursor: grabbing; box-shadow: 0 2px 8px rgba(21, 35, 59, .18); opacity: .9; }
 /* 양 끝 리사이즈 핸들 — 바 안쪽에 얇게. 평소엔 숨고 호버 때만 드러난다(ClickUp Gen-C 동일). */
 .pjv-gt-handle { position: absolute; top: 4px; bottom: 4px; width: 7px; cursor: ew-resize;
-  border-radius: 2px; background: rgba(255, 255, 255, .75); opacity: 0; transition: opacity .1s;
+  border-radius: 2px; background: color-mix(in srgb, var(--bg) 75%, transparent); opacity: 0; transition: opacity .1s;
   touch-action: none; }
 .pjv-gt-handle.l { left: 2px; }
 .pjv-gt-handle.r { right: 2px; }

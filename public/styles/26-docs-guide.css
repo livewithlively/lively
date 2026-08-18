@@ -219,7 +219,7 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .md-tab-btn { appearance: none; border: 1px solid transparent; background: none; padding: 7px 13px;
   font-size: 13.5px; font-weight: 700; color: var(--ink-sub); cursor: pointer; border-radius: 9px;
   transition: background .12s ease, color .12s ease, border-color .12s ease; }
-.md-tab-btn:hover { color: var(--ink); background: rgba(255,255,255,.75); }
+.md-tab-btn:hover { color: var(--ink); background: color-mix(in srgb, var(--bg) 75%, transparent); }
 .md-tab-btn.active { background: var(--bg); color: var(--blue); border-color: var(--line-net-2);
   box-shadow: 0 1px 4px rgba(21,35,59,.06); }
 .md-tab-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }

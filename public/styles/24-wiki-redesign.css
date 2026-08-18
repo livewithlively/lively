@@ -141,7 +141,7 @@
 .wk-addcover:hover { color: var(--ink-sub); background: var(--bg-tint); }
 .wk-cover-btns { position: absolute; right: 14px; bottom: 12px; display: flex; gap: 6px; opacity: 0; transition: opacity .15s; }
 .wk-cat-cover:hover .wk-cover-btns, .wk-doc-cover:hover .wk-cover-btns { opacity: 1; }
-.wk-cover-btn { border: none; background: rgba(255, 255, 255, .92); color: var(--ink-sub); font-size: 11.5px;
+.wk-cover-btn { border: none; background: color-mix(in srgb, var(--bg) 92%, transparent); color: var(--ink-sub); font-size: 11.5px;
   font-weight: 600; padding: 4px 10px; border-radius: 6px; cursor: pointer; box-shadow: 0 1px 4px rgba(21, 35, 59, .12); }
 .wk-cover-btn:hover { color: var(--ink); }
 .wk-cat-headrow { display: flex; align-items: flex-start; gap: 18px; margin-top: 14px; }
