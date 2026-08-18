@@ -36,6 +36,7 @@ import { canAttach, sessionDir } from "./terminal-sessions.js";
 import { getOpt } from "./tmux-exec.js";
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState } from "../sessions/session-state.js";
+import { findPrevTranscript } from "./terminal-transcript.js";
 import { isChatKey, sendKeyToSession, type ChatKey } from "./send-keys.js";
 import { nodeOfSession, nodeCanAttach } from "../node/registry.js";
 import { transcriptRange } from "../sessions/transcript-range.js";
@@ -84,18 +85,30 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     if (!/^[A-Za-z0-9._-]{1,128}$/.test(id)) throw new HttpError(400, "세션 id 형식 오류");
     await gateRead(id, req);
     const st = await getSessionState(id);
-    const uuid = st?.claude_session_id || "";
+    const mapped = st?.claude_session_id || "";
     res.setHeader("Cache-Control", "no-store");
+    // ?uuid= — 이 박스의 **다른 대화 파일**(맥락 압축 전 파일 — 아래 X-Prev-Session 으로 알려준 것). 같은 실행 폴더·같은 소유자 뿌리
+    //  안에서만 찾으므로 남의 대화를 가리킬 수 없다(박스 인가는 위 gateRead 가 이미 했다).
+    const want = String(req.query.uuid ?? "").trim();
+    if (want && !/^[A-Za-z0-9._-]{1,128}$/.test(want)) throw new HttpError(400, "uuid 형식 오류");
+    const uuid = want || mapped;
     if (!uuid) throw new HttpError(404, "이 세션의 대화 id 를 아직 모릅니다(첫 대화가 오가면 생깁니다).");
     const harness = await harnessOf(id, st?.harness);
     const io = harnessIo(harness);
     if (!io || !io.parse) throw new HttpError(409, `${io?.label || harness || "이 하네스"} 의 대화는 아직 여기서 읽을 수 없습니다 — 터미널로 보세요.`);
     // 실행 폴더 — desired-state 미러가 있으면 그것, 없으면 tmux 옵션(라이브).
     const cwd = st?.dir || await resolveSessionDir(id, () => sessionDir(id)).catch(() => "");
-    const found = await locateTranscript(io, { cwd, convId: uuid, owner: st?.owner || "", reportedPath: st?.transcript_path });
+    //  훅이 보고한 파일 경로는 **지금 매핑된 대화**의 것이다 — 다른 uuid(?uuid=, 압축 전 파일)를 찾을 땐 규약으로만(그 경로를 주면 엉뚱한 현재 파일을 읽는다).
+    const found = await locateTranscript(io, { cwd, convId: uuid, owner: st?.owner || "", reportedPath: uuid === mapped ? st?.transcript_path : null });
     if (!found) throw new HttpError(404, "대화 기록 파일을 찾지 못했습니다(아직 한 줄도 안 쌓였거나 이 박스가 읽을 수 없는 곳에 있습니다).");
     const q = req.query as Record<string, unknown>;
     const { start, end } = transcriptRange(found.size, q);
+    // 창이 파일 머리(0)에 닿았고 그 파일이 압축으로 시작하면 이전 파일 uuid 를 함께 준다 — 화면이 [압축 전 대화 불러오기]를 낸다.
+    //  (claude 의 compact_boundary 사슬 — 다른 하네스 파일엔 그 표식이 없어 null 이 돌아온다.)
+    if (start === 0 && found.size > 0) {
+      const prev = await findPrevTranscript(found.file);
+      if (prev) res.setHeader("X-Prev-Session", prev);
+    }
     const explicitTo = q.to !== undefined;
     let win: AlignedWindow = { from: start, to: start, data: Buffer.alloc(0) };
     if (end > start) {
