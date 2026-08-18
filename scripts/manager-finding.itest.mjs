@@ -176,6 +176,39 @@ try {
   assert.equal(await applyAction(null, "itest"), false);
   ok("M16·M17 비가역·미지 op 는 적용 안 함");
 
+  // ── M18 미발견 자동 해소 — 큐가 '고쳐서' 줄어든다 (#1419 도그푸드 2차) ──
+  //  이게 없으면 사람이 문서를 고쳐도 발견이 open 으로 영원히 남아 큐가 단조증가한다.
+  //  ⚠ 실DB 여야 하는 이유: 판정이 `last_seen_at < <스윕 시작 시각>` 이라 시각 비교와 상태 CASE 가
+  //   SQL 안에 있다. 모킹으로는 '반려는 안 닫는다'를 증명할 수 없다.
+  {
+    const m3 = await store.upsertManager({ key: "m-sweep", kind: "mismatch", enabled: true }, "itest");
+    const keep = await store.upsertFinding(m3.id, "mismatch", F({ target_ref: "k-유지", dedup_key: "a" }));
+    const drop = await store.upsertFinding(m3.id, "mismatch", F({ target_ref: "k-사라짐", dedup_key: "b" }));
+    const rej  = await store.upsertFinding(m3.id, "mismatch", F({ target_ref: "k-반려", dedup_key: "c" }));
+    assert.deepEqual([keep, drop, rej], ["new", "new", "new"]);
+    const idOf = async (ref) => (await store.listFindings({ managerId: m3.id, state: "open" }))
+      .find((f) => f.target_ref === ref)?.id;
+    await store.resolveFinding(await idOf("k-반려"), "rejected", "사람:윤상민", "오탐");
+
+    // 스윕 시작 시각을 찍고 — k-유지만 다시 발견한다(나머지는 '이번에 못 본 것'이 된다).
+    await new Promise((r) => setTimeout(r, 50));   // now() 해상도상 last_seen_at 과 확실히 갈리게
+    const sweepStart = (await itemsPool.query("SELECT now() AS t")).rows[0].t;
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(await store.upsertFinding(m3.id, "mismatch", F({ target_ref: "k-유지", dedup_key: "a" })), "again");
+
+    const n = await store.resolveUnseenFindings(m3.id, sweepStart, "itest");
+    assert.equal(n, 1, "미발견 1건(k-사라짐)만 닫아야 한다");
+
+    const open = (await store.listFindings({ managerId: m3.id, state: "open" })).map((f) => f.target_ref);
+    assert.deepEqual(open, ["k-유지"], "다시 발견된 것만 열려 있어야 한다");
+    const resolved = (await store.listFindings({ managerId: m3.id, state: "resolved" })).map((f) => f.target_ref);
+    assert.deepEqual(resolved, ["k-사라짐"]);
+    // 반려는 건드리지 않는다 — 사람의 '오탐이다'가 최신 판단이고, resolved 로 바꾸면 그 판단이 지워진다.
+    const rejected = (await store.listFindings({ managerId: m3.id, state: "rejected" })).map((f) => f.target_ref);
+    assert.deepEqual(rejected, ["k-반려"], "반려는 자동 해소가 건드리면 안 된다");
+    ok("M18 미발견 자동 해소 — 다시 발견된 것만 열림 · 반려는 불변");
+  }
+
   console.log(`\n${pass} passed`);
   await itemsPool.end();
 } finally {
