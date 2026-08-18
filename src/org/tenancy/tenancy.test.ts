@@ -19,7 +19,7 @@ import { withTenant } from "../tenant-context.js";
 import { readTenancyRuntimeSync, writeTenancyRuntime, registryModeActive, tenancyRuntimePath } from "./state.js";
 import { workspaceAccessAllowed } from "./gate.js";
 import { normalizeWorkspaceSlug, PRIMARY_TENANT_ID } from "./registry.js";
-import { buildAppDsn, IDENTITY_GLOBAL_TABLES, APP_ROLE } from "./activate.js";
+import { buildAppDsn, IDENTITY_GLOBAL_TABLES, appRoleName, autoActivationEligible } from "./activate.js";
 
 const E = (o: Record<string, string> = {}) => o as NodeJS.ProcessEnv;
 const REG = { LIVELY_TENANT_BINDING: "rls", LIVELY_TENANCY_MODE: "registry" };
@@ -122,10 +122,10 @@ test("E1~E4 — 정규화·경계(3/40 허용, 2/41 거부)·위반 거부", () 
 
 // ── F. 앱 DSN 파생 ──────────────────────────────────────────────────────────
 
-test("F1 — 사용자·비밀번호만 교체, 호스트·포트·DB·쿼리 보존", () => {
-  const out = buildAppDsn("postgresql://owner:old@db.local:5433/lively?sslmode=require", "npw");
+test("F1' — 사용자=주어진 role(상수 아님)·비밀번호 교체, 호스트·포트·DB·쿼리 보존", () => {
+  const out = buildAppDsn("postgresql://owner:old@db.local:5433/lively?sslmode=require", "lvly_app_lively", "npw");
   const u = new URL(out);
-  assert.equal(u.username, APP_ROLE);
+  assert.equal(u.username, "lvly_app_lively");
   assert.equal(u.password, "npw");
   assert.equal(u.hostname, "db.local");
   assert.equal(u.port, "5433");
@@ -135,8 +135,29 @@ test("F1 — 사용자·비밀번호만 교체, 호스트·포트·DB·쿼리 �
 
 test("F2/F3 — 못 알아보는 형태는 추측하지 않고 던진다(직접 지정 안내)", () => {
   for (const bad of ["postgres:///lively?host=/tmp", "not-a-url", ""]) {
-    assert.throws(() => buildAppDsn(bad, "x"), /직접 지정|해석할 수 없습니다/, `허용되면 안 됨: ${bad}`);
+    assert.throws(() => buildAppDsn(bad, "r", "x"), /직접 지정|해석할 수 없습니다/, `허용되면 안 됨: ${bad}`);
   }
+});
+
+// ── I. 앱 role 이름 — 클러스터 전역이라 DB 별로 갈라야 한다(공유 클러스터에서 비밀번호 상호 회전 사고) ──
+
+test("I1~I4 — DB 이름 파생·63자 상한·DB 마다 다름·빈 이름 오류", () => {
+  assert.equal(appRoleName("Lively-Prod.1"), "lvly_app_lively_prod_1", "I1: 소문자·비허용문자 _ 치환");
+  assert.equal(appRoleName("x".repeat(100)).length, 63, "I2: Postgres 식별자 상한");
+  assert.notEqual(appRoleName("ws_a"), appRoleName("ws_b"), "I3: 같은 클러스터의 두 DB 가 같은 role 을 쓰면 안 된다");
+  for (const bad of ["", "   "]) assert.throws(() => appRoleName(bad), /비어/, "I4");
+});
+
+// ── J. 자동 활성화 대상 판정 — 매니지드·외부 바인딩에서 켜지면 CP 캡 우회/권위 이중화가 된다 ──
+
+test("★★ J1~J6 — 순수 셀프호스트만 대상, 매니지드·바인딩·opt-out·기활성·무DB 는 제외", () => {
+  const base = { ITEMS_DATABASE_URL: "postgres://u:p@h/db" };
+  assert.equal(autoActivationEligible(E(base)).ok, true, "J1: 관리 env 없음 = 대상");
+  assert.equal(autoActivationEligible(E({ ...base, LIVELY_WORKSPACE_REGISTRY: "off" })).ok, false, "J2: opt-out");
+  assert.equal(autoActivationEligible(E({ ...base, LIVELY_TENANT_HEADER_SECRET: "s" })).ok, false, "J3: 매니지드 공유 게이트웨이");
+  assert.equal(autoActivationEligible(E({ ...base, LIVELY_TENANT_BINDING: "rls" })).ok, false, "J4: 외부 바인딩(fixed/request)");
+  assert.equal(autoActivationEligible(E({ ...base, ...REG })).ok, false, "J5: 이미 registry");
+  assert.equal(autoActivationEligible(E({})).ok, false, "J6: DB 미설정");
 });
 
 // ── G. 면제 2축 — 겹치면 같은 표를 두 이유로 면제한 것(판단이 흐려진다) ──────
@@ -179,4 +200,23 @@ test("H6 — 활성화는 격리 검증을 통과한 뒤에만 상태파일을 �
   const verify = act.indexOf("await verifyAppIsolation(");
   const write = act.indexOf("await writeTenancyRuntime(");
   assert.ok(verify > 0 && write > verify, `verify(${verify}) 가 write(${write}) 보다 앞이어야 한다`);
+});
+
+test("★★ K1/K2 — 부팅이 스스로 활성화한다: self-rls 뒤 스텝 + 성공 시 재기동(exit)", () => {
+  const hk = readFileSync("src/boot/housekeeping.ts", "utf8");
+  const selfRls = hk.indexOf('name: "self-rls"');
+  const auto = hk.indexOf('name: "workspace-registry"');
+  assert.ok(auto > 0, "K1: 자동 활성화 스텝이 없다 — 활성화가 도로 수동이 된다");
+  assert.ok(auto > selfRls, "K1: self-rls 뒤여야 reader 정책까지 첫 판에 걸린다");
+  const stepBody = hk.slice(auto, auto + 900);
+  assert.match(stepBody, /process\.exit\(0\)/, "K2: 성공 후 재기동이 없으면 앱 role 재배선이 영영 안 된다");
+});
+
+test("K3 — 자동 활성화 실패는 던지지 않는다(단일 모드 유지) + 사유 보존", () => {
+  const act = readFileSync("src/org/tenancy/activate.ts", "utf8");
+  const at = act.indexOf("export async function autoActivateWorkspaceRegistry");
+  assert.ok(at > 0);
+  const body = act.slice(at, at + 1400);
+  assert.match(body, /catch/, "실패가 부팅 체인을 죽이면 안 된다 — fail-closed 는 '단일 유지'지 '기동 실패'가 아니다");
+  assert.match(body, /lastAutoActivationError/, "사유를 보존해야 화면(workspace_registry_status)이 '왜 아직 single 인가'에 답한다");
 });

@@ -31,11 +31,27 @@ import crypto from "node:crypto";
 import pg from "pg";
 import { itemsPool } from "../../db/client.js";
 import { TENANT_COLUMN_EXEMPT, SINGLE_TENANT_ID, ensureTenantColumn } from "../../db/tenant-column.js";
-import { writeTenancyRuntime, readTenancyRuntimeSync } from "./state.js";
+import { writeTenancyRuntime, readTenancyRuntimeSync, registryModeActive } from "./state.js";
 import { PRIMARY_SLUG, invalidateRegistryCache } from "./registry.js";
 import { logger } from "../../log.js";
 
-export const APP_ROLE = "lvly_app";
+/**
+ * 앱 role 이름 — **DB 마다 다르다**(`lvly_app_<db>`), 상수가 아니다.
+ *
+ * ★ role 은 Postgres 에서 **클러스터 전역**이다. 상수명('lvly_app')이면 같은 클러스터에 사는 두 배포가
+ *  각자 활성화하며 **서로의 비밀번호를 회전**시킨다 — 먼저 활성화한 쪽의 runtime.json 이 낡은 비밀번호를
+ *  들고 있어 다음 부팅부터 DB 인증이 전부 죽는다(자동 활성화가 켜지면 개발 박스에서 실제로 나는 조합이다:
+ *  한 로컬 pg 에 게이트웨이 여러 개). LOGIN+비밀번호 역만의 문제다 — lively_reader(NOLOGIN)는 공유해도 무해.
+ */
+export function appRoleName(dbName: string): string {
+  const s = String(dbName || "").trim().toLowerCase().replace(/[^a-z0-9_]/g, "_");
+  if (!s) throw new Error("DB 이름이 비어 있습니다 — 앱 role 이름을 만들 수 없습니다");
+  return `lvly_app_${s}`.slice(0, 63); // Postgres 식별자 상한
+}
+
+async function currentAppRole(db: Q): Promise<string> {
+  return appRoleName(String((await db.query("SELECT current_database() AS d")).rows[0]?.d ?? ""));
+}
 
 /** 신원·전역 표 — 정책을 걸지 않는다(박스 전역). ⚠ 늘리는 것은 "이 표엔 워크스페이스 사유 데이터가
  *  절대 없다"는 판단이다 — 면제는 검사를 끄는 일이고, 꺼진 검사가 유출 경로가 된다. */
@@ -102,6 +118,7 @@ export async function ensureTenantPolicies(db: Q = itemsPool): Promise<{ tables:
   //  테넌트 밖 행만 추가로 걸러낸다. 역이 없으면(self-rls 미준비) 건너뛴다 — 역이 생기는 건 ensureSelfRls 뒤고,
   //  그 직후 이 함수가 다시 돈다(스키마 자식의 실행 순서).
   const readerExists = (await db.query("SELECT 1 FROM pg_roles WHERE rolname='lively_reader'")).rows.length > 0;
+  const appRole = await currentAppRole(db);
   const rows = (await db.query(TABLE_STATUS_SQL)).rows as unknown as TableStatus[];
   let touched = 0, content = 0;
   for (const t of rows) {
@@ -117,7 +134,7 @@ export async function ensureTenantPolicies(db: Q = itemsPool): Promise<{ tables:
     if (!t.rls_forced) stmts.push(`ALTER TABLE ${tbl} FORCE ROW LEVEL SECURITY`);
     if (!t.policies.includes("tenant_isolation")) {
       // USING = 보이는 행 · WITH CHECK = 쓸 수 있는 행. 같은 식이라 "남의 소속으로 바꿔치기"도 막힌다.
-      stmts.push(`CREATE POLICY ${qi("tenant_isolation")} ON ${tbl} FOR ALL TO ${qi(APP_ROLE)} ` +
+      stmts.push(`CREATE POLICY ${qi("tenant_isolation")} ON ${tbl} FOR ALL TO ${qi(appRole)} ` +
         `USING (tenant_id = ${STRICT_EXPR}) WITH CHECK (tenant_id = ${STRICT_EXPR})`);
     }
     if (!t.policies.includes("owner_all")) {
@@ -136,24 +153,24 @@ export async function ensureTenantPolicies(db: Q = itemsPool): Promise<{ tables:
 
 /** 앱 role 에 데이터 권한을 준다(멱등). DDL 권한은 주지 않는다 — 스키마는 소유자의 일이다.
  *  ⚠ TRUNCATE 는 주지 않는다: TRUNCATE 는 RLS 를 안 본다(정책 무시 전체 삭제) — 앱이 가지면 안 되는 권한. */
-async function grantAppRole(db: Q, owner: string): Promise<void> {
-  await db.query(`GRANT USAGE ON SCHEMA public TO ${qi(APP_ROLE)}`);
-  await db.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${qi(APP_ROLE)}`);
-  await db.query(`GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO ${qi(APP_ROLE)}`);
+async function grantAppRole(db: Q, owner: string, appRole: string): Promise<void> {
+  await db.query(`GRANT USAGE ON SCHEMA public TO ${qi(appRole)}`);
+  await db.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${qi(appRole)}`);
+  await db.query(`GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO ${qi(appRole)}`);
   // 앞으로 소유자가 만들 테이블(새 코어 릴리스)도 자동으로 — 안 하면 릴리스마다 GRANT 를 사람이 기억해야 한다.
-  await db.query(`ALTER DEFAULT PRIVILEGES FOR ROLE ${qi(owner)} IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${qi(APP_ROLE)}`);
-  await db.query(`ALTER DEFAULT PRIVILEGES FOR ROLE ${qi(owner)} IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO ${qi(APP_ROLE)}`);
+  await db.query(`ALTER DEFAULT PRIVILEGES FOR ROLE ${qi(owner)} IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${qi(appRole)}`);
+  await db.query(`ALTER DEFAULT PRIVILEGES FOR ROLE ${qi(owner)} IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO ${qi(appRole)}`);
 }
 
 /** 소유자 DSN → 앱 DSN(사용자·비밀번호만 교체). 못 알아보는 형태면 던진다 — 추측한 DSN 으로
  *  활성화하면 재기동 후 게이트웨이가 영영 못 뜬다(app_dsn 파라미터로 직접 지정하는 길을 안내). */
-export function buildAppDsn(ownerDsn: string, password: string): string {
+export function buildAppDsn(ownerDsn: string, appRole: string, password: string): string {
   let u: URL;
   try { u = new URL(ownerDsn); } catch { throw new Error("ITEMS_DATABASE_URL 을 URL 로 해석할 수 없습니다 — app_dsn 파라미터로 앱 DSN 을 직접 지정하세요"); }
   if (!/^postgres(ql)?:$/.test(u.protocol) || !u.hostname) {
     throw new Error("소켓 경로형 DSN 은 자동 변환하지 않습니다 — app_dsn 파라미터로 앱 DSN 을 직접 지정하세요");
   }
-  u.username = APP_ROLE;
+  u.username = appRole;
   u.password = password;
   return u.toString();
 }
@@ -207,23 +224,25 @@ export async function activateWorkspaceRegistry(opts: {
   if (!ownerDsn) throw new Error("ITEMS_DATABASE_URL 이 없습니다");
 
   const owner = String((await itemsPool.query("SELECT current_user AS u")).rows[0]?.u ?? "");
+  const appRole = await currentAppRole(itemsPool);
 
-  // ① 앱 role — 있으면 비밀번호를 보존(같은 클러스터의 다른 배포가 이미 쓰고 있을 수 있다), 없으면 생성.
-  //  기존 상태파일이 있으면 그 DSN 의 비밀번호를 재사용한다(재활성화 = 정책 재보장, 자격 회전 아님).
+  // ① 앱 role(DB별 파생명 — appRoleName 머리말) — 기존 상태파일이 **이 role 이름으로** 있으면 비밀번호를
+  //  재사용한다(재활성화 = 정책 재보장, 자격 회전 아님). 이름이 다르면(구 상수명 등) 새로 만든다.
   const prior = readTenancyRuntimeSync();
-  const roleExists = (await itemsPool.query("SELECT 1 FROM pg_roles WHERE rolname=$1", [APP_ROLE])).rows.length > 0;
+  const priorUser = (() => { try { return prior ? new URL(prior.app_dsn).username : ""; } catch { return ""; } })();
+  const roleExists = (await itemsPool.query("SELECT 1 FROM pg_roles WHERE rolname=$1", [appRole])).rows.length > 0;
   let password: string;
-  if (prior && roleExists && !opts.appDsn) {
+  if (prior && roleExists && priorUser === appRole && !opts.appDsn) {
     try { password = new URL(prior.app_dsn).password; } catch { password = ""; }
-    if (!password) { password = crypto.randomBytes(24).toString("base64url"); await itemsPool.query(`ALTER ROLE ${qi(APP_ROLE)} PASSWORD '${password}'`); }
+    if (!password) { password = crypto.randomBytes(24).toString("base64url"); await itemsPool.query(`ALTER ROLE ${qi(appRole)} PASSWORD '${password}'`); }
   } else {
     password = crypto.randomBytes(24).toString("base64url");
     // 비밀번호는 식별자가 아니라 리터럴 — base64url 은 따옴표·백슬래시가 없어 안전하다(생성 직후라 주입면 없음).
     await itemsPool.query(roleExists
-      ? `ALTER ROLE ${qi(APP_ROLE)} NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE LOGIN PASSWORD '${password}'`
-      : `CREATE ROLE ${qi(APP_ROLE)} NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE LOGIN PASSWORD '${password}'`);
+      ? `ALTER ROLE ${qi(appRole)} NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE LOGIN PASSWORD '${password}'`
+      : `CREATE ROLE ${qi(appRole)} NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE LOGIN PASSWORD '${password}'`);
   }
-  await grantAppRole(itemsPool, owner);
+  await grantAppRole(itemsPool, owner, appRole);
 
   // ② 정책 전수 보장(멱등) — 콘텐츠 테이블 전부.
   const pol = await ensureTenantPolicies(itemsPool);
@@ -240,7 +259,7 @@ export async function activateWorkspaceRegistry(opts: {
   invalidateRegistryCache();
 
   // ④ 실접속 검증 — 실패하면 여기서 던지고 상태파일은 쓰지 않는다.
-  const appDsn = opts.appDsn?.trim() || buildAppDsn(ownerDsn, password);
+  const appDsn = opts.appDsn?.trim() || buildAppDsn(ownerDsn, appRole, password);
   await verifyAppIsolation(appDsn);
 
   // ⑤ 상태파일 — 다음 부팅부터 registry 모드.
@@ -249,4 +268,59 @@ export async function activateWorkspaceRegistry(opts: {
   let host = "";
   try { host = new URL(appDsn).host; } catch { /* 표시용일 뿐 */ }
   return { tables: pol.tables, touched: pol.touched, app_dsn_host: host, primary_seeded: seeded };
+}
+
+// ── 부팅 자동 활성화(#1750 후속) — 사람 손 0 이 목표다 ─────────────────────────
+//
+// 처음 구현은 활성화를 admin capability 1회 호출로 남겼다. 그 결과가 나쁜 플로우였다: 신규 설치도
+//  단일 모드로 뜨고, 스위처엔 만들기 UI 가 안 보이고(registry 모드에서만 노출), 관리자가 숨은 API 를
+//  알아야 했다 — "셀프서브"가 아니었다. 그래서 **부팅이 스스로 활성화한다**: 단일 모드로 뜬 부팅
+//  하우스키핑이 여기를 지나며 활성화하고 1회 재기동한다. 신규 설치는 첫 부팅에, 기존 박스는 다음
+//  업데이트 재기동에 자동으로 넘어온다 — 설치·업데이트 스크립트는 한 줄도 몰라도 된다.
+//
+// 실패 방향: **fail-closed 로 단일 모드 유지**(활성화의 검증 게이트가 상태파일을 안 쓴다) + 경고 로그
+//  + 상태 API 노출. 격리가 덜 된 채 다중으로 뜨는 것보다 종전 단일로 남는 것이 항상 낫다.
+
+/** 자동 활성화 대상인가(순수) — 아닌 이유가 곧 로그 문구다. */
+export function autoActivationEligible(env: NodeJS.ProcessEnv = process.env): { ok: boolean; reason: string } {
+  // 명시 opt-out — 매니지드 테넌트 컨테이너(CP 가 워크스페이스 축의 권위 — 테넌트 안 다중 ws 는 CP 캡 우회가
+  //  된다)와, 운영자가 원치 않는 박스의 탈출구. lvly-cloud 프로비저너가 테넌트 env 에 심는다.
+  if ((env.LIVELY_WORKSPACE_REGISTRY || "").trim().toLowerCase() === "off") return { ok: false, reason: "LIVELY_WORKSPACE_REGISTRY=off" };
+  if (registryModeActive(env)) return { ok: false, reason: "이미 registry 모드" };
+  if ((env.LIVELY_TENANT_HEADER_SECRET || "").trim()) return { ok: false, reason: "매니지드 공유 게이트웨이(CP 헤더 모드)" };
+  // fixed/request(매니지드 공용 DB) — 그 배포의 테넌시는 CP 소유다. registry 를 겹치면 권위가 둘이 된다.
+  if ((env.LIVELY_TENANT_BINDING || "").trim()) return { ok: false, reason: "외부 관리 바인딩(fixed/request)" };
+  if (!env.ITEMS_DATABASE_URL) return { ok: false, reason: "DB 미설정" };
+  return { ok: true, reason: "" };
+}
+
+// 마지막 자동 활성화 실패 사유 — 상태 API(workspace_registry_status)가 admin 에게 보여준다.
+//  로그는 흘러가지만 이 값은 남는다: "왜 아직 single 인가"를 화면에서 답할 수 있어야 수동 복구(app_dsn)로 이어진다.
+let lastAutoActivationError: string | null = null;
+export function lastActivationError(): string | null { return lastAutoActivationError; }
+
+export type AutoActivateStatus = "activated" | "skipped" | "failed";
+
+/**
+ * 부팅 하우스키핑용 — 대상이면 활성화까지 한다. "activated" 를 받으면 **호출자가 프로세스를 재기동**해야
+ *  한다(앱 role 재배선은 첫 import 시점이라 살아 있는 프로세스에선 불가능하다).
+ */
+export async function autoActivateWorkspaceRegistry(): Promise<{ status: AutoActivateStatus; reason?: string }> {
+  const e = autoActivationEligible();
+  if (!e.ok) return { status: "skipped", reason: e.reason };
+  try {
+    // primary 의 owner 표시용 — 첫 admin 멤버, 아직 없으면(신규 설치 첫 부팅) 'system'.
+    //  primary 는 명부를 안 보는 워크스페이스라 이 값은 표시 이상의 권한이 아니다.
+    const admin = await itemsPool.query(
+      `SELECT id FROM org_member WHERE state='active' AND scopes @> '["admin"]'::jsonb ORDER BY created_at LIMIT 1`,
+    ).then((r) => String(r.rows[0]?.id ?? "")).catch(() => "");
+    await activateWorkspaceRegistry({ ownerMember: admin || "system" });
+    lastAutoActivationError = null;
+    return { status: "activated" };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    lastAutoActivationError = msg;
+    logger.warn({ err }, "다중 워크스페이스 자동 활성화 실패 — 단일 모드로 계속(수동: workspace_activate, 소켓 DSN 이면 app_dsn 지정)");
+    return { status: "failed", reason: msg };
+  }
 }
