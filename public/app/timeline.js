@@ -35,9 +35,11 @@ export const TL_KINDS = [
     { key: 'source', label: '자료' }, { key: 'say', label: '지시' }, { key: 'meta', label: '잔 변경' },
 ];
 // 2행에 조용히 놓을 '무엇을 한 일인가' — 라벨이 아니라 문장의 한 조각이다.
+//  ⚠ activity 는 비어 있다 — 워크스페이스 타임라인은 대부분이 작업 기록이라 '작업'이 전 행에 반복되면
+//    그 단어가 또 소음이 된다(같은 이유로 세션 뷰의 지시도 비움). 단어는 **소수파일 때만 정보**다.
 const KIND_WORD = {
-    task: '끝낸 일', knowledge: '남긴 지식', activity: '작업', cmd: '코드', file: '파일',
-    project: '프로젝트', say: '남긴 말', source: '자료', meta: '설정',
+    task: '끝낸 일', knowledge: '지식', activity: '', cmd: '커밋', file: '파일',
+    project: '프로젝트', say: '', source: '자료', meta: '설정',
 };
 const hhmm = (iso) => {
     if (!iso)
@@ -124,27 +126,16 @@ export function createTimeline(host, ctx) {
     const root = el('section', { class: 'tl-wrap' }, el('div', { class: 'v2-aside-h' }, el('b', { text: '타임라인' }), el('span', { class: 'tl-scope', text: ctx.scope }), countEl), factsEl, el('div', { class: 'tl-scroll' }, list, emptyEl, noteEl));
     host.append(root);
     const isHead = (it) => !!ctx.chapters && it.kind === 'say' && it.verb === '지시';
-    // ── 한 항목 = 한 카드 ────────────────────────────────────────────────────
-    //  상민님 2026-08-18: "디자인이 클로드 딸깍 같고 촌스럽다."
-    //  → 제목이 주인공이 되게 바꾼다. 종전엔 [동사] 라벨이 맨 앞에서 제목을 밀고 색까지 써서 눈이 라벨로 갔다.
-    //    이제 1행은 **제목과 시각**뿐이고, 무엇을 한 일인지(종류)·누가·결과는 2행에 조용히 붙는다.
-    //    테두리를 걷고 옅은 그림자만 둬서 카드가 종이처럼 뜨게 하고, 색은 레일 점 하나에만 쓴다.
+    // ── 한 항목 = 원장(ledger) 한 줄 ──────────────────────────────────────
+    //  상민님 2026-08-18: "너무 정신없고 이쁘지 않다. 파일·중요 변경점과도 조화롭게 — 완전 변경."
+    //  종전 카드는 한 행에 일곱 가지(동사색·제목·배지·얼굴·이름·시각·자세히)가 경쟁했다. 반복되는 것
+    //  (이름·배지·자세히)이 소음이고 변하는 것(제목)이 눌려 있었다. 그래서 **회계 원장의 문법**으로 바꾼다
+    //  (덱 디자인 시스템 "Ledger & Pulse"의 Ledger 를 제품에 들여온 것):
+    //   · 시각이 왼쪽 거터에 모노로 선다 — 세로로 정렬된 숫자가 그 자체로 리듬이다.
+    //   · 그 아래 종류 한 단어(지식·기능·파일…)가 조용히 붙는다 — 색 코드는 전부 걷는다
+    //     (범례 없는 색 축은 정보가 아니라 소음이다). 색은 오류(코랄) 하나만.
+    //   · 본문은 제목뿐이다. 사람은 얼굴 하나 — 그것도 앞 행과 같은 사람이면 안 그린다.
     const faceOf = (a) => (ctx.showActors && a && (a.id || a.name) ? personFace(String(a.id || ''), 'tl-face', String(a.name || a.id || '')) : null);
-    /** 2행에 들어갈 조용한 말 — "무엇을 한 일인가 · 남은 것". 개수 나열은 소음이라 최소로. */
-    function metaBits(it, kids) {
-        const kn = kids.filter((k) => k.kind === 'knowledge').length + (it.children || []).filter((c) => c.verb === '지식').length;
-        const files = kids.filter((k) => k.kind === 'file').length + (it.children || []).filter((c) => c.verb === '파일').length;
-        const bits = [];
-        if (it.kind === 'cmd' && it.detail)
-            bits.push(it.detail + '번');
-        else
-            bits.push(KIND_WORD[it.kind] || '');
-        if (files)
-            bits.push('파일 ' + files);
-        if (kn)
-            bits.push('지식 ' + kn);
-        return bits.filter(Boolean).join(' · ');
-    }
     function card(it, kids, sameWho) {
         const canOpen = kids.length > 0 || (it.children || []).length > 0;
         const isOpen = open.has(it.id);
@@ -152,11 +143,12 @@ export function createTimeline(host, ctx) {
             ? el('div', { class: 'tl-body', hidden: !isOpen }, ...kids.slice().reverse().map(sub), ...(it.children || []).map(childLine))
             : null;
         const face = sameWho ? null : faceOf(it.actor);
+        const kindWord = it.kind === 'cmd' && it.detail ? it.detail + '번' : (KIND_WORD[it.kind] || '');
         const box = el(it.href && !canOpen ? 'a' : 'div', {
             class: 'tl-card tlk-' + it.kind + (canOpen ? ' can' : '') + (isOpen ? ' open' : '') + (it.href && !canOpen ? ' go' : '') + (it.error ? ' err' : ''),
             href: it.href && !canOpen ? it.href : null,
-            title: [it.label, it.detail].filter(Boolean).join('\n'),
-        }, el('div', { class: 'tl-head' }, el('span', { class: 'tl-ttl', text: it.label || '(이름 없음)' }), it.count > 1 ? el('span', { class: 'tl-x', text: '×' + it.count }) : null, el('span', { class: 'tl-tm', text: hhmm(it.ts) })), el('div', { class: 'tl-meta' }, el('span', { class: 'tl-what', text: metaBits(it, kids) }), face, face && it.actor && it.actor.name ? el('span', { class: 'tl-who', text: String(it.actor.name) }) : null, canOpen ? el('span', { class: 'tl-car', 'aria-hidden': 'true', text: '›' }) : null), body);
+            title: [it.label, it.detail, it.actor && it.actor.name ? String(it.actor.name) : ''].filter(Boolean).join('\n'),
+        }, el('div', { class: 'tl-gut' }, el('span', { class: 'tl-tm', text: hhmm(it.ts) }), kindWord ? el('span', { class: 'tl-kw', text: kindWord }) : null), el('div', { class: 'tl-main' }, el('div', { class: 'tl-head' }, el('span', { class: 'tl-ttl', text: it.label || '(이름 없음)' }), it.count > 1 ? el('span', { class: 'tl-x', text: '×' + it.count }) : null, face, canOpen ? el('span', { class: 'tl-car', 'aria-hidden': 'true', text: '›' }) : null), body));
         if (canOpen) {
             box.setAttribute('role', 'button');
             box.setAttribute('tabindex', '0');
