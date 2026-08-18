@@ -295,7 +295,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const QSTATE_TEXT: Record<string, string> = {
     queued: '전달 대기 중 — AI 입력창이 뜨면 들어갑니다',
     sending: '전달하는 중…',
-    'not-ready-long': '전달 대기 중 — 입력창이 아직 안 떠요. 로그인이 필요한 상태일 수 있어요(터미널로 확인)',
   };
   function paintQState(pd: Pending, row: { status: string; last_error: string | null; created_at: string } | null): void {
     if (!row) { pd.state.textContent = ''; return; }              // 큐에서 사라짐(delivered/sent) — 에코가 곧 마감한다
@@ -308,8 +307,27 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       if (pd.t === cur?.t) { running = false; view.settle(pd.t); view.busy(false); }
       return;
     }
-    const age = Date.now() - Date.parse(row.created_at);
-    pd.state.textContent = QSTATE_TEXT[age > 60_000 && row.last_error === 'not-ready' ? 'not-ready-long' : row.status] || '';
+    // 오래 못 들어가고 있다(로그인·대화상자 의심) — 글자만 두지 않는다: 눌러서 그 화면(터미널)을 바로 연다(막다른 안내 금지).
+    //  터미널은 이 페이지 아래 분할로 열리므로 '웹 안에서' 로그인까지 끝낼 수 있다.
+    const stuck = row.status === 'queued' && row.last_error === 'not-ready' && Date.now() - Date.parse(row.created_at) > 60_000;
+    if (stuck) {
+      pd.state.replaceChildren(
+        el('span', { text: '전달 대기 중 — 입력창이 아직 안 떠요. 로그인이 필요한 상태일 수 있어요. ' }),
+        ...(opts.terminalSrc && isBox ? [el('button', { class: 'btn-text dt-qact', type: 'button', text: '터미널 열기', onclick: () => toggleTerminal(true) })] : []));
+      maybeAutoOpenTerminal();
+      return;
+    }
+    pd.state.textContent = QSTATE_TEXT[row.status] || '';
+  }
+  // 세션이 멈춰 있고 **보여줄 대화도 없으면** 터미널 분할을 한 번 자동으로 연다 — 로그인 화면은 터미널에만 있는데,
+  //  빈 채팅만 두면 사람이 볼 수 있는 게 없다(실측 신고). 대화가 이미 있으면 자동으로 열지 않는다(읽던 화면을 뺏지 않는다).
+  let autoTermOpened = false;
+  function maybeAutoOpenTerminal(): void {
+    if (autoTermOpened || destroyed || !opts.terminalSrc || !isBox) return;
+    if (curUuid || recs.some((r) => r.evs.length)) return;        // 대화가 보이고 있다 — 알림 줄이면 충분
+    autoTermOpened = true;
+    toggleTerminal(true);
+    view.setNote('세션이 입력을 못 받고 있어 터미널을 열었어요 — 로그인 등 필요한 단계를 여기서 끝내면 대기 중인 지시가 이어서 들어갑니다.');
   }
   async function outboxAct(pd: Pending, act: 'retry' | 'discard'): Promise<void> {
     if (!pd.obId) return;
@@ -405,6 +423,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       // 라이브 박스면 파일이 생기는 순간을 잡는다(사람이 터미널에서 먼저 말을 걸 수도 있다) — 첫 대화 뒤에 여기로 흘러든다.
       //  못 읽는 하네스면 기다려도 안 온다 — 폴링하지 않는다(보내기는 된다: 주입은 tmux 라 하네스 무관).
       if (canType() && !target.node && !unreadable) { src = { kind: 'box', id: target.id }; schedule(); }
+      void syncOutbox();   // ⚠ 기록이 아직 없어도 큐엔 내 말이 있을 수 있다(다른 탭에서 보냄·막힌 세션) — 대기 말풍선을 되살린다
       return;
     }
     loadedFrom = chunk.from; loadedTo = chunk.to;      // 서버가 줄 경계로 맞춘 창 — 첫 줄 버리기·조각 이어붙이기가 필요 없다(#1746 window.ts)
