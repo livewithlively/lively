@@ -101,6 +101,38 @@ export async function findTranscriptFile(cwd: string, sessionUuid: string, owner
   return null;
 }
 
+// #1719 세션 대화창 — **맥락 압축(compact) 사슬**. Claude Code 는 압축 때 **새 세션 uuid 의 새 파일**을 열고(첫 줄 system/compact_boundary,
+//  logicalParentUuid = 이전 파일의 마지막 메시지 uuid) 옛 파일은 그대로 둔다(실측 2026-08-18: 108b6fb2 → e722ab02). 화면이 압축 전
+//  대화까지 이어 보이려면 '이 파일의 이전 파일'을 알아야 한다 — 같은 폴더의 다른 대화 파일 중 그 uuid 를 가진 파일을 찾는다.
+//  파일이 수십 MB 라 매 요청마다 뒤지지 않는다: 결과를 프로세스 캐시에 둔다(파일 → 이전 uuid|null). 최근 수정 순으로 최대 12개만 본다.
+const prevCache = new Map<string, string | null>();
+export async function findPrevTranscript(file: string): Promise<string | null> {
+  if (prevCache.has(file)) return prevCache.get(file) ?? null;
+  let prev: string | null = null;
+  try {
+    const fh = await fsp.open(file, "r");
+    let head = "";
+    try { const buf = Buffer.alloc(8192); const r = await fh.read(buf, 0, 8192, 0); head = buf.subarray(0, r.bytesRead).toString("utf8"); }
+    finally { await fh.close(); }
+    const first = head.split("\n")[0] || "";
+    let o: any = null; try { o = JSON.parse(first); } catch { /* 첫 줄이 잘렸거나 JSON 아님 */ }
+    const lp = o && o.type === "system" && o.subtype === "compact_boundary" ? String(o.logicalParentUuid || "") : "";
+    if (lp && /^[A-Za-z0-9-]{8,64}$/.test(lp)) {
+      const dir = path.dirname(file);
+      const names = (await fsp.readdir(dir)).filter((n) => n.endsWith(".jsonl") && path.join(dir, n) !== file);
+      const stats = await Promise.all(names.map(async (n) => ({ n, m: (await fsp.stat(path.join(dir, n)).catch(() => null))?.mtimeMs ?? 0 })));
+      stats.sort((a, b) => b.m - a.m);
+      const needle = `"uuid":"${lp}"`;
+      for (const { n } of stats.slice(0, 12)) {
+        const txt = await fsp.readFile(path.join(dir, n), "utf8").catch(() => "");
+        if (txt.includes(needle)) { prev = n.replace(/\.jsonl$/, ""); break; }
+      }
+    }
+  } catch { prev = null; }
+  prevCache.set(file, prev);
+  return prev;
+}
+
 // ⚠ '그 폴더의 가장 최근 대화'로 resume 을 추측하는 함수가 여기 있었다가 제거됐다(2026-07-28).
 //  왜 다시 만들지 말아야 하나: ① 격리(#524)는 멤버마다 홈이 따로라 남의 홈 대화를 집으면 그 세션이 못 읽어
 //  claude 가 즉시 죽는다(실측 사고) ② 소유자로 스코프해도 같은 폴더의 다른 대화를 '최신'이라며 집을 수 있다.
