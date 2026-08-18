@@ -175,7 +175,7 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .sc-proj-connect:hover { border-color: var(--blue); color: var(--blue); background: transparent; }
 .sc-proj-car { font-size: 9px; color: inherit; }
 .sc-proj-none { color: var(--muted); }
-.v2-pjpick { width: 320px; max-width: calc(100vw - 24px); display: flex; flex-direction: column; gap: 8px; }
+.v2-pjpick { width: 320px; max-width: calc(100vw - 24px); display: flex; flex-direction: column; gap: 8px; padding: 8px; }   /* 배경·그림자는 .dash-pop-panel(20-dashboard.css) */
 .v2-pjpick-in { height: 32px; border: 1px solid var(--line-net, #D5DDEA); border-radius: 8px; padding: 0 10px; font: inherit; font-size: 13px;
   background: var(--bg, #fff); color: var(--ink); }
 .v2-pjpick-in:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; border-color: transparent; }
