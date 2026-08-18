@@ -18,6 +18,12 @@ t("[2] echoNeedle — JSON 이스케이프 형태(따옴표·역슬래시·한�
   const line = JSON.stringify({ type: "user", message: { role: "user", content: 'say "hi"' } });
   assert.ok(line.includes(echoNeedle('say "hi"')));
 });
+t("[2b] echoNeedle — 접두 160자만(긴 텍스트 꼬리 뒤섞임 내성): 꼬리가 달라져도 매치된다", () => {
+  const long = "가".repeat(200) + " 꼬리";
+  const mangled = "가".repeat(200) + " 리꼬";           // 꼬리가 뒤섞인 주입 결과
+  const doc = JSON.stringify({ content: mangled });
+  assert.ok(doc.includes(echoNeedle(long)));
+});
 t("[3] retryDelayMs — 완만히 늘고 30초에 멈춘다(로그인 화면을 계속 두드리지 않는다)", () => {
   assert.equal(retryDelayMs(1), 15_000);
   assert.equal(retryDelayMs(4), 30_000);
