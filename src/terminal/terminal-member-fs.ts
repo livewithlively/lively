@@ -54,6 +54,25 @@ export function memberLs(osUser: string, absPath: string): Promise<LsEntry[]> {
   });
 }
 
+// 멤버 uid 로 node 한 줄(고정 리터럴)을 돌리고 stdin JSON → stdout JSON 을 받는다(#1719 session-project — 세션 폴더 안
+//  마커·링크·셔틀을 격리 홈(700)에 쓰려면 이 통로뿐이다). 스크립트는 우리 코드의 **고정 리터럴**, 값은 전부 stdin JSON.
+export function memberNodeJson<T>(osUser: string, js: string, input: unknown): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const c = memberSpawn(osUser, ["node", "-e", js], ["pipe", "pipe", "pipe"]);
+    const err = collectErr(c);
+    let out = "";
+    c.stdout?.on("data", (d) => (out += d));
+    c.on("error", reject);
+    if (!c.stdin) return reject(new Error("member node: no stdin"));
+    c.stdin.on("error", reject);
+    c.stdin.end(JSON.stringify(input));
+    c.on("close", (code) => {
+      if (code !== 0) return reject(new Error(err.get() || `member node exit ${code}`));
+      try { resolve(JSON.parse(out || "null") as T); } catch (e) { reject(e as Error); }
+    });
+  });
+}
+
 export function memberStat(osUser: string, absPath: string): Promise<{ size: number; file: boolean; dir: boolean } | null> {
   return new Promise((resolve, reject) => {
     const c = memberSpawn(osUser, ["node", "-e", STAT_JS, absPath], ["ignore", "pipe", "pipe"]);
