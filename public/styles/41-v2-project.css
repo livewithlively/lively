@@ -1,0 +1,96 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   41-v2-project.css — 새 셸 프로젝트 화면(web/v2/project-view.ts, #1757).
+   문법: 위 = 짧은 개요(번호·상태 / 제목 [편집] / 본문 몇 줄 / 여는 길 · 사실), 아래 = 리브 대화 + 입력칸(36-chat desktop 변형).
+   토큰은 01-base 것만. 채운 파랑은 화면당 하나(대화 입력칸의 보내기·편집 저장 — 동시에 안 보인다). 상태 = 점 + 글자.
+   40-v2.css 뒤에 온다(캐스케이드 맨 뒤 — .v2-row 등 새 셸 공용 조각을 여기서 그대로 쓴다).
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.pv-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg, #fff); }
+
+/* ── 개요 — 스크롤하지 않는 위 블록. 본문을 펼쳐 아주 길어지면 이 블록만 안에서 굴린다(대화 칸을 밀어내지 않는다). ── */
+.pv-top { flex: none; max-height: 58vh; overflow-y: auto; padding: 24px 28px 0; }
+.pv-eyebrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); line-height: 1.4; }
+.pv-eyebrow .mono { font-family: var(--mono, ui-monospace, monospace); font-size: 12px; letter-spacing: .02em; }
+.pv-eyebrow .sep { color: var(--muted-3, #C2CCDD); }
+.pv-state { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-sub); }
+.pv-when { color: var(--muted); }
+
+.pv-title-row { display: flex; align-items: flex-start; gap: 14px; margin-top: 6px; }
+.pv-title { flex: 1; min-width: 0; margin: 0; font-size: 23px; font-weight: 800; letter-spacing: -.45px; line-height: 1.32; word-break: keep-all; text-wrap: balance; }
+.pv-head-acts { flex: none; display: inline-flex; gap: 2px; margin-top: 3px; }
+.pv-act { font: inherit; font-size: 12.5px; font-weight: 600; line-height: 1; padding: 6px 9px; border: 0; border-radius: 7px; background: none; color: var(--ink-sub); cursor: pointer; }
+.pv-act:hover { background: var(--bg-tint); color: var(--ink); }
+.pv-act:disabled { color: var(--muted-2, #a6b2c8); cursor: default; background: none; }
+.pv-act:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+
+/* 본문 — 정돈된 마크다운. 기본은 몇 줄만(clamp: 약 6.5줄) + 아래 흐림 + [더 보기]. 편집·펼침 땐 다 보인다. */
+.pv-body-wrap { margin-top: 12px; max-width: 74ch; }
+.pv-body { position: relative; font-size: 14.5px; line-height: 1.72; color: var(--ink-sub); word-break: keep-all; overflow-wrap: anywhere; }
+.pv-body.clamp { max-height: 10.9em; overflow: hidden; }
+.pv-body.clamp::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 3em; pointer-events: none;
+  background: linear-gradient(to bottom, rgba(255,255,255,0), var(--bg, #fff) 78%); }
+.pv-body .md > :first-child { margin-top: 0; }
+.pv-body .md > :last-child { margin-bottom: 0; }
+.pv-body .md p { margin: 0 0 .55em; }
+.pv-body .md h1, .pv-body .md h2, .pv-body .md h3 { margin: 1em 0 .3em; font-size: 12px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--muted-head, #7A88A3); }
+.pv-body .md h1 { font-size: 13px; }
+.pv-body .md ul, .pv-body .md ol { margin: 0 0 .55em; padding-left: 1.25em; }
+.pv-body .md li { margin: .12em 0; }
+.pv-body .md li::marker { color: var(--muted-2, #a6b2c8); }
+.pv-body .md a { color: var(--blue); text-decoration: none; }
+.pv-body .md a:hover { text-decoration: underline; }
+.pv-body .md code { font-size: .92em; }
+.pv-body .md hr { border: 0; border-top: 1px solid var(--line); margin: .8em 0; }
+.pv-more { display: inline-block; margin-top: 4px; font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); background: none; border: 0; padding: 4px 0; cursor: pointer; }
+.pv-more:hover { color: var(--blue); }
+.pv-more[hidden] { display: none; }
+.pv-empty-body { margin: 12px 0 0; font-size: 13.5px; line-height: 1.7; color: var(--muted); }
+.pv-link { font: inherit; font-size: inherit; color: var(--ink-sub); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--line-net-2, #CFE0F7); }
+.pv-link:hover { color: var(--blue); text-decoration-color: currentColor; }
+
+/* 편집 — 그 자리에서. 저장이 이 순간의 주 액션(채운 파랑). */
+.pv-edit { margin-top: 12px; max-width: 74ch; }
+.pv-edit-ta { display: block; width: 100%; box-sizing: border-box; min-height: 140px; resize: vertical; font-family: inherit; font-size: 14px; line-height: 1.68; color: var(--ink);
+  padding: 11px 13px; border: 1px solid var(--line-net); border-radius: 11px; background: var(--bg, #fff); }
+.pv-edit-ta:focus-visible { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px var(--bg-punch); }
+.pv-edit-acts { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.pv-edit-hint { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+/* 여는 길(왼) + 사실 한 줄(오른). 사실은 눌러서 한 칸 펼친다 — 늘 펼쳐 두면 옛 화면처럼 길어진다. */
+.pv-tools { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding-bottom: 14px; }
+.pv-tools-l { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pv-tools-l .btn-sm { padding: 5px 11px; font-size: 12.5px; text-decoration: none; }
+.pv-facts { margin-left: auto; display: inline-flex; align-items: center; gap: 14px; font-size: 12.5px; color: var(--ink-sub); white-space: nowrap; }
+.pv-fact { display: inline-flex; align-items: center; gap: 4px; font: inherit; color: inherit; background: none; border: 0; padding: 4px 2px; cursor: pointer; border-radius: 6px; }
+.pv-fact .car { font-size: 9px; color: var(--muted-2, #a6b2c8); }
+.pv-fact:hover { color: var(--ink); }
+.pv-fact.on { color: var(--ink); font-weight: 700; }
+.pv-fact.on .car { color: var(--ink-sub); }
+.pv-fact-plain { color: var(--muted); }
+
+/* 펼친 목록 — 새 셸 공용 행(.v2-row) 그대로. 한 번에 하나만, 길면 안에서 굴린다. */
+.pv-panel { border: 1px solid var(--line); border-radius: 12px; overflow: auto; max-height: 260px; margin: -4px 0 16px; background: var(--bg, #fff); }
+.pv-panel .v2-row { padding: 9px 14px; }
+.pv-panel .v2-row .t { font-size: 13.5px; }
+.pv-panel .v2-empty { padding: 10px 14px; }
+
+/* ── 대화 — 개요 아래 나머지 전부. 36-chat 의 desktop 변형이 그린다; 여기선 자리와 빈 화면(제안 칩)·바만. ── */
+.pv-chat { flex: 1; min-height: 0; display: flex; border-top: 1px solid var(--line); }
+.pv-chat > .livc-wrap { flex: 1; }
+/* 빈 대화의 안내(제안 칩)는 입력칸 바로 위에 앉는다(35-liv 의 :first-child margin-top:auto 가 아래로 민다) — 칩은 입력의 지름길이라 입력칸 곁이 맞다. */
+.pv-open { padding: 6px 0 12px; max-width: 74ch; }
+.pv-open-lede { font-size: 13.5px; line-height: 1.7; color: var(--ink-sub); }
+.pv-open-lede b { color: var(--ink); font-weight: 700; }
+.pv-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.pv-chips .chip { font-weight: 600; }
+.pv-chips .chip:hover { border-color: var(--blue); color: var(--ink); background: var(--bg-tint); }
+.pv-bar-note { font-size: 11.5px; color: var(--muted); }
+.pv-bar-r { display: inline-flex; gap: 2px; }
+.pv-bar-btn { font: inherit; font-size: 12px; font-weight: 600; color: var(--ink-sub); background: none; border: 0; padding: 3px 8px; border-radius: 6px; cursor: pointer; }
+.pv-bar-btn:hover { background: var(--bg-tint); color: var(--ink); }
+
+@media (max-width: 1100px) {
+  .pv-top { padding-left: 20px; padding-right: 20px; }
+  .pv-tools { flex-wrap: wrap; }
+  .pv-facts { margin-left: 0; }
+}

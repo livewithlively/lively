@@ -1,7 +1,7 @@
 // v2/main.ts — 새 1탭 셸(#1719)의 뿌리. main.ts boot() 가 ui_mode 로 고른 뒤 bootV2() 를 부른다.
 //  구조(마진 없는 풀스크린 · 상단/하단 바 없음):
 //    좌 사이드바 — 로고(→홈) · 리브(→리브 페이지) · 프로젝트(워크스페이스 전체) ▸ 살아 있는 세션 트리(web/v2/side.ts) · 앱(런치패드) · 나/로그아웃
-//    중앙        — 입력창 하나(홈 — Enter 로 프로젝트 없는 세션, #1719) / 프로젝트 / 세션(대화창) / 앱 프레임(클래식 화면 임베드) / 리브 페이지
+//    중앙        — 입력창 하나(홈 — Enter 로 프로젝트 없는 세션, #1719) / 프로젝트(짧은 개요 + 리브 대화, v2/project-view.ts #1757) / 세션(대화창) / 앱 프레임(클래식 화면 임베드) / 리브 페이지
 //    우측        — 이 선택의 지식(프로젝트 필요·산출) · 리브 카드(홈)
 //  라우트: #/ #/dashboard → 홈 · #/liv · #/p/<id> · #/s/<sid> · #/app/<key>[/…] · 그 밖의 클래식 해시 → 같은 해시로 앱 프레임.
 //  데스크톱(일렉트론)에서 그대로 쓰기 위한 규약: 정적 자산 + 해시 라우트 + api()(상대 경로·bearer/쿠키)만 쓴다.
@@ -10,7 +10,8 @@ import { $view, anchoredPopover, api, el, toast } from '../core.js';
 import { fillLivCards, renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame } from './apps.js';
 import { drawSide as drawSideTree, projectOrder } from './side.js';
-import { dotCls, mergeSessions, projName, refreshSession, renderHome, renderProject, renderSession, unmountSession } from './views.js';
+import { dotCls, mergeSessions, projName, refreshSession, renderHome, renderSession, unmountSession } from './views.js';
+import { mountProjectView } from './project-view.js';
 import { createTimeline } from '../timeline.js';
 import { loadProjectTimeline, loadSessionActivities, loadWorkspaceTimeline } from '../timeline-sources.js';
 import { makeSplitter } from './split.js';
@@ -22,6 +23,7 @@ let data = { projects: [], sessions: [], loadedAt: 0 };
 let projLoadedAt = 0;
 const projRetried = new Set(); // 목록에 없어 한 번 더 당겨 본 프로젝트 id(같은 id 로 반복 재조회 방지)
 let routeSeq = 0;
+let projView = null; // 프로젝트 화면(#1757) — 떠날 때 대화 폴링을 끈다
 // 프로젝트 목록은 워크스페이스 전체(수백 건·설명 포함이라 1MB 를 넘는다) — 세션처럼 20초마다 당기지 않는다.
 //  5분에 한 번, 그리고 세션이 모르는 프로젝트를 가리킬 때(그새 생긴 프로젝트) 한 번 더.
 const PROJ_TTL_MS = 5 * 60 * 1000;
@@ -102,6 +104,10 @@ async function route() {
     document.body.dataset.route = 'v2';
     if (page !== 's')
         unmountSession(); // 세션 화면을 떠나면 그 폴링·리스너를 끈다(다음 렌더가 덮어써도 타이머는 남는다)
+    if (projView) {
+        projView.destroy();
+        projView = null;
+    } // 프로젝트 화면도 같은 이유(리브 턴 폴링) — 같은 프로젝트로 다시 와도 새로 그린다(대화는 서버에서 되그린다)
     markActive(page === 'p' ? 'p:' + segs[1] : page === 's' ? 's:' + decodeURIComponent(segs[1] || '') : page === 'liv' ? 'liv' : page === '' || page === 'dashboard' ? 'home' : '');
     root.classList.toggle('no-aside', false);
     try {
@@ -132,7 +138,8 @@ async function route() {
             // 목록에 없는 프로젝트(방금 만든 것·딥링크) — 사이드바 트리에도 나오게 목록을 한 번 더 당긴다.
             if (detail && !data.projects.some((p) => p.id === id))
                 void loadData({ projects: true }).then(() => drawSide());
-            await renderProject(centerEl, data, id, detail);
+            // 프로젝트 화면(#1757) = 짧은 개요 + 리브 대화. 리브가 본문·태스크를 바꾸면(턴 끝) 목록·사이드바도 다시 당긴다.
+            projView = mountProjectView(centerEl, { data, id, detail, onProjectChanged: () => { void loadData({ projects: true }).then(() => drawSide()); } });
             drawAsideProject(detail, id);
         }
         else if (page === 's' && segs[1]) {
