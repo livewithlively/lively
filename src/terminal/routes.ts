@@ -22,7 +22,7 @@ import { registerTerminalFiles } from "./terminal-files.js";
 import { listMembers, getRuntimeConfig } from "../org/store.js";
 import { isProjectSessionDir } from "../project/project-fs.js";
 // 분산 노드(#869) — 원격 노드 세션의 목록 병합·CRUD 위임. 정책(소유·초대 검증)은 여기, 실행은 노드(F7).
-import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, liveNodes, nodeOfSession } from "../node/registry.js";
+import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, liveNodes, nodeOfSession, nodeSessionHarness } from "../node/registry.js";
 import type { NodeOp } from "../node/protocol.js";
 import { getNode, listNodes } from "../node/store.js";
 import { nodeHarnesses } from "../node/protocol.js";   // #1713 — 노드별 하네스 가용성(미보고 → 기준선)
@@ -33,6 +33,7 @@ import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세
 import { registerSessionProjectRoutes } from "./session-project-routes.js";   // #1719 — 세션 프로젝트 소속 바꾸기(홈 입력창 세션)
 import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑
 import { chatIoCaps } from "./harness-io/adapter.js";                 // #1746 — 행에 대화창 능력(읽기·승인)
+import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
 
 // 노드 op 실패를 사용자에게 그대로 보여준다 — 노드측 예외(예: tmux 미설치 → spawn ENOENT)가 generic 500("internal_error")
 //  으로 묻히면 원인 진단이 불가능하다(#869 haru 사례: 세션 생성 500 의 진짜 원인이 로그에만 있고 응답엔 안 나왔다).
@@ -127,7 +128,13 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
       // bin·autoApproveFlag 를 함께 준다(#1695) — 프로젝트 화면의 '내 컴퓨터에서 작업'이 자동승인 설명에 **그 하네스의
       //  실제 플래그**를 적기 위해서다. 종전엔 웹이 'claude --dangerously-skip-permissions / codex --yolo' 를 문장에
       //  하드코딩해, 하네스가 늘 때마다 그 문장이 조용히 틀려졌다. 둘 다 우리 상수라 노출에 위험이 없다.
-      harnesses: HARNESSES.map((h) => ({ key: h.key, label: h.label, bin: h.bin, hasAutoApprove: !!h.autoApproveFlag, autoApproveFlag: h.autoApproveFlag ?? "", flags: h.flags })),
+      // provider — 화면이 '어느 회사 모델로 열까'로 묻고 그 답이 곧 하네스가 된다(#1758, catalog.ts HarnessProvider).
+      // runtime — 이미 떠 있는 세션에서 그 축을 바꿀 수 있나(슬래시 명령이 있는 하네스만). 화면이 컨트롤 노출을 이걸로 정한다.
+      harnesses: HARNESSES.map((h) => ({
+        key: h.key, label: h.label, bin: h.bin, provider: h.provider,
+        hasAutoApprove: !!h.autoApproveFlag, autoApproveFlag: h.autoApproveFlag ?? "", flags: h.flags,
+        runtime: { model: !!h.runtimeCmd?.model, effort: !!h.runtimeCmd?.effort },
+      })),
       members,
       // 멀티프로필(#346): 이 세션이 '내 계정'(프로필 로그인됨)으로 뜰지, '공유 계정'으로 폴백할지 UI 표시.(레거시 폴백)
       profile: await profileStatus(userOf(req)),
@@ -370,6 +377,71 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       throw e;
     }
     res.json({ ok: true });
+  }));
+  // 이미 떠 있는 세션의 **모델·추론강도**를 바꾼다(#1758) — 대화창 입력칸 아래 드롭다운이 부른다.
+  //  세션은 이미 argv 로 떠 있어 플래그로는 못 바꾼다. 사람이 터미널에서 치는 것과 **같은 슬래시 명령**을 넣는 수밖에 없고,
+  //  그 통로는 프롬프트와 **같은 아웃박스**다(#1753) — 직접 send-keys 하면 배달자가 프롬프트를 넣는 중간에 끼어들어
+  //  둘 다 깨진다. 큐가 세션당 직렬이라 순서(모델 먼저, 그 다음 프롬프트)도 큐가 지킨다.
+  //  제공자는 여기서 못 바꾼다 — 다른 CLI 를 띄우는 일이라 새 세션의 몫이다.
+  //  ⚠ 하네스는 **서버가 해소한다**(desired-state → 노드 스냅샷 → tmux 옵션). 화면이 보낸 값을 믿으면 남의 하네스
+  //   명령을 대신 치게 하는 통로가 된다. 값도 그 하네스 카탈로그의 선택지로 화이트리스트한다.
+  app.post("/api/ui/terminal/sessions/:id/runtime", auth, wrap(async (req, res) => {
+    const uid = idOf(userOf(req));
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const AXES: ReadonlyArray<{ axis: "model" | "effort"; ko: string; flag: string }> = [
+      { axis: "model", ko: "모델", flag: "--model" },
+      { axis: "effort", ko: "추론강도", flag: "--effort" },
+    ];
+    const want = AXES.map((a) => ({ ...a, v: String(b[a.axis] ?? "").trim() })).filter((a) => a.v);
+    if (!want.length) throw new HttpError(400, "바꿀 값이 없습니다");
+    const nodeId = nodeOfSession(req.params.id);
+    if (nodeId) {
+      const v = await nodeCanAttach(nodeId, req.params.id, uid);
+      if (!v.ok) throw new HttpError(v.code === 4410 ? 404 : v.code === 4462 ? 503 : 403, v.reason);
+    } else if (!(await canAttach(req.params.id, uid))) {
+      throw new HttpError(403, "세션에 접근할 수 없습니다");
+    }
+    const st = await getSessionState(req.params.id);
+    const key = (nodeId ? nodeSessionHarness(nodeId, req.params.id) : "")
+      || st?.harness
+      || (await getOpt(req.params.id, "@box_harness").catch(() => ""))
+      || "";
+    const h = HARNESSES.find((x) => x.key === key);
+    if (!h) throw new HttpError(409, "이 세션이 어떤 AI 로 떴는지 알 수 없어 여기서는 못 바꿉니다 — 터미널에서 바꿔 주세요.");
+    const cmds: string[] = [];
+    for (const w of want) {
+      const make = h.runtimeCmd?.[w.axis];
+      if (!make) throw new HttpError(409, `${h.label} 세션은 여기서 ${w.ko}를 바꿀 수 없습니다 — 터미널에서 바꿔 주세요.`);
+      const choices = (h.flags.find((f) => f.name === w.flag)?.choices ?? []).filter(Boolean);
+      if (!choices.includes(w.v)) throw new HttpError(400, `${h.label} 가 아는 ${w.ko}가 아닙니다: ${w.v}`);
+      cmds.push(make(w.v));
+    }
+    res.setHeader("Cache-Control", "no-store");
+    if (nodeId) {
+      // 노드 세션은 아웃박스 배달자가 닿지 않는다(tmux 가 그 컴퓨터에 있다) — 프롬프트와 같은 릴레이 경로.
+      const { injectPrompt } = await import("../node/session-inject.js");
+      for (const c of cmds) {
+        try { await injectPrompt(req.params.id, c); }
+        catch (e) {
+          const msg = (e as Error)?.message ?? String(e);
+          if (msg === "node-offline") throw new HttpError(503, "그 컴퓨터가 지금 연결돼 있지 않습니다.");
+          if (msg.startsWith("node-unsupported-op:")) throw new HttpError(409, "그 컴퓨터의 라이블리가 오래돼 받지 못합니다. 업데이트가 필요합니다.");
+          if (msg === "node-rpc-timeout") throw new HttpError(504, "그 컴퓨터가 응답하지 않습니다.");
+          throw e;
+        }
+      }
+      res.json({ ok: true, harness: h.key, sent: cmds });
+      return;
+    }
+    const { enqueuePrompt, waitOutboxSettled } = await import("../sessions/session-outbox.js");
+    const ids: number[] = [];
+    for (const c of cmds) ids.push((await enqueuePrompt(req.params.id, c, { kind: "control" })).id);
+    // 큐에 넣고 끝내지 않고 **잠깐 결말을 본다** — 입력창이 떠 있는 보통의 경우 몇 초 안에 끝나고, 그때 화면이
+    //  '바꿨다/못 바꿨다'를 그 자리에서 말할 수 있다. 아직 대기 중이면 그 사실 그대로(pending) 돌려준다 —
+    //  로그인 화면에 멈춘 세션은 뜨는 즉시 배달자가 넣는다(아웃박스가 들고 있다).
+    const done = await waitOutboxSettled(ids, 8_000);
+    if (done.failed) throw new HttpError(409, `바꾸지 못했어요 — ${done.failed}`);
+    res.json({ ok: true, harness: h.key, sent: cmds, pending: !done.settled });
   }));
   // 여러 세션 통합 '내 질문' 검색(#745) — 내가 접근 가능한 세션(개인 소유/초대 + 내 프로젝트 세션)의 질문을 grep, 어느 세션인지와 함께.
   app.get("/api/ui/terminal/prompts/search", auth, wrap(async (req, res) => {

@@ -102,6 +102,13 @@ export function nodeOfSession(sessionId: string): string | null {
   return null;
 }
 
+// 노드 세션이 어느 하네스로 떴나(스냅샷 기준) — 모르면 ''. 노드 세션은 게이트웨이의 desired-state 미러에 없어서
+//  (그 세션은 그 컴퓨터가 만든다) 하네스를 여기서만 알 수 있다. 모델·추론강도 바꾸기(#1758)가 '어떤 슬래시 명령을
+//  칠까'를 정하려면 하네스가 있어야 한다 — 화면이 보낸 값을 믿지 않는다(남의 하네스 명령을 대신 치게 할 여지를 안 만든다).
+export function nodeSessionHarness(nodeId: string, sessionId: string): string {
+  return states.get(nodeId)?.sessions.find((s) => s.id === sessionId)?.harness || "";
+}
+
 // 이 노드가 op 를 할 수 있나(#905 C4) — hello.caps 가 근거, 안 보낸 구 노드는 v1 기준선.
 //  provision-remote.ts(assertNodeUsable 의 requireProvision 게이트)가 배치 전 사전 조회로 쓴다 — 못 할 노드를
 //   미리 걸러 사람 말로 안내한다. 강제 게이트는 nodeRpc 가 이미 한다(여긴 사전 조회용).
