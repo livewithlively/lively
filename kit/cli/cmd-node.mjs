@@ -55,6 +55,24 @@ export function logTailHint(logFile, platform = process.platform) {
     ? `Get-Content -Wait -Tail 50 -Encoding utf8 '${logFile}'`
     : `tail -f ${logFile}`;
 }
+/**
+ * Windows 네이티브 명령의 출력 디코드 — 한국어 콘솔은 cp949 를 뱉는다(#1541 실측: 앱 로그에
+ *  "(schtasks: ����: �׼����� �źεǾ����ϴ�.)" — cp949 바이트를 utf8 로 읽은 깨진 글자를 사람에게 보여줬다).
+ *  utf8 로 먼저 읽고, 깨졌으면(U+FFFD) WHATWG euc-kr(=windows-949, Node full-ICU 내장)로 다시. 그래도 깨지면
+ *  **빈 문자열** — 깨진 글자를 보여주는 것보다 침묵이 낫다(문구는 진단 보조일 뿐이다).
+ * @param {Buffer|string|null|undefined} raw  spawnSync 를 encoding 없이 부른 stdout/stderr(Buffer)
+ */
+export function decodeConsoleText(raw) {
+  if (raw == null) return "";
+  if (typeof raw === "string") return raw.includes("\uFFFD") ? "" : raw;
+  const utf8 = raw.toString("utf8");
+  if (!utf8.includes("\uFFFD")) return utf8;
+  try {
+    const t = new TextDecoder("euc-kr").decode(raw);
+    if (!t.includes("\uFFFD")) return t;
+  } catch { /* ICU 없음 등 */ }
+  return "";
+}
 const LAUNCHD_LABEL = "io.lvly.node-agent";
 const PLIST_PATH = join(HOME, "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
 const SYSTEMD_UNIT = join(HOME, ".config", "systemd", "user", "lively-node-agent.service");
@@ -372,7 +390,8 @@ WantedBy=default.target\n`);
     writeFileSync(xmlPath, "\ufeff" + xml, "utf16le");
     spawnSync("schtasks", ["/Delete", "/TN", WIN_TASK_NAME, "/F"], { stdio: "ignore" });   // 재등록 안전(멱등)
     // stdio:"pipe" — 실패했을 때 **schtasks 가 뭐라 했는지**가 폴백 여부 판단의 근거다(그냥 버리면 진단이 사라진다).
-    const r = spawnSync("schtasks", ["/Create", "/TN", WIN_TASK_NAME, "/XML", xmlPath], { encoding: "utf8" });
+    // encoding 을 주지 않는다(Buffer 로 받는다) — 한국어 Windows 의 schtasks 는 cp949 를 뱉어 utf8 강제 디코드가 글자를 깨뜨린다.
+    const r = spawnSync("schtasks", ["/Create", "/TN", WIN_TASK_NAME, "/XML", xmlPath], {});
     if (r.status === 0) {
       const since = Date.now();                                                            // 기동 **전** 시각 — 이후의 연결만 우리 것으로 센다
       spawnSync("schtasks", ["/Run", "/TN", WIN_TASK_NAME], { stdio: "ignore" });          // 재로그인 기다리지 않고 지금 기동
@@ -389,7 +408,7 @@ WantedBy=default.target\n`);
     //  잃는 것은 '로그인 전 기동' 하나뿐 — 어차피 그건 관리자 권한이 필요하고, 사용자 홈·자격으로 도는
     //  노드에겐 로그인 전 실행이 의미도 없다. 재시작 보장은 런처(.cmd)의 루프가 그대로 진다.
     say(yellow(`⚠ 작업 스케줄러 등록이 거부됐습니다 — 시작프로그램 방식으로 대체합니다.`));
-    const denied = String(r.stderr || r.stdout || "").trim();
+    const denied = (decodeConsoleText(r.stderr).trim() || decodeConsoleText(r.stdout).trim());
     if (denied) say(dim(`   (schtasks: ${denied.split(/\r?\n/)[0]})`));
     const vbsPath = join(winStartupDir(), WIN_STARTUP_VBS);
     try {

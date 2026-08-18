@@ -407,7 +407,11 @@ function connect(): void {
     chans.clear();
     const delay = Math.min(BACKOFF_MAX_MS, BACKOFF_MIN_MS * 2 ** Math.min(attempt++, 5));
     logger.warn({ delay }, "게이트웨이 연결 끊김 — 재연결 예약");
-    setTimeout(connect, delay).unref();
+    // ⚠ unref 금지(#1541 실기기 로그로 확정): teardown 뒤엔 이 타이머가 이벤트 루프를 지탱하는 유일한 핸들이라,
+    //  unref 면 **재연결이 실행되기 전에 프로세스가 끝난다**. hammurabi 로그의 모든 "연결 끊김 — 재연결 예약" 뒤에
+    //  재연결이 아니라 +5초에 새 pid(런처 재기동)가 온다 — 예약된 재연결이 단 한 번도 돈 적이 없다.
+    //  데몬은 런처가 우연히 가려 주지만, 포그라운드(lively node — 런처 없음)는 끊김 한 번에 노드가 통째로 죽는다.
+    setTimeout(connect, delay);
   };
   ws.once("close", teardown);
   ws.once("error", (err) => { logger.warn({ err: (err as Error)?.message }, "노드 WSS 오류"); try { ws.terminate(); } catch { /* noop */ } });

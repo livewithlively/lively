@@ -10,7 +10,7 @@
 //     그래서 창을 닫아도 앱이 안 죽고(트레이 상주), 앱을 종료해도 노드는 그대로다.
 //  ③ 렌더러는 신뢰하지 않는다 — contextIsolation·sandbox 켜고, argv 는 메인이 만든다(ipc-contract).
 import { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, dialog, screen } from "electron";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { spawnSync, spawn, execFile } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -246,6 +246,9 @@ async function applyUpdate() {
   if (running) return { ok: false, error: "작업이 끝난 뒤에 적용합니다." };
   try {
     const u = await getUpdater();
+    // 창을 보고 있던 사람이 적용을 눌렀으면 재시작 뒤 **창을 다시 연다**(#1541 실측: 트레이에만 떠서 손으로 열었다).
+    //  자동 적용(창 숨김)은 마커를 안 쓴다 — 사람이 안 보고 있는데 창이 튀어나오면 안 된다.
+    try { if (win && win.isVisible()) writeFileSync(join(LIVELY_DIR, "desktop-reopen"), ""); } catch { /* 마커 실패는 비치명 */ }
     quitting = true;                                   // 창 close 핸들러가 숨기기 대신 닫게
     send(IPC.LOG, { stream: "raw", line: `업데이트 적용 — 앱을 다시 시작합니다 (${updateReady})…` });
     u.quitAndInstall(true, true);                      // Windows: 설치기 /S --force-run · Linux AppImage: 교체 후 재실행
@@ -515,6 +518,8 @@ else {
     //  파일이 다 있어 '완료' 로 판정되니 창이 아예 안 뜨고, 트레이 앱은 조용히 앉아 아무것도 안 한다.
     //  사용자에게는 '앱이 안 켜진다' 로 보인다(실측: 이 검증 하네스가 그 상태를 그대로 잡았다).
     if (!state.cliFound || state.cliOutdated || state.cliBroken || !state.loggedIn || !state.kitInstalled) showWindow();
+    // 업데이트 적용 재시작 — 창에서 적용을 눌렀던 사람에게 창을 되돌려준다(마커는 applyUpdate 가 창이 보일 때만 남긴다).
+    try { const m = join(LIVELY_DIR, "desktop-reopen"); if (existsSync(m)) { rmSync(m, { force: true }); showWindow(); } } catch { /* noop */ }
     // 노드는 앱 밖에서도 죽고 살아난다(OS 데몬·사용자의 `lively node stop`). 주기적으로 되읽지 않으면
     //  트레이가 옛 상태를 계속 보여준다. 30초 — 사람이 느끼기엔 실시간이고 `status` 호출은 가볍다.
     const poll = setInterval(() => { if (!running) void refreshState({ deep: true }); }, 30_000);
