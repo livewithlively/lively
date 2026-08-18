@@ -49,7 +49,7 @@ await t("[C6] locateTranscript — 보고 경로가 뿌리 안이고 존재 → 
   const evil = path.join(outside, "evil.jsonl"); fs.writeFileSync(evil, "ccc\n");
   // 테스트용 어댑터 — 뿌리 = <home>/.t, 규약 = <root>/<convId>/conv.jsonl. ownerHomes 는 실 홈을 보므로 roots 가 tmp 를 보게 어댑터로 고정.
   const io: HarnessSessionAdapter = { key: "t", label: "t", roots: () => [path.join(home, ".t")], filePattern: /\.jsonl$/,
-    pathFor: (root, { convId }) => path.join(root, convId, "conv.jsonl"), parse: null, answer: null, screen: null };
+    pathFor: (root, { convId }) => path.join(root, convId, "conv.jsonl"), convIdOk: null, parse: null, answer: null, screen: null };
   const a = await locateTranscript(io, { cwd: "/w", convId: "conv-1", owner: "yoon", reportedPath: reported });
   assert.deepEqual(a, { file: reported, size: 2, via: "reported" });
   const b = await locateTranscript(io, { cwd: "/w", convId: "conv-1", owner: "yoon", reportedPath: evil });

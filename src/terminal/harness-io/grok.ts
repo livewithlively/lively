@@ -94,6 +94,7 @@ export const grokIo: HarnessSessionAdapter = {
   roots: (homes) => homes.map((h) => path.join(h, ".grok", "sessions")),
   filePattern: /^updates\.jsonl$/,
   pathFor: (root, { cwd, convId }) => (cwd && CONV_ID_RE.test(convId) ? path.join(root, encodeURIComponent(cwd), convId, "updates.jsonl") : null),
+  convIdOk: null,   // 이 하네스의 대화 id 규약을 아직 확정 안 했다 — 판단 보류(보고를 종전대로 받는다)
   parse: parseGrok,
   answer: null,
   // 실측 2026-08-18(box-yoon-bf4872dd): 응답 중엔 "⠹ Responding… 6.5s … [stop]" + 푸터에 "Esc:cancel",

@@ -45,6 +45,11 @@ export interface HarnessSessionAdapter {
   roots(homes: string[], owner: string): string[];
   filePattern: RegExp;
   pathFor: ((root: string, ctx: { cwd: string; convId: string }) => string | null) | null;
+  /** 이 문자열이 **이 하네스의 대화 id 로 그럴듯한가**(#1719 후속). 훅 보고를 받는 쪽이 쓴다 — 세션 안에서 도는
+   *  무엇이든 그 경로를 칠 수 있고 저장이 last-write-wins 라, 규약에 안 맞는 값 하나가 정본을 지운다(실측: 테스트가
+   *  넣은 "s7" 이 살아 있는 세션 3개의 매핑을 덮었다). null = 규약을 모른다(판단 보류 — 종전대로 통과).
+   *  ⚠ 읽기(pathFor·filePattern)는 느슨한 채로 둔다. 여기서 좁히는 건 **쓰기(보고)** 뿐이다. */
+  convIdOk: ((id: string) => boolean) | null;
   parse: ((text: string, state: ParseState) => ParseResult) | null;
   answer: ((action: ChatAction) => ChatKey) | null;
   screen: ((tail: string[]) => ScreenState | null) | null;
@@ -58,7 +63,7 @@ const codexIo: HarnessSessionAdapter = {
   key: "codex", label: "Codex",
   roots: (homes) => homes.map((h) => path.join(h, ".codex", "sessions")),
   filePattern: /^rollout-.*\.jsonl$/,
-  pathFor: null, parse: null, answer: null,
+  pathFor: null, convIdOk: null, parse: null, answer: null,
   // 실측 2026-08-18(box-yoon-355e7d10): 업데이트·신뢰 대화상자는 메뉴 꼬리가 공통("Press enter to continue"),
   // 작업 중엔 "• Working (2s • esc to interrupt)", 준비되면 컴포저 캐럿(›)이 placeholder 와 함께 뜬다.
   // ⚠ busy 중에도 컴포저(›)가 그려져 있다 — 판정 순서(dialog→busy→ready)가 곧 안전장치다.
@@ -74,7 +79,7 @@ const opencodeIo: HarnessSessionAdapter = {
   key: "opencode", label: "OpenCode",
   roots: () => [],
   filePattern: /\.jsonl$/,
-  pathFor: null, parse: null, answer: null,
+  pathFor: null, convIdOk: null, parse: null, answer: null,
   // 실측 2026-08-18(box-yoon-3e231912): 작업 중엔 상태바에 "esc interrupt"(1차 Esc 후엔 "esc again to interrupt"),
   // 준비되면 그 자리가 cwd 로 바뀌고 "ctrl+p commands" 는 늘 있다 — 그래서 busy 를 먼저 보고 ready 를 본다.
   screen: (tail) => {
@@ -86,7 +91,7 @@ const opencodeIo: HarnessSessionAdapter = {
 };
 // 셸 세션 — AI 없음. 대화 파일도 승인도 없다.
 const shellIo: HarnessSessionAdapter = {
-  key: "shell", label: "셸", roots: () => [], filePattern: /$^/, pathFor: null, parse: null, answer: null, screen: null,
+  key: "shell", label: "셸", roots: () => [], filePattern: /$^/, pathFor: null, convIdOk: null, parse: null, answer: null, screen: null,
 };
 
 export const HARNESS_IO: readonly HarnessSessionAdapter[] = [claudeIo, codexIo, opencodeIo, antigravityIo, grokIo, shellIo];
