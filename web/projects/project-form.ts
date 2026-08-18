@@ -274,7 +274,11 @@ export function openProjectV2Form(reload, prefill?: any) {
       if (withRun && np && np.id) {
         const rd = pjvRunDefaults('__new__', []);
         const sbody: any = { label: name, harness: rd.harness || 'claude', autoApprove: rd.autoApprove === true };   // #782 기본 꺼짐
-        if (rd.model) sbody.flags = { '--model': rd.model };
+        // 모델·추론강도는 고른 것만 — 빈 값은 '지난번 그대로'라 안 넘기는 게 그 뜻이다(#1758, selection.ts 와 같은 규칙).
+        const rdFlags: Record<string, string> = {};
+        if (rd.model) rdFlags['--model'] = rd.model;
+        if (rd.effort) rdFlags['--effort'] = rd.effort;
+        if (Object.keys(rdFlags).length) sbody.flags = rdFlags;
         let sid = '';
         try { const sr = await api('/api/ui/v6/projects/' + np.id + '/sessions', { method: 'POST', body: JSON.stringify(sbody) }); sid = (sr && sr.session && sr.session.id) || ''; }
         catch (e) { toast('프로젝트는 만들었지만 세션 실행 실패 — ' + (e.message || e), true); }

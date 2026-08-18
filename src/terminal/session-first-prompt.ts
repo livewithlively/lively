@@ -13,6 +13,7 @@
 //  ⚠ 신뢰 대화상자 자동 수락은 **세션 전용 폴더일 때만**(라이블리가 방금 만든 빈 폴더 — 신뢰할 파일 자체가 없다).
 //   사람이 고른 폴더는 그 사람의 판단이라 대신 누르지 않는다(대화창의 '확인 대기' 배너가 Enter 를 대신 눌러 준다).
 import { SHELL_CMDS } from "./phase.js";
+import { harnessIo } from "./harness-io/adapter.js";
 import { tmux } from "./tmux-exec.js";
 import { sendKeysToSession, sendKeyToSession } from "./send-keys.js";
 
@@ -22,8 +23,11 @@ export type FirstPromptStep = "wait" | "accept-trust" | "send" | "give-up";
 const TAIL_LINES = 14;
 // Claude Code 입력창이 떠 있다는 표식(phase.ts INPUT_BOX 와 같은 문구 — 두 군데가 같은 화면을 본다).
 const INPUT_BOX = /\b(auto|manual|plan|accept edits|bypass permissions) mode on\b|\? for shortcuts|shift\+tab to cycle/i;
-// 새 폴더 신뢰 대화상자(Claude Code) — "Do you trust the files in this folder?" · 기본 선택은 'Yes, proceed'.
-const TRUST_DIALOG = /trust the files in this (folder|directory)/i;
+// 새 폴더 신뢰 대화상자 — 하네스마다 문구가 다르다(기본 선택은 둘 다 'Yes'):
+//  · Claude Code: "Do you trust the files in this folder?"
+//  · Antigravity: "Do you trust the contents of this project?" (실측 2026-08-18 — 종전 정규식이 못 잡아
+//    ⓐ 세션 전용 폴더인데 자동 수락이 안 됐고 ⓑ 6초 뒤 '하네스가 떴다'로 오판해 첫 지시를 대화상자에 밀어 넣었다).
+const TRUST_DIALOG = /trust the (files|contents) (in|of) this (folder|directory|project)/i;
 // 하네스가 아직 뜨는 중인데 화면에 아무 표식이 없을 때, 비-Claude 하네스에 쓰는 보수적 대기(입력창 문구를 모르는 하네스).
 const OTHER_HARNESS_SETTLE_MS = 6000;
 
@@ -43,6 +47,13 @@ export function firstPromptStep(i: { pane: string; harness: string; paneCmd: str
   const tail = tailOf(i.pane);
   const tailText = tail.join("\n");
   if (TRUST_DIALOG.test(tailText)) return i.trustOk ? "accept-trust" : "wait";
+  // 하네스가 화면 판정을 선언했으면(#1719 계약 축 screen) 그것이 정본이다 — 휴리스틱보다 먼저.
+  //  auth(로그인·인증 검증)에 넣으면 거부돼 사라지고(antigravity 실측 — "아직 인증 확인중" 거부), dialog 에 넣으면
+  //  대화상자가 삼킨다. busy 는 큐잉 보장이 없으면 기다렸다 넣는다. 판정 불가(null)면 아래 폴백으로.
+  const scr = harnessIo(i.harness)?.screen?.(tail) ?? null;
+  if (scr === "ready") return "send";
+  if (scr === "auth" || scr === "busy") return "wait";
+  if (scr === "dialog") return "wait";                        // 신뢰 대화상자는 위에서 이미 갈랐다 — 그 밖의 대화상자는 대신 안 누른다
   if (i.harness === "claude") return tail.some((l) => INPUT_BOX.test(l)) ? "send" : "wait";
   // 그 밖의 하네스 — 입력창 문구를 모른다. 포그라운드가 셸이 아니게 된 뒤(하네스가 떴다) 조금 기다렸다 넣는다.
   const fg = (i.paneCmd || "").trim();

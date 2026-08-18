@@ -36,7 +36,17 @@
       <h2>설치가 끝났습니다</h2>
       <p class="hint">이제 아무 폴더에서든 <b>claude</b> 를 켜면 회사 맥락이 따라옵니다.
         이미 켜 둔 터미널이 있으면 껐다 켜세요(훅은 세션 시작에 스냅샷됩니다).</p>
-      <div class="row"><button id="done-web" class="ghost">웹에서 보기</button></div>
+      <div class="row"><button id="done-open" class="primary">라이블리 열기</button><button id="done-web" class="ghost">브라우저에서 열기</button></div>
+    </section>
+
+    <!-- 라이블리 화면(웹 UI 창) — 갖춰진 뒤에만. 앱 안에 웹 UI 를 그대로 싣는다(web-shell.mjs). 못 실었으면 사유와 다시 시도. -->
+    <section id="app-card" class="card hidden">
+      <h2>라이블리 화면</h2>
+      <p class="hint" id="app-note">웹과 같은 화면을 이 앱 안에서 씁니다 — 세션·프로젝트·WIKI 전부.</p>
+      <div class="row">
+        <button id="app-open" class="primary">라이블리 열기</button>
+        <button id="app-web" class="ghost">브라우저에서 열기</button>
+      </div>
     </section>
 
     <!-- 진행 -->

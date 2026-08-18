@@ -20,4 +20,14 @@ export const claudeIo: HarnessSessionAdapter = {
   pathFor: (root, { cwd, convId }) => (cwd && CONV_ID_RE.test(convId) ? path.join(root, claudeProjectsDirName(cwd), `${convId}.jsonl`) : null),
   parse: (text, state) => ({ lines: parseJsonLines(text).filter((o) => !!o && typeof o === "object") as ChatLine[], state }),
   answer: (action) => (action === "approve" ? "Enter" : "Escape"),
+  // 화면 판정(실측 규약 — session-first-prompt.ts·phase.ts 와 같은 문구): 입력창 푸터가 보이면 ready(돌고 있어도 큐잉 보장),
+  //  신뢰·선택 대화상자는 dialog, 로그인 화면은 auth. 그 밖(부팅 스피너 등)은 null.
+  screen: (tail) => {
+    const t = tail.join("\n");
+    if (/trust the (files|contents) (in|of) this (folder|directory|project)/i.test(t)) return "dialog";
+    if (/Select login method|Welcome to Claude Code\b[\s\S]*login/i.test(t)) return "auth";
+    if (tail.some((l) => /\b(auto|manual|plan|accept edits|bypass permissions) mode on\b|\? for shortcuts|shift\+tab to cycle/i.test(l))) return "ready";
+    if (/Enter to select|↑\/↓ to navigate|Esc to cancel/i.test(t)) return "dialog";
+    return null;
+  },
 };

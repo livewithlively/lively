@@ -52,7 +52,8 @@ details.livc-divider > summary::before, details.livc-divider > summary::after { 
 
 /* ── 세션 화면 ───────────────────────────────────────────────────────────── */
 .sc-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg, #fff); }
-.sc-head { display: flex; align-items: center; gap: 12px; padding: 9px 16px 8px; border-bottom: 1px solid var(--line); flex: none; }
+/* 우패널 머리(.v2-aside-h)와 **같은 높이**여야 두 열의 아래선이 한 줄로 이어진다(#1756) — 둘 다 38px. */
+.sc-head { display: flex; align-items: center; gap: 12px; min-height: 38px; padding: 9px 16px 8px; border-bottom: 1px solid var(--line); flex: none; }
 .sc-head-l { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
 .sc-title { font-size: 13.5px; font-weight: 800; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
 .sc-meta { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-sub); white-space: nowrap; }
@@ -155,6 +156,13 @@ details.livc-divider > summary::before, details.livc-divider > summary::after { 
 .dt-chips { display: inline-flex; gap: 12px; align-items: center; }
 .dt-chip { font-size: 12px; color: var(--ink-sub); }
 .dt-chip[hidden] { display: none; }
+/* 바꿀 수 있는 칩(#1758 모델·추론강도) — 읽기 전용 칩과 같은 크기·색이되 눌러도 된다는 표시(캐럿·호버)를 준다. */
+.dt-chip-sel { appearance: none; -webkit-appearance: none; border: 1px solid transparent; border-radius: 999px; background: transparent;
+  font: inherit; font-size: 12px; color: var(--ink-sub); padding: 1px 16px 1px 7px; max-width: 190px; cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted, #7b879b) 50%), linear-gradient(135deg, var(--muted, #7b879b) 50%, transparent 50%);
+  background-position: calc(100% - 8px) 52%, calc(100% - 4px) 52%; background-size: 4px 4px, 4px 4px; background-repeat: no-repeat; }
+.dt-chip-sel:hover:not(:disabled) { border-color: var(--line-net, #D5DDEA); color: var(--blue); }
+.dt-chip-sel:disabled { opacity: .55; cursor: default; }
 .livc-desktop .livc-note:not(:empty) { padding: 2px 30px 0; }
 .livc-desktop .livc-jump { bottom: 10px; }
 

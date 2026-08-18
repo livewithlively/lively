@@ -4,6 +4,7 @@
 //  클래식 모듈을 **복제하지 않는다** — 대화·세션 목록·프로젝트 상세는 이미 있는 것을 가져다 붙인다.
 import { api, el, errorNote, relTime, state, toast } from '../core.js';
 import { isCreatingQuickSession, openQuickSession, takeFirstPrompt } from './quick-session.js';
+import { createRunPicker } from './run-picker.js';
 import { mountSessionChat, type SessionChatHandle } from '../session-chat.js';
 import type { TrailWidget } from '../session-trail.js';
 import { sessIsDead, sessLabel, sessStateKey } from '../session-status.js';
@@ -89,7 +90,12 @@ export function renderHome(host: HTMLElement, data: V2Data): void {
   const destWhy = el('span', { class: 'v2-dest-why' });
   const destRow = el('div', { class: 'v2-dest' }, el('span', { class: 'v2-dest-k', text: '여는 곳' }), destBtn, destWhy);
   const pop = el('div', { class: 'v2-dest-pop', hidden: true });
-  const card = el('div', { class: 'v2-launch' }, ta, el('div', { class: 'v2-launch-row' }, destRow, send), pop);
+  // [시키기] 왼쪽 세 칸 — 제공자(어느 회사 모델)·모델·추론강도(#1758). 행선지 칩과 한 줄에 서서 '어디로 · 무엇에게'가
+  //  나란히 읽힌다. 기본은 내가 지난번에 고른 값이고, 여기서 바꾸면 그게 다음 기본이 된다(v2/run-picker.ts —
+  //  '새 AI 세션' 폼과 같은 기억을 쓴다).
+  const runPicker = createRunPicker();
+  const card = el('div', { class: 'v2-launch' }, ta,
+    el('div', { class: 'v2-launch-row' }, el('div', { class: 'v2-launch-ctl' }, destRow, runPicker.el), send), pop);
 
   const paintDest = (): void => {
     destBtn.replaceChildren(
@@ -140,9 +146,10 @@ export function renderHome(host: HTMLElement, data: V2Data): void {
   const submit = async (): Promise<void> => {
     const text = ta.value.trim();
     if (!text || isCreatingQuickSession()) return;
-    send.disabled = true; ta.disabled = true; send.replaceChildren(el('span', { text: dest.p ? `「${dest.p.name.slice(0, 14)}${dest.p.name.length > 14 ? '…' : ''}」에 여는 중…` : '여는 중…' }));
-    const ok = await openQuickSession(text, dest.p ? { projectId: Number(dest.p.id), projectName: dest.p.name } : undefined);
-    if (!ok) { send.disabled = false; ta.disabled = false; send.replaceChildren(el('span', { text: '시키기' }), el('kbd', { text: '⏎' })); ta.focus(); }
+    send.disabled = true; ta.disabled = true; runPicker.disable(true);
+    send.replaceChildren(el('span', { text: dest.p ? `「${dest.p.name.slice(0, 14)}${dest.p.name.length > 14 ? '…' : ''}」에 여는 중…` : '여는 중…' }));
+    const ok = await openQuickSession(text, { projectId: dest.p ? Number(dest.p.id) : null, projectName: dest.p?.name, run: runPicker.value() });
+    if (!ok) { send.disabled = false; ta.disabled = false; runPicker.disable(false); send.replaceChildren(el('span', { text: '시키기' }), el('kbd', { text: '⏎' })); ta.focus(); }
   };
   send.onclick = () => { void submit(); };
   ta.addEventListener('input', () => { grow(); autoMatch(); });

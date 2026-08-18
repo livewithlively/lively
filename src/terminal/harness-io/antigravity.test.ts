@@ -55,12 +55,12 @@ t("[E4] 종류 매칭이 없으면 가장 오래된 대기 · 대기가 없으�
   const cold = run([F.view]);
   assert.equal(cold.lines.length, 0);
 });
-t("[E5] CHECKPOINT → system compact(text=content) · content 만 있는 PLANNER → assistant text + system turn_duration(USER_INPUT 부터)", () => {
+t("[E5] CHECKPOINT 는 버린다(내부 스냅샷 — 1턴 대화에도 찍혀 '맥락 압축' 구분선이 거짓말이 됨, 실측 2026-08-18) · content 만 있는 PLANNER → assistant text + system turn_duration(USER_INPUT 부터)", () => {
   const { lines } = run([F.user, F.plan, F.ckpt, F.final]);
   const k = kinds(lines);
-  assert.equal(k[2], "system:compact"); assert.ok(String((lines[2] as any).text).startsWith("{{ CHECKPOINT 0 }}"));
-  assert.deepEqual(k.slice(3), ["assistant:text", "system:turn_duration"]);
-  assert.equal((lines[4] as any).durationMs, Date.parse("2026-08-14T10:27:20Z") - Date.parse(T0));
+  assert.ok(!k.includes("system:compact"), "CHECKPOINT 가 compact 로 번역되면 안 된다");
+  assert.deepEqual(k.slice(2), ["assistant:text", "system:turn_duration"]);
+  assert.equal((lines[3] as any).durationMs, Date.parse("2026-08-14T10:27:20Z") - Date.parse(T0));
 });
 t("[E6] ERROR_MESSAGE — MODEL+대기 있음 → 오류 결과(is_error) · MODEL+대기 없음 → assistant ⚠ 글 · SYSTEM → assistant ⚠ 글", () => {
   const withPending = run([F.user, F.planMcp, F.errModel]);

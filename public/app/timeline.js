@@ -118,7 +118,10 @@ export function createTimeline(host, ctx) {
     const list = el('div', { class: 'tl-list' });
     const emptyEl = el('p', { class: 'v2-empty', text: ctx.empty || '아직 기록이 없어요.' });
     const noteEl = el('p', { class: 'v2-fine', hidden: true });
-    const root = el('section', { class: 'tl-wrap' }, el('div', { class: 'v2-aside-h' }, el('b', { text: '타임라인' }), el('span', { class: 'tl-scope', text: ctx.scope }), countEl), list, emptyEl, noteEl);
+    // 골격은 가운데 화면과 같다(#1756): [머리 바][사실 한 줄] + 본문만 스크롤.
+    //  가운데 대화창(sc-head → sc-chat)과 같은 자리에 같은 선이 지나가야 두 열이 한 판으로 읽힌다.
+    const factsEl = el('div', { class: 'tl-facts', hidden: true });
+    const root = el('section', { class: 'tl-wrap' }, el('div', { class: 'v2-aside-h' }, el('b', { text: '타임라인' }), el('span', { class: 'tl-scope', text: ctx.scope }), countEl), factsEl, el('div', { class: 'tl-scroll' }, list, emptyEl, noteEl));
     host.append(root);
     const isHead = (it) => !!ctx.chapters && it.kind === 'say' && it.verb === '지시';
     // ── 한 항목 = 한 카드 ────────────────────────────────────────────────────
@@ -178,8 +181,86 @@ export function createTimeline(host, ctx) {
     function childLine(c) {
         return el(c.href ? 'a' : 'div', { class: 'tl-sub' + (c.href ? ' go' : ''), href: c.href || null, title: c.label }, el('span', { class: 'tl-sub-v', text: c.verb }), el('span', { class: 'tl-sub-t', text: c.label }));
     }
+    // ── 결과물 보기(#1756, 다른 세션 작업 — 이 브랜치의 카드 구조에 맞춰 합침) ──
+    //  상민님: "결과물 위주로. 사소한 건 됐고, 전체 맥락에 중요한 영향 끼칠 것만."
+    //  ① 같은 대상은 한 장으로 접는다(같은 파일을 열 번 고쳤어도 그 파일은 하나다 — 횟수는 ×N 으로).
+    //  ② 지시는 결과물이 아니다(무엇을 시켰나는 가운데 대화가 말한다).
+    //  ③ 무게가 낮은 것은 지우지 않고 **접는다** — 한 번 스친 파일까지 늘어놓으면 중요한 게 묻힌다.
+    const WEIGHT_KEEP = 55;
+    function weightOf(it) {
+        if (it.kind === 'activity')
+            return 100; // 사람이 남긴 작업 기록 = 가장 무겁다
+        if (it.kind === 'knowledge')
+            return 95; // 조직에 남는 것
+        if (it.kind === 'project' || it.kind === 'task')
+            return 90; // 일의 뼈대가 바뀐 것
+        if (it.kind === 'cmd')
+            return 85; // 커밋 — 밖으로 나간 결과
+        if (it.kind === 'file')
+            return (it.verb === '씀' ? 70 : 45) + Math.min(20, (it.count - 1) * 5);
+        return 30;
+    }
+    let restOpen = false;
+    function outcomes() {
+        const by = new Map();
+        for (const it of items) {
+            if (it.kind === 'say')
+                continue;
+            const k = it.kind + '|' + it.label;
+            const cur = by.get(k);
+            if (!cur) {
+                by.set(k, { ...it });
+                continue;
+            }
+            cur.count += it.count;
+            if (tsNum(it.ts) > tsNum(cur.ts))
+                cur.ts = it.ts;
+            if (it.verb === '씀' || it.verb === '만듦')
+                cur.verb = it.verb; // 만든 것이 고친 것을 이긴다
+            if (it.children && it.children.length)
+                cur.children = [...(cur.children || []), ...it.children];
+        }
+        const all = [...by.values()].sort((a2, b2) => tsNum(a2.ts) - tsNum(b2.ts));
+        return { keep: all.filter((it) => weightOf(it) >= WEIGHT_KEEP), rest: all.filter((it) => weightOf(it) < WEIGHT_KEEP) };
+    }
+    function paintOutcomes() {
+        const { keep, rest } = outcomes();
+        countEl.textContent = String(keep.length);
+        emptyEl.hidden = keep.length > 0 || rest.length > 0;
+        const kids = [];
+        let day = ' ';
+        let lastWho = '\u0000';
+        let rail = el('div', { class: 'tl-rail' });
+        const shown = restOpen ? [...keep, ...rest].sort((a2, b2) => tsNum(a2.ts) - tsNum(b2.ts)) : keep;
+        for (let i = shown.length - 1; i >= 0; i--) { // 최신이 위
+            const it = shown[i];
+            const d = dayOf(it.ts);
+            if (d !== day) {
+                day = d;
+                lastWho = '\u0000';
+                if (d)
+                    kids.push(el('div', { class: 'tl-day' }, el('span', { text: dayLabel(d) })));
+                rail = el('div', { class: 'tl-rail' });
+                kids.push(el('div', { class: 'tl-group' }, rail)); // 하루 = 한 판(이 브랜치의 구조)
+            }
+            const who = String((it.actor && it.actor.id) || '');
+            rail.append(card(it, [], who === lastWho));
+            lastWho = who;
+        }
+        if (rest.length) {
+            kids.push(el('button', {
+                class: 'tl-rest', type: 'button', 'aria-expanded': String(restOpen),
+                onclick: () => { restOpen = !restOpen; paint(); },
+            }, restOpen ? '덜 중요한 변화 접기' : `덜 중요한 변화 ${rest.length}개 보기`));
+        }
+        list.replaceChildren(...kids);
+    }
     // ── 그리기 ──
     function paint() {
+        if (ctx.outcomes) {
+            paintOutcomes();
+            return;
+        }
         const rows = [];
         let cur = null;
         for (const it of items) {
@@ -289,6 +370,7 @@ export function createTimeline(host, ctx) {
             schedule();
         },
         setNote(note) { noteEl.textContent = note || ''; noteEl.hidden = !note; },
+        setMeta(node) { factsEl.replaceChildren(...(node ? [node] : [])); factsEl.hidden = !node; },
         clear() { items = []; byId.clear(); byKey.clear(); open.clear(); schedule(); },
     };
     paint();

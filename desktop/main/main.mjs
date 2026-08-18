@@ -9,7 +9,9 @@
 //  ② **상시성의 주체는 앱이 아니라 OS 데몬**이다(launchd·systemd·작업 스케줄러). 앱을 꺼도 노드는 산다.
 //     그래서 창을 닫아도 앱이 안 죽고(트레이 상주), 앱을 종료해도 노드는 그대로다.
 //  ③ 렌더러는 신뢰하지 않는다 — contextIsolation·sandbox 켜고, argv 는 메인이 만든다(ipc-contract).
-import { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, dialog, screen } from "electron";
+//  ④ **화면은 웹 UI 그대로다**(web-shell.mjs) — 설치·로그인·키트가 갖춰지면 창에 게이트웨이의 /ui/ 를 싣는다.
+//     앱에 화면 코드를 한 벌 더 두지 않는다(웹이 곧 앱). 마법사(renderer/)는 갖춰지기 전과 노드·점검 설정에만 쓴다.
+import { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, dialog, screen, session } from "electron";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { spawnSync, spawn, execFile } from "node:child_process";
 import { join, dirname } from "node:path";
@@ -19,7 +21,8 @@ import { locateCli, cliMissingHelp, cliLaunchSpec } from "./cli-locate.mjs";
 import { runBootstrap, bootstrapPreview } from "./bootstrap.mjs";
 import { runCli, reduceProgress, cliContractVerdict } from "./cli-runner.mjs";
 import { trayMenuModel } from "./tray-menu.mjs";
-import { IPC, RUN_KINDS, RETRYABLE_KINDS, argvFor } from "./ipc-contract.mjs";
+import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor } from "./ipc-contract.mjs";
+import { appReady, webUiUrl, webOrigin, openTargetFor, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN } from "./web-shell.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
 import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, shouldAutoApplyUpdate, downloadProgressNote, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
 import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
@@ -30,8 +33,15 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const LIVELY_DIR = join(process.env.LIVELY_HOME || homedir(), ".lively");
 
 const BOUNDS_FILE = join(LIVELY_DIR, "desktop-window.json");
+const APP_BOUNDS_FILE = join(LIVELY_DIR, "desktop-app-window.json");   // 웹 UI 창은 마법사와 크기·자리가 다르다 — 따로 기억
+const WEB_PRELOAD = join(HERE, "..", "preload", "web.cjs");
 
 let tray = null, win = null, quitting = false;
+let appWin = null;                  // 웹 UI 창(게이트웨이 /ui/) — web-shell.mjs. 마법사 창(win)과 preload·채널이 다르다
+let appLoaded = { url: null, token: null };   // 웹 창에 마지막으로 실은 주소·토큰 — 달라졌으면 다시 싣는다(재로그인 뒤 옛 토큰으로 401 나는 걸 막는다)
+let rejectedToken = null;           // 게이트웨이가 401 로 거부한 토큰(문자열) — 파일의 토큰이 바뀌면(재로그인) 저절로 풀린다
+let webError = null;                // 웹 창을 못 실었을 때의 사유(사람용 한 줄) — 마법사의 '라이블리 열기' 카드가 보여준다
+let startedHidden = false;          // 로그인 때 자동으로(숨겨) 떴나 — 그러면 갖춰져 있어도 창을 안 띄운다
 let running = null;                 // { kind, handle } — 지금 도는 CLI(동시 1개)
 let lastRun = null;                 // 마지막으로 시도한 { kind, opts } — '다시 시도' 가 이걸 그대로 다시 돈다
 let updateNote = null;              // 업데이트 확인 결과 한 줄(사람용)
@@ -54,10 +64,15 @@ const pendingPrompts = new Map();   // prompt id → resolve (렌더러의 답�
 //  노드의 실행 여부는 프로세스를 재야 알 수 있어 `lively status --json` 으로 따로 가져온다(#1541 T4).
 //  ⚠ 못 잰 축은 null 로 남긴다 — 모르는 걸 false 로 눕히면 화면이 "정지됨" 이라고 거짓말한다.
 async function refreshState({ deep = false } = {}) {
+  const wasReady = appReady(state);
   const cliPath = locateCli(existsSync);
   const next = { ...state, cliPath, cliFound: !!cliPath };
   next.gatewayUrl = readTrim(join(LIVELY_DIR, "gateway-url"));
   next.loggedIn = existsSync(join(LIVELY_DIR, "token"));
+  // 토큰이 **있다**와 **먹힌다**는 다르다 — 게이트웨이가 401 로 거부한 그 토큰이 그대로면 로그인이 필요한 상태다.
+  //  파일의 토큰이 바뀌면(다시 로그인) 저절로 풀린다 — 따로 초기화할 자리가 없어 빠뜨릴 일이 없다.
+  next.tokenRejected = !!(rejectedToken && readTrim(join(LIVELY_DIR, "token")) === rejectedToken);
+  next.webError = webError;
   next.kitInstalled = existsSync(join(LIVELY_DIR, "kit-version"));
   next.nodeRegistered = existsSync(join(LIVELY_DIR, "node-agent.env"));
   next.appAutoLaunch = appAutoLaunchEnabled();
@@ -72,10 +87,30 @@ async function refreshState({ deep = false } = {}) {
   // 재시도는 **실패한 게 있고 그게 안전한 작업일 때만** 제안한다(렌더러가 판단하지 않는다).
   next.retryable = !!(lastRun && RETRYABLE_KINDS.includes(lastRun.kind));
   next.logViews = LOG_VIEWS.map((v) => ({ id: v.id, label: v.label }));
+  // '다 갖춰졌다' 는 **한 자리**(web-shell.appReady)에서만 판정한다 — 트레이·마법사·창 선택이 전부 이 값을 본다.
+  next.ready = appReady(next);
   state = next;
   renderTray(); send(IPC.STATE, state);
   if (deep && cliPath && !running) await refreshNodeStatus(cliPath);
+  syncWindows(wasReady);
   return state;
+}
+
+/**
+ * 준비 상태가 **바뀌었을 때** 창을 맞춘다 — 갖춰졌다가 무너지면(로그아웃·토큰 거부·CLI 고장) 웹 창을 내리고 마법사를,
+ *  마법사에서 갖춰지면(설치·로그인 완료) 웹 창을 연다. 바뀐 게 없으면 아무 창도 건드리지 않는다(사람이 닫아 둔 창을 되살리지 않는다).
+ */
+function syncWindows(wasReady) {
+  const ready = appReady(state);
+  if (wasReady && !ready) {
+    if (appWin && !appWin.isDestroyed() && appWin.isVisible()) { appWin.hide(); showWindow(); }
+    return;
+  }
+  if (!wasReady && ready && win && !win.isDestroyed() && win.isVisible()) {
+    // 마법사를 보며 로그인·설치를 마친 사람에게 결과(라이블리 화면)를 바로 준다. 마법사는 닫지 않는다 — 완료 카드(다음 할 일)가
+    //  거기 있고, 창이 저절로 사라지는 건 사람을 놀라게 한다. 앞에 뜬 라이블리 창을 쓰다가 마법사는 스스로 닫는다.
+    showApp();
+  }
 }
 
 /** `lively status --json` 의 node 축을 읽어 실제 상태로 덮는다(폴링·작업 직후). */
@@ -88,14 +123,16 @@ async function refreshNodeStatus(cli) {
   //  `spawn EINVAL` 로 매번 죽는데 cliOutdated=false 라 '설치 완료' 로 판정돼 앱이 조용히 트레이에 앉았다.
   //  못 띄우는 CLI 는 없는 것보다 나쁘다(있는 줄 알고 화면이 아무 말도 안 한다). 별도 축으로 드러낸다.
   if (verdict !== "failed") {
-    state = { ...state, cliOutdated: verdict === "too-old", cliBroken: verdict === "unusable" ? (r.error || "CLI 를 실행하지 못했습니다.") : null };
+    patchState({ cliOutdated: verdict === "too-old", cliBroken: verdict === "unusable" ? (r.error || "CLI 를 실행하지 못했습니다.") : null });
   }
   const n = r.result?.node;
   if (!r.ok || !n) { renderTray(); send(IPC.STATE, state); return; }   // 못 읽었으면 **건드리지 않는다**(옛 값이 추측보다 낫다)
   // nodeConnected: 게이트웨이가 보는 연결 여부(true/false/null=모름). running 과 다른 축 — 프로세스가 돌아도 안 붙어 있을 수 있다.
-  state = { ...state, nodeRegistered: !!n.registered, nodeDaemon: !!n.daemon, nodeRunning: n.running, nodeId: n.id || null, nodeConnected: typeof n.connected === "boolean" ? n.connected : null };
+  patchState({ nodeRegistered: !!n.registered, nodeDaemon: !!n.daemon, nodeRunning: n.running, nodeId: n.id || null, nodeConnected: typeof n.connected === "boolean" ? n.connected : null });
   renderTray(); send(IPC.STATE, state);
 }
+/** 상태 일부를 바꾸면 `ready` 도 같이 다시 잰다 — 이걸 빼먹은 자리가 하나라도 있으면 트레이·창이 옛 판정으로 움직인다. */
+function patchState(patch) { state = { ...state, ...patch }; state.ready = appReady(state); }
 function readTrim(p) { try { return readFileSync(p, "utf8").trim() || null; } catch { return null; } }
 /** CLI 를 '어떻게' 띄울지 — Windows 의 `.cmd` EINVAL 을 피하는 유일한 자리(cli-locate 주석 참조). */
 function launchSpecFor(cli, args) {
@@ -144,7 +181,8 @@ function renderTray() {
     : { label: m.label, type: m.type, checked: m.checked, enabled: m.enabled !== false, click: () => onMenu(m.id) }))));
 }
 function onMenu(id) {
-  if (id === "open") return showWindow();
+  if (id === "open") return showMain();          // 갖춰졌으면 라이블리 화면, 아니면 마법사
+  if (id === "settings") return showWindow();    // 마법사(설치·노드·점검) — 갖춰진 뒤에도 트레이에서 언제든
   if (id === "quit") { quitting = true; return app.quit(); }
   if (id === "apply-update") return applyUpdate();
   if (id === "cleanup-stale") return cleanupStaleInstall();
@@ -163,13 +201,15 @@ function onMenu(id) {
 //  '리모컨을 로그인할 때 띄울까' 다. 그래서 기본은 꺼짐이고, 사람이 켤 때만 켠다.
 //  Electron 의 loginItem 은 macOS(로그인 항목)·Windows(Run 키)를 한 API 로 덮는다. Linux 는 미지원이라
 //  false 를 그대로 돌려준다(있는 척하지 않는다).
+//  ⚠ Windows 는 등록할 때 넣은 인자(`--hidden`)를 **조회할 때도 같이 줘야** openAtLogin 을 제대로 읽는다(Electron 규약).
 function appAutoLaunchEnabled() {
-  try { return process.platform === "linux" ? null : !!app.getLoginItemSettings().openAtLogin; } catch { return null; }
+  try { return process.platform === "linux" ? null : !!app.getLoginItemSettings({ args: AUTOLAUNCH_ARGS }).openAtLogin; } catch { return null; }
 }
 function setAppAutoLaunch(on) {
   try {
-    // openAsHidden: 로그인 때 창을 띄우지 않는다 — 트레이 앱이 매 부팅마다 창을 열면 그건 방해다.
-    app.setLoginItemSettings({ openAtLogin: !!on, openAsHidden: true });
+    // openAsHidden(macOS)·--hidden(Windows): 로그인 때 창을 띄우지 않는다 — 앱이 매 부팅마다 창을 열면 그건 방해다.
+    //  이제 앱 창 = 라이블리 화면이라 더 그렇다(startupWindow 가 이 신호를 보고 트레이만 남긴다).
+    app.setLoginItemSettings({ openAtLogin: !!on, openAsHidden: true, args: AUTOLAUNCH_ARGS });
   } catch { /* 미지원 플랫폼 */ }
   void refreshState();
 }
@@ -246,9 +286,12 @@ async function applyUpdate() {
   if (running) return { ok: false, error: "작업이 끝난 뒤에 적용합니다." };
   try {
     const u = await getUpdater();
-    // 창을 보고 있던 사람이 적용을 눌렀으면 재시작 뒤 **창을 다시 연다**(#1541 실측: 트레이에만 떠서 손으로 열었다).
-    //  자동 적용(창 숨김)은 마커를 안 쓴다 — 사람이 안 보고 있는데 창이 튀어나오면 안 된다.
-    try { if (win && win.isVisible()) writeFileSync(join(LIVELY_DIR, "desktop-reopen"), ""); } catch { /* 마커 실패는 비치명 */ }
+    // 창을 보고 있던 사람이 적용을 눌렀으면 재시작 뒤 **그 창을 다시 연다**(#1541 실측: 트레이에만 떠서 손으로 열었다).
+    //  마커 내용 = 어느 창이었나("app" 라이블리 화면 / "setup" 마법사). 자동 적용(창 숨김)은 마커를 안 쓴다 — 안 보는데 창이 튀면 안 된다.
+    try {
+      const which = appWinVisible() ? "app" : (win && win.isVisible()) ? "setup" : null;
+      if (which) writeFileSync(join(LIVELY_DIR, "desktop-reopen"), which);
+    } catch { /* 마커 실패는 비치명 */ }
     quitting = true;                                   // 창 close 핸들러가 숨기기 대신 닫게
     send(IPC.LOG, { stream: "raw", line: `업데이트 적용 — 앱을 다시 시작합니다 (${updateReady})…` });
     u.quitAndInstall(true, true);                      // Windows: 설치기 /S --force-run · Linux AppImage: 교체 후 재실행
@@ -263,14 +306,17 @@ async function applyUpdate() {
 /** 창이 안 보이면(트레이 상주) 잠시 뒤 자동 적용 — 판단은 shouldAutoApplyUpdate(순수·표로 못박음). 창을 열면 취소. */
 function scheduleAutoApply() {
   if (autoApplyTimer) { clearTimeout(autoApplyTimer); autoApplyTimer = null; }
-  const ok = shouldAutoApplyUpdate({ ready: !!updateReady, busy: !!running, windowVisible: !!(win && win.isVisible()), promptsPending: pendingPrompts.size });
+  // '보고 있나' 는 두 창 다 본다 — 라이블리 화면을 보는 중에 앱이 스스로 재시작하면 안 된다.
+  const ok = shouldAutoApplyUpdate({ ready: !!updateReady, busy: !!running, windowVisible: anyWindowVisible(), promptsPending: pendingPrompts.size });
   if (!ok) return;
   autoApplyTimer = setTimeout(() => {
     autoApplyTimer = null;
     // 예약 뒤 상황이 바뀌었을 수 있다(창을 열었다·작업을 시작했다) — 다시 판정한다.
-    if (shouldAutoApplyUpdate({ ready: !!updateReady, busy: !!running, windowVisible: !!(win && win.isVisible()), promptsPending: pendingPrompts.size })) void applyUpdate();
+    if (shouldAutoApplyUpdate({ ready: !!updateReady, busy: !!running, windowVisible: anyWindowVisible(), promptsPending: pendingPrompts.size })) void applyUpdate();
   }, AUTO_APPLY_DELAY_MS);
 }
+const appWinVisible = () => !!(appWin && !appWin.isDestroyed() && appWin.isVisible());
+const anyWindowVisible = () => !!(win && !win.isDestroyed() && win.isVisible()) || appWinVisible();
 // ── Windows: 다른 자리에 남은 옛 설치본 (#1541 · win-stale-install.mjs 머리말) ────────────────
 /** 감지 — 패키지된 Windows 앱에서만. 실패는 '없음' 으로(감지 못 한다고 앱을 막지 않는다). 5분에 한 번이면 충분하다. */
 async function detectStaleInstall({ force = false } = {}) {
@@ -296,10 +342,10 @@ function repointToSelf() {
   } catch (e) { notes.push(`바탕화면 바로가기 생성 실패: ${String(e?.message || e).slice(0, 120)}`); }
   try {
     // 로그인 자동시작(Run 키)이 **다른 exe** 를 가리키면 우리 exe 로 덮는다(같은 값 이름이라 setLoginItemSettings 가 덮어쓴다).
-    const st = app.getLoginItemSettings();
+    const st = app.getLoginItemSettings({ args: AUTOLAUNCH_ARGS });
     const items = Array.isArray(st.launchItems) ? st.launchItems : [];
     const other = items.find((i) => /lively/i.test(String(i.name || "") + String(i.path || "")) && String(i.path || "").toLowerCase() !== process.execPath.toLowerCase());
-    if (other || st.openAtLogin) { app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true }); if (other) notes.push("로그인 자동 시작을 이 버전으로 바꿨습니다."); }
+    if (other || st.openAtLogin) { app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true, args: AUTOLAUNCH_ARGS }); if (other) notes.push("로그인 자동 시작을 이 버전으로 바꿨습니다."); }
   } catch (e) { notes.push(`자동 시작 갱신 실패: ${String(e?.message || e).slice(0, 120)}`); }
   return notes;
 }
@@ -367,6 +413,115 @@ function showWindow() {
   return win;
 }
 const send = (ch, payload) => { try { win?.webContents.send(ch, payload); } catch { /* 창 없음 */ } };
+
+// ── 라이블리 화면 = 웹 UI 창 (web-shell.mjs) ────────────────────────────────
+// 게이트웨이가 서빙하는 /ui/ 를 **그대로** 싣는다 — 화면 코드를 앱에 두지 않는다. 앱이 보태는 건 토큰 주입(preload/web.cjs)·
+//  창 열기 규칙(같은 출처=앱 안 새 창, 바깥=브라우저)·401 감지(토큰 거부→마법사) 셋뿐이다.
+/** 사람이 '창 열기' 를 눌렀을 때 — 갖춰졌으면 라이블리 화면, 아니면 마법사(할 일이 있다). */
+function showMain() { return state.ready ? (showApp().ok ? appWin : showWindow()) : showWindow(); }
+function showApp() {
+  if (!state.ready) return { ok: false, error: "아직 설치·로그인이 끝나지 않았습니다." };
+  const url = webUiUrl(state.gatewayUrl);
+  if (!url) return { ok: false, error: "게이트웨이 주소가 없습니다." };
+  const token = readTrim(join(LIVELY_DIR, "token"));
+  watchTokenRejection(state.gatewayUrl);
+  if (!appWin || appWin.isDestroyed()) {
+    const b = loadAppBounds();
+    appWin = new BrowserWindow({
+      ...b, minWidth: APP_WINDOW_MIN.width, minHeight: APP_WINDOW_MIN.height, title: "라이블리", show: false,
+      autoHideMenuBar: true,   // Windows·Linux: 메뉴 막대를 숨긴다(Alt 로 나온다) — 웹 화면 위에 File/Edit 줄이 얹히면 웹이 아니다
+      webPreferences: {
+        preload: WEB_PRELOAD,
+        contextIsolation: true, nodeIntegration: false, sandbox: true,   // 원격 페이지다 — 마법사보다 더 믿지 않는다
+      },
+    });
+    // 첫 그림이 준비되면 보인다. 게이트웨이가 느리면 1.5초 뒤엔 빈 창이라도 띄운다(아무것도 안 뜨면 "안 열린다" 로 보인다).
+    const fallback = setTimeout(() => { if (appWin && !appWin.isDestroyed() && !appWin.isVisible()) appWin.show(); }, 1500);
+    appWin.once("ready-to-show", () => { clearTimeout(fallback); if (appWin && !appWin.isDestroyed()) appWin.show(); });
+    // 마법사 창과 같은 수명 규약 — 닫아도 앱은 트레이에 남는다(노드 리모컨이 사라지면 안 된다).
+    appWin.on("close", (e) => { saveAppBounds(); if (!quitting) { e.preventDefault(); appWin.hide(); } });
+    appWin.on("hide", () => scheduleAutoApply());
+    appWin.on("show", () => { if (autoApplyTimer) { clearTimeout(autoApplyTimer); autoApplyTimer = null; } });
+    appWin.on("closed", () => { appWin = null; appLoaded = { url: null, token: null }; });
+    appWin.on("moved", saveAppBounds);
+    appWin.on("resized", saveAppBounds);
+    // 못 실었으면(게이트웨이 다운·주소 오류·오프라인) 빈 창을 두지 않는다 — 마법사의 '라이블리 열기' 카드에 사유를 적고 거기서 다시 시도한다.
+    //  -3(ERR_ABORTED)은 리다이렉트·중복 로드의 부수 신호라 오류가 아니다.
+    appWin.webContents.on("did-fail-load", (_e, code, desc, failedUrl, isMainFrame) => {
+      if (!isMainFrame || code === -3) return;
+      webError = `라이블리 화면을 열지 못했습니다 — ${desc || code} (${failedUrl || url})`;
+      appLoaded = { url: null, token: null };
+      send(IPC.LOG, { stream: "raw", line: webError });
+      if (appWin && !appWin.isDestroyed()) appWin.hide();
+      showWindow(); void refreshState();
+    });
+    appWin.webContents.on("did-finish-load", () => { if (webError) { webError = null; void refreshState(); } });
+  }
+  // 주소나 토큰이 바뀌었으면(다른 게이트웨이·다시 로그인) 다시 싣는다 — preload 가 문서 시작 때 새 토큰을 넣는다.
+  //  ⚠ loadURL 의 거절을 받아 둔다 — 안 받으면 게이트웨이가 꺼져 있을 때 unhandled rejection 이 uncaughtException 으로 올라가
+  //   오류 대화상자가 뜬다. 실패의 처리는 위 did-fail-load 한 곳이 한다(마법사 카드에 사유 + 다시 시도).
+  if (appLoaded.url !== url || appLoaded.token !== token) { appLoaded = { url, token }; appWin.loadURL(url).catch(() => { /* did-fail-load 가 처리 */ }); }
+  appWin.show(); appWin.focus();
+  return { ok: true };
+}
+function loadAppBounds() {
+  const opts = { defaultSize: APP_WINDOW_DEFAULT, minSize: APP_WINDOW_MIN };
+  try { return normalizeBounds(JSON.parse(readFileSync(APP_BOUNDS_FILE, "utf8")), workAreas(), opts); }
+  catch { return normalizeBounds(null, workAreas(), opts); }
+}
+function saveAppBounds() {
+  try {
+    if (!appWin || appWin.isDestroyed() || appWin.isMinimized() || appWin.isFullScreen()) return;
+    const b = pickBounds(appWin.getNormalBounds ? appWin.getNormalBounds() : appWin.getBounds());
+    if (!b) return;
+    mkdirSync(LIVELY_DIR, { recursive: true });
+    writeFileSync(APP_BOUNDS_FILE, JSON.stringify(b));
+  } catch { /* 저장 실패는 치명이 아니다 */ }
+}
+/**
+ * 게이트웨이가 우리 토큰을 거부하면(회수·만료 — `/api/ui/*` 401) 마법사로 돌아가 다시 로그인하게 한다.
+ *  응답을 바꾸지 않고 **보기만** 한다. 게이트웨이 주소마다 한 번 건다(같은 세션에 다시 걸면 교체된다).
+ */
+let watchingGateway = null;
+function watchTokenRejection(gatewayUrl) {
+  if (watchingGateway === gatewayUrl) return;
+  const filter = tokenWatchFilter(gatewayUrl);
+  if (!filter) return;
+  watchingGateway = gatewayUrl;
+  session.defaultSession.webRequest.onHeadersReceived(filter, (details, cb) => {
+    cb({});
+    if (!isTokenRejection(details, gatewayUrl)) return;
+    const tok = readTrim(join(LIVELY_DIR, "token"));
+    if (!tok || rejectedToken === tok) return;   // 토큰이 없으면(로그아웃 직후) 거부가 아니라 부재다 · 같은 토큰은 한 번만
+    rejectedToken = tok;
+    send(IPC.LOG, { stream: "raw", line: "게이트웨이가 로그인 토큰을 거부했습니다(만료 또는 회수) — 다시 로그인이 필요합니다." });
+    void refreshState();   // → ready=false → syncWindows 가 웹 창을 내리고 마법사를 띄운다
+  });
+}
+// 웹이 새 창을 열려 할 때(`window.open`·`target=_blank`)와 최상위 이동 — 어느 웹 컨텐츠든 같은 규칙(web-shell.openTargetFor):
+//  같은 출처(터미널 새 창·그래프)는 앱 안의 새 창으로(토큰은 같은 localStorage 라 그대로 로그인 상태), 바깥은 시스템 브라우저로,
+//  그 외(javascript: 등)는 열지 않는다. 자식 창에도 같은 preload·격리를 준다.
+app.on("web-contents-created", (_e, wc) => {
+  wc.setWindowOpenHandler(({ url }) => {
+    const t = openTargetFor(url, state.gatewayUrl);
+    if (t === "external") { shell.openExternal(url); return { action: "deny" }; }
+    if (t !== "child") return { action: "deny" };
+    return {
+      action: "allow",
+      overrideBrowserWindowOptions: {
+        width: 1100, height: 760, autoHideMenuBar: true, title: "라이블리",
+        webPreferences: { preload: WEB_PRELOAD, contextIsolation: true, nodeIntegration: false, sandbox: true },
+      },
+    };
+  });
+  wc.on("will-navigate", (e, url) => {
+    // 마법사(file://)는 어디로도 안 간다. 웹 창은 같은 출처 안에서만 움직인다 — 바깥 링크는 브라우저로.
+    const t = openTargetFor(url, state.gatewayUrl);
+    if (t === "child" && !wc.getURL().startsWith("file:")) return;
+    e.preventDefault();
+    if (t === "external") shell.openExternal(url);
+  });
+});
 
 // ── CLI 구동 ────────────────────────────────────────────────────────────────
 async function start(kind, opts) {
@@ -501,7 +656,20 @@ ipcMain.handle(IPC.READ_LOG, (_e, { id }) => {
 ipcMain.handle(IPC.CHECK_UPDATE, async () => { updateFailed = false; await checkUpdates(); return { ok: true, note: updateNote }; });
 ipcMain.handle(IPC.APPLY_UPDATE, async () => applyUpdate());
 ipcMain.handle(IPC.CLEANUP_STALE, async () => cleanupStaleInstall());
+ipcMain.handle(IPC.OPEN_APP, () => showApp());
 ipcMain.handle(IPC.SET_APP_AUTOLAUNCH, (_e, { on }) => { setAppAutoLaunch(!!on); return { ok: true, on: appAutoLaunchEnabled() }; });
+// ── 웹 UI 창 채널(IPC_WEB) — 원격 페이지 쪽 다리. 보내는 프레임이 **게이트웨이 출처**일 때만 답한다(다른 사이트가 이 창에
+//  실렸다면 토큰도, 로그아웃도 주지 않는다). preload/web.cjs 도 출처를 한 번 더 본다(양쪽 방어).
+const fromGateway = (e) => { const o = webOrigin(state.gatewayUrl); try { return !!o && new URL(e.senderFrame?.url || e.sender.getURL()).origin === o; } catch { return false; } };
+ipcMain.on(IPC_WEB.BOOT, (e) => {
+  const ok = fromGateway(e);
+  e.returnValue = webBootPayload({ gatewayUrl: state.gatewayUrl, token: ok ? readTrim(join(LIVELY_DIR, "token")) : null, appVersion: safeAppVersion(), platform: process.platform });
+});
+ipcMain.handle(IPC_WEB.LOGOUT, async (e) => {
+  if (!fromGateway(e)) return { ok: false, error: "허용되지 않은 출처입니다." };
+  // 웹의 '로그아웃' 은 데스크톱 로그인(CLI 토큰)까지 끝낸다 — 안 그러면 다음 창 열기에서 토큰이 다시 들어가 '로그아웃이 안 된다'.
+  return start("logout", {});
+});
 // 외부 링크는 메인만 연다 — 렌더러에 shell 을 노출하면 임의 URL·파일 열기가 된다.
 ipcMain.handle(IPC.OPEN_EXTERNAL, (_e, { url }) => {
   if (!/^https?:\/\//i.test(String(url || ""))) return { ok: false };
@@ -512,17 +680,21 @@ ipcMain.handle(IPC.OPEN_EXTERNAL, (_e, { url }) => {
 // 두 번째 인스턴스는 창만 띄우고 죽는다 — 트레이 아이콘이 둘, CLI 가 동시에 둘 도는 걸 막는다.
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  app.on("second-instance", () => showWindow());
+  app.on("second-instance", () => showMain());
   app.whenReady().then(async () => {
     tray = new Tray(trayImage());
-    tray.on("click", () => showWindow());          // Windows·Linux 는 좌클릭이 자연스럽다
+    tray.on("click", () => showMain());            // Windows·Linux 는 좌클릭이 자연스럽다
+    try { startedHidden = startedHiddenFrom({ platform: process.platform, argv: process.argv, loginItem: app.getLoginItemSettings({ args: AUTOLAUNCH_ARGS }) }); } catch { startedHidden = false; }
     await refreshState({ deep: true });
-    // 할 일이 있으면 먼저 보여준다. ⚠ `cliOutdated` 를 빼먹으면 **가장 나쁜 조합**이 된다 — 구 CLI 인 PC 는
-    //  파일이 다 있어 '완료' 로 판정되니 창이 아예 안 뜨고, 트레이 앱은 조용히 앉아 아무것도 안 한다.
-    //  사용자에게는 '앱이 안 켜진다' 로 보인다(실측: 이 검증 하네스가 그 상태를 그대로 잡았다).
-    if (!state.cliFound || state.cliOutdated || state.cliBroken || !state.loggedIn || !state.kitInstalled) showWindow();
-    // 업데이트 적용 재시작 — 창에서 적용을 눌렀던 사람에게 창을 되돌려준다(마커는 applyUpdate 가 창이 보일 때만 남긴다).
-    try { const m = join(LIVELY_DIR, "desktop-reopen"); if (existsSync(m)) { rmSync(m, { force: true }); showWindow(); } } catch { /* noop */ }
+    // 어느 창을 띄울지는 web-shell.startupWindow 하나가 정한다:
+    //  · 할 일이 있으면(CLI 없음·구 CLI·로그인·키트) 마법사 — 로그인 자동시작으로 숨겨 떴어도. ⚠ `cliOutdated` 를 빼먹으면
+    //    **가장 나쁜 조합**이 된다 — 구 CLI 인 PC 는 파일이 다 있어 '완료' 로 판정되니 창이 아예 안 뜨고, 트레이 앱은 조용히
+    //    앉아 아무것도 안 한다(실측: 이 검증 하네스가 그 상태를 그대로 잡았다). 그래서 판정은 appReady 한 자리다.
+    //  · 갖춰졌고 사람이 켰으면 라이블리 화면(웹 UI). 로그인 때 자동으로 숨겨 떴으면 트레이만.
+    const first = startupWindow({ ready: state.ready, startedHidden });
+    if (first === "setup") showWindow(); else if (first === "app") showApp();
+    // 업데이트 적용 재시작 — 창에서 적용을 눌렀던 사람에게 **그 창**을 되돌려준다(마커는 applyUpdate 가 창이 보일 때만 남긴다).
+    try { const m = join(LIVELY_DIR, "desktop-reopen"); if (existsSync(m)) { const which = readTrim(m); rmSync(m, { force: true }); if (which === "app") showApp(); else showWindow(); } } catch { /* noop */ }
     // 노드는 앱 밖에서도 죽고 살아난다(OS 데몬·사용자의 `lively node stop`). 주기적으로 되읽지 않으면
     //  트레이가 옛 상태를 계속 보여준다. 30초 — 사람이 느끼기엔 실시간이고 `status` 호출은 가볍다.
     const poll = setInterval(() => { if (!running) void refreshState({ deep: true }); }, 30_000);
@@ -536,7 +708,7 @@ else {
   // ★ 창을 다 닫아도 종료하지 않는다(트레이 상주). 기본 동작(win/linux 종료)을 반드시 덮어야 한다.
   app.on("window-all-closed", () => { /* noop — 트레이로 산다 */ });
   app.on("before-quit", () => { quitting = true; });
-  app.on("activate", () => showWindow());          // macOS dock 클릭
+  app.on("activate", () => showMain());            // macOS dock 클릭 — 갖춰졌으면 라이블리 화면
   process.on("uncaughtException", (e) => {
     try { dialog.showErrorBox("라이블리", String(e?.stack || e)); } catch { /* 다이얼로그도 못 뜨는 상황 */ }
   });

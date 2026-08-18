@@ -18,6 +18,7 @@ import { logger } from "../log.js";
 import os from "node:os";
 import { TMUX_BIN, canAttach, ensureSessionOpts, sessionGone } from "./terminal-sessions.js";
 import { tmuxExecArgv } from "./tmux-exec.js";
+import { resolveTenantFromHeaders, withTenant } from "../org/tenant-context.js";
 import { nodeCanAttach, nodeRelayAttach } from "../node/registry.js";
 
 // attach 가 실제로 쓰는 소켓 표면 — 게이트웨이 로컬은 실 WebSocket, 노드 에이전트(#869)는 게이트웨이행
@@ -115,7 +116,14 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
     let url: URL;
     try { url = new URL(req.url || "", "http://localhost"); } catch { return; }
     if (url.pathname !== "/terminal/ws") return; // 다른 업그레이드(있다면)는 미관여
-    void (async () => {
+    // ★★ 업그레이드는 Express 미들웨어를 **안 탄다** — 테넌트 컨텍스트(tenant-middleware)가 여기엔 없다.
+    //  요청별 테넌시 배포에서 컨텍스트 없이 canAttach 를 부르면 tmux 중계·DB 조회가 "컨텍스트 밖"으로
+    //  죽고, 그 실패가 4403 으로 접혀 **소유자 본인이 무한 '연결 확인중'** 이 된다(실측 2026-08-18).
+    //  같은 헤더·같은 비밀로 여기서 직접 연다. 거절 사유면 소켓을 닫는다(비밀 불일치 = 배선 문제).
+    const tr = resolveTenantFromHeaders(req.headers as Record<string, string | string[] | undefined>, process.env);
+    if (!tr.ok && tr.reason !== "disabled") { socket.destroy(); return; }
+    const inTenant = <T>(fn: () => T): T => (tr.ok ? withTenant(tr.tenant, fn) : fn());
+    void inTenant(() => (async () => {
       const tk = lookupTicket(req.headers.cookie);
       if (!tk) { socket.destroy(); return; }
       const id = url.searchParams.get("session") || "";
@@ -149,8 +157,8 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
         return;
       }
       await ensureSessionOpts(id).catch(() => { /* 비치명 */ });
-      wss.handleUpgrade(req, socket, head, (ws) => attach(ws, id));
-    })();
+      wss.handleUpgrade(req, socket, head, (ws) => inTenant(() => attach(ws, id)));
+    })());
   });
 }
 

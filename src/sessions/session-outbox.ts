@@ -32,8 +32,10 @@ import { getSessionState } from "./session-state.js";
 import { logger } from "../log.js";
 
 export type OutboxStatus = "queued" | "sending" | "delivered" | "sent" | "failed";
+/** prompt=사람이 보낸 말(대화창 말풍선) · control=설정 슬래시 명령(모델·추론강도 바꾸기, #1758 — 말풍선 아님·에코 없음). */
+export type OutboxKind = "prompt" | "control";
 export interface OutboxRow {
-  id: number; session_id: string; seq: number; text: string; status: OutboxStatus;
+  id: number; session_id: string; seq: number; text: string; status: OutboxStatus; kind: OutboxKind;
   attempts: number; trust_ok: boolean; last_error: string | null;
   created_at: string; updated_at: string; delivered_at: string | null;
 }
@@ -48,36 +50,64 @@ export const NOT_READY_TTL_MS = 30 * 60_000;
 /** 보낸 뒤 에코(트랜스크립트 등장)를 기다리는 시간. 하네스가 받았다면 user 줄은 수 초 안에 적힌다. */
 export const ECHO_WINDOW_MS = 15_000;
 
-/** 에코 찾기용 바늘 — 트랜스크립트는 JSON 한 줄이라, 주입된 한 줄 텍스트를 JSON 문자열로 이스케이프한 형태로 찾는다. */
+/** 에코 찾기용 바늘 — 트랜스크립트는 JSON 한 줄이라, 주입된 한 줄 텍스트를 JSON 문자열로 이스케이프한 형태로 찾는다.
+ *  ⚠ **접두 160자만** 쓴다: 아주 긴 텍스트는 TUI 를 지나며 꼬리가 뒤섞일 수 있어(실측 2026-08-18, 3천자 프롬프트)
+ *  전문 일치는 실제로 전달됐는데 'echo-unconfirmed' 로 오판한다. 접두 160자는 충분히 특정적이고 머리는 안 섞인다. */
 export function echoNeedle(oneLine: string): string {
-  return JSON.stringify(oneLine).slice(1, -1);
+  return JSON.stringify(oneLine.slice(0, 160)).slice(1, -1);
 }
 /** send-keys 가 실제로 넣는 한 줄(send-keys.ts 규약 ① — 개행은 공백으로). 에코도 이 형태로 찾아야 한다. */
 export const flatOneLine = (text: string): string => String(text ?? "").replace(/\s*\n\s*/g, " ").trim();
 
 // ── 저장 ────────────────────────────────────────────────────────────────────────
-export async function enqueuePrompt(sessionId: string, text: string, opts?: { trustOk?: boolean }): Promise<{ id: number; seq: number }> {
+export async function enqueuePrompt(sessionId: string, text: string, opts?: { trustOk?: boolean; kind?: OutboxKind }): Promise<{ id: number; seq: number }> {
   const r = await itemsPool.query(
-    `INSERT INTO org_session_outbox(session_id, seq, text, trust_ok)
-     VALUES($1, COALESCE((SELECT MAX(seq) FROM org_session_outbox WHERE session_id=$1), 0) + 1, $2, $3)
+    `INSERT INTO org_session_outbox(session_id, seq, text, trust_ok, kind)
+     VALUES($1, COALESCE((SELECT MAX(seq) FROM org_session_outbox WHERE session_id=$1), 0) + 1, $2, $3, $4)
      RETURNING id, seq`,
-    [sessionId, text, !!opts?.trustOk]);
+    [sessionId, text, !!opts?.trustOk, opts?.kind ?? "prompt"]);
   kickOutbox(sessionId);
   return { id: Number(r.rows[0].id), seq: Number(r.rows[0].seq) };
 }
 
-/** 화면용 — 아직 끝나지 않은 것(queued·sending·failed)만. delivered/sent 는 트랜스크립트가 이미 보여준다. */
+/** 화면용 — 아직 끝나지 않은 것(queued·sending·failed)만. delivered/sent 는 트랜스크립트가 이미 보여준다.
+ *  control(설정 명령)은 뺀다 — 대화창은 **사람이 보낸 말**의 큐이고, 거기 `/model opus` 가 말풍선으로 뜨면
+ *  사람이 그렇게 말한 것처럼 보인다. 그 결말은 부른 쪽(POST …/runtime)이 waitOutboxSettled 로 그 자리에서 본다. */
+// 화면용 — 미완(queued·sending·failed) + **에코 미확인**(sent·echo-unconfirmed). 후자를 숨기면 "보낸 걸로 떠서 영영
+//  대답을 못 받는" 거짓 화면이 된다(antigravity 인증 거부 실측 2026-08-18) — 재시도·지우기를 사람 손에 준다.
+//  (echo-unreadable 은 파일을 못 읽는 자리의 정상적 '모름' — 표시하지 않는다.)
 export async function listOutbox(sessionId: string): Promise<OutboxRow[]> {
   const r = await itemsPool.query(
-    `SELECT * FROM org_session_outbox WHERE session_id=$1 AND status IN ('queued','sending','failed') ORDER BY seq`,
+    `SELECT * FROM org_session_outbox WHERE session_id=$1 AND kind='prompt' AND
+       (status IN ('queued','sending','failed') OR (status='sent' AND last_error='echo-unconfirmed')) ORDER BY seq`,
     [sessionId]);
   return r.rows.map(rowToOutbox);
+}
+
+/**
+ * 이 행들이 **끝날 때까지** 잠깐 기다린다(부른 쪽이 그 자리에서 결말을 말할 수 있게, #1758 모델 바꾸기).
+ *  settled=전부 큐를 떠났다(sent·delivered) · failed=사유(하나라도 실패) · 시간 안에 안 끝나면 settled=false
+ *  (실패가 아니다 — 로그인 화면에 멈춘 세션은 큐가 들고 있다가 입력창이 뜨면 넣는다).
+ */
+export async function waitOutboxSettled(ids: number[], maxMs: number): Promise<{ settled: boolean; failed: string | null }> {
+  if (!ids.length) return { settled: true, failed: null };
+  const t0 = Date.now();
+  for (;;) {
+    const r = await itemsPool.query(
+      `SELECT status, last_error FROM org_session_outbox WHERE id = ANY($1::bigint[])`, [ids]);
+    const rows = r.rows as Array<{ status: string; last_error: string | null }>;
+    const bad = rows.find((x) => x.status === "failed");
+    if (bad) return { settled: true, failed: bad.last_error || "알 수 없는 이유" };
+    if (rows.every((x) => x.status === "sent" || x.status === "delivered")) return { settled: true, failed: null };
+    if (Date.now() - t0 >= maxMs) return { settled: false, failed: null };
+    await sleep(300);
+  }
 }
 
 export async function retryOutbox(sessionId: string, id: number): Promise<boolean> {
   const r = await itemsPool.query(
     `UPDATE org_session_outbox SET status='queued', attempts=0, last_error=NULL, created_at=now(), updated_at=now()
-     WHERE session_id=$1 AND id=$2 AND status='failed'`,
+     WHERE session_id=$1 AND id=$2 AND (status='failed' OR (status='sent' AND last_error='echo-unconfirmed'))`,
     [sessionId, id]);
   if ((r.rowCount ?? 0) > 0) { kickOutbox(sessionId); return true; }
   return false;
@@ -85,7 +115,7 @@ export async function retryOutbox(sessionId: string, id: number): Promise<boolea
 
 export async function discardOutbox(sessionId: string, id: number): Promise<boolean> {
   const r = await itemsPool.query(
-    `DELETE FROM org_session_outbox WHERE session_id=$1 AND id=$2 AND status IN ('queued','failed')`,
+    `DELETE FROM org_session_outbox WHERE session_id=$1 AND id=$2 AND (status IN ('queued','failed') OR (status='sent' AND last_error='echo-unconfirmed'))`,
     [sessionId, id]);
   return (r.rowCount ?? 0) > 0;
 }
@@ -93,7 +123,8 @@ export async function discardOutbox(sessionId: string, id: number): Promise<bool
 function rowToOutbox(r: Record<string, any>): OutboxRow {
   return {
     id: Number(r.id), session_id: String(r.session_id), seq: Number(r.seq), text: String(r.text),
-    status: r.status as OutboxStatus, attempts: Number(r.attempts || 0), trust_ok: !!r.trust_ok,
+    status: r.status as OutboxStatus, kind: (r.kind === "control" ? "control" : "prompt") as OutboxKind,
+    attempts: Number(r.attempts || 0), trust_ok: !!r.trust_ok,
     last_error: (r.last_error as string | null) ?? null,
     created_at: new Date(r.created_at).toISOString(), updated_at: new Date(r.updated_at).toISOString(),
     delivered_at: r.delivered_at ? new Date(r.delivered_at).toISOString() : null,
@@ -153,6 +184,10 @@ async function deliverLoop(sessionId: string): Promise<void> {
       await mark(row.id, "failed", `send: ${(e as Error)?.message ?? e}`.slice(0, 300));
       continue;
     }
+    // 설정 명령(#1758)은 에코로 확인할 수 없다 — 슬래시 명령은 트랜스크립트에 친 글자 그대로가 아니라
+    //  `<command-name>` 형태로 적혀 이 바늘엔 영영 안 걸린다. 15초를 헛되이 기다리고 빈 Enter 를 덧보내는 대신
+    //  '보냄(미확인)'으로 마감한다 — 실제 적용 여부는 화면이 다음 턴의 model/effort 관측으로 스스로 안다.
+    if (row.kind === "control") { await mark(row.id, "sent", "control-no-echo"); continue; }
     let echoed = await waitEcho(st, oneLine);
     if (echoed === "timeout" && harness === "claude") {
       // 미제출 방어(send-keys 규약 ② — TUI 가 글자를 다 받기 전에 Enter 가 닿으면 입력칸에 글만 남는다, 실측 2026-08-18):

@@ -24,25 +24,29 @@ function overlap(a, b) {
  *
  * @param {object|null} saved     이전에 저장한 {x,y,width,height}
  * @param {Array<{x,y,width,height}>} displays  각 디스플레이의 **작업영역**(작업표시줄 제외)
+ * @param {{defaultSize?:{width:number,height:number}, minSize?:{width:number,height:number}}} [opts]
+ *          창마다 다른 기본·최소 크기(마법사 720×560 vs 웹 UI 창 1280×840). 없으면 마법사 값.
  * @returns {{width:number,height:number,x?:number,y?:number}}
  *          x·y 가 **없으면** 위치를 포기했다는 뜻 — 그 경우 OS/Electron 이 알아서 가운데 놓는다.
  *          (0,0 으로 지어내지 않는다. 0,0 은 '모른다'가 아니라 '좌상단'이라는 구체적 주장이다.)
  */
-export function normalizeBounds(saved, displays) {
+export function normalizeBounds(saved, displays, opts) {
+  const DEF = (opts && opts.defaultSize) || DEFAULT_SIZE;
+  const MIN = (opts && opts.minSize) || MIN_SIZE;
   const list = Array.isArray(displays) ? displays.filter((d) => d && num(d.width) && num(d.height)) : [];
   const s = saved && typeof saved === "object" ? saved : {};
 
   // 크기 — 저장값이 있으면 쓰되 최소치 밑으로는 못 내려간다. 없거나 망가졌으면 기본값.
-  let width = num(s.width) ?? DEFAULT_SIZE.width;
-  let height = num(s.height) ?? DEFAULT_SIZE.height;
-  width = Math.max(MIN_SIZE.width, width);
-  height = Math.max(MIN_SIZE.height, height);
+  let width = num(s.width) ?? DEF.width;
+  let height = num(s.height) ?? DEF.height;
+  width = Math.max(MIN.width, width);
+  height = Math.max(MIN.height, height);
   // 화면보다 큰 창은 사람이 줄일 수 없는 자리로 갈 수 있다 — 가장 큰 작업영역에 맞춘다.
   if (list.length) {
     const maxW = Math.max(...list.map((d) => d.width));
     const maxH = Math.max(...list.map((d) => d.height));
-    width = Math.min(width, Math.max(MIN_SIZE.width, maxW));
-    height = Math.min(height, Math.max(MIN_SIZE.height, maxH));
+    width = Math.min(width, Math.max(MIN.width, maxW));
+    height = Math.min(height, Math.max(MIN.height, maxH));
   }
 
   const x = num(s.x), y = num(s.y);
