@@ -33,7 +33,7 @@ import { activeProviders } from "./auth/providers.js";
 import { ee } from "./enterprise/registry.js"; // #1601 외부 IdP 로그인(SSO)은 Enterprise — 미탑재면 local 만 남는다
 import { gatewayUrlForRequest } from "./gateway-url.js";
 import { startDeviceAuth, pollDeviceAuth } from "./org/auth/device-auth.js";
-import { exchangeSessionCode } from "./org/store.js"; // #1454 S1 — 세션 SSO 브리지(1회용 코드 → 세션)
+import { exchangeSessionCode, exchangeLandingPath } from "./org/store.js"; // #1454 S1 — 세션 SSO 브리지(1회용 코드 → 세션)
 import { bootstrapBody } from "./bootstrap-asset.js";
 import { registerWebhookRoutes } from "./connectors/generic/webhook-routes.js"; // #1419 T2 — 무인증 웹훅 수신구
 
@@ -138,7 +138,8 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   // ── 세션 SSO 브리지 교환(#1454 S1) — 컨트롤플레인이 발급한 1회용 코드(org_session_mint)를 웹 세션으로. ──
   //  **비인증**(로그인과 같은 성격 — 세션을 얻기 전에 탈 수 있는 유일한 문). code 자체가 비밀이다:
   //  TTL 60초·1회용·저장은 sha256 뿐(검증·소비·감사는 exchangeSessionCode 가 원자적으로 수행).
-  //  브라우저 리다이렉트 흐름이라 JSON 이 아니라 302 로 답한다 — 성공은 /ui/, 실패는 게이트(로그인 화면)로.
+  //  브라우저 리다이렉트 흐름이라 JSON 이 아니라 302 로 답한다 — 성공은 /ui/(또는 `?to=#/…` 해시 착지 — #1771,
+  //  CLI/데스크톱 디바이스 승인 `#/activate?code=…` 회귀), 실패는 게이트(로그인 화면)로.
   //  셀프호스트 무해: 발급 창구(admin 전용)를 안 쓰면 코드가 존재하지 않아 이 라우트는 항상 실패 리다이렉트다.
   app.get("/api/ui/session/exchange", wrap(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
@@ -147,7 +148,7 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     const { sessionId, expiresAt } = await createSession(r.memberId,
       { ip: req.ip, userAgent: (req.headers["user-agent"] as string) ?? null });
     res.setHeader("Set-Cookie", sessionCookie(sessionId, expiresAt));
-    res.redirect(302, "/ui/");
+    res.redirect(302, exchangeLandingPath(req.query?.to));
   }));
 
   app.post("/api/ui/logout", wrap(async (req, res) => {

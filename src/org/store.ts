@@ -46,7 +46,7 @@ export {
 export type { TokenMeta } from "./store/tokens.js";
 
 // ── pending_session_mint(세션 SSO 브리지 #1454 S1 — 1회용 코드 발급·교환) ──
-export { mintSessionCode, exchangeSessionCode, SESSION_MINT_TTL_MS } from "./store/session-mint.js";
+export { mintSessionCode, exchangeSessionCode, exchangeLandingPath, SESSION_MINT_TTL_MS } from "./store/session-mint.js";
 
 // ── org_runtime_config(런타임 설정 단일행 + 정책 seam 출처 판정) ──
 export {

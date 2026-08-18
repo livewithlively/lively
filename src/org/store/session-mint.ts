@@ -73,3 +73,18 @@ export async function exchangeSessionCode(
     null, { member_id: row.member_id, ip: meta?.ip ?? null }, row.member_id, "web", db as unknown as pg.PoolClient);
   return { memberId: row.member_id };
 }
+
+// 교환 성공 뒤 착지 경로(순수) — `?to=` 로 받은 **해시 경로**를 /ui/ 뒤에 붙인다(#1771).
+//  왜 필요한가: CP 는 종전에 exchange URL 뒤에 프래그먼트를 그대로 달아 브라우저의 "Location 에 프래그먼트가
+//  없으면 원래 것을 유지" 동작에 기댔다. 그 경로는 서버가 모르는 값이라 화이트리스트가 CP 한 곳뿐이고,
+//  `#/activate?code=XXXX-XXXX` 처럼 쿼리가 든 해시는 걸러졌다(CLI/데스크톱 승인이 홈으로 떨어졌다).
+//  여기서 서버가 직접 Location 에 싣고 형태를 검증한다 — 열린 리다이렉트 방지: 반드시 `#/` 로 시작하는
+//  **동일 출처 해시 경로**만 허용하고, 스킴·호스트·`//`·공백·제어문자는 전부 기본 착지(/ui/)로 떨어뜨린다.
+const LANDING_HASH_RE = /^#\/[A-Za-z0-9/_\-.?=&%+~:@,]*$/;
+export function exchangeLandingPath(to: unknown): string {
+  const s = typeof to === "string" ? to.trim() : "";
+  if (!s || s.length > 512) return "/ui/";
+  if (!LANDING_HASH_RE.test(s)) return "/ui/";
+  if (s.startsWith("#//")) return "/ui/"; // `#//evil.com` 류 — 브라우저는 해시로 보지만 사람이 오독할 수 있어 잘라낸다
+  return `/ui/${s}`;
+}

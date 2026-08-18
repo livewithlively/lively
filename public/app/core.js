@@ -29,8 +29,17 @@ function showGate(message) {
         gateRedirectChecked = true;
         fetch('/api/ui/auth-config').then((r) => r.ok ? r.json() : null).then((c) => {
             const u = c && typeof c.login_redirect_url === 'string' ? c.login_redirect_url : '';
-            if (u && new URL(u, location.href).host !== location.host)
-                location.replace(u);
+            if (!u)
+                return;
+            const target = new URL(u, location.href);
+            if (target.host === location.host)
+                return;
+            // 돌아올 자리를 함께 보낸다(#1771) — CLI/데스크톱 디바이스 승인(#/activate?code=…)처럼 **해시에 상태가 있는**
+            //  화면에서 게이트를 만나면, CP 로 튕기는 순간 그 해시가 사라져 승인 화면으로 못 돌아온다.
+            //  CP 는 이 값의 호스트가 자기 테넌트 도메인인지 검증하고 SSO 입장 뒤 같은 자리로 돌려보낸다(열린 리다이렉트 아님).
+            //  구 CP 는 모르는 쿼리를 무시하므로 붙여도 무해하다.
+            target.searchParams.set('to', location.href);
+            location.replace(target.toString());
         }).catch(() => { });
     }
     document.getElementById('app').hidden = true;
