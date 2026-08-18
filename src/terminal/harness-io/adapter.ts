@@ -45,6 +45,11 @@ export interface HarnessSessionAdapter {
   roots(homes: string[], owner: string): string[];
   filePattern: RegExp;
   pathFor: ((root: string, ctx: { cwd: string; convId: string }) => string | null) | null;
+  /** 이 문자열이 **이 하네스의 대화 id 로 그럴듯한가**(#1719 후속). 훅 보고를 받는 쪽이 쓴다 — 세션 안에서 도는
+   *  무엇이든 그 경로를 칠 수 있고 저장이 last-write-wins 라, 규약에 안 맞는 값 하나가 정본을 지운다(실측: 테스트가
+   *  넣은 "s7" 이 살아 있는 세션 3개의 매핑을 덮었다). null = 규약을 모른다(판단 보류 — 종전대로 통과).
+   *  ⚠ 읽기(pathFor·filePattern)는 느슨한 채로 둔다. 여기서 좁히는 건 **쓰기(보고)** 뿐이다. */
+  convIdOk: ((id: string) => boolean) | null;
   parse: ((text: string, state: ParseState) => ParseResult) | null;
   answer: ((action: ChatAction) => ChatKey) | null;
   screen: ((tail: string[]) => ScreenState | null) | null;
@@ -58,17 +63,17 @@ const codexIo: HarnessSessionAdapter = {
   key: "codex", label: "Codex",
   roots: (homes) => homes.map((h) => path.join(h, ".codex", "sessions")),
   filePattern: /^rollout-.*\.jsonl$/,
-  pathFor: null, parse: null, answer: null, screen: null,
+  pathFor: null, convIdOk: null, parse: null, answer: null, screen: null,
 };
 const opencodeIo: HarnessSessionAdapter = {
   key: "opencode", label: "OpenCode",
   roots: () => [],
   filePattern: /\.jsonl$/,
-  pathFor: null, parse: null, answer: null, screen: null,
+  pathFor: null, convIdOk: null, parse: null, answer: null, screen: null,
 };
 // 셸 세션 — AI 없음. 대화 파일도 승인도 없다.
 const shellIo: HarnessSessionAdapter = {
-  key: "shell", label: "셸", roots: () => [], filePattern: /$^/, pathFor: null, parse: null, answer: null, screen: null,
+  key: "shell", label: "셸", roots: () => [], filePattern: /$^/, pathFor: null, convIdOk: null, parse: null, answer: null, screen: null,
 };
 
 export const HARNESS_IO: readonly HarnessSessionAdapter[] = [claudeIo, codexIo, opencodeIo, antigravityIo, grokIo, shellIo];

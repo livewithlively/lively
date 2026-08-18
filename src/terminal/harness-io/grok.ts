@@ -94,6 +94,7 @@ export const grokIo: HarnessSessionAdapter = {
   roots: (homes) => homes.map((h) => path.join(h, ".grok", "sessions")),
   filePattern: /^updates\.jsonl$/,
   pathFor: (root, { cwd, convId }) => (cwd && CONV_ID_RE.test(convId) ? path.join(root, encodeURIComponent(cwd), convId, "updates.jsonl") : null),
+  convIdOk: null,   // 이 하네스의 대화 id 규약을 아직 확정 안 했다 — 판단 보류(보고를 종전대로 받는다)
   parse: parseGrok,
   answer: null,
   screen: null,   // 화면 판정 미실측(#1719) — 폴백 휴리스틱
