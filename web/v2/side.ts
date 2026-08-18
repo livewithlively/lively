@@ -16,12 +16,15 @@ import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls, type Proj, type Sess, type V2Data } from './views.js';
 import { switcherTop } from './switcher.js';
 
-const CLOSED_KEY = 'lively_v2_closed';    // 사용자가 직접 접은 프로젝트 — 살아 있는 세션이 있으면 기본이 '펼침'이라 '접음'만 기억하면 된다
+// 기본은 **전부 접힘**(상민님 2026-08-18: 선택된 프로젝트 외에는 다 접어둔다) — 사용자가 편 것만 기억한다.
+//  지금 보는 프로젝트(선택)는 늘 펼침이 기본이고, 그걸 접은 건 잠깐의 상태라 기억하지 않는다(다음 방문엔 다시 펼쳐 보인다).
+const OPEN_KEY = 'lively_v2_opened';
 const DONE_KEY = 'lively_v2_side_done';   // '1' = 완료 프로젝트도 보인다(필터 풀림)
 const MINE_KEY = 'lively_v2_side_mine';   // '1' = 내 프로젝트만
 const MAX_SESS = 12;                      // 한 프로젝트 아래 펼쳐 보이는 세션 상한(넘치면 '외 n개' → 프로젝트 화면)
 
-let closedSet = new Set<string>();
+let openSet = new Set<string>();
+const closedSelected = new Set<string>();   // 선택 프로젝트를 일부러 접은 것 — 세션(페이지) 수명만
 let showDone = false;
 let mineOnly = false;
 let sideFilter = '';
@@ -30,7 +33,7 @@ let keyBound = false;
 let stateFilter: string | null = null;    // 상태 칩 — 세션 상태 key(waiting·busy…) 하나. 새로고침하면 풀린다(잠깐 보는 렌즈)
 let people: Record<string, any> = {};     // id → 멤버(표시명·아바타). 남의 세션 소유자 이름용
 let inited = false;
-let last: { host: HTMLElement; data: V2Data; activeKey: () => string } | null = null;
+let last: { host: HTMLElement; data: V2Data; activeKey: () => string; openSessions: () => Array<{ id: string; active: boolean }> } | null = null;
 
 function loadSet(k: string): Set<string> { try { const a = JSON.parse(localStorage.getItem(k) || '[]'); return new Set<string>(Array.isArray(a) ? a : []); } catch (_) { return new Set<string>(); } }
 function saveSet(k: string, s: Set<string>): void { try { if (s.size) localStorage.setItem(k, JSON.stringify([...s])); else localStorage.removeItem(k); } catch (_) { /* noop */ } }
@@ -38,7 +41,7 @@ function saveFlag(k: string, v: boolean): void { try { if (v) localStorage.setIt
 function init(): void {
   if (inited) return;
   inited = true;
-  closedSet = loadSet(CLOSED_KEY);
+  openSet = loadSet(OPEN_KEY);
   try { showDone = localStorage.getItem(DONE_KEY) === '1'; mineOnly = localStorage.getItem(MINE_KEY) === '1'; } catch (_) { /* noop */ }
   void loadPeopleAvatars().then((m) => { people = m || {}; if (last) redraw(); });
 }
@@ -124,9 +127,9 @@ export function projectOrder(data: V2Data): Array<{ proj: Proj; done: boolean; m
 }
 
 // ── 그리기 ──
-export function drawSide(host: HTMLElement, data: V2Data, activeKey: () => string): void {
+export function drawSide(host: HTMLElement, data: V2Data, activeKey: () => string, openSessions?: () => Array<{ id: string; active: boolean }>): void {
   init();
-  last = { host, data, activeKey };
+  last = { host, data, activeKey, openSessions: openSessions || (() => []) };
   render();
 }
 function redraw(): void { if (last) render(); }
@@ -193,6 +196,7 @@ function render(): void {
     //  #1154 가 토글을 폐지했던 사유 중 하나가 '검색 중인 줄 모른 채 짧아진 목록을 본다'였다.
     ...(findShown() ? [el('div', { class: 'v2-find' }, findIn)] : []),
     ...(fltN ? [filterSummary(fltN)] : []),
+    ...pinnedBlock(),
     treeEl!,
     el('div', { class: 'v2-side-foot' },
       el('button', { class: 'v2-apps-btn', type: 'button', onclick: () => openLaunchpad(), title: '앱 — 아직 새 화면으로 옮기지 않은 것들' }, appIcon('proj', 'v2-apps-ic'), el('span', { text: '앱' }), el('span', { class: 'v2-cnt', text: String(visibleApps().length) })),
@@ -295,11 +299,38 @@ function filterSummary(n: number): HTMLElement {
       onclick: () => { stateFilter = null; mineOnly = false; showDone = false; saveFlag(MINE_KEY, false); saveFlag(DONE_KEY, false); redraw(); } }));
 }
 
+// '열린 세션' 고정 줄(#1719 탭) — 셸 탭에 열려 있는 세션이 트리 위에 **상단 고정**으로 보인다(스크롤과 무관).
+//  트리 속 원래 자리도 그대로 둔다(위치 보존) — 이 블록은 복사본이지 이동이 아니다. 누르면 그 탭으로 간다(한 세션 = 한 탭).
+function pinnedBlock(): HTMLElement[] {
+  if (!last) return [];
+  const open = last.openSessions();
+  if (!open.length) return [];
+  const { data, activeKey } = last;
+  const ak = activeKey();
+  const rows: HTMLElement[] = [];
+  for (const o of open) {
+    const s = data.sessions.find((x) => x.id === o.id) || data.sessions.find((x) => x.logId === o.id);
+    if (!s) continue;
+    const pn = s.projectId ? (data.projects.find((p) => Number(p.id) === Number(s.projectId))?.name || '') : '';
+    const t = sessText(s, '');
+    rows.push(sessRow(s, ak, { main: t.main, sub: t.sub || pn }));
+  }
+  if (!rows.length) return [];
+  return [el('div', { class: 'v2-pin' }, el('div', { class: 'v2-pin-h', text: '열린 세션' }), ...rows)];
+}
+
 // 트리(프로젝트 ▸ 세션) — 검색은 여기만 다시 그린다(입력칸 포커스를 잃지 않게).
 function renderTree(rowsIn?: Row[]): void {
   if (!last || !treeEl) return;
   const rows = rowsIn || buildRows(last.data);
   const activeKey = last.activeKey();
+  // 지금 보는 프로젝트 — 프로젝트 화면이면 그것, 세션 화면이면 그 세션이 붙은 프로젝트(없으면 '프로젝트 없는 세션' 묶음).
+  let selectedPk = activeKey.startsWith('p:') ? activeKey : '';
+  if (activeKey.startsWith('s:')) {
+    const sid = activeKey.slice(2);
+    const s = last.data.sessions.find((x) => x.id === sid) || last.data.sessions.find((x) => x.logId === sid);
+    selectedPk = s ? 'p:' + (s.projectId || 0) : '';
+  }
   const q = sideFilter.trim().toLowerCase();
   const hit = (r: Row) => !q || (r.proj ? (r.proj.name.toLowerCase().includes(q) || String(r.proj.id) === q) : '프로젝트 없는 세션'.includes(q));
   const stateOf = (r: Row) => (stateFilter ? r.live.filter((s) => s.stateKey === stateFilter) : r.live);
@@ -312,7 +343,7 @@ function renderTree(rowsIn?: Row[]): void {
     return true;
   }).sort((a, b) => b.lastWork - a.lastWork || String((b.proj && b.proj.updated_at) || '').localeCompare(String((a.proj && a.proj.updated_at) || '')));
   if (countEl) countEl.textContent = `프로젝트 · ${shown.filter((r) => r.proj).length}${q || mineOnly || stateFilter ? ` / ${rows.filter((r) => r.proj && (showDone || !r.done || r.live.length)).length}` : ''}`;
-  const kids: HTMLElement[] = shown.map((r) => projRow(r, stateOf(r), activeKey));
+  const kids: HTMLElement[] = shown.map((r) => projRow(r, stateOf(r), activeKey, selectedPk));
   if (!kids.length) {
     kids.push(!last.data.loadedAt ? el('p', { class: 'v2-tree-note', text: '불러오는 중…' }) : !last.data.projects.length
       ? el('p', { class: 'v2-tree-note', text: '아직 프로젝트가 없어요. 가운데 입력창에 무엇이든 시키면 세션이 열리고, 프로젝트는 나중에 붙일 수 있어요.' })
@@ -323,18 +354,21 @@ function renderTree(rowsIn?: Row[]): void {
   treeEl.replaceChildren(...kids);
 }
 
-function projRow(r: Row, sess: Sess[], activeKey: string): HTMLElement {
+function projRow(r: Row, sess: Sess[], activeKey: string, selectedPk: string): HTMLElement {
   const p = r.proj;
   const pk = r.key;
   const href = p ? '#/p/' + p.id : '#/app/terminal';
   const isOn = activeKey === pk || (!p && activeKey === 'app:terminal');
-  // 펼침 기본값: 살아 있는 세션이 있으면 **펼침**(한눈에 상태를 보는 게 사이드바의 일이다) — 사용자가 접은 것만 접힌 채로.
-  const isOpen = sess.length > 0 && !closedSet.has(pk);
+  // 펼침 기본값(#1719 재구성): **선택된 프로젝트만 펼침**, 나머지는 접힘 — 사용자가 편 것만 그대로.
+  //  선택을 일부러 접은 건 이 페이지 수명만 기억한다(다음 방문엔 다시 펼쳐 보인다 — 선택은 늘 보이는 게 기본).
+  const isSel = pk === selectedPk;
+  const isOpen = sess.length > 0 && (isSel ? !closedSelected.has(pk) : openSet.has(pk));
   const caret = sess.length
     ? el('button', { class: 'v2-car', type: 'button', 'aria-label': isOpen ? '접기' : '펼치기', 'aria-expanded': String(isOpen), text: '›', onclick: (e: Event) => {
       e.preventDefault(); e.stopPropagation();
-      if (isOpen) closedSet.add(pk); else closedSet.delete(pk);
-      saveSet(CLOSED_KEY, closedSet); renderTree(); } })
+      if (isSel) { if (isOpen) closedSelected.add(pk); else closedSelected.delete(pk); }
+      if (isOpen) openSet.delete(pk); else openSet.add(pk);
+      saveSet(OPEN_KEY, openSet); renderTree(); } })
     : el('span', { class: 'v2-car none', 'aria-hidden': 'true' });
   const tipBits = p
     ? [`#${p.id} · ${p.status_category === 'done' ? '완료' : p.status_category === 'unstarted' ? '시작 전' : '진행 중'}`, r.lastWork ? '마지막 작업 ' + when(r.lastWork) : '세션 없음', r.mine ? '내 프로젝트' : (p.created_by ? `${(people[p.created_by] && people[p.created_by].display_name) || p.created_by} 만듦` : '')]
