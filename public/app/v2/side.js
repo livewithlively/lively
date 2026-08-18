@@ -95,6 +95,14 @@ function buildRows(data) {
         rows.push({ key: 'p:0', proj: null, live: loose, lastWork: lastOf(noProj), done: false, mine: true });
     return rows;
 }
+// ── 사이드바 정렬을 밖에서도(#1749 상단바 프로젝트 연결 드롭다운) — 트리와 **같은 순서**(마지막 작업 시각 ↓ → updated_at ↓).
+//  완료 프로젝트는 뒤로 보낸다(트리는 기본 숨김이라 "보이는 순서"가 곧 미완료 순서 — 드롭다운은 숨기는 대신 가라앉힌다).
+export function projectOrder(data) {
+    const byWork = (a, b) => b.lastWork - a.lastWork || String((b.proj && b.proj.updated_at) || '').localeCompare(String((a.proj && a.proj.updated_at) || ''));
+    return buildRows(data).filter((r) => r.proj)
+        .sort((a, b) => Number(a.done) - Number(b.done) || byWork(a, b))
+        .map((r) => ({ proj: r.proj, done: r.done, mine: r.mine, lastWork: r.lastWork }));
+}
 // ── 그리기 ──
 export function drawSide(host, data, activeKey) {
     init();
