@@ -22,7 +22,9 @@ const isJunkPath = (p) => { const t = String(p ?? ''); return !t || JUNK_PATH.te
 // ── Bash → 남은 것만 ────────────────────────────────────────────────────────
 const CMD_RULES = [
     // 커밋 — 메시지 한 줄만. sha·레포는 사람이 읽을 것이 아니다(툴팁에도 안 넣는다).
-    { re: /\bgit commit\b[\s\S]*?-m\s+["']([^"'\n]+)/, f: (m) => mk('cmd', '커밋', humanTitle(m[1])) },
+    //  ⚠ -m "$(cat <<'EOF' …)" 로 쓴 커밋은 따옴표 뒤가 명령 치환이라 그걸 제목으로 삼으면 안 된다(실측: 제목이 `$(cat <<'EOF'` 가 됐다).
+    //   그런 꼴은 건너뛰고 아래 heredoc 규칙이 **본문 첫 줄**을 집게 한다.
+    { re: /\bgit commit\b[\s\S]*?-m\s+["'](?!\$\()([^"'\n]+)/, f: (m) => mk('cmd', '커밋', humanTitle(m[1])) },
     { re: /\bgit commit\b[\s\S]*?<<\s*'?\w+'?\s*\n([^\n]+)/, f: (m) => mk('cmd', '커밋', humanTitle(m[1])) },
     // 파일 — 대상이 명령에 드러난 경우만. (python heredoc 편집이 실제로 가장 흔하다)
     { re: /p\s*=\s*['"]([^'"\n]+)['"][\s\S]{0,4000}?open\(\s*p\s*,\s*['"]w/, f: (m) => mk('file', '고침', tailPath(m[1])) },
