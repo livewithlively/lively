@@ -662,15 +662,19 @@ t('U13 받는 동안의 문구 — 확인이 끝난 뒤 침묵하지 않는다(�
     // ★ GUID 는 electron-builder 가 실제로 쓰는 값과 같아야 한다 — 그 라이브러리(builder-util-runtime)로 직접 대조한다
     const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'));
     assert.equal(APP_ID, pkg.build.appId, 'APP_ID 가 package.json build.appId 와 다르다 — GUID 가 다른 앱을 가리킨다');
-    // 고정값 — 2026-08-18 builder-util-runtime UUID.v5(appId, ELECTRON_BUILDER_NS_UUID) 로 얻은 값. appId 가 바뀌면 같이 바뀐다.
-    assert.equal(uuidV5("io.lvly.desktop", "50e065bc-3134-11e6-9bab-360a5f6d0d1a"), "3671aa13-ad0d-5bfe-852b-a342893d84d2");
-    assert.equal(APP_GUID, uuidV5(pkg.build.appId, "50e065bc-3134-11e6-9bab-360a5f6d0d1a"));
-    // electron-builder 의 실제 라이브러리와도 대조한다 — 단, 루트 테스트 잡은 desktop/ 의존성을 안 깔므로 **있을 때만**
-    //  (없으면 위 고정값 대조가 계약이다. 있는 곳(desktop/ 에서 npm ci 한 러너·로컬)에선 라이브러리가 정본).
+    // ★ 고정값 = **실기기 레지스트리에서 확인한 실제 키**(hammurabi HKLM, 2026-08-18). 종전엔 NS 끝자리를 틀리게
+    //  옮겨 적은 값(…360a5f6d0d1a)으로 계산해 GUID 가 통째로 달랐고, 그 틀린 값끼리 맞춰 본 대조는 초록불이었다.
+    //  이제 NS 는 app-builder-lib NsisTarget.js 소스에서 **직접 읽어** 대조한다(있을 때만 — 루트 잡은 desktop 의존성 없음).
+    assert.equal(uuidV5("io.lvly.desktop", "50e065bc-3134-11e6-9bab-38c9862bdaf3"), "c70fc652-f177-5d81-a865-695715b3f6c0");
+    assert.equal(APP_GUID, "c70fc652-f177-5d81-a865-695715b3f6c0", 'GUID 가 실기기 레지스트리 키와 다르다');
     try {
+      const nsisSrc = readFileSync(fileURLToPath(new URL('../node_modules/app-builder-lib/out/targets/nsis/NsisTarget.js', import.meta.url)), 'utf8');
+      const ns = /ELECTRON_BUILDER_NS_UUID = [^"]*"([0-9a-f-]{36})"/.exec(nsisSrc);
+      assert.ok(ns, 'NsisTarget.js 에서 NS 상수를 못 찾았다(구조 변경 — 파싱을 고칠 것)');
+      assert.equal(uuidV5(pkg.build.appId, ns[1]), APP_GUID, 'app-builder-lib 의 NS 로 계산한 GUID 가 우리 상수와 다르다');
       const { UUID } = createRequire(import.meta.url)("builder-util-runtime");
-      assert.equal(APP_GUID, UUID.v5(pkg.build.appId, UUID.parse("50e065bc-3134-11e6-9bab-360a5f6d0d1a")), 'GUID 가 electron-builder 계산과 다르다');
-    } catch (e) { if (!/Cannot find module/.test(String(e?.message))) throw e; }
+      assert.equal(APP_GUID, UUID.v5(pkg.build.appId, UUID.parse(ns[1])), 'GUID 가 electron-builder 계산과 다르다');
+    } catch (e) { if (!/Cannot find module|ENOENT/.test(String(e?.message))) throw e; }
     assert.ok(!pkg.build.nsis.guid, 'nsis.guid 를 박으면 여기 계산과 갈린다 — 박을 거면 APP_GUID 도 그 값으로');
     assert.equal(UNINSTALLER_NAME, `Uninstall ${pkg.build.productName}.exe`);
     // 쿼리는 GUID 키로도 잡는다(이름은 보조) — DisplayName -eq 'Lively' 는 다시는 안 된다
@@ -705,6 +709,12 @@ t('U13 받는 동안의 문구 — 확인이 끝난 뒤 침묵하지 않는다(�
     assert.match(main, /detectStaleInstall\(\{ force: true \}\)/, '시작 때 감지하지 않는다');
     assert.match(main, /platform !== "win32" \|\| !app\.isPackaged\) return/, 'Windows 패키지 앱에서만 감지해야 한다');
     assert.match(main, /-EncodedCommand/, '정리 스크립트를 EncodedCommand 로 넘기지 않는다(인용부호가 argv 에 실린다)');
+    // ★ 정리 런처는 **보이는 콘솔**이어야 한다 — 숨김 프로세스의 승격 요청은 작업 표시줄에 최소화돼 사람이 못 본다
+    //  (실기기: UAC 를 5분 뒤에야 발견). cleanupStaleInstall 구간만 본다(감지 execFile 의 windowsHide 는 별개).
+    const cl = main.slice(main.indexOf('async function cleanupStaleInstall'), main.indexOf('async function cleanupStaleInstall') + 2200);
+    assert.ok(!/WindowStyle",\s*"Hidden"/.test(cl), '정리 런처가 -WindowStyle Hidden 이다 — UAC 가 작업 표시줄에 숨는다');
+    assert.ok(!/windowsHide:\s*true/.test(cl) && !/detached:\s*true/.test(cl), '정리 런처가 숨김/분리다 — UAC 가 작업 표시줄에 숨는다');
+    assert.match(staleCleanupPs({ stale: [], ownExe: "C:\\a.exe" }), /방패 아이콘/, '콘솔 안내 문구가 없다');
     assert.match(main, /shell\.writeShortcutLink/, '바탕화면 바로가기를 이 버전으로 잇지 않는다');
     assert.match(main, /setLoginItemSettings\(\{ openAtLogin: true/, '로그인 자동 시작을 이 버전으로 잇지 않는다');
     assert.ok(!/void cleanupStaleInstall\(\)/.test(main), '정리를 자동으로 돌리면 UAC 창이 느닷없이 뜬다 — 사람이 눌러야 한다');
