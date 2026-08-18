@@ -13,6 +13,8 @@ import { logger } from "../log.js";
 import { roots, HARNESSES, listSessions, listRestorableSessions, listSessionsRaw, createSession, killSession, editSession, canAttach, markSessionActive, isReportedPhase, getSessionLabel, getSessionProject, sessionDir, sessionGone, profileStatus, profileStatusFor, provisionProfile, provisionMemberOs, memberOsStatus, aiAccountStatus, aiAccountLogout, validateInvites, type SessionInfo, type CreateInput, normalizeCap } from "./terminal-sessions.js";
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState, deleteSessionState, setClaudeSessionId, markSessionExited } from "../sessions/session-state.js"; // #1059 E — restorable 세션 복원(+정밀 UUID 매핑·정상종료 표시)
+import { currentTenant } from "../org/tenant-context.js";
+import { PRIMARY_TENANT_ID, setSessionWorkspace, clearSessionWorkspace } from "../org/tenancy/registry.js"; // #1750 후속 — 세션→워크스페이스 정본
 import { listManagedSessions } from "../sessions/managed-sessions.js"; // #1059 F — 관리탭 세션목록에서 managed 표시(회수 제외)
 import { mergeSessionViews } from "../sessions/session-merge.js"; // #1716 — 출처가 겹쳐도 세션 카드는 1장
 import { sessionPrompts, searchPrompts, searchPromptsHybrid, transcriptExists } from "./terminal-transcript.js";
@@ -474,6 +476,21 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     if (!nodeOnline(nodeId)) throw new HttpError(409, "노드가 오프라인입니다(에이전트 연결 대기)");
   };
 
+  // 세션 → 워크스페이스 정본 기록(#1750 후속) — 헤더를 못 싣는 표면(SSE·iframe·WS·훅·구 kit)이
+  //  이 맵(gw_session_map)으로 컨텍스트를 되찾는다. primary(무컨텍스트)는 행을 안 만든다(부재 = primary).
+  //  ⚠ 기록 실패는 **생성 실패로 승격**한다: 맵 없는 secondary 세션은 이후 헤더 없는 요청이 전부
+  //  primary 로 오귀속된다 — dev 실측('다온')이 정확히 그 사고라, 조용히 넘기지 않는다.
+  const recordSessionTenant = async (sessionId: string, killOnFail?: () => Promise<unknown>): Promise<void> => {
+    const t = currentTenant();
+    if (!t || t.id === PRIMARY_TENANT_ID) return;
+    try { await setSessionWorkspace(sessionId, t.id); }
+    catch (e) {
+      logger.error({ err: e, sessionId, ws: t.slug }, "세션 워크스페이스 맵 기록 실패 — 세션을 되물리고 생성을 실패시킨다");
+      if (killOnFail) await killOnFail().catch(() => { /* 되물림 실패 — 세션이 남지만 다음 요청도 같은 DB 라 대개 함께 죽어 있다 */ });
+      throw new HttpError(500, "세션의 워크스페이스 소속을 기록하지 못했습니다 — 다시 시도하세요");
+    }
+  };
+
   app.post("/api/ui/terminal/sessions", auth, wrap(async (req, res) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
     const input: CreateInput = {
@@ -499,10 +516,12 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       const me = idOf(userOf(req));
       const invites = await validateInvites(b.invites, me);
       const session = await relayNodeOp<SessionInfo>(nodeId, "create", { user: { userId: me }, input: { ...input, invites: [] }, invites });
+      await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: me }, id: session.id }));
       res.json({ session: { ...session, node: { id: nodeId, online: true } } });
       return;
     }
     const session = await createSession(userOf(req), input);
+    await recordSessionTenant(session.id, () => killSession(userOf(req), session.id, {}));
     res.json({ session });
   }));
   // 세션 수정 — 이름·초대 멤버 변경. 소유자만(서버가 강제 — 노드 세션은 노드측 assertManage 가 같은 규칙으로 강제).
@@ -528,8 +547,11 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   }));
   app.delete("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
     const nodeId = String(req.query.node ?? "").trim();
+    // 맵 정리는 best-effort — 남은 행은 무해하다(세션 id 는 무작위라 재사용되지 않고, 죽은 세션은 참조되지 않는다).
+    const forgetTenantMap = (): void => { void clearSessionWorkspace(req.params.id!).catch(() => { /* 비치명 */ }); };
     if (nodeId) {
       await relayNodeOp(nodeId, "kill", { user: { userId: idOf(userOf(req)) }, id: req.params.id });
+      forgetTenantMap();
       res.json({ ok: true });
       return;
     }
@@ -545,6 +567,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       if (st) {
         if (st.owner !== idOf(u) && !u.scopes?.includes("admin")) throw new HttpError(403, "본인 세션이 아닙니다");
         await deleteSessionState(req.params.id);
+        forgetTenantMap();
         res.json({ ok: true, forgot: true });
         return;
       }
@@ -554,6 +577,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     //  파괴적이지 않다 — preserveState 로 desired-state 를 남겨 restorable 로 복원 가능(자동 reaper 가 정당세션을 보호하는 것과 역할 분담).
     const admin = reclaim && !!u.scopes?.includes("admin");
     await killSession(u, req.params.id, { admin, preserveState: reclaim });
+    if (!reclaim) forgetTenantMap(); // 회수(복원 가능)는 소속을 남긴다 — 복원 세션이 제 워크스페이스로 돌아가야 한다
     res.json({ ok: true });
   }));
 }

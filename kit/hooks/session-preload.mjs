@@ -26,6 +26,15 @@ import { fileURLToPath } from "node:url";
 //   표 조회(harness())가 알아서 claude 로 폴백하므로 분기 결과는 종전과 같다.
 import { harness, isForeignGrokInvocation } from "./harness-registry.mjs";
 
+// #1750 — 세션 소속 신호: 게이트웨이가 x-lively-session(→ 세션 정본 gw_session_map)·x-lively-workspace 로
+//  이 세션의 워크스페이스 컨텍스트를 되찾는다. 안 실으면 primary 로 간주되므로(폴백) secondary 세션의
+//  훅 호출이 조용히 primary 데이터를 읽고 쓴다 — dev '다온' 실측이 정확히 그 사고다.
+const SCOPE_HDRS = {
+  ...(String(process.env.LIVELY_SESSION_ID || "").trim() ? { "x-lively-session": String(process.env.LIVELY_SESSION_ID).trim() } : {}),
+  ...(String(process.env.LVLY_TENANT_SLUG || "").trim() ? { "x-lively-workspace": String(process.env.LVLY_TENANT_SLUG).trim() } : {}),
+};
+
+
 // grok compat 이중발화 가드(#1701) — grok 은 ~/.claude/settings.json 의 우리 훅을 기본값으로 그대로 실행한다.
 //  그 사본이면 조용히 비켜선다(정본은 grok-adapter 가 LIVELY_HARNESS=grok 으로 스폰하는 경로).
 if (isForeignGrokInvocation()) process.exit(0);
@@ -141,7 +150,7 @@ async function jget(path, ms = 2000, auth = true) {
   try {
     const res = await fetch(`${GW}${path}`, {
       signal: ctl.signal,
-      headers: auth ? { authorization: `Bearer ${TOKEN}` } : {},
+      headers: auth ? { authorization: `Bearer ${TOKEN}`, ...SCOPE_HDRS } : {},
     });
     if (!res.ok) return null;
     return await res.json();

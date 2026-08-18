@@ -22,6 +22,15 @@ import { execFileSync } from "node:child_process";
 //  이 값이 게이트웨이 질의(`?harness=`)에 그대로 실리므로 여기서 기본값을 채우면 서버가 받는 값이 바뀐다.
 import { harness, isForeignGrokInvocation } from "./harness-registry.mjs";
 
+// #1750 — 세션 소속 신호: 게이트웨이가 x-lively-session(→ 세션 정본 gw_session_map)·x-lively-workspace 로
+//  이 세션의 워크스페이스 컨텍스트를 되찾는다. 안 실으면 primary 로 간주되므로(폴백) secondary 세션의
+//  훅 호출이 조용히 primary 데이터를 읽고 쓴다 — dev '다온' 실측이 정확히 그 사고다.
+const SCOPE_HDRS = {
+  ...(String(process.env.LIVELY_SESSION_ID || "").trim() ? { "x-lively-session": String(process.env.LIVELY_SESSION_ID).trim() } : {}),
+  ...(String(process.env.LVLY_TENANT_SLUG || "").trim() ? { "x-lively-workspace": String(process.env.LVLY_TENANT_SLUG).trim() } : {}),
+};
+
+
 // grok compat 이중발화 가드(#1701) — grok 이 ~/.claude/settings.json 의 러너 엔트리를 그대로 실행한 사본이면
 //  비켜선다(정본은 grok-adapter 경유 — 사본이 돌면 org 훅이 이벤트당 두 번 울린다).
 if (isForeignGrokInvocation()) process.exit(0);
@@ -95,7 +104,7 @@ async function fetchHooks() {
   const t = setTimeout(() => ctl.abort(), SESSIONEND ? FETCH_MS_SESSIONEND : FETCH_MS);
   try {
     const url = `${GW}/api/ui/org/runner/hooks?harness=${encodeURIComponent(HARNESS || "")}&event=${encodeURIComponent(EVENT)}`;
-    const res = await fetch(url, { signal: ctl.signal, headers: { authorization: `Bearer ${TOKEN}` } });
+    const res = await fetch(url, { signal: ctl.signal, headers: { authorization: `Bearer ${TOKEN}`, ...SCOPE_HDRS } });
     if (!res.ok) return null;
     const j = await res.json();
     if (!Array.isArray(j?.hooks)) return { hooks: [], relay: DEFAULT_RELAY };
@@ -133,7 +142,7 @@ async function reportFailures(fails) {
   try {
     await fetch(`${GW}/api/ui/org/runner/hook-report`, {
       method: "POST", signal: ctl.signal,
-      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${TOKEN}`, ...SCOPE_HDRS, "content-type": "application/json" },
       body: JSON.stringify({ event: EVENT, harness: HARNESS || null, failures: fails }),
     });
   } catch { /* 관측은 best-effort */ }

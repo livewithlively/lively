@@ -25,8 +25,32 @@ import { resolveTenantFromHeaders, withTenant, type TenantContext } from "./tena
 
 /** 셀프호스트 다중 워크스페이스(#1750 S1)의 요청 헤더 — 프론트 api()/하네스가 선택한 워크스페이스 slug. */
 export const WORKSPACE_HEADER = "x-lively-workspace";
+/** 헤더를 못 싣는 표면(EventSource·iframe·WS URL)용 등가 신호 — apiUrl() 이 붙인다. */
+export const WORKSPACE_QUERY = "lvly_ws";
 /** registry 모드에서 미들웨어가 쓰는 slug→워크스페이스 해석기(부팅이 주입 — org/tenancy/registry.lookupWorkspace). */
 export type WorkspaceLookup = (slug: string) => Promise<{ id: string; slug: string } | null>;
+/** 세션 id→워크스페이스 해석기(부팅이 주입 — org/tenancy/registry.workspaceForSession). 맵 부재 = null = primary. */
+export type SessionWorkspaceLookup = (sessionId: string) => Promise<{ id: string; slug: string } | null>;
+
+const SESSION_ID_CHARS = /^[A-Za-z0-9._-]{4,64}$/;
+
+/**
+ * 요청에서 **세션 축 신호**를 뽑는다(순수) — 명시 워크스페이스 신호가 없을 때의 폴백 재료.
+ *
+ * ★ 워크스페이스 신호를 클라이언트 헤더에만 의존하면 헤더를 못/안 싣는 표면 전부가 조용히 primary 로
+ *  떨어진다(dev 실측 — SSE·iframe·구 번들). 세션을 참조하는 요청은 그 세션의 소속이 서버 정본
+ *  (gw_session_map)에 있으므로, 여기서 세션 id 만 뽑으면 컨텍스트를 되찾을 수 있다:
+ *   · `x-lively-session` 헤더 — 하네스 MCP 프록시·훅이 #852 부터 실어 온 **기존 계약**(구 kit 도 이미 보낸다).
+ *   · URL 경로 `/api/ui/terminal/sessions/<id>…` · `/api/ui/v6/sessions/<id>…` — SSE·iframe 의 fetch 가
+ *     헤더 없이도 세션을 URL 로 가리킨다(캡처 훅의 watermark 경로도 이 꼴).
+ */
+export function sessionIdFromRequest(headers: Record<string, string | string[] | undefined>, url: string): string | null {
+  const h = headers["x-lively-session"];
+  const fromHeader = (Array.isArray(h) ? h[0] : h || "").trim();
+  if (fromHeader && SESSION_ID_CHARS.test(fromHeader)) return fromHeader;
+  const m = /^\/api\/ui\/(?:terminal|v6)\/sessions\/([A-Za-z0-9._-]{4,64})(?:[/?#]|$)/.exec((url || "").split("?")[0] ?? "");
+  return m ? m[1]! : null;
+}
 
 /** 거절 사유별 HTTP 상태 — 운영이 로그만 보고 원인을 가를 수 있게 서로 다른 코드를 준다. */
 export function statusForReason(reason: string): number {
@@ -61,7 +85,7 @@ export function isTenantAgnosticPath(path: string): boolean {
  * ⚠ `withTenant` 안에서 `next()` 를 부른다 — 그래야 **그 뒤의 모든 핸들러**가 같은 비동기 체인에
  *  들어와 컨텍스트를 본다. `next()` 를 밖에서 부르면 컨텍스트가 이 미들웨어에서 끝난다.
  */
-export function tenantContextMiddleware(env: NodeJS.ProcessEnv = process.env, lookup?: WorkspaceLookup): RequestHandler {
+export function tenantContextMiddleware(env: NodeJS.ProcessEnv = process.env, lookup?: WorkspaceLookup, sessionLookup?: SessionWorkspaceLookup): RequestHandler {
   // ── registry 모드(#1750 S1, 셀프호스트 다중 워크스페이스) ──────────────────
   //  CP 헤더 모드와 **배타**다: 앞단(CP 라우터)이 있는 배포는 서명 헤더가 권위이고, 셀프호스트는 앞단이
   //  없어 **선택 헤더 + 등록부**가 권위다. 두 모드가 겹치면(둘 다 설정) CP 쪽이 이긴다 — 서명이 더 강한
@@ -78,16 +102,37 @@ export function tenantContextMiddleware(env: NodeJS.ProcessEnv = process.env, lo
       && !(env.LIVELY_TENANT_HEADER_SECRET || "").trim()) {
     return (req, res, next) => {
       if (isTenantAgnosticPath(req.url || "")) { next(); return; }
+      // 신호 우선순위: ① 명시 slug(헤더 > lvly_ws 쿼리 — 쿼리는 헤더를 못 싣는 SSE·iframe·WS URL 용,
+      //  apiUrl() 이 붙인다) ② 세션 축(x-lively-session 헤더·/sessions/<id> 경로 → gw_session_map 정본)
+      //  ③ 없음 = primary. ①의 miss 는 404(오타·삭제가 primary 로 조용히 꽂히지 않게), ②의 맵 부재는
+      //  primary(구 세션·primary 세션 = 행 없음이 정상).
       const raw = req.headers[WORKSPACE_HEADER];
-      const slug = (Array.isArray(raw) ? raw[0] : raw || "").trim().toLowerCase();
-      if (!slug || slug === "primary") { next(); return; }
-      if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(slug)) { res.status(400).json({ message: "워크스페이스 이름 형식이 올바르지 않습니다" }); return; }
-      lookup(slug).then((w) => {
-        if (!w) { res.status(404).json({ message: `워크스페이스 '${slug}' 가 없습니다` }); return; }
+      let slug = (Array.isArray(raw) ? raw[0] : raw || "").trim().toLowerCase();
+      if (!slug) {
+        const q = /[?&]lvly_ws=([^&#]+)/.exec(req.url || "");
+        if (q) { try { slug = decodeURIComponent(q[1]!).trim().toLowerCase(); } catch { slug = ""; } }
+      }
+      if (slug && slug !== "primary") {
+        if (!/^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/.test(slug)) { res.status(400).json({ message: "워크스페이스 이름 형식이 올바르지 않습니다" }); return; }
+        lookup(slug).then((w) => {
+          if (!w) { res.status(404).json({ message: `워크스페이스 '${slug}' 가 없습니다` }); return; }
+          withTenant({ id: w.id, slug: w.slug }, () => next());
+        }).catch((e) => {
+          console.warn(`[tenant] 워크스페이스 해석 실패 — ${e instanceof Error ? e.message : e}`);
+          res.status(500).json({ message: "워크스페이스를 확인하지 못했습니다" });
+        });
+        return;
+      }
+      if (slug === "primary") { next(); return; }
+      const sid = sessionLookup ? sessionIdFromRequest(req.headers as Record<string, string | string[] | undefined>, req.url || "") : null;
+      if (!sid) { next(); return; }
+      sessionLookup!(sid).then((w) => {
+        if (!w) { next(); return; } // 맵 없음 = primary 세션(구 세션 포함) — 종전 그대로
         withTenant({ id: w.id, slug: w.slug }, () => next());
       }).catch((e) => {
-        console.warn(`[tenant] 워크스페이스 해석 실패 — ${e instanceof Error ? e.message : e}`);
-        res.status(500).json({ message: "워크스페이스를 확인하지 못했습니다" });
+        // 세션 축 해석 실패 — primary 로 넘기지 않는다(그 순간이 곧 오귀속). 시끄럽게 막는다.
+        console.warn(`[tenant] 세션 소속 해석 실패 — ${e instanceof Error ? e.message : e}`);
+        res.status(500).json({ message: "세션의 워크스페이스를 확인하지 못했습니다" });
       });
     };
   }

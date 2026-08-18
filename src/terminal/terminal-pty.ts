@@ -122,8 +122,22 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
     //  같은 헤더·같은 비밀로 여기서 직접 연다. 거절 사유면 소켓을 닫는다(비밀 불일치 = 배선 문제).
     const tr = resolveTenantFromHeaders(req.headers as Record<string, string | string[] | undefined>, process.env);
     if (!tr.ok && tr.reason !== "disabled") { socket.destroy(); return; }
-    const inTenant = <T>(fn: () => T): T => (tr.ok ? withTenant(tr.tenant, fn) : fn());
-    void inTenant(() => (async () => {
+    // registry(#1750 후속) — 셀프호스트 다중 워크스페이스. 브라우저 WS URL 은 커스텀 헤더를 못 실으므로
+    //  **세션 정본(gw_session_map)** 으로 소속을 되찾는다: 맵에 있으면 그 워크스페이스, 없으면 primary(종전).
+    //  이게 없으면 secondary 세션 attach 가 primary 컨텍스트로 돌아 기본 tmux 소켓을 뒤지고 4410(가짜
+    //  '세션 없음')이 된다 — 세션은 lvly-<slug> 소켓에 살아 있는데.
+    const registrySessionCtx = async (): Promise<{ id: string; slug: string } | null> => {
+      if (tr.ok || (process.env.LIVELY_TENANCY_MODE || "").trim().toLowerCase() !== "registry") return null;
+      const sid = url.searchParams.get("session") || "";
+      if (!sid) return null;
+      const { workspaceForSession } = await import("../org/tenancy/registry.js");
+      const w = await workspaceForSession(sid).catch(() => null);
+      return w ? { id: w.id, slug: w.slug } : null;
+    };
+    void (async () => {
+      const regCtx = await registrySessionCtx();
+      const inTenant = <T>(fn: () => T): T => (tr.ok ? withTenant(tr.tenant, fn) : regCtx ? withTenant(regCtx, fn) : fn());
+      return inTenant(() => (async () => {
       const tk = lookupTicket(req.headers.cookie);
       if (!tk) { socket.destroy(); return; }
       const id = url.searchParams.get("session") || "";
@@ -158,7 +172,8 @@ export function setupPtyUpgrade(server: Server, lookupTicket: TicketLookup): voi
       }
       await ensureSessionOpts(id).catch(() => { /* 비치명 */ });
       wss.handleUpgrade(req, socket, head, (ws) => inTenant(() => attach(ws, id)));
-    })());
+      })());
+    })();
   });
 }
 

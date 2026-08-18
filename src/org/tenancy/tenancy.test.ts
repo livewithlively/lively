@@ -15,7 +15,7 @@ import path from "node:path";
 import { clearTenantResolver, tenantBindingSql } from "../../db/client.js";
 import { SINGLE_TENANT_ID, TENANT_COLUMN_EXEMPT } from "../../db/tenant-column.js";
 import { installTenantBinding, resolveBindingMode } from "../../db/tenant-binding-boot.js";
-import { withTenant } from "../tenant-context.js";
+import { withTenant, currentTenant } from "../tenant-context.js";
 import { readTenancyRuntimeSync, writeTenancyRuntime, registryModeActive, tenancyRuntimePath } from "./state.js";
 import { workspaceAccessAllowed } from "./gate.js";
 import { normalizeWorkspaceSlug, PRIMARY_TENANT_ID } from "./registry.js";
@@ -164,6 +164,89 @@ test("★★ J1~J6 — 순수 셀프호스트만 대상, 매니지드·바인딩
 
 test("G1 — IDENTITY_GLOBAL ∩ TENANT_COLUMN_EXEMPT = ∅", () => {
   for (const t of IDENTITY_GLOBAL_TABLES) assert.ok(!TENANT_COLUMN_EXEMPT.has(t), `${t} 가 양쪽에 있다`);
+});
+
+// ── L. 세션→워크스페이스 정본 + URL 신호 — dev '다온' 유출(헤더 못 싣는 표면 → primary 오귀속) 대응 ──
+
+import { tenantContextMiddleware, sessionIdFromRequest } from "../tenant-middleware.js";
+
+/** express 없이 registry 미들웨어를 돌린다(비동기 분기 포함). */
+async function runMw(headers: Record<string, string>, url: string) {
+  const env = E({ ...REG });
+  let nexted = false; let seen: { id: string; slug: string } | null = null; let status = 0;
+  const lookup = async (slug: string) => slug === "acme" ? { id: SEC_ID, slug } : null;
+  const sessionLookup = async (sid: string) => {
+    if (sid === "box-a-11112222") return { id: SEC_ID, slug: "acme" };
+    if (sid === "box-err-33334444") throw new Error("boom");
+    return null;
+  };
+  const res = { status(c: number) { status = c; return this; }, json() { return this; } };
+  await new Promise<void>((done) => {
+    tenantContextMiddleware(env, lookup, sessionLookup)(
+      { headers, url } as never, res as never,
+      () => { nexted = true; seen = currentTenant(); done(); });
+    // 거절 경로는 next 가 안 불린다 — 마이크로태스크 몇 번이면 프라미스 체인이 끝난다.
+    setTimeout(done, 30);
+  });
+  return { nexted, seen: seen as { id: string; slug: string } | null, status };
+}
+
+test("L1/L6 — 명시 slug 가 최우선(세션 신호가 함께 있어도), miss 는 404", async () => {
+  const a = await runMw({ "x-lively-workspace": "acme", "x-lively-session": "box-b-99998888" }, "/api/ui/me");
+  assert.equal(a.seen?.slug, "acme", "L6: 명시가 이긴다");
+  const b = await runMw({ "x-lively-workspace": "no-such" }, "/api/ui/me");
+  assert.equal(b.status, 404, "L1: 명시 miss 는 primary 로 조용히 꽂히지 않는다");
+});
+
+test("L2 — lvly_ws 쿼리는 헤더와 동등(헤더를 못 싣는 SSE·iframe 표면용)", async () => {
+  const a = await runMw({}, "/api/ui/v6/projects/1/chat/turn?lvly_ws=acme");
+  assert.equal(a.seen?.slug, "acme");
+  const b = await runMw({}, "/api/ui/me?lvly_ws=no-such");
+  assert.equal(b.status, 404);
+});
+
+test("★★ L3/L4/L5 — 세션 축 폴백: 헤더·경로의 세션 id → 정본 맵 → 컨텍스트, 맵 없음 = primary", async () => {
+  const a = await runMw({ "x-lively-session": "box-a-11112222" }, "/api/ui/knowledge/similar");
+  assert.equal(a.seen?.slug, "acme", "L3: x-lively-session 헤더(구 kit 도 이미 보낸다 — #852)");
+  const b = await runMw({}, "/api/ui/v6/sessions/box-a-11112222/log/watermark?node=");
+  assert.equal(b.seen?.slug, "acme", "L4: URL 경로의 세션 id(캡처 훅·SSE)");
+  const c = await runMw({}, "/api/ui/terminal/sessions/box-a-11112222/prompt");
+  assert.equal(c.seen?.slug, "acme", "L4: terminal 경로");
+  const d = await runMw({ "x-lively-session": "box-old-77776666" }, "/api/ui/me");
+  assert.equal(d.nexted, true); assert.equal(d.seen, null, "L5: 맵 없음 = primary(구 세션 무회귀)");
+});
+
+test("L7/L8 — 형식 위반은 신호가 아니고, 해석기 오류는 500(오귀속 금지)", async () => {
+  assert.equal(sessionIdFromRequest({ "x-lively-session": "a b c" }, "/api/ui/me"), null, "L7: 형식 위반");
+  assert.equal(sessionIdFromRequest({}, "/api/ui/knowledge/box-a-11112222"), null, "L7: 세션 경로가 아니다");
+  assert.equal(sessionIdFromRequest({}, "/api/ui/v6/sessions/box-a-11112222"), "box-a-11112222");
+  const e = await runMw({ "x-lively-session": "box-err-33334444" }, "/api/ui/me");
+  assert.equal(e.status, 500, "L8: 해석 실패를 primary 로 넘기면 그 순간이 오귀속이다");
+  assert.equal(e.seen, null);
+});
+
+// ── M. 배선 구조 잠금(소스) — 세션 정본의 기록·정리·업그레이드·클라 신호 ──────
+
+test("★★ M3/M4 — 세션 생성이 맵을 기록(실패=생성 실패)하고, 삭제가 정리한다(회수 제외)", () => {
+  const rt = readFileSync("src/terminal/routes.ts", "utf8");
+  assert.match(rt, /recordSessionTenant\(session\.id/, "생성 두 갈래(로컬·노드) 모두 기록해야 한다");
+  assert.ok(rt.split("recordSessionTenant(session.id").length - 1 >= 2, "노드 릴레이 갈래가 빠지면 노드 세션이 오귀속된다");
+  assert.match(rt, /생성 실패로 승격|생성을 실패시킨다/, "M3: 기록 실패를 삼키면 그 세션의 모든 무헤더 요청이 primary 로 간다");
+  assert.match(rt, /clearSessionWorkspace/, "M4: 삭제 정리");
+  assert.match(rt, /if \(!reclaim\) forgetTenantMap/, "M4: 회수(복원 가능)는 소속을 남긴다");
+});
+
+test("★ M5 — WS 업그레이드(registry)는 세션 정본으로 컨텍스트를 복원한다", () => {
+  const pty = readFileSync("src/terminal/terminal-pty.ts", "utf8");
+  assert.match(pty, /workspaceForSession/, "업그레이드는 헤더를 못 싣는다 — 정본 복원이 없으면 secondary attach 가 가짜 4410");
+});
+
+test("★ M1/M6 — apiUrl 이 lvly_ws 를 싣고, 훅·프록시가 세션 신호를 싣는다", () => {
+  const net = readFileSync("web/lib/net.ts", "utf8");
+  assert.match(net, /lvly_ws=/, "M1: URL 로 가는 요청(SSE·iframe)의 유일한 신호");
+  const preload = readFileSync("kit/hooks/session-preload.mjs", "utf8");
+  assert.match(preload, /SCOPE_HDRS/, "M6: 주입 훅이 무신호면 primary 컨텍스트('다온')가 주입된다");
+  assert.match(readFileSync("kit/cli/lively-mcp-gateway.mjs", "utf8"), /x-lively-session/, "M6: MCP 프록시");
 });
 
 // ── H. 배선 구조 잠금(소스) ─────────────────────────────────────────────────

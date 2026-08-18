@@ -11,7 +11,7 @@ import { itemsPool } from "./db/client.js";
 import { buildToolCandidates, registry } from "./capabilities/index.js";
 import { installTenantBinding } from "./db/tenant-binding-boot.js";
 import { tenantContextMiddleware } from "./org/tenant-middleware.js";
-import { lookupWorkspace } from "./org/tenancy/registry.js";
+import { lookupWorkspace, workspaceForSession } from "./org/tenancy/registry.js";
 import { setToolCandidates } from "./mcp/mcp-surface.js";
 import { finishConsent, abandonConsent } from "./org/credentials/oauth-broker.js";
 import { buildInstallBundle } from "./org/delivery/publish.js";
@@ -67,7 +67,7 @@ const app = express();
 //  DB 를 쓴다. `LIVELY_TENANT_HEADER_SECRET` 이 없으면 아무것도 하지 않는다(자가호스팅 무회귀).
 //  registry 모드(#1750 셀프호스트 다중 워크스페이스)에서는 x-lively-workspace 헤더를 등록부로 해석한다 —
 //  해석기는 여기서 주입한다(미들웨어 모듈이 스토어를 직접 물면 계층이 꼬인다).
-app.use(tenantContextMiddleware(process.env, lookupWorkspace));
+app.use(tenantContextMiddleware(process.env, lookupWorkspace, workspaceForSession));
 
 // domainmap 웹훅(:7700 시절과 동일 경로) — 반드시 전역 express.json() '이전'에 마운트:
 // HMAC 은 정확한 raw bytes 대상이라 JSON 파서가 스트림을 먼저 소비하면 검증이 영원히 실패한다.

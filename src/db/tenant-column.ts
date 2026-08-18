@@ -40,6 +40,8 @@ export const TENANT_COLUMN_EXEMPT: ReadonlySet<string> = new Set([
   //  필수(안 하면 공용 DB 게이트가 프로비저닝을 fail-closed 로 막는다).
   "gw_workspace",
   "gw_workspace_member",
+  "gw_session_map", // 세션→워크스페이스 정본(#1750 후속) — 컨텍스트를 열기 **전에** 읽는 표라 테넌트 축 밖
+
   // #1291 v3 self-rls 의 스코프 전달 표 — **pg_backend_pid() 키** 프로세스 인프라다(각 백엔드가 제 pid 행만
   //  본다). 테넌트 축을 붙이면 PK(pid,kind,key)가 자연키로 판정돼 (tenant_id,…) 재작성이 일어나는데,
   //  이 표의 격리 축은 테넌트가 아니라 pid 라 재작성이 의미 없고 self-rls 의 정책 조인만 흔든다.
