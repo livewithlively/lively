@@ -14,11 +14,25 @@ export const IPC = {
   CHECK_UPDATE: "lively:check-update", // 사람이 누른 '지금 확인' — 자동 6시간 주기와 같은 판정을 쓴다
   APPLY_UPDATE: "lively:apply-update", // 받아 둔 업데이트를 지금 적용 — 앱이 스스로 닫고·설치하고·다시 뜬다(update-policy 머리말)
   CLEANUP_STALE: "lively:cleanup-stale", // Windows: 다른 자리에 남은 옛 설치본 제거 + 바로가기·자동시작을 이 버전으로(win-stale-install.mjs)
+  OPEN_APP: "lively:open-app",         // 라이블리 화면(웹 UI 창)을 연다 — 마법사의 '라이블리 열기'. 준비 안 됐으면 메인이 거절한다
 
   // 메인 → 렌더러 (send, 단방향)
   STATE: "lively:state",               // 상태 스냅샷 갱신
   PROGRESS: "lively:progress",         // reduceProgress 결과
   LOG: "lively:log",                   // { stream:"stderr"|"raw", line }
+};
+
+/**
+ * 웹 UI 창(게이트웨이의 /ui/ 를 싣는 창) ↔ 메인 채널 (#1541 · web-shell.mjs).
+ *  ⚠ 마법사 채널(IPC)과 **다른 preload·다른 접두(`lively-web:`)** 다 — 원격 페이지(웹 UI)에는 설치·노드를 움직이는
+ *  IPC 를 절대 노출하지 않는다(웹 UI 의 XSS 한 방이 이 PC 의 CLI 실행으로 승격되면 안 된다). 여기 둘만 있다:
+ *   BOOT   preload 가 문서 시작 시점에 동기로 받는 값 — { origin, token, appVersion, platform } (web-shell.webBootPayload)
+ *   LOGOUT 웹 UI 의 '로그아웃' 이 데스크톱 로그인(CLI 토큰)까지 끝내도록 — 안 이으면 웹은 localStorage 만 지우고
+ *          다음 창 열기에서 토큰이 다시 주입돼 '로그아웃이 안 된다' 로 보인다
+ */
+export const IPC_WEB = {
+  BOOT: "lively-web:boot",
+  LOGOUT: "lively-web:logout",
 };
 
 /** 렌더러가 요청할 수 있는 작업 — 화이트리스트. 임의 argv 를 렌더러가 만들지 못하게 한다. */

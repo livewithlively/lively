@@ -38,6 +38,15 @@ function hideGate() {
 }
 // ── 로그아웃 — 세션 회수 + 로컬 토큰 제거 → 게이트. (헤더 버튼·강제 비번변경 모달 공용) ──
 async function logout(message) {
+    // 데스크톱 앱 안(#1541 web-shell)이면 이 PC 의 로그인(CLI 토큰)도 함께 끝낸다 — 앱은 창을 열 때마다 그 토큰을 넣어 주므로,
+    //  여기서 localStorage 만 지우면 다음 창 열기에서 도로 로그인돼 '로그아웃이 안 된다' 로 보인다. 브라우저에선 없는 다리라 그대로 지나간다.
+    const desk = window.livelyDesktop;
+    if (desk && typeof desk.logout === 'function') {
+        try {
+            await desk.logout();
+        }
+        catch (_) { /* 앱 쪽 실패는 아래 웹 로그아웃을 막지 않는다 */ }
+    }
     try {
         await fetch(apiUrl('/api/ui/logout'), { method: 'POST' });
     }
