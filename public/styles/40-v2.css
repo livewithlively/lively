@@ -45,10 +45,10 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-empty { font-size: 12.5px; color: var(--muted); line-height: 1.6; margin: 0; padding: 8px 4px; }
 .v2-fine { font-size: 11.5px; color: var(--muted); line-height: 1.6; margin: 10px 0 0; }
 
-.v2-ws { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg, #fff); font: inherit; cursor: pointer; }
-.v2-ws:hover { border-color: var(--line-net-2, #CFE0F7); }
-.v2-ws-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 700; color: var(--ink); }
-.v2-ws-car { font-size: 10px; color: var(--muted-2, #a6b2c8); flex: none; }
+.v2-ws { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding: 5px 7px; border: 1px solid transparent; border-radius: 8px; background: none; font: inherit; text-align: left; cursor: pointer; }
+.v2-ws:hover { background: var(--bg, #fff); border-color: var(--line, #E6ECF5); }
+.v2-ws-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14.5px; font-weight: 700; color: var(--ink); }
+.v2-ws-car { font-size: 10px; color: var(--muted-2, #a6b2c8); flex: none; margin-right: auto; }
 .v2-ws-badge { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 9.5px; letter-spacing: .04em; font-weight: 700; padding: 1px 5px; border-radius: 5px; border: 1px solid transparent; }
 .v2-ws-badge.personal { color: var(--mint-deep, #0FA37E); background: var(--bg-success, #F3FBF8); border-color: #CDEFE3; }
 .v2-ws-badge.team { color: var(--blue); background: var(--bg-tint, #F6FAFF); border-color: var(--line-net-2, #CFE0F7); }
@@ -86,9 +86,13 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 
 /* ── 사이드바 ── */
 .v2-side { background: var(--canvas, #F4F7FC); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
-.v2-side-top { padding: 14px 12px 4px; }
-.v2-logo { display: inline-flex; align-items: center; gap: 8px; font-weight: 800; font-size: 18.5px; letter-spacing: -.45px; color: var(--ink); padding: 6px 9px; border-radius: 9px; text-decoration: none; }
-.v2-logo:hover { background: var(--bg, #fff); }
+/* 좌상단 한 줄 — 브랜드 심볼(=홈) + 워크스페이스 스위처. 워드마크 줄을 따로 두면 조직명이 'Lively' 일 때
+   같은 글자가 두 번 나오고 머리만 196px 를 먹었다(실측) → 141px. */
+.v2-side-top { padding: 12px 10px 6px; display: flex; align-items: center; gap: 9px; }
+.v2-mark { flex: none; width: 30px; height: 30px; border-radius: 9px; background: var(--ink); display: grid; place-items: center; text-decoration: none; }
+.v2-mark:hover { background: var(--blue-deep, #1E54CC); }
+.v2-mark-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--mint-deep, #0FA37E); display: block; }
+.v2-mark:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .v2-liv-btn { margin: 5px 8px 2px; display: flex; align-items: center; gap: 10px; padding: 10px 11px; border-radius: 10px; border: 1px solid transparent; font-weight: 700; font-size: 14.5px; color: var(--ink); text-decoration: none; }
 .v2-liv-btn:hover, .v2-liv-btn.on { background: var(--bg, #fff); border-color: #CDEFE3; }
 .v2-liv-btn .lm { width: 24px; height: 24px; border-radius: 50%; background: var(--bg-success, #F3FBF8); border: 1px solid #CDEFE3; display: grid; place-items: center; color: var(--mint-deep, #0FA37E); font-weight: 800; font-size: 11px; flex: none; }
