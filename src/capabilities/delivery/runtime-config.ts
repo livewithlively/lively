@@ -545,7 +545,7 @@ export const runtimeConfigCapabilities: Capability[] = [
       session_share: z.object({
         enabled: z.boolean(), harnesses: z.array(z.string()), scope: z.enum(["main", "tree"]),
         store: z.enum(["slim", "raw"]), retention_days: z.number(), view_policy: z.enum(["attach", "owner"]),
-      }).partial().optional().describe("세션이력 캡처 정책(#905 C1) — 기본 enabled=false. 관리탭 ▸ 세션 공유"),
+      }).partial().optional().describe("세션이력 캡처 정책(#905 C1/#1752) — 기본 enabled=true(캡처 기본 켬, 명시 false 만 끔). 관리탭 ▸ 세션 공유"),
       hook_relay_decisions: z.array(z.enum(["deny", "defer", "ask", "allow"])).optional()
         .describe("커스텀 훅(PreToolUse)의 결정 중 러너가 하네스로 전파할 값(#892). 기본 deny·ask·defer — 'allow' 는 멤버의 권한 프롬프트를 건너뛰므로 명시 opt-in. 비우면 전파 안 함(게이트 해제)"),
       hook_grace_ms: z.number().int().min(0).max(31_536_000_000).nullable().optional()
