@@ -58,13 +58,31 @@ const codexIo: HarnessSessionAdapter = {
   key: "codex", label: "Codex",
   roots: (homes) => homes.map((h) => path.join(h, ".codex", "sessions")),
   filePattern: /^rollout-.*\.jsonl$/,
-  pathFor: null, parse: null, answer: null, screen: null,
+  pathFor: null, parse: null, answer: null,
+  // 실측 2026-08-18(box-yoon-355e7d10): 업데이트·신뢰 대화상자는 메뉴 꼬리가 공통("Press enter to continue"),
+  // 작업 중엔 "• Working (2s • esc to interrupt)", 준비되면 컴포저 캐럿(›)이 placeholder 와 함께 뜬다.
+  // ⚠ busy 중에도 컴포저(›)가 그려져 있다 — 판정 순서(dialog→busy→ready)가 곧 안전장치다.
+  screen: (tail) => {
+    const s = tail.join("\n");
+    if (/press enter to continue/i.test(s)) return "dialog";
+    if (/esc to interrupt/i.test(s)) return "busy";
+    if (/^\s*›/m.test(s)) return "ready";
+    return null;   // 부팅·로그인 등 미실측 화면 — 보수적으로 기다린다
+  },
 };
 const opencodeIo: HarnessSessionAdapter = {
   key: "opencode", label: "OpenCode",
   roots: () => [],
   filePattern: /\.jsonl$/,
-  pathFor: null, parse: null, answer: null, screen: null,
+  pathFor: null, parse: null, answer: null,
+  // 실측 2026-08-18(box-yoon-3e231912): 작업 중엔 상태바에 "esc interrupt"(1차 Esc 후엔 "esc again to interrupt"),
+  // 준비되면 그 자리가 cwd 로 바뀌고 "ctrl+p commands" 는 늘 있다 — 그래서 busy 를 먼저 보고 ready 를 본다.
+  screen: (tail) => {
+    const s = tail.join("\n");
+    if (/esc (again to )?interrupt/i.test(s)) return "busy";
+    if (/ctrl\+p commands/i.test(s)) return "ready";
+    return null;
+  },
 };
 // 셸 세션 — AI 없음. 대화 파일도 승인도 없다.
 const shellIo: HarnessSessionAdapter = {
