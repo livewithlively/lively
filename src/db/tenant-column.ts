@@ -32,7 +32,15 @@ export const TENANT_DEFAULT_EXPR =
   `COALESCE(current_setting('app.tenant_id', true), '${SINGLE_TENANT_ID}')::uuid`;
 
 /** 검사·변경에서 제외 — 테넌트 축이 없는 것이 정상인 테이블. */
-export const TENANT_COLUMN_EXEMPT: ReadonlySet<string> = new Set(["schema_migrations"]);
+export const TENANT_COLUMN_EXEMPT: ReadonlySet<string> = new Set([
+  "schema_migrations",
+  // #1750 S1 — 셀프호스트 워크스페이스 등록부: "이 배포에 어떤 워크스페이스가 있나"라는 배포 전체의
+  //  사실이라 테넌트 축 위에 놓을 수 없다(자기 자신을 못 찾는 부트스트랩 순환). 매니지드의 CP
+  //  tenants/workspaces 테이블에 해당하는 코어판. ⚠ lvly-cloud tenantrls.RLS_EXEMPT_TABLES 에도 등재
+  //  필수(안 하면 공용 DB 게이트가 프로비저닝을 fail-closed 로 막는다).
+  "gw_workspace",
+  "gw_workspace_member",
+]);
 
 function qi(name: string): string {
   if (!/^[A-Za-z_][A-Za-z0-9_$]*$/.test(name)) throw new Error(`안전하지 않은 식별자: ${name}`);

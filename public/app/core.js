@@ -61,7 +61,7 @@ async function logout(message) {
 export { hideGate, logout, showGate };
 // ── 배럴 재수출(호출부 무변경 계약) ─────────────────────────────────────────────
 //  네트워크(R29a) — 토큰 키·API 베이스·인증 fetch.
-export { TOKEN_KEY, api, apiUrl, appUrl } from './lib/net.js';
+export { TOKEN_KEY, api, apiUrl, appUrl, currentWorkspace, setCurrentWorkspace } from './lib/net.js';
 //  DOM 프리미티브 — el/sv 로만 화면을 짓는다(innerHTML 금지 불변식의 물리적 근거).
 export { $view, applyReveal, el, interleave, reducedMotion, sv } from './lib/dom.js';
 //  제자리 갱신이 스크롤을 옮기지 않게(#1635) — busy(비우는 동안 높이 예약) · keepSideScroll(사이드바 자체 스크롤).

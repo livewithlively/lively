@@ -23,6 +23,7 @@ import { initOAuthServer } from "./schema/oauth.js";
 import { initCanary } from "./schema/canary.js";
 import { initPromotion } from "./schema/promotion.js";
 import { initNodeSessionMap } from "./schema/node-session-map.js";
+import { initWorkspaceRegistry } from "./schema/workspace-registry.js";
 
 export async function initOrgSchema(): Promise<void> {
   await initOrgCore(itemsPool);                    // org_profile·org_member·org_content_audit·mcp_call_log·auth_token
@@ -51,5 +52,6 @@ export async function initOrgSchema(): Promise<void> {
   await initManagerRegistry(itemsPool);            // org_manager(+finding — 관리기 4종: 어긋남·아웃데이티드·모순·코드괴리)
   await initPromotion(itemsPool);                  // #1750: org_promotion_request(개인→팀 워크스페이스 승격 요청 큐) — 맨 끝(신규 조각 규약)
   await initNodeSessionMap(itemsPool);             // #1752 갭2: org_node_session_map(노드 세션 box-id↔대화 uuid) — 맨 끝(신규 조각 규약)
+  await initWorkspaceRegistry(itemsPool);          // #1750 S1: gw_workspace(+member) — 셀프호스트 다중 워크스페이스 등록부(전역 — 테넌트화 제외)
   // (org_memory/org_content → knowledge_unit 1회복사 폐기 2026-06-24 — 원본 DROP, 복사 완료·v6 컷오버.)
 }

@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
-import { InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import { InvalidTokenError, InsufficientScopeError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import type { LivelyUser } from "../context.js";
 import { verifyDbToken } from "../org/store.js";
+import { workspaceAccessAllowed } from "../org/tenancy/gate.js";
 import { isScope, DANGEROUS_SCOPES, type Scope } from "./scopes.js";
 import { isOwnResource } from "./resource-id.js";
 import { logger } from "../log.js";
@@ -52,6 +53,14 @@ function sanitizeStaticTokens(table: TokenTable): TokenTable {
   return table;
 }
 
+// 워크스페이스 게이트(#1750) — 인증이 수렴하는 두 지점 중 bearer 쪽. 토큰 자체는 박스 전역으로 유효하므로
+//  401(InvalidToken)이 아니라 403(InsufficientScope)이다 — "네가 아닌 게 아니라, 여기 멤버가 아니다".
+async function assertWorkspaceMember(memberId: string): Promise<void> {
+  if (!(await workspaceAccessAllowed(memberId))) {
+    throw new InsufficientScopeError("not a member of this workspace");
+  }
+}
+
 function authInfo(user: LivelyUser, token: string, over?: { expiresAt?: number | null; resource?: string | null }): AuthInfo {
   // SDK 의 requireBearerAuth 는 expiresAt 을 **필수**로 본다(없으면 'Token has no expiration time' 401).
   //  만료 없는 종전 토큰은 여기서 1년짜리 합성값을 주고, OAuth 발급분(짧은 수명)은 DB 값을 그대로 쓴다.
@@ -84,7 +93,10 @@ export class BearerVerifier {
     // 1) 정적 테이블(AUTH_TOKENS_JSON) — 회수 불가 토큰. tokenSource:'static' 으로 표시해
     //    admin/runtime 행위를 거부한다(B5: revoke 안 되는 토큰으로 fleet 코드/정책 변경 금지).
     const staticUser = this.tokens[token];
-    if (staticUser) return authInfo({ ...staticUser, tokenSource: "static" }, token);
+    if (staticUser) {
+      await assertWorkspaceMember(staticUser.userId); // 워크스페이스 게이트(#1750) — secondary 는 명부 필수
+      return authInfo({ ...staticUser, tokenSource: "static" }, token);
+    }
     // 2) DB 토큰(auth_token) — 'lvk_' prefix 만 조회(정적 토큰은 DB hit 회피). revoke 시 즉시 무효.
     //    tokenHashPrefix 는 감사 상관추적용(회수 대상 즉시 특정 — 비밀 아님).
     if (token.startsWith("lvk_")) {
@@ -97,6 +109,8 @@ export class BearerVerifier {
             "다른 자원서버 앞으로 발급된 토큰 거부(audience 불일치)");
           throw new InvalidTokenError("token audience does not match this resource server");
         }
+        // 워크스페이스 게이트(#1750) — 토큰은 유효하되 이 워크스페이스의 멤버가 아니면 403.
+        await assertWorkspaceMember(dbUser.userId);
         const { clientId, resource, expiresAt, ...identity } = dbUser;
         return authInfo(
           {

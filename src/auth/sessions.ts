@@ -4,6 +4,7 @@
 import crypto from "node:crypto";
 import { itemsPool } from "../db/client.js";
 import { isScope } from "./scopes.js";
+import { workspaceAccessAllowed } from "../org/tenancy/gate.js";
 import type { LivelyUser } from "../context.js";
 
 const sha256 = (s: string): string => crypto.createHash("sha256").update(s).digest("hex");
@@ -42,6 +43,9 @@ export async function userFromSession(sessionId: string): Promise<LivelyUser | n
     const row = r.rows[0] as { member_id: string; email: string | null; state: string; scopes: unknown } | undefined;
     if (!row) return null;
     if (row.state !== "active") return null; // 비활성 멤버 → 세션 무효(즉시 차단)
+    // 워크스페이스 게이트(#1750) — secondary 컨텍스트면 명부에 있어야 한다. 세션 자체는 박스 전역이라
+    //  유효하지만, "이 워크스페이스에서의" 인증으로는 실패시킨다(=401, 남의 개인 ws 는 존재도 안 보인다).
+    if (!(await workspaceAccessAllowed(row.member_id))) return null;
     const scopes = Array.isArray(row.scopes)
       ? (row.scopes as unknown[]).filter((x): x is string => typeof x === "string").filter(isScope)
       : [];

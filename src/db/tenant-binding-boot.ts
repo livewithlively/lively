@@ -18,12 +18,13 @@
 //  통째로 남의 데이터를 만지게 된다. 그건 500 보다 나쁘다 — 아예 뜨지 않는 게 맞다.
 
 import { installTenantResolver } from "./client.js";
+import { SINGLE_TENANT_ID } from "./tenant-column.js";
 import { currentTenant } from "../org/tenant-context.js";
 import { installTenantSlugResolver } from "../terminal/catalog.js";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export type BindingMode = "off" | "fixed" | "request";
+export type BindingMode = "off" | "fixed" | "request" | "registry";
 
 /** 설정에서 모드를 읽는다(순수). 값이 이상하면 off 가 아니라 **던진다** — 조용히 안 켜지면 유출이다. */
 export function resolveBindingMode(env: NodeJS.ProcessEnv = process.env): { mode: BindingMode; tenantId?: string } {
@@ -31,6 +32,12 @@ export function resolveBindingMode(env: NodeJS.ProcessEnv = process.env): { mode
   if (!raw || raw === "off") return { mode: "off" };
   if (raw !== "rls") throw new Error(`LIVELY_TENANT_BINDING 값이 잘못됐습니다: ${raw} (rls 또는 미설정)`);
 
+  // registry(#1750 S1) — 셀프호스트 다중 워크스페이스. request 와 같은 요청별 컨텍스트지만 **폴백이 다르다**:
+  //  컨텍스트 없음 = primary(기존 박스 워크스페이스). request(매니지드 공유 게이트웨이)의 "없으면 null → 정책 오류"
+  //  규약을 여기 적용하면 부팅 하우스키핑·크론·커넥터 싱크 등 컨텍스트 밖 경로 전부가 죽는다 — 셀프호스트에서
+  //  그 경로들은 전부 primary 의 일이 맞다(종전 단일 워크스페이스와 동일 동작 = 하위호환의 핵심).
+  //  폴백이 "조용히 남의 데이터"가 아닌 이유: primary 는 남이 아니라 **종전의 그 워크스페이스 자신**이다.
+  if ((env.LIVELY_TENANCY_MODE || "").trim().toLowerCase() === "registry") return { mode: "registry" };
   const fixed = (env.LIVELY_TENANT_ID || "").trim();
   if (!fixed) return { mode: "request" };
   if (!UUID_RE.test(fixed)) {
@@ -58,6 +65,10 @@ export function installTenantBinding(env: NodeJS.ProcessEnv = process.env): stri
     const id = r.tenantId!;
     installTenantResolver(() => id);
     return `테넌트 바인딩: 고정(${id.slice(0, 8)}…) — 공용 DB, 이 프로세스는 테넌트 하나를 서비스한다`;
+  }
+  if (r.mode === "registry") {
+    installTenantResolver(() => currentTenant()?.id ?? SINGLE_TENANT_ID);
+    return "테넌트 바인딩: 등록부(셀프호스트 다중 워크스페이스) — 컨텍스트 없으면 primary";
   }
   // request 모드 — 요청 스코프 컨텍스트를 읽는다. 컨텍스트가 없으면 null 을 주고(던지지 않는다),
   //  막는 주체는 DB 정책이다(`''::uuid` 오류). 자세한 이유는 client.ts 의 tenantBindingSql 주석 참조.

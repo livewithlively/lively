@@ -6,7 +6,10 @@
 //   · DB_BOOT_STEPS 전체 — ITEMS_DATABASE_URL 없으면 체인 자체를 돌리지 않는다(종전 if 블록과 동일).
 import type express from "express";
 import type { Server } from "node:http";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import type { BearerVerifier } from "../auth/bearer.js";
+import { registryModeActive } from "../org/tenancy/state.js";
 import { itemsPool } from "../db/client.js";
 import { reapDeviceAuth } from "../org/auth/device-auth.js";
 import { reapOAuth } from "../org/store/oauth.js";
@@ -43,6 +46,25 @@ import { logger } from "../log.js";
 //  배경(왜 게이트인가)은 'scheduler' 스텝 원문 주석 참조.
 const schedulerEnabled = (): boolean => process.env.LIVELY_NO_SCHEDULER !== "1";
 
+// ── registry 모드 스키마 초기화 자식(#1750 S1) — 소유자 자격으로 DDL 을 치는 별도 프로세스. ──
+//  이 프로세스(앱 role)는 스키마를 소유하지 않는다. 자식은 boot/schema-init-child.js 를 소유자 DSN 으로
+//  실행한다: initAllSchemas → ensureSelfRls → ensureTenantPolicies(새 코어 릴리스의 신규 테이블도 정책을
+//  갖고 태어난다 — 이게 없으면 새 테이블은 전 워크스페이스에 보인다). stdio 상속 = 스키마 로그가 부팅
+//  로그에 그대로 실린다(종전 in-process 와 같은 가시성).
+function runSchemaInitChild(): Promise<void> {
+  const ownerDsn = (process.env.LIVELY_OWNER_DATABASE_URL || "").trim();
+  if (!ownerDsn) return Promise.reject(new Error("LIVELY_OWNER_DATABASE_URL 이 없습니다 — tenancy-env 배선이 깨졌습니다"));
+  const env: NodeJS.ProcessEnv = { ...process.env, ITEMS_DATABASE_URL: ownerDsn };
+  delete env.LIVELY_TENANT_BINDING; delete env.LIVELY_TENANCY_MODE; delete env.LIVELY_OWNER_DATABASE_URL;
+  const entry = fileURLToPath(new URL("./schema-init-child.js", import.meta.url));
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [entry], { env, stdio: "inherit" });
+    child.on("error", reject);
+    child.on("exit", (code) => code === 0 ? resolve()
+      : reject(new Error(`스키마 초기화 자식 실패(exit ${code}) — 소유자 DSN·정책 보장 로그를 확인하세요`)));
+  });
+}
+
 /**
  * 이 프로세스가 **여러 워크스페이스를 요청별로** 서비스하는가(#1437 v1 5단계).
  *
@@ -56,10 +78,16 @@ const schedulerEnabled = (): boolean => process.env.LIVELY_NO_SCHEDULER !== "1";
  *  "누구의 것인지 모르는 정리 작업"이 된다.
  *
  * 판정: 바인딩이 rls 인데 고정 테넌트가 없다 = 요청별 모드.
+ *
+ * ⚠ registry(#1750 셀프호스트 다중 워크스페이스)는 **제외한다** — 같은 요청별 컨텍스트지만 폴백이
+ *  다르다(컨텍스트 없음 = primary). 하우스키핑의 컨텍스트 밖 DB 작업은 전부 primary 의 일로
+ *  떨어지며, 그게 종전 단일 워크스페이스와 동일 동작이다(하위호환의 핵심). 매니지드 request 모드의
+ *  "누구의 것인지 모르는 정리 작업" 문제가 registry 에는 없다.
  */
 const requestScopedTenancy = (): boolean =>
   (process.env.LIVELY_TENANT_BINDING || "").trim().toLowerCase() === "rls"
-  && !(process.env.LIVELY_TENANT_ID || "").trim();
+  && !(process.env.LIVELY_TENANT_ID || "").trim()
+  && !registryModeActive();
 
 // 저장소·감사로그 정책 로더는 org/policies/runtime-loaders 로 수렴(#1313 R46 — terminal/sessions.ts 의 인라인
 //  람다와 byte-identical 복붙이었다). index.ts 가 여기서 loadStoragePolicy 를 받아가므로 재수출로 표면을 유지한다.
@@ -96,10 +124,14 @@ export const LISTEN_STEPS: BootStep[] = [
 //    뒤 스텝은 돌지 않는다(runBootHousekeeping 의 단일 catch — 종전 체인 말미 .catch 와 동일 시맨틱). ──
 export const DB_BOOT_STEPS: BootStep[] = [
   // 스키마 직렬 체인(item→org→domainmap→v6) — 순서 규약·원문 주석은 boot/schemas.ts(단일 출처).
-  { name: "schemas", gate: "always", run: () => initAllSchemas() },
+  //  ★ registry 모드(#1750 셀프호스트 다중 워크스페이스)에서는 **자식 프로세스**로 돈다: 이 프로세스는
+  //   앱 role(lvly_app, DDL 불가)로 붙어 있어 여기서 DDL 을 치면 42501 로 부팅이 죽는다. 자식은
+  //   LIVELY_OWNER_DATABASE_URL(소유자)로 붙어 스키마 + 신규 테이블 정책 보장까지 하고 끝난다.
+  { name: "schemas", gate: "always", run: () => registryModeActive() ? runSchemaInitChild() : initAllSchemas() },
   // #1291 v3 — self 소스 행 단위 공개범위(롤·스코프테이블·정책). v6 스키마 뒤여야 대상 테이블이 존재한다.
   //  실패해도 부팅을 막지 않는다(그 경우 self 는 v2 처럼 '잠긴 맥락이 있으면 닫힘'으로 폴백).
-  { name: "self-rls", gate: "always", run: () => ensureSelfRls().then((ok) => logger.info({ rowLevel: ok }, "self 소스 공개범위 준비됨")) },
+  //  registry 모드에선 자식(schema-init-child)이 소유자로 이미 돌렸다 — 여기서 또 하면 DDL 권한 오류만 난다.
+  { name: "self-rls", gate: "always", run: () => registryModeActive() ? Promise.resolve() : ensureSelfRls().then((ok) => logger.info({ rowLevel: ok }, "self 소스 공개범위 준비됨")) },
   // 프로비저닝 디폴트 콘텐츠 시딩(#713) — 코드가 이름으로 전제하는 지식·훅·스킬(예: 모든 프로젝트 AGENTS.md 가
   //  가리키는 project-closeout 스킬(#878), 도메인맵 is-부트스트랩 런북 2개, 커스텀훅·스킬)을 신규 게이트웨이에
   //  idempotent 주입한다(없을 때만 — 운영자 토글·편집 보존). org(훅·스킬)+v6(지식) 스키마가 모두 준비된 뒤. 비치명.

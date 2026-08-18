@@ -66,7 +66,12 @@ export function tenantSlug(): string | null {
  * 템플릿이 없거나 컨텍스트가 없으면 null → 종전 경로.
  */
 function tenantRootBase(): string | null {
-  const tpl = process.env.LIVELY_TENANT_ROOT_TEMPLATE;
+  // 셀프호스트 registry(#1750 S3) — 템플릿 미설정이면 홈 아래 기본 자리로 워크스페이스별 파일루트를 가른다.
+  //  primary 는 slug 가 없어 여기 안 걸린다(= 종전 경로 그대로, 기존 파일 무회귀). DB 만 갈라지고 파일이
+  //  섞이면 파일 탐색기에서 곧바로 남의 파일이 보인다 — 그래서 기본값이 있어야 한다(옵트인이 아니라).
+  const tpl = process.env.LIVELY_TENANT_ROOT_TEMPLATE
+    || ((process.env.LIVELY_TENANCY_MODE || "").trim().toLowerCase() === "registry"
+      ? path.join(os.homedir(), "lively", "workspaces", "{slug}") : "");
   if (!tpl || !tpl.includes("{slug}")) return null;
   const slug = tenantSlug();
   if (!slug) return null;

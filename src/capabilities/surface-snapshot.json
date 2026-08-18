@@ -1819,6 +1819,76 @@
   "input_hash": "506dd5f406adefed"
  },
  {
+  "name": "workspace_registry_status",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/workspaces"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "workspace_activate",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/org/workspaces/activate"
+  ],
+  "input_hash": "ef78fb83efebfe4b"
+ },
+ {
+  "name": "workspace_create",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/workspaces"
+  ],
+  "input_hash": "5d2637258aad5196"
+ },
+ {
+  "name": "workspace_update",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/workspaces/update"
+  ],
+  "input_hash": "f62e557908759772"
+ },
+ {
+  "name": "workspace_delete",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/workspaces/delete"
+  ],
+  "input_hash": "d025bde5d0cd2ee4"
+ },
+ {
+  "name": "workspace_member_add",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/workspaces/members/add"
+  ],
+  "input_hash": "7a13e02f9ef818f2"
+ },
+ {
+  "name": "workspace_member_remove",
+  "scope": "memory",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/workspaces/members/remove"
+  ],
+  "input_hash": "de9c8a98f1ec1cd9"
+ },
+ {
   "name": "activity_log",
   "scope": "memory",
   "mcp": true,

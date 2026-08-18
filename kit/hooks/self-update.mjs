@@ -239,6 +239,7 @@ function reconcileOneClaudeConfig(cj, gw, token) {
         Authorization: `Bearer ${token}`,
         "x-lively-session": "${LIVELY_SESSION_ID:-}",  // #852
         "x-lively-mode": "${LIVELY_MODE:-}",           // #1007+ 단일 실행모드 헤더(readonly|incognito) — 미래 모드도 재등록 불요
+        "x-lively-workspace": "${LVLY_TENANT_SLUG:-}", // #1750 S3 — 셀프호스트 다중 워크스페이스 소속(없으면 primary)
       } };
   want["lively-local"] = { type: "stdio", command: shim, args: ["mcp-local"], env: {} };
   // 조직 추가 MCP 서버(mcp-servers.json) — [] 또는 {servers:[]} 양식 모두 허용. enabled·name 있는 것만, additive.

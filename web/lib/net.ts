@@ -43,11 +43,25 @@ function setUnauthorizedHandler(fn: UnauthorizedHandler | null): void {
   onUnauthorized = fn;
 }
 
+// ── 워크스페이스 선택(#1750 S2) — 셀프호스트 다중 워크스페이스의 클라이언트 축. ──
+//  선택은 localStorage 에 산다(탭·새로고침 유지). 'primary'/미선택이면 헤더를 아예 안 붙인다 —
+//  구 게이트웨이(registry 모드 아님)에 미지 헤더를 보내지 않는 무회귀이자, primary = 무컨텍스트 규약과 일치.
+const WORKSPACE_KEY = 'lively.workspace';
+function currentWorkspace(): string {
+  try { return (localStorage.getItem(WORKSPACE_KEY) || '').trim().toLowerCase(); } catch (_) { return ''; }
+}
+function setCurrentWorkspace(slug: string): void {
+  const s = (slug || '').trim().toLowerCase();
+  try { if (!s || s === 'primary') localStorage.removeItem(WORKSPACE_KEY); else localStorage.setItem(WORKSPACE_KEY, s); } catch (_) { /* 프라이빗 모드 등 — 선택이 세션 한정이 될 뿐 */ }
+}
+
 // ── fetch 헬퍼 — 401 은 토큰 폐기 + 주입된 처리기, 그 외 비정상은 {error} 메시지로 throw ──
 async function api(path: string, opts: any = {}): Promise<any> {
   const token = localStorage.getItem(TOKEN_KEY);
   const headers: any = Object.assign({}, opts.headers);
   if (token) headers['Authorization'] = 'Bearer ' + token;
+  const ws = currentWorkspace();
+  if (ws && ws !== 'primary') headers['x-lively-workspace'] = ws;
   if (opts.body) headers['Content-Type'] = 'application/json';
   const res = await fetch(apiUrl(path), Object.assign({}, opts, { headers }));
   if (res.status === 401) {
@@ -57,6 +71,13 @@ async function api(path: string, opts: any = {}): Promise<any> {
   }
   let data: any = null;
   try { data = await res.json(); } catch (_) { /* 빈 바디 허용 */ }
+  // 선택한 워크스페이스가 사라졌다(보관·오타) — 갇히지 않게 선택을 지우고 primary 로 복귀한다(1회 리로드).
+  //  루프 안전: 지운 뒤에는 헤더가 안 붙으므로 재발하지 않는다. 일반 404(자원 없음)와는 메시지로 가른다.
+  if (res.status === 404 && ws && data && typeof data.message === 'string' && data.message.indexOf('워크스페이스') === 0) {
+    setCurrentWorkspace('');
+    location.reload();
+    const eGone: any = new Error(data.message); eGone.status = 404; throw eGone;
+  }
   if (!res.ok) {
     const e: any = new Error((data && data.error) || ('요청 실패 (' + res.status + ')'));
     e.status = res.status;
@@ -74,4 +95,6 @@ export {
   apiUrl,
   appUrl,
   setUnauthorizedHandler,
+  currentWorkspace,
+  setCurrentWorkspace,
 };

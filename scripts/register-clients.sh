@@ -28,7 +28,8 @@ else
   claude mcp add --transport http --scope user "$MCP_LABEL" "$STORE_URL" \
     --header "Authorization: Bearer ${LIVELY_TOKEN}" \
     --header 'x-lively-session: ${LIVELY_SESSION_ID:-}' \
-    --header 'x-lively-mode: ${LIVELY_MODE:-}'
+    --header 'x-lively-mode: ${LIVELY_MODE:-}' \
+    --header 'x-lively-workspace: ${LVLY_TENANT_SLUG:-}'
   echo "  ✓ ${MCP_LABEL} (http 직결 — 프록시 미설치/롤백)"
 fi
 
@@ -80,7 +81,8 @@ cat <<EOF
       "url": "${STORE_URL}",
       "headers": {
         "Authorization": "Bearer \${LIVELY_TOKEN}",
-        "x-lively-mode": "\${LIVELY_MODE:-}"
+        "x-lively-mode": "\${LIVELY_MODE:-}",
+        "x-lively-workspace": "\${LVLY_TENANT_SLUG:-}"
       }
     }
   }
