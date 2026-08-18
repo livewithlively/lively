@@ -22,7 +22,6 @@ import { api, apiUrl, TOKEN_KEY, anchoredPopover, el, toast } from './core.js';
 import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
 import { toolLabel } from './session-tool-labels.js';
 import { classifyToolUse, type TrailWidget } from './session-trail.js';
-import { makeSplitter } from './v2/split.js';
 import { effortKo, findHarness, flagChoices, prettyModel, providerLabel, runCatalog, type RunHarness } from './v2/run-picker.js';
 
 export interface SessionChatTarget {
@@ -84,7 +83,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const stateEl = el('span', { class: 'sc-state' });
   const titleEl = el('b', { class: 'sc-title', text: target.label });
   const idxBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '목차', title: '질문 목차', onclick: () => openIndex() }) as HTMLButtonElement;
-  const termBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '터미널', title: '터미널로 보기(승인 대화상자 등은 터미널이 맞을 때가 있어요)', onclick: () => toggleTerminal() }) as HTMLButtonElement;
+  // 상민님 지시(2026-08-18): 대화 인터페이스가 아직 미완성이라 **터미널이 기본**, 대화는 '베타' 뱃지를 달고 버튼 뒤에 둔다.
+  const modeBtn = el('button', { class: 'btn-text sc-act', type: 'button', onclick: () => setMode(mode === 'term' ? 'chat' : 'term') }) as HTMLButtonElement;
+  const chatBadge = el('span', { class: 'sc-beta', text: '베타', hidden: true, title: '대화 인터페이스는 베타예요 — 표시가 어긋나면 터미널로 보세요' });
   // 프로젝트 소속(#1749) — 붙었으면 프로젝트 링크 + [▾](바꾸기), 아니면 [프로젝트 연결] 버튼(검색 드롭다운). 내 세션에서만 바꿀 수 있다.
   //  update() 가 되그린다(소속은 화면이 열린 뒤에도 바뀐다).
   const projEl = el('span', { class: 'sc-proj' });
@@ -104,7 +105,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   paintProject();
   const head = el('div', { class: 'sc-head' },
     el('div', { class: 'sc-head-l' },
-      dot, titleEl,
+      dot, titleEl, chatBadge,
       el('span', { class: 'sc-meta' },
         stateEl, el('span', { class: 'sc-sep', text: '·' }),
         projEl,
@@ -112,7 +113,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         target.node ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { text: String(target.node) })] : null)),
     el('div', { class: 'sc-head-r' },
       idxBtn,
-      opts.terminalSrc && isBox ? termBtn : null,
+      opts.terminalSrc && isBox ? modeBtn : null,
       el('button', { class: 'btn-text sc-act', type: 'button', text: '링크', title: '이 세션 링크 복사', onclick: async () => { try { await navigator.clipboard.writeText(location.href); toast('링크를 복사했습니다.'); } catch { window.prompt('이 링크를 복사하세요:', location.href); } } }),
       opts.openHref ? el('a', { class: 'btn-text sc-act', href: opts.openHref, target: '_blank', rel: 'noopener', text: '새 탭 ↗' }) : null));
 
@@ -120,10 +121,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const termHost = el('div', { class: 'sc-term', hidden: true });
   const waitBar = el('div', { class: 'sc-wait', hidden: true });
   const wrap = el('div', { class: 'sc-wrap' }, head, waitBar, chatHost) as HTMLElement;
-  // 터미널은 대화 **아래**에 붙는다(둘 다 보인다) — 사이 경계는 끌어서 조정(#1719 '수평 경계').
-  const termSplit = makeSplitter({ axis: 'y', key: 'sc-term-h', cssVar: '--sc-term-h', target: wrap, def: 320, min: 120, max: 1200, grow: -1, label: '대화·터미널 경계' });
-  termSplit.hidden = true;
-  wrap.append(termSplit, termHost);
+  wrap.append(termHost);
   host.replaceChildren(wrap);
 
   // 입력칸 아래 바(Claude Desktop 의 '자동 · Opus 5 · 엑스트라' 자리) — 이 세션이 실제로 도는 모드·제공자·모델·추론강도.
@@ -255,7 +253,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         el('span', { class: 'v2-dot wait', 'aria-hidden': 'true' }),
         el('div', { class: 'sc-wait-t' }, el('b', { text: '확인이 필요해요' }), el('span', { text: ' — 세션이 승인이나 선택을 기다리고 있어요. 무엇을 묻는지는 터미널에 떠 있습니다.' })),
         el('div', { class: 'sc-wait-acts' },
-          opts.terminalSrc && isBox ? el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '터미널에서 답하기', onclick: () => toggleTerminal(true) }) : null,
+          opts.terminalSrc && isBox ? el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '터미널에서 답하기', onclick: () => setMode('term') }) : null,
           canKeys() ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', text: '기본 선택으로 답하기', onclick: () => sendKey('approve') }) : null,
           canKeys() ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', text: '거부', onclick: () => sendKey('deny') }) : null));
     }
@@ -272,19 +270,27 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     view.busy(false);
   };
 
-  // 터미널 토글 — 버리지 않는다. 처음 켤 때 한 번 만들고, 그 뒤엔 숨겼다 보였다(WS 를 유지해 즉시 전환).
+  // 화면 모드 — 기본은 **터미널**(상민님 지시 2026-08-18: 대화창이 미완성이라 공 들이기 전엔 터미널이 정답).
+  //  '대화 (베타)' 버튼으로 스왑한다. 스왑이어도 양쪽 다 DOM 에 남는다(터미널 WS·대화 폴링 유지 — 숨겼다 보였다).
+  //  터미널이 없는 세션(노드·기록 전용)은 종전대로 대화가 기본이고 버튼도 없다.
   let termFrame: HTMLIFrameElement | null = null;
-  function toggleTerminal(on?: boolean): void {
-    const show = on ?? termHost.hidden;
-    if (show && !termFrame && opts.terminalSrc) {
+  let mode: 'term' | 'chat' = 'chat';
+  function setMode(m: 'term' | 'chat'): void {
+    if (m === 'term' && (!opts.terminalSrc || !isBox)) m = 'chat';
+    mode = m;
+    if (m === 'term' && !termFrame && opts.terminalSrc) {
       termFrame = el('iframe', { class: 'sc-term-frame', src: opts.terminalSrc, title: '터미널', allow: 'clipboard-read; clipboard-write' }) as HTMLIFrameElement;
       termHost.append(termFrame);
     }
-    termHost.hidden = !show; termSplit.hidden = !show;
-    termBtn.textContent = show ? '터미널 닫기' : '터미널';
-    termBtn.classList.toggle('sc-act-on', show);
-    view.scrollToBottom();
-    if (!show) view.input.focus();
+    wrap.classList.toggle('sc-mode-term', m === 'term');
+    termHost.hidden = m !== 'term';
+    chatHost.hidden = m === 'term';
+    chatBadge.hidden = m !== 'chat';
+    modeBtn.replaceChildren(...(m === 'term'
+      ? [el('span', { text: '대화' }), el('span', { class: 'sc-beta', text: '베타' })]
+      : [el('span', { text: '터미널' })]));
+    modeBtn.title = m === 'term' ? '대화 인터페이스로 보기 — 아직 베타예요' : '터미널로 보기';
+    if (m === 'chat') { view.scrollToBottom(); view.input.focus(); }
   }
 
   // ── 대화 파일 → 대화창 ────────────────────────────────────────────────────────────────
@@ -446,7 +452,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (stuck) {
       pd.state.replaceChildren(
         el('span', { text: '전달 대기 중 — 입력창이 아직 안 떠요. 로그인이 필요한 상태일 수 있어요. ' }),
-        ...(opts.terminalSrc && isBox ? [el('button', { class: 'btn-text dt-qact', type: 'button', text: '터미널 열기', onclick: () => toggleTerminal(true) })] : []));
+        ...(opts.terminalSrc && isBox ? [el('button', { class: 'btn-text dt-qact', type: 'button', text: '터미널 열기', onclick: () => setMode('term') })] : []));
       maybeAutoOpenTerminal();
       return;
     }
@@ -457,9 +463,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let autoTermOpened = false;
   function maybeAutoOpenTerminal(): void {
     if (autoTermOpened || destroyed || !opts.terminalSrc || !isBox) return;
+    if (mode === 'term') { autoTermOpened = true; return; }        // 이미 터미널이 떠 있다 — 로그인 화면이 보인다
     if (curUuid || recs.some((r) => r.evs.length)) return;        // 대화가 보이고 있다 — 알림 줄이면 충분
     autoTermOpened = true;
-    toggleTerminal(true);
+    setMode('term');
     view.setNote('세션이 입력을 못 받고 있어 터미널을 열었어요 — 로그인 등 필요한 단계를 여기서 끝내면 대기 중인 지시가 이어서 들어갑니다.');
   }
   async function outboxAct(pd: Pending, act: 'retry' | 'discard'): Promise<void> {
@@ -570,7 +577,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         : lastErr?.status === 409 ? '이 세션의 대화 파일은 그 컴퓨터에 있어 여기서 바로 읽지 못해요. 첫 턴이 끝나면 중앙 기록으로 보입니다.'
         : `대화 기록을 불러오지 못했습니다. ${lastErr?.message || ''}`;
       view.list.append(el('div', { class: 'livc-open sc-empty' }, el('p', { text: msg }),
-        opts.terminalSrc && isBox ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '터미널로 보기', onclick: () => toggleTerminal(true) }) : null));
+        opts.terminalSrc && isBox ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '터미널로 보기', onclick: () => setMode('term') }) : null));
       paintState();
       // 라이브면 기록이 생기는 순간을 잡는다 — 박스는 파일, 노드는 중앙 기록(uuid 를 알 때만). 못 읽는 하네스면 기다려도 안 온다(폴링 X).
       if (canType() && !unreadable) { src = watch(); if (src) schedule(); }
@@ -834,6 +841,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         el('span', { class: 'sc-idx-n', text: String(i + 1) }), el('span', { class: 'sc-idx-t', text: r.t.text.length > 90 ? r.t.text.slice(0, 90) + '…' : r.t.text }))));
     const close = anchoredPopover(idxBtn, panel);
   }
+
+  setMode('term');   // 기본 = 터미널(터미널 없는 세션은 setMode 가 대화로 되돌린다)
 
   void open();
 
