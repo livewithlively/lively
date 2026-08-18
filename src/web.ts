@@ -41,6 +41,24 @@ import { registerWebhookRoutes } from "./connectors/generic/webhook-routes.js"; 
 const userOf = (req: express.Request): LivelyUser =>
   ((req as unknown as { auth?: { extra?: unknown } }).auth?.extra ?? {}) as unknown as LivelyUser;
 
+const IMMUTABLE = "public, max-age=31536000, immutable";
+
+/** 자산 응답의 Cache-Control 을 고른다 (#1760).
+ *
+ *  `?v=` 는 **캐시 키일 뿐 내용 선택자가 아니다** — 서버는 언제나 그 순간의 디스크 파일을 준다.
+ *  그래서 요청이 든 v 가 지금 빌드버전과 다르면, 그 URL 로 받아 간 것이 **다른 세대와 섞인 조합일
+ *  수 있다**(빌드 도중 스탬프된 HTML, 또는 배포를 넘긴 옛 탭). 그런 응답을 immutable(1년)로 굳히면
+ *  모듈 그래프가 어긋난 채 캐시에 박혀, 사람이 강제 새로고침을 하기 전까지 화면이 백지로 고정된다
+ *  — 실제 사고: v2/main.js(옛것)가 views.js(새것)에서 이미 옮겨간 심볼을 import 해 ESM 로드 실패.
+ *
+ *  그래서 **지금 세대와 일치할 때만** 굳힌다. 불일치는 no-store 로 흘려보내 다음 로드가 새 버전으로
+ *  복구되게 한다(index.html 은 no-store 라 언제나 최신 버전 스탬프를 준다).
+ */
+export function assetCacheControl(reqV: string, currentV: string): string {
+  if (reqV === "") return "no-cache"; // ?v= 없는 직접·구 URL 은 재검증(하위호환)
+  return reqV === currentV ? IMMUTABLE : "no-store";
+}
+
 export function registerWebUi(app: express.Express, verifier: BearerVerifier): void {
   // 세션 쿠키(웹 로그인, scope=멤버 LIVE) OR bearer(에이전트) — 공통 미들웨어(http-auth). 터미널·프로젝트 라우트도 동일 사용.
   const authResolve = sessionOrBearer(verifier);
@@ -335,7 +353,6 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   //   ② HTML 의 로컬 자산 참조 + JS 모듈의 import 그래프 전체에 ?v=<버전> 을 서빙 시점에 주입한다.
   //   ③ ?v= 가 붙은 요청은 immutable 로 서빙 → 내용이 바뀐 자산은 새 URL 이라 무조건 새로 받고(F5 로 충분,
   //   강제 새로고침 불요), 안 바뀐 자산은 재검증 왕복 0(오히려 더 빠름). index.html 은 no-store 라 항상 최신 버전을 참조.
-  const IMMUTABLE = "public, max-age=31536000, immutable";
   // 로컬 자산 = public 최상위 *.{js,mjs,css} + public/app/**(하위 포함) *.{js,mjs} + public/styles/**/*.css.
   //  (fonts/img 는 자체로 거의 불변이라 제외 — 필요 시 확장.)
   //  #1313 R50 — 옛 단일 styles.css 를 화면별 public/styles/*.css 로 분할했다. 이 목록이 곧
@@ -412,13 +429,14 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
     let st: ReturnType<typeof statSync>;
     try { st = statSync(full); } catch { next(); return; } // 없으면 다음(해시라우팅이라 SPA 폴백 불요)
     if (!st.isFile()) { next(); return; }
-    const versioned = typeof req.query.v === "string" && req.query.v.length > 0;
+    // 캐시 정책은 assetCacheControl 참조(#1760) — 지금 세대와 일치하는 ?v= 만 immutable 로 굳힌다.
+    const cacheHdr = assetCacheControl(typeof req.query.v === "string" ? req.query.v : "", assetVersion());
     if (/\.(?:js|mjs)$/.test(full)) {
-      res.setHeader("Cache-Control", versioned ? IMMUTABLE : "no-cache"); // ?v= 없는 직접·구 URL 은 재검증(하위호환)
+      res.setHeader("Cache-Control", cacheHdr);
       res.type("application/javascript; charset=utf-8").send(moduleBody(full, assetVersion())); return;
     }
     if (/\.html?$/.test(full)) { sendHtml(full, res); return; }
-    res.setHeader("Cache-Control", versioned ? IMMUTABLE : "no-cache");
+    res.setHeader("Cache-Control", cacheHdr);
     res.sendFile(full, { cacheControl: false }); return; // cacheControl:false — express 가 우리 헤더를 덮어쓰지 않도록
   };
   app.use("/ui", serveStatic);

@@ -10,8 +10,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && tsc -p web/tsconfig.json && tsc -p web/standalone/tsconfig.json && node scripts/build-node-agent.mjs && node scripts/build-standalone.mjs",
-    "build:web": "tsc -p web/tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/build-web.mjs && tsc -p web/standalone/tsconfig.json && node scripts/build-node-agent.mjs && node scripts/build-standalone.mjs",
+    "build:web": "node scripts/build-web.mjs",
     "start": "node --env-file-if-exists=.env dist/index.js",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit && npm run typecheck:web && npm run typecheck:standalone",
