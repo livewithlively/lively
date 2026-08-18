@@ -687,6 +687,12 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     if (!uuid || uuid.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(uuid)) throw new HttpError(400, "uuid 형식 오류");
     const tp = typeof body.transcript_path === "string" ? body.transcript_path.trim() : "";
     const transcriptPath = tp && tp.length <= 1024 && !tp.includes("\0") && (tp.startsWith("/") || /^[A-Za-z]:[\\/]/.test(tp)) ? tp : null;
+    // ⚠ 소유자 불일치를 **200 으로 답하지 않는다**(2026-08-18 실측) — 훅은 응답 본문이 아니라 HTTP 상태(`r.ok`)로
+    //  성공을 판정해 dedup 플래그(`<box>.<uuid>.mapped`)를 쓴다. 그래서 종전의 `200 {ok:false}` 는 **거부를 성공으로
+    //  기록**해 그 세션을 영구 무매핑으로 굳혔다(재시도 없음 → 대화창이 영영 "기록 없음"). /active 와 동형으로 403.
+    //  레코드 없음은 여기서 안 막는다 — 그건 거부가 아니라 '박스 행이 없다'이고, 바로 아래 노드 경로가 받는다.
+    const st0 = await getSessionState(req.params.id);
+    if (st0 && st0.owner !== idOf(userOf(req))) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
     let ok = await setClaudeSessionId(req.params.id, uuid, idOf(userOf(req)), transcriptPath);
     // #1752 갭2 — 노드 세션은 org_session_state 행이 없어 위가 0행이다. 그 세션이 지금 어느 노드의 것인지
     //  레지스트리(3s push 스냅샷)로 확인되면 전용 매핑(org_node_session_map)에 남긴다 — 이 uuid 가 곧
