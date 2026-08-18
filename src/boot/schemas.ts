@@ -18,6 +18,19 @@ import { logger } from "../log.js";
 // 직렬 체인 — 멱등(부팅마다·단독 CLI 신규 DB 에서도 성립). quiet: run-sync CLI 는 종전대로 무로그(부팅 로그는 유지).
 // v6 그린필드 스키마(category/knowledge/project + 정션) — 레거시 이후 직렬(FK 순서: category→knowledge/project→정션→activity·mapping·debt ALTER).
 export async function initAllSchemas(opts?: { quiet?: boolean }): Promise<void> {
+  // ★★ 스키마를 **소유하지 않는** 프로세스는 여기서 손을 뗀다(#1437 v1 5단계).
+  //
+  // 공유 게이트웨이는 DDL 권한이 없는 role 로 붙는다(RLS 를 우회하지 않으려면 비-슈퍼여야 하고,
+  //  스키마 소유는 별도 마이그레이터 role 이 갖는다). 그 프로세스가 스키마 초기화를 시도하면
+  //  `42501 permission denied for schema public` 로 **부팅이 실패한다** — 실측으로 밟았다.
+  //
+  // 스키마는 마이그레이터가 배포 절차에서 적용한다. 그러니 여기서 건너뛰는 건 "생략"이 아니라
+  //  **소유권을 지키는 것**이다. ⚠ 대신 배포 절차가 마이그레이션을 반드시 돌려야 한다 —
+  //  이 스위치를 켜 두고 마이그레이션을 안 돌리면 새 컬럼이 영영 안 생긴다.
+  if (/^(1|true|yes)$/i.test(process.env.LIVELY_SKIP_SCHEMA_INIT || "")) {
+    if (!opts?.quiet) logger.info("스키마 초기화 건너뜀 — 이 프로세스는 스키마를 소유하지 않는다(LIVELY_SKIP_SCHEMA_INIT)");
+    return;
+  }
   const note = (msg: string): void => { if (!opts?.quiet) logger.info(msg); };
   await initItemSchema();
   note("item schema ready");
