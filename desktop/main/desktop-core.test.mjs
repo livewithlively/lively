@@ -18,6 +18,7 @@ import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
 import { shouldCheckForUpdates, updateFailureNote, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
 import { normalizeBounds, pickBounds, MIN_SIZE, DEFAULT_SIZE, MIN_VISIBLE } from "./window-bounds.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
+import { manifestRefs, manifestProblems, GITHUB_SAFE } from "../verify-update-manifest.mjs";
 import { versionLabel } from "./tray-menu.mjs";
 import { RETRYABLE_KINDS } from "./ipc-contract.mjs";
 import { updateStatusNote } from "./update-policy.mjs";
@@ -924,6 +925,64 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.ok(wf.indexOf("npm ci") < wf.indexOf("GITHUB_REF_NAME#v"), "버전 스탬프가 npm ci 보다 앞에 있다");
     // 스탬프 스텝보다 빌드가 뒤여야 한다 — 앞이면 옛 버전으로 굽는다.
     assert.ok(wf.indexOf("GITHUB_REF_NAME#v") < wf.indexOf("electron-builder --win"), "빌드가 버전 스탬프보다 앞에 있다");
+  });
+}
+
+// ── Z5/Z6. 업데이트 자산 이름 — 매니페스트와 실제 자산이 **같은 이름**이어야 한다 (#1541) ────────
+// 실측(2026-08-18, 사용자 Windows · 앱 0.1.320): "Cannot download …/Lively-Setup-0.1.323.exe, status 404".
+//  자산은 있었다 — `Lively.Setup.0.1.323.exe` 로. NSIS 기본 이름(공백)을 우리가 action-gh-release 로 그대로 올리면
+//  GitHub 이 공백을 점으로 바꾸고, electron-updater 는 latest.yml 의 이름에서 공백을 하이픈으로 바꿔 요청한다.
+//  둘은 영영 못 만난다 → 그 사용자는 영영 업데이트를 못 받는다. 이번엔 그 업데이트가 EINVAL(0.1.321) 수정이라 잠금이었다.
+{
+  const pkg = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"));
+  const wf = readFileSync(fileURLToPath(new URL("../../.github/workflows/release-desktop.yml", import.meta.url)), "utf8");
+  // 패턴 → 예시 이름(electron-builder 매크로 치환). 검사 대상은 리터럴 부분이다.
+  const expand = (pat) => String(pat).replace(/\$\{productName\}/g, "Lively").replace(/\$\{version\}/g, "0.1.0")
+    .replace(/\$\{ext\}/g, "exe").replace(/\$\{arch\}/g, "x64").replace(/\$\{[a-zA-Z]+\}/g, "x");
+
+  t("Z5 ★ NSIS 산출물 이름을 명시한다 — 기본값(공백)이면 GitHub 자산과 latest.yml 이 갈려 404", () => {
+    const name = pkg.build && pkg.build.nsis && pkg.build.nsis.artifactName;
+    assert.ok(name, "nsis.artifactName 이 없다 — electron-builder 기본값은 `${productName} Setup ${version}.${ext}`(공백)이다");
+    assert.ok(!/\s/.test(name), `nsis.artifactName 에 공백: ${name}`);
+    assert.match(expand(name), GITHUB_SAFE, `치환 후 이름에 GitHub 이 바꾸는 문자: ${expand(name)}`);
+    assert.match(expand(name), /\.exe$/, "확장자는 ${ext} 로 끝나야 업데이터가 설치기로 인식한다");
+    // Setup 이 이름에 남아야 한다 — 사람이 릴리스 페이지에서 '설치기'를 알아보는 단서다(mac zip·dmg 와 구분).
+    assert.match(name, /Setup/, "설치기 이름에 Setup 표기가 없다");
+    // mac/linux 는 electron-builder 기본값이 이미 공백 없음(`${productName}-${version}-${arch}.${ext}`) — 덮어썼다면 그것도 안전해야 한다.
+    for (const k of ["mac", "linux", "dmg", "appImage"]) {
+      const v = pkg.build && pkg.build[k] && pkg.build[k].artifactName;
+      if (v) assert.match(expand(v), GITHUB_SAFE, `${k}.artifactName 이 GitHub-불안전: ${v}`);
+    }
+  });
+
+  t("Z6 매니페스트 검증기 — 엣지 표", () => {
+    const files = ["Lively-Setup-0.1.324.exe", "latest.yml", "Lively-0.1.324-arm64-mac.zip", "Lively-0.1.324-arm64.dmg"];
+    // ① 정상: 이름 일치 + 안전 → 문제 없음
+    assert.deepEqual(manifestProblems("version: 0.1.324\nfiles:\n  - url: Lively-Setup-0.1.324.exe\n    sha512: x\npath: Lively-Setup-0.1.324.exe\n", files), []);
+    // ② ★ 이번 사고: 로컬엔 파일이 **있는데** 이름에 공백 — GitHub 이 바꾼다 → 반드시 잡아야 한다
+    const spaced = manifestProblems("path: Lively Setup 0.1.324.exe\n", ["Lively Setup 0.1.324.exe"]);
+    assert.equal(spaced.length, 1, `공백 이름을 못 잡았다: ${JSON.stringify(spaced)}`);
+    assert.match(spaced[0], /공백/);
+    // ③ 매니페스트가 없는 파일을 가리킴(빌드 산출물 이름 ≠ 매니페스트 이름 — 정확히 0.1.323 의 상태)
+    const missing = manifestProblems("path: Lively-Setup-0.1.324.exe\n", ["Lively Setup 0.1.324.exe"]);
+    assert.ok(missing.some((p) => /release\/ 에 없다/.test(p)), JSON.stringify(missing));
+    // ④ 새 헬퍼의 빈 입력: 참조가 0건이면 그 자체가 문제(업데이터가 받을 게 없다) — 통과시키면 안 된다
+    assert.ok(manifestProblems("", files).length >= 1, "빈 매니페스트를 통과시켰다");
+    assert.ok(manifestProblems("version: 0.1.324\n", files).length >= 1, "url/path 없는 매니페스트를 통과시켰다");
+    // ⑤ GitHub 이 바꾸는 다른 문자(괄호·한글) — 공백이 아니어도 잡는다
+    assert.ok(manifestProblems("path: Lively(1).exe\n", ["Lively(1).exe"]).length >= 1);
+    // ⑥ 여러 파일(mac: zip + dmg) 전부 있으면 통과 · 하나만 빠져도 실패
+    const mac = "files:\n  - url: Lively-0.1.324-arm64-mac.zip\n  - url: Lively-0.1.324-arm64.dmg\npath: Lively-0.1.324-arm64-mac.zip\n";
+    assert.deepEqual(manifestProblems(mac, files), []);
+    assert.ok(manifestProblems(mac, files.filter((f) => !/dmg$/.test(f))).length >= 1, "dmg 누락을 못 잡았다");
+    // 파서: url/path 만 읽고 sha512·size 같은 다른 키는 무시한다
+    assert.deepEqual(manifestRefs("path: a.exe\nsha512: b\nfiles:\n  - url: c.exe\n    size: 1\n"), ["a.exe", "c.exe"]);
+    // 배선: 워크플로에 검증 스텝이 **빌드 뒤·업로드 앞**에 있어야 한다 — 없으면 이 함수는 CI 에서 아무것도 안 본다
+    assert.match(wf, /verify-update-manifest\.mjs/, "워크플로에 매니페스트 검증 스텝이 없다");
+    assert.ok(wf.indexOf("electron-builder --win") < wf.indexOf("verify-update-manifest.mjs"), "검증이 빌드보다 앞이다");
+    assert.ok(wf.indexOf("verify-update-manifest.mjs") < wf.indexOf("softprops/action-gh-release"), "검증이 업로드보다 뒤다 — 막을 수 없다");
+    const step = wf.split("verify-update-manifest.mjs")[0].split("- name:").pop();
+    assert.ok(!/continue-on-error:\s*true/.test(step), "검증 스텝이 continue-on-error 라 실패해도 릴리스가 나간다");
   });
 }
 
