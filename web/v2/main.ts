@@ -33,7 +33,7 @@ export async function bootV2(): Promise<void> {
   // 세 칸 사이 경계는 끌어서 조정(#1719) — 사이드바·우패널 너비를 CSS 변수(--v2-side-w/--v2-aside-w)로, 손잡이가 바꾼다(기억됨).
   root.replaceChildren(
     sideEl = el('nav', { class: 'v2-side', 'aria-label': '탐색' }),
-    makeSplitter({ axis: 'x', key: 'side-w', cssVar: '--v2-side-w', target: root, def: 262, min: 180, max: 520, grow: 1, label: '사이드바 너비' }),
+    makeSplitter({ axis: 'x', key: 'side-w', cssVar: '--v2-side-w', target: root, def: 292, min: 200, max: 520, grow: 1, label: '사이드바 너비' }),
     centerEl = el('div', { class: 'v2-main', id: 'v2-main' }),
     makeSplitter({ axis: 'x', key: 'aside-w', cssVar: '--v2-aside-w', target: root, def: 316, min: 240, max: 720, grow: -1, label: '우패널 너비' }),
     asideEl = el('aside', { class: 'v2-aside', 'aria-label': '이 선택의 맥락' }));
