@@ -82,6 +82,40 @@ export async function setClaudeSessionId(id: string, claudeUuid: string, owner: 
   return (r.rowCount ?? 0) > 0;
 }
 
+// ── #1752 갭2 — **노드 세션**의 box-id ↔ 대화 uuid 매핑(org_node_session_map). ──
+//  노드 세션은 org_session_state 행이 없어(노드가 DB 없이 생성) 위 setClaudeSessionId 가 0행 UPDATE 로 끝났다 —
+//  그 순간 훅이 보고한 대화 uuid 가 증발해, 채팅창이 그 세션의 중앙 기록(session_log — 키가 곧 이 uuid)에 못 닿았다.
+//  이 매핑이 있으면: 라이브 노드 세션 = 목록 행에 claudeSessionId 가 실려 채팅창이 중앙 기록으로 폴백하고,
+//  노드가 꺼진 뒤 = 기록 행(session_log)으로 계속 읽힌다. 스키마 근거: org/schema/node-session-map.ts.
+//  owner 가드: 첫 보고자가 owner 로 고정되고, 이후 갱신은 같은 owner 일 때만(남의 box_id 를 가로채 남의 채팅창을
+//  엉뚱한 대화로 보내는 오염 차단 — setClaudeSessionId 의 owner-gate 와 같은 이유). last-write-wins(uuid 변경 시 최신).
+export async function setNodeSessionMap(
+  boxId: string, nodeId: string, convUuid: string, owner: string, transcriptPath?: string | null,
+): Promise<boolean> {
+  const r = await itemsPool.query(
+    `INSERT INTO org_node_session_map(box_id, node_id, conv_uuid, transcript_path, owner, updated_at)
+     VALUES($1,$2,$3,$4,$5,now())
+     ON CONFLICT (tenant_id, box_id) DO UPDATE SET
+       node_id=EXCLUDED.node_id, conv_uuid=EXCLUDED.conv_uuid,
+       transcript_path=COALESCE(EXCLUDED.transcript_path, org_node_session_map.transcript_path), updated_at=now()
+     WHERE org_node_session_map.owner = EXCLUDED.owner`,
+    [boxId, nodeId, convUuid, transcriptPath ?? null, owner],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+// 목록 보강용 일괄 조회 — box_id → {node_id, conv_uuid}. claudeSessionIdsFor(박스 세션)와 짝(노드 세션판).
+export async function nodeSessionMapFor(ids: string[]): Promise<Map<string, { node_id: string; conv_uuid: string }>> {
+  const out = new Map<string, { node_id: string; conv_uuid: string }>();
+  if (!ids.length) return out;
+  const r = await itemsPool.query(
+    "SELECT box_id, node_id, conv_uuid FROM org_node_session_map WHERE box_id = ANY($1::text[])",
+    [ids],
+  );
+  for (const row of r.rows) out.set(String(row.box_id), { node_id: String(row.node_id), conv_uuid: String(row.conv_uuid) });
+  return out;
+}
+
 // #1059 — 사용자 **정상 종료** 표시(claude SessionEnd 훅 보고). setClaudeSessionId 와 **동형**: owner-gated(호출자가 그
 //  box 소유자일 때만) + 레코드 존재 시에만 UPDATE(INSERT 안 함). 재부팅·강제kill·reaper 는 훅이 못 떠서 안 찍히고(중단됨),
 //  이건 사용자가 명시적으로 나간 것만 찍힌다(→ 복원목록에서 '종료됨'으로 구분). 반환 rowCount>0 = 찍힘. best-effort(실패 무해).
