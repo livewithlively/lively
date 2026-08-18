@@ -185,6 +185,16 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-dest-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line-net, #DCE6F5); flex: none; }
 .v2-dest-dot.on { background: var(--blue); }
 .v2-dest-why { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* [시키기] 왼쪽 컨트롤 띠(#1758) — 행선지 칩 + 제공자·모델·추론강도. 좁으면 줄바꿈하고 버튼은 늘 오른끝. */
+.v2-launch-ctl { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; flex: 1; min-width: 0; }
+.v2-run { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+/* 행선지 칩(.v2-dest-chip)과 같은 몸통 — 한 줄에 서는 것들이라 크기·색이 갈리면 줄이 지저분해진다. */
+.v2-run-sel { appearance: none; -webkit-appearance: none; height: 28px; padding: 0 22px 0 10px; border: 1px solid var(--line, #E6ECF5); border-radius: 999px;
+  background-color: var(--bg-tint, #F6FAFF); color: var(--ink-sub, #5A6B85); font: inherit; font-size: 12.5px; max-width: 190px; cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted, #7b879b) 50%), linear-gradient(135deg, var(--muted, #7b879b) 50%, transparent 50%);
+  background-position: calc(100% - 12px) 52%, calc(100% - 8px) 52%; background-size: 4px 4px, 4px 4px; background-repeat: no-repeat; }
+.v2-run-sel:hover:not(:disabled) { border-color: var(--line-net-2, #CFE0F7); background-color: var(--bg, #fff); color: var(--ink); }
+.v2-run-sel:disabled { opacity: .55; cursor: default; }
 .v2-launch-send { flex: none; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 15px; }
 .v2-launch-send kbd { font-family: var(--mono, ui-monospace, monospace); font-size: 11px; opacity: .75; }
 .v2-dest-pop { position: absolute; left: 14px; bottom: 52px; width: min(360px, calc(100% - 28px)); z-index: 30; background: var(--bg, #fff); border: 1px solid var(--line, #E6ECF5); border-radius: 12px; box-shadow: 0 14px 36px rgba(21, 35, 59, .16); padding: 8px; }
