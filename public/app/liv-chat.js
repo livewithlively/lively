@@ -13,7 +13,8 @@
 //
 //  ── 이 화면이 지키는 것 ──
 //  · **답을 기다리는 동안 입력을 막는다.** 턴이 겹치면 대화 이어받기(--resume)가 꼬인다(sendWhileBusy=false).
-//  · 도구 이름은 사람 말로, 모르는 이름은 그대로(틀린 한국어보다 낯선 영어 한 줄이 낫다).
+//  · 도구 이름은 사람 말로, 모르는 이름은 그대로(틀린 한국어보다 낯선 영어 한 줄이 낫다). 연속 도구는 한 줄로 접힌다(desktop 변형).
+//  · 그림은 세션 대화창과 **같은 문법**(desktop) — 한 제품 안에 대화창이 두 모양이면 안 된다.
 import { api, el } from './core.js';
 import { createChatView } from './chat-view.js';
 /**
@@ -94,6 +95,9 @@ export function mountLivChat(host, askHost) {
         toolLabel,
         thinking: 'hide',
         sendWhileBusy: false,
+        // 그림은 세션 대화창과 같은 Claude Desktop 문법(상민님 결정 2026-08-18 — "리브도 desktop 스타일로"): 오른쪽 말풍선·이름표 없는 답·
+        //  연속 도구 한 줄 접힘·✻. #1631 의 '일지' 그림은 chat-view 의 journal 변형으로 남아 있다(한 플래그).
+        style: 'desktop',
         onSend: (text) => sendTurn(text),
         onStop: stopTurn,
         escActive: () => document.body.dataset.route === 'liv' || !!document.body.dataset.ui,
