@@ -5,41 +5,13 @@
 //  시각 재료는 전부 UI 가 생성한다(오로라·워터마크·아이콘) — 사진 업로드 없음.
 import { api, busy, el, errorNote, relTime, state } from './core.js';
 import { skeletonRows } from './learn.js';
-import { hasMemoryScope, isCategoryHomeDoc, knFetchCategoryIndex } from './wiki-data.js';
-import { wkAurora, wkDayLabel, wkDocCard, wkEmpty, wkReadVisits, wkSection } from './wiki-ui.js';
+import { hasMemoryScope, isCategoryHomeDoc, knApplyCatReorder, knCatOrderClear, knCatOrderSaved, knFetchCategoryIndex, knSortByCatOrder } from './wiki-data.js';
+import { wkAurora, wkDayLabel, wkDocCard, wkEmpty, wkResumeRow, wkSection } from './wiki-ui.js';
 import { openWikiPeek, openWikiSearch, setWikiPeekList } from './wiki-doc.js';
 const HOME_PIN_CAP = 8;
 const HOME_DAY_CAP = 8;
-// ── 카드 순서(드래그 정렬) — #657h3 과 같은 localStorage 키(기존 사용자 순서 승계). 기기별. ──
-const WK_HOME_ORDER = 'kn_home_cat_order_v1';
-function homeOrderSaved() {
-    try {
-        const v = JSON.parse(localStorage.getItem(WK_HOME_ORDER) || '[]');
-        return Array.isArray(v) ? v.map(String) : [];
-    }
-    catch (_) {
-        return [];
-    }
-}
-function homeOrderSave(ids) { try {
-    localStorage.setItem(WK_HOME_ORDER, JSON.stringify(ids));
-}
-catch (_) { /* noop */ } }
-function homeOrderClear() { try {
-    localStorage.removeItem(WK_HOME_ORDER);
-}
-catch (_) { /* noop */ } }
-// 저장 순서를 앞에, 미지정(신설)은 원래 순서대로 뒤에 — 안정 병합.
-function homeSortByOrder(cats, order) {
-    if (!order.length)
-        return cats.slice();
-    const pos = new Map(order.map((id, i) => [String(id), i]));
-    return cats.slice().sort((a, b) => {
-        const pa = pos.has(String(a.id)) ? pos.get(String(a.id)) : 1e9;
-        const pb = pos.has(String(b.id)) ? pos.get(String(b.id)) : 1e9;
-        return pa - pb;
-    });
-}
+// 카드 순서(드래그 정렬)는 공유 헬퍼(wiki-data knCatOrder* — #657h3 키 승계)를 쓴다 —
+//  홈 카드·내 소유 대시보드·사이드바 ★구역이 같은 순서를 본다(#1685).
 async function renderHomeSurface(box, ctx) {
     busy(box, el('div', { class: 'wk-home' }, skeletonRows(4)));
     let pinned = [];
@@ -75,15 +47,10 @@ async function renderHomeSurface(box, ctx) {
     const hero = el('div', { class: 'wk-hero' }, el('div', { class: 'wk-hero-row' }, searchBtn, hasMemoryScope() ? el('a', { class: 'btn btn-primary wk-hero-new', href: '#/knowledge/new',
         title: '새 페이지 — 제목을 쓰면 바로 저장', text: '＋ 새 페이지' }) : null), el('div', { class: 'wk-hero-stats' }, el('span', { class: 'wk-row-m', text: '지식 ' + totalDocs }), el('span', { class: 'wk-row-m', text: '카테고리 ' + allCats.length }), todayN ? el('span', { class: 'wk-row-m wk-hero-today', text: '오늘 갱신 ' + todayN }) : null));
     home.append(hero);
-    // 이어서 — 마지막으로 열었던 문서 필(히어로 바로 아래, 조용히).
-    const visits = wkReadVisits().slice(0, 3);
-    if (visits.length) {
-        const row = el('div', { class: 'wk-resume' }, el('span', { class: 'wk-resume-label', text: '이어서' }));
-        for (const v of visits) {
-            row.append(el('a', { class: 'wk-resume-it', href: '#/k/' + encodeURIComponent(v.name), title: v.title }, v.icon ? el('span', { class: 'wk-resume-ic', 'aria-hidden': 'true', text: v.icon }) : null, el('span', { text: v.title })));
-        }
-        home.append(row);
-    }
+    // 이어서 — 마지막으로 열었던 문서 필(히어로 바로 아래, 조용히). 내 소유 대시보드와 공용(wkResumeRow).
+    const resume = wkResumeRow();
+    if (resume)
+        home.append(resume);
     // ── 카테고리 카드 그리드 — 오로라 커버 + 아이콘 타일 + 이름/설명 + mono 메타. ──
     //  ★ 내 소유(팀 오너십 = 우선순위)가 큰 카드로 먼저, 그 외는 컴팩트 카드. 그룹 '안'에서만 드래그 정렬.
     const enrich = new Map(); // cat.id → { icEl, timeEl, icNow } 점진 보강 슬롯
@@ -147,29 +114,18 @@ async function renderHomeSurface(box, ctx) {
     }
     // 순서 재계산 — 화면 밖(다른 그룹 포함) id 까지 보존해 저장.
     function applyReorder(src, target, before) {
-        const cur = homeSortByOrder(allCats, homeOrderSaved()).map((c) => String(c.id));
-        const from = cur.indexOf(src);
-        if (from < 0)
-            return;
-        cur.splice(from, 1);
-        let to = cur.indexOf(target);
-        if (to < 0)
-            return;
-        if (!before)
-            to += 1;
-        cur.splice(to, 0, src);
-        homeOrderSave(cur);
-        paintCats(); // 카드 구역만 조용히 재렌더(캐시 데이터 — 깜빡임 없음)
+        if (knApplyCatReorder(allCats, src, target, before))
+            paintCats(); // 카드 구역만 조용히 재렌더(캐시 데이터 — 깜빡임 없음)
     }
     const catsWrap = el('div', {});
     function paintCats() {
-        const ordered = homeSortByOrder(allCats, homeOrderSaved());
+        const ordered = knSortByCatOrder(allCats);
         const mine = ordered.filter((c) => myIds.has(String(c.id)));
         const rest = ordered.filter((c) => !myIds.has(String(c.id)));
-        const hasCustom = homeOrderSaved().length > 0;
+        const hasCustom = knCatOrderSaved().length > 0;
         const orderCtl = hasCustom
             ? el('button', { class: 'wk-sec-act', type: 'button', title: '드래그로 바꾼 카드 순서를 기본으로 되돌립니다', text: '정렬 초기화',
-                onclick: () => { homeOrderClear(); paintCats(); } })
+                onclick: () => { knCatOrderClear(); paintCats(); } })
             : el('span', { class: 'wk-sec-hint', text: '드래그해서 순서 변경' });
         const parts = [];
         if (mine.length) {
