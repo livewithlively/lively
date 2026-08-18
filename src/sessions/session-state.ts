@@ -104,6 +104,20 @@ export async function markSessionOomKilled(id: string): Promise<boolean> {
   return (r.rowCount ?? 0) > 0;
 }
 
+// #1719 세션 대화창 — 라이브 세션 행에 '이 박스가 도는 대화 UUID' 를 실어 주기 위한 일괄 조회.
+//  목록 라우트가 세션마다 getSessionState 를 부르면 세션 수만큼 왕복이라(실측 dev 200+행), 한 번에 가져온다.
+//  없는 id·미보고(NULL)는 결과에 없다 — 호출자가 '모름'으로 다룬다(추측하지 않는다, 위 claude_session_id 주석).
+export async function claudeSessionIdsFor(ids: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!ids.length) return out;
+  const r = await itemsPool.query(
+    "SELECT id, claude_session_id FROM org_session_state WHERE id = ANY($1::text[]) AND claude_session_id IS NOT NULL",
+    [ids],
+  );
+  for (const row of r.rows) out.set(String(row.id), String(row.claude_session_id));
+  return out;
+}
+
 export async function getSessionState(id: string): Promise<SessionState | undefined> {
   const r = await itemsPool.query("SELECT * FROM org_session_state WHERE id=$1", [id]);
   return r.rows[0] ? rowToState(r.rows[0]) : undefined;

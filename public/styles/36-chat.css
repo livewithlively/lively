@@ -1,0 +1,97 @@
+/* 36-chat.css — 공용 대화창(web/chat-view.ts)의 **추가분** + 세션 대화 화면(web/session-chat.ts, #1719).
+ *  기본 그림(.livc-*)은 35-liv.css 가 이미 그린다 — 여기는 리브 시절에 없던 조각만: 도구 대상 한 줄·생각 카드·경과 시간 줄·
+ *  코드 복사·구분선·시각·이어짐 턴·멈춤 버튼 공존, 그리고 세션 화면의 헤더/확인 대기 배너/끝난 세션 바/터미널 토글/목차.
+ *  ⚠ 상태는 색이 아니라 점+글자(35-liv §0.5 색각 계약). 채운 파랑은 화면당 하나(확인 배너의 주 버튼 또는 이어받기 버튼). */
+
+/* ── 대화창 추가분 ───────────────────────────────────────────────────────── */
+.livc-slip-detail { font-family: var(--livc-mono); font-size: 11.5px; color: var(--ink-sub); min-width: 0; flex: 1 1 auto;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.livc-slip-head .livc-slip-name { margin-right: 0; flex: none; }
+.livc-slip-head .livc-slip-detail + .livc-slip-raw, .livc-slip-head .livc-slip-name + .livc-slip-raw { margin-left: auto; }
+.livc-slip-raw[open] ~ .livc-slip-state { order: 2; }
+
+.livc-think { margin: 2px 0; }
+.livc-think > summary { list-style: none; cursor: pointer; display: inline-flex; gap: 8px; align-items: baseline;
+  font-family: var(--livc-mono); font-size: 10.5px; letter-spacing: .04em; color: var(--muted); }
+.livc-think > summary::-webkit-details-marker { display: none; }
+.livc-think > summary::before { content: '▸'; font-size: 9px; }
+.livc-think[open] > summary::before { content: '▾'; }
+.livc-think > summary:hover { color: var(--ink-sub); }
+.livc-think-k { color: var(--muted); }
+.livc-think-body { margin: 6px 0 4px; padding: 8px 11px; border-left: 2px solid var(--line-net); font-size: 12.5px; line-height: 1.7;
+  color: var(--ink-sub); white-space: pre-wrap; word-break: break-word; max-height: 360px; overflow: auto; }
+
+.livc-live { font-family: var(--livc-mono); font-size: 11px; color: var(--muted); letter-spacing: .02em; margin-top: 4px; }
+.livc-live::before { content: '● '; color: var(--mint-deep); animation: livc-pulse 1.1s ease-in-out infinite; }
+.livc-mark { font-family: var(--livc-mono); font-size: 11px; color: var(--coral-text); margin-top: 2px; }
+.livc-dur { margin-left: 8px; font-weight: 400; color: var(--muted-2, #a6b2c8); }
+.livc-ts { margin-left: 8px; font-weight: 400; color: var(--muted-2, #a6b2c8); letter-spacing: 0; }
+.livc-turn-cont > .livc-work { margin-top: 0; }
+.livc-work > .livc-who { display: flex; align-items: baseline; }
+
+.livc-code { position: relative; }
+.livc-copy { position: absolute; top: 6px; right: 6px; font: inherit; font-size: 11px; line-height: 1; padding: 4px 7px;
+  border: 1px solid var(--line); border-radius: 5px; background: var(--bg); color: var(--ink-sub); cursor: pointer; opacity: 0; transition: opacity .12s; }
+.livc-code:hover .livc-copy, .livc-copy:focus-visible { opacity: 1; }
+.livc-copy:hover { color: var(--ink); border-color: var(--line-net); }
+
+.livc-divider { margin: 18px 0 8px; font-family: var(--livc-mono); font-size: 10.5px; letter-spacing: .04em; color: var(--muted);
+  display: flex; align-items: center; gap: 10px; }
+.livc-divider::before, .livc-divider::after { content: ''; flex: 1; border-top: 1px dashed var(--line-net); }
+details.livc-divider { display: block; }
+details.livc-divider::before, details.livc-divider::after { display: none; }
+details.livc-divider > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px; }
+details.livc-divider > summary::-webkit-details-marker { display: none; }
+details.livc-divider > summary::before, details.livc-divider > summary::after { content: ''; flex: 1; border-top: 1px dashed var(--line-net); }
+.livc-divider-body { margin: 8px 0 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--bg-tint);
+  font-family: inherit; font-size: 12.5px; line-height: 1.65; color: var(--ink-sub); white-space: pre-wrap; max-height: 320px; overflow: auto; letter-spacing: 0; }
+
+.livc-compose .livc-send-stop { margin-right: 2px; }
+.livc-foot { flex: none; }
+.livc-foot form[hidden] { display: none; }
+
+/* ── 세션 화면 ───────────────────────────────────────────────────────────── */
+.sc-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg, #fff); }
+.sc-head { display: flex; align-items: center; gap: 12px; padding: 9px 16px 8px; border-bottom: 1px solid var(--line); flex: none; }
+.sc-head-l { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.sc-title { font-size: 13.5px; font-weight: 800; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
+.sc-meta { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-sub); white-space: nowrap; }
+.sc-meta a { color: var(--ink-sub); text-decoration: none; }
+.sc-meta a:hover { color: var(--blue); }
+.sc-sep { color: var(--muted-2, #a6b2c8); }
+.sc-head-r { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.sc-act { font-size: 12.5px; padding: 4px 8px; border-radius: 6px; color: var(--ink-sub); }
+.sc-act:hover { background: var(--bg-tint); color: var(--ink); }
+.sc-act-on { background: var(--bg-punch); color: var(--ink); }
+.sc-chat { flex: 1; min-height: 0; display: flex; }
+.sc-chat[hidden] { display: none; }
+.sc-chat > .livc-wrap { flex: 1; }
+.sc-term { flex: 1; min-height: 0; display: flex; }
+.sc-term[hidden] { display: none; }
+.sc-term-frame { flex: 1; width: 100%; border: 0; background: var(--bg, #fff); }
+
+.sc-wait { display: flex; align-items: center; gap: 12px; padding: 9px 16px; border-bottom: 1px solid var(--line); background: var(--bg-note); flex: none; }
+.sc-wait[hidden] { display: none; }
+.sc-wait-t { font-size: 13px; color: var(--ink); line-height: 1.5; min-width: 0; flex: 1; }
+.sc-wait-acts { display: inline-flex; gap: 6px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
+
+.sc-bar { display: flex; align-items: center; gap: 12px; padding: 12px 22px 16px; border-top: 1px solid var(--line); background: var(--bg-tint); }
+.sc-bar-t { font-size: 13px; color: var(--ink-sub); flex: 1; min-width: 0; line-height: 1.5; }
+
+.sc-older { display: flex; justify-content: center; padding: 8px 0 14px; }
+.sc-empty p { font-size: 13.5px; line-height: 1.7; color: var(--ink-sub); margin: 0 0 10px; }
+
+.sc-idx { width: 340px; max-height: 60vh; overflow: auto; padding: 6px; }
+.sc-idx-h { font-family: var(--livc-mono); font-size: 10.5px; letter-spacing: .04em; color: var(--muted); padding: 6px 8px 8px; }
+.sc-idx-item { display: flex; gap: 10px; align-items: baseline; width: 100%; text-align: left; font: inherit; font-size: 12.5px; line-height: 1.45;
+  padding: 6px 8px; border: 0; border-radius: 6px; background: none; color: var(--ink); cursor: pointer; }
+.sc-idx-item:hover { background: var(--bg-tint); }
+.sc-idx-n { font-family: var(--livc-mono); font-size: 10.5px; color: var(--muted); flex: none; min-width: 16px; }
+.sc-idx-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-flash { animation: sc-flash 1.8s ease-out; }
+@keyframes sc-flash { 0% { background: var(--bg-sel); } 100% { background: transparent; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .livc-live::before { animation: none; }
+  .sc-flash { animation: none; }
+}

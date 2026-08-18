@@ -85,6 +85,22 @@ export async function transcriptExists(cwd: string, sessionUuid: string, owner =
   return false;
 }
 
+// #1719 세션 대화창 — 이 UUID 의 대화 파일 **경로**를 찾는다(transcriptExists 와 같은 뿌리·같은 소유자 스코프).
+//  존재 여부만으로는 모자라다: 대화창이 그 파일을 오프셋부터 이어 읽어야 한다(터미널 대신 말풍선으로 라이브 세션을 보인다).
+//  못 찾으면 null — 호출자가 '아직 기록 없음'으로 다룬다(추측 폴백 없음, 위 주석의 원칙 그대로).
+export async function findTranscriptFile(cwd: string, sessionUuid: string, owner = ""): Promise<{ file: string; size: number } | null> {
+  if (!cwd || !sessionUuid) return null;
+  const enc = cwd.replace(/[/.]/g, "-");
+  for (const { dir } of rootsForOwner(await transcriptRoots(), owner)) {
+    const file = path.join(dir, enc, `${sessionUuid}.jsonl`);
+    try {
+      const st = await fsp.stat(file);
+      if (st.isFile()) return { file, size: st.size };
+    } catch { /* 이 뿌리엔 없음 — 다음 */ }
+  }
+  return null;
+}
+
 // ⚠ '그 폴더의 가장 최근 대화'로 resume 을 추측하는 함수가 여기 있었다가 제거됐다(2026-07-28).
 //  왜 다시 만들지 말아야 하나: ① 격리(#524)는 멤버마다 홈이 따로라 남의 홈 대화를 집으면 그 세션이 못 읽어
 //  claude 가 즉시 죽는다(실측 사고) ② 소유자로 스코프해도 같은 폴더의 다른 대화를 '최신'이라며 집을 수 있다.

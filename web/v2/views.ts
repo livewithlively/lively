@@ -4,13 +4,16 @@
 //  클래식 모듈을 **복제하지 않는다** — 대화·세션 목록·프로젝트 상세는 이미 있는 것을 가져다 붙인다.
 import { api, el, errorNote, relTime, state, toast } from '../core.js';
 import { mountLivChat, livChatAsk } from '../liv-chat.js';
+import { mountSessionChat, type SessionChatHandle } from '../session-chat.js';
 import { sessIsDead, sessLabel, sessStateKey } from '../session-status.js';
-import { appFrame, terminalUrl } from './apps.js';
+import { terminalUrl } from './apps.js';
 
 export interface Proj { id: number; name: string; status?: string | null; status_category?: string | null; my_session_count?: number; description?: string | null; list_id?: number | null; updated_at?: string | null; }
 export interface Sess {
   id: string; label: string; projectId: number | null; node: string | null;
   live: boolean; alive: boolean; owned: boolean; stateKey: string; stateLabel: string; lastSeen: number; raw: any;
+  // 중앙 기록 좌표(대화 uuid) — 라이브 행에 접힌 기록(mergeSessions). 기록만 있는 행은 id 자체가 uuid 라 비어 있다.
+  logId?: string | null; logNode?: string | null;
 }
 export interface V2Data { projects: Proj[]; sessions: Sess[]; loadedAt: number; }
 
@@ -105,37 +108,56 @@ export async function renderProject(host: HTMLElement, data: V2Data, id: number,
   ));
 }
 
-// ── 세션 — 그 세션 자체를 가운데에. 라이브면 터미널, 아니면 중앙 기록 대화(클래식 #/sessions/<id>) ─────────
+// ── 세션 — 그 세션 자체를 가운데에: **대화창**(web/session-chat.ts, 리브와 같은 컴포넌트)으로. 터미널은 헤더에서 토글 ─────────
+//  라이브면 박스의 대화 파일을 창으로 읽어 라이브로 따라가고 입력칸으로 보낸다(프롬프트 주입). 끝난 세션이면 기록 + [이어서 대화하기].
+let sessChat: SessionChatHandle | null = null;
 export function renderSession(host: HTMLElement, data: V2Data, id: string): void {
-  const s = data.sessions.find((x) => x.id === id);
+  // 기록(uuid) 링크로 들어왔는데 그 대화를 도는 박스가 있으면 그 박스가 정본이다(mergeSessions 가 기록을 박스에 접었다) — 옛 링크가 산다.
+  const s = data.sessions.find((x) => x.id === id) || data.sessions.find((x) => x.logId === id);
+  if (sessChat) { sessChat.destroy(); sessChat = null; }
   if (!s) { host.replaceChildren(el('div', { class: 'v2-center' }, el('p', { class: 'v2-muted', text: '세션을 찾을 수 없어요. 목록을 새로고침해 주세요.' }))); return; }
-  const title = s.label;
-  const frame = s.live
-    ? appFrame('', title, { live: true, src: terminalUrl(s.id, s.label, s.node) })
-    : appFrame('sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node) : ''), title);
-  const meta = el('div', { class: 'v2-sess-meta' },
-    dot(s.stateKey), el('span', { text: s.stateLabel }), el('span', { text: '·' }),
-    el('a', { href: s.projectId ? '#/p/' + s.projectId : '#/', text: projName(data, s.projectId) }),
-    el('span', { text: '·' }), el('span', { text: when(s.lastSeen) }));
-  frame.insertBefore(meta, frame.firstChild!.nextSibling);
-  host.replaceChildren(frame);
+  const termSrc = s.live ? terminalUrl(s.id, s.label, s.node) : null;
+  sessChat = mountSessionChat(host, { ...s, projectName: projName(data, s.projectId) }, {
+    terminalSrc: termSrc,
+    openHref: s.live ? termSrc : (location.pathname + '?ui=classic#/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node) : '')),
+  });
 }
+/** 목록이 새로 왔을 때(20초 폴링) 열려 있는 세션 화면의 상태 표시를 갱신한다. 본문은 화면 자신이 대화 파일을 폴링한다. */
+export function refreshSession(data: V2Data, id: string): void {
+  if (!sessChat) return;
+  const s = data.sessions.find((x) => x.id === id) || data.sessions.find((x) => x.logId === id);
+  if (s) sessChat.update({ ...s, projectName: projName(data, s.projectId) });
+}
+export function unmountSession(): void { if (sessChat) { sessChat.destroy(); sessChat = null; } }
 
 // ── 데이터 정규화 — 라이브(terminal/sessions) + 기록(v6/sessions) 를 한 목록으로 ─────────
+//  같은 세션이 두 목록에 있으면 한 장으로: 라이브 행의 claudeSessionId(박스가 도는 대화 uuid) == 기록 행의 session_id 면
+//  기록 행을 라이브 행에 접는다(logId·logNode). 종전엔 '박스 1장 + 그 대화의 기록 1장'이 나란히 떠 같은 세션이 둘로 보였다.
 export function mergeSessions(liveRows: any[], logRows: any[]): Sess[] {
   const now = Date.now();
   const out = new Map<string, Sess>();
+  const byUuid = new Map<string, Sess>();
   for (const r of liveRows || []) {
     const k = sessStateKey(r, now);
-    out.set(String(r.id), {
+    const s: Sess = {
       id: String(r.id), label: String(r.label || r.title || r.id), projectId: r.projectId ? Number(r.projectId) : null,
-      node: r.node || null, live: true, alive: !sessIsDead(r, now), owned: !!r.owned, stateKey: k, stateLabel: sessLabel(r, now),
+      // 노드 세션의 node 는 {id,name,online} 객체다 — id 만 든다(터미널 URL·중앙 기록 좌표에 문자열로 쓴다).
+      node: r.node && typeof r.node === 'object' ? (String(r.node.id || '') || null) : (r.node ? String(r.node) : null),
+      live: true, alive: !sessIsDead(r, now), owned: !!r.owned, stateKey: k, stateLabel: sessLabel(r, now),
       lastSeen: Number(r.lastActive || r.created || 0) * (String(r.lastActive || r.created || 0).length > 11 ? 1 : 1000) || 0, raw: r,
-    });
+    };
+    out.set(s.id, s);
+    if (r.claudeSessionId && !byUuid.has(String(r.claudeSessionId))) byUuid.set(String(r.claudeSessionId), s);
   }
   for (const r of logRows || []) {
     const id = String(r.session_id);
     if (out.has(id)) continue;
+    const owner = byUuid.get(id);
+    if (owner) {                                   // 라이브(또는 복원 가능) 박스가 이 대화를 돌린다 — 그 카드에 접는다
+      owner.logId = id; owner.logNode = r.node_id || '';
+      if (!owner.projectId && r.project_id != null) owner.projectId = Number(r.project_id);
+      continue;
+    }
     out.set(id, {
       id, label: String(r.title || id), projectId: r.project_id != null ? Number(r.project_id) : null, node: r.node_id || null,
       live: false, alive: false, owned: true, stateKey: 'log', stateLabel: '기록', lastSeen: r.last_seen ? new Date(r.last_seen).getTime() : 0, raw: r,

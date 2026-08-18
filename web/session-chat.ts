@@ -1,0 +1,471 @@
+// session-chat.ts — 세션 화면의 가운데(#1719): 라이브 AI 세션(또는 그 기록)을 **터미널 대신 대화창**으로.
+//
+//  ── 무엇 ──
+//  공용 대화창(web/chat-view.ts — 리브와 같은 그림)에 **세션의 대화 파일**을 실어 준다.
+//   · 읽기: 박스 세션은 GET terminal/sessions/:id/transcript(로컬 ~/.claude 대화 파일을 창으로) — Claude Code 가 블록 단위로
+//     즉시 append 하므로 0.7초 폴링이면 터미널 없이도 라이브로 따라간다. 노드(멤버 PC) 세션·기록만 남은 세션은 중앙 세션
+//     기록(v6/sessions/:uuid/log — Stop 훅이 턴마다 올린 것)으로 읽는다.
+//   · 보내기: POST terminal/sessions/:id/prompt(#1664 — 터미널에서 치는 것과 같은 주입). Claude Code 는 도는 중에 친
+//     글을 **큐에 쌓아** 다음 턴으로 받으므로 도는 동안에도 보낼 수 있다(리브와 다른 점).
+//   · 멈춤/승인: POST terminal/sessions/:id/keys {Escape|Enter} — 터미널에서 Esc·Enter 를 누르는 그 일.
+//   · 끝난 세션(중단됨·종료됨·기록만): 입력칸 대신 [이어서 대화하기] — 복원(restore)/이어받기(resume)로 새 라이브 세션을 만들어
+//     그 화면으로 간다(같은 대화 uuid 를 잇는다).
+//
+//  ── Claude Code(데스크톱)와 맞추려 한 것 ──
+//   턴 = 내 말 + 그 아래 AI 가 한 모든 것 / 도구 호출은 `읽기 src/x.ts` 식 이름+대상 한 줄, 펼치면 입출력 원문 / 생각은 접힌 카드 /
+//   돌 때 경과 시간 줄 + Esc 로 멈춤 / 답을 읽고 있으면 스크롤을 뺏지 않음 / 확인(승인) 대기는 배너로 / 긴 기록은 꼬리부터,
+//   위로 [이전 대화 불러오기] / 질문 목차 / 코드 복사 / 터미널은 **버리지 않고** 토글(승인 대화상자 등 터미널이 맞는 순간이 있다).
+//
+//  ── 안 하는 것 ──
+//   대화 uuid 를 추측하지 않는다(서버 원칙) — 매핑이 없으면 '기록 아직 없음'으로 말하고 터미널을 권한다.
+import { api, apiUrl, TOKEN_KEY, anchoredPopover, el, toast } from './core.js';
+import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
+import { toolLabel } from './session-tool-labels.js';
+
+export interface SessionChatTarget {
+  id: string; label: string; live: boolean; alive: boolean; node: string | null; owned: boolean;
+  stateKey: string; stateLabel: string; projectId: number | null; projectName: string;
+  raw: any;                                   // 라이브 행(harness·agentState·awaiting·restorable·claudeSessionId) 또는 기록 행
+  logId?: string | null; logNode?: string | null;   // 중앙 기록 좌표(대화 uuid) — 라이브 행에 접힌 기록
+}
+export interface SessionChatHandle { update(t: SessionChatTarget): void; destroy(): void }
+
+const WINDOW = 1_500_000;          // 첫 로드·[이전 불러오기] 한 번에 읽는 바이트(긴 세션은 30MB — 꼬리부터)
+const POLL_RUN_MS = 700;           // 도는 중(블록 단위로 즉시 쌓인다 — 이 값이 체감 지연)
+const POLL_IDLE_MS = 3000;         // 살아 있고 안 도는 중(다음 지시를 터미널에서 칠 수도 있다)
+const POLL_LOG_MS = 8000;          // 중앙 기록(턴 단위 — 자주 봐도 안 늘어난다)
+const INJECTED_RE = /^\s*(<command-name|<local-command-|<command-message|<command-args|<bash-|<task-notification|<system-reminder|Caveat:)/;
+const INTERRUPT_RE = /^\s*\[Request interrupted/;
+const CONTINUED_RE = /^\s*This session is being continued/;
+
+// ── 원문 읽기(ndjson + 워터마크 헤더) ────────────────────────────────────────────────────────
+interface RawChunk { status: number; text: string; bytes: number; from: number; to: number; uuid?: string }
+async function rawGet(path: string): Promise<RawChunk> {
+  const headers: Record<string, string> = {};
+  const tok = localStorage.getItem(TOKEN_KEY); if (tok) headers.Authorization = 'Bearer ' + tok;
+  const res = await fetch(apiUrl(path), { headers, credentials: 'same-origin' });
+  const text = res.ok ? await res.text() : '';
+  if (!res.ok) { let msg = ''; try { msg = (await res.json())?.error || ''; } catch { /* */ } const e: any = new Error(msg || `요청 실패 (${res.status})`); e.status = res.status; throw e; }
+  const n = (h: string): number => { const v = Number(res.headers.get(h)); return Number.isFinite(v) ? v : 0; };
+  return { status: res.status, text, bytes: n('X-Log-Bytes'), from: n('X-Log-From'), to: n('X-Log-To') || (n('X-Log-From') + text.length), uuid: res.headers.get('X-Session-Uuid') || undefined };
+}
+type Source = { kind: 'box'; id: string } | { kind: 'log'; sid: string; node: string };
+const srcPath = (s: Source, q: Record<string, string | number>): string => {
+  const qs = new URLSearchParams(Object.entries(q).map(([k, v]) => [k, String(v)]));
+  return s.kind === 'box'
+    ? `/api/ui/terminal/sessions/${encodeURIComponent(s.id)}/transcript?${qs}`
+    : `/api/ui/v6/sessions/${encodeURIComponent(s.sid)}/log?node=${encodeURIComponent(s.node)}&${qs}`;
+};
+
+// ── 마운트 ────────────────────────────────────────────────────────────────────────────────
+export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, opts: { terminalSrc?: string | null; openHref?: string | null }): SessionChatHandle {
+  let target = first;
+  const isBox = first.live;                     // 라이브 행(박스) — 죽었어도(restorable) 박스다
+  const dead = (): boolean => !target.live || !target.alive || !!target.raw?.restorable;
+  const canType = (): boolean => !dead();
+  const canKeys = (): boolean => canType() && !target.node;
+
+  // 헤더 — 제목 · 상태 · 프로젝트 · 하네스 · [목차] [터미널] [새 탭] ————
+  const dot = el('span', { class: 'v2-dot', 'aria-hidden': 'true' });
+  const stateEl = el('span', { class: 'sc-state' });
+  const titleEl = el('b', { class: 'sc-title', text: target.label });
+  const idxBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '목차', title: '질문 목차', onclick: () => openIndex() }) as HTMLButtonElement;
+  const termBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '터미널', title: '터미널로 보기(승인 대화상자 등은 터미널이 맞을 때가 있어요)', onclick: () => toggleTerminal() }) as HTMLButtonElement;
+  const head = el('div', { class: 'sc-head' },
+    el('div', { class: 'sc-head-l' },
+      dot, titleEl,
+      el('span', { class: 'sc-meta' },
+        stateEl, el('span', { class: 'sc-sep', text: '·' }),
+        el('a', { href: target.projectId ? '#/p/' + target.projectId : '#/', text: target.projectName }),
+        target.raw?.harness ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { class: 'mono', text: String(target.raw.harness) })] : null,
+        target.node ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { text: String(target.node) })] : null)),
+    el('div', { class: 'sc-head-r' },
+      idxBtn,
+      opts.terminalSrc && isBox ? termBtn : null,
+      el('button', { class: 'btn-text sc-act', type: 'button', text: '링크', title: '이 세션 링크 복사', onclick: async () => { try { await navigator.clipboard.writeText(location.href); toast('링크를 복사했습니다.'); } catch { window.prompt('이 링크를 복사하세요:', location.href); } } }),
+      opts.openHref ? el('a', { class: 'btn-text sc-act', href: opts.openHref, target: '_blank', rel: 'noopener', text: '새 탭 ↗' }) : null));
+
+  const chatHost = el('div', { class: 'sc-chat' });
+  const termHost = el('div', { class: 'sc-term', hidden: true });
+  const waitBar = el('div', { class: 'sc-wait', hidden: true });
+  const wrap = el('div', { class: 'sc-wrap' }, head, waitBar, chatHost, termHost);
+  host.replaceChildren(wrap);
+
+  // 대화창 ————
+  const view: ChatView = createChatView(chatHost, {
+    who: { me: '나', ai: 'AI' },
+    placeholder: target.node ? '이 세션에 보내기(그 컴퓨터로 전달)' : '이 세션에 보내기 — Enter 로 보냄, Shift+Enter 줄바꿈',
+    toolLabel,
+    thinking: 'fold',
+    sendWhileBusy: true,
+    onSend: (text) => sendPrompt(text),
+    onStop: canKeys() ? () => sendKey('Escape') : undefined,
+    escActive: () => !termHost.hidden ? false : true,
+    opening: null,
+  });
+
+  // 상태 표시(헤더 점·라벨·확인 대기 배너·끝난 세션 바) ————
+  const dotCls = (k: string): string => k === 'busy' ? 'busy' : k === 'waiting' ? 'wait' : (k === 'done' || k === 'idle') ? 'done' : '';
+  let running = false;                        // 대화 파일 기준 '지금 턴이 도는 중'
+  const paintState = (): void => {
+    const k = running && !dead() ? 'busy' : target.stateKey;
+    dot.className = 'v2-dot ' + dotCls(k);
+    stateEl.textContent = running && !dead() ? '작업 중' : target.stateLabel;
+    const waiting = !dead() && (!!target.raw?.awaiting || target.raw?.agentState === 'waiting');
+    waitBar.hidden = !waiting;
+    if (waiting && !waitBar.childElementCount) {
+      waitBar.replaceChildren(
+        el('span', { class: 'v2-dot wait', 'aria-hidden': 'true' }),
+        el('div', { class: 'sc-wait-t' }, el('b', { text: '확인이 필요해요' }), el('span', { text: ' — 세션이 승인이나 선택을 기다리고 있어요. 무엇을 묻는지는 터미널에 떠 있습니다.' })),
+        el('div', { class: 'sc-wait-acts' },
+          opts.terminalSrc && isBox ? el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '터미널에서 답하기', onclick: () => toggleTerminal(true) }) : null,
+          canKeys() ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', text: '기본 선택으로 답하기 (Enter)', onclick: () => sendKey('Enter') }) : null,
+          canKeys() ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', text: '거부 (Esc)', onclick: () => sendKey('Escape') }) : null));
+    }
+    if (dead()) paintDeadFooter();
+  };
+  let deadFooterOn = false;
+  const paintDeadFooter = (): void => {
+    if (deadFooterOn) return; deadFooterOn = true;
+    const why = target.stateKey === 'exited_user' ? '내가 종료한 세션' : target.stateKey === 'oom_killed' ? '메모리 부족으로 끝난 세션' : target.stateKey === 'restorable' ? '중단된 세션' : '기록만 남은 세션';
+    const btn = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '이어서 대화하기' }) as HTMLButtonElement;
+    btn.addEventListener('click', () => { void resumeSession(btn); });
+    view.setFooter(el('div', { class: 'sc-bar' },
+      el('span', { class: 'sc-bar-t', text: `${why}이에요 — 대화는 그대로 이어받을 수 있어요.` }), btn));
+    view.busy(false);
+  };
+
+  // 터미널 토글 — 버리지 않는다. 처음 켤 때 한 번 만들고, 그 뒤엔 숨겼다 보였다(WS 를 유지해 즉시 전환).
+  let termFrame: HTMLIFrameElement | null = null;
+  function toggleTerminal(on?: boolean): void {
+    const show = on ?? termHost.hidden;
+    if (show && !termFrame && opts.terminalSrc) {
+      termFrame = el('iframe', { class: 'sc-term-frame', src: opts.terminalSrc, title: '터미널', allow: 'clipboard-read; clipboard-write' }) as HTMLIFrameElement;
+      termHost.append(termFrame);
+    }
+    termHost.hidden = !show; chatHost.hidden = show;
+    termBtn.textContent = show ? '대화로' : '터미널';
+    termBtn.classList.toggle('sc-act-on', show);
+    if (!show) { view.scrollToBottom(); view.input.focus(); }
+  }
+
+  // ── 대화 파일 → 대화창 ────────────────────────────────────────────────────────────────
+  interface Rec { t: ChatTurn; evs: any[] }
+  const recs: Rec[] = [];                     // 화면 순서(위→아래)
+  let cur: Rec | null = null;
+  let src: Source | null = null;
+  let loadedFrom = 0; let loadedTo = 0;
+  let carry = '';                             // 잘린 마지막 줄(다음 폴에서 이어 붙인다)
+  let pendingSent: { text: string; t: ChatTurn } | null = null;   // 낙관적으로 그린 내 말 — 파일에 나타나면 그 턴을 재사용
+  let pollTimer: number | null = null;
+  let destroyed = false;
+  let lastLineAt = 0;
+
+  const flat = (s: string): string => s.replace(/\s*\n\s*/g, ' ').trim();
+  function userText(o: any): { text: string; results: any[] } {
+    const c = o?.message?.content;
+    if (typeof c === 'string') return { text: c, results: [] };
+    if (!Array.isArray(c)) return { text: '', results: [] };
+    return { text: c.filter((b: any) => b && b.type === 'text').map((b: any) => String(b.text ?? '')).join('\n'), results: c.filter((b: any) => b && b.type === 'tool_result') };
+  }
+  const newRec = (text: string | null, ts?: string, at?: 'end' | 'start'): Rec => { const r = { t: view.turn(text, { ts, at }), evs: [] as any[] }; if (at === 'start') recs.unshift(r); else recs.push(r); return r; };
+
+  /** 한 줄을 (끝에) 반영한다. 되그리기·라이브 둘 다 이 함수 하나. */
+  function applyLine(o: any): void {
+    if (!o || typeof o !== 'object' || o.isSidechain) return;
+    if (o.timestamp) { const ms = new Date(o.timestamp).getTime(); if (Number.isFinite(ms)) lastLineAt = ms; }
+    if (o.type === 'user') {
+      const { text, results } = userText(o);
+      if (results.length) { if (!cur) cur = newRec(null); cur.evs.push(o); view.event(cur.t, { type: 'user', message: { content: results } }); }
+      if (o.isMeta || !text.trim()) return;
+      if (INTERRUPT_RE.test(text)) { if (cur) view.settle(cur.t, { interrupted: true }); running = false; return; }
+      if (CONTINUED_RE.test(text)) { view.divider('맥락 압축 — 이전 대화를 요약해 이어감', text); cur = newRec(null); running = true; return; }
+      if (INJECTED_RE.test(text)) return;                       // 슬래시 명령·리마인더 — 사람 말이 아니다
+      // 내가 방금 보낸 말이 파일에 나타났다 → 낙관적으로 그린 턴을 그대로 쓴다(두 번 그리지 않는다)
+      if (pendingSent && flat(pendingSent.text) === flat(text)) {
+        const rec = recs.find((r) => r.t === pendingSent!.t);
+        pendingSent = null;
+        if (rec) { cur = rec; rec.t.ts = o.timestamp; running = true; return; }
+      }
+      cur = newRec(text, o.timestamp); running = true;
+      return;
+    }
+    if (o.type === 'assistant') {
+      if (!cur) cur = newRec(null);
+      cur.evs.push(o); view.event(cur.t, o); running = true;
+      return;
+    }
+    if (o.type === 'system') {
+      // 턴의 끝 — turn_duration(소요 시간)·stop_hook_summary(Stop 훅 요약) 둘 다 턴이 끝난 뒤에만 찍힌다(둘 중 하나만 있어도 마감).
+      if (o.subtype === 'turn_duration' || o.subtype === 'stop_hook_summary') { if (cur) view.settle(cur.t, { durationMs: Number(o.durationMs) || 0 }); running = false; }
+      return;
+    }
+  }
+  function applyText(text: string): number {
+    const chunk = carry + text;
+    const lines = chunk.split('\n');
+    carry = lines.pop() ?? '';                 // 마지막 조각(개행 없이 끝남)은 다음에
+    let n = 0;
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let o: any; try { o = JSON.parse(line); } catch { continue; }
+      applyLine(o); n++;
+    }
+    return n;
+  }
+
+  /** 첫 로드 — 어디서 읽을지 정하고 꼬리 창을 그린다. */
+  async function open(): Promise<void> {
+    view.setNote('');
+    const tries: Source[] = [];
+    if (isBox) {
+      if (!target.node) tries.push({ kind: 'box', id: target.id });
+      const uuid = target.logId || target.raw?.claudeSessionId;
+      if (uuid) tries.push({ kind: 'log', sid: String(uuid), node: String(target.logNode ?? target.node ?? '') });
+    } else {
+      tries.push({ kind: 'log', sid: target.id, node: String(target.node ?? '') });
+    }
+    let chunk: RawChunk | null = null; const errs: any[] = [];
+    for (const s of tries) {
+      try { chunk = await rawGet(srcPath(s, { tail: WINDOW })); src = s; break; }
+      catch (e: any) { errs.push(e); if (![403, 404, 409].includes(Number(e?.status))) break; }   // '없음·권한 아직 없음·딴 컴퓨터' 는 다음 후보로
+    }
+    if (destroyed) return;
+    if (!chunk) {
+      // 기록이 아직 없다(첫 대화 전) 또는 못 읽는다 — 그 자리에 말한다. 라이브면 입력칸은 살아 있다(첫 지시를 여기서 보낼 수 있다).
+      //  박스 후보가 404 였으면 그게 사실(파일이 아직 없다)이다 — 그 뒤 중앙 기록 후보의 403(행이 아직 없다)을 앞세우지 않는다.
+      const boxErr = errs.find((e) => tries[errs.indexOf(e)]?.kind === 'box');
+      const lastErr = boxErr ?? errs[errs.length - 1];
+      const notYet = !errs.length || errs.every((e) => [403, 404].includes(Number(e?.status)));
+      const msg = !tries.length ? '이 세션의 대화 id 를 아직 몰라 여기서 읽을 수 없어요 — 첫 턴이 끝나면 중앙 기록으로 보입니다. 지금은 터미널로 보세요.'
+        : notYet ? (canType() ? '아직 대화 기록이 없어요. 아래에 첫 지시를 적으면 여기서부터 쌓입니다.' : '이 세션의 대화 기록을 찾지 못했어요.')
+        : lastErr?.status === 409 ? '이 세션의 대화 파일은 그 컴퓨터에 있어 여기서 바로 읽지 못해요. 첫 턴이 끝나면 중앙 기록으로 보입니다.'
+        : `대화 기록을 불러오지 못했습니다. ${lastErr?.message || ''}`;
+      view.list.append(el('div', { class: 'livc-open sc-empty' }, el('p', { text: msg }),
+        !notYet && opts.terminalSrc && isBox ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '터미널로 보기', onclick: () => toggleTerminal(true) }) : null));
+      paintState();
+      // 라이브 박스면 파일이 생기는 순간을 잡는다(사람이 터미널에서 먼저 말을 걸 수도 있다) — 첫 대화 뒤에 여기로 흘러든다.
+      if (canType() && !target.node) { src = { kind: 'box', id: target.id }; schedule(); }
+      return;
+    }
+    loadedFrom = chunk.from; loadedTo = chunk.to;
+    let text = chunk.text;
+    if (chunk.from > 0) { const nl = text.indexOf('\n'); text = nl >= 0 ? text.slice(nl + 1) : ''; }   // 창 첫 줄은 잘렸을 수 있다
+    applyText(text);
+    if (chunk.from > 0) olderBar();
+    finishReplay();
+    view.scrollToBottom();
+    paintState();
+    schedule();
+  }
+  function finishReplay(): void {
+    // 창 안에서 끝나지 않은 마지막 턴 — 지금 도는 중이면 라이브 표시, 아니면(죽었거나 오래됐으면) 조용히 마감.
+    const staleMs = Date.now() - lastLineAt;
+    const looksLive = running && !dead() && (target.raw?.working || target.raw?.agentState === 'busy' || staleMs < 120_000);
+    if (cur && looksLive) { view.running(cur.t); view.busy(true); }
+    else { running = false; recs.forEach((r) => view.settle(r.t)); view.busy(false); }
+    titleFromFirstAsk();
+  }
+  function titleFromFirstAsk(): void {
+    if (target.label && !/^box-|^[0-9a-f-]{20,}$/i.test(target.label)) return;
+    const q = recs.find((r) => r.t.text)?.t.text;
+    if (q) titleEl.textContent = q.length > 60 ? q.slice(0, 60) + '…' : q;
+  }
+
+  // 위로 더 — [from-WINDOW, from) 창을 읽어 **턴 단위로 거꾸로** 앞에 끼운다(보고 있던 자리는 그대로).
+  let olderEl: HTMLElement | null = null;
+  function olderBar(): void {
+    olderEl?.remove();
+    if (loadedFrom <= 0) { olderEl = null; return; }
+    const kb = Math.round(loadedFrom / 1024);
+    const btn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: `이전 대화 불러오기 (${kb >= 1024 ? (kb / 1024).toFixed(1) + 'MB' : kb + 'KB'} 더 있음)` }) as HTMLButtonElement;
+    btn.addEventListener('click', () => { void loadOlder(btn); });
+    const bar = el('div', { class: 'sc-older' }, btn) as HTMLElement;
+    olderEl = bar;
+    view.list.prepend(bar);
+  }
+  async function loadOlder(btn: HTMLButtonElement): Promise<void> {
+    if (!src || loadedFrom <= 0) return;
+    btn.disabled = true; btn.textContent = '불러오는 중…';
+    const from = Math.max(0, loadedFrom - WINDOW);
+    let chunk: RawChunk;
+    try { chunk = await rawGet(srcPath(src, { from, to: loadedFrom })); }
+    catch (e: any) { btn.disabled = false; btn.textContent = '다시 시도'; toast(e?.message || '이전 대화를 불러오지 못했습니다.'); return; }
+    if (destroyed) return;
+    let text = chunk.text;
+    if (from > 0) { const nl = text.indexOf('\n'); text = nl >= 0 ? text.slice(nl + 1) : ''; }
+    // 줄 → 턴 묶음(사람 말 기준). 첫 묶음은 사람 말 없는 이어짐일 수 있다.
+    type Bundle = { text: string | null; ts?: string; lines: any[]; kind: 'turn' | 'cont' | 'divider'; raw?: string };
+    const bundles: Bundle[] = [];
+    let b: Bundle | null = null;
+    for (const line of text.split('\n')) {
+      if (!line.trim()) continue;
+      let o: any; try { o = JSON.parse(line); } catch { continue; }
+      if (!o || o.isSidechain) continue;
+      if (o.type === 'user') {
+        const { text: ut, results } = userText(o);
+        if (results.length) { if (!b) { b = { text: null, lines: [], kind: 'cont' }; bundles.push(b); } b.lines.push(o); }
+        if (o.isMeta || !ut.trim() || INTERRUPT_RE.test(ut) || INJECTED_RE.test(ut)) { if (INTERRUPT_RE.test(ut) && b) b.lines.push(o); continue; }
+        if (CONTINUED_RE.test(ut)) { bundles.push({ text: null, lines: [], kind: 'divider', raw: ut }); b = { text: null, lines: [], kind: 'cont' }; bundles.push(b); continue; }
+        b = { text: ut, ts: o.timestamp, lines: [], kind: 'turn' }; bundles.push(b);
+      } else if (o.type === 'assistant' || (o.type === 'system' && (o.subtype === 'turn_duration' || o.subtype === 'stop_hook_summary'))) {
+        if (!b) { b = { text: null, lines: [], kind: 'cont' }; bundles.push(b); }
+        b.lines.push(o);
+      }
+    }
+    // 화면 맨 위가 '이어짐'(사람 말 없음)이었으면 그 내용은 이 창의 마지막 턴에 속한다 — 합친다.
+    const firstRec = recs[0];
+    let orphan: Rec | null = null;
+    if (firstRec && !firstRec.t.ask && bundles.length && bundles[bundles.length - 1].kind !== 'divider') { orphan = firstRec; }
+    view.prependKeepingView(() => {
+      const savedCur = cur;
+      for (let i = bundles.length - 1; i >= 0; i--) {
+        const bd = bundles[i];
+        if (bd.kind === 'divider') { view.divider('맥락 압축 — 이전 대화를 요약해 이어감', bd.raw, 'start'); continue; }
+        const rec = newRec(bd.text, bd.ts, 'start');
+        cur = rec;
+        for (const o of bd.lines) {
+          if (o.type === 'user') { const { text: ut, results } = userText(o); if (results.length) view.event(rec.t, { type: 'user', message: { content: results } }); if (INTERRUPT_RE.test(ut)) view.settle(rec.t, { interrupted: true }); }
+          else if (o.type === 'assistant') view.event(rec.t, o);
+          else if (o.type === 'system') view.settle(rec.t, { durationMs: Number(o.durationMs) || 0 });
+        }
+        if (i === bundles.length - 1 && orphan) {
+          // 고아 이어짐의 이벤트를 이 턴 뒤에 다시 그리고 고아는 치운다. 고아가 '지금 도는 턴'이었으면 그 표시(깜빡임·경과 줄)도 옮긴다.
+          const wasLive = !!orphan.t.live;
+          for (const o of orphan.evs) view.event(rec.t, o);
+          orphan.t.root.remove(); recs.splice(recs.indexOf(orphan), 1);
+          if (savedCur === orphan) cur = rec;
+          if (wasLive) { view.running(rec.t); continue; }   // 도는 턴은 마감하지 않는다
+        }
+        view.settle(rec.t);
+      }
+      cur = savedCur && recs.includes(savedCur) ? savedCur : cur;
+      loadedFrom = from;
+      olderBar();
+    });
+    titleFromFirstAsk();
+  }
+
+  // 폴링 — 도는 중이면 촘촘히, 아니면 느슨히. 탭이 숨어 있으면 건너뛴다.
+  function schedule(): void {
+    if (destroyed || !src) return;
+    if (pollTimer) clearTimeout(pollTimer);
+    const ms = src.kind === 'log' ? POLL_LOG_MS : running ? POLL_RUN_MS : POLL_IDLE_MS;
+    if (dead() && src.kind === 'log' && !running) return;   // 죽은 세션의 중앙 기록은 더 안 는다
+    pollTimer = window.setTimeout(() => { void poll(); }, ms);
+  }
+  let fails = 0;
+  async function poll(): Promise<void> {
+    if (destroyed || !src) return;
+    if (document.hidden) { schedule(); return; }
+    try {
+      const c = await rawGet(srcPath(src, { from: loadedTo }));
+      fails = 0;
+      if (destroyed) return;
+      if (c.bytes < loadedTo) {            // 파일이 줄었다(교체됨) — 처음부터 다시
+        clearAll(); await open(); return;
+      }
+      if (c.text) {
+        view.list.querySelector('.sc-empty')?.remove();   // 파일이 생겼다 — '아직 없음' 안내는 물러난다
+        const wasRunning = running;
+        applyText(c.text);
+        loadedTo = c.to;
+        if (running && cur) { if (!wasRunning || !cur.t.live) view.running(cur.t); view.busy(true); }
+        if (!running) { if (cur) view.settle(cur.t); view.busy(false); }
+        view.scroll(); paintState(); titleFromFirstAsk();
+      } else if (running && cur && !dead()) {
+        // 새 줄이 없는데 도는 중 표시 — 오래 조용하면(120초) 상태 보고까지 안 바쁘다면 마감한다(터미널에서 Esc 했거나 죽은 경우)
+        if (Date.now() - lastLineAt > 120_000 && !(target.raw?.working || target.raw?.agentState === 'busy')) { running = false; view.settle(cur.t); view.busy(false); paintState(); }
+      }
+    } catch (e: any) {
+      fails++;
+      if (e?.status === 404 && src.kind === 'box') { /* 아직 파일 없음 — 계속 기다린다(첫 대화 뒤에 생긴다) */ }
+      else if (fails === 3) view.setNote('진행을 따라가지 못하고 있어요 — 다시 붙는 중…');
+    }
+    schedule();
+  }
+  function clearAll(): void {
+    recs.splice(0); cur = null; carry = ''; loadedFrom = loadedTo = 0; running = false;
+    view.list.replaceChildren(); olderEl = null;
+  }
+
+  // ── 보내기·키·이어받기 ──────────────────────────────────────────────────────────────
+  async function sendPrompt(text: string): Promise<void> {
+    if (!canType()) { toast('끝난 세션이에요 — [이어서 대화하기]로 새 세션을 열어 보내세요.'); return; }
+    // 낙관적으로 그린다 — 파일에 내 말이 나타나면 그 턴을 재사용한다(applyLine). 안 나타나면 5초 뒤 알린다.
+    view.removeOpening(); view.list.querySelector('.sc-empty')?.remove();
+    const rec = newRec(text, new Date().toISOString());
+    pendingSent = { text, t: rec.t };
+    cur = rec;                                   // 이제부터 오는 AI 줄은 이 턴의 것이다(옛 턴에 붙지 않게)
+    view.running(rec.t); view.busy(true); view.scrollToBottom();
+    running = true;
+    try {
+      await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/prompt`, { method: 'POST', body: JSON.stringify({ text }) });
+      view.setNote('');
+      if (!src) { src = { kind: 'box', id: target.id }; }
+      schedule();
+      // 주입은 tmux send-keys 라 TUI 가 글자를 다 받기 전에 Enter 가 닿으면 **입력칸에 글만 남고 미제출**이 된다(send-keys.ts 규약 ②,
+      //  실측 2026-08-18: 두 번째 프롬프트가 그렇게 남았다). 기록에 내 말이 안 나타나면 Enter 만 한 번 더 보낸다 — 이미 제출됐으면
+      //  빈 입력칸에 Enter 라 아무 일도 없고, 남아 있었으면 그때 제출된다. 그래도 안 되면 사람에게 말한다(터미널을 보라고).
+      const stillPending = (): boolean => !!pendingSent && pendingSent.t === rec.t && !destroyed;
+      window.setTimeout(() => { if (stillPending() && canKeys()) void sendKey('Enter', true); }, 5000);
+      window.setTimeout(() => { if (stillPending()) view.setNote('보냈지만 아직 세션 기록에 나타나지 않았어요 — 세션이 다른 대화상자에 멈춰 있을 수 있어요(터미널을 확인해 보세요).'); }, 12000);
+    } catch (e: any) {
+      pendingSent = null; running = false;
+      view.settle(rec.t); view.busy(false);
+      view.error(rec.t, `보내지 못했습니다. ${e?.message || ''}`);
+      view.input.value = text;               // 친 글은 돌려준다
+    }
+  }
+  async function sendKey(key: 'Enter' | 'Escape', quiet = false): Promise<void> {
+    try {
+      await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/keys`, { method: 'POST', body: JSON.stringify({ key }) });
+      if (quiet) return;
+      view.setNote(key === 'Escape' ? '멈춤을 보냈어요.' : 'Enter 를 보냈어요.');
+      window.setTimeout(() => { if (!destroyed) view.setNote(''); }, 2500);
+    } catch (e: any) { if (!quiet) view.setNote(e?.message || '키를 보내지 못했습니다.'); }
+  }
+  async function resumeSession(btn: HTMLButtonElement): Promise<void> {
+    btn.disabled = true; const orig = btn.textContent; btn.textContent = '여는 중…';
+    try {
+      let nextId = '';
+      if (isBox && target.raw?.restorable) {
+        const r: any = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/restore`, { method: 'POST', body: '{}' });
+        nextId = String(r?.session?.id || (r?.already ? target.id : ''));
+      } else {
+        const sid = !isBox ? target.id : String(target.logId || target.raw?.claudeSessionId || '');
+        const node = !isBox ? String(target.node ?? '') : String(target.logNode ?? '');
+        if (!sid) throw new Error('이어받을 대화 id 를 모릅니다.');
+        const r: any = await api(`/api/ui/v6/sessions/${encodeURIComponent(sid)}/resume?node=${encodeURIComponent(node)}`, { method: 'POST', body: '{}' });
+        nextId = String(r?.session?.id || '');
+        if (r?.mode === 'fallback' && r?.reason) toast(String(r.reason));
+      }
+      if (!nextId) throw new Error('새 세션 id 를 받지 못했습니다.');
+      toast('이어받기 세션을 열었어요.');
+      location.hash = '#/s/' + encodeURIComponent(nextId);
+    } catch (e: any) { toast(e?.message || '이어받기 세션을 만들지 못했습니다.'); btn.disabled = false; btn.textContent = orig || '이어서 대화하기'; }
+  }
+
+  // 목차 — 이 창에서 읽은 질문들. 누르면 그 턴으로.
+  function openIndex(): void {
+    const qs = recs.filter((r) => r.t.text);
+    const panel = el('div', { class: 'sc-idx' },
+      el('div', { class: 'sc-idx-h', text: qs.length ? `질문 ${qs.length}개${loadedFrom > 0 ? ' · 불러온 범위 안' : ''}` : '이 창에 질문이 없어요' }),
+      ...qs.map((r, i) => el('button', { class: 'sc-idx-item', type: 'button', title: r.t.text, onclick: () => { close(); r.t.root.scrollIntoView({ behavior: 'smooth', block: 'start' }); r.t.root.classList.add('sc-flash'); setTimeout(() => r.t.root.classList.remove('sc-flash'), 1800); } },
+        el('span', { class: 'sc-idx-n', text: String(i + 1) }), el('span', { class: 'sc-idx-t', text: r.t.text.length > 90 ? r.t.text.slice(0, 90) + '…' : r.t.text }))));
+    const close = anchoredPopover(idxBtn, panel);
+  }
+
+  void open();
+
+  return {
+    update(t) {
+      const wasDead = dead();
+      target = t;
+      titleEl.textContent = t.label && !/^box-|^[0-9a-f-]{20,}$/i.test(t.label) ? t.label : titleEl.textContent;
+      paintState();
+      if (!wasDead && dead()) { running = false; if (cur) view.settle(cur.t); }
+    },
+    destroy() { destroyed = true; if (pollTimer) clearTimeout(pollTimer); view.destroy(); },
+  };
+}
