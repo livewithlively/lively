@@ -24,6 +24,7 @@ import { pjvFolderDrag, pjvLocalSortOverride, pjvSortCtx } from './state.js';
 import { PJV_PRIORITY, PJV_PRIORITY_ORDER, pjvStatusIconStd } from './status.js';
 import { pjvAssigneeWrite, pjvSaveProjMembers } from './task-controls.js';
 import { termAutoApprovePref } from '../terminal.js';
+import { effortKo, flagChoices, providerLabel, runCatalog } from '../v2/run-picker.js'; // #1758 — 제공자·모델·추론강도(홈 입력창과 같은 말·같은 표)
 // ════════════════════════════════════════════════════════════════════════════
 // 클릭업식 다중선택 — 행 호버 시 좌측 체크박스 + 제목 우측 아이콘 3개(추가·태그·이름변경),
 //  체크박스로 1개 이상 선택하면 화면 하단 일괄작업 바(상태·담당자·마감·우선순위·태그·복제·삭제).
@@ -253,8 +254,14 @@ async function pjvBulkRunClaude(btn) {
         labelSpan.textContent = '세션 여는 중…';
     try {
         const sbody = { label, harness: rd.harness || 'claude', autoApprove: rd.autoApprove === true }; // #782 기본 꺼짐 — 켠 사람만 켜짐
+        // 모델·추론강도는 **고른 것만** 넘긴다 — 빈 값은 '지난번 그대로'(그 AI 가 자기 설정으로 뜬다)라서 안 넘기는 게 곧 그 뜻이다(#1758).
+        const rdFlags = {};
         if (rd.model)
-            sbody.flags = { '--model': rd.model };
+            rdFlags['--model'] = rd.model;
+        if (rd.effort)
+            rdFlags['--effort'] = rd.effort;
+        if (Object.keys(rdFlags).length)
+            sbody.flags = rdFlags;
         const r = await api(B + '/sessions', { method: 'POST', body: JSON.stringify(sbody) });
         const sid = r && r.session && r.session.id;
         if (!sid)
@@ -282,7 +289,7 @@ async function pjvBulkRunClaude(btn) {
 const pjvRunDefaultsKey = (pid) => 'lively:runclaude:defaults:v2:' + ((state.me && (state.me.userId || state.me.email)) || 'anon') + ':' + pid;
 const pjvRunDefaultsLegacyKey = (pid) => 'lively:runclaude:defaults:' + pid;
 function pjvRunDefaults(pid, projectRepos) {
-    const base = { where: 'web', harness: 'claude', model: '', autoApprove: termAutoApprovePref(), worktree: true, branch: 'project/' + pid, repos: null };
+    const base = { where: 'web', harness: 'claude', model: '', effort: '', autoApprove: termAutoApprovePref(), worktree: true, branch: 'project/' + pid, repos: null };
     let saved = {};
     try {
         const raw = localStorage.getItem(pjvRunDefaultsKey(pid));
@@ -317,7 +324,7 @@ async function pjvBulkRunDefaultsModal(ctx) {
         toast('프로젝트를 찾을 수 없어요', true);
         return;
     }
-    // 프로젝트 관련 레포 + 하네스 카탈로그(모델 목록·자동승인 여부). 실패해도 아래 기본 카탈로그로 진행.
+    // 프로젝트 관련 레포 + 하네스 카탈로그(제공자·모델·추론강도·자동승인). 실패해도 아래 기본 카탈로그로 진행.
     let projectRepos = [];
     try {
         const pr = await api('/api/ui/v6/projects/' + pid).then((dd) => dd && (dd.project || dd));
@@ -325,17 +332,17 @@ async function pjvBulkRunDefaultsModal(ctx) {
     }
     catch (_) { /* 레포 조회 실패 — 레포 선택 없이 */ }
     const harnessCat = {
-        claude: { label: 'Claude Code', models: ['', 'opus', 'sonnet', 'haiku'], hasAuto: true },
-        codex: { label: 'Codex', models: ['', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'], hasAuto: true },
+        claude: { label: 'Claude Code', prov: 'Anthropic', models: ['', 'opus', 'sonnet', 'haiku'], efforts: [], hasAuto: true },
+        codex: { label: 'Codex', prov: 'OpenAI', models: ['', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'], efforts: [], hasAuto: true },
     };
-    try {
-        const cfg = await api('/api/ui/terminal/config');
-        ((cfg && cfg.harnesses) || []).forEach((h) => {
-            const mf = (h.flags || []).find((f) => f.name === '--model');
-            harnessCat[h.key] = { label: h.label || h.key, models: (mf && mf.choices) || [''], hasAuto: !!h.hasAutoApprove };
-        });
-    }
-    catch (_) { /* 카탈로그 실패 → 위 기본 카탈로그 유지 */ }
+    // #1758 — 목록·이름은 서버 카탈로그가 준다(v2/run-picker 가 캐시). 홈 입력창과 **같은 표**를 읽어야 두 화면의 말이 갈리지 않는다.
+    const cat = await runCatalog();
+    cat.forEach((h) => {
+        harnessCat[h.key] = {
+            label: h.label || h.key, prov: providerLabel(h),
+            models: ['', ...flagChoices(h, '--model')], efforts: flagChoices(h, '--effort'), hasAuto: !!h.hasAutoApprove,
+        };
+    });
     const d = pjvRunDefaults(pid, projectRepos);
     // ── 아래 UI 는 '새 AI 세션' 모달과 같은 언어를 쓴다(#1145) — 같은 일을 정하는 화면이 서로 다르게 생기면
     //  사용자는 매번 새로 배워야 한다. 웹/내 PC 는 제목 줄 pill, 나머지는 문장 격자(.ig-grid).
@@ -362,27 +369,41 @@ async function pjvBulkRunDefaultsModal(ctx) {
     //  #1695 — 목록은 **서버 카탈로그가 준 것 전부**(셸만 제외)다. 종전엔 ['claude','codex'] 를 여기 하드코딩해,
     //   배선이 다 끝난 하네스(opencode #1519 · antigravity #1689)가 이 화면에서만 존재하지 않았다.
     //   폴백 카탈로그(위)가 claude·codex 를 담고 있으므로 서버를 못 읽어도 종전 선택지는 그대로 뜬다.
+    //  #1758 — 첫 칸은 하네스 이름이 아니라 **제공자**로 묻는다(홈 입력창과 같은 말): '앤트로피 · Claude Code'.
+    //   고르는 건 결국 하네스지만, 사람이 먼저 떠올리는 이름을 앞에 두고 무엇이 뜨는지를 뒤에 붙여 둘 다 보이게 한다.
     const HKEYS = Object.keys(harnessCat).filter((k) => k !== 'shell');
-    const harnessSel = el('select', { class: 'term-input ig-sel' }, ...HKEYS.map((k) => el('option', { value: k, text: harnessCat[k].label || k })));
+    const harnessSel = el('select', { class: 'term-input ig-sel' }, ...HKEYS.map((k) => el('option', { value: k, text: (harnessCat[k].prov ? harnessCat[k].prov + ' · ' : '') + (harnessCat[k].label || k) })));
     const modelSel = el('select', { class: 'term-input ig-sel' });
+    const effortSel = el('select', { class: 'term-input ig-sel' });
     const autoCb = el('input', { type: 'checkbox' });
     const autoRow = el('label', { class: 'term-auto' }, autoCb, el('span', { text: ' 자동 승인 — 권한 확인 없이 바로 실행해 빨라요. 신뢰하는 작업에만 켜세요.' }));
     const renderModels = () => {
-        const cat = harnessCat[harnessSel.value] || { models: [''] };
-        const cur = modelSel.value;
-        modelSel.replaceChildren(...(cat.models || ['']).map((m) => el('option', { value: m, text: m || '지난번 그대로' })));
-        if ((cat.models || []).includes(cur))
-            modelSel.value = cur;
-        autoRow.style.display = (cat.hasAuto === false) ? 'none' : '';
+        const hc = harnessCat[harnessSel.value] || { models: [''], efforts: [] };
+        const curM = modelSel.value;
+        modelSel.replaceChildren(...(hc.models || ['']).map((m) => el('option', { value: m, text: m || '지난번 그대로' })));
+        if ((hc.models || []).includes(curM))
+            modelSel.value = curM;
+        // 추론강도를 안 받는 하네스(codex·opencode)면 그 칸을 아예 안 보인다 — 효과 없는 컨트롤을 남기지 않는다.
+        const efs = hc.efforts || [];
+        const curE = effortSel.value;
+        effortSel.replaceChildren(el('option', { value: '', text: '지난번 그대로' }), ...efs.map((e) => el('option', { value: e, text: effortKo(e) })));
+        if (efs.includes(curE))
+            effortSel.value = curE;
+        effortWrap.style.display = efs.length ? '' : 'none';
+        autoRow.style.display = (hc.hasAuto === false) ? 'none' : '';
     };
+    // 문장 격자의 셀로 직접 참여한다(display:contents) — 하네스가 추론강도를 안 받으면 이 묶음만 통째로 사라진다.
+    const effortWrap = el('span', { style: 'display:contents' }, el('span', { class: 'ig-mid', text: ', 추론강도는' }), effortSel);
     if (HKEYS.includes(d.harness))
         harnessSel.value = d.harness;
     harnessSel.addEventListener('change', renderModels);
     renderModels();
     if (((harnessCat[harnessSel.value] || { models: [] }).models || []).includes(d.model))
         modelSel.value = d.model;
+    if (((harnessCat[harnessSel.value] || { efforts: [] }).efforts || []).includes(d.effort))
+        effortSel.value = d.effort;
     autoCb.checked = d.autoApprove === true; // #782 기본 해제(저장된 값이 있을 때만 켬)
-    const runGrid = el('div', { class: 'ig-grid' }, el('span', { class: 'ig-lead', text: '실행은' }), harnessSel, el('span', { class: 'ig-mid', text: '로 실행하고, 모델은' }), modelSel, el('span', { class: 'ig-tail' }, document.createTextNode('를 씁니다.'), infoPop('선택한 태스크를 맡길 **AI 와 모델**입니다.\n\n모델의 「지난번 그대로」는 그 값을 **넘기지 않는다**는 뜻입니다 — 그 AI 가 자기 설정(마지막에 고른 모델)으로 뜹니다.')));
+    const runGrid = el('div', { class: 'ig-grid' }, el('span', { class: 'ig-lead', text: '실행은' }), harnessSel, el('span', { class: 'ig-mid', text: '로 하고, 모델은' }), modelSel, effortWrap, el('span', { class: 'ig-tail' }, document.createTextNode('를 씁니다.'), infoPop('선택한 태스크를 맡길 **제공자(어느 회사 모델)와 모델·추론강도**입니다.\n\n제공자를 고르면 그에 맞는 AI 가 뜹니다 — 앤트로픽은 Claude Code, 오픈AI 는 Codex, 제미나이는 Antigravity, xAI 는 Grok Build, 그 밖은 OpenCode 입니다.\n\n「지난번 그대로」는 그 값을 **넘기지 않는다**는 뜻입니다 — 그 AI 가 자기 설정(마지막에 고른 값)으로 뜹니다.')));
     // 워크트리 — 이 프로젝트 전용 작업 공간을 자동 준비(있으면 재사용). 브랜치명(project/<id>)은 자동 파생이라 안 묻는다(#514 후속).
     const wtChk = el('input', { type: 'checkbox' });
     wtChk.checked = d.worktree !== false;
@@ -429,6 +450,7 @@ async function pjvBulkRunDefaultsModal(ctx) {
             where: whereVal,
             harness: harnessSel.value,
             model: modelSel.value || '',
+            effort: effortSel.value || '',
             autoApprove: autoCb.checked,
             worktree: wtChk.checked,
             repos: (projectRepos.length && !allChosen) ? chosen : null, // null=전부(미래 레포 자동 포함). 브랜치는 저장 안 함 — pjvRunDefaults 가 project/<id> 로 자동 고정.

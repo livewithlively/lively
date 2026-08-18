@@ -152,19 +152,55 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 
 /* 홈 — 인사 + 입력창 하나(#1719, claude.ai 홈처럼) + 지금 도는 세션 */
 .v2-home { flex: 1; min-height: 0; display: flex; flex-direction: column; width: 100%; max-width: 780px; margin: 0 auto; padding: 34px 32px 18px; }
-.v2-home-compose { justify-content: flex-start; padding-top: clamp(40px, 16vh, 140px); }
-.v2-home-compose .v2-h1 { font-size: 24px; }
-.v2-compose { margin-top: 18px; border: 1px solid var(--line-net, #D5DDEA); border-radius: 16px; background: var(--bg, #fff);
-  padding: 12px 12px 10px; box-shadow: 0 1px 2px rgba(16, 24, 40, .04); }
-.v2-compose:focus-within { border-color: transparent; outline: 2px solid var(--blue); outline-offset: 0; }
-.v2-compose-in { display: block; width: 100%; resize: none; border: 0; outline: 0; background: transparent; font: inherit; font-size: 15px;
-  line-height: 1.6; color: var(--ink); min-height: 48px; max-height: 220px; padding: 2px 4px; }
-.v2-compose-in::placeholder { color: var(--muted-2, #a6b2c8); }
-.v2-compose-in:disabled { opacity: .55; }
-.v2-compose-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; }
-.v2-compose-hint { font-size: 12px; color: var(--muted); }
-.v2-compose-send { flex: none; }
-.v2-home-compose .v2-now { margin-top: 28px; }
+/* 홈 = 런처(#1719 재설계) — 왼끝 정렬(가운데 정렬 낙수형 탈피), 입력 카드가 유일한 주인공. */
+.v2-home-launch { max-width: 720px; justify-content: flex-start; padding-top: clamp(36px, 13vh, 120px); }
+.v2-home-eyebrow { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.v2-home-eyebrow .sep { color: var(--line-net-2, #CFE0F7); }
+.v2-home-eyebrow .st { display: inline-flex; align-items: center; gap: 5px; font-weight: 700; color: var(--ink-sub); }
+.v2-home-eyebrow .st.wait { color: var(--amber, #B7791F); }
+.v2-home-launch .v2-h1 { font-size: 25px; letter-spacing: -.45px; margin: 8px 0 0; }
+.v2-launch { position: relative; margin-top: 16px; border: 1px solid var(--line-net, #D5DDEA); border-radius: 16px; background: var(--bg, #fff);
+  box-shadow: 0 1px 2px rgba(21, 35, 59, .05), 0 10px 30px -18px rgba(21, 35, 59, .18); padding: 14px 14px 10px; }
+.v2-launch:focus-within { border-color: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 14%, transparent), 0 10px 30px -18px rgba(21, 35, 59, .2); }
+.v2-launch-in { display: block; width: 100%; resize: none; border: 0; outline: 0; background: transparent; font: inherit; font-size: 15.5px; line-height: 1.6; min-height: 52px; }
+.v2-launch-in::placeholder { color: var(--muted-2, #a6b2c8); }
+.v2-launch-in:disabled { opacity: .55; }
+.v2-launch-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; border-top: 1px solid var(--line-row, #EDF1F8); padding-top: 9px; }
+/* 행선지 — "이 입력이 어디로 가는가"가 창 안에 산다. 칩이 곧 바꾸는 버튼이다. */
+.v2-dest { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.v2-dest-k { font-family: var(--mono, ui-monospace, monospace); font-size: 10px; letter-spacing: .06em; color: var(--muted); flex: none; }
+.v2-dest-chip { display: inline-flex; align-items: center; gap: 7px; max-width: 320px; height: 28px; padding: 0 10px; border: 1px solid var(--line, #E6ECF5); border-radius: 999px; background: var(--bg-tint, #F6FAFF); font: inherit; font-size: 12.5px; color: var(--ink); cursor: pointer; min-width: 0; }
+.v2-dest-chip:hover { border-color: var(--line-net-2, #CFE0F7); background: var(--bg, #fff); }
+.v2-dest-chip b { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.v2-dest-chip .car { color: var(--muted); font-size: 10px; flex: none; }
+.v2-dest-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line-net, #DCE6F5); flex: none; }
+.v2-dest-dot.on { background: var(--blue); }
+.v2-dest-why { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* [시키기] 왼쪽 컨트롤 띠(#1758) — 행선지 칩 + 제공자·모델·추론강도. 좁으면 줄바꿈하고 버튼은 늘 오른끝. */
+.v2-launch-ctl { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; flex: 1; min-width: 0; }
+.v2-run { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+/* 행선지 칩(.v2-dest-chip)과 같은 몸통 — 한 줄에 서는 것들이라 크기·색이 갈리면 줄이 지저분해진다. */
+.v2-run-sel { appearance: none; -webkit-appearance: none; height: 28px; padding: 0 22px 0 10px; border: 1px solid var(--line, #E6ECF5); border-radius: 999px;
+  background-color: var(--bg-tint, #F6FAFF); color: var(--ink-sub, #5A6B85); font: inherit; font-size: 12.5px; max-width: 190px; cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted, #7b879b) 50%), linear-gradient(135deg, var(--muted, #7b879b) 50%, transparent 50%);
+  background-position: calc(100% - 12px) 52%, calc(100% - 8px) 52%; background-size: 4px 4px, 4px 4px; background-repeat: no-repeat; }
+.v2-run-sel:hover:not(:disabled) { border-color: var(--line-net-2, #CFE0F7); background-color: var(--bg, #fff); color: var(--ink); }
+.v2-run-sel:disabled { opacity: .55; cursor: default; }
+.v2-launch-send { flex: none; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 15px; }
+.v2-launch-send kbd { font-family: var(--mono, ui-monospace, monospace); font-size: 11px; opacity: .75; }
+.v2-dest-pop { position: absolute; left: 14px; bottom: 52px; width: min(360px, calc(100% - 28px)); z-index: 30; background: var(--bg, #fff); border: 1px solid var(--line, #E6ECF5); border-radius: 12px; box-shadow: 0 14px 36px rgba(21, 35, 59, .16); padding: 8px; }
+.v2-dest-q { width: 100%; height: 30px; border: 1px solid var(--line, #E6ECF5); border-radius: 8px; padding: 0 9px; font: inherit; font-size: 12.5px; background: var(--bg-tint, #F6FAFF); }
+.v2-dest-q:focus-visible { outline: 2px solid var(--blue); outline-offset: 0; border-color: transparent; }
+.v2-dest-list { margin-top: 6px; max-height: 260px; overflow: auto; display: flex; flex-direction: column; gap: 1px; }
+.v2-dest-opt { display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left; padding: 7px 9px; border: 0; border-radius: 8px; background: none; font: inherit; font-size: 13px; color: var(--ink); cursor: pointer; }
+.v2-dest-opt:hover { background: var(--bg-tint, #F6FAFF); }
+.v2-dest-opt.on { background: var(--bg-tint, #F6FAFF); font-weight: 700; }
+.v2-dest-opt .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-dest-opt .s { font-size: 11px; color: var(--muted); flex: none; }
+.v2-dest-opt .ck { color: var(--mint-deep, #0FA37E); font-weight: 800; flex: none; }
+.v2-dest-opt.auto { border-top: 1px dashed var(--line, #E6ECF5); border-radius: 0 0 8px 8px; margin-top: 4px; padding-top: 9px; color: var(--ink-sub); }
+.v2-launch-hint { margin-top: 7px; font-size: 11.5px; color: var(--muted-2, #a6b2c8); }
+.v2-launch-sugs { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 /* 상단바 프로젝트 연결(#1749) — 버튼 + 검색 드롭다운(anchoredPopover .dash-pop 위에 얹힘) */
 .sc-proj { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
 .sc-proj > a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
