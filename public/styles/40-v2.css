@@ -258,32 +258,32 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .tl-wrap { display: flex; flex-direction: column; gap: 10px; flex: none; }
 .tl-scope { font-size: 12px; color: var(--muted); }
 .tl-wrap .v2-aside-h .v2-k { margin-left: auto; }
-.tl-list { display: flex; flex-direction: column; min-height: 0; }
+.tl-list { display: flex; flex-direction: column; min-height: 0; gap: 2px; }
 .tl-day { display: flex; align-items: center; gap: 10px; padding: 18px 2px 8px; font-size: 11px; font-weight: 700; letter-spacing: .02em; color: var(--muted-2, #a6b2c8); }
 .tl-day:first-child { padding-top: 2px; }
 .tl-day::after { content: ""; flex: 1; height: 1px; background: var(--line-net, #DCE6F5); }
 
 /* 세로 레일 — 점이 레일 위에 얹힌다 */
-.tl-rail { position: relative; padding-left: 20px; display: flex; flex-direction: column; gap: 7px; }
-.tl-rail::before { content: ""; position: absolute; left: 5px; top: 14px; bottom: 14px; width: 1px; background: linear-gradient(var(--line-net, #DCE6F5), var(--line-net, #DCE6F5)); }
+.tl-rail { position: relative; padding-left: 30px; display: flex; flex-direction: column; }
+.tl-rail::before { content: ""; position: absolute; left: 18px; top: 20px; bottom: 20px; width: 1px; background: var(--line-net, #DCE6F5); }
 
-/* 한 항목 = 한 카드 — 제목이 주인공이다.
-   "클로드 딸깍 같고 촌스럽다"(상민님) → 라벨을 앞에서 걷어내고, 테두리를 없애고, 색은 레일 점 하나에만 남긴다.
-   1행: 제목(두 줄까지) + 시각 · 2행: 무엇을 한 일인가 · 누가 · 펼침 표시. */
+/* 하루 = 한 판, 그 안은 행 — 항목마다 흰 상자가 서서 말풍선이 줄줄이 붙던 것을 걷었다(상민님 2026-08-18).
+   판 하나가 날짜를 대신 말하고, 항목은 얇은 선으로만 나뉜다. 색은 왼쪽 점 하나에만. */
+.tl-group { background: var(--bg, #fff); border-radius: 16px; padding: 2px 0; box-shadow: 0 1px 2px rgba(21,35,59,.04); overflow: hidden; }
 .tl-card {
   position: relative; display: flex; flex-direction: column; gap: 3px;
-  background: var(--bg, #fff); border: 0; border-radius: 14px; padding: 12px 14px 11px;
-  box-shadow: 0 1px 2px rgba(21, 35, 59, .05), 0 1px 0 rgba(21, 35, 59, .02);
-  text-decoration: none; color: inherit; transition: box-shadow .16s ease, transform .16s ease;
+  background: none; border: 0; border-radius: 0; padding: 12px 14px 11px 2px;
+  text-decoration: none; color: inherit; transition: background .14s ease;
 }
+.tl-card + .tl-card { box-shadow: inset 0 1px 0 var(--line-row, #EDF1F8); }
 .tl-card::before {
-  content: ""; position: absolute; left: -19px; top: 19px; width: 7px; height: 7px; border-radius: 50%;
-  background: var(--muted-2, #a6b2c8); box-shadow: 0 0 0 3px var(--canvas, #E6EBF3); box-sizing: border-box;
+  content: ""; position: absolute; left: -15px; top: 18px; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--muted-2, #a6b2c8); box-shadow: 0 0 0 3px var(--bg, #fff); box-sizing: border-box;
 }
 .tl-card.can { cursor: pointer; }
-.tl-card.can:hover, .tl-card.go:hover { box-shadow: 0 2px 4px rgba(21,35,59,.07), 0 8px 20px rgba(21,35,59,.06); transform: translateY(-1px); }
-.tl-card.open { box-shadow: 0 2px 4px rgba(21,35,59,.07), 0 10px 24px rgba(21,35,59,.07); }
-.tl-card:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.tl-card.can:hover, .tl-card.go:hover { background: var(--bg-tint, #F6FAFF); }
+.tl-card.open { background: var(--bg-tint, #F6FAFF); }
+.tl-card:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 .tl-head { display: flex; align-items: flex-start; gap: 8px; }
 .tl-ttl {
   flex: 1; min-width: 0; font-size: 14px; line-height: 1.5; font-weight: 600; letter-spacing: -.2px;
@@ -301,19 +301,17 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .tl-card.can:hover .tl-car { color: var(--blue); }
 .tl-card.open .tl-car { transform: rotate(90deg); color: var(--blue); }
 .tl-x { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; color: var(--muted-2, #a6b2c8); padding-top: 3px; }
-/* 색은 점 하나에만 — 종류를 조용히 가른다 */
 .tl-card.tlk-task::before { background: var(--mint-deep, #0FA37E); }
 .tl-card.tlk-knowledge::before { background: var(--teal, #1BAEB0); }
 .tl-card.tlk-file::before { background: var(--mint-deep, #0FA37E); }
 .tl-card.tlk-activity::before { background: var(--blue); }
-.tl-card.tlk-cmd::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-2, #a6b2c8), 0 0 0 3px var(--canvas, #E6EBF3); }
+.tl-card.tlk-cmd::before { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-2, #a6b2c8), 0 0 0 3px var(--bg, #fff); }
 .tl-card.tlk-project::before { background: var(--blue-deep, #1E54CC); }
 .tl-card.tlk-say::before, .tl-card.tlk-meta::before { background: var(--muted-3, #C2CCDD); }
 .tl-card.err .tl-ttl { color: var(--coral-text, #B84E44); }
-/* 펼친 안 */
 .tl-body { display: flex; flex-direction: column; gap: 0; margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--line-row, #EDF1F8); }
-.tl-sub { display: flex; align-items: center; gap: 8px; min-height: 26px; padding: 2px 2px; border-radius: 7px; text-decoration: none; color: inherit; }
-.tl-sub.go:hover { background: var(--bg-tint, #F6FAFF); }
+.tl-sub { display: flex; align-items: center; gap: 8px; min-height: 26px; padding: 2px; border-radius: 7px; text-decoration: none; color: inherit; }
+.tl-sub.go:hover { background: var(--bg-tint-2, #EEF5FF); }
 .tl-sub-v { flex: none; font-size: 11px; font-weight: 600; color: var(--muted-2, #a6b2c8); min-width: 30px; }
 .tl-sub-v.tlk-knowledge { color: var(--teal, #1BAEB0); }
 .tl-sub-v.tlk-file { color: var(--mint-deep, #0FA37E); }

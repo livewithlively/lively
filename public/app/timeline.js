@@ -198,23 +198,24 @@ export function createTimeline(host, ctx) {
         const shownCount = rows.reduce((n, r) => n + ('solo' in r ? 1 : r.kids.length), 0);
         countEl.textContent = String(shownCount);
         emptyEl.hidden = shownCount > 0;
+        // 하루가 **한 판**이다. 종전엔 항목마다 흰 카드가 서서 말풍선이 줄줄이 붙은 꼴이었다(상민님: "다다다닥 붙어 거슬린다").
+        //  이제 판은 날짜 하나에 하나뿐이고, 그 안에서 항목은 얇은 선으로만 나뉜다 — 반복되는 상자가 사라진다.
         const kids = [];
         let day = ' ';
-        let lastWho = '\u0000'; // 같은 사람이 이어지면 이름을 되풀이하지 않는다
+        let lastWho = '\u0000';
         let rail = el('div', { class: 'tl-rail' });
         for (let i = shownRows.length - 1; i >= 0; i--) { // 최신이 위
             const r = shownRows[i];
-            const ts = 'solo' in r ? r.solo.ts : r.head.ts;
-            const d = dayOf(ts);
+            const it0 = 'solo' in r ? r.solo : r.head;
+            const d = dayOf(it0.ts);
             if (d !== day) {
                 day = d;
+                lastWho = '\u0000'; // 날이 바뀌면 누구인지 다시 밝힌다
                 if (d)
                     kids.push(el('div', { class: 'tl-day' }, el('span', { text: dayLabel(d) })));
                 rail = el('div', { class: 'tl-rail' });
-                kids.push(rail);
-                lastWho = '\u0000'; // 날이 바뀌면 다시 밝힌다
+                kids.push(el('div', { class: 'tl-group' }, rail));
             }
-            const it0 = 'solo' in r ? r.solo : r.head;
             const who = String((it0.actor && it0.actor.id) || '');
             rail.append('solo' in r ? card(r.solo, [], who === lastWho) : card(r.head, r.kids, who === lastWho));
             lastWho = who;
