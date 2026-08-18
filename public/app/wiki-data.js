@@ -224,6 +224,54 @@ async function knFetchUncategorizedCount() {
     return Number(r && r.total) || 0;
 }
 function knInvalidateTreeCaches() { knAuthoredTreePromise = null; knCatRowsCache.clear(); knCatIndexCache.clear(); }
+// ── 카테고리 사용자 순서(기기 로컬) — 홈 카드·내 소유 대시보드·사이드바 ★구역이 **같은 순서**를 본다(#1685). ──
+//  키는 홈 카드 드래그 정렬(#657h3)의 것을 그대로 승계 — 이미 순서를 만져 둔 사용자의 투자가 이어진다.
+//  저장 순서를 앞에, 미지정(신설)은 원래 순서대로 뒤에 — 안정 병합.
+const KN_CAT_ORDER = 'kn_home_cat_order_v1';
+function knCatOrderSaved() {
+    try {
+        const v = JSON.parse(localStorage.getItem(KN_CAT_ORDER) || '[]');
+        return Array.isArray(v) ? v.map(String) : [];
+    }
+    catch (_) {
+        return [];
+    }
+}
+function knCatOrderSave(ids) { try {
+    localStorage.setItem(KN_CAT_ORDER, JSON.stringify(ids));
+}
+catch (_) { /* noop */ } }
+function knCatOrderClear() { try {
+    localStorage.removeItem(KN_CAT_ORDER);
+}
+catch (_) { /* noop */ } }
+function knSortByCatOrder(cats) {
+    const order = knCatOrderSaved();
+    if (!order.length)
+        return cats.slice();
+    const pos = new Map(order.map((id, i) => [String(id), i]));
+    return cats.slice().sort((a, b) => {
+        const pa = pos.has(String(a.id)) ? pos.get(String(a.id)) : 1e9;
+        const pb = pos.has(String(b.id)) ? pos.get(String(b.id)) : 1e9;
+        return pa - pb;
+    });
+}
+// src 를 target 의 앞/뒤로 — 화면 밖(다른 그룹 포함) id 까지 보존해 저장한다. 성공 시 true.
+function knApplyCatReorder(allCats, src, target, before) {
+    const cur = knSortByCatOrder(allCats).map((c) => String(c.id));
+    const from = cur.indexOf(String(src));
+    if (from < 0)
+        return false;
+    cur.splice(from, 1);
+    let to = cur.indexOf(String(target));
+    if (to < 0)
+        return false;
+    if (!before)
+        to += 1;
+    cur.splice(to, 0, String(src));
+    knCatOrderSave(cur);
+    return true;
+}
 // 폴더 우선 → sort → 제목순 — 사이드바 트리·폴더 드릴다운 공용 정렬(§3).
 function knFolderFirstSort(a, b) {
     const fa = a.is_folder ? 0 : 1, fb = b.is_folder ? 0 : 1;
@@ -1072,4 +1120,4 @@ async function knFolderChildrenBlock(k) {
 function knPageIcon(e) {
     return (e && e.icon) || (e && e.is_folder ? '📁' : '📄');
 }
-export { HOME_EMPTY, KN_UNCAT, SPACE_LABEL, KN_INJECTION_LABEL, KN_INJECTION_HINT, KN_PROVENANCE_LABEL, KN_PROVENANCE_HINT, KN_AUTHOR_LABEL, KN_AUTHOR_HINT, KN_TYPE_LABEL, KN_REL_LABEL, KN_LINK_REL_LABEL, KN_SOURCE_REL_LABEL, KN_PROP_CATALOG, SOURCE_KIND_LABEL, buildKnPropsBlock, fetchKnHiddenProps, hasMemoryScope, homeDocName, infoDot, isCategoryHomeDoc, knAuthorChip, knChildrenPanel, knCommentsSection, knDelete, knEffectiveVisible, knFetchAuthoredTree, knFetchCategoryIndex, knFetchCategoryRows, knFetchUncategorizedCount, knFolderChildrenBlock, knFolderFirstSort, knInjectChip, knInvalidateTreeCaches, knLinksPanel, knNotionPropsPanel, knPageIcon, knProjectLinks, knPropValue, knProvChip, knSimilarItem, knTreeIcon, knTypeChip, openKnMetaPicker, openKnowledgeLinkPicker, openKnowledgeMoveTo, openProjectChooser, openSourceDetail, saveKnPropsUi, wkRegisterFlush, wkRouteCleanup, wkTrackEditor, };
+export { HOME_EMPTY, KN_UNCAT, SPACE_LABEL, KN_INJECTION_LABEL, KN_INJECTION_HINT, KN_PROVENANCE_LABEL, KN_PROVENANCE_HINT, KN_AUTHOR_LABEL, KN_AUTHOR_HINT, KN_TYPE_LABEL, KN_REL_LABEL, KN_LINK_REL_LABEL, KN_SOURCE_REL_LABEL, KN_PROP_CATALOG, SOURCE_KIND_LABEL, buildKnPropsBlock, fetchKnHiddenProps, hasMemoryScope, homeDocName, infoDot, isCategoryHomeDoc, knAuthorChip, knChildrenPanel, knCommentsSection, knDelete, knEffectiveVisible, knApplyCatReorder, knCatOrderClear, knCatOrderSaved, knFetchAuthoredTree, knFetchCategoryIndex, knFetchCategoryRows, knFetchUncategorizedCount, knSortByCatOrder, knFolderChildrenBlock, knFolderFirstSort, knInjectChip, knInvalidateTreeCaches, knLinksPanel, knNotionPropsPanel, knPageIcon, knProjectLinks, knPropValue, knProvChip, knSimilarItem, knTreeIcon, knTypeChip, openKnMetaPicker, openKnowledgeLinkPicker, openKnowledgeMoveTo, openProjectChooser, openSourceDetail, saveKnPropsUi, wkRegisterFlush, wkRouteCleanup, wkTrackEditor, };
