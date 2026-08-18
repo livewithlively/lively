@@ -10,6 +10,15 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 
+// #1750 — 세션 소속 신호: 게이트웨이가 x-lively-session(→ 세션 정본 gw_session_map)·x-lively-workspace 로
+//  이 세션의 워크스페이스 컨텍스트를 되찾는다. 안 실으면 primary 로 간주되므로(폴백) secondary 세션의
+//  훅 호출이 조용히 primary 데이터를 읽고 쓴다 — dev '다온' 실측이 정확히 그 사고다.
+const SCOPE_HDRS = {
+  ...(String(process.env.LIVELY_SESSION_ID || "").trim() ? { "x-lively-session": String(process.env.LIVELY_SESSION_ID).trim() } : {}),
+  ...(String(process.env.LVLY_TENANT_SLUG || "").trim() ? { "x-lively-workspace": String(process.env.LVLY_TENANT_SLUG).trim() } : {}),
+};
+
+
 // ── 싱크 모드 게이트(#905 P1-②) — 이 폴더에 서버 파일을 쓸 자격이 있는가. ──
 //  배경(왜 이게 없으면 사고인가): 이 훅은 cwd 에서 **위로 40단계** 마커를 찾고, 찾은 폴더에 매니페스트 파일을
 //   '크기가 다르면' 덮어쓴다 — 그리고 stdout 을 안 내므로 **완전 무음**이다. 지금껏 안 터진 유일한 이유는
@@ -109,7 +118,7 @@ function untouched(st, base) {
 
   const jfetch = async (p) => {
     const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 4000);
-    try { return await fetch(base + p, { signal: ctl.signal, headers: { authorization: "Bearer " + token } }); }
+    try { return await fetch(base + p, { signal: ctl.signal, headers: { authorization: "Bearer " + token, ...SCOPE_HDRS } }); }
     finally { clearTimeout(t); }
   };
 

@@ -14,6 +14,15 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
+// #1750 — 세션 소속 신호: 게이트웨이가 x-lively-session(→ 세션 정본 gw_session_map)·x-lively-workspace 로
+//  이 세션의 워크스페이스 컨텍스트를 되찾는다. 안 실으면 primary 로 간주되므로(폴백) secondary 세션의
+//  훅 호출이 조용히 primary 데이터를 읽고 쓴다 — dev '다온' 실측이 정확히 그 사고다.
+const SCOPE_HDRS = {
+  ...(String(process.env.LIVELY_SESSION_ID || "").trim() ? { "x-lively-session": String(process.env.LIVELY_SESSION_ID).trim() } : {}),
+  ...(String(process.env.LVLY_TENANT_SLUG || "").trim() ? { "x-lively-workspace": String(process.env.LVLY_TENANT_SLUG).trim() } : {}),
+};
+
+
 const MIN_PROMPT_CHARS = 12;   // (a) HUB 은 이보다 짧은 프롬프트에선 스킵(노이즈·낭비 방지). (b) 는 최근 Read 있으면 진행.
 const HUB_CAP = 2;
 const LEAF_CAP = 3;
@@ -94,7 +103,7 @@ function cacheFile(sid) {
   try {
     const res = await fetch(`${base}/api/ui/recall/route`, {
       method: "POST", signal: ctl.signal,
-      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      headers: { authorization: "Bearer " + token, ...SCOPE_HDRS, "content-type": "application/json" },
       body: JSON.stringify({
         text: wantHub ? prompt.slice(0, 4000) : "",
         paths, exclude: injected,

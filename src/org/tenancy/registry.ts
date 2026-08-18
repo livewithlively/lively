@@ -136,3 +136,42 @@ export async function removeWorkspaceMember(workspaceId: string, memberId: strin
   await itemsPool.query(`DELETE FROM gw_workspace_member WHERE workspace_id=$1 AND member_id=$2`, [workspaceId, memberId]);
   invalidateRegistryCache();
 }
+
+// ── 세션 → 워크스페이스 정본(#1750 후속) ────────────────────────────────────
+//
+// 워크스페이스 신호가 클라이언트 헤더에만 실리면 SSE·iframe·WS·구 번들·훅이 전부 조용히 primary 로
+//  떨어진다(dev '다온' 실측). 세션 생성이 소속을 여기 새기면, 이후의 모든 세션 축 요청은 서버가
+//  이 표로 컨텍스트를 되찾는다 — 클라이언트가 뭘 실었든/못 실었든.
+//
+// primary 세션은 행을 만들지 않는다(부재 = primary — 구 세션·종전 동작과 정확히 일치).
+// 캐시: 미들웨어 핫패스(세션당 요청 다발)라 15초 TTL 개별 캐시. 낡음의 최악 = 방금 만든 세션의
+//  첫 요청 몇 개가 맵 미스 → primary 로 가는 것인데, 쓰기 직후 캐시에 심으므로 실제로는 0.
+
+const sessionWsCache = new Map<string, { ws: RegistryWorkspace | null; at: number }>();
+const SESSION_TTL_MS = 15_000;
+
+export async function setSessionWorkspace(sessionId: string, workspaceId: string): Promise<void> {
+  await itemsPool.query(
+    `INSERT INTO gw_session_map(session_id, workspace_id) VALUES($1,$2)
+     ON CONFLICT (session_id) DO UPDATE SET workspace_id=EXCLUDED.workspace_id`,
+    [sessionId, workspaceId]);
+  sessionWsCache.delete(sessionId);
+}
+
+export async function clearSessionWorkspace(sessionId: string): Promise<void> {
+  await itemsPool.query(`DELETE FROM gw_session_map WHERE session_id=$1`, [sessionId]);
+  sessionWsCache.delete(sessionId);
+}
+
+/** 세션의 소속 워크스페이스(active 만). 행 없음/보관됨 = null → 호출자는 primary 로 다룬다. */
+export async function workspaceForSession(sessionId: string): Promise<RegistryWorkspace | null> {
+  const hit = sessionWsCache.get(sessionId);
+  if (hit && Date.now() - hit.at < SESSION_TTL_MS) return hit.ws;
+  const r = await itemsPool.query(
+    `SELECT ${COLS.split(", ").map((c) => `w.${c}`).join(", ")}
+       FROM gw_session_map m JOIN gw_workspace w ON w.id = m.workspace_id
+      WHERE m.session_id=$1 AND w.state='active'`, [sessionId]);
+  const ws = (r.rows[0] as RegistryWorkspace) ?? null;
+  sessionWsCache.set(sessionId, { ws, at: Date.now() });
+  return ws;
+}

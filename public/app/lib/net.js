@@ -20,8 +20,17 @@ const API_PREFIX = (() => {
     return m ? m[1] : '';
 })();
 // 루트 절대경로만 접두사를 받는다(상대·절대URL·blob/data 는 그대로).
+//  #1750 후속 — /api/ 경로에는 선택 워크스페이스를 `lvly_ws` 쿼리로도 싣는다. 헤더는 fetch 에만 실을 수
+//  있어서 EventSource(SSE)·iframe·`<a href>` 로 만드는 요청이 전부 신호 없이 primary 로 떨어졌다
+//  (dev 실측 — '하루' 워크스페이스 화면이라 믿는 탭이 primary 데이터를 그렸다). URL 을 만드는 이 한
+//  자리에 붙이면 fetch 든 스트림이든 같은 신호를 갖는다(서버 미들웨어가 헤더와 동등하게 읽는다).
 function apiUrl(path) {
-    return API_PREFIX && String(path).charAt(0) === '/' ? API_PREFIX + path : path;
+    let p = API_PREFIX && String(path).charAt(0) === '/' ? API_PREFIX + path : path;
+    const ws = currentWorkspace();
+    if (ws && ws !== 'primary' && String(path).indexOf('/api/') === 0 && p.indexOf('lvly_ws=') < 0) {
+        p += (p.indexOf('?') < 0 ? '?' : '&') + 'lvly_ws=' + encodeURIComponent(ws);
+    }
+    return p;
 }
 // 화면 이동(#1169) — `window.open`·`<a href>` 로 **다른 페이지**를 열 때 쓴다. apiUrl 과 규칙은 같지만
 //  대상이 fetch 가 아니라 내비게이션이라 이름을 갈라 둔다(호출부에서 무엇을 하려는지 읽히도록).

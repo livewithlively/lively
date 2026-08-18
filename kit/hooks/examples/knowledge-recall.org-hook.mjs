@@ -10,6 +10,15 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
+// #1750 — 세션 소속 신호: 게이트웨이가 x-lively-session(→ 세션 정본 gw_session_map)·x-lively-workspace 로
+//  이 세션의 워크스페이스 컨텍스트를 되찾는다. 안 실으면 primary 로 간주되므로(폴백) secondary 세션의
+//  훅 호출이 조용히 primary 데이터를 읽고 쓴다 — dev '다온' 실측이 정확히 그 사고다.
+const SCOPE_HDRS = {
+  ...(String(process.env.LIVELY_SESSION_ID || "").trim() ? { "x-lively-session": String(process.env.LIVELY_SESSION_ID).trim() } : {}),
+  ...(String(process.env.LVLY_TENANT_SLUG || "").trim() ? { "x-lively-workspace": String(process.env.LVLY_TENANT_SLUG).trim() } : {}),
+};
+
+
 const MIN_SCORE = 0.6;        // 이 코사인 유사도 이상만 — 게이팅(관련 없으면 아무것도 안 함). bge-m3 기준 0.5는 모호질문에 턱걸이 노이즈가 새서 0.6으로 상향(2026-06-26).
 const LIMIT = 4;              // 주입 최대 건수(인덱스이므로 적게)
 const MIN_PROMPT_CHARS = 12;  // 너무 짧은 프롬프트(ok/네/yes 등)는 스킵(노이즈·낭비 방지)
@@ -40,7 +49,7 @@ const FETCH_MS = 4000;
   const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), FETCH_MS);
   try {
     const qs = new URLSearchParams({ text: prompt.slice(0, 2000), min_score: String(MIN_SCORE), limit: String(LIMIT) });
-    const res = await fetch(`${base}/api/ui/knowledge/similar?${qs}`, { signal: ctl.signal, headers: { authorization: "Bearer " + token } });
+    const res = await fetch(`${base}/api/ui/knowledge/similar?${qs}`, { signal: ctl.signal, headers: { authorization: "Bearer " + token, ...SCOPE_HDRS } });
     if (!res.ok) return;
     const j = await res.json();
     entries = Array.isArray(j && j.entries) ? j.entries : [];
