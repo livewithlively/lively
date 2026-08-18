@@ -196,6 +196,9 @@ function startBackgroundSweeps(): void {
   //   라이브 38건 중 19건이 레코드 없음 = 회수 면역). 판정 시각은 tmux 메타(작업·열람)를 그대로 쓰므로
   //   갓 백필한 세션이 곧바로 회수되지는 않는다(활동이 최근이면 보존).
   setInterval(() => {
+    void import("../sessions/session-outbox.js")
+      .then(({ resumeOutbox }) => resumeOutbox())
+      .catch((err) => logger.warn({ err }, "outbox 재개 실패(비치명 — 다음 enqueue 가 kick)"));
     void backfillSessionStates()
       .catch((err) => logger.warn({ err }, "session-state 백필 tick 실패"))
       .then(() => reapIdleSessions())
