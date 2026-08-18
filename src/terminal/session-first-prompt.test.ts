@@ -24,6 +24,15 @@ const TRUST = [
   "",
   " Enter to confirm · Esc to exit",
 ].join("\n");
+// Antigravity 신뢰 대화상자(실측 2026-08-18) — 문구·커서('>')·힌트("↑/↓ Navigate · enter Confirm")가 전부 claude 와 다르다.
+const AG_TRUST = [
+  " Accessing workspace: /Users/lively/box/yoon/sessions/box-yoon-ca3037ee",
+  " Do you trust the contents of this project?",
+  " Antigravity CLI requires permission to read, edit, and execute files here.",
+  " > Yes, I trust this folder",
+  "   No, exit",
+  " ↑/↓ Navigate · enter Confirm",
+].join("\n");
 const LOGIN = "\n Welcome to Claude Code\n\n Select login method:\n ❯ 1. Claude account with subscription\n   2. Anthropic Console account\n";
 const base = { harness: "claude", paneCmd: "node", elapsedMs: 3000, maxMs: 90_000, trustOk: true };
 
@@ -57,5 +66,11 @@ t("[9] 비-Claude 하네스 — 하네스가 떴어도 정착 6s 전엔 wait(599
 t("[10] 비-Claude 하네스도 신뢰 대화상자가 보이면 하네스 규칙보다 먼저 그걸 처리한다", () => assert.equal(firstPromptStep({ ...base, harness: "codex", paneCmd: "codex", pane: TRUST, elapsedMs: 8000 }), "accept-trust"));
 t("[11] 새 입력 부재 — claude · pane=\"\" · paneCmd=\"\" 은 wait(넣지 않는다)", () => assert.equal(firstPromptStep({ ...base, pane: "", paneCmd: "" }), "wait"));
 t("[12] 비-Claude · paneCmd=\"\"(포그라운드 모름)는 wait", () => assert.equal(firstPromptStep({ ...base, harness: "opencode", paneCmd: "", pane: "", elapsedMs: 30_000 }), "wait"));
+
+
+t("[AG1] Antigravity 신뢰 대화상자 + 세션 전용 폴더 → accept-trust(문구가 달라도)", () =>
+  assert.equal(firstPromptStep({ ...base, harness: "antigravity", paneCmd: "antigravity", pane: AG_TRUST, elapsedMs: 8000 }), "accept-trust"));
+t("[AG2] Antigravity 신뢰 대화상자 + 사람이 고른 폴더 → wait(6초가 지나도 대화상자에 텍스트를 밀어 넣지 않는다)", () =>
+  assert.equal(firstPromptStep({ ...base, harness: "antigravity", paneCmd: "antigravity", pane: AG_TRUST, elapsedMs: 8000, trustOk: false }), "wait"));
 
 console.log(`session-first-prompt: ${pass} passed`);

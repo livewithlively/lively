@@ -40,6 +40,16 @@ t("전사에 남은 사용자의 번호목록 메시지 → 대기 아님(#853 �
   ].join("\n");
   assert.equal(detectAwaiting(pane), false);
 });
+t("detectAwaiting — Antigravity 신뢰 대화상자('Do you trust'·'↑/↓ Navigate · enter Confirm')도 확인 필요다(실측 2026-08-18)", () => {
+  const ag = [
+    " Accessing workspace: /Users/lively/box/yoon/sessions/box-yoon-ca3037ee",
+    " Do you trust the contents of this project?",
+    " > Yes, I trust this folder",
+    "   No, exit",
+    " ↑/↓ Navigate · enter Confirm",
+  ].join("\n");
+  assert.equal(detectAwaiting(ag), true);
+});
 
 t("사용자가 입력창에 번호목록을 타이핑 중 → 대기 아님", () => {
   const pane = ["⏺ 네.", "─".repeat(120), "❯ 1. 첫째 2. 둘째", "─".repeat(120), "  ⏸ manual mode on · ? for shortcuts"].join("\n");
