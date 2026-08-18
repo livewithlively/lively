@@ -9,7 +9,8 @@ import path from "node:path";
 
 const SHARED = await fsp.mkdtemp(path.join(os.tmpdir(), "lively-sp-shared-"));
 process.env.TERMINAL_ROOT_SHARED = SHARED;
-const { applySessionProjectFs, PROJECT_LINK_NAME } = await import("./session-project.js");
+const { applySessionProjectFs, planSessionProjectFs, PROJECT_LINK_NAME, MEMBER_JS } = await import("./session-project.js");
+import { spawnSync } from "node:child_process";
 
 let pass = 0;
 const t = async (name: string, fn: () => Promise<void>): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
@@ -99,6 +100,41 @@ await t("[7] 프로젝트 폴더는 있으나 AGENTS.md 없음 → CLAUDE.md 는
   assert.equal(r.linked, true);
   const claude = fs.readFileSync(path.join(dir, "CLAUDE.md"), "utf8").trim().split("\n");
   assert.deepEqual(claude, ["<!-- lively:session-project -->", "@AGENTS.md"]);
+});
+
+// ── 멤버 uid 실행기(MEMBER_JS) — 격리 홈에선 이 고정 리터럴이 같은 계획을 실행한다. 여기선 로컬 uid 로 돌려 계약(probe→ops)을 검증 ──
+const runMember = (input: unknown): any => {
+  const r = spawnSync(process.execPath, ["-e", MEMBER_JS], { input: JSON.stringify(input), encoding: "utf8" });
+  if (r.status !== 0) throw new Error("member js exit " + r.status + " " + r.stderr);
+  return JSON.parse(r.stdout);
+};
+await t("[8] MEMBER_JS probe — 링크 없음·셔틀 없음이면 {false,null,null} · 우리 셔틀이 있으면 head 로 표식이 보인다", async () => {
+  const dir = await mkSession();
+  const paths = { link: path.join(dir, PROJECT_LINK_NAME), agents: path.join(dir, "AGENTS.md"), claude: path.join(dir, "CLAUDE.md") };
+  assert.deepEqual(runMember({ probe: paths }), { linkIsSymlink: false, agentsHead: null, claudeHead: null });
+  await fsp.writeFile(paths.agents, "<!-- lively:session-project -->\n# x\n");
+  await fsp.symlink(P12, paths.link, "dir");
+  const pr = runMember({ probe: paths });
+  assert.equal(pr.linkIsSymlink, true); assert.ok(String(pr.agentsHead).startsWith("<!-- lively:session-project -->")); assert.equal(pr.claudeHead, null);
+});
+await t("[9] MEMBER_JS ops — 로컬 io 와 같은 계획을 실행하면 같은 결과(마커·링크·셔틀) · 뗌 계획도 같다", async () => {
+  const dir = await mkSession();
+  const paths = { link: path.join(dir, PROJECT_LINK_NAME), agents: path.join(dir, "AGENTS.md"), claude: path.join(dir, "CLAUDE.md") };
+  const plan = planSessionProjectFs(dir, "box-yoon-9", { projectId: 12, folder: "project/12", name: "온보딩" }, P12, runMember({ probe: paths }));
+  assert.deepEqual(runMember({ ops: plan.ops }), { linkFailed: false });
+  assert.equal(readJson(path.join(dir, ".lively", "project.json")).project_id, 12);
+  assert.equal(linkTarget(paths.link), P12);
+  assert.ok(fs.readFileSync(paths.claude, "utf8").includes(`@${PROJECT_LINK_NAME}/AGENTS.md`));
+  // 실패한 링크는 linkFailed 로 보고(진짜 폴더가 자리를 차지) — 나머지 op 는 그대로 수행
+  const dir2 = await mkSession(); await fsp.mkdir(path.join(dir2, PROJECT_LINK_NAME));
+  const paths2 = { link: path.join(dir2, PROJECT_LINK_NAME), agents: path.join(dir2, "AGENTS.md"), claude: path.join(dir2, "CLAUDE.md") };
+  const plan2 = planSessionProjectFs(dir2, "box-yoon-9b", { projectId: 12, folder: "project/12" }, P12, runMember({ probe: paths2 }));
+  assert.deepEqual(runMember({ ops: plan2.ops }), { linkFailed: true });
+  assert.ok(fs.existsSync(path.join(dir2, ".lively", "project.json")));
+  // 뗌
+  const unplan = planSessionProjectFs(dir, "box-yoon-9", null, null, runMember({ probe: paths }));
+  assert.deepEqual(runMember({ ops: unplan.ops }), { linkFailed: false });
+  assert.ok(!fs.existsSync(paths.link) && !fs.existsSync(paths.agents) && !fs.existsSync(path.join(dir, ".lively", "project.json")));
 });
 
 console.log(`session-project: ${pass} passed`);
