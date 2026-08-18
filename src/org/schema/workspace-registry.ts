@@ -44,5 +44,15 @@ export async function initWorkspaceRegistry(pool: Pool): Promise<void> {
       PRIMARY KEY (workspace_id, member_id));
     ${ensureCheck("gw_workspace_member", { gw_workspace_member_role_chk: "role IN ('owner','member')" })}
     CREATE INDEX IF NOT EXISTS gw_workspace_member_member_idx ON gw_workspace_member(member_id);
+    -- 세션 → 워크스페이스 정본(#1750 후속). ★ 워크스페이스 신호를 클라이언트 헤더에만 실으면
+    --  EventSource(SSE)·iframe(단독 터미널 페이지)·WS 업그레이드·구 번들·훅처럼 헤더를 못/안 싣는
+    --  표면이 전부 조용히 primary 로 떨어진다(dev 실측: '하루' 개인 ws 에서 연 세션이 primary 로 들어가
+    --  primary 의 AI 멤버 '다온'으로 응답). 세션 생성 시 서버가 소속을 여기 새기고, 이후의 모든
+    --  세션 축 요청(x-lively-session 헤더·/sessions/<id> 경로·WS 티켓)은 이 표로 컨텍스트를 되찾는다 —
+    --  클라이언트 버전과 무관하게. 전역 표(등록부와 같은 이유 — 컨텍스트를 열기 전에 읽어야 한다).
+    CREATE TABLE IF NOT EXISTS gw_session_map(
+      session_id TEXT PRIMARY KEY,
+      workspace_id UUID NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now());
   `);
 }

@@ -26,6 +26,15 @@ import { join } from "node:path";
 //  **항상 false** 가 되어 세션 상태·기록 인정이 통째로 무음이 된다. 반드시 표에서 파생한다(#1519 §4).
 import { resolveHarness, allToolNames, mcpToolName, isForeignGrokInvocation } from "./harness-registry.mjs";
 
+// #1750 — 세션 소속 신호: 게이트웨이가 x-lively-session(→ 세션 정본 gw_session_map)·x-lively-workspace 로
+//  이 세션의 워크스페이스 컨텍스트를 되찾는다. 안 실으면 primary 로 간주되므로(폴백) secondary 세션의
+//  훅 호출이 조용히 primary 데이터를 읽고 쓴다 — dev '다온' 실측이 정확히 그 사고다.
+const SCOPE_HDRS = {
+  ...(String(process.env.LIVELY_SESSION_ID || "").trim() ? { "x-lively-session": String(process.env.LIVELY_SESSION_ID).trim() } : {}),
+  ...(String(process.env.LVLY_TENANT_SLUG || "").trim() ? { "x-lively-workspace": String(process.env.LVLY_TENANT_SLUG).trim() } : {}),
+};
+
+
 // grok compat 이중발화 가드(#1701) — grok 이 ~/.claude/settings.json 의 우리 훅을 그대로 실행한 사본이면
 //  비켜선다(정본은 grok-adapter 경유 — 사본이 돌면 camelCase 페이로드 오파싱 + 이중 기록).
 if (isForeignGrokInvocation()) process.exit(0);
@@ -168,7 +177,7 @@ try {
           try {
             await fetch(`${gw}/api/ui/terminal/sessions/${encodeURIComponent(boxId)}/exited`, {
               method: "POST", signal: ctl.signal,
-              headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+              headers: { "content-type": "application/json", authorization: `Bearer ${token}`, ...SCOPE_HDRS },
               body: JSON.stringify({ reason }),
             });
           } catch { /* fail-open — 미보고 시 복원목록에 '복원 가능(중단됨)'으로 남을 뿐(무해) */ }
@@ -234,7 +243,7 @@ try {
       try {
         const r = await fetch(`${gw}/api/ui/terminal/sessions/${encodeURIComponent(boxId)}${path}`, {
           method: "POST", signal: ctl.signal,
-          headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+          headers: { "content-type": "application/json", authorization: `Bearer ${token}`, ...SCOPE_HDRS },
           body: JSON.stringify(body),
         });
         return !!r?.ok;

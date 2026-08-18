@@ -29,6 +29,15 @@ import { join, dirname, relative, isAbsolute } from "node:path";
 //   (설치 시 ~/.lively/hooks/ 로 평평하게 복사되므로) → user-install 의 HOOK_SCRIPTS 에 등재돼 있다.
 import { resolveHarness, harness, placementFor, assetDirsFor, assetDirNames, isForeignGrokInvocation } from "./harness-registry.mjs";
 
+// #1750 — 세션 소속 신호: 게이트웨이가 x-lively-session(→ 세션 정본 gw_session_map)·x-lively-workspace 로
+//  이 세션의 워크스페이스 컨텍스트를 되찾는다. 안 실으면 primary 로 간주되므로(폴백) secondary 세션의
+//  훅 호출이 조용히 primary 데이터를 읽고 쓴다 — dev '다온' 실측이 정확히 그 사고다.
+const SCOPE_HDRS = {
+  ...(String(process.env.LIVELY_SESSION_ID || "").trim() ? { "x-lively-session": String(process.env.LIVELY_SESSION_ID).trim() } : {}),
+  ...(String(process.env.LVLY_TENANT_SLUG || "").trim() ? { "x-lively-workspace": String(process.env.LVLY_TENANT_SLUG).trim() } : {}),
+};
+
+
 // grok compat 이중발화 가드(#1701) — grok 이 ~/.claude/settings.json 의 우리 훅을 그대로 실행한 사본이면
 //  비켜선다(사본은 --harness 없이 돌아 claude 자리에 sync 하므로 grok 세션에서 무의미 + 이중 fetch).
 if (isForeignGrokInvocation()) process.exit(0);
@@ -193,7 +202,7 @@ async function fetchAssets() {
   const t = setTimeout(() => ctl.abort(), FETCH_MS);
   try {
     const url = `${GW}/api/ui/org/runner/assets?harness=${encodeURIComponent(HARNESS)}`;
-    const res = await fetch(url, { signal: ctl.signal, headers: { authorization: `Bearer ${TOKEN}` } });
+    const res = await fetch(url, { signal: ctl.signal, headers: { authorization: `Bearer ${TOKEN}`, ...SCOPE_HDRS } });
     if (!res.ok) return null;
     const j = await res.json();
     return Array.isArray(j?.assets) ? j.assets : [];
@@ -386,7 +395,7 @@ async function reportLocalInventory(managedIds) {
     const t = setTimeout(() => ctrl.abort(), 2500);
     await fetch(`${GW}/api/ui/me/harness-report`, {
       method: "POST", signal: ctrl.signal,
-      headers: { "Authorization": `Bearer ${TOKEN}`, "Content-Type": "application/json" },
+      headers: { "Authorization": `Bearer ${TOKEN}`, ...SCOPE_HDRS, "Content-Type": "application/json" },
       body: JSON.stringify({ harness: HARNESS, host, machine_id: machineId(), assets }),
     }).catch(() => {});
     clearTimeout(t);
@@ -402,7 +411,7 @@ async function applyLocalPref() {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 2500);
     const res = await fetch(`${GW}/api/ui/me/harness-local-pref/plan?machine_id=${encodeURIComponent(mid)}`, {
-      signal: ctrl.signal, headers: { "Authorization": `Bearer ${TOKEN}` },
+      signal: ctrl.signal, headers: { "Authorization": `Bearer ${TOKEN}`, ...SCOPE_HDRS },
     }).catch(() => null);
     clearTimeout(t);
     if (!res || !res.ok) return; // 계획 못 받으면 아무것도 안 함(fail-safe — 사용자 파일 안 건드림)
