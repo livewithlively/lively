@@ -154,15 +154,13 @@
    한글은 조합 중 DOM 이 더 자주 비어 체감이 더 심했다.
    ⚠ position:absolute 필수 — static ::before 는 실제 인라인 박스를 만들어 **뒤 내용을 밀어낸다**(글씨 밀림의 원인). */
 .be-text { position: relative; }
-.be .be-block:only-child .be-text:empty::before,
-.be .be-block:only-child .be-text:has(> br:only-child)::before {
-  position: absolute; left: 2px; top: 3px; white-space: nowrap; }
-/*  ⚠ :empty 만으로는 부족하다 — contentEditable 은 '빈' 블록에 <br> 하나를 남기므로 정작 새 문서에서
-    안내가 안 뜬다. 단 이 조건은 **블록이 하나뿐일 때(:only-child)** 로 묶여 있어, 예전처럼 줄마다
-    따라다니며 깜빡이지 않는다. (:has 미지원 브라우저에서는 :empty 규칙만 동작 — 격리해 둔다.) */
-.be .be-block:only-child .be-text:has(> br:only-child)::before {
+/*  ⚠ 빈 판정은 **CSS 가 아니라 JS**(.be-empty)가 한다 — `:empty` 는 contentEditable 이 남기는 <br> 때문에
+    새 문서에서 안내가 안 뜨고, 그 보완으로 쓰던 `:has(> br:only-child)` 는 **텍스트 노드를 세지 않아**
+    `첫 줄<br>둘째 줄`(Shift+Enter 로 줄바꿈한 한 블록)에서도 참이 됐다 → 글을 쓰는 중인데 안내문이
+    본문 위에 겹쳐 그려졌다(#1581). blocks.ts 의 refreshEmpty() 가 textContent 로 판정해 클래스를 토글한다. */
+.be.be-empty .be-block:only-child .be-text::before {
+  position: absolute; left: 2px; top: 3px; white-space: nowrap;
   content: attr(data-ph); color: var(--muted-3); pointer-events: none; }
-.be .be-block:only-child .be-text:empty::before,
 .ke-title:empty::before,
 .kn-doc-title-edit:empty::before,
 .cath-desc:empty::before {

@@ -68,12 +68,28 @@ t("L6 uuid 가 아닌 세션 id 는 그 자리에서 거절한다", () => {
 });
 
 t("L7 가변인자 거부 목록 뒤에 곧바로 다음 플래그가 온다", () => {
-  const a = livTurnArgs({ sessionId: UUID, resume: true });
-  const i = a.indexOf("--disallowedTools");
-  const next = a.findIndex((x, k) => k > i && x.startsWith("--"));
-  assert.equal(next, i + 1 + LIV_DENIED_TOOLS.length,
-    "거부 목록과 다음 플래그 사이에 다른 게 끼면 그게 도구 이름으로 먹힌다");
-  assert.equal(a[next], "--resume");
+  // 지키는 것은 **끊기는 자리**이지 그 뒤에 무엇이 오느냐가 아니다 — 목록과 다음 `--플래그` 사이에
+  //  다른 게 끼면 그게 도구 이름으로 먹혀 안전선이 조용히 반쪽이 된다(그래도 실행은 되고 답도 나온다).
+  //  그래서 '다음 토큰이 플래그다'만 고정한다. 새 플래그를 끼워도 이 단언은 계속 유효하다.
+  for (const resume of [true, false]) {
+    const a = livTurnArgs({ sessionId: UUID, resume });
+    const i = a.indexOf("--disallowedTools");
+    const after = i + 1 + LIV_DENIED_TOOLS.length;
+    assert.ok(a[after]?.startsWith("--"),
+      `거부 목록 바로 뒤가 플래그가 아니다(resume=${resume}): ${JSON.stringify(a[after])}`);
+    // 목록 안에 플래그가 섞여 있으면 거기서 일찍 끊겨 뒤쪽 도구가 안 막힌다.
+    for (let k = i + 1; k < after; k++) {
+      assert.ok(!a[k].startsWith("--"), `거부 목록 안에 플래그가 섞였다: ${a[k]}`);
+    }
+  }
+});
+
+t("L10 이어가기 축은 언제나 마지막 두 자리다(uuid 가 플래그에 안 먹힌다)", () => {
+  for (const [resume, flag] of [[true, "--resume"], [false, "--session-id"]] as const) {
+    const a = livTurnArgs({ sessionId: UUID, resume });
+    assert.equal(a[a.length - 2], flag, "이어가기 플래그가 제자리에 없다");
+    assert.equal(a[a.length - 1], UUID, "uuid 가 그 플래그 바로 뒤가 아니면 다른 플래그의 값으로 먹힌다");
+  }
 });
 
 t("L8 거부 목록이 비어 있지 않다", () => {

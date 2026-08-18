@@ -235,6 +235,15 @@ export interface SessionInfo {
   //  이걸 구분해 주지 않으면 사용자는 자기 세션이 왜 사라졌는지 모른 채 재부팅·자동회수와 같은 '중단됨'으로만 본다.
   //  ⚠ 관측 기반 **추정**이라, 확신이 서지 않으면 아예 안 붙인다(box-watch 의 매핑 조건 참조).
   oomKilled?: boolean;
+  // #1719 세션 대화창 — 이 박스가 지금(또는 마지막으로) 돌린 **하네스 대화 id**(org_session_state.claude_session_id,
+  //  work-flag 훅 보고·last-write-wins). 화면이 이 값으로 ① 로컬 트랜스크립트(/sessions/:id/transcript)를 잇고
+  //  ② 중앙 세션 기록(v6/sessions 의 session_id 는 이 uuid 다)과 **같은 세션임을 알아 목록에서 한 장으로 접는다.**
+  //  미보고면 없다(추측하지 않는다 — sessions.ts restore 의 picker 원칙과 같다).
+  claudeSessionId?: string;
+  // #1746 세션 대화창의 하네스 능력 요약(harness-io/adapter.ts chatIoCaps) — read=대화 파일을 화면으로 읽을 수 있나(파서 있음) ·
+  //  answer=승인·거부·중단을 화면에서 대신 누를 수 있나(승인 키 실측 있음). 화면이 이걸로 버튼·안내를 **정직하게** 그린다(없는 능력의
+  //  버튼을 두지 않는다 — 막다른 컨트롤 금지). 없으면(구 서버) 화면은 둘 다 있는 것으로 본다(종전 동작).
+  chat?: { read: boolean; answer: boolean };
 }
 export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; resume?: string; readOnly?: boolean; incognito?: boolean;
   // #1291 v2 — 기록 범위(write cap)와 read 축소. 미지정이면 실행 폴더에서 파생한다(신규·복원이 같은 규칙).
@@ -249,7 +258,15 @@ export interface CreateInput { label: string; rootKey: string; subpath: string; 
   // #1516 — 로그인 전용 세션: 이 하네스의 **로그인 명령**을 셸에서 돌린다(하네스 TUI 를 띄우지 않는다).
   //  자격이 만료된 상태에서 그 하네스로 세션을 열면 즉사해 로그인 자체가 불가능하기 때문(harnessLoginArgv 주석).
   //  harness 는 'shell' 로 보낸다 — 이 세션은 AI 세션이 아니라 로그인 절차용이다.
-  loginFor?: string; }
+  loginFor?: string;
+  // #1719 홈 입력창 — **세션 전용 폴더**에서 연다: cwd = <rootKey 루트>/sessions/<세션id>(폴더를 고르지 않는다).
+  //  프로젝트 소속은 만들 때 정하지 않고 나중에 POST /terminal/sessions/:id/project 로 붙인다(session-project.ts) —
+  //  cwd 는 세션의 것이라 프로젝트가 바뀌어도 그대로다(실행 중 프로세스의 cwd 는 inode 참조라 어차피 안 따라온다).
+  //  subpath 는 무시된다. 라벨·하네스·플래그는 종전과 같다.
+  sessionDir?: boolean;
+  // #1719 홈 입력창 — 첫 지시. 세션을 띄운 뒤 하네스 입력창이 뜨는 걸 **보고 나서** 주입한다(session-first-prompt.ts).
+  //  생성 응답은 기다리지 않는다(주입은 백그라운드) — 화면은 세션 대화창으로 가서 대화 파일에 나타나는 걸 따라간다.
+  initialPrompt?: string; }
 
 // ── 세션 런처(#1516) — 하네스가 죽어도 세션은 산다 ──
 //

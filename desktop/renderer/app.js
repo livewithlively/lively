@@ -47,17 +47,28 @@ function renderState(s) {
   show($("done-card"), ready && !s?.busy && justFinished);
   show($("node-card"), ready);
   show($("tools-card"), ready);
+  show($("stale-card"), !!s?.staleInstall);
+  $("stale-note").textContent = s?.staleInstall || "";
+  $("stale-clean").disabled = !!s?.busy;
   // 버전은 늘 보인다 — 제보할 때 가장 먼저 묻는 값이다. 앱과 키트는 갱신 주기가 달라 따로 적는다.
   $("ver").textContent = `앱 ${s?.appVersion || "알 수 없음"} · ${s?.kitVersion ? "키트 " + s.kitVersion : "키트 미설치"}`;
   $("upd-note").textContent = s?.updateNote || "";
+  // 받아 둔 업데이트가 있으면 **적용 버튼**을 준다 — 앱이 스스로 닫고·설치하고·다시 뜬다. 종전 "다시 켜면 적용" 은
+  //  사람과 설치기를 경쟁시켰다(두 번 재시작·바로가기 오류). 창을 닫아 두면 자동으로도 적용된다.
+  show($("apply-update"), !!s?.updateReady);
+  $("apply-update").disabled = !!s?.busy;
   for (const id of ["doctor", "kit-update", "logout"]) $(id).disabled = !!s?.busy;
   // 실행 여부를 **모를 때**(측정 실패)는 버튼을 잠그지 않는다 — 모른다고 사용자를 가두면 안 된다.
   const running = s?.nodeRunning === true, stopped = s?.nodeRunning === false;
+  // 프로세스는 도는데 게이트웨이엔 안 붙어 있음(절전 뒤 좀비 — 실측 3시간·나흘). '실행 중' 이라 그리면 거짓말이라 따로 말한다.
+  const zombie = running && s?.nodeConnected === false;
   $("node-state").textContent = !s?.nodeRegistered ? "아직 이 PC 는 노드로 등록되지 않았습니다."
     : s?.nodeRunning === null ? `노드 ${s?.nodeId || ""} — 실행 여부를 확인하지 못했습니다.`
-      : running ? `노드 ${s?.nodeId || ""} 실행 중${s?.nodeDaemon ? " · PC 켤 때 자동 시작" : " · 이 세션만"}`
-        : `노드 ${s?.nodeId || ""} 정지됨`;
-  $("node-start").disabled = !!s?.busy || running;
+      : zombie ? `노드 ${s?.nodeId || ""} — 프로세스는 돌지만 게이트웨이에 연결돼 있지 않습니다. 다시 시작하세요.`
+        : running ? `노드 ${s?.nodeId || ""} 실행 중${s?.nodeDaemon ? " · PC 켤 때 자동 시작" : " · 이 세션만"}`
+          : `노드 ${s?.nodeId || ""} 정지됨`;
+  $("node-start").textContent = zombie ? "노드 다시 시작" : "노드 시작";
+  $("node-start").disabled = !!s?.busy || (running && !zombie);
   $("node-stop").disabled = !!s?.busy || stopped || !s?.nodeRegistered;
   const al = $("app-autolaunch");
   al.closest("label").classList.toggle("hidden", s?.appAutoLaunch === null || s?.appAutoLaunch === undefined);
@@ -147,10 +158,26 @@ $("logout").addEventListener("click", async () => {
   const r = await window.lively.run("logout");
   if (r?.error) log("✗ " + r.error);
 });
+$("stale-clean").addEventListener("click", async () => {
+  $("stale-clean").disabled = true;
+  const r = await window.lively.cleanupStale();
+  if (r?.error) { log("✗ " + r.error); $("stale-clean").disabled = false; }
+  else log("이전 버전을 제거합니다 — 관리자 확인 창이 뜨면 '예'를 누르세요. 끝나면 앱이 다시 열립니다.");
+});
+$("apply-update").addEventListener("click", async () => {
+  $("apply-update").disabled = true;
+  $("upd-note").textContent = "앱을 다시 시작해서 적용합니다…";
+  const r = await window.lively.applyUpdate();
+  if (r?.error) { $("upd-note").textContent = r.error; $("apply-update").disabled = false; }
+});
 $("check-update").addEventListener("click", async () => {
-  $("upd-note").textContent = "확인 중…";
-  const r = await window.lively.checkUpdate();
-  if (r?.note) $("upd-note").textContent = r.note;
+  // 문구는 **상태(state.updateNote)가 주도**한다 — 메인이 확인 중·받는 중(진행률)·준비됨을 순서대로 밀어준다.
+  //  종전엔 여기서 IPC 응답의 문구를 다시 써서, 그 사이 도착한 진행률 문구를 옛 문구로 덮었다.
+  //  IPC 는 '확인'이 끝나면 돌아온다(다운로드는 뒤에서 계속) — 그동안 버튼만 잠근다.
+  const btn = $("check-update");
+  btn.disabled = true; const label = btn.textContent; btn.textContent = "확인 중…";
+  try { const r = await window.lively.checkUpdate(); if (r?.error) $("upd-note").textContent = r.error; }
+  finally { btn.disabled = false; btn.textContent = label; }
 });
 
 // ── 로그 두 축 ──────────────────────────────────────────────────────────────

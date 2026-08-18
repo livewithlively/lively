@@ -20,7 +20,7 @@ const db = (p: Partial<SessionState> = {}): SessionState => ({
   flags: { "--model": "opus" }, auto_approve: true, invites: ["u-new"],
   project_id: 22, project_src: "v6", read_only: false, incognito: false,
   write_vis: null, restrict_read: false, created: 1, last_busy: null, last_seen: null,
-  claude_session_id: null, exited_at: null, exit_reason: null,
+  claude_session_id: null, transcript_path: null, exited_at: null, exit_reason: null,
   ...p,
 });
 

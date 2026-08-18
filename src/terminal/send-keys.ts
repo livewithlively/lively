@@ -61,3 +61,22 @@ export async function sendKeysToSession(id: string, text: string): Promise<void>
   await new Promise((r) => setTimeout(r, injectFlushMs(plan.oneLine.length)));
   await tmux(plan.enter);
 }
+
+// ── 단일 키(Enter·Escape) — 대화 화면(#1719 세션 대화창)이 승인·중단을 대신 누른다 ──
+//  텍스트 주입과 **다른 통로**를 두는 이유: Claude Code 의 승인 대화상자는 글자가 아니라 키(Enter=기본 선택 승인 /
+//  Esc=거부·중단)로 답한다. `sendKeysToSession` 은 문자열을 넣고 flush 를 기다린 뒤 Enter 를 붙이므로 그 자리에 쓸 수 없다.
+//  받는 키를 둘로 못박는다 — 화면이 보낼 수 있는 키가 곧 화면이 대신할 수 있는 행동의 전부다(임의 키 릴레이는 만들지 않는다).
+export const CHAT_KEYS = ["Enter", "Escape"] as const;
+export type ChatKey = typeof CHAT_KEYS[number];
+export const isChatKey = (k: unknown): k is ChatKey => (CHAT_KEYS as readonly string[]).includes(String(k));
+
+/** 키 하나를 보내는 argv(순수) — tmux 는 키 이름, psmux 는 코드포인트 토큰(위 규약 ③). */
+export function sendKeyPlan(id: string, key: ChatKey, bin: string): string[] {
+  if (isPsmuxBin(bin)) return ["send-keys", "-t", id, key === "Enter" ? "0x0d" : "0x1b"];
+  return ["send-keys", "-t", id, key];
+}
+
+export async function sendKeyToSession(id: string, key: ChatKey): Promise<void> {
+  await tmux(["has-session", "-t", id]);
+  await tmux(sendKeyPlan(id, key, TMUX_BIN));
+}

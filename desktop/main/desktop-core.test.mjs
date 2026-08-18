@@ -15,9 +15,12 @@ import { createNdjsonParser, runCli, reduceProgress, lastError, cliContractVerdi
 import { argvFor, RUN_KINDS, IPC } from "./ipc-contract.mjs";
 import { trayMenuModel, statusLabel } from "./tray-menu.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
-import { shouldCheckForUpdates, updateFailureNote, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
+import { shouldCheckForUpdates, updateFailureNote, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV, shouldAutoApplyUpdate, updateReadyNote, AUTO_APPLY_DELAY_MS, downloadProgressNote, PROGRESS_NOTE_MIN_MS } from "./update-policy.mjs";
+import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, uninstallerPath, uninstallerArgs, staleCleanupPs, staleInstallNote, psQuote, APP_ID, APP_GUID, UNINSTALLER_NAME, uuidV5 } from "./win-stale-install.mjs";
+import { createRequire } from "node:module";
 import { normalizeBounds, pickBounds, MIN_SIZE, DEFAULT_SIZE, MIN_VISIBLE } from "./window-bounds.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
+import { manifestRefs, manifestProblems, GITHUB_SAFE } from "../verify-update-manifest.mjs";
 import { versionLabel } from "./tray-menu.mjs";
 import { RETRYABLE_KINDS } from "./ipc-contract.mjs";
 import { updateStatusNote } from "./update-policy.mjs";
@@ -540,6 +543,227 @@ t('U9 ★ 설치기 없는 빌드(app-update.yml 부재)는 확인하지 않는�
   assert.ok(line.includes('app-update.yml'), line);
 });
 
+// ── U10~U12. 받은 업데이트의 **적용** — 앱이 스스로 닫고·설치하고·다시 뜬다 (#1541) ──────────────
+// 실측(2026-08-18, 사용자 Windows 0.1.320→0.1.324): "두 번 재시작해야 했고, 바로가기가 사라졌다고 나왔고,
+//  트레이에서 껐다 켜는 게 불편하다." 셋 다 한 원인 — 종전 안내("앱을 다시 켜면 적용")는 사람과 설치기를
+//  경쟁시켰다: 설치기(--updated)는 떠 있는 앱을 묻지 않고 죽이고(app-builder-lib CHECK_APP_RUNNING), 조용한
+//  설치(/S)는 --force-run 없이는 앱을 다시 띄우지 않는다. 그래서 적용은 앱이 quitAndInstall(true,true) 로 한다.
+t('U10 자동 적용 판정 — 엣지 표(창이 안 보일 때만 · 작업 중/질문 대기 중 금지 · 받은 게 없으면 금지)', () => {
+  const R = { ready: true, busy: false, windowVisible: false, promptsPending: 0 };
+  assert.equal(shouldAutoApplyUpdate(R), true, '트레이 상주(창 안 보임)·한가함 → 자동 적용');
+  assert.equal(shouldAutoApplyUpdate({ ...R, windowVisible: true }), false, '창을 보고 있으면 자동으로 사라지면 안 된다(버튼으로)');
+  assert.equal(shouldAutoApplyUpdate({ ...R, busy: true }), false, 'CLI 작업 중엔 재시작하면 작업이 끊긴다');
+  assert.equal(shouldAutoApplyUpdate({ ...R, promptsPending: 1 }), false, '사람의 답을 기다리는 질문이 있으면 금지');
+  assert.equal(shouldAutoApplyUpdate({ ...R, ready: false }), false, '받아 둔 게 없으면 적용할 게 없다');
+  // 새 헬퍼의 빈 입력 — undefined/빈 객체는 "하지 않는다"(안전측)
+  assert.equal(shouldAutoApplyUpdate(undefined), false);
+  assert.equal(shouldAutoApplyUpdate({}), false);
+  // 경계: promptsPending 0 은 허용, 1 부터 금지 · 지연은 '방금 닫은 창을 곧 다시 여는' 경우를 흡수할 만큼
+  assert.equal(shouldAutoApplyUpdate({ ...R, promptsPending: 0 }), true);
+  assert.ok(AUTO_APPLY_DELAY_MS >= 3000 && AUTO_APPLY_DELAY_MS <= 30_000, `지연이 비상식적: ${AUTO_APPLY_DELAY_MS}`);
+  // 문구: 종전의 함정 문구("다시 켜면")를 다시 쓰지 않는다 — 사람이 켜는 순간 설치기와 경쟁한다.
+  assert.match(updateReadyNote('0.1.325'), /0\.1\.325/);
+  assert.ok(!/다시 켜면/.test(updateReadyNote('0.1.325')), '사람에게 직접 켜라고 하면 종전 경쟁이 재현된다');
+  assert.match(updateReadyNote(''), /준비됨/);
+});
+
+t('U11 트레이 — 받아 둔 업데이트가 있으면 적용 항목이 **가장 위**에, 작업 중엔 잠긴다', () => {
+  const base = { cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true, nodeRunning: true };
+  const none = trayMenuModel(base);
+  assert.ok(!none.some((m) => m.id === 'apply-update'), '받은 게 없으면 항목이 없어야 한다');
+  const m = trayMenuModel({ ...base, updateReady: '0.1.325' });
+  const i = m.findIndex((x) => x.id === 'apply-update');
+  assert.ok(i >= 0, '적용 항목이 없다 — 트레이만 보는 사람에겐 유일한 입구다');
+  assert.ok(i < m.findIndex((x) => x.id === 'node-stop' || x.id === 'node-start'), '노드 항목보다 위여야 눈에 띈다');
+  assert.match(m[i].label, /0\.1\.325/, '어느 버전인지 적는다');
+  assert.notEqual(m[i].enabled, false);
+  assert.equal(trayMenuModel({ ...base, updateReady: '0.1.325', busy: true })[i].enabled, false, '작업 중엔 잠근다');
+});
+
+t('U12 ★ 배선 — 적용은 quitAndInstall(조용히+다시 띄우기)이고, "종료하면 설치" OS 알림은 쓰지 않는다', () => {
+  const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
+  // isSilent=true, isForceRunAfter=true — 둘 중 하나라도 빠지면 종전 경쟁이 그대로다(설치기가 앱을 안 띄우거나 UI 를 띄운다).
+  assert.match(main, /quitAndInstall\(\s*true\s*,\s*true\s*\)/, 'quitAndInstall(true, true) 가 아니다');
+  // checkForUpdatesAndNotify 는 "종료하면 설치됩니다" 알림을 띄워 사람을 종전 함정으로 부른다.
+  const code = main.split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');   // 주석 제외 — 코드만 본다
+  assert.ok(!/checkForUpdatesAndNotify/.test(code), 'checkForUpdatesAndNotify 를 다시 쓰고 있다');
+  // 리스너는 한 번만 — 확인할 때마다 on() 을 걸면 누적돼 같은 문구가 n 번 찍힌다.
+  const onCount = (main.match(/autoUpdater\.on\("update-downloaded"/g) || []).length;
+  assert.equal(onCount, 1, `update-downloaded 리스너 등록이 ${onCount}곳`);
+  assert.ok(/updater\s*=\s*autoUpdater/.test(main) && /if \(updater\) return updater/.test(main), '업데이터 인스턴스를 재사용하지 않는다');
+  // 창 숨김 → 자동 적용 예약 · 창 표시 → 취소 (사람이 보고 있으면 사라지지 않는다)
+  assert.match(main, /win\.on\("hide",\s*\(\)\s*=>\s*scheduleAutoApply\(\)\)/, '창을 숨길 때 자동 적용을 예약하지 않는다');
+  assert.match(main, /win\.on\("show"/, '창을 다시 열 때 예약을 취소하지 않는다');
+  // IPC·preload·렌더러가 같은 채널을 본다
+  assert.equal(IPC.APPLY_UPDATE, 'lively:apply-update');
+  assert.match(main, /ipcMain\.handle\(IPC\.APPLY_UPDATE/, '메인에 APPLY_UPDATE 핸들러가 없다');
+  const preload = readFileSync(fileURLToPath(new URL('../preload/preload.cjs', import.meta.url)), 'utf8');
+  assert.match(preload, /applyUpdate:/, 'preload 가 applyUpdate 를 노출하지 않는다');
+  const html = readFileSync(fileURLToPath(new URL('../renderer/index.html', import.meta.url)), 'utf8');
+  const js = readFileSync(fileURLToPath(new URL('../renderer/app.js', import.meta.url)), 'utf8');
+  assert.match(html, /id="apply-update"/, '렌더러에 적용 버튼이 없다');
+  assert.match(js, /window\.lively\.applyUpdate\(\)/, '버튼이 applyUpdate 를 부르지 않는다');
+  assert.match(js, /updateReady/, '렌더러가 updateReady 로 버튼을 보이지 않는다');
+});
+
+t('U13 받는 동안의 문구 — 확인이 끝난 뒤 침묵하지 않는다(진행률·양·속도)', () => {
+  // 실측: 확인은 1초 만에 끝났고 3분 넘게 100MB 를 받는 중이었는데 화면은 "업데이트를 확인합니다." 그대로였다.
+  const n = downloadProgressNote('0.1.326', { percent: 42.7, transferred: 41.9 * 1048576, total: 99.9 * 1048576, bytesPerSecond: 1.2 * 1048576 });
+  assert.match(n, /0\.1\.326/); assert.match(n, /42%/); assert.match(n, /41\.9\/99\.9MB/); assert.match(n, /1\.2MB\/s/);
+  // 새 헬퍼의 빈 입력 — 필드가 없어도(초기 이벤트) 크래시 없이 '받는 중' 만
+  assert.match(downloadProgressNote('0.1.326', undefined), /받는 중/);
+  assert.match(downloadProgressNote('', {}), /받는 중/);
+  // 경계: percent 는 0~100 으로 자르고 정수로, total 0 이면 양을 적지 않는다
+  assert.match(downloadProgressNote('v', { percent: 100.4 }), /100%/);
+  assert.match(downloadProgressNote('v', { percent: -3 }), /0%/);
+  assert.ok(!/MB\b.*\//.test(downloadProgressNote('v', { percent: 5, transferred: 10, total: 0 })), '총량 0 인데 양을 적었다');
+  // 확인 단계의 문구는 '확인 중' 이어야 한다 — 종전 "확인합니다" 는 결과처럼 읽혀 사람이 3분을 기다렸다
+  assert.match(updateStatusNote('ok'), /확인 중/);
+  assert.ok(!/확인합니다\./.test(updateStatusNote('ok')));
+  assert.ok(PROGRESS_NOTE_MIN_MS >= 200 && PROGRESS_NOTE_MIN_MS <= 2000, '스로틀이 비상식적');
+  // 배선: 메인이 download-progress·update-available·checking-for-update 를 다 듣고, 렌더러는 IPC 응답으로 문구를 덮지 않는다
+  const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
+  for (const ev of ['checking-for-update', 'update-available', 'download-progress']) assert.match(main, new RegExp(`autoUpdater\\.on\\("${ev}"`), `${ev} 리스너가 없다`);
+  assert.match(main, /PROGRESS_NOTE_MIN_MS/, '진행률 스로틀이 없다(초당 수십 번 다시 그린다)');
+  const js = readFileSync(fileURLToPath(new URL('../renderer/app.js', import.meta.url)), 'utf8');
+  const seg = js.slice(js.indexOf('$("check-update").addEventListener'), js.indexOf('// ── 로그 두 축'));
+  assert.ok(!/upd-note"\)\.textContent = r\.note/.test(seg), '렌더러가 IPC 응답 문구로 진행률 문구를 덮는다');
+});
+
+// ── S. Windows: 다른 자리에 남은 옛 설치본 (#1541 · win-stale-install.mjs) ────────────────────
+// 실측: "라이블리 바로가기로 열면 0.1.325 를 설치한 뒤에도 0.1.320 이 열린다" — 0.1.320 은 '모든 사용자'(Program Files/HKLM),
+//  그 뒤 업데이트는 사용자 자리(HKCU). 사용자 설치기는 HKLM 옛 설치본을 못 지운다 → 옛 바로가기가 옛 exe 를 연다.
+{
+  const ownExe = "C:\\Users\\a\\AppData\\Local\\Programs\\Lively\\Lively.exe";
+  // ⚠ DisplayName 은 electron-builder 기본값 `${productName} ${version}` 이다("Lively 0.1.320") — v0.1.326 은 `-eq 'Lively'` 로 걸어
+  //  **전부 놓쳤다**(실측: 카드가 안 떴다). 픽스처는 실제 값으로 둔다. 미끼("Lively Wallpaper" — 실재하는 남의 제품)도 넣는다.
+  const rows = [
+    { key: APP_GUID, hive: "HKLM", name: "Lively 0.1.320", version: "0.1.320", location: "C:\\Program Files\\Lively", uninstall: '"C:\\Program Files\\Lively\\Uninstall Lively.exe" /allusers', quiet: "" },
+    { key: APP_GUID, hive: "HKCU", name: "Lively 0.1.326", version: "0.1.326", location: "C:\\Users\\a\\AppData\\Local\\Programs\\Lively", uninstall: '"C:\\Users\\a\\AppData\\Local\\Programs\\Lively\\Uninstall Lively.exe" /currentuser', quiet: "" },
+    { key: "{9c1b-other}", hive: "HKLM", name: "Lively Wallpaper 2.0", version: "2.0", location: "C:\\Program Files\\Lively Wallpaper", uninstall: '"C:\\Program Files\\Lively Wallpaper\\Uninstall Lively Wallpaper.exe"', quiet: "" },
+  ];
+  t('S1 감지 — 우리 자리(HKCU)는 빼고 다른 자리(HKLM 옛 설치본)만 잡는다', () => {
+    const st = pickStaleInstalls(parseStaleQuery("\uFEFF" + JSON.stringify(rows)), ownExe);
+    assert.equal(st.length, 1); assert.equal(st[0].version, "0.1.320");
+    assert.equal(st[0].uninstaller, "C:\\Program Files\\Lively\\Uninstall Lively.exe");
+    assert.deepEqual(st[0].uninstallArgs, ["/allusers"], '등록된 모드 토큰(/allusers)을 그대로 넘겨야 같은 컨텍스트로 지운다');
+    // 우리 자리만 있으면 아무것도 없다(정상 상태에서 카드가 뜨면 안 된다) — 대소문자·구분자 차이도 같은 자리
+    assert.deepEqual(pickStaleInstalls(parseStaleQuery(JSON.stringify([rows[1]])), ownExe), []);
+    assert.deepEqual(pickStaleInstalls(parseStaleQuery(JSON.stringify([{ ...rows[1], location: "c:/users/a/appdata/local/programs/lively/" }])), ownExe), []);
+    // 단일 객체 출력(ConvertTo-Json 이 원소 하나면 배열을 안 만든다)·빈 출력·쓰레기 출력
+    assert.equal(pickStaleInstalls(parseStaleQuery(JSON.stringify(rows[0])), ownExe).length, 1);
+    assert.deepEqual(parseStaleQuery(""), []); assert.deepEqual(parseStaleQuery("not json"), []); assert.deepEqual(parseStaleQuery(undefined), []);
+    // ★ 우리 제품 판정은 GUID 키(정본) 또는 언인스톨러 파일명 — 이름만 비슷한 남의 제품(Lively Wallpaper)은 제외
+    assert.ok(!st.some((e) => /Wallpaper/.test(e.location)), '남의 제품(Lively Wallpaper)을 옛 설치본으로 잡았다 — 지우면 사고다');
+    // 키가 없어도(구버전 레코드) 언인스톨러 파일명이 우리 것이면 잡는다
+    assert.equal(pickStaleInstalls(parseStaleQuery(JSON.stringify([{ ...rows[0], key: "" }])), ownExe).length, 1);
+    // 키도 파일명도 다르면 이름이 'Lively 0.1.1' 이어도 제외
+    assert.deepEqual(pickStaleInstalls(parseStaleQuery(JSON.stringify([{ ...rows[0], key: "x", uninstall: '"C:\\z\\Remove.exe"' }])), ownExe), []);
+    // ★ GUID 는 electron-builder 가 실제로 쓰는 값과 같아야 한다 — 그 라이브러리(builder-util-runtime)로 직접 대조한다
+    const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'));
+    assert.equal(APP_ID, pkg.build.appId, 'APP_ID 가 package.json build.appId 와 다르다 — GUID 가 다른 앱을 가리킨다');
+    // 고정값 — 2026-08-18 builder-util-runtime UUID.v5(appId, ELECTRON_BUILDER_NS_UUID) 로 얻은 값. appId 가 바뀌면 같이 바뀐다.
+    assert.equal(uuidV5("io.lvly.desktop", "50e065bc-3134-11e6-9bab-360a5f6d0d1a"), "3671aa13-ad0d-5bfe-852b-a342893d84d2");
+    assert.equal(APP_GUID, uuidV5(pkg.build.appId, "50e065bc-3134-11e6-9bab-360a5f6d0d1a"));
+    // electron-builder 의 실제 라이브러리와도 대조한다 — 단, 루트 테스트 잡은 desktop/ 의존성을 안 깔므로 **있을 때만**
+    //  (없으면 위 고정값 대조가 계약이다. 있는 곳(desktop/ 에서 npm ci 한 러너·로컬)에선 라이브러리가 정본).
+    try {
+      const { UUID } = createRequire(import.meta.url)("builder-util-runtime");
+      assert.equal(APP_GUID, UUID.v5(pkg.build.appId, UUID.parse("50e065bc-3134-11e6-9bab-360a5f6d0d1a")), 'GUID 가 electron-builder 계산과 다르다');
+    } catch (e) { if (!/Cannot find module/.test(String(e?.message))) throw e; }
+    assert.ok(!pkg.build.nsis.guid, 'nsis.guid 를 박으면 여기 계산과 갈린다 — 박을 거면 APP_GUID 도 그 값으로');
+    assert.equal(UNINSTALLER_NAME, `Uninstall ${pkg.build.productName}.exe`);
+    // 쿼리는 GUID 키로도 잡는다(이름은 보조) — DisplayName -eq 'Lively' 는 다시는 안 된다
+    assert.ok(STALE_QUERY_PS.includes(`PSChildName -eq '${APP_GUID}'`), '쿼리가 GUID 키를 안 본다');
+    assert.ok(!/DisplayName -eq 'Lively'/.test(STALE_QUERY_PS), "DisplayName -eq 'Lively' 는 제품명+버전 형식을 전부 놓친다(v0.1.326 실측)");
+    // 지울 수단이 없는 항목은 감지해도 목록에 안 넣는다(버튼을 줘도 할 게 없다)
+    assert.deepEqual(pickStaleInstalls(parseStaleQuery(JSON.stringify([{ ...rows[0], uninstall: "", quiet: "" }])), ownExe), []);
+    // 파서 보조
+    assert.equal(uninstallerPath('"C:\\P F\\U.exe" /S'), "C:\\P F\\U.exe"); assert.equal(uninstallerPath("C:\\x\\u.exe /a"), "C:\\x\\u.exe");
+    assert.deepEqual(uninstallerArgs('"C:\\P F\\U.exe"'), []);
+  });
+  t('S2 ★ 정리 스크립트 — 권한상승·조용히·모드 토큰 유지·끝나면 우리를 다시 띄운다 (옛 언인스톨러가 우리를 죽이므로)', () => {
+    const st = pickStaleInstalls(parseStaleQuery(JSON.stringify(rows)), ownExe);
+    const ps = staleCleanupPs({ stale: st, ownExe });
+    assert.match(ps, /Start-Process -Verb RunAs -Wait -FilePath 'C:\\Program Files\\Lively\\Uninstall Lively\.exe' -ArgumentList @\('\/S','\/allusers'\)/);
+    assert.ok(ps.indexOf("Uninstall Lively.exe") < ps.indexOf("Start-Process -FilePath 'C:\\Users\\a"), '언인스톨 뒤에 우리를 띄워야 한다');
+    assert.match(ps, /try \{[^}]*RunAs[^}]*\} catch/, 'UAC 거절(예외)해도 스크립트가 끝까지 가서 앱을 다시 띄워야 한다');
+    // 인용부호 안전 — 값의 따옴표는 두 배로(레지스트리 값이 스크립트를 깨지 못한다)
+    assert.equal(psQuote("it's"), "'it''s'");
+    assert.match(staleCleanupPs({ stale: [{ uninstaller: "C:\\o'k\\u.exe" }], ownExe: "C:\\a.exe" }), /'C:\\o''k\\u\.exe'/);
+    // 빈 목록이면 언인스톨 줄 없이 재실행만(호출자가 막지만 크래시는 없어야 한다)
+    assert.ok(!/RunAs/.test(staleCleanupPs({ stale: [], ownExe: "C:\\a.exe" })));
+    // 문구
+    assert.match(staleInstallNote(st), /0\.1\.320/); assert.equal(staleInstallNote([]), "");
+    // 쿼리 상수: 네 자리(HKLM 네이티브·WOW6432Node·HKCU)를 다 보고, 보간이 없다(인젝션 표면 없음)
+    assert.match(STALE_QUERY_PS, /HKLM:\\SOFTWARE\\Microsoft/); assert.match(STALE_QUERY_PS, /WOW6432Node/); assert.match(STALE_QUERY_PS, /HKCU:/);
+    assert.ok(!/\$\{/.test(STALE_QUERY_PS), '쿼리에 JS 보간 흔적이 있다(GUID 는 이미 치환된 hex 상수여야 한다)');
+    assert.match(STALE_QUERY_PS, /ConvertTo-Json/);
+  });
+  t('S3 배선 — 시작 때 감지·카드·트레이 항목·IPC·preload, 정리는 사람이 누를 때만', () => {
+    const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
+    assert.match(main, /detectStaleInstall\(\{ force: true \}\)/, '시작 때 감지하지 않는다');
+    assert.match(main, /platform !== "win32" \|\| !app\.isPackaged\) return/, 'Windows 패키지 앱에서만 감지해야 한다');
+    assert.match(main, /-EncodedCommand/, '정리 스크립트를 EncodedCommand 로 넘기지 않는다(인용부호가 argv 에 실린다)');
+    assert.match(main, /shell\.writeShortcutLink/, '바탕화면 바로가기를 이 버전으로 잇지 않는다');
+    assert.match(main, /setLoginItemSettings\(\{ openAtLogin: true/, '로그인 자동 시작을 이 버전으로 잇지 않는다');
+    assert.ok(!/void cleanupStaleInstall\(\)/.test(main), '정리를 자동으로 돌리면 UAC 창이 느닷없이 뜬다 — 사람이 눌러야 한다');
+    assert.match(main, /ipcMain\.handle\(IPC\.CLEANUP_STALE/);
+    assert.equal(IPC.CLEANUP_STALE, 'lively:cleanup-stale');
+    const preload = readFileSync(fileURLToPath(new URL('../preload/preload.cjs', import.meta.url)), 'utf8');
+    assert.match(preload, /cleanupStale:/);
+    const html = readFileSync(fileURLToPath(new URL('../renderer/index.html', import.meta.url)), 'utf8');
+    assert.match(html, /id="stale-card"/); assert.match(html, /id="stale-clean"/);
+    const js = readFileSync(fileURLToPath(new URL('../renderer/app.js', import.meta.url)), 'utf8');
+    assert.match(js, /window\.lively\.cleanupStale\(\)/); assert.match(js, /staleInstall/);
+    const m = trayMenuModel({ cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true, nodeRunning: true, staleVersions: "0.1.320" });
+    const i = m.findIndex((x) => x.id === 'cleanup-stale');
+    assert.ok(i >= 0, '트레이에 정리 항목이 없다'); assert.match(m[i].label, /0\.1\.320/);
+    assert.ok(!trayMenuModel({ cliFound: true, loggedIn: true, kitInstalled: true }).some((x) => x.id === 'cleanup-stale'), '옛 설치본이 없으면 항목이 없어야 한다');
+    // 새 설치는 바탕화면 바로가기를 만든다(사용자는 바로가기로 앱을 연다 — 실측). 업데이트 땐 keep 메커니즘이라 늘지 않는다.
+    const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'));
+    assert.notEqual(pkg.build.nsis.createDesktopShortcut, false, 'createDesktopShortcut:false 면 옛 바로가기를 지운 뒤 아무 바로가기도 없다');
+  });
+}
+
+// ── N. 노드 '붙어 있는가' 축 — 프로세스는 도는데 게이트웨이엔 안 붙은 좀비를 '실행 중' 이라 그리지 않는다 (#1541) ──
+t('N1 트레이 — running 인데 connected=false 면 "연결 끊김" + 다시 시작 항목, 모름(null)이면 종전대로 실행 중', () => {
+  const base = { cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true, nodeRunning: true, nodeDaemon: true };
+  assert.match(statusLabel({ ...base, nodeConnected: false }), /연결 끊김/);
+  assert.match(statusLabel({ ...base, nodeConnected: true }), /실행 중/);
+  assert.match(statusLabel({ ...base, nodeConnected: null }), /실행 중/, '모름은 종전대로 — 게이트웨이에 못 물었다고 끊김이라 하면 거짓말');
+  assert.match(statusLabel({ ...base }), /실행 중/, '축이 아예 없어도(구 CLI) 종전대로');
+  const z = trayMenuModel({ ...base, nodeConnected: false });
+  const i = z.findIndex((m) => m.id === 'node-start');
+  assert.ok(i >= 0 && /다시 시작/.test(z[i].label), '좀비면 다시 시작 항목이 있어야 한다');
+  assert.ok(z.some((m) => m.id === 'node-stop'), '정지도 남긴다');
+  assert.ok(!trayMenuModel({ ...base, nodeConnected: true }).some((m) => m.id === 'node-start'), '정상 실행 중엔 시작 항목이 없다');
+  // 배선: 메인이 status 의 connected 를 상태로 옮기고(boolean 만), 렌더러가 그걸로 문구·버튼을 바꾼다
+  const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
+  assert.match(main, /nodeConnected: typeof n\.connected === "boolean" \? n\.connected : null/, 'connected 를 boolean 일 때만 옮기지 않는다');
+  const js = readFileSync(fileURLToPath(new URL('../renderer/app.js', import.meta.url)), 'utf8');
+  assert.match(js, /nodeConnected === false/, '렌더러가 좀비를 구분하지 않는다');
+  assert.match(js, /연결돼 있지 않습니다/, '렌더러 문구가 없다');
+  assert.match(js, /"노드 다시 시작"/, '좀비면 버튼이 다시 시작이어야 한다');
+});
+
+t('U14 업데이트 적용 재시작 후 창 복원 — 창에서 눌렀을 때만 마커, 시작 때 마커 소비 후 창 (#1541 실측: 트레이에만 떠 손으로 열었다)', () => {
+  const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
+  // applyUpdate: 창이 보일 때만 마커 — 자동 적용(창 숨김)이 마커를 남기면 안 보는 사람 앞에 창이 튀어나온다
+  const ap = main.slice(main.indexOf('async function applyUpdate'), main.indexOf('async function applyUpdate') + 1600);
+  const mk = ap.indexOf('desktop-reopen');
+  assert.ok(mk >= 0, 'applyUpdate 가 재열기 마커를 안 남긴다');
+  assert.match(ap.slice(Math.max(0, mk - 200), mk), /win\.isVisible\(\)/, '창 표시 여부 확인 없이 마커를 남긴다');
+  assert.ok(ap.indexOf('desktop-reopen') < ap.indexOf('quitAndInstall'), '마커는 quitAndInstall 전에 남겨야 한다(후엔 프로세스가 죽는다)');
+  // 시작: 마커가 있으면 지우고 창을 연다(지우지 않으면 다음 시작마다 창이 뜬다)
+  const boot = main.slice(main.indexOf('app.whenReady'), main.indexOf('app.whenReady') + 2000);
+  const bm = boot.indexOf('desktop-reopen');
+  assert.ok(bm >= 0, '시작 경로가 마커를 확인하지 않는다');
+  const after = boot.slice(bm, bm + 200);
+  assert.match(after, /rmSync/, '마커를 지우지 않는다 — 다음 시작마다 창이 뜬다');
+  assert.match(after, /showWindow\(\)/, '마커를 보고도 창을 안 연다');
+});
+
 t('D6 ★ 답한 프롬프트는 다시 뜨지 않는다(리듀서가 옛 prompt 를 물고 있으면 안 된다)', () => {
   // 실측(맥 풀 플로우): '예' 를 누르고 나서도 다음 step 이벤트마다 확인 카드가 되살아나 세 번 눌러야 했다.
   //  리듀서는 prompt 를 end 까지 들고 있으므로, **답한 순간** 메인이 그 자리를 비워 줘야 한다.
@@ -924,6 +1148,71 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.ok(wf.indexOf("npm ci") < wf.indexOf("GITHUB_REF_NAME#v"), "버전 스탬프가 npm ci 보다 앞에 있다");
     // 스탬프 스텝보다 빌드가 뒤여야 한다 — 앞이면 옛 버전으로 굽는다.
     assert.ok(wf.indexOf("GITHUB_REF_NAME#v") < wf.indexOf("electron-builder --win"), "빌드가 버전 스탬프보다 앞에 있다");
+  });
+}
+
+// ── Z5/Z6. 업데이트 자산 이름 — 매니페스트와 실제 자산이 **같은 이름**이어야 한다 (#1541) ────────
+// 실측(2026-08-18, 사용자 Windows · 앱 0.1.320): "Cannot download …/Lively-Setup-0.1.323.exe, status 404".
+//  자산은 있었다 — `Lively.Setup.0.1.323.exe` 로. NSIS 기본 이름(공백)을 우리가 action-gh-release 로 그대로 올리면
+//  GitHub 이 공백을 점으로 바꾸고, electron-updater 는 latest.yml 의 이름에서 공백을 하이픈으로 바꿔 요청한다.
+//  둘은 영영 못 만난다 → 그 사용자는 영영 업데이트를 못 받는다. 이번엔 그 업데이트가 EINVAL(0.1.321) 수정이라 잠금이었다.
+{
+  const pkg = JSON.parse(readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"));
+  const wf = readFileSync(fileURLToPath(new URL("../../.github/workflows/release-desktop.yml", import.meta.url)), "utf8");
+  // 패턴 → 예시 이름(electron-builder 매크로 치환). 검사 대상은 리터럴 부분이다.
+  const expand = (pat) => String(pat).replace(/\$\{productName\}/g, "Lively").replace(/\$\{version\}/g, "0.1.0")
+    .replace(/\$\{ext\}/g, "exe").replace(/\$\{arch\}/g, "x64").replace(/\$\{[a-zA-Z]+\}/g, "x");
+
+  t("Z5 ★ NSIS 산출물 이름을 명시한다 — 기본값(공백)이면 GitHub 자산과 latest.yml 이 갈려 404", () => {
+    const name = pkg.build && pkg.build.nsis && pkg.build.nsis.artifactName;
+    assert.ok(name, "nsis.artifactName 이 없다 — electron-builder 기본값은 `${productName} Setup ${version}.${ext}`(공백)이다");
+    assert.ok(!/\s/.test(name), `nsis.artifactName 에 공백: ${name}`);
+    assert.match(expand(name), GITHUB_SAFE, `치환 후 이름에 GitHub 이 바꾸는 문자: ${expand(name)}`);
+    assert.match(expand(name), /\.exe$/, "확장자는 ${ext} 로 끝나야 업데이터가 설치기로 인식한다");
+    // Setup 이 이름에 남아야 한다 — 사람이 릴리스 페이지에서 '설치기'를 알아보는 단서다(mac zip·dmg 와 구분).
+    assert.match(name, /Setup/, "설치기 이름에 Setup 표기가 없다");
+    // mac/linux 는 electron-builder 기본값이 이미 공백 없음(`${productName}-${version}-${arch}.${ext}`) — 덮어썼다면 그것도 안전해야 한다.
+    for (const k of ["mac", "linux", "dmg", "appImage"]) {
+      const v = pkg.build && pkg.build[k] && pkg.build[k].artifactName;
+      if (v) assert.match(expand(v), GITHUB_SAFE, `${k}.artifactName 이 GitHub-불안전: ${v}`);
+    }
+  });
+
+  t("Z6 매니페스트 검증기 — 엣지 표", () => {
+    const files = ["Lively-Setup-0.1.324.exe", "Lively-Setup-0.1.324.exe.blockmap", "latest.yml", "Lively-0.1.324-arm64-mac.zip", "Lively-0.1.324-arm64.dmg"];
+    // ① 정상: 이름 일치 + 안전 → 문제 없음
+    assert.deepEqual(manifestProblems("version: 0.1.324\nfiles:\n  - url: Lively-Setup-0.1.324.exe\n    sha512: x\npath: Lively-Setup-0.1.324.exe\n", files), []);
+    // ② ★ 이번 사고: 로컬엔 파일이 **있는데** 이름에 공백 — GitHub 이 바꾼다 → 반드시 잡아야 한다
+    const spaced = manifestProblems("path: Lively Setup 0.1.324.exe\n", ["Lively Setup 0.1.324.exe", "Lively Setup 0.1.324.exe.blockmap"]);
+    assert.equal(spaced.length, 1, `공백 이름을 못 잡았다: ${JSON.stringify(spaced)}`);
+    assert.match(spaced[0], /공백/);
+    // ③ 매니페스트가 없는 파일을 가리킴(빌드 산출물 이름 ≠ 매니페스트 이름 — 정확히 0.1.323 의 상태)
+    const missing = manifestProblems("path: Lively-Setup-0.1.324.exe\n", ["Lively Setup 0.1.324.exe"]);
+    assert.ok(missing.some((p) => /release\/ 에 없다/.test(p)), JSON.stringify(missing));
+    // ④ 새 헬퍼의 빈 입력: 참조가 0건이면 그 자체가 문제(업데이터가 받을 게 없다) — 통과시키면 안 된다
+    assert.ok(manifestProblems("", files).length >= 1, "빈 매니페스트를 통과시켰다");
+    assert.ok(manifestProblems("version: 0.1.324\n", files).length >= 1, "url/path 없는 매니페스트를 통과시켰다");
+    // ⑤ GitHub 이 바꾸는 다른 문자(괄호·한글) — 공백이 아니어도 잡는다
+    assert.ok(manifestProblems("path: Lively(1).exe\n", ["Lively(1).exe"]).length >= 1);
+    // ⑥ 여러 파일(mac: zip + dmg) 전부 있으면 통과 · 하나만 빠져도 실패
+    const mac = "files:\n  - url: Lively-0.1.324-arm64-mac.zip\n  - url: Lively-0.1.324-arm64.dmg\npath: Lively-0.1.324-arm64-mac.zip\n";
+    assert.deepEqual(manifestProblems(mac, files), []);
+    assert.ok(manifestProblems(mac, files.filter((f) => !/dmg$/.test(f))).length >= 1, "dmg 누락을 못 잡았다");
+    // ⑦ ★ 차등 다운로드 재료 — Windows 설치기 옆에 .blockmap 이 없으면 업데이트마다 100MB 전체를 받는다(실측 3분+ 침묵). 실패로 막는다.
+    const noBm = manifestProblems("path: Lively-Setup-0.1.324.exe\n", ["Lively-Setup-0.1.324.exe"]);
+    assert.ok(noBm.some((p) => /blockmap/.test(p)), `exe 옆 blockmap 부재를 못 잡았다: ${JSON.stringify(noBm)}`);
+    // mac zip 은 강제하지 않는다(미서명이라 mac 자동 업데이트가 꺼져 있다) — zip 만 있고 blockmap 없어도 통과
+    assert.deepEqual(manifestProblems("path: Lively-0.1.324-arm64-mac.zip\n", ["Lively-0.1.324-arm64-mac.zip"]), []);
+    // 워크플로가 blockmap 을 **올린다** — 검사만 하고 안 올리면 업데이터는 여전히 404 를 받는다
+    assert.match(wf, /desktop\/release\/\*\.blockmap/, "릴리스 업로드 목록에 *.blockmap 이 없다");
+    // 파서: url/path 만 읽고 sha512·size 같은 다른 키는 무시한다
+    assert.deepEqual(manifestRefs("path: a.exe\nsha512: b\nfiles:\n  - url: c.exe\n    size: 1\n"), ["a.exe", "c.exe"]);
+    // 배선: 워크플로에 검증 스텝이 **빌드 뒤·업로드 앞**에 있어야 한다 — 없으면 이 함수는 CI 에서 아무것도 안 본다
+    assert.match(wf, /verify-update-manifest\.mjs/, "워크플로에 매니페스트 검증 스텝이 없다");
+    assert.ok(wf.indexOf("electron-builder --win") < wf.indexOf("verify-update-manifest.mjs"), "검증이 빌드보다 앞이다");
+    assert.ok(wf.indexOf("verify-update-manifest.mjs") < wf.indexOf("softprops/action-gh-release"), "검증이 업로드보다 뒤다 — 막을 수 없다");
+    const step = wf.split("verify-update-manifest.mjs")[0].split("- name:").pop();
+    assert.ok(!/continue-on-error:\s*true/.test(step), "검증 스텝이 continue-on-error 라 실패해도 릴리스가 나간다");
   });
 }
 

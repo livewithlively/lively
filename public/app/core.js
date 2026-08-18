@@ -58,7 +58,7 @@ export { $view, applyReveal, el, interleave, reducedMotion, sv } from './lib/dom
 //  제자리 갱신이 스크롤을 옮기지 않게(#1635) — busy(비우는 동안 높이 예약) · keepSideScroll(사이드바 자체 스크롤).
 export { busy, keepSideScroll } from './lib/inplace.js';
 //  전역 상태 싱글턴 + 그 위의 판정 헬퍼.
-export { hasScope, navOn, state, visAxisOn } from './lib/state.js';
+export { hasScope, navOn, setUiModeOverride, state, uiMode, uiModeOverride, visAxisOn } from './lib/state.js';
 //  시간·숫자 표기(core 소유분).
 export { absTime, fmtNum, relTime } from './lib/format.js';
 //  안내문 인라인 표기 → 화면 칩.

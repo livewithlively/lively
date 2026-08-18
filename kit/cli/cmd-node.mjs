@@ -55,6 +55,24 @@ export function logTailHint(logFile, platform = process.platform) {
     ? `Get-Content -Wait -Tail 50 -Encoding utf8 '${logFile}'`
     : `tail -f ${logFile}`;
 }
+/**
+ * Windows 네이티브 명령의 출력 디코드 — 한국어 콘솔은 cp949 를 뱉는다(#1541 실측: 앱 로그에
+ *  "(schtasks: ����: �׼����� �źεǾ����ϴ�.)" — cp949 바이트를 utf8 로 읽은 깨진 글자를 사람에게 보여줬다).
+ *  utf8 로 먼저 읽고, 깨졌으면(U+FFFD) WHATWG euc-kr(=windows-949, Node full-ICU 내장)로 다시. 그래도 깨지면
+ *  **빈 문자열** — 깨진 글자를 보여주는 것보다 침묵이 낫다(문구는 진단 보조일 뿐이다).
+ * @param {Buffer|string|null|undefined} raw  spawnSync 를 encoding 없이 부른 stdout/stderr(Buffer)
+ */
+export function decodeConsoleText(raw) {
+  if (raw == null) return "";
+  if (typeof raw === "string") return raw.includes("\uFFFD") ? "" : raw;
+  const utf8 = raw.toString("utf8");
+  if (!utf8.includes("\uFFFD")) return utf8;
+  try {
+    const t = new TextDecoder("euc-kr").decode(raw);
+    if (!t.includes("\uFFFD")) return t;
+  } catch { /* ICU 없음 등 */ }
+  return "";
+}
 const LAUNCHD_LABEL = "io.lvly.node-agent";
 const PLIST_PATH = join(HOME, "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
 const SYSTEMD_UNIT = join(HOME, ".config", "systemd", "user", "lively-node-agent.service");
@@ -372,7 +390,8 @@ WantedBy=default.target\n`);
     writeFileSync(xmlPath, "\ufeff" + xml, "utf16le");
     spawnSync("schtasks", ["/Delete", "/TN", WIN_TASK_NAME, "/F"], { stdio: "ignore" });   // 재등록 안전(멱등)
     // stdio:"pipe" — 실패했을 때 **schtasks 가 뭐라 했는지**가 폴백 여부 판단의 근거다(그냥 버리면 진단이 사라진다).
-    const r = spawnSync("schtasks", ["/Create", "/TN", WIN_TASK_NAME, "/XML", xmlPath], { encoding: "utf8" });
+    // encoding 을 주지 않는다(Buffer 로 받는다) — 한국어 Windows 의 schtasks 는 cp949 를 뱉어 utf8 강제 디코드가 글자를 깨뜨린다.
+    const r = spawnSync("schtasks", ["/Create", "/TN", WIN_TASK_NAME, "/XML", xmlPath], {});
     if (r.status === 0) {
       const since = Date.now();                                                            // 기동 **전** 시각 — 이후의 연결만 우리 것으로 센다
       spawnSync("schtasks", ["/Run", "/TN", WIN_TASK_NAME], { stdio: "ignore" });          // 재로그인 기다리지 않고 지금 기동
@@ -389,7 +408,7 @@ WantedBy=default.target\n`);
     //  잃는 것은 '로그인 전 기동' 하나뿐 — 어차피 그건 관리자 권한이 필요하고, 사용자 홈·자격으로 도는
     //  노드에겐 로그인 전 실행이 의미도 없다. 재시작 보장은 런처(.cmd)의 루프가 그대로 진다.
     say(yellow(`⚠ 작업 스케줄러 등록이 거부됐습니다 — 시작프로그램 방식으로 대체합니다.`));
-    const denied = String(r.stderr || r.stdout || "").trim();
+    const denied = (decodeConsoleText(r.stderr).trim() || decodeConsoleText(r.stdout).trim());
     if (denied) say(dim(`   (schtasks: ${denied.split(/\r?\n/)[0]})`));
     const vbsPath = join(winStartupDir(), WIN_STARTUP_VBS);
     try {
@@ -401,6 +420,9 @@ WantedBy=default.target\n`);
         "  관리자 PowerShell 에서 `lively node --daemon` 을 실행하거나, `lively node` 로 창을 띄워두고 쓰세요.", 1);
     }
     winKillAgentProcs();                                                                   // 재등록 멱등 — 옛 인스턴스 회수
+    // 못 죽인 옛 인스턴스가 있으면 **말하고** 계속한다(새 인스턴스는 띄운다 — 게이트웨이엔 새 것이 붙는다). 좀비는 재부팅
+    //  또는 관리자 PowerShell 의 `lively node stop` 으로 걷는다. 조용히 넘어가면 프로세스가 둘인 이유를 아무도 모른다.
+    { const residual = winResidualAgentProcs(); if (residual.pids.length) say(yellow(stopResidualNote(residual))); }
     const since = Date.now();                                                              // 기동 **전** 시각 — 이후의 연결만 우리 것으로 센다
     // 지금 기동 — 로그인 때와 **같은 경로**로 띄운다(다르게 띄우면 여기선 되고 재부팅 후 안 되는 걸 못 잡는다).
     const started = spawnSync("wscript", [vbsPath], { stdio: "ignore", timeout: 15_000 }).status === 0;
@@ -641,6 +663,45 @@ function winKillAgentProcs() {
   kill("node.exe", "*node-agent*agent.mjs*");
 }
 
+/**
+ * 죽인 **뒤에 다시 센다** — Stop-Process 는 못 죽여도 조용하다(-ErrorAction SilentlyContinue, 게다가 stdio ignore).
+ *  ★ 실측(2026-08-18, hammurabi): 앱에서 '노드 정지' → "✅ 노드 데몬 해제" 를 찍고 끝났는데 프로세스는 그대로 살아
+ *  화면이 계속 "실행 중" 이었다(게이트웨이엔 이미 몇 시간째 오프라인인 좀비). 일반 권한 프로세스는 **관리자 권한으로 시작된**
+ *  같은 사용자의 프로세스를 종료할 수 없다(무결성 수준) — 세는 건 WMI 가 대신 해 줘서 보이는데, 죽이는 건 안 된다.
+ *  '했다' 고 말하고 안 됐으면 사람이 할 일(관리자 PowerShell 에서 다시)을 알 길이 없다 → 남은 프로세스를 PID 로 보고한다.
+ * @returns {{pids:number[], detail:string}} 남은 우리 프로세스(없으면 pids=[])
+ */
+export function winResidualAgentProcs(runProbe = winResidualProbe) {
+  const raw = runProbe();
+  const rows = parseResidualProbe(raw);
+  return { pids: rows.map((r) => r.pid), detail: rows.map((r) => `PID ${r.pid}${r.session != null ? ` (세션 ${r.session})` : ""} ${r.name}`).join(", ") };
+}
+/** 남은 프로세스 나열 — 이름·PID·세션. 순수 파서와 갈라 두어 표로 못박는다(Windows 분기는 CI 에서 안 돈다). */
+function winResidualProbe() {
+  const r = spawnSync("powershell", ["-NoProfile", "-Command",
+    "Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'node.exe' -and $_.CommandLine -like '*node-agent*agent.mjs*') -or ($_.Name -eq 'cmd.exe' -and $_.CommandLine -like '*node-agent-run.cmd*') } | " +
+    "ForEach-Object { \"$($_.ProcessId)`t$($_.SessionId)`t$($_.Name)\" }"], { encoding: "utf8", timeout: 8000 });
+  return r.error ? "" : String(r.stdout || "");
+}
+/** `pid<TAB>session<TAB>name` 줄들 → 배열. 빈 출력·쓰레기 줄은 버린다. */
+export function parseResidualProbe(stdout) {
+  const out = [];
+  for (const line of String(stdout || "").split(/\r?\n/)) {
+    const [pid, session, name] = line.trim().split("\t");
+    const p = Number(pid);
+    if (!Number.isFinite(p) || p <= 0) continue;
+    out.push({ pid: p, session: Number.isFinite(Number(session)) && session !== "" ? Number(session) : null, name: (name || "").trim() });
+  }
+  return out;
+}
+/** 정지 뒤 남은 프로세스에 대한 사람용 문구(순수). 없으면 "" */
+export function stopResidualNote(residual) {
+  const r = residual || { pids: [] };
+  if (!r.pids || !r.pids.length) return "";
+  return `⚠ 노드 프로세스 ${r.pids.length}개가 아직 살아 있습니다(${r.detail}) — 관리자 권한으로 시작됐거나 다른 로그온 세션의 것이라 이 권한으로는 종료할 수 없습니다.\n` +
+    "  관리자 PowerShell 에서 `lively node stop` 을 실행한 뒤, 일반 PowerShell(또는 앱)에서 다시 시작하세요.";
+}
+
 // ── 노드 상태 (#1541 T4) ────────────────────────────────────────────────────
 // 데스크톱 앱이 폴링할 축이다. 사람이 트레이에서 한 줄로 이해하는 건 "지금 도는가"이고, 버튼이 갈리는 건
 //  "등록됐나 / 자동시작이 켜졌나" 다 — 그 셋을 따로 준다.
@@ -682,6 +743,22 @@ export function parseProcCount(platform, stdout, status) {
 }
 
 /** 노드 상태 실측 — 앱·`status --json` 이 쓰는 단일 통로. 못 재는 축은 null(모르는 걸 false 로 눕히지 않는다). */
+/**
+ * 게이트웨이가 보는 이 노드의 연결 여부 — `/api/ui/nodes` 응답에서 id 로 찾는다. 순수.
+ *
+ * ★ 왜 이 축이 따로 필요한가(#1541 실측 2026-08-18): 노드 프로세스는 살아 있는데(running=true) 게이트웨이엔 3시간째
+ *  오프라인인 **좀비**가 있었다(PC 절전 뒤 소켓이 반쯤 열린 채 남음). 프로세스 실측만 보는 화면은 "노드 실행 중" 이라고
+ *  거짓말했다. '도는가' 와 '붙어 있는가' 는 다른 축이다 — 붙어 있지 않으면 사람은 다시 시작해야 한다.
+ * @returns true=붙어 있음 · false=목록엔 있는데 오프라인 · null=모름(목록에 없음·응답 이상)
+ */
+export function nodeConnectedFrom(payload, id) {
+  const list = Array.isArray(payload) ? payload : Array.isArray(payload?.nodes) ? payload.nodes : null;
+  if (!list || !id) return null;
+  const n = list.find((x) => x && String(x.id) === String(id));
+  if (!n) return null;
+  return typeof n.online === "boolean" ? n.online : null;
+}
+
 export function nodeStatus() {
   const artifact = nodeDaemonArtifact();
   const registered = existsSync(NODE_ENV_FILE);
@@ -694,6 +771,7 @@ export function nodeStatus() {
     running: null,
     id: registered ? readEnvFile(NODE_ENV_FILE, "LIVELY_NODE_ID") : null,
     gateway: registered ? readEnvFile(NODE_ENV_FILE, "LIVELY_GATEWAY_URL") : null,
+    connected: null,   // 게이트웨이가 보는 연결 여부 — lively.mjs 가 /api/ui/nodes 로 채운다(여긴 로컬 실측만)
   };
   try {
     const probe = nodeProcProbe();
@@ -735,6 +813,9 @@ function nodeStop() {
     //  ⚠ `taskkill /IM node.exe` 는 금지 — 사용자의 다른 Node 를 전부 죽인다. 커맨드라인으로 우리 것만 고른다
     //   (이 CLI 자신은 그 문자열이 없어 대상이 아니다).
     winKillAgentProcs();
+    // ★ 죽였는지 **다시 센다** — 못 죽였는데 ✅ 를 찍으면 앱은 계속 "실행 중" 인데 사람은 뭘 해야 할지 모른다(실측).
+    const residual = winResidualAgentProcs();
+    if (residual.pids.length) die(stopResidualNote(residual), 3);
     say(green(`✅ 노드 데몬 해제(${hadTask ? "작업 스케줄러" : hadVbs ? "시작프로그램" : "등록 없음 — 잔여 프로세스만 회수"})`));
   } else { die(`미지원 OS: ${process.platform}`, 1); }
   say(dim("   (노드 등록·번들은 남습니다 — 완전 제거는 웹/REST 로 노드 삭제)"));

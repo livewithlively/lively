@@ -116,6 +116,24 @@ const sh = (cmd, args = [], { cwd = SB, allowFail = false } = {}) => {
   check("프로젝트 밖 → cwd/<repo>", r.worktree === join(outside, "base"), r.worktree);
   check("프로젝트 밖 → wt/<repo> 계열", /^wt\/base/.test(r.branch), r.branch);
 
+  // ── 9b) 세션 전용 폴더의 마커(#1719, kind:"session") — 그 폴더는 프로젝트 폴더가 **아니다** ──
+  //  session-project.ts 가 세션이 프로젝트에 붙을 때 sessions/<sid>/.lively/project.json 에 { kind:"session", project_id,
+  //  project_dir } 를 쓴다. 슬롯은 project_dir(=프로젝트 폴더)이어야 한다 — marker.dir(세션 폴더)로 잡으면
+  //  sessions/<sid>/<repo> 에 project/<id> 가 걸려 서버 provision 이 막힌다(#932 의 그 사고가 다른 자리에서 재현).
+  const sess = join(SB, "box", "sessions", "box-yoon-1");
+  mkdirSync(join(sess, ".lively"), { recursive: true });
+  writeFileSync(join(sess, ".lively", "project.json"), JSON.stringify({ kind: "session", session_id: "box-yoon-1", project_id: 999, project_dir: proj, sync: "none" }));
+  r = await repoWorktree(ctx(sess), { repo: "base" });
+  check("세션 폴더 마커 + project_dir → 슬롯은 프로젝트 폴더(멱등 재사용)", r.worktree === join(proj, "base"), r.worktree);
+  check("세션 폴더 마커 + project_dir → 브랜치 project/<id>", r.branch === "project/999", r.branch);
+  //  project_dir 없음(그 컴퓨터에 프로젝트 폴더가 없다) → 슬롯 없음 → cwd/<repo> + wt/<repo>(project/<id> 를 세션 폴더에 걸지 않는다)
+  const sess2 = join(SB, "box", "sessions", "box-yoon-2");
+  mkdirSync(join(sess2, ".lively"), { recursive: true });
+  writeFileSync(join(sess2, ".lively", "project.json"), JSON.stringify({ kind: "session", session_id: "box-yoon-2", project_id: 999, project_dir: null, sync: "none" }));
+  r = await repoWorktree(ctx(sess2), { repo: "base" });
+  check("세션 폴더 마커 · project_dir 없음 → cwd/<repo>", r.worktree === join(sess2, "base"), r.worktree);
+  check("세션 폴더 마커 · project_dir 없음 → wt/<repo> 계열(project/<id> 아님)", /^wt\/base/.test(r.branch), r.branch);
+
   // ── 10) 핀 경로 스톰프 회귀(#932) — content-addressed 라 다른 SHA 핀이 공존, repoPin 이 남의 핀을 안 덮는다 ──
   //  tmpdir 은 macOS 에서 유저당 하나(세션당 아님)라, sha 없이 repo 만으로 자리를 잡으면 다른 세션이 다른 SHA 를
   //  핀할 때 내 핀을 force-remove 로 덮어 발밑 코드가 바뀐다 — 핀이 막으려던 바로 그 HEAD 드리프트.

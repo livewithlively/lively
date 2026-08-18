@@ -743,7 +743,7 @@
   "rest": [
    "POST /api/ui/org/runtime-config"
   ],
-  "input_hash": "10e81ea1942482e3"
+  "input_hash": "42036f1ebdf2ef71"
  },
  {
   "name": "org_alert_status",
@@ -1406,6 +1406,36 @@
    "GET /api/ui/me/liv/turn/:id"
   ],
   "input_hash": "71d627e9a9d1759c"
+ },
+ {
+  "name": "me_liv_turn_stop",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/liv/turn/:id/stop"
+  ],
+  "input_hash": "972fb036fe1be6a0"
+ },
+ {
+  "name": "me_liv_chat",
+  "scope": null,
+  "mcp": false,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/me/liv/chat"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "me_liv_ask_dismiss",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/me/liv/ask-dismiss"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
  },
  {
   "name": "me_liv_chat_reset",

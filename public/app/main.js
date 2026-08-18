@@ -25,6 +25,8 @@ import { changePasswordModal, openMyProfileModal, renderSystem } from './admin.j
 import { endTour } from './tour.js';
 import { installGlobalUndo } from './undo.js';
 import { setUnauthorizedHandler } from './lib/net.js';
+import { uiMode } from './lib/state.js';
+import { bootV2 } from './v2/main.js'; // #1719 새 1탭 셸 — boot() 가 ui_mode 로 고른다. 정적 import(스탬프 경로 단일화), 부르기 전엔 아무 일도 안 함.
 // ── 401(세션 만료) 처리 배선(R29a) — **이 파일에서 가장 먼저 실행되는 문장이어야 한다.** ──
 //  lib/net.ts 의 api() 는 401 을 만나면 토큰만 지우고 여기 등록된 처리기를 부른다(미배선이면 아무것도 안 하고
 //  401 을 throw — 즉 배선이 늦으면 '만료됐는데 로그인 화면이 안 뜬다'가 된다). 첫 api() 호출은 이 파일 맨 끝
@@ -62,7 +64,12 @@ const NAV_PAGE_TAB = {
     knowledge: 'knowledge', trash: 'knowledge', k: 'knowledge', 'k-edit': 'knowledge',
     context: 'context', system: 'system',
 };
+// #1719 — 새 셸이 떠 있으면 클래식 라우터는 손을 뗀다(hashchange 는 새 셸의 라우터가 받는다).
+//  ⚠ 클래식 페이지는 그래도 살아 있다 — 새 셸이 ?embed=1 로 같은 index.html 을 iframe 에 실어 '앱'으로 띄운다.
+let uiV2Active = false;
 async function route() {
+    if (uiV2Active)
+        return;
     // #592 피크 패널 — 뒤/앞으로가기가 peek 파라미터만 바꾼 이동이면 패널이 스스로 개폐를 끝냈다(가드) —
     //  본문 전체 재렌더를 생략해 목록 스크롤·상태를 보존. 그 외 라우팅은 남은 피크를 정리(전체화면 이동·탭 전환 등).
     //  (#761) 투어 정리는 이 가드 '뒤'에서 — 피크 개폐만으로는 진행 중 둘러보기를 죽이지 않는다(본문도 그대로니까).
@@ -320,6 +327,20 @@ async function boot() {
         return;
     }
     hideGate();
+    // ── 화면 셸 선택(#1719) ──
+    //  ?embed=1 : 새 셸이 클래식 페이지를 iframe 에 '앱'으로 실을 때. 클래식 셸을 그대로 쓰되 크롬(상단바·탭·배너·푸터)만
+    //             body.embed 로 걷는다(40-v2.css). 임베드는 항상 클래식이다(안 그러면 셸 안에 셸이 뜬다).
+    //  그 외      : uiMode()(URL ?ui > 로컬 오버라이드 > 조직 ui_mode > 'v2') 가 v2 면 새 셸로 넘기고 여기서 끝낸다.
+    //             클래식 라우터·상단바 코드는 건드리지 않은 채로 남는다 — 두 셸의 병행 기간 동안 옛 화면은 옛 코드 그대로다.
+    const embedded = new URLSearchParams(location.search).get('embed') === '1';
+    if (embedded)
+        document.body.classList.add('embed');
+    else if (uiMode() === 'v2') {
+        uiV2Active = true;
+        document.body.dataset.ui = 'v2';
+        await bootV2();
+        return;
+    }
     // 우측 상단 = '내 프로필' 버튼(아바타 + 표시이름). 표시이름 우선(없으면 이메일/아이디). 클릭→'내 정보' 팝업(#762).
     const userBtn = document.getElementById('user-email');
     if (userBtn) {

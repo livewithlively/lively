@@ -52,9 +52,38 @@ function navOn(tab: string): boolean {
   return tabs[tab] !== false;
 }
 
-export type { AppState };
+// 화면 셸 판정(#1719) — 새 1탭 셸('v2') vs 종전 탭 셸('classic'). **셸을 고르는 단일 규칙**이다(main.ts boot 만 부른다).
+//  우선순위: ① URL ?ui=classic|v2 (이번 로드에만 — 링크로 상대 화면을 보여줄 때)
+//           ② 브라우저 로컬 오버라이드 localStorage[lively_ui_mode] (관리탭 [화면] 의 '이 브라우저에서만' 버튼)
+//           ③ 조직 기본 me.ui_mode (org_runtime_config.ui_mode — 관리자가 정함, 매니지드는 컨트롤플레인이 push)
+//           ④ 'v2' (제품 기본 — 서버가 값을 못 준 구 게이트웨이도 새 셸로 뜬다)
+//  ⚠ 셀프호스트가 옛 화면을 유지하려면 ③ 을 classic 으로 두면 된다(어니스트 등 기배포는 운영자가 수동 설정 — 대표 결정).
+const UI_MODE_KEY = 'lively_ui_mode';
+type UiMode = 'v2' | 'classic';
+function uiMode(): UiMode {
+  try {
+    const q = new URLSearchParams(location.search).get('ui');
+    if (q === 'classic' || q === 'v2') return q;
+    const o = localStorage.getItem(UI_MODE_KEY);
+    if (o === 'classic' || o === 'v2') return o;
+  } catch (_) { /* localStorage 접근 불가(프라이버시 모드 등) → 조직 기본으로 */ }
+  const m = state.me && (state.me as any).ui_mode;
+  return m === 'classic' ? 'classic' : 'v2';
+}
+// 로컬 오버라이드 쓰기 — null 이면 해제(조직 기본으로 복귀). 관리탭 [화면] 과 새 셸의 '클래식으로' 링크가 쓴다.
+function setUiModeOverride(m: UiMode | null): void {
+  try { if (m) localStorage.setItem(UI_MODE_KEY, m); else localStorage.removeItem(UI_MODE_KEY); } catch (_) { /* noop */ }
+}
+function uiModeOverride(): UiMode | null {
+  try { const o = localStorage.getItem(UI_MODE_KEY); return o === 'classic' || o === 'v2' ? o : null; } catch (_) { return null; }
+}
+
+export type { AppState, UiMode };
 export {
   state,
   visAxisOn,
   navOn,
+  uiMode,
+  setUiModeOverride,
+  uiModeOverride,
 };

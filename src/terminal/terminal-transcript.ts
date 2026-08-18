@@ -20,9 +20,18 @@ export interface Prompt { text: string; ts: string; author?: string; }
 //  CLAUDE_CONFIG_DIR=<PROFILES_ROOT>/<슬러그>/claude 로 실행된다). 예전엔 공유 하나만 봐서, 세션에서 오간
 //  질문 대부분이(특히 남이 던진 것) 팝업에 아예 안 떴다 — 실측: project/1045 는 공유 7 + yoon 프로필 3 = 대화
 //  10개인데 공유의 최신 1개만 읽고 있었다.
-const PROFILES_ROOT = process.env.LIVELY_PROFILES_ROOT || path.join(os.homedir(), ".lively", "profiles");
+export const PROFILES_ROOT = process.env.LIVELY_PROFILES_ROOT || path.join(os.homedir(), ".lively", "profiles");
+// #1746 하네스 세션 I/O 어댑터(harness-io/claude.ts)가 쓰는 규약 조각 — 이 파일의 경로 지식을 한 곳에 둔다(어댑터가 다시 적지 않게).
+export const claudeProjectsDirName = (cwd: string): string => cwd.replace(/[/.]/g, "-");
+/** 이 소유자의 세션이 볼 수 있는 claude 대화 뿌리들 — 공유 홈 + 멤버 프로필(CLAUDE_CONFIG_DIR) + (격리 홈은 homes 로 받는다). */
+export function claudeTranscriptRoots(homes: string[], owner: string): string[] {
+  const out = homes.map((h) => path.join(h, ".claude", "projects"));
+  const me = String(owner || "").trim();
+  if (me) out.push(path.join(PROFILES_ROOT, me, "claude", "projects"));
+  return out;
+}
 const MAX_TRANSCRIPT_FILES = 20;   // 한 세션(cwd)당 읽을 대화 파일 상한 — 최근 수정순. 통합검색이 전 세션을 훑으므로 상한을 둔다.
-const MEMBER_HOME_BASE = process.env.LIVELY_MEMBER_HOME_BASE || "/home";   // 격리 ON(리눅스): useradd -m -d /home/box_<slug>
+export const MEMBER_HOME_BASE = process.env.LIVELY_MEMBER_HOME_BASE || "/home";   // 격리 ON(리눅스): useradd -m -d /home/box_<slug>
 async function transcriptRoots(): Promise<Array<{ dir: string; author: string }>> {
   const roots = [{ dir: CLAUDE_PROJECTS, author: "" }];   // author='' = 공유(누구 프로필인지 알 수 없음)
   let slugs: string[] = [];
@@ -83,6 +92,54 @@ export async function transcriptExists(cwd: string, sessionUuid: string, owner =
     } catch { /* 이 뿌리엔 없음 — 다음 */ }
   }
   return false;
+}
+
+// #1719 세션 대화창 — 이 UUID 의 대화 파일 **경로**를 찾는다(transcriptExists 와 같은 뿌리·같은 소유자 스코프).
+//  존재 여부만으로는 모자라다: 대화창이 그 파일을 오프셋부터 이어 읽어야 한다(터미널 대신 말풍선으로 라이브 세션을 보인다).
+//  못 찾으면 null — 호출자가 '아직 기록 없음'으로 다룬다(추측 폴백 없음, 위 주석의 원칙 그대로).
+export async function findTranscriptFile(cwd: string, sessionUuid: string, owner = ""): Promise<{ file: string; size: number } | null> {
+  if (!cwd || !sessionUuid) return null;
+  const enc = cwd.replace(/[/.]/g, "-");
+  for (const { dir } of rootsForOwner(await transcriptRoots(), owner)) {
+    const file = path.join(dir, enc, `${sessionUuid}.jsonl`);
+    try {
+      const st = await fsp.stat(file);
+      if (st.isFile()) return { file, size: st.size };
+    } catch { /* 이 뿌리엔 없음 — 다음 */ }
+  }
+  return null;
+}
+
+// #1719 세션 대화창 — **맥락 압축(compact) 사슬**. Claude Code 는 압축 때 **새 세션 uuid 의 새 파일**을 열고(첫 줄 system/compact_boundary,
+//  logicalParentUuid = 이전 파일의 마지막 메시지 uuid) 옛 파일은 그대로 둔다(실측 2026-08-18: 108b6fb2 → e722ab02). 화면이 압축 전
+//  대화까지 이어 보이려면 '이 파일의 이전 파일'을 알아야 한다 — 같은 폴더의 다른 대화 파일 중 그 uuid 를 가진 파일을 찾는다.
+//  파일이 수십 MB 라 매 요청마다 뒤지지 않는다: 결과를 프로세스 캐시에 둔다(파일 → 이전 uuid|null). 최근 수정 순으로 최대 12개만 본다.
+const prevCache = new Map<string, string | null>();
+export async function findPrevTranscript(file: string): Promise<string | null> {
+  if (prevCache.has(file)) return prevCache.get(file) ?? null;
+  let prev: string | null = null;
+  try {
+    const fh = await fsp.open(file, "r");
+    let head = "";
+    try { const buf = Buffer.alloc(8192); const r = await fh.read(buf, 0, 8192, 0); head = buf.subarray(0, r.bytesRead).toString("utf8"); }
+    finally { await fh.close(); }
+    const first = head.split("\n")[0] || "";
+    let o: any = null; try { o = JSON.parse(first); } catch { /* 첫 줄이 잘렸거나 JSON 아님 */ }
+    const lp = o && o.type === "system" && o.subtype === "compact_boundary" ? String(o.logicalParentUuid || "") : "";
+    if (lp && /^[A-Za-z0-9-]{8,64}$/.test(lp)) {
+      const dir = path.dirname(file);
+      const names = (await fsp.readdir(dir)).filter((n) => n.endsWith(".jsonl") && path.join(dir, n) !== file);
+      const stats = await Promise.all(names.map(async (n) => ({ n, m: (await fsp.stat(path.join(dir, n)).catch(() => null))?.mtimeMs ?? 0 })));
+      stats.sort((a, b) => b.m - a.m);
+      const needle = `"uuid":"${lp}"`;
+      for (const { n } of stats.slice(0, 12)) {
+        const txt = await fsp.readFile(path.join(dir, n), "utf8").catch(() => "");
+        if (txt.includes(needle)) { prev = n.replace(/\.jsonl$/, ""); break; }
+      }
+    }
+  } catch { prev = null; }
+  prevCache.set(file, prev);
+  return prev;
 }
 
 // ⚠ '그 폴더의 가장 최근 대화'로 resume 을 추측하는 함수가 여기 있었다가 제거됐다(2026-07-28).

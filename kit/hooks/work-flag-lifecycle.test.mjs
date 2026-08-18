@@ -101,6 +101,24 @@ function runHook(input, env = {}) {
   } else bad("E4 SessionStart → /claude-uuid", `uuid=${uuid.length} exited=${exitedCalls.length} all=${JSON.stringify(r.map((x) => x.path))}`);
 }
 
+// ── E4b(#1746): SessionStart 에 transcript_path 가 오면 그 경로도 함께 보고한다(대화창이 하네스 무관하게 파일을 찾는 근거) · 없으면 안 싣는다 ──
+{
+  const sid = `s${++n}-uuid`;
+  const tp = "/tmp/x/.claude/projects/-tmp-work/" + sid + ".jsonl";
+  const r = await runHook({ session_id: sid, hook_event_name: "SessionStart", source: "startup", transcript_path: tp });
+  const uuid = r.filter((x) => x.method === "POST" && x.path === `/api/ui/terminal/sessions/${BOX}/claude-uuid`);
+  let body = null; try { body = JSON.parse(uuid[0]?.body || "null"); } catch { /* */ }
+  (uuid.length === 1 && body && body.uuid === sid && body.transcript_path === tp)
+    ? ok("E4b SessionStart(transcript_path) → POST /claude-uuid {uuid, transcript_path}")
+    : bad("E4b transcript_path 동반 보고", `calls=${uuid.length} body=${uuid[0]?.body}`);
+  // 없으면 필드 자체가 없다(구 하네스·경로 미제공) — 서버가 규약으로 폴백한다.
+  const sid2 = `s${++n}-uuid`;
+  const r2 = await runHook({ session_id: sid2, hook_event_name: "SessionStart", source: "startup" });
+  const u2 = r2.filter((x) => x.path.endsWith("/claude-uuid"));
+  let b2 = null; try { b2 = JSON.parse(u2[0]?.body || "null"); } catch { /* */ }
+  (u2.length === 1 && b2 && !("transcript_path" in b2)) ? ok("E4b 경로 없으면 transcript_path 필드 없음") : bad("E4b 경로 없음", `body=${u2[0]?.body}`);
+}
+
 // ── E5: SessionEnd(prompt_input_exit) 이지만 box-id 없음 → POST 없음(비-box 세션 fail-open) ──
 {
   const r = await runHook({ session_id: `u${++n}`, hook_event_name: "SessionEnd", reason: "prompt_input_exit" }, { LIVELY_SESSION_ID: "" });

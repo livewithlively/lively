@@ -52,6 +52,12 @@ export async function sessionOwner(nodeId: string, sessionId: string): Promise<s
   return (r.rows[0]?.owner as string | null) ?? null;
 }
 
+// 이 기록을 남긴 하네스(캡처 훅이 보고, #1746) — 읽을 때 어느 어댑터 파서로 공통 ChatLine 을 만들지 정한다. 미보고(구 행)면 null.
+export async function sessionHarness(nodeId: string, sessionId: string): Promise<string | null> {
+  const r = await itemsPool.query(`SELECT harness FROM session WHERE node_id=$1 AND session_id=$2`, [nodeId, sessionId]);
+  return (r.rows[0]?.harness as string | null) ?? null;
+}
+
 // 부모 세션 id — 서브에이전트면 부모(주) 세션 id, 최상위면 null(#905 C1 슬⑥). 렌더 시 sidechain 포함 여부 판정에 쓴다.
 export async function sessionParent(nodeId: string, sessionId: string): Promise<string | null> {
   const r = await itemsPool.query(`SELECT parent_session_id FROM session WHERE node_id=$1 AND session_id=$2`, [nodeId, sessionId]);
@@ -150,19 +156,22 @@ export async function sessionLogWatermark(nodeId: string, sessionId: string): Pr
 
 // 회수(웹뷰·resume 슬라이스에서 사용) — from 바이트부터 이어붙여 반환. 청크가 at_offset 순서라 그대로 concat.
 //  from 이 청크 경계 중간이면 그 청크의 해당 지점부터 자른다(경계 무관 요청 허용).
-export async function readSessionLog(nodeId: string, sessionId: string, from = 0): Promise<{ from: number; bytes: number; data: Buffer }> {
+//  to(선택, #1719) — [from, to) 창만. 긴 기록(수십 MB)을 화면이 꼬리부터 창으로 읽을 때 쓴다. 없으면 종전대로 끝까지.
+export async function readSessionLog(nodeId: string, sessionId: string, from = 0, to?: number): Promise<{ from: number; bytes: number; data: Buffer }> {
   const total = await sessionLogWatermark(nodeId, sessionId);
   const start = Math.max(0, Math.min(from, total));
+  const end = to !== undefined && Number.isFinite(to) ? Math.max(start, Math.min(to, total)) : total;
   // 오프셋 회계는 **원본 길이**(raw_len) 기준 — 압축본 octet_length 가 아니라. 구청크(raw_len NULL)는 원본=octet_length(data).
   const r = await itemsPool.query(
     `SELECT at_offset, data, codec, COALESCE(raw_len, octet_length(data)) AS raw_len FROM session_log_chunk
-      WHERE node_id=$1 AND session_id=$2 AND at_offset + COALESCE(raw_len, octet_length(data)) > $3
+      WHERE node_id=$1 AND session_id=$2 AND at_offset + COALESCE(raw_len, octet_length(data)) > $3 AND at_offset < $4
       ORDER BY at_offset`,
-    [nodeId, sessionId, start]);
+    [nodeId, sessionId, start, end]);
   const parts: Buffer[] = [];
   for (const row of r.rows) {
     const chunkAt = Number(row.at_offset);
-    const buf: Buffer = decodeChunk(row.data as Buffer, (row.codec as string | null) ?? null);   // 압축본이면 원본 복원
+    let buf: Buffer = decodeChunk(row.data as Buffer, (row.codec as string | null) ?? null);   // 압축본이면 원본 복원
+    if (chunkAt + buf.length > end) buf = buf.subarray(0, end - chunkAt);   // 끝이 이 청크 중간이면 뒷부분 잘라낸다
     const skip = start > chunkAt ? start - chunkAt : 0;   // 시작이 이 청크 중간이면 원본 기준 앞부분 잘라낸다
     parts.push(skip > 0 ? buf.subarray(skip) : buf);
   }

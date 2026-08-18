@@ -178,5 +178,10 @@ export async function initRuntimeConfigPolicyColumns(pool: Pool): Promise<void> 
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS announcement JSONB;
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS ui_profile TEXT NOT NULL DEFAULT 'full';
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS usage_url TEXT;
+    -- ── ui_mode(#1719): 기본 화면 셸 — 'v2'(새 1탭 셸: 사이드바·리브 대화·위젯·런치패드) | 'classic'(종전 탭 셸).
+    --  ⚠ 기본값이 'v2' 다 — 다른 노브와 달리 '기존 동작 불변'이 아니다(대표 결정: 새 설치·매니지드는 새 화면이 기본,
+    --   이미 배포된 셀프호스트는 운영자가 관리탭 [화면] 에서 classic 으로 내린다). 클래식 코드는 그대로 남아
+    --   ?embed=1 로 새 셸의 런치패드 '앱'으로 실린다. 사람별로는 브라우저 로컬 오버라이드(web/lib/state.ts uiMode)가 우선.
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS ui_mode TEXT NOT NULL DEFAULT 'v2';
   `);
 }

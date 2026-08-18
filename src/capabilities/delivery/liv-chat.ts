@@ -15,6 +15,7 @@
 //  승인 우회를 쓰지 않는다. 경계는 `--disallowedTools`(liv-turn.ts 의 실측 참조)이고, 이 파일은 그 인자를
 //  만들지 않는다 — livTurnArgs 하나만 부른다. 안전선이 한 자리에 있어야 약해질 때 눈에 띈다.
 import crypto from "node:crypto";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import type { Capability } from "../types.js";
@@ -54,7 +55,7 @@ export const livChatCapabilities: Capability[] = [
       if (!text) throw new HttpError(400, "할 말이 비어 있습니다");
       if (text.length > TURN_MAX) throw new HttpError(400, `한 번에 보낼 수 있는 글자 수를 넘었습니다(${text.length} > ${TURN_MAX})`);
 
-      const { getLivProfile, setLivChat } = await import("../../org/store.js");
+      const { getLivProfile, setLivChat, appendLivTurn } = await import("../../org/store.js");
       const prof = await getLivProfile(userId);
       // 이어갈 대화가 있으면 이어받고, 없거나 restart 면 새로 만든다.
       //  ⚠ 첫 턴과 이어가는 턴은 **주는 플래그가 다르다**(--session-id ↔ --resume). 이걸 뒤집으면
@@ -66,7 +67,7 @@ export const livChatCapabilities: Capability[] = [
 
       const turnId = newTurnId();
       const { spawnTaskSession } = await import("../../node/tasks.js");
-      await spawnTaskSession({
+      const spawned = await spawnTaskSession({
         user, taskId: turnId, rootKey: "personal", subpath: "liv",
         prompt: text, harness: "claude",
         extraFlags: livTurnArgs({ sessionId, resume }),
@@ -74,7 +75,13 @@ export const livChatCapabilities: Capability[] = [
       });
 
       // 스폰이 성공한 뒤에 기억한다 — 실패한 턴의 세션 id 를 남기면 다음 턴이 없는 대화를 이어받으려 한다.
-      if (!resume) await setLivChat(userId, { session_id: sessionId, started_at: new Date().toISOString() });
+      const now = new Date().toISOString();
+      if (!resume) await setLivChat(userId, { session_id: sessionId, started_at: now, turns: [] });
+      // 되그릴 수 있게 턴을 잇는다. **사람이 한 말만** 담는다 — 리브의 말은 그 턴의 진행 파일이 정본이다.
+      // ⚠ 세션 id 를 **두 곳에** 남긴다. 프로필은 화면이 읽기 좋고, 턴 폴더는 프로필 쓰기가 실패해도 남는다.
+      //  멈추기는 이게 없으면 아예 불가능하다 — "시작만 되고 멈출 수 없는 상태"는 만들지 않는다.
+      await fsp.writeFile(path.join(spawned.taskDir, "session"), spawned.sessionId, "utf8").catch(() => { /* best-effort */ });
+      await appendLivTurn(userId, { id: turnId, text, at: now, sid: spawned.sessionId });
       return { turn_id: turnId, resumed: resume };
     },
     false,  // mcp:false — 이건 **화면이 리브를 부르는 문**이다. 리브가 자기를 다시 부르면 턴이 겹쳐 돈다.
@@ -102,6 +109,64 @@ export const livChatCapabilities: Capability[] = [
     {
       id: z.string().describe("턴 id(me_liv_turn 이 준 값)"),
       from: z.number().optional().describe("이어 읽기 시작할 바이트 오프셋(기본 0)"),
+    }),
+
+  restRead("me_liv_turn_stop", "하던 것 멈추기",
+    "돌고 있는 턴을 멈춘다. 사람이 시작만 할 수 있고 멈추지는 못하면 그건 대화가 아니다 — " +
+    "리브가 엉뚱한 길로 갔거나 오래 걸릴 때 끊을 수 있어야 한다. 이미 끝난 턴이면 아무 일도 안 한다.",
+    [{ method: "POST", paths: ["/api/ui/me/liv/turn/:id/stop"], parse: (req) => ({ id: String(req.params?.id ?? "") }) }],
+    async (input: { id: string }, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      if (!TURN_ID_RE.test(input.id)) throw new HttpError(400, "턴 id 형식이 아닙니다");
+      // 세션 id 는 **본인 프로필에서만** 꺼낸다 — 남의 턴을 멈추는 길이 구조적으로 없다.
+      const { getLivProfile } = await import("../../org/store.js");
+      const turn = ((await getLivProfile(userId)).chat?.turns ?? []).find((t) => t.id === input.id);
+      // 프로필에 없으면 턴 폴더에서 읽는다(둘 중 하나만 남아도 멈출 수 있게).
+      let sid = turn?.sid ?? "";
+      if (!sid) sid = (await fsp.readFile(path.join(await turnDir(user, input.id), "session"), "utf8").catch(() => "")).trim();
+      if (!sid) {
+        // 못 멈추면 **못 멈춘다고 말한다.** 조용히 실패하면 사람은 눌렀는데 안 멈춘 이유를 영영 모른다.
+        return { stopped: false, reason: "이 턴의 세션을 찾지 못했습니다 — 멈추기가 붙기 전에 시작된 대화입니다. 리브는 계속 일하고, 끝나면 화면이 풀립니다." };
+      }
+      const { killTaskSession } = await import("../../node/tasks.js");
+      await killTaskSession(sid).catch(() => { /* 이미 끝났다 — 멈추라는 뜻은 이미 이뤄졌다 */ });
+      return { stopped: true };
+    },
+    false, { id: z.string().describe("멈출 턴 id") }),
+
+  restRead("me_liv_chat", "지금 이어가는 대화",
+    "이 사람이 이어가고 있는 대화와 그 턴 목록. 화면이 **새로고침 뒤 기록을 되그리는** 근거다 — " +
+    "본문은 담지 않는다(각 턴의 진행을 me_liv_turn_log 로 읽어 그린다).",
+    [{ method: "GET", paths: ["/api/ui/me/liv/chat"], parse: () => ({}) }],
+    async (_input: unknown, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const { getLivProfile } = await import("../../org/store.js");
+      const chat = (await getLivProfile(userId)).chat ?? null;
+      // 되그리기는 **최근 것부터 값이 있다** — 오래된 턴까지 다 읽으면 화면이 뜨는 데 오래 걸린다.
+      return { chat: chat ? { ...chat, turns: (chat.turns ?? []).slice(-12) } : null };
+    }),
+
+  restRead("me_liv_ask_dismiss", "물음 접어두기",
+    "리브가 걸어 둔 물음(자격·객관식·올리기)을 **사람이 지금은 안 하겠다**고 접는다. " +
+    "접은 사실을 declined 에도 남겨, 다음 대화의 리브가 같은 걸 곧바로 다시 묻지 않게 한다.",
+    [{ method: "POST", paths: ["/api/ui/me/liv/ask-dismiss"], parse: () => ({}) }],
+    async (_input: unknown, user: LivelyUser) => {
+      const userId = user?.userId;
+      if (!userId) throw new HttpError(401, "인증이 필요합니다");
+      const { getLivProfile, setLivSecretAsk, appendLivProfile } = await import("../../org/store.js");
+      const cur = await getLivProfile(userId);
+      const ask = cur.secret_ask ?? null;
+      if (!ask) return { ask: null, dismissed: false };
+      // 무엇을 접었는지 남긴다 — 안 남기면 다음 턴의 리브가 같은 걸 또 묻고, 그게 잔소리가 된다.
+      // kind 별로 식별자가 다르다(객관식=key · 자격=field · 올리기=없음). 셋 다 같은 모양의 키로 접는다.
+      const a = ask as unknown as { kind?: string; key?: string; field?: string };
+      const key = `ask.${a.kind ?? "secret"}.${a.key ?? a.field ?? ""}`.replace(/\.$/, "");
+      await appendLivProfile(userId, {
+        declined: { at: new Date().toISOString(), key, why: "지금은 안 하겠다고 화면에서 접음" },
+      });
+      return { ask: null, dismissed: true, profile: await setLivSecretAsk(userId, null) };
     }),
 
   restRead("me_liv_chat_reset", "리브와 새 대화 시작",

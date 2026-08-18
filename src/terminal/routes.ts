@@ -29,6 +29,10 @@ import { nodeHarnesses } from "../node/protocol.js";   // #1713 — 노드별 �
 import { nodeOpenTo } from "../node/node-access.js";
 import { translateNodeRpcError } from "../node/rpc-error.js";
 import { registerNodeRoutes } from "../node/routes.js";
+import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
+import { registerSessionProjectRoutes } from "./session-project-routes.js";   // #1719 — 세션 프로젝트 소속 바꾸기(홈 입력창 세션)
+import { claudeSessionIdsFor } from "../sessions/session-state.js";   // #1719 — 라이브 행에 대화 uuid
+import { chatIoCaps } from "./harness-io/adapter.js";                 // #1746 — 행에 대화창 능력(읽기·승인)
 
 // 노드 op 실패를 사용자에게 그대로 보여준다 — 노드측 예외(예: tmux 미설치 → spawn ENOENT)가 generic 500("internal_error")
 //  으로 묻히면 원인 진단이 불가능하다(#869 haru 사례: 세션 생성 500 의 진짜 원인이 로그에만 있고 응답엔 안 나왔다).
@@ -89,6 +93,8 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
   registerTicketProfileRoutes(app, auth);
   registerSessionCrudRoutes(app, auth);
   registerRestoreReportRoutes(app, auth);
+  registerSessionChatRoutes(app, auth);   // #1719 — /sessions/:id/transcript · /sessions/:id/keys (CRUD 뒤 — 경로가 겹치지 않는다)
+  registerSessionProjectRoutes(app, auth);   // #1719 — POST /sessions/:id/project (붙이기·떼기)
 
   registerTerminalFiles(app, verifier);
   registerNodeRoutes(app, verifier); // 분산 노드(#869) — /api/ui/nodes* (등록·회전·활성·삭제·현황)
@@ -229,6 +235,15 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const keep = (s: SessionInfo): boolean => includeProjects || !proj(s) || (ownedProjectsOnly && !!s.owned);
     const local = all.filter(keep);
     const localRestorable = restorable.filter(keep);
+    // #1719 — 라이브 행에 대화 uuid(claudeSessionId)를 싣는다. 새 셸의 세션 화면이 이 값으로 로컬 트랜스크립트를 잇고,
+    //  중앙 세션 기록(v6/sessions — session_id 가 곧 이 uuid)과 같은 세션임을 알아 목록을 한 장으로 접는다.
+    //  한 번의 일괄 조회(세션 수만큼 왕복하지 않는다). DB 가 죽어도 목록은 나간다(best-effort).
+    try {
+      const map = await claudeSessionIdsFor(local.map((s) => s.id));
+      for (const s of local) { const u = map.get(s.id); if (u) s.claudeSessionId = u; }
+    } catch { /* 미러 조회 실패 — uuid 없이 나간다(화면은 '기록 없음'으로 다룬다) */ }
+    // #1746 — 하네스별 대화창 능력(읽기·승인)을 행에 싣는다. 화면이 없는 능력의 버튼을 두지 않게(정직한 표면).
+    for (const s of [...local, ...localRestorable, ...remote]) s.chat = chatIoCaps(s.harness);
     // 같은 세션이 두 출처에 잡히면 카드 1장으로 접는다(#1716) — 인자 순서가 곧 우선순위(라이브 관측 > 기억).
     //  게이트웨이와 노드 에이전트가 같은 박스에서 돌면 **같은 tmux 서버**를 보므로 local 과 remote 에 같은 id 가
     //  동시에 잡힌다(실측: AI 세션 탭 카드가 전부 2장씩). liveIds 로 restorable 만 걸러선 이 짝을 못 막는다.
@@ -385,6 +400,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       // #1516 — 로그인 전용 세션(관리탭 [연결된 AI 계정] ▸ 로그인). 값 검증은 harnessLoginArgv 가 한다
       //  (아는 하네스만 로그인 argv 를 내주고, 모르는 값은 평범한 셸 세션으로 접힌다 — 임의 문자열이 명령이 되지 않는다).
       loginFor: String(b.loginFor ?? "") || undefined,
+      // #1719 홈 입력창 — 세션 전용 폴더(폴더를 안 고른다) + 첫 지시(하네스 입력창이 뜬 뒤 주입). 노드 세션도 input 스프레드로 그대로 전파.
+      sessionDir: b.sessionDir === true,
+      initialPrompt: typeof b.initialPrompt === "string" && b.initialPrompt.trim() ? b.initialPrompt.slice(0, 20_000) : undefined,
     };
     const nodeId = String(b.node ?? "").trim();
     res.setHeader("Cache-Control", "no-store");
@@ -508,7 +526,7 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     //  (2026-07-28 상민님 신고 — 정밀 복원이 한 번만 되는 증상의 절반. 나머지 절반은 훅 dedup 키에 box-id 부재였다).
     //  훅이 새 UUID 를 보고하면 last-write-wins 로 갱신되므로 이 승계는 '보고 전 공백'만 메운다. best-effort.
     if (st.claude_session_id) {
-      await setClaudeSessionId(session.id, st.claude_session_id, st.owner)
+      await setClaudeSessionId(session.id, st.claude_session_id, st.owner, st.transcript_path)   // #1746 대화 파일 경로도 승계(같은 대화 = 같은 파일)
         .catch((e) => logger.warn({ err: e, id: session.id }, "restore: claude UUID 승계 실패(비치명 — 다음 복원은 picker)"));
     }
     await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "restore: 옛 desired-state 정리 실패(비치명)"));
@@ -571,12 +589,17 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
   //  라(claude 는 자체 UUID 생성) restore 가 --resume 에 box-id 를 주면 "검색 결과 없음"이 됐다(사용자 신고). 이 매핑으로
   //  restore 가 정확한 UUID 로 이어받는다. 한 box 안에서 branch·resume·/clear 로 UUID 가 바뀌므로 매 보고가 최신으로 덮는다(last-write-wins).
   //  owner-gated: setClaudeSessionId 가 org_session_state.owner==호출자일 때만 갱신(남의 세션 오염 차단). best-effort — 훅은 fire-and-forget.
+  //  #1746 — 훅이 함께 보내는 transcript_path(그 대화 파일의 절대경로)도 받는다. 대화창이 하네스 무관하게 파일을 찾는 근거
+  //  (harness-io/locate.ts — 읽을 때 소유자 뿌리 안인지 검증). 형식만 여기서 거른다(절대경로·길이·NUL 없음) — 존재·소속 판정은 읽는 쪽.
   app.post("/api/ui/terminal/sessions/:id/claude-uuid", auth, wrap(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
-    const uuid = String(((req.body ?? {}) as Record<string, unknown>).uuid ?? "").trim();
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const uuid = String(body.uuid ?? "").trim();
     // claude 세션 UUID 형식(표준 uuid 또는 안전 문자셋) — 경로/주입 방어.
     if (!uuid || uuid.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(uuid)) throw new HttpError(400, "uuid 형식 오류");
-    const ok = await setClaudeSessionId(req.params.id, uuid, idOf(userOf(req)));
+    const tp = typeof body.transcript_path === "string" ? body.transcript_path.trim() : "";
+    const transcriptPath = tp && tp.length <= 1024 && !tp.includes("\0") && (tp.startsWith("/") || /^[A-Za-z]:[\\/]/.test(tp)) ? tp : null;
+    const ok = await setClaudeSessionId(req.params.id, uuid, idOf(userOf(req)), transcriptPath);
     res.json({ ok }); // ok=false: 그 box 의 소유자가 아니거나 desired-state 레코드 없음(무해)
   }));
 

@@ -17,6 +17,8 @@
 /* 인라인 추가행(편집 상태)을 위 프로젝트 행과 픽셀·타이포 정확히 일치 — 좌우 패딩·행높이·글자크기·볼드·자간을 행과 동일하게,
    입력칸 내부 패딩 0 으로 제목 텍스트 시작점(캐럿+점+gap)을 행과 픽셀 단위로 맞춤. */
 .pjv-proj-card .pjv-addrow.editing { padding: 0 8px; min-height: 46px; }
+/* 생성 응답을 기다리는 임시 행(#1581) — Enter 즉시 자리를 잡되, 아직 열 수 없다는 걸 옅기로 알린다. */
+.pjv-proj-card .pjv-proj-row-pending { min-height: 46px; padding: 0 8px; opacity: .55; pointer-events: none; }
 .pjv-proj-card .pjv-addrow.editing .pjv-addrow-input { font-size: 15px; font-weight: 600; letter-spacing: -.1px; padding: 0; line-height: 1.3; }
 /* 병합 컬럼헤더 좌우 패딩을 행 콘텐츠 시작점(8px·#339)과 맞춰 컬럼 정렬 보존 */
 .pjv-proj-card .pjv-tgroup-head-cols { padding-left: 8px; padding-right: 8px; }

@@ -18,23 +18,14 @@ import { mountLivChat, livChatAsk } from './liv-chat.js';
 export async function livStatus() {
     return await api('/api/ui/me/liv');
 }
-// ── 대화 ─────────────────────────────────────────────────────────────────────
-// v0 는 웹터미널 세션을 재사용했다(두뇌를 먼저 검증하려는 선택이었고, 그건 성공했다).
-// v1 부터는 **세션을 만들지 않는다** — 턴마다 서버가 헤드리스를 띄우고 진행을 JSONL 로 남기며,
-// 화면은 그걸 말풍선·액션카드로 그린다(web/liv-chat.ts). 그래서 여기 있던 것들이 통째로 사라졌다:
-//   · 세션 찾기·만들기·죽은 세션 청소   → 세션이 없으니 청소할 것도 없다
-//   · 여는 말 주입과 도달 확인 폴링      → 사람이 먼저 말을 건다(열자마자 리브가 떠들지 않는다)
-//   · 프롬프트 주입(send-keys 규약)      → 대화창이 곧 입력이다
-// 리브의 기억이 세션이 아니라 서버에 산다는 불변식(#1663) 덕분에 이 교체가 무손실이다.
-// ── 화면 ─────────────────────────────────────────────────────────────────────
-export async function renderLiv(view) {
+export async function renderLiv(view, opts = {}) {
     if (!view)
         return; // 라우터가 넘기는 $view() 는 셸이 아직 없으면 null 이다(대시보드와 같은 계약)
     view.replaceChildren();
     document.body.dataset.route = 'liv';
     // 상단 내비를 걷었으니 **나가는 길이 화면 안에 있어야 한다** — 없으면 사람이 뒤로가기를 찾는다.
     //  하나만 둔다: 어디로 가는지가 분명한 [← 라이블리]. 탭을 여기 다시 그리면 크롬을 걷은 뜻이 없어진다.
-    const head = el('div', { class: 'liv-head' }, el('div', { class: 'liv-title' }, el('span', { class: 'liv-dot' }), el('b', { text: '리브' })), el('div', { class: 'liv-head-acts' }, el('a', {
+    const head = el('div', { class: 'liv-head' }, el('div', { class: 'liv-title' }, el('span', { class: 'liv-dot' }), el('b', { text: '리브' }), opts.embedded ? el('span', { class: 'liv-title-sub', text: '워크스페이스 담당자' }) : null), opts.embedded ? null : el('div', { class: 'liv-head-acts' }, el('a', {
         class: 'btn btn-sm btn-ghost', href: '#/dashboard', text: '← 라이블리',
         title: '라이블리 홈으로 돌아갑니다. 리브는 상단 [리브] 버튼으로 다시 열 수 있습니다.',
     })));
@@ -44,7 +35,14 @@ export async function renderLiv(view) {
     // 리브가 던진 물음이 앉는 자리 — 대화와 **같은 칸**, 입력 바로 위(스크롤에 떠내려가지 않는다).
     const askHost = el('div', { class: 'liv-askdock' });
     const chatWrap = el('div', { class: 'liv-chat' }, el('div', { class: 'liv-chat-body', id: 'liv-chat-body' }, el('div', { class: 'liv-chat-boot', text: '세션을 준비하고 있습니다…' })));
-    view.append(el('div', { class: 'liv-wrap' }, head, el('div', { class: 'liv-body' }, el('aside', { class: 'liv-rail' }, cards), chatWrap)));
+    // rail 을 받았으면 카드는 그쪽(셸의 우측 패널)에, 본문은 대화 한 열. 안 받았으면 종전 그대로 왼쪽 레일.
+    if (opts.rail) {
+        opts.rail.replaceChildren(cards);
+        view.append(el('div', { class: 'liv-wrap' }, head, el('div', { class: 'liv-body liv-body-solo' }, chatWrap)));
+    }
+    else {
+        view.append(el('div', { class: 'liv-wrap' }, head, el('div', { class: 'liv-body' }, el('aside', { class: 'liv-rail' }, cards), chatWrap)));
+    }
     // 카드와 세션은 **독립적으로** 로드한다. 세션이 못 떠도 무엇이 문제인지는 보여야 하고,
     //  카드 조회가 느려도 대화는 먼저 시작될 수 있다(위젯 독립 실패 원칙과 같은 결).
     refreshLiv = () => { void fillLivCards(cards, askHost); };
@@ -64,6 +62,23 @@ export async function renderLiv(view) {
 /** 화면 갱신 진입점 하나. 카드가 제출 뒤 자기 자신을 새로 그릴 때 **어느 칸에 사는지 알 필요가 없다** —
  *  물음은 대화 칸, 할 일은 레일로 갈렸는데 그 사실을 카드마다 인자로 나르면 한 자리만 틀려도 조용히 안 갱신된다. */
 let refreshLiv = () => { };
+/**
+ * 물음을 **치우는 길**. 이게 없으면 리브가 건 물음은 답하기 전엔 영원히 남는다 —
+ * 대화 칸에 고정한 뒤로는 그게 '리브가 지금 기다리는 것'이 아니라 **영구 가구**로 보인다(대표 지적).
+ * 접으면 서버가 declined 에도 남겨, 다음 대화의 리브가 곧바로 다시 묻지 않는다.
+ */
+function livDismissBtn() {
+    return el('button', {
+        class: 'btn btn-sm btn-ghost liv-ask-later', type: 'button', text: '나중에',
+        title: '지금은 넘어갑니다. 리브가 이걸 다시 곧바로 묻지 않습니다.',
+        onclick: async (ev) => {
+            const b = ev.currentTarget;
+            b.disabled = true;
+            await api('/api/ui/me/liv/ask-dismiss', { method: 'POST', body: '{}' }).catch(() => { });
+            refreshLiv();
+        },
+    });
+}
 function skeletonLine() { return el('div', { class: 'liv-card liv-card-skel' }); }
 /**
  * 레일에는 **서 있는 일**(지금 손볼 것)만 그린다. 리브가 지금 던진 물음은 여기가 아니다 — askHost 로 간다.
@@ -73,7 +88,7 @@ function skeletonLine() { return el('div', { class: 'liv-card liv-card-skel' });
  *  먹어 '지금 손볼 것'을 화면 밖으로 밀어냈다. 물음이 대화 밖에 있으면 그건 대화가 아니라 서식이다.
  *  → 리브가 던진 물음은 **말하는 자리 바로 위**에 붙인다(대화와 같은 칸, 스크롤에 떠내려가지 않는 자리).
  */
-async function fillLivCards(host, askHost) {
+export async function fillLivCards(host, askHost) {
     // 사람이 자격을 입력하는 중이면 손대지 않는다 — 다시 그리면 타이핑하던 값이 사라진다.
     const typing = askHost.querySelector('.liv-ask-input');
     if (typing && (typing.value !== '' || document.activeElement === typing))
@@ -173,7 +188,7 @@ function livChoiceCard(ask, host) {
     sync();
     return el('div', { class: 'liv-card liv-ask' }, el('div', { class: 'liv-ask-head' }, el('b', { text: ask.question ?? '' })), ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null, opts, 
     // '그 외'는 탈출구다 — 여기 적히는 것이 곧 다음에 만들 커넥터 후보라 버리지 않고 쌓는다.
-    ask.allow_other ? el('div', { class: 'liv-ask-row' }, otherIn) : null, (ask.multi || ask.allow_other) ? el('div', { class: 'liv-ask-row' }, send) : null, ask.multi ? el('div', { class: 'liv-ask-note', text: '해당하는 걸 모두 고르셔도 됩니다.' }) : null);
+    ask.allow_other ? el('div', { class: 'liv-ask-row' }, otherIn) : null, el('div', { class: 'liv-ask-row' }, (ask.multi || ask.allow_other) ? send : null, livDismissBtn()), ask.multi ? el('div', { class: 'liv-ask-note', text: '해당하는 걸 모두 고르셔도 됩니다.' }) : null);
 }
 /**
  * 파일 올리기 — **로컬 폴더를 뒤지는 대신 끌어다 놓는다**(대표 판단).
@@ -224,7 +239,7 @@ function livUploadCard(ask, host) {
             setTimeout(() => refreshLiv(), 1200);
         }
     };
-    return el('div', { class: 'liv-card liv-ask' }, el('div', { class: 'liv-ask-head' }, el('b', { text: ask.label ?? '파일 올리기' })), ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null, el('div', { class: 'liv-ask-row' }, input), el('div', { class: 'liv-ask-note', text: ask.accept_hint || '글자로 된 파일만 됩니다 — 메모·문서(.txt·.md)·표(.csv) 등. PDF·이미지는 아직 안 됩니다.' }), msg);
+    return el('div', { class: 'liv-card liv-ask' }, el('div', { class: 'liv-ask-head' }, el('b', { text: ask.label ?? '파일 올리기' })), ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null, el('div', { class: 'liv-ask-row' }, input), el('div', { class: 'liv-ask-row' }, livDismissBtn()), el('div', { class: 'liv-ask-note', text: ask.accept_hint || '글자로 된 파일만 됩니다 — 메모·문서(.txt·.md)·표(.csv) 등. PDF·이미지는 아직 안 됩니다.' }), msg);
 }
 /**
  * 자격 입력칸 — **이 화면에서 끝내기 위한 장치**.
@@ -274,7 +289,7 @@ function livSecretCard(ask, host) {
         ev.preventDefault();
         void submit();
     } };
-    return el('div', { class: 'liv-card liv-ask' }, el('div', { class: 'liv-ask-head' }, el('b', { text: ask.label })), ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null, el('div', { class: 'liv-ask-row' }, input, save), el('div', { class: 'liv-ask-note', text: '입력하신 값은 잠긴 보관함으로 바로 들어가고, 대화 기록에는 남지 않습니다.' }), msg);
+    return el('div', { class: 'liv-card liv-ask' }, el('div', { class: 'liv-ask-head' }, el('b', { text: ask.label })), ask.why ? el('div', { class: 'liv-ask-why', text: ask.why }) : null, el('div', { class: 'liv-ask-row' }, input, save, livDismissBtn()), el('div', { class: 'liv-ask-note', text: '입력하신 값은 잠긴 보관함으로 바로 들어가고, 대화 기록에는 남지 않습니다.' }), msg);
 }
 function livCard(f, host) {
     const acts = el('div', { class: 'liv-card-acts' });

@@ -17,6 +17,8 @@ const IPC = {
   RETRY: "lively:retry",
   READ_LOG: "lively:read-log",
   CHECK_UPDATE: "lively:check-update",
+  APPLY_UPDATE: "lively:apply-update",
+  CLEANUP_STALE: "lively:cleanup-stale",
   STATE: "lively:state",
   PROGRESS: "lively:progress",
   LOG: "lively:log",
@@ -35,6 +37,8 @@ contextBridge.exposeInMainWorld("lively", {
   // 로그는 **id 로만** 연다 — 경로를 렌더러가 정하면 XSS 한 방이 임의 파일 읽기가 된다.
   readLog: (id) => ipcRenderer.invoke(IPC.READ_LOG, { id }),
   checkUpdate: () => ipcRenderer.invoke(IPC.CHECK_UPDATE),
+  applyUpdate: () => ipcRenderer.invoke(IPC.APPLY_UPDATE),
+  cleanupStale: () => ipcRenderer.invoke(IPC.CLEANUP_STALE),
   onState: (cb) => ipcRenderer.on(IPC.STATE, (_e, s) => cb(s)),
   onProgress: (cb) => ipcRenderer.on(IPC.PROGRESS, (_e, p) => cb(p)),
   onLog: (cb) => ipcRenderer.on(IPC.LOG, (_e, l) => cb(l)),

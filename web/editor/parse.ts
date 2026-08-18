@@ -130,7 +130,14 @@ function mdToBlocks(md: string): any[] {
             const cb = /^\[( |x|X)\]\s+(.*)$/.exec(text);
             if (cb) { checked = cb[1] !== ' '; text = cb[2]; }
           }
-          out.push({ type: checked != null ? 'todo' : (om ? 'numbered' : 'bullet'), indent, checked: !!checked, text });
+          // 번호 목록은 원문의 시작 번호를 실어 보낸다(#1581) — `2.` 로 시작한 목록이 다시 열 때 1 로 돌아가지 않게.
+          //  단 **시퀀스가 새로 시작하는 항목에만** 심는다(renumber 의 카운터 리셋 조건과 같은 판정: 앞이 목록이 아니거나,
+          //  더 얕은 항목 뒤라 이 깊이의 카운터가 없는 경우). 이어지는 항목에까지 남기면 앞 항목을 지웠을 때
+          //  옛 번호가 시작값으로 되살아난다.
+          const prevIt: any = out.length ? out[out.length - 1] : null;
+          const runStart = !prevIt || !LISTY.has(prevIt.type) || (prevIt.indent || 0) < indent;
+          out.push({ type: checked != null ? 'todo' : (om ? 'numbered' : 'bullet'), indent, checked: !!checked,
+            ...(om && runStart ? { start: Number(om[2]) } : {}), text });
           i++;
           continue;
         }

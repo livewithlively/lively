@@ -17,6 +17,8 @@ export function statusLabel(st) {
   if (s.cliBroken) return "라이블리 CLI 를 실행할 수 없음";
   if (!s.loggedIn) return "로그인 필요";
   if (!s.kitInstalled) return "키트 설치 필요";
+  // 프로세스는 도는데 게이트웨이엔 안 붙어 있음(#1541 실측: 절전 뒤 좀비 3시간·나흘) — '실행 중' 이라 하면 거짓말이다.
+  if (s.nodeRunning && s.nodeConnected === false) return "노드 연결 끊김 — 다시 시작 필요";
   if (s.nodeRunning) return s.nodeDaemon ? "노드 실행 중 (자동 시작 켜짐)" : "노드 실행 중 (이 세션만)";
   return s.nodeRegistered ? "노드 정지됨" : "노드 미등록";
 }
@@ -36,6 +38,17 @@ export function trayMenuModel(st) {
   const s = st || {};
   const busy = !!s.busy;
   const items = [{ id: "status", label: statusLabel(s), enabled: false }, { type: "separator" }];
+  // 받아 둔 업데이트가 있으면 **가장 위**에 — 트레이만 보는 사람에게 유일한 입구다. 창을 안 열면 자동으로도
+  //  적용되지만(update-policy shouldAutoApplyUpdate), 지금 당장 하고 싶을 때 누른다. 작업 중엔 잠근다(작업이 끊긴다).
+  if (s.updateReady) {
+    items.push({ id: "apply-update", label: `업데이트 적용 — 앱 다시 시작 (${s.updateReady})`, enabled: !busy });
+    items.push({ type: "separator" });
+  }
+  // 다른 자리에 옛 설치본이 남아 있으면(Windows, win-stale-install.mjs) — 옛 바로가기가 옛 버전을 연다. 사람이 누를 때만.
+  if (s.staleVersions) {
+    items.push({ id: "cleanup-stale", label: `이전 버전 정리… (${s.staleVersions})`, enabled: !busy });
+    items.push({ type: "separator" });
+  }
 
   if (!s.cliFound || s.cliOutdated || s.cliBroken || !s.loggedIn || !s.kitInstalled) {
     items.push({
@@ -46,6 +59,10 @@ export function trayMenuModel(st) {
           : s.cliFound ? "설치 계속하기…" : "라이블리 설치…",
       enabled: !busy,
     });
+  } else if (s.nodeRunning && s.nodeConnected === false) {
+    // 좀비 — 다시 시작(node-start 는 옛 인스턴스를 회수하고 새로 띄운다)이 첫 항목, 정지는 그 아래
+    items.push({ id: "node-start", label: "노드 다시 시작", enabled: !busy });
+    items.push({ id: "node-stop", label: "노드 정지", enabled: !busy });
   } else if (s.nodeRunning) {
     items.push({ id: "node-stop", label: "노드 정지", enabled: !busy });
   } else {

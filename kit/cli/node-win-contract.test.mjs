@@ -6,7 +6,8 @@
 //  (실기기 e2e 는 별도 — Windows VM 에서 등록·기동까지 확인한다.)
 // 실행: node kit/cli/node-win-contract.test.mjs
 import assert from "node:assert/strict";
-import { muxCandidates, winTaskXml, winRunnerCmd, resolveWinUserId, winInstallArgv, nodeDaemonArtifact, nodeProcProbe, parseProcCount, winStartupDir, winStartupVbs, tailLines, lastConnectedAt, logTailHint } from "./cmd-node.mjs";
+import { readFileSync } from "node:fs";
+import { muxCandidates, winTaskXml, winRunnerCmd, resolveWinUserId, winInstallArgv, nodeDaemonArtifact, nodeProcProbe, parseProcCount, winStartupDir, winStartupVbs, tailLines, lastConnectedAt, logTailHint, nodeConnectedFrom, parseResidualProbe, winResidualAgentProcs, stopResidualNote, decodeConsoleText } from "./cmd-node.mjs";
 
 let pass = 0;
 const t = (name, fn) => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -336,6 +337,66 @@ t("G3 경로에 공백이 있어도 한 인자로 유지된다(따옴표)", () =
 t("G4 POSIX 는 종전 그대로 tail -f (무회귀)", () => {
   assert.equal(logTailHint("/home/y/.lively/logs/node-agent.log", "darwin"), "tail -f /home/y/.lively/logs/node-agent.log");
   assert.equal(logTailHint("/x.log", "linux"), "tail -f /x.log");
+});
+
+// ── H. '붙어 있는가' 축 — 프로세스 실측(running)과 다른 축 (#1541) ────────────────────────
+// 실측(2026-08-18): 노드 프로세스는 살았는데 게이트웨이엔 3시간째 오프라인(절전 뒤 좀비). running 만 보는 화면은
+//  "노드 실행 중" 이라고 거짓말했다. 게이트웨이 /api/ui/nodes 의 online 이 정본이다.
+t("H1 붙어 있음/오프라인/모름 — 목록에서 id 로 찾고, 못 찾거나 이상하면 null(모름 — false 로 눕히지 않는다)", () => {
+  const list = { nodes: [{ id: "hammurabi", online: false }, { id: "macmini", online: true }] };
+  assert.equal(nodeConnectedFrom(list, "macmini"), true);
+  assert.equal(nodeConnectedFrom(list, "hammurabi"), false);
+  assert.equal(nodeConnectedFrom(list, "nope"), null, "목록에 없으면 모름");
+  assert.equal(nodeConnectedFrom(list.nodes, "macmini"), true, "배열 그대로도 받는다");
+  assert.equal(nodeConnectedFrom({ nodes: [{ id: "x" }] }, "x"), null, "online 이 boolean 이 아니면 모름");
+  // 새 헬퍼의 빈 입력 — 크래시 없이 모름
+  assert.equal(nodeConnectedFrom(undefined, "x"), null); assert.equal(nodeConnectedFrom({}, "x"), null);
+  assert.equal(nodeConnectedFrom(list, ""), null); assert.equal(nodeConnectedFrom(null, null), null);
+  // id 는 문자열 비교(숫자 id 가 와도)
+  assert.equal(nodeConnectedFrom({ nodes: [{ id: 7, online: true }] }, "7"), true);
+});
+
+// ── K. 정지 뒤 검증 — 못 죽였으면 ✅ 가 아니라 ⚠ (#1541) ─────────────────────────────────
+// 실측(2026-08-18, hammurabi): 앱 '노드 정지' → "✅ 노드 데몬 해제" 인데 프로세스는 그대로(관리자 권한 좀비) → 화면 "실행 중".
+t("K1 잔여 프로브 파서 — pid<TAB>session<TAB>name 줄, 빈 출력·쓰레기 줄은 버린다", () => {
+  assert.deepEqual(parseResidualProbe("1234\t1\tnode.exe\r\n5678\t0\tcmd.exe\r\n"), [{ pid: 1234, session: 1, name: "node.exe" }, { pid: 5678, session: 0, name: "cmd.exe" }]);
+  assert.deepEqual(parseResidualProbe(""), []); assert.deepEqual(parseResidualProbe(undefined), []);
+  assert.deepEqual(parseResidualProbe("garbage\nnope\t\t\n"), []);
+  assert.deepEqual(parseResidualProbe("42\t\tnode.exe"), [{ pid: 42, session: null, name: "node.exe" }], "세션을 못 읽어도 pid 는 살린다");
+});
+t("K2 ★ 남아 있으면 문구가 '살아 있다·관리자 PowerShell 에서 다시' 를 말하고, 없으면 빈 문자열", () => {
+  const r = winResidualAgentProcs(() => "1234\t1\tnode.exe\n");
+  assert.deepEqual(r.pids, [1234]); assert.match(r.detail, /PID 1234/);
+  const note = stopResidualNote(r);
+  assert.match(note, /1개가 아직 살아/); assert.match(note, /관리자 PowerShell/); assert.match(note, /lively node stop/);
+  assert.equal(stopResidualNote(winResidualAgentProcs(() => "")), "");
+  assert.equal(stopResidualNote(undefined), ""); assert.equal(stopResidualNote({ pids: [] }), "");
+  // 배선: nodeStop(WIN) 이 죽인 뒤 다시 세고, 남으면 die(비-0) — 앱이 실패로 받아 문구를 보여준다
+  const src = readFileSync(new URL("./cmd-node.mjs", import.meta.url), "utf8");
+  const stopFn = src.slice(src.indexOf("function nodeStop()"), src.indexOf("function nodeStop()") + 3000);
+  const stopSeg = stopFn.slice(stopFn.indexOf("else if (WIN)"));   // Windows 분기만 — darwin/linux 의 ✅ 는 다른 자리다
+  const i = stopSeg.indexOf("winKillAgentProcs();"), j = stopSeg.indexOf("winResidualAgentProcs()"), k = stopSeg.indexOf("die(stopResidualNote");
+  assert.ok(i >= 0 && j > i && k > j, "정지 경로: 죽이기 → 다시 세기 → 남으면 die 순서가 아니다");
+  assert.ok(stopSeg.indexOf("✅ 노드 데몬 해제") > k, "✅ 가 검증보다 앞에 찍힌다 — 못 죽여도 성공이라 말하게 된다");
+});
+
+// ── M. 네이티브 출력 디코드 — cp949 를 utf8 로 읽어 깨진 글자를 사람에게 보여주지 않는다 (#1541) ──────
+// 실측: 앱 로그 "(schtasks: ����: �׼����� �źεǾ����ϴ�.)" — 한국어 Windows 의 schtasks stderr(cp949)를 utf8 강제 디코드.
+t("M1 decodeConsoleText — utf8 그대로 · cp949 는 euc-kr 로 복원 · 못 읽으면 침묵", () => {
+  assert.equal(decodeConsoleText(Buffer.from("오류: 액세스", "utf8")), "오류: 액세스");
+  // '오류: 액세스가 거부되었습니다.' 의 실제 cp949 바이트(python cp949 인코딩으로 생성)
+  const cp949 = Buffer.from("bfc0b7f93a20bed7bcbcbdbab0a120b0c5baceb5c7befabdc0b4cfb4d92e", "hex");
+  assert.equal(decodeConsoleText(cp949), "오류: 액세스가 거부되었습니다.");
+  // 어느 쪽으로도 안 읽히는 바이트 → 빈 문자열(깨진 글자를 보여주는 것보다 침묵)
+  assert.equal(decodeConsoleText(Buffer.from([0xff, 0xfe, 0x81, 0x00, 0x81])), "");
+  assert.equal(decodeConsoleText(null), ""); assert.equal(decodeConsoleText(undefined), "");
+  assert.equal(decodeConsoleText("이미 문자열"), "이미 문자열");
+  assert.equal(decodeConsoleText("깨진\uFFFD문자열"), "", "이미 깨진 문자열도 침묵");
+  // 배선: schtasks /Create 를 encoding 강제 없이(Buffer) 부르고, denied 는 decodeConsoleText 를 거친다
+  const src = readFileSync(new URL("./cmd-node.mjs", import.meta.url), "utf8");
+  const seg = src.slice(src.indexOf('spawnSync("schtasks", ["/Create"'), src.indexOf('spawnSync("schtasks", ["/Create"') + 1600);
+  assert.ok(!/encoding:\s*"utf8"/.test(seg), "schtasks 출력을 utf8 로 강제 디코드한다(cp949 가 깨진다)");
+  assert.match(seg, /decodeConsoleText\(r\.stderr\)/, "denied 가 디코더를 안 거친다");
 });
 
 console.log(`\n${pass} passed`);
