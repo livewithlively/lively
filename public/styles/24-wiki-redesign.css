@@ -866,3 +866,100 @@ button.wk-crumb { border: none; background: none; cursor: pointer; padding: 0; }
 }
 @media (prefers-reduced-motion: reduce) { .wk-blk, .wk-galc, .wk-pal-card, .wk-blk-cbtn { transition: none; } }
 
+
+/* ════════════════════════════════════════════════════════════════════════════
+   #1685 내 소유 카테고리 대시보드 — v4 한 화면 콕핏(마스터-디테일).
+   왼쪽 = 전체 최신 + 카테고리 목록(선택·드래그 정렬), 오른쪽 = 선택 항목의 최근 문서.
+   두 패널은 뷰포트 높이에 맞춰 서고 각자 스크롤한다(높이는 JS fit — 모바일은 자연 흐름).
+   장식은 디테일 헤더의 오로라 밴드 하나뿐 — 나머지는 위키 공통 부품(wk-row·wk-sec-act·mono 메타).
+   ════════════════════════════════════════════════════════════════════════════ */
+.wk-mc { max-width: var(--wk-wide); margin: 0 auto; padding: 26px 36px 28px; }
+.wk-mc-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.wk-mc-title { margin: 0; font-size: 16px; font-weight: 800; letter-spacing: -.2px; color: var(--ink); }
+.wk-mc-stats { display: inline-flex; align-items: center; gap: 14px; }
+.wk-mc-sp { flex: 1; }
+.wk-mc-search { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--bg); cursor: pointer;
+  color: var(--muted); font-size: 12.5px; font-weight: 500; }
+.wk-mc-search:hover { border-color: var(--line-net); background: var(--bg-tint); }
+.wk-mc-search:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.wk-mc-new { display: inline-flex; align-items: center; min-height: 32px; padding: 0 13px; border-radius: 10px; font-size: 12.5px; }
+.wk-mc .wk-resume { margin: 10px 0 0; }
+.wk-m-new { color: var(--mint-deep); }
+.wk-m-new:empty { display: none; }
+
+/* 분할 — 마스터 248px + 디테일. 높이는 renderMineSurface 의 fit() 이 뷰포트에 맞춘다. */
+.wk-mc-split { display: grid; grid-template-columns: 248px minmax(0, 1fr); gap: 16px; margin-top: 14px; min-height: 420px; }
+
+/* 마스터 — 카테고리 선택 목록(행 = 선택 + 드래그 순서 단위) */
+.wk-mc-master { display: flex; flex-direction: column; min-height: 0; min-width: 0;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--bg); padding: 8px; }
+.wk-mc-mlist { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+.wk-mc-mrow { position: relative; display: flex; align-items: center; gap: 8px; min-width: 0; text-align: left;
+  border: none; background: none; padding: 8px 10px; border-radius: 9px; cursor: pointer;
+  font-size: 13.5px; font-weight: 650; color: var(--ink-sub); }
+.wk-mc-mrow:hover { background: var(--bg-tint); }
+.wk-mc-mrow[aria-selected="true"] { background: var(--bg-sel); color: var(--ink); box-shadow: inset 2px 0 0 var(--blue); }
+.wk-mc-mrow:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.wk-mc-mrow[draggable="true"] { cursor: pointer; }
+.wk-mc-mic { flex: none; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 13px; line-height: 1; }
+.wk-mc-mic.letter { font-size: 10.5px; font-weight: 800; color: var(--muted); background: var(--bg-tint-2); border-radius: 6px; }
+.wk-mc-mall .wk-mc-mic { color: var(--muted-2); font-size: 15px; }
+.wk-mc-mname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wk-mc-mmeta { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 7px; padding-left: 8px; }
+.wk-mc-mdiv { flex: none; height: 1px; margin: 5px 8px; background: var(--line-row); }
+.wk-mc-mrow.drag-src { opacity: .4; }
+.wk-mc-mrow.drop-before::before, .wk-mc-mrow.drop-after::after { content: ''; position: absolute; left: 6px; right: 6px;
+  height: 2px; border-radius: 2px; background: var(--blue); z-index: 2; }
+.wk-mc-mrow.drop-before::before { top: -1.5px; }
+.wk-mc-mrow.drop-after::after { bottom: -1.5px; }
+.wk-mc-mfoot { flex: none; display: flex; align-items: center; padding: 6px 6px 2px; }
+.wk-mc-mfoot .wk-sec-hint { font-size: 11px; }
+
+/* 디테일 — 헤더 밴드(카테고리 = 오로라 · 전체 최신 = 중립) + 스크롤 본문 */
+.wk-mc-detail { display: flex; flex-direction: column; min-height: 0; min-width: 0;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--bg); overflow: hidden; }
+.wk-mc-dhead { position: relative; flex: none; }
+.wk-mc-dcover { position: absolute; inset: 0; }
+.wk-mc-dcover .wk-aurora-wm { font-size: 64px; bottom: -16px; right: 14px; opacity: .12; }
+.wk-mc-dbar { position: relative; display: flex; align-items: center; gap: 11px; min-width: 0; padding: 14px 18px; }
+.wk-mc-dbar.plain { background: var(--bg-tint); }
+.wk-mc-dic { flex: none; width: 36px; height: 36px; border-radius: 10px; background: var(--bg); border: 1px solid var(--line-row);
+  box-shadow: 0 1px 4px rgba(21, 35, 59, .08); display: inline-flex; align-items: center; justify-content: center; font-size: 18px; }
+.wk-mc-dic.letter { font-size: 14px; font-weight: 800; color: var(--ink-sub); background: var(--bg-tint-2); }
+.wk-mc-dmain { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.wk-mc-dname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: none;
+  font-size: 16.5px; font-weight: 800; letter-spacing: -.2px; color: var(--ink); }
+a.wk-mc-dname:hover { color: var(--blue); }
+a.wk-mc-dname:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 4px; }
+.wk-mc-dmeta { display: inline-flex; align-items: center; gap: 12px; min-width: 0; flex-wrap: wrap; }
+.wk-mc-dacts { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 2px; }
+.wk-mc-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.wk-mc-body { padding: 8px 18px 14px; }
+.wk-mc-body .wk-row-meta .wk-row-m:last-child { min-width: 54px; text-align: right; font-variant-numeric: tabular-nums; }
+.wk-mc-body .wk-empty { padding: 14px 2px; font-size: 13.5px; }
+.wk-mc-more { padding: 6px 0 2px; }
+
+/* 사이드바 ★그룹 헤더(#1685) — 원래 .pjv-side-favhead 는 11px uppercase 아이브로우 '라벨'이었는데,
+   이제 맨 위의 일급 진입점이라 그 크기면 아래 행(14px)보다 작아 이상하다 —
+   스페이스 헤더(사업·제품·시스템, .kn-space-head 14px/700)와 같은 급으로 올린다. */
+.kn-favhead { cursor: pointer; text-decoration: none; border-radius: 8px; margin: 2px 4px 0; padding: 6px 10px;
+  font-size: 14px; font-weight: 700; letter-spacing: normal; text-transform: none; color: var(--ink-sub); gap: 7px; }
+.kn-favhead .pjv-side-favhead-ic { font-size: 12.5px; line-height: 1; }
+.kn-favhead:hover { background: var(--bg-tint); color: var(--ink); }
+.kn-favhead.active { background: var(--bg-sel); color: var(--ink); }
+.kn-favhead:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+
+@media (max-width: 900px) {
+  .wk-mc { padding: 18px 16px 64px; }
+  .wk-mc-split { display: block; min-height: 0; }
+  .wk-mc-master { flex-direction: row; align-items: center; padding: 6px; margin-bottom: 12px; }
+  .wk-mc-mlist { flex-direction: row; overflow-x: auto; overflow-y: hidden; gap: 4px; }
+  .wk-mc-mrow { flex: none; padding: 6px 10px; }
+  .wk-mc-mname { max-width: 130px; }
+  .wk-mc-mdiv { width: 1px; height: auto; align-self: stretch; margin: 4px 4px; }
+  .wk-mc-mfoot { display: none; }
+  .wk-mc-scroll { overflow: visible; }
+  .wk-mc-detail { min-height: 0; }
+}
