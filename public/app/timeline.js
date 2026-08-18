@@ -34,11 +34,7 @@ export const TL_KINDS = [
     { key: 'cmd', label: '명령' }, { key: 'task', label: '태스크' }, { key: 'project', label: '프로젝트' },
     { key: 'source', label: '자료' }, { key: 'say', label: '지시' }, { key: 'meta', label: '잔 변경' },
 ];
-// 2행에 조용히 놓을 '무엇을 한 일인가' — 라벨이 아니라 문장의 한 조각이다.
-const KIND_WORD = {
-    task: '끝낸 일', knowledge: '남긴 지식', activity: '작업', cmd: '코드', file: '파일',
-    project: '프로젝트', say: '남긴 말', source: '자료', meta: '설정',
-};
+const KIND_LABEL = new Map(TL_KINDS.map((k) => [k.key, k.label]));
 const hhmm = (iso) => {
     if (!iso)
         return '';
@@ -58,6 +54,12 @@ function dayLabel(key) {
     return Number.isFinite(d.getTime()) ? (d.getMonth() + 1) + '월 ' + d.getDate() + '일' : key;
 }
 const tsNum = (iso) => { const n = Date.parse(iso || ''); return Number.isFinite(n) ? n : 0; };
+function span(a, b) {
+    const m = Math.round((tsNum(b) - tsNum(a)) / 60000);
+    if (!Number.isFinite(m) || m <= 0)
+        return '';
+    return m < 60 ? m + '분' : Math.floor(m / 60) + '시간' + (m % 60 ? ' ' + (m % 60) + '분' : '');
+}
 // ── 사람 말로 ───────────────────────────────────────────────────────────────
 //  개발 도구의 원문(커밋 문법 feat(ui):, 꼬리표 (#1719)·PR #146)을 그대로 붙여넣지 않는다.
 const CONV_PREFIX = /^(feat|fix|chore|docs|refactor|test|perf|style|build|ci|design)(\([^)]*\))?:\s*/i;
@@ -125,38 +127,29 @@ export function createTimeline(host, ctx) {
     host.append(root);
     const isHead = (it) => !!ctx.chapters && it.kind === 'say' && it.verb === '지시';
     // ── 한 항목 = 한 카드 ────────────────────────────────────────────────────
-    //  상민님 2026-08-18: "디자인이 클로드 딸깍 같고 촌스럽다."
-    //  → 제목이 주인공이 되게 바꾼다. 종전엔 [동사] 라벨이 맨 앞에서 제목을 밀고 색까지 써서 눈이 라벨로 갔다.
-    //    이제 1행은 **제목과 시각**뿐이고, 무엇을 한 일인지(종류)·누가·결과는 2행에 조용히 붙는다.
-    //    테두리를 걷고 옅은 그림자만 둬서 카드가 종이처럼 뜨게 하고, 색은 레일 점 하나에만 쓴다.
+    //  상민님 2026-08-18: "얇은 한 줄에 배경도 없이 다닥다닥 붙어 있으니 징그럽다.
+    //   중요한 내용이면 그만큼 공간을 차지하는 게 맞다 — 세로 공간을 너무 박하게 쓰지 마라."
+    //  → 모든 항목을 같은 카드로 그린다: [무엇을 했나] 제목(두 줄까지) / 아랫줄에 결과·사람·시각.
     const faceOf = (a) => (ctx.showActors && a && (a.id || a.name) ? personFace(String(a.id || ''), 'tl-face', String(a.name || a.id || '')) : null);
-    /** 2행에 들어갈 조용한 말 — "무엇을 한 일인가 · 남은 것". 개수 나열은 소음이라 최소로. */
-    function metaBits(it, kids) {
-        const kn = kids.filter((k) => k.kind === 'knowledge').length + (it.children || []).filter((c) => c.verb === '지식').length;
-        const files = kids.filter((k) => k.kind === 'file').length + (it.children || []).filter((c) => c.verb === '파일').length;
-        const bits = [];
-        if (it.kind === 'cmd' && it.detail)
-            bits.push(it.detail + '번');
-        else
-            bits.push(KIND_WORD[it.kind] || '');
-        if (files)
-            bits.push('파일 ' + files);
-        if (kn)
-            bits.push('지식 ' + kn);
-        return bits.filter(Boolean).join(' · ');
+    function metaRow(it, kids, canOpen, isOpen) {
+        const face = faceOf(it.actor);
+        const dur = kids.length ? span(it.ts, kids[kids.length - 1].ts) : '';
+        return el('div', { class: 'tl-meta' }, badges(kids, it.children), dur ? el('span', { class: 'tl-dur', text: dur }) : null, face, face && it.actor && it.actor.name ? el('span', { class: 'tl-who', text: String(it.actor.name) }) : null, el('span', { class: 'tl-tm', text: hhmm(it.ts) }), canOpen ? el('span', { class: 'tl-more', text: isOpen ? '접기' : '자세히' }) : null);
     }
-    function card(it, kids, sameWho) {
-        const canOpen = kids.length > 0 || (it.children || []).length > 0;
+    /** 카드 하나. kids 가 있으면 장(章)이 되어 눌러서 펼친다. */
+    function card(it, kids) {
+        const childRows = (it.children || []).length;
+        const canOpen = kids.length > 0 || childRows > 0;
         const isOpen = open.has(it.id);
         const body = canOpen
             ? el('div', { class: 'tl-body', hidden: !isOpen }, ...kids.slice().reverse().map(sub), ...(it.children || []).map(childLine))
             : null;
-        const face = sameWho ? null : faceOf(it.actor);
+        const head = el('div', { class: 'tl-head' }, el('span', { class: 'tl-verb', text: it.verb }), el('span', { class: 'tl-ttl', text: it.label || '(이름 없음)' }), it.count > 1 ? el('span', { class: 'tl-x', text: '×' + it.count }) : null);
         const box = el(it.href && !canOpen ? 'a' : 'div', {
-            class: 'tl-card tlk-' + it.kind + (canOpen ? ' can' : '') + (isOpen ? ' open' : '') + (it.href && !canOpen ? ' go' : '') + (it.error ? ' err' : ''),
+            class: 'tl-card t' + tierOf(it) + ' tlk-' + it.kind + (canOpen ? ' can' : '') + (isOpen ? ' open' : '') + (it.href && !canOpen ? ' go' : '') + (it.error ? ' err' : ''),
             href: it.href && !canOpen ? it.href : null,
             title: [it.label, it.detail].filter(Boolean).join('\n'),
-        }, el('div', { class: 'tl-head' }, el('span', { class: 'tl-ttl', text: it.label || '(이름 없음)' }), it.count > 1 ? el('span', { class: 'tl-x', text: '×' + it.count }) : null, el('span', { class: 'tl-tm', text: hhmm(it.ts) })), el('div', { class: 'tl-meta' }, el('span', { class: 'tl-what', text: metaBits(it, kids) }), face, face && it.actor && it.actor.name ? el('span', { class: 'tl-who', text: String(it.actor.name) }) : null, canOpen ? el('span', { class: 'tl-car', 'aria-hidden': 'true', text: '›' }) : null), body);
+        }, head, metaRow(it, kids, canOpen, isOpen), body);
         if (canOpen) {
             box.setAttribute('role', 'button');
             box.setAttribute('tabindex', '0');
@@ -174,57 +167,47 @@ export function createTimeline(host, ctx) {
         }
         return box;
     }
-    /** 펼친 카드 안의 한 줄 — 맥락은 카드가 잡았으니 여기서는 촘촘해도 된다. */
+    /** 펼친 카드 안의 한 줄(그 일에서 나온 것들) — 여기서는 촘촘해도 된다. 맥락이 이미 카드가 잡아 준다. */
     function sub(it) {
         return el(it.href ? 'a' : 'div', { class: 'tl-sub' + (it.href ? ' go' : ''), href: it.href || null, title: it.label }, el('span', { class: 'tl-sub-v tlk-' + it.kind, text: it.verb }), el('span', { class: 'tl-sub-t', text: it.label }), it.count > 1 ? el('span', { class: 'tl-x', text: '×' + it.count }) : null, el('span', { class: 'tl-tm', text: hhmm(it.ts) }));
     }
     function childLine(c) {
         return el(c.href ? 'a' : 'div', { class: 'tl-sub' + (c.href ? ' go' : ''), href: c.href || null, title: c.label }, el('span', { class: 'tl-sub-v', text: c.verb }), el('span', { class: 'tl-sub-t', text: c.label }));
     }
-    // ── 결과물 보기(#1756, 다른 세션 작업 — 이 브랜치의 카드 구조에 맞춰 합침) ──
-    //  상민님: "결과물 위주로. 사소한 건 됐고, 전체 맥락에 중요한 영향 끼칠 것만."
-    //  ① 같은 대상은 한 장으로 접는다(같은 파일을 열 번 고쳤어도 그 파일은 하나다 — 횟수는 ×N 으로).
-    //  ② 지시는 결과물이 아니다(무엇을 시켰나는 가운데 대화가 말한다).
-    //  ③ 남는 것과 과정을 **종류로 가른다** — 무게 점수는 통하지 않았다(아래).
-    //
-    //  ★ 무엇이 카드가 되나 (상민님 2026-08-18, 두 차례 되돌아온 피드백)
-    //    "정말로 누가 봐도 유의미한 변화가 있는 것만 올라가야지 그냥 다 올라가잖아."
-    //    "커밋도 솔직히 별로 쓸데없지. 추가된 기능 정도만 보이면 되잖아."
-    //   처음엔 무게 점수(파일 45 + 반복 가산, 55점 이상 노출)로 걸렀는데 **여러 번 고친 파일이 그대로 통과**해
-    //   결국 다 올라오는 화면이 됐다(실측: 이 화면을 만든 세션은 도구 호출 109건 중 대부분이 파일 편집 —
-    //   파일 4개를 14번 고쳤고 커밋·지식은 몇 건뿐이었다). 그래서 점수가 아니라 **종류**로 가른다:
-    //   그런데 종류로 뭉텅이로 자르면 **중요한 커밋까지 같이 사라진다**(상민님: "커밋 중요한 것도 있을 텐데
-    //   다 빼면 어떡해"). 그래서 종류로 자르는 게 아니라 **항목마다 판단한다**:
-    //     · 조직에 남는 것(작업 기록·지식·프로젝트·태스크) — 언제나 결과다.
-    //     · 커밋 — 메시지가 말해 준다. 개발 관례(feat·design·fix…)가 이미 '기능이 생겼다'와
-    //       '치우는 일'을 가르고 있으므로 그 판정을 그대로 쓴다(session-trail.ts 가 tier 로 실어 보낸다).
-    //     · 파일 — **새로 만든 것**은 결과(없던 게 생겼다), **고친 것**은 과정(몇 번 고쳤나는 결과가 아니다).
-    //   나머지는 지우지 않고 접는다 — 안 보이는 것과 없는 것은 다르고, 접힘 줄은 무엇을 접었는지 그대로 말한다.
-    const OUTCOME_KINDS = new Set(['activity', 'knowledge', 'project', 'task']);
-    const isOutcome = (it) => OUTCOME_KINDS.has(it.kind) ? true
-        : it.kind === 'cmd' ? (it.verb === '커밋' && tierOf(it) === 1) // 기능·수정 커밋만(치우는 커밋은 접힘)
-            : it.kind === 'file' ? it.verb === '씀' // 새로 만든 파일만
-                : false;
-    /** 접힌 것의 이름 — '그 밖에 N개'는 열어 보기 전엔 아무 뜻이 없다. */
-    function restLabel(rest) {
-        const files = rest.filter((it) => it.kind === 'file').length;
-        const commits = rest.filter((it) => it.kind === 'cmd' && it.verb === '커밋').length;
-        const etc = rest.length - files - commits;
-        const parts = [];
-        if (files)
-            parts.push(`손댄 파일 ${files}개`);
-        if (commits)
-            parts.push(`커밋 ${commits}개`);
-        if (etc)
-            parts.push(`그 밖 ${etc}개`);
-        return parts.join(' · ') + ' 보기';
+    // ── 결과 배지 ──
+    function badges(kids, extra) {
+        const c = new Map();
+        for (const k of kids) {
+            const w = k.kind === 'file' ? '파일' : k.kind === 'knowledge' ? '지식' : k.kind === 'cmd' ? '커밋' : (KIND_LABEL.get(k.kind) || k.kind);
+            c.set(w, (c.get(w) || 0) + k.count);
+        }
+        for (const e of extra || [])
+            c.set(e.verb, (c.get(e.verb) || 0) + 1);
+        if (!c.size)
+            return null;
+        const dotOf = (w) => (w === '파일' ? 'file' : w === '지식' ? 'knowledge' : w === '커밋' ? 'cmd' : w === '코드' ? 'activity' : 'task');
+        return el('span', { class: 'tl-bdgs' }, ...[...c.entries()].slice(0, 3).map(([w, n]) => el('span', { class: 'tl-bdg' }, el('span', { class: 'tl-dot tlk-' + dotOf(w), 'aria-hidden': 'true' }), w + ' ' + n)));
     }
+    // ── 결과물 보기(#1756) — 상민님: "결과물 위주로. 사소한 건 됐고, 전체 맥락에 중요한 영향 끼칠 것만." ──
+    //  ① 같은 대상은 한 장으로 접는다(같은 파일을 열 번 고쳤어도 그 파일은 하나다 — 횟수는 카드 안에).
+    //  ② 지시는 결과물이 아니다(무엇을 시켰나는 대화가 말한다).
+    //  ③ 무게가 낮은 것은 지우지 않고 **접는다** — 한 번 스친 파일까지 늘어놓으면 중요한 게 묻힌다.
+    //  ★ 무엇이 카드가 되나 — 점수가 아니라 **종류**로 가른다(#1756, 상민님: "정말로 누가 봐도
+    //    유의미한 변화가 있는 것만 올라가야지 그냥 다 올라가잖아").
+    //    실측(이 화면을 만든 세션): 도구 호출 109건 중 대부분이 파일 편집이었고 커밋·지식은 몇 건뿐이었다.
+    //    이어서: "커밋도 솔직히 별로 쓸데없지. 추가된 기능 정도만 보이면 되잖아."
+    //    파일을 몇 번 고쳤나도, 그걸 몇 번 커밋했나도 **과정**이다 — 읽는 사람이 알고 싶은 것은 "무엇이 생겼나"다.
+    //    그래서 카드가 되는 것은 이 넷뿐이다:
+    //      · 작업 기록(무엇을 했다고 남긴 것)  · 지식(조직에 남는 것)  · 프로젝트  · 태스크(일의 뼈대)
+    //    파일 편집·커밋·그 밖의 명령은 지우지 않고 **접는다** — 안 보이는 것과 없는 것은 다르다.
+    const OUTCOME_KINDS = new Set(['activity', 'knowledge', 'project', 'task']);
+    const isOutcome = (it) => OUTCOME_KINDS.has(it.kind);
     let restOpen = false;
     function outcomes() {
         const by = new Map();
         for (const it of items) {
             if (it.kind === 'say')
-                continue;
+                continue; // 지시는 결과물이 아니다(가운데 대화가 말한다)
             const k = it.kind + '|' + it.label;
             const cur = by.get(k);
             if (!cur) {
@@ -239,8 +222,22 @@ export function createTimeline(host, ctx) {
             if (it.children && it.children.length)
                 cur.children = [...(cur.children || []), ...it.children];
         }
-        const all = [...by.values()].sort((a2, b2) => tsNum(a2.ts) - tsNum(b2.ts));
+        const all = [...by.values()].sort((a, b) => tsNum(a.ts) - tsNum(b.ts));
         return { keep: all.filter(isOutcome), rest: all.filter((it) => !isOutcome(it)) };
+    }
+    /** 접힌 것의 이름 — 무엇을 접었는지 그대로 말한다('그 밖에 N개'는 열어 보기 전엔 아무 뜻이 없다). */
+    function restLabel(rest) {
+        const files = rest.filter((it) => it.kind === 'file').length;
+        const commits = rest.filter((it) => it.kind === 'cmd' && it.verb === '커밋').length;
+        const etc = rest.length - files - commits;
+        const parts = [];
+        if (files)
+            parts.push(`손댄 파일 ${files}개`);
+        if (commits)
+            parts.push(`커밋 ${commits}개`);
+        if (etc)
+            parts.push(`그 밖 ${etc}개`);
+        return parts.join(' · ') + ' 보기';
     }
     function paintOutcomes() {
         const { keep, rest } = outcomes();
@@ -248,23 +245,19 @@ export function createTimeline(host, ctx) {
         emptyEl.hidden = keep.length > 0 || rest.length > 0;
         const kids = [];
         let day = ' ';
-        let lastWho = '\u0000';
         let rail = el('div', { class: 'tl-rail' });
-        const shown = restOpen ? [...keep, ...rest].sort((a2, b2) => tsNum(a2.ts) - tsNum(b2.ts)) : keep;
+        const shown = restOpen ? [...keep, ...rest].sort((a, b) => tsNum(a.ts) - tsNum(b.ts)) : keep;
         for (let i = shown.length - 1; i >= 0; i--) { // 최신이 위
             const it = shown[i];
             const d = dayOf(it.ts);
             if (d !== day) {
                 day = d;
-                lastWho = '\u0000';
                 if (d)
                     kids.push(el('div', { class: 'tl-day' }, el('span', { text: dayLabel(d) })));
                 rail = el('div', { class: 'tl-rail' });
-                kids.push(el('div', { class: 'tl-group' }, rail)); // 하루 = 한 판(이 브랜치의 구조)
+                kids.push(rail);
             }
-            const who = String((it.actor && it.actor.id) || '');
-            rail.append(card(it, [], who === lastWho));
-            lastWho = who;
+            rail.append(card(it, []));
         }
         if (rest.length) {
             kids.push(el('button', {
@@ -298,27 +291,21 @@ export function createTimeline(host, ctx) {
         const shownCount = rows.reduce((n, r) => n + ('solo' in r ? 1 : r.kids.length), 0);
         countEl.textContent = String(shownCount);
         emptyEl.hidden = shownCount > 0;
-        // 하루가 **한 판**이다. 종전엔 항목마다 흰 카드가 서서 말풍선이 줄줄이 붙은 꼴이었다(상민님: "다다다닥 붙어 거슬린다").
-        //  이제 판은 날짜 하나에 하나뿐이고, 그 안에서 항목은 얇은 선으로만 나뉜다 — 반복되는 상자가 사라진다.
         const kids = [];
         let day = ' ';
-        let lastWho = '\u0000';
         let rail = el('div', { class: 'tl-rail' });
         for (let i = shownRows.length - 1; i >= 0; i--) { // 최신이 위
             const r = shownRows[i];
-            const it0 = 'solo' in r ? r.solo : r.head;
-            const d = dayOf(it0.ts);
+            const ts = 'solo' in r ? r.solo.ts : r.head.ts;
+            const d = dayOf(ts);
             if (d !== day) {
                 day = d;
-                lastWho = '\u0000'; // 날이 바뀌면 누구인지 다시 밝힌다
                 if (d)
                     kids.push(el('div', { class: 'tl-day' }, el('span', { text: dayLabel(d) })));
                 rail = el('div', { class: 'tl-rail' });
-                kids.push(el('div', { class: 'tl-group' }, rail));
+                kids.push(rail);
             }
-            const who = String((it0.actor && it0.actor.id) || '');
-            rail.append('solo' in r ? card(r.solo, [], who === lastWho) : card(r.head, r.kids, who === lastWho));
-            lastWho = who;
+            rail.append('solo' in r ? card(r.solo, []) : card(r.head, r.kids));
         }
         list.replaceChildren(...kids);
     }
