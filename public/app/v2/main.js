@@ -258,7 +258,7 @@ function openProjectPicker(anchor, sessionId) {
     const input = el('input', { class: 'v2-pjpick-in', type: 'search', placeholder: '프로젝트 검색', 'aria-label': '프로젝트 검색' });
     const listEl = el('div', { class: 'v2-pjpick-list', role: 'listbox' });
     const note = el('p', { class: 'v2-fine v2-pjpick-note' });
-    const panel = el('div', { class: 'v2-pjpick' }, input, listEl, note);
+    const panel = el('div', { class: 'dash-pop-panel v2-pjpick' }, input, listEl, note); // dash-pop-panel = 배경·테두리·그림자(anchoredPopover 는 위치만)
     let closePop = null;
     let busyPick = false;
     async function pick(pid) {
