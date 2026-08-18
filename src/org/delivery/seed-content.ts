@@ -56,6 +56,19 @@ export async function seedDefaultContent(): Promise<SeedResult> {
         res.hooks++;
         continue;
       }
+      // ── #1752 일회성 기본값 승격: session-log-capture 를 기본 켬(대표 결정 2026-08-18). ──
+      //  대상은 **손 안 댄 시드**(updated_by='system' — 운영자·에이전트가 한 번이라도 만졌으면 updated_by 가 그 사람)뿐이다.
+      //  즉 '아무도 의사를 밝힌 적 없는' 행만 새 기본값을 따라간다 — 운영자가 명시로 끈 박스는 영원히 꺼진 채다.
+      //  (아래 source_code 갱신 경로는 enabled 를 보존하는 규약이라 여기로는 기본값 변경이 영영 안 닿는다 — 별도 블록이 필요했다.)
+      if (h.id === "session-log-capture" && h.enabled && before.updated_by === "system" && !before.enabled) {
+        await upsertOrgHook({
+          id: h.id, label: h.label, harness: h.harness as HookHarness, event: h.event, matcher: h.matcher,
+          source_code: h.source_code, timeout_sec: h.timeout_sec, note: h.note,
+          enabled: true, target_members: before.target_members, sort: h.sort,
+        }, ctx);
+        res.hooks++;
+        continue;
+      }
       // 기존 행 — 손 안 댄 시드(updated_by='system')이고 소스가 실제로 달라졌을 때만 갱신.
       if (before.updated_by !== "system" || before.source_code === h.source_code) continue;
       await upsertOrgHook({

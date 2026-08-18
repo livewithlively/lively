@@ -55,7 +55,7 @@ export interface OrgRuntimeConfig {
   session_reclaim_policy: SessionReclaimPolicy; // idle 세션 자동 회수(#1059 F) — idle TTL(분). 0=끔(무회귀). DB 우선, 비면 env 시드
   delegate_policy: DelegatePolicy; // 위탁 태스크 정책(#1101) — 무출력 stall 상한(ms). 0=가드 끔. DB 우선, 비면 env 시드 → 5분
   hook_relay_decisions: HookRelayDecision[]; // 러너가 PreToolUse 에서 전파할 결정(#892). 기본 deny/ask/defer — allow 는 명시 opt-in
-  session_share: SessionShareConfig; // 세션이력 캡처 정책(#905 C1). 기본 enabled=false(롤아웃 꺼둠). 관리탭 ▸ 세션 공유.
+  session_share: SessionShareConfig; // 세션이력 캡처 정책(#905 C1). 기본 enabled=true(#1752 — 명시 false 만 끔). 관리탭 ▸ 세션 공유.
   hook_grace_ms: number | null; // #1008 — run-custom 이 게이트웨이 미도달 시 최근 캐시를 쓸 유효기간(ms). NULL=무제한(기본). 양수=그 ms 후 fail-CLOSED.
   embedding_backfill_paused: boolean; // #1060 — 자동 임베딩 백필 스윕 일시중지. true=부팅·주기·sync후·nudge 스윕 no-op + 실행 중 잡 중단. DB 영속(재시작에도 유지).
   inject_ontology_guide: boolean; // #1245 — 온톨로지 가이드(제품 소유 섹션, 코드 단일 출처) 주입 여부. 본문 편집은 불가 — 이 토글만 org 가 정한다.

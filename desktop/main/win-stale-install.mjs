@@ -23,7 +23,10 @@ import { createHash } from "node:crypto";
 /** 앱 식별자 — desktop/package.json build.appId 와 같아야 한다(테스트가 못박는다). 설치기의 레지스트리 키 이름이 여기서 나온다. */
 export const APP_ID = "io.lvly.desktop";
 /** electron-builder 가 NSIS GUID 를 만들 때 쓰는 네임스페이스(app-builder-lib NsisTarget ELECTRON_BUILDER_NS_UUID). */
-const ELECTRON_BUILDER_NS_UUID = "50e065bc-3134-11e6-9bab-360a5f6d0d1a";
+// ⚠ 끝 6바이트를 틀리게 옮겨 적어(…360a5f6d0d1a) GUID 가 통째로 달랐던 적이 있다(실기기 레지스트리로 발각 —
+//  감지는 언인스톨러 파일명 폴백이 살렸다). 값은 app-builder-lib NsisTarget.js 의 상수 그대로이며, 테스트가
+//  그 파일에서 **직접 읽어** 대조한다(다시는 옮겨 적은 값이 정본 행세를 못 하게).
+const ELECTRON_BUILDER_NS_UUID = "50e065bc-3134-11e6-9bab-38c9862bdaf3";
 /** 언인스톨러 파일명 — app-builder-lib common.nsh `UNINSTALL_FILENAME "Uninstall ${PRODUCT_FILENAME}.exe"`. */
 export const UNINSTALLER_NAME = "Uninstall Lively.exe";
 
@@ -125,7 +128,13 @@ export const psQuote = (s) => "'" + String(s ?? "").replace(/'/g, "''") + "'";
  * @param {{stale:Array<{uninstaller:string, uninstallArgs?:string[]}>, ownExe:string}} o
  */
 export function staleCleanupPs(o) {
-  const lines = ["$ErrorActionPreference='Continue'"];
+  // 이 스크립트는 **보이는 콘솔**에서 돈다(main.mjs 가 창 없이 띄우지 않는다) — 숨김 프로세스가 요청한 승격은
+  //  Windows 가 작업 표시줄에 최소화해 두고 사람이 누를 때까지 화면을 안 덮는다(실기기: 사용자가 5분 뒤에야 발견).
+  //  보이는 콘솔이 포그라운드를 가지면 승격 창이 즉시 보안 데스크톱으로 뜬다.
+  const lines = [
+    "$ErrorActionPreference='Continue'",
+    "Write-Host '라이블리 이전 버전 제거 — 화면이 어두워지며 관리자 확인 창이 뜹니다. 안 보이면 작업 표시줄의 방패 아이콘을 누르세요.'",
+  ];
   for (const e of o.stale || []) {
     // /S 가 먼저, 그 뒤에 등록돼 있던 모드 토큰(/allusers 등). 각 인자는 PS 리터럴로 — 값은 레지스트리에서 왔다.
     const args = ["/S", ...(e.uninstallArgs || []).filter((a) => a !== "/S")].map(psQuote).join(",");

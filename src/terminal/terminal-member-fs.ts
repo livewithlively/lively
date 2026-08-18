@@ -5,7 +5,8 @@
 //  ⚠ 경로 봉쇄(세션 dir 내부)는 호출부(terminal-files resolveInSession)가 이미 건다 — 여기선 uid 만 내린다.
 import { spawn, type ChildProcess } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
-import { wrapAsMember } from "./terminal-isolation.js";
+import { memberExecConfigured, wrapAsMember } from "./terminal-isolation.js";
+import { tenantSlug } from "./catalog.js";
 
 // node one-liner(멤버 PATH 의 node 로 실행). argv[1]=대상 절대경로. 셸 미경유(argv) — 인젝션 없음.
 const LS_JS =
@@ -18,9 +19,35 @@ const STAT_JS =
   "process.stdout.write(JSON.stringify({size:s.size,file:s.isFile(),dir:s.isDirectory()}))}" +
   "catch{process.stdout.write('null')}";
 
+/**
+ * 멤버 파일 op 실행 seam — 기본은 **로컬 uid 강하**(설정 없으면 종전과 완전히 동일하다).
+ *
+ * 왜 필요한가: 이 파일의 모든 op 는 "게이트웨이와 파일이 같은 호스트에 있다"는 가정으로
+ *  sudo→box-spawn 을 부른다. 그 가정이 깨지는 배포(파일은 실행 노드, 게이트웨이는 중앙 컨테이너)
+ *  에서는 여기 하나만 갈아끼우면 상위(terminal-files·upload·session-project)는 한 줄도 안 바뀐다 —
+ *  tmuxExecArgv 와 같은 자리·같은 교리다.
+ *
+ * 계약: 지정한 프로그램을 `<중계> <osUser> -- <argv...>` 로 실행한다. 중계는 argv 를 **그 멤버의
+ *  실행 환경**(우리 배포에선 그 테넌트의 컨테이너)에서 돌리고, stdio 를 바이트 그대로 잇고,
+ *  argv 의 종료코드로 끝난다 — 로컬 실행과 같은 규약이라 상위 파서·에러 처리가 그대로 동작한다.
+ *
+ * ★★ `{slug}` 템플릿인데 테넌트 컨텍스트가 없으면 **던진다.** 로컬로 폴백하면 그 op 가 게이트웨이
+ *  컨테이너의 (존재하지 않거나 남의) 경로를 만진다 — tmuxExecArgv 의 판단과 같은 교리다.
+ */
+export function memberExecArgv(): string[] {
+  const raw = (process.env.LIVELY_MEMBER_EXEC || "").trim();
+  if (!raw) return [];
+  if (!raw.includes("{slug}")) return raw.split(/\s+/);
+  const slug = tenantSlug();
+  if (!slug) throw new Error("멤버 파일 op 중계에 테넌트 컨텍스트가 필요합니다 — 컨텍스트 밖에서 호출됐습니다");
+  return raw.replace("{slug}", slug).split(/\s+/);
+}
+
 // box-spawn 경유로 멤버 uid 에서 프로세스 스폰. wrapAsMember = ["sudo","-n","-u",osUser,"--",BOX_SPAWN,...argv].
+//  중계 배포(memberExecConfigured)면 `<중계> <osUser> -- <argv...>` — memberExecArgv 머리말 참조.
 function memberSpawn(osUser: string, argv: string[], stdio: Array<"ignore" | "pipe">): ChildProcess {
-  const full = wrapAsMember(osUser, argv);
+  const relay = memberExecConfigured() ? memberExecArgv() : [];
+  const full = relay.length ? [...relay, osUser, "--", ...argv] : wrapAsMember(osUser, argv);
   return spawn(full[0], full.slice(1), { stdio });
 }
 // 자식 stderr 를 문자열로 수집(진단). 스트림 null 이면 no-op.

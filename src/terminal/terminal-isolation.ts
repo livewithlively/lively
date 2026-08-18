@@ -128,11 +128,28 @@ export async function osUserExists(osUser: string): Promise<boolean> {
   catch { return false; }
 }
 
+/**
+ * 멤버 파일 op 를 외부 중계로 실행하는가(LIVELY_MEMBER_EXEC).
+ *
+ * 게이트웨이가 파일이 있는 호스트와 **다른 호스트**에 있는 배포(예: 파일은 실행 노드, 게이트웨이는
+ *  중앙 컨테이너)에서 켠다. 그때 파일 op 는 로컬 uid 강하(sudo box-spawn)가 아니라 지정한 중계
+ *  프로그램으로 나간다 — 계약은 terminal-member-fs.memberExecArgv 참조.
+ * ⚠ **호출 시점에 읽는다**(tmuxExecArgv 와 같은 이유 — 모듈 로드 시점 고정은 부팅 순서·테스트에서 깨진다).
+ */
+export function memberExecConfigured(): boolean {
+  return !!(process.env.LIVELY_MEMBER_EXEC || "").trim();
+}
+
 // 세션 격리 게이트 — 활성 && 인프라 설치됨(box-spawn) && 그 멤버 OS 유저 존재 → osUser 반환, 아니면 null(→ 공유 폴백).
 //  createSession 이 이 값으로 분기: non-null 이면 wrapAsMember, null 이면 종전(#346 CLAUDE_CONFIG_DIR) 경로.
 //  3중 게이트라 secure-by-default 여도 미설치/미프로비저닝 박스는 폴백-세이프(무회귀). Linux 전용.
 export async function resolveMemberOsUser(slug: string): Promise<string | null> {
   if (!isolationEnabled()) return null;               // 하드 킬스위치(=off)
+  // ── 원격 중계 배포(LIVELY_MEMBER_EXEC) — 로컬 게이트 3개를 건너뛴다 ──
+  //  이 프로세스에는 box-spawn 도 멤버 passwd 항목도 없는 게 정상이다(파일과 실행 주체가 다른
+  //  호스트에 있다). 로컬 존재 검사로 null 을 돌려주면 파일 op 가 "공유 폴백" = **존재하지 않는
+  //  로컬 경로의 직접 fs** 로 떨어져 조용히 빈 목록이 된다 — 중계가 곧 인프라이므로 이름만 정한다.
+  if (memberExecConfigured()) return osUsername(slug);
   if (process.platform !== "linux") return null;      // 격리는 Linux 전용(맥 개발환경 등 폴백)
   if (!existsSync(BOX_SPAWN)) return null;             // 인프라 미설치(install-isolation 안 함) → 공유 폴백
   const osUser = osUsername(slug);

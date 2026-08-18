@@ -1,9 +1,12 @@
 // 세션 공유(세션이력 캡처) 정책(#905 C1) — 관리탭 ▸ 세션 공유 에서 완전 커스터마이징. runtime_config.session_share(jsonb).
 //  순수 모듈(DB 무접촉) — resolve/normalize/기본값을 여기 모아 단위검증한다. store.ts 가 DB 입출력에서 이걸 쓴다.
 //
-//  기본값 = 권고: **캡처 메커니즘은 자동(무결성 — 죽는 세션의 성실성에 안 기댄다, 설계 §5)** 이되 **롤아웃은 꺼둠**.
-//   enabled=false 라 켜기 전엔 아무 세션도 캡처 안 한다(C3 push 선례 — 조직이 명시적으로 켠다).
-//   켜면 그때부터 harnesses·scope·store·retention·권한축을 관리탭에서 조절한다.
+//  기본값(#1752, 대표 결정 2026-08-18): **캡처 기본 켬.** 실행 노드 로컬의 대화이력을 중앙에 보관해, 노드가
+//   오프라인이어도 같은 채팅 UI 에서 세션 기록을 읽을 수 있게 한다(읽기전용 — 프롬프트 전송은 라이브 세션만).
+//   신뢰경계는 안 넘는다: 셀프호스트=자기 박스 DB, 매니지드=자기 테넌트 DB(원래 그 노드 파일이 속한 조직의 저장소).
+//   view_policy=attach 라 그 세션이 붙었던 프로젝트의 멤버가 기록을 본다 — 끄려면 관리탭 ▸ 세션 공유에서
+//   enabled=false(명시 false 는 영구 존중 — 재시딩·업그레이드가 되살리지 않는다).
+//   (종전 기본 꺼짐의 근거였던 '롤아웃 안전'은 1년치 운용으로 소거 — 켜짐이 제품 기본 동작이 됐다.)
 
 import { READABLE_HARNESSES } from "../terminal/harness-io/adapter.js";
 
@@ -13,7 +16,7 @@ export type SessionShareViewPolicy = "attach" | "owner";  // 로그 열람 권�
 export type SessionShareResumePolicy = "owner";      // 경로무관 resume 권한: 현재 owner(assertManage 동형)만. (확장 여지)
 
 export interface SessionShareConfig {
-  enabled: boolean;            // 마스터 스위치 — 캡처 자체 on/off. 기본 false(롤아웃 안전).
+  enabled: boolean;            // 마스터 스위치 — 캡처 자체 on/off. 기본 true(#1752 — 명시 false 만 끔).
   harnesses: string[];         // 캡처할 하네스. 기본 ["claude"]. codex 는 D12 구조적 배제(의미계층 포크 필요)라 켜도 파이프라인 미지원.
   scope: SessionShareScope;    // 기본 "main"(트리 캡처는 후속 슬라이스).
   store: SessionShareStore;    // 기본 "slim". (슬림 구현 전 슬라이스에선 파이프라인이 raw 로 폴백할 수 있음.)
@@ -35,11 +38,11 @@ export const KNOWN_HARNESSES: readonly string[] = [...new Set(["claude", "codex"
 export const RETENTION_MAX_DAYS = 3650;   // 상한(10년) — 0=무제한과 구분, 실수로 거대값 입력 방어.
 
 export const DEFAULT_SESSION_SHARE: SessionShareConfig = {
-  enabled: false,
+  enabled: true,          // #1752 — 기본 켬(중앙 보관·오프라인 읽기). 명시 false 만 끈다.
   harnesses: ["claude"],
   scope: "main",
   store: "slim",
-  retention_days: 30,
+  retention_days: 0,      // #1752 — 기본 무제한('중앙에서 관리'가 30일 시한부면 반쪽 — 기록은 남는 게 기본). 관리탭에서 조절.
   view_policy: "attach",
   resume_policy: "owner",
 };
@@ -55,7 +58,10 @@ export function resolveSessionShare(raw: unknown): SessionShareConfig {
     : DEFAULT_SESSION_SHARE.harnesses;
   const rd = Number(o.retention_days);
   return {
-    enabled: o.enabled === true,   // 기본 false — 명시적 true 일 때만 켜짐(부재/잡값 = 꺼짐)
+    // #1752 기본 켬 — **명시 boolean 만 의미를 갖는다**: false=끔(영구 존중) · true=켬 · 부재/잡값=기본값(켬).
+    //  구 규약(=== true, 부재=꺼짐)을 뒤집는 것이 이 변경의 본체다: 한 번도 설정 안 한 박스가 업그레이드로 켜진다.
+    //  잡값이 기본(켬)으로 접히는 건 다른 필드(asEnum)와 같은 규약 — 명시적으로 끈 조직만 false 를 저장하고 있다.
+    enabled: typeof o.enabled === "boolean" ? o.enabled : DEFAULT_SESSION_SHARE.enabled,
     harnesses: harnesses.length ? harnesses : DEFAULT_SESSION_SHARE.harnesses,
     scope: asEnum(o.scope, SESSION_SHARE_SCOPES, DEFAULT_SESSION_SHARE.scope),
     store: asEnum(o.store, SESSION_SHARE_STORES, DEFAULT_SESSION_SHARE.store),
