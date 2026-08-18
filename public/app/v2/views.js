@@ -86,7 +86,7 @@ export function renderHome(host, data) {
     const send = el('button', { class: 'btn btn-primary v2-launch-send', type: 'button' }, el('span', { text: '시키기' }), el('kbd', { text: '⏎' }));
     const destBtn = el('button', { class: 'v2-dest-chip', type: 'button', 'aria-haspopup': 'listbox' });
     const destWhy = el('span', { class: 'v2-dest-why' });
-    const destRow = el('div', { class: 'v2-dest' }, el('span', { class: 'v2-dest-k', text: '여는 곳' }), destBtn, destWhy);
+    const destRow = el('div', { class: 'v2-dest' }, destBtn, destWhy); // '여는 곳' 라벨은 뺐다 — 칩의 폴더 아이콘·이름이 그 말을 한다
     const pop = el('div', { class: 'v2-dest-pop', hidden: true });
     // [시키기] 왼쪽 세 칸 — 제공자(어느 회사 모델)·모델·추론강도(#1758). 행선지 칩과 한 줄에 서서 '어디로 · 무엇에게'가
     //  나란히 읽힌다. 기본은 내가 지난번에 고른 값이고, 여기서 바꾸면 그게 다음 기본이 된다(v2/run-picker.ts —
@@ -96,7 +96,8 @@ export function renderHome(host, data) {
     const paintDest = () => {
         destBtn.replaceChildren(dest.p ? el('span', { class: 'v2-dest-dot on', 'aria-hidden': 'true' }) : el('span', { class: 'v2-dest-dot', 'aria-hidden': 'true' }), el('b', { text: dest.p ? dest.p.name : '프로젝트 없이' }), el('span', { class: 'car', text: '▾', 'aria-hidden': 'true' }));
         destBtn.title = dest.p ? `새 세션이 「${dest.p.name}」 프로젝트에 붙습니다 — 눌러서 바꿀 수 있어요` : '세션 전용 폴더로 열립니다 — 눌러서 프로젝트를 고를 수 있어요';
-        destWhy.textContent = dest.p ? (dest.manual ? '직접 골랐어요' : dest.why) : '나중에 언제든 붙일 수 있어요';
+        // 부연은 **자동 매칭이 일어났을 때만** — 기본 상태의 '나중에 언제든…'은 매번 읽히는 소음이었다(툴팁으로).
+        destWhy.textContent = dest.p && !dest.manual ? dest.why : '';
     };
     const autoMatch = () => {
         if (dest.manual)
@@ -178,23 +179,29 @@ export function renderHome(host, data) {
     const recent = [...data.projects].filter((p) => byWork.get(Number(p.id))).sort((a, b) => (byWork.get(Number(b.id)) || 0) - (byWork.get(Number(a.id)) || 0)).slice(0, 2);
     const sugs = recent.length ? el('div', { class: 'v2-launch-sugs' }, el('span', { class: 'v2-k', text: '이어서' }), ...recent.map((p) => el('button', { class: 'chip', type: 'button', text: p.name, title: `행선지를 「${p.name}」로 두고 입력으로 갑니다`,
         onclick: () => { dest.p = p; dest.manual = true; paintDest(); ta.focus(); } }))) : null;
-    host.replaceChildren(el('section', { class: 'v2-home v2-home-launch' }, el('div', { class: 'v2-home-eyebrow' }, el('span', { text: `${d.getMonth() + 1}월 ${d.getDate()}일 ${KO_DAY[d.getDay()]}요일` }), el('span', { class: 'sep', text: '·' }), busy ? el('span', { class: 'st busy' }, dot('busy'), `작업 중 ${busy}`) : el('span', { text: '도는 세션 없음' }), waiting ? el('span', { class: 'st wait' }, dot('waiting'), `답 기다림 ${waiting}`) : null), el('h1', { class: 'v2-h1', text: `${tod}${name ? ', ' + name + '님' : ''}. 무엇을 할까요?` }), card, el('div', { class: 'v2-launch-hint', text: 'Enter 시키기 · Shift+Enter 줄바꿈' }), sugs, nowList(data)));
+    host.replaceChildren(el('section', { class: 'v2-home v2-home-launch' }, el('div', { class: 'v2-home-eyebrow' }, el('span', { text: `${d.getMonth() + 1}월 ${d.getDate()}일 ${KO_DAY[d.getDay()]}요일` }), 
+    // 세션이 하나도 안 돌면 그 말 자체를 안 한다 — '도는 세션 없음'은 정보가 아니라 빈자리 채우기다.
+    busy ? [el('span', { class: 'sep', text: '·' }), el('span', { class: 'st busy' }, dot('busy'), `작업 중 ${busy}`)] : null, waiting ? [el('span', { class: 'sep', text: '·' }), el('span', { class: 'st wait' }, dot('waiting'), `답 기다림 ${waiting}`)] : null), el('h1', { class: 'v2-h1', text: `${tod}${name ? ', ' + name + '님' : ''}.` }), el('p', { class: 'v2-home-sub', text: '무엇을 할까요?' }), card, sugs, nowList(data)));
     paintDest();
     window.setTimeout(() => { grow(); ta.focus(); }, 30);
 }
 function nowList(data) {
+    // 홈의 두 번째 존재 — 상태별 두 결(#1756): **답을 기다리는 것**은 내가 움직여야 풀리는 일이라 앰버 카드로
+    //  도드라지고, 나머지는 조용한 목록이다. 종전엔 일곱 행이 같은 무게로 나열돼 급한 것이 안 보였다.
     const rank = (s) => (s.stateKey === 'waiting' ? 0 : s.stateKey === 'busy' ? 1 : 2);
-    const rows = data.sessions.filter((s) => s.live && s.alive).sort((a, b) => rank(a) - rank(b) || b.lastSeen - a.lastSeen).slice(0, 7);
-    if (!rows.length)
+    const live = data.sessions.filter((s) => s.live && s.alive).sort((a, b) => rank(a) - rank(b) || b.lastSeen - a.lastSeen);
+    if (!live.length)
         return el('div', {});
-    return el('div', { class: 'v2-now' }, el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: `지금 도는 세션 · ${rows.length}` }), el('a', { class: 'btn-text', href: '#/app/terminal', text: '전체 →' })), ...rows.map((s) => {
+    const waits = live.filter((s) => s.stateKey === 'waiting');
+    const rest = live.filter((s) => s.stateKey !== 'waiting').slice(0, 7 - Math.min(waits.length, 4));
+    const rowOf = (s) => {
         const pn = projName(data, s.projectId);
         const raw = (s.raw || {});
-        // 세션 이름이 프로젝트명 그대로면 한 번만 쓴다 — '지금 하는 일'(pane 제목)이 있으면 그게 더 세션답다.
         const title = s.label === pn && raw.title && String(raw.title) !== s.label ? String(raw.title) : s.label;
         const showProj = !!s.projectId && title !== pn;
-        return el('a', { class: 'v2-now-row' + (s.stateKey === 'waiting' ? ' wait' : ''), href: '#/s/' + encodeURIComponent(s.id) }, dot(s.stateKey), el('span', { class: 't', text: title }), showProj ? el('span', { class: 'p', text: pn }) : null, el('span', { class: 'st', text: `${s.stateLabel} · ${when(s.lastSeen)}` }), s.stateKey === 'waiting' ? el('span', { class: 'go', text: '답하기 →' }) : null);
-    }));
+        return el('a', { class: 'v2-now-row' + (s.stateKey === 'waiting' ? ' wait' : ''), href: '#/s/' + encodeURIComponent(s.id) }, dot(s.stateKey), el('span', { class: 'tw' }, el('span', { class: 't', text: title }), showProj ? el('span', { class: 'p', text: pn }) : null), el('span', { class: 'st', text: s.stateKey === 'waiting' ? when(s.lastSeen) : `${s.stateLabel} · ${when(s.lastSeen)}` }), s.stateKey === 'waiting' ? el('span', { class: 'go btn btn-sm', text: '답하기' }) : null);
+    };
+    return el('div', { class: 'v2-now' }, waits.length ? el('section', { class: 'v2-now-wait' }, el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k wait', text: `답을 기다려요 · ${waits.length}` })), ...waits.slice(0, 4).map(rowOf)) : null, rest.length ? el('section', {}, el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: `돌고 있어요 · ${rest.length}` }), el('a', { class: 'btn-text', href: '#/app/terminal', text: '전체 →' })), ...rest.map(rowOf)) : null);
 }
 export function projName(data, id) {
     if (!id)
