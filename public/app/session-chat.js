@@ -112,10 +112,19 @@ export function mountSessionChat(host, first, opts) {
     const chipMode = el('span', { class: 'dt-chip', hidden: true });
     const chipModel = el('span', { class: 'dt-chip', hidden: true });
     const chipEffort = el('span', { class: 'dt-chip', hidden: true });
-    const chip = (n, v) => { n.textContent = v; n.hidden = !v; };
+    const chip = (n, v, tip) => { n.textContent = v; if (tip && tip !== v)
+        n.title = tip;
+    else
+        n.removeAttribute('title'); n.hidden = !v; };
     const MODE_KO = { default: '기본', auto: '자동', acceptEdits: '수정 자동승인', bypassPermissions: '전부 자동', plan: '계획', dontAsk: '묻지 않음' };
     const EFFORT_KO = { low: '낮음', medium: '보통', high: '높음', xhigh: '매우 높음', max: '최대' };
     const prettyModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '').split('-').map((w) => (/^\d/.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1))).join(' ');
+    // 세션 도중 `/model` 로 모델을 바꾸면 그 사실이 사용자 줄에 남는다("Set model to <b>Opus 5 (1M context)</b> and saved …", ANSI 굵기 포함).
+    //  `assistant.message.model` 만 보면 **'마지막 응답에 쓰인 모델'** 이라, 바꾼 뒤 아직 답이 없는 세션은 옛 모델을 가리킨다
+    //  (실측 2026-08-18: 한 대화 파일에 claude-fable-5 206줄 + claude-opus-5 233줄 — 터미널은 Opus 인데 칩은 Fable).
+    //  줄 순서대로 덮으므로 둘 중 **나중에 나온 사실**이 이긴다.
+    const SET_MODEL_RE = /Set model to\s+(.+?)(?:\s+and saved\b|$)/i;
+    const setModel = (full) => chip(chipModel, full.replace(/\s*\([^)]*\)\s*$/, '').trim() || full, full);
     // 대화창 ————
     const view = createChatView(chatHost, {
         who: { me: '나', ai: 'AI' },
@@ -183,7 +192,8 @@ export function mountSessionChat(host, first, opts) {
     let oldestUuid = null;
     let oldestPrev = null;
     let carry = ''; // 잘린 마지막 줄(다음 폴에서 이어 붙인다)
-    let pendingSent = null; // 낙관적으로 그린 내 말 — 파일에 나타나면 그 턴을 재사용
+    const pending = [];
+    let outboxTimer = null;
     let firstPrompt = opts.firstPrompt ? String(opts.firstPrompt) : null; // 홈 입력창의 첫 지시(한 번만 그린다)
     let pollTimer = null;
     let destroyed = false;
@@ -220,6 +230,9 @@ export function mountSessionChat(host, first, opts) {
             if (o.permissionMode)
                 chip(chipMode, MODE_KO[String(o.permissionMode)] || String(o.permissionMode));
             const { text, results } = userText(o);
+            const sm = SET_MODEL_RE.exec(text.replace(/\u001b\[[0-9;]*m/g, '')); // ANSI 굵기를 걷어내고 본다
+            if (sm && sm[1])
+                setModel(sm[1].trim());
             if (results.length) {
                 if (!cur)
                     cur = newRec(null);
@@ -243,11 +256,14 @@ export function mountSessionChat(host, first, opts) {
             }
             if (INJECTED_RE.test(text))
                 return; // 슬래시 명령·리마인더 — 사람 말이 아니다
-            // 내가 방금 보낸 말이 파일에 나타났다 → 낙관적으로 그린 턴을 그대로 쓴다(두 번 그리지 않는다)
-            if (pendingSent && flat(pendingSent.text) === flat(text)) {
-                const rec = recs.find((r) => r.t === pendingSent.t);
-                pendingSent = null;
-                view.setNote(''); // '여는 중·아직 안 나타남' 안내는 내 말이 기록에 나타난 순간 물러난다
+            // 내가 보낸(또는 큐에 있던) 말이 파일에 나타났다 → 낙관적으로 그린 그 턴을 그대로 쓴다(두 번 그리지 않는다)
+            const pi = pending.findIndex((pd) => flat(pd.text) === flat(text));
+            if (pi >= 0) {
+                const pd = pending[pi];
+                pending.splice(pi, 1);
+                pd.state.remove(); // '전달 대기' 줄은 물러난다 — 기록에 적힌 것이 곧 전달이다
+                view.setNote(''); // '여는 중·아직 안 나타남' 안내도 그 순간 물러난다
+                const rec = recs.find((r) => r.t === pd.t);
                 if (rec) {
                     cur = rec;
                     rec.t.ts = o.timestamp;
@@ -263,7 +279,7 @@ export function mountSessionChat(host, first, opts) {
         }
         if (o.type === 'assistant') {
             if (o.message?.model)
-                chip(chipModel, prettyModel(String(o.message.model)));
+                setModel(prettyModel(String(o.message.model)));
             if (o.effort)
                 chip(chipEffort, EFFORT_KO[String(o.effort)] || String(o.effort));
             if (!cur)
@@ -320,6 +336,125 @@ export function mountSessionChat(host, first, opts) {
             if (b?.tool_use_id)
                 trail.result(String(b.tool_use_id), trailOut(b), !!b.is_error);
     }
+    // ── 아웃박스(#1753) — 전달 대기·실패의 화면 짝 ─────────────────────────────────────────
+    /** 낙관 턴 + 말풍선 밑 상태 줄 한 벌. 서버 큐 행(obId)과 연결되면 새로고침에도 큐에서 되살아난다. */
+    function addPending(text, obId) {
+        const rec = newRec(text, new Date().toISOString());
+        const state = el('div', { class: 'dt-qstate' });
+        rec.t.ask?.append(state);
+        const pd = { text, t: rec.t, obId, state };
+        pending.push(pd);
+        cur = rec;
+        running = true;
+        view.running(rec.t);
+        view.busy(true);
+        watchOutbox();
+        return pd;
+    }
+    const QSTATE_TEXT = {
+        queued: '전달 대기 중 — AI 입력창이 뜨면 들어갑니다',
+        sending: '전달하는 중…',
+    };
+    function paintQState(pd, row) {
+        if (!row) {
+            pd.state.textContent = '';
+            return;
+        } // 큐에서 사라짐(delivered/sent) — 에코가 곧 마감한다
+        if (row.status === 'failed') {
+            const why = row.last_error === 'not-ready' ? '입력창이 끝내 안 떴어요(로그인·오류 화면)'
+                : row.last_error === 'session-gone' ? '세션이 그새 닫혔어요' : (row.last_error || '알 수 없는 이유');
+            const retry = el('button', { class: 'btn-text dt-qact', type: 'button', text: '다시 보내기', onclick: () => { void outboxAct(pd, 'retry'); } });
+            const drop = el('button', { class: 'btn-text dt-qact', type: 'button', text: '지우기', onclick: () => { void outboxAct(pd, 'discard'); } });
+            pd.state.replaceChildren(el('span', { class: 'dt-qfail', text: `전달 안 됨 — ${why} ` }), retry, drop);
+            if (pd.t === cur?.t) {
+                running = false;
+                view.settle(pd.t);
+                view.busy(false);
+            }
+            return;
+        }
+        // 오래 못 들어가고 있다(로그인·대화상자 의심) — 글자만 두지 않는다: 눌러서 그 화면(터미널)을 바로 연다(막다른 안내 금지).
+        //  터미널은 이 페이지 아래 분할로 열리므로 '웹 안에서' 로그인까지 끝낼 수 있다.
+        const stuck = row.status === 'queued' && row.last_error === 'not-ready' && Date.now() - Date.parse(row.created_at) > 60_000;
+        if (stuck) {
+            pd.state.replaceChildren(el('span', { text: '전달 대기 중 — 입력창이 아직 안 떠요. 로그인이 필요한 상태일 수 있어요. ' }), ...(opts.terminalSrc && isBox ? [el('button', { class: 'btn-text dt-qact', type: 'button', text: '터미널 열기', onclick: () => toggleTerminal(true) })] : []));
+            maybeAutoOpenTerminal();
+            return;
+        }
+        pd.state.textContent = QSTATE_TEXT[row.status] || '';
+    }
+    // 세션이 멈춰 있고 **보여줄 대화도 없으면** 터미널 분할을 한 번 자동으로 연다 — 로그인 화면은 터미널에만 있는데,
+    //  빈 채팅만 두면 사람이 볼 수 있는 게 없다(실측 신고). 대화가 이미 있으면 자동으로 열지 않는다(읽던 화면을 뺏지 않는다).
+    let autoTermOpened = false;
+    function maybeAutoOpenTerminal() {
+        if (autoTermOpened || destroyed || !opts.terminalSrc || !isBox)
+            return;
+        if (curUuid || recs.some((r) => r.evs.length))
+            return; // 대화가 보이고 있다 — 알림 줄이면 충분
+        autoTermOpened = true;
+        toggleTerminal(true);
+        view.setNote('세션이 입력을 못 받고 있어 터미널을 열었어요 — 로그인 등 필요한 단계를 여기서 끝내면 대기 중인 지시가 이어서 들어갑니다.');
+    }
+    async function outboxAct(pd, act) {
+        if (!pd.obId)
+            return;
+        try {
+            await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/outbox/${pd.obId}/${act}`, { method: 'POST', body: '{}' });
+            if (act === 'discard') {
+                const i = pending.indexOf(pd);
+                if (i >= 0)
+                    pending.splice(i, 1);
+                pd.t.root.remove();
+                const ri = recs.findIndex((r) => r.t === pd.t);
+                if (ri >= 0)
+                    recs.splice(ri, 1);
+            }
+            else {
+                pd.state.textContent = QSTATE_TEXT.queued;
+                view.running(pd.t);
+            }
+            void syncOutbox();
+        }
+        catch (e) {
+            toast(e?.message || '처리하지 못했습니다.');
+        }
+    }
+    /** 서버 큐와 화면을 맞춘다 — 몰랐던 행(다른 탭·홈 첫 지시)은 턴으로 올리고, 아는 행은 상태 줄만 갱신. */
+    async function syncOutbox() {
+        if (destroyed || !isBox || target.node)
+            return;
+        let items = [];
+        try {
+            items = (await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/outbox`)).items || [];
+        }
+        catch {
+            return;
+        }
+        for (const row of items) {
+            let pd = pending.find((x) => x.obId === row.id) || pending.find((x) => !x.obId && flat(x.text) === flat(String(row.text)));
+            if (!pd)
+                pd = addPending(String(row.text), Number(row.id));
+            pd.obId = Number(row.id);
+            paintQState(pd, row);
+        }
+        for (const pd of pending)
+            if (pd.obId && !items.some((r) => Number(r.id) === pd.obId))
+                paintQState(pd, null);
+        if (pending.some((x) => x.obId))
+            watchOutbox();
+        else
+            stopWatchOutbox();
+    }
+    function watchOutbox() {
+        if (outboxTimer || destroyed)
+            return;
+        outboxTimer = window.setInterval(() => { if (!document.hidden)
+            void syncOutbox(); }, 3000);
+    }
+    function stopWatchOutbox() { if (outboxTimer) {
+        clearInterval(outboxTimer);
+        outboxTimer = null;
+    } }
     function applyText(text) {
         const chunk = carry + text;
         const lines = chunk.split('\n');
@@ -380,29 +515,25 @@ export function mountSessionChat(host, first, opts) {
             // 홈 입력창이 방금 연 세션 — 첫 지시는 서버가 넣는 중이다. '아직 없음' 대신 그 턴을 도는 모양으로 먼저 그린다.
             //  하네스 부팅(수 초)+신뢰 대화상자를 지나 파일에 내 말이 나타나면 applyLine 이 이 턴을 재사용한다. 오래 안 나타나면 말한다.
             if (notYet && firstPrompt && canType() && !target.node) {
-                const rec = newRec(firstPrompt, new Date().toISOString());
-                pendingSent = { text: firstPrompt, t: rec.t };
-                cur = rec;
-                running = true;
-                firstPrompt = null;
-                view.running(rec.t);
-                view.busy(true);
+                addPending(firstPrompt);
+                firstPrompt = null; // 서버 큐(createSession 가 enqueue)가 곧 obId 를 붙인다(syncOutbox)
                 view.scrollToBottom();
                 view.setNote('세션을 여는 중이에요 — AI 가 뜨면 첫 지시가 들어갑니다.');
-                const t0 = rec.t;
-                window.setTimeout(() => { if (!destroyed && pendingSent && pendingSent.t === t0)
-                    view.setNote('아직 첫 지시가 기록에 나타나지 않았어요 — 로그인이나 확인 대화상자에 멈춰 있을 수 있어요(터미널을 확인해 보세요).'); }, 60000);
                 paintState();
                 src = { kind: 'box', id: target.id };
                 schedule();
+                void syncOutbox();
                 return;
             }
+            // ⚠ 압축(Compacting) 탓을 하지 않는다 — 압축은 새 uuid 파일로 이어지고 폴링이 그 전환을 따라간다(아래 poll()). 여기 닿는
+            //  '기록 없음'의 실제 원인은 대부분 ① 방금 연 세션(하네스 부팅 전) ② 로그인·신뢰 대화상자에 멈춤 — 둘 다 **터미널에만 보인다**.
+            //  그래서 문구가 터미널을 가리키고, 버튼도 이 경우에 항상 둔다(막다른 안내 금지 — 확인할 길을 같이 준다).
             const msg = !tries.length ? '이 세션의 대화 id 를 아직 몰라 여기서 읽을 수 없어요 — 첫 턴이 끝나면 중앙 기록으로 보입니다. 지금은 터미널로 보세요.'
-                : notYet ? (canType() ? '아직 대화 기록이 없어요 — 방금 열렸거나 맥락을 정리(압축)하는 중일 수 있어요. 기록이 생기면 바로 여기 보입니다.' : '이 세션의 대화 기록을 찾지 못했어요.')
+                : notYet ? (canType() ? '아직 대화 기록이 없어요. 세션이 방금 떴다면 곧 여기 보이고, 계속 비어 있으면 로그인·확인 대화상자에 멈춰 있는 것일 수 있어요 — 터미널로 확인해 보세요.' : '이 세션의 대화 기록을 찾지 못했어요.')
                     : unreadable ? String(lastErr.message)
                         : lastErr?.status === 409 ? '이 세션의 대화 파일은 그 컴퓨터에 있어 여기서 바로 읽지 못해요. 첫 턴이 끝나면 중앙 기록으로 보입니다.'
                             : `대화 기록을 불러오지 못했습니다. ${lastErr?.message || ''}`;
-            view.list.append(el('div', { class: 'livc-open sc-empty' }, el('p', { text: msg }), !notYet && opts.terminalSrc && isBox ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '터미널로 보기', onclick: () => toggleTerminal(true) }) : null));
+            view.list.append(el('div', { class: 'livc-open sc-empty' }, el('p', { text: msg }), opts.terminalSrc && isBox ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '터미널로 보기', onclick: () => toggleTerminal(true) }) : null));
             paintState();
             // 라이브 박스면 파일이 생기는 순간을 잡는다(사람이 터미널에서 먼저 말을 걸 수도 있다) — 첫 대화 뒤에 여기로 흘러든다.
             //  못 읽는 하네스면 기다려도 안 온다 — 폴링하지 않는다(보내기는 된다: 주입은 tmux 라 하네스 무관).
@@ -410,6 +541,7 @@ export function mountSessionChat(host, first, opts) {
                 src = { kind: 'box', id: target.id };
                 schedule();
             }
+            void syncOutbox(); // ⚠ 기록이 아직 없어도 큐엔 내 말이 있을 수 있다(다른 탭에서 보냄·막힌 세션) — 대기 말풍선을 되살린다
             return;
         }
         loadedFrom = chunk.from;
@@ -422,6 +554,7 @@ export function mountSessionChat(host, first, opts) {
         finishReplay();
         view.scrollToBottom();
         paintState();
+        void syncOutbox(); // 큐에 남은 내 말(다른 탭·홈 첫 지시·재시작 전) — 새로고침에도 대기 말풍선으로 되살아난다
         schedule();
     }
     function finishReplay() {
@@ -723,23 +856,24 @@ export function mountSessionChat(host, first, opts) {
             toast('끝난 세션이에요 — [이어서 대화하기]로 새 세션을 열어 보내세요.');
             return;
         }
-        // 낙관적으로 그린다 — 파일에 내 말이 나타나면 그 턴을 재사용한다(applyLine). 안 나타나면 5초 뒤 알린다.
+        // 낙관적으로 그리고 **서버 큐에 넣는다**(#1753). 배달자가 입력창을 확인하고 넣고 에코로 delivered 를 확정한다 —
+        //  로그인·대화상자에 멈춘 세션이어도 유실되지 않고, 새로고침해도 큐에서 되살아난다. 미제출 Enter 재시도도 배달자 몫.
         view.removeOpening();
         view.list.querySelector('.sc-empty')?.remove();
-        const rec = newRec(text, new Date().toISOString());
-        pendingSent = { text, t: rec.t };
-        cur = rec; // 이제부터 오는 AI 줄은 이 턴의 것이다(옛 턴에 붙지 않게)
-        view.running(rec.t);
-        view.busy(true);
+        const pd = addPending(text);
         view.scrollToBottom();
-        running = true;
         try {
-            await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/prompt`, { method: 'POST', body: JSON.stringify({ text }) });
+            const r = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/prompt`, { method: 'POST', body: JSON.stringify({ text }) });
+            if (r?.outbox_id)
+                pd.obId = Number(r.outbox_id);
             view.setNote('');
-            if (!caps().read) { // 보내기는 됐지만(주입은 tmux 라 하네스 무관) 답은 여기 안 온다(파서 전) — 도는 척 두지 않고 그 자리에 말한다
-                pendingSent = null;
+            if (!caps().read) { // 큐엔 들어갔지만(배달자가 전달) 답은 여기 안 온다(파서 전) — 도는 척 두지 않고 그 자리에 말한다
+                const i = pending.indexOf(pd);
+                if (i >= 0)
+                    pending.splice(i, 1);
+                pd.state.textContent = '';
                 running = false;
-                view.settle(rec.t);
+                view.settle(pd.t);
                 view.busy(false);
                 view.setNote('보냈어요 — 이 하네스의 답은 아직 여기 안 보여요. 터미널로 보세요.');
                 return;
@@ -748,21 +882,17 @@ export function mountSessionChat(host, first, opts) {
                 src = { kind: 'box', id: target.id };
             }
             schedule();
-            // 주입은 tmux send-keys 라 TUI 가 글자를 다 받기 전에 Enter 가 닿으면 **입력칸에 글만 남고 미제출**이 된다(send-keys.ts 규약 ②,
-            //  실측 2026-08-18: 두 번째 프롬프트가 그렇게 남았다). 기록에 내 말이 안 나타나면 Enter 만 한 번 더 보낸다 — 이미 제출됐으면
-            //  빈 입력칸에 Enter 라 아무 일도 없고, 남아 있었으면 그때 제출된다. 그래도 안 되면 사람에게 말한다(터미널을 보라고).
-            const stillPending = () => !!pendingSent && pendingSent.t === rec.t && !destroyed;
-            window.setTimeout(() => { if (stillPending() && canKeys())
-                void sendKey('approve', true); }, 5000);
-            window.setTimeout(() => { if (stillPending())
-                view.setNote('보냈지만 아직 세션 기록에 나타나지 않았어요 — 세션이 다른 대화상자에 멈춰 있을 수 있어요(터미널을 확인해 보세요).'); }, 12000);
+            void syncOutbox();
         }
         catch (e) {
-            pendingSent = null;
+            const i = pending.indexOf(pd);
+            if (i >= 0)
+                pending.splice(i, 1);
+            pd.state.remove();
             running = false;
-            view.settle(rec.t);
+            view.settle(pd.t);
             view.busy(false);
-            view.error(rec.t, `보내지 못했습니다. ${e?.message || ''}`);
+            view.error(pd.t, `보내지 못했습니다. ${e?.message || ''}`);
             view.input.value = text; // 친 글은 돌려준다
         }
     }
@@ -834,6 +964,6 @@ export function mountSessionChat(host, first, opts) {
             }
         },
         destroy() { destroyed = true; if (pollTimer)
-            clearTimeout(pollTimer); view.destroy(); },
+            clearTimeout(pollTimer); stopWatchOutbox(); view.destroy(); },
     };
 }

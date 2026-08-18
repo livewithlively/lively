@@ -22,7 +22,7 @@ import { registerTerminalFiles } from "./terminal-files.js";
 import { listMembers, getRuntimeConfig } from "../org/store.js";
 import { isProjectSessionDir } from "../project/project-fs.js";
 // 분산 노드(#869) — 원격 노드 세션의 목록 병합·CRUD 위임. 정책(소유·초대 검증)은 여기, 실행은 노드(F7).
-import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, liveNodes } from "../node/registry.js";
+import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, liveNodes, nodeOfSession } from "../node/registry.js";
 import type { NodeOp } from "../node/protocol.js";
 import { getNode, listNodes } from "../node/store.js";
 import { nodeHarnesses } from "../node/protocol.js";   // #1713 — 노드별 하네스 가용성(미보고 → 기준선)
@@ -31,7 +31,7 @@ import { translateNodeRpcError } from "../node/rpc-error.js";
 import { registerNodeRoutes } from "../node/routes.js";
 import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
 import { registerSessionProjectRoutes } from "./session-project-routes.js";   // #1719 — 세션 프로젝트 소속 바꾸기(홈 입력창 세션)
-import { claudeSessionIdsFor } from "../sessions/session-state.js";   // #1719 — 라이브 행에 대화 uuid
+import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑
 import { chatIoCaps } from "./harness-io/adapter.js";                 // #1746 — 행에 대화창 능력(읽기·승인)
 
 // 노드 op 실패를 사용자에게 그대로 보여준다 — 노드측 예외(예: tmux 미설치 → spawn ENOENT)가 generic 500("internal_error")
@@ -242,6 +242,13 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       const map = await claudeSessionIdsFor(local.map((s) => s.id));
       for (const s of local) { const u = map.get(s.id); if (u) s.claudeSessionId = u; }
     } catch { /* 미러 조회 실패 — uuid 없이 나간다(화면은 '기록 없음'으로 다룬다) */ }
+    // #1752 갭2 — 노드 세션 행에도 대화 uuid 를 싣는다(org_node_session_map — /claude-uuid 노드 분기가 채움).
+    //  이 값이 실려야 새 셸 채팅창이 노드 세션을 중앙 기록(v6/sessions/:uuid/log)으로 읽고, 같은 기록 행과 한 장으로 접힌다.
+    //  매핑의 node_id 와 지금 행의 노드가 다르면 버린다(노드 재등록·이름 재사용으로 남은 낡은 매핑 오염 방지).
+    try {
+      const nmap = await nodeSessionMapFor(remote.map((s) => s.id));
+      for (const s of remote) { const m = nmap.get(s.id); if (m && m.node_id === s.node.id) s.claudeSessionId = m.conv_uuid; }
+    } catch { /* 조회 실패 — uuid 없이 나간다 */ }
     // #1746 — 하네스별 대화창 능력(읽기·승인)을 행에 싣는다. 화면이 없는 능력의 버튼을 두지 않게(정직한 표면).
     for (const s of [...local, ...localRestorable, ...remote]) s.chat = chatIoCaps(s.harness);
     // 같은 세션이 두 출처에 잡히면 카드 1장으로 접는다(#1716) — 인자 순서가 곧 우선순위(라이브 관측 > 기억).
@@ -343,6 +350,15 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     } else if (!(await canAttach(req.params.id, uid))) {
       throw new HttpError(403, "세션에 접근할 수 없습니다");
     }
+    if (!nodeId) {
+      // 이 박스 세션 — 아웃박스(#1753)로. 곧바로 send-keys 하지 않는다: 로그인·대화상자에 멈춘 세션이면 글자가 조용히
+      //  사라진다(실측). 배달자가 입력창을 확인하고 넣고, 트랜스크립트 에코로 delivered 를 확정한다. 화면은 seq 로 상태를 따라간다.
+      const { enqueuePrompt } = await import("../sessions/session-outbox.js");
+      const q = await enqueuePrompt(req.params.id, text);
+      res.json({ ok: true, queued: true, outbox_id: q.id, seq: q.seq });
+      return;
+    }
+    // 노드(멤버 PC) 세션 — 파일·tmux 가 그 컴퓨터에 있어 아웃박스 배달자가 닿지 않는다. 종전 릴레이 그대로(후속 #1753 P2).
     const { injectPrompt } = await import("../node/session-inject.js");
     try { await injectPrompt(req.params.id, text); }
     catch (e) {
@@ -599,8 +615,16 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     if (!uuid || uuid.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(uuid)) throw new HttpError(400, "uuid 형식 오류");
     const tp = typeof body.transcript_path === "string" ? body.transcript_path.trim() : "";
     const transcriptPath = tp && tp.length <= 1024 && !tp.includes("\0") && (tp.startsWith("/") || /^[A-Za-z]:[\\/]/.test(tp)) ? tp : null;
-    const ok = await setClaudeSessionId(req.params.id, uuid, idOf(userOf(req)), transcriptPath);
-    res.json({ ok }); // ok=false: 그 box 의 소유자가 아니거나 desired-state 레코드 없음(무해)
+    let ok = await setClaudeSessionId(req.params.id, uuid, idOf(userOf(req)), transcriptPath);
+    // #1752 갭2 — 노드 세션은 org_session_state 행이 없어 위가 0행이다. 그 세션이 지금 어느 노드의 것인지
+    //  레지스트리(3s push 스냅샷)로 확인되면 전용 매핑(org_node_session_map)에 남긴다 — 이 uuid 가 곧
+    //  중앙 세션 기록(session_log)의 키라, 매핑이 있어야 채팅창이 노드 오프라인에도 기록을 읽는다.
+    //  노드 미확인(스냅샷 지연·게이트웨이 재시작 직후)이면 이번 보고는 버린다 — 훅이 매 턴 다시 보고한다(재시도 무료).
+    if (!ok) {
+      const nodeId = nodeOfSession(req.params.id);
+      if (nodeId) ok = await setNodeSessionMap(req.params.id, nodeId, uuid, idOf(userOf(req)), transcriptPath).catch(() => false);
+    }
+    res.json({ ok }); // ok=false: 그 box 의 소유자가 아니거나, 박스 레코드도 노드 스냅샷도 없음(무해 — 다음 보고가 잇는다)
   }));
 
   // #1059 — claude SessionEnd 훅이 **사용자 정상 종료**(/exit·Ctrl-D=prompt_input_exit, logout)를 보고한다. 이 표시가 찍힌

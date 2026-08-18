@@ -43,6 +43,24 @@ import { logger } from "../log.js";
 //  배경(왜 게이트인가)은 'scheduler' 스텝 원문 주석 참조.
 const schedulerEnabled = (): boolean => process.env.LIVELY_NO_SCHEDULER !== "1";
 
+/**
+ * 이 프로세스가 **여러 워크스페이스를 요청별로** 서비스하는가(#1437 v1 5단계).
+ *
+ * ★★ 그런 프로세스에서는 부팅 하우스키핑을 **돌리면 안 된다.** 이 스텝들은 전부 "이 프로세스의
+ *  워크스페이스" 하나를 전제로 DB 를 만지는데, 요청 밖이라 테넌트 컨텍스트가 없다. 그러면
+ *  `42704 unrecognized configuration parameter "app.tenant_id"` 로 매 tick 실패한다
+ *  (실측: 시딩·로그 재니터·prune·위탁 스케줄러가 전부 그랬다).
+ *
+ *  조용히 넘기지 않고 **아예 안 도는** 것이 맞다: 워크스페이스마다 돌려야 하는 일이고, 그건
+ *  요청 서버가 아니라 **별도 러너**의 몫이다. 여기서 억지로 한 테넌트를 골라 돌리면
+ *  "누구의 것인지 모르는 정리 작업"이 된다.
+ *
+ * 판정: 바인딩이 rls 인데 고정 테넌트가 없다 = 요청별 모드.
+ */
+const requestScopedTenancy = (): boolean =>
+  (process.env.LIVELY_TENANT_BINDING || "").trim().toLowerCase() === "rls"
+  && !(process.env.LIVELY_TENANT_ID || "").trim();
+
 // 저장소·감사로그 정책 로더는 org/policies/runtime-loaders 로 수렴(#1313 R46 — terminal/sessions.ts 의 인라인
 //  람다와 byte-identical 복붙이었다). index.ts 가 여기서 loadStoragePolicy 를 받아가므로 재수출로 표면을 유지한다.
 export { loadStoragePolicy };
@@ -196,6 +214,9 @@ function startBackgroundSweeps(): void {
   //   라이브 38건 중 19건이 레코드 없음 = 회수 면역). 판정 시각은 tmux 메타(작업·열람)를 그대로 쓰므로
   //   갓 백필한 세션이 곧바로 회수되지는 않는다(활동이 최근이면 보존).
   setInterval(() => {
+    void import("../sessions/session-outbox.js")
+      .then(({ resumeOutbox }) => resumeOutbox())
+      .catch((err) => logger.warn({ err }, "outbox 재개 실패(비치명 — 다음 enqueue 가 kick)"));
     void backfillSessionStates()
       .catch((err) => logger.warn({ err }, "session-state 백필 tick 실패"))
       .then(() => reapIdleSessions())
@@ -211,10 +232,15 @@ function startBackgroundSweeps(): void {
 //  스키마 순서 규약(직렬 체인 이유)은 boot/schemas.ts 참조. listen 성공 후 실행 불변식 유지.
 export function runBootHousekeeping(ctx: BootContext): void {
   for (const step of LISTEN_STEPS) {
-    if (step.gate === "scheduler" && !schedulerEnabled()) continue;
+    if (step.gate === "scheduler" && (!schedulerEnabled() || requestScopedTenancy())) continue;
     void step.run(ctx);
   }
   if (!process.env.ITEMS_DATABASE_URL) return;
+  // ★★ 요청별 테넌시에서는 DB 부팅 체인을 통째로 건너뛴다(requestScopedTenancy 머리말).
+  if (requestScopedTenancy()) {
+    logger.info("부팅 하우스키핑 건너뜀 — 이 프로세스는 요청별로 여러 워크스페이스를 서비스한다");
+    return;
+  }
   (async () => {
     for (const step of DB_BOOT_STEPS) {
       if (step.gate === "scheduler" && !schedulerEnabled()) continue;

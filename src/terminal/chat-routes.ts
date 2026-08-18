@@ -92,6 +92,12 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     const want = String(req.query.uuid ?? "").trim();
     if (want && !/^[A-Za-z0-9._-]{1,128}$/.test(want)) throw new HttpError(400, "uuid 형식 오류");
     const uuid = want || mapped;
+    //  매핑이 없으면 **404 가 정답이다 — cwd 규약 폴더를 훑어 최신 파일을 집지 않는다**(#1719 회귀, 3b36df18 되돌림).
+    //  대화 파일엔 어느 박스의 것인지가 안 적혀 있고(claude jsonl 은 자기 conv uuid 만 안다), 폴더는 cwd 로만 갈려
+    //  프로젝트 폴더 하나를 세션 여럿이 공유한다 — mtime 최신은 '내 대화'가 아니라 '지금 제일 시끄러운 세션'이다.
+    //  실측(2026-08-18 dev): 그렇게 집었더니 남의 세션 대화가 폴링마다 갈아끼워져 한 화면에 쏟아지고(화면은 uuid 변화를
+    //  압축 경계로 읽어 매번 파일 전체를 되읽는다) transcript 요청이 분당 200건을 넘었다. 박스↔대화 결합을 아는 곳은
+    //  세션 **안에서** 도는 훅뿐이다(work-flag → POST …/claude-uuid, 실패해도 60초 뒤 다음 툴 사용에 재시도).
     if (!uuid) throw new HttpError(404, "이 세션의 대화 id 를 아직 모릅니다(첫 대화가 오가면 생깁니다).");
     const harness = await harnessOf(id, st?.harness);
     const io = harnessIo(harness);
@@ -142,5 +148,35 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     await sendKeyToSession(id, key);
     res.setHeader("Cache-Control", "no-store");
     res.json({ ok: true, action, key });
+  }));
+
+  // ── 아웃박스(#1753) — 이 세션의 전달 대기·실패 프롬프트. 화면이 대기 말풍선(새로고침 생존)과 재시도·삭제를 그린다. ──
+  //  게이트 = transcript 와 동일(gateRead — 입장할 수 있으면 어차피 터미널에서 볼 수 있는 내용이다).
+  app.get("/api/ui/terminal/sessions/:id/outbox", auth, wrap(async (req, res) => {
+    const id = String(req.params.id ?? "");
+    if (!/^[A-Za-z0-9._-]{1,128}$/.test(id)) throw new HttpError(400, "세션 id 형식 오류");
+    await gateRead(id, req);
+    const { listOutbox } = await import("../sessions/session-outbox.js");
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ items: await listOutbox(id) });
+  }));
+  //  재시도·삭제는 **보내기와 동급 게이트**(canAttach) — 큐를 움직이는 건 세션에 입력하는 것과 같은 행동이다.
+  app.post("/api/ui/terminal/sessions/:id/outbox/:oid/retry", auth, wrap(async (req, res) => {
+    const id = String(req.params.id ?? "");
+    if (!/^[A-Za-z0-9._-]{1,128}$/.test(id)) throw new HttpError(400, "세션 id 형식 오류");
+    if (!(await canAttach(id, idOf(userOf(req))))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    const oid = Number(req.params.oid);
+    if (!Number.isFinite(oid) || oid <= 0) throw new HttpError(400, "outbox id 형식 오류");
+    const { retryOutbox } = await import("../sessions/session-outbox.js");
+    res.json({ ok: await retryOutbox(id, oid) });
+  }));
+  app.post("/api/ui/terminal/sessions/:id/outbox/:oid/discard", auth, wrap(async (req, res) => {
+    const id = String(req.params.id ?? "");
+    if (!/^[A-Za-z0-9._-]{1,128}$/.test(id)) throw new HttpError(400, "세션 id 형식 오류");
+    if (!(await canAttach(id, idOf(userOf(req))))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    const oid = Number(req.params.oid);
+    if (!Number.isFinite(oid) || oid <= 0) throw new HttpError(400, "outbox id 형식 오류");
+    const { discardOutbox } = await import("../sessions/session-outbox.js");
+    res.json({ ok: await discardOutbox(id, oid) });
   }));
 }

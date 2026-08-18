@@ -36,9 +36,11 @@ let creating = false;
 export function isCreatingQuickSession(): boolean { return creating; }
 
 /**
- * 프로젝트 없는 세션을 열고 그 화면으로 간다. 실패하면 toast 로 이유를 말하고 false(입력은 호출자가 돌려준다).
+ * 세션을 열고 그 화면으로 간다. 실패하면 toast 로 이유를 말하고 false(입력은 호출자가 돌려준다).
+ *  opts.projectId — 홈 런처가 고른 행선지(#1719). 생성 API 는 프로젝트를 받지 않으므로(catalog 계약: 소속은 나중에)
+ *  만들고 나서 POST /sessions/:id/project 로 붙인다. 붙이기가 실패해도 세션은 유효하다 — 말하고 계속 간다.
  */
-export async function openQuickSession(text: string): Promise<boolean> {
+export async function openQuickSession(text: string, opts?: { projectId?: number | null; projectName?: string }): Promise<boolean> {
   const t = String(text || '').trim();
   if (!t || creating) return false;
   creating = true;
@@ -55,6 +57,11 @@ export async function openQuickSession(text: string): Promise<boolean> {
     const id = out && out.session && out.session.id ? String(out.session.id) : '';
     if (!id) throw new Error('세션 id 를 받지 못했습니다');
     firstPrompts.set(id, t);
+    const pid = opts && opts.projectId ? Number(opts.projectId) : 0;
+    if (pid > 0) {
+      try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(id) + '/project', { method: 'POST', body: JSON.stringify({ projectId: pid }) }); }
+      catch (e: any) { toast(`세션은 열렸는데 「${opts?.projectName || '프로젝트'}」에 붙이지 못했어요 — 우측 '이 세션'에서 다시 붙일 수 있어요. (${e && e.message ? e.message : e})`, true); }
+    }
     location.hash = '#/s/' + encodeURIComponent(id);
     return true;
   } catch (e: any) {

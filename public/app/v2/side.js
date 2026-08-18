@@ -14,6 +14,7 @@ import { el, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTim
 import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls } from './views.js';
+import { switcherTop } from './switcher.js';
 const CLOSED_KEY = 'lively_v2_closed'; // 사용자가 직접 접은 프로젝트 — 살아 있는 세션이 있으면 기본이 '펼침'이라 '접음'만 기억하면 된다
 const DONE_KEY = 'lively_v2_side_done'; // '1' = 완료 프로젝트도 보인다(필터 풀림)
 const MINE_KEY = 'lively_v2_side_mine'; // '1' = 내 프로젝트만
@@ -62,6 +63,58 @@ function init() {
 }
 /** 살아 있는 세션 = 사이드바에 보이는 세션. 라이브 박스이고 끝나지 않은 것(중단됨·종료됨 제외). 기록만 남은 대화는 아니다. */
 const isLive = (s) => s.live && s.alive;
+const norm = (s) => s.replace(/\s+/g, ' ').trim().toLowerCase();
+// 하네스가 pane 제목에 자기 이름만 써 둔 것 — '지금 하는 일'이 아니다(정보 0).
+const HARNESS_TITLES = new Set(['claude code', 'claude', 'codex', 'opencode', 'antigravity', 'grok', 'shell', 'bash', 'zsh', 'tmux', 'node']);
+// 기계가 붙인 세션 이름 — 사람이 읽을 게 없다('이어보기 · 3e1ca8f2', '위탁 #t501ac…').
+const isMachineLabel = (s) => /^이어보기\s*[·:]/.test(s) || /^위탁\s*#/.test(s);
+/** 이 이름이 프로젝트명의 되풀이인가. 세 모양을 다 잡는다(실측):
+ *   ① 그대로              "APP. lvly. io 셀프서브 방식 와이어프레임"
+ *   ② 만들 때 잘린 것      "라이블리 키트, cli, 노드 등록을 지금 다 cli에서 해야하는데, 이거 윈도…"(프로젝트명의 앞부분)
+ *   ③ 조각만 이어붙인 변형  "app.lvly.io 와이어프레임" ⊂ "APP. lvly. io 셀프서브 방식 와이어프레임"
+ *  ③은 글자·숫자만 남긴 뒤 공통 앞머리 + 공통 꼬리가 이름 전체를 덮으면 되풀이로 본다(우연 일치를 막으려 6자 미만은 제외). */
+function echoesProject(label, proj) {
+    const a = norm(label);
+    const b = norm(proj);
+    if (!a || !b)
+        return false;
+    if (a === b || b.startsWith(a) || a.startsWith(b))
+        return true;
+    const ca = a.replace(/[^\p{L}\p{N}]/gu, '');
+    const cb = b.replace(/[^\p{L}\p{N}]/gu, '');
+    if (ca.length < 6 || !cb)
+        return false;
+    let head = 0;
+    while (head < ca.length && head < cb.length && ca[head] === cb[head])
+        head++;
+    let tail = 0;
+    while (tail < ca.length - head && tail < cb.length - head && ca[ca.length - 1 - tail] === cb[cb.length - 1 - tail])
+        tail++;
+    return head + tail >= ca.length;
+}
+/** 세션 행에 쓸 글 — ★프로젝트명 반복을 걷어낸다.
+ *  프로젝트에서 연 세션은 이름이 **프로젝트명 그대로**인 게 대다수(dev 실측 2026-08-18: 25건 중 14건) — 그 이름은 바로 위
+ *  프로젝트 행이 이미 말하고 있다. 같은 제목이 한 화면에 대여섯 번 반복돼 목록이 통째로 안 읽히던 원인이라 지운다.
+ *  대신 하네스가 pane 제목에 써 두는 '지금 하는 일'이 그 자리를 받는다 — 실제로 세션을 구분해 주던 건 그 줄이었다.
+ *  이름이 따로 있는 세션(사람이 지은 것)만 두 줄이 된다. 원래 이름은 툴팁에 남는다(정보를 버리지는 않는다). */
+function sessText(s, projName) {
+    const label = String(s.label || '').trim();
+    const work = String((s.raw && s.raw.title) || '').trim();
+    let name = label;
+    // '프로젝트명 + 꼬리'(예: "… 와이어프레임 - 3열")면 꼬리만 남기고, 그 밖의 되풀이는 통째로 지운다.
+    if (projName && label.startsWith(projName))
+        name = label.slice(projName.length).replace(/^[\s·:\-–—_/|]+/, '').trim();
+    if (projName && name && echoesProject(name, projName))
+        name = '';
+    if (isMachineLabel(name))
+        name = '';
+    const job = work && !HARNESS_TITLES.has(norm(work)) && norm(work) !== norm(name) ? work : '';
+    if (name && job)
+        return { main: name, sub: job };
+    if (name || job)
+        return { main: name || job, sub: '' };
+    return { main: label || String((s.raw && s.raw.harness) || '') || '이름 없는 세션', sub: '' };
+}
 const rankOf = (k) => (SESS_STATES[k] ? SESS_STATES[k].rank : 9);
 const bySeen = (a, b) => rankOf(a.stateKey) - rankOf(b.stateKey) || b.lastSeen - a.lastSeen;
 const when = (ms) => (ms ? relTime(new Date(ms).toISOString()) : '');
@@ -144,7 +197,7 @@ function render() {
             treeEl.scrollTop = 0; } });
     const doneCount = rows.filter((r) => r.done).length;
     const fltN = (stateFilter ? 1 : 0) + (mineOnly ? 1 : 0) + (showDone ? 1 : 0);
-    host.replaceChildren(el('div', { class: 'v2-side-top' }, el('a', { class: 'v2-logo', href: '#/', title: '홈으로', 'data-nav': 'home' }, 'Lively', el('span', { class: 'pulse-dot', 'aria-hidden': 'true' }))), 
+    host.replaceChildren(switcherTop(), // 좌상단 워크스페이스 스위처(#1750) — 홈 워드마크 + 개인/팀 배지·전환·연결 메뉴
     // ⚠ replaceChildren 은 null 을 글자 "null" 로 그린다(el() 과 다르다) — 조건부 자식은 스프레드로.
     ...(livOn ? [el('a', { class: 'v2-liv-btn' + (last.activeKey() === 'liv' ? ' on' : ''), href: '#/liv', 'data-nav': 'liv' }, el('span', { class: 'lm', text: 'L' }), el('span', { text: '리브' }), el('span', { class: 'sub', text: '워크스페이스 담당자' }))] : []), el('div', { class: 'v2-side-sec' }, countEl, filterBtn(fltN, liveAll, doneCount), el('a', { class: 'v2-add', href: '#/projects2', text: '+ 새 프로젝트', title: '프로젝트 앱(보드)에서 만듭니다' })), el('div', { class: 'v2-find' }, findIn), ...(fltN ? [filterSummary(fltN)] : []), treeEl, el('div', { class: 'v2-side-foot' }, el('button', { class: 'v2-apps-btn', type: 'button', onclick: () => openLaunchpad(), title: '앱 — 아직 새 화면으로 옮기지 않은 것들' }, appIcon('proj', 'v2-apps-ic'), el('span', { text: '앱' }), el('span', { class: 'v2-cnt', text: String(visibleApps().length) })), el('div', { class: 'v2-me' }, profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }), el('span', { class: 'v2-me-name', text: name }), el('button', { class: 'btn-text', type: 'button', text: '로그아웃', onclick: () => void logout() })), el('button', { class: 'v2-classic-link', type: 'button', text: '클래식 화면으로 (이 브라우저)', title: '이 브라우저에서만 옛 화면으로 봅니다. 관리탭 [화면] 에서 되돌릴 수 있어요.', onclick: () => { setUiModeOverride('classic'); location.replace(location.pathname + '#/dashboard'); location.reload(); } })));
     renderTree(rows);
@@ -261,7 +314,8 @@ function projRow(r, sess, activeKey) {
         : ['프로젝트에 붙지 않은 세션 — AI 세션 앱에서 전부 봅니다'];
     // 이름은 언제나 같은 잉크색이다 — 완료·조용함은 태그·시각이 말한다(연회색 본문이 목록 절반이면 전체가 바래 보인다).
     const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : ''), href, 'data-nav': p ? pk : 'app:terminal', title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') + '\n프로젝트 화면을 엽니다' }, caret, glyph('folder', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }), r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null, sess.length ? sumEl(sess) : (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null));
-    const list = sess.length ? el('div', { class: 'v2-ss-list', role: 'group', hidden: !isOpen }, ...sess.slice(0, MAX_SESS).map((s) => sessRow(s, activeKey)), sess.length > MAX_SESS ? el('a', { class: 'v2-ss-more', href, text: `외 ${sess.length - MAX_SESS}개` }) : null) : null;
+    const head = sess.slice(0, MAX_SESS);
+    const list = sess.length ? el('div', { class: 'v2-ss-list', role: 'group', hidden: !isOpen }, ...head.map((s) => sessRow(s, activeKey, sessText(s, p ? p.name : ''))), sess.length > MAX_SESS ? el('a', { class: 'v2-ss-more', href, text: `외 ${sess.length - MAX_SESS}개` }) : null) : null;
     return el('div', { class: 'v2-pj' + (isOpen ? ' open' : ''), role: 'treeitem', 'aria-expanded': sess.length ? String(isOpen) : null }, row, list);
 }
 // 프로젝트 행 오른쪽 — 숫자를 늘어놓지 않는다. **볼 일이 있는 것만**: 확인 필요(호박)·작업 중(파랑).
@@ -281,16 +335,19 @@ function sumEl(sess) {
     const part = (n, cls, label) => (n ? el('span', { class: 'v2-sum ' + cls, title: `${label} ${n}` }, el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }), String(n)) : null);
     return el('span', { class: 'v2-sums', 'aria-label': `세션 ${sess.length}` }, part(c.wait, 'wait', '확인 필요'), part(c.busy, 'busy', '작업 중'), (!c.wait && !c.busy && c.rest) ? el('span', { class: 'v2-sum idle', title: `살아 있는 세션 ${c.rest}` }, String(c.rest)) : null);
 }
-// 세션 행 — 상태점 · 이름(+ 아래에 '지금 하는 일' 한 줄) · 남의 세션이면 소유자 얼굴 · 상태어.
-function sessRow(s, activeKey) {
+// 세션 행 — 상태점 · 세션을 실제로 구분해 주는 글(sessText) · 남의 세션이면 소유자 얼굴 · 상태어.
+function sessRow(s, activeKey, text) {
     const st = SESS_STATES[s.stateKey];
     const cls = dotCls(s.stateKey);
     const raw = s.raw || {};
     const owner = ownerName(s);
-    // '지금 하는 일'(하네스가 pane 제목에 써 두는 요약, 클래식 카드의 💬 줄) — 이름과 다를 때만 둘째 줄로. 세션 이름이 프로젝트명 그대로인 게 많아
-    //  이 줄이 사실상 세션을 구분해 준다. 끝난 세션은 트리에 없으니 '마지막으로 하던 일'로 읽어도 틀리지 않는다.
-    const sub = raw.title && String(raw.title) !== s.label ? String(raw.title) : '';
-    const tip = [s.label, `${st ? st.label : s.stateLabel}${s.lastSeen ? ' · ' + when(s.lastSeen) : ''}`, s.owned ? '내 세션' : `${owner}의 세션`, raw.harness ? String(raw.harness) : '', s.node ? '노드 ' + s.node : ''].filter(Boolean).join('\n');
-    const showWord = s.stateKey === 'waiting' || s.stateKey === 'busy'; // 상태어는 지금 볼 일이 있는 것만 — 나머지는 점이 말한다
-    return el('a', { class: 'v2-ss-row' + (activeKey === 's:' + s.id ? ' on' : '') + (s.owned ? '' : ' other'), href: '#/s/' + encodeURIComponent(s.id), 'data-nav': 's:' + s.id, title: tip + '\n세션 대화를 엽니다', role: 'treeitem' }, el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }), el('span', { class: 'v2-ss-main' }, el('span', { class: 't', text: s.label }), sub ? el('span', { class: 'sub', text: sub }) : null), s.owned ? null : personFace(String(raw.owner || ''), 'v2-ss-face', owner), showWord ? el('span', { class: 'w ' + cls, text: st ? st.label : s.stateLabel }) : glyph('chat', 'v2-ss-go'));
+    // 프로젝트명 반복을 걷어낸 뒤의 이름·'지금 하는 일'(하네스 pane 제목 = 클래식 카드의 💬 줄).
+    //  끝난 세션은 트리에 없으니 '마지막으로 하던 일'로 읽어도 틀리지 않는다.
+    const main = text.main;
+    const sub = text.sub;
+    const tip = [s.label, raw.title && String(raw.title) !== s.label ? String(raw.title) : '', `${st ? st.label : s.stateLabel}${s.lastSeen ? ' · ' + when(s.lastSeen) : ''}`, s.owned ? '내 세션' : `${owner}의 세션`, raw.harness ? String(raw.harness) : '', s.node ? '노드 ' + s.node : ''].filter(Boolean).join('\n');
+    return el('a', { class: 'v2-ss-row' + (activeKey === 's:' + s.id ? ' on' : '') + (s.owned ? '' : ' other'), href: '#/s/' + encodeURIComponent(s.id), 'data-nav': 's:' + s.id, title: tip + '\n세션 대화를 엽니다', role: 'treeitem' }, el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }), el('span', { class: 'v2-ss-main' }, el('span', { class: 't', text: main }), sub ? el('span', { class: 'sub', text: sub }) : null), s.owned ? null : personFace(String(raw.owner || ''), 'v2-ss-face', owner), 
+    // 오른쪽 끝은 **한 자리**로 고정한다 — 상태어를 조건부로 넣으면 행마다 길이가 달라 목록이 들쭉날쭉해진다(상민님 2026-08-18).
+    //  상태는 왼쪽 점이, 개수는 프로젝트 행이 말한다. 여기는 '누르면 대화로 간다'는 표식만(hover 때 보인다).
+    glyph('chat', 'v2-ss-go'));
 }

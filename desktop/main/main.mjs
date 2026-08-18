@@ -317,9 +317,12 @@ async function cleanupStaleInstall() {
   const script = staleCleanupPs({ stale: staleInstalls, ownExe: process.execPath });
   const b64 = Buffer.from(script, "utf16le").toString("base64");
   try {
-    send(IPC.LOG, { stream: "raw", line: `이전 버전(${staleInstalls.map((e) => e.version).join(", ")}) 제거 — 관리자 확인 창이 뜹니다. 끝나면 앱이 다시 열립니다.` });
+    send(IPC.LOG, { stream: "raw", line: `이전 버전(${staleInstalls.map((e) => e.version).join(", ")}) 제거 — 화면이 어두워지며 관리자 확인 창이 뜹니다(안 보이면 작업 표시줄의 방패 아이콘). 끝나면 앱이 다시 열립니다.` });
     quitting = true;   // 언인스톨러가 우리를 닫는다 — 창 close 가 숨기기로 가로채지 않게
-    const child = spawn("powershell", ["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-EncodedCommand", b64], { detached: true, stdio: "ignore", windowsHide: true });
+    // ⚠ 숨김(-WindowStyle Hidden·windowsHide·detached)으로 띄우지 않는다 — 백그라운드 프로세스의 승격 요청은
+    //  작업 표시줄에 최소화돼 사람이 못 본다(실기기: UAC 를 5분 뒤에야 발견). 보이는 콘솔이 포그라운드를 가져야
+    //  관리자 확인 창이 즉시 화면을 덮는다. 콘솔엔 스크립트가 안내 문구를 찍는다(win-stale-install.mjs).
+    const child = spawn("powershell", ["-NoProfile", "-NonInteractive", "-EncodedCommand", b64], { stdio: "ignore" });
     child.unref();
     return { ok: true };
   } catch (e) {

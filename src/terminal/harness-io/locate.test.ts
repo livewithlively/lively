@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { reportedPathOk, ownerHomes, locateTranscript } from "./locate.js";
-import { harnessIo, type HarnessSessionAdapter } from "./adapter.js";
+import { harnessIo, HARNESS_IO, type HarnessSessionAdapter } from "./adapter.js";
 
 let pass = 0;
 const t = async (name: string, fn: () => Promise<void> | void): Promise<void> => { await fn(); pass++; console.log(`ok  ${name}`); };
@@ -59,6 +59,12 @@ await t("[C6] locateTranscript — 보고 경로가 뿌리 안이고 존재 → 
   const d = await locateTranscript(io, { cwd: "/w", convId: "conv-1", owner: "yoon", reportedPath: path.join(home, ".t", "conv-1", "missing.jsonl") });
   assert.deepEqual(d, { file: conv, size: 3, via: "convention" });         // 보고 경로가 없으면 규약으로
   fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+await t("[C7] 추측 금지 — 어댑터에 'cwd 폴더 훑어 최신 파일' 축을 두지 않는다 (#1719 회귀 방지)", () => {
+  // 대화 파일엔 박스 id 가 없고 cwd 폴더는 세션들이 공유한다 — mtime 최신은 소유 세션의 증거가 못 된다.
+  //  매핑(훅 보고)이 없으면 라우트가 404 로 답하는 것이 정답이다. 스캔 축이 다시 생기면 여기서 걸린다.
+  for (const io of HARNESS_IO) assert.equal("latest" in io, false, `${io.key} 에 폴더 스캔 축이 생겼다`);
 });
 
 console.log(`harness-io/locate: ${pass} passed`);
