@@ -9,6 +9,8 @@ export interface ProjectActivity {
   author_person: string | null; author_agent: string | null;
   commit_sha: string | null; committed_at: string | null; created_at: string | null;
   should_review: string | null; is_review: string | null; repo: string | null;
+  // #1719 — 어느 세션이 한 일인가(상세의 '이 작업을 한 AI 세션' 링크) · 어느 태스크에 달렸나(프로젝트 타임라인의 소속 표시).
+  session_id: string | null; project_id: number | null;
   external_system: string | null; external_url: string | null;
   refs: { name: string; title: string | null; relation: string }[];
   touchCount: number;
@@ -30,12 +32,20 @@ export async function listProjectActivities(
   //  (예전엔 author_person 조인으로 팀원이 한 모든 작업을 보여줘서 프로젝트 밖 작업까지 섞였음 → 그 폭넓은 조인은 유지하지 않는다.
   //   project_id=이 프로젝트는 정의상 이 프로젝트 작업이라 session_id 가 없어도 표시되어야 한다 — MCP activity_log 로 직접 기록한 작업 포함.)
   const r = await itemsPool.query(
-    `SELECT a.id, a.type, a.title, a.summary, a.body, a.author_person, a.author_agent,
+    `WITH scope AS (
+       -- 이 프로젝트 + 그 아래 태스크·서브태스크(#1719 타임라인). 기록은 프로젝트에 달 수도, 그 안 태스크에 달 수도 있는데
+       -- 종전엔 정확일치라 **태스크에 남긴 작업이 프로젝트 타임라인에서 통째로 빠졌다**(실측 #1719: 직접 20건 · 태스크 11건).
+       SELECT id FROM project WHERE id = $1
+       UNION SELECT id FROM project WHERE parent_id = $1
+       UNION SELECT c.id FROM project c JOIN project t ON t.id = c.parent_id WHERE t.parent_id = $1
+     )
+     SELECT a.id, a.type, a.title, a.summary, a.body, a.author_person, a.author_agent,
             a.commit_sha, a.committed_at, a.created_at, a.should_review, a.is_review,
+            a.session_id, a.project_id,
             a.external_system, a.external_url, rp.name AS repo
        FROM activity a
        LEFT JOIN repo rp ON rp.id = a.repo_id
-      WHERE (a.project_id = $1
+      WHERE (a.project_id IN (SELECT id FROM scope)
              OR (a.project_id IS NULL AND EXISTS (
                   SELECT 1 FROM session_project sp
                    WHERE sp.session_id = a.session_id
