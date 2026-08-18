@@ -62,6 +62,7 @@ const me: Capability = {
       announcement: ui?.announcement ?? null, // S3 — 조직 공지 배너 {text, href?, tone}
       ui_profile: ui?.ui_profile ?? "full",   // S4 — 관리탭 프로파일(admin-shell sectionHidden 이 해석)
       usage_url: ui?.usage_url ?? null,       // S5 — 상단바 '사용량' 칩 링크
+      ui_mode: ui?.ui_mode ?? "v2",           // #1719 — 기본 화면 셸(v2|classic). main.ts boot 가 셸 선택 전에 읽는다
       incognito: ctx?.incognito ?? false,
     };
   },

@@ -26,6 +26,7 @@ import { myNodesPanel, orgNodesPanel } from './admin-nodes.js';
 import { injectionMap } from './admin-injection.js';
 import { storageEditor } from './admin-storage.js';
 import { logsEditor, sessionShareEditor, sessionsAdminEditor } from './admin-ops.js';
+import { uiModeSection } from './admin-ui-mode.js'; // #1719 관리탭 ▸ 화면(새 셸/클래식)
 import { embeddingsEditor } from './admin-embeddings.js';
 import { loginIdpEditor } from './admin-login-idp.js'; // #1520 회사 계정(OIDC) 로그인 설정
 // ── #1313 R40 분해 ④ — 도메인 패널 B. 셸은 아래 등록 블록에서만 이들을 부른다. ──
@@ -135,6 +136,8 @@ const ADMIN_SECTIONS = [
   { key: 'me-nodes', label: '내 컴퓨터', meaning: null, group: 'me' },
   // ── 조직 ──
   { key: 'profile', label: '조직 정보', meaning: 'gateway-url', group: 'org' },
+  // 화면(#1719) — 새 1탭 셸 / 클래식 선택. 조직 기본은 관리자, '이 브라우저에서만'은 누구나 → ADMIN_ONLY 에 넣지 않는다.
+  { key: 'ui', label: '화면', meaning: null, group: 'org' },
   // 구성원 — 구 [구성원 관리]+[구성원 추가]+[구성원 토큰 관리]+[중앙박스 계정] 4개 탭을 한 화면(서브탭)으로.
   //  넷 다 "한 사람에 대해 뭘 설정하나"였다. 갈라져 있던 탓에 '구성원 추가' 저장이 location.hash 로 토큰 탭에
   //  점프하고 state.admin.memberAddPreselect 로 선택을 실어 나르는 해킹이 필요했다(#837 에서 제거).
@@ -426,6 +429,7 @@ registerPanel('storage', (detail, data) => storageEditor(detail, data));
 registerPanel('logs', (detail, data) => logsEditor(detail, data));
 registerPanel('sessions', (detail, data) => sessionsAdminEditor(detail, data));
 registerPanel('session-share', (detail, data) => sessionShareEditor(detail, data));
+registerPanel('ui', (detail, data) => uiModeSection(detail, data)); // #1719
 registerPanel('embeddings', (detail, data) => embeddingsEditor(detail, data));
 registerPanel('login-idp', (detail, data) => loginIdpEditor(detail, data));
 registerPanel('repos', (detail, data) => reposPanel(detail, data));
