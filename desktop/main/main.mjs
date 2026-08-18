@@ -92,7 +92,8 @@ async function refreshNodeStatus(cli) {
   }
   const n = r.result?.node;
   if (!r.ok || !n) { renderTray(); send(IPC.STATE, state); return; }   // 못 읽었으면 **건드리지 않는다**(옛 값이 추측보다 낫다)
-  state = { ...state, nodeRegistered: !!n.registered, nodeDaemon: !!n.daemon, nodeRunning: n.running, nodeId: n.id || null };
+  // nodeConnected: 게이트웨이가 보는 연결 여부(true/false/null=모름). running 과 다른 축 — 프로세스가 돌아도 안 붙어 있을 수 있다.
+  state = { ...state, nodeRegistered: !!n.registered, nodeDaemon: !!n.daemon, nodeRunning: n.running, nodeId: n.id || null, nodeConnected: typeof n.connected === "boolean" ? n.connected : null };
   renderTray(); send(IPC.STATE, state);
 }
 function readTrim(p) { try { return readFileSync(p, "utf8").trim() || null; } catch { return null; } }

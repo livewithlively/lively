@@ -699,6 +699,27 @@ t('U13 받는 동안의 문구 — 확인이 끝난 뒤 침묵하지 않는다(�
   });
 }
 
+// ── N. 노드 '붙어 있는가' 축 — 프로세스는 도는데 게이트웨이엔 안 붙은 좀비를 '실행 중' 이라 그리지 않는다 (#1541) ──
+t('N1 트레이 — running 인데 connected=false 면 "연결 끊김" + 다시 시작 항목, 모름(null)이면 종전대로 실행 중', () => {
+  const base = { cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true, nodeRunning: true, nodeDaemon: true };
+  assert.match(statusLabel({ ...base, nodeConnected: false }), /연결 끊김/);
+  assert.match(statusLabel({ ...base, nodeConnected: true }), /실행 중/);
+  assert.match(statusLabel({ ...base, nodeConnected: null }), /실행 중/, '모름은 종전대로 — 게이트웨이에 못 물었다고 끊김이라 하면 거짓말');
+  assert.match(statusLabel({ ...base }), /실행 중/, '축이 아예 없어도(구 CLI) 종전대로');
+  const z = trayMenuModel({ ...base, nodeConnected: false });
+  const i = z.findIndex((m) => m.id === 'node-start');
+  assert.ok(i >= 0 && /다시 시작/.test(z[i].label), '좀비면 다시 시작 항목이 있어야 한다');
+  assert.ok(z.some((m) => m.id === 'node-stop'), '정지도 남긴다');
+  assert.ok(!trayMenuModel({ ...base, nodeConnected: true }).some((m) => m.id === 'node-start'), '정상 실행 중엔 시작 항목이 없다');
+  // 배선: 메인이 status 의 connected 를 상태로 옮기고(boolean 만), 렌더러가 그걸로 문구·버튼을 바꾼다
+  const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
+  assert.match(main, /nodeConnected: typeof n\.connected === "boolean" \? n\.connected : null/, 'connected 를 boolean 일 때만 옮기지 않는다');
+  const js = readFileSync(fileURLToPath(new URL('../renderer/app.js', import.meta.url)), 'utf8');
+  assert.match(js, /nodeConnected === false/, '렌더러가 좀비를 구분하지 않는다');
+  assert.match(js, /연결돼 있지 않습니다/, '렌더러 문구가 없다');
+  assert.match(js, /"노드 다시 시작"/, '좀비면 버튼이 다시 시작이어야 한다');
+});
+
 t('D6 ★ 답한 프롬프트는 다시 뜨지 않는다(리듀서가 옛 prompt 를 물고 있으면 안 된다)', () => {
   // 실측(맥 풀 플로우): '예' 를 누르고 나서도 다음 step 이벤트마다 확인 카드가 되살아나 세 번 눌러야 했다.
   //  리듀서는 prompt 를 end 까지 들고 있으므로, **답한 순간** 메인이 그 자리를 비워 줘야 한다.

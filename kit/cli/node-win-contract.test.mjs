@@ -6,7 +6,7 @@
 //  (실기기 e2e 는 별도 — Windows VM 에서 등록·기동까지 확인한다.)
 // 실행: node kit/cli/node-win-contract.test.mjs
 import assert from "node:assert/strict";
-import { muxCandidates, winTaskXml, winRunnerCmd, resolveWinUserId, winInstallArgv, nodeDaemonArtifact, nodeProcProbe, parseProcCount, winStartupDir, winStartupVbs, tailLines, lastConnectedAt, logTailHint } from "./cmd-node.mjs";
+import { muxCandidates, winTaskXml, winRunnerCmd, resolveWinUserId, winInstallArgv, nodeDaemonArtifact, nodeProcProbe, parseProcCount, winStartupDir, winStartupVbs, tailLines, lastConnectedAt, logTailHint, nodeConnectedFrom } from "./cmd-node.mjs";
 
 let pass = 0;
 const t = (name, fn) => { fn(); pass++; console.log(`ok  ${name}`); };
@@ -336,6 +336,23 @@ t("G3 경로에 공백이 있어도 한 인자로 유지된다(따옴표)", () =
 t("G4 POSIX 는 종전 그대로 tail -f (무회귀)", () => {
   assert.equal(logTailHint("/home/y/.lively/logs/node-agent.log", "darwin"), "tail -f /home/y/.lively/logs/node-agent.log");
   assert.equal(logTailHint("/x.log", "linux"), "tail -f /x.log");
+});
+
+// ── H. '붙어 있는가' 축 — 프로세스 실측(running)과 다른 축 (#1541) ────────────────────────
+// 실측(2026-08-18): 노드 프로세스는 살았는데 게이트웨이엔 3시간째 오프라인(절전 뒤 좀비). running 만 보는 화면은
+//  "노드 실행 중" 이라고 거짓말했다. 게이트웨이 /api/ui/nodes 의 online 이 정본이다.
+t("H1 붙어 있음/오프라인/모름 — 목록에서 id 로 찾고, 못 찾거나 이상하면 null(모름 — false 로 눕히지 않는다)", () => {
+  const list = { nodes: [{ id: "hammurabi", online: false }, { id: "macmini", online: true }] };
+  assert.equal(nodeConnectedFrom(list, "macmini"), true);
+  assert.equal(nodeConnectedFrom(list, "hammurabi"), false);
+  assert.equal(nodeConnectedFrom(list, "nope"), null, "목록에 없으면 모름");
+  assert.equal(nodeConnectedFrom(list.nodes, "macmini"), true, "배열 그대로도 받는다");
+  assert.equal(nodeConnectedFrom({ nodes: [{ id: "x" }] }, "x"), null, "online 이 boolean 이 아니면 모름");
+  // 새 헬퍼의 빈 입력 — 크래시 없이 모름
+  assert.equal(nodeConnectedFrom(undefined, "x"), null); assert.equal(nodeConnectedFrom({}, "x"), null);
+  assert.equal(nodeConnectedFrom(list, ""), null); assert.equal(nodeConnectedFrom(null, null), null);
+  // id 는 문자열 비교(숫자 id 가 와도)
+  assert.equal(nodeConnectedFrom({ nodes: [{ id: 7, online: true }] }, "7"), true);
 });
 
 console.log(`\n${pass} passed`);
