@@ -2,12 +2,12 @@
 //
 //  ── 무엇 ──
 //  공용 대화창(web/chat-view.ts — 리브와 같은 그림)에 **세션의 대화 파일**을 실어 준다.
-//   · 읽기: 박스 세션은 GET terminal/sessions/:id/transcript(로컬 ~/.claude 대화 파일을 창으로) — Claude Code 가 블록 단위로
-//     즉시 append 하므로 0.7초 폴링이면 터미널 없이도 라이브로 따라간다. 노드(멤버 PC) 세션·기록만 남은 세션은 중앙 세션
-//     기록(v6/sessions/:uuid/log — Stop 훅이 턴마다 올린 것)으로 읽는다.
+//   · 읽기: 박스 세션은 GET terminal/sessions/:id/transcript(박스의 대화 파일을 창으로, 0.7초 폴링) · 노드 세션·기록만 남은 세션은 중앙 기록
+//     (v6/sessions/:uuid/log). **둘 다 공통 ChatLine ndjson**(#1746 — 서버 하네스 어댑터가 claude·grok·agy 원문을 한 모양으로 번역, 이 파일은
+//     하네스를 모른다). 창은 서버가 줄 경계로 맞춰 준다(X-Log-From/To 가 다음 경계). 못 읽는 하네스는 409 + 행의 chat.read=false → 터미널 안내.
 //   · 보내기: POST terminal/sessions/:id/prompt(#1664 — 터미널에서 치는 것과 같은 주입). Claude Code 는 도는 중에 친
 //     글을 **큐에 쌓아** 다음 턴으로 받으므로 도는 동안에도 보낼 수 있다(리브와 다른 점).
-//   · 멈춤/승인: POST terminal/sessions/:id/keys {Escape|Enter} — 터미널에서 Esc·Enter 를 누르는 그 일.
+//   · 멈춤/승인: POST …/keys {action: interrupt|approve|deny} — 키는 서버 어댑터가 정한다. 못 누르는 하네스(chat.answer=false)엔 버튼을 안 둔다.
 //   · 끝난 세션(중단됨·종료됨·기록만): 입력칸 대신 [이어서 대화하기] — 복원(restore)/이어받기(resume)로 새 라이브 세션을 만들어
 //     그 화면으로 간다(같은 대화 uuid 를 잇는다).
 //
@@ -52,7 +52,7 @@ const srcPath = (s, q) => {
     const qs = new URLSearchParams(Object.entries(q).map(([k, v]) => [k, String(v)]));
     return s.kind === 'box'
         ? `/api/ui/terminal/sessions/${encodeURIComponent(s.id)}/transcript?${qs}`
-        : `/api/ui/v6/sessions/${encodeURIComponent(s.sid)}/log?node=${encodeURIComponent(s.node)}&${qs}`;
+        : `/api/ui/v6/sessions/${encodeURIComponent(s.sid)}/log?node=${encodeURIComponent(s.node)}&fmt=chat&${qs}`; // fmt=chat: 공통 ChatLine(원본 바이트 아님)
 };
 // ── 마운트 ────────────────────────────────────────────────────────────────────────────────
 // opts.firstPrompt — 홈 입력창(#1719 v2/quick-session)이 방금 연 세션의 첫 지시. 서버가 하네스 입력창이 뜬 뒤 실제로 넣으므로
@@ -62,7 +62,8 @@ export function mountSessionChat(host, first, opts) {
     const isBox = first.live; // 라이브 행(박스) — 죽었어도(restorable) 박스다
     const dead = () => !target.live || !target.alive || !!target.raw?.restorable;
     const canType = () => !dead();
-    const canKeys = () => canType() && !target.node;
+    const caps = () => (target.raw?.chat && typeof target.raw.chat === 'object') ? { read: target.raw.chat.read !== false, answer: target.raw.chat.answer !== false } : { read: true, answer: true }; // 서버 harness-io 능력(행의 chat) — 없으면(구 서버) 둘 다 있는 것으로
+    const canKeys = () => canType() && !target.node && caps().answer;
     // 헤더 — 제목 · 상태 · 프로젝트 · 하네스 · [목차] [터미널] [새 탭] ————
     const dot = el('span', { class: 'v2-dot', 'aria-hidden': 'true' });
     const stateEl = el('span', { class: 'sc-state' });
@@ -103,7 +104,7 @@ export function mountSessionChat(host, first, opts) {
         style: 'desktop',
         bar: { right: el('span', { class: 'dt-chips' }, chipMode, chipModel, chipEffort) },
         onSend: (text) => sendPrompt(text),
-        onStop: canKeys() ? () => sendKey('Escape') : undefined,
+        onStop: canKeys() ? () => sendKey('interrupt') : undefined,
         escActive: () => !termHost.hidden ? false : true,
         opening: null,
     });
@@ -117,7 +118,7 @@ export function mountSessionChat(host, first, opts) {
         const waiting = !dead() && (!!target.raw?.awaiting || target.raw?.agentState === 'waiting');
         waitBar.hidden = !waiting;
         if (waiting && !waitBar.childElementCount) {
-            waitBar.replaceChildren(el('span', { class: 'v2-dot wait', 'aria-hidden': 'true' }), el('div', { class: 'sc-wait-t' }, el('b', { text: '확인이 필요해요' }), el('span', { text: ' — 세션이 승인이나 선택을 기다리고 있어요. 무엇을 묻는지는 터미널에 떠 있습니다.' })), el('div', { class: 'sc-wait-acts' }, opts.terminalSrc && isBox ? el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '터미널에서 답하기', onclick: () => toggleTerminal(true) }) : null, canKeys() ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', text: '기본 선택으로 답하기 (Enter)', onclick: () => sendKey('Enter') }) : null, canKeys() ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', text: '거부 (Esc)', onclick: () => sendKey('Escape') }) : null));
+            waitBar.replaceChildren(el('span', { class: 'v2-dot wait', 'aria-hidden': 'true' }), el('div', { class: 'sc-wait-t' }, el('b', { text: '확인이 필요해요' }), el('span', { text: ' — 세션이 승인이나 선택을 기다리고 있어요. 무엇을 묻는지는 터미널에 떠 있습니다.' })), el('div', { class: 'sc-wait-acts' }, opts.terminalSrc && isBox ? el('button', { class: 'btn btn-sm btn-primary', type: 'button', text: '터미널에서 답하기', onclick: () => toggleTerminal(true) }) : null, canKeys() ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', text: '기본 선택으로 답하기', onclick: () => sendKey('approve') }) : null, canKeys() ? el('button', { class: 'btn btn-sm btn-ghost', type: 'button', text: '거부', onclick: () => sendKey('deny') }) : null));
         }
         if (dead())
             paintDeadFooter();
@@ -244,6 +245,17 @@ export function mountSessionChat(host, first, opts) {
                     view.settle(cur.t, { durationMs: Number(o.durationMs) || 0 });
                 running = false;
             }
+            // 공통 ChatLine(#1746) — 중단(사용자가 끊음)·맥락 압축(어댑터가 system 줄로 올린다. claude 는 위의 사용자 줄 표식으로도 온다).
+            else if (o.subtype === 'interrupted') {
+                if (cur)
+                    view.settle(cur.t, { interrupted: true });
+                running = false;
+            }
+            else if (o.subtype === 'compact') {
+                view.divider('맥락 압축 — 이전 대화를 요약해 이어감', typeof o.text === 'string' ? o.text : undefined);
+                cur = newRec(null);
+                running = true;
+            }
             return;
         }
     }
@@ -303,6 +315,7 @@ export function mountSessionChat(host, first, opts) {
             const boxErr = errs.find((e) => tries[errs.indexOf(e)]?.kind === 'box');
             const lastErr = boxErr ?? errs[errs.length - 1];
             const notYet = !errs.length || errs.every((e) => [403, 404].includes(Number(e?.status)));
+            const unreadable = Number(lastErr?.status) === 409 && lastErr?.message !== 'node' && !!lastErr?.message; // 409 = 'node'(그 컴퓨터) 또는 못 읽는 하네스(문장, #1746 — 폴링 무의미)
             // 홈 입력창이 방금 연 세션 — 첫 지시는 서버가 넣는 중이다. '아직 없음' 대신 그 턴을 도는 모양으로 먼저 그린다.
             //  하네스 부팅(수 초)+신뢰 대화상자를 지나 파일에 내 말이 나타나면 applyLine 이 이 턴을 재사용한다. 오래 안 나타나면 말한다.
             if (notYet && firstPrompt && canType() && !target.node) {
@@ -325,25 +338,22 @@ export function mountSessionChat(host, first, opts) {
             }
             const msg = !tries.length ? '이 세션의 대화 id 를 아직 몰라 여기서 읽을 수 없어요 — 첫 턴이 끝나면 중앙 기록으로 보입니다. 지금은 터미널로 보세요.'
                 : notYet ? (canType() ? '아직 대화 기록이 없어요. 아래에 첫 지시를 적으면 여기서부터 쌓입니다.' : '이 세션의 대화 기록을 찾지 못했어요.')
-                    : lastErr?.status === 409 ? '이 세션의 대화 파일은 그 컴퓨터에 있어 여기서 바로 읽지 못해요. 첫 턴이 끝나면 중앙 기록으로 보입니다.'
-                        : `대화 기록을 불러오지 못했습니다. ${lastErr?.message || ''}`;
+                    : unreadable ? String(lastErr.message)
+                        : lastErr?.status === 409 ? '이 세션의 대화 파일은 그 컴퓨터에 있어 여기서 바로 읽지 못해요. 첫 턴이 끝나면 중앙 기록으로 보입니다.'
+                            : `대화 기록을 불러오지 못했습니다. ${lastErr?.message || ''}`;
             view.list.append(el('div', { class: 'livc-open sc-empty' }, el('p', { text: msg }), !notYet && opts.terminalSrc && isBox ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '터미널로 보기', onclick: () => toggleTerminal(true) }) : null));
             paintState();
             // 라이브 박스면 파일이 생기는 순간을 잡는다(사람이 터미널에서 먼저 말을 걸 수도 있다) — 첫 대화 뒤에 여기로 흘러든다.
-            if (canType() && !target.node) {
+            //  못 읽는 하네스면 기다려도 안 온다 — 폴링하지 않는다(보내기는 된다: 주입은 tmux 라 하네스 무관).
+            if (canType() && !target.node && !unreadable) {
                 src = { kind: 'box', id: target.id };
                 schedule();
             }
             return;
         }
         loadedFrom = chunk.from;
-        loadedTo = chunk.to;
-        let text = chunk.text;
-        if (chunk.from > 0) {
-            const nl = text.indexOf('\n');
-            text = nl >= 0 ? text.slice(nl + 1) : '';
-        } // 창 첫 줄은 잘렸을 수 있다
-        applyText(text);
+        loadedTo = chunk.to; // 서버가 줄 경계로 맞춘 창 — 첫 줄 버리기·조각 이어붙이기가 필요 없다(#1746 window.ts)
+        applyText(chunk.text);
         if (chunk.from > 0)
             olderBar();
         finishReplay();
@@ -406,11 +416,7 @@ export function mountSessionChat(host, first, opts) {
         }
         if (destroyed)
             return;
-        let text = chunk.text;
-        if (from > 0) {
-            const nl = text.indexOf('\n');
-            text = nl >= 0 ? text.slice(nl + 1) : '';
-        }
+        const text = chunk.text; // 서버가 줄 경계로 맞춘 창(#1746) — 첫 줄 버리기 없음
         const bundles = [];
         let b = null;
         for (const line of text.split('\n')) {
@@ -448,7 +454,12 @@ export function mountSessionChat(host, first, opts) {
                 b = { text: ut, ts: o.timestamp, lines: [], kind: 'turn' };
                 bundles.push(b);
             }
-            else if (o.type === 'assistant' || (o.type === 'system' && (o.subtype === 'turn_duration' || o.subtype === 'stop_hook_summary'))) {
+            else if (o.type === 'system' && o.subtype === 'compact') {
+                bundles.push({ text: null, lines: [], kind: 'divider', raw: typeof o.text === 'string' ? o.text : undefined });
+                b = { text: null, lines: [], kind: 'cont' };
+                bundles.push(b);
+            }
+            else if (o.type === 'assistant' || (o.type === 'system' && (o.subtype === 'turn_duration' || o.subtype === 'stop_hook_summary' || o.subtype === 'interrupted'))) {
                 if (!b) {
                     b = { text: null, lines: [], kind: 'cont' };
                     bundles.push(b);
@@ -483,7 +494,7 @@ export function mountSessionChat(host, first, opts) {
                     else if (o.type === 'assistant')
                         view.event(rec.t, o);
                     else if (o.type === 'system')
-                        view.settle(rec.t, { durationMs: Number(o.durationMs) || 0 });
+                        view.settle(rec.t, o.subtype === 'interrupted' ? { interrupted: true } : { durationMs: Number(o.durationMs) || 0 });
                 }
                 if (i === bundles.length - 1 && orphan) {
                     // 고아 이어짐의 이벤트를 이 턴 뒤에 다시 그리고 고아는 치운다. 고아가 '지금 도는 턴'이었으면 그 표시(깜빡임·경과 줄)도 옮긴다.
@@ -502,7 +513,7 @@ export function mountSessionChat(host, first, opts) {
                 view.settle(rec.t);
             }
             cur = savedCur && recs.includes(savedCur) ? savedCur : cur;
-            loadedFrom = from;
+            loadedFrom = chunk.from; // 서버가 맞춘 경계(요청한 from 이 줄 중간이면 다음 줄부터)
             olderBar();
         });
         titleFromFirstAsk();
@@ -568,6 +579,10 @@ export function mountSessionChat(host, first, opts) {
         catch (e) {
             fails++;
             if (e?.status === 404 && src.kind === 'box') { /* 아직 파일 없음 — 계속 기다린다(첫 대화 뒤에 생긴다) */ }
+            else if (e?.status === 409 && src.kind === 'box' && e?.message && e.message !== 'node') {
+                src = null;
+                return;
+            } // 못 읽는 하네스 — 더 안 묻는다(#1746)
             else if (fails === 3)
                 view.setNote('진행을 따라가지 못하고 있어요 — 다시 붙는 중…');
         }
@@ -601,6 +616,14 @@ export function mountSessionChat(host, first, opts) {
         try {
             await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/prompt`, { method: 'POST', body: JSON.stringify({ text }) });
             view.setNote('');
+            if (!caps().read) { // 보내기는 됐지만(주입은 tmux 라 하네스 무관) 답은 여기 안 온다(파서 전) — 도는 척 두지 않고 그 자리에 말한다
+                pendingSent = null;
+                running = false;
+                view.settle(rec.t);
+                view.busy(false);
+                view.setNote('보냈어요 — 이 하네스의 답은 아직 여기 안 보여요. 터미널로 보세요.');
+                return;
+            }
             if (!src) {
                 src = { kind: 'box', id: target.id };
             }
@@ -610,7 +633,7 @@ export function mountSessionChat(host, first, opts) {
             //  빈 입력칸에 Enter 라 아무 일도 없고, 남아 있었으면 그때 제출된다. 그래도 안 되면 사람에게 말한다(터미널을 보라고).
             const stillPending = () => !!pendingSent && pendingSent.t === rec.t && !destroyed;
             window.setTimeout(() => { if (stillPending() && canKeys())
-                void sendKey('Enter', true); }, 5000);
+                void sendKey('approve', true); }, 5000);
             window.setTimeout(() => { if (stillPending())
                 view.setNote('보냈지만 아직 세션 기록에 나타나지 않았어요 — 세션이 다른 대화상자에 멈춰 있을 수 있어요(터미널을 확인해 보세요).'); }, 12000);
         }
@@ -623,12 +646,13 @@ export function mountSessionChat(host, first, opts) {
             view.input.value = text; // 친 글은 돌려준다
         }
     }
-    async function sendKey(key, quiet = false) {
+    // 동작(승인·거부·중단)을 보낸다 — 어느 키인지는 서버의 하네스 어댑터가 정한다(#1746). 대신 못 누르는 하네스면 서버가 409 로 말한다.
+    async function sendKey(action, quiet = false) {
         try {
-            await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/keys`, { method: 'POST', body: JSON.stringify({ key }) });
+            await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/keys`, { method: 'POST', body: JSON.stringify({ action }) });
             if (quiet)
                 return;
-            view.setNote(key === 'Escape' ? '멈춤을 보냈어요.' : 'Enter 를 보냈어요.');
+            view.setNote(action === 'interrupt' ? '멈춤을 보냈어요.' : action === 'deny' ? '거부를 보냈어요.' : '승인을 보냈어요.');
             window.setTimeout(() => { if (!destroyed)
                 view.setNote(''); }, 2500);
         }

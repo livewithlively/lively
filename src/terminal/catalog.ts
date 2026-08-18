@@ -240,6 +240,10 @@ export interface SessionInfo {
   //  ② 중앙 세션 기록(v6/sessions 의 session_id 는 이 uuid 다)과 **같은 세션임을 알아 목록에서 한 장으로 접는다.**
   //  미보고면 없다(추측하지 않는다 — sessions.ts restore 의 picker 원칙과 같다).
   claudeSessionId?: string;
+  // #1746 세션 대화창의 하네스 능력 요약(harness-io/adapter.ts chatIoCaps) — read=대화 파일을 화면으로 읽을 수 있나(파서 있음) ·
+  //  answer=승인·거부·중단을 화면에서 대신 누를 수 있나(승인 키 실측 있음). 화면이 이걸로 버튼·안내를 **정직하게** 그린다(없는 능력의
+  //  버튼을 두지 않는다 — 막다른 컨트롤 금지). 없으면(구 서버) 화면은 둘 다 있는 것으로 본다(종전 동작).
+  chat?: { read: boolean; answer: boolean };
 }
 export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; resume?: string; readOnly?: boolean; incognito?: boolean;
   // #1291 v2 — 기록 범위(write cap)와 read 축소. 미지정이면 실행 폴더에서 파생한다(신규·복원이 같은 규칙).

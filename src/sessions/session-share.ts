@@ -5,6 +5,8 @@
 //   enabled=false 라 켜기 전엔 아무 세션도 캡처 안 한다(C3 push 선례 — 조직이 명시적으로 켠다).
 //   켜면 그때부터 harnesses·scope·store·retention·권한축을 관리탭에서 조절한다.
 
+import { READABLE_HARNESSES } from "../terminal/harness-io/adapter.js";
+
 export type SessionShareScope = "main" | "tree";     // main=주 트랜스크립트만 · tree=서브에이전트(<uuid>/subagents/*)까지
 export type SessionShareStore = "slim" | "raw";      // slim=무손실 슬림(signature·toolUseResult·usage 버림, 본문 유지) · raw=원본 그대로
 export type SessionShareViewPolicy = "attach" | "owner";  // 로그 열람 권한축: attach=입장가능자(canAttach) · owner=소유자만
@@ -24,13 +26,12 @@ export const SESSION_SHARE_SCOPES: readonly SessionShareScope[] = ["main", "tree
 export const SESSION_SHARE_STORES: readonly SessionShareStore[] = ["slim", "raw"];
 export const SESSION_SHARE_VIEW_POLICIES: readonly SessionShareViewPolicy[] = ["attach", "owner"];
 // 선택지(파이프라인 실제 지원과 별개 — codex 는 D12).
-// ⚠ #1695 판정: 웹 세션 카탈로그에는 opencode·antigravity 가 들어갔지만 **여기엔 넣지 않는다.**
-//  캡처(수집)는 이미 가능하다 — antigravity 어댑터가 Stop 에서 transcript_path 를 실어 조직 훅을 부른다(실측).
-//  막히는 건 **열람**이다: 세션 기록 화면이 쓰는 renderTranscript(terminal/terminal-transcript.ts)는 claude 의
-//  JSONL 스키마(`{type:"assistant", message:{content:[…]}}`)와 `~/.claude/projects/<cwd>/<uuid>.jsonl` 경로 규약
-//  전용인데, antigravity 의 트랜스크립트는 `{step_index, source, type, status, created_at, content}` 다(실측).
-//  → 켜면 로그는 쌓이는데 화면은 빈다. 하네스별 파서가 생기기 전까지 선택지에 두지 않는다('못 지킬 켜기' 금지).
-export const KNOWN_HARNESSES: readonly string[] = ["claude", "codex"];
+// ⚠ #1695 판정: **화면으로 열람할 수 없는 하네스는 선택지에 두지 않는다**('못 지킬 켜기' 금지) — 캡처(수집)는 어떤 하네스든 원본
+//  바이트로 되지만(어댑터가 Stop 에서 transcript_path 를 실어 조직 훅을 부른다), 파서가 없으면 켜도 화면이 빈다.
+//  #1746 부터 그 판정을 **하네스 세션 I/O 어댑터의 파서 유무**(harness-io READABLE_HARNESSES)에서 파생한다 — 파서가 생기면 여기도
+//  자동으로 열린다(claude·antigravity·grok). codex 는 파서 전이지만 종전 선택지였고 캡처가 실제로 되므로 유지한다(끄면 이미 켠 조직의
+//  설정이 조용히 잘린다).
+export const KNOWN_HARNESSES: readonly string[] = [...new Set(["claude", "codex", ...READABLE_HARNESSES])];
 export const RETENTION_MAX_DAYS = 3650;   // 상한(10년) — 0=무제한과 구분, 실수로 거대값 입력 방어.
 
 export const DEFAULT_SESSION_SHARE: SessionShareConfig = {
