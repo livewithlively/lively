@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 import { TENANT_AUTH_HEADER, TENANT_HEADER, TENANT_ID_HEADER, currentTenant } from "./tenant-context.js";
-import { statusForReason, tenantContextMiddleware } from "./tenant-middleware.js";
+import { isTenantAgnosticPath, statusForReason, tenantContextMiddleware } from "./tenant-middleware.js";
 
 const SECRET = "s".repeat(32);
 const E = (o: Record<string, string> = {}) => o as NodeJS.ProcessEnv;
@@ -109,4 +109,21 @@ test("★ 거절 응답 본문에 비밀이 실리지 않는다", () => {
   const r = run(hdr({ [TENANT_AUTH_HEADER]: "wrong" }), E({ LIVELY_TENANT_HEADER_SECRET: SECRET }));
   assert.ok(!JSON.stringify(r.body).includes(SECRET));
   assert.ok(!JSON.stringify(r.body).includes("wrong"));
+});
+
+// ── 테넌트와 무관한 경로 ────────────────────────────────────────────────────
+// ⚠ 목록이 넓어지면 그만큼 "테넌트를 모르는 상태"로 앱에 들어가는 문이 늘어난다.
+//  헬스체크처럼 **아무 데이터도 안 만지는** 것만 넣는다.
+test("★ healthz 는 컨텍스트 없이 통과한다(모니터링이 401 을 보면 안 된다)", () => {
+  const r = run({}, E({ LIVELY_TENANT_HEADER_SECRET: SECRET }));
+  assert.equal(r.status, 401, "기본은 여전히 거절이어야 한다");
+  for (const p of ["/healthz", "/healthz?x=1", "/__router/healthz"]) {
+    assert.equal(isTenantAgnosticPath(p), true, p);
+  }
+});
+
+test("★★ 데이터 경로는 절대 무관 경로가 아니다", () => {
+  for (const p of ["/api/ui/org/profile", "/mcp", "/", "/healthzz", "/api/healthz"]) {
+    assert.equal(isTenantAgnosticPath(p), false, `${p} 가 통과하면 안 된다`);
+  }
 });

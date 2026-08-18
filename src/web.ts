@@ -6,6 +6,12 @@
 // 정적 자산은 비인증(사내망 전제) — 데이터는 전부 /api/ui 토큰/세션 뒤. domainmap 은 무인증 서비스라
 // 이 프록시의 인증이 신뢰 경계(절대 비인증 프록시 금지).
 import express from "express";
+import { runSchedulerTickOnce } from "./scheduler/engine.js";
+import { seedDefaultContent } from "./org/delivery/seed-content.js";
+import { pruneCallLog } from "./org/policies/call-log-prune.js";
+import { getRuntimeConfig } from "./org/store/runtime-config.js";
+import { backfillSessionStates } from "./sessions/session-state-backfill.js";
+import { reapIdleSessions } from "./sessions/session-reaper.js";
 import path from "node:path";
 import { readFileSync, statSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -50,6 +56,32 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
   };
 
   const mw = (scope: Scope | null): express.RequestHandler[] => [authResolve, requireScope(scope)];
+
+  // ── 테넌트 하우스키핑 틱(#1437 중앙 모드) ──────────────────────────────────
+  // 요청별 테넌시에서는 부팅 하우스키핑·스케줄러가 전부 꺼진다(요청 밖엔 테넌트 컨텍스트가 없다 —
+  //  boot/housekeeping.requestScopedTenancy). 그 일들을 **요청으로** 되살리는 자리가 여기다:
+  //  CP 가 테넌트마다 주기적으로 이 엔드포인트를 두드리고, 요청 컨텍스트(테넌트 헤더) 안에서
+  //  스케줄러 틱·시딩·정리가 그 테넌트 스코프로 돈다. itemsPool 파사드가 격리를 보장한다.
+  //
+  //  ⚠ 빨리 돌아온다 — 크론 잡 실행은 스케줄러 내부에서 fire-and-forget(중첩은 잡별 락이 막는다).
+  //  ⚠ 자가호스팅(고정/단일 테넌트)에서는 부팅 경로가 이미 이 일들을 하므로 이 엔드포인트를 부를
+  //   일이 없다 — 있어도 각 단계가 멱등이라 무해하다.
+  app.post("/api/ops/housekeeping/tick", ...mw("admin"), wrap(async (_req, res) => {
+    const out: Record<string, unknown> = {};
+    const step = async (name: string, fn: () => Promise<unknown>): Promise<void> => {
+      try { out[name] = (await fn()) ?? "ok"; }
+      catch (e) { out[name] = { error: e instanceof Error ? e.message : String(e) }; }
+    };
+    await step("scheduler", async () => { await runSchedulerTickOnce(); return "ticked"; });
+    await step("seed-default-content", () => seedDefaultContent());
+    await step("call-log-prune", async () => {
+      const cfg = await getRuntimeConfig();
+      return { deleted: await pruneCallLog(cfg.call_log_policy?.retention_days ?? 0) };
+    });
+    await step("session-backfill", async () => { await backfillSessionStates(); return "ok"; });
+    await step("session-reaper", async () => { await reapIdleSessions(); return "ok"; });
+    res.json({ ok: true, steps: out });
+  }));
 
   // ── 로컬 로그인/로그아웃/비번변경(P4). 로그인은 미인증 접근(cap 마운트보다 먼저). ──
   app.post("/api/ui/login", wrap(async (req, res) => {
