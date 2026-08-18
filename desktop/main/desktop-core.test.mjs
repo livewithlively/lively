@@ -16,7 +16,8 @@ import { argvFor, RUN_KINDS, IPC } from "./ipc-contract.mjs";
 import { trayMenuModel, statusLabel } from "./tray-menu.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
 import { shouldCheckForUpdates, updateFailureNote, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV, shouldAutoApplyUpdate, updateReadyNote, AUTO_APPLY_DELAY_MS, downloadProgressNote, PROGRESS_NOTE_MIN_MS } from "./update-policy.mjs";
-import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, uninstallerPath, uninstallerArgs, staleCleanupPs, staleInstallNote, psQuote } from "./win-stale-install.mjs";
+import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, uninstallerPath, uninstallerArgs, staleCleanupPs, staleInstallNote, psQuote, APP_ID, APP_GUID, UNINSTALLER_NAME, uuidV5 } from "./win-stale-install.mjs";
+import { createRequire } from "node:module";
 import { normalizeBounds, pickBounds, MIN_SIZE, DEFAULT_SIZE, MIN_VISIBLE } from "./window-bounds.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { manifestRefs, manifestProblems, GITHUB_SAFE } from "../verify-update-manifest.mjs";
@@ -634,9 +635,12 @@ t('U13 받는 동안의 문구 — 확인이 끝난 뒤 침묵하지 않는다(�
 //  그 뒤 업데이트는 사용자 자리(HKCU). 사용자 설치기는 HKLM 옛 설치본을 못 지운다 → 옛 바로가기가 옛 exe 를 연다.
 {
   const ownExe = "C:\\Users\\a\\AppData\\Local\\Programs\\Lively\\Lively.exe";
+  // ⚠ DisplayName 은 electron-builder 기본값 `${productName} ${version}` 이다("Lively 0.1.320") — v0.1.326 은 `-eq 'Lively'` 로 걸어
+  //  **전부 놓쳤다**(실측: 카드가 안 떴다). 픽스처는 실제 값으로 둔다. 미끼("Lively Wallpaper" — 실재하는 남의 제품)도 넣는다.
   const rows = [
-    { hive: "HKLM", name: "Lively", version: "0.1.320", location: "C:\\Program Files\\Lively", uninstall: '"C:\\Program Files\\Lively\\Uninstall Lively.exe" /allusers', quiet: "" },
-    { hive: "HKCU", name: "Lively", version: "0.1.325", location: "C:\\Users\\a\\AppData\\Local\\Programs\\Lively", uninstall: '"C:\\Users\\a\\AppData\\Local\\Programs\\Lively\\Uninstall Lively.exe" /currentuser', quiet: "" },
+    { key: APP_GUID, hive: "HKLM", name: "Lively 0.1.320", version: "0.1.320", location: "C:\\Program Files\\Lively", uninstall: '"C:\\Program Files\\Lively\\Uninstall Lively.exe" /allusers', quiet: "" },
+    { key: APP_GUID, hive: "HKCU", name: "Lively 0.1.326", version: "0.1.326", location: "C:\\Users\\a\\AppData\\Local\\Programs\\Lively", uninstall: '"C:\\Users\\a\\AppData\\Local\\Programs\\Lively\\Uninstall Lively.exe" /currentuser', quiet: "" },
+    { key: "{9c1b-other}", hive: "HKLM", name: "Lively Wallpaper 2.0", version: "2.0", location: "C:\\Program Files\\Lively Wallpaper", uninstall: '"C:\\Program Files\\Lively Wallpaper\\Uninstall Lively Wallpaper.exe"', quiet: "" },
   ];
   t('S1 감지 — 우리 자리(HKCU)는 빼고 다른 자리(HKLM 옛 설치본)만 잡는다', () => {
     const st = pickStaleInstalls(parseStaleQuery("\uFEFF" + JSON.stringify(rows)), ownExe);
@@ -649,6 +653,29 @@ t('U13 받는 동안의 문구 — 확인이 끝난 뒤 침묵하지 않는다(�
     // 단일 객체 출력(ConvertTo-Json 이 원소 하나면 배열을 안 만든다)·빈 출력·쓰레기 출력
     assert.equal(pickStaleInstalls(parseStaleQuery(JSON.stringify(rows[0])), ownExe).length, 1);
     assert.deepEqual(parseStaleQuery(""), []); assert.deepEqual(parseStaleQuery("not json"), []); assert.deepEqual(parseStaleQuery(undefined), []);
+    // ★ 우리 제품 판정은 GUID 키(정본) 또는 언인스톨러 파일명 — 이름만 비슷한 남의 제품(Lively Wallpaper)은 제외
+    assert.ok(!st.some((e) => /Wallpaper/.test(e.location)), '남의 제품(Lively Wallpaper)을 옛 설치본으로 잡았다 — 지우면 사고다');
+    // 키가 없어도(구버전 레코드) 언인스톨러 파일명이 우리 것이면 잡는다
+    assert.equal(pickStaleInstalls(parseStaleQuery(JSON.stringify([{ ...rows[0], key: "" }])), ownExe).length, 1);
+    // 키도 파일명도 다르면 이름이 'Lively 0.1.1' 이어도 제외
+    assert.deepEqual(pickStaleInstalls(parseStaleQuery(JSON.stringify([{ ...rows[0], key: "x", uninstall: '"C:\\z\\Remove.exe"' }])), ownExe), []);
+    // ★ GUID 는 electron-builder 가 실제로 쓰는 값과 같아야 한다 — 그 라이브러리(builder-util-runtime)로 직접 대조한다
+    const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'));
+    assert.equal(APP_ID, pkg.build.appId, 'APP_ID 가 package.json build.appId 와 다르다 — GUID 가 다른 앱을 가리킨다');
+    // 고정값 — 2026-08-18 builder-util-runtime UUID.v5(appId, ELECTRON_BUILDER_NS_UUID) 로 얻은 값. appId 가 바뀌면 같이 바뀐다.
+    assert.equal(uuidV5("io.lvly.desktop", "50e065bc-3134-11e6-9bab-360a5f6d0d1a"), "3671aa13-ad0d-5bfe-852b-a342893d84d2");
+    assert.equal(APP_GUID, uuidV5(pkg.build.appId, "50e065bc-3134-11e6-9bab-360a5f6d0d1a"));
+    // electron-builder 의 실제 라이브러리와도 대조한다 — 단, 루트 테스트 잡은 desktop/ 의존성을 안 깔므로 **있을 때만**
+    //  (없으면 위 고정값 대조가 계약이다. 있는 곳(desktop/ 에서 npm ci 한 러너·로컬)에선 라이브러리가 정본).
+    try {
+      const { UUID } = createRequire(import.meta.url)("builder-util-runtime");
+      assert.equal(APP_GUID, UUID.v5(pkg.build.appId, UUID.parse("50e065bc-3134-11e6-9bab-360a5f6d0d1a")), 'GUID 가 electron-builder 계산과 다르다');
+    } catch (e) { if (!/Cannot find module/.test(String(e?.message))) throw e; }
+    assert.ok(!pkg.build.nsis.guid, 'nsis.guid 를 박으면 여기 계산과 갈린다 — 박을 거면 APP_GUID 도 그 값으로');
+    assert.equal(UNINSTALLER_NAME, `Uninstall ${pkg.build.productName}.exe`);
+    // 쿼리는 GUID 키로도 잡는다(이름은 보조) — DisplayName -eq 'Lively' 는 다시는 안 된다
+    assert.ok(STALE_QUERY_PS.includes(`PSChildName -eq '${APP_GUID}'`), '쿼리가 GUID 키를 안 본다');
+    assert.ok(!/DisplayName -eq 'Lively'/.test(STALE_QUERY_PS), "DisplayName -eq 'Lively' 는 제품명+버전 형식을 전부 놓친다(v0.1.326 실측)");
     // 지울 수단이 없는 항목은 감지해도 목록에 안 넣는다(버튼을 줘도 할 게 없다)
     assert.deepEqual(pickStaleInstalls(parseStaleQuery(JSON.stringify([{ ...rows[0], uninstall: "", quiet: "" }])), ownExe), []);
     // 파서 보조
@@ -670,7 +697,7 @@ t('U13 받는 동안의 문구 — 확인이 끝난 뒤 침묵하지 않는다(�
     assert.match(staleInstallNote(st), /0\.1\.320/); assert.equal(staleInstallNote([]), "");
     // 쿼리 상수: 네 자리(HKLM 네이티브·WOW6432Node·HKCU)를 다 보고, 보간이 없다(인젝션 표면 없음)
     assert.match(STALE_QUERY_PS, /HKLM:\\SOFTWARE\\Microsoft/); assert.match(STALE_QUERY_PS, /WOW6432Node/); assert.match(STALE_QUERY_PS, /HKCU:/);
-    assert.ok(!/\$\{/.test(STALE_QUERY_PS), '쿼리에 JS 보간 흔적이 있다');
+    assert.ok(!/\$\{/.test(STALE_QUERY_PS), '쿼리에 JS 보간 흔적이 있다(GUID 는 이미 치환된 hex 상수여야 한다)');
     assert.match(STALE_QUERY_PS, /ConvertTo-Json/);
   });
   t('S3 배선 — 시작 때 감지·카드·트레이 항목·IPC·preload, 정리는 사람이 누를 때만', () => {
@@ -698,6 +725,27 @@ t('U13 받는 동안의 문구 — 확인이 끝난 뒤 침묵하지 않는다(�
     assert.notEqual(pkg.build.nsis.createDesktopShortcut, false, 'createDesktopShortcut:false 면 옛 바로가기를 지운 뒤 아무 바로가기도 없다');
   });
 }
+
+// ── N. 노드 '붙어 있는가' 축 — 프로세스는 도는데 게이트웨이엔 안 붙은 좀비를 '실행 중' 이라 그리지 않는다 (#1541) ──
+t('N1 트레이 — running 인데 connected=false 면 "연결 끊김" + 다시 시작 항목, 모름(null)이면 종전대로 실행 중', () => {
+  const base = { cliFound: true, loggedIn: true, kitInstalled: true, nodeRegistered: true, nodeRunning: true, nodeDaemon: true };
+  assert.match(statusLabel({ ...base, nodeConnected: false }), /연결 끊김/);
+  assert.match(statusLabel({ ...base, nodeConnected: true }), /실행 중/);
+  assert.match(statusLabel({ ...base, nodeConnected: null }), /실행 중/, '모름은 종전대로 — 게이트웨이에 못 물었다고 끊김이라 하면 거짓말');
+  assert.match(statusLabel({ ...base }), /실행 중/, '축이 아예 없어도(구 CLI) 종전대로');
+  const z = trayMenuModel({ ...base, nodeConnected: false });
+  const i = z.findIndex((m) => m.id === 'node-start');
+  assert.ok(i >= 0 && /다시 시작/.test(z[i].label), '좀비면 다시 시작 항목이 있어야 한다');
+  assert.ok(z.some((m) => m.id === 'node-stop'), '정지도 남긴다');
+  assert.ok(!trayMenuModel({ ...base, nodeConnected: true }).some((m) => m.id === 'node-start'), '정상 실행 중엔 시작 항목이 없다');
+  // 배선: 메인이 status 의 connected 를 상태로 옮기고(boolean 만), 렌더러가 그걸로 문구·버튼을 바꾼다
+  const main = readFileSync(fileURLToPath(new URL('./main.mjs', import.meta.url)), 'utf8');
+  assert.match(main, /nodeConnected: typeof n\.connected === "boolean" \? n\.connected : null/, 'connected 를 boolean 일 때만 옮기지 않는다');
+  const js = readFileSync(fileURLToPath(new URL('../renderer/app.js', import.meta.url)), 'utf8');
+  assert.match(js, /nodeConnected === false/, '렌더러가 좀비를 구분하지 않는다');
+  assert.match(js, /연결돼 있지 않습니다/, '렌더러 문구가 없다');
+  assert.match(js, /"노드 다시 시작"/, '좀비면 버튼이 다시 시작이어야 한다');
+});
 
 t('D6 ★ 답한 프롬프트는 다시 뜨지 않는다(리듀서가 옛 prompt 를 물고 있으면 안 된다)', () => {
   // 실측(맥 풀 플로우): '예' 를 누르고 나서도 다음 step 이벤트마다 확인 카드가 되살아나 세 번 눌러야 했다.

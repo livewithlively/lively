@@ -17,6 +17,8 @@ export function statusLabel(st) {
   if (s.cliBroken) return "라이블리 CLI 를 실행할 수 없음";
   if (!s.loggedIn) return "로그인 필요";
   if (!s.kitInstalled) return "키트 설치 필요";
+  // 프로세스는 도는데 게이트웨이엔 안 붙어 있음(#1541 실측: 절전 뒤 좀비 3시간·나흘) — '실행 중' 이라 하면 거짓말이다.
+  if (s.nodeRunning && s.nodeConnected === false) return "노드 연결 끊김 — 다시 시작 필요";
   if (s.nodeRunning) return s.nodeDaemon ? "노드 실행 중 (자동 시작 켜짐)" : "노드 실행 중 (이 세션만)";
   return s.nodeRegistered ? "노드 정지됨" : "노드 미등록";
 }
@@ -57,6 +59,10 @@ export function trayMenuModel(st) {
           : s.cliFound ? "설치 계속하기…" : "라이블리 설치…",
       enabled: !busy,
     });
+  } else if (s.nodeRunning && s.nodeConnected === false) {
+    // 좀비 — 다시 시작(node-start 는 옛 인스턴스를 회수하고 새로 띄운다)이 첫 항목, 정지는 그 아래
+    items.push({ id: "node-start", label: "노드 다시 시작", enabled: !busy });
+    items.push({ id: "node-stop", label: "노드 정지", enabled: !busy });
   } else if (s.nodeRunning) {
     items.push({ id: "node-stop", label: "노드 정지", enabled: !busy });
   } else {

@@ -18,15 +18,39 @@
 // ⚠ 순수함수로 뺀다(#1510 §5): 이 분기는 mac/linux CI 에서 한 번도 돌지 않는다. 판정·스크립트 조립을 여기서
 //  표로 못박는다. 실행(spawn)은 main.mjs 가 한다.
 
+import { createHash } from "node:crypto";
+
+/** 앱 식별자 — desktop/package.json build.appId 와 같아야 한다(테스트가 못박는다). 설치기의 레지스트리 키 이름이 여기서 나온다. */
+export const APP_ID = "io.lvly.desktop";
+/** electron-builder 가 NSIS GUID 를 만들 때 쓰는 네임스페이스(app-builder-lib NsisTarget ELECTRON_BUILDER_NS_UUID). */
+const ELECTRON_BUILDER_NS_UUID = "50e065bc-3134-11e6-9bab-360a5f6d0d1a";
+/** 언인스톨러 파일명 — app-builder-lib common.nsh `UNINSTALL_FILENAME "Uninstall ${PRODUCT_FILENAME}.exe"`. */
+export const UNINSTALLER_NAME = "Uninstall Lively.exe";
+
+/** RFC 4122 UUID v5 — electron-builder 가 `nsis.guid` 미지정 시 `UUID.v5(appId, NS)` 로 만드는 값과 같다(테스트가 builder-util-runtime 과 대조). */
+export function uuidV5(name, nsUuid) {
+  const ns = Buffer.from(String(nsUuid).replace(/-/g, ""), "hex");
+  const h = createHash("sha1").update(Buffer.concat([ns, Buffer.from(String(name), "utf8")])).digest();
+  h[6] = (h[6] & 0x0f) | 0x50; h[8] = (h[8] & 0x3f) | 0x80;
+  const x = h.subarray(0, 16).toString("hex");
+  return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20, 32)}`;
+}
+/** 우리 설치본의 Uninstall 레지스트리 키 이름 — per-user(HKCU)·per-machine(HKLM) 둘 다 이 GUID 아래 등록된다. */
+export const APP_GUID = uuidV5(APP_ID, ELECTRON_BUILDER_NS_UUID);
+
 /**
- * 감지 쿼리 — PowerShell 상수(보간 없음). Uninstall 키 네 자리(HKLM/HKCU × 네이티브/WOW6432Node)에서
- *  DisplayName 이 productName 인 항목을 JSON 배열로 낸다. 없으면 `[]`.
- *  ⚠ ConvertTo-Json 은 원소가 하나면 배열이 아니라 객체를 낸다 → `@(...)` 로 감싸고 -Depth 를 준다(parse 가 둘 다 받는다).
+ * 감지 쿼리 — PowerShell. Uninstall 키 네 자리(HKLM/HKCU × 네이티브/WOW6432Node)에서 **우리 GUID 키**이거나
+ *  DisplayName 이 `Lively…` 인 항목을 JSON 배열로 낸다(좁히는 판정은 JS pickStaleInstalls 가 한 번 더 한다).
+ *  ⚠ DisplayName 은 `${productName} ${version}`("Lively 0.1.320")이다 — `-eq 'Lively'` 로 걸면 **전부 놓친다**
+ *   (v0.1.326 에서 실제로 그랬다: 실측 화면에 카드가 안 떴다). 이름 대신 GUID 키가 정본이다.
+ *  보간은 APP_GUID 하나뿐이고 그건 hex/하이픈 상수다(아래 정규식으로 못박음). ConvertTo-Json 은 원소가 하나면 배열이
+ *  아니라 객체를 낸다 → `@(...)` 로 감싼다(parse 가 둘 다 받는다).
  */
+if (!/^[0-9a-f-]{36}$/.test(APP_GUID)) throw new Error(`APP_GUID 형식 이상: ${APP_GUID}`);
 export const STALE_QUERY_PS = [
   "$ErrorActionPreference='SilentlyContinue'",
-  "$keys=@('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*')",
-  "$rows=@(Get-ItemProperty $keys | Where-Object { $_.DisplayName -eq 'Lively' } | ForEach-Object { [pscustomobject]@{ hive=($_.PSPath -replace '^.*::(HK[A-Z]+).*$','$1'); name=$_.DisplayName; version=$_.DisplayVersion; location=$_.InstallLocation; uninstall=$_.UninstallString; quiet=$_.QuietUninstallString } })",
+  "$keys=@('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKCU:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*')",
+  `$rows=@(Get-ItemProperty $keys | Where-Object { $_.PSChildName -eq '${APP_GUID}' -or $_.DisplayName -like 'Lively*' } | ForEach-Object { [pscustomobject]@{ key=$_.PSChildName; hive=($_.PSPath -replace '^.*::(HK[A-Z_]+).*$','$1'); name=$_.DisplayName; version=$_.DisplayVersion; location=$_.InstallLocation; uninstall=$_.UninstallString; quiet=$_.QuietUninstallString } })`,
   "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)",
   "ConvertTo-Json -Compress -Depth 3 @($rows)",
 ].join("; ");
@@ -39,6 +63,8 @@ export function parseStaleQuery(text) {
   try { v = JSON.parse(t); } catch { return []; }
   const arr = Array.isArray(v) ? v : (v && typeof v === "object" ? [v] : []);
   return arr.filter((e) => e && typeof e === "object").map((e) => ({
+    key: String(e.key || ""),
+    name: String(e.name || ""),
     hive: String(e.hive || ""),
     version: String(e.version || ""),
     location: String(e.location || ""),
@@ -78,6 +104,10 @@ export function pickStaleInstalls(entries, ownExe) {
   for (const e of entries || []) {
     const uninst = uninstallerPath(e.quiet || e.uninstall);
     if (!uninst) continue;                                                // 지울 수단이 없으면 감지해도 할 게 없다
+    // **우리 제품**인가 — GUID 키(정본) 또는 언인스톨러 파일명. "Lively Wallpaper" 같은 남의 제품이 이름으로 걸려도 여기서 걸러진다.
+    const ours = String(e.key || "").toLowerCase() === APP_GUID
+      || String(uninst).replace(/^.*[\\/]/, "").toLowerCase() === UNINSTALLER_NAME.toLowerCase();
+    if (!ours) continue;
     const loc = normDir(e.location || uninst.replace(/[\\/][^\\/]+$/, ""));
     if (!loc || loc === own) continue;
     out.push({ ...e, uninstaller: uninst, uninstallArgs: uninstallerArgs(e.quiet || e.uninstall), location: e.location || uninst.replace(/[\\/][^\\/]+$/, "") });
