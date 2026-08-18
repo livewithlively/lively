@@ -401,6 +401,9 @@ WantedBy=default.target\n`);
         "  관리자 PowerShell 에서 `lively node --daemon` 을 실행하거나, `lively node` 로 창을 띄워두고 쓰세요.", 1);
     }
     winKillAgentProcs();                                                                   // 재등록 멱등 — 옛 인스턴스 회수
+    // 못 죽인 옛 인스턴스가 있으면 **말하고** 계속한다(새 인스턴스는 띄운다 — 게이트웨이엔 새 것이 붙는다). 좀비는 재부팅
+    //  또는 관리자 PowerShell 의 `lively node stop` 으로 걷는다. 조용히 넘어가면 프로세스가 둘인 이유를 아무도 모른다.
+    { const residual = winResidualAgentProcs(); if (residual.pids.length) say(yellow(stopResidualNote(residual))); }
     const since = Date.now();                                                              // 기동 **전** 시각 — 이후의 연결만 우리 것으로 센다
     // 지금 기동 — 로그인 때와 **같은 경로**로 띄운다(다르게 띄우면 여기선 되고 재부팅 후 안 되는 걸 못 잡는다).
     const started = spawnSync("wscript", [vbsPath], { stdio: "ignore", timeout: 15_000 }).status === 0;
@@ -641,6 +644,45 @@ function winKillAgentProcs() {
   kill("node.exe", "*node-agent*agent.mjs*");
 }
 
+/**
+ * 죽인 **뒤에 다시 센다** — Stop-Process 는 못 죽여도 조용하다(-ErrorAction SilentlyContinue, 게다가 stdio ignore).
+ *  ★ 실측(2026-08-18, hammurabi): 앱에서 '노드 정지' → "✅ 노드 데몬 해제" 를 찍고 끝났는데 프로세스는 그대로 살아
+ *  화면이 계속 "실행 중" 이었다(게이트웨이엔 이미 몇 시간째 오프라인인 좀비). 일반 권한 프로세스는 **관리자 권한으로 시작된**
+ *  같은 사용자의 프로세스를 종료할 수 없다(무결성 수준) — 세는 건 WMI 가 대신 해 줘서 보이는데, 죽이는 건 안 된다.
+ *  '했다' 고 말하고 안 됐으면 사람이 할 일(관리자 PowerShell 에서 다시)을 알 길이 없다 → 남은 프로세스를 PID 로 보고한다.
+ * @returns {{pids:number[], detail:string}} 남은 우리 프로세스(없으면 pids=[])
+ */
+export function winResidualAgentProcs(runProbe = winResidualProbe) {
+  const raw = runProbe();
+  const rows = parseResidualProbe(raw);
+  return { pids: rows.map((r) => r.pid), detail: rows.map((r) => `PID ${r.pid}${r.session != null ? ` (세션 ${r.session})` : ""} ${r.name}`).join(", ") };
+}
+/** 남은 프로세스 나열 — 이름·PID·세션. 순수 파서와 갈라 두어 표로 못박는다(Windows 분기는 CI 에서 안 돈다). */
+function winResidualProbe() {
+  const r = spawnSync("powershell", ["-NoProfile", "-Command",
+    "Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'node.exe' -and $_.CommandLine -like '*node-agent*agent.mjs*') -or ($_.Name -eq 'cmd.exe' -and $_.CommandLine -like '*node-agent-run.cmd*') } | " +
+    "ForEach-Object { \"$($_.ProcessId)`t$($_.SessionId)`t$($_.Name)\" }"], { encoding: "utf8", timeout: 8000 });
+  return r.error ? "" : String(r.stdout || "");
+}
+/** `pid<TAB>session<TAB>name` 줄들 → 배열. 빈 출력·쓰레기 줄은 버린다. */
+export function parseResidualProbe(stdout) {
+  const out = [];
+  for (const line of String(stdout || "").split(/\r?\n/)) {
+    const [pid, session, name] = line.trim().split("\t");
+    const p = Number(pid);
+    if (!Number.isFinite(p) || p <= 0) continue;
+    out.push({ pid: p, session: Number.isFinite(Number(session)) && session !== "" ? Number(session) : null, name: (name || "").trim() });
+  }
+  return out;
+}
+/** 정지 뒤 남은 프로세스에 대한 사람용 문구(순수). 없으면 "" */
+export function stopResidualNote(residual) {
+  const r = residual || { pids: [] };
+  if (!r.pids || !r.pids.length) return "";
+  return `⚠ 노드 프로세스 ${r.pids.length}개가 아직 살아 있습니다(${r.detail}) — 관리자 권한으로 시작됐거나 다른 로그온 세션의 것이라 이 권한으로는 종료할 수 없습니다.\n` +
+    "  관리자 PowerShell 에서 `lively node stop` 을 실행한 뒤, 일반 PowerShell(또는 앱)에서 다시 시작하세요.";
+}
+
 // ── 노드 상태 (#1541 T4) ────────────────────────────────────────────────────
 // 데스크톱 앱이 폴링할 축이다. 사람이 트레이에서 한 줄로 이해하는 건 "지금 도는가"이고, 버튼이 갈리는 건
 //  "등록됐나 / 자동시작이 켜졌나" 다 — 그 셋을 따로 준다.
@@ -752,6 +794,9 @@ function nodeStop() {
     //  ⚠ `taskkill /IM node.exe` 는 금지 — 사용자의 다른 Node 를 전부 죽인다. 커맨드라인으로 우리 것만 고른다
     //   (이 CLI 자신은 그 문자열이 없어 대상이 아니다).
     winKillAgentProcs();
+    // ★ 죽였는지 **다시 센다** — 못 죽였는데 ✅ 를 찍으면 앱은 계속 "실행 중" 인데 사람은 뭘 해야 할지 모른다(실측).
+    const residual = winResidualAgentProcs();
+    if (residual.pids.length) die(stopResidualNote(residual), 3);
     say(green(`✅ 노드 데몬 해제(${hadTask ? "작업 스케줄러" : hadVbs ? "시작프로그램" : "등록 없음 — 잔여 프로세스만 회수"})`));
   } else { die(`미지원 OS: ${process.platform}`, 1); }
   say(dim("   (노드 등록·번들은 남습니다 — 완전 제거는 웹/REST 로 노드 삭제)"));
