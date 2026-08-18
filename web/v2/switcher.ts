@@ -67,13 +67,15 @@ async function openMenu(anchor: HTMLElement): Promise<void> {
     // 비활성(= 부팅 자동 활성화 대기/실패 또는 매니지드) — **조용히 숨기지 않는다.** 만들기 섹션이
     //  없는 이유를 화면이 답하지 못하면 "기능이 없다"로 읽힌다. 매니지드(mode=managed)는 허브 링크가
     //  이미 그 답이라 아무것도 더하지 않고, 셀프호스트 single 만 진단 한 줄을 붙인다(admin 은 실패 사유까지).
+    const diagSlot = el('div');
+    panel.append(diagSlot);
     void (async () => {
       try {
         const d: any = await api('/api/ui/me/workspaces');
         if (!openPanel || d?.mode !== 'single') return;
-        panel.insertBefore(el('p', { class: 'v2-ws-empty', text: d.activation_error
+        diagSlot.append(el('p', { class: 'v2-ws-empty', text: d.activation_error
           ? '다중 워크스페이스 자동 활성화 실패 — ' + d.activation_error
-          : '다중 워크스페이스 준비 중이에요(부팅 자동 활성화). 계속 안 되면 관리자 로그를 확인하세요.' }), teamWrap);
+          : '다중 워크스페이스 준비 중이에요(부팅 자동 활성화). 계속 안 되면 관리자 로그를 확인하세요.' }));
       } catch (_) { /* 진단 실패는 침묵 — 메뉴 본기능과 무관 */ }
     })();
   }
