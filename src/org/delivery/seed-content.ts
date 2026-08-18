@@ -51,7 +51,7 @@ export async function seedDefaultContent(): Promise<SeedResult> {
       if (!before) {
         await upsertOrgHook({
           id: h.id, label: h.label, harness: h.harness as HookHarness, event: h.event, matcher: h.matcher,
-          source_code: h.source_code, timeout_sec: h.timeout_sec, note: h.note, enabled: h.enabled, sort: h.sort,
+          source_code: h.source_code, timeout_sec: h.timeout_sec, note: h.note, summary: h.summary, enabled: h.enabled, sort: h.sort,
         }, ctx);
         res.hooks++;
         continue;
@@ -63,7 +63,7 @@ export async function seedDefaultContent(): Promise<SeedResult> {
       if (h.id === "session-log-capture" && h.enabled && before.updated_by === "system" && !before.enabled) {
         await upsertOrgHook({
           id: h.id, label: h.label, harness: h.harness as HookHarness, event: h.event, matcher: h.matcher,
-          source_code: h.source_code, timeout_sec: h.timeout_sec, note: h.note,
+          source_code: h.source_code, timeout_sec: h.timeout_sec, note: h.note, summary: h.summary,
           enabled: true, target_members: before.target_members, sort: h.sort,
         }, ctx);
         res.hooks++;
@@ -73,7 +73,7 @@ export async function seedDefaultContent(): Promise<SeedResult> {
       if (before.updated_by !== "system" || before.source_code === h.source_code) continue;
       await upsertOrgHook({
         id: h.id, label: h.label, harness: h.harness as HookHarness, event: h.event, matcher: h.matcher,
-        source_code: h.source_code, timeout_sec: h.timeout_sec, note: h.note,
+        source_code: h.source_code, timeout_sec: h.timeout_sec, note: h.note, summary: h.summary,
         enabled: before.enabled,                 // 운영자 토글 보존(재시딩이 켜거나 끄지 않는다)
         target_members: before.target_members,   // 타깃 지정 보존
         sort: h.sort,

@@ -125,7 +125,7 @@ export function emitDefaultContentModule({ hooks, skills, knowledge }) {
 
 export interface DefaultHook {
   id: string; label: string | null; harness: string; event: string; matcher: string | null;
-  timeout_sec: number; note: string | null; enabled: boolean; sort: number; source_code: string;
+  timeout_sec: number; note: string | null; summary?: string; enabled: boolean; sort: number; source_code: string;
 }
 export interface DefaultSkill {
   id: string; kind: string; label: string | null; harness: string; description: string;
@@ -233,7 +233,7 @@ async function main() {
   const { default: pg } = await import("pg");
   const pool = new pg.Pool({ connectionString: process.env.ITEMS_DATABASE_URL, max: 2 });
   const nextHooks = (await pool.query(
-    `SELECT id, label, harness, event, matcher, timeout_sec, note, enabled, sort, source_code
+    `SELECT id, label, harness, event, matcher, timeout_sec, note, summary, enabled, sort, source_code
        FROM org_hook ORDER BY sort, id`)).rows;
   const capturedSkills = (await pool.query(
     `SELECT id, kind, label, harness, description, frontmatter, paired_hook_id, enabled, sort, body
