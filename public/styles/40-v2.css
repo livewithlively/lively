@@ -275,7 +275,7 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-sugs .chip { font-size: 13px; padding: 6px 12px; border-radius: 999px; }
 .v2-chat { flex: 1; min-height: 260px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg, #fff); overflow: hidden; display: flex; flex-direction: column; }
 .v2-chat-body { flex: 1; min-height: 0; display: flex; }
-.v2-askdock { margin-top: 8px; }
+.v2-askdock { flex: none; margin-top: 0; padding: 10px 16px 0; }
 .v2-now { margin-top: 18px; }
 .v2-now .v2-k { display: block; margin-bottom: 6px; }
 .v2-now-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 9px; text-decoration: none; color: inherit; }
@@ -303,11 +303,20 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--bg, #fff); }
 
 /* ── 우측 ── */
-.v2-aside { background: var(--canvas, #F4F7FC); border-left: 1px solid var(--line); min-height: 0; overflow: auto; padding: 16px 14px 24px; display: flex; flex-direction: column; gap: 10px; }
-.v2-aside-h { display: flex; align-items: baseline; gap: 8px; padding: 0 2px; }
+/* 우패널은 사이드바가 아니라 **가운데 화면의 연장**이다(#1756, 상민님). 종전엔 좌·우가 같은 회색 판(canvas)이라
+   3열이 [탐색 | 내용 | 탐색] 으로 읽혔다. 우패널이 말하는 것은 탐색이 아니라 지금 보고 있는 것의 내용이므로 판을 가운데에 붙인다.
+   잇는 것은 배경색만이 아니라 **구조선**이다:
+     (1) 판을 같게(흰 바탕) — 회색 canvas 는 왼쪽 탐색열만의 것이 된다.
+     (2) 두 열의 머리(가운데 .sc-head · 여기 .v2-aside-h)를 같은 38px·같은 아래선으로 맞춰 **한 줄로 잇는다**.
+     (3) 골격도 같게 — 머리 고정 → 사실 한 줄 → 본문만 스크롤(가운데 sc-head → sc-chat 과 같은 리듬).
+   사이의 세로 경계선은 **남긴다**(상민님: 2열 3열 사이에도 경계선이 없으면 이상하다) — 다만 판이 같으므로
+   그 선은 이제 다른 판의 시작이 아니라 한 판 안의 칸막이로 읽힌다. */
+.v2-aside { background: var(--bg, #fff); border-left: 1px solid var(--line); min-height: 0; overflow: hidden; padding: 0; display: flex; flex-direction: column; }
+.v2-aside > .v2-empty { padding: 14px 16px; }
+.v2-aside-h { display: flex; align-items: center; gap: 8px; flex: none; min-height: 38px; padding: 9px 16px 8px; border-bottom: 1px solid var(--line); }
 .v2-aside-h b { font-size: 13.5px; font-weight: 800; }
-.v2-aside-h .v2-k { margin-left: auto; }
-.v2-liv-cards { gap: 6px; }
+.v2-aside-h .v2-k { margin-left: auto; font-variant-numeric: tabular-nums; }
+.v2-liv-cards { gap: 6px; padding: 0 16px; }
 .v2-liv-rail { overflow: visible; }
 .v2-liv-rail .liv-cards { gap: 6px; }
 .v2-kn-sec .v2-k { display: block; margin: 6px 2px 6px; }
@@ -320,7 +329,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-kn-name { font-size: 12.5px; font-weight: 600; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-applist { display: flex; flex-direction: column; gap: 4px; }
 .v2-applink { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--ink); text-decoration: none; }
-.v2-applink:hover { background: var(--bg, #fff); }
+.v2-applink:hover { background: var(--bg-tint, #F6FAFF); }
 .v2-facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 0; font-size: 12.5px; }
 .v2-facts dt { color: var(--muted); }
 .v2-facts dd { margin: 0; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -330,13 +339,17 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
    근데 글자가 다다다닥 붙어 있으니 뭔 소린지 못 알아듣겠다 — 차라리 이전이 나았다."
    → 한 줄 규칙은 지키되 **줄끼리 숨 쉬게** 한다: 행 높이·글자 크기를 올리고(사이드바 14px 기준),
      항목 사이를 띄우고, 장은 카드처럼 바탕을 준다. 필터 줄은 없다(애초에 남은 것만 싣는다). */
-.tl-wrap { display: flex; flex-direction: column; gap: 10px; flex: none; }
+.tl-wrap { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+/* 머리 아래 한 줄 — 이 화면이 무엇을 보고 있는지의 사실(세션 상태·프로젝트·하네스). 가운데 대화창 머리와 같은 정보 층. */
+.tl-meta { flex: none; padding: 8px 16px; border-bottom: 1px solid var(--line-row, #EDF1F8); }
+.tl-meta[hidden] { display: none; }
+.tl-body { flex: 1; min-height: 0; overflow: auto; padding: 10px 16px 22px; }
 .tl-scope { font-size: 12px; color: var(--muted); }
 .tl-wrap .v2-aside-h .v2-k { margin-left: auto; }
 .tl-list { display: flex; flex-direction: column; min-height: 0; }
 .tl-day { display: flex; align-items: center; gap: 9px; padding: 16px 2px 6px; font-size: 11px; font-weight: 700; color: var(--muted-2, #a6b2c8); }
 .tl-day:first-child { padding-top: 2px; }
-.tl-day::after { content: ""; flex: 1; height: 1px; background: var(--line-net, #DCE6F5); }
+.tl-day::after { content: ""; flex: 1; height: 1px; background: var(--line-row, #EDF1F8); }
 
 /* 세로 레일 — 점이 레일 위에 얹힌다 */
 .tl-rail { position: relative; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; }
@@ -402,7 +415,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .tl-dot.tlk-source { background: var(--node-blue-soft, #9DBDF2); }
 .tl-dot.tlk-say, .tl-dot.tlk-meta { background: var(--muted-2, #a6b2c8); }
 .tl-dot.tlk-all { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted-2, #a6b2c8); }
-.v2-kn-foot { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 7px; }
+.v2-kn-foot { flex: none; margin-top: 0; padding: 14px 16px 18px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 7px; }
 
 /* ── 런치패드 ── */
 .v2-pad { position: fixed; inset: 0; z-index: 900; background: rgba(21, 35, 59, .28); backdrop-filter: blur(6px); display: flex; flex-direction: column; align-items: center; padding: 48px 24px; overflow: auto; }
@@ -424,7 +437,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 @media (max-width: 900px) { #v2-root, #v2-root.no-aside { grid-template-columns: 220px 6px minmax(0, 1fr) 0 0; } .v2-aside, #v2-root > .v2-split-x + .v2-main + .v2-split-x { display: none; } }
 
 /* ── 세션 우패널: 사실 한 줄 + 발자취(web/session-trail.ts) ── */
-.v2-sfacts { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--ink-sub); padding: 0 2px; }
+.v2-sfacts { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12px; color: var(--ink-sub); padding: 0; }
 .v2-sfacts a { color: var(--ink-sub); text-decoration: none; } .v2-sfacts a:hover { color: var(--blue); }
 .v2-sfacts .sep { color: var(--muted-2, #a6b2c8); }
 .tr-wrap { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
