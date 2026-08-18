@@ -350,62 +350,87 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .tl-rest:hover { color: var(--ink); background: var(--bg-tint, #F6FAFF); border-color: var(--line-net-2, #CFE0F7); }
 .tl-scope { font-size: 12px; color: var(--muted); }
 .tl-wrap .v2-aside-h .v2-k { margin-left: auto; }
-.tl-list { display: flex; flex-direction: column; min-height: 0; }
-.tl-day { display: flex; align-items: center; gap: 9px; padding: 16px 2px 6px; font-size: 11px; font-weight: 700; color: var(--muted-2, #a6b2c8); }
+.tl-list { display: flex; flex-direction: column; min-height: 0; gap: 2px; }
+.tl-day { display: flex; align-items: center; gap: 10px; padding: 18px 2px 8px; font-size: 11px; font-weight: 700; letter-spacing: .02em; color: var(--muted-2, #a6b2c8); }
 .tl-day:first-child { padding-top: 2px; }
 .tl-day::after { content: ""; flex: 1; height: 1px; background: var(--line-row, #EDF1F8); }
 
 /* 세로 레일 — 점이 레일 위에 얹힌다 */
-.tl-rail { position: relative; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; }
-.tl-rail::before { content: ""; position: absolute; left: 5px; top: 12px; bottom: 12px; width: 1px; background: var(--line-net, #DCE6F5); }
+/* 점과 선은 **한 좌표에서 파생**시킨다 — 따로 적어 두면 어느 한쪽만 고쳐져 어긋난다(실측: 선이 첫 점보다 2px 아래에서 시작).
+   --tl-cx = 레일 기준 점 중심 x · --tl-cy = 카드 기준 점 중심 y(제목 첫 줄 한가운데) · --tl-pad = 본문 들여쓰기 */
+.tl-rail { position: relative; --tl-pad: 30px; --tl-cx: 18.5px; --tl-cy: 22.5px; --tl-dot: 7px;
+  padding-left: var(--tl-pad); display: flex; flex-direction: column; }
+.tl-card::after { content: ""; position: absolute; left: calc(var(--tl-cx) - var(--tl-pad) - 0.5px); top: 0; bottom: 0; width: 1px; background: var(--line-net, #DCE6F5); }
+.tl-card:first-child::after { top: var(--tl-cy); }                      /* 선은 첫 점 **중심**에서 시작하고 */
+.tl-card:last-child::after { bottom: calc(100% - var(--tl-cy)); }       /*  마지막 점 중심에서 끝난다 */
 
-/* 한 항목 = 한 카드 — 제목은 두 줄까지, 결과·사람·시각은 아랫줄로.
-   "중요한 내용이면 그만큼 공간을 차지하는 게 맞다"(상민님) — 세로를 아끼지 않는다. */
-.tl-card { position: relative; display: flex; flex-direction: column; gap: 5px; background: var(--bg, #fff); border: 1px solid var(--line); border-radius: 12px; padding: 11px 13px 10px; text-decoration: none; color: inherit; }
-.tl-card::before { content: ""; position: absolute; left: -19px; top: 17px; width: 8px; height: 8px; border-radius: 50%; background: var(--bg, #fff); border: 1.5px solid var(--muted-2, #a6b2c8); box-sizing: border-box; }
+/* 하루 = 한 판, 그 안은 행 — 항목마다 흰 상자가 서서 말풍선이 줄줄이 붙던 것을 걷었다(상민님 2026-08-18).
+   판 하나가 날짜를 대신 말하고, 항목은 얇은 선으로만 나뉜다. 색은 왼쪽 점 하나에만. */
+.tl-group { background: var(--bg, #fff); border-radius: 16px; padding: 2px 0; box-shadow: 0 1px 2px rgba(21,35,59,.04); overflow: hidden; }
+.tl-card {
+  position: relative; display: flex; flex-direction: column; gap: 3px;
+  background: none; border: 0; border-radius: 0; padding: 12px 14px 11px 2px;
+  text-decoration: none; color: inherit; transition: background .14s ease;
+}
+.tl-card + .tl-card { box-shadow: inset 0 1px 0 var(--line-row, #EDF1F8); }
+.tl-card::before {
+  content: ""; position: absolute; z-index: 1;
+  left: calc(var(--tl-cx) - var(--tl-pad) - var(--tl-dot) / 2);
+  top: calc(var(--tl-cy) - var(--tl-dot) / 2);
+  width: var(--tl-dot); height: var(--tl-dot); border-radius: 50%;
+  background: var(--muted-2, #a6b2c8); box-shadow: 0 0 0 3px var(--bg, #fff); box-sizing: border-box;
+}
 .tl-card.can { cursor: pointer; }
-.tl-card.can:hover, .tl-card.go:hover { border-color: var(--line-net-2, #CFE0F7); box-shadow: var(--shadow-1, 0 1px 3px rgba(21,35,59,.06)); }
-.tl-card.open { border-color: var(--line-net-2, #CFE0F7); box-shadow: var(--shadow-1, 0 1px 3px rgba(21,35,59,.06)); }
-.tl-card:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
-.tl-head { display: flex; align-items: baseline; gap: 7px; }
+.tl-card.can:hover, .tl-card.go:hover { background: var(--bg-tint, #F6FAFF); }
+.tl-card.open { background: var(--bg-tint, #F6FAFF); }
+.tl-card:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.tl-head { display: flex; align-items: flex-start; gap: 8px; }
+.tl-ttl {
+  flex: 1; min-width: 0; font-size: 14px; line-height: 1.5; font-weight: 600; letter-spacing: -.2px;
+  color: var(--ink); word-break: keep-all;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.tl-head .tl-tm { flex: none; padding-top: 2px; }
+.tl-tm { font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; color: var(--muted-2, #a6b2c8); letter-spacing: -.2px; }
+.tl-meta { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--muted); min-height: 17px; }
+.tl-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-who { flex: none; color: var(--muted); }
+.tl-meta .tl-face { margin-left: auto; }
+.tl-meta .tl-who + .tl-car, .tl-meta .tl-what + .tl-car { margin-left: auto; }
+.tl-car { flex: none; color: var(--muted-3, #C2CCDD); font-size: 13px; line-height: 1; transition: transform .16s ease, color .16s ease; }
+.tl-card.can:hover .tl-car { color: var(--blue); }
+.tl-card.open .tl-car { transform: rotate(90deg); color: var(--blue); }
+.tl-x { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; color: var(--muted-2, #a6b2c8); padding-top: 3px; }
+.tl-card.tlk-task::before { background: var(--mint-deep, #0FA37E); }
+.tl-card.tlk-knowledge::before { background: var(--teal, #1BAEB0); }
+.tl-card.tlk-file::before { background: var(--mint-deep, #0FA37E); }
+.tl-card.tlk-activity::before { background: var(--blue); }
+.tl-card.tlk-cmd::before { background: var(--bg, #fff); box-shadow: inset 0 0 0 1.5px var(--muted-2, #a6b2c8), 0 0 0 3px var(--bg, #fff); }
+.tl-card.tlk-project::before { background: var(--blue-deep, #1E54CC); }
+.tl-card.tlk-say::before, .tl-card.tlk-meta::before { background: var(--muted-3, #C2CCDD); }
+/* ⚠ 아래 12줄은 main(#1756 이전 카드 디자인)에서 딸려온 죽은 규칙 — 지금 렌더러가 이 클래스를 붙이지 않는다.
+   지우면 css-drops 게이트가 회귀로 잡으므로 다음 PR 에서 HEAD 정리와 함께 걷는다. */
 .tl-verb { flex: none; font-size: 11.5px; font-weight: 700; color: var(--muted); }
-.tl-ttl { flex: 1; min-width: 0; font-size: 14px; line-height: 1.5; font-weight: 600; color: var(--ink); word-break: keep-all; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.tl-meta { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted); }
 .tl-meta .tl-tm { font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; color: var(--muted-2, #a6b2c8); margin-left: auto; }
-.tl-meta .tl-face { margin-left: 0; }
-.tl-who { flex: none; font-size: 11.5px; color: var(--muted); }
 .tl-more { flex: none; font-size: 11px; font-weight: 600; color: var(--muted-2, #a6b2c8); }
 .tl-card.can:hover .tl-more { color: var(--blue); }
-.tl-x { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; color: var(--muted-2, #a6b2c8); }
-/* 남은 것 — 점과 동사에 색 */
 .tl-card.t1::before { background: var(--mint-deep, #0FA37E); border-color: var(--mint-deep, #0FA37E); }
 .tl-card.t1.tlk-activity::before, .tl-card.t1.tlk-cmd::before, .tl-card.tlk-activity::before { background: var(--blue); border-color: var(--blue); }
-.tl-card.tlk-task::before { background: var(--mint-deep, #0FA37E); border-color: var(--mint-deep, #0FA37E); }
-/* 프로젝트 자체의 변화가 위계의 꼭대기다(상민님) — 남색 점 + 남색 동사로 다른 것과 갈라 보이게. */
-.tl-card.tlk-project::before { background: var(--blue-deep, #1E54CC); border-color: var(--blue-deep, #1E54CC); }
 .tl-card.tlk-project .tl-verb { color: var(--blue-deep, #1E54CC); }
-.tl-card.tlk-knowledge::before { background: var(--teal, #1BAEB0); border-color: var(--teal, #1BAEB0); }
 .tl-card.tlk-knowledge .tl-verb { color: var(--teal, #1BAEB0); }
-.tl-card.tlk-meta::before { background: transparent; border-color: var(--muted-2, #a6b2c8); }
 .tl-card.tlk-meta .tl-ttl { color: var(--ink-sub); font-weight: 500; }
 .tl-card .tl-verb { color: var(--mint-deep, #0FA37E); }
 .tl-card.tlk-activity .tl-verb, .tl-card.tlk-cmd .tl-verb { color: var(--blue); }
 .tl-card.tlk-say .tl-verb, .tl-card.tlk-meta .tl-verb { color: var(--muted); }
 .tl-card.err .tl-ttl { color: var(--coral-text, #B84E44); }
-/* 펼친 안 — 그 일에서 나온 것들. 여기서는 촘촘해도 된다(카드가 이미 맥락을 잡았다). */
-.tl-body { display: flex; flex-direction: column; gap: 1px; margin-top: 3px; padding-top: 7px; border-top: 1px solid var(--line-row, #EDF1F8); }
-.tl-sub { display: flex; align-items: center; gap: 7px; min-height: 25px; padding: 2px 4px; border-radius: 7px; text-decoration: none; color: inherit; }
-.tl-sub.go:hover { background: var(--bg-tint, #F6FAFF); }
-.tl-sub-v { flex: none; font-size: 11px; font-weight: 700; color: var(--muted); }
-.tl-sub-v.tlk-file { color: var(--mint-deep, #0FA37E); }
+.tl-body { display: flex; flex-direction: column; gap: 0; margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--line-row, #EDF1F8); }
+.tl-sub { display: flex; align-items: center; gap: 8px; min-height: 26px; padding: 2px; border-radius: 7px; text-decoration: none; color: inherit; }
+.tl-sub.go:hover { background: var(--bg-tint-2, #EEF5FF); }
+.tl-sub-v { flex: none; font-size: 11px; font-weight: 600; color: var(--muted-2, #a6b2c8); min-width: 30px; }
 .tl-sub-v.tlk-knowledge { color: var(--teal, #1BAEB0); }
-.tl-sub-v.tlk-cmd { color: var(--blue); }
+.tl-sub-v.tlk-file { color: var(--mint-deep, #0FA37E); }
 .tl-sub-t { flex: 1; min-width: 0; font-size: 12.5px; color: var(--ink-sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tl-sub.go:hover .tl-sub-t { color: var(--blue); }
-.tl-sub .tl-tm { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 10px; color: var(--muted-2, #a6b2c8); }
-.tl-bdgs { display: inline-flex; align-items: center; gap: 9px; flex-wrap: wrap; }
-.tl-bdg { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
-.tl-dur { flex: none; }
 
 .tl-face { width: 17px; height: 17px; border-radius: 50%; font-size: 9px; font-weight: 700; flex: none; display: inline-grid; place-items: center; color: #fff; overflow: hidden; }
 .tl-face img { width: 100%; height: 100%; object-fit: cover; display: block; }
