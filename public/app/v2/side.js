@@ -23,6 +23,8 @@ let closedSet = new Set();
 let showDone = false;
 let mineOnly = false;
 let sideFilter = '';
+let findOpen = false; // 돋보기로 펼친 검색칸. **검색어가 있으면 늘 펼친 상태**로 친다(왜 목록이 짧은지 화면이 말해야 한다)
+let keyBound = false;
 let stateFilter = null; // 상태 칩 — 세션 상태 key(waiting·busy…) 하나. 새로고침하면 풀린다(잠깐 보는 렌즈)
 let people = {}; // id → 멤버(표시명·아바타). 남의 세션 소유자 이름용
 let inited = false;
@@ -193,13 +195,42 @@ function render() {
     countEl = el('span', { class: 'v2-k' });
     treeEl = el('div', { class: 'v2-tree', role: 'tree', 'aria-label': '프로젝트와 세션' });
     const findIn = el('input', { class: 'v2-find-in', type: 'search', placeholder: '프로젝트 찾기', 'aria-label': '프로젝트 찾기', value: sideFilter,
-        oninput: (e) => { sideFilter = e.target.value; renderTree(); if (treeEl)
-            treeEl.scrollTop = 0; } });
+        // 타이핑 중에는 트리만 다시 그린다(전면 재렌더는 포커스·한글 IME 조합을 깬다) → 아이콘 강조는 클래스만 손댄다
+        oninput: (e) => {
+            sideFilter = e.target.value;
+            renderTree();
+            if (treeEl)
+                treeEl.scrollTop = 0;
+            markFind();
+        },
+        // Esc = 지우고 접는다(검색어가 있으면 한 번 더 눌러야 접힌다 — 실수로 지운 걸 되돌릴 여지를 준다)
+        onkeydown: (e) => {
+            if (e.key !== 'Escape')
+                return;
+            e.stopPropagation();
+            if (sideFilter) {
+                sideFilter = '';
+                renderTree();
+                e.currentTarget.value = '';
+                markFind();
+            }
+            else
+                closeFind();
+        },
+        // 검색어 없이 다른 곳을 누르면 조용히 접힌다 — 빈 칸이 자리를 계속 차지할 이유가 없다
+        onblur: () => { if (!sideFilter && findOpen)
+            window.setTimeout(() => { if (!sideFilter)
+                closeFind(); }, 120); } });
     const doneCount = rows.filter((r) => r.done).length;
     const fltN = (stateFilter ? 1 : 0) + (mineOnly ? 1 : 0) + (showDone ? 1 : 0);
     host.replaceChildren(switcherTop(), // 좌상단 워크스페이스 스위처(#1750) — 홈 워드마크 + 개인/팀 배지·전환·연결 메뉴
     // ⚠ replaceChildren 은 null 을 글자 "null" 로 그린다(el() 과 다르다) — 조건부 자식은 스프레드로.
-    ...(livOn ? [el('a', { class: 'v2-liv-btn' + (last.activeKey() === 'liv' ? ' on' : ''), href: '#/liv', 'data-nav': 'liv' }, el('span', { class: 'lm', text: 'L' }), el('span', { text: '리브' }), el('span', { class: 'sub', text: '워크스페이스 담당자' }))] : []), el('div', { class: 'v2-side-sec' }, countEl, filterBtn(fltN, liveAll, doneCount), el('a', { class: 'v2-add', href: '#/projects2', text: '+ 새 프로젝트', title: '프로젝트 앱(보드)에서 만듭니다' })), el('div', { class: 'v2-find' }, findIn), ...(fltN ? [filterSummary(fltN)] : []), treeEl, el('div', { class: 'v2-side-foot' }, el('button', { class: 'v2-apps-btn', type: 'button', onclick: () => openLaunchpad(), title: '앱 — 아직 새 화면으로 옮기지 않은 것들' }, appIcon('proj', 'v2-apps-ic'), el('span', { text: '앱' }), el('span', { class: 'v2-cnt', text: String(visibleApps().length) })), el('div', { class: 'v2-me' }, profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }), el('span', { class: 'v2-me-name', text: name }), el('button', { class: 'btn-text', type: 'button', text: '로그아웃', onclick: () => void logout() })), el('button', { class: 'v2-classic-link', type: 'button', text: '클래식 화면으로 (이 브라우저)', title: '이 브라우저에서만 옛 화면으로 봅니다. 관리탭 [화면] 에서 되돌릴 수 있어요.', onclick: () => { setUiModeOverride('classic'); location.replace(location.pathname + '#/dashboard'); location.reload(); } })));
+    ...(livOn ? [el('a', { class: 'v2-liv-btn' + (last.activeKey() === 'liv' ? ' on' : ''), href: '#/liv', 'data-nav': 'liv' }, el('span', { class: 'lm', text: 'L' }), el('span', { text: '리브' }), el('span', { class: 'sub', text: '워크스페이스 담당자' }))] : []), el('div', { class: 'v2-side-sec' }, countEl, findBtn(), filterBtn(fltN, liveAll, doneCount), 
+    // ＋도 아이콘으로 — 돋보기가 자리를 차지하면서 글자 버튼까지 두면 헤더가 두 줄로 접힌다(#1067 의 🔍/＋ 문법).
+    el('a', { class: 'v2-add', href: '#/projects2', title: '새 프로젝트 — 프로젝트 앱(보드)에서 만듭니다', 'aria-label': '새 프로젝트' }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-add-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' })))), 
+    // 검색칸은 돋보기를 눌렀을 때만(#1067 의 방식). 단 **검색어가 남아 있으면 계속 보인다** —
+    //  #1154 가 토글을 폐지했던 사유 중 하나가 '검색 중인 줄 모른 채 짧아진 목록을 본다'였다.
+    ...(findShown() ? [el('div', { class: 'v2-find' }, findIn)] : []), ...(fltN ? [filterSummary(fltN)] : []), treeEl, el('div', { class: 'v2-side-foot' }, el('button', { class: 'v2-apps-btn', type: 'button', onclick: () => openLaunchpad(), title: '앱 — 아직 새 화면으로 옮기지 않은 것들' }, appIcon('proj', 'v2-apps-ic'), el('span', { text: '앱' }), el('span', { class: 'v2-cnt', text: String(visibleApps().length) })), el('div', { class: 'v2-me' }, profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }), el('span', { class: 'v2-me-name', text: name }), el('button', { class: 'btn-text', type: 'button', text: '로그아웃', onclick: () => void logout() })), el('button', { class: 'v2-classic-link', type: 'button', text: '클래식 화면으로 (이 브라우저)', title: '이 브라우저에서만 옛 화면으로 봅니다. 관리탭 [화면] 에서 되돌릴 수 있어요.', onclick: () => { setUiModeOverride('classic'); location.replace(location.pathname + '#/dashboard'); location.reload(); } })));
     renderTree(rows);
     treeEl.scrollTop = prevScroll;
     if (findHad) {
@@ -207,6 +238,53 @@ function render() {
         if (findSel && findSel[0] != null)
             findIn.setSelectionRange(findSel[0], findSel[1]);
     }
+    else if (findFocusWanted) {
+        findFocusWanted = false;
+        findIn.focus();
+    }
+    bindFindKey();
+}
+// ── 돋보기 = 검색칸 여닫기 (#1067 의 방식을 되살리되 #1154 의 반려 사유 둘을 설계로 막는다) ──
+//  ⓐ "있는 줄도 모른다" → 돋보기 **아이콘 자체는 늘 보인다**(헤더 고정 자리) + 어디서든 `/` 키로 열린다 +
+//     검색 중이면 아이콘이 켜진 상태로 남고 지우는 [×] 가 붙는다.
+//  ⓑ "사이드바를 접으면 닿을 길이 없다" → 새 셸 사이드바는 통째로 접히지 않는다(손잡이 최소 200px).
+//     클래식 프로젝트 보드(접힘 레일 없음)와 다른 조건이라 그 사유는 여기 해당하지 않는다.
+let findFocusWanted = false;
+const findShown = () => findOpen || !!sideFilter;
+// 검색 중이면 돋보기를 켠 색으로 — 전면 재렌더 없이 클래스만(재렌더는 포커스·한글 IME 조합을 깬다)
+function markFind() { const fb = document.querySelector('.v2-findbtn'); if (fb)
+    fb.classList.toggle('has', !!sideFilter); }
+function openFind() { findOpen = true; findFocusWanted = true; redraw(); }
+function closeFind() { if (!findOpen && !sideFilter)
+    return; findOpen = false; sideFilter = ''; redraw(); }
+// `/` 한 번으로 열린다 — 글자를 치던 중이면(입력칸·편집영역) 가로채지 않는다.
+function bindFindKey() {
+    if (keyBound)
+        return;
+    keyBound = true;
+    document.addEventListener('keydown', (e) => {
+        if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey)
+            return;
+        const t = e.target;
+        if (t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName)))
+            return;
+        if (!last)
+            return;
+        e.preventDefault();
+        openFind();
+    });
+}
+function findBtn() {
+    const on = findShown();
+    return el('span', { class: 'v2-findbtn-wrap' }, el('button', {
+        class: 'v2-findbtn' + (on ? ' on' : '') + (sideFilter ? ' has' : ''), type: 'button',
+        'aria-label': on ? '프로젝트 찾기 닫기' : '프로젝트 찾기', 'aria-expanded': String(on),
+        title: on ? '닫기 (Esc)' : '프로젝트 찾기 — / 키로도 열려요',
+        onclick: () => { if (findShown())
+            closeFind();
+        else
+            openFind(); }
+    }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-findbtn-ic', 'aria-hidden': 'true' }, sv('circle', { cx: '11', cy: '11', r: '6.5' }), sv('path', { d: 'M16 16l4.5 4.5' }))));
 }
 // [필터] 버튼 + 팝오버 — 조작부는 여기 다 모인다. 목록 표면에는 필터가 없다(켜져 있으면 요약 한 줄만).
 function filterBtn(activeN, liveAll, doneCount) {
