@@ -14,6 +14,7 @@
 import { api, el, personFace, relTime, renderMarkdown, toast } from '../core.js';
 import { UP_CONFIRM, fileIconSvg, fmtFileDateFull, fmtSize, openFileViewer, openFolderGrid, upControl, upDropZone, upPrecheckOverwrite, upProgress, upSend, upToast, type UpItem } from '../projects/files.js';
 import { mountProjectChat, type ProjectChatHandle } from '../project-chat.js';
+import { appIcon } from './apps.js';
 import { openProjectSession } from './quick-session.js';
 import { sessText } from './side.js';
 import { makeSplitter } from './split.js';
@@ -108,18 +109,19 @@ export function mountProjectView(host: HTMLElement, opts: ProjectViewOpts): Proj
   }
 
   // ══ 구역 뼈대 — 슬림 헤더(라벨은 또렷하게) + 안에서 구르는 몸통 (+선택: 바닥 줄) ═══════════════════
-  function zone(cls: string, label: string): { root: HTMLElement; count: HTMLElement; acts: HTMLElement; body: HTMLElement; foot: HTMLElement } {
+  function zone(cls: string, label: string, icon?: Element | null): { root: HTMLElement; count: HTMLElement; acts: HTMLElement; body: HTMLElement; foot: HTMLElement } {
     const count = el('span', { class: 'pv-z-n' });
     const acts = el('div', { class: 'pv-z-acts' });
     const body = el('div', { class: 'pv-z-b' });
     const foot = el('div', { class: 'pv-z-f', hidden: true });
     const root = el('section', { class: 'pv-zone ' + cls, 'aria-label': label },
-      el('div', { class: 'pv-z-h' }, el('h2', { class: 'pv-z-k', text: label }), count, acts), body, foot);
+      el('div', { class: 'pv-z-h' }, icon ? el('span', { class: 'pv-z-ic', 'aria-hidden': 'true' }, icon) : null,
+        el('h2', { class: 'pv-z-k', text: label }), count, acts), body, foot);
     return { root, count, acts, body, foot };
   }
 
   // ══ 본문 — 왼쪽 큰 벽(문서 시트) ═══════════════════════════════════════════════════════════════
-  const bz = zone('pv-z-doc', '본문');
+  const bz = zone('pv-z-doc', '본문', appIcon('wiki'));
   const editBtn = el('button', { class: 'pv-btn', type: 'button', text: '편집', title: '본문을 직접 고칩니다', onclick: () => startEdit() }) as HTMLButtonElement;
   bz.acts.append(editBtn);
   function paintBody(): void {
@@ -174,7 +176,7 @@ export function mountProjectView(host: HTMLElement, opts: ProjectViewOpts): Proj
   function startEdit(): void { if (editing) return; editing = true; paintBody(); }
 
   // ══ 코멘트 — 오른쪽 위 게시판(얼굴 + 말 카드 + 쓰는 칸) ══════════════════════════════════════════
-  const cz = zone('pv-z-cmt', '코멘트');
+  const cz = zone('pv-z-cmt', '코멘트', appIcon('sess'));
   const cIn = el('textarea', { class: 'pv-cmt-in', rows: '1', placeholder: '이 방의 모두에게 남기기', 'aria-label': '코멘트 남기기' }) as HTMLTextAreaElement;
   const cSend = el('button', { class: 'pv-cmt-send', type: 'button', title: '남기기 (Enter)', 'aria-label': '코멘트 남기기', text: '⏎' }) as HTMLButtonElement;
   cz.foot.hidden = false;
@@ -223,7 +225,7 @@ export function mountProjectView(host: HTMLElement, opts: ProjectViewOpts): Proj
   });
 
   // ══ 세션 — 오른쪽 아래 작업대(도는 것은 색 띠) ═══════════════════════════════════════════════════
-  const sz = zone('pv-z-sess', '세션');
+  const sz = zone('pv-z-sess', '세션', appIcon('term'));
   {
     const btn = el('button', { class: 'pv-btn-main', type: 'button', text: '＋ 새 세션', title: '이 프로젝트에 붙은 AI 세션을 엽니다' }) as HTMLButtonElement;
     btn.onclick = () => { btn.disabled = true; void openProjectSession(id, String(pj().name || '')).then((ok) => { if (!ok) btn.disabled = false; }); };
@@ -271,7 +273,8 @@ export function mountProjectView(host: HTMLElement, opts: ProjectViewOpts): Proj
     const allBtn = el('button', { class: 'pv-btn', type: 'button', text: '전체 보기', title: '넓은 화면에서 검색·정렬·일괄 작업',
       onclick: () => openFolderGrid(id, fst.path, F, pj().folder || undefined) });
     shelf.append(
-      el('div', { class: 'pv-z-h' }, el('h2', { class: 'pv-z-k', text: '공유 폴더' }), shelfCount, crumbBox, progBox,
+      el('div', { class: 'pv-z-h' }, el('span', { class: 'pv-z-ic', 'aria-hidden': 'true' }, fileIconSvg('', true)),
+        el('h2', { class: 'pv-z-k', text: '공유 폴더' }), shelfCount, crumbBox, progBox,
         el('div', { class: 'pv-z-acts' }, up.btn, allBtn, up.fileIn, up.dirIn)),
       shelfBody);
     upDropZone(shelf, shelf, (items, emptyDirs) => void uploadHere(items, emptyDirs));   // 선반 전체가 드롭존(#781)

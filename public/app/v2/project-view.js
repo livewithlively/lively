@@ -14,6 +14,7 @@
 import { api, el, personFace, relTime, renderMarkdown, toast } from '../core.js';
 import { UP_CONFIRM, fileIconSvg, fmtFileDateFull, fmtSize, openFileViewer, openFolderGrid, upControl, upDropZone, upPrecheckOverwrite, upProgress, upSend, upToast } from '../projects/files.js';
 import { mountProjectChat } from '../project-chat.js';
+import { appIcon } from './apps.js';
 import { openProjectSession } from './quick-session.js';
 import { sessText } from './side.js';
 import { makeSplitter } from './split.js';
@@ -70,16 +71,16 @@ export function mountProjectView(host, opts) {
         door.replaceChildren(el('div', { class: 'pv-eyebrow' }, el('span', { class: 'pv-idchip mono', text: '#' + p.id }), p.list && p.list.name ? el('span', { class: 'pv-listname', text: p.list.name }) : null, el('span', { class: 'pv-eyebrow-sp' }), p.updated_at ? el('span', { class: 'pv-when', text: '수정 ' + relTime(p.updated_at) }) : null), el('div', { class: 'pv-title-line' }, el('h1', { class: 'pv-title', text: p.name }), el('span', { class: 'pv-stpill ' + st.cls }, el('span', { class: 'd', 'aria-hidden': 'true' }), el('span', { text: st.word }))), el('div', { class: 'pv-vitals' }, busy ? el('span', { class: 'pv-live' }, el('span', { class: 'v2-dot busy', 'aria-hidden': 'true' }), el('span', { text: `지금 ${busy}개 돌아가는 중` })) : null, vital('세션', String(sess.length)), vital('할 일', tasks.length ? `${tdone}/${tasks.length}` : '0', '#/app/projects2/p/' + id, tasks.length ? el('span', { class: 'pv-minibar', 'aria-hidden': 'true' }, el('span', { class: 'f', style: 'width:' + Math.round((tdone / tasks.length) * 100) + '%' })) : null), vital('자료', fileTotal == null ? '—' : String(fileTotal)), vital('지식', String(knN)), facesWrap));
     }
     // ══ 구역 뼈대 — 슬림 헤더(라벨은 또렷하게) + 안에서 구르는 몸통 (+선택: 바닥 줄) ═══════════════════
-    function zone(cls, label) {
+    function zone(cls, label, icon) {
         const count = el('span', { class: 'pv-z-n' });
         const acts = el('div', { class: 'pv-z-acts' });
         const body = el('div', { class: 'pv-z-b' });
         const foot = el('div', { class: 'pv-z-f', hidden: true });
-        const root = el('section', { class: 'pv-zone ' + cls, 'aria-label': label }, el('div', { class: 'pv-z-h' }, el('h2', { class: 'pv-z-k', text: label }), count, acts), body, foot);
+        const root = el('section', { class: 'pv-zone ' + cls, 'aria-label': label }, el('div', { class: 'pv-z-h' }, icon ? el('span', { class: 'pv-z-ic', 'aria-hidden': 'true' }, icon) : null, el('h2', { class: 'pv-z-k', text: label }), count, acts), body, foot);
         return { root, count, acts, body, foot };
     }
     // ══ 본문 — 왼쪽 큰 벽(문서 시트) ═══════════════════════════════════════════════════════════════
-    const bz = zone('pv-z-doc', '본문');
+    const bz = zone('pv-z-doc', '본문', appIcon('wiki'));
     const editBtn = el('button', { class: 'pv-btn', type: 'button', text: '편집', title: '본문을 직접 고칩니다', onclick: () => startEdit() });
     bz.acts.append(editBtn);
     function paintBody() {
@@ -146,7 +147,7 @@ export function mountProjectView(host, opts) {
     function startEdit() { if (editing)
         return; editing = true; paintBody(); }
     // ══ 코멘트 — 오른쪽 위 게시판(얼굴 + 말 카드 + 쓰는 칸) ══════════════════════════════════════════
-    const cz = zone('pv-z-cmt', '코멘트');
+    const cz = zone('pv-z-cmt', '코멘트', appIcon('sess'));
     const cIn = el('textarea', { class: 'pv-cmt-in', rows: '1', placeholder: '이 방의 모두에게 남기기', 'aria-label': '코멘트 남기기' });
     const cSend = el('button', { class: 'pv-cmt-send', type: 'button', title: '남기기 (Enter)', 'aria-label': '코멘트 남기기', text: '⏎' });
     cz.foot.hidden = false;
@@ -202,7 +203,7 @@ export function mountProjectView(host, opts) {
         } // 한글 조합 Enter 가드(레포 불변식)
     });
     // ══ 세션 — 오른쪽 아래 작업대(도는 것은 색 띠) ═══════════════════════════════════════════════════
-    const sz = zone('pv-z-sess', '세션');
+    const sz = zone('pv-z-sess', '세션', appIcon('term'));
     {
         const btn = el('button', { class: 'pv-btn-main', type: 'button', text: '＋ 새 세션', title: '이 프로젝트에 붙은 AI 세션을 엽니다' });
         btn.onclick = () => { btn.disabled = true; void openProjectSession(id, String(pj().name || '')).then((ok) => { if (!ok)
@@ -239,7 +240,7 @@ export function mountProjectView(host, opts) {
         const up = upControl((items) => void uploadHere(items, []), { className: 'pv-btn', label: '올리기' });
         const allBtn = el('button', { class: 'pv-btn', type: 'button', text: '전체 보기', title: '넓은 화면에서 검색·정렬·일괄 작업',
             onclick: () => openFolderGrid(id, fst.path, F, pj().folder || undefined) });
-        shelf.append(el('div', { class: 'pv-z-h' }, el('h2', { class: 'pv-z-k', text: '공유 폴더' }), shelfCount, crumbBox, progBox, el('div', { class: 'pv-z-acts' }, up.btn, allBtn, up.fileIn, up.dirIn)), shelfBody);
+        shelf.append(el('div', { class: 'pv-z-h' }, el('span', { class: 'pv-z-ic', 'aria-hidden': 'true' }, fileIconSvg('', true)), el('h2', { class: 'pv-z-k', text: '공유 폴더' }), shelfCount, crumbBox, progBox, el('div', { class: 'pv-z-acts' }, up.btn, allBtn, up.fileIn, up.dirIn)), shelfBody);
         upDropZone(shelf, shelf, (items, emptyDirs) => void uploadHere(items, emptyDirs)); // 선반 전체가 드롭존(#781)
     }
     function paintCrumb() {
