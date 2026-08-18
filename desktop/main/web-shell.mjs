@@ -107,3 +107,40 @@ export function webBootPayload({ gatewayUrl, token, appVersion, platform }) {
 /** 웹 창 기본 크기 — 마법사(720×560)와 다르다. 웹 UI 는 3열 셸이라 좁으면 접힌다. */
 export const APP_WINDOW_DEFAULT = { width: 1280, height: 840 };
 export const APP_WINDOW_MIN = { width: 900, height: 600 };
+
+// ── 커스텀 타이틀바 (#1541) ──────────────────────────────────────────────────
+// OS 기본 타이틀바를 걷고(frameless) 페이지 위 36px 를 우리 타이틀바로 쓴다. 규약:
+//  · Windows: titleBarStyle hidden + **WCO overlay**(네이티브 최소화/최대화/닫기만 남는다) — 버튼 색은 페이지 테마를 따라
+//    setTitleBarOverlay 로 맞춘다(다크모드가 웹에 들어오면 저절로 따라온다).
+//  · macOS: hiddenInset — 신호등이 페이지 위에 얹힌다(색 개념 없음 — 페이지 배경이 곧 타이틀바 색).
+//  · Linux: 손대지 않는다(서버측 장식 없이 frameless 면 이동·리사이즈 UX 가 무너진다 — 있는 척하지 않는다).
+// 드래그 영역·색 관찰은 **preload(web.cjs)가 소유**한다 — 웹 레포·게이트웨이 배포와 버전이 어긋나도
+//  (구 게이트웨이에 새 앱, 또는 그 반대) 창이 항상 끌리고 색이 항상 맞아야 하기 때문이다.
+export const TITLEBAR_HEIGHT = 36;
+
+/** 창 생성 옵션 조각 — 마법사·웹 창·자식 창이 전부 같은 규약을 받는다. theme 는 초기 색(페이지 보고가 오기 전)뿐이다. */
+export function frameOptions(platform, theme) {
+  if (platform === "win32") {
+    const dark = theme === "dark";
+    return {
+      titleBarStyle: "hidden",
+      titleBarOverlay: { color: dark ? "#14161a" : "#ffffff", symbolColor: dark ? "#e8eaed" : "#16181d", height: TITLEBAR_HEIGHT },
+    };
+  }
+  if (platform === "darwin") return { titleBarStyle: "hiddenInset" };
+  return {};
+}
+
+/** 이 플랫폼에서 frameless(=preload 가 타이틀바를 그려야 하는가). Linux 는 false — 네이티브 프레임 그대로. */
+export function framelessOn(platform) { return platform === "win32" || platform === "darwin"; }
+
+/**
+ * preload 의 색 보고 → Windows setTitleBarOverlay 인자. **#RRGGBB 만** 받는다(렌더러발 값이므로 형태를 강제 —
+ *  잘못된 값이면 null, 조용히 무시된다). Windows 외 플랫폼에선 호출부가 부르지 않는다.
+ */
+export function titlebarOverlayPatch(input) {
+  const hex = (v) => (typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v) ? v : null);
+  const color = hex(input?.color), symbolColor = hex(input?.symbol);
+  if (!color || !symbolColor) return null;
+  return { color, symbolColor, height: TITLEBAR_HEIGHT };
+}
