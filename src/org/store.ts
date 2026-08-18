@@ -55,7 +55,7 @@ export {
   getEmbeddingConfigSource, getStoragePolicySource, getCallLogPolicySource,
   getSessionMemoryPolicySource, getSessionReclaimPolicySource, getDelegatePolicySource,
 } from "./store/runtime-config.js";
-export type { OrgRuntimeConfig, HookRelayDecision, UiNavConfig, UiAnnouncement, UiProfile, UiSurfaceConfig } from "./store/runtime-config.js";
+export type { OrgRuntimeConfig, HookRelayDecision, UiNavConfig, UiAnnouncement, UiProfile, UiSurfaceConfig, WorkspaceKind } from "./store/runtime-config.js";
 
 // ── org_mcp_server(MCP 서버 레지스트리 + 프록시 스냅샷) ──
 export {

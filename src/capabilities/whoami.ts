@@ -63,6 +63,9 @@ const me: Capability = {
       ui_profile: ui?.ui_profile ?? "full",   // S4 — 관리탭 프로파일(admin-shell sectionHidden 이 해석)
       usage_url: ui?.usage_url ?? null,       // S5 — 상단바 '사용량' 칩 링크
       ui_mode: ui?.ui_mode ?? "v2",           // #1719 — 기본 화면 셸(v2|classic). main.ts boot 가 셸 선택 전에 읽는다
+      // #1750 — 이 워크스페이스의 종류(personal|team)와 계정 허브 URL. 좌상단 스위처(web/v2/switcher.ts)가 배지·동선을 정한다.
+      //  기본 team·null = 기존 셀프호스트 박스(무설정) — 스위처는 '이 팀 워크스페이스 + 연결한 팀' 만 보인다.
+      workspace: { kind: ui?.workspace_kind ?? "team", hub_url: ui?.workspace_hub_url ?? null },
       incognito: ctx?.incognito ?? false,
     };
   },

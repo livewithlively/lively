@@ -55,7 +55,7 @@ export interface OrgRuntimeConfig {
   session_reclaim_policy: SessionReclaimPolicy; // idle 세션 자동 회수(#1059 F) — idle TTL(분). 0=끔(무회귀). DB 우선, 비면 env 시드
   delegate_policy: DelegatePolicy; // 위탁 태스크 정책(#1101) — 무출력 stall 상한(ms). 0=가드 끔. DB 우선, 비면 env 시드 → 5분
   hook_relay_decisions: HookRelayDecision[]; // 러너가 PreToolUse 에서 전파할 결정(#892). 기본 deny/ask/defer — allow 는 명시 opt-in
-  session_share: SessionShareConfig; // 세션이력 캡처 정책(#905 C1). 기본 enabled=false(롤아웃 꺼둠). 관리탭 ▸ 세션 공유.
+  session_share: SessionShareConfig; // 세션이력 캡처 정책(#905 C1). 기본 enabled=true(#1752 — 명시 false 만 끔). 관리탭 ▸ 세션 공유.
   hook_grace_ms: number | null; // #1008 — run-custom 이 게이트웨이 미도달 시 최근 캐시를 쓸 유효기간(ms). NULL=무제한(기본). 양수=그 ms 후 fail-CLOSED.
   embedding_backfill_paused: boolean; // #1060 — 자동 임베딩 백필 스윕 일시중지. true=부팅·주기·sync후·nudge 스윕 no-op + 실행 중 잡 중단. DB 영속(재시작에도 유지).
   inject_ontology_guide: boolean; // #1245 — 온톨로지 가이드(제품 소유 섹션, 코드 단일 출처) 주입 여부. 본문 편집은 불가 — 이 토글만 org 가 정한다.
@@ -65,6 +65,8 @@ export interface OrgRuntimeConfig {
   ui_profile: UiProfile; // #1454 S4 — 관리탭 프로파일. 'full'(현행) | 'personal'(개인 워크스페이스 — 조직 운영 섹션 숨김).
   usage_url: string | null; // #1454 S5 — 상단바 '사용량' 칩 링크. null = 칩 미노출(현행).
   ui_mode: UiMode; // #1719 — 기본 화면 셸. 'v2'(새 1탭 셸, 기본) | 'classic'(종전 탭 셸). 사람별 로컬 오버라이드는 프론트가 해석.
+  workspace_kind: WorkspaceKind; // #1750 — 이 워크스페이스(=게이트웨이)의 종류. 'team'(기본 = 기존 셀프호스트) | 'personal'(개인).
+  workspace_hub_url: string | null; // #1750 — 계정의 워크스페이스 목록·만들기 허브(매니지드 app.lvly.io/home). null = 없음(셀프호스트 기본).
   version: number;
   updated_at: string | null;
   updated_by: string | null;
@@ -100,6 +102,9 @@ export type UiProfile = "full" | "personal";
 //  대표 결정(2026-08-18): 매니지드·새 설치는 새 화면, 이미 배포된 셀프호스트는 운영자가 classic 으로 내린다.
 export type UiMode = "v2" | "classic";
 export const uiModeSafe = (v: unknown): UiMode => (v === "classic" ? "classic" : "v2");
+// #1750 — 워크스페이스 종류. 잡값/부재 = 'team'(기존 셀프호스트 박스 = 팀 워크스페이스, 무설정 하위호환).
+export type WorkspaceKind = "personal" | "team";
+export const workspaceKindSafe = (v: unknown): WorkspaceKind => (v === "personal" ? "personal" : "team");
 const uiNavSafe = (v: unknown): UiNavConfig => {
   if (!v || typeof v !== "object" || Array.isArray(v)) return {};
   const tabsRaw = (v as Record<string, unknown>).tabs;
@@ -126,7 +131,7 @@ const usageUrlSafe = (v: unknown): string | null => (typeof v === "string" && v.
 
 export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
   const r = await itemsPool.query(
-    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, version, updated_at, updated_by
+    `SELECT hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, version, updated_at, updated_by
        FROM org_runtime_config WHERE id=1`,
   );
   const row = r.rows[0] as Record<string, unknown> | undefined;
@@ -166,6 +171,8 @@ export async function getRuntimeConfig(): Promise<OrgRuntimeConfig> {
     ui_profile: uiProfileSafe(row?.ui_profile), // #1454 S4 — 잡값/부재면 'full'(현행)
     usage_url: usageUrlSafe(row?.usage_url), // #1454 S5 — 빈값/부재면 null = 칩 미노출(현행)
     ui_mode: uiModeSafe(row?.ui_mode), // #1719 — 잡값/부재면 'v2'(제품 기본 = 새 셸)
+    workspace_kind: workspaceKindSafe(row?.workspace_kind), // #1750 — 잡값/부재면 'team'(기존 박스 = 팀)
+    workspace_hub_url: usageUrlSafe(row?.workspace_hub_url), // #1750 — 빈값/부재면 null(허브 없음)
     version: (row?.version as number) ?? 1,
     updated_at: (row?.updated_at as string) ?? null,
     updated_by: (row?.updated_by as string) ?? null,
@@ -201,6 +208,8 @@ export async function updateRuntimeConfig(
     ui_profile?: UiProfile;
     usage_url?: string | null;
     ui_mode?: UiMode;
+    workspace_kind?: WorkspaceKind;        // #1750
+    workspace_hub_url?: string | null;     // #1750
   },
   actor?: string,
   source?: string,
@@ -233,6 +242,8 @@ export async function updateRuntimeConfig(
   const uiProfile = patch.ui_profile !== undefined ? uiProfileSafe(patch.ui_profile) : before.ui_profile;
   const usageUrl = patch.usage_url !== undefined ? usageUrlSafe(patch.usage_url) : before.usage_url;
   const uiMode = patch.ui_mode !== undefined ? uiModeSafe(patch.ui_mode) : before.ui_mode; // #1719
+  const workspaceKind = patch.workspace_kind !== undefined ? workspaceKindSafe(patch.workspace_kind) : before.workspace_kind; // #1750
+  const workspaceHubUrl = patch.workspace_hub_url !== undefined ? usageUrlSafe(patch.workspace_hub_url) : before.workspace_hub_url; // #1750
   // 임베딩 설정 — 저장 시 정규화(잡값/알 수 없는 provider → off). 시크릿 미저장(auth_env_ref=env 이름만).
   //  #688 두 가지 보존: ① '명시적 끄기'({provider:'off',explicit:true})는 normalize 로 마커를 벗기지 않고 그대로 저장
   //  (env 시드 부활 금지). ② embedding_config 를 안 건드린 저장은 DB '원본'을 유지 — before(resolved)를 되쓰면
@@ -305,8 +316,8 @@ export async function updateRuntimeConfig(
     : before.oidc_config;
 
   await itemsPool.query(
-    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, version, updated_at, updated_by)
-       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$20::jsonb,$18::jsonb,$19::jsonb,$22::jsonb,$14::jsonb,$15::jsonb,$16,$17,$21,$27::jsonb,$23::jsonb,$24::jsonb,$25,$26,$28,1,now(),$13)
+    `INSERT INTO org_runtime_config(id, hooks, writeback_notice, work_roots, allowed_auth_envs, url_allowlist, allowed_db_secret_refs, allowed_db_hosts, allowed_internal_hosts, write_tools, pull_tools, embedding_config, storage_policy, call_log_policy, session_memory_policy, session_reclaim_policy, delegate_policy, hook_relay_decisions, session_share, hook_grace_ms, embedding_backfill_paused, inject_ontology_guide, oidc_config, ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url, version, updated_at, updated_by)
+       VALUES(1,$1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$20::jsonb,$18::jsonb,$19::jsonb,$22::jsonb,$14::jsonb,$15::jsonb,$16,$17,$21,$27::jsonb,$23::jsonb,$24::jsonb,$25,$26,$28,$29,$30,1,now(),$13)
      ON CONFLICT (tenant_id, id) DO UPDATE SET hooks=EXCLUDED.hooks, writeback_notice=EXCLUDED.writeback_notice,
        work_roots=EXCLUDED.work_roots, allowed_auth_envs=EXCLUDED.allowed_auth_envs, url_allowlist=EXCLUDED.url_allowlist,
        allowed_db_secret_refs=EXCLUDED.allowed_db_secret_refs, allowed_db_hosts=EXCLUDED.allowed_db_hosts,
@@ -319,13 +330,13 @@ export async function updateRuntimeConfig(
        embedding_backfill_paused=EXCLUDED.embedding_backfill_paused,
        inject_ontology_guide=EXCLUDED.inject_ontology_guide, oidc_config=EXCLUDED.oidc_config,
        ui_nav=EXCLUDED.ui_nav, announcement=EXCLUDED.announcement, ui_profile=EXCLUDED.ui_profile, usage_url=EXCLUDED.usage_url,
-       ui_mode=EXCLUDED.ui_mode,
+       ui_mode=EXCLUDED.ui_mode, workspace_kind=EXCLUDED.workspace_kind, workspace_hub_url=EXCLUDED.workspace_hub_url,
        version=org_runtime_config.version+1, updated_at=now(), updated_by=EXCLUDED.updated_by`,
     [JSON.stringify(hooks), writebackNotice, JSON.stringify(workRoots),
      JSON.stringify(allowedAuthEnvs), JSON.stringify(urlAllowlist), JSON.stringify(allowedDbSecretRefs), JSON.stringify(allowedDbHosts), JSON.stringify(allowedInternalHosts), JSON.stringify(writeTools), JSON.stringify(pullTools), JSON.stringify(embeddingConfig), JSON.stringify(storagePolicy), actor ?? null, JSON.stringify(relayDecisions), JSON.stringify(sessionShare), hookGraceMs, embeddingBackfillPaused, JSON.stringify(sessionMemoryPolicy), JSON.stringify(sessionReclaimPolicy), JSON.stringify(callLogPolicy), injectOntologyGuide, JSON.stringify(delegatePolicy),
      // #1454 S2~S5 — announcement 는 null 이면 SQL NULL(json 'null' 이 아니라 컬럼 NULL — 미표시의 정본 표현).
      JSON.stringify(uiNav), announcement === null ? null : JSON.stringify(announcement), uiProfile, usageUrl,
-     JSON.stringify(oidcConfig), uiMode],
+     JSON.stringify(oidcConfig), uiMode, workspaceKind, workspaceHubUrl],
   );
   // 저장 즉시 반영 — /readyz 임계치·로그 재니터가 캐시를 들고 있다(게이트웨이 재시작 없이 먹어야 한다).
   if (patch.storage_policy !== undefined) invalidateStoragePolicyCache();
@@ -399,10 +410,12 @@ export interface UiSurfaceConfig {
   ui_profile: UiProfile;
   usage_url: string | null;
   ui_mode: UiMode; // #1719 — 기본 화면 셸(v2|classic). 프론트 boot 가 셸을 고르기 전에 me 로 받는다.
+  workspace_kind: WorkspaceKind; // #1750 — 좌상단 스위처가 '개인/팀' 배지·동선을 정한다.
+  workspace_hub_url: string | null; // #1750 — 스위처의 '다른 워크스페이스·만들기' 링크(매니지드 허브). null = 링크 없음.
 }
 export async function getUiSurface(): Promise<UiSurfaceConfig> {
   try {
-    const r = await itemsPool.query(`SELECT ui_nav, announcement, ui_profile, usage_url, ui_mode FROM org_runtime_config WHERE id=1`);
+    const r = await itemsPool.query(`SELECT ui_nav, announcement, ui_profile, usage_url, ui_mode, workspace_kind, workspace_hub_url FROM org_runtime_config WHERE id=1`);
     const row = r.rows[0] as Record<string, unknown> | undefined;
     return {
       ui_nav: uiNavSafe(row?.ui_nav),
@@ -410,8 +423,10 @@ export async function getUiSurface(): Promise<UiSurfaceConfig> {
       ui_profile: uiProfileSafe(row?.ui_profile),
       usage_url: usageUrlSafe(row?.usage_url),
       ui_mode: uiModeSafe(row?.ui_mode),
+      workspace_kind: workspaceKindSafe(row?.workspace_kind),
+      workspace_hub_url: usageUrlSafe(row?.workspace_hub_url),
     };
   } catch {
-    return { ui_nav: {}, announcement: null, ui_profile: "full", usage_url: null, ui_mode: "v2" };
+    return { ui_nav: {}, announcement: null, ui_profile: "full", usage_url: null, ui_mode: "v2", workspace_kind: "team", workspace_hub_url: null };
   }
 }

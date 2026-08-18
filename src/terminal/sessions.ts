@@ -486,9 +486,11 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  동적 import — 정적으로 걸면 sessions → session-first-prompt → send-keys → terminal-pty → terminal-sessions → sessions 순환(check-imports).
   if (input.initialPrompt && String(input.initialPrompt).trim() && harness.key !== "shell" && !input.loginFor) {
     const prompt = String(input.initialPrompt);
-    void import("./session-first-prompt.js")
-      .then(({ injectFirstPrompt }) => injectFirstPrompt(id, harness.key, prompt, { trustOk: !!input.sessionDir }))
-      .catch((e) => { console.warn(`[terminal] 첫 지시 주입 실패(${id}) — 세션은 살아 있다:`, (e as Error)?.message ?? e); });
+    // 아웃박스(#1753) — 직접 폴링(injectFirstPrompt) 대신 큐로. 로그인 화면이면 큐가 들고 있다가 입력창이 뜨면 넣고,
+    //  못 넣으면 failed 로 남아 화면이 재시도를 준다(종전엔 서버 warn 한 줄로 유실). trust_ok: 세션 전용 폴더만(원 주석 그대로).
+    void import("../sessions/session-outbox.js")
+      .then(({ enqueuePrompt }) => enqueuePrompt(id, prompt, { trustOk: !!input.sessionDir }))
+      .catch((e) => { console.warn(`[terminal] 첫 지시 큐 등록 실패(${id}) — 세션은 살아 있다:`, (e as Error)?.message ?? e); });
   }
   return { id, label, harness: harness.key, dir: target, autoApprove: !!input.autoApprove, owner: ownerId(user), owned: true, created: createdSec, attached: false, invites, flags: appliedFlags };
 }

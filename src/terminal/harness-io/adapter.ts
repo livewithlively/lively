@@ -33,6 +33,9 @@ export interface HarnessSessionAdapter {
   roots(homes: string[], owner: string): string[];
   filePattern: RegExp;
   pathFor: ((root: string, ctx: { cwd: string; convId: string }) => string | null) | null;
+  /** 훅 보고(매핑)가 아직 없을 때의 마지막 폴백 — 이 cwd 의 규약 디렉터리에서 **가장 최근 대화 파일**을 찾는다(#1719).
+   *  어댑터가 자기 규약을 아는 만큼만 구현한다(claude: <루트>/<cwd 인코딩>/<uuid>.jsonl). null = 규약상 못 찾음(추측 금지 유지). */
+  latest: ((roots: string[], cwd: string) => Promise<{ convId: string; file: string; size: number } | null>) | null;
   parse: ((text: string, state: ParseState) => ParseResult) | null;
   answer: ((action: ChatAction) => ChatKey) | null;
 }
@@ -45,17 +48,17 @@ const codexIo: HarnessSessionAdapter = {
   key: "codex", label: "Codex",
   roots: (homes) => homes.map((h) => path.join(h, ".codex", "sessions")),
   filePattern: /^rollout-.*\.jsonl$/,
-  pathFor: null, parse: null, answer: null,
+  pathFor: null, latest: null, parse: null, answer: null,
 };
 const opencodeIo: HarnessSessionAdapter = {
   key: "opencode", label: "OpenCode",
   roots: () => [],
   filePattern: /\.jsonl$/,
-  pathFor: null, parse: null, answer: null,
+  pathFor: null, latest: null, parse: null, answer: null,
 };
 // 셸 세션 — AI 없음. 대화 파일도 승인도 없다.
 const shellIo: HarnessSessionAdapter = {
-  key: "shell", label: "셸", roots: () => [], filePattern: /$^/, pathFor: null, parse: null, answer: null,
+  key: "shell", label: "셸", roots: () => [], filePattern: /$^/, pathFor: null, latest: null, parse: null, answer: null,
 };
 
 export const HARNESS_IO: readonly HarnessSessionAdapter[] = [claudeIo, codexIo, opencodeIo, antigravityIo, grokIo, shellIo];

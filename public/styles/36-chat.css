@@ -162,3 +162,10 @@ details.livc-divider > summary::before, details.livc-divider > summary::after { 
   .dt-spin { animation: none; }
   .dt-tools-mark.run { animation: none; }
 }
+
+/* ── 아웃박스(#1753) — 말풍선 밑 전달 상태 줄 ── */
+.dt-qstate { font-family: var(--livc-mono); font-size: 11px; color: var(--muted); margin-top: 4px; text-align: right; }
+.dt-qstate:empty { display: none; }
+.dt-qfail { color: var(--coral-text); }
+.dt-qact { font-size: 11px; padding: 1px 6px; margin-left: 4px; }
+.livc-desktop .dt-user { flex-direction: column; align-items: flex-end; }

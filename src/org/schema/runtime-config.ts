@@ -183,5 +183,13 @@ export async function initRuntimeConfigPolicyColumns(pool: Pool): Promise<void> 
     --   이미 배포된 셀프호스트는 운영자가 관리탭 [화면] 에서 classic 으로 내린다). 클래식 코드는 그대로 남아
     --   ?embed=1 로 새 셸의 런치패드 '앱'으로 실린다. 사람별로는 브라우저 로컬 오버라이드(web/lib/state.ts uiMode)가 우선.
     ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS ui_mode TEXT NOT NULL DEFAULT 'v2';
+    -- ── workspace_kind(#1750): 이 워크스페이스(=이 게이트웨이)의 종류 — 'team'(여러 사람이 쓰는 팀 워크스페이스) |
+    --   'personal'(한 사람의 개인 워크스페이스). 기본 'team' = 기존 셀프호스트 박스는 무설정으로 팀 워크스페이스가 된다
+    --   (상민님 결정 2026-08-18: "기존 셀프호스팅 단일 워크스페이스는 팀 워크스페이스"). 매니지드는 컨트롤플레인이 가입 시 personal 로 push.
+    --   개인 워크스페이스에서만 '팀으로 올리기(승격)' 흐름이 기본 동선이다 — 팀 워크스페이스에서도 링크·승격은 막지 않는다(멤버 단위).
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS workspace_kind TEXT NOT NULL DEFAULT 'team';
+    -- workspace_hub_url(#1750): 계정의 워크스페이스 목록·만들기가 있는 허브(매니지드 = app.lvly.io/home). 좌상단 스위처가
+    --   '다른 워크스페이스·새로 만들기'를 여기로 보낸다. null = 허브 없음(셀프호스트 기본 — 스위처엔 이 워크스페이스와 연결한 팀만).
+    ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS workspace_hub_url TEXT;
   `);
 }

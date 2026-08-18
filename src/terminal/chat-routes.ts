@@ -41,7 +41,7 @@ import { isChatKey, sendKeyToSession, type ChatKey } from "./send-keys.js";
 import { nodeOfSession, nodeCanAttach } from "../node/registry.js";
 import { transcriptRange } from "../sessions/transcript-range.js";
 import { harnessIo, isChatAction, type ChatAction } from "./harness-io/adapter.js";
-import { locateTranscript } from "./harness-io/locate.js";
+import { locateTranscript, ownerHomes } from "./harness-io/locate.js";
 import { readAlignedWindow, fileReader, type AlignedWindow } from "./harness-io/window.js";
 import { parseWindow } from "./harness-io/parse-cache.js";
 import { toNdjson } from "./harness-io/chat-line.js";
@@ -91,15 +91,22 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     //  안에서만 찾으므로 남의 대화를 가리킬 수 없다(박스 인가는 위 gateRead 가 이미 했다).
     const want = String(req.query.uuid ?? "").trim();
     if (want && !/^[A-Za-z0-9._-]{1,128}$/.test(want)) throw new HttpError(400, "uuid 형식 오류");
-    const uuid = want || mapped;
-    if (!uuid) throw new HttpError(404, "이 세션의 대화 id 를 아직 모릅니다(첫 대화가 오가면 생깁니다).");
     const harness = await harnessOf(id, st?.harness);
     const io = harnessIo(harness);
     if (!io || !io.parse) throw new HttpError(409, `${io?.label || harness || "이 하네스"} 의 대화는 아직 여기서 읽을 수 없습니다 — 터미널로 보세요.`);
     // 실행 폴더 — desired-state 미러가 있으면 그것, 없으면 tmux 옵션(라이브).
     const cwd = st?.dir || await resolveSessionDir(id, () => sessionDir(id)).catch(() => "");
+    let uuid = want || mapped;
+    let scanned: { convId: string; file: string; size: number } | null = null;
+    if (!uuid && io.latest) {
+      // 매핑(훅 보고)이 아직 없다 — 이 cwd 의 규약 폴더에서 최신 대화 파일을 찾는다(#1719: "터미널엔 보이는데 대화창이 비었다").
+      //  훅이 언젠가 보고하면 mapped 가 생겨 이 스캔은 다시 안 돈다. want(?uuid=)가 있으면 정확 요청이므로 스캔하지 않는다.
+      scanned = await io.latest(io.roots(ownerHomes(st?.owner || ""), st?.owner || ""), cwd).catch(() => null);
+      if (scanned) uuid = scanned.convId;
+    }
+    if (!uuid) throw new HttpError(404, "이 세션의 대화 id 를 아직 모릅니다(첫 대화가 오가면 생깁니다).");
     //  훅이 보고한 파일 경로는 **지금 매핑된 대화**의 것이다 — 다른 uuid(?uuid=, 압축 전 파일)를 찾을 땐 규약으로만(그 경로를 주면 엉뚱한 현재 파일을 읽는다).
-    const found = await locateTranscript(io, { cwd, convId: uuid, owner: st?.owner || "", reportedPath: uuid === mapped ? st?.transcript_path : null });
+    const found = scanned ?? await locateTranscript(io, { cwd, convId: uuid, owner: st?.owner || "", reportedPath: uuid === mapped ? st?.transcript_path : null });
     if (!found) throw new HttpError(404, "대화 기록 파일을 찾지 못했습니다(아직 한 줄도 안 쌓였거나 이 박스가 읽을 수 없는 곳에 있습니다).");
     const q = req.query as Record<string, unknown>;
     const { start, end } = transcriptRange(found.size, q);
@@ -142,5 +149,35 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     await sendKeyToSession(id, key);
     res.setHeader("Cache-Control", "no-store");
     res.json({ ok: true, action, key });
+  }));
+
+  // ── 아웃박스(#1753) — 이 세션의 전달 대기·실패 프롬프트. 화면이 대기 말풍선(새로고침 생존)과 재시도·삭제를 그린다. ──
+  //  게이트 = transcript 와 동일(gateRead — 입장할 수 있으면 어차피 터미널에서 볼 수 있는 내용이다).
+  app.get("/api/ui/terminal/sessions/:id/outbox", auth, wrap(async (req, res) => {
+    const id = String(req.params.id ?? "");
+    if (!/^[A-Za-z0-9._-]{1,128}$/.test(id)) throw new HttpError(400, "세션 id 형식 오류");
+    await gateRead(id, req);
+    const { listOutbox } = await import("../sessions/session-outbox.js");
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ items: await listOutbox(id) });
+  }));
+  //  재시도·삭제는 **보내기와 동급 게이트**(canAttach) — 큐를 움직이는 건 세션에 입력하는 것과 같은 행동이다.
+  app.post("/api/ui/terminal/sessions/:id/outbox/:oid/retry", auth, wrap(async (req, res) => {
+    const id = String(req.params.id ?? "");
+    if (!/^[A-Za-z0-9._-]{1,128}$/.test(id)) throw new HttpError(400, "세션 id 형식 오류");
+    if (!(await canAttach(id, idOf(userOf(req))))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    const oid = Number(req.params.oid);
+    if (!Number.isFinite(oid) || oid <= 0) throw new HttpError(400, "outbox id 형식 오류");
+    const { retryOutbox } = await import("../sessions/session-outbox.js");
+    res.json({ ok: await retryOutbox(id, oid) });
+  }));
+  app.post("/api/ui/terminal/sessions/:id/outbox/:oid/discard", auth, wrap(async (req, res) => {
+    const id = String(req.params.id ?? "");
+    if (!/^[A-Za-z0-9._-]{1,128}$/.test(id)) throw new HttpError(400, "세션 id 형식 오류");
+    if (!(await canAttach(id, idOf(userOf(req))))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    const oid = Number(req.params.oid);
+    if (!Number.isFinite(oid) || oid <= 0) throw new HttpError(400, "outbox id 형식 오류");
+    const { discardOutbox } = await import("../sessions/session-outbox.js");
+    res.json({ ok: await discardOutbox(id, oid) });
   }));
 }
