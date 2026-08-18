@@ -177,14 +177,20 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
   let stick = true;
   const jump = el('button', {
     class: 'livc-jump', type: 'button', hidden: true, text: '최신 대화로 ↓',
-    onclick: () => { stick = true; list.scrollTop = list.scrollHeight; jump.hidden = true; },
+    onclick: () => { stick = true; toBottom(); },
   }) as HTMLButtonElement;
+  // ⚠ 우리가 바닥으로 내린 직후의 scroll 이벤트는 '사람이 올렸다'가 아니다 — 내용이 연달아 붙는 되그리기 중에는 내린 뒤
+  //  다음 덩이가 먼저 붙어 이벤트가 '바닥이 아님'으로 잡히고, 그 한 번에 stick 이 풀려 [최신 대화로] 가 괜히 뜬다(실측).
+  //  프로그램 스크롤 뒤 120ms 안의 이벤트는 stick 을 풀지 않는다(붙이는 방향은 그대로 반영).
+  let progAt = 0;
   list.addEventListener('scroll', () => {
-    stick = list.scrollHeight - list.scrollTop - list.clientHeight <= NEAR_BOTTOM;
-    if (stick) jump.hidden = true;
+    const near = list.scrollHeight - list.scrollTop - list.clientHeight <= NEAR_BOTTOM;
+    if (near) { stick = true; jump.hidden = true; return; }
+    if (Date.now() - progAt > 120) stick = false;
   });
+  const toBottom = (): void => { progAt = Date.now(); list.scrollTop = list.scrollHeight; jump.hidden = true; };
   const scroll = (): void => {
-    if (stick) { list.scrollTop = list.scrollHeight; jump.hidden = true; return; }
+    if (stick) { toBottom(); return; }
     jump.hidden = false;
   };
 
@@ -373,7 +379,7 @@ export function createChatView(host: HTMLElement, opts: ChatViewOpts): ChatView 
   return {
     root, list, input, form, noteEl: note,
     turn, event, stream, settle, running, busy, scroll,
-    scrollToBottom: () => { stick = true; list.scrollTop = list.scrollHeight; jump.hidden = true; },
+    scrollToBottom: () => { stick = true; toBottom(); },
     setNote: (text: string) => { note.textContent = text; },
     error: (t, text) => { const n = el('div', { class: 'livc-err', text }); if (t) appendWork(t, n); else list.append(n); scroll(); },
     divider,
