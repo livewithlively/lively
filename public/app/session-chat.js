@@ -23,6 +23,7 @@ import { createChatView } from './chat-view.js';
 import { toolLabel } from './session-tool-labels.js';
 import { classifyToolUse } from './session-trail.js';
 import { makeSplitter } from './v2/split.js';
+import { effortKo, findHarness, flagChoices, prettyModel, providerLabel, runCatalog } from './v2/run-picker.js';
 const WINDOW = 1_500_000; // 첫 로드·[이전 불러오기] 한 번에 읽는 바이트(긴 세션은 30MB — 꼬리부터)
 const POLL_RUN_MS = 700; // 도는 중(블록 단위로 즉시 쌓인다 — 이 값이 체감 지연)
 const POLL_IDLE_MS = 3000; // 살아 있고 안 도는 중(다음 지시를 터미널에서 칠 수도 있다)
@@ -106,25 +107,31 @@ export function mountSessionChat(host, first, opts) {
     termSplit.hidden = true;
     wrap.append(termSplit, termHost);
     host.replaceChildren(wrap);
-    // 입력칸 아래 바(Claude Desktop 의 '자동 · Opus 5 · 엑스트라' 자리) — 이 세션이 실제로 도는 모드·모델·노력. 트랜스크립트 줄에서
-    //  읽어 채운다(user.permissionMode · assistant.message.model · assistant.effort). **바꾸는 컨트롤이 아니라 사실 표시**다 —
-    //  이 값은 터미널(/model·/effort)에서만 바뀐다. 눌러도 되는 척하는 버튼은 두지 않는다(막다른 컨트롤 금지).
+    // 입력칸 아래 바(Claude Desktop 의 '자동 · Opus 5 · 엑스트라' 자리) — 이 세션이 실제로 도는 모드·제공자·모델·추론강도.
+    //  트랜스크립트 줄에서 읽어 채운다(user.permissionMode · assistant.message.model · assistant.effort).
+    //   · 모드·제공자는 **사실 표시**다. 모드는 터미널에서만 바뀌고, 제공자(어느 회사 모델)는 프로세스가 이미 그 CLI 로
+    //     떠 있어 못 바꾼다 — 다른 제공자로 가려면 새 세션을 연다(홈 입력창의 세 칸, #1758).
+    //   · 모델·추론강도는 **여기서 바꾼다**(#1758). 단 그 하네스에 인자를 받는 슬래시 명령이 있을 때만 드롭다운이 되고
+    //     (서버 catalog.ts runtimeCmd → 카탈로그 runtime), 없으면 종전 그대로 읽기 전용 칩이다 — 눌러도 되는 척하는
+    //     컨트롤은 두지 않는다(막다른 컨트롤 금지).
     const chipMode = el('span', { class: 'dt-chip', hidden: true });
+    const chipProv = el('span', { class: 'dt-chip', hidden: true });
     const chipModel = el('span', { class: 'dt-chip', hidden: true });
     const chipEffort = el('span', { class: 'dt-chip', hidden: true });
+    const selModel = el('select', { class: 'dt-chip dt-chip-sel', hidden: true, 'aria-label': '모델' });
+    const selEffort = el('select', { class: 'dt-chip dt-chip-sel', hidden: true, 'aria-label': '추론강도' });
     const chip = (n, v, tip) => { n.textContent = v; if (tip && tip !== v)
         n.title = tip;
     else
         n.removeAttribute('title'); n.hidden = !v; };
     const MODE_KO = { default: '기본', auto: '자동', acceptEdits: '수정 자동승인', bypassPermissions: '전부 자동', plan: '계획', dontAsk: '묻지 않음' };
-    const EFFORT_KO = { low: '낮음', medium: '보통', high: '높음', xhigh: '매우 높음', max: '최대' };
-    const prettyModel = (m) => m.replace(/^claude-/, '').replace(/-\d{8}$/, '').split('-').map((w) => (/^\d/.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1))).join(' ');
     // 세션 도중 `/model` 로 모델을 바꾸면 그 사실이 사용자 줄에 남는다("Set model to <b>Opus 5 (1M context)</b> and saved …", ANSI 굵기 포함).
     //  `assistant.message.model` 만 보면 **'마지막 응답에 쓰인 모델'** 이라, 바꾼 뒤 아직 답이 없는 세션은 옛 모델을 가리킨다
     //  (실측 2026-08-18: 한 대화 파일에 claude-fable-5 206줄 + claude-opus-5 233줄 — 터미널은 Opus 인데 칩은 Fable).
-    //  줄 순서대로 덮으므로 둘 중 **나중에 나온 사실**이 이긴다.
+    //  줄 순서대로 덮으므로 둘 중 **나중에 나온 사실**이 이긴다. 드롭다운(#1758)의 '지금'도 같은 사실을 따른다 —
+    //  내가 방금 바꾼 값이 여기로 되돌아오는 것이 그 변경이 먹혔다는 유일한 증거다.
     const SET_MODEL_RE = /Set model to\s+(.+?)(?:\s+and saved\b|$)/i;
-    const setModel = (full) => chip(chipModel, full.replace(/\s*\([^)]*\)\s*$/, '').trim() || full, full);
+    const setModel = (full) => setObserved('model', full.replace(/\s*\([^)]*\)\s*$/, '').trim() || full, full);
     // 대화창 ————
     const view = createChatView(chatHost, {
         who: { me: '나', ai: 'AI' },
@@ -133,12 +140,109 @@ export function mountSessionChat(host, first, opts) {
         thinking: 'fold',
         sendWhileBusy: true,
         style: 'desktop',
-        bar: { right: el('span', { class: 'dt-chips' }, chipMode, chipModel, chipEffort) },
+        bar: { right: el('span', { class: 'dt-chips' }, chipMode, chipProv, chipModel, selModel, chipEffort, selEffort) },
         onSend: (text) => sendPrompt(text),
         onStop: canKeys() ? () => sendKey('interrupt') : undefined,
         escActive: () => true,
         opening: null,
     });
+    // 모델·추론강도 바꾸기(#1758) ————
+    //  세션은 이미 argv 로 떠 있어 플래그로는 못 바꾼다 — 서버가 사람이 터미널에서 치는 것과 **같은 슬래시 명령**을
+    //  주입한다(POST …/runtime). 어떤 하네스가 그걸 받는지는 서버 카탈로그가 정한다(runtime.model / runtime.effort).
+    let hcat = null; // 이 세션의 하네스 카탈로그 행(제공자 이름 · 선택지 · 바꿀 수 있나)
+    let obsModel = '';
+    let obsModelTip = '';
+    let obsEffort = ''; // 대화 파일이 말한 **실제** 값 — 드롭다운의 '지금'은 이걸 따른다
+    let switching = false;
+    //  obj = 목적격 조사까지 붙인 형태('모델을'·'추론강도를') — 받침 유무로 갈리는데 축이 둘뿐이라 표에 그대로 적는다.
+    const AXIS = {
+        model: { flag: '--model', ko: '모델', obj: '모델을' },
+        effort: { flag: '--effort', ko: '추론강도', obj: '추론강도를' },
+    };
+    const canSwitch = (a) => !!hcat && canType() && !!hcat.runtime?.[a] && flagChoices(hcat, AXIS[a].flag).length > 0;
+    //  optLabel = 드롭다운 선택지 문구(모델은 **값 그대로** — 홈 입력창과 같은 말이어야 하고, antigravity 처럼
+    //   'claude-…'/'gemini-…' 로 제공자가 갈리는 목록은 접두어를 지우면 무엇인지 알 수 없다).
+    //  showLabel = 관측값('지금 · …') 문구 — 하네스가 뱉는 긴 id 라 읽기 좋게 다듬는다.
+    function paintAxis(a, box, span, observed, optLabel, showLabel) {
+        const shown = observed ? showLabel(observed) : '';
+        if (!canSwitch(a)) {
+            box.hidden = true;
+            chip(span, shown, a === 'model' ? obsModelTip : undefined);
+            return;
+        }
+        span.hidden = true;
+        const choices = flagChoices(hcat, AXIS[a].flag);
+        // 관측값이 선택지 중 하나를 품고 있으면 그 칸을 고른 것으로 본다. 영숫자만 남겨 비교한다 — 관측값은
+        //  'claude-opus-4-5-…' 로도 오고 화면용으로 다듬은 'Grok 4.6' 으로도 와서, 하이픈·공백을 그대로 두면 서로 안 닿는다.
+        const norm = (x) => x.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const hit = choices.find((c) => observed && norm(observed).includes(norm(c))) || '';
+        const keep = box.value; // 방금 고른 값이 아직 기록에 안 나타났을 수 있다 — 관측이 따라오면 그게 이긴다
+        box.replaceChildren(el('option', { value: '' }, hit || !shown ? `${AXIS[a].ko} · 지난번 그대로` : `지금 · ${shown}`), ...choices.map((c) => el('option', { value: c }, optLabel(c))));
+        box.value = hit || (choices.includes(keep) ? keep : '');
+        box.hidden = false;
+    }
+    function paintRun() {
+        chip(chipProv, hcat ? providerLabel(hcat) : '');
+        if (hcat)
+            chipProv.title = `이 세션은 ${providerLabel(hcat)} 의 ${hcat.label} 로 떠 있어요 — 제공자는 새 세션에서만 고를 수 있어요.`;
+        paintAxis('model', selModel, chipModel, obsModel, (v) => v, prettyModel);
+        paintAxis('effort', selEffort, chipEffort, obsEffort, effortKo, effortKo);
+    }
+    //  tip = 칩에 걸 전체 문구(모델 이름이 길어 줄인 경우의 원문). 드롭다운으로 바꿀 수 있는 세션에선 칩이 숨으므로 안 쓰인다.
+    function setObserved(a, v, tip) {
+        if (a === 'model') {
+            if (obsModel === v && obsModelTip === (tip || ''))
+                return;
+            obsModel = v;
+            obsModelTip = tip || '';
+        }
+        else {
+            if (obsEffort === v)
+                return;
+            obsEffort = v;
+        }
+        paintRun();
+    }
+    async function switchAxis(a, box) {
+        const v = box.value;
+        if (!v) {
+            paintRun();
+            return;
+        } // '지난번 그대로'(빈 값)는 되돌릴 명령이 없다 — 표시만 원복
+        // 앞 변경이 아직 도는 중(확인·재시도까지 몇 초 걸린다) — 조용히 되돌리지 않고 왜 안 먹었는지 말한다.
+        if (switching) {
+            paintRun();
+            view.setNote('앞의 변경을 보내는 중이에요 — 끝나면 다시 골라 주세요.');
+            return;
+        }
+        switching = true;
+        box.disabled = true;
+        try {
+            const r = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/runtime`, { method: 'POST', body: JSON.stringify({ [a]: v }) });
+            // 값은 「」로 감싼다 — 'sonnet'처럼 한글이 아닌 값에 조사를 직접 붙이면 읽는 소리에 따라 '로/으로'가 갈려
+            //  어느 쪽을 써도 어색해진다. 「」 뒤의 '으로'는 그 문제를 안 만든다(session-form 의 「지난번 그대로」와 같은 표기).
+            //  pending = 아직 큐에 있다(세션이 로그인·대화상자에 멈춰 있는 경우) — '바꿨다'고 말하지 않는다.
+            const said = a === 'model' ? v : effortKo(v);
+            const msg = r?.pending
+                ? `${AXIS[a].obj} 「${said}」으로 바꾸라고 걸어 뒀어요 — AI 입력창이 뜨면 들어갑니다.`
+                : `${AXIS[a].obj} 「${said}」으로 바꿨어요.`;
+            view.setNote(msg);
+            // 내가 띄운 안내만 지운다 — 그 사이에 다른 안내가 올라왔으면 그걸 지우면 안 된다(먼저 건 타이머가 나중 걸 지웠다).
+            window.setTimeout(() => { if (!destroyed && view.noteEl.textContent === msg)
+                view.setNote(''); }, 3000);
+        }
+        catch (e) {
+            view.setNote(e?.message || `${AXIS[a].obj} 바꾸지 못했어요.`);
+            paintRun(); // 실패했으면 고른 티를 남기지 않는다
+        }
+        finally {
+            switching = false;
+            box.disabled = false;
+        }
+    }
+    selModel.addEventListener('change', () => { void switchAxis('model', selModel); });
+    selEffort.addEventListener('change', () => { void switchAxis('effort', selEffort); });
+    void runCatalog().then((hs) => { hcat = findHarness(hs, String(target.raw?.harness || '')); paintRun(); });
     // 상태 표시(헤더 점·라벨·확인 대기 배너·끝난 세션 바) ————
     const dotCls = (k) => k === 'busy' ? 'busy' : k === 'waiting' ? 'wait' : (k === 'done' || k === 'idle') ? 'done' : '';
     let running = false; // 대화 파일 기준 '지금 턴이 도는 중'
@@ -292,7 +396,7 @@ export function mountSessionChat(host, first, opts) {
             if (o.message?.model)
                 setModel(prettyModel(String(o.message.model)));
             if (o.effort)
-                chip(chipEffort, EFFORT_KO[String(o.effort)] || String(o.effort));
+                setObserved('effort', String(o.effort));
             if (!cur)
                 cur = newRec(null);
             cur.evs.push(o);
@@ -965,6 +1069,10 @@ export function mountSessionChat(host, first, opts) {
         update(t) {
             const wasDead = dead();
             target = t;
+            if (!hcat && t.raw?.harness) {
+                void runCatalog().then((hs) => { hcat = findHarness(hs, String(t.raw.harness)); paintRun(); });
+            }
+            paintRun(); // 세션이 끝나면 드롭다운은 물러나고 사실 표시(칩)만 남는다
             titleEl.textContent = t.label && !/^box-|^[0-9a-f-]{20,}$/i.test(t.label) ? t.label : titleEl.textContent;
             paintProject();
             paintState();

@@ -204,6 +204,11 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
       delivered_at TIMESTAMPTZ);
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_session_outbox_session_idx ON org_session_outbox(session_id, status);`);
+  //  kind: prompt(사람이 보낸 말 — 대화창에 말풍선으로 뜬다) · control(설정 슬래시 명령 — 모델·추론강도 바꾸기, #1758).
+  //   control 은 ⓐ 대화창 목록에서 빠지고(사람이 친 말이 아니다) ⓑ 에코 확인을 건너뛴다 — 슬래시 명령은
+  //   트랜스크립트에 친 글자 그대로가 아니라 `<command-name>` 형태로 적혀 그 바늘로는 영영 못 찾는다.
+  //   같은 큐를 타는 이유는 순서다: 모델 바꾸기가 그 다음 프롬프트보다 먼저 들어가야 하고, 배달자는 세션당 직렬이다.
+  await pool.query(`ALTER TABLE org_session_outbox ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'prompt';`);
   // 끝난 행(delivered·sent)은 하루 지나면 청소 대상 — resumeOutbox 가 부팅 때 지운다(무한 적재 방지).
 
   // ── org_preview_env — 프리뷰 환경(작업자별 격리 미리보기)의 desired state (#1036). 관리탭 CRUD. ──
