@@ -158,7 +158,10 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     const k = running && !dead() ? 'busy' : target.stateKey;
     dot.className = 'v2-dot ' + dotCls(k);
     stateEl.textContent = running && !dead() ? '작업 중' : target.stateLabel;
-    const waiting = !dead() && (!!target.raw?.awaiting || target.raw?.agentState === 'waiting');
+    // ⚠ '대화가 지금 흐르고 있으면' 확인 배너를 내린다 — 훅의 waiting 보고는 사람이 터미널에서 답한 뒤 **다음 훅 보고**
+    //  (PostToolUse — 긴 도구면 그 도구가 끝날 때)까지 남는다(실측 2026-08-18: 답했는데 배너가 계속 떠 있음 신고).
+    //  트랜스크립트에 새 줄이 흐른다는 건 대화상자가 이미 닫혔다는 뜻이다 — 목록 폴링보다 빠르고 확실한 신호.
+    const waiting = !dead() && !running && (!!target.raw?.awaiting || target.raw?.agentState === 'waiting');
     waitBar.hidden = !waiting;
     if (waiting && !waitBar.childElementCount) {
       waitBar.replaceChildren(

@@ -22,8 +22,11 @@ export type FirstPromptStep = "wait" | "accept-trust" | "send" | "give-up";
 const TAIL_LINES = 14;
 // Claude Code 입력창이 떠 있다는 표식(phase.ts INPUT_BOX 와 같은 문구 — 두 군데가 같은 화면을 본다).
 const INPUT_BOX = /\b(auto|manual|plan|accept edits|bypass permissions) mode on\b|\? for shortcuts|shift\+tab to cycle/i;
-// 새 폴더 신뢰 대화상자(Claude Code) — "Do you trust the files in this folder?" · 기본 선택은 'Yes, proceed'.
-const TRUST_DIALOG = /trust the files in this (folder|directory)/i;
+// 새 폴더 신뢰 대화상자 — 하네스마다 문구가 다르다(기본 선택은 둘 다 'Yes'):
+//  · Claude Code: "Do you trust the files in this folder?"
+//  · Antigravity: "Do you trust the contents of this project?" (실측 2026-08-18 — 종전 정규식이 못 잡아
+//    ⓐ 세션 전용 폴더인데 자동 수락이 안 됐고 ⓑ 6초 뒤 '하네스가 떴다'로 오판해 첫 지시를 대화상자에 밀어 넣었다).
+const TRUST_DIALOG = /trust the (files|contents) (in|of) this (folder|directory|project)/i;
 // 하네스가 아직 뜨는 중인데 화면에 아무 표식이 없을 때, 비-Claude 하네스에 쓰는 보수적 대기(입력창 문구를 모르는 하네스).
 const OTHER_HARNESS_SETTLE_MS = 6000;
 
