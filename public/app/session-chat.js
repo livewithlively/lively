@@ -305,7 +305,18 @@ export function mountSessionChat(host, first, opts) {
     let pollTimer = null;
     let destroyed = false;
     let lastLineAt = 0;
-    const flat = (s) => s.replace(/\s*\n\s*/g, ' ').trim();
+    // 낙관 말풍선(원본) ↔ 트랜스크립트 에코(주입본) 매칭 — **정확일치만 믿지 않는다.** 주입은 개행을 공백으로 평탄화하고,
+    //  아주 긴 텍스트는 TUI 를 지나며 일부가 뒤섞이기도 한다(실측 2026-08-18: 3천자 프롬프트 꼬리 토막이 자리 이동 →
+    //  정확일치 실패 → 같은 말이 두 번 보임 — 상민님 신고). 전 공백 정규화 후 정확일치, 아니면 **접두 64자**로 잇는다.
+    const norm = (s) => s.replace(/\s+/g, ' ').trim();
+    const sameSaid = (a, b) => {
+        const na = norm(a), nb = norm(b);
+        if (!na || !nb)
+            return false;
+        if (na === nb)
+            return true;
+        return na.length >= 24 && nb.length >= 24 && na.slice(0, 64) === nb.slice(0, 64);
+    };
     // 타임라인 장 제목 — 붙여넣은 로그·여러 문단은 **첫 줄(또는 첫 문장)**만. 통째로 이으면 제목이 벽이 된다.
     const firstLine = (t) => {
         const ln = String(t || '').split('\n').map((x) => x.trim()).find((x) => x.length > 1) || '';
@@ -364,7 +375,7 @@ export function mountSessionChat(host, first, opts) {
             if (INJECTED_RE.test(text))
                 return; // 슬래시 명령·리마인더 — 사람 말이 아니다
             // 내가 보낸(또는 큐에 있던) 말이 파일에 나타났다 → 낙관적으로 그린 그 턴을 그대로 쓴다(두 번 그리지 않는다)
-            const pi = pending.findIndex((pd) => flat(pd.text) === flat(text));
+            const pi = pending.findIndex((pd) => sameSaid(pd.text, text));
             if (pi >= 0) {
                 const pd = pending[pi];
                 pending.splice(pi, 1);
@@ -538,7 +549,7 @@ export function mountSessionChat(host, first, opts) {
             return;
         }
         for (const row of items) {
-            let pd = pending.find((x) => x.obId === row.id) || pending.find((x) => !x.obId && flat(x.text) === flat(String(row.text)));
+            let pd = pending.find((x) => x.obId === row.id) || pending.find((x) => !x.obId && sameSaid(x.text, String(row.text)));
             if (!pd)
                 pd = addPending(String(row.text), Number(row.id));
             pd.obId = Number(row.id);

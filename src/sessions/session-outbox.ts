@@ -50,9 +50,11 @@ export const NOT_READY_TTL_MS = 30 * 60_000;
 /** 보낸 뒤 에코(트랜스크립트 등장)를 기다리는 시간. 하네스가 받았다면 user 줄은 수 초 안에 적힌다. */
 export const ECHO_WINDOW_MS = 15_000;
 
-/** 에코 찾기용 바늘 — 트랜스크립트는 JSON 한 줄이라, 주입된 한 줄 텍스트를 JSON 문자열로 이스케이프한 형태로 찾는다. */
+/** 에코 찾기용 바늘 — 트랜스크립트는 JSON 한 줄이라, 주입된 한 줄 텍스트를 JSON 문자열로 이스케이프한 형태로 찾는다.
+ *  ⚠ **접두 160자만** 쓴다: 아주 긴 텍스트는 TUI 를 지나며 꼬리가 뒤섞일 수 있어(실측 2026-08-18, 3천자 프롬프트)
+ *  전문 일치는 실제로 전달됐는데 'echo-unconfirmed' 로 오판한다. 접두 160자는 충분히 특정적이고 머리는 안 섞인다. */
 export function echoNeedle(oneLine: string): string {
-  return JSON.stringify(oneLine).slice(1, -1);
+  return JSON.stringify(oneLine.slice(0, 160)).slice(1, -1);
 }
 /** send-keys 가 실제로 넣는 한 줄(send-keys.ts 규약 ① — 개행은 공백으로). 에코도 이 형태로 찾아야 한다. */
 export const flatOneLine = (text: string): string => String(text ?? "").replace(/\s*\n\s*/g, " ").trim();
