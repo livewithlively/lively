@@ -660,12 +660,17 @@ t('U13 받는 동안의 문구 — 확인이 끝난 뒤 침묵하지 않는다(�
     // 키도 파일명도 다르면 이름이 'Lively 0.1.1' 이어도 제외
     assert.deepEqual(pickStaleInstalls(parseStaleQuery(JSON.stringify([{ ...rows[0], key: "x", uninstall: '"C:\\z\\Remove.exe"' }])), ownExe), []);
     // ★ GUID 는 electron-builder 가 실제로 쓰는 값과 같아야 한다 — 그 라이브러리(builder-util-runtime)로 직접 대조한다
-    const require = createRequire(import.meta.url);
-    const { UUID } = require("builder-util-runtime");
     const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'));
     assert.equal(APP_ID, pkg.build.appId, 'APP_ID 가 package.json build.appId 와 다르다 — GUID 가 다른 앱을 가리킨다');
-    assert.equal(APP_GUID, UUID.v5(pkg.build.appId, UUID.parse("50e065bc-3134-11e6-9bab-360a5f6d0d1a")), 'GUID 가 electron-builder 계산과 다르다');
+    // 고정값 — 2026-08-18 builder-util-runtime UUID.v5(appId, ELECTRON_BUILDER_NS_UUID) 로 얻은 값. appId 가 바뀌면 같이 바뀐다.
     assert.equal(uuidV5("io.lvly.desktop", "50e065bc-3134-11e6-9bab-360a5f6d0d1a"), "3671aa13-ad0d-5bfe-852b-a342893d84d2");
+    assert.equal(APP_GUID, uuidV5(pkg.build.appId, "50e065bc-3134-11e6-9bab-360a5f6d0d1a"));
+    // electron-builder 의 실제 라이브러리와도 대조한다 — 단, 루트 테스트 잡은 desktop/ 의존성을 안 깔므로 **있을 때만**
+    //  (없으면 위 고정값 대조가 계약이다. 있는 곳(desktop/ 에서 npm ci 한 러너·로컬)에선 라이브러리가 정본).
+    try {
+      const { UUID } = createRequire(import.meta.url)("builder-util-runtime");
+      assert.equal(APP_GUID, UUID.v5(pkg.build.appId, UUID.parse("50e065bc-3134-11e6-9bab-360a5f6d0d1a")), 'GUID 가 electron-builder 계산과 다르다');
+    } catch (e) { if (!/Cannot find module/.test(String(e?.message))) throw e; }
     assert.ok(!pkg.build.nsis.guid, 'nsis.guid 를 박으면 여기 계산과 갈린다 — 박을 거면 APP_GUID 도 그 값으로');
     assert.equal(UNINSTALLER_NAME, `Uninstall ${pkg.build.productName}.exe`);
     // 쿼리는 GUID 키로도 잡는다(이름은 보조) — DisplayName -eq 'Lively' 는 다시는 안 된다
