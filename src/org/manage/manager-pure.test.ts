@@ -28,13 +28,19 @@ await t("판단이 필요한 종류는 LLM 을 쓴다 [M11]", () => {
   assert.equal(needsLlm("code_drift"), true);
 });
 
+await t("stale_ref 은 결정적이다 [#1419 도그푸드]", () => {
+  // 파일이 있나 없나를 보는 판정이라 LLM 이 필요 없다. 여기가 뒤집히면 매 주기 헤드리스 배치를
+  //  접수해 놓고 정작 판정은 안 한다(그 경로는 후보만 넘기고 AI 보고를 기다린다).
+  assert.equal(needsLlm("stale_ref"), false);
+});
+
 await t("4종 모두 사람 읽는 이름이 있다", () => {
   // 이름이 비면 화면·요약에 raw kind 가 새어 나온다(비개발자 화면 요구).
-  for (const k of ["mismatch", "outdated", "contradiction", "code_drift"] as ManagerKind[]) {
+  for (const k of ["mismatch", "outdated", "stale_ref", "contradiction", "code_drift"] as ManagerKind[]) {
     assert.ok(MANAGER_KIND_LABEL[k], `${k} 라벨 없음`);
     assert.notEqual(MANAGER_KIND_LABEL[k], k);
   }
-  assert.equal(Object.keys(MANAGER_KIND_LABEL).length, 4, "종류가 늘었는데 라벨 표를 안 고쳤다");
+  assert.equal(Object.keys(MANAGER_KIND_LABEL).length, 5, "종류가 늘었는데 라벨 표를 안 고쳤다");
 });
 
 // ══ M16·M17 자동 조치 거부 규칙 ══
