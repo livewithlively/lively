@@ -111,7 +111,8 @@ export async function renderProject(host, data, id, detailIn) {
 //  라이브면 박스의 대화 파일을 창으로 읽어 라이브로 따라가고 입력칸으로 보낸다(프롬프트 주입). 끝난 세션이면 기록 + [이어서 대화하기].
 let sessChat = null;
 //  trail = 우패널 '발자취' 위젯(main.ts 가 aside 에 만들어 넘긴다) — 대화 파일에서 읽는 도구 사용이 거기로 흘러든다.
-export function renderSession(host, data, id, trail) {
+//  onPickProject = 상단바 [프로젝트 연결] 드롭다운(#1749) — main.ts 가 목록·실행·갱신을 쥔다.
+export function renderSession(host, data, id, trail, onPickProject) {
     // 기록(uuid) 링크로 들어왔는데 그 대화를 도는 박스가 있으면 그 박스가 정본이다(mergeSessions 가 기록을 박스에 접었다) — 옛 링크가 산다.
     const s = data.sessions.find((x) => x.id === id) || data.sessions.find((x) => x.logId === id);
     if (sessChat) {
@@ -129,6 +130,7 @@ export function renderSession(host, data, id, trail) {
         // 홈 입력창이 방금 연 세션이면 그 첫 지시를 낙관적으로 먼저 그린다(서버가 하네스 입력창이 뜬 뒤 실제로 넣는다).
         firstPrompt: takeFirstPrompt(s.id),
         trail: trail || null,
+        onPickProject, // 상단바 [프로젝트 연결] 드롭다운(#1749) — main.ts 가 목록·실행·갱신을 쥔다
     });
 }
 /** 목록이 새로 왔을 때(20초 폴링) 열려 있는 세션 화면의 상태 표시를 갱신한다. 본문은 화면 자신이 대화 파일을 폴링한다. */

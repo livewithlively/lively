@@ -59,6 +59,8 @@ const srcPath = (s, q) => {
 // ── 마운트 ────────────────────────────────────────────────────────────────────────────────
 // opts.firstPrompt — 홈 입력창(#1719 v2/quick-session)이 방금 연 세션의 첫 지시. 서버가 하네스 입력창이 뜬 뒤 실제로 넣으므로
 //  여기서는 **낙관적으로 그 턴을 먼저 그리고**(보낸 것과 같은 모양) 대화 파일에 나타나면 그 턴을 재사용한다(pendingSent 규약).
+// opts.onPickProject — 상단바 [프로젝트 연결]/[▾] 를 눌렀을 때 검색 드롭다운을 여는 콜백(#1749, v2/main.ts 가 준다).
+//  붙이기·떼기의 실행·갱신은 그쪽 몫이고, 여기는 바뀐 target 을 update() 로 받아 라벨만 되그린다.
 export function mountSessionChat(host, first, opts) {
     let target = first;
     const isBox = first.live; // 라이브 행(박스) — 죽었어도(restorable) 박스다
@@ -72,9 +74,23 @@ export function mountSessionChat(host, first, opts) {
     const titleEl = el('b', { class: 'sc-title', text: target.label });
     const idxBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '목차', title: '질문 목차', onclick: () => openIndex() });
     const termBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '터미널', title: '터미널로 보기(승인 대화상자 등은 터미널이 맞을 때가 있어요)', onclick: () => toggleTerminal() });
-    // 프로젝트 소속은 화면이 열린 뒤에도 바뀐다(#1719 우측 '이 세션' ▸ 프로젝트) — update() 가 이 링크를 되그린다.
-    const projLink = el('a', { href: target.projectId ? '#/p/' + target.projectId : '#/', text: target.projectName });
-    const head = el('div', { class: 'sc-head' }, el('div', { class: 'sc-head-l' }, dot, titleEl, el('span', { class: 'sc-meta' }, stateEl, el('span', { class: 'sc-sep', text: '·' }), projLink, target.raw?.harness ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { class: 'mono', text: String(target.raw.harness) })] : null, target.node ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { text: String(target.node) })] : null)), el('div', { class: 'sc-head-r' }, idxBtn, opts.terminalSrc && isBox ? termBtn : null, el('button', { class: 'btn-text sc-act', type: 'button', text: '링크', title: '이 세션 링크 복사', onclick: async () => { try {
+    // 프로젝트 소속(#1749) — 붙었으면 프로젝트 링크 + [▾](바꾸기), 아니면 [프로젝트 연결] 버튼(검색 드롭다운). 내 세션에서만 바꿀 수 있다.
+    //  update() 가 되그린다(소속은 화면이 열린 뒤에도 바뀐다).
+    const projEl = el('span', { class: 'sc-proj' });
+    function paintProject() {
+        const canPick = !!opts.onPickProject && target.owned;
+        if (target.projectId) {
+            projEl.replaceChildren(el('a', { href: '#/p/' + target.projectId, text: target.projectName }), ...(canPick ? [el('button', { class: 'btn-text sc-proj-btn', type: 'button', text: '▾', title: '프로젝트 바꾸기·떼기', 'aria-label': '프로젝트 바꾸기', onclick: (e) => opts.onPickProject(e.currentTarget) })] : []));
+        }
+        else if (canPick) {
+            projEl.replaceChildren(el('button', { class: 'btn-text sc-proj-btn sc-proj-connect', type: 'button', title: '이 세션을 프로젝트에 붙입니다 — 언제든 바꾸거나 뗄 수 있어요', onclick: (e) => opts.onPickProject(e.currentTarget) }, el('span', { text: '프로젝트 연결' }), el('span', { class: 'sc-proj-car', 'aria-hidden': 'true', text: '▾' })));
+        }
+        else {
+            projEl.replaceChildren(el('span', { class: 'sc-proj-none', text: target.projectName || '프로젝트 없음' }));
+        }
+    }
+    paintProject();
+    const head = el('div', { class: 'sc-head' }, el('div', { class: 'sc-head-l' }, dot, titleEl, el('span', { class: 'sc-meta' }, stateEl, el('span', { class: 'sc-sep', text: '·' }), projEl, target.raw?.harness ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { class: 'mono', text: String(target.raw.harness) })] : null, target.node ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { text: String(target.node) })] : null)), el('div', { class: 'sc-head-r' }, idxBtn, opts.terminalSrc && isBox ? termBtn : null, el('button', { class: 'btn-text sc-act', type: 'button', text: '링크', title: '이 세션 링크 복사', onclick: async () => { try {
             await navigator.clipboard.writeText(location.href);
             toast('링크를 복사했습니다.');
         }
@@ -790,8 +806,7 @@ export function mountSessionChat(host, first, opts) {
             const wasDead = dead();
             target = t;
             titleEl.textContent = t.label && !/^box-|^[0-9a-f-]{20,}$/i.test(t.label) ? t.label : titleEl.textContent;
-            projLink.textContent = t.projectName;
-            projLink.href = t.projectId ? '#/p/' + t.projectId : '#/';
+            paintProject();
             paintState();
             if (!wasDead && dead()) {
                 running = false;
