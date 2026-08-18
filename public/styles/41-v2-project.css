@@ -1,96 +1,152 @@
 /* ─────────────────────────────────────────────────────────────────────────────
-   41-v2-project.css — 새 셸 프로젝트 화면(web/v2/project-view.ts, #1757).
-   문법: 위 = 짧은 개요(번호·상태 / 제목 [편집] / 본문 몇 줄 / 여는 길 · 사실), 아래 = 리브 대화 + 입력칸(36-chat desktop 변형).
-   토큰은 01-base 것만. 채운 파랑은 화면당 하나(대화 입력칸의 보내기·편집 저장 — 동시에 안 보인다). 상태 = 점 + 글자.
-   40-v2.css 뒤에 온다(캐스케이드 맨 뒤 — .v2-row 등 새 셸 공용 조각을 여기서 그대로 쓴다).
+   41-v2-project.css — 새 셸 프로젝트 화면 = 방 (web/v2/project-view.ts, #1757 v3).
+   방의 바닥은 옅은 틴트, 그 위에 구역 넷(본문·코멘트·공유 폴더·세션)이 흰 카드로 앉는다 — 대화 바로 위까지.
+   맨 아래는 리브 대화(36-chat desktop). 토큰은 01-base 것만. 채운 파랑은 화면당 하나(입력칸 보내기).
+   상태 = 점 + 글자(35-liv §0.5 색각 계약).
    ───────────────────────────────────────────────────────────────────────────── */
 
-.pv-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg, #fff); }
+.pv-wrap { --pv-chat-h: 340px; flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg, #fff); }
+/* 방 바닥 — 구역 카드가 흰색으로 도드라지는 옅은 틴트. 대화(아래)와 명확히 다른 바닥이다. */
+.pv-top { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 20px 24px 16px; background: var(--bg-tint); }
 
-/* ── 개요 — 스크롤하지 않는 위 블록. 본문을 펼쳐 아주 길어지면 이 블록만 안에서 굴린다(대화 칸을 밀어내지 않는다). ── */
-.pv-top { flex: none; max-height: 58vh; overflow-y: auto; padding: 24px 28px 0; }
-.pv-eyebrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); line-height: 1.4; }
-.pv-eyebrow .mono { font-family: var(--mono, ui-monospace, monospace); font-size: 12px; letter-spacing: .02em; }
-.pv-eyebrow .sep { color: var(--muted-3, #C2CCDD); }
-.pv-state { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-sub); }
-.pv-when { color: var(--muted); }
+/* ── 방 머리 ── */
+.pv-head { flex: none; padding: 0 4px; }
+.pv-eyebrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); line-height: 1.4; }
+.pv-idchip { font-size: 11.5px; letter-spacing: .02em; color: var(--ink-sub); background: var(--bg, #fff); border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px; }
+.pv-state { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-sub); font-weight: 600; }
+.pv-crumbsep::before { content: '·'; color: var(--muted-3, #C2CCDD); margin-right: 10px; }
+.pv-title { margin: 7px 0 0; font-size: 23px; font-weight: 800; letter-spacing: -.5px; line-height: 1.3; word-break: keep-all; text-wrap: balance; }
 
-.pv-title-row { display: flex; align-items: flex-start; gap: 14px; margin-top: 6px; }
-.pv-title { flex: 1; min-width: 0; margin: 0; font-size: 23px; font-weight: 800; letter-spacing: -.45px; line-height: 1.32; word-break: keep-all; text-wrap: balance; }
-.pv-head-acts { flex: none; display: inline-flex; gap: 2px; margin-top: 3px; }
-.pv-act { font: inherit; font-size: 12.5px; font-weight: 600; line-height: 1; padding: 6px 9px; border: 0; border-radius: 7px; background: none; color: var(--ink-sub); cursor: pointer; }
-.pv-act:hover { background: var(--bg-tint); color: var(--ink); }
-.pv-act:disabled { color: var(--muted-2, #a6b2c8); cursor: default; background: none; }
-.pv-act:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+/* 방 현황 한 줄 — 지금 도는 것 · 세션 · 할 일(진행 바) · 자료 · 지식 · 사람 · (오른쪽 끝) 수정시각 */
+.pv-stats { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 9px; font-size: 12.5px; line-height: 1.4; }
+.pv-stat { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-sub); text-decoration: none; }
+.pv-stat .k { color: var(--muted); }
+.pv-stat b { font-weight: 700; color: var(--ink-sub); font-variant-numeric: tabular-nums; }
+.pv-stat.live b { color: var(--ink); }
+a.pv-stat:hover b { color: var(--blue); }
+.pv-minibar { width: 52px; height: 4px; border-radius: 2px; background: var(--line-net, #DCE6F5); overflow: hidden; }
+.pv-minibar .f { display: block; height: 100%; border-radius: 2px; background: var(--mint-deep, #0FA37E); }
+.pv-stats-sp { flex: 1; }
+.pv-when { font-size: 12px; color: var(--muted); }
 
-/* 본문 — 정돈된 마크다운. 기본은 몇 줄만(clamp: 약 6.5줄) + 아래 흐림 + [더 보기]. 편집·펼침 땐 다 보인다. */
-.pv-body-wrap { margin-top: 12px; max-width: 74ch; }
-.pv-body { position: relative; font-size: 14.5px; line-height: 1.72; color: var(--ink-sub); word-break: keep-all; overflow-wrap: anywhere; }
-.pv-body.clamp { max-height: 10.9em; overflow: hidden; }
-.pv-body.clamp::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 3em; pointer-events: none;
-  background: linear-gradient(to bottom, rgba(255,255,255,0), var(--bg, #fff) 78%); }
+/* ── 구역 그리드 — 본문 | 코멘트 / 공유 폴더 | 세션. 남는 높이를 채우고, 각 구역이 안에서 구른다. ── */
+.pv-room { flex: 1 1 auto; min-height: 160px; display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+  grid-template-rows: minmax(0, 6fr) minmax(0, 5fr); gap: 12px; margin-top: 14px; }
+.pv-panel { min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 13px; background: var(--bg, #fff); overflow: hidden;
+  box-shadow: 0 1px 2px rgba(21, 35, 59, .04); }
+.pv-panel-h { flex: none; display: flex; align-items: center; gap: 8px; padding: 9px 12px 8px 14px; border-bottom: 1px solid var(--line-row, #EDF1F8); }
+.pv-panel-k { font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--muted-head, #7A88A3); }
+.pv-panel-n { font-size: 11.5px; color: var(--muted); }
+.pv-panel-acts { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; }
+.pv-panel-sub { flex: none; padding: 6px 14px; border-bottom: 1px solid var(--line-row, #EDF1F8); }
+.pv-panel-sub[hidden] { display: none; }
+.pv-panel-b { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 6px 6px; }
+.pv-panel-f { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--line-row, #EDF1F8); }
+.pv-panel-f[hidden] { display: none; }
+
+/* 구역 헤더 버튼 — 주 버튼(새 세션)은 틴트, 나머지는 조용한 고스트. 채운 파랑은 안 쓴다(그건 입력칸 몫). */
+.pv-btn { display: inline-flex; align-items: center; font: inherit; font-size: 12px; font-weight: 600; line-height: 1; padding: 6px 9px;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--bg); color: var(--ink-sub); cursor: pointer; text-decoration: none; white-space: nowrap; }
+.pv-btn:hover { border-color: var(--muted-3); color: var(--ink); }
+.pv-btn:disabled { opacity: .55; cursor: default; }
+.pv-btn-main { display: inline-flex; align-items: center; font: inherit; font-size: 12px; font-weight: 700; line-height: 1; padding: 6px 10px;
+  border: 1px solid var(--line-note, #D6E4FF); border-radius: 7px; background: var(--bg-punch); color: var(--blue-deep, #1E54CC); cursor: pointer; white-space: nowrap; }
+.pv-btn-main:hover { border-color: var(--blue); }
+.pv-btn-main:disabled { opacity: .55; cursor: default; }
+.pv-btn:focus-visible, .pv-btn-main:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+
+/* ── 본문 구역 — 정돈된 마크다운이 구역 안에서 구른다(접기 불요 — 구역이 곧 창이다) ── */
+.pv-body { padding: 8px 10px 10px; font-size: 14px; line-height: 1.7; color: var(--ink-sub); word-break: keep-all; overflow-wrap: anywhere; max-width: 78ch; }
 .pv-body .md > :first-child { margin-top: 0; }
 .pv-body .md > :last-child { margin-bottom: 0; }
-.pv-body .md p { margin: 0 0 .55em; }
-.pv-body .md h1, .pv-body .md h2, .pv-body .md h3 { margin: 1em 0 .3em; font-size: 12px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--muted-head, #7A88A3); }
-.pv-body .md h1 { font-size: 13px; }
-.pv-body .md ul, .pv-body .md ol { margin: 0 0 .55em; padding-left: 1.25em; }
-.pv-body .md li { margin: .12em 0; }
+.pv-body .md p { margin: 0 0 .5em; }
+.pv-body .md h1, .pv-body .md h2, .pv-body .md h3 { margin: .95em 0 .3em; font-size: 11.5px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: var(--muted-head, #7A88A3); }
+.pv-body .md ul, .pv-body .md ol { margin: 0 0 .5em; padding-left: 1.25em; }
+.pv-body .md li { margin: .1em 0; }
 .pv-body .md li::marker { color: var(--muted-2, #a6b2c8); }
 .pv-body .md a { color: var(--blue); text-decoration: none; }
 .pv-body .md a:hover { text-decoration: underline; }
-.pv-body .md code { font-size: .92em; }
-.pv-body .md hr { border: 0; border-top: 1px solid var(--line); margin: .8em 0; }
-.pv-more { display: inline-block; margin-top: 4px; font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); background: none; border: 0; padding: 4px 0; cursor: pointer; }
-.pv-more:hover { color: var(--blue); }
-.pv-more[hidden] { display: none; }
-.pv-empty-body { margin: 12px 0 0; font-size: 13.5px; line-height: 1.7; color: var(--muted); }
+.pv-body .md hr { border: 0; border-top: 1px solid var(--line); margin: .75em 0; }
 .pv-link { font: inherit; font-size: inherit; color: var(--ink-sub); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--line-net-2, #CFE0F7); }
 .pv-link:hover { color: var(--blue); text-decoration-color: currentColor; }
 
-/* 편집 — 그 자리에서. 저장이 이 순간의 주 액션(채운 파랑). */
-.pv-edit { margin-top: 12px; max-width: 74ch; }
-.pv-edit-ta { display: block; width: 100%; box-sizing: border-box; min-height: 140px; resize: vertical; font-family: inherit; font-size: 14px; line-height: 1.68; color: var(--ink);
-  padding: 11px 13px; border: 1px solid var(--line-net); border-radius: 11px; background: var(--bg, #fff); }
+/* 본문 편집 — 구역 몸통 전체가 편집칸이 된다(저장·취소는 구역 바닥 줄) */
+.pv-edit { height: 100%; display: flex; padding: 6px; }
+.pv-edit-ta { flex: 1; min-height: 0; resize: none; font-family: inherit; font-size: 13.5px; line-height: 1.65; color: var(--ink);
+  padding: 9px 11px; border: 1px solid var(--line-net); border-radius: 9px; background: var(--bg, #fff); }
 .pv-edit-ta:focus-visible { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px var(--bg-punch); }
-.pv-edit-acts { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
-.pv-edit-hint { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+.pv-edit-hint { flex: 1; min-width: 0; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
 
-/* 여는 길(왼) + 사실 한 줄(오른). 사실은 눌러서 한 칸 펼친다 — 늘 펼쳐 두면 옛 화면처럼 길어진다. */
-.pv-tools { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding-bottom: 14px; }
-.pv-tools-l { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.pv-tools-l .btn-sm { padding: 5px 11px; font-size: 12.5px; text-decoration: none; }
-.pv-facts { margin-left: auto; display: inline-flex; align-items: center; gap: 14px; font-size: 12.5px; color: var(--ink-sub); white-space: nowrap; }
-.pv-fact { display: inline-flex; align-items: center; gap: 4px; font: inherit; color: inherit; background: none; border: 0; padding: 4px 2px; cursor: pointer; border-radius: 6px; }
-.pv-fact .car { font-size: 9px; color: var(--muted-2, #a6b2c8); }
-.pv-fact:hover { color: var(--ink); }
-.pv-fact.on { color: var(--ink); font-weight: 700; }
-.pv-fact.on .car { color: var(--ink-sub); }
-.pv-fact-plain { color: var(--muted); }
+/* ── 코멘트 구역 — 말은 위에 쌓이고, 쓰는 칸은 구역 바닥에 붙어 있다 ── */
+.pv-cmt { padding: 7px 9px; border-radius: 9px; }
+.pv-cmt:hover { background: var(--bg-tint); }
+.pv-cmt-h { display: flex; align-items: baseline; gap: 8px; }
+.pv-cmt-h b { font-size: 12.5px; font-weight: 700; color: var(--ink); }
+.pv-cmt-ts { font-size: 11px; color: var(--muted); }
+.pv-cmt-b { margin-top: 2px; font-size: 13px; line-height: 1.6; color: var(--ink-sub); white-space: pre-wrap; word-break: break-word; }
+.pv-cmt-in { flex: 1; min-width: 0; resize: none; font-family: inherit; font-size: 13px; line-height: 1.5; color: var(--ink);
+  padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg, #fff); }
+.pv-cmt-in::placeholder { color: var(--muted-2, #a6b2c8); }
+.pv-cmt-in:focus-visible { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px var(--bg-punch); }
 
-/* 펼친 목록 — 새 셸 공용 행(.v2-row) 그대로. 한 번에 하나만, 길면 안에서 굴린다. */
-.pv-panel { border: 1px solid var(--line); border-radius: 12px; overflow: auto; max-height: 260px; margin: -4px 0 16px; background: var(--bg, #fff); }
-.pv-panel .v2-row { padding: 9px 14px; }
-.pv-panel .v2-row .t { font-size: 13.5px; }
-.pv-panel .v2-empty { padding: 10px 14px; }
+/* ── 행(세션·파일 공용) — 굵은 제목 + 얇은 메타 두 층 ── */
+.pv-row { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; font: inherit; padding: 8px 9px; border: 0; border-radius: 9px;
+  background: none; color: inherit; text-decoration: none; cursor: pointer; }
+.pv-row:hover { background: var(--bg-tint); }
+.pv-row:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.pv-row.dim .t { color: var(--ink-sub); font-weight: 600; }
+.pv-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.pv-row-main .t { font-size: 13.5px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-row-main .m { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-row-go { flex: none; width: 10px; color: var(--muted-2, #a6b2c8); opacity: 0; transition: opacity .1s; }
+.pv-row:hover .pv-row-go { opacity: 1; }
 
-/* ── 대화 — 개요 아래 나머지 전부. 36-chat 의 desktop 변형이 그린다; 여기선 자리와 빈 화면(제안 칩)·바만. ── */
-.pv-chat { flex: 1; min-height: 0; display: flex; border-top: 1px solid var(--line); }
-.pv-chat > .livc-wrap { flex: 1; }
-/* 빈 대화의 안내(제안 칩)는 입력칸 바로 위에 앉는다(35-liv 의 :first-child margin-top:auto 가 아래로 민다) — 칩은 입력의 지름길이라 입력칸 곁이 맞다. */
-.pv-open { padding: 6px 0 12px; max-width: 74ch; }
-.pv-open-lede { font-size: 13.5px; line-height: 1.7; color: var(--ink-sub); }
-.pv-open-lede b { color: var(--ink); font-weight: 700; }
-.pv-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
-.pv-chips .chip { font-weight: 600; }
-.pv-chips .chip:hover { border-color: var(--blue); color: var(--ink); background: var(--bg-tint); }
+/* 폴더 행 — 실제 타입 아이콘(files-icons fileIconSvg) + 크기/폴더 메타 오른쪽 정렬 */
+.pv-frow .pv-row-main .t { font-weight: 600; }
+.pv-fic { flex: none; display: inline-flex; }
+.pv-fic .fic { width: 17px; height: 17px; stroke-width: 1.7; }
+.pv-fmeta { flex: none; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* 브레드크럼(폴더 구역 둘째 줄) */
+.pv-crumbs { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; min-height: 18px; }
+.pv-crumb { font: inherit; font-size: 12px; color: var(--ink-sub); background: none; border: 0; padding: 1px 5px; border-radius: 5px; cursor: pointer; }
+.pv-crumb:hover { background: var(--bg-tint-2, #EEF5FF); color: var(--ink); }
+.pv-crumb.cur { color: var(--ink); font-weight: 700; cursor: default; background: none; }
+.pv-crumb-sep { font-size: 11px; color: var(--muted-3, #C2CCDD); }
+.pv-upprog:not(:empty) { margin-top: 4px; }
+
+/* 드롭 하이라이트 — files-upload upDropZone 이 .drop-active 를 켠다 */
+.pv-panel.drop-active { border-color: var(--blue); box-shadow: 0 0 0 3px var(--bg-punch); }
+
+/* 빈 상태 — 행동으로의 초대(설명이 아니라) */
+.pv-blank { padding: 16px 14px; }
+.pv-blank p { margin: 0; font-size: 13px; line-height: 1.65; color: var(--ink-sub); }
+.pv-blank .sub { margin-top: 4px; font-size: 12px; color: var(--muted); }
+
+/* ── 대화 — 방의 바닥. 대화가 없으면 칩+입력칸만(내용 높이), 생기면 경계 손잡이 + 기억된 높이. ── */
+.pv-wrap > .v2-split-y { display: none; }
+.pv-wrap.has-turns > .v2-split-y { display: block; }
+.pv-chat { flex: none; display: flex; border-top: 1px solid var(--line); background: var(--bg, #fff); }
+.pv-wrap.has-turns .pv-chat { height: var(--pv-chat-h); min-height: 180px; }
+.pv-chat > .livc-wrap { flex: 1; min-width: 0; }
+.pv-wrap:not(.has-turns) .pv-chat .livc-scroller { min-height: 0; }
+.pv-wrap:not(.has-turns) .pv-chat .livc-list { padding-top: 10px; padding-bottom: 0; }
+
+/* 빈 대화 = 리브 소개 한 줄 + 제안 칩 — 입력칸 바로 위, 조용하게 */
+.pv-open { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 2px 0 4px; }
+.pv-open-lede { flex: 1 1 320px; min-width: 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); }
+.pv-open-lede b { color: var(--ink-sub); font-weight: 700; }
+.pv-chips { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.pv-chip { font: inherit; font-size: 12.5px; font-weight: 600; padding: 6px 11px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg); color: var(--ink-sub); cursor: pointer; white-space: nowrap; }
+.pv-chip:hover { border-color: var(--blue); color: var(--ink); background: var(--bg-tint); }
+
 .pv-bar-note { font-size: 11.5px; color: var(--muted); }
 .pv-bar-r { display: inline-flex; gap: 2px; }
 .pv-bar-btn { font: inherit; font-size: 12px; font-weight: 600; color: var(--ink-sub); background: none; border: 0; padding: 3px 8px; border-radius: 6px; cursor: pointer; }
 .pv-bar-btn:hover { background: var(--bg-tint); color: var(--ink); }
 
+@media (max-width: 1280px) { .pv-room { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
 @media (max-width: 1100px) {
-  .pv-top { padding-left: 20px; padding-right: 20px; }
-  .pv-tools { flex-wrap: wrap; }
-  .pv-facts { margin-left: 0; }
+  .pv-top { padding-left: 18px; padding-right: 18px; }
+  .pv-room { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-auto-rows: minmax(150px, 1fr); }
 }

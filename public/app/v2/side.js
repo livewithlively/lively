@@ -97,7 +97,7 @@ function echoesProject(label, proj) {
  *  프로젝트 행이 이미 말하고 있다. 같은 제목이 한 화면에 대여섯 번 반복돼 목록이 통째로 안 읽히던 원인이라 지운다.
  *  대신 하네스가 pane 제목에 써 두는 '지금 하는 일'이 그 자리를 받는다 — 실제로 세션을 구분해 주던 건 그 줄이었다.
  *  이름이 따로 있는 세션(사람이 지은 것)만 두 줄이 된다. 원래 이름은 툴팁에 남는다(정보를 버리지는 않는다). */
-function sessText(s, projName) {
+export function sessText(s, projName) {
     const label = String(s.label || '').trim();
     const work = String((s.raw && s.raw.title) || '').trim();
     let name = label;
