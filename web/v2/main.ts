@@ -94,12 +94,13 @@ async function route(): Promise<void> {
       renderHome(centerEl, data);
       drawAsideHome();
     } else if (page === 'liv') {
-      // 리브 전체 페이지 — 클래식 renderLiv 를 **그대로** 이 칸에 그린다(카드 레일 + 대화). 크롬은 새 셸이 대신 준다.
+      // 리브 전체 페이지 — 대화는 **본문**, "지금 손볼 것" 카드는 **우측 패널**. 다른 페이지(본문 가운데·패널 오른쪽)와
+      //  같은 열 문법이다. (v1 renderLiv 는 카드를 왼쪽 레일에 그렸는데, 사이드바가 있는 셸에선 그게 사이드바 둘로 읽혔다.)
       centerEl.replaceChildren();
       const host = el('div', { class: 'v2-livpage' });
       centerEl.append(host);
-      await renderLiv(host);
-      root!.classList.add('no-aside');
+      const rail = drawAsideLiv();
+      await renderLiv(host, { rail, embedded: true });
     } else if (page === 'p' && segs[1]) {
       const id = Number(segs[1]);
       let detail: any = null;
@@ -171,6 +172,16 @@ function drawAsideHome(): void {
   const askHost = el('div', { class: 'liv-askdock v2-askdock' });
   cards.before(askHost);
   void fillLivCards(cards, askHost);
+}
+// 리브 페이지의 우측 패널 — 홈 패널과 같은 자리·같은 카드("리브가 지금 보는 것"). 카드 본체는 renderLiv 가 채운다.
+function drawAsideLiv(): HTMLElement | null {
+  if (!asideEl) return null;
+  const rail = el('div', { class: 'liv-rail v2-liv-rail' });
+  asideEl.replaceChildren(
+    el('div', { class: 'v2-aside-h' }, el('b', { text: '리브가 지금 보는 것' }), el('span', { class: 'v2-k', text: '손볼 것' })),
+    rail,
+    el('p', { class: 'v2-fine', text: '리브가 던진 물음은 대화 입력 바로 위에 뜹니다.' }));
+  return rail;
 }
 function drawAsideProject(detail: any, id: number): void {
   if (!asideEl) return;

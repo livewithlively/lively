@@ -58,7 +58,13 @@ export async function livStatus(): Promise<LivStatus> {
 
 // ── 화면 ─────────────────────────────────────────────────────────────────────
 
-export async function renderLiv(view: HTMLElement | null): Promise<void> {
+/** 셸이 이미 크롬(사이드바·우측 패널)을 주는 자리에 끼울 때의 선택지(#1719 v2).
+ *  · rail — 카드("지금 손볼 것")를 그릴 바깥 호스트. 주면 본문은 대화 한 열만 남고, 카드는 그 호스트에 산다.
+ *    v2 셸에선 우측 패널이 그 자리다 — 다른 페이지(본문 가운데·패널 오른쪽)와 같은 문법이 된다.
+ *  · embedded — 나가는 길([← 라이블리])을 그리지 않는다(사이드바가 이미 있다). */
+export interface RenderLivOpts { rail?: HTMLElement | null; embedded?: boolean }
+
+export async function renderLiv(view: HTMLElement | null, opts: RenderLivOpts = {}): Promise<void> {
   if (!view) return; // 라우터가 넘기는 $view() 는 셸이 아직 없으면 null 이다(대시보드와 같은 계약)
   view.replaceChildren();
   document.body.dataset.route = 'liv';
@@ -66,8 +72,9 @@ export async function renderLiv(view: HTMLElement | null): Promise<void> {
   // 상단 내비를 걷었으니 **나가는 길이 화면 안에 있어야 한다** — 없으면 사람이 뒤로가기를 찾는다.
   //  하나만 둔다: 어디로 가는지가 분명한 [← 라이블리]. 탭을 여기 다시 그리면 크롬을 걷은 뜻이 없어진다.
   const head = el('div', { class: 'liv-head' },
-    el('div', { class: 'liv-title' }, el('span', { class: 'liv-dot' }), el('b', { text: '리브' })),
-    el('div', { class: 'liv-head-acts' },
+    el('div', { class: 'liv-title' }, el('span', { class: 'liv-dot' }), el('b', { text: '리브' }),
+      opts.embedded ? el('span', { class: 'liv-title-sub', text: '워크스페이스 담당자' }) : null),
+    opts.embedded ? null : el('div', { class: 'liv-head-acts' },
       el('a', {
         class: 'btn btn-sm btn-ghost', href: '#/dashboard', text: '← 라이블리',
         title: '라이블리 홈으로 돌아갑니다. 리브는 상단 [리브] 버튼으로 다시 열 수 있습니다.',
@@ -81,8 +88,14 @@ export async function renderLiv(view: HTMLElement | null): Promise<void> {
   const chatWrap = el('div', { class: 'liv-chat' },
     el('div', { class: 'liv-chat-body', id: 'liv-chat-body' }, el('div', { class: 'liv-chat-boot', text: '세션을 준비하고 있습니다…' })));
 
-  view.append(el('div', { class: 'liv-wrap' }, head,
-    el('div', { class: 'liv-body' }, el('aside', { class: 'liv-rail' }, cards), chatWrap)));
+  // rail 을 받았으면 카드는 그쪽(셸의 우측 패널)에, 본문은 대화 한 열. 안 받았으면 종전 그대로 왼쪽 레일.
+  if (opts.rail) {
+    opts.rail.replaceChildren(cards);
+    view.append(el('div', { class: 'liv-wrap' }, head, el('div', { class: 'liv-body liv-body-solo' }, chatWrap)));
+  } else {
+    view.append(el('div', { class: 'liv-wrap' }, head,
+      el('div', { class: 'liv-body' }, el('aside', { class: 'liv-rail' }, cards), chatWrap)));
+  }
 
   // 카드와 세션은 **독립적으로** 로드한다. 세션이 못 떠도 무엇이 문제인지는 보여야 하고,
   //  카드 조회가 느려도 대화는 먼저 시작될 수 있다(위젯 독립 실패 원칙과 같은 결).
