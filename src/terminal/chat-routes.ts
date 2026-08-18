@@ -150,4 +150,34 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     res.setHeader("Cache-Control", "no-store");
     res.json({ ok: true, action, key });
   }));
+
+  // ── 아웃박스(#1753) — 이 세션의 전달 대기·실패 프롬프트. 화면이 대기 말풍선(새로고침 생존)과 재시도·삭제를 그린다. ──
+  //  게이트 = transcript 와 동일(gateRead — 입장할 수 있으면 어차피 터미널에서 볼 수 있는 내용이다).
+  app.get("/api/ui/terminal/sessions/:id/outbox", auth, wrap(async (req, res) => {
+    const id = String(req.params.id ?? "");
+    if (!/^[A-Za-z0-9._-]{1,128}$/.test(id)) throw new HttpError(400, "세션 id 형식 오류");
+    await gateRead(id, req);
+    const { listOutbox } = await import("../sessions/session-outbox.js");
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ items: await listOutbox(id) });
+  }));
+  //  재시도·삭제는 **보내기와 동급 게이트**(canAttach) — 큐를 움직이는 건 세션에 입력하는 것과 같은 행동이다.
+  app.post("/api/ui/terminal/sessions/:id/outbox/:oid/retry", auth, wrap(async (req, res) => {
+    const id = String(req.params.id ?? "");
+    if (!/^[A-Za-z0-9._-]{1,128}$/.test(id)) throw new HttpError(400, "세션 id 형식 오류");
+    if (!(await canAttach(id, idOf(userOf(req))))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    const oid = Number(req.params.oid);
+    if (!Number.isFinite(oid) || oid <= 0) throw new HttpError(400, "outbox id 형식 오류");
+    const { retryOutbox } = await import("../sessions/session-outbox.js");
+    res.json({ ok: await retryOutbox(id, oid) });
+  }));
+  app.post("/api/ui/terminal/sessions/:id/outbox/:oid/discard", auth, wrap(async (req, res) => {
+    const id = String(req.params.id ?? "");
+    if (!/^[A-Za-z0-9._-]{1,128}$/.test(id)) throw new HttpError(400, "세션 id 형식 오류");
+    if (!(await canAttach(id, idOf(userOf(req))))) throw new HttpError(403, "세션에 접근할 수 없습니다");
+    const oid = Number(req.params.oid);
+    if (!Number.isFinite(oid) || oid <= 0) throw new HttpError(400, "outbox id 형식 오류");
+    const { discardOutbox } = await import("../sessions/session-outbox.js");
+    res.json({ ok: await discardOutbox(id, oid) });
+  }));
 }

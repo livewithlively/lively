@@ -343,6 +343,15 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     } else if (!(await canAttach(req.params.id, uid))) {
       throw new HttpError(403, "세션에 접근할 수 없습니다");
     }
+    if (!nodeId) {
+      // 이 박스 세션 — 아웃박스(#1753)로. 곧바로 send-keys 하지 않는다: 로그인·대화상자에 멈춘 세션이면 글자가 조용히
+      //  사라진다(실측). 배달자가 입력창을 확인하고 넣고, 트랜스크립트 에코로 delivered 를 확정한다. 화면은 seq 로 상태를 따라간다.
+      const { enqueuePrompt } = await import("../sessions/session-outbox.js");
+      const q = await enqueuePrompt(req.params.id, text);
+      res.json({ ok: true, queued: true, outbox_id: q.id, seq: q.seq });
+      return;
+    }
+    // 노드(멤버 PC) 세션 — 파일·tmux 가 그 컴퓨터에 있어 아웃박스 배달자가 닿지 않는다. 종전 릴레이 그대로(후속 #1753 P2).
     const { injectPrompt } = await import("../node/session-inject.js");
     try { await injectPrompt(req.params.id, text); }
     catch (e) {
