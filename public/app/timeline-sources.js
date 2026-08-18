@@ -5,40 +5,52 @@
 //    세션 → 트랜스크립트(session-trail.ts 가 분류) + 이 세션이 남긴 작업 기록
 //  ⚠ 여기서 위계(tier)를 손으로 매기지 않는다 — timeline.ts 의 tierOf 가 (kind, verb) 로 정한다.
 //    예외는 '사건의 성격이 동사만으로 안 갈리는 것'뿐이다(상태 변경=1, 댓글=2, 잔 편집=3).
-import { api } from './core.js';
+import { api, loadPeopleAvatars } from './core.js';
 import { humanSummary } from './timeline.js';
 const s = (v) => String(v ?? '');
+// 사람 id → 표시명. 화면에 'yoon' 이 아니라 '윤상민' 이 떠야 한다(아바타 맵과 같은 원천).
+let people = {};
+void loadPeopleAvatars().then((m) => { people = m || {}; });
+const personName = (id) => {
+    const k = s(id);
+    return (people[k] && people[k].display_name) || k;
+};
 // 작업 기록의 유형 — 화면 어휘는 한 곳(web/lib/widgets.ts)이 정본이지만, 여기선 타임라인 한 줄에 들어갈
 //  짧은 말만 쓴다(칩이 아니라 부제의 한 조각이라 색·순서를 다시 만들 이유가 없다).
 const TYPE_LABEL = {
     feature: '기능', fix: '수정', decision: '결정', docs: '문서', research: '리서치', review: '검토', chore: '운영', other: '기타',
 };
+// 화면에 보일 동사 — 유형마다 다르게 말한다. '했음'만 되풀이하면 아무 말도 안 한 것과 같다.
+const TYPE_VERB = {
+    feature: '만듦', fix: '고침', decision: '정함', docs: '남김', research: '알아봄', review: '살펴봄', chore: '손봄', other: '했음',
+};
 // 상태 원값(todo·active·in_progress·done)은 화면 말이 아니다 — 사람 말로 바꿔 보여준다.
 const STATUS_LABEL = { todo: '시작 전', active: '진행 중', in_progress: '진행 중', done: '완료' };
 const statusWord = (v) => { const k = s(v); return k ? (STATUS_LABEL[k] || k) : '—'; };
-/** 작업 기록 한 건 → **장(章)** 한 줄. 접힌 채로는 요약 한 줄, 펼치면 그 안에서 나온 것들. */
+/** 작업 기록 한 건 → **장(章)** 한 줄. 접힌 줄은 사람 말 요약, 펼치면 그 작업에서 남은 것. */
 function fromActivity(a, opts) {
     const ts = s(a.committed_at || a.created_at);
-    // 펼침 — 이 작업에서 실제로 나온 것들. 지식은 이름을 그대로(누르면 가운데 화면에서 열린다).
+    // 펼침 — 이 작업에서 **남은 것**만. 커밋 해시·레포는 넣지 않는다(사람이 읽을 것이 아니다).
     const kids = [];
     for (const r of (Array.isArray(a.refs) ? a.refs : [])) {
-        kids.push({ verb: r.relation === 'produced' ? '지식' : '읽음', label: s(r.title || r.name), href: r.name ? '#/k/' + encodeURIComponent(s(r.name)) : null });
+        if (r.relation !== 'produced')
+            continue;
+        kids.push({ verb: '지식', label: humanSummary(r.title || r.name, 40), href: r.name ? '#/k/' + encodeURIComponent(s(r.name)) : null });
     }
-    if (a.commit_sha)
-        kids.push({ verb: '커밋', label: [s(a.repo), s(a.commit_sha).slice(0, 8)].filter(Boolean).join(' ') + (a.touchCount ? ' · 코드 ' + a.touchCount + '곳' : '') });
-    // 툴팁용 부연(화면 한 줄에는 안 나온다) — 유형·커밋·소속.
-    const tip = [TYPE_LABEL[s(a.type)] || '', a.commit_sha ? '커밋 ' + s(a.commit_sha).slice(0, 8) : '', opts?.showProject && a.project_id ? '#' + a.project_id : '']
-        .filter(Boolean).join(' · ');
+    if (a.touchCount)
+        kids.push({ verb: '코드', label: a.touchCount + '곳을 고쳤어요' });
+    const type = s(a.type);
     return {
         id: 'act:' + a.id,
-        kind: 'activity', verb: '기록',
-        label: humanSummary(a.summary || a.title),
+        kind: 'activity',
+        verb: TYPE_VERB[type] || '했음',
+        label: humanSummary(a.summary || a.title, 44),
         key: 'act|' + a.id,
         ts,
-        detail: tip || undefined,
-        actor: { id: s(a.author_person) || null, name: s(a.author_person) || null, agent: s(a.author_agent) || null },
+        detail: [TYPE_LABEL[type] || '', opts?.showProject && a.project_id ? '프로젝트 #' + a.project_id : ''].filter(Boolean).join(' · ') || undefined,
+        actor: { id: s(a.author_person) || null, name: personName(a.author_person) || null, agent: s(a.author_agent) || null },
         children: kids,
-        href: null, // 작업 기록 자체의 '자세히'는 가운데 화면 몫(다음 단계)
+        href: null,
     };
 }
 /** 프로젝트 타임라인 — 작업 기록 + 사건(상태·생성) + 댓글 + 잔 변경 + 태스크 만듦/끝냄. */
@@ -51,27 +63,32 @@ export async function loadProjectTimeline(id, detail) {
     for (const f of feedRes) {
         const actor = { id: s(f.actor) || null, name: s(f.display_name || f.actor) || null, agent: null };
         if (f.kind === 'comment') {
-            out.push({ id: 'cmt:' + f.id, kind: 'say', verb: '남긴 말', label: humanSummary(f.body || f.text, 46), key: 'cmt|' + f.id, ts: s(f.ts), actor, tier: 2 });
+            out.push({ id: 'cmt:' + f.id, kind: 'say', verb: '말함', label: humanSummary(f.body || f.text, 44), key: 'cmt|' + f.id, ts: s(f.ts), actor });
             continue;
         }
-        if (f.field === 'created') {
-            out.push({ id: 'ev:' + f.id, kind: 'project', verb: '만듦', label: '프로젝트를 만듦', key: 'ev|created', ts: s(f.ts), actor });
-        }
-        else if (f.field === 'status') {
-            out.push({ id: 'ev:' + f.id, kind: 'project', verb: '바꿈', label: `상태 ${statusWord(f.from)} → ${statusWord(f.to)}`, key: 'ev|status', ts: s(f.ts), actor });
-        }
-        else {
-            // 설명·이름 같은 잔 편집은 사건이 아니라 배경이다 — 3단(전부 보기에서만).
-            out.push({ id: 'ev:' + f.id, kind: 'meta', verb: '고침', label: s(f.label || f.field), key: 'ev|meta|' + s(f.field) + '|' + s(f.actor), ts: s(f.ts), actor, tier: 3 });
-        }
+        // 상태가 바뀐 것은 결정이다. 이름·설명 같은 잔 편집은 사건이 아니라 배경이라 싣지 않는다.
+        if (f.field === 'created')
+            out.push({ id: 'ev:' + f.id, kind: 'project', verb: '시작', label: '이 프로젝트를 시작했어요', key: 'ev|created', ts: s(f.ts), actor });
+        else if (f.field === 'status')
+            out.push({ id: 'ev:' + f.id, kind: 'project', verb: '정함', label: statusWord(f.to) + '(으)로 옮겼어요', key: 'ev|status|' + s(f.to), ts: s(f.ts), actor });
     }
+    // 우리 일하는 방식상 '작업 기록을 남기고 그 태스크를 끝낸다' 가 한 벌이라, 둘 다 실으면 같은 일이 두 줄이 된다.
+    //  기록 시각과 10분 안에 붙는 완료는 그 기록이 이미 말하고 있다 — 태스크 줄을 빼서 되풀이를 없앤다.
+    const actTimes = out.map((x) => Date.parse(x.ts || '')).filter((n) => Number.isFinite(n));
+    const nearActivity = (iso) => {
+        const n = Date.parse(iso);
+        if (!Number.isFinite(n))
+            return false;
+        return actTimes.some((t2) => Math.abs(t2 - n) <= 10 * 60_000);
+    };
     const tasks = (detail && detail.project && Array.isArray(detail.project.tasks)) ? detail.project.tasks : [];
     for (const t of tasks) {
-        const who = { id: s(t.assignee || t.created_by) || null, name: s(t.assignee || t.created_by) || null, agent: null };
-        if (t.completed_at)
-            out.push({ id: 'tk-done:' + t.id, kind: 'task', verb: '끝냄', label: humanSummary(t.name, 40), key: 'tk|done|' + t.id, ts: s(t.completed_at), actor: who, href: '#/projects2/t/' + t.id });
-        if (t.created_at)
-            out.push({ id: 'tk-new:' + t.id, kind: 'task', verb: '만듦', label: humanSummary(t.name, 40), key: 'tk|new|' + t.id, ts: s(t.created_at), actor: who, href: '#/projects2/t/' + t.id, tier: 2 });
+        if (!t.completed_at)
+            continue; // 끝낸 일만 — 만든 일은 계획이지 결과가 아니다
+        if (nearActivity(s(t.completed_at)))
+            continue;
+        const who = { id: s(t.assignee || t.created_by) || null, name: personName(t.assignee || t.created_by) || null, agent: null };
+        out.push({ id: 'tk-done:' + t.id, kind: 'task', verb: '끝냄', label: humanSummary(t.name, 44), key: 'tk|done|' + t.id, ts: s(t.completed_at), actor: who, href: '#/projects2/t/' + t.id });
     }
     return out;
 }
