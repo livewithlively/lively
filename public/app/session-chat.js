@@ -394,7 +394,7 @@ export function mountSessionChat(host, first, opts) {
                     : unreadable ? String(lastErr.message)
                         : lastErr?.status === 409 ? '이 세션의 대화 파일은 그 컴퓨터에 있어 여기서 바로 읽지 못해요. 첫 턴이 끝나면 중앙 기록으로 보입니다.'
                             : `대화 기록을 불러오지 못했습니다. ${lastErr?.message || ''}`;
-            view.list.append(el('div', { class: 'livc-open sc-empty' }, el('p', { text: msg }), !notYet && opts.terminalSrc && isBox ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '터미널로 보기', onclick: () => toggleTerminal(true) }) : null));
+            view.list.append(el('div', { class: 'livc-open sc-empty' }, el('p', { text: msg }), opts.terminalSrc && isBox ? el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '터미널로 보기', onclick: () => toggleTerminal(true) }) : null));
             paintState();
             // 라이브 박스면 파일이 생기는 순간을 잡는다(사람이 터미널에서 먼저 말을 걸 수도 있다) — 첫 대화 뒤에 여기로 흘러든다.
             //  못 읽는 하네스면 기다려도 안 온다 — 폴링하지 않는다(보내기는 된다: 주입은 tmux 라 하네스 무관).
