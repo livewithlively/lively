@@ -245,14 +245,16 @@ function drawAsideSession(s) {
     }
     const raw = s.raw || {};
     const factsEl = el('div', { class: 'v2-sfacts' }, el('span', { class: 'v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' }), el('span', { text: s.stateLabel }), el('span', { class: 'sep', text: '·' }), s.projectId ? el('a', { href: '#/p/' + s.projectId, text: projName(data, s.projectId) }) : el('span', { text: '프로젝트 없음' }), raw.harness ? [el('span', { class: 'sep', text: '·' }), el('span', { class: 'mono', text: String(raw.harness) })] : null, s.node ? [el('span', { class: 'sep', text: '·' }), el('span', { text: String(s.node) })] : null, !s.owned && (raw.owner_name || raw.owner) ? [el('span', { class: 'sep', text: '·' }), el('span', { text: String(raw.owner_name || raw.owner) })] : null);
+    // 사실 줄은 타임라인 **머리 바 아래 한 줄**로 들어간다(#1756) — 가운데 대화창의 머리와 같은 자리에 같은 선이
+    //  지나가야 두 열이 한 판으로 읽힌다(우패널이 따로 노는 상자가 아니게).
     if (asideTrail && asideTrail.id === s.id && asideTrail.w.root.isConnected) {
-        asideTrail.facts.replaceWith(factsEl);
-        asideTrail.facts = factsEl;
+        asideTrail.w.setMeta(factsEl);
         return asideTrail.w;
     }
-    asideEl.replaceChildren(factsEl); // 프로젝트 붙이기는 상단바 [프로젝트 연결](#1749)
+    asideEl.replaceChildren(); // 프로젝트 붙이기는 상단바 [프로젝트 연결](#1749)
     const w = createTimeline(asideEl, { scope: '이 세션', chapters: true, empty: '아직 한 일이 없어요 — 세션이 일하면 여기에 쌓입니다.' });
-    asideTrail = { id: s.id, w, facts: factsEl };
+    w.setMeta(factsEl);
+    asideTrail = { id: s.id, w };
     void loadSessionActivities(s.id).then((items) => w.addAll(items));
     return w;
 }
