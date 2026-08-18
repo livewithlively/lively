@@ -154,6 +154,39 @@
 
 <div id="toasts" aria-live="polite"></div>
 
+<!-- 자산 세대 불일치 자가복구(#1760) — 반드시 아래 모듈 스크립트보다 **먼저** 실행돼야 한다(그래야 그 로드 실패를 듣는다).
+     배포·빌드가 스치는 순간에는 한 페이지가 옛 모듈과 새 모듈을 섞어 받을 수 있고, 그러면 ESM 은 export 불일치로
+     그 자리에서 죽어 화면이 통째로 백지가 된다(사람 눈에는 원인 없는 하얀 화면). 서버는 그 시점에 이미 온전한
+     번들을 갖고 있고 HTML 은 no-store 라 다시 열면 새 버전 스탬프를 받으므로, 재로드 한 번이면 복구된다.
+     되풀이를 막으려고 세션당 한 번만 시도하고, 부팅이 실제로 끝나면 그 표시를 지운다. -->
+<script>
+(function () {
+  var KEY = 'lv:asset-reload';
+  var RE = /does not provide an export|dynamically imported module|Importing a module script failed|Unexpected token/i;
+  var tried = false;
+  function recover(why) {
+    if (tried) return; tried = true;
+    try {
+      if (sessionStorage.getItem(KEY)) { console.error('[assets] 재로드 후에도 모듈 로드 실패 — 자동 복구를 멈춘다:', why); return; }
+      sessionStorage.setItem(KEY, String(Date.now()));
+    } catch (_) { return; } // 스토리지가 막힌 브라우저에선 무한 리로드 위험이 있어 복구를 포기한다
+    console.warn('[assets] 자산 세대가 섞여 로드됐다 — 최신 버전으로 다시 연다:', why);
+    location.reload();
+  }
+  // 모듈 실패는 두 경로로 온다 — 태그의 error 이벤트(네트워크·파싱)와 window 의 error(평가 중 예외).
+  window.addEventListener('error', function (e) {
+    var t = e && e.target;
+    if (t && t !== window && t.tagName === 'SCRIPT') { recover((t.getAttribute && t.getAttribute('src')) || 'script'); return; }
+    if (e && typeof e.message === 'string' && RE.test(e.message)) recover(e.message);
+  }, true);
+  window.addEventListener('unhandledrejection', function (e) {
+    var m = e && e.reason && (e.reason.message || e.reason);
+    if (typeof m === 'string' && RE.test(m)) recover(m);
+  });
+  // 부팅이 실제로 끝났으면 표시를 지운다 — 다음 사고 때 다시 복구할 수 있도록.
+  window.addEventListener('load', function () { setTimeout(function () { try { sessionStorage.removeItem(KEY); } catch (_) { /* noop */ } }, 3000); });
+})();
+</script>
 <script type="module" src="./app/main.js"></script>
 <!-- 페이지 오버레이 스크롤바(#756) — 네이티브 루트 스크롤바를 숨기고 겹쳐 뜨는 얇은 막대로 대체(빌드 불필요, 순수 JS) -->
 <script defer src="./page-scrollbar.js"></script>

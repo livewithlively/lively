@@ -12,7 +12,11 @@
     "skipLibCheck": true,
     "resolveJsonModule": true,
     "rootDir": ".",
-    "outDir": "../public/app",
+    // ⚠ 서빙 경로가 아니다(#1760). 산출물은 scripts/build-web.mjs 가 빌드 완료 후 public/app 으로
+    //  **원자 교체**한다 — tsc 가 서빙 디렉터리에 직접 쓰면 21초에 걸친 순차 기록 동안 옛/새 모듈이
+    //  한 페이지에 섞여 로드돼 화면이 백지가 된다. `tsc -p web/tsconfig.json` 을 직접 돌리면 여기까지만
+    //  만들어지고 화면에는 반영되지 않는다 — 반드시 `npm run build:web` 을 쓸 것.
+    "outDir": "../build/web-app",
     "incremental": true,
     "tsBuildInfoFile": "../.tsbuildinfo-web"
   },

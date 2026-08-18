@@ -35,3 +35,9 @@ build-info.json
 desktop/node_modules/
 desktop/release/
 desktop/build/
+
+# 웹 SPA 컴파일 중간 산출(#1760) — scripts/build-web.mjs 가 여기 쌓고 public/app 으로 원자 교체한다.
+#  서빙되는 것은 public/app 쪽이고 그건 계속 커밋한다.
+/build/
+/public/.app-next/
+/public/.app-old/
