@@ -311,3 +311,46 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .tr-md { font-size: 12.5px; line-height: 1.7; max-height: 480px; overflow: auto; }
 .tr-md .md > :first-child { margin-top: 0; }
 .tr-body .btn { align-self: flex-start; }
+
+/* ── 워크스페이스 스위처(#1750) — 좌상단. 홈 워드마크 + 개인/팀 배지 버튼. 메뉴는 body 에 fixed 로 뜬다. ── */
+.v2-side-top { display: flex; align-items: center; gap: 6px; padding: 12px 12px 4px; }
+.v2-side-top .v2-logo { padding: 6px 8px; }
+.v2-ws { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg, #fff); font: inherit; cursor: pointer; }
+.v2-ws:hover { border-color: var(--line-net-2, #CFE0F7); }
+.v2-ws-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 700; color: var(--ink); }
+.v2-ws-car { font-size: 10px; color: var(--muted-2, #a6b2c8); flex: none; }
+.v2-ws-badge { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 9.5px; letter-spacing: .04em; font-weight: 700; padding: 1px 5px; border-radius: 5px; border: 1px solid transparent; }
+.v2-ws-badge.personal { color: var(--mint-deep, #0FA37E); background: var(--bg-success, #F3FBF8); border-color: #CDEFE3; }
+.v2-ws-badge.team { color: var(--blue); background: var(--bg-tint, #F6FAFF); border-color: var(--line-net-2, #CFE0F7); }
+/* 스위처 메뉴(fixed, body 부착) */
+.v2-ws-menu { z-index: 60; background: var(--bg, #fff); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow-2, 0 8px 30px rgba(21,35,59,.14)); padding: 6px; max-width: 380px; max-height: 74vh; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+.v2-ws-acct { font-size: 11.5px; color: var(--muted); padding: 6px 8px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-ws-sec { font-family: var(--mono, ui-monospace, monospace); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted-2, #a6b2c8); padding: 8px 8px 3px; }
+.v2-ws-cur { display: flex; align-items: center; gap: 7px; padding: 7px 8px; border-radius: 8px; background: var(--bg-tint, #F6FAFF); }
+.v2-ws-cur .v2-ws-name { font-size: 13px; }
+.v2-ws-check { color: var(--blue); font-weight: 800; flex: none; }
+.v2-ws-item { display: flex; align-items: center; gap: 6px; padding: 8px; border: 0; background: none; font: inherit; font-size: 12.5px; font-weight: 600; color: var(--ink-sub); text-decoration: none; border-radius: 8px; cursor: pointer; text-align: left; }
+.v2-ws-item:hover { background: var(--bg-tint, #F6FAFF); color: var(--ink); }
+.v2-ws-item.add { color: var(--blue); }
+.v2-ws-empty, .v2-ws-loading { font-size: 11.5px; color: var(--muted); line-height: 1.55; padding: 4px 8px 6px; margin: 0; }
+.v2-ws-team-row { display: flex; align-items: center; gap: 4px; padding: 2px 4px 2px 8px; border-radius: 8px; }
+.v2-ws-team-row:hover { background: var(--bg-tint, #F6FAFF); }
+.v2-ws-team-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; text-decoration: none; color: var(--ink); font-size: 12.5px; font-weight: 600; }
+.v2-ws-err { flex: none; width: 15px; height: 15px; border-radius: 50%; background: var(--coral, #E5484D); color: #fff; font-size: 10px; font-weight: 800; display: grid; place-items: center; }
+.v2-ws-auto { flex: none; font-size: 10.5px; font-weight: 700; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
+.v2-ws-auto.on { color: var(--mint-deep, #0FA37E); border-color: #CDEFE3; background: var(--bg-success, #F3FBF8); }
+.v2-ws-del { flex: none; width: 22px; border: 0; background: none; color: var(--muted-2, #a6b2c8); font-size: 12px; cursor: pointer; border-radius: 6px; }
+.v2-ws-del:hover { color: var(--coral, #E5484D); background: var(--bg-tint, #F6FAFF); }
+.v2-ws-linkform { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px 8px; }
+.v2-ws-in { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 12.5px; }
+.v2-ws-in:focus { outline: none; border-color: var(--blue); }
+.v2-ws-formrow { display: flex; align-items: center; gap: 8px; }
+.v2-ws-note { font-size: 11px; color: var(--coral, #E5484D); flex: 1; min-width: 0; line-height: 1.4; }
+.v2-ws-hint { font-size: 11px; color: var(--muted); line-height: 1.5; margin: 2px 0 0; }
+.v2-ws-promo { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; }
+.v2-ws-promo:hover { background: var(--bg-tint, #F6FAFF); }
+.v2-ws-promo-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; }
+.v2-ws-promo-kind { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 9.5px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.v2-ws-promo-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.v2-ws-promo-acts { flex: none; display: flex; gap: 4px; }
+.btn-xs { font-size: 11px; padding: 2px 8px; }

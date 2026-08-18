@@ -21,6 +21,7 @@ import { initGroundTruthRegistries } from "./schema/registry.js";
 import { initMemberAuth } from "./schema/member-auth.js";
 import { initOAuthServer } from "./schema/oauth.js";
 import { initCanary } from "./schema/canary.js";
+import { initPromotion } from "./schema/promotion.js";
 
 export async function initOrgSchema(): Promise<void> {
   await initOrgCore(itemsPool);                    // org_profile·org_member·org_content_audit·mcp_call_log·auth_token
@@ -47,5 +48,6 @@ export async function initOrgSchema(): Promise<void> {
   await initCanary(itemsPool);                     // #1657: canary_result(상류 회귀 자동탐지 실행 기록)
   await initClassifierRegistry(itemsPool);         // org_classifier(+seen — 분류기 n개. 증류기의 분류판)
   await initManagerRegistry(itemsPool);            // org_manager(+finding — 관리기 4종: 어긋남·아웃데이티드·모순·코드괴리)
+  await initPromotion(itemsPool);                  // #1750: org_promotion_request(개인→팀 워크스페이스 승격 요청 큐) — 맨 끝(신규 조각 규약)
   // (org_memory/org_content → knowledge_unit 1회복사 폐기 2026-06-24 — 원본 DROP, 복사 완료·v6 컷오버.)
 }
