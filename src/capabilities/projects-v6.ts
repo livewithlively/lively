@@ -33,6 +33,7 @@ import {
   linkProjectEdge, unlinkProjectEdge, getProjectListRow,
   projectIdsInList, listIdOfProject,
   searchProjects, countProjectGrep, hybridSearchProjects, // #631 프로젝트 검색(grep/hybrid)
+  findSimilarProjects,                                  // #1762 유사 프로젝트(절대 코사인 — 게이팅 가능)
   listMyTasks, // #1232 대시보드 '내 할 일' — 사람 축 태스크 조회
   listTasksForProjects, // #1305 타임라인(간트) — 프로젝트 여러 개의 하위 작업 벌크 조회
   getNodeRow, listEdgesForNodes, rescheduleDependents, // #1308 의존선 — 노드(레벨 무관) 엣지·자동 재스케줄
@@ -233,6 +234,64 @@ const projectSearchV6: Capability = {
   },
   handler: async (input: ProjectSearchV6Input, _user: LivelyUser, ctx?: CapabilityCtx) => {
     return { projects: await hybridSearchProjects(input.q, { ...toSearchOpts(input), viewer: ctx?.viewer ?? null }) };
+  },
+};
+
+// ── 유사 프로젝트(절대 코사인, #1762) — project_search(RRF) 와 직교. 랭크가 아니라 **절대 유사도**라 임계 비교가 된다. ──
+//  왜 필요한가: RRF 점수는 순위 역수(Σ 1/(k+rank))라 무관한 질의에도 상위 N 이 늘 나온다 — "관련 있을 때만 보여준다"는
+//  게이팅을 세울 수 없다(실측 2026-08-18: 무관 질의 top5 가 0.0164·0.0161·0.0159… 로 촘촘). 훅(세션↔프로젝트 연결
+//  후보 회수)처럼 **무관하면 아무것도 하지 않아야** 하는 표면이 이걸 쓴다. knowledge_similar 와 동형.
+const projectSimilarV6Input = {
+  text: z.string().min(1).max(8000).optional().describe("기준 텍스트(즉시 임베딩) — id 와 택일"),
+  id: z.number().int().positive().optional().describe("기준 프로젝트 id(저장된 임베딩 재사용, 자기 제외) — text 와 택일"),
+  level: z.enum(SEARCH_LEVELS).optional(),
+  list_id: z.number().int().positive().optional(),
+  status: z.string().optional(),
+  include_done: z.boolean().optional().describe("완료·취소된 것도 포함(기본 false — 죽은 프로젝트를 후보로 권하지 않는다)"),
+  limit: z.number().int().min(1).max(50).optional(),
+  min_score: z.number().min(0).max(1).optional().describe("이 코사인 유사도(0~1) 이상만(기본 0)"),
+};
+type ProjectSimilarV6Input = z.infer<z.ZodObject<typeof projectSimilarV6Input>>;
+const projectSimilarV6: Capability = {
+  name: "project_similar",
+  title: "유사 프로젝트",
+  description:
+    "주어진 텍스트(text) 또는 프로젝트(id)와 **의미적으로 가장 가까운** 프로젝트를 코사인 유사도(0~1)로 찾는다. " +
+    "min_score(0~1) 이상만, 유사도 내림차순 — **랭크가 아니라 절대 유사도라 '관련 없으면 빈 결과'가 성립한다**(project_search 의 RRF 점수로는 불가). " +
+    "지금 하는 일을 어느 프로젝트에 붙일지 고를 때, 새 프로젝트를 만들기 전 중복 확인할 때 쓴다. 기본으로 완료·취소 프로젝트는 제외(include_done 으로 포함). " +
+    "**임베딩이 꺼져 있거나 대상에 임베딩이 없으면 빈 결과**(자연어 검색은 project_search, 정확매칭은 project_grep).",
+  scope: "memory",
+  input: projectSimilarV6Input,
+  // REST 마운트는 project_get_v6(/projects/:id) **앞**에 둬야 'similar'가 :id 로 안 잡힌다(semantic 과 동형 — 아래 배열 순서).
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/v6/projects/similar"],
+      parse: (req) => {
+        const query = (req.query ?? {}) as Record<string, unknown>;
+        const text = query.text ? String(query.text) : undefined;
+        const id = query.id != null && query.id !== "" ? Number(query.id) : undefined;
+        if (!text && id == null) throw new HttpError(400, "text 또는 id 가 필요합니다");
+        const level = query.level ? String(query.level) : undefined;
+        return {
+          text, id,
+          level: level && (SEARCH_LEVELS as readonly string[]).includes(level) ? level : undefined,
+          list_id: query.list_id != null && query.list_id !== "" ? Number(query.list_id) : undefined,
+          status: query.status ? String(query.status) : undefined,
+          include_done: query.include_done === "1" || query.include_done === "true",
+          limit: query.limit != null && query.limit !== "" ? Number(query.limit) : undefined,
+          min_score: query.min_score != null && query.min_score !== "" ? Number(query.min_score) : undefined,
+        };
+      } }],
+  },
+  handler: async (input: ProjectSimilarV6Input, _user: LivelyUser, ctx?: CapabilityCtx) => {
+    if (!input.text && input.id == null) throw new HttpError(400, "text 또는 id 중 하나가 필요합니다");
+    return {
+      projects: await findSimilarProjects({
+        text: input.text, id: input.id, limit: input.limit, minScore: input.min_score,
+        level: input.level, listId: input.list_id, status: input.status, includeDone: input.include_done,
+        viewer: ctx?.viewer ?? null,
+      }),
+    };
   },
 };
 
@@ -1243,7 +1302,7 @@ export const projectV6Capabilities: Capability[] = [
   // ⚠ 검색(정적 경로)은 projectGetV6(/projects/:id) '앞에' — Express first-match 가 :id 로 삼키지 않게(#631).
   myTasksV6,   // #1232 정적 경로(/v6/my-tasks) — /projects/:id 계열과 세그먼트가 달라 무충돌이지만 순서 규칙대로 앞에
   projectTasksV6, // #1305 정적 경로(/v6/project-tasks) — 위와 같은 이유로 앞에
-  projectListV6, projectGrepV6, projectSearchV6, projectGetV6, projectCreateV6, projectUpdateV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectSetMembersV6,
+  projectListV6, projectGrepV6, projectSearchV6, projectSimilarV6, projectGetV6, projectCreateV6, projectUpdateV6, projectSetReposV6, projectSetCategoriesV6, projectDeleteV6, projectSetStatusV6, projectSetMembersV6,
   projectMyStatusV6,
   projectLinkCategoryV6, projectLinkKnowledgeV6, projectLinkProjectV6, projectRecommendKnowledgeV6, knowledgeProjectsV6, taskCreateV6, taskSetStatusV6, taskUpdateV6, taskReorderV6, projectReorderV6, taskDeleteV6, boardFieldsV6,
 ];

@@ -16,7 +16,7 @@ import { visibleListIds, listIdPredicate, type Viewer } from "./visibility.js";
 // 쓰기 경로 임베딩 비동기화(#1053) — 저장/수정 시 인라인 임베딩 대신 pending 마킹 후 백그라운드 스윕에 위임(knowledge 와 동형).
 import { markEmbeddingPending, PROJECT_TARGET } from "./embedding-backfill.js";
 import {
-  type GrepPlan, parseGrep, grepWhere, grepExec, grepSnippet, RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider,
+  type GrepPlan, parseGrep, grepWhere, grepExec, grepSnippet, previewBody, RRF_K, HYBRID_CANDIDATES, activeEmbeddingProvider,
 } from "./search-util.js";
 
 // 세션·폴더 바인딩(#1313 R21) — 구현은 project-session-store.ts 로 분리(터미널 척추가 PM 스토어 전체를 안 끌게).
@@ -1062,4 +1062,81 @@ async function rrfSearchProjects(qstr: string, qvec: number[], opts: ProjectSear
     if (withBody) base.snippet = grepSnippet((r.description as string | null) ?? "", plan, opts.context, "project_get_v6");
     return base;
   });
+}
+
+// ── 유사 프로젝트(절대 코사인, #1762) — knowledge findSimilarKnowledge 와 동형. ──
+//  hybridSearchProjects(RRF) 와 직교: RRF 점수는 **순위 역수**(Σ 1/(k+rank))라 절대 의미가 없다 —
+//  무관한 질의에도 상위 N 이 늘 나오므로 "관련 있으면 보여주고 없으면 아무것도 안 한다"는 게이팅에 쓸 수 없다.
+//  (실측 2026-08-18: 무관 질의 top5 가 0.0164·0.0161·0.0159… 로 촘촘 — 임계를 그을 자리가 없다.)
+//  이건 코사인 유사도(0~1)를 그대로 돌려주므로 minScore 로 임계 비교가 된다. 용도: 세션↔프로젝트 연결 후보
+//  회수(훅), 신규 프로젝트 생성 전 중복 확인. 임베딩 off / 대상 미임베딩이면 **빈 결과**(폴백 없음 — 벡터 전용).
+export interface ProjectSimilarRow extends ProjectSearchRow { similarity: number }
+export interface ProjectSimilarOpts {
+  text?: string;          // 기준 텍스트(즉시 임베딩) — id 와 택일
+  id?: number;            // 기준 프로젝트(저장된 임베딩 재사용, 자기 제외) — text 와 택일
+  limit?: number; minScore?: number;
+  level?: string; listId?: number; status?: string;
+  includeDone?: boolean;  // 기본 false — done·canceled 는 제외(연결 후보로 죽은 프로젝트를 권하지 않는다)
+  viewer?: Viewer;
+}
+export async function findSimilarProjects(opts: ProjectSimilarOpts = {}): Promise<ProjectSimilarRow[]> {
+  // 1) 쿼리 벡터 리터럴 — id(저장된 벡터 재사용, 재임베딩 불요) 또는 text(즉시 임베딩).
+  const visIds = opts.viewer === undefined ? undefined : await visibleListIds(opts.viewer);
+  let vecLiteral: string | null = null;
+  if (opts.id != null) {
+    // 기준 프로젝트도 볼 수 있어야 한다 — 안 보이는 프로젝트의 임베딩으로 이웃을 훑는 건 그 프로젝트를
+    //  지렛대 삼아 "무엇에 대한 일인가"를 역추적하는 우회로다(knowledge similar 의 assertKnowledgeVisible 과 같은 이유).
+    const vis = visIds === undefined ? "TRUE" : listIdPredicate(PROJECT_ROW_LIST_ID_SQL, visIds);
+    const r = await one(itemsPool, `SELECT p.embedding_vector::text AS v FROM project p WHERE p.id=$1 AND ${vis}`, [opts.id]);
+    vecLiteral = (r as { v?: string | null } | undefined)?.v ?? null;   // 미임베딩·비가시 → null → []
+  } else if (opts.text && opts.text.trim()) {
+    const provider = await activeEmbeddingProvider();
+    if (!provider) return [];                                          // 임베딩 off → 유사 없음
+    try {
+      const [v] = await provider.embed([opts.text.slice(0, 8000)]);
+      vecLiteral = v && v.length ? toVectorLiteral(v) : null;
+    } catch { return []; }                                             // 쿼리 임베딩 실패 → 빈 결과(폴백 아님)
+  }
+  if (!vecLiteral) return [];
+  // 2) 최근접 — 코사인 거리 오름차순. 미임베딩·앵커·(기본)완료 제외, minScore 이상만.
+  const limit = Math.min(Math.max(opts.limit ?? 5, 1), 50);
+  const minScore = typeof opts.minScore === "number" ? opts.minScore : 0;
+  try {
+    const params: unknown[] = [vecLiteral]; const qp = `$1::vector`;    // $1 = 쿼리 벡터(거리·유사도·정렬에 공유)
+    const wh: string[] = [P_SEARCH_BASE, `p.embedding_vector IS NOT NULL`];
+    if (opts.id != null) { params.push(opts.id); wh.push(`p.id <> $${params.length}`); }
+    if (opts.level) { params.push(opts.level); wh.push(`p.level=$${params.length}`); }
+    if (opts.listId != null) { params.push(opts.listId); wh.push(`p.list_id=$${params.length}`); }
+    if (opts.status) { params.push(opts.status); wh.push(`p.status=$${params.length}`); }
+    if (!opts.includeDone) wh.push(`COALESCE(p.status_category,'') NOT IN ('done','canceled')`);
+    params.push(minScore); const minP = `$${params.length}`;
+    params.push(Math.min(limit * 10, 500)); const candP = `$${params.length}`;   // 후보는 넓게(공개범위 필터 여유분)
+    params.push(limit); const limP = `$${params.length}`;
+    // ⚠ 공개범위 술어를 **후보 스캔(cand)에 넣지 않는다** — 이 스캔이 곧 HNSW 근사탐색(ORDER BY <=> … LIMIT)이라
+    //  거기에 술어를 얹으면 탐색목록 안에서만 사후 필터돼 결과가 통째로 비는 리콜 붕괴가 난다(#1291 R2-#6, knowledge 와 동일).
+    //  cand 가 level·parent_id·list_id 를 실어야 바깥 술어(PROJECT_ROW_LIST_ID_SQL, 별칭 p)가 그대로 붙는다.
+    const vis = visIds === undefined ? "TRUE" : listIdPredicate(PROJECT_ROW_LIST_ID_SQL, visIds);
+    const sql = `
+      WITH cand AS (
+        SELECT ${P_GREP_SEL}, (1 - (p.embedding_vector <=> ${qp}))::float8 AS similarity
+        FROM project p
+        WHERE ${wh.join(" AND ")} AND (1 - (p.embedding_vector <=> ${qp})) >= ${minP}
+        ORDER BY p.embedding_vector <=> ${qp}
+        LIMIT ${candP}
+      )
+      SELECT * FROM cand p
+      WHERE ${vis}
+      ORDER BY p.similarity DESC
+      LIMIT ${limP}`;
+    const rows = await q(itemsPool, sql, params);
+    return rows.map((r) => {
+      const base = toProjectRow(r) as ProjectSimilarRow;
+      base.similarity = Number(r.similarity);
+      base.snippet = previewBody((r.description as string | null) ?? "");   // 식별용 앞부분(전문은 project_get_v6)
+      return base;
+    });
+  } catch (e) {
+    console.warn(`[embeddings] 유사 프로젝트 조회 실패: ${(e as Error)?.message}`);
+    return [];                                                          // pgvector 부재 등 → 빈 결과(검색·저장 무손상)
+  }
 }
