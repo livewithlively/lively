@@ -9,7 +9,7 @@
 //                                 tool_calls 가 없으면 그 턴의 **마지막 말**이다 → system turn_duration 을 뒤에 붙인다(agy 엔 턴 종료 줄이 없다)
 //      RUN_COMMAND·VIEW_FILE·LIST_DIRECTORY·GREP_SEARCH·MCP_TOOL·CODE_ACTION·GENERIC(MODEL) content = 도구 결과   → user tool_result
 //      ERROR_MESSAGE(MODEL: 툴콜 파싱 오류 / SYSTEM: 시스템 오류) error·content                            → 짝이 있으면 오류 결과, 없으면 assistant text ⚠
-//      CHECKPOINT(SYSTEM) content = 맥락 압축 요약                                                          → system compact
+//      CHECKPOINT(SYSTEM) 내부 스냅샷(1턴에도 찍힘 — 압축 사건 아님, 실측)                                   → 버린다
 //      CONVERSATION_HISTORY(SYSTEM)                                                                       → 버린다
 //  · 결과 줄엔 어느 tool_call 의 것인지 id 가 없다 → **짝짓기**: PLANNER 의 tool_calls 를 대기열에 넣고(id=agy-<step>-<i>), 결과 줄이 오면
 //    같은 종류(run_command↔RUN_COMMAND …)이면서 그 PLANNER 보다 뒤 스텝인 가장 오래된 대기를 짝으로 준다. 종류가 안 맞으면 가장 오래된
@@ -84,7 +84,10 @@ export function parseAntigravity(text: string, state: ParseState): { lines: Chat
       if (blocks.length) lines.push({ type: "assistant", timestamp: ts, message: { role: "assistant", content: blocks } });
       if (!calls.length && content.trim()) closeTurn(ts);   // 도구 없이 말만 = 턴의 마지막 말
     } else if (type === "CHECKPOINT") {
-      lines.push({ type: "system", subtype: "compact", timestamp: ts, text: content });
+      // ⚠ compact 로 번역하지 않는다 — antigravity 는 **1턴짜리 대화에도** CHECKPOINT 0("truncated due to its long
+      //  length" 문구 포함)을 찍는다(실측 2026-08-18, step 3 에서). 사용자에게 보인 압축 사건이 아니라 내부 스냅샷이고,
+      //  transcript_full 은 전문을 그대로 유지한다 → 화면에 '맥락 압축' 구분선을 그리면 거짓말이 된다(상민님 신고).
+      //  버린다(CONVERSATION_HISTORY 와 같은 취급).
     } else if (type === "ERROR_MESSAGE") {
       const msg = String(o.error || content || "").trim();
       const p = source === "MODEL" ? takePending(step, "GENERIC") : null;
@@ -107,6 +110,18 @@ export const antigravityIo: HarnessSessionAdapter = {
   roots: (homes) => homes.map((h) => path.join(h, ".gemini", "antigravity-cli", "brain")),
   filePattern: /^transcript(_full)?\.jsonl$/,
   pathFor: (root, { convId }) => (CONV_ID_RE.test(convId) ? path.join(root, convId, ".system_generated", "logs", "transcript_full.jsonl") : null),
+  // 화면 판정(실측 2026-08-18): "You are currently not signed in." + "⡿ Signing in..."(인증 검증 — 이때 넣은 프롬프트는
+  //  "아직 인증 확인중" 으로 거부돼 사라진다, 상민님 신고) → auth. 신뢰 대화상자("Do you trust … · ↑/↓ Navigate · enter
+  //  Confirm") → dialog. 생성 중 푸터 "esc to cancel" → busy(claude 와 달리 큐잉 보장 미실측 — 기다렸다 넣는다).
+  //  준비 푸터 "? for shortcuts · Gemini …" → ready.
+  screen: (tail) => {
+    const t = tail.join("\n");
+    if (/not signed in|Signing in\.\.\./i.test(t)) return "auth";
+    if (/Do you trust the contents|↑\/↓\s+Navigate|enter\s+Confirm/i.test(t)) return "dialog";
+    if (tail.some((l) => /\? for shortcuts/i.test(l))) return "ready";
+    if (tail.some((l) => /esc to cancel/i.test(l))) return "busy";
+    return null;
+  },
   parse: parseAntigravity,
   answer: null,
 };

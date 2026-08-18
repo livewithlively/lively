@@ -96,4 +96,5 @@ export const grokIo: HarnessSessionAdapter = {
   pathFor: (root, { cwd, convId }) => (cwd && CONV_ID_RE.test(convId) ? path.join(root, encodeURIComponent(cwd), convId, "updates.jsonl") : null),
   parse: parseGrok,
   answer: null,
+  screen: null,   // 화면 판정 미실측(#1719) — 폴백 휴리스틱
 };
