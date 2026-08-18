@@ -214,7 +214,7 @@ function drawAsideSession(s: Sess | null): TimelineHandle | null {
     !s.owned && (raw.owner_name || raw.owner) ? [el('span', { class: 'sep', text: '·' }), el('span', { text: String(raw.owner_name || raw.owner) })] : null);
   if (asideTrail && asideTrail.id === s.id && asideTrail.w.root.isConnected) { asideTrail.facts.replaceWith(factsEl); asideTrail.facts = factsEl; return asideTrail.w; }
   asideEl.replaceChildren(factsEl);   // 프로젝트 붙이기는 상단바 [프로젝트 연결](#1749)
-  const w = createTimeline(asideEl, { scope: '이 세션', empty: '아직 한 일이 없어요 — 세션이 일하면 여기에 쌓입니다.' });
+  const w = createTimeline(asideEl, { scope: '이 세션', chapters: true, empty: '아직 한 일이 없어요 — 세션이 일하면 여기에 쌓입니다.' });
   asideTrail = { id: s.id, w, facts: factsEl };
   void loadSessionActivities(s.id).then((items) => w.addAll(items));
   return w;

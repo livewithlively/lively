@@ -208,6 +208,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let lastLineAt = 0;
 
   const flat = (s: string): string => s.replace(/\s*\n\s*/g, ' ').trim();
+  // 타임라인 장 제목 — 붙여넣은 로그·여러 문단은 **첫 줄(또는 첫 문장)**만. 통째로 이으면 제목이 벽이 된다.
+  const firstLine = (t: string): string => {
+    const ln = String(t || '').split('\n').map((x) => x.trim()).find((x) => x.length > 1) || '';
+    const dot = ln.search(/[.?!。]\s/);
+    return (dot > 8 ? ln.slice(0, dot + 1) : ln).trim();
+  };
   function userText(o: any): { text: string; results: any[] } {
     const c = o?.message?.content;
     if (typeof c === 'string') return { text: c, results: [] };
@@ -236,6 +242,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         if (rec) { cur = rec; rec.t.ts = o.timestamp; running = true; return; }
       }
       cur = newRec(text, o.timestamp); running = true;
+      // 타임라인(우패널)의 장(章) 머리 — 이 지시 아래로 그동안의 일이 묶인다(#1719 C안).
+      trail?.add({ id: 'turn:' + String(o.uuid || o.timestamp || text.slice(0, 40)), kind: 'say', verb: '지시', label: firstLine(text), key: 'turn|' + String(o.uuid || o.timestamp), ts: o.timestamp }, 'end');
       return;
     }
     if (o.type === 'assistant') {
@@ -410,9 +418,16 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     }
     // 발자취 — 이 창의 도구 사용을 시간순으로 모았다가 **위에**(오래된 쪽) 끼운다(가장 최신 것부터 거꾸로 add 해야 순서가 맞다).
     const olderUses: any[] = []; const olderResults: any[] = [];
-    for (const bd of bundles) for (const o of bd.lines) {
-      if (o.type === 'assistant') olderUses.push(o);
-      else if (o.type === 'user') { const { results } = userText(o); if (results.length) olderResults.push(...results); }
+    const olderTurns: Array<{ uuid: string; ts: string; text: string }> = [];   // 되그린 창의 지시 = 타임라인 장 머리
+    for (const bd of bundles) {
+      if (bd.text && bd.text.trim()) {
+        const head = bd.lines.find((x: any) => x && x.type === 'user') || {};
+        olderTurns.push({ uuid: String(head.uuid || head.timestamp || bd.text.slice(0, 40)), ts: String(head.timestamp || ''), text: bd.text });
+      }
+      for (const o of bd.lines) {
+        if (o.type === 'assistant') olderUses.push(o);
+        else if (o.type === 'user') { const { results } = userText(o); if (results.length) olderResults.push(...results); }
+      }
     }
     // 화면 맨 위가 '이어짐'(사람 말 없음)이었으면 그 내용은 이 창의 마지막 턴에 속한다 — 합친다.
     const firstRec = recs[0];
@@ -445,6 +460,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       olderBar();
     });
     for (let i = olderUses.length - 1; i >= 0; i--) trailUses(olderUses[i], 'start');
+    for (let i = olderTurns.length - 1; i >= 0; i--) { const o = olderTurns[i];
+      trail?.add({ id: 'turn:' + String(o.uuid || o.ts), kind: 'say', verb: '지시', label: firstLine(o.text), key: 'turn|' + String(o.uuid || o.ts), ts: o.ts }, 'start'); }
     trailResults(olderResults);
     titleFromFirstAsk();
   }
