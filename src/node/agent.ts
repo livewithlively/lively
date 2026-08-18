@@ -12,6 +12,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";   // #1713 자가 갱신 — 받은 tar.gz 해제
+import { linkIsStale, LINK_CHECK_MS, LINK_STALE_MS } from "./link-liveness.js";   // #1541 — 클라이언트 쪽 생존 감시
 import {
   listSessionsRaw, createSession, killSession, editSession, applyValidatedInvites,
   sessionGone, getSessionLabel, killEmptyTmuxServer, sessionDir, sharedRoot,
@@ -305,6 +306,13 @@ function connect(): void {
   const chans = new Map<number, ChanSocket>();
   let pusher: NodeJS.Timeout | null = null;
   let lastPushed = "";
+  // 링크 생존 감시(#1541 · link-liveness.ts 머리말) — 게이트웨이는 10초마다 ping 한다. 그게(또는 어떤 메시지든) LINK_STALE_MS
+  //  동안 안 오면 **우리가 먼저 끊는다**(terminate → close → 아래 teardown 의 재연결). 안 그러면 PC 절전 뒤 소켓이
+  //  '연결됨' 인 채 영영 남아 게이트웨이엔 오프라인, 앱엔 실행 중, 런처는 살아 있으니 안 살리는 좀비가 된다(실측: 나흘).
+  let lastBeat = Date.now();
+  let watch: NodeJS.Timeout | null = null;
+  ws.on("ping", () => { lastBeat = Date.now(); });
+  ws.on("pong", () => { lastBeat = Date.now(); });
 
   const pushState = async (force = false): Promise<void> => {
     if (ws.readyState !== WebSocket.OPEN) return;
@@ -330,6 +338,16 @@ function connect(): void {
 
   ws.on("open", () => {
     attempt = 0;
+    lastBeat = Date.now();
+    // 소켓 keepalive — 절전이 아니라 NAT 만료 같은 조용한 단절도 OS 가 알아채게(belt and braces).
+    try { (ws as unknown as { _socket?: { setKeepAlive?: (on: boolean, ms: number) => void } })._socket?.setKeepAlive?.(true, 15_000); } catch { /* noop */ }
+    if (watch) clearInterval(watch);
+    watch = setInterval(() => {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      if (!linkIsStale(lastBeat, Date.now(), LINK_STALE_MS)) return;
+      logger.warn({ silentMs: Date.now() - lastBeat }, "게이트웨이 heartbeat 끊김 — 링크를 끊고 다시 잇는다");
+      try { ws.terminate(); } catch { /* noop */ }
+    }, LINK_CHECK_MS);
     logger.info({ url }, "게이트웨이 연결됨");
     void (async () => {
       const hasDocker = await detectDocker();
@@ -346,6 +364,7 @@ function connect(): void {
   });
 
   ws.on("message", (raw, isBinary) => {
+    lastBeat = Date.now();
     if (isBinary) { decodeChanFrame(raw as Buffer); return; } // 현재 게이트웨이→노드 바이너리는 없음(제어는 ctl)
     const m = parseMsg<GwToNodeMsg>(raw);
     if (!m) return;
@@ -376,6 +395,7 @@ function connect(): void {
 
   const teardown = (): void => {
     if (pusher) { clearInterval(pusher); pusher = null; }
+    if (watch) { clearInterval(watch); watch = null; }
     for (const sock of chans.values()) sock.feedClose(); // attach pty 정리(#687 — 고아 방지)
     chans.clear();
     const delay = Math.min(BACKOFF_MAX_MS, BACKOFF_MIN_MS * 2 ** Math.min(attempt++, 5));
