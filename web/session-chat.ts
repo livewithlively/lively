@@ -125,10 +125,16 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const chipMode = el('span', { class: 'dt-chip', hidden: true });
   const chipModel = el('span', { class: 'dt-chip', hidden: true });
   const chipEffort = el('span', { class: 'dt-chip', hidden: true });
-  const chip = (n: HTMLElement, v: string): void => { n.textContent = v; n.hidden = !v; };
+  const chip = (n: HTMLElement, v: string, tip?: string): void => { n.textContent = v; if (tip && tip !== v) n.title = tip; else n.removeAttribute('title'); n.hidden = !v; };
   const MODE_KO: Record<string, string> = { default: '기본', auto: '자동', acceptEdits: '수정 자동승인', bypassPermissions: '전부 자동', plan: '계획', dontAsk: '묻지 않음' };
   const EFFORT_KO: Record<string, string> = { low: '낮음', medium: '보통', high: '높음', xhigh: '매우 높음', max: '최대' };
   const prettyModel = (m: string): string => m.replace(/^claude-/, '').replace(/-\d{8}$/, '').split('-').map((w) => (/^\d/.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1))).join(' ');
+  // 세션 도중 `/model` 로 모델을 바꾸면 그 사실이 사용자 줄에 남는다("Set model to <b>Opus 5 (1M context)</b> and saved …", ANSI 굵기 포함).
+  //  `assistant.message.model` 만 보면 **'마지막 응답에 쓰인 모델'** 이라, 바꾼 뒤 아직 답이 없는 세션은 옛 모델을 가리킨다
+  //  (실측 2026-08-18: 한 대화 파일에 claude-fable-5 206줄 + claude-opus-5 233줄 — 터미널은 Opus 인데 칩은 Fable).
+  //  줄 순서대로 덮으므로 둘 중 **나중에 나온 사실**이 이긴다.
+  const SET_MODEL_RE = /Set model to\s+(.+?)(?:\s+and saved\b|$)/i;
+  const setModel = (full: string): void => chip(chipModel, full.replace(/\s*\([^)]*\)\s*$/, '').trim() || full, full);
 
   // 대화창 ————
   const view: ChatView = createChatView(chatHost, {
@@ -233,6 +239,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (o.type === 'user') {
       if (o.permissionMode) chip(chipMode, MODE_KO[String(o.permissionMode)] || String(o.permissionMode));
       const { text, results } = userText(o);
+      const sm = SET_MODEL_RE.exec(text.replace(/\u001b\[[0-9;]*m/g, ''));   // ANSI 굵기를 걷어내고 본다
+      if (sm && sm[1]) setModel(sm[1].trim());
       if (results.length) { if (!cur) cur = newRec(null); cur.evs.push(o); view.event(cur.t, { type: 'user', message: { content: results } }); trailResults(results); }
       if (o.isMeta || !text.trim()) return;
       if (INTERRUPT_RE.test(text)) { if (cur) view.settle(cur.t, { interrupted: true }); running = false; return; }
@@ -253,7 +261,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       return;
     }
     if (o.type === 'assistant') {
-      if (o.message?.model) chip(chipModel, prettyModel(String(o.message.model)));
+      if (o.message?.model) setModel(prettyModel(String(o.message.model)));
       if (o.effort) chip(chipEffort, EFFORT_KO[String(o.effort)] || String(o.effort));
       if (!cur) cur = newRec(null);
       cur.evs.push(o); view.event(cur.t, o); running = true;
