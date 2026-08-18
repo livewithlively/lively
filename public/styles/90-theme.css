@@ -149,3 +149,59 @@ html[data-theme="dark"] {
 .v2-theme .theme-seg-btn { flex: 1; text-align: center; }
 
 /* ── ④ 다크 표면 패치 — 토큰으로 못 담는 리터럴 색 컴포넌트의 보정(표면별 섹션) ── */
+
+/* 잉크 반전 툴바(21-wiki-notion .be-tools) — 다크에선 잉크가 밝아져 툴바가 밝은 알약이 된다.
+   호버 워시만 흰색→잉크 계열로 뒤집는다(글자색은 var(--bg-tint) 재바인딩으로 이미 따라온다). */
+html[data-theme="dark"] .be-tool:hover { background: rgba(21, 35, 59, .14); }
+
+/* 사용 가이드 히어로(06-learn) — 유일 허용 그라데이션의 다크 판 */
+html[data-theme="dark"] .guide-hero { background: linear-gradient(135deg, var(--bg-sel) 0%, #10281F 100%); }
+
+/* 노션 콜아웃(18-notion-mirror) — 앰버·그린·레드는 토큰이 따라오고, 무채·퍼플만 다크 값이 따로 필요 */
+html[data-theme="dark"] .md-callout-gray, html[data-theme="dark"] .md-callout-brown { background: var(--bg-tint); }
+html[data-theme="dark"] .md-callout-purple, html[data-theme="dark"] .md-callout-pink { background: #262038; border-color: #3A3154; }
+
+/* 감사 배지(06-learn .head-badge-aud) — 틸 리터럴 보더/글자의 다크 판 */
+html[data-theme="dark"] .head-badge-aud { border-color: color-mix(in srgb, var(--teal) 45%, transparent); color: var(--teal); }
+
+/* 도메인맵 교차 태그(17-projects-board-ext .dmx-tag.cross) — 라벤더 틴트의 다크 판 */
+html[data-theme="dark"] .dmx-tag.cross { background: color-mix(in srgb, var(--violet) 16%, var(--bg)); color: var(--violet); }
+
+/* WIKI 오로라 커버(24-wiki-redesign) — 결정적 제너레이티브 커버의 다크 레시피.
+   브랜드 워시(radial, 토큰 참조)는 라이트와 동일 구조, 베이스(linear)만 같은 색상(hue)의 딥 톤으로. */
+html[data-theme="dark"] .wk-aur-product-1 { background:
+  radial-gradient(90% 130% at 12% -15%, color-mix(in srgb, var(--blue) 30%, transparent), transparent 55%),
+  radial-gradient(110% 140% at 92% 118%, color-mix(in srgb, var(--mint) 28%, transparent), transparent 52%),
+  linear-gradient(135deg, #14213C 0%, #0F2A23 100%); }
+html[data-theme="dark"] .wk-aur-product-2 { background:
+  radial-gradient(85% 120% at 85% -20%, color-mix(in srgb, var(--teal) 30%, transparent), transparent 55%),
+  radial-gradient(100% 130% at 6% 125%, color-mix(in srgb, var(--blue) 22%, transparent), transparent 52%),
+  linear-gradient(150deg, #131F38 0%, #102822 100%); }
+html[data-theme="dark"] .wk-aur-product-3 { background:
+  radial-gradient(80% 110% at 50% -25%, color-mix(in srgb, var(--mint-bright) 26%, transparent), transparent 55%),
+  radial-gradient(90% 120% at 100% 100%, rgba(30,84,204,.16), transparent 52%),
+  linear-gradient(118deg, #17203A 0%, #0F2733 100%); }
+html[data-theme="dark"] .wk-aur-business-1 { background:
+  radial-gradient(90% 130% at 14% -15%, color-mix(in srgb, var(--warn-strong) 28%, transparent), transparent 55%),
+  radial-gradient(100% 130% at 92% 115%, color-mix(in srgb, var(--blue) 10%, transparent), transparent 52%),
+  linear-gradient(135deg, #2B2110 0%, #2C1D0E 100%); }
+html[data-theme="dark"] .wk-aur-business-2 { background:
+  radial-gradient(85% 120% at 86% -18%, rgba(255,171,64,.30), transparent 55%),
+  radial-gradient(90% 120% at 8% 120%, color-mix(in srgb, var(--coral) 12%, transparent), transparent 52%),
+  linear-gradient(150deg, #2C230F 0%, #2B1D10 100%); }
+html[data-theme="dark"] .wk-aur-business-3 { background:
+  radial-gradient(80% 110% at 45% -22%, color-mix(in srgb, var(--warn-strong) 24%, transparent), transparent 55%),
+  radial-gradient(90% 130% at 98% 105%, color-mix(in srgb, var(--mint) 10%, transparent), transparent 52%),
+  linear-gradient(120deg, #2A2210 0%, #291E12 100%); }
+html[data-theme="dark"] .wk-aur-system-1 { background:
+  radial-gradient(90% 130% at 12% -15%, rgba(139,92,246,.26), transparent 55%),
+  radial-gradient(100% 130% at 92% 115%, color-mix(in srgb, var(--blue) 14%, transparent), transparent 52%),
+  linear-gradient(135deg, #221D3E 0%, #17203A 100%); }
+html[data-theme="dark"] .wk-aur-system-2 { background:
+  radial-gradient(85% 120% at 85% -20%, rgba(124,77,255,.24), transparent 55%),
+  radial-gradient(95% 120% at 6% 120%, color-mix(in srgb, var(--teal) 14%, transparent), transparent 52%),
+  linear-gradient(150deg, #241F42 0%, #142438 100%); }
+html[data-theme="dark"] .wk-aur-system-3 { background:
+  radial-gradient(80% 115% at 50% -20%, rgba(139,92,246,.22), transparent 55%),
+  radial-gradient(90% 125% at 100% 105%, color-mix(in srgb, var(--mint-bright) 12%, transparent), transparent 52%),
+  linear-gradient(120deg, #211D3C 0%, #182238 100%); }

@@ -117,12 +117,12 @@ function openRepoForm(repo, reload) {
             const r = await api('/api/ui/repos/check', { method: 'POST', body: JSON.stringify({ git_url: url }) });
             if (r.ok) {
                 const drift = r.default_branch && branchInp.value.trim() && r.default_branch !== branchInp.value.trim();
-                checkNote.replaceChildren(el('span', { style: 'color:var(--ok,#16a34a)',
+                checkNote.replaceChildren(el('span', { style: 'color:var(--success-text)',
                     text: `✓ 접근 OK — ${r.host} · 브랜치 ${r.branches}개 · 원격 기본 브랜치 ${r.default_branch || '알 수 없음'}` }));
                 // 원격의 실제 기본 브랜치가 입력값과 다르면 조용히 넘기지 않는다 — 스캔이 엉뚱한 브랜치를 읽는 사고의 원인.
                 if (drift) {
                     const useBtn = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: `‘${r.default_branch}’ 로 맞추기`,
-                        onclick: () => { branchInp.value = r.default_branch; checkNote.replaceChildren(el('span', { style: 'color:var(--ok,#16a34a)', text: `✓ 기본 브랜치를 ${r.default_branch} 로 설정했습니다` })); } });
+                        onclick: () => { branchInp.value = r.default_branch; checkNote.replaceChildren(el('span', { style: 'color:var(--success-text)', text: `✓ 기본 브랜치를 ${r.default_branch} 로 설정했습니다` })); } });
                     checkNote.append(el('span', { text: ` — 입력한 ‘${branchInp.value.trim()}’ 와 다릅니다. ` }), useBtn);
                 }
             }

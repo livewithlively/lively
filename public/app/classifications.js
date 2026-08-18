@@ -32,7 +32,7 @@ function clsEnsureStyles() {
 .cls-count span+span{color:var(--muted)}
 .cls-conf{flex:none;font-size:11px;font-weight:800;padding:2px 8px;border-radius:6px;border:1px solid var(--line);
   font-variant-numeric:tabular-nums;min-width:42px;text-align:center}
-.cls-conf.hi{background:var(--bg-success);border-color:var(--mint-soft,#7FE0C4);color:var(--mint-deep)}
+.cls-conf.hi{background:var(--bg-success);border-color:var(--node-mint-soft);color:var(--mint-deep)}
 .cls-conf.mid{background:var(--bg-tint);border-color:var(--line);color:var(--ink-sub)}
 .cls-conf.lo{background:var(--bg-note);border-color:var(--line-note);color:var(--ink-note)}
 .cls-conf.na{background:var(--bg-tint);border-color:var(--line);color:var(--muted-2)}

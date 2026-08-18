@@ -130,7 +130,7 @@ function catalogStatusCard(catalog: any[], servers: any[]) {
     let chip: any; let hint = '';
     if (s && s.enabled !== false) { chip = el('span', { class: 'pill pill-ok', text: '✓ 등록됨' }); hint = c.dcr ? '구성원이 [연결]을 마치면 사용할 수 있습니다.' : 'OAuth client 시딩 확인 후 [연결]'; }
     else if (c.dcr) { chip = el('span', { class: 'pill', text: '+ 추가 가능(자동)' }); hint = 'MCP 서버 ▸ 프리셋에서 추가(DCR — client 불필요)'; }
-    else { chip = el('span', { class: 'pill', style: 'background:#faefdd;color:#b45309', text: '⚙ 설정 필요' }); hint = 'OAuth client 를 만들어 사전 등록한 뒤 프리셋으로 추가하세요.'; }
+    else { chip = el('span', { class: 'pill', style: 'background:var(--amber-bg);color:var(--amber-mid)', text: '⚙ 설정 필요' }); hint = 'OAuth client 를 만들어 사전 등록한 뒤 프리셋으로 추가하세요.'; }
     rows.push(el('div', { class: 'card', style: 'padding:9px 12px;margin:6px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap' },
       el('span', { style: 'font-weight:650;min-width:150px', text: c.label }),
       chip,
