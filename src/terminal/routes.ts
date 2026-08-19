@@ -32,7 +32,6 @@ import { nodeOpenTo, nodeHostProfile } from "../node/node-access.js";
 import { translateNodeRpcError } from "../node/rpc-error.js";
 import { registerNodeRoutes } from "../node/routes.js";
 import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
-import { registerSessionProjectRoutes } from "./session-project-routes.js";   // #1719 — 세션 프로젝트 소속 바꾸기(홈 입력창 세션)
 import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
 import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑
 import { chatIoCaps, harnessIo } from "./harness-io/adapter.js";                 // #1746 — 행에 대화창 능력(읽기·승인)
@@ -104,7 +103,7 @@ export function registerTerminal(app: express.Express, server: Server, verifier:
   registerSessionCrudRoutes(app, auth);
   registerRestoreReportRoutes(app, auth);
   registerSessionChatRoutes(app, auth);   // #1719 — /sessions/:id/transcript · /sessions/:id/keys (CRUD 뒤 — 경로가 겹치지 않는다)
-  registerSessionProjectRoutes(app, auth);   // #1719 — POST /sessions/:id/project (붙이기·떼기)
+  // #1719 세션 프로젝트 소속 바꾸기(POST /sessions/:id/project)는 capability session_set_project 가 서빙(#1798 후속 — capabilities/session-project.ts).
 
   registerTerminalFiles(app, verifier);
   registerNodeRoutes(app, verifier); // 분산 노드(#869) — /api/ui/nodes* (등록·회전·활성·삭제·현황)

@@ -20,6 +20,20 @@ declare const WebLinksAddon: any;
 //    해시를 바꾼다 — 사용자가 기대하는 "앱 내 이동"이 정확히 이것이다(새 창·새 탭이 아니라).
 //  · 그 외(독립 탭·다른 출처)는 window.open — 데스크톱 앱에선 메인의 창 규칙(web-shell.openTargetFor)이
 //    같은 출처 = 앱 안 새 창 / 외부 = 시스템 브라우저로 가른다. 브라우저에선 새 탭.
+// (순수 — 테스트 대상) 한 줄 텍스트에서 col(0-기준 셀 인덱스)이 걸친 URL 을 찾는다. 없으면 null.
+//  Cmd/Ctrl+클릭 링크 열기(#1541)의 판정부: 마우스 트래킹이 켜진 pane(claude 등 TUI)에서는 xterm 이
+//  클릭을 앱으로 보내므로 web-links 애드온(맨클릭)이 못 받는다 — 우회는 Shift+클릭뿐인데 사람들의 손은
+//  iTerm·VSCode 습관(Cmd+클릭)이다. 그래서 DOM 레벨에서 좌표→셀→그 줄 텍스트로 URL 을 직접 찾는다.
+export function urlAtColumn(lineText: string, col: number): string | null {
+  const re = /https?:\/\/[^\s"'<>\u3000]+/g;
+  for (let m = re.exec(lineText); m; m = re.exec(lineText)) {
+    if (col >= m.index && col < m.index + m[0].length) {
+      return m[0].replace(/[.,;:!?)\]]+$/, "");   // 문장부호 꼬리 제거(문장 속 URL)
+    }
+  }
+  return null;
+}
+
 function openLinkFromTerminal(uri: string): void {
   try {
     const u = new URL(uri, location.href);
@@ -2210,6 +2224,59 @@ export async function boot() {
     term.loadAddon(new WebLinksAddon.WebLinksAddon((e: MouseEvent, uri: string) => { e.preventDefault(); openLinkFromTerminal(uri); }));
   }
   term.open(host);
+  // 클릭으로 링크 열기(#1541) — 두 경로를 캡처 단계에서 가로채 **클라이언트가** 연다(urlAtColumn 머리말).
+  //  ⚠ 실측: 트래킹 pane(claude TUI)에선 클릭이 pty 로 릴레이돼 web-links(맨클릭)가 못 받고, TUI 자신의 링크
+  //   확인창이 뜨며, OK 는 서버 안 open(1) — 게이트웨이 박스엔 브라우저가 없어 사용자에겐 무반응(구조적).
+  //  경로 ① modifier(Cmd/Ctrl)+클릭 — 트래킹 여부 무관, 항상 우리가 연다(iTerm·VSCode 습관).
+  //  경로 ② **URL 글자 위** 맨클릭 — 트래킹 pane 에서만. URL 밖 맨클릭은 종전대로 TUI 로(선택지 클릭 등
+  //   TUI 의 정당한 마우스 입력을 죽이지 않는다). 게이트웨이 세션에선 TUI 링크 열기가 어차피 무반응이라 순이득.
+  //   비트래킹(셸) pane 의 맨클릭은 web-links 가 이미 처리하고, 드래그 선택을 지켜야 하므로 안 가로챈다.
+  //  판정은 mousedown 에서 한다 — press 가 pty 로 새면 TUI 확인창이 그대로 뜬다. down/up/click 세 이벤트를
+  //  한 판정(pendingLink)으로 함께 삼킨다.
+  const linkAtEvent = (ev: MouseEvent): string | null => {
+    if (!term) return null;
+    const screen = host.querySelector('.xterm-screen');
+    if (!screen) return null;
+    const r = screen.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    const col = Math.floor((ev.clientX - r.left) / (r.width / term.cols));
+    const row = Math.floor((ev.clientY - r.top) / (r.height / term.rows));
+    if (col < 0 || row < 0 || col >= term.cols || row >= term.rows) return null;
+    const buf = term.buffer.active;
+    if (!buf.getLine(buf.viewportY + row)) return null;
+    // 긴 URL 은 다음 행으로 감싸인다 — 감싸인 이웃 행(isWrapped)을 이어 한 논리 줄로 보고, col 도 그만큼 민다.
+    let startY = buf.viewportY + row;
+    while (startY > 0 && buf.getLine(startY)?.isWrapped) startY--;
+    let text = '';
+    let colInLogical = col;
+    for (let y = startY; y < buf.length; y++) {
+      const l = buf.getLine(y);
+      if (!l || (y > startY && !l.isWrapped)) break;
+      if (y < buf.viewportY + row) colInLogical += term.cols;
+      text += l.translateToString(true).padEnd(term.cols);
+    }
+    return urlAtColumn(text, colInLogical);
+  };
+  const mouseTracked = (): boolean => { try { const m = term?.modes?.mouseTrackingMode; return !!m && m !== 'none'; } catch { return false; } };
+  let pendingLink: string | null = null;
+  host.addEventListener('mousedown', (ev: MouseEvent) => {
+    if (ev.button !== 0) { pendingLink = null; return; }
+    const wantsLink = (ev.metaKey || ev.ctrlKey) || mouseTracked();
+    pendingLink = wantsLink ? linkAtEvent(ev) : null;
+    // modifier 클릭은 URL 밖이어도 삼킨다(pty 로 새면 TUI 가 press 를 받는다) — 맨클릭은 URL 위일 때만.
+    if (pendingLink || (ev.metaKey || ev.ctrlKey)) { ev.stopPropagation(); ev.preventDefault(); }
+  }, true);
+  host.addEventListener('mouseup', (ev: MouseEvent) => {
+    if (pendingLink || ((ev.metaKey || ev.ctrlKey) && ev.button === 0)) { ev.stopPropagation(); ev.preventDefault(); }
+  }, true);
+  host.addEventListener('click', (ev: MouseEvent) => {
+    if (!pendingLink) return;
+    ev.stopPropagation(); ev.preventDefault();
+    // down 과 다른 자리에서 뗐으면(드래그) 열지 않는다 — click 좌표로 같은 URL 인지 한 번 더 확인.
+    const url = linkAtEvent(ev);
+    if (url && url === pendingLink) openLinkFromTerminal(url);
+    pendingLink = null;
+  }, true);
   loadRenderer();
   loadTermFonts();        // 웹폰트 다운로드를 즉시 시작(WS 핸드셰이크와 병렬) — onopen 의 재측정이 빨리 확정되도록
   setupClipboard();

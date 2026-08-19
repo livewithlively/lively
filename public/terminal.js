@@ -441,6 +441,15 @@
   }
 
   // web/standalone/terminal.ts
+  function urlAtColumn(lineText, col) {
+    const re = /https?:\/\/[^\s"'<>\u3000]+/g;
+    for (let m = re.exec(lineText); m; m = re.exec(lineText)) {
+      if (col >= m.index && col < m.index + m[0].length) {
+        return m[0].replace(/[.,;:!?)\]]+$/, "");
+      }
+    }
+    return null;
+  }
   function openLinkFromTerminal(uri) {
     try {
       const u = new URL(uri, location.href);
@@ -564,7 +573,7 @@
   }
   function diagText() {
     return [
-      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build 8b4e45df",
+      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build d4311853",
       "ua: " + navigator.userAgent,
       "session: " + SESSION_ID + (NODE_ID ? " node=" + NODE_ID : ""),
       "secure: " + window.isSecureContext + " \xB7 exported: " + (/* @__PURE__ */ new Date()).toISOString(),
@@ -2495,7 +2504,7 @@
           "\uBB38\uC81C\uAC00 \uC0DD\uACBC\uC744 \uB54C",
           tool("\uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", "\uC785\uB825\uC774 \uC774\uC0C1\uD560 \uB54C(\uD0A4\uB9CC \uB20C\uB7EC\uB3C4 \uAC19\uC740 \uBB38\uC790\uC5F4\uC774 \uB4E4\uC5B4\uAC00\uB294 \uB4F1) \uC544\uB798 \uBC84\uD2BC\uC73C\uB85C \uCD5C\uADFC \uC785\uB825 \uAE30\uB85D\uC744 \uBCF5\uC0AC\uD574 \uC81C\uBCF4\uC5D0 \uBD99\uC5EC \uC8FC\uC138\uC694 \u2014 \uC11C\uBC84\uB85C\uB294 \uC804\uC1A1\uB418\uC9C0 \uC54A\uC544\uC694"),
           el("button", { class: "tbtn", text: "\u{1F50D} \uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", onclick: () => copyText(diagText(), false, true) }),
-          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "8b4e45df \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
+          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "d4311853 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
         ),
         sec(
           "\uB3C4\uAD6C (\uC624\uB978\uCABD \uC704 \uBC84\uD2BC)",
@@ -2984,6 +2993,64 @@
       }));
     }
     term.open(host);
+    const linkAtEvent = (ev) => {
+      if (!term) return null;
+      const screen = host.querySelector(".xterm-screen");
+      if (!screen) return null;
+      const r = screen.getBoundingClientRect();
+      if (!r.width || !r.height) return null;
+      const col = Math.floor((ev.clientX - r.left) / (r.width / term.cols));
+      const row = Math.floor((ev.clientY - r.top) / (r.height / term.rows));
+      if (col < 0 || row < 0 || col >= term.cols || row >= term.rows) return null;
+      const buf = term.buffer.active;
+      if (!buf.getLine(buf.viewportY + row)) return null;
+      let startY = buf.viewportY + row;
+      while (startY > 0 && buf.getLine(startY)?.isWrapped) startY--;
+      let text = "";
+      let colInLogical = col;
+      for (let y = startY; y < buf.length; y++) {
+        const l = buf.getLine(y);
+        if (!l || y > startY && !l.isWrapped) break;
+        if (y < buf.viewportY + row) colInLogical += term.cols;
+        text += l.translateToString(true).padEnd(term.cols);
+      }
+      return urlAtColumn(text, colInLogical);
+    };
+    const mouseTracked = () => {
+      try {
+        const m = term?.modes?.mouseTrackingMode;
+        return !!m && m !== "none";
+      } catch {
+        return false;
+      }
+    };
+    let pendingLink = null;
+    host.addEventListener("mousedown", (ev) => {
+      if (ev.button !== 0) {
+        pendingLink = null;
+        return;
+      }
+      const wantsLink = ev.metaKey || ev.ctrlKey || mouseTracked();
+      pendingLink = wantsLink ? linkAtEvent(ev) : null;
+      if (pendingLink || (ev.metaKey || ev.ctrlKey)) {
+        ev.stopPropagation();
+        ev.preventDefault();
+      }
+    }, true);
+    host.addEventListener("mouseup", (ev) => {
+      if (pendingLink || (ev.metaKey || ev.ctrlKey) && ev.button === 0) {
+        ev.stopPropagation();
+        ev.preventDefault();
+      }
+    }, true);
+    host.addEventListener("click", (ev) => {
+      if (!pendingLink) return;
+      ev.stopPropagation();
+      ev.preventDefault();
+      const url = linkAtEvent(ev);
+      if (url && url === pendingLink) openLinkFromTerminal(url);
+      pendingLink = null;
+    }, true);
     loadRenderer();
     loadTermFonts();
     setupClipboard();

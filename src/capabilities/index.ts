@@ -38,6 +38,7 @@ import { cronCapabilities } from "./cron.js";
 import { feedTargetCapabilities } from "./feed-targets.js";
 import { mappingCapabilities } from "./mapping.js";
 import { managedSessionCapabilities } from "./managed-session.js";
+import { sessionProjectCapabilities } from "./session-project.js";
 import { previewEnvCapabilities } from "./preview-env.js";
 import { stackProfileCapabilities } from "./stack-profiles.js";
 import { delegateCapabilities } from "./delegate.js";
@@ -99,6 +100,7 @@ const all: Capability[] = [
   ...cronCapabilities, // 서버사이드 스케줄 잡(org_cron) 관리 — admin scope. cron_list/set/delete/run_now(REST /api/ui/cron + MCP). 트리거 표준화: is 신선화·sync 를 게이트웨이가 주기 실행(웹훅 대체).
   ...mappingCapabilities, // 코드유닛→도메인 매핑 — context scope. list_unmapped(인박스)+map_code_unit(propose+근거, MCP+REST). LLM 판단주체: 에이전트가 도메인 should+DDD 로 분류.
   ...managedSessionCapabilities, // 상시 에이전트 세션 — admin scope. managed_session_list/set/delete/ensure. 격리 워크스페이스+keep-alive(createSession 재사용), 크론 타깃.
+  ...sessionProjectCapabilities, // #1798 후속: session_set_project — 세션↔프로젝트 소속 변경(MCP 전용, scope=null). 기본 대상 = 이 요청의 세션(x-lively-session). REST 는 terminal/session-project-routes 가 별도 서빙.
   ...previewEnvCapabilities, // #1036 프리뷰 환경 — code scope. preview_env_list/set/delete/ensure/stop. /preview/<id>/ 서브패스로 워크트리 public 정적 서빙(shared-proxy).
   ...repoBranchCapabilities, // repo_branch_list — 정의는 context.ts(repo_* 군집). 자리는 여기 고정(표면 순서 = tools/list 순서).
   ...stackProfileCapabilities, // '어떻게 띄우나' 정의(stack_profile_list/set/delete) — 조회는 code, 정의는 admin(start_cmd = 셸 명령).

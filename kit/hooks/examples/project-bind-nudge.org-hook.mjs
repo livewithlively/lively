@@ -89,22 +89,18 @@ function projectIdFromToolInput(toolName, ti) {
   try { fs.mkdirSync(FLAG_DIR, { recursive: true, mode: 0o700 }); fs.writeFileSync(flag, "", { flag: "wx" }); }
   catch { return; }                                // 이미 누가 만들었다 → 중복 안내 안 함
 
-  const bindCmd = (idExpr) => `curl -s -X POST "$(cat ~/.lively/gateway-url)/api/ui/terminal/sessions/${boxId}/project" `
-    + `-H "authorization: Bearer $(cat ~/.lively/token)" -H "content-type: application/json" -d '{"projectId":${idExpr}}'`;
-
+  // 붙이기 = MCP `session_set_project`(#1798 후속 — session_id 생략 시 이 요청의 세션 자신). REST 는 폴백으로만 언급.
   const body = detId != null
     // 결정론 신호 — 툴 입력이 이미 특정 프로젝트를 가리킨다. 이때만 기존 프로젝트 연결을 안내한다.
-    ? `지금 호출하려는 툴 입력이 **프로젝트 #${detId}** 를 가리킵니다(결정론 신호 — 그 프로젝트에 남기면서 세션은 미연결). 이 세션을 그 프로젝트에 붙이세요:\n`
-      + `  ${bindCmd(String(detId))}\n`
-      + `지금 하는 일이 #${detId} 소속이 아니라 새로운 일이면 새 프로젝트를 만들어 붙이세요 — \`project_create_v6\`(\`list_id\` 필수 · 선행 프로젝트가 있으면 \`follow_up\`) 로 만들고, 필요·산출지식을 \`project_link_knowledge_v6\` 로 이은 뒤, 위 명령의 projectId 만 새 id 로 바꿔 실행합니다.\n`
+    ? `지금 호출하려는 툴 입력이 **프로젝트 #${detId}** 를 가리킵니다(결정론 신호 — 그 프로젝트에 남기면서 세션은 미연결). 이 세션을 그 프로젝트에 붙이세요: \`session_set_project {project_id: ${detId}}\` (lively MCP — session_id 는 생략, 이 세션 자신).\n`
+      + `지금 하는 일이 #${detId} 소속이 아니라 새로운 일이면 새 프로젝트를 만들어 붙이세요 — \`project_create_v6\`(\`list_id\` 필수 · 선행 프로젝트가 있으면 \`follow_up\`) 로 만들고, 필요·산출지식을 \`project_link_knowledge_v6\` 로 이은 뒤 \`session_set_project {project_id: <새 id>}\` 로 붙입니다.\n`
     // 기본 — 새 프로젝트 생성. 기존 프로젝트 검색·유사도 매칭은 하지 않는다(오연결·맥락 낭비 실측).
     : "**기본 동작은 새 프로젝트 생성입니다.** 기존 프로젝트를 검색해 골라 붙이려 하지 마세요 — 유사도 매칭은 오연결이 잦고 후보 검토로 맥락만 낭비합니다. 기존 프로젝트에 붙이는 건 사람이 그 프로젝트를 직접 지목했을 때만 하세요.\n"
       + "`project_create_v6` 로 새 프로젝트를 만들되, 다음 세 가지를 반드시 함께 챙기세요:\n"
       + "  ① **소속 리스트** — `project_list_index_v6` 로 리스트(영역) 목록을 보고 이 일이 속한 리스트의 `list_id` 로 만듭니다(`list_id` 는 필수입니다).\n"
       + "  ② **선행·후속 관계** — 이 일이 기존 프로젝트의 후속이면 생성 시 `follow_up=<선행 프로젝트 id>` 를 주거나, 만든 뒤 `project_link_project_v6(id=새 프로젝트, to=선행)` 로 잇습니다. 선행 후보는 검색이 아니라 **대화에서 사람이 언급한 프로젝트·직전에 하던 일**에서 찾고, 애매하면 사람에게 물어보세요.\n"
       + "  ③ **필요·산출지식** — 생성 응답의 `prior_art` 와 `project_recommend_knowledge_v6` 로 관련 지식을 확인해 `project_link_knowledge_v6(required)` 로 잇고, 이 세션이 만드는 지식은 세션이 끝나기 전 `produced` 로 잇습니다.\n"
-      + "만든 뒤 이 세션을 붙입니다:\n"
-      + `  ${bindCmd("<새 프로젝트 id>")}\n`;
+      + "만든 뒤 이 세션을 붙입니다: `session_set_project {project_id: <새 프로젝트 id>}` (lively MCP — session_id 는 생략, 이 세션 자신. MCP 가 안 되면 REST `POST /api/ui/terminal/sessions/" + boxId + "/project {\"projectId\":<id>}`).\n";
 
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
