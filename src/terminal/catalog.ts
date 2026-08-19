@@ -5,6 +5,9 @@ import os from "node:os";
 
 // 게이트웨이가 launchd/nohup 로 떠 PATH 에 brew 가 없을 수 있어 절대경로 우선(env 오버라이드 가능).
 export const TMUX_BIN = process.env.TMUX_BIN || "/opt/homebrew/bin/tmux";
+/** psmux(윈도우 네이티브 tmux 구현)인가 — 파일명으로 판정한다(경로·확장자 무관). 원래 terminal-pty 에 있던 것을 여기(leaf)로
+ *  내렸다(#1791): tmux-exec 의 sessionGone 도 이 판정이 필요한데 terminal-pty 는 그 위층이라 역방향 import 가 된다. */
+export const isPsmuxBin = (bin: string): boolean => /(^|[\\/])psmux(\.exe)?$/i.test(String(bin || ""));
 
 // pane(세션 안 shell/Claude) 로케일 — 한글(멀티바이트·더블폭) 편집 정상화(#633). ⚠ TMUX_ENV(tmux-exec.ts)는 tmux **CLI**
 //  호출에만 UTF-8 을 준다 — 그 값은 pane 까지 전달되지 않는다. tmux 는 LANG/LC_* 를 update-environment 기본

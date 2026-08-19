@@ -161,6 +161,18 @@ t("tmux 서버 접속 불가(소켓 없음·no server running) → 종료 아님
   assert.equal(isSessionGoneError({ code: 1, stderr: "no server running on /private/tmp/tmux-501/default" }), false);
 });
 
+// #1791 실측(hammurabi) — psmux 는 `has-session -t <없는 id>` 에 문구 없이 exit 1 만 준다. tmux 규칙(문구 필요)만 있으면
+//  윈도우 노드의 죽은 세션이 영영 '판정 불가'라 4410 도, 복원·삭제의 gone 확답도 못 받는다. bin 인자는 실행 파일 판별용(기본 TMUX_BIN).
+t("psmux(윈도우) — exit 1 + 빈 stderr 는 '그 세션 없음'(확답) · tmux 에선 같은 입력이 판정 불가 그대로", () => {
+  assert.equal(isSessionGoneError({ code: 1, stderr: "" }, "C:\\Users\\y\\AppData\\Local\\Microsoft\\WinGet\\Links\\psmux.exe"), true);
+  assert.equal(isSessionGoneError({ code: 1, stderr: "   \n" }, "psmux"), true, "공백뿐인 stderr 도 빈 것으로");
+  assert.equal(isSessionGoneError({ code: 1, stderr: "" }, "/opt/homebrew/bin/tmux"), false, "tmux 는 문구 없이는 확답 아님(서버 접속불가일 수 있다)");
+  assert.equal(isSessionGoneError({ code: 2, stderr: "" }, "psmux"), false, "psmux 라도 exit 1 이 아니면 확답 아님");
+  assert.equal(isSessionGoneError({ code: "ENOENT", stderr: "" }, "psmux.exe"), false, "psmux 실행 파일 부재는 확답 아님");
+  assert.equal(isSessionGoneError({ killed: true, signal: "SIGTERM", stderr: "" }, "psmux"), false, "psmux 타임아웃도 판정 불가");
+  assert.equal(isSessionGoneError({ code: 1, stderr: "can't find session: box-a-0011ffee" }, "psmux"), true, "문구가 오면 그대로 확답");
+});
+
 t("tmux 실행 자체 실패·알 수 없는 오류 → 종료 아님", () => {
   assert.equal(isSessionGoneError({ code: "ENOENT", stderr: "" }), false);
   assert.equal(isSessionGoneError(new Error("boom")), false);
