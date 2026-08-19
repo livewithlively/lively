@@ -20,6 +20,7 @@ import { ensureAgentsMd, readProjectAgentsMd } from "../v6/agents-md.js";
 import { provisionProjectRepos } from "./project-provision.js";
 import { startProjectProvision, projectProvisionStatus } from "./project-provision-jobs.js";
 import { provisionProjectOnNode, provisionStatusOnNode, createProjectSessionOnNode, nodeProjectSessions } from "../node/provision-remote.js";
+import { mirrorNodeSession, decorateNodeRows } from "../terminal/node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB)
 import { recordSessionProject } from "../v6/project-store.js";
 import { receiveUpload, uploadError, nfcPath } from "../terminal/upload-file.js";
 import { manifestFiles } from "./project-manifest.js";
@@ -264,10 +265,15 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const underBase = (s: { dir?: string }): boolean => !!s.dir && (s.dir === base || s.dir.startsWith(base + path.sep));
     const local = all.filter(underBase);
     // 복원 가능(#1059 E) — 재부팅·회수로 죽었으나 desired-state 가 남은 이 프로젝트 폴더의 세션(라이브 우선, 이중표기 방지).
-    const restorable = (await listRestorableSessions(userOf(req), new Set(all.map((s) => s.id)))).filter(underBase);
     // 노드 프로젝트 세션(#905 C4) 병합 — 노드에서 연 이 프로젝트 세션도 목록에 보이게(가시성=invites 스냅샷 판정).
     //  각 항목의 .node 로 프론트가 &node= 입장/삭제를 릴레이한다. 로컬은 dir 로, 노드는 projectId 로 좁힌다.
     const remote = nodeProjectSessions(idOf(userOf(req)), Number(req.params.id));
+    // #1791 — 복원 가능 행에 노드 세션(node_id)도 온다: 노드 경로는 이 박스의 base 아래가 아니므로 projectId 로 좁힌다.
+    //  노드 스냅샷에 살아 있는 id 는 라이브가 SoT(local ∪ remote 제외).
+    const pid = Number(req.params.id);
+    const restorable = (await listRestorableSessions(userOf(req), new Set([...all, ...remote].map((s) => s.id))))
+      .filter((s) => (s.node ? s.projectId === pid : underBase(s)));
+    await decorateNodeRows(restorable);
     // AI 세션 탭과 같은 규칙으로 이중표기를 접는다(#1716) — 게이트웨이와 노드가 같은 박스면 같은 tmux 세션이
     //  local·remote 양쪽에 잡힌다. 인자 순서 = 우선순위(로컬 라이브 > 노드 스냅샷 > 복원 가능).
     res.json({ sessions: mergeSessionViews(local, remote, restorable) });
@@ -309,6 +315,8 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
       // 노드측은 DB 무접속이라 createSession 내부 recordSessionProject 가 no-op → 게이트웨이가 대신 세션↔프로젝트
       //  매핑을 남긴다(멱등). 이게 있어야 활동 타임라인 귀속·경로무관 resume(latestProjectForSession)이 노드 세션도 인지.
       await recordSessionProject(session.id, project.id).catch(() => { /* 비치명 */ });
+      // #1791 — desired-state 정본(node_id) — 죽어도 '복원 가능(그 노드)'로 남는 근거. 노드엔 DB 가 없어 게이트웨이가 쓴다.
+      await mirrorNodeSession({ ...session, invites }, nodeId, input, requester);
       res.json({ session: { ...session, node: { id: nodeId, online: true } } });
       return;
     }

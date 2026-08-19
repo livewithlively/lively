@@ -564,7 +564,7 @@
   }
   function diagText() {
     return [
-      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build d9d7d748",
+      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build c79d052e",
       "ua: " + navigator.userAgent,
       "session: " + SESSION_ID + (NODE_ID ? " node=" + NODE_ID : ""),
       "secure: " + window.isSecureContext + " \xB7 exported: " + (/* @__PURE__ */ new Date()).toISOString(),
@@ -2295,7 +2295,7 @@
           "\uBB38\uC81C\uAC00 \uC0DD\uACBC\uC744 \uB54C",
           tool("\uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", "\uC785\uB825\uC774 \uC774\uC0C1\uD560 \uB54C(\uD0A4\uB9CC \uB20C\uB7EC\uB3C4 \uAC19\uC740 \uBB38\uC790\uC5F4\uC774 \uB4E4\uC5B4\uAC00\uB294 \uB4F1) \uC544\uB798 \uBC84\uD2BC\uC73C\uB85C \uCD5C\uADFC \uC785\uB825 \uAE30\uB85D\uC744 \uBCF5\uC0AC\uD574 \uC81C\uBCF4\uC5D0 \uBD99\uC5EC \uC8FC\uC138\uC694 \u2014 \uC11C\uBC84\uB85C\uB294 \uC804\uC1A1\uB418\uC9C0 \uC54A\uC544\uC694"),
           el("button", { class: "tbtn", text: "\u{1F50D} \uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", onclick: () => copyText(diagText(), false, true) }),
-          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "d9d7d748 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
+          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "c79d052e \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
         ),
         sec(
           "\uB3C4\uAD6C (\uC624\uB978\uCABD \uC704 \uBC84\uD2BC)",
@@ -2931,7 +2931,7 @@
     main.insertBefore(bar, panesEl);
   }
   function goneMode(meta, isNode, alreadyRestored, typed) {
-    if (isNode) return "end";
+    void isNode;
     if (!meta || !meta.restorable) return "end";
     if (!meta.canRestore) return "notowner";
     if (meta.exitedByUser || typed) return "ask";
@@ -2949,11 +2949,9 @@
     restoreTried = true;
     clearTimeout(reconnectTimer);
     let meta = null;
-    if (!NODE_ID) {
-      try {
-        meta = await api(sUrl(""));
-      } catch (_) {
-      }
+    try {
+      meta = await api(sUrl(""));
+    } catch (_) {
     }
     const mode = goneMode(meta, !!NODE_ID, RESTORED, userTyped);
     if (mode === "end") {
@@ -3034,7 +3032,7 @@
     }
     const ns = r && r.session;
     if (ns && ns.id) {
-      location.replace(apiUrl("/ui/terminal.html?session=") + encodeURIComponent(ns.id) + "&label=" + encodeURIComponent(ns.label || SESSION_LABEL || "") + "&restored=1");
+      location.replace(apiUrl("/ui/terminal.html?session=") + encodeURIComponent(ns.id) + "&label=" + encodeURIComponent(ns.label || SESSION_LABEL || "") + "&restored=1" + (ns.node && ns.node.id ? "&node=" + encodeURIComponent(ns.node.id) : ""));
       return;
     }
     sessionEnded = true;

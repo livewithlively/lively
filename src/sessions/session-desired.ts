@@ -22,6 +22,10 @@
 import { itemsPool } from "../db/client.js";
 import { rowToState, type SessionState } from "./session-state.js";
 
+// #1791 — 노드 에이전트 프로세스에는 DB 가 없다(설계). 거기서 desired 조회는 **묻지 않고** tmux 폴백이다 — 종전엔 3초마다
+//  (상태 push 마다) 실패 로그를 찍어 노드 로그를 채웠다(하루 9천 줄, 실 오류를 가림). 판별자는 session-state.ts 와 같다.
+const ON_NODE = !!process.env.LIVELY_NODE_TOKEN;
+
 /** tmux `list-sessions` 한 줄에서 뽑은 desired 후보. 필드는 DB 컬럼과 1:1. */
 export interface TmuxDesired {
   owner: string;
@@ -74,6 +78,7 @@ export function resolveDesired(db: SessionState | undefined, tmux: TmuxDesired):
  *  DB 가 잠깐 흔들릴 때 **살아 있는 세션에 아무도 못 붙는다.**
  */
 export async function loadDesiredOne(id: string): Promise<SessionState | undefined> {
+  if (ON_NODE) return undefined;   // 노드: tmux 가 유일한 진실(아래 resolveSessionDir 주석)
   try {
     const r = await itemsPool.query("SELECT * FROM org_session_state WHERE id=$1", [id]);
     return r.rows[0] ? rowToState(r.rows[0]) : undefined;
@@ -106,7 +111,7 @@ export async function resolveSessionDir(id: string, tmuxFallback: () => Promise<
  */
 export async function loadDesiredMap(ids: string[]): Promise<Map<string, SessionState>> {
   const out = new Map<string, SessionState>();
-  if (!ids.length) return out;
+  if (!ids.length || ON_NODE) return out;   // 노드: 전부 tmux 폴백(조용히)
   try {
     const r = await itemsPool.query("SELECT * FROM org_session_state WHERE id = ANY($1::text[])", [ids]);
     for (const row of r.rows) {

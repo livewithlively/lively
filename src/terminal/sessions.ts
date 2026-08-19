@@ -103,6 +103,9 @@ export async function listRestorableSessions(user: LivelyUser, liveIds: Set<stri
       // #1251 — 사용자 종료가 아닌데 사유가 'oom' 이면 earlyoom 이 죽인 것. 둘이 겹치면 사용자 종료가 이긴다(더 확실한 사실).
       oomKilled: !s.exited_at && s.exit_reason === "oom",
       claudeSessionId: s.claude_session_id || undefined,   // #1719 — 죽은 세션도 대화 uuid 를 알면 기록을 잇는다
+      // #1791 — 노드 세션의 desired-state. 여기선 id 만 안다(이 모듈은 노드 에이전트 번들에도 들어가 node/registry 를
+      //  import 할 수 없다) — 이름·온라인 여부는 routes 가 레지스트리로 보강한다(decorateNodeRows). 프론트는 이 값으로 &node= 를 릴레이.
+      ...(s.node_id ? { node: { id: s.node_id, name: s.node_id, online: false } } : {}),
     });
   }
   return out;

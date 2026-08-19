@@ -258,9 +258,10 @@ function sessDraw(ctx: SessCtx) {
         try {
           const r: any = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/restore', { method: 'POST', body: '{}' });
           // 라이브 경합(already) — 그새 다시 떠 있으면 새로 만들지 않고 그 세션을 그대로 연다(오success 방지).
-          if (r && r.already) { dashOpenSessionTab(s.id, s.label || ''); toast('세션이 이미 살아있어 그대로 엽니다'); ctx.reloadSessions && ctx.reloadSessions(); return; }
+          if (r && r.already) { dashOpenSessionTab(s.id, s.label || '', s.node && s.node.id); toast('세션이 이미 살아있어 그대로 엽니다'); ctx.reloadSessions && ctx.reloadSessions(); return; }
           const ns = r && r.session;
-          if (ns && ns.id) dashOpenSessionTab(ns.id, ns.label || s.label || '');
+          // #1791 — 노드에서 복원된 세션은 그 노드로 붙는다(서버가 session.node 를 준다).
+          if (ns && ns.id) dashOpenSessionTab(ns.id, ns.label || s.label || '', ns.node && ns.node.id);
           toast('열었어요 — 새 터미널에서 대화를 이어받아요(정확한 대화를 못 찾으면 목록에서 고르세요).'); ctx.reloadSessions && ctx.reloadSessions();
         } catch (e: any) { toast(dRestoreVerb + ' 실패 — ' + (e && e.message || e), true); openBtn.disabled = false; openBtn.textContent = dRestoreVerb; }
       };
