@@ -140,9 +140,11 @@ export async function upsertGrant(
   appId: string, memberId: string, scopes: string[], tools: string[], ctx: WriteCtx = {},
 ): Promise<AppGrantRow> {
   const r = await itemsPool.query(
+    // ON CONFLICT 타깃에 tenant_id 포함 — ensureTenantColumn 이 PK 를 (tenant_id, app_id, member_id)로 재작성한다
+    //  (org_app_component 와 동일 규약, addComponent 참조). tenant_id 는 컬럼 DEFAULT 로 채워지므로 VALUES 엔 안 싣는다.
     `INSERT INTO org_app_grant(app_id,member_id,scopes,tools,granted_at,granted_by,revoked_at)
        VALUES($1,$2,$3::jsonb,$4::jsonb,now(),$5,NULL)
-     ON CONFLICT (app_id,member_id) DO UPDATE SET
+     ON CONFLICT (tenant_id,app_id,member_id) DO UPDATE SET
        scopes=EXCLUDED.scopes, tools=EXCLUDED.tools, granted_at=now(), granted_by=EXCLUDED.granted_by, revoked_at=NULL
      RETURNING *`,
     [appId, memberId, JSON.stringify(scopes), JSON.stringify(tools), ctx.actor ?? null],
