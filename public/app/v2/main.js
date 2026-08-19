@@ -262,7 +262,7 @@ async function renderRoute(tab) {
                 return;
             // 우패널(발자취)을 먼저 — 세션 화면이 대화 파일을 읽으며 거기로 흘려보낸다.
             const trail = drawAsideSession(tab, s || null);
-            tab.chat = renderSession(tab.center, data, id, trail, (anchor) => openProjectPicker(anchor, id, tab));
+            tab.chat = renderSession(tab.center, data, id, trail, (anchor) => openProjectPicker(anchor, id, tab), (label) => renameSession(s ? s.id : id, label, tab));
         }
         else if (page === 'app' && segs[1]) {
             const a = appByKey(segs[1]);
@@ -370,6 +370,30 @@ function drawAsideSession(tab, s) {
     host.__trail = { id: s.id, w };
     void loadSessionActivities(s.id).then((items) => w.addAll(items));
     return w;
+}
+// 세션 이름 바꾸기(#1719) — 가운데 화면의 제목이 곧 편집 자리다. 서버(POST terminal/sessions/:id {label})가
+//  tmux @box_label 과 복원용 desired-state 를 함께 바꾼다. 소유자만(서버가 403 으로 강제 — 화면도 내 세션에서만 연다).
+//  ⚠ 바꾼 뒤 **좌측 사이드바·우패널·탭 제목이 곧바로 그 이름**이어야 한다 — 20초 폴링을 기다리게 하면 "안 바뀌었다"로 읽힌다.
+//   그래서 손에 든 목록을 먼저 고쳐 다시 그리고(낙관), 서버 목록은 뒤따라 당겨 사실로 덮는다.
+async function renameSession(sessionId, label, tab) {
+    const s = findSess(sessionId); // 기록(uuid) 링크로 열린 세션도 같은 박스를 가리키게
+    const body = { label };
+    if (s && s.node)
+        body.node = s.node; // 노드 세션은 게이트웨이가 그 노드로 중계한다(라우트가 body.node 를 본다)
+    await api('/api/ui/terminal/sessions/' + encodeURIComponent(sessionId), { method: 'POST', body: JSON.stringify(body) });
+    if (s) {
+        s.label = label;
+        if (s.raw)
+            s.raw.label = label;
+    }
+    drawSide();
+    const cur = findSess(sessionId);
+    if (tab.chat && cur)
+        tab.chat.update({ ...cur, projectName: projName(data, cur.projectId) });
+    drawAsideSession(tab, cur || null);
+    tabsApi?.routed(tab);
+    tabsApi?.paint(); // 탭 줄의 제목도 새 이름으로
+    void loadData().then(() => { drawSide(); tabsApi?.paint(); });
 }
 // 세션의 프로젝트 소속(#1749) — 상단바 [프로젝트 연결]/[▾] 이 여는 검색 드롭다운.
 function openProjectPicker(anchor, sessionId, tab) {

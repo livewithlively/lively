@@ -235,7 +235,8 @@ export async function renderProject(host, data, id, detailIn) {
 //  라이브면 박스의 대화 파일을 창으로 읽어 라이브로 따라가고 입력칸으로 보낸다(프롬프트 주입). 끝난 세션이면 기록 + [이어서 대화하기].
 //  핸들은 **호출자(탭)가 쥔다**(#1719 탭 — 세션 화면이 탭마다 하나씩 동시에 산다). 파괴·갱신도 탭이 한다.
 //  trail = 우패널 '발자취' 위젯(main.ts 가 그 탭의 aside 에 만들어 넘긴다).
-export function renderSession(host, data, id, trail, onPickProject) {
+//  onRename = 제목을 눌러 고친 세션 이름을 서버에 반영(#1719) — 사이드바·우패널·탭 제목 갱신까지 main.ts 가 쥔다.
+export function renderSession(host, data, id, trail, onPickProject, onRename) {
     // 기록(uuid) 링크로 들어왔는데 그 대화를 도는 박스가 있으면 그 박스가 정본이다(mergeSessions 가 기록을 박스에 접었다) — 옛 링크가 산다.
     const s = data.sessions.find((x) => x.id === id) || data.sessions.find((x) => x.logId === id);
     if (!s) {
@@ -250,6 +251,7 @@ export function renderSession(host, data, id, trail, onPickProject) {
         firstPrompt: takeFirstPrompt(s.id),
         trail: trail || null,
         onPickProject, // 상단바 [프로젝트 연결] 드롭다운(#1749) — main.ts 가 목록·실행·갱신을 쥔다
+        onRename, // 제목 = 세션 이름(#1719) — 고치면 사이드바·목록이 그 이름으로 바뀐다
     });
 }
 // ── 데이터 정규화 — 라이브(terminal/sessions) + 기록(v6/sessions) 를 한 목록으로 ─────────
