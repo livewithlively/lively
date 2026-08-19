@@ -69,7 +69,9 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-ws-empty, .v2-ws-loading { font-size: 11.5px; color: var(--muted); line-height: 1.55; padding: 4px 8px 6px; margin: 0; }
 .v2-ws-team-row { display: flex; align-items: center; gap: 4px; padding: 2px 4px 2px 8px; border-radius: 8px; }
 .v2-ws-team-row:hover { background: var(--bg-tint, #F6FAFF); }
-.v2-ws-team-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; text-decoration: none; color: var(--ink); font-size: 12.5px; font-weight: 600; }
+/* 행 본체 — a(연결한 팀)와 button(registry 전환) 둘 다 이 클래스를 쓴다. button 기본 테두리·배경을
+   리셋하지 않으면 이름까지만 감싼 회색 상자가 되고 ✎·✕ 가 상자 밖에 남는다(2026-08-19 실측). */
+.v2-ws-team-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; text-decoration: none; color: var(--ink); font: inherit; font-size: 12.5px; font-weight: 600; border: 0; background: none; padding: 5px 2px; text-align: left; cursor: pointer; border-radius: 6px; }
 .v2-ws-err { flex: none; width: 15px; height: 15px; border-radius: 50%; background: var(--coral, #E5484D); color: #fff; font-size: 10px; font-weight: 800; display: grid; place-items: center; }
 .v2-ws-auto { flex: none; font-size: 10.5px; font-weight: 700; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
 .v2-ws-auto.on { color: var(--mint-deep, #0FA37E); border-color: #CDEFE3; background: var(--bg-success, #F3FBF8); }
@@ -585,6 +587,32 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-pad-ico .v2-ic { width: 22px; height: 22px; }
 .v2-pad-desc { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
 .v2-pad-empty { color: #fff; font-size: 13px; }
+/* 세션 앱 타일(#1780) — 화면 앱과 성격이 다르다(열면 전용 AI 세션이 뜬다). 민트 강조 + 배지로 구분. */
+.v2-pad-item--app { position: relative; cursor: pointer; font: inherit; }
+.v2-pad-item--app:hover { border-color: var(--mint-deep, #0FA37E); }
+.v2-pad-item--app .v2-pad-ico { background: var(--bg-success, #F3FBF8); border-color: #CDEFE3; color: var(--mint-deep, #0FA37E); }
+.v2-pad-badge { position: absolute; top: 8px; right: 8px; font-size: 9.5px; font-weight: 800; letter-spacing: .02em; color: var(--mint-deep, #0FA37E); background: var(--bg-success, #F3FBF8); border: 1px solid #CDEFE3; border-radius: 999px; padding: 1px 7px; }
+
+/* ── 앱 사용 동의 창(#1780 app-session) — 세션 앱을 처음 열 때 뜨는 권한 확인 모달 ── */
+.v2-consent-ov { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: rgba(21,35,59,.32); padding: 20px; }
+.v2-consent { width: min(440px, 100%); background: var(--bg, #fff); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-2, 0 8px 30px rgba(21,35,59,.14)); padding: 22px 22px 18px; }
+.v2-consent-t { margin: 0 0 6px; font-size: 16px; font-weight: 800; color: var(--ink); line-height: 1.4; }
+.v2-consent-sub { margin: 0 0 16px; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+.v2-consent-grp { display: flex; gap: 10px; align-items: baseline; padding: 8px 0; border-top: 1px solid var(--line); }
+.v2-consent-grp > b { flex: none; width: 44px; font-size: 12px; color: var(--ink-sub); }
+.v2-consent-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.v2-consent-chip { font-family: var(--mono, ui-monospace, monospace); font-size: 11px; color: var(--blue); background: var(--bg-tint, #F6FAFF); border: 1px solid var(--line-net-2, #CFE0F7); border-radius: 7px; padding: 2px 8px; }
+.v2-consent-chip.none { color: var(--muted); background: transparent; border-color: var(--line); font-family: inherit; }
+.v2-consent-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+
+/* ── 앱 UI 창(#1780 PR5) — 설치된 앱의 UI 페이지를 샌드박스 iframe 으로 실는 모달 ── */
+.v2-appui-ov { position: fixed; inset: 0; z-index: 88; display: grid; place-items: center; background: rgba(21,35,59,.36); padding: 24px; }
+.v2-appui { width: min(960px, 100%); height: min(680px, 88vh); display: flex; flex-direction: column; background: var(--bg, #fff); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-2, 0 8px 30px rgba(21,35,59,.14)); overflow: hidden; }
+.v2-appui-h { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); flex: none; }
+.v2-appui-t { font-size: 14px; font-weight: 800; color: var(--ink); }
+.v2-appui-badge { font-size: 9.5px; font-weight: 800; letter-spacing: .02em; color: var(--blue); background: var(--bg-tint, #F6FAFF); border: 1px solid var(--line-net-2, #CFE0F7); border-radius: 999px; padding: 1px 7px; }
+.v2-appui-spacer { flex: 1; }
+.v2-appui-frame { flex: 1; width: 100%; border: 0; background: #fff; }
 
 /* ── 타임라인 서랍(#1719 바탕화면 방향 1차) ─────────────────────────────────
    맥 문법(알림 센터): 홈(바탕화면)의 타임라인은 상주 열이 아니라 '불러오는 것' — 우상단 버튼으로
@@ -782,7 +810,6 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 /* 팝아웃 창(#1744)은 서랍 크롬(☰·타임라인 버튼)이 없다 — 좁은 화면에선 가운데 한 칸만 남긴다.
    팝아웃은 '이 세션만 큰 창으로'라는 데스크톱 손짓이고, 폰에서는 본 화면(서랍 셸)이 그 역할을 한다. */
 @media (max-width: 900px) { #v2-root.solo .v2-aside { display: none; } }
-
 /* ══ 실험장 v3(#1719 원준) — 레일 · 작업대 · 위젯(S/M/L 반응) ════════════════════ */
 /* ── 레일 모드 그리드 ── */
 /* 좌측 열 폐기(원준 3차) — 평소 0px, 프로젝트 패널이 열릴 때만 284px 로 민다. */
@@ -1034,8 +1061,12 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .stu-app-ic .stu-i { width: 21px; height: 21px; stroke-width: 1.9; }
 .stu-app-n { font-size: 10.5px; color: var(--ink-sub); }
 .stu-shell-dot { position: absolute; top: -2px; right: 8px; width: 9px; height: 9px; border-radius: 5px; background: var(--coral); border: 2px solid var(--bg, #fff); }
+/* 설치된 세션 앱(#1780) — 판 위에 전용 세션 카드로 뜬다. 민트 점으로 스튜디오 내장 앱과 구분. */
+.stu-launch-inst[hidden] { display: none; }
+.stu-inst-dot { position: absolute; top: -2px; right: 8px; width: 9px; height: 9px; border-radius: 5px; background: var(--mint-deep, #0FA37E); border: 2px solid var(--bg, #fff); }
+.stu-app-inst { cursor: pointer; }
 /* ── 패널 다시 열기 손잡이 — 닫힌 화면 좌상단(원준) ── */
-/* 탭 줄 아래에 앉는다 — 겹치면 탭을 못 누른다(실측). */
+/* 탭 줄이 맨 위에 있으므로(원준 2026-08-19 '탭 줄은 있는 방향으로') 손잡이는 그 아래에 앉는다 — 겹치면 탭을 못 누른다. */
 .stu-panel-fab { position: absolute; left: 14px; top: 54px; z-index: 50; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 12px 0 5px; border: 1px solid var(--line-net-2); border-radius: 17px; background: rgba(255,255,255,.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); box-shadow: 0 2px 6px rgba(21,35,59,.08), 0 10px 24px rgba(21,35,59,.12); font: inherit; font-size: 12.5px; color: var(--ink-sub); cursor: pointer; }
 .stu-panel-fab:hover { border-color: var(--blue); }
 /* 알약 안 두 조각 — 왼쪽 L 은 홈, 나머지는 목록 열기. 눌리는 자리를 넓게 잡아 '누르는 것'으로 읽히게 한다. */
@@ -1114,6 +1145,11 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
    우측 위에서 아래로, 넘치면 왼쪽 열로(맥). 알림 센터가 열리면 그 아래로 깔린다. */
 .stu-desk { position: absolute; top: 14px; right: 14px; height: calc(100% - 250px); z-index: 20; display: flex; flex-direction: column; flex-wrap: wrap-reverse; align-content: flex-start; gap: 2px; pointer-events: none; }
 .stu-desk.dragging .stu-ico:not(.sel) { opacity: .5; }
+/* 타임라인 서랍이 열리면 아이콘 열·휴지통이 **왼쪽으로 비켜선다**(원준 2026-08-19) — 서랍이 파일을 덮으면
+   보려던 것을 가리는 셈이라, 맥에서 창이 겹칠 때 우리가 창을 옮기듯 이쪽이 물러난다. */
+.stu-desk, .stu-trash { transition: transform .3s cubic-bezier(.22,.61,.36,1); }
+.stu-stage.notif-on .stu-desk, .stu-stage.notif-on .stu-trash { transform: translateX(calc(-1 * (var(--stu-notif-w, 360px) + 18px))); }
+@media (prefers-reduced-motion: reduce) { .stu-desk, .stu-trash { transition: none; } }
 .stu-ico { pointer-events: auto; width: 92px; padding: 7px 4px 6px; border: 0; border-radius: 10px; background: none; font: inherit; display: flex; flex-direction: column; align-items: center; gap: 5px; cursor: default; }
 .stu-ico:hover .stu-ico-g { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(21,35,59,.14); }
 .stu-ico.sel { background: rgba(45,107,240,.12); box-shadow: inset 0 0 0 1px rgba(45,107,240,.35); }
@@ -1132,6 +1168,75 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .stu-ico-g.im { background: #fff; border: 1px solid var(--line-net); overflow: hidden; }
 .stu-ico-g.im img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .stu-ico-g.trash { background: rgba(255,255,255,.86); color: var(--muted); border: 1px dashed var(--muted-3); }
+
+/* ══ 바탕화면 아이콘 격상(원준 2026-08-19) — 맥 수준 ═══════════════════════════════
+   문서는 **종이 낱장**(접힌 귀 + 그림자)이고, 그릴 수 있는 것은 실제로 그린다:
+   PDF·HTML 은 브라우저가 첫 화면을 렌더할 수 있으므로 축소해 얹고, 글 파일은 첫 줄들을 아주 작게 깐다.
+   못 그리는 형식은 확장자 배지만 남는다 — 미리보기는 덤이지 전제가 아니다. */
+.stu-ico-g.doc-g { background: none; border: 0; box-shadow: none; overflow: visible; }
+.stu-sheet { position: relative; width: 44px; height: 54px; background: #fff; border: 1px solid #DFE4EE;
+  border-radius: 4px 10px 4px 4px; box-shadow: 0 1px 2px rgba(21,35,59,.10), 0 6px 14px rgba(21,35,59,.10); overflow: hidden; }
+/* 접힌 귀 — 오른쪽 위를 대각으로 접은 종이(맥 문서 아이콘의 표식) */
+.stu-sheet-fold { position: absolute; top: -1px; right: -1px; width: 15px; height: 15px; z-index: 2;
+  background: linear-gradient(225deg, #EDF1F8 0 50%, transparent 50%); border-left: 1px solid #DFE4EE; border-bottom: 1px solid #DFE4EE; border-radius: 0 4px 0 3px; }
+.stu-prev { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; background: #fff; }
+.stu-prev.has-prev .stu-ext { display: none; }
+/* 미리보기 — 실제 문서를 잘게 줄여 얹는다. 손이 닿지 않게(포인터 차단) 아이콘 전체가 한 덩어리로 눌리게 한다. */
+.stu-prev-fr { position: absolute; top: 0; left: 0; width: 420px; height: 540px; border: 0; background: #fff;
+  transform: scale(.105); transform-origin: 0 0; pointer-events: none; }
+.stu-prev-tx { position: absolute; inset: 4px 4px 0; display: flex; flex-direction: column; gap: 2px; pointer-events: none; }
+.stu-prev-tx span { height: 3px; border-radius: 1px; background: #E7EBF3; overflow: hidden; text-indent: -999px; }
+.stu-prev-tx span:nth-child(3n) { width: 62%; }
+.stu-prev-tx span:nth-child(4n) { width: 78%; }
+/* 확장자 배지 — 미리보기가 없을 때 이 파일이 무엇인지 말하는 유일한 표식이라 또렷하게. */
+.stu-ext { position: relative; z-index: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9.5px; font-weight: 700;
+  letter-spacing: .04em; color: #fff; background: #8A99B5; padding: 2px 5px; border-radius: 3px; }
+.stu-ext.pdf { background: #C4564A; }
+.stu-ext.page { background: #7C5CFC; }
+.stu-ext.doc { background: #1BAEB0; }
+
+/* 스택 = 겹쳐 쌓인 낱장 셋(맥 '스택으로 그룹화'). 무더기라는 게 형태로 보여야 눌러 볼 생각이 든다. */
+.stu-ico-g.stack { background: none; border: 0; box-shadow: none; overflow: visible; }
+.stu-ico-g.stack::before, .stu-ico-g.stack::after { content: none; }
+.stu-stk { position: absolute; width: 42px; height: 42px; border-radius: 10px; background: #fff; border: 1px solid #DDE3EE;
+  box-shadow: 0 2px 6px rgba(21,35,59,.10); display: flex; align-items: center; justify-content: center; }
+.stu-stk.s3 { transform: translate(6px, 7px) rotate(6deg); opacity: .5; }
+.stu-stk.s2 { transform: translate(3px, 3.5px) rotate(3deg); opacity: .78; }
+.stu-stk.s1 { color: #5A6B85; }
+.stu-ico-g.cat-그림 .stu-stk.s1 { color: #2D9A6B; } .stu-ico-g.cat-시안 .stu-stk.s1 { color: #7C5CFC; }
+.stu-ico-g.cat-문서 .stu-stk.s1 { color: #C4564A; } .stu-ico-g.cat-표 .stu-stk.s1 { color: #D9772B; }
+.stu-ico-g.stack-folder .stu-stk.s1 { color: #5B8AE0; } .stu-ico-g.stack-kn .stu-stk.s1 { color: #1BAEB0; }
+.stu-ico.is-stack.open .stu-stk.s3 { transform: translate(10px, -6px) rotate(12deg); }
+.stu-ico.is-stack.open .stu-stk.s2 { transform: translate(5px, -3px) rotate(6deg); }
+
+/* 휴지통 — 낱장 아이콘과 같은 급. 통·뚜껑·홈이 있고, 차면 종이가 삐져나온다. */
+.stu-ico-g.trash { background: none; border: 0; box-shadow: none; overflow: visible; }
+.stu-trash-sv { width: 40px; height: 42px; fill: none; stroke: #7C8AA5; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.stu-trash-sv .can { fill: rgba(255,255,255,.92); }
+.stu-trash-sv .rib { stroke-width: 1.5; opacity: .55; }
+.stu-ico-g.trash.full .stu-trash-sv { stroke: #5A6B85; }
+.stu-trash-paper { position: absolute; top: 1px; left: 50%; width: 20px; height: 12px; margin-left: -10px;
+  background: #fff; border: 1px solid #DFE4EE; border-radius: 2px; transform: rotate(-8deg); }
+.stu-trash.over .stu-trash-sv { stroke: var(--blue); }
+
+/* [스택] 토글 — 켜져 있으면 눌린 상태가 보여야 다시 누를 생각이 든다(타임라인 버튼과 같은 문법). */
+.stu-stack-btn.on { background: var(--bg-punch); border-color: var(--blue); color: var(--blue); }
+
+/* 스택 판 — 무더기 안을 훑는 자리. **판을 덮지 않는다**: 스택 옆에 붙고, 넘치면 자기 안에서 스크롤한다.
+   (그 자리에서 펼치면 31장짜리 그림 스택이 캔버스를 통째로 덮는다 — 실측.) */
+.stu-stackpop { position: absolute; z-index: 48; width: min(392px, 40vw); max-height: min(60vh, 520px);
+  display: flex; flex-direction: column; overflow: hidden; border-radius: 14px;
+  background: rgba(255,255,255,.9); backdrop-filter: saturate(180%) blur(18px); -webkit-backdrop-filter: saturate(180%) blur(18px);
+  border: 1px solid var(--line-net-2); box-shadow: 0 24px 64px rgba(21,35,59,.20), 0 4px 14px rgba(21,35,59,.10);
+  animation: stu-drop .16s ease; }
+.stu-stackpop-h { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 10px 8px 14px; border-bottom: 1px solid var(--line); }
+.stu-stackpop-h b { font-size: 13px; }
+.stu-stackpop-h .stu-w-btn { margin-left: auto; }
+.stu-stackpop-g { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-wrap: wrap; gap: 2px; padding: 8px 6px 12px; align-content: flex-start; }
+.stu-stackpop-g .stu-ico { width: 88px; }
+/* 이름이 길어도 줄을 넘기지 않는다 — 바탕에서는 이름보다 '무엇인지'가 먼저다. */
+.stu-ico-n { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.stu-ico.is-stack.open .stu-ico-n { background: var(--blue); color: #fff; border-radius: 5px; }
 .stu-ico-g.trash.full { color: var(--ink-sub); border-style: solid; border-color: var(--line-net); background: #fff; }
 .stu-ico-n { max-width: 92px; font-size: 11px; line-height: 1.3; color: var(--ink); text-align: center; padding: 1px 5px; border-radius: 5px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-all; }
 .stu-ico-t { font-size: 10px; color: var(--muted-2); letter-spacing: .01em; }
@@ -1209,7 +1314,9 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .stu-app-ic { position: relative; }
 
 /* 온보딩 길잡이 — 빈 판이 백지가 아니라 '첫 걸음' 이 되게 */
-.stu-guide { position: absolute; left: 50%; top: 84px; transform: translateX(-50%); width: min(720px, 86%); text-align: left; pointer-events: auto; }
+.stu-guidehost { position: absolute; left: 50%; top: 76px; transform: translateX(-50%); width: min(720px, 86%); z-index: 15; }
+.stu-guidehost[hidden] { display: none; }
+.stu-guide { text-align: left; }
 .stu-guide h2 { margin: 0 0 6px; font-size: 20px; font-weight: 800; letter-spacing: -.02em; color: var(--ink); }
 .stu-guide-l { margin: 0 0 22px; font-size: 13.5px; color: var(--ink-sub); }
 .stu-guide-g { display: grid; gap: 12px; }
@@ -1231,7 +1338,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 @keyframes stu-slidein { from { opacity: 0; transform: translateX(12px); } }
 
 /* 리브 말풍선 — 도크의 L 위에서 말한다 */
-.stu-tip { position: absolute; left: calc(50% - 354px); bottom: 104px; z-index: 41; width: min(320px, 60%);   /* 꼬리가 도크의 L 위에 오게(도크 폭 720 기준) */
+.stu-tip { position: absolute; left: 0; bottom: calc(100% + 12px); z-index: 41; width: min(320px, 84vw);   /* 도크 '안'에 달아 L 위에 붙는다(도크 폭이 변해도 어긋나지 않게) */
   padding: 13px 14px 11px; background: var(--bg, #fff); border: 1px solid #CDEFE3; border-radius: 14px 14px 14px 4px;
   box-shadow: 0 16px 40px rgba(21,35,59,.16); animation: stu-tipin .22s ease; }
 .stu-tip[hidden] { display: none; }
@@ -1240,7 +1347,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .stu-tip-t { margin: 0 0 10px; font-size: 12.5px; line-height: 1.65; color: var(--ink); }
 .stu-tip-a { display: flex; align-items: center; gap: 10px; }
 @keyframes stu-tipin { from { opacity: 0; transform: translateY(8px); } }
-@media (max-width: 1100px) { .stu-tip { left: 16px; } .stu-tip::after { left: 24px; } }
+
 
 /* 포커스 카드 — 시킨 세션이 가운데로 커진다 */
 /* 세션 포커스 = 모달(원준 2026-08-19). 커진 카드는 '이사'가 아니라 '잠깐 앞으로 나온 것'이라
@@ -1273,3 +1380,12 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .stu-dest.pulse { animation: stu-chip-pulse .6s ease 3; }
 @keyframes stu-chip-pulse { 50% { box-shadow: 0 0 0 6px rgba(45,107,240,.18); border-color: var(--blue); } }
 @media (prefers-reduced-motion: reduce) { .stu-dest.pulse { animation: none; box-shadow: 0 0 0 4px rgba(45,107,240,.18); } }
+
+/* 손잡이 알약 — 끌어서 옮긴다(자리는 사람마다 다르다). 왼쪽 세로 점선이 잡는 자리. */
+.stu-panel-fab { cursor: default; padding-left: 2px; }
+.stu-fab-grip { flex: none; width: 12px; height: 20px; margin-right: -2px; cursor: grab; border-radius: 4px;
+  background-image: radial-gradient(currentColor 1px, transparent 1px); background-size: 4px 5px; background-position: 2px 2px;
+  color: var(--muted-3); opacity: .85; }
+.stu-panel-fab:hover .stu-fab-grip { color: var(--muted); }
+.stu-panel-fab.dragging { cursor: grabbing; box-shadow: 0 14px 34px rgba(21,35,59,.22); }
+.stu-panel-fab.dragging .stu-fab-grip { cursor: grabbing; }
