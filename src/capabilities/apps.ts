@@ -206,4 +206,33 @@ const appActivityCap: Capability = {
   },
 };
 
-export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke, appInstall, appRemove, appActivityCap];
+// ── 앱 UI 페이지 서빙(#1780 PR5) — 샌드박스 srcdoc iframe 용 entry HTML ──
+//  정적 URL 이 아니라 **인증 API**로 준다: 앱 UI 는 호스트가 fetch → sandbox="allow-scripts" srcdoc 으로 실어
+//  오리진 격리(불투명)·네트워크 없음. tools/call 은 postMessage 로 호스트가 앱 grant 로 제약(PR5b). scope null —
+//  설치된(active·enabled) 앱의 UI 는 워크스페이스 멤버가 열 수 있다(브리지 없이는 아무 부작용 없는 정적 표시).
+const appUi: Capability = {
+  name: "org_app_ui",
+  title: "앱 UI 페이지",
+  description: "설치된 앱의 UI 페이지/위젯 entry HTML 을 준다(샌드박스 iframe srcdoc 용). page 미지정이면 첫 페이지. 앱이 active·enabled 여야 한다.",
+  scope: null,
+  input: { app_id: z.string(), page: z.string().optional() },
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/apps/:id/ui", "/api/ui/apps/:id/ui/:page"],
+      parse: (req) => ({ app_id: (req.params as Record<string, string>)?.id, page: (req.params as Record<string, string>)?.page }) }],
+  },
+  handler: async (input: Record<string, unknown>) => {
+    const id = appId(input.app_id);
+    const app = await store.getApp(id);
+    if (!app) throw new HttpError(404, `앱 없음: ${id}`);
+    if (app.status !== "active" || !app.enabled) throw new HttpError(409, `앱 '${id}' 이 활성 상태가 아닙니다`);
+    const pages = await store.listUiAssets(id);
+    if (pages.length === 0) throw new HttpError(404, `앱 '${id}' 에 UI 페이지가 없습니다`);
+    const key = input.page ? String(input.page) : pages[0].page_key;
+    const a = await store.getUiAsset(id, key);
+    if (!a) throw new HttpError(404, `UI 페이지 없음: ${key}`);
+    return { app_id: id, page_key: a.page_key, kind: a.kind, title: a.title, html: a.html, pages };
+  },
+};
+
+export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke, appInstall, appRemove, appActivityCap, appUi];

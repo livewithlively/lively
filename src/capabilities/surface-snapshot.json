@@ -3915,5 +3915,16 @@
    "GET /api/ui/app-activity"
   ],
   "input_hash": "9ca2386249c54c50"
+ },
+ {
+  "name": "org_app_ui",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/apps/:id/ui",
+   "GET /api/ui/apps/:id/ui/:page"
+  ],
+  "input_hash": "f48e51524b8110f6"
  }
 ]

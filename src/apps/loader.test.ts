@@ -42,11 +42,31 @@ test("agents/commands 파일 레이아웃 → subagent/command", async () => {
   assert.deepEqual(kinds, ["command", "subagent"]);
 });
 
-test("ui.pages → ui_page item(저널만, payload null)", async () => {
-  const d = await stage({ "lively-app.json": MANIFEST({ ui: { pages: [{ key: "main", title: "M", entry: "ui/i.html" }] } }) });
+test("ui.pages → ui_page item(저널만, payload null) + entry HTML 은 uiAssets 로 보존", async () => {
+  // PR5 — loader 가 이제 entry 파일을 읽어 uiAssets 에 담는다. 파일이 없으면 로드 실패(선언한 UI 는 실려야 한다).
+  const d = await stage({
+    "lively-app.json": MANIFEST({ ui: { pages: [{ key: "main", title: "M", entry: "ui/i.html" }] } }),
+    "ui/i.html": "<!doctype html><title>M</title><body>hi</body>",
+  });
   const loaded = await loadAppPackage(d);
   const ui = loaded.items.find((i) => i.comp.kind === "ui_page");
-  assert.ok(ui); assert.equal(ui!.payload, null);
+  assert.ok(ui); assert.equal(ui!.payload, null);          // component 는 저널만(payload null) — 종전 계약 유지
+  assert.equal(loaded.uiAssets.length, 1);                  // entry HTML 은 uiAssets 로
+  assert.equal(loaded.uiAssets[0].page_key, "main");
+  assert.equal(loaded.uiAssets[0].kind, "page");
+  assert.match(loaded.uiAssets[0].html, /hi<\/body>/);
+  await rm(d, { recursive: true });
+});
+
+test("ui.pages entry 파일이 없으면 로드 실패(선언한 UI 는 실려야 한다)", async () => {
+  const d = await stage({ "lively-app.json": MANIFEST({ ui: { pages: [{ key: "main", title: "M", entry: "ui/missing.html" }] } }) });
+  await assert.rejects(() => loadAppPackage(d), /ui entry 파일이 없습니다/);
+  await rm(d, { recursive: true });
+});
+
+test("ui entry 경로탈출 거부", async () => {
+  const d = await stage({ "lively-app.json": MANIFEST({ ui: { pages: [{ key: "main", title: "M", entry: "../evil.html" }] } }) });
+  await assert.rejects(() => loadAppPackage(d), /패키지 밖/);
   await rm(d, { recursive: true });
 });
 

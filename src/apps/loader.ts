@@ -17,10 +17,13 @@ import { planDeclaredComponents, type AppComponentRef } from "./install-plan.js"
 import { hashAppPackage } from "./package-hash.js";
 import type { DeployItem } from "./install.js";
 
+export interface LoadedUiAsset { page_key: string; kind: "page" | "widget"; title: string; entry: string; html: string }
+
 export interface LoadedApp {
   manifest: LivelyAppManifest;
   contentHash: string;
   items: DeployItem[];
+  uiAssets: LoadedUiAsset[];   // #1780 PR5 — ui.pages/widgets entry HTML(설치 시 보존 대상). 없으면 [].
 }
 
 // 하네스 자산 종류 → 디스크 레이아웃(Claude 플러그인 트리 규약).
@@ -55,7 +58,31 @@ export async function loadAppPackage(stageDir: string): Promise<LoadedApp> {
   if (!pluginRoot.startsWith(root)) throw new HttpError(400, "harness.plugin 경로가 패키지 밖을 가리킵니다");
   for (const asset of await scanHarnessAssets(manifest, pluginRoot)) items.push(asset);
 
-  return { manifest, contentHash, items };
+  // 3) UI entry HTML 보존 — ui.pages/widgets 의 entry 파일을 읽어 담는다(소스 무관 서빙 대비, PR5).
+  const uiAssets = await readUiAssets(manifest, root);
+
+  return { manifest, contentHash, items, uiAssets };
+}
+
+const UI_MAX_BYTES = 2 * 1024 * 1024; // entry HTML 상한(자체완결 HTML 가정 — 초과는 거부).
+
+// ui.pages/widgets 의 entry 파일을 읽는다. entry 는 패키지 밖을 가리킬 수 없고(경로탈출 거부), 파일이어야 하며 상한 이하.
+async function readUiAssets(m: LivelyAppManifest, root: string): Promise<LoadedUiAsset[]> {
+  const out: LoadedUiAsset[] = [];
+  const specs: Array<{ key: string; kind: "page" | "widget"; title: string; entry: string }> = [
+    ...m.ui.pages.map((p) => ({ key: p.key, kind: "page" as const, title: p.title, entry: p.entry })),
+    ...m.ui.widgets.map((w) => ({ key: w.key, kind: "widget" as const, title: w.title, entry: w.entry })),
+  ];
+  for (const spec of specs) {
+    const abs = path.resolve(root, spec.entry);
+    if (abs !== root && !abs.startsWith(root + path.sep)) throw new HttpError(400, `ui entry 가 패키지 밖을 가리킵니다: ${spec.entry}`);
+    let st;
+    try { st = await stat(abs); } catch { throw new HttpError(400, `ui entry 파일이 없습니다: ${spec.entry}`); }
+    if (!st.isFile()) throw new HttpError(400, `ui entry 가 파일이 아닙니다: ${spec.entry}`);
+    if (st.size > UI_MAX_BYTES) throw new HttpError(400, `ui entry 가 너무 큽니다(${spec.entry}, ${st.size}B > ${UI_MAX_BYTES}B)`);
+    out.push({ page_key: spec.key, kind: spec.kind, title: spec.title, entry: spec.entry, html: await readFile(abs, "utf8") });
+  }
+  return out;
 }
 
 // 선언 component 의 payload — 실전개 kind 는 매니페스트 조각, 저널 kind 는 null.

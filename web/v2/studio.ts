@@ -26,6 +26,7 @@ import { fmtSize, openFileViewer } from '../projects/files.js';
 import { upDropZone, upSend, upToast, type UpItem } from '../projects/files-upload.js';
 import { runPrefs } from './run-picker.js';
 import { listSessionApps, spawnAppSession, type SessionApp } from './app-session.js';
+import { openAppUi } from './app-ui.js';
 import { sessText } from './side.js';
 import { dotCls, type Sess, type V2Data } from './views.js';
 
@@ -949,13 +950,16 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
     if (!asApp) c.addEventListener('dragstart', (e: DragEvent) => { e.dataTransfer?.setData('text/plain', 'stu:' + d.type); after?.(); });
     return c;
   };
-  // ── 세션 앱 타일(#1780) — 설치된 앱을 열면 그 앱 전용 AI 세션이 판 위에 카드로 뜬다(동의 없으면 그때 동의 창). ──
-  const sessionAppTile = (a: SessionApp): HTMLElement =>
-    el('button', { class: 'stu-app as-app stu-app-inst', type: 'button', title: '세션 앱 — 열면 이 앱 전용 AI 세션이 판 위에 카드로 떠요',
-      onclick: () => { toggleLaunch(false); void openSessionAppCard(a); } },
-      el('span', { class: 'stu-app-ic', style: 'background:#0FA37E' }, icon('chat', 'stu-i')),
+  // ── 설치된 앱 타일(#1780) — UI 앱이면 창(샌드박스 iframe 모달)으로, 세션 앱이면 판 위 세션 카드로. ──
+  const sessionAppTile = (a: SessionApp): HTMLElement => {
+    const hasUi = a.pages.length > 0;
+    return el('button', { class: 'stu-app as-app stu-app-inst', type: 'button',
+      title: hasUi ? '앱 — 열면 이 앱의 화면이 창으로 떠요' : '세션 앱 — 열면 이 앱 전용 AI 세션이 판 위에 카드로 떠요',
+      onclick: () => { toggleLaunch(false); if (hasUi) void openAppUi(a.id, { title: a.title }); else void openSessionAppCard(a); } },
+      el('span', { class: 'stu-app-ic', style: 'background:' + (hasUi ? '#2D6BF0' : '#0FA37E') }, icon(hasUi ? 'grid' : 'chat', 'stu-i')),
       el('span', { class: 'stu-app-n', text: a.title }),
-      el('span', { class: 'stu-inst-dot', title: '세션 앱' }));
+      el('span', { class: 'stu-inst-dot', title: hasUi ? '앱' : '세션 앱' }));
+  };
   // 앱 세션을 열고 판 위에 세션 카드로 올린다(spawnSession 과 같은 문법 — 여기선 appId 를 실어 앱 배관을 켠다).
   async function openSessionAppCard(a: SessionApp): Promise<void> {
     const born = ghostCanvasPos();
