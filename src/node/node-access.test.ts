@@ -7,7 +7,7 @@
 // 축: 소유일치 × shared(true/false/undefined/null) × 리스. shared 는 **이번에 새로 도입한 플래그**라
 //  구 스키마 행에서 undefined/null 로 올 수 있다 — truthy 로 오독하면 전 노드가 개방되므로 그 두 칸을 따로 본다.
 import assert from "node:assert/strict";
-import { nodeOpenTo, remoteDelegateAllowed, type NodeAccessFacts } from "./node-access.js";
+import { nodeHostProfile, nodeOpenTo, remoteDelegateAllowed, type NodeAccessFacts } from "./node-access.js";
 
 let pass = 0;
 const ok = (n: string) => { pass++; console.log(`ok  ${n}`); };
@@ -88,6 +88,19 @@ const node = (owner: NodeAccessFacts["owner_member"], shared?: boolean | null): 
   // 배선 단언 — 허용이 0건이면 위 포함관계는 공허하게 통과한다(vacuous). 실제로 통과한 칸이 있어야 검증이다.
   assert.ok(allowed >= 6, `C1 관측 장치 확인 — 위탁 허용 칸이 실제로 있어야 한다(observed=${allowed})`);
   ok(`C1 불변식 위탁 ⊆ 접근 (${checked}조합 · 허용 ${allowed}칸)`);
+}
+
+// ── D. hostProfile(#1541) — member 노드 && 생성자=주인일 때만 네이티브 설정(CLAUDE_CONFIG_DIR 미주입) ──
+//  잘못 넓히면 공유 노드에서 #1014 신원 유출 방어가 꺼진다 — 표로 못박는다.
+{
+  const mk = (kind: string | undefined, owner: string | null) => ({ kind, owner_member: owner });
+  assert.equal(nodeHostProfile(mk("member", ME), ME), true, "D1 member+주인 = 네이티브");
+  assert.equal(nodeHostProfile(mk("member", OTHER), ME), false, "D2 member 지만 남의 노드 = 주입 유지");
+  assert.equal(nodeHostProfile(mk("shared", ME), ME), false, "D3 shared 류(비-member kind)는 항상 주입 유지");
+  assert.equal(nodeHostProfile(mk("member", null), ME), false, "D4 주인 미상 = 주입 유지(안전측)");
+  assert.equal(nodeHostProfile(mk("member", ME), ""), false, "D5 요청자 미상 = 주입 유지(안전측)");
+  assert.equal(nodeHostProfile(mk(undefined, ME), ME), false, "D6 kind 미상 = 주입 유지(안전측)");
+  ok("D hostProfile 판정 6칸");
 }
 
 console.log(`\n${pass} passed`);
