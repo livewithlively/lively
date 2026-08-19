@@ -41,12 +41,20 @@ t("U5 비-URL·빈 줄 = null (throw 없음)", () => {
   assert.equal(urlAtColumn("no links here", 5), null);
   assert.equal(urlAtColumn("", 0), null);
 });
-t("W1 배선 — modifier 클릭은 xterm 전에 삼킨다(mousedown·mouseup 캡처) + click 이 urlAtColumn 을 부른다", () => {
-  assert.match(src, /swallowIfModifier/, "가로채기 헬퍼가 없다");
-  assert.match(src, /addEventListener\('mousedown', swallowIfModifier, true\)/, "mousedown 캡처가 없다 — pty 리포팅이 새서 TUI 확인창이 또 뜬다");
-  assert.match(src, /addEventListener\('mouseup', swallowIfModifier, true\)/, "mouseup 캡처가 없다");
-  assert.match(src, /urlAtColumn\(text, colInLogical\)/, "클릭 판정이 urlAtColumn 을 안 쓴다");
+t("W1 배선 — 판정은 mousedown 에서(press 가 pty 로 새면 TUI 확인창이 뜬다), down/up/click 캡처 셋이 한 판정을 공유", () => {
+  assert.match(src, /pendingLink = wantsLink \? linkAtEvent\(ev\) : null/, "mousedown 에서 링크를 판정하지 않는다");
+  assert.match(src, /urlAtColumn\(text, colInLogical\)/, "판정이 urlAtColumn 을 안 쓴다");
   assert.match(src, /isWrapped/, "감싸인 긴 URL(줄바꿈)을 잇지 않는다");
+  // 캡처(true) 3종 — 버블 단계면 xterm 이 먼저 먹는다
+  for (const evName of ["mousedown", "mouseup", "click"]) {
+    assert.match(src, new RegExp(`addEventListener\\('${evName}',[\\s\\S]{0,700}?\\}, true\\);`), `${evName} 이 캡처가 아니다`);
+  }
+});
+t("W2 배선 — 맨클릭은 '트래킹 pane × URL 위'로 좁힌다(TUI 마우스 입력·셸 드래그 선택 보존), modifier 는 항상", () => {
+  assert.match(src, /\(ev\.metaKey \|\| ev\.ctrlKey\) \|\| mouseTracked\(\)/, "맨클릭 경로가 트래킹 판정을 안 탄다");
+  assert.match(src, /mouseTrackingMode/, "트래킹 판정이 xterm modes 를 안 본다");
+  assert.match(src, /if \(pendingLink \|\| \(ev\.metaKey \|\| ev\.ctrlKey\)\)/, "맨클릭이 URL 밖에서도 삼켜진다(TUI 입력이 죽는다) — URL 위일 때만 삼켜야 한다");
+  assert.match(src, /url && url === pendingLink/, "드래그(다른 자리에서 뗌)를 클릭으로 오인한다");
 });
 
 console.log(`\n${pass} passed`);
