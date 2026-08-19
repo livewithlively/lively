@@ -172,9 +172,10 @@ function titleFor(route) {
         return { title: '리브', noAside: true };
     // 실험장 v4(2026-08-19 바탕화면): 프로젝트 화면은 우패널 없이 — 판이 폭 전체를 쓴다. 타임라인은 문패 [타임라인](알림 센터),
     //  위젯·앱은 도크 ⊞(런치패드)로 옮겨 갔다(web/v2/studio.ts 머리 주석).
+    //  #/p/0 = 프로젝트 없는 세션들의 작업대(사이드바의 그 폴더) — 프로젝트가 아니라 '자투리 묶음'이다.
     if (p === 'p') {
         const id = Number(segs[1]);
-        return { title: projName(data, id), noAside: true };
+        return { title: id === 0 ? '프로젝트 없는 세션' : projName(data, id), noAside: true };
     }
     if (p === 's') {
         // 탭 제목도 사이드바와 **같은 규칙**(side.ts sessText)을 쓴다(#1744) — 종전엔 s.label 을 날것으로 써서
@@ -272,12 +273,14 @@ async function renderRoute(tab) {
         else if (page === 'p' && segs[1]) {
             const id = Number(segs[1]);
             let detail = null;
-            try {
-                detail = await api('/api/ui/v6/projects/' + id);
-            }
-            catch (_) {
-                detail = null;
-            }
+            if (id) {
+                try {
+                    detail = await api('/api/ui/v6/projects/' + id);
+                }
+                catch (_) {
+                    detail = null;
+                }
+            } // id 0 = 프로젝트 없는 묶음(조회할 프로젝트가 없다)
             if (seq !== tab.seq)
                 return;
             if (detail && !data.projects.some((p) => p.id === id))
