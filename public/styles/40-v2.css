@@ -267,18 +267,6 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-launch-in:disabled { opacity: .55; }
 .v2-launch-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; padding-top: 0; border-top: 0; }
 
-/* 행선지 — 컨트롤 줄에서 유일하게 '모양 있는' 칩. 나머지 실행 축은 글자만 남는다(전부 알약이면 카드가 폼으로 보인다). */
-.v2-dest { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.v2-dest-k { display: none; }
-.v2-dest-chip { display: inline-flex; align-items: center; gap: 7px; max-width: 300px; height: 30px; padding: 0 11px; border: 0; border-radius: 999px; background: var(--bg-tint, #F6FAFF); font: inherit; font-size: 12.5px; color: var(--ink); cursor: pointer; min-width: 0; }
-.v2-dest-chip:hover { background: var(--bg-tint-2, #EEF5FF); }
-.v2-dest-chip b { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.v2-dest-chip .car { color: var(--muted-2, #A6B2C8); font-size: 9px; flex: none; }
-.v2-dest-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted-3, #C2CCDD); flex: none; }
-.v2-dest-dot.on { background: var(--blue); }
-.v2-dest-why { font-size: 11.5px; color: var(--muted-2, #A6B2C8); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.v2-dest-why:empty { display: none; }
-
 .v2-launch-ctl { display: flex; align-items: center; flex-wrap: wrap; gap: 3px 6px; flex: 1; min-width: 0; }
 .v2-launch-row > .v2-launch-send { align-self: flex-end; }
 .v2-run { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; min-width: 0; }
@@ -291,20 +279,7 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 
 .v2-launch-send { flex: none; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 16px; border-radius: 11px; font-weight: 650; }
 .v2-launch-send kbd { font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; opacity: .7; font-weight: 400; }
-.v2-dest-pop { position: absolute; left: 14px; bottom: 52px; width: min(360px, calc(100% - 28px)); z-index: 30; background: var(--bg, #fff); border: 1px solid var(--line, #E6ECF5); border-radius: 12px; box-shadow: 0 14px 36px rgba(21, 35, 59, .16); padding: 8px; }
-.v2-dest-q { width: 100%; height: 30px; border: 1px solid var(--line, #E6ECF5); border-radius: 8px; padding: 0 9px; font: inherit; font-size: 12.5px; background: var(--bg-tint, #F6FAFF); }
-.v2-dest-q:focus-visible { outline: 2px solid var(--blue); outline-offset: 0; border-color: transparent; }
-.v2-dest-list { margin-top: 6px; max-height: 260px; overflow: auto; display: flex; flex-direction: column; gap: 1px; }
-.v2-dest-opt { display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left; padding: 7px 9px; border: 0; border-radius: 8px; background: none; font: inherit; font-size: 13px; color: var(--ink); cursor: pointer; }
-.v2-dest-opt:hover { background: var(--bg-tint, #F6FAFF); }
-.v2-dest-opt.on { background: var(--bg-tint, #F6FAFF); font-weight: 700; }
-.v2-dest-opt .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.v2-dest-opt .s { font-size: 11px; color: var(--muted); flex: none; }
-.v2-dest-opt .ck { color: var(--mint-deep, #0FA37E); font-weight: 800; flex: none; }
-.v2-dest-opt.auto { border-top: 1px dashed var(--line, #E6ECF5); border-radius: 0 0 8px 8px; margin-top: 4px; padding-top: 9px; color: var(--ink-sub); }
 .v2-launch-hint { display: none; }   /* Enter 안내 줄 폐지 — placeholder 와 관례가 이미 말한다(#1756) */
-.v2-launch-sugs { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 12px; padding-left: 4px; }
-.v2-launch-sugs .chip { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 상단바 프로젝트 연결(#1749) — 버튼 + 검색 드롭다운(anchoredPopover .dash-pop 위에 얹힘) */
 .sc-proj { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
 .sc-proj > a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
@@ -771,9 +746,6 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
   .v2-launch-in { min-height: 64px; }
   .v2-launch-row { flex-wrap: wrap; }
   .v2-launch-row > .v2-launch-send { margin-left: auto; height: 38px; }
-  .v2-dest-chip { max-width: min(300px, calc(100vw - 120px)); }
-  .v2-dest-pop { left: 8px; bottom: 56px; width: calc(100% - 16px); }
-  .v2-dest-q { height: 36px; }
   .v2-now { margin-top: 26px; }
   .v2-now-row { padding: 10px 8px; }
   .v2-now-row .tw { flex-wrap: wrap; row-gap: 2px; }
@@ -804,7 +776,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 }
 /* 터치 기기(폭 무관) — 입력칸 글자 16px: iOS 사파리는 16px 미만 입력칸에 포커스가 가면 화면을 확대한다(돌아오지 않는다). */
 @media (pointer: coarse) {
-  .v2-find-in, .v2-launch-in, .v2-dest-q, .v2-pad-search, .v2-pjpick-in, .v2-ws-in, #gate-input, #gate-email, #gate-password { font-size: 16px; }
+  .v2-find-in, .v2-launch-in, .v2-pad-search, .v2-pjpick-in, .v2-ws-in, #gate-input, #gate-email, #gate-password { font-size: 16px; }
 }
 
 /* 팝아웃 창(#1744)은 서랍 크롬(☰·타임라인 버튼)이 없다 — 좁은 화면에선 가운데 한 칸만 남긴다.
