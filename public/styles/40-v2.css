@@ -49,10 +49,10 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-empty { font-size: 12.5px; color: var(--muted); line-height: 1.6; margin: 0; padding: 8px 4px; }
 .v2-fine { font-size: 11.5px; color: var(--muted); line-height: 1.6; margin: 10px 0 0; }
 
-.v2-ws { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding: 5px 7px; border: 1px solid transparent; border-radius: 8px; background: none; font: inherit; text-align: left; cursor: pointer; }
+.v2-ws { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding: 6px 8px; border: 1px solid transparent; border-radius: 8px; background: none; font: inherit; text-align: left; cursor: pointer; }
 .v2-ws:hover { background: var(--bg, #fff); border-color: var(--line, #E6ECF5); }
-.v2-ws-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 700; color: var(--ink); }
-.v2-ws-car { font-size: 10px; color: var(--muted-2, #a6b2c8); flex: none; margin-right: auto; }
+.v2-ws-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 700; color: var(--ink); }
+.v2-ws-car { font-size: 10px; color: var(--muted-2, #a6b2c8); flex: none; }
 .v2-ws-badge { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 10px; letter-spacing: .04em; font-weight: 700; padding: 1px 5px; border-radius: 5px; border: 1px solid transparent; }
 .v2-ws-badge.personal { color: var(--mint-deep, #0FA37E); background: var(--bg-success, #F3FBF8); border-color: #CDEFE3; }
 .v2-ws-badge.team { color: var(--blue); background: var(--bg-tint, #F6FAFF); border-color: var(--line-net-2, #CFE0F7); }
@@ -98,15 +98,17 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-side { --side-x: 8px; --rail: 56px; --row-h: 34px; background: var(--canvas, #F4F7FC); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
 /* 좌상단 한 줄 — 브랜드 심볼(=홈) + 워크스페이스 스위처. 워드마크 줄을 따로 두면 조직명이 'Lively' 일 때
    같은 글자가 두 번 나오고 머리만 196px 를 먹었다(실측) → 141px. */
-.v2-side-top { padding: 12px var(--side-x, 8px) 6px 8px; display: flex; align-items: center; gap: 10px; }
-.v2-mark { flex: none; width: 30px; height: 30px; border-radius: 9px; background: var(--ink); display: grid; place-items: center; text-decoration: none; }
-.v2-mark:hover { background: var(--blue-deep, #1E54CC); }
-.v2-mark-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--mint-deep, #0FA37E); display: block; }
-.v2-mark:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-.v2-liv-btn { margin: 4px var(--side-x, 8px) 2px; display: flex; align-items: center; gap: 12px; padding: 8px 10px 8px 9px; min-height: var(--row-h, 34px); border-radius: 9px; border: 1px solid transparent; font-weight: 700; font-size: 14px; color: var(--ink); text-decoration: none; }
-.v2-liv-btn:hover, .v2-liv-btn.on { background: var(--bg, #fff); border-color: #CDEFE3; }
-.v2-liv-btn .lm { width: 26px; height: 26px; border-radius: 50%; background: var(--bg-success, #F3FBF8); border: 1px solid #CDEFE3; display: grid; place-items: center; color: var(--mint-deep, #0FA37E); font-weight: 800; font-size: 11px; flex: none; }
-.v2-liv-btn .sub { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--muted); }
+.v2-side-top { padding: 10px var(--side-x, 8px) 4px; display: flex; align-items: center; }
+/* 늘 있는 곳(홈·리브) — 프로젝트 행과 **같은 모양**이다. 알약(테두리·큰 글씨)으로 만들면 목록보다 먼저
+   읽혀 위계가 뒤집힌다(상민님 2026-08-19). 아이콘도 프로젝트 폴더와 같은 칸에 앉아 글자가 기둥 56px 에 선다. */
+.v2-fixed { padding: 0 var(--side-x, 8px) 6px; margin-bottom: 4px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
+.v2-nav { display: flex; align-items: center; padding: 7px 10px 7px 28px; min-height: var(--row-h, 34px); border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--ink-sub); text-decoration: none; }
+.v2-nav:hover { background: var(--bg, #fff); color: var(--ink); }
+.v2-nav.on { background: var(--bg, #fff); color: var(--ink); font-weight: 700; box-shadow: inset 0 0 0 1px var(--line-net, #DCE6F5); }
+.v2-nav .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-nav-ic { width: 16px; height: 16px; margin-right: 4px; flex: none; fill: none; stroke: var(--muted-2, #a6b2c8); stroke-width: 1.8; stroke-linejoin: round; }
+.v2-nav:hover .v2-nav-ic, .v2-nav.on .v2-nav-ic { stroke: var(--blue); }
+.v2-nav-lm { width: 16px; height: 16px; margin-right: 4px; flex: none; border-radius: 50%; background: var(--bg-success, #F3FBF8); border: 1px solid #CDEFE3; display: grid; place-items: center; color: var(--mint-deep, #0FA37E); font-weight: 800; font-size: 9px; }
 .v2-side-sec { padding: 14px 8px 4px 16px; display: flex; align-items: center; gap: 2px; flex-wrap: nowrap; min-height: 30px; }
 .v2-side-sec .v2-k { margin-right: 6px; font-family: inherit; font-size: 11px; font-weight: 700; letter-spacing: 0; text-transform: none; color: var(--muted); font-variant-numeric: tabular-nums; }
 /* 개수가 늘어도(196·1204) 줄바꿈되지 않게 — 조작부가 두 줄로 접히면 목록보다 머리가 커 보인다. */
@@ -116,6 +118,11 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-add { flex: none; display: inline-grid; place-items: center; width: 27px; height: 27px; color: var(--muted); text-decoration: none; border: 1px solid transparent; border-radius: 7px; }
 .v2-add:hover { color: var(--ink); background: var(--bg, #fff); border-color: var(--line, #E6ECF5); }
 .v2-add-ic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+/* ＋ 새 프로젝트 팝오버 — anchoredPopover 는 자리만 잡는다. 면(배경·테두리·그림자)은 이 클래스가 줘야 하고,
+   없으면 입력칸·안내글이 본문 위에 투명하게 겹친다(상민님 2026-08-19 실측 사진). */
+.v2-newpop { z-index: 60; background: var(--bg, #fff); border: 1px solid var(--line, #E6ECF5); border-radius: 12px; box-shadow: 0 12px 32px rgba(21, 35, 59, .14); }
+.v2-newrow { display: flex; align-items: center; gap: 8px; }
+.v2-newmsg { margin: 0; font-size: 11.5px; color: var(--coral-text, #B84E44); line-height: 1.5; }
 /* 상태 칩 — 살아 있는 세션 상태별 개수. 누르면 그 상태만(렌즈). 채운 파랑은 안 쓴다(주 액션 아님) — 켜짐은 흰 배경+테두리. */
 /* 돋보기 — 검색칸을 여닫는다. 아이콘 자체는 늘 보여서 '검색이 있는 줄 모르는' 일이 없다(#1154 반려 사유 대응).
    검색어가 남아 있으면 켜진 색으로 남아, 목록이 짧아진 이유를 헤더가 말해 준다. */
@@ -219,11 +226,11 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-pj.after-pins { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line-net, #DCE6F5); }
 
 .v2-side-foot { padding: 8px var(--side-x, 8px) 10px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
-.v2-apps-btn { display: flex; align-items: center; gap: 12px; width: 100%; padding: 8px 10px 8px 9px; min-height: var(--row-h, 34px); border-radius: 9px; border: 1px solid var(--line); background: var(--bg, #fff); font: inherit; font-size: 13px; font-weight: 700; color: var(--ink); cursor: pointer; }
-.v2-apps-btn:hover { border-color: var(--blue); }
+.v2-apps-btn { display: flex; align-items: center; gap: 4px; width: 100%; padding: 7px 10px 7px 28px; min-height: var(--row-h, 34px); border-radius: 8px; border: 0; background: none; font: inherit; font-size: 13px; font-weight: 600; color: var(--ink-sub); cursor: pointer; text-align: left; }
+.v2-apps-btn:hover { background: var(--bg, #fff); color: var(--ink); }
 .v2-apps-btn .v2-cnt { margin-left: auto; }
-.v2-me { display: flex; align-items: center; gap: 12px; padding: 4px 10px; min-height: var(--row-h, 34px); font-size: 13px; color: var(--ink-sub); }
-.v2-me .v2-ava { width: 26px; height: 26px; border-radius: 50%; font-size: 11px; }
+.v2-me { display: flex; align-items: center; gap: 8px; padding: 4px 10px 4px 18px; min-height: var(--row-h, 34px); font-size: 13px; color: var(--ink-sub); }
+.v2-me .v2-ava { width: 22px; height: 22px; border-radius: 50%; font-size: 10px; }
 .v2-me-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-classic-link { border: 0; background: none; font: inherit; font-size: 11px; color: var(--muted-2, #a6b2c8); cursor: pointer; text-align: left; padding: 2px 10px 0; }
 .v2-classic-link:hover { color: var(--ink-sub); text-decoration: underline; }

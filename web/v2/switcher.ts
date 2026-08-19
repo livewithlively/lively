@@ -22,22 +22,22 @@ function ws(): { kind: 'personal' | 'team'; hub: string | null; name: string } {
   return { kind, hub: w.hub_url || null, name };
 }
 
-// 상단 노드 — **한 줄**: 브랜드 심볼(=홈) + 워크스페이스 스위처. side.ts 가 이걸 v2-side-top 자리에 넣는다.
-//  ⚠ 예전엔 워드마크 'Lively' 줄과 스위처 줄이 **따로** 있었다. 그러면 조직 이름이 'Lively' 일 때
-//   같은 글자가 세로로 두 번 나오고(실측), 목록이 시작되기 전에 196px 를 머리로 쓴다(사이드바 높이의 20%).
-//   심볼이 홈을 겸하게 해 한 줄로 접었다 — 141px. 심볼에 글자를 넣지 않는 이유는 리브 아바타('L')와 겹치기 때문.
+// 상단 노드 — **워크스페이스 한 줄**. 여기가 어디인지를 말하는 자리다(사이드바의 가장 바깥 위계).
+//  ⚠ 예전엔 워드마크 'Lively' 줄과 스위처 줄이 **따로** 있었다. 조직 이름이 'Lively' 면 같은 글자가 세로로
+//   두 번 나오고 머리만 196px 를 먹었다(실측) → 한 줄로 접었다.
+//  ⚠ 그 뒤엔 검은 네모(브랜드 심볼 = 홈 링크)를 스위처 **밖**에 세워 뒀는데, 무엇인지 읽히지 않았다
+//   (상민님 2026-08-19: "좌측에 있는 아이콘? 프로필 박스? 네모난거 저거 위치 너무 어색"). 홈은 아래 [홈] 줄로
+//   내리고, 아이콘 자리는 아예 비웠다 — 이 줄은 **머리글**이지 목록의 항목이 아니다. 그래서 글자도
+//   목록의 기둥(56px)이 아니라 섹션 라벨과 같은 자리(16px)에서 시작한다.
 export function switcherTop(): HTMLElement {
   const w = ws();
   const kindText = w.kind === 'personal' ? '개인' : '팀';
   const btn = el('button', { class: 'v2-ws', type: 'button', 'aria-haspopup': 'menu', title: `${w.name} · ${kindText} 워크스페이스 — 누르면 전환·연결` },
-    el('span', { class: 'v2-ws-badge ' + w.kind, text: kindText }),
     el('span', { class: 'v2-ws-name', text: w.name }),
+    el('span', { class: 'v2-ws-badge ' + w.kind, text: kindText }),
     el('span', { class: 'v2-ws-car', 'aria-hidden': 'true', text: '▾' })) as HTMLButtonElement;
   btn.onclick = (e) => { e.preventDefault(); if (openPanel) { closeMenu(); return; } openMenu(btn); };
-  return el('div', { class: 'v2-side-top' },
-    el('a', { class: 'v2-mark', href: '#/', title: '라이블리 홈으로', 'aria-label': '홈으로', 'data-nav': 'home' },
-      el('span', { class: 'v2-mark-dot', 'aria-hidden': 'true' })),
-    btn);
+  return el('div', { class: 'v2-side-top' }, btn);
 }
 
 function sectionLabel(text: string): HTMLElement { return el('div', { class: 'v2-ws-sec', text }); }
