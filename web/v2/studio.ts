@@ -135,6 +135,12 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   host.replaceChildren(wrap);
 
   const cmBtn = el('button', { class: 'btn btn-ghost btn-sm stu-cm-btn', type: 'button', title: '코멘트 모드 — 판 위를 드래그해 영역을 잡고 코멘트를 남깁니다', onclick: () => setCommentMode(!commentMode) }, icon('pin', 'stu-i sm'), el('span', { text: '코멘트' })) as HTMLButtonElement;
+  // 타임라인은 위젯이 아니라 **우상단 토글**이다(원준 2026-08-19) — 맥 알림 센터 문법: 문패 오른쪽 끝에서
+  //  누르면 오른쪽에서 스르륵 밀려 들어오고, 다시 누르면 밀려 나간다. 판 위 다른 위젯과 결이 다른 게 맞다 —
+  //  이건 '판에 둔 물건'이 아니라 '잠깐 젖혀 보는 서랍'이라서다(그래서 판 배치에 저장되지 않는다).
+  const tlBtn = el('button', { class: 'btn btn-ghost btn-sm stu-tl-btn', type: 'button', title: '타임라인 — 이 프로젝트에 남은 것들 (Esc 로 닫기)',
+    'aria-label': '타임라인', 'aria-expanded': 'false', onclick: () => toggleNotif() },
+    icon('clock', 'stu-i sm'), el('span', { text: '타임라인' })) as HTMLButtonElement;
   function paintDoor(): void {
     const p = pj();
     const tasks: any[] = Array.isArray(p.tasks) ? p.tasks : [];
@@ -159,6 +165,7 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
         el('span', { class: 'stu-faces' }, ...members.slice(0, 5).map((m: any) => personFace(String(m.member_id || m), 'stu-face', String(m.display_name || m.member_id || '')))),
         // 이 줄은 **캔버스보다 위**에 있는 것들만 — 판 설정(코멘트 모드·정리)뿐이다(원준 2026-08-19).
         //  타임라인·명세는 기능이라 앱/위젯으로 내려갔다(⊞ 런치패드).
+        tlBtn,
         cmBtn,
         el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '정리', title: '위젯 위치만 격자에 맞춰 정렬합니다(크기는 그대로)', onclick: () => { autoArrange(); paintAll(); save(); } })));
     cmBtn.classList.toggle('on', commentMode);
@@ -199,7 +206,7 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
           ? el('button', { class: 'stu-w-btn', type: 'button', title: '전체 화면(대화창)', text: '⤢', onclick: (e: Event) => { e.stopPropagation(); location.hash = '#/s/' + encodeURIComponent(String(spec.data.sid)); } })
           : null,
         el('button', { class: 'stu-w-btn', type: 'button', title: '판에서 치우기', text: '×', onclick: (e: Event) => { e.stopPropagation(); removeWidget(spec); } })));
-    const w = el('div', { class: 'stu-w stu-w-' + spec.type + (spec.min ? ' min' : ''), 'data-sz': sizeOf(spec), style: `left:${spec.x}px;top:${spec.y}px;width:${spec.w}px;${spec.min ? '' : 'height:' + spec.h + 'px;'}z-index:${spec.z || 1};--wac:${d.ac}` }, head, body,
+    const w = el('div', { class: 'stu-w stu-w-' + spec.type + (spec.min ? ' min' : '') + (focusId === spec.id ? ' focused' : ''), 'data-sz': sizeOf(spec), style: `left:${spec.x}px;top:${spec.y}px;width:${spec.w}px;${spec.min ? '' : 'height:' + spec.h + 'px;'}z-index:${spec.z || 1};--wac:${d.ac}` }, head, body,
       el('div', { class: 'stu-w-rsz', title: '크기 조절 — 문턱을 넘으면 구성이 바뀌어요' }));
     els.set(spec.id, { root: w, body, title: titleEl2 });
     if (!spec.min) fillBody(spec, body, true);
@@ -869,6 +876,7 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
     canvas.replaceChildren(
       ...widgets.map((s) => (s.data?.cm ? commentEl(s) : widgetEl(s))),
       widgets.length ? el('div', { class: 'stu-boardhint', text: '바탕화면 — 아이콘은 두 번 눌러 열기 · 파일을 끌어다 놓기 · ⊞ 에서 앱·위젯 꺼내기 · [코멘트]로 어디든 표시' }) : startGuide());
+    if (focusId) { ensureScrim(); const r = els.get(focusId); if (r) r.root.classList.add('focused'); }   // 다시 그려도 모달은 열린 채로
     growCanvas();
   }
   /** 처음 = **빈 판 + 길잡이**(원준 2026-08-19 "빈 백지보다 뭐부터 해야 하는지 감이 오는 화면").
@@ -1034,15 +1042,22 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
         el('button', { class: 'stu-w-btn', type: 'button', text: '×', title: '닫기(Esc)', onclick: () => toggleNotif(false) })));
       void loadProjectTimeline(id, detail).then((items) => { if (!dead && !notif.hidden) tl.addAll(items); });
       toggleLaunch(false);
+      notif.hidden = false;
+      requestAnimationFrame(() => notif.classList.add('on'));   // 다음 프레임에 켜야 '들어오는' 전환이 걸린다
+    } else {
+      notif.classList.remove('on');
+      // 다 밀려 나간 뒤에 감춘다 — 바로 hidden 을 주면 전환이 잘린다.
+      window.setTimeout(() => { if (!notif.classList.contains('on')) notif.hidden = true; }, 260);
     }
-    notif.hidden = !want;
+    tlBtn.classList.toggle('on', want);
+    tlBtn.setAttribute('aria-expanded', String(want));
   }
   document.addEventListener('pointerdown', onDocDown);
   document.addEventListener('keydown', onDocKey);
   function onDocDown(e: PointerEvent): void {
     if (dead) { document.removeEventListener('pointerdown', onDocDown); return; }
     const t = e.target as Node;
-    if (!notif.hidden && !notif.contains(t) && !streamEl.contains(t)) toggleNotif(false);
+    if (!notif.hidden && !notif.contains(t) && !streamEl.contains(t) && !tlBtn.contains(t)) toggleNotif(false);
     if (appEl && !appEl.contains(t) && !launch.contains(t)) closeApp();
     if (!launch.hidden && !launch.contains(t) && !launchBtn.contains(t)) toggleLaunch(false);
     if (peekEl && !peekEl.contains(t)) closePeek();   // 판 아무 데나 누르면 피크는 물러난다(맥 훑어보기와 같은 몸짓)
@@ -1053,7 +1068,8 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
     if (dead) { document.removeEventListener('keydown', onDocKey); return; }
     const typing = !!(document.activeElement && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName));
     if (e.key === 'Escape') {
-      if (appEl) { closeApp(); e.stopPropagation(); }
+      if (focusId) { unfocusWidget(); e.stopPropagation(); }
+      else if (appEl) { closeApp(); e.stopPropagation(); }
       else if (!notif.hidden) { toggleNotif(false); e.stopPropagation(); }
       else if (!launch.hidden) { toggleLaunch(false); e.stopPropagation(); }
       else if (selected().length) { clearSel(); e.stopPropagation(); }
@@ -1404,25 +1420,70 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   // ══ 세션 포커스 — 시킨 세션이 가운데로 커진다(원준 2026-08-19) ═══════════════════
   //  "매번 세션 화면으로 넘어가지 않고도 오가는 말이 보였으면" — 카드를 키워 대화를 크게 보여주고,
   //  [작게]로 원래 자리·크기로 돌아온다(창을 키웠다 줄이는 맥 문법 그대로).
-  const focusPrev = new Map<string, { x: number; y: number; w: number; h: number }>();
+  //  ⚠ **모달처럼 다룬다**(원준 2026-08-19): 커진 카드가 판의 새 자리로 '이사'하면 닫을 때 돌아갈 곳이 흐려진다.
+  //   그래서 ① 뒤에 딤을 깔아 판을 잠그고 ② 커진 기하는 **저장하지 않는다**(닫으면 원래 자리·크기로 복귀,
+  //   새로고침해도 원래 자리) ③ 위치·크기 변화는 그 자리에서 **부드럽게** 움직인다.
+  //   paintAll 은 DOM 을 통째로 새로 만들어 전환이 안 걸리므로, 포커스는 **다시 그리지 않고 스타일만** 바꾼다.
+  const focusPrev = new Map<string, { x: number; y: number; w: number; h: number; min?: boolean }>();
+  let focusId: string | null = null;
+  let scrimEl: HTMLElement | null = null;
+  const ANIM_MS = 280;
+
+  function ensureScrim(): HTMLElement {
+    const sc = scrimEl ?? el('div', { class: 'stu-scrim', 'aria-hidden': 'true' });
+    if (!scrimEl) { sc.addEventListener('pointerdown', (e: Event) => { e.stopPropagation(); unfocusWidget(); }); scrimEl = sc; }
+    if (sc.parentElement !== canvas) canvas.append(sc);
+    return sc;
+  }
+  /** 전환 동안만 transition 을 켠다 — 상시로 켜면 끌어 옮길 때 손가락을 따라오지 못한다. */
+  function animate(node: HTMLElement, apply: () => void): void {
+    node.classList.add('anim');
+    apply();
+    window.setTimeout(() => node.classList.remove('anim'), ANIM_MS + 40);
+  }
   function focusWidget(spec: WSpec): void {
+    if (focusId && focusId !== spec.id) unfocusWidget();
+    let ref = els.get(spec.id);
+    if (!ref) { paintAll(); ref = els.get(spec.id); }
+    if (!ref) return;
     const scroll = { x: board.scrollLeft, y: board.scrollTop };
     const vw = board.clientWidth, vh = board.clientHeight;
-    if (!focusPrev.has(spec.id)) focusPrev.set(spec.id, { x: spec.x, y: spec.y, w: spec.w, h: spec.h });
-    spec.w = Math.min(720, Math.max(420, vw - 220));
-    spec.h = Math.min(560, Math.max(320, vh - 240));
-    spec.x = snap(scroll.x + Math.max(24, (vw - spec.w) / 2));
-    spec.y = snap(scroll.y + Math.max(16, (vh - spec.h) / 2 - 40));
-    spec.min = false; spec.z = ++zTop;
-    sigs.delete(spec.id); save(); paintAll();
-    const ref = els.get(spec.id);
-    if (ref) { ref.root.classList.add('focused'); ref.root.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
+    if (!focusPrev.has(spec.id)) focusPrev.set(spec.id, { x: spec.x, y: spec.y, w: spec.w, h: spec.h, min: spec.min });
+    const w = Math.min(720, Math.max(420, vw - 220));
+    const h = Math.min(560, Math.max(320, vh - 240));
+    const x = snap(scroll.x + Math.max(24, (vw - w) / 2));
+    const y = snap(scroll.y + Math.max(16, (vh - h) / 2 - 40));
+    // 접혀 있었으면 먼저 펴야 높이가 생긴다(펴는 것 자체는 다시 그려야 한다).
+    if (spec.min) { spec.min = false; sigs.delete(spec.id); paintAll(); ref = els.get(spec.id); if (!ref) return; }
+    focusId = spec.id;
+    spec.z = ++zTop;
+    const scrim = ensureScrim();
+    requestAnimationFrame(() => scrim.classList.add('on'));
+    const root = ref.root;
+    root.classList.add('focused');
+    animate(root, () => {
+      root.style.left = x + 'px'; root.style.top = y + 'px';
+      root.style.width = w + 'px'; root.style.height = h + 'px';
+      root.style.zIndex = String(spec.z);
+    });
+    // ⚠ spec 은 건드리지 않는다 — 저장되는 배치는 언제나 '원래 자리'다.
   }
-  function unfocusWidget(spec: WSpec): void {
-    const prev = focusPrev.get(spec.id);
+  function unfocusWidget(spec?: WSpec): void {
+    const id = spec ? spec.id : focusId;
+    if (!id) return;
+    const prev = focusPrev.get(id);
+    const ref = els.get(id);
+    focusId = null;
+    if (scrimEl) { const sc = scrimEl; sc.classList.remove('on'); window.setTimeout(() => { if (!focusId) sc.remove(); }, ANIM_MS); }
     if (!prev) return;
-    Object.assign(spec, prev); focusPrev.delete(spec.id);
-    sigs.delete(spec.id); save(); paintAll();
+    focusPrev.delete(id);
+    if (!ref) return;
+    ref.root.classList.remove('focused');
+    animate(ref.root, () => {
+      ref.root.style.left = prev.x + 'px'; ref.root.style.top = prev.y + 'px';
+      ref.root.style.width = prev.w + 'px';
+      ref.root.style.height = prev.min ? '' : prev.h + 'px';
+    });
   }
 
   // ── 명령 → 창이 미리 나타난다('짠'): 새 일 = 도크 위 유령 창 · 기존 세션 = 그 카드 조준 · 리브 = 리브 단추 조준 ──

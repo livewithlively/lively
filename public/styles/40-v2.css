@@ -1012,7 +1012,15 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .stu-tl-btn { display: inline-flex; align-items: center; gap: 5px; }
 .stu-tl-btn.on { background: #EEF4FF; color: var(--blue); border-color: var(--line-net-2); }
 .stu-notif { position: absolute; top: 12px; right: 14px; bottom: 92px; z-index: 46; width: min(360px, 42%); display: flex; flex-direction: column; overflow: hidden;
-  background: var(--bg, #fff); border: 1px solid var(--line-net-2); border-radius: 14px; box-shadow: 0 24px 64px rgba(21,35,59,.20), 0 4px 14px rgba(21,35,59,.10); animation: stu-drop .16s ease; }
+  background: rgba(255,255,255,.86); backdrop-filter: saturate(180%) blur(18px); -webkit-backdrop-filter: saturate(180%) blur(18px);
+  border: 1px solid var(--line-net-2); border-radius: 14px; box-shadow: 0 24px 64px rgba(21,35,59,.20), 0 4px 14px rgba(21,35,59,.10);
+  /* 오른쪽 밖에서 대기하다 밀려 들어온다 — 맥 알림 센터와 같은 몸짓(열림은 조금 빠르게, 닫힘은 조금 느리게). */
+  transform: translateX(calc(100% + 22px)); opacity: 0; pointer-events: none;
+  transition: transform .3s cubic-bezier(.22,.61,.36,1), opacity .22s ease; }
+.stu-notif.on { transform: none; opacity: 1; pointer-events: auto; }
+@media (prefers-reduced-motion: reduce) { .stu-notif { transition: none; } }
+/* 문패 오른쪽 [타임라인] — 열려 있으면 눌린 상태가 보여야 다시 누를 생각이 든다. */
+.stu-tl-btn.on { background: var(--bg-punch); border-color: var(--blue); color: var(--blue); }
 .stu-notif[hidden] { display: none; }
 .stu-notif-acts { margin-left: 6px; opacity: 1; }
 .stu-notif .tl-wrap > .v2-aside-h .v2-k { margin-left: auto; }
@@ -1175,4 +1183,14 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 @media (max-width: 1100px) { .stu-tip { left: 16px; } .stu-tip::after { left: 24px; } }
 
 /* 포커스 카드 — 시킨 세션이 가운데로 커진다 */
-.stu-w.focused { box-shadow: 0 0 0 1px rgba(45,107,240,.35), 0 30px 70px rgba(21,35,59,.22); }
+/* 세션 포커스 = 모달(원준 2026-08-19). 커진 카드는 '이사'가 아니라 '잠깐 앞으로 나온 것'이라
+   뒤를 딤으로 잠그고, 닫으면 원래 자리로 되돌아간다. 그 되돌아가는 길이 보여야 사람이 안심한다. */
+.stu-scrim { position: absolute; inset: 0; z-index: 9000; background: rgba(21,35,59,.30);
+  backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
+  opacity: 0; transition: opacity .24s ease; }
+.stu-scrim.on { opacity: 1; }
+.stu-w.focused { z-index: 9001 !important; box-shadow: 0 0 0 1px rgba(45,107,240,.35), 0 30px 70px rgba(21,35,59,.28); }
+/* 전환은 **움직이는 동안만** 켠다 — 상시로 켜면 끌어 옮길 때 손을 못 따라온다. */
+.stu-w.anim { transition: left .28s cubic-bezier(.22,.61,.36,1), top .28s cubic-bezier(.22,.61,.36,1),
+  width .28s cubic-bezier(.22,.61,.36,1), height .28s cubic-bezier(.22,.61,.36,1), box-shadow .28s ease; }
+@media (prefers-reduced-motion: reduce) { .stu-w.anim { transition: none; } .stu-scrim { transition: none; } }
