@@ -223,3 +223,21 @@ export function memberWriteFrom(
     });
   });
 }
+
+// 문자열 → 멤버 소유 파일(작은 파일 전용, #1780 앱 세션 물질화). `cat > "$0" && chmod "$1" "$0"` 로 멤버 uid 에서
+//  파일을 만들고 모드를 굳힌다 — 경로·모드는 **argv**($0·$1)로만 넘겨 스크립트 본문에 문자열을 안 섞는다(인젝션 없음,
+//  memberWriteFrom 의 `cat > "$0"` 규약과 동일). data 는 우리 코드가 만든 내용(앱 토큰·조립된 자산)이라 stdin 으로 준다.
+//  ⚠ 스트리밍 업로드(memberWriteFrom)와 달리 상한/스톨 가드가 없다 — 서버가 만든 유한한 작은 문자열에만 쓴다.
+export function memberWriteFile(osUser: string, absPath: string, data: string, mode = 0o600): Promise<void> {
+  const octal = (mode & 0o777).toString(8).padStart(3, "0");
+  return new Promise((resolve, reject) => {
+    const c = memberSpawn(osUser, ["sh", "-c", 'cat > "$0" && chmod "$1" "$0"', absPath, octal], ["pipe", "ignore", "pipe"]);
+    const err = collectErr(c);
+    c.on("error", reject);
+    const stdin = c.stdin;
+    if (!stdin) return reject(new Error("member write: no stdin"));
+    stdin.on("error", reject);
+    stdin.end(data);
+    c.on("close", (code) => (code === 0 ? resolve() : reject(new Error(err.get() || `member write exit ${code}`))));
+  });
+}

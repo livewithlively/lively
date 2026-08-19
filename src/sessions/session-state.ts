@@ -25,6 +25,7 @@ export interface SessionState {
   invites: string[];          // @box_invites
   project_id: number | null;  // @box_project
   project_src: string | null; // @box_project_src(v6|org)
+  app_id?: string | null;     // #1780 D4 — 이 세션이 어느 앱으로 떴나(@box_app 미러). null=일반 세션. 입력에선 선택(미전송=null).
   read_only: boolean;         // 실행 모드(#1007+)
   incognito: boolean;
   // #1291 v2 — 기록 범위(write cap)·read 축소. tmux 가 권위, 여기는 미러(재부팅 후 복원이 캡을 잃지 않게).
@@ -56,6 +57,8 @@ export function rowToState(r: Record<string, any>): SessionState {
     invites: Array.isArray(r.invites) ? r.invites.filter((x: unknown): x is string => typeof x === "string") : [],
     project_id: r.project_id != null ? Number(r.project_id) : null,
     project_src: r.project_src ?? null,
+    app_id: r.app_id ?? null,   // #1780 D4
+
     read_only: !!r.read_only, incognito: !!r.incognito,
     write_vis: (r.write_vis as string | null) ?? null, restrict_read: !!r.restrict_read,
     created: r.created != null ? Number(r.created) : null,
@@ -179,8 +182,8 @@ export async function listAllSessionStates(): Promise<SessionState[]> {
 //  ⚠ best-effort 로 호출된다(createSession 이 실패를 삼킴) — DB 가 죽어도 세션 생성 자체는 진행돼야 한다.
 export async function upsertSessionState(s: SessionStateInput): Promise<void> {
   await itemsPool.query(
-    `INSERT INTO org_session_state(id, owner, label, harness, dir, root_key, subpath, flags, auto_approve, invites, project_id, project_src, read_only, incognito, write_vis, restrict_read, created, last_busy, last_seen, updated_at)
-     VALUES($1,$2,$3,COALESCE($4,'claude'),$5,$6,$7,COALESCE($8,'{}')::jsonb,COALESCE($9,false),COALESCE($10,'[]')::jsonb,$11,$12,COALESCE($13,false),COALESCE($14,false),$15,COALESCE($16,false),$17,$18,now(),now())
+    `INSERT INTO org_session_state(id, owner, label, harness, dir, root_key, subpath, flags, auto_approve, invites, project_id, project_src, read_only, incognito, write_vis, restrict_read, created, last_busy, app_id, last_seen, updated_at)
+     VALUES($1,$2,$3,COALESCE($4,'claude'),$5,$6,$7,COALESCE($8,'{}')::jsonb,COALESCE($9,false),COALESCE($10,'[]')::jsonb,$11,$12,COALESCE($13,false),COALESCE($14,false),$15,COALESCE($16,false),$17,$18,$19,now(),now())
      ON CONFLICT (tenant_id, id) DO UPDATE SET
        owner=EXCLUDED.owner, label=EXCLUDED.label, harness=EXCLUDED.harness, dir=EXCLUDED.dir,
        root_key=EXCLUDED.root_key, subpath=EXCLUDED.subpath, flags=EXCLUDED.flags, auto_approve=EXCLUDED.auto_approve,
@@ -191,11 +194,11 @@ export async function upsertSessionState(s: SessionStateInput): Promise<void> {
        write_vis=COALESCE(EXCLUDED.write_vis, org_session_state.write_vis),
        restrict_read=EXCLUDED.restrict_read,
        created=EXCLUDED.created,
-       last_busy=EXCLUDED.last_busy, last_seen=now(), updated_at=now()`,
+       last_busy=EXCLUDED.last_busy, app_id=EXCLUDED.app_id, last_seen=now(), updated_at=now()`,
     [s.id, s.owner, s.label, s.harness, s.dir, s.root_key, s.subpath, JSON.stringify(s.flags || {}),
      s.auto_approve, JSON.stringify(s.invites || []), s.project_id, s.project_src, s.read_only, s.incognito,
      s.write_vis ?? null, s.restrict_read ?? false,
-     s.created, s.last_busy],
+     s.created, s.last_busy, s.app_id ?? null],
   );
 }
 

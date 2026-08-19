@@ -625,6 +625,10 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       invites: st.invites, projectId: st.project_id || undefined,
       projectSrc: st.project_src === "org" ? "org" : "v6",
       readOnly: st.read_only, incognito: st.incognito,
+      // #1780 D3-4 — 앱 세션 복원은 **D4 전체를 재실행**한다: appId 를 넘기면 createSession 이 grant 재검사·앱 토큰
+      //  재발급·앱 홈/자산 재물질화를 다시 돈다(reaper 가 보존한 옛 토큰은 죽은 토큰이라 새 id 로 새로 굽는다).
+      //  app_id 는 일반 세션에선 null 이라 무회귀. grant 가 회수됐으면 여기서 403 = 복원 거부(설계 의도).
+      appId: st.app_id || undefined,
       // #1059 정밀 복원 — work-flag 훅이 보고한 claude UUID 가 있고 **그 대화 기록이 실제로 있으면** 그걸로 정확히
       //  이어받는다(--resume <uuid>). 없으면(셸·코덱스·미보고·기록 없음) 인자 없는 --resume(후보 picker)로 폴백한다.
       //  ⚠ 기록 확인이 필수다: 없는 UUID 로 resume 하면 claude 가 즉시 종료되고 box-spawn 이 exec 라 tmux 세션도
