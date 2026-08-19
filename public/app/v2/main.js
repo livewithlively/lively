@@ -8,13 +8,13 @@
 //  탭에 있으면 그 탭으로 간다(한 세션 = 한 탭). Alt+클릭 = 새 탭에서 열기.
 //  데스크톱(일렉트론)에서 그대로 쓰기 위한 규약: 정적 자산 + 해시 라우트 + api()(상대 경로·bearer/쿠키)만 쓴다.
 import { $view, anchoredPopover, api, el, toast } from '../core.js';
-import { fillLivCards, renderLiv } from '../liv.js';
+import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame } from './apps.js';
 import { drawSide as drawSideTree, projectOrder } from './side.js';
 import { dotCls, mergeSessions, projName, renderHome, renderSession } from './views.js';
 import { mountStudio } from './studio.js'; // 실험장(#1719 원준): 프로젝트 화면 = 작업대(캔버스). 종전 방(project-view)은 잠시 내려둔다.
 import { createTimeline } from '../timeline.js';
-import { loadSessionActivities, loadWorkspaceTimeline } from '../timeline-sources.js';
+import { loadSessionActivities } from '../timeline-sources.js';
 import { makeSplitter } from './split.js';
 import { createTabs, routeKey } from './tabs.js';
 import { mountMobileChrome } from './mobile.js';
@@ -156,10 +156,12 @@ function parseRoute(route) {
 function titleFor(route) {
     const { segs, raw } = parseRoute(route);
     const p = segs[0] || '';
+    // 실험장: **어느 화면에도 상시 타임라인 열은 없다**(원준 2026-08-19 "메인 홈에도 리브에도 떠 있는데 둘 다 없애줘").
+    //  돌아보기는 불러오는 것 — 프로젝트 화면은 문패 [타임라인](알림 센터)이 그 자리를 맡는다.
     if (!p || p === 'dashboard')
-        return { title: '홈', noAside: false };
+        return { title: '홈', noAside: true };
     if (p === 'liv')
-        return { title: '리브', noAside: false };
+        return { title: '리브', noAside: true };
     // 실험장 v4(2026-08-19 바탕화면): 프로젝트 화면은 우패널 없이 — 판이 폭 전체를 쓴다. 타임라인은 문패 [타임라인](알림 센터),
     //  위젯·앱은 도크 ⊞(런치패드)로 옮겨 갔다(web/v2/studio.ts 머리 주석).
     if (p === 'p') {
@@ -178,7 +180,7 @@ function titleFor(route) {
         const a = appByKey(CLASSIC_PAGES[p]);
         return { title: a ? a.title : raw, noAside: true };
     }
-    return { title: '홈', noAside: false };
+    return { title: '홈', noAside: true };
 }
 function applyTabChrome(tab) {
     root.classList.toggle('no-aside', tab.noAside);
@@ -244,14 +246,14 @@ async function renderRoute(tab) {
     try {
         if (page === '' || page === 'dashboard') {
             renderHome(tab.center, data);
-            drawAsideHome(tab);
+            tab.aside.replaceChildren();
         }
         else if (page === 'liv') {
             tab.center.replaceChildren();
             const host = el('div', { class: 'v2-livpage' });
             tab.center.append(host);
-            const rail = drawAsideLiv(tab);
-            await renderLiv(host, { rail, embedded: true });
+            tab.aside.replaceChildren();
+            await renderLiv(host, { rail: null, embedded: true }); // rail 없음 = 카드·편지는 본문에(종전 drawAsideLiv 도 null 을 돌려줬다)
         }
         else if (page === 'p' && segs[1]) {
             const id = Number(segs[1]);
@@ -300,7 +302,7 @@ async function renderRoute(tab) {
         }
         else {
             renderHome(tab.center, data);
-            drawAsideHome(tab);
+            tab.aside.replaceChildren();
         }
     }
     catch (e) {
@@ -388,22 +390,7 @@ function drawSide() {
 // 작업대(문패 [프로젝트])가 쏘는 신호 — 모듈 순환 없이 DOM 이벤트로 잇는다.
 window.addEventListener('stu:toggle-projects', () => { railPanelOpen = !railPanelOpen; drawSide(); });
 // ── 우측(탭마다 한 벌 — tab.aside 에 그린다) ──
-function drawAsideHome(tab) {
-    const askHost = el('div', { class: 'liv-askdock v2-askdock' });
-    const cards = el('div', { class: 'liv-letter v2-liv-cards', hidden: true }); // 리브의 편지(#1719 재구성) — 홈 우패널에도 같은 그림
-    tab.aside.replaceChildren(askHost, cards);
-    const tl = createTimeline(tab.aside, { scope: '워크스페이스', showActors: true, empty: '아직 남은 작업 기록이 없어요 — 세션이 일하고 기록하면 여기에 쌓입니다.' });
-    void fillLivCards(cards, askHost);
-    void loadWorkspaceTimeline(60).then((items) => tl.addAll(items));
-}
-function drawAsideLiv(tab) {
-    tab.aside.replaceChildren();
-    const tl = createTimeline(tab.aside, { scope: '워크스페이스', showActors: true, empty: '아직 남은 작업 기록이 없어요.' });
-    void loadWorkspaceTimeline(60).then((items) => tl.addAll(items));
-    return null; // rail 을 주지 않는다 = 카드는 본문에
-}
-// 세션 우패널 = 짧은 사실 줄 + **타임라인**. 같은 세션이면 위젯을 다시 만들지 않는다(폴링이 상태만 갱신) —
-//  탭마다 한 벌이므로 캐시도 탭의 aside 에 붙어 산다(전환해도 쌓인 것이 그대로).
+//  실험장에선 홈·리브·프로젝트가 우패널을 쓰지 않는다(위 titleFor 주석) — 남은 소비자는 세션 화면뿐이다.
 function drawAsideSession(tab, s) {
     const host = tab.aside;
     if (!s) {

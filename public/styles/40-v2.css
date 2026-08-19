@@ -1009,6 +1009,30 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .stu-notif .tl-wrap > .v2-aside-h .v2-k { margin-left: auto; }
 .stu-notif-b { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
 @keyframes stu-drop { from { opacity: 0; transform: translateY(-6px); } }
+/* 자료함(공유 폴더 위젯) — 파일시스템이 아니라 '내가 올린 자료' 목록. 행 = 미리보기 + 이름 + 종류·크기·폴더 */
+.stu-asset-head { margin-top: 0 !important; padding-top: 0 !important; }
+.stu-assets { gap: 1px; }
+.stu-asset { display: flex; align-items: center; border-radius: 9px; }
+.stu-asset:hover { background: var(--bg-sel, #F4F8FF); }
+.stu-asset-b { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 7px 8px; border: 0; border-radius: 9px; background: none; font: inherit; text-align: left; cursor: pointer; }
+.stu-asset-ic { flex: none; width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center; overflow: hidden; background: #EDF0F5; color: var(--ink-sub); }
+.stu-asset-ic .stu-i { width: 17px; height: 17px; }
+.stu-asset-ic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.stu-asset-ic.page { background: #EFEBFF; color: #7C5CFC; }
+.stu-asset-ic.pdf { background: #FDF0EE; color: #C4564A; }
+.stu-asset-ic.img { background: #E7F0FE; }
+.stu-asset-t { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.stu-asset-t b { font-size: 12.5px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stu-asset-m { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); min-width: 0; }
+.stu-asset-m .sep { color: var(--muted-3); }
+.stu-asset-dir { font-family: var(--mono, ui-monospace, monospace); font-size: 10px; color: var(--muted-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stu-asset-x { flex: none; margin-right: 6px; opacity: 0; }
+.stu-asset:hover .stu-asset-x { opacity: 1; }
+.stu-asset-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; padding: 10px 16px; color: var(--muted); }
+.stu-asset-empty b { font-size: 13px; color: var(--ink-sub); }
+.stu-asset-empty p { margin: 0; max-width: 260px; line-height: 1.55; }
+.stu-i.big { width: 26px; height: 26px; color: var(--muted-3); }
+
 /* 바탕화면(v5) — 뜻 있는 것만: [공유 폴더] [지식] 스택 + 최근 산출물. 이름 밑 캡션이 '이게 뭔지' 를 답한다.
    우측 위에서 아래로, 넘치면 왼쪽 열로(맥). 알림 센터가 열리면 그 아래로 깔린다. */
 .stu-desk { position: absolute; top: 14px; right: 14px; height: calc(100% - 250px); z-index: 20; display: flex; flex-direction: column; flex-wrap: wrap-reverse; align-content: flex-start; gap: 2px; pointer-events: none; }

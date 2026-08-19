@@ -73,7 +73,7 @@ const WDEFS: WDef[] = [
   { type: 'automation', label: '자동화', hint: '반복을 붙박이로 — 켤 수 있는 자동화', w: 340, h: 250, ic: 'bolt', ac: '#7C5CFC' },
   { type: 'tasks', label: '태스크', hint: 'S=진행 링 · M=할 일 목록 · L=마감까지', w: 320, h: 300, ic: 'task', ac: '#D9772B' },
   { type: 'knowledge', label: '지식', hint: 'M=문서 목록 · L=본문 미리보기 카드', w: 320, h: 280, ic: 'book', ac: '#1BAEB0' },
-  { type: 'folder', label: '공유 폴더', hint: '파일 그리드 — 이미지·PDF 는 판에 프리뷰로', w: 380, h: 300, ic: 'folder', ac: '#5A6B85' },
+  { type: 'folder', label: '공유 폴더', hint: '내가 올린 자료 · 세션이 남긴 결과물 — 끌어다 놓으면 올라가요', w: 380, h: 320, ic: 'folder', ac: '#5A6B85' },
   { type: 'desc', label: '명세', hint: '프로젝트 본문 — 꺼내 읽는 문서', w: 440, h: 360, ic: 'doc', ac: '#8A99B5' },
   { type: 'timeline', label: '타임라인', hint: '남은 결과들', w: 340, h: 420, ic: 'clock', ac: '#15233B' },
   { type: 'sticky', label: '포스트잇', hint: '판에 붙이는 메모', w: 230, h: 170, ic: 'note', ac: '#D9A32B' },
@@ -504,28 +504,54 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
         icon('doc', 'stu-i sm'), el('span', { class: 'n', text: k.name }), el('span', { class: 'stu-kn-rel' + (k.rel === '산출' ? ' prod' : ''), text: k.rel })))));
   }
 
-  // ══ 폴더 — Files 그리드(최근 먼저). 이미지·PDF 는 판에 프리뷰로 ═══════════════════
+  // ══ 공유 폴더 = **내가 올린 자료함**(원준 2026-08-19 "claude.md 처럼 자세한 건 보여줄 필요 없고,
+  //   내가 올린 파일을 담는 공유폴더의 느낌이 더 강했으면") ══════════════════════════
+  //  판이 보는 것은 파일시스템이 아니라 **자료**다: 워크트리(.git 폴더)·기계 파일(CLAUDE.md·AGENTS.md)·
+  //  캐시(__pycache__·node_modules·dist)는 애초에 목록에 없다. 원시 파일 브라우저는 발밑에 링크로만 남긴다.
   async function fillFolder(spec: WSpec, body: HTMLElement): Promise<void> {
-    const sz = sizeOf(spec);
+    const sz2 = sizeOf(spec);
     body.replaceChildren(el('p', { class: 'stu-fine', text: '불러오는 중…' }));
-    let data: any = null;
-    try { data = await api('/api/ui/v6/projects/' + id + '/files?path='); } catch (e: any) { body.replaceChildren(el('p', { class: 'stu-fine', text: '폴더를 못 읽었어요 — ' + (e?.message || e) })); return; }
+    const files = await assetFiles();
     if (dead || !body.isConnected) return;
-    const items: any[] = ((data && data.items) || []).slice().sort((a: any, b: any) => Number(b.mtime || 0) - Number(a.mtime || 0));
-    if (!items.length) { body.replaceChildren(el('p', { class: 'stu-fine', text: '아직 파일이 없어요 — 세션 작업물이 여기 쌓입니다.' })); return; }
-    if (sz === 's') {
-      const f = items.find((x: any) => x.type !== 'dir') || items[0];
-      body.replaceChildren(el('div', { class: 'stu-kn-s' }, el('b', { text: String(items.length) }), el('span', { text: '항목' }), el('span', { class: 'stu-fine ell', text: '최근 — ' + f.name })));
+    const upIn = el('input', { type: 'file', multiple: 'true', hidden: true }) as HTMLInputElement;
+    upIn.addEventListener('change', () => {
+      const items: UpItem[] = Array.from(upIn.files || []).map((f) => ({ file: f, rel: f.name }));
+      upIn.value = '';
+      void uploadDropped(items, []).then(() => { sigs.delete(spec.id); fillBody(spec, body, true); });
+    });
+    const head = el('div', { class: 'stu-w-foot stu-asset-head' },
+      el('span', { class: 'stu-fine', text: files.length ? files.length + '개 · 최근 먼저' : '' }),
+      el('button', { class: 'btn-text', type: 'button', text: '＋ 올리기', title: '컴퓨터에서 파일 고르기 — 판에 끌어다 놓아도 올라가요', onclick: () => upIn.click() }));
+    if (!files.length) {
+      body.replaceChildren(upIn, el('div', { class: 'stu-asset-empty' },
+        icon('drop', 'stu-i big'),
+        el('b', { text: '아직 자료가 없어요' }),
+        el('p', { class: 'stu-fine', text: '컴퓨터에서 파일을 판에 끌어다 놓거나 [＋ 올리기]를 누르세요. 세션이 만든 결과물도 여기 쌓입니다.' }),
+        el('button', { class: 'btn-text', type: 'button', text: '＋ 올리기', onclick: () => upIn.click() })));
       return;
     }
-    const tile = (it: any): HTMLElement => el('button', { class: 'stu-file', type: 'button', title: it.name, onclick: () => {
-      if (it.type === 'dir') { openPeek('#/f?root=shared&path=' + encodeURIComponent('project/' + id + '/' + it.name), it.name); return; }
-      if (/\.(png|jpe?g|gif|webp|svg|pdf)$/i.test(it.name)) { addWidget('preview', { x: 96, y: 96 }, { path: it.name, name: it.name }); return; }
-      void openFileViewer(id, it.name, it.name, () => { /* noop */ }, '/api/ui/v6/projects/');
-    } },
-      el('span', { class: 'stu-file-ic' + (it.type === 'dir' ? ' dir' : /\.(png|jpe?g|gif|webp|svg)$/i.test(it.name) ? ' im' : '') }, icon(it.type === 'dir' ? 'folder' : /\.(png|jpe?g|gif|webp|svg)$/i.test(it.name) ? 'img' : 'doc', 'stu-i')),
-      el('span', { class: 'n', text: it.name }), el('span', { class: 'm', text: it.type === 'dir' ? '폴더' : fmtSize(it.size || 0) }));
-    body.replaceChildren(el('div', { class: 'stu-scroll' }, el('div', { class: 'stu-filegrid' }, ...items.slice(0, sz === 'l' ? 40 : 12).map(tile))));
+    if (sz2 === 's') {
+      const f = files[0];
+      body.replaceChildren(upIn, el('div', { class: 'stu-kn-s' }, el('b', { text: String(files.length) }), el('span', { text: '자료' }), el('span', { class: 'stu-fine ell', text: '최근 — ' + base(f.path) })));
+      return;
+    }
+    const row = (f: AssetFile): HTMLElement => {
+      const k = kindOf(f.path);
+      const dir = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/')) : '';
+      const thumb = k.kind === 'img' ? el('img', { alt: '', loading: 'lazy' }) as HTMLImageElement : null;
+      if (thumb) fillImg(thumb, f.path);
+      return el('div', { class: 'stu-asset' },
+        el('button', { class: 'stu-asset-b', type: 'button', title: f.path + ' — 열기', onclick: () => openDeskItem({ kind: k.kind, path: f.path, label: base(f.path), type: k.type }) },
+          el('span', { class: 'stu-asset-ic ' + k.kind }, thumb || icon(k.kind === 'page' ? 'deck' : 'doc', 'stu-i')),
+          el('span', { class: 'stu-asset-t' },
+            el('b', { text: base(f.path) }),
+            el('span', { class: 'stu-asset-m' }, el('span', { text: k.type }), el('span', { class: 'sep', text: '·' }), el('span', { text: fmtSize(f.size || 0) }),
+              dir ? el('span', { class: 'sep', text: '·' }) : null, dir ? el('span', { class: 'stu-asset-dir', text: dir }) : null))),
+        el('button', { class: 'stu-w-btn stu-asset-x', type: 'button', text: '×', title: '휴지통으로', onclick: () => void trashItems([{ kind: k.kind, path: f.path, label: base(f.path), type: k.type }]).then(() => { sigs.delete(spec.id); fillBody(spec, body, true); }) }));
+    };
+    body.replaceChildren(upIn, head,
+      el('div', { class: 'stu-scroll stu-assets' }, ...files.slice(0, sz2 === 'l' ? 60 : 20).map(row)),
+      el('div', { class: 'stu-w-foot' }, el('button', { class: 'btn-text', type: 'button', text: '원본 폴더 열기 ↗', title: '폴더 구조 그대로 보는 파일 브라우저', onclick: () => openPeek('#/f?root=shared&path=' + encodeURIComponent('project/' + id), '공유 폴더 — 원본') })));
   }
 
   function fillDesc(body: HTMLElement): void {
@@ -941,7 +967,9 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   //  조작(맥 그대로): 클릭 = 선택 · ⌘/Ctrl+클릭 = 더하기 · 바탕 드래그 = 영역 선택 · ⌘A = 전체 · Esc = 해제 ·
   //   두 번 = 열기 · 끌어다 판에 놓기 = 그 자리에 창 · Delete 또는 휴지통에 떨구기 = 버리기.
   const TRASH_DIR = '휴지통';
-  const MACHINE_FILES = new Set(['CLAUDE.md', 'AGENTS.md', '.DS_Store']);
+  const MACHINE_FILES = new Set(['CLAUDE.md', 'AGENTS.md', '.DS_Store', 'package-lock.json', 'yarn.lock']);
+  const NOISE_RE = /\/(__pycache__|node_modules|dist|build|\.next|coverage|venv)\//;   // 사람이 올린 자료가 아닌 것
+  type AssetFile = { path: string; size: number; mtime: number };
   const desk = el('div', { class: 'stu-desk', role: 'listbox', 'aria-label': '바탕화면', 'aria-multiselectable': 'true' });
   const deskBar = el('div', { class: 'stu-deskbar', hidden: true });
   const marq = el('div', { class: 'stu-deskmarq', hidden: true });
@@ -976,7 +1004,7 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   }
 
   function openDeskItem(it: DeskItem, at?: { x: number; y: number }): void {
-    if (it.kind === 'stack-folder') { openPeek('#/f?root=shared&path=' + encodeURIComponent('project/' + id), '공유 폴더'); return; }
+    if (it.kind === 'stack-folder') { addOrFocus('folder'); return; }   // 원시 파일 브라우저가 아니라 자료함 위젯(그 안에 '원본 폴더 열기' 가 있다)
     if (it.kind === 'stack-kn') { addOrFocus('knowledge'); return; }
     if (it.kind === 'img' || it.kind === 'pdf' || it.kind === 'page') {
       const w = addWidget('preview', at || { x: 96 + (widgets.length % 5) * 26, y: 96 + (widgets.length % 4) * 22 }, { path: it.path, name: base(it.path) });
@@ -997,12 +1025,13 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
     const n = selected().length;
     deskBar.hidden = n === 0;
     if (!n) return;
-    deskBar.replaceChildren(
+    deskBar.replaceChildren(...[
       el('b', { text: n + '개 선택' }),
       el('button', { class: 'btn-text', type: 'button', text: '열기', onclick: () => { selected().forEach((x, i) => openDeskItem(x.it, { x: 80 + i * 26, y: 72 + i * 22 })); clearSel(); } }),
       sel.length ? el('button', { class: 'btn-text', type: 'button', text: '복제', onclick: () => void duplicateItems(sel.map((x) => x.it)) }) : null,
       sel.length ? el('button', { class: 'btn-text danger', type: 'button', text: '휴지통으로', onclick: () => void trashItems(sel.map((x) => x.it)) }) : null,
-      el('button', { class: 'stu-w-btn', type: 'button', text: '×', title: '선택 해제 (Esc)', onclick: clearSel }));
+      el('button', { class: 'stu-w-btn', type: 'button', text: '×', title: '선택 해제 (Esc)', onclick: clearSel }),
+    ].filter(Boolean) as HTMLElement[]);   // ⚠ replaceChildren 은 el 과 달리 null 을 'null' 텍스트로 넣는다
   }
   function deskIcon(it: DeskItem): HTMLElement {
     const stack = it.kind === 'stack-folder' || it.kind === 'stack-kn';
@@ -1150,33 +1179,36 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
     panel.remove(); deskSig = ''; await paintDesk();
   }
 
+  /** 자료 = 사람이 올렸거나 세션이 남긴 파일. 워크트리·기계 파일·캐시는 애초에 자료가 아니다. */
+  async function assetFiles(): Promise<AssetFile[]> {
+    // 매니페스트 = 재귀 파일 목록에서 **워크트리(.git 보유 폴더)를 통째로 건너뛴 것**.
+    const m: any = await api('/api/ui/v6/projects/' + id + '/shared/manifest').catch(() => null);
+    const mf: any[] = (m && m.files) || [];
+    trashN = mf.filter((f: any) => String(f.path).startsWith(TRASH_DIR + '/')).length;
+    return mf
+      .filter((f: any) => {
+        const p2 = String(f.path);
+        if (p2.startsWith(TRASH_DIR + '/')) return false;
+        if (MACHINE_FILES.has(base(p2))) return false;
+        return !NOISE_RE.test('/' + p2);
+      })
+      .map((f: any) => ({ path: String(f.path), size: Number(f.size || 0), mtime: Number(f.mtime || 0) }))
+      .sort((a2, b2) => b2.mtime - a2.mtime);
+  }
+
   async function paintDesk(): Promise<void> {
-    // 매니페스트 = 재귀 파일 목록에서 **워크트리(.git 보유 폴더)를 통째로 건너뛴 것** — 판에 올릴 만한 것만 남는다.
-    let mf: any[] = [];
-    let rootN = 0;
-    try {
-      const [m, r]: any[] = await Promise.all([
-        api('/api/ui/v6/projects/' + id + '/shared/manifest').catch(() => null),
-        api('/api/ui/v6/projects/' + id + '/files?path=').catch(() => null),
-      ]);
-      mf = (m && m.files) || [];
-      rootN = ((r && r.items) || []).length;
-    } catch (_) { /* noop */ }
+    const assets = await assetFiles().catch(() => [] as AssetFile[]);
     if (dead) return;
-    const trash = mf.filter((f: any) => String(f.path).startsWith(TRASH_DIR + '/'));
-    trashN = trash.length;
-    const docs = mf
-      .filter((f: any) => !String(f.path).startsWith(TRASH_DIR + '/') && !MACHINE_FILES.has(base(String(f.path))))
-      .sort((a: any, b: any) => Number(b.mtime || 0) - Number(a.mtime || 0))
-      .slice(0, 6);   // 많을수록 바탕이 어지럽다 — 최근 것 여섯만(나머지는 [공유 폴더] 스택 안에)
+    const rootN = assets.length;   // 스택 배지 = **자료 수**(파일시스템 항목 수가 아니라)
+    const docs = assets.slice(0, 6);   // 많을수록 바탕이 어지럽다 — 최근 것 여섯만(나머지는 [공유 폴더] 안에)
     const kn = (pj().knowledge || {}) as any;
     const knN = ((kn.required || []) as any[]).length + ((kn.produced || []) as any[]).length;
     const items: DeskItem[] = [
-      { kind: 'stack-folder', path: '', label: '공유 폴더', type: '폴더', n: rootN, sub: '이 프로젝트의 파일 전부' },
+      { kind: 'stack-folder', path: '', label: '공유 폴더', type: '자료', n: rootN, sub: '올린 파일·세션이 남긴 결과물' },
       ...(knN ? [{ kind: 'stack-kn' as const, path: '', label: '지식', type: '지식', n: knN, sub: '필요·산출 지식' }] : []),
-      ...docs.map((f: any) => {
-        const k = kindOf(String(f.path));
-        return { kind: k.kind, path: String(f.path), label: base(String(f.path)), type: k.type, sub: fmtSize(f.size || 0) };
+      ...docs.map((f) => {
+        const k = kindOf(f.path);
+        return { kind: k.kind, path: f.path, label: base(f.path), type: k.type, sub: fmtSize(f.size) };
       }),
     ];
     const sig = JSON.stringify(items.map((i) => i.kind + ':' + i.path + ':' + (i.n ?? '')) ) + ':' + trashN;
@@ -1265,7 +1297,8 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
       w.z = ++zTop; popIn(w);
     });
     lastSpawnTs = Date.now(); save();   // 자동 등장(autoSpawn)이 같은 파일을 한 번 더 올리지 않게
-    void paintDesk();
+    for (const spec of widgets) if (spec.type === 'folder') { const ref = els.get(spec.id); if (ref) { sigs.delete(spec.id); fillBody(spec, ref.body, true); } }
+    deskSig = ''; void paintDesk();
   }
 
   // ── 라이브 틱 — 세션·코치는 서명 비교로 제자리 갱신(입력·스크롤 보존) ──
