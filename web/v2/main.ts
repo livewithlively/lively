@@ -138,7 +138,7 @@ function parseRoute(route: string): { segs: string[]; params: URLSearchParams; r
 function titleFor(route: string): { title: string; noAside: boolean } {
   const { segs, raw } = parseRoute(route);
   const p = segs[0] || '';
-  if (!p || p === 'dashboard') return { title: '홈', noAside: true };   // 홈: 우패널 없이(상민님 2026-08-19) — main #1777 과 같은 결론
+  if (!p || p === 'dashboard') return { title: '홈', noAside: false };
   if (p === 'liv') return { title: '리브', noAside: false };
   // 실험장 v4(2026-08-19 바탕화면): 프로젝트 화면은 우패널 없이 — 판이 폭 전체를 쓴다. 타임라인은 문패 [타임라인](알림 센터),
   //  위젯·앱은 도크 ⊞(런치패드)로 옮겨 갔다(web/v2/studio.ts 머리 주석).
@@ -149,7 +149,7 @@ function titleFor(route: string): { title: string; noAside: boolean } {
   }
   if (p === 'app') { const a = appByKey(segs[1]); return { title: a ? a.title : segs[1], noAside: true }; }
   if (CLASSIC_PAGES[p]) { const a = appByKey(CLASSIC_PAGES[p]); return { title: a ? a.title : raw, noAside: true }; }
-  return { title: '홈', noAside: true };
+  return { title: '홈', noAside: false };
 }
 function applyTabChrome(tab: ShellTab): void {
   root!.classList.toggle('no-aside', tab.noAside);
