@@ -962,3 +962,77 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .stu-panel-fab { position: absolute; left: 14px; top: 14px; z-index: 50; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 12px 0 5px; border: 1px solid var(--line-net-2); border-radius: 17px; background: rgba(255,255,255,.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); box-shadow: 0 2px 6px rgba(21,35,59,.08), 0 10px 24px rgba(21,35,59,.12); font: inherit; font-size: 12.5px; color: var(--ink-sub); cursor: pointer; }
 .stu-panel-fab:hover { color: var(--ink); border-color: var(--blue); }
 .stu-panel-fab .lg { width: 24px; height: 24px; border-radius: 8px; background: var(--ink); color: #fff; font-weight: 800; font-size: 12px; display: flex; align-items: center; justify-content: center; }
+
+/* ══ 실험장 v4 = 바탕화면(2026-08-19) — 스테이지 층·도크·런치패드·알림 센터·바로가기·유령 창·OS 드롭 ══
+   판(.stu-board)은 스크롤하고, 그 위에 스크롤하지 않는 것들이 .stu-stage 에 절대배치로 얹힌다(맥: 아이콘·도크·알림 센터는 안 스크롤). */
+.stu-stage { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.stu-stage > .stu-board { flex: 1; min-height: 0; }
+.stu-stage > .stu-composer { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); }   /* sticky(판 안) → absolute(스테이지) */
+.stu-stage > .stu-livpanel { z-index: 40; }
+/* 도크 — 컴포저 양옆에 단추가 붙는다: [리브] [입력] [+새 세션] [⊞] */
+.stu-dock-btn { position: relative; flex: none; width: 44px; height: 44px; border: 1px solid var(--line-net-2); border-radius: 22px; background: rgba(255,255,255,.92); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  color: var(--ink-sub); display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 6px 18px rgba(21,35,59,.10); }
+.stu-dock-btn:hover { color: var(--ink); border-color: var(--blue); }
+.stu-dock-btn.on { color: var(--blue); border-color: var(--blue); background: #EEF4FF; }
+.stu-dock-btn .stu-i { width: 19px; height: 19px; }
+/* 런치패드 — 도크 위로 떠오르는 위젯·앱 그리드 */
+.stu-launch { position: absolute; left: 50%; bottom: 84px; transform: translateX(-50%); z-index: 45; width: min(560px, 90%); padding: 14px 16px 16px;
+  background: rgba(255,255,255,.94); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); border: 1px solid var(--line-net-2); border-radius: 18px;
+  box-shadow: 0 24px 64px rgba(21,35,59,.20), 0 4px 14px rgba(21,35,59,.10); animation: stu-rise .16s ease; }
+.stu-launch[hidden] { display: none; }
+.stu-launch-h { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
+.stu-launch-h b { font-size: 13px; }
+.stu-launch-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px 6px; }
+@keyframes stu-rise { from { opacity: 0; transform: translate(-50%, 8px); } }
+/* 알림 센터 — 문패 [타임라인] 로 우측 위에 카드로. 판이 아니라 스테이지에 얹혀 스크롤과 무관 */
+.stu-tl-btn { display: inline-flex; align-items: center; gap: 5px; }
+.stu-tl-btn.on { background: #EEF4FF; color: var(--blue); border-color: var(--line-net-2); }
+.stu-notif { position: absolute; top: 12px; right: 14px; bottom: 92px; z-index: 46; width: min(360px, 42%); display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg, #fff); border: 1px solid var(--line-net-2); border-radius: 14px; box-shadow: 0 24px 64px rgba(21,35,59,.20), 0 4px 14px rgba(21,35,59,.10); animation: stu-drop .16s ease; }
+.stu-notif[hidden] { display: none; }
+.stu-notif-acts { margin-left: 6px; opacity: 1; }
+.stu-notif .tl-wrap > .v2-aside-h .v2-k { margin-left: auto; }
+.stu-notif-b { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+@keyframes stu-drop { from { opacity: 0; transform: translateY(-6px); } }
+/* 바탕화면 바로가기 — 우측 위에서 아래로, 넘치면 왼쪽 열로(맥). 알림 센터가 열리면 그 아래 깔린다 */
+.stu-desk { position: absolute; top: 14px; right: 14px; height: calc(100% - 118px); z-index: 20; display: flex; flex-direction: column; flex-wrap: wrap-reverse; align-content: flex-start; gap: 4px 2px; pointer-events: none; }
+.stu-desk.empty { display: none; }
+.stu-ico { pointer-events: auto; width: 84px; padding: 6px 4px 5px; border: 0; border-radius: 10px; background: none; font: inherit; display: flex; flex-direction: column; align-items: center; gap: 5px; cursor: default; }
+.stu-ico:hover .stu-ico-g { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(21,35,59,.14); }
+.stu-ico.sel { background: rgba(45,107,240,.10); }
+.stu-ico.sel .stu-ico-n { background: var(--blue); color: #fff; }
+.stu-ico:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.stu-ico-g { width: 50px; height: 50px; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: #fff; box-shadow: 0 2px 6px rgba(21,35,59,.14); transition: transform .12s ease, box-shadow .12s ease; overflow: hidden; }
+.stu-ico-g .stu-i { width: 24px; height: 24px; stroke-width: 1.8; }
+.stu-ico-g.dir { background: linear-gradient(180deg, #7FA6E9, #5B8AE0); }
+.stu-ico-g.file, .stu-ico-g.pdf { background: #fff; color: #5A6B85; border: 1px solid var(--line-net); }
+.stu-ico-g.pdf { color: #C4564A; }
+.stu-ico-g.kn { background: linear-gradient(180deg, #33C0C2, #1BAEB0); }
+.stu-ico-g.im { background: #fff; border: 1px solid var(--line-net); }
+.stu-ico-g.im img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.stu-ico-n { max-width: 84px; font-size: 11px; line-height: 1.3; color: var(--ink); text-align: center; padding: 1px 5px; border-radius: 5px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-all; }
+/* 유령 창 — 명령을 치는 동안 도크 위에 미리 나타나는 세션 창('짠'). 보내면 그 자리에서 진짜 카드가 된다 */
+.stu-ghost { position: absolute; left: 50%; bottom: 112px; transform: translateX(-50%); z-index: 34; width: 340px; display: flex; flex-direction: column;
+  background: rgba(255,255,255,.72); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1.5px dashed rgba(45,107,240,.55); border-radius: 13px;
+  box-shadow: 0 14px 40px rgba(45,107,240,.14); animation: stu-materialize .22s ease; pointer-events: none; }
+.stu-ghost[hidden] { display: none; }
+.stu-ghost .stu-w-head { cursor: default; }
+.stu-ghost-tag { flex: none; font-size: 10.5px; color: var(--blue); background: #EEF4FF; border-radius: 4px; padding: 1px 6px; }
+.stu-ghost-b { padding: 2px 12px 12px; display: flex; align-items: flex-start; gap: 6px; }
+.stu-ghost-p { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--ink-sub); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+.stu-ghost-cur { flex: none; width: 7px; height: 14px; margin-top: 2px; background: var(--blue); opacity: .8; animation: stu-blink 1s steps(2) infinite; }
+.stu-ghost.busy { border-style: solid; border-color: var(--blue); }
+.stu-ghost.busy .stu-ghost-cur { animation: stu-blink .4s steps(2) infinite; }
+@keyframes stu-materialize { from { opacity: 0; transform: translate(-50%, 10px) scale(.96); } }
+@keyframes stu-blink { to { opacity: 0; } }
+/* 조준 — 입력 중 행선지가 정해진 카드·리브 단추에 테두리 */
+.stu-w.aim { outline: 2px solid var(--blue); outline-offset: 3px; box-shadow: 0 0 0 6px rgba(45,107,240,.10), 0 14px 34px rgba(21,35,59,.12); }
+.stu-liv-toggle.aim { border-color: var(--mint); box-shadow: 0 0 0 5px rgba(22,199,154,.18); }
+/* 태어남 — 유령 자리에서 실체가 되는 한 박자 */
+.stu-w.pop { animation: stu-pop .5s cubic-bezier(.2,.9,.3,1.2); }
+@keyframes stu-pop { from { opacity: 0; transform: scale(.9); } 60% { transform: scale(1.02); } to { opacity: 1; transform: none; } }
+/* 컴퓨터에서 파일·폴더를 끌고 들어오면 판 전체가 드롭 대상으로 빛난다 */
+.stu-stage.drop-active::after { content: '여기 놓으면 이 프로젝트 공유 폴더에 올라가요 — 이미지·PDF 는 그 자리에 바로 떠요'; position: absolute; inset: 10px; z-index: 60; pointer-events: none;
+  border: 2px dashed var(--blue); border-radius: 16px; background: rgba(45,107,240,.06); display: flex; align-items: center; justify-content: center;
+  font-size: 14px; font-weight: 700; color: var(--blue); text-shadow: 0 1px 0 #fff; }
+@media (prefers-reduced-motion: reduce) { .stu-launch, .stu-notif, .stu-ghost, .stu-w.pop { animation: none; } .stu-ghost-cur { animation: none; } }

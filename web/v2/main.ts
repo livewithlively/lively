@@ -140,7 +140,9 @@ function titleFor(route: string): { title: string; noAside: boolean } {
   const p = segs[0] || '';
   if (!p || p === 'dashboard') return { title: '홈', noAside: false };
   if (p === 'liv') return { title: '리브', noAside: false };
-  if (p === 'p') { const id = Number(segs[1]); return { title: projName(data, id), noAside: false }; }
+  // 실험장 v4(2026-08-19 바탕화면): 프로젝트 화면은 우패널 없이 — 판이 폭 전체를 쓴다. 타임라인은 문패 [타임라인](알림 센터),
+  //  위젯·앱은 도크 ⊞(런치패드)로 옮겨 갔다(web/v2/studio.ts 머리 주석).
+  if (p === 'p') { const id = Number(segs[1]); return { title: projName(data, id), noAside: true }; }
   if (p === 's') {
     const s = findSess(decodeURIComponent(segs[1] || ''));
     return { title: s ? (String(s.label || '').trim() || String(s.raw?.harness || '세션')) : '세션', noAside: false };
@@ -213,7 +215,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       dropProjView(tab);
       const stu = mountStudio(tab.center, { data: () => data, id, detail, onProjectChanged: () => { void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); }); } });
       projViews.set(tab, stu);
-      stu.renderAside(tab.aside);
+      tab.aside.replaceChildren();   // v4: 우패널 없음 — 선반·타임라인은 작업대 안(런치패드·알림 센터)에서 산다
     } else if (page === 's' && segs[1]) {
       const id = decodeURIComponent(segs[1]);
       let s = findSess(id);
