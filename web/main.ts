@@ -270,9 +270,12 @@ async function boot() {
   //             body.embed 로 걷는다(40-v2.css). 임베드는 항상 클래식이다(안 그러면 셸 안에 셸이 뜬다).
   //  그 외      : uiMode()(URL ?ui > 로컬 오버라이드 > 조직 ui_mode > 'v2') 가 v2 면 새 셸로 넘기고 여기서 끝낸다.
   //             클래식 라우터·상단바 코드는 건드리지 않은 채로 남는다 — 두 셸의 병행 기간 동안 옛 화면은 옛 코드 그대로다.
+  //  ?solo=1 : 세션 하나만 담은 **팝아웃 창**(#1744 — 세션 화면 [새 탭]). 새 셸을 쓰되 왼쪽 사이드바만 없다.
+  //             조직이 ui_mode 를 classic 으로 두었더라도 이 주소는 새 셸이어야 한다(그 화면을 가리키는 링크이므로).
   const embedded = new URLSearchParams(location.search).get('embed') === '1';
+  const solo = new URLSearchParams(location.search).get('solo') === '1';
   if (embedded) document.body.classList.add('embed');
-  else if (uiMode() === 'v2') {
+  else if (solo || uiMode() === 'v2') {
     uiV2Active = true;
     document.body.dataset.ui = 'v2';
     await bootV2();
