@@ -726,11 +726,12 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 
 /* ══ 실험장 v3(#1719 원준) — 레일 · 작업대 · 위젯(S/M/L 반응) ════════════════════ */
 /* ── 레일 모드 그리드 ── */
-#v2-root.rail-mode { grid-template-columns: 64px minmax(0, 1fr) 6px var(--v2-aside-w); }
-#v2-root.rail-mode.no-aside { grid-template-columns: 64px minmax(0, 1fr) 0 0; }
-#v2-root.rail-mode.rail-open { grid-template-columns: 348px minmax(0, 1fr) 6px var(--v2-aside-w); }
-#v2-root.rail-mode.rail-open.no-aside { grid-template-columns: 348px minmax(0, 1fr) 0 0; }
-.stu-side { position: relative; display: flex; flex-direction: row; align-items: stretch; overflow: visible; padding: 0; background: #F7F8FA; border-right: 1px solid var(--line); }
+/* 좌측 열 폐기(원준 3차) — 평소 0px, 프로젝트 패널이 열릴 때만 284px 로 민다. */
+#v2-root.rail-mode { grid-template-columns: 0 minmax(0, 1fr) 6px var(--v2-aside-w); }
+#v2-root.rail-mode.no-aside { grid-template-columns: 0 minmax(0, 1fr) 0 0; }
+#v2-root.rail-mode.rail-open { grid-template-columns: 284px minmax(0, 1fr) 6px var(--v2-aside-w); }
+#v2-root.rail-mode.rail-open.no-aside { grid-template-columns: 284px minmax(0, 1fr) 0 0; }
+.stu-side { position: relative; display: flex; flex-direction: row; align-items: stretch; overflow: hidden; padding: 0; background: var(--bg, #fff); border: 0; }
 .stu-rail { width: 64px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 0; }
 .stu-rail-logo { width: 30px; height: 30px; border-radius: 9px; background: var(--ink); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 14px; margin-bottom: 10px; text-decoration: none; }
 .stu-rail-it { width: 56px; padding: 7px 0 6px; border: 0; background: none; border-radius: 10px; display: flex; flex-direction: column; align-items: center; gap: 3px; font: inherit; font-size: 10px; color: var(--muted-head); cursor: pointer; text-decoration: none; }
@@ -738,18 +739,25 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .stu-rail-it.on { background: #E9EFFB; color: var(--blue); }
 .stu-rail-i { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .stu-rail-sp { flex: 1; }
-.stu-panel { position: relative; width: 284px; flex: none; min-height: 0; background: var(--bg, #fff); border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+.stu-panel { position: relative; width: 284px; flex: none; min-height: 0; background: #FAFBFC; border-right: 1px solid var(--line); display: flex; flex-direction: column; }
 .stu-panel-h { flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 12px 8px; }
 .stu-panel-h b { flex: 1; font-size: 13px; }
 .stu-panel-tree { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .stu-panel-tree .v2-side { border: 0; background: transparent; width: auto; }
+/* 문패 첫 줄 — 홈 로고·[프로젝트]·메타가 한 줄, 그 아래 큰 제목(시안 P1 존재감) */
+.stu-door-top { display: flex; align-items: center; gap: 9px; margin-bottom: 7px; }
+.stu-homelogo { width: 26px; height: 26px; border-radius: 8px; background: var(--ink); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 13px; text-decoration: none; flex: none; }
+.stu-projbtn { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border: 1px solid var(--line-net); border-radius: 8px; background: var(--bg, #fff); font: inherit; font-size: 12px; color: var(--ink-sub); cursor: pointer; flex: none; }
+.stu-projbtn:hover { border-color: var(--blue); color: var(--blue); }
+.stu-projbtn .car { color: var(--muted-2); }
+.stu-door-sep { width: 1px; height: 14px; background: var(--line-net); flex: none; }
 /* ── 작업대 골격 ── */
 .stu-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg, #fff); }
-.stu-door { flex: none; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 16px 22px 12px; border-bottom: 1px solid var(--line); }
-.stu-eyebrow { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-sub); }
+.stu-door { flex: none; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 16px 24px 14px; border-bottom: 1px solid var(--line); }
+.stu-eyebrow { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-sub); }
 .stu-eyebrow .sep { color: var(--muted-2); }
 .stu-state.run { color: var(--blue); font-weight: 700; } .stu-state.done { color: var(--mint-deep); font-weight: 700; } .stu-state.todo { color: var(--muted); }
-.stu-title { margin: 4px 0 0; font-size: 21px; font-weight: 800; letter-spacing: -.02em; line-height: 1.25; }
+.stu-title { margin: 0; font-size: 25px; font-weight: 800; letter-spacing: -.022em; line-height: 1.22; }
 .stu-door-r { display: flex; align-items: center; gap: 8px; flex: none; }
 .stu-faces { display: inline-flex; margin-right: 4px; }
 .stu-face { width: 26px; height: 26px; border-radius: 13px; border: 2px solid var(--bg, #fff); margin-left: -6px; }
