@@ -380,21 +380,8 @@ function activeKey() {
     const cur = parseRoute(t ? t.route : location.hash);
     return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
 }
-/** 셸 탭에 열린 세션 id 들(활성 먼저) — 사이드바 '열린 세션' 고정 줄(side.ts)이 그린다. */
-function openSessions() {
-    if (!tabsApi)
-        return [];
-    const act = tabsApi.current();
-    const out = [];
-    for (const t of [...tabsApi.tabs].sort((a, b) => Number(b === act) - Number(a === act))) {
-        const k = routeKey(t.route);
-        if (k.startsWith('s:'))
-            out.push({ id: k.slice(2), active: t === act });
-    }
-    return out;
-}
 function drawSide() { if (sideEl)
-    drawSideTree(sideEl, data, activeKey, openSessions); }
+    drawSideTree(sideEl, data, activeKey); }
 // ── 우측(탭마다 한 벌 — tab.aside 에 그린다) ──
 function knItem(name, rel) {
     return el('a', { class: 'v2-kn', href: '#/k/' + encodeURIComponent(name), title: name }, el('span', { class: 'v2-kn-rel ' + rel, text: rel === 'req' ? '필요' : '산출' }), el('span', { class: 'v2-kn-name', text: name }));
