@@ -205,7 +205,7 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-classic-link:hover { color: var(--ink-sub); text-decoration: underline; }
 
 /* ── 중앙 ── */
-.v2-main { min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; background: var(--bg, #fff); }
+.v2-main { position: relative; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; background: var(--bg, #fff); }   /* relative: 타임라인 서랍 버튼(.v2-tl-btn)의 기준 */
 
 /* ── 셸 탭(#1719) — 가운데 열 맨 위 한 줄. 탭 = 화면(홈·프로젝트·세션·앱) 하나, 전환은 숨겼다 보였다(재렌더 없음). ── */
 .v2-tabs { display: flex; align-items: center; gap: 3px; padding: 6px 8px 6px; border-bottom: 1px solid var(--line); background: var(--canvas, #F4F7FC); flex: none; overflow-x: auto; scrollbar-width: none; }
@@ -555,6 +555,28 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-pad-desc { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
 .v2-pad-empty { color: #fff; font-size: 13px; }
 
+/* ── 타임라인 서랍(#1719 바탕화면 방향 1차) ─────────────────────────────────
+   맥 문법(알림 센터): 홈(바탕화면)의 타임라인은 상주 열이 아니라 '불러오는 것' — 우상단 버튼으로
+   우측 위에 카드로 떠오르고, 밖 클릭·Esc·화면 이동이면 물러난다. 우패널이 있는 화면(프로젝트·세션·리브)에선
+   이미 열려 있으니 버튼이 숨고, 앱 프레임(no-tl)은 타임라인 자체가 없어 버튼도 없다.
+   ≤900px 모바일은 자기 서랍(m-aside, 파일 끝 블록)이 맡는다 — 이 블록은 데스크톱 전용. */
+@media (min-width: 901px) {
+  .v2-tl-btn { position: absolute; top: 7px; right: 8px; z-index: 30; display: inline-flex; align-items: center; gap: 6px; height: 27px; padding: 0 10px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--bg, #fff); color: var(--muted, #5B6B84);
+    font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+  .v2-tl-btn:hover { color: var(--ink, #15233B); border-color: var(--line-strong, #C9D4E4); }
+  .v2-tl-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+  #v2-root:not(.no-aside) .v2-tl-btn, #v2-root.no-tl .v2-tl-btn { display: none; }
+  #v2-root.no-aside:not(.no-tl) .v2-tabs { padding-right: 112px; }   /* 탭이 많아도 서랍 버튼 밑으로 안 숨게 */
+  #v2-root.d-aside .v2-tl-btn { color: var(--ink, #15233B); background: var(--canvas, #F4F7FC); }
+  #v2-root.d-aside .v2-aside { display: flex; position: fixed; top: 44px; right: 10px; bottom: 10px; z-index: 45;
+    width: clamp(300px, var(--v2-aside-w, 316px), 420px); border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+    background: var(--bg, #fff); box-shadow: 0 24px 64px rgba(21, 35, 59, .22), 0 4px 14px rgba(21, 35, 59, .10);
+    animation: v2-drawer-in .18s ease; }
+}
+@keyframes v2-drawer-in { from { opacity: 0; transform: translateY(-6px); } }
+@media (prefers-reduced-motion: reduce) { #v2-root.d-aside .v2-aside { animation: none; } }
+
 /* 901~1100px(작은 노트북 창·아이패드 가로) — 옆 두 칸을 좁힌다. ⚠ 열은 다섯(사이드바·손잡이·가운데·손잡이·우패널)이라 셋만 적으면
    가운데가 셋째 열(280px)에 앉고 우패널이 다음 줄로 떨어진다(1024px 실측 #1777 — 손잡이가 생기기 전 규칙이 남아 있었다).
    손잡이가 인라인 변수로 너비를 쥐므로 변수를 덮지 않고 min() 으로 상한만 건다(더 좁히는 건 여전히 된다). */
@@ -640,7 +662,9 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
   .v2-scrim { display: block; position: fixed; inset: 0; z-index: 39; background: rgba(21, 35, 59, .42); }
   .v2-scrim[hidden] { display: none; }
   /* 서랍 — 사이드바(왼쪽)·우패널(오른쪽). 닫힘 = 화면 밖 + visibility:hidden(초점·스크린리더에서도 빠진다).
-     900px 규칙이 우패널을 display:none 으로 껐던 것을 되살린다(no-aside 는 여전히 꺼져 있고 버튼도 없다). */
+     900px 규칙이 우패널을 display:none 으로 껐던 것을 되살린다. no-aside 도 되살린다 — 홈이 no-aside 가 되면서(#1719
+     바탕화면 1차) 모바일 홈 타임라인은 이 서랍으로만 열리기 때문(버튼 유무는 main.ts setAside 가 라우트별로 쥔다). */
+  #v2-root.no-aside .v2-aside { display: flex; }
   .v2-side, .v2-aside { position: fixed; top: 0; bottom: 0; z-index: 40; width: min(86vw, 336px); max-width: 100vw; visibility: hidden;
     transition: transform .22s ease, visibility 0s linear .22s; overscroll-behavior: contain; }
   .v2-side { left: 0; transform: translateX(-100%); border-right: 0; padding-top: env(safe-area-inset-top, 0px); }

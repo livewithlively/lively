@@ -7,7 +7,7 @@
 //  탭 규칙(#1719 상민님 2026-08-18): 주소는 활성 탭의 라우트다. 링크는 활성 탭 안에서 이동하되, 같은 화면이 이미 다른
 //  탭에 있으면 그 탭으로 간다(한 세션 = 한 탭). Alt+클릭 = 새 탭에서 열기.
 //  데스크톱(일렉트론)에서 그대로 쓰기 위한 규약: 정적 자산 + 해시 라우트 + api()(상대 경로·bearer/쿠키)만 쓴다.
-import { $view, anchoredPopover, api, el, toast } from '../core.js';
+import { $view, anchoredPopover, api, el, sv, toast } from '../core.js';
 import { fillLivCards, renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame } from './apps.js';
 import { drawSide as drawSideTree, projectOrder } from './side.js';
@@ -24,6 +24,7 @@ let centerEl = null;
 let asideEl = null;
 let tabsApi = null;
 let mobile = null; // ≤900px 모바일 크롬(#1777) — 상단 바·서랍. 데스크톱에선 보이지 않는 채로 달려 있다.
+let tlBtn = null; // 홈(바탕화면)의 타임라인 서랍 버튼 — 우패널이 있는 화면에선 CSS 로 숨는다.
 let data = { projects: [], sessions: [], loadedAt: 0 };
 let projLoadedAt = 0;
 const projRetried = new Set(); // 목록에 없어 한 번 더 당겨 본 프로젝트 id(같은 id 로 반복 재조회 방지)
@@ -63,6 +64,23 @@ export async function bootV2() {
     centerEl.prepend(tabsApi.strip); // 탭 줄은 가운데 열 맨 위(탭 패널들은 tabs.ts 가 이미 뒤에 붙였다)
     // 모바일이면 탭 줄이 상단 바 가운데로 옮겨 간다(#1777) — 데스크톱으로 돌아오면 여기(가운데 열 맨 위)로 되돌린다.
     mobile.adoptStrip(tabsApi.strip, () => centerEl.prepend(tabsApi.strip));
+    // 타임라인 서랍(#1719 바탕화면 방향 1차, 상민님 2026-08-19 "이 홈에서는 우측에 타임라인이 사이드바로 있는거 버려야할듯") —
+    //  홈의 타임라인은 상주 열이 아니라 '불러오는 것'이다. 맥 알림 센터 문법: 우상단 버튼으로 우측 위에 카드로 떠오르고,
+    //  밖 클릭·Esc·화면 이동이면 물러난다. 내용은 탭의 우패널(tab.aside) 그대로 — 렌더는 renderRoute 가 이미 해 둔다.
+    const tl = el('button', { class: 'v2-tl-btn', type: 'button', 'aria-expanded': 'false', title: '타임라인 — 이 워크스페이스에 무슨 일이 있었나' }, sv('svg', { viewBox: '0 0 24 24', 'aria-hidden': 'true' }, ...['M12 4v16', 'M12 8h6', 'M12 14h6', 'M6 6h2', 'M6 12h2', 'M6 18h2'].map((d) => sv('path', { d }))), '타임라인');
+    tlBtn = tl;
+    tl.onclick = () => setDrawer(!root.classList.contains('d-aside'));
+    centerEl.append(tl);
+    document.addEventListener('pointerdown', (e) => {
+        if (!root || !root.classList.contains('d-aside'))
+            return;
+        const t = e.target;
+        if (asideEl.contains(t) || tl.contains(t))
+            return;
+        setDrawer(false);
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && root?.classList.contains('d-aside'))
+        setDrawer(false); });
     drawSide(); // 데이터 전 골격(로고·리브·앱)부터 — 빈 화면을 오래 두지 않는다
     await loadData();
     // 시작 탭 — 주소에 화면이 있으면(딥링크) 그 화면: 있던 탭이면 그 탭, 아니면 저장된 활성 탭이 그리로 간다.
@@ -141,8 +159,10 @@ function parseRoute(route) {
 function titleFor(route) {
     const { segs, raw } = parseRoute(route);
     const p = segs[0] || '';
+    // 홈은 우패널(타임라인) 없이 — 홈의 일은 '시키기'지 '돌아보기'가 아니다(상민님 2026-08-19,
+    //  바탕화면 방향과 같은 결: 타임라인은 상시 패널이 아니라 불러오는 것으로 옮겨 간다).
     if (!p || p === 'dashboard')
-        return { title: '홈', noAside: false };
+        return { title: '홈', noAside: true };
     if (p === 'liv')
         return { title: '리브', noAside: false };
     if (p === 'p') {
@@ -161,12 +181,20 @@ function titleFor(route) {
         const a = appByKey(CLASSIC_PAGES[p]);
         return { title: a ? a.title : raw, noAside: true };
     }
-    return { title: '홈', noAside: false };
+    return { title: '홈', noAside: true };
+}
+/** 타임라인 서랍 열림/닫힘 — 데스크톱 홈 전용(우패널이 있는 화면·모바일에선 버튼 자체가 숨는다). */
+function setDrawer(on) {
+    root.classList.toggle('d-aside', on);
+    tlBtn?.setAttribute('aria-expanded', String(on));
 }
 function applyTabChrome(tab) {
+    const home = routeKey(tab.route) === 'home'; // 홈: 우패널 '열'은 없지만 타임라인은 서랍으로 산다(#1719 바탕화면 1차)
     root.classList.toggle('no-aside', tab.noAside);
+    root.classList.toggle('no-tl', tab.noAside && !home); // 앱 프레임: 타임라인 자체가 없다 — 서랍 버튼도 없다
+    setDrawer(false); // 화면을 옮기면 서랍은 닫는다(알림 센터 문법)
     if (mobile)
-        mobile.setAside(!tab.noAside); // 모바일 상단 바의 [타임라인] — 우패널이 없는 화면(앱 프레임)에선 버튼도 없다
+        mobile.setAside(!tab.noAside || home); // 모바일 [타임라인]: 우패널 화면 + 홈(서랍으로) — 앱 프레임에만 없다
     // 리브 페이지를 떠나면 그 폴링이 멈추게(liv.ts 는 body.dataset.route==='liv' 동안만 폴링).
     document.body.dataset.route = routeKey(tab.route) === 'raw:liv' || parseRoute(tab.route).segs[0] === 'liv' ? 'liv' : 'v2';
 }
