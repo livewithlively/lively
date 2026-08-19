@@ -46,8 +46,10 @@ const semverSchema = z.string().regex(
 // 자산 슬러그(스킬/에이전트/커맨드/위젯/페이지 key) — STRICT_SLUG 그대로.
 const slugSchema = z.string().regex(STRICT_SLUG, "key/name 은 소문자 영숫자/_/- 1~64자여야 합니다");
 
-// 호스트: 외부 백엔드·프록시 도구가 나갈 수 있는 호스트(url_allowlist 에 등록될 값). 소문자, 스킴 없음.
-const hostSchema = z.string().regex(/^[a-z0-9.-]+(?::\d+)?$/, "host 는 호스트[:포트] 형식(스킴 없이)이어야 합니다");
+// 호스트: 외부 백엔드·프록시 도구가 나갈 수 있는 호스트(url_allowlist 에 등록될 값). 스킴 없음.
+//  대소문자 관대 입력 + **소문자 정규화**(url_allowlist·SSRF 는 소문자 비교라 저장은 소문자로 굳힌다).
+const hostSchema = z.string().regex(/^[A-Za-z0-9.-]+(?::\d+)?$/, "host 는 호스트[:포트] 형식(스킴 없이)이어야 합니다")
+  .transform((s) => s.toLowerCase());
 
 // 도구 이름 또는 글롭(예: "knowledge_search", "ext__slack__*").
 const toolGlobSchema = z.string().min(1).max(128).regex(/^[a-z0-9_*]+$/i, "tool 이름/글롭 형식이 아닙니다");
