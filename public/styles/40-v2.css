@@ -1245,7 +1245,9 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .stu-app-ic { position: relative; }
 
 /* 온보딩 길잡이 — 빈 판이 백지가 아니라 '첫 걸음' 이 되게 */
-.stu-guide { position: absolute; left: 50%; top: 84px; transform: translateX(-50%); width: min(720px, 86%); text-align: left; pointer-events: auto; }
+.stu-guidehost { position: absolute; left: 50%; top: 76px; transform: translateX(-50%); width: min(720px, 86%); z-index: 15; }
+.stu-guidehost[hidden] { display: none; }
+.stu-guide { text-align: left; }
 .stu-guide h2 { margin: 0 0 6px; font-size: 20px; font-weight: 800; letter-spacing: -.02em; color: var(--ink); }
 .stu-guide-l { margin: 0 0 22px; font-size: 13.5px; color: var(--ink-sub); }
 .stu-guide-g { display: grid; gap: 12px; }
@@ -1267,7 +1269,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 @keyframes stu-slidein { from { opacity: 0; transform: translateX(12px); } }
 
 /* 리브 말풍선 — 도크의 L 위에서 말한다 */
-.stu-tip { position: absolute; left: calc(50% - 354px); bottom: 104px; z-index: 41; width: min(320px, 60%);   /* 꼬리가 도크의 L 위에 오게(도크 폭 720 기준) */
+.stu-tip { position: absolute; left: 0; bottom: calc(100% + 12px); z-index: 41; width: min(320px, 84vw);   /* 도크 '안'에 달아 L 위에 붙는다(도크 폭이 변해도 어긋나지 않게) */
   padding: 13px 14px 11px; background: var(--bg, #fff); border: 1px solid #CDEFE3; border-radius: 14px 14px 14px 4px;
   box-shadow: 0 16px 40px rgba(21,35,59,.16); animation: stu-tipin .22s ease; }
 .stu-tip[hidden] { display: none; }
@@ -1276,7 +1278,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .stu-tip-t { margin: 0 0 10px; font-size: 12.5px; line-height: 1.65; color: var(--ink); }
 .stu-tip-a { display: flex; align-items: center; gap: 10px; }
 @keyframes stu-tipin { from { opacity: 0; transform: translateY(8px); } }
-@media (max-width: 1100px) { .stu-tip { left: 16px; } .stu-tip::after { left: 24px; } }
+
 
 /* 포커스 카드 — 시킨 세션이 가운데로 커진다 */
 /* 세션 포커스 = 모달(원준 2026-08-19). 커진 카드는 '이사'가 아니라 '잠깐 앞으로 나온 것'이라
@@ -1309,3 +1311,12 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .stu-dest.pulse { animation: stu-chip-pulse .6s ease 3; }
 @keyframes stu-chip-pulse { 50% { box-shadow: 0 0 0 6px rgba(45,107,240,.18); border-color: var(--blue); } }
 @media (prefers-reduced-motion: reduce) { .stu-dest.pulse { animation: none; box-shadow: 0 0 0 4px rgba(45,107,240,.18); } }
+
+/* 손잡이 알약 — 끌어서 옮긴다(자리는 사람마다 다르다). 왼쪽 세로 점선이 잡는 자리. */
+.stu-panel-fab { cursor: default; padding-left: 2px; }
+.stu-fab-grip { flex: none; width: 12px; height: 20px; margin-right: -2px; cursor: grab; border-radius: 4px;
+  background-image: radial-gradient(currentColor 1px, transparent 1px); background-size: 4px 5px; background-position: 2px 2px;
+  color: var(--muted-3); opacity: .85; }
+.stu-panel-fab:hover .stu-fab-grip { color: var(--muted); }
+.stu-panel-fab.dragging { cursor: grabbing; box-shadow: 0 14px 34px rgba(21,35,59,.22); }
+.stu-panel-fab.dragging .stu-fab-grip { cursor: grabbing; }

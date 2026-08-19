@@ -139,7 +139,8 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   const cmLayer = el('div', { class: 'stu-cmlayer', hidden: true });
   const board = el('div', { class: 'stu-board' }, canvas, cmLayer);
   // 스테이지(v4) — 스크롤하는 판(board) 위에 **스크롤하지 않는 것들**(바로가기·알림 센터·도크·런치패드·유령 창)을 얹는 층.
-  const stage = el('div', { class: 'stu-stage' }, board);
+  const guideHost = el('div', { class: 'stu-guidehost', hidden: true });   // 안내는 '보이는 영역' 기준(도크와 같은 기준)
+  const stage = el('div', { class: 'stu-stage' }, board, guideHost);
   const wrap = el('div', { class: 'stu-wrap' }, door, stage) as HTMLElement;
   host.replaceChildren(wrap);
 
@@ -893,9 +894,15 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   function paintAll(): void {
     if (dead) return;
     els.clear(); sigs.clear();
-    canvas.replaceChildren(
+    canvas.replaceChildren(...[
       ...widgets.map((s) => (s.data?.cm ? commentEl(s) : widgetEl(s))),
-      widgets.length ? el('div', { class: 'stu-boardhint', text: '바탕화면 — 아이콘은 두 번 눌러 열기 · 파일을 끌어다 놓기 · ⊞ 에서 앱·위젯 꺼내기 · [코멘트]로 어디든 표시' }) : startGuide());
+      // ⚠ replaceChildren 은 el() 과 달리 null 을 글자 "null" 로 넣는다 — 조건부 자식은 반드시 걸러서.
+      widgets.length ? el('div', { class: 'stu-boardhint', text: '바탕화면 — 아이콘은 두 번 눌러 열기 · 파일을 끌어다 놓기 · ⊞ 에서 앱·위젯 꺼내기 · [코멘트]로 어디든 표시' }) : null,
+    ].filter(Boolean) as HTMLElement[]);
+    // 안내는 캔버스가 아니라 스테이지에 — 캔버스는 화면보다 넓고 스크롤되므로 그 50%는 화면 중앙이 아니다
+    //  (사이드바를 여닫으면 어긋나 보이던 원인, 상민님 2026-08-19).
+    guideHost.hidden = !!widgets.length;
+    guideHost.replaceChildren(...(widgets.length ? [] : [startGuide()]));
     if (focusId) { ensureScrim(); const r = els.get(focusId); if (r) r.root.classList.add('focused'); }   // 다시 그려도 모달은 열린 채로
     growCanvas();
   }
@@ -1487,7 +1494,7 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   // ══ 리브 말풍선 — 캔버스를 쓸 수 있다는 감을 '말'로 준다(원준 2026-08-19) ══════════════
   //  규칙 기반(껍데기): 판의 상태를 보고 지금 해 볼 만한 것 하나를 제안한다. 닫으면 그 제안은 다시 안 나온다.
   const tip = el('div', { class: 'stu-tip', hidden: true });
-  stage.append(tip);
+  composer.append(tip);   // 도크 안에 달아야 L 바로 위에 붙는다(스테이지에 달면 도크 폭이 바뀔 때 어긋난다)
   const TIP_KEY = 'lively_studio_tips_' + id;
   const tipsDone = ((): Set<string> => { try { return new Set(JSON.parse(localStorage.getItem(TIP_KEY) || '[]')); } catch (_) { return new Set(); } })();
   function tipDone(k: string): void { tipsDone.add(k); try { localStorage.setItem(TIP_KEY, JSON.stringify([...tipsDone])); } catch (_) { /* noop */ } }

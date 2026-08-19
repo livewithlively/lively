@@ -411,11 +411,14 @@ function drawSide() {
         panelFab = null;
     }
     if (!showPanel) {
-        const fab = el('div', { class: 'stu-panel-fab' }, el('a', { class: 'lg', href: '#/', title: '홈으로', 'aria-label': '홈으로', text: 'L' }), el('button', { class: 'stu-panel-fab-open', type: 'button', text: '프로젝트',
-            title: '프로젝트 목록 열기 (닫으려면 패널의 ×)', 'aria-label': '프로젝트 목록 열기',
+        const fab = el('div', { class: 'stu-panel-fab' }, el('span', { class: 'stu-fab-grip', title: '끌어서 옮기기', 'aria-hidden': 'true' }), el('a', { class: 'lg', href: '#/', title: '홈으로', 'aria-label': '홈으로', text: 'L' }), el('button', { class: 'stu-panel-fab-open', type: 'button', text: '프로젝트',
+            title: '프로젝트 목록 열기 (닫으려면 패널의 ×) · 알약은 끌어서 옮길 수 있어요',
+            'aria-label': '프로젝트 목록 열기',
             onclick: () => { railPanelOpen = true; drawSide(); } }));
         panelFab = fab;
         root.append(fab);
+        placeFab(fab);
+        makeFabDraggable(fab);
     }
     if (!showPanel) {
         sideEl.replaceChildren();
@@ -433,6 +436,76 @@ function drawSide() {
     drawSideTree(treeHost, data, activeKey, openSessions);
     sideEl.replaceChildren(panel);
 }
+// ── 손잡이 알약의 자리는 **사람마다 다르다**(원준 2026-08-19 "저 위치가 너무 거슬린다") ──
+//  어디에 두든 무언가를 가린다 — 그래서 우리가 고르지 않고 끌어서 옮기게 하고, 그 자리를 기억한다.
+//  좌표는 화면 크기가 변해도 살아남게 **비율**로 저장한다(창을 줄였다 키워도 제자리).
+const FAB_POS_KEY = 'stu_fab_pos';
+function loadFabPos() {
+    try {
+        const v = JSON.parse(localStorage.getItem(FAB_POS_KEY) || 'null');
+        return v && typeof v.rx === 'number' && typeof v.ry === 'number' ? v : null;
+    }
+    catch (_) {
+        return null;
+    }
+}
+function placeFab(fab) {
+    const pos = loadFabPos();
+    if (!pos || !root)
+        return;
+    const r = root.getBoundingClientRect();
+    const w = fab.offsetWidth || 132, h = fab.offsetHeight || 34;
+    fab.style.left = Math.round(Math.min(Math.max(8, pos.rx * r.width), Math.max(8, r.width - w - 8))) + 'px';
+    fab.style.top = Math.round(Math.min(Math.max(8, pos.ry * r.height), Math.max(8, r.height - h - 8))) + 'px';
+}
+function makeFabDraggable(fab) {
+    fab.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0)
+            return;
+        const tgt = e.target;
+        const onGrip = !!tgt.closest('.stu-fab-grip');
+        if (!onGrip && tgt.closest('a, button'))
+            return; // 손잡이가 아니면 링크·버튼은 제 일을 한다
+        const r0 = fab.getBoundingClientRect(), rr = root.getBoundingClientRect();
+        const dx = e.clientX - r0.left, dy = e.clientY - r0.top;
+        let moved = false;
+        const move = (ev) => {
+            if (!moved && Math.abs(ev.clientX - e.clientX) + Math.abs(ev.clientY - e.clientY) < 4)
+                return;
+            if (!moved) {
+                moved = true;
+                fab.classList.add('dragging');
+                fab.setPointerCapture(ev.pointerId);
+            }
+            const x = Math.min(Math.max(8, ev.clientX - rr.left - dx), rr.width - fab.offsetWidth - 8);
+            const y = Math.min(Math.max(8, ev.clientY - rr.top - dy), rr.height - fab.offsetHeight - 8);
+            fab.style.left = Math.round(x) + 'px';
+            fab.style.top = Math.round(y) + 'px';
+        };
+        const up = (ev) => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', up);
+            if (!moved)
+                return;
+            fab.classList.remove('dragging');
+            try {
+                fab.releasePointerCapture(ev.pointerId);
+            }
+            catch (_) { /* noop */ }
+            const r = fab.getBoundingClientRect();
+            try {
+                localStorage.setItem(FAB_POS_KEY, JSON.stringify({ rx: (r.left - rr.left) / rr.width, ry: (r.top - rr.top) / rr.height }));
+            }
+            catch (_) { /* noop */ }
+            const swallow = (ev2) => { ev2.stopPropagation(); ev2.preventDefault(); };
+            fab.addEventListener('click', swallow, { capture: true, once: true }); // 끌고 놓은 손짓이 '열기'로 새지 않게
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+    });
+}
+window.addEventListener('resize', () => { if (panelFab)
+    placeFab(panelFab); });
 // 작업대(문패 [프로젝트])가 쏘는 신호 — 모듈 순환 없이 DOM 이벤트로 잇는다.
 window.addEventListener('stu:toggle-projects', () => { railPanelOpen = !railPanelOpen; drawSide(); });
 function paintAsidePanes(host) {
