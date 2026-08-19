@@ -1,58 +1,76 @@
-// v2/studio.ts — 실험장(#1719 원준): 프로젝트 화면 = **작업대(캔버스)**. C(작업대)를 뼈대로,
-//  E(고요한 문패·여백)·B(살아 있는 세션 카드)·2부(핀·타임라인 부품)를 조립한 판이다.
-//
-//  ── 구도 ──
-//  문패(door)   — 프로젝트 이름·번호·상태·숫자(가장 눈에 들어오게, 원준 지시). 명세는 상시 노출하지 않고 위젯으로 소환.
-//  판(board)    — 점 격자 캔버스. 위젯(세션·태스크·지식·폴더·명세·타임라인·스티키·리브 제안·앱 껍데기)을
-//                 자유 배치·크기 조절·접기. 배치는 이 브라우저에 기억(localStorage) — 팀 공유 좌표는 다음 단계.
-//  바닥(chat)   — 리브 대화(mountProjectChat, 실동작). 위젯의 [리브에게] 칩이 전부 이 대화로 흘러든다 —
-//                 "AI 로 캔버스와 내용을 조작한다"의 첫 배선이다.
-//  우패널       — 위젯 선반(끌어다 놓기/클릭 추가) + 프로젝트 타임라인.
-//
-//  ── 이 파일이 알면서 안 하는 것(원준에게 설명함) ──
-//  · 화면 전체(홈 등)를 위젯으로 축소 배치 — 위젯은 '데이터를 아는 타입'만. 임의 화면 임베드는 죽은 액자다.
-//  · 세션 위젯 안 전체 대화 — 읽기는 전체 화면(기존 대화창), 카드는 지금 하는 일 + 던지기만.
-//  · 팀 공유 배치·실시간 커서 — 서버 저장이 필요한 P3.
-import { api, el, personFace, relTime, renderMarkdown, toast } from '../core.js';
+// v2/studio.ts — 실험장 v2(#1719 원준): 프로젝트 화면 = **작업대(캔버스)**.
+//  v1 피드백 반영 전면 재설계(2026-08-19 원준):
+//   · 위젯마다 **다른 디자인 언어** — 같은 흰 카드의 반복이 기능 직관을 죽였다. 세션=상태 띠+대화 거품,
+//     리브 제안=민트, 자동화=보라, 포스트잇=노랑 테이프, 폴더=파일 그리드, 지식=문서 행, 앱=각자 액센트.
+//   · 선반 = **런치패드**(아이콘 타일 + 이름) — 맥 앱처럼 보이게.
+//   · 입력은 **하나** — 플로팅 컴포저. 글의 내용으로 행선지(리브/기존 세션/새 세션)를 추정해 칩으로 보여주고
+//     사람이 바꿀 수 있다(오배송 비용 때문에 자동 100%가 아니라 '보이는 자동'부터 — v1 휴리스틱).
+//   · 세션 카드 = 최근 주고받음(나/AI 한 줄씩) — 카드만 봐도 무슨 대화인지 안다.
+//   · 코멘트 모드 — 판 위 어디서나 드래그로 영역을 잡고 코멘트(민트 마키), [리브에게]로 AI 에도 들어간다.
+//   · 타임라인 항목(지식)은 판으로 끌어다 문서 위젯으로.
+//   · 새 산출물(이미지·문서)이 생기면 판에 **프리뷰 위젯이 자동 등장**(30초 감시).
+import { api, apiUrl, TOKEN_KEY, el, personFace, relTime, renderMarkdown, sv, toast } from '../core.js';
 import { mountProjectChat, type ProjectChatHandle } from '../project-chat.js';
 import { createTimeline } from '../timeline.js';
 import { loadProjectTimeline } from '../timeline-sources.js';
-import { fileIconSvg, fmtSize, openFileViewer } from '../projects/files.js';
+import { fmtSize, openFileViewer } from '../projects/files.js';
 import { runPrefs } from './run-picker.js';
 import { sessText } from './side.js';
-import { makeSplitter } from './split.js';
 import { dotCls, type Sess, type V2Data } from './views.js';
 
-export interface StudioOpts {
-  data: () => V2Data;
-  id: number;
-  detail: any;
-  onProjectChanged?: () => void;
-}
-export interface StudioHandle { destroy(): void; renderAside(aside: HTMLElement): void; }
+export interface StudioOpts { data: () => V2Data; id: number; detail: any; onProjectChanged?: () => void }
+export interface StudioHandle { destroy(): void; renderAside(aside: HTMLElement): void }
 
-// ── 위젯 카탈로그 — 선반과 판이 같은 표를 본다 ────────────────────────────────
-type WType = 'session' | 'tasks' | 'knowledge' | 'folder' | 'desc' | 'timeline' | 'sticky' | 'coach' | 'app-meeting' | 'app-calendar' | 'app-slides';
-interface WSpec { id: string; type: WType; x: number; y: number; w: number; h: number; min?: boolean; big?: boolean; data?: any }
-interface WDef { type: WType; label: string; hint: string; w: number; h: number; shell?: boolean }
+// ── 아이콘(스트로크 SVG — 이모지 금지, 시안과 같은 붓) ─────────────────────────
+const ICON_PATHS: Record<string, string> = {
+  chat: '<path d="M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z"/>',
+  spark: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>',
+  task: '<path d="M4 6h12M4 12h12M4 18h8"/><path d="M19 5l2 2-4 4"/>',
+  book: '<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5"/><path d="M8 7h7"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  doc: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/>',
+  clock: '<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>',
+  pin: '<path d="M12 21s-6-5.3-6-10a6 6 0 0 1 12 0c0 4.7-6 10-6 10z"/><circle cx="12" cy="11" r="2"/>',
+  note: '<path d="M5 4h14v11l-5 5H5z"/><path d="M14 20v-5h5"/>',
+  bolt: '<path d="M13 2L4 14h6l-1 8 9-12h-6z"/>',
+  cal: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>',
+  mic: '<rect x="9" y="3" width="6" height="10" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
+  deck: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M8 20h8"/>',
+  img: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-8 8"/>',
+  send: '<path d="M4 12l16-8-6 16-2-7z"/>',
+  x: '<path d="M6 6l12 12M18 6L6 18"/>',
+};
+function icon(name: string, cls = 'stu-i'): SVGElement {
+  const s = sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' });
+  s.innerHTML = ICON_PATHS[name] || ICON_PATHS.doc;
+  return s;
+}
+
+// ── 위젯 카탈로그 — 선반(런치패드)과 판이 같은 표를 본다 ─────────────────────────
+type WType = 'session' | 'coach' | 'automation' | 'tasks' | 'knowledge' | 'folder' | 'desc' | 'timeline' | 'sticky' | 'preview' | 'doc' | 'app-meeting' | 'app-calendar' | 'app-slides';
+interface WSpec { id: string; type: WType; x: number; y: number; w: number; h: number; min?: boolean; big?: boolean; z?: number; data?: any }
+interface WDef { type: WType; label: string; hint: string; w: number; h: number; ic: string; ac: string; shell?: boolean; hidden?: boolean }
 const WDEFS: WDef[] = [
-  { type: 'session', label: 'AI 세션', hint: '이 프로젝트의 세션 하나 — 지금 하는 일이 살아서 보이고, 바로 시킬 수 있어요', w: 330, h: 240 },
-  { type: 'coach', label: '리브 제안', hint: '리브가 이 판을 읽고 워크플로우를 더 밀어붙일 방법을 제안해요', w: 360, h: 250 },
-  { type: 'tasks', label: '태스크', hint: '이 프로젝트의 할 일 — 보드는 크게 열어서', w: 310, h: 300 },
-  { type: 'knowledge', label: '지식', hint: '필요·산출 지식 — 누르면 옆에서 펼쳐 읽어요', w: 310, h: 260 },
-  { type: 'folder', label: '공유 폴더', hint: '프로젝트 파일 — 누르면 미리보기', w: 340, h: 300 },
-  { type: 'desc', label: '명세(본문)', hint: '프로젝트 본문 — 필요할 때만 꺼내 보는 문서', w: 430, h: 340 },
-  { type: 'timeline', label: '타임라인', hint: '이 프로젝트에서 일어난 일 — 판 위에도 놓을 수 있어요', w: 340, h: 420 },
-  { type: 'sticky', label: '포스트잇', hint: '판에 붙이는 메모 — 결정·방향을 그 자리에', w: 230, h: 170 },
-  { type: 'app-meeting', label: '회의록', hint: '껍데기 — 회의록을 넣으면 결정·태스크를 뽑는 앱 자리', w: 330, h: 260, shell: true },
-  { type: 'app-calendar', label: '캘린더', hint: '껍데기 — 태스크 마감·세션 예약이 놓일 앱 자리', w: 330, h: 280, shell: true },
-  { type: 'app-slides', label: '장표', hint: '껍데기 — 지식으로 보고용 장표를 만드는 앱 자리', w: 330, h: 250, shell: true },
+  { type: 'session', label: 'AI 세션', hint: '세션 하나 — 최근 주고받음이 보이고, 컴포저 행선지로 잡아 시켜요', w: 340, h: 250, ic: 'chat', ac: '#2D6BF0' },
+  { type: 'coach', label: '리브 제안', hint: '리브가 판을 읽고 워크플로우를 더 크게 쓰는 법을 제안해요', w: 360, h: 240, ic: 'spark', ac: '#0FA37E' },
+  { type: 'automation', label: '자동화', hint: '반복을 붙박이로 — 켤 수 있는 자동화 제안', w: 340, h: 240, ic: 'bolt', ac: '#7C5CFC' },
+  { type: 'tasks', label: '태스크', hint: '남은 할 일 — 진행 막대와 함께', w: 320, h: 300, ic: 'task', ac: '#D9772B' },
+  { type: 'knowledge', label: '지식', hint: '필요·산출 지식 — 누르면 옆에서 펼쳐 읽어요', w: 320, h: 260, ic: 'book', ac: '#1BAEB0' },
+  { type: 'folder', label: '공유 폴더', hint: '프로젝트 파일 — 그리드로, 누르면 미리보기', w: 380, h: 300, ic: 'folder', ac: '#5A6B85' },
+  { type: 'desc', label: '명세', hint: '프로젝트 본문 — 필요할 때 꺼내 보는 문서', w: 440, h: 340, ic: 'doc', ac: '#8A99B5' },
+  { type: 'timeline', label: '타임라인', hint: '남은 결과들 — 판 위에도 놓을 수 있어요', w: 340, h: 420, ic: 'clock', ac: '#15233B' },
+  { type: 'sticky', label: '포스트잇', hint: '판에 붙이는 메모', w: 230, h: 170, ic: 'note', ac: '#D9A32B' },
+  { type: 'app-meeting', label: '회의록', hint: '껍데기 — 회의록에서 결정·태스크를 뽑는 앱 자리', w: 340, h: 250, ic: 'mic', ac: '#B84E9C', shell: true },
+  { type: 'app-calendar', label: '캘린더', hint: '껍데기 — 마감·회의·세션 예약이 놓일 자리', w: 340, h: 280, ic: 'cal', ac: '#D9772B', shell: true },
+  { type: 'app-slides', label: '장표', hint: '껍데기 — 지식으로 보고 장표를 만드는 자리', w: 340, h: 240, ic: 'deck', ac: '#2D6BF0', shell: true },
+  { type: 'preview', label: '프리뷰', hint: '파일 미리보기(자동 등장)', w: 360, h: 320, ic: 'img', ac: '#5A6B85', hidden: true },
+  { type: 'doc', label: '문서', hint: '지식·문서 임베드', w: 460, h: 420, ic: 'doc', ac: '#1BAEB0', hidden: true },
 ];
 const wdef = (t: WType): WDef => WDEFS.find((d) => d.type === t)!;
-
 const GRID = 8;
 const snap = (n: number): number => Math.max(0, Math.round(n / GRID) * GRID);
-const LS_KEY = (id: number): string => 'lively_studio_' + id;
+const LS_KEY = (id: number): string => 'lively_studio2_' + id;
+const INJ_RE = /^\s*(<command-name|<local-command-|<command-message|<command-args|<bash-|<task-notification|<system-reminder|\[Request interrupted|Caveat:|This session is being continued)/;
 
 export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   const id = opts.id;
@@ -61,39 +79,42 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   let chat: ProjectChatHandle | null = null;
   let zTop = 10;
   let liveTimer: number | null = null;
+  let tick = 0;
+  let commentMode = false;
 
-  // ── 배치 상태 (이 브라우저에 기억 — 팀 공유는 P3) ──
+  // ── 배치 상태(이 브라우저) ──
   let widgets: WSpec[] = [];
   let seq = 1;
-  const els = new Map<string, { root: HTMLElement; body: HTMLElement; title: HTMLElement }>();   // 제자리 갱신용(라이브 틱이 전체 재그림을 하지 않는다)
-  function save(): void { try { localStorage.setItem(LS_KEY(id), JSON.stringify({ widgets, seq })); } catch (_) { /* noop */ } }
+  let lastSpawnTs = 0;   // 자동 등장 프리뷰의 기준 시각(이보다 새 파일만 판에 올린다)
+  const els = new Map<string, { root: HTMLElement; body: HTMLElement; title: HTMLElement }>();
+  function save(): void { try { localStorage.setItem(LS_KEY(id), JSON.stringify({ widgets, seq, lastSpawnTs })); } catch (_) { /* noop */ } }
   function load(): boolean {
     try {
       const s = JSON.parse(localStorage.getItem(LS_KEY(id)) || 'null');
-      if (s && Array.isArray(s.widgets)) { widgets = s.widgets; seq = Number(s.seq) || widgets.length + 1; return true; }
+      if (s && Array.isArray(s.widgets)) { widgets = s.widgets; seq = Number(s.seq) || widgets.length + 1; lastSpawnTs = Number(s.lastSpawnTs) || 0; return true; }
     } catch (_) { /* noop */ }
     return false;
   }
 
-  // ── 골격 ──
-  const door = el('header', { class: 'stu-door' });
-  const canvas = el('div', { class: 'stu-canvas' });
-  const board = el('div', { class: 'stu-board' }, canvas);
-  const chatHost = el('div', { class: 'stu-chat' });
-  const wrap = el('div', { class: 'stu-wrap' }, door, board) as HTMLElement;
-  wrap.append(makeSplitter({ axis: 'y', key: 'stu-chat-h', cssVar: '--stu-chat-h', target: wrap, def: 260, min: 150, max: 560, grow: -1, label: '판·대화 경계' }), chatHost);
-  host.replaceChildren(wrap);
-
   const pj = (): any => (detail && detail.project) || { id, name: '프로젝트 #' + id };
   const mySessions = (): Sess[] => opts.data().sessions.filter((s) => Number(s.projectId) === id);
 
-  // ── 문패 — 이름이 주인공(원준: "제목 박스는 가장 눈에 들어오게") ──
+  // ── 골격 — 문패 / 판(+코멘트 층) / 플로팅 컴포저·리브 패널 ──
+  const door = el('header', { class: 'stu-door' });
+  const canvas = el('div', { class: 'stu-canvas' });
+  const cmLayer = el('div', { class: 'stu-cmlayer', hidden: true });     // 코멘트 모드에서만 활성(판 최상위)
+  const board = el('div', { class: 'stu-board' }, canvas, cmLayer);
+  const wrap = el('div', { class: 'stu-wrap' }, door, board) as HTMLElement;
+  host.replaceChildren(wrap);
+
+  // ── 문패 ──
+  const cmBtn = el('button', { class: 'btn btn-ghost btn-sm stu-cm-btn', type: 'button', title: '코멘트 모드 — 판 위를 드래그해 영역을 잡고 코멘트를 남깁니다', onclick: () => setCommentMode(!commentMode) }, icon('pin', 'stu-i sm'), el('span', { text: '코멘트' })) as HTMLButtonElement;
   function paintDoor(): void {
     const p = pj();
     const tasks: any[] = Array.isArray(p.tasks) ? p.tasks : [];
     const doneN = tasks.filter((t) => t.status_category === 'done').length;
     const kn = p.knowledge || {};
-    const knN = ((kn.required || []).length + (kn.produced || []).length) || 0;
+    const knN = (kn.required || []).length + (kn.produced || []).length;
     const ss = mySessions();
     const live = ss.filter((s) => s.live && s.alive);
     const members: any[] = Array.isArray(p.members) ? p.members : [];
@@ -103,146 +124,169 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
         el('div', { class: 'stu-eyebrow' },
           el('span', { class: 'mono', text: '#' + p.id }), el('span', { class: 'sep', text: '·' }),
           el('span', { class: 'stu-state ' + st.c, text: st.t }), el('span', { class: 'sep', text: '·' }),
-          el('span', { text: `세션 ${ss.length}` + (live.length ? ` (지금 ${live.length})` : '') }), el('span', { class: 'sep', text: '·' }),
+          el('span', { text: `세션 ${ss.length}` + (live.length ? ` · 지금 ${live.length}` : '') }), el('span', { class: 'sep', text: '·' }),
           el('span', { text: `할 일 ${tasks.length - doneN}/${tasks.length}` }), el('span', { class: 'sep', text: '·' }),
           el('span', { text: `지식 ${knN}` })),
         el('h1', { class: 'stu-title', text: p.name || '프로젝트 #' + id })),
       el('div', { class: 'stu-door-r' },
         el('span', { class: 'stu-faces' }, ...members.slice(0, 5).map((m: any) => personFace(String(m.member_id || m), 'stu-face', String(m.display_name || m.member_id || '')))),
-        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '명세', title: '프로젝트 본문을 판에 꺼냅니다', onclick: () => addOrFocus('desc') }),
-        el('a', { class: 'btn btn-ghost btn-sm', href: '#/projects2/p/' + id, text: '보드(클래식)', title: '태스크 보드·표·타임라인은 클래식 앱에서' }),
-        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '정리', title: '위젯을 자동으로 다시 배치합니다', onclick: () => { autoArrange(); paintAll(); save(); } })));
+        cmBtn,
+        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '명세', onclick: () => addOrFocus('desc') }),
+        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '정리', title: '위젯 자동 재배치', onclick: () => { autoArrange(); paintAll(); save(); } })));
+    cmBtn.classList.toggle('on', commentMode);
   }
 
-  // ── 위젯 공통 틀 ──
-  function addWidget(type: WType, at?: { x: number; y: number }, data?: any, opts2?: { noSave?: boolean }): WSpec {
+  // ── 위젯 공통 틀 — 타입별 액센트 띠·머리 아이콘(디자인 언어 분리) ──
+  function addWidget(type: WType, at?: { x: number; y: number }, data?: any, o2?: { noSave?: boolean }): WSpec {
     const d = wdef(type);
-    const spec: WSpec = { id: 'w' + seq++, type, x: at ? snap(at.x) : 24 + ((seq * 40) % 240), y: at ? snap(at.y) : 24 + ((seq * 32) % 180), w: d.w, h: d.h, data: data || {} };
+    const spec: WSpec = { id: 'w' + seq++, type, x: at ? snap(at.x) : 40 + ((seq * 48) % 280), y: at ? snap(at.y) : 32 + ((seq * 36) % 200), w: d.w, h: d.h, data: data || {} };
     widgets.push(spec);
-    if (!opts2?.noSave) { save(); paintAll(); }
+    if (!o2?.noSave) { save(); paintAll(); }
     return spec;
   }
   function addOrFocus(type: WType): void {
     const hit = widgets.find((w) => w.type === type);
-    if (hit) { hit.min = false; bump(hit); paintAll(); save(); return; }
-    addWidget(type, { x: 60, y: 40 });
+    if (hit) { hit.min = false; hit.z = ++zTop; paintAll(); save(); return; }
+    addWidget(type, { x: 72, y: 48 });
   }
-  function bump(spec: WSpec): void { (spec as any).z = ++zTop; }
   function removeWidget(spec: WSpec): void { widgets = widgets.filter((w) => w !== spec); save(); paintAll(); }
 
   function widgetEl(spec: WSpec): HTMLElement {
+    if (spec.type === 'sticky') return stickyEl(spec);
     const d = wdef(spec.type);
     const body = el('div', { class: 'stu-w-body' });
-    const title = spec.type === 'session' ? sessionTitle(spec) : (spec.type === 'sticky' ? '포스트잇' : d.label);
-    const isBig = !!spec.big;
+    const titleEl2 = el('b', { class: 'stu-w-t', text: widgetTitle(spec) });
     const head = el('div', { class: 'stu-w-head' },
-      el('b', { class: 'stu-w-t', text: title }),
+      el('span', { class: 'stu-w-ic', style: 'color:' + d.ac }, icon(d.ic, 'stu-i sm')),
+      titleEl2,
       d.shell ? el('span', { class: 'stu-shell-badge', text: '껍데기' }) : null,
       el('span', { class: 'stu-w-acts' },
         el('button', { class: 'stu-w-btn', type: 'button', title: spec.min ? '펼치기' : '접기', text: spec.min ? '▸' : '▾', onclick: (e: Event) => { e.stopPropagation(); spec.min = !spec.min; save(); paintAll(); } }),
         spec.type === 'session' && spec.data?.sid
           ? el('button', { class: 'stu-w-btn', type: 'button', title: '전체 화면(대화창)', text: '⤢', onclick: (e: Event) => { e.stopPropagation(); location.hash = '#/s/' + encodeURIComponent(String(spec.data.sid)); } })
-          : el('button', { class: 'stu-w-btn', type: 'button', title: isBig ? '원래 크기' : '크게', text: '⤢', onclick: (e: Event) => { e.stopPropagation(); toggleBig(spec); } }),
-        el('button', { class: 'stu-w-btn', type: 'button', title: '닫기(판에서 치우기 — 데이터는 안 지워져요)', text: '×', onclick: (e: Event) => { e.stopPropagation(); removeWidget(spec); } })));
-    const w = el('div', { class: 'stu-w stu-w-' + spec.type + (spec.min ? ' min' : '') + (spec.type === 'sticky' ? ' sticky' : ''), style: `left:${spec.x}px;top:${spec.y}px;width:${spec.w}px;${spec.min ? '' : 'height:' + spec.h + 'px;'}z-index:${(spec as any).z || 1}` }, head, body,
+          : el('button', { class: 'stu-w-btn', type: 'button', title: spec.big ? '원래 크기' : '크게', text: '⤢', onclick: (e: Event) => { e.stopPropagation(); toggleBig(spec); } }),
+        el('button', { class: 'stu-w-btn', type: 'button', title: '판에서 치우기(데이터는 안 지워져요)', text: '×', onclick: (e: Event) => { e.stopPropagation(); removeWidget(spec); } })));
+    const w = el('div', { class: 'stu-w stu-w-' + spec.type + (spec.min ? ' min' : ''), style: `left:${spec.x}px;top:${spec.y}px;width:${spec.w}px;${spec.min ? '' : 'height:' + spec.h + 'px;'}z-index:${spec.z || 1};--wac:${d.ac}` }, head, body,
       el('div', { class: 'stu-w-rsz', title: '크기 조절' }));
-    els.set(spec.id, { root: w, body, title: head.querySelector('.stu-w-t') as HTMLElement });
+    els.set(spec.id, { root: w, body, title: titleEl2 });
     if (!spec.min) fillBody(spec, body);
     wireDrag(spec, w, head);
     wireResize(spec, w);
-    w.addEventListener('mousedown', () => { bump(spec); w.style.zIndex = String((spec as any).z); });
+    w.addEventListener('mousedown', () => { spec.z = ++zTop; w.style.zIndex = String(spec.z); });
     return w;
+  }
+  function widgetTitle(spec: WSpec): string {
+    if (spec.type === 'session') {
+      const s = spec.data?.sid ? mySessions().find((x) => x.id === spec.data.sid) : null;
+      if (!s) return 'AI 세션 — 고르세요';
+      const t = sessText(s, pj().name || '');
+      return t.main || s.label || 'AI 세션';
+    }
+    if (spec.type === 'preview') return String(spec.data?.name || '프리뷰');
+    if (spec.type === 'doc') return String(spec.data?.title || '문서');
+    return wdef(spec.type).label;
   }
   function toggleBig(spec: WSpec): void {
     const d = wdef(spec.type);
     if (spec.big) { spec.w = d.w; spec.h = d.h; spec.big = false; }
-    else { spec.w = 760; spec.h = 540; spec.big = true; }
+    else { spec.w = 780; spec.h = 560; spec.big = true; spec.z = ++zTop; }
     save(); paintAll();
   }
-
-  // 드래그 — 머리를 잡고 끈다(스냅 8px). 버튼·입력은 예외.
-  function wireDrag(spec: WSpec, w: HTMLElement, head: HTMLElement): void {
-    head.addEventListener('mousedown', (e: MouseEvent) => {
+  function wireDrag(spec: WSpec, w: HTMLElement, handle: HTMLElement): void {
+    handle.addEventListener('mousedown', (e: MouseEvent) => {
       if ((e.target as HTMLElement).closest('button, input, textarea, a, select')) return;
       e.preventDefault();
       const sx = e.clientX, sy = e.clientY, ox = spec.x, oy = spec.y;
-      const move = (ev: MouseEvent): void => {
-        spec.x = snap(ox + ev.clientX - sx); spec.y = snap(oy + ev.clientY - sy);
-        w.style.left = spec.x + 'px'; w.style.top = spec.y + 'px';
-      };
+      const move = (ev: MouseEvent): void => { spec.x = snap(ox + ev.clientX - sx); spec.y = snap(oy + ev.clientY - sy); w.style.left = spec.x + 'px'; w.style.top = spec.y + 'px'; };
       const up = (): void => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); save(); growCanvas(); };
       document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
     });
   }
   function wireResize(spec: WSpec, w: HTMLElement): void {
-    const h = w.querySelector('.stu-w-rsz') as HTMLElement;
+    const h = w.querySelector('.stu-w-rsz') as HTMLElement | null;
+    if (!h) return;
     h.addEventListener('mousedown', (e: MouseEvent) => {
       e.preventDefault(); e.stopPropagation();
       const sx = e.clientX, sy = e.clientY, ow = spec.w, oh = spec.h;
-      const move = (ev: MouseEvent): void => {
-        spec.w = Math.max(200, snap(ow + ev.clientX - sx)); spec.h = Math.max(120, snap(oh + ev.clientY - sy));
-        w.style.width = spec.w + 'px'; if (!spec.min) w.style.height = spec.h + 'px';
-      };
-      const up = (): void => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); spec.big = false; save(); paintAll(); };
+      const move = (ev: MouseEvent): void => { spec.w = Math.max(200, snap(ow + ev.clientX - sx)); spec.h = Math.max(120, snap(oh + ev.clientY - sy)); w.style.width = spec.w + 'px'; if (!spec.min) w.style.height = spec.h + 'px'; };
+      const up = (): void => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); spec.big = false; save(); };
       document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
     });
   }
   function growCanvas(): void {
-    const mx = Math.max(1600, ...widgets.map((s) => s.x + s.w + 80));
-    const my = Math.max(1000, ...widgets.map((s) => s.y + (s.min ? 40 : s.h) + 120));
+    const mx = Math.max(1500, ...widgets.map((s) => s.x + s.w + 80));
+    const my = Math.max(900, ...widgets.map((s) => s.y + (s.min ? 40 : s.h) + 140));
     canvas.style.width = mx + 'px'; canvas.style.height = my + 'px';
+    cmLayer.style.width = mx + 'px'; cmLayer.style.height = my + 'px';
   }
 
-  // ── 위젯 본문들 ──
+  // ── 위젯 본문 ──
   function fillBody(spec: WSpec, body: HTMLElement): void {
     const t = spec.type;
-    if (t === 'session') fillSession(spec, body);
+    if (t === 'session') void fillSession(spec, body);
+    else if (t === 'coach') fillCoach(body);
+    else if (t === 'automation') fillAutomation(body);
     else if (t === 'tasks') fillTasks(body);
     else if (t === 'knowledge') fillKnowledge(body);
     else if (t === 'folder') void fillFolder(body);
     else if (t === 'desc') fillDesc(body);
     else if (t === 'timeline') fillTimeline(body);
-    else if (t === 'sticky') fillSticky(spec, body);
-    else if (t === 'coach') fillCoach(body);
+    else if (t === 'preview') fillPreview(spec, body);
+    else if (t === 'doc') fillDoc(spec, body);
     else if (t === 'app-meeting') fillMeeting(body);
     else if (t === 'app-calendar') fillCalendar(body);
     else if (t === 'app-slides') fillSlides(body);
   }
 
-  // 세션 위젯 — 살아 있는 카드(B의 감각). 읽기는 전체 화면, 여기선 상태·마지막 일·던지기·승인.
-  function sessionTitle(spec: WSpec): string {
-    const s = spec.data?.sid ? mySessions().find((x) => x.id === spec.data.sid) : null;
-    if (!s) return 'AI 세션 — 고르세요';
-    const t = sessText(s, pj().name || '');   // 프로젝트명 되풀이를 걷어낸다(사이드바와 같은 규칙)
-    return t.main || s.label || 'AI 세션';
+  // 세션 — 최근 주고받음(나/AI). 입력칸은 없다: 입력은 아래 컴포저 하나, [여기에 시키기]가 행선지를 이 세션으로.
+  const tailCache = new Map<string, { ask: string; ans: string; at: number }>();
+  async function fetchTail(s: Sess): Promise<{ ask: string; ans: string }> {
+    const hit = tailCache.get(s.id);
+    if (hit && Date.now() - hit.at < 15000) return hit;
+    let ask = '', ans = '';
+    try {
+      const headers: Record<string, string> = {};
+      const tok = localStorage.getItem(TOKEN_KEY); if (tok) headers.Authorization = 'Bearer ' + tok;
+      const res = await fetch(apiUrl('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/transcript?tail=24000'), { headers, credentials: 'same-origin' });
+      if (res.ok) {
+        for (const line of (await res.text()).split('\n')) {
+          if (!line.trim()) continue;
+          let o: any; try { o = JSON.parse(line); } catch { continue; }
+          if (!o || o.isSidechain || o.isMeta) continue;
+          if (o.type === 'user') {
+            const c = o.message?.content;
+            const txt = typeof c === 'string' ? c : Array.isArray(c) ? c.filter((b: any) => b?.type === 'text').map((b: any) => String(b.text || '')).join(' ') : '';
+            const one = txt.replace(/\s+/g, ' ').trim();
+            if (one && !INJ_RE.test(one)) { ask = one; ans = ''; }
+          } else if (o.type === 'assistant') {
+            const c = o.message?.content;
+            const txt = Array.isArray(c) ? c.filter((b: any) => b?.type === 'text').map((b: any) => String(b.text || '')).join(' ') : '';
+            const one = txt.replace(/\s+/g, ' ').trim();
+            if (one) ans = one;
+          }
+        }
+      }
+    } catch (_) { /* 기록을 못 읽는 하네스(409 등) — 거품 없이 상태만 */ }
+    const out = { ask: ask.slice(0, 120), ans: ans.slice(0, 160), at: Date.now() };
+    tailCache.set(s.id, out);
+    return out;
   }
-  function fillSession(spec: WSpec, body: HTMLElement): void {
+  async function fillSession(spec: WSpec, body: HTMLElement): Promise<void> {
     const sid = spec.data?.sid ? String(spec.data.sid) : '';
     const s = sid ? mySessions().find((x) => x.id === sid) : null;
     if (!s) {
       const list = mySessions();
       body.replaceChildren(
-        el('p', { class: 'stu-fine', text: list.length ? '이 판에 올릴 세션을 고르세요.' : '이 프로젝트에 세션이 아직 없어요 — 아래 대화나 [+ 새 세션]으로 시작하세요.' }),
-        el('div', { class: 'stu-pick' }, ...list.slice(0, 8).map((x) => el('button', {
-          class: 'stu-pick-row', type: 'button', onclick: () => { spec.data = { sid: x.id }; save(); paintAll(); } },
+        el('p', { class: 'stu-fine', text: list.length ? '판에 올릴 세션을 고르세요.' : '아직 세션이 없어요 — 아래 컴포저로 시키면 자동으로 생깁니다.' }),
+        el('div', { class: 'stu-pick' }, ...list.slice(0, 8).map((x) => el('button', { class: 'stu-pick-row', type: 'button', onclick: () => { spec.data = { sid: x.id }; save(); paintAll(); } },
           el('span', { class: 'v2-dot ' + dotCls(x.stateKey), 'aria-hidden': 'true' }), el('span', { class: 'n', text: x.label || x.id }), el('span', { class: 'm', text: x.stateLabel })))));
       return;
     }
     const raw = s.raw || {};
-    const work = String(raw.title || '').trim();
     const waiting = s.stateKey === 'waiting';
-    const lastEl = el('div', { class: 'stu-sess-last', text: work && work.toLowerCase() !== String(raw.harness || '').toLowerCase() ? work : (s.stateLabel + (s.lastSeen ? ' · ' + relTime(new Date(s.lastSeen).toISOString()) : '')) });
-    const input = el('input', { class: 'stu-sess-in', type: 'text', placeholder: '이 세션에 시키기 — Enter', 'aria-label': '세션에 보낼 지시' }) as HTMLInputElement;
-    input.addEventListener('keydown', (e: KeyboardEvent) => {
-      if (e.key !== 'Enter' || e.isComposing) return;
-      const text = input.value.trim();
-      if (!text) return;
-      input.disabled = true;
-      void api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/prompt', { method: 'POST', body: JSON.stringify({ text }) })
-        .then(() => { input.value = ''; toast('보냈어요 — 진행은 카드와 타임라인에 나타납니다.'); })
-        .catch((err: any) => toast('보내지 못했어요 — ' + (err?.message || err), true))
-        .finally(() => { input.disabled = false; });
-    });
+    const stripe = els.get(spec.id)?.root;
+    if (stripe) stripe.style.setProperty('--wac', s.stateKey === 'busy' ? '#2D6BF0' : waiting ? '#D9A32B' : s.stateKey === 'done' ? '#16C79A' : '#A6B2C8');
+    const work = String(raw.title || '').trim();
     const key = (action: string, label: string, primary?: boolean): HTMLElement =>
       el('button', { class: 'btn btn-sm ' + (primary ? 'btn-primary' : 'btn-ghost'), type: 'button', text: label, onclick: () => {
         void api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/keys', { method: 'POST', body: JSON.stringify({ action }) })
@@ -250,232 +294,451 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
       } });
     body.replaceChildren(
       el('div', { class: 'stu-sess-st' },
-        el('span', { class: 'v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' }),
-        el('span', { text: s.stateLabel }),
-        el('span', { class: 'stu-fine', text: raw.harness ? String(raw.harness) : '' }),
-        el('a', { class: 'stu-fine stu-open', href: '#/s/' + encodeURIComponent(s.id), text: '대화 열기 →' })),
-      lastEl,
+        el('span', { class: 'v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' }), el('span', { text: s.stateLabel }),
+        raw.harness ? el('span', { class: 'stu-hbadge mono', text: String(raw.harness) }) : null,
+        el('span', { class: 'stu-fine', style: 'margin-left:auto', text: s.lastSeen ? relTime(new Date(s.lastSeen).toISOString()) : '' })),
+      work && !INJ_RE.test(work) ? el('div', { class: 'stu-sess-now', title: work }, icon('bolt', 'stu-i sm'), el('span', { text: work })) : null,
+      el('div', { class: 'stu-sess-x', 'data-x': '1' }),
       ...(waiting ? [el('div', { class: 'stu-sess-keys' }, key('approve', '승인', true), key('deny', '거부'), key('interrupt', '멈춤'))] : []),
-      input);
-  }
-
-  // 태스크 위젯 — 미니 목록(보드는 클래식 앱이 담당 — 칸반과 판을 합치지 않는다).
-  function fillTasks(body: HTMLElement): void {
-    const tasks: any[] = Array.isArray(pj().tasks) ? pj().tasks : [];
-    const row = (tk: any): HTMLElement => el('a', { class: 'stu-row', href: '#/projects2/t/' + tk.id, title: tk.name },
-      el('span', { class: 'v2-dot ' + (tk.status_category === 'done' ? 'done' : tk.status_category === 'started' ? 'busy' : ''), 'aria-hidden': 'true' }),
-      el('span', { class: 'n', text: tk.name }), el('span', { class: 'm', text: tk.status || '' }));
-    const open = tasks.filter((tk) => tk.status_category !== 'done');
-    body.replaceChildren(
-      open.length ? el('div', { class: 'stu-rows' }, ...open.slice(0, 12).map(row)) : el('p', { class: 'stu-fine', text: '남은 할 일이 없어요.' }),
       el('div', { class: 'stu-w-foot' },
-        el('span', { class: 'stu-fine', text: `남음 ${open.length} · 전체 ${tasks.length}` }),
-        el('button', { class: 'btn-text', type: 'button', text: '리브에게 나누기', onclick: () => chat?.say('이 프로젝트를 태스크로 나눠 줘. 만들기 전에 목록을 먼저 보여 줘.') })));
-  }
-
-  // 지식 위젯 — 누르면 오른쪽에서 펼쳐 읽는다(3열 확장 패턴 재사용).
-  function fillKnowledge(body: HTMLElement): void {
-    const kn = pj().knowledge || {};
-    const rows: HTMLElement[] = [];
-    for (const [rel, list] of [['필요', kn.required || []], ['산출', kn.produced || []]] as Array<[string, any[]]>) {
-      for (const k of list) rows.push(el('button', { class: 'stu-row', type: 'button', title: k.name, onclick: () => openPeek('#/k/' + encodeURIComponent(k.name), k.name) },
-        el('span', { class: 'stu-kn-rel' + (rel === '산출' ? ' prod' : ''), text: rel }), el('span', { class: 'n', text: k.name })));
+        el('button', { class: 'btn-text', type: 'button', text: '여기에 시키기', title: '아래 컴포저의 행선지를 이 세션으로 잡습니다', onclick: () => setDest({ kind: 'session', sid: s.id, label: widgetTitle(spec) }, true) }),
+        el('a', { class: 'btn-text', href: '#/s/' + encodeURIComponent(s.id), text: '대화 열기 →' })));
+    if (s.live && !s.node) {
+      const x = body.querySelector('.stu-sess-x') as HTMLElement | null;
+      const t = await fetchTail(s);
+      if (dead || !x || !x.isConnected) return;
+      // ⚠ replaceChildren 은 null 을 글자 "null" 로 그린다 — 조건부 자식은 배열 스프레드로.
+      x.replaceChildren(
+        ...(t.ask ? [el('div', { class: 'stu-bub me', title: t.ask }, el('span', { class: 'who', text: '나' }), el('span', { class: 'tx', text: t.ask }))] : [el('p', { class: 'stu-fine', text: '아직 주고받은 말이 없어요.' })]),
+        ...(t.ans ? [el('div', { class: 'stu-bub ai', title: t.ans }, el('span', { class: 'who', text: 'AI' }), el('span', { class: 'tx', text: t.ans }))] : []));
     }
-    body.replaceChildren(rows.length ? el('div', { class: 'stu-rows' }, ...rows.slice(0, 14)) : el('p', { class: 'stu-fine', text: '연결된 지식이 아직 없어요 — 세션이 남기면 여기에 쌓입니다.' }));
   }
 
-  // 공유 폴더 위젯 — 파일 목록 + 클릭 미리보기(기존 뷰어 재사용).
-  async function fillFolder(body: HTMLElement): Promise<void> {
-    body.replaceChildren(el('p', { class: 'stu-fine', text: '불러오는 중…' }));
-    let data: any = null;
-    try { data = await api('/api/ui/projects/' + id + '/files?path='); } catch (e: any) { body.replaceChildren(el('p', { class: 'stu-fine', text: '폴더를 불러오지 못했어요 — ' + (e?.message || e) })); return; }
-    if (dead) return;
-    const items: any[] = (data && data.items) || [];
-    const row = (it: any): HTMLElement => el('button', { class: 'stu-row', type: 'button', title: it.name, onclick: () => {
-      if (it.type === 'dir') { openPeek('#/f?root=shared&path=' + encodeURIComponent('project/' + id + '/' + it.name), it.name); return; }
-      void openFileViewer(id, it.name, it.name, () => { /* 목록 재조회 불요 */ }, '/api/ui/projects/');
-    } }, fileIconSvg(it.name, it.type), el('span', { class: 'n', text: it.name }), el('span', { class: 'm', text: it.type === 'dir' ? '폴더' : fmtSize(it.size || 0) }));
-    body.replaceChildren(items.length ? el('div', { class: 'stu-rows' }, ...items.slice(0, 16).map(row)) : el('p', { class: 'stu-fine', text: '아직 파일이 없어요 — 세션 작업물이 여기 쌓입니다.' }));
+  // 리브 제안(민트) — 판 상태에서 계산한 '더 크게 쓰기'.
+  function coachRow(txt: string, say: string): HTMLElement {
+    return el('div', { class: 'stu-coach-row' }, el('span', { class: 'n', text: txt }),
+      el('button', { class: 'stu-mintbtn', type: 'button', text: '리브에게', onclick: () => { openLiv(); chat?.say(say); } }));
   }
-
-  // 명세(본문) 위젯 — "본문이 계속 눈에 보일 필요는 없다"(원준) → 상시 노출 대신 꺼내 보는 문서.
-  function fillDesc(body: HTMLElement): void {
-    const md = String(pj().description || '').trim();
-    body.replaceChildren(
-      md ? el('div', { class: 'stu-md' }, renderMarkdown(md)) : el('p', { class: 'stu-fine', text: '본문이 아직 없어요.' }),
-      el('div', { class: 'stu-w-foot' }, el('button', { class: 'btn-text', type: 'button', text: '리브에게 정돈 맡기기', onclick: () => chat?.say('본문을 정돈된 형식으로 다시 써 줘. 원문의 사실·결정·링크는 하나도 잃지 말고, 산만한 문장만 정리해.') })));
-  }
-
-  function fillTimeline(body: HTMLElement): void {
-    const tl = createTimeline(body, { scope: '프로젝트 #' + id, showActors: true, empty: '아직 이 프로젝트에서 일어난 일이 없어요.' });
-    void loadProjectTimeline(id, detail).then((items) => { if (!dead) tl.addAll(items); });
-  }
-
-  function fillSticky(spec: WSpec, body: HTMLElement): void {
-    const ta = el('textarea', { class: 'stu-sticky-ta', placeholder: '메모 — 이 판을 보는 팀원에게 남길 말', 'aria-label': '포스트잇 메모' }) as HTMLTextAreaElement;
-    ta.value = String(spec.data?.text || '');
-    ta.addEventListener('input', () => { spec.data = { ...(spec.data || {}), text: ta.value }; save(); });
-    body.replaceChildren(ta, el('div', { class: 'stu-fine stu-sticky-note', text: '지금은 이 브라우저에만 저장돼요 — 팀 공유는 다음 단계.' }));
-  }
-
-  // 리브 제안 — "사람은 자기 워크플로우의 한계로 AI 를 작게 쓴다 → 리브가 계속 더 큰 쓰임을 제안한다"(원준 문제의식).
-  //  제안 = 데이터에서 계산한 것 + 워크플로우 확장 제안(예시). [리브에게] = 아래 리브 대화로 실제 전송.
   function fillCoach(body: HTMLElement): void {
     const ss = mySessions();
     const waiting = ss.filter((s) => s.stateKey === 'waiting');
     const idle = ss.filter((s) => s.live && s.alive && s.stateKey === 'idle');
     const tasks: any[] = Array.isArray(pj().tasks) ? pj().tasks : [];
     const noMeta = tasks.filter((tk) => tk.status_category !== 'done' && !tk.due_date && !(tk.assignees && tk.assignees.length)).length;
-    const rows: Array<[string, string]> = [];
-    if (waiting.length) rows.push([`세션 ${waiting.length}개가 답을 기다려요 — 물음을 모아 보여 드릴까요?`, '지금 답을 기다리는 세션들의 질문을 모아서 요약해 줘. 내가 한 번에 결정할 수 있게.']);
-    if (idle.length >= 2) rows.push([`조용한 세션 ${idle.length}개 — 남긴 것을 지식으로 정리하고 닫을 수 있어요.`, '이 프로젝트의 조용한 세션들이 남긴 결과를 지식으로 정리하고, 닫아도 되는 세션을 알려 줘.']);
-    if (noMeta >= 3) rows.push([`담당·마감 없는 할 일이 ${noMeta}개 — 정리하면 병렬로 시킬 수 있어요.`, '상태·마감·담당·우선순위를 점검하고, 비어 있거나 어긋난 게 있으면 정리해 줘.']);
-    rows.push(['이 작업, 세션 여러 개로 나눠 병렬로 돌릴 수 있어요 — 나누는 안을 받아 보세요.', '지금 진행 중인 작업을 병렬 세션 2~3개로 나누는 안을 제안해 줘. 각 세션에 줄 첫 지시까지 써 줘.']);
-    rows.push(['반복 확인(화면 검증·회귀 체크)은 상시 세션에 맡길 수 있어요.', '이 프로젝트에서 반복되는 확인 작업을 찾아서, 상시 세션 하나에 맡기는 흐름을 제안해 줘.']);
-    body.replaceChildren(
-      el('div', { class: 'stu-coach-rows' }, ...rows.slice(0, 4).map(([txt, say]) => el('div', { class: 'stu-coach-row' },
-        el('span', { class: 'n', text: txt }),
-        el('button', { class: 'btn btn-sm btn-ghost', type: 'button', text: '리브에게', onclick: () => { chat?.say(say); chat?.focus(); } })))),
-      el('p', { class: 'stu-fine', text: '제안은 판의 상태에서 계산돼요 — 누르면 아래 리브 대화로 들어갑니다.' }));
+    const rows: HTMLElement[] = [];
+    if (waiting.length) rows.push(coachRow(`세션 ${waiting.length}개가 답을 기다려요 — 물음을 모아 볼까요?`, '답을 기다리는 세션들의 질문을 모아 요약해 줘. 한 번에 결정할 수 있게.'));
+    if (idle.length >= 2) rows.push(coachRow(`조용한 세션 ${idle.length}개 — 결과를 지식으로 정리하고 닫을 수 있어요.`, '조용한 세션들이 남긴 결과를 지식으로 정리하고, 닫아도 되는 세션을 알려 줘.'));
+    if (noMeta >= 3) rows.push(coachRow(`담당·마감 없는 할 일 ${noMeta}개 — 정리하면 병렬로 시킬 수 있어요.`, '상태·마감·담당을 점검하고 비거나 어긋난 걸 정리해 줘.'));
+    rows.push(coachRow('이 작업, 세션 2~3개로 나눠 병렬로 돌릴 수 있어요.', '지금 작업을 병렬 세션 2~3개로 나누는 안을 제안해 줘. 각 세션의 첫 지시까지.'));
+    body.replaceChildren(el('div', { class: 'stu-coach-rows' }, ...rows.slice(0, 4)),
+      el('p', { class: 'stu-fine', text: '판의 상태에서 계산한 제안 — 누르면 리브 대화로 들어가요.' }));
   }
 
-  // ── 앱 껍데기 셋 — "무엇이 들어올 자리인지"를 말하고, 지금 되는 것(리브)으로 연결한다 ──
-  function shellRow(txt: string, say: string): HTMLElement {
-    return el('div', { class: 'stu-coach-row' }, el('span', { class: 'n', text: txt }),
-      el('button', { class: 'btn btn-sm btn-ghost', type: 'button', text: '리브에게', onclick: () => { chat?.say(say); chat?.focus(); } }));
+  // 자동화(보라) — 반복을 붙박이로. 지금은 제안+리브 배선(실제 예약 실행은 다음 단계).
+  function fillAutomation(body: HTMLElement): void {
+    const row = (t: string, d2: string, say: string): HTMLElement => el('div', { class: 'stu-auto-row' },
+      el('span', { class: 'stu-auto-ic' }, icon('bolt', 'stu-i sm')),
+      el('span', { class: 'b' }, el('b', { text: t }), el('span', { class: 'stu-fine', text: d2 })),
+      el('button', { class: 'stu-violetbtn', type: 'button', text: '켜기', onclick: () => { openLiv(); chat?.say(say); } }));
+    body.replaceChildren(
+      row('아침 브리프', '매일 9시, 밤새 남긴 것 요약을 판과 대화로', '매일 아침 9시에 이 프로젝트의 전날 결과(지식·커밋·결정)를 요약해 주는 자동화를 만들려면 어떻게 하면 되는지 제안하고, 가능하면 만들어 줘.'),
+      row('회의록 → 태스크', '회의록이 올라오면 결정·태스크 자동 추출', '공유 폴더에 회의록이 올라오면 결정·태스크를 자동 추출하는 흐름을 제안하고, 가능하면 만들어 줘.'),
+      row('화면 회귀 검증', '화면 바뀔 때마다 스크린샷 비교를 상시 세션에', '화면이 바뀔 때마다 스크린샷을 찍어 이전과 비교하는 상시 검증 흐름을 제안해 줘.'),
+      el('p', { class: 'stu-fine', text: '켜기 = 리브에게 설계·생성을 맡깁니다(예약 실행 붙박이는 다음 단계).' }));
+  }
+
+  // 태스크(주황) — 진행 막대 + 체크 스타일 행.
+  function fillTasks(body: HTMLElement): void {
+    const tasks: any[] = Array.isArray(pj().tasks) ? pj().tasks : [];
+    const done = tasks.filter((tk) => tk.status_category === 'done').length;
+    const open = tasks.filter((tk) => tk.status_category !== 'done');
+    const pct = tasks.length ? Math.round(done / tasks.length * 100) : 0;
+    body.replaceChildren(
+      el('div', { class: 'stu-taskbar' }, el('i', { style: 'width:' + pct + '%' }), el('span', { class: 'stu-fine', text: `${done}/${tasks.length} · ${pct}%` })),
+      open.length ? el('div', { class: 'stu-rows' }, ...open.slice(0, 12).map((tk) => el('a', { class: 'stu-task-row', href: '#/projects2/t/' + tk.id, title: tk.name },
+        el('span', { class: 'stu-ck' + (tk.status_category === 'started' ? ' run' : ''), 'aria-hidden': 'true' }),
+        el('span', { class: 'n', text: tk.name }),
+        tk.due_date ? el('span', { class: 'm mono', text: String(tk.due_date).slice(5, 10) }) : null)))
+        : el('p', { class: 'stu-fine', text: '남은 할 일이 없어요.' }),
+      el('div', { class: 'stu-w-foot' }, el('button', { class: 'btn-text', type: 'button', text: '리브에게 나누기', onclick: () => { openLiv(); chat?.say('이 프로젝트를 태스크로 나눠 줘. 만들기 전에 목록 먼저.'); } })));
+  }
+
+  // 지식(청록 문서) — 행 = 문서. 클릭 = 피크.
+  function fillKnowledge(body: HTMLElement): void {
+    const kn = pj().knowledge || {};
+    const rows: HTMLElement[] = [];
+    for (const [rel, list] of [['필요', kn.required || []], ['산출', kn.produced || []]] as Array<[string, any[]]>) {
+      for (const k of list) rows.push(el('button', { class: 'stu-doc-row', type: 'button', title: k.name, onclick: () => openPeek('#/k/' + encodeURIComponent(k.name), k.name) },
+        icon('doc', 'stu-i sm'), el('span', { class: 'n', text: k.name }), el('span', { class: 'stu-kn-rel' + (rel === '산출' ? ' prod' : ''), text: rel })));
+    }
+    body.replaceChildren(rows.length ? el('div', { class: 'stu-rows' }, ...rows.slice(0, 14)) : el('p', { class: 'stu-fine', text: '연결된 지식이 아직 없어요.' }));
+  }
+
+  // 폴더(파일 그리드 — Finder 감각).
+  async function fillFolder(body: HTMLElement): Promise<void> {
+    body.replaceChildren(el('p', { class: 'stu-fine', text: '불러오는 중…' }));
+    let data: any = null;
+    try { data = await api('/api/ui/projects/' + id + '/files?path='); } catch (e: any) { body.replaceChildren(el('p', { class: 'stu-fine', text: '폴더를 못 읽었어요 — ' + (e?.message || e) })); return; }
+    if (dead) return;
+    const items: any[] = (data && data.items) || [];
+    const tile = (it: any): HTMLElement => el('button', { class: 'stu-file', type: 'button', title: it.name, onclick: () => {
+      if (it.type === 'dir') { openPeek('#/f?root=shared&path=' + encodeURIComponent('project/' + id + '/' + it.name), it.name); return; }
+      if (/\.(png|jpe?g|gif|webp|svg|pdf)$/i.test(it.name)) { addWidget('preview', { x: 80, y: 80 }, { path: it.name, name: it.name }); return; }
+      void openFileViewer(id, it.name, it.name, () => { /* noop */ }, '/api/ui/projects/');
+    } },
+      el('span', { class: 'stu-file-ic' + (it.type === 'dir' ? ' dir' : '') }, icon(it.type === 'dir' ? 'folder' : /\.(png|jpe?g|gif|webp|svg)$/i.test(it.name) ? 'img' : 'doc', 'stu-i')),
+      el('span', { class: 'n', text: it.name }), el('span', { class: 'm', text: it.type === 'dir' ? '폴더' : fmtSize(it.size || 0) }));
+    body.replaceChildren(items.length ? el('div', { class: 'stu-filegrid' }, ...items.slice(0, 18).map(tile)) : el('p', { class: 'stu-fine', text: '아직 파일이 없어요.' }));
+  }
+
+  function fillDesc(body: HTMLElement): void {
+    const md = String(pj().description || '').trim();
+    body.replaceChildren(
+      md ? el('div', { class: 'stu-md' }, renderMarkdown(md)) : el('p', { class: 'stu-fine', text: '본문이 아직 없어요.' }),
+      el('div', { class: 'stu-w-foot' }, el('button', { class: 'btn-text', type: 'button', text: '리브에게 정돈 맡기기', onclick: () => { openLiv(); chat?.say('본문을 정돈된 형식으로 다시 써 줘. 사실·결정·링크는 하나도 잃지 말고.'); } })));
+  }
+  function fillTimeline(body: HTMLElement): void {
+    const tl = createTimeline(body, { scope: '프로젝트 #' + id, showActors: true, outcomes: true, empty: '아직 남은 것이 없어요.' });
+    void loadProjectTimeline(id, detail).then((items) => { if (!dead) tl.addAll(items); });
+  }
+  function fillPreview(spec: WSpec, body: HTMLElement): void {
+    const path = String(spec.data?.path || '');
+    const url = apiUrl('/api/ui/projects/' + id + '/file?path=' + encodeURIComponent(path));
+    if (/\.(png|jpe?g|gif|webp|svg)$/i.test(path)) body.replaceChildren(el('img', { class: 'stu-prev-img', src: url, alt: path, loading: 'lazy' }));
+    else if (/\.pdf$/i.test(path)) body.replaceChildren(el('iframe', { class: 'stu-prev-f', src: url + '#toolbar=0&view=FitH', title: path }));
+    else body.replaceChildren(el('iframe', { class: 'stu-prev-f', src: url, title: path }));
+    body.append(el('div', { class: 'stu-w-foot' }, el('span', { class: 'stu-fine', text: path }),
+      el('button', { class: 'btn-text', type: 'button', text: '크게', onclick: () => void openFileViewer(id, path, path, () => { /* noop */ }, '/api/ui/projects/') })));
+  }
+  function fillDoc(spec: WSpec, body: HTMLElement): void {
+    const hash = String(spec.data?.hash || '');
+    body.replaceChildren(el('iframe', { class: 'stu-prev-f', src: location.pathname + '?embed=1' + hash, title: String(spec.data?.title || '문서') }));
   }
   function fillMeeting(body: HTMLElement): void {
-    body.replaceChildren(
-      el('p', { class: 'stu-shell-p', text: '회의록 앱 자리 — 회의록(텍스트·녹취)을 넣으면 결정·태스크·미결이 추출되어 이 프로젝트에 연결됩니다.' }),
+    body.replaceChildren(el('p', { class: 'stu-shell-p', text: '회의록을 넣으면 결정·태스크·미결이 추출되어 이 프로젝트에 연결되는 자리예요.' }),
       el('div', { class: 'stu-coach-rows' },
-        shellRow('회의록을 공유 폴더에 올리고 추출을 맡겨 보세요.', '공유 폴더의 회의록 파일을 찾아 결정·태스크·미결 항목을 추출하고, 태스크로 만들지 목록을 먼저 보여 줘.'),
-        shellRow('회의마다 자동으로 하게 만들 수도 있어요.', '회의록이 올라오면 자동으로 결정·태스크를 추출하는 흐름을 어떻게 만들 수 있는지 제안해 줘.')));
+        coachRow('회의록 추출을 지금 맡겨 보기', '공유 폴더의 회의록을 찾아 결정·태스크·미결을 추출하고, 태스크로 만들지 목록 먼저 보여 줘.')));
   }
   function fillCalendar(body: HTMLElement): void {
     const tasks: any[] = (Array.isArray(pj().tasks) ? pj().tasks : []).filter((tk: any) => tk.due_date && tk.status_category !== 'done');
-    body.replaceChildren(
-      el('p', { class: 'stu-shell-p', text: '캘린더 앱 자리 — 태스크 마감·회의·세션 예약(정기 실행)이 한 달력에 놓입니다.' }),
-      tasks.length ? el('div', { class: 'stu-rows' }, ...tasks.slice(0, 6).map((tk: any) => el('a', { class: 'stu-row', href: '#/projects2/t/' + tk.id },
-        el('span', { class: 'm mono', text: String(tk.due_date).slice(5, 10) }), el('span', { class: 'n', text: tk.name })))) : el('p', { class: 'stu-fine', text: '마감이 있는 할 일이 아직 없어요.' }),
-      el('div', { class: 'stu-coach-rows' }, shellRow('마감 점검을 리브에게.', '마감이 지난·임박한 태스크를 점검하고 조정안을 제안해 줘.')));
+    body.replaceChildren(el('p', { class: 'stu-shell-p', text: '태스크 마감·회의·세션 예약(정기 실행)이 한 달력에 놓일 자리예요.' }),
+      tasks.length ? el('div', { class: 'stu-rows' }, ...tasks.slice(0, 6).map((tk: any) => el('a', { class: 'stu-task-row', href: '#/projects2/t/' + tk.id },
+        el('span', { class: 'm mono', text: String(tk.due_date).slice(5, 10) }), el('span', { class: 'n', text: tk.name })))) : el('p', { class: 'stu-fine', text: '마감 있는 할 일이 아직 없어요.' }),
+      el('div', { class: 'stu-coach-rows' }, coachRow('마감 점검 맡기기', '마감이 지난·임박한 태스크를 점검하고 조정안을 제안해 줘.')));
   }
   function fillSlides(body: HTMLElement): void {
-    body.replaceChildren(
-      el('p', { class: 'stu-shell-p', text: '장표 앱 자리 — 이 프로젝트의 지식·산출물로 보고용 장표(HTML)를 만들어 판에 놓습니다.' }),
-      el('div', { class: 'stu-coach-rows' },
-        shellRow('산출지식으로 장표 초안 만들기.', '이 프로젝트의 산출지식을 바탕으로 보고용 장표(HTML) 초안을 만들어 줘. 목차부터 먼저 보여 줘.')));
+    body.replaceChildren(el('p', { class: 'stu-shell-p', text: '이 프로젝트의 지식·산출물로 보고용 장표(HTML)를 만들어 판에 놓는 자리예요.' }),
+      el('div', { class: 'stu-coach-rows' }, coachRow('산출지식으로 장표 초안', '산출지식으로 보고용 장표(HTML) 초안을 만들어 줘. 목차 먼저.')));
   }
 
-  // ── 오른쪽에서 펼쳐 읽기(피크) — 타임라인 펼쳐보기(#1756 계열)와 같은 문법 ──
+  // 포스트잇 — 테이프 달린 노랑 쪽지(머리 없음, 전체가 손잡이).
+  function stickyEl(spec: WSpec): HTMLElement {
+    const ta = el('textarea', { class: 'stu-sticky-ta', placeholder: '메모…', 'aria-label': '포스트잇' }) as HTMLTextAreaElement;
+    ta.value = String(spec.data?.text || '');
+    ta.addEventListener('input', () => { spec.data = { ...(spec.data || {}), text: ta.value }; save(); });
+    const w = el('div', { class: 'stu-w stu-sticky', style: `left:${spec.x}px;top:${spec.y}px;width:${spec.w}px;height:${spec.h}px;z-index:${spec.z || 1}` },
+      el('span', { class: 'stu-tape', 'aria-hidden': 'true' }),
+      el('button', { class: 'stu-w-btn stu-sticky-x', type: 'button', text: '×', title: '치우기', onclick: () => removeWidget(spec) }),
+      ta, el('div', { class: 'stu-w-rsz' }));
+    els.set(spec.id, { root: w, body: w, title: w });
+    wireDrag(spec, w, w);
+    wireResize(spec, w);
+    w.addEventListener('mousedown', () => { spec.z = ++zTop; w.style.zIndex = String(spec.z); });
+    return w;
+  }
+
+  // ── 코멘트 모드 — 판 최상위 마키(민트). 드래그 = 영역, 놓으면 코멘트 카드. ──
+  function setCommentMode(on: boolean): void {
+    commentMode = on;
+    cmLayer.hidden = !on;
+    board.classList.toggle('cm-on', on);
+    cmBtn.classList.toggle('on', on);
+    if (on) toast('코멘트 모드 — 판 위를 드래그해 영역을 잡으세요. (버튼으로 끔)');
+  }
+  cmLayer.addEventListener('mousedown', (e: MouseEvent) => {
+    if (!commentMode) return;
+    e.preventDefault();
+    const r = cmLayer.getBoundingClientRect();
+    const sx = e.clientX - r.left, sy = e.clientY - r.top;
+    const box = el('div', { class: 'stu-marq', style: `left:${sx}px;top:${sy}px;width:0;height:0` });
+    cmLayer.append(box);
+    const move = (ev: MouseEvent): void => {
+      const x = Math.min(sx, ev.clientX - r.left), y = Math.min(sy, ev.clientY - r.top);
+      const w2 = Math.abs(ev.clientX - r.left - sx), h2 = Math.abs(ev.clientY - r.top - sy);
+      box.style.left = x + 'px'; box.style.top = y + 'px'; box.style.width = w2 + 'px'; box.style.height = h2 + 'px';
+    };
+    const up = (ev: MouseEvent): void => {
+      document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up);
+      box.remove();
+      const x = Math.min(sx, ev.clientX - r.left), y = Math.min(sy, ev.clientY - r.top);
+      const w2 = Math.abs(ev.clientX - r.left - sx), h2 = Math.abs(ev.clientY - r.top - sy);
+      if (w2 < 24 || h2 < 18) return;   // 실수 클릭은 코멘트가 아니다
+      const spec: WSpec = { id: 'w' + seq++, type: 'sticky', x: 0, y: 0, w: 0, h: 0, data: { cm: { x: snap(x), y: snap(y), w: snap(w2), h: snap(h2) }, text: '' } };
+      (spec as any).comment = true;
+      widgets.push(spec);
+      save(); paintAll();
+      setCommentMode(false);
+      window.setTimeout(() => { (canvas.querySelector('[data-cm="' + spec.id + '"] textarea') as HTMLTextAreaElement | null)?.focus(); }, 30);
+    };
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
+  });
+  // 코멘트(영역+카드) 렌더 — 위젯 배열에 살지만 생김새는 마키 민트.
+  function commentEl(spec: WSpec): HTMLElement {
+    const cm = spec.data?.cm || { x: 40, y: 40, w: 160, h: 80 };
+    const ta = el('textarea', { class: 'stu-cmt-ta', placeholder: '이 영역에 대해…', 'aria-label': '코멘트' }) as HTMLTextAreaElement;
+    ta.value = String(spec.data?.text || '');
+    ta.addEventListener('input', () => { spec.data = { ...(spec.data || {}), text: ta.value }; save(); });
+    const card = el('div', { class: 'stu-cmt-card' },
+      el('div', { class: 'stu-cmt-h' }, icon('pin', 'stu-i sm'), el('b', { text: '코멘트' }),
+        el('button', { class: 'stu-w-btn', type: 'button', text: '×', title: '지우기', onclick: () => removeWidget(spec) })),
+      ta,
+      el('div', { class: 'stu-cmt-acts' },
+        el('button', { class: 'stu-mintbtn', type: 'button', text: '리브에게', title: '이 코멘트를 리브 대화로 보냅니다', onclick: () => {
+          const t = ta.value.trim(); if (!t) { toast('코멘트를 먼저 써 주세요.', true); return; }
+          openLiv(); chat?.say('[캔버스 코멘트 · 판 좌표 ' + cm.x + ',' + cm.y + ' 근처] ' + t);
+        } })));
+    const g = el('div', { class: 'stu-cmt', 'data-cm': spec.id, style: `left:${cm.x}px;top:${cm.y}px;z-index:${spec.z || 5}` },
+      el('div', { class: 'stu-cmt-region', style: `width:${cm.w}px;height:${cm.h}px` }), card);
+    // 카드 머리를 끌면 그룹 이동
+    const head = g.querySelector('.stu-cmt-h') as HTMLElement;
+    head.addEventListener('mousedown', (e: MouseEvent) => {
+      if ((e.target as HTMLElement).closest('button')) return;
+      e.preventDefault();
+      const sx = e.clientX, sy = e.clientY, ox = cm.x, oy = cm.y;
+      const move = (ev: MouseEvent): void => { cm.x = snap(ox + ev.clientX - sx); cm.y = snap(oy + ev.clientY - sy); g.style.left = cm.x + 'px'; g.style.top = cm.y + 'px'; };
+      const up = (): void => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); spec.data = { ...(spec.data || {}), cm }; save(); };
+      document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
+    });
+    return g;
+  }
+
+  // ── 피크(오른쪽 펼쳐 읽기) ──
   let peekEl: HTMLElement | null = null;
   function closePeek(): void { if (peekEl) { peekEl.remove(); peekEl = null; document.removeEventListener('keydown', peekEsc, true); } }
   function peekEsc(e: KeyboardEvent): void { if (e.key === 'Escape') { e.stopPropagation(); closePeek(); } }
   function openPeek(hash: string, title: string): void {
     closePeek();
-    const url = location.pathname + '?embed=1' + hash;
     const pe = el('div', { class: 'stu-peek' },
       el('div', { class: 'stu-peek-h' }, el('b', { text: title }),
         el('span', { class: 'stu-w-acts' },
+          el('button', { class: 'btn-text', type: 'button', text: '판에 놓기', title: '이 문서를 위젯으로 판에 둡니다', onclick: () => { addWidget('doc', { x: 120, y: 80 }, { hash, title }); closePeek(); } }),
           el('a', { class: 'btn-text', href: hash, target: '_blank', rel: 'noopener', text: '새 탭 ↗' }),
           el('button', { class: 'stu-w-btn', type: 'button', text: '×', title: '닫기(Esc)', onclick: closePeek }))),
-      el('iframe', { class: 'stu-peek-f', src: url, title }));
+      el('iframe', { class: 'stu-peek-f', src: location.pathname + '?embed=1' + hash, title }));
     peekEl = pe;
     wrap.append(pe);
     document.addEventListener('keydown', peekEsc, true);
   }
 
-  // ── 바닥 — 리브 대화(실동작). 위젯의 [리브에게]가 전부 여기로 흘러든다 ──
-  function mountChat(): void {
-    const barR = el('span', { class: 'stu-chat-r' },
-      el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '+ 새 세션', title: '이 프로젝트에 붙은 새 AI 세션을 열고, 판에 카드로 올립니다', onclick: () => void spawnSession() }));
-    chat = mountProjectChat(chatHost, {
-      projectId: id,
-      bar: { right: barR },
-      onTurnDone: () => { void refreshDetail(); opts.onProjectChanged?.(); },
-    });
+  // ── 플로팅 컴포저(입력은 하나) + 리브 패널 ──
+  type Dest = { kind: 'liv' } | { kind: 'session'; sid: string; label: string } | { kind: 'new' };
+  let destOverride: Dest | null = null;
+  const destChip = el('button', { class: 'stu-dest', type: 'button', 'aria-haspopup': 'listbox', title: '행선지 — 글의 내용으로 추정해요. 눌러서 바꿀 수 있어요' }) as HTMLButtonElement;
+  const destWhy = el('span', { class: 'stu-dest-why' });
+  const input = el('textarea', { class: 'stu-comp-in', rows: '1', placeholder: '무엇이든 시키세요 — 정리는 리브가, 일은 세션이 받아요', 'aria-label': '시키기' }) as HTMLTextAreaElement;
+  const sendBtn = el('button', { class: 'stu-comp-send', type: 'button', title: '보내기(Enter)' }, icon('send', 'stu-i')) as HTMLButtonElement;
+  const livToggle = el('button', { class: 'stu-liv-toggle', type: 'button', title: '리브 대화 열기/닫기' }, el('span', { class: 'lm', text: 'L' }), el('span', { class: 'stu-liv-n', hidden: true })) as HTMLButtonElement;
+  const livPanel = el('div', { class: 'stu-livpanel', hidden: true });
+  const livBody = el('div', { class: 'stu-livbody' });
+  livPanel.append(el('div', { class: 'stu-livpanel-h' }, el('b', { text: '리브 — 이 프로젝트' }), el('button', { class: 'stu-w-btn', type: 'button', text: '×', onclick: () => toggleLiv(false) })), livBody);
+  const composer = el('div', { class: 'stu-composer' },
+    livToggle,
+    el('div', { class: 'stu-comp-box' },
+      el('div', { class: 'stu-comp-row1' }, input, sendBtn),
+      el('div', { class: 'stu-comp-row2' }, el('span', { class: 'k', text: '행선지' }), destChip, destWhy)),
+    el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '+ 새 세션', title: '빈 세션을 열어 판에 올립니다', onclick: () => void spawnSession(null) }));
+  board.append(composer, livPanel);
+
+  const tokensOf = (t: string): string[] => String(t || '').toLowerCase().split(/[^0-9a-z가-힣]+/).filter((x) => (/[가-힣]/.test(x) ? x.length >= 2 : x.length >= 3));
+  function guessDest(text: string): { dest: Dest; why: string } {
+    if (destOverride) return { dest: destOverride, why: '직접 골랐어요' };
+    const t = String(text || '').toLowerCase();
+    if (!t.trim()) return { dest: { kind: 'liv' }, why: '' };
+    // ① 기존 세션 — 세션 이름·지금 하는 일과 겹치면 그 세션(홈 런처의 매칭 규칙과 같은 감각)
+    let best: { s: Sess; score: number; hit: string } | null = null;
+    for (const s of mySessions().filter((x) => x.live && x.alive)) {
+      const name = (s.label || '') + ' ' + String(s.raw?.title || '');
+      let score = 0, hit = '';
+      for (const tok of tokensOf(name)) if (t.includes(tok)) { score += tok.length; if (tok.length > hit.length) hit = tok; }
+      if (score && (!best || score > best.score)) best = { s, score, hit };
+    }
+    if (best && best.score >= 4) return { dest: { kind: 'session', sid: best.s.id, label: sessText(best.s, pj().name || '').main || best.s.label }, why: `「${best.hit}」가 닿았어요` };
+    // ② 워크스페이스 정리 명령 — 리브가 받는다
+    if (/(본문|명세|태스크|할 일|할일|상태|정리|요약|지식|연결|이름|마감|담당|우선순위|프로젝트)/.test(t)) return { dest: { kind: 'liv' }, why: '정리 명령으로 읽혀요' };
+    // ③ 그 밖의 일 — 새 세션
+    return { dest: { kind: 'new' }, why: '새 일로 읽혀요' };
   }
-  async function spawnSession(): Promise<void> {
+  function paintDest(): void {
+    const g = guessDest(input.value);
+    const d = g.dest;
+    destChip.replaceChildren(
+      el('span', { class: 'stu-dest-dot ' + (d.kind === 'liv' ? 'liv' : d.kind === 'new' ? 'new' : 'sess'), 'aria-hidden': 'true' }),
+      el('b', { text: d.kind === 'liv' ? '리브(워크스페이스)' : d.kind === 'new' ? '새 세션' : d.label }),
+      el('span', { class: 'car', text: '▾', 'aria-hidden': 'true' }));
+    destWhy.textContent = g.why;
+  }
+  function setDest(d: Dest | null, focus?: boolean): void { destOverride = d; paintDest(); if (focus) input.focus(); }
+  destChip.onclick = (e) => {
+    e.stopPropagation();
+    const pop = el('div', { class: 'stu-dest-pop' },
+      el('button', { class: 'stu-dest-opt', type: 'button', onclick: () => { setDest(null); pop.remove(); } }, el('b', { text: '자동 — 글에서 추정' })),
+      el('button', { class: 'stu-dest-opt', type: 'button', onclick: () => { setDest({ kind: 'liv' }); pop.remove(); } }, el('span', { class: 'stu-dest-dot liv' }), el('span', { text: '리브(정리·본문·태스크)' })),
+      el('button', { class: 'stu-dest-opt', type: 'button', onclick: () => { setDest({ kind: 'new' }); pop.remove(); } }, el('span', { class: 'stu-dest-dot new' }), el('span', { text: '새 세션 열어서' })),
+      ...mySessions().filter((s) => s.live && s.alive).slice(0, 6).map((s) => el('button', { class: 'stu-dest-opt', type: 'button', onclick: () => { setDest({ kind: 'session', sid: s.id, label: sessText(s, pj().name || '').main || s.label }); pop.remove(); } },
+        el('span', { class: 'v2-dot ' + dotCls(s.stateKey) }), el('span', { text: sessText(s, pj().name || '').main || s.label }))));
+    composer.append(pop);
+    const off = (ev: MouseEvent): void => { if (!(ev.target as HTMLElement).closest('.stu-dest-pop, .stu-dest')) { pop.remove(); document.removeEventListener('click', off); } };
+    window.setTimeout(() => document.addEventListener('click', off), 0);
+  };
+  input.addEventListener('input', () => { paintDest(); input.style.height = 'auto'; input.style.height = Math.min(120, input.scrollHeight) + 'px'; });
+  input.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); void sendComposer(); } });
+  sendBtn.onclick = () => void sendComposer();
+  async function sendComposer(): Promise<void> {
+    const text = input.value.trim();
+    if (!text) return;
+    const { dest } = guessDest(text);
+    input.value = ''; input.style.height = 'auto'; destOverride = null; paintDest();
+    if (dest.kind === 'liv') { openLiv(); chat?.say(text); return; }
+    if (dest.kind === 'session') {
+      try {
+        await api('/api/ui/terminal/sessions/' + encodeURIComponent(dest.sid) + '/prompt', { method: 'POST', body: JSON.stringify({ text }) });
+        toast(`「${dest.label}」 세션에 보냈어요.`);
+        const wg = widgets.find((w) => w.type === 'session' && w.data?.sid === dest.sid);
+        if (wg) { const ref = els.get(wg.id); ref?.root.classList.add('flash'); window.setTimeout(() => ref?.root.classList.remove('flash'), 1600); }
+        else addWidget('session', { x: 72, y: 72 }, { sid: dest.sid });
+      } catch (e: any) { toast('보내지 못했어요 — ' + (e?.message || e), true); }
+      return;
+    }
+    await spawnSession(text);
+  }
+  async function spawnSession(firstPrompt: string | null): Promise<void> {
     const p = runPrefs();
     try {
       const out: any = await api('/api/ui/terminal/sessions', { method: 'POST', body: JSON.stringify({
-        label: (pj().name || '새 세션').slice(0, 28), harness: p.harness && p.harness !== 'shell' ? p.harness : 'claude',
-        flags: p.flags && typeof p.flags === 'object' ? p.flags : {}, autoApprove: !!p.autoApprove, sessionDir: true }) });
+        label: (firstPrompt ? firstPrompt.replace(/\s+/g, ' ').slice(0, 28) : (pj().name || '새 세션').slice(0, 28)),
+        harness: p.harness && p.harness !== 'shell' ? p.harness : 'claude',
+        flags: p.flags && typeof p.flags === 'object' ? p.flags : {}, autoApprove: !!p.autoApprove, sessionDir: true,
+        ...(firstPrompt ? { initialPrompt: firstPrompt } : {}) }) });
       const sid = out?.session?.id ? String(out.session.id) : '';
       if (!sid) throw new Error('세션 id 를 받지 못했습니다');
-      try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(sid) + '/project', { method: 'POST', body: JSON.stringify({ projectId: id }) }); } catch (_) { /* 위젯에서 재연결 가능 */ }
-      addWidget('session', { x: 60, y: 60 }, { sid });
-      toast('세션을 열고 판에 올렸어요.');
+      try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(sid) + '/project', { method: 'POST', body: JSON.stringify({ projectId: id }) }); } catch (_) { /* noop */ }
+      addWidget('session', { x: 88, y: 88 }, { sid });
+      toast(firstPrompt ? '새 세션을 열어 시켰어요 — 판에 카드로 올라왔습니다.' : '세션을 열고 판에 올렸어요.');
+      opts.onProjectChanged?.();
     } catch (e: any) { toast('세션을 열지 못했어요 — ' + (e?.message || e), true); }
   }
+  function toggleLiv(on?: boolean): void {
+    const want = on != null ? on : livPanel.hidden;
+    livPanel.hidden = !want;
+    livToggle.classList.toggle('on', want);
+  }
+  function openLiv(): void { toggleLiv(true); }
+  livToggle.onclick = () => toggleLiv();
 
+  function mountChat(): void {
+    chat = mountProjectChat(livBody, {
+      projectId: id,
+      onTurnDone: () => { void refreshDetail(); opts.onProjectChanged?.(); },
+      onHasTurns: (has) => { (livToggle.querySelector('.stu-liv-n') as HTMLElement).hidden = !has; },
+    });
+  }
   async function refreshDetail(): Promise<void> {
-    try { const d = await api('/api/ui/v6/projects/' + id); if (!dead && d) { detail = d; paintDoor(); paintAll(); } } catch (_) { /* noop */ }
+    try { const d = await api('/api/ui/v6/projects/' + id); if (!dead && d) { detail = d; paintDoor(); refreshDataWidgets(); } } catch (_) { /* noop */ }
+  }
+  function refreshDataWidgets(): void {
+    for (const spec of widgets) {
+      if (spec.min || spec.type === 'session') continue;
+      if (!['tasks', 'knowledge', 'desc', 'coach', 'automation', 'app-calendar'].includes(spec.type)) continue;
+      const ref = els.get(spec.id);
+      if (ref && ref.root.isConnected && !(document.activeElement && ref.root.contains(document.activeElement))) fillBody(spec, ref.body);
+    }
+  }
+
+  // ── 새 산출물 자동 등장 — 30초마다 폴더를 보고, 새 이미지·PDF 를 판에 올린다 ──
+  async function autoSpawn(): Promise<void> {
+    let data: any = null;
+    try { data = await api('/api/ui/projects/' + id + '/files?path='); } catch (_) { return; }
+    if (dead) return;
+    const items: any[] = ((data && data.items) || []).filter((it: any) => it.type !== 'dir' && /\.(png|jpe?g|gif|webp|svg|pdf|html?)$/i.test(it.name));
+    const fresh = items.filter((it: any) => Number(it.mtime || 0) * (String(it.mtime).length > 11 ? 1 : 1000) > lastSpawnTs)
+      .filter((it: any) => !widgets.some((w) => w.type === 'preview' && w.data?.path === it.name));
+    if (!lastSpawnTs) { lastSpawnTs = Date.now(); save(); return; }   // 첫 방문 — 과거 파일을 쏟아붓지 않는다
+    for (const it of fresh.slice(0, 2)) {
+      addWidget('preview', { x: 120 + Math.random() * 120, y: 96 + Math.random() * 80 }, { path: it.name, name: it.name });
+      toast('새 산출물이 판에 올라왔어요 — ' + it.name);
+    }
+    if (fresh.length) { lastSpawnTs = Date.now(); save(); }
   }
 
   // ── 판 그리기 ──
   function paintAll(): void {
     if (dead) return;
     els.clear();
-    canvas.replaceChildren(...widgets.map(widgetEl),
-      el('div', { class: 'stu-boardhint', text: '오른쪽 선반에서 끌어다 놓거나 눌러서 위젯을 놓아요 · 머리를 끌면 이동 · 모서리로 크기' }));
+    canvas.replaceChildren(
+      ...widgets.map((s) => ((s as any).comment || s.data?.cm ? commentEl(s) : widgetEl(s))),
+      el('div', { class: 'stu-boardhint', text: '선반에서 끌어다 놓기 · 머리 끌면 이동 · 모서리로 크기 · [코멘트]로 어디든 표시' }));
     growCanvas();
   }
-
-  // 기본 배치 — 처음 열면 자동으로(자유 배치의 '정리 비용'을 기본값이 흡수한다).
-  //  1열 리브 제안+첫 세션 · 2열 나머지 세션 · 3열 태스크·지식. 이후엔 사람이 끈 자리가 진실.
   function autoArrange(): void {
+    const keep = widgets.filter((s) => (s as any).comment || s.data?.cm || s.type === 'sticky');
     widgets = [];
-    seq = 1;
-    addWidget('coach', { x: 24, y: 16 }, {}, { noSave: true });
+    seq = Math.max(1, seq);
+    addWidget('coach', { x: 32, y: 24 }, {}, { noSave: true });
     const live = mySessions().filter((s) => s.live && s.alive).slice(0, 3);
-    live.forEach((s, i) => {
-      const at = i === 0 ? { x: 24, y: 290 } : { x: 424, y: 16 + (i - 1) * (wdef('session').h + 24) };
-      addWidget('session', at, { sid: s.id }, { noSave: true });
-    });
-    addWidget('tasks', { x: 768, y: 16 }, {}, { noSave: true });
-    addWidget('knowledge', { x: 768, y: 344 }, {}, { noSave: true });
+    live.forEach((s, i) => addWidget('session', i === 0 ? { x: 32, y: 296 } : { x: 424, y: 24 + (i - 1) * 284 }, { sid: s.id }, { noSave: true }));
+    addWidget('tasks', { x: 796, y: 24 }, {}, { noSave: true });
+    addWidget('knowledge', { x: 796, y: 356 }, {}, { noSave: true });
+    widgets.push(...keep);
   }
 
-  // ── 우패널: 위젯 선반 + 타임라인 ──
+  // ── 우패널: 런치패드 선반 + 타임라인(결과만) ──
   function renderAside(aside: HTMLElement): void {
     aside.replaceChildren();
-    const shelf = el('div', { class: 'stu-shelf' },
-      el('div', { class: 'stu-shelf-h', text: '위젯 · 앱 — 판으로 끌어다 놓기' }),
-      el('div', { class: 'stu-shelf-grid' }, ...WDEFS.map((d) => {
-        const card = el('button', { class: 'stu-shelf-card', type: 'button', title: d.hint + (d.shell ? ' (껍데기)' : ''), draggable: 'true', onclick: () => addWidget(d.type, undefined) },
-          el('b', { text: d.label }), d.shell ? el('span', { class: 'stu-shell-badge', text: '껍' }) : null);
-        card.addEventListener('dragstart', (e: DragEvent) => { e.dataTransfer?.setData('text/plain', 'stu:' + d.type); });
-        return card;
-      })));
-    aside.append(shelf);
-    const tl = createTimeline(aside, { scope: '프로젝트 #' + id, showActors: true, empty: '아직 이 프로젝트에서 일어난 일이 없어요.' });
+    const tile = (d: WDef): HTMLElement => {
+      const c = el('button', { class: 'stu-app', type: 'button', title: d.hint, draggable: 'true', onclick: () => addWidget(d.type) },
+        el('span', { class: 'stu-app-ic', style: 'background:' + d.ac }, icon(d.ic, 'stu-i')),
+        el('span', { class: 'stu-app-n', text: d.label }),
+        d.shell ? el('span', { class: 'stu-shell-dot', title: '껍데기' }) : null);
+      c.addEventListener('dragstart', (e: DragEvent) => { e.dataTransfer?.setData('text/plain', 'stu:' + d.type); });
+      return c;
+    };
+    aside.append(
+      el('div', { class: 'stu-shelf' },
+        el('div', { class: 'stu-shelf-h', text: '위젯 · 앱' }),
+        el('div', { class: 'stu-shelf-grid' }, ...WDEFS.filter((d) => !d.hidden).map(tile))));
+    const tl = createTimeline(aside, { scope: '프로젝트 #' + id, showActors: true, outcomes: true, empty: '아직 남은 것이 없어요.' });
     void loadProjectTimeline(id, detail).then((items) => { if (!dead) tl.addAll(items); });
   }
 
-  // 판에 드롭 받기
+  // 판에 드롭 — 선반 위젯 + 타임라인 지식(문서로)
   board.addEventListener('dragover', (e: DragEvent) => { e.preventDefault(); });
   board.addEventListener('drop', (e: DragEvent) => {
-    const t = e.dataTransfer?.getData('text/plain') || '';
-    if (!t.startsWith('stu:')) return;
-    e.preventDefault();
+    const raw = e.dataTransfer?.getData('text/plain') || '';
     const r = canvas.getBoundingClientRect();
-    addWidget(t.slice(4) as WType, { x: e.clientX - r.left - 40, y: e.clientY - r.top - 16 });
+    const at = { x: e.clientX - r.left - 40, y: e.clientY - r.top - 16 };
+    if (raw.startsWith('stu:')) { e.preventDefault(); addWidget(raw.slice(4) as WType, at); return; }
+    if (raw.startsWith('tl:')) {
+      e.preventDefault();
+      try { const p = JSON.parse(raw.slice(3)); if (p && p.href) addWidget('doc', at, { hash: String(p.href), title: String(p.label || '문서') }); } catch (_) { /* noop */ }
+    }
   });
 
-  // ── 라이브 갱신 — 세션 카드의 상태·지금 하는 일(8초). main 의 20초 목록과 별개로 가볍게 ──
+  // ── 라이브 틱 — 문패 + 세션·코치 제자리 갱신(8초), 산출물 감시(32초) ──
   function armLive(): void {
     liveTimer = window.setInterval(() => {
       if (dead || document.hidden) return;
+      tick++;
       paintDoor();
       const focused = document.activeElement as HTMLElement | null;
       for (const spec of widgets) {
         if (spec.min || (spec.type !== 'session' && spec.type !== 'coach')) continue;
         const ref = els.get(spec.id);
         if (!ref || !ref.root.isConnected) continue;
-        if (focused && ref.root.contains(focused)) continue;   // 입력·선택 중 — 손대지 않는다
+        if (focused && ref.root.contains(focused)) continue;
         fillBody(spec, ref.body);
-        if (spec.type === 'session') ref.title.textContent = sessionTitle(spec);
+        if (spec.type === 'session') ref.title.textContent = widgetTitle(spec);
       }
+      if (tick % 4 === 0) void autoSpawn();
     }, 8000);
   }
 
@@ -484,7 +747,9 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   paintDoor();
   paintAll();
   mountChat();
+  paintDest();
   armLive();
+  void autoSpawn();          // 기준 시각 시딩(첫 방문은 안 쏟아붓는다)
   if (!detail) void refreshDetail();
 
   return {

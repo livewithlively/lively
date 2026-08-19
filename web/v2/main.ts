@@ -7,7 +7,7 @@
 //  탭 규칙(#1719 상민님 2026-08-18): 주소는 활성 탭의 라우트다. 링크는 활성 탭 안에서 이동하되, 같은 화면이 이미 다른
 //  탭에 있으면 그 탭으로 간다(한 세션 = 한 탭). Alt+클릭 = 새 탭에서 열기.
 //  데스크톱(일렉트론)에서 그대로 쓰기 위한 규약: 정적 자산 + 해시 라우트 + api()(상대 경로·bearer/쿠키)만 쓴다.
-import { $view, anchoredPopover, api, el, toast } from '../core.js';
+import { $view, anchoredPopover, api, el, sv, toast } from '../core.js';
 import { fillLivCards, renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame } from './apps.js';
 import { drawSide as drawSideTree, projectOrder } from './side.js';
@@ -40,9 +40,11 @@ export async function bootV2(): Promise<void> {
   root = document.getElementById('v2-root');
   if (!root) return;
   root.hidden = false;
+  // 실험장(#1719 원준): 좌측은 64px 아이콘 레일 — 프로젝트 트리는 [프로젝트] 버튼으로 여닫는 패널(핀 고정 가능).
+  //  캔버스를 넓게 쓰기 위한 구조라 사이드 폭 스플리터도 걷는다.
+  root.classList.add('rail-mode');
   root.replaceChildren(
-    sideEl = el('nav', { class: 'v2-side', 'aria-label': '탐색' }),
-    makeSplitter({ axis: 'x', key: 'side-w', cssVar: '--v2-side-w', target: root, def: 292, min: 200, max: 520, grow: 1, label: '사이드바 너비' }),
+    sideEl = el('nav', { class: 'v2-side stu-side', 'aria-label': '탐색' }),
     centerEl = el('div', { class: 'v2-main', id: 'v2-main' }),
     makeSplitter({ axis: 'x', key: 'aside-w', cssVar: '--v2-aside-w', target: root, def: 316, min: 240, max: 720, grow: -1, label: '우패널 너비' }),
     asideEl = el('aside', { class: 'v2-aside', 'aria-label': '이 선택의 맥락' }));
@@ -265,7 +267,60 @@ function openSessions(): Array<{ id: string; active: boolean }> {
   }
   return out;
 }
-function drawSide(): void { if (sideEl) drawSideTree(sideEl, data, activeKey, openSessions); }
+// ── 레일 + 프로젝트 패널(#1719 원준 — P1 시안) ──────────────────────────────
+let railPanelOpen = false;
+let railPanelPin = ((): boolean => { try { return localStorage.getItem('stu_side_pin') === '1'; } catch (_) { return false; } })();
+let railOutsideBound = false;
+function railIcon(d: string): SVGElement { const g = sv('svg', { viewBox: '0 0 24 24', class: 'stu-rail-i', 'aria-hidden': 'true' }); g.innerHTML = d; return g; }
+const RAIL_P: Record<string, string> = {
+  home: '<path d="M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>',
+  liv: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>',
+  inbox: '<path d="M4 13l2.5-8h11L20 13v6H4z"/><path d="M4 13h5l1.5 2h3L15 13h5"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  book: '<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 21V5"/><path d="M8 7h7"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1"/>',
+};
+function drawSide(): void {
+  if (!sideEl) return;
+  const key = activeKey();
+  const item = (k: string, ic: string, label: string, href?: string, onclick?: () => void): HTMLElement =>
+    el(href ? 'a' : 'button', { class: 'stu-rail-it' + (key === k ? ' on' : ''), href: href || null, type: href ? null : 'button', 'data-nav': k, title: label, onclick },
+      railIcon(RAIL_P[ic]), el('span', { text: label }));
+  const projBtn = el('button', { class: 'stu-rail-it' + (key.startsWith('p:') || railPanelOpen || railPanelPin ? ' on' : ''), type: 'button', title: '프로젝트 — 목록 열기/닫기',
+    onclick: () => { railPanelOpen = !railPanelOpen; drawSide(); } },
+    railIcon(RAIL_P.folder), el('span', { text: '프로젝트' }));
+  const rail = el('div', { class: 'stu-rail' },
+    el('a', { class: 'stu-rail-logo', href: '#/', title: '홈' }, el('span', { text: 'L' })),
+    item('home', 'home', '홈', '#/'),
+    item('liv', 'liv', '리브', '#/liv'),
+    item('inbox', 'inbox', '인박스', '#/'),
+    projBtn,
+    item('app:knowledge', 'book', '지식', '#/knowledge'),
+    el('span', { class: 'stu-rail-sp' }),
+    item('app:system', 'gear', '설정', '#/system'));
+  const showPanel = railPanelOpen || railPanelPin;
+  let panel: HTMLElement | null = null;
+  if (showPanel) {
+    const treeHost = el('div', { class: 'stu-panel-tree' });
+    panel = el('div', { class: 'stu-panel' + (railPanelPin ? ' pin' : '') },
+      el('div', { class: 'stu-panel-h' }, el('b', { text: '프로젝트' }),
+        el('button', { class: 'btn-text', type: 'button', text: railPanelPin ? '핀 해제' : '핀 고정', title: '고정하면 항상 펼쳐져 있어요',
+          onclick: () => { railPanelPin = !railPanelPin; try { localStorage.setItem('stu_side_pin', railPanelPin ? '1' : ''); } catch (_) { /* noop */ } drawSide(); } }),
+        el('button', { class: 'stu-w-btn', type: 'button', text: '×', title: '닫기', onclick: () => { railPanelOpen = false; drawSide(); } })),
+      treeHost);
+    drawSideTree(treeHost, data, activeKey, openSessions);
+  }
+  root!.classList.toggle('rail-pin', railPanelPin);
+  sideEl.replaceChildren(rail, ...(panel ? [panel] : []));
+  if (!railOutsideBound) {
+    railOutsideBound = true;
+    document.addEventListener('click', (e) => {
+      if (!railPanelOpen || railPanelPin) return;
+      if ((e.target as HTMLElement | null)?.closest?.('.stu-panel, .stu-rail')) return;
+      railPanelOpen = false; drawSide();
+    });
+  }
+}
 
 // ── 우측(탭마다 한 벌 — tab.aside 에 그린다) ──
 function drawAsideHome(tab: ShellTab): void {
