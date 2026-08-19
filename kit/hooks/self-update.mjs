@@ -40,7 +40,21 @@ if (process.env.LIVELY_NO_AUTO_UPDATE === "1") process.exit(0);
 
 const HOME = process.env.LIVELY_HOME || homedir();
 const LIVELY = join(HOME, ".lively");
-const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || join(HOME, ".claude");
+// claude 설정 디렉터리 — CLAUDE_CONFIG_DIR(프로필 격리 #346) > <HOME>/.claude. ★ LIVELY_HOME(샌드박스 격리)이 켜져 있으면
+//  CLAUDE_CONFIG_DIR 는 **그 샌드박스 안에 있을 때만** 존중한다 — 밖(개발자 셸·웹터미널 세션이 상속한 실 프로필)이면 무시.
+//  실측(2026-08-19): 테스트가 LIVELY_HOME 만 주고 설치기를 돌려, 상속된 CLAUDE_CONFIG_DIR=<실 프로필> 의 settings.json 에
+//  곧 지워질 임시 샌드박스 훅 경로가 써졌다 → 모든 세션 훅이 Cannot find module 로 실패. harness-registry.claudeConfigDir 와
+//  **같은 계산**이어야 한다(정본은 거기 — 이 파일은 발행물 배치가 달라 정적 import 를 못 해 인라인). 어긋나면 한쪽은 샌드박스에,
+//  한쪽은 실 프로필에 쓴다. 윈도우는 대소문자·구분자 무시(문자열 prefix 판정 — 호출부는 절대경로).
+function claudeConfigDir(home, env = process.env) {
+  const ccd = String(env.CLAUDE_CONFIG_DIR || "").trim();
+  if (!ccd) return join(home, ".claude");
+  if (!env.LIVELY_HOME) return ccd;
+  const norm = (p) => { const s = String(p || "").replace(/[\\/]+/g, "/").replace(/\/+$/, ""); return process.platform === "win32" ? s.toLowerCase() : s; };
+  const c = norm(ccd), r = norm(env.LIVELY_HOME);
+  return (c === r || c.startsWith(r + "/")) ? ccd : join(home, ".claude");
+}
+const CLAUDE_DIR = claudeConfigDir(HOME);
 const CODEX_DIR = join(HOME, ".codex");
 
 const LOCK = join(LIVELY, "update.lock");

@@ -223,6 +223,35 @@ bashKept ? ok("⑤ 다른 matcher 의 동일 스크립트 항목 보존") : bad(
     : bad("⑫ SessionEnd timeout", "미지정 — 종료 경로에서 floor 1500ms 로 fetch 조기 abort");
 }
 
+// ⑬ ★ 2026-08-19 실측 — LIVELY_HOME(샌드박스) 밖의 CLAUDE_CONFIG_DIR 는 상속된 **실 프로필**이다. 설치기가 그걸 존중하면
+//   실 프로필 settings.json 에 곧 지워질 샌드박스 훅 경로가 써져(harness-registry.test D 가 실제로 냈던 사고) 이후 모든 세션 훅이
+//   Cannot find module 로 죽는다. 설치기는 밖의 값을 무시하고 <LIVELY_HOME>/.claude 에 써야 한다(harness-registry.claudeConfigDir 계약).
+{
+  const { cpSync, existsSync } = await import("node:fs");
+  const { execFileSync } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const HERE = join(fileURLToPath(import.meta.url), "..");
+  const box = mkdtempSync(join(tmpdir(), "ui-leak-"));
+  const bundle = join(box, "bundle");
+  mkdirSync(join(bundle, ".claude", "hooks"), { recursive: true });
+  cpSync(join(HERE, "..", "hooks"), join(bundle, ".claude", "hooks"), { recursive: true });
+  cpSync(HERE, join(bundle, "setup"), { recursive: true });
+  const home = join(box, "home");                 // 샌드박스 HOME
+  const decoy = join(box, "real-profile");        // 샌드박스 HOME **밖** — 실 프로필 흉내
+  mkdirSync(home, { recursive: true }); mkdirSync(decoy, { recursive: true });
+  const before = JSON.stringify({ hooks: {}, marker: "untouched" });
+  writeFileSync(join(decoy, "settings.json"), before);
+  execFileSync(process.execPath, [join(bundle, "setup", "user-install.mjs"), "--harness", "claude", "--clone-root", bundle],
+    { env: { ...process.env, LIVELY_HOME: home, CLAUDE_CONFIG_DIR: decoy }, stdio: "ignore" });
+  const decoyAfter = readFileSync(join(decoy, "settings.json"), "utf8");
+  const sb = join(home, ".claude", "settings.json");
+  const sbHooks = existsSync(sb) ? countHooks(JSON.parse(readFileSync(sb, "utf8"))) : 0;
+  decoyAfter === before && sbHooks > 0
+    ? ok(`⑬ ★ LIVELY_HOME 밖 CLAUDE_CONFIG_DIR(실 프로필) 무접촉 · 샌드박스 .claude 에 ${sbHooks}개 배선`)
+    : bad("⑬ ★ 샌드박스 밖 CLAUDE_CONFIG_DIR 누수", `decoyChanged=${decoyAfter !== before} sbHooks=${sbHooks}`);
+  rmSync(box, { recursive: true, force: true });
+}
+
 rmSync(SANDBOX, { recursive: true, force: true });
 console.log(`user-install tests: ${pass} passed${fail ? `, ${fail} FAILED` : ""}`);
 if (fail) process.exit(1);

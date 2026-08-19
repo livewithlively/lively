@@ -39,7 +39,21 @@ const CODEX = join(HOME, ".codex");
 // settings.json 위치: CLAUDE_CONFIG_DIR 있으면 그 dir(프로필별 계정 격리 — 멀티프로필 #346), 없으면 <HOME>/.claude(기본, 무변경).
 //  ~/.lively(컨텍스트·훅·토큰)는 HOME 기준 유지 = 프로필 간 공유(훅 command 는 런타임 $HOME/.lively 참조).
 //  계정별로 달라지는 건 settings(훅·권한)·MCP(.claude.json)·자격증명(.credentials.json)뿐 — 전부 CLAUDE_CONFIG_DIR 안.
-const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || join(HOME, ".claude");
+// claude 설정 디렉터리 — CLAUDE_CONFIG_DIR(프로필 격리 #346) > <HOME>/.claude. ★ LIVELY_HOME(샌드박스 격리)이 켜져 있으면
+//  CLAUDE_CONFIG_DIR 는 **그 샌드박스 안에 있을 때만** 존중한다 — 밖(개발자 셸·웹터미널 세션이 상속한 실 프로필)이면 무시.
+//  실측(2026-08-19): 테스트가 LIVELY_HOME 만 주고 설치기를 돌려, 상속된 CLAUDE_CONFIG_DIR=<실 프로필> 의 settings.json 에
+//  곧 지워질 임시 샌드박스 훅 경로가 써졌다 → 모든 세션 훅이 Cannot find module 로 실패. harness-registry.claudeConfigDir 와
+//  **같은 계산**이어야 한다(정본은 거기 — 이 파일은 발행물 배치가 달라 정적 import 를 못 해 인라인). 어긋나면 한쪽은 샌드박스에,
+//  한쪽은 실 프로필에 쓴다. 윈도우는 대소문자·구분자 무시(문자열 prefix 판정 — 호출부는 절대경로).
+function claudeConfigDir(home, env = process.env) {
+  const ccd = String(env.CLAUDE_CONFIG_DIR || "").trim();
+  if (!ccd) return join(home, ".claude");
+  if (!env.LIVELY_HOME) return ccd;
+  const norm = (p) => { const s = String(p || "").replace(/[\\/]+/g, "/").replace(/\/+$/, ""); return process.platform === "win32" ? s.toLowerCase() : s; };
+  const c = norm(ccd), r = norm(env.LIVELY_HOME);
+  return (c === r || c.startsWith(r + "/")) ? ccd : join(home, ".claude");
+}
+const CLAUDE_DIR = claudeConfigDir(HOME);
 // self-update.mjs(#858)는 settings 에 **배선하지 않는다** — 훅이 아니라 session-preload 가 detached 로 띄우는
 //  백그라운드 업데이터다(세션 시작마다 프로세스를 하나 더 띄우지 않기 위함). 파일만 ~/.lively/hooks 에 놓는다.
 // ⚠ harness-registry.mjs 는 실행되는 훅이 아니라 **훅들이 import 하는 모듈**이다. 훅은 이 디렉터리로 평평하게
