@@ -65,7 +65,9 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-ws-empty, .v2-ws-loading { font-size: 11.5px; color: var(--muted); line-height: 1.55; padding: 4px 8px 6px; margin: 0; }
 .v2-ws-team-row { display: flex; align-items: center; gap: 4px; padding: 2px 4px 2px 8px; border-radius: 8px; }
 .v2-ws-team-row:hover { background: var(--bg-tint, #F6FAFF); }
-.v2-ws-team-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; text-decoration: none; color: var(--ink); font-size: 12.5px; font-weight: 600; }
+/* 행 본체 — a(연결한 팀)와 button(registry 전환) 둘 다 이 클래스를 쓴다. button 기본 테두리·배경을
+   리셋하지 않으면 이름까지만 감싼 회색 상자가 되고 ✎·✕ 가 상자 밖에 남는다(2026-08-19 실측). */
+.v2-ws-team-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; text-decoration: none; color: var(--ink); font: inherit; font-size: 12.5px; font-weight: 600; border: 0; background: none; padding: 5px 2px; text-align: left; cursor: pointer; border-radius: 6px; }
 .v2-ws-err { flex: none; width: 15px; height: 15px; border-radius: 50%; background: var(--coral, #E5484D); color: #fff; font-size: 10px; font-weight: 800; display: grid; place-items: center; }
 .v2-ws-auto { flex: none; font-size: 10.5px; font-weight: 700; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
 .v2-ws-auto.on { color: var(--mint-deep, #0FA37E); border-color: #CDEFE3; background: var(--bg-success, #F3FBF8); }
