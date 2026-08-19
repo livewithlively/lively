@@ -10,7 +10,7 @@
 //    감싸는 건 호출자 몫(현재 라우트는 clone 이 대개 초 단위인 사내 레포 전제로 직접 await, 상한은 아래 CAP).
 import { getNode, type OrgNode } from "./store.js";
 import { nodeOpenTo } from "./node-access.js";
-import { nodeOnline, nodeRpc, nodeSupports, nodeSessionsFor, type NodeSessionInfo } from "./registry.js";
+import { nodeOnline, nodeRpc, nodeSupports, nodeSessionsFor, type NodeSessionInfo, nodeAgentStale } from "./registry.js";
 import type { NodeOp } from "./protocol.js";
 import { resolveRepoInject, type RepoSpec, type ProvisionedRepo, type ProvisionResult } from "../project/project-provision.js";
 import type { CreateInput, SessionInfo } from "../terminal/terminal-sessions.js"; // type-only — 런타임 순환 없음(erased)
@@ -187,12 +187,15 @@ export async function createProjectSessionOnNode(
     //  (#1313 R46) relayNodeOp 와 달리 offline 에 `|| !nodeOnline(nodeId)` 추가조건이 있고, unsupported 문구는 op 을
     //  끼우지 않는 고정 문구다 — 그 차이를 map 으로 표현한다.
     const msg = e instanceof Error ? e.message : String(e);
+    // 낡은 번들 힌트(#1541) — relayNodeOp 와 같은 축(그쪽 주석 참조): caps 로 못 잡는 '규약만 낡은' 실패에 다음 행동을 붙인다.
+    const stale = await nodeAgentStale(nodeId).catch(() => false);
+    const staleHint = stale ? " (이 노드의 프로그램이 오래된 버전입니다 — 그 PC 에서 노드를 다시 시작하면 최신으로 갱신되고, 그 뒤로는 자동으로 유지됩니다.)" : "";
     throw translateNodeRpcError(msg, {
       offline: `노드 '${nodeId}' 연결이 끊겨 세션을 열지 못했습니다.`,
       offlineWhen: () => !nodeOnline(nodeId),
       timeout: `노드 '${nodeId}' 응답 시간 초과 — 세션 생성을 확인하지 못했습니다.`,
       unsupported: () => `노드 '${nodeId}' 의 에이전트가 낡아 세션 생성을 지원하지 않습니다 — 그 PC/서버에서 노드를 다시 설치·업데이트하세요.`,
-      failed: (m) => `노드 '${nodeId}' 세션 생성 실패: ${m}`,
+      failed: (m) => `노드 '${nodeId}' 세션 생성 실패: ${m}${staleHint}`,
     });
   }
 }

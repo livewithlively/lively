@@ -13,7 +13,7 @@ import {
   NODE_WS_PATH, PROTO_VER, decodeChanFrame, parseMsg, nodeSessionVisible, nodeCaps, nodeHarnesses, NODE_BASELINE_OPS, NODE_BASELINE_HARNESSES,
   type NodeToGwMsg, type GwToNodeMsg, type NodeOp, type NodeResources, type TaskDoneMsg,
 } from "./protocol.js";
-import { authNodeToken, touchNode, type OrgNode } from "./store.js";
+import { authNodeToken, getNode, touchNode, type OrgNode } from "./store.js";
 
 // 웹터미널 close 코드 확장(#869) — 로컬 4410(session-gone)/4403(no-access) 체계에 노드 사유를 더한다.
 export const CLOSE_NODE_OFFLINE = 4462; // 노드 미연결(꺼짐·절전·네트워크) — 클라는 재시도 유지(일시 상태일 수 있음)
@@ -71,6 +71,18 @@ export function liveNodes(): NodePublic[] {
 }
 
 export function nodeOnline(id: string): boolean { return conns.has(id); }
+
+// 이 노드의 에이전트가 게이트웨이 서빙 번들보다 낡았나 — **에러 번역용**(#1541). op 미지원(caps)과 다른 축이다:
+//  op 은 있는데(기준선 create 등) 그 구현이 새 규약(sessionDir 등)을 몰라 "허용되지 않은 루트" 류의 낯선 오류를
+//  던지는 케이스가 실측됐다. 그때 사용자에게 "노드를 다시 시작하라"는 다음 행동을 줘야 한다(#1713 자가 갱신이
+//  그 재시작 한 번으로 영구 부트스트랩된다). 라이브 hello 값 우선, 없으면(오프라인 직후) DB 기억을 본다.
+export async function nodeAgentStale(id: string): Promise<boolean> {
+  const served = servedAgentVersion();
+  if (!served) return false;                                  // 서빙 번들을 모르면 판정하지 않는다(거짓 힌트 금지)
+  // hello 가 touchNode 로 DB 에 남긴 값을 본다(라이브 conn 은 agentVer 를 안 들고 있다 — 저장은 DB 한 곳).
+  const ver = (await getNode(id).catch(() => undefined))?.agent_ver ?? null;
+  return !!ver && ver !== served;
+}
 
 // 뷰어에게 보이는 노드 세션들(개인 세션 규칙: 소유자 또는 초대 — 프로젝트 전체공개 규칙은 원격에 미적용, D2).
 //  오프라인 노드 세션은 마지막 스냅샷으로 보여주되 agentState 를 offline 으로 강제(라이브 오해 방지).
