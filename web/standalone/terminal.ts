@@ -34,6 +34,10 @@ const NODE_ID = new URLSearchParams(location.search).get('node') || '';
 //  복원한 세션이 곧 다시 죽으면(예: 이어받을 대화가 없어 claude 가 즉시 종료) 또 4410 이 오는데,
 //  그때 다시 자동 복원하면 '복원→즉사→복원' 이 끝없이 돈다(2026-07-28 실측: 화면이 계속 새로고침).
 const RESTORED = new URLSearchParams(location.search).get('restored') === '1';
+// 세션 화면 안에 프레임으로 실렸나(#1744). 그렇다면 이 페이지의 **상단바·파일 탐색기는 그리지 않는다** —
+//  그 기능은 세션 화면의 상단바([⋯] 메뉴)와 우패널(파일 탐색기)로 옮겨 갔다. 종전엔 상단바가 위아래로 둘이었다.
+//  프레임 밖(단독 탭)은 종전 그대로 — 이 주소를 직접 여는 곳이 여럿이다(프로젝트 화면·활동 로그·me-ai 등).
+const EMBED = new URLSearchParams(location.search).get('embed') === '1';
 const nodeQ = (joiner) => (NODE_ID ? joiner + 'node=' + encodeURIComponent(NODE_ID) : '');
 
 // 모든 라틴 글꼴 뒤에 자체호스팅 'D2Coding'(public/fonts, OFL)을 한글 폴백으로 둔다 →
@@ -1934,6 +1938,32 @@ async function loadSessionMeta() {
   showDropHint(); // 메타를 받은 뒤에 띄운다 — 업로드 위치 문구가 프로젝트/개인 세션에 따라 갈리므로(#1235)
 }
 
+// ── 세션 화면과의 다리(#1744 ?embed=1) ────────────────────────────────────────────────
+//  상단바를 합쳤으므로, 저기서 누른 것을 여기서 실행한다. 같은 오리진 프레임이라 postMessage 한 줄이면 된다
+//  (프레임 안 로직을 세션 화면으로 복제하지 않는다 — 복제하면 두 벌이 갈린다).
+//  연결 상태는 반대 방향으로 흘려보낸다: statusEl 은 재연결·종료 등 여러 곳에서 바뀌므로 **값을 관측**한다
+//   (호출부마다 손으로 알리면 언젠가 한 군데를 빠뜨린다).
+function setupEmbedBridge() {
+  window.addEventListener('message', (ev: MessageEvent) => {
+    if (ev.origin !== location.origin || ev.source !== window.parent) return;
+    const m: any = ev.data;
+    if (!m || m.type !== 'lively-term') return;
+    if (m.cmd === 'reconnect') softReconnect();
+    else if (m.cmd === 'settings') openSettings();
+    else if (m.cmd === 'help') openHelp();
+    else if (m.cmd === 'prompts') openMyPrompts();
+    else if (m.cmd === 'focus') { try { term.focus(); } catch (_) { /* 아직 안 떴다 */ } }
+  });
+  const post = () => {
+    try {
+      window.parent.postMessage({ type: 'lively-term-status', text: statusEl.textContent || '',
+        cls: String(statusEl.className || '').replace('status', '').trim() }, location.origin);
+    } catch (_) { /* 부모가 없거나 닫혔다 */ }
+  };
+  try { new MutationObserver(post).observe(statusEl, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['class'] }); } catch (_) { /* 미지원 — 첫 값만 */ }
+  post();
+}
+
 export async function boot() {
   const p = prefs();
   scrollSpeed = Math.max(1, Math.min(12, Number(p.scrollSpeed) || 3));
@@ -1979,12 +2009,13 @@ export async function boot() {
   termPane = el('div', { class: 'pane active' }, host);
   tabbarEl = el('div', { id: 'tabbar' });
   panesEl = el('div', { id: 'panes' }, termPane);
-  const main = el('div', { id: 'main' }, toolbar, tabbarEl, panesEl);
-  document.getElementById('root').replaceChildren(el('div', { id: 'ws' }, explorerEl, main));
+  const main = EMBED ? el('div', { id: 'main' }, tabbarEl, panesEl) : el('div', { id: 'main' }, toolbar, tabbarEl, panesEl);
+  document.getElementById('root').replaceChildren(EMBED ? el('div', { id: 'ws' }, main) : el('div', { id: 'ws' }, explorerEl, main));
   tabs.push({ id: 'term', label: '터미널', pane: termPane, closable: false });
   renderTabbar();
-  setupDnd();
+  if (!EMBED) setupDnd();
   setupTermDrop();
+  if (EMBED) setupEmbedBridge();
   loadSessionMeta();
 
   // 이름 라이브 반영 — 다른 탭(프로젝트/세션 매니저)에서 이름을 바꾸면 같은 브라우저 안에선 즉시 받는다.

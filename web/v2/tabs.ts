@@ -22,7 +22,7 @@ export interface ShellTab {
   aside: HTMLElement;          // v2-aside 안의 이 탭 우패널
   rendered: boolean;           // 게으른 렌더 — 처음 활성화될 때 그린다
   noAside: boolean;            // 앱 프레임 탭은 우패널이 없다
-  chat: { destroy(): void; update(t: any): void } | null;   // 세션 탭의 대화창 핸들(views.renderSession)
+  chat: { destroy(): void; update(t: any): void; setFilesOn(on: boolean): void } | null;   // 세션 탭의 대화창 핸들(views.renderSession)
   seq: number;                 // 이 탭의 렌더 순번(늦게 온 비동기 렌더 무시)
 }
 

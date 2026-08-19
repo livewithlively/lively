@@ -7,7 +7,7 @@ import { isCreatingQuickSession, openQuickSession, takeFirstPrompt } from './qui
 import { createRunPicker } from './run-picker.js';
 import { mountSessionChat } from '../session-chat.js';
 import { sessIsDead, sessLabel, sessStateKey } from '../session-status.js';
-import { terminalUrl } from './apps.js';
+import { soloSessionUrl, terminalUrl } from './apps.js';
 const dot = (k) => el('span', { class: 'v2-dot ' + dotCls(k), 'aria-hidden': 'true' });
 // 상태 key(web/session-status.ts) → 점 색 클래스. 눈에 띄어야 할 셋만 색이다 — 작업 중(파랑·깜빡)·확인 필요(앰버)·작업 완료(민트 링).
 //  나머지 살아 있는 것(대기·오프라인·셸)은 회색 계열로 조용히, 끝난 것(중단됨·종료됨·기록)은 빈 점.
@@ -231,27 +231,26 @@ export async function renderProject(host, data, id, detailIn) {
     host.replaceChildren(el('div', { class: 'v2-center' }, el('div', { class: 'v2-eyebrow' }, el('span', { class: 'mono', text: '#' + pj.id }), el('span', { text: '·' }), el('span', { class: 'state ' + (pj.status_category === 'done' ? 'done' : 'busy'), text: st }), pj.list && pj.list.name ? [el('span', { text: '·' }), el('span', { text: pj.list.name })] : null), el('h1', { class: 'v2-title', text: pj.name }), pj.description ? el('p', { class: 'v2-desc', text: String(pj.description).slice(0, 600) }) : null, el('div', { class: 'v2-actrow' }, el('a', { class: 'btn btn-primary btn-sm', href: '#/app/terminal', text: '새 AI 세션' }), el('a', { class: 'btn btn-ghost btn-sm', href: '#/projects2/p/' + pj.id, text: '프로젝트 앱에서 열기(보드·태스크)' }), el('span', { class: 'v2-muted', text: tasks.length ? `태스크 ${tasks.length} · 끝남 ${done}` : '태스크 없음' })), el('section', { class: 'v2-sec' }, el('div', { class: 'v2-sec-h' }, el('span', { class: 'v2-k', text: `세션 · ${sess.length}` })), sess.length ? el('div', { class: 'v2-list' }, ...sess.map((s) => el('a', { class: 'v2-row', href: '#/s/' + encodeURIComponent(s.id) }, dot(s.stateKey), el('div', { class: 'v2-row-main' }, el('div', { class: 't', text: s.label }), el('div', { class: 'm', text: `${s.stateLabel}${s.live ? '' : ' · 기록만'} · ${when(s.lastSeen)}` })), el('span', { class: 'v2-row-r', text: '›' }))))
         : el('p', { class: 'v2-empty', text: '이 프로젝트에 붙은 세션이 아직 없어요. [새 AI 세션] 으로 시작하면 여기에 쌓입니다.' })), tasks.length ? el('section', { class: 'v2-sec' }, el('div', { class: 'v2-sec-h' }, el('span', { class: 'v2-k', text: `태스크 · ${tasks.length}` })), el('div', { class: 'v2-list' }, ...tasks.slice(0, 8).map((t) => el('a', { class: 'v2-row', href: '#/projects2/t/' + t.id }, el('span', { class: 'v2-dot ' + (t.status_category === 'done' ? 'done' : t.status_category === 'started' ? 'busy' : '') }), el('div', { class: 'v2-row-main' }, el('div', { class: 't', text: t.name }), el('div', { class: 'm', text: t.status || t.status_category || '' })), el('span', { class: 'v2-row-r', text: '›' }))), tasks.length > 8 ? el('a', { class: 'v2-more', href: '#/projects2/p/' + pj.id, text: `외 ${tasks.length - 8}개 — 프로젝트 앱에서` }) : null)) : null));
 }
-// ── 세션 — 그 세션 자체를 가운데에: 터미널 기본 + 대화(베타)(web/session-chat.ts) ─────────
-//  라이브면 박스의 대화 파일을 창으로 읽어 라이브로 따라가고 입력칸으로 보낸다(프롬프트 주입). 끝난 세션이면 기록 + [이어서 대화하기].
-//  핸들은 **호출자(탭)가 쥔다**(#1719 탭 — 세션 화면이 탭마다 하나씩 동시에 산다). 파괴·갱신도 탭이 한다.
-//  trail = 우패널 '발자취' 위젯(main.ts 가 그 탭의 aside 에 만들어 넘긴다).
-//  onRename = 제목을 눌러 고친 세션 이름을 서버에 반영(#1719) — 사이드바·우패널·탭 제목 갱신까지 main.ts 가 쥔다.
-export function renderSession(host, data, id, trail, onPickProject, onRename) {
+export function renderSession(host, data, id, vopts = {}) {
     // 기록(uuid) 링크로 들어왔는데 그 대화를 도는 박스가 있으면 그 박스가 정본이다(mergeSessions 가 기록을 박스에 접었다) — 옛 링크가 산다.
     const s = data.sessions.find((x) => x.id === id) || data.sessions.find((x) => x.logId === id);
     if (!s) {
         host.replaceChildren(el('div', { class: 'v2-center' }, el('p', { class: 'v2-muted', text: '세션을 찾을 수 없어요. 목록을 새로고침해 주세요.' })));
         return null;
     }
-    const termSrc = s.live ? terminalUrl(s.id, s.label, s.node) : null;
+    // 프레임에 실을 터미널은 embed=1 — 그 안의 상단바·파일 탐색기는 이 화면의 상단바·우패널로 이미 합쳐졌다(#1744).
+    const termSrc = s.live ? terminalUrl(s.id, s.label, s.node, { embed: true }) : null;
     return mountSessionChat(host, { ...s, projectName: projName(data, s.projectId) }, {
         terminalSrc: termSrc,
-        openHref: s.live ? termSrc : (location.pathname + '?ui=classic#/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node) : '')),
+        // 나가는 문: 본 화면이면 이 세션만 담은 **팝아웃 창**(같은 컴포넌트, 사이드바만 없다), 팝아웃 창이면 반대로 전체 화면.
+        openHref: vopts.solo ? location.pathname + '#/s/' + encodeURIComponent(s.id) : soloSessionUrl(s.id),
         // 홈 입력창이 방금 연 세션이면 그 첫 지시를 낙관적으로 먼저 그린다(서버가 하네스 입력창이 뜬 뒤 실제로 넣는다).
         firstPrompt: takeFirstPrompt(s.id),
-        trail: trail || null,
-        onPickProject, // 상단바 [프로젝트 연결] 드롭다운(#1749) — main.ts 가 목록·실행·갱신을 쥔다
-        onRename, // 제목 = 세션 이름(#1719) — 고치면 사이드바·목록이 그 이름으로 바뀐다
+        trail: vopts.trail || null,
+        onPickProject: vopts.onPickProject, // 상단바 [프로젝트 연결] 드롭다운(#1749)
+        onRename: vopts.onRename, // 제목 = 세션 이름(#1719) — 고치면 사이드바·목록이 그 이름으로 바뀐다
+        onToggleFiles: vopts.onToggleFiles, // 상단바 [파일] → 우패널 파일 탐색기(#1744)
+        solo: vopts.solo,
     });
 }
 // ── 데이터 정규화 — 라이브(terminal/sessions) + 기록(v6/sessions) 를 한 목록으로 ─────────
