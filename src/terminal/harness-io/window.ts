@@ -85,3 +85,27 @@ export function fileReader(fh: { read(buf: Buffer, off: number, len: number, pos
     },
   };
 }
+
+/**
+ * 비싼 구간 읽기(원격 중계 exec 한 번 = 허브→노드→컨테이너 왕복) 앞에 두는 선읽기 캐시.
+ *  readAlignedWindow 는 한 창에 read 를 여러 번 부른다 — 본 구간 · 시작 정렬용 `start-1` 한 바이트 · 끝 정렬용 SCAN_STEP
+ *  전진. 원격에선 그게 전부 왕복이라, 첫 미스에서 **[start-1, end+SCAN_STEP)** 을 한 번에 당겨 두면 정상 경로는 왕복 1회다.
+ *  캐시 밖(아주 긴 줄을 계속 좇는 경우)만 다시 당긴다. size = 파일 워터마크(그 너머는 요청하지 않는다).
+ */
+export function prefetchReader(fetch: (start: number, end: number) => Promise<Buffer>, size: number): ByteReader {
+  let cacheStart = 0, cache: Buffer = Buffer.alloc(0);
+  const covered = (s: number, e: number): boolean => cache.length > 0 && s >= cacheStart && e <= cacheStart + cache.length;
+  return {
+    async read(start, end) {
+      const s = Math.max(0, start), e = Math.min(size, end);
+      if (e <= s) return Buffer.alloc(0);
+      if (!covered(s, e)) {
+        const fs = Math.max(0, s - 1), fe = Math.min(size, e + SCAN_STEP);
+        cache = await fetch(fs, fe); cacheStart = fs;
+        // 짧게 돌아왔으면(파일이 그새 줄었거나 EOF) 덮는 범위도 그만큼이다 — covered 가 그 사실을 반영한다.
+        if (!covered(s, Math.min(e, cacheStart + cache.length))) return Buffer.alloc(0);
+      }
+      return cache.subarray(s - cacheStart, Math.min(e, cacheStart + cache.length) - cacheStart);
+    },
+  };
+}
