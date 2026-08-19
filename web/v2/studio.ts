@@ -1257,6 +1257,27 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
       el('button', { class: 'stu-w-btn', type: 'button', text: '×', title: '선택 해제 (Esc)', onclick: clearSel }),
     ].filter(Boolean) as HTMLElement[]);   // ⚠ replaceChildren 은 el 과 달리 null 을 'null' 텍스트로 넣는다
   }
+  /** 맥 폴더 — 뒤판(탭 있는 판) + 앞판 두 장. 선 아이콘이 아니라 **면**이라 44px 로 줄여도 폴더로 읽힌다.
+   *  kn = 지식 폴더(청록). 색만 다르고 형태는 같다 — 같은 종류의 것이라는 뜻이 형태로 남는다. */
+  function macFolder(tone?: 'kn'): HTMLElement {
+    const u = 'f' + (tone || 'b') + '-' + id;
+    return sv('svg', { viewBox: '0 0 56 46', class: 'stu-folder-sv', 'aria-hidden': 'true' },
+      sv('defs', {},
+        sv('linearGradient', { id: u + '-back', x1: '0', y1: '0', x2: '0', y2: '1' },
+          sv('stop', { offset: '0', 'stop-color': tone ? '#5AD1CF' : '#7CB6F7' }),
+          sv('stop', { offset: '1', 'stop-color': tone ? '#2FB3B4' : '#4E93EC' })),
+        sv('linearGradient', { id: u + '-front', x1: '0', y1: '0', x2: '0', y2: '1' },
+          sv('stop', { offset: '0', 'stop-color': tone ? '#8BE6E2' : '#A8D3FC' }),
+          sv('stop', { offset: '1', 'stop-color': tone ? '#3DC2C0' : '#5FA2F0' }))),
+      // 뒤판 — 왼쪽 위에 탭이 솟은 판
+      sv('path', { fill: 'url(#' + u + '-back)',
+        d: 'M2 9.5A4.5 4.5 0 0 1 6.5 5h13.2c1.2 0 2.3.47 3.14 1.31L26.5 9.6H49.5A4.5 4.5 0 0 1 54 14.1V38a4.5 4.5 0 0 1-4.5 4.5h-43A4.5 4.5 0 0 1 2 38z' }),
+      // 앞판 — 살짝 아래에서 시작해 뒤판 위에 겹친다(맥의 그 두께감)
+      sv('path', { fill: 'url(#' + u + '-front)', opacity: '.96',
+        d: 'M2 16.5h52V38a4.5 4.5 0 0 1-4.5 4.5h-43A4.5 4.5 0 0 1 2 38z' }),
+      // 앞판 윗선 하이라이트 — 종이 두 장이 겹친 자리
+      sv('path', { stroke: 'rgba(255,255,255,.55)', 'stroke-width': '1', fill: 'none', d: 'M2.6 17.1h50.8' }));
+  }
   /** 종이 낱장 — 맥 문서 아이콘의 뼈대(접힌 귀 + 그림자). 그 위에 미리보기나 확장자 배지를 얹는다. */
   function sheet(...kids: HTMLElement[]): HTMLElement {
     return el('span', { class: 'stu-sheet' }, el('span', { class: 'stu-sheet-fold', 'aria-hidden': 'true' }), ...kids);
@@ -1315,17 +1336,32 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
       const thumb = el('img', { alt: '', loading: 'lazy' }) as HTMLImageElement;
       fillImg(thumb, it.path);
       g = el('span', { class: 'stu-ico-g im' }, thumb);
+    } else if (it.kind === 'stack-folder') {
+      g = el('span', { class: 'stu-ico-g folder-g' }, macFolder());
+    } else if (it.kind === 'stack-kn') {
+      g = el('span', { class: 'stu-ico-g folder-g kn' }, macFolder('kn'));
     } else if (stack) {
-      // 스택 = 겹쳐 쌓인 낱장 셋(맥 문법). 맨 앞장에 그 묶음을 대표하는 표식.
+      // 스택 = **맨 위 것이 앞에 서고 나머지가 뒤로 비친다**(맥 스택 그대로). 그래서 그림 무더기는 첫 장이 그대로 보인다.
+      const top = (it.kids || [])[0];
+      let front: HTMLElement;
+      if (top && top.kind === 'img') {
+        const th = el('img', { alt: '', loading: 'lazy' }) as HTMLImageElement;
+        fillImg(th, top.path);
+        front = el('span', { class: 'stu-stk s1 im' }, th);
+      } else {
+        const box = el('span', { class: 'stu-prev' }, el('span', { class: 'stu-ext ' + (top ? top.kind : 'file'), text: top ? EXT_OF(top.path) : '' }));
+        front = el('span', { class: 'stu-stk s1' }, sheet(box));
+        if (top) livePrev(top, box);
+      }
       g = el('span', { class: 'stu-ico-g stack cat-' + (it.cat || it.kind) },
-        el('span', { class: 'stu-stk s3', 'aria-hidden': 'true' }), el('span', { class: 'stu-stk s2', 'aria-hidden': 'true' }),
-        el('span', { class: 'stu-stk s1' }, icon(it.kind === 'stack-folder' ? 'folder' : it.kind === 'stack-kn' ? 'book' : it.cat === '그림' ? 'img' : it.cat === '시안' ? 'deck' : 'doc', 'stu-i sm')));
+        el('span', { class: 'stu-stk s3', 'aria-hidden': 'true' }), el('span', { class: 'stu-stk s2', 'aria-hidden': 'true' }), front);
     } else {
       const box = el('span', { class: 'stu-prev' }, el('span', { class: 'stu-ext ' + it.kind, text: EXT_OF(it.path) }));
       g = el('span', { class: 'stu-ico-g doc-g ' + it.kind }, sheet(box));
       livePrev(it, box);
     }
-    const b = el('button', { class: 'stu-ico' + (stack ? ' is-stack' : '') + (openPopFor === it.path ? ' open' : ''), type: 'button', role: 'option', 'aria-selected': 'false', draggable: String(!stack) as any,
+    // ⚠ openPopFor 가 비었을 때 빈 경로(공유 폴더·지식)와 같아져 늘 '열림' 으로 보이던 버그 — 빈 값을 먼저 거른다.
+    const b = el('button', { class: 'stu-ico' + (stack ? ' is-stack' : '') + (openPopFor && openPopFor === it.path ? ' open' : ''), type: 'button', role: 'option', 'aria-selected': 'false', draggable: String(!stack) as any,
       title: (stack ? it.label : it.path) + (it.sub ? ' — ' + it.sub : '') + '\n' + (stack ? '두 번 눌러 열기' : '두 번 눌러 열기 · 끌어다 놓으면 그 자리에 창 · Delete = 휴지통') },
       g, el('span', { class: 'stu-ico-n', text: it.label }), el('span', { class: 'stu-ico-t', text: it.type + (it.n != null ? ' · ' + it.n : '') }));
     b.addEventListener('click', (e: MouseEvent) => {
