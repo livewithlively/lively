@@ -8,6 +8,7 @@
 import express from "express";
 import { runSchedulerTickOnce } from "./scheduler/engine.js";
 import { seedDefaultContent } from "./org/delivery/seed-content.js";
+import { requireAppTool } from "./apps/principal.js";
 import { pruneCallLog } from "./org/policies/call-log-prune.js";
 import { getRuntimeConfig } from "./org/store/runtime-config.js";
 import { backfillSessionStates } from "./sessions/session-state-backfill.js";
@@ -270,6 +271,8 @@ export function registerWebUi(app: express.Express, verifier: BearerVerifier): v
       if (cap.scope && DANGEROUS_SCOPES.has(cap.scope) && user.tokenSource === "static") {
         throw new HttpError(403, "정적 토큰으로는 관리/런타임 변경이 불가합니다 — 접속 해제할 수 있는 발급 토큰(lvk_)을 사용하세요");
       }
+      // #1780: 앱 세션 토큰이면 그 앱 grant 의 도구 allowlist 로 축소(MCP 핸들러와 같은 판정 — 표면 간 일관). 일반 세션은 통과.
+      await requireAppTool(user, cap.name);
       // /api/ui 응답은 전부 비공개(토큰 발급 평문 포함) — 프록시/브라우저 캐시 금지.
       res.setHeader("Cache-Control", "no-store");
       res.json(await cap.handler(input, user, {

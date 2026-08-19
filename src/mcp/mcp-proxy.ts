@@ -28,6 +28,7 @@ import type { AwsCreds } from "../net/aws/aws-sigv4.js";
 import { scrubPii } from "../org/ingest/pii-scrub.js";
 import { EXT_PREFIX, markExternalTool } from "../org/policies/tool-log.js";
 import { resolveUser, requireScope } from "../context.js";
+import { requireAppTool } from "../apps/principal.js";
 import { isScope } from "../auth/scopes.js";
 import { jsonSchemaToZodShape, buildProxyAuthHeaders, proxyAuthFallback, CALLABLE_SCOPES } from "./dynamic-tools.js";
 import { logger } from "../log.js";
@@ -319,6 +320,7 @@ export async function registerProxiedMcpTools(server: McpServer): Promise<void> 
           async (args: Record<string, unknown>, extra: unknown) => {
             const u = resolveUser(extra);
             requireScope(u, callScope);          // scope 게이트(멤버 권한)
+            await requireAppTool(u, toolName);   // #1780: 앱 세션이면 ext_tools allowlist 로 축소(일반 세션 통과)
             try {
               const r = await callUpstream(srv, tool.name, args ?? {}, u.userId, toolLevel);
               return { content: r.content as never, isError: r.isError }; // 상류 content 는 임의 구조 — SDK 블록 유니온으로 정적 검증 불가
