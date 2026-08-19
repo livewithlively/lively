@@ -402,10 +402,30 @@ function parsePaneState(line) {
 //  (alt-screen 여부로는 못 가른다 — 하드킬은 alt=1 도 같이 남기고, fzf --height 처럼 normal 화면에서 마우스를
 //   쓰는 앱도 있다. foreground 명령이 훨씬 정확한 축이다.)
 //  cmd 가 비면(구 서버 — 마커에 cmd 없음) 게이팅하지 않고 옛 동작으로 degrade 한다.
+//
+// ⚠ 'keep' — 백엔드가 마우스 flag 를 **못 주는** 경우(psmux, 아래 paneMouseKnown)엔 어느 쪽으로도 동기화하지 않는다.
+//  #1535 윈도우 재발(2026-08-19, 상민님): "터미널이 포그라운드로 바뀌면 몇 초간 휠이 ↑/↓ 로 인식된다".
+//  경로: 포커스 → forceRedraw → {t:'st'} → psmux 상태블록 `any= btn= std= sgr=` (전부 빈 값 — 실측 psmux 3.3.7,
+//  `cmd=claude`) → 종전 판정은 '없음'을 '꺼짐'으로 읽어 'none' → applyPaneState 가 살아있는 앱의 트래킹을 껐다
+//  → alt-screen 에서 xterm 이 휠을 화살표로 폴백. 앱이 다시 그리며(넛지) 1003h 를 재발행할 때까지 몇 초.
+//  psmux 상태블록은 마우스에 관해 **정보가 없다** — 그때의 진실은 xterm 이 스트림에서 스스로 추적한 모드뿐이다.
 export function paneMouseMode(st) {
-  if (!st || !(st.any || st.btn || st.std)) return 'none';
-  if (isShellCmd(st.cmd)) return 'none';              // 셸이 포그라운드 = 죽은 앱이 남긴 flag(위 주석)
+  if (!st) return 'none';
+  if (isShellCmd(st.cmd)) return 'none';              // 셸이 포그라운드 = 앱 없음. flag 유무와 무관(psmux 에서도 성립 — #1302 보호 유지)
+  if (!paneMouseKnown(st)) return 'keep';             // flag 를 못 주는 백엔드 — xterm 자체 추적을 건드리지 않는다
+  if (!(st.any || st.btn || st.std)) return 'none';
   return st.any ? 'any' : st.btn ? 'drag' : 'vt200';  // 1003 > 1002 > 1000 (상위모드 우선)
+}
+/** 이 상태블록이 마우스 트래킹 모드를 **말해주는가** — 순수(전역 의존 없음).
+ *  tmux 는 mouse_*_flag 를 0/1 로 준다 → 안다. psmux(Windows 노드)는 그 포맷변수를 구현하지 않아 **전부 빈 값**으로
+ *  온다(실측 psmux 3.3.7: `alt=1 any= btn= std= sgr= cmd=claude`) → 모른다. 서버가 mux=psmux 라고 알려주면 flag 가
+ *  0/1 로 와도 믿지 않는다 — ConPTY 가 앱 출력을 정규화하는 뒤에서 psmux 가 모드를 추적한다는 검증이 없고, 틀린 0 을
+ *  믿으면 살아있는 앱의 마우스를 끄는 이 버그가 그대로 재발한다(그 검증이 생기면 이 게이트를 좁혀라).
+ *  구 노드 번들(mux 토큰 없음)은 '전부 빈 값' 지문으로 psmux 를 알아본다(captureSafeBackend 와 같은 축). */
+export function paneMouseKnown(st) {
+  if (!st) return false;
+  if (st.mux === 'psmux') return false;
+  return !st.flagsMissing;
 }
 // xterm 이 내보낸 데이터가 마우스 리포트인가 — SGR(1006) `\e[<b;x;yM|m` · urxvt(1015) `\e[b;x;yM` · X10 `\e[M`+3바이트.
 //  순수 함수(전역 의존 없음). 드리프트 가드에서만 쓴다.
@@ -432,10 +452,14 @@ export function applyPaneState(st) {
     try { xtMode = (term.modes && term.modes.mouseTrackingMode) || 'none'; } catch (_) { /* noop */ }
     const xtOn = xtMode !== 'none';
     const wantMode = paneMouseMode(st);
-    // tmux 는 마우스 ON 이라는데 그 pane 에 앱이 없다 = 죽은 앱이 남긴 flag. 이 클라만 안 켜고 끝내면 tmux 의 잘못된
-    //  진실은 그대로라 다른 클라·실 터미널 attach 는 계속 flood 를 받는다 → 서버에 pane 상태 복구를 요청한다(스로틀).
-    if (st.mouseOn && wantMode === 'none') requestMouseReset();
-    if (wantMode === 'none') {
+    // 'keep' — 백엔드(psmux)가 마우스 flag 를 못 준다. 이 블록으로는 켤 수도 끌 수도 없다 → xterm 이 스트림에서 스스로
+    //  추적한 모드를 그대로 둔다(#1535 윈도우 재발: 여기서 '없음'을 '꺼짐'으로 읽어 끄면 포커스마다 휠이 화살표가 된다).
+    if (wantMode === 'keep') {
+      if (xtOn) dlog('mouse', 'keep ' + xtMode + ' (백엔드가 flag 를 안 준다 · mux=' + (st.mux || '?') + ' cmd=' + (st.cmd || '?') + ')');
+    } else if (wantMode === 'none') {
+      // tmux 는 마우스 ON 이라는데 그 pane 에 앱이 없다 = 죽은 앱이 남긴 flag. 이 클라만 안 켜고 끝내면 tmux 의 잘못된
+      //  진실은 그대로라 다른 클라·실 터미널 attach 는 계속 flood 를 받는다 → 서버에 pane 상태 복구를 요청한다(스로틀).
+      if (st.mouseOn) requestMouseReset();
       if (xtOn) term.write('\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l'); // 앱 off → 전 모드 해제
     } else if (wantMode !== xtMode) {
       // 앱이 원하는 모드로 정확히 맞춘다(꺼져있었거나 다른 서브모드였거나). 다른 트래킹이 켜져있었으면 먼저 정리.

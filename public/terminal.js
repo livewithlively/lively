@@ -551,7 +551,7 @@
   }
   function diagText() {
     return [
-      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build 6cba5390",
+      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build 859bc159",
       "ua: " + navigator.userAgent,
       "session: " + SESSION_ID + (NODE_ID ? " node=" + NODE_ID : ""),
       "secure: " + window.isSecureContext + " \xB7 exported: " + (/* @__PURE__ */ new Date()).toISOString(),
@@ -799,9 +799,16 @@
     };
   }
   function paneMouseMode(st) {
-    if (!st || !(st.any || st.btn || st.std)) return "none";
+    if (!st) return "none";
     if (isShellCmd(st.cmd)) return "none";
+    if (!paneMouseKnown(st)) return "keep";
+    if (!(st.any || st.btn || st.std)) return "none";
     return st.any ? "any" : st.btn ? "drag" : "vt200";
+  }
+  function paneMouseKnown(st) {
+    if (!st) return false;
+    if (st.mux === "psmux") return false;
+    return !st.flagsMissing;
   }
   function isMouseReport(d) {
     return /^\x1b\[(<[0-9;]+[Mm]|[0-9;]+M|M)/.test(String(d || ""));
@@ -830,8 +837,10 @@
       }
       const xtOn = xtMode !== "none";
       const wantMode = paneMouseMode(st);
-      if (st.mouseOn && wantMode === "none") requestMouseReset();
-      if (wantMode === "none") {
+      if (wantMode === "keep") {
+        if (xtOn) dlog("mouse", "keep " + xtMode + " (\uBC31\uC5D4\uB4DC\uAC00 flag \uB97C \uC548 \uC900\uB2E4 \xB7 mux=" + (st.mux || "?") + " cmd=" + (st.cmd || "?") + ")");
+      } else if (wantMode === "none") {
+        if (st.mouseOn) requestMouseReset();
         if (xtOn) term.write("\x1B[?1000l\x1B[?1002l\x1B[?1003l\x1B[?1005l\x1B[?1006l\x1B[?1015l");
       } else if (wantMode !== xtMode) {
         let seq = xtOn ? "\x1B[?1000l\x1B[?1002l\x1B[?1003l" : "";
@@ -2273,7 +2282,7 @@
           "\uBB38\uC81C\uAC00 \uC0DD\uACBC\uC744 \uB54C",
           tool("\uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", "\uC785\uB825\uC774 \uC774\uC0C1\uD560 \uB54C(\uD0A4\uB9CC \uB20C\uB7EC\uB3C4 \uAC19\uC740 \uBB38\uC790\uC5F4\uC774 \uB4E4\uC5B4\uAC00\uB294 \uB4F1) \uC544\uB798 \uBC84\uD2BC\uC73C\uB85C \uCD5C\uADFC \uC785\uB825 \uAE30\uB85D\uC744 \uBCF5\uC0AC\uD574 \uC81C\uBCF4\uC5D0 \uBD99\uC5EC \uC8FC\uC138\uC694 \u2014 \uC11C\uBC84\uB85C\uB294 \uC804\uC1A1\uB418\uC9C0 \uC54A\uC544\uC694"),
           el("button", { class: "tbtn", text: "\u{1F50D} \uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", onclick: () => copyText(diagText(), false, true) }),
-          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "6cba5390 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
+          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "859bc159 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
         ),
         sec(
           "\uB3C4\uAD6C (\uC624\uB978\uCABD \uC704 \uBC84\uD2BC)",
