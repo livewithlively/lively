@@ -20,6 +20,20 @@ declare const WebLinksAddon: any;
 //    해시를 바꾼다 — 사용자가 기대하는 "앱 내 이동"이 정확히 이것이다(새 창·새 탭이 아니라).
 //  · 그 외(독립 탭·다른 출처)는 window.open — 데스크톱 앱에선 메인의 창 규칙(web-shell.openTargetFor)이
 //    같은 출처 = 앱 안 새 창 / 외부 = 시스템 브라우저로 가른다. 브라우저에선 새 탭.
+// (순수 — 테스트 대상) 한 줄 텍스트에서 col(0-기준 셀 인덱스)이 걸친 URL 을 찾는다. 없으면 null.
+//  Cmd/Ctrl+클릭 링크 열기(#1541)의 판정부: 마우스 트래킹이 켜진 pane(claude 등 TUI)에서는 xterm 이
+//  클릭을 앱으로 보내므로 web-links 애드온(맨클릭)이 못 받는다 — 우회는 Shift+클릭뿐인데 사람들의 손은
+//  iTerm·VSCode 습관(Cmd+클릭)이다. 그래서 DOM 레벨에서 좌표→셀→그 줄 텍스트로 URL 을 직접 찾는다.
+export function urlAtColumn(lineText: string, col: number): string | null {
+  const re = /https?:\/\/[^\s"'<>\u3000]+/g;
+  for (let m = re.exec(lineText); m; m = re.exec(lineText)) {
+    if (col >= m.index && col < m.index + m[0].length) {
+      return m[0].replace(/[.,;:!?)\]]+$/, "");   // 문장부호 꼬리 제거(문장 속 URL)
+    }
+  }
+  return null;
+}
+
 function openLinkFromTerminal(uri: string): void {
   try {
     const u = new URL(uri, location.href);
@@ -2068,6 +2082,39 @@ export async function boot() {
     term.loadAddon(new WebLinksAddon.WebLinksAddon((e: MouseEvent, uri: string) => { e.preventDefault(); openLinkFromTerminal(uri); }));
   }
   term.open(host);
+  // Cmd/Ctrl+클릭으로 링크 열기(#1541) — 마우스 트래킹 pane(claude TUI)에서도 동작(urlAtColumn 머리말).
+  //  ⚠ 실측: 트래킹 pane 에선 클릭이 pty 로 릴레이돼 **TUI 자신의 링크 확인창**이 뜨고, OK 는 서버 안 open(1)이라
+  //   사용자 브라우저엔 아무 일도 없다(게이트웨이 박스에 브라우저가 없다 — 구조적). 그래서 modifier 클릭은
+  //   **xterm 에 닿기 전에**(캡처 mousedown/mouseup stopPropagation) 가로채 클라이언트가 연다.
+  const swallowIfModifier = (ev: MouseEvent): void => { if ((ev.metaKey || ev.ctrlKey) && ev.button === 0) { ev.stopPropagation(); ev.preventDefault(); } };
+  host.addEventListener('mousedown', swallowIfModifier, true);
+  host.addEventListener('mouseup', swallowIfModifier, true);
+  host.addEventListener('click', (ev: MouseEvent) => {
+    if (!(ev.metaKey || ev.ctrlKey) || !term) return;
+    const screen = host.querySelector('.xterm-screen');
+    if (!screen) return;
+    const r = screen.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    const col = Math.floor((ev.clientX - r.left) / (r.width / term.cols));
+    const row = Math.floor((ev.clientY - r.top) / (r.height / term.rows));
+    if (col < 0 || row < 0 || col >= term.cols || row >= term.rows) return;
+    const buf = term.buffer.active;
+    const line = buf.getLine(buf.viewportY + row);
+    if (!line) return;
+    // 긴 URL 은 다음 행으로 감싸인다 — 감싸인 이웃 행(isWrapped)을 이어 한 논리 줄로 보고, col 도 그만큼 민다.
+    let startY = buf.viewportY + row;
+    while (startY > 0 && buf.getLine(startY)?.isWrapped) startY--;
+    let text = '';
+    let colInLogical = col;
+    for (let y = startY; y < buf.length; y++) {
+      const l = buf.getLine(y);
+      if (!l || (y > startY && !l.isWrapped)) break;
+      if (y < buf.viewportY + row) colInLogical += term.cols;
+      text += l.translateToString(true).padEnd(term.cols);
+    }
+    const url = urlAtColumn(text, colInLogical);
+    if (url) { ev.preventDefault(); ev.stopPropagation(); openLinkFromTerminal(url); }
+  }, true);
   loadRenderer();
   loadTermFonts();        // 웹폰트 다운로드를 즉시 시작(WS 핸드셰이크와 병렬) — onopen 의 재측정이 빨리 확정되도록
   setupClipboard();
