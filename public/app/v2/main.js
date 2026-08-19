@@ -374,19 +374,6 @@ function activeKey() {
     const cur = parseRoute(t ? t.route : location.hash);
     return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
 }
-/** 셸 탭에 열린 세션 id 들(활성 먼저) — 사이드바 '열린 세션' 고정 줄(side.ts)이 그린다. */
-function openSessions() {
-    if (!tabsApi)
-        return [];
-    const act = tabsApi.current();
-    const out = [];
-    for (const t of [...tabsApi.tabs].sort((a, b) => Number(b === act) - Number(a === act))) {
-        const k = routeKey(t.route);
-        if (k.startsWith('s:'))
-            out.push({ id: k.slice(2), active: t === act });
-    }
-    return out;
-}
 // ── 좌측 열 폐기(원준 2026-08-19 3차) — 프로젝트 목록 패널만, 작업대 문패의 [프로젝트]로 여닫는다 ──
 let railPanelOpen = false;
 let railPanelPin = (() => { try {
@@ -433,7 +420,7 @@ function drawSide() {
             localStorage.setItem('stu_side_pin', '');
         }
         catch (_) { /* noop */ } drawSide(); } })), treeHost);
-    drawSideTree(treeHost, data, activeKey, openSessions);
+    drawSideTree(treeHost, data, activeKey);
     sideEl.replaceChildren(panel);
 }
 // ── 손잡이 알약의 자리는 **사람마다 다르다**(원준 2026-08-19 "저 위치가 너무 거슬린다") ──

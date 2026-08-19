@@ -1,6 +1,8 @@
 // v2/side.ts — 새 셸 좌측 사이드바(#1719): 워크스페이스 **전체** 프로젝트 ▸ 살아 있는 세션 트리.
 //  규칙(상민님 2026-08-18, 같은 날 재구성 지시로 갱신):
 //   · 프로젝트는 워크스페이스 전체가 보인다(내 것만이 아니다). '내 프로젝트만'은 필터 안의 토글.
+//   · **고정**은 사람이 고른다(2026-08-19) — 행의 압정을 누르면 맨 위로. 자동으로 뭘 올려 두지 않는다
+//     (열린 세션을 자동으로 띄우던 줄은 같은 날 걷었다: 내가 고르지 않은 것이 자리를 차지했다).
 //   · 프로젝트 아래엔 **끝나지 않은 세션만**(살아 있는 박스). 끝난 것은 프로젝트 화면·세션 이력에서.
 //   · 완료 프로젝트는 기본 숨김(살아 있는 세션이 있으면 예외로 보인다). 정렬 = 마지막 작업 시각 내림차순.
 //   · **기본 화면은 목록 하나다** — 상태 칩·완료 숨김·내 프로젝트만 같은 필터는 전부 [필터] 버튼 속 팝오버로
@@ -21,9 +23,11 @@ import { switcherTop } from './switcher.js';
 const OPEN_KEY = 'lively_v2_opened';
 const DONE_KEY = 'lively_v2_side_done';   // '1' = 완료 프로젝트도 보인다(필터 풀림)
 const MINE_KEY = 'lively_v2_side_mine';   // '1' = 내 프로젝트만
+const PIN_KEY = 'lively_v2_side_pin';     // 위에 고정한 프로젝트 키('p:123') — 사람이 고른 것만 들어간다
 const MAX_SESS = 12;                      // 한 프로젝트 아래 펼쳐 보이는 세션 상한(넘치면 '외 n개' → 프로젝트 화면)
 
 let openSet = new Set<string>();
+let pinnedSet = new Set<string>();          // ★고정 = 사람이 고른 프로젝트를 맨 위로(상민님 2026-08-19)
 const closedSelected = new Set<string>();   // 선택 프로젝트를 일부러 접은 것 — 세션(페이지) 수명만
 let showDone = false;
 let mineOnly = false;
@@ -33,7 +37,7 @@ let keyBound = false;
 let stateFilter: string | null = null;    // 상태 칩 — 세션 상태 key(waiting·busy…) 하나. 새로고침하면 풀린다(잠깐 보는 렌즈)
 let people: Record<string, any> = {};     // id → 멤버(표시명·아바타). 남의 세션 소유자 이름용
 let inited = false;
-let last: { host: HTMLElement; data: V2Data; activeKey: () => string; openSessions: () => Array<{ id: string; active: boolean }> } | null = null;
+let last: { host: HTMLElement; data: V2Data; activeKey: () => string } | null = null;
 
 function loadSet(k: string): Set<string> { try { const a = JSON.parse(localStorage.getItem(k) || '[]'); return new Set<string>(Array.isArray(a) ? a : []); } catch (_) { return new Set<string>(); } }
 function saveSet(k: string, s: Set<string>): void { try { if (s.size) localStorage.setItem(k, JSON.stringify([...s])); else localStorage.removeItem(k); } catch (_) { /* noop */ } }
@@ -42,6 +46,7 @@ function init(): void {
   if (inited) return;
   inited = true;
   openSet = loadSet(OPEN_KEY);
+  pinnedSet = loadSet(PIN_KEY);
   try { showDone = localStorage.getItem(DONE_KEY) === '1'; mineOnly = localStorage.getItem(MINE_KEY) === '1'; } catch (_) { /* noop */ }
   void loadPeopleAvatars().then((m) => { people = m || {}; if (last) redraw(); });
 }
@@ -131,12 +136,21 @@ export function projectOrder(data: V2Data): Array<{ proj: Proj; done: boolean; m
 }
 
 // ── 그리기 ──
-export function drawSide(host: HTMLElement, data: V2Data, activeKey: () => string, openSessions?: () => Array<{ id: string; active: boolean }>): void {
+export function drawSide(host: HTMLElement, data: V2Data, activeKey: () => string): void {
   init();
-  last = { host, data, activeKey, openSessions: openSessions || (() => []) };
+  last = { host, data, activeKey };
   render();
 }
 function redraw(): void { if (last) render(); }
+
+// ★고정 — 사람이 고른 프로젝트를 목록 맨 위로. 자동으로 뭘 올려 두지 않는다(열린 세션을 자동으로 띄우던
+//  줄은 2026-08-19 에 걷었다: 내가 고르지 않은 것이 자리를 차지했다). 브라우저에 남는다.
+const isPinned = (key: string): boolean => pinnedSet.has(key);
+function togglePin(key: string): void {
+  if (pinnedSet.has(key)) pinnedSet.delete(key); else pinnedSet.add(key);
+  saveSet(PIN_KEY, pinnedSet);
+  renderTree();
+}
 
 let treeEl: HTMLElement | null = null;
 let countEl: HTMLElement | null = null;
@@ -201,7 +215,6 @@ function render(): void {
     //  #1154 가 토글을 폐지했던 사유 중 하나가 '검색 중인 줄 모른 채 짧아진 목록을 본다'였다.
     ...(findShown() ? [el('div', { class: 'v2-find' }, findIn)] : []),
     ...(fltN ? [filterSummary(fltN)] : []),
-    ...pinnedBlock(),
     treeEl!,
     el('div', { class: 'v2-side-foot' },
       el('button', { class: 'v2-apps-btn', type: 'button', onclick: () => openLaunchpad(), title: '앱 — 아직 새 화면으로 옮기지 않은 것들' }, appIcon('proj', 'v2-apps-ic'), el('span', { text: '앱' }), el('span', { class: 'v2-cnt', text: String(visibleApps().length) })),
@@ -336,26 +349,6 @@ function filterSummary(n: number): HTMLElement {
       onclick: () => { stateFilter = null; mineOnly = false; showDone = false; saveFlag(MINE_KEY, false); saveFlag(DONE_KEY, false); redraw(); } }));
 }
 
-// '열린 세션' 고정 줄(#1719 탭) — 셸 탭에 열려 있는 세션이 트리 위에 **상단 고정**으로 보인다(스크롤과 무관).
-//  트리 속 원래 자리도 그대로 둔다(위치 보존) — 이 블록은 복사본이지 이동이 아니다. 누르면 그 탭으로 간다(한 세션 = 한 탭).
-function pinnedBlock(): HTMLElement[] {
-  if (!last) return [];
-  const open = last.openSessions();
-  if (!open.length) return [];
-  const { data, activeKey } = last;
-  const ak = activeKey();
-  const rows: HTMLElement[] = [];
-  for (const o of open) {
-    const s = data.sessions.find((x) => x.id === o.id) || data.sessions.find((x) => x.logId === o.id);
-    if (!s) continue;
-    const pn = s.projectId ? (data.projects.find((p) => Number(p.id) === Number(s.projectId))?.name || '') : '';
-    const t = sessText(s, '');
-    rows.push(sessRow(s, ak, { main: t.main, sub: t.sub || pn }));
-  }
-  if (!rows.length) return [];
-  return [el('div', { class: 'v2-pin' }, el('div', { class: 'v2-pin-h', text: '열린 세션' }), ...rows)];
-}
-
 // 트리(프로젝트 ▸ 세션) — 검색은 여기만 다시 그린다(입력칸 포커스를 잃지 않게).
 function renderTree(rowsIn?: Row[]): void {
   if (!last || !treeEl) return;
@@ -376,11 +369,13 @@ function renderTree(rowsIn?: Row[]): void {
     if (!hit(r)) return false;
     if (mineOnly && !r.mine) return false;
     if (stateFilter && !stateOf(r).length) return false;
-    if (r.done && !showDone && !r.live.length) { hiddenDone++; return false; }
+    if (r.done && !showDone && !r.live.length && !isPinned(r.key)) { hiddenDone++; return false; }
     return true;
-  }).sort((a, b) => b.lastWork - a.lastWork || String((b.proj && b.proj.updated_at) || '').localeCompare(String((a.proj && a.proj.updated_at) || '')));
+  }).sort((a, b) => Number(isPinned(b.key)) - Number(isPinned(a.key)) || b.lastWork - a.lastWork || String((b.proj && b.proj.updated_at) || '').localeCompare(String((a.proj && a.proj.updated_at) || '')));
   if (countEl) countEl.textContent = `프로젝트 · ${shown.filter((r) => r.proj).length}${q || mineOnly || stateFilter ? ` / ${rows.filter((r) => r.proj && (showDone || !r.done || r.live.length)).length}` : ''}`;
   const kids: HTMLElement[] = shown.map((r) => projRow(r, stateOf(r), activeKey, selectedPk));
+  const firstLoose = shown.findIndex((r) => !isPinned(r.key));
+  if (firstLoose > 0 && kids[firstLoose]) kids[firstLoose].classList.add('after-pins');
   if (!kids.length) {
     kids.push(!last.data.loadedAt ? el('p', { class: 'v2-tree-note', text: '불러오는 중…' }) : !last.data.projects.length
       ? el('p', { class: 'v2-tree-note', text: '아직 프로젝트가 없어요. 가운데 입력창에 무엇이든 시키면 세션이 열리고, 프로젝트는 나중에 붙일 수 있어요.' })
@@ -416,12 +411,24 @@ function projRow(r: Row, sess: Sess[], activeKey: string, selectedPk: string): H
   const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : ''), href, 'data-nav': pk, title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') + '\n프로젝트 화면을 엽니다' },
     caret, glyph(isOpen ? 'folder-open' : 'folder', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }),
     r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null,
-    sess.length ? sumEl(sess) : (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null));
+    sess.length ? sumEl(sess) : (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null),
+    p ? pinBtn(pk) : null);
   const head = sess.slice(0, MAX_SESS);
   const list = sess.length ? el('div', { class: 'v2-ss-list', role: 'group', hidden: !isOpen },
     ...head.map((s) => sessRow(s, activeKey, sessText(s, p ? p.name : ''))),
     sess.length > MAX_SESS ? el('a', { class: 'v2-ss-more', href, text: `외 ${sess.length - MAX_SESS}개` }) : null) : null;
   return el('div', { class: 'v2-pj' + (isOpen ? ' open' : ''), role: 'treeitem', 'aria-expanded': sess.length ? String(isOpen) : null }, row, list);
+}
+
+// 고정 단추 — 자리는 늘 차지한다(눌러야 보이는 것이 나타나며 행을 밀면 목록 전체가 흔들린다).
+//  고정된 것은 늘 보이고, 아닌 것은 그 행에 손을 얹었을 때만 보인다.
+function pinBtn(pk: string): HTMLElement {
+  const on = isPinned(pk);
+  return el('button', { class: 'v2-pinb' + (on ? ' on' : ''), type: 'button', 'aria-pressed': String(on),
+    'aria-label': on ? '고정 해제' : '위에 고정', title: on ? '고정 해제' : '위에 고정 — 맨 위로 올려 둡니다',
+    onclick: (e: Event) => { e.preventDefault(); e.stopPropagation(); togglePin(pk); } },
+    sv('svg', { viewBox: '0 0 24 24', class: 'v2-pinb-ic', 'aria-hidden': 'true' },
+      sv('path', { d: 'M9 4h6l-1 5 3.2 3.2a1 1 0 0 1-.7 1.7H12v5l-1 1-1-1v-5H6.5a1 1 0 0 1-.7-1.7L9 9z' })));
 }
 
 // 프로젝트 행 오른쪽 — 숫자를 늘어놓지 않는다. **볼 일이 있는 것만**: 확인 필요(호박)·작업 중(파랑).
