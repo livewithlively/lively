@@ -177,6 +177,31 @@ export async function getActiveGrant(appId: string, memberId: string): Promise<A
   return r.rows[0] ? rowToGrant(r.rows[0]) : null;
 }
 
+// ── 앱 활동(mcp_call_log.app 집계, design D3-5 관측 전용) ──────────────────────
+export interface AppActivityRow { app: string; tool: string; calls: number; ok: number; errors: number; last_called_at: string }
+
+/** 앱별·도구별 호출 집계(최근 days 일). appId 를 주면 그 앱만. 관측 전용 — 권한 판정에 쓰지 않는다. */
+export async function appActivity(appId: string | null, days: number): Promise<AppActivityRow[]> {
+  const win = Math.max(1, Math.min(365, Math.round(days)));
+  const params: unknown[] = [win];
+  const clauses = ["app IS NOT NULL", "called_at >= now() - make_interval(days => $1)"];
+  if (appId) { params.push(appId); clauses.push(`app = $${params.length}`); }
+  const r = await itemsPool.query(
+    `SELECT app, tool, count(*)::int AS calls,
+            count(*) FILTER (WHERE ok)::int AS ok,
+            count(*) FILTER (WHERE NOT ok)::int AS errors,
+            max(called_at) AS last_called_at
+       FROM mcp_call_log WHERE ${clauses.join(" AND ")}
+      GROUP BY app, tool ORDER BY app, calls DESC`,
+    params,
+  );
+  return r.rows.map((x) => ({
+    app: String(x.app), tool: String(x.tool),
+    calls: Number(x.calls), ok: Number(x.ok), errors: Number(x.errors),
+    last_called_at: String(x.last_called_at),
+  }));
+}
+
 function rowToGrant(r: Record<string, unknown>): AppGrantRow {
   return {
     app_id: String(r.app_id), member_id: String(r.member_id),

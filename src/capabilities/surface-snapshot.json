@@ -3895,5 +3895,15 @@
    "POST /api/ui/apps/:id/remove"
   ],
   "input_hash": "eeaa30c0ba805f7f"
+ },
+ {
+  "name": "org_app_activity",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-activity"
+  ],
+  "input_hash": "9ca2386249c54c50"
  }
 ]
