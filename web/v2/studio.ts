@@ -148,10 +148,6 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
     door.replaceChildren(
       el('div', { class: 'stu-door-l' },
         el('div', { class: 'stu-door-top' },
-          el('a', { class: 'stu-homelogo', href: '#/', title: '홈으로' }, el('span', { text: 'L' })),
-          el('button', { class: 'stu-projbtn', type: 'button', title: '프로젝트 목록 열기/닫기', onclick: () => window.dispatchEvent(new Event('stu:toggle-projects')) },
-            icon('folder', 'stu-i sm'), el('span', { text: '프로젝트' }), el('span', { class: 'car', text: '▾', 'aria-hidden': 'true' })),
-          el('span', { class: 'stu-door-sep', 'aria-hidden': 'true' }),
           el('div', { class: 'stu-eyebrow' },
             el('span', { class: 'mono', text: '#' + p.id }), el('span', { class: 'sep', text: '·' }),
             el('span', { class: 'stu-state ' + st.c, text: st.t }), el('span', { class: 'sep', text: '·' }),

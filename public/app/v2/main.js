@@ -358,16 +358,19 @@ function drawSide() {
         return;
     const showPanel = railPanelOpen || railPanelPin;
     root.classList.toggle('rail-open', showPanel); // 열림 = 좌측 칸 0 → 284px (캔버스를 민다)
-    // 닫으면 다시 못 여는 문제(원준) — 문패 [프로젝트 ▾] 는 프로젝트 화면에만 있다.
-    //  그래서 **패널이 닫힌 모든 화면 좌상단에 손잡이(fab)** 를 띄운다: 홈·세션·리브 어디서 닫아도 길이 남는다.
-    //  단 **프로젝트 화면은 제외** — 문패의 [프로젝트 ▾] 가 같은 자리에 있어 손잡이가 겹쳐 덮는다(실측).
+    // 닫으면 다시 못 여는 문제(원준) — **패널이 닫힌 모든 화면 좌상단에 손잡이(fab)** 를 띄운다.
+    //  ⚠ 종전엔 프로젝트 화면만 제외하고 문패의 [🗀 프로젝트 ▾] 에 맡겼다. 그런데 그 버튼은 눌러서 목록이
+    //   열린다는 느낌을 주지 못했다(원준 2026-08-19: "전혀 직관적이지 않은 당황스러운 버튼"). 화면마다 여는 길이
+    //   다른 것 자체가 문제였다 — 이제 **어느 화면에서든 같은 알약 하나**다. 문패의 로고·[프로젝트]는 걷었다.
+    //  알약은 두 조각이다: 왼쪽 L = 홈으로(문패 로고가 하던 일), 나머지 = 목록 열기. 보이기엔 한 알약이다.
     if (panelFab) {
         panelFab.remove();
         panelFab = null;
     }
-    if (!showPanel && !activeKey().startsWith('p:')) {
-        const fab = el('button', { class: 'stu-panel-fab', type: 'button', title: '프로젝트 목록 열기 (닫으려면 패널의 ×)', 'aria-label': '프로젝트 목록 열기',
-            onclick: () => { railPanelOpen = true; drawSide(); } }, el('span', { class: 'lg', text: 'L' }), el('span', { text: '프로젝트' }));
+    if (!showPanel) {
+        const fab = el('div', { class: 'stu-panel-fab' }, el('a', { class: 'lg', href: '#/', title: '홈으로', 'aria-label': '홈으로', text: 'L' }), el('button', { class: 'stu-panel-fab-open', type: 'button', text: '프로젝트',
+            title: '프로젝트 목록 열기 (닫으려면 패널의 ×)', 'aria-label': '프로젝트 목록 열기',
+            onclick: () => { railPanelOpen = true; drawSide(); } }));
         panelFab = fab;
         root.append(fab);
     }

@@ -754,6 +754,8 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 /* ── 작업대 골격 ── */
 .stu-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg, #fff); }
 .stu-door { flex: none; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 16px 24px 14px; border-bottom: 1px solid var(--line); }
+/* 좌상단 손잡이(.stu-panel-fab)가 떠 있을 때만 그만큼 왼쪽을 비운다 — 패널이 열려 있으면 손잡이가 없다. */
+#v2-root:not(.rail-open) .stu-door { padding-left: 122px; }
 .stu-eyebrow { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-sub); }
 .stu-eyebrow .sep { color: var(--muted-2); }
 .stu-state.run { color: var(--blue); font-weight: 700; } .stu-state.done { color: var(--mint-deep); font-weight: 700; } .stu-state.todo { color: var(--muted); }
@@ -975,7 +977,14 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .stu-shell-dot { position: absolute; top: -2px; right: 8px; width: 9px; height: 9px; border-radius: 5px; background: var(--coral); border: 2px solid var(--bg, #fff); }
 /* ── 패널 다시 열기 손잡이 — 닫힌 화면 좌상단(원준) ── */
 .stu-panel-fab { position: absolute; left: 14px; top: 14px; z-index: 50; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 12px 0 5px; border: 1px solid var(--line-net-2); border-radius: 17px; background: rgba(255,255,255,.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); box-shadow: 0 2px 6px rgba(21,35,59,.08), 0 10px 24px rgba(21,35,59,.12); font: inherit; font-size: 12.5px; color: var(--ink-sub); cursor: pointer; }
-.stu-panel-fab:hover { color: var(--ink); border-color: var(--blue); }
+.stu-panel-fab:hover { border-color: var(--blue); }
+/* 알약 안 두 조각 — 왼쪽 L 은 홈, 나머지는 목록 열기. 눌리는 자리를 넓게 잡아 '누르는 것'으로 읽히게 한다. */
+.stu-panel-fab .lg { text-decoration: none; flex: none; }
+.stu-panel-fab .lg:hover { opacity: .82; }
+.stu-panel-fab-open { border: 0; background: none; font: inherit; font-size: 12.5px; color: var(--ink-sub);
+  padding: 0 2px 0 0; height: 100%; cursor: pointer; letter-spacing: -.01em; }
+.stu-panel-fab:hover .stu-panel-fab-open { color: var(--blue); }
+.stu-panel-fab-open:focus-visible, .stu-panel-fab .lg:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 6px; }
 .stu-panel-fab .lg { width: 24px; height: 24px; border-radius: 8px; background: var(--ink); color: #fff; font-weight: 800; font-size: 12px; display: flex; align-items: center; justify-content: center; }
 
 /* ══ 실험장 v4 = 바탕화면(2026-08-19) — 스테이지 층·도크·런치패드·알림 센터·바로가기·유령 창·OS 드롭 ══
