@@ -68,7 +68,7 @@ await t("[C8] stat 주입(#1437 ②) — 판정은 주입된 stat 이 한다: �
   const local = path.join(home, ".t", "conv-1", "conv.jsonl"); fs.writeFileSync(local, "bb\n");   // 로컬엔 실재
   const remote = path.join(home, ".t", "conv-1", "remote.jsonl");                                    // 로컬엔 없음(다른 호스트에 있다고 치자)
   const io: HarnessSessionAdapter = { key: "t", label: "t", roots: () => [path.join(home, ".t")], filePattern: /\.jsonl$/,
-    pathFor: (root, { convId }) => path.join(root, convId, "conv.jsonl"), parse: null, answer: null, screen: null };
+    pathFor: (root, { convId }) => path.join(root, convId, "conv.jsonl"), convIdOk: null, parse: null, answer: null, screen: null };
   const asked: string[] = [];
   const remoteStat = async (f: string): Promise<number | null> => { asked.push(f); return f === remote ? 77 : null; };
   const a = await locateTranscript(io, { cwd: "/w", convId: "conv-1", owner: "yoon", reportedPath: remote }, remoteStat);
