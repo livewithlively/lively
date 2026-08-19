@@ -1,0 +1,101 @@
+// 앱 패키지 로더 — 스테이지 디렉터리 → {manifest, content_hash, DeployItem[]} (#1780, design D2/D4).
+//  builtin(코드 내장 디렉터리)·git clone·tar 업로드 모두 **추출 후 같은 스테이지 디렉터리**로 수렴하므로 로더는 하나다.
+//  로더는 매니페스트 선언(planDeclaredComponents) + 플러그인 트리 FS 스캔(harness_asset)을 결합해 전개 계획을 완성한다.
+//
+// payload 계약(deploy 실행기가 kind 별로 해석):
+//  - harness_asset: { kind:'skill'|'subagent'|'command', harness:'claude', body, label }  ← 실전개(스토어 upsert)
+//  - cron:          { schedule, run }                                                       ← 실전개
+//  - mcp_server:    <매니페스트 tools.mcp_servers[] 항목>                                    ← 실전개
+//  - tool:          <매니페스트 tools.http_tools[] 항목>                                     ← 실전개
+//  - host:          null                                                                     ← 실전개(url_allowlist 병합)
+//  - ui_page/ui_widget/section/data_table: null                                              ← 저널만(surfaces 는 manifest 에서 읽음, DDL 은 부팅자식)
+import { readdir, readFile, stat } from "node:fs/promises";
+import path from "node:path";
+import { HttpError } from "../http-error.js";
+import { parseAppManifest, appAssetId, type LivelyAppManifest } from "./manifest.js";
+import { planDeclaredComponents, type AppComponentRef } from "./install-plan.js";
+import { hashAppPackage } from "./package-hash.js";
+import type { DeployItem } from "./install.js";
+
+export interface LoadedApp {
+  manifest: LivelyAppManifest;
+  contentHash: string;
+  items: DeployItem[];
+}
+
+// 하네스 자산 종류 → 디스크 레이아웃(Claude 플러그인 트리 규약).
+const ASSET_DIRS: Array<{ dir: string; kind: "skill" | "subagent" | "command"; layout: "dir" | "file" }> = [
+  { dir: "skills", kind: "skill", layout: "dir" },    // skills/<slug>/SKILL.md
+  { dir: "agents", kind: "subagent", layout: "file" }, // agents/<slug>.md
+  { dir: "commands", kind: "command", layout: "file" }, // commands/<slug>.md
+];
+
+/** 스테이지 디렉터리를 읽어 설치 계획을 완성한다. 결정론적(FS 읽기). */
+export async function loadAppPackage(stageDir: string): Promise<LoadedApp> {
+  const root = path.resolve(stageDir);
+  const manifestPath = path.join(root, "lively-app.json");
+  let manifest: LivelyAppManifest;
+  try {
+    manifest = parseAppManifest(JSON.parse(await readFile(manifestPath, "utf8")));
+  } catch (e) {
+    if ((e as { code?: string }).code === "ENOENT") throw new HttpError(400, "lively-app.json 이 없습니다");
+    if (e instanceof HttpError) throw e;
+    throw new HttpError(400, `lively-app.json 파싱 오류: ${(e as Error).message}`);
+  }
+
+  const contentHash = (await hashAppPackage(root)).hash;
+
+  // 1) 매니페스트 선언 component(ui·host·section·data·cron·mcp_server·tool).
+  const declared = planDeclaredComponents(manifest);
+  const items: DeployItem[] = declared.map((comp) => ({ comp, payload: payloadForDeclared(manifest, comp) }));
+
+  // 2) 플러그인 트리 harness_asset 스캔(skills·agents·commands).
+  const pluginRel = manifest.harness?.plugin ?? "./";
+  const pluginRoot = path.resolve(root, pluginRel);
+  if (!pluginRoot.startsWith(root)) throw new HttpError(400, "harness.plugin 경로가 패키지 밖을 가리킵니다");
+  for (const asset of await scanHarnessAssets(manifest, pluginRoot)) items.push(asset);
+
+  return { manifest, contentHash, items };
+}
+
+// 선언 component 의 payload — 실전개 kind 는 매니페스트 조각, 저널 kind 는 null.
+function payloadForDeclared(m: LivelyAppManifest, comp: AppComponentRef): unknown {
+  if (comp.kind === "cron") {
+    const job = m.jobs.find((j) => j.key === comp.orig_name);
+    return job ? { schedule: job.schedule, run: job.run } : null;
+  }
+  if (comp.kind === "mcp_server") return m.tools.mcp_servers.find((s) => (s as { name?: string }).name === comp.orig_name) ?? null;
+  if (comp.kind === "tool") return m.tools.http_tools.find((t) => (t as { name?: string }).name === comp.orig_name) ?? null;
+  return null; // host / ui_page / ui_widget / section / data_table
+}
+
+async function scanHarnessAssets(m: LivelyAppManifest, pluginRoot: string): Promise<DeployItem[]> {
+  const out: DeployItem[] = [];
+  for (const spec of ASSET_DIRS) {
+    const base = path.join(pluginRoot, spec.dir);
+    let entries: string[];
+    try { entries = await readdir(base); } catch { continue; } // 없으면 스킵
+    for (const name of entries) {
+      let slug: string; let body: string;
+      if (spec.layout === "dir") {
+        const skillMd = path.join(base, name, "SKILL.md");
+        try { const s = await stat(skillMd); if (!s.isFile()) continue; } catch { continue; }
+        slug = name; body = await readFile(skillMd, "utf8");
+      } else {
+        if (!name.endsWith(".md")) continue;
+        slug = name.slice(0, -3); body = await readFile(path.join(base, name), "utf8");
+      }
+      out.push({
+        comp: { kind: "harness_asset", ref: appAssetId(m.id, slug), orig_name: slug },
+        payload: { kind: spec.kind, harness: "claude", body, label: slug },
+      });
+    }
+  }
+  // 같은 ref 가 두 번 나오면(예: skills/x 와 commands/x 가 같은 slug) 거부 — 물질화 충돌.
+  const seen = new Set<string>();
+  for (const it of out) {
+    if (seen.has(it.comp.ref)) throw new HttpError(400, `하네스 자산 id 충돌: ${it.comp.orig_name}`);
+    seen.add(it.comp.ref);
+  }
+  return out;
+}
