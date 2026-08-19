@@ -178,6 +178,7 @@ const appRemove: Capability = {
         try { await deps.reclaim({ kind: c.kind, ref: c.ref, orig_name: c.orig_name ?? undefined }); }
         catch { /* best-effort — 조인은 아래 delete 로 CASCADE, 저널 삭제로 스위퍼도 무관 */ }
       }
+      await store.pruneUiAssets(id, []);   // UI 자산은 FK CASCADE 대상이 아니므로(스키마 주석) 명시 삭제.
       await store.deleteApp(id, wctx(user, ctx));
       return { ok: true, removed: id, components: comps.length };
     });

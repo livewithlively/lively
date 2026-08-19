@@ -1,5 +1,5 @@
 // 앱 UI 보존·서빙 실-DB 스모크 (#1780 PR5) — 설치가 entry HTML 을 org_app_ui_asset 에 보존하고,
-//  org_app_ui 가 그 HTML 을 서빙하며, 앱 제거 시 CASCADE 로 사라지는지 본다. fail-first: UI 보존/서빙은 이 PR 이전 없었다.
+//  org_app_ui 가 그 HTML 을 서빙하며, 앱 제거 시 UI 자산 명시 삭제 로 사라지는지 본다. fail-first: UI 보존/서빙은 이 PR 이전 없었다.
 //  ⚠ 수동 실행(docker):  node scripts/app-ui.itest.mjs
 import { execFileSync, execSync } from "node:child_process";
 import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
@@ -77,10 +77,10 @@ try {
   ok("비활성 앱 UI → 409");
   await setAppEnabled("uiapp", true, { actor: "test" });
 
-  // ── 제거 시 CASCADE ──
+  // ── 제거 시 UI 자산 명시 삭제 ──
   await removeCap.handler({ app_id: "uiapp" }, user, ctx);
-  assert.equal(await getUiAsset("uiapp", "main"), null, "앱 제거 시 UI 자산 CASCADE");
-  ok("제거: UI 자산 CASCADE");
+  assert.equal(await getUiAsset("uiapp", "main"), null, "앱 제거 시 UI 자산 삭제");
+  ok("제거: UI 자산 삭제");
 
   console.log(`\n✓ ${pass} passed`);
   await itemsPool.end().catch(() => {});
