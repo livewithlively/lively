@@ -55,13 +55,45 @@ async function grantTools(appId: string, memberId: string): Promise<string[] | n
 }
 
 /**
+ * 앱 세션 무조건 통과 능력(EXEMPT) — grant 와 **무관하게** 허용되는 **세션 플럼빙** 능력들(#1780 PR3c).
+ *
+ *  왜 필요한가: 앱 세션의 grant 는 앱이 쓰는 **콘텐츠 도구**(knowledge_save·db_query·project_* …)를 좁히는 게 목적이지,
+ *   세션이 돌기 위한 **인프라 배관**을 좁히는 게 아니다. 그런데 세션 안에서 도는 두 종류의 호출이 requireAppTool 을 만난다:
+ *    ① LLM 자신의 인프라 호출(프록시 = 앱 토큰). 대표적으로 whoami(자기 신원) — 하네스가 부팅 때 부른다.
+ *    ② 세션 훅(session-preload·sync-harness-assets·run-custom)의 인프라 fetch. 격리(box-spawn) 세션에선
+ *       box-spawn 이 LIVELY_TOKEN=멤버토큰을 심어 훅이 멤버 토큰으로 나가므로(appId 없음) 게이트를 안 만나지만,
+ *       비격리(단일유저 박스)에선 LIVELY_TOKEN 미주입 → LIVELY_HOME 을 존중하는 훅(run-custom·sync-harness-assets)이
+ *       **앱 토큰**으로 나가 이 게이트에 걸린다. 이 목록이 없으면 그 경우 컨텍스트 주입·자산 동기화가 조용히 403 된다.
+ *   즉 이 EXEMPT 는 배포형태(격리/비격리)·토큰출처(멤버/앱)와 **무관하게** 인프라 배관을 살려 두는 명시적 경계다.
+ *
+ *  ⚠ 안전 불변식: 여기 오르는 것은 **읽기/보고/인프라(전부 scope:null, 콘텐츠 미변경)** 뿐이다.
+ *   콘텐츠 쓰기 능력(knowledge_save·source_save·db_query·project_create_v6 …)은 **절대** 넣지 않는다 — 계속 grant 로 게이트된다.
+ *   목록을 좁게 유지하고, 각 항목은 '어느 훅/경로가 왜 필요로 하나'를 근거로만 추가한다(surface-snapshot 은 불변 — 능력 추가 아님).
+ */
+export const APP_TOOL_EXEMPT: ReadonlySet<string> = new Set([
+  "whoami",                     // LLM 자기 신원 — 하네스가 부팅 때 호출(앱 토큰). 읽기(GET /api/ui/me/whoami).
+  "org_preview",                // session-preload 컨텍스트 주입 — 멤버 정적 컨텍스트 렌더. 읽기·scope:null(GET /api/ui/org/preview).
+  "org_runtime_config",         // session-preload 훅 토글/너지 동적 fetch. 읽기·scope:null(GET /api/ui/org/runtime-config).
+  "org_runner_assets",          // sync-harness-assets 자산 materializer fetch. 읽기·scope:null(GET /api/ui/org/runner/assets).
+  "org_runner_hooks",           // run-custom 커스텀 훅 소스 fetch. 읽기·scope:null(GET /api/ui/org/runner/hooks).
+  "org_runner_hook_report",     // run-custom 훅 실패 텔레메트리(본인 신원으로만 기록). 보고·scope:null(POST /api/ui/org/runner/hook-report).
+  "me_harness_report",          // sync-harness-assets 로컬 하네스 인벤토리 메타 보고(본문·메모리 미포함). 보고·scope:null(POST /api/ui/me/harness-report).
+  "me_harness_local_pref_plan", // sync-harness-assets 이 머신 로컬 끄기 계획 pull. 읽기·scope:null(GET /api/ui/me/harness-local-pref/plan).
+  // 제외 근거(의도적 미포함):
+  //  · terminal/sessions/*(work-flag active/exited) — 능력이 아니라 bare Express 라우트(src/terminal/routes.ts) → requireAppTool 미경유.
+  //  · recall_route·project_similar — 코어 훅이 아니라 **선택형 예제 org 훅**(domain-recall·project-bind-nudge)만 호출. 코어 의존 아님 → 좁게 유지.
+]);
+
+/**
  * 앱 도구 판정(순수) — appId·grant.tools·도구이름만으로 결정.
  *  - appId 없음(일반 세션) → 항상 허용
+ *  - EXEMPT 인프라 능력 → grant 무관 허용(세션 배관 — 위 APP_TOOL_EXEMPT 주석)
  *  - appId 있는데 grant.tools 가 null(grant 사라짐) → 전부 차단(fail-closed)
  *  - 그 외 → toolAllowed(글롭 매칭)
  */
 export function decideAppTool(appId: string | undefined, tools: string[] | null, toolName: string): boolean {
   if (!appId) return true;
+  if (APP_TOOL_EXEMPT.has(toolName)) return true; // 읽기/보고/인프라 배관 — grant 무관(콘텐츠 쓰기는 여기 없음)
   if (tools === null) return false;
   return toolAllowed(tools, toolName);
 }
