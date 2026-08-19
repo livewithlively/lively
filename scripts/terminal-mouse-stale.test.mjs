@@ -43,6 +43,18 @@ eq(paneMouseMode(st({ any: 1 }, "fzf")), "any", "A11 normal 화면에서 마우�
 eq(paneMouseMode(st({ any: 1 }, "2.1.220")), "any", "A12 실측 Claude Code foreground 이름 — 셸이 아니면 보존");
 eq(paneMouseMode(st({ any: 1 }, "zsh-completions")), "any", "A13 경계: 셸 이름을 접두로 가진 남 — 부분일치로 끄면 안 된다");
 eq(paneMouseMode(null), "none", "A14 상태가 아예 없으면 끔(방어)");
+// ── 표 A′. 백엔드가 마우스 flag 를 **못 주는** 경우(psmux — Windows 노드) — #1535 윈도우 재발(2026-08-19) ──
+//  psmux 3.3.7 실측: `any= btn= std= sgr=` 전부 빈 값(포맷변수 미구현). '없음'을 '꺼짐'으로 읽으면 살아있는 앱의
+//  트래킹을 끈다 → alt-screen 에서 휠이 ↑/↓ 로 폴백(신고 증상: 포커스 때마다 상태블록 → 몇 초간 화살표).
+//  이 경우 클라 xterm 이 스트림에서 스스로 추적한 모드가 유일한 진실이다 → 'keep'(건드리지 않음).
+const psm = (cmd, extra = {}) => ({ any: false, btn: false, std: false, sgr: false, flagsMissing: true, mux: "psmux", cmd, ...extra });
+eq(paneMouseMode(psm("claude")), "keep", "A15 psmux + 앱 실행 중 → 건드리지 않는다(신고 증상 그 자체 — 'none' 이면 살아있는 앱의 휠이 죽는다)");
+eq(paneMouseMode(psm("claude", { mux: "" })), "keep", "A16 구 노드 번들(mux 토큰 없음)도 flag 가 전부 비면 psmux 지문 → 건드리지 않는다");
+eq(paneMouseMode(psm("claude", { flagsMissing: false, mux: "psmux" })), "keep", "A17 서버가 psmux 라고 알려주면 flag 가 0/1 로 와도 믿지 않는다(ConPTY 뒤의 모드 추적은 미검증)");
+eq(paneMouseMode(psm("powershell")), "none", "A18 psmux 라도 포그라운드가 셸이면 끈다 — 셸은 마우스를 켜지 않는다(#1302 보호 유지)");
+eq(paneMouseMode(psm("cmd.exe")), "none", "A19 Windows 셸(cmd.exe)도 셸");
+eq(paneMouseMode({ any: false, btn: false, std: false, sgr: false, flagsMissing: false, mux: "tmux", cmd: "2.1.222" }), "none",
+  "A20 경계: tmux 가 flag 를 0 으로 **말해준** 것은 '꺼짐'이다 — 종전 동작 그대로(앱이 off 한 뒤 재접속 갭 보정, #1092)");
 
 // ── 표 B. 마우스 리포트 판별 ──
 eq(isMouseReport("\x1b[<35;70;12M"), true, "B1 SGR 누름/이동");
@@ -70,6 +82,8 @@ assert.ok(applySrc.includes("paneMouseMode(st)"),
   "배선: applyPaneState 가 paneMouseMode 로 목표 모드를 정해야 한다 — 옛 인라인 판정이 남으면 stale 게이팅이 통째로 죽는다");
 assert.ok(applySrc.includes("requestMouseReset()"),
   "배선: stale 관측 시 tmux 쪽 상태 복구를 요청해야 한다 — 이 클라만 안 켜면 다른 클라·실 터미널 attach 는 계속 flood 를 받는다");
+assert.ok(applySrc.includes("wantMode === 'keep'"),
+  "배선: applyPaneState 가 'keep' 을 받으면 마우스 동기화를 통째로 건너뛰어야 한다 — 판정만 있고 호출부가 종전 분기(none→끔)로 흘리면 psmux 버그는 그대로다");
 pass++; console.log("ok  배선 applyPaneState → paneMouseMode + requestMouseReset");
 
 // 정의 자체가 먼저 매치되므로(indexOf 는 첫 등장) onData 이후 구간에서 '호출'을 찾는다.
