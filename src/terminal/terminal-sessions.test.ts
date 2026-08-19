@@ -251,10 +251,20 @@ const ok2 = (cond: boolean, name: string): void => { if (!cond) { console.error(
     ok2(/HARNESS_ERR/.test(out), "E2 하네스가 stderr 로 남긴 원문 에러가 화면에 보존된다");
     ok2(/codex logout && codex login --device-auth/.test(out), "E2 비개발자가 그대로 붙여넣을 로그인 한 줄을 준다");
   }
-  // E3 — 실패 코드 값에 무관해야 한다(127=바이너리 없음 등).
+  // E3 — 127(명령 없음)은 **전용 안내**를 받는다(#1541): "다시 시작하세요"는 같은 실패를 반복시키는 안내다.
+  //  원인은 대개 좁은 PATH(GUI 가 재시작한 노드) — 터미널에서 노드 재시작 한 줄을 처방한다.
   {
     const out = runLaunch(harnessLaunchArgv("codex", ["sh", "-c", "exit 127"]), ALIVE);
     ok2(/SHELL_ALIVE/.test(out), "E3 다른 실패 코드(127)도 세션을 살린다(코드 값에 무관)");
+    ok2(/PATH 에서 찾지 못했습니다/.test(out), "E3 127 은 '실행 파일을 못 찾았다' 안내다(죽었다는 안내가 아니라)");
+    ok2(/lively node stop && lively node --daemon/.test(out), "E3 처방 한 줄(노드 재시작)이 그대로 붙여넣을 수 있게 나온다");
+    ok2(!/예기치 않게 종료/.test(out), "E3 127 에 일반 실패 안내를 겹쳐 찍지 않는다");
+  }
+  // E3b — 일반 실패(exit 1)에는 127 안내가 새지 않는다(갈래 분리 확인).
+  {
+    const out = runLaunch(harnessLaunchArgv("claude", ["sh", "-c", "exit 1"]), ALIVE);
+    ok2(!/PATH 에서 찾지 못했습니다/.test(out), "E3b 일반 실패에 not-found 안내가 새지 않는다");
+    ok2(/예기치 않게 종료/.test(out), "E3b 일반 실패 안내는 그대로");
   }
   // E4 — 새로 도입한 헬퍼의 **빈 입력**: POSIX 셸 세션은 감쌀 하네스가 없다.
   ok2(harnessLaunchArgv("shell", [], "linux").length === 0, "E4 POSIX 셸 세션(빈 cmd)은 감싸지 않는다");

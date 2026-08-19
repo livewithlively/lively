@@ -134,6 +134,12 @@ try {
     // PATH baked(#869) — 데몬은 최소 PATH 라, 사용자 로그인 PATH 를 넣어야 tmux 서버 pane 이 harness(claude 등)를 찾는다.
     check("③ env 에 PATH baked(데몬 tmux 서버가 pane 명령 해석 — harness not-found 방지)",
       /^PATH=\/.+/m.test(env), `PATH 줄: ${(env.match(/^PATH=.*/m) || ["(없음)"])[0]}`);
+    // PATH 굽기가 **현재(호출자) PATH 를 잃지 않는다**(#1541) — GUI 가 몰아도 로그인 셸과 합집합이므로,
+    //  최소한 이 테스트 프로세스의 PATH 성분은 남아 있어야 한다(스텁 bin 경로가 그 증거).
+    const baked = (env.match(/^PATH=(.*)$/m) || [])[1] || "";
+    check("③ PATH 합집합 — 호출자 PATH 성분 보존 + ~/.lively/bin 포함(#1541 GUI 재시작 회귀 방지)",
+      baked.split(":").includes(H.bin) && baked.split(":").includes(join(H.home, ".lively", "bin")),
+      `baked=${baked.slice(0, 200)}`);
   }
 
   // ④ 번들 해제 — ~/.lively/node-agent/agent.mjs 로 풀렸다(데몬이 이걸 실행한다).

@@ -241,6 +241,36 @@ function tmuxHelp() {
   return `${MUX} 가 필요합니다 — 설치 후 다시 실행하세요.`;
 }
 
+// ── PATH 굽기 (#1541) — env 파일의 PATH 는 pane 안 하네스(claude 등)의 명령 해석 전부를 정한다. ──
+//  로그인 셸의 PATH 를 물어 현재 PATH 와 **합집합**으로 굽는다(순서: 로그인 셸 먼저 — 사용자가 rc 에서 정한
+//  우선순위 보존). 로그인 셸이 실패하면(비대화 환경·이상한 rc) 현재 PATH 그대로 — 종전보다 나빠지지 않는다.
+//  Windows 는 GUI 도 레지스트리(머신+사용자) PATH 를 받으므로 손대지 않는다.
+/** (순수 — 테스트 seam) 로그인 셸 PATH ∪ 현재 PATH ∪ 필수 항목. 빈 조각·중복 제거, 순서 보존. */
+export function mergePathDirs(loginPath, currentPath, extras, sep) {
+  const out = [];
+  for (const p of [...String(loginPath || "").split(sep), ...String(currentPath || "").split(sep), ...(extras || [])]) {
+    if (p && !out.includes(p)) out.push(p);
+  }
+  return out.join(sep);
+}
+function loginShellPath() {
+  if (process.platform === "win32") return "";
+  // 마커로 감싼다 — 셸 rc 가 stdout 에 찍는 잡음(모트·에코)과 PATH 를 가른다. -l(로그인)만 쓰고 -i 는 안 쓴다
+  //  (-i 는 tty 를 기다리다 매달릴 수 있다). SHELL 미설정(GUI 컨텍스트)이면 macOS 기본 zsh 로 폴백.
+  const sh = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh");
+  try {
+    const out = execFileSync(sh, ["-lc", 'printf "<<<LIVELY_PATH:%s>>>" "$PATH"'],
+      { encoding: "utf8", timeout: 8000, stdio: ["ignore", "pipe", "ignore"] });
+    const m = /<<<LIVELY_PATH:([^>]*)>>>/.exec(out);
+    return m ? m[1] : "";
+  } catch { return ""; }
+}
+function bakedNodePath() {
+  if (process.platform === "win32") return process.env.PATH || "";
+  // ~/.lively/bin 은 항상 넣는다 — pane 안에서 `lively` 자신이 잡혀야 안내 문구("lively node …")가 실행 가능하다.
+  return mergePathDirs(loginShellPath(), process.env.PATH || "", [join(HOME, ".lively", "bin")], ":");
+}
+
 async function cmdNode(rest) {
   const sub = rest[0];
   if (sub === "stop") return nodeStop();
@@ -265,10 +295,12 @@ async function cmdNode(rest) {
   }
   // 접속정보 env 파일(0600) — foreground 는 spawn env, 데몬은 이 파일을 읽는다.
   //  PATH: 데몬(launchd/systemd)은 사용자 로그인 셸을 안 거쳐 최소 PATH 다 → tmux 서버가 pane 안 harness(claude 등)를
-  //   못 찾아 세션이 즉사한다(#869). `lively node` 는 사용자 대화형 셸에서 도니 지금 PATH 가 곧 사용자 PATH — 그걸 baked.
+  //   못 찾아 세션이 즉사한다(#869). 종전엔 "지금 PATH"를 그대로 구웠는데, **이 명령을 데스크톱 앱(GUI)이 몰면
+  //   그 '지금'이 로그인 셸이 아니라 GUI 의 최소 PATH 다** — 실측(#1541 맥): 트레이 [노드 시작] 뒤 모든 pane 이
+  //   `claude: command not found`. 그래서 로그인 셸에 PATH 를 물어(bakedNodePath) 현재 PATH 와 합쳐 굽는다.
   //   (TMUX_BIN 절대경로는 tmux 자체 해석용, PATH 는 그 tmux 서버가 띄우는 pane 의 명령 해석용 — 둘 다 필요.)
   writeLively("node-agent.env",
-    `LIVELY_GATEWAY_URL=${gw}\nLIVELY_NODE_TOKEN=${nodeTok}\nLIVELY_NODE_ID=${nodeId}\nTMUX_BIN=${tmuxPath}\nPATH=${process.env.PATH || ""}\n`, 0o600);
+    `LIVELY_GATEWAY_URL=${gw}\nLIVELY_NODE_TOKEN=${nodeTok}\nLIVELY_NODE_ID=${nodeId}\nTMUX_BIN=${tmuxPath}\nPATH=${bakedNodePath()}\n`, 0o600);
 
   // 2) 에이전트 번들 내려받기(멤버 pull) → ~/.lively/node-agent/
   say(dim("· 노드 에이전트 내려받는 중…"));

@@ -332,11 +332,13 @@ export interface CreateInput { label: string; rootKey: string; subpath: string; 
 //  (비대화형 셸이라 job control 상태 메시지는 pane 에 찍히지 않는다 — 실측 확인.)
 const LAUNCH_SH = [
   'set -m',
-  'notice=$1; shift',
+  'notice=$1; notfound=$2; shift 2',
   '"$@"',
   'rc=$?',
   '[ "$rc" -eq 0 ] && exit 0',
-  'printf \'\\n%s\\n\' "$notice"',
+  // 127 = 명령을 못 찾음(셸 규약) — "하네스가 죽었다"와 원인·처방이 전혀 다르다(#1541 실측: GUI 가 구운 좁은
+  //  PATH 로 노드가 떠서 pane 이 claude 를 못 찾음). 이 갈래만 다른 안내를 찍는다.
+  'if [ "$rc" -eq 127 ]; then printf \'\\n%s\\n\' "$notfound"; else printf \'\\n%s\\n\' "$notice"; fi',
   'exec "${SHELL:-/bin/sh}" -il',
 ].join("\n");
 
@@ -377,6 +379,29 @@ export function harnessFailNotice(harnessKey: string): string {
     ];
   // 세션이 살아 있다는 사실 자체가 안내의 절반이다 — 종전엔 창이 사라져 사용자가 '내가 뭘 잘못했나'로 끝났다.
   return [line, ...body, line].join("\n");
+}
+
+// 명령 자체를 못 찾은 경우(exit 127) — "다시 시작하세요(<bin>)"는 **같은 실패를 한 번 더 시키는 안내**다.
+//  원인은 십중팔구 이 세션의 PATH(#1541 실측): 노드를 데스크톱 앱(GUI)에서 재시작하면 등록 절차가 GUI 의 최소
+//  PATH 를 구웠고, pane 은 그걸 물려받아 하네스를 못 찾는다. 처방은 "터미널에서 노드 재시작" 한 줄이다
+//  (kit cmd-node 가 로그인 셸 PATH 를 굽도록 고쳐진 뒤로는 그 한 번으로 영구 해결된다).
+export function harnessNotFoundNotice(harnessKey: string): string {
+  const line = "─".repeat(60);
+  const h = HARNESSES.find((x) => x.key === harnessKey);
+  const label = h?.label || harnessKey;
+  const bin = h?.bin || harnessKey;
+  return [
+    line,
+    `${label} — 실행 파일(${bin})을 이 세션의 PATH 에서 찾지 못했습니다.`,
+    "",
+    `이 PC 에 ${bin} 이 설치돼 있는데도 이 메시지가 나오면, 노드가 좁은 PATH 로 시작된 것입니다`,
+    "(데스크톱 앱에서 노드를 시작하면 생길 수 있습니다). 이 PC 의 터미널에서 아래 한 줄을 실행하세요:",
+    "",
+    "    lively node stop && lively node --daemon",
+    "",
+    `설치돼 있지 않다면 먼저 설치하세요. 그 뒤 이 세션에서  ${bin}  을 입력하면 이어서 쓸 수 있습니다.`,
+    line,
+  ].join("\n");
 }
 
 // Windows pane 셸의 UTF-8 프렐류드(#1541) — POSIX 의 PANE_LOCALE(#633)에 대응하는 **Windows 축**이다.
@@ -443,7 +468,7 @@ export function harnessLaunchArgv(harnessKey: string, cmd: string[], platform: s
   const argv = Array.isArray(cmd) ? cmd : [];
   if (platform === "win32") return argv.length ? argv : winShellArgv();
   if (!argv.length) return argv;
-  return ["sh", "-c", LAUNCH_SH, "lively-launch", harnessFailNotice(harnessKey), ...argv];
+  return ["sh", "-c", LAUNCH_SH, "lively-launch", harnessFailNotice(harnessKey), harnessNotFoundNotice(harnessKey), ...argv];
 }
 
 // 로그인 전용 세션(#1516) — 관리탭 [연결된 AI 계정]의 [로그인]이 여는 세션.
