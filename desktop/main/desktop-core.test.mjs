@@ -1353,7 +1353,8 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     for (const ch of Object.values(IPC_WEB)) assert.ok(ch.startsWith("lively-web:") && !Object.values(IPC).includes(ch));
     // 메인: BOOT 는 동기 응답, LOGOUT 은 CLI logout, 둘 다 게이트웨이 출처에서 온 요청에만
     const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
-    assert.match(main, /ipcMain\.on\(IPC_WEB\.BOOT, \(e\) => \{[\s\S]*?e\.returnValue = webBootPayload\(/, "BOOT 가 동기 응답이 아니다(비동기면 웹이 토큰 없이 부팅해 로그인 화면이 깜빡인다)");
+    assert.match(main, /ipcMain\.on\(IPC_WEB\.BOOT, \(e\) => \{[\s\S]*?e\.returnValue = \{ \.\.\.webBootPayload\(/, "BOOT 가 동기 응답이 아니다(비동기면 웹이 토큰 없이 부팅해 로그인 화면이 깜빡인다)");
+    assert.match(main, /frameless: framelessOn\(process\.platform\)/, "BOOT 가 frameless 를 안 준다 — preload 가 타이틀바를 언제 그릴지 모른다");
     const bootSeg = main.slice(main.indexOf("ipcMain.on(IPC_WEB.BOOT"), main.indexOf("ipcMain.handle(IPC_WEB.LOGOUT"));
     assert.match(bootSeg, /fromGateway\(e\)/, "BOOT 가 보내는 프레임의 출처를 안 본다");
     const lo = main.slice(main.indexOf("ipcMain.handle(IPC_WEB.LOGOUT"), main.indexOf("ipcMain.handle(IPC_WEB.LOGOUT") + 400);

@@ -11,7 +11,7 @@
 //  ③ 렌더러는 신뢰하지 않는다 — contextIsolation·sandbox 켜고, argv 는 메인이 만든다(ipc-contract).
 //  ④ **화면은 웹 UI 그대로다**(web-shell.mjs) — 설치·로그인·키트가 갖춰지면 창에 게이트웨이의 /ui/ 를 싣는다.
 //     앱에 화면 코드를 한 벌 더 두지 않는다(웹이 곧 앱). 마법사(renderer/)는 갖춰지기 전과 노드·점검 설정에만 쓴다.
-import { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, dialog, screen, session } from "electron";
+import { app, BrowserWindow, Tray, Menu, nativeImage, nativeTheme, shell, ipcMain, dialog, screen, session } from "electron";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { spawnSync, spawn, execFile } from "node:child_process";
 import { join, dirname } from "node:path";
@@ -22,7 +22,7 @@ import { runBootstrap, bootstrapPreview } from "./bootstrap.mjs";
 import { runCli, reduceProgress, cliContractVerdict } from "./cli-runner.mjs";
 import { trayMenuModel } from "./tray-menu.mjs";
 import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor } from "./ipc-contract.mjs";
-import { appReady, webUiUrl, webOrigin, openTargetFor, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN } from "./web-shell.mjs";
+import { appReady, webUiUrl, webOrigin, openTargetFor, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch } from "./web-shell.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
 import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, shouldAutoApplyUpdate, downloadProgressNote, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
 import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
@@ -144,6 +144,17 @@ function launchSpecFor(cli, args) {
 }
 /** 개발 실행(electron .)에서는 Electron 자신의 버전이 나온다 — 그래도 없는 척하지 않고 그대로 보여준다. */
 function safeAppVersion() { try { return app.getVersion(); } catch { return null; } }
+/** OS 다크모드 — frameless 창의 초기 타이틀바 색(마법사는 이 값이 전부, 웹 창은 페이지 보고가 곧 덮는다). */
+function osTheme() { try { return nativeTheme.shouldUseDarkColors ? "dark" : "light"; } catch { return "light"; } }
+// OS 테마가 바뀌면(라이트↔다크) 마법사 창의 Windows 창 버튼 색을 따라 바꾼다 — 마법사 CSS 는 prefers-color-scheme 로
+//  이미 스스로 바뀌므로, 안 맞추면 버튼 자리만 옛 색으로 남는다. 웹 창은 페이지가 관찰·보고하므로 여기서 안 건드린다.
+try {
+  nativeTheme.on("updated", () => {
+    if (process.platform !== "win32") return;
+    const o = frameOptions("win32", osTheme()).titleBarOverlay;
+    try { if (win && !win.isDestroyed()) win.setTitleBarOverlay(o); } catch { /* 비치명 */ }
+  });
+} catch { /* 테스트 스텁 등 nativeTheme 없음 */ }
 
 // ── 창 배치 기억 ────────────────────────────────────────────────────────────
 // 판단(화면 밖 좌표 버리기·최소 크기)은 window-bounds.mjs 가 하고 여기선 읽고 쓰기만 한다.
@@ -393,7 +404,8 @@ function showWindow() {
   //  안 그러면 창이 보이지 않는 곳에 떠서 사용자에겐 "앱이 안 열린다" 로 보인다.
   const b = loadBounds();
   win = new BrowserWindow({
-    ...b, minWidth: 560, minHeight: 420, title: "라이블리", show: false,
+    ...b, ...frameOptions(process.platform, osTheme()), minWidth: 560, minHeight: 420, title: "라이블리", show: false,
+    autoHideMenuBar: true,   // frameless 에서 메뉴 막대가 남으면 그게 곧 '이상한 바' 다 — Alt 로는 나온다
     webPreferences: {
       preload: join(HERE, "..", "preload", "preload.cjs"),
       contextIsolation: true, nodeIntegration: false, sandbox: true,   // 렌더러는 신뢰하지 않는다
@@ -428,7 +440,7 @@ function showApp() {
   if (!appWin || appWin.isDestroyed()) {
     const b = loadAppBounds();
     appWin = new BrowserWindow({
-      ...b, minWidth: APP_WINDOW_MIN.width, minHeight: APP_WINDOW_MIN.height, title: "라이블리", show: false,
+      ...b, ...frameOptions(process.platform, osTheme()), minWidth: APP_WINDOW_MIN.width, minHeight: APP_WINDOW_MIN.height, title: "라이블리", show: false,
       autoHideMenuBar: true,   // Windows·Linux: 메뉴 막대를 숨긴다(Alt 로 나온다) — 웹 화면 위에 File/Edit 줄이 얹히면 웹이 아니다
       webPreferences: {
         preload: WEB_PRELOAD,
@@ -510,6 +522,7 @@ app.on("web-contents-created", (_e, wc) => {
       action: "allow",
       overrideBrowserWindowOptions: {
         width: 1100, height: 760, autoHideMenuBar: true, title: "라이블리",
+        ...frameOptions(process.platform, osTheme()),   // 자식 창(터미널 새 창)도 같은 타이틀바 규약 — 섞이면 그게 버그로 보인다
         webPreferences: { preload: WEB_PRELOAD, contextIsolation: true, nodeIntegration: false, sandbox: true },
       },
     };
@@ -663,7 +676,16 @@ ipcMain.handle(IPC.SET_APP_AUTOLAUNCH, (_e, { on }) => { setAppAutoLaunch(!!on);
 const fromGateway = (e) => { const o = webOrigin(state.gatewayUrl); try { return !!o && new URL(e.senderFrame?.url || e.sender.getURL()).origin === o; } catch { return false; } };
 ipcMain.on(IPC_WEB.BOOT, (e) => {
   const ok = fromGateway(e);
-  e.returnValue = webBootPayload({ gatewayUrl: state.gatewayUrl, token: ok ? readTrim(join(LIVELY_DIR, "token")) : null, appVersion: safeAppVersion(), platform: process.platform });
+  // frameless 는 출처와 무관하다 — 이 창이 frameless 로 떠 있다는 사실이므로, 어떤 페이지가 실렸든 타이틀바는 있어야 창을 끈다.
+  e.returnValue = { ...webBootPayload({ gatewayUrl: state.gatewayUrl, token: ok ? readTrim(join(LIVELY_DIR, "token")) : null, appVersion: safeAppVersion(), platform: process.platform }), frameless: framelessOn(process.platform) };
+});
+// 타이틀바 색 보고(preload ③) — Windows 에서만 뜻이 있다(WCO 버튼 색). 값은 titlebarOverlayPatch 가 #RRGGBB 로 강제한다.
+ipcMain.handle(IPC_WEB.TITLEBAR, (e, t) => {
+  if (process.platform !== "win32") return { ok: false };
+  const patch = titlebarOverlayPatch(t);
+  if (!patch) return { ok: false };
+  try { BrowserWindow.fromWebContents(e.sender)?.setTitleBarOverlay(patch); return { ok: true }; }
+  catch { return { ok: false }; }
 });
 ipcMain.handle(IPC_WEB.LOGOUT, async (e) => {
   if (!fromGateway(e)) return { ok: false, error: "허용되지 않은 출처입니다." };

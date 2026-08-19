@@ -33,6 +33,9 @@ export const IPC = {
 export const IPC_WEB = {
   BOOT: "lively-web:boot",
   LOGOUT: "lively-web:logout",
+  // 커스텀 타이틀바(#1541) — preload 가 페이지의 실제 배경/글자색을 읽어 보고하면, 메인이 Windows 의
+  //  네이티브 창 버튼(WCO overlay) 색을 거기 맞춘다. 페이지(웹 UI)는 이 채널을 모른다 — preload 전용.
+  TITLEBAR: "lively-web:titlebar",
 };
 
 /** 렌더러가 요청할 수 있는 작업 — 화이트리스트. 임의 argv 를 렌더러가 만들지 못하게 한다. */
