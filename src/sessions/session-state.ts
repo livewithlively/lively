@@ -35,6 +35,7 @@ export interface SessionState {
   invites: string[];          // @box_invites
   project_id: number | null;  // @box_project
   project_src: string | null; // @box_project_src(v6|org)
+  app_id?: string | null;     // #1780 D4 — 이 세션이 어느 앱으로 떴나(@box_app 미러). null=일반 세션. 입력에선 선택(미전송=null).
   read_only: boolean;         // 실행 모드(#1007+)
   incognito: boolean;
   // #1291 v2 — 기록 범위(write cap)·read 축소. tmux 가 권위, 여기는 미러(재부팅 후 복원이 캡을 잃지 않게).
@@ -69,6 +70,8 @@ export function rowToState(r: Record<string, any>): SessionState {
     invites: Array.isArray(r.invites) ? r.invites.filter((x: unknown): x is string => typeof x === "string") : [],
     project_id: r.project_id != null ? Number(r.project_id) : null,
     project_src: r.project_src ?? null,
+    app_id: r.app_id ?? null,   // #1780 D4
+
     read_only: !!r.read_only, incognito: !!r.incognito,
     write_vis: (r.write_vis as string | null) ?? null, restrict_read: !!r.restrict_read,
     created: r.created != null ? Number(r.created) : null,
@@ -194,8 +197,8 @@ export async function listAllSessionStates(): Promise<SessionState[]> {
 export async function upsertSessionState(s: SessionStateInput): Promise<void> {
   if (ON_NODE) return;   // #1791 — 노드엔 DB 가 없다. 노드 세션의 행은 게이트웨이가 릴레이 직후 쓴다(헤더).
   await itemsPool.query(
-    `INSERT INTO org_session_state(id, owner, label, harness, dir, root_key, subpath, flags, auto_approve, invites, project_id, project_src, read_only, incognito, write_vis, restrict_read, created, last_busy, node_id, last_seen, updated_at)
-     VALUES($1,$2,$3,COALESCE($4,'claude'),$5,$6,$7,COALESCE($8,'{}')::jsonb,COALESCE($9,false),COALESCE($10,'[]')::jsonb,$11,$12,COALESCE($13,false),COALESCE($14,false),$15,COALESCE($16,false),$17,$18,$19,now(),now())
+    `INSERT INTO org_session_state(id, owner, label, harness, dir, root_key, subpath, flags, auto_approve, invites, project_id, project_src, read_only, incognito, write_vis, restrict_read, created, last_busy, node_id, app_id, last_seen, updated_at)
+     VALUES($1,$2,$3,COALESCE($4,'claude'),$5,$6,$7,COALESCE($8,'{}')::jsonb,COALESCE($9,false),COALESCE($10,'[]')::jsonb,$11,$12,COALESCE($13,false),COALESCE($14,false),$15,COALESCE($16,false),$17,$18,$19,$20,now(),now())
      ON CONFLICT (tenant_id, id) DO UPDATE SET
        owner=EXCLUDED.owner, label=EXCLUDED.label, harness=EXCLUDED.harness, dir=EXCLUDED.dir,
        root_key=EXCLUDED.root_key, subpath=EXCLUDED.subpath, flags=EXCLUDED.flags, auto_approve=EXCLUDED.auto_approve,
@@ -210,11 +213,11 @@ export async function upsertSessionState(s: SessionStateInput): Promise<void> {
        --  백필(중앙 tmux 만 훑는다)이 박스 세션에 NULL 을 넣고, 노드 릴레이가 노드 세션에 그 노드를 넣는다. 둘이 한 id 를 두고
        --  다투는 경우는 id 가 무작위라 없다.
        node_id=EXCLUDED.node_id,
-       last_busy=EXCLUDED.last_busy, last_seen=now(), updated_at=now()`,
+       last_busy=EXCLUDED.last_busy, app_id=EXCLUDED.app_id, last_seen=now(), updated_at=now()`,
     [s.id, s.owner, s.label, s.harness, s.dir, s.root_key, s.subpath, JSON.stringify(s.flags || {}),
      s.auto_approve, JSON.stringify(s.invites || []), s.project_id, s.project_src, s.read_only, s.incognito,
      s.write_vis ?? null, s.restrict_read ?? false,
-     s.created, s.last_busy, s.node_id ?? null],
+     s.created, s.last_busy, s.node_id ?? null, s.app_id ?? null],
   );
 }
 
