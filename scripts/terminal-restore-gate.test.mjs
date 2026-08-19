@@ -39,9 +39,12 @@ eq(goneMode({ restorable: true, canRestore: false, exitedByUser: true }, false),
 eq(goneMode(null, false), "end", "⑤메타 조회 실패(403·네트워크) → 종료 안내");
 eq(goneMode({}, false), "end", "⑥응답은 왔으나 복원 정보 없음 → 종료 안내");
 eq(goneMode({ restorable: false, canRestore: true }, false), "end", "⑦restorable=false 는 권한이 있어도 종료 안내");
-// ⑧⑨ 노드 세션(#869) — 중앙에 desired-state 가 없다. 메타가 복원 가능해 보여도 되살리지 않는다.
-eq(goneMode({ restorable: true, canRestore: true, exitedByUser: false }, true), "end",
-  "⑧노드 세션은 메타가 복원 가능해 보여도 중앙 복원 대상 아님");
+// ⑧⑨ 노드 세션 — #1791 뒤 노드 세션도 중앙 desired-state(node_id)를 가진다. 판정표는 박스와 **같다**: 메타(GET …?node=)가
+//  복원 가능이라 하면 같은 길(auto/ask/notowner)로 가고, 메타가 없으면 종전처럼 종료 안내. (종전 ⑧은 "노드는 무조건 end" —
+//  노드 세션엔 desired-state 가 없던 시절의 규칙이라 뒤집는다. 되살리는 실제 동작은 서버가 그 노드에 create 를 릴레이한다.)
+eq(goneMode({ restorable: true, canRestore: true, exitedByUser: false }, true), "auto",
+  "⑧노드 세션도 메타가 복원 가능(내 세션·중단됨)이면 박스와 같이 자동 복원");
+eq(goneMode({ restorable: true, canRestore: false }, true), "notowner", "⑧-b 노드 세션 남의 것 → 복원 불가 안내(박스와 동일)");
 eq(goneMode(null, true), "end", "⑨노드 세션 + 메타 없음 → 종료 안내");
 // ⑩⑪ 이번에 새로 도입한 필드가 비어 올 때의 기본값 — 불확실하면 자동으로 되살리지 않는다(안전측).
 eq(goneMode({ restorable: true }, false), "notowner",
@@ -106,6 +109,23 @@ eq(goneMode({ restorable: true, canRestore: true, exitedByUser: false }, false, 
   const blk = src.slice(src.indexOf(line), src.indexOf(line) + 400);
   assert.ok(/restored=1/.test(blk), "㉘복원 후 주소에 restored=1 표식이 없습니다 — 루프 차단이 발동하지 않습니다");
   pass++; console.log("ok  ㉘복원 후 주소에 restored=1 표식을 붙인다");
+}
+// #1791 — 노드에서 복원된 새 세션은 **그 노드로** 붙어야 한다(서버가 session.node 를 준다). 이걸 안 붙이면 새 주소가 박스로 가서
+//  4410(박스엔 그 세션이 없다) → 종료 배너로 끝난다. 배선(주소 조립)만 소스로 확인한다.
+{
+  const line = src.split("\n").find((l) => l.includes("location.replace(apiUrl('/ui/terminal.html?session=')"));
+  const blk = src.slice(src.indexOf(line), src.indexOf(line) + 600);
+  assert.ok(/ns\.node\s*&&\s*ns\.node\.id[\s\S]*&node=/.test(blk), "㉙-b 복원 후 주소에 새 세션의 node 를 붙이지 않습니다 — 노드 복원이 박스로 가서 끝납니다");
+  pass++; console.log("ok  ㉙-b 노드에서 복원된 세션은 그 노드로 붙는다(배선)");
+}
+// 노드 세션도 메타를 묻는다(종전엔 !NODE_ID 게이트로 아예 안 물었다 — 그러면 ⑧ 이 영영 발동 못 한다).
+{
+  const i = src.indexOf("async function onSessionGone()");
+  assert.ok(i > 0, "onSessionGone 을 찾지 못했습니다");
+  const blk = src.slice(i, i + 900);
+  assert.ok(!/if\s*\(\s*!NODE_ID\s*\)\s*\{?\s*try\s*\{\s*meta\s*=/.test(blk), "㉙-c 노드 세션은 메타 조회를 건너뜁니다 — 노드 복원이 발동하지 않습니다");
+  assert.ok(/meta\s*=\s*await\s+api\(sUrl\(''\)\)/.test(blk), "㉙-c onSessionGone 이 sUrl('')(node 쿼리 포함)로 메타를 묻지 않습니다");
+  pass++; console.log("ok  ㉙-c 노드 세션도 메타를 묻는다(배선)");
 }
 
 // ── ② 프리뷰 접두사(API_PREFIX / apiUrl) ─────────────────────────────────────────

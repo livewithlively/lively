@@ -302,8 +302,9 @@ function tsessCard(s, ctx) {
                     return;
                 }
                 const ns = r && r.session;
+                // #1791 — 노드에서 복원된 세션은 그 노드로 붙는다(서버가 session.node 를 준다). 없으면 박스.
                 if (ns && ns.id)
-                    window.open(termUrl(ns.id, ns.label || s.label), '_blank');
+                    window.open(termUrl(ns.id, ns.label || s.label, ns.node && ns.node.id), '_blank');
                 // 정밀복원(UUID 매핑 有)이면 바로 그 대화로 이어지고, 미상이면 이어보기 목록이 뜬다 — 둘 다 안내.
                 toast('열었어요 — 새 터미널에서 대화를 이어받아요(정확한 대화를 못 찾으면 목록에서 고르세요).');
                 reRender();

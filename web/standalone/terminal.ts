@@ -2371,11 +2371,14 @@ function showEndedBar(o) {
 //  종전엔 복원 경로가 목록 화면의 [복원] 버튼뿐이라, 세션 링크로 바로 들어온 사람은 종료 배너만 보고 목록으로
 //  되돌아가야 했다. E 의 설계는 원래 '부팅 시 전부 자동 spawn 하지 않고 열 때 resume' 이고, 이 화면이 그 '열 때'다.
 //  자동 복원은 **중단된 세션(재부팅·자동회수)만** — 내가 /exit 로 끝낸 세션(exitedByUser)은 되살아나는 게 의도와
-//  어긋나므로 버튼으로 둔다. 노드 세션(#869)은 중앙 desired-state 가 없어 복원 대상이 아니다.
+//  어긋나므로 버튼으로 둔다. 노드 세션도 같다 — #1791 뒤 노드 세션에도 중앙 desired-state(node_id)가 있어 서버가 그 노드에
+//  create 를 다시 릴레이한다(종전 '노드는 복원 대상 아님'은 desired-state 가 없던 시절의 규칙).
 // 4410 뒤 무엇을 할지 — 순수 판정(scripts/terminal-restore-gate.test.mjs 가 이 표를 지킨다).
 //  'end'=종료 배너(종전 동작) · 'notowner'=중단됐지만 남의 세션 · 'ask'=버튼으로 물어봄 · 'auto'=자동 복원.
 export function goneMode(meta, isNode, alreadyRestored, typed) {
-  if (isNode) return 'end';                       // 노드 세션(#869)은 중앙 desired-state 가 없어 복원 대상이 아니다
+  // #1791 — 노드 세션도 중앙 desired-state(node_id)를 가진다. 판정표는 박스와 같다 — 메타(GET …?node=)가 복원 가능이라 하면
+  //  같은 길로 간다(복원 자체는 서버가 그 노드에 create 를 릴레이). isNode 는 호환용 인자로 남긴다(판정에 안 쓴다).
+  void isNode;
   if (!meta || !meta.restorable) return 'end';    // 기록이 없거나 남의 세션(403) — 진짜 끝난 세션
   if (!meta.canRestore) return 'notowner';        // 프로젝트 세션이라 보이지만 복원은 소유자 몫
   // 내가 끝냈다는 신호가 있으면 되살리지 않고 **묻는다**. 신호는 두 갈래 — 훅 기록(exitedByUser) 또는 이 탭의 입력.
@@ -2402,7 +2405,8 @@ async function onSessionGone() {
   restoreTried = true;
   clearTimeout(reconnectTimer);
   let meta = null;
-  if (!NODE_ID) { try { meta = await api(sUrl('')); } catch (_) { /* 403(남의 세션)·기록 없음 → 일반 종료 배너 */ } }
+  // #1791 — 노드 세션도 묻는다(sUrl 이 &node= 를 붙인다): 스냅샷에 없으면 서버가 desired-state 로 '복원 가능'을 알린다.
+  try { meta = await api(sUrl('')); } catch (_) { /* 403(남의 세션)·기록 없음 → 일반 종료 배너 */ }
   const mode = goneMode(meta, !!NODE_ID, RESTORED, userTyped);
   if (mode === 'end') { endSession(); return; }
   if (mode === 'loop') {
@@ -2464,7 +2468,8 @@ async function restoreThisSession() {
   if (ns && ns.id) {
     // restored=1 — 이 표식이 있는 페이지는 다시 자동 복원하지 않는다(루프 차단, 위 goneMode).
     location.replace(apiUrl('/ui/terminal.html?session=') + encodeURIComponent(ns.id)
-      + '&label=' + encodeURIComponent(ns.label || SESSION_LABEL || '') + '&restored=1');
+      + '&label=' + encodeURIComponent(ns.label || SESSION_LABEL || '') + '&restored=1'
+      + (ns.node && ns.node.id ? '&node=' + encodeURIComponent(ns.node.id) : ''));   // #1791 — 노드에서 복원된 새 세션은 그 노드로 붙는다
     return;
   }
   sessionEnded = true;

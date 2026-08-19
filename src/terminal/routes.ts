@@ -33,6 +33,7 @@ import { translateNodeRpcError } from "../node/rpc-error.js";
 import { registerNodeRoutes } from "../node/routes.js";
 import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
 import { registerSessionProjectRoutes } from "./session-project-routes.js";   // #1719 — 세션 프로젝트 소속 바꾸기(홈 입력창 세션)
+import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
 import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑
 import { chatIoCaps, harnessIo } from "./harness-io/adapter.js";                 // #1746 — 행에 대화창 능력(읽기·승인)
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
@@ -227,6 +228,22 @@ function registerTicketProfileRoutes(app: express.Express, auth: express.Request
 
 // ── ② 세션 목록·단건 조회 + '내 질문'(transcript) 검색(#745) + 생성·수정·삭제(CRUD) ──
 //  prompts* 두 라우트가 CRUD 사이에 끼어 있는 건 원래 등록 순서다(위 registerTerminal 주석 — 순서 보존 우선).
+// 세션 → 워크스페이스 정본 기록(#1750 후속) — 헤더를 못 싣는 표면(SSE·iframe·WS·훅·구 kit)이
+//  이 맵(gw_session_map)으로 컨텍스트를 되찾는다. primary(무컨텍스트)는 행을 안 만든다(부재 = primary).
+//  ⚠ 기록 실패는 **생성 실패로 승격**한다: 맵 없는 secondary 세션은 이후 헤더 없는 요청이 전부
+//  primary 로 오귀속된다 — dev 실측('다온')이 정확히 그 사고라, 조용히 넘기지 않는다.
+// (#1791 모듈 스코프로 올림 — 노드 세션 복원도 같은 기록을 해야 한다.)
+const recordSessionTenant = async (sessionId: string, killOnFail?: () => Promise<unknown>): Promise<void> => {
+  const t = currentTenant();
+  if (!t || t.id === PRIMARY_TENANT_ID) return;
+  try { await setSessionWorkspace(sessionId, t.id); }
+  catch (e) {
+    logger.error({ err: e, sessionId, ws: t.slug }, "세션 워크스페이스 맵 기록 실패 — 세션을 되물리고 생성을 실패시킨다");
+    if (killOnFail) await killOnFail().catch(() => { /* 되물림 실패 — 세션이 남지만 다음 요청도 같은 DB 라 대개 함께 죽어 있다 */ });
+    throw new HttpError(500, "세션의 워크스페이스 소속을 기록하지 못했습니다 — 다시 시도하세요");
+  }
+};
+
 function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHandler): void {
   app.get("/api/ui/terminal/sessions", auth, wrap(async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
@@ -242,26 +259,30 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const includeProjects = ipRaw === "1" || ipRaw === "true";
     const ownedProjectsOnly = ipRaw === "owned" || ipRaw === "mine";
     const all = await listSessions(userOf(req));
-    // 복원 가능(#1059 E) — DB desired-state 에만 있고 지금 tmux 에 없는 세션(재부팅 사망·reaper 회수). 라이브 우선(이중표기 방지).
-    const restorable = await listRestorableSessions(userOf(req), new Set(all.map((s) => s.id)));
     // 분산 노드(#869) — 원격 노드 세션 병합(node 필드로 구분). 가시성은 개인 세션 규칙(소유자+초대)로 게이트웨이가 판정.
     const remote = nodeSessionsFor(idOf(userOf(req)));
+    // 복원 가능(#1059 E) — DB desired-state 에만 있고 지금 tmux 에 없는 세션(재부팅 사망·reaper 회수). 라이브 우선(이중표기 방지).
+    //  #1791 — 노드 세션 행(node_id)도 여기 온다: 노드 스냅샷에 살아 있는 id 는 라이브가 SoT 라 뺀다(local ∪ remote).
+    const restorable = await listRestorableSessions(userOf(req), new Set([...all, ...remote].map((s) => s.id)));
     const proj = (s: SessionInfo): boolean => isProjectSessionDir(s.dir);
     const keep = (s: SessionInfo): boolean => includeProjects || !proj(s) || (ownedProjectsOnly && !!s.owned);
     const local = all.filter(keep);
     const localRestorable = restorable.filter(keep);
+    // #1791 — 복원 가능 노드 세션 행의 노드 이름·온라인 여부(listRestorableSessions 는 id 만 안다). 프론트가 &node= 로 릴레이한다.
+    await decorateNodeRows(localRestorable);
     // #1719 — 라이브 행에 대화 uuid(claudeSessionId)를 싣는다. 새 셸의 세션 화면이 이 값으로 로컬 트랜스크립트를 잇고,
     //  중앙 세션 기록(v6/sessions — session_id 가 곧 이 uuid)과 같은 세션임을 알아 목록을 한 장으로 접는다.
     //  한 번의 일괄 조회(세션 수만큼 왕복하지 않는다). DB 가 죽어도 목록은 나간다(best-effort).
+    //  #1791 — 노드 세션도 org_session_state 행이 생겼으므로(/claude-uuid 가 그 행을 갱신) 같은 조회로 remote 행까지 채운다.
     try {
-      const map = await claudeSessionIdsFor(local.map((s) => s.id));
-      for (const s of local) { const u = map.get(s.id); if (u) s.claudeSessionId = u; }
+      const map = await claudeSessionIdsFor([...local, ...remote].map((s) => s.id));
+      for (const s of [...local, ...remote]) { const u = map.get(s.id); if (u) s.claudeSessionId = u; }
     } catch { /* 미러 조회 실패 — uuid 없이 나간다(화면은 '기록 없음'으로 다룬다) */ }
     // #1752 갭2 — 노드 세션 행에도 대화 uuid 를 싣는다(org_node_session_map — /claude-uuid 노드 분기가 채움).
     //  이 값이 실려야 새 셸 채팅창이 노드 세션을 중앙 기록(v6/sessions/:uuid/log)으로 읽고, 같은 기록 행과 한 장으로 접힌다.
     //  매핑의 node_id 와 지금 행의 노드가 다르면 버린다(노드 재등록·이름 재사용으로 남은 낡은 매핑 오염 방지).
     try {
-      const nmap = await nodeSessionMapFor(remote.map((s) => s.id));
+      const nmap = await nodeSessionMapFor(remote.filter((s) => !s.claudeSessionId).map((s) => s.id));   // #1791 — 행이 없는 옛 노드 세션의 폴백
       for (const s of remote) { const m = nmap.get(s.id); if (m && m.node_id === s.node.id) s.claudeSessionId = m.conv_uuid; }
     } catch { /* 조회 실패 — uuid 없이 나간다 */ }
     // #1746 — 하네스별 대화창 능력(읽기·승인)을 행에 싣는다. 화면이 없는 능력의 버튼을 두지 않게(정직한 표면).
@@ -296,9 +317,27 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     const nodeId = String(req.query.node ?? "").trim();
     if (nodeId) {
       const s = nodeSessionsFor(uid).find((x) => x.node.id === nodeId && x.id === req.params.id);
-      if (!s) throw new HttpError(403, "세션에 접근할 수 없습니다");
-      res.json({ id: s.id, label: s.label, projectId: s.projectId || 0 });
-      return;
+      if (s) { res.json({ id: s.id, label: s.label, projectId: s.projectId || 0 }); return; }
+      // #1791 — 스냅샷에 없다 = 그 노드에서 죽었다(또는 노드가 스냅샷을 아직 안 올렸다). 아래 desired-state 경로로 떨어져
+      //  '복원 가능'을 알린다(종전엔 여기서 403 — 노드 세션은 desired-state 가 없어 알릴 것이 없었다).
+    }
+    // #1791 — 노드 세션의 desired-state(node_id) — 라이브 스냅샷에 없으면 죽은 것이다. 게이트웨이 tmux 를 묻지 않는다
+    //  (그 id 는 여기 tmux 에 없고, canAttach 가 DB owner 로 통과해 빈 라벨을 돌려주는 오답을 막는다).
+    {
+      const st = await getSessionState(req.params.id);
+      if (st?.node_id) {
+        const mine = st.owner === uid || !!userOf(req).scopes?.includes("admin");
+        if (!(mine || (st.project_id ?? 0) > 0)) throw new HttpError(403, "세션에 접근할 수 없습니다");
+        const ln = liveNodes().find((n) => n.id === st.node_id);
+        res.json({
+          id: req.params.id, label: st.label || req.params.id, projectId: st.project_id || 0,
+          restorable: true, canRestore: mine, exitedByUser: !!st.exited_at,
+          oomKilled: !st.exited_at && st.exit_reason === "oom",
+          harness: st.harness || "shell",
+          node: { id: st.node_id, name: ln?.name || st.node_id, online: !!ln?.online },
+        });
+        return;
+      }
     }
     if (!(await canAttach(req.params.id, uid))) {
       // #1059 E — tmux 에 없어도(재부팅·회수·정상종료) desired-state 가 남아 있으면 '복원 가능'으로 알린다.
@@ -482,21 +521,6 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     if (!nodeOnline(nodeId)) throw new HttpError(409, "노드가 오프라인입니다(에이전트 연결 대기)");
   };
 
-  // 세션 → 워크스페이스 정본 기록(#1750 후속) — 헤더를 못 싣는 표면(SSE·iframe·WS·훅·구 kit)이
-  //  이 맵(gw_session_map)으로 컨텍스트를 되찾는다. primary(무컨텍스트)는 행을 안 만든다(부재 = primary).
-  //  ⚠ 기록 실패는 **생성 실패로 승격**한다: 맵 없는 secondary 세션은 이후 헤더 없는 요청이 전부
-  //  primary 로 오귀속된다 — dev 실측('다온')이 정확히 그 사고라, 조용히 넘기지 않는다.
-  const recordSessionTenant = async (sessionId: string, killOnFail?: () => Promise<unknown>): Promise<void> => {
-    const t = currentTenant();
-    if (!t || t.id === PRIMARY_TENANT_ID) return;
-    try { await setSessionWorkspace(sessionId, t.id); }
-    catch (e) {
-      logger.error({ err: e, sessionId, ws: t.slug }, "세션 워크스페이스 맵 기록 실패 — 세션을 되물리고 생성을 실패시킨다");
-      if (killOnFail) await killOnFail().catch(() => { /* 되물림 실패 — 세션이 남지만 다음 요청도 같은 DB 라 대개 함께 죽어 있다 */ });
-      throw new HttpError(500, "세션의 워크스페이스 소속을 기록하지 못했습니다 — 다시 시도하세요");
-    }
-  };
-
   app.post("/api/ui/terminal/sessions", auth, wrap(async (req, res) => {
     const b = (req.body ?? {}) as Record<string, unknown>;
     const input: CreateInput = {
@@ -525,6 +549,8 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, me)).catch(() => false);
       const session = await relayNodeOp<SessionInfo>(nodeId, "create", { user: { userId: me }, input: { ...input, invites: [], hostProfile }, invites });
       await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: me }, id: session.id }));
+      // #1791 — desired-state 정본은 게이트웨이가 쓴다(노드엔 DB 가 없다). 죽어도 '복원 가능(그 노드)'로 남는 근거.
+      await mirrorNodeSession({ ...session, invites }, nodeId, input, me);
       res.json({ session: { ...session, node: { id: nodeId, online: true } } });
       return;
     }
@@ -558,9 +584,40 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     // 맵 정리는 best-effort — 남은 행은 무해하다(세션 id 는 무작위라 재사용되지 않고, 죽은 세션은 참조되지 않는다).
     const forgetTenantMap = (): void => { void clearSessionWorkspace(req.params.id!).catch(() => { /* 비치명 */ }); };
     if (nodeId) {
-      await relayNodeOp(nodeId, "kill", { user: { userId: idOf(userOf(req)) }, id: req.params.id });
+      const me = idOf(userOf(req));
+      const id = req.params.id;
+      // #1791 — 노드 세션 종료 = 그 노드의 tmux 를 죽이고 desired-state 행을 지운다('복원 안 함'). 살아 있는지의 판정은
+      //  **스냅샷이 아니라 노드에 묻는다**(gone op — nodeCanAttach 의 '확답 only' #835 와 같은 원칙): 스냅샷은 게이트웨이
+      //  재시작 직후·생성 직후 3초 동안 비어 있고 뷰어별 가시성 필터라(admin 이 남의 세션을 지울 때) 살아 있는 세션을
+      //  '죽었다'고 오판해 **행만 지우고 tmux 는 남기는** 고아를 만든다 — 그게 이 과업이 없애려던 사고 그 자체다.
+      const st = await getSessionState(id);
+      const snap = nodeSessionsFor(me).find((x) => x.node.id === nodeId && x.id === id);
+      if (!st && !snap) throw new HttpError(404, "그 노드에 이 세션이 없습니다");
+      // 행이 있으면 그 행의 노드여야 한다 — 박스 세션(node_id NULL)에 ?node= 를 붙여 오면 엉뚱한 노드가 '없다'고 답해
+      //  kill 없이 행만 지워지는 구멍이 된다(리뷰 지적). 행이 없는 옛 노드 세션(#1791 이전 생성)만 스냅샷으로 진행.
+      if (st && st.node_id !== nodeId) throw new HttpError(404, "그 노드에 이 세션이 없습니다");
+      const admin = !!userOf(req).scopes?.includes("admin");
+      if (st && st.owner !== me && !admin) throw new HttpError(403, "본인 세션이 아닙니다");
+      let killed = false;
+      if (nodeOnline(nodeId)) {
+        // 노드가 답해서 '없다'고 할 때만 kill 을 건너뛴다. 못 물으면(타임아웃) 살아 있다고 보고 kill 을 보낸다 — kill 이
+        //  '그런 세션 없음'으로 실패하면 한 번 더 물어 정말 없을 때만 행 삭제로 진행한다(모르면 파괴적 정리를 안 한다).
+        //  3값: true=노드가 '없다'고 답함 · false=살아 있음 · null=못 물음(타임아웃). false 와 null 은 둘 다 kill 로 간다 —
+        //  모르면 살아 있다고 보는 게 안전측이고, kill 이 '없음'으로 실패하면 아래 재확인이 정말 없을 때만 삭제로 잇는다.
+        const gone: boolean | null = await nodeRpc<boolean>(nodeId, "gone", { id }).catch(() => null);
+        if (gone !== true) {
+          try { await relayNodeOp(nodeId, "kill", { user: { userId: me }, id }); killed = true; }
+          catch (e) {
+            const goneNow = await nodeRpc<boolean>(nodeId, "gone", { id }).catch(() => null);
+            if (goneNow !== true) throw e;
+          }
+        }
+      }
+      // 노드가 꺼져 있으면 tmux 는 못 건드린다 — 사용자가 '복원 목록에서 지우기'를 눌렀으니 행은 지운다(그 노드에서 살아
+      //  있다면 다시 연결될 때 라이브로 보이고, 이후 죽으면 카드가 없다 — 사용자가 명시한 '복원 안 함' 그대로).
+      await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "노드 세션 desired-state 삭제 실패(비치명)"));
       forgetTenantMap();
-      res.json({ ok: true });
+      res.json({ ok: true, forgot: !killed });
       return;
     }
     // #1059 F — 회수(reclaim=1): desired-state 를 보존해 restorable 로 남긴다(vs 기본 = 완전 삭제·복원 안 함).
@@ -606,6 +663,45 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     const u = userOf(req);
     const me = idOf(u);
     if (st.owner !== me && !u.scopes?.includes("admin")) throw new HttpError(403, "이 세션을 복원할 수 없습니다(소유자만 가능).");
+    // #1791 — **노드 세션**의 복원: 그 노드에 create 를 다시 릴레이한다(좌표·하네스·모드·초대는 desired-state 그대로).
+    //  박스 복원과 같은 원칙(원 소유자 신원·새 id·옛 행 삭제·대화 id 승계). 다른 점 둘 — ① 라이브 경합은 게이트웨이 tmux 가
+    //  아니라 노드 스냅샷으로 본다 ② 이어받을 대화 파일이 노드에 있어 여기서 존재 확인(transcriptExists)을 못 한다: 훅이
+    //  보고한 대화 id 가 있으면 그대로 시도하고, 없으면 picker. 없는 id 로 열려도 #1516 런처(POSIX)가 세션을 살려 두고,
+    //  윈도우(psmux)는 원문 에러가 화면에 남는다 — 어느 쪽도 조용한 루프는 아니다(restored=1 게이트가 한 번 더 막는다).
+    if (st.node_id) {
+      const nodeId = st.node_id;
+      if (nodeSessionsFor(me).some((x) => x.node.id === nodeId && x.id === id)) { res.json({ ok: true, already: true, id, node: { id: nodeId } }); return; }
+      if (!nodeOnline(nodeId)) throw new HttpError(409, "그 세션이 있던 컴퓨터(노드)가 지금 연결돼 있지 않아 복원할 수 없습니다. 노드가 켜지면 다시 시도하세요.");
+      // 라이브 경합은 **노드에 묻는다**(gone op) — 스냅샷은 재시작 직후·생성 직후 비어 있고 뷰어별 필터라(admin) 살아 있는 세션을
+      //  놓칠 수 있다. 확답을 못 받으면 복원하지 않는다(모르면 같은 세션을 둘로 만들지 않는다 — #835 '확답 only').
+      const gone = await nodeRpc<boolean>(nodeId, "gone", { id }).catch(() => null);
+      if (gone === false) { res.json({ ok: true, already: true, id, node: { id: nodeId } }); return; }
+      if (gone === null) throw new HttpError(409, "그 컴퓨터(노드)가 응답하지 않아 세션 상태를 확인하지 못했습니다 — 잠시 후 다시 시도하세요.");
+      const resumeId = st.claude_session_id || null;
+      const input: CreateInput = {
+        label: st.label || id, rootKey: st.root_key || "shared", subpath: st.subpath || "",
+        harness: st.harness || "claude", flags: st.flags || {}, autoApprove: st.auto_approve,
+        projectId: st.project_id || undefined, projectSrc: st.project_src === "org" ? "org" : "v6",
+        readOnly: st.read_only, incognito: st.incognito,
+        writeVis: st.write_vis ?? undefined, restrictRead: !!st.restrict_read,
+        ...(resumeId ? { resume: resumeId } : { resumePick: true }),
+      };
+      const owner = st.owner;
+      // #1541 hostProfile — 원 소유자 기준(생성 때와 같은 판정). 조회 실패 = false(주입 유지).
+      const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, owner)).catch(() => false);
+      const invites = Array.isArray(st.invites) ? st.invites : [];
+      const session = await relayNodeOp<SessionInfo>(nodeId, "create", { user: { userId: owner }, input: { ...input, invites: [], hostProfile }, invites });
+      await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: owner }, id: session.id }));
+      await mirrorNodeSession({ ...session, invites }, nodeId, input, owner);
+      if (st.claude_session_id) {
+        await setClaudeSessionId(session.id, st.claude_session_id, owner, st.transcript_path)
+          .catch((e) => logger.warn({ err: e, id: session.id }, "restore(node): 대화 id 승계 실패(비치명 — 다음 복원은 picker)"));
+      }
+      await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "restore(node): 옛 desired-state 정리 실패(비치명)"));
+      const ln = liveNodes().find((n) => n.id === nodeId);
+      res.json({ ok: true, session: { ...session, node: { id: nodeId, name: ln?.name || nodeId, online: true } } });
+      return;
+    }
     // 라이브 경합 방어 — 그새 다시 떠 있으면 복원 대신 그대로 안내(라이브가 SoT).
     if (!(await sessionGone(id))) { res.json({ ok: true, already: true, id }); return; }
     const owner = { userId: st.owner } as LivelyUser;
@@ -669,12 +765,14 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     const phase = isReportedPhase(raw) ? raw : undefined;   // 모르는 값은 조용히 무시(활동 보고만) — 훅이 앞서갈 수 있다
     const me = idOf(userOf(req));
     const st = await getSessionState(id);
-    if (st) {
+    // #1791 — 노드 세션도 이제 행이 있다(node_id). 그 세션의 tmux 는 노드에 있으니 아래 릴레이 분기로(여기서 로컬 tmux 를 만지면 안 된다).
+    if (st && !st.node_id) {
       if (st.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
       await markSessionActive(id, phase).catch((e) => logger.warn({ err: e, id }, "활동 시각 기록 실패(비치명)"));
       res.json({ ok: true });
       return;
     }
+    if (st && st.node_id && st.owner !== me) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
     // 노드 세션(#869) — 중앙 DB 에 desired-state 가 없다(노드엔 DB 가 없어 레코드를 안 만든다). 그 세션의 tmux 는
     //  멤버 PC 에 있어 게이트웨이가 직접 못 쓰므로 **소유자 확인 후 노드로 릴레이**한다(정책=게이트웨이, 실행=노드 F7).
     //  이게 없으면 노드 세션은 훅을 배선해도 영영 404 라 화면 스크래핑에 묶인다 — 하네스 보고가 중앙에서만 되면
@@ -738,13 +836,16 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     }
     if (st0 && st0.owner !== idOf(userOf(req))) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
     let ok = await setClaudeSessionId(req.params.id, uuid, idOf(userOf(req)), transcriptPath);
-    // #1752 갭2 — 노드 세션은 org_session_state 행이 없어 위가 0행이다. 그 세션이 지금 어느 노드의 것인지
-    //  레지스트리(3s push 스냅샷)로 확인되면 전용 매핑(org_node_session_map)에 남긴다 — 이 uuid 가 곧
-    //  중앙 세션 기록(session_log)의 키라, 매핑이 있어야 채팅창이 노드 오프라인에도 기록을 읽는다.
-    //  노드 미확인(스냅샷 지연·게이트웨이 재시작 직후)이면 이번 보고는 버린다 — 훅이 매 턴 다시 보고한다(재시도 무료).
-    if (!ok) {
+    // #1752 갭2 — 노드 세션의 전용 매핑(org_node_session_map): 이 uuid 가 곧 중앙 세션 기록(session_log)의 키라, 매핑이 있어야
+    //  채팅창이 노드 오프라인에도 기록을 읽는다. #1791 뒤 노드 세션도 org_session_state 행이 있어 위 UPDATE 가 성공하지만,
+    //  기록 열쇠는 세션 수명과 무관하게 남아야 하므로(행은 삭제·복원으로 사라진다) **둘 다** 쓴다. 행이 없는 옛 노드 세션은
+    //  종전대로 매핑만. 노드 미확인(스냅샷 지연·게이트웨이 재시작 직후)이면 매핑은 다음 보고로(훅이 매 턴 다시 보고한다).
+    {
       const nodeId = nodeOfSession(req.params.id);
-      if (nodeId) ok = await setNodeSessionMap(req.params.id, nodeId, uuid, idOf(userOf(req)), transcriptPath).catch(() => false);
+      if (nodeId) {
+        const mapped = await setNodeSessionMap(req.params.id, nodeId, uuid, idOf(userOf(req)), transcriptPath).catch(() => false);
+        ok = ok || mapped;
+      }
     }
     res.json({ ok }); // ok=false: 그 box 의 소유자가 아니거나, 박스 레코드도 노드 스냅샷도 없음(무해 — 다음 보고가 잇는다)
   }));
