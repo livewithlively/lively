@@ -601,7 +601,24 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
       fillImg(im, path);   // 헤더 인증(쿠키 없는 세션에서도 뜨게)
       body.replaceChildren(el('div', { class: 'stu-prevwrap' }, im));
     }
-    else body.replaceChildren(el('iframe', { class: 'stu-prev-f', src: /\.pdf$/i.test(path) ? url + '#toolbar=0&view=FitH' : url, title: path }));
+    else {
+      // ⚠ **주소를 iframe 에 직접 걸지 않는다**(원준 신고 2026-08-19: 화면에 들어갈 때마다 'file' 이 저장됨).
+      //  서버 MIME 표에 html 이 없어 .html 은 application/octet-stream 으로 나가는데(의도 — 같은 출처에서
+      //  남의 HTML 이 실행되면 XSS 다), 그걸 iframe 으로 열면 브라우저가 그리기 대신 **내려받기**로 처리한다.
+      //  주소 끝 조각이 'file' 이라 저장 이름도 'file' 이 됐다.
+      //  그래서 받아서 **형식을 붙여** 띄운다. HTML 은 sandbox="" 라 스크립트도 동일출처도 막힌 채 그려진다
+      //  — 서버가 막으려던 '같은 출처 실행' 은 여전히 불가능하다.
+      const isPdf = /\.pdf$/i.test(path);
+      const host = el('div', { class: 'stu-prevwrap' }, el('p', { class: 'stu-fine', text: '여는 중…' }));
+      body.replaceChildren(host);
+      void fetch(url, { headers: authHeaders() }).then((r) => (r.ok ? r.blob() : null)).then((bl) => {
+        if (!bl || dead) return;
+        const u = URL.createObjectURL(new Blob([bl], { type: isPdf ? 'application/pdf' : 'text/html' }));
+        blobUrls.push(u);
+        host.replaceChildren(el('iframe', { class: 'stu-prev-f', title: path,
+          ...(isPdf ? {} : { sandbox: '' }), src: u + (isPdf ? '#toolbar=0&view=FitH' : '') }));
+      }).catch(() => { host.replaceChildren(el('p', { class: 'stu-fine', text: '미리보기를 열지 못했어요 — [크게] 로 열어 보세요.' })); });
+    }
     body.append(el('div', { class: 'stu-w-foot' }, el('span', { class: 'stu-fine ell', text: path }),
       el('button', { class: 'btn-text', type: 'button', text: '크게', onclick: () => void openFileViewer(id, path, path, () => { /* noop */ }, '/api/ui/v6/projects/') })));
   }
