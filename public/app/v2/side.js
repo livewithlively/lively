@@ -10,7 +10,7 @@
 //   · 흐린 회색 본문 금지 — 완료·조용한 프로젝트도 이름은 같은 잉크색이고, 상태는 작은 태그·시각으로만 구분한다
 //     (연회색 글씨가 목록의 절반을 차지하면 전체가 바래 보인다).
 //  main.ts 가 데이터·활성 키를 넘기고, 필터·펼침 같은 사이드바 자체 상태는 여기 산다(브라우저에 기억).
-import { el, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTime, setUiModeOverride, state, sv } from '../core.js';
+import { anchoredPopover, api, el, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTime, setUiModeOverride, state, sv } from '../core.js';
 import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls } from './views.js';
@@ -233,7 +233,9 @@ function render() {
     // ⚠ replaceChildren 은 null 을 글자 "null" 로 그린다(el() 과 다르다) — 조건부 자식은 스프레드로.
     ...(livOn ? [el('a', { class: 'v2-liv-btn' + (last.activeKey() === 'liv' ? ' on' : ''), href: '#/liv', 'data-nav': 'liv' }, el('span', { class: 'lm', text: 'L' }), el('span', { text: '리브' }), el('span', { class: 'sub', text: '워크스페이스 담당자' }))] : []), el('div', { class: 'v2-side-sec' }, countEl, findBtn(), filterBtn(fltN, liveAll, doneCount), 
     // ＋도 아이콘으로 — 돋보기가 자리를 차지하면서 글자 버튼까지 두면 헤더가 두 줄로 접힌다(#1067 의 🔍/＋ 문법).
-    el('a', { class: 'v2-add', href: '#/projects2', title: '새 프로젝트 — 프로젝트 앱(보드)에서 만듭니다', 'aria-label': '새 프로젝트' }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-add-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' })))), 
+    //  누르면 **여기서 만들고 그 작업대로 간다**(원준 2026-08-19) — 옛 프로젝트 앱(보드)으로 떠나보내지 않는다.
+    //  이름은 그 자리에서 받는다(빈 판을 먼저 만들고 이름을 나중에 묻는 건 '이름 없는 프로젝트'만 늘린다).
+    newBtn()), 
     // 검색칸은 돋보기를 눌렀을 때만(#1067 의 방식). 단 **검색어가 남아 있으면 계속 보인다** —
     //  #1154 가 토글을 폐지했던 사유 중 하나가 '검색 중인 줄 모른 채 짧아진 목록을 본다'였다.
     ...(findShown() ? [el('div', { class: 'v2-find' }, findIn)] : []), ...(fltN ? [filterSummary(fltN)] : []), ...pinnedBlock(), treeEl, el('div', { class: 'v2-side-foot' }, el('button', { class: 'v2-apps-btn', type: 'button', onclick: () => openLaunchpad(), title: '앱 — 아직 새 화면으로 옮기지 않은 것들' }, appIcon('proj', 'v2-apps-ic'), el('span', { text: '앱' }), el('span', { class: 'v2-cnt', text: String(visibleApps().length) })), el('div', { class: 'v2-me' }, profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }), el('span', { class: 'v2-me-name', text: name }), el('button', { class: 'btn-text', type: 'button', text: '로그아웃', onclick: () => void logout() })), el('button', { class: 'v2-classic-link', type: 'button', text: '클래식 화면으로 (이 브라우저)', title: '이 브라우저에서만 옛 화면으로 봅니다. 관리탭 [화면] 에서 되돌릴 수 있어요.', onclick: () => { setUiModeOverride('classic'); location.replace(location.pathname + '#/dashboard'); location.reload(); } })));
@@ -279,6 +281,47 @@ function bindFindKey() {
         e.preventDefault();
         openFind();
     });
+}
+/** ＋ 새 프로젝트 — 이름만 그 자리에서 받고, 만들자마자 그 프로젝트의 빈 작업대로 간다. */
+function newBtn() {
+    const b = el('button', { class: 'v2-add', type: 'button', title: '새 프로젝트 — 만들고 그 작업대로 갑니다', 'aria-label': '새 프로젝트' }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-add-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' })));
+    b.onclick = (e) => {
+        e.preventDefault();
+        const inp = el('input', { class: 'v2-newin', type: 'text', placeholder: '새 프로젝트 이름', maxlength: '120', 'aria-label': '새 프로젝트 이름' });
+        const msg = el('p', { class: 'v2-newmsg', hidden: true });
+        const go = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '만들기' });
+        const close = anchoredPopover(b, el('div', { class: 'v2-newpop' }, el('div', { class: 'v2-newrow' }, inp, go), el('p', { class: 'v2-fine', text: '만들면 그 프로젝트의 빈 작업대가 열립니다. 이름은 나중에 바꿀 수 있어요.' }), msg));
+        window.setTimeout(() => inp.focus(), 0);
+        const create = async () => {
+            const name = inp.value.trim();
+            if (!name) {
+                inp.focus();
+                return;
+            }
+            go.disabled = true;
+            go.textContent = '만드는 중…';
+            msg.hidden = true;
+            try {
+                const np = await api('/api/ui/v6/projects', { method: 'POST', body: JSON.stringify({ name }) }).then((d) => (d && d.project) || d);
+                if (!np || !np.id)
+                    throw new Error('생성 응답에 프로젝트가 없어요');
+                close();
+                location.hash = '#/p/' + np.id; // 그 작업대로(목록 갱신은 라우터가 새 프로젝트를 보고 알아서 당긴다)
+            }
+            catch (err) {
+                msg.hidden = false;
+                msg.textContent = '만들지 못했어요 — ' + (err?.message || err);
+                go.disabled = false;
+                go.textContent = '만들기';
+            }
+        };
+        go.onclick = () => void create();
+        inp.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') {
+            ev.preventDefault();
+            void create();
+        } });
+    };
+    return b;
 }
 function findBtn() {
     const on = findShown();
@@ -407,8 +450,10 @@ function renderTree(rowsIn) {
 function projRow(r, sess, activeKey, selectedPk) {
     const p = r.proj;
     const pk = r.key;
-    const href = p ? '#/p/' + p.id : '#/app/terminal';
-    const isOn = activeKey === pk || (!p && activeKey === 'app:terminal');
+    // 프로젝트 없는 세션도 **작업대(캔버스)** 로 간다(#/p/0) — 옛 AI 세션 앱이 아니라(원준 2026-08-19).
+    //  자투리 세션들이 그 판에 카드로 모여 거기서 바로 대화·열기가 된다.
+    const href = p ? '#/p/' + p.id : '#/p/0';
+    const isOn = activeKey === pk;
     // 펼침 기본값(#1719 재구성): **선택된 프로젝트만 펼침**, 나머지는 접힘 — 사용자가 편 것만 그대로.
     //  선택을 일부러 접은 건 이 페이지 수명만 기억한다(다음 방문엔 다시 펼쳐 보인다 — 선택은 늘 보이는 게 기본).
     const isSel = pk === selectedPk;
@@ -433,9 +478,9 @@ function projRow(r, sess, activeKey, selectedPk) {
         : el('span', { class: 'v2-car none', 'aria-hidden': 'true' });
     const tipBits = p
         ? [`#${p.id} · ${p.status_category === 'done' ? '완료' : p.status_category === 'unstarted' ? '시작 전' : '진행 중'}`, r.lastWork ? '마지막 작업 ' + when(r.lastWork) : '세션 없음', r.mine ? '내 프로젝트' : (p.created_by ? `${(people[p.created_by] && people[p.created_by].display_name) || p.created_by} 만듦` : '')]
-        : ['프로젝트에 붙지 않은 세션 — AI 세션 앱에서 전부 봅니다'];
+        : ['프로젝트에 붙지 않은 세션 — 이 세션들의 작업대를 엽니다'];
     // 이름은 언제나 같은 잉크색이다 — 완료·조용함은 태그·시각이 말한다(연회색 본문이 목록 절반이면 전체가 바래 보인다).
-    const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : ''), href, 'data-nav': p ? pk : 'app:terminal', title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') + '\n프로젝트 화면을 엽니다' }, caret, glyph(isOpen ? 'folder-open' : 'folder', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }), r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null, sess.length ? sumEl(sess) : (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null));
+    const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : ''), href, 'data-nav': pk, title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') + '\n프로젝트 화면을 엽니다' }, caret, glyph(isOpen ? 'folder-open' : 'folder', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }), r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null, sess.length ? sumEl(sess) : (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null));
     const head = sess.slice(0, MAX_SESS);
     const list = sess.length ? el('div', { class: 'v2-ss-list', role: 'group', hidden: !isOpen }, ...head.map((s) => sessRow(s, activeKey, sessText(s, p ? p.name : ''))), sess.length > MAX_SESS ? el('a', { class: 'v2-ss-more', href, text: `외 ${sess.length - MAX_SESS}개` }) : null) : null;
     return el('div', { class: 'v2-pj' + (isOpen ? ' open' : ''), role: 'treeitem', 'aria-expanded': sess.length ? String(isOpen) : null }, row, list);

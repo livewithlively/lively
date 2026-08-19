@@ -88,6 +88,10 @@ function sizeOf(spec) {
 }
 export function mountStudio(host, opts) {
     const id = opts.id;
+    // id 0 = **프로젝트 없는 세션들의 작업대**(사이드바 그 폴더의 목적지, 원준 2026-08-19).
+    //  프로젝트가 없으니 공유 폴더·태스크·지식·프로젝트 리브가 없다 — 있는 건 '자투리 세션들'뿐이고,
+    //  그것들이 카드로 모여 여기서 바로 말을 걸 수 있다(프로젝트로 옮기는 건 세션의 [프로젝트 연결]).
+    const loose = id === 0;
     let detail = opts.detail;
     let dead = false;
     let chat = null;
@@ -117,8 +121,8 @@ export function mountStudio(host, opts) {
         catch (_) { /* noop */ }
         return false;
     }
-    const pj = () => (detail && detail.project) || { id, name: '프로젝트 #' + id };
-    const mySessions = () => opts.data().sessions.filter((s) => Number(s.projectId) === id);
+    const pj = () => (loose ? { id: 0, name: '프로젝트 없는 세션' } : (detail && detail.project) || { id, name: '프로젝트 #' + id });
+    const mySessions = () => opts.data().sessions.filter((s) => (loose ? !s.projectId : Number(s.projectId) === id));
     // ── 골격 ──
     const door = el('header', { class: 'stu-door' });
     const canvas = el('div', { class: 'stu-canvas' });
@@ -144,7 +148,8 @@ export function mountStudio(host, opts) {
         const live = ss.filter((s) => s.live && s.alive);
         const members = Array.isArray(p.members) ? p.members : [];
         const st = p.status_category === 'done' ? { t: '끝남', c: 'done' } : p.status_category === 'unstarted' ? { t: '시작 전', c: 'todo' } : { t: '진행 중', c: 'run' };
-        door.replaceChildren(el('div', { class: 'stu-door-l' }, el('div', { class: 'stu-door-top' }, el('div', { class: 'stu-eyebrow' }, el('span', { class: 'mono', text: '#' + p.id }), el('span', { class: 'sep', text: '·' }), el('span', { class: 'stu-state ' + st.c, text: st.t }), el('span', { class: 'sep', text: '·' }), el('span', { text: `세션 ${ss.length}` + (live.length ? ` · 지금 ${live.length}` : '') }), el('span', { class: 'sep', text: '·' }), el('span', { text: `할 일 ${tasks.length - doneN}/${tasks.length}` }), el('span', { class: 'sep', text: '·' }), el('span', { text: `지식 ${knN}` }))), el('h1', { class: 'stu-title', text: p.name || '프로젝트 #' + id })), el('div', { class: 'stu-door-r' }, el('span', { class: 'stu-faces' }, ...members.slice(0, 5).map((m) => personFace(String(m.member_id || m), 'stu-face', String(m.display_name || m.member_id || '')))), 
+        door.replaceChildren(el('div', { class: 'stu-door-l' }, el('div', { class: 'stu-door-top' }, loose ? el('div', { class: 'stu-eyebrow' }, el('span', { text: `세션 ${ss.length}` + (live.length ? ` · 지금 ${live.length}` : '') }), el('span', { class: 'sep', text: '·' }), el('span', { text: '아직 어느 프로젝트에도 붙지 않음' }))
+            : el('div', { class: 'stu-eyebrow' }, el('span', { class: 'mono', text: '#' + p.id }), el('span', { class: 'sep', text: '·' }), el('span', { class: 'stu-state ' + st.c, text: st.t }), el('span', { class: 'sep', text: '·' }), el('span', { text: `세션 ${ss.length}` + (live.length ? ` · 지금 ${live.length}` : '') }), el('span', { class: 'sep', text: '·' }), el('span', { text: `할 일 ${tasks.length - doneN}/${tasks.length}` }), el('span', { class: 'sep', text: '·' }), el('span', { text: `지식 ${knN}` }))), el('h1', { class: 'stu-title', text: p.name || '프로젝트 #' + id })), el('div', { class: 'stu-door-r' }, el('span', { class: 'stu-faces' }, ...members.slice(0, 5).map((m) => personFace(String(m.member_id || m), 'stu-face', String(m.display_name || m.member_id || '')))), 
         // 이 줄은 **캔버스보다 위**에 있는 것들만 — 판 설정(코멘트 모드·정리)뿐이다(원준 2026-08-19).
         //  타임라인·명세는 기능이라 앱/위젯으로 내려갔다(⊞ 런치패드).
         tlBtn, cmBtn, el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '정리', title: '위젯 위치만 격자에 맞춰 정렬합니다(크기는 그대로)', onclick: () => { autoArrange(); paintAll(); save(); } })));
@@ -172,7 +177,14 @@ export function mountStudio(host, opts) {
         }
         addWidget(type, { x: 72, y: 48 });
     }
-    function removeWidget(spec) { widgets = widgets.filter((w) => w !== spec); sigs.delete(spec.id); save(); paintAll(); }
+    function removeWidget(spec) {
+        if (loose && spec.type === 'session' && spec.data?.sid)
+            looseHide(String(spec.data.sid)); // 자투리 판: 치운 카드는 다시 안 올린다
+        widgets = widgets.filter((w) => w !== spec);
+        sigs.delete(spec.id);
+        save();
+        paintAll();
+    }
     function widgetEl(spec) {
         if (spec.type === 'sticky')
             return stickyEl(spec);
@@ -807,10 +819,13 @@ export function mountStudio(host, opts) {
             const sid = out?.session?.id ? String(out.session.id) : '';
             if (!sid)
                 throw new Error('세션 id 를 받지 못했습니다');
-            try {
-                await api('/api/ui/terminal/sessions/' + encodeURIComponent(sid) + '/project', { method: 'POST', body: JSON.stringify({ projectId: id }) });
+            // 자투리 판에서 연 세션은 어디에도 붙이지 않는다 — 그게 이 판의 정의다(나중에 [프로젝트 연결]로 옮긴다).
+            if (!loose) {
+                try {
+                    await api('/api/ui/terminal/sessions/' + encodeURIComponent(sid) + '/project', { method: 'POST', body: JSON.stringify({ projectId: id }) });
+                }
+                catch (_) { /* noop */ }
             }
-            catch (_) { /* noop */ }
             const spec = addWidget('session', at || ghostCanvasPos() || { x: 88, y: 88 }, { sid });
             spec.z = ++zTop;
             popIn(spec);
@@ -839,8 +854,15 @@ export function mountStudio(host, opts) {
         livToggle.classList.toggle('on', want);
     }
     function openLiv() { toggleLiv(true); }
-    livToggle.onclick = () => toggleLiv();
+    livToggle.onclick = () => { if (loose) {
+        location.hash = '#/liv';
+        return;
+    } toggleLiv(); };
+    if (loose)
+        livToggle.title = '리브 — 워크스페이스 리브 화면으로';
     function mountChat() {
+        if (loose)
+            return; // 프로젝트 리브는 프로젝트의 것 — 자투리 판에서는 L 이 워크스페이스 리브로 데려간다
         chat = mountProjectChat(livBody, {
             projectId: id,
             onTurnDone: () => { void refreshDetail(); opts.onProjectChanged?.(); },
@@ -848,6 +870,10 @@ export function mountStudio(host, opts) {
         });
     }
     async function refreshDetail() {
+        if (loose) {
+            paintDoor();
+            return;
+        }
         try {
             const d = await api('/api/ui/v6/projects/' + id);
             if (!dead && d) {
@@ -874,6 +900,8 @@ export function mountStudio(host, opts) {
     }
     // ── 새 산출물 자동 등장 ──
     async function autoSpawn() {
+        if (loose)
+            return;
         let data = null;
         try {
             data = await api('/api/ui/v6/projects/' + id + '/files?path=');
@@ -920,6 +948,8 @@ export function mountStudio(host, opts) {
      *  할 수 있는 일 셋만 큰 글씨로 두고, 나머지는 일하다 리브가 제안한다. */
     function startGuide() {
         const step = (n, t, d2, act) => el('div', { class: 'stu-guide-s' }, el('span', { class: 'stu-guide-n', text: n }), el('div', {}, el('b', { text: t }), el('p', { class: 'stu-fine', text: d2 }), act ? el('button', { class: 'btn-text', type: 'button', text: act.label, onclick: act.run }) : null));
+        if (loose)
+            return el('div', { class: 'stu-guide' }, el('h2', { text: '프로젝트에 붙지 않은 세션들' }), el('p', { class: 'stu-guide-l', text: '아직 어느 프로젝트에도 매이지 않은 세션이 여기 모입니다. 지금은 하나도 없네요.' }), el('div', { class: 'stu-guide-g' }, el('div', { class: 'stu-guide-s' }, el('span', { class: 'stu-guide-n', text: '＋' }), el('div', {}, el('b', { text: '아래 칸에 시켜 보세요' }), el('p', { class: 'stu-fine', text: '프로젝트를 정하지 않고도 바로 일을 시킬 수 있어요. 열린 세션은 이 판에 카드로 모이고, 나중에 프로젝트로 옮길 수 있습니다.' })))));
         return el('div', { class: 'stu-guide' }, el('h2', { text: '여기가 이 프로젝트의 작업대예요' }), el('p', { class: 'stu-guide-l', text: '빈 판으로 시작해서, 필요한 것만 하나씩 올려 두면 됩니다.' }), el('div', { class: 'stu-guide-g' }, step('1', '아래 칸에 시켜 보세요', '“랜딩 문구 3안 써 줘” 처럼 적으면 AI가 일을 시작하고, 그 대화가 이 판에 카드로 올라옵니다.', { label: '입력칸으로', run: () => input.focus() }), step('2', '파일을 끌어다 놓아 보세요', '컴퓨터에서 파일·폴더를 이 판에 떨어뜨리면 자료로 올라가고, 그림·PDF는 그 자리에 바로 펼쳐집니다.'), step('3', '필요해지면 꺼내세요', '태스크·지식·타임라인 같은 건 ⊞ 에서 앱으로 열거나 위젯으로 판에 둘 수 있어요. 지금 당장은 필요 없습니다.', { label: '⊞ 열어 보기', run: () => toggleLaunch(true) })));
     }
     /** 정리 = **위치만** 격자에 맞춘다(원준 2026-08-19 "정리 누르면 크기도 맘대로 바뀐다").
@@ -968,9 +998,19 @@ export function mountStudio(host, opts) {
         const want = on != null ? on : launch.hidden;
         if (want) {
             // 앱과 위젯은 성격이 다르다 — 앱은 열어서 하는 일(모달), 위젯은 캔버스에 두는 것. 구역을 갈라 그 차이를 보이게.
-            const apps = WDEFS.filter((d) => !d.hidden && (d.surf === 'app' || d.surf === 'both'));
-            const wgs = WDEFS.filter((d) => !d.hidden && (d.surf === 'widget' || d.surf === 'both'));
-            launch.replaceChildren(el('div', { class: 'stu-launch-h' }, el('b', { text: '앱' }), el('span', { class: 'stu-fine', text: '열어서 하는 일 — 창으로 뜹니다' })), el('div', { class: 'stu-shelf-grid stu-launch-grid' }, ...apps.map((d) => appTile(d, () => toggleLaunch(false), true))), el('div', { class: 'stu-launch-h sep' }, el('b', { text: '위젯' }), el('span', { class: 'stu-fine', text: '캔버스에 두는 것 — 눌러 올리거나 원하는 자리로 끌어다 놓기' })), el('div', { class: 'stu-shelf-grid stu-launch-grid' }, ...wgs.map((d) => appTile(d, () => toggleLaunch(false)))));
+            // 자투리 판엔 프로젝트 재료(태스크·지식·자료·명세·타임라인·자동화)가 없다 — 없는 걸 눌러 빈 창을 보여 주는 게 가장 나쁜 안내다.
+            const LOOSE_OK = new Set(['session', 'sticky']);
+            const usable = WDEFS.filter((d) => !d.hidden && (!loose || LOOSE_OK.has(d.type)));
+            const apps = usable.filter((d) => d.surf === 'app' || d.surf === 'both');
+            const wgs = usable.filter((d) => d.surf === 'widget' || d.surf === 'both');
+            launch.replaceChildren(...[
+                apps.length ? el('div', { class: 'stu-launch-h' }, el('b', { text: '앱' }), el('span', { class: 'stu-fine', text: '열어서 하는 일 — 창으로 뜹니다' })) : null,
+                apps.length ? el('div', { class: 'stu-shelf-grid stu-launch-grid' }, ...apps.map((d) => appTile(d, () => toggleLaunch(false), true))) : null,
+                el('div', { class: 'stu-launch-h' + (apps.length ? ' sep' : '') }, el('b', { text: '위젯' }), el('span', { class: 'stu-fine', text: '캔버스에 두는 것 — 눌러 올리거나 원하는 자리로 끌어다 놓기' })),
+                el('div', { class: 'stu-shelf-grid stu-launch-grid' }, ...wgs.map((d) => appTile(d, () => toggleLaunch(false)))),
+                // 자투리 판에서 앱 구역이 통째로 비는 건 고장이 아니다 — 왜 없는지 한 줄로 말해 준다(막다른 안내 금지).
+                loose ? el('p', { class: 'stu-launch-note stu-fine', text: '태스크·지식·자료 같은 건 프로젝트의 것이에요. 세션을 프로젝트에 연결하면 그 작업대에서 쓸 수 있습니다.' }) : null,
+            ].filter(Boolean));
             toggleNotif(false);
         }
         launch.hidden = !want;
@@ -1437,6 +1477,40 @@ export function mountStudio(host, opts) {
         deskSig = '';
         await paintDesk();
     }
+    // ── 자투리 판 = 프로젝트 없는 세션이 곧 내용 ────────────────────────────────
+    //  전부 카드로 올린다(원준 "자투리 세션들을 다 거기에 넣어"). 사용자가 치운 카드는 다시 올리지 않는다 —
+    //  판은 사용자의 것이므로, 되살리는 건 우리가 아니라 사용자가 [AI 세션] 위젯으로 한다.
+    const LOOSE_HIDE_KEY = 'lively_studio_loose_hidden';
+    const looseHidden = (() => { try {
+        return new Set(JSON.parse(localStorage.getItem(LOOSE_HIDE_KEY) || '[]'));
+    }
+    catch (_) {
+        return new Set();
+    } })();
+    function looseHide(sid) { looseHidden.add(sid); try {
+        localStorage.setItem(LOOSE_HIDE_KEY, JSON.stringify([...looseHidden]));
+    }
+    catch (_) { /* noop */ } }
+    function syncLooseCards(first) {
+        if (!loose)
+            return;
+        const on = new Set(widgets.filter((w) => w.type === 'session').map((w) => String(w.data?.sid || '')));
+        // ⚠ 카드 하나가 곧 폴링 하나다(대화·상태) — 자투리가 189개인 워크스페이스도 있다(실측).
+        //  그래서 **살아 있는 세션 먼저**, 없으면 최근 것 몇 개만. 나머지는 사이드바 목록이 이미 다 보여 준다.
+        const cand = mySessions().filter((s2) => !on.has(s2.id) && !looseHidden.has(s2.id));
+        const live = cand.filter((s2) => s2.live && s2.alive);
+        const rest = cand.filter((s2) => !(s2.live && s2.alive));
+        const room = Math.max(0, (first ? 8 : 3) - widgets.filter((w) => w.type === 'session').length);
+        const add = [...live, ...(first ? rest.slice(0, Math.max(0, 4 - live.length)) : [])].slice(0, room);
+        if (!add.length)
+            return;
+        add.forEach((s2, i) => {
+            const n = widgets.length + i;
+            addWidget('session', { x: 32 + (n % 3) * 360, y: 24 + Math.floor(n / 3) * 332 }, { sid: s2.id }, { noSave: true });
+        });
+        save();
+        paintAll();
+    }
     /** 자료 = 사람이 올렸거나 세션이 남긴 파일. 워크트리·기계 파일·캐시는 애초에 자료가 아니다. */
     async function assetFiles() {
         // 매니페스트 = 재귀 파일 목록에서 **워크트리(.git 보유 폴더)를 통째로 건너뛴 것**.
@@ -1457,6 +1531,11 @@ export function mountStudio(host, opts) {
     }
     let assetCount = null;
     async function paintDesk() {
+        if (loose) {
+            desk.replaceChildren();
+            trashEl.hidden = true;
+            return;
+        } // 공유 폴더가 없는 판 — 바탕 아이콘·휴지통도 없다
         const assets = await assetFiles().catch(() => []);
         if (dead)
             return;
@@ -1554,6 +1633,11 @@ export function mountStudio(host, opts) {
             return;
         const live = mySessions().filter((s) => s.live && s.alive);
         const hasSessionCard = widgets.some((w) => w.type === 'session');
+        if (loose) {
+            // 자투리 판엔 자료·타임라인이 없다 — 없는 걸 권하지 않는다(막다른 안내 금지).
+            showTip('loose', '여기 카드는 아직 어느 프로젝트에도 붙지 않은 세션들이에요. 프로젝트에 연결하면 그 프로젝트의 자료·태스크와 함께 일하게 됩니다.');
+            return;
+        }
         if (!widgets.length && !(assetCount ?? 0)) {
             showTip('start', '먼저 무엇을 할지 아래 칸에 적어 보세요. 컴퓨터에서 파일을 끌어다 놓아도 돼요 — 이 판이 이 프로젝트의 작업대예요.');
             return;
@@ -1742,6 +1826,10 @@ export function mountStudio(host, opts) {
     async function uploadDropped(items, emptyDirs) {
         if (!items.length && !emptyDirs.length)
             return;
+        if (loose) {
+            toast('이 판은 프로젝트 폴더가 없어 파일을 둘 곳이 없어요 — 세션을 프로젝트에 연결한 뒤 그 작업대에 올려 주세요.', true);
+            return;
+        }
         const at = lastDropAt;
         const ac = new AbortController();
         toast(items.length ? `${items.length}개를 공유 폴더로 올리는 중…` : '폴더를 만드는 중…');
@@ -1796,6 +1884,8 @@ export function mountStudio(host, opts) {
                 void autoSpawn();
                 void paintDesk();
             }
+            if (loose)
+                syncLooseCards(false);
             void pollStream();
             thinkTip();
         }, 8000);
@@ -1803,6 +1893,8 @@ export function mountStudio(host, opts) {
     // ── 시작 ──
     if (!load())
         widgets = []; // 첫 방문 = 빈 판(위젯 자동 배치 폐지, #1719 원준 2026-08-19)
+    if (loose)
+        syncLooseCards(true); // 다만 자투리 판은 '그 세션들' 자체가 내용이다 — 카드로 전부 올린다
     paintDoor();
     paintAll();
     mountChat();
