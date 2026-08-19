@@ -2,9 +2,9 @@
 //  builtin 시더(seed.ts)와 설치 verb(delivery/apps.ts org_app_install)의 **공용 코어** — 두 경로가 같은
 //  설치 시맨틱을 쓰도록 한 곳에 둔다(선례: seed 가 인라인하던 diff/runInstall 블록을 여기로 승격).
 import { getApp, listComponents, upsertUiAsset, pruneUiAssets } from "../org/store/apps.js";
+import type { LoadedApp } from "./loader.js";
 import { logger } from "../log.js";
 import type { WriteCtx } from "../org/store/audit.js";
-import type { LoadedApp } from "./loader.js";
 import { diffComponents, type AppComponentRef } from "./install-plan.js";
 import { runInstall, type InstallAppMeta } from "./install.js";
 import { makeDeployDeps } from "./deploy.js";
@@ -36,19 +36,27 @@ export async function installLoadedApp(loaded: LoadedApp, source: unknown, ctx: 
   const components = await runInstall(meta, loaded.items, deps);
 
   // UI entry HTML 보존(PR5) — 설치가 active 로 저널된 뒤. best-effort: 실패해도 앱(하네스·principal)은 유효하고
-  //  다음 설치/시드가 재보존한다(upsert). 선언 안 하는 페이지는 prune 으로 정리(update-diff).
-  try {
-    for (const ui of loaded.uiAssets) {
-      await upsertUiAsset(id, { page_key: ui.page_key, kind: ui.kind, title: ui.title, html: ui.html }, loaded.contentHash);
-    }
-    await pruneUiAssets(id, loaded.uiAssets.map((u) => u.page_key));
-  } catch (err) {
-    logger.warn({ err, id }, "앱 UI 자산 보존 실패(비치명 — 다음 설치가 재보존)");
-  }
+  //  다음 설치/시드가 재보존한다. seed 의 skip 경로도 같은 헬퍼로 백필한다(마이그레이션 — 기존 설치 앱).
+  await persistUiAssets(loaded);
 
   for (const c of drop) {
     try { await deps.reclaim(c); } catch { /* best-effort — 저널이 스위퍼를 부른다 */ }
     try { await deps.removeComponent(id, c); } catch { /* best-effort */ }
   }
   return { id, created: !existing, components };
+}
+
+
+/** 로드된 앱의 UI entry HTML 을 보존(upsert)하고 선언 안 하는 페이지를 정리(prune). 멱등 — 설치·시드 skip 양쪽에서 호출.
+ *  best-effort: 실패해도 앱(하네스·principal)은 유효(다음 설치/부팅이 재보존). */
+export async function persistUiAssets(loaded: LoadedApp): Promise<void> {
+  const id = loaded.manifest.id;
+  try {
+    for (const ui of loaded.uiAssets) {
+      await upsertUiAsset(id, { page_key: ui.page_key, kind: ui.kind, title: ui.title, html: ui.html }, loaded.contentHash);
+    }
+    await pruneUiAssets(id, loaded.uiAssets.map((u) => u.page_key));
+  } catch (err) {
+    logger.warn({ err, id }, "앱 UI 자산 보존 실패(비치명 — 다음 설치/부팅이 재보존)");
+  }
 }
