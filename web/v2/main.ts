@@ -270,10 +270,22 @@ function openSessions(): Array<{ id: string; active: boolean }> {
 // ── 좌측 열 폐기(원준 2026-08-19 3차) — 프로젝트 목록 패널만, 작업대 문패의 [프로젝트]로 여닫는다 ──
 let railPanelOpen = false;
 let railPanelPin = ((): boolean => { try { return localStorage.getItem('stu_side_pin') === '1'; } catch (_) { return false; } })();
+let panelFab: HTMLElement | null = null;
 function drawSide(): void {
   if (!sideEl) return;
   const showPanel = railPanelOpen || railPanelPin;
   root!.classList.toggle('rail-open', showPanel);   // 열림 = 좌측 칸 0 → 284px (캔버스를 민다)
+  // 닫으면 다시 못 여는 문제(원준) — 문패 [프로젝트 ▾] 는 프로젝트 화면에만 있다.
+  //  그래서 **패널이 닫힌 모든 화면 좌상단에 손잡이(fab)** 를 띄운다: 홈·세션·리브 어디서 닫아도 길이 남는다.
+  //  단 **프로젝트 화면은 제외** — 문패의 [프로젝트 ▾] 가 같은 자리에 있어 손잡이가 겹쳐 덮는다(실측).
+  if (panelFab) { panelFab.remove(); panelFab = null; }
+  if (!showPanel && !activeKey().startsWith('p:')) {
+    const fab = el('button', { class: 'stu-panel-fab', type: 'button', title: '프로젝트 목록 열기 (닫으려면 패널의 ×)', 'aria-label': '프로젝트 목록 열기',
+      onclick: () => { railPanelOpen = true; drawSide(); } },
+      el('span', { class: 'lg', text: 'L' }), el('span', { text: '프로젝트' }));
+    panelFab = fab;
+    root!.append(fab);
+  }
   if (!showPanel) { sideEl.replaceChildren(); return; }
   const treeHost = el('div', { class: 'stu-panel-tree' });
   const panel = el('div', { class: 'stu-panel' },
