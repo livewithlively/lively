@@ -17,6 +17,7 @@ import type { Duplex } from "node:stream";
 import { logger } from "../log.js";
 import os from "node:os";
 import { TMUX_BIN, canAttach, ensureSessionOpts, sessionGone } from "./terminal-sessions.js";
+import { isPsmuxBin } from "./catalog.js";   // #1791 — 정의가 catalog(leaf)로 내려갔다(위 재수출과 짝)
 import { tmuxExecArgv } from "./tmux-exec.js";
 import { resolveTenantFromHeaders, withTenant } from "../org/tenant-context.js";
 import { nodeCanAttach, nodeRelayAttach } from "../node/registry.js";
@@ -70,8 +71,8 @@ export interface AttachTerm {
   resize(cols: number, rows: number): void;
   kill(signal?: string): void;
 }
-/** psmux(윈도우 네이티브 tmux 구현)인가 — 파일명으로 판정한다(경로·확장자 무관). */
-export const isPsmuxBin = (bin: string): boolean => /(^|[\\/])psmux(\.exe)?$/i.test(String(bin || ""));
+/** psmux 판정 — 정의는 catalog.ts(leaf)로 내렸다(#1791, tmux-exec 의 sessionGone 도 쓴다). 종전 import 경로를 위해 재수출. */
+export { isPsmuxBin } from "./catalog.js";
 
 function spawnAttachTerm(bin: string, args: string[], env: Record<string, string>): AttachTerm {
   if (!isPsmuxBin(bin)) {
