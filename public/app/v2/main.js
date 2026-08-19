@@ -10,7 +10,7 @@
 import { $view, anchoredPopover, api, el, sv, toast } from '../core.js';
 import { fillLivCards, renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame } from './apps.js';
-import { drawSide as drawSideTree, projectOrder } from './side.js';
+import { drawSide as drawSideTree, projectOrder, sessText } from './side.js';
 import { dotCls, mergeSessions, projName, renderHome, renderProject, renderSession } from './views.js';
 import { takeCreated } from './created-cache.js';
 import { createTimeline } from '../timeline.js';
@@ -181,8 +181,14 @@ function titleFor(route) {
         return { title: projName(data, id), noAside: false };
     }
     if (p === 's') {
+        // 탭 제목도 사이드바와 **같은 규칙**(side.ts sessText)을 쓴다(#1744) — 종전엔 s.label 을 날것으로 써서
+        //  탭에 `box-yoon-…`·`위탁 #41`·프로젝트명 반복이 그대로 떴다(dev 실측: 자동 생성 이름이 죽은 세션의 83%).
+        //  sessText 는 그런 이름을 걷어내고 pane 제목('지금 하는 일')을 그 자리에 올린다.
         const s = findSess(decodeURIComponent(segs[1] || ''));
-        return { title: s ? (String(s.label || '').trim() || String(s.raw?.harness || '세션')) : '세션', noAside: false };
+        if (!s)
+            return { title: '세션', noAside: false };
+        const t = sessText(s, projName(data, s.projectId));
+        return { title: t.main || t.sub || String(s.raw?.harness || '세션'), noAside: false };
     }
     if (p === 'app') {
         const a = appByKey(segs[1]);
