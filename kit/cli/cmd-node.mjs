@@ -12,10 +12,11 @@
 //  주입 컨텍스트  ctx = { say, dim, green, yellow, die, has, api, gateway, token, writeLively }
 //   (lively.mjs 의 cliCtx() 가 만든다 — 본문은 원문 그대로 이 이름들을 쓴다.)
 // ═══════════════════════════════════════════════════════════════════════════
-import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, readdirSync, chmodSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join, dirname, win32 as pwin, posix as pposix } from "node:path";
 import { spawnSync, spawn, execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 // lively.mjs 와 같은 계약(LIVELY_HOME 은 HOME 리다이렉트 — 샌드박스/테스트).
 const HOME = process.env.LIVELY_HOME || homedir();
@@ -99,7 +100,15 @@ const MUX_EXE = WIN ? "psmux.exe" : "tmux";
 //   인자로 받으면 그 플랫폼이 아니어도 목록 자체를 테스트로 못박을 수 있다. 경로 조립도 pwin.join 을 써서
 //   POSIX 에서 만들어도 진짜 Windows 구분자가 나오게 한다(join 을 그대로 쓰면 `/` 가 섞여 검증이 무의미해진다).
 export function muxCandidates(platform = process.platform, env = process.env) {
-  if (platform !== "win32") return ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/opt/local/bin/tmux", "/usr/bin/tmux"];
+  if (platform !== "win32") {
+    // 1순위는 **우리가 깐 자리** — Windows 의 ~/.lively/bin/psmux 와 대칭이다(설치·제거가 같은 자리에서 닫힌다).
+    //  패키지 매니저가 없는 박스(brew 없는 맥 등)에서 installTmuxFromRelease 가 여기에 놓는다.
+    const home = env.LIVELY_HOME || env.HOME || "";
+    return [
+      home && pposix.join(home, ".lively", "bin", "tmux"),
+      "/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/opt/local/bin/tmux", "/usr/bin/tmux",
+    ].filter(Boolean);
+  }
   const h = env.LIVELY_HOME || env.USERPROFILE || env.HOME || "";
   const local = env.LOCALAPPDATA || (h ? pwin.join(h, "AppData", "Local") : "");
   const pf = env.ProgramFiles || "C:\\Program Files";
@@ -146,17 +155,26 @@ async function ensureTmux() {
   }
   die(tmuxHelp(), 2);
 }
-// 자동 설치. 성공=true. macOS=brew · Linux=apt/dnf/yum/pacman/apk/zypper(비-root 면 sudo) · Windows=winget/scoop→릴리스 zip.
+// 자동 설치. 성공=true. macOS=brew→업스트림 사전빌드 · Linux=apt/dnf/yum/pacman/apk/zypper(비-root 면 sudo)→사전빌드
+//  · Windows=winget/scoop→릴리스 zip.
+//  ⚠ **패키지 매니저는 최선의 경로일 뿐 유일한 경로가 아니다.** 종전엔 mac 에서 brew 가 없으면 곧장 포기하고
+//   "Homebrew 를 설치하세요" 만 안내했는데, 그게 데스크톱 앱으로 들어온 **비개발자 맥을 통째로 막았다**(실측
+//   2026-08-19: 설치는 끝났는데 `lively node` 가 그 안내만 반복 → 웹터미널·위탁이 영영 안 켜짐). brew 설치는
+//   sudo·수 분·수백 MB 를 요구하는 별개의 결심이라, tmux 하나 때문에 사람에게 떠넘길 일이 아니다.
 async function autoInstallTmux() {
   const run = (argv) => { say(dim(`  $ ${argv.join(" ")}`)); try { return spawnSync(argv[0], argv.slice(1), { stdio: "inherit" }).status === 0; } catch { return false; } };
-  if (process.platform === "darwin") return has("brew") ? run(["brew", "install", "tmux"]) : false;
+  if (process.platform === "darwin") {
+    if (has("brew") && run(["brew", "install", "tmux"])) return true;
+    return await installTmuxFromRelease();
+  }
   if (process.platform === "linux") {
     const root = typeof process.getuid === "function" && process.getuid() === 0;
     const sudo = root ? [] : (has("sudo") ? ["sudo"] : []);
     const spec = { "apt-get": ["install", "-y", "tmux"], dnf: ["install", "-y", "tmux"], yum: ["install", "-y", "tmux"], pacman: ["-S", "--noconfirm", "tmux"], apk: ["add", "tmux"], zypper: ["install", "-y", "tmux"] };
     const pm = Object.keys(spec).find(has);
-    if (!pm) return false;
-    return run([...sudo, pm, ...spec[pm]]);
+    // 패키지 매니저가 없거나(최소 이미지) sudo 가 막힌 박스도 같은 폴백으로 산다 — ~/.lively 안이라 권한이 필요 없다.
+    if (pm && run([...sudo, pm, ...spec[pm]])) return true;
+    return await installTmuxFromRelease();
   }
   if (process.platform === "win32") {
     // 패키지 매니저가 있으면 그쪽이 낫다 — 설치·갱신·제거가 표준 경로에 남는다(#869 의 '공급망 표면 최소' 취지).
@@ -170,6 +188,88 @@ async function autoInstallTmux() {
   }
   return false;
 }
+// ── POSIX 사전빌드 tmux 폴백 (brew·apt 가 없는 박스) ─────────────────────────
+// **왜 업스트림 사전빌드인가**: tmux 는 소스 배포가 원칙이라 종전엔 패키지 매니저 말고 길이 없었다. 그런데
+//  tmux 조직이 직접 굽는 바이너리 릴리스가 있다(github.com/tmux/tmux-builds — GitHub Actions 로 빌드,
+//  Linux/macOS × arm64/x86_64). 남의 재배포가 아니라 **업스트림 자신**이라 공급망 표면이 늘지 않는다.
+//  실측(2026-08-19 · v3.7b macos-arm64): tar.gz 안에 `tmux` 실행파일 하나. 그 Mach-O 는 libevent·ncurses 를
+//  정적으로 품어 시스템 dylib 둘(libSystem·libresolv)만 의존하고, arm64 실행에 필수인 코드서명
+//  (LC_CODE_SIGNATURE)도 들어 있다. terminfo 는 macOS 기본 /usr/share/terminfo 를 쓴다 → **어느 자리에 풀어도 돈다.**
+const TMUX_BUILDS_API = "https://api.github.com/repos/tmux/tmux-builds/releases/latest";
+const TMUX_BUILDS_DL = "https://github.com/tmux/tmux-builds/releases/download";
+// API 가 막혔을 때(비인증 레이트리밋 60회/시간·사내 방화벽) 쓸 고정 폴백 — 최신이 아닌 건 '설치 불가' 보다 낫다.
+const TMUX_PINNED_VER = "3.7b";
+
+/**
+ * (순수 — 테스트 seam) 업스트림 사전빌드 애셋 이름. `tmux-3.7b-macos-arm64.tar.gz` 꼴.
+ *  ⚠ 이름 규칙이 곧 계약이다 — 틀리면 애셋을 못 찾아 **조용히** 폴백이 죽고, 사람에겐 "자동 설치 실패"만 남는다.
+ *   그래서 표기(darwin→macos · x64→x86_64)를 한 자리에 못박고 테스트로 지킨다.
+ * @returns {string|null} 사전빌드가 없는 OS·CPU 조합이면 null
+ */
+export function tmuxAssetName(version, platform = process.platform, arch = process.arch) {
+  const os = platform === "darwin" ? "macos" : (platform === "linux" ? "linux" : null);
+  const cpu = arch === "arm64" ? "arm64" : (arch === "x64" ? "x86_64" : null);
+  return os && cpu && version ? `tmux-${version}-${os}-${cpu}.tar.gz` : null;
+}
+
+/**
+ * 업스트림 사전빌드 tmux → `~/.lively/bin/tmux` (패키지 매니저가 없는 박스용 폴백). 성공=true.
+ *  ~/.lively 안이라 **sudo 가 필요 없다** — 관리자 권한이 없는 계정에서도 그대로 산다.
+ *  export 인 이유는 installPsmuxFromRelease 와 같다: brew/apt 가 **있는** CI 러너에선 이 경로가 한 번도 안 돌아,
+ *  실기기 검증 하네스가 제품 함수를 그대로 불러야 한다(하네스가 절차를 베끼면 하네스만 검증된다).
+ *  ⚠ 호출 전 nodeCommands(ctx) 로 출력 원시함수가 주입돼 있어야 한다(psmux 폴백과 같은 계약).
+ */
+export async function installTmuxFromRelease() {
+  const dir = join(LIVELY, "bin");
+  const dest = join(dir, "tmux");
+  try {
+    // 최신 릴리스를 먼저 묻는다(버전 고정은 언젠가 썩는다). 못 물으면 고정 버전 직링크로 간다.
+    const rel = await fetch(TMUX_BUILDS_API, { headers: { "user-agent": "lively-cli", accept: "application/vnd.github+json" } })
+      .then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    const latest = tmuxAssetName(String(rel?.tag_name || "").replace(/^v/, ""));
+    const asset = latest ? (rel?.assets || []).find((a) => a.name === latest) : null;
+    const name = asset ? latest : tmuxAssetName(TMUX_PINNED_VER);
+    if (!name) return false;                      // 사전빌드가 없는 OS·CPU
+    const url = asset ? asset.browser_download_url : `${TMUX_BUILDS_DL}/v${TMUX_PINNED_VER}/${name}`;
+    // 무결성 — GitHub 이 애셋마다 주는 digest(`sha256:…`)가 있으면 **불일치는 중단**. 없으면 TLS 로 진행한다
+    //  (부트스트랩의 SHASUMS256 규율과 같은 정책 — 체크섬을 못 받았다는 이유로 설치를 막지는 않는다).
+    const want = /^sha256:([0-9a-f]{64})$/.exec(asset?.digest || "")?.[1] || null;
+    say(dim(`  ↓ ${name}`));
+    const res = await fetch(url, { headers: { "user-agent": "lively-cli" } });
+    if (!res.ok) return false;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (want) {
+      const got = createHash("sha256").update(buf).digest("hex");
+      if (got !== want) { say(yellow("  ⚠ tmux 체크섬 불일치 — 무결성 실패로 설치를 중단합니다.")); return false; }
+      say(dim("  · 체크섬 검증 통과"));
+    }
+    // ⚠ ~/.lively/bin 에 **직접 풀지 않는다** — 거기엔 `lively` 런처가 산다. 아카이브 내용물을 모르는 채로
+    //  그 위에 풀면 배포 구조가 바뀌는 날 CLI 자신을 덮어쓸 수 있다. 임시 자리에 풀고 실행파일만 옮긴다.
+    const stage = join(dir, ".tmux-unpack");
+    mkdirSync(stage, { recursive: true });
+    const tgz = join(stage, "tmux.tar.gz");
+    writeFileSync(tgz, buf);
+    execFileSync(tarBin(), ["-xzf", tgz, "-C", stage], { stdio: "ignore" });
+    rmSync(tgz, { force: true });
+    const found = findFileDeep(stage, "tmux", 3);  // 배포가 하위 폴더를 만들어도 찾는다(psmux 쪽과 같은 방어)
+    if (!found) { rmSync(stage, { recursive: true, force: true }); return false; }
+    writeFileSync(dest, readFileSync(found));
+    rmSync(stage, { recursive: true, force: true });
+    chmodSync(dest, 0o755);
+    // 격리 속성(Gatekeeper) — fetch 로 받은 파일엔 보통 안 붙지만(브라우저·메일처럼 quarantine 을 붙이는 앱만 붙인다),
+    //  붙어 있으면 실행이 막힌다. 지우기는 무해하고 없으면 그냥 실패한다(best-effort).
+    if (process.platform === "darwin") { try { spawnSync("xattr", ["-d", "com.apple.quarantine", dest], { stdio: "ignore" }); } catch { /* xattr 없음 등 */ } }
+    // ★ **파일이 생겼다가 아니라 도는지로 판정한다.** 아키텍처·서명·libc 불일치는 여기서만 드러나고, 여기서
+    //  안 걸러내면 '설치 성공'이라 말한 뒤 세션 생성이 spawn 실패로 죽는다(있는 척 금지 — #1087 의 규율).
+    if (spawnSync(dest, ["-V"], { stdio: ["ignore", "ignore", "ignore"] }).status !== 0) {
+      rmSync(dest, { force: true });
+      say(yellow("  ⚠ 내려받은 tmux 가 이 기기에서 실행되지 않습니다 — 되돌렸습니다."));
+      return false;
+    }
+    return true;
+  } catch { return false; }
+}
+
 // winget 설치 명령 — **패키지 id 는 `marlocarlo.psmux`** 다.
 //  ⚠ 이 문자열은 추측할 수 없고, 틀려도 **조용히** 실패한다(`-e` 라 엉뚱한 패키지가 깔리진 않지만, 그냥 실패한 뒤
 //   zip 폴백으로 떨어져 '왜 느리지'로만 보인다). winget 공식 소스 인덱스(cdn.winget.microsoft.com/cache/source.msix
@@ -228,12 +328,18 @@ function tarBin() {
   const abs = pwin.join(process.env.SystemRoot || process.env.windir || "C:\\Windows", "System32", "tar.exe");
   return existsSync(abs) ? abs : "tar";
 }
+// 자동 설치가 **다 실패한 뒤**의 안내다. 종전엔 mac 에서 "Homebrew 를 설치하세요" 라고 했는데, 이제 brew 는
+//  경로 하나일 뿐이라 그 문장은 사실과 다르다 — 남은 원인은 네트워크(사내 프록시·github.com 차단)다.
+//  그래서 무엇이 막혔는지와 **손으로 놓을 자리**(우리가 찾는 경로)를 말한다.
 function tmuxHelp() {
-  if (process.platform === "darwin")
-    return "tmux 가 필요한데 Homebrew 가 없어 자동 설치를 못 했습니다. Homebrew 설치 후 `lively node` 를 다시 실행하면 tmux 를 자동 설치합니다:\n" +
-      '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"';
-  if (process.platform === "linux")
-    return "tmux 자동 설치 실패(패키지 매니저·권한 확인). 수동: sudo apt install -y tmux (또는 dnf/pacman/apk/zypper).";
+  if (process.platform === "darwin" || process.platform === "linux") {
+    const pm = process.platform === "darwin" ? "brew install tmux" : "sudo apt install -y tmux (또는 dnf/pacman/apk/zypper)";
+    return "tmux 자동 설치에 실패했습니다 — github.com 접속이 막혔는지 확인해 주세요(사내 프록시·방화벽).\n" +
+      `  · 패키지 매니저가 있다면: ${pm}\n` +
+      "  · 없다면 https://github.com/tmux/tmux-builds/releases 에서 이 기기용 파일을 받아 풀고,\n" +
+      `    실행파일을 ${join(LIVELY, "bin", "tmux")} 에 두세요(chmod +x).\n` +
+      "  둘 중 무엇이든 끝난 뒤 `lively node` 를 다시 실행하면 됩니다.";
+  }
   if (process.platform === "win32")
     return "psmux(윈도우용 tmux) 자동 설치에 실패했습니다. 네트워크·권한을 확인하고 다시 실행하거나, 수동으로 설치하세요:\n" +
       "  winget install marlocarlo.psmux      (또는 scoop install psmux)\n" +
