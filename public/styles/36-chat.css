@@ -71,6 +71,20 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   border: 1px solid var(--blue); border-radius: 6px; background: var(--bg, #fff); color: var(--ink); }
 .sc-title-in:focus { outline: none; box-shadow: 0 0 0 3px var(--blue-soft, rgba(43, 108, 232, .18)); }
 .sc-title-in:disabled { opacity: .6; }
+/* pane 이름이 제목 자리를 차지했을 때(#1744) 세션 이름은 **사실 줄**로 내려온다 — 고치는 자리는 여전히 한 군데다.
+   제목판(button.sc-title)과 같은 부품을 사실 줄 크기(12px)로 입는다. pane 이름이 없으면 이 칩은 통째로 빠지고
+   제목 자신이 종전처럼 고치는 자리가 된다(그때 이 칩이 남아 있으면 같은 이름이 두 번 보인다). */
+.sc-namebox { display: inline-flex; align-items: center; min-width: 0; max-width: 28ch; }
+.sc-namebox[hidden] { display: none; }
+.sc-namebox[hidden] + .sc-sep-name { display: none; }
+b.sc-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+button.sc-name { display: inline-flex; align-items: center; gap: 4px; font: inherit; font-size: 12px; font-weight: 700;
+  max-width: 28ch; margin: 0 -4px; padding: 1px 4px; border: 0; border-radius: 5px; background: none; color: var(--ink-sub); text-align: left; cursor: text; }
+button.sc-name .sc-title-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+button.sc-name:hover { background: var(--bg-punch); box-shadow: inset 0 0 0 1px var(--line-net, var(--line)); color: var(--ink); }
+button.sc-name:hover .sc-title-pen, button.sc-name:focus-visible .sc-title-pen { opacity: 1; }
+button.sc-name:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.sc-namebox .sc-title-in { font-size: 12px; font-weight: 700; width: min(28ch, 26vw); margin: 0; }
 .sc-meta { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-sub); white-space: nowrap; }
 
 /* ── 처방전(#1719) — 입력칸 바로 위. '방금 네 번 주고받은 것, 한 번에 끝낼 수 있었어요'.
@@ -135,6 +149,19 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-act { font-size: 12.5px; padding: 4px 8px; border-radius: 6px; color: var(--ink-sub); }
 .sc-act:hover { background: var(--bg-tint); color: var(--ink); }
 .sc-act-on { background: var(--bg-punch); color: var(--ink); }
+/* 터미널 연결 상태(#1744) — 상단바를 합치며 터미널 툴바에 있던 한 줄이 여기로 왔다. 터미널이 열려 있을 때만 뜬다. */
+.sc-termstat { font-size: 11.5px; color: var(--muted); white-space: nowrap; margin-right: 2px; }
+.sc-termstat[hidden] { display: none; }
+.sc-termstat.ok { color: var(--mint-deep, #0FA37E); }
+.sc-termstat.err { color: var(--coral, #E5484D); }
+.sc-termstat.end { color: var(--ink-sub); font-weight: 700; }
+/* [⋯] — 터미널 툴바에 흩어져 있던 것들이 한 메뉴로 모였다(화면 복구·환경 설정·사용법 + 링크·새 창). */
+.sc-more { min-width: 250px; max-width: 320px; padding: 5px; display: flex; flex-direction: column; gap: 1px; }
+.sc-more-sec { font-family: var(--mono, ui-monospace, monospace); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted-2, #a6b2c8); padding: 8px 8px 3px; }
+.sc-more-row { display: flex; flex-direction: column; gap: 1px; align-items: flex-start; text-align: left; width: 100%; padding: 7px 8px; border: 0; background: none; font: inherit; border-radius: 8px; cursor: pointer; text-decoration: none; color: inherit; }
+.sc-more-row:hover { background: var(--bg-tint, #F6FAFF); }
+.sc-more-row .n { font-size: 12.5px; font-weight: 700; color: var(--ink); }
+.sc-more-row .m { font-size: 11px; color: var(--muted); line-height: 1.45; }
 .sc-chat { flex: 1; min-height: 0; display: flex; }
 .sc-chat[hidden] { display: none; }
 .sc-chat > .livc-wrap { flex: 1; }

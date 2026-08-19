@@ -18,6 +18,10 @@ body[data-ui="v2"] #org-banner, body[data-ui="v2"] header.topbar, body[data-ui="
 #v2-root.no-aside { grid-template-columns: var(--v2-side-w) 6px minmax(0, 1fr) 0 0; }
 #v2-root.no-aside .v2-aside { display: none; }
 #v2-root.no-aside > .v2-split-x + .v2-main + .v2-split-x { display: none; }
+/* 팝아웃 창(#1744 ?solo=1) — 세션 하나만 담은 창. **왼쪽 탐색열만 없다**: 가운데·우패널은 본 화면과 같은 부품이라
+   여기서는 열 정의만 두 칸으로 줄인다(가운데 판이 창 왼쪽 끝에 붙으므로 그쪽 테두리는 지운다). */
+#v2-root.solo { grid-template-columns: minmax(0, 1fr) 6px var(--v2-aside-w); }
+#v2-root.solo.no-aside { grid-template-columns: minmax(0, 1fr) 0 0; }
 .v2-split { position: relative; z-index: 3; background: transparent; touch-action: none; }
 .v2-split-x { cursor: col-resize; }
 .v2-split-y { cursor: row-resize; height: 6px; flex: none; }
@@ -386,6 +390,9 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
    그 선은 이제 다른 판의 시작이 아니라 한 판 안의 칸막이로 읽힌다. */
 .v2-aside { background: var(--bg, #fff); border-left: 1px solid var(--line); min-height: 0; overflow: hidden; padding: 0; display: flex; flex-direction: column; }
 .v2-aside > .v2-empty { padding: 14px 16px; }
+/* 우패널은 칸을 **갈아 낀다**(타임라인 ↔ 파일 탐색기, #1744) — 지우지 않고 숨긴다(발자취에 쌓인 것이 살아 있어야 한다).
+   display 를 가진 자식은 [hidden] 만으로 안 사라지므로 여기서 못박는다. */
+.v2-aside-pane > [hidden] { display: none !important; }
 .v2-aside-h { display: flex; align-items: center; gap: 8px; flex: none; min-height: 38px; padding: 9px 16px 8px; border-bottom: 1px solid var(--line); }
 .v2-aside-h b { font-size: 13.5px; font-weight: 800; }
 .v2-aside-h .v2-k { margin-left: auto; font-variant-numeric: tabular-nums; }
@@ -406,6 +413,55 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 0; font-size: 12.5px; }
 .v2-facts dt { color: var(--muted); }
 .v2-facts dd { margin: 0; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── 우패널 파일 탐색기(#1744, web/v2/files.ts) ──
+   세션 작업 폴더를 타임라인과 **같은 골격**으로 본다: 머리 고정 → 경로 한 줄 → 본문만 스크롤.
+   종전엔 터미널 단독 페이지 왼쪽에 붙어 있었는데, 상단바를 합치며 이 자리로 왔다(가운데는 대화·터미널만 남는다). */
+.v2-files { display: flex; flex-direction: column; flex: 1; min-height: 0; position: relative; }
+.v2-files.fx-drag::after { content: '여기에 놓으면 이 폴더로 올라갑니다'; position: absolute; inset: 0; z-index: 2; pointer-events: none;
+  display: grid; place-items: center; text-align: center; padding: 0 18px; font-size: 12.5px; font-weight: 600; color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 8%, var(--bg, #fff)); border: 2px dashed var(--blue); border-radius: 10px; }
+.fx-head .fx-scope { font-size: 12px; color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fx-hacts { margin-left: auto; display: inline-flex; align-items: center; gap: 2px; flex: none; }
+.fx-hbtn { border: 0; background: none; font: inherit; font-size: 12px; color: var(--ink-sub); padding: 3px 7px; border-radius: 6px; cursor: pointer; text-decoration: none; white-space: nowrap; }
+.fx-hbtn:hover { background: var(--bg-tint, #F6FAFF); color: var(--ink); }
+.fx-path { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 1px; padding: 7px 14px; border-bottom: 1px solid var(--line-row, #EDF1F8); }
+.fx-crumb { border: 0; background: none; font: inherit; font-family: var(--mono, ui-monospace, monospace); font-size: 11.5px; color: var(--muted); padding: 1px 4px; border-radius: 5px; cursor: pointer; }
+.fx-crumb:hover { color: var(--blue); background: var(--bg-tint, #F6FAFF); }
+.fx-crumb-sep { font-size: 10px; color: var(--muted-2, #a6b2c8); }
+/* 심링크를 타고 들어와 있으면 '진짜 어디인지'를 말한다 — 안 그러면 그 내용이 세션 폴더 안에 있는 줄 안다. */
+.fx-linknote { flex: none; display: flex; align-items: center; gap: 6px; padding: 6px 14px; font-size: 11px; color: var(--muted);
+  border-bottom: 1px solid var(--line-row, #EDF1F8); background: var(--bg-tint, #F6FAFF); overflow: hidden; }
+.fx-linknote[hidden] { display: none; }
+.fx-linknote .mono { font-family: var(--mono, ui-monospace, monospace); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.fx-link-ic { flex: none; color: var(--blue); }
+.fx-scroll { flex: 1; min-height: 0; overflow: auto; padding: 6px 8px 18px; }
+.fx-list { display: flex; flex-direction: column; }
+/* 한 줄 = [열기 버튼(아이콘·이름·크기)] + [액션들] — 버튼 안에 버튼을 넣지 않으려고 둘로 나눈다(키보드로도 닿는다). */
+.fx-row { display: flex; align-items: center; gap: 2px; border-radius: 7px; }
+.fx-row:hover { background: var(--bg-tint, #F6FAFF); }
+.fx-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding: 5px 6px; border: 0; background: none; font: inherit; font-size: 12.5px; color: var(--ink); text-align: left; cursor: pointer; }
+.fx-ic { flex: none; width: 16px; text-align: center; opacity: .85; }
+.fx-nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fx-row.is-link .fx-nm { color: var(--ink-note, #2D4A7A); }
+.fx-link { flex: none; font-size: 10.5px; color: var(--blue); }
+.fx-sz { margin-left: auto; flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; color: var(--muted-2, #a6b2c8); }
+.fx-acts { flex: none; display: inline-flex; align-items: center; gap: 2px; padding-right: 4px; opacity: 0; }
+.fx-row:hover .fx-acts, .fx-row:focus-within .fx-acts { opacity: 1; }
+.fx-act { display: inline-grid; place-items: center; width: 20px; height: 20px; border: 0; background: none; border-radius: 5px; font: inherit; font-size: 11px; color: var(--muted); cursor: pointer; }
+.fx-act:hover { background: var(--bg-punch, #EAF1FC); color: var(--ink); }
+.fx-act svg { width: 13px; height: 13px; }
+/* 미리보기 — 목록 자리에 제자리 전환(대시보드 폴더 위젯과 같은 문법). 정독·공유는 [⛶] 전체페이지가 맡는다. */
+.fx-pbar { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding: 0 0 8px; border-bottom: 1px solid var(--line-row, #EDF1F8); }
+.fx-pname { font-size: 12px; font-weight: 700; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fx-pstage { padding: 10px 2px 0; }
+.fx-p-img { max-width: 100%; height: auto; border-radius: 8px; }
+.fx-p-pdf { width: 100%; height: 62vh; border: 1px solid var(--line); border-radius: 8px; }
+.fx-p-md { font-size: 13px; line-height: 1.65; }
+.fx-p-code { font-size: 11.5px; line-height: 1.55; overflow: auto; }
+.fx-p-table { overflow: auto; }
+.fx-p-audio, .fx-p-video { width: 100%; }
+.fx-p-msg { font-size: 12.5px; color: var(--muted); line-height: 1.6; }
 
 /* ── 우패널 타임라인(#1719) — 프로젝트·세션·워크스페이스가 같은 부품 ──
    상민님 2026-08-18: "중요한 결과·산출물만. 한 줄로 요약하고 자세한 건 눌러서.
@@ -585,6 +641,9 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 @media (max-width: 1100px) {
   #v2-root { grid-template-columns: min(var(--v2-side-w), 232px) 6px minmax(0, 1fr) 6px min(var(--v2-aside-w), 280px); }
   #v2-root.no-aside { grid-template-columns: min(var(--v2-side-w), 232px) 6px minmax(0, 1fr) 0 0; }
+  /* 팝아웃 창은 열이 셋뿐이다(#1744) — 위 5열 규칙을 그대로 맞으면 가운데가 6px 손잡이 칸에 앉는다. */
+  #v2-root.solo { grid-template-columns: minmax(0, 1fr) 6px min(var(--v2-aside-w), 280px); }
+  #v2-root.solo.no-aside { grid-template-columns: minmax(0, 1fr) 0 0; }
   .v2-center { padding-left: 24px; padding-right: 24px; }
 }
 /* (≤900px 는 파일 끝 '모바일' 블록이 통째로 맡는다 — 종전의 '사이드바 220px + 우패널 숨김' 규칙은 #1777 에서 서랍 셸로 대체됐다.) */
@@ -749,3 +808,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 @media (pointer: coarse) {
   .v2-find-in, .v2-launch-in, .v2-dest-q, .v2-pad-search, .v2-pjpick-in, .v2-ws-in, #gate-input, #gate-email, #gate-password { font-size: 16px; }
 }
+
+/* 팝아웃 창(#1744)은 서랍 크롬(☰·타임라인 버튼)이 없다 — 좁은 화면에선 가운데 한 칸만 남긴다.
+   팝아웃은 '이 세션만 큰 창으로'라는 데스크톱 손짓이고, 폰에서는 본 화면(서랍 셸)이 그 역할을 한다. */
+@media (max-width: 900px) { #v2-root.solo .v2-aside { display: none; } }

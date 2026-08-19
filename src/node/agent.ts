@@ -263,12 +263,17 @@ async function runOp(op: string, args: Record<string, unknown>): Promise<unknown
     case "fsLs": {
       const { base, abs } = await nodeSessionAbs(String(args.id), String(args.sub ?? ""));
       let ents; try { ents = await fsp.readdir(abs, { withFileTypes: true }); } catch { throw new Error("디렉터리 없음"); }
-      const items: Array<{ name: string; type: "dir" | "file"; size: number }> = [];
+      // 심링크는 **따라가서** 실효 종류를 정한다(#1744 — 게이트웨이 terminal-files.readDirItems 와 같은 규칙).
+      //  dirent.isDirectory() 는 링크에 언제나 false 라, 그대로 두면 폴더 링크(./project 등)가 '파일'로 나와 탐색기가 못 들어간다.
+      const items: Array<{ name: string; type: "dir" | "file"; size: number; link?: boolean; linkTarget?: string }> = [];
       for (const e of ents) {
         if (e.name.startsWith(".")) continue;
-        const isDir = e.isDirectory();
-        let size = 0; if (!isDir) { try { size = (await fsp.stat(path.join(abs, e.name))).size; } catch { /* skip */ } }
-        items.push({ name: e.name, type: isDir ? "dir" : "file", size });
+        const link = e.isSymbolicLink();
+        const full = path.join(abs, e.name);
+        let isDir = e.isDirectory(); let size = 0; let linkTarget = "";
+        try { const st = await fsp.stat(full); if (link) isDir = st.isDirectory(); if (!isDir) size = st.size; } catch { /* 끊어진 링크 — 아는 만큼만 */ }
+        if (link) { try { linkTarget = await fsp.readlink(full); } catch { /* 목적지 생략 */ } }
+        items.push({ name: e.name, type: isDir ? "dir" : "file", size, ...(link ? { link: true, linkTarget } : {}) });
       }
       items.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
       const rel = path.relative(base, abs);

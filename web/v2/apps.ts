@@ -50,10 +50,19 @@ export function classicUrl(hash: string): string {
   const h = hash.replace(/^#\/?/, '');
   return location.pathname + '?ui=classic#/' + h;
 }
-// 라이브 터미널 단독 페이지(클래식 terminal.html) — 세션 하나를 중앙에 실을 때.
-export function terminalUrl(id: string, label: string, node?: string | null): string {
+// 라이브 터미널 페이지(클래식 terminal.html) — 세션 하나의 xterm 화면.
+//  embed=1(#1744): 이 페이지가 **세션 화면 안 프레임**으로 실릴 때. 그 안의 상단바·파일 탐색기는 세션 화면 상단바와
+//   우패널로 이미 합쳐졌으므로 프레임 쪽은 크롬 없이 터미널만 그린다(상단바 둘이 겹쳐 보이던 것을 없앤다).
+//   프레임 밖(단독 탭)에서는 embed 없이 종전 그대로 — 이 주소를 아는 곳이 여럿이다(프로젝트 화면·활동 로그 등).
+export function terminalUrl(id: string, label: string, node?: string | null, opts?: { embed?: boolean }): string {
   return appUrl('/ui/terminal.html?session=' + encodeURIComponent(id) + '&label=' + encodeURIComponent(label || '')
-    + (node ? '&node=' + encodeURIComponent(node) : ''));
+    + (node ? '&node=' + encodeURIComponent(node) : '') + (opts?.embed ? '&embed=1' : ''));
+}
+// 세션 하나만 담은 **팝아웃 창**(#1744) — 세션 화면의 [새 탭]이 여는 주소.
+//  종전엔 terminal.html(터미널만)을 열었는데, 이제 같은 앱을 `?solo=1` 로 열어 **가운데 대화창 + 우패널**을 그대로
+//  띄운다(왼쪽 사이드바만 없다 — v2/main.ts bootV2). 즉 새 탭과 본 화면이 같은 컴포넌트를 쓴다.
+export function soloSessionUrl(id: string): string {
+  return location.pathname + '?solo=1#/s/' + encodeURIComponent(id);
 }
 
 // ── 아이콘(라인, 채움 없음 — DS 규약) ──

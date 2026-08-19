@@ -65,12 +65,6 @@ const srcPath = (s, q) => {
         ? `/api/ui/terminal/sessions/${encodeURIComponent(s.id)}/transcript?${qs}`
         : `/api/ui/v6/sessions/${encodeURIComponent(s.sid)}/log?node=${encodeURIComponent(s.node)}&fmt=chat&${qs}`; // fmt=chat: 공통 ChatLine(원본 바이트 아님)
 };
-// ── 마운트 ────────────────────────────────────────────────────────────────────────────────
-// opts.firstPrompt — 홈 입력창(#1719 v2/quick-session)이 방금 연 세션의 첫 지시. 서버가 하네스 입력창이 뜬 뒤 실제로 넣으므로
-//  여기서는 **낙관적으로 그 턴을 먼저 그리고**(보낸 것과 같은 모양) 대화 파일에 나타나면 그 턴을 재사용한다(pendingSent 규약).
-// opts.onPickProject — 상단바 [프로젝트 연결]/[▾] 를 눌렀을 때 검색 드롭다운을 여는 콜백(#1749, v2/main.ts 가 준다).
-//  붙이기·떼기의 실행·갱신은 그쪽 몫이고, 여기는 바뀐 target 을 update() 로 받아 라벨만 되그린다.
-// opts.onRename — 제목을 눌러 이름을 고쳤을 때 서버에 반영하는 콜백(#1719). 실패는 throw 로 알려 주면 여기서 말한다.
 export function mountSessionChat(host, first, opts) {
     let target = first;
     const isBox = first.live; // 라이브 행(박스) — 죽었어도(restorable) 박스다
@@ -78,31 +72,51 @@ export function mountSessionChat(host, first, opts) {
     const canType = () => !dead();
     const caps = () => (target.raw?.chat && typeof target.raw.chat === 'object') ? { read: target.raw.chat.read !== false, answer: target.raw.chat.answer !== false } : { read: true, answer: true }; // 서버 harness-io 능력(행의 chat) — 없으면(구 서버) 둘 다 있는 것으로
     const canKeys = () => canType() && !target.node && caps().answer;
-    // 헤더 — 제목 · 상태 · 프로젝트 · 하네스 · [목차] [터미널] [새 탭] ————
+    // 헤더 — 이 세션의 **한 줄 신원**(지금 하는 일 · 상태 · 프로젝트 · 하네스)과 **이 세션에 하는 모든 일**이 여기 모인다.
+    //  #1744 로 터미널 페이지의 상단바(파일 탐색기 · 질문 · 화면 복구 · 환경 설정 · 사용법 · 프로젝트 페이지)를 여기로
+    //  합쳤다 — 종전엔 세션 화면 안에 터미널 프레임이 뜨면 상단바가 위아래로 둘이었다. 터미널 쪽 것은 사라지고
+    //  그 기능은 [파일]·[목차]와 [⋯] 메뉴(터미널 조작)로 이 한 줄에 들어온다.
     const dot = el('span', { class: 'v2-dot', 'aria-hidden': 'true' });
     const stateEl = el('span', { class: 'sc-state' });
-    // 제목은 **세션 이름 그 자체**다(#1719) — 내 세션이고 살아 있으면 눌러서 바로 고친다.
-    //  프로젝트에서 연 세션은 이름이 프로젝트명 그대로 붙어 사이드바가 같은 말을 반복하는데, 고칠 자리가 어디에도
-    //  없어 그대로 굳어 있었다. 그 자리를 제목 자신에게 준다(별도 메뉴로 숨기지 않는다 — 여기가 그 이름이 보이는 곳이다).
-    //  못 바꾸는 세션(남의 것·중단됨·기록만)은 버튼이 아니라 그냥 글씨다 — 눌러도 되는 척하는 컨트롤은 두지 않는다.
+    // 제목 = **pane 이름**(하네스가 써 두는 '지금 하는 일', 목록의 raw.title) — 상민님 2026-08-19.
+    //  화면 안에서 알고 싶은 것은 '이 세션이 지금 뭘 하고 있나'다(세션 이름은 사이드바·목록에 이미 있다).
+    //  ⚠ 이름 고치기(#1719)는 없어지지 않는다 — pane 이름이 있으면 **아래 사실 줄의 이름 칩**이 그 자리를 맡고,
+    //   pane 이름이 없으면(셸·방금 뜬 세션) 제목 자신이 종전처럼 고치는 자리다. 고칠 수 있는 이름은 언제나 한 군데다.
     const titleHost = el('span', { class: 'sc-titlebox' });
+    const nameHost = el('span', { class: 'sc-namebox' }); // 사실 줄의 '세션 이름(고치기)' 칩 — pane 이름이 제목을 차지했을 때
     let titleText = target.label;
     let renaming = false;
     const canRename = () => !!opts.onRename && target.owned && target.live && !target.raw?.restorable;
+    const paneTitle = () => String(target.raw?.title || '').trim();
+    /** 세션 이름을 그리는 노드 — 고칠 수 있으면 버튼(연필), 아니면 글씨. host 에 따라 제목/칩 두 자리에 같은 부품을 쓴다. */
+    function nameNode(cls) {
+        const t = titleText || '(이름 없음)';
+        return canRename()
+            ? el('button', { class: cls + ' sc-title-btn', type: 'button', title: '세션 이름 — 눌러서 바꿉니다', onclick: () => startRename() }, el('span', { class: 'sc-title-t', text: t }), 
+            // 연필은 손을 올렸을 때만 나타난다 — 늘 보이면 머리줄의 조작부가 하나 늘고, 아예 없으면 고칠 수 있다는 걸 아무도 모른다.
+            sv('svg', { viewBox: '0 0 24 24', class: 'sc-title-pen', 'aria-hidden': 'true' }, sv('path', { d: 'M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z' })))
+            : el('b', { class: cls, title: t, text: t });
+    }
     function paintTitle() {
         if (renaming)
             return; // 고치는 중엔 손대지 않는다(20초 폴링이 입력 중인 칸을 지우면 안 된다)
-        const t = titleText || '(이름 없음)';
-        titleHost.replaceChildren(canRename()
-            ? el('button', { class: 'sc-title sc-title-btn', type: 'button', title: '세션 이름 — 눌러서 바꿉니다', onclick: () => startRename() }, el('span', { class: 'sc-title-t', text: t }), 
-            // 연필은 손을 올렸을 때만 나타난다 — 늘 보이면 머리줄의 조작부가 하나 늘고, 아예 없으면 고칠 수 있다는 걸 아무도 모른다.
-            sv('svg', { viewBox: '0 0 24 24', class: 'sc-title-pen', 'aria-hidden': 'true' }, sv('path', { d: 'M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z' })))
-            : el('b', { class: 'sc-title', title: t, text: t }));
+        const pane = paneTitle();
+        if (pane) {
+            titleHost.replaceChildren(el('b', { class: 'sc-title', title: [titleText, target.id].filter(Boolean).join(' · '), text: pane }));
+            nameHost.replaceChildren(nameNode('sc-name'));
+            nameHost.hidden = false;
+        }
+        else {
+            titleHost.replaceChildren(nameNode('sc-title'));
+            nameHost.replaceChildren();
+            nameHost.hidden = true;
+        }
     }
     function startRename() {
         if (renaming || !canRename())
             return;
         renaming = true;
+        const host2 = paneTitle() ? nameHost : titleHost;
         const input = el('input', { class: 'sc-title-in', type: 'text', maxlength: '80', value: titleText, 'aria-label': '세션 이름', spellcheck: 'false' });
         let closed = false;
         const done = () => { renaming = false; paintTitle(); };
@@ -141,15 +155,22 @@ export function mountSessionChat(host, first, opts) {
             }
         };
         input.onblur = () => { void save(); }; // 다른 데를 누르면 그대로 저장(취소는 Esc)
-        titleHost.replaceChildren(input);
+        host2.replaceChildren(input);
         input.focus();
         input.select();
     }
     paintTitle();
-    const idxBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '목차', title: '질문 목차', onclick: () => openIndex() });
+    const idxBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '목차', title: '이 세션에 보낸 질문 목차 — 누르면 그 자리로', onclick: () => openIndex() });
     // 상민님 지시(2026-08-18): 대화 인터페이스가 아직 미완성이라 **터미널이 기본**, 대화는 '베타' 뱃지를 달고 버튼 뒤에 둔다.
     const modeBtn = el('button', { class: 'btn-text sc-act', type: 'button', onclick: () => setMode(mode === 'term' ? 'chat' : 'term') });
     const chatBadge = el('span', { class: 'sc-beta', text: '베타', hidden: true, title: '대화 인터페이스는 베타예요 — 표시가 어긋나면 터미널로 보세요' });
+    // 상단바 통합(#1744) — 터미널 페이지가 갖고 있던 것들이 이 줄로 온다: [파일](우패널 탐색기) · 연결 상태 · [⋯](터미널 조작).
+    const filesBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '파일', title: '이 세션의 작업 폴더를 오른쪽 패널에서 봅니다(업로드·다운로드)', onclick: () => {
+            const on = opts.onToggleFiles ? opts.onToggleFiles() : false;
+            filesBtn.classList.toggle('sc-act-on', on);
+        } });
+    const termStatusEl = el('span', { class: 'sc-termstat', hidden: true });
+    const moreBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '⋯', title: '이 세션에 할 수 있는 것들', 'aria-label': '더 보기', onclick: () => openMore() });
     // 프로젝트 소속(#1749) — 붙었으면 프로젝트 링크 + [▾](바꾸기), 아니면 [프로젝트 연결] 버튼(검색 드롭다운). 내 세션에서만 바꿀 수 있다.
     //  update() 가 되그린다(소속은 화면이 열린 뒤에도 바뀐다).
     const projEl = el('span', { class: 'sc-proj' });
@@ -166,13 +187,8 @@ export function mountSessionChat(host, first, opts) {
         }
     }
     paintProject();
-    const head = el('div', { class: 'sc-head' }, el('div', { class: 'sc-head-l' }, dot, titleHost, chatBadge, el('span', { class: 'sc-meta' }, stateEl, el('span', { class: 'sc-sep', text: '·' }), projEl, target.raw?.harness ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { class: 'mono', text: String(target.raw.harness) })] : null, target.node ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { text: String(target.node) })] : null)), el('div', { class: 'sc-head-r' }, idxBtn, opts.terminalSrc && isBox ? modeBtn : null, el('button', { class: 'btn-text sc-act', type: 'button', text: '링크', title: '이 세션 링크 복사', onclick: async () => { try {
-            await navigator.clipboard.writeText(location.href);
-            toast('링크를 복사했습니다.');
-        }
-        catch {
-            window.prompt('이 링크를 복사하세요:', location.href);
-        } } }), opts.openHref ? el('a', { class: 'btn-text sc-act', href: opts.openHref, target: '_blank', rel: 'noopener', text: '새 탭 ↗' }) : null));
+    paintTitle();
+    const head = el('div', { class: 'sc-head' }, el('div', { class: 'sc-head-l' }, dot, titleHost, chatBadge, el('span', { class: 'sc-meta' }, stateEl, el('span', { class: 'sc-sep', text: '·' }), nameHost, el('span', { class: 'sc-sep sc-sep-name', text: '·' }), projEl, target.raw?.harness ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { class: 'mono', text: String(target.raw.harness) })] : null, target.node ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { text: String(target.node) })] : null)), el('div', { class: 'sc-head-r' }, termStatusEl, opts.onToggleFiles ? filesBtn : null, idxBtn, opts.terminalSrc && isBox ? modeBtn : null, moreBtn));
     const chatHost = el('div', { class: 'sc-chat' });
     const termHost = el('div', { class: 'sc-term', hidden: true });
     const waitBar = el('div', { class: 'sc-wait', hidden: true });
@@ -368,10 +384,82 @@ export function mountSessionChat(host, first, opts) {
             ? [el('span', { text: '대화' }), el('span', { class: 'sc-beta', text: '베타' })]
             : [el('span', { text: '터미널' })]));
         modeBtn.title = m === 'term' ? '대화 인터페이스로 보기 — 아직 베타예요' : '터미널로 보기';
+        termStatusEl.hidden = m !== 'term' || !termStatusEl.textContent; // 연결 상태는 터미널을 보고 있을 때만(#1744)
         if (m === 'chat') {
             view.scrollToBottom();
             view.input.focus();
         }
+    }
+    // ── 터미널 프레임과의 다리(#1744) ────────────────────────────────────────────────────────
+    //  상단바를 합쳤으므로 '터미널이 하던 일'을 여기서 눌러 저기서 실행한다. 같은 오리진 프레임이라 postMessage 한 줄이면
+    //  된다(프레임 안 코드를 여기로 복제하지 않는다 — 복제하면 두 벌이 갈린다). 프레임은 연결 상태도 되돌려 보내
+    //  '연결 중…/연결됨'이 이 한 줄에 뜬다. 오리진·출처(source)를 둘 다 확인한다.
+    const TERM_MSG = 'lively-term';
+    let termReady = false; // 프레임이 첫 신호(상태)를 보냈나 — 그 전에 보낸 명령은 사라진다
+    let termQueue = [];
+    function termSend(cmd) {
+        if (!termFrame || !termFrame.contentWindow)
+            return;
+        try {
+            termFrame.contentWindow.postMessage({ type: TERM_MSG, cmd }, location.origin);
+        }
+        catch { /* 프레임이 닫혔다 */ }
+    }
+    /** 터미널이 있어야 하는 동작 — 닫혀 있으면 먼저 연다(막다른 버튼 금지). 아직 안 뜬 프레임이면 뜰 때까지 담아 둔다. */
+    function termAct(cmd) {
+        if (!opts.terminalSrc || !isBox) {
+            toast('이 세션에는 터미널이 없어요.');
+            return;
+        }
+        if (mode !== 'term')
+            setMode('term');
+        if (termReady)
+            termSend(cmd);
+        else
+            termQueue.push(cmd);
+    }
+    const onTermMsg = (ev) => {
+        if (ev.origin !== location.origin || !termFrame || ev.source !== termFrame.contentWindow)
+            return;
+        const m = ev.data;
+        if (!m || m.type !== 'lively-term-status')
+            return;
+        if (!termReady) {
+            termReady = true;
+            const q = termQueue;
+            termQueue = [];
+            for (const c of q)
+                termSend(c);
+        }
+        termStatusEl.textContent = String(m.text || '');
+        termStatusEl.className = 'sc-termstat' + (m.cls ? ' ' + String(m.cls).replace(/[^a-z]/g, '') : '');
+        termStatusEl.hidden = termHost.hidden || !termStatusEl.textContent;
+    };
+    window.addEventListener('message', onTermMsg);
+    // ── [⋯] — 이 세션에 할 수 있는 나머지. 터미널 상단바에 있던 것들이 여기로 들어왔다. ──
+    function openMore() {
+        const rows = [];
+        const row = (label, desc, onClick) => el('button', { class: 'sc-more-row', type: 'button', onclick: () => { close(); onClick(); } }, el('span', { class: 'n', text: label }), el('span', { class: 'm', text: desc }));
+        if (opts.terminalSrc && isBox) {
+            rows.push(el('div', { class: 'sc-more-sec', text: '터미널' }));
+            rows.push(row('화면 복구', '깨지거나 어긋난 화면을 재연결로 되돌립니다', () => termAct('reconnect')));
+            rows.push(row('터미널 환경 설정', '글꼴·크기·테마·커서·스크롤 속도', () => termAct('settings')));
+            rows.push(row('사용법 안내', '터미널·단축키 간단 사용법', () => termAct('help')));
+        }
+        rows.push(el('div', { class: 'sc-more-sec', text: '이 세션' }));
+        rows.push(row('링크 복사', '지금 보고 있는 이 화면의 주소', async () => {
+            try {
+                await navigator.clipboard.writeText(location.href);
+                toast('링크를 복사했습니다.');
+            }
+            catch {
+                window.prompt('이 링크를 복사하세요:', location.href);
+            }
+        }));
+        if (opts.openHref)
+            rows.push(el('a', { class: 'sc-more-row', href: opts.openHref, target: '_blank', rel: 'noopener', onclick: () => close() }, el('span', { class: 'n', text: opts.solo ? '전체 화면으로 열기 ↗' : '새 창으로 열기 ↗' }), el('span', { class: 'm', text: opts.solo ? '사이드바까지 있는 라이블리 화면' : '이 세션만 담은 창(대화 + 발자취)' })));
+        const panel = el('div', { class: 'dash-pop-panel sc-more' }, ...rows);
+        const close = anchoredPopover(moreBtn, panel);
     }
     const recs = []; // 화면 순서(위→아래)
     let cur = null;
@@ -837,13 +925,12 @@ export function mountSessionChat(host, first, opts) {
         paintRx();
     }
     function titleFromFirstAsk() {
-        if (target.label && !/^box-|^[0-9a-f-]{20,}$/i.test(target.label))
-            return;
         const q = recs.find((r) => r.t.text)?.t.text;
-        if (q) {
+        // 이름이 자동 생성 id 꼴이면 첫 질문을 이름 자리에 대신 쓴다(고치기 전까지의 임시 이름).
+        if (q && /^box-|^[0-9a-f-]{20,}$/i.test(titleText)) {
             titleText = q.length > 60 ? q.slice(0, 60) + '…' : q;
-            paintTitle();
         }
+        paintTitle();
     }
     // ── 처방전(#1719) — "방금 네 번 주고받은 것, 한 번에 끝낼 수 있었어요" ──────────────────────
     //  왜: 사람이 한 번에 말했으면 끝날 일을 나눠 말하느라 네 턴을 쓴다(실측 흔함). 그 사실은 **일이 끝난 뒤에만**
@@ -1336,6 +1423,7 @@ export function mountSessionChat(host, first, opts) {
     setMode('term'); // 기본 = 터미널(터미널 없는 세션은 setMode 가 대화로 되돌린다)
     void open();
     return {
+        setFilesOn(on) { filesBtn.classList.toggle('sc-act-on', !!on); },
         update(t) {
             const wasDead = dead();
             target = t;
@@ -1345,7 +1433,7 @@ export function mountSessionChat(host, first, opts) {
             paintRun(); // 세션이 끝나면 드롭다운은 물러나고 사실 표시(칩)만 남는다
             if (t.label && !/^box-|^[0-9a-f-]{20,}$/i.test(t.label))
                 titleText = t.label;
-            paintTitle(); // 살아 있음/소유가 바뀌면 '고칠 수 있는 제목'인지도 같이 바뀐다
+            paintTitle(); // pane 이름은 턴마다 바뀌고, 살아있음·소유가 바뀌면 '고칠 수 있는 이름'인지도 바뀐다
             paintProject();
             paintState();
             if (!wasDead && dead()) {
@@ -1371,6 +1459,6 @@ export function mountSessionChat(host, first, opts) {
             }
         },
         destroy() { destroyed = true; if (pollTimer)
-            clearTimeout(pollTimer); stopWatchOutbox(); view.destroy(); },
+            clearTimeout(pollTimer); stopWatchOutbox(); window.removeEventListener('message', onTermMsg); view.destroy(); },
     };
 }
