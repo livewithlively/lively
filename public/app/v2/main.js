@@ -273,7 +273,7 @@ async function renderRoute(tab) {
                 return;
             // 우패널(발자취)을 먼저 — 세션 화면이 대화 파일을 읽으며 거기로 흘려보낸다.
             const trail = drawAsideSession(tab, s || null);
-            tab.chat = renderSession(tab.center, data, id, trail, (anchor) => openProjectPicker(anchor, id, tab), (label) => renameSession(id, label, tab));
+            tab.chat = renderSession(tab.center, data, id, trail, (anchor) => openProjectPicker(anchor, id, tab), (label) => renameSession(s ? s.id : id, label, tab));
         }
         else if (page === 'app' && segs[1]) {
             const a = appByKey(segs[1]);
@@ -387,7 +387,7 @@ function drawAsideSession(tab, s) {
 //  ⚠ 바꾼 뒤 **좌측 사이드바·우패널·탭 제목이 곧바로 그 이름**이어야 한다 — 20초 폴링을 기다리게 하면 "안 바뀌었다"로 읽힌다.
 //   그래서 손에 든 목록을 먼저 고쳐 다시 그리고(낙관), 서버 목록은 뒤따라 당겨 사실로 덮는다.
 async function renameSession(sessionId, label, tab) {
-    const s = data.sessions.find((x) => x.id === sessionId);
+    const s = findSess(sessionId); // 기록(uuid) 링크로 열린 세션도 같은 박스를 가리키게
     const body = { label };
     if (s && s.node)
         body.node = s.node; // 노드 세션은 게이트웨이가 그 노드로 중계한다(라우트가 body.node 를 본다)
