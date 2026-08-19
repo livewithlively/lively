@@ -3785,5 +3785,55 @@
    "POST /api/ui/me/broker/run"
   ],
   "input_hash": "3c4d513a6fa4e750"
+ },
+ {
+  "name": "org_apps",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/apps"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_app_get",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/apps/:id"
+  ],
+  "input_hash": "eeaa30c0ba805f7f"
+ },
+ {
+  "name": "org_app_set_enabled",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/enabled"
+  ],
+  "input_hash": "2599d27fa95e8ab2"
+ },
+ {
+  "name": "me_app_grant",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/grant"
+  ],
+  "input_hash": "2b26d1171bc83fae"
+ },
+ {
+  "name": "me_app_revoke",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/revoke"
+  ],
+  "input_hash": "eeaa30c0ba805f7f"
  }
 ]
