@@ -222,6 +222,8 @@ $("tab-run").addEventListener("click", () => setLogTab("run"));
 $("tab-file").addEventListener("click", () => setLogTab("file"));
 $("log-reload").addEventListener("click", () => void loadFileLog());
 
+// frameless(#1541): macOS 신호등이 헤더 왼쪽에 얹힌다 — CSS 가 여백으로 비키게 몸통에 표식을 단다.
+if (/Mac/.test(navigator.platform || "")) document.body.classList.add("mac");
 window.lively.onState(renderState);
 window.lively.onProgress(renderProgress);
 window.lively.onLog((l) => log(l.line));
