@@ -1107,3 +1107,63 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
   border: 2px dashed var(--blue); border-radius: 16px; background: rgba(45,107,240,.06); display: flex; align-items: center; justify-content: center;
   font-size: 14px; font-weight: 700; color: var(--blue); text-shadow: 0 1px 0 #fff; }
 @media (prefers-reduced-motion: reduce) { .stu-launch, .stu-notif, .stu-ghost, .stu-w.pop { animation: none; } .stu-ghost-cur { animation: none; } }
+
+/* ══ 실험장 v6 — 앱 창(모달) · 온보딩 길잡이 · 활동 스트림 · 리브 말풍선 · 포커스 카드 ══════════ */
+/* 앱 = 열어서 하는 일. 위젯(판 위 카드)과 성격이 다르므로 창도 다르게: 가운데 큰 창 + 어두운 배경 없음(판이 보인다). */
+.stu-appwin { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 49; width: min(920px, 88%); height: min(620px, 78%);
+  display: flex; flex-direction: column; overflow: hidden; background: var(--bg, #fff); border: 1px solid var(--line-net-2); border-radius: 16px;
+  box-shadow: 0 32px 80px rgba(21,35,59,.26), 0 6px 18px rgba(21,35,59,.12); animation: stu-appin .18s ease; }
+@keyframes stu-appin { from { opacity: 0; transform: translate(-50%, -48%) scale(.98); } }
+.stu-appwin-h { flex: none; display: flex; align-items: center; gap: 9px; padding: 11px 12px 11px 14px; border-bottom: 1px solid var(--line); }
+.stu-appwin-h b { font-size: 14px; }
+.stu-appwin-h .stu-peek-acts { margin-left: auto; }
+.stu-appwin-b { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 10px; padding: 14px 16px 16px; }
+.stu-appwin-b > .stu-scroll { flex: 1; min-height: 0; }
+.stu-appwin-f { flex: none; display: flex; align-items: center; gap: 12px; }
+.stu-descedit { flex: 1; min-height: 0; resize: none; border: 1px solid var(--line-net); border-radius: 10px; padding: 12px 14px;
+  font-family: var(--mono, ui-monospace, monospace); font-size: 12.5px; line-height: 1.7; color: var(--ink); background: var(--bg-tint, #F9FBFF); }
+.stu-descedit:focus { outline: none; border-color: var(--blue); background: var(--bg, #fff); }
+.stu-appsearch { flex: none; height: 34px; border: 1px solid var(--line-net); border-radius: 9px; padding: 0 12px; font: inherit; font-size: 13px; }
+.stu-appsearch:focus { outline: none; border-color: var(--blue); }
+.stu-launch-h.sep { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.stu-app.as-app .stu-app-ic { border-radius: 14px; }
+.stu-app.as-app .stu-app-ic::after { content: ''; position: absolute; right: -3px; bottom: -3px; width: 12px; height: 12px; border-radius: 4px;
+  background: var(--bg, #fff); box-shadow: inset 0 0 0 1.5px currentColor; opacity: .5; }
+.stu-app-ic { position: relative; }
+
+/* 온보딩 길잡이 — 빈 판이 백지가 아니라 '첫 걸음' 이 되게 */
+.stu-guide { position: absolute; left: 50%; top: 84px; transform: translateX(-50%); width: min(720px, 86%); text-align: left; pointer-events: auto; }
+.stu-guide h2 { margin: 0 0 6px; font-size: 20px; font-weight: 800; letter-spacing: -.02em; color: var(--ink); }
+.stu-guide-l { margin: 0 0 22px; font-size: 13.5px; color: var(--ink-sub); }
+.stu-guide-g { display: grid; gap: 12px; }
+.stu-guide-s { display: flex; gap: 14px; align-items: flex-start; padding: 14px 16px; background: rgba(255,255,255,.72); border: 1px solid var(--line); border-radius: 13px; }
+.stu-guide-n { flex: none; width: 24px; height: 24px; border-radius: 12px; background: var(--blue); color: #fff; font-size: 12px; font-weight: 800; display: flex; align-items: center; justify-content: center; }
+.stu-guide-s b { font-size: 13.5px; }
+.stu-guide-s p { margin: 3px 0 0; line-height: 1.6; max-width: 520px; }
+.stu-guide-s .btn-text { margin-top: 6px; }
+
+/* 활동 스트림 — 타임라인의 '살아 있는 층'. 스스로 왔다 물러난다(버튼을 누르지 않아도 흐름이 보인다) */
+.stu-stream { position: absolute; top: 14px; right: 120px; z-index: 43; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; pointer-events: none; }
+.stu-streamcard { pointer-events: auto; display: flex; align-items: flex-start; gap: 9px; max-width: 320px; padding: 9px 12px 10px; text-align: left;
+  background: rgba(255,255,255,.94); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid var(--line-net-2); border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(21,35,59,.16); font: inherit; cursor: pointer; animation: stu-slidein .2s ease; }
+.stu-streamcard.out { opacity: 0; transform: translateX(8px); transition: opacity .24s ease, transform .24s ease; }
+.stu-stream-dot { flex: none; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--mint); }
+.stu-stream-t { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.stu-stream-t b { font-size: 12.5px; font-weight: 600; color: var(--ink); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+@keyframes stu-slidein { from { opacity: 0; transform: translateX(12px); } }
+
+/* 리브 말풍선 — 도크의 L 위에서 말한다 */
+.stu-tip { position: absolute; left: calc(50% - 354px); bottom: 104px; z-index: 41; width: min(320px, 60%);   /* 꼬리가 도크의 L 위에 오게(도크 폭 720 기준) */
+  padding: 13px 14px 11px; background: var(--bg, #fff); border: 1px solid #CDEFE3; border-radius: 14px 14px 14px 4px;
+  box-shadow: 0 16px 40px rgba(21,35,59,.16); animation: stu-tipin .22s ease; }
+.stu-tip[hidden] { display: none; }
+.stu-tip::after { content: ''; position: absolute; left: 14px; bottom: -7px; width: 12px; height: 12px; background: var(--bg, #fff);
+  border-right: 1px solid #CDEFE3; border-bottom: 1px solid #CDEFE3; transform: rotate(45deg); }
+.stu-tip-t { margin: 0 0 10px; font-size: 12.5px; line-height: 1.65; color: var(--ink); }
+.stu-tip-a { display: flex; align-items: center; gap: 10px; }
+@keyframes stu-tipin { from { opacity: 0; transform: translateY(8px); } }
+@media (max-width: 1100px) { .stu-tip { left: 16px; } .stu-tip::after { left: 24px; } }
+
+/* 포커스 카드 — 시킨 세션이 가운데로 커진다 */
+.stu-w.focused { box-shadow: 0 0 0 1px rgba(45,107,240,.35), 0 30px 70px rgba(21,35,59,.22); }

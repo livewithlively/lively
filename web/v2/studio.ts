@@ -66,22 +66,24 @@ function icon(name: string, cls = 'stu-i'): SVGElement {
 type WType = 'session' | 'coach' | 'automation' | 'tasks' | 'knowledge' | 'folder' | 'desc' | 'timeline' | 'sticky' | 'preview' | 'doc' | 'app-meeting' | 'app-calendar' | 'app-slides';
 type Sz = 's' | 'm' | 'l';
 interface WSpec { id: string; type: WType; x: number; y: number; w: number; h: number; min?: boolean; z?: number; data?: any }
-interface WDef { type: WType; label: string; hint: string; w: number; h: number; ic: string; ac: string; shell?: boolean; hidden?: boolean }
+// surf = 이 기능이 사는 **표면**(원준 2026-08-19 "앱은 모달, 위젯은 캔버스를 꾸미는 것"):
+//  app = 열어서 하는 일(검색·편집·설정 — 모달) · widget = 캔버스에 두는 것(곁눈질) · both = 둘 다(같은 재료, 다른 성격).
+interface WDef { type: WType; label: string; hint: string; w: number; h: number; ic: string; ac: string; surf: 'app' | 'widget' | 'both'; shell?: boolean; hidden?: boolean }
 const WDEFS: WDef[] = [
-  { type: 'session', label: 'AI 세션', hint: '세션 하나 — 크기를 키우면 대화가 통째로 보여요', w: 340, h: 300, ic: 'chat', ac: '#2D6BF0' },
-  { type: 'coach', label: '리브 제안', hint: '판을 읽고 AI 를 더 크게 쓰는 법을 제안', w: 340, h: 250, ic: 'spark', ac: '#0FA37E' },
-  { type: 'automation', label: '자동화', hint: '반복을 붙박이로 — 켤 수 있는 자동화', w: 340, h: 250, ic: 'bolt', ac: '#7C5CFC' },
-  { type: 'tasks', label: '태스크', hint: 'S=진행 링 · M=할 일 목록 · L=마감까지', w: 320, h: 300, ic: 'task', ac: '#D9772B' },
-  { type: 'knowledge', label: '지식', hint: 'M=문서 목록 · L=본문 미리보기 카드', w: 320, h: 280, ic: 'book', ac: '#1BAEB0' },
-  { type: 'folder', label: '공유 폴더', hint: '내가 올린 자료 · 세션이 남긴 결과물 — 끌어다 놓으면 올라가요', w: 380, h: 320, ic: 'folder', ac: '#5A6B85' },
-  { type: 'desc', label: '명세', hint: '프로젝트 본문 — 꺼내 읽는 문서', w: 440, h: 360, ic: 'doc', ac: '#8A99B5' },
-  { type: 'timeline', label: '타임라인', hint: '남은 결과들', w: 340, h: 420, ic: 'clock', ac: '#15233B' },
-  { type: 'sticky', label: '포스트잇', hint: '판에 붙이는 메모', w: 230, h: 170, ic: 'note', ac: '#D9A32B' },
-  { type: 'app-meeting', label: '회의록', hint: '껍데기 — 회의록→결정·태스크 추출 자리', w: 340, h: 250, ic: 'mic', ac: '#B84E9C', shell: true },
-  { type: 'app-calendar', label: '캘린더', hint: '껍데기 — 마감·회의·세션 예약 자리', w: 340, h: 280, ic: 'cal', ac: '#D9772B', shell: true },
-  { type: 'app-slides', label: '장표', hint: '껍데기 — 지식→보고 장표 자리', w: 340, h: 240, ic: 'deck', ac: '#2D6BF0', shell: true },
-  { type: 'preview', label: '프리뷰', hint: '파일 미리보기', w: 360, h: 320, ic: 'img', ac: '#5A6B85', hidden: true },
-  { type: 'doc', label: '문서', hint: '지식·문서 임베드', w: 460, h: 420, ic: 'doc', ac: '#1BAEB0', hidden: true },
+  { type: 'session', label: 'AI 세션', hint: '세션 하나 — 크기를 키우면 대화가 통째로 보여요', w: 340, h: 300, ic: 'chat', ac: '#2D6BF0', surf: 'widget' },
+  { type: 'coach', label: '리브 제안', hint: '판을 읽고 AI 를 더 크게 쓰는 법을 제안', w: 340, h: 250, ic: 'spark', ac: '#0FA37E', surf: 'widget' },
+  { type: 'automation', label: '자동화', hint: '반복을 붙박이로 — 켤 수 있는 자동화', w: 340, h: 250, ic: 'bolt', ac: '#7C5CFC', surf: 'both' },
+  { type: 'tasks', label: '태스크', hint: 'S=진행 링 · M=할 일 목록 · L=마감까지', w: 320, h: 300, ic: 'task', ac: '#D9772B', surf: 'both' },
+  { type: 'knowledge', label: '지식', hint: 'M=문서 목록 · L=본문 미리보기 카드', w: 320, h: 280, ic: 'book', ac: '#1BAEB0', surf: 'both' },
+  { type: 'folder', label: '공유 폴더', hint: '내가 올린 자료 · 세션이 남긴 결과물 — 끌어다 놓으면 올라가요', w: 380, h: 320, ic: 'folder', ac: '#5A6B85', surf: 'both' },
+  { type: 'desc', label: '명세', hint: '프로젝트 본문 — 꺼내 읽는 문서', w: 440, h: 360, ic: 'doc', ac: '#8A99B5', surf: 'app' },
+  { type: 'timeline', label: '타임라인', hint: '남은 결과들', w: 340, h: 420, ic: 'clock', ac: '#15233B', surf: 'both' },
+  { type: 'sticky', label: '포스트잇', hint: '판에 붙이는 메모', w: 230, h: 170, ic: 'note', ac: '#D9A32B', surf: 'widget' },
+  { type: 'app-meeting', label: '회의록', hint: '껍데기 — 회의록→결정·태스크 추출 자리', w: 340, h: 250, ic: 'mic', ac: '#B84E9C', surf: 'app', shell: true },
+  { type: 'app-calendar', label: '캘린더', hint: '껍데기 — 마감·회의·세션 예약 자리', w: 340, h: 280, ic: 'cal', ac: '#D9772B', surf: 'app', shell: true },
+  { type: 'app-slides', label: '장표', hint: '껍데기 — 지식→보고 장표 자리', w: 340, h: 240, ic: 'deck', ac: '#2D6BF0', surf: 'app', shell: true },
+  { type: 'preview', label: '프리뷰', hint: '파일 미리보기', w: 360, h: 320, ic: 'img', ac: '#5A6B85', surf: 'widget', hidden: true },
+  { type: 'doc', label: '문서', hint: '지식·문서 임베드', w: 460, h: 420, ic: 'doc', ac: '#1BAEB0', surf: 'widget', hidden: true },
 ];
 const wdef = (t: WType): WDef => WDEFS.find((d) => d.type === t)!;
 const GRID = 8;
@@ -133,7 +135,6 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   host.replaceChildren(wrap);
 
   const cmBtn = el('button', { class: 'btn btn-ghost btn-sm stu-cm-btn', type: 'button', title: '코멘트 모드 — 판 위를 드래그해 영역을 잡고 코멘트를 남깁니다', onclick: () => setCommentMode(!commentMode) }, icon('pin', 'stu-i sm'), el('span', { text: '코멘트' })) as HTMLButtonElement;
-  const tlBtn = el('button', { class: 'btn btn-ghost btn-sm stu-tl-btn', type: 'button', 'aria-expanded': 'false', title: '타임라인 — 이 프로젝트에 무엇이 남았나(알림 센터처럼 불러왔다 물립니다)', onclick: (e: Event) => { e.stopPropagation(); toggleNotif(); } }, icon('clock', 'stu-i sm'), el('span', { text: '타임라인' })) as HTMLButtonElement;
   function paintDoor(): void {
     const p = pj();
     const tasks: any[] = Array.isArray(p.tasks) ? p.tasks : [];
@@ -160,12 +161,11 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
         el('h1', { class: 'stu-title', text: p.name || '프로젝트 #' + id })),
       el('div', { class: 'stu-door-r' },
         el('span', { class: 'stu-faces' }, ...members.slice(0, 5).map((m: any) => personFace(String(m.member_id || m), 'stu-face', String(m.display_name || m.member_id || '')))),
-        tlBtn,
+        // 이 줄은 **캔버스보다 위**에 있는 것들만 — 판 설정(코멘트 모드·정리)뿐이다(원준 2026-08-19).
+        //  타임라인·명세는 기능이라 앱/위젯으로 내려갔다(⊞ 런치패드).
         cmBtn,
-        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '명세', onclick: () => addOrFocus('desc') }),
-        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '정리', title: '위젯 자동 재배치', onclick: () => { autoArrange(); paintAll(); save(); } })));
+        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '정리', title: '위젯 위치만 격자에 맞춰 정렬합니다(크기는 그대로)', onclick: () => { autoArrange(); paintAll(); save(); } })));
     cmBtn.classList.toggle('on', commentMode);
-    tlBtn.classList.toggle('on', !notif.hidden);
   }
 
   // ── 위젯 프레임 ──
@@ -196,6 +196,9 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
       el('span', { class: 'stu-w-acts' },
         szBtn,
         el('button', { class: 'stu-w-btn', type: 'button', title: spec.min ? '펼치기' : '접기', text: spec.min ? '▸' : '▾', onclick: (e: Event) => { e.stopPropagation(); spec.min = !spec.min; sigs.delete(spec.id); save(); paintAll(); } }),
+        focusPrev.has(spec.id)
+          ? el('button', { class: 'stu-w-btn', type: 'button', title: '작게 — 원래 자리·크기로', text: '⤡', onclick: (e: Event) => { e.stopPropagation(); unfocusWidget(spec); } })
+          : null,
         spec.type === 'session' && spec.data?.sid
           ? el('button', { class: 'stu-w-btn', type: 'button', title: '전체 화면(대화창)', text: '⤢', onclick: (e: Event) => { e.stopPropagation(); location.hash = '#/s/' + encodeURIComponent(String(spec.data.sid)); } })
           : null,
@@ -719,13 +722,14 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   const livBody = el('div', { class: 'stu-livbody' });
   livPanel.append(el('div', { class: 'stu-livpanel-h' }, el('b', { text: '리브 — 이 프로젝트' }), el('button', { class: 'stu-w-btn', type: 'button', text: '×', onclick: () => toggleLiv(false) })), livBody);
   const launchBtn = el('button', { class: 'stu-dock-btn', type: 'button', 'aria-expanded': 'false', title: '런치패드 — 위젯·앱을 판에 꺼냅니다', onclick: (e: Event) => { e.stopPropagation(); toggleLaunch(); } }, icon('grid', 'stu-i')) as HTMLButtonElement;
+  // 도크(원준 2026-08-19): 왼쪽 = 부르는 것(리브·런치패드), 가운데 = 시키는 것. [+ 새 세션]은 뺐다 —
+  //  처음 온 사람에게 '세션'은 뜻 모를 말이고, 새 일을 시키면 어차피 세션이 열린다(행선지 칩이 그 사실을 말해 준다).
   const composer = el('div', { class: 'stu-composer stu-dock' },
     livToggle,
+    launchBtn,
     el('div', { class: 'stu-comp-box' },
       el('div', { class: 'stu-comp-row1' }, input, sendBtn),
-      el('div', { class: 'stu-comp-row2' }, el('span', { class: 'k', text: '행선지' }), destChip, destWhy)),
-    el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '+ 새 세션', title: '빈 세션을 열어 판에 올립니다', onclick: () => void spawnSession(null) }),
-    launchBtn);
+      el('div', { class: 'stu-comp-row2' }, el('span', { class: 'k', text: '행선지' }), destChip, destWhy)));
   stage.append(composer, livPanel);
 
   const tokensOf = (t: string): string[] => String(t || '').toLowerCase().split(/[^0-9a-z가-힣]+/).filter((x) => (/[가-힣]/.test(x) ? x.length >= 2 : x.length >= 3));
@@ -780,8 +784,10 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
         await api('/api/ui/terminal/sessions/' + encodeURIComponent(dest.sid) + '/prompt', { method: 'POST', body: JSON.stringify({ text }) });
         toast(`「${dest.label}」 세션에 보냈어요.`);
         const wg = widgets.find((w) => w.type === 'session' && w.data?.sid === dest.sid);
-        if (wg) { const ref = els.get(wg.id); ref?.root.classList.add('flash'); window.setTimeout(() => ref?.root.classList.remove('flash'), 1600); }
-        else addWidget('session', born || { x: 72, y: 72 }, { sid: dest.sid });
+        // 시킨 세션이 눈앞으로 온다 — 카드가 없으면 만들고, 있으면 가운데로 키운다(대화가 크게 보이게).
+        const card = wg || addWidget('session', born || { x: 72, y: 72 }, { sid: dest.sid });
+        focusWidget(card);
+        const ref2 = els.get(card.id); ref2?.root.classList.add('flash'); window.setTimeout(() => ref2?.root.classList.remove('flash'), 1600);
       } catch (e: any) { toast('보내지 못했어요 — ' + (e?.message || e), true); }
       paintAim();
       return;
@@ -803,6 +809,7 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
       const spec = addWidget('session', at || ghostCanvasPos() || { x: 88, y: 88 }, { sid });
       spec.z = ++zTop;
       popIn(spec);
+      if (firstPrompt) focusWidget(spec);   // 시켰으면 그 대화를 크게 — 세션 화면으로 넘어가지 않아도 되게
       toast(firstPrompt ? '새 세션을 열어 시켰어요 — 판에 카드로 올라왔습니다.' : '세션을 열고 판에 올렸어요.');
       opts.onProjectChanged?.();
     } catch (e: any) { toast('세션을 열지 못했어요 — ' + (e?.message || e), true); }
@@ -865,27 +872,52 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
     els.clear(); sigs.clear();
     canvas.replaceChildren(
       ...widgets.map((s) => (s.data?.cm ? commentEl(s) : widgetEl(s))),
-      el('div', { class: 'stu-boardhint', text: '바탕화면 — 아이콘은 두 번 눌러 열기 · 컴퓨터의 파일·폴더를 끌어다 놓기 · ⊞ 런치패드에서 위젯 꺼내기 · [코멘트]로 어디든 표시' }));
+      widgets.length ? el('div', { class: 'stu-boardhint', text: '바탕화면 — 아이콘은 두 번 눌러 열기 · 파일을 끌어다 놓기 · ⊞ 에서 앱·위젯 꺼내기 · [코멘트]로 어디든 표시' }) : startGuide());
     growCanvas();
   }
+  /** 처음 = **빈 판 + 길잡이**(원준 2026-08-19 "빈 백지보다 뭐부터 해야 하는지 감이 오는 화면").
+   *  위젯을 미리 뿌려 놓지 않는다 — 처음 온 사람에게 판 가득한 카드는 남의 화면처럼 보인다.
+   *  할 수 있는 일 셋만 큰 글씨로 두고, 나머지는 일하다 리브가 제안한다. */
+  function startGuide(): HTMLElement {
+    const step = (n: string, t: string, d2: string, act?: { label: string; run: () => void }): HTMLElement =>
+      el('div', { class: 'stu-guide-s' },
+        el('span', { class: 'stu-guide-n', text: n }),
+        el('div', {}, el('b', { text: t }), el('p', { class: 'stu-fine', text: d2 }),
+          act ? el('button', { class: 'btn-text', type: 'button', text: act.label, onclick: act.run }) : null));
+    return el('div', { class: 'stu-guide' },
+      el('h2', { text: '여기가 이 프로젝트의 작업대예요' }),
+      el('p', { class: 'stu-guide-l', text: '빈 판으로 시작해서, 필요한 것만 하나씩 올려 두면 됩니다.' }),
+      el('div', { class: 'stu-guide-g' },
+        step('1', '아래 칸에 시켜 보세요', '“랜딩 문구 3안 써 줘” 처럼 적으면 AI가 일을 시작하고, 그 대화가 이 판에 카드로 올라옵니다.',
+          { label: '입력칸으로', run: () => input.focus() }),
+        step('2', '파일을 끌어다 놓아 보세요', '컴퓨터에서 파일·폴더를 이 판에 떨어뜨리면 자료로 올라가고, 그림·PDF는 그 자리에 바로 펼쳐집니다.'),
+        step('3', '필요해지면 꺼내세요', '태스크·지식·타임라인 같은 건 ⊞ 에서 앱으로 열거나 위젯으로 판에 둘 수 있어요. 지금 당장은 필요 없습니다.',
+          { label: '⊞ 열어 보기', run: () => toggleLaunch(true) })));
+  }
+  /** 정리 = **위치만** 격자에 맞춘다(원준 2026-08-19 "정리 누르면 크기도 맘대로 바뀐다").
+   *  위젯의 크기·구성·내용은 사용자의 것이라 손대지 않는다. 코멘트는 판 위 좌표가 뜻이라 제자리. */
   function autoArrange(): void {
-    const keep = widgets.filter((s) => s.data?.cm || s.type === 'sticky');
-    widgets = [];
-    addWidget('coach', { x: 32, y: 24 }, {}, { noSave: true });
-    const live = mySessions().filter((s) => s.live && s.alive).slice(0, 3);
-    live.forEach((s, i) => addWidget('session', i === 0 ? { x: 32, y: 298 } : { x: 424, y: 24 + (i - 1) * 332 }, { sid: s.id }, { noSave: true }));
-    addWidget('tasks', { x: 796, y: 24 }, {}, { noSave: true });
-    addWidget('knowledge', { x: 796, y: 356 }, {}, { noSave: true });
-    widgets.push(...keep);
+    const movable = widgets.filter((w) => !w.data?.cm);
+    const COL = 24, ROW = 24;
+    const width = Math.max(600, canvas.clientWidth || 1200);
+    let x = COL, y = ROW, rowH = 0;
+    for (const w of movable) {
+      const ww = w.w || 320, wh = w.min ? 44 : (w.h || 260);
+      if (x > COL && x + ww > width - COL) { x = COL; y += rowH + ROW; rowH = 0; }
+      w.x = snap(x); w.y = snap(y);
+      x += ww + COL; rowH = Math.max(rowH, wh);
+    }
+    growCanvas();
   }
 
   // ── 런치패드 타일(위젯·앱) — 클릭 = 판에 올리기 · 끌어다 놓기 = 그 자리에 ──
-  const appTile = (d: WDef, after?: () => void): HTMLElement => {
-    const c = el('button', { class: 'stu-app', type: 'button', title: d.hint, draggable: 'true', onclick: () => { addWidget(d.type); after?.(); } },
+  const appTile = (d: WDef, after?: () => void, asApp?: boolean): HTMLElement => {
+    const c = el('button', { class: 'stu-app' + (asApp ? ' as-app' : ''), type: 'button', title: (asApp ? '앱 — 열어서 하는 일. ' : '위젯 — 캔버스에 둡니다. ') + d.hint, draggable: String(!asApp) as any,
+      onclick: () => { if (asApp) openApp(d.type); else addWidget(d.type); after?.(); } },
       el('span', { class: 'stu-app-ic', style: 'background:' + d.ac }, icon(d.ic, 'stu-i')),
       el('span', { class: 'stu-app-n', text: d.label }),
       d.shell ? el('span', { class: 'stu-shell-dot', title: '껍데기' }) : null);
-    c.addEventListener('dragstart', (e: DragEvent) => { e.dataTransfer?.setData('text/plain', 'stu:' + d.type); after?.(); });
+    if (!asApp) c.addEventListener('dragstart', (e: DragEvent) => { e.dataTransfer?.setData('text/plain', 'stu:' + d.type); after?.(); });
     return c;
   };
   /** (v3 호환) 우패널이 있는 셸이 부르면 선반+타임라인을 그린다 — v4 셸은 부르지 않는다(알림 센터·런치패드로 옮겼다). */
@@ -904,9 +936,14 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   function toggleLaunch(on?: boolean): void {
     const want = on != null ? on : launch.hidden;
     if (want) {
+      // 앱과 위젯은 성격이 다르다 — 앱은 열어서 하는 일(모달), 위젯은 캔버스에 두는 것. 구역을 갈라 그 차이를 보이게.
+      const apps = WDEFS.filter((d) => !d.hidden && (d.surf === 'app' || d.surf === 'both'));
+      const wgs = WDEFS.filter((d) => !d.hidden && (d.surf === 'widget' || d.surf === 'both'));
       launch.replaceChildren(
-        el('div', { class: 'stu-launch-h' }, el('b', { text: '런치패드' }), el('span', { class: 'stu-fine', text: '눌러서 판에 올리거나, 원하는 자리로 끌어다 놓기' })),
-        el('div', { class: 'stu-shelf-grid stu-launch-grid' }, ...WDEFS.filter((d) => !d.hidden).map((d) => appTile(d, () => toggleLaunch(false)))));
+        el('div', { class: 'stu-launch-h' }, el('b', { text: '앱' }), el('span', { class: 'stu-fine', text: '열어서 하는 일 — 창으로 뜹니다' })),
+        el('div', { class: 'stu-shelf-grid stu-launch-grid' }, ...apps.map((d) => appTile(d, () => toggleLaunch(false), true))),
+        el('div', { class: 'stu-launch-h sep' }, el('b', { text: '위젯' }), el('span', { class: 'stu-fine', text: '캔버스에 두는 것 — 눌러 올리거나 원하는 자리로 끌어다 놓기' })),
+        el('div', { class: 'stu-shelf-grid stu-launch-grid' }, ...wgs.map((d) => appTile(d, () => toggleLaunch(false)))));
       toggleNotif(false);
     }
     launch.hidden = !want;
@@ -914,7 +951,79 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
     launchBtn.setAttribute('aria-expanded', String(want));
   }
 
-  // ── 알림 센터(문패 [타임라인]) — 우측 위 카드로 불러왔다 물린다. [판에 고정] = 타임라인 위젯 ──
+  // ══ 앱 = 열어서 하는 일(모달) ═══════════════════════════════════════════════
+  //  같은 재료라도 성격이 다르다: 앱은 **찾고·고치고·설정하는** 자리(넓은 창), 위젯은 **곁눈질하는** 자리(판 위).
+  //  그래서 앱 창엔 언제나 [＋ 캔버스에 위젯으로]가 있다 — 두 표면이 이어져 있음을 손으로 알게.
+  let appEl: HTMLElement | null = null;
+  function closeApp(): void { if (appEl) { const id2 = appEl.dataset.spec || ''; sigs.delete(id2); els.delete(id2); appEl.remove(); appEl = null; } }
+  function openApp(type: WType): void {
+    closeApp();
+    const d = wdef(type);
+    const body = el('div', { class: 'stu-appwin-b' });
+    const win = el('section', { class: 'stu-appwin', role: 'dialog', 'aria-label': d.label },
+      el('div', { class: 'stu-appwin-h' },
+        el('span', { class: 'stu-w-ic', style: 'color:' + d.ac + ';background:' + d.ac + '1a' }, icon(d.ic, 'stu-i sm')),
+        el('b', { text: d.label }),
+        d.shell ? el('span', { class: 'stu-shell-badge', text: '껍데기' }) : null,
+        el('span', { class: 'stu-peek-acts' },
+          el('button', { class: 'btn-text', type: 'button', text: '＋ 캔버스에 위젯으로', title: '이 앱의 내용을 판에 두고 곁눈질합니다', onclick: () => { addOrFocus(type); closeApp(); } }),
+          el('button', { class: 'stu-peek-x', type: 'button', onclick: closeApp }, icon('x', 'stu-i sm'), el('span', { text: '닫기' })))),
+      body);
+    appEl = win;
+    win.dataset.spec = 'app-' + type;
+    if (type === 'desc') fillDescApp(body);
+    else if (type === 'knowledge') fillKnowledgeApp(body);
+    else {
+      const spec: WSpec = { id: 'app-' + type, type, x: 0, y: 0, w: 900, h: 560, data: {} };   // L 등급 = 앱은 넓게
+      els.set(spec.id, { root: win, body, title: el('b') });
+      fillBody(spec, body, true);
+    }
+    stage.append(win);
+    toggleLaunch(false); toggleNotif(false);
+  }
+  /** 명세 앱 = 프로젝트 본문을 **고치는** 자리(위젯은 읽는 자리). */
+  function fillDescApp(body: HTMLElement): void {
+    const ta = el('textarea', { class: 'stu-descedit', spellcheck: 'false' }) as HTMLTextAreaElement;
+    ta.value = String(pj().description || '');
+    const status = el('span', { class: 'stu-fine' });
+    body.replaceChildren(
+      el('p', { class: 'stu-fine', text: '이 프로젝트가 무엇인지 — 세션과 리브가 일할 때 먼저 읽는 글입니다. 마크다운으로 쓰세요.' }),
+      ta,
+      el('div', { class: 'stu-appwin-f' }, status,
+        el('button', { class: 'stu-pillbtn mint', type: 'button', text: '저장', onclick: async () => {
+          status.textContent = '저장 중…';
+          try {
+            await api('/api/ui/v6/projects/' + id, { method: 'POST', body: JSON.stringify({ description: ta.value || null }) });
+            (detail && detail.project ? detail.project : {}).description = ta.value;
+            status.textContent = '저장했어요.'; refreshDataWidgets(); void refreshDetail();
+          } catch (e: any) { status.textContent = '저장하지 못했어요 — ' + (e?.message || e); }
+        } }),
+        el('button', { class: 'btn-text', type: 'button', text: '리브에게 정돈 맡기기', onclick: () => { closeApp(); openLiv(); chat?.say('본문을 정돈된 형식으로 다시 써 줘. 사실·결정·링크는 하나도 잃지 말고.'); } })));
+  }
+  /** 지식 앱 = **찾는** 자리(위젯은 목록만). */
+  function fillKnowledgeApp(body: HTMLElement): void {
+    const kn = (pj().knowledge || {}) as any;
+    const all: Array<{ name: string; rel: string; title?: string }> = [
+      ...((kn.required || []) as any[]).map((k: any) => ({ name: String(k.name), rel: '필요', title: String(k.title || '') })),
+      ...((kn.produced || []) as any[]).map((k: any) => ({ name: String(k.name), rel: '산출', title: String(k.title || '') })),
+    ];
+    const list = el('div', { class: 'stu-scroll stu-assets' });
+    const q = el('input', { class: 'stu-appsearch', type: 'search', placeholder: '지식 이름·제목으로 찾기', 'aria-label': '지식 검색' }) as HTMLInputElement;
+    const draw = (): void => {
+      const t = q.value.trim().toLowerCase();
+      const hit = all.filter((k) => !t || k.name.toLowerCase().includes(t) || (k.title || '').toLowerCase().includes(t));
+      list.replaceChildren(...(hit.length ? hit.map((k) => el('div', { class: 'stu-asset' },
+        el('button', { class: 'stu-asset-b', type: 'button', onclick: () => { closeApp(); openPeek('#/k/' + encodeURIComponent(k.name), k.name); } },
+          el('span', { class: 'stu-asset-ic' }, icon('book', 'stu-i')),
+          el('span', { class: 'stu-asset-t' }, el('b', { text: k.name }), el('span', { class: 'stu-asset-m' }, el('span', { text: k.rel }), k.title ? el('span', { class: 'sep', text: '·' }) : null, k.title ? el('span', { class: 'stu-asset-dir', text: k.title }) : null)))))
+        : [el('p', { class: 'stu-fine', text: t ? '찾는 지식이 없어요.' : '아직 연결된 지식이 없어요 — 세션이 남긴 결론이 여기 쌓입니다.' })]));
+    };
+    q.addEventListener('input', draw);
+    body.replaceChildren(q, list);
+    draw();
+  }
+
+  // ── 알림 센터(옛 문패 [타임라인]) — 지금은 활동 스트림의 [모두 보기]가 부른다 ──
   const notif = el('aside', { class: 'stu-notif', hidden: true, 'aria-label': '타임라인' });
   stage.append(notif);
   function toggleNotif(on?: boolean): void {
@@ -931,15 +1040,14 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
       toggleLaunch(false);
     }
     notif.hidden = !want;
-    tlBtn.classList.toggle('on', want);
-    tlBtn.setAttribute('aria-expanded', String(want));
   }
   document.addEventListener('pointerdown', onDocDown);
   document.addEventListener('keydown', onDocKey);
   function onDocDown(e: PointerEvent): void {
     if (dead) { document.removeEventListener('pointerdown', onDocDown); return; }
     const t = e.target as Node;
-    if (!notif.hidden && !notif.contains(t) && !tlBtn.contains(t)) toggleNotif(false);
+    if (!notif.hidden && !notif.contains(t) && !streamEl.contains(t)) toggleNotif(false);
+    if (appEl && !appEl.contains(t) && !launch.contains(t)) closeApp();
     if (!launch.hidden && !launch.contains(t) && !launchBtn.contains(t)) toggleLaunch(false);
     if (peekEl && !peekEl.contains(t)) closePeek();   // 판 아무 데나 누르면 피크는 물러난다(맥 훑어보기와 같은 몸짓)
     if (desk.contains(t)) return;
@@ -949,7 +1057,8 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
     if (dead) { document.removeEventListener('keydown', onDocKey); return; }
     const typing = !!(document.activeElement && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName));
     if (e.key === 'Escape') {
-      if (!notif.hidden) { toggleNotif(false); e.stopPropagation(); }
+      if (appEl) { closeApp(); e.stopPropagation(); }
+      else if (!notif.hidden) { toggleNotif(false); e.stopPropagation(); }
       else if (!launch.hidden) { toggleLaunch(false); e.stopPropagation(); }
       else if (selected().length) { clearSel(); e.stopPropagation(); }
       return;
@@ -1196,9 +1305,11 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
       .sort((a2, b2) => b2.mtime - a2.mtime);
   }
 
+  let assetCount: number | null = null;
   async function paintDesk(): Promise<void> {
     const assets = await assetFiles().catch(() => [] as AssetFile[]);
     if (dead) return;
+    assetCount = assets.length;
     const rootN = assets.length;   // 스택 배지 = **자료 수**(파일시스템 항목 수가 아니라)
     const docs = assets.slice(0, 6);   // 많을수록 바탕이 어지럽다 — 최근 것 여섯만(나머지는 [공유 폴더] 안에)
     const kn = (pj().knowledge || {}) as any;
@@ -1218,6 +1329,104 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
     desk.replaceChildren(...items.map(deskIcon));
     paintTrash();
     paintDeskBar();
+  }
+
+  // ══ 타임라인 = 두 층(원준 2026-08-19 "타임라인은 중요한데 버튼 눌러 나오는 건 별로") ═══════════
+  //  ① **살아 있는 층 = 활동 스트림**: 새 일이 생기면 우측 위에 카드가 스스로 떠올랐다 물러난다(맥 알림).
+  //     버튼을 누르지 않아도 흐름이 보이고, 누르면 그 일이 있던 자리(세션 카드)로 데려간다.
+  //  ② **되돌아보는 층**: 전체 기록은 [타임라인] **앱**(찾기·필터)이나 **위젯**(상주)으로 — 상시 여부는 사용자가 정한다.
+  //  그래서 문패의 [타임라인] 버튼은 없앴다. 상단 버튼은 캔버스 설정 자리지 기능 자리가 아니다.
+  const streamEl = el('div', { class: 'stu-stream', 'aria-live': 'polite', 'aria-label': '방금 일어난 일' });
+  stage.append(streamEl);
+  let streamSeen: Set<string> | null = null;   // null = 첫 로드(기준선만 잡고 알리지 않는다 — 들어오자마자 폭탄이면 소음이다)
+  async function pollStream(): Promise<void> {
+    let items: any[] = [];
+    try { items = await loadProjectTimeline(id, detail); } catch (_) { return; }
+    if (dead) return;
+    const key = (it: any): string => String(it.id ?? '') + ':' + String(it.at ?? it.time ?? '') + ':' + String(it.title ?? it.text ?? '');
+    if (!streamSeen) { streamSeen = new Set(items.slice(0, 60).map(key)); return; }
+    const fresh = items.filter((it) => !streamSeen!.has(key(it))).slice(0, 3);
+    for (const it of fresh) streamSeen.add(key(it));
+    for (const it of fresh) pushStream(it);
+  }
+  function pushStream(it: any): void {
+    const title = String(it.title || it.text || it.label || '새 소식');
+    const sid = String(it.sessionId || it.session_id || it.raw?.session_id || '');
+    const card = el('button', { class: 'stu-streamcard', type: 'button', title: '이 일이 있던 자리로' },
+      el('span', { class: 'stu-stream-dot', 'aria-hidden': 'true' }),
+      el('span', { class: 'stu-stream-t' }, el('b', { text: title }), el('span', { class: 'stu-fine', text: it.kind || it.type || '방금' })));
+    card.onclick = () => {
+      const wg = sid ? widgets.find((w) => w.type === 'session' && w.data?.sid === sid) : null;
+      if (wg) focusWidget(wg); else toggleNotif(true);
+      card.remove();
+    };
+    streamEl.append(card);
+    while (streamEl.children.length > 3) streamEl.firstElementChild?.remove();
+    window.setTimeout(() => { card.classList.add('out'); window.setTimeout(() => card.remove(), 260); }, 9000);
+  }
+
+  // ══ 리브 말풍선 — 캔버스를 쓸 수 있다는 감을 '말'로 준다(원준 2026-08-19) ══════════════
+  //  규칙 기반(껍데기): 판의 상태를 보고 지금 해 볼 만한 것 하나를 제안한다. 닫으면 그 제안은 다시 안 나온다.
+  const tip = el('div', { class: 'stu-tip', hidden: true });
+  stage.append(tip);
+  const TIP_KEY = 'lively_studio_tips_' + id;
+  const tipsDone = ((): Set<string> => { try { return new Set(JSON.parse(localStorage.getItem(TIP_KEY) || '[]')); } catch (_) { return new Set(); } })();
+  function tipDone(k: string): void { tipsDone.add(k); try { localStorage.setItem(TIP_KEY, JSON.stringify([...tipsDone])); } catch (_) { /* noop */ } }
+  function showTip(k: string, text: string, act?: { label: string; run: () => void }): void {
+    if (tipsDone.has(k) || !tip.hidden) return;
+    tip.replaceChildren(
+      el('p', { class: 'stu-tip-t', text }),
+      el('div', { class: 'stu-tip-a' },
+        act ? el('button', { class: 'stu-pillbtn mint', type: 'button', text: act.label, onclick: () => { tipDone(k); tip.hidden = true; act.run(); } }) : null,
+        el('button', { class: 'btn-text', type: 'button', text: '괜찮아요', onclick: () => { tipDone(k); tip.hidden = true; } })));
+    tip.hidden = false;
+  }
+  function thinkTip(): void {
+    if (!tip.hidden || dead) return;
+    const live = mySessions().filter((s) => s.live && s.alive);
+    const hasSessionCard = widgets.some((w) => w.type === 'session');
+    if (!widgets.length && !(assetCount ?? 0)) {
+      showTip('start', '먼저 무엇을 할지 아래 칸에 적어 보세요. 컴퓨터에서 파일을 끌어다 놓아도 돼요 — 이 판이 이 프로젝트의 작업대예요.');
+      return;
+    }
+    if ((assetCount ?? 0) > 0 && !widgets.some((w) => w.type === 'folder')) {
+      showTip('assets', `올려 둔 자료가 ${assetCount}개 있어요. 자주 볼 것 같으면 판에 두고 곁눈질할 수 있어요.`,
+        { label: '자료함 올리기', run: () => addOrFocus('folder') });
+      return;
+    }
+    if (live.length && !hasSessionCard) {
+      showTip('live', `지금 ${live.length}개가 돌아가는 중이에요. 판에 올려 두면 대화가 오가는 걸 그대로 볼 수 있어요.`,
+        { label: '세션 올리기', run: () => { const s0 = live[0]; const w = addWidget('session', { x: 80, y: 96 }, { sid: s0.id }); w.z = ++zTop; popIn(w); } });
+      return;
+    }
+    if (widgets.length >= 2 && !widgets.some((w) => w.type === 'timeline')) {
+      showTip('tl', '무슨 일이 있었는지 늘 보고 싶으면 타임라인을 판에 두세요. 필요 없으면 그때그때 알림으로만 와요.',
+        { label: '타임라인 올리기', run: () => addOrFocus('timeline') });
+    }
+  }
+
+  // ══ 세션 포커스 — 시킨 세션이 가운데로 커진다(원준 2026-08-19) ═══════════════════
+  //  "매번 세션 화면으로 넘어가지 않고도 오가는 말이 보였으면" — 카드를 키워 대화를 크게 보여주고,
+  //  [작게]로 원래 자리·크기로 돌아온다(창을 키웠다 줄이는 맥 문법 그대로).
+  const focusPrev = new Map<string, { x: number; y: number; w: number; h: number }>();
+  function focusWidget(spec: WSpec): void {
+    const scroll = { x: board.scrollLeft, y: board.scrollTop };
+    const vw = board.clientWidth, vh = board.clientHeight;
+    if (!focusPrev.has(spec.id)) focusPrev.set(spec.id, { x: spec.x, y: spec.y, w: spec.w, h: spec.h });
+    spec.w = Math.min(720, Math.max(420, vw - 220));
+    spec.h = Math.min(560, Math.max(320, vh - 240));
+    spec.x = snap(scroll.x + Math.max(24, (vw - spec.w) / 2));
+    spec.y = snap(scroll.y + Math.max(16, (vh - spec.h) / 2 - 40));
+    spec.min = false; spec.z = ++zTop;
+    sigs.delete(spec.id); save(); paintAll();
+    const ref = els.get(spec.id);
+    if (ref) { ref.root.classList.add('focused'); ref.root.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
+  }
+  function unfocusWidget(spec: WSpec): void {
+    const prev = focusPrev.get(spec.id);
+    if (!prev) return;
+    Object.assign(spec, prev); focusPrev.delete(spec.id);
+    sigs.delete(spec.id); save(); paintAll();
   }
 
   // ── 명령 → 창이 미리 나타난다('짠'): 새 일 = 도크 위 유령 창 · 기존 세션 = 그 카드 조준 · 리브 = 리브 단추 조준 ──
@@ -1317,11 +1526,13 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
         if (spec.type === 'session') ref.title.textContent = widgetTitle(spec);
       }
       if (tick % 4 === 0) { void autoSpawn(); void paintDesk(); }
+      void pollStream();
+      thinkTip();
     }, 8000);
   }
 
   // ── 시작 ──
-  if (!load()) autoArrange();
+  if (!load()) widgets = [];   // 첫 방문 = 빈 판(위젯 자동 배치 폐지, #1719 원준 2026-08-19)
   paintDoor();
   paintAll();
   mountChat();
@@ -1329,6 +1540,8 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   armLive();
   void autoSpawn();
   void paintDesk();
+  void pollStream();
+  window.setTimeout(() => thinkTip(), 1200);
   if (!detail) void refreshDetail();
 
   return {
