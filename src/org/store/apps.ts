@@ -105,8 +105,11 @@ export async function deleteApp(id: string, ctx: WriteCtx = {}, client?: pg.Pool
 export async function addComponent(appId: string, kind: string, ref: string, origName: string | null, client?: pg.PoolClient): Promise<void> {
   const exec: Q = client ?? itemsPool;
   await exec.query(
+    // ON CONFLICT 타깃은 tenant_id 를 포함한다 — ensureTenantColumn 이 PK 를 (tenant_id, app_id, kind, ref)로
+    //  재작성하므로(tenant-column.ts), (app_id,kind,ref)만으로는 매칭되는 제약이 없어 42P10 이 난다(org_app 의
+    //  ON CONFLICT (tenant_id,id) 와 동일 규약). tenant_id 는 컬럼 DEFAULT 로 채워지므로 VALUES 엔 안 싣는다.
     `INSERT INTO org_app_component(app_id,kind,ref,orig_name) VALUES($1,$2,$3,$4)
-       ON CONFLICT (app_id,kind,ref) DO UPDATE SET orig_name=EXCLUDED.orig_name`,
+       ON CONFLICT (tenant_id,app_id,kind,ref) DO UPDATE SET orig_name=EXCLUDED.orig_name`,
     [appId, kind, ref, origName],
   );
 }
