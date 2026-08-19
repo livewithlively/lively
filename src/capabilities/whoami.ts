@@ -13,6 +13,7 @@ import { gatewayUrl } from "../gateway-url.js";
 import { memberTeams, memberCategories, memberCategoryIds } from "../v6/team-store.js";
 import { visAxes } from "../v6/visibility-axes.js";
 import { registryModeActive } from "../org/tenancy/state.js"; // #1750 S1 — 다중 워크스페이스 ride-along
+import { getWorkspaceBySlug, PRIMARY_SLUG } from "../org/tenancy/registry.js"; // 스위처 버튼 이름·종류(registry 가 이름의 SoT)
 import { currentTenant } from "../org/tenant-context.js";
 
 // ── me — 토큰 게이트 확인(스코프 불요, REST 전용). 핸들러가 partial user 에서 null-default 구성. ──
@@ -68,9 +69,17 @@ const me: Capability = {
       // #1750 — 이 워크스페이스의 종류(personal|team)와 계정 허브 URL. 좌상단 스위처(web/v2/switcher.ts)가 배지·동선을 정한다.
       //  기본 team·null = 기존 셀프호스트 박스(무설정) — 스위처는 '이 팀 워크스페이스 + 연결한 팀' 만 보인다.
       workspace: { kind: ui?.workspace_kind ?? "team", hub_url: ui?.workspace_hub_url ?? null },
-      // #1750 S1 — 셀프호스트 다중 워크스페이스: registry 활성화 여부 + 지금 요청의 워크스페이스 slug.
+      // #1750 S1 — 셀프호스트 다중 워크스페이스: registry 활성화 여부 + 지금 요청의 워크스페이스 slug·이름·종류.
       //  스위처가 이걸로 '만들기/전환' UI 를 켠다(single 이면 종전 그대로). 목록은 workspace_registry_status.
-      workspace_registry: { active: registryModeActive(), current: currentTenant()?.slug ?? "primary" },
+      //  ⚠ name·kind 를 함께 준다 — 안 주면 스위처 버튼은 org_profile 이름("Lively")을, 메뉴 목록은
+      //   registry 이름("라이블리")을 그려 **같은 워크스페이스가 두 이름으로** 보인다(2026-08-19 실측 신고).
+      workspace_registry: await (async () => {
+        const active = registryModeActive();
+        if (!active) return { active, current: "primary" };
+        const slug = currentTenant()?.slug ?? PRIMARY_SLUG;
+        const row = await getWorkspaceBySlug(slug).catch(() => null);
+        return { active, current: slug, name: row?.name ?? null, kind: row?.kind ?? null };
+      })(),
       incognito: ctx?.incognito ?? false,
     };
   },
