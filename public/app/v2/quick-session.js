@@ -6,6 +6,7 @@
 //  runPrefs). 제공자(하네스)·모델·추론강도는 홈 입력창의 세 칸이 정해 넘긴다(#1758) — 안 넘기면 그 기억이 기본이다.
 import { api, toast } from '../core.js';
 import { runPrefs } from './run-picker.js';
+import { rememberCreated } from './created-cache.js';
 /** 이 화면이 만든 세션의 첫 지시 — 세션 화면이 마운트될 때 꺼내 낙관적으로 그린다(서버가 실제 주입). */
 const firstPrompts = new Map();
 export function takeFirstPrompt(sessionId) {
@@ -50,6 +51,7 @@ export async function openQuickSession(text, opts) {
         const id = out && out.session && out.session.id ? String(out.session.id) : '';
         if (!id)
             throw new Error('세션 id 를 받지 못했습니다');
+        rememberCreated(out.session); // 노드 세션은 목록 반영이 한 박자 늦다 — 라우트가 이 전문으로 먼저 그린다(created-cache 머리말)
         firstPrompts.set(id, t);
         const pid = opts && opts.projectId ? Number(opts.projectId) : 0;
         if (pid > 0) {
