@@ -149,6 +149,48 @@ export async function hostReferenceCount(host: string, exceptAppId: string): Pro
   return Number(r.rows[0]?.n ?? 0);
 }
 
+// ── org_app_ui_asset — UI 페이지/위젯 entry HTML(#1780 PR5) ────────────────────
+export interface AppUiAssetRow { app_id: string; page_key: string; kind: "page" | "widget"; title: string | null; html: string; content_hash: string | null; updated_at: string }
+export interface AppUiAssetMeta { page_key: string; kind: "page" | "widget"; title: string | null }
+
+/** entry HTML 을 보존(설치/업데이트 시). client 주면 그 tx 에서. */
+export async function upsertUiAsset(
+  appId: string, a: { page_key: string; kind: "page" | "widget"; title: string; html: string }, contentHash: string | null, client?: pg.PoolClient,
+): Promise<void> {
+  const exec: Q = client ?? itemsPool;
+  await exec.query(
+    // ON CONFLICT 타깃에 tenant_id 포함(ensureTenantColumn 이 PK 를 (tenant_id,app_id,page_key)로 재작성 — org_app_component 규약과 동일).
+    `INSERT INTO org_app_ui_asset(app_id,page_key,kind,title,html,content_hash,updated_at)
+       VALUES($1,$2,$3,$4,$5,$6,now())
+     ON CONFLICT (tenant_id,app_id,page_key) DO UPDATE SET
+       kind=EXCLUDED.kind, title=EXCLUDED.title, html=EXCLUDED.html, content_hash=EXCLUDED.content_hash, updated_at=now()`,
+    [appId, a.page_key, a.kind, a.title, a.html, contentHash],
+  );
+}
+
+/** 이 앱의 UI 자산 메타(html 제외 — 목록·존재확인용). */
+export async function listUiAssets(appId: string): Promise<AppUiAssetMeta[]> {
+  const r = await itemsPool.query(`SELECT page_key, kind, title FROM org_app_ui_asset WHERE app_id=$1 ORDER BY kind, page_key`, [appId]);
+  return r.rows.map((x) => ({ page_key: String(x.page_key), kind: x.kind as "page" | "widget", title: x.title == null ? null : String(x.title) }));
+}
+
+/** 페이지 1건(html 포함) — 서빙용. 없으면 null. */
+export async function getUiAsset(appId: string, pageKey: string): Promise<AppUiAssetRow | null> {
+  const r = await itemsPool.query(`SELECT * FROM org_app_ui_asset WHERE app_id=$1 AND page_key=$2`, [appId, pageKey]);
+  const x = r.rows[0];
+  if (!x) return null;
+  return { app_id: String(x.app_id), page_key: String(x.page_key), kind: x.kind as "page" | "widget",
+    title: x.title == null ? null : String(x.title), html: String(x.html),
+    content_hash: x.content_hash == null ? null : String(x.content_hash), updated_at: String(x.updated_at) };
+}
+
+/** keep 에 없는 UI 자산을 제거(업데이트 diff — 더 이상 선언 안 하는 페이지). client 주면 그 tx 에서. */
+export async function pruneUiAssets(appId: string, keep: string[], client?: pg.PoolClient): Promise<void> {
+  const exec: Q = client ?? itemsPool;
+  if (keep.length === 0) { await exec.query(`DELETE FROM org_app_ui_asset WHERE app_id=$1`, [appId]); return; }
+  await exec.query(`DELETE FROM org_app_ui_asset WHERE app_id=$1 AND page_key <> ALL($2::text[])`, [appId, keep]);
+}
+
 // ── org_app_grant ──────────────────────────────────────────────────────────────
 
 export async function upsertGrant(

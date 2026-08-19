@@ -630,6 +630,15 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-consent-chip.none { color: var(--muted); background: transparent; border-color: var(--line); font-family: inherit; }
 .v2-consent-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 
+/* ── 앱 UI 창(#1780 PR5) — 설치된 앱의 UI 페이지를 샌드박스 iframe 으로 실는 모달 ── */
+.v2-appui-ov { position: fixed; inset: 0; z-index: 88; display: grid; place-items: center; background: rgba(21,35,59,.36); padding: 24px; }
+.v2-appui { width: min(960px, 100%); height: min(680px, 88vh); display: flex; flex-direction: column; background: var(--bg, #fff); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-2, 0 8px 30px rgba(21,35,59,.14)); overflow: hidden; }
+.v2-appui-h { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); flex: none; }
+.v2-appui-t { font-size: 14px; font-weight: 800; color: var(--ink); }
+.v2-appui-badge { font-size: 9.5px; font-weight: 800; letter-spacing: .02em; color: var(--blue); background: var(--bg-tint, #F6FAFF); border: 1px solid var(--line-net-2, #CFE0F7); border-radius: 999px; padding: 1px 7px; }
+.v2-appui-spacer { flex: 1; }
+.v2-appui-frame { flex: 1; width: 100%; border: 0; background: #fff; }
+
 /* ── 타임라인 서랍(#1719 바탕화면 방향 1차) ─────────────────────────────────
    맥 문법(알림 센터): 홈(바탕화면)의 타임라인은 상주 열이 아니라 '불러오는 것' — 우상단 버튼으로
    우측 위에 카드로 떠오르고, 밖 클릭·Esc·화면 이동이면 물러난다. 우패널이 있는 화면(프로젝트·세션·리브)에선

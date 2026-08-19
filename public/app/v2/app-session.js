@@ -20,8 +20,9 @@ export async function listSessionApps() {
             .map((a) => {
             const perm = (a.manifest && a.manifest.permissions) || {};
             const tools = [...(perm.tools || []), ...(perm.ext_tools || [])].map(String);
+            const pages = (((a.manifest && a.manifest.ui) || {}).pages || []).map((p) => ({ key: String(p.key), title: String(p.title || p.key) }));
             return { id: String(a.id), title: String(a.title || a.id), version: String(a.version || '0.0.0'),
-                scopes: (perm.scopes || []).map(String), tools };
+                scopes: (perm.scopes || []).map(String), tools, pages };
         });
     }
     catch (e) {
@@ -49,7 +50,7 @@ export async function spawnAppSession(appId, opts) {
             if (e && e.status === 403) {
                 // grant 없음 → 동의 창 → grant → 재시도 1회.
                 const app = (await listSessionApps()).find((a) => a.id === appId)
-                    || { id: appId, title: opts?.title || appId, version: '', scopes: [], tools: [] };
+                    || { id: appId, title: opts?.title || appId, version: '', scopes: [], tools: [], pages: [] };
                 if (!(await appConsent(app)))
                     return null; // 취소 = 조용히 멈춤
                 await api('/api/ui/apps/' + encodeURIComponent(appId) + '/grant', { method: 'POST', body: JSON.stringify({}) });

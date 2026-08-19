@@ -87,6 +87,25 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS org_app_grant_member_idx ON org_app_grant(member_id) WHERE revoked_at IS NULL;`);
 
+  // ── org_app_ui_asset — 앱 UI 페이지/위젯 entry HTML 보존(#1780 PR5) ──
+  //  왜 보존? ui_page/ui_widget component 는 저널만이고, UI 파일은 패키지 안에만 있다 — git/upload 설치는 스테이지가
+  //  삭제되므로 UI 가 유실된다. 설치 시 entry HTML 을 여기 담아, 소스(builtin/git/upload) 무관하게 서빙한다.
+  //  전달 = **인증 API → 샌드박스 srcdoc iframe**(정적 URL 아님) — 앱 UI 는 오리진 격리(불투명), 네트워크 없음,
+  //  tools/call 은 postMessage 로 호스트가 중개(앱 grant 로 제약, PR5b). PK(app_id, page_key), 앱 제거 시 CASCADE.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS org_app_ui_asset(
+      app_id TEXT NOT NULL REFERENCES org_app(id) ON DELETE CASCADE,
+      page_key TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('page','widget')),
+      title TEXT,
+      html TEXT NOT NULL,
+      content_hash TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (app_id, page_key)
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS org_app_ui_asset_app_idx ON org_app_ui_asset(app_id);`);
+
   // ── 기존 테이블 앱 축(design D1) — 전부 ADD COLUMN IF NOT EXISTS(무회귀) ──
   //  auth_token.app_id — 앱 세션 토큰 귀속(NULL = 일반 토큰). 기능 롤백 런북이 `WHERE app_id IS NOT NULL` 로 일괄 revoke.
   await pool.query(`ALTER TABLE auth_token ADD COLUMN IF NOT EXISTS app_id TEXT;`);

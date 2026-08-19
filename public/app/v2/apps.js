@@ -6,6 +6,7 @@
 //  ⚠ 노출은 클래식과 같은 규칙(navOn — ui_nav 로 끈 탭은 여기서도 안 보인다).
 import { appUrl, el, navOn } from '../core.js';
 import { listSessionApps, openAppSession } from './app-session.js';
+import { openAppUi } from './app-ui.js';
 // 표 한 줄 = 앱 하나. 순서 = 런치패드 순서. 클래식 탭 순서(홈·AI세션·프로젝트·WIKI·맥락관리·설정·가이드)를 따른다.
 export const APPS = [
     { key: 'dashboard', title: '홈(클래식)', desc: '옛 대시보드 — 내 프로젝트·알림·세션·팀 로그 위젯', route: 'dashboard', tab: 'dashboard', icon: 'home' },
@@ -90,9 +91,15 @@ export function openLaunchpad() {
     const draw = () => {
         const q = input.value.trim().toLowerCase();
         const screen = apps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.desc.toLowerCase().includes(q)).map((a) => el('a', { class: 'v2-pad-item', role: 'listitem', href: '#/app/' + a.key, onclick: () => closeLaunchpad() }, el('span', { class: 'v2-pad-ico' }, appIcon(a.icon)), el('b', { text: a.title }), el('span', { class: 'v2-pad-desc', text: a.desc })));
-        const session = sApps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.id.toLowerCase().includes(q)).map((a) => el('button', { class: 'v2-pad-item v2-pad-item--app', role: 'listitem', type: 'button',
-            title: '세션 앱 — 열면 이 앱 전용 AI 세션이 뜹니다',
-            onclick: () => { closeLaunchpad(); void openAppSession(a.id, { title: a.title }); } }, el('span', { class: 'v2-pad-ico' }, appIcon('term')), el('b', { text: a.title }), el('span', { class: 'v2-pad-desc', text: '앱 세션 — 열면 이 앱으로 대화가 시작돼요' }), el('span', { class: 'v2-pad-badge', text: '세션 앱' })));
+        const session = sApps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.id.toLowerCase().includes(q)).map((a) => {
+            const hasUi = a.pages.length > 0; // UI 앱이면 UI 를 연다(샌드박스 iframe), 아니면 세션 앱.
+            return el('button', { class: 'v2-pad-item v2-pad-item--app', role: 'listitem', type: 'button',
+                title: hasUi ? '앱 — 열면 이 앱의 화면이 창으로 뜹니다' : '세션 앱 — 열면 이 앱 전용 AI 세션이 뜹니다',
+                onclick: () => { closeLaunchpad(); if (hasUi)
+                    void openAppUi(a.id, { title: a.title });
+                else
+                    void openAppSession(a.id, { title: a.title }); } }, el('span', { class: 'v2-pad-ico' }, appIcon(hasUi ? 'liv' : 'term')), el('b', { text: a.title }), el('span', { class: 'v2-pad-desc', text: hasUi ? '앱 화면 — 창으로 열려요' : '앱 세션 — 열면 이 앱으로 대화가 시작돼요' }), el('span', { class: 'v2-pad-badge', text: hasUi ? '앱' : '세션 앱' }));
+        });
         grid.replaceChildren(...screen, ...session);
         if (!grid.childElementCount)
             grid.append(el('p', { class: 'v2-pad-empty', text: '맞는 앱이 없어요.' }));
