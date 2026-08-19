@@ -422,7 +422,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //  ⚠ 세션스코프 -e 만(persistent tmux 서버라 global set-environment 는 세션 간 누수).
     //  유일한 예외 = 단일-유저 kill-switch(LIVELY_MULTIPROFILE=0): 그 박스는 계정이 하나라 공유 config 가 곧 본인이다.
     //  (input.loginProfile 은 이제 기본 동작에 흡수됨 — 항상 dir 을 만들어 주므로 별도 강제 분기 불요.)
-    if (process.env.LIVELY_MULTIPROFILE !== "0") {
+    //  #1541 hostProfile — member 노드에서 주인이 여는 세션은 주입하지 않는다(그 PC 의 ~/.claude 가 곧 본인 신원 —
+    //   주입하면 빈 프로필이 돼 MCP·훅·로그인이 전부 사라진다). 판정은 게이트웨이가 했다(CreateInput 주석).
+    if (process.env.LIVELY_MULTIPROFILE !== "0" && !input.hostProfile) {
       const profileDir = profileConfigDir(user);
       await fsp.mkdir(profileDir, { recursive: true, mode: 0o700 });
       args.push("-e", `CLAUDE_CONFIG_DIR=${profileDir}`);
