@@ -17,6 +17,13 @@ export interface NodeAccessFacts {
 }
 
 // 소유 또는 공유 — provision·노드 세션생성·노드 지정·목록 노출의 기본 판정.
+// #1541 — 이 노드 세션이 '그 PC 주인의 네이티브 하네스 설정'(CLAUDE_CONFIG_DIR 미주입)을 써도 되는가.
+//  member(개인 PC) 노드 && 생성자가 곧 등록자일 때만 — 공유(shared) 노드·타인 세션은 종전 프로필 주입 유지
+//  (여러 사람이 한 OS 계정을 쓰는 자리라 #1014 신원 유출 방어가 그대로 필요하다).
+export function nodeHostProfile(node: { kind?: string | null; owner_member?: string | null }, requesterId: string): boolean {
+  return node.kind === "member" && !!requesterId && node.owner_member === requesterId;
+}
+
 export function nodeOpenTo(node: NodeAccessFacts, requesterId: string): boolean {
   if (!requesterId) return false;                  // 신원 없음 → fail-closed(빈 owner 와 우연히 같아지는 것도 막는다)
   return node.owner_member === requesterId || node.shared === true;

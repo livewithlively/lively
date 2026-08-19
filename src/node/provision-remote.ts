@@ -9,7 +9,7 @@
 //   ⚠ 그래도 호출자(라우트)는 이 함수를 **await 로 오래 붙들면 안 된다** — 202+백그라운드나 별도 상태 폴링으로
 //    감싸는 건 호출자 몫(현재 라우트는 clone 이 대개 초 단위인 사내 레포 전제로 직접 await, 상한은 아래 CAP).
 import { getNode, type OrgNode } from "./store.js";
-import { nodeOpenTo } from "./node-access.js";
+import { nodeOpenTo, nodeHostProfile } from "./node-access.js";
 import { nodeOnline, nodeRpc, nodeSupports, nodeSessionsFor, type NodeSessionInfo, nodeAgentStale } from "./registry.js";
 import type { NodeOp } from "./protocol.js";
 import { resolveRepoInject, type RepoSpec, type ProvisionedRepo, type ProvisionResult } from "../project/project-provision.js";
@@ -179,8 +179,11 @@ export async function createProjectSessionOnNode(
 ): Promise<SessionInfo> {
   await assertNodeUsable(liveNodeDeps, nodeId, requesterId);
   try {
+    // #1541 hostProfile — member 노드 && 생성자=주인이면 그 PC 의 네이티브 하네스 설정을 그대로 쓴다(CreateInput 주석).
+    //  판정을 못 하면(조회 실패) false — 프로필 주입(안전측) 유지.
+    const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, requesterId)).catch(() => false);
     return await nodeRpc<SessionInfo>(nodeId, "create", {
-      user: { userId: requesterId }, input: { ...input, invites: [] }, invites,
+      user: { userId: requesterId }, input: { ...input, invites: [], hostProfile }, invites,
     });
   } catch (e) {
     // 네트워크·미지원을 사람 말로(래핑 없으면 bare 500 로 샌다) — relayNodeOp 와 같은 **분기 구성**(문구는 이 사이트 것).
