@@ -1263,3 +1263,13 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-newpop .v2-fine { margin: 0; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
 .v2-newmsg { margin: 0; font-size: 11.5px; color: var(--coral-text, #C4564A); }
 .stu-launch-note { margin: 12px 2px 0; line-height: 1.55; }
+
+/* 안내 속 행선지 칩 — 도크의 진짜 칩과 같은 모양(그림이 아니라 손잡이: 누르면 그 칩이 열리고 잠깐 뛴다) */
+.stu-guide-chip { display: inline-flex; align-items: center; gap: 5px; vertical-align: -3px; margin: 0 2px; height: 22px; padding: 0 8px;
+  border: 1px solid var(--line-net); border-radius: 7px; background: var(--bg-tint, #F6FAFF); font: inherit; font-size: 11.5px; color: var(--ink-sub); cursor: pointer; }
+.stu-guide-chip:hover { border-color: var(--blue); color: var(--blue); }
+.stu-guide-chip b { font-weight: 700; }
+.stu-guide-chip .car { color: var(--muted-2); }
+.stu-dest.pulse { animation: stu-chip-pulse .6s ease 3; }
+@keyframes stu-chip-pulse { 50% { box-shadow: 0 0 0 6px rgba(45,107,240,.18); border-color: var(--blue); } }
+@media (prefers-reduced-motion: reduce) { .stu-dest.pulse { animation: none; box-shadow: 0 0 0 4px rgba(45,107,240,.18); } }
