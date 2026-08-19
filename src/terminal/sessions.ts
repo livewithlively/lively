@@ -117,10 +117,24 @@ export async function listSessionsRaw(): Promise<SessionInfo[]> {
 //  띄운 tmux 서버가 남아 있으면 새 세션 pane 이 harness(claude 등)를 못 찾아 즉사한다(tmux 는 서버 프로세스의 PATH 로만
 //  명령을 해석 — set-environment/-e 로 안 고쳐진다, 실측). 빈 서버를 죽여 다음 new-session 이 데몬의 현재 PATH(로그인 PATH
 //  baked)로 새 서버를 띄우게 한다. 세션이 있으면 보존(무손실 — 데몬 재시작 간 세션 지속 불변식).
+//  ⚠ '비었다'는 **tmux 가 답해서 세션이 하나도 없다고 말할 때만** 참이다(#1251 의 `ok` 교리와 같다):
+//   ① 조회 실패(타임아웃·과부하·서버 없음)는 0개가 아니다 — 종전 collectSessions 폴백은 실패를 빈 배열로 접어
+//      `kill-server` 로 이어졌다. 그 판정이 틀리면 **살아있는 세션이 전부 죽는다**(kill-server 는 그 서버의 모든 세션 종료).
+//      실패면 죽일 것도 못 본 것이니 그냥 돌아간다 — 서버가 정말 없으면 다음 new-session 이 어차피 새 서버를 띄운다.
+//   ② box-* 만이 아니라 **어떤 세션이든** 있으면 빈 서버가 아니다. 사용자의 개인 tmux 세션이 같은 서버에 있으면
+//      그건 무손실이 아니고, Windows psmux 는 소켓 격리가 없어 kill-server 가 곧 'PC 의 모든 세션 종료'다
+//      (2026-08-18 실측 — 테스트 한 줄의 kill-server 로 그 PC 의 라이블리 세션 5개가 한 번에 죽었다).
 export async function killEmptyTmuxServer(): Promise<void> {
-  try {
-    if ((await listSessionsRaw()).length === 0) await tmuxQuiet(["kill-server"]);
-  } catch { /* 서버 없음 등 — 무시 */ }
+  let raw: string;
+  try { raw = await tmux(["list-sessions", "-F", "#{session_name}"]); }
+  catch (e) {   // 못 봤다 ≠ 비었다
+    // 서버가 없는 건 정상(부팅 직후 대부분) — 조용히. 그 밖의 실패(타임아웃·과부하)는 '왜 자가치유가 안 됐나'의 단서라 남긴다.
+    const stderr = String((e as { stderr?: unknown })?.stderr ?? "");
+    if (!/no server running|error connecting/i.test(stderr)) console.warn(`[terminal] 빈 tmux 서버 판정 보류 — list-sessions 실패(죽이지 않는다): ${(e as Error)?.message}`);
+    return;
+  }
+  if (raw.split("\n").some((line) => line.trim() !== "")) return;   // 무엇이든 살아 있으면 보존
+  await tmuxQuiet(["kill-server"]);
 }
 
 // me=null 이면 필터 없이 전부(owned=false 고정 — 뷰어별 owned 는 소비자가 재계산).
@@ -422,7 +436,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     //  ⚠ 세션스코프 -e 만(persistent tmux 서버라 global set-environment 는 세션 간 누수).
     //  유일한 예외 = 단일-유저 kill-switch(LIVELY_MULTIPROFILE=0): 그 박스는 계정이 하나라 공유 config 가 곧 본인이다.
     //  (input.loginProfile 은 이제 기본 동작에 흡수됨 — 항상 dir 을 만들어 주므로 별도 강제 분기 불요.)
-    if (process.env.LIVELY_MULTIPROFILE !== "0") {
+    //  #1541 hostProfile — member 노드에서 주인이 여는 세션은 주입하지 않는다(그 PC 의 ~/.claude 가 곧 본인 신원 —
+    //   주입하면 빈 프로필이 돼 MCP·훅·로그인이 전부 사라진다). 판정은 게이트웨이가 했다(CreateInput 주석).
+    if (process.env.LIVELY_MULTIPROFILE !== "0" && !input.hostProfile) {
       const profileDir = profileConfigDir(user);
       await fsp.mkdir(profileDir, { recursive: true, mode: 0o700 });
       args.push("-e", `CLAUDE_CONFIG_DIR=${profileDir}`);

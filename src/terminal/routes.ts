@@ -28,7 +28,7 @@ import { nodeSessionsFor, nodeRpc, nodeSupports, nodeCanAttach, nodeOnline, live
 import type { NodeOp } from "../node/protocol.js";
 import { getNode, listNodes } from "../node/store.js";
 import { nodeHarnesses } from "../node/protocol.js";   // #1713 — 노드별 하네스 가용성(미보고 → 기준선)
-import { nodeOpenTo } from "../node/node-access.js";
+import { nodeOpenTo, nodeHostProfile } from "../node/node-access.js";
 import { translateNodeRpcError } from "../node/rpc-error.js";
 import { registerNodeRoutes } from "../node/routes.js";
 import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
@@ -521,7 +521,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       await requireCreatableNode(req, nodeId);
       const me = idOf(userOf(req));
       const invites = await validateInvites(b.invites, me);
-      const session = await relayNodeOp<SessionInfo>(nodeId, "create", { user: { userId: me }, input: { ...input, invites: [] }, invites });
+      // #1541 hostProfile — member 노드 && 생성자=주인이면 그 PC 의 네이티브 하네스 설정 그대로(CreateInput 주석). 조회 실패 = false(주입 유지).
+      const hostProfile = await getNode(nodeId).then((n) => !!n && nodeHostProfile(n, me)).catch(() => false);
+      const session = await relayNodeOp<SessionInfo>(nodeId, "create", { user: { userId: me }, input: { ...input, invites: [], hostProfile }, invites });
       await recordSessionTenant(session.id, () => relayNodeOp(nodeId, "kill", { user: { userId: me }, id: session.id }));
       res.json({ session: { ...session, node: { id: nodeId, online: true } } });
       return;

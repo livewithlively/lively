@@ -38,11 +38,14 @@ export function reportedPathOk(adapter: HarnessSessionAdapter, reported: string,
 export interface LocateCtx { cwd: string; convId: string; owner: string; reportedPath?: string | null }
 export interface Located { file: string; size: number; via: "reported" | "convention" }
 
-export async function locateTranscript(adapter: HarnessSessionAdapter, ctx: LocateCtx): Promise<Located | null> {
+/** 존재/크기 판정 — 기본은 게이트웨이 로컬 fs. 파일이 다른 호스트(멤버 실행환경 중계, #1437 ②)에 있으면 transcript-fs 의 stat 을 넘긴다. */
+export type TranscriptStat = (file: string) => Promise<number | null>;
+const localStat: TranscriptStat = async (file) => {
+  try { const st = await fsp.stat(file); return st.isFile() ? st.size : null; } catch { return null; }
+};
+
+export async function locateTranscript(adapter: HarnessSessionAdapter, ctx: LocateCtx, stat: TranscriptStat = localStat): Promise<Located | null> {
   const roots = adapter.roots(ownerHomes(ctx.owner), ctx.owner);
-  const stat = async (file: string): Promise<number | null> => {
-    try { const st = await fsp.stat(file); return st.isFile() ? st.size : null; } catch { return null; }
-  };
   if (ctx.reportedPath && reportedPathOk(adapter, ctx.reportedPath, roots)) {
     const size = await stat(ctx.reportedPath);
     if (size !== null) return { file: ctx.reportedPath, size, via: "reported" };

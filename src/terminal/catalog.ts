@@ -274,6 +274,12 @@ export interface CreateInput { label: string; rootKey: string; subpath: string; 
   //  restrictRead: 프로젝트 세션을 owner∪invites 로 더 좁힌다(프로젝트 대상 안에서만 축소 가능).
   writeVis?: string;
   restrictRead?: boolean;
+  // #1541 — 노드(멤버 PC) 세션: **그 PC 주인의 네이티브 클로드 설정을 그대로 쓴다**(CLAUDE_CONFIG_DIR 미주입).
+  //  #1014 프로필 주입은 '여러 멤버가 한 OS 계정을 공유하는 게이트웨이 박스'의 신원 유출 방어인데, 본인 소유
+  //  member 노드에선 그 전제가 없다 — 주입하면 텅 빈 프로필 dir 이 돼 MCP·훅·로그인이 전부 사라진 claude 가 뜬다
+  //  (실측: /mcp "No MCP servers configured"). 게이트웨이가 "member 노드 && 생성자=노드 주인"일 때만 켠다 —
+  //  노드측은 값을 믿고 따르기만 한다(정책 판단은 게이트웨이, 노드는 기계적 실행 — agent runOp 전제 그대로).
+  hostProfile?: boolean;
   // #1059 E — 상시(managed) 세션은 desired-state DB 미러를 만들지 않는다(keep-alive 가 그 영속을 소유). ensureManagedSession 만 넘긴다.
   managed?: boolean;
   // #1059 — claude UUID 를 모를 때 인자 없는 --resume 로 후보 picker 를 띄운다(restorable 복원. resume 과 배타 — resume 우선).

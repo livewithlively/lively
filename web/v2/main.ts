@@ -303,7 +303,7 @@ window.addEventListener('stu:toggle-projects', () => { railPanelOpen = !railPane
 // ── 우측(탭마다 한 벌 — tab.aside 에 그린다) ──
 function drawAsideHome(tab: ShellTab): void {
   const askHost = el('div', { class: 'liv-askdock v2-askdock' });
-  const cards = el('div', { class: 'liv-cards v2-liv-cards', hidden: true });
+  const cards = el('div', { class: 'liv-letter v2-liv-cards', hidden: true });   // 리브의 편지(#1719 재구성) — 홈 우패널에도 같은 그림
   tab.aside.replaceChildren(askHost, cards);
   const tl = createTimeline(tab.aside, { scope: '워크스페이스', showActors: true, empty: '아직 남은 작업 기록이 없어요 — 세션이 일하고 기록하면 여기에 쌓입니다.' });
   void fillLivCards(cards, askHost);

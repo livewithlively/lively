@@ -28,21 +28,26 @@
 //  · 노드(멤버 PC) 세션의 파일은 여기서 못 읽는다(파일이 그 컴퓨터에 있다) → 409 `node` 를 주고, 화면은 중앙 세션 기록
 //    (v6/sessions/:uuid/log — Stop 훅이 턴마다 올린 것)으로 물러난다. 노드 릴레이 op 는 후속.
 //  · 대화 id 를 **추측하지 않는다**(sessions.ts restore 원칙) — work-flag 훅이 보고한 매핑이 없으면 404.
+//
+//  ── 파일이 어디 있나(#1437 ②) ──
+//  박스 세션의 파일도 게이트웨이 로컬 fs 가 아닐 수 있다 — 매니지드(중앙 게이트웨이·마운트 0)에선 실행 노드의 멤버 홈이다.
+//  그래서 여기서 fsp 를 직접 부르지 않고 harness-io/transcript-fs 파사드(로컬 | 멤버 실행환경 중계)를 탄다 — 파일 API 가
+//  memberSpawn seam 을 타는 것과 같은 자리·같은 교리. 중계가 없는 배포는 종전 로컬 읽기 그대로다.
 import type express from "express";
-import fsp from "node:fs/promises";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { canAttach, sessionDir } from "./terminal-sessions.js";
 import { getOpt } from "./tmux-exec.js";
 import { resolveSessionDir } from "../sessions/session-desired.js";
 import { getSessionState } from "../sessions/session-state.js";
-import { findPrevTranscript } from "./terminal-transcript.js";
 import { isChatKey, sendKeyToSession, type ChatKey } from "./send-keys.js";
 import { nodeOfSession, nodeCanAttach } from "../node/registry.js";
 import { transcriptRange } from "../sessions/transcript-range.js";
+import { sessionOsUser } from "./profiles.js";
 import { harnessIo, isChatAction, type ChatAction } from "./harness-io/adapter.js";
 import { locateTranscript } from "./harness-io/locate.js";
-import { readAlignedWindow, fileReader, type AlignedWindow } from "./harness-io/window.js";
+import { readAlignedWindow, type AlignedWindow } from "./harness-io/window.js";
+import { transcriptFsFor } from "./harness-io/transcript-fs.js";
 import { parseWindow } from "./harness-io/parse-cache.js";
 import { toNdjson } from "./harness-io/chat-line.js";
 
@@ -104,24 +109,22 @@ export function registerSessionChatRoutes(app: express.Express, auth: express.Re
     if (!io || !io.parse) throw new HttpError(409, `${io?.label || harness || "이 하네스"} 의 대화는 아직 여기서 읽을 수 없습니다 — 터미널로 보세요.`);
     // 실행 폴더 — desired-state 미러가 있으면 그것, 없으면 tmux 옵션(라이브).
     const cwd = st?.dir || await resolveSessionDir(id, () => sessionDir(id)).catch(() => "");
+    // 파일 접근 파사드 — 소유자 osUser(격리·중계 판정은 sessionOsUser 가) → 로컬 fs 또는 멤버 실행환경 중계(transcript-fs 머리말).
+    const tfs = transcriptFsFor(await sessionOsUser(id).catch(() => null));
     //  훅이 보고한 파일 경로는 **지금 매핑된 대화**의 것이다 — 다른 uuid(?uuid=, 압축 전 파일)를 찾을 땐 규약으로만(그 경로를 주면 엉뚱한 현재 파일을 읽는다).
-    const found = await locateTranscript(io, { cwd, convId: uuid, owner: st?.owner || "", reportedPath: uuid === mapped ? st?.transcript_path : null });
+    const found = await locateTranscript(io, { cwd, convId: uuid, owner: st?.owner || "", reportedPath: uuid === mapped ? st?.transcript_path : null }, tfs.stat);
     if (!found) throw new HttpError(404, "대화 기록 파일을 찾지 못했습니다(아직 한 줄도 안 쌓였거나 이 박스가 읽을 수 없는 곳에 있습니다).");
     const q = req.query as Record<string, unknown>;
     const { start, end } = transcriptRange(found.size, q);
     // 창이 파일 머리(0)에 닿았고 그 파일이 압축으로 시작하면 이전 파일 uuid 를 함께 준다 — 화면이 [압축 전 대화 불러오기]를 낸다.
     //  (claude 의 compact_boundary 사슬 — 다른 하네스 파일엔 그 표식이 없어 null 이 돌아온다.)
     if (start === 0 && found.size > 0) {
-      const prev = await findPrevTranscript(found.file);
+      const prev = await tfs.prevTranscript(found.file);
       if (prev) res.setHeader("X-Prev-Session", prev);
     }
     const explicitTo = q.to !== undefined;
     let win: AlignedWindow = { from: start, to: start, data: Buffer.alloc(0) };
-    if (end > start) {
-      const fh = await fsp.open(found.file, "r");
-      try { win = await readAlignedWindow(fileReader(fh), found.size, start, end, explicitTo); }
-      finally { await fh.close(); }
-    }
+    if (end > start) win = await tfs.read(found.file, found.size, (r) => readAlignedWindow(r, found.size, start, end, explicitTo));
     const lines = win.data.length ? parseWindow(io.parse, `${id}|${found.file}`, win.from, win.to, win.data.toString("utf8")) : [];
     res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
     res.setHeader("X-Log-Bytes", String(found.size));   // 전체 워터마크(원문 바이트) — 화면이 증분 tail 에 쓴다(v6 log 와 같은 헤더)
