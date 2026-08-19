@@ -900,11 +900,24 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
    *  위젯을 미리 뿌려 놓지 않는다 — 처음 온 사람에게 판 가득한 카드는 남의 화면처럼 보인다.
    *  할 수 있는 일 셋만 큰 글씨로 두고, 나머지는 일하다 리브가 제안한다. */
   function startGuide(): HTMLElement {
-    const step = (n: string, t: string, d2: string, act?: { label: string; run: () => void }): HTMLElement =>
+    const step = (n: string, t: string, d2: string | HTMLElement[], act?: { label: string; run: () => void }): HTMLElement =>
       el('div', { class: 'stu-guide-s' },
         el('span', { class: 'stu-guide-n', text: n }),
-        el('div', {}, el('b', { text: t }), el('p', { class: 'stu-fine', text: d2 }),
+        el('div', {}, el('b', { text: t }),
+          ...(typeof d2 === 'string' ? [el('p', { class: 'stu-fine', text: d2 })] : d2),
           act ? el('button', { class: 'btn-text', type: 'button', text: act.label, onclick: act.run }) : null));
+    // 안내 속 행선지 칩은 **그림이 아니라 진짜 손잡이**다 — 누르면 아래 도크의 그 칩이 열리고 잠깐 뛴다.
+    //  "밑에 이거 건드려라"를 글로만 설명하는 것보다 눌러 보게 하는 쪽이 한 번에 통한다(상민님 2026-08-19).
+    const chipDemo = (): HTMLElement => {
+      const c = el('button', { class: 'stu-guide-chip', type: 'button', title: '행선지 — 어디로 보낼지 여기서 고릅니다' },
+        el('span', { class: 'stu-dest-dot liv', 'aria-hidden': 'true' }), el('b', { text: '리브(워크스페이스)' }), el('span', { class: 'car', text: '▾', 'aria-hidden': 'true' }));
+      c.onclick = () => {
+        destChip.classList.add('pulse');
+        window.setTimeout(() => destChip.classList.remove('pulse'), 1800);
+        destChip.click();
+      };
+      return c;
+    };
     if (loose) return el('div', { class: 'stu-guide' },
       el('h2', { text: '프로젝트에 붙지 않은 세션들' }),
       el('p', { class: 'stu-guide-l', text: '아직 어느 프로젝트에도 매이지 않은 세션이 여기 모입니다. 지금은 하나도 없네요.' }),
@@ -919,7 +932,10 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
       el('h2', { text: '여기가 이 프로젝트의 작업대예요' }),
       el('p', { class: 'stu-guide-l', text: '빈 캔버스로 시작해서, 이 프로젝트에 맞게 화면을 조정해보세요.' }),
       el('div', { class: 'stu-guide-g' },
-        step('1', '아래 칸에 시켜 보세요', '“랜딩 문구 3안 써 줘” 처럼 적으면 AI가 일을 시작하고, 그 대화가 이 판에 카드로 올라옵니다.'),
+        step('1', '아래 칸에 시켜 보세요', [
+          el('p', { class: 'stu-fine', text: '“랜딩 문구 3안 써 줘” 처럼 적으면 AI가 자동으로 세션을 만들어서 일을 시작하고, 그 대화가 이 캔버스에 카드로 올라옵니다.' }),
+          el('p', { class: 'stu-fine' }, el('span', { text: '같은 세션에서 이어서 말하려면 입력칸 아래 ' }), chipDemo(), el('span', { text: ' 를 눌러 그 세션을 고르세요.' })),
+        ]),
         step('2', '파일을 끌어다 놓아 보세요', '컴퓨터에서 파일·폴더를 이 판에 떨어뜨리면 이 프로젝트에서 AI랑 대화할 때 AI가 참고해서 작업합니다. AI가 작업하면서 생성한 파일도 여기에 쌓입니다.'),
         step('3', '위젯을 통해서 커스터마이즈 해보세요', '태스크·캘린더·메모 같은 건 ⊞ 에서 앱으로 열거나 위젯으로 캔버스에 둘 수 있어요. 지금 당장은 필요 없습니다.',
           { label: '⊞ 열어 보기', run: () => toggleLaunch(true) })));
