@@ -1195,19 +1195,26 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .stu-ext.page { background: #7C5CFC; }
 .stu-ext.doc { background: #1BAEB0; }
 
-/* 스택 = 겹쳐 쌓인 낱장 셋(맥 '스택으로 그룹화'). 무더기라는 게 형태로 보여야 눌러 볼 생각이 든다. */
+/* 폴더 — 맥 기본 문법(면으로 그린 두 장짜리 판). 선 아이콘이 아니라 색면이라 작아도 폴더로 읽힌다. */
+.stu-ico-g.folder-g { background: none; border: 0; box-shadow: none; overflow: visible; }
+.stu-folder-sv { width: 52px; height: 43px; filter: drop-shadow(0 2px 4px rgba(21,35,59,.16)); }
+
+/* 스택 — **맨 위 것이 앞에 서고 나머지가 뒤로 비친다**(맥 스택 그대로).
+   그래서 그림 무더기는 첫 장이 그대로 보이고, 문서 무더기는 그 문서의 첫 화면이 보인다. */
 .stu-ico-g.stack { background: none; border: 0; box-shadow: none; overflow: visible; }
 .stu-ico-g.stack::before, .stu-ico-g.stack::after { content: none; }
-.stu-stk { position: absolute; width: 42px; height: 42px; border-radius: 10px; background: #fff; border: 1px solid #DDE3EE;
-  box-shadow: 0 2px 6px rgba(21,35,59,.10); display: flex; align-items: center; justify-content: center; }
-.stu-stk.s3 { transform: translate(6px, 7px) rotate(6deg); opacity: .5; }
-.stu-stk.s2 { transform: translate(3px, 3.5px) rotate(3deg); opacity: .78; }
-.stu-stk.s1 { color: #5A6B85; }
-.stu-ico-g.cat-그림 .stu-stk.s1 { color: #2D9A6B; } .stu-ico-g.cat-시안 .stu-stk.s1 { color: #7C5CFC; }
-.stu-ico-g.cat-문서 .stu-stk.s1 { color: #C4564A; } .stu-ico-g.cat-표 .stu-stk.s1 { color: #D9772B; }
-.stu-ico-g.stack-folder .stu-stk.s1 { color: #5B8AE0; } .stu-ico-g.stack-kn .stu-stk.s1 { color: #1BAEB0; }
-.stu-ico.is-stack.open .stu-stk.s3 { transform: translate(10px, -6px) rotate(12deg); }
-.stu-ico.is-stack.open .stu-stk.s2 { transform: translate(5px, -3px) rotate(6deg); }
+.stu-stk { position: absolute; display: flex; align-items: center; justify-content: center; }
+.stu-stk.s3, .stu-stk.s2 { width: 42px; height: 52px; border-radius: 4px; background: #fff; border: 1px solid #E1E6F0;
+  box-shadow: 0 1px 3px rgba(21,35,59,.10); }
+.stu-stk.s3 { transform: translate(7px, -2px) rotate(7deg); opacity: .62; }
+.stu-stk.s2 { transform: translate(3.5px, -1px) rotate(3.5deg); opacity: .82; }
+.stu-stk.s1 { z-index: 2; }
+.stu-stk.s1.im { width: 44px; height: 54px; border-radius: 4px; overflow: hidden; background: #fff; border: 1px solid #DFE4EE;
+  box-shadow: 0 1px 2px rgba(21,35,59,.10), 0 6px 14px rgba(21,35,59,.10); }
+.stu-stk.s1.im img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* 펼친 스택 — 뒤 장이 부채처럼 더 벌어진다(열려 있다는 걸 형태로) */
+.stu-ico.is-stack.open .stu-stk.s3 { transform: translate(13px, -7px) rotate(13deg); }
+.stu-ico.is-stack.open .stu-stk.s2 { transform: translate(7px, -4px) rotate(7deg); }
 
 /* 휴지통 — 낱장 아이콘과 같은 급. 통·뚜껑·홈이 있고, 차면 종이가 삐져나온다. */
 .stu-ico-g.trash { background: none; border: 0; box-shadow: none; overflow: visible; }
