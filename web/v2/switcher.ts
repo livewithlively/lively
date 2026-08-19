@@ -14,7 +14,12 @@ function onKey(e: KeyboardEvent): void { if (e.key === 'Escape') closeMenu(); }
 function ws(): { kind: 'personal' | 'team'; hub: string | null; name: string } {
   const m: any = (state && state.me) || {};
   const w = m.workspace || {};
-  return { kind: w.kind === 'personal' ? 'personal' : 'team', hub: w.hub_url || null, name: String(m.org_name || m.email || '내 워크스페이스') };
+  // registry(다중 워크스페이스)가 켜져 있으면 **등록부의 이름·종류가 정답**이다 — org_name 을 쓰면
+  //  버튼("Lively")과 메뉴 목록("라이블리")이 같은 워크스페이스를 두 이름으로 부른다(2026-08-19 실측 신고).
+  const reg: any = m.workspace_registry || {};
+  const name = (reg.active && reg.name) ? String(reg.name) : String(m.org_name || m.email || '내 워크스페이스');
+  const kind = (reg.active && reg.kind) ? (reg.kind === 'personal' ? 'personal' : 'team') : (w.kind === 'personal' ? 'personal' : 'team');
+  return { kind, hub: w.hub_url || null, name };
 }
 
 // 상단 노드 — **한 줄**: 브랜드 심볼(=홈) + 워크스페이스 스위처. side.ts 가 이걸 v2-side-top 자리에 넣는다.
