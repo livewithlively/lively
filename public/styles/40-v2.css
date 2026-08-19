@@ -612,6 +612,23 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-pad-ico .v2-ic { width: 22px; height: 22px; }
 .v2-pad-desc { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
 .v2-pad-empty { color: #fff; font-size: 13px; }
+/* 세션 앱 타일(#1780) — 화면 앱과 성격이 다르다(열면 전용 AI 세션이 뜬다). 민트 강조 + 배지로 구분. */
+.v2-pad-item--app { position: relative; cursor: pointer; font: inherit; }
+.v2-pad-item--app:hover { border-color: var(--mint-deep, #0FA37E); }
+.v2-pad-item--app .v2-pad-ico { background: var(--bg-success, #F3FBF8); border-color: #CDEFE3; color: var(--mint-deep, #0FA37E); }
+.v2-pad-badge { position: absolute; top: 8px; right: 8px; font-size: 9.5px; font-weight: 800; letter-spacing: .02em; color: var(--mint-deep, #0FA37E); background: var(--bg-success, #F3FBF8); border: 1px solid #CDEFE3; border-radius: 999px; padding: 1px 7px; }
+
+/* ── 앱 사용 동의 창(#1780 app-session) — 세션 앱을 처음 열 때 뜨는 권한 확인 모달 ── */
+.v2-consent-ov { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: rgba(21,35,59,.32); padding: 20px; }
+.v2-consent { width: min(440px, 100%); background: var(--bg, #fff); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-2, 0 8px 30px rgba(21,35,59,.14)); padding: 22px 22px 18px; }
+.v2-consent-t { margin: 0 0 6px; font-size: 16px; font-weight: 800; color: var(--ink); line-height: 1.4; }
+.v2-consent-sub { margin: 0 0 16px; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+.v2-consent-grp { display: flex; gap: 10px; align-items: baseline; padding: 8px 0; border-top: 1px solid var(--line); }
+.v2-consent-grp > b { flex: none; width: 44px; font-size: 12px; color: var(--ink-sub); }
+.v2-consent-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.v2-consent-chip { font-family: var(--mono, ui-monospace, monospace); font-size: 11px; color: var(--blue); background: var(--bg-tint, #F6FAFF); border: 1px solid var(--line-net-2, #CFE0F7); border-radius: 7px; padding: 2px 8px; }
+.v2-consent-chip.none { color: var(--muted); background: transparent; border-color: var(--line); font-family: inherit; }
+.v2-consent-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 
 /* ── 타임라인 서랍(#1719 바탕화면 방향 1차) ─────────────────────────────────
    맥 문법(알림 센터): 홈(바탕화면)의 타임라인은 상주 열이 아니라 '불러오는 것' — 우상단 버튼으로
@@ -1063,6 +1080,10 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .stu-app-ic .stu-i { width: 21px; height: 21px; stroke-width: 1.9; }
 .stu-app-n { font-size: 10.5px; color: var(--ink-sub); }
 .stu-shell-dot { position: absolute; top: -2px; right: 8px; width: 9px; height: 9px; border-radius: 5px; background: var(--coral); border: 2px solid var(--bg, #fff); }
+/* 설치된 세션 앱(#1780) — 판 위에 전용 세션 카드로 뜬다. 민트 점으로 스튜디오 내장 앱과 구분. */
+.stu-launch-inst[hidden] { display: none; }
+.stu-inst-dot { position: absolute; top: -2px; right: 8px; width: 9px; height: 9px; border-radius: 5px; background: var(--mint-deep, #0FA37E); border: 2px solid var(--bg, #fff); }
+.stu-app-inst { cursor: pointer; }
 /* ── 패널 다시 열기 손잡이 — 닫힌 화면 좌상단(원준) ── */
 /* 탭 줄이 맨 위에 있으므로(원준 2026-08-19 '탭 줄은 있는 방향으로') 손잡이는 그 아래에 앉는다 — 겹치면 탭을 못 누른다. */
 .stu-panel-fab { position: absolute; left: 14px; top: 54px; z-index: 50; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 12px 0 5px; border: 1px solid var(--line-net-2); border-radius: 17px; background: rgba(255,255,255,.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); box-shadow: 0 2px 6px rgba(21,35,59,.08), 0 10px 24px rgba(21,35,59,.12); font: inherit; font-size: 12.5px; color: var(--ink-sub); cursor: pointer; }

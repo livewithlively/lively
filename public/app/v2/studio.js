@@ -25,6 +25,7 @@ import { loadProjectTimeline } from '../timeline-sources.js';
 import { fmtSize, openFileViewer } from '../projects/files.js';
 import { upDropZone, upSend, upToast } from '../projects/files-upload.js';
 import { runPrefs } from './run-picker.js';
+import { listSessionApps, spawnAppSession } from './app-session.js';
 import { sessText } from './side.js';
 import { dotCls } from './views.js';
 // ── 아이콘(스트로크 SVG) ──────────────────────────────────────────────────────
@@ -954,6 +955,20 @@ export function mountStudio(host, opts) {
             c.addEventListener('dragstart', (e) => { e.dataTransfer?.setData('text/plain', 'stu:' + d.type); after?.(); });
         return c;
     };
+    // ── 세션 앱 타일(#1780) — 설치된 앱을 열면 그 앱 전용 AI 세션이 판 위에 카드로 뜬다(동의 없으면 그때 동의 창). ──
+    const sessionAppTile = (a) => el('button', { class: 'stu-app as-app stu-app-inst', type: 'button', title: '세션 앱 — 열면 이 앱 전용 AI 세션이 판 위에 카드로 떠요',
+        onclick: () => { toggleLaunch(false); void openSessionAppCard(a); } }, el('span', { class: 'stu-app-ic', style: 'background:#0FA37E' }, icon('chat', 'stu-i')), el('span', { class: 'stu-app-n', text: a.title }), el('span', { class: 'stu-inst-dot', title: '세션 앱' }));
+    // 앱 세션을 열고 판 위에 세션 카드로 올린다(spawnSession 과 같은 문법 — 여기선 appId 를 실어 앱 배관을 켠다).
+    async function openSessionAppCard(a) {
+        const born = ghostCanvasPos();
+        const s = await spawnAppSession(a.id, { title: a.title, projectId: id });
+        if (!s || dead)
+            return;
+        const spec = addWidget('session', born || { x: 88, y: 88 }, { sid: s.id });
+        spec.z = ++zTop;
+        popIn(spec);
+        focusWidget(spec);
+    }
     /** (v3 호환) 우패널이 있는 셸이 부르면 선반+타임라인을 그린다 — v4 셸은 부르지 않는다(알림 센터·런치패드로 옮겼다). */
     function renderAside(aside) {
         aside.replaceChildren(el('div', { class: 'stu-shelf' }, el('div', { class: 'stu-shelf-h', text: '위젯 · 앱' }), el('div', { class: 'stu-shelf-grid' }, ...WDEFS.filter((d) => !d.hidden).map((d) => appTile(d)))));
@@ -970,7 +985,17 @@ export function mountStudio(host, opts) {
             // 앱과 위젯은 성격이 다르다 — 앱은 열어서 하는 일(모달), 위젯은 캔버스에 두는 것. 구역을 갈라 그 차이를 보이게.
             const apps = WDEFS.filter((d) => !d.hidden && (d.surf === 'app' || d.surf === 'both'));
             const wgs = WDEFS.filter((d) => !d.hidden && (d.surf === 'widget' || d.surf === 'both'));
-            launch.replaceChildren(el('div', { class: 'stu-launch-h' }, el('b', { text: '앱' }), el('span', { class: 'stu-fine', text: '열어서 하는 일 — 창으로 뜹니다' })), el('div', { class: 'stu-shelf-grid stu-launch-grid' }, ...apps.map((d) => appTile(d, () => toggleLaunch(false), true))), el('div', { class: 'stu-launch-h sep' }, el('b', { text: '위젯' }), el('span', { class: 'stu-fine', text: '캔버스에 두는 것 — 눌러 올리거나 원하는 자리로 끌어다 놓기' })), el('div', { class: 'stu-shelf-grid stu-launch-grid' }, ...wgs.map((d) => appTile(d, () => toggleLaunch(false)))));
+            // 설치된 세션 앱(org_app, #1780) — 스튜디오 내장 앱과 성격이 달라(각자 전용 세션이 뜬다) 별도 구역으로.
+            //  비동기로 불러와 도착하면 채운다(없으면 구역 숨김 유지 → 종전 화면과 동일).
+            const instGrid = el('div', { class: 'stu-shelf-grid stu-launch-grid' });
+            const instSec = el('div', { class: 'stu-launch-inst', hidden: true }, el('div', { class: 'stu-launch-h sep' }, el('b', { text: '설치된 앱' }), el('span', { class: 'stu-fine', text: '열면 이 앱 전용 AI 세션이 판 위에 카드로 떠요' })), instGrid);
+            launch.replaceChildren(el('div', { class: 'stu-launch-h' }, el('b', { text: '앱' }), el('span', { class: 'stu-fine', text: '열어서 하는 일 — 창으로 뜹니다' })), el('div', { class: 'stu-shelf-grid stu-launch-grid' }, ...apps.map((d) => appTile(d, () => toggleLaunch(false), true))), instSec, el('div', { class: 'stu-launch-h sep' }, el('b', { text: '위젯' }), el('span', { class: 'stu-fine', text: '캔버스에 두는 것 — 눌러 올리거나 원하는 자리로 끌어다 놓기' })), el('div', { class: 'stu-shelf-grid stu-launch-grid' }, ...wgs.map((d) => appTile(d, () => toggleLaunch(false)))));
+            void listSessionApps().then((list) => {
+                if (launch.hidden || !list.length)
+                    return; // 닫혔거나 설치된 세션 앱 없음 → 숨김 유지
+                instSec.hidden = false;
+                instGrid.replaceChildren(...list.map((a) => sessionAppTile(a)));
+            });
             toggleNotif(false);
         }
         launch.hidden = !want;
