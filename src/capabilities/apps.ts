@@ -184,4 +184,26 @@ const appRemove: Capability = {
   },
 };
 
-export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke, appInstall, appRemove];
+// ── 앱 활동 관측(관리자) — mcp_call_log.app 집계. design D3-5(관측 전용, 권한 판정 불사용) ──
+//  앱 세션/UI 가 자기 자격으로 부른 도구를 앱별·도구별로 집계(호출수·성공/실패·최근시각). 인자·actor 는 노출 안 함.
+const appActivityCap: Capability = {
+  name: "org_app_activity",
+  title: "앱 활동 로그",
+  description: "설치된 앱들이 자기 자격으로 호출한 도구 활동을 앱별·도구별로 집계한다(호출수·성공/실패·최근시각). app_id 를 주면 그 앱만, days 로 기간(기본 7·최대 365). 관측 전용. 관리자.",
+  scope: "admin",
+  input: { app_id: z.string().optional(), days: z.number().optional() },
+  expose: {
+    mcp: true,
+    rest: [{ method: "GET", paths: ["/api/ui/app-activity"], parse: (req) => {
+      const q = (req.query ?? {}) as Record<string, unknown>;
+      return { app_id: q.app_id, days: q.days == null ? undefined : Number(q.days) };
+    } }],
+  },
+  handler: async (input: Record<string, unknown>) => {
+    const id = input.app_id ? appId(input.app_id) : null;
+    const days = input.days != null && Number.isFinite(Number(input.days)) ? Number(input.days) : 7;
+    return { activity: await store.appActivity(id, days) };
+  },
+};
+
+export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke, appInstall, appRemove, appActivityCap];
