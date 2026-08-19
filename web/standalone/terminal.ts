@@ -13,12 +13,30 @@ import { el, renderMarkdown } from './md.js';
 declare const Terminal: any;
 declare const FitAddon: any;
 declare const WebglAddon: any;
+declare const WebLinksAddon: any;
+
+// 터미널 속 링크 열기(#1541) — 같은 게이트웨이의 /ui/ 화면 링크는 **셸 안에서 그 자리 이동**, 그 외는 새 창.
+//  · 이 문서가 셸(iframe, 세션 화면의 터미널)에 박혀 있고 링크가 같은 출처의 /ui/ 해시 화면이면 부모 셸의
+//    해시를 바꾼다 — 사용자가 기대하는 "앱 내 이동"이 정확히 이것이다(새 창·새 탭이 아니라).
+//  · 그 외(독립 탭·다른 출처)는 window.open — 데스크톱 앱에선 메인의 창 규칙(web-shell.openTargetFor)이
+//    같은 출처 = 앱 안 새 창 / 외부 = 시스템 브라우저로 가른다. 브라우저에선 새 탭.
+function openLinkFromTerminal(uri: string): void {
+  try {
+    const u = new URL(uri, location.href);
+    const uiPath = location.pathname.replace(/terminal(?:-grid)?\.html$/, '');
+    if (u.origin === location.origin && u.pathname === uiPath && u.hash && window.parent !== window) {
+      window.parent.location.hash = u.hash;   // 같은 출처 부모(셸) — 교차 출처면 아래 catch 로
+      return;
+    }
+  } catch (_) { /* URL 파싱·부모 접근 실패 — 새 창 폴백 */ }
+  window.open(uri, '_blank', 'noopener');
+}
 declare const CanvasAddon: any;
 // 빌드 스탬프 — 빌드 시 esbuild define 이 주입한다(scripts/build-standalone.mjs). 종전엔 손으로 고치는 상수였다.
 declare const TERMJS_BUILD: string;
 declare global {
   interface Window {
-    Terminal?: any; FitAddon?: any; WebglAddon?: any; CanvasAddon?: any;
+    Terminal?: any; FitAddon?: any; WebglAddon?: any; CanvasAddon?: any; WebLinksAddon?: any;
     livelyTermDiag?: () => string;
     livelyJumpToPrompt?: (text: string) => void;
   }
@@ -2185,6 +2203,12 @@ export async function boot() {
   });
   fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
+  // 터미널 속 URL 을 클릭 가능하게(#1541) — 종전엔 애드온이 없어 하네스(claude)가 찍은 링크가 그냥 색칠된 글자였다
+  //  (xterm 은 캔버스에 그려 DOM 앵커가 없다 — 사람은 "링크인데 안 눌린다"로 본다). 열기 규칙 openLinkFromTerminal.
+  //  CDN 로드 실패 시 조용히 종전 동작(클릭 불가) — 링크는 편의지 전제가 아니다.
+  if (window.WebLinksAddon && window.WebLinksAddon.WebLinksAddon) {
+    term.loadAddon(new WebLinksAddon.WebLinksAddon((e: MouseEvent, uri: string) => { e.preventDefault(); openLinkFromTerminal(uri); }));
+  }
   term.open(host);
   loadRenderer();
   loadTermFonts();        // 웹폰트 다운로드를 즉시 시작(WS 핸드셰이크와 병렬) — onopen 의 재측정이 빨리 확정되도록

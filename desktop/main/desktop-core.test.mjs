@@ -1410,4 +1410,48 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
   });
 }
 
+
+// ── P. 로그인 셸 PATH 보강 (#1541 · login-path.mjs) — GUI 최소 PATH 로 CLI 를 몰던 근본 원인 ─────────
+{
+  const { mergePath, extractPath, loginShellCmd, enrichPathFromLoginShell } = await import("./login-path.mjs");
+  t("P1 합집합 — 로그인 셸 우선·중복/빈 조각 제거·현재 PATH 성분 보존", () => {
+    assert.equal(mergePath("/a:/b:/usr/bin", "/usr/bin:/bin:/c", ":"), "/a:/b:/usr/bin:/bin:/c");
+    assert.equal(mergePath("", "/usr/bin:/bin", ":"), "/usr/bin:/bin");
+    assert.equal(mergePath("/a::/a", "", ":"), "/a");
+  });
+  t("P2 마커 추출 — 셸 rc 잡음(모트·에코)에 안 속는다", () => {
+    assert.equal(extractPath("Welcome!\n<<<LIVELY_PATH:/a:/b>>>"), "/a:/b");
+    assert.equal(extractPath("no marker"), null);
+    assert.equal(extractPath(""), null);
+  });
+  t("P3 질의 명령 — SHELL 존중, GUI(미설정)는 darwin=zsh 폴백, -l 만(-i 는 tty 대기 행)", () => {
+    assert.deepEqual(loginShellCmd({ SHELL: "/bin/bash" }, "darwin")[0], "/bin/bash");
+    assert.equal(loginShellCmd({}, "darwin")[0], "/bin/zsh");
+    assert.equal(loginShellCmd({}, "linux")[0], "/bin/sh");
+    const argv = loginShellCmd({}, "darwin")[1];
+    assert.equal(argv[0], "-lc");
+    assert.ok(!argv.includes("-i"), "-i 가 섞였다(무tty 에서 매달린다)");
+  });
+  t("P4 ★ enrich — darwin 은 env.PATH 를 덮고, win32 는 손대지 않고, 실패는 무해", () => {
+    const env = { SHELL: "/bin/zsh", PATH: "/usr/bin:/bin" };
+    const got = enrichPathFromLoginShell(env, "darwin", () => "<<<LIVELY_PATH:/opt/homebrew/bin:/Users/u/.local/bin:/usr/bin>>>");
+    assert.equal(got, "/opt/homebrew/bin:/Users/u/.local/bin:/usr/bin:/bin");
+    assert.equal(env.PATH, got, "env.PATH 에 심지 않으면 자식이 못 물려받는다");
+    const w = { PATH: "C:\\x" };
+    assert.equal(enrichPathFromLoginShell(w, "win32", () => { throw new Error("호출되면 안 된다"); }), null);
+    assert.equal(w.PATH, "C:\\x");
+    const e2 = { PATH: "/usr/bin" };
+    assert.equal(enrichPathFromLoginShell(e2, "darwin", () => { throw new Error("셸 실패"); }), null);
+    assert.equal(e2.PATH, "/usr/bin", "실패가 PATH 를 건드렸다");
+    assert.equal(enrichPathFromLoginShell({ PATH: "/a" }, "darwin", () => "<<<LIVELY_PATH:/a>>>"), null, "변화 없음 = null");
+  });
+  t("P5 배선 — 메인이 whenReady 초입(첫 refreshState 전)에 보강한다", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    const boot = main.slice(main.indexOf("app.whenReady"), main.indexOf("app.whenReady") + 1200);
+    const at = boot.indexOf("enrichPathFromLoginShell");
+    assert.ok(at >= 0, "whenReady 에서 PATH 를 보강하지 않는다");
+    assert.ok(at < boot.indexOf("refreshState"), "첫 CLI 실행(refreshState deep)보다 앞서야 한다");
+  });
+}
+
 console.log(`\n${pass} passed`);

@@ -34,6 +34,8 @@ import {
   paneAwaitingInput, parseReportedPhase, isPhaseFresh, resolveAgentPhase,
 } from "./phase.js";
 import { userSlug, ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir, mintSessionHookToken, revokeSessionHookToken } from "./profiles.js";
+import { ensureMemberKitSeeded } from "./member-kit-seed.js";
+import { logger } from "../log.js";
 import { canSeeSession } from "./write-cap.js";
 import { loadDesiredMap, loadDesiredOne, resolveDesired, resolveSessionDir } from "../sessions/session-desired.js";
 
@@ -295,6 +297,13 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  폴더를 그룹접근가능으로 만들며 해소. 미프로비저닝 멤버는 여기서 '첫 세션 lazy provision'(ensureMemberOsUser) →
   //  자동 격리(수동 버튼 불요). 인프라미설치/off/비멤버 = null 반환 = 비격리 폴백(무회귀).
   const osUser = await ensureMemberOsUser(user);
+  // 중계 배포 멤버 홈 키트(#1437 §21-3) — 로컬 격리의 provision-member 가 심는 훅·토큰·MCP 배선을 첫 세션에서
+  //  memberSpawn seam 으로 심는다(멱등·마커 1-stat 빠른 경로·중계 미설정이면 no-op). best-effort — 실패해도 세션은
+  //  뜬다(git materialize 규율). 키트가 없으면 work-flag 훅이 없어 대화창 매핑(claude-uuid)이 영영 안 생긴다.
+  if (osUser) {
+    await ensureMemberKitSeeded(user, osUser).catch((e) =>
+      logger.warn({ err: e, osUser }, "멤버 홈 키트 시딩 실패(비치명) — 세션은 뜨나 훅·대화창 매핑이 비어 있을 수 있다"));
+  }
   const id = `${sessionPrefix(user)}${crypto.randomBytes(4).toString("hex")}`;
   // 세션 전용 폴더(#1719 홈 입력창) — cwd = <루트>/sessions/<세션id>. subpath 는 안 받는다(폴더를 고르지 않는 진입이라).
   //  루트는 rootKey 그대로(기본 personal) — 격리 박스면 멤버 홈/box 아래, 관리형이면 멤버 홈이 그대로 마운트되는 자리다.
