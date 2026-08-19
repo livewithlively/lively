@@ -14,7 +14,7 @@ import { logger } from "../log.js";
 import type { WriteCtx } from "../org/store/audit.js";
 import { getApp } from "../org/store/apps.js";
 import { loadAppPackage } from "./loader.js";
-import { installLoadedApp } from "./install-run.js";
+import { installLoadedApp, persistUiAssets } from "./install-run.js";
 
 export interface SeedBuiltinAppsResult { seeded: string[]; skipped: string[]; updated: string[] }
 
@@ -56,6 +56,8 @@ export async function seedBuiltinApps(): Promise<SeedBuiltinAppsResult> {
     const id = loaded.manifest.id;
     const existing = await getApp(id);
     if (existing && existing.content_hash === loaded.contentHash && existing.status === "active") {
+      // 패키지는 안 바뀌었지만 UI 자산은 뒤늦게 도입됐다(PR5) — 없으면 백필(멱등, 기존 설치 앱 마이그레이션).
+      if (loaded.uiAssets.length > 0) await persistUiAssets(loaded);
       res.skipped.push(id);
       continue;
     }
