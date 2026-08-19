@@ -91,10 +91,14 @@ export async function initAppRegistry(pool: Pool): Promise<void> {
   //  왜 보존? ui_page/ui_widget component 는 저널만이고, UI 파일은 패키지 안에만 있다 — git/upload 설치는 스테이지가
   //  삭제되므로 UI 가 유실된다. 설치 시 entry HTML 을 여기 담아, 소스(builtin/git/upload) 무관하게 서빙한다.
   //  전달 = **인증 API → 샌드박스 srcdoc iframe**(정적 URL 아님) — 앱 UI 는 오리진 격리(불투명), 네트워크 없음,
-  //  tools/call 은 postMessage 로 호스트가 중개(앱 grant 로 제약, PR5b). PK(app_id, page_key), 앱 제거 시 CASCADE.
+  //  tools/call 은 postMessage 로 호스트가 중개(앱 grant 로 제약, PR5b). PK(app_id, page_key).
+  //  ⚠ FK 를 org_app(id) 로 걸지 **않는다**: 이 테이블은 org_app 보다 늦게 도입돼, 기존 DB 에선 ensureTenantColumn 이
+  //   org_app PK 를 (tenant_id,id)로 이미 재작성한 뒤라 id 단독 unique 가 없어 FK 생성이 42830 으로 실패한다
+  //   (component/grant 는 fresh DB 때 만들어져 살아남은 것 — 신규 테이블엔 그 전제가 없다). 앱 제거 시 UI 자산 정리는
+  //   org_app_remove 가 pruneUiAssets 로 명시 수행한다(CASCADE 대체).
   await pool.query(`
     CREATE TABLE IF NOT EXISTS org_app_ui_asset(
-      app_id TEXT NOT NULL REFERENCES org_app(id) ON DELETE CASCADE,
+      app_id TEXT NOT NULL,
       page_key TEXT NOT NULL,
       kind TEXT NOT NULL CHECK (kind IN ('page','widget')),
       title TEXT,
