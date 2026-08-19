@@ -44,6 +44,21 @@ function rowToApp(r: Record<string, unknown>): OrgApp {
   };
 }
 
+// ── 설치 직렬화(advisory lock, design R2-5) ────────────────────────────────────
+//  같은 앱의 동시 설치/제거를 직렬화한다(반쯤 전개된 조인을 다른 설치가 덮어쓰지 않게). DB-전역 advisory lock 이라
+//  blue/green 다중 프로세스 사이도 막는다. 락은 **연결 단위**라 전용 client 를 잡아 그 위에서만 lock/unlock 하고,
+//  본 작업(fn)은 풀의 다른 커넥션을 자유로이 쓴다. tenant 는 키에 넣지 않는다(앱 id 만으로 상위집합 직렬화 — 안전).
+export async function withAppInstallLock<T>(appId: string, fn: () => Promise<T>): Promise<T> {
+  const client = await itemsPool.connect();
+  try {
+    await client.query("SELECT pg_advisory_lock(hashtext($1))", ["app-install:" + appId]);
+    return await fn();
+  } finally {
+    try { await client.query("SELECT pg_advisory_unlock(hashtext($1))", ["app-install:" + appId]); } catch { /* 세션 종료 시 자동 해제 */ }
+    client.release();
+  }
+}
+
 // ── org_app ──────────────────────────────────────────────────────────────────
 
 /** 앱 행 upsert(설치/업데이트). status 미지정이면 'installing'(설치 시작). client 주면 그 tx 에서. */

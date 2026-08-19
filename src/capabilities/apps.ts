@@ -1,6 +1,6 @@
-// 앱 레지스트리 capability (#1780, design D2) — 조회 + 멤버 grant + enabled 토글.
-//  ⚠ 설치/업데이트/제거(org_app_install/update/remove)는 **패키지 소스 추출·harness FS 스캔이 선행**이라
-//   별도 트랙(후속 태스크). 여기선 스토어 위에 순수하게 얹히는 조회·grant·enabled 만 노출한다.
+// 앱 레지스트리 capability (#1780, design D2) — 조회 + 멤버 grant + enabled 토글 + 설치/제거(관리자).
+//  설치/제거(org_app_install/remove)는 패키지 소스(git·로컬 경로)를 스테이지 디렉터리로 추출한 뒤
+//   loader→installLoadedApp(builtin 시더와 공용 코어)로 저널드 전개한다. 업로드(tar)는 후속(멀티파트 라우트 선행).
 //  경로 prefix = /api/ui/apps.
 import { z } from "zod";
 import { HttpError } from "./rest-util.js";
@@ -8,6 +8,10 @@ import type { Capability } from "./types.js";
 import * as store from "../org/store/apps.js";
 import { parseAppManifest } from "../apps/manifest.js";
 import { resolveGrant } from "../apps/grant.js";
+import { loadAppPackage } from "../apps/loader.js";
+import { stageAppSource, parseAppSource } from "../apps/install-source.js";
+import { installLoadedApp } from "../apps/install-run.js";
+import { makeDeployDeps } from "../apps/deploy.js";
 
 const actorOf = (u: { userId?: string; email?: string } | undefined): string => u?.userId || u?.email || "unknown";
 const wctx = (u: { userId?: string; email?: string } | undefined, ctx?: { source?: string }) => ({ actor: actorOf(u), source: ctx?.source ?? "web" });
@@ -120,4 +124,64 @@ const appRevoke: Capability = {
   },
 };
 
-export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke];
+// ── 앱 설치/업데이트(관리자) — 패키지 소스 추출 → 로드 → 저널드 전개(#1780 설치 verb) ──
+//  builtin 시더가 쓰는 공용 코어(installLoadedApp)를 그대로 태운다 — git/로컬경로만 다르고 설치 시맨틱은 동일.
+//  같은 앱의 동시 설치/제거는 withAppInstallLock 으로 직렬화(반쯤 전개된 조인 덮어쓰기 방지, R2-5).
+const appInstall: Capability = {
+  name: "org_app_install",
+  title: "앱 설치·업데이트",
+  description: "패키지 소스에서 앱을 설치(같은 id 면 업데이트)한다. source.kind='git'(https:// url·선택 ref) 또는 'path'(게이트웨이 로컬 경로). 저널드 2-phase — 실패 시 역순 보상. 관리자.",
+  scope: "admin",
+  input: { source: z.object({ kind: z.enum(["git", "path"]), url: z.string().optional(), ref: z.string().optional(), path: z.string().optional() }) },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/apps/install"], parse: (req) => ({ source: (req.body as Record<string, unknown>)?.source }) }],
+  },
+  handler: async (input: Record<string, unknown>, user, ctx) => {
+    const source = parseAppSource(input.source);
+    const staged = await stageAppSource(source);
+    try {
+      const loaded = await loadAppPackage(staged.dir);
+      const outcome = await store.withAppInstallLock(loaded.manifest.id, () =>
+        installLoadedApp(loaded, staged.meta, wctx(user, ctx)));
+      const app = await store.getApp(outcome.id);
+      return { app, created: outcome.created, components: outcome.components };
+    } finally {
+      await staged.cleanup();
+    }
+  },
+};
+
+// ── 앱 제거(관리자) — 전개물 회수 + 레지스트리 삭제 ──
+//  전개된 대상(하네스 자산·크론·툴·호스트 병합)은 CASCADE 밖(별도 스토어)이라 **먼저 reclaim** 한 뒤 앱 행을 지운다
+//  (조인 component/grant 는 deleteApp 이 CASCADE). builtin 은 제거해도 부팅 시 재시드되므로 막고 enabled 토글로 안내.
+const appRemove: Capability = {
+  name: "org_app_remove",
+  title: "앱 제거",
+  description: "앱과 그 전개물(하네스 자산·크론·툴·호스트)을 회수하고 레지스트리에서 삭제한다. builtin(코드 소유) 앱은 제거 대신 org_app_set_enabled 로 끈다(부팅 재시드). 관리자.",
+  scope: "admin",
+  input: { app_id: z.string() },
+  expose: {
+    mcp: true,
+    rest: [{ method: "POST", paths: ["/api/ui/apps/:id/remove"], parse: (req) => ({ app_id: (req.params as Record<string, string>)?.id }) }],
+  },
+  handler: async (input: Record<string, unknown>, user, ctx) => {
+    const id = appId(input.app_id);
+    return store.withAppInstallLock(id, async () => {
+      const app = await store.getApp(id);
+      if (!app) throw new HttpError(404, `앱 없음: ${id}`);
+      const src = (app.source ?? {}) as { kind?: string };
+      if (src.kind === "builtin") throw new HttpError(409, `builtin 앱 '${id}' 은 제거 대신 org_app_set_enabled 로 끄세요(부팅 시 재시드됩니다)`);
+      const deps = makeDeployDeps(id, wctx(user, ctx));
+      const comps = await store.listComponents(id);
+      for (const c of comps) {
+        try { await deps.reclaim({ kind: c.kind, ref: c.ref, orig_name: c.orig_name ?? undefined }); }
+        catch { /* best-effort — 조인은 아래 delete 로 CASCADE, 저널 삭제로 스위퍼도 무관 */ }
+      }
+      await store.deleteApp(id, wctx(user, ctx));
+      return { ok: true, removed: id, components: comps.length };
+    });
+  },
+};
+
+export const appCapabilities: Capability[] = [appsIndex, appGet, appSetEnabled, appGrant, appRevoke, appInstall, appRemove];
