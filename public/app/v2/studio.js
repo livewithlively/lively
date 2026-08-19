@@ -139,6 +139,14 @@ export function mountStudio(host, opts) {
     // 타임라인은 위젯이 아니라 **우상단 토글**이다(원준 2026-08-19) — 맥 알림 센터 문법: 문패 오른쪽 끝에서
     //  누르면 오른쪽에서 스르륵 밀려 들어오고, 다시 누르면 밀려 나간다. 판 위 다른 위젯과 결이 다른 게 맞다 —
     //  이건 '판에 둔 물건'이 아니라 '잠깐 젖혀 보는 서랍'이라서다(그래서 판 배치에 저장되지 않는다).
+    // 바탕화면 스택 켜기/끄기 — 판 설정이라 문패 오른쪽(타임라인·코멘트·정리)과 같은 줄에 둔다(원준 2026-08-19).
+    const stackBtn = el('button', { class: 'btn btn-ghost btn-sm stu-stack-btn', type: 'button',
+        title: '스택 — 바탕화면 파일을 종류별 한 무더기로 접습니다', 'aria-pressed': 'false',
+        onclick: () => { stackOn = !stackOn; try {
+            localStorage.setItem(STACK_KEY, stackOn ? '1' : '0');
+        }
+        catch (_) { /* noop */ } closeStackPop(); paintStackBtn(); deskSig = ''; void paintDesk(); } }, icon('grid', 'stu-i sm'), el('span', { text: '스택' }));
+    function paintStackBtn() { stackBtn.classList.toggle('on', stackOn); stackBtn.setAttribute('aria-pressed', String(stackOn)); }
     const tlBtn = el('button', { class: 'btn btn-ghost btn-sm stu-tl-btn', type: 'button', title: '타임라인 — 이 프로젝트에 남은 것들 (Esc 로 닫기)',
         'aria-label': '타임라인', 'aria-expanded': 'false', onclick: () => toggleNotif() }, icon('clock', 'stu-i sm'), el('span', { text: '타임라인' }));
     function paintDoor() {
@@ -155,7 +163,7 @@ export function mountStudio(host, opts) {
             : el('div', { class: 'stu-eyebrow' }, el('span', { class: 'mono', text: '#' + p.id }), el('span', { class: 'sep', text: '·' }), el('span', { class: 'stu-state ' + st.c, text: st.t }), el('span', { class: 'sep', text: '·' }), el('span', { text: `세션 ${ss.length}` + (live.length ? ` · 지금 ${live.length}` : '') }), el('span', { class: 'sep', text: '·' }), el('span', { text: `할 일 ${tasks.length - doneN}/${tasks.length}` }), el('span', { class: 'sep', text: '·' }), el('span', { text: `지식 ${knN}` }))), el('h1', { class: 'stu-title', text: p.name || '프로젝트 #' + id })), el('div', { class: 'stu-door-r' }, el('span', { class: 'stu-faces' }, ...members.slice(0, 5).map((m) => personFace(String(m.member_id || m), 'stu-face', String(m.display_name || m.member_id || '')))), 
         // 이 줄은 **캔버스보다 위**에 있는 것들만 — 판 설정(코멘트 모드·정리)뿐이다(원준 2026-08-19).
         //  타임라인·명세는 기능이라 앱/위젯으로 내려갔다(⊞ 런치패드).
-        tlBtn, cmBtn, el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '정리', title: '위젯 위치만 격자에 맞춰 정렬합니다(크기는 그대로)', onclick: () => { autoArrange(); paintAll(); save(); } })));
+        stackBtn, tlBtn, cmBtn, el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '정리', title: '위젯 위치만 격자에 맞춰 정렬합니다(크기는 그대로)', onclick: () => { autoArrange(); paintAll(); save(); } })));
         cmBtn.classList.toggle('on', commentMode);
     }
     // ── 위젯 프레임 ──
@@ -1188,6 +1196,8 @@ export function mountStudio(host, opts) {
             closeApp();
         if (!launch.hidden && !launch.contains(t) && !launchBtn.contains(t))
             toggleLaunch(false);
+        if (stackPop && !stackPop.contains(t) && !(t instanceof Node && t.closest?.('.stu-ico.is-stack')))
+            closeStackPop();
         if (peekEl && !peekEl.contains(t))
             closePeek(); // 판 아무 데나 누르면 피크는 물러난다(맥 훑어보기와 같은 몸짓)
         if (desk.contains(t))
@@ -1201,7 +1211,11 @@ export function mountStudio(host, opts) {
         }
         const typing = !!(document.activeElement && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName));
         if (e.key === 'Escape') {
-            if (focusId) {
+            if (stackPop) {
+                closeStackPop();
+                e.stopPropagation();
+            }
+            else if (focusId) {
                 unfocusWidget();
                 e.stopPropagation();
             }
@@ -1244,6 +1258,14 @@ export function mountStudio(host, opts) {
     //   "각각 뭔지" 를 이름 밑에서 바로 읽게 한다.
     //  조작(맥 그대로): 클릭 = 선택 · ⌘/Ctrl+클릭 = 더하기 · 바탕 드래그 = 영역 선택 · ⌘A = 전체 · Esc = 해제 ·
     //   두 번 = 열기 · 끌어다 판에 놓기 = 그 자리에 창 · Delete 또는 휴지통에 떨구기 = 버리기.
+    // 스택 켜기/끄기 — 맥 바탕화면의 '스택 사용'. 사람마다 취향이 갈려 기억해 둔다(기본은 켜짐: 파일이 늘어도 안 어지럽다).
+    const STACK_KEY = 'lively_studio_stack_' + id;
+    let stackOn = (() => { try {
+        return localStorage.getItem(STACK_KEY) !== '0';
+    }
+    catch (_) {
+        return true;
+    } })();
     const TRASH_DIR = '휴지통';
     const MACHINE_FILES = new Set(['CLAUDE.md', 'AGENTS.md', '.DS_Store', 'package-lock.json', 'yarn.lock']);
     const NOISE_RE = /\/(__pycache__|node_modules|dist|build|\.next|coverage|venv)\//; // 사람이 올린 자료가 아닌 것
@@ -1254,25 +1276,27 @@ export function mountStudio(host, opts) {
     stage.append(desk, deskBar, marq, trashEl);
     let deskSig = '';
     let trashN = 0;
+    /** 스택 카테고리 — 맥 '스택으로 그룹화' 의 종류별 묶음. 사람이 찾을 때 쓰는 말로 짓는다(확장자 아님). */
+    const CATS = ['그림', '시안', '문서', '표', '장표', '묶음', '그 밖'];
     const isImg = (n) => /\.(png|jpe?g|gif|webp|svg)$/i.test(n);
     const base = (p2) => String(p2).split('/').pop() || String(p2);
     /** 확장자 → 사람이 읽는 종류. 아이콘 밑 캡션이자 이 파일이 무엇인지에 대한 답. */
     function kindOf(p2) {
         if (isImg(p2))
-            return { kind: 'img', type: '그림' };
+            return { kind: 'img', type: '그림', cat: '그림' };
         if (/\.pdf$/i.test(p2))
-            return { kind: 'pdf', type: 'PDF' };
+            return { kind: 'pdf', type: 'PDF', cat: '문서' };
         if (/\.html?$/i.test(p2))
-            return { kind: 'page', type: '시안' };
+            return { kind: 'page', type: '시안', cat: '시안' };
         if (/\.(md|txt)$/i.test(p2))
-            return { kind: 'doc', type: '문서' };
+            return { kind: 'doc', type: '문서', cat: '문서' };
         if (/\.(csv|tsv|xlsx?)$/i.test(p2))
-            return { kind: 'file', type: '표' };
+            return { kind: 'file', type: '표', cat: '표' };
         if (/\.(pptx?|key)$/i.test(p2))
-            return { kind: 'file', type: '장표' };
+            return { kind: 'file', type: '장표', cat: '장표' };
         if (/\.(zip|tar|gz)$/i.test(p2))
-            return { kind: 'file', type: '묶음' };
-        return { kind: 'file', type: '파일' };
+            return { kind: 'file', type: '묶음', cat: '묶음' };
+        return { kind: 'file', type: '파일', cat: '그 밖' };
     }
     const fileUrl = (p2) => apiUrl('/api/ui/v6/projects/' + id + '/file?path=' + encodeURIComponent(p2));
     // <img src> 는 Authorization 헤더를 못 싣는다 — 쿠키 없는 세션(프리뷰·데스크톱 토큰 모드)에서 그림이 깨진다.
@@ -1315,7 +1339,7 @@ export function mountStudio(host, opts) {
     function clearSel() { for (const [e2] of iconEls)
         e2.classList.remove('sel'); paintDeskBar(); }
     function paintDeskBar() {
-        const sel = selected().filter((x) => x.it.kind !== 'stack-folder' && x.it.kind !== 'stack-kn');
+        const sel = selected().filter((x) => !String(x.it.kind).startsWith('stack'));
         const n = selected().length;
         deskBar.hidden = n === 0;
         if (!n)
@@ -1328,23 +1352,91 @@ export function mountStudio(host, opts) {
             el('button', { class: 'stu-w-btn', type: 'button', text: '×', title: '선택 해제 (Esc)', onclick: clearSel }),
         ].filter(Boolean)); // ⚠ replaceChildren 은 el 과 달리 null 을 'null' 텍스트로 넣는다
     }
+    /** 종이 낱장 — 맥 문서 아이콘의 뼈대(접힌 귀 + 그림자). 그 위에 미리보기나 확장자 배지를 얹는다. */
+    function sheet(...kids) {
+        return el('span', { class: 'stu-sheet' }, el('span', { class: 'stu-sheet-fold', 'aria-hidden': 'true' }), ...kids);
+    }
+    /** 실제 미리보기 — PDF·HTML 은 브라우저가 그릴 수 있다(작게 줄여 얹는다). 글 파일은 첫 줄들을 축소해 보여준다.
+     *  ⚠ 안 되는 파일도 있다(권한·형식) — 그 땐 배지만 남는다. 미리보기는 덤이지 전제가 아니다. */
+    function livePrev(it, host) {
+        if (it.kind === 'pdf' || it.kind === 'page') {
+            void fetch(fileUrl(it.path), { headers: authHeaders() }).then((r) => (r.ok ? r.blob() : null)).then((bl) => {
+                if (!bl || dead)
+                    return;
+                const u = URL.createObjectURL(bl);
+                blobUrls.push(u);
+                const fr = el('iframe', { class: 'stu-prev-fr', tabindex: '-1', 'aria-hidden': 'true', scrolling: 'no',
+                    ...(it.kind === 'page' ? { sandbox: '' } : {}), src: u + (it.kind === 'pdf' ? '#toolbar=0&navpanes=0&view=FitH' : '') });
+                host.replaceChildren(fr);
+                host.classList.add('has-prev');
+            }).catch(() => { });
+            return;
+        }
+        if (it.kind === 'doc') {
+            void fetch(fileUrl(it.path), { headers: authHeaders() }).then((r) => (r.ok ? r.text() : '')).then((t) => {
+                if (!t || dead)
+                    return;
+                const lines = t.split('\n').filter((x) => x.trim()).slice(0, 9);
+                host.replaceChildren(el('span', { class: 'stu-prev-tx' }, ...lines.map((x) => el('span', { text: x.slice(0, 40) }))));
+                host.classList.add('has-prev');
+            }).catch(() => { });
+        }
+    }
+    const EXT_OF = (p2) => (String(p2).split('.').pop() || '').slice(0, 4).toUpperCase();
+    // ── 스택 판 — 그 무더기 안을 훑는 자리(맥 폴더 팝오버). 판을 덮지 않게 작고, 스스로 스크롤한다. ──
+    let stackPop = null;
+    let openPopFor = '';
+    function closeStackPop() { if (stackPop) {
+        stackPop.remove();
+        stackPop = null;
+    } openPopFor = ''; desk.querySelectorAll('.stu-ico.open').forEach((x) => x.classList.remove('open')); }
+    function openStackPop(it, anchorEl) {
+        const was = openPopFor === it.path;
+        closeStackPop();
+        if (was)
+            return; // 같은 스택을 다시 누르면 닫는다
+        openPopFor = it.path;
+        anchorEl.classList.add('open');
+        const kids = it.kids || [];
+        const grid = el('div', { class: 'stu-stackpop-g' }, ...kids.map(deskIcon));
+        const pop = el('div', { class: 'stu-stackpop' }, el('div', { class: 'stu-stackpop-h' }, el('b', { text: it.label }), el('span', { class: 'stu-fine', text: kids.length + '개' }), el('button', { class: 'stu-w-btn', type: 'button', text: '×', title: '닫기(Esc)', onclick: () => closeStackPop() })), grid);
+        stackPop = pop;
+        stage.append(pop);
+        const r = anchorEl.getBoundingClientRect(), sr = stage.getBoundingClientRect();
+        pop.style.top = Math.max(8, Math.round(r.top - sr.top)) + 'px';
+        pop.style.right = Math.round(sr.right - r.left + 10) + 'px';
+    }
     function deskIcon(it) {
-        const stack = it.kind === 'stack-folder' || it.kind === 'stack-kn';
-        const thumb = it.kind === 'img' ? el('img', { alt: '', loading: 'lazy' }) : null;
-        if (thumb)
+        const stack = it.kind === 'stack-folder' || it.kind === 'stack-kn' || it.kind === 'stack-cat';
+        let g;
+        if (it.kind === 'img') {
+            const thumb = el('img', { alt: '', loading: 'lazy' });
             fillImg(thumb, it.path);
-        const g = it.kind === 'img'
-            ? el('span', { class: 'stu-ico-g im' }, thumb)
-            : el('span', { class: 'stu-ico-g ' + it.kind }, icon(it.kind === 'stack-folder' ? 'folder' : it.kind === 'stack-kn' ? 'book' : it.kind === 'page' ? 'deck' : it.kind === 'pdf' ? 'doc' : 'doc', 'stu-i'));
-        if (stack)
-            g.classList.add('stack');
-        const b = el('button', { class: 'stu-ico' + (stack ? ' is-stack' : ''), type: 'button', role: 'option', 'aria-selected': 'false', draggable: String(!stack),
+            g = el('span', { class: 'stu-ico-g im' }, thumb);
+        }
+        else if (stack) {
+            // 스택 = 겹쳐 쌓인 낱장 셋(맥 문법). 맨 앞장에 그 묶음을 대표하는 표식.
+            g = el('span', { class: 'stu-ico-g stack cat-' + (it.cat || it.kind) }, el('span', { class: 'stu-stk s3', 'aria-hidden': 'true' }), el('span', { class: 'stu-stk s2', 'aria-hidden': 'true' }), el('span', { class: 'stu-stk s1' }, icon(it.kind === 'stack-folder' ? 'folder' : it.kind === 'stack-kn' ? 'book' : it.cat === '그림' ? 'img' : it.cat === '시안' ? 'deck' : 'doc', 'stu-i sm')));
+        }
+        else {
+            const box = el('span', { class: 'stu-prev' }, el('span', { class: 'stu-ext ' + it.kind, text: EXT_OF(it.path) }));
+            g = el('span', { class: 'stu-ico-g doc-g ' + it.kind }, sheet(box));
+            livePrev(it, box);
+        }
+        const b = el('button', { class: 'stu-ico' + (stack ? ' is-stack' : '') + (openPopFor === it.path ? ' open' : ''), type: 'button', role: 'option', 'aria-selected': 'false', draggable: String(!stack),
             title: (stack ? it.label : it.path) + (it.sub ? ' — ' + it.sub : '') + '\n' + (stack ? '두 번 눌러 열기' : '두 번 눌러 열기 · 끌어다 놓으면 그 자리에 창 · Delete = 휴지통') }, g, el('span', { class: 'stu-ico-n', text: it.label }), el('span', { class: 'stu-ico-t', text: it.type + (it.n != null ? ' · ' + it.n : '') }));
         b.addEventListener('click', (e) => {
             e.stopPropagation();
             if (e.metaKey || e.ctrlKey) {
                 b.classList.toggle('sel');
                 paintDeskBar();
+                return;
+            }
+            // 종류 스택은 한 번 눌러 연다 — 단 **판 위로 흘리지 않는다**.
+            //  실측(원준 걱정 그대로): 31장짜리 그림 스택을 그 자리에서 펼쳤더니 캔버스를 통째로 덮었다.
+            //  그래서 맥 폴더처럼 **그 옆에 뜨는 작은 판**으로 연다 — 바탕은 언제나 한 줄로 깨끗하다.
+            if (it.kind === 'stack-cat') {
+                openStackPop(it, b);
                 return;
             }
             selectOnly(b);
@@ -1361,7 +1453,7 @@ export function mountStudio(host, opts) {
             }
             if (!b.classList.contains('sel'))
                 selectOnly(b);
-            const many = selected().map((x) => x.it).filter((x) => x.kind !== 'stack-folder' && x.kind !== 'stack-kn');
+            const many = selected().map((x) => x.it).filter((x) => !String(x.kind).startsWith('stack'));
             e.dataTransfer?.setData('text/plain', 'stu-desk:' + JSON.stringify(many.length ? many : [it]));
             desk.classList.add('dragging');
         });
@@ -1415,8 +1507,10 @@ export function mountStudio(host, opts) {
     // ── 휴지통 — 아이콘을 떨구거나 Delete. 되돌리기·비우기는 휴지통을 두 번 눌러서 ──
     //  서버 rename 은 같은 폴더 안에서만 되므로(경로 이동 API 없음) '복사 후 삭제' 로 옮긴다 — 큰 파일은 확인을 받는다.
     function paintTrash() {
-        trashEl.replaceChildren(el('span', { class: 'stu-ico-g trash' + (trashN ? ' full' : '') }, icon('trash', 'stu-i')), el('span', { class: 'stu-ico-n', text: '휴지통' }), el('span', { class: 'stu-ico-t', text: trashN ? trashN + '개' : '비어 있음' }));
+        // 휴지통도 낱장 아이콘과 같은 급으로 그린다 — 통 + 뚜껑 + 세로 홈, 차면 종이가 삐져나온다(맥 문법).
+        trashEl.replaceChildren(el('span', { class: 'stu-ico-g trash' + (trashN ? ' full' : '') }, ...(trashN ? [el('span', { class: 'stu-trash-paper', 'aria-hidden': 'true' })] : []), sv('svg', { viewBox: '0 0 32 34', class: 'stu-trash-sv', 'aria-hidden': 'true' }, sv('path', { class: 'lid', d: 'M4 8h24' }), sv('path', { class: 'lid', d: 'M12 8V5.5A1.5 1.5 0 0 1 13.5 4h5A1.5 1.5 0 0 1 20 5.5V8' }), sv('path', { class: 'can', d: 'M6.5 8.5h19l-1.6 20.2A2.4 2.4 0 0 1 21.5 31h-11a2.4 2.4 0 0 1-2.4-2.3L6.5 8.5z' }), sv('path', { class: 'rib', d: 'M13 13.5v12M19 13.5v12' }))), el('span', { class: 'stu-ico-n', text: '휴지통' }), el('span', { class: 'stu-ico-t', text: trashN ? trashN + '개' : '비어 있음' }));
     }
+    paintStackBtn(); // 저장된 켜짐 상태를 버튼에 처음부터 반영
     trashEl.addEventListener('dblclick', () => void openTrash());
     trashEl.addEventListener('dragover', (e) => { e.preventDefault(); trashEl.classList.add('over'); });
     trashEl.addEventListener('dragleave', () => trashEl.classList.remove('over'));
@@ -1603,18 +1697,37 @@ export function mountStudio(host, opts) {
             return;
         assetCount = assets.length;
         const rootN = assets.length; // 스택 배지 = **자료 수**(파일시스템 항목 수가 아니라)
-        const docs = assets.slice(0, 6); // 많을수록 바탕이 어지럽다 — 최근 것 여섯만(나머지는 [공유 폴더] 안에)
         const kn = (pj().knowledge || {});
         const knN = (kn.required || []).length + (kn.produced || []).length;
+        const asItem = (f) => {
+            const k = kindOf(f.path);
+            return { kind: k.kind, path: f.path, label: base(f.path), type: k.type, sub: fmtSize(f.size), cat: k.cat };
+        };
+        // 스택(맥 '스택으로 그룹화') — 파일이 늘어도 바탕이 어지러워지지 않게 **종류별 한 무더기**로 접는다.
+        //  꺼 두면 종전대로 최근 여섯 장만 낱개로 눕는다(그 이상은 [공유 폴더] 안에).
+        let files;
+        if (stackOn) {
+            const by = new Map();
+            for (const f of assets) {
+                const i2 = asItem(f);
+                const c = i2.cat || '그 밖';
+                (by.get(c) ?? by.set(c, []).get(c)).push(i2);
+            }
+            files = CATS.filter((c) => by.has(c)).map((c) => {
+                const kids = by.get(c);
+                return { kind: 'stack-cat', path: 'cat:' + c, label: c, type: '스택', n: kids.length, cat: c,
+                    sub: kids.slice(0, 3).map((k2) => k2.label).join(' · '), kids };
+            });
+        }
+        else {
+            files = assets.slice(0, 6).map(asItem);
+        }
         const items = [
             { kind: 'stack-folder', path: '', label: '공유 폴더', type: '자료', n: rootN, sub: '올린 파일·세션이 남긴 결과물' },
             ...(knN ? [{ kind: 'stack-kn', path: '', label: '지식', type: '지식', n: knN, sub: '필요·산출 지식' }] : []),
-            ...docs.map((f) => {
-                const k = kindOf(f.path);
-                return { kind: k.kind, path: f.path, label: base(f.path), type: k.type, sub: fmtSize(f.size) };
-            }),
+            ...files,
         ];
-        const sig = JSON.stringify(items.map((i) => i.kind + ':' + i.path + ':' + (i.n ?? ''))) + ':' + trashN;
+        const sig = JSON.stringify(items.map((i) => i.kind + ':' + i.path + ':' + (i.n ?? ''))) + ':' + trashN + ':' + (stackOn ? '1' : '0');
         if (sig === deskSig)
             return;
         deskSig = sig;
