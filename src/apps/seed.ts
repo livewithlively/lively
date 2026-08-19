@@ -12,11 +12,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { logger } from "../log.js";
 import type { WriteCtx } from "../org/store/audit.js";
-import { getApp, listComponents } from "../org/store/apps.js";
+import { getApp } from "../org/store/apps.js";
 import { loadAppPackage } from "./loader.js";
-import { diffComponents, type AppComponentRef } from "./install-plan.js";
-import { runInstall, type InstallAppMeta } from "./install.js";
-import { makeDeployDeps } from "./deploy.js";
+import { installLoadedApp } from "./install-run.js";
 
 export interface SeedBuiltinAppsResult { seeded: string[]; skipped: string[]; updated: string[] }
 
@@ -62,34 +60,10 @@ export async function seedBuiltinApps(): Promise<SeedBuiltinAppsResult> {
       continue;
     }
 
-    const meta: InstallAppMeta = {
-      id,
-      title: loaded.manifest.title,
-      version: loaded.manifest.version,
-      manifest: loaded.manifest,
-      source: { kind: "builtin" },
-      content_hash: loaded.contentHash,
-    };
-    const deps = makeDeployDeps(id, ctx);
-
     try {
-      if (existing) {
-        // 업데이트 — 빠진 component(drop)를 먼저 계산해 두고, 새 계획 전체로 재설치한 뒤 drop 을 회수한다.
-        //  (v1: 새 set 재전개는 kind 별 handler 가 멱등 upsert/replace 라 keep 도 안전하게 다시 쓴다.)
-        const oldRefs: AppComponentRef[] = (await listComponents(id)).map((c) => ({
-          kind: c.kind, ref: c.ref, orig_name: c.orig_name ?? undefined,
-        }));
-        const { drop } = diffComponents(oldRefs, loaded.items.map((it) => it.comp));
-        await runInstall(meta, loaded.items, deps);
-        for (const c of drop) {
-          try { await deps.reclaim(c); } catch (err) { logger.warn({ err, id, comp: c }, "drop 회수 실패(비치명)"); }
-          try { await deps.removeComponent(id, c); } catch (err) { logger.warn({ err, id, comp: c }, "drop 조인 제거 실패(비치명)"); }
-        }
-        res.updated.push(id);
-      } else {
-        await runInstall(meta, loaded.items, deps);
-        res.seeded.push(id);
-      }
+      // builtin 은 코드 소유 → source={kind:'builtin'}. 공용 코어가 저널드 설치 + update-diff 를 처리한다.
+      const outcome = await installLoadedApp(loaded, { kind: "builtin" }, ctx);
+      (outcome.created ? res.seeded : res.updated).push(id);
     } catch (err) {
       // runInstall 은 실패 시 저널 status=failed 를 남기고 보상한다 — 부팅 스위퍼가 잔재를 회수한다. 다음 시딩이 재시도.
       logger.warn({ err, id }, "빌트인 앱 설치 실패(비치명 — 다음 시딩이 재시도)");

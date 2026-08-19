@@ -3875,5 +3875,25 @@
    "POST /api/ui/apps/:id/revoke"
   ],
   "input_hash": "eeaa30c0ba805f7f"
+ },
+ {
+  "name": "org_app_install",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/install"
+  ],
+  "input_hash": "eca5923943b417fa"
+ },
+ {
+  "name": "org_app_remove",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/remove"
+  ],
+  "input_hash": "eeaa30c0ba805f7f"
  }
 ]
