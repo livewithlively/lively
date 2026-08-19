@@ -28,6 +28,8 @@ import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReady
 import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, staleCleanupPs, staleInstallNote } from "./win-stale-install.mjs";
+import { enrichPathFromLoginShell } from "./login-path.mjs";
+import { execFileSync } from "node:child_process";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LIVELY_DIR = join(process.env.LIVELY_HOME || homedir(), ".lively");
@@ -704,6 +706,11 @@ if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on("second-instance", () => showMain());
   app.whenReady().then(async () => {
+    // ★ 로그인 셸 PATH 보강(#1541, login-path.mjs 머리말) — 이 아래의 **모든** CLI 실행(status·setup·node)이
+    //  이 PATH 를 물려받는다. 실측: GUI 최소 PATH 로 노드를 재시작해 pane 이 claude 를 못 찾았다(#216은 kit 쪽 방어,
+    //  이건 호출자 쪽 근본 방어 — 둘이 겹쳐야 setup·tmux 탐색까지 안전하다). 실패는 무해(현재 PATH 유지).
+    enrichPathFromLoginShell(process.env, process.platform, (sh, argv) =>
+      execFileSync(sh, argv, { encoding: "utf8", timeout: 8000, stdio: ["ignore", "pipe", "ignore"] }));
     tray = new Tray(trayImage());
     tray.on("click", () => showMain());            // Windows·Linux 는 좌클릭이 자연스럽다
     try { startedHidden = startedHiddenFrom({ platform: process.platform, argv: process.argv, loginItem: app.getLoginItemSettings({ args: AUTOLAUNCH_ARGS }) }); } catch { startedHidden = false; }
