@@ -1217,7 +1217,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) { .stu-dest.pulse { animation: none; box-shadow: 0 0 0 4px rgba(45,107,240,.18); } }
 
 /* 손잡이 알약 — 끌어서 옮긴다(자리는 사람마다 다르다). 왼쪽 세로 점선이 잡는 자리. */
-.stu-panel-fab { cursor: default; padding-left: 2px; }
+.stu-panel-fab { cursor: pointer; padding-left: 2px; }   /* 알약 어디를 눌러도 목록이 열린다 — 손 모양으로 그렇게 보이게 */
 .stu-fab-grip { flex: none; width: 12px; height: 20px; margin-right: -2px; cursor: grab; border-radius: 4px;
   background-image: radial-gradient(currentColor 1px, transparent 1px); background-size: 4px 5px; background-position: 2px 2px;
   color: var(--muted-3); opacity: .85; }

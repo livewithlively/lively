@@ -287,7 +287,7 @@ function drawSide(): void {
   //  알약은 두 조각이다: 왼쪽 L = 홈으로(문패 로고가 하던 일), 나머지 = 목록 열기. 보이기엔 한 알약이다.
   if (panelFab) { panelFab.remove(); panelFab = null; }
   if (!showPanel) {
-    const fab = el('div', { class: 'stu-panel-fab' },
+    const fab = el('div', { class: 'stu-panel-fab', title: '눌러서 프로젝트 목록 열기 · 그립을 잡고 끌면 자리를 옮깁니다' },
       el('span', { class: 'stu-fab-grip', title: '끌어서 옮기기', 'aria-hidden': 'true' }),
       el('a', { class: 'lg', href: '#/', title: '홈으로', 'aria-label': '홈으로', text: 'L' }),
       el('button', { class: 'stu-panel-fab-open', type: 'button', text: '프로젝트',
@@ -336,7 +336,9 @@ function makeFabDraggable(fab: HTMLElement): void {
     const dx = e.clientX - r0.left, dy = e.clientY - r0.top;
     let moved = false;
     const move = (ev: PointerEvent): void => {
-      if (!moved && Math.abs(ev.clientX - e.clientX) + Math.abs(ev.clientY - e.clientY) < 4) return;
+      // 문턱을 넉넉히(8px) — 트랙패드는 '누르기'에도 2~5px 흔들린다. 좁으면 클릭이 드래그로 잡혀 아무 일도 안 일어난다
+      //  (상민님 실측 2026-08-19: "알약 눌러도 사이드바 안 나타나").
+      if (!moved && Math.abs(ev.clientX - e.clientX) + Math.abs(ev.clientY - e.clientY) < 8) return;
       if (!moved) { moved = true; fab.classList.add('dragging'); fab.setPointerCapture(ev.pointerId); }
       const x = Math.min(Math.max(8, ev.clientX - rr.left - dx), rr.width - fab.offsetWidth - 8);
       const y = Math.min(Math.max(8, ev.clientY - rr.top - dy), rr.height - fab.offsetHeight - 8);
@@ -344,7 +346,8 @@ function makeFabDraggable(fab: HTMLElement): void {
     };
     const up = (ev: PointerEvent): void => {
       window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up);
-      if (!moved) return;
+      // 끌지 않았으면 = 그냥 누른 것 → 목록을 연다. 알약의 **어디를 눌러도** 열려야 한다(글자만 되는 건 함정이다).
+      if (!moved) { railPanelOpen = true; drawSide(); return; }
       fab.classList.remove('dragging');
       try { fab.releasePointerCapture(ev.pointerId); } catch (_) { /* noop */ }
       const r = fab.getBoundingClientRect();
