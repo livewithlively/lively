@@ -85,19 +85,27 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-ws-promo-acts { flex: none; display: flex; gap: 4px; }
 
 /* ── 사이드바 ── */
-.v2-side { background: var(--canvas, #F4F7FC); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+/* ══ 사이드바 여백 체계(상민님 2026-08-19 "좌측여백 타이트·배치 0부터 다시") ═══════════════════
+   종전엔 블록마다 제 여백을 들고 있어 왼쪽 기준선이 8·12·16·18·24px 로 갈렸고(실측), 그래서 무엇도
+   줄이 맞지 않았다. 이제 **기준선은 셋뿐**이다:
+     ① --side-pad  : 패널 안 모든 블록의 좌우 여백(바깥 기준선)
+     ② --side-inset: 행 안쪽 첫 요소까지(아이콘·캐럿이 앉는 자리)
+     ③ --side-step : 한 단계 들여쓰기(캐럿+아이콘 폭) — 세션 이름이 프로젝트 이름과 같은 x 에 선다.
+   행 높이도 하나로(--side-row) — 목록이 '다닥다닥'해 보이던 것은 밀도가 아니라 제각각인 높이 탓이었다. */
+.v2-side { --side-pad: 14px; --side-inset: 10px; --side-step: 31px; --side-row: 36px;
+  background: var(--canvas, #F4F7FC); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
 /* 좌상단 한 줄 — 브랜드 심볼(=홈) + 워크스페이스 스위처. 워드마크 줄을 따로 두면 조직명이 'Lively' 일 때
    같은 글자가 두 번 나오고 머리만 196px 를 먹었다(실측) → 141px. */
-.v2-side-top { padding: 12px 10px 6px; display: flex; align-items: center; gap: 9px; }
+.v2-side-top { padding: 14px var(--side-pad) 8px; display: flex; align-items: center; gap: 10px; }
 .v2-mark { flex: none; width: 30px; height: 30px; border-radius: 9px; background: var(--ink); display: grid; place-items: center; text-decoration: none; }
 .v2-mark:hover { background: var(--blue-deep, #1E54CC); }
 .v2-mark-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--mint-deep, #0FA37E); display: block; }
 .v2-mark:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-.v2-liv-btn { margin: 5px 8px 2px; display: flex; align-items: center; gap: 10px; padding: 10px 11px; border-radius: 10px; border: 1px solid transparent; font-weight: 700; font-size: 14.5px; color: var(--ink); text-decoration: none; }
+.v2-liv-btn { margin: 4px var(--side-pad) 2px; display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 7px var(--side-inset); border-radius: 10px; border: 1px solid transparent; font-weight: 700; font-size: 14.5px; color: var(--ink); text-decoration: none; }
 .v2-liv-btn:hover, .v2-liv-btn.on { background: var(--bg, #fff); border-color: #CDEFE3; }
 .v2-liv-btn .lm { width: 24px; height: 24px; border-radius: 50%; background: var(--bg-success, #F3FBF8); border: 1px solid #CDEFE3; display: grid; place-items: center; color: var(--mint-deep, #0FA37E); font-weight: 800; font-size: 11px; flex: none; }
 .v2-liv-btn .sub { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--muted); }
-.v2-side-sec { padding: 16px 12px 6px 18px; display: flex; align-items: center; gap: 2px; flex-wrap: nowrap; }
+.v2-side-sec { padding: 18px var(--side-pad) 8px; display: flex; align-items: center; gap: 2px; flex-wrap: nowrap; }
 .v2-side-sec .v2-k { margin-right: 6px; }
 /* 개수가 늘어도(196·1204) 줄바꿈되지 않게 — 조작부가 두 줄로 접히면 목록보다 머리가 커 보인다. */
 .v2-side-sec .v2-k { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -132,22 +140,22 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-fo-ck { color: var(--mint-deep, #0FA37E); font-weight: 800; }
 .v2-flt-foot { display: flex; justify-content: space-between; border-top: 1px solid var(--line, #E6ECF5); margin-top: 6px; padding: 6px 4px 2px; }
 /* 필터가 켜졌을 때만 나오는 요약 한 줄 — 목록이 왜 짧은지 화면이 직접 말한다. */
-.v2-flt-sum { display: flex; align-items: center; gap: 8px; margin: 4px 12px 0; padding: 4px 10px; border: 1px dashed var(--line-net, #DCE6F5); border-radius: 8px; font-size: 11.5px; font-weight: 600; color: var(--ink-sub); background: var(--bg, #fff); }
+.v2-flt-sum { display: flex; align-items: center; gap: 8px; margin: 4px var(--side-pad) 0; padding: 4px 10px; border: 1px dashed var(--line-net, #DCE6F5); border-radius: 8px; font-size: 11.5px; font-weight: 600; color: var(--ink-sub); background: var(--bg, #fff); }
 .v2-flt-sum span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.v2-tree { flex: 1; min-height: 0; overflow: auto; padding: 4px 8px 12px; }
-.v2-pj + .v2-pj { margin-top: 2px; }
+.v2-tree { flex: 1; min-height: 0; overflow: auto; padding: 2px var(--side-pad) 14px; }
+.v2-pj + .v2-pj { margin-top: 3px; }
 /* 카드(펼친 프로젝트)는 앞뒤로 더 띄운다 — 상자끼리 붙으면 한 덩어리로 뭉개진다. */
 .v2-pj.open + .v2-pj, .v2-pj + .v2-pj.open { margin-top: 8px; }
 /* ★펼친 프로젝트 = 흰 카드 그릇 (안 1 '방', 상민님 선택 2026-08-18) — 세션이 프로젝트의 **안**에
    산다는 걸 면(面)이 말한다. 들여쓰기+세로선만으로는 "목록 둘이 이웃한 그림"으로 읽혔다(반려 사유).
    접힌 프로젝트는 카드 없이 조용히 — 카드는 '열려 있음'의 표식이기도 하다. */
 .v2-pj.open { background: var(--bg, #fff); border: 1px solid var(--line-net, #DCE6F5); border-radius: 11px; }
-.v2-pj.open > .v2-pj-row { padding: 8px 10px 6px 6px; border-radius: 10px 10px 0 0; }
+.v2-pj.open > .v2-pj-row { border-radius: 10px 10px 0 0; }
 .v2-pj.open > .v2-pj-row:hover { background: var(--bg-tint, #F6FAFF); }
 .v2-pj.open > .v2-pj-row.on { background: var(--bg-tint, #F6FAFF); box-shadow: none; }
 /* 프로젝트 행 — 폴더 + 굵은 이름. 누르면 **프로젝트 화면**. 완료·조용함도 이름은 같은 잉크색(태그·시각이 구분). */
-.v2-pj-row { display: flex; align-items: center; gap: 7px; padding: 8px 8px 8px 4px; border-radius: 8px; font-size: 14.5px; font-weight: 700; color: var(--ink); text-decoration: none; }
+.v2-pj-row { display: flex; align-items: center; gap: 8px; min-height: var(--side-row); padding: 6px var(--side-inset); border-radius: 8px; font-size: 14.5px; font-weight: 700; color: var(--ink); text-decoration: none; }
 .v2-pj-row:hover { background: var(--bg, #fff); }
 .v2-pj-row.on { background: var(--bg, #fff); box-shadow: inset 0 0 0 1px var(--line-net, #DCE6F5); }
 .v2-pj-ic { width: 16.5px; height: 16.5px; flex: none; fill: none; stroke: var(--muted-2, #a6b2c8); stroke-width: 1.8; stroke-linejoin: round; }
@@ -167,13 +175,13 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-pj.open > .v2-pj-row .v2-car { transform: rotate(90deg); }
 /* 세션 목록 = 카드 몸통 — 담김은 카드(면)가 말하므로 세로선 레일은 뺀다(이중 표식은 잡음).
    세션 행: 상태점 + 보통 글씨. 누르면 **그 세션의 대화**. 프로젝트 행과 생김새가 다르다(위계). */
-.v2-ss-list { padding: 0 6px 7px; }
-.v2-ss-row { position: relative; display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; border-radius: 7px; font-size: 13.5px; font-weight: 500; color: var(--ink-sub); text-decoration: none; min-height: 30px; }
+.v2-ss-list { padding: 0 var(--side-inset) 8px calc(var(--side-inset) + var(--side-step)); }
+.v2-ss-row { position: relative; display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 5px 8px; border-radius: 7px; font-size: 13.5px; font-weight: 500; color: var(--ink-sub); text-decoration: none; }
 .v2-ss-row + .v2-ss-row { margin-top: 2px; }
 .v2-ss-row:hover { background: var(--bg-tint, #F6FAFF); color: var(--ink); }
 .v2-ss-row.on { background: var(--bg-tint, #F6FAFF); color: var(--ink); font-weight: 700; }
 /* 지금 보고 있는 세션 — 행 왼쪽에 파란 마디. */
-.v2-ss-row.on::before { content: ''; position: absolute; left: 2px; top: 6px; bottom: 6px; width: 2.5px; border-radius: 2px; background: var(--blue); }
+.v2-ss-row.on::before { content: ''; position: absolute; left: -10px; top: 5px; bottom: 5px; width: 2.5px; border-radius: 2px; background: var(--blue); }
 .v2-ss-go { width: 14px; height: 14px; flex: none; fill: none; stroke: var(--muted-2, #a6b2c8); stroke-width: 1.8; stroke-linejoin: round; opacity: 0; }
 .v2-ss-row:hover .v2-ss-go { opacity: 1; }
 .v2-ss-main { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.35; }
@@ -186,7 +194,7 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-ss-row .w.busy { color: var(--blue); }
 .v2-ss-row .w.done { color: var(--mint-deep, #0FA37E); }
 .v2-ss-more { display: block; padding: 6px 8px 6px 12px; font-size: 13px; color: var(--muted); text-decoration: none; }
-.v2-tree-note { margin: 10px 8px 0; padding: 10px 12px; border: 1px dashed var(--line-net, #DCE6F5); border-radius: 9px; font-size: 13px; color: var(--muted); line-height: 1.55; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.v2-tree-note { margin: 10px 0 0; padding: 10px 12px; border: 1px dashed var(--line-net, #DCE6F5); border-radius: 9px; font-size: 13px; color: var(--muted); line-height: 1.55; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
 .v2-tree-note .btn-text { font-size: 13px; padding: 0; }
 .v2-tree-more { display: block; width: 100%; margin-top: 8px; padding: 7px 8px; border: 1px dashed var(--line-net, #DCE6F5); border-radius: 8px; background: none; font: inherit; font-size: 13px; font-weight: 600; color: var(--muted); cursor: pointer; text-align: left; }
 .v2-tree-more:hover { color: var(--ink); background: var(--bg, #fff); }
@@ -194,8 +202,8 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-pin-h { font-size: 10.5px; font-weight: 800; letter-spacing: .04em; color: var(--ink-sub); padding: 4px 10px 2px; }
 .v2-pin .v2-ss-row { padding-left: 10px; }
 
-.v2-side-foot { padding: 8px 10px 10px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
-.v2-apps-btn { display: flex; align-items: center; gap: 9px; width: 100%; padding: 10px 11px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg, #fff); font: inherit; font-size: 14px; font-weight: 700; color: var(--ink); cursor: pointer; }
+.v2-side-foot { padding: 10px var(--side-pad) 12px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+.v2-apps-btn { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 40px; padding: 7px var(--side-inset); border-radius: 10px; border: 1px solid var(--line); background: var(--bg, #fff); font: inherit; font-size: 14px; font-weight: 700; color: var(--ink); cursor: pointer; }
 .v2-apps-btn:hover { border-color: var(--blue); }
 .v2-apps-btn .v2-cnt { margin-left: auto; }
 .v2-me { display: flex; align-items: center; gap: 9px; padding: 4px 4px; font-size: 13.5px; color: var(--ink-sub); }
@@ -329,7 +337,7 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-liv-tag { display: inline-flex; align-items: center; gap: 7px; color: var(--mint-deep, #0FA37E); font-weight: 800; font-size: 13px; }
 .v2-h1 { margin: 10px 0 0; font-size: 22px; font-weight: 800; letter-spacing: -.45px; line-height: 1.38; text-wrap: balance; word-break: keep-all; }
 .v2-title, .v2-desc { word-break: keep-all; }
-.v2-find { padding: 4px 12px 2px; }
+.v2-find { padding: 2px var(--side-pad) 4px; }
 .v2-find-in { width: 100%; height: 34px; border: 1px solid var(--line); border-radius: 9px; padding: 0 11px; font: inherit; font-size: 13.5px; background: var(--bg, #fff); }
 .v2-find-in:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; border-color: transparent; }
 .v2-sugs { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 12px; }
@@ -740,7 +748,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .stu-rail-i { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .stu-rail-sp { flex: 1; }
 .stu-panel { position: relative; width: 284px; flex: none; min-height: 0; background: #FAFBFC; border-right: 1px solid var(--line); display: flex; flex-direction: column; }
-.stu-panel-h { flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 12px 8px; }
+.stu-panel-h { flex: none; display: flex; align-items: center; gap: 8px; padding: 14px 14px 6px; }
 .stu-panel-h b { flex: 1; font-size: 13px; }
 .stu-panel-tree { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .stu-panel-tree .v2-side { border: 0; background: transparent; width: auto; }
