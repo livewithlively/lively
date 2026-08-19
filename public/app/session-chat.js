@@ -79,45 +79,47 @@ export function mountSessionChat(host, first, opts) {
     const dot = el('span', { class: 'v2-dot', 'aria-hidden': 'true' });
     const stateEl = el('span', { class: 'sc-state' });
     // 제목 = **pane 이름**(하네스가 써 두는 '지금 하는 일', 목록의 raw.title) — 상민님 2026-08-19.
-    //  화면 안에서 알고 싶은 것은 '이 세션이 지금 뭘 하고 있나'다(세션 이름은 사이드바·목록에 이미 있다).
-    //  ⚠ 이름 고치기(#1719)는 없어지지 않는다 — pane 이름이 있으면 **아래 사실 줄의 이름 칩**이 그 자리를 맡고,
-    //   pane 이름이 없으면(셸·방금 뜬 세션) 제목 자신이 종전처럼 고치는 자리다. 고칠 수 있는 이름은 언제나 한 군데다.
+    //  화면 안에서 알고 싶은 것은 '이 세션이 지금 뭘 하고 있나'다.
+    //
+    //  ★ 세션 이름은 이 줄에 따로 두지 않는다(#1744, dev 213건 실측). 이름을 정하는 자리 9곳 중 사람이 정하는 건
+    //   사실상 새 세션 폼 하나뿐이고 — 홈 입력창은 첫 지시 앞 27자, 프로젝트에서 열면 프로젝트명이 기본값, 복원·위탁·
+    //   이어보기는 시스템 문구, 아무것도 안 주면 id 그대로 — 그 결과 **살아있는 세션의 38%·죽은 세션의 83%가
+    //   자동 생성 이름**이다(프로젝트명 에코 58%). 그 원본은 화면에 이미 다 있다: 프로젝트명은 옆 칩, 첫 지시는 대화
+    //   맨 위, id 는 주소. 반대로 pane 제목은 살아있는 세션의 88%에서 '지금 하는 일'을 말해 준다 —
+    //   실제로 세션을 구분해 주는 축은 그쪽이다(사이드바 side.ts sessText 가 같은 결론으로 먼저 걷어냈다).
+    //  ⚠ 이름 고치기(#1719)는 살아 있다 — pane 이름이 없으면(셸·방금 뜬 세션) 제목이 곧 세션 이름이라 **그 자리에서**
+    //   고치고, pane 이름이 제목을 차지했으면 [⋯ ▸ 세션 이름 바꾸기]가 같은 편집기를 제목 자리에 연다.
     const titleHost = el('span', { class: 'sc-titlebox' });
-    const nameHost = el('span', { class: 'sc-namebox' }); // 사실 줄의 '세션 이름(고치기)' 칩 — pane 이름이 제목을 차지했을 때
     let titleText = target.label;
     let renaming = false;
     const canRename = () => !!opts.onRename && target.owned && target.live && !target.raw?.restorable;
     const paneTitle = () => String(target.raw?.title || '').trim();
-    /** 세션 이름을 그리는 노드 — 고칠 수 있으면 버튼(연필), 아니면 글씨. host 에 따라 제목/칩 두 자리에 같은 부품을 쓴다. */
-    function nameNode(cls) {
-        const t = titleText || '(이름 없음)';
-        return canRename()
-            ? el('button', { class: cls + ' sc-title-btn', type: 'button', title: '세션 이름 — 눌러서 바꿉니다', onclick: () => startRename() }, el('span', { class: 'sc-title-t', text: t }), 
-            // 연필은 손을 올렸을 때만 나타난다 — 늘 보이면 머리줄의 조작부가 하나 늘고, 아예 없으면 고칠 수 있다는 걸 아무도 모른다.
-            sv('svg', { viewBox: '0 0 24 24', class: 'sc-title-pen', 'aria-hidden': 'true' }, sv('path', { d: 'M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z' })))
-            : el('b', { class: cls, title: t, text: t });
-    }
+    // 이름을 안 주고 만든 세션은 이름이 **id 그대로**다(sessions.ts: label = cleanLabel(input.label) || id).
+    //  그건 이름이 아니므로 화면에 쓰지 않는다 — 사이드바(side.ts isIdLabel)와 같은 판정.
+    const idLabel = (x) => /^box-|^[0-9a-f-]{20,}$/i.test(String(x || '').trim());
+    const shownName = () => (idLabel(titleText) ? '' : titleText) || String(target.raw?.harness || '') || '(이름 없음)';
     function paintTitle() {
         if (renaming)
             return; // 고치는 중엔 손대지 않는다(20초 폴링이 입력 중인 칸을 지우면 안 된다)
         const pane = paneTitle();
+        const tip = [titleText, target.id].filter(Boolean).join(' · ');
         if (pane) {
-            titleHost.replaceChildren(el('b', { class: 'sc-title', title: [titleText, target.id].filter(Boolean).join(' · '), text: pane }));
-            nameHost.replaceChildren(nameNode('sc-name'));
-            nameHost.hidden = false;
+            titleHost.replaceChildren(el('b', { class: 'sc-title', title: tip, text: pane }));
+            return;
         }
-        else {
-            titleHost.replaceChildren(nameNode('sc-title'));
-            nameHost.replaceChildren();
-            nameHost.hidden = true;
-        }
+        const t = shownName();
+        titleHost.replaceChildren(canRename()
+            ? el('button', { class: 'sc-title sc-title-btn', type: 'button', title: '세션 이름 — 눌러서 바꿉니다', onclick: () => startRename() }, el('span', { class: 'sc-title-t', text: t }), 
+            // 연필은 손을 올렸을 때만 나타난다 — 늘 보이면 머리줄의 조작부가 하나 늘고, 아예 없으면 고칠 수 있다는 걸 아무도 모른다.
+            sv('svg', { viewBox: '0 0 24 24', class: 'sc-title-pen', 'aria-hidden': 'true' }, sv('path', { d: 'M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z' })))
+            : el('b', { class: 'sc-title', title: tip, text: t }));
     }
     function startRename() {
         if (renaming || !canRename())
             return;
         renaming = true;
-        const host2 = paneTitle() ? nameHost : titleHost;
-        const input = el('input', { class: 'sc-title-in', type: 'text', maxlength: '80', value: titleText, 'aria-label': '세션 이름', spellcheck: 'false' });
+        const host2 = titleHost; // 고치는 자리는 언제나 제목 — pane 이름이 떠 있어도 그 자리에 이름 입력칸이 열린다
+        const input = el('input', { class: 'sc-title-in', type: 'text', maxlength: '80', value: idLabel(titleText) ? '' : titleText, placeholder: '세션 이름', 'aria-label': '세션 이름', spellcheck: 'false' });
         let closed = false;
         const done = () => { renaming = false; paintTitle(); };
         const cancel = () => { if (closed)
@@ -160,10 +162,11 @@ export function mountSessionChat(host, first, opts) {
         input.select();
     }
     paintTitle();
-    const idxBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '목차', title: '이 세션에 보낸 질문 목차 — 누르면 그 자리로', onclick: () => openIndex() });
-    // 상민님 지시(2026-08-18): 대화 인터페이스가 아직 미완성이라 **터미널이 기본**, 대화는 '베타' 뱃지를 달고 버튼 뒤에 둔다.
-    const modeBtn = el('button', { class: 'btn-text sc-act', type: 'button', onclick: () => setMode(mode === 'term' ? 'chat' : 'term') });
+    // 겉에 둘 것 = **터미널을 보다가 손이 자주 가는 것**(화면 복구·환경 설정). 보기 전환·목차처럼 가끔 쓰는 것은 [⋯] 안으로
+    //  내린다(상민님 2026-08-19). 종전엔 반대였다 — 화면이 깨졌을 때 복구가 메뉴 두 단계 뒤에 있었다.
     const chatBadge = el('span', { class: 'sc-beta', text: '베타', hidden: true, title: '대화 인터페이스는 베타예요 — 표시가 어긋나면 터미널로 보세요' });
+    const fixBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '화면 복구', title: '화면이 깨지거나 어긋났을 때 재연결로 복구합니다', onclick: () => termAct('reconnect') });
+    const setBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '환경 설정', title: '터미널 글꼴·크기·테마·커서·스크롤 속도', onclick: () => termAct('settings') });
     // 상단바 통합(#1744) — 터미널 페이지가 갖고 있던 것들이 이 줄로 온다: [파일](우패널 탐색기) · 연결 상태 · [⋯](터미널 조작).
     const filesBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '파일', title: '이 세션의 작업 폴더를 오른쪽 패널에서 봅니다(업로드·다운로드)', onclick: () => {
             const on = opts.onToggleFiles ? opts.onToggleFiles() : false;
@@ -188,7 +191,7 @@ export function mountSessionChat(host, first, opts) {
     }
     paintProject();
     paintTitle();
-    const head = el('div', { class: 'sc-head' }, el('div', { class: 'sc-head-l' }, dot, titleHost, chatBadge, el('span', { class: 'sc-meta' }, stateEl, el('span', { class: 'sc-sep', text: '·' }), nameHost, el('span', { class: 'sc-sep sc-sep-name', text: '·' }), projEl, target.raw?.harness ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { class: 'mono', text: String(target.raw.harness) })] : null, target.node ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { text: String(target.node) })] : null)), el('div', { class: 'sc-head-r' }, termStatusEl, opts.onToggleFiles ? filesBtn : null, idxBtn, opts.terminalSrc && isBox ? modeBtn : null, moreBtn));
+    const head = el('div', { class: 'sc-head' }, el('div', { class: 'sc-head-l' }, dot, titleHost, chatBadge, el('span', { class: 'sc-meta' }, stateEl, el('span', { class: 'sc-sep', text: '·' }), projEl, target.raw?.harness ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { class: 'mono', text: String(target.raw.harness) })] : null, target.node ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { text: String(target.node) })] : null)), el('div', { class: 'sc-head-r' }, termStatusEl, opts.onToggleFiles ? filesBtn : null, opts.terminalSrc && isBox ? [fixBtn, setBtn] : null, moreBtn));
     const chatHost = el('div', { class: 'sc-chat' });
     const termHost = el('div', { class: 'sc-term', hidden: true });
     const waitBar = el('div', { class: 'sc-wait', hidden: true });
@@ -380,11 +383,9 @@ export function mountSessionChat(host, first, opts) {
         termHost.hidden = m !== 'term';
         chatHost.hidden = m === 'term';
         chatBadge.hidden = m !== 'chat';
-        modeBtn.replaceChildren(...(m === 'term'
-            ? [el('span', { text: '대화' }), el('span', { class: 'sc-beta', text: '베타' })]
-            : [el('span', { text: '터미널' })]));
-        modeBtn.title = m === 'term' ? '대화 인터페이스로 보기 — 아직 베타예요' : '터미널로 보기';
-        termStatusEl.hidden = m !== 'term' || !termStatusEl.textContent; // 연결 상태는 터미널을 보고 있을 때만(#1744)
+        fixBtn.hidden = m !== 'term';
+        setBtn.hidden = m !== 'term'; // 터미널 조작은 터미널을 보고 있을 때만 겉에 둔다
+        termStatusEl.hidden = m !== 'term' || !termStatusEl.textContent; // 연결 상태도 마찬가지(#1744)
         if (m === 'chat') {
             view.scrollToBottom();
             view.input.focus();
@@ -436,17 +437,26 @@ export function mountSessionChat(host, first, opts) {
         termStatusEl.hidden = termHost.hidden || !termStatusEl.textContent;
     };
     window.addEventListener('message', onTermMsg);
-    // ── [⋯] — 이 세션에 할 수 있는 나머지. 터미널 상단바에 있던 것들이 여기로 들어왔다. ──
+    // ── [⋯] — 겉에 두기엔 가끔 쓰는 것들. 열 때마다 지금 상태로 다시 그린다(보기 전환 라벨이 모드를 따른다). ──
     function openMore() {
         const rows = [];
         const row = (label, desc, onClick) => el('button', { class: 'sc-more-row', type: 'button', onclick: () => { close(); onClick(); } }, el('span', { class: 'n', text: label }), el('span', { class: 'm', text: desc }));
+        rows.push(el('div', { class: 'sc-more-sec', text: '보기' }));
+        if (opts.terminalSrc && isBox) {
+            // 상민님 지시(2026-08-18): 대화 인터페이스가 아직 미완성이라 **터미널이 기본**, 대화는 '베타'를 달고 뒤에 둔다.
+            rows.push(mode === 'term'
+                ? row('대화로 보기 (베타)', '터미널 대신 대화창으로 — 표시가 어긋나면 터미널로 돌아오세요', () => setMode('chat'))
+                : row('터미널로 보기', '승인 대화상자·로그인처럼 터미널이 맞는 순간이 있어요', () => setMode('term')));
+        }
+        rows.push(row('목차', '이 세션에 보낸 질문 목록 — 누르면 그 자리로', () => openIndex()));
         if (opts.terminalSrc && isBox) {
             rows.push(el('div', { class: 'sc-more-sec', text: '터미널' }));
-            rows.push(row('화면 복구', '깨지거나 어긋난 화면을 재연결로 되돌립니다', () => termAct('reconnect')));
-            rows.push(row('터미널 환경 설정', '글꼴·크기·테마·커서·스크롤 속도', () => termAct('settings')));
             rows.push(row('사용법 안내', '터미널·단축키 간단 사용법', () => termAct('help')));
         }
         rows.push(el('div', { class: 'sc-more-sec', text: '이 세션' }));
+        // 이름은 상단바에 상시로 두지 않는다(위 제목 주석) — 고칠 일이 있을 때만 여기서 연다.
+        if (canRename())
+            rows.push(row('세션 이름 바꾸기', idLabel(titleText) ? '아직 이름이 없어요' : titleText, () => startRename()));
         rows.push(row('링크 복사', '지금 보고 있는 이 화면의 주소', async () => {
             try {
                 await navigator.clipboard.writeText(location.href);
@@ -1418,7 +1428,7 @@ export function mountSessionChat(host, first, opts) {
         const qs = recs.filter((r) => r.t.text);
         // dash-pop-panel — 배경·테두리·그림자는 이 클래스가 준다(anchoredPopover 는 위치만 잡는다). 없으면 글자가 본문 위에 투명하게 겹친다.
         const panel = el('div', { class: 'dash-pop-panel sc-idx' }, el('div', { class: 'sc-idx-h', text: qs.length ? `질문 ${qs.length}개${loadedFrom > 0 ? ' · 불러온 범위 안' : ''}` : '이 창에 질문이 없어요' }), ...qs.map((r, i) => el('button', { class: 'sc-idx-item', type: 'button', title: r.t.text, onclick: () => { close(); r.t.root.scrollIntoView({ behavior: 'smooth', block: 'start' }); r.t.root.classList.add('sc-flash'); setTimeout(() => r.t.root.classList.remove('sc-flash'), 1800); } }, el('span', { class: 'sc-idx-n', text: String(i + 1) }), el('span', { class: 'sc-idx-t', text: r.t.text.length > 90 ? r.t.text.slice(0, 90) + '…' : r.t.text }))));
-        const close = anchoredPopover(idxBtn, panel);
+        const close = anchoredPopover(moreBtn, panel); // 목차는 [⋯] 안으로 들어갔다 — 앵커도 그 버튼이다
     }
     setMode('term'); // 기본 = 터미널(터미널 없는 세션은 setMode 가 대화로 되돌린다)
     void open();

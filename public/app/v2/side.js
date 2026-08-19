@@ -72,7 +72,11 @@ const norm = (s) => s.replace(/\s+/g, ' ').trim().toLowerCase();
 // 하네스가 pane 제목에 자기 이름만 써 둔 것 — '지금 하는 일'이 아니다(정보 0).
 const HARNESS_TITLES = new Set(['claude code', 'claude', 'codex', 'opencode', 'antigravity', 'grok', 'shell', 'bash', 'zsh', 'tmux', 'node']);
 // 기계가 붙인 세션 이름 — 사람이 읽을 게 없다('이어보기 · 3e1ca8f2', '위탁 #t501ac…').
-const isMachineLabel = (s) => /^이어보기\s*[·:]/.test(s) || /^위탁\s*#/.test(s);
+// 이름 자리에서 걷어낼 자동 생성 이름. ⚠ **id 꼴은 따로 본다**(#1744) — '위탁 #41'·'이어보기 · 3e1ca8f2' 는
+//  pane 제목이 없을 때 마지막 폴백으로 쓸 값은 되지만(무슨 세션인지는 말해 준다), `box-yoon-40096683` 은 아무것도
+//  말해 주지 않아 폴백으로도 못 쓴다. 이름을 안 주고 만든 세션이 그 꼴이 된다(sessions.ts: label = … || id).
+const isIdLabel = (s) => /^box-/i.test(s) || /^[0-9a-f-]{20,}$/i.test(s);
+const isMachineLabel = (s) => /^이어보기\s*[·:]/.test(s) || /^위탁\s*#/.test(s) || isIdLabel(s);
 /** 이 이름이 프로젝트명의 되풀이인가. 세 모양을 다 잡는다(실측):
  *   ① 그대로              "APP. lvly. io 셀프서브 방식 와이어프레임"
  *   ② 만들 때 잘린 것      "라이블리 키트, cli, 노드 등록을 지금 다 cli에서 해야하는데, 이거 윈도…"(프로젝트명의 앞부분)
@@ -118,7 +122,7 @@ export function sessText(s, projName) {
         return { main: name, sub: job };
     if (name || job)
         return { main: name || job, sub: '' };
-    return { main: label || String((s.raw && s.raw.harness) || '') || '이름 없는 세션', sub: '' };
+    return { main: (isIdLabel(label) ? '' : label) || String((s.raw && s.raw.harness) || '') || '이름 없는 세션', sub: '' };
 }
 const rankOf = (k) => (SESS_STATES[k] ? SESS_STATES[k].rank : 9);
 const bySeen = (a, b) => rankOf(a.stateKey) - rankOf(b.stateKey) || b.lastSeen - a.lastSeen;

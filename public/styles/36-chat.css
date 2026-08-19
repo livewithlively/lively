@@ -71,20 +71,6 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   border: 1px solid var(--blue); border-radius: 6px; background: var(--bg, #fff); color: var(--ink); }
 .sc-title-in:focus { outline: none; box-shadow: 0 0 0 3px var(--blue-soft, rgba(43, 108, 232, .18)); }
 .sc-title-in:disabled { opacity: .6; }
-/* pane 이름이 제목 자리를 차지했을 때(#1744) 세션 이름은 **사실 줄**로 내려온다 — 고치는 자리는 여전히 한 군데다.
-   제목판(button.sc-title)과 같은 부품을 사실 줄 크기(12px)로 입는다. pane 이름이 없으면 이 칩은 통째로 빠지고
-   제목 자신이 종전처럼 고치는 자리가 된다(그때 이 칩이 남아 있으면 같은 이름이 두 번 보인다). */
-.sc-namebox { display: inline-flex; align-items: center; min-width: 0; max-width: 28ch; }
-.sc-namebox[hidden] { display: none; }
-.sc-namebox[hidden] + .sc-sep-name { display: none; }
-b.sc-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-button.sc-name { display: inline-flex; align-items: center; gap: 4px; font: inherit; font-size: 12px; font-weight: 700;
-  max-width: 28ch; margin: 0 -4px; padding: 1px 4px; border: 0; border-radius: 5px; background: none; color: var(--ink-sub); text-align: left; cursor: text; }
-button.sc-name .sc-title-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-button.sc-name:hover { background: var(--bg-punch); box-shadow: inset 0 0 0 1px var(--line-net, var(--line)); color: var(--ink); }
-button.sc-name:hover .sc-title-pen, button.sc-name:focus-visible .sc-title-pen { opacity: 1; }
-button.sc-name:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
-.sc-namebox .sc-title-in { font-size: 12px; font-weight: 700; width: min(28ch, 26vw); margin: 0; }
 .sc-meta { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-sub); white-space: nowrap; }
 
 /* ── 처방전(#1719) — 입력칸 바로 위. '방금 네 번 주고받은 것, 한 번에 끝낼 수 있었어요'.
