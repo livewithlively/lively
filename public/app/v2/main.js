@@ -367,29 +367,19 @@ function drawSide() {
         onclick: () => { railPanelOpen = !railPanelOpen; drawSide(); } }, railIcon(RAIL_P.folder), el('span', { text: '프로젝트' }));
     const rail = el('div', { class: 'stu-rail' }, el('a', { class: 'stu-rail-logo', href: '#/', title: '홈' }, el('span', { text: 'L' })), item('home', 'home', '홈', '#/'), item('liv', 'liv', '리브', '#/liv'), item('inbox', 'inbox', '인박스', '#/'), projBtn, item('app:knowledge', 'book', '지식', '#/knowledge'), el('span', { class: 'stu-rail-sp' }), item('app:system', 'gear', '설정', '#/system'));
     const showPanel = railPanelOpen || railPanelPin;
+    root.classList.toggle('rail-open', showPanel); // 패널은 캔버스를 **오른쪽으로 민다**(겹치지 않는다 — 원준 2026-08-19)
     let panel = null;
     if (showPanel) {
         const treeHost = el('div', { class: 'stu-panel-tree' });
-        panel = el('div', { class: 'stu-panel' + (railPanelPin ? ' pin' : '') }, el('div', { class: 'stu-panel-h' }, el('b', { text: '프로젝트' }), el('button', { class: 'btn-text', type: 'button', text: railPanelPin ? '핀 해제' : '핀 고정', title: '고정하면 항상 펼쳐져 있어요',
+        panel = el('div', { class: 'stu-panel' + (railPanelPin ? ' pin' : '') }, el('div', { class: 'stu-panel-h' }, el('b', { text: '프로젝트' }), el('button', { class: 'btn-text', type: 'button', text: railPanelPin ? '핀 해제' : '핀 고정', title: '고정하면 새로고침해도 펼쳐져 있어요',
             onclick: () => { railPanelPin = !railPanelPin; try {
                 localStorage.setItem('stu_side_pin', railPanelPin ? '1' : '');
             }
             catch (_) { /* noop */ } drawSide(); } }), el('button', { class: 'stu-w-btn', type: 'button', text: '×', title: '닫기', onclick: () => { railPanelOpen = false; drawSide(); } })), treeHost);
         drawSideTree(treeHost, data, activeKey, openSessions);
     }
-    root.classList.toggle('rail-pin', railPanelPin);
     sideEl.replaceChildren(rail, ...(panel ? [panel] : []));
-    if (!railOutsideBound) {
-        railOutsideBound = true;
-        document.addEventListener('click', (e) => {
-            if (!railPanelOpen || railPanelPin)
-                return;
-            if (e.target?.closest?.('.stu-panel, .stu-rail'))
-                return;
-            railPanelOpen = false;
-            drawSide();
-        });
-    }
+    void railOutsideBound; // 밀기 방식에선 바깥 클릭 닫기를 쓰지 않는다(캔버스가 튀지 않게 — 닫기는 × 또는 [프로젝트] 토글)
 }
 // ── 우측(탭마다 한 벌 — tab.aside 에 그린다) ──
 function drawAsideHome(tab) {

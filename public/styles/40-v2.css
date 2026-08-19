@@ -728,7 +728,8 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 /* ── 레일 모드 그리드 — 좌측 64px, 스플리터 없음 ── */
 #v2-root.rail-mode { grid-template-columns: 64px minmax(0, 1fr) 6px var(--v2-aside-w); }
 #v2-root.rail-mode.no-aside { grid-template-columns: 64px minmax(0, 1fr) 0 0; }
-#v2-root.rail-mode.rail-pin { grid-template-columns: 348px minmax(0, 1fr) 6px var(--v2-aside-w); }
+#v2-root.rail-mode.rail-open { grid-template-columns: 348px minmax(0, 1fr) 6px var(--v2-aside-w); }
+#v2-root.rail-mode.rail-open.no-aside { grid-template-columns: 348px minmax(0, 1fr) 0 0; }
 .stu-side { position: relative; display: flex; overflow: visible; padding: 0; background: #F7F8FA; border-right: 1px solid var(--line); }
 .stu-rail { width: 64px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 0; }
 .stu-rail-logo { width: 30px; height: 30px; border-radius: 9px; background: var(--ink); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 14px; margin-bottom: 10px; text-decoration: none; }
@@ -738,8 +739,8 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .stu-rail-i { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .stu-rail-sp { flex: 1; }
 /* 프로젝트 패널 — 레일 옆에서 미끄러져 나온다. 핀 = 항상 펼침(그리드 칸 안). */
-.stu-panel { position: absolute; left: 64px; top: 0; bottom: 0; width: 284px; background: var(--bg, #fff); border-right: 1px solid var(--line); box-shadow: 10px 0 28px rgba(21,35,59,.12); z-index: 45; display: flex; flex-direction: column; }
-.stu-panel.pin { position: relative; left: 0; box-shadow: none; z-index: 1; }
+/* 패널은 캔버스를 민다(겹침 금지 — 원준 2026-08-19). 열림 = 그리드 좌측 칸이 348px 로 넓어진다. */
+.stu-panel { position: relative; width: 284px; flex: none; min-height: 0; background: var(--bg, #fff); border-right: 1px solid var(--line); display: flex; flex-direction: column; }
 .stu-panel-h { flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 12px 8px; }
 .stu-panel-h b { flex: 1; font-size: 13px; }
 .stu-panel-tree { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
