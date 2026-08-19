@@ -1377,7 +1377,11 @@ export function mountStudio(host, opts) {
             void fetch(fileUrl(it.path), { headers: authHeaders() }).then((r) => (r.ok ? r.blob() : null)).then((bl) => {
                 if (!bl || dead)
                     return;
-                const u = URL.createObjectURL(bl);
+                // ⚠ 서버는 자료를 **첨부(application/octet-stream + Content-Disposition: attachment)** 로 내려준다
+                //  (인라인 표시를 막으려는 의도). 그 blob 을 그대로 iframe 에 걸면 브라우저가 미리보기 대신 **내려받는다**
+                //  — 화면에 들어갈 때마다 'file' 이라는 파일이 저장됐다(원준 신고 2026-08-19).
+                //  그래서 여기서 형식을 다시 붙여 준다. HTML 은 sandbox="" 로 스크립트·동일출처를 모두 막은 채 그린다.
+                const u = URL.createObjectURL(new Blob([bl], { type: it.kind === 'pdf' ? 'application/pdf' : 'text/html' }));
                 blobUrls.push(u);
                 const fr = el('iframe', { class: 'stu-prev-fr', tabindex: '-1', 'aria-hidden': 'true', scrolling: 'no',
                     ...(it.kind === 'page' ? { sandbox: '' } : {}), src: u + (it.kind === 'pdf' ? '#toolbar=0&navpanes=0&view=FitH' : '') });
