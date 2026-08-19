@@ -411,7 +411,7 @@ function drawSide() {
         panelFab = null;
     }
     if (!showPanel) {
-        const fab = el('div', { class: 'stu-panel-fab' }, el('span', { class: 'stu-fab-grip', title: '끌어서 옮기기', 'aria-hidden': 'true' }), el('a', { class: 'lg', href: '#/', title: '홈으로', 'aria-label': '홈으로', text: 'L' }), el('button', { class: 'stu-panel-fab-open', type: 'button', text: '프로젝트',
+        const fab = el('div', { class: 'stu-panel-fab', title: '눌러서 프로젝트 목록 열기 · 그립을 잡고 끌면 자리를 옮깁니다' }, el('span', { class: 'stu-fab-grip', title: '끌어서 옮기기', 'aria-hidden': 'true' }), el('a', { class: 'lg', href: '#/', title: '홈으로', 'aria-label': '홈으로', text: 'L' }), el('button', { class: 'stu-panel-fab-open', type: 'button', text: '프로젝트',
             title: '프로젝트 목록 열기 (닫으려면 패널의 ×) · 알약은 끌어서 옮길 수 있어요',
             'aria-label': '프로젝트 목록 열기',
             onclick: () => { railPanelOpen = true; drawSide(); } }));
@@ -470,7 +470,9 @@ function makeFabDraggable(fab) {
         const dx = e.clientX - r0.left, dy = e.clientY - r0.top;
         let moved = false;
         const move = (ev) => {
-            if (!moved && Math.abs(ev.clientX - e.clientX) + Math.abs(ev.clientY - e.clientY) < 4)
+            // 문턱을 넉넉히(8px) — 트랙패드는 '누르기'에도 2~5px 흔들린다. 좁으면 클릭이 드래그로 잡혀 아무 일도 안 일어난다
+            //  (상민님 실측 2026-08-19: "알약 눌러도 사이드바 안 나타나").
+            if (!moved && Math.abs(ev.clientX - e.clientX) + Math.abs(ev.clientY - e.clientY) < 8)
                 return;
             if (!moved) {
                 moved = true;
@@ -485,8 +487,12 @@ function makeFabDraggable(fab) {
         const up = (ev) => {
             window.removeEventListener('pointermove', move);
             window.removeEventListener('pointerup', up);
-            if (!moved)
+            // 끌지 않았으면 = 그냥 누른 것 → 목록을 연다. 알약의 **어디를 눌러도** 열려야 한다(글자만 되는 건 함정이다).
+            if (!moved) {
+                railPanelOpen = true;
+                drawSide();
                 return;
+            }
             fab.classList.remove('dragging');
             try {
                 fab.releasePointerCapture(ev.pointerId);
