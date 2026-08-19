@@ -16,6 +16,7 @@ import { mountStudio, type StudioHandle } from './studio.js';   // 실험장(#17
 import { createTimeline, type TimelineHandle } from '../timeline.js';
 import { loadSessionActivities } from '../timeline-sources.js';
 import { makeSplitter } from './split.js';
+import { createSessionFiles, type FilesHandle } from './files.js';
 import { createTabs, routeKey, type ShellTab, type TabsApi } from './tabs.js';
 import { mountMobileChrome, type MobileChrome } from './mobile.js';
 import { takeCreated } from './created-cache.js';
@@ -257,6 +258,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
         trail,
         onPickProject: (anchor) => openProjectPicker(anchor, id, tab),
         onRename: (label) => renameSession(s ? s.id : id, label, tab),
+        onToggleFiles: () => toggleAsideFiles(tab, id),   // 상단바 [파일] → 이 탭 우패널을 파일 탐색기로(#1744)
         solo: SOLO,   // 팝아웃 창(#1744) — 좌측 없이 이 화면만
       });
     } else if (page === 'app' && segs[1]) {
@@ -343,9 +345,36 @@ window.addEventListener('stu:toggle-projects', () => { railPanelOpen = !railPane
 
 // ── 우측(탭마다 한 벌 — tab.aside 에 그린다) ──
 //  실험장에선 홈·리브·프로젝트가 우패널을 쓰지 않는다(위 titleFor 주석) — 남은 소비자는 세션 화면뿐이다.
+// 세션 우패널 = 짧은 사실 줄 + **타임라인**. 같은 세션이면 위젯을 다시 만들지 않는다(폴링이 상태만 갱신) —
+//  탭마다 한 벌이므로 캐시도 탭의 aside 에 붙어 산다(전환해도 쌓인 것이 그대로).
+//  #1744 로 같은 자리에 **파일 탐색기**가 한 칸 더 산다(상단바 [파일]). 두 칸은 지워서 갈아 끼우지 않고 hidden 으로
+//  바꿔 낀다 — 발자취는 세션 화면이 대화를 읽으며 계속 밀어 넣는 곳이라, 지웠다 새로 만들면 쌓인 것이 사라진다.
+type AsideHost = HTMLElement & { __trail?: { id: string; w: TimelineHandle }; __files?: { id: string; h: FilesHandle }; __filesOn?: boolean };
+function paintAsidePanes(host: AsideHost): void {
+  if (host.__trail) host.__trail.w.root.hidden = !!host.__filesOn;
+  if (host.__files) host.__files.h.root.hidden = !host.__filesOn;
+}
+function dropAsideFiles(host: AsideHost): void {
+  if (host.__files) { host.__files.h.destroy(); host.__files = undefined; }
+  host.__filesOn = false;
+}
+/** 상단바 [파일] — 이 탭의 우패널을 '발자취 ↔ 파일 탐색기'로 갈아 낀다. 켠 상태를 돌려준다(버튼 불). */
+function toggleAsideFiles(tab: ShellTab, id: string): boolean {
+  const host = tab.aside as AsideHost;
+  const s = findSess(id);
+  if (!s) { toast('세션 정보를 찾지 못해 파일을 열 수 없어요.', true); return false; }
+  if (host.__files && host.__files.id !== s.id) dropAsideFiles(host);
+  host.__filesOn = !host.__filesOn;
+  if (host.__filesOn && !host.__files) {
+    host.__files = { id: s.id, h: createSessionFiles(host, { sessionId: s.id, node: s.node,
+      onClose: () => { host.__filesOn = false; paintAsidePanes(host); if (tab.chat) tab.chat.setFilesOn(false); } }) };
+  }
+  paintAsidePanes(host);
+  return !!host.__filesOn;
+}
 function drawAsideSession(tab: ShellTab, s: Sess | null): TimelineHandle | null {
-  const host = tab.aside as HTMLElement & { __trail?: { id: string; w: TimelineHandle } };
-  if (!s) { host.__trail = undefined; host.replaceChildren(el('p', { class: 'v2-empty', text: '세션 정보를 찾을 수 없어요.' })); return null; }
+  const host = tab.aside as AsideHost;
+  if (!s) { host.__trail = undefined; dropAsideFiles(host); host.replaceChildren(el('p', { class: 'v2-empty', text: '세션 정보를 찾을 수 없어요.' })); return null; }
   const raw = s.raw || {};
   const factsEl = el('div', { class: 'v2-sfacts' },
     el('span', { class: 'v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' }), el('span', { text: s.stateLabel }),
@@ -353,11 +382,13 @@ function drawAsideSession(tab: ShellTab, s: Sess | null): TimelineHandle | null 
     raw.harness ? [el('span', { class: 'sep', text: '·' }), el('span', { class: 'mono', text: String(raw.harness) })] : null,
     s.node ? [el('span', { class: 'sep', text: '·' }), el('span', { text: String(s.node) })] : null,
     !s.owned && (raw.owner_name || raw.owner) ? [el('span', { class: 'sep', text: '·' }), el('span', { text: String(raw.owner_name || raw.owner) })] : null);
-  if (host.__trail && host.__trail.id === s.id && host.__trail.w.root.isConnected) { host.__trail.w.setMeta(factsEl); return host.__trail.w; }
+  if (host.__trail && host.__trail.id === s.id && host.__trail.w.root.isConnected) { host.__trail.w.setMeta(factsEl); paintAsidePanes(host); return host.__trail.w; }
   host.replaceChildren();
+  dropAsideFiles(host);          // 다른 세션으로 옮겼다 — 파일 패널도 그 세션 것으로 새로 연다
   const w = createTimeline(host, { scope: '이 세션', outcomes: true, empty: '아직 남은 것이 없어요 — 세션이 만들고 고친 것이 여기에 쌓입니다.' });
   w.setMeta(factsEl);
   host.__trail = { id: s.id, w };
+  paintAsidePanes(host);
   void loadSessionActivities(s.id).then((items) => w.addAll(items));
   return w;
 }
