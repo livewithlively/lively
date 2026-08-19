@@ -288,8 +288,8 @@ function drawAsideProject(tab: ShellTab, detail: any, id: number): void {
   const prod: any[] = (kn && kn.produced) || [];
   tab.aside.append(el('div', { class: 'v2-kn-foot' },
     el('span', { class: 'v2-k', text: `지식 · 필요 ${req.length} · 산출 ${prod.length}` }),
-    el('div', { class: 'v2-kn-list' }, ...[...req.map((k: any) => knItem(k.name, 'req')), ...prod.map((k: any) => knItem(k.name, 'prod'))].slice(0, 6)),
-    el('a', { class: 'btn btn-ghost btn-sm', href: '#/projects2/p/' + id, text: '프로젝트 앱에서 열기' })));
+    el('div', { class: 'v2-kn-list' }, ...[...req.map((k: any) => knItem(k.name, 'req')), ...prod.map((k: any) => knItem(k.name, 'prod'))].slice(0, 6))));
+  //  '프로젝트 앱에서 열기' 는 여기 두지 않는다(상민님 2026-08-19) — 같은 링크가 가운데 화면 액션줄에 이미 있다.
   void loadProjectTimeline(id, detail).then((items) => tl.addAll(items));
 }
 // 세션 우패널 = 짧은 사실 줄 + **타임라인**. 같은 세션이면 위젯을 다시 만들지 않는다(폴링이 상태만 갱신) —
