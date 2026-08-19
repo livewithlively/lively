@@ -20,6 +20,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   HARNESS, HARNESS_IDS, resolveHarness, isKnownHarness,
   harness, placementFor, assetDirsFor, assetDirNames, toolMatcher, mcpMatcher, allToolNames, mcpToolName,
+  claudeConfigDir, isInsideDir,
 } from "./harness-registry.mjs";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
@@ -101,6 +102,23 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
     { file: "/h/.codex/prompts/c1.md", root: "/h/.codex/prompts" });
   eqPath("C6[E10] claude 는 CLAUDE_CONFIG_DIR 를 존중", placementFor("claude", "skill", "s1", H, { CLAUDE_CONFIG_DIR: "/p" }),
     { file: "/p/skills/s1/SKILL.md", skillDir: "/p/skills/s1", root: "/p/skills" });
+  // ★ 2026-08-19 실측 — LIVELY_HOME(샌드박스) 밖의 CLAUDE_CONFIG_DIR 는 **상속된 실 프로필**이다. 존중하면 실 프로필
+  //  settings.json 에 샌드박스 훅 경로가 써지고(D 블록이 그 사고를 냈다) 이후 모든 세션 훅이 Cannot find module 로 죽는다.
+  //  안이면 존중(프로필 격리 #346 은 샌드박스에서도 검증돼야 한다 — self-update·lively.test 가 그렇게 쓴다) · 밖이면 무시.
+  eqPath("C6b LIVELY_HOME 없으면 CLAUDE_CONFIG_DIR 그대로", claudeConfigDir(H, { CLAUDE_CONFIG_DIR: "/p" }), "/p");
+  eqPath("C6c LIVELY_HOME 안의 CLAUDE_CONFIG_DIR 는 존중", claudeConfigDir(H, { LIVELY_HOME: "/sb/home", CLAUDE_CONFIG_DIR: "/sb/home/.claude" }), "/sb/home/.claude");
+  eqPath("C6d LIVELY_HOME 밖의 CLAUDE_CONFIG_DIR 는 무시 → <HOME>/.claude", claudeConfigDir(H, { LIVELY_HOME: "/sb/home", CLAUDE_CONFIG_DIR: "/Users/dev/.lively/profiles/x/claude" }), "/h/.claude");
+  eqPath("C6e 접두어만 같은 형제 디렉터리는 '안'이 아니다", claudeConfigDir(H, { LIVELY_HOME: "/sb/home", CLAUDE_CONFIG_DIR: "/sb/home2/.claude" }), "/h/.claude");
+  eqPath("C6f 빈 CLAUDE_CONFIG_DIR 는 지목이 아니다", claudeConfigDir(H, { LIVELY_HOME: "/sb/home", CLAUDE_CONFIG_DIR: "  " }), "/h/.claude");
+  eqPath("C6g HARNESS.claude.home 도 같은 계산", HARNESS.claude.home(H, { LIVELY_HOME: "/sb/home", CLAUDE_CONFIG_DIR: "/p" }), "/h/.claude");
+  // 윈도우: 대소문자·구분자가 섞여 와도 포함 판정이 성립해야 한다(안 그러면 정당한 샌드박스 프로필까지 무시돼 테스트가 엉뚱한 곳을 본다).
+  if (process.platform === "win32") {
+    eq("C6h[win] 구분자·대소문자 무시 포함 판정", isInsideDir("c:\\SB\\Home\\.claude", "C:/sb/home/"), true);
+    eq("C6i[win] 형제 디렉터리는 밖", isInsideDir("C:\\sb\\home2\\.claude", "C:/sb/home"), false);
+  } else {
+    eq("C6h[posix] 대소문자는 구분한다", isInsideDir("/SB/home/.claude", "/sb/home"), false);
+    eq("C6i[posix] 후행 슬래시 무시", isInsideDir("/sb/home/.claude", "/sb/home/"), true);
+  }
   eqPath("C7[E11] 모르는 하네스는 claude 배치로 폴백", placementFor("nope", "skill", "s1", H, env),
     { file: "/h/.claude/skills/s1/SKILL.md", skillDir: "/h/.claude/skills/s1", root: "/h/.claude/skills" });
   // '어디에 쓰나'(placement)와 '어디를 훑나'(assetDirs)가 같은 출처여야 한다 —
@@ -155,9 +173,27 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
     mkdirSync(join(HOME, ".lively"), { recursive: true });
     writeFileSync(join(HOME, ".lively", "gateway-url"), "http://127.0.0.1:9\n"); // 토큰 없음 = 네트워크 미접촉
 
+    // ★ 미끼 '실 프로필' — 웹터미널 세션·개발자 셸이 상속시키는 CLAUDE_CONFIG_DIR 를 재현한다. **샌드박스 HOME 밖**(SB 형제)이다.
+    //  2026-08-19 실측: 이 테스트가 LIVELY_HOME 만 주고 설치기를 돌려, 상속된 CLAUDE_CONFIG_DIR=<실 프로필>/settings.json 에
+    //  이 샌드박스(곧 rmSync 됨)의 훅 경로 20개가 써졌다 → 다음 세션부터 모든 훅이 Cannot find module. 여기서 그 사고를 못박는다:
+    //  설치기·훅은 LIVELY_HOME 밖의 CLAUDE_CONFIG_DIR 를 **무시**하고 <HOME>/.claude 에 써야 한다(harness-registry.claudeConfigDir).
+    const DECOY = join(SB, "real-profile-claude");
+    mkdirSync(DECOY, { recursive: true });
+    const DECOY_BEFORE = JSON.stringify({ hooks: {}, marker: "untouched" });
+    writeFileSync(join(DECOY, "settings.json"), DECOY_BEFORE);
+
     const r = spawnSync(process.execPath, [join(BUNDLE, "setup", "user-install.mjs"), "--harness", "claude", "--clone-root", BUNDLE],
-      { env: { ...process.env, LIVELY_HOME: HOME }, encoding: "utf8" });
+      { env: { ...process.env, LIVELY_HOME: HOME, CLAUDE_CONFIG_DIR: DECOY }, encoding: "utf8" });
     r.status === 0 ? ok("D1[E4] 설치기 성공") : bad("D1[E4] 설치기 성공", `exit=${r.status} ${r.stderr || r.stdout}`);
+
+    // D4 — 미끼(실 프로필)는 바이트 하나 안 바뀌어야 한다. D5 — 대신 샌드박스 <HOME>/.claude/settings.json 에 배선된다.
+    const decoyAfter = readFileSync(join(DECOY, "settings.json"), "utf8");
+    decoyAfter === DECOY_BEFORE
+      ? ok("D4 ★ LIVELY_HOME 밖의 CLAUDE_CONFIG_DIR(실 프로필)는 무접촉")
+      : bad("D4 ★ LIVELY_HOME 밖의 CLAUDE_CONFIG_DIR(실 프로필)는 무접촉", `실 프로필 settings.json 이 바뀜: ${decoyAfter.slice(0, 200)}`);
+    const sbSettings = join(HOME, ".claude", "settings.json");
+    const sbHooked = existsSync(sbSettings) && readFileSync(sbSettings, "utf8").includes(".lively/hooks/");
+    sbHooked ? ok("D5 훅 배선은 샌드박스 <HOME>/.claude/settings.json 으로 감") : bad("D5 훅 배선은 샌드박스 <HOME>/.claude/settings.json 으로 감", `${sbSettings} 없음/미배선`);
 
     existsSync(join(HOME, ".lively", "hooks", "harness-registry.mjs"))
       ? ok("D2[E3] 레지스트리가 ~/.lively/hooks 에 설치됨")
@@ -166,7 +202,7 @@ const eqPath = (n, got, want) => eq(n, slash(got), want);
     // ★ 핵심 — 설치된 자리에서 훅을 실제로 실행한다. import 가 안 풀리면 ERR_MODULE_NOT_FOUND 로 죽는다.
     //  토큰이 없으므로 훅은 즉시 exit 0(fail-open) 이어야 한다 — 그게 정상 동작이다.
     const h = spawnSync(process.execPath, [join(HOME, ".lively", "hooks", "sync-harness-assets.mjs")],
-      { env: { ...process.env, LIVELY_HOME: HOME, HOME }, encoding: "utf8", timeout: 20000 });
+      { env: { ...process.env, LIVELY_HOME: HOME, HOME, CLAUDE_CONFIG_DIR: DECOY }, encoding: "utf8", timeout: 20000 });
     if (h.status !== 0) bad("D3[E3·E4] 설치된 훅이 그 자리에서 실행됨", `exit=${h.status} ${String(h.stderr).slice(0, 300)}`);
     else if (/ERR_MODULE_NOT_FOUND|Cannot find module/.test(String(h.stderr))) bad("D3[E3·E4] 설치된 훅이 그 자리에서 실행됨", `모듈 해석 실패: ${String(h.stderr).slice(0, 300)}`);
     else ok("D3[E3·E4] 설치된 훅이 그 자리에서 실행됨");

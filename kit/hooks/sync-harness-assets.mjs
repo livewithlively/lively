@@ -27,7 +27,7 @@ import { join, dirname, relative, isAbsolute } from "node:path";
 //  따로 하드코딩돼 어긋날 수 있었다(어긋나면 관측·로컬토글에서 그 종류가 통째로 안 보인다).
 //  ⚠ 이 import 가 성립하려면 harness-registry.mjs 가 이 파일과 **같은 디렉터리**로 설치돼야 한다
 //   (설치 시 ~/.lively/hooks/ 로 평평하게 복사되므로) → user-install 의 HOOK_SCRIPTS 에 등재돼 있다.
-import { resolveHarness, harness, placementFor, assetDirsFor, assetDirNames, isForeignGrokInvocation } from "./harness-registry.mjs";
+import { resolveHarness, harness, placementFor, assetDirsFor, assetDirNames, isForeignGrokInvocation, claudeConfigDir } from "./harness-registry.mjs";
 
 // #1750 — 세션 소속 신호: 게이트웨이가 x-lively-session(→ 세션 정본 gw_session_map)·x-lively-workspace 로
 //  이 세션의 워크스페이스 컨텍스트를 되찾는다. 안 실으면 primary 로 간주되므로(폴백) secondary 세션의
@@ -47,7 +47,8 @@ if (OFF) process.exit(0);
 
 const HOME = process.env.LIVELY_HOME || homedir();
 const LIVELY = join(HOME, ".lively");
-const CLAUDE_DIR = process.env.CLAUDE_CONFIG_DIR || join(HOME, ".claude");
+// CLAUDE_CONFIG_DIR(프로필 격리) — 단 LIVELY_HOME 샌드박스 밖의 값은 무시(harness-registry.claudeConfigDir 계약, 2026-08-19 실측 참조).
+const CLAUDE_DIR = claudeConfigDir(HOME);
 const CODEX_DIR = join(HOME, ".codex");
 const FETCH_MS = 3000;
 const HARD_MS = 4000;
