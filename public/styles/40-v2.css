@@ -1145,6 +1145,11 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
    우측 위에서 아래로, 넘치면 왼쪽 열로(맥). 알림 센터가 열리면 그 아래로 깔린다. */
 .stu-desk { position: absolute; top: 14px; right: 14px; height: calc(100% - 250px); z-index: 20; display: flex; flex-direction: column; flex-wrap: wrap-reverse; align-content: flex-start; gap: 2px; pointer-events: none; }
 .stu-desk.dragging .stu-ico:not(.sel) { opacity: .5; }
+/* 타임라인 서랍이 열리면 아이콘 열·휴지통이 **왼쪽으로 비켜선다**(원준 2026-08-19) — 서랍이 파일을 덮으면
+   보려던 것을 가리는 셈이라, 맥에서 창이 겹칠 때 우리가 창을 옮기듯 이쪽이 물러난다. */
+.stu-desk, .stu-trash { transition: transform .3s cubic-bezier(.22,.61,.36,1); }
+.stu-stage.notif-on .stu-desk, .stu-stage.notif-on .stu-trash { transform: translateX(calc(-1 * (var(--stu-notif-w, 360px) + 18px))); }
+@media (prefers-reduced-motion: reduce) { .stu-desk, .stu-trash { transition: none; } }
 .stu-ico { pointer-events: auto; width: 92px; padding: 7px 4px 6px; border: 0; border-radius: 10px; background: none; font: inherit; display: flex; flex-direction: column; align-items: center; gap: 5px; cursor: default; }
 .stu-ico:hover .stu-ico-g { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(21,35,59,.14); }
 .stu-ico.sel { background: rgba(45,107,240,.12); box-shadow: inset 0 0 0 1px rgba(45,107,240,.35); }

@@ -60,20 +60,20 @@ function icon(name, cls = 'stu-i') {
     return s;
 }
 const WDEFS = [
-    { type: 'session', label: 'AI 세션', hint: '세션 하나 — 크기를 키우면 대화가 통째로 보여요', w: 340, h: 300, ic: 'chat', ac: '#2D6BF0', surf: 'widget' },
-    { type: 'coach', label: '리브 제안', hint: '판을 읽고 AI 를 더 크게 쓰는 법을 제안', w: 340, h: 250, ic: 'spark', ac: '#0FA37E', surf: 'widget' },
-    { type: 'automation', label: '자동화', hint: '반복을 붙박이로 — 켤 수 있는 자동화', w: 340, h: 250, ic: 'bolt', ac: '#7C5CFC', surf: 'both' },
-    { type: 'tasks', label: '태스크', hint: 'S=진행 링 · M=할 일 목록 · L=마감까지', w: 320, h: 300, ic: 'task', ac: '#D9772B', surf: 'both' },
-    { type: 'knowledge', label: '지식', hint: 'M=문서 목록 · L=본문 미리보기 카드', w: 320, h: 280, ic: 'book', ac: '#1BAEB0', surf: 'both' },
-    { type: 'folder', label: '공유 폴더', hint: '내가 올린 자료 · 세션이 남긴 결과물 — 끌어다 놓으면 올라가요', w: 380, h: 320, ic: 'folder', ac: '#5A6B85', surf: 'both' },
-    { type: 'desc', label: '명세', hint: '프로젝트 본문 — 꺼내 읽는 문서', w: 440, h: 360, ic: 'doc', ac: '#8A99B5', surf: 'app' },
-    { type: 'timeline', label: '타임라인', hint: '남은 결과들', w: 340, h: 420, ic: 'clock', ac: '#15233B', surf: 'both' },
-    { type: 'sticky', label: '포스트잇', hint: '판에 붙이는 메모', w: 230, h: 170, ic: 'note', ac: '#D9A32B', surf: 'widget' },
-    { type: 'app-meeting', label: '회의록', hint: '껍데기 — 회의록→결정·태스크 추출 자리', w: 340, h: 250, ic: 'mic', ac: '#B84E9C', surf: 'app', shell: true },
-    { type: 'app-calendar', label: '캘린더', hint: '껍데기 — 마감·회의·세션 예약 자리', w: 340, h: 280, ic: 'cal', ac: '#D9772B', surf: 'app', shell: true },
-    { type: 'app-slides', label: '장표', hint: '껍데기 — 지식→보고 장표 자리', w: 340, h: 240, ic: 'deck', ac: '#2D6BF0', surf: 'app', shell: true },
-    { type: 'preview', label: '프리뷰', hint: '파일 미리보기', w: 360, h: 320, ic: 'img', ac: '#5A6B85', surf: 'widget', hidden: true },
-    { type: 'doc', label: '문서', hint: '지식·문서 임베드', w: 460, h: 420, ic: 'doc', ac: '#1BAEB0', surf: 'widget', hidden: true },
+    { type: 'session', label: 'AI 세션', hint: '세션 하나 — 크기를 키우면 대화가 통째로 보여요', w: 340, h: 300, ic: 'chat', ac: '#2D6BF0' },
+    { type: 'coach', label: '리브 제안', hint: '판을 읽고 AI 를 더 크게 쓰는 법을 제안', w: 340, h: 250, ic: 'spark', ac: '#0FA37E' },
+    { type: 'automation', label: '자동화', hint: '반복을 붙박이로 — 켤 수 있는 자동화', w: 340, h: 250, ic: 'bolt', ac: '#7C5CFC' },
+    { type: 'tasks', label: '태스크', hint: 'S=진행 링 · M=할 일 목록 · L=마감까지', w: 320, h: 300, ic: 'task', ac: '#D9772B' },
+    { type: 'knowledge', label: '지식', hint: 'M=문서 목록 · L=본문 미리보기 카드', w: 320, h: 280, ic: 'book', ac: '#1BAEB0' },
+    { type: 'folder', label: '공유 폴더', hint: '내가 올린 자료 · 세션이 남긴 결과물 — 끌어다 놓으면 올라가요', w: 380, h: 320, ic: 'folder', ac: '#5A6B85', deskOnly: true },
+    { type: 'desc', label: '명세', hint: '프로젝트 본문 — 꺼내 읽는 문서', w: 440, h: 360, ic: 'doc', ac: '#8A99B5' },
+    { type: 'timeline', label: '타임라인', hint: '남은 결과들', w: 340, h: 420, ic: 'clock', ac: '#15233B', deskOnly: true },
+    { type: 'sticky', label: '포스트잇', hint: '판에 붙이는 메모', w: 230, h: 170, ic: 'note', ac: '#D9A32B' },
+    { type: 'app-meeting', label: '회의록', hint: '껍데기 — 회의록→결정·태스크 추출 자리', w: 340, h: 250, ic: 'mic', ac: '#B84E9C', shell: true },
+    { type: 'app-calendar', label: '캘린더', hint: '껍데기 — 마감·회의·세션 예약 자리', w: 340, h: 280, ic: 'cal', ac: '#D9772B', shell: true },
+    { type: 'app-slides', label: '장표', hint: '껍데기 — 지식→보고 장표 자리', w: 340, h: 240, ic: 'deck', ac: '#2D6BF0', shell: true },
+    { type: 'preview', label: '프리뷰', hint: '파일 미리보기', w: 360, h: 320, ic: 'img', ac: '#5A6B85', hidden: true },
+    { type: 'doc', label: '문서', hint: '지식·문서 임베드', w: 460, h: 420, ic: 'doc', ac: '#1BAEB0', hidden: true },
 ];
 const wdef = (t) => WDEFS.find((d) => d.type === t);
 const GRID = 8;
@@ -1037,28 +1037,24 @@ export function mountStudio(host, opts) {
     function toggleLaunch(on) {
         const want = on != null ? on : launch.hidden;
         if (want) {
-            // 앱과 위젯은 성격이 다르다 — 앱은 열어서 하는 일(모달), 위젯은 캔버스에 두는 것. 구역을 갈라 그 차이를 보이게.
-            // 자투리 판(#/p/0)엔 프로젝트 재료(태스크·지식·자료·명세·타임라인·자동화)가 없다 — 없는 걸 눌러 빈 창을 보여 주는 게 가장 나쁜 안내다.
+            // 한 묶음뿐이다(원준 2026-08-19) — 판에 올리는 것은 전부 위젯(캔버스 카드)이다.
+            //  타임라인은 문패 오른쪽 서랍이 맡고, 공유 폴더는 바탕화면이 이미 갖고 있어 목록에서 뺐다(deskOnly).
+            //  범용 앱은 이 판이 아니라 사이드바 [앱] — 특정 프로젝트에 매이지 않는 것들이 사는 곳이다.
+            // 자투리 판(#/p/0)엔 프로젝트 재료(태스크·지식·명세·자동화)가 없다 — 없는 걸 눌러 빈 창을 보여 주는 게 가장 나쁜 안내다.
             const LOOSE_OK = new Set(['session', 'sticky']);
-            const usable = WDEFS.filter((d) => !d.hidden && (!loose || LOOSE_OK.has(d.type)));
-            const apps = usable.filter((d) => d.surf === 'app' || d.surf === 'both');
-            const wgs = usable.filter((d) => d.surf === 'widget' || d.surf === 'both');
-            // 설치된 세션 앱(org_app, #1780) — 스튜디오 내장 앱과 성격이 달라(각자 전용 세션이 뜬다) 별도 구역으로.
-            //  비동기로 불러와 도착하면 채운다(없으면 구역 숨김 유지 → 종전 화면과 동일).
+            const wgs = WDEFS.filter((d) => !d.hidden && !d.deskOnly && (!loose || LOOSE_OK.has(d.type)));
+            // 설치된 세션 앱(org_app, #1780) — 각자 전용 세션이 뜨는 것이라 성격이 달라 그대로 별도 구역.
             const instGrid = el('div', { class: 'stu-shelf-grid stu-launch-grid' });
             const instSec = el('div', { class: 'stu-launch-inst', hidden: true }, el('div', { class: 'stu-launch-h sep' }, el('b', { text: '설치된 앱' }), el('span', { class: 'stu-fine', text: '열면 이 앱 전용 AI 세션이 판 위에 카드로 떠요' })), instGrid);
             launch.replaceChildren(...[
-                apps.length ? el('div', { class: 'stu-launch-h' }, el('b', { text: '앱' }), el('span', { class: 'stu-fine', text: '열어서 하는 일 — 창으로 뜹니다' })) : null,
-                apps.length ? el('div', { class: 'stu-shelf-grid stu-launch-grid' }, ...apps.map((d) => appTile(d, () => toggleLaunch(false), true))) : null,
-                instSec,
-                el('div', { class: 'stu-launch-h' + (apps.length ? ' sep' : '') }, el('b', { text: '위젯' }), el('span', { class: 'stu-fine', text: '캔버스에 두는 것 — 눌러 올리거나 원하는 자리로 끌어다 놓기' })),
+                el('div', { class: 'stu-launch-h' }, el('b', { text: '위젯' }), el('span', { class: 'stu-fine', text: '캔버스에 두는 것 — 눌러 올리거나 원하는 자리로 끌어다 놓기' })),
                 el('div', { class: 'stu-shelf-grid stu-launch-grid' }, ...wgs.map((d) => appTile(d, () => toggleLaunch(false)))),
-                // 자투리 판에서 앱 구역이 통째로 비는 건 고장이 아니다 — 왜 없는지 한 줄로 말해 준다(막다른 안내 금지).
-                loose ? el('p', { class: 'stu-launch-note stu-fine', text: '태스크·지식·자료 같은 건 프로젝트의 것이에요. 세션을 프로젝트에 연결하면 그 작업대에서 쓸 수 있습니다.' }) : null,
+                instSec,
+                loose ? el('p', { class: 'stu-launch-note stu-fine', text: '태스크·지식 같은 건 프로젝트의 것이에요. 세션을 프로젝트에 연결하면 그 작업대에서 쓸 수 있습니다.' }) : null,
             ].filter(Boolean));
             void listSessionApps().then((list) => {
                 if (launch.hidden || !list.length)
-                    return; // 닫혔거나 설치된 세션 앱 없음 → 숨김 유지
+                    return;
                 instSec.hidden = false;
                 instGrid.replaceChildren(...list.map((a) => sessionAppTile(a)));
             });
@@ -1160,6 +1156,12 @@ export function mountStudio(host, opts) {
             window.setTimeout(() => { if (!notif.classList.contains('on'))
                 notif.hidden = true; }, 260);
         }
+        // 서랍이 아이콘 열을 덮지 않게 — 열리면 아이콘이 왼쪽으로 비켜선다(원준 2026-08-19).
+        //  ⚠ 밀 거리는 **실제 서랍 폭을 재서** 준다. CSS transform 안의 %는 뷰포트가 아니라 '움직이는 그 요소'
+        //   기준이라, min(360px,42%) 를 그대로 쓰면 아이콘 열 폭의 42% 만 밀려 여전히 가린다(실측: 96px 만 밀렸다).
+        if (want)
+            requestAnimationFrame(() => stage.style.setProperty('--stu-notif-w', Math.round(notif.getBoundingClientRect().width) + 'px'));
+        stage.classList.toggle('notif-on', want);
         tlBtn.classList.toggle('on', want);
         tlBtn.setAttribute('aria-expanded', String(want));
     }
