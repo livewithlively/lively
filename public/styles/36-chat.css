@@ -56,6 +56,21 @@ details.livc-divider > summary::before, details.livc-divider > summary::after { 
 .sc-head { display: flex; align-items: center; gap: 12px; min-height: 38px; padding: 9px 16px 8px; border-bottom: 1px solid var(--line); flex: none; }
 .sc-head-l { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
 .sc-title { font-size: 13.5px; font-weight: 800; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; }
+/* 제목 = 세션 이름을 고치는 자리(#1719). 평소엔 제목과 똑같이 보이고, 손을 올렸을 때만 '고칠 수 있다'고 말한다
+   — 머리줄에 연필 아이콘 하나를 더 놓으면 그 줄의 조작부가 다섯 개가 된다(제목이 조작부에 밀린다). */
+.sc-titlebox { display: inline-flex; align-items: center; min-width: 0; flex: 0 1 auto; }
+button.sc-title { display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 13.5px; font-weight: 800;
+  max-width: 46ch; margin-left: -6px; padding: 2px 6px; border: 0; border-radius: 6px; background: none; color: var(--ink); text-align: left; cursor: text; }
+button.sc-title .sc-title-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sc-title-pen { width: 13px; height: 13px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linejoin: round;
+  opacity: 0; transition: opacity .12s ease; }
+button.sc-title:hover { background: var(--bg-punch); box-shadow: inset 0 0 0 1px var(--line-net, var(--line)); }
+button.sc-title:hover .sc-title-pen, button.sc-title:focus-visible .sc-title-pen { opacity: 1; }
+button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.sc-title-in { font: inherit; font-size: 13.5px; font-weight: 800; width: min(46ch, 38vw); margin-left: -6px; padding: 2px 6px;
+  border: 1px solid var(--blue); border-radius: 6px; background: var(--bg, #fff); color: var(--ink); }
+.sc-title-in:focus { outline: none; box-shadow: 0 0 0 3px var(--blue-soft, rgba(43, 108, 232, .18)); }
+.sc-title-in:disabled { opacity: .6; }
 .sc-meta { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-sub); white-space: nowrap; }
 .sc-meta a { color: var(--ink-sub); text-decoration: none; }
 .sc-meta a:hover { color: var(--blue); }
@@ -191,6 +206,9 @@ details.livc-divider > summary::before, details.livc-divider > summary::after { 
   .sc-head { flex-wrap: wrap; gap: 4px 8px; padding: 8px 12px 6px; min-height: 0; }
   .sc-head-l { flex: 1 1 100%; flex-wrap: wrap; row-gap: 3px; }
   .sc-title { font-size: 15px; flex: 1 1 auto; max-width: 100%; }
+  .sc-titlebox { flex: 1 1 auto; max-width: 100%; }
+  button.sc-title { font-size: 15px; max-width: 100%; }
+  .sc-title-in { font-size: 16px; width: 100%; }
   .sc-meta { flex: 1 1 100%; overflow: hidden; }
   .sc-meta .sc-proj > a { max-width: min(240px, 46vw); }
   .sc-head-r { flex: 1 1 100%; justify-content: flex-start; gap: 2px; margin-left: -6px; }
