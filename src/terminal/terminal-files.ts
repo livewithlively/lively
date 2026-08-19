@@ -32,6 +32,28 @@ const MAX_UPLOAD = 50 * 1024 * 1024; // 50MB
 //  따라 "미리보기엔 너무 큽니다"가 갈리면 링크를 받은 사람에게는 그게 그냥 고장으로 보인다.
 //  (종전 2MB 는 대시보드 위젯 미리보기만 염두에 둔 값이라 5MB PDF 보고서조차 링크로 열리지 않았다.)
 const MAX_PREVIEW = 25 * 1024 * 1024; // 25MB
+// 디렉터리 한 칸 읽기(로컬 fs) — **심링크를 따라가** 실효 종류를 정한다(#1744).
+//  dirent.isDirectory() 는 링크에 대해 언제나 false 라, 그대로 두면 폴더를 가리키는 링크(세션 폴더의 ./project 가 그
+//  대표)가 목록에 '파일'로 나와 탐색기에서 들어갈 수 없었다 — 눌러도 미리보기만 열렸다. stat 은 링크를 따라가므로
+//  그 결과로 type 을 정하고, link/linkTarget 을 함께 실어 화면이 '링크'임을 표시하고 목적지를 말할 수 있게 한다.
+//  끊어진 링크는 stat 이 던져 종전대로 file(크기 0)로 남는다 — 목록에서 사라지지 않는 편이 낫다.
+//  ⚠ 격리 멤버 경로는 같은 규칙을 memberLs(LS_JS)가 자기 uid 로 수행한다 — 한쪽만 고치면 두 목록이 어긋난다.
+export interface FsListItem { name: string; type: "dir" | "file"; size: number; mtime: number; link?: boolean; linkTarget?: string }
+export async function readDirItems(abs: string): Promise<FsListItem[]> {
+  const entries = await fsp.readdir(abs, { withFileTypes: true });
+  const items: FsListItem[] = [];
+  for (const e of entries) {
+    if (e.name.startsWith(".")) continue;
+    const link = e.isSymbolicLink();
+    let isDir = e.isDirectory(); let size = 0; let mtime = 0; let linkTarget = "";
+    const full = path.join(abs, e.name);
+    try { const st = await fsp.stat(full); mtime = Math.floor(st.mtimeMs); if (link) isDir = st.isDirectory(); if (!isDir) size = st.size; } catch { /* 끊어진 링크·권한 — 아는 만큼만 */ }
+    if (link) { try { linkTarget = await fsp.readlink(full); } catch { /* 읽을 수 없으면 목적지는 생략 */ } }
+    items.push({ name: e.name, type: isDir ? "dir" : "file", size, mtime, ...(link ? { link: true, linkTarget } : {}) });
+  }
+  return items;
+}
+
 const userOf = (req: express.Request): LivelyUser => (req.auth?.extra ?? {}) as unknown as LivelyUser;
 const idOf = (u: LivelyUser): string => u.userId || u.email || "";
 
@@ -108,23 +130,15 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     assertBrowseVisible(gate, base, abs);
     const restrictedProjects = gate ? await restrictedProjectFolders() : new Set<string>();
     const osUser = await userOsUser(u);
-    const items: Array<{ name: string; type: "dir" | "file"; size: number; mtime: number; locked?: boolean }> = [];
+    const items: Array<FsListItem & { locked?: boolean }> = [];
     if (osUser) {
       await memberMkdir(osUser, base).catch(() => { /* 루트 없으면 생성 */ });
       let entries: LsEntry[] = [];
       try { entries = await memberLs(osUser, abs); } catch { entries = []; }
-      for (const e of entries) if (!e.name.startsWith(".")) items.push({ name: e.name, type: e.type, size: e.size, mtime: e.mtime });
+      for (const e of entries) if (!e.name.startsWith(".")) items.push({ name: e.name, type: e.type, size: e.size, mtime: e.mtime, ...(e.link ? { link: true, linkTarget: e.linkTarget || "" } : {}) });
     } else {
       await fsp.mkdir(base, { recursive: true }).catch(() => { /* 개인 루트 없으면 생성 */ });
-      let entries: fs.Dirent[] = [];
-      try { entries = await fsp.readdir(abs, { withFileTypes: true }); } catch { entries = []; }
-      for (const e of entries) {
-        if (e.name.startsWith(".")) continue;
-        const isDir = e.isDirectory();
-        let size = 0, mtime = 0;
-        try { const st = await fsp.stat(path.join(abs, e.name)); mtime = Math.floor(st.mtimeMs); if (!isDir) size = st.size; } catch { /* skip */ }
-        items.push({ name: e.name, type: isDir ? "dir" : "file", size, mtime });
-      }
+      try { items.push(...await readDirItems(abs)); } catch { /* 못 읽으면 빈 목록 */ }
     }
     items.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
     const rel = path.relative(base, abs);
@@ -235,21 +249,13 @@ export function registerTerminalFiles(app: express.Express, verifier: BearerVeri
     }
     const { base, abs } = await resolveInSession(req, false);
     const osUser = await sessionOsUser(req.params.id);
-    const items: Array<{ name: string; type: "dir" | "file"; size: number; mtime: number }> = [];
+    const items: FsListItem[] = [];
     if (osUser) {
       let entries;
       try { entries = await memberLs(osUser, abs); } catch { throw new HttpError(404, "디렉터리 없음"); }
-      for (const e of entries) { if (!e.name.startsWith(".")) items.push({ name: e.name, type: e.type, size: e.size, mtime: e.mtime }); }
+      for (const e of entries) { if (!e.name.startsWith(".")) items.push({ name: e.name, type: e.type, size: e.size, mtime: e.mtime, ...(e.link ? { link: true, linkTarget: e.linkTarget || "" } : {}) }); }
     } else {
-      let entries: fs.Dirent[];
-      try { entries = await fsp.readdir(abs, { withFileTypes: true }); } catch { throw new HttpError(404, "디렉터리 없음"); }
-      for (const e of entries) {
-        if (e.name.startsWith(".")) continue;
-        const isDir = e.isDirectory();
-        let size = 0, mtime = 0;
-        try { const st = await fsp.stat(path.join(abs, e.name)); mtime = Math.floor(st.mtimeMs); if (!isDir) size = st.size; } catch { /* skip */ }
-        items.push({ name: e.name, type: isDir ? "dir" : "file", size, mtime });
-      }
+      try { items.push(...await readDirItems(abs)); } catch { throw new HttpError(404, "디렉터리 없음"); }
     }
     items.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
     const rel = path.relative(base, abs);

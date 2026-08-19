@@ -447,6 +447,7 @@
   var SESSION_LABEL = new URLSearchParams(location.search).get("label") || "";
   var NODE_ID = new URLSearchParams(location.search).get("node") || "";
   var RESTORED = new URLSearchParams(location.search).get("restored") === "1";
+  var EMBED = new URLSearchParams(location.search).get("embed") === "1";
   var nodeQ = (joiner) => NODE_ID ? joiner + "node=" + encodeURIComponent(NODE_ID) : "";
   var FONTS = [
     { v: "'JetBrains Mono', 'D2Coding', monospace", label: "JetBrains Mono" },
@@ -551,7 +552,7 @@
   }
   function diagText() {
     return [
-      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build 859bc159",
+      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build 4be41d90",
       "ua: " + navigator.userAgent,
       "session: " + SESSION_ID + (NODE_ID ? " node=" + NODE_ID : ""),
       "secure: " + window.isSecureContext + " \xB7 exported: " + (/* @__PURE__ */ new Date()).toISOString(),
@@ -2282,7 +2283,7 @@
           "\uBB38\uC81C\uAC00 \uC0DD\uACBC\uC744 \uB54C",
           tool("\uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", "\uC785\uB825\uC774 \uC774\uC0C1\uD560 \uB54C(\uD0A4\uB9CC \uB20C\uB7EC\uB3C4 \uAC19\uC740 \uBB38\uC790\uC5F4\uC774 \uB4E4\uC5B4\uAC00\uB294 \uB4F1) \uC544\uB798 \uBC84\uD2BC\uC73C\uB85C \uCD5C\uADFC \uC785\uB825 \uAE30\uB85D\uC744 \uBCF5\uC0AC\uD574 \uC81C\uBCF4\uC5D0 \uBD99\uC5EC \uC8FC\uC138\uC694 \u2014 \uC11C\uBC84\uB85C\uB294 \uC804\uC1A1\uB418\uC9C0 \uC54A\uC544\uC694"),
           el("button", { class: "tbtn", text: "\u{1F50D} \uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", onclick: () => copyText(diagText(), false, true) }),
-          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "859bc159 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
+          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "4be41d90 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
         ),
         sec(
           "\uB3C4\uAD6C (\uC624\uB978\uCABD \uC704 \uBC84\uD2BC)",
@@ -2627,6 +2628,38 @@
     sessionProjectId = data && Number(data.projectId) || 0;
     showDropHint();
   }
+  function setupEmbedBridge() {
+    window.addEventListener("message", (ev) => {
+      if (ev.origin !== location.origin || ev.source !== window.parent) return;
+      const m = ev.data;
+      if (!m || m.type !== "lively-term") return;
+      if (m.cmd === "reconnect") softReconnect();
+      else if (m.cmd === "settings") openSettings();
+      else if (m.cmd === "help") openHelp();
+      else if (m.cmd === "prompts") openMyPrompts();
+      else if (m.cmd === "focus") {
+        try {
+          term.focus();
+        } catch (_) {
+        }
+      }
+    });
+    const post = () => {
+      try {
+        window.parent.postMessage({
+          type: "lively-term-status",
+          text: statusEl.textContent || "",
+          cls: String(statusEl.className || "").replace("status", "").trim()
+        }, location.origin);
+      } catch (_) {
+      }
+    };
+    try {
+      new MutationObserver(post).observe(statusEl, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+    } catch (_) {
+    }
+    post();
+  }
   async function boot() {
     const p = prefs();
     scrollSpeed = Math.max(1, Math.min(12, Number(p.scrollSpeed) || 3));
@@ -2696,12 +2729,13 @@
     termPane = el("div", { class: "pane active" }, host);
     tabbarEl = el("div", { id: "tabbar" });
     panesEl = el("div", { id: "panes" }, termPane);
-    const main = el("div", { id: "main" }, toolbar, tabbarEl, panesEl);
-    document.getElementById("root").replaceChildren(el("div", { id: "ws" }, explorerEl, main));
+    const main = EMBED ? el("div", { id: "main" }, tabbarEl, panesEl) : el("div", { id: "main" }, toolbar, tabbarEl, panesEl);
+    document.getElementById("root").replaceChildren(EMBED ? el("div", { id: "ws" }, main) : el("div", { id: "ws" }, explorerEl, main));
     tabs.push({ id: "term", label: "\uD130\uBBF8\uB110", pane: termPane, closable: false });
     renderTabbar();
-    setupDnd();
+    if (!EMBED) setupDnd();
     setupTermDrop();
+    if (EMBED) setupEmbedBridge();
     loadSessionMeta();
     try {
       const ch = new BroadcastChannel("lively-terminal");
