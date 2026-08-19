@@ -156,6 +156,24 @@ export function memberReadTo(osUser: string, absPath: string, dest: Writable): P
   });
 }
 
+// 멤버 파일의 바이트 구간 [start,end) — 대화 파일 창 읽기(harness-io/transcript-fs)가 쓴다.
+//  `tail -c +K | head -c N`(K=start+1, 1-based). 스크립트는 고정 리터럴, 값(오프셋·길이·경로)은 전부 argv(인젝션 없음).
+//  head 가 N 바이트를 받으면 파이프를 닫아 tail 이 스스로 끝난다 — 우리 쪽에서 EOF 를 신호할 일이 없다(중계 채널은
+//  half-close 를 전체 종료로 전파하므로 stdin 없는 op 여야 한다). 파일이 짧으면 짧게 돌아온다(=EOF, ByteReader 계약).
+export function memberReadRange(osUser: string, absPath: string, start: number, end: number): Promise<Buffer> {
+  const s = Math.max(0, Math.floor(start));
+  const n = Math.floor(end) - s;
+  if (n <= 0) return Promise.resolve(Buffer.alloc(0));
+  return new Promise((resolve, reject) => {
+    const c = memberSpawn(osUser, ["sh", "-c", 'tail -c +"$1" -- "$3" | head -c "$2"', "lively-range", String(s + 1), String(n), absPath], ["ignore", "pipe", "pipe"]);
+    const err = collectErr(c);
+    const chunks: Buffer[] = [];
+    c.stdout?.on("data", (d: Buffer) => chunks.push(d));
+    c.on("error", reject);
+    c.on("close", (code) => (code === 0 ? resolve(Buffer.concat(chunks)) : reject(new Error(err.get() || `member range exit ${code}`))));
+  });
+}
+
 // 멤버 uid 로 `sh -c <script>` 실행(선택 stdin) — 스크립트는 **우리 코드의 고정 리터럴**만(사용자입력 X → 인젝션 없음).
 //  시크릿(git 개인키·토큰 등)은 argv 아닌 **stdin** 으로만 전달한다(ps/argv 노출 회피). git 자격 materialize(#540)에 쓰인다.
 export function memberSh(osUser: string, script: string, stdin?: string): Promise<void> {
