@@ -206,6 +206,9 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
   .sc-head { flex-wrap: wrap; gap: 4px 8px; padding: 8px 12px 6px; min-height: 0; }
   .sc-head-l { flex: 1 1 100%; flex-wrap: wrap; row-gap: 3px; }
   .sc-title { font-size: 15px; flex: 1 1 auto; max-width: 100%; }
+  .sc-titlebox { flex: 1 1 auto; max-width: 100%; }
+  button.sc-title { font-size: 15px; max-width: 100%; }
+  .sc-title-in { font-size: 16px; width: 100%; }
   .sc-meta { flex: 1 1 100%; overflow: hidden; }
   .sc-meta .sc-proj > a { max-width: min(240px, 46vw); }
   .sc-head-r { flex: 1 1 100%; justify-content: flex-start; gap: 2px; margin-left: -6px; }
