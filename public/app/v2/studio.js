@@ -321,7 +321,22 @@ export function mountStudio(host, opts) {
                 void api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/keys', { method: 'POST', body: JSON.stringify({ action }) })
                     .then(() => toast(label + ' — 보냈어요.')).catch((err) => toast('실패 — ' + (err?.message || err), true));
             } });
-        body.replaceChildren(el('div', { class: 'stu-sess-st' }, el('span', { class: 'v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' }), el('span', { text: s.stateLabel }), raw.harness ? el('span', { class: 'stu-hbadge mono', text: String(raw.harness) }) : null, el('span', { class: 'stu-fine', style: 'margin-left:auto', text: s.lastSeen ? relTime(new Date(s.lastSeen).toISOString()) : '' })), work && !INJ_RE.test(work) ? el('div', { class: 'stu-sess-now', title: work }, icon('bolt', 'stu-i sm'), el('span', { text: work })) : null, el('div', { class: 'stu-sess-x', 'data-x': '1' }), ...(waiting ? [el('div', { class: 'stu-sess-keys' }, key('approve', '승인', true), key('deny', '거부'), key('interrupt', '멈춤'))] : []), el('div', { class: 'stu-w-foot' }, el('button', { class: 'btn-text', type: 'button', text: '여기에 시키기', title: '아래 컴포저의 행선지를 이 세션으로 잡습니다', onclick: () => setDest({ kind: 'session', sid: s.id, label: widgetTitle(spec) }, true) }), el('a', { class: 'btn-text', href: '#/s/' + encodeURIComponent(s.id), text: '대화 열기 →' })));
+        body.replaceChildren(el('div', { class: 'stu-sess-st' }, el('span', { class: 'v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' }), el('span', { text: s.stateLabel }), raw.harness ? el('span', { class: 'stu-hbadge mono', text: String(raw.harness) }) : null, el('span', { class: 'stu-fine', style: 'margin-left:auto', text: s.lastSeen ? relTime(new Date(s.lastSeen).toISOString()) : '' })), work && !INJ_RE.test(work) ? el('div', { class: 'stu-sess-now', title: work }, icon('bolt', 'stu-i sm'), el('span', { text: work })) : null, el('div', { class: 'stu-sess-x', 'data-x': '1' }), ...(waiting ? [el('div', { class: 'stu-sess-keys' }, key('approve', '승인', true), key('deny', '거부'), key('interrupt', '멈춤'))] : []), (() => {
+            const inp = el('input', { class: 'stu-sess-in', type: 'text', placeholder: '이 세션에 시키기 — Enter', 'aria-label': '이 세션에 시키기' });
+            inp.addEventListener('keydown', (e) => {
+                if (e.key !== 'Enter' || e.isComposing)
+                    return;
+                const text = inp.value.trim();
+                if (!text)
+                    return;
+                inp.disabled = true;
+                void api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/prompt', { method: 'POST', body: JSON.stringify({ text }) })
+                    .then(() => { inp.value = ''; toast('보냈어요 — 답은 카드와 대화창에 나타납니다.'); })
+                    .catch((err) => toast('보내지 못했어요 — ' + (err?.message || err), true))
+                    .finally(() => { inp.disabled = false; inp.focus(); });
+            });
+            return el('div', { class: 'stu-sess-footrow' }, inp, el('a', { class: 'btn-text', href: '#/s/' + encodeURIComponent(s.id), text: '열기 →', title: '전체 대화창' }));
+        })());
         if (s.live && !s.node) {
             const x = body.querySelector('.stu-sess-x');
             const t = await fetchTail(s);
