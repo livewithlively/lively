@@ -178,6 +178,13 @@ export async function initSessionsInfra(pool: Pool): Promise<void> {
   //  reaper 회수 — 훅이 프로세스 사망으로 못 뜸) '복원 가능(중단됨)'. exit_reason 은 진단용(어떤 사유였나).
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS exited_at TIMESTAMPTZ;`);
   await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS exit_reason TEXT;`);
+  // #1791 — **노드 세션도 이 표에 산다.** node_id = 그 세션이 도는 노드(멤버 PC·워커·매니지드 실행환경). NULL = 게이트웨이 박스.
+  //  왜: 노드 세션은 노드 에이전트가 만드는데 노드엔 DB 가 없어 행이 없었고, 그 tmux/psmux 가 죽으면 흔적 없이 사라졌다
+  //   (2026-08-18 hammurabi — 세션 5개가 동시에 "세션을 찾을 수 없어요", 복원 카드조차 없음). 이제 **게이트웨이가**
+  //   노드 create 릴레이 직후 행을 쓴다(정본 = DB, 노드 = 실행 표면). 복원(restore)은 node_id 의 노드에 create 를 다시 릴레이한다.
+  //  ⚠ 소비자는 이 컬럼을 보고 갈라야 한다 — 복원 목록은 그 노드의 것으로 표시하고, reaper·백필(중앙 tmux 만 훑는다)은
+  //   라이브 목록에 없는 id 라 원래 건드리지 않는다. 종전 node-session-map.ts 헤더의 "INSERT 기각" 근거가 이 컬럼으로 해소된다.
+  await pool.query(`ALTER TABLE org_session_state ADD COLUMN IF NOT EXISTS node_id TEXT;`);
   // #1291 v2 — 세션 **기록 범위**(write cap)와 read 축소의 desired-state 미러.
   //  tmux user-option 이 권위지만 tmux 가 죽으면(재부팅·회수) 그 값이 사라진다 → 복원 때 캡이 넓어지지 않게 여기 남긴다.
   //  write_vis: 'open'|'audience'|'private' (NULL=미설정 → 실행 폴더에서 재파생). restrict: read 축소(owner∪invites) 여부.
