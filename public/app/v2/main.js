@@ -12,9 +12,9 @@ import { fillLivCards, renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame } from './apps.js';
 import { drawSide as drawSideTree, projectOrder } from './side.js';
 import { dotCls, mergeSessions, projName, renderHome, renderSession } from './views.js';
-import { mountProjectView } from './project-view.js';
+import { mountStudio } from './studio.js'; // 실험장(#1719 원준): 프로젝트 화면 = 작업대(캔버스). 종전 방(project-view)은 잠시 내려둔다.
 import { createTimeline } from '../timeline.js';
-import { loadProjectTimeline, loadSessionActivities, loadWorkspaceTimeline } from '../timeline-sources.js';
+import { loadSessionActivities, loadWorkspaceTimeline } from '../timeline-sources.js';
 import { makeSplitter } from './split.js';
 import { createTabs, routeKey } from './tabs.js';
 import { mountMobileChrome } from './mobile.js';
@@ -47,6 +47,9 @@ export async function bootV2() {
     mobile = mountMobileChrome(root, sideEl, asideEl);
     root.prepend(mobile.bar);
     root.append(mobile.scrim);
+    // 실험장(#1719 원준): 크롬식 탭 줄은 걷는다 — 사이드바(프로젝트·열린 세션)가 이미 그 역할을 한다.
+    //  탭 '기계'는 남긴다(화면마다 상태 보존·복귀가 이 구조에 실려 있다) — 줄만 안 그린다.
+    const TABS_OFF = true;
     tabsApi = createTabs(centerEl, asideEl, {
         titleFor,
         onActivate: (tab, fresh) => {
@@ -67,9 +70,11 @@ export async function bootV2() {
             tab.chat = null;
         } dropProjView(tab); drawSide(); },
     });
-    centerEl.prepend(tabsApi.strip); // 탭 줄은 가운데 열 맨 위(탭 패널들은 tabs.ts 가 이미 뒤에 붙였다)
-    // 모바일이면 탭 줄이 상단 바 가운데로 옮겨 간다(#1777) — 데스크톱으로 돌아오면 여기(가운데 열 맨 위)로 되돌린다.
-    mobile.adoptStrip(tabsApi.strip, () => centerEl.prepend(tabsApi.strip));
+    if (!TABS_OFF) {
+        centerEl.prepend(tabsApi.strip); // 탭 줄은 가운데 열 맨 위(탭 패널들은 tabs.ts 가 이미 뒤에 붙였다)
+        // 모바일이면 탭 줄이 상단 바 가운데로 옮겨 간다(#1777) — 데스크톱으로 돌아오면 여기(가운데 열 맨 위)로 되돌린다.
+        mobile.adoptStrip(tabsApi.strip, () => centerEl.prepend(tabsApi.strip));
+    }
     drawSide(); // 데이터 전 골격(로고·리브·앱)부터 — 빈 화면을 오래 두지 않는다
     await loadData();
     // 시작 탭 — 주소에 화면이 있으면(딥링크) 그 화면: 있던 탭이면 그 탭, 아니면 저장된 활성 탭이 그리로 간다.
@@ -258,8 +263,9 @@ async function renderRoute(tab) {
                 void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); });
             // 프로젝트 화면(#1757) = 짧은 개요 + 리브 대화 — 이 탭의 것으로 마운트(리브가 본문·태스크를 바꾸면 목록·사이드바 갱신).
             dropProjView(tab);
-            projViews.set(tab, mountProjectView(tab.center, { data: () => data, id, detail, onProjectChanged: () => { void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); }); } }));
-            drawAsideProject(tab, detail, id);
+            const stu = mountStudio(tab.center, { data: () => data, id, detail, onProjectChanged: () => { void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); }); } });
+            projViews.set(tab, stu);
+            stu.renderAside(tab.aside);
         }
         else if (page === 's' && segs[1]) {
             const id = decodeURIComponent(segs[1]);
@@ -334,9 +340,6 @@ function openSessions() {
 function drawSide() { if (sideEl)
     drawSideTree(sideEl, data, activeKey, openSessions); }
 // ── 우측(탭마다 한 벌 — tab.aside 에 그린다) ──
-function knItem(name, rel) {
-    return el('a', { class: 'v2-kn', href: '#/k/' + encodeURIComponent(name), title: name }, el('span', { class: 'v2-kn-rel ' + rel, text: rel === 'req' ? '필요' : '산출' }), el('span', { class: 'v2-kn-name', text: name }));
-}
 function drawAsideHome(tab) {
     const askHost = el('div', { class: 'liv-askdock v2-askdock' });
     const cards = el('div', { class: 'liv-cards v2-liv-cards', hidden: true });
@@ -350,16 +353,6 @@ function drawAsideLiv(tab) {
     const tl = createTimeline(tab.aside, { scope: '워크스페이스', showActors: true, empty: '아직 남은 작업 기록이 없어요.' });
     void loadWorkspaceTimeline(60).then((items) => tl.addAll(items));
     return null; // rail 을 주지 않는다 = 카드는 본문에
-}
-function drawAsideProject(tab, detail, id) {
-    tab.aside.replaceChildren();
-    const tl = createTimeline(tab.aside, { scope: '프로젝트 #' + id, showActors: true, empty: '아직 이 프로젝트에서 일어난 일이 없어요.' });
-    const kn = detail && detail.project && detail.project.knowledge;
-    const req = (kn && kn.required) || [];
-    const prod = (kn && kn.produced) || [];
-    tab.aside.append(el('div', { class: 'v2-kn-foot' }, el('span', { class: 'v2-k', text: `지식 · 필요 ${req.length} · 산출 ${prod.length}` }), el('div', { class: 'v2-kn-list' }, ...[...req.map((k) => knItem(k.name, 'req')), ...prod.map((k) => knItem(k.name, 'prod'))].slice(0, 6))));
-    //  '프로젝트 앱에서 열기' 는 여기 두지 않는다(상민님 2026-08-19) — 같은 링크가 가운데 화면 액션줄에 이미 있다.
-    void loadProjectTimeline(id, detail).then((items) => tl.addAll(items));
 }
 // 세션 우패널 = 짧은 사실 줄 + **타임라인**. 같은 세션이면 위젯을 다시 만들지 않는다(폴링이 상태만 갱신) —
 //  탭마다 한 벌이므로 캐시도 탭의 aside 에 붙어 산다(전환해도 쌓인 것이 그대로).
