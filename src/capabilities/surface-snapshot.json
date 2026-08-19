@@ -3487,6 +3487,16 @@
   "input_hash": "e9f5a6623f0f7ef5"
  },
  {
+  "name": "session_set_project",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/terminal/sessions/:id/project"
+  ],
+  "input_hash": "7545b7dc003c8466"
+ },
+ {
   "name": "preview_env_list",
   "scope": "code",
   "mcp": true,
