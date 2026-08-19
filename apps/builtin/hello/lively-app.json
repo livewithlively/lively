@@ -4,6 +4,6 @@
   "version": "0.1.0",
   "publisher": { "name": "Lively" },
   "harness": { "plugin": "./" },
-  "permissions": { "scopes": ["context"], "tools": ["knowledge_search", "knowledge_get"] },
+  "permissions": { "scopes": ["memory"], "tools": ["knowledge_search", "knowledge_get"] },
   "ui": { "pages": [{ "key": "main", "title": "안녕", "entry": "ui/index.html", "display": ["inline", "fullscreen"] }] }
 }
