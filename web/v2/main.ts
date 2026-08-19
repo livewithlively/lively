@@ -13,6 +13,7 @@ import { CLASSIC_PAGES, appByKey, appFrame } from './apps.js';
 import { drawSide as drawSideTree, projectOrder } from './side.js';
 import { dotCls, mergeSessions, projName, renderHome, renderSession, type Sess, type V2Data } from './views.js';
 import { mountProjectView, type ProjectViewHandle } from './project-view.js';
+import { takeCreated } from './created-cache.js';
 import { createTimeline, type TimelineHandle } from '../timeline.js';
 import { loadProjectTimeline, loadSessionActivities, loadWorkspaceTimeline } from '../timeline-sources.js';
 import { makeSplitter } from './split.js';
@@ -209,7 +210,24 @@ async function renderRoute(tab: ShellTab): Promise<void> {
     } else if (page === 's' && segs[1]) {
       const id = decodeURIComponent(segs[1]);
       let s = findSess(id);
+      // 방금 만든 세션이면 생성 응답 전문으로 먼저 그린다(created-cache 머리말 — 노드 세션은 목록 반영이 한 박자 늦다).
+      if (!s) {
+        const seeded = takeCreated(id);
+        if (seeded) { data.sessions = mergeSessions([seeded as any], []).concat(data.sessions); s = findSess(id); }
+      }
       if (!s) { await loadData(); drawSide(); s = findSess(id); }
+      // 그래도 없으면(다른 탭에서 만든 노드 세션 등) 에러로 끝내지 않는다 — "새로고침해 주세요"는 사람에게 폴링을 시키는 것.
+      //  잠깐 기다리며 몇 번 더 본다(노드 state push 는 수 초 안에 온다). 라우트가 바뀌면(seq) 즉시 중단.
+      if (!s) {
+        tab.center.replaceChildren(el('div', { class: 'v2-center' }, el('p', { class: 'v2-muted', text: '세션을 여는 중…' })));
+        for (let i = 0; i < 4 && !s; i++) {
+          await new Promise((r) => setTimeout(r, 800));
+          if (seq !== tab.seq) return;
+          await loadData();
+          s = findSess(id);
+        }
+        drawSide();
+      }
       if (seq !== tab.seq) return;
       // 우패널(발자취)을 먼저 — 세션 화면이 대화 파일을 읽으며 거기로 흘려보낸다.
       const trail = drawAsideSession(tab, s || null);

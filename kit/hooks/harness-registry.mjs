@@ -46,6 +46,33 @@ export function isForeignGrokInvocation(argv = process.argv.slice(2), env = proc
 const SEP = process.platform === "win32" ? "\\" : "/";
 const j = (...parts) => parts.filter(Boolean).join(SEP);
 
+// claude 설정 디렉터리(settings.json 자리) — CLAUDE_CONFIG_DIR(프로필별 계정 격리 #346) > <HOME>/.claude.
+//  ★ LIVELY_HOME(샌드박스 격리)이 켜져 있으면 CLAUDE_CONFIG_DIR 는 **그 샌드박스 안에 있을 때만** 존중한다.
+//   밖이면(개발자 셸·웹터미널 세션이 상속한 **실 프로필**) 무시하고 <HOME>/.claude 로 간다.
+//   실측(2026-08-19): 테스트가 LIVELY_HOME 만 주고 설치기를 돌렸는데 세션이 상속한 CLAUDE_CONFIG_DIR=<실 프로필>
+//   이 그대로 이겨, 실 프로필 settings.json 에 **곧 지워질 임시 샌드박스** 훅 경로 20개가 써졌다 → 그 뒤 모든
+//   세션의 SessionStart/UserPromptSubmit/… 훅이 `Cannot find module` 로 실패. opencode(XDG)·grok(GROK_HOME)은
+//   LIVELY_HOME 이면 사용자 env 를 통째로 무시하지만 claude 는 프로필 격리 자체가 테스트 대상이라(self-update·
+//   lively.test 가 샌드박스 안 CLAUDE_CONFIG_DIR 를 준다) '안이면 존중·밖이면 무시' 로 한다.
+//  ⚠ 설치기(user-install)·self-update·sync-harness-assets·CLI(lively.mjs)의 CLAUDE_DIR 도 **같은 계산**이어야
+//   한다(각자 인라인 — 발행물 배치가 달라 정적 import 를 못 하는 파일이 있다). 어긋나면 한쪽은 샌드박스에, 한쪽은
+//   실 프로필에 쓴다. kit/hooks/harness-registry.test.mjs C6b~i·D4·D5 와 kit/setup/user-install.test.mjs ⑬ 이 잡는다.
+//  포함 판정은 문자열 prefix 다(이 모듈은 path 를 안 쓴다) — 호출부는 절대경로를 넘긴다. 윈도우는 대소문자·구분자 무시.
+const normDir = (p) => {
+  let s = String(p || "").replace(/[\\/]+/g, "/").replace(/\/+$/, "");
+  return process.platform === "win32" ? s.toLowerCase() : s;
+};
+export const isInsideDir = (child, root) => {
+  const c = normDir(child), r = normDir(root);
+  return !!r && (c === r || c.startsWith(r + "/"));
+};
+export function claudeConfigDir(HOME, env = process.env) {
+  const ccd = String(env.CLAUDE_CONFIG_DIR || "").trim();
+  if (!ccd) return j(HOME, ".claude");
+  if (env.LIVELY_HOME && !isInsideDir(ccd, env.LIVELY_HOME)) return j(HOME, ".claude");
+  return ccd;
+}
+
 // ── 표 ────────────────────────────────────────────────────────────────────
 // 각 하네스는 아래 축을 채운다. 축을 하나 늘리면 **모든 하네스가 그 축을 답해야** 한다 — 그게 '빠진 자리'를 없애는 방법이다.
 //
@@ -68,8 +95,8 @@ export const HARNESS = {
     id: "claude",
     label: "Claude Code",
     bin: "claude",
-    // CLAUDE_CONFIG_DIR = 프로필별 계정 격리(#346). 없으면 <HOME>/.claude.
-    home: (HOME, env = process.env) => env.CLAUDE_CONFIG_DIR || j(HOME, ".claude"),
+    // CLAUDE_CONFIG_DIR = 프로필별 계정 격리(#346). 없으면 <HOME>/.claude. LIVELY_HOME 샌드박스 밖의 값은 무시(claudeConfigDir 참조).
+    home: (HOME, env = process.env) => claudeConfigDir(HOME, env),
     configFile: (home) => j(home, "settings.json"),
     configFormat: "json",
     wiring: "settings-merge",
