@@ -19,6 +19,7 @@ import { initV6ProjectOrg } from "./schema/project-org.js";
 import { initV6TaskDetail } from "./schema/task-detail.js";
 import { initV6GraphSource } from "./schema/graph-source.js";
 import { initV6UiVis } from "./schema/ui-vis.js";
+import { initV6ProjectChat } from "./schema/project-chat.js";
 
 export async function initV6Schema(): Promise<string> {
   const pool = itemsPool;
@@ -29,5 +30,6 @@ export async function initV6Schema(): Promise<string> {
   await initV6TaskDetail(pool);   // §11·⑫·⑧: 태그·시간·체크리스트·의존성·커스텀필드·첨부·댓글
   await initV6GraphSource(pool);  // ⑭(#290): 단일-home 유니크·knowledge_link·project_edge·source·knowledge_source
   await initV6UiVis(pool);        // ⑮(#592) UI·⑬ 임베딩·멤버 개인화·가시성(#1291)
+  await initV6ProjectChat(pool);  // ⑯(#1757) project_chat — 새 셸 프로젝트 화면의 리브 대화(프로젝트×사람) — 맨 끝(신규 조각 규약)
   return "initialized v6 schema";
 }

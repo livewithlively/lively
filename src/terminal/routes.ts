@@ -34,7 +34,7 @@ import { registerNodeRoutes } from "../node/routes.js";
 import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
 import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
 import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑
-import { chatIoCaps } from "./harness-io/adapter.js";                 // #1746 — 행에 대화창 능력(읽기·승인)
+import { chatIoCaps, harnessIo } from "./harness-io/adapter.js";                 // #1746 — 행에 대화창 능력(읽기·승인)
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
 
 // 노드 op 실패를 사용자에게 그대로 보여준다 — 노드측 예외(예: tmux 미설치 → spawn ENOENT)가 generic 500("internal_error")
@@ -816,6 +816,24 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     if (!uuid || uuid.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(uuid)) throw new HttpError(400, "uuid 형식 오류");
     const tp = typeof body.transcript_path === "string" ? body.transcript_path.trim() : "";
     const transcriptPath = tp && tp.length <= 1024 && !tp.includes("\0") && (tp.startsWith("/") || /^[A-Za-z]:[\\/]/.test(tp)) ? tp : null;
+    // ⚠ 소유자 불일치를 **200 으로 답하지 않는다**(2026-08-18 실측) — 훅은 응답 본문이 아니라 HTTP 상태(`r.ok`)로
+    //  성공을 판정해 dedup 플래그(`<box>.<uuid>.mapped`)를 쓴다. 그래서 종전의 `200 {ok:false}` 는 **거부를 성공으로
+    //  기록**해 그 세션을 영구 무매핑으로 굳혔다(재시도 없음 → 대화창이 영영 "기록 없음"). /active 와 동형으로 403.
+    //  레코드 없음은 여기서 안 막는다 — 그건 거부가 아니라 '박스 행이 없다'이고, 바로 아래 노드 경로가 받는다.
+    // 보고한 대화 id 와 대화 파일 경로가 **서로 어긋나면 받지 않는다**(2026-08-18 실측 — 이 자리를 통해 살아 있는
+    //  세션의 매핑이 `s7` 로 덮였다). 세션 안에서 도는 무엇이든 이 경로를 칠 수 있고 저장은 last-write-wins 라,
+    //  한 번의 엉뚱한 보고가 정본을 지운다. 두 값이 같은 대화를 가리키는지는 하네스를 몰라도 볼 수 있다 —
+    //  claude 는 `<uuid>.jsonl`, grok 은 `<convId>/updates.jsonl` 처럼 **id 가 경로 안에 들어 있다**.
+    //  경로를 안 보낸 구 훅은 종전대로 통과(무회귀) — 그건 어긋남이 아니라 '모름'이다.
+    if (transcriptPath && !transcriptPath.includes(uuid)) throw new HttpError(400, "대화 id 와 대화 파일 경로가 어긋납니다");
+    const st0 = await getSessionState(req.params.id);
+    //  경로를 안 보냈다면 대조할 짝이 없다 — 그 땐 **그 하네스의 대화 id 꼴**인지라도 본다(claude=UUID).
+    //  둘을 합치면 "짝이 맞거나, 아니면 규약에 맞거나" 여야 통과다. 규약을 모르는 하네스(convIdOk=null)는 종전대로.
+    if (!transcriptPath) {
+      const io0 = st0?.harness ? harnessIo(st0.harness) : null;   // 하네스를 모르면(미러 없음) 판단 보류
+      if (io0?.convIdOk && !io0.convIdOk(uuid)) throw new HttpError(400, `${io0.label} 의 대화 id 형식이 아닙니다`);
+    }
+    if (st0 && st0.owner !== idOf(userOf(req))) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
     let ok = await setClaudeSessionId(req.params.id, uuid, idOf(userOf(req)), transcriptPath);
     // #1752 갭2 — 노드 세션의 전용 매핑(org_node_session_map): 이 uuid 가 곧 중앙 세션 기록(session_log)의 키라, 매핑이 있어야
     //  채팅창이 노드 오프라인에도 기록을 읽는다. #1791 뒤 노드 세션도 org_session_state 행이 있어 위 UPDATE 가 성공하지만,

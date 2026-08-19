@@ -146,6 +146,9 @@ export function createTimeline(host, ctx) {
         const kindWord = it.kind === 'cmd' && it.detail ? it.detail + '번' : (KIND_WORD[it.kind] || '');
         const box = el(it.href && !canOpen ? 'a' : 'div', {
             class: 'tl-card tlk-' + it.kind + (canOpen ? ' can' : '') + (isOpen ? ' open' : '') + (it.href && !canOpen ? ' go' : '') + (it.error ? ' err' : ''),
+            // 실험장(#1719 원준): 지식 카드는 판(작업대)으로 끌어다 문서 위젯이 된다.
+            draggable: it.href && String(it.href).startsWith('#/k/') ? 'true' : null,
+            ondragstart: it.href && String(it.href).startsWith('#/k/') ? ((e) => { e.dataTransfer?.setData('text/plain', 'tl:' + JSON.stringify({ href: it.href, label: it.label })); }) : null,
             href: it.href && !canOpen ? it.href : null,
             title: [it.label, it.detail, it.actor && it.actor.name ? String(it.actor.name) : ''].filter(Boolean).join('\n'),
         }, el('div', { class: 'tl-gut' }, el('span', { class: 'tl-tm', text: hhmm(it.ts) }), kindWord ? el('span', { class: 'tl-kw', text: kindWord }) : null), el('div', { class: 'tl-main' }, el('div', { class: 'tl-head' }, el('span', { class: 'tl-ttl', text: it.label || '(이름 없음)' }), it.count > 1 ? el('span', { class: 'tl-x', text: '×' + it.count }) : null, face, canOpen ? el('span', { class: 'tl-car', 'aria-hidden': 'true', text: '›' }) : null), body));

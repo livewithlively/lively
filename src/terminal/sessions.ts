@@ -33,7 +33,7 @@ import {
   sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
   paneAwaitingInput, parseReportedPhase, isPhaseFresh, resolveAgentPhase,
 } from "./phase.js";
-import { userSlug, ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir } from "./profiles.js";
+import { userSlug, ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir, mintSessionHookToken, revokeSessionHookToken } from "./profiles.js";
 import { ensureMemberKitSeeded } from "./member-kit-seed.js";
 import { logger } from "../log.js";
 import { canSeeSession } from "./write-cap.js";
@@ -455,6 +455,12 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       await fsp.mkdir(profileDir, { recursive: true, mode: 0o700 });
       args.push("-e", `CLAUDE_CONFIG_DIR=${profileDir}`);
     }
+    // 훅 신원(#1719 후속) — 이 pane 의 훅이 **그 세션 주인**으로 보고하게 한다(대화 uuid 매핑·활동/단계·정상종료).
+    //  왜 여기만인지·왜 MCP 신원은 안 바뀌는지는 profiles.mintSessionHookToken 주석. 격리 경로는 멤버 홈의
+    //  ~/.lively/token 이 이미 그 멤버 것이고 sudo env_reset 도 지나야 해서 넣지 않는다.
+    //  best-effort — 못 구우면 종전대로 공유 토큰으로 떨어진다(무회귀).
+    const hookToken = await mintSessionHookToken(ownerId(user), id).catch(() => null);
+    if (hookToken) args.push("-e", `LIVELY_TOKEN=${hookToken}`);
     if (launch.length) args.push(...launch);
   }
   // 웹터미널은 xterm.js 로 렌더된다 — pane TERM 을 xterm-256color 로 통일(색 일관성: 격리 세션은 box-spawn 이
@@ -583,6 +589,8 @@ export async function reapCentralSession(id: string): Promise<void> {
 export async function killSession(user: LivelyUser, id: string, opts?: { admin?: boolean; preserveState?: boolean }): Promise<void> {
   if (!opts?.admin) await assertManage(user, id);
   await tmuxKill(id);
+  // 세션 스코프 자격 회수 — 이 box 에 실어 준 훅 토큰은 세션과 함께 죽는다(회수/삭제 둘 다. 복원은 새 box id 라 새로 굽는다).
+  await revokeSessionHookToken(id).catch((e) => console.warn(`[terminal] 세션 훅 토큰 회수 실패(${id}):`, (e as Error)?.message ?? e));
   if (!opts?.preserveState) await deleteSessionState(id).catch((e) => console.warn(`[terminal] desired-state 삭제 실패(${id}):`, (e as Error)?.message ?? e));
 }
 export async function editSession(user: LivelyUser, id: string, patch: { label?: string; invites?: unknown }): Promise<void> {

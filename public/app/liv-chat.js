@@ -15,7 +15,7 @@
 //  · **답을 기다리는 동안 입력을 막는다.** 턴이 겹치면 대화 이어받기(--resume)가 꼬인다(sendWhileBusy=false).
 //  · 도구 이름은 사람 말로, 모르는 이름은 그대로(틀린 한국어보다 낯선 영어 한 줄이 낫다). 연속 도구는 한 줄로 접힌다(desktop 변형).
 //  · 그림은 세션 대화창과 **같은 문법**(desktop) — 한 제품 안에 대화창이 두 모양이면 안 된다.
-import { api, el } from './core.js';
+import { api } from './core.js';
 import { createChatView } from './chat-view.js';
 /**
  * 진행을 다시 물어보는 간격.
@@ -56,19 +56,6 @@ function toolLabel(name) {
         return { label: '연결한 도구 사용' };
     return { label: TOOL_LABELS[name] ?? name };
 }
-/**
- * 빈 화면 — **행동으로의 초대**여야 한다(설명이 아니라).
- * 리브가 실제로 할 수 있는 세 마디를 **눌러서 채워지는** 보기로 둔다. 예시가 곧 사용법이다.
- * 앞의 라벨(점검·연결·기록)은 장식이 아니라 **리브가 하는 일의 세 갈래**다.
- */
-const STARTERS = [
-    ['점검', '지금 뭐부터 하면 돼요?'],
-    ['연결', '쓰던 노션이랑 연결해 주세요'],
-    ['기록', '매주 회의록을 여기 쌓고 싶어요'],
-];
-function opening(fill) {
-    return el('div', { class: 'livc-open' }, el('div', { class: 'livc-open-lede' }, el('b', { text: '말씀하시면 제가 합니다.' }), el('p', { text: '설명서를 드리는 게 아니라, 이 워크스페이스를 직접 손봅니다.' })), el('ul', { class: 'livc-open-list' }, ...STARTERS.map(([kind, t]) => el('li', {}, el('button', { class: 'livc-open-btn', type: 'button', onclick: () => fill(t) }, el('span', { class: 'livc-open-kind', text: kind }), el('span', { class: 'livc-open-say', text: t }))))));
-}
 /** askHost = 리브가 던진 물음이 앉는 자리. **대화와 같은 칸, 입력 바로 위**에 끼운다. */
 export function mountLivChat(host, askHost) {
     let view;
@@ -101,7 +88,7 @@ export function mountLivChat(host, askHost) {
         onSend: (text) => sendTurn(text),
         onStop: stopTurn,
         escActive: () => document.body.dataset.route === 'liv' || !!document.body.dataset.ui,
-        opening: opening((t) => { view.input.value = t; view.input.focus(); view.form.requestSubmit(); }),
+        opening: null, // 첫 화면의 초대는 편지가 한다(#1719 재구성) — 같은 초대를 두 곳에 두지 않는다
         askHost,
     });
     async function drain(turnId, t, from0 = 0) {
@@ -256,6 +243,18 @@ export function mountLivChat(host, askHost) {
  * 카드(맡기기·객관식 답·업로드·자격 저장)가 리브에게 말을 거는 **유일한 문**.
  * 리브가 답하는 중이면 버리지 않고 기다린다 — 끝내 못 보내면 친 글은 입력칸에 남겨 사람이 직접 보낼 수 있게 한다.
  */
+/**
+ * 입력칸에 **담기만** 한다(보내지 않는다). 침묵 화면의 '이런 것도 부탁하실 수 있어요' 가 쓰는 문.
+ * 보내기까지 하면 사람이 문장을 고칠 기회를 뺏는다 — 예시는 출발점이지 완성된 지시가 아니다.
+ */
+export function livChatFill(text) {
+    const input = document.querySelector('.livc-input');
+    if (!input)
+        return;
+    input.value = text;
+    input.dispatchEvent(new Event('input'));
+    input.focus();
+}
 export function livChatAsk(text) {
     const t0 = Date.now();
     const tryOnce = () => {
