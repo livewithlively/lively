@@ -52,6 +52,8 @@ const ICON_PATHS: Record<string, string> = {
   arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
   grid: '<rect x="4" y="4" width="6" height="6" rx="1.5"/><rect x="14" y="4" width="6" height="6" rx="1.5"/><rect x="4" y="14" width="6" height="6" rx="1.5"/><rect x="14" y="14" width="6" height="6" rx="1.5"/>',
   bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
+  x: '<path d="M6 6l12 12M18 6L6 18"/>',
+  trash: '<path d="M5 7h14"/><path d="M9 7V5h6v2"/><path d="M7 7l1 13h8l1-13"/><path d="M10 11v6M14 11v6"/>',
   drop: '<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 19h14"/>',
 };
 function icon(name: string, cls = 'stu-i'): SVGElement {
@@ -539,7 +541,11 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   function fillPreview(spec: WSpec, body: HTMLElement): void {
     const path = String(spec.data?.path || '');
     const url = apiUrl('/api/ui/v6/projects/' + id + '/file?path=' + encodeURIComponent(path));
-    if (/\.(png|jpe?g|gif|webp|svg)$/i.test(path)) body.replaceChildren(el('div', { class: 'stu-prevwrap' }, el('img', { class: 'stu-prev-img', src: url, alt: path, loading: 'lazy' })));
+    if (/\.(png|jpe?g|gif|webp|svg)$/i.test(path)) {
+      const im = el('img', { class: 'stu-prev-img', alt: path, loading: 'lazy' }) as HTMLImageElement;
+      fillImg(im, path);   // 헤더 인증(쿠키 없는 세션에서도 뜨게)
+      body.replaceChildren(el('div', { class: 'stu-prevwrap' }, im));
+    }
     else body.replaceChildren(el('iframe', { class: 'stu-prev-f', src: /\.pdf$/i.test(path) ? url + '#toolbar=0&view=FitH' : url, title: path }));
     body.append(el('div', { class: 'stu-w-foot' }, el('span', { class: 'stu-fine ell', text: path }),
       el('button', { class: 'btn-text', type: 'button', text: '크게', onclick: () => void openFileViewer(id, path, path, () => { /* noop */ }, '/api/ui/v6/projects/') })));
@@ -658,15 +664,20 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   function peekEsc(e: KeyboardEvent): void { if (e.key === 'Escape') { e.stopPropagation(); closePeek(); } }
   function openPeek(hash: string, title: string): void {
     closePeek();
-    const pe = el('div', { class: 'stu-peek' },
+    // 닫는 길을 **셋** 둔다(원준 2026-08-19 "켠 걸 어떻게 없애는지 직관적이어야"): ① 머리의 [닫기] 단추(항상 보임 —
+    //  종전엔 .stu-w-acts 를 빌려 써서 opacity:0 인 채였다: 실제로 화면에 없던 버튼) ② 판 아무 데나 클릭 ③ Esc.
+    //  왼쪽 모서리 손잡이(›)는 '밀어서 치운다'는 같은 뜻을 몸짓으로도 준다.
+    const pe = el('aside', { class: 'stu-peek', role: 'dialog', 'aria-label': title },
+      el('button', { class: 'stu-peek-grip', type: 'button', title: '닫기 — 오른쪽으로 밀어 치웁니다 (Esc)', 'aria-label': '닫기', onclick: closePeek }, el('span', { class: 'ch', text: '›', 'aria-hidden': 'true' })),
       el('div', { class: 'stu-peek-h' }, el('b', { text: title }),
-        el('span', { class: 'stu-w-acts' },
+        el('span', { class: 'stu-peek-acts' },
           el('button', { class: 'btn-text', type: 'button', text: '판에 놓기', onclick: () => { addWidget('doc', { x: 120, y: 80 }, { hash, title }); closePeek(); } }),
           el('a', { class: 'btn-text', href: hash, target: '_blank', rel: 'noopener', text: '새 탭 ↗' }),
-          el('button', { class: 'stu-w-btn', type: 'button', text: '×', title: '닫기(Esc)', onclick: closePeek }))),
+          el('button', { class: 'stu-peek-x', type: 'button', title: '닫기 (Esc)' }, icon('x', 'stu-i sm'), el('span', { text: '닫기' })))),
       el('iframe', { class: 'stu-peek-f', src: location.pathname + '?embed=1' + hash, title }));
+    (pe.querySelector('.stu-peek-x') as HTMLButtonElement).onclick = closePeek;
     peekEl = pe;
-    wrap.append(pe);
+    stage.append(pe);   // 스테이지에 얹는다 — 도크 위가 아니라 도크 '옆'에 서게(명령 입력을 가리지 않는다)
     document.addEventListener('keydown', peekEsc, true);
   }
 
@@ -904,59 +915,277 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
     const t = e.target as Node;
     if (!notif.hidden && !notif.contains(t) && !tlBtn.contains(t)) toggleNotif(false);
     if (!launch.hidden && !launch.contains(t) && !launchBtn.contains(t)) toggleLaunch(false);
+    if (peekEl && !peekEl.contains(t)) closePeek();   // 판 아무 데나 누르면 피크는 물러난다(맥 훑어보기와 같은 몸짓)
     if (desk.contains(t)) return;
     desk.querySelectorAll('.stu-ico.sel').forEach((x) => x.classList.remove('sel'));   // 바탕 클릭 = 선택 해제(맥)
   }
   function onDocKey(e: KeyboardEvent): void {
     if (dead) { document.removeEventListener('keydown', onDocKey); return; }
-    if (e.key !== 'Escape') return;
-    if (!notif.hidden) { toggleNotif(false); e.stopPropagation(); }
-    else if (!launch.hidden) { toggleLaunch(false); e.stopPropagation(); }
+    const typing = !!(document.activeElement && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName));
+    if (e.key === 'Escape') {
+      if (!notif.hidden) { toggleNotif(false); e.stopPropagation(); }
+      else if (!launch.hidden) { toggleLaunch(false); e.stopPropagation(); }
+      else if (selected().length) { clearSel(); e.stopPropagation(); }
+      return;
+    }
+    if (typing) return;
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'a' || e.key === 'A')) { e.preventDefault(); for (const [x] of iconEls) x.classList.add('sel'); paintDeskBar(); return; }
+    if ((e.key === 'Delete' || e.key === 'Backspace') && selected().length) { e.preventDefault(); void trashItems(selected().map((x) => x.it)); }
   }
 
-  // ── 바탕화면 바로가기(우측 위, 맥 문법) — 공유 폴더 항목 + 이 프로젝트의 지식 ──
-  //  한 번 = 선택 · 두 번(Enter) = 열기 · 끌어다 놓기 = 그 자리에 창. 목록은 서명 비교로 제자리 갱신.
-  const desk = el('div', { class: 'stu-desk', role: 'list', 'aria-label': '바탕화면 바로가기' });
-  stage.append(desk);
+  // ── 바탕화면(v5, 원준 2026-08-19 "폴더가 쓸데없이 엄청 생겨있고 뭔지 전혀 모르겠음") ─────────────
+  //  ★ 규칙: **뜻이 있는 것만 올린다.** 공유 폴더의 워크트리(레포 클론)·기계 파일(CLAUDE.md·AGENTS.md)은 사람이 만든 게
+  //   아니라 판을 어지럽힐 뿐이다. 그래서 목록은 매니페스트(`/shared/manifest` — .git 보유 폴더를 통째로 건너뛴다)를 쓰고,
+  //   폴더 여러 개 대신 **스택 하나**(공유 폴더 · 지식)로 접는다. 아이콘마다 종류 캡션(그림·PDF·시안·문서)을 달아
+  //   "각각 뭔지" 를 이름 밑에서 바로 읽게 한다.
+  //  조작(맥 그대로): 클릭 = 선택 · ⌘/Ctrl+클릭 = 더하기 · 바탕 드래그 = 영역 선택 · ⌘A = 전체 · Esc = 해제 ·
+  //   두 번 = 열기 · 끌어다 판에 놓기 = 그 자리에 창 · Delete 또는 휴지통에 떨구기 = 버리기.
+  const TRASH_DIR = '휴지통';
+  const MACHINE_FILES = new Set(['CLAUDE.md', 'AGENTS.md', '.DS_Store']);
+  const desk = el('div', { class: 'stu-desk', role: 'listbox', 'aria-label': '바탕화면', 'aria-multiselectable': 'true' });
+  const deskBar = el('div', { class: 'stu-deskbar', hidden: true });
+  const marq = el('div', { class: 'stu-deskmarq', hidden: true });
+  const trashEl = el('div', { class: 'stu-trash' });
+  stage.append(desk, deskBar, marq, trashEl);
   let deskSig = '';
-  type DeskItem = { kind: 'dir' | 'img' | 'pdf' | 'file' | 'kn'; name: string; label: string; sub?: string };
+  let trashN = 0;
+  type DKind = 'stack-folder' | 'stack-kn' | 'img' | 'pdf' | 'page' | 'doc' | 'file';
+  type DeskItem = { kind: DKind; path: string; label: string; type: string; sub?: string; n?: number };
   const isImg = (n: string): boolean => /\.(png|jpe?g|gif|webp|svg)$/i.test(n);
+  const base = (p2: string): string => String(p2).split('/').pop() || String(p2);
+  /** 확장자 → 사람이 읽는 종류. 아이콘 밑 캡션이자 이 파일이 무엇인지에 대한 답. */
+  function kindOf(p2: string): { kind: DKind; type: string } {
+    if (isImg(p2)) return { kind: 'img', type: '그림' };
+    if (/\.pdf$/i.test(p2)) return { kind: 'pdf', type: 'PDF' };
+    if (/\.html?$/i.test(p2)) return { kind: 'page', type: '시안' };
+    if (/\.(md|txt)$/i.test(p2)) return { kind: 'doc', type: '문서' };
+    if (/\.(csv|tsv|xlsx?)$/i.test(p2)) return { kind: 'file', type: '표' };
+    if (/\.(pptx?|key)$/i.test(p2)) return { kind: 'file', type: '장표' };
+    if (/\.(zip|tar|gz)$/i.test(p2)) return { kind: 'file', type: '묶음' };
+    return { kind: 'file', type: '파일' };
+  }
+  const fileUrl = (p2: string): string => apiUrl('/api/ui/v6/projects/' + id + '/file?path=' + encodeURIComponent(p2));
+  // <img src> 는 Authorization 헤더를 못 싣는다 — 쿠키 없는 세션(프리뷰·데스크톱 토큰 모드)에서 그림이 깨진다.
+  //  받아서 objectURL 로 건다. URL 은 화면이 죽을 때 한꺼번에 반납한다.
+  const blobUrls: string[] = [];
+  function fillImg(img: HTMLImageElement, p2: string): void {
+    void fetch(fileUrl(p2), { headers: authHeaders() }).then((r) => (r.ok ? r.blob() : null)).then((bl) => {
+      if (!bl || dead) return;
+      const u = URL.createObjectURL(bl); blobUrls.push(u); img.src = u;
+    }).catch(() => { /* 못 받으면 아이콘 그대로 */ });
+  }
+
   function openDeskItem(it: DeskItem, at?: { x: number; y: number }): void {
-    if (it.kind === 'dir') { openPeek('#/f?root=shared&path=' + encodeURIComponent('project/' + id + '/' + it.name), it.name); return; }
-    if (it.kind === 'kn') { if (at) addWidget('doc', at, { hash: '#/k/' + encodeURIComponent(it.name), title: it.name }); else openPeek('#/k/' + encodeURIComponent(it.name), it.name); return; }
-    if (it.kind === 'img' || it.kind === 'pdf') { const w = addWidget('preview', at || { x: 96 + Math.random() * 60, y: 96 + Math.random() * 40 }, { path: it.name, name: it.name }); w.z = ++zTop; popIn(w); return; }
-    void openFileViewer(id, it.name, it.name, () => { /* noop */ }, '/api/ui/v6/projects/');
+    if (it.kind === 'stack-folder') { openPeek('#/f?root=shared&path=' + encodeURIComponent('project/' + id), '공유 폴더'); return; }
+    if (it.kind === 'stack-kn') { addOrFocus('knowledge'); return; }
+    if (it.kind === 'img' || it.kind === 'pdf' || it.kind === 'page') {
+      const w = addWidget('preview', at || { x: 96 + (widgets.length % 5) * 26, y: 96 + (widgets.length % 4) * 22 }, { path: it.path, name: base(it.path) });
+      w.z = ++zTop; popIn(w); return;
+    }
+    void openFileViewer(id, it.path, base(it.path), () => { /* noop */ }, '/api/ui/v6/projects/');
+  }
+  // ── 선택 ──
+  const iconEls = new Map<HTMLElement, DeskItem>();
+  const selected = (): Array<{ el: HTMLElement; it: DeskItem }> => [...iconEls].filter(([e2]) => e2.classList.contains('sel')).map(([e2, it]) => ({ el: e2, it }));
+  function selectOnly(b: HTMLElement | null): void {
+    for (const [e2] of iconEls) e2.classList.toggle('sel', e2 === b);
+    paintDeskBar();
+  }
+  function clearSel(): void { for (const [e2] of iconEls) e2.classList.remove('sel'); paintDeskBar(); }
+  function paintDeskBar(): void {
+    const sel = selected().filter((x) => x.it.kind !== 'stack-folder' && x.it.kind !== 'stack-kn');
+    const n = selected().length;
+    deskBar.hidden = n === 0;
+    if (!n) return;
+    deskBar.replaceChildren(
+      el('b', { text: n + '개 선택' }),
+      el('button', { class: 'btn-text', type: 'button', text: '열기', onclick: () => { selected().forEach((x, i) => openDeskItem(x.it, { x: 80 + i * 26, y: 72 + i * 22 })); clearSel(); } }),
+      sel.length ? el('button', { class: 'btn-text', type: 'button', text: '복제', onclick: () => void duplicateItems(sel.map((x) => x.it)) }) : null,
+      sel.length ? el('button', { class: 'btn-text danger', type: 'button', text: '휴지통으로', onclick: () => void trashItems(sel.map((x) => x.it)) }) : null,
+      el('button', { class: 'stu-w-btn', type: 'button', text: '×', title: '선택 해제 (Esc)', onclick: clearSel }));
   }
   function deskIcon(it: DeskItem): HTMLElement {
+    const stack = it.kind === 'stack-folder' || it.kind === 'stack-kn';
+    const thumb = it.kind === 'img' ? el('img', { alt: '', loading: 'lazy' }) as HTMLImageElement : null;
+    if (thumb) fillImg(thumb, it.path);
     const g = it.kind === 'img'
-      ? el('span', { class: 'stu-ico-g im' }, el('img', { src: apiUrl('/api/ui/v6/projects/' + id + '/file?path=' + encodeURIComponent(it.name)), alt: '', loading: 'lazy' }))
-      : el('span', { class: 'stu-ico-g ' + it.kind }, icon(it.kind === 'dir' ? 'folder' : it.kind === 'kn' ? 'book' : 'doc', 'stu-i'));
-    const b = el('button', { class: 'stu-ico', type: 'button', role: 'listitem', draggable: 'true', title: (it.kind === 'kn' ? '지식 · ' : '') + it.name + (it.sub ? ' — ' + it.sub : '') + '\n두 번 눌러 열기 · 끌어다 놓으면 그 자리에 창' },
-      g, el('span', { class: 'stu-ico-n', text: it.label }));
-    b.addEventListener('click', (e: MouseEvent) => { e.stopPropagation(); desk.querySelectorAll('.stu-ico.sel').forEach((x) => { if (x !== b) x.classList.remove('sel'); }); b.classList.toggle('sel', true); });
+      ? el('span', { class: 'stu-ico-g im' }, thumb!)
+      : el('span', { class: 'stu-ico-g ' + it.kind }, icon(it.kind === 'stack-folder' ? 'folder' : it.kind === 'stack-kn' ? 'book' : it.kind === 'page' ? 'deck' : it.kind === 'pdf' ? 'doc' : 'doc', 'stu-i'));
+    if (stack) g.classList.add('stack');
+    const b = el('button', { class: 'stu-ico' + (stack ? ' is-stack' : ''), type: 'button', role: 'option', 'aria-selected': 'false', draggable: String(!stack) as any,
+      title: (stack ? it.label : it.path) + (it.sub ? ' — ' + it.sub : '') + '\n' + (stack ? '두 번 눌러 열기' : '두 번 눌러 열기 · 끌어다 놓으면 그 자리에 창 · Delete = 휴지통') },
+      g, el('span', { class: 'stu-ico-n', text: it.label }), el('span', { class: 'stu-ico-t', text: it.type + (it.n != null ? ' · ' + it.n : '') }));
+    b.addEventListener('click', (e: MouseEvent) => {
+      e.stopPropagation();
+      if (e.metaKey || e.ctrlKey) { b.classList.toggle('sel'); paintDeskBar(); return; }
+      selectOnly(b);
+    });
     b.addEventListener('dblclick', (e: MouseEvent) => { e.preventDefault(); openDeskItem(it); });
     b.addEventListener('keydown', (e: KeyboardEvent) => { if (e.key === 'Enter') { e.preventDefault(); openDeskItem(it); } });
-    b.addEventListener('dragstart', (e: DragEvent) => { e.dataTransfer?.setData('text/plain', 'stu-desk:' + JSON.stringify(it)); });
+    b.addEventListener('dragstart', (e: DragEvent) => {
+      if (stack) { e.preventDefault(); return; }
+      if (!b.classList.contains('sel')) selectOnly(b);
+      const many = selected().map((x) => x.it).filter((x) => x.kind !== 'stack-folder' && x.kind !== 'stack-kn');
+      e.dataTransfer?.setData('text/plain', 'stu-desk:' + JSON.stringify(many.length ? many : [it]));
+      desk.classList.add('dragging');
+    });
+    b.addEventListener('dragend', () => { desk.classList.remove('dragging'); trashEl.classList.remove('over'); });
+    iconEls.set(b, it);
     return b;
   }
-  async function paintDesk(): Promise<void> {
-    let files: any[] = [];
-    try { const d: any = await api('/api/ui/v6/projects/' + id + '/files?path='); files = (d && d.items) || []; } catch (_) { files = []; }
+
+  // ── 영역 선택(마퀴) — 바탕(빈 판)에서 끌면 사각형이 그려지고 겹친 아이콘이 잡힌다 ──
+  board.addEventListener('mousedown', (e: MouseEvent) => {
+    if (commentMode || e.button !== 0) return;
+    const t = e.target as HTMLElement;
+    if (t.closest('.stu-w, .stu-cmt, .stu-composer, .stu-launch, .stu-notif, .stu-peek')) return;
+    e.preventDefault();                 // 판을 긁을 때 페이지 글자가 함께 선택되던 것
+    const sr = stage.getBoundingClientRect();
+    const sx = e.clientX, sy = e.clientY;
+    let moved = false;
+    const move = (ev: MouseEvent): void => {
+      if (!moved && Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) < 5) return;
+      if (!moved) stage.classList.add('marq-on');
+      moved = true; marq.hidden = false;
+      const x = Math.min(sx, ev.clientX), y = Math.min(sy, ev.clientY);
+      const w2 = Math.abs(ev.clientX - sx), h2 = Math.abs(ev.clientY - sy);
+      marq.style.left = (x - sr.left) + 'px'; marq.style.top = (y - sr.top) + 'px'; marq.style.width = w2 + 'px'; marq.style.height = h2 + 'px';
+      const box = { l: x, t: y, r: x + w2, b: y + h2 };
+      for (const [e2] of iconEls) {
+        const r = e2.getBoundingClientRect();
+        const hit = r.right > box.l && r.left < box.r && r.bottom > box.t && r.top < box.b;
+        e2.classList.toggle('sel', ev.metaKey || ev.ctrlKey ? (e2.classList.contains('sel') || hit) : hit);
+      }
+      paintDeskBar();
+    };
+    const up = (): void => {
+      document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up);
+      marq.hidden = true; stage.classList.remove('marq-on');
+      if (!moved) clearSel();   // 그냥 클릭 = 바탕 클릭 = 선택 해제(맥)
+    };
+    document.addEventListener('mousemove', move); document.addEventListener('mouseup', up);
+  });
+
+  // ── 휴지통 — 아이콘을 떨구거나 Delete. 되돌리기·비우기는 휴지통을 두 번 눌러서 ──
+  //  서버 rename 은 같은 폴더 안에서만 되므로(경로 이동 API 없음) '복사 후 삭제' 로 옮긴다 — 큰 파일은 확인을 받는다.
+  function paintTrash(): void {
+    trashEl.replaceChildren(
+      el('span', { class: 'stu-ico-g trash' + (trashN ? ' full' : '') }, icon('trash', 'stu-i')),
+      el('span', { class: 'stu-ico-n', text: '휴지통' }),
+      el('span', { class: 'stu-ico-t', text: trashN ? trashN + '개' : '비어 있음' }));
+  }
+  trashEl.addEventListener('dblclick', () => void openTrash());
+  trashEl.addEventListener('dragover', (e: DragEvent) => { e.preventDefault(); trashEl.classList.add('over'); });
+  trashEl.addEventListener('dragleave', () => trashEl.classList.remove('over'));
+  trashEl.addEventListener('drop', (e: DragEvent) => {
+    e.preventDefault(); e.stopPropagation(); trashEl.classList.remove('over');
+    const raw = e.dataTransfer?.getData('text/plain') || '';
+    if (!raw.startsWith('stu-desk:')) return;
+    try { void trashItems(JSON.parse(raw.slice(9)) as DeskItem[]); } catch (_) { /* noop */ }
+  });
+  async function moveFile(from: string, to: string): Promise<void> {
+    const r = await fetch(fileUrl(from), { headers: authHeaders() });
+    if (!r.ok) throw new Error('읽지 못했어요(' + r.status + ')');
+    const blob = await r.blob();
+    const up = await fetch(fileUrl(to), { method: 'PUT', headers: authHeaders(), body: blob });
+    if (!up.ok) throw new Error('옮기지 못했어요(' + up.status + ')');
+    await api('/api/ui/v6/projects/' + id + '/file?path=' + encodeURIComponent(from), { method: 'DELETE' });
+  }
+  function authHeaders(): Record<string, string> {
+    const t = (() => { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (_) { return ''; } })();
+    return t ? { authorization: 'Bearer ' + t } : {};
+  }
+  async function trashItems(items: DeskItem[]): Promise<void> {
+    const list = items.filter((it) => it.kind !== 'stack-folder' && it.kind !== 'stack-kn');
+    if (!list.length) return;
+    try { await api('/api/ui/v6/projects/' + id + '/folder?path=' + encodeURIComponent(TRASH_DIR), { method: 'POST' }); } catch (_) { /* 이미 있음 */ }
+    let ok = 0;
+    for (const it of list) {
+      try { await moveFile(it.path, TRASH_DIR + '/' + base(it.path)); ok++; }
+      catch (e: any) { toast(base(it.path) + ' — ' + (e?.message || e), true); }
+    }
+    if (ok) toast(ok + '개를 휴지통으로 옮겼어요 — 휴지통을 두 번 누르면 되돌릴 수 있어요.');
+    clearSel(); deskSig = ''; await paintDesk();
+  }
+  async function duplicateItems(items: DeskItem[]): Promise<void> {
+    let ok = 0;
+    for (const it of items) {
+      const nm = base(it.path);
+      const dot = nm.lastIndexOf('.');
+      const copy = (dot > 0 ? nm.slice(0, dot) + ' 사본' + nm.slice(dot) : nm + ' 사본');
+      const dir = it.path.includes('/') ? it.path.slice(0, it.path.lastIndexOf('/') + 1) : '';
+      try {
+        const r = await fetch(fileUrl(it.path), { headers: authHeaders() });
+        const up = await fetch(fileUrl(dir + copy), { method: 'PUT', headers: authHeaders(), body: await r.blob() });
+        if (!up.ok) throw new Error('복제 실패(' + up.status + ')');
+        ok++;
+      } catch (e: any) { toast(nm + ' — ' + (e?.message || e), true); }
+    }
+    if (ok) toast(ok + '개를 복제했어요.');
+    clearSel(); deskSig = ''; await paintDesk();
+  }
+  async function openTrash(): Promise<void> {
+    let items: any[] = [];
+    try { const d: any = await api('/api/ui/v6/projects/' + id + '/files?path=' + encodeURIComponent(TRASH_DIR)); items = (d && d.items) || []; } catch (_) { items = []; }
     if (dead) return;
-    const dirs = files.filter((f: any) => f.type === 'dir').sort((a: any, b: any) => String(a.name).localeCompare(String(b.name), 'ko'));
-    const docs = files.filter((f: any) => f.type !== 'dir' && !String(f.name).startsWith('.')).sort((a: any, b: any) => Number(b.mtime || 0) - Number(a.mtime || 0));
+    const host = el('div', { class: 'stu-trashpanel-b' });
+    const panel = el('aside', { class: 'stu-trashpanel', role: 'dialog', 'aria-label': '휴지통' },
+      el('div', { class: 'stu-notif-h2' }, el('b', { text: '휴지통' }), el('span', { class: 'stu-fine', text: items.length + '개' }),
+        el('span', { class: 'stu-peek-acts' },
+          items.length ? el('button', { class: 'btn-text danger', type: 'button', text: '비우기', onclick: () => void emptyTrash(panel) }) : null,
+          el('button', { class: 'stu-peek-x', type: 'button', onclick: () => panel.remove() }, icon('x', 'stu-i sm'), el('span', { text: '닫기' })))),
+      host);
+    host.replaceChildren(...(items.length ? items.map((f: any) => el('div', { class: 'stu-trashrow' },
+      el('span', { class: 'n', text: String(f.name) }), el('span', { class: 'm', text: fmtSize(f.size || 0) }),
+      el('button', { class: 'btn-text', type: 'button', text: '되돌리기', onclick: async () => {
+        try { await moveFile(TRASH_DIR + '/' + f.name, String(f.name)); toast(f.name + ' — 제자리로 돌려놨어요.'); panel.remove(); deskSig = ''; await paintDesk(); }
+        catch (e: any) { toast('되돌리지 못했어요 — ' + (e?.message || e), true); }
+      } })))
+      : [el('p', { class: 'stu-fine', text: '휴지통이 비어 있어요.' })]));
+    stage.append(panel);
+  }
+  async function emptyTrash(panel: HTMLElement): Promise<void> {
+    try { await api('/api/ui/v6/projects/' + id + '/file?path=' + encodeURIComponent(TRASH_DIR), { method: 'DELETE' }); toast('휴지통을 비웠어요.'); }
+    catch (e: any) { toast('비우지 못했어요 — ' + (e?.message || e), true); }
+    panel.remove(); deskSig = ''; await paintDesk();
+  }
+
+  async function paintDesk(): Promise<void> {
+    // 매니페스트 = 재귀 파일 목록에서 **워크트리(.git 보유 폴더)를 통째로 건너뛴 것** — 판에 올릴 만한 것만 남는다.
+    let mf: any[] = [];
+    let rootN = 0;
+    try {
+      const [m, r]: any[] = await Promise.all([
+        api('/api/ui/v6/projects/' + id + '/shared/manifest').catch(() => null),
+        api('/api/ui/v6/projects/' + id + '/files?path=').catch(() => null),
+      ]);
+      mf = (m && m.files) || [];
+      rootN = ((r && r.items) || []).length;
+    } catch (_) { /* noop */ }
+    if (dead) return;
+    const trash = mf.filter((f: any) => String(f.path).startsWith(TRASH_DIR + '/'));
+    trashN = trash.length;
+    const docs = mf
+      .filter((f: any) => !String(f.path).startsWith(TRASH_DIR + '/') && !MACHINE_FILES.has(base(String(f.path))))
+      .sort((a: any, b: any) => Number(b.mtime || 0) - Number(a.mtime || 0))
+      .slice(0, 6);   // 많을수록 바탕이 어지럽다 — 최근 것 여섯만(나머지는 [공유 폴더] 스택 안에)
     const kn = (pj().knowledge || {}) as any;
-    const kns: any[] = [...((kn.required || []) as any[]), ...((kn.produced || []) as any[])];
+    const knN = ((kn.required || []) as any[]).length + ((kn.produced || []) as any[]).length;
     const items: DeskItem[] = [
-      ...dirs.slice(0, 6).map((f: any) => ({ kind: 'dir' as const, name: String(f.name), label: String(f.name), sub: '폴더' })),
-      ...docs.slice(0, 8).map((f: any) => ({ kind: (isImg(f.name) ? 'img' : /\.pdf$/i.test(f.name) ? 'pdf' : 'file') as DeskItem['kind'], name: String(f.name), label: String(f.name), sub: fmtSize(f.size || 0) })),
-      ...kns.slice(0, 6).map((k: any) => ({ kind: 'kn' as const, name: String(k.name), label: String(k.name), sub: String(k.title || '') })),   // 라벨은 슬러그(제목은 문장이라 아이콘 밑에 못 앉는다) — 제목은 툴팁
+      { kind: 'stack-folder', path: '', label: '공유 폴더', type: '폴더', n: rootN, sub: '이 프로젝트의 파일 전부' },
+      ...(knN ? [{ kind: 'stack-kn' as const, path: '', label: '지식', type: '지식', n: knN, sub: '필요·산출 지식' }] : []),
+      ...docs.map((f: any) => {
+        const k = kindOf(String(f.path));
+        return { kind: k.kind, path: String(f.path), label: base(String(f.path)), type: k.type, sub: fmtSize(f.size || 0) };
+      }),
     ];
-    const sig = JSON.stringify(items.map((i) => i.kind + ':' + i.name));
+    const sig = JSON.stringify(items.map((i) => i.kind + ':' + i.path + ':' + (i.n ?? '')) ) + ':' + trashN;
     if (sig === deskSig) return;
     deskSig = sig;
+    iconEls.clear();
     desk.replaceChildren(...items.map(deskIcon));
-    desk.classList.toggle('empty', !items.length);
+    paintTrash();
+    paintDeskBar();
   }
 
   // ── 명령 → 창이 미리 나타난다('짠'): 새 일 = 도크 위 유령 창 · 기존 세션 = 그 카드 조준 · 리브 = 리브 단추 조준 ──
@@ -1004,7 +1233,12 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
     if (raw.startsWith('stu:')) { e.preventDefault(); addWidget(raw.slice(4) as WType, at); return; }
     if (raw.startsWith('stu-desk:')) {
       e.preventDefault();
-      try { const it = JSON.parse(raw.slice(9)) as DeskItem; openDeskItem(it, at); } catch (_) { /* noop */ }
+      try {
+        const got = JSON.parse(raw.slice(9));
+        const list: DeskItem[] = Array.isArray(got) ? got : [got];
+        list.forEach((it, i) => openDeskItem(it, { x: at.x + i * 26, y: at.y + i * 22 }));
+        clearSel();
+      } catch (_) { /* noop */ }
       return;
     }
     if (raw.startsWith('tl:')) {
@@ -1065,7 +1299,7 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   if (!detail) void refreshDetail();
 
   return {
-    destroy() { dead = true; if (liveTimer) clearInterval(liveTimer); chat?.destroy(); chat = null; closePeek(); document.removeEventListener('pointerdown', onDocDown); document.removeEventListener('keydown', onDocKey); },
+    destroy() { dead = true; if (liveTimer) clearInterval(liveTimer); chat?.destroy(); chat = null; closePeek(); for (const u of blobUrls) URL.revokeObjectURL(u); document.removeEventListener('pointerdown', onDocDown); document.removeEventListener('keydown', onDocKey); },
     renderAside,
   };
 }

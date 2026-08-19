@@ -916,10 +916,25 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .stu-cmt-ta { border: 0; background: none; resize: none; min-height: 54px; padding: 8px 10px; font: inherit; font-size: 12.5px; line-height: 1.55; outline: none; }
 .stu-cmt-acts { display: flex; justify-content: flex-end; padding: 0 8px 8px; }
 /* ── 피크 ── */
-.stu-peek { position: absolute; right: 0; top: 0; bottom: 0; width: min(680px, 58%); background: var(--bg, #fff); border-left: 1px solid var(--line); box-shadow: -10px 0 30px rgba(21,35,59,.12); display: flex; flex-direction: column; z-index: 40; }
-.stu-peek-h { flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+/* 피크 — 바로가기(폴더·문서)를 훑어보는 우측 패널. **닫는 길이 눈에 보여야 한다**(원준 2026-08-19):
+   머리의 [닫기] · 왼쪽 모서리 손잡이(›) · 판 클릭 · Esc. 알림 센터와 같은 '떠 있는 카드' 가족이라 바깥이 판임이 보이고,
+   도크 위(bottom 92px)에서 멈춰 명령 입력을 가리지 않는다. */
+.stu-peek { position: absolute; right: 14px; top: 12px; bottom: 92px; z-index: 44; width: min(660px, 54%); display: flex; flex-direction: column; overflow: visible;
+  background: var(--bg, #fff); border: 1px solid var(--line-net-2); border-radius: 14px; box-shadow: 0 24px 64px rgba(21,35,59,.22), 0 4px 14px rgba(21,35,59,.10); animation: stu-peek-in .18s ease; }
+.stu-peek-grip { position: absolute; left: -13px; top: 50%; transform: translateY(-50%); width: 26px; height: 58px; padding: 0; z-index: 1;
+  border: 1px solid var(--line-net-2); border-radius: 13px; background: var(--bg, #fff); color: var(--muted); cursor: pointer;
+  display: flex; align-items: center; justify-content: center; box-shadow: -4px 0 12px rgba(21,35,59,.10); }
+.stu-peek-grip:hover { color: var(--blue); border-color: var(--blue); }
+.stu-peek-grip .ch { font-size: 17px; line-height: 1; font-weight: 700; }
+.stu-peek-h { flex: none; display: flex; align-items: center; gap: 10px; padding: 9px 10px 9px 16px; border-bottom: 1px solid var(--line); }
 .stu-peek-h b { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.stu-peek-f { flex: 1; border: 0; width: 100%; }
+.stu-peek-acts { display: inline-flex; align-items: center; gap: 6px; flex: none; }   /* ⚠ opacity:0 인 .stu-w-acts 를 빌려 쓰지 않는다 — 그래서 닫기 버튼이 화면에 없었다 */
+.stu-peek-x { display: inline-flex; align-items: center; gap: 5px; height: 27px; padding: 0 10px; border: 1px solid var(--line-net); border-radius: 8px;
+  background: var(--bg, #fff); color: var(--ink-sub); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.stu-peek-x:hover { color: var(--ink); border-color: var(--blue); background: var(--bg-punch); }
+.stu-peek-f { flex: 1; border: 0; width: 100%; border-radius: 0 0 13px 13px; background: var(--bg, #fff); }
+@keyframes stu-peek-in { from { opacity: 0; transform: translateX(14px); } }
+@media (prefers-reduced-motion: reduce) { .stu-peek { animation: none; } }
 /* ── 플로팅 컴포저 ── */
 .stu-composer { position: sticky; left: 50%; bottom: 18px; transform: translateX(-50%); width: min(720px, 86%); display: flex; align-items: flex-end; gap: 10px; z-index: 35; margin-top: -8px; }
 .stu-comp-box { flex: 1; background: rgba(255,255,255,.92); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid var(--line-net-2); border-radius: 18px; box-shadow: 0 2px 6px rgba(21,35,59,.08), 0 16px 42px rgba(21,35,59,.16); padding: 11px 13px 9px; display: flex; flex-direction: column; gap: 6px; }
@@ -994,23 +1009,55 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .stu-notif .tl-wrap > .v2-aside-h .v2-k { margin-left: auto; }
 .stu-notif-b { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
 @keyframes stu-drop { from { opacity: 0; transform: translateY(-6px); } }
-/* 바탕화면 바로가기 — 우측 위에서 아래로, 넘치면 왼쪽 열로(맥). 알림 센터가 열리면 그 아래 깔린다 */
-.stu-desk { position: absolute; top: 14px; right: 14px; height: calc(100% - 118px); z-index: 20; display: flex; flex-direction: column; flex-wrap: wrap-reverse; align-content: flex-start; gap: 4px 2px; pointer-events: none; }
-.stu-desk.empty { display: none; }
-.stu-ico { pointer-events: auto; width: 84px; padding: 6px 4px 5px; border: 0; border-radius: 10px; background: none; font: inherit; display: flex; flex-direction: column; align-items: center; gap: 5px; cursor: default; }
+/* 바탕화면(v5) — 뜻 있는 것만: [공유 폴더] [지식] 스택 + 최근 산출물. 이름 밑 캡션이 '이게 뭔지' 를 답한다.
+   우측 위에서 아래로, 넘치면 왼쪽 열로(맥). 알림 센터가 열리면 그 아래로 깔린다. */
+.stu-desk { position: absolute; top: 14px; right: 14px; height: calc(100% - 250px); z-index: 20; display: flex; flex-direction: column; flex-wrap: wrap-reverse; align-content: flex-start; gap: 2px; pointer-events: none; }
+.stu-desk.dragging .stu-ico:not(.sel) { opacity: .5; }
+.stu-ico { pointer-events: auto; width: 92px; padding: 7px 4px 6px; border: 0; border-radius: 10px; background: none; font: inherit; display: flex; flex-direction: column; align-items: center; gap: 5px; cursor: default; }
 .stu-ico:hover .stu-ico-g { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(21,35,59,.14); }
-.stu-ico.sel { background: rgba(45,107,240,.10); }
+.stu-ico.sel { background: rgba(45,107,240,.12); box-shadow: inset 0 0 0 1px rgba(45,107,240,.35); }
 .stu-ico.sel .stu-ico-n { background: var(--blue); color: #fff; }
 .stu-ico:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
-.stu-ico-g { width: 50px; height: 50px; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: #fff; box-shadow: 0 2px 6px rgba(21,35,59,.14); transition: transform .12s ease, box-shadow .12s ease; overflow: hidden; }
-.stu-ico-g .stu-i { width: 24px; height: 24px; stroke-width: 1.8; }
-.stu-ico-g.dir { background: linear-gradient(180deg, #7FA6E9, #5B8AE0); }
-.stu-ico-g.file, .stu-ico-g.pdf { background: #fff; color: #5A6B85; border: 1px solid var(--line-net); }
-.stu-ico-g.pdf { color: #C4564A; }
-.stu-ico-g.kn { background: linear-gradient(180deg, #33C0C2, #1BAEB0); }
-.stu-ico-g.im { background: #fff; border: 1px solid var(--line-net); }
+.stu-ico-g { position: relative; width: 52px; height: 52px; border-radius: 13px; display: flex; align-items: center; justify-content: center; color: #fff; box-shadow: 0 2px 6px rgba(21,35,59,.14); transition: transform .12s ease, box-shadow .12s ease; }
+.stu-ico-g .stu-i { width: 25px; height: 25px; stroke-width: 1.7; }
+.stu-ico-g.stack::before, .stu-ico-g.stack::after { content: ''; position: absolute; inset: 0; border-radius: 13px; background: inherit; opacity: .5; z-index: -1; }
+.stu-ico-g.stack::before { transform: translate(3px, 3px) scale(.97); }
+.stu-ico-g.stack::after { transform: translate(6px, 6px) scale(.94); opacity: .28; }
+.stu-ico-g.stack-folder { background: linear-gradient(180deg, #7FA6E9, #5B8AE0); }
+.stu-ico-g.stack-kn { background: linear-gradient(180deg, #33C0C2, #1BAEB0); }
+.stu-ico-g.doc, .stu-ico-g.file { background: #fff; color: #5A6B85; border: 1px solid var(--line-net); }
+.stu-ico-g.pdf { background: #fff; color: #C4564A; border: 1px solid var(--line-net); }
+.stu-ico-g.page { background: linear-gradient(180deg, #8C74FF, #7C5CFC); }
+.stu-ico-g.im { background: #fff; border: 1px solid var(--line-net); overflow: hidden; }
 .stu-ico-g.im img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.stu-ico-n { max-width: 84px; font-size: 11px; line-height: 1.3; color: var(--ink); text-align: center; padding: 1px 5px; border-radius: 5px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-all; }
+.stu-ico-g.trash { background: rgba(255,255,255,.86); color: var(--muted); border: 1px dashed var(--muted-3); }
+.stu-ico-g.trash.full { color: var(--ink-sub); border-style: solid; border-color: var(--line-net); background: #fff; }
+.stu-ico-n { max-width: 92px; font-size: 11px; line-height: 1.3; color: var(--ink); text-align: center; padding: 1px 5px; border-radius: 5px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-all; }
+.stu-ico-t { font-size: 10px; color: var(--muted-2); letter-spacing: .01em; }
+/* 선택 액션바 — 몇 개를 골랐고 무엇을 할 수 있는지 */
+.stu-deskbar { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 47; display: inline-flex; align-items: center; gap: 10px; padding: 7px 8px 7px 14px;
+  background: rgba(255,255,255,.94); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid var(--line-net-2); border-radius: 999px; box-shadow: 0 12px 32px rgba(21,35,59,.16); font-size: 12.5px; }
+.stu-deskbar[hidden] { display: none; }
+.stu-deskbar b { font-size: 12.5px; }
+.stu-deskbar .btn-text.danger, .stu-peek-acts .btn-text.danger { color: var(--coral-text, #C4564A); }
+/* 영역 선택 사각형 */
+.stu-deskmarq { position: absolute; z-index: 25; border: 1.5px solid var(--blue); background: rgba(45,107,240,.10); border-radius: 3px; pointer-events: none; }
+.stu-deskmarq[hidden] { display: none; }
+.stu-stage.marq-on { user-select: none; -webkit-user-select: none; }
+/* 휴지통 — 바탕화면 오른쪽 아래(맥 도크 옆) */
+.stu-trash { position: absolute; right: 20px; bottom: 100px; z-index: 21; width: 92px; padding: 7px 4px 6px; border-radius: 10px; display: flex; flex-direction: column; align-items: center; gap: 5px; cursor: default; }
+.stu-trash.over { background: rgba(196,86,74,.12); box-shadow: inset 0 0 0 1px rgba(196,86,74,.45); }
+.stu-trash.over .stu-ico-g.trash { color: var(--coral-text, #C4564A); border-color: var(--coral-text, #C4564A); }
+.stu-trashpanel { position: absolute; right: 124px; bottom: 100px; z-index: 48; width: min(420px, 60%); max-height: 60%; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg, #fff); border: 1px solid var(--line-net-2); border-radius: 14px; box-shadow: 0 24px 64px rgba(21,35,59,.22); }
+.stu-notif-h2 { flex: none; display: flex; align-items: center; gap: 8px; padding: 9px 10px 9px 14px; border-bottom: 1px solid var(--line); }
+.stu-notif-h2 b { font-size: 13px; }
+.stu-notif-h2 .stu-peek-acts { margin-left: auto; }
+.stu-trashpanel-b { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 10px 12px; display: flex; flex-direction: column; gap: 2px; }
+.stu-trashrow { display: flex; align-items: center; gap: 10px; padding: 7px 6px; border-radius: 8px; font-size: 12.5px; }
+.stu-trashrow:hover { background: var(--bg-sel); }
+.stu-trashrow .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stu-trashrow .m { color: var(--muted-2); font-size: 11px; }
 /* 유령 창 — 명령을 치는 동안 도크 위에 미리 나타나는 세션 창('짠'). 보내면 그 자리에서 진짜 카드가 된다 */
 .stu-ghost { position: absolute; left: 50%; bottom: 112px; transform: translateX(-50%); z-index: 34; width: 340px; display: flex; flex-direction: column;
   background: rgba(255,255,255,.72); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1.5px dashed rgba(45,107,240,.55); border-radius: 13px;
