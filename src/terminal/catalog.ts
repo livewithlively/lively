@@ -5,6 +5,9 @@ import os from "node:os";
 
 // 게이트웨이가 launchd/nohup 로 떠 PATH 에 brew 가 없을 수 있어 절대경로 우선(env 오버라이드 가능).
 export const TMUX_BIN = process.env.TMUX_BIN || "/opt/homebrew/bin/tmux";
+/** psmux(윈도우 네이티브 tmux 구현)인가 — 파일명으로 판정한다(경로·확장자 무관). 원래 terminal-pty 에 있던 것을 여기(leaf)로
+ *  내렸다(#1791): tmux-exec 의 sessionGone 도 이 판정이 필요한데 terminal-pty 는 그 위층이라 역방향 import 가 된다. */
+export const isPsmuxBin = (bin: string): boolean => /(^|[\\/])psmux(\.exe)?$/i.test(String(bin || ""));
 
 // pane(세션 안 shell/Claude) 로케일 — 한글(멀티바이트·더블폭) 편집 정상화(#633). ⚠ TMUX_ENV(tmux-exec.ts)는 tmux **CLI**
 //  호출에만 UTF-8 을 준다 — 그 값은 pane 까지 전달되지 않는다. tmux 는 LANG/LC_* 를 update-environment 기본
@@ -267,6 +270,10 @@ export interface SessionInfo {
   //  answer=승인·거부·중단을 화면에서 대신 누를 수 있나(승인 키 실측 있음). 화면이 이걸로 버튼·안내를 **정직하게** 그린다(없는 능력의
   //  버튼을 두지 않는다 — 막다른 컨트롤 금지). 없으면(구 서버) 화면은 둘 다 있는 것으로 본다(종전 동작).
   chat?: { read: boolean; answer: boolean };
+  // #1791 — 이 세션이 도는 노드(라이브 노드 스냅샷 행은 node/registry 가 채우고, **복원 가능 노드 세션 행**은
+  //  listRestorableSessions 가 desired-state 의 node_id 로 채운다 — 이름·온라인 여부는 routes 가 레지스트리로 보강). 없으면 게이트웨이 박스.
+  //  프론트는 이 값으로 &node= 를 릴레이한다(입장·삭제·복원 결과 열기).
+  node?: { id: string; name: string; online: boolean };
 }
 export interface CreateInput { label: string; rootKey: string; subpath: string; harness: string; flags: Record<string, unknown>; autoApprove: boolean; invites?: unknown; projectId?: number; projectSrc?: "v6" | "org"; loginProfile?: boolean; resume?: string; readOnly?: boolean; incognito?: boolean;
   // #1291 v2 — 기록 범위(write cap)와 read 축소. 미지정이면 실행 폴더에서 파생한다(신규·복원이 같은 규칙).
@@ -295,7 +302,11 @@ export interface CreateInput { label: string; rootKey: string; subpath: string; 
   sessionDir?: boolean;
   // #1719 홈 입력창 — 첫 지시. 세션을 띄운 뒤 하네스 입력창이 뜨는 걸 **보고 나서** 주입한다(session-first-prompt.ts).
   //  생성 응답은 기다리지 않는다(주입은 백그라운드) — 화면은 세션 대화창으로 가서 대화 파일에 나타나는 걸 따라간다.
-  initialPrompt?: string; }
+  initialPrompt?: string;
+  // #1780 D4 — 이 세션을 **앱으로** 띄운다. 설정 시 createSession 이 grant 검사 → 앱 토큰 발급 →
+  //  세션 폴더에 앱 홈(.lively/token·gateway-url)·앱 하네스 자산(.claude/{skills,agents,commands})을 물질화하고
+  //  pane env LIVELY_HOME=<sessionDir>·LIVELY_APP_ID=<id> 를 주입한다(design D3·D4). 미설정=일반 세션(무변경).
+  appId?: string; }
 
 // ── 세션 런처(#1516) — 하네스가 죽어도 세션은 산다 ──
 //

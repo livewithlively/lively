@@ -6,6 +6,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveUser, requireScope } from "../context.js";
 import { viewerOf } from "./principal.js";
+import { requireAppTool } from "../apps/principal.js";
 import { agentFromExtra, sessionFromExtra, readOnlyFromExtra } from "../org/auth/agent-identity.js";
 import { contextCapabilities, repoBranchCapabilities } from "./context.js";
 import { deliveryCapabilities } from "./delivery.js";
@@ -21,6 +22,7 @@ import { projectV6Capabilities } from "./projects-v6.js";
 import { listV6Capabilities } from "./lists-v6.js";
 import { statusTemplateV6Capabilities } from "./status-templates-v6.js";
 import { favoritesCapabilities } from "./favorites.js";
+import { appCapabilities } from "./apps.js";
 import { dashPrefsCapabilities } from "./dash-prefs.js";
 import { sidePrefsCapabilities } from "./side-prefs.js";
 import { folderV6Capabilities } from "./folders-v6.js";
@@ -36,6 +38,7 @@ import { cronCapabilities } from "./cron.js";
 import { feedTargetCapabilities } from "./feed-targets.js";
 import { mappingCapabilities } from "./mapping.js";
 import { managedSessionCapabilities } from "./managed-session.js";
+import { sessionProjectCapabilities } from "./session-project.js";
 import { previewEnvCapabilities } from "./preview-env.js";
 import { stackProfileCapabilities } from "./stack-profiles.js";
 import { delegateCapabilities } from "./delegate.js";
@@ -97,6 +100,7 @@ const all: Capability[] = [
   ...cronCapabilities, // 서버사이드 스케줄 잡(org_cron) 관리 — admin scope. cron_list/set/delete/run_now(REST /api/ui/cron + MCP). 트리거 표준화: is 신선화·sync 를 게이트웨이가 주기 실행(웹훅 대체).
   ...mappingCapabilities, // 코드유닛→도메인 매핑 — context scope. list_unmapped(인박스)+map_code_unit(propose+근거, MCP+REST). LLM 판단주체: 에이전트가 도메인 should+DDD 로 분류.
   ...managedSessionCapabilities, // 상시 에이전트 세션 — admin scope. managed_session_list/set/delete/ensure. 격리 워크스페이스+keep-alive(createSession 재사용), 크론 타깃.
+  ...sessionProjectCapabilities, // #1798 후속: session_set_project — 세션↔프로젝트 소속 변경(MCP 전용, scope=null). 기본 대상 = 이 요청의 세션(x-lively-session). REST 는 terminal/session-project-routes 가 별도 서빙.
   ...previewEnvCapabilities, // #1036 프리뷰 환경 — code scope. preview_env_list/set/delete/ensure/stop. /preview/<id>/ 서브패스로 워크트리 public 정적 서빙(shared-proxy).
   ...repoBranchCapabilities, // repo_branch_list — 정의는 context.ts(repo_* 군집). 자리는 여기 고정(표면 순서 = tools/list 순서).
   ...stackProfileCapabilities, // '어떻게 띄우나' 정의(stack_profile_list/set/delete) — 조회는 code, 정의는 admin(start_cmd = 셸 명령).
@@ -111,6 +115,7 @@ const all: Capability[] = [
   ...oauthConnectCapabilities, // #746 T2: OAuth 커넥터 연결 — me_oauth_connect/disconnect(scope=null). auth_mode=oauth 프록시 MCP 에 per-user 동의. 콜백은 /oauth/callback(index.ts).
   ...channelPolicyCapabilities, // #1226: 대화 채널별 개인 열람/발송 허용 — me_slack_channels·me_channel_policy_set. **REST 전용·변경은 사람만**(AI 가 자기 차단을 못 풀게). 집행은 org/channels/channel-guard ← mcp-proxy.
   ...brokerCapabilities, // #746 T4: broker_run(scope=code) — per-member 브로커에서 D-도구(git·kubectl·terraform) 실행. 첫 호출에 자동 기동, 전용 uid 격리.
+  ...appCapabilities, // #1780: 앱 레지스트리 — org_apps/org_app_get(조회 scope=null)·org_app_set_enabled(admin)·me_app_grant/revoke(동의 scope=null). 설치/제거는 패키지 추출 선행(후속 트랙).
 ];
 // MCP 표면 = expose.mcp:true 인 capability 전부(registerMcpCapabilities 자동등록) + db 직접등록 3툴(db_query·db_schema·db_sources, tools/db.ts).
 //  (하드코딩 카운트 금지 — 컷오버마다 썩는다. 실제 집합은 buildToolCandidates/isToolExposed 가 expose.mcp 로 결정.)
@@ -210,6 +215,7 @@ export function registerMcpCapabilities(
       async (args: Record<string, unknown>, extra: unknown) => {
         const u = resolveUser(extra);
         if (cap.scope) requireScope(u, cap.scope);
+        await requireAppTool(u, cap.name); // #1780: 앱 세션이면 그 앱 grant 의 도구 allowlist 로 축소(일반 세션은 통과)
         // 작업자(AI) — 게이트웨이가 접속 신원(x-lively-harness 헤더 우선, 없으면 User-Agent)으로 식별(프로젝트 #182). 자기보고 대신 권위 신원.
         const agent = agentFromExtra(extra) ?? undefined;
         // 작업이 이뤄진 터미널 세션 — 같은 원리로 접속 헤더(x-lively-session)에서(#852). 세션 밖이면 undefined.

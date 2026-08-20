@@ -10,15 +10,20 @@
 import { $view, anchoredPopover, api, el, toast } from '../core.js';
 import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame } from './apps.js';
-import { drawSide as drawSideTree, projectOrder } from './side.js';
+import { drawSide as drawSideTree, projectOrder, sessText } from './side.js';
 import { dotCls, mergeSessions, projName, renderHome, renderSession, type Sess, type V2Data } from './views.js';
 import { mountStudio, type StudioHandle } from './studio.js';   // 실험장(#1719 원준): 프로젝트 화면 = 작업대(캔버스). 종전 방(project-view)은 잠시 내려둔다.
 import { createTimeline, type TimelineHandle } from '../timeline.js';
 import { loadSessionActivities } from '../timeline-sources.js';
 import { makeSplitter } from './split.js';
+import { createSessionFiles, type FilesHandle } from './files.js';
 import { createTabs, routeKey, type ShellTab, type TabsApi } from './tabs.js';
 import { mountMobileChrome, type MobileChrome } from './mobile.js';
+import { takeCreated } from './created-cache.js';
 
+// 팝아웃 창(#1744) — 세션 화면 [⋯ ▸ 새 창]이 `?solo=1` 로 여는 같은 앱. **좌측(과 탭 줄)만 없다**:
+//  가운데(터미널·대화)와 우패널은 본 화면과 한 코드다. 실험장으로 갈아타도 이 창은 그대로 서야 한다.
+const SOLO = new URLSearchParams(location.search).get('solo') === '1';
 let root: HTMLElement | null = null;
 let sideEl: HTMLElement | null = null;
 let centerEl: HTMLElement | null = null;
@@ -43,19 +48,22 @@ export async function bootV2(): Promise<void> {
   // 실험장(#1719 원준): 좌측은 64px 아이콘 레일 — 프로젝트 트리는 [프로젝트] 버튼으로 여닫는 패널(핀 고정 가능).
   //  캔버스를 넓게 쓰기 위한 구조라 사이드 폭 스플리터도 걷는다.
   root.classList.add('rail-mode');
+  root.classList.toggle('solo', SOLO);
   root.replaceChildren(
-    sideEl = el('nav', { class: 'v2-side stu-side', 'aria-label': '탐색' }),
+    ...(SOLO ? [] : [sideEl = el('nav', { class: 'v2-side stu-side', 'aria-label': '탐색' })]),
     centerEl = el('div', { class: 'v2-main', id: 'v2-main' }),
     makeSplitter({ axis: 'x', key: 'aside-w', cssVar: '--v2-aside-w', target: root, def: 316, min: 240, max: 720, grow: -1, label: '우패널 너비' }),
     asideEl = el('aside', { class: 'v2-aside', 'aria-label': '이 선택의 맥락' }));
   // 모바일 크롬(#1777) — 바는 그리드 맨 앞, 배경막은 맨 뒤. 데스크톱에선 둘 다 display:none 이라 그리드 열 순서에 안 낀다.
-  mobile = mountMobileChrome(root, sideEl!, asideEl!);
-  root.prepend(mobile.bar);
-  root.append(mobile.scrim);
+  if (!SOLO) {
+    mobile = mountMobileChrome(root, sideEl!, asideEl!);
+    root.prepend(mobile.bar);
+    root.append(mobile.scrim);
+  }
 
   // 실험장(#1719 원준): 크롬식 탭 줄은 걷는다 — 사이드바(프로젝트·열린 세션)가 이미 그 역할을 한다.
   //  탭 '기계'는 남긴다(화면마다 상태 보존·복귀가 이 구조에 실려 있다) — 줄만 안 그린다.
-  const TABS_OFF = true;
+  const TABS_OFF = false;   // 탭 줄은 남긴다(원준 2026-08-19 확정) — 실험장은 걷었지만 그 하나는 되살린다
   tabsApi = createTabs(centerEl!, asideEl!, {
     titleFor,
     onActivate: (tab, fresh) => {
@@ -71,7 +79,7 @@ export async function bootV2(): Promise<void> {
   if (!TABS_OFF) {
     centerEl!.prepend(tabsApi.strip);   // 탭 줄은 가운데 열 맨 위(탭 패널들은 tabs.ts 가 이미 뒤에 붙였다)
     // 모바일이면 탭 줄이 상단 바 가운데로 옮겨 간다(#1777) — 데스크톱으로 돌아오면 여기(가운데 열 맨 위)로 되돌린다.
-    mobile.adoptStrip(tabsApi.strip, () => centerEl!.prepend(tabsApi!.strip));
+    mobile?.adoptStrip(tabsApi.strip, () => centerEl!.prepend(tabsApi!.strip));
   }
 
   drawSide(); // 데이터 전 골격(로고·리브·앱)부터 — 빈 화면을 오래 두지 않는다
@@ -147,8 +155,13 @@ function titleFor(route: string): { title: string; noAside: boolean } {
   //  #/p/0 = 프로젝트 없는 세션들의 작업대(사이드바의 그 폴더) — 프로젝트가 아니라 '자투리 묶음'이다.
   if (p === 'p') { const id = Number(segs[1]); return { title: id === 0 ? '프로젝트 없는 세션' : projName(data, id), noAside: true }; }
   if (p === 's') {
+    // 탭 제목도 사이드바와 **같은 규칙**(side.ts sessText)을 쓴다(#1744) — 종전엔 s.label 을 날것으로 써서
+    //  탭에 `box-yoon-…`·`위탁 #41`·프로젝트명 반복이 그대로 떴다(dev 실측: 자동 생성 이름이 죽은 세션의 83%).
+    //  sessText 는 그런 이름을 걷어내고 pane 제목('지금 하는 일')을 그 자리에 올린다.
     const s = findSess(decodeURIComponent(segs[1] || ''));
-    return { title: s ? (String(s.label || '').trim() || String(s.raw?.harness || '세션')) : '세션', noAside: false };
+    if (!s) return { title: '세션', noAside: false };
+    const t = sessText(s, projName(data, s.projectId));
+    return { title: t.main || t.sub || String(s.raw?.harness || '세션'), noAside: false };
   }
   if (p === 'app') { const a = appByKey(segs[1]); return { title: a ? a.title : segs[1], noAside: true }; }
   if (CLASSIC_PAGES[p]) { const a = appByKey(CLASSIC_PAGES[p]); return { title: a ? a.title : raw, noAside: true }; }
@@ -222,11 +235,33 @@ async function renderRoute(tab: ShellTab): Promise<void> {
     } else if (page === 's' && segs[1]) {
       const id = decodeURIComponent(segs[1]);
       let s = findSess(id);
+      // 방금 만든 세션이면 생성 응답 전문으로 먼저 그린다(created-cache — 노드 세션은 목록 반영이 한 박자 늦다).
+      if (!s) {
+        const seeded = takeCreated(id);
+        if (seeded) { data.sessions = mergeSessions([seeded as any], []).concat(data.sessions); s = findSess(id); }
+      }
       if (!s) { await loadData(); drawSide(); s = findSess(id); }
+      // 그래도 없으면(다른 탭에서 만든 노드 세션 등) 에러로 끝내지 않는다 — "새로고침해 주세요"는 사람에게 폴링을 시키는 것.
+      if (!s) {
+        tab.center.replaceChildren(el('div', { class: 'v2-center' }, el('p', { class: 'v2-muted', text: '세션을 여는 중…' })));
+        for (let i = 0; i < 4 && !s; i++) {
+          await new Promise((r) => setTimeout(r, 800));
+          if (seq !== tab.seq) return;
+          await loadData();
+          s = findSess(id);
+        }
+        drawSide();
+      }
       if (seq !== tab.seq) return;
       // 우패널(발자취)을 먼저 — 세션 화면이 대화 파일을 읽으며 거기로 흘려보낸다.
       const trail = drawAsideSession(tab, s || null);
-      tab.chat = renderSession(tab.center, data, id, trail, (anchor) => openProjectPicker(anchor, id, tab), (label) => renameSession(s ? s.id : id, label, tab));
+      tab.chat = renderSession(tab.center, data, id, {
+        trail,
+        onPickProject: (anchor) => openProjectPicker(anchor, id, tab),
+        onRename: (label) => renameSession(s ? s.id : id, label, tab),
+        onToggleFiles: () => toggleAsideFiles(tab, id),   // 상단바 [파일] → 이 탭 우패널을 파일 탐색기로(#1744)
+        solo: SOLO,   // 팝아웃 창(#1744) — 좌측 없이 이 화면만
+      });
     } else if (page === 'app' && segs[1]) {
       const a = appByKey(segs[1]);
       const rest = segs.slice(2).join('/');
@@ -260,17 +295,6 @@ function activeKey(): string {
   const t = tabsApi ? tabsApi.current() : null;
   const cur = parseRoute(t ? t.route : location.hash);
   return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
-}
-/** 셸 탭에 열린 세션 id 들(활성 먼저) — 사이드바 '열린 세션' 고정 줄(side.ts)이 그린다. */
-function openSessions(): Array<{ id: string; active: boolean }> {
-  if (!tabsApi) return [];
-  const act = tabsApi.current();
-  const out: Array<{ id: string; active: boolean }> = [];
-  for (const t of [...tabsApi.tabs].sort((a, b) => Number(b === act) - Number(a === act))) {
-    const k = routeKey(t.route);
-    if (k.startsWith('s:')) out.push({ id: k.slice(2), active: t === act });
-  }
-  return out;
 }
 // ── 좌측 열 폐기(원준 2026-08-19 3차) — 프로젝트 목록 패널만, 작업대 문패의 [프로젝트]로 여닫는다 ──
 let railPanelOpen = false;
@@ -307,7 +331,7 @@ function drawSide(): void {
         onclick: () => { railPanelPin = !railPanelPin; try { localStorage.setItem('stu_side_pin', railPanelPin ? '1' : ''); } catch (_) { /* noop */ } drawSide(); } }),
       el('button', { class: 'stu-w-btn', type: 'button', text: '×', title: '닫기', onclick: () => { railPanelOpen = false; railPanelPin = false; try { localStorage.setItem('stu_side_pin', ''); } catch (_) { /* noop */ } drawSide(); } })),
     treeHost);
-  drawSideTree(treeHost, data, activeKey, openSessions);
+  drawSideTree(treeHost, data, activeKey);
   sideEl.replaceChildren(panel);
 }
 // ── 손잡이 알약의 자리는 **사람마다 다르다**(원준 2026-08-19 "저 위치가 너무 거슬린다") ──
@@ -365,9 +389,36 @@ window.addEventListener('stu:toggle-projects', () => { railPanelOpen = !railPane
 
 // ── 우측(탭마다 한 벌 — tab.aside 에 그린다) ──
 //  실험장에선 홈·리브·프로젝트가 우패널을 쓰지 않는다(위 titleFor 주석) — 남은 소비자는 세션 화면뿐이다.
+// 세션 우패널 = 짧은 사실 줄 + **타임라인**. 같은 세션이면 위젯을 다시 만들지 않는다(폴링이 상태만 갱신) —
+//  탭마다 한 벌이므로 캐시도 탭의 aside 에 붙어 산다(전환해도 쌓인 것이 그대로).
+//  #1744 로 같은 자리에 **파일 탐색기**가 한 칸 더 산다(상단바 [파일]). 두 칸은 지워서 갈아 끼우지 않고 hidden 으로
+//  바꿔 낀다 — 발자취는 세션 화면이 대화를 읽으며 계속 밀어 넣는 곳이라, 지웠다 새로 만들면 쌓인 것이 사라진다.
+type AsideHost = HTMLElement & { __trail?: { id: string; w: TimelineHandle }; __files?: { id: string; h: FilesHandle }; __filesOn?: boolean };
+function paintAsidePanes(host: AsideHost): void {
+  if (host.__trail) host.__trail.w.root.hidden = !!host.__filesOn;
+  if (host.__files) host.__files.h.root.hidden = !host.__filesOn;
+}
+function dropAsideFiles(host: AsideHost): void {
+  if (host.__files) { host.__files.h.destroy(); host.__files = undefined; }
+  host.__filesOn = false;
+}
+/** 상단바 [파일] — 이 탭의 우패널을 '발자취 ↔ 파일 탐색기'로 갈아 낀다. 켠 상태를 돌려준다(버튼 불). */
+function toggleAsideFiles(tab: ShellTab, id: string): boolean {
+  const host = tab.aside as AsideHost;
+  const s = findSess(id);
+  if (!s) { toast('세션 정보를 찾지 못해 파일을 열 수 없어요.', true); return false; }
+  if (host.__files && host.__files.id !== s.id) dropAsideFiles(host);
+  host.__filesOn = !host.__filesOn;
+  if (host.__filesOn && !host.__files) {
+    host.__files = { id: s.id, h: createSessionFiles(host, { sessionId: s.id, node: s.node,
+      onClose: () => { host.__filesOn = false; paintAsidePanes(host); if (tab.chat) tab.chat.setFilesOn(false); } }) };
+  }
+  paintAsidePanes(host);
+  return !!host.__filesOn;
+}
 function drawAsideSession(tab: ShellTab, s: Sess | null): TimelineHandle | null {
-  const host = tab.aside as HTMLElement & { __trail?: { id: string; w: TimelineHandle } };
-  if (!s) { host.__trail = undefined; host.replaceChildren(el('p', { class: 'v2-empty', text: '세션 정보를 찾을 수 없어요.' })); return null; }
+  const host = tab.aside as AsideHost;
+  if (!s) { host.__trail = undefined; dropAsideFiles(host); host.replaceChildren(el('p', { class: 'v2-empty', text: '세션 정보를 찾을 수 없어요.' })); return null; }
   const raw = s.raw || {};
   const factsEl = el('div', { class: 'v2-sfacts' },
     el('span', { class: 'v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' }), el('span', { text: s.stateLabel }),
@@ -375,11 +426,13 @@ function drawAsideSession(tab: ShellTab, s: Sess | null): TimelineHandle | null 
     raw.harness ? [el('span', { class: 'sep', text: '·' }), el('span', { class: 'mono', text: String(raw.harness) })] : null,
     s.node ? [el('span', { class: 'sep', text: '·' }), el('span', { text: String(s.node) })] : null,
     !s.owned && (raw.owner_name || raw.owner) ? [el('span', { class: 'sep', text: '·' }), el('span', { text: String(raw.owner_name || raw.owner) })] : null);
-  if (host.__trail && host.__trail.id === s.id && host.__trail.w.root.isConnected) { host.__trail.w.setMeta(factsEl); return host.__trail.w; }
+  if (host.__trail && host.__trail.id === s.id && host.__trail.w.root.isConnected) { host.__trail.w.setMeta(factsEl); paintAsidePanes(host); return host.__trail.w; }
   host.replaceChildren();
+  dropAsideFiles(host);          // 다른 세션으로 옮겼다 — 파일 패널도 그 세션 것으로 새로 연다
   const w = createTimeline(host, { scope: '이 세션', outcomes: true, empty: '아직 남은 것이 없어요 — 세션이 만들고 고친 것이 여기에 쌓입니다.' });
   w.setMeta(factsEl);
   host.__trail = { id: s.id, w };
+  paintAsidePanes(host);
   void loadSessionActivities(s.id).then((items) => w.addAll(items));
   return w;
 }

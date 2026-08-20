@@ -104,10 +104,24 @@ function anchoredPopover(anchor: any, panel: any): () => void {
   panel.style.left = Math.max(8, Math.min(r.left, window.innerWidth - pw - 8)) + 'px';
   // 위로 뒤집을 땐 여백을 넉넉히(12) — 앵커가 하단 플로팅 바 '안'에 있으면 6px 로는 바의 패딩과 겹쳐 보인다.
   panel.style.top = (below >= ph || below >= r.top ? r.bottom + 6 : Math.max(8, r.top - ph - 12)) + 'px';
-  const close = () => { panel.remove(); document.removeEventListener('mousedown', onDoc, true); document.removeEventListener('keydown', onKey, true); };
+  const close = () => {
+    panel.remove();
+    document.removeEventListener('mousedown', onDoc, true);
+    document.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('blur', onBlur);
+  };
   const onDoc = (e: any) => { if (!panel.contains(e.target) && !anchor.contains(e.target)) close(); };
   const onKey = (e: any) => { if (e.key === 'Escape') close(); };
-  setTimeout(() => { document.addEventListener('mousedown', onDoc, true); document.addEventListener('keydown', onKey, true); }, 0);
+  // ⚠ **iframe 위에서 열린 팝오버**(세션 화면의 터미널·앱 프레임)는 위 mousedown 만으로는 안 닫힌다 — 프레임 안을 누르면
+  //  그 이벤트는 프레임 문서로 가고 이 문서엔 아예 오지 않는다(#1744 신고: "영역 밖을 눌러도 안 닫혀").
+  //  프레임이 포커스를 가져가면 window blur 가 뜨고 그때 activeElement 가 그 IFRAME 이 된다 — 그 경우에만 닫는다.
+  //  (앱 전환·탭 전환도 blur 를 내지만 그땐 activeElement 가 그대로라, 돌아왔을 때 메뉴가 사라져 있지 않다.)
+  const onBlur = () => { if (document.activeElement && document.activeElement.tagName === 'IFRAME') close(); };
+  setTimeout(() => {
+    document.addEventListener('mousedown', onDoc, true);
+    document.addEventListener('keydown', onKey, true);
+    window.addEventListener('blur', onBlur);
+  }, 0);
   return close;
 }
 

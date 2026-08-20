@@ -25,8 +25,12 @@ import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id
 import { wrapAsMember, type CgroupLimit } from "./terminal-isolation.js";
 import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡
 import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
-import { memberMkdir } from "./terminal-member-fs.js";
+import { memberMkdir, memberWriteFile } from "./terminal-member-fs.js";
 import { materializeMemberGit, ensureGitSafeDirectory } from "../org/credentials/git-credential-materialize.js";
+// #1780 D3·D4 — 앱 세션: 앱 토큰 발급 + 세션 폴더에 앱 홈·앱 하네스 자산 물질화.
+import { mintAppToken } from "../apps/principal.js";
+import { writeAppHome, materializeAppAssets, directFsWriter, type AppFsWriter } from "../apps/session-assets.js";
+import { gatewayUrl } from "../gateway-url.js";
 import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput } from "./catalog.js";
 import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson } from "./tmux-exec.js";
 import {
@@ -34,6 +38,8 @@ import {
   paneAwaitingInput, parseReportedPhase, isPhaseFresh, resolveAgentPhase,
 } from "./phase.js";
 import { userSlug, ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir, mintSessionHookToken, revokeSessionHookToken } from "./profiles.js";
+import { ensureMemberKitSeeded } from "./member-kit-seed.js";
+import { logger } from "../log.js";
 import { canSeeSession } from "./write-cap.js";
 import { loadDesiredMap, loadDesiredOne, resolveDesired, resolveSessionDir } from "../sessions/session-desired.js";
 
@@ -101,6 +107,9 @@ export async function listRestorableSessions(user: LivelyUser, liveIds: Set<stri
       // #1251 — 사용자 종료가 아닌데 사유가 'oom' 이면 earlyoom 이 죽인 것. 둘이 겹치면 사용자 종료가 이긴다(더 확실한 사실).
       oomKilled: !s.exited_at && s.exit_reason === "oom",
       claudeSessionId: s.claude_session_id || undefined,   // #1719 — 죽은 세션도 대화 uuid 를 알면 기록을 잇는다
+      // #1791 — 노드 세션의 desired-state. 여기선 id 만 안다(이 모듈은 노드 에이전트 번들에도 들어가 node/registry 를
+      //  import 할 수 없다) — 이름·온라인 여부는 routes 가 레지스트리로 보강한다(decorateNodeRows). 프론트는 이 값으로 &node= 를 릴레이.
+      ...(s.node_id ? { node: { id: s.node_id, name: s.node_id, online: false } } : {}),
     });
   }
   return out;
@@ -295,6 +304,13 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  폴더를 그룹접근가능으로 만들며 해소. 미프로비저닝 멤버는 여기서 '첫 세션 lazy provision'(ensureMemberOsUser) →
   //  자동 격리(수동 버튼 불요). 인프라미설치/off/비멤버 = null 반환 = 비격리 폴백(무회귀).
   const osUser = await ensureMemberOsUser(user);
+  // 중계 배포 멤버 홈 키트(#1437 §21-3) — 로컬 격리의 provision-member 가 심는 훅·토큰·MCP 배선을 첫 세션에서
+  //  memberSpawn seam 으로 심는다(멱등·마커 1-stat 빠른 경로·중계 미설정이면 no-op). best-effort — 실패해도 세션은
+  //  뜬다(git materialize 규율). 키트가 없으면 work-flag 훅이 없어 대화창 매핑(claude-uuid)이 영영 안 생긴다.
+  if (osUser) {
+    await ensureMemberKitSeeded(user, osUser).catch((e) =>
+      logger.warn({ err: e, osUser }, "멤버 홈 키트 시딩 실패(비치명) — 세션은 뜨나 훅·대화창 매핑이 비어 있을 수 있다"));
+  }
   const id = `${sessionPrefix(user)}${crypto.randomBytes(4).toString("hex")}`;
   // 세션 전용 폴더(#1719 홈 입력창) — cwd = <루트>/sessions/<세션id>. subpath 는 안 받는다(폴더를 고르지 않는 진입이라).
   //  루트는 rootKey 그대로(기본 personal) — 격리 박스면 멤버 홈/box 아래, 관리형이면 멤버 홈이 그대로 마운트되는 자리다.
@@ -316,6 +332,27 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     await ensureGitSafeDirectory(osUser).catch((e) => console.warn("[terminal] safe.directory 설정 실패 — 세션은 계속:", (e as Error)?.message ?? e));
     const mid = ownerId(user);
     if (mid) await materializeMemberGit(osUser, mid).catch((e) => console.warn(`[terminal] git 자격 materialize 실패(${mid}) — 세션은 계속:`, (e as Error)?.message ?? e));
+  }
+
+  // ── 앱 세션(#1780 D3·D4) — appId 가 있으면 grant 검사 → 앱 토큰 발급 → 세션 폴더에 앱 홈·앱 하네스 자산 물질화. ──
+  //  일반 세션(appId 미설정)은 이 블록을 통째로 건너뛴다 → 종전 경로 무변경(핫패스 무회귀).
+  //  ⚠ hard-fail: grant 없음(403/409)·토큰 발급 실패·자산 물질화 실패는 **세션 생성을 중단**한다 — 스킬·토큰 없는
+  //   앱 세션은 틀린 상태다(일반 세션이라면 best-effort 인 자리들과 대비). 실패해도 tmux new-session 은 아직 안 돌았다.
+  //  격리(멤버 700 홈) 세션은 게이트웨이가 그 안에 직접 못 쓰므로 멤버 uid 백엔드 writer 를 넘긴다(비격리는 직접 fs).
+  let appEnv: string[] = [];
+  if (input.appId) {
+    const appId = input.appId;
+    const memberId = ownerId(user);
+    // mintAppToken 이 앱 존재·활성·grant 를 재검하고 없으면 HttpError(404/409/403) 를 던진다 — 그대로 전파(사용자 메시지).
+    const { token } = await mintAppToken(memberId, appId, "app-spawn");
+    const gwUrl = await gatewayUrl();   // org 프로필/PUBLIC_URL 기준(요청 헤더 불요) — 프록시가 이 base 로 게이트웨이에 붙는다.
+    const writer: AppFsWriter = osUser ? { mkdirp: (d) => memberMkdir(osUser, d), writeFile: (p, data, mode) => memberWriteFile(osUser, p, data, mode) } : directFsWriter;
+    await writeAppHome(target, token, gwUrl, writer);          // <sessionDir>/.lively/{token,gateway-url}(D3)
+    await materializeAppAssets(target, appId, writer);         // <sessionDir>/.claude/{skills,agents,commands}(D4)
+    // pane env — 다른 세션스코프 -e 와 같은 통로(아래 args 에 합류). LIVELY_HOME 은 프록시가 앱 토큰 파일을 찾는 뿌리,
+    //  LIVELY_APP_ID 는 귀속(x-lively-app → mcp_call_log.app). ⚠ 격리 분기는 sudoers env_keep 이 두 값을 통과시켜야 실효한다
+    //  (deploy/linux/sudoers-lively — 별도 PR3d, 이 커밋 범위 밖).
+    appEnv = ["-e", `LIVELY_HOME=${target}`, "-e", `LIVELY_APP_ID=${appId}`];
   }
 
   const harness = HARNESSES.find((h) => h.key === input.harness);
@@ -390,6 +427,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  ⚠ pane env 는 exec 시점 고정 → **새 세션부터** 적용(LANG #633·TZ #778·SESSION_ID #852 와 동일 성질).
   //  ⚠ 격리(sudo → box-spawn) 분기는 env_reset 이 털어가므로 sudoers 가 LIVELY_MODE(+전이기 구 LIVELY_READONLY/INCOGNITO)를 명시 보존해야 한다(deploy/linux/sudoers-lively).
   args.push(...modeEnvArgs(input)); // 분기·전이기 dual-env 는 modeEnvArgs(순수·단위테스트됨)에
+  // #1780 D3 — 앱 세션이면 LIVELY_HOME=<sessionDir>·LIVELY_APP_ID=<id>(위 앱 블록에서 조립). 일반 세션은 빈 배열=무변경.
+  //  ⚠ LANG·TZ·SESSION_ID 와 같은 세션스코프 -e 성질(exec 시점 고정, 새 세션부터 적용). 격리 분기 env_keep 는 별도 PR3d.
+  args.push(...appEnv);
   // 공유 빌드 캐시(#813 T3) — 생태계별 다운로드/의존성 캐시를 박스 전역 한 곳으로. LANG/TZ 와 같은 세션스코프 -e
   //  (전역/타세션 누수 없음). 목적은 부피 감소가 아니라 **회수를 싸게 만드는 것**: 워크트리 파생물을 회수해도
   //  캐시가 warm 이라 재설치가 금방 끝난다. 부수로 멤버 격리(#524)로 갈린 홈들의 캐시 중복도 하나로 접는다.
@@ -466,6 +506,8 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   // 세션 전용 폴더 표식(#1719) — session-project.ts 가 **이 표식이 있을 때만** 폴더 안에 마커·링크를 쓴다
   //  (cwd 가 프로젝트 폴더인 종전 세션에 같은 걸 쓰면 프로젝트 폴더를 오염시킨다).
   if (isSessionDir) await tmux(["set-option", "-t", id, "@box_session_dir", "1"]);
+  // 앱 세션이면 앱 id 를 박아둔다(#1780 D4) — @box_project 등과 같은 자리·같은 규약(desired 미러는 app_id 컬럼). 관측·귀속용.
+  if (input.appId) await tmux(["set-option", "-t", id, "@box_app", String(input.appId)]);
   // 프로젝트 세션엔 프로젝트 id 를 박아둔다 — listSessions 의 projectId(프론트 세션 귀속·카운트) + 작업 타임라인 귀속용.
   //  (#452 이후 입장 게이트 canAttach 는 멤버십을 안 봄 — 이 id 는 표시·귀속 목적으로만 남는다.)
   if (input.projectId) {
@@ -499,6 +541,7 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
         project_id: input.projectId || null, project_src: input.projectId ? (input.projectSrc === "org" ? "org" : "v6") : null,
         read_only: !!input.readOnly, incognito: !!input.incognito,
         write_vis: input.writeVis ?? null, restrict_read: !!input.restrictRead,
+        app_id: input.appId || null,   // #1780 D4 — 앱 세션 desired-state 미러(복원이 앱 축을 잃지 않게)
         created: createdSec, last_busy: null,
       });
     } catch (e) { console.warn(`[terminal] 세션 desired-state 미러 실패(${id}) — 세션은 계속:`, (e as Error)?.message ?? e); }

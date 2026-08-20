@@ -248,7 +248,8 @@ function tsessCard(s, ctx) {
         // 라이브 경합(already) — 그새 다시 떠 있으면 새로 만들지 않고 그 세션을 그대로 연다(오success 방지).
         if (r && r.already) { window.open(termUrl(s.id, s.label, s.node && s.node.id), '_blank'); toast('세션이 이미 살아있어 그대로 엽니다'); reRender(); return; }
         const ns = r && r.session;
-        if (ns && ns.id) window.open(termUrl(ns.id, ns.label || s.label), '_blank');
+        // #1791 — 노드에서 복원된 세션은 그 노드로 붙는다(서버가 session.node 를 준다). 없으면 박스.
+        if (ns && ns.id) window.open(termUrl(ns.id, ns.label || s.label, ns.node && ns.node.id), '_blank');
         // 정밀복원(UUID 매핑 有)이면 바로 그 대화로 이어지고, 미상이면 이어보기 목록이 뜬다 — 둘 다 안내.
         toast('열었어요 — 새 터미널에서 대화를 이어받아요(정확한 대화를 못 찾으면 목록에서 고르세요).'); reRender();
       } catch (e: any) { toast('열지 못했어요 — ' + (e && e.message || e), true); rb.disabled = false; rb.textContent = restoreVerb; }

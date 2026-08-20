@@ -6,7 +6,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import os from "node:os";
-import { TMUX_BIN, tenantSlug } from "./catalog.js";
+import { TMUX_BIN, tenantSlug, isPsmuxBin } from "./catalog.js";
 import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id 형식 — 게이트웨이 헤더 판정과 같은 자
 
 const execFileAsync = promisify(execFile);
@@ -151,13 +151,19 @@ export async function listSessionPanePids(): Promise<{ ok: boolean; panes: Map<s
 //  웹터미널이 '세션 종료됨'을 띄우려면 ⓑ여야 한다 — ⓒ를 종료로 오인하면 살아있는 세션을 죽었다고 알리게 되는데,
 //  그게 #687 이 막으려던 바로 그 오인이다(그래서 그때 프론트를 '계속 재연결'로 바꿨고, 이번엔 그 반대급부인
 //  '진짜 닫혔는데 영원히 재접속중'을 고친다). 따라서 tmux 가 **응답해서 "그런 세션 없음"이라고 말할 때만** true.
-export function isSessionGoneError(err: unknown): boolean {
+export function isSessionGoneError(err: unknown, bin: string = TMUX_BIN): boolean {
   if (!err || typeof err !== "object") return false;
-  const e = err as { killed?: boolean; signal?: string | null; stderr?: unknown };
+  const e = err as { killed?: boolean; signal?: string | null; stderr?: unknown; code?: unknown };
   if (e.killed || e.signal) return false; // 타임아웃(SIGTERM 으로 kill)·시그널 종료 → 판정 불가
   // tmux 응답: "can't find session: <id>". 소켓 접속불가("error connecting to …", "no server running")는
   //  tmux 서버가 죽었거나 못 붙은 것 = 판정 불가로 둔다(일시장애일 수 있음 → 재연결 유지).
-  return /can't find session|session not found/i.test(String(e.stderr ?? ""));
+  if (/can't find session|session not found/i.test(String(e.stderr ?? ""))) return true;
+  // psmux(윈도우 노드, #1791 실측): `has-session -t <없는 id>` 가 **stderr 한 글자 없이 exit 1** 로 끝난다(tmux 의 "can't find
+  //  session" 문구가 없다). 그래서 종전엔 윈도우 노드의 죽은 세션이 영영 '판정 불가'였다 — nodeCanAttach 가 4410 대신 4403 을
+  //  내고, #1791 복원·삭제의 gone 확답도 못 받았다(복원이 already 로 끝남, 실측). psmux 는 서버가 세션당 프로세스라
+  //  '서버 접속불가'라는 별개 상태가 없다 — exit 1 + 빈 stderr = 그 세션 없음. 실행 파일 부재(ENOENT)는 code 가 문자열이라 안 걸린다.
+  if (isPsmuxBin(bin) && e.code === 1 && String(e.stderr ?? "").trim() === "") return true;
+  return false;
 }
 export async function sessionGone(id: string): Promise<boolean> {
   if (!ID_RE.test(id)) return false; // 형식 자체가 틀림 = '종료'가 아니라 잘못된 요청

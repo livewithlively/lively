@@ -135,6 +135,19 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-act { font-size: 12.5px; padding: 4px 8px; border-radius: 6px; color: var(--ink-sub); }
 .sc-act:hover { background: var(--bg-tint); color: var(--ink); }
 .sc-act-on { background: var(--bg-punch); color: var(--ink); }
+/* 터미널 연결 상태(#1744) — 상단바를 합치며 터미널 툴바에 있던 한 줄이 여기로 왔다. 터미널이 열려 있을 때만 뜬다. */
+.sc-termstat { font-size: 11.5px; color: var(--muted); white-space: nowrap; margin-right: 2px; }
+.sc-termstat[hidden] { display: none; }
+.sc-termstat.ok { color: var(--mint-deep, #0FA37E); }
+.sc-termstat.err { color: var(--coral, #E5484D); }
+.sc-termstat.end { color: var(--ink-sub); font-weight: 700; }
+/* [⋯] — 터미널 툴바에 흩어져 있던 것들이 한 메뉴로 모였다(화면 복구·환경 설정·사용법 + 링크·새 창). */
+.sc-more { min-width: 250px; max-width: 320px; padding: 5px; display: flex; flex-direction: column; gap: 1px; }
+.sc-more-sec { font-family: var(--mono, ui-monospace, monospace); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted-2, #a6b2c8); padding: 8px 8px 3px; }
+.sc-more-row { display: flex; flex-direction: column; gap: 1px; align-items: flex-start; text-align: left; width: 100%; padding: 7px 8px; border: 0; background: none; font: inherit; border-radius: 8px; cursor: pointer; text-decoration: none; color: inherit; }
+.sc-more-row:hover { background: var(--bg-tint, #F6FAFF); }
+.sc-more-row .n { font-size: 12.5px; font-weight: 700; color: var(--ink); }
+.sc-more-row .m { font-size: 11px; color: var(--muted); line-height: 1.45; }
 .sc-chat { flex: 1; min-height: 0; display: flex; }
 .sc-chat[hidden] { display: none; }
 .sc-chat > .livc-wrap { flex: 1; }

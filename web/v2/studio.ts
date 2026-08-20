@@ -25,6 +25,8 @@ import { loadProjectTimeline } from '../timeline-sources.js';
 import { fmtSize, openFileViewer } from '../projects/files.js';
 import { upDropZone, upSend, upToast, type UpItem } from '../projects/files-upload.js';
 import { runPrefs } from './run-picker.js';
+import { listSessionApps, spawnAppSession, type SessionApp } from './app-session.js';
+import { openAppUi } from './app-ui.js';
 import { sessText } from './side.js';
 import { dotCls, type Sess, type V2Data } from './views.js';
 
@@ -68,22 +70,25 @@ type Sz = 's' | 'm' | 'l';
 interface WSpec { id: string; type: WType; x: number; y: number; w: number; h: number; min?: boolean; z?: number; data?: any }
 // surf = 이 기능이 사는 **표면**(원준 2026-08-19 "앱은 모달, 위젯은 캔버스를 꾸미는 것"):
 //  app = 열어서 하는 일(검색·편집·설정 — 모달) · widget = 캔버스에 두는 것(곁눈질) · both = 둘 다(같은 재료, 다른 성격).
-interface WDef { type: WType; label: string; hint: string; w: number; h: number; ic: string; ac: string; surf: 'app' | 'widget' | 'both'; shell?: boolean; hidden?: boolean }
+// surf 는 폐기했다(원준 2026-08-19) — 프로젝트 판에서 '앱(모달)/위젯(캔버스)'을 가르지 않는다.
+//  판 위의 것은 **전부 캔버스 카드**이고, 전역에서 쓰는 범용 앱은 사이드바 [앱] 이 맡는다.
+//  deskOnly = 목록에 안 띄운다(바탕화면·서랍이 이미 그 자리를 갖는 것 — 공유 폴더·타임라인).
+interface WDef { type: WType; label: string; hint: string; w: number; h: number; ic: string; ac: string; shell?: boolean; hidden?: boolean; deskOnly?: boolean }
 const WDEFS: WDef[] = [
-  { type: 'session', label: 'AI 세션', hint: '세션 하나 — 크기를 키우면 대화가 통째로 보여요', w: 340, h: 300, ic: 'chat', ac: '#2D6BF0', surf: 'widget' },
-  { type: 'coach', label: '리브 제안', hint: '판을 읽고 AI 를 더 크게 쓰는 법을 제안', w: 340, h: 250, ic: 'spark', ac: '#0FA37E', surf: 'widget' },
-  { type: 'automation', label: '자동화', hint: '반복을 붙박이로 — 켤 수 있는 자동화', w: 340, h: 250, ic: 'bolt', ac: '#7C5CFC', surf: 'both' },
-  { type: 'tasks', label: '태스크', hint: 'S=진행 링 · M=할 일 목록 · L=마감까지', w: 320, h: 300, ic: 'task', ac: '#D9772B', surf: 'both' },
-  { type: 'knowledge', label: '지식', hint: 'M=문서 목록 · L=본문 미리보기 카드', w: 320, h: 280, ic: 'book', ac: '#1BAEB0', surf: 'both' },
-  { type: 'folder', label: '공유 폴더', hint: '내가 올린 자료 · 세션이 남긴 결과물 — 끌어다 놓으면 올라가요', w: 380, h: 320, ic: 'folder', ac: '#5A6B85', surf: 'both' },
-  { type: 'desc', label: '명세', hint: '프로젝트 본문 — 꺼내 읽는 문서', w: 440, h: 360, ic: 'doc', ac: '#8A99B5', surf: 'app' },
-  { type: 'timeline', label: '타임라인', hint: '남은 결과들', w: 340, h: 420, ic: 'clock', ac: '#15233B', surf: 'both' },
-  { type: 'sticky', label: '포스트잇', hint: '판에 붙이는 메모', w: 230, h: 170, ic: 'note', ac: '#D9A32B', surf: 'widget' },
-  { type: 'app-meeting', label: '회의록', hint: '껍데기 — 회의록→결정·태스크 추출 자리', w: 340, h: 250, ic: 'mic', ac: '#B84E9C', surf: 'app', shell: true },
-  { type: 'app-calendar', label: '캘린더', hint: '껍데기 — 마감·회의·세션 예약 자리', w: 340, h: 280, ic: 'cal', ac: '#D9772B', surf: 'app', shell: true },
-  { type: 'app-slides', label: '장표', hint: '껍데기 — 지식→보고 장표 자리', w: 340, h: 240, ic: 'deck', ac: '#2D6BF0', surf: 'app', shell: true },
-  { type: 'preview', label: '프리뷰', hint: '파일 미리보기', w: 360, h: 320, ic: 'img', ac: '#5A6B85', surf: 'widget', hidden: true },
-  { type: 'doc', label: '문서', hint: '지식·문서 임베드', w: 460, h: 420, ic: 'doc', ac: '#1BAEB0', surf: 'widget', hidden: true },
+  { type: 'session', label: 'AI 세션', hint: '세션 하나 — 크기를 키우면 대화가 통째로 보여요', w: 340, h: 300, ic: 'chat', ac: '#2D6BF0' },
+  { type: 'coach', label: '리브 제안', hint: '판을 읽고 AI 를 더 크게 쓰는 법을 제안', w: 340, h: 250, ic: 'spark', ac: '#0FA37E' },
+  { type: 'automation', label: '자동화', hint: '반복을 붙박이로 — 켤 수 있는 자동화', w: 340, h: 250, ic: 'bolt', ac: '#7C5CFC' },
+  { type: 'tasks', label: '태스크', hint: 'S=진행 링 · M=할 일 목록 · L=마감까지', w: 320, h: 300, ic: 'task', ac: '#D9772B' },
+  { type: 'knowledge', label: '지식', hint: 'M=문서 목록 · L=본문 미리보기 카드', w: 320, h: 280, ic: 'book', ac: '#1BAEB0' },
+  { type: 'folder', label: '공유 폴더', hint: '내가 올린 자료 · 세션이 남긴 결과물 — 끌어다 놓으면 올라가요', w: 380, h: 320, ic: 'folder', ac: '#5A6B85', deskOnly: true },
+  { type: 'desc', label: '명세', hint: '프로젝트 본문 — 꺼내 읽는 문서', w: 440, h: 360, ic: 'doc', ac: '#8A99B5' },
+  { type: 'timeline', label: '타임라인', hint: '남은 결과들', w: 340, h: 420, ic: 'clock', ac: '#15233B', deskOnly: true },
+  { type: 'sticky', label: '포스트잇', hint: '판에 붙이는 메모', w: 230, h: 170, ic: 'note', ac: '#D9A32B' },
+  { type: 'app-meeting', label: '회의록', hint: '껍데기 — 회의록→결정·태스크 추출 자리', w: 340, h: 250, ic: 'mic', ac: '#B84E9C', shell: true },
+  { type: 'app-calendar', label: '캘린더', hint: '껍데기 — 마감·회의·세션 예약 자리', w: 340, h: 280, ic: 'cal', ac: '#D9772B', shell: true },
+  { type: 'app-slides', label: '장표', hint: '껍데기 — 지식→보고 장표 자리', w: 340, h: 240, ic: 'deck', ac: '#2D6BF0', shell: true },
+  { type: 'preview', label: '프리뷰', hint: '파일 미리보기', w: 360, h: 320, ic: 'img', ac: '#5A6B85', hidden: true },
+  { type: 'doc', label: '문서', hint: '지식·문서 임베드', w: 460, h: 420, ic: 'doc', ac: '#1BAEB0', hidden: true },
 ];
 const wdef = (t: WType): WDef => WDEFS.find((d) => d.type === t)!;
 const GRID = 8;
@@ -143,6 +148,12 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   // 타임라인은 위젯이 아니라 **우상단 토글**이다(원준 2026-08-19) — 맥 알림 센터 문법: 문패 오른쪽 끝에서
   //  누르면 오른쪽에서 스르륵 밀려 들어오고, 다시 누르면 밀려 나간다. 판 위 다른 위젯과 결이 다른 게 맞다 —
   //  이건 '판에 둔 물건'이 아니라 '잠깐 젖혀 보는 서랍'이라서다(그래서 판 배치에 저장되지 않는다).
+  // 바탕화면 스택 켜기/끄기 — 판 설정이라 문패 오른쪽(타임라인·코멘트·정리)과 같은 줄에 둔다(원준 2026-08-19).
+  const stackBtn = el('button', { class: 'btn btn-ghost btn-sm stu-stack-btn', type: 'button',
+    title: '스택 — 바탕화면 파일을 종류별 한 무더기로 접습니다', 'aria-pressed': 'false',
+    onclick: () => { stackOn = !stackOn; try { localStorage.setItem(STACK_KEY, stackOn ? '1' : '0'); } catch (_) { /* noop */ } closeStackPop(); paintStackBtn(); deskSig = ''; void paintDesk(); } },
+    icon('grid', 'stu-i sm'), el('span', { text: '스택' })) as HTMLButtonElement;
+  function paintStackBtn(): void { stackBtn.classList.toggle('on', stackOn); stackBtn.setAttribute('aria-pressed', String(stackOn)); }
   const tlBtn = el('button', { class: 'btn btn-ghost btn-sm stu-tl-btn', type: 'button', title: '타임라인 — 이 프로젝트에 남은 것들 (Esc 로 닫기)',
     'aria-label': '타임라인', 'aria-expanded': 'false', onclick: () => toggleNotif() },
     icon('clock', 'stu-i sm'), el('span', { text: '타임라인' })) as HTMLButtonElement;
@@ -173,6 +184,7 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
         el('span', { class: 'stu-faces' }, ...members.slice(0, 5).map((m: any) => personFace(String(m.member_id || m), 'stu-face', String(m.display_name || m.member_id || '')))),
         // 이 줄은 **캔버스보다 위**에 있는 것들만 — 판 설정(코멘트 모드·정리)뿐이다(원준 2026-08-19).
         //  타임라인·명세는 기능이라 앱/위젯으로 내려갔다(⊞ 런치패드).
+        stackBtn,
         tlBtn,
         cmBtn,
         el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '정리', title: '위젯 위치만 격자에 맞춰 정렬합니다(크기는 그대로)', onclick: () => { autoArrange(); paintAll(); save(); } })));
@@ -589,7 +601,24 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
       fillImg(im, path);   // 헤더 인증(쿠키 없는 세션에서도 뜨게)
       body.replaceChildren(el('div', { class: 'stu-prevwrap' }, im));
     }
-    else body.replaceChildren(el('iframe', { class: 'stu-prev-f', src: /\.pdf$/i.test(path) ? url + '#toolbar=0&view=FitH' : url, title: path }));
+    else {
+      // ⚠ **주소를 iframe 에 직접 걸지 않는다**(원준 신고 2026-08-19: 화면에 들어갈 때마다 'file' 이 저장됨).
+      //  서버 MIME 표에 html 이 없어 .html 은 application/octet-stream 으로 나가는데(의도 — 같은 출처에서
+      //  남의 HTML 이 실행되면 XSS 다), 그걸 iframe 으로 열면 브라우저가 그리기 대신 **내려받기**로 처리한다.
+      //  주소 끝 조각이 'file' 이라 저장 이름도 'file' 이 됐다.
+      //  그래서 받아서 **형식을 붙여** 띄운다. HTML 은 sandbox="" 라 스크립트도 동일출처도 막힌 채 그려진다
+      //  — 서버가 막으려던 '같은 출처 실행' 은 여전히 불가능하다.
+      const isPdf = /\.pdf$/i.test(path);
+      const host = el('div', { class: 'stu-prevwrap' }, el('p', { class: 'stu-fine', text: '여는 중…' }));
+      body.replaceChildren(host);
+      void fetch(url, { headers: authHeaders() }).then((r) => (r.ok ? r.blob() : null)).then((bl) => {
+        if (!bl || dead) return;
+        const u = URL.createObjectURL(new Blob([bl], { type: isPdf ? 'application/pdf' : 'text/html' }));
+        blobUrls.push(u);
+        host.replaceChildren(el('iframe', { class: 'stu-prev-f', title: path,
+          ...(isPdf ? {} : { sandbox: '' }), src: u + (isPdf ? '#toolbar=0&view=FitH' : '') }));
+      }).catch(() => { host.replaceChildren(el('p', { class: 'stu-fine', text: '미리보기를 열지 못했어요 — [크게] 로 열어 보세요.' })); });
+    }
     body.append(el('div', { class: 'stu-w-foot' }, el('span', { class: 'stu-fine ell', text: path }),
       el('button', { class: 'btn-text', type: 'button', text: '크게', onclick: () => void openFileViewer(id, path, path, () => { /* noop */ }, '/api/ui/v6/projects/') })));
   }
@@ -971,6 +1000,24 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
     if (!asApp) c.addEventListener('dragstart', (e: DragEvent) => { e.dataTransfer?.setData('text/plain', 'stu:' + d.type); after?.(); });
     return c;
   };
+  // ── 설치된 앱 타일(#1780) — UI 앱이면 창(샌드박스 iframe 모달)으로, 세션 앱이면 판 위 세션 카드로. ──
+  const sessionAppTile = (a: SessionApp): HTMLElement => {
+    const hasUi = a.pages.length > 0;
+    return el('button', { class: 'stu-app as-app stu-app-inst', type: 'button',
+      title: hasUi ? '앱 — 열면 이 앱의 화면이 창으로 떠요' : '세션 앱 — 열면 이 앱 전용 AI 세션이 판 위에 카드로 떠요',
+      onclick: () => { toggleLaunch(false); if (hasUi) void openAppUi(a.id, { title: a.title }); else void openSessionAppCard(a); } },
+      el('span', { class: 'stu-app-ic', style: 'background:' + (hasUi ? '#2D6BF0' : '#0FA37E') }, icon(hasUi ? 'grid' : 'chat', 'stu-i')),
+      el('span', { class: 'stu-app-n', text: a.title }),
+      el('span', { class: 'stu-inst-dot', title: hasUi ? '앱' : '세션 앱' }));
+  };
+  // 앱 세션을 열고 판 위에 세션 카드로 올린다(spawnSession 과 같은 문법 — 여기선 appId 를 실어 앱 배관을 켠다).
+  async function openSessionAppCard(a: SessionApp): Promise<void> {
+    const born = ghostCanvasPos();
+    const s = await spawnAppSession(a.id, { title: a.title, projectId: id });
+    if (!s || dead) return;
+    const spec = addWidget('session', born || { x: 88, y: 88 }, { sid: s.id });
+    spec.z = ++zTop; popIn(spec); focusWidget(spec);
+  }
   /** (v3 호환) 우패널이 있는 셸이 부르면 선반+타임라인을 그린다 — v4 셸은 부르지 않는다(알림 센터·런치패드로 옮겼다). */
   function renderAside(aside: HTMLElement): void {
     aside.replaceChildren(
@@ -987,20 +1034,28 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   function toggleLaunch(on?: boolean): void {
     const want = on != null ? on : launch.hidden;
     if (want) {
-      // 앱과 위젯은 성격이 다르다 — 앱은 열어서 하는 일(모달), 위젯은 캔버스에 두는 것. 구역을 갈라 그 차이를 보이게.
-      // 자투리 판엔 프로젝트 재료(태스크·지식·자료·명세·타임라인·자동화)가 없다 — 없는 걸 눌러 빈 창을 보여 주는 게 가장 나쁜 안내다.
+      // 한 묶음뿐이다(원준 2026-08-19) — 판에 올리는 것은 전부 위젯(캔버스 카드)이다.
+      //  타임라인은 문패 오른쪽 서랍이 맡고, 공유 폴더는 바탕화면이 이미 갖고 있어 목록에서 뺐다(deskOnly).
+      //  범용 앱은 이 판이 아니라 사이드바 [앱] — 특정 프로젝트에 매이지 않는 것들이 사는 곳이다.
+      // 자투리 판(#/p/0)엔 프로젝트 재료(태스크·지식·명세·자동화)가 없다 — 없는 걸 눌러 빈 창을 보여 주는 게 가장 나쁜 안내다.
       const LOOSE_OK = new Set<WType>(['session', 'sticky']);
-      const usable = WDEFS.filter((d) => !d.hidden && (!loose || LOOSE_OK.has(d.type)));
-      const apps = usable.filter((d) => d.surf === 'app' || d.surf === 'both');
-      const wgs = usable.filter((d) => d.surf === 'widget' || d.surf === 'both');
+      const wgs = WDEFS.filter((d) => !d.hidden && !d.deskOnly && (!loose || LOOSE_OK.has(d.type)));
+      // 설치된 세션 앱(org_app, #1780) — 각자 전용 세션이 뜨는 것이라 성격이 달라 그대로 별도 구역.
+      const instGrid = el('div', { class: 'stu-shelf-grid stu-launch-grid' });
+      const instSec = el('div', { class: 'stu-launch-inst', hidden: true },
+        el('div', { class: 'stu-launch-h sep' }, el('b', { text: '설치된 앱' }), el('span', { class: 'stu-fine', text: '열면 이 앱 전용 AI 세션이 판 위에 카드로 떠요' })),
+        instGrid);
       launch.replaceChildren(...[
-        apps.length ? el('div', { class: 'stu-launch-h' }, el('b', { text: '앱' }), el('span', { class: 'stu-fine', text: '열어서 하는 일 — 창으로 뜹니다' })) : null,
-        apps.length ? el('div', { class: 'stu-shelf-grid stu-launch-grid' }, ...apps.map((d) => appTile(d, () => toggleLaunch(false), true))) : null,
-        el('div', { class: 'stu-launch-h' + (apps.length ? ' sep' : '') }, el('b', { text: '위젯' }), el('span', { class: 'stu-fine', text: '캔버스에 두는 것 — 눌러 올리거나 원하는 자리로 끌어다 놓기' })),
+        el('div', { class: 'stu-launch-h' }, el('b', { text: '위젯' }), el('span', { class: 'stu-fine', text: '캔버스에 두는 것 — 눌러 올리거나 원하는 자리로 끌어다 놓기' })),
         el('div', { class: 'stu-shelf-grid stu-launch-grid' }, ...wgs.map((d) => appTile(d, () => toggleLaunch(false)))),
-        // 자투리 판에서 앱 구역이 통째로 비는 건 고장이 아니다 — 왜 없는지 한 줄로 말해 준다(막다른 안내 금지).
-        loose ? el('p', { class: 'stu-launch-note stu-fine', text: '태스크·지식·자료 같은 건 프로젝트의 것이에요. 세션을 프로젝트에 연결하면 그 작업대에서 쓸 수 있습니다.' }) : null,
+        instSec,
+        loose ? el('p', { class: 'stu-launch-note stu-fine', text: '태스크·지식 같은 건 프로젝트의 것이에요. 세션을 프로젝트에 연결하면 그 작업대에서 쓸 수 있습니다.' }) : null,
       ].filter(Boolean) as HTMLElement[]);
+      void listSessionApps().then((list) => {
+        if (launch.hidden || !list.length) return;
+        instSec.hidden = false;
+        instGrid.replaceChildren(...list.map((a) => sessionAppTile(a)));
+      });
       toggleNotif(false);
     }
     launch.hidden = !want;
@@ -1102,6 +1157,11 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
       // 다 밀려 나간 뒤에 감춘다 — 바로 hidden 을 주면 전환이 잘린다.
       window.setTimeout(() => { if (!notif.classList.contains('on')) notif.hidden = true; }, 260);
     }
+    // 서랍이 아이콘 열을 덮지 않게 — 열리면 아이콘이 왼쪽으로 비켜선다(원준 2026-08-19).
+    //  ⚠ 밀 거리는 **실제 서랍 폭을 재서** 준다. CSS transform 안의 %는 뷰포트가 아니라 '움직이는 그 요소'
+    //   기준이라, min(360px,42%) 를 그대로 쓰면 아이콘 열 폭의 42% 만 밀려 여전히 가린다(실측: 96px 만 밀렸다).
+    if (want) requestAnimationFrame(() => stage.style.setProperty('--stu-notif-w', Math.round(notif.getBoundingClientRect().width) + 'px'));
+    stage.classList.toggle('notif-on', want);
     tlBtn.classList.toggle('on', want);
     tlBtn.setAttribute('aria-expanded', String(want));
   }
@@ -1113,6 +1173,7 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
     if (!notif.hidden && !notif.contains(t) && !streamEl.contains(t) && !tlBtn.contains(t)) toggleNotif(false);
     if (appEl && !appEl.contains(t) && !launch.contains(t)) closeApp();
     if (!launch.hidden && !launch.contains(t) && !launchBtn.contains(t)) toggleLaunch(false);
+    if (stackPop && !stackPop.contains(t) && !(t instanceof Node && (t as HTMLElement).closest?.('.stu-ico.is-stack'))) closeStackPop();
     if (peekEl && !peekEl.contains(t)) closePeek();   // 판 아무 데나 누르면 피크는 물러난다(맥 훑어보기와 같은 몸짓)
     if (desk.contains(t)) return;
     desk.querySelectorAll('.stu-ico.sel').forEach((x) => x.classList.remove('sel'));   // 바탕 클릭 = 선택 해제(맥)
@@ -1121,7 +1182,8 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
     if (dead) { document.removeEventListener('keydown', onDocKey); return; }
     const typing = !!(document.activeElement && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName));
     if (e.key === 'Escape') {
-      if (focusId) { unfocusWidget(); e.stopPropagation(); }
+      if (stackPop) { closeStackPop(); e.stopPropagation(); }
+      else if (focusId) { unfocusWidget(); e.stopPropagation(); }
       else if (appEl) { closeApp(); e.stopPropagation(); }
       else if (!notif.hidden) { toggleNotif(false); e.stopPropagation(); }
       else if (!launch.hidden) { toggleLaunch(false); e.stopPropagation(); }
@@ -1140,6 +1202,9 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   //   "각각 뭔지" 를 이름 밑에서 바로 읽게 한다.
   //  조작(맥 그대로): 클릭 = 선택 · ⌘/Ctrl+클릭 = 더하기 · 바탕 드래그 = 영역 선택 · ⌘A = 전체 · Esc = 해제 ·
   //   두 번 = 열기 · 끌어다 판에 놓기 = 그 자리에 창 · Delete 또는 휴지통에 떨구기 = 버리기.
+  // 스택 켜기/끄기 — 맥 바탕화면의 '스택 사용'. 사람마다 취향이 갈려 기억해 둔다(기본은 켜짐: 파일이 늘어도 안 어지럽다).
+  const STACK_KEY = 'lively_studio_stack_' + id;
+  let stackOn = ((): boolean => { try { return localStorage.getItem(STACK_KEY) !== '0'; } catch (_) { return true; } })();
   const TRASH_DIR = '휴지통';
   const MACHINE_FILES = new Set(['CLAUDE.md', 'AGENTS.md', '.DS_Store', 'package-lock.json', 'yarn.lock']);
   const NOISE_RE = /\/(__pycache__|node_modules|dist|build|\.next|coverage|venv)\//;   // 사람이 올린 자료가 아닌 것
@@ -1151,20 +1216,22 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   stage.append(desk, deskBar, marq, trashEl);
   let deskSig = '';
   let trashN = 0;
-  type DKind = 'stack-folder' | 'stack-kn' | 'img' | 'pdf' | 'page' | 'doc' | 'file';
-  type DeskItem = { kind: DKind; path: string; label: string; type: string; sub?: string; n?: number };
+  type DKind = 'stack-folder' | 'stack-kn' | 'stack-cat' | 'img' | 'pdf' | 'page' | 'doc' | 'file';
+  type DeskItem = { kind: DKind; path: string; label: string; type: string; sub?: string; n?: number; cat?: string; kids?: DeskItem[] };
+  /** 스택 카테고리 — 맥 '스택으로 그룹화' 의 종류별 묶음. 사람이 찾을 때 쓰는 말로 짓는다(확장자 아님). */
+  const CATS = ['그림', '시안', '문서', '표', '장표', '묶음', '그 밖'] as const;
   const isImg = (n: string): boolean => /\.(png|jpe?g|gif|webp|svg)$/i.test(n);
   const base = (p2: string): string => String(p2).split('/').pop() || String(p2);
   /** 확장자 → 사람이 읽는 종류. 아이콘 밑 캡션이자 이 파일이 무엇인지에 대한 답. */
-  function kindOf(p2: string): { kind: DKind; type: string } {
-    if (isImg(p2)) return { kind: 'img', type: '그림' };
-    if (/\.pdf$/i.test(p2)) return { kind: 'pdf', type: 'PDF' };
-    if (/\.html?$/i.test(p2)) return { kind: 'page', type: '시안' };
-    if (/\.(md|txt)$/i.test(p2)) return { kind: 'doc', type: '문서' };
-    if (/\.(csv|tsv|xlsx?)$/i.test(p2)) return { kind: 'file', type: '표' };
-    if (/\.(pptx?|key)$/i.test(p2)) return { kind: 'file', type: '장표' };
-    if (/\.(zip|tar|gz)$/i.test(p2)) return { kind: 'file', type: '묶음' };
-    return { kind: 'file', type: '파일' };
+  function kindOf(p2: string): { kind: DKind; type: string; cat: string } {
+    if (isImg(p2)) return { kind: 'img', type: '그림', cat: '그림' };
+    if (/\.pdf$/i.test(p2)) return { kind: 'pdf', type: 'PDF', cat: '문서' };
+    if (/\.html?$/i.test(p2)) return { kind: 'page', type: '시안', cat: '시안' };
+    if (/\.(md|txt)$/i.test(p2)) return { kind: 'doc', type: '문서', cat: '문서' };
+    if (/\.(csv|tsv|xlsx?)$/i.test(p2)) return { kind: 'file', type: '표', cat: '표' };
+    if (/\.(pptx?|key)$/i.test(p2)) return { kind: 'file', type: '장표', cat: '장표' };
+    if (/\.(zip|tar|gz)$/i.test(p2)) return { kind: 'file', type: '묶음', cat: '묶음' };
+    return { kind: 'file', type: '파일', cat: '그 밖' };
   }
   const fileUrl = (p2: string): string => apiUrl('/api/ui/v6/projects/' + id + '/file?path=' + encodeURIComponent(p2));
   // <img src> 는 Authorization 헤더를 못 싣는다 — 쿠키 없는 세션(프리뷰·데스크톱 토큰 모드)에서 그림이 깨진다.
@@ -1195,7 +1262,7 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   }
   function clearSel(): void { for (const [e2] of iconEls) e2.classList.remove('sel'); paintDeskBar(); }
   function paintDeskBar(): void {
-    const sel = selected().filter((x) => x.it.kind !== 'stack-folder' && x.it.kind !== 'stack-kn');
+    const sel = selected().filter((x) => !String(x.it.kind).startsWith('stack'));
     const n = selected().length;
     deskBar.hidden = n === 0;
     if (!n) return;
@@ -1207,20 +1274,125 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
       el('button', { class: 'stu-w-btn', type: 'button', text: '×', title: '선택 해제 (Esc)', onclick: clearSel }),
     ].filter(Boolean) as HTMLElement[]);   // ⚠ replaceChildren 은 el 과 달리 null 을 'null' 텍스트로 넣는다
   }
+  /** 맥 폴더 — 뒤판(탭 있는 판) + 앞판 두 장. 선 아이콘이 아니라 **면**이라 44px 로 줄여도 폴더로 읽힌다.
+   *  kn = 지식 폴더(청록). 색만 다르고 형태는 같다 — 같은 종류의 것이라는 뜻이 형태로 남는다. */
+  function macFolder(tone?: 'kn'): HTMLElement {
+    const u = 'f' + (tone || 'b') + '-' + id;
+    return sv('svg', { viewBox: '0 0 56 46', class: 'stu-folder-sv', 'aria-hidden': 'true' },
+      sv('defs', {},
+        sv('linearGradient', { id: u + '-back', x1: '0', y1: '0', x2: '0', y2: '1' },
+          sv('stop', { offset: '0', 'stop-color': tone ? '#5AD1CF' : '#7CB6F7' }),
+          sv('stop', { offset: '1', 'stop-color': tone ? '#2FB3B4' : '#4E93EC' })),
+        sv('linearGradient', { id: u + '-front', x1: '0', y1: '0', x2: '0', y2: '1' },
+          sv('stop', { offset: '0', 'stop-color': tone ? '#8BE6E2' : '#A8D3FC' }),
+          sv('stop', { offset: '1', 'stop-color': tone ? '#3DC2C0' : '#5FA2F0' }))),
+      // 뒤판 — 왼쪽 위에 탭이 솟은 판
+      sv('path', { fill: 'url(#' + u + '-back)',
+        d: 'M2 9.5A4.5 4.5 0 0 1 6.5 5h13.2c1.2 0 2.3.47 3.14 1.31L26.5 9.6H49.5A4.5 4.5 0 0 1 54 14.1V38a4.5 4.5 0 0 1-4.5 4.5h-43A4.5 4.5 0 0 1 2 38z' }),
+      // 앞판 — 살짝 아래에서 시작해 뒤판 위에 겹친다(맥의 그 두께감)
+      sv('path', { fill: 'url(#' + u + '-front)', opacity: '.96',
+        d: 'M2 16.5h52V38a4.5 4.5 0 0 1-4.5 4.5h-43A4.5 4.5 0 0 1 2 38z' }),
+      // 앞판 윗선 하이라이트 — 종이 두 장이 겹친 자리
+      sv('path', { stroke: 'rgba(255,255,255,.55)', 'stroke-width': '1', fill: 'none', d: 'M2.6 17.1h50.8' }));
+  }
+  /** 종이 낱장 — 맥 문서 아이콘의 뼈대(접힌 귀 + 그림자). 그 위에 미리보기나 확장자 배지를 얹는다. */
+  function sheet(...kids: HTMLElement[]): HTMLElement {
+    return el('span', { class: 'stu-sheet' }, el('span', { class: 'stu-sheet-fold', 'aria-hidden': 'true' }), ...kids);
+  }
+  /** 실제 미리보기 — PDF·HTML 은 브라우저가 그릴 수 있다(작게 줄여 얹는다). 글 파일은 첫 줄들을 축소해 보여준다.
+   *  ⚠ 안 되는 파일도 있다(권한·형식) — 그 땐 배지만 남는다. 미리보기는 덤이지 전제가 아니다. */
+  function livePrev(it: DeskItem, host: HTMLElement): void {
+    if (it.kind === 'pdf' || it.kind === 'page') {
+      void fetch(fileUrl(it.path), { headers: authHeaders() }).then((r) => (r.ok ? r.blob() : null)).then((bl) => {
+        if (!bl || dead) return;
+        // ⚠ 서버는 자료를 **첨부(application/octet-stream + Content-Disposition: attachment)** 로 내려준다
+        //  (인라인 표시를 막으려는 의도). 그 blob 을 그대로 iframe 에 걸면 브라우저가 미리보기 대신 **내려받는다**
+        //  — 화면에 들어갈 때마다 'file' 이라는 파일이 저장됐다(원준 신고 2026-08-19).
+        //  그래서 여기서 형식을 다시 붙여 준다. HTML 은 sandbox="" 로 스크립트·동일출처를 모두 막은 채 그린다.
+        const u = URL.createObjectURL(new Blob([bl], { type: it.kind === 'pdf' ? 'application/pdf' : 'text/html' }));
+        blobUrls.push(u);
+        const fr = el('iframe', { class: 'stu-prev-fr', tabindex: '-1', 'aria-hidden': 'true', scrolling: 'no',
+          ...(it.kind === 'page' ? { sandbox: '' } : {}), src: u + (it.kind === 'pdf' ? '#toolbar=0&navpanes=0&view=FitH' : '') });
+        host.replaceChildren(fr);
+        host.classList.add('has-prev');
+      }).catch(() => { /* 배지만 */ });
+      return;
+    }
+    if (it.kind === 'doc') {
+      void fetch(fileUrl(it.path), { headers: authHeaders() }).then((r) => (r.ok ? r.text() : '')).then((t) => {
+        if (!t || dead) return;
+        const lines = t.split('\n').filter((x) => x.trim()).slice(0, 9);
+        host.replaceChildren(el('span', { class: 'stu-prev-tx' }, ...lines.map((x) => el('span', { text: x.slice(0, 40) }))));
+        host.classList.add('has-prev');
+      }).catch(() => { /* 배지만 */ });
+    }
+  }
+  const EXT_OF = (p2: string): string => (String(p2).split('.').pop() || '').slice(0, 4).toUpperCase();
+  // ── 스택 판 — 그 무더기 안을 훑는 자리(맥 폴더 팝오버). 판을 덮지 않게 작고, 스스로 스크롤한다. ──
+  let stackPop: HTMLElement | null = null;
+  let openPopFor = '';
+  function closeStackPop(): void { if (stackPop) { stackPop.remove(); stackPop = null; } openPopFor = ''; desk.querySelectorAll('.stu-ico.open').forEach((x) => x.classList.remove('open')); }
+  function openStackPop(it: DeskItem, anchorEl: HTMLElement): void {
+    const was = openPopFor === it.path;
+    closeStackPop();
+    if (was) return;                        // 같은 스택을 다시 누르면 닫는다
+    openPopFor = it.path;
+    anchorEl.classList.add('open');
+    const kids = it.kids || [];
+    const grid = el('div', { class: 'stu-stackpop-g' }, ...kids.map(deskIcon));
+    const pop = el('div', { class: 'stu-stackpop' },
+      el('div', { class: 'stu-stackpop-h' }, el('b', { text: it.label }), el('span', { class: 'stu-fine', text: kids.length + '개' }),
+        el('button', { class: 'stu-w-btn', type: 'button', text: '×', title: '닫기(Esc)', onclick: () => closeStackPop() })),
+      grid);
+    stackPop = pop;
+    stage.append(pop);
+    const r = anchorEl.getBoundingClientRect(), sr = stage.getBoundingClientRect();
+    pop.style.top = Math.max(8, Math.round(r.top - sr.top)) + 'px';
+    pop.style.right = Math.round(sr.right - r.left + 10) + 'px';
+  }
+
   function deskIcon(it: DeskItem): HTMLElement {
-    const stack = it.kind === 'stack-folder' || it.kind === 'stack-kn';
-    const thumb = it.kind === 'img' ? el('img', { alt: '', loading: 'lazy' }) as HTMLImageElement : null;
-    if (thumb) fillImg(thumb, it.path);
-    const g = it.kind === 'img'
-      ? el('span', { class: 'stu-ico-g im' }, thumb!)
-      : el('span', { class: 'stu-ico-g ' + it.kind }, icon(it.kind === 'stack-folder' ? 'folder' : it.kind === 'stack-kn' ? 'book' : it.kind === 'page' ? 'deck' : it.kind === 'pdf' ? 'doc' : 'doc', 'stu-i'));
-    if (stack) g.classList.add('stack');
-    const b = el('button', { class: 'stu-ico' + (stack ? ' is-stack' : ''), type: 'button', role: 'option', 'aria-selected': 'false', draggable: String(!stack) as any,
+    const stack = it.kind === 'stack-folder' || it.kind === 'stack-kn' || it.kind === 'stack-cat';
+    let g: HTMLElement;
+    if (it.kind === 'img') {
+      const thumb = el('img', { alt: '', loading: 'lazy' }) as HTMLImageElement;
+      fillImg(thumb, it.path);
+      g = el('span', { class: 'stu-ico-g im' }, thumb);
+    } else if (it.kind === 'stack-folder') {
+      g = el('span', { class: 'stu-ico-g folder-g' }, macFolder());
+    } else if (it.kind === 'stack-kn') {
+      g = el('span', { class: 'stu-ico-g folder-g kn' }, macFolder('kn'));
+    } else if (stack) {
+      // 스택 = **맨 위 것이 앞에 서고 나머지가 뒤로 비친다**(맥 스택 그대로). 그래서 그림 무더기는 첫 장이 그대로 보인다.
+      const top = (it.kids || [])[0];
+      let front: HTMLElement;
+      if (top && top.kind === 'img') {
+        const th = el('img', { alt: '', loading: 'lazy' }) as HTMLImageElement;
+        fillImg(th, top.path);
+        front = el('span', { class: 'stu-stk s1 im' }, th);
+      } else {
+        const box = el('span', { class: 'stu-prev' }, el('span', { class: 'stu-ext ' + (top ? top.kind : 'file'), text: top ? EXT_OF(top.path) : '' }));
+        front = el('span', { class: 'stu-stk s1' }, sheet(box));
+        if (top) livePrev(top, box);
+      }
+      g = el('span', { class: 'stu-ico-g stack cat-' + (it.cat || it.kind) },
+        el('span', { class: 'stu-stk s3', 'aria-hidden': 'true' }), el('span', { class: 'stu-stk s2', 'aria-hidden': 'true' }), front);
+    } else {
+      const box = el('span', { class: 'stu-prev' }, el('span', { class: 'stu-ext ' + it.kind, text: EXT_OF(it.path) }));
+      g = el('span', { class: 'stu-ico-g doc-g ' + it.kind }, sheet(box));
+      livePrev(it, box);
+    }
+    // ⚠ openPopFor 가 비었을 때 빈 경로(공유 폴더·지식)와 같아져 늘 '열림' 으로 보이던 버그 — 빈 값을 먼저 거른다.
+    const b = el('button', { class: 'stu-ico' + (stack ? ' is-stack' : '') + (openPopFor && openPopFor === it.path ? ' open' : ''), type: 'button', role: 'option', 'aria-selected': 'false', draggable: String(!stack) as any,
       title: (stack ? it.label : it.path) + (it.sub ? ' — ' + it.sub : '') + '\n' + (stack ? '두 번 눌러 열기' : '두 번 눌러 열기 · 끌어다 놓으면 그 자리에 창 · Delete = 휴지통') },
       g, el('span', { class: 'stu-ico-n', text: it.label }), el('span', { class: 'stu-ico-t', text: it.type + (it.n != null ? ' · ' + it.n : '') }));
     b.addEventListener('click', (e: MouseEvent) => {
       e.stopPropagation();
       if (e.metaKey || e.ctrlKey) { b.classList.toggle('sel'); paintDeskBar(); return; }
+      // 종류 스택은 한 번 눌러 연다 — 단 **판 위로 흘리지 않는다**.
+      //  실측(원준 걱정 그대로): 31장짜리 그림 스택을 그 자리에서 펼쳤더니 캔버스를 통째로 덮었다.
+      //  그래서 맥 폴더처럼 **그 옆에 뜨는 작은 판**으로 연다 — 바탕은 언제나 한 줄로 깨끗하다.
+      if (it.kind === 'stack-cat') { openStackPop(it, b); return; }
       selectOnly(b);
     });
     b.addEventListener('dblclick', (e: MouseEvent) => { e.preventDefault(); openDeskItem(it); });
@@ -1228,7 +1400,7 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
     b.addEventListener('dragstart', (e: DragEvent) => {
       if (stack) { e.preventDefault(); return; }
       if (!b.classList.contains('sel')) selectOnly(b);
-      const many = selected().map((x) => x.it).filter((x) => x.kind !== 'stack-folder' && x.kind !== 'stack-kn');
+      const many = selected().map((x) => x.it).filter((x) => !String(x.kind).startsWith('stack'));
       e.dataTransfer?.setData('text/plain', 'stu-desk:' + JSON.stringify(many.length ? many : [it]));
       desk.classList.add('dragging');
     });
@@ -1272,11 +1444,19 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
   // ── 휴지통 — 아이콘을 떨구거나 Delete. 되돌리기·비우기는 휴지통을 두 번 눌러서 ──
   //  서버 rename 은 같은 폴더 안에서만 되므로(경로 이동 API 없음) '복사 후 삭제' 로 옮긴다 — 큰 파일은 확인을 받는다.
   function paintTrash(): void {
+    // 휴지통도 낱장 아이콘과 같은 급으로 그린다 — 통 + 뚜껑 + 세로 홈, 차면 종이가 삐져나온다(맥 문법).
     trashEl.replaceChildren(
-      el('span', { class: 'stu-ico-g trash' + (trashN ? ' full' : '') }, icon('trash', 'stu-i')),
+      el('span', { class: 'stu-ico-g trash' + (trashN ? ' full' : '') },
+        ...(trashN ? [el('span', { class: 'stu-trash-paper', 'aria-hidden': 'true' })] : []),
+        sv('svg', { viewBox: '0 0 32 34', class: 'stu-trash-sv', 'aria-hidden': 'true' },
+          sv('path', { class: 'lid', d: 'M4 8h24' }),
+          sv('path', { class: 'lid', d: 'M12 8V5.5A1.5 1.5 0 0 1 13.5 4h5A1.5 1.5 0 0 1 20 5.5V8' }),
+          sv('path', { class: 'can', d: 'M6.5 8.5h19l-1.6 20.2A2.4 2.4 0 0 1 21.5 31h-11a2.4 2.4 0 0 1-2.4-2.3L6.5 8.5z' }),
+          sv('path', { class: 'rib', d: 'M13 13.5v12M19 13.5v12' }))),
       el('span', { class: 'stu-ico-n', text: '휴지통' }),
       el('span', { class: 'stu-ico-t', text: trashN ? trashN + '개' : '비어 있음' }));
   }
+  paintStackBtn();   // 저장된 켜짐 상태를 버튼에 처음부터 반영
   trashEl.addEventListener('dblclick', () => void openTrash());
   trashEl.addEventListener('dragover', (e: DragEvent) => { e.preventDefault(); trashEl.classList.add('over'); });
   trashEl.addEventListener('dragleave', () => trashEl.classList.remove('over'));
@@ -1401,18 +1581,32 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
     if (dead) return;
     assetCount = assets.length;
     const rootN = assets.length;   // 스택 배지 = **자료 수**(파일시스템 항목 수가 아니라)
-    const docs = assets.slice(0, 6);   // 많을수록 바탕이 어지럽다 — 최근 것 여섯만(나머지는 [공유 폴더] 안에)
     const kn = (pj().knowledge || {}) as any;
     const knN = ((kn.required || []) as any[]).length + ((kn.produced || []) as any[]).length;
+    const asItem = (f: AssetFile): DeskItem => {
+      const k = kindOf(f.path);
+      return { kind: k.kind, path: f.path, label: base(f.path), type: k.type, sub: fmtSize(f.size), cat: k.cat };
+    };
+    // 스택(맥 '스택으로 그룹화') — 파일이 늘어도 바탕이 어지러워지지 않게 **종류별 한 무더기**로 접는다.
+    //  꺼 두면 종전대로 최근 여섯 장만 낱개로 눕는다(그 이상은 [공유 폴더] 안에).
+    let files: DeskItem[];
+    if (stackOn) {
+      const by = new Map<string, DeskItem[]>();
+      for (const f of assets) { const i2 = asItem(f); const c = i2.cat || '그 밖'; (by.get(c) ?? by.set(c, []).get(c)!).push(i2); }
+      files = CATS.filter((c) => by.has(c)).map((c) => {
+        const kids = by.get(c)!;
+        return { kind: 'stack-cat' as const, path: 'cat:' + c, label: c, type: '스택', n: kids.length, cat: c,
+          sub: kids.slice(0, 3).map((k2) => k2.label).join(' · '), kids };
+      });
+    } else {
+      files = assets.slice(0, 6).map(asItem);
+    }
     const items: DeskItem[] = [
       { kind: 'stack-folder', path: '', label: '공유 폴더', type: '자료', n: rootN, sub: '올린 파일·세션이 남긴 결과물' },
       ...(knN ? [{ kind: 'stack-kn' as const, path: '', label: '지식', type: '지식', n: knN, sub: '필요·산출 지식' }] : []),
-      ...docs.map((f) => {
-        const k = kindOf(f.path);
-        return { kind: k.kind, path: f.path, label: base(f.path), type: k.type, sub: fmtSize(f.size) };
-      }),
+      ...files,
     ];
-    const sig = JSON.stringify(items.map((i) => i.kind + ':' + i.path + ':' + (i.n ?? '')) ) + ':' + trashN;
+    const sig = JSON.stringify(items.map((i) => i.kind + ':' + i.path + ':' + (i.n ?? '')) ) + ':' + trashN + ':' + (stackOn ? '1' : '0');
     if (sig === deskSig) return;
     deskSig = sig;
     iconEls.clear();

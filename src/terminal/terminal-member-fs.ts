@@ -9,10 +9,15 @@ import { memberExecConfigured, wrapAsMember } from "./terminal-isolation.js";
 import { tenantSlug } from "./catalog.js";
 
 // node one-liner(멤버 PATH 의 node 로 실행). argv[1]=대상 절대경로. 셸 미경유(argv) — 인젝션 없음.
-const LS_JS =
+// 심링크(#1744): dirent 의 isDirectory() 는 링크에 대해 **항상 false** 라, 폴더를 가리키는 링크가 '파일'로 나왔다
+//  (세션 폴더의 ./project 가 그 대표 — 눌러도 미리보기가 열려 못 들어갔다). statSync 는 링크를 따라가므로 그 값으로
+//  실효 종류를 정하고, link/linkTarget 으로 '링크였다'는 사실도 함께 싣는다(끊어진 링크는 stat 이 던져 file 로 남는다).
+export const LS_JS =
   "const fs=require('fs'),p=process.argv[1],o=[];" +
-  "for(const e of fs.readdirSync(p,{withFileTypes:true})){const d=e.isDirectory();let s=0,m=0;" +
-  "try{const st=fs.statSync(p+'/'+e.name);m=Math.floor(st.mtimeMs);if(!d)s=st.size}catch{}o.push({name:e.name,type:d?'dir':'file',size:s,mtime:m})}" +
+  "for(const e of fs.readdirSync(p,{withFileTypes:true})){const l=e.isSymbolicLink();let d=e.isDirectory(),s=0,m=0,t='';" +
+  "try{const st=fs.statSync(p+'/'+e.name);m=Math.floor(st.mtimeMs);if(l)d=st.isDirectory();if(!d)s=st.size}catch{}" +
+  "if(l){try{t=fs.readlinkSync(p+'/'+e.name)}catch{}}" +
+  "o.push({name:e.name,type:d?'dir':'file',size:s,mtime:m,link:l,linkTarget:t})}" +
   "process.stdout.write(JSON.stringify(o))";
 const STAT_JS =
   "const fs=require('fs');try{const s=fs.statSync(process.argv[1]);" +
@@ -57,7 +62,7 @@ function collectErr(c: ChildProcess): { get: () => string } {
   return { get: () => err.trim() };
 }
 
-export interface LsEntry { name: string; type: "dir" | "file"; size: number; mtime: number; }
+export interface LsEntry { name: string; type: "dir" | "file"; size: number; mtime: number; link?: boolean; linkTarget?: string; }
 
 // 업로드 정지(#1272) — 본문이 **한 바이트도 오지 않는데 요청이 닫히지도 않는** 상태의 상한.
 //  실측(고객사 A 실박스): 중간에서(사내 PC 문서보안(DLP)·프록시) 브라우저에만 403 을 돌려주고 본문 중계를 멈추면,
@@ -239,5 +244,23 @@ export function memberWriteFrom(
       if (aborted) return;
       code === 0 ? resolve() : reject(new Error(err.get() || `member write exit ${code}`));
     });
+  });
+}
+
+// 문자열 → 멤버 소유 파일(작은 파일 전용, #1780 앱 세션 물질화). `cat > "$0" && chmod "$1" "$0"` 로 멤버 uid 에서
+//  파일을 만들고 모드를 굳힌다 — 경로·모드는 **argv**($0·$1)로만 넘겨 스크립트 본문에 문자열을 안 섞는다(인젝션 없음,
+//  memberWriteFrom 의 `cat > "$0"` 규약과 동일). data 는 우리 코드가 만든 내용(앱 토큰·조립된 자산)이라 stdin 으로 준다.
+//  ⚠ 스트리밍 업로드(memberWriteFrom)와 달리 상한/스톨 가드가 없다 — 서버가 만든 유한한 작은 문자열에만 쓴다.
+export function memberWriteFile(osUser: string, absPath: string, data: string, mode = 0o600): Promise<void> {
+  const octal = (mode & 0o777).toString(8).padStart(3, "0");
+  return new Promise((resolve, reject) => {
+    const c = memberSpawn(osUser, ["sh", "-c", 'cat > "$0" && chmod "$1" "$0"', absPath, octal], ["pipe", "ignore", "pipe"]);
+    const err = collectErr(c);
+    c.on("error", reject);
+    const stdin = c.stdin;
+    if (!stdin) return reject(new Error("member write: no stdin"));
+    stdin.on("error", reject);
+    stdin.end(data);
+    c.on("close", (code) => (code === 0 ? resolve() : reject(new Error(err.get() || `member write exit ${code}`))));
   });
 }

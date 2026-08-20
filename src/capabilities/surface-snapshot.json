@@ -3527,6 +3527,16 @@
   "input_hash": "e9f5a6623f0f7ef5"
  },
  {
+  "name": "session_set_project",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/terminal/sessions/:id/project"
+  ],
+  "input_hash": "7545b7dc003c8466"
+ },
+ {
   "name": "preview_env_list",
   "scope": "code",
   "mcp": true,
@@ -3825,5 +3835,96 @@
    "POST /api/ui/me/broker/run"
   ],
   "input_hash": "3c4d513a6fa4e750"
+ },
+ {
+  "name": "org_apps",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/apps"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
+ },
+ {
+  "name": "org_app_get",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/apps/:id"
+  ],
+  "input_hash": "eeaa30c0ba805f7f"
+ },
+ {
+  "name": "org_app_set_enabled",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/enabled"
+  ],
+  "input_hash": "2599d27fa95e8ab2"
+ },
+ {
+  "name": "me_app_grant",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/grant"
+  ],
+  "input_hash": "2b26d1171bc83fae"
+ },
+ {
+  "name": "me_app_revoke",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/revoke"
+  ],
+  "input_hash": "eeaa30c0ba805f7f"
+ },
+ {
+  "name": "org_app_install",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/install"
+  ],
+  "input_hash": "eca5923943b417fa"
+ },
+ {
+  "name": "org_app_remove",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/remove"
+  ],
+  "input_hash": "eeaa30c0ba805f7f"
+ },
+ {
+  "name": "org_app_activity",
+  "scope": "admin",
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/app-activity"
+  ],
+  "input_hash": "9ca2386249c54c50"
+ },
+ {
+  "name": "org_app_ui",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/apps/:id/ui",
+   "GET /api/ui/apps/:id/ui/:page"
+  ],
+  "input_hash": "f48e51524b8110f6"
  }
 ]

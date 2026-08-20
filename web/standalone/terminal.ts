@@ -13,12 +13,44 @@ import { el, renderMarkdown } from './md.js';
 declare const Terminal: any;
 declare const FitAddon: any;
 declare const WebglAddon: any;
+declare const WebLinksAddon: any;
+
+// 터미널 속 링크 열기(#1541) — 같은 게이트웨이의 /ui/ 화면 링크는 **셸 안에서 그 자리 이동**, 그 외는 새 창.
+//  · 이 문서가 셸(iframe, 세션 화면의 터미널)에 박혀 있고 링크가 같은 출처의 /ui/ 해시 화면이면 부모 셸의
+//    해시를 바꾼다 — 사용자가 기대하는 "앱 내 이동"이 정확히 이것이다(새 창·새 탭이 아니라).
+//  · 그 외(독립 탭·다른 출처)는 window.open — 데스크톱 앱에선 메인의 창 규칙(web-shell.openTargetFor)이
+//    같은 출처 = 앱 안 새 창 / 외부 = 시스템 브라우저로 가른다. 브라우저에선 새 탭.
+// (순수 — 테스트 대상) 한 줄 텍스트에서 col(0-기준 셀 인덱스)이 걸친 URL 을 찾는다. 없으면 null.
+//  Cmd/Ctrl+클릭 링크 열기(#1541)의 판정부: 마우스 트래킹이 켜진 pane(claude 등 TUI)에서는 xterm 이
+//  클릭을 앱으로 보내므로 web-links 애드온(맨클릭)이 못 받는다 — 우회는 Shift+클릭뿐인데 사람들의 손은
+//  iTerm·VSCode 습관(Cmd+클릭)이다. 그래서 DOM 레벨에서 좌표→셀→그 줄 텍스트로 URL 을 직접 찾는다.
+export function urlAtColumn(lineText: string, col: number): string | null {
+  const re = /https?:\/\/[^\s"'<>\u3000]+/g;
+  for (let m = re.exec(lineText); m; m = re.exec(lineText)) {
+    if (col >= m.index && col < m.index + m[0].length) {
+      return m[0].replace(/[.,;:!?)\]]+$/, "");   // 문장부호 꼬리 제거(문장 속 URL)
+    }
+  }
+  return null;
+}
+
+function openLinkFromTerminal(uri: string): void {
+  try {
+    const u = new URL(uri, location.href);
+    const uiPath = location.pathname.replace(/terminal(?:-grid)?\.html$/, '');
+    if (u.origin === location.origin && u.pathname === uiPath && u.hash && window.parent !== window) {
+      window.parent.location.hash = u.hash;   // 같은 출처 부모(셸) — 교차 출처면 아래 catch 로
+      return;
+    }
+  } catch (_) { /* URL 파싱·부모 접근 실패 — 새 창 폴백 */ }
+  window.open(uri, '_blank', 'noopener');
+}
 declare const CanvasAddon: any;
 // 빌드 스탬프 — 빌드 시 esbuild define 이 주입한다(scripts/build-standalone.mjs). 종전엔 손으로 고치는 상수였다.
 declare const TERMJS_BUILD: string;
 declare global {
   interface Window {
-    Terminal?: any; FitAddon?: any; WebglAddon?: any; CanvasAddon?: any;
+    Terminal?: any; FitAddon?: any; WebglAddon?: any; CanvasAddon?: any; WebLinksAddon?: any;
     livelyTermDiag?: () => string;
     livelyJumpToPrompt?: (text: string) => void;
   }
@@ -34,6 +66,10 @@ const NODE_ID = new URLSearchParams(location.search).get('node') || '';
 //  복원한 세션이 곧 다시 죽으면(예: 이어받을 대화가 없어 claude 가 즉시 종료) 또 4410 이 오는데,
 //  그때 다시 자동 복원하면 '복원→즉사→복원' 이 끝없이 돈다(2026-07-28 실측: 화면이 계속 새로고침).
 const RESTORED = new URLSearchParams(location.search).get('restored') === '1';
+// 세션 화면 안에 프레임으로 실렸나(#1744). 그렇다면 이 페이지의 **상단바·파일 탐색기는 그리지 않는다** —
+//  그 기능은 세션 화면의 상단바([⋯] 메뉴)와 우패널(파일 탐색기)로 옮겨 갔다. 종전엔 상단바가 위아래로 둘이었다.
+//  프레임 밖(단독 탭)은 종전 그대로 — 이 주소를 직접 여는 곳이 여럿이다(프로젝트 화면·활동 로그·me-ai 등).
+const EMBED = new URLSearchParams(location.search).get('embed') === '1';
 const nodeQ = (joiner) => (NODE_ID ? joiner + 'node=' + encodeURIComponent(NODE_ID) : '');
 
 // 모든 라틴 글꼴 뒤에 자체호스팅 'D2Coding'(public/fonts, OFL)을 한글 폴백으로 둔다 →
@@ -411,10 +447,30 @@ function parsePaneState(line) {
 //  (alt-screen 여부로는 못 가른다 — 하드킬은 alt=1 도 같이 남기고, fzf --height 처럼 normal 화면에서 마우스를
 //   쓰는 앱도 있다. foreground 명령이 훨씬 정확한 축이다.)
 //  cmd 가 비면(구 서버 — 마커에 cmd 없음) 게이팅하지 않고 옛 동작으로 degrade 한다.
+//
+// ⚠ 'keep' — 백엔드가 마우스 flag 를 **못 주는** 경우(psmux, 아래 paneMouseKnown)엔 어느 쪽으로도 동기화하지 않는다.
+//  #1535 윈도우 재발(2026-08-19, 상민님): "터미널이 포그라운드로 바뀌면 몇 초간 휠이 ↑/↓ 로 인식된다".
+//  경로: 포커스 → forceRedraw → {t:'st'} → psmux 상태블록 `any= btn= std= sgr=` (전부 빈 값 — 실측 psmux 3.3.7,
+//  `cmd=claude`) → 종전 판정은 '없음'을 '꺼짐'으로 읽어 'none' → applyPaneState 가 살아있는 앱의 트래킹을 껐다
+//  → alt-screen 에서 xterm 이 휠을 화살표로 폴백. 앱이 다시 그리며(넛지) 1003h 를 재발행할 때까지 몇 초.
+//  psmux 상태블록은 마우스에 관해 **정보가 없다** — 그때의 진실은 xterm 이 스트림에서 스스로 추적한 모드뿐이다.
 export function paneMouseMode(st) {
-  if (!st || !(st.any || st.btn || st.std)) return 'none';
-  if (isShellCmd(st.cmd)) return 'none';              // 셸이 포그라운드 = 죽은 앱이 남긴 flag(위 주석)
+  if (!st) return 'none';
+  if (isShellCmd(st.cmd)) return 'none';              // 셸이 포그라운드 = 앱 없음. flag 유무와 무관(psmux 에서도 성립 — #1302 보호 유지)
+  if (!paneMouseKnown(st)) return 'keep';             // flag 를 못 주는 백엔드 — xterm 자체 추적을 건드리지 않는다
+  if (!(st.any || st.btn || st.std)) return 'none';
   return st.any ? 'any' : st.btn ? 'drag' : 'vt200';  // 1003 > 1002 > 1000 (상위모드 우선)
+}
+/** 이 상태블록이 마우스 트래킹 모드를 **말해주는가** — 순수(전역 의존 없음).
+ *  tmux 는 mouse_*_flag 를 0/1 로 준다 → 안다. psmux(Windows 노드)는 그 포맷변수를 구현하지 않아 **전부 빈 값**으로
+ *  온다(실측 psmux 3.3.7: `alt=1 any= btn= std= sgr= cmd=claude`) → 모른다. 서버가 mux=psmux 라고 알려주면 flag 가
+ *  0/1 로 와도 믿지 않는다 — ConPTY 가 앱 출력을 정규화하는 뒤에서 psmux 가 모드를 추적한다는 검증이 없고, 틀린 0 을
+ *  믿으면 살아있는 앱의 마우스를 끄는 이 버그가 그대로 재발한다(그 검증이 생기면 이 게이트를 좁혀라).
+ *  구 노드 번들(mux 토큰 없음)은 '전부 빈 값' 지문으로 psmux 를 알아본다(captureSafeBackend 와 같은 축). */
+export function paneMouseKnown(st) {
+  if (!st) return false;
+  if (st.mux === 'psmux') return false;
+  return !st.flagsMissing;
 }
 // xterm 이 내보낸 데이터가 마우스 리포트인가 — SGR(1006) `\e[<b;x;yM|m` · urxvt(1015) `\e[b;x;yM` · X10 `\e[M`+3바이트.
 //  순수 함수(전역 의존 없음). 드리프트 가드에서만 쓴다.
@@ -441,10 +497,14 @@ export function applyPaneState(st) {
     try { xtMode = (term.modes && term.modes.mouseTrackingMode) || 'none'; } catch (_) { /* noop */ }
     const xtOn = xtMode !== 'none';
     const wantMode = paneMouseMode(st);
-    // tmux 는 마우스 ON 이라는데 그 pane 에 앱이 없다 = 죽은 앱이 남긴 flag. 이 클라만 안 켜고 끝내면 tmux 의 잘못된
-    //  진실은 그대로라 다른 클라·실 터미널 attach 는 계속 flood 를 받는다 → 서버에 pane 상태 복구를 요청한다(스로틀).
-    if (st.mouseOn && wantMode === 'none') requestMouseReset();
-    if (wantMode === 'none') {
+    // 'keep' — 백엔드(psmux)가 마우스 flag 를 못 준다. 이 블록으로는 켤 수도 끌 수도 없다 → xterm 이 스트림에서 스스로
+    //  추적한 모드를 그대로 둔다(#1535 윈도우 재발: 여기서 '없음'을 '꺼짐'으로 읽어 끄면 포커스마다 휠이 화살표가 된다).
+    if (wantMode === 'keep') {
+      if (xtOn) dlog('mouse', 'keep ' + xtMode + ' (백엔드가 flag 를 안 준다 · mux=' + (st.mux || '?') + ' cmd=' + (st.cmd || '?') + ')');
+    } else if (wantMode === 'none') {
+      // tmux 는 마우스 ON 이라는데 그 pane 에 앱이 없다 = 죽은 앱이 남긴 flag. 이 클라만 안 켜고 끝내면 tmux 의 잘못된
+      //  진실은 그대로라 다른 클라·실 터미널 attach 는 계속 flood 를 받는다 → 서버에 pane 상태 복구를 요청한다(스로틀).
+      if (st.mouseOn) requestMouseReset();
       if (xtOn) term.write('\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l'); // 앱 off → 전 모드 해제
     } else if (wantMode !== xtMode) {
       // 앱이 원하는 모드로 정확히 맞춘다(꺼져있었거나 다른 서브모드였거나). 다른 트래킹이 켜져있었으면 먼저 정리.
@@ -2052,6 +2112,32 @@ async function loadSessionMeta() {
   showDropHint(); // 메타를 받은 뒤에 띄운다 — 업로드 위치 문구가 프로젝트/개인 세션에 따라 갈리므로(#1235)
 }
 
+// ── 세션 화면과의 다리(#1744 ?embed=1) ────────────────────────────────────────────────
+//  상단바를 합쳤으므로, 저기서 누른 것을 여기서 실행한다. 같은 오리진 프레임이라 postMessage 한 줄이면 된다
+//  (프레임 안 로직을 세션 화면으로 복제하지 않는다 — 복제하면 두 벌이 갈린다).
+//  연결 상태는 반대 방향으로 흘려보낸다: statusEl 은 재연결·종료 등 여러 곳에서 바뀌므로 **값을 관측**한다
+//   (호출부마다 손으로 알리면 언젠가 한 군데를 빠뜨린다).
+function setupEmbedBridge() {
+  window.addEventListener('message', (ev: MessageEvent) => {
+    if (ev.origin !== location.origin || ev.source !== window.parent) return;
+    const m: any = ev.data;
+    if (!m || m.type !== 'lively-term') return;
+    if (m.cmd === 'reconnect') softReconnect();
+    else if (m.cmd === 'settings') openSettings();
+    else if (m.cmd === 'help') openHelp();
+    else if (m.cmd === 'prompts') openMyPrompts();
+    else if (m.cmd === 'focus') { try { term.focus(); } catch (_) { /* 아직 안 떴다 */ } }
+  });
+  const post = () => {
+    try {
+      window.parent.postMessage({ type: 'lively-term-status', text: statusEl.textContent || '',
+        cls: String(statusEl.className || '').replace('status', '').trim() }, location.origin);
+    } catch (_) { /* 부모가 없거나 닫혔다 */ }
+  };
+  try { new MutationObserver(post).observe(statusEl, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['class'] }); } catch (_) { /* 미지원 — 첫 값만 */ }
+  post();
+}
+
 export async function boot() {
   const p = prefs();
   scrollSpeed = Math.max(1, Math.min(12, Number(p.scrollSpeed) || 3));
@@ -2097,12 +2183,13 @@ export async function boot() {
   termPane = el('div', { class: 'pane active' }, host);
   tabbarEl = el('div', { id: 'tabbar' });
   panesEl = el('div', { id: 'panes' }, termPane);
-  const main = el('div', { id: 'main' }, toolbar, tabbarEl, panesEl);
-  document.getElementById('root').replaceChildren(el('div', { id: 'ws' }, explorerEl, main));
+  const main = EMBED ? el('div', { id: 'main' }, tabbarEl, panesEl) : el('div', { id: 'main' }, toolbar, tabbarEl, panesEl);
+  document.getElementById('root').replaceChildren(EMBED ? el('div', { id: 'ws' }, main) : el('div', { id: 'ws' }, explorerEl, main));
   tabs.push({ id: 'term', label: '터미널', pane: termPane, closable: false });
   renderTabbar();
-  setupDnd();
+  if (!EMBED) setupDnd();
   setupTermDrop();
+  if (EMBED) setupEmbedBridge();
   loadSessionMeta();
 
   // 이름 라이브 반영 — 다른 탭(프로젝트/세션 매니저)에서 이름을 바꾸면 같은 브라우저 안에선 즉시 받는다.
@@ -2130,7 +2217,66 @@ export async function boot() {
   });
   fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
+  // 터미널 속 URL 을 클릭 가능하게(#1541) — 종전엔 애드온이 없어 하네스(claude)가 찍은 링크가 그냥 색칠된 글자였다
+  //  (xterm 은 캔버스에 그려 DOM 앵커가 없다 — 사람은 "링크인데 안 눌린다"로 본다). 열기 규칙 openLinkFromTerminal.
+  //  CDN 로드 실패 시 조용히 종전 동작(클릭 불가) — 링크는 편의지 전제가 아니다.
+  if (window.WebLinksAddon && window.WebLinksAddon.WebLinksAddon) {
+    term.loadAddon(new WebLinksAddon.WebLinksAddon((e: MouseEvent, uri: string) => { e.preventDefault(); openLinkFromTerminal(uri); }));
+  }
   term.open(host);
+  // 클릭으로 링크 열기(#1541) — 두 경로를 캡처 단계에서 가로채 **클라이언트가** 연다(urlAtColumn 머리말).
+  //  ⚠ 실측: 트래킹 pane(claude TUI)에선 클릭이 pty 로 릴레이돼 web-links(맨클릭)가 못 받고, TUI 자신의 링크
+  //   확인창이 뜨며, OK 는 서버 안 open(1) — 게이트웨이 박스엔 브라우저가 없어 사용자에겐 무반응(구조적).
+  //  경로 ① modifier(Cmd/Ctrl)+클릭 — 트래킹 여부 무관, 항상 우리가 연다(iTerm·VSCode 습관).
+  //  경로 ② **URL 글자 위** 맨클릭 — 트래킹 pane 에서만. URL 밖 맨클릭은 종전대로 TUI 로(선택지 클릭 등
+  //   TUI 의 정당한 마우스 입력을 죽이지 않는다). 게이트웨이 세션에선 TUI 링크 열기가 어차피 무반응이라 순이득.
+  //   비트래킹(셸) pane 의 맨클릭은 web-links 가 이미 처리하고, 드래그 선택을 지켜야 하므로 안 가로챈다.
+  //  판정은 mousedown 에서 한다 — press 가 pty 로 새면 TUI 확인창이 그대로 뜬다. down/up/click 세 이벤트를
+  //  한 판정(pendingLink)으로 함께 삼킨다.
+  const linkAtEvent = (ev: MouseEvent): string | null => {
+    if (!term) return null;
+    const screen = host.querySelector('.xterm-screen');
+    if (!screen) return null;
+    const r = screen.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    const col = Math.floor((ev.clientX - r.left) / (r.width / term.cols));
+    const row = Math.floor((ev.clientY - r.top) / (r.height / term.rows));
+    if (col < 0 || row < 0 || col >= term.cols || row >= term.rows) return null;
+    const buf = term.buffer.active;
+    if (!buf.getLine(buf.viewportY + row)) return null;
+    // 긴 URL 은 다음 행으로 감싸인다 — 감싸인 이웃 행(isWrapped)을 이어 한 논리 줄로 보고, col 도 그만큼 민다.
+    let startY = buf.viewportY + row;
+    while (startY > 0 && buf.getLine(startY)?.isWrapped) startY--;
+    let text = '';
+    let colInLogical = col;
+    for (let y = startY; y < buf.length; y++) {
+      const l = buf.getLine(y);
+      if (!l || (y > startY && !l.isWrapped)) break;
+      if (y < buf.viewportY + row) colInLogical += term.cols;
+      text += l.translateToString(true).padEnd(term.cols);
+    }
+    return urlAtColumn(text, colInLogical);
+  };
+  const mouseTracked = (): boolean => { try { const m = term?.modes?.mouseTrackingMode; return !!m && m !== 'none'; } catch { return false; } };
+  let pendingLink: string | null = null;
+  host.addEventListener('mousedown', (ev: MouseEvent) => {
+    if (ev.button !== 0) { pendingLink = null; return; }
+    const wantsLink = (ev.metaKey || ev.ctrlKey) || mouseTracked();
+    pendingLink = wantsLink ? linkAtEvent(ev) : null;
+    // modifier 클릭은 URL 밖이어도 삼킨다(pty 로 새면 TUI 가 press 를 받는다) — 맨클릭은 URL 위일 때만.
+    if (pendingLink || (ev.metaKey || ev.ctrlKey)) { ev.stopPropagation(); ev.preventDefault(); }
+  }, true);
+  host.addEventListener('mouseup', (ev: MouseEvent) => {
+    if (pendingLink || ((ev.metaKey || ev.ctrlKey) && ev.button === 0)) { ev.stopPropagation(); ev.preventDefault(); }
+  }, true);
+  host.addEventListener('click', (ev: MouseEvent) => {
+    if (!pendingLink) return;
+    ev.stopPropagation(); ev.preventDefault();
+    // down 과 다른 자리에서 뗐으면(드래그) 열지 않는다 — click 좌표로 같은 URL 인지 한 번 더 확인.
+    const url = linkAtEvent(ev);
+    if (url && url === pendingLink) openLinkFromTerminal(url);
+    pendingLink = null;
+  }, true);
   loadRenderer();
   loadTermFonts();        // 웹폰트 다운로드를 즉시 시작(WS 핸드셰이크와 병렬) — onopen 의 재측정이 빨리 확정되도록
   setupClipboard();
@@ -2292,11 +2438,14 @@ function showEndedBar(o) {
 //  종전엔 복원 경로가 목록 화면의 [복원] 버튼뿐이라, 세션 링크로 바로 들어온 사람은 종료 배너만 보고 목록으로
 //  되돌아가야 했다. E 의 설계는 원래 '부팅 시 전부 자동 spawn 하지 않고 열 때 resume' 이고, 이 화면이 그 '열 때'다.
 //  자동 복원은 **중단된 세션(재부팅·자동회수)만** — 내가 /exit 로 끝낸 세션(exitedByUser)은 되살아나는 게 의도와
-//  어긋나므로 버튼으로 둔다. 노드 세션(#869)은 중앙 desired-state 가 없어 복원 대상이 아니다.
+//  어긋나므로 버튼으로 둔다. 노드 세션도 같다 — #1791 뒤 노드 세션에도 중앙 desired-state(node_id)가 있어 서버가 그 노드에
+//  create 를 다시 릴레이한다(종전 '노드는 복원 대상 아님'은 desired-state 가 없던 시절의 규칙).
 // 4410 뒤 무엇을 할지 — 순수 판정(scripts/terminal-restore-gate.test.mjs 가 이 표를 지킨다).
 //  'end'=종료 배너(종전 동작) · 'notowner'=중단됐지만 남의 세션 · 'ask'=버튼으로 물어봄 · 'auto'=자동 복원.
 export function goneMode(meta, isNode, alreadyRestored, typed) {
-  if (isNode) return 'end';                       // 노드 세션(#869)은 중앙 desired-state 가 없어 복원 대상이 아니다
+  // #1791 — 노드 세션도 중앙 desired-state(node_id)를 가진다. 판정표는 박스와 같다 — 메타(GET …?node=)가 복원 가능이라 하면
+  //  같은 길로 간다(복원 자체는 서버가 그 노드에 create 를 릴레이). isNode 는 호환용 인자로 남긴다(판정에 안 쓴다).
+  void isNode;
   if (!meta || !meta.restorable) return 'end';    // 기록이 없거나 남의 세션(403) — 진짜 끝난 세션
   if (!meta.canRestore) return 'notowner';        // 프로젝트 세션이라 보이지만 복원은 소유자 몫
   // 내가 끝냈다는 신호가 있으면 되살리지 않고 **묻는다**. 신호는 두 갈래 — 훅 기록(exitedByUser) 또는 이 탭의 입력.
@@ -2323,7 +2472,8 @@ async function onSessionGone() {
   restoreTried = true;
   clearTimeout(reconnectTimer);
   let meta = null;
-  if (!NODE_ID) { try { meta = await api(sUrl('')); } catch (_) { /* 403(남의 세션)·기록 없음 → 일반 종료 배너 */ } }
+  // #1791 — 노드 세션도 묻는다(sUrl 이 &node= 를 붙인다): 스냅샷에 없으면 서버가 desired-state 로 '복원 가능'을 알린다.
+  try { meta = await api(sUrl('')); } catch (_) { /* 403(남의 세션)·기록 없음 → 일반 종료 배너 */ }
   const mode = goneMode(meta, !!NODE_ID, RESTORED, userTyped);
   if (mode === 'end') { endSession(); return; }
   if (mode === 'loop') {
@@ -2385,7 +2535,8 @@ async function restoreThisSession() {
   if (ns && ns.id) {
     // restored=1 — 이 표식이 있는 페이지는 다시 자동 복원하지 않는다(루프 차단, 위 goneMode).
     location.replace(apiUrl('/ui/terminal.html?session=') + encodeURIComponent(ns.id)
-      + '&label=' + encodeURIComponent(ns.label || SESSION_LABEL || '') + '&restored=1');
+      + '&label=' + encodeURIComponent(ns.label || SESSION_LABEL || '') + '&restored=1'
+      + (ns.node && ns.node.id ? '&node=' + encodeURIComponent(ns.node.id) : ''));   // #1791 — 노드에서 복원된 새 세션은 그 노드로 붙는다
     return;
   }
   sessionEnded = true;
