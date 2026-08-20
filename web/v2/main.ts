@@ -44,6 +44,10 @@ let suppressHash = 0;                    // 탭 전환이 만든 hashchange 를 
 //  탭 전환(숨김)에는 살려 둔다 — 탭의 존재 이유(상태 보존)와 같은 원칙.
 //  뷰가 둘(기본·캔버스)이라 핸들은 공통 계약 하나로만 본다 — 셸이 아는 것은 '언젠가 정리해야 한다'뿐이다.
 const projViews = new Map<ShellTab, { destroy(): void; newSession?(): void }>();
+// 그 탭의 셸이 **어느 프로젝트로** 마운트됐나(#1834 후속). 세션을 목록에서 못 찾은 판에는 loose(0)로 마운트되는데,
+//  종전엔 그 상태가 그대로 굳어 문패가 '프로젝트 없는 세션'이 되고 그 셸의 세션 목록도 남의 것이 됐다.
+//  20초 갱신이 이 값과 세션의 실제 프로젝트를 대조해 어긋나면 다시 그린다.
+const shellProject = new Map<ShellTab, number>();
 function dropProjView(tab: ShellTab): void { const pv = projViews.get(tab); if (pv) { pv.destroy(); projViews.delete(tab); } }
 
 // ── 프로젝트 = 세션이 놓인 방(원준 2026-08-20) ────────────────────────────────
@@ -83,6 +87,7 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
   if (seq !== tab.seq) return;
   if (detail && !data.projects.some((p) => p.id === projectId)) void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); });
   dropProjView(tab);
+  shellProject.set(tab, projectId);
   if (tab.chat) { tab.chat.destroy(); tab.chat = null; }
   projViews.set(tab, mountPanes(tab.center, {
     data: () => data,
@@ -175,7 +180,7 @@ export async function bootV2(): Promise<void> {
       else markActive(routeKey(tab.route));
       drawSide();
     },
-    onClose: (tab) => { if (tab.chat) { tab.chat.destroy(); tab.chat = null; } dropProjView(tab); drawSide(); },
+    onClose: (tab) => { if (tab.chat) { tab.chat.destroy(); tab.chat = null; } dropProjView(tab); shellProject.delete(tab); drawSide(); },
     // 탭 두 번 눌러 이름 바꾸기(원준 2026-08-20) — 세션 탭만. 판정은 세션 화면의 규칙과 같다:
     //  내 세션이고 살아 있고 복원 대기가 아닐 때(session-chat canRename).
     canRename: (tab) => {
@@ -242,6 +247,15 @@ export async function bootV2(): Promise<void> {
         if (!t.chat) continue;
         const sid = routeKey(t.route).startsWith('s:') ? routeKey(t.route).slice(2) : '';
         const s = sid ? findSess(sid) : null;
+        // ★ 셸이 **틀린 프로젝트로** 마운트돼 있으면 그 탭을 다시 그린다(#1834 재발 처방).
+        //  재시작 창에 세션을 못 찾으면 loose(0)로 마운트되는데, 그대로 두면 문패가 '프로젝트 없는 세션'이고
+        //  그 셸의 세션 목록도 남의 것(프로젝트 없는 세션들)이 된다 — 세션 화면이 남의 세션으로 바뀌던 사고의
+        //  뿌리가 여기였다. 목록에서 그 세션을 **찾았을 때만** 판단하므로 빈 판에 흔들리지 않는다.
+        if (s) {
+          const want = s.projectId ? Number(s.projectId) : 0;
+          const have = shellProject.get(t);
+          if (have !== undefined && have !== want) { void renderRoute(t); continue; }
+        }
         // ★ 탭이 보는 세션(라우트)과 **실제로 붙어 있는 화면**(chat.id)이 다르면 덧칠하지 않는다.
         //  어긋남 자체는 panes-parts.ts sessionsPart.paint 에서 막았지만, 어떤 경로로든 어긋나면 이 갱신이
         //  '상단바만 남의 세션'인 화면을 20초마다 다시 만든다(상민님 신고 2026-08-20).
