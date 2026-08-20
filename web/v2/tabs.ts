@@ -160,7 +160,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     strip.classList.remove('dnd');
   }
   function beginDrag(t: ShellTab, node: HTMLElement, e: PointerEvent): void {
-    if (drag || editing || t.fixed || e.button !== 0 || e.pointerType === 'touch') return;
+    if (drag || editLocked() || t.fixed || e.button !== 0 || e.pointerType === 'touch') return;
     const movable = tabs.filter((x) => !x.fixed);
     const els = movable.map((x) => (strip as HTMLElement).querySelector('[data-tab="' + x.id + '"]') as HTMLElement);
     if (els.some((n) => !n)) return;
@@ -229,14 +229,25 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
   // ── 탭 이름 두 번 눌러 고치기(원준 2026-08-20) — 세션 탭만.
   //  20초 폴링이 입력 중인 칸을 지우지 않게, 고치는 동안 paint 를 멈춘다(session-chat 의 renaming 과 같은 규칙).
   let editing: ShellTab | null = null;
+  let editEl: HTMLInputElement | null = null;
+  //  ⚠ 잠금은 **화면에 살아 있는 입력칸**에만 걸린다. 편집칸이 DOM 에서 떨어져 나가면(탭 줄이 통째로 옮겨가는
+  //   모바일 전환, 닫힌 탭, 바깥 재렌더) blur 도 Esc 도 오지 않아 잠금이 영영 안 풀린다 —
+  //   그러면 paint 가 멈춰 탭 줄이 굳고 끌기도 안 걸린다(실측: dev 에서 탭 줄이 굳어 드래그가 시작되지 않았다).
+  function editLocked(): boolean {
+    if (!editing) return false;
+    if (editEl && editEl.isConnected) return true;
+    editing = null; editEl = null;
+    return false;
+  }
   function startRename(t: ShellTab, node: HTMLElement): void {
-    if (editing || drag || !hooks.canRename || !hooks.canRename(t) || !hooks.onRename) return;
+    if (editLocked() || drag || !hooks.canRename || !hooks.canRename(t) || !hooks.onRename) return;
+    if (!node.isConnected) return;                       // 이미 갈아치워진 옛 노드에는 편집칸을 열지 않는다
     const label = node.querySelector('.t') as HTMLElement | null;
     if (!label) return;
     editing = t;
     const input = el('input', { class: 'v2-tab-in', type: 'text', maxlength: '80', value: t.title, 'aria-label': '세션 이름', spellcheck: 'false' }) as HTMLInputElement;
     let closed = false;
-    const done = (): void => { editing = null; paint(); };
+    const done = (): void => { editing = null; editEl = null; paint(); };
     const cancel = (): void => { if (closed) return; closed = true; done(); };
     const commit = async (): Promise<void> => {
       if (closed) return;
@@ -254,12 +265,13 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     input.onblur = () => { void commit(); };
     input.onpointerdown = (ev: Event) => ev.stopPropagation();   // 고치는 중엔 끌기가 시작되지 않게
     input.onclick = (ev: Event) => ev.stopPropagation();
+    editEl = input;
     label.replaceWith(input);
     input.focus(); input.select();
   }
 
   function paint(): void {
-    if (drag || editing) return;      // 끌거나 고치는 중에 다시 그리면 그 동작이 끊긴다(20초 폴링도 paint 를 부른다)
+    if (drag || editLocked()) return; // 끌거나 고치는 중에 다시 그리면 그 동작이 끊긴다(20초 폴링도 paint 를 부른다)
     const kids: HTMLElement[] = tabs.map((t) => {
       const info = hooks.titleFor(t.route);
       t.title = info.title; t.noAside = info.noAside;
