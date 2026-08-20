@@ -19,7 +19,7 @@ import { runPrefs } from './run-picker.js';
 import { sessText } from './side.js';
 import { type Sess, type V2Data } from './views.js';
 
-export type PartType = 'sessions' | 'files' | 'knowledge' | 'tasks' | 'timeline' | 'overview' | 'liv' | 'archive';
+export type PartType = 'sessions' | 'files' | 'knowledge' | 'tasks' | 'timeline' | 'overview' | 'liv' | 'archive' | 'web' | 'editor';
 
 export interface PartCtx {
   id: number;
@@ -59,6 +59,8 @@ export const PART_DEFS: PartDef[] = [
   { type: 'liv', name: '리브', icon: 'spark', hint: '이 프로젝트를 아는 리브와 대화합니다.' },
   // 이름을 '보관함'이 아니라 **보관한 세션**으로 둔다(원준 2026-08-20) — 무엇을 보관하는지가 이름에서 바로 읽혀야 한다.
   { type: 'archive', name: '보관한 세션', icon: 'box', hint: '닫아 둔 AI 세션입니다. 대화 그대로 다시 살릴 수 있어요.' },
+  { type: 'web', name: '웹', icon: 'globe', hint: '주소를 넣으면 이 칸에서 그 페이지를 봅니다. 문서·레퍼런스를 옆에 띄워 두세요.' },
+  { type: 'editor', name: '파일 편집', icon: 'pencil', hint: '자료의 파일을 이 칸에 띄워 놓고 고칩니다. 글 파일은 그 자리에서 저장돼요.' },
 ];
 
 export const partDef = (t: PartType): PartDef => PART_DEFS.find((d) => d.type === t) || PART_DEFS[0];
@@ -83,6 +85,10 @@ const ICON_PATHS: Record<string, string> = {
   drop: '<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 19h14"/>',
   box: '<path d="M3 7h18v4H3z"/><path d="M5 11v8h14v-8"/><path d="M10 15h4"/>',
   undo: '<path d="M4 9h11a5 5 0 0 1 0 10h-6"/><path d="M8 5L4 9l4 4"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/>',
+  pencil: '<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/><path d="M14 6l4 4"/>',
+  save: '<path d="M5 4h11l3 3v13H5z"/><path d="M9 4v5h6V4"/><path d="M8 20v-6h8v6"/>',
+  ext: '<path d="M14 4h6v6"/><path d="M20 4l-8 8"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
 };
 export function pnIcon(name: string, cls = 'pn-i'): SVGElement {
   const s = sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' });
@@ -690,9 +696,193 @@ function archivePart(ctx: PartCtx): Part {
   return { root, tick: paint };
 }
 
+// ══ 웹 — 이 칸을 작은 브라우저로(원준 2026-08-20) ═══════════════════════════════
+//  왜 프레임 하나가 아니라 부품인가: 자료·지식과 같은 칸에 얹혀 **세션 옆에서 같이 보기** 위해서다.
+//  ⚠ 정직하게 말해 둘 것 — 많은 사이트가 남의 창 안에 뜨는 것을 스스로 막는다(X-Frame-Options·CSP).
+//   그건 우리가 뚫을 수 있는 것이 아니고(뚫으려면 서버가 남의 페이지를 대신 받아 오는 프록시가 되어야 하는데,
+//   그건 로그인도 깨지고 보안상 열어서는 안 되는 문이다). 그래서 **빈 화면이면 새 탭으로**를 그 자리에 둔다.
+function webPart(ctx: PartCtx): Part {
+  const root = el('div', { class: 'pn-part pn-web' });
+  const KEY = 'pn_web_url';
+  const store = (): Record<string, string> => { try { return JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (_) { return {}; } };
+  const keyOf = (): string => String(ctx.id || 0);
+  const norm = (v: string): string => {
+    const t = v.trim();
+    if (!t) return '';
+    if (/^https?:\/\//i.test(t)) return t;
+    if (/^[\w.-]+\.[a-z]{2,}(\/|$|\?)/i.test(t)) return 'https://' + t;
+    return 'https://www.google.com/search?q=' + encodeURIComponent(t);   // 주소가 아니면 검색으로 — 막다른 입력칸을 만들지 않는다
+  };
+  const frame = el('iframe', { class: 'pn-webframe', referrerpolicy: 'no-referrer-when-downgrade' }) as HTMLIFrameElement;
+  const input = el('input', { class: 'pn-web-in', type: 'text', placeholder: '주소 또는 검색어 — 예: docs.google.com', 'aria-label': '주소' }) as HTMLInputElement;
+  const go = (raw?: string): void => {
+    const u = norm(raw ?? input.value);
+    if (!u) return;
+    input.value = u;
+    frame.src = u;
+    const m = store(); m[keyOf()] = u;
+    try { localStorage.setItem(KEY, JSON.stringify(m)); } catch (_) { /* noop */ }
+  };
+  input.onkeydown = (e: KeyboardEvent) => { if (!e.isComposing && e.key === 'Enter') { e.preventDefault(); go(); } };
+  const openTab = el('a', { class: 'pn-web-btn', target: '_blank', rel: 'noopener', title: '새 탭에서 엽니다', href: '#' }, pnIcon('ext', 'pn-i sm')) as HTMLAnchorElement;
+  openTab.onclick = (e: Event) => { const u = norm(input.value); if (!u) { e.preventDefault(); return; } openTab.href = u; };
+  root.append(
+    el('div', { class: 'pn-web-bar' },
+      el('button', { class: 'pn-web-btn', type: 'button', title: '다시 불러오기', onclick: () => go() }, pnIcon('undo', 'pn-i sm')),
+      input,
+      el('button', { class: 'pn-web-btn', type: 'button', text: '열기', onclick: () => go() }),
+      openTab),
+    frame,
+    el('p', { class: 'pn-web-note pn-fine', text: '빈 화면인가요? 그 사이트가 창 안에 뜨는 걸 막은 거예요 — 오른쪽 ↗ 로 새 탭에서 여세요.' }));
+  const saved = store()[keyOf()];
+  if (saved) { input.value = saved; frame.src = saved; }
+  return { root };
+}
+
+// ══ 파일 편집 — 자료를 띄워 놓고 그 자리에서 고친다(원준 2026-08-20) ═══════════════
+//  형식마다 할 수 있는 일이 다르다. 할 수 없는 것을 할 수 있는 척하지 않는다:
+//   · 글 파일(md·txt·csv·json·코드·html) → **고치고 저장**(PUT 으로 같은 경로에 덮어쓴다). html 은 옆에 미리보기.
+//   · PDF·그림·영상 → 보기 전용(브라우저가 그려 준다).
+//   · 파워포인트·워드·엑셀·한글 → 브라우저에 이걸 여는 방법이 없다. [내려받기]로 원래 앱에서 고치고
+//     [고친 파일 올리기]로 같은 자리에 되돌리는 **왕복**을 만들어 둔다 — 그게 지금 정직하게 가능한 '수정'이다.
+function editorPart(ctx: PartCtx): Part {
+  const root = el('div', { class: 'pn-part pn-ed' });
+  const KEY = 'pn_ed_path';
+  const bar = el('div', { class: 'pn-ed-bar' });
+  const body = el('div', { class: 'pn-ed-body' });
+  root.append(bar, body);
+  let list: AssetFile[] = [];
+  let path = '';
+  let dirty = false;
+  let area: HTMLTextAreaElement | null = null;
+  let pv: HTMLIFrameElement | null = null;
+  const urls: string[] = [];
+  const fileUrl = (p2: string): string => apiUrl('/api/ui/v6/projects/' + ctx.id + '/file?path=' + encodeURIComponent(p2));
+  const remember = (p2: string): void => {
+    try { const m = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; m[String(ctx.id || 0)] = p2; localStorage.setItem(KEY, JSON.stringify(m)); } catch (_) { /* noop */ }
+  };
+
+  async function loadList(): Promise<void> {
+    const m: any = await api('/api/ui/v6/projects/' + ctx.id + '/shared/manifest').catch(() => null);
+    list = (((m && m.files) || []) as any[])
+      .filter((f) => !String(f.path).startsWith(TRASH_DIR + '/') && !NOISE_RE.test('/' + f.path))
+      .map((f) => ({ path: String(f.path), size: Number(f.size || 0), mtime: Number(f.mtime || 0) }))
+      .sort((a, b) => b.mtime - a.mtime);
+  }
+
+  async function save(): Promise<void> {
+    if (!area || !path) return;
+    const btn = bar.querySelector('.pn-ed-save') as HTMLButtonElement | null;
+    if (btn) { btn.disabled = true; btn.textContent = '저장 중…'; }
+    try {
+      const r = await fetch(fileUrl(path), { method: 'PUT', headers: authHeaders(), body: new Blob([area.value]) });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      dirty = false;
+      toast('저장했어요 — ' + base(path));
+      ctx.onChanged?.();
+    } catch (e: any) {
+      toast('저장하지 못했어요 — ' + (e && e.message ? e.message : e), true);
+    } finally { paintBar(); }
+  }
+
+  function paintBar(): void {
+    const pick = el('select', { class: 'pn-ed-pick', 'aria-label': '고칠 파일' }) as HTMLSelectElement;
+    pick.append(el('option', { value: '', text: list.length ? '파일 고르기…' : '자료가 아직 없어요' }));
+    for (const f of list.slice(0, 200)) {
+      const o = el('option', { value: f.path, text: base(f.path) }) as HTMLOptionElement;
+      if (f.path === path) o.selected = true;
+      pick.append(o);
+    }
+    pick.onchange = () => { void open(pick.value); };
+    const kids: HTMLElement[] = [pick];
+    if (path) {
+      const k = kindOf(path);
+      if (k.kind === 'text' || k.kind === 'page') {
+        kids.push(el('button', { class: 'pn-web-btn pn-ed-save', type: 'button', text: dirty ? '저장 ●' : '저장', title: '⌘S / Ctrl+S 로도 저장됩니다', onclick: () => void save() }));
+      }
+      kids.push(el('a', { class: 'pn-web-btn', href: fileUrl(path), download: base(path), title: '내려받기' }, pnIcon('drop', 'pn-i sm')));
+      const up = el('input', { type: 'file', hidden: true }) as HTMLInputElement;
+      up.onchange = async () => {
+        const f = up.files && up.files[0];
+        up.value = '';
+        if (!f) return;
+        try {
+          const r = await fetch(fileUrl(path), { method: 'PUT', headers: authHeaders(), body: f });
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          toast('같은 자리에 올렸어요 — ' + base(path));
+          ctx.onChanged?.();
+          await open(path);
+        } catch (e: any) { toast('올리지 못했어요 — ' + (e && e.message ? e.message : e), true); }
+      };
+      kids.push(up, el('button', { class: 'pn-web-btn', type: 'button', text: '고친 파일 올리기', title: '원래 앱에서 고친 파일을 같은 자리에 덮어씁니다', onclick: () => up.click() }));
+    }
+    bar.replaceChildren(...kids);
+  }
+
+  async function open(p2: string): Promise<void> {
+    path = p2; dirty = false; area = null; pv = null;
+    remember(p2);
+    paintBar();
+    if (!p2) { body.replaceChildren(el('p', { class: 'pn-fine', style: 'padding:14px', text: '위에서 파일을 고르면 이 자리에 띄웁니다.' })); return; }
+    const k = kindOf(p2);
+    if (k.kind === 'text' || k.kind === 'page') {
+      const r = await fetch(fileUrl(p2), { headers: authHeaders() }).catch(() => null);
+      if (!r || !r.ok) { body.replaceChildren(el('p', { class: 'pn-fine', style: 'padding:14px', text: '파일을 읽지 못했어요.' })); return; }
+      const txt = await r.text();
+      const ta = el('textarea', { class: 'pn-ed-ta', spellcheck: 'false' }) as HTMLTextAreaElement;
+      ta.value = txt;
+      ta.oninput = () => { if (!dirty) { dirty = true; paintBar(); } if (pv) pv.srcdoc = ta.value.slice(0, 400_000); };
+      ta.onkeydown = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); void save(); } };
+      area = ta;
+      if (k.kind === 'page') {
+        // 고치면서 바로 본다 — 격리 프레임(srcdoc)이라 스크립트는 돌지 않는다(그림만 확인).
+        const f = el('iframe', { class: 'pn-ed-pv', sandbox: '', tabindex: '-1' }) as HTMLIFrameElement;
+        f.srcdoc = txt.slice(0, 400_000);
+        pv = f;
+        body.replaceChildren(el('div', { class: 'pn-ed-split' }, ta, f));
+      } else body.replaceChildren(ta);
+      return;
+    }
+    if (k.kind === 'img' || k.kind === 'pdf' || k.kind === 'video') {
+      const r = await fetch(fileUrl(p2), { headers: authHeaders() }).catch(() => null);
+      if (!r || !r.ok) { body.replaceChildren(el('p', { class: 'pn-fine', style: 'padding:14px', text: '파일을 읽지 못했어요.' })); return; }
+      const bl = await r.blob();
+      const u = URL.createObjectURL(k.kind === 'pdf' ? new Blob([bl], { type: 'application/pdf' }) : bl);
+      urls.push(u);
+      body.replaceChildren(k.kind === 'img'
+        ? el('img', { class: 'pn-ed-img', src: u, alt: base(p2) })
+        : k.kind === 'video'
+          ? el('video', { class: 'pn-ed-img', src: u, controls: 'true' })
+          : el('iframe', { class: 'pn-ed-pv full', src: u + '#toolbar=1&view=FitH' }));
+      return;
+    }
+    body.replaceChildren(el('div', { class: 'pn-empty' },
+      pnIcon('doc', 'pn-i big'),
+      el('b', { text: '이 형식은 브라우저에서 열 수 없어요.' }),
+      el('p', { class: 'pn-fine', text: '파워포인트·워드·엑셀·한글은 브라우저가 그릴 방법이 없습니다. 위 [내려받기]로 원래 앱에서 고친 뒤 [고친 파일 올리기]로 같은 자리에 되돌리면 돼요.' })));
+  }
+
+  if (!(ctx.id > 0)) {
+    body.replaceChildren(el('p', { class: 'pn-fine', style: 'padding:14px', text: '이 화면은 프로젝트 폴더가 없어 자료를 열 수 없어요.' }));
+    return { root };
+  }
+  void loadList().then(() => {
+    let last = '';
+    try { last = (JSON.parse(localStorage.getItem(KEY) || '{}') || {})[String(ctx.id)] || ''; } catch (_) { /* noop */ }
+    void open(last && list.some((f) => f.path === last) ? last : '');
+  });
+  return {
+    root,
+    tick: () => { if (!dirty) void loadList().then(() => paintBar()); },   // 고치는 중엔 목록도 건드리지 않는다
+    destroy: () => { urls.forEach((u) => URL.revokeObjectURL(u)); },
+  };
+}
+
 export function makePart(type: PartType, ctx: PartCtx): Part {
   if (type === 'sessions') return sessionsPart(ctx);
   if (type === 'archive') return archivePart(ctx);
+  if (type === 'web') return webPart(ctx);
+  if (type === 'editor') return editorPart(ctx);
   if (type === 'files') return filesPart(ctx);
   if (type === 'knowledge') return knowledgePart(ctx);
   if (type === 'tasks') return tasksPart(ctx);

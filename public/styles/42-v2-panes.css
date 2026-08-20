@@ -249,3 +249,21 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9.5px; line-height: 1.5; color: var(--ink-sub); }
 .pn-fic video { width: 100%; height: 100%; object-fit: cover; background: #000; }
 .pn-fic.text, .pn-fic.pdf, .pn-fic.page, .pn-fic.video { position: relative; }
+
+/* ── 웹 · 파일 편집(원준 2026-08-20) ─────────────────────────────────────────── */
+.pn-web, .pn-ed { display: flex; flex-direction: column; min-height: 0; }
+.pn-web-bar, .pn-ed-bar { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.pn-web-in { flex: 1; min-width: 0; height: 28px; padding: 0 9px; border: 1px solid var(--line-net); border-radius: 8px; font: inherit; font-size: 12.5px; background: var(--bg, #fff); color: var(--ink); }
+.pn-web-in:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
+.pn-web-btn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 28px; padding: 0 9px; border: 1px solid var(--line-net); border-radius: 8px; background: var(--bg, #fff); font: inherit; font-size: 12px; color: var(--ink-sub); cursor: pointer; text-decoration: none; flex: none; }
+.pn-web-btn:hover { color: var(--blue); border-color: var(--blue); }
+.pn-webframe { flex: 1; min-height: 0; width: 100%; border: 0; background: #fff; }
+.pn-web-note { flex: none; padding: 6px 10px 8px; border-top: 1px solid var(--line); }
+.pn-ed-pick { max-width: 46%; height: 28px; border: 1px solid var(--line-net); border-radius: 8px; font: inherit; font-size: 12.5px; background: var(--bg, #fff); color: var(--ink); }
+.pn-ed-body { flex: 1; min-height: 0; display: flex; }
+.pn-ed-split { flex: 1; min-height: 0; display: grid; grid-template-rows: 1fr 1fr; }
+.pn-ed-ta { flex: 1; min-height: 0; width: 100%; border: 0; padding: 10px 12px; resize: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6; color: var(--ink); background: var(--bg, #fff); }
+.pn-ed-ta:focus { outline: none; }
+.pn-ed-split .pn-ed-ta { border-bottom: 1px solid var(--line); }
+.pn-ed-pv { width: 100%; height: 100%; border: 0; background: #fff; }
+.pn-ed-img { width: 100%; height: 100%; object-fit: contain; background: #F7F9FC; }
