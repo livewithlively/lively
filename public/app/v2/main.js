@@ -11,7 +11,7 @@ import { $view, anchoredPopover, api, el, toast } from '../core.js';
 import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame } from './apps.js';
 import { bySeen, drawSide as drawSideTree, projectOrder, sessText } from './side.js';
-import { dotCls, mergeSessions, projName, renderHome, renderSession } from './views.js';
+import { dotCls, mergeSessions, projName, renderHome, renderInbox, renderSession } from './views.js';
 import { mountPanes } from './panes.js'; // 프로젝트 = 세션 화면(#1719 원준 2026-08-20) — 칸으로 나뉜 도킹 화면 하나뿐이다.
 import { createTimeline } from '../timeline.js';
 import { loadSessionActivities } from '../timeline-sources.js';
@@ -204,6 +204,9 @@ export async function bootV2() {
         void loadData().then(() => {
             drawSide();
             tabsApi.paint();
+            const at = tabsApi.active();
+            if (parseRoute(at.route).segs[0] === 'inbox')
+                renderInbox(at.center, data); // 확인할 것 — 20초 결로 따라온다
             for (const t of tabsApi.tabs) {
                 if (!t.chat)
                     continue;
@@ -261,6 +264,8 @@ function titleFor(route) {
     //  돌아보기는 불러오는 것 — 프로젝트 화면은 문패 [타임라인](알림 센터)이 그 자리를 맡는다.
     if (!p || p === 'dashboard')
         return { title: '홈', noAside: true };
+    if (p === 'inbox')
+        return { title: '확인할 것', noAside: true };
     if (p === 'liv')
         return { title: '리브', noAside: true };
     // 실험장 v4(2026-08-19 바탕화면): 프로젝트 화면은 우패널 없이 — 판이 폭 전체를 쓴다. 타임라인은 문패 [타임라인](알림 센터),
@@ -362,10 +367,15 @@ async function renderRoute(tab) {
     const seq = ++tab.seq;
     const { segs, raw } = parseRoute(tab.route);
     const page = segs[0] || '';
-    markActive(page === 'p' ? 'p:' + segs[1] : page === 's' ? 's:' + decodeURIComponent(segs[1] || '') : page === 'liv' ? 'liv' : page === '' || page === 'dashboard' ? 'home' : '');
+    markActive(page === 'p' ? 'p:' + segs[1] : page === 's' ? 's:' + decodeURIComponent(segs[1] || '') : page === 'liv' ? 'liv' : page === 'inbox' ? 'inbox' : page === '' || page === 'dashboard' ? 'home' : '');
     try {
         if (page === '' || page === 'dashboard') {
             renderHome(tab.center, data);
+            tab.aside.replaceChildren();
+        }
+        else if (page === 'inbox') {
+            markActive('inbox');
+            renderInbox(tab.center, data);
             tab.aside.replaceChildren();
         }
         else if (page === 'liv') {
@@ -472,7 +482,7 @@ function activeKey() {
     // 부작용 없는 조회 — 부팅 중(활성 탭 확정 전)의 drawSide 가 탭을 만들어 버리면 딥링크가 죽는다(실측).
     const t = tabsApi ? tabsApi.current() : null;
     const cur = parseRoute(t ? t.route : location.hash);
-    return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
+    return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : cur.segs[0] === 'inbox' ? 'inbox' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
 }
 // ── 좌측 사이드바는 **늘 있다**(원준 2026-08-20) ──────────────────────────────────
 //  이력: 3차(2026-08-19)에 좌측 열을 걷고 떠다니는 알약으로 여닫게 했는데, 그 알약이 ⓐ 자리를 가리고

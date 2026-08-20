@@ -146,6 +146,37 @@ function nowList(data: V2Data): HTMLElement {
       ...past.map(rowOf)) : null);
 }
 
+// ── 확인할 것(#1719 사이드바 개편 안2) — 시키다→기다리다→**확인**의 병목을 한 화면에 모은다 ───────
+//  · 답을 기다려요: 승인·선택을 기다리는 세션(waiting) — 보이는 것 전부(프로젝트 세션은 팀 누구든 답할 수 있다).
+//  · 끝났어요: 시킨 작업이 끝났는데 아직 안 본 세션(stateKey 'done') — 내 것만(남의 완료를 내가 '확인'할 일은 없다).
+//  행은 홈의 nowList 와 같은 문법(v2-now-row) — 새 시각 언어를 만들지 않는다. 들어가 보면(lastAttached 갱신) 목록에서 빠진다.
+export function renderInbox(host: HTMLElement, data: V2Data): void {
+  const waits = data.sessions.filter((s) => isLiveSess(s) && s.stateKey === 'waiting').sort((a, b) => b.lastSeen - a.lastSeen);
+  const dones = data.sessions.filter((s) => isLiveSess(s) && s.stateKey === 'done' && s.owned).sort((a, b) => b.lastSeen - a.lastSeen);
+  const rowOf = (s: Sess): HTMLElement => {
+    const pn = projName(data, s.projectId);
+    const title = sessDisplayName(s, pn);
+    return el('a', { class: 'v2-now-row' + (s.stateKey === 'waiting' ? ' wait' : ''), href: '#/s/' + encodeURIComponent(s.id) },
+      dot(s.stateKey),
+      el('span', { class: 'tw' }, el('span', { class: 't', text: title }), s.projectId && title !== pn ? el('span', { class: 'p', text: pn }) : null),
+      el('span', { class: 'st', text: when(s.lastSeen) }),
+      el('span', { class: 'go btn btn-sm', text: s.stateKey === 'waiting' ? '답하기' : '보기' }));
+  };
+  host.replaceChildren(el('div', { class: 'v2-center v2-inbox' },
+    el('h1', { class: 'v2-title', text: '확인할 것' }),
+    el('p', { class: 'v2-desc', text: '내 답이나 확인을 기다리는 세션이에요. 들어가 보면 목록에서 빠집니다.' }),
+    (!waits.length && !dones.length)
+      ? el('div', { class: 'v2-inbox-empty' }, el('p', { class: 'h', text: '지금 확인할 것이 없어요.' }),
+          el('p', { class: 'sub', text: '세션이 답을 기다리거나 작업을 끝내면 여기에 모입니다.' }))
+      : el('div', { class: 'v2-now' },
+          waits.length ? el('section', { class: 'v2-now-wait' },
+            el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k wait', text: `답을 기다려요 · ${waits.length}` })),
+            ...waits.map(rowOf)) : null,
+          dones.length ? el('section', {},
+            el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: `끝났어요 — 확인만 하면 돼요 · ${dones.length}` })),
+            ...dones.map(rowOf)) : null)));
+}
+
 export function projName(data: V2Data, id: number | null): string {
   if (!id) return '프로젝트 없음';
   const p = data.projects.find((x) => Number(x.id) === Number(id));
