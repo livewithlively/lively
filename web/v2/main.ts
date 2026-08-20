@@ -99,7 +99,10 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
       tab.route = href;
       // 셸은 그대로 두고 주소·탭 제목만 바꾼다 — hashchange 를 한 번 삼켜 라우터가 다시 그리지 않게.
       //  ⚠ 값이 같으면 hashchange 가 아예 안 나므로 그때는 세지 않는다(안 그러면 다음 진짜 이동을 삼킨다).
-      if (location.hash !== href) { suppressHash++; location.hash = href; }
+      //  ⚠ 주소는 **활성 탭의 것**이다 — 숨어 있는 탭이 스스로 세션을 갈아탈 때도(목록에서 사라진 세션의
+      //   유예 뒤 폴백, panes-parts sessionsPart.paint) 이 훅이 불린다. 그때 location 을 만지면 지금 보고 있는
+      //   **다른 탭의 주소**를 덮어쓴다. 그 탭이 활성일 때만 맞추고, 아니면 탭 제목만 바꾼다(activate 가 나중에 맞춘다).
+      if (tabsApi?.current() === tab && location.hash !== href) { suppressHash++; location.hash = href; }
       tabsApi?.routed(tab);
       drawSide();
     },
@@ -236,7 +239,10 @@ export async function bootV2(): Promise<void> {
         if (!t.chat) continue;
         const sid = routeKey(t.route).startsWith('s:') ? routeKey(t.route).slice(2) : '';
         const s = sid ? findSess(sid) : null;
-        if (s) { t.chat.update({ ...s, projectName: projName(data, s.projectId) });
+        // ★ 탭이 보는 세션(라우트)과 **실제로 붙어 있는 화면**(chat.id)이 다르면 덧칠하지 않는다.
+        //  어긋남 자체는 panes-parts.ts sessionsPart.paint 에서 막았지만, 어떤 경로로든 어긋나면 이 갱신이
+        //  '상단바만 남의 세션'인 화면을 20초마다 다시 만든다(상민님 신고 2026-08-20).
+        if (s && t.chat.id === s.id) { t.chat.update({ ...s, projectName: projName(data, s.projectId) });
           // 우측 '이 세션'도 — 프로젝트 드롭다운(#1749)은 body 팝오버라 우측을 되그려도 안 닫힌다.
           drawAsideSession(t, s); }
       }
@@ -245,13 +251,17 @@ export async function bootV2(): Promise<void> {
 }
 
 // ── 데이터 ──
+// 마지막으로 **성공한** 세션 응답(라이브·기록) — 실패한 판이 화면을 비우지 않게 이 값을 다시 쓴다(loadData 주석).
+let lastLive: any[] = [];
+let lastLogs: any[] = [];
 async function loadData(opts?: { projects?: boolean }): Promise<void> {
   const wantProj = opts && opts.projects != null ? opts.projects : (Date.now() - projLoadedAt > PROJ_TTL_MS);
   const [pj, live, logs] = await Promise.all([
     // 워크스페이스 **전체** 프로젝트(mine=1 아님) — 가시성은 서버가 시행한다(#1291).
     wantProj ? api('/api/ui/v6/projects').then((d) => (d && d.projects) || null).catch(() => null) : Promise.resolve(null),
-    api('/api/ui/terminal/sessions?includeProjects=1').then((d) => (d && d.sessions) || []).catch(() => []),
-    api('/api/ui/v6/sessions').then((d) => (d && d.sessions) || []).catch(() => []),
+    // ⚠ 실패를 '0건'으로 접지 않는다(null 로 구분) — 아래 '직전 목록 유지' 주석.
+    api('/api/ui/terminal/sessions?includeProjects=1').then((d) => (d && d.sessions) || []).catch(() => null),
+    api('/api/ui/v6/sessions').then((d) => (d && d.sessions) || []).catch(() => null),
   ]);
   let projects = data.projects;
   if (Array.isArray(pj)) {
@@ -262,7 +272,13 @@ async function loadData(opts?: { projects?: boolean }): Promise<void> {
       created_by: p.created_by != null ? String(p.created_by) : null, member_ids: Array.isArray(p.members) ? p.members.map((m: any) => String(m && m.member_id != null ? m.member_id : m)) : [] }));
     projLoadedAt = Date.now();
   }
-  const sessions = mergeSessions(live as any[], logs as any[]);
+  // 실패한 축은 **직전 응답을 그대로 쓴다**(상민님 신고 2026-08-20). 게이트웨이를 재배포하면 이 두 요청이
+  //  몇 초간 실패하는데, 그때 빈 목록으로 덮으면 살아 있는 세션이 화면에서 통째로 사라졌다가 돌아온다 —
+  //  그 한 판에 세션 화면이 다른 세션으로 갈아타는 사고가 났다(v2/panes-parts.ts sessionsPart.paint 주석).
+  //  빈 배열(요청 성공)은 그대로 반영한다 — 실패와 '진짜 0건'은 다르다.
+  if (Array.isArray(live)) lastLive = live as any[];
+  if (Array.isArray(logs)) lastLogs = logs as any[];
+  const sessions = mergeSessions(lastLive, lastLogs);
   applyRenamePins(sessions);   // 방금 고친 이름을 **떠 있던 응답이 되덮지 않게**(아래 renamePins)
   data = { projects, sessions, loadedAt: Date.now() };
   if (!wantProj) {
@@ -677,12 +693,13 @@ function applyRenamePins(sessions: Sess[]): void {
 /** 사이드바 인라인 편집(#1719 원준) — 탭이 어디에 있든 이름을 전체에 반영한다.
  *  그 세션을 연 탭이 있으면 그 탭의 대화창·우패널·탭 제목까지, 없으면 목록만. 서버 반영은 renameSession 과 같은 경로. */
 async function renameSessionEverywhere(sessionId: string, label: string): Promise<void> {
-  const tab = tabsApi?.tabs.find((t) => routeKey(t.route) === 's:' + sessionId) || tabsApi?.active();
-  if (!tab) return;
+  // ⚠ 그 세션을 연 탭이 없으면 **활성 탭으로 폴백하지 않는다** — 폴백하면 지금 보고 있는 다른 세션의 상단바·
+  //  우패널이 남의 세션 것으로 갈아 끼워진다(겉과 속이 어긋난 화면의 또 다른 입구). 목록만 고치면 된다.
+  const tab = tabsApi?.tabs.find((t) => routeKey(t.route) === 's:' + sessionId) || null;
   await renameSession(sessionId, label, tab);
 }
 
-async function renameSession(sessionId: string, label: string, tab: ShellTab): Promise<void> {
+async function renameSession(sessionId: string, label: string, tab: ShellTab | null): Promise<void> {
   const s = findSess(sessionId);            // 기록(uuid) 링크로 열린 세션도 같은 박스를 가리키게
   const body: Record<string, unknown> = { label };
   if (s && s.node) body.node = s.node;         // 노드 세션은 게이트웨이가 그 노드로 중계한다(라우트가 body.node 를 본다)
@@ -691,9 +708,9 @@ async function renameSession(sessionId: string, label: string, tab: ShellTab): P
   if (s) { s.label = label; if (s.raw) s.raw.label = label; }
   drawSide();
   const cur = findSess(sessionId);
-  if (tab.chat && cur) tab.chat.update({ ...cur, projectName: projName(data, cur.projectId) });
-  drawAsideSession(tab, cur || null);
-  tabsApi?.routed(tab); tabsApi?.paint();       // 탭 줄의 제목도 새 이름으로
+  if (tab && tab.chat && cur && tab.chat.id === cur.id) tab.chat.update({ ...cur, projectName: projName(data, cur.projectId) });
+  if (tab) { drawAsideSession(tab, cur || null); tabsApi?.routed(tab); }   // 탭 줄의 제목도 새 이름으로
+  tabsApi?.paint();
   void loadData().then(() => { drawSide(); tabsApi?.paint(); });
 }
 
@@ -719,7 +736,7 @@ function openProjectPicker(anchor: HTMLElement, sessionId: string, tab: ShellTab
       if (closePop) closePop();
       await loadData(); drawSide(); tabsApi?.paint();
       const cur = data.sessions.find((x) => x.id === sessionId) || null;
-      if (tab.chat && cur) tab.chat.update({ ...cur, projectName: projName(data, cur.projectId) });
+      if (tab.chat && cur && tab.chat.id === cur.id) tab.chat.update({ ...cur, projectName: projName(data, cur.projectId) });
       drawAsideSession(tab, cur);
     } catch (e: any) {
       busyPick = false;
