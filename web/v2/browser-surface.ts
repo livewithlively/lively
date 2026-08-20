@@ -9,15 +9,27 @@
 //  브라우저는 자기 안에 또 브라우저를 주지 않는다. 그건 우리가 못 고치는 것이므로 **없는 척하지 않고 접는다**:
 //  능력이 있으면 안에서 열고, 없으면 "새 탭에서 열기" 로 정직하게 내보낸다.
 //  능력 감지는 기능 유무(`livelyDesktop.browserSurface`)로 한다 — 플랫폼·UA 로 추측하지 않는다(구 앱·새 웹 조합에서 어긋난다).
-import { el } from '../core.js';
+import { anchoredPopover, el, toast } from '../core.js';
 
 interface SurfaceCap { version: number }
-interface DesktopBridge { browserSurface?: SurfaceCap | null }
+export interface ExtItem { id: string; name: string; version: string }
+interface ExtBridge {
+  list(): Promise<{ ok: boolean; items?: ExtItem[]; error?: string }>;
+  install(): Promise<{ ok: boolean; canceled?: boolean; name?: string; error?: string }>;
+  remove(id: string): Promise<{ ok: boolean; error?: string }>;
+}
+interface DesktopBridge { browserSurface?: SurfaceCap | null; browserExtensions?: ExtBridge | null }
 
 /** 이 화면이 남의 사이트를 **안에서** 띄울 수 있나 — 데스크톱 앱 안일 때만 참. */
 export function hasBrowserSurface(): boolean {
   const d = (window as any).livelyDesktop as DesktopBridge | undefined;
   return !!(d && d.browserSurface && typeof d.browserSurface.version === 'number');
+}
+
+/** 확장(애드온) 다리 — 데스크톱 안에서만 있다. 없으면 화면이 확장 UI 를 아예 안 그린다. */
+function extBridge(): ExtBridge | null {
+  const d = (window as any).livelyDesktop as DesktopBridge | undefined;
+  return (d && d.browserExtensions) || null;
 }
 
 /** 사람이 주소창에 친 것을 URL 로 — 스킴이 없으면 https, 스킴이 있어도 http(s)가 아니면 검색으로 넘긴다. */
@@ -86,10 +98,14 @@ export function browserSurface(opts: SurfaceOpts): HTMLElement {
   const fwd = btn('›', '앞으로', () => { if (view && view.canGoForward && view.canGoForward()) view.goForward(); }) as HTMLButtonElement;
   const reload = btn('↻', '새로고침', () => { if (view) view.reload(); else nav(addr.value); });
 
+  const ext = extBridge();
   const head = el('div', { class: 'v2-bs-bar' },
     el('span', { class: 'v2-bs-navs' }, back, fwd, reload),
     addr,
-    el('span', { class: 'v2-bs-acts' }, outLink));
+    el('span', { class: 'v2-bs-acts' },
+      ext ? el('button', { class: 'btn-text', type: 'button', text: '확장', title: '이 브라우저에 설치된 확장',
+        onclick: (e: Event) => openExtensions(e.currentTarget as HTMLElement, ext) }) : null,
+      outLink));
 
   // ── 폴백(브라우저에서 연 웹 UI) — 왜 안 되는지와 무엇을 하면 되는지를 같이 말한다. ──
   //  "지원하지 않습니다" 만 적으면 사람은 우리 버그로 읽는다. 막는 주체가 사이트라는 사실이 안내의 핵심이다.
@@ -127,4 +143,52 @@ export function browserSurface(opts: SurfaceOpts): HTMLElement {
   }
 
   return el('div', { class: 'v2-app v2-bs' }, head, body);
+}
+
+// ── 확장(애드온) 팝오버 (#1829) ──
+//  ⚠ 여기서 파일 경로를 만들지 않는다 — `install()` 은 인자가 없고, 메인이 네이티브 선택창을 띄운다.
+//   페이지가 경로를 정할 수 있으면 이 화면의 XSS 한 방이 임의 파일을 확장으로 심는 통로가 된다.
+async function openExtensions(anchor: HTMLElement, ext: ExtBridge): Promise<void> {
+  const body = el('div', { class: 'v2-bs-ext' });
+  const closePop = anchoredPopover(anchor, body);   // 반환값 = 닫기 함수
+
+  const draw = async (): Promise<void> => {
+    body.replaceChildren(el('p', { class: 'v2-bs-ext-h', text: '확장' }));
+    let items: ExtItem[] = [];
+    try {
+      const r = await ext.list();
+      if (!r.ok) throw new Error(r.error || '목록을 읽지 못했습니다');
+      items = r.items || [];
+    } catch (e: any) {
+      body.append(el('p', { class: 'v2-bs-ext-p', text: (e && e.message) || String(e) }));
+    }
+    if (!items.length) {
+      body.append(el('p', { class: 'v2-bs-ext-p', text: '설치된 확장이 없습니다. .crx 나 .zip 파일을 고르면 이 브라우저에만 설치됩니다.' }));
+    }
+    for (const it of items) {
+      body.append(el('div', { class: 'v2-bs-ext-row' },
+        el('span', { class: 'v2-bs-ext-nm', text: it.name + (it.version ? ' ' + it.version : '') }),
+        el('button', {
+          class: 'btn-text', type: 'button', text: '제거',
+          onclick: async () => {
+            const r = await ext.remove(it.id);
+            if (!r.ok) { toast(r.error || '제거하지 못했습니다'); return; }
+            toast(it.name + ' 을(를) 제거했습니다. 다시 켜려면 브라우저를 새로 여세요.');
+            void draw();
+          },
+        })));
+    }
+    body.append(el('button', {
+      class: 'btn btn-sm', type: 'button', text: '확장 파일 고르기…',
+      onclick: async () => {
+        const r = await ext.install();
+        if (r.canceled) return;
+        if (!r.ok) { toast(r.error || '설치하지 못했습니다'); return; }
+        toast((r.name || '확장') + ' 을(를) 설치했습니다.');
+        void draw();
+      },
+    }));
+  };
+  void draw();
+  void closePop;   // 닫기는 바깥 클릭이 한다 — 핸들은 잡아만 둔다(팝오버 계약)
 }
