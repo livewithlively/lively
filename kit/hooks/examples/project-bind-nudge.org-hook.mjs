@@ -118,7 +118,8 @@ function projectIdFromToolInput(toolName, ti) {
     `  1) 지금 프로젝트(#${from})의 본문(첫 지시 원문)을 대상에 옮겨 붙입니다 — \`project_update_v6(id: <대상>, append_description: …)\`\n` +
     `  2) 이미 #${from} 에 붙은 산출/필요지식이 있으면 대상에도 \`project_link_knowledge_v6\` 로 잇습니다\n` +
     "  3) `session_set_project {project_id: <대상>}` 로 세션을 옮깁니다 — 지나간 작업 귀속은 시간구간으로 남아 사라지지 않습니다\n" +
-    `  4) 빈 껍데기 #${from} 는 그대로 두면 됩니다(비어 있는 자동 생성 프로젝트는 나중에 자동 정리됩니다)\n`;
+    `  4) 빈 껍데기 #${from} 에는 어디로 갔는지 한 줄 남깁니다 — \`project_update_v6 {id: ${from}, append_description: "→ #<대상> 으로 이관됨(이 프로젝트는 비어 있습니다)."}\`\n` +
+    "     (자동 삭제 장치는 없습니다 — 사람이 보드에서 보고 지웁니다. 그래서 '어디로 갔는지'가 본문에 남아 있어야 합니다.)\n";
 
   // ── (c) 미연결 — project-auto-bind 가 꺼졌거나 실패한 폴백. 종전대로 '새로 만들어 붙여라'. ──
   if (pid === null) {
