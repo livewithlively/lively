@@ -14,6 +14,7 @@ import { upDropZone, upSend, upToast } from '../projects/files-upload.js';
 import { mountProjectChat } from '../project-chat.js';
 import { createTimeline } from '../timeline.js';
 import { loadProjectTimeline } from '../timeline-sources.js';
+import { makeSplitter } from './split.js';
 import { runPrefs } from './run-picker.js';
 import { sessText } from './side.js';
 import { dotCls } from './views.js';
@@ -125,65 +126,124 @@ async function fetchTurns(s, maxBytes) {
 /** 상태 우선순위 — 답을 기다리는 것이 맨 위(내가 풀어야 도는 일), 그다음 도는 것, 조용한 것, 끝난 것. */
 const rank = (s) => (s.stateKey === 'waiting' ? 0 : s.stateKey === 'busy' ? 1 : s.live && s.alive ? 2 : 3);
 const norm = (v) => String(v || '').toLowerCase().replace(/\s+/g, ' ').trim();
+// ── 세션 부품 ────────────────────────────────────────────────────────────────
+//  구도(원준 2026-08-20 "한 열에 여러 개가 동시에 보여서 정신이 하나도 없음"):
+//    위 = **고른 세션 하나**의 대화판 — 한 번에 하나만 크게 본다.
+//    아래 = **세션 서랍** — 곁칸의 자료 서랍과 *같은 문법의 타일*(아이콘 + 이름 + 시각)로 눕혀 둔다.
+//           타일을 누르면 그 세션이 위로 올라오고, [＋]는 새 세션을 연다.
+//  경계는 끌어 조정한다(--pn-drw-h) — 서랍을 키우면 타일이 여러 줄이 된다.
 function sessionsPart(ctx) {
     const root = el('div', { class: 'pn-part pn-sessions' });
-    const open = new Map(); // 카드 펼침(사람이 누른 것) — 기본은 아래 규칙
-    //  이름이 프로젝트명과 같은 세션(자동 이름)은 카드 일곱 개가 전부 같은 글자가 된다 — 그럴 땐 **마지막으로 시킨 말**을
+    //  이름이 프로젝트명과 같은 세션(자동 이름)은 타일이 전부 같은 글자가 된다 — 그럴 땐 **마지막으로 시킨 말**을
     //  이름 자리에 쓴다. 그게 '이 세션이 무엇이었나'의 답이다. 한 번 찾으면 캐시해 두고 다시 묻지 않는다.
     const askedName = new Set();
     const nameCache = new Map();
-    const cards = new Map();
-    let listSig = '';
+    const SEL_KEY = 'lively_panes_sess_' + ctx.id; // 마지막으로 보던 세션(프로젝트별 — 배치가 아니라 '어디 있었나')
+    let sel = (() => { try {
+        return localStorage.getItem(SEL_KEY);
+    }
+    catch (_) {
+        return null;
+    } })();
+    let composing = false; // [＋] 새 세션 모드 — 위 판이 첫 지시를 받는 자리가 된다
     let sending = false;
-    const ta = el('textarea', { class: 'pn-new-in', rows: '1', placeholder: '무엇이든 시켜 보세요 — 새 세션이 열립니다.', 'aria-label': '새 세션에 시킬 일' });
-    const sendBtn = el('button', { class: 'pn-new-send', type: 'button', title: '새 세션을 열고 시킵니다', 'aria-label': '보내기', onclick: () => void spawn() }, pnIcon('send', 'pn-i'));
-    ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(160, ta.scrollHeight) + 'px'; });
+    let headSig = '';
+    let convSig = '';
+    let drawerSig = '';
+    // ── 위: 대화판 ──
+    const stageHead = el('div', { class: 'pn-stage-h' });
+    const conv = el('div', { class: 'pn-conv' });
+    const keys = el('div', { class: 'pn-keys', hidden: true });
+    const ta = el('textarea', { class: 'pn-new-in', rows: '1', placeholder: '무엇이든 시켜 보세요 — 새 세션이 열립니다.', 'aria-label': '시킬 일' });
+    const sendBtn = el('button', { class: 'pn-new-send', type: 'button', title: '보냅니다', 'aria-label': '보내기', onclick: () => void send() }, pnIcon('send', 'pn-i'));
+    const composer = el('div', { class: 'pn-new' }, ta, sendBtn);
+    const stage = el('div', { class: 'pn-stage' }, stageHead, conv, keys, el('div', { class: 'pn-sfoot' }, composer));
+    ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(180, ta.scrollHeight) + 'px'; });
     ta.addEventListener('keydown', (e) => {
         if (e.key !== 'Enter' || e.shiftKey || e.isComposing)
             return;
         e.preventDefault();
-        void spawn();
+        void send();
     });
-    const composer = el('div', { class: 'pn-new' }, ta, sendBtn);
-    const list = el('div', { class: 'pn-slist' });
-    root.append(composer, list);
-    async function spawn() {
+    // ── 아래: 서랍 ──
+    const drawerHead = el('div', { class: 'pn-drw-h' });
+    const tiles = el('div', { class: 'pn-drw-grid', role: 'listbox', 'aria-label': '이 프로젝트의 세션' });
+    const drawer = el('section', { class: 'pn-drw' }, drawerHead, tiles);
+    const split = makeSplitter({ axis: 'y', key: 'panes_sessdrawer', cssVar: '--pn-drw-h', target: root, def: 176, min: 104, max: 460, grow: -1, label: '세션 서랍 높이' });
+    root.append(stage, split, drawer);
+    const mine = () => ctx.data().sessions
+        .filter((s) => Number(s.projectId) === ctx.id)
+        .sort((a, b) => rank(a) - rank(b) || (b.lastSeen || 0) - (a.lastSeen || 0));
+    /** 이 세션을 뭐라고 부를까 — 자동 이름(프로젝트명 되풀이)이면 마지막 지시, 그것도 없으면 세션 꼬리. */
+    function titleOf(s) {
+        const pname = String((ctx.detail()?.project || {}).name || '');
+        const t = sessText(s, pname);
+        const dup = !!pname && norm(t.main) === norm(pname);
+        const tailId = String(s.id).split('-').pop() || String(s.id);
+        return nameCache.get(s.id) || (dup ? '' : t.main) || ('세션 ' + tailId.slice(0, 8));
+    }
+    function select(id) {
+        sel = id;
+        composing = id == null;
+        try {
+            if (id)
+                localStorage.setItem(SEL_KEY, id);
+        }
+        catch (_) { /* noop */ }
+        headSig = '';
+        convSig = '';
+        drawerSig = '';
+        paint();
+        ta.focus();
+    }
+    // ── 보내기 — 고른 세션이 있으면 그 세션에, 없으면(새 세션 모드) 새로 연다 ──
+    async function send() {
         const text = ta.value.trim();
         if (!text || sending)
             return;
+        const target = composing ? null : sel;
         sending = true;
         sendBtn.disabled = true;
         ta.disabled = true;
         try {
-            const p = runPrefs();
-            const out = await api('/api/ui/terminal/sessions', {
-                method: 'POST',
-                body: JSON.stringify({
-                    label: text.replace(/\s+/g, ' ').slice(0, 28),
-                    harness: p.harness && p.harness !== 'shell' ? p.harness : 'claude',
-                    flags: p.flags && typeof p.flags === 'object' ? p.flags : {},
-                    autoApprove: !!p.autoApprove, sessionDir: true, initialPrompt: text,
-                }),
-            });
-            const sid = out?.session?.id ? String(out.session.id) : '';
-            if (!sid)
-                throw new Error('세션 id 를 받지 못했습니다');
-            if (ctx.id > 0) {
-                try {
-                    await api('/api/ui/terminal/sessions/' + encodeURIComponent(sid) + '/project', { method: 'POST', body: JSON.stringify({ projectId: ctx.id }) });
+            if (target) {
+                await api('/api/ui/terminal/sessions/' + encodeURIComponent(target) + '/prompt', { method: 'POST', body: JSON.stringify({ text }) });
+                conv.append(el('div', { class: 'pn-msg me pend' }, el('span', { class: 'who', text: '나' }), el('div', { class: 'tx', text })));
+                conv.scrollTop = conv.scrollHeight;
+                convSig = ''; // 다음 틱에 진짜 대화로 갈아 끼운다
+            }
+            else {
+                const p = runPrefs();
+                const out = await api('/api/ui/terminal/sessions', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        label: text.replace(/\s+/g, ' ').slice(0, 28),
+                        harness: p.harness && p.harness !== 'shell' ? p.harness : 'claude',
+                        flags: p.flags && typeof p.flags === 'object' ? p.flags : {},
+                        autoApprove: !!p.autoApprove, sessionDir: true, initialPrompt: text,
+                    }),
+                });
+                const sid = out?.session?.id ? String(out.session.id) : '';
+                if (!sid)
+                    throw new Error('세션 id 를 받지 못했습니다');
+                if (ctx.id > 0) {
+                    try {
+                        await api('/api/ui/terminal/sessions/' + encodeURIComponent(sid) + '/project', { method: 'POST', body: JSON.stringify({ projectId: ctx.id }) });
+                    }
+                    catch (_) {
+                        toast('세션은 열렸는데 이 프로젝트에 붙이지 못했어요 — 세션 상단바에서 다시 연결할 수 있어요.', true);
+                    }
                 }
-                catch (_) {
-                    toast('세션은 열렸는데 이 프로젝트에 붙이지 못했어요 — 세션 상단바에서 다시 연결할 수 있어요.', true);
-                }
+                nameCache.set(sid, text.replace(/\s+/g, ' ').slice(0, 46));
+                select(sid);
+                toast('새 세션을 열어 시켰어요 — 서랍에 올라옵니다.');
+                ctx.onChanged?.();
             }
             ta.value = '';
             ta.style.height = 'auto';
-            open.set(sid, true);
-            toast('새 세션을 열어 시켰어요 — 목록 맨 위에 올라옵니다.');
-            ctx.onChanged?.();
         }
         catch (e) {
-            toast('세션을 열지 못했어요 — ' + (e?.message || e), true);
+            toast('보내지 못했어요 — ' + (e?.message || e), true);
         }
         finally {
             sending = false;
@@ -192,120 +252,93 @@ function sessionsPart(ctx) {
             ta.focus();
         }
     }
-    function mine() {
-        return ctx.data().sessions
-            .filter((s) => Number(s.projectId) === ctx.id)
-            .sort((a, b) => rank(a) - rank(b) || (b.lastSeen || 0) - (a.lastSeen || 0));
+    const keyBtn = (sid, action, label, primary) => el('button', { class: 'btn btn-sm ' + (primary ? 'btn-primary' : 'btn-ghost'), type: 'button', text: label, onclick: () => {
+            void api('/api/ui/terminal/sessions/' + encodeURIComponent(sid) + '/keys', { method: 'POST', body: JSON.stringify({ action }) })
+                .then(() => toast(label + ' — 보냈어요.')).catch((err) => toast('실패했어요 — ' + (err?.message || err), true));
+        } });
+    // ── 위 판 그리기 ──
+    function paintStage(ss) {
+        const s = composing ? null : ss.find((x) => x.id === sel) || null;
+        const sig = s ? 'S|' + s.id + '|' + s.stateKey + '|' + (s.raw?.title || '') + '|' + titleOf(s) : composing ? 'NEW' : 'NONE';
+        if (sig !== headSig) {
+            headSig = sig;
+            convSig = '';
+            if (s) {
+                const raw = s.raw || {};
+                const work = String(raw.title || '').trim();
+                const workOk = !!work && !INJ_RE.test(work) && work.toLowerCase() !== String(raw.harness || '').toLowerCase();
+                // ⚠ replaceChildren 은 el() 과 달리 null 을 걸러 주지 않는다 — 배열로 모아 filter 한다.
+                stageHead.replaceChildren(...[
+                    el('span', { class: 'v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' }),
+                    el('b', { class: 'pn-sname ell', title: s.label || s.id, text: titleOf(s) }),
+                    el('span', { class: 'pn-smeta' }, el('span', { text: s.stateLabel }), el('span', { class: 'sep', text: '·' }), el('span', { text: when(s.lastSeen) })),
+                    workOk ? el('span', { class: 'pn-swork ell', title: work, text: work }) : null,
+                    el('a', { class: 'pn-sopen', href: '#/s/' + encodeURIComponent(s.id), title: '세션 화면으로 갑니다', text: '열기 ↗' }),
+                ].filter(Boolean));
+                stageHead.hidden = false;
+                ta.placeholder = '이 세션에 이어서 말하기 — Enter';
+                const waiting = s.stateKey === 'waiting';
+                keys.hidden = !waiting;
+                if (waiting)
+                    keys.replaceChildren(el('span', { class: 'pn-wait-k', text: '확인이 필요해요' }), keyBtn(s.id, 'approve', '승인', true), keyBtn(s.id, 'deny', '거부'), keyBtn(s.id, 'interrupt', '멈춤'));
+            }
+            else {
+                stageHead.hidden = true;
+                keys.hidden = true;
+                ta.placeholder = '무엇이든 시켜 보세요 — 새 세션이 열립니다.';
+                conv.replaceChildren(el('div', { class: 'pn-empty' }, pnIcon('chat', 'pn-i big'), el('b', { text: composing ? '새 세션을 엽니다.' : '아직 세션이 없어요.' }), el('p', { class: 'pn-fine', text: '아래 칸에 시킬 일을 적으면 이 프로젝트에 붙은 AI 세션이 열리고, 서랍에 타일로 쌓입니다.' })));
+            }
+        }
+        if (s)
+            void fillConv(s);
     }
-    /** 기본 펼침 — 살아 있는 세션 위에서 셋까지. 살아 있는 게 하나도 없으면 가장 최근 것 한 건(전부 접힌
-     *  화면은 '아무 일도 없었다'로 읽힌다). 사람이 접거나 편 것이 있으면 그게 이긴다. */
-    const isOpen = (s, i, anyLive) => {
-        const forced = open.get(s.id);
-        if (forced != null)
-            return forced;
-        return anyLive ? s.live && s.alive && i < 3 : i === 0;
-    };
-    function card(s, i, anyLive) {
-        const opened = isOpen(s, i, anyLive);
-        const raw = s.raw || {};
-        // 이름은 사이드바와 같은 규칙으로 짓는다 — 세션 이름이 프로젝트명과 같으면 같은 말이 화면에 두 번 뜬다(#1754).
-        const pname = String((ctx.detail()?.project || {}).name || '');
-        const t = sessText(s, pname);
-        const dup = !!pname && norm(t.main) === norm(pname);
-        // 이름을 끝내 못 찾은 세션(자동 이름 + 남은 대화 없음)은 **세션 꼬리**로 구분한다 —
-        //  '세션 · 1일 전'처럼 시각으로 쓰면 같은 날 것끼리 글자가 똑같아져 구분이 안 된다(오른쪽에 시각이 이미 있다).
-        const tailId = String(s.id).split('-').pop() || String(s.id);
-        const title = nameCache.get(s.id) || (dup ? '' : t.main) || ('세션 ' + tailId.slice(0, 8));
-        const work = t.sub || String(raw.title || '').trim();
-        const workOk = !!work && !INJ_RE.test(work) && work.toLowerCase() !== String(raw.harness || '').toLowerCase();
-        const head = el('div', { class: 'pn-scard-h' }, el('button', {
-            class: 'pn-scard-tw', type: 'button', 'aria-expanded': String(opened),
-            title: opened ? '접습니다' : '펼쳐서 대화를 봅니다',
-            onclick: () => { open.set(s.id, !opened); listSig = ''; paint(); },
-        }, pnIcon('chev', 'pn-i sm pn-chev' + (opened ? ' on' : ''))), el('span', { class: 'v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' }), el('b', { class: 'pn-sname ell', title: s.label || s.id, text: title }), el('span', { class: 'pn-smeta' }, el('span', { text: s.stateLabel }), el('span', { class: 'sep', text: '·' }), el('span', { text: when(s.lastSeen) })), el('a', { class: 'pn-sopen', href: '#/s/' + encodeURIComponent(s.id), title: '세션 화면으로 갑니다', text: '열기 ↗' }));
-        const box = el('div', { class: 'pn-scard' + (s.stateKey === 'waiting' ? ' wait' : '') + (opened ? ' open' : '') }, head);
-        if (workOk)
-            box.append(el('div', { class: 'pn-swork ell', title: work, text: work }));
-        return box;
-    }
-    function convBody(s, box) {
-        const conv = el('div', { class: 'pn-conv' });
-        const inp = el('input', { class: 'pn-sin', type: 'text', placeholder: '이 세션에 이어서 말하기 — Enter', 'aria-label': '이 세션에 이어서 말하기' });
-        inp.addEventListener('keydown', (e) => {
-            if (e.key !== 'Enter' || e.isComposing)
-                return;
-            const text = inp.value.trim();
-            if (!text)
-                return;
-            inp.disabled = true;
-            void api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/prompt', { method: 'POST', body: JSON.stringify({ text }) })
-                .then(() => {
-                inp.value = '';
-                conv.append(el('div', { class: 'pn-msg me pend' }, el('span', { class: 'who', text: '나' }), el('div', { class: 'tx', text })));
-                conv.scrollTop = conv.scrollHeight;
-            })
-                .catch((err) => toast('보내지 못했어요 — ' + (err?.message || err), true))
-                .finally(() => { inp.disabled = false; inp.focus(); });
-        });
-        const key = (action, label, primary) => el('button', { class: 'btn btn-sm ' + (primary ? 'btn-primary' : 'btn-ghost'), type: 'button', text: label, onclick: () => {
-                void api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/keys', { method: 'POST', body: JSON.stringify({ action }) })
-                    .then(() => toast(label + ' — 보냈어요.')).catch((err) => toast('실패했어요 — ' + (err?.message || err), true));
-            } });
-        box.append(conv);
-        if (s.stateKey === 'waiting')
-            box.append(el('div', { class: 'pn-keys' }, el('span', { class: 'pn-wait-k', text: '확인이 필요해요' }), key('approve', '승인', true), key('deny', '거부'), key('interrupt', '멈춤')));
-        box.append(el('div', { class: 'pn-sfoot' }, inp));
-        return conv;
-    }
-    async function fillConv(s, conv, ref) {
-        const turns = await fetchTurns(s, 30000);
+    async function fillConv(s) {
+        const turns = await fetchTurns(s, 60000);
         if (ctx.dead() || !conv.isConnected)
             return;
-        const shown = turns.slice(-6);
+        if (headSig !== 'S|' + s.id + '|' + s.stateKey + '|' + (s.raw?.title || '') + '|' + titleOf(s))
+            return; // 그새 다른 세션으로 갈아탔다
+        const shown = turns.slice(-14);
         const sig = shown.map((t) => t.who + t.text.length).join(',');
-        if (ref.sig === sig)
-            return; // 변화 없음 — 스크롤·입력 그대로 둔다
-        ref.sig = sig;
-        const atBottom = conv.scrollHeight - conv.scrollTop - conv.clientHeight < 40;
-        // ⚠ replaceChildren 은 el() 과 달리 null 을 걸러 주지 않는다 — 조건부 자식은 배열로 모아 filter 한다.
+        if (sig === convSig)
+            return; // 변화 없음 — 스크롤·읽던 자리를 그대로 둔다
+        convSig = sig;
+        const atBottom = conv.scrollHeight - conv.scrollTop - conv.clientHeight < 60;
         conv.replaceChildren(...[
-            shown.length ? null : el('p', { class: 'pn-fine', text: s.live ? '아직 주고받은 말이 없어요.' : '남은 대화 기록이 없어요 — [열기]로 세션 화면에서 봅니다.' }),
-            ...shown.map((t) => el('div', { class: 'pn-msg ' + t.who }, el('span', { class: 'who', text: t.who === 'me' ? '나' : 'AI' }), el('div', { class: 'tx', text: t.text.length > 420 ? t.text.slice(0, 420) + '…' : t.text }))),
+            shown.length ? null : el('p', { class: 'pn-fine pn-conv-none', text: s.live ? '아직 주고받은 말이 없어요.' : '남은 대화 기록이 없어요 — [열기]로 세션 화면에서 봅니다.' }),
+            ...shown.map((t) => el('div', { class: 'pn-msg ' + t.who }, el('span', { class: 'who', text: t.who === 'me' ? '나' : 'AI' }), 
+            // AI 답은 마크다운으로 온다 — 글머리·굵기를 살려야 읽힌다. 사람 말은 쓴 그대로.
+            t.who === 'ai'
+                ? el('div', { class: 'tx pn-md' }, renderMarkdown(t.text.length > 2400 ? t.text.slice(0, 2400) + '…' : t.text))
+                : el('div', { class: 'tx', text: t.text.length > 600 ? t.text.slice(0, 600) + '…' : t.text }))),
         ].filter(Boolean));
         if (atBottom)
             conv.scrollTop = conv.scrollHeight;
     }
-    function paint() {
-        const ss = mine();
-        const anyLive = ss.some((s) => s.live && s.alive);
-        const sig = ss.map((s, i) => s.id + s.stateKey + (isOpen(s, i, anyLive) ? '1' : '0') + (s.raw?.title || '')).join('|');
-        if (sig === listSig) { // 목록 구성은 그대로 — 펼친 카드의 대화만 갱신한다
-            ss.forEach((s, i) => { if (!isOpen(s, i, anyLive))
-                return; const c = cards.get(s.id); if (c?.conv)
-                void fillConv(s, c.conv, c); });
-            return;
-        }
-        listSig = sig;
-        cards.clear();
-        void nameLookup(ss.slice(0, 8));
-        if (!ss.length) {
-            list.replaceChildren(el('div', { class: 'pn-empty' }, pnIcon('chat', 'pn-i big'), el('b', { text: '아직 세션이 없어요.' }), el('p', { class: 'pn-fine', text: '위 칸에 시킬 일을 적으면 이 프로젝트에 붙은 AI 세션이 열리고, 여기 카드로 쌓입니다.' })));
-            return;
-        }
-        const rows = [];
-        ss.forEach((s, i) => {
-            const box = card(s, i, anyLive);
-            const ref = { root: box, conv: null, sig: '' };
-            if (isOpen(s, i, anyLive)) {
-                ref.conv = convBody(s, box);
-                void fillConv(s, ref.conv, ref);
-            }
-            cards.set(s.id, ref);
-            rows.push(box);
-        });
-        list.replaceChildren(...rows);
+    // ── 아래 서랍 그리기 ──
+    function tile(s) {
+        const on = !composing && s.id === sel;
+        const t = titleOf(s);
+        return el('button', {
+            class: 'pn-stile' + (on ? ' on' : '') + (s.stateKey === 'waiting' ? ' wait' : ''),
+            type: 'button', role: 'option', 'aria-selected': String(on),
+            title: t + ' — ' + s.stateLabel + (on ? ' (지금 보는 세션)' : ''),
+            onclick: () => select(s.id),
+        }, el('span', { class: 'pn-stile-ic' }, pnIcon('chat', 'pn-i'), el('span', { class: 'pn-stile-dot v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' })), el('b', { class: 'pn-stile-n ell2', text: t }), el('span', { class: 'pn-stile-m', text: when(s.lastSeen) }));
     }
-    /** 되풀이 이름을 가진 세션의 '마지막으로 시킨 말'을 한 번씩만 찾아 온다. 찾으면 그 카드만 다시 그린다. */
+    function paintDrawer(ss) {
+        const live = ss.filter((s) => s.live && s.alive).length;
+        const sig = (composing ? 'new|' : sel + '|') + ss.map((s) => s.id + s.stateKey + titleOf(s)).join(',');
+        if (sig === drawerSig)
+            return;
+        drawerSig = sig;
+        drawerHead.replaceChildren(el('span', { class: 'pn-fine', text: ss.length ? `세션 ${ss.length}` + (live ? ` · 지금 ${live}` : '') : '세션이 아직 없어요' }), el('span', { class: 'pn-drw-hint pn-fine', text: '타일을 누르면 위에서 그 대화를 봅니다.' }));
+        tiles.replaceChildren(el('button', {
+            class: 'pn-stile new' + (composing ? ' on' : ''), type: 'button', title: '새 세션을 엽니다',
+            onclick: () => select(null),
+        }, el('span', { class: 'pn-stile-ic new' }, pnIcon('plus', 'pn-i')), el('b', { class: 'pn-stile-n', text: '새 세션' })), ...ss.map(tile));
+    }
+    /** 되풀이 이름을 가진 세션의 '마지막으로 시킨 말'을 한 번씩만 찾아 온다. 찾으면 그 타일·머리를 다시 그린다. */
     async function nameLookup(ss) {
         const pname = String((ctx.detail()?.project || {}).name || '');
         if (!pname)
@@ -327,9 +360,20 @@ function sessionsPart(ctx) {
             got = true;
         }
         if (got && !ctx.dead()) {
-            listSig = '';
+            drawerSig = '';
+            headSig = '';
             paint();
         }
+    }
+    function paint() {
+        const ss = mine();
+        if (!composing && (!sel || !ss.some((s) => s.id === sel)))
+            sel = ss.length ? ss[0].id : null;
+        if (!ss.length && !composing)
+            composing = true; // 세션이 없으면 위 판은 '새 세션' 자리
+        paintDrawer(ss);
+        paintStage(ss);
+        void nameLookup(ss.slice(0, 10));
     }
     paint();
     return { root, tick: () => paint() };

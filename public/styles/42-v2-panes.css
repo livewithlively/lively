@@ -40,20 +40,24 @@
 .pn-part { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .pn-part[hidden] { display: none; }
 
-/* ── 문패 ── */
-.pn-door { flex: none; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 16px 20px 13px; border-bottom: 1px solid var(--line); }
+/* ── 문패 ──
+   여백·제목 크기는 **캔버스 문패(.stu-door)와 정확히 같은 값**이다 — 오른쪽 끝 [기본|캔버스] 단추가 두 뷰에서
+   같은 픽셀에 서야 하기 때문(1px 이라도 다르면 오갈 때 단추가 흔들린다). 한쪽을 고치면 다른 쪽도 같이 고친다. */
+.pn-door { flex: none; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 16px 24px 14px; border-bottom: 1px solid var(--line); }
 #v2-root:not(.rail-open) .pn-door { padding-left: 122px; }
-.pn-eyebrow { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-sub); margin-bottom: 5px; }
+.pn-eyebrow { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-sub); margin-bottom: 7px; }
 .pn-eyebrow .sep { color: var(--muted-2); }
 .pn-state.run { color: var(--blue); font-weight: 700; }
 .pn-state.done { color: var(--mint-deep); font-weight: 700; }
 .pn-state.todo { color: var(--muted); }
-.pn-title { margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -.022em; line-height: 1.22; }
+.pn-title { margin: 0; font-size: 25px; font-weight: 800; letter-spacing: -.022em; line-height: 1.22; }
 .pn-door-r { display: flex; align-items: center; gap: 8px; flex: none; }
 .pn-faces { display: inline-flex; margin-right: 4px; }
 .pn-face { width: 26px; height: 26px; border-radius: 13px; border: 2px solid var(--bg, #fff); margin-left: -6px; }
 
-/* [기본|캔버스] — 두 뷰가 같은 자리에 두는 세그먼트. 켜진 쪽만 흰 알약. */
+/* [기본|캔버스] — 문패 오른쪽 **맨 끝**에 둔다. 두 뷰의 나머지 단추 개수가 달라도(캔버스 4개·기본 2개)
+   오른쪽 끝은 같은 자리라, 오갈 때 마우스가 움직이지 않는다(원준 2026-08-20). 앞에 구분선으로 갈라 둔다. */
+.pn-vtwrap { display: inline-flex; align-items: center; margin-left: 4px; padding-left: 12px; border-left: 1px solid var(--line); }
 .pn-vt { display: inline-flex; align-items: center; padding: 2px; border: 1px solid var(--line-net); border-radius: 9px; background: #F4F6FA; }
 .pn-vt-b { height: 24px; padding: 0 11px; border: 0; border-radius: 7px; background: none; font: inherit; font-size: 12px; color: var(--muted-head); cursor: pointer; }
 .pn-vt-b:hover { color: var(--ink); }
@@ -73,8 +77,12 @@
 .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ell2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
-/* ── 팝오버(칸 고르기·보기 메뉴) ── */
-.pn-pop { min-width: 264px; max-width: 320px; padding: 8px; }
+/* ── 팝오버(칸 고르기·보기 메뉴) ──
+   ⚠ anchoredPopover 는 **위치만** 잡는다(.dash-pop = position:fixed·z-index). 배경·테두리·그림자는 패널이
+   직접 가져야 한다 — 안 주면 글자가 본문 위에 투명하게 겹쳐 읽을 수 없다(원준 신고 2026-08-20). */
+.pn-pop { min-width: 264px; max-width: 320px; max-height: 70vh; overflow-y: auto; padding: 8px;
+  background: var(--bg, #fff); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(21,35,59,.16); scrollbar-width: thin; }
 .pn-pop-h { margin: 2px 6px 8px; font-size: 12px; color: var(--ink-sub); }
 .pn-pop-list { display: flex; flex-direction: column; gap: 1px; }
 .pn-pop-row { display: flex; align-items: flex-start; gap: 9px; padding: 8px 9px; border: 0; border-radius: 8px; background: none; font: inherit; text-align: left; color: var(--ink); cursor: pointer; }
@@ -87,44 +95,60 @@
 .pn-check.on { border-color: var(--blue); background: var(--blue); position: relative; }
 .pn-check.on::after { content: ''; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(42deg); }
 
-/* ══ 세션 — 새 세션 입력칸 + 카드 스택 ══════════════════════════════════════ */
-.pn-sessions { overflow: hidden; }
-.pn-new { flex: none; display: flex; align-items: flex-end; gap: 8px; margin: 12px 14px 10px; padding: 9px 9px 9px 13px; border: 1px solid var(--line-net); border-radius: 12px; background: var(--bg, #fff); box-shadow: 0 1px 2px rgba(21,35,59,.05); }
+/* ══ 세션 — 위: 고른 세션 하나의 대화판 · 아래: 세션 서랍(타일) ═══════════════
+   (원준 2026-08-20 "한 열에 여러 개가 동시에 보여서 정신이 하나도 없음")
+   서랍 타일은 곁칸 자료 카드(.pn-fcard)와 **같은 문법**이다 — 아이콘 면 + 이름 + 잔글씨. 두 서랍이
+   같은 모양이라 '여기 담겨 있는 것들'이라는 뜻이 한 번에 읽힌다. */
+.pn-sessions { --pn-drw-h: 176px; overflow: hidden; }
+.pn-stage { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.pn-stage-h { flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 20px 10px; border-bottom: 1px solid var(--line-row); }
+.pn-stage-h[hidden] { display: none; }
+.pn-sname { font-size: 14px; font-weight: 700; min-width: 0; max-width: 42%; }
+.pn-smeta { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); flex: none; }
+.pn-smeta .sep { color: var(--muted-3); }
+.pn-swork { font-size: 11.5px; color: var(--ink-sub); min-width: 0; flex: 1; padding-left: 4px; }
+.pn-sopen { font-size: 11.5px; color: var(--blue); text-decoration: none; flex: none; margin-left: auto; }
+.pn-sopen:hover { text-decoration: underline; }
+
+.pn-conv { flex: 1; min-height: 0; overflow: auto; padding: 14px 20px 10px; display: flex; flex-direction: column; gap: 14px; }
+.pn-conv-none { margin: 0; }
+.pn-msg { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; line-height: 1.62; }
+.pn-msg .who { flex: none; width: 22px; font-size: 10.5px; font-weight: 700; color: var(--muted); padding-top: 3px; }
+.pn-msg.me .who { color: var(--ink-sub); }
+.pn-msg .tx { min-width: 0; flex: 1; word-break: break-word; color: var(--ink); }
+.pn-msg.me .tx { white-space: pre-wrap; font-weight: 600; }
+.pn-msg.ai .tx { color: var(--ink-sub); }
+.pn-msg.pend .tx { opacity: .6; }
+.pn-msg .tx.pn-md { padding: 0; overflow: visible; font-size: 13px; }
+.pn-keys { flex: none; display: flex; align-items: center; gap: 6px; padding: 0 20px 8px; }
+.pn-keys[hidden] { display: none; }
+.pn-wait-k { font-size: 11.5px; font-weight: 700; color: #9A6B12; margin-right: 2px; }
+.pn-sfoot { flex: none; padding: 4px 18px 14px; }
+.pn-new { display: flex; align-items: flex-end; gap: 8px; padding: 9px 9px 9px 13px; border: 1px solid var(--line-net); border-radius: 12px; background: var(--bg, #fff); box-shadow: 0 1px 2px rgba(21,35,59,.05); }
 .pn-new:focus-within { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
-.pn-new-in { flex: 1; min-width: 0; border: 0; background: none; font: inherit; font-size: 13.5px; line-height: 1.5; resize: none; max-height: 160px; color: var(--ink); }
+.pn-new-in { flex: 1; min-width: 0; border: 0; background: none; font: inherit; font-size: 13.5px; line-height: 1.5; resize: none; max-height: 180px; color: var(--ink); }
 .pn-new-in:focus { outline: none; }
 .pn-new-send { flex: none; width: 30px; height: 30px; border: 0; border-radius: 9px; background: var(--blue); color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; }
 .pn-new-send:hover { background: var(--blue-deep); }
 .pn-new-send:disabled { background: var(--muted-3); cursor: default; }
 
-.pn-slist { flex: 1; min-height: 0; overflow: auto; padding: 2px 14px 16px; display: flex; flex-direction: column; gap: 9px; }
-.pn-scard { border: 1px solid var(--line-net); border-radius: 12px; background: var(--bg, #fff); overflow: hidden; }
-.pn-scard.open { box-shadow: 0 1px 2px rgba(21,35,59,.05); }
-.pn-scard.wait { border-color: #E8CE93; background: #FFFCF4; }
-.pn-scard-h { display: flex; align-items: center; gap: 7px; padding: 9px 11px 9px 6px; }
-.pn-scard-tw { width: 22px; height: 22px; flex: none; border: 0; background: none; color: var(--muted-2); display: flex; align-items: center; justify-content: center; cursor: pointer; }
-.pn-scard-tw:hover { color: var(--ink); }
-.pn-chev { transition: transform .14s ease; }
-.pn-chev.on { transform: rotate(90deg); }
-.pn-sname { font-size: 13px; font-weight: 700; min-width: 0; flex: 1; }
-.pn-smeta { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); flex: none; }
-.pn-smeta .sep { color: var(--muted-3); }
-.pn-sopen { font-size: 11.5px; color: var(--blue); text-decoration: none; flex: none; }
-.pn-sopen:hover { text-decoration: underline; }
-.pn-swork { padding: 0 12px 9px 35px; font-size: 11.5px; color: var(--ink-sub); }
-.pn-conv { max-height: 240px; overflow: auto; padding: 4px 13px 8px; display: flex; flex-direction: column; gap: 9px; border-top: 1px solid var(--line-row); }
-.pn-msg { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; line-height: 1.55; }
-.pn-msg .who { flex: none; width: 20px; font-size: 10.5px; font-weight: 700; color: var(--muted); padding-top: 2px; }
-.pn-msg.me .who { color: var(--ink-sub); }
-.pn-msg .tx { min-width: 0; white-space: pre-wrap; word-break: break-word; color: var(--ink); }
-.pn-msg.me .tx { color: var(--ink); font-weight: 600; }
-.pn-msg.ai .tx { color: var(--ink-sub); }
-.pn-msg.pend .tx { opacity: .6; }
-.pn-sfoot { padding: 0 12px 11px; }
-.pn-sin { width: 100%; height: 32px; padding: 0 11px; border: 1px solid var(--line-net); border-radius: 9px; background: #FBFCFE; font: inherit; font-size: 12.5px; color: var(--ink); }
-.pn-sin:focus { outline: none; border-color: var(--blue); background: var(--bg, #fff); }
-.pn-keys { display: flex; align-items: center; gap: 6px; padding: 0 12px 10px; }
-.pn-wait-k { font-size: 11.5px; font-weight: 700; color: #9A6B12; margin-right: 2px; }
+/* 서랍 — 판(흰 대화판)과 다른 바닥색으로 '아래에 눕혀 둔 것'임을 말한다. */
+.pn-drw { height: var(--pn-drw-h); flex: none; display: flex; flex-direction: column; background: #FAFBFC; border-top: 1px solid var(--line); }
+.pn-drw-h { flex: none; display: flex; align-items: baseline; gap: 10px; padding: 9px 14px 5px; }
+.pn-drw-hint { margin-left: auto; }
+.pn-drw-grid { flex: 1; min-height: 0; overflow: auto; padding: 2px 12px 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; align-content: start; }
+.pn-stile { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 7px 5px 8px; border: 1px solid transparent; border-radius: 10px; background: none; font: inherit; color: var(--ink); cursor: pointer; }
+.pn-stile:hover { border-color: var(--line-net); background: var(--bg, #fff); }
+.pn-stile.on { border-color: var(--blue); background: var(--bg, #fff); box-shadow: 0 1px 2px rgba(21,35,59,.07); }
+.pn-stile-ic { position: relative; width: 100%; aspect-ratio: 1 / .8; border: 1px solid var(--line); border-radius: 8px; background: var(--bg, #fff); display: flex; align-items: center; justify-content: center; color: var(--muted-2); }
+.pn-stile.on .pn-stile-ic { border-color: var(--line-net-2); color: var(--blue); }
+.pn-stile.wait .pn-stile-ic { border-color: #E8CE93; background: #FFFCF4; }
+.pn-stile-ic.new { border-style: dashed; color: var(--muted); }
+.pn-stile.new:hover .pn-stile-ic, .pn-stile.new.on .pn-stile-ic { border-color: var(--blue); color: var(--blue); }
+.pn-stile-dot { position: absolute; right: 6px; top: 6px; }
+.pn-stile-n { font-size: 11px; font-weight: 600; line-height: 1.32; text-align: center; word-break: break-all; }
+.pn-stile.on .pn-stile-n { color: var(--ink); }
+.pn-stile-m { font-size: 10px; color: var(--muted-2); }
 
 /* ══ 자료 — 좁은 칸에서도 읽히는 격자 ══════════════════════════════════════ */
 .pn-files { overflow: hidden; }

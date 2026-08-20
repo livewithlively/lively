@@ -41,7 +41,8 @@ export function projMode(): ProjMode {
 export function setProjMode(m: ProjMode): void {
   try { localStorage.setItem(MODE_KEY, m); } catch (_) { /* 저장 못 해도 이번 화면은 된다 */ }
 }
-/** [기본|캔버스] 세그먼트 — 두 뷰가 **같은 자리에 같은 모양으로** 두는 단추(캔버스 문패도 이걸 쓴다). */
+/** [기본|캔버스] 세그먼트 — 두 뷰가 **문패 오른쪽 맨 끝, 같은 자리에** 두는 단추(캔버스 문패도 이걸 쓴다).
+ *  자리가 어긋나면 두 뷰를 오갈 때마다 마우스가 좌우로 뛴다 — 그래서 '맨 끝'이 규칙이다(원준 2026-08-20). */
 export function viewToggle(cur: ProjMode, onPick: (m: ProjMode) => void): HTMLElement {
   const mk = (m: ProjMode, label: string, title: string): HTMLElement =>
     el('button', {
@@ -49,9 +50,10 @@ export function viewToggle(cur: ProjMode, onPick: (m: ProjMode) => void): HTMLEl
       'aria-pressed': String(cur === m),
       onclick: () => { if (cur !== m) onPick(m); },
     }, el('span', { text: label }));
-  return el('div', { class: 'pn-vt', role: 'group', 'aria-label': '화면 보기 방식' },
-    mk('panes', '기본', '칸으로 나뉜 기본 화면입니다.'),
-    mk('canvas', '캔버스', '위젯을 자유롭게 놓는 작업대입니다.'));
+  return el('div', { class: 'pn-vtwrap' },
+    el('div', { class: 'pn-vt', role: 'group', 'aria-label': '화면 보기 방식' },
+      mk('panes', '기본', '칸으로 나뉜 기본 화면입니다.'),
+      mk('canvas', '캔버스', '위젯을 자유롭게 놓는 작업대입니다.')));
 }
 
 // ── 배치 ────────────────────────────────────────────────────────────────────
@@ -300,9 +302,10 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
         el('h1', { class: 'pn-title', text: p.name || '프로젝트 #' + id })),
       el('div', { class: 'pn-door-r' },
         el('span', { class: 'pn-faces' }, ...members.slice(0, 5).map((m: any) => personFace(String(m.member_id || m), 'pn-face', String(m.display_name || m.member_id || '')))),
-        viewToggle('panes', (m) => { if (m !== 'panes') { setProjMode(m); opts.onSwitchView?.(m); } }),
         zonesBtn(),
-        loose ? null : el('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: '이름·상태·본문·할 일을 고칩니다', onclick: () => openSettings() }, pnIcon('gear', 'pn-i sm'), el('span', { text: '설정' }))));
+        loose ? null : el('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: '이름·상태·본문·할 일을 고칩니다', onclick: () => openSettings() }, pnIcon('gear', 'pn-i sm'), el('span', { text: '설정' })),
+        // 맨 끝 — 캔버스 문패도 같은 자리에 둔다(오갈 때 마우스가 안 움직이게).
+        viewToggle('panes', (m) => { if (m !== 'panes') { setProjMode(m); opts.onSwitchView?.(m); } })));
   }
 
   /** [칸] — 어떤 칸을 보일지, 배치를 되돌릴지. VS Code 의 보기 메뉴 자리다. */
