@@ -505,12 +505,28 @@ function watchTokenRejection(gatewayUrl) {
   session.defaultSession.webRequest.onHeadersReceived(filter, (details, cb) => {
     cb({});
     if (!isTokenRejection(details, gatewayUrl)) return;
-    const tok = readTrim(join(LIVELY_DIR, "token"));
-    if (!tok || rejectedToken === tok) return;   // 토큰이 없으면(로그아웃 직후) 거부가 아니라 부재다 · 같은 토큰은 한 번만
+    // ⚠ 401 을 그대로 믿지 않는다(#1541 실측: 원준님 맥 — 유효한 토큰인데 어떤 웹 요청 하나의 401 로 '만료' 오판
+    //  → 재로그인은 CLI 가 "이미 로그인됨"으로 즉시 끝나 파일이 안 바뀌고 → 오판 플래그가 영영 안 풀리는 루프).
+    //  onHeadersReceived 는 그 요청이 bearer 를 실었는지도 모른다(무인증 요청의 401 일 수 있다). 그래서 감지는
+    //  후보일 뿐이고, **메인이 파일 토큰으로 /api/ui/me 를 직접 쳐서** 진짜 거부일 때만 마법사로 보낸다.
+    void verifyTokenAfter401(gatewayUrl);
+  });
+}
+let verifyingToken = false;
+async function verifyTokenAfter401(gatewayUrl) {
+  const tok = readTrim(join(LIVELY_DIR, "token"));
+  if (!tok || rejectedToken === tok || verifyingToken) return;   // 부재(로그아웃 직후)·이미 판정·검증 중이면 무시
+  verifyingToken = true;
+  try {
+    const res = await fetch(`${String(gatewayUrl).replace(/\/+$/, "")}/api/ui/me`, {
+      headers: { Authorization: `Bearer ${tok}` }, signal: AbortSignal.timeout(8000),
+    });
+    if (res.status !== 401) return;   // 우리 토큰은 멀쩡하다 — 그 401 은 다른 요청의 사정(무인증·전용 게이트 등)
     rejectedToken = tok;
     send(IPC.LOG, { stream: "raw", line: "게이트웨이가 로그인 토큰을 거부했습니다(만료 또는 회수) — 다시 로그인이 필요합니다." });
     void refreshState();   // → ready=false → syncWindows 가 웹 창을 내리고 마법사를 띄운다
-  });
+  } catch { /* 네트워크 실패 = 판정 불가 — 거짓 '만료'가 판정 불가보다 나쁘다. 다음 401 에서 다시 검증한다. */ }
+  finally { verifyingToken = false; }
 }
 // 웹이 새 창을 열려 할 때(`window.open`·`target=_blank`)와 최상위 이동 — 어느 웹 컨텐츠든 같은 규칙(web-shell.openTargetFor):
 //  같은 출처(터미널 새 창·그래프)는 앱 안의 새 창으로(토큰은 같은 localStorage 라 그대로 로그인 상태), 바깥은 시스템 브라우저로,
@@ -562,6 +578,9 @@ async function start(kind, opts) {
   });
   running = null;
   scheduleAutoApply();   // 작업 중엔 미뤄 둔 업데이트 적용을 다시 판정한다
+  // 재로그인(setup·login)이 성공했으면 '거부된 토큰' 판정을 푼다 — CLI 는 기존 토큰이 **먹히면** 재발급 없이
+  //  "이미 로그인됨"으로 끝내므로(파일 불변), 파일 비교만으로는 오판이 영영 안 풀린다(#1541 원준님 맥 루프).
+  if (r.ok && (kind === "setup" || kind === "login")) rejectedToken = null;
   state = { ...state, busy: false };
   await refreshState({ deep: true });          // 방금 바꾼 상태를 **실측으로** 되읽는다(추측으로 그리지 않는다)
   renderTray(); send(IPC.STATE, state);

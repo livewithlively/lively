@@ -41,6 +41,17 @@ t("U5 비-URL·빈 줄 = null (throw 없음)", () => {
   assert.equal(urlAtColumn("no links here", 5), null);
   assert.equal(urlAtColumn("", 0), null);
 });
+t("U6 ★ 스킴 없는 링크(실측: TUI 가 developer.apple.com/… 로 찍는다) — 열 때 https:// 보정", () => {
+  const line = "가서 developer.apple.com/account/resources/certificates 를 여세요";
+  assert.equal(urlAtColumn(line, 10), "https://developer.apple.com/account/resources/certificates");
+  assert.equal(urlAtColumn("www.apple.com 참고", 3), "https://www.apple.com");
+  assert.equal(urlAtColumn("호스트만: apple.com/kr", 7), "https://apple.com/kr");
+});
+t("U7 스킴 없는 형태의 오탐 경계 — 경로 없는 점-이름·파일 경로는 링크가 아니다", () => {
+  assert.equal(urlAtColumn("package.json 을 여세요", 4), null, "경로(/) 없는 점-이름");
+  assert.equal(urlAtColumn("src/foo.ts 수정", 4), null, "일반 파일 경로(호스트 형태 아님)");
+  assert.equal(urlAtColumn("버전 1.2.3/4 확인", 4), null, "숫자.숫자/… 는 TLD 가 아니다");
+});
 t("W1 배선 — 판정은 mousedown 에서(press 가 pty 로 새면 TUI 확인창이 뜬다), down/up/click 캡처 셋이 한 판정을 공유", () => {
   assert.match(src, /pendingLink = wantsLink \? linkAtEvent\(ev\) : null/, "mousedown 에서 링크를 판정하지 않는다");
   assert.match(src, /urlAtColumn\(text, colInLogical\)/, "판정이 urlAtColumn 을 안 쓴다");
@@ -53,6 +64,7 @@ t("W1 배선 — 판정은 mousedown 에서(press 가 pty 로 새면 TUI 확인�
 t("W2 배선 — 맨클릭은 '트래킹 pane × URL 위'로 좁힌다(TUI 마우스 입력·셸 드래그 선택 보존), modifier 는 항상", () => {
   assert.match(src, /\(ev\.metaKey \|\| ev\.ctrlKey\) \|\| mouseTracked\(\)/, "맨클릭 경로가 트래킹 판정을 안 탄다");
   assert.match(src, /mouseTrackingMode/, "트래킹 판정이 xterm modes 를 안 본다");
+  assert.match(src, /linkHandler: \{ activate:/, "OSC 8 하이퍼링크(linkHandler)가 없다 — TUI 가 심은 실제 URI 링크가 죽은 링크가 된다");
   assert.match(src, /if \(pendingLink \|\| \(ev\.metaKey \|\| ev\.ctrlKey\)\)/, "맨클릭이 URL 밖에서도 삼켜진다(TUI 입력이 죽는다) — URL 위일 때만 삼켜야 한다");
   assert.match(src, /url && url === pendingLink/, "드래그(다른 자리에서 뗌)를 클릭으로 오인한다");
 });
