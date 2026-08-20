@@ -1420,7 +1420,7 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
 
 // ── P. 로그인 셸 PATH 보강 (#1541 · login-path.mjs) — GUI 최소 PATH 로 CLI 를 몰던 근본 원인 ─────────
 {
-  const { mergePath, extractPath, loginShellCmd, enrichPathFromLoginShell } = await import("./login-path.mjs");
+  const { mergePath, extractPath, loginShellCmds, enrichPathFromLoginShell } = await import("./login-path.mjs");
   t("P1 합집합 — 로그인 셸 우선·중복/빈 조각 제거·현재 PATH 성분 보존", () => {
     assert.equal(mergePath("/a:/b:/usr/bin", "/usr/bin:/bin:/c", ":"), "/a:/b:/usr/bin:/bin:/c");
     assert.equal(mergePath("", "/usr/bin:/bin", ":"), "/usr/bin:/bin");
@@ -1431,25 +1431,49 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.equal(extractPath("no marker"), null);
     assert.equal(extractPath(""), null);
   });
-  t("P3 질의 명령 — SHELL 존중, GUI(미설정)는 darwin=zsh 폴백, -l 만(-i 는 tty 대기 행)", () => {
-    assert.deepEqual(loginShellCmd({ SHELL: "/bin/bash" }, "darwin")[0], "/bin/bash");
-    assert.equal(loginShellCmd({}, "darwin")[0], "/bin/zsh");
-    assert.equal(loginShellCmd({}, "linux")[0], "/bin/sh");
-    const argv = loginShellCmd({}, "darwin")[1];
-    assert.equal(argv[0], "-lc");
-    assert.ok(!argv.includes("-i"), "-i 가 섞였다(무tty 에서 매달린다)");
+  t("P3 질의 명령 — SHELL 존중, GUI(미설정)는 darwin=zsh 폴백, -lc + -ilc 두 프로브(.zshrc 커버)", () => {
+    const cmds = loginShellCmds({ SHELL: "/bin/bash" }, "darwin");
+    assert.equal(cmds.length, 2, "-lc 와 -ilc 두 번 물어야 한다(.zshrc 에만 PATH 를 넣는 nvm 설치 커버)");
+    assert.ok(cmds.every(([sh]) => sh === "/bin/bash"), "SHELL 을 존중하지 않는다");
+    assert.equal(loginShellCmds({}, "darwin")[0][0], "/bin/zsh");
+    assert.equal(loginShellCmds({}, "linux")[0][0], "/bin/sh");
+    assert.deepEqual(cmds.map(([, argv]) => argv[0]), ["-lc", "-ilc"],
+      "-lc(안전·검증됨) 먼저 -ilc 다음이어야 한다 — 결과 순서가 곧 PATH 우선순위");
   });
-  t("P4 ★ enrich — darwin 은 env.PATH 를 덮고, win32 는 손대지 않고, 실패는 무해", () => {
+  t("P4 ★ enrich — 두 프로브 합집합으로 env.PATH 를 덮고, 프로브별 격리, win32/실패는 무해", () => {
+    // 표1·2·10: 합집합(-ilc 에만 있는 nvm 경로 포함) + 프로브 2회 호출 배선
     const env = { SHELL: "/bin/zsh", PATH: "/usr/bin:/bin" };
-    const got = enrichPathFromLoginShell(env, "darwin", () => "<<<LIVELY_PATH:/opt/homebrew/bin:/Users/u/.local/bin:/usr/bin>>>");
-    assert.equal(got, "/opt/homebrew/bin:/Users/u/.local/bin:/usr/bin:/bin");
+    const calls = [];
+    const got = enrichPathFromLoginShell(env, "darwin", (_sh, argv) => {
+      calls.push(argv[0]);
+      return argv[0] === "-lc" ? "<<<LIVELY_PATH:/opt/homebrew/bin:/usr/bin>>>"
+                               : "<<<LIVELY_PATH:/Users/u/.nvm/versions/node/v20/bin:/usr/bin>>>";
+    });
+    assert.equal(got, "/opt/homebrew/bin:/usr/bin:/Users/u/.nvm/versions/node/v20/bin:/bin",
+      "대화형(-ilc)에서만 나오는 nvm 경로가 합집합에 빠졌다");
     assert.equal(env.PATH, got, "env.PATH 에 심지 않으면 자식이 못 물려받는다");
+    assert.deepEqual(calls, ["-lc", "-ilc"], "프로브가 2회 다 불리지 않았다(관측 장치 죽음)");
+    // 표3: -ilc 실패(예외/타임아웃)여도 -lc 결과는 살린다
+    const e1 = { PATH: "/usr/bin" };
+    const g1 = enrichPathFromLoginShell(e1, "darwin", (_sh, argv) => {
+      if (argv[0] === "-ilc") throw new Error("대화형 rc 죽음");
+      return "<<<LIVELY_PATH:/opt/homebrew/bin>>>";
+    });
+    assert.equal(g1, "/opt/homebrew/bin:/usr/bin", "-ilc 실패가 -lc 결과까지 죽였다(프로브 격리 위반)");
+    // 표8: 한 프로브가 마커 없는 출력이면 그 프로브만 무시
+    const e8 = { PATH: "/usr/bin" };
+    const g8 = enrichPathFromLoginShell(e8, "darwin", (_sh, argv) =>
+      argv[0] === "-ilc" ? "rc 잡음만 있고 마커 없음" : "<<<LIVELY_PATH:/opt/homebrew/bin>>>");
+    assert.equal(g8, "/opt/homebrew/bin:/usr/bin", "마커 없는 프로브를 무시하지 못했다");
+    // 표5: win32 는 프로브 호출 0건
     const w = { PATH: "C:\\x" };
     assert.equal(enrichPathFromLoginShell(w, "win32", () => { throw new Error("호출되면 안 된다"); }), null);
     assert.equal(w.PATH, "C:\\x");
+    // 표4: 전 프로브 실패 = null, PATH 불변
     const e2 = { PATH: "/usr/bin" };
     assert.equal(enrichPathFromLoginShell(e2, "darwin", () => { throw new Error("셸 실패"); }), null);
     assert.equal(e2.PATH, "/usr/bin", "실패가 PATH 를 건드렸다");
+    // 표6: 변화 없음 = null
     assert.equal(enrichPathFromLoginShell({ PATH: "/a" }, "darwin", () => "<<<LIVELY_PATH:/a>>>"), null, "변화 없음 = null");
   });
   t("P5 배선 — 메인이 whenReady 초입(첫 refreshState 전)에 보강한다", () => {
@@ -1458,6 +1482,30 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     const at = boot.indexOf("enrichPathFromLoginShell");
     assert.ok(at >= 0, "whenReady 에서 PATH 를 보강하지 않는다");
     assert.ok(at < boot.indexOf("refreshState"), "첫 CLI 실행(refreshState deep)보다 앞서야 한다");
+  });
+}
+
+// ── N. 설치 후 노드 자동 시작 (#1541 · web-shell.nextAfterSetup) — 설치의 끝은 '노드가 돈다'까지 ─────────
+{
+  const { nextAfterSetup } = await import("./web-shell.mjs");
+  t("N1 판정 — 노드가 돌고 있으면 null(재시작 금지), 아니면·모르면 node-start(daemon 은 멱등)", () => {
+    assert.equal(nextAfterSetup({ nodeRunning: true }), null, "멀쩡한 노드를 재시작하려 한다");
+    assert.equal(nextAfterSetup({ nodeRunning: false }), "node-start");
+    assert.equal(nextAfterSetup({ nodeRunning: null }), "node-start", "모름(null)은 시작 쪽 — 안 돌면 시작이 맞고 돌면 멱등");
+    assert.equal(nextAfterSetup({}), "node-start");
+    assert.equal(nextAfterSetup(null), "node-start");
+  });
+  t("N2 배선 — onboard 가 setup **성공 후에만** node-start 를 잇고, 실패면 setup 결과를 그대로 돌려준다", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    const fn = main.slice(main.indexOf("async function onboard("), main.indexOf("function askUser("));
+    const setupAt = fn.indexOf('await start("setup"');
+    assert.ok(setupAt >= 0, "onboard 가 setup 을 부르지 않는다");
+    const rest = fn.slice(setupAt);
+    assert.ok(/if\s*\(!r\.ok\)\s*return r;/.test(rest), "setup 실패에서 멈추지 않는다 — 실패한 설치 위에 노드를 올리면 안 된다");
+    const chainAt = rest.indexOf("nextAfterSetup");
+    assert.ok(chainAt >= 0, "노드 자동 시작 판정(nextAfterSetup)이 배선되지 않았다");
+    assert.ok(rest.slice(chainAt).includes('start("node-start"'), "판정이 참일 때 node-start 를 잇지 않는다");
+    assert.ok(rest.indexOf("!r.ok") < chainAt, "실패 가드보다 먼저 노드를 시작하려 한다");
   });
 }
 

@@ -285,7 +285,7 @@ export const runtimeConfigCapabilities: Capability[] = [
         if (p !== "full" && p !== "personal") throw new HttpError(400, "ui_profile 은 full|personal 만 허용됩니다");
         patch.ui_profile = p;
       }
-      // ui_mode(#1719): 기본 화면 셸 — 'v2'(새 1탭 셸, 제품 기본) | 'classic'(종전 탭 셸). 관리탭 [화면] 이 쓴다.
+      // ui_mode(#1719): 기본 화면 셸 — 'classic'(종전 탭 셸, 제품 기본) | 'v2'(새 1탭 셸, 베타 opt-in). 관리탭 [화면] 이 쓴다.
       if (input.ui_mode !== undefined) {
         const m = String(input.ui_mode);
         if (m !== "v2" && m !== "classic") throw new HttpError(400, "ui_mode 는 v2|classic 만 허용됩니다");

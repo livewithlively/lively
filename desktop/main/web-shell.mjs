@@ -144,3 +144,14 @@ export function titlebarOverlayPatch(input) {
   if (!color || !symbolColor) return null;
   return { color, symbolColor, height: TITLEBAR_HEIGHT };
 }
+
+/**
+ * 설치(setup) 성공 직후 이어서 할 일 (#1541) — 설치의 끝은 "이 PC 가 노드로 돈다"까지다(프로젝트 제목이 그거다).
+ *  새 PC 에서 setup 만 끝내고 노드는 사람이 [노드 시작]을 눌러야 했던 단차를 없앤다(실측 2026-08-20 원준 맥).
+ *  이미 돌고 있으면 건드리지 않는다(재온보딩·재로그인이 멀쩡한 노드를 재시작하지 않게).
+ * @returns "node-start" | null
+ */
+export function nextAfterSetup(state) {
+  if (state && state.nodeRunning) return null;
+  return "node-start";
+}
