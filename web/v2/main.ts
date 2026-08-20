@@ -88,7 +88,13 @@ export async function bootV2(): Promise<void> {
   // 시작 탭 — 주소에 화면이 있으면(딥링크) 그 화면: 있던 탭이면 그 탭, 아니면 저장된 활성 탭이 그리로 간다.
   const boot = location.hash && location.hash !== '#/' && location.hash !== '#' ? location.hash : null;
   if (boot && tabsApi.find(boot)) { const hit = tabsApi.find(boot)!; hit.route = boot; tabsApi.activate(hit); }
-  else { const t = tabsApi.initial() || tabsApi.add(boot || '#/', { activate: false }); if (boot) t.route = boot; tabsApi.activate(t); }
+  else {
+    const saved = tabsApi.initial();
+    // 저장된 활성 탭이 **고정 홈**이면 그 탭을 딥링크로 끌고 가지 않는다 — 홈은 홈으로 두고 새 탭을 연다.
+    const t = boot && (!saved || saved.fixed) ? tabsApi.add(boot, { activate: false }) : (saved || tabsApi.add(boot || '#/', { activate: false }));
+    if (boot && !t.fixed) t.route = boot;
+    tabsApi.activate(t);
+  }
   drawSide();
 
   window.addEventListener('hashchange', () => { void onHash(); });
@@ -183,6 +189,11 @@ async function onHash(): Promise<void> {
   if (routeKey(cur.route) === routeKey(hash)) { cur.route = hash; tabsApi.routed(cur); return; }
   const other = tabsApi.find(hash);
   if (other) { tabsApi.activate(other); return; }   // 같은 화면(같은 세션·프로젝트)은 그 탭으로 — 두 번 그리지 않는다
+  // 새 탭에서 여는 두 경우(원준 2026-08-20):
+  //  ① **세션** — 여러 세션이 탭으로 나란히 살아야 한다. 지금 탭을 덮어쓰면 보던 세션이 사라진다.
+  //  ② **홈에서 출발** — 홈 탭은 늘 홈이다(고정). 홈이 다른 화면으로 변신하면 '못 닫는 홈'이 무의미해진다.
+  //  나머지(프로젝트 → 프로젝트 등)는 종전대로 그 탭 안에서 이동한다 — 클릭마다 탭이 불어나면 그것도 못 쓴다.
+  if (routeKey(hash).startsWith('s:') || cur.fixed) { tabsApi.add(hash); return; }
   if (cur.chat) { cur.chat.destroy(); cur.chat = null; }   // 세션 화면을 떠나면 그 폴링·리스너를 끈다
   dropProjView(cur);                                       // 프로젝트 화면(#1757)의 리브 턴 폴링도
   cur.route = hash;

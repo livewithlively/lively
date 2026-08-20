@@ -96,8 +96,10 @@ export async function bootV2() {
         tabsApi.activate(hit);
     }
     else {
-        const t = tabsApi.initial() || tabsApi.add(boot || '#/', { activate: false });
-        if (boot)
+        const saved = tabsApi.initial();
+        // 저장된 활성 탭이 **고정 홈**이면 그 탭을 딥링크로 끌고 가지 않는다 — 홈은 홈으로 두고 새 탭을 연다.
+        const t = boot && (!saved || saved.fixed) ? tabsApi.add(boot, { activate: false }) : (saved || tabsApi.add(boot || '#/', { activate: false }));
+        if (boot && !t.fixed)
             t.route = boot;
         tabsApi.activate(t);
     }
@@ -224,6 +226,14 @@ async function onHash() {
         tabsApi.activate(other);
         return;
     } // 같은 화면(같은 세션·프로젝트)은 그 탭으로 — 두 번 그리지 않는다
+    // 새 탭에서 여는 두 경우(원준 2026-08-20):
+    //  ① **세션** — 여러 세션이 탭으로 나란히 살아야 한다. 지금 탭을 덮어쓰면 보던 세션이 사라진다.
+    //  ② **홈에서 출발** — 홈 탭은 늘 홈이다(고정). 홈이 다른 화면으로 변신하면 '못 닫는 홈'이 무의미해진다.
+    //  나머지(프로젝트 → 프로젝트 등)는 종전대로 그 탭 안에서 이동한다 — 클릭마다 탭이 불어나면 그것도 못 쓴다.
+    if (routeKey(hash).startsWith('s:') || cur.fixed) {
+        tabsApi.add(hash);
+        return;
+    }
     if (cur.chat) {
         cur.chat.destroy();
         cur.chat = null;

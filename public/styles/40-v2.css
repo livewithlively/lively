@@ -1428,3 +1428,9 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .stu-panel-fab:hover .stu-fab-grip { color: var(--muted); }
 .stu-panel-fab.dragging { cursor: grabbing; box-shadow: 0 14px 34px rgba(21,35,59,.22); }
 .stu-panel-fab.dragging .stu-fab-grip { cursor: grabbing; }
+
+/* ── 탭 끌어 옮기기 + 고정 홈(원준 2026-08-20) ── */
+.v2-tab.fixed { padding-right: 9px; }          /* 닫기 단추가 없으니 오른쪽 여백을 글자 쪽으로 되돌린다 */
+.v2-tab.dragging { opacity: .45; }
+.v2-tab.dnd-before { box-shadow: inset 2px 0 0 var(--blue); }
+.v2-tab.dnd-after { box-shadow: inset -2px 0 0 var(--blue); }
