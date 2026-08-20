@@ -562,7 +562,7 @@
     },
     sources: {
       cls: 'wide',
-      html: () => scHead('', '지금까지 일한 맥락들을 주로 어디에 쌓아 두셨나요?', '여러 개 골라도 됩니다. 살아 있는 서비스는 연결해 두면 새 자료가 계속 따라옵니다.')
+      html: () => scHead('고맙습니다. 여쭐 건 여기까지예요 — 이제 <b>자료만</b> 보여 주시면 됩니다.', '지금까지 일한 맥락들을 주로 어디에 쌓아 두셨나요?', '여러 개 골라도 됩니다. 살아 있는 서비스는 연결해 두면 새 자료가 계속 따라옵니다.')
         + `<div class="sc-srcs">${SOURCE_ROWS.map((row) => `<div class="srcrow"><span class="srcrow-k">${esc(row.k)}</span><div class="sc-opts">${row.items.map((s) => `<button type="button" class="chip chip-src${S.sources.includes(s.id) ? ' on' : ''}${s.none ? ' chip-dim' : ''}" data-opt="${esc(s.id)}" data-none="${s.none ? 1 : 0}">${s.logo ? brandLogo(s.logo) : ic(s.ic, 'ic-sm')}<span>${esc(s.label)}</span></button>`).join('')}</div></div>`).join('')}</div>`
         + `<div class="sc-go" hidden><button type="button" class="btn btn-primary">계속</button></div>`
         + `<div class="sc-skip"><button type="button" class="btn-text" data-esc="skip">건너뛰기</button></div>`,
@@ -577,11 +577,11 @@
         const local = S.sources.some((id) => id === 'folder' || id === 'git');
         const files = S.files.length ? `<div class="drop filled"><b>${S.files.length}개 받았어요</b><div class="filelist">${S.files.slice(0, 6).map((f) => `<span class="f">${ic(f.endsWith('.m4a') ? 'mic' : f.endsWith('.xlsx') ? 'sheet' : 'doc')}${esc(f)}</span>`).join('')}<span class="more">외 ${S.files.length - 6}개</span></div></div>`
           : `<div class="drop" data-drop role="button" tabindex="0"><b>여기에 파일이나 폴더를 끌어다 놓기</b><span>pdf · docx · pptx · xlsx · md · m4a</span></div>`;
-        const conn = (s) => { const st = S.conn[s.id]; return `<div class="conn"><span class="logo">${s.logo ? brandLogo(s.logo) : ic(s.ic || 'folder', 'ic-sm')}</span><div><div class="t">${esc(s.label)}</div><div class="s">${st === 'on' ? '연결됐어요 · 읽기만 · 새 자료 자동 반영' : '읽기 권한만 · 한 번이면 됩니다'}</div></div>${st === 'on' ? `<span class="state on" style="margin-left:auto">연결됨</span>` : `<button type="button" class="btn btn-ghost btn-sm${st === 'busy' ? ' is-busy' : ''}" data-connect="${s.id}">${esc(s.label)} 연결</button>`}</div>`; };
+        const conn = (s) => { const st = S.conn[s.id]; return `<div class="conn"><span class="logo">${s.logo ? brandLogo(s.logo) : ic(s.ic || 'folder', 'ic-sm')}</span><div class="t">${esc(s.label)}</div>${st === 'on' ? `<span class="state on">연결됨</span>` : `<button type="button" class="btn btn-ghost btn-sm${st === 'busy' ? ' is-busy' : ''}" data-connect="${s.id}">연결</button>`}<div class="s">${st === 'on' ? '연결됐어요 · 읽기만 · 새 자료 자동 반영' : '읽기 권한만 · 한 번이면 됩니다'}</div></div>`; };
         const has = S.files.length > 0 || Object.values(S.conn).some((v) => v === 'on' || v === 'busy');
         const liveNames = oauth.map((s) => s.label).join('·');
         return scHead(liveNames ? `${esc(liveNames)}은 한 번 연결하면 계속 새 자료가 따라옵니다.` : '파일이 손에 있으면 그냥 끌어다 놓으시면 됩니다.', '자료를 넘겨주세요.', '폴더 정리도, 이름 짓기도 필요 없습니다 — 읽는 동안 다음으로 넘어갑니다.')
-          + `<div class="sc-body"><div class="src-grid">${files}<div class="src-col">${oauth.map(conn).join('')}${later.map((s) => `<div class="conn ghost"><span class="logo">${s.logo ? brandLogo(s.logo) : ic(s.ic || 'folder', 'ic-sm')}</span><div><div class="t">${esc(s.label)}</div><div class="s">앱 발급이 한 번 필요해서 <b>홈에서 한 걸음씩</b> 안내할게요.</div></div><span class="state wait" style="margin-left:auto">나중에</span></div>`).join('')}${local ? `<div class="conn ghost"><span class="logo">${ic('term')}</span><div><div class="t">내 컴퓨터 폴더</div><div class="s">한 줄만 실행하면 리브가 그 폴더를 읽습니다.</div></div><button type="button" class="btn btn-ghost btn-sm" data-copy style="margin-left:auto">명령 복사</button></div>` : ''}</div></div></div>
+          + `<div class="sc-body"><div class="src-grid">${files}<div class="src-col">${oauth.map(conn).join('')}${later.map((s) => `<div class="conn ghost"><span class="logo">${s.logo ? brandLogo(s.logo) : ic(s.ic || 'folder', 'ic-sm')}</span><div class="t">${esc(s.label)}</div><span class="state wait">나중에</span><div class="s">앱 발급이 한 번 필요해서 <b>홈에서 한 걸음씩</b> 안내할게요.</div></div>`).join('')}${local ? `<div class="conn ghost"><span class="logo">${ic('term')}</span><div class="t">내 컴퓨터 폴더</div><button type="button" class="btn btn-ghost btn-sm" data-copy>명령 복사</button><div class="s">한 줄만 실행하면 리브가 그 폴더를 읽습니다.</div></div>` : ''}</div></div></div>
           <div class="sc-actions">${has ? `<button type="button" class="btn btn-primary" data-done>다 넣었어요 — 계속</button>` : ''}</div>
           <div class="sc-skip"><button type="button" class="btn-text" data-skip>지금은 건너뛰기</button></div>`;
       },

@@ -17,6 +17,7 @@
   --amber-text:#B7791F;
   --amber-soft:#FFF7E6;
   --line-success:#CDEFE3;
+  --mint-deep-2:#0C8A6A;   /* --mint-deep 의 눌림 단계 — 시스템에 --blue-deep 은 있는데 민트 쪽 짝이 없다 */
   --font:"Pretendard Variable","Pretendard",-apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;
   --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
   --ease:cubic-bezier(.16,1,.3,1);
@@ -58,7 +59,7 @@ button { cursor:pointer; }
 .btn-ghost { background:var(--bg); border:1px solid var(--line-net); color:var(--ink); }
 .btn-ghost:hover { border-color:var(--blue); }
 .btn-mint { background:var(--mint-deep); color:#fff; }
-.btn-mint:hover { background:#0C8A6A; }
+.btn-mint:hover { background:var(--mint-deep-2); }
 .btn-sm { padding:5px 12px; font-size:13px; border-radius:8px; }
 .btn-xs { padding:3px 9px; font-size:12.5px; border-radius:7px; }
 .btn-text { background:none; border:none; color:var(--ink-sub); font-weight:600; font-size:13px; cursor:pointer; padding:4px 6px; }
@@ -177,10 +178,12 @@ input.in:focus-visible, textarea.in:focus-visible { outline:2px solid var(--blue
 .room-body { flex:1; min-height:0; overflow-y:auto; display:grid;
   grid-template-columns:minmax(0,1fr) minmax(272px,316px); gap:28px;
   width:100%; max-width:var(--room-w); margin:0 auto;
-  padding:clamp(16px,4vh,40px) 24px clamp(44px,10vh,92px);
-  align-content:safe center; align-items:start; }
-  /* 세로는 **광학 중앙** — 아래 여백을 위보다 크게 잡아 살짝 위에 앉힌다(정확한 정중앙은 처져 보인다).
-     safe center 라 내용이 길어지면 위에서 시작해 잘리지 않는다. */
+  padding:clamp(24px,19.5vh,190px) 24px clamp(40px,8vh,80px);
+  align-content:start; align-items:start; }
+  /* ★ 세로는 **고정 앵커**다(중앙 정렬이 아니다). 장면마다 내용 높이가 달라서 가운데로 맞추면
+     화면을 넘길 때 질문 줄이 위아래로 튄다 — 실측 334 → 338 → 230 → 345 (원준님 2026-08-20).
+     시작점을 붙박아 두면 질문이 늘 같은 자리에 서고, 길어진 내용은 아래로만 자란다.
+     넘치면 .room-body 가 스크롤한다(위가 잘리지 않는다). */
 
 /* 대화(작업 일지) — #/liv 페이지가 쓴다 */
 .journal { min-height:0; display:flex; flex-direction:column; border:1px solid var(--line); border-radius:14px; overflow:hidden; background:var(--bg); }
@@ -257,12 +260,16 @@ input.in:focus-visible, textarea.in:focus-visible { outline:2px solid var(--blue
 .filelist .more { color:var(--muted); font-size:12px; align-self:center; }
 .src-grid { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr); gap:10px; margin-top:10px; }
 .src-col { display:flex; flex-direction:column; gap:8px; }
-.conn { border:1px solid var(--line); border-radius:10px; padding:10px 12px; display:flex; align-items:center; gap:10px; background:var(--bg); }
-.conn .logo { width:28px; height:28px; border-radius:8px; display:grid; place-items:center; background:var(--bg); border:1px solid var(--line); flex:none; }
+/* 연결 카드 — 이름·행동은 같은 줄, 설명은 카드 폭을 다 쓴다.
+   한 줄 flex 로 두면 좁은 칸(355)에서 설명이 버튼 폭만큼 깎여 두 글자만 다음 줄로 떨어진다. */
+.conn { border:1px solid var(--line); border-radius:10px; padding:10px 12px; background:var(--bg);
+  display:grid; grid-template-columns:auto minmax(0,1fr) auto;
+  grid-template-areas:"logo title act" "logo desc desc"; column-gap:10px; row-gap:2px; align-items:center; }
+.conn .logo { grid-area:logo; width:28px; height:28px; border-radius:8px; display:grid; place-items:center; background:var(--bg); border:1px solid var(--line); }
 .conn .logo .blogo { width:16px; height:16px; }
-.conn .t { font-size:13.5px; font-weight:700; }
-.conn .s { font-size:12px; color:var(--muted); margin-top:1px; }
-.conn .btn { margin-left:auto; }
+.conn .t { grid-area:title; font-size:13.5px; font-weight:700; }
+.conn .s { grid-area:desc; font-size:12px; line-height:1.5; color:var(--muted); }
+.conn .btn, .conn .state { grid-area:act; justify-self:end; }
 .conn.ghost { border-style:dashed; }
 /* Claude 연결 카드 — 3걸음, 한 번에 한 걸음 */
 .steps3 { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin-top:10px; }
@@ -568,11 +575,11 @@ main.page { flex:1; width:100%; max-width:1160px; margin:0 auto; padding:26px 28
 }
 /* 눌러서 고치기 — 카드·요약 칸·진행점이 곧 편집 진입점 */
 .bc.fx { cursor:pointer; transition:border-color .12s ease, box-shadow .12s ease; }
-.bc.fx:hover { border-color:#BFD2F2; box-shadow:0 2px 8px rgba(45,107,240,.07); }
+.bc.fx:hover { border-color:var(--line-net-2); box-shadow:0 2px 8px rgba(45,107,240,.07); }
 .bc.fx:hover .fix { color:var(--blue); }
 .bc .k .fix, .sum-cell .k .fix { float:right; font-size:11px; font-weight:600; color:var(--muted); }
 .sum-cell[data-fix] { cursor:pointer; transition:border-color .12s ease, box-shadow .12s ease; }
-.sum-cell[data-fix]:hover { border-color:#BFD2F2; box-shadow:0 2px 8px rgba(45,107,240,.07); }
+.sum-cell[data-fix]:hover { border-color:var(--line-net-2); box-shadow:0 2px 8px rgba(45,107,240,.07); }
 .sum-cell[data-fix]:hover .fix { color:var(--blue); }
 .dots li.done { cursor:pointer; }
 .dots li.done:hover { transform:scale(1.45); }
@@ -627,13 +634,13 @@ main.page { flex:1; width:100%; max-width:1160px; margin:0 auto; padding:26px 28
 .kind { font-size:11px; font-weight:700; color:var(--muted); white-space:nowrap; }
 .kind.k-auto { color:var(--blue-deep); } .kind.k-watch { color:var(--amber-text); } .kind.k-tidy { color:var(--mint-deep); } .kind.k-ai { color:var(--blue); }
 .livpage .sug { display:grid; grid-template-columns:auto 1fr auto; grid-template-areas:"kind say on" "kind then on"; column-gap:10px; row-gap:2px; align-items:baseline; width:100%; text-align:left; padding:8px 10px; border:1px solid var(--line); border-radius:10px; background:var(--bg); font-family:inherit; cursor:pointer; transition:border-color .12s ease, background-color .12s ease; }
-.livpage .sug:hover { border-color:#BFD2F2; background:var(--bg-tint); }
+.livpage .sug:hover { border-color:var(--line-net-2); background:var(--bg-tint); }
 .livpage .sug .kind { grid-area:kind; align-self:start; padding-top:3px; }
 .livpage .sug .say { grid-area:say; font-size:13.5px; font-weight:700; color:var(--ink); line-height:1.4; }
 .livpage .sug .then { grid-area:then; font-size:12px; color:var(--ink-sub); line-height:1.45; }
 .livpage .sug .on { grid-area:on; align-self:start; font-size:10.5px; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:1px 7px; white-space:nowrap; }
 .livpage .mg .sug { border-color:transparent; padding:7px 8px; }
-.livpage .mg .sug:hover { border-color:#BFD2F2; }
+.livpage .mg .sug:hover { border-color:var(--line-net-2); }
 .sug-list { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
 .map-strip { flex:none; display:flex; align-items:center; gap:10px; padding:6px 22px 0; border-top:1px solid var(--line); }
 .map-strip .btn-text { padding:6px 0; color:var(--ink-sub); }
@@ -683,7 +690,7 @@ main.page { flex:1; width:100%; max-width:1160px; margin:0 auto; padding:26px 28
 .home > .home-main { grid-area:main; }
 .home > .rail { grid-area:rail; }
 .rc-link { cursor:pointer; transition:border-color .12s ease, box-shadow .12s ease; }
-.rc-link:hover { border-color:#BFD2F2; box-shadow:0 2px 8px rgba(45,107,240,.07); }
+.rc-link:hover { border-color:var(--line-net-2); box-shadow:0 2px 8px rgba(45,107,240,.07); }
 .rc .k .go { float:right; font-size:11px; font-weight:600; color:var(--muted); }
 .rc-link:hover .k .go { color:var(--blue); }
 .live-dot { display:inline-flex; align-items:center; gap:5px; margin-left:6px; font-size:11px; font-weight:700; color:var(--mint-deep); }
@@ -693,7 +700,7 @@ main.page { flex:1; width:100%; max-width:1160px; margin:0 auto; padding:26px 28
 .tally-row { display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; }
 .tally-row .t { border:1px solid var(--line); background:var(--bg-tint); border-radius:999px; padding:2px 9px; font-size:11.5px; color:var(--ink-sub); font-family:inherit; cursor:pointer; }
 .tally-row .t b { color:var(--ink); font-variant-numeric:tabular-nums; margin-left:2px; }
-.tally-row .t:hover { border-color:#BFD2F2; color:var(--blue-deep); }
+.tally-row .t:hover { border-color:var(--line-net-2); color:var(--blue-deep); }
 .feed { list-style:none; margin:10px 0 0; padding:0; display:flex; flex-direction:column; gap:6px; }
 .feed li { display:grid; grid-template-columns:52px 1fr; gap:8px; font-size:12px; line-height:1.5; color:var(--ink-sub); }
 .feed time { color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
@@ -717,7 +724,7 @@ main.page { flex:1; width:100%; max-width:1160px; margin:0 auto; padding:26px 28
 .navi .lbl small { font-size:11px; font-weight:500; color:var(--muted); }
 .more-h { font-size:11px; font-weight:700; color:var(--muted); padding:10px 9px 4px; border-top:1px dashed var(--line); margin-top:6px; }
 .navi.conn-add { border:1px dashed var(--line-net); margin-top:4px; padding:6px 8px; }
-.navi.conn-add:hover { border-color:#BFD2F2; background:var(--bg); }
+.navi.conn-add:hover { border-color:var(--line-net-2); background:var(--bg); }
 .navi.conn-add .logo { width:24px; height:24px; border-radius:7px; display:grid; place-items:center; background:var(--bg-tint); border:1px solid var(--line); font-weight:800; font-size:11.5px; color:var(--ink-sub); flex:none; }
 .navi.conn-add .n { color:var(--blue); font-weight:700; }
 .navi.conn-add.is-busy .n { color:var(--muted); }
@@ -743,7 +750,7 @@ main.page { flex:1; width:100%; max-width:1160px; margin:0 auto; padding:26px 28
 .found, .diag { display:flex; flex-direction:column; gap:9px; }
 .fnd, .dg { display:grid; grid-template-columns:28px 1fr auto; gap:13px; align-items:center; border:1px solid var(--line); border-radius:12px; background:var(--bg); padding:13px 15px; text-align:left; }
 .fnd { cursor:pointer; transition:border-color .12s ease, box-shadow .12s ease; }
-.fnd:hover { border-color:#BFD2F2; box-shadow:0 2px 8px rgba(45,107,240,.07); }
+.fnd:hover { border-color:var(--line-net-2); box-shadow:0 2px 8px rgba(45,107,240,.07); }
 .fnd.on { border-color:var(--line-success); background:var(--bg-success); }
 .fnd-n, .dg-n { width:28px; height:28px; border-radius:50%; display:grid; place-items:center; font-size:12.5px; font-weight:800; background:var(--bg-tint); color:var(--ink-sub); border:1px solid var(--line); }
 .fnd.on .fnd-n { background:var(--mint-deep); color:#fff; border-color:var(--mint-deep); }
