@@ -575,7 +575,7 @@
   }
   function diagText() {
     return [
-      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build feb771cc",
+      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build 7b0835c8",
       "ua: " + navigator.userAgent,
       "session: " + SESSION_ID + (NODE_ID ? " node=" + NODE_ID : ""),
       "secure: " + window.isSecureContext + " \xB7 exported: " + (/* @__PURE__ */ new Date()).toISOString(),
@@ -2506,7 +2506,7 @@
           "\uBB38\uC81C\uAC00 \uC0DD\uACBC\uC744 \uB54C",
           tool("\uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", "\uC785\uB825\uC774 \uC774\uC0C1\uD560 \uB54C(\uD0A4\uB9CC \uB20C\uB7EC\uB3C4 \uAC19\uC740 \uBB38\uC790\uC5F4\uC774 \uB4E4\uC5B4\uAC00\uB294 \uB4F1) \uC544\uB798 \uBC84\uD2BC\uC73C\uB85C \uCD5C\uADFC \uC785\uB825 \uAE30\uB85D\uC744 \uBCF5\uC0AC\uD574 \uC81C\uBCF4\uC5D0 \uBD99\uC5EC \uC8FC\uC138\uC694 \u2014 \uC11C\uBC84\uB85C\uB294 \uC804\uC1A1\uB418\uC9C0 \uC54A\uC544\uC694"),
           el("button", { class: "tbtn", text: "\u{1F50D} \uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", onclick: () => copyText(diagText(), false, true) }),
-          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "feb771cc \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
+          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "7b0835c8 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
         ),
         sec(
           "\uB3C4\uAD6C (\uC624\uB978\uCABD \uC704 \uBC84\uD2BC)",
@@ -2850,6 +2850,7 @@
     if (data) setProjectLink(Number(data.projectId) || 0);
     sessionProjectId = data && Number(data.projectId) || 0;
     showDropHint();
+    return data;
   }
   function setupEmbedBridge() {
     window.addEventListener("message", (ev) => {
@@ -2959,7 +2960,7 @@
     if (!EMBED) setupDnd();
     setupTermDrop();
     if (EMBED) setupEmbedBridge();
-    loadSessionMeta();
+    const metaAtBoot = loadSessionMeta();
     try {
       const ch = new BroadcastChannel("lively-terminal");
       ch.onmessage = (ev) => {
@@ -3089,7 +3090,62 @@
     window.addEventListener("focus", () => {
       if (ws && ws.readyState === 1) forceRedraw();
     });
+    if (await maybeRestoreOnOpen(await metaAtBoot)) return;
     connectNow();
+  }
+  async function maybeRestoreOnOpen(meta) {
+    if (!meta || !meta.restorable) return false;
+    restoreTried = true;
+    const mode = goneMode(meta, !!NODE_ID, RESTORED, false);
+    if (mode === "notowner") {
+      endSession({
+        info: true,
+        icon: "\u21BB",
+        title: "\uC774 \uC138\uC158\uC740 \uBA48\uCDB0 \uC788\uC2B5\uB2C8\uB2E4.",
+        body: "\uC774\uC5B4\uC11C \uC5EC\uB294 \uAC74 \uC138\uC158\uC744 \uB9CC\uB4E0 \uC0AC\uB78C\uB9CC \uD560 \uC218 \uC788\uC5B4\uC694. \uC544\uB798 \uB9C8\uC9C0\uB9C9 \uD654\uBA74\uC740 \uADF8\uB300\uB85C \uC77D\uACE0 \uBCF5\uC0AC\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4."
+      });
+      return true;
+    }
+    if (mode === "loop") {
+      endSession({
+        info: true,
+        icon: "\u21BB",
+        title: "\uC774\uC5B4\uC11C \uC5F4\uC5C8\uC9C0\uB9CC \uC138\uC158\uC774 \uACE7 \uB2E4\uC2DC \uC885\uB8CC\uB410\uC5B4\uC694.",
+        body: "\uC774\uC5B4\uBC1B\uC744 \uB300\uD654\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC744 \uC218 \uC788\uC5B4\uC694(\uC608: \uADF8 \uB300\uD654 \uAE30\uB85D\uC774 \uC774 \uD3F4\uB354\uC5D0 \uC5C6\uC74C). \uC544\uB798 \uBC84\uD2BC\uC73C\uB85C \uB2E4\uC2DC \uC2DC\uB3C4\uD558\uBA74 \uB300\uD654 \uBAA9\uB85D\uC5D0\uC11C \uC9C1\uC811 \uACE0\uB97C \uC218 \uC788\uC2B5\uB2C8\uB2E4.",
+        restoreBtn: true,
+        restoreLabel: "\uB300\uD654 \uBAA9\uB85D\uC5D0\uC11C \uACE0\uB974\uAE30"
+      });
+      return true;
+    }
+    if (mode !== "auto") return false;
+    if (handOffToShell(meta)) return true;
+    startRestore(meta);
+    return true;
+  }
+  function handOffToShell(meta) {
+    if (!(EMBED && window.parent !== window)) return false;
+    try {
+      window.parent.postMessage({ type: "lively-term-gone", id: SESSION_ID, restorable: true, canRestore: !!(meta && meta.canRestore) }, location.origin);
+    } catch (_) {
+    }
+    sessionEnded = true;
+    showEndedBar({ info: true, icon: "\u21BB", title: "\uBA48\uCDB0 \uC788\uB294 \uC138\uC158\uC774\uC5D0\uC694.", body: "\uC774\uC5B4\uC11C \uC5F4\uACE0 \uC788\uC2B5\uB2C8\uB2E4 \u2014 \uC7A0\uC2DC\uB9CC\uC694.", restoreBtn: true, restoreLabel: "\uC5EC\uAE30\uC11C \uC774\uC5B4\uC11C \uC5F4\uAE30" });
+    return true;
+  }
+  function startRestore(meta) {
+    sessionEnded = true;
+    try {
+      term.options.disableStdin = true;
+      term.blur();
+    } catch (_) {
+    }
+    try {
+      statusEl.textContent = "\uC774\uC5B4\uC11C \uC5EC\uB294 \uC911\u2026";
+      statusEl.className = "status";
+    } catch (_) {
+    }
+    showRestoringBanner(meta);
+    restoreThisSession();
   }
   var reconnectTimer = null, reconnectDelay = 1500, wasConnected = false, connecting = false, attempts = 0;
   var denyRetries = 0;
@@ -3209,8 +3265,7 @@
     void isNode;
     if (!meta || !meta.restorable) return "end";
     if (!meta.canRestore) return "notowner";
-    if (meta.exitedByUser || typed) return "ask";
-    if (meta.harness && meta.harness !== "claude") return "ask";
+    if (typed) return "ask";
     if (alreadyRestored) return "loop";
     return "auto";
   }
@@ -3249,19 +3304,7 @@
       return;
     }
     if (mode === "ask") {
-      const noResume = meta.harness === "shell";
-      endSession(noResume ? {
-        info: true,
-        title: "\uC774 \uC138\uC158\uC740 \uC885\uB8CC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.",
-        body: "\uC774\uC5B4\uBC1B\uC744 \uB300\uD654\uAC00 \uC5C6\uB294 \uC138\uC158(\uC178)\uC774\uC5D0\uC694. \uAC19\uC740 \uD3F4\uB354\xB7\uC124\uC815\uC73C\uB85C \uB2E4\uC2DC \uC5F4 \uC218 \uC788\uC2B5\uB2C8\uB2E4.",
-        restoreBtn: true,
-        restoreLabel: "\uB2E4\uC2DC \uC5F4\uAE30"
-      } : meta.exitedByUser ? {
-        info: true,
-        title: "\uC774 \uC138\uC158\uC740 \uC885\uB8CC\uB418\uC5C8\uC2B5\uB2C8\uB2E4.",
-        body: "\uC9C1\uC811 \uC885\uB8CC(exit)\uD55C \uC138\uC158\uC774\uC5D0\uC694. \uADF8\uB54C \uB300\uD654\uB97C \uC774\uC5B4\uC11C \uB2E4\uC2DC \uC5F4 \uC218 \uC788\uC2B5\uB2C8\uB2E4.",
-        restoreBtn: true
-      } : {
+      endSession({
         info: true,
         title: "\uC774 \uC138\uC158\uC774 \uBC29\uAE08 \uB05D\uB0AC\uC2B5\uB2C8\uB2E4.",
         body: "\uC774 \uD0ED\uC5D0\uC11C \uC870\uC791\uD55C \uB4A4 \uB05D\uB0AC\uC5B4\uC694 \u2014 \uC9C1\uC811 \uC885\uB8CC\uD55C \uAC83\uC774\uBA74 \uADF8\uB300\uB85C \uB450\uC2DC\uBA74 \uB429\uB2C8\uB2E4. \uC544\uB2C8\uB77C\uBA74 \uB300\uD654\uB97C \uC774\uC5B4\uC11C \uB2E4\uC2DC \uC5F4 \uC218 \uC788\uC2B5\uB2C8\uB2E4.",
@@ -3269,24 +3312,17 @@
       });
       return;
     }
-    sessionEnded = true;
-    try {
-      term.options.disableStdin = true;
-      term.blur();
-    } catch (_) {
-    }
-    try {
-      statusEl.textContent = "\uC774\uC5B4\uC11C \uC5EC\uB294 \uC911\u2026";
-      statusEl.className = "status";
-    } catch (_) {
-    }
+    if (handOffToShell(meta)) return;
+    startRestore(meta);
+  }
+  function showRestoringBanner(meta) {
+    const why = meta && meta.exitedByUser ? "\uC9C1\uC811 \uC885\uB8CC\uD588\uB358 \uC138\uC158\uC774\uC5D0\uC694." : meta && meta.oomKilled ? "\uBA54\uBAA8\uB9AC\uAC00 \uBAA8\uC790\uB77C \uBA48\uCDC4\uB358 \uC138\uC158\uC774\uC5D0\uC694." : "\uC7AC\uBD80\uD305\uC774\uB098 \uC790\uB3D9 \uD68C\uC218\uB85C \uBA48\uCDB0 \uC788\uB358 \uC138\uC158\uC774\uC5D0\uC694.";
     showEndedBar({
       info: true,
       icon: "\u21BB",
-      title: "\uC911\uB2E8\uB41C \uC138\uC158\uC744 \uC774\uC5B4\uC11C \uC5EC\uB294 \uC911\u2026",
-      body: "\uC7AC\uBD80\uD305\uC774\uB098 \uC790\uB3D9 \uD68C\uC218\uB85C \uBA48\uCD98 \uC138\uC158\uC774\uC5D0\uC694. \uAC19\uC740 \uD3F4\uB354\xB7\uC124\uC815\uC73C\uB85C \uB2E4\uC2DC \uC5F4\uACE0 \uB300\uD654\uB97C \uC774\uC5B4\uBC1B\uC2B5\uB2C8\uB2E4."
+      title: "\uC138\uC158\uC744 \uC774\uC5B4\uC11C \uC5EC\uB294 \uC911\u2026",
+      body: why + " \uAC19\uC740 \uD3F4\uB354\xB7\uC124\uC815\uC73C\uB85C \uB2E4\uC2DC \uC5F4\uACE0 \uB300\uD654\uB97C \uC774\uC5B4\uBC1B\uC2B5\uB2C8\uB2E4."
     });
-    restoreThisSession();
   }
   async function restoreThisSession() {
     try {

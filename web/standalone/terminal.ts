@@ -2115,6 +2115,7 @@ async function loadSessionMeta() {
   if (data) setProjectLink(Number(data.projectId) || 0);
   sessionProjectId = (data && Number(data.projectId)) || 0;
   showDropHint(); // 메타를 받은 뒤에 띄운다 — 업로드 위치 문구가 프로젝트/개인 세션에 따라 갈리므로(#1235)
+  return data;    // #1820 — 부팅이 이 값으로 '붙기 전에 되살릴까'를 판정한다(maybeRestoreOnOpen).
 }
 
 // ── 세션 화면과의 다리(#1744 ?embed=1) ────────────────────────────────────────────────
@@ -2195,7 +2196,9 @@ export async function boot() {
   if (!EMBED) setupDnd();
   setupTermDrop();
   if (EMBED) setupEmbedBridge();
-  loadSessionMeta();
+  // #1820 — 메타는 어차피 제목·프로젝트 링크 때문에 받는다. 그 값으로 **붙기 전에** '되살릴 세션인가'를 판정한다
+  //  (아래 connectNow 직전에서 await). 여기서 await 하지 않는 이유: 화면 구성·폰트 로드를 1 RTT 만큼 늦추지 않으려고.
+  const metaAtBoot = loadSessionMeta();
 
   // 이름 라이브 반영 — 다른 탭(프로젝트/세션 매니저)에서 이름을 바꾸면 같은 브라우저 안에선 즉시 받는다.
   try {
@@ -2320,7 +2323,62 @@ export async function boot() {
   // 다른 브라우저 창에서 이 창으로 전환(같은 창 탭전환은 visibilitychange, 창 전환은 focus)될 때도 동일하게 크기 재요구.
   window.addEventListener('focus', () => { if (ws && ws.readyState === 1) forceRedraw(); });
 
+  // ★ #1820 — 붙기 전에 '이 세션이 지금 살아 있나'를 본다. 되살릴 세션이면 WS 를 아예 안 붙이고 복원으로 간다.
+  if (await maybeRestoreOnOpen(await metaAtBoot)) return;
   connectNow();
+}
+
+// 페이지가 뜰 때의 복원 게이트 (#1820) — WS 를 붙이기 **전에** 판정한다. 반환 true = 복원 경로로 넘어갔다(연결 안 함).
+//  왜 4410 을 기다리지 않나: ① 없는 세션에 붙는 왕복(티켓 발급 → WS 핸드셰이크 → tmux 확답)이 통째로 낭비고
+//   ② 그 사이 '연결 중…' → '연결 실패' 가 번쩍여 사용자는 그걸 **오류**로 읽는다("열었더니 세션이 안 뜨고
+//   오류가 난다" — #1820 신고 문구 그대로다). 메타는 어차피 제목 때문에 받으므로 추가 요청이 없다.
+//  4410 뒤의 onSessionGone 은 그대로 남는다 — 붙어 있다가 죽는 경우(재부팅·회수)는 여기서 못 잡는다.
+async function maybeRestoreOnOpen(meta) {
+  if (!meta || !meta.restorable) return false;          // 살아 있다(또는 판정 근거 없음) — 종전대로 붙는다
+  restoreTried = true;                                  // 이 화면의 복원 시도는 여기서 소진(4410 경로와 이중 실행 금지)
+  // 방금 연 화면이라 '이 탭에서 조작함'(typed)은 언제나 false 다 — 그래서 판정표의 ask 행은 여기서 나오지 않는다.
+  const mode = goneMode(meta, !!NODE_ID, RESTORED, false);
+  if (mode === 'notowner') {
+    endSession({ info: true, icon: '↻', title: '이 세션은 멈춰 있습니다.',
+      body: '이어서 여는 건 세션을 만든 사람만 할 수 있어요. 아래 마지막 화면은 그대로 읽고 복사할 수 있습니다.' });
+    return true;
+  }
+  if (mode === 'loop') {
+    endSession({ info: true, icon: '↻', title: '이어서 열었지만 세션이 곧 다시 종료됐어요.',
+      body: '이어받을 대화를 찾지 못했을 수 있어요(예: 그 대화 기록이 이 폴더에 없음). 아래 버튼으로 다시 시도하면 대화 목록에서 직접 고를 수 있습니다.',
+      restoreBtn: true, restoreLabel: '대화 목록에서 고르기' });
+    return true;
+  }
+  if (mode !== 'auto') return false;                    // 'end'·'ask' — 여기서 날 수 없는 값. 나면 종전 경로로.
+  if (handOffToShell(meta)) return true;
+  startRestore(meta);
+  return true;
+}
+/**
+ * 세션 화면(v2) 안의 프레임이면 **복원을 부모(셸)에게 넘긴다**. 반환 true = 넘겼다.
+ *
+ * 여기서 되살려 location 을 갈아타면 셸 주소(#/s/<옛 id>)·탭 제목·사이드바는 옛 세션 그대로인데 **프레임만
+ *  새 세션**인 어긋난 화면이 된다 — #1808 에서 실제로 났던 사고다. 셸이 받으면 주소까지 함께 옮긴다.
+ *  부모가 없거나(직접 embed URL로 열었거나) 안 듣더라도 사용자는 배너의 버튼으로 직접 되살릴 수 있다.
+ */
+function handOffToShell(meta) {
+  if (!(EMBED && window.parent !== window)) return false;
+  try {
+    window.parent.postMessage({ type: 'lively-term-gone', id: SESSION_ID, restorable: true, canRestore: !!(meta && meta.canRestore) }, location.origin);
+  } catch (_) { /* 부모가 없거나 닫혔다 */ }
+  sessionEnded = true;
+  showEndedBar({ info: true, icon: '↻', title: '멈춰 있는 세션이에요.', body: '이어서 열고 있습니다 — 잠시만요.', restoreBtn: true, restoreLabel: '여기서 이어서 열기' });
+  return true;
+}
+/** 이 화면에서 복원을 실행한다 — 진행 배너를 띄우고 재연결 스케줄러를 세운 뒤 POST /restore. */
+function startRestore(meta) {
+  // ⚠ sessionEnded 를 먼저 세운다 — ws.close() 의 onclose 가 재연결 스케줄러를 깨우면 복원 중에 죽은 id 로
+  //  계속 재접속을 시도한다(scheduleReconnect 의 유일한 정지 조건이 이 플래그).
+  sessionEnded = true;
+  try { term.options.disableStdin = true; term.blur(); } catch (_) { /* noop */ }
+  try { statusEl.textContent = '이어서 여는 중…'; statusEl.className = 'status'; } catch (_) { /* noop */ }
+  showRestoringBanner(meta);
+  restoreThisSession();
 }
 
 // 게이트웨이 재배포 등으로 끊겨도 tmux 세션은 살아있다 → 자동 재연결(티켓 재발급 후 같은 세션 재attach).
@@ -2442,34 +2500,30 @@ function showEndedBar(o) {
   main.insertBefore(bar, panesEl);
 }
 
-// ── #1059 E — 이 화면에서의 lazy 복원 ──
-// 4410(세션 종료 확정) 을 받으면, 그 세션이 '복원 가능'(desired-state 가 DB 에 남음)인지 서버에 묻고 되살린다.
-//  종전엔 복원 경로가 목록 화면의 [복원] 버튼뿐이라, 세션 링크로 바로 들어온 사람은 종료 배너만 보고 목록으로
-//  되돌아가야 했다. E 의 설계는 원래 '부팅 시 전부 자동 spawn 하지 않고 열 때 resume' 이고, 이 화면이 그 '열 때'다.
-//  자동 복원은 **중단된 세션(재부팅·자동회수)만** — 내가 /exit 로 끝낸 세션(exitedByUser)은 되살아나는 게 의도와
-//  어긋나므로 버튼으로 둔다. 노드 세션도 같다 — #1791 뒤 노드 세션에도 중앙 desired-state(node_id)가 있어 서버가 그 노드에
-//  create 를 다시 릴레이한다(종전 '노드는 복원 대상 아님'은 desired-state 가 없던 시절의 규칙).
-// 4410 뒤 무엇을 할지 — 순수 판정(scripts/terminal-restore-gate.test.mjs 가 이 표를 지킨다).
-//  'end'=종료 배너(종전 동작) · 'notowner'=중단됐지만 남의 세션 · 'ask'=버튼으로 물어봄 · 'auto'=자동 복원.
+// ── #1059 E / #1820 — 이 화면에서의 lazy 복원 ──
+// **세션을 여는 것은 "이걸 쓰겠다"는 의사표시다** — 되살릴 수 있으면 되살린다. 이 페이지는 세션으로 가는 모든 길의
+//  도착지(단독 탭·그리드 셀·세션 화면 프레임이 전부 여기다)이므로, 복원을 여기서 보장하면 **트리거가 몇 개든**
+//  누락이 없다. 트리거마다 복원을 넣는 방식은 새 화면이 생길 때마다 빠졌다(#1820 전수조사: 활동 로그·프로젝트
+//  상세·질문 검색·그리드·하단바 '열기'가 전부 그냥 링크만 열고 있었다).
+// 언제 판정하나 — 두 시점이 같은 표를 쓴다: ① 페이지가 뜰 때(메타가 restorable 이라고 하면 WS 를 붙이기 전에)
+//  ② 붙어 있다가 4410(세션 종료 확정)을 받았을 때. 순수 판정(scripts/terminal-restore-gate.test.mjs 가 표를 지킨다).
+//  'end'=종료 배너(되살릴 근거 없음) · 'notowner'=중단됐지만 남의 세션 · 'ask'=버튼으로 물어봄 · 'auto'=자동 복원 · 'loop'=재복원 차단.
 export function goneMode(meta, isNode, alreadyRestored, typed) {
   // #1791 — 노드 세션도 중앙 desired-state(node_id)를 가진다. 판정표는 박스와 같다 — 메타(GET …?node=)가 복원 가능이라 하면
   //  같은 길로 간다(복원 자체는 서버가 그 노드에 create 를 릴레이). isNode 는 호환용 인자로 남긴다(판정에 안 쓴다).
   void isNode;
   if (!meta || !meta.restorable) return 'end';    // 기록이 없거나 남의 세션(403) — 진짜 끝난 세션
   if (!meta.canRestore) return 'notowner';        // 프로젝트 세션이라 보이지만 복원은 소유자 몫
-  // 내가 끝냈다는 신호가 있으면 되살리지 않고 **묻는다**. 신호는 두 갈래 — 훅 기록(exitedByUser) 또는 이 탭의 입력.
-  //  ⚠ exitedByUser 를 loop 보다 앞세운다: 복원해서 쓰다가 또 exit 한 경우까지 loop 로 잡으면 '대화를 못 찾았다'는
-  //   엉뚱한 설명이 뜬다(2026-07-28 실측 신고).
-  if (meta.exitedByUser || typed) return 'ask';
-  // claude 가 아닌 세션은 **자동** 복원하지 않는다(사용자가 버튼을 누르면 복원되고, 그때는 대화도 이어받는다).
-  //  ⚠ #1711 근거 갱신: 종전 근거 ①"이어받을 대화가 없어 복원의 이득이 없다(--resume 무의미)"는 **더 이상 참이
-  //   아니다** — 카탈로그 resumeArgv 로 codex·opencode·antigravity 도 각자 수단으로 그 대화를 이어받는다.
-  //   남은 진짜 이유는 ②다: '사용자가 직접 exit 했다'(exitedByUser)를 채우려면 SessionEnd 등가 이벤트가 필요한데
-  //   그게 없는 하네스가 있다(antigravity 훅은 5이벤트뿐 — SessionEnd 등가물 없음, #1689 실측). 그 신호 없이
-  //   자동 복원하면 사용자가 끝낸 세션을 되살려 exit 가 안 먹히는 UX 가 된다(실측 신고: 셸에서 exit → 자동 복원 → 루프).
-  if (meta.harness && meta.harness !== 'claude') return 'ask';
+  // ★ 유일한 '되살리지 않음' 신호는 **이 탭에서 사용자가 조작했다**(typed)는 것이다. 그건 '여는 중'이 아니라
+  //  '쓰던 중'이고, exit·Ctrl-D·kill 은 전부 입력을 수반하므로 "내가 방금 끝냈다"를 정확히 가른다.
+  //  ⚠ #1820 에서 좁혔다 — 종전엔 `meta.exitedByUser`(훅이 기록한 **과거의** /exit)와 `harness !== 'claude'` 도
+  //   ask 였다. 그 둘이 실측 세션의 대부분이라(dev: 복원 가능 198건 중 다수) "열었는데 아무 일도 안 난다"가
+  //   기본 경험이 됐다(상민님 신고). 과거에 exit 했다는 사실은 **지금 그 세션을 열었다**를 이기지 못한다 —
+  //   목록에서 골라 연 사람은 그걸 쓰려는 것이다. 셸에서 exit → 자동 복원 루프(2026-07-28 신고)는 같은 탭의
+  //   일이라 typed 가 잡고, 복원된 세션이 즉시 또 죽는 경우는 아래 loop 가 잡는다. 두 안전장치는 그대로다.
+  if (typed) return 'ask';
   if (alreadyRestored) return 'loop';             // 복원으로 열린 세션이 사용자 의도 없이 또 끊겼다 — 루프 차단
-  return 'auto';                                  // 중단됨(재부팅·자동회수)인 claude 세션 = 자동 복원의 정확한 타깃
+  return 'auto';
 }
 let restoreTried = false;
 // 이 탭에서 사용자가 키를 눌렀나 — 자동 복원 금지의 **1차 신호**. 훅 기록(exited_at)은 claude 세션에만 있고
@@ -2499,34 +2553,27 @@ async function onSessionGone() {
     return;
   }
   if (mode === 'ask') {
-    // 같은 'ask' 라도 왜 멈췄는지가 다르다 — 사유를 정확히 말한다(틀린 설명이 오해를 만든다).
-    // #1711 — '이어받을 대화가 없다'는 **셸에만** 참이다. 종전엔 claude 가 아니면 전부 이 문구를 써서,
-    //  codex·opencode·antigravity 세션에 "이어받을 대화가 없는 세션이에요"라고 **되는 기능을 없다고** 말했다
-    //  (2026-08-14 상민님 신고: antigravity 세션을 exit 하고 이어 열면 대화가 안 이어진다 — 서버 하드코딩과
-    //  이 문구가 같은 오해의 양면이었다).
-    const noResume = meta.harness === 'shell';
-    endSession(noResume
-      ? { info: true, title: '이 세션은 종료되었습니다.',
-          body: '이어받을 대화가 없는 세션(셸)이에요. 같은 폴더·설정으로 다시 열 수 있습니다.',
-          restoreBtn: true, restoreLabel: '다시 열기' }
-      : meta.exitedByUser
-      ? { info: true, title: '이 세션은 종료되었습니다.',
-          body: '직접 종료(exit)한 세션이에요. 그때 대화를 이어서 다시 열 수 있습니다.', restoreBtn: true }
-      : { info: true, title: '이 세션이 방금 끝났습니다.',
-          body: '이 탭에서 조작한 뒤 끝났어요 — 직접 종료한 것이면 그대로 두시면 됩니다. 아니라면 대화를 이어서 다시 열 수 있습니다.',
-          restoreBtn: true });
+    // #1820 — ask 는 이제 **한 가지 상황**뿐이다: 이 탭에서 조작한 뒤 끝났다(typed). 종전엔 '과거에 exit 했음'과
+    //  '셸·코덱스 하네스'도 여기로 왔는데, 그건 '여는 것'이지 '끝낸 것'이 아니라 auto 로 넘겼다(위 goneMode).
+    //  직접 exit 한 것까지 되살리면 exit 가 안 먹히는 UX 가 되므로 이 자리만 남긴다.
+    endSession({ info: true, title: '이 세션이 방금 끝났습니다.',
+      body: '이 탭에서 조작한 뒤 끝났어요 — 직접 종료한 것이면 그대로 두시면 됩니다. 아니라면 대화를 이어서 다시 열 수 있습니다.',
+      restoreBtn: true });
     return;
   }
-  // 중단됨(재부팅·자동회수) — 자동 복원. 진행 상태를 배너로 알린다(조용히 새 세션으로 바뀌면 무슨 일이 났는지 모른다).
-  //  ⚠ sessionEnded 를 먼저 세운다 — 아래 ws.close() 의 onclose 가 재연결 스케줄러를 깨우면 복원 중에 죽은 id 로
-  //   계속 재접속을 시도한다(scheduleReconnect 의 유일한 정지 조건이 이 플래그). 복원되면 새 주소로 갈아타므로
-  //   이 화면이 다시 붙을 일은 없다.
-  sessionEnded = true;
-  try { term.options.disableStdin = true; term.blur(); } catch (_) { /* noop */ }
-  try { statusEl.textContent = '이어서 여는 중…'; statusEl.className = 'status'; } catch (_) { /* noop */ }
-  showEndedBar({ info: true, icon: '↻', title: '중단된 세션을 이어서 여는 중…',
-    body: '재부팅이나 자동 회수로 멈춘 세션이에요. 같은 폴더·설정으로 다시 열고 대화를 이어받습니다.' });
-  restoreThisSession();
+  // 자동 복원 — 진행 상태를 배너로 알린다(조용히 새 세션으로 바뀌면 무슨 일이 났는지 모른다).
+  //  ⚠ #1820 — 보던 중에 죽은 경우도 **세션 화면 안 프레임이면 셸에 넘긴다**. 부팅 게이트에만 넣으면
+  //   '열 때'는 멀쩡한데 '보다가 죽을 때'만 프레임이 몰래 갈아타는 어긋남이 남는다(#1808 과 같은 사고).
+  if (handOffToShell(meta)) return;
+  startRestore(meta);
+}
+// 복원 중 배너 — 페이지가 뜰 때(선제)와 4410 뒤(사후)가 같은 말을 하도록 한 곳에 둔다.
+function showRestoringBanner(meta) {
+  const why = meta && meta.exitedByUser ? '직접 종료했던 세션이에요.'
+    : meta && meta.oomKilled ? '메모리가 모자라 멈췄던 세션이에요.'
+    : '재부팅이나 자동 회수로 멈춰 있던 세션이에요.';
+  showEndedBar({ info: true, icon: '↻', title: '세션을 이어서 여는 중…',
+    body: why + ' 같은 폴더·설정으로 다시 열고 대화를 이어받습니다.' });
 }
 // 복원 실행 — 목록 카드 [복원] 과 같은 엔드포인트. 새 세션은 새 id 를 받으므로 그 주소로 갈아탄다(현재 URL 은 죽은 id).
 async function restoreThisSession() {
