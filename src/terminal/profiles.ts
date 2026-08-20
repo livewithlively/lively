@@ -167,6 +167,37 @@ export async function mintCentralBoxToken(memberId: string, memberScopes: string
   return token;
 }
 
+// 세션 훅 신원(#1719 후속) — **비격리(공유 홈) 박스**의 세션 pane 에 실어 주는 '그 세션 소유자' 토큰.
+//  왜: 훅(work-flag 등)은 토큰을 `LIVELY_TOKEN` env → 없으면 공유 `~/.lively/token` 에서 읽는다. 홈이 공유인 박스는
+//   그 파일이 **키트를 설치한 사람 것**이라, 다른 멤버 세션이 보내는 보고(대화 uuid 매핑·활동/단계·정상종료)가 전부
+//   남의 신원으로 나가 owner 게이트에 걸려 **조용히 버려졌다**(실측 2026-08-18 dev: yoon 아닌 살아있는 세션 24개
+//   매핑 0건 → 그 세션들의 대화창이 영영 "기록 없음"). 격리(리눅스 OS유저) 박스는 provision-member.sh 가 멤버 홈에
+//   각자 토큰을 심어 이미 옳으므로, 이 주입은 비격리 경로에서만 한다.
+//  ⚠ 이건 격리가 아니라 **귀속**이다 — 같은 박스에서 서로 읽을 수 있다는 사실은 그대로다(맥=단일유저 공유, #1048).
+//  MCP·CLI 신원은 안 바뀐다: 그쪽은 **파일이 정본이고 env 는 캐시**다(#916 — lively.mjs token()). env 를 우선하는 건
+//   훅뿐이라 이 주입의 영향 범위가 정확히 '세션 보고'다. 훅이 부르는 나머지 엔드포인트(런너 훅·자산·runtime-config)는
+//   scope null(인증된 멤버면 OK)이고, 오히려 per-member 타깃팅이 그 세션 주인 기준으로 맞아진다.
+//  세션 스코프 자격이라 세션이 죽으면 회수한다(killSession). 같은 id 로 다시 뜨면 옛 것을 회수하고 새로 굽는다.
+const SESSION_TOKEN_LABEL = "session-hooks:";
+export async function revokeSessionHookToken(boxId: string): Promise<void> {
+  const label = `${SESSION_TOKEN_LABEL}${boxId}`;
+  for (const t of await listTokens()) {
+    if (!t.revoked_at && t.label === label) await revokeToken(t.token_hash, "killSession", "terminal-sessions");
+  }
+}
+export async function mintSessionHookToken(memberId: string, boxId: string): Promise<string | null> {
+  const member = await getMember(memberId);
+  if (!member) return null;                       // 멤버 디렉터리에 없는 소유자 — 종전대로 공유 토큰(무회귀)
+  await revokeSessionHookToken(boxId);            // 같은 box id 재생성 — 옛 자격은 즉시 죽인다
+  const dangerous = DANGEROUS_SCOPES as ReadonlySet<string>;
+  const scopes = (member.scopes || []).filter((s) => isScope(s) && !dangerous.has(s));   // 세션 최소권한(admin/runtime 제외)
+  const { token } = await mintToken(
+    { userId: memberId, memberId, scopes, label: `${SESSION_TOKEN_LABEL}${boxId}` },
+    "createSession", "terminal-sessions",
+  );
+  return token;
+}
+
 export async function provisionProfile(memberId: string, opts?: { includeControlPlane?: boolean }): Promise<{ slug: string; dir: string }> {
   const u = { userId: memberId } as LivelyUser;
   const member = await getMember(memberId);

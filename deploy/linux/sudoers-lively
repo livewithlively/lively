@@ -36,7 +36,7 @@ lively ALL=(LIVELY_BOX_MEMBERS,LIVELY_BROKERS) NOPASSWD: /opt/lively/libexec/box
 #   /login 된 계정의 크레딧이 소모된다(무증상. 고객사 A에서 실제로 그랬다). 권한확대 아님: 값은 **의뢰자 본인의**
 #   자격이고 강하 대상 uid 도 의뢰자 본인 박스유저다(/proc/<pid>/environ 은 그 uid·root 만 읽는다). 이 Cmnd 에만
 #   걸린 보존이며, provision-member 의 LIVELY_TOKEN·브로커의 LIVELY_BROKER_AUTH 와 같은 선례다).
-Defaults!/opt/lively/libexec/box-spawn env_keep += "CLAUDE_CODE_OAUTH_TOKEN TZ LIVELY_SESSION_ID LIVELY_MODE LIVELY_READONLY LIVELY_INCOGNITO LIVELY_OFF LIVELY_BROKER_SOCKET LIVELY_BROKER_MEMBER LIVELY_BROKER_WORKROOT LIVELY_BROKER_ALLOWED_TOOLS LIVELY_BROKER_INTERNAL_HOSTS LIVELY_BROKER_ENTRY LIVELY_BROKER_AUTH"
+Defaults!/opt/lively/libexec/box-spawn env_keep += "CLAUDE_CODE_OAUTH_TOKEN TZ LIVELY_SESSION_ID LIVELY_MODE LIVELY_READONLY LIVELY_INCOGNITO LIVELY_OFF LIVELY_BROKER_SOCKET LIVELY_BROKER_MEMBER LIVELY_BROKER_WORKROOT LIVELY_BROKER_ALLOWED_TOOLS LIVELY_BROKER_INTERNAL_HOSTS LIVELY_BROKER_ENTRY LIVELY_BROKER_AUTH LIVELY_HOME LIVELY_APP_ID"
 
 # ④ per-session cgroup 메모리 격리(#1059 D) — box-cgspawn 을 **root 로**. 세션(claude 등)은 네이티브 ELF 라
 #   힙제한이 안 통해 메모리 캡 수단이 cgroup 뿐인데, 비-root 게이트웨이는 polkit 때문에 cgroup 을 못 만든다.
@@ -49,7 +49,7 @@ Defaults!/opt/lively/libexec/box-spawn env_keep += "CLAUDE_CODE_OAUTH_TOKEN TZ L
 #   부르므로 box-spawn 자신의 env_keep 은 이 경로엔 안 걸린다 → 여기서 보존이 유일한 통로).
 #   ⚠ 위 box-spawn env_keep 목록과 **항상 동일하게 유지**할 것 — 한쪽에만 변수를 추가하면 캡 세션(box-cgspawn 경유)과
 #     비캡 세션(box-spawn 직행)의 env 가 갈린다(공유 상수·테스트로 강제하지 않으니 수기 동기화 규율).
-Defaults!/opt/lively/libexec/box-cgspawn env_keep += "CLAUDE_CODE_OAUTH_TOKEN TZ LIVELY_SESSION_ID LIVELY_MODE LIVELY_READONLY LIVELY_INCOGNITO LIVELY_OFF LIVELY_BROKER_SOCKET LIVELY_BROKER_MEMBER LIVELY_BROKER_WORKROOT LIVELY_BROKER_ALLOWED_TOOLS LIVELY_BROKER_INTERNAL_HOSTS LIVELY_BROKER_ENTRY LIVELY_BROKER_AUTH"
+Defaults!/opt/lively/libexec/box-cgspawn env_keep += "CLAUDE_CODE_OAUTH_TOKEN TZ LIVELY_SESSION_ID LIVELY_MODE LIVELY_READONLY LIVELY_INCOGNITO LIVELY_OFF LIVELY_BROKER_SOCKET LIVELY_BROKER_MEMBER LIVELY_BROKER_WORKROOT LIVELY_BROKER_ALLOWED_TOOLS LIVELY_BROKER_INTERNAL_HOSTS LIVELY_BROKER_ENTRY LIVELY_BROKER_AUTH LIVELY_HOME LIVELY_APP_ID"
 lively ALL=(root) NOPASSWD: /opt/lively/libexec/box-cgspawn
 
 # ② 웹 프로비저닝 — root 로 provision 스크립트 하나만. 토큰·이름·이메일만 env 보존(PATH 등은 미보존).

@@ -70,3 +70,43 @@ export async function openQuickSession(text, opts) {
         creating = false;
     }
 }
+/**
+ * 프로젝트 화면의 [새 세션](#1757) — 첫 지시 없이 이 프로젝트에 붙은 세션을 열고 그 화면으로 간다(지시는 거기서 친다).
+ *  cwd 는 홈 런처와 같은 세션 전용 폴더(sessionDir) — 소속만 프로젝트에 붙인다(#1748 결정: cwd 는 세션 폴더, 소속은 링크).
+ *  실패하면 toast 로 이유를 말하고 false.
+ */
+export async function openProjectSession(projectId, projectName) {
+    if (creating || !(projectId > 0))
+        return false;
+    creating = true;
+    try {
+        const p = runPrefs();
+        const harness = p.harness && p.harness !== 'shell' ? p.harness : 'claude';
+        const out = await api('/api/ui/terminal/sessions', {
+            method: 'POST',
+            // ⚠ label 을 넘기지 않는다(#1808) — 여기에 프로젝트명을 박으면 그 프로젝트의 세션이 전부 같은 이름이 된다
+            //  (실측 2026-08-20: 그 경로로 프로젝트 세션 147건 중 104건이 이름이 프로젝트명 그대로였다). 이름은 서버가
+            //  **처음 시킨 말**로 짓는다 — 여기선 지시를 세션 화면에서 치므로 중앙 기록이 첫 발화를 알아내는 순간 붙는다
+            //  (src/terminal/session-name.ts · src/sessions/session-autoname.ts). 프로젝트는 소속으로만 붙인다(아래 /project).
+            body: JSON.stringify({ harness, flags: p.flags && typeof p.flags === 'object' ? p.flags : {}, autoApprove: !!p.autoApprove, sessionDir: true }),
+        });
+        const id = out && out.session && out.session.id ? String(out.session.id) : '';
+        if (!id)
+            throw new Error('세션 id 를 받지 못했습니다');
+        try {
+            await api('/api/ui/terminal/sessions/' + encodeURIComponent(id) + '/project', { method: 'POST', body: JSON.stringify({ projectId }) });
+        }
+        catch (e) {
+            toast(`세션은 열렸는데 「${projectName || '프로젝트'}」에 붙이지 못했어요 — 세션 상단바 [프로젝트 연결]로 다시 붙일 수 있어요. (${e && e.message ? e.message : e})`, true);
+        }
+        location.hash = '#/s/' + encodeURIComponent(id);
+        return true;
+    }
+    catch (e) {
+        toast('세션을 열지 못했습니다 — ' + (e && e.message ? e.message : e), true);
+        return false;
+    }
+    finally {
+        creating = false;
+    }
+}

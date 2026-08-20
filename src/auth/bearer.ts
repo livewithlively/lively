@@ -111,11 +111,12 @@ export class BearerVerifier {
         }
         // 워크스페이스 게이트(#1750) — 토큰은 유효하되 이 워크스페이스의 멤버가 아니면 403.
         await assertWorkspaceMember(dbUser.userId);
-        const { clientId, resource, expiresAt, ...identity } = dbUser;
+        const { clientId, resource, expiresAt, appId, ...identity } = dbUser;
         return authInfo(
           {
             ...identity, tokenSource: "db", tokenHashPrefix: sha256Hex(token).slice(0, 12),
             ...(clientId ? { oauthClientId: clientId } : {}),
+            ...(appId ? { appId } : {}),
           } as LivelyUser,
           token,
           { expiresAt, resource },

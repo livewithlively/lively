@@ -1,8 +1,8 @@
 // v2/views.ts — 새 셸의 중앙 화면 셋(#1719): 홈(미선택) · 프로젝트 · 세션. 데이터는 main.ts 가 모아 넘긴다(V2Data).
 //  홈은 **입력창 하나**(claude.ai 홈처럼 — Enter 로 프로젝트 없는 세션이 열린다, v2/quick-session.ts)이고,
-//  프로젝트는 개요+세션, 세션은 그 세션 자체(대화창 — 라이브 또는 중앙 기록)를 실는다. 리브 대화는 #/liv 에 있다.
+//  프로젝트는 v2/project-view.ts(#1757 — 짧은 개요 + 리브 대화), 세션은 그 세션 자체(대화창 — 라이브 또는 중앙 기록)를 실는다. 리브 대화는 #/liv 에 있다.
 //  클래식 모듈을 **복제하지 않는다** — 대화·세션 목록·프로젝트 상세는 이미 있는 것을 가져다 붙인다.
-import { api, el, errorNote, relTime, state, toast } from '../core.js';
+import { el, relTime, state, toast } from '../core.js';
 import { isCreatingQuickSession, openQuickSession, takeFirstPrompt } from './quick-session.js';
 import { createRunPicker } from './run-picker.js';
 import { mountSessionChat, type SessionChatHandle } from '../session-chat.js';
@@ -152,43 +152,7 @@ export function projName(data: V2Data, id: number | null): string {
   return p ? p.name : `프로젝트 #${id}`;
 }
 
-// ── 프로젝트 — 개요 + 세션 + 여는 길 ────────────────────────────────────────
-export async function renderProject(host: HTMLElement, data: V2Data, id: number, detailIn?: any): Promise<void> {
-  const p = data.projects.find((x) => Number(x.id) === id);
-  let detail: any = detailIn ?? null;
-  if (!detail) {
-    host.replaceChildren(el('div', { class: 'v2-center' }, el('p', { class: 'v2-muted', text: '불러오는 중…' })));
-    try { detail = await api('/api/ui/v6/projects/' + id); } catch (e) { host.replaceChildren(el('div', { class: 'v2-center' }, errorNote(e, '프로젝트를 불러오지 못했습니다'))); return; }
-  }
-  const pj = (detail && detail.project) || p || { id, name: `프로젝트 #${id}` };
-  const tasks: any[] = Array.isArray(detail?.project?.tasks) ? detail.project.tasks : (Array.isArray(detail?.tasks) ? detail.tasks : []);
-  const done = tasks.filter((t) => t.status_category === 'done' || t.status === 'done').length;
-  const sess = data.sessions.filter((s) => Number(s.projectId) === id).sort((a, b) => Number(b.live) - Number(a.live) || b.lastSeen - a.lastSeen);
-  const st = pj.status_category === 'done' ? '끝남' : pj.status_category === 'unstarted' ? '시작 전' : '진행 중';
-  host.replaceChildren(el('div', { class: 'v2-center' },
-    el('div', { class: 'v2-eyebrow' }, el('span', { class: 'mono', text: '#' + pj.id }), el('span', { text: '·' }), el('span', { class: 'state ' + (pj.status_category === 'done' ? 'done' : 'busy'), text: st }),
-      pj.list && pj.list.name ? [el('span', { text: '·' }), el('span', { text: pj.list.name })] : null),
-    el('h1', { class: 'v2-title', text: pj.name }),
-    pj.description ? el('p', { class: 'v2-desc', text: String(pj.description).slice(0, 600) }) : null,
-    el('div', { class: 'v2-actrow' },
-      el('a', { class: 'btn btn-primary btn-sm', href: '#/app/terminal', text: '새 AI 세션' }),
-      el('a', { class: 'btn btn-ghost btn-sm', href: '#/projects2/p/' + pj.id, text: '프로젝트 앱에서 열기(보드·태스크)' }),
-      el('span', { class: 'v2-muted', text: tasks.length ? `태스크 ${tasks.length} · 끝남 ${done}` : '태스크 없음' })),
-    el('section', { class: 'v2-sec' },
-      el('div', { class: 'v2-sec-h' }, el('span', { class: 'v2-k', text: `세션 · ${sess.length}` })),
-      sess.length ? el('div', { class: 'v2-list' }, ...sess.map((s) => el('a', { class: 'v2-row', href: '#/s/' + encodeURIComponent(s.id) },
-        dot(s.stateKey), el('div', { class: 'v2-row-main' }, el('div', { class: 't', text: sessDisplayName(s, pj.name) }), el('div', { class: 'm', text: `${s.stateLabel} · ${when(s.lastSeen)}` })),
-        el('span', { class: 'v2-row-r', text: '›' }))))
-        : el('p', { class: 'v2-empty', text: '이 프로젝트에 붙은 세션이 아직 없어요. [새 AI 세션] 으로 시작하면 여기에 쌓입니다.' })),
-    tasks.length ? el('section', { class: 'v2-sec' },
-      el('div', { class: 'v2-sec-h' }, el('span', { class: 'v2-k', text: `태스크 · ${tasks.length}` })),
-      el('div', { class: 'v2-list' }, ...tasks.slice(0, 8).map((t) => el('a', { class: 'v2-row', href: '#/projects2/t/' + t.id },
-        el('span', { class: 'v2-dot ' + (t.status_category === 'done' ? 'done' : t.status_category === 'started' ? 'busy' : '') }),
-        el('div', { class: 'v2-row-main' }, el('div', { class: 't', text: t.name }), el('div', { class: 'm', text: t.status || t.status_category || '' })),
-        el('span', { class: 'v2-row-r', text: '›' }))),
-        tasks.length > 8 ? el('a', { class: 'v2-more', href: '#/projects2/p/' + pj.id, text: `외 ${tasks.length - 8}개 — 프로젝트 앱에서` }) : null)) : null,
-  ));
-}
+// ── 프로젝트 화면은 v2/project-view.ts(#1757) — 짧은 개요 + 리브 대화. 여기 있던 renderProject(개요+세션+태스크 나열)는 거기로 갈음했다.
 
 // ── 세션 — 그 세션 자체를 가운데에: 터미널 기본 + 대화(베타)(web/session-chat.ts) ─────────
 //  라이브면 박스의 대화 파일을 창으로 읽어 라이브로 따라가고 입력칸으로 보낸다(프롬프트 주입). 끝난 세션이면 기록 + [이어서 대화하기].

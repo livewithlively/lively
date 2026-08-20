@@ -49,10 +49,10 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-empty { font-size: 12.5px; color: var(--muted); line-height: 1.6; margin: 0; padding: 8px 4px; }
 .v2-fine { font-size: 11.5px; color: var(--muted); line-height: 1.6; margin: 10px 0 0; }
 
-.v2-ws { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding: 5px 7px; border: 1px solid transparent; border-radius: 8px; background: none; font: inherit; text-align: left; cursor: pointer; }
+.v2-ws { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding: 6px 8px; border: 1px solid transparent; border-radius: 8px; background: none; font: inherit; text-align: left; cursor: pointer; }
 .v2-ws:hover { background: var(--bg, #fff); border-color: var(--line, #E6ECF5); }
-.v2-ws-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 700; color: var(--ink); }
-.v2-ws-car { font-size: 10px; color: var(--muted-2, #a6b2c8); flex: none; margin-right: auto; }
+.v2-ws-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 700; color: var(--ink); }
+.v2-ws-car { font-size: 10px; color: var(--muted-2, #a6b2c8); flex: none; }
 .v2-ws-badge { flex: none; font-family: var(--mono, ui-monospace, monospace); font-size: 10px; letter-spacing: .04em; font-weight: 700; padding: 1px 5px; border-radius: 5px; border: 1px solid transparent; }
 .v2-ws-badge.personal { color: var(--mint-deep, #0FA37E); background: var(--bg-success, #F3FBF8); border-color: #CDEFE3; }
 .v2-ws-badge.team { color: var(--blue); background: var(--bg-tint, #F6FAFF); border-color: var(--line-net-2, #CFE0F7); }
@@ -69,7 +69,9 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-ws-empty, .v2-ws-loading { font-size: 11.5px; color: var(--muted); line-height: 1.55; padding: 4px 8px 6px; margin: 0; }
 .v2-ws-team-row { display: flex; align-items: center; gap: 4px; padding: 2px 4px 2px 8px; border-radius: 8px; }
 .v2-ws-team-row:hover { background: var(--bg-tint, #F6FAFF); }
-.v2-ws-team-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; text-decoration: none; color: var(--ink); font-size: 12.5px; font-weight: 600; }
+/* 행 본체 — a(연결한 팀)와 button(registry 전환) 둘 다 이 클래스를 쓴다. button 기본 테두리·배경을
+   리셋하지 않으면 이름까지만 감싼 회색 상자가 되고 ✎·✕ 가 상자 밖에 남는다(2026-08-19 실측). */
+.v2-ws-team-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; text-decoration: none; color: var(--ink); font: inherit; font-size: 12.5px; font-weight: 600; border: 0; background: none; padding: 5px 2px; text-align: left; cursor: pointer; border-radius: 6px; }
 .v2-ws-err { flex: none; width: 15px; height: 15px; border-radius: 50%; background: var(--coral, #E5484D); color: #fff; font-size: 10px; font-weight: 800; display: grid; place-items: center; }
 .v2-ws-auto { flex: none; font-size: 10.5px; font-weight: 700; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
 .v2-ws-auto.on { color: var(--mint-deep, #0FA37E); border-color: #CDEFE3; background: var(--bg-success, #F3FBF8); }
@@ -94,19 +96,26 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
       프로젝트 62.5(펼치면 65.5) · 세션 41 · 내 이름 48 로 다섯 갈래였고, 특히 자식(세션 41)이 부모(62.5)보다
       **왼쪽**에서 시작해 위계가 뒤집혀 읽혔다. 세션의 상태점은 프로젝트의 폴더 아이콘 칸에 앉혀 기둥을 맞춘다.
    ② **4px 격자**: 한 줄 행은 모두 --row-h(34px). 이전엔 38.5 / 36.5 / 30.2 로 행마다 달랐다.
-   ③ **글자 크기 넷**: 14(이름) · 13(세션·버튼) · 12(부제) · 11(시각·개수·라벨). 이전엔 9.5~15 사이 열한 가지였다. */
-.v2-side { --side-x: 8px; --rail: 56px; --row-h: 34px; background: var(--canvas, #F4F7FC); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
-/* 좌상단 한 줄 — 브랜드 심볼(=홈) + 워크스페이스 스위처. 워드마크 줄을 따로 두면 조직명이 'Lively' 일 때
-   같은 글자가 두 번 나오고 머리만 196px 를 먹었다(실측) → 141px. */
-.v2-side-top { padding: 12px var(--side-x, 8px) 6px 8px; display: flex; align-items: center; gap: 10px; }
-.v2-mark { flex: none; width: 30px; height: 30px; border-radius: 9px; background: var(--ink); display: grid; place-items: center; text-decoration: none; }
-.v2-mark:hover { background: var(--blue-deep, #1E54CC); }
-.v2-mark-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--mint-deep, #0FA37E); display: block; }
-.v2-mark:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-.v2-liv-btn { margin: 4px var(--side-x, 8px) 2px; display: flex; align-items: center; gap: 12px; padding: 8px 10px 8px 9px; min-height: var(--row-h, 34px); border-radius: 9px; border: 1px solid transparent; font-weight: 700; font-size: 14px; color: var(--ink); text-decoration: none; }
-.v2-liv-btn:hover, .v2-liv-btn.on { background: var(--bg, #fff); border-color: #CDEFE3; }
-.v2-liv-btn .lm { width: 26px; height: 26px; border-radius: 50%; background: var(--bg-success, #F3FBF8); border: 1px solid #CDEFE3; display: grid; place-items: center; color: var(--mint-deep, #0FA37E); font-weight: 800; font-size: 11px; flex: none; }
-.v2-liv-btn .sub { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--muted); }
+   ③ **글자 크기 넷**: 14(이름) · 13(세션·버튼) · 12(부제) · 11(시각·개수·라벨). 이전엔 9.5~15 사이 열한 가지였다.
+   ⚠ 단, 기둥 규칙은 **최상위 행(홈·리브·프로젝트)에만** 적용한다. 세션까지 같은 기둥에 세웠더니 부모와 자식이
+      같은 x(실측 56·56)에 서서 '프로젝트 안에 세션이 있다'가 화면에서 사라졌다 — 원준님 2026-08-20 반려
+      ("프로젝트 아래 방처럼 있는 게 다 없어졌다"). 자식은 --nest 만큼 안쪽에 선다(56 → 70).
+      ①의 원래 사유(자식 41 < 부모 62.5 로 위계가 **뒤집혀** 읽힘)는 그대로 지켜진다 — 이제 자식이 더 안쪽이다. */
+.v2-side { --side-x: 8px; --rail: 56px; --nest: 14px; --row-h: 34px; background: var(--canvas, #F4F7FC); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+/* 좌상단 한 줄 = **워크스페이스 머리글**. 워드마크 줄을 따로 두면 조직명이 'Lively' 일 때 같은 글자가
+   두 번 나오고 머리만 196px 를 먹었다(실측) → 한 줄로. 브랜드 네모(홈 링크)는 무엇인지 읽히지 않아
+   걷었고(상민님 2026-08-19), 홈은 아래 [홈] 줄이 맡는다. */
+.v2-side-top { padding: 10px var(--side-x, 8px) 4px; display: flex; align-items: center; }
+/* 늘 있는 곳(홈·리브) — 프로젝트 행과 **같은 모양**이다. 알약(테두리·큰 글씨)으로 만들면 목록보다 먼저
+   읽혀 위계가 뒤집힌다(상민님 2026-08-19). 아이콘도 프로젝트 폴더와 같은 칸에 앉아 글자가 기둥 56px 에 선다. */
+.v2-fixed { padding: 0 var(--side-x, 8px) 6px; margin-bottom: 4px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
+.v2-nav { display: flex; align-items: center; padding: 7px 10px 7px 28px; min-height: var(--row-h, 34px); border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--ink-sub); text-decoration: none; }
+.v2-nav:hover { background: var(--bg, #fff); color: var(--ink); }
+.v2-nav.on { background: var(--bg, #fff); color: var(--ink); font-weight: 700; box-shadow: inset 0 0 0 1px var(--line-net, #DCE6F5); }
+.v2-nav .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-nav-ic { width: 16px; height: 16px; margin-right: 4px; flex: none; fill: none; stroke: var(--muted-2, #a6b2c8); stroke-width: 1.8; stroke-linejoin: round; }
+.v2-nav:hover .v2-nav-ic, .v2-nav.on .v2-nav-ic { stroke: var(--blue); }
+.v2-nav-lm { width: 16px; height: 16px; margin-right: 4px; flex: none; border-radius: 50%; background: var(--bg-success, #F3FBF8); border: 1px solid #CDEFE3; display: grid; place-items: center; color: var(--mint-deep, #0FA37E); font-weight: 800; font-size: 9px; }
 .v2-side-sec { padding: 14px 8px 4px 16px; display: flex; align-items: center; gap: 2px; flex-wrap: nowrap; min-height: 30px; }
 .v2-side-sec .v2-k { margin-right: 6px; font-family: inherit; font-size: 11px; font-weight: 700; letter-spacing: 0; text-transform: none; color: var(--muted); font-variant-numeric: tabular-nums; }
 /* 개수가 늘어도(196·1204) 줄바꿈되지 않게 — 조작부가 두 줄로 접히면 목록보다 머리가 커 보인다. */
@@ -116,6 +125,11 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-add { flex: none; display: inline-grid; place-items: center; width: 27px; height: 27px; color: var(--muted); text-decoration: none; border: 1px solid transparent; border-radius: 7px; }
 .v2-add:hover { color: var(--ink); background: var(--bg, #fff); border-color: var(--line, #E6ECF5); }
 .v2-add-ic { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+/* ＋ 새 프로젝트 팝오버 — anchoredPopover 는 자리만 잡는다. 면(배경·테두리·그림자)은 이 클래스가 줘야 하고,
+   없으면 입력칸·안내글이 본문 위에 투명하게 겹친다(상민님 2026-08-19 실측 사진). */
+.v2-newpop { z-index: 60; background: var(--bg, #fff); border: 1px solid var(--line, #E6ECF5); border-radius: 12px; box-shadow: 0 12px 32px rgba(21, 35, 59, .14); }
+.v2-newrow { display: flex; align-items: center; gap: 8px; }
+.v2-newmsg { margin: 0; font-size: 11.5px; color: var(--coral-text, #B84E44); line-height: 1.5; }
 /* 상태 칩 — 살아 있는 세션 상태별 개수. 누르면 그 상태만(렌즈). 채운 파랑은 안 쓴다(주 액션 아님) — 켜짐은 흰 배경+테두리. */
 /* 돋보기 — 검색칸을 여닫는다. 아이콘 자체는 늘 보여서 '검색이 있는 줄 모르는' 일이 없다(#1154 반려 사유 대응).
    검색어가 남아 있으면 켜진 색으로 남아, 목록이 짧아진 이유를 헤더가 말해 준다. */
@@ -169,10 +183,10 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-pj-ic { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted-2, #a6b2c8); stroke-width: 1.8; stroke-linejoin: round; }
 .v2-pj-row:hover .v2-pj-ic, .v2-pj-row.on .v2-pj-ic { stroke: var(--blue); }
 .v2-pj-row .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.v2-pj-when { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--muted, #8A99B5); flex: none; margin-left: 8px; min-width: 40px; text-align: right; }
+.v2-pj-when { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--muted, #8A99B5); flex: none; margin-left: 8px; min-width: 34px; text-align: right; }
 .v2-tag { font-size: 11px; letter-spacing: 0; color: var(--muted, #8A99B5); border: 1px solid var(--line-net, #DCE6F5); border-radius: 4px; padding: 0 5px; line-height: 16px; flex: none; margin-left: 6px; }
 /* 프로젝트 행 오른쪽 상태 요약 — 색 점 + 개수. 확인 필요 › 작업 완료 › 작업 중 › 그 밖(회색) 순. */
-.v2-sums { display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px; flex: none; margin-left: 8px; min-width: 40px; }
+.v2-sums { display: inline-flex; align-items: center; justify-content: flex-end; gap: 8px; flex: none; margin-left: 8px; min-width: 34px; }
 .v2-sum { display: inline-flex; align-items: center; gap: 4px; font-family: var(--mono, ui-monospace, monospace); font-size: 11px; font-weight: 600; color: var(--muted); }
 .v2-sum.wait { color: var(--amber, #C98A16); }
 .v2-sum.busy { color: var(--blue); }
@@ -184,14 +198,14 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 /* 세션 목록 = 카드 몸통 — 담김은 카드(면)가 말하므로 세로선 레일은 뺀다(이중 표식은 잡음).
    세션 행: 상태점 + 보통 글씨. 누르면 **그 세션의 대화**. 프로젝트 행과 생김새가 다르다(위계). */
 .v2-ss-list { padding: 0 9px 6px 0; }
-.v2-ss-row { position: relative; display: flex; align-items: center; gap: 0; padding: 7px 9px 7px 27px; border-radius: 7px; font-size: 13px; font-weight: 500; line-height: 1.4; color: var(--ink-sub); text-decoration: none; min-height: var(--row-h, 34px); }
+.v2-ss-row { position: relative; display: flex; align-items: center; gap: 0; padding: 7px 9px 7px calc(27px + var(--nest, 14px)); border-radius: 7px; font-size: 13px; font-weight: 500; line-height: 1.4; color: var(--ink-sub); text-decoration: none; min-height: var(--row-h, 34px); }
 .v2-ss-row + .v2-ss-row { margin-top: 2px; }
 /* 점은 프로젝트의 폴더 아이콘과 같은 칸(16px)의 한가운데 — 이 여백이 세션 글자를 부모와 같은 기둥에 세운다. */
 .v2-ss-row > .v2-dot { margin: 0 9px 0 5px; }
 .v2-ss-row:hover { background: var(--bg-tint, #F6FAFF); color: var(--ink); }
 .v2-ss-row.on { background: var(--bg-tint, #F6FAFF); color: var(--ink); font-weight: 700; }
 /* 지금 보고 있는 세션 — 행 왼쪽에 파란 마디. */
-.v2-ss-row.on::before { content: ''; position: absolute; left: 3px; top: 7px; bottom: 7px; width: 2.5px; border-radius: 2px; background: var(--blue); }
+.v2-ss-row.on::before { content: ''; position: absolute; left: calc(3px + var(--nest, 14px)); top: 7px; bottom: 7px; width: 2.5px; border-radius: 2px; background: var(--blue); }
 .v2-ss-go { width: 14px; height: 14px; margin-left: 6px; flex: none; fill: none; stroke: var(--muted-2, #a6b2c8); stroke-width: 1.8; stroke-linejoin: round; opacity: 0; }
 .v2-ss-row:hover .v2-ss-go { opacity: 1; }
 .v2-ss-main { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.35; }
@@ -204,9 +218,9 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-ss-row .w.busy { color: var(--blue); }
 .v2-ss-row .w.done { color: var(--mint-deep, #0FA37E); }
 .v2-ss-more { display: block; padding: 6px 9px 6px 47px; font-size: 12px; color: var(--muted); text-decoration: none; }
-/* '지난 세션 n' — 멈춘 세션을 접어 두는 묶음 머리(#1808). 캐럿·글자 시작점을 **세션 행 이름과 같은 기둥**(47px)에
-   맞춘다 — 위계를 한 단 더 들이는 게 아니라 같은 목록 안의 묶음이라는 뜻이다. */
-.v2-ss-past { display: flex; align-items: center; gap: 4px; width: calc(100% - 9px); margin-top: 2px; padding: 5px 9px 5px 27px; border: 0; background: none; font: inherit; font-size: 12px; font-weight: 600; line-height: 1.4; color: var(--muted); cursor: pointer; border-radius: 7px; text-align: left; }
+/* '지난 세션 n' — 멈춘 세션을 접어 두는 묶음 머리(#1808). 캐럿·글자 시작점을 **세션 행과 같은 안쪽 기둥**에
+   맞춘다(--nest 포함) — 위계를 한 단 더 들이는 게 아니라 그 방 안의 묶음이라는 뜻이다. */
+.v2-ss-past { display: flex; align-items: center; gap: 4px; width: calc(100% - 9px); margin-top: 2px; padding: 5px 9px 5px calc(27px + var(--nest, 14px)); border: 0; background: none; font: inherit; font-size: 12px; font-weight: 600; line-height: 1.4; color: var(--muted); cursor: pointer; border-radius: 7px; text-align: left; }
 .v2-ss-past:hover { background: var(--bg-tint, #F6FAFF); color: var(--ink); }
 .v2-ss-past .n { flex: none; }
 .v2-ss-past .v2-cnt { flex: none; }
@@ -218,16 +232,22 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-tree-note .btn-text { font-size: 13px; padding: 0; }
 .v2-tree-more { display: block; width: calc(100% - var(--side-x, 8px)); margin-top: 10px; padding: 8px 10px; border: 1px dashed var(--line-net, #DCE6F5); border-radius: 8px; background: none; font: inherit; font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer; text-align: left; }
 .v2-tree-more:hover { color: var(--ink); background: var(--bg, #fff); }
-.v2-pin { flex: none; padding: 2px var(--side-x, 8px) 8px; border-bottom: 1px solid var(--line); }
-.v2-pin-h { font-size: 11px; font-weight: 700; letter-spacing: 0; color: var(--muted); padding: 6px 8px 4px; }
-.v2-pin .v2-ss-row { padding-left: 28px; }
+/* 고정 단추 — 자리는 늘 차지한다(hover 때 나타나며 행을 밀면 목록이 흔들린다). 고정된 것만 늘 보인다. */
+.v2-pinb { width: 18px; height: 18px; margin-left: 4px; padding: 0; flex: none; border: 0; border-radius: 5px; background: none; color: var(--muted-2, #A6B2C8); cursor: pointer; display: inline-grid; place-items: center; opacity: 0; }
+.v2-pj-row:hover .v2-pinb, .v2-pinb:focus-visible { opacity: 1; }
+.v2-pinb:hover { color: var(--ink); background: var(--bg-tint-2, #EEF5FF); }
+.v2-pinb.on { opacity: 1; color: var(--blue); }
+.v2-pinb-ic { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
+.v2-pinb.on .v2-pinb-ic { fill: currentColor; stroke: none; }
+/* 고정 묶음과 나머지 사이 — 실선 하나면 충분하다(머리글을 두지 않는다). */
+.v2-pj.after-pins { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line-net, #DCE6F5); }
 
 .v2-side-foot { padding: 8px var(--side-x, 8px) 10px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
-.v2-apps-btn { display: flex; align-items: center; gap: 12px; width: 100%; padding: 8px 10px 8px 9px; min-height: var(--row-h, 34px); border-radius: 9px; border: 1px solid var(--line); background: var(--bg, #fff); font: inherit; font-size: 13px; font-weight: 700; color: var(--ink); cursor: pointer; }
-.v2-apps-btn:hover { border-color: var(--blue); }
+.v2-apps-btn { display: flex; align-items: center; gap: 4px; width: 100%; padding: 7px 10px 7px 28px; min-height: var(--row-h, 34px); border-radius: 8px; border: 0; background: none; font: inherit; font-size: 13px; font-weight: 600; color: var(--ink-sub); cursor: pointer; text-align: left; }
+.v2-apps-btn:hover { background: var(--bg, #fff); color: var(--ink); }
 .v2-apps-btn .v2-cnt { margin-left: auto; }
-.v2-me { display: flex; align-items: center; gap: 12px; padding: 4px 10px; min-height: var(--row-h, 34px); font-size: 13px; color: var(--ink-sub); }
-.v2-me .v2-ava { width: 26px; height: 26px; border-radius: 50%; font-size: 11px; }
+.v2-me { display: flex; align-items: center; gap: 8px; padding: 4px 10px 4px 18px; min-height: var(--row-h, 34px); font-size: 13px; color: var(--ink-sub); }
+.v2-me .v2-ava { width: 22px; height: 22px; border-radius: 50%; font-size: 10px; }
 .v2-me-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-classic-link { border: 0; background: none; font: inherit; font-size: 11px; color: var(--muted-2, #a6b2c8); cursor: pointer; text-align: left; padding: 2px 10px 0; }
 .v2-classic-link:hover { color: var(--ink-sub); text-decoration: underline; }
@@ -612,6 +632,32 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-pad-ico .v2-ic { width: 22px; height: 22px; }
 .v2-pad-desc { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
 .v2-pad-empty { color: #fff; font-size: 13px; }
+/* 세션 앱 타일(#1780) — 화면 앱과 성격이 다르다(열면 전용 AI 세션이 뜬다). 민트 강조 + 배지로 구분. */
+.v2-pad-item--app { position: relative; cursor: pointer; font: inherit; }
+.v2-pad-item--app:hover { border-color: var(--mint-deep, #0FA37E); }
+.v2-pad-item--app .v2-pad-ico { background: var(--bg-success, #F3FBF8); border-color: #CDEFE3; color: var(--mint-deep, #0FA37E); }
+.v2-pad-badge { position: absolute; top: 8px; right: 8px; font-size: 9.5px; font-weight: 800; letter-spacing: .02em; color: var(--mint-deep, #0FA37E); background: var(--bg-success, #F3FBF8); border: 1px solid #CDEFE3; border-radius: 999px; padding: 1px 7px; }
+
+/* ── 앱 사용 동의 창(#1780 app-session) — 세션 앱을 처음 열 때 뜨는 권한 확인 모달 ── */
+.v2-consent-ov { position: fixed; inset: 0; z-index: 90; display: grid; place-items: center; background: rgba(21,35,59,.32); padding: 20px; }
+.v2-consent { width: min(440px, 100%); background: var(--bg, #fff); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-2, 0 8px 30px rgba(21,35,59,.14)); padding: 22px 22px 18px; }
+.v2-consent-t { margin: 0 0 6px; font-size: 16px; font-weight: 800; color: var(--ink); line-height: 1.4; }
+.v2-consent-sub { margin: 0 0 16px; font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+.v2-consent-grp { display: flex; gap: 10px; align-items: baseline; padding: 8px 0; border-top: 1px solid var(--line); }
+.v2-consent-grp > b { flex: none; width: 44px; font-size: 12px; color: var(--ink-sub); }
+.v2-consent-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.v2-consent-chip { font-family: var(--mono, ui-monospace, monospace); font-size: 11px; color: var(--blue); background: var(--bg-tint, #F6FAFF); border: 1px solid var(--line-net-2, #CFE0F7); border-radius: 7px; padding: 2px 8px; }
+.v2-consent-chip.none { color: var(--muted); background: transparent; border-color: var(--line); font-family: inherit; }
+.v2-consent-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+
+/* ── 앱 UI 창(#1780 PR5) — 설치된 앱의 UI 페이지를 샌드박스 iframe 으로 실는 모달 ── */
+.v2-appui-ov { position: fixed; inset: 0; z-index: 88; display: grid; place-items: center; background: rgba(21,35,59,.36); padding: 24px; }
+.v2-appui { width: min(960px, 100%); height: min(680px, 88vh); display: flex; flex-direction: column; background: var(--bg, #fff); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-2, 0 8px 30px rgba(21,35,59,.14)); overflow: hidden; }
+.v2-appui-h { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); flex: none; }
+.v2-appui-t { font-size: 14px; font-weight: 800; color: var(--ink); }
+.v2-appui-badge { font-size: 9.5px; font-weight: 800; letter-spacing: .02em; color: var(--blue); background: var(--bg-tint, #F6FAFF); border: 1px solid var(--line-net-2, #CFE0F7); border-radius: 999px; padding: 1px 7px; }
+.v2-appui-spacer { flex: 1; }
+.v2-appui-frame { flex: 1; width: 100%; border: 0; background: #fff; }
 
 /* ── 타임라인 서랍(#1719 바탕화면 방향 1차) ─────────────────────────────────
    맥 문법(알림 센터): 홈(바탕화면)의 타임라인은 상주 열이 아니라 '불러오는 것' — 우상단 버튼으로
@@ -743,7 +789,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
   .v2-pj-row { padding: 11px 10px 11px 6px; font-size: 15px; }
   .v2-pj.open > .v2-pj-row { padding: 11px 12px 8px 8px; }
   .v2-car { width: 30px; height: 30px; font-size: 17px; }
-  .v2-ss-row { min-height: 42px; padding: 8px 10px 8px 14px; font-size: 14.5px; }
+  .v2-ss-row { min-height: 42px; padding: 8px 10px 8px calc(14px + var(--nest, 14px)); font-size: 14.5px; }
   .v2-ss-row .sub { font-size: 12.5px; }
   .v2-ss-go { opacity: 1; }                       /* 호버가 없다 — 가는 길(말풍선)은 늘 보인다 */
   .v2-ss-more, .v2-tree-more, .v2-tree-note { font-size: 14px; }
@@ -809,3 +855,595 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 /* 팝아웃 창(#1744)은 서랍 크롬(☰·타임라인 버튼)이 없다 — 좁은 화면에선 가운데 한 칸만 남긴다.
    팝아웃은 '이 세션만 큰 창으로'라는 데스크톱 손짓이고, 폰에서는 본 화면(서랍 셸)이 그 역할을 한다. */
 @media (max-width: 900px) { #v2-root.solo .v2-aside { display: none; } }
+/* ══ 실험장 v3(#1719 원준) — 레일 · 작업대 · 위젯(S/M/L 반응) ════════════════════ */
+/* ── 레일 모드 그리드 ── */
+/* 좌측 열 폐기(원준 3차) — 평소 0px, 프로젝트 패널이 열릴 때만 284px 로 민다. */
+#v2-root.rail-mode { grid-template-columns: 0 minmax(0, 1fr) 6px var(--v2-aside-w); }
+#v2-root.rail-mode.no-aside { grid-template-columns: 0 minmax(0, 1fr) 0 0; }
+#v2-root.rail-mode.rail-open { grid-template-columns: 284px minmax(0, 1fr) 6px var(--v2-aside-w); }
+#v2-root.rail-mode.rail-open.no-aside { grid-template-columns: 284px minmax(0, 1fr) 0 0; }
+.stu-side { position: relative; display: flex; flex-direction: row; align-items: stretch; overflow: hidden; padding: 0; background: var(--bg, #fff); border: 0; }
+.stu-rail { width: 64px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 0; }
+.stu-rail-logo { width: 30px; height: 30px; border-radius: 9px; background: var(--ink); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 14px; margin-bottom: 10px; text-decoration: none; }
+.stu-rail-it { width: 56px; padding: 7px 0 6px; border: 0; background: none; border-radius: 10px; display: flex; flex-direction: column; align-items: center; gap: 3px; font: inherit; font-size: 10px; color: var(--muted-head); cursor: pointer; text-decoration: none; }
+.stu-rail-it:hover { background: var(--bg-punch); color: var(--ink); }
+.stu-rail-it.on { background: #E9EFFB; color: var(--blue); }
+.stu-rail-i { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.stu-rail-sp { flex: 1; }
+.stu-panel { position: relative; width: 284px; flex: none; min-height: 0; background: #FAFBFC; border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+.stu-panel-h { flex: none; display: flex; align-items: center; gap: 8px; padding: 14px 14px 6px; }
+.stu-panel-h b { flex: 1; font-size: 13px; }
+.stu-panel-tree { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.stu-panel-tree .v2-side { border: 0; background: transparent; width: auto; }
+/* 문패 첫 줄 — 홈 로고·[프로젝트]·메타가 한 줄, 그 아래 큰 제목(시안 P1 존재감) */
+.stu-door-top { display: flex; align-items: center; gap: 9px; margin-bottom: 7px; }
+.stu-homelogo { width: 26px; height: 26px; border-radius: 8px; background: var(--ink); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 13px; text-decoration: none; flex: none; }
+.stu-projbtn { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 9px; border: 1px solid var(--line-net); border-radius: 8px; background: var(--bg, #fff); font: inherit; font-size: 12px; color: var(--ink-sub); cursor: pointer; flex: none; }
+.stu-projbtn:hover { border-color: var(--blue); color: var(--blue); }
+.stu-projbtn .car { color: var(--muted-2); }
+.stu-door-sep { width: 1px; height: 14px; background: var(--line-net); flex: none; }
+/* ── 작업대 골격 ── */
+.stu-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg, #fff); }
+.stu-door { flex: none; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 16px 24px 14px; border-bottom: 1px solid var(--line); }
+/* 좌상단 손잡이(.stu-panel-fab)가 떠 있을 때만 그만큼 왼쪽을 비운다 — 패널이 열려 있으면 손잡이가 없다. */
+#v2-root:not(.rail-open) .stu-door { padding-left: 122px; }
+.stu-eyebrow { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-sub); }
+.stu-eyebrow .sep { color: var(--muted-2); }
+.stu-state.run { color: var(--blue); font-weight: 700; } .stu-state.done { color: var(--mint-deep); font-weight: 700; } .stu-state.todo { color: var(--muted); }
+.stu-title { margin: 0; font-size: 25px; font-weight: 800; letter-spacing: -.022em; line-height: 1.22; }
+.stu-door-r { display: flex; align-items: center; gap: 8px; flex: none; }
+.stu-faces { display: inline-flex; margin-right: 4px; }
+.stu-face { width: 26px; height: 26px; border-radius: 13px; border: 2px solid var(--bg, #fff); margin-left: -6px; }
+.stu-cm-btn { display: inline-flex; align-items: center; gap: 5px; }
+.stu-cm-btn.on { background: #E6F7F5; color: #0E7C7E; border-color: #9ADCD4; }
+.stu-i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.stu-i.sm { width: 13px; height: 13px; }
+.stu-board { flex: 1; min-height: 0; overflow: auto; position: relative; background: #F6F7F9; background-image: radial-gradient(#DDE3EB 1px, transparent 1px); background-size: 22px 22px; }
+.stu-board.cm-on { cursor: crosshair; }
+.stu-canvas { position: relative; width: 1500px; height: 900px; }
+.stu-cmlayer { position: absolute; left: 0; top: 0; z-index: 30; cursor: crosshair; }
+.stu-cmlayer[hidden] { display: none; }
+.stu-marq { position: absolute; border: 1.5px dashed #1BAEB0; background: rgba(27,174,176,.10); border-radius: 6px; pointer-events: none; }
+.stu-boardhint { position: sticky; left: 16px; top: 0; width: max-content; max-width: 90%; margin: 8px 0 0 16px; font-size: 11.5px; color: var(--muted); pointer-events: none; }
+/* ── 위젯 프레임 — 완성도: 이중 그림자·13px 라운드·호버 리프트·드래그 부양 ── */
+.stu-w { position: absolute; display: flex; flex-direction: column; background: var(--bg, #fff); border: 1px solid #E4E8EF; border-radius: 13px;
+  box-shadow: 0 0 0 .5px rgba(21,35,59,.03), 0 1px 2px rgba(21,35,59,.06), 0 10px 26px rgba(21,35,59,.07); overflow: hidden;
+  transition: box-shadow .14s ease; }
+.stu-w:hover { box-shadow: 0 0 0 .5px rgba(21,35,59,.03), 0 2px 4px rgba(21,35,59,.07), 0 14px 34px rgba(21,35,59,.10); }
+.stu-w.drag { box-shadow: 0 0 0 .5px rgba(21,35,59,.04), 0 6px 14px rgba(21,35,59,.12), 0 26px 60px rgba(21,35,59,.18); }
+.stu-w.min { height: auto !important; }
+.stu-w.flash { outline: 2px solid var(--blue); outline-offset: 2px; }
+.stu-w-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 9px 8px 8px 11px; cursor: grab; user-select: none; }
+.stu-w-head:active { cursor: grabbing; }
+.stu-w-ic { display: inline-flex; width: 24px; height: 24px; border-radius: 7px; align-items: center; justify-content: center; }
+.stu-w-t { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: -.01em; }
+.stu-w-acts { display: inline-flex; gap: 1px; flex: none; opacity: 0; transition: opacity .12s ease; }
+.stu-w:hover .stu-w-acts, .stu-cmt-card .stu-w-acts { opacity: 1; }
+.stu-w-btn { min-width: 22px; height: 22px; border: 0; border-radius: 6px; background: none; color: var(--muted); font-size: 11px; font-weight: 600; cursor: pointer; padding: 0 4px; line-height: 1; font-family: inherit; }
+.stu-w-btn:hover { background: var(--bg-punch); color: var(--ink); }
+.stu-w-body { flex: 1; min-height: 0; overflow: hidden; padding: 2px 12px 10px; display: flex; flex-direction: column; gap: 8px; }
+.stu-w-rsz { position: absolute; right: 0; bottom: 0; width: 18px; height: 18px; cursor: nwse-resize; }
+.stu-w-rsz::after { content: ''; position: absolute; right: 5px; bottom: 5px; width: 7px; height: 7px; border-right: 2px solid var(--muted-3); border-bottom: 2px solid var(--muted-3); border-radius: 1px; }
+.stu-w-foot { margin-top: auto; flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 7px; }
+.stu-fine { font-size: 11.5px; color: var(--muted); }
+.stu-foot-note { margin: 2px 0 0; font-size: 11px; color: var(--muted-2); }
+.ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ell2 { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.stu-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.stu-shell-badge { flex: none; font-size: 10px; font-weight: 700; color: var(--coral-text); background: #FDF0EE; border-radius: 4px; padding: 1px 6px; }
+.stu-shell-p { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--ink-sub); }
+.stu-pillbtn { flex: none; border: 0; border-radius: 999px; font: inherit; font-size: 11.5px; font-weight: 700; padding: 5px 12px; cursor: pointer; color: #fff; }
+.stu-pillbtn.mint { background: var(--mint); } .stu-pillbtn.mint:hover { background: var(--mint-deep); }
+.stu-pillbtn.violet { background: #7C5CFC; } .stu-pillbtn.violet:hover { filter: brightness(.94); }
+/* ── 세션 위젯 ── */
+.stu-w-session .stu-w-ic { color: var(--wac); background: color-mix(in srgb, var(--wac) 12%, #fff); }
+.stu-sess-st { flex: none; display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-sub); }
+.stu-hbadge { font-size: 10.5px; color: var(--ink-note); background: var(--bg-note); border-radius: 4px; padding: 1px 6px; }
+.stu-sess-s { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
+.stu-sess-s .st { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-sub); }
+.stu-sess-s .now { font-size: 13px; line-height: 1.55; color: var(--ink); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.stu-conv { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 4px 2px 6px; overscroll-behavior: contain; }
+.stu-msg { display: flex; gap: 8px; align-items: flex-start; }
+.stu-msg .who { flex: none; width: 22px; height: 22px; border-radius: 11px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; margin-top: 1px; }
+.stu-msg.me .who { background: #E4EBF7; color: #2D4A7A; }
+.stu-msg.ai .who { background: var(--ink); color: #fff; }
+.stu-msg .tx { min-width: 0; font-size: 12.5px; line-height: 1.6; color: var(--ink); white-space: pre-wrap; word-break: break-word; background: var(--bg-tint); border-radius: 4px 12px 12px 12px; padding: 7px 10px; }
+.stu-msg.me .tx { background: #EDF3FF; border-radius: 12px 4px 12px 12px; }
+.stu-msg.pend .tx { opacity: .65; }
+.stu-sess-keys { flex: none; display: flex; align-items: center; gap: 6px; padding: 7px 9px; background: #FFF8E6; border: 1px solid #F1DFAF; border-radius: 10px; }
+.stu-wait-k { flex: 1; font-size: 11.5px; font-weight: 700; color: #8A6B14; }
+.stu-sess-footrow { flex: none; display: flex; align-items: center; gap: 8px; padding-top: 2px; }
+.stu-sess-in { flex: 1; min-width: 0; height: 32px; border: 1px solid var(--line-net); border-radius: 9px; padding: 0 11px; font: inherit; font-size: 12.5px; background: var(--bg, #fff); color: var(--ink); }
+.stu-sess-in:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
+.stu-pick { display: flex; flex-direction: column; }
+.stu-pick-row { display: flex; align-items: center; gap: 8px; padding: 7px 6px; border: 0; background: none; font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; border-bottom: 1px solid var(--line-row); color: var(--ink); }
+.stu-pick-row:hover { background: var(--bg-sel); }
+.stu-pick-row .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stu-pick-row .m { font-size: 11px; color: var(--muted); }
+/* ── 리브 제안 = Siri 제안 문법 ── */
+.stu-w-coach { background: linear-gradient(180deg, #F2FBF7 0%, #fff 55%); }
+.stu-w-coach .stu-w-ic { color: #0FA37E; background: #DDF4EB; }
+.stu-suggs { display: flex; flex-direction: column; gap: 7px; }
+.stu-sugg { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 11px; border: 1px solid #DCEFE6; border-radius: 11px; background: #fff; font: inherit; text-align: left; cursor: pointer; box-shadow: 0 1px 2px rgba(15,163,126,.05); transition: border-color .12s ease, box-shadow .12s ease; }
+.stu-sugg:hover { border-color: #A9DFC9; box-shadow: 0 2px 8px rgba(15,163,126,.12); }
+.stu-sugg-ic { flex: none; width: 28px; height: 28px; border-radius: 9px; background: linear-gradient(135deg, #16C79A, #0FA37E); color: #fff; display: flex; align-items: center; justify-content: center; }
+.stu-sugg .n { flex: 1; min-width: 0; font-size: 12.5px; line-height: 1.5; color: var(--ink); }
+.stu-sugg .go { flex: none; color: #0FA37E; opacity: 0; transition: opacity .12s ease; }
+.stu-sugg:hover .go { opacity: 1; }
+/* ── 자동화 = 단축어 갤러리 ── */
+.stu-w-automation { background: linear-gradient(180deg, #F6F4FE 0%, #fff 55%); }
+.stu-w-automation .stu-w-ic { color: #7C5CFC; background: #EBE5FC; }
+.stu-autos { display: flex; flex-direction: column; gap: 7px; }
+.stu-auto { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid #E5DEFA; border-radius: 11px; background: #fff; box-shadow: 0 1px 2px rgba(124,92,252,.05); }
+.stu-auto .b { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.stu-auto b { font-size: 12.5px; }
+.stu-auto .d { font-size: 11px; color: var(--muted); }
+.stu-auto-ic { flex: none; width: 28px; height: 28px; border-radius: 9px; background: linear-gradient(135deg, #9B7DFF, #7C5CFC); color: #fff; display: flex; align-items: center; justify-content: center; }
+/* ── 태스크 ── */
+.stu-w-tasks .stu-w-ic { color: #D9772B; background: #FBEBDD; }
+.stu-task-s { display: flex; align-items: center; gap: 14px; padding-top: 4px; }
+.stu-ring { width: 72px; height: 72px; flex: none; }
+.stu-task-s .k { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.stu-task-s .k b { font-size: 19px; font-weight: 800; letter-spacing: -.02em; }
+.stu-task-s .k > span { font-size: 11.5px; color: var(--muted); }
+.stu-taskbar { flex: none; position: relative; height: 22px; border-radius: 7px; background: #FBF3EA; overflow: hidden; display: flex; align-items: center; }
+.stu-taskbar i { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(90deg, #F0B37E, #D9772B); border-radius: 7px; }
+.stu-taskbar span { position: relative; margin-left: 9px; font-size: 11px; font-weight: 700; color: #7A4A16; }
+.stu-task { display: flex; align-items: center; gap: 9px; padding: 7px 4px; border-bottom: 1px solid var(--line-row); font-size: 12.5px; color: var(--ink); text-decoration: none; }
+.stu-task:hover { background: var(--bg-sel); }
+.stu-task .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stu-task .due { flex: none; font-size: 10.5px; font-weight: 700; color: #7A4A16; background: #FBEBDD; border-radius: 5px; padding: 2px 6px; font-variant-numeric: tabular-nums; }
+.stu-task .due.over { color: #fff; background: var(--coral); }
+.stu-ck { flex: none; width: 15px; height: 15px; border-radius: 5px; border: 1.5px solid var(--muted-3); }
+.stu-ck.run { border-color: #D9772B; box-shadow: inset 0 0 0 3px #FBEBDD; }
+/* ── 지식 ── */
+.stu-w-knowledge .stu-w-ic { color: #1BAEB0; background: #DFF3F3; }
+.stu-kn-s { display: flex; flex-direction: column; gap: 3px; padding-top: 4px; }
+.stu-kn-s b { font-size: 22px; font-weight: 800; letter-spacing: -.02em; }
+.stu-kn-s > span { font-size: 11.5px; color: var(--muted); }
+.stu-docrow { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 4px; border: 0; background: none; font: inherit; font-size: 12.5px; color: var(--ink); text-align: left; cursor: pointer; border-bottom: 1px solid var(--line-row); }
+.stu-docrow:hover { background: var(--bg-sel); }
+.stu-docrow svg { color: #1BAEB0; }
+.stu-docrow .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stu-kn-rel { flex: none; font-size: 10px; font-weight: 700; color: var(--ink-note); background: var(--bg-note); border-radius: 4px; padding: 1px 6px; }
+.stu-kn-rel.prod { color: var(--mint-deep); background: var(--bg-success); }
+.stu-kngrid { flex: 1; min-height: 0; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 9px; align-content: start; }
+.stu-kncard { display: flex; flex-direction: column; gap: 5px; padding: 11px 12px; border: 1px solid #DAECEC; border-radius: 11px; background: #FBFEFE; font: inherit; text-align: left; cursor: pointer; transition: border-color .12s ease, box-shadow .12s ease; }
+.stu-kncard:hover { border-color: #9AD4D5; box-shadow: 0 3px 10px rgba(27,174,176,.10); }
+.stu-kncard .h { display: flex; align-items: center; gap: 6px; color: #1BAEB0; }
+.stu-kncard .h .stu-kn-rel { margin-left: auto; }
+.stu-kncard b { font-size: 12px; line-height: 1.4; color: var(--ink); }
+.stu-kncard .snip { font-size: 11px; line-height: 1.55; color: var(--muted); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+/* ── 폴더 ── */
+.stu-w-folder .stu-w-ic { color: #5A6B85; background: #E9EDF3; }
+.stu-filegrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 6px; align-content: start; }
+.stu-file { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 9px 6px 7px; border: 0; border-radius: 10px; background: none; font: inherit; cursor: pointer; }
+.stu-file:hover { background: #EEF2F7; }
+.stu-file-ic { width: 42px; height: 42px; border-radius: 11px; background: #EDF0F5; color: var(--ink-sub); display: flex; align-items: center; justify-content: center; }
+.stu-file-ic.dir { background: #FBEFD3; color: #B8860B; }
+.stu-file-ic.im { background: #E7F0FE; color: #2D6BF0; }
+.stu-file-ic .stu-i { width: 20px; height: 20px; }
+.stu-file .n { max-width: 100%; font-size: 11px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stu-file .m { font-size: 10px; color: var(--muted); }
+/* ── 명세·문서·프리뷰 ── */
+.stu-w-desc .stu-w-ic { color: #5A6B85; background: #ECEFF4; }
+.stu-md { font-size: 13px; line-height: 1.75; padding-right: 4px; }
+.stu-md h1, .stu-md h2, .stu-md h3 { font-size: 14px; margin: 12px 0 6px; }
+.stu-prevwrap { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: #F1F3F6; border-radius: 9px; overflow: hidden; }
+.stu-prev-img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.stu-prev-f { flex: 1; min-height: 0; width: 100%; border: 0; border-radius: 9px; background: #fff; }
+/* ── 포스트잇 ── */
+.stu-sticky { background: #FFF4C8; border: 0; border-radius: 3px; box-shadow: 0 1px 2px rgba(90,80,20,.10), 0 10px 22px rgba(90,80,20,.16); cursor: grab; transition: box-shadow .14s ease; }
+.stu-sticky:hover { box-shadow: 0 2px 4px rgba(90,80,20,.12), 0 14px 30px rgba(90,80,20,.20); }
+.stu-sticky:active { cursor: grabbing; }
+.stu-tape { position: absolute; left: 50%; top: -9px; transform: translateX(-50%) rotate(-2deg); width: 66px; height: 18px; background: rgba(27,174,176,.30); border-radius: 2px; }
+.stu-sticky-x { position: absolute; right: 4px; top: 4px; opacity: 0; }
+.stu-sticky:hover .stu-sticky-x { opacity: 1; }
+.stu-sticky-ta { position: absolute; inset: 20px 13px 13px; resize: none; border: 0; background: transparent; font: inherit; font-size: 13px; line-height: 1.6; color: #4B4A3E; outline: none; }
+/* ── 코멘트 ── */
+.stu-cmt { position: absolute; }
+.stu-cmt-region { border: 1.5px dashed #1BAEB0; background: rgba(27,174,176,.08); border-radius: 6px; }
+.stu-cmt-card { position: absolute; left: calc(100% + 10px); top: 0; width: 224px; background: #fff; border: 1px solid #9ADCD4; border-radius: 11px; box-shadow: 0 10px 26px rgba(14,124,126,.18); display: flex; flex-direction: column; }
+.stu-cmt-h { display: flex; align-items: center; gap: 6px; padding: 7px 8px 6px 10px; color: #0E7C7E; cursor: grab; border-bottom: 1px solid #E0F4F1; }
+.stu-cmt-h b { flex: 1; font-size: 11.5px; }
+.stu-cmt-ta { border: 0; background: none; resize: none; min-height: 54px; padding: 8px 10px; font: inherit; font-size: 12.5px; line-height: 1.55; outline: none; }
+.stu-cmt-acts { display: flex; justify-content: flex-end; padding: 0 8px 8px; }
+/* ── 피크 ── */
+/* 피크 — 바로가기(폴더·문서)를 훑어보는 우측 패널. **닫는 길이 눈에 보여야 한다**(원준 2026-08-19):
+   머리의 [닫기] · 왼쪽 모서리 손잡이(›) · 판 클릭 · Esc. 알림 센터와 같은 '떠 있는 카드' 가족이라 바깥이 판임이 보이고,
+   도크 위(bottom 92px)에서 멈춰 명령 입력을 가리지 않는다. */
+.stu-peek { position: absolute; right: 14px; top: 12px; bottom: 92px; z-index: 44; width: min(660px, 54%); display: flex; flex-direction: column; overflow: visible;
+  background: var(--bg, #fff); border: 1px solid var(--line-net-2); border-radius: 14px; box-shadow: 0 24px 64px rgba(21,35,59,.22), 0 4px 14px rgba(21,35,59,.10); animation: stu-peek-in .18s ease; }
+.stu-peek-grip { position: absolute; left: -13px; top: 50%; transform: translateY(-50%); width: 26px; height: 58px; padding: 0; z-index: 1;
+  border: 1px solid var(--line-net-2); border-radius: 13px; background: var(--bg, #fff); color: var(--muted); cursor: pointer;
+  display: flex; align-items: center; justify-content: center; box-shadow: -4px 0 12px rgba(21,35,59,.10); }
+.stu-peek-grip:hover { color: var(--blue); border-color: var(--blue); }
+.stu-peek-grip .ch { font-size: 17px; line-height: 1; font-weight: 700; }
+.stu-peek-h { flex: none; display: flex; align-items: center; gap: 10px; padding: 9px 10px 9px 16px; border-bottom: 1px solid var(--line); }
+.stu-peek-h b { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stu-peek-acts { display: inline-flex; align-items: center; gap: 6px; flex: none; }   /* ⚠ opacity:0 인 .stu-w-acts 를 빌려 쓰지 않는다 — 그래서 닫기 버튼이 화면에 없었다 */
+.stu-peek-x { display: inline-flex; align-items: center; gap: 5px; height: 27px; padding: 0 10px; border: 1px solid var(--line-net); border-radius: 8px;
+  background: var(--bg, #fff); color: var(--ink-sub); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.stu-peek-x:hover { color: var(--ink); border-color: var(--blue); background: var(--bg-punch); }
+.stu-peek-f { flex: 1; border: 0; width: 100%; border-radius: 0 0 13px 13px; background: var(--bg, #fff); }
+@keyframes stu-peek-in { from { opacity: 0; transform: translateX(14px); } }
+@media (prefers-reduced-motion: reduce) { .stu-peek { animation: none; } }
+/* ── 플로팅 컴포저 ── */
+.stu-composer { position: sticky; left: 50%; bottom: 18px; transform: translateX(-50%); width: min(720px, 86%); display: flex; align-items: flex-end; gap: 10px; z-index: 35; margin-top: -8px; }
+.stu-comp-box { flex: 1; background: rgba(255,255,255,.92); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid var(--line-net-2); border-radius: 18px; box-shadow: 0 2px 6px rgba(21,35,59,.08), 0 16px 42px rgba(21,35,59,.16); padding: 11px 13px 9px; display: flex; flex-direction: column; gap: 6px; }
+.stu-comp-row1 { display: flex; align-items: flex-end; gap: 8px; }
+.stu-comp-in { flex: 1; border: 0; resize: none; background: none; font: inherit; font-size: 13.5px; line-height: 1.5; outline: none; max-height: 120px; color: var(--ink); }
+.stu-comp-send { flex: none; width: 34px; height: 34px; border: 0; border-radius: 17px; background: var(--blue); color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: transform .1s ease; }
+.stu-comp-send:hover { background: var(--blue-deep); transform: scale(1.05); }
+.stu-comp-row2 { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted); }
+.stu-dest { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-net); border-radius: 8px; background: var(--bg-tint); font: inherit; font-size: 11.5px; padding: 3px 8px; cursor: pointer; color: var(--ink); }
+.stu-dest b { font-weight: 700; }
+.stu-dest .car { color: var(--muted-2); }
+.stu-dest-dot { width: 8px; height: 8px; border-radius: 50%; }
+.stu-dest-dot.liv { background: var(--mint); } .stu-dest-dot.new { background: var(--muted-3); border: 1.5px dashed var(--muted); } .stu-dest-dot.sess { background: var(--blue); }
+.stu-dest-why { color: var(--muted); }
+.stu-dest-pop { position: absolute; bottom: 74px; left: 60px; width: 280px; background: var(--bg, #fff); border: 1px solid var(--line-net); border-radius: 12px; box-shadow: 0 12px 32px rgba(21,35,59,.18); padding: 6px; z-index: 60; }
+.stu-dest-opt { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 9px; border: 0; border-radius: 8px; background: none; font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; color: var(--ink); }
+.stu-dest-opt:hover { background: var(--bg-sel); }
+.stu-liv-toggle { position: relative; flex: none; width: 44px; height: 44px; border: 1px solid var(--line-net-2); border-radius: 22px; background: rgba(255,255,255,.92); backdrop-filter: blur(14px); box-shadow: 0 2px 6px rgba(21,35,59,.08), 0 10px 26px rgba(21,35,59,.14); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.stu-liv-toggle .lm { width: 26px; height: 26px; border-radius: 13px; background: var(--mint); color: #fff; font-weight: 800; font-size: 13px; display: flex; align-items: center; justify-content: center; }
+.stu-liv-toggle.on { border-color: var(--mint); }
+.stu-liv-n { position: absolute; top: 2px; right: 2px; width: 10px; height: 10px; border-radius: 5px; background: var(--coral); border: 2px solid #fff; }
+.stu-livpanel { position: absolute; left: 50%; transform: translateX(-50%); bottom: 76px; width: min(680px, 84%); height: min(440px, 55%); background: var(--bg, #fff); border: 1px solid var(--line-net-2); border-radius: 16px; box-shadow: 0 18px 48px rgba(21,35,59,.22); z-index: 34; display: flex; flex-direction: column; overflow: hidden; }
+.stu-livpanel[hidden] { display: none; }
+.stu-livpanel-h { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.stu-livpanel-h b { flex: 1; font-size: 13px; }
+.stu-livbody { flex: 1; min-height: 0; display: flex; }
+.stu-livbody > * { flex: 1; min-width: 0; }
+/* ── 선반 = 런치패드 ── */
+.stu-shelf { flex: none; border-bottom: 1px solid var(--line); padding: 12px 12px 14px; }
+.stu-shelf-h { font-size: 11px; letter-spacing: .04em; color: var(--muted-head); margin-bottom: 10px; }
+.stu-shelf-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 6px; }
+.stu-app { position: relative; display: flex; flex-direction: column; align-items: center; gap: 5px; border: 0; background: none; font: inherit; cursor: grab; padding: 2px 0; }
+.stu-app:active { cursor: grabbing; }
+.stu-app-ic { width: 44px; height: 44px; border-radius: 12px; color: #fff; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 6px rgba(21,35,59,.16), inset 0 -8px 14px rgba(0,0,0,.10); transition: transform .1s ease; }
+.stu-app:hover .stu-app-ic { transform: scale(1.06); }
+.stu-app-ic .stu-i { width: 21px; height: 21px; stroke-width: 1.9; }
+.stu-app-n { font-size: 10.5px; color: var(--ink-sub); }
+.stu-shell-dot { position: absolute; top: -2px; right: 8px; width: 9px; height: 9px; border-radius: 5px; background: var(--coral); border: 2px solid var(--bg, #fff); }
+/* 설치된 세션 앱(#1780) — 판 위에 전용 세션 카드로 뜬다. 민트 점으로 스튜디오 내장 앱과 구분. */
+.stu-launch-inst[hidden] { display: none; }
+.stu-inst-dot { position: absolute; top: -2px; right: 8px; width: 9px; height: 9px; border-radius: 5px; background: var(--mint-deep, #0FA37E); border: 2px solid var(--bg, #fff); }
+.stu-app-inst { cursor: pointer; }
+/* ── 패널 다시 열기 손잡이 — 닫힌 화면 좌상단(원준) ── */
+/* 탭 줄이 맨 위에 있으므로(원준 2026-08-19 '탭 줄은 있는 방향으로') 손잡이는 그 아래에 앉는다 — 겹치면 탭을 못 누른다. */
+.stu-panel-fab { position: absolute; left: 14px; top: 54px; z-index: 50; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 12px 0 5px; border: 1px solid var(--line-net-2); border-radius: 17px; background: rgba(255,255,255,.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); box-shadow: 0 2px 6px rgba(21,35,59,.08), 0 10px 24px rgba(21,35,59,.12); font: inherit; font-size: 12.5px; color: var(--ink-sub); cursor: pointer; }
+.stu-panel-fab:hover { border-color: var(--blue); }
+/* 알약 안 두 조각 — 왼쪽 L 은 홈, 나머지는 목록 열기. 눌리는 자리를 넓게 잡아 '누르는 것'으로 읽히게 한다. */
+.stu-panel-fab .lg { text-decoration: none; flex: none; }
+.stu-panel-fab .lg:hover { opacity: .82; }
+.stu-panel-fab-open { border: 0; background: none; font: inherit; font-size: 12.5px; color: var(--ink-sub);
+  padding: 0 2px 0 0; height: 100%; cursor: pointer; letter-spacing: -.01em; }
+.stu-panel-fab:hover .stu-panel-fab-open { color: var(--blue); }
+.stu-panel-fab-open:focus-visible, .stu-panel-fab .lg:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 6px; }
+.stu-panel-fab .lg { width: 24px; height: 24px; border-radius: 8px; background: var(--ink); color: #fff; font-weight: 800; font-size: 12px; display: flex; align-items: center; justify-content: center; }
+
+/* ══ 실험장 v4 = 바탕화면(2026-08-19) — 스테이지 층·도크·런치패드·알림 센터·바로가기·유령 창·OS 드롭 ══
+   판(.stu-board)은 스크롤하고, 그 위에 스크롤하지 않는 것들이 .stu-stage 에 절대배치로 얹힌다(맥: 아이콘·도크·알림 센터는 안 스크롤). */
+.stu-stage { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.stu-stage > .stu-board { flex: 1; min-height: 0; }
+.stu-stage > .stu-composer { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); }   /* sticky(판 안) → absolute(스테이지) */
+.stu-stage > .stu-livpanel { z-index: 40; }
+/* 도크 — 컴포저 양옆에 단추가 붙는다: [리브] [입력] [+새 세션] [⊞] */
+.stu-dock-btn { position: relative; flex: none; width: 44px; height: 44px; border: 1px solid var(--line-net-2); border-radius: 22px; background: rgba(255,255,255,.92); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  color: var(--ink-sub); display: flex; align-items: center; justify-content: center; cursor: pointer; box-shadow: 0 6px 18px rgba(21,35,59,.10); }
+.stu-dock-btn:hover { color: var(--ink); border-color: var(--blue); }
+.stu-dock-btn.on { color: var(--blue); border-color: var(--blue); background: #EEF4FF; }
+.stu-dock-btn .stu-i { width: 19px; height: 19px; }
+/* 런치패드 — 도크 위로 떠오르는 위젯·앱 그리드 */
+.stu-launch { position: absolute; left: 50%; bottom: 84px; transform: translateX(-50%); z-index: 45; width: min(560px, 90%); padding: 14px 16px 16px;
+  background: rgba(255,255,255,.94); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); border: 1px solid var(--line-net-2); border-radius: 18px;
+  box-shadow: 0 24px 64px rgba(21,35,59,.20), 0 4px 14px rgba(21,35,59,.10); animation: stu-rise .16s ease; }
+.stu-launch[hidden] { display: none; }
+.stu-launch-h { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
+.stu-launch-h b { font-size: 13px; }
+.stu-launch-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px 6px; }
+@keyframes stu-rise { from { opacity: 0; transform: translate(-50%, 8px); } }
+/* 알림 센터 — 문패 [타임라인] 로 우측 위에 카드로. 판이 아니라 스테이지에 얹혀 스크롤과 무관 */
+.stu-tl-btn { display: inline-flex; align-items: center; gap: 5px; }
+.stu-tl-btn.on { background: #EEF4FF; color: var(--blue); border-color: var(--line-net-2); }
+.stu-notif { position: absolute; top: 12px; right: 14px; bottom: 92px; z-index: 46; width: min(360px, 42%); display: flex; flex-direction: column; overflow: hidden;
+  background: rgba(255,255,255,.86); backdrop-filter: saturate(180%) blur(18px); -webkit-backdrop-filter: saturate(180%) blur(18px);
+  border: 1px solid var(--line-net-2); border-radius: 14px; box-shadow: 0 24px 64px rgba(21,35,59,.20), 0 4px 14px rgba(21,35,59,.10);
+  /* 오른쪽 밖에서 대기하다 밀려 들어온다 — 맥 알림 센터와 같은 몸짓(열림은 조금 빠르게, 닫힘은 조금 느리게). */
+  transform: translateX(calc(100% + 22px)); opacity: 0; pointer-events: none;
+  transition: transform .3s cubic-bezier(.22,.61,.36,1), opacity .22s ease; }
+.stu-notif.on { transform: none; opacity: 1; pointer-events: auto; }
+@media (prefers-reduced-motion: reduce) { .stu-notif { transition: none; } }
+/* 문패 오른쪽 [타임라인] — 열려 있으면 눌린 상태가 보여야 다시 누를 생각이 든다. */
+.stu-tl-btn.on { background: var(--bg-punch); border-color: var(--blue); color: var(--blue); }
+.stu-notif[hidden] { display: none; }
+.stu-notif-acts { margin-left: 6px; opacity: 1; }
+.stu-notif .tl-wrap > .v2-aside-h .v2-k { margin-left: auto; }
+.stu-notif-b { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+@keyframes stu-drop { from { opacity: 0; transform: translateY(-6px); } }
+/* 자료함(공유 폴더 위젯) — 파일시스템이 아니라 '내가 올린 자료' 목록. 행 = 미리보기 + 이름 + 종류·크기·폴더 */
+.stu-asset-head { margin-top: 0 !important; padding-top: 0 !important; }
+.stu-assets { gap: 1px; }
+.stu-asset { display: flex; align-items: center; border-radius: 9px; }
+.stu-asset:hover { background: var(--bg-sel, #F4F8FF); }
+.stu-asset-b { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 7px 8px; border: 0; border-radius: 9px; background: none; font: inherit; text-align: left; cursor: pointer; }
+.stu-asset-ic { flex: none; width: 34px; height: 34px; border-radius: 9px; display: flex; align-items: center; justify-content: center; overflow: hidden; background: #EDF0F5; color: var(--ink-sub); }
+.stu-asset-ic .stu-i { width: 17px; height: 17px; }
+.stu-asset-ic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.stu-asset-ic.page { background: #EFEBFF; color: #7C5CFC; }
+.stu-asset-ic.pdf { background: #FDF0EE; color: #C4564A; }
+.stu-asset-ic.img { background: #E7F0FE; }
+.stu-asset-t { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.stu-asset-t b { font-size: 12.5px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stu-asset-m { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); min-width: 0; }
+.stu-asset-m .sep { color: var(--muted-3); }
+.stu-asset-dir { font-family: var(--mono, ui-monospace, monospace); font-size: 10px; color: var(--muted-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stu-asset-x { flex: none; margin-right: 6px; opacity: 0; }
+.stu-asset:hover .stu-asset-x { opacity: 1; }
+.stu-asset-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; padding: 10px 16px; color: var(--muted); }
+.stu-asset-empty b { font-size: 13px; color: var(--ink-sub); }
+.stu-asset-empty p { margin: 0; max-width: 260px; line-height: 1.55; }
+.stu-i.big { width: 26px; height: 26px; color: var(--muted-3); }
+
+/* 바탕화면(v5) — 뜻 있는 것만: [공유 폴더] [지식] 스택 + 최근 산출물. 이름 밑 캡션이 '이게 뭔지' 를 답한다.
+   우측 위에서 아래로, 넘치면 왼쪽 열로(맥). 알림 센터가 열리면 그 아래로 깔린다. */
+.stu-desk { position: absolute; top: 14px; right: 14px; height: calc(100% - 250px); z-index: 20; display: flex; flex-direction: column; flex-wrap: wrap-reverse; align-content: flex-start; gap: 2px; pointer-events: none; }
+.stu-desk.dragging .stu-ico:not(.sel) { opacity: .5; }
+/* 타임라인 서랍이 열리면 아이콘 열·휴지통이 **왼쪽으로 비켜선다**(원준 2026-08-19) — 서랍이 파일을 덮으면
+   보려던 것을 가리는 셈이라, 맥에서 창이 겹칠 때 우리가 창을 옮기듯 이쪽이 물러난다. */
+.stu-desk, .stu-trash { transition: transform .3s cubic-bezier(.22,.61,.36,1); }
+.stu-stage.notif-on .stu-desk, .stu-stage.notif-on .stu-trash { transform: translateX(calc(-1 * (var(--stu-notif-w, 360px) + 18px))); }
+@media (prefers-reduced-motion: reduce) { .stu-desk, .stu-trash { transition: none; } }
+.stu-ico { pointer-events: auto; width: 92px; padding: 7px 4px 6px; border: 0; border-radius: 10px; background: none; font: inherit; display: flex; flex-direction: column; align-items: center; gap: 5px; cursor: default; }
+.stu-ico:hover .stu-ico-g { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(21,35,59,.14); }
+.stu-ico.sel { background: rgba(45,107,240,.12); box-shadow: inset 0 0 0 1px rgba(45,107,240,.35); }
+.stu-ico.sel .stu-ico-n { background: var(--blue); color: #fff; }
+.stu-ico:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+.stu-ico-g { position: relative; width: 52px; height: 52px; border-radius: 13px; display: flex; align-items: center; justify-content: center; color: #fff; box-shadow: 0 2px 6px rgba(21,35,59,.14); transition: transform .12s ease, box-shadow .12s ease; }
+.stu-ico-g .stu-i { width: 25px; height: 25px; stroke-width: 1.7; }
+.stu-ico-g.stack::before, .stu-ico-g.stack::after { content: ''; position: absolute; inset: 0; border-radius: 13px; background: inherit; opacity: .5; z-index: -1; }
+.stu-ico-g.stack::before { transform: translate(3px, 3px) scale(.97); }
+.stu-ico-g.stack::after { transform: translate(6px, 6px) scale(.94); opacity: .28; }
+.stu-ico-g.stack-folder { background: linear-gradient(180deg, #7FA6E9, #5B8AE0); }
+.stu-ico-g.stack-kn { background: linear-gradient(180deg, #33C0C2, #1BAEB0); }
+.stu-ico-g.doc, .stu-ico-g.file { background: #fff; color: #5A6B85; border: 1px solid var(--line-net); }
+.stu-ico-g.pdf { background: #fff; color: #C4564A; border: 1px solid var(--line-net); }
+.stu-ico-g.page { background: linear-gradient(180deg, #8C74FF, #7C5CFC); }
+.stu-ico-g.im { background: #fff; border: 1px solid var(--line-net); overflow: hidden; }
+.stu-ico-g.im img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.stu-ico-g.trash { background: rgba(255,255,255,.86); color: var(--muted); border: 1px dashed var(--muted-3); }
+
+/* ══ 바탕화면 아이콘 격상(원준 2026-08-19) — 맥 수준 ═══════════════════════════════
+   문서는 **종이 낱장**(접힌 귀 + 그림자)이고, 그릴 수 있는 것은 실제로 그린다:
+   PDF·HTML 은 브라우저가 첫 화면을 렌더할 수 있으므로 축소해 얹고, 글 파일은 첫 줄들을 아주 작게 깐다.
+   못 그리는 형식은 확장자 배지만 남는다 — 미리보기는 덤이지 전제가 아니다. */
+.stu-ico-g.doc-g { background: none; border: 0; box-shadow: none; overflow: visible; }
+.stu-sheet { position: relative; width: 44px; height: 54px; background: #fff; border: 1px solid #DFE4EE;
+  border-radius: 4px 10px 4px 4px; box-shadow: 0 1px 2px rgba(21,35,59,.10), 0 6px 14px rgba(21,35,59,.10); overflow: hidden; }
+/* 접힌 귀 — 오른쪽 위를 대각으로 접은 종이(맥 문서 아이콘의 표식) */
+.stu-sheet-fold { position: absolute; top: -1px; right: -1px; width: 15px; height: 15px; z-index: 2;
+  background: linear-gradient(225deg, #EDF1F8 0 50%, transparent 50%); border-left: 1px solid #DFE4EE; border-bottom: 1px solid #DFE4EE; border-radius: 0 4px 0 3px; }
+.stu-prev { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; background: #fff; }
+.stu-prev.has-prev .stu-ext { display: none; }
+/* 미리보기 — 실제 문서를 잘게 줄여 얹는다. 손이 닿지 않게(포인터 차단) 아이콘 전체가 한 덩어리로 눌리게 한다. */
+.stu-prev-fr { position: absolute; top: 0; left: 0; width: 420px; height: 540px; border: 0; background: #fff;
+  transform: scale(.105); transform-origin: 0 0; pointer-events: none; }
+.stu-prev-tx { position: absolute; inset: 4px 4px 0; display: flex; flex-direction: column; gap: 2px; pointer-events: none; }
+.stu-prev-tx span { height: 3px; border-radius: 1px; background: #E7EBF3; overflow: hidden; text-indent: -999px; }
+.stu-prev-tx span:nth-child(3n) { width: 62%; }
+.stu-prev-tx span:nth-child(4n) { width: 78%; }
+/* 확장자 배지 — 미리보기가 없을 때 이 파일이 무엇인지 말하는 유일한 표식이라 또렷하게. */
+.stu-ext { position: relative; z-index: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9.5px; font-weight: 700;
+  letter-spacing: .04em; color: #fff; background: #8A99B5; padding: 2px 5px; border-radius: 3px; }
+.stu-ext.pdf { background: #C4564A; }
+.stu-ext.page { background: #7C5CFC; }
+.stu-ext.doc { background: #1BAEB0; }
+
+/* 폴더 — 맥 기본 문법(면으로 그린 두 장짜리 판). 선 아이콘이 아니라 색면이라 작아도 폴더로 읽힌다. */
+.stu-ico-g.folder-g { background: none; border: 0; box-shadow: none; overflow: visible; }
+.stu-folder-sv { width: 52px; height: 43px; filter: drop-shadow(0 2px 4px rgba(21,35,59,.16)); }
+
+/* 스택 — **맨 위 것이 앞에 서고 나머지가 뒤로 비친다**(맥 스택 그대로).
+   그래서 그림 무더기는 첫 장이 그대로 보이고, 문서 무더기는 그 문서의 첫 화면이 보인다. */
+.stu-ico-g.stack { background: none; border: 0; box-shadow: none; overflow: visible; }
+.stu-ico-g.stack::before, .stu-ico-g.stack::after { content: none; }
+.stu-stk { position: absolute; display: flex; align-items: center; justify-content: center; }
+.stu-stk.s3, .stu-stk.s2 { width: 42px; height: 52px; border-radius: 4px; background: #fff; border: 1px solid #E1E6F0;
+  box-shadow: 0 1px 3px rgba(21,35,59,.10); }
+.stu-stk.s3 { transform: translate(7px, -2px) rotate(7deg); opacity: .62; }
+.stu-stk.s2 { transform: translate(3.5px, -1px) rotate(3.5deg); opacity: .82; }
+.stu-stk.s1 { z-index: 2; }
+.stu-stk.s1.im { width: 44px; height: 54px; border-radius: 4px; overflow: hidden; background: #fff; border: 1px solid #DFE4EE;
+  box-shadow: 0 1px 2px rgba(21,35,59,.10), 0 6px 14px rgba(21,35,59,.10); }
+.stu-stk.s1.im img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* 펼친 스택 — 뒤 장이 부채처럼 더 벌어진다(열려 있다는 걸 형태로) */
+.stu-ico.is-stack.open .stu-stk.s3 { transform: translate(13px, -7px) rotate(13deg); }
+.stu-ico.is-stack.open .stu-stk.s2 { transform: translate(7px, -4px) rotate(7deg); }
+
+/* 휴지통 — 낱장 아이콘과 같은 급. 통·뚜껑·홈이 있고, 차면 종이가 삐져나온다. */
+.stu-ico-g.trash { background: none; border: 0; box-shadow: none; overflow: visible; }
+.stu-trash-sv { width: 40px; height: 42px; fill: none; stroke: #7C8AA5; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+.stu-trash-sv .can { fill: rgba(255,255,255,.92); }
+.stu-trash-sv .rib { stroke-width: 1.5; opacity: .55; }
+.stu-ico-g.trash.full .stu-trash-sv { stroke: #5A6B85; }
+.stu-trash-paper { position: absolute; top: 1px; left: 50%; width: 20px; height: 12px; margin-left: -10px;
+  background: #fff; border: 1px solid #DFE4EE; border-radius: 2px; transform: rotate(-8deg); }
+.stu-trash.over .stu-trash-sv { stroke: var(--blue); }
+
+/* [스택] 토글 — 켜져 있으면 눌린 상태가 보여야 다시 누를 생각이 든다(타임라인 버튼과 같은 문법). */
+.stu-stack-btn.on { background: var(--bg-punch); border-color: var(--blue); color: var(--blue); }
+
+/* 스택 판 — 무더기 안을 훑는 자리. **판을 덮지 않는다**: 스택 옆에 붙고, 넘치면 자기 안에서 스크롤한다.
+   (그 자리에서 펼치면 31장짜리 그림 스택이 캔버스를 통째로 덮는다 — 실측.) */
+.stu-stackpop { position: absolute; z-index: 48; width: min(392px, 40vw); max-height: min(60vh, 520px);
+  display: flex; flex-direction: column; overflow: hidden; border-radius: 14px;
+  background: rgba(255,255,255,.9); backdrop-filter: saturate(180%) blur(18px); -webkit-backdrop-filter: saturate(180%) blur(18px);
+  border: 1px solid var(--line-net-2); box-shadow: 0 24px 64px rgba(21,35,59,.20), 0 4px 14px rgba(21,35,59,.10);
+  animation: stu-drop .16s ease; }
+.stu-stackpop-h { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 10px 8px 14px; border-bottom: 1px solid var(--line); }
+.stu-stackpop-h b { font-size: 13px; }
+.stu-stackpop-h .stu-w-btn { margin-left: auto; }
+.stu-stackpop-g { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-wrap: wrap; gap: 2px; padding: 8px 6px 12px; align-content: flex-start; }
+.stu-stackpop-g .stu-ico { width: 88px; }
+/* 이름이 길어도 줄을 넘기지 않는다 — 바탕에서는 이름보다 '무엇인지'가 먼저다. */
+.stu-ico-n { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.stu-ico.is-stack.open .stu-ico-n { background: var(--blue); color: #fff; border-radius: 5px; }
+.stu-ico-g.trash.full { color: var(--ink-sub); border-style: solid; border-color: var(--line-net); background: #fff; }
+.stu-ico-n { max-width: 92px; font-size: 11px; line-height: 1.3; color: var(--ink); text-align: center; padding: 1px 5px; border-radius: 5px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-all; }
+.stu-ico-t { font-size: 10px; color: var(--muted-2); letter-spacing: .01em; }
+/* 선택 액션바 — 몇 개를 골랐고 무엇을 할 수 있는지 */
+.stu-deskbar { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 47; display: inline-flex; align-items: center; gap: 10px; padding: 7px 8px 7px 14px;
+  background: rgba(255,255,255,.94); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid var(--line-net-2); border-radius: 999px; box-shadow: 0 12px 32px rgba(21,35,59,.16); font-size: 12.5px; }
+.stu-deskbar[hidden] { display: none; }
+.stu-deskbar b { font-size: 12.5px; }
+.stu-deskbar .btn-text.danger, .stu-peek-acts .btn-text.danger { color: var(--coral-text, #C4564A); }
+/* 영역 선택 사각형 */
+.stu-deskmarq { position: absolute; z-index: 25; border: 1.5px solid var(--blue); background: rgba(45,107,240,.10); border-radius: 3px; pointer-events: none; }
+.stu-deskmarq[hidden] { display: none; }
+.stu-stage.marq-on { user-select: none; -webkit-user-select: none; }
+/* 휴지통 — 바탕화면 오른쪽 아래(맥 도크 옆) */
+.stu-trash { position: absolute; right: 20px; bottom: 100px; z-index: 21; width: 92px; padding: 7px 4px 6px; border-radius: 10px; display: flex; flex-direction: column; align-items: center; gap: 5px; cursor: default; }
+.stu-trash.over { background: rgba(196,86,74,.12); box-shadow: inset 0 0 0 1px rgba(196,86,74,.45); }
+.stu-trash.over .stu-ico-g.trash { color: var(--coral-text, #C4564A); border-color: var(--coral-text, #C4564A); }
+.stu-trashpanel { position: absolute; right: 124px; bottom: 100px; z-index: 48; width: min(420px, 60%); max-height: 60%; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--bg, #fff); border: 1px solid var(--line-net-2); border-radius: 14px; box-shadow: 0 24px 64px rgba(21,35,59,.22); }
+.stu-notif-h2 { flex: none; display: flex; align-items: center; gap: 8px; padding: 9px 10px 9px 14px; border-bottom: 1px solid var(--line); }
+.stu-notif-h2 b { font-size: 13px; }
+.stu-notif-h2 .stu-peek-acts { margin-left: auto; }
+.stu-trashpanel-b { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 10px 12px; display: flex; flex-direction: column; gap: 2px; }
+.stu-trashrow { display: flex; align-items: center; gap: 10px; padding: 7px 6px; border-radius: 8px; font-size: 12.5px; }
+.stu-trashrow:hover { background: var(--bg-sel); }
+.stu-trashrow .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stu-trashrow .m { color: var(--muted-2); font-size: 11px; }
+/* 유령 창 — 명령을 치는 동안 도크 위에 미리 나타나는 세션 창('짠'). 보내면 그 자리에서 진짜 카드가 된다 */
+.stu-ghost { position: absolute; left: 50%; bottom: 112px; transform: translateX(-50%); z-index: 34; width: 340px; display: flex; flex-direction: column;
+  background: rgba(255,255,255,.72); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1.5px dashed rgba(45,107,240,.55); border-radius: 13px;
+  box-shadow: 0 14px 40px rgba(45,107,240,.14); animation: stu-materialize .22s ease; pointer-events: none; }
+.stu-ghost[hidden] { display: none; }
+.stu-ghost .stu-w-head { cursor: default; }
+.stu-ghost-tag { flex: none; font-size: 10.5px; color: var(--blue); background: #EEF4FF; border-radius: 4px; padding: 1px 6px; }
+.stu-ghost-b { padding: 2px 12px 12px; display: flex; align-items: flex-start; gap: 6px; }
+.stu-ghost-p { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--ink-sub); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; }
+.stu-ghost-cur { flex: none; width: 7px; height: 14px; margin-top: 2px; background: var(--blue); opacity: .8; animation: stu-blink 1s steps(2) infinite; }
+.stu-ghost.busy { border-style: solid; border-color: var(--blue); }
+.stu-ghost.busy .stu-ghost-cur { animation: stu-blink .4s steps(2) infinite; }
+@keyframes stu-materialize { from { opacity: 0; transform: translate(-50%, 10px) scale(.96); } }
+@keyframes stu-blink { to { opacity: 0; } }
+/* 조준 — 입력 중 행선지가 정해진 카드·리브 단추에 테두리 */
+.stu-w.aim { outline: 2px solid var(--blue); outline-offset: 3px; box-shadow: 0 0 0 6px rgba(45,107,240,.10), 0 14px 34px rgba(21,35,59,.12); }
+.stu-liv-toggle.aim { border-color: var(--mint); box-shadow: 0 0 0 5px rgba(22,199,154,.18); }
+/* 태어남 — 유령 자리에서 실체가 되는 한 박자 */
+.stu-w.pop { animation: stu-pop .5s cubic-bezier(.2,.9,.3,1.2); }
+@keyframes stu-pop { from { opacity: 0; transform: scale(.9); } 60% { transform: scale(1.02); } to { opacity: 1; transform: none; } }
+/* 컴퓨터에서 파일·폴더를 끌고 들어오면 판 전체가 드롭 대상으로 빛난다 */
+.stu-stage.drop-active::after { content: '여기 놓으면 이 프로젝트 공유 폴더에 올라가요 — 이미지·PDF 는 그 자리에 바로 떠요'; position: absolute; inset: 10px; z-index: 60; pointer-events: none;
+  border: 2px dashed var(--blue); border-radius: 16px; background: rgba(45,107,240,.06); display: flex; align-items: center; justify-content: center;
+  font-size: 14px; font-weight: 700; color: var(--blue); text-shadow: 0 1px 0 #fff; }
+@media (prefers-reduced-motion: reduce) { .stu-launch, .stu-notif, .stu-ghost, .stu-w.pop { animation: none; } .stu-ghost-cur { animation: none; } }
+
+/* ══ 실험장 v6 — 앱 창(모달) · 온보딩 길잡이 · 활동 스트림 · 리브 말풍선 · 포커스 카드 ══════════ */
+/* 앱 = 열어서 하는 일. 위젯(판 위 카드)과 성격이 다르므로 창도 다르게: 가운데 큰 창 + 어두운 배경 없음(판이 보인다). */
+.stu-appwin { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 49; width: min(920px, 88%); height: min(620px, 78%);
+  display: flex; flex-direction: column; overflow: hidden; background: var(--bg, #fff); border: 1px solid var(--line-net-2); border-radius: 16px;
+  box-shadow: 0 32px 80px rgba(21,35,59,.26), 0 6px 18px rgba(21,35,59,.12); animation: stu-appin .18s ease; }
+@keyframes stu-appin { from { opacity: 0; transform: translate(-50%, -48%) scale(.98); } }
+.stu-appwin-h { flex: none; display: flex; align-items: center; gap: 9px; padding: 11px 12px 11px 14px; border-bottom: 1px solid var(--line); }
+.stu-appwin-h b { font-size: 14px; }
+.stu-appwin-h .stu-peek-acts { margin-left: auto; }
+.stu-appwin-b { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 10px; padding: 14px 16px 16px; }
+.stu-appwin-b > .stu-scroll { flex: 1; min-height: 0; }
+.stu-appwin-f { flex: none; display: flex; align-items: center; gap: 12px; }
+.stu-descedit { flex: 1; min-height: 0; resize: none; border: 1px solid var(--line-net); border-radius: 10px; padding: 12px 14px;
+  font-family: var(--mono, ui-monospace, monospace); font-size: 12.5px; line-height: 1.7; color: var(--ink); background: var(--bg-tint, #F9FBFF); }
+.stu-descedit:focus { outline: none; border-color: var(--blue); background: var(--bg, #fff); }
+.stu-appsearch { flex: none; height: 34px; border: 1px solid var(--line-net); border-radius: 9px; padding: 0 12px; font: inherit; font-size: 13px; }
+.stu-appsearch:focus { outline: none; border-color: var(--blue); }
+.stu-launch-h.sep { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.stu-app.as-app .stu-app-ic { border-radius: 14px; }
+.stu-app.as-app .stu-app-ic::after { content: ''; position: absolute; right: -3px; bottom: -3px; width: 12px; height: 12px; border-radius: 4px;
+  background: var(--bg, #fff); box-shadow: inset 0 0 0 1.5px currentColor; opacity: .5; }
+.stu-app-ic { position: relative; }
+
+/* 온보딩 길잡이 — 빈 판이 백지가 아니라 '첫 걸음' 이 되게 */
+.stu-guidehost { position: absolute; left: 50%; top: 76px; transform: translateX(-50%); width: min(720px, 86%); z-index: 15; }
+.stu-guidehost[hidden] { display: none; }
+.stu-guide { text-align: left; }
+.stu-guide h2 { margin: 0 0 6px; font-size: 20px; font-weight: 800; letter-spacing: -.02em; color: var(--ink); }
+.stu-guide-l { margin: 0 0 22px; font-size: 13.5px; color: var(--ink-sub); }
+.stu-guide-g { display: grid; gap: 12px; }
+.stu-guide-s { display: flex; gap: 14px; align-items: flex-start; padding: 14px 16px; background: rgba(255,255,255,.72); border: 1px solid var(--line); border-radius: 13px; }
+.stu-guide-n { flex: none; width: 24px; height: 24px; border-radius: 12px; background: var(--blue); color: #fff; font-size: 12px; font-weight: 800; display: flex; align-items: center; justify-content: center; }
+.stu-guide-s b { font-size: 13.5px; }
+.stu-guide-s p { margin: 3px 0 0; line-height: 1.6; max-width: 520px; }
+.stu-guide-s .btn-text { margin-top: 6px; }
+
+/* 활동 스트림 — 타임라인의 '살아 있는 층'. 스스로 왔다 물러난다(버튼을 누르지 않아도 흐름이 보인다) */
+.stu-stream { position: absolute; top: 14px; right: 120px; z-index: 43; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; pointer-events: none; }
+.stu-streamcard { pointer-events: auto; display: flex; align-items: flex-start; gap: 9px; max-width: 320px; padding: 9px 12px 10px; text-align: left;
+  background: rgba(255,255,255,.94); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); border: 1px solid var(--line-net-2); border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(21,35,59,.16); font: inherit; cursor: pointer; animation: stu-slidein .2s ease; }
+.stu-streamcard.out { opacity: 0; transform: translateX(8px); transition: opacity .24s ease, transform .24s ease; }
+.stu-stream-dot { flex: none; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--mint); }
+.stu-stream-t { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.stu-stream-t b { font-size: 12.5px; font-weight: 600; color: var(--ink); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+@keyframes stu-slidein { from { opacity: 0; transform: translateX(12px); } }
+
+/* 리브 말풍선 — 도크의 L 위에서 말한다 */
+.stu-tip { position: absolute; left: 0; bottom: calc(100% + 12px); z-index: 41; width: min(320px, 84vw);   /* 도크 '안'에 달아 L 위에 붙는다(도크 폭이 변해도 어긋나지 않게) */
+  padding: 13px 14px 11px; background: var(--bg, #fff); border: 1px solid #CDEFE3; border-radius: 14px 14px 14px 4px;
+  box-shadow: 0 16px 40px rgba(21,35,59,.16); animation: stu-tipin .22s ease; }
+.stu-tip[hidden] { display: none; }
+.stu-tip::after { content: ''; position: absolute; left: 14px; bottom: -7px; width: 12px; height: 12px; background: var(--bg, #fff);
+  border-right: 1px solid #CDEFE3; border-bottom: 1px solid #CDEFE3; transform: rotate(45deg); }
+.stu-tip-t { margin: 0 0 10px; font-size: 12.5px; line-height: 1.65; color: var(--ink); }
+.stu-tip-a { display: flex; align-items: center; gap: 10px; }
+@keyframes stu-tipin { from { opacity: 0; transform: translateY(8px); } }
+
+
+/* 포커스 카드 — 시킨 세션이 가운데로 커진다 */
+/* 세션 포커스 = 모달(원준 2026-08-19). 커진 카드는 '이사'가 아니라 '잠깐 앞으로 나온 것'이라
+   뒤를 딤으로 잠그고, 닫으면 원래 자리로 되돌아간다. 그 되돌아가는 길이 보여야 사람이 안심한다. */
+.stu-scrim { position: absolute; inset: 0; z-index: 9000; background: rgba(21,35,59,.30);
+  backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
+  opacity: 0; transition: opacity .24s ease; }
+.stu-scrim.on { opacity: 1; }
+.stu-w.focused { z-index: 9001 !important; box-shadow: 0 0 0 1px rgba(45,107,240,.35), 0 30px 70px rgba(21,35,59,.28); }
+/* 전환은 **움직이는 동안만** 켠다 — 상시로 켜면 끌어 옮길 때 손을 못 따라온다. */
+.stu-w.anim { transition: left .28s cubic-bezier(.22,.61,.36,1), top .28s cubic-bezier(.22,.61,.36,1),
+  width .28s cubic-bezier(.22,.61,.36,1), height .28s cubic-bezier(.22,.61,.36,1), box-shadow .28s ease; }
+@media (prefers-reduced-motion: reduce) { .stu-w.anim { transition: none; } .stu-scrim { transition: none; } }
+
+/* 새 프로젝트 — 사이드바 ＋ 의 그 자리 팝오버(만들면 그 작업대로 간다) */
+.v2-newpop { width: 300px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.v2-newrow { display: flex; gap: 8px; }
+.v2-newin { flex: 1; min-width: 0; height: 32px; border: 1px solid var(--line-net); border-radius: 8px; padding: 0 10px; font: inherit; font-size: 13px; }
+.v2-newin:focus { outline: none; border-color: var(--blue); }
+.v2-newpop .v2-fine { margin: 0; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.v2-newmsg { margin: 0; font-size: 11.5px; color: var(--coral-text, #C4564A); }
+.stu-launch-note { margin: 12px 2px 0; line-height: 1.55; }
+
+/* 안내 속 행선지 칩 — 도크의 진짜 칩과 같은 모양(그림이 아니라 손잡이: 누르면 그 칩이 열리고 잠깐 뛴다) */
+.stu-guide-chip { display: inline-flex; align-items: center; gap: 5px; vertical-align: -3px; margin: 0 2px; height: 22px; padding: 0 8px;
+  border: 1px solid var(--line-net); border-radius: 7px; background: var(--bg-tint, #F6FAFF); font: inherit; font-size: 11.5px; color: var(--ink-sub); cursor: pointer; }
+.stu-guide-chip:hover { border-color: var(--blue); color: var(--blue); }
+.stu-guide-chip b { font-weight: 700; }
+.stu-guide-chip .car { color: var(--muted-2); }
+.stu-dest.pulse { animation: stu-chip-pulse .6s ease 3; }
+@keyframes stu-chip-pulse { 50% { box-shadow: 0 0 0 6px rgba(45,107,240,.18); border-color: var(--blue); } }
+@media (prefers-reduced-motion: reduce) { .stu-dest.pulse { animation: none; box-shadow: 0 0 0 4px rgba(45,107,240,.18); } }
+
+/* 손잡이 알약 — 끌어서 옮긴다(자리는 사람마다 다르다). 왼쪽 세로 점선이 잡는 자리. */
+.stu-panel-fab { cursor: pointer; padding-left: 2px; }   /* 알약 어디를 눌러도 목록이 열린다 — 손 모양으로 그렇게 보이게 */
+.stu-fab-grip { flex: none; width: 12px; height: 20px; margin-right: -2px; cursor: grab; border-radius: 4px;
+  background-image: radial-gradient(currentColor 1px, transparent 1px); background-size: 4px 5px; background-position: 2px 2px;
+  color: var(--muted-3); opacity: .85; }
+.stu-panel-fab:hover .stu-fab-grip { color: var(--muted); }
+.stu-panel-fab.dragging { cursor: grabbing; box-shadow: 0 14px 34px rgba(21,35,59,.22); }
+.stu-panel-fab.dragging .stu-fab-grip { cursor: grabbing; }
+
+/* ── 탭 끌어 옮기기 + 고정 홈(원준 2026-08-20) ── */
+.v2-tab.fixed { padding-right: 9px; }          /* 닫기 단추가 없으니 오른쪽 여백을 글자 쪽으로 되돌린다 */
+.v2-tab.dragging { opacity: .45; }
+.v2-tab.dnd-before { box-shadow: inset 2px 0 0 var(--blue); }
+.v2-tab.dnd-after { box-shadow: inset -2px 0 0 var(--blue); }
