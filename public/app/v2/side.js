@@ -33,10 +33,12 @@ const OPEN_KEY = 'lively_v2_opened';
 const DONE_KEY = 'lively_v2_side_done'; // '1' = 완료 프로젝트도 보인다(필터 풀림)
 const MINE_KEY = 'lively_v2_side_mine'; // '1' = 내 프로젝트만
 const PAST_KEY = 'lively_v2_side_past'; // '지난 세션' 묶음을 펴 둔 프로젝트 키
+const ALL_KEY = 'lively_v2_side_all'; // '1' = 「전체 프로젝트」 묶음을 펴 둠 (기본 접힘 — 매일 화면은 '진행 중'만)
 const PIN_KEY = 'lively_v2_side_pin'; // 위에 고정한 프로젝트 키('p:123') — 사람이 고른 것만 들어간다
 const MAX_SESS = 12; // 한 프로젝트 아래 펼쳐 보이는 세션 상한(넘치면 '외 n개' → 프로젝트 화면)
 let openSet = new Set();
 let pastSet = new Set(); // '지난 세션'을 펴 둔 프로젝트 — 브라우저에 기억(도는 세션과 따로 접힌다)
+let allOpen = false; // 「전체 프로젝트」 펼침 — 브라우저에 기억
 let pinnedSet = new Set(); // ★고정 = 사람이 고른 프로젝트를 맨 위로(상민님 2026-08-19)
 const closedSelected = new Set(); // 선택 프로젝트를 일부러 접은 것 — 세션(페이지) 수명만
 let showDone = false;
@@ -75,6 +77,10 @@ function init() {
     inited = true;
     openSet = loadSet(OPEN_KEY);
     pastSet = loadSet(PAST_KEY);
+    try {
+        allOpen = localStorage.getItem(ALL_KEY) === '1';
+    }
+    catch (_) { /* noop */ }
     pinnedSet = loadSet(PIN_KEY);
     try {
         showDone = localStorage.getItem(DONE_KEY) === '1';
@@ -226,6 +232,7 @@ function glyph(kind, cls) {
         // 뚜껑이 젖혀진 열린 폴더 — 카드가 열려 있다는 것을 아이콘도 함께 말한다(안 1 '방').
         'folder-open': ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1', 'M3 17l2.3-6.6A2 2 0 0 1 7.2 9H21l-2.4 7.6a2 2 0 0 1-1.9 1.4H5a2 2 0 0 1-2-1z'],
         chat: ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z'],
+        inbox: ['M4.6 5h14.8L22 13v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-4z', 'M2 13h6a4 4 0 0 0 8 0h6'],
         home: ['M3.5 11.2 12 4.5l8.5 6.7', 'M6 10v9h12v-9'],
     };
     return sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, ...D[kind].map((d) => sv('path', { d })));
@@ -234,6 +241,12 @@ function render() {
     if (!last)
         return;
     const { host, data } = last;
+    // 개인 워크스페이스 = 웜 캔버스(안3 문패의 온도축) — 클래스는 사이드바 뿌리(.v2-side)에 건다.
+    const wsReg = state.me?.workspace_registry || {};
+    const wsKind = (wsReg.active && wsReg.kind) || (state.me?.workspace?.kind);
+    host.closest('.v2-side')?.classList.toggle('ws-personal', wsKind === 'personal');
+    // 문패 얼굴 스택 = **세션을 가진 사람들**(나 먼저) — 멤버 명부 순서 그대로면 dev 처럼 더미 계정이 먼저 잡힌다(실측).
+    const faceOwners = [...new Set(data.sessions.map((s) => String((s.raw && s.raw.owner) || '')).filter(Boolean))];
     const me = state.me || {};
     const name = String(me.display_name || me.email || me.userId || '');
     const rows = buildRows(data);
@@ -275,10 +288,18 @@ function render() {
                 closeFind(); }, 120); } });
     const doneCount = rows.filter((r) => r.done).length;
     const fltN = (stateFilter ? 1 : 0) + (mineOnly ? 1 : 0) + (showDone ? 1 : 0);
-    host.replaceChildren(switcherTop(), // 좌상단 워크스페이스 스위처(#1750) — 홈 워드마크 + 개인/팀 배지·전환·연결 메뉴
+    // 확인할 것 = 확인 필요(waiting, 보이는 것 전부 — 프로젝트 세션은 팀 누구든 답할 수 있다) + 작업 완료 미열람(내 것만).
+    const inboxN = data.sessions.filter((s) => isLive(s) && (s.stateKey === 'waiting' || (s.stateKey === 'done' && s.owned))).length;
+    host.replaceChildren(switcherTop({ people, faces: faceOwners }), // 좌상단 워크스페이스 **문패 카드**(#1750 메뉴 + 얼굴 스택) — 여기가 어느 집인지 말하는 자리
     // ⚠ replaceChildren 은 null 을 글자 "null" 로 그린다(el() 과 다르다) — 조건부 자식은 스프레드로.
     el('nav', { class: 'v2-fixed', 'aria-label': '바로 가기' }, el('a', { class: 'v2-nav' + (last.activeKey() === 'home' ? ' on' : ''), href: '#/', 'data-nav': 'home',
-        title: '홈 — 무엇이든 시켜서 세션을 여는 자리' }, glyph('home', 'v2-nav-ic'), el('span', { class: 'n', text: '홈' })), ...(livOn ? [el('a', { class: 'v2-nav' + (last.activeKey() === 'liv' ? ' on' : ''), href: '#/liv', 'data-nav': 'liv',
+        title: '홈 — 무엇이든 시켜서 세션을 여는 자리' }, glyph('home', 'v2-nav-ic'), el('span', { class: 'n', text: '홈 — 새로 시키기' })), 
+    // 확인할 것(#1719 사이드바 개편 안2) — 답을 기다리는 세션 + 끝났는데 아직 안 본 세션. **사이드바에서 유일하게
+    //  숫자 배지를 가진 행**이라 눈이 먼저 간다(슬랙 읽지 않음 문법). 우리 제품의 루프는 시키다→기다리다→확인이고,
+    //  그 병목(확인)이 상시 자리를 가져야 "세션은 받은 편지함"(셀프서브 설계)과 화면이 일치한다. 0건이어도 행은
+    //  남는다(자리가 사라지면 있다는 것 자체를 잊는다) — 배지만 조용히 사라진다.
+    el('a', { class: 'v2-nav' + (last.activeKey() === 'inbox' ? ' on' : ''), href: '#/inbox', 'data-nav': 'inbox',
+        title: '확인할 것 — 내 답·확인을 기다리는 세션' }, glyph('inbox', 'v2-nav-ic'), el('span', { class: 'n', text: '확인할 것' }), inboxN ? el('span', { class: 'v2-nav-cnt', text: String(inboxN) }) : null), ...(livOn ? [el('a', { class: 'v2-nav' + (last.activeKey() === 'liv' ? ' on' : ''), href: '#/liv', 'data-nav': 'liv',
             title: '리브 — 이 워크스페이스를 맡아 보는 담당자' }, el('span', { class: 'v2-nav-lm', text: 'L' }), el('span', { class: 'n', text: '리브' }))] : [])), el('div', { class: 'v2-side-sec' }, countEl, findBtn(), filterBtn(fltN, liveAll, doneCount), 
     // ＋도 아이콘으로 — 돋보기가 자리를 차지하면서 글자 버튼까지 두면 헤더가 두 줄로 접힌다(#1067 의 🔍/＋ 문법).
     //  누르면 **여기서 만들고 그 작업대로 간다**(원준 2026-08-19) — 옛 프로젝트 앱(보드)으로 떠나보내지 않는다.
@@ -286,7 +307,9 @@ function render() {
     newBtn()), 
     // 검색칸은 돋보기를 눌렀을 때만(#1067 의 방식). 단 **검색어가 남아 있으면 계속 보인다** —
     //  #1154 가 토글을 폐지했던 사유 중 하나가 '검색 중인 줄 모른 채 짧아진 목록을 본다'였다.
-    ...(findShown() ? [el('div', { class: 'v2-find' }, findIn)] : []), ...(fltN ? [filterSummary(fltN)] : []), treeEl, el('div', { class: 'v2-side-foot' }, el('button', { class: 'v2-apps-btn', type: 'button', onclick: () => openLaunchpad(), title: '앱 — 아직 새 화면으로 옮기지 않은 것들' }, appIcon('proj', 'v2-apps-ic'), el('span', { text: '앱' }), el('span', { class: 'v2-cnt', text: String(visibleApps().length) })), el('div', { class: 'v2-me' }, profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }), el('span', { class: 'v2-me-name', text: name }), el('button', { class: 'btn-text', type: 'button', text: '로그아웃', onclick: () => void logout() })), el('button', { class: 'v2-classic-link', type: 'button', text: '클래식 화면으로 (이 브라우저)', title: '이 브라우저에서만 옛 화면으로 봅니다. 관리탭 [화면] 에서 되돌릴 수 있어요.', onclick: () => { setUiModeOverride('classic'); location.replace(location.pathname + '#/dashboard'); location.reload(); } })));
+    ...(findShown() ? [el('div', { class: 'v2-find' }, findIn)] : []), ...(fltN ? [filterSummary(fltN)] : []), treeEl, el('div', { class: 'v2-side-foot' }, 
+    // 「도구」 — 앱(런치패드)은 콘텐츠가 아니라 도구다. 계정(신원)과 결을 갈라, 푸터가 잡동사니로 읽히지 않게 한다.
+    el('div', { class: 'v2-foot-k', text: '도구' }), el('button', { class: 'v2-apps-btn', type: 'button', onclick: () => openLaunchpad(), title: '앱 — 아직 새 화면으로 옮기지 않은 것들' }, appIcon('proj', 'v2-apps-ic'), el('span', { text: '앱' }), el('span', { class: 'v2-cnt', text: String(visibleApps().length) })), el('div', { class: 'v2-me' }, profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }), el('span', { class: 'v2-me-name', text: name }), el('button', { class: 'btn-text', type: 'button', text: '로그아웃', onclick: () => void logout() })), el('button', { class: 'v2-classic-link', type: 'button', text: '클래식 화면으로 (이 브라우저)', title: '이 브라우저에서만 옛 화면으로 봅니다. 관리탭 [화면] 에서 되돌릴 수 있어요.', onclick: () => { setUiModeOverride('classic'); location.replace(location.pathname + '#/dashboard'); location.reload(); } })));
     renderTree(rows);
     treeEl.scrollTop = prevScroll;
     if (findHad) {
@@ -456,18 +479,46 @@ function renderTree(rowsIn) {
         }
         return true;
     }).sort((a, b) => Number(isPinned(b.key)) - Number(isPinned(a.key)) || b.lastWork - a.lastWork || String((b.proj && b.proj.updated_at) || '').localeCompare(String((a.proj && a.proj.updated_at) || '')));
+    // ── 진행 중 / 전체 프로젝트 (#1719 사이드바 개편 안2) ─────────────────────────
+    //  매일 쓰는 화면은 「진행 중」(도는 세션이 있는 프로젝트 + 압정 고정)만이다 — dev 실측으로 4~6개.
+    //  나머지 수백 개는 「전체 프로젝트 · N」 한 줄 뒤로 접는다(노션이 Favorites 를 먼저 놓고 전체 트리를 뒤로
+    //  미는 문법). ⚠ **검색·필터가 켜져 있으면 가르지 않는다** — 찾으려고 건 렌즈를 묶음이 가리면 안 된다.
+    //  그때는 종전처럼 한 목록이다('완료 포함'도 렌즈로 취급).
+    const splitting = !q && !stateFilter && !mineOnly && !showDone;
+    const isActiveRow = (r) => isPinned(r.key) || r.live.length > 0;
+    const activeRows = splitting ? shown.filter(isActiveRow) : shown;
+    const restRows = splitting ? shown.filter((r) => !isActiveRow(r)) : [];
     if (countEl)
-        countEl.textContent = `프로젝트 · ${shown.filter((r) => r.proj).length}${q || mineOnly || stateFilter ? ` / ${rows.filter((r) => r.proj && (showDone || !r.done || r.live.length)).length}` : ''}`;
-    const kids = shown.map((r) => projRow(r, stateOf(r), pastOf(r), activeKey, selectedPk));
-    const firstLoose = shown.findIndex((r) => !isPinned(r.key));
+        countEl.textContent = splitting
+            ? `진행 중 · ${activeRows.length}`
+            : `프로젝트 · ${shown.filter((r) => r.proj).length}${q || mineOnly || stateFilter ? ` / ${rows.filter((r) => r.proj && (showDone || !r.done || r.live.length)).length}` : ''}`;
+    const kids = activeRows.map((r) => projRow(r, stateOf(r), pastOf(r), activeKey, selectedPk));
+    const firstLoose = activeRows.findIndex((r) => !isPinned(r.key));
     if (firstLoose > 0 && kids[firstLoose])
         kids[firstLoose].classList.add('after-pins');
+    if (splitting && !activeRows.length && last.data.loadedAt) {
+        kids.push(el('p', { class: 'v2-tree-note', text: '지금 도는 세션이 없어요. 아래 전체 프로젝트에서 이어서 하거나, 홈에서 새로 시키세요.' }));
+    }
+    if (splitting) {
+        // 「전체 프로젝트」 머리 — 누르면 그 자리에서 펴진다(기억됨). 완료 프로젝트는 펴도 종전 규칙대로 숨김(맨 아래 more).
+        // 카운트는 **펴면 보이는 것만** 센다 — 완료 프로젝트(수백)는 펴도 '숨긴 완료 N개 보기' 뒤에 있으므로
+        //  여기 합치면 라벨(539)과 목록(205)이 어긋난다(실측). 완료는 그 버튼이 제 숫자를 말한다.
+        const totalN = restRows.length;
+        kids.push(el('button', {
+            class: 'v2-all-h' + (allOpen ? ' open' : ''), type: 'button', 'aria-expanded': String(allOpen),
+            title: allOpen ? '전체 프로젝트 접기' : '진행 중이 아닌 프로젝트까지 모두 폅니다',
+            onclick: () => { allOpen = !allOpen; saveFlag(ALL_KEY, allOpen); renderTree(); }
+        }, el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '›' }), el('span', { class: 'n', text: '전체 프로젝트' }), el('span', { class: 'v2-cnt', text: String(totalN) })));
+        if (allOpen)
+            kids.push(...restRows.map((r) => projRow(r, stateOf(r), pastOf(r), activeKey, selectedPk)));
+    }
     if (!kids.length) {
         kids.push(!last.data.loadedAt ? el('p', { class: 'v2-tree-note', text: '불러오는 중…' }) : !last.data.projects.length
             ? el('p', { class: 'v2-tree-note', text: '아직 프로젝트가 없어요. 가운데 입력창에 무엇이든 시키면 세션이 열리고, 프로젝트는 나중에 붙일 수 있어요.' })
             : el('div', { class: 'v2-tree-note' }, el('span', { text: '조건에 맞는 프로젝트가 없어요.' }), el('button', { class: 'btn-text', type: 'button', text: '필터 지우기', onclick: () => { sideFilter = ''; stateFilter = null; mineOnly = false; saveFlag(MINE_KEY, false); redraw(); } })));
     }
-    if (hiddenDone)
+    // 숨긴 완료 N개 — 전체 묶음이 접혀 있으면 그 안의 일이라 보이지 않는 게 맞다(펴면 맨 아래).
+    if (hiddenDone && (!splitting || allOpen))
         kids.push(el('button', { class: 'v2-tree-more', type: 'button', text: `숨긴 완료 프로젝트 ${hiddenDone}개 보기`, onclick: () => { showDone = true; saveFlag(DONE_KEY, true); redraw(); } }));
     treeEl.replaceChildren(...kids);
 }

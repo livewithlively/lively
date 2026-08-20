@@ -4,7 +4,7 @@
 //   · 매니지드면 [다른 워크스페이스 · 새로 만들기 →](허브) · 승인 대기 중인 승격 요청(있으면 배지+승인/거절).
 //  워크스페이스 1개 = 게이트웨이 1개라, '전환'은 그 게이트웨이 주소를 새 탭으로 여는 것이다(개인↔팀은 서로 다른 게이트웨이).
 //  메뉴는 body 에 떠서(fixed) 사이드바 20초 재렌더에 지워지지 않는다. 데이터(연결·승격)는 **열 때** 한 번만 당긴다.
-import { api, currentWorkspace, el, setCurrentWorkspace, state, toast } from '../core.js';
+import { api, currentWorkspace, el, personFace, profileAvatar, setCurrentWorkspace, state, toast } from '../core.js';
 let openPanel = null;
 function closeMenu() { if (openPanel) {
     openPanel.remove();
@@ -26,17 +26,32 @@ function ws() {
     const kind = (reg.active && reg.kind) ? (reg.kind === 'personal' ? 'personal' : 'team') : (w.kind === 'personal' ? 'personal' : 'team');
     return { kind, hub: w.hub_url || null, name };
 }
-// 상단 노드 — **워크스페이스 한 줄**. 여기가 어디인지를 말하는 자리다(사이드바의 가장 바깥 위계).
-//  ⚠ 예전엔 워드마크 'Lively' 줄과 스위처 줄이 **따로** 있었다. 조직 이름이 'Lively' 면 같은 글자가 세로로
-//   두 번 나오고 머리만 196px 를 먹었다(실측) → 한 줄로 접었다.
-//  ⚠ 그 뒤엔 검은 네모(브랜드 심볼 = 홈 링크)를 스위처 **밖**에 세워 뒀는데, 무엇인지 읽히지 않았다
-//   (상민님 2026-08-19: "좌측에 있는 아이콘? 프로필 박스? 네모난거 저거 위치 너무 어색"). 홈은 아래 [홈] 줄로
-//   내리고, 아이콘 자리는 아예 비웠다 — 이 줄은 **머리글**이지 목록의 항목이 아니다. 그래서 글자도
-//   목록의 기둥(56px)이 아니라 섹션 라벨과 같은 자리(16px)에서 시작한다.
-export function switcherTop() {
+// 상단 노드 — **워크스페이스 문패 카드**(2026-08-20 원준, 사이드바 개편 안3의 문패 채택).
+//  이력: ① 워드마크 줄 + 스위처 줄 두 줄 → 같은 글자 중복·머리 196px(실측)로 한 줄로 접음 ② 그 한 줄은
+//  이름+글자배지뿐이라 '문패'가 아니라 '텍스트 라벨'로 읽혔다 — 개인↔팀 전환이 장소 이동이라는 감각이 없었고,
+//  그 오인은 잘못 시키기(개인 일을 팀에)로 직결된다. 그래서 **카드로 격상**한다(노션 문법):
+//   · 팀 = 조직 타일(이니셜, 둥근 사각) + 이름 + "팀 워크스페이스 · N명" + 멤버 얼굴 스택(최대 3+n)
+//   · 개인 = 내 얼굴(원형) + 이름 + "개인 워크스페이스 · 나만"
+//  얼굴 스택은 "여기서 하는 일은 이 사람들이 본다"를 매 순간 말한다 — 공개 범위 오인을 줄이는 가장 싼 장치.
+//  누르면 종전과 같은 전환·연결 메뉴가 뜬다(기능 무변경 — #1750 메뉴 그대로).
+export function switcherTop(opts) {
     const w = ws();
+    const me = (state && state.me) || {};
     const kindText = w.kind === 'personal' ? '개인' : '팀';
-    const btn = el('button', { class: 'v2-ws', type: 'button', 'aria-haspopup': 'menu', title: `${w.name} · ${kindText} 워크스페이스 — 누르면 전환·연결` }, el('span', { class: 'v2-ws-name', text: w.name }), el('span', { class: 'v2-ws-badge ' + w.kind, text: kindText }), el('span', { class: 'v2-ws-car', 'aria-hidden': 'true', text: '▾' }));
+    const people = (opts && opts.people) || {};
+    const ids = Object.keys(people);
+    const sub = w.kind === 'personal' ? '개인 워크스페이스 · 나만'
+        : `팀 워크스페이스${ids.length ? ' · ' + ids.length + '명' : ''}`;
+    // 아바타 — 개인은 내 얼굴(계정 아바타 그대로), 팀은 조직 이니셜 타일. 팀 로고 이미지는 아직 없다(있으면 여기).
+    const face = w.kind === 'personal'
+        ? profileAvatar(me.avatar, w.name, me.userId, 'v2-wscard-big round', { char: me.avatar_char, color: me.avatar_color })
+        : el('span', { class: 'v2-wscard-big', text: (w.name || '?').trim().slice(0, 1) });
+    // 팀 얼굴 스택 — **세션을 가진 사람들**(호출자가 추린 실재 협업자, 나 먼저) 최대 3명 + 나머지는 숫자.
+    //  멤버 명부를 그대로 쓰면 더미·테스트 계정이 먼저 잡힌다(dev 실측) — 얼굴은 '지금 여기서 일하는 사람'이어야 맞다.
+    const pool = (opts && opts.faces && opts.faces.length ? opts.faces : ids);
+    const faceIds = w.kind === 'team' ? [String(me.userId || ''), ...pool.filter((x) => x !== String(me.userId || ''))].filter((x) => people[x]).slice(0, 3) : [];
+    const more = w.kind === 'team' ? Math.max(0, ids.length - faceIds.length) : 0;
+    const btn = el('button', { class: 'v2-ws v2-wscard', type: 'button', 'aria-haspopup': 'menu', title: `${w.name} · ${kindText} 워크스페이스 — 누르면 전환·연결` }, face, el('span', { class: 'v2-wscard-tt' }, el('b', { text: w.name }), el('span', { text: sub })), faceIds.length ? el('span', { class: 'v2-wscard-faces', 'aria-hidden': 'true' }, ...faceIds.map((id) => personFace(id, 'v2-wscard-face', String(people[id]?.display_name || id))), more ? el('i', { class: 'v2-wscard-more', text: '+' + more }) : null) : null, el('span', { class: 'v2-ws-car', 'aria-hidden': 'true', text: '▾' }));
     btn.onclick = (e) => { e.preventDefault(); if (openPanel) {
         closeMenu();
         return;
