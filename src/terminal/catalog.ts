@@ -299,6 +299,11 @@ export interface CreateInput { label: string; rootKey: string; subpath: string; 
   //  프로젝트 소속은 만들 때 정하지 않고 나중에 POST /terminal/sessions/:id/project 로 붙인다(session-project.ts) —
   //  cwd 는 세션의 것이라 프로젝트가 바뀌어도 그대로다(실행 중 프로세스의 cwd 는 inode 참조라 어차피 안 따라온다).
   //  subpath 는 무시된다. 라벨·하네스·플래그는 종전과 같다.
+  // #1683 다크모드 — 이 세션을 만든 **브라우저 화면의 테마**(해석된 값: dark|light). pane env 로 내려보내
+  //  안에서 도는 하네스·TUI 가 배경에 맞는 색을 고르게 한다(COLORFGBG·LIVELY_THEME — sessions.ts 참조).
+  //  ⚠ 하네스 설정 파일(~/.claude/settings.json 의 theme 등)은 **건드리지 않는다** — 그건 사람의 설정이고
+  //   킷이 보존하기로 한 키다(kit/adapters/*/uninstall.mjs). 우리는 터미널이 하는 표준 신호만 준다.
+  theme?: "dark" | "light";
   sessionDir?: boolean;
   // #1719 홈 입력창 — 첫 지시. 세션을 띄운 뒤 하네스 입력창이 뜨는 걸 **보고 나서** 주입한다(session-first-prompt.ts).
   //  생성 응답은 기다리지 않는다(주입은 백그라운드) — 화면은 세션 대화창으로 가서 대화 파일에 나타나는 걸 따라간다.
@@ -525,4 +530,27 @@ export function modeEnvArgs(input: { readOnly?: boolean; incognito?: boolean }):
   if (input.incognito) return ["-e", "LIVELY_MODE=incognito", "-e", "LIVELY_INCOGNITO=1", "-e", "LIVELY_OFF=1"];
   if (input.readOnly) return ["-e", "LIVELY_MODE=readonly", "-e", "LIVELY_READONLY=1"];
   return [];
+}
+
+// 화면 테마(#1683) — 값 정규화와 `-e` env 조립. modeEnvArgs 와 같은 자리·같은 모양(순수 함수 → 계약을 테스트로 못박는다).
+//
+// 왜 pane 에 내려보내나: 터미널 안에서 도는 하네스·TUI 가 **배경에 맞는 색**을 골라야 읽힌다. 밝은 배경에
+//  밝은 회색으로 쓰면 안 보이고, 그 반대도 마찬가지다. 터미널이 앱에게 배경을 알려주는 표준 통로는 둘이다 —
+//   · OSC 11 질의 응답 — 앱이 물어보면 터미널이 답한다. 웹터미널은 xterm 이 자동으로 답한다
+//     (실증: 배경 #111726 → `ESC]11;rgb:1111/1717/2626`). **물어보는** 도구는 이 env 없이도 맞게 고른다.
+//   · COLORFGBG env — 물어보지 않고 env 를 읽는 도구(vim/neovim 의 background 자동판정, less 등)를 위한 보강.
+//  LIVELY_THEME 은 우리 훅·스킬이 읽을 명시 값이다(COLORFGBG 는 값 규약이 느슨해 해석이 갈린다).
+//
+// ⚠ 하네스의 설정 파일(~/.claude/settings.json 의 theme 등)은 **고치지 않는다** — 사람의 설정이고 킷이
+//  보존하기로 한 키다(kit/adapters/*/uninstall.mjs). 터미널이 하는 표준 신호까지가 우리 몫이다.
+// ⚠ pane env 는 exec 시점 고정 → **새 세션부터** 적용된다(LANG #633·TZ #778·SESSION_ID #852 와 같은 성질).
+export function normalizeTheme(v: unknown): "dark" | "light" | undefined {
+  const s = String(v ?? "").trim().toLowerCase();
+  return s === "dark" || s === "light" ? s : undefined;
+}
+export function themeEnvArgs(theme: unknown): string[] {
+  const t = normalizeTheme(theme);
+  if (!t) return [];   // 모르면 아무것도 안 넣는다 — 종전 동작(무회귀). 억지 기본값이 더 나쁘다.
+  // COLORFGBG "<fg>;<bg>" ANSI 번호 — 다크는 밝은 글자(15) on 검정(0), 라이트는 그 반대.
+  return ["-e", `COLORFGBG=${t === "dark" ? "15;0" : "0;15"}`, "-e", `LIVELY_THEME=${t}`];
 }
