@@ -53,8 +53,14 @@ function goSession(sid: string, tab: ShellTab): void {
   const href = '#/s/' + encodeURIComponent(sid);
   // ⚠ tab.route 를 **미리 바꾸지 않는다** — 라우터는 '탭 라우트와 새 해시가 같으면 다시 그리지 않는다'로 동작하므로,
   //  먼저 바꿔 두면 이 이동이 통째로 삼켜져 화면이 비어 버린다(실측 2026-08-20).
+  // ⚠ 이 이동은 **이 탭 안에서 이어지는 이동**이다(프로젝트 주소 → 그 프로젝트의 맨 위 세션). 세션 주소라고 해서
+  //  새 탭을 만들면, 프로젝트 탭을 누를 때마다 탭이 하나씩 늘고 활성이 끝으로 튄다(원준 2026-08-20 신고 실측:
+  //  '고객사 사용 분석' 탭을 눌렀더니 12번째 탭이 새로 생기고 그리로 옮겨 갔다). 그래서 hop 으로 표시해 둔다.
+  if (location.hash !== href) inTabHops++;
   location.replace(location.pathname + location.search + href);
 }
+/** 같은 탭 안에서 이어지는 이동(리다이렉트)의 수 — onHash 의 '새 탭' 규칙만 건너뛴다(다시 그리기는 그대로 한다). */
+let inTabHops = 0;
 
 /** 프로젝트 셸(문패 + 칸 + 세션 서랍)을 이 탭에 마운트한다. 세션 화면은 그 안 '세션' 칸에 통째로 들어간다. */
 async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: string | null, seq: number): Promise<void> {
@@ -265,15 +271,18 @@ async function onHash(): Promise<void> {
   const hash = location.hash || '#/';
   const cur = tabsApi.active();
   if (routeKey(cur.route) === routeKey(hash)) { cur.route = hash; tabsApi.routed(cur); return; }
+  // 이 탭 안에서 이어지는 이동인가(프로젝트 → 그 프로젝트의 세션) — 새 탭 규칙만 건너뛴다.
+  const hop = inTabHops > 0;
+  if (hop) inTabHops--;
   const other = tabsApi.find(hash);
-  if (other) { tabsApi.activate(other); return; }   // 같은 화면(같은 세션·프로젝트)은 그 탭으로 — 두 번 그리지 않는다
+  if (other && other !== cur) { tabsApi.activate(other); return; }   // 같은 화면(같은 세션·프로젝트)은 그 탭으로 — 두 번 그리지 않는다
   // 새 탭에서 여는 세 경우(원준 2026-08-20):
   //  ① **세션으로 간다** — 여러 세션이 탭으로 나란히 살아야 한다. 지금 탭을 덮어쓰면 보던 세션이 사라진다.
   //  ② **홈에서 출발** — 홈 탭은 늘 홈이다(고정). 홈이 다른 화면으로 변신하면 '못 닫는 홈'이 무의미해진다.
   //  ③ **세션에서 출발** — 세션 탭도 세션으로 남는다. 안 그러면 사이드바에서 프로젝트 한 번 눌렀다고
   //     열어 둔 대화가 통째로 사라진다(실측: dev 에서 '안뇽' 세션 탭이 프로젝트로 바뀌어 없어졌다).
   //  나머지(프로젝트 → 프로젝트·앱 등)는 종전대로 그 탭 안에서 이동한다 — 클릭마다 탭이 불어나면 그것도 못 쓴다.
-  if (routeKey(hash).startsWith('s:') || cur.fixed || routeKey(cur.route).startsWith('s:')) { tabsApi.add(hash); return; }
+  if (!hop && (routeKey(hash).startsWith('s:') || cur.fixed || routeKey(cur.route).startsWith('s:'))) { tabsApi.add(hash); return; }
   if (cur.chat) { cur.chat.destroy(); cur.chat = null; }   // 세션 화면을 떠나면 그 폴링·리스너를 끈다
   dropProjView(cur);                                       // 프로젝트 화면(#1757)의 리브 턴 폴링도
   cur.route = hash;
