@@ -95,3 +95,4 @@ export const SESS_DEAD_KEYS = ['restorable', 'oom_killed', 'exited_user'] as con
 export function shouldRestoreOnOpen(s: { restorable?: boolean; owned?: boolean } | null | undefined): boolean {
   return !!s && !!s.restorable && !!s.owned;
 }
+
