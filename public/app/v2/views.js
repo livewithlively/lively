@@ -6,7 +6,7 @@ import { api, el, errorNote, relTime, state, toast } from '../core.js';
 import { isCreatingQuickSession, openQuickSession, takeFirstPrompt } from './quick-session.js';
 import { createRunPicker } from './run-picker.js';
 import { mountSessionChat } from '../session-chat.js';
-import { sessIsDead, sessLabel, sessStateKey } from '../session-status.js';
+import { sessIsDead, sessLabel, sessStateKey, shouldRestoreOnOpen } from '../session-status.js';
 import { soloSessionUrl, terminalUrl } from './apps.js';
 const dot = (k) => el('span', { class: 'v2-dot ' + dotCls(k), 'aria-hidden': 'true' });
 // 상태 key(web/session-status.ts) → 점 색 클래스. 눈에 띄어야 할 셋만 색이다 — 작업 중(파랑·깜빡)·확인 필요(앰버)·작업 완료(민트 링).
@@ -146,6 +146,11 @@ export function renderSession(host, data, id, vopts = {}) {
         onRename: vopts.onRename, // 제목 = 세션 이름(#1719) — 고치면 사이드바·목록이 그 이름으로 바뀐다
         onToggleFiles: vopts.onToggleFiles, // 상단바 [파일] → 우패널 파일 탐색기(#1744)
         solo: vopts.solo,
+        // ★ #1820 — 멈춘 내 세션은 **열면 바로 되살린다**. 위 주석의 '읽기전용 기록 + 버튼 한 번'은 화면이 어긋나던
+        //  사고(#1808)의 처방이었는데, 그 처방이 "열어도 아무 일도 안 난다"를 기본 경험으로 만들었다(dev 실측:
+        //  내 세션 219건 중 복원 가능 198건). 어긋남의 원인은 '자동'이 아니라 **프레임이 몰래 갈아탄 것**이었으므로,
+        //  셸이 라우팅까지 쥐고 되살리면 둘 다 만족한다. 실패하면 그 기록 화면과 버튼이 그대로 남는다.
+        autoResume: shouldRestoreOnOpen({ restorable: !!s.raw?.restorable, owned: s.owned }),
     });
 }
 // ── 데이터 정규화 — 라이브(terminal/sessions) + 기록(v6/sessions) 를 한 목록으로 ─────────

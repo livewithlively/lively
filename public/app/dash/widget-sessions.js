@@ -15,7 +15,8 @@
 //     재렌더가 카드를 갈아치우면 끌던 범위가 끊기기 때문. 상태 서명(sessStateSig)이 바뀔 때만 다시 그리고,
 //     그릴 때 스크롤 위치를 보존한다. ⚠ 타이머는 이 모듈 밖으로 나갈 수 없다(소유 모듈과 동거).
 //  ③ **드래그 범위 선택 등록**(initDragRangeSelect)은 core 가 문서 리스너 한 벌을 소유하고 여기선 조합만 등록한다.
-import { api, appUrl, el, errorNote, initDragRangeSelect, toast } from '../core.js';
+import { api, el, errorNote, initDragRangeSelect, toast } from '../core.js';
+import { openSessionWindow } from '../lib/session-open.js'; // #1820 — 세션 주소는 한 곳에서만 만든다
 import { openGridPicker, openSessionSelectPicker, openTermCreateForm, startTerminalTour } from '../terminal.js';
 import { dashSessDensity, dashSessFilter2, dashSessOnlineOnly, dashSessShowClosed, dashSessSort } from './prefs.js';
 import { dashSessionIcon } from './icons.js';
@@ -465,14 +466,8 @@ async function fillSessions(zone, onCount, projectsP) {
 //  그 탭을 재사용·포커스한다(같은 세션을 여러 번 열어 탭이 무한히 늘어나던 문제). 이 대시보드가 연 탭이어야 이름이 잡히므로,
 //  다른 경로로 연 탭이면 새로 열린다(그 뒤로는 이 이름으로 묶여 재사용된다).
 function dashOpenSessionTab(id, label, nodeId) {
-    // #1169 appUrl — 프리뷰(/preview/<id>/…) 아래에서 열면 루트 절대경로가 오리진 루트(라이브)로 새어 프리뷰가 풀린다.
-    const url = appUrl('/ui/terminal.html?session=') + encodeURIComponent(id) + '&label=' + encodeURIComponent(label || '') + (nodeId ? '&node=' + encodeURIComponent(nodeId) : '');
-    const w = window.open(url, 'lively-term-' + id);
-    try {
-        w && w.focus();
-    }
-    catch { /* 팝업 차단·크로스오리진 — 열기는 됐으니 무시 */ }
-    return w;
+    // 주소·창이름 규칙(#1169 프리뷰 접두사 · #1598 한 세션 한 탭)은 web/lib/session-open.ts 한 곳이 쥔다(#1820).
+    return openSessionWindow(id, { label, node: nodeId });
 }
 // #req 따라하기 ① 단계 — 대시보드 맥락에 맞춘 문구·앵커. (②~⑦은 openTermCreateForm 폼이 동일해 그대로 재사용.)
 //  이 카드의 [+ 새 세션]([data-tour="new-session"])을 가리키고, 클릭하면 폼이 대시보드 위로 떠 다음 단계로 이어짐.

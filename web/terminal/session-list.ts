@@ -1,7 +1,8 @@
 // terminal/session-list.ts — 목록을 이루는 것들: 프로젝트 **트리 필터**(폴더›리스트›프로젝트) · **세션 카드** · 질문 팝아웃/통합검색.
 //  소비자: terminal/routes.ts + 대시보드 '내 AI 세션'(openSessPrompts — 배럴 terminal.ts 경유).
 //  import 방향: status-filter·select-bar·session-form(전부 아래층)만 본다 — routes.ts 는 보지 않는다.
-import { api, appUrl, el, toast } from '../core.js';
+import { api, el, toast } from '../core.js';
+import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 import { overlay } from '../admin.js';
 // #1582 — 세션 종료·목록제거 확인창은 전 화면 공용 정의 하나만 쓴다.
 import { confirmSessionForget, endedToast } from '../session-actions.js';
@@ -461,7 +462,7 @@ function openGlobalPromptSearch(ctx) {
           el('span', { class: 'tsess-gopen', text: '열기 ↗' }));
         const txt = qHighlight(r.text, ql);
         const item = el('div', { class: 'tsess-qitem tsess-gitem', role: 'button', tabindex: '0', title: '이 세션 열기' }, meta, txt);
-        item.onclick = () => window.open(appUrl('/ui/terminal.html?session=') + encodeURIComponent(r.sessionId) + '&label=' + encodeURIComponent(r.label || ''), '_blank');
+        item.onclick = () => window.open(sessionTermUrl(r.sessionId, { label: r.label }), '_blank');
         results.append(item);
         qClampText(item, txt);
       });

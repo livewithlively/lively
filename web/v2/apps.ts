@@ -4,7 +4,8 @@
 //  중앙에 띄운다 — 클래식 코드를 한 줄도 옮기지 않고 새 셸 안에서 그대로 쓴다. 나중에 화면이 새 셸로 이식되면
 //  이 표의 항목이 `native` 로 바뀌거나 빠진다(표가 곧 '아직 안 옮긴 것' 목록이다).
 //  ⚠ 노출은 클래식과 같은 규칙(navOn — ui_nav 로 끈 탭은 여기서도 안 보인다).
-import { appUrl, el, navOn } from '../core.js';
+import { el, navOn } from '../core.js';
+import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 
 export interface AppDef {
   key: string;        // 안정 키(= 클래식 data-tab 슬러그 또는 페이지 이름)
@@ -55,8 +56,7 @@ export function classicUrl(hash: string): string {
 //   우패널로 이미 합쳐졌으므로 프레임 쪽은 크롬 없이 터미널만 그린다(상단바 둘이 겹쳐 보이던 것을 없앤다).
 //   프레임 밖(단독 탭)에서는 embed 없이 종전 그대로 — 이 주소를 아는 곳이 여럿이다(프로젝트 화면·활동 로그 등).
 export function terminalUrl(id: string, label: string, node?: string | null, opts?: { embed?: boolean }): string {
-  return appUrl('/ui/terminal.html?session=' + encodeURIComponent(id) + '&label=' + encodeURIComponent(label || '')
-    + (node ? '&node=' + encodeURIComponent(node) : '') + (opts?.embed ? '&embed=1' : ''));
+  return sessionTermUrl(id, { label, node, embed: opts?.embed });   // #1820 — 주소를 만드는 곳은 한 곳뿐이다
 }
 // 세션 하나만 담은 **팝아웃 창**(#1744) — 세션 화면의 [새 탭]이 여는 주소.
 //  종전엔 terminal.html(터미널만)을 열었는데, 이제 같은 앱을 `?solo=1` 로 열어 **가운데 대화창 + 우패널**을 그대로

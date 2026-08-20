@@ -23,6 +23,7 @@ import { createChatView, type ChatTurn, type ChatView } from './chat-view.js';
 import { toolLabel } from './session-tool-labels.js';
 import { classifyToolUse, type TrailWidget } from './session-trail.js';
 import { effortKo, findHarness, flagChoices, prettyModel, providerLabel, runCatalog, type RunHarness } from './v2/run-picker.js';
+import { rememberCreated } from './v2/created-cache.js';   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
 
 export interface SessionChatTarget {
   id: string; label: string; live: boolean; alive: boolean; node: string | null; owned: boolean;
@@ -87,6 +88,11 @@ export interface SessionChatOpts {
   onToggleFiles?: () => boolean;
   /** 팝아웃 창(?solo=1)이면 true — [새 창] 대신 [전체 화면으로]를 둔다(#1744). */
   solo?: boolean;
+  /**
+   * 열자마자 되살린다 (#1820) — 박스가 없어졌지만 좌표가 남아 있고 내가 주인인 세션. 판정은 호출자가
+   *  `shouldRestoreOnOpen`(web/session-status.ts)으로 한다. 실패하면 기록 화면 + [이어서 대화하기]로 되돌아간다.
+   */
+  autoResume?: boolean;
 }
 export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, opts: SessionChatOpts): SessionChatHandle {
   let target = first;
@@ -364,6 +370,14 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     view.setFooter(el('div', { class: 'sc-bar' },
       el('span', { class: 'sc-bar-t', text: `${why}이에요 — 대화는 그대로 이어받을 수 있어요.` }), btn));
     view.busy(false);
+    // ★ #1820 — 열면 되살린다. 이 화면에 온 것 자체가 "이 세션을 쓰겠다"는 뜻이라, 버튼을 한 번 더 누르게 하지
+    //  않는다. 되살아나면 새 id 로 주소가 옮겨 가고(셸이 라우팅을 쥔다 — 프레임이 몰래 갈아타지 않는다, #1808),
+    //  실패하면 이 기록 화면과 버튼이 그대로 남는다(자동이 막다른 길을 만들지 않는다).
+    if (opts.autoResume && !resumeAuto) {
+      resumeAuto = true;
+      view.setNote('세션을 이어서 여는 중…');
+      void resumeSession(btn);
+    }
   };
 
   // 화면 모드 — 기본은 **터미널**(상민님 지시 2026-08-18: 대화창이 미완성이라 공 들이기 전엔 터미널이 정답).
@@ -394,6 +408,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const TERM_MSG = 'lively-term';
   let termReady = false;                       // 프레임이 첫 신호(상태)를 보냈나 — 그 전에 보낸 명령은 사라진다
   let termQueue: string[] = [];
+  let resumeAuto = false;                      // #1820 — 자동 복원을 이미 걸었나(한 화면에서 한 번만)
   function termSend(cmd: string): void {
     if (!termFrame || !termFrame.contentWindow) return;
     try { termFrame.contentWindow.postMessage({ type: TERM_MSG, cmd }, location.origin); } catch { /* 프레임이 닫혔다 */ }
@@ -407,6 +422,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const onTermMsg = (ev: MessageEvent): void => {
     if (ev.origin !== location.origin || !termFrame || ev.source !== termFrame.contentWindow) return;
     const m: any = ev.data;
+    // #1820 — 프레임이 "이 세션 박스가 없다"고 알려 왔다. 되살리기는 **셸이** 한다 — 프레임이 스스로 되살려
+    //  자기 주소만 갈아타면 셸 주소·탭 제목·사이드바는 옛 세션 그대로인 어긋난 화면이 된다(#1808 사고).
+    //  여기서 부르는 resumeSession 은 [이어서 대화하기]와 같은 경로라 주소(#/s/<새 id>)까지 함께 옮긴다.
+    if (m && m.type === 'lively-term-gone' && String(m.id || '') === target.id) {
+      if (m.canRestore && !resumeAuto) { resumeAuto = true; view.setNote('세션을 이어서 여는 중…'); void resumeSession(); }
+      return;
+    }
     if (!m || m.type !== 'lively-term-status') return;
     if (!termReady) { termReady = true; const q = termQueue; termQueue = []; for (const c of q) termSend(c); }
     termStatusEl.textContent = String(m.text || '');
@@ -965,25 +987,33 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       window.setTimeout(() => { if (!destroyed) view.setNote(''); }, 2500);
     } catch (e: any) { if (!quiet) view.setNote(e?.message || '키를 보내지 못했습니다.'); }
   }
-  async function resumeSession(btn: HTMLButtonElement): Promise<void> {
-    btn.disabled = true; const orig = btn.textContent; btn.textContent = '여는 중…';
+  /** 이 세션을 되살려(또는 그 대화를 이어받아) 새 세션으로 간다. btn 없이도 부를 수 있다 — 자동 복원 경로(#1820). */
+  async function resumeSession(btn?: HTMLButtonElement | null): Promise<void> {
+    const orig = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = '여는 중…'; }
     try {
       let nextId = '';
       if (isBox && target.raw?.restorable) {
         const r: any = await api(`/api/ui/terminal/sessions/${encodeURIComponent(target.id)}/restore`, { method: 'POST', body: '{}' });
+        if (r?.session) rememberCreated(r.session);
         nextId = String(r?.session?.id || (r?.already ? target.id : ''));
       } else {
         const sid = !isBox ? target.id : String(target.logId || target.raw?.claudeSessionId || '');
         const node = !isBox ? String(target.node ?? '') : String(target.logNode ?? '');
         if (!sid) throw new Error('이어받을 대화 id 를 모릅니다.');
         const r: any = await api(`/api/ui/v6/sessions/${encodeURIComponent(sid)}/resume?node=${encodeURIComponent(node)}`, { method: 'POST', body: '{}' });
+        if (r?.session) rememberCreated(r.session);
         nextId = String(r?.session?.id || '');
         if (r?.mode === 'fallback' && r?.reason) toast(String(r.reason));
       }
       if (!nextId) throw new Error('새 세션 id 를 받지 못했습니다.');
       toast('이어받기 세션을 열었어요.');
       location.hash = '#/s/' + encodeURIComponent(nextId);
-    } catch (e: any) { toast(e?.message || '이어받기 세션을 만들지 못했습니다.'); btn.disabled = false; btn.textContent = orig || '이어서 대화하기'; }
+    } catch (e: any) {
+      toast(e?.message || '이어받기 세션을 만들지 못했습니다.');
+      resumeAuto = false;                       // 자동 복원이 실패했으면 다시 시도할 수 있게 푼다(버튼은 그대로 있다)
+      if (btn) { btn.disabled = false; btn.textContent = orig || '이어서 대화하기'; }
+    }
   }
 
   // 목차 — 이 창에서 읽은 질문들. 누르면 그 턴으로.

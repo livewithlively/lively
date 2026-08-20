@@ -4,7 +4,8 @@
 //  ※ 레포 피커는 프로젝트 설정 모달이, 지식 피커는 상세의 필요/산출 지식 섹션이 함께 쓴다(배럴 재수출).
 //  ※ 실행 기본값(pjvRunDefaults·pjvBulkRunDefaultsModal)은 R33 이 projects/selection.ts 로, 컨테이너 비교자
 //   (pjvContainerCmp)는 projects/rows.ts 로 가져갔다 — 배럴(../projects.js)을 거치지 않고 **직결**로 받는다.
-import { api, appUrl, el, toast } from '../core.js';
+import { api, el, toast } from '../core.js';
+import { sessionTermUrl } from '../lib/session-open.js'; // #1820 — 세션 주소는 한 곳에서만 만든다
 import { overlayBox } from '../learn.js';
 import { memberPicker } from './files.js';
 import { pjvSubtaskIcon } from './icons.js';
@@ -379,7 +380,7 @@ export function openProjectV2Form(reload, prefill) {
                     reload();
                 toast(sid ? '프로젝트 생성 · AI세션을 새 탭에서 열었어요' : '프로젝트를 만들었어요');
                 if (sid)
-                    window.open(appUrl('/ui/terminal.html?session=') + encodeURIComponent(sid) + '&label=' + encodeURIComponent(name), '_blank');
+                    window.open(sessionTermUrl(sid, { label: name }), '_blank');
                 return;
             }
             back.remove();
