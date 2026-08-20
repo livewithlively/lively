@@ -37,6 +37,9 @@ import { loadEnterprise } from "./enterprise/load.js";
 import { logger } from "./log.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
+// 바인드 주소(#250) — 기본은 종전과 동일한 전 인터페이스(회귀 없음). SG 같은 방화벽 계층이 없는 호스트
+//  (사무실 macOS launchd 등)는 BIND_HOST=127.0.0.1 로 좁히고 노출은 tailscale serve 등 앞단에 맡긴다.
+const BIND_HOST = process.env.BIND_HOST || "0.0.0.0";
 
 // ── 프로세스 안전망(최대한 안 죽게) — launchd KeepAlive 와 함께 2중 방어. ──
 //  unhandledRejection: 미처리 promise 거부로 프로세스가 통째로 죽지 않게 — 로그만 남기고 계속(요청 1건 실패 ≠ 전체 다운).
@@ -226,8 +229,8 @@ if (!registry.has("source_vis_policy_list")) {
 //  express.json 이후·app.listen 이전. WS 불요(정적+REST 만)라 server 핸들 불필요.
 registerPreviewRoutes(app, verifier);
 
-const server = app.listen(PORT, () => {
-  logger.info(`Lively gateway listening on :${PORT}/mcp`);
+const server = app.listen(PORT, BIND_HOST, () => {
+  logger.info(`Lively gateway listening on ${BIND_HOST}:${PORT}/mcp`);
   // 부팅 하우스키핑(#1313 R17) — 종전 이 콜백의 ~120줄 .then 체인. 스텝 선언(이름·게이트·순서)·스키마 직렬
   //  체인(boot/schemas.ts)·LIVELY_NO_SCHEDULER 게이트 단일 판정은 전부 boot/housekeeping.ts 소유.
   runBootHousekeeping({ app, server, verifier });

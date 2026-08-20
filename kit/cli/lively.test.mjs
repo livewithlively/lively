@@ -205,7 +205,7 @@ try {
       `stamp=${stamped} hooks=${hooks} cli=${cli} shim=${shim}\n${r.err.slice(-400)}`);
   }
 
-  // ④ **MCP 등록 인자** — 이 CLI(registerLivelyMcp)와 register-clients.sh(scripts/ 소스 + kit/setup/ 트윈)는
+  // ④ **MCP 등록 인자** — 이 CLI(registerClaudeMcp)와 register-clients.sh(scripts/ 소스 + kit/setup/ 트윈)는
   //  **동일한 헤더 세트**여야 한다. register-clients.sh 는 죽은 코드가 아니라 fresh 설치·멤버 온보딩의 주 경로다
   //  (deploy/install-kit.sh·provision-member.sh 가 직접 호출) — 어느 한쪽만 헤더를 더하면 그 경로로 깐 세션은
   //  헤더가 빠져 기능이 조용히 죽는다(#1007 리뷰). 그래서 아래 두 축으로 못박는다: (a) 이 CLI argv 를 리터럴로,
