@@ -299,6 +299,9 @@ const MACHINE_FILES = new Set(['CLAUDE.md', 'AGENTS.md', '.DS_Store', 'package-l
 const NOISE_RE = /\/(__pycache__|node_modules|dist|build|\.next|coverage|venv)\//;
 const TRASH_DIR = '휴지통';
 const isImg = (n) => /\.(png|jpe?g|gif|webp|svg)$/i.test(n);
+// 아이콘이 아니라 **내용이 보이게**(원준 2026-08-20) — kind 가 미리보기 방식을 정한다.
+//  img=그대로 · pdf/page=축소해 실제로 렌더 · text=앞부분을 글자로 · video=첫 프레임 · file=아이콘(렌더할 방법이 없는 것들).
+const TEXTY = /\.(md|markdown|txt|log|csv|tsv|json|jsonl|ya?ml|toml|ini|conf|env|sql|sh|bash|zsh|ps1|py|rb|go|rs|java|kt|swift|c|h|cpp|cc|hpp|cs|php|pl|lua|r|ts|tsx|js|jsx|mjs|cjs|css|scss|less|xml|svg|gitignore|dockerfile|makefile)$/i;
 function kindOf(p) {
     if (isImg(p))
         return { kind: 'img', type: '그림' };
@@ -306,16 +309,27 @@ function kindOf(p) {
         return { kind: 'pdf', type: 'PDF' };
     if (/\.html?$/i.test(p))
         return { kind: 'page', type: '시안' };
-    if (/\.(md|txt)$/i.test(p))
-        return { kind: 'doc', type: '문서' };
-    if (/\.(csv|tsv|xlsx?)$/i.test(p))
+    if (/\.(mp4|webm|mov|m4v)$/i.test(p))
+        return { kind: 'video', type: '영상' };
+    if (/\.(md|markdown|txt)$/i.test(p))
+        return { kind: 'text', type: '문서' };
+    if (/\.(csv|tsv)$/i.test(p))
+        return { kind: 'text', type: '표' };
+    if (/\.xlsx?$/i.test(p))
         return { kind: 'file', type: '표' };
     if (/\.(pptx?|key)$/i.test(p))
         return { kind: 'file', type: '장표' };
-    if (/\.(zip|tar|gz)$/i.test(p))
+    if (/\.docx?$|\.hwpx?$/i.test(p))
+        return { kind: 'file', type: '문서' };
+    if (/\.(zip|tar|gz|7z|rar)$/i.test(p))
         return { kind: 'file', type: '묶음' };
+    if (TEXTY.test(p))
+        return { kind: 'text', type: '코드' };
     return { kind: 'file', type: '파일' };
 }
+// 미리보기는 **작은 종이 한 장**(300×246)을 만들어 카드 크기에 맞춰 줄인다 — 글자·표가 뭉개지지 않고 비율이 산다.
+const PV_W = 300; // 종이 폭(높이는 CSS 가 카드 비율로 잡는다)
+const PV_MAX = { pdf: 12e6, page: 4e6, text: 512e3, img: 24e6, video: 80e6 };
 function filesPart(ctx) {
     const root = el('div', { class: 'pn-part pn-files' });
     const grid = el('div', { class: 'pn-fgrid' });
@@ -366,17 +380,115 @@ function filesPart(ctx) {
             .map((f) => ({ path: String(f.path), size: Number(f.size || 0), mtime: Number(f.mtime || 0) }))
             .sort((a, b) => b.mtime - a.mtime);
     }
+    // ── 미리보기 ──────────────────────────────────────────────────────────────
+    //  · **보일 때만** 받는다(IntersectionObserver) — 자료가 수십 개인 칸에서 전부 받으면 화면이 멈춘다.
+    //  · 한 번에 세 개까지만 받는다(fetch 큐) — 좁은 칸에서 브라우저가 연결로 막히지 않게.
+    //  · 큰 파일은 건너뛰고 아이콘으로 둔다(형식별 상한 PV_MAX) — 미리보기 하나 보자고 100MB 를 내려받지 않는다.
+    const seenPv = new WeakSet();
+    let inflight = 0;
+    const queue = [];
+    function pump() {
+        while (inflight < 3 && queue.length) {
+            const job = queue.shift();
+            inflight++;
+            void job().catch(() => { }).then(() => { inflight--; pump(); });
+        }
+    }
+    const io = typeof IntersectionObserver === 'function'
+        ? new IntersectionObserver((ents) => {
+            for (const e of ents) {
+                const n = e.target;
+                if (!e.isIntersecting || seenPv.has(n))
+                    continue;
+                seenPv.add(n);
+                io?.unobserve(n);
+                const path = n.dataset.pv || '';
+                const kind = n.dataset.pvk || '';
+                const size = Number(n.dataset.pvs || 0);
+                queue.push(() => fillPreview(n, path, kind, size));
+                pump();
+            }
+        }, { rootMargin: '250px' })
+        : null;
+    /** 카드 폭에 맞춰 종이(300×246)를 줄인다 — 칸 폭이 바뀌면 다시 맞춘다. */
+    function fitPaper(box, paper) {
+        const w = box.clientWidth || 92;
+        paper.style.transform = 'scale(' + (w / PV_W).toFixed(4) + ')';
+    }
+    const fits = [];
+    const ro = typeof ResizeObserver === 'function'
+        ? new ResizeObserver(() => { for (const [b, pp] of fits)
+            fitPaper(b, pp); })
+        : null;
+    function paper(box, inner) {
+        const pp = el('div', { class: 'pn-fpaper' }, inner);
+        box.replaceChildren(pp);
+        fits.push([box, pp]);
+        fitPaper(box, pp);
+        ro?.observe(box);
+    }
+    async function fillPreview(box, path, kind, size) {
+        if (ctx.dead() || !box.isConnected)
+            return;
+        if (size && size > (PV_MAX[kind] || 4e6))
+            return; // 너무 큰 것은 아이콘 그대로
+        const url = apiUrl('/api/ui/v6/projects/' + ctx.id + '/file?path=' + encodeURIComponent(path));
+        if (kind === 'text') {
+            // 앞부분만 — Range 를 무시하는 서버여도 글자만 잘라 쓰므로 화면은 같다.
+            const r = await fetch(url, { headers: { ...authHeaders(), Range: 'bytes=0-4095' } });
+            if (!r.ok || ctx.dead() || !box.isConnected)
+                return;
+            const txt = (await r.text()).slice(0, 1400);
+            if (!txt.trim())
+                return;
+            box.classList.add('has-pv');
+            paper(box, el('pre', { class: 'pn-fpre', text: txt }));
+            return;
+        }
+        const r = await fetch(url, { headers: authHeaders() });
+        if (!r.ok || ctx.dead() || !box.isConnected)
+            return;
+        const bl = await r.blob();
+        const u = URL.createObjectURL(kind === 'pdf' ? new Blob([bl], { type: 'application/pdf' }) : bl);
+        blobUrls.push(u);
+        if (ctx.dead() || !box.isConnected)
+            return;
+        box.classList.add('has-pv');
+        if (kind === 'img') {
+            box.replaceChildren(el('img', { alt: '', src: u }));
+        }
+        else if (kind === 'video') {
+            const v = el('video', { src: u, muted: 'true', playsinline: 'true', preload: 'metadata' });
+            v.muted = true;
+            box.replaceChildren(v);
+            // 첫 프레임을 세운다 — metadata 만으로 검은 칸이 남는 브라우저가 있어 0.1초로 옮겨 한 장을 그린다.
+            v.addEventListener('loadedmetadata', () => { try {
+                v.currentTime = Math.min(0.1, (v.duration || 1) / 10);
+            }
+            catch (_) { /* noop */ } }, { once: true });
+        }
+        else if (kind === 'pdf') {
+            // 크롬·사파리는 PDF 를 프레임 안에서 직접 그린다 — 첫 장만, 도구모음 없이.
+            paper(box, el('iframe', { class: 'pn-fframe', src: u + '#page=1&toolbar=0&navpanes=0&scrollbar=0&view=FitH', loading: 'lazy', tabindex: '-1', 'aria-hidden': 'true' }));
+        }
+        else if (kind === 'page') {
+            // 시안(HTML)은 **완전 격리 프레임**으로 — sandbox 를 비워 스크립트·폼·같은-오리진 접근을 모두 막고 그림만 본다.
+            paper(box, el('iframe', { class: 'pn-fframe', src: u, sandbox: '', loading: 'lazy', tabindex: '-1', 'aria-hidden': 'true' }));
+        }
+    }
     function thumb(f) {
         const k = kindOf(f.path);
-        if (k.kind !== 'img')
-            return el('span', { class: 'pn-fic ' + k.kind }, pnIcon(k.kind === 'page' ? 'note' : 'doc', 'pn-i'));
-        const img = el('img', { alt: '', loading: 'lazy' });
-        void fetch(apiUrl('/api/ui/v6/projects/' + ctx.id + '/file?path=' + encodeURIComponent(f.path)), { headers: authHeaders() })
-            .then((r) => (r.ok ? r.blob() : null))
-            .then((bl) => { if (!bl || ctx.dead())
-            return; const u = URL.createObjectURL(bl); blobUrls.push(u); img.src = u; })
-            .catch(() => { });
-        return el('span', { class: 'pn-fic img' }, img);
+        const box = el('span', { class: 'pn-fic ' + k.kind, 'data-pv': f.path, 'data-pvk': k.kind, 'data-pvs': String(f.size || 0) }, pnIcon(k.kind === 'page' ? 'note' : k.kind === 'video' ? 'img' : 'doc', 'pn-i'));
+        if (k.kind !== 'file') {
+            if (io)
+                io.observe(box);
+            else {
+                seenPv.add(box);
+                queue.push(() => fillPreview(box, f.path, k.kind, f.size || 0));
+                pump();
+            }
+        }
+        return box;
     }
     async function paint() {
         const fs = await files().catch(() => []);
@@ -403,7 +515,7 @@ function filesPart(ctx) {
     return {
         root,
         tick: () => { void paint(); },
-        destroy: () => { blobUrls.forEach((u) => URL.revokeObjectURL(u)); },
+        destroy: () => { io?.disconnect(); ro?.disconnect(); blobUrls.forEach((u) => URL.revokeObjectURL(u)); },
     };
 }
 // ══ 지식 — 이 프로젝트에 연결된 문서 ══════════════════════════════════════════

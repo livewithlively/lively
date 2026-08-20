@@ -238,3 +238,14 @@
 .pn-stab-in { width: 160px; max-width: 44vw; min-width: 90px; height: 20px; border: 1px solid var(--blue); border-radius: 5px;
   padding: 0 5px; font: inherit; font-size: 12.5px; background: var(--bg, #fff); color: var(--ink); }
 .pn-stab-in:focus { outline: none; box-shadow: 0 0 0 3px rgba(45, 107, 240, .12); }
+
+/* ── 자료 미리보기 — 아이콘 대신 내용이 보이게(원준 2026-08-20) ────────────────
+   작은 종이 한 장(폭 300px)을 만들어 카드 폭에 맞춰 줄인다(JS 가 scale 을 준다). 글자·표·시안이
+   뭉개지지 않고 비율 그대로 작아진다 — 브라우저가 11px 글자를 그린 뒤 축소하는 것이라 선이 살아 있다. */
+.pn-fic.has-pv { background: #fff; position: relative; }
+.pn-fpaper { position: absolute; inset: 0; width: 300px; height: 246px; transform-origin: top left; overflow: hidden; background: #fff; pointer-events: none; }
+.pn-fframe { width: 300px; height: 246px; border: 0; background: #fff; }
+.pn-fpre { margin: 0; padding: 10px 11px; width: 300px; height: 246px; overflow: hidden; white-space: pre-wrap; word-break: break-all;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9.5px; line-height: 1.5; color: var(--ink-sub); }
+.pn-fic video { width: 100%; height: 100%; object-fit: cover; background: #000; }
+.pn-fic.text, .pn-fic.pdf, .pn-fic.page, .pn-fic.video { position: relative; }
