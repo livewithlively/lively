@@ -162,6 +162,7 @@ export function renderSession(host, data, id, vopts = {}) {
         trail: vopts.trail || null,
         onPickProject: vopts.onPickProject, // 상단바 [프로젝트 연결] 드롭다운(#1749)
         onRename: vopts.onRename, // 제목 = 세션 이름(#1719) — 고치면 사이드바·목록이 그 이름으로 바뀐다
+        onArchive: vopts.onArchive,
         onToggleFiles: vopts.onToggleFiles, // 상단바 [파일] → 우패널 파일 탐색기(#1744)
         solo: vopts.solo,
     });

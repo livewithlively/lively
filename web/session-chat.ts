@@ -77,6 +77,8 @@ const srcPath = (s: Source, q: Record<string, string | number>): string => {
 //  붙이기·떼기의 실행·갱신은 그쪽 몫이고, 여기는 바뀐 target 을 update() 로 받아 라벨만 되그린다.
 // opts.onRename — 제목을 눌러 이름을 고쳤을 때 서버에 반영하는 콜백(#1719). 실패는 throw 로 알려 주면 여기서 말한다.
 export interface SessionChatOpts {
+  /** [⋯ ▸ 이 세션 보관] — 세션 탭 줄을 없애면서(원준 2026-08-20) 보관의 입구가 여기로 옮겨 왔다. 실행은 main.ts 가 쥔다. */
+  onArchive?: () => void;
   terminalSrc?: string | null;
   openHref?: string | null;
   firstPrompt?: string | null;
@@ -476,6 +478,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     rows.push(el('div', { class: 'sc-more-sec', text: '이 세션' }));
     // 이름은 상단바에 상시로 두지 않는다(위 제목 주석) — 고칠 일이 있을 때만 여기서 연다.
     if (canRename()) rows.push(row('세션 이름 바꾸기', idLabel(titleText) ? '아직 이름이 없어요' : titleText, () => startRename()));
+    // 보관 — 터미널만 내려놓고 대화·설정은 남긴다. 살아 있는 내 세션에만(내릴 것이 있어야 보관이다).
+    if (opts.onArchive && target.owned && target.live && !target.raw?.restorable)
+      rows.push(row('이 세션 보관', '터미널을 내려놓고 대화·설정은 남겨요 — [보관한 세션]에서 되살립니다', () => opts.onArchive!()));
     rows.push(row('링크 복사', '지금 보고 있는 이 화면의 주소', async () => {
       try { await navigator.clipboard.writeText(location.href); toast('링크를 복사했습니다.'); }
       catch { window.prompt('이 링크를 복사하세요:', location.href); }
