@@ -78,8 +78,8 @@ const srcPath = (s: Source, q: Record<string, string | number>): string => {
 // ── 마운트 ────────────────────────────────────────────────────────────────────────────────
 // opts.firstPrompt — 홈 입력창(#1719 v2/quick-session)이 방금 연 세션의 첫 지시. 서버가 하네스 입력창이 뜬 뒤 실제로 넣으므로
 //  여기서는 **낙관적으로 그 턴을 먼저 그리고**(보낸 것과 같은 모양) 대화 파일에 나타나면 그 턴을 재사용한다(pendingSent 규약).
-// opts.onPickProject — 상단바 [프로젝트 연결]/[▾] 를 눌렀을 때 검색 드롭다운을 여는 콜백(#1749, v2/main.ts 가 준다).
-//  붙이기·떼기의 실행·갱신은 그쪽 몫이고, 여기는 바뀐 target 을 update() 로 받아 라벨만 되그린다.
+// opts.onPickProject — [⋯ ▸ 프로젝트] 를 눌렀을 때 검색 드롭다운을 여는 콜백(#1749, v2/main.ts 가 준다).
+//  붙이기·떼기의 실행·갱신은 그쪽 몫이고, 여기는 바뀐 target 을 update() 로 받는다(메뉴는 열 때마다 다시 그린다).
 // opts.onRename — 제목을 눌러 이름을 고쳤을 때 서버에 반영하는 콜백(#1719). 실패는 throw 로 알려 주면 여기서 말한다.
 export interface SessionChatOpts {
   /** [⋯ ▸ 이 세션 보관] — 세션 탭 줄을 없애면서(원준 2026-08-20) 보관의 입구가 여기로 옮겨 왔다. 실행은 main.ts 가 쥔다. */
@@ -245,30 +245,16 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //   어느 쪽이 진짜인지 묻게 된다(막다른 컨트롤 금지의 뒷면).
   const runEl = el('span', { class: 'sc-run', hidden: true });
   const moreBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '⋯', title: '이 세션에 할 수 있는 것들', 'aria-label': '더 보기', onclick: () => openMore() }) as HTMLButtonElement;
-  // 프로젝트 소속(#1749) — 붙었으면 프로젝트 링크 + [▾](바꾸기), 아니면 [프로젝트 연결] 버튼(검색 드롭다운). 내 세션에서만 바꿀 수 있다.
-  //  update() 가 되그린다(소속은 화면이 열린 뒤에도 바뀐다).
-  const projEl = el('span', { class: 'sc-proj' });
-  function paintProject(): void {
-    const canPick = !!opts.onPickProject && target.owned;
-    if (target.projectId) {
-      projEl.replaceChildren(
-        el('a', { href: '#/p/' + target.projectId, text: target.projectName }),
-        ...(canPick ? [el('button', { class: 'btn-text sc-proj-btn', type: 'button', text: '▾', title: '프로젝트 바꾸기·떼기', 'aria-label': '프로젝트 바꾸기', onclick: (e: Event) => opts.onPickProject!(e.currentTarget as HTMLElement) })] : []));
-    } else if (canPick) {
-      projEl.replaceChildren(el('button', { class: 'btn-text sc-proj-btn sc-proj-connect', type: 'button', title: '이 세션을 프로젝트에 붙입니다 — 언제든 바꾸거나 뗄 수 있어요', onclick: (e: Event) => opts.onPickProject!(e.currentTarget as HTMLElement) },
-        el('span', { text: '프로젝트 연결' }), el('span', { class: 'sc-proj-car', 'aria-hidden': 'true', text: '▾' })));
-    } else {
-      projEl.replaceChildren(el('span', { class: 'sc-proj-none', text: target.projectName || '프로젝트 없음' }));
-    }
-  }
-  paintProject();
+  // ★ 프로젝트 이름은 이 줄에 두지 않는다(원준님 2026-08-20) — 세션 이름을 걷어낸 것과 **같은 이유**다.
+  //  그 이름은 화면에 이미 있다: 왼쪽 사이드바의 고정된 프로젝트 줄과 우패널 머리의 사실 줄(v2-sfacts). 머리줄에
+  //  한 번 더 적으면 같은 말이 세 자리를 차지하고, 길면(실측: 40자 넘는 프로젝트명) 조작부까지 밀어냈다.
+  //  붙이기·바꾸기·떼기(#1749)는 사라지지 않고 [⋯ ▸ 이 세션] 으로 내려간다 — 세션 이름 바꾸기와 같은 자리다.
   paintTitle();
   const head = el('div', { class: 'sc-head' },
     el('div', { class: 'sc-head-l' },
       dot, titleHost, chatBadge,
       el('span', { class: 'sc-meta' },
-        stateEl, el('span', { class: 'sc-sep', text: '·' }),
-        projEl,
+        stateEl,
         target.raw?.harness ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { class: 'mono', text: String(target.raw.harness) })] : null,
         runEl,
         target.node ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { text: String(target.node) })] : null)),
@@ -534,6 +520,13 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     rows.push(el('div', { class: 'sc-more-sec', text: '이 세션' }));
     // 이름은 상단바에 상시로 두지 않는다(위 제목 주석) — 고칠 일이 있을 때만 여기서 연다.
     if (canRename()) rows.push(row('세션 이름 바꾸기', idLabel(titleText) ? '아직 이름이 없어요' : titleText, () => startRename()));
+    // 프로젝트도 이름과 같은 이유로 머리줄에서 내려왔다 — 이름은 사이드바·우패널에 이미 있고, 여기는 '바꿀 때' 오는 자리다.
+    //  설명줄이 지금 붙은 프로젝트를 말해 주므로 메뉴를 여는 것만으로도 소속을 확인할 수 있다(정보를 잃지 않는다).
+    if (opts.onPickProject && target.owned) {
+      rows.push(row(target.projectId ? '프로젝트 바꾸기·떼기' : '프로젝트 연결',
+        target.projectId ? (target.projectName || '이름 없는 프로젝트') : '이 세션은 아직 프로젝트에 붙어 있지 않아요',
+        () => opts.onPickProject!(moreBtn)));
+    }
     // 보관 — 터미널만 내려놓고 대화·설정은 남긴다. 살아 있는 내 세션에만(내릴 것이 있어야 보관이다).
     if (opts.onArchive && target.owned && target.live && !target.raw?.restorable)
       rows.push(row('이 세션 보관', '터미널을 내려놓고 대화·설정은 남겨요 — [보관한 세션]에서 되살립니다', () => opts.onArchive!()));
@@ -1221,7 +1214,6 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       paintRun();                                 // 세션이 끝나면 드롭다운은 물러나고 사실 표시(칩)만 남는다
       if (t.label && !/^box-|^[0-9a-f-]{20,}$/i.test(t.label)) titleText = t.label;
       paintTitle();                               // pane 이름은 턴마다 바뀌고, 살아있음·소유가 바뀌면 '고칠 수 있는 이름'인지도 바뀐다
-      paintProject();
       paintState();
       if (!wasDead && dead()) { running = false; if (cur) view.settle(cur.t); }
       // 노드 세션(#1744) — 열 때는 대화 uuid 를 몰랐는데 목록 갱신이 가져왔다(행 claudeSessionId·logId): 이제 중앙 기록을 연다.

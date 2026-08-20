@@ -400,16 +400,8 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-launch-send { flex: none; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 16px; border-radius: 11px; font-weight: 650; }
 .v2-launch-send kbd { font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; opacity: .7; font-weight: 400; }
 .v2-launch-hint { display: none; }   /* Enter 안내 줄 폐지 — placeholder 와 관례가 이미 말한다(#1756) */
-/* 상단바 프로젝트 연결(#1749) — 버튼 + 검색 드롭다운(anchoredPopover .dash-pop 위에 얹힘) */
-.sc-proj { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
-.sc-proj > a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
-.sc-proj-btn { padding: 1px 4px; border-radius: 6px; color: var(--muted); }
-.sc-proj-btn:hover { color: var(--ink); background: var(--bg-tint); }
-.sc-proj-connect { display: inline-flex; align-items: center; gap: 5px; border: 1px dashed var(--line-net); padding: 2px 9px; border-radius: 999px;
-  color: var(--ink-sub); font-size: 12px; font-weight: 600; }
-.sc-proj-connect:hover { border-color: var(--blue); color: var(--blue); background: transparent; }
-.sc-proj-car { font-size: 9px; color: inherit; }
-.sc-proj-none { color: var(--muted); }
+/* 프로젝트 연결 드롭다운(#1749) — 여는 자리는 [⋯ ▸ 이 세션] 이다(머리줄 칩은 2026-08-20 폐지).
+   드롭다운 본체(.v2-pjpick)는 그대로 anchoredPopover .dash-pop 위에 얹힌다. */
 .v2-pjpick { width: 320px; max-width: calc(100vw - 24px); display: flex; flex-direction: column; gap: 8px; padding: 8px; }   /* 배경·그림자는 .dash-pop-panel(20-dashboard.css) */
 .v2-pjpick-in { height: 32px; border: 1px solid var(--line-net); border-radius: 8px; padding: 0 10px; font: inherit; font-size: 13px;
   background: var(--bg); color: var(--ink); }
