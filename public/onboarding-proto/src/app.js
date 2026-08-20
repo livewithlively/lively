@@ -9,6 +9,9 @@
   const ic = (n, cls) => `<svg class="ic ${cls || ''}" aria-hidden="true"><use href="#i-${n}"/></svg>`;
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const nowStr = () => { const d = new Date(); return `${d.getHours() < 12 ? '오전' : '오후'} ${((d.getHours() + 11) % 12) + 1}:${String(d.getMinutes()).padStart(2, '0')}`; };
+  // 온보딩이 끝나면 넘길 진짜 제품. 프로토가 흉내 낸 홈은 설계 참고용으로 남겨 두되(#/home),
+  // '홈으로 가기'는 실제 앱으로 나간다 — 여기까지가 이 프로토의 범위다.
+  const REAL_APP = 'http://dev.lvly.io:8080/ui/#/';
   const KO = { day: ['일', '월', '화', '수', '목', '금', '토'] };
   const dateStr = () => { const d = new Date(); return `${d.getMonth() + 1}월 ${d.getDate()}일 ${KO.day[d.getDay()]}요일`; };
 
@@ -453,12 +456,12 @@
   function renderRoom(app) {
     if (!S.ob.started) { S.ob.started = true; S.ob.startedAt = Date.now(); }
     app.innerHTML = `<div class="room">
-      <header class="room-head">
+      <header class="room-head"><div class="rh-in">
         <div class="wordmark">Lively <i class="pulse-dot"></i> <span class="room-sub">처음 설정</span></div>
         <div class="room-prog"><span class="room-time" id="roomTime">처음 한 번 · 3분</span>
           <ol class="dots" id="dots" aria-label="진행">${[1,2,3,4,5].map((i)=>`<li data-i="${i}"></li>`).join('')}</ol>
           <button class="btn btn-ghost btn-sm" data-act="skip-all">나중에 하기 ${ic('arrow','ic-sm')}</button></div>
-      </header>
+      </div></header>
       <div class="room-body">
         <section class="stage" id="stage" aria-live="polite"></section>
         <aside class="build" id="build" aria-label="만들어지는 내 워크스페이스"></aside>
@@ -581,7 +584,15 @@
         const has = S.files.length > 0 || Object.values(S.conn).some((v) => v === 'on' || v === 'busy');
         const liveNames = oauth.map((s) => s.label).join('·');
         return scHead(liveNames ? `${esc(liveNames)}은 한 번 연결하면 계속 새 자료가 따라옵니다.` : '파일이 손에 있으면 그냥 끌어다 놓으시면 됩니다.', '자료를 넘겨주세요.', '폴더 정리도, 이름 짓기도 필요 없습니다 — 읽는 동안 다음으로 넘어갑니다.')
-          + `<div class="sc-body"><div class="src-grid">${files}<div class="src-col">${oauth.map(conn).join('')}${later.map((s) => `<div class="conn ghost"><span class="logo">${s.logo ? brandLogo(s.logo) : ic(s.ic || 'folder', 'ic-sm')}</span><div class="t">${esc(s.label)}</div><span class="state wait">나중에</span><div class="s">앱 발급이 한 번 필요해서 <b>홈에서 한 걸음씩</b> 안내할게요.</div></div>`).join('')}${local ? `<div class="conn ghost"><span class="logo">${ic('term')}</span><div class="t">내 컴퓨터 폴더</div><button type="button" class="btn btn-ghost btn-sm" data-copy>명령 복사</button><div class="s">한 줄만 실행하면 리브가 그 폴더를 읽습니다.</div></div>` : ''}</div></div></div>
+          + `<div class="sc-body up-body">
+            <div class="src-grid${oauth.length ? '' : ' solo'}">${files}${oauth.length ? `<div class="src-col">${oauth.map(conn).join('')}</div>` : ''}</div>
+            ${local ? `<div class="conn ghost"><span class="logo">${ic('term')}</span><div class="t">내 컴퓨터 폴더</div><button type="button" class="btn btn-ghost btn-sm" data-copy>명령 복사</button><div class="s">한 줄만 실행하면 리브가 그 폴더를 읽습니다.</div></div>` : ''}
+            ${later.length ? `<div class="later-box">
+              <div class="lb-h"><b>앱 발급이 한 번 필요한 곳</b><span class="state wait">나중에</span></div>
+              <div class="lb-apps">${later.map((s) => `<span class="lb-app">${s.logo ? brandLogo(s.logo) : ic(s.ic || 'folder', 'ic-sm')}${esc(s.label)}</span>`).join('')}</div>
+              <p class="lb-s">${later.length}곳 모두 <b>홈에서 리브가 한 걸음씩</b> 안내해 드립니다 — 지금 하지 않으셔도 됩니다.</p>
+            </div>` : ''}
+          </div>
           <div class="sc-actions">${has ? `<button type="button" class="btn btn-primary" data-done>다 넣었어요 — 계속</button>` : ''}</div>
           <div class="sc-skip"><button type="button" class="btn-text" data-skip>지금은 건너뛰기</button></div>`;
       },
@@ -806,7 +817,9 @@
       if (!S.fixes.includes(x.slip)) { S.fixes.push(x.slip); S.decisions.push(x.slip); if (x.slip.startsWith('자동')) S.work.push({ id: 'fix-late' + b.dataset.late, t: x.slip.replace(/^자동: /, ''), st: 'sched', when: '자동', m: '리브가 돌립니다' }); }
       save(); renderBuild(); renderScene('done', false); toast(`켰어요 — ${x.fix}`);
     }));
-    $$('[data-act="go-home"]', el).forEach((b) => b.addEventListener('click', () => go('#/home')));
+    // 온보딩이 끝나면 프로토가 흉내 낸 홈이 아니라 **진짜 제품**으로 넘긴다(원준님 2026-08-20).
+    // 여기까지가 이 프로토가 설계하는 범위 — 그 뒤는 실제 앱이 받는다.
+    $$('[data-act="go-home"]', el).forEach((b) => b.addEventListener('click', () => { location.href = REAL_APP; }));
     $$('[data-act="keep-summary"]', el).forEach((b) => b.addEventListener('click', () => { S.knowledge += 1; save(); renderBuild(); toast('요약을 자료함에 남겼어요.'); b.disabled = true; }));
   }
   function finish() {
@@ -846,7 +859,20 @@
       : ing.finished ? `<div class="bc lit fx" data-fix="upload" role="button" tabindex="0"><span class="k">자료함<span class="fix">더 넣기</span></span><div class="v"><span class="state on">지식 <b>${S.knowledge}</b>건 · 정리 끝</span></div>${tally}${S.knowledge > ing.total ? `<div class="sub">방금 답이 다시 쌓였어요.</div>` : ''}</div>`
       : ing.total ? `<div class="bc lit fx" data-fix="upload" role="button" tabindex="0"><span class="k">자료함<span class="fix">더 넣기</span></span><div class="v"><span class="state busy">${ing.total}개 읽는 중 · ${ing.done}/${ing.total}</span></div><div class="meter"><i style="width:${Math.round(100 * ing.done / ing.total)}%"></i></div>${tally}</div>`
       : `<div class="bc lit fx" data-fix="upload" role="button" tabindex="0"><span class="k">자료함<span class="fix">더 넣기</span></span><div class="v"><span class="state wait">연결한 곳에서 들어올 준비 중</span></div></div>`;
-    const connCard = (src.length || conns.length) ? `<div class="bc lit fx" data-fix="sources" role="button" tabindex="0"><span class="k">연결한 것<span class="fix">바꾸기</span></span><div class="v">${src.map((s) => { const st = S.conn[s.id]; const cls = st === 'on' ? 'on' : st === 'busy' ? 'busy' : st === 'later' ? 'wait' : 'off'; const lbl = st === 'on' ? '읽기 · 자동 반영' : st === 'busy' ? '연결 중' : s.live ? '연결 대기' : '노드로 읽기'; return `<div class="state ${cls}">${esc(s.label)} — ${lbl}</div>`; }).join('')}</div>${S.node ? `<div class="sub">내 컴퓨터: 노드 한 줄로 폴더·터미널까지 이어집니다.</div>` : ''}</div>` : '';
+    // 장부는 **상태별로 묶는다**. 곳마다 한 줄씩 세우면 고른 개수만큼 장부가 세로로 자라
+    // "— 연결 대기"가 열한 번 반복된다(원준님 2026-08-20). 묶으면 몇 곳을 골라도 최대 네 줄이다.
+    const connCard = (() => {
+      if (!src.length && !conns.length) return '';
+      const bucket = { on: [], busy: [], wait: [], node: [] };
+      src.forEach((s) => { const st = S.conn[s.id]; bucket[st === 'on' ? 'on' : st === 'busy' ? 'busy' : s.live ? 'wait' : 'node'].push(s.label); });
+      const line = (key, cls, lbl) => { const a = bucket[key]; if (!a.length) return '';
+        const shown = a.slice(0, 2).join(' · ') + (a.length > 2 ? ` 외 ${a.length - 2}곳` : '');
+        return `<div class="state ${cls}">${esc(shown)} — ${lbl}</div>`; };
+      return `<div class="bc lit fx" data-fix="sources" role="button" tabindex="0"><span class="k">연결한 것<span class="fix">바꾸기</span></span><div class="v">`
+        + line('on', 'on', '읽기 · 자동 반영') + line('busy', 'busy', '연결 중')
+        + line('wait', 'wait', '연결 대기') + line('node', 'off', '노드로 읽기')
+        + `</div>${S.node ? `<div class="sub">내 컴퓨터: 노드 한 줄로 폴더·터미널까지 이어집니다.</div>` : ''}</div>`;
+    })();
     const decCard = decisions.length ? `<div class="bc lit"><span class="k">리브가 정한 것</span><ul>${decisions.map((d, i) => `<li><span>${esc(d)}</span><button class="undo" data-undo="${i}" title="이것만 되돌리기">✕</button></li>`).join('')}</ul><div class="sub">✕를 누르면 그것만 되돌립니다.</div></div>` : '';
     buildEl.innerHTML = `
       <div class="build-h"><b>${livFace(15)}만들어지는 내 워크스페이스</b><span class="k">${S.ob.finished ? '준비 끝' : '실시간'}</span></div>

@@ -162,8 +162,12 @@ input.in:focus-visible, textarea.in:focus-visible { outline:2px solid var(--blue
    ═══════════════════════════════════════════════════════════════════════════ */
 /* 온보딩 룸 — **풀스크린으로 펼치지 않는다**(원준님 2026-08-20). 화면 끝까지 늘리면 질문과 오른쪽 장부가
    양 끝으로 밀려 서로 남남처럼 보인다. 가운데 기둥(1120)에 둘을 나란히 세워 한 덩어리로 읽히게 한다. */
-.room { height:100vh; display:flex; flex-direction:column; padding:12px 0 16px; gap:10px; background:var(--bg); }
-.room-head { flex:none; display:flex; align-items:center; gap:14px; min-height:34px;
+.room { height:100vh; display:flex; flex-direction:column; padding:0 0 18px; background:var(--bg); }
+/* 위 띠 — 흰 바탕에 글자만 떠 있으면 '처음 한 번·3분 / 나중에 하기' 무리가 화면 꼭대기에 홀로 남아
+   본문과 남남으로 보인다(원준님 2026-08-20). 셸의 탭 줄과 같은 결(한 톤 낮은 띠 + 헤어라인)을 줘서
+   '여기는 크롬'이라고 말하게 한다 — 그러면 맨 위에 있는 게 사고가 아니라 의도로 읽힌다. */
+.room-head { flex:none; background:var(--strip); border-bottom:1px solid var(--line); }
+.rh-in { display:flex; align-items:center; gap:14px; height:var(--topbar-h);
   width:100%; max-width:var(--room-w); margin:0 auto; padding:0 24px; }
 .room-head .wordmark { font-size:17px; }
 .room-head .wordmark .room-sub { font-size:13.5px; font-weight:600; color:var(--ink-sub); letter-spacing:0; }
@@ -178,12 +182,14 @@ input.in:focus-visible, textarea.in:focus-visible { outline:2px solid var(--blue
 .room-body { flex:1; min-height:0; overflow-y:auto; display:grid;
   grid-template-columns:minmax(0,1fr) minmax(272px,316px); gap:28px;
   width:100%; max-width:var(--room-w); margin:0 auto;
-  padding:clamp(24px,19.5vh,190px) 24px clamp(40px,8vh,80px);
+  padding:clamp(24px,15vh,165px) 24px clamp(32px,7vh,72px);
   align-content:start; align-items:start; }
   /* ★ 세로는 **고정 앵커**다(중앙 정렬이 아니다). 장면마다 내용 높이가 달라서 가운데로 맞추면
      화면을 넘길 때 질문 줄이 위아래로 튄다 — 실측 334 → 338 → 230 → 345 (원준님 2026-08-20).
      시작점을 붙박아 두면 질문이 늘 같은 자리에 서고, 길어진 내용은 아래로만 자란다.
-     넘치면 .room-body 가 스크롤한다(위가 잘리지 않는다). */
+     ★ 앵커는 위 띠(처음 한 번·3분 / 나중에 하기)와 **말이 통하는 거리**여야 한다. 19.5vh 로 두었더니
+     띠만 화면 꼭대기에 홀로 떨어져 보여서(원준님) 15vh 로 당기고 .room 위 여백을 20 으로 올렸다.
+     길어진 내용은 아래로만 자라고, 그래도 넘치면 .room-body 가 스크롤한다(위가 잘리지 않는다). */
 
 /* 대화(작업 일지) — #/liv 페이지가 쓴다 */
 .journal { min-height:0; display:flex; flex-direction:column; border:1px solid var(--line); border-radius:14px; overflow:hidden; background:var(--bg); }
@@ -249,7 +255,8 @@ input.in:focus-visible, textarea.in:focus-visible { outline:2px solid var(--blue
 .bc .undo { flex:none; border:0; background:none; color:var(--muted-2); font-size:11px; cursor:pointer; padding:0 2px; border-radius:4px; }
 .bc .undo:hover { color:var(--coral-text); }
 /* 드롭존 — 이 화면의 채운 파랑 톤은 여기 하나 */
-.drop { border:1.5px dashed var(--blue); background:var(--bg-punch); border-radius:12px; padding:20px 16px; text-align:center; cursor:pointer; transition:background .12s ease, border-color .12s ease; }
+.drop { border:1.5px dashed var(--blue); background:var(--bg-punch); border-radius:12px; padding:20px 16px; text-align:center; cursor:pointer; transition:background .12s ease, border-color .12s ease;
+  display:flex; flex-direction:column; justify-content:center; }   /* 옆 칸이 길어져도 빈 채로 남지 않게 늘어난다 */
 .drop:hover, .drop.over { background:var(--bg-tint-2); border-color:var(--blue-deep); }
 .drop b { display:block; font-size:14.5px; color:var(--blue-deep); }
 .drop span { display:block; margin-top:4px; font-size:12px; color:var(--ink-note); }
@@ -258,8 +265,23 @@ input.in:focus-visible, textarea.in:focus-visible { outline:2px solid var(--blue
 .filelist .f { display:inline-flex; align-items:center; gap:6px; height:26px; padding:0 10px; border-radius:999px; background:var(--bg); border:1px solid var(--line); font-size:11.5px; font-weight:500; color:var(--ink-sub); }
 .filelist .f .ic { width:13px; height:13px; }
 .filelist .more { color:var(--muted); font-size:12px; align-self:center; }
-.src-grid { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr); gap:10px; margin-top:10px; }
+.src-grid { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr); gap:10px; align-items:stretch; }
+.src-grid.solo { grid-template-columns:minmax(0,1fr); }   /* 지금 연결할 게 없으면 드롭존이 폭을 다 쓴다 */
 .src-col { display:flex; flex-direction:column; gap:8px; }
+.up-body > * + * { margin-top:10px; }
+
+/* '나중에' 는 **한 장으로 묶는다**(원준님 2026-08-20). 앱마다 카드를 세우면 같은 문장이 열 번 반복되고,
+   앞 화면에서 고른 개수만큼 페이지가 세로로 자라 질문·버튼 위치가 화면마다 달라진다.
+   묶어 두면 1곳이든 9곳이든 이 칸의 높이가 거의 변하지 않는다 — 배치가 개수에 휘둘리지 않는다. */
+.later-box { border:1px dashed var(--line-net); border-radius:12px; padding:12px 14px; background:var(--bg); display:flex; flex-direction:column; gap:9px; }
+.lb-h { display:flex; align-items:center; gap:8px; }
+.lb-h b { font-size:13.5px; font-weight:700; }
+.lb-h .state { margin-left:auto; }
+.lb-apps { display:flex; flex-wrap:wrap; gap:6px; }
+.lb-app { display:inline-flex; align-items:center; gap:6px; height:28px; padding:0 11px; border-radius:999px; background:var(--bg-tint); border:1px solid var(--line); font-size:12.5px; font-weight:600; color:var(--ink-sub); }
+.lb-app .blogo, .lb-app .ic { width:14px; height:14px; flex:none; }
+.lb-s { margin:0; font-size:12px; line-height:1.6; color:var(--muted); }
+.lb-s b { color:var(--ink-sub); }
 /* 연결 카드 — 이름·행동은 같은 줄, 설명은 카드 폭을 다 쓴다.
    한 줄 flex 로 두면 좁은 칸(355)에서 설명이 버튼 폭만큼 깎여 두 글자만 다음 줄로 떨어진다. */
 .conn { border:1px solid var(--line); border-radius:10px; padding:10px 12px; background:var(--bg);
@@ -295,7 +317,8 @@ input.in:focus-visible, textarea.in:focus-visible { outline:2px solid var(--blue
 .bc .k { display:block; margin-bottom:5px; }
 .bc .v { font-size:13.5px; line-height:1.55; }
 .bc .v b { font-weight:700; }
-.bc .v .state { display:flex; }
+.bc .v .state { display:flex; align-items:flex-start; white-space:normal; word-break:keep-all; }
+.bc .v .state::before { margin-top:6px; }   /* 두 줄로 접힐 때 점이 첫 줄에 붙어 있게 */
 .bc .v .state + .state { margin-top:3px; }
 .bc .sub { font-size:12px; color:var(--muted); margin-top:2px; line-height:1.5; }
 .bc .fix { font-size:11px; font-weight:600; color:var(--muted); background:none; border:0; padding:0; cursor:pointer; margin-left:6px; }
@@ -333,6 +356,8 @@ input.in:focus-visible, textarea.in:focus-visible { outline:2px solid var(--blue
   .compose { padding:8px 12px 12px; }
   .src-grid, .steps3, .sum-grid { grid-template-columns:minmax(0,1fr); }
   .room-time { display:none; }
+  .rh-in { padding:0 14px; gap:10px; }
+  .lb-app { font-size:12px; padding:0 9px; }
   .bc:not(:has(.v)) { display:none; }
   .proto { right:auto; left:12px; }
 }
