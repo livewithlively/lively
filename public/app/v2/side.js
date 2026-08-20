@@ -166,6 +166,21 @@ function ownerName(s) {
     const m = people[id];
     return (m && m.display_name) || id || '?';
 }
+// ── 방금 만든 프로젝트는 잠깐 맨 위 (원준 2026-08-20 신고) ──────────────────────
+//  사이드바 순서는 '마지막 작업 시각'인데 갓 만든 프로젝트는 그 값이 0이다 — 그래서 만들자마자
+//  「전체 프로젝트」 접힌 묶음 뒤로 사라져 화면에서 찾을 수가 없었다(신고자는 검색으로 찾아야 했다).
+//  생성 시각을 그 자리에 **잠깐** 세워 둔다: 정렬 앞 + 「진행 중」에 노출. 시간이 지나면 스스로 가라앉는다
+//  (★고정은 사람이 거는 것이므로 자동으로 건드리지 않는다 — 자동 고정은 목록을 영구히 늘린다).
+const FRESH_MS = 2 * 60 * 60 * 1000;
+/** 생성 후 FRESH_MS 안이면 그 생성 시각(ms), 아니면 0. */
+function freshMs(p) {
+    if (!p || !p.created_at)
+        return 0;
+    const t = Date.parse(String(p.created_at));
+    if (!(t > 0))
+        return 0;
+    return Date.now() - t < FRESH_MS ? t : 0;
+}
 function buildRows(data) {
     const me = String((state.me && state.me.userId) || '');
     const byProj = new Map();
@@ -182,8 +197,10 @@ function buildRows(data) {
     const lastOf = (arr) => arr.reduce((m, s) => Math.max(m, s.lastSeen || 0), 0);
     const rows = data.projects.map((p) => {
         const all = byProj.get(p.id) || [];
+        const fresh = freshMs(p);
         return { key: 'p:' + p.id, proj: p, live: all.filter(isLive).sort(bySeen), past: all.filter(isPast).sort((a, b) => b.lastSeen - a.lastSeen),
-            lastWork: lastOf(all), done: p.status_category === 'done',
+            // 갓 만든 프로젝트는 생성 시각을 '마지막 작업'으로 친다 — 세션이 아직 없어도 맨 위에 선다.
+            lastWork: Math.max(lastOf(all), fresh), done: p.status_category === 'done', fresh: fresh > 0,
             mine: !!me && (p.created_by === me || (p.member_ids || []).includes(me)) };
     });
     // 프로젝트 없는 세션 — 가짜 프로젝트 한 줄로 같은 정렬에 섞는다(맨 아래 고정이면 프로젝트 수백 개 밑에 묻힌다).
@@ -192,7 +209,7 @@ function buildRows(data) {
     const loose = noProj.filter(isLive).sort(bySeen);
     const loosePast = noProj.filter(isPast).sort((a, b) => b.lastSeen - a.lastSeen);
     if (loose.length || loosePast.length)
-        rows.push({ key: 'p:0', proj: null, live: loose, past: loosePast, lastWork: lastOf(noProj), done: false, mine: true });
+        rows.push({ key: 'p:0', proj: null, live: loose, past: loosePast, lastWork: lastOf(noProj), done: false, fresh: false, mine: true });
     return rows;
 }
 // ── 사이드바 정렬을 밖에서도(#1749 상단바 프로젝트 연결 드롭다운) — 트리와 **같은 순서**(마지막 작업 시각 ↓ → updated_at ↓).
@@ -371,12 +388,16 @@ function newBtn() {
         const go = el('button', { class: 'btn btn-primary btn-sm', type: 'button', text: '만들기' });
         const close = anchoredPopover(b, el('div', { class: 'v2-newpop' }, el('div', { class: 'v2-newrow' }, inp, go), el('p', { class: 'v2-fine', text: '만들면 그 프로젝트의 빈 작업대가 열립니다. 이름은 나중에 바꿀 수 있어요.' }), msg));
         window.setTimeout(() => inp.focus(), 0);
+        let sending = false; // 한 번의 '만들기'가 두 번 나가지 않게 — 아래 IME 가드와 이중 방어(둘 다 실측 사고의 원인)
         const create = async () => {
             const name = inp.value.trim();
+            if (sending)
+                return;
             if (!name) {
                 inp.focus();
                 return;
             }
+            sending = true;
             go.disabled = true;
             go.textContent = '만드는 중…';
             msg.hidden = true;
@@ -388,6 +409,7 @@ function newBtn() {
                 location.hash = '#/p/' + np.id; // 그 작업대로(목록 갱신은 라우터가 새 프로젝트를 보고 알아서 당긴다)
             }
             catch (err) {
+                sending = false;
                 msg.hidden = false;
                 msg.textContent = '만들지 못했어요 — ' + (err?.message || err);
                 go.disabled = false;
@@ -395,10 +417,16 @@ function newBtn() {
             }
         };
         go.onclick = () => void create();
-        inp.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') {
+        // 한글(IME) 조합 중의 Enter 는 **조합 확정**이지 제출이 아니다. 그 확정 Enter 와 뒤이은 진짜 Enter 가
+        //  잇달아 들어와 create() 가 두 번 돌았고, 같은 이름의 프로젝트가 **같은 밀리초에 두 개** 만들어졌다
+        //  (실측 2026-08-20: #1818/#1819 · 앞서 #1806/#1807 · #1812/#1813 — 전부 한글로 끝나는 이름).
+        //  project-form.ts 가 #505 에서 이미 배운 가드를 여기(사이드바 빠른 생성)에도 둔다.
+        inp.addEventListener('keydown', (ev) => {
+            if (ev.key !== 'Enter' || ev.isComposing || ev.keyCode === 229)
+                return;
             ev.preventDefault();
             void create();
-        } });
+        });
     };
     return b;
 }
@@ -493,7 +521,8 @@ function renderTree(rowsIn) {
     //  미는 문법). ⚠ **검색·필터가 켜져 있으면 가르지 않는다** — 찾으려고 건 렌즈를 묶음이 가리면 안 된다.
     //  그때는 종전처럼 한 목록이다('완료 포함'도 렌즈로 취급).
     const splitting = !q && !stateFilter && !mineOnly && !showDone;
-    const isActiveRow = (r) => isPinned(r.key) || r.live.length > 0;
+    //  갓 만든 프로젝트(fresh)도 여기 선다 — 아직 도는 세션이 없다고 접힌 묶음에 숨기면 만든 사람이 못 찾는다.
+    const isActiveRow = (r) => isPinned(r.key) || r.live.length > 0 || r.fresh;
     const activeRows = splitting ? shown.filter(isActiveRow) : shown;
     const restRows = splitting ? shown.filter((r) => !isActiveRow(r)) : [];
     if (countEl)

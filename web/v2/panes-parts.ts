@@ -8,13 +8,14 @@
 //   · root  — 칸 본문에 그대로 붙는 요소.
 //   · tick() — 8초 틱. **서명이 같으면 DOM 을 건드리지 않는다**(스크롤·입력 중인 글자 보호).
 //   · destroy() — 폴링·구독 정리.
-import { TOKEN_KEY, api, apiUrl, el, relTime, renderMarkdown, sv, toast } from '../core.js';
+import { api, apiUrl, el, relTime, renderMarkdown, toast } from '../core.js';
 import { confirmSessionForget } from '../session-actions.js';
-import { fmtSize, openFileViewer } from '../projects/files.js';
-import { upDropZone, upSend, upToast, type UpItem } from '../projects/files-upload.js';
+import { upDropZone } from '../projects/files-upload.js';
 import { mountProjectChat, type ProjectChatHandle } from '../project-chat.js';
 import { createTimeline } from '../timeline.js';
 import { loadProjectTimeline } from '../timeline-sources.js';
+import { filesPart } from './panes-files.js';
+import { NOISE_RE, TRASH_DIR, attachName, authHeaders, kindOf, pnIcon } from './panes-kit.js';
 import { createRunPicker } from './run-picker.js';
 import { spawnSession } from './quick-session.js';
 import { rememberCreated } from './created-cache.js';   // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
@@ -22,6 +23,9 @@ import { sessText } from './side.js';
 import { listSessionApps, openAppSession, type SessionApp } from './app-session.js';
 import { mountAppUiFrame, type AppUiFrame } from './app-ui.js';
 import { type Sess, type V2Data } from './views.js';
+
+// 아이콘은 곁칸 곳곳(panes.ts · proj-settings.ts)이 여기서 받아 왔다 — 잎으로 옮긴 뒤에도 그 자리를 유지한다.
+export { pnIcon } from './panes-kit.js';
 
 export type PartType = 'sessions' | 'files' | 'knowledge' | 'tasks' | 'timeline' | 'overview' | 'liv' | 'archive' | 'web' | 'editor' | 'apps';
 
@@ -58,7 +62,7 @@ export interface PartDef { type: PartType; name: string; icon: string; hint: str
 /** 칸에 넣을 수 있는 것들 — [+] 고르기 목록의 정본. */
 export const PART_DEFS: PartDef[] = [
   { type: 'sessions', name: '세션', icon: 'chat', hint: '이 프로젝트에서 도는 AI 세션들과 바로 말하는 자리입니다.' },
-  { type: 'files', name: '자료', icon: 'folder', hint: '공유 폴더에 쌓인 파일입니다. 끌어다 놓으면 올라갑니다.' },
+  { type: 'files', name: '자료', icon: 'folder', hint: '이 프로젝트의 모든 세션이 참고하는 자료입니다. 끌어다 놓거나 붙여넣으면 올라갑니다.' },
   { type: 'knowledge', name: '지식', icon: 'doc', hint: '이 프로젝트에 연결된 지식 문서입니다.' },
   { type: 'tasks', name: '할 일', icon: 'task', hint: '태스크 목록입니다. 눌러서 끝냈다고 표시합니다.' },
   { type: 'timeline', name: '타임라인', icon: 'clock', hint: '이 프로젝트에 남은 활동 기록입니다.' },
@@ -73,42 +77,6 @@ export const PART_DEFS: PartDef[] = [
 
 export const partDef = (t: PartType): PartDef => PART_DEFS.find((d) => d.type === t) || PART_DEFS[0];
 
-// ── 아이콘(스트로크 SVG) ──────────────────────────────────────────────────────
-const ICON_PATHS: Record<string, string> = {
-  chat: '<path d="M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z"/>',
-  spark: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>',
-  task: '<path d="M4 6h12M4 12h12M4 18h8"/><path d="M19 5l2 2-4 4"/>',
-  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
-  doc: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/>',
-  clock: '<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>',
-  note: '<path d="M5 4h14v11l-5 5H5z"/><path d="M14 20v-5h5"/>',
-  img: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M21 16l-5-5-8 8"/>',
-  send: '<path d="M4 12l16-8-6 16-2-7z"/>',
-  plus: '<path d="M12 5v14M5 12h14"/>',
-  x: '<path d="M6 6l12 12M18 6L6 18"/>',
-  chev: '<path d="M9 6l6 6-6 6"/>',
-  gear: '<circle cx="12" cy="12" r="3.2"/><path d="M12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2L5.6 5.6"/>',
-  info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5"/><path d="M12 8h.01"/>',
-  cols: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M15 5v14"/>',
-  drop: '<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 19h14"/>',
-  box: '<path d="M3 7h18v4H3z"/><path d="M5 11v8h14v-8"/><path d="M10 15h4"/>',
-  undo: '<path d="M4 9h11a5 5 0 0 1 0 10h-6"/><path d="M8 5L4 9l4 4"/>',
-  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/>',
-  grid: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
-  pencil: '<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/><path d="M14 6l4 4"/>',
-  save: '<path d="M5 4h11l3 3v13H5z"/><path d="M9 4v5h6V4"/><path d="M8 20v-6h8v6"/>',
-  ext: '<path d="M14 4h6v6"/><path d="M20 4l-8 8"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
-};
-export function pnIcon(name: string, cls = 'pn-i'): SVGElement {
-  const s = sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' });
-  s.innerHTML = ICON_PATHS[name] || ICON_PATHS.doc;
-  return s;
-}
-
-const authHeaders = (): Record<string, string> => {
-  const t = ((): string => { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (_) { return ''; } })();
-  return t ? { authorization: 'Bearer ' + t } : {};
-};
 const base = (p: string): string => String(p).split('/').pop() || String(p);
 
 // ══ 세션 — 카드가 세로로 쌓인다(원준 2026-08-20 선택) ════════════════════════════
@@ -253,14 +221,57 @@ function sessionsPart(ctx: PartCtx): Part {
     e.preventDefault(); void spawn();
   });
 
+  // ── 첨부(#1819) — 그림·파일을 **붙여넣거나 끌어다 놓으면** 프로젝트 자료로 올리고 첫 지시에 딸려 보낸다.
+  //  왜 필요했나: 클로드가 도는 화면(터미널)에는 이 경로가 있는데(dropFileToAgent) 세션을 **여는** 창에는 없어서,
+  //  화면을 캡처해 놓고도 세션을 먼저 열고 다시 붙여넣어야 했다(원준 2026-08-20 신고).
+  //  세션 cwd 는 프로젝트 폴더가 아니라 세션 전용 폴더라 상대경로로는 못 찾는다 → 서버가 준 절대경로를 지시에 적는다.
+  const attached: Array<{ name: string; abs: string }> = [];
+  const chips = el('div', { class: 'pn-att', hidden: true });
+  function paintChips(): void {
+    chips.hidden = !attached.length;
+    chips.replaceChildren(...attached.map((a) => el('span', { class: 'pn-att-c', title: a.abs },
+      pnIcon('doc', 'pn-i sm'), el('span', { class: 'n', text: a.name }),
+      el('button', { class: 'pn-att-x', type: 'button', title: '첨부 빼기', 'aria-label': '첨부 빼기', text: '✕',
+        onclick: () => { const i = attached.indexOf(a); if (i >= 0) attached.splice(i, 1); paintChips(); } }))));
+  }
+  async function attachFiles(files: File[]): Promise<void> {
+    if (!files.length) return;
+    if (!(ctx.id > 0)) { toast('이 화면은 프로젝트 폴더가 없어 파일을 둘 곳이 없어요 — 세션을 연 뒤 붙여넣어 주세요.', true); return; }
+    toast(files.length + '개를 자료로 올리는 중이에요…');
+    for (const f of files) {
+      const nm = attachName(f, attached.map((a) => a.name));
+      try {
+        const r = await fetch(apiUrl('/api/ui/v6/projects/' + ctx.id + '/file?path=' + encodeURIComponent(nm)),
+          { method: 'PUT', headers: { ...authHeaders(), 'Content-Type': 'application/octet-stream' }, body: f });
+        const j: any = await r.json().catch(() => null);
+        if (!r.ok) throw new Error((j && j.error) || String(r.status));
+        attached.push({ name: nm, abs: (j && j.path) || nm });
+      } catch (e: any) { toast(nm + ' 올리기 실패 — ' + (e?.message || e), true); }
+    }
+    if (ctx.dead()) return;
+    paintChips();
+    ctx.onChanged?.();     // 자료 칸이 같은 화면에 있으면 바로 보이게
+    toast('자료에 올렸어요 — 이 세션에 시킬 때 함께 넘어갑니다.');
+  }
+  ta.addEventListener('paste', (e: ClipboardEvent) => {
+    const dt = e.clipboardData; if (!dt) return;
+    const files = Array.from(dt.items || []).filter((it) => it.kind === 'file').map((it) => it.getAsFile()).filter(Boolean) as File[];
+    if (!files.length) return;          // 글 붙여넣기는 평소대로 입력칸에 들어간다
+    e.preventDefault();
+    void attachFiles(files);
+  });
+
   function newPane(): HTMLElement {
     if (!runPicker) runPicker = createRunPicker();
-    return el('div', { class: 'pn-newpane' },
+    const pane = el('div', { class: 'pn-newpane' },
       el('div', { class: 'pn-launch' },
         el('h1', { class: 'v2-h1', text: '무엇을 할까요?' }),
         el('p', { class: 'v2-home-sub', text: ctx.id > 0 ? '새 세션이 열려요.' : '프로젝트 없이 새 세션이 열려요.' }),
-        el('div', { class: 'v2-launch' }, ta,
+        el('div', { class: 'v2-launch' }, ta, chips,
           el('div', { class: 'v2-launch-row' }, el('div', { class: 'v2-launch-ctl' }, runPicker.el), send))));
+    upDropZone(pane, pane, (list) => void attachFiles(list.map((u) => u.file as File)));
+    paintChips();
+    return pane;
   }
 
   const mine = (): Sess[] => ctx.data().sessions
@@ -316,13 +327,18 @@ function sessionsPart(ctx: PartCtx): Part {
     send.replaceChildren(el('span', { text: '여는 중…' }));
     // 생성은 **한 곳**에서만 한다(v2/quick-session.ts spawnSession) — 생성 전문 캐시·첫 지시 낙관 렌더·프로젝트
     //  붙이기가 거기 묶여 있다. 여기서 fetch 를 다시 짜면 그 중 하나가 빠진다(실제로 캐시가 빠져 있었다).
-    const made = await spawnSession(text, { projectId: ctx.id > 0 ? ctx.id : null, projectName: projectName(), run: runPicker?.value() || null });
+    // 첨부는 지시의 꼬리에 절대경로로 적는다 — 세션이 열리자마자 그 파일을 읽을 수 있게(이름은 사람이 알아보는 단서).
+    const prompt = attached.length
+      ? text + '\n\n첨부한 자료(이 프로젝트 공유 폴더):\n' + attached.map((a) => '- ' + a.abs).join('\n')
+      : text;
+    const made = await spawnSession(prompt, { projectId: ctx.id > 0 ? ctx.id : null, projectName: projectName(), run: runPicker?.value() || null });
     sending = false; idle();
     if (!made) { ta.focus(); return; }
     seedSessName(made.id, text);
     // 목록에 **지금** 끼워 넣는다 — 20초 폴링을 기다리면 그 사이 세션 화면이 빈 채로 있는다.
     ctx.onSessionCreated?.(made.session);
     ta.value = ''; ta.style.height = 'auto';
+    attached.length = 0; paintChips();
     ctx.onChanged?.();
     select(made.id);
   }
@@ -348,213 +364,6 @@ function sessionsPart(ctx: PartCtx): Part {
     },
     selectSession: (sid) => select(sid),
     currentSession: () => (composing ? null : sel),
-  };
-}
-
-// ══ 자료 — 공유 폴더에 쌓인 것. 끌어다 놓으면 올라간다 ═══════════════════════════
-type AssetFile = { path: string; size: number; mtime: number };
-const MACHINE_FILES = new Set(['CLAUDE.md', 'AGENTS.md', '.DS_Store', 'package-lock.json', 'yarn.lock']);
-const NOISE_RE = /\/(__pycache__|node_modules|dist|build|\.next|coverage|venv)\//;
-const TRASH_DIR = '휴지통';
-const isImg = (n: string): boolean => /\.(png|jpe?g|gif|webp|svg)$/i.test(n);
-// 아이콘이 아니라 **내용이 보이게**(원준 2026-08-20) — kind 가 미리보기 방식을 정한다.
-//  img=그대로 · pdf/page=축소해 실제로 렌더 · text=앞부분을 글자로 · video=첫 프레임 · file=아이콘(렌더할 방법이 없는 것들).
-const TEXTY = /\.(md|markdown|txt|log|csv|tsv|json|jsonl|ya?ml|toml|ini|conf|env|sql|sh|bash|zsh|ps1|py|rb|go|rs|java|kt|swift|c|h|cpp|cc|hpp|cs|php|pl|lua|r|ts|tsx|js|jsx|mjs|cjs|css|scss|less|xml|svg|gitignore|dockerfile|makefile)$/i;
-function kindOf(p: string): { kind: string; type: string } {
-  if (isImg(p)) return { kind: 'img', type: '그림' };
-  if (/\.pdf$/i.test(p)) return { kind: 'pdf', type: 'PDF' };
-  if (/\.html?$/i.test(p)) return { kind: 'page', type: '시안' };
-  if (/\.(mp4|webm|mov|m4v)$/i.test(p)) return { kind: 'video', type: '영상' };
-  if (/\.(md|markdown|txt)$/i.test(p)) return { kind: 'text', type: '문서' };
-  if (/\.(csv|tsv)$/i.test(p)) return { kind: 'text', type: '표' };
-  if (/\.xlsx?$/i.test(p)) return { kind: 'file', type: '표' };
-  if (/\.(pptx?|key)$/i.test(p)) return { kind: 'file', type: '장표' };
-  if (/\.docx?$|\.hwpx?$/i.test(p)) return { kind: 'file', type: '문서' };
-  if (/\.(zip|tar|gz|7z|rar)$/i.test(p)) return { kind: 'file', type: '묶음' };
-  if (TEXTY.test(p)) return { kind: 'text', type: '코드' };
-  return { kind: 'file', type: '파일' };
-}
-// 미리보기는 **작은 종이 한 장**(300×246)을 만들어 카드 크기에 맞춰 줄인다 — 글자·표가 뭉개지지 않고 비율이 산다.
-const PV_W = 300;   // 종이 폭(높이는 CSS 가 카드 비율로 잡는다)
-const PV_MAX = { pdf: 12e6, page: 4e6, text: 512e3, img: 24e6, video: 80e6 } as Record<string, number>;
-
-function filesPart(ctx: PartCtx): Part {
-  const root = el('div', { class: 'pn-part pn-files' });
-  const grid = el('div', { class: 'pn-fgrid' });
-  const count = el('span', { class: 'pn-fine', text: '' });
-  const blobUrls: string[] = [];
-  let sig = '';
-
-  const upIn = el('input', { type: 'file', multiple: 'true', hidden: true }) as HTMLInputElement;
-  upIn.addEventListener('change', () => {
-    const items: UpItem[] = Array.from(upIn.files || []).map((f) => ({ file: f, rel: f.name }));
-    upIn.value = '';
-    void upload(items);
-  });
-  const head = el('div', { class: 'pn-head' }, count,
-    el('button', { class: 'btn-text', type: 'button', text: '＋ 올리기', title: '컴퓨터에서 파일을 고릅니다', onclick: () => upIn.click() }));
-  root.append(upIn, head, grid);
-
-  async function upload(items: UpItem[], emptyDirs: string[] = []): Promise<void> {
-    if (!items.length && !emptyDirs.length) return;
-    if (!(ctx.id > 0)) { toast('이 화면은 프로젝트 폴더가 없어 파일을 둘 곳이 없어요.', true); return; }
-    const ac = new AbortController();
-    toast(`${items.length}개를 공유 폴더로 올리는 중이에요…`);
-    const r = await upSend({
-      items, emptyDirs, signal: ac.signal,
-      fileUrl: (rel) => '/api/ui/v6/projects/' + ctx.id + '/file?path=' + encodeURIComponent(rel),
-      dirUrl: (d) => '/api/ui/v6/projects/' + ctx.id + '/folder?path=' + encodeURIComponent(d),
-    });
-    if (ctx.dead()) return;
-    upToast(r);
-    sig = ''; void paint();
-  }
-  upDropZone(root, root, (items, emptyDirs) => { void upload(items, emptyDirs); });
-
-  async function files(): Promise<AssetFile[]> {
-    const m: any = await api('/api/ui/v6/projects/' + ctx.id + '/shared/manifest').catch(() => null);
-    const mf: any[] = (m && m.files) || [];
-    return mf
-      .filter((f: any) => {
-        const p = String(f.path);
-        if (p.startsWith(TRASH_DIR + '/')) return false;
-        if (MACHINE_FILES.has(base(p))) return false;
-        return !NOISE_RE.test('/' + p);
-      })
-      .map((f: any) => ({ path: String(f.path), size: Number(f.size || 0), mtime: Number(f.mtime || 0) }))
-      .sort((a, b) => b.mtime - a.mtime);
-  }
-
-  // ── 미리보기 ──────────────────────────────────────────────────────────────
-  //  · **보일 때만** 받는다(IntersectionObserver) — 자료가 수십 개인 칸에서 전부 받으면 화면이 멈춘다.
-  //  · 한 번에 세 개까지만 받는다(fetch 큐) — 좁은 칸에서 브라우저가 연결로 막히지 않게.
-  //  · 큰 파일은 건너뛰고 아이콘으로 둔다(형식별 상한 PV_MAX) — 미리보기 하나 보자고 100MB 를 내려받지 않는다.
-  const seenPv = new WeakSet<HTMLElement>();
-  let inflight = 0;
-  const queue: Array<() => Promise<void>> = [];
-  function pump(): void {
-    while (inflight < 3 && queue.length) {
-      const job = queue.shift()!;
-      inflight++;
-      void job().catch(() => { /* 하나 실패해도 나머지는 계속 */ }).then(() => { inflight--; pump(); });
-    }
-  }
-  const io: IntersectionObserver | null = typeof IntersectionObserver === 'function'
-    ? new IntersectionObserver((ents) => {
-      for (const e of ents) {
-        const n = e.target as HTMLElement;
-        if (!e.isIntersecting || seenPv.has(n)) continue;
-        seenPv.add(n);
-        io?.unobserve(n);
-        const path = n.dataset.pv || '';
-        const kind = n.dataset.pvk || '';
-        const size = Number(n.dataset.pvs || 0);
-        queue.push(() => fillPreview(n, path, kind, size));
-        pump();
-      }
-    }, { rootMargin: '250px' })
-    : null;
-
-  /** 카드 폭에 맞춰 종이(300×246)를 줄인다 — 칸 폭이 바뀌면 다시 맞춘다. */
-  function fitPaper(box: HTMLElement, paper: HTMLElement): void {
-    const w = box.clientWidth || 92;
-    paper.style.transform = 'scale(' + (w / PV_W).toFixed(4) + ')';
-  }
-  const fits: Array<[HTMLElement, HTMLElement]> = [];
-  const ro: ResizeObserver | null = typeof ResizeObserver === 'function'
-    ? new ResizeObserver(() => { for (const [b, pp] of fits) fitPaper(b, pp); })
-    : null;
-  function paper(box: HTMLElement, inner: HTMLElement): void {
-    const pp = el('div', { class: 'pn-fpaper' }, inner) as HTMLElement;
-    box.replaceChildren(pp);
-    fits.push([box, pp]);
-    fitPaper(box, pp);
-    ro?.observe(box);
-  }
-
-  async function fillPreview(box: HTMLElement, path: string, kind: string, size: number): Promise<void> {
-    if (ctx.dead() || !box.isConnected) return;
-    if (size && size > (PV_MAX[kind] || 4e6)) return;              // 너무 큰 것은 아이콘 그대로
-    const url = apiUrl('/api/ui/v6/projects/' + ctx.id + '/file?path=' + encodeURIComponent(path));
-    if (kind === 'text' || kind === 'page') {
-      // 앞부분만 — Range 를 무시하는 서버여도 글자만 잘라 쓰므로 화면은 같다. 416(범위 거부)이면 통째로 받는다.
-      let r = await fetch(url, { headers: { ...authHeaders(), Range: 'bytes=0-' + (kind === 'page' ? 400_000 : 4095) } });
-      if (r.status === 416) r = await fetch(url, { headers: authHeaders() });
-      if (!r.ok || ctx.dead() || !box.isConnected) return;
-      const raw = await r.text();
-      if (!raw.trim()) return;
-      box.classList.add('has-pv');
-      if (kind === 'text') { paper(box, el('pre', { class: 'pn-fpre', text: raw.slice(0, 1400) })); return; }
-      // ⚠ 시안(HTML)은 **srcdoc + 빈 sandbox** 로 그린다. blob 주소를 sandbox 프레임에 물리면 그 프레임은
-      //  불투명 출처라 blob 을 읽을 권한이 없어 **흰 칸**이 된다(실측 2026-08-20 — 시안 미리보기가 전부 백지였다).
-      //  srcdoc 은 내용을 그 자리에 넘기므로 출처 문제가 없고, 빈 sandbox 가 스크립트·폼·상위 접근을 모두 막는다.
-      const frame = el('iframe', { class: 'pn-fframe', sandbox: '', loading: 'lazy', tabindex: '-1', 'aria-hidden': 'true' }) as HTMLIFrameElement;
-      frame.srcdoc = raw.slice(0, 400_000);
-      paper(box, frame);
-      return;
-    }
-    const r = await fetch(url, { headers: authHeaders() });
-    if (!r.ok || ctx.dead() || !box.isConnected) return;
-    const bl = await r.blob();
-    const u = URL.createObjectURL(kind === 'pdf' ? new Blob([bl], { type: 'application/pdf' }) : bl);
-    blobUrls.push(u);
-    if (ctx.dead() || !box.isConnected) return;
-    box.classList.add('has-pv');
-    if (kind === 'img') {
-      box.replaceChildren(el('img', { alt: '', src: u }));
-    } else if (kind === 'video') {
-      const v = el('video', { src: u, muted: 'true', playsinline: 'true', preload: 'metadata' }) as HTMLVideoElement;
-      v.muted = true;
-      box.replaceChildren(v);
-      // 첫 프레임을 세운다 — metadata 만으로 검은 칸이 남는 브라우저가 있어 0.1초로 옮겨 한 장을 그린다.
-      v.addEventListener('loadedmetadata', () => { try { v.currentTime = Math.min(0.1, (v.duration || 1) / 10); } catch (_) { /* noop */ } }, { once: true });
-    } else if (kind === 'pdf') {
-      // 크롬·사파리는 PDF 를 프레임 안에서 직접 그린다 — 첫 장만, 도구모음 없이.
-      paper(box, el('iframe', { class: 'pn-fframe', src: u + '#page=1&toolbar=0&navpanes=0&scrollbar=0&view=FitH', loading: 'lazy', tabindex: '-1', 'aria-hidden': 'true' }));
-    }
-  }
-
-  function thumb(f: AssetFile): HTMLElement {
-    const k = kindOf(f.path);
-    const box = el('span', { class: 'pn-fic ' + k.kind, 'data-pv': f.path, 'data-pvk': k.kind, 'data-pvs': String(f.size || 0) },
-      pnIcon(k.kind === 'page' ? 'note' : k.kind === 'video' ? 'img' : 'doc', 'pn-i')) as HTMLElement;
-    if (k.kind !== 'file') {
-      if (io) io.observe(box);
-      else { seenPv.add(box); queue.push(() => fillPreview(box, f.path, k.kind, f.size || 0)); pump(); }
-    }
-    return box;
-  }
-
-  async function paint(): Promise<void> {
-    const fs = await files().catch(() => [] as AssetFile[]);
-    if (ctx.dead() || !root.isConnected) return;
-    const s2 = fs.map((f) => f.path + f.mtime).join('|');
-    if (s2 === sig) return;
-    sig = s2;
-    count.textContent = fs.length ? fs.length + '개 · 최근 먼저' : '';
-    if (!fs.length) {
-      grid.replaceChildren(el('div', { class: 'pn-empty' },
-        pnIcon('drop', 'pn-i big'),
-        el('b', { text: '아직 자료가 없어요.' }),
-        el('p', { class: 'pn-fine', text: '파일을 이 칸에 끌어다 놓거나 [＋ 올리기]를 누르세요. 세션이 만든 결과물도 여기 쌓입니다.' })));
-      return;
-    }
-    grid.replaceChildren(...fs.slice(0, 60).map((f) => {
-      const k = kindOf(f.path);
-      return el('button', {
-        class: 'pn-fcard', type: 'button', title: f.path + ' — 엽니다',
-        onclick: () => { void openFileViewer(ctx.id, f.path, base(f.path), () => { sig = ''; void paint(); }, '/api/ui/v6/projects/'); },
-      }, thumb(f),
-        el('b', { class: 'pn-fname ell2', text: base(f.path) }),
-        el('span', { class: 'pn-fmeta' }, el('span', { text: k.type }), el('span', { class: 'sep', text: '·' }), el('span', { text: fmtSize(f.size || 0) })));
-    }));
-  }
-
-  void paint();
-  return {
-    root,
-    tick: () => { void paint(); },
-    destroy: () => { io?.disconnect(); ro?.disconnect(); blobUrls.forEach((u) => URL.revokeObjectURL(u)); },
   };
 }
 
@@ -799,13 +608,14 @@ function webPart(ctx: PartCtx): Part {
 //   · PDF·그림·영상 → 보기 전용(브라우저가 그려 준다).
 //   · 파워포인트·워드·엑셀·한글 → 브라우저에 이걸 여는 방법이 없다. [내려받기]로 원래 앱에서 고치고
 //     [고친 파일 올리기]로 같은 자리에 되돌리는 **왕복**을 만들어 둔다 — 그게 지금 정직하게 가능한 '수정'이다.
+type FlatFile = { path: string; size: number; mtime: number };   // 파일 편집기는 폴더를 다루지 않는다 — 평평한 매니페스트 한 줄
 function editorPart(ctx: PartCtx): Part {
   const root = el('div', { class: 'pn-part pn-ed' });
   const KEY = 'pn_ed_path';
   const bar = el('div', { class: 'pn-ed-bar' });
   const body = el('div', { class: 'pn-ed-body' });
   root.append(bar, body);
-  let list: AssetFile[] = [];
+  let list: FlatFile[] = [];
   let path = '';
   let dirty = false;
   let area: HTMLTextAreaElement | null = null;
