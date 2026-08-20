@@ -583,6 +583,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   }));
   app.delete("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
     const nodeId = String(req.query.node ?? "").trim();
+    // 회수(보관) 여부는 **노드 분기보다 먼저** 읽는다 — 종전엔 아래(박스 분기)에서만 읽어, 노드 세션은
+    //  reclaim=1 을 줘도 desired-state 를 지워 '보관'이 곧 '완전 삭제'가 됐다(#1719 원준의 세션 보관함).
+    const reclaimQ = req.query.reclaim === "1" || req.query.reclaim === "true";
     // 맵 정리는 best-effort — 남은 행은 무해하다(세션 id 는 무작위라 재사용되지 않고, 죽은 세션은 참조되지 않는다).
     const forgetTenantMap = (): void => { void clearSessionWorkspace(req.params.id!).catch(() => { /* 비치명 */ }); };
     if (nodeId) {
@@ -615,8 +618,13 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
           }
         }
       }
-      // 노드가 꺼져 있으면 tmux 는 못 건드린다 — 사용자가 '복원 목록에서 지우기'를 눌렀으니 행은 지운다(그 노드에서 살아
-      //  있다면 다시 연결될 때 라이브로 보이고, 이후 죽으면 카드가 없다 — 사용자가 명시한 '복원 안 함' 그대로).
+      // 보관(reclaim=1)이면 **행을 남긴다** — tmux 만 내리고 좌표·대화 id 는 DB 에 그대로 두어 restorable 로 남는다.
+      //  복원 경로(POST …/restore)가 st.node_id 를 보고 그 노드에 다시 create 를 릴레이하므로 노드 세션도 되살아난다.
+      //  기본(완전 삭제)은 종전과 같다: 노드가 꺼져 있어 tmux 를 못 건드려도 사용자가 '복원 안 함'을 명시했으니 행은 지운다.
+      if (reclaimQ) {
+        res.json({ ok: true, reclaimed: true, killed });
+        return;
+      }
       await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "노드 세션 desired-state 삭제 실패(비치명)"));
       forgetTenantMap();
       res.json({ ok: true, forgot: !killed });
@@ -625,7 +633,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     // #1059 F — 회수(reclaim=1): desired-state 를 보존해 restorable 로 남긴다(vs 기본 = 완전 삭제·복원 안 함).
     //  admin bypass 는 **회수에만** 허용한다(복원 가능한 안전 동작) — 남의 세션을 파괴적으로 삭제하는 건 admin 도 못 하고 소유자만.
     const u = userOf(req);
-    const reclaim = req.query.reclaim === "1" || req.query.reclaim === "true";
+    const reclaim = reclaimQ;
     // #1059 E — restorable(이미 tmux 에서 죽은) 세션의 '삭제' = desired-state 레코드 제거(복원 목록에서 지움).
     //  killSession 의 assertManage 는 tmux @box_owner 메타를 읽는데 세션이 gone 이면 그 메타가 없어 403 이 된다.
     //  그래서 gone + DB 레코드 존재 시엔 DB 레코드의 owner 로 권한을 확인하고 레코드만 지운다(멱등).

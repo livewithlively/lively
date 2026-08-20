@@ -8,7 +8,8 @@
 //   · root  — 칸 본문에 그대로 붙는 요소.
 //   · tick() — 8초 틱. **서명이 같으면 DOM 을 건드리지 않는다**(스크롤·입력 중인 글자 보호).
 //   · destroy() — 폴링·구독 정리.
-import { TOKEN_KEY, api, apiUrl, el, renderMarkdown, sv, toast } from '../core.js';
+import { TOKEN_KEY, api, apiUrl, el, relTime, renderMarkdown, sv, toast } from '../core.js';
+import { confirmDialog } from '../ui-primitives.js';
 import { fmtSize, openFileViewer } from '../projects/files.js';
 import { upDropZone, upSend, upToast } from '../projects/files-upload.js';
 import { mountProjectChat } from '../project-chat.js';
@@ -25,6 +26,8 @@ export const PART_DEFS = [
     { type: 'timeline', name: '타임라인', icon: 'clock', hint: '이 프로젝트에 남은 활동 기록입니다.' },
     { type: 'overview', name: '개요', icon: 'note', hint: '프로젝트 본문입니다.' },
     { type: 'liv', name: '리브', icon: 'spark', hint: '이 프로젝트를 아는 리브와 대화합니다.' },
+    // 이름을 '보관함'이 아니라 **보관한 세션**으로 둔다(원준 2026-08-20) — 무엇을 보관하는지가 이름에서 바로 읽혀야 한다.
+    { type: 'archive', name: '보관한 세션', icon: 'box', hint: '닫아 둔 AI 세션입니다. 대화 그대로 다시 살릴 수 있어요.' },
 ];
 export const partDef = (t) => PART_DEFS.find((d) => d.type === t) || PART_DEFS[0];
 // ── 아이콘(스트로크 SVG) ──────────────────────────────────────────────────────
@@ -44,6 +47,8 @@ const ICON_PATHS = {
     gear: '<circle cx="12" cy="12" r="3.2"/><path d="M12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2L5.6 5.6"/>',
     cols: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M15 5v14"/>',
     drop: '<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 19h14"/>',
+    box: '<path d="M3 7h18v4H3z"/><path d="M5 11v8h14v-8"/><path d="M10 15h4"/>',
+    undo: '<path d="M4 9h11a5 5 0 0 1 0 10h-6"/><path d="M8 5L4 9l4 4"/>',
 };
 export function pnIcon(name, cls = 'pn-i') {
     const s = sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' });
@@ -487,9 +492,100 @@ function livPart(ctx) {
         root.append(el('p', { class: 'pn-fine', text: '프로젝트가 없는 화면이라 리브 대화는 열 수 없어요.' }));
     return { root, destroy: () => chat?.destroy?.() };
 }
+// ══ 보관한 세션 — 닫아 둔 세션을 대화 그대로 되살리는 자리(#1719 원준 2026-08-20) ═══════════
+//  세션 탭의 ×(보관)가 여기로 보낸다. 서버는 tmux 만 내리고 좌표·대화 id 를 DB 에 남긴다(DELETE ?reclaim=1) —
+//  그 상태가 곧 'restorable' 이고, [되살리기](POST …/restore)가 저장된 설정 그대로 다시 만들어 --resume 으로 대화를 잇는다.
+//  ⚠ 세 가지가 섞여 보인다: ① 보관됨(되살릴 수 있음) ② 그냥 끝난 세션 ③ 기록만 남은 대화(중앙 기록).
+//   ①만 되살리기가 되고, ②③은 '대화 보기'만 된다 — 버튼을 상태별로 갈라 두어 눌러 보고 실패하는 일이 없게 한다.
+function archivePart(ctx) {
+    const root = el('div', { class: 'pn-part pn-arch' });
+    let sig = '';
+    let workingId = '';
+    const mine = () => ctx.data().sessions
+        .filter((s) => (ctx.id > 0 ? Number(s.projectId) === ctx.id : !s.projectId))
+        .filter((s) => !(s.live && s.alive))
+        .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
+    const canRestore = (s) => !!(s.raw && s.raw.restorable);
+    async function restore(s) {
+        if (workingId)
+            return;
+        workingId = s.id;
+        sig = '';
+        paint();
+        try {
+            await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/restore', { method: 'POST' });
+            toast('세션을 되살렸어요 — 대화가 이어집니다.');
+            ctx.onChanged?.();
+        }
+        catch (e) {
+            toast('되살리지 못했어요 — ' + (e && e.message ? e.message : e), true);
+        }
+        finally {
+            workingId = '';
+            sig = '';
+            paint();
+        }
+    }
+    async function purge(s, name) {
+        if (workingId)
+            return;
+        const ok = await confirmDialog({
+            title: `「${name}」을 완전히 지울까요?`,
+            message: '보관 목록에서 사라지고 다시 되살릴 수 없습니다.',
+            lines: ['이미 쌓인 대화 기록은 중앙에 남아 읽을 수는 있어요.'],
+            confirmText: '완전 삭제', danger: true,
+        });
+        if (!ok)
+            return;
+        workingId = s.id;
+        sig = '';
+        paint();
+        try {
+            await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + (s.node ? '?node=' + encodeURIComponent(s.node) : ''), { method: 'DELETE' });
+            toast('보관 목록에서 지웠어요.');
+            ctx.onChanged?.();
+        }
+        catch (e) {
+            toast('지우지 못했어요 — ' + (e && e.message ? e.message : e), true);
+        }
+        finally {
+            workingId = '';
+            sig = '';
+            paint();
+        }
+    }
+    function paint() {
+        const ss = mine();
+        const s2 = ss.map((s) => s.id + ':' + (canRestore(s) ? 'r' : '-') + ':' + (s.lastSeen || 0)).join('|') + '#' + workingId;
+        if (s2 === sig)
+            return;
+        sig = s2;
+        if (!ss.length) {
+            root.replaceChildren(el('div', { class: 'pn-empty' }, pnIcon('box', 'pn-i big'), el('b', { text: '보관한 세션이 아직 없어요.' }), el('p', { class: 'pn-fine', text: '세션 탭의 ×를 누르면 여기에 담깁니다 — 대화는 그대로 남고, 언제든 되살릴 수 있어요.' })));
+            return;
+        }
+        const rows = ss.map((s) => {
+            const t = sessText(s, '').main || s.id;
+            const busy = workingId === s.id;
+            const keep = canRestore(s);
+            return el('div', { class: 'pn-arow' + (busy ? ' busy' : '') }, el('span', { class: 'v2-dot ' + (keep ? 'idle' : ''), 'aria-hidden': 'true' }), el('a', { class: 'n ell', href: '#/s/' + encodeURIComponent(s.id), title: t + ' — 대화를 봅니다', text: t }), el('span', { class: 'pn-fine w', text: keep ? '보관됨' : '끝난 세션' }), ...(s.lastSeen ? [el('span', { class: 'pn-fine w', text: relTime(new Date(s.lastSeen).toISOString()) })] : []), ...(keep ? [el('button', {
+                    class: 'btn-text', type: 'button', disabled: busy, text: busy ? '되살리는 중…' : '되살리기',
+                    title: '저장해 둔 설정 그대로 다시 열고, 대화를 이어 붙입니다.', onclick: () => void restore(s),
+                })] : [el('a', { class: 'btn-text', href: '#/s/' + encodeURIComponent(s.id), text: '대화 보기' })]), el('button', {
+                class: 'pn-arow-x', type: 'button', title: '완전 삭제 — 되살릴 수 없게 됩니다', 'aria-label': `「${t}」 완전 삭제`,
+                onclick: () => void purge(s, t),
+            }, pnIcon('x', 'pn-i xs')));
+        });
+        root.replaceChildren(el('div', { class: 'pn-head' }, el('span', { class: 'pn-fine', text: ss.length + '건 · 되살릴 수 있는 것 ' + ss.filter(canRestore).length + '건' })), el('div', { class: 'pn-alist' }, ...rows));
+    }
+    paint();
+    return { root, tick: paint };
+}
 export function makePart(type, ctx) {
     if (type === 'sessions')
         return sessionsPart(ctx);
+    if (type === 'archive')
+        return archivePart(ctx);
     if (type === 'files')
         return filesPart(ctx);
     if (type === 'knowledge')

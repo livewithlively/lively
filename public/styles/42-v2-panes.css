@@ -211,3 +211,17 @@
   .pn-door { padding: 12px 14px 10px; }
   .pn-title { font-size: 19px; }
 }
+
+/* ── 보관한 세션(#1719 원준 2026-08-20) — 닫아 둔 세션을 되살리는 자리 ── */
+.pn-alist { display: flex; flex-direction: column; padding: 2px 6px 10px; }
+.pn-arow { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 8px; font-size: 13px; color: var(--ink); }
+.pn-arow:hover { background: var(--bg-tint, #F6FAFF); }
+.pn-arow.busy { opacity: .6; }
+.pn-arow .n { flex: 1; min-width: 0; color: var(--ink); text-decoration: none; }
+.pn-arow .n:hover { color: var(--blue); }
+.pn-arow .w { flex: none; font-size: 11.5px; }
+.pn-arow .btn-text { flex: none; }
+.pn-arow-x { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px;
+  border: 0; background: none; padding: 0; border-radius: 6px; color: var(--muted-2, #a6b2c8); cursor: pointer; opacity: 0; }
+.pn-arow:hover .pn-arow-x, .pn-arow-x:focus-visible { opacity: 1; }
+.pn-arow-x:hover { background: var(--bg-punch, #FDECEC); color: var(--danger, #C0392B); }

@@ -23,6 +23,7 @@
 //
 //  이 파일이 모르는 것: 각 칸에 들어가는 내용(v2/panes-parts.ts) · 프로젝트 설정 창(v2/proj-settings.ts).
 import { anchoredPopover, api, el, personFace, toast } from '../core.js';
+import { confirmDialog } from '../ui-primitives.js';
 import { makeSplitter } from './split.js';
 import { PART_DEFS, lookupSessNames, makePart, partDef, pnIcon, sessTitle, type Part, type PartCtx, type PartType } from './panes-parts.js';
 import { openProjSettings } from './proj-settings.js';
@@ -230,14 +231,45 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   };
   const SESS_TAB_MAX = 40;   // 탭 줄에 눕히는 상한 — 프로젝트 없는 세션 화면엔 수백 개가 몰린다(실측 188개)
 
-  /** 세션 탭 하나 — 상태점 + 이름. 닫기(×)는 없다: 세션은 '열어 둔 문서'가 아니라 프로젝트에 속한 실체다. */
+  /** 세션 탭 하나 — 상태점 + 이름 + ×(보관).
+   *  ⚠ ×는 '화면 닫기'가 아니라 **세션 보관**이다(원준 2026-08-20): 돌던 터미널을 내리고 대화·설정은 남겨
+   *   [보관한 세션]에서 되살릴 수 있게 한다. 돌고 있는 AI 를 멈추는 동작이라 확인창을 반드시 거친다.
+   *   내 세션이고 살아 있을 때만 보인다 — 남의 세션은 못 내리고, 이미 끝난 세션은 보관할 것이 없다. */
   function sessTab(s: Sess, on: boolean, part: Part): HTMLElement {
     const t = sessTitle(s, String(pj().name || ''));
     const b = el('button', {
       class: 'pn-tab pn-stab' + (on ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': String(on),
       title: t + ' — ' + s.stateLabel, onclick: () => { part.selectSession?.(s.id); paintPane('main'); },
     }, el('span', { class: 'v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' }), el('span', { class: 'ell', text: t }));
-    return el('span', { class: 'pn-tabwrap' + (on ? ' on' : '') }, b);
+    const canArchive = s.owned && s.live && s.alive;
+    const x = canArchive ? el('button', {
+      class: 'pn-tab-x', type: 'button', title: '이 세션을 보관합니다 — 대화는 남고, [보관한 세션]에서 되살릴 수 있어요.',
+      'aria-label': `「${t}」 세션 보관`,
+      onclick: (e: MouseEvent) => { e.stopPropagation(); void archiveSess(s, t); },
+    }, pnIcon('x', 'pn-i xs')) : null;
+    const wrap = el('span', { class: 'pn-tabwrap' + (on ? ' on' : '') }, b);
+    if (x) wrap.append(x);
+    return wrap;
+  }
+
+  /** 세션 보관 — 터미널만 내리고 좌표·대화는 DB 에 남긴다(DELETE ?reclaim=1 = restorable). */
+  async function archiveSess(s: Sess, name: string): Promise<void> {
+    const working = s.stateKey === 'busy' || s.stateKey === 'waiting';
+    const ok = await confirmDialog({
+      title: `「${name}」 세션을 보관할까요?`,
+      message: working ? '지금 일하는 중이라, 보관하면 그 자리에서 멈춥니다.' : '돌고 있는 터미널을 내려놓습니다.',
+      lines: ['대화와 설정은 그대로 남습니다 — [보관한 세션]에서 언제든 되살릴 수 있어요.'],
+      confirmText: '보관', danger: working,
+    });
+    if (!ok) return;
+    try {
+      await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '?reclaim=1' + (s.node ? '&node=' + encodeURIComponent(s.node) : ''), { method: 'DELETE' });
+      toast('세션을 보관했어요 — [보관한 세션]에서 되살릴 수 있어요.');
+      opts.onProjectChanged?.();
+      paintPane('main');
+    } catch (e: any) {
+      toast('보관하지 못했어요 — ' + (e && e.message ? e.message : e), true);
+    }
   }
 
   /** 가운데 칸의 탭 줄에 세션 탭들을 그린다(원준 2026-08-20 — 하단 서랍을 이 줄로 옮겼다). */
