@@ -44,6 +44,15 @@ function dropProjView(tab) { const pv = projViews.get(tab); if (pv) {
 } }
 // ── 프로젝트 = 세션이 놓인 방(원준 2026-08-20) ────────────────────────────────
 /** 그 프로젝트의 **맨 위 세션** — 사이드바에서 보이는 순서와 같은 정의(side.ts bySeen). */
+/** 세션 주소를 그 세션의 **정본 id**(박스 id)로 맞춘다 — 기록 uuid 로 들어와도 같은 탭이 되도록. */
+function canonSessionHash(hash) {
+    const k = routeKey(hash);
+    if (!k.startsWith('s:'))
+        return hash;
+    const id = k.slice(2);
+    const s = findSess(id);
+    return s && s.id && s.id !== id ? '#/s/' + encodeURIComponent(s.id) : hash;
+}
 function topSessionOf(projectId) {
     if (!(projectId > 0))
         return null;
@@ -291,8 +300,12 @@ function titleFor(route) {
         //  ★ 우패널 없음 — 세션 화면은 프로젝트 셸(v2/panes.ts) 안에서 열리고, 맥락(자료·지식·타임라인)은 그 셸의
         //   곁칸이 쥔다(2026-08-20 통합). 팝아웃 창(?solo=1)만 종전대로 세션 하나 + 발자취 우패널이다.
         const s = findSess(decodeURIComponent(segs[1] || ''));
-        if (!s)
-            return { title: '세션', noAside: !SOLO };
+        // 못 찾은 세션(죽었거나 아직 목록에 안 온 것)도 **서로 구분되게** — 전부 '세션'이면 다른 탭이 같아 보인다.
+        if (!s) {
+            const raw = decodeURIComponent(segs[1] || '');
+            const tail = raw.split('-').pop() || raw;
+            return { title: '세션 ' + tail.slice(0, 6), noAside: !SOLO };
+        }
         const t = sessText(s, projName(data, s.projectId));
         // 아이콘 색이 될 상태 — 사이드바 점과 같은 판정(dotCls): 도는 중·확인 필요·끝남만 색을 갖는다.
         return { title: t.main || t.sub || String(s.raw?.harness || '세션'), noAside: !SOLO, state: dotCls(s.stateKey) };
@@ -327,6 +340,15 @@ async function onHash() {
     //  사이드바에서 프로젝트 제목을 누르면 #/p/<id> 로 오는데, 그대로 탭을 만들면 **프로젝트 탭**이 하나 생겼다가
     //  그 안에서 다시 세션으로 바뀐다(제목이 두 번 바뀌고, 이미 프로젝트 탭이 있으면 그 낡은 탭이 켜졌다).
     //  그래서 탭을 고르기 **전에** 여기서 그 프로젝트의 맨 위 세션(사이드바 첫 줄과 같은 정의)으로 갈아 끼운다.
+    // ★ 같은 세션이 **두 철자**로 열려 탭이 둘이 되던 것(원준 2026-08-20 신고) — 세션은 박스 id(box-…)와
+    //  중앙 기록 id(uuid) 두 이름을 갖는다(findSess 가 둘 다 받는다). 타임라인·기록에서 열면 uuid, 사이드바에서
+    //  열면 박스 id 라 routeKey 가 갈려 '한 세션 = 한 탭'이 깨졌다. 탭을 고르기 전에 **박스 id 로 통일**한다.
+    const canon = canonSessionHash(hash);
+    if (canon !== hash) {
+        hash = canon;
+        suppressHash++;
+        location.replace(location.pathname + location.search + hash);
+    }
     const pk0 = routeKey(hash);
     if (pk0.startsWith('p:')) {
         const top = topSessionOf(Number(pk0.slice(2)));

@@ -317,8 +317,20 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
   try {
     const st = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
     if (st && Array.isArray(st.tabs)) {
-      for (const t of st.tabs.slice(0, 12)) { if (t && typeof t.route === 'string') mkTab(t.route, typeof t.title === 'string' ? t.title : undefined); }
-      restoredActive = Math.min(Math.max(0, Number(st.active) || 0), tabs.length - 1);
+      // ⚠ 복원에는 **중복 제거**가 필요하다 — 저장본에 같은 화면이 두 번 들어 있으면(옛 버그가 만든 잔재도) 그대로
+      //  탭 두 개로 되살아나고, 그 뒤로는 find() 가 첫 번째만 잡으므로 둘째가 영영 남는다(원준 2026-08-20 신고).
+      const seen = new Set<string>();
+      let want = -1;
+      const wantIdx = Math.max(0, Number(st.active) || 0);
+      st.tabs.slice(0, 12).forEach((t: any, i: number) => {
+        if (!t || typeof t.route !== 'string') return;
+        const k = routeKey(t.route);
+        if (seen.has(k)) return;
+        seen.add(k);
+        mkTab(t.route, typeof t.title === 'string' ? t.title : undefined);
+        if (i === wantIdx) want = tabs.length - 1;
+      });
+      restoredActive = Math.min(Math.max(0, want >= 0 ? want : 0), Math.max(0, tabs.length - 1));
     }
   } catch (_) { /* noop */ }
 
