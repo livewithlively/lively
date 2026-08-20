@@ -9,7 +9,7 @@
 //   · tick() — 8초 틱. **서명이 같으면 DOM 을 건드리지 않는다**(스크롤·입력 중인 글자 보호).
 //   · destroy() — 폴링·구독 정리.
 import { TOKEN_KEY, api, apiUrl, el, relTime, renderMarkdown, sv, toast } from '../core.js';
-import { confirmDialog } from '../ui-primitives.js';
+import { confirmSessionForget } from '../session-actions.js';
 import { fmtSize, openFileViewer } from '../projects/files.js';
 import { upDropZone, upSend, upToast } from '../projects/files-upload.js';
 import { mountProjectChat } from '../project-chat.js';
@@ -558,13 +558,9 @@ function archivePart(ctx) {
     async function purge(s, name) {
         if (workingId)
             return;
-        const ok = await confirmDialog({
-            title: `「${name}」을 완전히 지울까요?`,
-            message: '보관 목록에서 사라지고 다시 되살릴 수 없습니다.',
-            lines: ['이미 쌓인 대화 기록은 중앙에 남아 읽을 수는 있어요.'],
-            confirmText: '완전 삭제', danger: true,
-        });
-        if (!ok)
+        // 확인창은 #1582 의 단일 정의를 쓴다 — '대화록이 남는지'는 조직 설정·하네스에 따라 달라서,
+        //  그 판정을 여기서 흉내 내면 반드시 한쪽이 거짓말을 한다(confirmSessionForget 이 서버에 물어 참인 문장만 쓴다).
+        if (!await confirmSessionForget({ title: `「${name}」을 목록에서 지울까요?`, sessions: [{ harness: String((s.raw && s.raw.harness) || '') }] }))
             return;
         workingId = s.id;
         sig = '';
