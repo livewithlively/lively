@@ -281,7 +281,7 @@
   const fresh = () => ({
     route: '#/start', name: '상민', day: 1, team: false, boardOn: false, invitesLeft: 3, ws: 'me', livView: 'chat', livMapOpen: false,
     ob: { started: false, startedAt: null, finishedAt: null, step: 0, doneSteps: [], skipped: false, finished: false, scene: null, returnTo: null,
-      buildProg: 0, honest: false, firstQ: null, answered: false, freeLeft: 3 },
+      buildProg: 0, noai: false, firstQ: null, answered: false, freeLeft: 3 },
     role: null, detail: null, pain: null, fixes: [], jobs: [], sources: [], files: [], drop: false,
     ingest: { total: 0, done: 0, running: false, finished: false, tally: [] },
     conn: { gdrive: 'off', notion: 'off', slack: 'off', gmail: 'off', clickup: 'off' },
@@ -319,7 +319,7 @@
       <div class="start-or">또는 이메일로 계속하기</div>
       <input class="in start-email" type="email" placeholder="you@example.com" aria-label="이메일">
       <div class="start-invite"><span class="k">초대 코드</span><span class="code">lvi-8f2k-q7m3-xn1p</span><span class="tag mint">확인됨</span></div>
-      <div class="start-fine">지금은 무료 · 초대제 베타입니다. 정식 출시 때 유료 플랜으로 바뀝니다. AI 세션은 <b>쓰시던 AI 계정을 연결해</b> 돌아가고, 라이블리가 대신 결제하지 않습니다. 베타 기간에는 Claude로 실행되며 Codex·Gemini·Grok은 준비 중입니다.
+      <div class="start-fine">지금은 무료 · 초대제 베타입니다. 정식 출시 때 유료 플랜으로 바뀝니다. AI 세션은 <b>쓰시던 AI 계정을 연결해</b> 돌아갑니다 — Claude · ChatGPT · Gemini · Grok 가운데 하나를 유료로 이용 중이시면 됩니다. 라이블리가 대신 결제하지는 않습니다.
         <label><input type="checkbox" id="agree"> <span><a href="terms.html" target="_blank" rel="noopener">이용약관</a>과 <a href="privacy.html" target="_blank" rel="noopener">개인정보 처리방침</a>에 동의합니다.</span></label></div>
       <div class="start-foot">초대 코드가 없으면 <a href="#" data-act="wait">대기자 등록</a>으로 남길 수 있습니다.</div>
     </div></div>`;
@@ -353,7 +353,7 @@
   const SCENE_BACK = {
     detail: () => 'role', jobs: () => 'detail', guess: () => 'jobs', sources: () => 'guess', upload: () => 'sources',
     ai: () => (S.sources.length && !(S.sources.length === 1 && S.sources[0] === 'none') ? 'upload' : 'sources'),
-    claude: () => 'ai', terminal: () => (S.ai === 'Claude' && !S.aiConnected ? 'claude' : 'ai'),
+    claude: () => 'ai', terminal: () => (S.ai && S.ai !== '아직 없어요' && !S.aiConnected ? 'claude' : 'ai'),
     found: () => 'terminal',
     firstq: () => (S.ingest.total ? 'found' : 'terminal'), answer: () => 'firstq',
   };
@@ -517,12 +517,12 @@
     },
     ai: {
       html: () => scHead(S.ingest.total && !S.ingest.finished ? '자료를 읽는 동안 하나 더요.' : '이제 AI 차례예요.', '평소 어떤 AI를 쓰세요?', '쓰던 AI를 그대로 씁니다 — 새로 결제할 것은 없습니다.') + choiceHTML({ options: AIS, sel: S.ai ? [S.ai] : [], skip: '나중에 정할게요' }),
-      bind: (el) => bindChoice(el, { onCommit: async (sel) => { S.ai = sel[0]; save(); renderBuild(); if (S.ai === 'Claude' || S.ai === '여러 개') { S.ai = 'Claude'; save(); return goScene('claude'); } S.ob.honest = true; save(); goScene('terminal'); }, onSkip: () => goScene('terminal') }),
+      bind: (el) => bindChoice(el, { onCommit: async (sel) => { S.ai = sel[0]; save(); renderBuild(); if (S.ai === '아직 없어요') { S.ob.noai = true; save(); return goScene('terminal'); } if (S.ai === '여러 개') S.ai = 'Claude'; save(); return goScene('claude'); }, onSkip: () => goScene('terminal') }),
     },
     claude: {
       cls: 'wide',
-      html: () => scHead(`새 결제는 없어요. 연결한 뒤에는 저(리브)가 일할 때도 ${esc(S.name)}님의 Claude 사용량을 씁니다 — 얼마나 썼는지는 언제든 보여 드릴게요.`, 'Claude 계정을 연결해 주세요.', '새 탭에서 로그인하고 짧은 코드를 가져오면 됩니다 · 1분')
-        + `<div class="sc-body"><div class="steps3"><div class="step3" data-s="a"><span class="n">① 열기</span><button type="button" class="btn btn-primary btn-sm" data-open>Claude 열기 ${ic('ext','ic-sm')}</button><span>새 탭에서 Claude에 로그인합니다.</span></div>
+      html: () => scHead(`새 결제는 없어요. 연결한 뒤에는 저(리브)가 일할 때도 ${esc(S.name)}님의 ${esc(S.ai || 'AI')} 사용량을 씁니다 — 얼마나 썼는지는 언제든 보여 드릴게요.`, `${esc(S.ai || 'AI')} 계정을 연결해 주세요.`, '새 탭에서 로그인하고 짧은 코드를 가져오면 됩니다 · 1분')
+        + `<div class="sc-body"><div class="steps3"><div class="step3" data-s="a"><span class="n">① 열기</span><button type="button" class="btn btn-primary btn-sm" data-open>${esc(S.ai || 'AI')} 열기 ${ic('ext','ic-sm')}</button><span>새 탭에서 ${esc(S.ai || 'AI')}에 로그인합니다.</span></div>
         <div class="step3" data-s="b"><span class="n">② 코드 복사</span><span>화면에 나오는 짧은 코드를 복사합니다.<br><span class="muted">예: <span class="mono">3F7K-QX2M</span> 처럼 생겼어요.</span></span></div>
         <div class="step3" data-s="c"><span class="n">③ 여기 붙여넣기</span><input class="in" type="text" placeholder="코드 붙여넣기" aria-label="코드"><span class="muted">붙여넣으면 제가 확인합니다.</span></div></div></div>
         <div class="sc-actions"><button type="button" class="btn btn-primary" data-go disabled>연결 확인</button></div>
@@ -530,7 +530,7 @@
         <div class="sc-skip"><button type="button" class="btn-text" data-skip>나중에 할게요</button></div>`,
       bind: (el) => {
         const go = $('[data-go]', el), code = $('input.in', el);
-        $('[data-open]', el).addEventListener('click', () => { $('[data-s="a"]', el).classList.add('done'); toast('새 탭에서 Claude 로그인 화면이 열렸다고 가정합니다.'); setTimeout(() => { $('[data-s="b"]', el).classList.add('done'); code.focus(); }, 800); });
+        $('[data-open]', el).addEventListener('click', () => { $('[data-s="a"]', el).classList.add('done'); toast(`새 탭에서 ${S.ai || 'AI'} 로그인 화면이 열렸다고 가정합니다.`); setTimeout(() => { $('[data-s="b"]', el).classList.add('done'); code.focus(); }, 800); });
         code.addEventListener('input', () => { const ok = code.value.trim().length >= 4; go.disabled = !ok; $('[data-s="c"]', el).classList.toggle('done', ok); });
         code.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !go.disabled) go.click(); });
         go.addEventListener('click', () => { go.classList.add('is-busy'); setTimeout(() => { S.aiConnected = true; save(); renderBuild(); toast('연결됐어요. 이제 답은 내 구독으로 돕니다.'); goScene('terminal'); }, 650); });
@@ -538,7 +538,7 @@
       },
     },
     terminal: {
-      html: () => scHead(S.ob.honest ? `솔직히 말씀드릴게요 — 지금 베타는 <b>Claude</b>로 세션을 돌립니다. ${S.ai && S.ai !== '아직 없어요' ? `${esc(S.ai)}는 준비 중이에요. ` : ''}자료 쌓기·정리·검색은 지금부터 되고, 첫 질문 <b>3회</b>는 라이블리 계정으로 열어 드려요.` : (S.aiConnected ? '연결됐어요. 거의 끝났습니다.' : '거의 끝났습니다.'), '터미널에서 Claude Code나 Codex를 쓰시나요?', '쓰신다면 거기에도 같은 자료가 실리게 할 수 있어요.') + choiceHTML({ options: [{ id: 'yes', label: '네, 씁니다' }, { id: 'no', label: '아니요' }] }),
+      html: () => scHead(S.ob.noai ? `AI 구독이 아직 없으셔도 괜찮아요 — 자료 쌓기·정리·검색은 지금부터 됩니다. 첫 질문 <b>3회</b>는 라이블리 계정으로 열어 드릴게요.` : (S.aiConnected ? '연결됐어요. 거의 끝났습니다.' : '거의 끝났습니다.'), '터미널에서 Claude Code나 Codex를 쓰시나요?', '쓰신다면 거기에도 같은 자료가 실리게 할 수 있어요.') + choiceHTML({ options: [{ id: 'yes', label: '네, 씁니다' }, { id: 'no', label: '아니요' }] }),
       bind: (el) => bindChoice(el, { onCommit: async (sel) => {
         const yes = sel[0] === 'yes'; S.terminal = yes ? 'yes' : 'no';
         if (yes) { S.node = true; S.decisions.push('내 컴퓨터 노드 연결 — 터미널의 Claude Code에도 같은 자료'); toast('홈에서 한 줄 설치를 안내할게요 — lively node --daemon'); } else { S.declined.push('terminal'); }
@@ -594,7 +594,7 @@
     },
     firstq: {
       html: () => {
-        const locked = !S.aiConnected && S.ai !== 'Claude';
+        const locked = !S.aiConnected;
         const qs = S.ingest.total ? pick(FIRSTQ_BY_ROLE, roleOf()) : [];
         return `${scHead(`${S.fixes.length ? `${S.fixes.length}가지를 켜 뒀어요. 이제` : '이제'} 저(리브)가 아니라 <b>${esc(S.name)}님의 AI</b>가 답할 차례예요.${locked ? ' 세션 연결 전이라 라이블리 계정으로 3회 열어 드려요.' : ''}`, S.ingest.total ? '첫 마디를 골라, 그대로 시켜 보세요.' : '무엇을 준비 중이세요?', S.ingest.total ? `${esc(detailOf())} · ${S.jobs.slice(0, 2).map(esc).join('·') || '하시는 일'} 기준으로 골라 둔 질문이에요.` : '한 줄만 적어 주시면 그 답을 첫 자료로 남길게요.')}
         <div class="sc-opts sc-opts-q">${qs.map((q, i) => `<button type="button" class="chip chip-q" data-q="${esc(q)}" style="animation-delay:${60 + i * 60}ms">${esc(q)}</button>`).join('')}${qs.length ? `<button type="button" class="chip chip-esc" data-esc="write" style="animation-delay:${60 + qs.length * 60}ms">＋ 직접 물어보기</button>` : ''}</div>
@@ -616,7 +616,7 @@
   /* 첫 답 장면 — 이 온보딩의 보상. 질문 인용 + 내 AI의 답 카드(스트리밍) + 사다리 */
   const ANSWERS_BY_ROLE = fromP('answers');
   const genericAnswer = (q) => ({ html: `${esc(q.replace(/[?？]$/, ''))} — 자료함에서 관련 문서를 찾아 정리했어요.<br>· 근거 2건을 바탕으로 답했습니다.<br>· 결과는 자료함에 남겨 두었어요.`, ev: [['8/12 회의록', '근거'], ['7월 월간 보고서', '근거']], read: '읽은 것 2건 · 10초', ladder: ['이 내용으로 한 장짜리 정리 만들어 줘'] });
-  const aiWho = () => (S.aiConnected || S.ai === 'Claude') ? '내 AI · Claude' : 'AI · 라이블리 계정 체험';
+  const aiWho = () => S.aiConnected ? `내 AI · ${S.ai || 'Claude'}` : 'AI · 라이블리 계정 체험';
   function answerOf(q) { const qs = pick(FIRSTQ_BY_ROLE, roleOf()); const idx = qs.indexOf(q); const arr = ANSWERS_BY_ROLE[roleOf()] || ANSWERS_BY_ROLE.default; return idx >= 0 ? (arr[idx] || arr[0]) : genericAnswer(q); }
   const answerCardHTML = (A, body) => `<div class="ans-card"><div class="who ai">${sparkFace(17)}<span>${aiWho()}</span></div><div class="ans-body">${body}</div></div>`;
   function answerSceneHTML() {
@@ -698,7 +698,7 @@
       <div class="sum-cell" data-fix="role" role="button" tabindex="0"><span class="k">나<span class="fix">고치기</span></span><b>${esc(roleOf())}</b> · ${S.jobs.map(esc).join(', ') || '—'}<br><span class="muted">AI 눈높이: ${roleOf() === '개발' ? '기술 설명 자세히' : '비개발'} · 존댓말 · 한국어</span></div>
       <div class="sum-cell"><span class="k">리브가 정한 것 <span style="text-transform:none;letter-spacing:0">(전부 되돌릴 수 있어요)</span></span>${S.decisions.map((d) => `· ${esc(d)}`).join('<br>') || '—'}</div>
       <div class="sum-cell" data-fix="upload" role="button" tabindex="0"><span class="k">자료함<span class="fix">더 넣기</span></span>지식 <b>${S.knowledge}</b>건${conns.length ? ` · ${conns.map((c) => c + ' 연결(읽기)').join(' · ')}` : ''}${S.files.length ? ` · 올린 파일 ${S.files.length}` : ''}</div>
-      <div class="sum-cell" data-fix="ai" role="button" tabindex="0"><span class="k">쓰는 AI<span class="fix">바꾸기</span></span>${S.ai === 'Claude' ? `Claude(내 구독) · 오늘 사용 ${S.usage}회` : `${esc(S.ai || '아직 없음')} · 세션은 준비 중`} · 터미널: ${S.terminal === 'yes' ? '노드 연결' : '안 씀'}</div>
+      <div class="sum-cell" data-fix="ai" role="button" tabindex="0"><span class="k">쓰는 AI<span class="fix">바꾸기</span></span>${S.aiConnected ? `${esc(S.ai)}(내 구독) · 오늘 사용 ${S.usage}회` : `${esc(S.ai || '아직 없음')} · 연결 전`} · 터미널: ${S.terminal === 'yes' ? '노드 연결' : '안 씀'}</div>
       <div class="sum-cell" style="grid-column:1/-1"><span class="k">아직 안 한 것 (리브가 홈에서 다시 권함)</span>${notDone.map(esc).join(' · ')}</div></div>
       <div class="acts"><button type="button" class="btn btn-ghost btn-sm" data-act="keep-summary">이 요약을 자료함에 남기기</button><button type="button" class="btn btn-primary" data-act="go-home">홈으로 가기</button></div>`;
   }
@@ -711,10 +711,11 @@
     const src = SOURCES.filter((s) => S.sources.includes(s.id) && !s.none);
     const ing = S.ingest;
     const decisions = S.decisions;
+    // 어느 AI 를 골랐든 같은 세 상태로 말한다 — 안 고름 / 연결 중 / 연결됨. 특정 사업자를 특별 취급하지 않는다.
     const aiCard = S.ai == null ? `<div class="bc empty"><span class="k">쓰는 AI</span><div class="v"><span class="state off">아직 연결 전</span></div></div>`
-      : S.ai === 'Claude' ? (S.aiConnected ? `<div class="bc lit fx" data-fix="ai" role="button" tabindex="0"><span class="k">쓰는 AI<span class="fix">바꾸기</span></span><div class="v"><span class="state on">Claude · 내 구독</span></div><div class="sub">라이블리가 대신 결제하지 않습니다.${S.usage ? ` · 오늘 사용 ${S.usage}회` : ''}</div></div>`
-        : `<div class="bc lit fx" data-fix="ai" role="button" tabindex="0"><span class="k">쓰는 AI<span class="fix">바꾸기</span></span><div class="v"><span class="state wait">Claude — 연결 중</span></div><div class="sub">연결되면 내 구독으로 세션이 돕니다. 라이블리가 대신 결제하지 않습니다.</div></div>`)
-      : `<div class="bc lit fx" data-fix="ai" role="button" tabindex="0"><span class="k">쓰는 AI<span class="fix">바꾸기</span></span><div class="v"><span class="state wait">${esc(S.ai)} — 세션은 준비 중</span></div><div class="sub">자료 쌓기·정리·열람은 지금부터 됩니다. 준비되면 먼저 알려 드립니다.</div></div>`;
+      : S.ai === '아직 없어요' ? `<div class="bc lit fx" data-fix="ai" role="button" tabindex="0"><span class="k">쓰는 AI<span class="fix">바꾸기</span></span><div class="v"><span class="state off">구독 없음</span></div><div class="sub">자료 쌓기·정리·열람은 지금부터 됩니다. 첫 질문 3회는 라이블리 계정으로 열어 드립니다.</div></div>`
+      : S.aiConnected ? `<div class="bc lit fx" data-fix="ai" role="button" tabindex="0"><span class="k">쓰는 AI<span class="fix">바꾸기</span></span><div class="v"><span class="state on">${esc(S.ai)} · 내 구독</span></div><div class="sub">라이블리가 대신 결제하지 않습니다.${S.usage ? ` · 오늘 사용 ${S.usage}회` : ''}</div></div>`
+      : `<div class="bc lit fx" data-fix="ai" role="button" tabindex="0"><span class="k">쓰는 AI<span class="fix">바꾸기</span></span><div class="v"><span class="state wait">${esc(S.ai)} — 연결 중</span></div><div class="sub">연결되면 내 구독으로 세션이 돕니다. 라이블리가 대신 결제하지 않습니다.</div></div>`;
     const tally = ing.tally.length ? `<div class="tally">${ing.tally.map(([n, c]) => `<span class="t">${esc(n)} <b>${c}</b></span>`).join('')}</div>` : '';
     const libCard = !ing.total && !src.length ? `<div class="bc empty"><span class="k">자료함</span><div class="v"><span class="state off">비어 있음 — 자료 단계에서 채웁니다</span></div></div>`
       : ing.finished ? `<div class="bc lit fx" data-fix="upload" role="button" tabindex="0"><span class="k">자료함<span class="fix">더 넣기</span></span><div class="v"><span class="state on">지식 <b>${S.knowledge}</b>건 · 정리 끝</span></div>${tally}${S.knowledge > ing.total ? `<div class="sub">방금 답이 다시 쌓였어요.</div>` : ''}</div>`
@@ -812,7 +813,7 @@
   function livCards() {
     const c = [];
     if (S.ob.skipped && !S.ob.finished) c.push({ id: 'resume', p0: true, t: '처음 설정 이어서 하기', d: `${S.ob.doneSteps.length}/5 끝났어요. 남은 ${5 - S.ob.doneSteps.length}단계는 2분이면 됩니다.`, ok: '이어서 하기', go: '#/welcome' });
-    if (S.ai === 'Claude' && !S.aiConnected) c.push({ id: 'claude', p0: true, t: 'Claude 계정 연결', d: '연결해야 답이 내 구독으로 돕니다. 1분이면 됩니다.', ok: '연결하기', go: '#/welcome' });
+    if (S.ai && S.ai !== '아직 없어요' && !S.aiConnected) c.push({ id: 'claude', p0: true, t: `${S.ai} 계정 연결`, d: '연결해야 답이 내 구독으로 돕니다. 1분이면 됩니다.', ok: '연결하기', go: '#/welcome' });
     if (S.ai && S.ai !== 'Claude' && !S.livDismissed.includes('noclaude')) c.push({ id: 'noclaude', p0: false, t: S.ai === '아직 없어요' ? '세션은 Claude 연결 후' : `${S.ai} 세션은 준비 중`, d: '자료 쌓기·정리·검색은 지금부터 됩니다. 준비되면 먼저 알려 드릴게요.', ok: '알림 받기' });
     if (S.conn.notion !== 'on' && !S.declined.includes('notion') && !S.livDismissed.includes('notion')) c.push({ id: 'notion', p0: false, t: '노션 연결', d: '회의록이 노션에 더 있는 것 같아요. 연결하면 다음 답부터 그것도 봅니다.', ok: '연결하기' });
     if (S.day >= 2 && !S.livDismissed.includes('invite') && !S.team) c.push({ id: 'invite', p0: false, t: '동료 초대', d: '동료를 부르면 팀의 기억이 됩니다. 초대받은 사람은 AI 구독이 없어도 보고 쓸 수 있어요.', ok: '초대 링크 복사' });
@@ -881,7 +882,7 @@
       <div class="home-main">
         <div class="composer" id="composer">
           <textarea id="homeIn" placeholder="${S.aiConnected ? `무엇이든 시켜보세요 — ${S.team ? '우리' : '내'} 자료 ${kn}건을 알고 답합니다` : (S.ai && S.ai !== 'Claude') ? `자료 정리·검색은 지금 됩니다 — 세션은 Claude 연결 후 · 체험 ${S.ob.freeLeft}회 남음` : 'Claude를 연결하면 내 자료를 알고 답합니다 — 리브가 안내해요'}"></textarea>
-          <div class="composer-bar"><button class="tool">${ic('clip')} 파일</button><button class="tool">${S.ai === 'Claude' ? 'Claude' : (S.ai || 'AI')} ${ic('chev', 'ic-sm')}</button>${S.terminal === 'yes' ? `<button class="tool">${ic('term')} 터미널로 열기</button>` : ''}<span class="cap">동시 ${running.length}/3</span><button class="btn btn-primary btn-sm send" id="homeSend">보내기</button></div>
+          <div class="composer-bar"><button class="tool">${ic('clip')} 파일</button><button class="tool">${S.ai || 'AI'} ${ic('chev', 'ic-sm')}</button>${S.terminal === 'yes' ? `<button class="tool">${ic('term')} 터미널로 열기</button>` : ''}<span class="cap">동시 ${running.length}/3</span><button class="btn btn-primary btn-sm send" id="homeSend">보내기</button></div>
         </div>
         <div class="sugs"><span class="k">이런 걸 시켜보세요</span>${sugs.map(([k, s]) => `<button class="sug" data-sug="${esc(s)}"><span class="kind">${esc(k)}</span>${esc(s)}</button>`).join('')}</div>
         <section class="zone"><div class="zone-h"><h4>진행 중인 일</h4><span class="n">${running.length + teamRows.length}</span><a class="btn-text sp" href="#/work">전체 보기 →</a></div>
@@ -893,7 +894,7 @@
         ${libLiveCardHTML(kn)}
         ${card ? livCardHTML(card) : `<div class="rc liv"><span class="k">${livFace(14)}리브</span><div class="v">지금 손볼 것이 없어요. 자료가 새로 생기면 알아서 정리하고, 이상하면 먼저 말을 걸게요.</div><div class="sub" style="margin-top:6px">오늘 한 일 · 아침 점검 · 새 자료 ${S.day >= 2 ? 3 : 0}건 갈래 배정${S.day >= 2 ? ' · 겹침 1쌍 발견' : ''}</div><div class="acts"><a class="btn btn-ghost btn-sm" href="#/liv">리브에게 부탁하기</a><a class="btn-text" href="#/liv" data-liv-view="wiki">리브가 만든 지식 →</a></div></div>`}
         <div class="rc"><span class="k">같이 쓰기</span><div class="v" style="font-size:13.5px">동료를 부르면 팀의 기억이 됩니다.${S.team ? ' 구성원: 윤(나) · 김 — 구독 없이 열람·편집 중' : ''}</div><div class="acts"><button class="btn btn-ghost btn-sm" data-act="invite2">${ic('link', 'ic-sm')} 초대 링크 복사</button>${S.team ? `<button class="btn-text" data-ws="team">어니스트AI 열기 →</button>` : `<span class="muted num" style="font-size:12.5px;align-self:center">${S.invitesLeft}장 남음</span>`}</div></div>
-        <div class="rc usage-c"><span class="k">이번 달 사용 <button class="btn-text k-link" data-act="usage">자세히 →</button></span><div class="usage"><span>세션</span><b>${S.day >= 2 ? '4시간' : '0.2시간'} / 120</b><span>동시 세션</span><b>${running.length} / 3</b><span>Claude 사용</span><b>${S.usage}회 <button class="btn-text k-link" data-ask-liv="이번 달 Claude 사용량 얼마나 돼?">리브에게 묻기</button></b></div><div class="fine">베타 무료 · 정식 출시 후 유료 플랜으로 바뀝니다(정가 상당액 표기 예정). 쓰던 AI 구독은 그대로 필요합니다. <button class="btn-text k-link" data-act="plan">플랜 안내 →</button></div></div>
+        <div class="rc usage-c"><span class="k">이번 달 사용 <button class="btn-text k-link" data-act="usage">자세히 →</button></span><div class="usage"><span>세션</span><b>${S.day >= 2 ? '4시간' : '0.2시간'} / 120</b><span>동시 세션</span><b>${running.length} / 3</b><span>${esc(S.ai || 'AI')} 사용</span><b>${S.usage}회 <button class="btn-text k-link" data-ask-liv="이번 달 AI 사용량 얼마나 돼?">리브에게 묻기</button></b></div><div class="fine">베타 무료 · 정식 출시 후 유료 플랜으로 바뀝니다(정가 상당액 표기 예정). 쓰던 AI 구독은 그대로 필요합니다. <button class="btn-text k-link" data-act="plan">플랜 안내 →</button></div></div>
       </aside></div>`;
     bindLivCards(page); $$('[data-act="invite2"]', page).forEach((b) => b.addEventListener('click', inviteLink));
     $$('[data-ws]', page).forEach((b) => b.addEventListener('click', () => switchWs(b.dataset.ws)));
@@ -1027,7 +1028,7 @@
     g.ask = [
       it('ask', '지금 자료함이 어떻게 나뉘어 있어?', `${T.map((t) => `${t[0]} ${t[1]}`).join(' · ')}처럼 갈래와 건수를 말해 줘요`, onFiles),
       it('ask', '어제 뭐 정리했어?', '리브가 손댄 것과 그 이유를 시간순으로', '일지'),
-      it('ask', '이번 달 Claude 사용량 얼마나 돼?', `내 구독으로 ${S.usage}회 — 리브가 쓴 몫도 포함해서`, S.aiConnected ? 'Claude 연결됨' : '연결 후'),
+      it('ask', '이번 달 AI 사용량 얼마나 돼?', `내 구독으로 ${S.usage}회 — 리브가 쓴 몫도 포함해서`, S.aiConnected ? `${S.ai || 'AI'} 연결됨` : '연결 후'),
     ];
     g.undo = [
       it('undo', '방금 정한 것 되돌려 줘', (S.decisions.slice(-1)[0] ? `최근: ${S.decisions.slice(-1)[0]}` : '리브가 정한 게 생기면') + ' — 그것만 되돌려요', `정한 것 ${S.decisions.length}`),
