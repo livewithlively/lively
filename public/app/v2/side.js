@@ -461,12 +461,16 @@ function navArrow(dir, on, run) {
 }
 function navRow() {
     const st = hooks.navState ? hooks.navState() : { back: true, forward: true };
-    // ⌘/Ctrl 은 플랫폼 표기를 따른다 — 맥이 아닌데 ⌘K 라고 적어 두면 눌러도 안 열린다(같은 키를 두 이름으로 배우게 된다).
+    // 표기는 플랫폼을 따른다 — 맥이 아닌데 ⌘K 라고 적어 두면 눌러도 안 열린다(같은 키를 두 이름으로 배우게 된다).
+    //  맥이 아니면 **Alt+K** 를 적는다: Ctrl+K 도 먹지만 터미널이 포커스면 안 먹는다(그건 셸의 kill-line 이다).
+    //  '거의 되는 키'를 적어 두면 안 될 때 고장으로 읽히므로, 화면에는 **어디서나 되는 쪽**을 적는다.
     const mac = /mac|iphone|ipad/i.test(navigator.platform || navigator.userAgent || '');
     return el('div', { class: 'v2-side-nav' }, navArrow('back', st.back, hooks.onBack), navArrow('fwd', st.forward, hooks.onForward), el('button', {
-        class: 'v2-omnib', type: 'button', title: '통합검색 — 지식 · 프로젝트 · 자료 · 세션 · 세션 이력을 한 번에',
+        class: 'v2-omnib', type: 'button',
+        title: mac ? '통합검색 — 지식 · 프로젝트 · 자료 · 세션 · 세션 이력을 한 번에 (⌘K)'
+            : '통합검색 — 지식 · 프로젝트 · 자료 · 세션 · 세션 이력을 한 번에 (Alt+K, 터미널 밖에서는 Ctrl+K 도)',
         'aria-label': '통합검색 열기', onclick: () => hooks.onSearch?.()
-    }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-omnib-ic', 'aria-hidden': 'true' }, sv('circle', { cx: '11', cy: '11', r: '6.5' }), sv('path', { d: 'M16 16l4.5 4.5' })), el('span', { class: 'v2-omnib-t', text: '검색' }), el('kbd', { class: 'v2-omnib-k', text: mac ? '⌘K' : 'Ctrl K' })));
+    }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-omnib-ic', 'aria-hidden': 'true' }, sv('circle', { cx: '11', cy: '11', r: '6.5' }), sv('path', { d: 'M16 16l4.5 4.5' })), el('span', { class: 'v2-omnib-t', text: '검색' }), el('kbd', { class: 'v2-omnib-k', text: mac ? '⌘K' : 'Alt K' })));
 }
 /** 화살표 둘의 켜짐만 갱신한다 — 이동할 때마다 사이드바를 통째로 다시 그리지 않게(markFind 와 같은 규칙). */
 export function markNav(st) {

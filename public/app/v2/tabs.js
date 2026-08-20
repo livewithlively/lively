@@ -315,14 +315,16 @@ export function createTabs(centerHost, asideHost, hooks) {
         // ── 탭이 많아지면(원준 2026-08-20 "이름이 제대로 안 보인다") ──────────────────
         //  ① 탭은 일정 폭 아래로는 줄지 않는다(CSS min-width) → 글자가 뭉개지는 대신 **줄이 굴러간다**.
         //  ② 활성 탭은 더 넓게 — 지금 보고 있는 것만은 늘 읽혀야 한다.
-        //  ③ 그래도 다 안 보이므로 오른쪽 끝에 **[모든 탭]** 을 둔다: 전문 이름·상태로 찾아 누르고 거기서 닫을 수도 있다.
+        //  ③ 그래도 다 안 보이므로 **[모든 탭]** 을 둔다: 전문 이름·상태로 찾아 누르고 거기서 닫을 수도 있다.
         //     (브라우저 탭의 ⌄ 목록과 같은 문법 — 줄 밖으로 밀린 탭이 사라진 것처럼 보이지 않게 하는 장치다.)
+        //     자리는 **줄 맨 왼쪽**(상민님 2026-08-20). 오른쪽 끝은 데스크톱에선 창 버튼(최소화·닫기)과 끌 손잡이가
+        //     쓰는 자리라, 목록 단추를 거기 두면 창 조작부와 화면 조작부가 한 덩어리로 붙어 보인다.
         const menuBtn = el('button', {
             class: 'v2-tab-menu', type: 'button', title: '열린 탭 전체를 목록으로 봅니다',
             'aria-label': `열린 탭 ${tabs.length}개 — 목록`,
             onclick: (e) => openTabMenu(e.currentTarget),
         }, el('span', { class: 'n', text: String(tabs.length) }), sv('svg', { viewBox: '0 0 24 24', class: 'v2-tab-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M6 9l6 6 6-6' })));
-        strip.replaceChildren(...kids, menuBtn);
+        strip.replaceChildren(menuBtn, ...kids);
         // 탭이 줄 폭을 넘치면(모바일 상단 바·좁은 창) 활성 탭이 보이게 가로로만 굴린다 — 세로는 건드리지 않는다(nearest = 이미 보이면 0).
         const on = strip.querySelector('.v2-tab.on');
         if (on && strip.scrollWidth > strip.clientWidth)

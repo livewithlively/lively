@@ -258,10 +258,24 @@ export function omniClose() {
     document.removeEventListener('keydown', onEsc, true);
 }
 export function omniIsOpen() { return !!box; }
-/** ⌘K(맥)·Ctrl+K — 어디서든. 글자를 치던 중이면(입력칸·편집영역) 가로채지 않는다. */
+// ── 여는 키 ────────────────────────────────────────────────────────────────
+//  맥 ⌘K · 그 밖 Ctrl+K, 그리고 **Alt+K**(둘 다).
+//  왜 Alt+K 가 더 있나 — 터미널이 포커스면 Ctrl+K 를 셸이 못 받는다(상민님 2026-08-20 윈도우 앱 신고).
+//   ① 터미널은 iframe 이라 그 안의 키는 이 문서에 아예 안 온다.
+//   ② 온다 해도 xterm 이 Ctrl+K 를 PTY 로 보낸다 — 그건 readline `kill-line`(커서~줄끝 삭제)이라 **뺏으면 안 된다**.
+//  그래서 터미널 프레임은 **Alt+K 만** 가로채 이 창에 넘긴다(web/standalone/terminal.ts) — 터미널에서 Alt+K 는
+//  ESC k(meta-k)이고 readline 기본 바인딩이 없어 잃는 것이 없다. 맥은 ⌘ 가 애초에 PTY 로 안 가므로 ⌘K 그대로.
+export function isOmniChord(e) {
+    if (e.key !== 'k' && e.key !== 'K')
+        return false;
+    if (e.altKey)
+        return !e.metaKey && !e.ctrlKey; // Alt+K — 터미널이 포커스여도 되는 길
+    return (e.metaKey || e.ctrlKey) && !e.shiftKey; // ⌘K / Ctrl+K
+}
+/** 어디서든 여는 키 + **자식 프레임이 넘겨 준 요청**. 글자를 치던 중이면(입력칸) 그 칸의 키가 우선이다. */
 export function bindOmniKey() {
     document.addEventListener('keydown', (e) => {
-        if (!(e.metaKey || e.ctrlKey) || e.altKey || (e.key !== 'k' && e.key !== 'K'))
+        if (!isOmniChord(e))
             return;
         e.preventDefault();
         e.stopPropagation(); // 같은 문서의 위키 ⌘K(web/wiki-doc.ts)와 겹쳐 두 창이 뜨지 않게 — 캡처에서 끊는다
@@ -270,4 +284,19 @@ export function bindOmniKey() {
         else
             omniOpen();
     }, true);
+    // 프레임(터미널)에서 넘어온 요청 — **같은 오리진만**. 우리 프레임은 전부 같은 오리진이라 이 한 줄이면
+    //  프레임이 늘어나도 각자 넘기기만 하면 된다(셸에 프레임 목록을 두지 않는다).
+    window.addEventListener('message', (ev) => {
+        if (ev.origin !== location.origin)
+            return;
+        const m = ev.data;
+        if (!m || m.type !== OMNI_MSG)
+            return;
+        if (box)
+            omniClose();
+        else
+            omniOpen();
+    });
 }
+/** 프레임 → 셸 '통합검색 열어라' 신호. 프레임 쪽(web/standalone/terminal.ts)도 이 문자열을 쓴다. */
+export const OMNI_MSG = 'lively-omni-open';
