@@ -24,6 +24,7 @@
   --shadow-2:0 12px 32px rgba(21,35,59,.12);
   --shadow-launch:0 1px 2px rgba(21,35,59,.04), 0 14px 40px -24px rgba(21,35,59,.16);
   --topbar-h:52px;
+  --room-w:1120px;   /* 온보딩 룸 가운데 기둥 — 질문과 장부를 나란히 세우는 폭 */
 }
 * { box-sizing:border-box; }
 html, body { margin:0; padding:0; height:100%; }
@@ -158,8 +159,11 @@ input.in:focus-visible, textarea.in:focus-visible { outline:2px solid var(--blue
 /* ═══════════════════════════════════════════════════════════════════════════
    화면 2 · 온보딩 룸 (#/welcome) — 흰 판, 머리줄은 조용히
    ═══════════════════════════════════════════════════════════════════════════ */
-.room { height:100vh; display:flex; flex-direction:column; padding:12px 18px 16px; gap:10px; background:var(--bg); }
-.room-head { flex:none; display:flex; align-items:center; gap:14px; min-height:34px; }
+/* 온보딩 룸 — **풀스크린으로 펼치지 않는다**(원준님 2026-08-20). 화면 끝까지 늘리면 질문과 오른쪽 장부가
+   양 끝으로 밀려 서로 남남처럼 보인다. 가운데 기둥(1120)에 둘을 나란히 세워 한 덩어리로 읽히게 한다. */
+.room { height:100vh; display:flex; flex-direction:column; padding:12px 0 16px; gap:10px; background:var(--bg); }
+.room-head { flex:none; display:flex; align-items:center; gap:14px; min-height:34px;
+  width:100%; max-width:var(--room-w); margin:0 auto; padding:0 24px; }
 .room-head .wordmark { font-size:17px; }
 .room-head .wordmark .room-sub { font-size:13.5px; font-weight:600; color:var(--ink-sub); letter-spacing:0; }
 .room-prog { margin-left:auto; display:flex; align-items:center; gap:12px; }
@@ -168,7 +172,12 @@ input.in:focus-visible, textarea.in:focus-visible { outline:2px solid var(--blue
 .dots li { width:7px; height:7px; border-radius:50%; background:var(--line-net); transition:background .3s ease, transform .3s var(--ease); }
 .dots li.done { background:var(--mint-deep); }
 .dots li.now { background:var(--blue); transform:scale(1.3); }
-.room-body { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0,1fr) minmax(280px,332px); gap:14px; }
+/* 질문 칸과 장부가 **같은 높이에서 시작**한다(align-items:start) — 하나는 가운데, 하나는 위에 붙어 있으면
+   둘이 따로 논다. 세로 위치는 이 격자가 통째로 잡는다(safe center — 내용이 길어지면 위에서 시작해 안 잘린다). */
+.room-body { flex:1; min-height:0; overflow-y:auto; display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(272px,316px); gap:28px;
+  width:100%; max-width:var(--room-w); margin:0 auto; padding:0 24px 20px;
+  align-content:safe start; align-items:start; padding-top:clamp(16px,6vh,54px); }
 
 /* 대화(작업 일지) — #/liv 페이지가 쓴다 */
 .journal { min-height:0; display:flex; flex-direction:column; border:1px solid var(--line); border-radius:14px; overflow:hidden; background:var(--bg); }
@@ -246,7 +255,8 @@ input.in:focus-visible, textarea.in:focus-visible { outline:2px solid var(--blue
 .src-grid { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr); gap:10px; margin-top:10px; }
 .src-col { display:flex; flex-direction:column; gap:8px; }
 .conn { border:1px solid var(--line); border-radius:10px; padding:10px 12px; display:flex; align-items:center; gap:10px; background:var(--bg); }
-.conn .logo { width:26px; height:26px; border-radius:8px; display:grid; place-items:center; background:var(--bg-tint); border:1px solid var(--line); font-weight:800; font-size:12px; color:var(--ink-sub); flex:none; }
+.conn .logo { width:28px; height:28px; border-radius:8px; display:grid; place-items:center; background:var(--bg); border:1px solid var(--line); flex:none; }
+.conn .logo .blogo { width:16px; height:16px; }
 .conn .t { font-size:13.5px; font-weight:700; }
 .conn .s { font-size:12px; color:var(--muted); margin-top:1px; }
 .conn .btn { margin-left:auto; }
@@ -264,7 +274,7 @@ input.in:focus-visible, textarea.in:focus-visible { outline:2px solid var(--blue
 .compose textarea:focus-visible { outline:2px solid var(--mint-deep); outline-offset:1px; border-color:transparent; }
 
 /* 오른쪽 — 만들어지는 내 워크스페이스 (답할수록 채워지는 장부) */
-.build { min-height:0; overflow:auto; display:flex; flex-direction:column; gap:8px; }
+.build { display:flex; flex-direction:column; gap:8px; }   /* 내용만큼만 — 빈 칸이 세로로 늘어지지 않게 */
 .build-h { display:flex; align-items:center; gap:8px; padding:2px 4px 0; }
 .build-h b { display:inline-flex; align-items:center; gap:7px; font-size:13px; font-weight:700; letter-spacing:-.01em; }
 .build-h .k { margin-left:auto; }
@@ -487,10 +497,10 @@ main.page { flex:1; width:100%; max-width:1160px; margin:0 auto; padding:26px 28
    다만 아래 여백을 위보다 크게 잡아 광학적으로 살짝 위에 앉힌다 — 정확한 정중앙은 아래로 처져 보인다.
    ⚠ 세로 정렬은 align-items 가 아니라 .scene 의 margin:auto 로 한다. 진단·업로드처럼 장면이 길어지면
    align-items:center 는 위쪽을 잘라 먹지만(스크롤로 못 올라간다) margin:auto 는 자연히 위에서 시작한다. */
-.stage { min-width:0; min-height:0; overflow-y:auto; display:flex; justify-content:center;
-  padding:clamp(20px,5vh,56px) clamp(18px,4.5vw,56px) clamp(56px,13vh,132px); }
-.scene { margin:auto; width:100%; max-width:640px; display:flex; flex-direction:column; align-items:center; text-align:center; animation:sc-in .36s cubic-bezier(.16,.84,.32,1) both; }
-.scene.wide { max-width:780px; }
+/* 스테이지는 더 이상 스크롤·세로정렬을 맡지 않는다 — 그 몫은 .room-body 로 올라갔다. */
+.stage { min-width:0; display:flex; justify-content:center; padding:0; }
+.scene { margin:0 auto; width:100%; max-width:600px; display:flex; flex-direction:column; align-items:center; text-align:center; animation:sc-in .36s cubic-bezier(.16,.84,.32,1) both; }
+.scene.wide { max-width:min(780px, 100%); }   /* 룸이 가운데 기둥으로 좁아졌다 — 칸을 넘지 않게 100% 로 잠근다 */
 .scene.left { align-items:stretch; text-align:left; }
 @keyframes sc-in { from { opacity:0; transform:translateY(16px); } }
 .sc-leave { opacity:0; transform:translateY(-12px); transition:opacity .13s ease-in, transform .13s ease-in; }
