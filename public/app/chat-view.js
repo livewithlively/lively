@@ -19,6 +19,7 @@
 //  · innerHTML 을 쓰지 않는다(모델 출력을 그린다 — 마크다운도 textContent 기반 렌더러 lib/markdown.ts).
 //  클래스 이름은 리브 시절의 `livc-*` 를 그대로 둔다(35-liv.css 가 이미 그 이름으로 그린다 — 접두어를 바꾸면 얻는 게 없다).
 import { el, renderMarkdown, toast } from './core.js';
+import { toolGroupSummary } from './chat-tool-group.js';
 // ── 조각 렌더 ────────────────────────────────────────────────────────────────────────────
 /** 작업 슬립 — 이 화면의 시그니처. 상태는 색이 아니라 표식과 글자로(●하는 중 / ✓했음 / ✕실패). */
 function actionCard(lab, input) {
@@ -259,7 +260,7 @@ export function createChatView(host, opts) {
             t.work.append(node);
     }
     /**
-     * desktop — 연속된 도구 사용을 **한 줄**로 접는다("도구 N개 사용함 ›"). 도구 이력이 슬립 한 장씩 늘어서면 대화가 슬립에
+     * desktop — 연속된 도구 사용을 **한 줄**로 접는다("라이블리 5개 · 명령 2개 사용함 ›"). 도구 이력이 슬립 한 장씩 늘어서면 대화가 슬립에
      * 묻힌다(실측 지적: "너무 많이 뜬다"). 글(text)이 끼면 거기서 묶음이 끊기고 새 묶음이 시작된다 — 무엇을 하고 무엇을 말했는지의
      * 순서는 그대로 남는다. 펼치면 슬립이 그대로 있다(원문은 버리지 않는다).
      */
@@ -282,20 +283,22 @@ export function createChatView(host, opts) {
         if (!group)
             return;
         const cards = Array.from(group.querySelectorAll(':scope > .dt-tools-body > .livc-slip'));
-        const n = cards.length;
-        const running = cards.filter((c) => c.querySelector('.livc-slip-run'));
-        const errs = cards.filter((c) => c.classList.contains('livc-slip-err')).length;
+        // 문구 계산은 DOM 없는 chat-tool-group.ts 가 쥔다(#1822) — 여기서는 DOM → 항목으로 옮기고 표식만 칠한다.
+        const items = cards.map((c) => ({
+            label: c.dataset.label || '도구',
+            detail: c.dataset.detail || '',
+            running: !!c.querySelector('.livc-slip-run'),
+            err: c.classList.contains('livc-slip-err'),
+        }));
         const t = group.querySelector('.dt-tools-t');
         const mark = group.querySelector('.dt-tools-mark');
-        const one = (c) => `${c.dataset.label || '도구'}${c.dataset.detail ? ' ' + c.dataset.detail : ''}`;
-        if (running.length) {
-            const cur = running[running.length - 1];
-            t.textContent = n === 1 ? `${one(cur)} 실행 중` : `${cur.dataset.label || '도구'} 실행 중 · ${n}개째`;
+        t.textContent = toolGroupSummary(items);
+        const errs = items.filter((it) => it.err).length;
+        if (items.some((it) => it.running)) {
             mark.textContent = '●';
             mark.className = 'dt-tools-mark run';
         }
         else {
-            t.textContent = (n === 1 ? `${one(cards[0])} 사용함` : `도구 ${n}개 사용함`) + (errs ? ` · 실패 ${errs}` : '');
             mark.textContent = errs ? '✕' : '✓';
             mark.className = 'dt-tools-mark' + (errs ? ' err' : ' ok');
         }
