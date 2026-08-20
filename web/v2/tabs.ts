@@ -161,6 +161,11 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
   }
   function beginDrag(t: ShellTab, node: HTMLElement, e: PointerEvent): void {
     if (drag || editLocked() || t.fixed || e.button !== 0 || e.pointerType === 'touch') return;
+    // ⚠ 탭 안의 단추(닫기 ×) 위에서 누른 것은 **끌기가 아니다**. 여기서 걸러 내지 않으면 pointerdown 이 탭으로
+    //  버블링해 끌기가 시작되고, `setPointerCapture` 가 그 뒤의 click 을 탭 노드로 가져간다 — 그래서 ×의 onclick 이
+    //  영영 안 불리고 **눌러도 탭이 안 닫혔다**(원준 2026-08-20 신고: 지식 탭 × 가 먹지 않음). 이름 편집칸이
+    //  `onpointerdown: stopPropagation` 으로 자기를 지키는 것과 같은 방어를, 단추 쪽은 여기 한 곳에서 한다.
+    if ((e.target as HTMLElement | null)?.closest('button')) return;
     const movable = tabs.filter((x) => !x.fixed);
     const els = movable.map((x) => (strip as HTMLElement).querySelector('[data-tab="' + x.id + '"]') as HTMLElement);
     if (els.some((n) => !n)) return;
