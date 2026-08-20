@@ -191,9 +191,8 @@ export async function bootV2(): Promise<void> {
   if (boot && tabsApi.find(boot)) { const hit = tabsApi.find(boot)!; hit.route = boot; tabsApi.activate(hit); }
   else {
     const saved = tabsApi.initial();
-    // 저장된 활성 탭이 **고정 홈**이면 그 탭을 딥링크로 끌고 가지 않는다 — 홈은 홈으로 두고 새 탭을 연다.
-    const t = boot && (!saved || saved.fixed) ? tabsApi.add(boot, { activate: false }) : (saved || tabsApi.add(boot || '#/', { activate: false }));
-    if (boot && !t.fixed) t.route = boot;
+    const t = saved || tabsApi.add(boot || '#/', { activate: false });
+    if (boot) t.route = boot;
     tabsApi.activate(t);
   }
   drawSide();
@@ -330,13 +329,16 @@ async function onHash(): Promise<void> {
   if (hop) inTabHops--;
   const other = tabsApi.find(hash);
   if (other && other !== cur) { tabsApi.activate(other); return; }   // 같은 화면(같은 세션·프로젝트)은 그 탭으로 — 두 번 그리지 않는다
-  // 새 탭에서 여는 세 경우(원준 2026-08-20):
+  // ⓪ **홈에서 출발하면 그 자리에서 간다**(상민님 2026-08-20) — 홈은 [새 작업]이 새 탭으로 여는 **빈 탭**이라,
+  //  거기서 연 화면이 그 탭이 된다(브라우저 새 탭 페이지 문법). 아래 ①·②보다 먼저 본다: 안 그러면 [새 작업]을
+  //  누를 때마다 쓰지 않은 홈 탭이 하나씩 남는다.
+  //  새 탭에서 여는 두 경우(원준 2026-08-20):
   //  ① **세션으로 간다** — 여러 세션이 탭으로 나란히 살아야 한다. 지금 탭을 덮어쓰면 보던 세션이 사라진다.
-  //  ② **홈에서 출발** — 홈 탭은 늘 홈이다(고정). 홈이 다른 화면으로 변신하면 '못 닫는 홈'이 무의미해진다.
-  //  ③ **세션에서 출발** — 세션 탭도 세션으로 남는다. 안 그러면 사이드바에서 프로젝트 한 번 눌렀다고
+  //  ② **세션에서 출발** — 세션 탭도 세션으로 남는다. 안 그러면 사이드바에서 프로젝트 한 번 눌렀다고
   //     열어 둔 대화가 통째로 사라진다(실측: dev 에서 '안뇽' 세션 탭이 프로젝트로 바뀌어 없어졌다).
   //  나머지(프로젝트 → 프로젝트·앱 등)는 종전대로 그 탭 안에서 이동한다 — 클릭마다 탭이 불어나면 그것도 못 쓴다.
-  if (!hop && (routeKey(hash).startsWith('s:') || cur.fixed || routeKey(cur.route).startsWith('s:'))) { tabsApi.add(hash); return; }
+  const fromHome = routeKey(cur.route) === 'home';
+  if (!hop && !fromHome && (routeKey(hash).startsWith('s:') || routeKey(cur.route).startsWith('s:'))) { tabsApi.add(hash); return; }
   if (cur.chat) { cur.chat.destroy(); cur.chat = null; }   // 세션 화면을 떠나면 그 폴링·리스너를 끈다
   dropProjView(cur);                                       // 프로젝트 화면(#1757)의 리브 턴 폴링도
   cur.route = hash;
@@ -479,6 +481,9 @@ function drawSide(): void {
     onRenameSession: (id, label) => renameSessionEverywhere(id, label),
     // 보관(×) 뒤 — 그 세션은 이제 '지난 세션'이라 목록의 자리가 바뀐다. 서버가 정답이므로 다시 읽는다.
     onArchived: () => { void loadData().then(() => { drawSide(); tabsApi?.paint(); }); },
+    // [새 작업] — **늘 새 탭**에 홈을 연다. 이미 열린 홈 탭으로 되돌아가면(find→activate) 거기 쓰던 지시가 덮이고,
+    //  '새로 시작한다'는 이름과 동작이 어긋난다. 빈 홈 탭이 남으면 세션을 열 때 그 자리가 세션이 되어 정리된다.
+    onNewTask: () => { tabsApi?.add('#/'); },
   });
 }
 

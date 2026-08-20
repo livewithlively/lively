@@ -313,10 +313,9 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-tabs { display: flex; align-items: stretch; gap: 1px; height: 37px; padding: 0; border-bottom: 1px solid var(--line); background: #FAFBFC; flex: none; overflow-x: auto; scrollbar-width: none; }
 .v2-tabs::-webkit-scrollbar { display: none; }
 /* 탭이 많아도 글자가 뭉개지지 않게 — **바닥 폭**을 두고 그 아래로는 줄이 굴러간다(원준 2026-08-20).
-   활성 탭만 더 넓다: 지금 보고 있는 것 하나는 언제나 읽혀야 한다. 홈은 아이콘뿐이라 바닥이 필요 없다. */
+   활성 탭만 더 넓다: 지금 보고 있는 것 하나는 언제나 읽혀야 한다. */
 .v2-tab { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 9px 0 13px; border: 0; border-radius: 0; background: none; font-size: 12.5px; color: var(--muted-head, #7A88A3); cursor: pointer; max-width: 220px; min-width: 118px; white-space: nowrap; flex: 0 1 auto; user-select: none; }
 .v2-tab.on { min-width: 190px; }
-.v2-tab.fixed { min-width: 0; }
 .v2-tab:hover { background: rgba(255,255,255,.62); color: var(--ink); }
 .v2-tab.on { background: var(--bg, #fff); box-shadow: inset 0 2px 0 var(--blue); color: var(--ink); font-weight: 700; }
 .v2-tab.on:hover { background: var(--bg, #fff); }
@@ -1000,11 +999,9 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-newpop .v2-fine { margin: 0; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
 .v2-newmsg { margin: 0; font-size: 11.5px; color: var(--coral-text, #C4564A); }
 
-/* ── 탭 끌어 옮기기 + 고정 홈 + 이름 고치기(원준 2026-08-20) ── */
+/* ── 탭 끌어 옮기기 + 이름 고치기(원준 2026-08-20) ── */
 .v2-tab { position: relative; }
 /* 잡은 탭이 이웃 위로 떠야 한다(z-index) */
-.v2-tab.fixed { padding-right: 13px; }
-/* 닫기 단추가 없으니 오른쪽 여백을 글자 쪽으로 되돌린다 */
 /* 이웃이 미끄러지는 건 **끄는 동안만** — 평상시엔 탭이 움직일 일이 없다(transition 을 상시로 두면 첫 렌더가 흐른다). */
 .v2-tabs.dnd .v2-tab { transition: transform .16s cubic-bezier(.2,.7,.3,1); }
 .v2-tabs.dnd .v2-tab.dragging { transition: none; z-index: 5; cursor: grabbing;
