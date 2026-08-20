@@ -230,7 +230,7 @@
   background: var(--bg); font: inherit; font-size: 11.5px; font-weight: 600; color: var(--ink); text-align: center; }
 .pn-frow2 .pn-frename { flex: 1; text-align: left; font-size: 12.5px; }
 .pn-frename:focus { outline: none; box-shadow: 0 0 0 3px rgba(45,107,240,.14); }
-.pn-fcard.editing, .pn-frow2.editing { border-color: var(--blue); background: #F5F9FF; }
+.pn-fcard.editing, .pn-frow2.editing { border-color: var(--blue); background: var(--bg-tint); }
 @container (max-width: 300px) { .pn-fcol.k { display: none; } }
 
 /* 끌어 만든 사각형 — 파인더의 선택 상자. */
@@ -244,7 +244,7 @@
 .pn-ctx-i:hover { background: var(--bg-punch); }
 .pn-ctx-i:disabled { color: var(--muted-3); cursor: default; background: none; }
 .pn-ctx-i.danger { color: var(--danger); }
-.pn-ctx-i.danger:hover { background: #FDECEA; }
+.pn-ctx-i.danger:hover { background: var(--danger-bg); }
 .pn-ctx-sep { height: 1px; margin: 4px 6px; background: var(--line-row); }
 
 /* ══ 지식 · 할 일 · 개요 · 타임라인 ══════════════════════════════════════════ */
@@ -253,8 +253,8 @@
 .pn-knrow:hover { background: var(--bg-punch); }
 .pn-knrow svg { color: var(--muted-2); }
 .pn-knrow .n { min-width: 0; flex: 1; }
-.pn-knrel { flex: none; font-size: 10.5px; padding: 1px 6px; border-radius: 999px; background: #EEF2F8; color: var(--muted-head); }
-.pn-knrel.prod { background: #E8F8F2; color: var(--mint-deep); }
+.pn-knrel { flex: none; font-size: 10.5px; padding: 1px 6px; border-radius: 999px; background: var(--gray-bg); color: var(--muted-head); }
+.pn-knrel.prod { background: var(--ok-bg); color: var(--mint-deep); }
 
 .pn-trow { display: flex; align-items: flex-start; gap: 9px; padding: 7px 9px; border-radius: 8px; font-size: 12.5px; }
 .pn-trow:hover { background: var(--bg-punch); }
@@ -269,7 +269,7 @@
 .pn-md h1, .pn-md h2, .pn-md h3 { margin: 18px 0 7px; line-height: 1.3; }
 .pn-md h1 { font-size: 18px; } .pn-md h2 { font-size: 15.5px; } .pn-md h3 { font-size: 14px; }
 .pn-md p, .pn-md ul, .pn-md ol { margin: 0 0 10px; }
-.pn-md code { font-size: 12px; background: #F4F6FA; padding: 1px 4px; border-radius: 4px; }
+.pn-md code { font-size: 12px; background: var(--gray-bg); padding: 1px 4px; border-radius: 4px; }
 /* 타임라인 칸 = 그 세션의 발자취 위젯(web/timeline.ts) 통째. 위젯이 [머리 바 + 자기 스크롤]을 이미 갖고 있으니
    여기서는 높이만 내주고 스크롤은 겹치지 않게 둔다 — 겉과 속이 둘 다 스크롤하면 휠이 어디로 갈지 사람이 못 읽는다. */
 .pn-tl { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
