@@ -297,7 +297,11 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
    아이콘(집·말풍선·폴더)은 그대로 두되 **아이콘 색이 곧 상태**다(.st-busy/wait/done). */
 .v2-tabs { display: flex; align-items: stretch; gap: 1px; height: 37px; padding: 0; border-bottom: 1px solid var(--line); background: #FAFBFC; flex: none; overflow-x: auto; scrollbar-width: none; }
 .v2-tabs::-webkit-scrollbar { display: none; }
-.v2-tab { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 9px 0 13px; border: 0; border-radius: 0; background: none; font-size: 12.5px; color: var(--muted-head, #7A88A3); cursor: pointer; max-width: 210px; min-width: 0; white-space: nowrap; flex: 0 1 auto; user-select: none; }
+/* 탭이 많아도 글자가 뭉개지지 않게 — **바닥 폭**을 두고 그 아래로는 줄이 굴러간다(원준 2026-08-20).
+   활성 탭만 더 넓다: 지금 보고 있는 것 하나는 언제나 읽혀야 한다. 홈은 아이콘뿐이라 바닥이 필요 없다. */
+.v2-tab { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 9px 0 13px; border: 0; border-radius: 0; background: none; font-size: 12.5px; color: var(--muted-head, #7A88A3); cursor: pointer; max-width: 220px; min-width: 118px; white-space: nowrap; flex: 0 1 auto; user-select: none; }
+.v2-tab.on { min-width: 190px; }
+.v2-tab.fixed { min-width: 0; }
 .v2-tab:hover { background: rgba(255,255,255,.62); color: var(--ink); }
 .v2-tab.on { background: var(--bg, #fff); box-shadow: inset 0 2px 0 var(--blue); color: var(--ink); font-weight: 700; }
 .v2-tab.on:hover { background: var(--bg, #fff); }
@@ -993,3 +997,21 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-tab-in { width: 150px; max-width: 46vw; min-width: 90px; height: 20px; border: 1px solid var(--blue); border-radius: 5px;
   padding: 0 5px; font: inherit; font-size: 12.5px; background: var(--bg, #fff); color: var(--ink); }
 .v2-tab-in:focus { outline: none; box-shadow: 0 0 0 3px rgba(45, 107, 240, .12); }
+
+/* [모든 탭] — 줄 오른쪽 끝에 붙어 있는 목록 단추(줄이 굴러가도 늘 보이게 sticky). */
+.v2-tab-menu { position: sticky; right: 0; z-index: 3; display: inline-flex; align-items: center; gap: 3px; height: 36px; padding: 0 9px; border: 0; border-left: 1px solid var(--line); background: #FAFBFC; font: inherit; font-size: 11.5px; color: var(--muted-head, #7A88A3); cursor: pointer; flex: none; }
+.v2-tab-menu:hover { color: var(--blue); }
+.v2-tab-menu .n { font-variant-numeric: tabular-nums; font-weight: 600; }
+.v2-tabpop { width: 320px; max-width: 86vw; padding: 8px; }
+.v2-tabpop-h { margin: 2px 4px 6px; font-size: 11.5px; color: var(--muted); }
+.v2-tabpop-find { width: 100%; height: 28px; margin-bottom: 6px; padding: 0 9px; border: 1px solid var(--line-net); border-radius: 8px; font: inherit; font-size: 12.5px; background: var(--bg, #fff); color: var(--ink); }
+.v2-tabpop-find:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
+.v2-tabpop-list { max-height: 52vh; overflow: auto; display: flex; flex-direction: column; gap: 1px; }
+.v2-tabpop-row { display: flex; align-items: center; gap: 2px; border-radius: 8px; }
+.v2-tabpop-row:hover { background: var(--bg-tint, #F6FAFF); }
+.v2-tabpop-row.on { background: var(--bg-tint-2, #EEF5FF); }
+.v2-tabpop-row .go { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 7px 8px; border: 0; background: none; font: inherit; font-size: 12.5px; color: var(--ink); text-align: left; cursor: pointer; }
+.v2-tabpop-row .go .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v2-tabpop-row.on .go { font-weight: 700; }
+.v2-tabpop-row .x { flex: none; width: 24px; height: 24px; margin-right: 4px; border: 0; background: none; border-radius: 6px; color: var(--muted-2); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.v2-tabpop-row .x:hover { background: var(--bg-punch, #FDECEC); color: var(--ink); }
