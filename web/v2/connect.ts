@@ -93,7 +93,7 @@ export async function renderConnect(host: HTMLElement): Promise<void> {
   }
   paint();
 
-  host.replaceChildren(el('div', { class: 'v2-center v2-connect' },
+  host.replaceChildren(el('div', { class: 'v2-wide v2-connect' },
     el('h1', { class: 'v2-title', text: '외부 앱 연결' }),
     el('p', { class: 'v2-desc' }, ...uiText('AI가 내 계정으로 쓸 수 있는 앱이에요. 연결은 **나에게만** 적용되고 팀에는 공유되지 않습니다.')),
     el('div', { class: 'cn-top' }, sum, search),
@@ -186,7 +186,7 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
       el('div', { class: 'cn-slack' }, slackChannelPolicyCard())));
   }
 
-  host.replaceChildren(el('div', { class: 'v2-center v2-connect-app' },
+  host.replaceChildren(el('div', { class: 'v2-wide v2-connect-app' },
     backLink(),
     el('div', { class: 'cn-head' },
       svcTile(svc.key, svc.label, st === 'on'),
@@ -198,13 +198,17 @@ export async function renderConnectApp(host: HTMLElement, key: string): Promise<
             : el('span', { text: '관리자가 등록해야 해요' })))),
     el('p', { class: 'v2-desc' }, ...uiText(svc.blurb)),
     el('div', { class: 'cn-acts' }, ...acts),
-    el('dl', { class: 'cn-facts' }, ...facts.flatMap(([k, val]) => [el('dt', { text: k }), el('dd', { text: val })])),
-    // 발급 방법 — CRED_KINDS 의 help·docUrl 을 그대로 읽는다. 토큰형인데 아직 연결 안 했을 때 가장 막히는 자리다.
-    ...(spec && (spec.help || spec.docUrl) && st !== 'on' ? [el('section', { class: 'cn-sec' },
-      el('div', { class: 'cn-sec-h' }, el('span', { class: 'v2-k', text: '토큰 발급 방법' })),
-      el('p', { class: 'cn-help' }, ...uiText(String(spec.help || ''))),
-      ...(spec.docUrl ? [el('a', { class: 'btn btn-ghost btn-sm', href: spec.docUrl, target: '_blank', rel: 'noopener noreferrer', text: '발급 페이지 열기 ↗' })] : []))] : []),
-    ...settings));
+    // 아래 절반은 **두 칸**이다(넓은 화면에서만 — 좁으면 CSS 가 한 칸으로 되돌린다): 왼쪽 = 이 연결의 사실과
+    //  발급 방법, 오른쪽 = 그 앱의 설정. 세로로 쌓으면 슬랙처럼 설정이 긴 앱은 사실 표가 화면 밖으로 밀린다.
+    el('div', { class: 'cn-body' },
+      el('div', { class: 'cn-col' },
+        el('dl', { class: 'cn-facts' }, ...facts.flatMap(([k, val]) => [el('dt', { text: k }), el('dd', { text: val })])),
+        // 발급 방법 — CRED_KINDS 의 help·docUrl 을 그대로 읽는다. 토큰형인데 아직 연결 안 했을 때 가장 막히는 자리다.
+        ...(spec && (spec.help || spec.docUrl) && st !== 'on' ? [el('section', { class: 'cn-sec' },
+          el('div', { class: 'cn-sec-h' }, el('span', { class: 'v2-k', text: '토큰 발급 방법' })),
+          el('p', { class: 'cn-help' }, ...uiText(String(spec.help || ''))),
+          ...(spec.docUrl ? [el('a', { class: 'btn btn-ghost btn-sm', href: spec.docUrl, target: '_blank', rel: 'noopener noreferrer', text: '발급 페이지 열기 ↗' })] : []))] : [])),
+      ...(settings.length ? [el('div', { class: 'cn-col' }, ...settings)] : []))));
 }
 
 function backLink(): HTMLElement {
