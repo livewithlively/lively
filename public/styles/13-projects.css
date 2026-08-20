@@ -106,7 +106,7 @@
 .pjv-flag-glyph { font-size: 16px; line-height: 1; }
 .pjv-flag-label { font-size: 15px; font-weight: 600; }
 .pjv-flag.urgent { color: var(--coral-text); }
-.pjv-flag.high { color: #E08A2B; }
+.pjv-flag.high { color: var(--warn-deep); }
 .pjv-flag.normal { color: var(--blue); }
 .pjv-flag.low { color: var(--muted-2); }
 

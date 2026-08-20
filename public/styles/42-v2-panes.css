@@ -30,7 +30,7 @@
    종전엔 셋이 한 띠 안에 있어서, 탭이 칸 폭을 넘기는 순간 ＋·접기까지 같이 밀려 화면 밖으로 나갔다
    (원준 2026-08-20 신고 — 곁칸 기본 폭 339px 에 부품 9개면 띠가 884px, ＋는 x=1918 로 칸 밖이었다).
    손잡이를 띠 밖에 두면 탭이 몇 개든 제자리다. 가려진 탭은 [모두 보기]에서 켜거나 거기서 뺀다. */
-.pn-tabbar { position: relative; flex: none; display: flex; align-items: stretch; height: 37px; background: #FAFBFC; border-bottom: 1px solid var(--line); }
+.pn-tabbar { position: relative; flex: none; display: flex; align-items: stretch; height: 37px; background: var(--gray-bg-2); border-bottom: 1px solid var(--line); }
 .pn-tabbar[hidden] { display: none; }
 .pn-tabbar.drop { background: var(--bg-punch); box-shadow: inset 0 -2px 0 var(--blue); }
 .pn-tabs { flex: 1; min-width: 0; display: flex; align-items: stretch; gap: 1px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
@@ -196,7 +196,7 @@
 .pn-fnote svg { flex: none; margin-top: 1px; color: var(--blue); }
 .pn-fnote p { margin: 0; flex: 1; font-size: 11.5px; line-height: 1.5; color: var(--muted-head); }
 .pn-fnote-x { flex: none; width: 18px; height: 18px; border: 0; border-radius: 5px; background: none; color: var(--muted-2); font-size: 11px; line-height: 1; cursor: pointer; }
-.pn-fnote-x:hover { background: #E3EDFB; color: var(--ink); }
+.pn-fnote-x:hover { background: var(--bg-tint-2); color: var(--ink); }
 
 .pn-fhead { flex: none; padding: 8px 12px 6px; display: flex; flex-direction: column; gap: 6px; }
 .pn-frow1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -227,10 +227,10 @@
 .pn-fbody { flex: 1; min-height: 0; overflow: auto; position: relative; padding: 2px 12px 16px; --pn-fsz: 110px; container-type: inline-size; }
 .pn-fgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--pn-fsz), 1fr)); gap: 10px; align-content: start; }
 .pn-fcard { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 8px 5px 9px; border: 1px solid transparent; border-radius: 10px; background: none; font: inherit; color: var(--ink); cursor: default; user-select: none; }
-.pn-fcard:hover { border-color: var(--line-net); background: #FBFCFE; }
-.pn-fcard.on { border-color: var(--blue); background: #EDF3FE; }
-.pn-fcard.drop-in { border-color: var(--blue); background: #DCE9FE; box-shadow: inset 0 0 0 1px var(--blue); }
-.pn-fic { width: 100%; aspect-ratio: 1 / .82; border: 1px solid var(--line); border-radius: 8px; background: #F7F9FC; display: flex; align-items: center; justify-content: center; overflow: hidden; color: var(--muted-2); }
+.pn-fcard:hover { border-color: var(--line-net); background: var(--bg-tint); }
+.pn-fcard.on { border-color: var(--blue); background: var(--bg-tint-2); }
+.pn-fcard.drop-in { border-color: var(--blue); background: var(--bg-punch); box-shadow: inset 0 0 0 1px var(--blue); }
+.pn-fic { width: 100%; aspect-ratio: 1 / .82; border: 1px solid var(--line); border-radius: 8px; background: var(--gray-bg); display: flex; align-items: center; justify-content: center; overflow: hidden; color: var(--muted-2); }
 .pn-fic img { width: 100%; height: 100%; object-fit: cover; }
 .pn-fic video { width: 100%; height: 100%; object-fit: cover; }
 /* 폴더는 채운 그림이라 카드 테두리·바탕이 필요 없다 — 그림 자체가 덩어리다. */
@@ -249,8 +249,8 @@
 .pn-flist { display: flex; flex-direction: column; gap: 1px; }
 .pn-frow2 { display: flex; align-items: center; gap: 8px; padding: 5px 7px; border: 1px solid transparent; border-radius: 7px; font-size: 12.5px; cursor: default; user-select: none; }
 .pn-frow2:hover { background: var(--bg-punch); }
-.pn-frow2.on { border-color: var(--blue); background: #EDF3FE; }
-.pn-frow2.drop-in { border-color: var(--blue); background: #DCE9FE; }
+.pn-frow2.on { border-color: var(--blue); background: var(--bg-tint-2); }
+.pn-frow2.drop-in { border-color: var(--blue); background: var(--bg-punch); }
 .pn-fname1 { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pn-fcol { flex: none; font-size: 11px; color: var(--muted); font-weight: 400; }
 .pn-fcol.k { width: 40px; } .pn-fcol.s { width: 54px; text-align: right; } .pn-fcol.d { width: 58px; text-align: right; }
@@ -259,7 +259,7 @@
   background: var(--bg); font: inherit; font-size: 11.5px; font-weight: 600; color: var(--ink); text-align: center; }
 .pn-frow2 .pn-frename { flex: 1; text-align: left; font-size: 12.5px; }
 .pn-frename:focus { outline: none; box-shadow: 0 0 0 3px rgba(45,107,240,.14); }
-.pn-fcard.editing, .pn-frow2.editing { border-color: var(--blue); background: #F5F9FF; }
+.pn-fcard.editing, .pn-frow2.editing { border-color: var(--blue); background: var(--bg-tint); }
 @container (max-width: 300px) { .pn-fcol.k { display: none; } }
 
 /* 끌어 만든 사각형 — 파인더의 선택 상자. */
@@ -273,7 +273,7 @@
 .pn-ctx-i:hover { background: var(--bg-punch); }
 .pn-ctx-i:disabled { color: var(--muted-3); cursor: default; background: none; }
 .pn-ctx-i.danger { color: var(--danger); }
-.pn-ctx-i.danger:hover { background: #FDECEA; }
+.pn-ctx-i.danger:hover { background: var(--danger-bg); }
 .pn-ctx-sep { height: 1px; margin: 4px 6px; background: var(--line-row); }
 
 /* ══ 지식 · 할 일 · 개요 · 타임라인 ══════════════════════════════════════════ */
@@ -282,8 +282,8 @@
 .pn-knrow:hover { background: var(--bg-punch); }
 .pn-knrow svg { color: var(--muted-2); }
 .pn-knrow .n { min-width: 0; flex: 1; }
-.pn-knrel { flex: none; font-size: 10.5px; padding: 1px 6px; border-radius: 999px; background: #EEF2F8; color: var(--muted-head); }
-.pn-knrel.prod { background: #E8F8F2; color: var(--mint-deep); }
+.pn-knrel { flex: none; font-size: 10.5px; padding: 1px 6px; border-radius: 999px; background: var(--gray-bg); color: var(--muted-head); }
+.pn-knrel.prod { background: var(--ok-bg); color: var(--mint-deep); }
 
 .pn-trow { display: flex; align-items: flex-start; gap: 9px; padding: 7px 9px; border-radius: 8px; font-size: 12.5px; }
 .pn-trow:hover { background: var(--bg-punch); }
@@ -298,9 +298,9 @@
 .pn-md h1, .pn-md h2, .pn-md h3 { margin: 18px 0 7px; line-height: 1.3; }
 .pn-md h1 { font-size: 18px; } .pn-md h2 { font-size: 15.5px; } .pn-md h3 { font-size: 14px; }
 .pn-md p, .pn-md ul, .pn-md ol { margin: 0 0 10px; }
-.pn-md code { font-size: 12px; background: #F4F6FA; padding: 1px 4px; border-radius: 4px; }
+.pn-md code { font-size: 12px; background: var(--gray-bg); padding: 1px 4px; border-radius: 4px; }
 /* 코드·표는 제 안에서 가로로 흐른다 — 칸(또는 창)을 밀어 본문 글줄이 잘리지 않게. */
-.pn-md pre { margin: 0 0 10px; padding: 10px 12px; border-radius: 8px; background: #F4F6FA; overflow-x: auto; }
+.pn-md pre { margin: 0 0 10px; padding: 10px 12px; border-radius: 8px; background: var(--gray-bg); overflow-x: auto; }
 .pn-md pre code { background: none; padding: 0; }
 .pn-md table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
 .pn-tl { overflow: auto; padding: 6px 12px 14px; }
@@ -391,7 +391,7 @@ webview.pn-webframe { display: flex; }
 .pn-ed-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
 .pn-ed-name { flex: 1; min-width: 0; font-size: 12.5px; }
 .pn-ed-pv { width: 100%; height: 100%; border: 0; background: var(--surface); }
-.pn-ed-img { width: 100%; height: 100%; object-fit: contain; background: #F7F9FC; }
+.pn-ed-img { width: 100%; height: 100%; object-fit: contain; background: var(--gray-bg); }
 .pn-ed-pre { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 12px 14px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6; color: var(--ink); white-space: pre-wrap; word-break: break-word; }
 /* 뷰어의 '무엇을 열까' 화면 — 드롭다운을 대신하는 목록(검색 + 종류·크기·시각) */
 .pn-ed-pick2 { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -399,7 +399,7 @@ webview.pn-webframe { display: flex; }
 .pn-ed-find:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
 .pn-ed-pick2 .pn-flist { flex: 1; min-height: 0; overflow: auto; padding: 0 8px 12px; }
 .pn-ed-pick2 .pn-frow2 { width: 100%; border: 1px solid transparent; background: none; font: inherit; text-align: left; cursor: pointer; }
-.pn-ed-pick2 .pn-frow2:hover { border-color: var(--line-net); background: #FBFCFE; }
+.pn-ed-pick2 .pn-frow2:hover { border-color: var(--line-net); background: var(--bg-tint); }
 
 /* ── 앱 부품(#1780 panes 정합) — 설치된 앱을 곁칸에서 목록·열기 ── */
 .pn-apps { display: flex; flex-direction: column; overflow: hidden; }
@@ -409,7 +409,7 @@ webview.pn-webframe { display: flex; }
 .pn-app b { font-size: 12.5px; font-weight: 700; }
 .pn-app-ic { width: 40px; height: 40px; border-radius: 11px; background: var(--bg-tint); border: 1px solid var(--line); display: grid; place-items: center; color: var(--blue); }
 .pn-app-ic .pn-i { width: 20px; height: 20px; }
-.pn-apps-bar { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: #FAFBFC; }
+.pn-apps-bar { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--gray-bg-2); }
 .pn-apps-cur { font-size: 12.5px; }
 .pn-apps .v2-appui-frame { flex: 1; width: 100%; border: 0; background: var(--surface); }
 
@@ -418,7 +418,7 @@ webview.pn-webframe { display: flex; }
 .pn-knm .pn-modal-h h2 { font-size: 17px; line-height: 1.35; }
 .pn-knm-full { margin: 0 0 10px; font-size: 12.5px; line-height: 1.55; color: var(--muted-head); }
 .pn-knm-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; }
-.pn-knm-tag { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: #EEF2F8; color: var(--muted-head); }
+.pn-knm-tag { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: var(--gray-bg); color: var(--muted-head); }
 .pn-knm-sum { margin: 0 0 12px; padding: 10px 12px; border-left: 3px solid var(--blue); border-radius: 0 8px 8px 0; background: var(--bg-sel); font-size: 13px; line-height: 1.6; color: var(--ink); }
 .pn-knm-body .pn-md { padding: 0; }
 .pn-knm .pn-modal-f .pn-fine { min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
@@ -432,5 +432,5 @@ webview.pn-webframe { display: flex; }
 .pn-door-r .btn-primary.pn-door-btn:hover { box-shadow: 0 1px 2px rgba(45,107,240,.34), 0 4px 12px rgba(45,107,240,.22); }
 .pn-door-r .btn-ghost.pn-door-btn { border-color: var(--line-net); color: var(--ink); font-weight: 600; }
 .pn-door-r .btn-ghost.pn-door-btn svg { color: var(--muted-2); }
-.pn-door-r .btn-ghost.pn-door-btn:hover { border-color: var(--blue); color: var(--blue); background: #F6F9FF; }
+.pn-door-r .btn-ghost.pn-door-btn:hover { border-color: var(--blue); color: var(--blue); background: var(--bg-tint); }
 .pn-door-r .btn-ghost.pn-door-btn:hover svg { color: var(--blue); }
