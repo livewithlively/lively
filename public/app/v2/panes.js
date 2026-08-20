@@ -167,21 +167,25 @@ export function mountPanes(host, opts) {
     const wrap = el('div', { class: 'pn-wrap' }, door, body);
     host.replaceChildren(wrap);
     const panes = new Map();
+    const ros = [];
     function makePane(zone) {
         const tabs = el('div', { class: 'pn-tabs', role: 'tablist' });
+        const tail = el('div', { class: 'pn-tabtail' });
+        const bar = el('div', { class: 'pn-tabbar' }, tabs, tail);
         const bodyEl = el('div', { class: 'pn-pane-body' });
-        const root = el('section', { class: 'pn-pane', 'data-zone': zone }, tabs, bodyEl);
-        const p = { zone, root, tabs, bodyEl, parts: new Map() };
-        // 탭을 끌어 이 칸에 떨구면 그 부품이 여기로 옮겨 온다(VS Code 의 탭 도킹).
-        tabs.addEventListener('dragover', (e) => {
+        const root = el('section', { class: 'pn-pane', 'data-zone': zone }, bar, bodyEl);
+        const p = { zone, root, bar, tabs, tail, bodyEl, parts: new Map() };
+        // 탭을 끌어 이 칸에 떨구면 그 부품이 여기로 옮겨 온다(VS Code 의 탭 도킹). 과녁은 줄 전체다 —
+        //  띠가 꽉 차면 빈 자리가 없어져, 띠만 과녁이면 떨굴 데가 사라진다.
+        bar.addEventListener('dragover', (e) => {
             if (!e.dataTransfer?.types.includes('text/x-pn-part'))
                 return;
             e.preventDefault();
-            tabs.classList.add('drop');
+            bar.classList.add('drop');
         });
-        tabs.addEventListener('dragleave', () => tabs.classList.remove('drop'));
-        tabs.addEventListener('drop', (e) => {
-            tabs.classList.remove('drop');
+        bar.addEventListener('dragleave', () => bar.classList.remove('drop'));
+        bar.addEventListener('drop', (e) => {
+            bar.classList.remove('drop');
             const raw = e.dataTransfer?.getData('text/x-pn-part') || '';
             if (!raw)
                 return;
@@ -195,8 +199,29 @@ export function mountPanes(host, opts) {
             }
             moveTab(msg.type, msg.from, zone);
         });
+        // 세로 휠로도 띠가 미끄러지게 — 가로 막대는 디자인상 숨겨 두어서(scrollbar-width: none) 마우스만 쓰는
+        //  사람에겐 잡을 데가 없다. 넘칠 때만 가로채고, 그때도 Shift(브라우저 기본 가로 스크롤)는 그대로 둔다.
+        tabs.addEventListener('wheel', (e) => {
+            if (e.shiftKey || !e.deltaY)
+                return;
+            if (tabs.scrollWidth <= tabs.clientWidth + 1)
+                return;
+            e.preventDefault();
+            tabs.scrollLeft += e.deltaY;
+        }, { passive: false });
+        tabs.addEventListener('scroll', () => syncMore(p), { passive: true });
+        // 칸 폭이 바뀌면(경계 끌기·창 크기·곁칸 여닫기) '가려진 탭이 있다'를 다시 잰다.
+        if (typeof ResizeObserver === 'function') {
+            const ro = new ResizeObserver(() => syncMore(p));
+            ro.observe(tabs);
+            ros.push(ro);
+        }
         panes.set(zone, p);
         return p;
+    }
+    /** 띠가 넘치는가 — 넘칠 때만 [모두 보기]와 손잡이 왼쪽 그늘을 켠다(안 넘치면 군더더기다). */
+    function syncMore(p) {
+        p.bar.classList.toggle('has-more', p.tabs.scrollWidth > p.tabs.clientWidth + 1);
     }
     const mainPane = makePane('main');
     const bottomPane = makePane('bottom');
@@ -288,6 +313,23 @@ export function mountPanes(host, opts) {
         }, pnIcon('x', 'pn-i xs'));
         return el('span', { class: 'pn-tabwrap' + (on ? ' on' : '') }, b, x);
     }
+    /** [모두 보기] — 띠가 넘쳐 **가려진 탭이 생겼을 때만** 뜨는 통로(CSS: .pn-tabbar.has-more).
+     *  여기서 고르면 그 탭이 켜지고, 여기 ×로 빼면 띠를 훑지 않고도 뺄 수 있다 — 신고의 '×를 누르기 힘들다'가
+     *  실은 '×가 칸 밖에 있어 손이 닿지 않는다'였다. 이 목록은 스크롤과 무관하게 늘 칸 안에 있다. */
+    function moreBtn(zone) {
+        const b = el('button', { class: 'pn-tab-more', type: 'button', title: '이 칸에 든 탭을 모두 봅니다', 'aria-label': '탭 모두 보기' }, pnIcon('chev', 'pn-i sm'));
+        b.onclick = () => {
+            const list = lay[zone].filter((t) => t !== 'sessions');
+            const close = anchoredPopover(b, el('div', { class: 'pn-pop' }, el('p', { class: 'pn-pop-h', text: '이 칸에 들어 있는 것입니다 — 누르면 그 탭이 켜지고, ×는 이 칸에서 뺍니다.' }), el('div', { class: 'pn-pop-list' }, ...list.map((t) => {
+                const d = partDef(t);
+                return el('div', { class: 'pn-pop-line' + (lay.act[zone] === t ? ' on' : '') }, el('button', { class: 'pn-pop-row', type: 'button', onclick: () => { close(); activate(zone, t); } }, pnIcon(d.icon, 'pn-i sm'), el('span', { class: 'n' }, el('b', { text: d.name }), el('span', { class: 'pn-fine', text: d.hint }))), el('button', {
+                    class: 'pn-pop-x', type: 'button', title: `${d.name} 칸에서 뺍니다`, 'aria-label': `${d.name} 빼기`,
+                    onclick: () => { close(); removeTab(zone, t); },
+                }, pnIcon('x', 'pn-i xs')));
+            }))));
+        };
+        return b;
+    }
     function addBtn(zone) {
         const b = el('button', { class: 'pn-tab-add', type: 'button', title: '이 칸에 내용을 더합니다', 'aria-label': '내용 더하기' }, pnIcon('plus', 'pn-i sm'));
         b.onclick = () => {
@@ -335,10 +377,22 @@ export function mountPanes(host, opts) {
         //  일반 [+](칸에 내용 더하기)를 빼고 [+ 새 세션] 하나만 둔다 — 다른 것을 넣고 싶으면 곁칸·아래 칸의 [+]로 넣거나
         //  그 탭을 이 칸으로 끌어오면 된다(탭 끌어 옮기기는 그대로 산다).
         const sessionOnly = list.length === 1 && list[0] === 'sessions';
+        pane.tabs.replaceChildren(...list.flatMap(tabsOf));
+        // 손잡이는 띠 **밖**이라 탭이 몇 개가 되든 밀려나지 않는다(위 makePane 주석). [모두 보기]는 탭이 둘 이상일
+        //  때만 만들고, 실제로 보이는 건 띠가 넘칠 때뿐이다(syncMore).
         // ⚠ replaceChildren 은 el() 과 달리 null 을 걸러 주지 않는다 — 넣으면 'null' 이 글자로 찍힌다.
-        pane.tabs.replaceChildren(...[...list.flatMap(tabsOf), sessionOnly ? null : addBtn(zone), hideBtn].filter(Boolean));
-        // 세션만 든 칸에는 탭이 하나도 없다 → 줄 자체를 감춘다(빈 띠가 남으면 그게 더 이상하다).
-        pane.tabs.hidden = pane.tabs.childElementCount === 0;
+        pane.tail.replaceChildren(...[
+            pane.tabs.childElementCount > 1 ? moreBtn(zone) : null,
+            sessionOnly ? null : addBtn(zone),
+            hideBtn,
+        ].filter(Boolean));
+        // 세션만 든 칸에는 탭도 손잡이도 없다 → 줄 자체를 감춘다(빈 띠가 남으면 그게 더 이상하다).
+        pane.bar.hidden = pane.tabs.childElementCount === 0 && pane.tail.childElementCount === 0;
+        syncMore(pane);
+        // 켜진 탭이 띠 밖으로 밀려 있으면 끌어온다(셸 탭 줄과 같은 문법 — tabs.ts). 'nearest' 라 이미 보이면 안 움직인다.
+        const onTab = pane.tabs.querySelector('.pn-tabwrap.on');
+        if (onTab && pane.tabs.scrollWidth > pane.tabs.clientWidth + 1)
+            onTab.scrollIntoView({ inline: 'nearest', block: 'nearest' });
         // 켜진 부품만 보이게(나머지는 살려 둔 채 숨긴다 — 탭을 오가도 대화·스크롤이 그대로다).
         if (act)
             ensurePart(pane, act);
@@ -463,6 +517,9 @@ export function mountPanes(host, opts) {
             dead = true;
             window.removeEventListener('pn:sessions-view', onViewChanged);
             window.clearInterval(timer);
+            for (const ro of ros)
+                ro.disconnect();
+            ros.length = 0;
             for (const pane of panes.values())
                 for (const p of pane.parts.values())
                     p.destroy?.();
