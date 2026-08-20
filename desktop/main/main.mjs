@@ -26,7 +26,7 @@ import { appReady, webUiUrl, webOrigin, openTargetFor, startupWindow, startedHid
 import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, surfaceNavTarget, cleanUserAgent, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
 import { EXTENSIONS_DIRNAME, INSTALLED_FILE, RULESET_SHIM_PAGE, RULESET_SHIM_HTML, enableRulesetsScript, manifestRulesets, parseInstalled, serializeInstalled, crxZipOffset, readZipEntries, readZipEntryData, safeExtensionId } from "./browser-extensions.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
-import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, shouldAutoApplyUpdate, downloadProgressNote, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
+import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, shouldAutoApplyUpdate, downloadProgressNote, webUpdateState, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
 import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
 import { LOG_VIEWS, resolveLogPath, tailText } from "./log-view.mjs";
 import { STALE_QUERY_PS, parseStaleQuery, pickStaleInstalls, staleCleanupPs, staleInstallNote } from "./win-stale-install.mjs";
@@ -94,7 +94,7 @@ async function refreshState({ deep = false } = {}) {
   // '다 갖춰졌다' 는 **한 자리**(web-shell.appReady)에서만 판정한다 — 트레이·마법사·창 선택이 전부 이 값을 본다.
   next.ready = appReady(next);
   state = next;
-  renderTray(); send(IPC.STATE, state);
+  renderTray(); send(IPC.STATE, state); pushWebUpdate();
   if (deep && cliPath && !running) await refreshNodeStatus(cliPath);
   syncWindows(wasReady);
   return state;
@@ -429,6 +429,35 @@ function showWindow() {
   return win;
 }
 const send = (ch, payload) => { try { win?.webContents.send(ch, payload); } catch { /* 창 없음 */ } };
+
+// ── 웹 UI 창들에 밀기 (#1838) ───────────────────────────────────────────────
+// 마법사(send)와 달리 창이 여럿이다 — 라이블리 화면 + 거기서 연 자식 창(터미널 새 창 등). **게이트웨이 출처를
+//  실은 창에만** 보낸다: 창이 잠깐 다른 사이트(IdP·외부 문서)를 싣고 있을 수 있고, 그 페이지에 우리 신호를 줄
+//  이유가 없다. 창 목록을 따로 들고 다니지 않는 이유 — 자식 창은 setWindowOpenHandler 가 만들어 우리가 참조를
+//  못 받고, 들고 다니면 닫힌 창을 지우는 자리가 또 생긴다(그게 실제 누수의 흔한 자리다).
+function sendWeb(ch, payload) {
+  const origin = webOrigin(state.gatewayUrl);
+  if (!origin) return;
+  for (const w of BrowserWindow.getAllWindows()) {
+    try {
+      if (w.isDestroyed()) continue;
+      const u = w.webContents.getURL();
+      if (!u || new URL(u).origin !== origin) continue;
+      w.webContents.send(ch, payload);
+    } catch { /* 그 사이 사라진 창 — 다음 창으로 */ }
+  }
+}
+/** 지금의 업데이트 상태(웹용). 트레이·마법사가 보는 것과 **같은 사실**을 세 값으로 줄인 것이다. */
+const webUpdate = () => webUpdateState({ ready: !!updateReady, version: updateReady, busy: !!running });
+/** 바뀌었을 때만 민다 — refreshState 는 30초 폴링·CLI 이벤트마다 돌지만 이 값은 거의 안 바뀐다. */
+let webUpdateSent = "";
+function pushWebUpdate() {
+  const payload = webUpdate();
+  const key = JSON.stringify(payload);
+  if (key === webUpdateSent) return;
+  webUpdateSent = key;
+  sendWeb(IPC_WEB.UPDATE, payload);
+}
 
 // ── 라이블리 화면 = 웹 UI 창 (web-shell.mjs) ────────────────────────────────
 // 게이트웨이가 서빙하는 /ui/ 를 **그대로** 싣는다 — 화면 코드를 앱에 두지 않는다. 앱이 보태는 건 토큰 주입(preload/web.cjs)·
@@ -769,6 +798,7 @@ async function start(kind, opts) {
   state = { ...state, busy: true }; renderTray(); send(IPC.STATE, state);
   progress = null;
   running = { kind, handle: null };
+  pushWebUpdate();   // '작업 중' 은 웹의 [다시 시작하여 반영하기] 도 잠근다 — 눌러 놓고 거절당하지 않게(#1838)
   const r = await runCli({
     cli, launch: launchSpecFor(cli, args),
     env: { ...process.env },
@@ -934,6 +964,13 @@ ipcMain.handle(IPC_WEB.EXT_INSTALL, async (e) => {
 ipcMain.handle(IPC_WEB.EXT_REMOVE, (e, arg) => {
   if (!fromGateway(e)) return { ok: false, error: "허용되지 않은 출처입니다." };
   return removeExtension(arg && arg.id);
+});
+// 앱 업데이트(#1838) — 메인 화면(웹 UI)이 '받아 둔 게 있다' 를 보고 그 자리에서 적용하게. 게이트웨이 출처만.
+//  ⚠ 적용은 **인자 없는 단일 동작**이다(이 앱을 닫고·설치하고·다시 띄운다) — 트레이 항목이 부르는 함수와 같다.
+ipcMain.handle(IPC_WEB.UPDATE_STATE, (e) => (fromGateway(e) ? webUpdate() : webUpdateState({})));
+ipcMain.handle(IPC_WEB.UPDATE_APPLY, async (e) => {
+  if (!fromGateway(e)) return { ok: false, error: "허용되지 않은 출처입니다." };
+  return applyUpdate();
 });
 ipcMain.handle(IPC_WEB.LOGOUT, async (e) => {
   if (!fromGateway(e)) return { ok: false, error: "허용되지 않은 출처입니다." };
