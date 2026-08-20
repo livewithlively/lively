@@ -78,6 +78,8 @@ const srcPath = (s: Source, q: Record<string, string | number>): string => {
 //  붙이기·떼기의 실행·갱신은 그쪽 몫이고, 여기는 바뀐 target 을 update() 로 받아 라벨만 되그린다.
 // opts.onRename — 제목을 눌러 이름을 고쳤을 때 서버에 반영하는 콜백(#1719). 실패는 throw 로 알려 주면 여기서 말한다.
 export interface SessionChatOpts {
+  /** [⋯ ▸ 이 세션 보관] — 세션 탭 줄을 없애면서(원준 2026-08-20) 보관의 입구가 여기로 옮겨 왔다. 실행은 main.ts 가 쥔다. */
+  onArchive?: () => void;
   terminalSrc?: string | null;
   openHref?: string | null;
   firstPrompt?: string | null;
@@ -128,17 +130,53 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  그건 이름이 아니므로 화면에 쓰지 않는다 — 사이드바(side.ts isIdLabel)와 같은 판정.
   const idLabel = (x: string): boolean => /^box-|^[0-9a-f-]{20,}$/i.test(String(x || '').trim());
   const shownName = (): string => (idLabel(titleText) ? '' : titleText) || String(target.raw?.harness || '') || '(이름 없음)';
+  const normTxt = (x: string): string => String(x || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  // 사람이 지은 이름만 남긴다 — 프로젝트명 되풀이(dev 실측 58%)·id 꼴은 이름이 아니다(사이드바 side.ts sessText 와 같은 규칙).
+  function cleanName(): string {
+    let n = String(titleText || '').trim();
+    const proj = String((target as any).projectName || '').trim();
+    if (proj && n.startsWith(proj)) n = n.slice(proj.length).replace(/^[\s·:\-–—_/|]+/, '').trim();
+    if (proj && n && normTxt(n) === normTxt(proj)) n = '';
+    if (idLabel(n)) n = '';
+    return n;
+  }
+  const penIc = (): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: 'sc-title-pen', 'aria-hidden': 'true' }, sv('path', { d: 'M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z' }));
+  const penBtn = (): HTMLElement => el('button', {
+    class: 'sc-title-penbtn', type: 'button', 'aria-label': '세션 이름 바꾸기',
+    title: '세션 이름 바꾸기 — 지금 제목은 이 세션이 하는 일이에요', onclick: () => startRename(),
+  }, penIc());
   function paintTitle(): void {
     if (renaming) return;                    // 고치는 중엔 손대지 않는다(20초 폴링이 입력 중인 칸을 지우면 안 된다)
-    const pane = paneTitle();
     const tip = [titleText, target.id].filter(Boolean).join(' · ');
-    if (pane) { titleHost.replaceChildren(el('b', { class: 'sc-title', title: tip, text: pane })); return; }
+    const name = cleanName();
+    const pane = paneTitle();
+    const job = pane && normTxt(pane) !== normTxt(name) ? pane : '';
+    // ★굵은 자리의 임자 — **사람이 지은 이름이 있으면 그 이름**, 없으면 '지금 하는 일'(pane 제목, #1744).
+    //  종전엔 pane 제목이 늘 이겨서, 이름을 고쳐도 이 줄이 그대로였다(원준 2026-08-20 "탭에서 고쳤는데 여기는 반영이 안 된다").
+    //  #1744 가 막으려던 건 **자동 생성 이름**이 이 자리를 먹는 것이고, cleanName 이 그것들을 그대로 걷어낸다.
+    if (name) {
+      titleHost.replaceChildren(
+        canRename()
+          ? el('button', { class: 'sc-title sc-title-btn', type: 'button', title: '세션 이름 — 눌러서 바꿉니다', onclick: () => startRename() },
+            el('span', { class: 'sc-title-t', text: name }), penIc())
+          : el('b', { class: 'sc-title', title: tip, text: name }),
+        // 하는 일은 이름 옆에 조용히 — 사이드바가 이름(굵게) + 하는 일(부제)로 쓰는 것과 같은 문법이다.
+        ...(job ? [el('span', { class: 'sc-title-job', title: '이 세션이 지금 하는 일', text: job })] : []));
+      return;
+    }
+    if (job) {
+      const b = el('b', { class: 'sc-title', title: canRename() ? tip + ' — 두 번 누르면 세션 이름을 바꿉니다' : tip, text: job });
+      if (!canRename()) { titleHost.replaceChildren(b); return; }
+      b.addEventListener('dblclick', () => startRename());
+      titleHost.replaceChildren(b, penBtn());
+      return;
+    }
     const t = shownName();
     titleHost.replaceChildren(canRename()
       ? el('button', { class: 'sc-title sc-title-btn', type: 'button', title: '세션 이름 — 눌러서 바꿉니다', onclick: () => startRename() },
         el('span', { class: 'sc-title-t', text: t }),
         // 연필은 손을 올렸을 때만 나타난다 — 늘 보이면 머리줄의 조작부가 하나 늘고, 아예 없으면 고칠 수 있다는 걸 아무도 모른다.
-        sv('svg', { viewBox: '0 0 24 24', class: 'sc-title-pen', 'aria-hidden': 'true' }, sv('path', { d: 'M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z' })))
+        penIc())
       : el('b', { class: 'sc-title', title: tip, text: t }));
   }
   function startRename(): void {
@@ -249,6 +287,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   const SET_MODEL_RE = /Set model to\s+(.+?)(?:\s+and saved\b|$)/i;
   const setModel = (full: string): void => setObserved('model', full.replace(/\s*\([^)]*\)\s*$/, '').trim() || full, full);
 
+  // 처방전(#1719) — '방금 네 번 주고받은 것, 한 번에 끝낼 수 있었어요'가 앉는 자리. 입력칸 바로 위(askHost).
+  const rxHost = el('div', { class: 'sc-rx-host' });
+
   // 대화창 ————
   const view: ChatView = createChatView(chatHost, {
     who: { me: '나', ai: 'AI' },
@@ -258,6 +299,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     sendWhileBusy: true,
     style: 'desktop',
     bar: { right: el('span', { class: 'dt-chips' }, chipMode, chipProv, chipModel, selModel, chipEffort, selEffort) },
+    askHost: rxHost,                              // 처방전(#1719) — 스크롤에 떠내려가지 않는 입력칸 바로 위
     onSend: (text) => sendPrompt(text),
     onStop: canKeys() ? () => sendKey('interrupt') : undefined,
     escActive: () => true,
@@ -458,6 +500,9 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     rows.push(el('div', { class: 'sc-more-sec', text: '이 세션' }));
     // 이름은 상단바에 상시로 두지 않는다(위 제목 주석) — 고칠 일이 있을 때만 여기서 연다.
     if (canRename()) rows.push(row('세션 이름 바꾸기', idLabel(titleText) ? '아직 이름이 없어요' : titleText, () => startRename()));
+    // 보관 — 터미널만 내려놓고 대화·설정은 남긴다. 살아 있는 내 세션에만(내릴 것이 있어야 보관이다).
+    if (opts.onArchive && target.owned && target.live && !target.raw?.restorable)
+      rows.push(row('이 세션 보관', '터미널을 내려놓고 대화·설정은 남겨요 — [보관한 세션]에서 되살립니다', () => opts.onArchive!()));
     rows.push(row('링크 복사', '지금 보고 있는 이 화면의 주소', async () => {
       try { await navigator.clipboard.writeText(location.href); toast('링크를 복사했습니다.'); }
       catch { window.prompt('이 링크를 복사하세요:', location.href); }
@@ -772,17 +817,111 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   }
   function finishReplay(): void {
     // 창 안에서 끝나지 않은 마지막 턴 — 지금 도는 중이면 라이브 표시, 아니면(죽었거나 오래됐으면) 조용히 마감.
+    //  ⚠ 중앙 기록(노드 세션, src.kind==='log')은 **턴 종료 표시(turn_duration·stop_hook_summary)가 안 담긴다** — 그건 claude 가
+    //   Stop 훅 캡처 뒤에 .jsonl 에 쓰기 때문(#1744 실측: 중앙 로그에 그 줄이 0개). 그래서 '최근에 줄이 왔으니 도는 중'
+    //   휴리스틱(staleMs<120s)을 로그 소스엔 쓰지 않는다 — 세션이 idle(하네스가 markActive 로 보고) 이면 그 턴은 끝난 것이다.
     const staleMs = Date.now() - lastLineAt;
-    const looksLive = running && !dead() && (target.raw?.working || target.raw?.agentState === 'busy' || staleMs < 120_000);
+    const busy = !!(target.raw?.working || target.raw?.agentState === 'busy');
+    const looksLive = running && !dead() && (busy || (src?.kind !== 'log' && staleMs < 120_000));
     if (cur && looksLive) { view.running(cur.t); view.busy(true); }
     else { running = false; recs.forEach((r) => view.settle(r.t)); view.busy(false); }
     titleFromFirstAsk();
+    paintRx();
   }
   function titleFromFirstAsk(): void {
     const q = recs.find((r) => r.t.text)?.t.text;
     // 이름이 자동 생성 id 꼴이면 첫 질문을 이름 자리에 대신 쓴다(고치기 전까지의 임시 이름).
     if (q && /^box-|^[0-9a-f-]{20,}$/i.test(titleText)) { titleText = q.length > 60 ? q.slice(0, 60) + '…' : q; }
     paintTitle();
+  }
+
+  // ── 처방전(#1719) — "방금 네 번 주고받은 것, 한 번에 끝낼 수 있었어요" ──────────────────────
+  //  왜: 사람이 한 번에 말했으면 끝날 일을 나눠 말하느라 네 턴을 쓴다(실측 흔함). 그 사실은 **일이 끝난 뒤에만**
+  //   말할 수 있다 — 결과를 아는 상태라야 "이렇게 했으면 됐다"가 훈수가 아니라 제안이 된다.
+  //  ⚠ 이 판정은 **화면에서만** 한다. 대화 본문은 이미 이 브라우저에 있고, 서버로 아무것도 보내지 않는다
+  //   (제안엔진 C3 — 서버는 세션 대화를 열지 않는다). 나중에 다듬기를 붙일 때도 그 경계는 세션 안이다.
+  //  v0 는 문장을 지어내지 않는다: 나눠 말한 것을 **순서대로 합쳐** 보여줄 뿐이고, 나중에 덧붙인 부분만 표시한다.
+  //   숫자(횟수·걸린 시간)도 그 대화에서 실제로 센 값이다 — 예상치를 쓰지 않는다.
+  const RX_OFF_KEY = 'lively_rx_off';
+  const RX_MIN_ASKS = 3;              // 세 번 이상 나눠 말했을 때만. 두 번은 그냥 대화다.
+  const RX_GAP_MS = 20 * 60 * 1000;   // 이만큼 벌어지면 다른 일로 본다(한 묶음의 경계)
+  const rxDone = new Set<string>();   // 이 묶음은 닫았다(× ) — 새 묶음이면 다시 뜬다
+  let rxKey = '';                     // 지금 그려 둔 묶음
+  const rxOff = (): boolean => { try { return localStorage.getItem(RX_OFF_KEY) === '1'; } catch { return false; } };
+  const askAt = (t: ChatTurn): number => { const v = t.ts ? Date.parse(t.ts) : NaN; return Number.isFinite(v) ? v : t.startedAt; };
+
+  /** 마지막 '한 묶음' = 끝에서부터 20분 이내로 이어진 사람 말들. 그 사이가 벌어지면 거기서 끊는다. */
+  function lastAskCluster(): ChatTurn[] {
+    const asks = recs.map((r) => r.t).filter((t) => t.text && t.text.trim());
+    if (asks.length < RX_MIN_ASKS) return [];
+    const out: ChatTurn[] = [asks[asks.length - 1]!];
+    for (let i = asks.length - 2; i >= 0; i--) {
+      if (askAt(out[0]!) - askAt(asks[i]!) > RX_GAP_MS) break;
+      out.unshift(asks[i]!);
+    }
+    return out;
+  }
+
+  function paintRx(): void {
+    // 끝난 세션에서도 뜬다 — 되짚기는 오히려 끝난 뒤가 제일 쓸모 있다(입력칸이 없으면 '넣기' 버튼만 빠진다).
+    if (rxOff() || running) { if (!running) rxHost.replaceChildren(); return; }
+    const cluster = lastAskCluster();
+    if (cluster.length < RX_MIN_ASKS) { rxHost.replaceChildren(); rxKey = ''; return; }
+    const key = String(askAt(cluster[0]!)) + '·' + cluster.length + '·' + (cluster[cluster.length - 1]!.text || '').slice(0, 24);
+    if (key === rxKey) return;                       // 같은 묶음 — 다시 그리지 않는다(깜빡임 방지)
+    rxKey = key;
+    if (rxDone.has(key)) { rxHost.replaceChildren(); return; }
+    rxHost.replaceChildren(rxCard(cluster, key));
+  }
+
+  /** 나눠 말한 것을 순서대로 합친 지시문. 첫 마디는 그대로, 뒤에 덧붙인 것은 표시한다(무엇을 놓쳤는지가 보이게). */
+  function rxMerged(cluster: ChatTurn[]): { el: HTMLElement; text: string } {
+    const parts = cluster.map((t) => (t.text || '').trim()).filter(Boolean);
+    const box = el('div', { class: 'sc-rx-prompt' },
+      el('span', { class: 'sc-rx-plabel', text: '나눠 말씀하신 것을 한 덩어리로 합치면' }),
+      el('div', { class: 'sc-rx-ptext' },
+        ...parts.map((p, i) => i === 0
+          ? el('span', { text: p })
+          : el('span', { class: 'sc-rx-add', text: ' ' + p }))));
+    return { el: box, text: parts.join(' ') };
+  }
+
+  function rxCard(cluster: ChatTurn[], key: string): HTMLElement {
+    const n = cluster.length;
+    const mins = Math.max(1, Math.round((askAt(cluster[n - 1]!) - askAt(cluster[0]!)) / 60000));
+    const merged = rxMerged(cluster);
+    const close = (): void => { rxDone.add(key); rxHost.replaceChildren(); };
+
+    // 4 → 1 — 숫자를 읽지 않아도 보이게. 뒤쪽(합쳐진 것)에는 예상 시간을 쓰지 않는다(우리는 모른다).
+    const dots = el('div', { class: 'sc-rx-fold' },
+      el('span', { class: 'sc-rx-grp' }, ...Array.from({ length: Math.min(n, 6) }, () => el('i', { class: 'sc-rx-b' }))),
+      el('span', { class: 'sc-rx-arrow', 'aria-hidden': 'true', text: '→' }),
+      el('span', { class: 'sc-rx-grp' }, el('i', { class: 'sc-rx-b one' })),
+      el('span', { class: 'sc-rx-cap' }, el('b', { text: `${n}번 · ${mins}분` }), document.createTextNode(' 이 한 번으로')));
+
+    const put = canType()
+      ? el('button', { class: 'btn-text sc-rx-go', type: 'button', text: '이 지시문 입력칸에 넣기',
+        onclick: () => { view.input.value = merged.text; view.input.dispatchEvent(new Event('input')); view.input.focus(); close(); } })
+      : null;   // 끝난 세션엔 입력칸이 없다 — 눌러도 되는 척하는 버튼은 두지 않는다
+    const copy = el('button', { class: 'btn-text sc-rx-alt', type: 'button', text: '복사',
+      onclick: async () => { try { await navigator.clipboard.writeText(merged.text); toast('지시문을 복사했어요.'); } catch { window.prompt('이 지시문을 복사하세요:', merged.text); } } });
+    const keep = el('button', { class: 'btn-text sc-rx-alt', type: 'button', text: '이 일을 명령으로 저장해 두기',
+      onclick: () => toast('아직 준비 중이에요 — 다음 단계에서 이 지시문을 명령으로 굳힐 수 있게 됩니다.') });
+    const never = el('button', { class: 'btn-text sc-rx-never', type: 'button', text: '이런 거 안 볼래요',
+      onclick: () => { try { localStorage.setItem(RX_OFF_KEY, '1'); } catch { /* 비치명 */ } rxHost.replaceChildren(); toast('앞으로 이 안내를 띄우지 않습니다.'); } });
+
+    return el('div', { class: 'sc-rx' },
+      el('div', { class: 'sc-rx-h' },
+        el('span', { class: 'sc-rx-av', 'aria-hidden': 'true', text: 'L' }),
+        el('span', { class: 'sc-rx-ht', text: '이번 건, 한 번에 끝낼 수 있었어요' }),
+        el('button', { class: 'btn-text sc-rx-x', type: 'button', title: '닫기', 'aria-label': '닫기', text: '×', onclick: close })),
+      el('div', { class: 'sc-rx-b-wrap' },
+        el('p', { class: 'sc-rx-said' },
+          document.createTextNode('나눠서 '), el('b', { text: `${n}번` }), document.createTextNode(' 말씀하시느라 '),
+          el('b', { text: `${mins}분` }), document.createTextNode('이 걸렸어요. 아래처럼 처음부터 한 번에 주시면 됩니다.')),
+        dots,
+        merged.el,
+        el('div', { class: 'sc-rx-acts' }, ...(put ? [put] : []), copy, keep, never)));
   }
 
   // 위로 더 — [from-WINDOW, from) 창을 읽어 **턴 단위로 거꾸로** 앞에 끼운다(보고 있던 자리는 그대로).
@@ -920,8 +1059,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         if (!running) { if (cur) view.settle(cur.t); view.busy(false); }
         view.scroll(); paintState(); titleFromFirstAsk();
       } else if (running && cur && !dead()) {
-        // 새 줄이 없는데 도는 중 표시 — 오래 조용하면(120초) 상태 보고까지 안 바쁘다면 마감한다(터미널에서 Esc 했거나 죽은 경우)
-        if (Date.now() - lastLineAt > 120_000 && !(target.raw?.working || target.raw?.agentState === 'busy')) { running = false; view.settle(cur.t); view.busy(false); paintState(); }
+        // 새 줄이 없는데 도는 중 표시 — 마감 조건: 세션이 idle(하네스 보고) + 조용함. 유예는 소스별로 다르다.
+        //  · 중앙 기록(노드 세션): 턴 경계로만 자라고 종료 표시가 안 담기므로(#1744), idle 이면 짧게(6초) 기다렸다 마감한다.
+        //  · 박스 파일: 스트리밍이라 잠깐 조용할 수 있어 보수적으로 120초(터미널에서 Esc 했거나 죽은 경우 대비).
+        const idle = !(target.raw?.working || target.raw?.agentState === 'busy');
+        const graceMs = src.kind === 'log' ? 6_000 : 120_000;
+        if (idle && Date.now() - lastLineAt > graceMs) { running = false; view.settle(cur.t); view.busy(false); paintState(); }
       }
     } catch (e: any) {
       fails++;

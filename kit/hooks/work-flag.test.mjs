@@ -38,6 +38,16 @@ function flagsFor(tool) {
 }
 const eq = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
 
+// ⓪ 격리 회귀 가드(2026-08-18) — 이 테스트는 훅을 **실제 프로세스로** 띄운다. env 에 진짜 신원이 남아 있으면
+//  가짜 session_id("s1"…)가 실 게이트웨이로 POST 돼 **살아 있는 세션의 대화 매핑을 덮는다**(실측: 세션 3개가 "s7"이 됐다).
+//  HOME 샌드박스로는 못 막는다 — 훅이 토큰을 env 우선으로 읽기 때문이다. 그래서 sandboxEnv 가 값을 비운다.
+{
+  const e = sandboxEnv({ home: HOME, tmp: TMP });
+  (e.LIVELY_TOKEN === "" && e.LIVELY_SESSION_ID === "" && e.LIVELY_GATEWAY_URL === "")
+    ? ok("\u24ea 샌드박스 env 가 라이블리 신원·게이트웨이를 지운다(실 게이트웨이 유출 차단)")
+    : bad("\u24ea 실 게이트웨이 유출 차단", JSON.stringify(e));
+}
+
 // ── pull_tools 켜짐(기본값과 동일) ──
 cfg({ pull_tools: ["mcp__lively__ext__"] });
 

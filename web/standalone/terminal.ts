@@ -111,7 +111,7 @@ function prefs() {
   let p = {};
   try { p = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}'); } catch (_) { /* default */ }
   const browserDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-  const merged = Object.assign({ fontFamily: FONTS[0].v, fontSize: 14, theme: browserDark ? 'dark' : 'light', cursorStyle: 'bar', scrollSpeed: 3, padGain: 3 }, p);
+  const merged = Object.assign({ fontFamily: FONTS[0].v, fontSize: IS_MOBILE ? 12 : 14, theme: browserDark ? 'dark' : 'light', cursorStyle: 'bar', scrollSpeed: 3, padGain: 3, mobileDock: true }, p);
   merged.fontFamily = withKR(merged.fontFamily);
   return merged;
 }
@@ -209,6 +209,15 @@ function diagText() {
 window.livelyTermDiag = () => diagText();
 // 사파리 판별 — 클립보드 정책이 크롬과 다르다(제스처 밖·비동기 쓰기 거부 → 복사 경로가 갈린다, #1117 버그C).
 const IS_SAFARI = /Apple/i.test(navigator.vendor || '') && !/CriOS|FxiOS|Chrome|Chromium|Edg/i.test(navigator.userAgent || '');
+// 모바일(터치 주입력) 판정(#1719 모바일 터미널) — 거친 포인터(손가락) 또는 모바일 UA. iPadOS 는 UA 가 Mac 이라 pointer 로 잡는다.
+//  ?mobile=1|0 으로 강제(검증·데스크톱 터치스크린 예외).
+const IS_MOBILE = (() => {
+  const q = new URLSearchParams(location.search).get('mobile');
+  if (q === '1') return true;
+  if (q === '0') return false;
+  const coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+  return coarse || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+})();
 let imeComposing = false;  // setupTextareaHygiene 이 관리 — IME 조합 중엔 textarea 를 절대 건드리지 않는다(#633 교훈)
 let appDragSelect = false; // 앱(마우스모드) 화면에서 '드래그 선택'이 관측된 상태 — Cmd+C→^C 브리지 발동 조건(#1117 버그C)
 
@@ -1001,6 +1010,7 @@ function showDropHint() {
   const main = document.getElementById('main');
   if (!main || document.querySelector('.pop-hint')) return;
   if (main.querySelector('.ended-bar')) return; // 끝난 세션에 '파일 주세요'는 소용없다
+  if (IS_MOBILE) return; // 폰엔 끌어다 놓기가 없다 — 첫 화면을 안내로 가리지 않는다
   try { if (window.top !== window.self) return; } catch (_) { return; } // 크로스오리진이면 프레임 안으로 간주
   try { if (localStorage.getItem(HINT_DROP_KEY) === '1') return; } catch (_) { /* 스토리지 차단 — 그냥 보여준다 */ }
   const step = (n, title, sub) => el('div', { class: 'hint-step' },
@@ -1439,6 +1449,135 @@ function setupTouch() {
   hostEl.addEventListener('touchcancel', () => { active = false; }, { passive: true });
 }
 
+// ── 모바일 입력 모드(#1719) ──
+// 왜 따로 두나: 폰의 한글 IME 는 xterm 의 히든 textarea 와 상극이다(자모 분해·중복 전송 — iOS/Android 모두 실기기 제보).
+//  xterm 은 composition 이벤트 순서에 기대는데 모바일 IME 는 그 순서를 지키지 않고, 히든 textarea 는 화면 밖이라
+//  꾹 눌러 복사·붙여넣기도 안 된다. 그래서 폰에선 **보이는 입력칸**에서 네이티브 IME 로 글을 완성해 한 번에 보낸다 —
+//  키보드가 잘 아는 textarea 라 조합·꾹 누르기·붙여넣기가 전부 OS 그대로 동작한다. 터미널 화면 자체는 읽기 전용이 되고
+//  (탭해도 키보드가 안 뜬다), 방향키·Esc·Ctrl+C 같은 키는 키 줄의 버튼이 보낸다. 데스크톱 경로는 손대지 않는다.
+//  끄고 싶으면 환경 설정 '모바일 입력 바' 체크 해제(그러면 종전처럼 터미널에 직접 타이핑).
+let mdockEl = null, mcompEl = null;
+function mobileDockOn() { return IS_MOBILE && prefs().mobileDock !== false; }
+// xterm 히든 textarea 를 '키보드가 안 뜨는' 상태로 — readonly 면 iOS·Android 모두 소프트키보드를 띄우지 않는다.
+//  포커스·선택·컨텍스트메뉴는 그대로라 xterm 의 나머지 동작(스크롤·선택 복사)은 유지된다.
+function setTermTextareaReadonly(on) {
+  try {
+    const ta = term.textarea; if (!ta) return;
+    ta.readOnly = !!on;
+    if (on) { ta.setAttribute('inputmode', 'none'); ta.tabIndex = -1; } else { ta.removeAttribute('inputmode'); ta.tabIndex = 0; }
+  } catch (_) { /* noop */ }
+}
+// 방향키 바이트 — 앱이 application cursor 모드면 \x1bO?, 아니면 \x1b[? (xterm 이 모드를 알고 있다).
+function arrowSeq(letter) {
+  let app = false;
+  try { app = !!(term.modes && term.modes.applicationCursorKeysMode); } catch (_) { /* noop */ }
+  return (app ? '\x1bO' : '\x1b[') + letter;
+}
+function mobileSend() {
+  if (!mcompEl) return;
+  const t = String(mcompEl.value || '');
+  userTyped = true;
+  if (t) {
+    // 여러 줄은 bracketed paste 로 감싸 앱이 '한 덩어리'로 받게(줄바꿈이 Enter 로 오해되지 않게), 한 줄은 그대로.
+    if (/\n/.test(t)) pasteText(t); else sendInput(sanitizePasteText(t));
+  }
+  sendInput('\r');
+  mcompEl.value = ''; mobileGrow();
+  dlog('mdock', 'send len=' + t.length);
+}
+function mobileGrow() {
+  if (!mcompEl) return;
+  mcompEl.style.height = 'auto';
+  mcompEl.style.height = Math.min(112, Math.max(38, mcompEl.scrollHeight)) + 'px';
+}
+// 화면 글자를 '고를 수 있는 글'로 — 폰에선 xterm 캔버스 위 꾹 누르기가 안 먹으니, 최근 화면·스크롤백을 일반 텍스트로
+//  펼쳐 OS 선택(꾹 누르기)과 '전체 복사'를 준다.
+function openCopySheet() {
+  const lines = [];
+  try {
+    const b = term.buffer.active;
+    const from = Math.max(0, b.length - 400);
+    for (let i = from; i < b.length; i++) { const ln = b.getLine(i); lines.push(ln ? ln.translateToString(true) : ''); }
+  } catch (_) { /* noop */ }
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  const text = lines.join('\n');
+  const pre = el('pre', { class: 'copy-sheet-pre', text: text || '(화면에 글자가 없어요)' });
+  const back = el('div', { class: 'pop-back', onclick: (e) => { if (e.target === back) back.remove(); } },
+    el('div', { class: 'pop copy-sheet' },
+      el('div', { class: 'copy-sheet-head' }, el('h3', { text: '화면 글자 · 최근 ' + lines.length + '줄' }),
+        el('span', { class: 'spacer' }),
+        el('button', { class: 'tbtn', text: '전체 복사', onclick: () => { copyText(text, false, true); } }),
+        el('button', { class: 'tbtn', text: '닫기', onclick: () => back.remove() })),
+      el('div', { class: 'copy-sheet-hint', text: '꾹 눌러 필요한 부분만 고르거나, 전체 복사를 누르세요.' }),
+      pre));
+  document.body.append(back);
+  try { pre.scrollTop = pre.scrollHeight; } catch (_) { /* noop */ }
+}
+function setupMobileDock(mainEl) {
+  if (!IS_MOBILE) return;
+  document.body.classList.add('mobile');
+  // 터치 버튼 공통 — touchstart/touchend 에서 preventDefault 해 **입력칸 포커스를 뺏지 않는다**(버튼 탭마다 키보드가
+  //  내려갔다 올라오면 못 쓴다). passive:false 를 명시해야 preventDefault 가 먹는다. 클릭은 키보드 접근(detail 0)만 처리.
+  const tbtn = (label, title, act, onStart?) => {
+    const b = el('button', { class: 'mkey', type: 'button', title: title || label, text: label });
+    b.addEventListener(onStart ? 'touchstart' : 'touchend', (e) => { e.preventDefault(); act(); }, { passive: false });
+    b.addEventListener('click', (e) => { if (e.detail === 0) act(); });
+    return b;
+  };
+  const key = (label, seq, title?) => tbtn(label, title, () => { userTyped = true; sendInput(typeof seq === 'function' ? seq() : seq); }, true);
+  const keys = el('div', { class: 'mkeys' },
+    key('Esc', '\x1b'), key('Tab', '\t'),
+    key('↑', () => arrowSeq('A')), key('↓', () => arrowSeq('B')), key('←', () => arrowSeq('D')), key('→', () => arrowSeq('C')),
+    key('^C', '\x03', 'Ctrl+C — 중단'), key('⏎', '\r', 'Enter 만 보내기'),
+    tbtn('⧉ 복사', '화면 글자 고르기·복사', openCopySheet),
+    tbtn('⎘ 붙여넣기', '클립보드 내용을 입력칸에', mobilePasteIn));
+  mcompEl = el('textarea', { class: 'mcomp', rows: '1', placeholder: '여기에 쓰고 보내기 — 꾹 눌러 복사·붙여넣기',
+    autocapitalize: 'off', autocomplete: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'send', 'aria-label': '터미널에 보낼 글' });
+  const sendBtn = tbtn('보내기', '보내기(Enter)', mobileSend);
+  sendBtn.className = 'msend';
+  mcompEl.addEventListener('input', mobileGrow);
+  mcompEl.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;                 // 한글 조합 중 Enter 는 확정이지 전송이 아니다
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); mobileSend(); }
+  });
+  // 입력칸 포커스 때 iOS 가 페이지를 스크롤해 화면을 밀어 올린다 — 되돌린다(뷰포트 맞춤이 높이를 이미 키보드 위로 잡는다).
+  mcompEl.addEventListener('focus', () => { setTimeout(() => { try { window.scrollTo(0, 0); } catch (_) { /* noop */ } }, 50); });
+  mdockEl = el('div', { id: 'mdock' }, keys, el('div', { class: 'mrow' }, mcompEl, sendBtn));
+  mainEl.append(mdockEl);
+  applyMobileDock();
+}
+function mobilePasteIn() {
+  if (!(navigator.clipboard && navigator.clipboard.readText)) { toast('브라우저가 붙여넣기 읽기를 막았어요 — 입력칸을 꾹 눌러 붙여넣으세요.', true); return; }
+  navigator.clipboard.readText().then((t) => {
+    if (!mcompEl) return;
+    const v = mcompEl.value; const st = mcompEl.selectionStart ?? v.length;
+    mcompEl.value = v.slice(0, st) + t + v.slice(mcompEl.selectionEnd ?? v.length);
+    mobileGrow(); mcompEl.focus();
+  }).catch(() => toast('붙여넣기를 못 읽었어요 — 입력칸을 꾹 눌러 붙여넣으세요.', true));
+}
+function applyMobileDock() {
+  const on = mobileDockOn();
+  if (mdockEl) mdockEl.hidden = !on;
+  setTermTextareaReadonly(on);
+  doResize();
+}
+// 소프트 키보드가 뜨면 보이는 영역(visualViewport)만 줄어들고 100vh 는 그대로라 터미널 아랫부분이 키보드 뒤로 숨는다.
+//  보이는 높이에 맞춰 셸을 잡고 다시 fit — 입력칸이 키보드 바로 위에 온다. offsetTop 은 iOS 가 페이지를 밀어 올린 만큼.
+function setupViewportFit() {
+  const vv = window.visualViewport;
+  if (!vv || !IS_MOBILE) return;
+  const ws = document.getElementById('ws');
+  const apply = () => {
+    if (!ws) return;
+    ws.style.height = Math.round(vv.height) + 'px';
+    ws.style.transform = vv.offsetTop ? 'translateY(' + Math.round(vv.offsetTop) + 'px)' : '';
+    doResize();
+  };
+  vv.addEventListener('resize', apply);
+  vv.addEventListener('scroll', apply);
+  apply();
+}
+
 function setActive(id) {
   activeId = id;
   for (const t of tabs) t.pane.classList.toggle('active', t.id === id);
@@ -1669,9 +1808,10 @@ function openSettings() {
   const cursorSel = el('select', {}, ...['bar', 'block', 'underline'].map((c) => el('option', { value: c, selected: c === p.cursorStyle ? '' : null }, c)));
   const speedI = el('input', { type: 'number', min: '1', max: '12', step: '1', value: String(p.scrollSpeed || 3) });
   const gainI = el('input', { type: 'number', min: '0.5', max: '6', step: '0.5', value: String(p.padGain || 3) });
+  const dockI = el('input', { type: 'checkbox', checked: p.mobileDock !== false ? '' : null, style: 'width:auto' });
   let curFamily = p.fontFamily;
   const apply = () => {
-    const np = { fontFamily: fontSel.value, fontSize: Number(sizeI.value) || 14, theme: themeSel.value, cursorStyle: cursorSel.value, scrollSpeed: Math.max(1, Math.min(12, Number(speedI.value) || 1)), padGain: Math.max(0.5, Math.min(6, Number(gainI.value) || 3)) };
+    const np = { fontFamily: fontSel.value, fontSize: Number(sizeI.value) || 14, theme: themeSel.value, cursorStyle: cursorSel.value, scrollSpeed: Math.max(1, Math.min(12, Number(speedI.value) || 1)), padGain: Math.max(0.5, Math.min(6, Number(gainI.value) || 3)), mobileDock: !!dockI.checked };
     term.options.fontFamily = np.fontFamily; term.options.fontSize = np.fontSize; term.options.cursorStyle = np.cursorStyle;
     term.options.theme = (THEMES[np.theme] || THEMES.dark).theme;
     scrollSpeed = np.scrollSpeed; padGain = np.padGain;
@@ -1683,6 +1823,7 @@ function openSettings() {
   sizeI.addEventListener('input', apply);
   speedI.addEventListener('input', apply);
   gainI.addEventListener('input', apply);
+  dockI.addEventListener('change', () => { apply(); applyMobileDock(); });
   const back = el('div', { class: 'pop-back', onclick: (e) => { if (e.target === back) back.remove(); } },
     el('div', { class: 'pop' }, el('h3', { text: '환경 설정' }),
       el('div', { class: 'field' }, el('label', { text: '폰트' }), fontSel),
@@ -1691,6 +1832,7 @@ function openSettings() {
       el('div', { class: 'field' }, el('label', { text: '커서' }), cursorSel),
       el('div', { class: 'field' }, el('label', { text: '마우스 휠 속도 (1~12)' }), speedI),
       el('div', { class: 'field' }, el('label', { text: '트랙패드 속도 (1 = 손가락 이동만큼)' }), gainI),
+      IS_MOBILE ? el('div', { class: 'field field-row' }, dockI, el('label', { text: '모바일 입력 바 — 아래 입력칸에서 쓰고 보내기(끄면 터미널에 직접 타이핑, 한글이 깨질 수 있어요)' })) : null,
       el('button', { class: 'tbtn pop-close', text: '닫기', onclick: () => back.remove() })));
   document.addEventListener('keydown', function esc(ev) { if (ev.key === 'Escape') { back.remove(); document.removeEventListener('keydown', esc); } });
   document.body.append(back);
@@ -2153,6 +2295,8 @@ export async function boot() {
   setupPaste();
   setupWheel();
   setupTouch();           // 모바일 터치 스와이프 스크롤(#585)
+  setupMobileDock(main);  // 모바일 입력 바 — 보이는 입력칸에서 네이티브 IME 로 쓰고 한 번에 보낸다(#1719 폰 자모 분해·중복·복붙 불가)
+  setupViewportFit();     // 소프트 키보드가 뜨면 보이는 높이에 맞춰 다시 fit
   setupOscClipboard();    // 앱 OSC52 복사 신호 → 맥북 클립보드에 조용히 씀 (#972 · #252 방식 복원, 배너 없음)
   setupTextareaHygiene(); // 히든 textarea 잔류물 유휴 청소 — '키만 눌러도 특정 문자열 입력' 근본 차단(#1117 버그A)
   setupImeTrace();        // 조합 이벤트·전송 바이트 트레이스 — 사파리 한글 깨짐(선재 버그) 규명용(#1117)

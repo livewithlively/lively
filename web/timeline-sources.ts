@@ -173,7 +173,9 @@ export async function loadProjectTimeline(id: number, detail?: any): Promise<Ite
     // 커밋도 산출지식도 없는 기록은 프로젝트 화면의 사건이 아니다 — 싣지 않는다.
   }
   for (const [day, c] of codeByDay) {
-    out.push({ id: 'code:' + day, kind: 'cmd', verb: '코드', label: '코드 작업 ' + c.n + '번', key: 'code|' + day, ts: c.ts, actor: c.actor,
+    // 실험장(#1719 원준): '코드 작업 N번'은 행동이지 결과가 아니다 — 첫 성과 문장을 제목으로, 나머지는 '외 n건'.
+    const first = c.kids.length ? c.kids[0].label : '';
+    out.push({ id: 'code:' + day, kind: 'cmd', verb: '바꿈', label: first ? first + (c.n > 1 ? ' 외 ' + (c.n - 1) + '건' : '') : '코드 작업 ' + c.n + '건', key: 'code|' + day, ts: c.ts, actor: c.actor,
       detail: '커밋 ' + c.commits, children: c.kids });
   }
   return out;

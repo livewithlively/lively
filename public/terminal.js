@@ -505,7 +505,7 @@
     } catch (_) {
     }
     const browserDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-    const merged = Object.assign({ fontFamily: FONTS[0].v, fontSize: 14, theme: browserDark ? "dark" : "light", cursorStyle: "bar", scrollSpeed: 3, padGain: 3 }, p);
+    const merged = Object.assign({ fontFamily: FONTS[0].v, fontSize: IS_MOBILE ? 12 : 14, theme: browserDark ? "dark" : "light", cursorStyle: "bar", scrollSpeed: 3, padGain: 3, mobileDock: true }, p);
     merged.fontFamily = withKR(merged.fontFamily);
     return merged;
   }
@@ -575,7 +575,7 @@
   }
   function diagText() {
     return [
-      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build 48360892",
+      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build 7b0835c8",
       "ua: " + navigator.userAgent,
       "session: " + SESSION_ID + (NODE_ID ? " node=" + NODE_ID : ""),
       "secure: " + window.isSecureContext + " \xB7 exported: " + (/* @__PURE__ */ new Date()).toISOString(),
@@ -584,6 +584,13 @@
   }
   window.livelyTermDiag = () => diagText();
   var IS_SAFARI = /Apple/i.test(navigator.vendor || "") && !/CriOS|FxiOS|Chrome|Chromium|Edg/i.test(navigator.userAgent || "");
+  var IS_MOBILE = (() => {
+    const q = new URLSearchParams(location.search).get("mobile");
+    if (q === "1") return true;
+    if (q === "0") return false;
+    const coarse = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+    return coarse || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+  })();
   var imeComposing = false;
   var appDragSelect = false;
   var DCS_BYTES = [27, 80, 49, 48, 48, 48, 112];
@@ -1411,6 +1418,7 @@
     const main = document.getElementById("main");
     if (!main || document.querySelector(".pop-hint")) return;
     if (main.querySelector(".ended-bar")) return;
+    if (IS_MOBILE) return;
     try {
       if (window.top !== window.self) return;
     } catch (_) {
@@ -1884,6 +1892,192 @@
       active = false;
     }, { passive: true });
   }
+  var mdockEl = null, mcompEl = null;
+  function mobileDockOn() {
+    return IS_MOBILE && prefs().mobileDock !== false;
+  }
+  function setTermTextareaReadonly(on) {
+    try {
+      const ta = term.textarea;
+      if (!ta) return;
+      ta.readOnly = !!on;
+      if (on) {
+        ta.setAttribute("inputmode", "none");
+        ta.tabIndex = -1;
+      } else {
+        ta.removeAttribute("inputmode");
+        ta.tabIndex = 0;
+      }
+    } catch (_) {
+    }
+  }
+  function arrowSeq(letter) {
+    let app = false;
+    try {
+      app = !!(term.modes && term.modes.applicationCursorKeysMode);
+    } catch (_) {
+    }
+    return (app ? "\x1BO" : "\x1B[") + letter;
+  }
+  function mobileSend() {
+    if (!mcompEl) return;
+    const t = String(mcompEl.value || "");
+    userTyped = true;
+    if (t) {
+      if (/\n/.test(t)) pasteText(t);
+      else sendInput(sanitizePasteText(t));
+    }
+    sendInput("\r");
+    mcompEl.value = "";
+    mobileGrow();
+    dlog("mdock", "send len=" + t.length);
+  }
+  function mobileGrow() {
+    if (!mcompEl) return;
+    mcompEl.style.height = "auto";
+    mcompEl.style.height = Math.min(112, Math.max(38, mcompEl.scrollHeight)) + "px";
+  }
+  function openCopySheet() {
+    const lines = [];
+    try {
+      const b = term.buffer.active;
+      const from = Math.max(0, b.length - 400);
+      for (let i = from; i < b.length; i++) {
+        const ln = b.getLine(i);
+        lines.push(ln ? ln.translateToString(true) : "");
+      }
+    } catch (_) {
+    }
+    while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+    const text = lines.join("\n");
+    const pre = el("pre", { class: "copy-sheet-pre", text: text || "(\uD654\uBA74\uC5D0 \uAE00\uC790\uAC00 \uC5C6\uC5B4\uC694)" });
+    const back = el(
+      "div",
+      { class: "pop-back", onclick: (e) => {
+        if (e.target === back) back.remove();
+      } },
+      el(
+        "div",
+        { class: "pop copy-sheet" },
+        el(
+          "div",
+          { class: "copy-sheet-head" },
+          el("h3", { text: "\uD654\uBA74 \uAE00\uC790 \xB7 \uCD5C\uADFC " + lines.length + "\uC904" }),
+          el("span", { class: "spacer" }),
+          el("button", { class: "tbtn", text: "\uC804\uCCB4 \uBCF5\uC0AC", onclick: () => {
+            copyText(text, false, true);
+          } }),
+          el("button", { class: "tbtn", text: "\uB2EB\uAE30", onclick: () => back.remove() })
+        ),
+        el("div", { class: "copy-sheet-hint", text: "\uAFB9 \uB20C\uB7EC \uD544\uC694\uD55C \uBD80\uBD84\uB9CC \uACE0\uB974\uAC70\uB098, \uC804\uCCB4 \uBCF5\uC0AC\uB97C \uB204\uB974\uC138\uC694." }),
+        pre
+      )
+    );
+    document.body.append(back);
+    try {
+      pre.scrollTop = pre.scrollHeight;
+    } catch (_) {
+    }
+  }
+  function setupMobileDock(mainEl) {
+    if (!IS_MOBILE) return;
+    document.body.classList.add("mobile");
+    const tbtn = (label, title, act, onStart) => {
+      const b = el("button", { class: "mkey", type: "button", title: title || label, text: label });
+      b.addEventListener(onStart ? "touchstart" : "touchend", (e) => {
+        e.preventDefault();
+        act();
+      }, { passive: false });
+      b.addEventListener("click", (e) => {
+        if (e.detail === 0) act();
+      });
+      return b;
+    };
+    const key = (label, seq, title) => tbtn(label, title, () => {
+      userTyped = true;
+      sendInput(typeof seq === "function" ? seq() : seq);
+    }, true);
+    const keys = el(
+      "div",
+      { class: "mkeys" },
+      key("Esc", "\x1B"),
+      key("Tab", "	"),
+      key("\u2191", () => arrowSeq("A")),
+      key("\u2193", () => arrowSeq("B")),
+      key("\u2190", () => arrowSeq("D")),
+      key("\u2192", () => arrowSeq("C")),
+      key("^C", "", "Ctrl+C \u2014 \uC911\uB2E8"),
+      key("\u23CE", "\r", "Enter \uB9CC \uBCF4\uB0B4\uAE30"),
+      tbtn("\u29C9 \uBCF5\uC0AC", "\uD654\uBA74 \uAE00\uC790 \uACE0\uB974\uAE30\xB7\uBCF5\uC0AC", openCopySheet),
+      tbtn("\u2398 \uBD99\uC5EC\uB123\uAE30", "\uD074\uB9BD\uBCF4\uB4DC \uB0B4\uC6A9\uC744 \uC785\uB825\uCE78\uC5D0", mobilePasteIn)
+    );
+    mcompEl = el("textarea", {
+      class: "mcomp",
+      rows: "1",
+      placeholder: "\uC5EC\uAE30\uC5D0 \uC4F0\uACE0 \uBCF4\uB0B4\uAE30 \u2014 \uAFB9 \uB20C\uB7EC \uBCF5\uC0AC\xB7\uBD99\uC5EC\uB123\uAE30",
+      autocapitalize: "off",
+      autocomplete: "off",
+      autocorrect: "off",
+      spellcheck: "false",
+      enterkeyhint: "send",
+      "aria-label": "\uD130\uBBF8\uB110\uC5D0 \uBCF4\uB0BC \uAE00"
+    });
+    const sendBtn = tbtn("\uBCF4\uB0B4\uAE30", "\uBCF4\uB0B4\uAE30(Enter)", mobileSend);
+    sendBtn.className = "msend";
+    mcompEl.addEventListener("input", mobileGrow);
+    mcompEl.addEventListener("keydown", (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        mobileSend();
+      }
+    });
+    mcompEl.addEventListener("focus", () => {
+      setTimeout(() => {
+        try {
+          window.scrollTo(0, 0);
+        } catch (_) {
+        }
+      }, 50);
+    });
+    mdockEl = el("div", { id: "mdock" }, keys, el("div", { class: "mrow" }, mcompEl, sendBtn));
+    mainEl.append(mdockEl);
+    applyMobileDock();
+  }
+  function mobilePasteIn() {
+    if (!(navigator.clipboard && navigator.clipboard.readText)) {
+      toast("\uBE0C\uB77C\uC6B0\uC800\uAC00 \uBD99\uC5EC\uB123\uAE30 \uC77D\uAE30\uB97C \uB9C9\uC558\uC5B4\uC694 \u2014 \uC785\uB825\uCE78\uC744 \uAFB9 \uB20C\uB7EC \uBD99\uC5EC\uB123\uC73C\uC138\uC694.", true);
+      return;
+    }
+    navigator.clipboard.readText().then((t) => {
+      if (!mcompEl) return;
+      const v = mcompEl.value;
+      const st = mcompEl.selectionStart ?? v.length;
+      mcompEl.value = v.slice(0, st) + t + v.slice(mcompEl.selectionEnd ?? v.length);
+      mobileGrow();
+      mcompEl.focus();
+    }).catch(() => toast("\uBD99\uC5EC\uB123\uAE30\uB97C \uBABB \uC77D\uC5C8\uC5B4\uC694 \u2014 \uC785\uB825\uCE78\uC744 \uAFB9 \uB20C\uB7EC \uBD99\uC5EC\uB123\uC73C\uC138\uC694.", true));
+  }
+  function applyMobileDock() {
+    const on = mobileDockOn();
+    if (mdockEl) mdockEl.hidden = !on;
+    setTermTextareaReadonly(on);
+    doResize();
+  }
+  function setupViewportFit() {
+    const vv = window.visualViewport;
+    if (!vv || !IS_MOBILE) return;
+    const ws2 = document.getElementById("ws");
+    const apply = () => {
+      if (!ws2) return;
+      ws2.style.height = Math.round(vv.height) + "px";
+      ws2.style.transform = vv.offsetTop ? "translateY(" + Math.round(vv.offsetTop) + "px)" : "";
+      doResize();
+    };
+    vv.addEventListener("resize", apply);
+    vv.addEventListener("scroll", apply);
+    apply();
+  }
   function setActive(id) {
     activeId = id;
     for (const t of tabs) t.pane.classList.toggle("active", t.id === id);
@@ -2185,9 +2379,10 @@
     const cursorSel = el("select", {}, ...["bar", "block", "underline"].map((c) => el("option", { value: c, selected: c === p.cursorStyle ? "" : null }, c)));
     const speedI = el("input", { type: "number", min: "1", max: "12", step: "1", value: String(p.scrollSpeed || 3) });
     const gainI = el("input", { type: "number", min: "0.5", max: "6", step: "0.5", value: String(p.padGain || 3) });
+    const dockI = el("input", { type: "checkbox", checked: p.mobileDock !== false ? "" : null, style: "width:auto" });
     let curFamily = p.fontFamily;
     const apply = () => {
-      const np = { fontFamily: fontSel.value, fontSize: Number(sizeI.value) || 14, theme: themeSel.value, cursorStyle: cursorSel.value, scrollSpeed: Math.max(1, Math.min(12, Number(speedI.value) || 1)), padGain: Math.max(0.5, Math.min(6, Number(gainI.value) || 3)) };
+      const np = { fontFamily: fontSel.value, fontSize: Number(sizeI.value) || 14, theme: themeSel.value, cursorStyle: cursorSel.value, scrollSpeed: Math.max(1, Math.min(12, Number(speedI.value) || 1)), padGain: Math.max(0.5, Math.min(6, Number(gainI.value) || 3)), mobileDock: !!dockI.checked };
       term.options.fontFamily = np.fontFamily;
       term.options.fontSize = np.fontSize;
       term.options.cursorStyle = np.cursorStyle;
@@ -2206,6 +2401,10 @@
     sizeI.addEventListener("input", apply);
     speedI.addEventListener("input", apply);
     gainI.addEventListener("input", apply);
+    dockI.addEventListener("change", () => {
+      apply();
+      applyMobileDock();
+    });
     const back = el(
       "div",
       { class: "pop-back", onclick: (e) => {
@@ -2221,6 +2420,7 @@
         el("div", { class: "field" }, el("label", { text: "\uCEE4\uC11C" }), cursorSel),
         el("div", { class: "field" }, el("label", { text: "\uB9C8\uC6B0\uC2A4 \uD720 \uC18D\uB3C4 (1~12)" }), speedI),
         el("div", { class: "field" }, el("label", { text: "\uD2B8\uB799\uD328\uB4DC \uC18D\uB3C4 (1 = \uC190\uAC00\uB77D \uC774\uB3D9\uB9CC\uD07C)" }), gainI),
+        IS_MOBILE ? el("div", { class: "field field-row" }, dockI, el("label", { text: "\uBAA8\uBC14\uC77C \uC785\uB825 \uBC14 \u2014 \uC544\uB798 \uC785\uB825\uCE78\uC5D0\uC11C \uC4F0\uACE0 \uBCF4\uB0B4\uAE30(\uB044\uBA74 \uD130\uBBF8\uB110\uC5D0 \uC9C1\uC811 \uD0C0\uC774\uD551, \uD55C\uAE00\uC774 \uAE68\uC9C8 \uC218 \uC788\uC5B4\uC694)" })) : null,
         el("button", { class: "tbtn pop-close", text: "\uB2EB\uAE30", onclick: () => back.remove() })
       )
     );
@@ -2306,7 +2506,7 @@
           "\uBB38\uC81C\uAC00 \uC0DD\uACBC\uC744 \uB54C",
           tool("\uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", "\uC785\uB825\uC774 \uC774\uC0C1\uD560 \uB54C(\uD0A4\uB9CC \uB20C\uB7EC\uB3C4 \uAC19\uC740 \uBB38\uC790\uC5F4\uC774 \uB4E4\uC5B4\uAC00\uB294 \uB4F1) \uC544\uB798 \uBC84\uD2BC\uC73C\uB85C \uCD5C\uADFC \uC785\uB825 \uAE30\uB85D\uC744 \uBCF5\uC0AC\uD574 \uC81C\uBCF4\uC5D0 \uBD99\uC5EC \uC8FC\uC138\uC694 \u2014 \uC11C\uBC84\uB85C\uB294 \uC804\uC1A1\uB418\uC9C0 \uC54A\uC544\uC694"),
           el("button", { class: "tbtn", text: "\u{1F50D} \uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", onclick: () => copyText(diagText(), false, true) }),
-          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "48360892 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
+          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "7b0835c8 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
         ),
         sec(
           "\uB3C4\uAD6C (\uC624\uB978\uCABD \uC704 \uBC84\uD2BC)",
@@ -2864,6 +3064,8 @@
     setupPaste();
     setupWheel();
     setupTouch();
+    setupMobileDock(main);
+    setupViewportFit();
     setupOscClipboard();
     setupTextareaHygiene();
     setupImeTrace();

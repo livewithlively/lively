@@ -21,8 +21,11 @@ function instrument(name: string, handler: ToolHandler, harness?: string | null)
   return async (args, extra) => {
     const started = Date.now();
     let actor: string | null = null;
+    let app: string | null = null;
     try {
-      actor = resolveUser(extra)?.userId ?? null;
+      const u = resolveUser(extra);
+      actor = u?.userId ?? null;
+      app = u?.appId ?? null;   // #1780 D3-5 — 앱 세션/UI 의 tools/call 이면 그 앱 id 로 귀속(관측 전용)
     } catch {
       // 인증 컨텍스트 해석 실패 → actor 미상으로 기록(/mcp 는 bearer 필수라 보통 도달 안 함)
     }
@@ -30,7 +33,7 @@ function instrument(name: string, handler: ToolHandler, harness?: string | null)
       const out = await handler(args, extra);
       const failure = toolResultFailure(out); // 정상 반환이어도 isError:true 면 실패로 적재(#1653)
       logToolCall({
-        tool: name, harness: harness ?? null, actor, args,
+        tool: name, harness: harness ?? null, actor, app, args,
         ok: failure === null, error: failure, durationMs: Date.now() - started,
       });
       return out;
@@ -39,6 +42,7 @@ function instrument(name: string, handler: ToolHandler, harness?: string | null)
         tool: name,
         harness: harness ?? null,
         actor,
+        app,
         args,
         ok: false,
         error: err instanceof Error ? err.message : String(err),

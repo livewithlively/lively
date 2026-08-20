@@ -13,6 +13,7 @@ import { markExternalTool } from "../org/policies/tool-log.js";
 import { resolveMemberSecret } from "../org/credentials/member-secret-store.js";
 import { resolveProxyBearer } from "../org/credentials/oauth-proxy-auth.js";
 import { resolveUser, requireScope, type LivelyUser } from "../context.js";
+import { requireAppTool } from "../apps/principal.js";
 import { HttpError } from "../http/rest-util.js";
 import { isScope } from "../auth/scopes.js";
 import { logger } from "../log.js";
@@ -234,6 +235,7 @@ export async function registerDynamicTools(server: McpServer): Promise<void> {
       async (args: Record<string, unknown>, extra: unknown) => {
         const u: LivelyUser = resolveUser(extra);
         requireScope(u, callScope);
+        await requireAppTool(u, tool.name); // #1780: 앱 세션이면 ext_tools allowlist 로 축소(일반 세션 통과)
         try {
           const r = await runHttpProxyTool(tool, args ?? {}, u.userId); // P1: 요청자 신원으로 vault 자격 해소
           return {

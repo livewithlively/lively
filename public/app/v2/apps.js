@@ -6,6 +6,8 @@
 //  ⚠ 노출은 클래식과 같은 규칙(navOn — ui_nav 로 끈 탭은 여기서도 안 보인다).
 import { el, navOn } from '../core.js';
 import { sessionTermUrl } from '../lib/session-open.js'; // #1820 — 세션 주소는 한 곳에서만 만든다
+import { listSessionApps, openAppSession } from './app-session.js';
+import { openAppUi } from './app-ui.js';
 // 표 한 줄 = 앱 하나. 순서 = 런치패드 순서. 클래식 탭 순서(홈·AI세션·프로젝트·WIKI·맥락관리·설정·가이드)를 따른다.
 export const APPS = [
     { key: 'dashboard', title: '홈(클래식)', desc: '옛 대시보드 — 내 프로젝트·알림·세션·팀 로그 위젯', route: 'dashboard', tab: 'dashboard', icon: 'home' },
@@ -75,20 +77,38 @@ export function appIcon(icon, cls) {
     return svg;
 }
 // ── 런치패드 오버레이 ──
-//  전체 화면을 덮는 격자. 검색(제목·설명 부분일치)·Esc 로 닫기·항목 클릭 = #/app/<key>. 방향키 없이도 Tab 으로 순회된다.
+//  전체 화면을 덮는 격자. 검색(제목·설명 부분일치)·Esc 로 닫기.
+//   · 화면 앱(APPS 표) 클릭 = #/app/<key> 로 이동(가운데 iframe).
+//   · 설치된 세션 앱(org_app, #1780) 클릭 = openAppSession → 앱 세션을 열고 그 대화 화면으로. 동의(grant)가 없으면
+//     그때 동의 창이 뜬다. 세션 앱은 비동기로 불러와(listSessionApps) 도착하면 격자에 덧그린다(없으면 화면앱만 보인다).
 let padEl = null;
 export function openLaunchpad() {
     closeLaunchpad();
     const apps = visibleApps();
+    let sApps = [];
     const grid = el('div', { class: 'v2-pad-grid', role: 'list' });
     const input = el('input', { class: 'v2-pad-search', type: 'search', placeholder: '앱 찾기', 'aria-label': '앱 찾기' });
     const draw = () => {
         const q = input.value.trim().toLowerCase();
-        grid.replaceChildren(...apps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.desc.toLowerCase().includes(q)).map((a) => el('a', { class: 'v2-pad-item', role: 'listitem', href: '#/app/' + a.key, onclick: () => closeLaunchpad() }, el('span', { class: 'v2-pad-ico' }, appIcon(a.icon)), el('b', { text: a.title }), el('span', { class: 'v2-pad-desc', text: a.desc }))));
+        const screen = apps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.desc.toLowerCase().includes(q)).map((a) => el('a', { class: 'v2-pad-item', role: 'listitem', href: '#/app/' + a.key, onclick: () => closeLaunchpad() }, el('span', { class: 'v2-pad-ico' }, appIcon(a.icon)), el('b', { text: a.title }), el('span', { class: 'v2-pad-desc', text: a.desc })));
+        const session = sApps.filter((a) => !q || a.title.toLowerCase().includes(q) || a.id.toLowerCase().includes(q)).map((a) => {
+            const hasUi = a.pages.length > 0; // UI 앱이면 UI 를 연다(샌드박스 iframe), 아니면 세션 앱.
+            return el('button', { class: 'v2-pad-item v2-pad-item--app', role: 'listitem', type: 'button',
+                title: hasUi ? '앱 — 열면 이 앱의 화면이 창으로 뜹니다' : '세션 앱 — 열면 이 앱 전용 AI 세션이 뜹니다',
+                onclick: () => { closeLaunchpad(); if (hasUi)
+                    void openAppUi(a.id, { title: a.title });
+                else
+                    void openAppSession(a.id, { title: a.title }); } }, el('span', { class: 'v2-pad-ico' }, appIcon(hasUi ? 'liv' : 'term')), el('b', { text: a.title }), el('span', { class: 'v2-pad-desc', text: hasUi ? '앱 화면 — 창으로 열려요' : '앱 세션 — 열면 이 앱으로 대화가 시작돼요' }), el('span', { class: 'v2-pad-badge', text: hasUi ? '앱' : '세션 앱' }));
+        });
+        grid.replaceChildren(...screen, ...session);
         if (!grid.childElementCount)
             grid.append(el('p', { class: 'v2-pad-empty', text: '맞는 앱이 없어요.' }));
     };
     input.addEventListener('input', draw);
+    void listSessionApps().then((a) => { if (padEl) {
+        sApps = a;
+        draw();
+    } });
     padEl = el('div', { class: 'v2-pad', role: 'dialog', 'aria-label': '앱', onclick: (e) => { if (e.target === padEl)
             closeLaunchpad(); } }, el('div', { class: 'v2-pad-top' }, el('div', { class: 'v2-pad-h' }, el('b', { text: '앱' }), el('span', { class: 'v2-pad-sub', text: '아직 새 화면으로 옮기지 않은 것들 — 열면 가운데에 그대로 실립니다.' })), input, el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기 (Esc)', onclick: () => closeLaunchpad() })), grid);
     document.body.append(padEl);

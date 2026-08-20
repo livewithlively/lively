@@ -180,6 +180,9 @@ export function createTimeline(host: HTMLElement, ctx: TimelineCtx): TimelineHan
     const kindWord = it.kind === 'cmd' && it.detail ? it.detail + '번' : (KIND_WORD[it.kind] || '');
     const box = el(it.href && !canOpen ? 'a' : 'div', {
       class: 'tl-card tlk-' + it.kind + (canOpen ? ' can' : '') + (isOpen ? ' open' : '') + (it.href && !canOpen ? ' go' : '') + (it.error ? ' err' : ''),
+      // 실험장(#1719 원준): 지식 카드는 판(작업대)으로 끌어다 문서 위젯이 된다.
+      draggable: it.href && String(it.href).startsWith('#/k/') ? 'true' : null,
+      ondragstart: it.href && String(it.href).startsWith('#/k/') ? ((e: DragEvent) => { e.dataTransfer?.setData('text/plain', 'tl:' + JSON.stringify({ href: it.href, label: it.label })); }) : null,
       href: it.href && !canOpen ? it.href : null,
       title: [it.label, it.detail, it.actor && it.actor.name ? String(it.actor.name) : ''].filter(Boolean).join('\n'),
     },
