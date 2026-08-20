@@ -109,32 +109,154 @@ export function createTabs(centerHost, asideHost, hooks) {
                     : ['M4 5h16v12H4z', 'M4 9h16'];
         return sv('svg', { viewBox: '0 0 24 24', class: 'v2-tab-ic', 'aria-hidden': 'true' }, ...d.map((p) => sv('path', { d: p })));
     }
-    // ── 끌어 순서 바꾸기 ──
-    //  놓는 순간에만 배열을 고친다(끄는 중에 다시 그리면 브라우저 드래그가 끊긴다 — 표시는 클래스로만).
-    let dragging = null;
-    function clearMarks() { for (const n of Array.from(strip.querySelectorAll('.v2-tab')))
-        n.classList.remove('dnd-before', 'dnd-after'); }
-    function dropAt(target, after) {
-        const d = dragging;
-        clearMarks();
-        dragging = null;
-        if (!d || d.fixed)
+    let drag = null;
+    let dragJustMoved = false; // 끌고 난 직후의 click 은 탭 전환이 아니다
+    function clearDragStyles(d) {
+        for (const n of d.els) {
+            n.style.transform = '';
+            n.style.transition = '';
+        }
+        d.el.classList.remove('dragging');
+        strip.classList.remove('dnd');
+    }
+    function beginDrag(t, node, e) {
+        if (drag || editing || t.fixed || e.button !== 0 || e.pointerType === 'touch')
             return;
-        const from = tabs.indexOf(d);
+        const movable = tabs.filter((x) => !x.fixed);
+        const els = movable.map((x) => strip.querySelector('[data-tab="' + x.id + '"]'));
+        if (els.some((n) => !n))
+            return;
+        const from = movable.indexOf(t);
         if (from < 0)
             return;
-        tabs.splice(from, 1);
-        let to = target ? tabs.indexOf(target) + (after ? 1 : 0) : tabs.length;
-        to = Math.max(1, Math.min(to, tabs.length)); // 0번(홈) 앞으로는 못 간다
-        tabs.splice(to, 0, d);
-        paint();
-        save();
+        const rects = els.map((n) => n.getBoundingClientRect());
+        // 이웃이 비켜 줄 거리 = 잡은 탭의 폭 + 탭 사이 간격(줄에서 실측 — 폭이 제각각이라 상수로 두면 어긋난다).
+        const gap = rects.length > 1 ? Math.max(0, Math.round(rects[1].left - rects[0].right)) : 3;
+        drag = { tab: t, el: node, startX: e.clientX, pointerId: e.pointerId, moved: false, from, to: from, els, rects, step: rects[from].width + gap };
+        try {
+            node.setPointerCapture(e.pointerId);
+        }
+        catch (_) { /* noop */ }
     }
-    strip.addEventListener('dragover', (e) => { if (dragging)
-        e.preventDefault(); });
-    strip.addEventListener('drop', (e) => { if (!dragging)
-        return; e.preventDefault(); dropAt(null, true); });
+    function onDragMove(e) {
+        const d = drag;
+        if (!d || e.pointerId !== d.pointerId)
+            return;
+        const dx = e.clientX - d.startX;
+        if (!d.moved) {
+            if (Math.abs(dx) < 4)
+                return; // 손떨림은 클릭이다
+            d.moved = true;
+            strip.classList.add('dnd'); // 이 클래스가 붙어 있는 동안만 이웃이 미끄러진다
+            d.el.classList.add('dragging');
+        }
+        d.el.style.transform = 'translateX(' + dx + 'px)';
+        const c = d.rects[d.from].left + d.rects[d.from].width / 2 + dx;
+        let to = d.from;
+        for (let i = 0; i < d.rects.length; i++) {
+            if (i === d.from)
+                continue;
+            const mid = d.rects[i].left + d.rects[i].width / 2;
+            if (i > d.from && c > mid)
+                to = Math.max(to, i);
+            if (i < d.from && c < mid)
+                to = Math.min(to, i);
+        }
+        d.to = to;
+        for (let i = 0; i < d.els.length; i++) {
+            if (i === d.from)
+                continue;
+            const shift = (i > d.from && i <= to) ? -d.step : (i < d.from && i >= to) ? d.step : 0;
+            d.els[i].style.transform = shift ? 'translateX(' + shift + 'px)' : '';
+        }
+    }
+    function endDrag(e) {
+        const d = drag;
+        if (!d || (e && e.pointerId !== d.pointerId))
+            return;
+        drag = null;
+        try {
+            d.el.releasePointerCapture(d.pointerId);
+        }
+        catch (_) { /* noop */ }
+        if (!d.moved) {
+            clearDragStyles(d);
+            return;
+        }
+        dragJustMoved = true;
+        const land = d.to === d.from ? 0
+            : d.to > d.from ? (d.rects[d.to].right - d.rects[d.from].right)
+                : (d.rects[d.to].left - d.rects[d.from].left);
+        d.el.style.transition = 'transform .16s ease';
+        d.el.style.transform = 'translateX(' + land + 'px)';
+        window.setTimeout(() => {
+            const cur = tabs.indexOf(d.tab);
+            if (cur >= 0 && d.to !== d.from) {
+                tabs.splice(cur, 1);
+                tabs.splice(Math.max(1, Math.min(1 + d.to, tabs.length)), 0, d.tab); // 0번(홈) 앞자리는 없다
+                save();
+            }
+            clearDragStyles(d);
+            paint();
+            window.setTimeout(() => { dragJustMoved = false; }, 0);
+        }, d.to === d.from ? 0 : 170);
+    }
+    window.addEventListener('pointermove', onDragMove);
+    window.addEventListener('pointerup', endDrag);
+    window.addEventListener('pointercancel', endDrag);
+    // ── 탭 이름 두 번 눌러 고치기(원준 2026-08-20) — 세션 탭만.
+    //  20초 폴링이 입력 중인 칸을 지우지 않게, 고치는 동안 paint 를 멈춘다(session-chat 의 renaming 과 같은 규칙).
+    let editing = null;
+    function startRename(t, node) {
+        if (editing || drag || !hooks.canRename || !hooks.canRename(t) || !hooks.onRename)
+            return;
+        const label = node.querySelector('.t');
+        if (!label)
+            return;
+        editing = t;
+        const input = el('input', { class: 'v2-tab-in', type: 'text', maxlength: '80', value: t.title, 'aria-label': '세션 이름', spellcheck: 'false' });
+        let closed = false;
+        const done = () => { editing = null; paint(); };
+        const cancel = () => { if (closed)
+            return; closed = true; done(); };
+        const commit = async () => {
+            if (closed)
+                return;
+            const to = input.value.replace(/\s+/g, ' ').trim();
+            if (!to || to === t.title) {
+                cancel();
+                return;
+            }
+            closed = true;
+            input.disabled = true;
+            try {
+                await hooks.onRename(t, to);
+            }
+            catch (_) { /* 알림은 호출자가 냈다 */ }
+            done();
+        };
+        input.onkeydown = (ev) => {
+            if (ev.isComposing)
+                return; // 한글 조합 중 Enter 는 확정이지 저장이 아니다
+            if (ev.key === 'Enter') {
+                ev.preventDefault();
+                void commit();
+            }
+            else if (ev.key === 'Escape') {
+                ev.preventDefault();
+                cancel();
+            }
+        };
+        input.onblur = () => { void commit(); };
+        input.onpointerdown = (ev) => ev.stopPropagation(); // 고치는 중엔 끌기가 시작되지 않게
+        input.onclick = (ev) => ev.stopPropagation();
+        label.replaceWith(input);
+        input.focus();
+        input.select();
+    }
     function paint() {
+        if (drag || editing)
+            return; // 끌거나 고치는 중에 다시 그리면 그 동작이 끊긴다(20초 폴링도 paint 를 부른다)
         const kids = tabs.map((t) => {
             const info = hooks.titleFor(t.route);
             t.title = info.title;
@@ -142,50 +264,18 @@ export function createTabs(centerHost, asideHost, hooks) {
             const on = t === activeTab;
             const node = el('div', {
                 class: 'v2-tab' + (on ? ' on' : '') + (t.fixed ? ' fixed' : ''), role: 'tab', 'aria-selected': String(on),
-                title: t.fixed ? t.title + ' — 늘 여기 있어요' : t.title,
-                draggable: t.fixed ? null : 'true',
-                onclick: () => activate(t),
+                'data-tab': t.id,
+                title: t.fixed ? t.title + ' — 늘 여기 있어요'
+                    : (hooks.canRename && hooks.canRename(t) ? t.title + ' — 두 번 누르면 이름을 바꿉니다' : t.title),
+                onclick: () => { if (dragJustMoved)
+                    return; activate(t); },
+                ondblclick: () => startRename(t, node),
+                onpointerdown: (e) => beginDrag(t, node, e),
                 // 가운데 클릭 = 닫기(브라우저 탭 문법)
                 onauxclick: (e) => { if (e.button === 1) {
                     e.preventDefault();
                     close(t);
                 } },
-                ondragstart: (e) => {
-                    if (t.fixed) {
-                        e.preventDefault();
-                        return;
-                    }
-                    dragging = t;
-                    if (e.dataTransfer) {
-                        e.dataTransfer.effectAllowed = 'move';
-                        try {
-                            e.dataTransfer.setData('text/plain', t.id);
-                        }
-                        catch (_) { /* noop */ }
-                    }
-                    window.setTimeout(() => node.classList.add('dragging'), 0);
-                },
-                ondragend: () => { node.classList.remove('dragging'); clearMarks(); dragging = null; },
-                ondragover: (e) => {
-                    if (!dragging || dragging === t)
-                        return;
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const r = node.getBoundingClientRect();
-                    const after = e.clientX > r.left + r.width / 2;
-                    // 홈(0번) 위에서는 오른쪽에만 놓을 수 있다 — 그 앞자리는 없다.
-                    clearMarks();
-                    node.classList.add(t.fixed || after ? 'dnd-after' : 'dnd-before');
-                },
-                ondragleave: () => node.classList.remove('dnd-before', 'dnd-after'),
-                ondrop: (e) => {
-                    if (!dragging || dragging === t)
-                        return;
-                    e.preventDefault();
-                    e.stopPropagation();
-                    const r = node.getBoundingClientRect();
-                    dropAt(t, t.fixed || e.clientX > r.left + r.width / 2);
-                },
             }, icon(t.route), el('span', { class: 't', text: t.title }), 
             // 홈은 닫기 단추가 없다 — 지울 수 없는 자리라는 걸 생김새가 먼저 말한다.
             ...(t.fixed ? [] : [el('button', {

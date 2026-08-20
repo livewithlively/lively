@@ -319,3 +319,10 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 @media (pointer: coarse) {
   .livc-input, .dt-box .livc-input { font-size: 16px; }
 }
+
+/* 제목이 'pane 이름'일 때도 이 줄에서 이름을 고친다(원준 2026-08-20) — 연필은 손을 올렸을 때만. */
+.sc-title-penbtn { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-left: 4px;
+  border: 0; background: none; padding: 0; border-radius: 5px; cursor: pointer; opacity: 0; transition: opacity .12s ease; flex: none; }
+.sc-titlebox:hover .sc-title-penbtn, .sc-title-penbtn:focus-visible { opacity: 1; }
+.sc-title-penbtn:hover { background: var(--bg-tint, #F6FAFF); }
+.sc-title-penbtn:hover .sc-title-pen { stroke: var(--blue); }

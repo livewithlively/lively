@@ -126,7 +126,19 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (renaming) return;                    // 고치는 중엔 손대지 않는다(20초 폴링이 입력 중인 칸을 지우면 안 된다)
     const pane = paneTitle();
     const tip = [titleText, target.id].filter(Boolean).join(' · ');
-    if (pane) { titleHost.replaceChildren(el('b', { class: 'sc-title', title: tip, text: pane })); return; }
+    if (pane) {
+      // 제목 자리는 '지금 하는 일'(pane 이름)이 차지한다(#1744). 그래도 **이름은 이 줄에서 고친다**(원준 2026-08-20)
+      //  — 두 번 누르거나, 손을 올리면 나오는 연필로. 종전엔 [⋯ ▸ 세션 이름 바꾸기] 한 길뿐이라 아무도 못 찾았다.
+      const b = el('b', { class: 'sc-title', title: canRename() ? tip + ' — 두 번 누르면 세션 이름을 바꿉니다' : tip, text: pane });
+      if (!canRename()) { titleHost.replaceChildren(b); return; }
+      b.addEventListener('dblclick', () => startRename());
+      titleHost.replaceChildren(b, el('button', {
+        class: 'sc-title-penbtn', type: 'button', 'aria-label': '세션 이름 바꾸기',
+        title: '세션 이름 바꾸기 — 지금 제목은 이 세션이 하는 일이에요',
+        onclick: () => startRename(),
+      }, sv('svg', { viewBox: '0 0 24 24', class: 'sc-title-pen', 'aria-hidden': 'true' }, sv('path', { d: 'M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z' }))));
+      return;
+    }
     const t = shownName();
     titleHost.replaceChildren(canRename()
       ? el('button', { class: 'sc-title sc-title-btn', type: 'button', title: '세션 이름 — 눌러서 바꿉니다', onclick: () => startRename() },

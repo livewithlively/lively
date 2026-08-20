@@ -77,6 +77,19 @@ export async function bootV2(): Promise<void> {
       drawSide();
     },
     onClose: (tab) => { if (tab.chat) { tab.chat.destroy(); tab.chat = null; } dropProjView(tab); drawSide(); },
+    // 탭 두 번 눌러 이름 바꾸기(원준 2026-08-20) — 세션 탭만. 판정은 세션 화면의 규칙과 같다:
+    //  내 세션이고 살아 있고 복원 대기가 아닐 때(session-chat canRename).
+    canRename: (tab) => {
+      const k = routeKey(tab.route);
+      if (!k.startsWith('s:')) return false;
+      const s2 = findSess(k.slice(2));
+      return !!s2 && s2.owned && s2.live && !s2.raw?.restorable;
+    },
+    onRename: async (tab, name) => {
+      const id = routeKey(tab.route).slice(2);
+      try { await renameSession(id, name, tab); toast('세션 이름을 바꿨어요.'); }
+      catch (e: any) { toast('이름을 바꾸지 못했습니다 — ' + (e && e.message ? e.message : e), true); }
+    },
   });
   if (!TABS_OFF) {
     centerEl!.prepend(tabsApi.strip);   // 탭 줄은 가운데 열 맨 위(탭 패널들은 tabs.ts 가 이미 뒤에 붙였다)
