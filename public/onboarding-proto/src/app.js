@@ -14,12 +14,40 @@
 
   /* ───────────────────────── 데이터 ───────────────────────── */
   const ROLES = ['기획·PO', '마케팅', '연구·대학원', '법무·계약', '개발', '운영·재무', '1인 사업', '학생'];
-  const SOURCES = [
-    { id: 'gdrive', label: '구글 드라이브', live: true, logo: 'D' }, { id: 'notion', label: '노션', live: true, logo: 'N' },
-    { id: 'slack', label: '슬랙', live: true, logo: 'S' }, { id: 'gmail', label: '지메일', live: true, logo: 'M' },
-    { id: 'clickup', label: '클릭업', live: true, logo: 'C' }, { id: 'folder', label: '내 컴퓨터 폴더', live: false, logo: '📁' },
-    { id: 'git', label: '깃 저장소', live: false, logo: 'G' }, { id: 'none', label: '딱히 없어요 — 대화로 시작', live: false, logo: '·', none: true },
+  /* 자료 출처 — **종류별 줄**로 나눈다. 비슷한 서비스가 한 줄에 모여야 "내 것"을 눈으로 찾는다(#1813 원준님).
+     라이블리가 실제로 연결할 수 있는 앱 목록과 맞춘다. 연결 방식(계정 로그인 / 토큰 / 관리자 등록)은
+     이 화면에서 묻지 않는다 — 여기선 '어디에 쌓여 있나'만 고르고, 붙이는 방법은 다음 화면에서 리브가 안내한다. */
+  const SOURCE_ROWS = [
+    { k: '문서·위키', items: [
+      { id: 'notion', label: 'Notion', logo: 'notion', live: true },
+      { id: 'gdrive', label: 'Google Drive', logo: 'googledrive', live: true },
+      { id: 'figma', label: 'Figma', logo: 'figma', live: true },
+    ] },
+    { k: '메신저', items: [
+      { id: 'slack', label: 'Slack', logo: 'slack', live: true },
+    ] },
+    { k: '메일·일정', items: [
+      { id: 'gmail', label: 'Gmail', logo: 'gmail', live: true, admin: true },
+      { id: 'gcal', label: 'Google 캘린더', logo: 'googlecalendar', live: true, admin: true },
+    ] },
+    { k: '일감·이슈', items: [
+      { id: 'linear', label: 'Linear', logo: 'linear', live: true },
+      { id: 'clickup', label: 'ClickUp', logo: 'clickup', live: true },
+    ] },
+    { k: '코드', items: [
+      { id: 'github', label: 'GitHub', logo: 'github', live: true },
+      { id: 'gitlab', label: 'GitLab', logo: 'gitlab', live: true },
+    ] },
+    { k: '내 컴퓨터', items: [
+      { id: 'folder', label: '내 컴퓨터 폴더', ic: 'folder' },
+      { id: 'git', label: '로컬 깃 저장소', ic: 'term' },
+    ] },
+    { k: '그 밖', items: [
+      { id: 'prometheus', label: 'Prometheus', logo: 'prometheus', live: true },
+      { id: 'none', label: '딱히 없어요 — 대화로 시작', ic: 'doc', none: true },
+    ] },
   ];
+  const SOURCES = SOURCE_ROWS.flatMap((r) => r.items);
   // 선택지는 코어 하네스 카탈로그(src/terminal/catalog.ts)의 제공자와 맞춘다 — Claude Code(Anthropic)·
   //  Codex(OpenAI)·Antigravity(Google)·Grok Build(xAI)·OpenCode(그 밖). 사람에게는 CLI 이름 대신 아는 이름으로 묻는다.
   const AIS = ['Claude', 'ChatGPT', 'Gemini', 'Grok', '여러 개', '아직 없어요'];
@@ -269,8 +297,57 @@
       ],
     },
   };
+  /* ═════ A블록 — 먼저 묻는 두 가지: 무대(어디에서) → 직무(어느 쪽 일) (#1813 재설계) ═════
+     종전 Q1 은 직무·고용형태·신분 3축이 한 목록에 섞여 MECE 가 깨져 있었다("1인 사업 하는 마케터"가 갈 곳이 없고
+     디자인·영업·인사가 아예 없었다). 축을 둘로 갈라 ①무대(어디에서) ②직무(어느 쪽 일)로 묻는다.
+     ★ 직무마다 **쓸 자료 세트(PERSONA 키)를 명시적으로 적어 둔다** — `map[x] || default` 같은 조용한 폴백은 두지 않는다.
+       (v4 에서 8직업 중 5개가 마케팅 기본값으로 떨어져 "학생인데 계약서"가 나온 사고의 재발 방지.)
+     여러 직무가 같은 자료 세트를 공유하는 것은 괜찮다 — 고른 결과이지 빠뜨린 결과가 아니다. */
+  /* 서비스 로고 — **공식 마크**(simple-icons 의 브랜드 패스·브랜드 색)를 그대로 심는다.
+     직접 그린 도형은 쓰지 않는다: 사람이 찾는 것은 '내가 쓰는 그 서비스'이고, 그건 로고로 알아본다.
+     런타임 외부 의존이 없도록 패스를 인라인했다(CSP·오프라인 무관). */
+  const BRAND = {
+    slack: '<svg class="blogo" viewBox="0 0 24 24" aria-hidden="true" fill="#4A154B"><path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zM8.834 6.313a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zM17.688 8.834a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zM15.165 17.688a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z"/></svg>',
+    notion: '<svg class="blogo" viewBox="0 0 24 24" aria-hidden="true" fill="#000000"><path d="M4.459 4.208c.746.606 1.026.56 2.428.466l13.215-.793c.28 0 .047-.28-.046-.326L17.86 1.968c-.42-.326-.981-.7-2.055-.607L3.01 2.295c-.466.046-.56.28-.374.466zm.793 3.08v13.904c0 .747.373 1.027 1.214.98l14.523-.84c.841-.046.935-.56.935-1.167V6.354c0-.606-.233-.933-.748-.887l-15.177.887c-.56.047-.747.327-.747.933zm14.337.745c.093.42 0 .84-.42.888l-.7.14v10.264c-.608.327-1.168.514-1.635.514-.748 0-.935-.234-1.495-.933l-4.577-7.186v6.952L12.21 19s0 .84-1.168.84l-3.222.186c-.093-.186 0-.653.327-.746l.84-.233V9.854L7.822 9.76c-.094-.42.14-1.026.793-1.073l3.456-.233 4.764 7.279v-6.44l-1.215-.139c-.093-.514.28-.887.747-.933zM1.936 1.035l13.31-.98c1.634-.14 2.055-.047 3.082.7l4.249 2.986c.7.513.934.653.934 1.213v16.378c0 1.026-.373 1.634-1.68 1.726l-15.458.934c-.98.047-1.448-.093-1.962-.747l-3.129-4.06c-.56-.747-.793-1.306-.793-1.96V2.667c0-.839.374-1.54 1.447-1.632z"/></svg>',
+    linear: '<svg class="blogo" viewBox="0 0 24 24" aria-hidden="true" fill="#5E6AD2"><path d="M2.886 4.18A11.982 11.982 0 0 1 11.99 0C18.624 0 24 5.376 24 12.009c0 3.64-1.62 6.903-4.18 9.105L2.887 4.18ZM1.817 5.626l16.556 16.556c-.524.33-1.075.62-1.65.866L.951 7.277c.247-.575.537-1.126.866-1.65ZM.322 9.163l14.515 14.515c-.71.172-1.443.282-2.195.322L0 11.358a12 12 0 0 1 .322-2.195Zm-.17 4.862 9.823 9.824a12.02 12.02 0 0 1-9.824-9.824Z"/></svg>',
+    googledrive: '<svg class="blogo" viewBox="0 0 24 24" aria-hidden="true" fill="#4285F4"><path d="M12.01 1.485c-2.082 0-3.754.02-3.743.047.01.02 1.708 3.001 3.774 6.62l3.76 6.574h3.76c2.081 0 3.753-.02 3.742-.047-.005-.02-1.708-3.001-3.775-6.62l-3.76-6.574zm-4.76 1.73a789.828 789.861 0 0 0-3.63 6.319L0 15.868l1.89 3.298 1.885 3.297 3.62-6.335 3.618-6.33-1.88-3.287C8.1 4.704 7.255 3.22 7.25 3.214zm2.259 12.653-.203.348c-.114.198-.96 1.672-1.88 3.287a423.93 423.948 0 0 1-1.698 2.97c-.01.026 3.24.042 7.222.042h7.244l1.796-3.157c.992-1.734 1.85-3.23 1.906-3.323l.104-.167h-7.249z"/></svg>',
+    github: '<svg class="blogo" viewBox="0 0 24 24" aria-hidden="true" fill="#181717"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>',
+    gitlab: '<svg class="blogo" viewBox="0 0 24 24" aria-hidden="true" fill="#FC6D26"><path d="m23.6004 9.5927-.0337-.0862L20.3.9814a.851.851 0 0 0-.3362-.405.8748.8748 0 0 0-.9997.0539.8748.8748 0 0 0-.29.4399l-2.2055 6.748H7.5375l-2.2057-6.748a.8573.8573 0 0 0-.29-.4412.8748.8748 0 0 0-.9997-.0537.8585.8585 0 0 0-.3362.4049L.4332 9.5015l-.0325.0862a6.0657 6.0657 0 0 0 2.0119 7.0105l.0113.0087.03.0213 4.976 3.7264 2.462 1.8633 1.4995 1.1321a1.0085 1.0085 0 0 0 1.2197 0l1.4995-1.1321 2.4619-1.8633 5.006-3.7489.0125-.01a6.0682 6.0682 0 0 0 2.0094-7.003z"/></svg>',
+    clickup: '<svg class="blogo" viewBox="0 0 24 24" aria-hidden="true" fill="#7B68EE"><path d="M2 18.439l3.69-2.828c1.961 2.56 4.044 3.739 6.363 3.739 2.307 0 4.33-1.166 6.203-3.704L22 18.405C19.298 22.065 15.941 24 12.053 24 8.178 24 4.788 22.078 2 18.439zM12.04 6.15l-6.568 5.66-3.036-3.52L12.055 0l9.543 8.296-3.05 3.509z"/></svg>',
+    figma: '<svg class="blogo" viewBox="0 0 24 24" aria-hidden="true" fill="#F24E1E"><path d="M15.852 8.981h-4.588V0h4.588c2.476 0 4.49 2.014 4.49 4.49s-2.014 4.491-4.49 4.491zM12.735 7.51h3.117c1.665 0 3.019-1.355 3.019-3.019s-1.355-3.019-3.019-3.019h-3.117V7.51zm0 1.471H8.148c-2.476 0-4.49-2.014-4.49-4.49S5.672 0 8.148 0h4.588v8.981zm-4.587-7.51c-1.665 0-3.019 1.355-3.019 3.019s1.354 3.02 3.019 3.02h3.117V1.471H8.148zm4.587 15.019H8.148c-2.476 0-4.49-2.014-4.49-4.49s2.014-4.49 4.49-4.49h4.588v8.98zM8.148 8.981c-1.665 0-3.019 1.355-3.019 3.019s1.355 3.019 3.019 3.019h3.117V8.981H8.148zM8.172 24c-2.489 0-4.515-2.014-4.515-4.49s2.014-4.49 4.49-4.49h4.588v4.441c0 2.503-2.047 4.539-4.563 4.539zm-.024-7.51a3.023 3.023 0 0 0-3.019 3.019c0 1.665 1.365 3.019 3.044 3.019 1.705 0 3.093-1.376 3.093-3.068v-2.97H8.148zm7.704 0h-.098c-2.476 0-4.49-2.014-4.49-4.49s2.014-4.49 4.49-4.49h.098c2.476 0 4.49 2.014 4.49 4.49s-2.014 4.49-4.49 4.49zm-.097-7.509c-1.665 0-3.019 1.355-3.019 3.019s1.355 3.019 3.019 3.019h.098c1.665 0 3.019-1.355 3.019-3.019s-1.355-3.019-3.019-3.019h-.098z"/></svg>',
+    prometheus: '<svg class="blogo" viewBox="0 0 24 24" aria-hidden="true" fill="#E6522C"><path d="M12 0C5.373 0 0 5.372 0 12c0 6.627 5.373 12 12 12s12-5.373 12-12c0-6.628-5.373-12-12-12zm0 22.46c-1.885 0-3.414-1.26-3.414-2.814h6.828c0 1.553-1.528 2.813-3.414 2.813zm5.64-3.745H6.36v-2.046h11.28v2.046zm-.04-3.098H6.391c-.037-.043-.075-.086-.111-.13-1.155-1.401-1.427-2.133-1.69-2.879-.005-.025 1.4.287 2.395.511 0 0 .513.119 1.262.255-.72-.843-1.147-1.915-1.147-3.01 0-2.406 1.845-4.508 1.18-6.207.648.053 1.34 1.367 1.387 3.422.689-.951.977-2.69.977-3.755 0-1.103.727-2.385 1.454-2.429-.648 1.069.168 1.984.894 4.256.272.854.237 2.29.447 3.201.07-1.892.395-4.652 1.595-5.605-.529 1.2.079 2.702.494 3.424.671 1.164 1.078 2.047 1.078 3.716a4.642 4.642 0 01-1.11 2.996c.792-.149 1.34-.283 1.34-.283l2.573-.502s-.374 1.538-1.81 3.019z"/></svg>',
+    gmail: '<svg class="blogo" viewBox="0 0 24 24" aria-hidden="true" fill="#EA4335"><path d="M24 5.457v13.909c0 .904-.732 1.636-1.636 1.636h-3.819V11.73L12 16.64l-6.545-4.91v9.273H1.636A1.636 1.636 0 0 1 0 19.366V5.457c0-2.023 2.309-3.178 3.927-1.964L5.455 4.64 12 9.548l6.545-4.91 1.528-1.145C21.69 2.28 24 3.434 24 5.457z"/></svg>',
+    googlecalendar: '<svg class="blogo" viewBox="0 0 24 24" aria-hidden="true" fill="#4285F4"><path d="M18.316 5.684H24v12.632h-5.684V5.684zM5.684 24h12.632v-5.684H5.684V24zM18.316 5.684V0H1.895A1.894 1.894 0 0 0 0 1.895v16.421h5.684V5.684h12.632zm-7.207 6.25v-.065c.272-.144.5-.349.687-.617s.279-.595.279-.982c0-.379-.099-.72-.3-1.025a2.05 2.05 0 0 0-.832-.714 2.703 2.703 0 0 0-1.197-.257c-.6 0-1.094.156-1.481.467-.386.311-.65.671-.793 1.078l1.085.452c.086-.249.224-.461.413-.633.189-.172.445-.257.767-.257.33 0 .602.088.816.264a.86.86 0 0 1 .322.703c0 .33-.12.589-.36.778-.24.19-.535.284-.886.284h-.567v1.085h.633c.407 0 .748.109 1.02.327.272.218.407.499.407.843 0 .336-.129.614-.387.832s-.565.327-.924.327c-.351 0-.651-.103-.897-.311-.248-.208-.422-.502-.521-.881l-1.096.452c.178.616.505 1.082.977 1.401.472.319.984.478 1.538.477a2.84 2.84 0 0 0 1.293-.291c.382-.193.684-.458.902-.794.218-.336.327-.72.327-1.149 0-.429-.115-.797-.344-1.105a2.067 2.067 0 0 0-.881-.689zm2.093-1.931l.602.913L15 10.045v5.744h1.187V8.446h-.827l-2.158 1.557zM22.105 0h-3.289v5.184H24V1.895A1.894 1.894 0 0 0 22.105 0zm-3.289 23.5l4.684-4.684h-4.684V23.5zM0 22.105C0 23.152.848 24 1.895 24h3.289v-5.184H0v3.289z"/></svg>',
+  };
+  const brandLogo = (k) => BRAND[k] || '';
+
+  const STAGES = {
+    company: { label: '회사·조직', axis: '어느 부서에 가까우세요?', opts: [
+      ['제품·기획', '기획·PO'], ['마케팅·브랜드', '마케팅'], ['영업·고객', '마케팅'], ['개발·데이터', '개발'],
+      ['디자인', '기획·PO'], ['경영·전략', '기획·PO'], ['재무·회계·법무', '운영·재무'], ['인사·총무·운영', '운영·재무'],
+    ] },
+    solo: { label: '1인·프리랜서', axis: '어느 쪽 일을 하고 계세요?', opts: [
+      ['컨설팅·자문', '1인 사업'], ['개발·외주', '개발'], ['디자인·크리에이티브', '1인 사업'], ['콘텐츠·미디어', '마케팅'],
+      ['커머스', '1인 사업'], ['교육·강의', '1인 사업'], ['전문직', '법무·계약'],
+    ] },
+    academy: { label: '학교·연구', axis: '어느 단계이신가요?', opts: [
+      ['학부연구생', '연구·대학원'], ['석사', '연구·대학원'], ['박사', '연구·대학원'], ['포닥·연구원', '연구·대학원'], ['교원', '연구·대학원'],
+    ] },
+    student: { label: '학생', axis: '지금 어느 쪽에 가까우세요?', opts: [
+      ['1~2학년', '학생'], ['3~4학년', '학생'], ['졸업·취업 준비', '학생'], ['전공 밖 활동이 많음', '학생'],
+    ] },
+  };
+  const stageOf = () => STAGES[S.stage] || STAGES.company;
+  const jobOptsA2 = () => stageOf().opts.map(([label]) => ({ id: label, label }));
+  /** 고른 직무 → 그 직무가 쓸 자료 세트(PERSONA 키). 목록에 없으면(직접 적기) 그 무대의 첫 직무 세트를 쓴다. */
+  const personaFor = (stageId, job) => {
+    const st = STAGES[stageId] || STAGES.company;
+    const hit = st.opts.find(([label]) => label === job);
+    return hit ? hit[1] : st.opts[0][1];
+  };
+
   const P = () => PERSONA[roleOf()] || PERSONA['마케팅'];
-  const detailOf = () => { const d = P().detail.opts.find(([id]) => id === S.detail); return d ? d[1] : P().detail.opts[0][1]; };
+  const detailOf = () => S.job || (P().detail.opts[0] || ['', ''])[1];   // 화면에 보이는 '무슨 일 하는 사람인가' = 고른 직무
   const detailId = () => (P().detail.opts.some(([id]) => id === S.detail) ? S.detail : P().detail.opts[0][0]);
   const fromP = (key) => Object.fromEntries(Object.entries(PERSONA).map(([k, v]) => [k, v[key]]).concat([['default', PERSONA['마케팅'][key]]]));
   const pick = (map, role) => map[role] || map.default;
@@ -282,7 +359,7 @@
     route: '#/start', name: '상민', day: 1, team: false, boardOn: false, invitesLeft: 3, ws: 'me', livView: 'chat', livMapOpen: false,
     ob: { started: false, startedAt: null, finishedAt: null, step: 0, doneSteps: [], skipped: false, finished: false, scene: null, returnTo: null,
       buildProg: 0, noai: false, firstQ: null, answered: false, freeLeft: 3 },
-    role: null, detail: null, pain: null, fixes: [], jobs: [], sources: [], files: [], drop: false,
+    stage: null, job: null, role: null, detail: null, pain: null, nowline: null, fixes: [], jobs: [], sources: [], files: [], drop: false,
     ingest: { total: 0, done: 0, running: false, finished: false, tally: [] },
     conn: { gdrive: 'off', notion: 'off', slack: 'off', gmail: 'off', clickup: 'off' },
     ai: null, aiConnected: false, terminal: null, node: false,
@@ -349,17 +426,19 @@
      · 입력창 없음 — 자유 대화는 첫 답이 끝난 뒤 홈에서 이어진다. */
   let stageEl = null, buildEl = null, ingestTimer = null, buildTimer = null, sceneToken = 0, readTimer = null;
 
-  const SCENE_DOT = { role: 1, detail: 1, jobs: 1, guess: 1, sources: 2, upload: 2, ai: 3, claude: 3, terminal: 3, reading: 4, found: 4, firstq: 5, answer: 5, done: 5 };
+  const SCENE_DOT = { stage: 1, role: 1, sources: 2, upload: 2, ai: 3, claude: 3, terminal: 3,
+    reading: 4, guess: 4, b1: 4, b2: 4, b3: 4, b4: 4, nowline: 4, found: 4, firstq: 5, answer: 5, done: 5 };
   const SCENE_BACK = {
-    detail: () => 'role', jobs: () => 'detail', guess: () => 'jobs', sources: () => 'guess', upload: () => 'sources',
+    role: () => 'stage', sources: () => 'role', upload: () => 'sources',
     ai: () => (S.sources.length && !(S.sources.length === 1 && S.sources[0] === 'none') ? 'upload' : 'sources'),
     claude: () => 'ai', terminal: () => (S.ai && S.ai !== '아직 없어요' && !S.aiConnected ? 'claude' : 'ai'),
-    found: () => 'terminal',
+    guess: () => 'terminal', b1: () => 'guess', b2: () => 'b1', b3: () => 'b2', b4: () => 'b3', nowline: () => 'b4',
+    found: () => 'nowline',
     firstq: () => (S.ingest.total ? 'found' : 'terminal'), answer: () => 'firstq',
   };
   function setDots(cur, allDone) { S.ob.step = cur; S.ob.doneSteps = allDone ? [1, 2, 3, 4, 5] : Array.from({ length: Math.max(0, cur - 1) }, (_, i) => i + 1); save(); renderDots(); }
   function renderDots() { $$('#dots li').forEach((li) => { const i = +li.dataset.i; const done = S.ob.doneSteps.includes(i); li.classList.toggle('done', done); li.classList.toggle('now', S.ob.step === i && !done); li.title = done ? '이 단계로 돌아가 고치기' : ''; }); }
-  const DOT_SCENE = { 1: 'role', 2: 'sources', 3: 'ai', 4: 'found' };
+  const DOT_SCENE = { 1: 'stage', 2: 'sources', 3: 'ai', 4: 'guess' };
   const fmtDur = (ms) => { const s = Math.max(1, Math.round(ms / 1000)); return `${Math.floor(s / 60)}분 ${String(s % 60).padStart(2, '0')}초`; };
   function tickTime() { const el = $('#roomTime'); if (!el) return; el.textContent = S.ob.finishedAt ? `처음 한 번 · ${fmtDur(S.ob.finishedAt - S.ob.startedAt)}` : '처음 한 번 · 3분'; }
 
@@ -388,10 +467,10 @@
     $('[data-act="skip-all"]').addEventListener('click', skipAll);
     $('#dots').addEventListener('click', (e) => { const li = e.target.closest('li.done'); if (!li) return; const i = +li.dataset.i; const key = i === 5 ? 'firstq' : DOT_SCENE[i]; if (!key || key === S.ob.scene) return; S.ob.returnTo = S.ob.scene; goScene(key, { fix: true }); });
     renderBuild(); tickTime(); startBuildMeter(); resumeIngest();
-    const scene = S.ob.finished ? 'done' : (S.ob.scene || 'role');
+    const scene = S.ob.finished ? 'done' : (S.ob.scene || 'stage');
     renderScene(scene, false);
   }
-  const FIX_CHAIN = { sources: 'upload', ai: 'claude' }; // 고치기 중에도 이어져야 하는 다음 장면
+  const FIX_CHAIN = { sources: 'upload', ai: 'claude', stage: 'role' }; // 고치기 중에도 이어져야 하는 다음 장면
   async function goScene(key, opts) {
     if (S.ob.returnTo && !(opts && opts.fix)) {
       const cur = S.ob.scene;
@@ -419,16 +498,19 @@
 
   /* 선택지 — 단일: 탭 즉시 진행 / 복수: n개로 계속 / 직접 적기·건너뛰기 */
   function bindChoice(el, { multi, none, onCommit, onSkip }) {
-    const opts = $('.sc-opts', el), goWrap = $('.sc-go', el), go = goWrap ? $('button', goWrap) : null, wr = $('.sc-write', el), win = wr ? $('input', wr) : null;
+    // 선택지 줄이 여러 개인 화면(자료 출처의 종류별 줄)도 있어, 칩은 **장면 전체**에서 찾는다.
+    //  '직접 적기'로 만든 칩을 넣을 자리(opts)는 마지막 줄로 둔다.
+    const rows = $$('.sc-opts', el), opts = rows.length ? rows[rows.length - 1] : el;
+    const goWrap = $('.sc-go', el), go = goWrap ? $('button', goWrap) : null, wr = $('.sc-write', el), win = wr ? $('input', wr) : null;
     const extra = [];
-    const chosen = () => $$('.chip.on[data-opt]', opts).map((c) => c.dataset.opt).concat(extra);
+    const chosen = () => $$('.chip.on[data-opt]', el).map((c) => c.dataset.opt).concat(extra);
     const syncGo = () => { if (!goWrap) return; const n = chosen().length; goWrap.hidden = n === 0; if (go) go.textContent = `${n}개로 계속`; };
     syncGo();
     let committed = false;
     const commit = (sel) => { if (committed) return; committed = true; el.classList.add('sc-leave-soft'); onCommit(sel); };
-    $$('.chip[data-opt]', opts).forEach((c) => c.addEventListener('click', () => {
+    $$('.chip[data-opt]', el).forEach((c) => c.addEventListener('click', () => {
       if (committed) return;
-      if (!multi || c.dataset.none === '1') { $$('.chip[data-opt]', opts).forEach((x) => x.classList.remove('on')); c.classList.add('on'); setTimeout(() => commit([c.dataset.opt]), 170); return; }
+      if (!multi || c.dataset.none === '1') { $$('.chip[data-opt]', el).forEach((x) => x.classList.remove('on')); c.classList.add('on'); setTimeout(() => commit([c.dataset.opt]), 170); return; }
       c.classList.toggle('on'); syncGo();
     }));
     if (go) go.addEventListener('click', () => { const sel = chosen(); if (sel.length) commit(sel); });
@@ -460,29 +542,30 @@
 
   /* ── 장면들 ── */
   const SCENES = {
+    /* A1 — 무대. 직무 목록을 이걸로 가른다. */
+    stage: {
+      html: () => scHead('안녕하세요, 저는 리브예요. 이 워크스페이스를 계속 돌봐 드릴 담당자입니다. 두 가지만 여쭙고, 나머지는 <b>자료를 보고 제가 맞혀 볼게요</b>.', '어디에서 일하고 계세요?', '자세한 건 안 여쭙습니다 — 두 번만 고르시면 됩니다.')
+        + choiceHTML({ options: Object.entries(STAGES).map(([id, s]) => ({ id, label: s.label })), sel: S.stage ? [S.stage] : [], skip: '나중에 정할게요' }),
+      bind: (el) => bindChoice(el, {
+        onCommit: (sel) => { if (S.stage !== sel[0]) { S.job = null; S.role = null; S.pain = null; } S.stage = sel[0]; save(); renderBuild(); flashCard('#bcMe'); goScene('role'); },
+        onSkip: () => { S.stage = 'company'; save(); goScene('role'); },
+      }),
+    },
+    /* A2 — 직무. 무대마다 축(부서·업종·단계)이 달라 질문 문구도 그 축 이름으로 바뀐다. */
     role: {
-      html: () => scHead('안녕하세요, 저는 리브예요. 이 워크스페이스를 계속 돌봐 드릴 담당자입니다. 몇 가지만 여쭙고, <b>제가 본 것</b>을 말씀드릴게요.', '어떤 일을 하고 계세요?', '여기서 고르신 것에 따라 다음 질문이 완전히 달라집니다.') + choiceHTML({ options: ROLES, sel: S.role ? [S.role] : [], other: '직접 적기', skip: '나중에 정할게요' }),
-      bind: (el) => bindChoice(el, { onCommit: (sel) => { if (S.role !== sel[0]) { S.detail = null; S.jobs = []; S.pain = null; } S.role = sel[0]; save(); renderBuild(); flashCard('#bcMe'); goScene('detail'); }, onSkip: () => { S.role = '마케팅'; save(); goScene('detail'); } }),
-    },
-    detail: {
-      html: () => scHead(`${esc(roleOf())}이시군요.`, P().detail.q, '같은 직업이어도 여기서 하는 일이 갈립니다 — 다음 질문을 이걸로 만듭니다.') + choiceHTML({ options: P().detail.opts.map(([id, label]) => ({ id, label })), sel: S.detail ? [S.detail] : [], skip: '해당 없음' }),
-      bind: (el) => bindChoice(el, { onCommit: (sel) => { if (S.detail !== sel[0]) S.jobs = []; S.detail = sel[0]; save(); renderBuild(); flashCard('#bcMe'); goScene('jobs'); }, onSkip: () => { S.detail = P().detail.opts[0][0]; save(); goScene('jobs'); } }),
-    },
-    jobs: {
-      html: () => scHead(`${esc(detailOf())} 쪽이시군요.`, '이 중에 시간을 제일 많이 쓰는 일은?', '여러 개 골라도 됩니다 — 자료를 읽을 때 이 눈으로 봅니다.') + choiceHTML({ multi: true, options: jobOpts(), sel: S.jobs, other: '직접 적기', skip: '건너뛰기' }),
-      bind: (el) => bindChoice(el, { multi: true, onCommit: (sel) => { S.jobs = sel; S.decisions = [`분류 ${pick(TALLY_BY_ROLE, roleOf()).length}갈래(${pick(TALLY_BY_ROLE, roleOf()).map((t) => t[0]).join('·')})`].concat(S.decisions.filter((d) => !d.startsWith('분류'))); save(); renderBuild(); flashCard('#bcMe'); goScene('guess'); }, onSkip: () => goScene('guess') }),
-    },
-    guess: {
-      html: () => {
-        const b = P().bottle;
-        return scHead('그럼 하나 맞혀 볼게요.', '이게 제일 손이 가는 일 아닌가요?', '틀렸으면 고쳐 주세요 — 그대로 제 판단이 됩니다.')
-          + `<div class="sc-guess">${P().guess.line(detailOf())}</div>`
-          + choiceHTML({ options: [{ id: '0', label: '맞아요, 그게 제일 큽니다' }, { id: '1', label: P().guess.alt[0] }, { id: '2', label: P().guess.alt[1] }], sel: S.pain != null ? [String(S.pain)] : [] });
-      },
-      bind: (el) => bindChoice(el, { onCommit: (sel) => { S.pain = +sel[0]; save(); renderBuild(); goScene('sources'); } }),
+      html: () => scHead(`${esc(stageOf().label)}이시군요.`, stageOf().axis, '고르신 것에 맞춰 자료를 읽습니다 — 목록에 없으면 직접 적어 주세요.')
+        + choiceHTML({ options: jobOptsA2(), sel: S.job ? [S.job] : [], other: '그 외 — 직접 적기', skip: '나중에 정할게요' }),
+      bind: (el) => bindChoice(el, {
+        onCommit: (sel) => { S.job = sel[0]; S.role = personaFor(S.stage, sel[0]); save(); renderBuild(); flashCard('#bcMe'); goScene('sources'); },
+        onSkip: () => { const o = stageOf().opts[0]; S.job = o[0]; S.role = o[1]; save(); goScene('sources'); },
+      }),
     },
     sources: {
-      html: () => scHead('이제 <b>확인할 차례</b>예요. 자료를 보면 제 짐작이 맞는지 알 수 있습니다.', '지금까지 일한 내용은 주로 어디에 쌓아 두셨어요?', '여러 개 골라도 됩니다. 살아 있는 서비스는 연결해 두면 새 자료가 계속 따라옵니다.') + choiceHTML({ multi: true, options: SOURCES.map((s) => ({ id: s.id, label: s.label, none: s.none })), sel: S.sources, skip: '건너뛰기' }),
+      cls: 'wide',
+      html: () => scHead('', '지금까지 일한 맥락들을 주로 어디에 쌓아 두셨나요?', '여러 개 골라도 됩니다. 살아 있는 서비스는 연결해 두면 새 자료가 계속 따라옵니다.')
+        + `<div class="sc-srcs">${SOURCE_ROWS.map((row) => `<div class="srcrow"><span class="srcrow-k">${esc(row.k)}</span><div class="sc-opts">${row.items.map((s) => `<button type="button" class="chip chip-src${S.sources.includes(s.id) ? ' on' : ''}${s.none ? ' chip-dim' : ''}" data-opt="${esc(s.id)}" data-none="${s.none ? 1 : 0}">${s.logo ? brandLogo(s.logo) : ic(s.ic, 'ic-sm')}<span>${esc(s.label)}</span></button>`).join('')}</div></div>`).join('')}</div>`
+        + `<div class="sc-go" hidden><button type="button" class="btn btn-primary">계속</button></div>`
+        + `<div class="sc-skip"><button type="button" class="btn-text" data-esc="skip">건너뛰기</button></div>`,
       bind: (el) => bindChoice(el, { multi: true, onCommit: async (sel) => { S.sources = sel; save(); renderBuild(); if (sel.includes('none') && sel.length === 1) return goScene('ai'); goScene('upload'); }, onSkip: () => goScene('ai') }),
     },
     upload: {
@@ -543,7 +626,7 @@
         const yes = sel[0] === 'yes'; S.terminal = yes ? 'yes' : 'no';
         if (yes) { S.node = true; S.decisions.push('내 컴퓨터 노드 연결 — 터미널의 Claude Code에도 같은 자료'); toast('홈에서 한 줄 설치를 안내할게요 — lively node --daemon'); } else { S.declined.push('terminal'); }
         save(); renderBuild();
-        if (S.ingest.total && !S.ingest.finished) return goScene('reading');
+        if (S.ingest.total && !S.ingest.finished) return goScene(S.ingest.total ? 'guess' : 'found');
         goScene(S.ingest.total ? 'found' : 'firstq');
       } }),
     },
@@ -556,6 +639,48 @@
         document.addEventListener('ingest-done', () => setTimeout(done, 500), { once: true });
         readTimer = setInterval(() => { const n = $('#readN', el), b = $('#readBar', el), t = $('#readT', el); if (!n) return; n.textContent = `${S.ingest.done} / ${S.ingest.total}`; b.style.width = Math.round(100 * S.ingest.done / Math.max(1, S.ingest.total)) + '%'; if (S.ingest.tally.length) t.textContent = S.ingest.tally.map(([x, c]) => `${x} ${c}`).join(' · '); }, 400);
       },
+    },
+    /* ═════ B블록 — 되묻기. 자료를 읽은 **뒤**에 근거를 들고 묻는다(#1813 재설계) ═════
+       종전엔 맞혀보기가 A블록 끝(자료 0건)에 있어 근거 없는 짐작이었고, 몇 분 뒤 found 화면과 내용이 겹쳤다.
+       읽은 뒤로 옮기니 같은 질문이 "자료에서 봤는데 맞나요?"가 된다 — 틀리면 고쳐 주고 싶어지는 것이 답할 이유다. */
+    guess: {
+      html: () => scHead(`${S.ingest.total || 0}건을 훑어봤어요.`, '이게 제일 손이 가는 일 아닌가요?', '틀렸으면 고쳐 주세요 — 그대로 제 판단이 됩니다.')
+        + `<div class="sc-guess">${P().guess.line(detailOf())}</div>`
+        + choiceHTML({ options: [{ id: '0', label: '맞아요, 그게 제일 큽니다' }, { id: '1', label: P().guess.alt[0] }, { id: '2', label: P().guess.alt[1] }], sel: S.pain != null ? [String(S.pain)] : [] }),
+      bind: (el) => bindChoice(el, { onCommit: (sel) => { S.pain = +sel[0]; save(); renderBuild(); goScene('b1'); } }),
+    },
+    /* B1 산출물 — 실제로 읽은 갈래를 보여주고 맞는지만 묻는다. */
+    b1: {
+      html: () => scHead('만드시는 게 이렇게 보여요.', '이 갈래가 맞나요?', '맞으면 이 갈래로 자료함을 나눠 둘게요.')
+        + `<div class="sc-tally">${((S.ingest.tally && S.ingest.tally.length ? S.ingest.tally : pick(TALLY_BY_ROLE, roleOf()))).map(([n, c]) => `<span class="tag">${esc(n)} <b class="num">${c}</b></span>`).join('')}</div>`
+        + choiceHTML({ options: [{ id: 'ok', label: '맞아요' }, { id: 'add', label: '빠진 게 있어요 — 직접 적기' }], sel: [] }),
+      bind: (el) => bindChoice(el, { onCommit: (sel) => { if (sel[0] !== 'ok') S.decisions.unshift('갈래 추가 요청'); save(); renderBuild(); goScene('b2'); } }),
+    },
+    /* B2 주기 — 같은 양식이 반복되면 자동화 후보다. */
+    b2: {
+      html: () => scHead(`같은 양식 문서가 여러 달치 있네요 — ${esc((P().files[0] || '보고서'))} 같은 것들이요.`, '정해진 주기로 만드시나요?', '주기가 있으면 다음 것을 미리 만들어 둘 수 있습니다.')
+        + choiceHTML({ options: [{ id: 'month', label: '네, 매달' }, { id: 'week', label: '네, 매주' }, { id: 'no', label: '아니요' }], sel: [] }),
+      bind: (el) => bindChoice(el, { onCommit: (sel) => { if (sel[0] !== 'no') S.decisions.unshift(sel[0] === 'month' ? '매달 반복 작업으로 봄' : '매주 반복 작업으로 봄'); save(); renderBuild(); goScene('b3'); } }),
+    },
+    /* B3 협업 — 공유 범위를 정하는 근거. */
+    b3: {
+      html: () => scHead('문서에 같은 이름이 반복해서 나와요.', '같이 보는 팀이 있나요?', '있으면 팀이 볼 것과 나만 볼 것을 갈라 둡니다.')
+        + choiceHTML({ options: [{ id: 'team', label: '팀이 있어요' }, { id: 'me', label: '나만 봐요' }], sel: [] }),
+      bind: (el) => bindChoice(el, { onCommit: (sel) => { S.decisions.unshift(sel[0] === 'team' ? '팀과 함께 보는 자료로 봄' : '나만 보는 자료로 봄'); save(); renderBuild(); goScene('b4'); } }),
+    },
+    /* B4 최신본 — 같은 문서가 두 벌일 때 무엇을 정답으로 삼을지. 한 번 답하면 계속 그 기준으로 답한다. */
+    b4: {
+      html: () => scHead(`${esc((P().files[1] || '문서'))} 가 두 벌이에요.`, '나중 것이 최신 맞나요?', '한 번 정해 두면 다음부터 그 기준으로 답합니다.')
+        + choiceHTML({ options: [{ id: 'new', label: '네, 나중 것이 최신입니다' }, { id: 'old', label: '아니요, 예전 것이 기준이에요' }, { id: 'both', label: '둘 다 살려 두세요' }], sel: [] }),
+      bind: (el) => bindChoice(el, { onCommit: (sel) => { S.decisions.unshift(sel[0] === 'both' ? '겹치는 문서는 둘 다 보관' : `최신 기준: ${sel[0] === 'new' ? '나중 것' : '예전 것'}`); save(); renderBuild(); goScene('nowline'); } }),
+    },
+    /* B5 — 유일한 자유 입력. 지금 붙잡고 있는 일 한 줄이 첫 질문·첫 제안의 재료가 된다. */
+    nowline: {
+      html: () => scHead('마지막 하나예요.', '지금 제일 붙잡고 계신 일은 무엇인가요?', '한 줄이면 됩니다 — 이걸로 첫 제안을 만들어 드릴게요.')
+        + `<div class="sc-write" hidden><input class="in" type="text" placeholder="예: ${esc((P().firstq[0] || '이번 주 보고서').replace(/\?$/, ''))}" aria-label="지금 하는 일"><button type="button" class="btn btn-primary" data-write-go>계속</button></div>`
+        + `<div class="sc-opts"><button type="button" class="chip chip-esc" data-esc="write">＋ 직접 적기</button></div>`
+        + `<div class="sc-skip"><button type="button" class="btn-text" data-esc="skip">지금은 건너뛰기</button></div>`,
+      bind: (el) => bindChoice(el, { onCommit: (sel) => { if (sel[0]) { S.nowline = sel[0]; S.decisions.unshift(`지금 하는 일: ${sel[0]}`); } save(); renderBuild(); goScene(S.ingest.finished ? 'found' : 'reading'); }, onSkip: () => goScene(S.ingest.finished ? 'found' : 'reading') }),
     },
     found: {
       cls: 'wide',
@@ -596,7 +721,7 @@
       html: () => {
         const locked = !S.aiConnected;
         const qs = S.ingest.total ? pick(FIRSTQ_BY_ROLE, roleOf()) : [];
-        return `${scHead(`${S.fixes.length ? `${S.fixes.length}가지를 켜 뒀어요. 이제` : '이제'} 저(리브)가 아니라 <b>${esc(S.name)}님의 AI</b>가 답할 차례예요.${locked ? ' 세션 연결 전이라 라이블리 계정으로 3회 열어 드려요.' : ''}`, S.ingest.total ? '첫 마디를 골라, 그대로 시켜 보세요.' : '무엇을 준비 중이세요?', S.ingest.total ? `${esc(detailOf())} · ${S.jobs.slice(0, 2).map(esc).join('·') || '하시는 일'} 기준으로 골라 둔 질문이에요.` : '한 줄만 적어 주시면 그 답을 첫 자료로 남길게요.')}
+        return `${scHead(`${S.fixes.length ? `${S.fixes.length}가지를 켜 뒀어요. 이제` : '이제'} 저(리브)가 아니라 <b>${esc(S.name)}님의 AI</b>가 답할 차례예요.${locked ? ' 세션 연결 전이라 라이블리 계정으로 3회 열어 드려요.' : ''}`, S.ingest.total ? '첫 마디를 골라, 그대로 시켜 보세요.' : '무엇을 준비 중이세요?', S.ingest.total ? `${esc(stageOf().label)} · ${esc(detailOf())} 기준으로 골라 둔 질문이에요.` : '한 줄만 적어 주시면 그 답을 첫 자료로 남길게요.')}
         <div class="sc-opts sc-opts-q">${qs.map((q, i) => `<button type="button" class="chip chip-q" data-q="${esc(q)}" style="animation-delay:${60 + i * 60}ms">${esc(q)}</button>`).join('')}${qs.length ? `<button type="button" class="chip chip-esc" data-esc="write" style="animation-delay:${60 + qs.length * 60}ms">＋ 직접 물어보기</button>` : ''}</div>
         <div class="sc-write" ${qs.length ? 'hidden' : ''}><input class="in" type="text" placeholder="무엇이든 물어보세요"><button type="button" class="btn btn-primary btn-sm">시키기</button></div>`;
       },
@@ -660,7 +785,7 @@
     const B = bottles();
     const on = (b) => S.fixes.includes(b.slip);
     const onCount = B.filter(on).length;
-    return `${scHead(`${dur} 걸렸어요. 답해 주신 것과 자료 ${S.ingest.total || 0}건에서 본 것입니다.`, `리브가 본 ${esc(S.name)}님의 일하는 방식`, `${esc(roleOf())} · ${esc(detailOf())} · ${S.jobs.slice(0, 3).map(esc).join(' · ') || '업무 미지정'}`)}
+    return `${scHead(`${dur} 걸렸어요. 답해 주신 것과 자료 ${S.ingest.total || 0}건에서 본 것입니다.`, `리브가 본 ${esc(S.name)}님의 일하는 방식`, `${esc(stageOf().label)} · ${esc(detailOf())}${S.nowline ? ` · ${esc(S.nowline)}` : ''}`)}
       <div class="sc-body"><div class="diag">
         ${B.map((b, i) => `<article class="dg ${on(b) ? 'on' : 'off'}">
           <div class="dg-n">${i + 1}</div>
@@ -695,7 +820,7 @@
     const conns = Object.entries(S.conn).filter(([, v]) => v === 'on').map(([k]) => SOURCES.find((s) => s.id === k).label);
     const notDone = []; if (!conns.includes('노션') && !S.declined.includes('notion')) notDone.push('노션 연결'); notDone.push(`동료 초대(초대장 ${S.invitesLeft}장)`); notDone.push('매주 회의 요약 자동화');
     return `<h3>설정 요약 <span class="k">${dur}</span></h3><div class="sum-grid">
-      <div class="sum-cell" data-fix="role" role="button" tabindex="0"><span class="k">나<span class="fix">고치기</span></span><b>${esc(roleOf())}</b> · ${S.jobs.map(esc).join(', ') || '—'}<br><span class="muted">AI 눈높이: ${roleOf() === '개발' ? '기술 설명 자세히' : '비개발'} · 존댓말 · 한국어</span></div>
+      <div class="sum-cell" data-fix="role" role="button" tabindex="0"><span class="k">나<span class="fix">고치기</span></span><b>${esc(detailOf())}</b> · ${esc(stageOf().label)}<br><span class="muted">AI 눈높이는 ${S.terminal === 'yes' ? '터미널을 쓰시는 분 기준' : '설명을 붙이는 기준'}으로 잡았습니다 · 존댓말 · 한국어</span></div>
       <div class="sum-cell"><span class="k">리브가 정한 것 <span style="text-transform:none;letter-spacing:0">(전부 되돌릴 수 있어요)</span></span>${S.decisions.map((d) => `· ${esc(d)}`).join('<br>') || '—'}</div>
       <div class="sum-cell" data-fix="upload" role="button" tabindex="0"><span class="k">자료함<span class="fix">더 넣기</span></span>지식 <b>${S.knowledge}</b>건${conns.length ? ` · ${conns.map((c) => c + ' 연결(읽기)').join(' · ')}` : ''}${S.files.length ? ` · 올린 파일 ${S.files.length}` : ''}</div>
       <div class="sum-cell" data-fix="ai" role="button" tabindex="0"><span class="k">쓰는 AI<span class="fix">바꾸기</span></span>${S.aiConnected ? `${esc(S.ai)}(내 구독) · 오늘 사용 ${S.usage}회` : `${esc(S.ai || '아직 없음')} · 연결 전`} · 터미널: ${S.terminal === 'yes' ? '노드 연결' : '안 씀'}</div>
@@ -706,7 +831,7 @@
   /* 오른쪽 장부 */
   function renderBuild() {
     if (!buildEl) return;
-    const r = S.role, hasRole = !!r;
+    const r = S.role, hasRole = !!S.job;
     const conns = Object.entries(S.conn).filter(([k, v]) => v !== 'off');
     const src = SOURCES.filter((s) => S.sources.includes(s.id) && !s.none);
     const ing = S.ingest;
@@ -726,7 +851,7 @@
     buildEl.innerHTML = `
       <div class="build-h"><b>${livFace(15)}만들어지는 내 워크스페이스</b><span class="k">${S.ob.finished ? '준비 끝' : '실시간'}</span></div>
       ${!hasRole && S.ob.buildProg < 100 ? `<div class="bc"><span class="k">워크스페이스</span><div class="v"><span class="state busy">만드는 중</span></div><div class="meter"><i id="buildMeter" style="width:${S.ob.buildProg}%"></i></div><div class="sub">저장소 만드는 중 · AI 자리 준비 중 · 자료함 비어 있음</div></div>` : ''}
-      ${hasRole ? `<div class="bc lit fx" id="bcMe" data-fix="role" role="button" tabindex="0"><span class="k">나<span class="fix">고치기</span></span><div class="v"><b>${esc(r)}</b>${S.jobs.length ? ` · ${S.jobs.map(esc).join(', ')}` : ''}</div><div class="sub">AI가 이 눈높이로 말합니다 · ${r === '개발' ? '기술 설명 자세히' : '비개발 · 쉬운 말'} · 존댓말 · 한국어</div></div>` : `<div class="bc empty"><span class="k">나</span><div class="v">아직 모릅니다 — 지금 여쭙는 것</div></div>`}
+      ${hasRole ? `<div class="bc lit fx" id="bcMe" data-fix="role" role="button" tabindex="0"><span class="k">나<span class="fix">고치기</span></span><div class="v"><b>${esc(S.job || r)}</b> · ${esc(stageOf().label)}</div><div class="sub">${S.nowline ? `지금 하는 일: ${esc(S.nowline)}` : 'AI가 이 눈높이로 말합니다 · 존댓말 · 한국어'}</div></div>` : `<div class="bc empty"><span class="k">나</span><div class="v">아직 모릅니다 — 지금 여쭙는 것</div></div>`}
       ${aiCard}${libCard}${connCard}${decCard}
       <div class="build-foot">이 뒤에도 리브가 계속 관리합니다. 자료가 새로 생기면 알아서 정리하고, 이상하면 먼저 말을 겁니다.</div>`;
   }
@@ -744,7 +869,7 @@
       const p = g.done / g.total; g.tally = T.map(([n, c]) => [n, Math.round(c * p)]).filter(([, c]) => c > 0);
       if (g.done >= g.total) { g.finished = true; g.running = false; g.tally = T.slice(); S.knowledge = Math.max(S.knowledge, g.total); clearInterval(ingestTimer); document.dispatchEvent(new CustomEvent('ingest-done')); }
       save(); renderBuild();
-    }, 650);
+    }, 360);
   }
   /* 오른쪽 장부에서 바로 바꾸기 — 해당 장면으로 이동 */
   panelDelegate();
@@ -1256,7 +1381,7 @@
       go('#/' + p); });
   }
   function quickFinish() {
-    if (S.ob.finished) return; S.ob.started = true; S.ob.startedAt = S.ob.startedAt || Date.now() - 220000; S.role = S.role || '마케팅'; S.detail = S.detail || PERSONA[S.role].detail.opts[0][0]; if (S.pain == null) S.pain = 0; S.jobs = S.jobs.length ? S.jobs : PERSONA[S.role].jobs[PERSONA[S.role].detail.opts[0][0]].slice(0, 2); S.sources = S.sources.length ? S.sources : ['gdrive', 'notion']; S.files = S.files.length ? S.files : pick(FILES_BY_ROLE, S.role).concat(Array.from({ length: 33 }, (_, i) => `file-${i}`)); S.conn.gdrive = 'on'; S.ai = 'Claude'; S.aiConnected = true; S.terminal = S.terminal || 'no';
+    if (S.ob.finished) return; S.ob.started = true; S.ob.startedAt = S.ob.startedAt || Date.now() - 220000; S.stage = S.stage || 'company'; S.job = S.job || STAGES[S.stage].opts[1][0]; S.role = S.role || personaFor(S.stage, S.job); if (S.pain == null) S.pain = 0; S.nowline = S.nowline || '이번 주 캠페인 회고 정리'; S.sources = S.sources.length ? S.sources : ['gdrive', 'notion']; S.files = S.files.length ? S.files : pick(FILES_BY_ROLE, S.role).concat(Array.from({ length: 33 }, (_, i) => `file-${i}`)); S.conn.gdrive = 'on'; S.ai = 'Claude'; S.aiConnected = true; S.terminal = S.terminal || 'no';
     Object.assign(S.ingest, { total: 41, done: 41, running: false, finished: true, tally: pick(TALLY_BY_ROLE, S.role).slice() }); S.knowledge = 42; S.usage = 1;
     S.decisions = [`분류 3갈래(${pick(TALLY_BY_ROLE, S.role).map((t) => t[0]).join('·')})`, '회의록은 결정·할 일만 남김', '최신 기준: 가격 정책 7월', '드라이브 새 파일 자동 반영'];
     S.ob.finished = true; S.ob.finishedAt = Date.now(); S.ob.doneSteps = [1, 2, 3, 4, 5]; S.ob.step = 5; if (!S.fixes.length) { S.fixes = [PERSONA[S.role].bottle[0].slip]; } S.ob.skipped = false;
