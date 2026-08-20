@@ -1319,12 +1319,19 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
     assert.equal(isTokenRejection(null, GW), false);
     assert.deepEqual(tokenWatchFilter(GW + "/"), { urls: [GW + "/api/ui/*"] });
     assert.equal(tokenWatchFilter(""), null);
-    // 배선: 응답을 바꾸지 않고 보기만(cb({})) · 거부된 **그 토큰**을 기억 · 파일 토큰이 바뀌면 저절로 풀림 · 준비 판정에 반영
+    // 배선: 응답을 바꾸지 않고 보기만(cb({})) · 401 은 **후보**일 뿐 — 메인이 /api/ui/me 재검증으로 확정(#1541 오탐 루프)
+    //  · 거부된 **그 토큰**을 기억 · 파일 토큰이 바뀌거나 재로그인 성공(start ok)하면 풀림 · 준비 판정에 반영
     const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
     const w = main.slice(main.indexOf("function watchTokenRejection"), main.indexOf('app.on("web-contents-created"'));
     assert.match(w, /webRequest\.onHeadersReceived\(filter/, "onHeadersReceived 를 안 건다");
     assert.match(w, /cb\(\{\}\);/, "응답을 그대로 통과시키지 않는다");
+    assert.match(w, /void verifyTokenAfter401\(gatewayUrl\)/, "401 을 재검증 없이 그대로 믿는다(무인증 요청 401 오탐 → 만료 루프)");
+    assert.match(w, /\/api\/ui\/me/, "재검증이 /api/ui/me 를 안 친다");
+    assert.match(w, /if \(res\.status !== 401\) return;/, "멀쩡한 토큰(401 아님)을 거부로 눕힌다");
     assert.match(w, /rejectedToken = tok;/, "거부된 토큰을 기억하지 않는다");
+    assert.ok(w.indexOf("res.status !== 401") < w.indexOf("rejectedToken = tok;"), "재검증 확인보다 먼저 거부를 기록한다");
+    // 회복: 재로그인(setup·login) 성공 시 해제 — CLI 는 토큰이 먹히면 재발급 없이 끝나(파일 불변) 파일 비교만으론 안 풀린다
+    assert.match(main, /if \(r\.ok && \(kind === "setup" \|\| kind === "login"\)\) rejectedToken = null;/, "재로그인 성공이 오판 플래그를 안 푼다(만료 화면 무한 루프)");
     assert.match(main, /next\.tokenRejected = !!\(rejectedToken && readTrim\(join\(LIVELY_DIR, "token"\)\) === rejectedToken\)/, "파일 토큰과 비교하지 않는다(재로그인해도 안 풀린다)");
     // 트레이·마법사 문구
     assert.match(statusLabel({ ...okState, tokenRejected: true }), /다시 로그인/);
