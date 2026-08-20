@@ -326,3 +326,6 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-titlebox:hover .sc-title-penbtn, .sc-title-penbtn:focus-visible { opacity: 1; }
 .sc-title-penbtn:hover { background: var(--bg-tint, #F6FAFF); }
 .sc-title-penbtn:hover .sc-title-pen { stroke: var(--blue); }
+/* 이름 옆의 '지금 하는 일' — 굵은 이름과 같은 줄, 조용한 톤(사이드바의 이름+부제와 같은 문법). */
+.sc-title-job { margin-left: 9px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12.5px; font-weight: 500; color: var(--muted); }
