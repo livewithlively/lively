@@ -289,8 +289,9 @@ export function createTimeline(host, ctx) {
                 rows.push({ solo: it });
         }
         // 장은 안에 남은 것이 있을 때만 세운다 — 아무것도 안 남은 지시는 타임라인의 사건이 아니다.
-        const shownRows = rows.filter((r) => ('solo' in r ? true : r.kids.length > 0));
-        const shownCount = rows.reduce((n, r) => n + ('solo' in r ? 1 : r.kids.length), 0);
+        //  단 allSays 면 반대로 **모든 지시가 선다**(세션 발자취 — 위 TimelineCtx.allSays 주석).
+        const shownRows = rows.filter((r) => ('solo' in r ? true : ctx.allSays || r.kids.length > 0));
+        const shownCount = rows.reduce((n, r) => n + ('solo' in r ? 1 : r.kids.length + (ctx.allSays ? 1 : 0)), 0);
         countEl.textContent = String(shownCount);
         emptyEl.hidden = shownCount > 0;
         // 하루가 **한 판**이다. 종전엔 항목마다 흰 카드가 서서 말풍선이 줄줄이 붙은 꼴이었다(상민님: "다다다닥 붙어 거슬린다").
