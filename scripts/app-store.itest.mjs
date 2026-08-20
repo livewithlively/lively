@@ -74,6 +74,24 @@ try {
   assert.equal(done.rows[0].body, "second");
   ok("store_query → 전체 + match 필터");
 
+  // store_update — match 필수, 왕복.
+  const upd = appStoreCapabilities.find((c) => c.name === "store_update");
+  const del = appStoreCapabilities.find((c) => c.name === "store_delete");
+  const u = await upd.handler({ table: "notes", match: { done: false }, set: { done: true } }, appUser, ctx);
+  assert.equal(u.changed, 1, "update changed=1(first: done false→true)");
+  const bothDone = await qry.handler({ table: "notes", match: { done: true } }, appUser, ctx);
+  assert.equal(bothDone.rows.length, 2, "update 후 done=true 2행");
+  await assert.rejects(() => upd.handler({ table: "notes", set: { done: false } }, appUser, ctx), /match/i, "match 없는 update 거부(전량 방지)");
+  ok("store_update → match 대상 수정 + match 없으면 거부");
+
+  // store_delete — match 필수, 왕복.
+  const d = await del.handler({ table: "notes", match: { body: "first" } }, appUser, ctx);
+  assert.equal(d.deleted, 1, "delete deleted=1");
+  const left = await qry.handler({ table: "notes" }, appUser, ctx);
+  assert.equal(left.rows.length, 1, "delete 후 1행");
+  await assert.rejects(() => del.handler({ table: "notes" }, appUser, ctx), /match/i, "match 없는 delete 거부(전량 방지)");
+  ok("store_delete → match 대상 삭제 + match 없으면 거부");
+
   // 게이트: 일반 세션(appId 없음) → 400.
   await assert.rejects(() => ins.handler({ table: "notes", row: { body: "x" } }, normalUser, ctx), /앱 세션|principal|400/i, "일반 세션 차단");
   ok("일반 세션(appId 없음) → 차단");

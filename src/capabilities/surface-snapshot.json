@@ -3948,6 +3948,26 @@
   "input_hash": "3eb09fbb3f75ec14"
  },
  {
+  "name": "store_update",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/store/:table/update"
+  ],
+  "input_hash": "773947e7c2b2e356"
+ },
+ {
+  "name": "store_delete",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/store/:table/delete"
+  ],
+  "input_hash": "8de11ed6339aa6af"
+ },
+ {
   "name": "store_tables",
   "scope": null,
   "mcp": true,
