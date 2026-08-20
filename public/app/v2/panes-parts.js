@@ -433,16 +433,27 @@ function filesPart(ctx) {
         if (size && size > (PV_MAX[kind] || 4e6))
             return; // 너무 큰 것은 아이콘 그대로
         const url = apiUrl('/api/ui/v6/projects/' + ctx.id + '/file?path=' + encodeURIComponent(path));
-        if (kind === 'text') {
-            // 앞부분만 — Range 를 무시하는 서버여도 글자만 잘라 쓰므로 화면은 같다.
-            const r = await fetch(url, { headers: { ...authHeaders(), Range: 'bytes=0-4095' } });
+        if (kind === 'text' || kind === 'page') {
+            // 앞부분만 — Range 를 무시하는 서버여도 글자만 잘라 쓰므로 화면은 같다. 416(범위 거부)이면 통째로 받는다.
+            let r = await fetch(url, { headers: { ...authHeaders(), Range: 'bytes=0-' + (kind === 'page' ? 400_000 : 4095) } });
+            if (r.status === 416)
+                r = await fetch(url, { headers: authHeaders() });
             if (!r.ok || ctx.dead() || !box.isConnected)
                 return;
-            const txt = (await r.text()).slice(0, 1400);
-            if (!txt.trim())
+            const raw = await r.text();
+            if (!raw.trim())
                 return;
             box.classList.add('has-pv');
-            paper(box, el('pre', { class: 'pn-fpre', text: txt }));
+            if (kind === 'text') {
+                paper(box, el('pre', { class: 'pn-fpre', text: raw.slice(0, 1400) }));
+                return;
+            }
+            // ⚠ 시안(HTML)은 **srcdoc + 빈 sandbox** 로 그린다. blob 주소를 sandbox 프레임에 물리면 그 프레임은
+            //  불투명 출처라 blob 을 읽을 권한이 없어 **흰 칸**이 된다(실측 2026-08-20 — 시안 미리보기가 전부 백지였다).
+            //  srcdoc 은 내용을 그 자리에 넘기므로 출처 문제가 없고, 빈 sandbox 가 스크립트·폼·상위 접근을 모두 막는다.
+            const frame = el('iframe', { class: 'pn-fframe', sandbox: '', loading: 'lazy', tabindex: '-1', 'aria-hidden': 'true' });
+            frame.srcdoc = raw.slice(0, 400_000);
+            paper(box, frame);
             return;
         }
         const r = await fetch(url, { headers: authHeaders() });
@@ -470,10 +481,6 @@ function filesPart(ctx) {
         else if (kind === 'pdf') {
             // 크롬·사파리는 PDF 를 프레임 안에서 직접 그린다 — 첫 장만, 도구모음 없이.
             paper(box, el('iframe', { class: 'pn-fframe', src: u + '#page=1&toolbar=0&navpanes=0&scrollbar=0&view=FitH', loading: 'lazy', tabindex: '-1', 'aria-hidden': 'true' }));
-        }
-        else if (kind === 'page') {
-            // 시안(HTML)은 **완전 격리 프레임**으로 — sandbox 를 비워 스크립트·폼·같은-오리진 접근을 모두 막고 그림만 본다.
-            paper(box, el('iframe', { class: 'pn-fframe', src: u, sandbox: '', loading: 'lazy', tabindex: '-1', 'aria-hidden': 'true' }));
         }
     }
     function thumb(f) {
