@@ -240,7 +240,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     b.onclick = () => {
       const rest = PART_DEFS.filter((d) => !lay[zone].includes(d.type)
         && !(d.type === 'sessions' && zone !== 'main')     // 세션은 가운데 칸의 것 — 여기 넣으면 뺄 수가 없다(위 불변식)
-        && !(loose && (d.type === 'files' || d.type === 'knowledge' || d.type === 'tasks' || d.type === 'overview' || d.type === 'liv')));
+        && !(loose && (d.type === 'files' || d.type === 'knowledge' || d.type === 'tasks' || d.type === 'overview' || d.type === 'liv' || d.type === 'editor')));
       const close = anchoredPopover(b, el('div', { class: 'pn-pop' },
         el('p', { class: 'pn-pop-h', text: '이 칸에 넣을 것을 고르세요.' }),
         rest.length ? el('div', { class: 'pn-pop-list' }, ...rest.map((d) =>

@@ -242,7 +242,7 @@ export function mountPanes(host, opts) {
         b.onclick = () => {
             const rest = PART_DEFS.filter((d) => !lay[zone].includes(d.type)
                 && !(d.type === 'sessions' && zone !== 'main') // 세션은 가운데 칸의 것 — 여기 넣으면 뺄 수가 없다(위 불변식)
-                && !(loose && (d.type === 'files' || d.type === 'knowledge' || d.type === 'tasks' || d.type === 'overview' || d.type === 'liv')));
+                && !(loose && (d.type === 'files' || d.type === 'knowledge' || d.type === 'tasks' || d.type === 'overview' || d.type === 'liv' || d.type === 'editor')));
             const close = anchoredPopover(b, el('div', { class: 'pn-pop' }, el('p', { class: 'pn-pop-h', text: '이 칸에 넣을 것을 고르세요.' }), rest.length ? el('div', { class: 'pn-pop-list' }, ...rest.map((d) => el('button', { class: 'pn-pop-row', type: 'button', onclick: () => { close(); addTab(zone, d.type); } }, pnIcon(d.icon, 'pn-i sm'), el('span', { class: 'n' }, el('b', { text: d.name }), el('span', { class: 'pn-fine', text: d.hint })))))
                 : el('p', { class: 'pn-fine', text: '넣을 수 있는 것을 이미 다 넣었어요.' }), 
             // 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 배치 복구가 갈 곳이 없어졌다 — '화면에 무엇을 둘까'를
