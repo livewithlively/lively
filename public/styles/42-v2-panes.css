@@ -44,7 +44,7 @@
    여백·제목 크기는 **캔버스 문패(.stu-door)와 정확히 같은 값**이다 — 오른쪽 끝 [기본|캔버스] 단추가 두 뷰에서
    같은 픽셀에 서야 하기 때문(1px 이라도 다르면 오갈 때 단추가 흔들린다). 한쪽을 고치면 다른 쪽도 같이 고친다. */
 .pn-door { flex: none; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 16px 24px 14px; border-bottom: 1px solid var(--line); }
-#v2-root:not(.rail-open) .pn-door { padding-left: 122px; }
+/* (원준 2026-08-20) 알약 폐지 — 좌상단을 비워 둘 이유가 없다. */
 .pn-eyebrow { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-sub); margin-bottom: 7px; }
 .pn-eyebrow .sep { color: var(--muted-2); }
 .pn-state.run { color: var(--blue); font-weight: 700; }

@@ -857,11 +857,11 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 @media (max-width: 900px) { #v2-root.solo .v2-aside { display: none; } }
 /* ══ 실험장 v3(#1719 원준) — 레일 · 작업대 · 위젯(S/M/L 반응) ════════════════════ */
 /* ── 레일 모드 그리드 ── */
-/* 좌측 열 폐기(원준 3차) — 평소 0px, 프로젝트 패널이 열릴 때만 284px 로 민다. */
-#v2-root.rail-mode { grid-template-columns: 0 minmax(0, 1fr) 6px var(--v2-aside-w); }
-#v2-root.rail-mode.no-aside { grid-template-columns: 0 minmax(0, 1fr) 0 0; }
-#v2-root.rail-mode.rail-open { grid-template-columns: 284px minmax(0, 1fr) 6px var(--v2-aside-w); }
-#v2-root.rail-mode.rail-open.no-aside { grid-template-columns: 284px minmax(0, 1fr) 0 0; }
+/* 사이드바는 늘 보인다(원준 2026-08-20) — 3차의 '평소 0px + 알약으로 열기'를 되돌린다.
+   목록은 셸의 뼈대라 숨길 수 있게 두면 숨겨진 상태가 기본이 된다("새로고침하다 보면 사라진다").
+   없앨 수는 없고 **폭만** 끌어 조정한다 → 기본 그리드와 같은 5열(사이드 · 손잡이 · 가운데 · 손잡이 · 우패널). */
+#v2-root.rail-mode { grid-template-columns: var(--v2-side-w) 6px minmax(0, 1fr) 6px var(--v2-aside-w); }
+#v2-root.rail-mode.no-aside { grid-template-columns: var(--v2-side-w) 6px minmax(0, 1fr) 0 0; }
 .stu-side { position: relative; display: flex; flex-direction: row; align-items: stretch; overflow: hidden; padding: 0; background: var(--bg, #fff); border: 0; }
 .stu-rail { width: 64px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 12px 0; }
 .stu-rail-logo { width: 30px; height: 30px; border-radius: 9px; background: var(--ink); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 14px; margin-bottom: 10px; text-decoration: none; }
@@ -870,7 +870,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .stu-rail-it.on { background: #E9EFFB; color: var(--blue); }
 .stu-rail-i { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .stu-rail-sp { flex: 1; }
-.stu-panel { position: relative; width: 284px; flex: none; min-height: 0; background: #FAFBFC; border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+.stu-panel { position: relative; width: 100%; flex: 1 1 auto; min-width: 0; min-height: 0; background: #FAFBFC; border-right: 1px solid var(--line); display: flex; flex-direction: column; }
 .stu-panel-h { flex: none; display: flex; align-items: center; gap: 8px; padding: 14px 14px 6px; }
 .stu-panel-h b { flex: 1; font-size: 13px; }
 .stu-panel-tree { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
@@ -885,8 +885,6 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 /* ── 작업대 골격 ── */
 .stu-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg, #fff); }
 .stu-door { flex: none; display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 16px 24px 14px; border-bottom: 1px solid var(--line); }
-/* 좌상단 손잡이(.stu-panel-fab)가 떠 있을 때만 그만큼 왼쪽을 비운다 — 패널이 열려 있으면 손잡이가 없다. */
-#v2-root:not(.rail-open) .stu-door { padding-left: 122px; }
 .stu-eyebrow { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-sub); }
 .stu-eyebrow .sep { color: var(--muted-2); }
 .stu-state.run { color: var(--blue); font-weight: 700; } .stu-state.done { color: var(--mint-deep); font-weight: 700; } .stu-state.todo { color: var(--muted); }
@@ -1112,16 +1110,8 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .stu-app-inst { cursor: pointer; }
 /* ── 패널 다시 열기 손잡이 — 닫힌 화면 좌상단(원준) ── */
 /* 탭 줄이 맨 위에 있으므로(원준 2026-08-19 '탭 줄은 있는 방향으로') 손잡이는 그 아래에 앉는다 — 겹치면 탭을 못 누른다. */
-.stu-panel-fab { position: absolute; left: 14px; top: 54px; z-index: 50; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 12px 0 5px; border: 1px solid var(--line-net-2); border-radius: 17px; background: rgba(255,255,255,.92); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); box-shadow: 0 2px 6px rgba(21,35,59,.08), 0 10px 24px rgba(21,35,59,.12); font: inherit; font-size: 12.5px; color: var(--ink-sub); cursor: pointer; }
-.stu-panel-fab:hover { border-color: var(--blue); }
 /* 알약 안 두 조각 — 왼쪽 L 은 홈, 나머지는 목록 열기. 눌리는 자리를 넓게 잡아 '누르는 것'으로 읽히게 한다. */
-.stu-panel-fab .lg { text-decoration: none; flex: none; }
-.stu-panel-fab .lg:hover { opacity: .82; }
-.stu-panel-fab-open { border: 0; background: none; font: inherit; font-size: 12.5px; color: var(--ink-sub);
   padding: 0 2px 0 0; height: 100%; cursor: pointer; letter-spacing: -.01em; }
-.stu-panel-fab:hover .stu-panel-fab-open { color: var(--blue); }
-.stu-panel-fab-open:focus-visible, .stu-panel-fab .lg:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 6px; }
-.stu-panel-fab .lg { width: 24px; height: 24px; border-radius: 8px; background: var(--ink); color: #fff; font-weight: 800; font-size: 12px; display: flex; align-items: center; justify-content: center; }
 
 /* ══ 실험장 v4 = 바탕화면(2026-08-19) — 스테이지 층·도크·런치패드·알림 센터·바로가기·유령 창·OS 드롭 ══
    판(.stu-board)은 스크롤하고, 그 위에 스크롤하지 않는 것들이 .stu-stage 에 절대배치로 얹힌다(맥: 아이콘·도크·알림 센터는 안 스크롤). */
@@ -1434,13 +1424,8 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) { .stu-dest.pulse { animation: none; box-shadow: 0 0 0 4px rgba(45,107,240,.18); } }
 
 /* 손잡이 알약 — 끌어서 옮긴다(자리는 사람마다 다르다). 왼쪽 세로 점선이 잡는 자리. */
-.stu-panel-fab { cursor: pointer; padding-left: 2px; }   /* 알약 어디를 눌러도 목록이 열린다 — 손 모양으로 그렇게 보이게 */
-.stu-fab-grip { flex: none; width: 12px; height: 20px; margin-right: -2px; cursor: grab; border-radius: 4px;
   background-image: radial-gradient(currentColor 1px, transparent 1px); background-size: 4px 5px; background-position: 2px 2px;
   color: var(--muted-3); opacity: .85; }
-.stu-panel-fab:hover .stu-fab-grip { color: var(--muted); }
-.stu-panel-fab.dragging { cursor: grabbing; box-shadow: 0 14px 34px rgba(21,35,59,.22); }
-.stu-panel-fab.dragging .stu-fab-grip { cursor: grabbing; }
 
 /* ── 탭 끌어 옮기기 + 고정 홈 + 이름 고치기(원준 2026-08-20) ── */
 .v2-tab { position: relative; }                /* 잡은 탭이 이웃 위로 떠야 한다(z-index) */

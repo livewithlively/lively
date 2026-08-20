@@ -49,11 +49,15 @@ export async function bootV2() {
     if (!root)
         return;
     root.hidden = false;
-    // 실험장(#1719 원준): 좌측은 64px 아이콘 레일 — 프로젝트 트리는 [프로젝트] 버튼으로 여닫는 패널(핀 고정 가능).
-    //  캔버스를 넓게 쓰기 위한 구조라 사이드 폭 스플리터도 걷는다.
+    // 실험장(#1719 원준): 작업대 골격(rail-mode)은 그대로 두되 **좌측 사이드바는 늘 보인다**(원준 2026-08-20:
+    //  "새로고침하다 보면 사라질 때가 있다 — 항상 표시하고, 없앨 수는 없게. 폭만 끌어 조절"). 그래서
+    //  여닫는 길(알약·×·핀)을 전부 걷고 **폭 손잡이 하나**만 남긴다 — 사라지지 않으니 되찾는 길도 필요 없다.
     root.classList.add('rail-mode');
     root.classList.toggle('solo', SOLO);
-    root.replaceChildren(...(SOLO ? [] : [sideEl = el('nav', { class: 'v2-side stu-side', 'aria-label': '탐색' })]), centerEl = el('div', { class: 'v2-main', id: 'v2-main' }), makeSplitter({ axis: 'x', key: 'aside-w', cssVar: '--v2-aside-w', target: root, def: 316, min: 240, max: 720, grow: -1, label: '우패널 너비' }), asideEl = el('aside', { class: 'v2-aside', 'aria-label': '이 선택의 맥락' }));
+    root.replaceChildren(...(SOLO ? [] : [
+        sideEl = el('nav', { class: 'v2-side stu-side', 'aria-label': '탐색' }),
+        makeSplitter({ axis: 'x', key: 'side-w', cssVar: '--v2-side-w', target: root, def: 292, min: 220, max: 560, grow: 1, label: '사이드바 너비' }),
+    ]), centerEl = el('div', { class: 'v2-main', id: 'v2-main' }), makeSplitter({ axis: 'x', key: 'aside-w', cssVar: '--v2-aside-w', target: root, def: 316, min: 240, max: 720, grow: -1, label: '우패널 너비' }), asideEl = el('aside', { class: 'v2-aside', 'aria-label': '이 선택의 맥락' }));
     // 모바일 크롬(#1777) — 바는 그리드 맨 앞, 배경막은 맨 뒤. 데스크톱에선 둘 다 display:none 이라 그리드 열 순서에 안 낀다.
     if (!SOLO) {
         mobile = mountMobileChrome(root, sideEl, asideEl);
@@ -412,133 +416,19 @@ function activeKey() {
     const cur = parseRoute(t ? t.route : location.hash);
     return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
 }
-// ── 좌측 열 폐기(원준 2026-08-19 3차) — 프로젝트 목록 패널만, 작업대 문패의 [프로젝트]로 여닫는다 ──
-let railPanelOpen = false;
-let railPanelPin = (() => { try {
-    return localStorage.getItem('stu_side_pin') === '1';
-}
-catch (_) {
-    return false;
-} })();
-let panelFab = null;
+// ── 좌측 사이드바는 **늘 있다**(원준 2026-08-20) ──────────────────────────────────
+//  이력: 3차(2026-08-19)에 좌측 열을 걷고 떠다니는 알약으로 여닫게 했는데, 그 알약이 ⓐ 자리를 가리고
+//  ⓑ 새로고침·상태에 따라 목록이 사라져 "왜 없어졌나"를 매번 되찾아야 했다(원준 신고). 목록은 셸의 뼈대다 —
+//  숨길 수 있는 것으로 두면 숨겨진 상태가 기본이 된다. 그래서 **없앨 수 없고, 폭만 조절**한다.
+//  · 닫기(×)·핀 고정·알약(stu-panel-fab)·그 자리 기억(stu_fab_pos)은 전부 제거했다.
+//  · 패널 머리글도 뺐다 — 트리 자신이 이미 '프로젝트 · N'과 검색·필터를 머리에 두고 있어 두 겹이었다.
 function drawSide() {
     if (!sideEl)
         return;
-    const showPanel = railPanelOpen || railPanelPin;
-    root.classList.toggle('rail-open', showPanel); // 열림 = 좌측 칸 0 → 284px (캔버스를 민다)
-    // 닫으면 다시 못 여는 문제(원준) — **패널이 닫힌 모든 화면 좌상단에 손잡이(fab)** 를 띄운다.
-    //  ⚠ 종전엔 프로젝트 화면만 제외하고 문패의 [🗀 프로젝트 ▾] 에 맡겼다. 그런데 그 버튼은 눌러서 목록이
-    //   열린다는 느낌을 주지 못했다(원준 2026-08-19: "전혀 직관적이지 않은 당황스러운 버튼"). 화면마다 여는 길이
-    //   다른 것 자체가 문제였다 — 이제 **어느 화면에서든 같은 알약 하나**다. 문패의 로고·[프로젝트]는 걷었다.
-    //  알약은 두 조각이다: 왼쪽 L = 홈으로(문패 로고가 하던 일), 나머지 = 목록 열기. 보이기엔 한 알약이다.
-    if (panelFab) {
-        panelFab.remove();
-        panelFab = null;
-    }
-    if (!showPanel) {
-        const fab = el('div', { class: 'stu-panel-fab', title: '눌러서 프로젝트 목록 열기 · 그립을 잡고 끌면 자리를 옮깁니다' }, el('span', { class: 'stu-fab-grip', title: '끌어서 옮기기', 'aria-hidden': 'true' }), el('a', { class: 'lg', href: '#/', title: '홈으로', 'aria-label': '홈으로', text: 'L' }), el('button', { class: 'stu-panel-fab-open', type: 'button', text: '프로젝트',
-            title: '프로젝트 목록 열기 (닫으려면 패널의 ×) · 알약은 끌어서 옮길 수 있어요',
-            'aria-label': '프로젝트 목록 열기',
-            onclick: () => { railPanelOpen = true; drawSide(); } }));
-        panelFab = fab;
-        root.append(fab);
-        placeFab(fab);
-        makeFabDraggable(fab);
-    }
-    if (!showPanel) {
-        sideEl.replaceChildren();
-        return;
-    }
     const treeHost = el('div', { class: 'stu-panel-tree' });
-    const panel = el('div', { class: 'stu-panel' }, el('div', { class: 'stu-panel-h' }, el('b', { text: '프로젝트' }), el('button', { class: 'btn-text', type: 'button', text: railPanelPin ? '핀 해제' : '핀 고정', title: '고정하면 새로고침해도 펼쳐져 있어요',
-        onclick: () => { railPanelPin = !railPanelPin; try {
-            localStorage.setItem('stu_side_pin', railPanelPin ? '1' : '');
-        }
-        catch (_) { /* noop */ } drawSide(); } }), el('button', { class: 'stu-w-btn', type: 'button', text: '×', title: '닫기', onclick: () => { railPanelOpen = false; railPanelPin = false; try {
-            localStorage.setItem('stu_side_pin', '');
-        }
-        catch (_) { /* noop */ } drawSide(); } })), treeHost);
+    sideEl.replaceChildren(el('div', { class: 'stu-panel' }, treeHost));
     drawSideTree(treeHost, data, activeKey);
-    sideEl.replaceChildren(panel);
 }
-// ── 손잡이 알약의 자리는 **사람마다 다르다**(원준 2026-08-19 "저 위치가 너무 거슬린다") ──
-//  어디에 두든 무언가를 가린다 — 그래서 우리가 고르지 않고 끌어서 옮기게 하고, 그 자리를 기억한다.
-//  좌표는 화면 크기가 변해도 살아남게 **비율**로 저장한다(창을 줄였다 키워도 제자리).
-const FAB_POS_KEY = 'stu_fab_pos';
-function loadFabPos() {
-    try {
-        const v = JSON.parse(localStorage.getItem(FAB_POS_KEY) || 'null');
-        return v && typeof v.rx === 'number' && typeof v.ry === 'number' ? v : null;
-    }
-    catch (_) {
-        return null;
-    }
-}
-function placeFab(fab) {
-    const pos = loadFabPos();
-    if (!pos || !root)
-        return;
-    const r = root.getBoundingClientRect();
-    const w = fab.offsetWidth || 132, h = fab.offsetHeight || 34;
-    fab.style.left = Math.round(Math.min(Math.max(8, pos.rx * r.width), Math.max(8, r.width - w - 8))) + 'px';
-    fab.style.top = Math.round(Math.min(Math.max(8, pos.ry * r.height), Math.max(8, r.height - h - 8))) + 'px';
-}
-function makeFabDraggable(fab) {
-    fab.addEventListener('pointerdown', (e) => {
-        if (e.button !== 0)
-            return;
-        const tgt = e.target;
-        const onGrip = !!tgt.closest('.stu-fab-grip');
-        if (!onGrip && tgt.closest('a, button'))
-            return; // 손잡이가 아니면 링크·버튼은 제 일을 한다
-        const r0 = fab.getBoundingClientRect(), rr = root.getBoundingClientRect();
-        const dx = e.clientX - r0.left, dy = e.clientY - r0.top;
-        let moved = false;
-        const move = (ev) => {
-            // 문턱을 넉넉히(8px) — 트랙패드는 '누르기'에도 2~5px 흔들린다. 좁으면 클릭이 드래그로 잡혀 아무 일도 안 일어난다
-            //  (상민님 실측 2026-08-19: "알약 눌러도 사이드바 안 나타나").
-            if (!moved && Math.abs(ev.clientX - e.clientX) + Math.abs(ev.clientY - e.clientY) < 8)
-                return;
-            if (!moved) {
-                moved = true;
-                fab.classList.add('dragging');
-                fab.setPointerCapture(ev.pointerId);
-            }
-            const x = Math.min(Math.max(8, ev.clientX - rr.left - dx), rr.width - fab.offsetWidth - 8);
-            const y = Math.min(Math.max(8, ev.clientY - rr.top - dy), rr.height - fab.offsetHeight - 8);
-            fab.style.left = Math.round(x) + 'px';
-            fab.style.top = Math.round(y) + 'px';
-        };
-        const up = (ev) => {
-            window.removeEventListener('pointermove', move);
-            window.removeEventListener('pointerup', up);
-            // 끌지 않았으면 = 그냥 누른 것 → 목록을 연다. 알약의 **어디를 눌러도** 열려야 한다(글자만 되는 건 함정이다).
-            if (!moved) {
-                railPanelOpen = true;
-                drawSide();
-                return;
-            }
-            fab.classList.remove('dragging');
-            try {
-                fab.releasePointerCapture(ev.pointerId);
-            }
-            catch (_) { /* noop */ }
-            const r = fab.getBoundingClientRect();
-            try {
-                localStorage.setItem(FAB_POS_KEY, JSON.stringify({ rx: (r.left - rr.left) / rr.width, ry: (r.top - rr.top) / rr.height }));
-            }
-            catch (_) { /* noop */ }
-            const swallow = (ev2) => { ev2.stopPropagation(); ev2.preventDefault(); };
-            fab.addEventListener('click', swallow, { capture: true, once: true }); // 끌고 놓은 손짓이 '열기'로 새지 않게
-        };
-        window.addEventListener('pointermove', move);
-        window.addEventListener('pointerup', up);
-    });
-}
-window.addEventListener('resize', () => { if (panelFab)
-    placeFab(panelFab); });
-// 작업대(문패 [프로젝트])가 쏘는 신호 — 모듈 순환 없이 DOM 이벤트로 잇는다.
-window.addEventListener('stu:toggle-projects', () => { railPanelOpen = !railPanelOpen; drawSide(); });
 function paintAsidePanes(host) {
     if (host.__trail)
         host.__trail.w.root.hidden = !!host.__filesOn;
