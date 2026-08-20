@@ -12,7 +12,8 @@ import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame } from './apps.js';
 import { drawSide as drawSideTree, projectOrder, sessText } from './side.js';
 import { dotCls, mergeSessions, projName, renderHome, renderSession, type Sess, type V2Data } from './views.js';
-import { mountStudio, type StudioHandle } from './studio.js';   // 실험장(#1719 원준): 프로젝트 화면 = 작업대(캔버스). 종전 방(project-view)은 잠시 내려둔다.
+import { mountStudio } from './studio.js';                     // 캔버스 뷰(#1719 원준) — 위젯을 자유롭게 놓는 작업대
+import { mountPanes, projMode, setProjMode, type ProjMode } from './panes.js';   // 기본 뷰(#1719 원준 2026-08-20) — 칸으로 나뉜 도킹 화면. 둘은 문패의 [기본|캔버스]로 오간다.
 import { createTimeline, type TimelineHandle } from '../timeline.js';
 import { loadSessionActivities } from '../timeline-sources.js';
 import { makeSplitter } from './split.js';
@@ -36,7 +37,8 @@ const projRetried = new Set<number>();   // 목록에 없어 한 번 더 당겨 
 let suppressHash = 0;                    // 탭 전환이 만든 hashchange 를 라우터가 다시 그리지 않게
 // 프로젝트 화면(#1757) 핸들 — **탭마다 하나**. 탭이 다른 화면으로 가거나 닫힐 때 destroy(리브 턴 폴링 정지).
 //  탭 전환(숨김)에는 살려 둔다 — 탭의 존재 이유(상태 보존)와 같은 원칙.
-const projViews = new Map<ShellTab, StudioHandle>();
+//  뷰가 둘(기본·캔버스)이라 핸들은 공통 계약 하나로만 본다 — 셸이 아는 것은 '언젠가 정리해야 한다'뿐이다.
+const projViews = new Map<ShellTab, { destroy(): void }>();
 function dropProjView(tab: ShellTab): void { const pv = projViews.get(tab); if (pv) { pv.destroy(); projViews.delete(tab); } }
 // 프로젝트 목록은 워크스페이스 전체(수백 건·설명 포함이라 1MB 를 넘는다) — 세션처럼 20초마다 당기지 않는다.
 const PROJ_TTL_MS = 5 * 60 * 1000;
@@ -240,11 +242,16 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       if (id) { try { detail = await api('/api/ui/v6/projects/' + id); } catch (_) { detail = null; } }   // id 0 = 프로젝트 없는 묶음(조회할 프로젝트가 없다)
       if (seq !== tab.seq) return;
       if (detail && !data.projects.some((p) => p.id === id)) void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); });
-      // 프로젝트 화면(#1757) = 짧은 개요 + 리브 대화 — 이 탭의 것으로 마운트(리브가 본문·태스크를 바꾸면 목록·사이드바 갱신).
-      dropProjView(tab);
-      const stu = mountStudio(tab.center, { data: () => data, id, detail, onProjectChanged: () => { void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); }); } });
-      projViews.set(tab, stu);
-      tab.aside.replaceChildren();   // v4: 우패널 없음 — 선반·타임라인은 작업대 안(런치패드·알림 센터)에서 산다
+      // 프로젝트 화면 — 보기 방식(기본·캔버스)에 따라 다른 뷰를 이 탭에 마운트한다. 고른 것은 전역으로 기억한다
+      //  (프로젝트마다 다르면 그 자체가 또 '프로젝트마다 하는 설정'이 된다 — 기본 뷰가 없애려던 바로 그것).
+      const changed = (): void => { void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); }); };
+      const mountProj = (): void => {
+        dropProjView(tab);
+        const o = { data: () => data, id, detail, onProjectChanged: changed, onSwitchView: (m: ProjMode) => { setProjMode(m); mountProj(); } };
+        projViews.set(tab, projMode() === 'canvas' ? mountStudio(tab.center, o) : mountPanes(tab.center, o));
+      };
+      mountProj();
+      tab.aside.replaceChildren();   // 우패널 없음 — 맥락은 화면 안(칸·런치패드)에서 산다
     } else if (page === 's' && segs[1]) {
       const id = decodeURIComponent(segs[1]);
       let s = findSess(id);

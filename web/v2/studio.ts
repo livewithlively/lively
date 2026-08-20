@@ -29,8 +29,9 @@ import { listSessionApps, spawnAppSession, type SessionApp } from './app-session
 import { openAppUi } from './app-ui.js';
 import { sessText } from './side.js';
 import { dotCls, type Sess, type V2Data } from './views.js';
+import { setProjMode, viewToggle, type ProjMode } from './panes.js';   // [기본|캔버스] — 두 뷰가 문패 같은 자리에 같은 단추를 둔다
 
-export interface StudioOpts { data: () => V2Data; id: number; detail: any; onProjectChanged?: () => void }
+export interface StudioOpts { data: () => V2Data; id: number; detail: any; onProjectChanged?: () => void; onSwitchView?: (mode: ProjMode) => void }
 export interface StudioHandle { destroy(): void; renderAside(aside: HTMLElement): void }
 
 // ── 아이콘(스트로크 SVG) ──────────────────────────────────────────────────────
@@ -187,7 +188,9 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
         stackBtn,
         tlBtn,
         cmBtn,
-        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '정리', title: '위젯 위치만 격자에 맞춰 정렬합니다(크기는 그대로)', onclick: () => { autoArrange(); paintAll(); save(); } })));
+        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '정리', title: '위젯 위치만 격자에 맞춰 정렬합니다(크기는 그대로)', onclick: () => { autoArrange(); paintAll(); save(); } }),
+        // 맨 끝 — 기본 뷰 문패도 같은 자리에 둔다(오갈 때 마우스가 안 움직이게, 원준 2026-08-20).
+        viewToggle('canvas', (m) => { if (m !== 'canvas') { setProjMode(m); opts.onSwitchView?.(m); } })));
     cmBtn.classList.toggle('on', commentMode);
   }
 
