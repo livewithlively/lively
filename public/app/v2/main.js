@@ -322,7 +322,20 @@ async function onHash() {
         suppressHash--;
         return;
     }
-    const hash = location.hash || '#/';
+    let hash = location.hash || '#/';
+    // ★ 프로젝트 주소는 '거쳐 가는 문'이다(원준 2026-08-20 "그거 눌렀을 때 열리는 탭도 그냥 세션이 열리는걸로").
+    //  사이드바에서 프로젝트 제목을 누르면 #/p/<id> 로 오는데, 그대로 탭을 만들면 **프로젝트 탭**이 하나 생겼다가
+    //  그 안에서 다시 세션으로 바뀐다(제목이 두 번 바뀌고, 이미 프로젝트 탭이 있으면 그 낡은 탭이 켜졌다).
+    //  그래서 탭을 고르기 **전에** 여기서 그 프로젝트의 맨 위 세션(사이드바 첫 줄과 같은 정의)으로 갈아 끼운다.
+    const pk0 = routeKey(hash);
+    if (pk0.startsWith('p:')) {
+        const top = topSessionOf(Number(pk0.slice(2)));
+        if (top) {
+            hash = '#/s/' + encodeURIComponent(top.id);
+            suppressHash++; // 이 replace 가 만든 hashchange 는 라우터가 무시한다
+            location.replace(location.pathname + location.search + hash);
+        }
+    }
     const cur = tabsApi.active();
     if (routeKey(cur.route) === routeKey(hash)) {
         cur.route = hash;
