@@ -22,7 +22,7 @@ import { runBootstrap, bootstrapPreview } from "./bootstrap.mjs";
 import { runCli, reduceProgress, cliContractVerdict } from "./cli-runner.mjs";
 import { trayMenuModel } from "./tray-menu.mjs";
 import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor } from "./ipc-contract.mjs";
-import { appReady, webUiUrl, webOrigin, openTargetFor, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch } from "./web-shell.mjs";
+import { appReady, webUiUrl, webOrigin, openTargetFor, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup } from "./web-shell.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
 import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, shouldAutoApplyUpdate, downloadProgressNote, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
 import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
@@ -642,7 +642,13 @@ async function onboard(url) {
     await refreshState();
   }
   // 로그인 + 키트 설치는 CLI 의 setup 이 통째로 한다(순서·조건은 거기가 정본).
-  return start("setup", { gateway: gw });
+  const r = await start("setup", { gateway: gw });
+  if (!r.ok) return r;
+  // 설치의 끝은 노드까지(web-shell.nextAfterSetup) — start() 끝의 deep refresh 가 nodeRunning 을 실측으로
+  //  되읽은 뒤라 이 판정은 현재 상태 기준이다. 노드 시작이 실패하면 그 실패를 흐름의 결과로 돌려준다 —
+  //  진행 UI 가 실패(예: tmux 안내)를 보여주고 '다시 시도'는 node-start 를 재시도한다(lastRun).
+  if (nextAfterSetup(state)) return start("node-start", {});
+  return r;
 }
 
 /** prompt → 렌더러로 넘기고 답을 기다린다. device-code 는 통지형이라 답하지 않는다(undefined). */
