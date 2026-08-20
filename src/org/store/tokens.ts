@@ -22,6 +22,7 @@ export async function mintToken(input: {
   clientId?: string | null;
   resource?: string | null;
   expiresInSec?: number | null;
+  appId?: string | null;   // 앱 세션 토큰(#1780) — 이 값이 있으면 requireAppTool 이 도구를 그 앱 grant 로 축소.
 }, actor?: string, source?: string, client?: pg.PoolClient): Promise<{ token: string; tokenHash: string; expiresAt: Date | null }> {
   const exec = client ?? itemsPool;
   const token = "lvk_" + crypto.randomBytes(24).toString("base64url");
@@ -31,13 +32,13 @@ export async function mintToken(input: {
   // 만료는 DB now() 기준으로 계산한다 — 검증(verifyDbToken)도 DB now() 라 시계가 하나로 유지된다.
   const r = await exec.query(
     `INSERT INTO auth_token(token_hash, user_id, scopes, projects, label, member_id, created_by,
-                            client_id, resource, expires_at)
-       VALUES($1,$2,$3::jsonb,$4::jsonb,$5,$6,$7,$8,$9,
+                            client_id, resource, app_id, expires_at)
+       VALUES($1,$2,$3::jsonb,$4::jsonb,$5,$6,$7,$8,$9,$11,
               now() + ($10::int * interval '1 second'))
      RETURNING expires_at`,
     [tokenHash, input.userId, JSON.stringify(input.scopes),
      JSON.stringify(input.projects ?? ["*"]), input.label ?? null, input.memberId ?? null, actor ?? null,
-     input.clientId ?? null, input.resource ?? null, ttl == null ? null : String(ttl)],
+     input.clientId ?? null, input.resource ?? null, ttl == null ? null : String(ttl), input.appId ?? null],
   );
   await audit("auth_token", input.userId, "mint",
     null, { userId: input.userId, scopes: input.scopes, label: input.label, memberId: input.memberId,
@@ -101,6 +102,7 @@ export interface DbTokenIdentity {
   clientId: string | null;   // 발급 OAuth 클라이언트(oauth_client.client_id). 감사·읽기전용 프로필(T3)의 축.
   resource: string | null;   // RFC 8707 대상(audience) — 자원서버가 '내 앞으로 발급된 토큰인가'를 이걸로 판정.
   expiresAt: number | null;  // Unix 초. null = 만료 없음.
+  appId: string | null;      // 앱 세션 토큰이면 그 앱 id(#1780). null = 일반 토큰. requireAppTool 이 도구를 축소한다.
 }
 
 // 인증 경로(bearer.ts) — 평문 토큰 → 해시 조회. revoked 아니면 LivelyUser shape 반환, 아니면 null.
@@ -114,7 +116,7 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
     const r = await itemsPool.query(
       `SELECT t.user_id, t.member_id, m.email AS email, m.state AS member_state,
               t.scopes AS token_scopes, m.scopes AS member_scopes, t.projects,
-              t.client_id, t.resource, EXTRACT(EPOCH FROM t.expires_at) AS expires_epoch
+              t.client_id, t.resource, t.app_id, EXTRACT(EPOCH FROM t.expires_at) AS expires_epoch
          FROM auth_token t LEFT JOIN org_member m ON m.id = t.member_id
         WHERE t.token_hash=$1 AND t.revoked_at IS NULL
           AND (t.expires_at IS NULL OR t.expires_at > now())`,
@@ -123,7 +125,7 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
     const row = r.rows[0] as {
       user_id: string; member_id: string | null; email: string | null;
       member_state: string | null; token_scopes: unknown; member_scopes: unknown; projects: unknown;
-      client_id: string | null; resource: string | null; expires_epoch: string | null;
+      client_id: string | null; resource: string | null; app_id: string | null; expires_epoch: string | null;
     } | undefined;
     if (!row) return null;
     // JSONB scopes/projects 는 런타임에 무엇이든 될 수 있다(마이그레이션 버그·손상) → 보안 경계에서
@@ -144,6 +146,7 @@ export async function verifyDbToken(token: string): Promise<DbTokenIdentity | nu
       userId: row.user_id, email: row.email ?? "", scopes, projects: strArr(row.projects, ["*"]),
       clientId: row.client_id ?? null,
       resource: row.resource ?? null,
+      appId: row.app_id ?? null,
       // numeric → JS number. NaN/음수는 만료없음으로 오독되면 안 되므로 유한수만 통과시킨다.
       expiresAt: row.expires_epoch == null ? null : (Number.isFinite(Number(row.expires_epoch)) ? Math.floor(Number(row.expires_epoch)) : null),
     };

@@ -17,6 +17,7 @@ import { reapOAuth } from "../org/store/oauth.js";
 import { initAllSchemas } from "./schemas.js";
 import { ensureSelfRls } from "../db/self-rls.js";
 import { seedDefaultContent } from "../org/delivery/seed-content.js";
+import { seedBuiltinApps } from "../apps/seed.js";
 import { runAutoBackfillSweep } from "../v6/embedding-backfill.js";
 import { registerTerminal } from "../terminal/routes.js";
 import { liveAttachCount, scanAttachProcs } from "../terminal/terminal-pty.js";
@@ -151,6 +152,12 @@ export const DB_BOOT_STEPS: BootStep[] = [
   //  가리키는 project-closeout 스킬(#878), 도메인맵 is-부트스트랩 런북 2개, 커스텀훅·스킬)을 신규 게이트웨이에
   //  idempotent 주입한다(없을 때만 — 운영자 토글·편집 보존). org(훅·스킬)+v6(지식) 스키마가 모두 준비된 뒤. 비치명.
   { name: "seed-default-content", gate: "always", run: () => seedDefaultContent().catch((err) => logger.warn({ err }, "디폴트 콘텐츠 시딩 실패(비치명)")) },
+  // 빌트인 앱 시딩(#1780) — 코드 소유(apps/builtin/<id>) 앱을 게이트웨이에 idempotent 설치/갱신한다(content_hash 변경 시만).
+  //  seed-default-content 의 형제 best-effort 스텝: 앱 레지스트리(org_app)+전개 대상(org_harness_asset·org_cron 등)
+  //  스키마가 준비된 뒤(스키마 체인 완료 후 이 자리). 실패는 부팅을 막지 않는다(비치명 — 다음 부팅 시딩이 재시도).
+  { name: "seed-builtin-apps", gate: "always", run: () => seedBuiltinApps()
+      .then((r) => { if (r.seeded.length || r.updated.length) logger.info(r, "빌트인 앱 시딩"); })
+      .catch((err) => logger.warn({ err }, "빌트인 앱 시딩 실패(비치명)")) },
   // 구 마커 sync 백필(#905 P1-②) — 이 박스가 만든 프로젝트 폴더의 .lively/project.json 에 sync:"pull" 을 stamp.
   //  pull 훅이 '이 폴더에 서버 파일을 써도 되나'를 마커의 sync 로 판정하게 됐는데, sync 없는 구 마커의 폴백은
   //  ~/lively/projects/<id>(꼴 고정) 만 인정한다 — 박스 폴더는 folder 가 임의(예: 'project/관리탭 수정')라

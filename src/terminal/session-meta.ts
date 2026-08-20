@@ -1,0 +1,74 @@
+// 세션 하나의 메타(GET /api/ui/terminal/sessions/:id) 중 **죽은 세션이 '복원 가능'이라고 말하는 자리** (#1820).
+//
+// 왜 라우트에서 꺼냈나 — 이 응답의 `restorable`/`canRestore` 는 화면이 "열기 = 복원"을 판정하는 **유일한 신호**다.
+//  이 신호가 빠지면 터미널 페이지의 goneMode 가 'end'(그냥 끝난 세션)로 떨어져 **어떤 진입점에서도 복원이 안 된다**.
+//  실제로 그런 회귀가 6일간 있었다(2026-08-14 ~ 08-20): #109(3be85ae)가 ownerMeta 를 desired(DB) 우선으로 바꾸면서
+//  **죽은 박스 세션도 canAttach 를 통과**하게 됐고, 라우트는 그 뒤 tmux 에서 라벨을 읽어 `{label:"", projectId:0}` 만
+//  돌려줬다 — restorable 이 통째로 빠진 응답이다. 라우트 한복판의 인라인 분기라 이걸 지키는 테스트가 없었다.
+//  그래서 판정을 순수 함수로 꺼내 표로 고정한다(session-meta.test.ts).
+//
+// ⚠ DB·tmux·express 를 부르지 않는다(순수) — 그래야 표가 테스트로 고정된다.
+
+/** 복원 판정에 필요한 desired-state 필드만(= org_session_state 의 부분집합). */
+export interface DeadSessionStateLike {
+  owner: string;
+  label?: string | null;
+  project_id?: number | null;
+  harness?: string | null;
+  exited_at?: string | null;
+  exit_reason?: string | null;
+}
+
+/** 죽은 세션의 메타 응답 본문. `restorable: true` 가 곧 "박스에 없다 = 되살릴 수 있다". */
+export interface DeadSessionMeta {
+  id: string;
+  label: string;
+  projectId: number;
+  restorable: true;
+  /** 되살릴 수 있는 사람인가 — 소유자·admin 만. 프로젝트 세션은 남에게도 **보이되** 복원은 소유자 몫(#1059). */
+  canRestore: boolean;
+  /** 사용자가 직접 끝냈나(/exit·logout). 화면 문구를 가른다 — 자동 복원 여부를 가르지는 않는다(#1820). */
+  exitedByUser: boolean;
+  /** 메모리 부족으로 OS 가 끝냈나(#1251). exited_at 이 있으면 그쪽이 이긴다(확정 > 추정). */
+  oomKilled: boolean;
+  /** 하네스(claude·codex·shell…) — 이어받기 문구와 복원 인자를 가른다. */
+  harness: string;
+}
+
+export type DeadSessionMetaResult =
+  | { kind: "ok"; body: DeadSessionMeta }
+  /** desired-state 가 없다 = 되살릴 근거가 없는 '진짜 끝난 세션'. 호출자는 종전 흐름을 계속한다. */
+  | { kind: "none" }
+  /** 남의 개인 세션 — 존재조차 알리지 않는다. 호출자는 403. */
+  | { kind: "forbidden" };
+
+/**
+ * 죽은(박스/노드에 없는) 세션의 메타를 만든다.
+ *
+ * 노출 범위는 **복원 권한과 같은 축**이다: 소유자·admin 은 전부 보고 되살릴 수 있고, 프로젝트 세션은 전원에게
+ *  보이되(#452 공동 세션) 되살리는 건 소유자 몫이다(canRestore=false → 화면이 '소유자만 열기'로 안내).
+ */
+export function deadSessionMeta(
+  id: string,
+  st: DeadSessionStateLike | null | undefined,
+  viewerId: string,
+  isAdmin: boolean,
+): DeadSessionMetaResult {
+  if (!st || !st.owner) return { kind: "none" };
+  const mine = st.owner === viewerId || isAdmin;
+  const projectId = Number(st.project_id ?? 0) || 0;
+  if (!mine && projectId <= 0) return { kind: "forbidden" };
+  return {
+    kind: "ok",
+    body: {
+      id,
+      label: st.label || id,
+      projectId,
+      restorable: true,
+      canRestore: mine,
+      exitedByUser: !!st.exited_at,
+      oomKilled: !st.exited_at && st.exit_reason === "oom",
+      harness: st.harness || "shell",
+    },
+  };
+}

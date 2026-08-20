@@ -13,8 +13,8 @@
 //  ── 판정은 여기서 하지 않는다 ──
 //  무엇이 덜 됐는지(카드)는 서버가 이미 정해서 준다(GET /api/ui/me/liv).
 //  화면이 자기 판정을 가지면 리브와 다른 답을 하고, 그게 #1618 이 잡아낸 실패다. 여기는 그리기만 한다.
-import { api, el } from './core.js';
-import { mountLivChat, livChatAsk } from './liv-chat.js';
+import { api, el, state } from './core.js';
+import { mountLivChat, livChatAsk, livChatFill } from './liv-chat.js';
 
 export type LivMode = 'login' | 'liv' | 'dashboard';
 export interface LivFinding {
@@ -69,37 +69,41 @@ export async function renderLiv(view: HTMLElement | null, opts: RenderLivOpts = 
   view.replaceChildren();
   document.body.dataset.route = 'liv';
 
-  // 상단 내비를 걷었으니 **나가는 길이 화면 안에 있어야 한다** — 없으면 사람이 뒤로가기를 찾는다.
-  //  하나만 둔다: 어디로 가는지가 분명한 [← 라이블리]. 탭을 여기 다시 그리면 크롬을 걷은 뜻이 없어진다.
-  const head = el('div', { class: 'liv-head' },
-    el('div', { class: 'liv-title' }, el('span', { class: 'liv-dot' }), el('b', { text: '리브' }),
-      opts.embedded ? el('span', { class: 'liv-title-sub', text: '워크스페이스 담당자' }) : null),
-    opts.embedded ? null : el('div', { class: 'liv-head-acts' },
-      el('a', {
-        class: 'btn btn-sm btn-ghost', href: '#/dashboard', text: '← 라이블리',
-        title: '라이블리 홈으로 돌아갑니다. 리브는 상단 [리브] 버튼으로 다시 열 수 있습니다.',
-      })));
+  // ── 머리 = 이 화면이 무엇인지 3초 안에 ──────────────────────────────────────────────
+  //  처음 온 사람은 '리브'라는 이름만 보고는 여기가 무엇을 하는 곳인지 모른다(실측 지적 2026-08-19).
+  //  그래서 이름 아래에 **무엇을 해 주는 곳인가**를 두 줄로 적는다. 기능 목록이 아니라 약속 한 문장이다.
+  //  나가는 길([← 라이블리])은 셸이 없을 때만 — v2 안에서는 사이드바가 그 역할을 한다.
+  const head = el('header', { class: 'liv-top' },
+    el('div', { class: 'liv-top-row' },
+      el('span', { class: 'liv-face', 'aria-hidden': 'true', text: 'L' }),
+      el('div', { class: 'liv-top-name' },
+        el('b', { text: '리브' }),
+        el('span', { class: 'liv-top-role', text: '워크스페이스 담당자' })),
+      opts.embedded ? null : el('a', {
+        class: 'btn btn-sm btn-ghost liv-top-out', href: '#/dashboard', text: '← 라이블리',
+        title: '라이블리 홈으로 돌아갑니다.',
+      })),
+    el('p', { class: 'liv-top-say' },
+      el('b', { text: '이 워크스페이스를 대신 손보는 담당자예요.' }),
+      document.createTextNode(' 설명서를 드리지 않습니다 — 말씀하시면 제가 직접 합니다.')));
 
-  // 카드는 **왼쪽 레일**(이슈 목록 문법), 대화가 남은 폭·높이를 전부 먹는다. 카드가 위에 있으면 대화가
-  //  절반으로 눌려 정작 리브와 말하기가 불편해진다 — 이 화면의 주인공은 대화다.
-  const cards = el('div', { class: 'liv-cards' }, skeletonLine(), skeletonLine());
-  // 리브가 던진 물음이 앉는 자리 — 대화와 **같은 칸**, 입력 바로 위(스크롤에 떠내려가지 않는다).
+  // 편지 = 이 화면의 본문. 카드 목록이 아니라 **리브가 쓴 글 한 통**이다(#1719 안 A).
+  //  현황판을 두지 않는 이유는 0818 회의 결정이다 — 리브는 대시보드가 아니라 컨설턴트다.
+  const letter = el('section', { class: 'liv-letter' }, el('div', { class: 'liv-letter-skel' }));
+  // 리브가 던진 물음이 앉는 자리 — 대화와 같은 칸, 입력 바로 위(스크롤에 안 떠내려간다).
   const askHost = el('div', { class: 'liv-askdock' });
   const chatWrap = el('div', { class: 'liv-chat' },
-    el('div', { class: 'liv-chat-body', id: 'liv-chat-body' }, el('div', { class: 'liv-chat-boot', text: '세션을 준비하고 있습니다…' })));
+    el('div', { class: 'liv-chat-body', id: 'liv-chat-body' }, el('div', { class: 'liv-chat-boot', text: '준비하고 있습니다…' })));
 
-  // rail 을 받았으면 카드는 그쪽(셸의 우측 패널)에, 본문은 대화 한 열. 안 받았으면 종전 그대로 왼쪽 레일.
-  if (opts.rail) {
-    opts.rail.replaceChildren(cards);
-    view.append(el('div', { class: 'liv-wrap' }, head, el('div', { class: 'liv-body liv-body-solo' }, chatWrap)));
-  } else {
-    view.append(el('div', { class: 'liv-wrap' }, head,
-      el('div', { class: 'liv-body' }, el('aside', { class: 'liv-rail' }, cards), chatWrap)));
-  }
+  // 한 열이다. 왼쪽 레일(할 일 목록)을 걷었다 — 목록이 있으면 그게 곧 대시보드가 되고,
+  //  이 화면이 하기로 한 일(제안 하나를 읽고 결정하기)에서 눈이 흩어진다.
+  //  rail 을 주는 셸(v2 우패널)에서는 편지를 그쪽에 두지 않는다 — 편지는 언제나 본문의 주인공이다.
+  view.append(el('div', { class: 'liv-wrap' }, head,
+    el('div', { class: 'liv-body liv-body-solo' }, letter, chatWrap)));
 
   // 카드와 세션은 **독립적으로** 로드한다. 세션이 못 떠도 무엇이 문제인지는 보여야 하고,
   //  카드 조회가 느려도 대화는 먼저 시작될 수 있다(위젯 독립 실패 원칙과 같은 결).
-  refreshLiv = () => { void fillLivCards(cards, askHost); };
+  refreshLiv = () => { void fillLivCards(letter, askHost); };
   refreshLiv();
   mountLivChat(chatWrap.querySelector('.liv-chat-body') as HTMLElement, askHost);
 
@@ -134,8 +138,6 @@ function livDismissBtn(): HTMLElement {
   });
 }
 
-function skeletonLine(): HTMLElement { return el('div', { class: 'liv-card liv-card-skel' }); }
-
 /**
  * 레일에는 **서 있는 일**(지금 손볼 것)만 그린다. 리브가 지금 던진 물음은 여기가 아니다 — askHost 로 간다.
  *
@@ -152,7 +154,9 @@ export async function fillLivCards(host: HTMLElement, askHost: HTMLElement): Pro
   let st: LivStatus;
   try { st = await livStatus(); }
   catch {
-    host.replaceChildren(el('div', { class: 'liv-note', text: '지금 상태를 읽지 못했습니다. 옆에서 리브에게 직접 물어보셔도 됩니다.' }));
+    host.replaceChildren(el('div', { class: 'liv-letter-quiet' },
+      el('p', { class: 'liv-quiet-say', text: '지금 상태를 읽지 못했습니다.' }),
+      el('p', { class: 'liv-quiet-sub', text: '아래에서 저에게 직접 물어보셔도 됩니다.' })));
     return;
   }
   // 리브가 기다리는 물음 — 대화 칸의 입력 바로 위에. 이게 떠 있으면 리브는 그걸 기다리느라 멈춰 있다.
@@ -163,15 +167,84 @@ export async function fillLivCards(host: HTMLElement, askHost: HTMLElement): Pro
     : null;
   askHost.replaceChildren(...(ask ? [ask] : []));
 
-  if (!st.findings.length) {
-    host.replaceChildren(el('div', { class: 'liv-note' },
-      el('b', { text: '지금 손볼 것은 없습니다.' }),
-      el('span', { text: ' 옆에서 리브에게 무엇이든 물어보세요.' })));
-    return;
+  host.replaceChildren(st.findings.length ? livLetter(st, host) : livQuiet());
+}
+
+/** 사람 이름 — 편지는 누구에게 쓰는지가 있어야 편지다. 모르면 호칭 없이 시작한다(억지로 '고객님' 하지 않는다). */
+function meName(): string {
+  const m: any = (state && (state as any).me) || {};
+  const n = String(m.name || m.display_name || '').trim();
+  return n ? n + '님, ' : '';
+}
+const ORDINAL = ['하나', '둘', '셋', '넷', '다섯', '여섯'];
+
+/**
+ * 편지 — 카드 목록이 아니라 **리브가 쓴 글 한 통**(#1719 안 A · 0818 회의 §3).
+ *
+ * 왜 목록이 아닌가: 목록은 훑게 만들고, 훑으면 결정하지 않는다. 그리고 항목이 늘어나는 순간 그건 현황판이 된다 —
+ *  이 화면이 대시보드가 되면 안 된다는 것이 대표 결정이다. 글은 끝까지 읽히거나 안 읽히거나 둘 중 하나라
+ *  "몇 개인지"가 아니라 "무엇을 할지"가 남는다.
+ * 어조 규칙 하나: **1인칭**이다. "제가 켜 드릴게요"는 제안이고 "설정을 켜세요"는 훈수다 — 주어를 바꾸면
+ *  리브가 못 하는 일은 문장이 아예 안 만들어진다(훈수 차단이 문법에서 이뤄진다).
+ */
+function livLetter(st: LivStatus, host: HTMLElement): HTMLElement {
+  const n = st.findings.length;
+  const lead = n === 1
+    ? `${meName()}지금 한 가지가 걸립니다.`
+    : `${meName()}지금 ${n}가지가 걸립니다.`;
+  return el('article', { class: 'liv-letter-body' },
+    el('p', { class: 'liv-lead', text: lead }),
+    ...st.findings.map((f, i) => livPara(f, i, n, host)),
+    el('p', { class: 'liv-sign' }, el('span', { text: '— 리브' })));
+}
+
+/** 편지의 한 문단 = 제안 하나. 무엇을 봤는지(제목·설명) + 제가 하겠다(버튼)까지가 한 덩어리다. */
+function livPara(f: LivFinding, i: number, total: number, host: HTMLElement): HTMLElement {
+  const acts = el('div', { class: 'liv-para-acts' });
+  if (f.prompt) {
+    acts.append(el('button', {
+      class: 'btn btn-sm btn-primary', type: 'button', text: '제가 해 드릴게요',
+      title: '이 일을 제가 대신 합니다 — 무엇을 했는지 아래 대화에 그대로 남습니다.',
+      onclick: (ev: Event) => void livDelegate(ev.currentTarget as HTMLButtonElement, f),
+    }));
   }
-  host.replaceChildren(
-    el('div', { class: 'liv-cards-title', text: `지금 손볼 것 ${st.total}` }),
-    ...st.findings.map((f) => livCard(f, host)));
+  if (f.href) acts.append(el('a', { class: 'btn btn-sm', href: f.href, text: f.prompt ? '직접 볼게요' : '보러 가기' }));
+  acts.append(el('button', {
+    class: 'btn btn-sm btn-ghost', type: 'button', text: '나중에',
+    // '나중에'는 이 화면에서 그 문단을 접어 둘 뿐, 서버에 거절로 남기지 않는다 — 거절 기록은 리브가
+    //  대화에서 사람 뜻을 확인하고 남길 일이다(버튼 한 번으로 영구 침묵시키는 건 더 위험하다).
+    onclick: (ev: Event) => {
+      (ev.currentTarget as HTMLElement).closest('.liv-para')?.remove();
+      if (!host.querySelector('.liv-para')) refreshLiv();
+    },
+  }));
+  return el('div', { class: 'liv-para liv-para-' + f.severity },
+    total > 1 ? el('span', { class: 'liv-para-no', text: ORDINAL[i] ?? String(i + 1) }) : null,
+    el('div', { class: 'liv-para-b' },
+      el('p', { class: 'liv-para-t', text: f.title }),
+      f.detail ? el('p', { class: 'liv-para-d', text: f.detail }) : null,
+      acts));
+}
+
+/**
+ * 할 말이 없는 날 — **이 화면의 기본 상태**다(1년의 대부분).
+ *
+ * 여길 목록으로 채우고 싶은 유혹이 곧 대시보드로 되돌아가는 길이다. 대신 **부탁할 수 있는 것**을 세 줄 둔다 —
+ * 처음 온 사람에게는 이게 곧 사용법이고, 오래 쓴 사람에게는 "지금 조용하다"는 사실 자체가 정보다.
+ * (누르면 그 말이 입력칸에 담긴다 — 보내지는 않는다. 고치고 보내는 건 사람 몫이다.)
+ */
+function livQuiet(): HTMLElement {
+  const say = (t: string): HTMLElement => el('button', {
+    class: 'liv-can-row', type: 'button', onclick: () => livChatFill(t),
+  }, el('span', { class: 'liv-can-mark', 'aria-hidden': 'true', text: '·' }), el('span', { text: t }));
+  return el('div', { class: 'liv-letter-quiet' },
+    el('p', { class: 'liv-quiet-say', text: '오늘은 드릴 말씀이 없습니다.' }),
+    el('p', { class: 'liv-quiet-sub', text: '새로 눈에 띄는 게 생기면 제가 먼저 말씀드릴게요. 그동안 무엇이든 시키셔도 됩니다.' }),
+    el('div', { class: 'liv-can' },
+      el('div', { class: 'liv-can-h', text: '이런 것도 부탁하실 수 있어요' }),
+      say('쓰던 노션이랑 연결해 주세요'),
+      say('매주 회의록을 여기 쌓고 싶어요'),
+      say('지금 워크스페이스에서 손볼 게 있는지 봐 주세요')));
 }
 
 /**
@@ -290,6 +363,7 @@ function livUploadCard(ask: LivSecretAsk, host: HTMLElement): HTMLElement {
     msg);
 }
 
+
 /**
  * 자격 입력칸 — **이 화면에서 끝내기 위한 장치**.
  *
@@ -337,26 +411,6 @@ function livSecretCard(ask: LivSecretAsk, host: HTMLElement): HTMLElement {
     msg);
 }
 
-function livCard(f: LivFinding, host: HTMLElement): HTMLElement {
-  const acts = el('div', { class: 'liv-card-acts' });
-  if (f.prompt) {
-    acts.append(el('button', {
-      class: 'btn btn-sm btn-primary', type: 'button', text: '리브에게 맡기기',
-      onclick: (ev: Event) => void livDelegate(ev.currentTarget as HTMLButtonElement, f),
-    }));
-  }
-  if (f.href) acts.append(el('a', { class: 'btn btn-sm', href: f.href, text: f.prompt ? '직접 보기' : '보러 가기' }));
-  // '나중에' 는 이 화면에서 그 카드를 접어 둘 뿐, 서버에 거절로 남기지 않는다 — 거절 기록은 리브가
-  //  대화에서 사람 뜻을 확인하고 남길 일이다(화면 버튼 한 번으로 영구 침묵시키면 그게 더 위험하다).
-  acts.append(el('button', {
-    class: 'btn btn-sm btn-ghost', type: 'button', text: '나중에',
-    onclick: (ev: Event) => { (ev.currentTarget as HTMLElement).closest('.liv-card')?.remove(); if (!host.querySelector('.liv-card')) refreshLiv(); },
-  }));
-  return el('div', { class: 'liv-card liv-card-' + f.severity },
-    el('div', { class: 'liv-card-title' }, el('span', { class: 'liv-card-mark', text: f.severity === 'p0' ? '!' : '·' }), el('b', { text: f.title })),
-    f.detail ? el('div', { class: 'liv-card-detail', text: f.detail }) : null,
-    acts);
-}
 
 // 카드에서 맡긴 일은 **대화로 이어진다** — 무엇을 시켰는지 사람이 보고, 리브의 진행도 같은 자리에서 본다.
 function livDelegate(btn: HTMLButtonElement, f: LivFinding): void {

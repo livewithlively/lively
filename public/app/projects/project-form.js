@@ -4,7 +4,8 @@
 //  ※ 레포 피커는 프로젝트 설정 모달이, 지식 피커는 상세의 필요/산출 지식 섹션이 함께 쓴다(배럴 재수출).
 //  ※ 실행 기본값(pjvRunDefaults·pjvBulkRunDefaultsModal)은 R33 이 projects/selection.ts 로, 컨테이너 비교자
 //   (pjvContainerCmp)는 projects/rows.ts 로 가져갔다 — 배럴(../projects.js)을 거치지 않고 **직결**로 받는다.
-import { api, appUrl, el, toast } from '../core.js';
+import { api, el, toast } from '../core.js';
+import { sessionTermUrl } from '../lib/session-open.js'; // #1820 — 세션 주소는 한 곳에서만 만든다
 import { overlayBox } from '../learn.js';
 import { memberPicker } from './files.js';
 import { pjvSubtaskIcon } from './icons.js';
@@ -357,7 +358,9 @@ export function openProjectV2Form(reload, prefill) {
             // #758 '만들고 AI세션 실행' — 생성 직후 이 프로젝트에 내 세션을 열고 새 탭으로 입장. 실행 기본값은 pjvBulkRunDefaultsModal(__new__ 전역).
             if (withRun && np && np.id) {
                 const rd = pjvRunDefaults('__new__', []);
-                const sbody = { label: name, harness: rd.harness || 'claude', autoApprove: rd.autoApprove === true }; // #782 기본 꺼짐
+                // 이름은 넘기지 않는다(#1808) — 프로젝트명을 세션 이름으로 박으면 그 프로젝트의 모든 세션이 같은 이름이 된다.
+                //  서버가 처음 시킨 말로 짓는다(session-autoname.ts). #782 자동승인 기본 꺼짐.
+                const sbody = { harness: rd.harness || 'claude', autoApprove: rd.autoApprove === true };
                 // 모델·추론강도는 고른 것만 — 빈 값은 '지난번 그대로'라 안 넘기는 게 그 뜻이다(#1758, selection.ts 와 같은 규칙).
                 const rdFlags = {};
                 if (rd.model)
@@ -379,7 +382,7 @@ export function openProjectV2Form(reload, prefill) {
                     reload();
                 toast(sid ? '프로젝트 생성 · AI세션을 새 탭에서 열었어요' : '프로젝트를 만들었어요');
                 if (sid)
-                    window.open(appUrl('/ui/terminal.html?session=') + encodeURIComponent(sid) + '&label=' + encodeURIComponent(name), '_blank');
+                    window.open(sessionTermUrl(sid, { label: name }), '_blank');
                 return;
             }
             back.remove();

@@ -18,6 +18,8 @@ export const claudeIo: HarnessSessionAdapter = {
   roots: (homes, owner) => claudeTranscriptRoots(homes, owner),
   filePattern: /^[A-Za-z0-9][A-Za-z0-9._-]*\.jsonl$/,
   pathFor: (root, { cwd, convId }) => (cwd && CONV_ID_RE.test(convId) ? path.join(root, claudeProjectsDirName(cwd), `${convId}.jsonl`) : null),
+  // claude 의 대화 id 는 항상 UUID 다(대화 파일이 `<uuid>.jsonl`). 보고를 받을 때만 이 좁은 자를 댄다.
+  convIdOk: (id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id),
   parse: (text, state) => ({ lines: parseJsonLines(text).filter((o) => !!o && typeof o === "object") as ChatLine[], state }),
   answer: (action) => (action === "approve" ? "Enter" : "Escape"),
   // 화면 판정(실측 규약 — session-first-prompt.ts·phase.ts 와 같은 문구): 입력창 푸터가 보이면 ready(돌고 있어도 큐잉 보장),

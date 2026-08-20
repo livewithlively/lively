@@ -2,7 +2,7 @@
 //  project = level='project'(팀원·카테고리·필요/산출지식 보유) | task/subtask = 하위 작업(구 W ku 대체).
 //  itemsPool 직접 + q/one 헬퍼(domainmap/db) 재사용. 감사 org_content_audit(entity='project', entity_key=id).
 import { itemsPool } from "../db/client.js";
-import { q, one } from "../db/client.js";
+import { q, one, withTx } from "../db/client.js";
 import { listProjectFields, getFieldValuesForTasks } from "./task-field-store.js";
 import { getTaskTags, getTaskTime, getTaskAttachments } from "./task-detail-store.js"; // 프로젝트 노드(project.id)도 같은 task_tag_link/task_time_entry/task_attachment 테이블 사용
 import { auditOrgContent, restoreSnapshot, type WriteCtx } from "./content-audit.js";
@@ -413,17 +413,49 @@ export async function getProject(id: number, viewer?: Viewer): Promise<ProjectDe
 }
 
 // ── 프로젝트 쓰기 ─────────────────────────────────────────────────────────
+/** 같은 사람이 같은 이름으로 이 시간 안에 또 만들면 '사고'로 보고 먼저 만든 것을 돌려준다(#1819). */
+export const CREATE_DEDUPE_SEC = 30;
+
 export async function createProject(
   input: { name: string; description?: string; folder?: string; members?: string[]; list_id?: number | null },
   ctx?: WriteCtx,
 ): Promise<ProjectRow> {
   // folder = 평범한 선택 컬럼값(물리 폴더 생성 없음). TODO: 필요 시 capability 계층에서 createProjectFolder 선행.
   //  list_id = 소속 리스트(영역). nullable(웹은 미지정 허용, MCP 는 capability 에서 필수). FK 는 project_list(ON DELETE SET NULL).
-  const row: ProjectRow = await one(itemsPool,
-    `INSERT INTO project(level, name, description, folder, list_id, created_by, status, status_category, created_at, updated_at)
-     VALUES('project',$1,$2,$3,$4,$5,'active','started',now(),now())
-     RETURNING ${PROJECT_COLS}`,
-    [input.name, input.description ?? null, input.folder ?? null, input.list_id ?? null, ctx?.actor ?? null]);
+  //
+  // ── 중복 생성 차단(#1819) ────────────────────────────────────────────────
+  //  같은 사람이 **같은 이름**을 몇 초 안에 두 번 만들면 그건 의도가 아니라 사고다 — 이미 만들어진 것을 돌려준다.
+  //  실측(2026-08-20): 한글 이름을 치고 Enter 를 누르면 IME 조합 확정 Enter 와 진짜 Enter 가 잇달아 들어와
+  //   같은 밀리초에 프로젝트가 두 개 생겼다(#1818/#1819 · #1806/#1807 · #1812/#1813). 그 입구(웹 사이드바)는
+  //   따로 고쳤지만, 입구는 넷이고 앞으로도 는다(웹 모달·인라인 행·MCP·REST) — 그래서 **여기**서 구조로 막는다.
+  //   에이전트 재시도(응답을 못 받고 다시 호출)도 같은 사고이므로 창을 초 단위로 넉넉히 잡는다.
+  //  창 밖의 동명 프로젝트는 그대로 만들어진다(같은 이름을 일부러 여럿 두는 것은 사람의 자유다).
+  //
+  //  ⚠ **사전 조회만으로는 못 막는다** — 사고의 실제 모습이 '같은 밀리초에 도착한 두 요청'이라(위 실측 세 쌍의
+  //   created_at 간격은 0.15~0.2ms) 둘 다 조회에서 아무것도 못 보고 둘 다 INSERT 한다. 그래서 조회와 삽입을
+  //   한 트랜잭션에 넣고 (테넌트·만든이·이름) 키로 **직렬화**한다. 자문 락은 클러스터 전역이므로 키에 테넌트를
+  //   반드시 섞는다(안 섞으면 남의 워크스페이스가 같은 이름을 만들 때 서로 기다린다).
+  const made = await withTx(async (c): Promise<{ row: ProjectRow; deduped: boolean }> => {
+    await c.query(
+      `SELECT pg_advisory_xact_lock(hashtext(coalesce(current_setting('app.tenant_id', true),'') || '|' || $1))`,
+      [`${ctx?.actor ?? ""}|${input.name}`]);
+    const dup: ProjectRow | undefined = await one(c,
+      `SELECT ${PROJECT_COLS} FROM project
+        WHERE level='project' AND name=$1 AND created_by IS NOT DISTINCT FROM $2
+          AND created_at > now() - ($3 || ' seconds')::interval
+        ORDER BY id DESC LIMIT 1`,
+      [input.name, ctx?.actor ?? null, String(CREATE_DEDUPE_SEC)]);
+    if (dup) return { row: dup, deduped: true };
+    const fresh: ProjectRow = await one(c,
+      `INSERT INTO project(level, name, description, folder, list_id, created_by, status, status_category, created_at, updated_at)
+       VALUES('project',$1,$2,$3,$4,$5,'active','started',now(),now())
+       RETURNING ${PROJECT_COLS}`,
+      [input.name, input.description ?? null, input.folder ?? null, input.list_id ?? null, ctx?.actor ?? null]);
+    return { row: fresh, deduped: false };
+  });
+  // 이미 있던 것을 돌려주는 길에서는 뒷일(팀원 등록·감사·외부 푸시·임베딩)을 다시 하지 않는다 — 첫 생성이 이미 했다.
+  if (made.deduped) return made.row;
+  const row = made.row;
   // 팀원 초기 등록(project_member).
   for (const memberId of input.members ?? []) {
     await itemsPool.query(

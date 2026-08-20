@@ -95,6 +95,19 @@ export async function confirmSessionForget(opts) {
         extra: fate === 'all' || fate === 'some' ? sessionLogLink() : null,
     });
 }
+// ── 보관(reclaim=1) ── tmux 만 내리고 desired-state 는 남긴다. 잃는 것은 **돌던 실행뿐**이고,
+//  설정·대화 좌표가 DB 에 남아 [되살리기](POST …/restore)가 --resume 으로 그 대화를 이어 붙인다.
+//  그래서 이 약속만은 조직의 세션공유 설정과 무관하게 참이다(중앙 기록이 아니라 desired-state + 로컬 대화록에 기댄다).
+export async function confirmSessionArchive(opts) {
+    return confirmDialog({
+        title: opts.title, danger: opts.working, confirmText: '보관', cancelText: '취소',
+        message: opts.working ? '지금 돌고 있는 작업은 그 자리에서 멈춥니다.' : '돌고 있는 터미널을 내려놓습니다.',
+        lines: [
+            '세션이 사라지는 게 아니에요 — 설정과 대화는 그대로 남습니다.',
+            '[보관한 세션]에서 [되살리기]를 누르면 그 대화를 이어서 다시 엽니다.',
+        ],
+    });
+}
 // 종료·제거 뒤 토스트 — '어디서 다시 볼 수 있는지'를 결과 메시지에서도 한 번 더 말한다(확인창을 읽지 않고
 //  누른 사람에게 남는 유일한 안내라서). 중앙에 안 남는 경우엔 그 약속을 하지 않는다.
 export async function endedToast(n, sessions) {

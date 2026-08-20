@@ -25,19 +25,25 @@ import { SESSION_ID_RE } from "../org/auth/agent-identity.js"; // #852 세션 id
 import { wrapAsMember, type CgroupLimit } from "./terminal-isolation.js";
 import { effectiveSessionMemoryPolicy } from "../sessions/session-memory-policy.js"; // #1059 D — per-session cgroup 메모리 캡
 import { upsertSessionState, updateSessionStateMeta, deleteSessionState, touchSessionBusy, listAllSessionStates } from "../sessions/session-state.js"; // #1059 E — 세션 desired-state DB 미러(재부팅 복원)
-import { memberMkdir } from "./terminal-member-fs.js";
+import { memberMkdir, memberWriteFile } from "./terminal-member-fs.js";
 import { materializeMemberGit, ensureGitSafeDirectory } from "../org/credentials/git-credential-materialize.js";
+// #1780 D3·D4 — 앱 세션: 앱 토큰 발급 + 세션 폴더에 앱 홈·앱 하네스 자산 물질화.
+import { mintAppToken } from "../apps/principal.js";
+import { writeAppHome, materializeAppAssets, directFsWriter, type AppFsWriter } from "../apps/session-assets.js";
+import { gatewayUrl } from "../gateway-url.js";
 import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput } from "./catalog.js";
-import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson } from "./tmux-exec.js";
+import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, getSessionLabel, encodeOptJson, decodeOptJson } from "./tmux-exec.js";
 import {
   sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
   paneAwaitingInput, parseReportedPhase, isPhaseFresh, resolveAgentPhase,
 } from "./phase.js";
-import { userSlug, ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir } from "./profiles.js";
+import { userSlug, ownerId, resolveRootPath, ensureMemberOsUser, profileConfigDir, mintSessionHookToken, revokeSessionHookToken } from "./profiles.js";
 import { ensureMemberKitSeeded } from "./member-kit-seed.js";
 import { logger } from "../log.js";
 import { canSeeSession } from "./write-cap.js";
 import { loadDesiredMap, loadDesiredOne, resolveDesired, resolveSessionDir } from "../sessions/session-desired.js";
+import { sessionNameFromPrompt } from "./session-name.js";
+import { aiNamingEnabled, aiSessionName } from "./session-name-ai.js";
 
 export const sessionPrefix = (u: LivelyUser): string => `box-${userSlug(u)}-`;
 const ID_RE = SESSION_ID_RE;   // 세션 id 형식의 단일 진실원천 — 게이트웨이가 헤더로 받은 세션도 같은 자로 잰다(#852)
@@ -330,6 +336,27 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
     if (mid) await materializeMemberGit(osUser, mid).catch((e) => console.warn(`[terminal] git 자격 materialize 실패(${mid}) — 세션은 계속:`, (e as Error)?.message ?? e));
   }
 
+  // ── 앱 세션(#1780 D3·D4) — appId 가 있으면 grant 검사 → 앱 토큰 발급 → 세션 폴더에 앱 홈·앱 하네스 자산 물질화. ──
+  //  일반 세션(appId 미설정)은 이 블록을 통째로 건너뛴다 → 종전 경로 무변경(핫패스 무회귀).
+  //  ⚠ hard-fail: grant 없음(403/409)·토큰 발급 실패·자산 물질화 실패는 **세션 생성을 중단**한다 — 스킬·토큰 없는
+  //   앱 세션은 틀린 상태다(일반 세션이라면 best-effort 인 자리들과 대비). 실패해도 tmux new-session 은 아직 안 돌았다.
+  //  격리(멤버 700 홈) 세션은 게이트웨이가 그 안에 직접 못 쓰므로 멤버 uid 백엔드 writer 를 넘긴다(비격리는 직접 fs).
+  let appEnv: string[] = [];
+  if (input.appId) {
+    const appId = input.appId;
+    const memberId = ownerId(user);
+    // mintAppToken 이 앱 존재·활성·grant 를 재검하고 없으면 HttpError(404/409/403) 를 던진다 — 그대로 전파(사용자 메시지).
+    const { token } = await mintAppToken(memberId, appId, "app-spawn");
+    const gwUrl = await gatewayUrl();   // org 프로필/PUBLIC_URL 기준(요청 헤더 불요) — 프록시가 이 base 로 게이트웨이에 붙는다.
+    const writer: AppFsWriter = osUser ? { mkdirp: (d) => memberMkdir(osUser, d), writeFile: (p, data, mode) => memberWriteFile(osUser, p, data, mode) } : directFsWriter;
+    await writeAppHome(target, token, gwUrl, writer);          // <sessionDir>/.lively/{token,gateway-url}(D3)
+    await materializeAppAssets(target, appId, writer);         // <sessionDir>/.claude/{skills,agents,commands}(D4)
+    // pane env — 다른 세션스코프 -e 와 같은 통로(아래 args 에 합류). LIVELY_HOME 은 프록시가 앱 토큰 파일을 찾는 뿌리,
+    //  LIVELY_APP_ID 는 귀속(x-lively-app → mcp_call_log.app). ⚠ 격리 분기는 sudoers env_keep 이 두 값을 통과시켜야 실효한다
+    //  (deploy/linux/sudoers-lively — 별도 PR3d, 이 커밋 범위 밖).
+    appEnv = ["-e", `LIVELY_HOME=${target}`, "-e", `LIVELY_APP_ID=${appId}`];
+  }
+
   const harness = HARNESSES.find((h) => h.key === input.harness);
   if (!harness) throw new HttpError(400, "허용되지 않은 하네스입니다");
   const cmd: string[] = [];
@@ -402,6 +429,9 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  ⚠ pane env 는 exec 시점 고정 → **새 세션부터** 적용(LANG #633·TZ #778·SESSION_ID #852 와 동일 성질).
   //  ⚠ 격리(sudo → box-spawn) 분기는 env_reset 이 털어가므로 sudoers 가 LIVELY_MODE(+전이기 구 LIVELY_READONLY/INCOGNITO)를 명시 보존해야 한다(deploy/linux/sudoers-lively).
   args.push(...modeEnvArgs(input)); // 분기·전이기 dual-env 는 modeEnvArgs(순수·단위테스트됨)에
+  // #1780 D3 — 앱 세션이면 LIVELY_HOME=<sessionDir>·LIVELY_APP_ID=<id>(위 앱 블록에서 조립). 일반 세션은 빈 배열=무변경.
+  //  ⚠ LANG·TZ·SESSION_ID 와 같은 세션스코프 -e 성질(exec 시점 고정, 새 세션부터 적용). 격리 분기 env_keep 는 별도 PR3d.
+  args.push(...appEnv);
   // 공유 빌드 캐시(#813 T3) — 생태계별 다운로드/의존성 캐시를 박스 전역 한 곳으로. LANG/TZ 와 같은 세션스코프 -e
   //  (전역/타세션 누수 없음). 목적은 부피 감소가 아니라 **회수를 싸게 만드는 것**: 워크트리 파생물을 회수해도
   //  캐시가 warm 이라 재설치가 금방 끝난다. 부수로 멤버 격리(#524)로 갈린 홈들의 캐시 중복도 하나로 접는다.
@@ -455,13 +485,22 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
       await fsp.mkdir(profileDir, { recursive: true, mode: 0o700 });
       args.push("-e", `CLAUDE_CONFIG_DIR=${profileDir}`);
     }
+    // 훅 신원(#1719 후속) — 이 pane 의 훅이 **그 세션 주인**으로 보고하게 한다(대화 uuid 매핑·활동/단계·정상종료).
+    //  왜 여기만인지·왜 MCP 신원은 안 바뀌는지는 profiles.mintSessionHookToken 주석. 격리 경로는 멤버 홈의
+    //  ~/.lively/token 이 이미 그 멤버 것이고 sudo env_reset 도 지나야 해서 넣지 않는다.
+    //  best-effort — 못 구우면 종전대로 공유 토큰으로 떨어진다(무회귀).
+    const hookToken = await mintSessionHookToken(ownerId(user), id).catch(() => null);
+    if (hookToken) args.push("-e", `LIVELY_TOKEN=${hookToken}`);
     if (launch.length) args.push(...launch);
   }
   // 웹터미널은 xterm.js 로 렌더된다 — pane TERM 을 xterm-256color 로 통일(색 일관성: 격리 세션은 box-spawn 이
   //  강제, 비격리(프로젝트·managed)는 여기 default-terminal 로. 서버 전역이나 '새 pane' 에만 적용=기존 세션 무영향, 멱등).
   await tmuxQuiet(["set-option", "-g", "default-terminal", "xterm-256color"]);
   await tmux(args);
-  const label = cleanLabel(input.label) || id;
+  // 이름(#1808) — ① 사람이 준 이름 ② 없으면 **첫 지시**로 짓는다 ③ 그것도 없으면 id(= '아직 이름 없음' 표식.
+  //  화면은 그때 pane 제목·중앙 기록 첫 지시로 이름 자리를 채우고, 대화가 시작되면 session-autoname 이 진짜 이름을 박는다).
+  //  ⚠ 여기에 '프로젝트명'은 없다 — 한 프로젝트 아래 세션이 전부 같은 이름이 되던 뿌리였다(실측 71%).
+  const label = cleanLabel(input.label) || cleanLabel(sessionNameFromPrompt(input.initialPrompt || "")) || id;
   await tmux(["set-option", "-t", id, "@box_owner", ownerId(user)]);
   await tmux(["set-option", "-t", id, "@box_label", label]);
   await tmux(["set-option", "-t", id, "@box_harness", harness.key]);
@@ -472,6 +511,8 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   // 세션 전용 폴더 표식(#1719) — session-project.ts 가 **이 표식이 있을 때만** 폴더 안에 마커·링크를 쓴다
   //  (cwd 가 프로젝트 폴더인 종전 세션에 같은 걸 쓰면 프로젝트 폴더를 오염시킨다).
   if (isSessionDir) await tmux(["set-option", "-t", id, "@box_session_dir", "1"]);
+  // 앱 세션이면 앱 id 를 박아둔다(#1780 D4) — @box_project 등과 같은 자리·같은 규약(desired 미러는 app_id 컬럼). 관측·귀속용.
+  if (input.appId) await tmux(["set-option", "-t", id, "@box_app", String(input.appId)]);
   // 프로젝트 세션엔 프로젝트 id 를 박아둔다 — listSessions 의 projectId(프론트 세션 귀속·카운트) + 작업 타임라인 귀속용.
   //  (#452 이후 입장 게이트 canAttach 는 멤버십을 안 봄 — 이 id 는 표시·귀속 목적으로만 남는다.)
   if (input.projectId) {
@@ -505,9 +546,26 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
         project_id: input.projectId || null, project_src: input.projectId ? (input.projectSrc === "org" ? "org" : "v6") : null,
         read_only: !!input.readOnly, incognito: !!input.incognito,
         write_vis: input.writeVis ?? null, restrict_read: !!input.restrictRead,
+        app_id: input.appId || null,   // #1780 D4 — 앱 세션 desired-state 미러(복원이 앱 축을 잃지 않게)
         created: createdSec, last_busy: null,
       });
     } catch (e) { console.warn(`[terminal] 세션 desired-state 미러 실패(${id}) — 세션은 계속:`, (e as Error)?.message ?? e); }
+  }
+  // 이름을 **AI 가 다시 짓는다**(#1719 원준 2026-08-20) — 위 label 은 첫 지시 앞 28자(규칙)라 대개 조사로 채워진다.
+  //  응답을 막지 않는다: 이름은 몇 초 뒤에 붙어도 되고(화면이 폴링으로 받아 간다), 실패하면 규칙 이름 그대로 산다.
+  //  사람이 준 이름(input.label)은 손대지 않는다 — 여기 들어오는 건 '이름을 안 주고 첫 지시만 준' 경로뿐이다.
+  //  덮기 전에 지금 이름을 다시 읽어 **그 사이 사람이 고쳤으면 물러난다**(짓는 데 몇 초가 걸린다).
+  if (aiNamingEnabled() && !cleanLabel(input.label) && input.initialPrompt && String(input.initialPrompt).trim() && harness.key !== "shell" && !input.loginFor) {
+    const seed = String(input.initialPrompt);
+    const ruleName = label;
+    const cfgDir = process.env.LIVELY_MULTIPROFILE !== "0" && !input.hostProfile ? profileConfigDir(user) : null;
+    void (async () => {
+      const nice = cleanLabel(await aiSessionName(seed, { configDir: cfgDir }));
+      if (!nice || nice === ruleName) return;
+      const now = await getSessionLabel(id).catch(() => "");
+      if (now && now !== ruleName) return;                 // 사람이 그 사이 이름을 고쳤다 — 그 이름이 정본이다
+      await editSession(user, id, { label: nice });
+    })().catch((e) => console.warn(`[terminal] 세션 AI 이름 실패(${id}) — 규칙 이름으로 남는다:`, (e as Error)?.message ?? e));
   }
   // 첫 지시(#1719 홈 입력창) — 응답을 막지 않고 백그라운드에서 하네스 입력창이 뜨길 기다렸다 넣는다.
   //  ⚠ 응답을 기다리게 하면 안 된다: 하네스 부팅(수 초)+신뢰 대화상자 동안 화면이 멈추고, 실패해도 세션은 이미 살아 있다.
@@ -583,6 +641,8 @@ export async function reapCentralSession(id: string): Promise<void> {
 export async function killSession(user: LivelyUser, id: string, opts?: { admin?: boolean; preserveState?: boolean }): Promise<void> {
   if (!opts?.admin) await assertManage(user, id);
   await tmuxKill(id);
+  // 세션 스코프 자격 회수 — 이 box 에 실어 준 훅 토큰은 세션과 함께 죽는다(회수/삭제 둘 다. 복원은 새 box id 라 새로 굽는다).
+  await revokeSessionHookToken(id).catch((e) => console.warn(`[terminal] 세션 훅 토큰 회수 실패(${id}):`, (e as Error)?.message ?? e));
   if (!opts?.preserveState) await deleteSessionState(id).catch((e) => console.warn(`[terminal] desired-state 삭제 실패(${id}):`, (e as Error)?.message ?? e));
 }
 export async function editSession(user: LivelyUser, id: string, patch: { label?: string; invites?: unknown }): Promise<void> {

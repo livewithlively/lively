@@ -320,4 +320,5 @@ async function myLoginsSection(detail) {
     detail.replaceChildren(sectionHead('외부 서비스 관리', 'AI가 내 계정으로 외부 서비스를 쓸 수 있게 연결하고, 연결한 뒤 어디까지 허용할지 정합니다. 여기 설정은 나에게만 적용되고 팀에는 공유되지 않습니다.'), el('div', { class: 'admin-stack' }, svcHost, gitCard));
     await renderServices(svcHost);
 }
-export { CH_TYPE_LABEL, LOGIN_SERVICES, channelRuleExplainer, myLoginsSection, renderServices, slackChannelPolicyCard, };
+export { CH_TYPE_LABEL, LOGIN_SERVICES, channelRuleExplainer, myLoginsSection, partition, // #1719 새 셸 [외부 앱 연결](v2/connect.ts)이 **같은 판정**을 쓴다 — 표도 술어도 두 벌이 되면 어긋난다
+renderServices, slackChannelPolicyCard, };

@@ -110,6 +110,7 @@ export const antigravityIo: HarnessSessionAdapter = {
   roots: (homes) => homes.map((h) => path.join(h, ".gemini", "antigravity-cli", "brain")),
   filePattern: /^transcript(_full)?\.jsonl$/,
   pathFor: (root, { convId }) => (CONV_ID_RE.test(convId) ? path.join(root, convId, ".system_generated", "logs", "transcript_full.jsonl") : null),
+  convIdOk: null,   // 이 하네스의 대화 id 규약을 아직 확정 안 했다 — 판단 보류(보고를 종전대로 받는다)
   // 화면 판정(실측 2026-08-18): "You are currently not signed in." + "⡿ Signing in..."(인증 검증 — 이때 넣은 프롬프트는
   //  "아직 인증 확인중" 으로 거부돼 사라진다, 상민님 신고) → auth. 신뢰 대화상자("Do you trust … · ↑/↓ Navigate · enter
   //  Confirm") → dialog. 생성 중 푸터 "esc to cancel" → busy(claude 와 달리 큐잉 보장 미실측 — 기다렸다 넣는다).

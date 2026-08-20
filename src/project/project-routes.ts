@@ -143,13 +143,18 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     const abs = resolveIn(base, req.query.path, false);
     let entries: fs.Dirent[];
     try { entries = await fsp.readdir(abs, { withFileTypes: true }); } catch { throw new HttpError(404, "디렉터리 없음"); }
-    const items: Array<{ name: string; type: "dir" | "file"; size: number; mtime: number }> = [];
+    const items: Array<{ name: string; type: "dir" | "file"; size: number; mtime: number; repo?: boolean }> = [];
     for (const e of entries) {
       if (e.name.startsWith(".")) continue;
       const isDir = e.isDirectory();
       let size = 0, mtime = 0;
       try { const s = await fsp.stat(path.join(abs, e.name)); mtime = Math.floor(s.mtimeMs); if (!isDir) size = s.size; } catch { /* skip */ }
-      items.push({ name: e.name, type: isDir ? "dir" : "file", size, mtime });
+      // repo — provision 된 레포/워크트리(.git 보유)임을 표시한다. 매니페스트가 이미 서브트리째 빼는 것과 같은
+      //  대상이다(project-manifest.ts): 코드는 git 이 소유하므로 '자료'가 아니다. 지우지는 않고 **표시만** 한다 —
+      //  파일 탐색기(v2/files.ts)는 코드를 보러 들어가는 화면이라 그대로 보여야 하고, 자료 칸만 이 표시로 가린다.
+      let repo = false;
+      if (isDir) { try { await fsp.stat(path.join(abs, e.name, ".git")); repo = true; } catch { /* 레포 아님 */ } }
+      items.push({ name: e.name, type: isDir ? "dir" : "file", size, mtime, ...(repo ? { repo: true } : {}) });
     }
     items.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
     const rel = path.relative(base, abs);
@@ -191,7 +196,10 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     //  lively-shared 그룹으로 이 폴더를 쓰므로, 이게 없으면 세션 클로드가 업로드 파일을 못 고친다(#1246).
     await grantSharedGroupWrite(abs, base, "file");
     const st = await fsp.stat(abs).catch(() => null);
-    res.json({ ok: true, ...(st ? { mtime: Math.floor(st.mtimeMs), size: st.size } : {}) });
+    // path(절대경로) — 올린 것을 **그 자리에서 AI 에게 넘기는** 화면이 쓴다(새 세션 창의 붙여넣기 첨부, #1819).
+    //  세션 cwd 는 프로젝트 폴더가 아니라 세션 전용 폴더라 상대경로로는 못 찾는다. 터미널 업로드 라우트가 이미
+    //  같은 계약을 갖고 있다(web/standalone/terminal.ts dropFileToAgent 가 j.path 를 그대로 입력창에 꽂는다).
+    res.json({ ok: true, path: abs, ...(st ? { mtime: Math.floor(st.mtimeMs), size: st.size } : {}) });
   }));
 
   // 새 폴더 생성
@@ -220,6 +228,40 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
     try { await fsp.access(toAbs); throw new HttpError(409, "같은 이름이 이미 있습니다"); } catch (e: any) { if (e instanceof HttpError) throw e; }
     await fsp.rename(fromAbs, toAbs);
     res.json({ ok: true });
+  }));
+
+  // 이동 — 다른 폴더로 옮긴다(자료 앱의 '폴더로 정리', #1819). body: { paths: string[], to: string }.
+  //  to = 목적지 **폴더**의 상대경로(""=루트). 이름은 그대로 두고 자리만 옮긴다 — 이름 변경은 /rename 이 맡는다.
+  //  왜 여러 개를 한 번에 받나: 사각형 선택으로 고른 여러 자료를 한 번에 끌어다 놓는 게 이 기능의 본래 쓰임이라,
+  //  건별 왕복이면 중간에 실패했을 때 사용자가 '어디까지 갔는지' 알 길이 없다. 건별 결과를 모아 돌려준다.
+  app.post(`${prefix}/:id/move`, auth, wrap(async (req, res) => {
+    const { base } = await projBase(Number(req.params.id), req);
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const list = Array.isArray(b.paths) ? b.paths : (b.path != null ? [b.path] : []);
+    if (!list.length) throw new HttpError(400, "옮길 대상이 필요합니다");
+    const destDir = resolveIn(base, nfcPath(b.to ?? ""), false);
+    const dstat = await fsp.stat(destDir).catch(() => null);
+    if (!dstat || !dstat.isDirectory()) throw new HttpError(400, "목적지가 폴더가 아닙니다");
+    const moved: string[] = [];
+    const failed: Array<{ path: string; error: string }> = [];
+    for (const raw of list) {
+      const fromAbs = resolveIn(base, raw, true);
+      const name = path.basename(fromAbs);
+      const toAbs = path.join(destDir, name);
+      try {
+        if (toAbs === fromAbs) { moved.push(path.relative(base, toAbs)); continue; }   // 제자리 — 성공으로 친다
+        // 폴더를 자기 안으로 넣으면 트리가 사라진다(rename 이 EINVAL 을 주기도, 조용히 먹기도 한다) — 먼저 막는다.
+        if (toAbs.startsWith(fromAbs + path.sep)) throw new HttpError(400, "폴더를 자기 안으로 옮길 수 없습니다");
+        try { await fsp.access(toAbs); throw new HttpError(409, "같은 이름이 이미 있습니다"); }
+        catch (e) { if (e instanceof HttpError) throw e; }
+        await fsp.rename(fromAbs, toAbs);
+        await grantSharedGroupWrite(toAbs, base, dstat.isDirectory() && (await fsp.stat(toAbs)).isDirectory() ? "dir" : "file");
+        moved.push(path.relative(base, toAbs));
+      } catch (e) {
+        failed.push({ path: String(raw), error: e instanceof HttpError ? e.message : String((e as Error)?.message || e) });
+      }
+    }
+    res.json({ ok: failed.length === 0, moved, failed });
   }));
 
   // 삭제 — 파일/폴더(폴더는 내용까지 재귀). 루트 자신은 거부(requireFile). path 필수.
