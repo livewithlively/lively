@@ -6,8 +6,13 @@
 
 /* ── 골격 ── */
 .pn-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg, #fff); }
-.pn-body { --pn-side-w: 340px; flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 6px var(--pn-side-w); background: var(--line); }
+.pn-body { --pn-side-w: 340px; position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 6px var(--pn-side-w); background: var(--line); }
 .pn-body.no-side { grid-template-columns: minmax(0, 1fr) 0 0; }
+/* 접힌 곁칸을 다시 펴는 손잡이 — 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 유일한 복구 통로.
+   격자 칸을 안 차지하게 오른쪽 위에 띄운다(가운데 칸 탭 줄과 같은 높이 — 줄의 일부처럼 읽히게). */
+.pn-side-reopen { position: absolute; top: 0; right: 0; z-index: 5; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 36px; border: 0; border-left: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--bg, #fff); color: var(--muted-2); cursor: pointer; }
+.pn-side-reopen:hover { color: var(--blue); background: var(--bg-punch); }
+.pn-side-reopen svg { transform: rotate(180deg); }
 /* ⚠ 격자 칸의 기본 min-height 는 auto 라 **내용이 칸을 밀어 늘린다** — 세션 화면처럼 자연 높이가 큰 것이
    들어오면 아래 칸(세션 서랍)이 화면 밖으로 나간다(실측 2026-08-20: 900px 뷰포트에서 칸이 2625px). 0 으로 못 박는다. */
 .pn-body > * { min-height: 0; }
@@ -93,7 +98,7 @@
 .pn-pop-row .n { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .pn-pop-row .n b { font-size: 12.5px; }
 .pn-pop-row svg { margin-top: 2px; color: var(--muted-head); }
-.pn-pop-foot { margin-top: 6px; padding-top: 7px; border-top: 1px solid var(--line-row); display: flex; justify-content: flex-end; }
+.pn-pop-foot { margin-top: 6px; padding-top: 7px; border-top: 1px solid var(--line-row); display: flex; justify-content: flex-end; gap: 14px; }
 .pn-check { width: 15px; height: 15px; margin-top: 1px; border: 1.5px solid var(--muted-3); border-radius: 4px; flex: none; }
 .pn-check.on { border-color: var(--blue); background: var(--blue); position: relative; }
 .pn-check.on::after { content: ''; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px; border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(42deg); }
@@ -207,7 +212,7 @@
 /* ── 좁은 화면(≤900px) — 곁칸은 접고 한 칸만 본다(모바일 크롬은 v2/mobile.ts 가 따로 쥔다) ── */
 @media (max-width: 900px) {
   .pn-body { grid-template-columns: minmax(0, 1fr) 0 0; }
-  .pn-pane[data-zone="side"], .pn-body > .v2-split-x { display: none; }
+  .pn-pane[data-zone="side"], .pn-body > .v2-split-x, .pn-side-reopen { display: none; }
   .pn-door { padding: 12px 14px 10px; }
   .pn-title { font-size: 19px; }
 }

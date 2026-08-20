@@ -96,6 +96,7 @@ const ICON_PATHS: Record<string, string> = {
   x: '<path d="M6 6l12 12M18 6L6 18"/>',
   chev: '<path d="M9 6l6 6-6 6"/>',
   gear: '<circle cx="12" cy="12" r="3.2"/><path d="M12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2L5.6 5.6"/>',
+  info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5"/><path d="M12 8h.01"/>',
   cols: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M15 5v14"/>',
   drop: '<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 19h14"/>',
   box: '<path d="M3 7h18v4H3z"/><path d="M5 11v8h14v-8"/><path d="M10 15h4"/>',
@@ -467,7 +468,7 @@ function tasksPart(ctx: PartCtx): Part {
       root.replaceChildren(el('div', { class: 'pn-empty' },
         pnIcon('task', 'pn-i big'),
         el('b', { text: '할 일이 아직 없어요.' }),
-        el('p', { class: 'pn-fine', text: '프로젝트 설정에서 더하거나, 세션에 "태스크로 나눠 줘"라고 시켜 보세요.' })));
+        el('p', { class: 'pn-fine', text: '프로젝트 정보에서 더하거나, 세션에 "태스크로 나눠 줘"라고 시켜 보세요.' })));
       return;
     }
     const done = tasks.filter((t) => t.status_category === 'done').length;
@@ -507,7 +508,7 @@ function overviewPart(ctx: PartCtx): Part {
           el('b', { text: '본문이 아직 없어요.' }),
           el('p', { class: 'pn-fine', text: '이 프로젝트가 무엇인지 적어 두면 세션도 그걸 읽고 일합니다.' })),
       el('div', { class: 'pn-head end' },
-        el('button', { class: 'btn-text', type: 'button', text: '프로젝트 설정에서 고치기', onclick: () => ctx.openSettings?.() })));
+        el('button', { class: 'btn-text', type: 'button', text: '프로젝트 정보에서 고치기', onclick: () => ctx.openSettings?.() })));
   }
   paint();
   return { root, tick: paint };

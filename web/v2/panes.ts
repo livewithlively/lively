@@ -11,10 +11,11 @@
 //      아무 데나 놓을 수 없다는 제약이 곧 '아무것도 안 해도 되는' 기본값을 가능하게 한다.
 //
 //  ── 구도 ──
-//   문패(door) — 프로젝트 이름·요약, 오른쪽에 [칸] · [설정].
+//   문패(door) — 프로젝트 이름·요약, 오른쪽에 [정보](이름·상태·본문·할 일을 한곳에 모은 창).
 //   가운데 칸(main) — 기본 [세션]. 위는 **지금 보는 세션의 화면 그 자체**, 아래는 세션 서랍.
-//   아래 칸(bottom) — 기본 닫힘. 열면 main 아래에 붙는다(타임라인·할 일 자리).
-//   곁칸(side) — 기본 [자료][지식] 탭. 경계를 끌어 폭 조절, [칸]에서 접을 수 있다.
+//   아래 칸(bottom) — 기본 닫힘. 여닫이는 각 칸 [+] 발치의 [아래 칸 열기]와 칸의 ×.
+//   곁칸(side) — 기본 [자료][지식] 탭. 경계를 끌어 폭 조절, 탭 줄 끝 손잡이로 접고 오른쪽 위 손잡이로 편다.
+//   (문패의 [칸] 버튼은 뺐다 — 원준 2026-08-20 "그냥 지워도 될 것 같다". 배치 복구는 [+] 발치로 옮겼다.)
 //
 //  ── ★ 프로젝트 화면과 세션 화면은 하나다(원준 2026-08-20) ──
 //  종전엔 `#/p/<id>`(프로젝트)와 `#/s/<sid>`(세션)가 서로 다른 화면이었다. 이제 **주소는 늘 세션**이고,
@@ -151,7 +152,13 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   const splitX = makeSplitter({ axis: 'x', key: 'panes_side', cssVar: '--pn-side-w', target: body, def: 340, min: 220, max: 620, grow: -1, label: '곁칸 너비' });
   const splitY = makeSplitter({ axis: 'y', key: 'panes_bottom', cssVar: '--pn-bottom-h', target: colMain, def: 240, min: 120, max: 560, grow: -1, label: '아래 칸 높이' });
   colMain.append(mainPane.root, splitY, bottomPane.root);
-  body.append(colMain, splitX, sidePane.root);
+  // 접힌 곁칸을 다시 펴는 손잡이 — 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 유일한 복구 통로가 됐다.
+  //  격자 칸을 차지하지 않고 오른쪽 위에 떠 있는다(no-side 격자를 안 건드리기 위해).
+  const sideReopen = el('button', {
+    class: 'pn-side-reopen', type: 'button', title: '곁칸을 폅니다 — 자료·지식이 여기 들어 있어요.', 'aria-label': '곁칸 펴기',
+    onclick: () => { lay.sideOn = true; saveLayout(); paintAll(); },
+  }, pnIcon('chev', 'pn-i sm')) as HTMLElement;
+  body.append(colMain, splitX, sidePane.root, sideReopen);
 
   // ── 탭 ──
   function ensurePart(pane: Pane, type: PartType): Part {
@@ -219,7 +226,12 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
           el('button', { class: 'pn-pop-row', type: 'button', onclick: () => { close(); addTab(zone, d.type); } },
             pnIcon(d.icon, 'pn-i sm'),
             el('span', { class: 'n' }, el('b', { text: d.name }), el('span', { class: 'pn-fine', text: d.hint })))))
-          : el('p', { class: 'pn-fine', text: '넣을 수 있는 것을 이미 다 넣었어요.' })));
+          : el('p', { class: 'pn-fine', text: '넣을 수 있는 것을 이미 다 넣었어요.' }),
+        // 문패의 [칸] 버튼을 빼면서(원준 2026-08-20) 배치 복구가 갈 곳이 없어졌다 — '화면에 무엇을 둘까'를
+        //  고르는 자리는 여기뿐이라, 닫힌 아래 칸의 유일한 입구와 되돌리기를 이 발치에 둔다.
+        el('div', { class: 'pn-pop-foot' },
+          loose || lay.bottomOn ? null : el('button', { class: 'btn-text', type: 'button', text: '아래 칸 열기', onclick: () => { close(); lay.bottomOn = true; saveLayout(); paintAll(); } }),
+          el('button', { class: 'btn-text', type: 'button', text: '기본 배치로 되돌리기', onclick: () => { close(); resetLayout(); } }))));
     };
     return b;
   }
@@ -285,7 +297,10 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     const rects = els.map((n) => n.getBoundingClientRect());
     const gap = rects.length > 1 ? Math.max(0, Math.round(rects[1].left - rects[0].right)) : 3;
     sdrag = { el: node, startX: e.clientX, pointerId: e.pointerId, moved: false, from, to: from, els, rects, step: rects[from].width + gap };
-    try { node.setPointerCapture(e.pointerId); } catch (_) { /* noop */ }
+    // ⚠ 캡처는 여기서 걸지 않는다 — 잡자마자 걸면 pointerup·click 이 wrap 으로 리타게팅되어 안의 버튼
+    //  (세션 전환·×·이름 고치기)의 onclick 이 영영 안 불린다(원준 2026-08-20 신고: 세션 탭을 눌러도 안 열림).
+    //  셸 탭(tabs.ts)은 click 핸들러가 캡처 노드 자신에 있어 무사하지만 여기는 wrap ≠ 버튼이다.
+    //  그래서 4px 문턱을 넘어 끌기로 확정된 순간(onSDragMove)에 건다 — 그 전에는 window 리스너가 따라간다.
   }
   function onSDragMove(e: PointerEvent): void {
     const d = sdrag;
@@ -294,6 +309,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     if (!d.moved) {
       if (Math.abs(dx) < 4) return;      // 손떨림은 클릭이다
       d.moved = true;
+      try { d.el.setPointerCapture(e.pointerId); } catch (_) { /* noop */ }   // 끌기 확정 — 이제부터는 click 을 삼켜도 된다
       d.el.classList.add('dragging');
       const strip = d.el.closest('.pn-tabs');
       if (strip) strip.classList.add('dnd');
@@ -508,6 +524,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     colMain.classList.toggle('no-bottom', !lay.bottomOn);
     sidePane.root.hidden = !lay.sideOn;
     splitX.hidden = !lay.sideOn;
+    sideReopen.hidden = lay.sideOn;
     bottomPane.root.hidden = !lay.bottomOn;
     splitY.hidden = !lay.bottomOn;
     paintPane('main'); paintPane('side'); paintPane('bottom');
@@ -540,26 +557,10 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
         el('h1', { class: 'pn-title', text: p.name || '프로젝트 #' + id })),
       el('div', { class: 'pn-door-r' },
         el('span', { class: 'pn-faces' }, ...members.slice(0, 5).map((m: any) => personFace(String(m.member_id || m), 'pn-face', String(m.display_name || m.member_id || '')))),
-        zonesBtn(),
-        loose ? null : el('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: '이름·상태·본문·할 일을 고칩니다', onclick: () => openSettings() }, pnIcon('gear', 'pn-i sm'), el('span', { text: '설정' }))));
-  }
-
-  /** [칸] — 어떤 칸을 보일지, 배치를 되돌릴지. VS Code 의 보기 메뉴 자리다. */
-  function zonesBtn(): HTMLElement {
-    const b = el('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: '어떤 칸을 볼지 정합니다' }, pnIcon('cols', 'pn-i sm'), el('span', { text: '칸' })) as HTMLElement;
-    b.onclick = () => {
-      const row = (label: string, on: boolean, hint: string, onPick: () => void): HTMLElement =>
-        el('button', { class: 'pn-pop-row' + (on ? ' on' : ''), type: 'button', onclick: () => { close(); onPick(); } },
-          el('span', { class: 'pn-check' + (on ? ' on' : ''), 'aria-hidden': 'true' }),
-          el('span', { class: 'n' }, el('b', { text: label }), el('span', { class: 'pn-fine', text: hint })));
-      const close = anchoredPopover(b, el('div', { class: 'pn-pop' },
-        el('div', { class: 'pn-pop-list' },
-          row('곁칸', lay.sideOn, '오른쪽에 자료·지식을 두는 칸입니다.', () => { lay.sideOn = !lay.sideOn; saveLayout(); paintAll(); }),
-          loose ? null : row('아래 칸', lay.bottomOn, '가운데 아래에 타임라인·할 일을 두는 칸입니다.', () => { lay.bottomOn = !lay.bottomOn; saveLayout(); paintAll(); })),
-        el('div', { class: 'pn-pop-foot' },
-          el('button', { class: 'btn-text', type: 'button', text: '기본 배치로 되돌리기', onclick: () => { close(); resetLayout(); } }))));
-    };
-    return b;
+        // [칸]은 뺐고(원준 2026-08-20) 이름은 '설정'이 아니라 **정보** — 창의 내용물이 동작 옵션이 아니라
+        //  프로젝트 그 자체(이름·상태·본문·할 일)라서다. '설정'은 환경설정을 기대하게 만들고, 정작
+        //  "이 프로젝트가 뭐더라"를 찾는 사람은 설정을 누를 생각을 못 한다.
+        loose ? null : el('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: '이름·상태·본문·할 일을 보고 고칩니다', onclick: () => openSettings() }, pnIcon('info', 'pn-i sm'), el('span', { text: '정보' }))));
   }
 
   function resetLayout(): void {
