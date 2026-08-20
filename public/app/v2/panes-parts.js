@@ -12,6 +12,7 @@ import { api, apiUrl, el, relTime, renderMarkdown, toast } from '../core.js';
 import { confirmSessionForget } from '../session-actions.js';
 import { upDropZone } from '../projects/files-upload.js';
 import { mountProjectChat } from '../project-chat.js';
+import { hasBrowserSurface } from './browser-surface.js';
 import { filesPart } from './panes-files.js';
 import { NOISE_RE, TRASH_DIR, attachName, authHeaders, kindOf, pnIcon } from './panes-kit.js';
 import { createRunPicker } from './run-picker.js';
@@ -579,9 +580,12 @@ function archivePart(ctx) {
 }
 // ══ 웹 — 이 칸을 작은 브라우저로(원준 2026-08-20) ═══════════════════════════════
 //  왜 프레임 하나가 아니라 부품인가: 자료·지식과 같은 칸에 얹혀 **세션 옆에서 같이 보기** 위해서다.
-//  ⚠ 정직하게 말해 둘 것 — 많은 사이트가 남의 창 안에 뜨는 것을 스스로 막는다(X-Frame-Options·CSP).
-//   그건 우리가 뚫을 수 있는 것이 아니고(뚫으려면 서버가 남의 페이지를 대신 받아 오는 프록시가 되어야 하는데,
-//   그건 로그인도 깨지고 보안상 열어서는 안 되는 문이다). 그래서 **빈 화면이면 새 탭으로**를 그 자리에 둔다.
+//  ⚠ 많은 사이트가 남의 창 안에 뜨는 것을 스스로 막는다(X-Frame-Options·CSP frame-ancestors).
+//   **브라우저에서는** 그걸 뚫을 수 없다(뚫으려면 서버가 남의 페이지를 대신 받아 오는 프록시가 되어야 하는데,
+//   로그인도 깨지고 보안상 열어서는 안 되는 문이다) → 빈 화면이면 새 탭으로 안내한다.
+//   **데스크톱 앱에서는 뚫린다**(#1829) — 거기선 `<webview>` 가 별도 WebContents 라 그 검사의 대상이 아니다
+//   (실측: XFO deny 인 github.com 이 iframe 에선 차단, webview 에선 그대로 렌더). 그래서 능력이 있으면
+//   같은 칸을 webview 로 그린다 — UI 는 한 벌 그대로고, 갈리는 건 프레임 한 줄과 안내문뿐이다.
 function webPart(ctx) {
     const root = el('div', { class: 'pn-part pn-web' });
     const KEY = 'pn_web_url';
@@ -603,14 +607,18 @@ function webPart(ctx) {
             return 'https://' + t;
         return 'https://www.google.com/search?q=' + encodeURIComponent(t); // 주소가 아니면 검색으로 — 막다른 입력칸을 만들지 않는다
     };
-    const frame = el('iframe', { class: 'pn-webframe', referrerpolicy: 'no-referrer-when-downgrade' });
+    // 능력 감지로 가른다(UA·플랫폼 추측 금지 — 구 앱 + 새 웹 조합에서 어긋난다).
+    const live = hasBrowserSurface();
+    const frame = (live
+        ? el('webview', { class: 'pn-webframe' })
+        : el('iframe', { class: 'pn-webframe', referrerpolicy: 'no-referrer-when-downgrade' }));
     const input = el('input', { class: 'pn-web-in', type: 'text', placeholder: '주소 또는 검색어 — 예: docs.google.com', 'aria-label': '주소' });
     const go = (raw) => {
         const u = norm(raw ?? input.value);
         if (!u)
             return;
         input.value = u;
-        frame.src = u;
+        frame.setAttribute('src', u);
         const m = store();
         m[keyOf()] = u;
         try {
@@ -624,14 +632,25 @@ function webPart(ctx) {
         const u = frame.getAttribute('src') || norm(input.value);
         if (!u)
             return;
-        try {
-            frame.contentWindow?.location.reload();
-            return;
+        // ⚠ 서피스(webview)에는 contentWindow 가 **없다** — `?.` 가 조용히 undefined 로 빠져 그대로 return 되면
+        //  '다시 불러오기'가 아무 일도 안 한다(무동작이 오동작보다 찾기 어렵다). webview 는 자기 reload() 를 쓴다.
+        if (live) {
+            try {
+                frame.reload();
+                return;
+            }
+            catch (_) { /* 아직 부착 전 — 아래 재삽입으로 */ }
         }
-        catch (_) { /* 남의 사이트 — 안쪽에 시킬 수 없다. 아래로 */ }
-        frame.src = 'about:blank';
+        else {
+            try {
+                frame.contentWindow?.location.reload();
+                return;
+            }
+            catch (_) { /* 남의 사이트 — 안쪽에 시킬 수 없다 */ }
+        }
+        frame.setAttribute('src', 'about:blank');
         window.setTimeout(() => { if (frame.isConnected)
-            frame.src = u; }, 0);
+            frame.setAttribute('src', u); }, 0);
     };
     input.onkeydown = (e) => { if (!e.isComposing && e.key === 'Enter') {
         e.preventDefault();
@@ -642,7 +661,7 @@ function webPart(ctx) {
         e.preventDefault();
         return;
     } openTab.href = u; };
-    root.append(el('div', { class: 'pn-web-bar' }, el('button', { class: 'pn-web-btn', type: 'button', title: '이 칸만 다시 불러옵니다 — ⌘R(윈도는 Ctrl+R)도 같습니다.', 'aria-label': '다시 불러오기', onclick: () => reload() }, pnIcon('undo', 'pn-i sm')), input, el('button', { class: 'pn-web-btn', type: 'button', text: '열기', onclick: () => go() }), openTab), frame, el('p', { class: 'pn-web-note pn-fine', text: '빈 화면인가요? 그 사이트가 창 안에 뜨는 걸 막은 거예요 — 오른쪽 ↗ 로 새 탭에서 여세요.' }));
+    root.append(el('div', { class: 'pn-web-bar' }, el('button', { class: 'pn-web-btn', type: 'button', title: '이 칸만 다시 불러옵니다 — ⌘R(윈도는 Ctrl+R)도 같습니다.', 'aria-label': '다시 불러오기', onclick: () => reload() }, pnIcon('undo', 'pn-i sm')), input, el('button', { class: 'pn-web-btn', type: 'button', text: '열기', onclick: () => go() }), openTab), frame, live ? null : el('p', { class: 'pn-web-note pn-fine', text: '빈 화면인가요? 그 사이트가 창 안에 뜨는 걸 막은 거예요 — 오른쪽 ↗ 로 새 탭에서 여세요. 데스크톱 앱에서는 이 칸 안에 그대로 뜹니다.' }));
     // 이 세션이 보던 주소로 맞춘다 — 세션을 갈아 끼우면 그 세션이 보던 페이지로 갈아입는다(아무것도 없으면 빈 칸).
     function adopt() {
         const u = store()[keyOf()] || '';
@@ -652,7 +671,7 @@ function webPart(ctx) {
         }
         input.value = u;
         if (u)
-            frame.src = u;
+            frame.setAttribute('src', u);
         else
             frame.removeAttribute('src');
     }
