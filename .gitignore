@@ -41,3 +41,5 @@ desktop/build/
 /build/
 /public/.app-next/
 /public/.app-old/
+# 폐기된 studio.ts 의 산출물 — 머지마다 되살아나 서빙 트리를 더럽혔다(#1719)
+public/app/v2/studio.js

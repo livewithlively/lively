@@ -83,10 +83,18 @@ export function proxyTo(base: string, rest: string, req: express.Request, res: e
   if (target.protocol !== "http:") { res.status(502).type("text/plain; charset=utf-8").send("프리뷰 프록시는 http 대상만 지원합니다(현재)"); return; }
   const hasBody = req.body && typeof req.body === "object" && !Buffer.isBuffer(req.body) && Object.keys(req.body).length > 0;
   const bodyBuf = hasBody ? Buffer.from(JSON.stringify(req.body)) : null;
+  // ── 본문 전달은 두 갈래다 ────────────────────────────────────────────────
+  //  ① 앞단 express.json 이 이미 먹은 JSON → 다시 직렬화해 보낸다.
+  //  ② 그 밖의 본문(파일 업로드의 application/octet-stream 등)은 파서가 손대지 않아 **아직 스트림에 남아 있다**
+  //     → 그대로 흘린다. 이 갈래가 없어서 프리뷰를 거친 PUT /file 이 전부 **0바이트**로 저장됐다(실측 2026-08-20,
+  //     #1819: 자료 붙여넣기가 조용히 빈 파일을 만들었고, 서버는 200 을 줘서 화면상 성공으로 보였다).
+  //  ⚠ ② 에서는 원본 content-length 를 **지우지 않는다** — 길이를 지우면 상대가 청크 종료만 기다린다.
+  //   반대로 본문이 없는데 길이를 남기면 상대가 오지 않을 바이트를 기다리므로, 없을 때만 지운다.
+  const rawBody = !hasBody && req.readable && !req.complete && req.method !== "GET" && req.method !== "HEAD";
   const headers: Record<string, string | string[]> = { ...req.headers } as Record<string, string | string[]>;
   headers.host = target.host;
   if (bodyBuf) { headers["content-type"] = "application/json"; headers["content-length"] = String(bodyBuf.length); }
-  else delete headers["content-length"];
+  else if (!rawBody) delete headers["content-length"];
   const up = http.request(
     { hostname: target.hostname, port: target.port || 80, path: target.pathname + target.search, method: req.method, headers },
     (r) => {
@@ -138,7 +146,10 @@ export function proxyTo(base: string, rest: string, req: express.Request, res: e
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
     res.end("프리뷰 백엔드 연결 실패 — 프로세스가 떠 있는지 확인하세요. (게이트웨이가 재시작되면 프리뷰 백엔드도 함께 내려갑니다 — 다시 띄우세요.)");
   });
-  up.end(bodyBuf ?? undefined);
+  if (rawBody) {
+    req.on("error", () => up.destroy());     // 클라이언트가 끊으면 상류 요청도 끊는다(반쯤 쓴 요청을 남기지 않는다)
+    req.pipe(up);
+  } else up.end(bodyBuf ?? undefined);
 }
 
 export function registerPreviewRoutes(app: express.Express, verifier: BearerVerifier): void {

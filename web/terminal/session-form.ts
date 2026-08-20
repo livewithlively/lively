@@ -1,7 +1,8 @@
 // terminal/session-form.ts — 세션 **생성·수정 폼**과 그 부속: 실행 설정 기억(#673/#782) · 초대 피커 · 노드 관리 · 로그인 배너/프로필 안내.
 //  소비자: terminal/{session-list,routes}.ts + 프로젝트·대시보드 탭(배럴 terminal.ts 경유).
 //  import 방향: select-bar(아래층)만 본다. 목록 재렌더는 routes.ts 를 직접 import 하지 않고 아래 훅으로 부른다(순환 방지).
-import { api, appUrl, busy, el, infoPop, personFace, state, toast, visAxisOn } from '../core.js';
+import { api, busy, el, infoPop, personFace, state, toast, visAxisOn } from '../core.js';
+import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 import { field, overlay } from '../admin.js';
 import { isTourActive } from '../tour.js';
 import { termUrl } from './select-bar.js';
@@ -63,7 +64,7 @@ async function openLoginSession(view) {
       label: '내 계정 로그인', rootKey: 'personal', subpath: '', harness: 'claude', flags: {}, autoApprove: false, loginProfile: true,
     }) });
     toast('로그인 터미널을 열었습니다 — 뜨는 claude 에서 로그인을 진행하세요');
-    if (out && out.session) window.open(appUrl('/ui/terminal.html?session=') + encodeURIComponent(out.session.id) + '&label=' + encodeURIComponent(out.session.label || ''), '_blank');
+    if (out && out.session) window.open(sessionTermUrl(out.session.id, { label: out.session.label }), '_blank');
     renderTerminal(view);
   } catch (e) { toast('로그인 터미널 열기 실패 — ' + e.message, true); }
 }
@@ -109,10 +110,12 @@ function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any;
   const roots = cfg.roots || [];
   const harnesses = cfg.harnesses || [];
   const prefs = termCreatePrefs();
-  // 프로젝트에서 열었으면 이름을 **프로젝트 제목으로 프리필**한다(#1145) — 그대로 [생성하기] 를 눌러 끝낼 수 있게.
-  //  (데모는 호출부가 '이 세션이 하는 일' 예시를 projectName 으로 넘긴다 — 투어가 가르치려는 작명이 그거다, #1009.)
-  const labelI = el('input', { class: 'term-input', type: 'text', placeholder: '예: 랜딩 카피 수정' });
-  if (project && project.name) labelI.value = project.name;
+  // ⚠ 이름칸은 **비워 둔다**(#1808). 종전엔 프로젝트에서 열면 프로젝트 제목을 프리필했는데(#1145 — 그대로
+  //  [생성하기] 를 눌러 끝낼 수 있게), 실제로 대다수가 그대로 눌러 **프로젝트 세션 147건 중 104건(71%)이
+  //  이름이 프로젝트명 그대로**가 됐다(dev 실측 2026-08-20). 한 프로젝트 아래 세션 예닐곱이 전부 같은 이름이라
+  //  목록에서 서로 구분이 안 된다 — 이름이 '어디에 속하나'를 말하면 정보가 0이다(그건 트리·칩이 이미 말한다).
+  //  비워 두면 서버가 **처음 시킨 말**로 이름을 짓는다(src/terminal/session-name.ts · session-autoname.ts).
+  const labelI = el('input', { class: 'term-input', type: 'text', placeholder: '비워 두면 처음 시킨 말로 지어져요 (예: 랜딩 카피 수정)' });
   // #853 작업 위치 = 공유/개인 2택 → 드롭다운 대신 세그먼트 토글(둘 중 하나를 명확히 고르게). 아래 '폴더'는 이 안의 하위 폴더.
   let rootKey = (roots[0] && roots[0].key) || 'personal';
   const rootBtns: Record<string, any> = {};
@@ -552,7 +555,7 @@ function openTermCreateForm(cfg, view, onCreated?, opts?: { project?: { id: any;
           });
           back.remove();
           toast('세션 생성됨');
-          if (out && out.session) window.open(termUrl(out.session.id, out.session.label, nodeId, fromTour ? '&welcome=1' : ''), '_blank');
+          if (out && out.session) window.open(termUrl(out.session.id, out.session.label, nodeId, { welcome: !!fromTour }), '_blank');
           if (onCreated) onCreated(out); else renderTerminal(view);
         } catch (e) { btn.disabled = false; toast('생성 실패 — ' + e.message, true); }
       } })));

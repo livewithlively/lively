@@ -16,6 +16,9 @@ export interface LivelyUser {
   // OAuth 2.1 인가서버가 발급한 토큰이면 그 클라이언트 id(#1473 T2). 사람이 발급한 토큰은 없음(undefined).
   //  헤더를 못 넣는 챗 표면의 프로필(읽기전용 등)을 '토큰에 묶는' 축이 이 값이다(T3 #1499).
   oauthClientId?: string;
+  // 앱 세션 토큰이면 그 앱 id(#1780). 일반 토큰은 undefined. 이 값이 있으면 그 세션의 능력 호출은
+  //  **그 앱 grant 의 도구 allowlist 로 축소**된다(requireAppTool — 헤더 자기주장이 아니라 토큰에 구운 경계).
+  appId?: string;
 }
 
 // MCP 핸들러의 extra.authInfo.extra 에 우리가 심어둔 사용자 정보를 꺼낸다.

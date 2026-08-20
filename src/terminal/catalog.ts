@@ -307,7 +307,11 @@ export interface CreateInput { label: string; rootKey: string; subpath: string; 
   sessionDir?: boolean;
   // #1719 홈 입력창 — 첫 지시. 세션을 띄운 뒤 하네스 입력창이 뜨는 걸 **보고 나서** 주입한다(session-first-prompt.ts).
   //  생성 응답은 기다리지 않는다(주입은 백그라운드) — 화면은 세션 대화창으로 가서 대화 파일에 나타나는 걸 따라간다.
-  initialPrompt?: string; }
+  initialPrompt?: string;
+  // #1780 D4 — 이 세션을 **앱으로** 띄운다. 설정 시 createSession 이 grant 검사 → 앱 토큰 발급 →
+  //  세션 폴더에 앱 홈(.lively/token·gateway-url)·앱 하네스 자산(.claude/{skills,agents,commands})을 물질화하고
+  //  pane env LIVELY_HOME=<sessionDir>·LIVELY_APP_ID=<id> 를 주입한다(design D3·D4). 미설정=일반 세션(무변경).
+  appId?: string; }
 
 // ── 세션 런처(#1516) — 하네스가 죽어도 세션은 산다 ──
 //

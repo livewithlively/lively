@@ -72,6 +72,62 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-title-in:focus { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue-fill) 18%, transparent); }
 .sc-title-in:disabled { opacity: .6; }
 .sc-meta { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-sub); white-space: nowrap; }
+
+/* ── 처방전(#1719) — 입력칸 바로 위. '방금 네 번 주고받은 것, 한 번에 끝낼 수 있었어요'.
+ *  대화가 아니라 **끼워 넣은 안내**라는 게 보여야 한다: 말풍선 문법을 쓰지 않고 테두리 있는 판으로.
+ *  일이 끝난 뒤에만 뜨고, 닫으면 그 묶음에서는 다시 안 뜬다. */
+.sc-rx-host:empty { display: none; }
+.sc-rx {
+  margin: 0 16px 10px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+  background: var(--bg); box-shadow: 0 1px 2px rgba(0, 0, 0, .04);
+}
+.sc-rx-h {
+  display: flex; align-items: center; gap: 9px; padding: 9px 12px;
+  background: var(--bg-punch); border-bottom: 1px solid var(--line-row);
+  font-size: 13px; font-weight: 600;
+}
+.sc-rx-av {
+  width: 20px; height: 20px; border-radius: 50%; background: var(--blue-fill); color: var(--on-fill); flex: none;
+  display: inline-flex; align-items: center; justify-content: center; font-size: 10.5px; font-weight: 700;
+}
+.sc-rx-ht { flex: 1; min-width: 0; }
+.sc-rx-x { color: var(--ink-sub); font-size: 15px; line-height: 1; padding: 2px 4px; }
+.sc-rx-b-wrap { padding: 13px 14px 14px; }
+.sc-rx-said { margin: 0 0 12px; font-size: 13px; line-height: 1.65; color: var(--ink-sub); }
+.sc-rx-said b { color: var(--ink); font-weight: 600; }
+
+/* 몇 번이 한 번이 되는지 — 숫자를 읽지 않아도 보이게 */
+.sc-rx-fold { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.sc-rx-grp { display: inline-flex; gap: 4px; }
+.sc-rx-b { width: 22px; height: 13px; border-radius: 4px; background: var(--bg-punch); border: 1px solid var(--line); display: block; }
+.sc-rx-b.one { width: 44px; background: var(--mint-deep); border-color: var(--mint-deep); }
+.sc-rx-arrow { color: var(--ink-sub); font-size: 13px; }
+.sc-rx-cap { font-size: 12px; color: var(--ink-sub); }
+.sc-rx-cap b { color: var(--ink); font-weight: 600; }
+
+/* 합친 지시문 — 읽는 물건이자 가져가는 물건 */
+.sc-rx-prompt { background: var(--bg-punch); border: 1px solid var(--line); border-radius: 9px; padding: 11px 13px; }
+.sc-rx-plabel {
+  display: block; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--ink-sub); margin-bottom: 6px;
+}
+.sc-rx-ptext { font-size: 13px; line-height: 1.75; color: var(--ink); word-break: break-word; }
+.sc-rx-add { background: rgba(22, 199, 154, .17); box-shadow: 0 0 0 1.5px rgba(22, 199, 154, .17); border-radius: 3px; }
+
+.sc-rx-acts { display: flex; align-items: center; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
+.sc-rx-go {
+  background: var(--blue-fill); color: var(--on-fill); border-radius: 7px; padding: 7px 13px; font-size: 12.5px; font-weight: 500;
+}
+.sc-rx-go:hover { filter: brightness(1.06); }
+.sc-rx-alt {
+  border: 1px solid var(--line); color: var(--ink-sub); border-radius: 7px; padding: 7px 11px; font-size: 12.5px;
+}
+.sc-rx-never { color: var(--ink-sub); font-size: 12px; padding: 7px 4px; margin-left: auto; }
+
+@media (max-width: 760px) {
+  .sc-rx { margin: 0 12px 8px; }
+  .sc-rx-never { margin-left: 0; }
+}
 .sc-meta a { color: var(--ink-sub); text-decoration: none; }
 .sc-meta a:hover { color: var(--blue); }
 .sc-sep { color: var(--muted-2); }
@@ -149,7 +205,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .livc-desktop .livc-mark { margin: 6px 0 0; }
 .livc-desktop .livc-err { margin-top: 8px; }
 
-/* 접힌 도구 줄 — "도구 N개 사용함 ›" · 펼치면 슬립이 그대로 */
+/* 접힌 도구 줄 — "라이블리 5개 · 명령 2개 사용함 ›"(문구는 web/chat-tool-group.ts) · 펼치면 슬립이 그대로 */
 .dt-tools { margin: 6px 0; }
 .dt-tools > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: baseline; gap: 7px;
   font-size: 12.5px; line-height: 1.5; color: var(--ink-sub); padding: 3px 0; border-radius: 6px; }
@@ -263,3 +319,13 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 @media (pointer: coarse) {
   .livc-input, .dt-box .livc-input { font-size: 16px; }
 }
+
+/* 제목이 'pane 이름'일 때도 이 줄에서 이름을 고친다(원준 2026-08-20) — 연필은 손을 올렸을 때만. */
+.sc-title-penbtn { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-left: 4px;
+  border: 0; background: none; padding: 0; border-radius: 5px; cursor: pointer; opacity: 0; transition: opacity .12s ease; flex: none; }
+.sc-titlebox:hover .sc-title-penbtn, .sc-title-penbtn:focus-visible { opacity: 1; }
+.sc-title-penbtn:hover { background: var(--bg-tint); }
+.sc-title-penbtn:hover .sc-title-pen { stroke: var(--blue); }
+/* 이름 옆의 '지금 하는 일' — 굵은 이름과 같은 줄, 조용한 톤(사이드바의 이름+부제와 같은 문법). */
+.sc-title-job { margin-left: 9px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12.5px; font-weight: 500; color: var(--muted); }

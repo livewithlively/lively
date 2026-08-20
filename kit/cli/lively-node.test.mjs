@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { sandboxEnv } from "../testlib/os-sandbox.mjs";
 
 // 이 파일은 **POSIX 상시화 경로의 e2e** 다 — tmux + launchd/systemd + pkill 을 스텁으로 가로채 검증한다.
 //  ⚠ 2026-08-05(#1541) 사양 변경: Windows 는 더 이상 비목표가 아니다. psmux(ConPTY 네이티브 tmux 구현) +
@@ -95,7 +96,7 @@ async function lively(h, args, { expectFail = false } = {}) {
     const r = await pExecFile(process.execPath, [CLI, ...args], {
       env: {
         ...process.env,
-        HOME: h.home, LIVELY_HOME: h.home,
+        ...sandboxEnv({ home: h.home }), LIVELY_HOME: h.home,
         PATH: `${h.bin}:${process.env.PATH}`,
         LIVELY_TOKEN: "", LIVELY_GATEWAY_URL: "",
       },

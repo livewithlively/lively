@@ -90,6 +90,8 @@ ok("⑱작업 기록이 없으면 '작업 완료' 판정 불가(false)");
   assert.equal(sessIsDead({ agentState: "exited" }), false, "AI 가 끝나도 셸이 떠 있으면 들어가서 쓸 수 있다");
   assert.equal(sessIsDead({ restorable: true }), true);
   assert.equal(sessIsDead({ restorable: true, exitedByUser: true }), true);
+  // #1808 — 메모리 부족으로 죽은 세션도 '박스가 없다'는 같은 사실이다(종전엔 여기서 빠져 살아 있는 것으로 세어졌다).
+  assert.equal(sessIsDead({ restorable: true, oomKilled: true }), true, "메모리 부족도 끝남 — tmux 에 없다");
   ok("㉒'끝남' = 중단됨·종료됨 (tmux 에서 사라진 것들만 — 셸·오프라인은 살아 있다)");
 }
 

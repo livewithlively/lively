@@ -2,7 +2,8 @@
 //  프로젝트 상세 ② '터미널 세션' 섹션 + 세션 이름변경/삭제 폼.
 //  세션 만들기는 자체 폼을 두지 않고 '새 AI 세션' 모달 하나로 위임한다(#1145) — 그때 레포 미리받기(provision)와
 //  그 진행을 지켜보던 watchProvision 폴링도 함께 사라졌다(세션이 필요할 때 스스로 워크트리를 뜬다, #918).
-import { api, appUrl, busy, el, errorNote, personFace, relTime, toast } from '../core.js';
+import { api, busy, el, errorNote, personFace, relTime, toast } from '../core.js';
+import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 import { overlayBox, skeletonRows } from '../learn.js';
 import { openProjectSessionsModal } from '../sessions.js';
 import { openTermCreateForm } from '../terminal.js';
@@ -145,7 +146,7 @@ function projectTerminalSection(id, members, meId, base, projectName, project?) 
       el('button', { class: 'btn btn-ghost btn-sm', title: '이 세션을 끝냅니다 — 작업 폴더·파일은 그대로, 대화록은 세션 기록에 남습니다', text: '종료', onclick: () => removeSession(s, load) }));
     acts.push(el('button', { class: 'btn btn-ghost btn-sm', text: 'ℹ 정보', onclick: () => openSessionInfo(s) }));  // 세션 메타 팝업(#480 요청2)
     // 노드 세션(#905 C4)은 &node= 로 입장해야 게이트웨이가 그 노드로 attach 를 릴레이한다.
-    const openQ = appUrl('/ui/terminal.html?session=') + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || '') + (s.node ? '&node=' + encodeURIComponent(s.node.id) : '');
+    const openQ = sessionTermUrl(s.id, { label: s.label, node: s.node && s.node.id });
     acts.push(el('button', { class: 'btn btn-primary btn-sm', text: '입장', onclick: () => window.open(openQ, '_blank') }));
     return el('div', { class: 'proj-sess-row' },
       el('div', { class: 'proj-sess-main' },
@@ -176,7 +177,7 @@ function projectTerminalSection(id, members, meId, base, projectName, project?) 
       el('div', { style: 'flex:0 0 92px;color:var(--muted);font-size:13px', text: kv[0] }),
       el('div', { style: 'flex:1;min-width:0;word-break:break-all', text: kv[1] }));
     const enterBtn = el('button', { class: 'btn btn-primary', text: '입장',
-      onclick: () => window.open(appUrl('/ui/terminal.html?session=') + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || '') + (s.node ? '&node=' + encodeURIComponent(s.node.id) : ''), '_blank') });
+      onclick: () => window.open(sessionTermUrl(s.id, { label: s.label, node: s.node && s.node.id }), '_blank') });
     const back = overlayBox('세션 정보 — ' + (s.label || s.id),
       el('div', {}, ...rows.map(rowEl)),
       el('div', { class: 'ov-actions' }, enterBtn, el('button', { class: 'btn btn-ghost', text: '닫기', onclick: () => back.remove() })));

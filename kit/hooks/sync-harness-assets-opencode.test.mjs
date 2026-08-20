@@ -18,6 +18,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { sandboxEnv } from "../testlib/os-sandbox.mjs";
 
 const RUNNER = join(dirname(fileURLToPath(import.meta.url)), "sync-harness-assets.mjs");
 const SANDBOX = mkdtempSync(join(tmpdir(), "sync-opencode-test-"));
@@ -73,7 +74,7 @@ function sync(env = {}) {
       // ⚠ XDG_CONFIG_HOME 를 **명시적으로 비운다.** LIVELY_HOME 은 HOME 만 리다이렉트하므로, 실행 환경에
       //  XDG_CONFIG_HOME 이 설정돼 있으면(CI 가 그렇다) 러너가 샌드박스 **밖**에 쓴다 — 실제로 ⓪ 지문이
       //  "샌드박스 계약 파손"으로 이 사고를 잡았다. 테스트가 개발자 실 홈을 오염시키면 안 된다.
-      { env: { ...process.env, LIVELY_HOME: HOME, XDG_CONFIG_HOME: "", ...env }, stdio: ["ignore", "pipe", "pipe"] });
+      { env: { ...process.env, ...sandboxEnv({ home: HOME, tmp: SANDBOX }), LIVELY_HOME: HOME, XDG_CONFIG_HOME: "", ...env }, stdio: ["ignore", "pipe", "pipe"] });
     let err = "";
     p.stderr.on("data", (d) => { err += d; });
     p.on("close", (status) => resolve({ status, stderr: err }));
@@ -175,7 +176,7 @@ let r = await sync();
 {
   // ⚠ probe 도 env 를 격리한다 — `opencode --version` 조차 설정 디렉터리를 만들 수 있어서, 상속 env 로 부르면
   //  **실행 환경의** XDG_CONFIG_HOME 아래에 흔적을 남긴다(테스트가 개발자 환경을 오염시키는 형태).
-  const isolated = { ...process.env, HOME: SANDBOX, XDG_CONFIG_HOME: "" };
+  const isolated = { ...process.env, ...sandboxEnv({ home: SANDBOX, tmp: SANDBOX }), XDG_CONFIG_HOME: "" };
   const probe = spawnSync("opencode", ["--version"], { env: isolated, encoding: "utf8", timeout: 15000 });
   if (probe.status !== 0) skip("O6 실제 opencode 로 설정 유효성 확인", "opencode 미설치");
   else {
@@ -187,7 +188,7 @@ let r = await sync();
     ];
     await sync();
     const g = spawnSync("opencode", ["debug", "agent", "probe-agent"],
-      { env: { ...process.env, HOME, XDG_CONFIG_HOME: "" }, encoding: "utf8", timeout: 30000, cwd: SANDBOX });
+      { env: { ...process.env, ...sandboxEnv({ home: HOME, tmp: SANDBOX }), XDG_CONFIG_HOME: "" }, encoding: "utf8", timeout: 30000, cwd: SANDBOX });
     const out = `${g.stdout || ""}${g.stderr || ""}`;
     /Configuration is invalid|ConfigInvalidError/i.test(out)
       ? bad("O6 실제 opencode 가 우리 자산을 유효한 설정으로 읽는다", `설정 거부됨: ${out.split("\n").slice(0, 3).join(" / ")}`)

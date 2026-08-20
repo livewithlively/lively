@@ -31,6 +31,21 @@ contextBridge.exposeInMainWorld("livelyDesktop", {
   appVersion: boot.appVersion || null,
   // 웹의 logout() 이 데스크톱 안이면 이걸 부른다(web/core.ts) — 메인이 CLI 로그아웃을 돌리고 창을 마법사로 바꾼다.
   logout: () => ipcRenderer.invoke("lively-web:logout"),
+  // 브라우저 서피스(#1829) — **능력 선언**이다. 웹은 이게 있으면 `<webview>` 로 남의 사이트를 앱 안에 띄우고,
+  //  없으면(=브라우저에서 연 웹 UI) '새 탭으로 열기' 폴백을 그린다(web/v2/browser-surface.ts).
+  //  값은 메인이 준다 — preload 가 스스로 "된다" 고 말하면 게이트웨이 출처가 아닐 때도 능력이 새어 나간다.
+  //  ⚠ 여긴 `<webview>` 를 **만드는 함수가 없다**. 태그는 페이지가 직접 만든다 — 우리는 만들 권한만 열어 두고,
+  //   붙는 순간의 안전(preload 제거·node 차단·파티션 격리)은 메인의 will-attach-webview 가 강제한다.
+  browserSurface: boot.browserSurface || null,
+  // 확장(애드온) (#1829) — 서피스 세션에만 걸리는 확장의 목록·설치·제거.
+  //  ⚠ **install 은 인자를 받지 않는다.** 경로를 페이지가 정할 수 있으면 웹 UI 의 XSS 한 방이 임의 파일을
+  //   확장으로 심는다(그 확장은 서피스에서 도는 코드다). 메인이 네이티브 선택창을 띄우고 사람이 고른 것만 받는다.
+  //  능력이 없으면(브라우저에서 연 웹 UI) 이 객체 자체가 null 이라 화면이 확장 UI 를 안 그린다.
+  browserExtensions: boot.browserSurface ? {
+    list: () => ipcRenderer.invoke("lively-web:ext-list"),
+    install: () => ipcRenderer.invoke("lively-web:ext-install"),
+    remove: (id) => ipcRenderer.invoke("lively-web:ext-remove", { id: String(id || "") }),
+  } : null,
 });
 
 // ── ③ 커스텀 타이틀바 — frameless 창에서만(리눅스는 네이티브 프레임 그대로 → boot.frameless=false) ──────────

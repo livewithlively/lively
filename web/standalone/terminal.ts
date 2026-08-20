@@ -156,7 +156,8 @@ function withKR(ff) {
 function prefs() {
   let p: any = {};
   try { p = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}'); } catch (_) { /* default */ }
-  const merged: any = Object.assign({ fontFamily: FONTS[0].v, fontSize: 14, theme: 'auto', cursorStyle: 'bar', scrollSpeed: 3, padGain: 3 }, p);
+  // 폰트 기본값·mobileDock 은 main 의 모바일 대응(IS_MOBILE), theme 기본값 'auto' 는 #1683 — 둘 다 살린다.
+  const merged: any = Object.assign({ fontFamily: FONTS[0].v, fontSize: IS_MOBILE ? 12 : 14, theme: 'auto', cursorStyle: 'bar', scrollSpeed: 3, padGain: 3, mobileDock: true }, p);
   // 옛 저장값 1회 이관(#1683) — 종전 기본은 '브라우저가 다크면 dark, 아니면 light' 였다. 그 두 값은 사람이
   //  고른 게 아니라 **자동 판정 결과가 굳은 것**이라, 앱 테마 따름(auto)으로 옮겨야 지금 기대(앱과 함께 바뀐다)에 맞는다.
   //  Dracula·Nord 처럼 이름 있는 테마는 사람이 고른 것이므로 건드리지 않는다. 이관 표시를 남겨 한 번만 한다 —
@@ -282,6 +283,15 @@ function diagText() {
 window.livelyTermDiag = () => diagText();
 // 사파리 판별 — 클립보드 정책이 크롬과 다르다(제스처 밖·비동기 쓰기 거부 → 복사 경로가 갈린다, #1117 버그C).
 const IS_SAFARI = /Apple/i.test(navigator.vendor || '') && !/CriOS|FxiOS|Chrome|Chromium|Edg/i.test(navigator.userAgent || '');
+// 모바일(터치 주입력) 판정(#1719 모바일 터미널) — 거친 포인터(손가락) 또는 모바일 UA. iPadOS 는 UA 가 Mac 이라 pointer 로 잡는다.
+//  ?mobile=1|0 으로 강제(검증·데스크톱 터치스크린 예외).
+const IS_MOBILE = (() => {
+  const q = new URLSearchParams(location.search).get('mobile');
+  if (q === '1') return true;
+  if (q === '0') return false;
+  const coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+  return coarse || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+})();
 let imeComposing = false;  // setupTextareaHygiene 이 관리 — IME 조합 중엔 textarea 를 절대 건드리지 않는다(#633 교훈)
 let appDragSelect = false; // 앱(마우스모드) 화면에서 '드래그 선택'이 관측된 상태 — Cmd+C→^C 브리지 발동 조건(#1117 버그C)
 
@@ -1074,6 +1084,7 @@ function showDropHint() {
   const main = document.getElementById('main');
   if (!main || document.querySelector('.pop-hint')) return;
   if (main.querySelector('.ended-bar')) return; // 끝난 세션에 '파일 주세요'는 소용없다
+  if (IS_MOBILE) return; // 폰엔 끌어다 놓기가 없다 — 첫 화면을 안내로 가리지 않는다
   try { if (window.top !== window.self) return; } catch (_) { return; } // 크로스오리진이면 프레임 안으로 간주
   try { if (localStorage.getItem(HINT_DROP_KEY) === '1') return; } catch (_) { /* 스토리지 차단 — 그냥 보여준다 */ }
   const step = (n, title, sub) => el('div', { class: 'hint-step' },
@@ -1512,6 +1523,135 @@ function setupTouch() {
   hostEl.addEventListener('touchcancel', () => { active = false; }, { passive: true });
 }
 
+// ── 모바일 입력 모드(#1719) ──
+// 왜 따로 두나: 폰의 한글 IME 는 xterm 의 히든 textarea 와 상극이다(자모 분해·중복 전송 — iOS/Android 모두 실기기 제보).
+//  xterm 은 composition 이벤트 순서에 기대는데 모바일 IME 는 그 순서를 지키지 않고, 히든 textarea 는 화면 밖이라
+//  꾹 눌러 복사·붙여넣기도 안 된다. 그래서 폰에선 **보이는 입력칸**에서 네이티브 IME 로 글을 완성해 한 번에 보낸다 —
+//  키보드가 잘 아는 textarea 라 조합·꾹 누르기·붙여넣기가 전부 OS 그대로 동작한다. 터미널 화면 자체는 읽기 전용이 되고
+//  (탭해도 키보드가 안 뜬다), 방향키·Esc·Ctrl+C 같은 키는 키 줄의 버튼이 보낸다. 데스크톱 경로는 손대지 않는다.
+//  끄고 싶으면 환경 설정 '모바일 입력 바' 체크 해제(그러면 종전처럼 터미널에 직접 타이핑).
+let mdockEl = null, mcompEl = null;
+function mobileDockOn() { return IS_MOBILE && prefs().mobileDock !== false; }
+// xterm 히든 textarea 를 '키보드가 안 뜨는' 상태로 — readonly 면 iOS·Android 모두 소프트키보드를 띄우지 않는다.
+//  포커스·선택·컨텍스트메뉴는 그대로라 xterm 의 나머지 동작(스크롤·선택 복사)은 유지된다.
+function setTermTextareaReadonly(on) {
+  try {
+    const ta = term.textarea; if (!ta) return;
+    ta.readOnly = !!on;
+    if (on) { ta.setAttribute('inputmode', 'none'); ta.tabIndex = -1; } else { ta.removeAttribute('inputmode'); ta.tabIndex = 0; }
+  } catch (_) { /* noop */ }
+}
+// 방향키 바이트 — 앱이 application cursor 모드면 \x1bO?, 아니면 \x1b[? (xterm 이 모드를 알고 있다).
+function arrowSeq(letter) {
+  let app = false;
+  try { app = !!(term.modes && term.modes.applicationCursorKeysMode); } catch (_) { /* noop */ }
+  return (app ? '\x1bO' : '\x1b[') + letter;
+}
+function mobileSend() {
+  if (!mcompEl) return;
+  const t = String(mcompEl.value || '');
+  userTyped = true;
+  if (t) {
+    // 여러 줄은 bracketed paste 로 감싸 앱이 '한 덩어리'로 받게(줄바꿈이 Enter 로 오해되지 않게), 한 줄은 그대로.
+    if (/\n/.test(t)) pasteText(t); else sendInput(sanitizePasteText(t));
+  }
+  sendInput('\r');
+  mcompEl.value = ''; mobileGrow();
+  dlog('mdock', 'send len=' + t.length);
+}
+function mobileGrow() {
+  if (!mcompEl) return;
+  mcompEl.style.height = 'auto';
+  mcompEl.style.height = Math.min(112, Math.max(38, mcompEl.scrollHeight)) + 'px';
+}
+// 화면 글자를 '고를 수 있는 글'로 — 폰에선 xterm 캔버스 위 꾹 누르기가 안 먹으니, 최근 화면·스크롤백을 일반 텍스트로
+//  펼쳐 OS 선택(꾹 누르기)과 '전체 복사'를 준다.
+function openCopySheet() {
+  const lines = [];
+  try {
+    const b = term.buffer.active;
+    const from = Math.max(0, b.length - 400);
+    for (let i = from; i < b.length; i++) { const ln = b.getLine(i); lines.push(ln ? ln.translateToString(true) : ''); }
+  } catch (_) { /* noop */ }
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  const text = lines.join('\n');
+  const pre = el('pre', { class: 'copy-sheet-pre', text: text || '(화면에 글자가 없어요)' });
+  const back = el('div', { class: 'pop-back', onclick: (e) => { if (e.target === back) back.remove(); } },
+    el('div', { class: 'pop copy-sheet' },
+      el('div', { class: 'copy-sheet-head' }, el('h3', { text: '화면 글자 · 최근 ' + lines.length + '줄' }),
+        el('span', { class: 'spacer' }),
+        el('button', { class: 'tbtn', text: '전체 복사', onclick: () => { copyText(text, false, true); } }),
+        el('button', { class: 'tbtn', text: '닫기', onclick: () => back.remove() })),
+      el('div', { class: 'copy-sheet-hint', text: '꾹 눌러 필요한 부분만 고르거나, 전체 복사를 누르세요.' }),
+      pre));
+  document.body.append(back);
+  try { pre.scrollTop = pre.scrollHeight; } catch (_) { /* noop */ }
+}
+function setupMobileDock(mainEl) {
+  if (!IS_MOBILE) return;
+  document.body.classList.add('mobile');
+  // 터치 버튼 공통 — touchstart/touchend 에서 preventDefault 해 **입력칸 포커스를 뺏지 않는다**(버튼 탭마다 키보드가
+  //  내려갔다 올라오면 못 쓴다). passive:false 를 명시해야 preventDefault 가 먹는다. 클릭은 키보드 접근(detail 0)만 처리.
+  const tbtn = (label, title, act, onStart?) => {
+    const b = el('button', { class: 'mkey', type: 'button', title: title || label, text: label });
+    b.addEventListener(onStart ? 'touchstart' : 'touchend', (e) => { e.preventDefault(); act(); }, { passive: false });
+    b.addEventListener('click', (e) => { if (e.detail === 0) act(); });
+    return b;
+  };
+  const key = (label, seq, title?) => tbtn(label, title, () => { userTyped = true; sendInput(typeof seq === 'function' ? seq() : seq); }, true);
+  const keys = el('div', { class: 'mkeys' },
+    key('Esc', '\x1b'), key('Tab', '\t'),
+    key('↑', () => arrowSeq('A')), key('↓', () => arrowSeq('B')), key('←', () => arrowSeq('D')), key('→', () => arrowSeq('C')),
+    key('^C', '\x03', 'Ctrl+C — 중단'), key('⏎', '\r', 'Enter 만 보내기'),
+    tbtn('⧉ 복사', '화면 글자 고르기·복사', openCopySheet),
+    tbtn('⎘ 붙여넣기', '클립보드 내용을 입력칸에', mobilePasteIn));
+  mcompEl = el('textarea', { class: 'mcomp', rows: '1', placeholder: '여기에 쓰고 보내기 — 꾹 눌러 복사·붙여넣기',
+    autocapitalize: 'off', autocomplete: 'off', autocorrect: 'off', spellcheck: 'false', enterkeyhint: 'send', 'aria-label': '터미널에 보낼 글' });
+  const sendBtn = tbtn('보내기', '보내기(Enter)', mobileSend);
+  sendBtn.className = 'msend';
+  mcompEl.addEventListener('input', mobileGrow);
+  mcompEl.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;                 // 한글 조합 중 Enter 는 확정이지 전송이 아니다
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); mobileSend(); }
+  });
+  // 입력칸 포커스 때 iOS 가 페이지를 스크롤해 화면을 밀어 올린다 — 되돌린다(뷰포트 맞춤이 높이를 이미 키보드 위로 잡는다).
+  mcompEl.addEventListener('focus', () => { setTimeout(() => { try { window.scrollTo(0, 0); } catch (_) { /* noop */ } }, 50); });
+  mdockEl = el('div', { id: 'mdock' }, keys, el('div', { class: 'mrow' }, mcompEl, sendBtn));
+  mainEl.append(mdockEl);
+  applyMobileDock();
+}
+function mobilePasteIn() {
+  if (!(navigator.clipboard && navigator.clipboard.readText)) { toast('브라우저가 붙여넣기 읽기를 막았어요 — 입력칸을 꾹 눌러 붙여넣으세요.', true); return; }
+  navigator.clipboard.readText().then((t) => {
+    if (!mcompEl) return;
+    const v = mcompEl.value; const st = mcompEl.selectionStart ?? v.length;
+    mcompEl.value = v.slice(0, st) + t + v.slice(mcompEl.selectionEnd ?? v.length);
+    mobileGrow(); mcompEl.focus();
+  }).catch(() => toast('붙여넣기를 못 읽었어요 — 입력칸을 꾹 눌러 붙여넣으세요.', true));
+}
+function applyMobileDock() {
+  const on = mobileDockOn();
+  if (mdockEl) mdockEl.hidden = !on;
+  setTermTextareaReadonly(on);
+  doResize();
+}
+// 소프트 키보드가 뜨면 보이는 영역(visualViewport)만 줄어들고 100vh 는 그대로라 터미널 아랫부분이 키보드 뒤로 숨는다.
+//  보이는 높이에 맞춰 셸을 잡고 다시 fit — 입력칸이 키보드 바로 위에 온다. offsetTop 은 iOS 가 페이지를 밀어 올린 만큼.
+function setupViewportFit() {
+  const vv = window.visualViewport;
+  if (!vv || !IS_MOBILE) return;
+  const ws = document.getElementById('ws');
+  const apply = () => {
+    if (!ws) return;
+    ws.style.height = Math.round(vv.height) + 'px';
+    ws.style.transform = vv.offsetTop ? 'translateY(' + Math.round(vv.offsetTop) + 'px)' : '';
+    doResize();
+  };
+  vv.addEventListener('resize', apply);
+  vv.addEventListener('scroll', apply);
+  apply();
+}
+
 function setActive(id) {
   activeId = id;
   for (const t of tabs) t.pane.classList.toggle('active', t.id === id);
@@ -1742,9 +1882,10 @@ function openSettings() {
   const cursorSel = el('select', {}, ...['bar', 'block', 'underline'].map((c) => el('option', { value: c, selected: c === p.cursorStyle ? '' : null }, c)));
   const speedI = el('input', { type: 'number', min: '1', max: '12', step: '1', value: String(p.scrollSpeed || 3) });
   const gainI = el('input', { type: 'number', min: '0.5', max: '6', step: '0.5', value: String(p.padGain || 3) });
+  const dockI = el('input', { type: 'checkbox', checked: p.mobileDock !== false ? '' : null, style: 'width:auto' });
   let curFamily = p.fontFamily;
   const apply = () => {
-    const np = { fontFamily: fontSel.value, fontSize: Number(sizeI.value) || 14, theme: themeSel.value, cursorStyle: cursorSel.value, scrollSpeed: Math.max(1, Math.min(12, Number(speedI.value) || 1)), padGain: Math.max(0.5, Math.min(6, Number(gainI.value) || 3)) };
+    const np = { fontFamily: fontSel.value, fontSize: Number(sizeI.value) || 14, theme: themeSel.value, cursorStyle: cursorSel.value, scrollSpeed: Math.max(1, Math.min(12, Number(speedI.value) || 1)), padGain: Math.max(0.5, Math.min(6, Number(gainI.value) || 3)), mobileDock: !!dockI.checked };
     term.options.fontFamily = np.fontFamily; term.options.fontSize = np.fontSize; term.options.cursorStyle = np.cursorStyle;
     term.options.theme = resolveTheme(np.theme);
     scrollSpeed = np.scrollSpeed; padGain = np.padGain;
@@ -1756,6 +1897,7 @@ function openSettings() {
   sizeI.addEventListener('input', apply);
   speedI.addEventListener('input', apply);
   gainI.addEventListener('input', apply);
+  dockI.addEventListener('change', () => { apply(); applyMobileDock(); });
   const back = el('div', { class: 'pop-back', onclick: (e) => { if (e.target === back) back.remove(); } },
     el('div', { class: 'pop' }, el('h3', { text: '환경 설정' }),
       el('div', { class: 'field' }, el('label', { text: '폰트' }), fontSel),
@@ -1764,6 +1906,7 @@ function openSettings() {
       el('div', { class: 'field' }, el('label', { text: '커서' }), cursorSel),
       el('div', { class: 'field' }, el('label', { text: '마우스 휠 속도 (1~12)' }), speedI),
       el('div', { class: 'field' }, el('label', { text: '트랙패드 속도 (1 = 손가락 이동만큼)' }), gainI),
+      IS_MOBILE ? el('div', { class: 'field field-row' }, dockI, el('label', { text: '모바일 입력 바 — 아래 입력칸에서 쓰고 보내기(끄면 터미널에 직접 타이핑, 한글이 깨질 수 있어요)' })) : null,
       el('button', { class: 'tbtn pop-close', text: '닫기', onclick: () => back.remove() })));
   document.addEventListener('keydown', function esc(ev) { if (ev.key === 'Escape') { back.remove(); document.removeEventListener('keydown', esc); } });
   document.body.append(back);
@@ -2046,6 +2189,7 @@ async function loadSessionMeta() {
   if (data) setProjectLink(Number(data.projectId) || 0);
   sessionProjectId = (data && Number(data.projectId)) || 0;
   showDropHint(); // 메타를 받은 뒤에 띄운다 — 업로드 위치 문구가 프로젝트/개인 세션에 따라 갈리므로(#1235)
+  return data;    // #1820 — 부팅이 이 값으로 '붙기 전에 되살릴까'를 판정한다(maybeRestoreOnOpen).
 }
 
 // ── 세션 화면과의 다리(#1744 ?embed=1) ────────────────────────────────────────────────
@@ -2127,7 +2271,9 @@ export async function boot() {
   if (!EMBED) setupDnd();
   setupTermDrop();
   if (EMBED) setupEmbedBridge();
-  loadSessionMeta();
+  // #1820 — 메타는 어차피 제목·프로젝트 링크 때문에 받는다. 그 값으로 **붙기 전에** '되살릴 세션인가'를 판정한다
+  //  (아래 connectNow 직전에서 await). 여기서 await 하지 않는 이유: 화면 구성·폰트 로드를 1 RTT 만큼 늦추지 않으려고.
+  const metaAtBoot = loadSessionMeta();
 
   // 이름 라이브 반영 — 다른 탭(프로젝트/세션 매니저)에서 이름을 바꾸면 같은 브라우저 안에선 즉시 받는다.
   try {
@@ -2224,6 +2370,8 @@ export async function boot() {
   setupPaste();
   setupWheel();
   setupTouch();           // 모바일 터치 스와이프 스크롤(#585)
+  setupMobileDock(main);  // 모바일 입력 바 — 보이는 입력칸에서 네이티브 IME 로 쓰고 한 번에 보낸다(#1719 폰 자모 분해·중복·복붙 불가)
+  setupViewportFit();     // 소프트 키보드가 뜨면 보이는 높이에 맞춰 다시 fit
   setupOscClipboard();    // 앱 OSC52 복사 신호 → 맥북 클립보드에 조용히 씀 (#972 · #252 방식 복원, 배너 없음)
   setupTextareaHygiene(); // 히든 textarea 잔류물 유휴 청소 — '키만 눌러도 특정 문자열 입력' 근본 차단(#1117 버그A)
   setupImeTrace();        // 조합 이벤트·전송 바이트 트레이스 — 사파리 한글 깨짐(선재 버그) 규명용(#1117)
@@ -2250,7 +2398,62 @@ export async function boot() {
   // 다른 브라우저 창에서 이 창으로 전환(같은 창 탭전환은 visibilitychange, 창 전환은 focus)될 때도 동일하게 크기 재요구.
   window.addEventListener('focus', () => { if (ws && ws.readyState === 1) forceRedraw(); });
 
+  // ★ #1820 — 붙기 전에 '이 세션이 지금 살아 있나'를 본다. 되살릴 세션이면 WS 를 아예 안 붙이고 복원으로 간다.
+  if (await maybeRestoreOnOpen(await metaAtBoot)) return;
   connectNow();
+}
+
+// 페이지가 뜰 때의 복원 게이트 (#1820) — WS 를 붙이기 **전에** 판정한다. 반환 true = 복원 경로로 넘어갔다(연결 안 함).
+//  왜 4410 을 기다리지 않나: ① 없는 세션에 붙는 왕복(티켓 발급 → WS 핸드셰이크 → tmux 확답)이 통째로 낭비고
+//   ② 그 사이 '연결 중…' → '연결 실패' 가 번쩍여 사용자는 그걸 **오류**로 읽는다("열었더니 세션이 안 뜨고
+//   오류가 난다" — #1820 신고 문구 그대로다). 메타는 어차피 제목 때문에 받으므로 추가 요청이 없다.
+//  4410 뒤의 onSessionGone 은 그대로 남는다 — 붙어 있다가 죽는 경우(재부팅·회수)는 여기서 못 잡는다.
+async function maybeRestoreOnOpen(meta) {
+  if (!meta || !meta.restorable) return false;          // 살아 있다(또는 판정 근거 없음) — 종전대로 붙는다
+  restoreTried = true;                                  // 이 화면의 복원 시도는 여기서 소진(4410 경로와 이중 실행 금지)
+  // 방금 연 화면이라 '이 탭에서 조작함'(typed)은 언제나 false 다 — 그래서 판정표의 ask 행은 여기서 나오지 않는다.
+  const mode = goneMode(meta, !!NODE_ID, RESTORED, false);
+  if (mode === 'notowner') {
+    endSession({ info: true, icon: '↻', title: '이 세션은 멈춰 있습니다.',
+      body: '이어서 여는 건 세션을 만든 사람만 할 수 있어요. 아래 마지막 화면은 그대로 읽고 복사할 수 있습니다.' });
+    return true;
+  }
+  if (mode === 'loop') {
+    endSession({ info: true, icon: '↻', title: '이어서 열었지만 세션이 곧 다시 종료됐어요.',
+      body: '이어받을 대화를 찾지 못했을 수 있어요(예: 그 대화 기록이 이 폴더에 없음). 아래 버튼으로 다시 시도하면 대화 목록에서 직접 고를 수 있습니다.',
+      restoreBtn: true, restoreLabel: '대화 목록에서 고르기' });
+    return true;
+  }
+  if (mode !== 'auto') return false;                    // 'end'·'ask' — 여기서 날 수 없는 값. 나면 종전 경로로.
+  if (handOffToShell(meta)) return true;
+  startRestore(meta);
+  return true;
+}
+/**
+ * 세션 화면(v2) 안의 프레임이면 **복원을 부모(셸)에게 넘긴다**. 반환 true = 넘겼다.
+ *
+ * 여기서 되살려 location 을 갈아타면 셸 주소(#/s/<옛 id>)·탭 제목·사이드바는 옛 세션 그대로인데 **프레임만
+ *  새 세션**인 어긋난 화면이 된다 — #1808 에서 실제로 났던 사고다. 셸이 받으면 주소까지 함께 옮긴다.
+ *  부모가 없거나(직접 embed URL로 열었거나) 안 듣더라도 사용자는 배너의 버튼으로 직접 되살릴 수 있다.
+ */
+function handOffToShell(meta) {
+  if (!(EMBED && window.parent !== window)) return false;
+  try {
+    window.parent.postMessage({ type: 'lively-term-gone', id: SESSION_ID, restorable: true, canRestore: !!(meta && meta.canRestore) }, location.origin);
+  } catch (_) { /* 부모가 없거나 닫혔다 */ }
+  sessionEnded = true;
+  showEndedBar({ info: true, icon: '↻', title: '멈춰 있는 세션이에요.', body: '이어서 열고 있습니다 — 잠시만요.', restoreBtn: true, restoreLabel: '여기서 이어서 열기' });
+  return true;
+}
+/** 이 화면에서 복원을 실행한다 — 진행 배너를 띄우고 재연결 스케줄러를 세운 뒤 POST /restore. */
+function startRestore(meta) {
+  // ⚠ sessionEnded 를 먼저 세운다 — ws.close() 의 onclose 가 재연결 스케줄러를 깨우면 복원 중에 죽은 id 로
+  //  계속 재접속을 시도한다(scheduleReconnect 의 유일한 정지 조건이 이 플래그).
+  sessionEnded = true;
+  try { term.options.disableStdin = true; term.blur(); } catch (_) { /* noop */ }
+  try { statusEl.textContent = '이어서 여는 중…'; statusEl.className = 'status'; } catch (_) { /* noop */ }
+  showRestoringBanner(meta);
+  restoreThisSession();
 }
 
 // 게이트웨이 재배포 등으로 끊겨도 tmux 세션은 살아있다 → 자동 재연결(티켓 재발급 후 같은 세션 재attach).
@@ -2372,34 +2575,30 @@ function showEndedBar(o) {
   main.insertBefore(bar, panesEl);
 }
 
-// ── #1059 E — 이 화면에서의 lazy 복원 ──
-// 4410(세션 종료 확정) 을 받으면, 그 세션이 '복원 가능'(desired-state 가 DB 에 남음)인지 서버에 묻고 되살린다.
-//  종전엔 복원 경로가 목록 화면의 [복원] 버튼뿐이라, 세션 링크로 바로 들어온 사람은 종료 배너만 보고 목록으로
-//  되돌아가야 했다. E 의 설계는 원래 '부팅 시 전부 자동 spawn 하지 않고 열 때 resume' 이고, 이 화면이 그 '열 때'다.
-//  자동 복원은 **중단된 세션(재부팅·자동회수)만** — 내가 /exit 로 끝낸 세션(exitedByUser)은 되살아나는 게 의도와
-//  어긋나므로 버튼으로 둔다. 노드 세션도 같다 — #1791 뒤 노드 세션에도 중앙 desired-state(node_id)가 있어 서버가 그 노드에
-//  create 를 다시 릴레이한다(종전 '노드는 복원 대상 아님'은 desired-state 가 없던 시절의 규칙).
-// 4410 뒤 무엇을 할지 — 순수 판정(scripts/terminal-restore-gate.test.mjs 가 이 표를 지킨다).
-//  'end'=종료 배너(종전 동작) · 'notowner'=중단됐지만 남의 세션 · 'ask'=버튼으로 물어봄 · 'auto'=자동 복원.
+// ── #1059 E / #1820 — 이 화면에서의 lazy 복원 ──
+// **세션을 여는 것은 "이걸 쓰겠다"는 의사표시다** — 되살릴 수 있으면 되살린다. 이 페이지는 세션으로 가는 모든 길의
+//  도착지(단독 탭·그리드 셀·세션 화면 프레임이 전부 여기다)이므로, 복원을 여기서 보장하면 **트리거가 몇 개든**
+//  누락이 없다. 트리거마다 복원을 넣는 방식은 새 화면이 생길 때마다 빠졌다(#1820 전수조사: 활동 로그·프로젝트
+//  상세·질문 검색·그리드·하단바 '열기'가 전부 그냥 링크만 열고 있었다).
+// 언제 판정하나 — 두 시점이 같은 표를 쓴다: ① 페이지가 뜰 때(메타가 restorable 이라고 하면 WS 를 붙이기 전에)
+//  ② 붙어 있다가 4410(세션 종료 확정)을 받았을 때. 순수 판정(scripts/terminal-restore-gate.test.mjs 가 표를 지킨다).
+//  'end'=종료 배너(되살릴 근거 없음) · 'notowner'=중단됐지만 남의 세션 · 'ask'=버튼으로 물어봄 · 'auto'=자동 복원 · 'loop'=재복원 차단.
 export function goneMode(meta, isNode, alreadyRestored, typed) {
   // #1791 — 노드 세션도 중앙 desired-state(node_id)를 가진다. 판정표는 박스와 같다 — 메타(GET …?node=)가 복원 가능이라 하면
   //  같은 길로 간다(복원 자체는 서버가 그 노드에 create 를 릴레이). isNode 는 호환용 인자로 남긴다(판정에 안 쓴다).
   void isNode;
   if (!meta || !meta.restorable) return 'end';    // 기록이 없거나 남의 세션(403) — 진짜 끝난 세션
   if (!meta.canRestore) return 'notowner';        // 프로젝트 세션이라 보이지만 복원은 소유자 몫
-  // 내가 끝냈다는 신호가 있으면 되살리지 않고 **묻는다**. 신호는 두 갈래 — 훅 기록(exitedByUser) 또는 이 탭의 입력.
-  //  ⚠ exitedByUser 를 loop 보다 앞세운다: 복원해서 쓰다가 또 exit 한 경우까지 loop 로 잡으면 '대화를 못 찾았다'는
-  //   엉뚱한 설명이 뜬다(2026-07-28 실측 신고).
-  if (meta.exitedByUser || typed) return 'ask';
-  // claude 가 아닌 세션은 **자동** 복원하지 않는다(사용자가 버튼을 누르면 복원되고, 그때는 대화도 이어받는다).
-  //  ⚠ #1711 근거 갱신: 종전 근거 ①"이어받을 대화가 없어 복원의 이득이 없다(--resume 무의미)"는 **더 이상 참이
-  //   아니다** — 카탈로그 resumeArgv 로 codex·opencode·antigravity 도 각자 수단으로 그 대화를 이어받는다.
-  //   남은 진짜 이유는 ②다: '사용자가 직접 exit 했다'(exitedByUser)를 채우려면 SessionEnd 등가 이벤트가 필요한데
-  //   그게 없는 하네스가 있다(antigravity 훅은 5이벤트뿐 — SessionEnd 등가물 없음, #1689 실측). 그 신호 없이
-  //   자동 복원하면 사용자가 끝낸 세션을 되살려 exit 가 안 먹히는 UX 가 된다(실측 신고: 셸에서 exit → 자동 복원 → 루프).
-  if (meta.harness && meta.harness !== 'claude') return 'ask';
+  // ★ 유일한 '되살리지 않음' 신호는 **이 탭에서 사용자가 조작했다**(typed)는 것이다. 그건 '여는 중'이 아니라
+  //  '쓰던 중'이고, exit·Ctrl-D·kill 은 전부 입력을 수반하므로 "내가 방금 끝냈다"를 정확히 가른다.
+  //  ⚠ #1820 에서 좁혔다 — 종전엔 `meta.exitedByUser`(훅이 기록한 **과거의** /exit)와 `harness !== 'claude'` 도
+  //   ask 였다. 그 둘이 실측 세션의 대부분이라(dev: 복원 가능 198건 중 다수) "열었는데 아무 일도 안 난다"가
+  //   기본 경험이 됐다(상민님 신고). 과거에 exit 했다는 사실은 **지금 그 세션을 열었다**를 이기지 못한다 —
+  //   목록에서 골라 연 사람은 그걸 쓰려는 것이다. 셸에서 exit → 자동 복원 루프(2026-07-28 신고)는 같은 탭의
+  //   일이라 typed 가 잡고, 복원된 세션이 즉시 또 죽는 경우는 아래 loop 가 잡는다. 두 안전장치는 그대로다.
+  if (typed) return 'ask';
   if (alreadyRestored) return 'loop';             // 복원으로 열린 세션이 사용자 의도 없이 또 끊겼다 — 루프 차단
-  return 'auto';                                  // 중단됨(재부팅·자동회수)인 claude 세션 = 자동 복원의 정확한 타깃
+  return 'auto';
 }
 let restoreTried = false;
 // 이 탭에서 사용자가 키를 눌렀나 — 자동 복원 금지의 **1차 신호**. 훅 기록(exited_at)은 claude 세션에만 있고
@@ -2429,34 +2628,27 @@ async function onSessionGone() {
     return;
   }
   if (mode === 'ask') {
-    // 같은 'ask' 라도 왜 멈췄는지가 다르다 — 사유를 정확히 말한다(틀린 설명이 오해를 만든다).
-    // #1711 — '이어받을 대화가 없다'는 **셸에만** 참이다. 종전엔 claude 가 아니면 전부 이 문구를 써서,
-    //  codex·opencode·antigravity 세션에 "이어받을 대화가 없는 세션이에요"라고 **되는 기능을 없다고** 말했다
-    //  (2026-08-14 상민님 신고: antigravity 세션을 exit 하고 이어 열면 대화가 안 이어진다 — 서버 하드코딩과
-    //  이 문구가 같은 오해의 양면이었다).
-    const noResume = meta.harness === 'shell';
-    endSession(noResume
-      ? { info: true, title: '이 세션은 종료되었습니다.',
-          body: '이어받을 대화가 없는 세션(셸)이에요. 같은 폴더·설정으로 다시 열 수 있습니다.',
-          restoreBtn: true, restoreLabel: '다시 열기' }
-      : meta.exitedByUser
-      ? { info: true, title: '이 세션은 종료되었습니다.',
-          body: '직접 종료(exit)한 세션이에요. 그때 대화를 이어서 다시 열 수 있습니다.', restoreBtn: true }
-      : { info: true, title: '이 세션이 방금 끝났습니다.',
-          body: '이 탭에서 조작한 뒤 끝났어요 — 직접 종료한 것이면 그대로 두시면 됩니다. 아니라면 대화를 이어서 다시 열 수 있습니다.',
-          restoreBtn: true });
+    // #1820 — ask 는 이제 **한 가지 상황**뿐이다: 이 탭에서 조작한 뒤 끝났다(typed). 종전엔 '과거에 exit 했음'과
+    //  '셸·코덱스 하네스'도 여기로 왔는데, 그건 '여는 것'이지 '끝낸 것'이 아니라 auto 로 넘겼다(위 goneMode).
+    //  직접 exit 한 것까지 되살리면 exit 가 안 먹히는 UX 가 되므로 이 자리만 남긴다.
+    endSession({ info: true, title: '이 세션이 방금 끝났습니다.',
+      body: '이 탭에서 조작한 뒤 끝났어요 — 직접 종료한 것이면 그대로 두시면 됩니다. 아니라면 대화를 이어서 다시 열 수 있습니다.',
+      restoreBtn: true });
     return;
   }
-  // 중단됨(재부팅·자동회수) — 자동 복원. 진행 상태를 배너로 알린다(조용히 새 세션으로 바뀌면 무슨 일이 났는지 모른다).
-  //  ⚠ sessionEnded 를 먼저 세운다 — 아래 ws.close() 의 onclose 가 재연결 스케줄러를 깨우면 복원 중에 죽은 id 로
-  //   계속 재접속을 시도한다(scheduleReconnect 의 유일한 정지 조건이 이 플래그). 복원되면 새 주소로 갈아타므로
-  //   이 화면이 다시 붙을 일은 없다.
-  sessionEnded = true;
-  try { term.options.disableStdin = true; term.blur(); } catch (_) { /* noop */ }
-  try { statusEl.textContent = '이어서 여는 중…'; statusEl.className = 'status'; } catch (_) { /* noop */ }
-  showEndedBar({ info: true, icon: '↻', title: '중단된 세션을 이어서 여는 중…',
-    body: '재부팅이나 자동 회수로 멈춘 세션이에요. 같은 폴더·설정으로 다시 열고 대화를 이어받습니다.' });
-  restoreThisSession();
+  // 자동 복원 — 진행 상태를 배너로 알린다(조용히 새 세션으로 바뀌면 무슨 일이 났는지 모른다).
+  //  ⚠ #1820 — 보던 중에 죽은 경우도 **세션 화면 안 프레임이면 셸에 넘긴다**. 부팅 게이트에만 넣으면
+  //   '열 때'는 멀쩡한데 '보다가 죽을 때'만 프레임이 몰래 갈아타는 어긋남이 남는다(#1808 과 같은 사고).
+  if (handOffToShell(meta)) return;
+  startRestore(meta);
+}
+// 복원 중 배너 — 페이지가 뜰 때(선제)와 4410 뒤(사후)가 같은 말을 하도록 한 곳에 둔다.
+function showRestoringBanner(meta) {
+  const why = meta && meta.exitedByUser ? '직접 종료했던 세션이에요.'
+    : meta && meta.oomKilled ? '메모리가 모자라 멈췄던 세션이에요.'
+    : '재부팅이나 자동 회수로 멈춰 있던 세션이에요.';
+  showEndedBar({ info: true, icon: '↻', title: '세션을 이어서 여는 중…',
+    body: why + ' 같은 폴더·설정으로 다시 열고 대화를 이어받습니다.' });
 }
 // 복원 실행 — 목록 카드 [복원] 과 같은 엔드포인트. 새 세션은 새 id 를 받으므로 그 주소로 갈아탄다(현재 URL 은 죽은 id).
 async function restoreThisSession() {

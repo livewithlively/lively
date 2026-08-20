@@ -87,7 +87,7 @@
 .pjv-col-draggable:active { cursor: grabbing; }
 .pjv-col-drag-src { opacity: .45; }
 .pjv-col-drop-before::after, .pjv-col-drop-after::after {
-  content: ''; position: absolute; top: 2px; bottom: 2px; width: 2px; background: var(--blue);
+  content: ''; position: absolute; top: 2px; bottom: 2px; width: 2px; background: var(--blue-fill);
   border-radius: 2px; box-shadow: 0 0 0 1px rgba(45,107,240,.25); pointer-events: none; z-index: 2; }
 .pjv-col-drop-before::after { left: -1px; }
 .pjv-col-drop-after::after { right: -1px; }

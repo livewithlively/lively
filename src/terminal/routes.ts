@@ -35,8 +35,9 @@ import { registerNodeRoutes } from "../node/routes.js";
 import { registerSessionChatRoutes } from "./chat-routes.js";   // #1719 — 세션 대화창(트랜스크립트 창 읽기·Enter/Esc)
 import { mirrorNodeSession, decorateNodeRows } from "./node-session-state.js";   // #1791 — 노드 세션 desired-state(정본 = DB, 게이트웨이가 쓴다)
 import { claudeSessionIdsFor, setNodeSessionMap, nodeSessionMapFor } from "../sessions/session-state.js";   // #1719 라이브 행에 대화 uuid · #1752 노드 세션 매핑
-import { chatIoCaps } from "./harness-io/adapter.js";                 // #1746 — 행에 대화창 능력(읽기·승인)
+import { chatIoCaps, harnessIo } from "./harness-io/adapter.js";                 // #1746 — 행에 대화창 능력(읽기·승인)
 import { getOpt } from "./tmux-exec.js";                             // #1758 — 세션 하네스 폴백(@box_harness)
+import { deadSessionMeta } from "./session-meta.js";                 // #1820 — 죽은 세션이 '복원 가능'을 말하는 단일 판정
 
 /** #1683 — 요청을 보낸 화면의 테마(해석된 dark|light). 헤더가 정본이고 바디는 폴백, 그 외엔 미지정(종전 동작). */
 function themeOf(req: { headers: Record<string, unknown> }, b: Record<string, unknown>): "dark" | "light" | undefined {
@@ -317,56 +318,48 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   //  접근통제: canAttach(소유자·초대된 멤버, 프로젝트 세션은 전원 #452) — 입장 가능한 사람만 이름을 읽는다.
   app.get("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
     const uid = idOf(userOf(req));
+    const isAdmin = !!userOf(req).scopes?.includes("admin");
+    const id = req.params.id;
     res.setHeader("Cache-Control", "no-store");
     // 노드 세션(#869) — 마지막 상태 스냅샷에서 가시성 판정 후 라벨 반환(노드 오프라인이어도 표시 가능).
     const nodeId = String(req.query.node ?? "").trim();
     if (nodeId) {
-      const s = nodeSessionsFor(uid).find((x) => x.node.id === nodeId && x.id === req.params.id);
+      const s = nodeSessionsFor(uid).find((x) => x.node.id === nodeId && x.id === id);
       if (s) { res.json({ id: s.id, label: s.label, projectId: s.projectId || 0 }); return; }
       // #1791 — 스냅샷에 없다 = 그 노드에서 죽었다(또는 노드가 스냅샷을 아직 안 올렸다). 아래 desired-state 경로로 떨어져
       //  '복원 가능'을 알린다(종전엔 여기서 403 — 노드 세션은 desired-state 가 없어 알릴 것이 없었다).
     }
+    // 복원 판정에 쓸 desired-state 는 한 번만 읽어 아래 세 갈래(노드·박스 사망·권한없음)가 나눠 쓴다.
+    const st = await getSessionState(id);
     // #1791 — 노드 세션의 desired-state(node_id) — 라이브 스냅샷에 없으면 죽은 것이다. 게이트웨이 tmux 를 묻지 않는다
     //  (그 id 는 여기 tmux 에 없고, canAttach 가 DB owner 로 통과해 빈 라벨을 돌려주는 오답을 막는다).
-    {
-      const st = await getSessionState(req.params.id);
-      if (st?.node_id) {
-        const mine = st.owner === uid || !!userOf(req).scopes?.includes("admin");
-        if (!(mine || (st.project_id ?? 0) > 0)) throw new HttpError(403, "세션에 접근할 수 없습니다");
-        const ln = liveNodes().find((n) => n.id === st.node_id);
-        res.json({
-          id: req.params.id, label: st.label || req.params.id, projectId: st.project_id || 0,
-          restorable: true, canRestore: mine, exitedByUser: !!st.exited_at,
-          oomKilled: !st.exited_at && st.exit_reason === "oom",
-          harness: st.harness || "shell",
-          node: { id: st.node_id, name: ln?.name || st.node_id, online: !!ln?.online },
-        });
-        return;
-      }
+    if (st?.node_id) {
+      const dead = deadSessionMeta(id, st, uid, isAdmin);
+      if (dead.kind !== "ok") throw new HttpError(403, "세션에 접근할 수 없습니다");
+      const ln = liveNodes().find((n) => n.id === st.node_id);
+      res.json({ ...dead.body, node: { id: st.node_id, name: ln?.name || st.node_id, online: !!ln?.online } });
+      return;
     }
-    if (!(await canAttach(req.params.id, uid))) {
+    // ★ #1820 — 박스 세션이 tmux 에 없으면 **여기서** '복원 가능'을 알린다. canAttach 뒤로 미루면 안 된다:
+    //  ownerMeta 가 desired(DB) 우선이 되면서(#109 3be85ae, 2026-08-14) **죽은 세션도 canAttach 를 통과**해
+    //  아래 라벨 조회(tmux)로 흘렀고, 그 결과 `{label:"", projectId:0}` 만 나가 restorable 신호가 통째로 빠졌다.
+    //  화면은 그걸 '그냥 끝난 세션'으로 읽어(goneMode 'end') **모든 진입점에서 복원이 죽었다**(실측 dev 2026-08-20:
+    //  내 세션 219건 중 198건이 이 상태 — 세션을 여는 일의 대부분이 막다른 길이었다).
+    //  ⚠ sessionGone 은 tmux 가 "그런 세션 없다"고 **확답**할 때만 true 다(소켓 불통·타임아웃은 false) — 모르면
+    //   종전 경로로 흘러 살아 있는 세션을 죽었다고 오판하지 않는다(#835 '확답 only').
+    if (await sessionGone(id)) {
+      const dead = deadSessionMeta(id, st, uid, isAdmin);
+      if (dead.kind === "ok") { res.json(dead.body); return; }
+      if (dead.kind === "forbidden") throw new HttpError(403, "세션에 접근할 수 없습니다");
+      // kind === "none" — 되살릴 근거(desired-state)가 없는 진짜 끝난 세션. 종전 흐름이 답한다.
+    }
+    if (!(await canAttach(id, uid))) {
       // #1059 E — tmux 에 없어도(재부팅·회수·정상종료) desired-state 가 남아 있으면 '복원 가능'으로 알린다.
-      //  canAttach 는 tmux 메타(ownerMeta)에 기대므로 죽은 세션은 무조건 false 라, 종전엔 세션 링크로 바로 들어온
-      //  사람이 라벨조차 못 받고 '종료됨' 배너로 끝났다 — 그 자리에서 복원할 길이 없었다(E 의 '열 때 lazy resume'
-      //  이 목록 카드의 [복원] 버튼에만 붙어 있던 갭). 터미널 페이지가 이 신호로 자동 복원한다.
+      //  위 게이트가 tmux 확답을 못 받았을 때의 폴백이다(공유 게이트웨이가 그 세션의 tmux 서버 문맥 밖에 있는 경우 등).
       //  노출 범위는 복원 권한과 같게: 소유자·admin 만 desired-state 를 보고 되살릴 수 있고(canRestore),
       //  프로젝트 세션은 #452 로 전원 공개라 라벨까지는 보이되 복원은 소유자 몫으로 둔다.
-      const st = await getSessionState(req.params.id);
-      const mine = !!st && (st.owner === uid || !!userOf(req).scopes?.includes("admin"));
-      if (st && (mine || (st.project_id ?? 0) > 0)) {
-        res.json({
-          id: req.params.id, label: st.label || req.params.id, projectId: st.project_id || 0,
-          restorable: true, canRestore: mine, exitedByUser: !!st.exited_at,
-          // #1251 — 딥링크로 바로 들어온 경우에도 왜 사라졌는지 알 수 있게(사용자 종료가 있으면 그쪽이 이긴다).
-          oomKilled: !st.exited_at && st.exit_reason === "oom",
-          // harness 를 실어 준다 — 프론트가 **자동 복원 여부**를 여기서 가른다. claude 가 아닌 세션(셸·코덱스)은
-          //  ① 이어받을 대화가 없어 복원의 이득이 없고 ② claude 훅이 없어 `exited_at`(사용자가 끝냈다)을 원리적으로
-          //  기록할 수 없다 → 자동 복원하면 셸에서 `exit` 한 것을 무조건 되살려 **exit 가 안 먹히는** UX 가 된다
-          //  (2026-07-28 실측 신고: 셸에서 exit 했는데 자동 복원됨. 그 세션의 exited_at·uuid 가 둘 다 null 인 게 증거).
-          harness: st.harness || "shell",
-        });
-        return;
-      }
+      const dead = deadSessionMeta(id, st, uid, isAdmin);
+      if (dead.kind === "ok") { res.json(dead.body); return; }
       throw new HttpError(403, "세션에 접근할 수 없습니다");
     }
     // 라벨 + 프로젝트 id 를 함께 반환 — 프로젝트 세션이면 프론트가 상단 '프로젝트 페이지 열기' 버튼을 켠다(개인 세션은 0 → 숨김).
@@ -546,6 +539,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
       theme: themeOf(req, b),
       sessionDir: b.sessionDir === true,
       initialPrompt: typeof b.initialPrompt === "string" && b.initialPrompt.trim() ? b.initialPrompt.slice(0, 20_000) : undefined,
+      // #1780 D4 — 앱 세션. appId 를 주면 createSession 이 grant 검사·앱 토큰 발급·세션폴더 앱 홈/자산 물질화를 한다
+      //  (없으면 일반 세션, 종전 경로 무변경). 존재·활성·grant 검증은 createSession(mintAppToken)이 하고 404/409/403 을 던진다.
+      appId: String(b.appId ?? "").trim() || undefined,
     };
     const nodeId = String(b.node ?? "").trim();
     res.setHeader("Cache-Control", "no-store");
@@ -589,6 +585,9 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
   }));
   app.delete("/api/ui/terminal/sessions/:id", auth, wrap(async (req, res) => {
     const nodeId = String(req.query.node ?? "").trim();
+    // 회수(보관) 여부는 **노드 분기보다 먼저** 읽는다 — 종전엔 아래(박스 분기)에서만 읽어, 노드 세션은
+    //  reclaim=1 을 줘도 desired-state 를 지워 '보관'이 곧 '완전 삭제'가 됐다(#1719 원준의 세션 보관함).
+    const reclaimQ = req.query.reclaim === "1" || req.query.reclaim === "true";
     // 맵 정리는 best-effort — 남은 행은 무해하다(세션 id 는 무작위라 재사용되지 않고, 죽은 세션은 참조되지 않는다).
     const forgetTenantMap = (): void => { void clearSessionWorkspace(req.params.id!).catch(() => { /* 비치명 */ }); };
     if (nodeId) {
@@ -621,8 +620,13 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
           }
         }
       }
-      // 노드가 꺼져 있으면 tmux 는 못 건드린다 — 사용자가 '복원 목록에서 지우기'를 눌렀으니 행은 지운다(그 노드에서 살아
-      //  있다면 다시 연결될 때 라이브로 보이고, 이후 죽으면 카드가 없다 — 사용자가 명시한 '복원 안 함' 그대로).
+      // 보관(reclaim=1)이면 **행을 남긴다** — tmux 만 내리고 좌표·대화 id 는 DB 에 그대로 두어 restorable 로 남는다.
+      //  복원 경로(POST …/restore)가 st.node_id 를 보고 그 노드에 다시 create 를 릴레이하므로 노드 세션도 되살아난다.
+      //  기본(완전 삭제)은 종전과 같다: 노드가 꺼져 있어 tmux 를 못 건드려도 사용자가 '복원 안 함'을 명시했으니 행은 지운다.
+      if (reclaimQ) {
+        res.json({ ok: true, reclaimed: true, killed });
+        return;
+      }
       await deleteSessionState(id).catch((e) => logger.warn({ err: e, id }, "노드 세션 desired-state 삭제 실패(비치명)"));
       forgetTenantMap();
       res.json({ ok: true, forgot: !killed });
@@ -631,7 +635,7 @@ function registerSessionCrudRoutes(app: express.Express, auth: express.RequestHa
     // #1059 F — 회수(reclaim=1): desired-state 를 보존해 restorable 로 남긴다(vs 기본 = 완전 삭제·복원 안 함).
     //  admin bypass 는 **회수에만** 허용한다(복원 가능한 안전 동작) — 남의 세션을 파괴적으로 삭제하는 건 admin 도 못 하고 소유자만.
     const u = userOf(req);
-    const reclaim = req.query.reclaim === "1" || req.query.reclaim === "true";
+    const reclaim = reclaimQ;
     // #1059 E — restorable(이미 tmux 에서 죽은) 세션의 '삭제' = desired-state 레코드 제거(복원 목록에서 지움).
     //  killSession 의 assertManage 는 tmux @box_owner 메타를 읽는데 세션이 gone 이면 그 메타가 없어 403 이 된다.
     //  그래서 gone + DB 레코드 존재 시엔 DB 레코드의 owner 로 권한을 확인하고 레코드만 지운다(멱등).
@@ -737,6 +741,10 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
       invites: st.invites, projectId: st.project_id || undefined,
       projectSrc: st.project_src === "org" ? "org" : "v6",
       readOnly: st.read_only, incognito: st.incognito,
+      // #1780 D3-4 — 앱 세션 복원은 **D4 전체를 재실행**한다: appId 를 넘기면 createSession 이 grant 재검사·앱 토큰
+      //  재발급·앱 홈/자산 재물질화를 다시 돈다(reaper 가 보존한 옛 토큰은 죽은 토큰이라 새 id 로 새로 굽는다).
+      //  app_id 는 일반 세션에선 null 이라 무회귀. grant 가 회수됐으면 여기서 403 = 복원 거부(설계 의도).
+      appId: st.app_id || undefined,
       // #1059 정밀 복원 — work-flag 훅이 보고한 claude UUID 가 있고 **그 대화 기록이 실제로 있으면** 그걸로 정확히
       //  이어받는다(--resume <uuid>). 없으면(셸·코덱스·미보고·기록 없음) 인자 없는 --resume(후보 picker)로 폴백한다.
       //  ⚠ 기록 확인이 필수다: 없는 UUID 로 resume 하면 claude 가 즉시 종료되고 box-spawn 이 exec 라 tmux 세션도
@@ -825,6 +833,24 @@ function registerRestoreReportRoutes(app: express.Express, auth: express.Request
     if (!uuid || uuid.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(uuid)) throw new HttpError(400, "uuid 형식 오류");
     const tp = typeof body.transcript_path === "string" ? body.transcript_path.trim() : "";
     const transcriptPath = tp && tp.length <= 1024 && !tp.includes("\0") && (tp.startsWith("/") || /^[A-Za-z]:[\\/]/.test(tp)) ? tp : null;
+    // ⚠ 소유자 불일치를 **200 으로 답하지 않는다**(2026-08-18 실측) — 훅은 응답 본문이 아니라 HTTP 상태(`r.ok`)로
+    //  성공을 판정해 dedup 플래그(`<box>.<uuid>.mapped`)를 쓴다. 그래서 종전의 `200 {ok:false}` 는 **거부를 성공으로
+    //  기록**해 그 세션을 영구 무매핑으로 굳혔다(재시도 없음 → 대화창이 영영 "기록 없음"). /active 와 동형으로 403.
+    //  레코드 없음은 여기서 안 막는다 — 그건 거부가 아니라 '박스 행이 없다'이고, 바로 아래 노드 경로가 받는다.
+    // 보고한 대화 id 와 대화 파일 경로가 **서로 어긋나면 받지 않는다**(2026-08-18 실측 — 이 자리를 통해 살아 있는
+    //  세션의 매핑이 `s7` 로 덮였다). 세션 안에서 도는 무엇이든 이 경로를 칠 수 있고 저장은 last-write-wins 라,
+    //  한 번의 엉뚱한 보고가 정본을 지운다. 두 값이 같은 대화를 가리키는지는 하네스를 몰라도 볼 수 있다 —
+    //  claude 는 `<uuid>.jsonl`, grok 은 `<convId>/updates.jsonl` 처럼 **id 가 경로 안에 들어 있다**.
+    //  경로를 안 보낸 구 훅은 종전대로 통과(무회귀) — 그건 어긋남이 아니라 '모름'이다.
+    if (transcriptPath && !transcriptPath.includes(uuid)) throw new HttpError(400, "대화 id 와 대화 파일 경로가 어긋납니다");
+    const st0 = await getSessionState(req.params.id);
+    //  경로를 안 보냈다면 대조할 짝이 없다 — 그 땐 **그 하네스의 대화 id 꼴**인지라도 본다(claude=UUID).
+    //  둘을 합치면 "짝이 맞거나, 아니면 규약에 맞거나" 여야 통과다. 규약을 모르는 하네스(convIdOk=null)는 종전대로.
+    if (!transcriptPath) {
+      const io0 = st0?.harness ? harnessIo(st0.harness) : null;   // 하네스를 모르면(미러 없음) 판단 보류
+      if (io0?.convIdOk && !io0.convIdOk(uuid)) throw new HttpError(400, `${io0.label} 의 대화 id 형식이 아닙니다`);
+    }
+    if (st0 && st0.owner !== idOf(userOf(req))) throw new HttpError(403, "이 세션의 소유자만 보고할 수 있습니다");
     let ok = await setClaudeSessionId(req.params.id, uuid, idOf(userOf(req)), transcriptPath);
     // #1752 갭2 — 노드 세션의 전용 매핑(org_node_session_map): 이 uuid 가 곧 중앙 세션 기록(session_log)의 키라, 매핑이 있어야
     //  채팅창이 노드 오프라인에도 기록을 읽는다. #1791 뒤 노드 세션도 org_session_state 행이 있어 위 UPDATE 가 성공하지만,
