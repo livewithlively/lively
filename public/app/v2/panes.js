@@ -98,6 +98,55 @@ export function mountPanes(host, opts) {
         catch (_) { /* noop */ }
     }
     saveLayout(); // loadLayout 의 교정(normalizeLayout)을 디스크에도 남긴다 — 갇힌 배치가 한 번 열고 끝나지 않게
+    // ── 어느 탭을 보고 있었나는 **세션마다** 기억한다(원준 2026-08-20) ─────────────────
+    //  칸에 무엇이 들어 있는지(탭의 종류)는 한 벌로 공유한다 — 프로젝트를 옮겨도 같은 도구 세트가 따라오는 게 맞고,
+    //  새 세션도 그 세트를 그대로 물려받는다. 하지만 **그중 무엇을 켜 두고 일하는가**는 세션마다 다르다:
+    //  이 세션은 웹을 띄워 두고, 저 세션은 타임라인을 본다. 그걸 매번 다시 고르게 하지 않는다.
+    //  기록은 이 브라우저에(칸 배치와 같은 급의 보기 취향), 세션 id 로 — 없으면 공용 기본값(lay.act)으로 떨어진다.
+    const ACT_KEY = 'pn_act_by_sess';
+    const actKey = () => String(opts.sessionId || ('p' + id));
+    function readActs() {
+        try {
+            const m = JSON.parse(localStorage.getItem(ACT_KEY) || '{}');
+            return m && typeof m === 'object' ? m : {};
+        }
+        catch (_) {
+            return {};
+        }
+    }
+    function saveAct(zone, type) {
+        if (loose)
+            return;
+        try {
+            const m = readActs();
+            const cur = { ...(m[actKey()] || {}) };
+            if (type)
+                cur[zone] = type;
+            else
+                delete cur[zone];
+            m[actKey()] = cur;
+            // 무한히 쌓이지 않게 — 오래된 것부터 접는다(브라우저 저장은 5MB 남짓이고, 세션은 수백 개가 된다).
+            const keys = Object.keys(m);
+            if (keys.length > 300)
+                for (const k of keys.slice(0, keys.length - 300))
+                    delete m[k];
+            localStorage.setItem(ACT_KEY, JSON.stringify(m));
+        }
+        catch (_) { /* noop */ }
+    }
+    /** 이 세션이 마지막으로 보던 탭을 되살린다 — 지금 칸에 실제로 들어 있는 것만(빠진 탭은 무시). */
+    (function applySessionAct() {
+        if (loose)
+            return;
+        const mine = readActs()[actKey()];
+        if (!mine)
+            return;
+        for (const z of ['main', 'side', 'bottom']) {
+            const t = mine[z];
+            if (t && lay[z].includes(t))
+                lay.act[z] = t;
+        }
+    })();
     const pj = () => (loose ? { id: 0, name: '프로젝트 없는 세션' } : (detail && detail.project) || { id, name: '프로젝트 #' + id });
     const ctx = {
         id,
@@ -175,6 +224,7 @@ export function mountPanes(host, opts) {
     function activate(zone, type) {
         lay.act[zone] = type;
         saveLayout();
+        saveAct(zone, type); // 이 세션이 무엇을 보고 있었는지도 함께 — 다시 돌아오면 그 탭이 켜져 있다
         paintPane(zone);
     }
     function addTab(zone, type) {
