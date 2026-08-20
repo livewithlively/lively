@@ -103,20 +103,42 @@ export function omniOpen(seed?: string): void {
       list, note)) as HTMLElement;
 
   // ── 상태 ──
+  //  결과는 **소스별로** 담는다(한 종류에 소스가 둘일 수 있다 — 지식·프로젝트는 의미검색 + grep).
+  //  화면에 그릴 목록(hits)은 그때그때 buckets 에서 다시 만든다(rebuild) — 소스 하나가 늦게 와도 나머지가 안 지워진다.
+  const buckets = new Map<string, Hit[]>();
   let hits: Hit[] = [];
   let sel = 0;
   let seq = 0;                      // 늦게 온 응답 무시
   let pending = 0;                  // 아직 안 온 원본 수(안내 문구용)
   let timer = 0;
+  let qTokens: string[] = [];       // 지금 질의의 토큰(제목 적중 판정용)
 
   const rowNodes: HTMLElement[] = [];
+  /** 제목이 질의를 통째로 담고 있나 — **종류와 무관하게** 맨 위로 올릴 근거(2026-08-20 실측 뒤 도입).
+   *  왜 필요한가: 채널 간 순서가 타입 고정이라 '정확히 그 이름인 문서'가 프로젝트 6건 아래 묻혔다. 게다가
+   *  하이브리드(RRF)는 순위역수라 채널마다 1등이 전부 같은 점수(1/61≈0.0164)가 되어 **점수로는 못 가른다**
+   *  (실측: 질의에 따라 12항목의 점수 폭이 0.0012 까지 좁아진다). 제목 적중은 그 애매함이 없는 유일한 신호다. */
+  function isTitleHit(h: Hit): boolean {
+    if (!qTokens.length) return false;
+    const t = h.title.toLowerCase();
+    return qTokens.every((tok) => t.includes(tok));
+  }
+  /** 작을수록 '그 이름다운' 제목 — 질의가 놓인 위치 + 제목 길이. */
+  function titleRank(h: Hit): number {
+    const t = h.title.toLowerCase();
+    const at = qTokens.length ? t.indexOf(qTokens[0]) : -1;
+    return (at < 0 ? 999 : at) * 10 + Math.min(99, h.title.length);
+  }
   function paint(): void {
     rowNodes.length = 0;
     const kids: HTMLElement[] = [];
-    for (const g of GROUPS) {
-      const rows = hits.filter((h) => h.kind === g.kind);
-      if (!rows.length) continue;
-      kids.push(el('div', { class: 'v2-omni-gh', text: g.label }));
+    //  그 안의 순서는 **얼마나 그 이름다운가**로 — 질의가 제목 앞쪽에 있을수록, 제목이 짧을수록 위.
+    //  (실측: '통합검색' 에서 정답 문서보다 '…그리드 통합검색' 이 먼저 뜨던 것 — 삽입순이라 그랬다.)
+    const top = hits.filter(isTitleHit).sort((a, b) => titleRank(a) - titleRank(b)).slice(0, 5);
+    const topKeys = new Set(top.map((h) => h.key));
+    const draw = (label: string, rows: Hit[]): void => {
+      if (!rows.length) return;
+      kids.push(el('div', { class: 'v2-omni-gh', text: label }));
       for (const h of rows) {
         const i = rowNodes.length;
         const node = el('div', {
@@ -132,7 +154,10 @@ export function omniOpen(seed?: string): void {
         rowNodes.push(node);
         kids.push(node);
       }
-    }
+    };
+    // 제목이 그대로 맞은 것 먼저 — 아래 종류별 묶음에서는 빼서 같은 줄이 두 번 뜨지 않게 한다(배지가 종류를 말한다).
+    draw('가장 맞는 것', top);
+    for (const g of GROUPS) draw(g.label, hits.filter((h) => h.kind === g.kind && !topKeys.has(h.key)));
     list.replaceChildren(...kids);
     if (sel >= rowNodes.length) sel = Math.max(0, rowNodes.length - 1);
     mark();
@@ -154,11 +179,26 @@ export function omniOpen(seed?: string): void {
     hooks!.open(h.href, newTab, h.title);
   }
 
-  // ── 검색 ── 자원마다 따로 돌고, 도착하는 대로 그 종류의 결과만 갈아 끼운다.
-  function put(kind: Kind, rows: Hit[], mySeq: number): void {
+  // ── 검색 ── 소스마다 따로 돌고, 도착하는 대로 그 소스 칸만 갈아 끼운 뒤 목록을 다시 만든다.
+  //  소스 순서 = 같은 항목이 두 소스에서 오면 **먼저 온 쪽의 표현**(스니펫)을 쓴다는 뜻이다. 의미검색을 앞에 두어
+  //  종전 순서를 지키고, grep 은 **의미검색이 놓친 것을 뒤에 보탠다**(그 중 제목 적중은 위 '가장 맞는 것'이 끌어올린다).
+  const SRC_ORDER = ['local', 'know:sem', 'know:grep', 'proj:sem', 'proj:grep', 'src', 'hist'];
+  function rebuild(): void {
+    const seen = new Set<string>();
+    hits = [];
+    for (const src of SRC_ORDER) {
+      for (const h of buckets.get(src) || []) {
+        if (seen.has(h.key)) continue;
+        seen.add(h.key);
+        hits.push(h);
+      }
+    }
+  }
+  function put(src: string, rows: Hit[], mySeq: number): void {
     if (mySeq !== seq || !box) return;
-    hits = hits.filter((h) => h.kind !== kind).concat(rows.filter((r, i, a) => a.findIndex((x) => x.key === r.key) === i));
+    buckets.set(src, rows);
     pending = Math.max(0, pending - 1);
+    rebuild();
     paint();
     setNote(pending ? '찾는 중…' : (hits.length ? '' : '결과가 없습니다.'));
   }
@@ -181,31 +221,50 @@ export function omniOpen(seed?: string): void {
       .map((p) => ({ kind: 'proj' as const, key: 'p:' + p.id, title: p.name, sub: oneLine(String(p.description || '')), href: '#/p/' + p.id }));
     const apps: Hit[] = visibleApps().filter((a) => (a.title + ' ' + a.desc).toLowerCase().includes(nq)).slice(0, 4)
       .map((a) => ({ kind: 'app' as const, key: 'a:' + a.key, title: a.title, sub: a.desc, href: '#/app/' + a.key }));
-    hits = hits.filter((h) => h.kind !== 'sess' && h.kind !== 'app' && h.kind !== 'proj').concat(sess, proj, apps);
+    buckets.set('local', [...sess, ...proj, ...apps]);
+    rebuild();
   }
 
   function run(): void {
     const q = input.value.trim();
     seq++;
     const my = seq;
+    buckets.clear();
     hits = [];
+    qTokens = q.toLowerCase().split(/\s+/).filter(Boolean);
     if (!q) { pending = 0; recent(); paint(); setNote(''); return; }
     localHits(q);
     paint();
-    pending = 4;
+    pending = 6;
     setNote('찾는 중…');
     const qs = encodeURIComponent(q);
     // 프로젝트(의미) — 로컬 이름 매칭을 덮어쓴다(서버가 더 넓게 본다: 태스크·본문·임베딩).
-    api('/api/ui/v6/projects/semantic?limit=6&q=' + qs).then((r: any) => put('proj', ((r && r.projects) || []).map((p: any) => ({
+    api('/api/ui/v6/projects/semantic?limit=6&q=' + qs).then((r: any) => put('proj:sem', ((r && r.projects) || []).map((p: any) => ({
       kind: 'proj' as const, key: 'p:' + p.id,
       title: String(p.name || p.title || ('프로젝트 #' + p.id)),
       sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
       // 태스크·서브태스크 히트도 **그 프로젝트**로 데려간다 — 셸엔 태스크 화면이 없다(클래식 모달은 앱 프레임 안쪽).
       href: '#/p/' + Number(p.project_id || p.id),
-    })), my), () => put('proj', [], my));
-    api('/api/ui/knowledge/semantic?limit=6&q=' + qs).then((r: any) => put('know', ((r && r.entries) || []).map((e: any) => ({
-      kind: 'know' as const, key: 'k:' + e.name, title: String(e.title || e.name), sub: snippetOf(e), href: '#/k/' + encodeURIComponent(e.name),
-    })), my), () => put('know', [], my));
+    })), my), () => put('proj:sem', [], my));
+    const knowRow = (e: any): Hit => ({
+      kind: 'know', key: 'k:' + e.name, title: String(e.title || e.name), sub: snippetOf(e), href: '#/k/' + encodeURIComponent(e.name),
+    });
+    api('/api/ui/knowledge/semantic?limit=6&q=' + qs).then((r: any) => put('know:sem', ((r && r.entries) || []).map(knowRow), my), () => put('know:sem', [], my));
+    // ── grep 채널을 **따로 부른다**(2026-08-20 실측) ────────────────────────────────
+    //  하이브리드(semantic)는 벡터 ∪ grep 을 RRF 로 합치는데, **벡터에 없는 문서**(미임베딩)는 벡터 쪽 순위가
+    //  통째로 엉뚱한 것들로 차면서 grep 이 맞게 찾은 정답을 뒤로 밀어낸다 — 즉 그 구간에선 하이브리드가
+    //  grep 단독보다 **나쁘다**(실측: 질의 '통합검색' 의 정답 문서가 grep 2위 / 하이브리드 top-5 밖).
+    //  그래서 grep 을 독립 채널로 한 번 더 부어 **놓친 것을 보탠다**. 제목이 맞은 것은 '가장 맞는 것'이 끌어올린다.
+    //  ⚠ grep 채널은 **제목이 맞은 것만** 취한다. grep 은 본문 어디든 토큰이 스치면 잡으므로 그대로 부으면
+    //   무관한 문서가 목록을 늘린다(실측: '클릭업'·'임베딩' 질의에 '이용약관'·'고객사 도입 48일차'가 딸려 왔다).
+    //   이 채널의 목적은 하나다 — **제목이 곧 그 이름인 문서가 RRF 에 묻히지 않게 하는 것**. 본문 회수는 의미검색 몫이다.
+    api('/api/ui/knowledge/search?limit=8&q=' + qs).then((r: any) => put('know:grep', ((r && r.entries) || []).map(knowRow).filter(isTitleHit), my), () => put('know:grep', [], my));
+    api('/api/ui/v6/projects/search?limit=8&q=' + qs).then((r: any) => put('proj:grep', ((r && r.projects) || []).map((p: any): Hit => ({
+      kind: 'proj' as const, key: 'p:' + p.id,
+      title: String(p.name || p.title || ('프로젝트 #' + p.id)),
+      sub: [p.level && p.level !== 'project' ? (p.level === 'task' ? '태스크' : '서브태스크') : '', snippetOf(p)].filter(Boolean).join(' · '),
+      href: '#/p/' + Number(p.project_id || p.id),
+    })).filter(isTitleHit), my), () => put('proj:grep', [], my));
     api('/api/ui/sources?limit=6&q=' + qs).then((r: any) => put('src', ((r && r.entries) || []).map((s: any) => ({
       kind: 'src' as const, key: 'src:' + s.id, title: String(s.title || ('자료 #' + s.id)),
       sub: [s.kind, (s.fields && s.fields.container_name) ? '#' + s.fields.container_name : ''].filter(Boolean).join(' · '),
@@ -222,10 +281,13 @@ export function omniOpen(seed?: string): void {
   /** 빈 칸일 때 — 최근에 본 세션. 스포트라이트를 열자마자 빈 판이면 '무엇을 칠 수 있는지'가 안 보인다. */
   function recent(): void {
     const d = hooks!.data();
-    hits = [...d.sessions].sort((a, b) => b.lastSeen - a.lastSeen).slice(0, 6).map((s) => {
+    buckets.clear();
+    qTokens = [];
+    buckets.set('local', [...d.sessions].sort((a, b) => b.lastSeen - a.lastSeen).slice(0, 6).map((s) => {
       const t = sessText(s, projName(d, s.projectId));
       return { kind: 'sess' as const, key: 's:' + s.id, title: t.main || t.sub || s.id, sub: projName(d, s.projectId), href: '#/s/' + encodeURIComponent(s.id) };
-    });
+    }));
+    rebuild();
   }
 
   input.addEventListener('input', () => { window.clearTimeout(timer); timer = window.setTimeout(run, 200); });
