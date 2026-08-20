@@ -190,6 +190,12 @@ export interface SideHooks {
   onArchived?: () => void;
   /** [새 작업] — **늘 새 탭**에 홈(시키는 자리)을 연다. 이미 열린 홈 탭으로 되돌아가지 않는다(그러면 쓰던 걸 덮는다). */
   onNewTask?: () => void;
+  /** 통합검색(⌘K) 열기 — 지식·프로젝트·자료·세션·세션이력을 한 칸에서(web/v2/omni.ts). */
+  onSearch?: () => void;
+  /** 뒤로/앞으로 — 브라우저 히스토리. can* 는 켜짐 판정(셸이 히스토리 위치를 센다). */
+  onBack?: () => void;
+  onForward?: () => void;
+  navState?: () => { back: boolean; forward: boolean };
 }
 let hooks: SideHooks = {};
 export function drawSide(host: HTMLElement, data: V2Data, activeKey: () => string, h?: SideHooks): void {
@@ -270,6 +276,7 @@ function render(): void {
   // 확인할 것 = 확인 필요(waiting, 보이는 것 전부 — 프로젝트 세션은 팀 누구든 답할 수 있다) + 작업 완료 미열람(내 것만).
   const inboxN = data.sessions.filter((s) => isLive(s) && (s.stateKey === 'waiting' || (s.stateKey === 'done' && s.owned))).length;
   host.replaceChildren(
+    navRow(),                                     // 맨 위 — 뒤로/앞으로 + 통합검색(상민님 2026-08-20, 클로드 데스크톱 문법)
     switcherTop({ people, faces: faceOwners }),   // 좌상단 워크스페이스 **문패 카드**(#1750 메뉴 + 얼굴 스택) — 여기가 어느 집인지 말하는 자리
     // ⚠ replaceChildren 은 null 을 글자 "null" 로 그린다(el() 과 다르다) — 조건부 자식은 스프레드로.
     el('nav', { class: 'v2-fixed', 'aria-label': '바로 가기' },
@@ -391,6 +398,44 @@ function newBtn(): HTMLElement {
   };
   return b;
 }
+// ── 사이드바 맨 윗줄 — [←][→] + [통합검색] (상민님 2026-08-20 "클로드 데스크탑 앱처럼") ──────────────
+//  왜 여기인가: 데스크톱 앱에서 맨 위 줄은 이제 **탭 줄**이 가져갔고(창 버튼과 같은 줄), 탐색 도구는
+//  내용(프로젝트·세션)보다 위, 문패보다도 위 — '이 워크스페이스 안에서 움직이는 손잡이'라 목록의 일부가 아니다.
+//  웹(브라우저)에서도 같은 자리다: 브라우저 뒤로가기와 겹쳐 보여도, 앱 안에서 손이 닿는 자리가 하나 있어야 한다.
+//  검색은 **칸처럼 생긴 버튼**이다 — 진짜 입력칸을 두면 사이드바 20초 재렌더가 입력을 끊는다(트리 검색칸이
+//  포커스·IME 를 지키느라 치르는 비용을 하나 더 만들지 않는다). 눌리면 화면 가운데 스포트라이트가 뜬다.
+function navArrow(dir: 'back' | 'fwd', on: boolean, run?: () => void): HTMLElement {
+  const d = dir === 'back' ? 'M14 6l-6 6 6 6' : 'M10 6l6 6-6 6';
+  return el('button', {
+    class: 'v2-navb', type: 'button', disabled: !on || !run,
+    title: dir === 'back' ? '뒤로' : '앞으로', 'aria-label': dir === 'back' ? '뒤로 가기' : '앞으로 가기',
+    onclick: () => run?.() },
+    sv('svg', { viewBox: '0 0 24 24', class: 'v2-navb-ic', 'aria-hidden': 'true' }, sv('path', { d })));
+}
+function navRow(): HTMLElement {
+  const st = hooks.navState ? hooks.navState() : { back: true, forward: true };
+  // ⌘/Ctrl 은 플랫폼 표기를 따른다 — 맥이 아닌데 ⌘K 라고 적어 두면 눌러도 안 열린다(같은 키를 두 이름으로 배우게 된다).
+  const mac = /mac|iphone|ipad/i.test(navigator.platform || navigator.userAgent || '');
+  return el('div', { class: 'v2-side-nav' },
+    navArrow('back', st.back, hooks.onBack),
+    navArrow('fwd', st.forward, hooks.onForward),
+    el('button', {
+      class: 'v2-omnib', type: 'button', title: '통합검색 — 지식 · 프로젝트 · 자료 · 세션 · 세션 이력을 한 번에',
+      'aria-label': '통합검색 열기', onclick: () => hooks.onSearch?.() },
+      sv('svg', { viewBox: '0 0 24 24', class: 'v2-omnib-ic', 'aria-hidden': 'true' },
+        sv('circle', { cx: '11', cy: '11', r: '6.5' }), sv('path', { d: 'M16 16l4.5 4.5' })),
+      el('span', { class: 'v2-omnib-t', text: '검색' }),
+      el('kbd', { class: 'v2-omnib-k', text: mac ? '⌘K' : 'Ctrl K' })));
+}
+/** 화살표 둘의 켜짐만 갱신한다 — 이동할 때마다 사이드바를 통째로 다시 그리지 않게(markFind 와 같은 규칙). */
+export function markNav(st: { back: boolean; forward: boolean }): void {
+  const row = document.querySelector('.v2-side-nav');
+  if (!row) return;
+  const btns = Array.from(row.querySelectorAll<HTMLButtonElement>('.v2-navb'));
+  if (btns[0]) btns[0].disabled = !st.back || !hooks.onBack;
+  if (btns[1]) btns[1].disabled = !st.forward || !hooks.onForward;
+}
+
 function findBtn(): HTMLElement {
   const on = findShown();
   return el('span', { class: 'v2-findbtn-wrap' },
