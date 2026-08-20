@@ -10,14 +10,34 @@ const TOOL_KO: Record<string, string> = {
   Task: '보조 에이전트', Agent: '보조 에이전트', TodoWrite: '할 일', AskUserQuestion: '물어보기', Skill: '스킬',
   ToolSearch: '도구 찾기', ExitPlanMode: '계획 끝', EnterPlanMode: '계획 시작', Workflow: '워크플로', Artifact: '아티팩트',
 };
+// ── MCP 서버 이름 → 사람 말 (#1823) ────────────────────────────────────────────────────────
+//  ⚠ 한 계열을 한쪽만 번역하면 **같은 계열 호출이 서로 다른 것처럼 보인다.** 실측: '라이블리' 옆에 'lively-local' 이
+//   영문으로 앉아, 사람이 그 둘을 같은 라이블리 호출로 읽지 못하고 "라이블리를 안 불렀다"고 판단했다.
+//  Map 인 이유: 서버 이름이 그대로 키가 되므로 객체면 'constructor' 같은 이름이 프로토타입 값을 집는다.
+const MCP_SERVER_KO = new Map<string, string>([
+  ['lively', '라이블리'],
+  ['lively-local', '라이블리 로컬'],
+]);
+/**
+ * 하네스는 플러그인 MCP 를 `plugin:<플러그인>:<서버>` 로 싣고 도구 이름엔 `_` 로 눌러 담는다
+ * (`plugin:playwright:playwright` → `plugin_playwright_playwright`). 플러그인과 서버 이름이 같으면 같은 낱말이
+ * 두 번 붙어 접힌 줄 하나를 통째로 먹는다 — 그 **기계적 중복만** 걷어낸다(번역이 아니라 정규화라 원칙과 무충돌).
+ * 이름이 서로 다르면(`plugin_foo_bar`) 무엇이 플러그인이고 무엇이 서버인지 우리가 모르므로 그대로 둔다.
+ */
+const dedupePluginServer = (s: string): string => {
+  const m = /^plugin_(.+)_(.+)$/.exec(s);
+  return m && m[1] === m[2] ? m[1] : s;
+};
+/** 모르는 서버는 영문 그대로 — 틀린 한국어보다 낯선 영어 한 줄이 낫다(이 파일의 원칙). */
+const mcpServerLabel = (raw: string): string => (raw ? MCP_SERVER_KO.get(raw) ?? dedupePluginServer(raw) : 'MCP');
+
 const short = (s: unknown, n = 90): string => { const t = String(s ?? '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
 const tailPath = (p: unknown): string => { const s = String(p ?? ''); const parts = s.split('/').filter(Boolean); return parts.length > 3 ? '…/' + parts.slice(-3).join('/') : s; };
 export function toolLabel(name: string, input: unknown): ToolLabel {
   const o = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>;
   if (name.startsWith('mcp__')) {
     const parts = name.split('__');            // mcp__<server>__<tool>
-    const server = parts[1] === 'lively' ? '라이블리' : parts[1] || 'MCP';
-    return { label: server, detail: short(parts.slice(2).join('__') || name, 60) };
+    return { label: mcpServerLabel(parts[1] || ''), detail: short(parts.slice(2).join('__') || name, 60) };
   }
   const label = TOOL_KO[name] ?? name;
   switch (name) {
