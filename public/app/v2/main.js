@@ -83,6 +83,24 @@ function goSession(sid, tab) {
 }
 /** 같은 탭 안에서 이어지는 이동(리다이렉트)의 수 — onHash 의 '새 탭' 규칙만 건너뛴다(다시 그리기는 그대로 한다). */
 let inTabHops = 0;
+/**
+ * 복원(이어받기)으로 새 세션이 생겼다 — **그 탭만** 새 세션으로 옮긴다(#1834 후속).
+ *
+ * 종전엔 세션 화면이 location.hash 를 직접 바꿨다. 셸 안에서 그건 **활성 탭의 주소**라, 숨은 탭에서
+ *  일어난 복원이 지금 보고 있는 탭을 남의 새 세션으로 끌고 갔다(상민님 지적 2026-08-20).
+ *  활성 탭이면 주소까지 맞추고, 숨은 탭이면 그 탭의 라우트·제목·화면만 바꾼다(그 탭을 열면 맞는 화면이다).
+ */
+function resumedInTab(tab, sid) {
+    const href = '#/s/' + encodeURIComponent(sid);
+    tab.route = href;
+    if (tabsApi?.current() === tab && location.hash !== href) {
+        suppressHash++;
+        location.hash = href;
+    }
+    tabsApi?.routed(tab);
+    void renderRoute(tab);
+    drawSide();
+}
 /** 프로젝트 셸(문패 + 칸 + 세션 서랍)을 이 탭에 마운트한다. 세션 화면은 그 안 '세션' 칸에 통째로 들어간다. */
 async function mountProjectShell(tab, projectId, sessionId, seq) {
     let detail = null;
@@ -150,6 +168,9 @@ async function mountProjectShell(tab, projectId, sessionId, seq) {
                 onPickProject: (anchor) => openProjectPicker(anchor, sid, tab),
                 onRename: (label) => renameSession(sid, label, tab),
                 onArchive: () => void archiveSession(sid),
+                // 자동 복원은 **보이는 탭에서만**, 복원 뒤 이동은 **그 탭만**(#1834 후속 — session-chat.ts isVisible/onResumed 주석).
+                isVisible: () => tabsApi?.current() === tab,
+                onResumed: (nid) => resumedInTab(tab, nid),
             });
             tab.chat = h; // 20초 목록 갱신이 이 핸들로 상태를 흘려보낸다
             return h;
