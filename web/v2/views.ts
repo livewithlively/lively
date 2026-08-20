@@ -108,45 +108,17 @@ export function renderHome(host: HTMLElement, data: V2Data): void {
         waiting ? [el('span', { class: 'sep', text: '·' }), el('span', { class: 'st wait' }, dot('waiting'), `답 기다림 ${waiting}`)] : null),
       el('h1', { class: 'v2-h1', text: `${tod}${name ? ', ' + name + '님' : ''}.` }),
       el('p', { class: 'v2-home-sub', text: '무엇을 할까요?' }),
-      card,
-      nowList(data)));
+      card));
+  // ★ 홈에서 세션 목록을 걷었다(원준 2026-08-20 "이 부분 내용 빼고, 텍스트 치는 칸을 자연스러운 위치로").
+  //  왜: 같은 목록이 **사이드바(프로젝트 폴더 안 세션)**·**[확인할 것]**·**AI 세션 앱** 셋에 이미 있고,
+  //  홈은 '무엇이든 시키는 자리' 하나로 충분하다. 게다가 그 목록에는 자동 이름짓기 프롬프트처럼 사람이 시킨 적
+  //  없는 기록까지 이름으로 올라와(실측) 첫 화면이 잡동사니로 읽혔다. 시키는 칸은 화면 가운데로 올린다.
   window.setTimeout(() => { grow(); ta.focus(); }, 30);
 }
 
-function nowList(data: V2Data): HTMLElement {
-  // 홈의 두 번째 존재 — 상태별 두 결(#1756): **답을 기다리는 것**은 내가 움직여야 풀리는 일이라 앰버 카드로
-  //  도드라지고, 나머지는 조용한 목록이다. 종전엔 일곱 행이 같은 무게로 나열돼 급한 것이 안 보였다.
-  const rank = (s: Sess): number => (s.stateKey === 'waiting' ? 0 : s.stateKey === 'busy' ? 1 : 2);
-  const live = data.sessions.filter(isLiveSess).sort((a, b) => rank(a) - rank(b) || b.lastSeen - a.lastSeen);
-  // 지난 세션(#1808) — 홈에서 **이어서 하기**로 곧장 갈 수 있어야 한다. 되살리는 건 소유자만 가능하므로(서버
-  //  restore/resume 이 owner-gated) 내 것만 올린다. 넷까지 — 그 이상은 사이드바의 '지난 세션'과 AI 세션 앱이 받는다.
-  const past = data.sessions.filter((s) => isPastSess(s) && s.owned).sort((a, b) => b.lastSeen - a.lastSeen).slice(0, 4);
-  if (!live.length && !past.length) return el('div', {});
-  const waits = live.filter((s) => s.stateKey === 'waiting');
-  const rest = live.filter((s) => s.stateKey !== 'waiting').slice(0, 7 - Math.min(waits.length, 4));
-  const rowOf = (s: Sess): HTMLElement => {
-    const pn = projName(data, s.projectId);
-    const title = sessDisplayName(s, pn);
-    const showProj = !!s.projectId && title !== pn;
-    return el('a', { class: 'v2-now-row' + (s.stateKey === 'waiting' ? ' wait' : ''), href: '#/s/' + encodeURIComponent(s.id) },
-      dot(s.stateKey),
-      el('span', { class: 'tw' }, el('span', { class: 't', text: title }), showProj ? el('span', { class: 'p', text: pn }) : null),
-      el('span', { class: 'st', text: s.stateKey === 'waiting' ? when(s.lastSeen) : `${s.stateLabel} · ${when(s.lastSeen)}` }),
-      s.stateKey === 'waiting' ? el('span', { class: 'go btn btn-sm', text: '답하기' }) : null);
-  };
-  return el('div', { class: 'v2-now' },
-    waits.length ? el('section', { class: 'v2-now-wait' },
-      el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k wait', text: `답을 기다려요 · ${waits.length}` })),
-      ...waits.slice(0, 4).map(rowOf)) : null,
-    rest.length ? el('section', {},
-      el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: `돌고 있어요 · ${rest.length}` }),
-        el('a', { class: 'btn-text', href: '#/app/terminal', text: '전체 →' })),
-      ...rest.map(rowOf)) : null,
-    past.length ? el('section', { class: 'v2-now-past' },
-      el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: '이어서 할 수 있어요' }),
-        el('a', { class: 'btn-text', href: '#/app/terminal', text: '전체 →' })),
-      ...past.map(rowOf)) : null);
-}
+// nowList(돌고 있어요 · 답을 기다려요 · 이어서 할 수 있어요)는 홈에서 걷었다(원준 2026-08-20).
+//  그 세 결은 다른 자리가 이미 맡고 있다 — 답 기다림·완료는 [확인할 것], 살아 있는 세션은 사이드바의 프로젝트 폴더,
+//  지난 세션은 그 폴더의 '지난 세션'과 AI 세션 앱. 홈에 네 번째 사본을 두지 않는다.
 
 // ── 확인할 것(#1719 사이드바 개편 안2) — 시키다→기다리다→**확인**의 병목을 한 화면에 모은다 ───────
 //  · 답을 기다려요: 승인·선택을 기다리는 세션(waiting) — 보이는 것 전부(프로젝트 세션은 팀 누구든 답할 수 있다).
