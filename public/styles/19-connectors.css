@@ -59,7 +59,7 @@ body[data-route="domainmap"] main { max-width: none; margin: 0; }
 .pjv-ov-bar { display: flex; height: 6px; border-radius: 4px; overflow: hidden; background: var(--bg-tint); }
 .pjv-ov-bar-seg { display: block; height: 100%; }
 .pjv-ov-bar-seg.todo { background: var(--muted-3); }
-.pjv-ov-bar-seg.prog { background: var(--blue); }
+.pjv-ov-bar-seg.prog { background: var(--blue-fill); }
 .pjv-ov-bar-seg.done { background: var(--mint); }
 .pjv-ov-bar-seg.empty { flex: 1; background: transparent; }
 /* ── #592 지식 문서 UI ── */

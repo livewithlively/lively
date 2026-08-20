@@ -79,15 +79,15 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-rx-host:empty { display: none; }
 .sc-rx {
   margin: 0 16px 10px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
-  background: var(--bg, #fff); box-shadow: 0 1px 2px rgba(0, 0, 0, .04);
+  background: var(--bg); box-shadow: 0 1px 2px rgba(0, 0, 0, .04);
 }
 .sc-rx-h {
   display: flex; align-items: center; gap: 9px; padding: 9px 12px;
-  background: var(--bg-punch); border-bottom: 1px solid var(--line-soft, var(--line));
+  background: var(--bg-punch); border-bottom: 1px solid var(--line-row);
   font-size: 13px; font-weight: 600;
 }
 .sc-rx-av {
-  width: 20px; height: 20px; border-radius: 50%; background: var(--blue); color: #fff; flex: none;
+  width: 20px; height: 20px; border-radius: 50%; background: var(--blue-fill); color: var(--on-fill); flex: none;
   display: inline-flex; align-items: center; justify-content: center; font-size: 10.5px; font-weight: 700;
 }
 .sc-rx-ht { flex: 1; min-width: 0; }
@@ -116,7 +116,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 
 .sc-rx-acts { display: flex; align-items: center; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
 .sc-rx-go {
-  background: var(--blue); color: #fff; border-radius: 7px; padding: 7px 13px; font-size: 12.5px; font-weight: 500;
+  background: var(--blue-fill); color: var(--on-fill); border-radius: 7px; padding: 7px 13px; font-size: 12.5px; font-weight: 500;
 }
 .sc-rx-go:hover { filter: brightness(1.06); }
 .sc-rx-alt {
@@ -324,7 +324,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-title-penbtn { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-left: 4px;
   border: 0; background: none; padding: 0; border-radius: 5px; cursor: pointer; opacity: 0; transition: opacity .12s ease; flex: none; }
 .sc-titlebox:hover .sc-title-penbtn, .sc-title-penbtn:focus-visible { opacity: 1; }
-.sc-title-penbtn:hover { background: var(--bg-tint, #F6FAFF); }
+.sc-title-penbtn:hover { background: var(--bg-tint); }
 .sc-title-penbtn:hover .sc-title-pen { stroke: var(--blue); }
 /* 이름 옆의 '지금 하는 일' — 굵은 이름과 같은 줄, 조용한 톤(사이드바의 이름+부제와 같은 문법). */
 .sc-title-job { margin-left: 9px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

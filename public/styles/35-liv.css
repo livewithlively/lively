@@ -37,7 +37,7 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 .liv-top-row { display: flex; align-items: center; gap: 10px; }
 .liv-face {
   width: 30px; height: 30px; border-radius: 50%; flex: none; display: grid; place-items: center;
-  background: var(--bg-success); border: 1px solid #CDEFE3; color: var(--mint-deep);
+  background: var(--bg-success); border: 1px solid var(--ok-line-2); color: var(--mint-deep);
   font-weight: 800; font-size: 13px; letter-spacing: .02em;
 }
 .liv-top-name { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
@@ -50,15 +50,15 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 
 /* ── 편지 — 이 화면의 본문 ──────────────────────────────────────────────────────
    카드 목록이 아니라 글 한 통이다. 목록은 훑게 만들고, 훑으면 결정하지 않는다. */
-.liv-letter { border: 1px solid var(--line-net, #CBD8EE); border-radius: 12px; background: var(--bg-tint);
+.liv-letter { border: 1px solid var(--line-net); border-radius: 12px; background: var(--bg-tint);
   padding: 20px 22px; max-height: 46vh; overflow: auto; flex: none; }
 .liv-letter-skel { height: 84px; opacity: .35;
-  background: linear-gradient(var(--line-soft, #EEF2F8) 0 0) no-repeat; border-radius: 8px; }
+  background: linear-gradient(var(--line-row) 0 0) no-repeat; border-radius: 8px; }
 .liv-lead { margin: 0 0 14px; font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
 .liv-sign { margin: 16px 0 0; font-size: 13px; color: var(--muted); }
 
 /* 문단 하나 = 제안 하나. 번호는 '몇 개인지'가 아니라 '어디까지 읽었는지'를 위한 것이라 둘 이상일 때만 붙는다. */
-.liv-para { display: flex; gap: 10px; padding: 13px 0; border-top: 1px solid var(--line-soft, #EEF2F8); }
+.liv-para { display: flex; gap: 10px; padding: 13px 0; border-top: 1px solid var(--line-row); }
 .liv-para:first-of-type { border-top: 0; padding-top: 0; }
 .liv-para-no { flex: none; width: 22px; font-size: 12px; font-weight: 700; color: var(--muted-2); padding-top: 2px; }
 .liv-para-b { min-width: 0; flex: 1; }
@@ -81,7 +81,7 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
   padding: 9px 11px; font-size: 13px; color: var(--ink); cursor: pointer; margin-bottom: 6px;
 }
 .liv-can-row { background: var(--bg); }
-.liv-can-row:hover { border-color: var(--line-net, #CBD8EE); background: var(--bg-sel); }
+.liv-can-row:hover { border-color: var(--line-net); background: var(--bg-sel); }
 .liv-can-row:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
 .liv-can-mark { color: var(--muted-2); flex: none; }
 
