@@ -29,8 +29,9 @@ import { listSessionApps, spawnAppSession, type SessionApp } from './app-session
 import { openAppUi } from './app-ui.js';
 import { sessText } from './side.js';
 import { dotCls, type Sess, type V2Data } from './views.js';
+import { setProjMode, viewToggle, type ProjMode } from './panes.js';   // [기본|캔버스] — 두 뷰가 문패 같은 자리에 같은 단추를 둔다
 
-export interface StudioOpts { data: () => V2Data; id: number; detail: any; onProjectChanged?: () => void }
+export interface StudioOpts { data: () => V2Data; id: number; detail: any; onProjectChanged?: () => void; onSwitchView?: (mode: ProjMode) => void }
 export interface StudioHandle { destroy(): void; renderAside(aside: HTMLElement): void }
 
 // ── 아이콘(스트로크 SVG) ──────────────────────────────────────────────────────
@@ -184,6 +185,7 @@ export function mountStudio(host: HTMLElement, opts: StudioOpts): StudioHandle {
         el('span', { class: 'stu-faces' }, ...members.slice(0, 5).map((m: any) => personFace(String(m.member_id || m), 'stu-face', String(m.display_name || m.member_id || '')))),
         // 이 줄은 **캔버스보다 위**에 있는 것들만 — 판 설정(코멘트 모드·정리)뿐이다(원준 2026-08-19).
         //  타임라인·명세는 기능이라 앱/위젯으로 내려갔다(⊞ 런치패드).
+        viewToggle('canvas', (m) => { if (m !== 'canvas') { setProjMode(m); opts.onSwitchView?.(m); } }),
         stackBtn,
         tlBtn,
         cmBtn,

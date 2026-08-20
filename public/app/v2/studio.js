@@ -29,6 +29,7 @@ import { listSessionApps, spawnAppSession } from './app-session.js';
 import { openAppUi } from './app-ui.js';
 import { sessText } from './side.js';
 import { dotCls } from './views.js';
+import { setProjMode, viewToggle } from './panes.js'; // [기본|캔버스] — 두 뷰가 문패 같은 자리에 같은 단추를 둔다
 // ── 아이콘(스트로크 SVG) ──────────────────────────────────────────────────────
 const ICON_PATHS = {
     chat: '<path d="M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z"/>',
@@ -163,7 +164,10 @@ export function mountStudio(host, opts) {
             : el('div', { class: 'stu-eyebrow' }, el('span', { class: 'mono', text: '#' + p.id }), el('span', { class: 'sep', text: '·' }), el('span', { class: 'stu-state ' + st.c, text: st.t }), el('span', { class: 'sep', text: '·' }), el('span', { text: `세션 ${ss.length}` + (live.length ? ` · 지금 ${live.length}` : '') }), el('span', { class: 'sep', text: '·' }), el('span', { text: `할 일 ${tasks.length - doneN}/${tasks.length}` }), el('span', { class: 'sep', text: '·' }), el('span', { text: `지식 ${knN}` }))), el('h1', { class: 'stu-title', text: p.name || '프로젝트 #' + id })), el('div', { class: 'stu-door-r' }, el('span', { class: 'stu-faces' }, ...members.slice(0, 5).map((m) => personFace(String(m.member_id || m), 'stu-face', String(m.display_name || m.member_id || '')))), 
         // 이 줄은 **캔버스보다 위**에 있는 것들만 — 판 설정(코멘트 모드·정리)뿐이다(원준 2026-08-19).
         //  타임라인·명세는 기능이라 앱/위젯으로 내려갔다(⊞ 런치패드).
-        stackBtn, tlBtn, cmBtn, el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '정리', title: '위젯 위치만 격자에 맞춰 정렬합니다(크기는 그대로)', onclick: () => { autoArrange(); paintAll(); save(); } })));
+        viewToggle('canvas', (m) => { if (m !== 'canvas') {
+            setProjMode(m);
+            opts.onSwitchView?.(m);
+        } }), stackBtn, tlBtn, cmBtn, el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '정리', title: '위젯 위치만 격자에 맞춰 정렬합니다(크기는 그대로)', onclick: () => { autoArrange(); paintAll(); save(); } })));
         cmBtn.classList.toggle('on', commentMode);
     }
     // ── 위젯 프레임 ──
