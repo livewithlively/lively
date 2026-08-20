@@ -22,7 +22,8 @@
 //     ①~③ 은 **같은 모양의 행**이고 기둥도 같다. 층은 구분선과 작은 라벨로만 나눈다 —
 //     리브만 알약(테두리·큰 글씨)이면 목록보다 먼저 읽혀 위계가 뒤집힌다.
 //  main.ts 가 데이터·활성 키를 넘기고, 필터·펼침 같은 사이드바 자체 상태는 여기 산다(브라우저에 기억).
-import { anchoredPopover, api, el, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTime, setUiModeOverride, state, sv } from '../core.js';
+import { anchoredPopover, api, el, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTime, setUiModeOverride, state, sv, toast } from '../core.js';
+import { confirmDialog } from '../ui-primitives.js';
 import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls, isLiveSess, isPastSess, sessWork } from './views.js';
@@ -639,10 +640,122 @@ function sessRow(s, activeKey, text, pastRow = false) {
     const main = text.main;
     const sub = text.sub;
     const tip = [s.label, sub || (raw.title && String(raw.title) !== s.label ? String(raw.title) : ''), `${st ? st.label : s.stateLabel}${s.lastSeen ? ' · ' + when(s.lastSeen) : ''}`, s.owned ? '내 세션' : `${owner}의 세션`, raw.harness ? String(raw.harness) : '', s.node ? '노드 ' + s.node : ''].filter(Boolean).join('\n');
-    return el('a', { class: 'v2-ss-row' + (activeKey === 's:' + s.id ? ' on' : '') + (s.owned ? '' : ' other') + (pastRow ? ' past' : ''), href: '#/s/' + encodeURIComponent(s.id), 'data-nav': 's:' + s.id, title: tip + (pastRow ? '\n열면 그때 대화를 읽고 [이어서 대화하기]로 계속할 수 있어요' : '\n세션 대화를 엽니다'), role: 'treeitem' }, el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }), el('span', { class: 'v2-ss-main' }, el('span', { class: 't', text: main })), s.owned ? null : personFace(String(raw.owner || ''), 'v2-ss-face', owner), 
+    // 이름 자리 — 더블클릭하면 그 자리에서 고친다(원준 2026-08-20). 고친 이름은 서버로 가고 탭·대화창까지 따라온다.
+    const nameEl = el('span', { class: 't', text: main });
+    const row = el('a', { class: 'v2-ss-row' + (activeKey === 's:' + s.id ? ' on' : '') + (s.owned ? '' : ' other') + (pastRow ? ' past' : ''), href: '#/s/' + encodeURIComponent(s.id), 'data-nav': 's:' + s.id, title: tip + (pastRow ? '\n열면 그때 대화를 읽고 [이어서 대화하기]로 계속할 수 있어요' : '\n세션 대화를 엽니다\n이름을 더블클릭하면 그 자리에서 고칠 수 있어요'), role: 'treeitem' }, el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }), el('span', { class: 'v2-ss-main' }, nameEl), s.owned ? null : personFace(String(raw.owner || ''), 'v2-ss-face', owner), 
     // 오른쪽 끝은 **한 자리**로 고정한다 — 상태어를 조건부로 넣으면 행마다 길이가 달라 목록이 들쭉날쭉해진다(상민님 2026-08-18).
     //  상태는 왼쪽 점이, 개수는 프로젝트 행이 말한다. 여기는 '누르면 대화로 간다'는 표식만(hover 때 보인다).
     //  ⚠ 지난 세션 묶음은 그 한 자리를 **'언제'**가 받는다 — 멈춘 것들을 고르는 축은 시간이고(어제 것인가 3주 전 것인가),
     //   묶음 안 모든 행이 똑같이 시각을 가지므로 '행마다 길이가 달라진다'는 그 규칙의 사유엔 걸리지 않는다.
-    pastRow ? el('span', { class: 'w', text: when(s.lastSeen) }) : glyph('chat', 'v2-ss-go'));
+    pastRow ? el('span', { class: 'w', text: when(s.lastSeen) }) : glyph('chat', 'v2-ss-go'), 
+    // 보관(×) — **도는 세션에만**(지난 세션은 이미 거기 있다), **내 세션에만**(서버도 소유자만 허용).
+    //  자리는 늘 차지한다(hover 때만 보인다) — 나타나며 행을 밀면 목록이 흔들린다(압정과 같은 규약).
+    !pastRow && s.owned ? archiveBtn(s) : null);
+    if (s.owned)
+        row.addEventListener('dblclick', (e) => { e.preventDefault(); e.stopPropagation(); beginRename(row, nameEl, s); });
+    return row;
+}
+// ── 세션 이름 인라인 편집 ────────────────────────────────────────────────────
+//  ⚠ 이름 자리에 그려진 글(main)은 **원래 이름이 아닐 수 있다** — sessText 가 프로젝트명 되풀이를 걷어내고
+//   pane 제목·첫 지시를 그 자리에 올리기 때문이다(#1808). 그래서 편집칸의 초기값은 화면 글이 아니라
+//   **s.label(진짜 세션 이름)** 이다. 그리지 않은 것을 고치게 하면 사용자는 자기가 안 쓴 글을 지우게 된다.
+let renaming = false;
+function beginRename(row, nameEl, s) {
+    if (renaming)
+        return;
+    renaming = true;
+    const shown = nameEl.textContent || '';
+    const input = el('input', { class: 'v2-ss-edit', type: 'text', value: String(s.label || shown), 'aria-label': '세션 이름' });
+    nameEl.replaceChildren(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = async (save) => {
+        if (done)
+            return;
+        done = true;
+        renaming = false;
+        const next = input.value.trim();
+        if (!save || !next || next === s.label) {
+            nameEl.replaceChildren(document.createTextNode(shown));
+            return;
+        }
+        nameEl.replaceChildren(document.createTextNode(next));
+        try {
+            await hooks.onRenameSession?.(s.id, next);
+        }
+        catch (e) {
+            toast((e && e.message) || '이름을 바꾸지 못했습니다', true);
+            nameEl.replaceChildren(document.createTextNode(shown));
+        }
+    };
+    input.addEventListener('keydown', (e) => {
+        e.stopPropagation(); // '/' 검색 단축키·Esc 사이드바 핸들러가 가로채지 않게
+        if (e.key === 'Enter' && !e.isComposing) {
+            e.preventDefault();
+            void finish(true);
+        }
+        else if (e.key === 'Escape') {
+            e.preventDefault();
+            void finish(false);
+        }
+    });
+    input.addEventListener('blur', () => { void finish(true); });
+    input.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); }); // 편집 중 클릭이 행 이동으로 새지 않게
+    void row;
+}
+// ── 보관(×) — 세션을 '지난 세션'으로 보낸다 ──────────────────────────────────
+//  DELETE …?reclaim=1 = tmux 만 내리고 복원 좌표(desired-state)는 남긴다 → 그 프로젝트의 '지난 세션'에 쌓이고
+//  열면 [이어서 대화하기] 로 그대로 살아난다. **완전 삭제가 아니다** — 그래서 문구도 '보관'이라고 말한다.
+const ARCHIVE_ACK_KEY = 'lively_v2_archive_ack'; // '1' = 안내를 다시 띄우지 않음(사용자가 체크)
+function archiveBtn(s) {
+    const btn = el('button', {
+        class: 'v2-ss-x', type: 'button', 'aria-label': s.label + ' 보관(지난 세션으로)',
+        title: '지난 세션으로 보내기 — 지금 실행만 멈추고, 나중에 열어서 이어서 할 수 있어요',
+    }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-ss-x-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' })));
+    btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        void doArchive(s);
+    });
+    return btn;
+}
+async function doArchive(s) {
+    let ack = false;
+    try {
+        ack = localStorage.getItem(ARCHIVE_ACK_KEY) === '1';
+    }
+    catch (_) { /* noop */ }
+    if (!ack) {
+        // '다시 보지 않기' 는 **확인을 누른 경우에만** 저장한다 — 취소하고 닫았는데 다음부터 말없이 보관되면 사고다.
+        const again = el('input', { type: 'checkbox', id: 'v2-arch-ack' });
+        const extra = el('label', { class: 'v2-arch-ack', for: 'v2-arch-ack' }, again, el('span', { text: '다시 안내하지 않기' }));
+        const ok = await confirmDialog({
+            title: '지난 세션으로 보낼까요?',
+            message: '지금 돌고 있는 것만 멈춥니다. 대화는 그대로 보관돼요.',
+            lines: [
+                '이 세션은 프로젝트 아래 [지난 세션] 묶음으로 들어갑니다.',
+                '나중에 열어서 [이어서 대화하기] 를 누르면 그때 대화 그대로 다시 시작합니다.',
+            ],
+            note: '지우는 것이 아닙니다 — 되돌릴 수 있어요.',
+            confirmText: '지난 세션으로', extra,
+        });
+        if (!ok)
+            return;
+        if (again.checked) {
+            try {
+                localStorage.setItem(ARCHIVE_ACK_KEY, '1');
+            }
+            catch (_) { /* noop */ }
+        }
+    }
+    try {
+        const q = '?reclaim=1' + (s.node ? '&node=' + encodeURIComponent(s.node) : '');
+        await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + q, { method: 'DELETE' });
+        toast('지난 세션으로 보냈어요 — 열면 이어서 할 수 있습니다');
+        hooks.onArchived?.();
+    }
+    catch (e) {
+        toast((e && e.message) || '보관하지 못했습니다', true);
+    }
 }

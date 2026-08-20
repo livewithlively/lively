@@ -211,7 +211,11 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-sum.wait { color: var(--amber, #C98A16); }
 .v2-sum.busy { color: var(--blue); }
 .v2-sum.done { color: var(--mint-deep, #0FA37E); }
-.v2-car { width: 16px; height: 20px; border: 0; background: none; color: var(--muted-2, #a6b2c8); font-size: 14px; line-height: 1; border-radius: 4px; cursor: pointer; padding: 0; transition: transform .15s ease; flex: none; }
+/* ⚠ 정사각(16×16)이어야 한다 — 펼침 상태에서 90° 회전하면 **박스의 세로가 가로로 온다**. 16×20 이던 때는
+   회전 뒤 시각 폭이 20px 이 되어 좌우로 2px 씩 삐져나왔고, 오른쪽 2px 이 폴더 아이콘을 파고들어 아이콘이
+   가려 보였다(원준 2026-08-20 신고 · 실측: 접힘 캐럿 16–32/틈 4px vs 펼침 14–34/틈 2px).
+   정사각이면 회전해도 시각 범위가 그대로라 기둥(캐럿 16 → 폴더 36 → 글자 56)이 흔들리지 않는다. */
+.v2-car { width: 16px; height: 16px; border: 0; background: none; color: var(--muted-2, #a6b2c8); font-size: 14px; line-height: 1; border-radius: 4px; cursor: pointer; padding: 0; transition: transform .15s ease; flex: none; }
 .v2-car:hover { color: var(--ink); background: var(--bg-tint-2, #EEF5FF); }
 .v2-car.none { visibility: hidden; cursor: default; }
 .v2-pj.open > .v2-pj-row .v2-car { transform: rotate(90deg); }
@@ -227,6 +231,17 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 /* 지금 보고 있는 세션 — 행 왼쪽에 파란 마디. */
 .v2-ss-row.on::before { content: ''; position: absolute; left: calc(3px + var(--nest, 14px)); top: 7px; bottom: 7px; width: 2.5px; border-radius: 2px; background: var(--blue); }
 .v2-ss-go { width: 14px; height: 14px; margin-left: 6px; flex: none; fill: none; stroke: var(--muted-2, #a6b2c8); stroke-width: 1.8; stroke-linejoin: round; opacity: 0; }
+/* 보관(×) — 자리는 늘 차지하고 hover 때만 보인다(압정과 같은 규약: 나타나며 행을 밀면 목록이 흔들린다). */
+.v2-ss-x { width: 18px; height: 18px; margin-left: 4px; padding: 0; flex: none; border: 0; border-radius: 5px; background: none; color: var(--muted-2, #A6B2C8); cursor: pointer; display: inline-grid; place-items: center; opacity: 0; }
+.v2-ss-row:hover .v2-ss-x, .v2-ss-x:focus-visible { opacity: 1; }
+.v2-ss-x:hover { color: var(--danger, #C2451E); background: var(--bg-tint-2, #EEF5FF); }
+.v2-ss-x-ic { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+/* 이름 인라인 편집 — 행의 글자 자리를 그대로 쓴다(칸이 튀어나오면 목록이 흔들린다). */
+.v2-ss-edit { width: 100%; min-width: 0; margin: -2px 0; padding: 1px 5px; border: 1px solid var(--blue); border-radius: 5px; background: var(--bg, #fff); font: inherit; font-size: 13px; font-weight: 500; color: var(--ink); }
+.v2-ss-edit:focus { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 22%, transparent); }
+/* 보관 안내의 '다시 안내하지 않기' */
+.v2-arch-ack { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-sub); cursor: pointer; }
+.v2-arch-ack input { width: 15px; height: 15px; accent-color: var(--blue); cursor: pointer; }
 .v2-ss-row:hover .v2-ss-go { opacity: 1; }
 .v2-ss-main { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.35; }
 .v2-ss-row .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

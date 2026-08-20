@@ -271,6 +271,7 @@ async function loadData(opts) {
         projLoadedAt = Date.now();
     }
     const sessions = mergeSessions(live, logs);
+    applyRenamePins(sessions); // 방금 고친 이름을 **떠 있던 응답이 되덮지 않게**(아래 renamePins)
     data = { projects, sessions, loadedAt: Date.now() };
     if (!wantProj) {
         const known = new Set(projects.map((p) => p.id));
@@ -579,7 +580,13 @@ function drawSide() {
         return;
     const treeHost = el('div', { class: 'stu-panel-tree' });
     sideEl.replaceChildren(el('div', { class: 'stu-panel' }, treeHost));
-    drawSideTree(treeHost, data, activeKey, { onNewSession: newSessionFor });
+    drawSideTree(treeHost, data, activeKey, {
+        onNewSession: newSessionFor,
+        // 사이드바에서 고친 이름은 **화면 전체**에 반영한다 — 목록만 바뀌고 탭·대화창 제목이 옛 이름이면 그게 더 혼란스럽다.
+        onRenameSession: (id, label) => renameSessionEverywhere(id, label),
+        // 보관(×) 뒤 — 그 세션은 이제 '지난 세션'이라 목록의 자리가 바뀐다. 서버가 정답이므로 다시 읽는다.
+        onArchived: () => { void loadData().then(() => { drawSide(); tabsApi?.paint(); }); },
+    });
 }
 /** 이 탭이 보고 있는 프로젝트 — 프로젝트 주소면 그 id, 세션 주소면 그 세션이 붙은 프로젝트. 아니면 -1. */
 function tabProject(t) {
@@ -702,12 +709,49 @@ async function archiveSession(sessionId) {
         toast('보관하지 못했어요 — ' + (e && e.message ? e.message : e), true);
     }
 }
+// ── 방금 고친 이름 고정(#1719 원준) ────────────────────────────────────────────
+//  이름을 바꾸는 순간에도 20초 폴링이 **이미 떠 있을 수 있다.** 그 응답에는 옛 이름이 담겨 있어서, 늦게
+//  도착하면 방금 고친 이름을 도로 옛것으로 되돌린다(실측: 4초 뒤 옛 이름, 13초 뒤 새 이름으로 복귀).
+//  자가 치유되긴 하지만 "내가 바꿨는데 안 바뀌네" 로 읽히는 몇 초다 — 그래서 짧게 고정해 둔다.
+//  서버가 정답이라는 원칙은 지킨다: 고정은 **내가 방금 쓴 값**에 대해서만, 30초만.
+const renamePins = new Map();
+function pinRename(id, label) { renamePins.set(id, { label, until: Date.now() + 30_000 }); }
+function applyRenamePins(sessions) {
+    if (!renamePins.size)
+        return;
+    const now = Date.now();
+    for (const [id, p] of [...renamePins]) {
+        if (p.until < now) {
+            renamePins.delete(id);
+            continue;
+        }
+        const s = sessions.find((x) => x.id === id);
+        if (!s)
+            continue;
+        if (s.label === p.label) {
+            renamePins.delete(id);
+            continue;
+        } // 서버가 따라잡았다 — 고정 해제
+        s.label = p.label;
+        if (s.raw)
+            s.raw.label = p.label;
+    }
+}
+/** 사이드바 인라인 편집(#1719 원준) — 탭이 어디에 있든 이름을 전체에 반영한다.
+ *  그 세션을 연 탭이 있으면 그 탭의 대화창·우패널·탭 제목까지, 없으면 목록만. 서버 반영은 renameSession 과 같은 경로. */
+async function renameSessionEverywhere(sessionId, label) {
+    const tab = tabsApi?.tabs.find((t) => routeKey(t.route) === 's:' + sessionId) || tabsApi?.active();
+    if (!tab)
+        return;
+    await renameSession(sessionId, label, tab);
+}
 async function renameSession(sessionId, label, tab) {
     const s = findSess(sessionId); // 기록(uuid) 링크로 열린 세션도 같은 박스를 가리키게
     const body = { label };
     if (s && s.node)
         body.node = s.node; // 노드 세션은 게이트웨이가 그 노드로 중계한다(라우트가 body.node 를 본다)
     await api('/api/ui/terminal/sessions/' + encodeURIComponent(sessionId), { method: 'POST', body: JSON.stringify(body) });
+    pinRename(sessionId, label); // 떠 있던 폴링 응답이 옛 이름으로 되덮지 않게(위 renamePins)
     if (s) {
         s.label = label;
         if (s.raw)
