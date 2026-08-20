@@ -10,6 +10,7 @@ import {
   getRuntimeConfig, listOrgHooks, listEnabledHooks, upsertOrgHook, removeOrgHook, recordHookFailures, type HookHarness
 } from "../../org/store.js";
 import { previewHooks } from "../../org/delivery/hooks-preview.js";
+import { effectiveHooks, isSeedHook, lockedFieldViolations, seedHookIds, seedHookLockMessage } from "../../org/delivery/seed-hook-lock.js";
 import { HOOK_HARNESSES, HOOK_HARNESSES_MSG, parseTargetMembers, restRead, restRuntime, str, wctx } from "./shared.js";
 
 // 커스텀 훅(org_hook)이 붙을 수 있는 이벤트 — DB 제약(org_hook_event_chk)·run-custom 배선(runnerHooksBlock)과 일치 유지.
@@ -48,12 +49,20 @@ export const hooksCapabilities: Capability[] = [
   restRuntime("org_hooks", "커스텀 훅 목록",
     "조직 커스텀 훅 전체(소스 포함) — runtime 권한 전용. 멤버 런너 fetch 는 org_runner_hooks(별도).",
     [{ method: "GET", paths: ["/api/ui/org/hooks"], parse: () => ({}) }],
-    async () => ({ hooks: await listOrgHooks(), meaning: MEANING["custom-hook"] })),
+    // 화면 = 실제 실행본. 시드 훅은 DB 행이 무엇이든 코드 본문으로 덮어 보낸다(#1836) — 관리탭이 '보고 있는 것'과
+    //  런너가 '실행하는 것'이 갈라지지 않게. locked_hook_ids 로 프론트가 read-only·배지를 그린다.
+    async () => ({ hooks: effectiveHooks(await listOrgHooks()), locked_hook_ids: seedHookIds(), meaning: MEANING["custom-hook"] })),
   restRuntime("org_hook_upsert", "커스텀 훅 추가·수정",
     "구성원 머신에서 실행되는 커스텀 훅을 저장한다(runtime). 본문은 멤버 디스크에 굳히지 않고 런너가 매 세션 fetch.",
     [{ method: "POST", paths: ["/api/ui/org/hook"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
       const id = assertHookId(input.id);
+      // ── 시드 훅 잠금(#1836) — 라이블리가 배포하는 훅은 코드가 SoT. 조직은 enabled·target_members·sort 만 정한다.
+      //  같은 값을 다시 보내는 건 통과시킨다(시딩·동기화 스크립트의 멱등 재전송은 막을 이유가 없다).
+      {
+        const violations = lockedFieldViolations(id, input);
+        if (violations.length) throw new HttpError(409, seedHookLockMessage(id, violations));
+      }
       // event 도 부분수정 보존(#970): 생략하면 기존 event 유지(store 위임). 신규 훅은 event 필수 — store 가 방어.
       //  단 제공되면 반드시 유효값이어야 한다(오타로 잘못된 event 를 저장하지 않게).
       const event = input.event === undefined ? undefined : str(input.event, "event", 40);
@@ -101,7 +110,13 @@ export const hooksCapabilities: Capability[] = [
     "커스텀 훅을 제거한다 — 다음 세션부터 런너가 더는 fetch/실행하지 않는다(미접속 머신은 직전 상태 유지).",
     [{ method: "POST", paths: ["/api/ui/org/hook/remove"], parse: (req) => req.body ?? {} }],
     async (input: Record<string, unknown>, user: LivelyUser, ctx?: CapabilityCtx) => {
-      await removeOrgHook(assertHookId(input.id), wctx(user, ctx));
+      const rmId = assertHookId(input.id);
+      // 시드 훅은 지울 수 없다(#1836) — 지워도 다음 부팅 시딩이 되살리므로 '지웠다'가 거짓말이 된다. 끄는 것이 올바른 표현.
+      if (isSeedHook(rmId)) {
+        throw new HttpError(409, `'${rmId}' 는 라이블리가 배포하는 기본 훅이라 제거할 수 없습니다 — 지워도 다음 업데이트에 다시 설치됩니다. `
+          + `쓰지 않으려면 enabled=false 로 끄세요(그 상태는 업데이트에도 보존됩니다).`);
+      }
+      await removeOrgHook(rmId, wctx(user, ctx));
       return { ok: true };
     }, {
       id: z.string().describe("제거할 훅 id — 다음 세션부터 런너가 fetch/실행하지 않는다(미접속 머신은 직전 상태 유지)"),
@@ -130,7 +145,9 @@ export const hooksCapabilities: Capability[] = [
       // relay_decisions(#892) — 러너가 PreToolUse 에서 하네스로 전파할 결정값. 이미 매 이벤트 오는 응답에
       //  얹으므로 왕복이 늘지 않는다. 구버전 러너는 이 필드를 무시하고, 신 러너는 필드가 없으면 자체 기본값을 쓴다.
       const relay = (await getRuntimeConfig()).hook_relay_decisions;
-      return { hooks: hooks.map((h) => ({
+      // 시드 훅은 코드 본문으로 덮어 내려준다(#1836) — 과거에 편집된 행이 남아 있어도 실행은 항상 최신 제품 코드다.
+      //  content_hash 도 함께 덮이므로 런너의 무결성 게이팅은 그대로 성립한다.
+      return { hooks: effectiveHooks(hooks).map((h) => ({
         id: h.id, event: h.event, matcher: h.matcher, source_code: h.source_code,
         content_hash: h.content_hash, timeout_sec: h.timeout_sec,
       })), relay_decisions: relay };
