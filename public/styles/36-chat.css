@@ -131,6 +131,14 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-meta a { color: var(--ink-sub); text-decoration: none; }
 .sc-meta a:hover { color: var(--blue); }
 .sc-sep { color: var(--muted-2); }
+/* 지금 무엇으로 돌고 있나(모델·추론강도) — 하네스 이름 옆. 자기 안에서도 sc-meta 와 같은 리듬(6px)을 쓴다.
+   [hidden] 을 다시 적는 것은 display:inline-flex 가 hidden 속성의 기본 display:none 을 이기기 때문이다. */
+.sc-run { display: inline-flex; align-items: center; gap: 6px; }
+.sc-run[hidden] { display: none; }
+.sc-meta { min-width: 0; }
+.sc-meta > * { flex: none; }
+.sc-meta .sc-proj { display: inline-flex; align-items: center; gap: 2px; flex: 0 1 auto; min-width: 0; }
+.sc-meta .sc-proj > a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sc-head-r { display: inline-flex; align-items: center; gap: 4px; flex: none; }
 .sc-act { font-size: 12.5px; padding: 4px 8px; border-radius: 6px; color: var(--ink-sub); }
 .sc-act:hover { background: var(--bg-tint); color: var(--ink); }
