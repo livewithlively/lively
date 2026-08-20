@@ -21,7 +21,7 @@
   grid-column: 1 / -1; grid-row: 1;
   height: var(--v2-tb-h, 36px);
   padding-left: var(--v2-tb-left, 0px); padding-right: var(--v2-tb-right, 0px);
-  background: #FAFBFC; border-bottom: 1px solid var(--line);
+  background: var(--gray-bg-2); border-bottom: 1px solid var(--line);
   -webkit-app-region: drag; -webkit-user-select: none; user-select: none;
 }
 #v2-root.has-topbar > .v2-topbar > .v2-tabs {

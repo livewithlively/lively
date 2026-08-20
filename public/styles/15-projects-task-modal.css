@@ -307,7 +307,7 @@ body.pjv-tm-open { overflow: hidden; }
 .pjv-tm-link-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; font-size: 13.5px; }
 .pjv-tm-link-type { font-size: 11px; font-weight: 700; border-radius: 5px; padding: 2px 7px; }
 .pjv-tm-link-type.blocking { color: var(--coral-text); background: color-mix(in srgb, var(--coral-text) 13%, transparent); }
-.pjv-tm-link-type.waiting_on { color: #E08A2B; background: color-mix(in srgb, #E08A2B 14%, transparent); }
+.pjv-tm-link-type.waiting_on { color: var(--warn-deep); background: color-mix(in srgb, var(--warn-deep) 14%, transparent); }
 .pjv-tm-link-type.linked { color: var(--muted-2); background: var(--bg-tint-2); }
 .pjv-tm-link-name { border: none; background: none; cursor: pointer; color: var(--ink); font-size: 13.5px; text-align: left; }
 .pjv-tm-link-name:hover { color: var(--blue); }
