@@ -5,7 +5,7 @@
 //  이 표의 항목이 `native` 로 바뀌거나 빠진다(표가 곧 '아직 안 옮긴 것' 목록이다).
 //  ⚠ 노출은 클래식과 같은 규칙(navOn — ui_nav 로 끈 탭은 여기서도 안 보인다).
 import { el, navOn } from '../core.js';
-import { sessionTermUrl } from '../lib/session-open.js';
+import { sessionTermUrl } from '../lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 import { listSessionApps, openAppSession, type SessionApp } from './app-session.js';
 import { openAppUi } from './app-ui.js';
 
