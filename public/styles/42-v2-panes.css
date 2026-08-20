@@ -8,7 +8,10 @@
 .pn-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg, #fff); }
 .pn-body { --pn-side-w: 340px; flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 6px var(--pn-side-w); background: var(--line); }
 .pn-body.no-side { grid-template-columns: minmax(0, 1fr) 0 0; }
-.pn-col { --pn-bottom-h: 240px; min-width: 0; display: flex; flex-direction: column; background: var(--bg, #fff); }
+/* ⚠ 격자 칸의 기본 min-height 는 auto 라 **내용이 칸을 밀어 늘린다** — 세션 화면처럼 자연 높이가 큰 것이
+   들어오면 아래 칸(세션 서랍)이 화면 밖으로 나간다(실측 2026-08-20: 900px 뷰포트에서 칸이 2625px). 0 으로 못 박는다. */
+.pn-body > * { min-height: 0; }
+.pn-col { --pn-bottom-h: 240px; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg, #fff); }
 .pn-col.no-bottom > .pn-pane[data-zone="bottom"] { display: none; }
 
 .pn-pane { min-height: 0; min-width: 0; display: flex; flex-direction: column; background: var(--bg, #fff); }
@@ -92,7 +95,8 @@
    서랍 타일은 곁칸 자료 카드(.pn-fcard)와 **같은 문법**이다 — 아이콘 면 + 이름 + 잔글씨. 두 서랍이
    같은 모양이라 '여기 담겨 있는 것들'이라는 뜻이 한 번에 읽힌다. */
 .pn-sessions { --pn-drw-h: 176px; overflow: hidden; }
-.pn-stage { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.pn-stage { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.pn-stage > * { min-height: 0; }
 .pn-stage-h { flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 20px 10px; border-bottom: 1px solid var(--line-row); }
 .pn-stage-h[hidden] { display: none; }
 .pn-sname { font-size: 14px; font-weight: 700; min-width: 0; max-width: 42%; }
