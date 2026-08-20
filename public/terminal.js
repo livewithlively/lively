@@ -442,10 +442,12 @@
 
   // web/standalone/terminal.ts
   function urlAtColumn(lineText, col) {
-    const re = /https?:\/\/[^\s"'<>\u3000]+/g;
+    const re = /(https?:\/\/[^\s"'<>\u3000]+|(?:www\.|(?:[a-z0-9][a-z0-9-]*\.)+[a-z]{2,}\/)[^\s"'<>\u3000]*)/gi;
     for (let m = re.exec(lineText); m; m = re.exec(lineText)) {
       if (col >= m.index && col < m.index + m[0].length) {
-        return m[0].replace(/[.,;:!?)\]]+$/, "");
+        const raw = m[0].replace(/[.,;:!?)\]]+$/, "");
+        if (!raw) return null;
+        return /^https?:\/\//i.test(raw) ? raw : "https://" + raw;
       }
     }
     return null;
@@ -573,7 +575,7 @@
   }
   function diagText() {
     return [
-      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build f7da472a",
+      "# \uC6F9\uD130\uBBF8\uB110 \uC785\uB825 \uC9C4\uB2E8 (#1117) \xB7 build c85a5751",
       "ua: " + navigator.userAgent,
       "session: " + SESSION_ID + (NODE_ID ? " node=" + NODE_ID : ""),
       "secure: " + window.isSecureContext + " \xB7 exported: " + (/* @__PURE__ */ new Date()).toISOString(),
@@ -2304,7 +2306,7 @@
           "\uBB38\uC81C\uAC00 \uC0DD\uACBC\uC744 \uB54C",
           tool("\uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", "\uC785\uB825\uC774 \uC774\uC0C1\uD560 \uB54C(\uD0A4\uB9CC \uB20C\uB7EC\uB3C4 \uAC19\uC740 \uBB38\uC790\uC5F4\uC774 \uB4E4\uC5B4\uAC00\uB294 \uB4F1) \uC544\uB798 \uBC84\uD2BC\uC73C\uB85C \uCD5C\uADFC \uC785\uB825 \uAE30\uB85D\uC744 \uBCF5\uC0AC\uD574 \uC81C\uBCF4\uC5D0 \uBD99\uC5EC \uC8FC\uC138\uC694 \u2014 \uC11C\uBC84\uB85C\uB294 \uC804\uC1A1\uB418\uC9C0 \uC54A\uC544\uC694"),
           el("button", { class: "tbtn", text: "\u{1F50D} \uC785\uB825 \uC9C4\uB2E8 \uBCF5\uC0AC", onclick: () => copyText(diagText(), false, true) }),
-          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "f7da472a \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
+          tool("\uC2E4\uD589 \uC911 \uBE4C\uB4DC", "c85a5751 \u2014 \uC81C\uBCF4 \uC2DC \uC774 \uAC12\uC744 \uD568\uAED8 \uC54C\uB824 \uC8FC\uC138\uC694(\uC61B \uCE90\uC2DC\uB85C \uD14C\uC2A4\uD2B8\uD558\uB294 \uC624\uC778 \uBC29\uC9C0)")
         ),
         sec(
           "\uB3C4\uAD6C (\uC624\uB978\uCABD \uC704 \uBC84\uD2BC)",
@@ -2780,6 +2782,10 @@
       theme: (THEMES[p.theme] || THEMES.dark).theme,
       scrollback: 1e4,
       allowProposedApi: true,
+      // OSC 8 하이퍼링크(#1541) — TUI(claude 등)가 표시 텍스트와 별개의 URI 를 심는 형식. 핸들러가 없으면 xterm 은
+      //  아무것도 안 한다(죽은 링크). 열기 규칙은 한 곳(openLinkFromTerminal) — 트래킹 pane 에선 클릭이 pty 로 가서
+      //  이 핸들러까지 안 오는 경우가 있는데, 그 축은 아래 캡처 경로(urlAtColumn)가 표시 텍스트로 커버한다.
+      linkHandler: { activate: (_e, uri) => openLinkFromTerminal(uri) },
       // tmux mouse on 이라도 선택할 수 있게: macOS 는 Option+드래그(iTerm 습관), 공통으로 Shift+드래그.
       macOptionClickForcesSelection: true,
       rightClickSelectsWord: true

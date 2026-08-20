@@ -25,10 +25,15 @@ declare const WebLinksAddon: any;
 //  클릭을 앱으로 보내므로 web-links 애드온(맨클릭)이 못 받는다 — 우회는 Shift+클릭뿐인데 사람들의 손은
 //  iTerm·VSCode 습관(Cmd+클릭)이다. 그래서 DOM 레벨에서 좌표→셀→그 줄 텍스트로 URL 을 직접 찾는다.
 export function urlAtColumn(lineText: string, col: number): string | null {
-  const re = /https?:\/\/[^\s"'<>\u3000]+/g;
+  // 세 형태를 링크로 본다(실측 #1541: TUI 가 스킴 없이 `developer.apple.com/account/…` 를 찍는다 — 스킴만 보면 놓친다):
+  //  ① https?:// 절대 URL  ② www. 시작  ③ 스킴 없는 host+경로(TLD 알파벳 2+ && `/` 경로 필수 — `package.json` 처럼
+  //  경로 없는 점-이름을 오탐하지 않기 위해 ③ 은 경로가 있어야 한다). ②③ 은 열 때 https:// 를 붙인다.
+  const re = /(https?:\/\/[^\s"'<>\u3000]+|(?:www\.|(?:[a-z0-9][a-z0-9-]*\.)+[a-z]{2,}\/)[^\s"'<>\u3000]*)/gi;
   for (let m = re.exec(lineText); m; m = re.exec(lineText)) {
     if (col >= m.index && col < m.index + m[0].length) {
-      return m[0].replace(/[.,;:!?)\]]+$/, "");   // 문장부호 꼬리 제거(문장 속 URL)
+      const raw = m[0].replace(/[.,;:!?)\]]+$/, "");   // 문장부호 꼬리 제거(문장 속 URL)
+      if (!raw) return null;
+      return /^https?:\/\//i.test(raw) ? raw : "https://" + raw;
     }
   }
   return null;
@@ -2070,6 +2075,10 @@ export async function boot() {
   term = new Terminal({
     fontFamily: p.fontFamily, fontSize: p.fontSize, cursorStyle: p.cursorStyle, cursorBlink: true,
     theme: (THEMES[p.theme] || THEMES.dark).theme, scrollback: 10000, allowProposedApi: true,
+    // OSC 8 하이퍼링크(#1541) — TUI(claude 등)가 표시 텍스트와 별개의 URI 를 심는 형식. 핸들러가 없으면 xterm 은
+    //  아무것도 안 한다(죽은 링크). 열기 규칙은 한 곳(openLinkFromTerminal) — 트래킹 pane 에선 클릭이 pty 로 가서
+    //  이 핸들러까지 안 오는 경우가 있는데, 그 축은 아래 캡처 경로(urlAtColumn)가 표시 텍스트로 커버한다.
+    linkHandler: { activate: (_e: MouseEvent, uri: string) => openLinkFromTerminal(uri) },
     // tmux mouse on 이라도 선택할 수 있게: macOS 는 Option+드래그(iTerm 습관), 공통으로 Shift+드래그.
     macOptionClickForcesSelection: true, rightClickSelectsWord: true,
   });
