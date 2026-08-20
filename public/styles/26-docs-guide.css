@@ -157,7 +157,7 @@ body[data-route="onboarding"] main { max-width: none; }
 a.docs-linkcard { display: block; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px;
   background: var(--bg); text-decoration: none; color: inherit;
   transition: border-color .14s ease, box-shadow .14s ease, transform .14s ease; }
-a.docs-linkcard:hover { border-color: var(--line-net-2); box-shadow: 0 6px 20px rgba(21,35,59,.07); transform: translateY(-2px); text-decoration: none; }
+a.docs-linkcard:hover { border-color: var(--line-net-2); box-shadow: 0 6px 20px rgba(var(--shadow-ink), .07); transform: translateY(-2px); text-decoration: none; }
 a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .docs-linkcard-t { display: flex; align-items: center; justify-content: space-between; gap: 8px;
   font-size: 14.5px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
@@ -190,9 +190,9 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
    #780 뷰티파이: 납작한 틴트 박스 → 아이콘 타일 + 부드러운 그림자 카드(호버 시 살짝 뜸). 아래 콜아웃(.md-quote)과 뚜렷이 구분. */
 .md-prompt { display: flex; align-items: flex-start; gap: 12px; position: relative;
   background: var(--bg); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; margin: 10px 0;
-  box-shadow: 0 1px 2px rgba(21,35,59,.04); transition: border-color .14s, box-shadow .14s, transform .14s; }
+  box-shadow: 0 1px 2px rgba(var(--shadow-ink), .04); transition: border-color .14s, box-shadow .14s, transform .14s; }
 .md-prompt:hover { border-color: color-mix(in srgb, var(--blue) 42%, var(--line));
-  box-shadow: 0 6px 18px rgba(21,35,59,.08); transform: translateY(-1px); }
+  box-shadow: 0 6px 18px rgba(var(--shadow-ink), .08); transform: translateY(-1px); }
 .md-prompt::before { content: '💬'; flex: none; display: inline-flex; align-items: center; justify-content: center;
   width: 30px; height: 30px; border-radius: 9px; margin-top: 1px; font-size: 15px; line-height: 1;
   background: color-mix(in srgb, var(--blue) 9%, var(--bg-punch)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 14%, transparent); }
@@ -219,9 +219,9 @@ a.docs-linkcard:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .md-tab-btn { appearance: none; border: 1px solid transparent; background: none; padding: 7px 13px;
   font-size: 13.5px; font-weight: 700; color: var(--ink-sub); cursor: pointer; border-radius: 9px;
   transition: background .12s ease, color .12s ease, border-color .12s ease; }
-.md-tab-btn:hover { color: var(--ink); background: rgba(255,255,255,.75); }
+.md-tab-btn:hover { color: var(--ink); background: var(--overlay-pill-2); }
 .md-tab-btn.active { background: var(--bg); color: var(--blue); border-color: var(--line-net-2);
-  box-shadow: 0 1px 4px rgba(21,35,59,.06); }
+  box-shadow: 0 1px 4px rgba(var(--shadow-ink), .06); }
 .md-tab-btn:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .md-tabs-body { background: var(--bg); border: 1px solid var(--line-net); border-radius: 10px; padding: 16px 18px 8px; }
 .md-tabs-body .md-tabpane > :last-child { margin-bottom: 8px; }

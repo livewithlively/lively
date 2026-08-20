@@ -39,7 +39,7 @@ function oaEnsureStyles() {
 .oa-badge.oa-op-delete,.oa-badge.oa-op-revoke{color:var(--coral);border-color:var(--coral)}
 .oa-badge.oa-op-insert,.oa-badge.oa-op-mint{color:var(--blue);border-color:var(--blue)}
 .oa-kind{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700}
-.oa-kind-ai{background:var(--blue);color:#fff}
+.oa-kind-ai{background:var(--blue-fill);color:var(--on-fill)}
 .oa-kind-human{background:var(--bg-tint);color:var(--ink);border:1px solid var(--line)}
 .oa-kind-system,.oa-kind-connector,.oa-kind-unknown{background:var(--bg-tint);color:var(--ink-sub);border:1px solid var(--line)}
 .oa-actor{color:var(--ink-sub);font-size:12px}

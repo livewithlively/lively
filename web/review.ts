@@ -59,7 +59,7 @@ export function rqEnsureStyles(): void {
 .rq-sel{width:100%;padding:7px 8px;font:inherit;font-size:13px;box-sizing:border-box;border:1px solid var(--line);border-radius:9px;background:var(--bg)}
 .rq-sw{position:relative;width:46px;height:26px;border-radius:999px;border:1px solid var(--line);background:var(--muted-3);cursor:pointer;transition:background .15s;flex:none}
 .rq-sw[aria-checked="true"]{background:var(--blue);border-color:var(--blue)}
-.rq-sw::after{content:'';position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;transition:transform .15s}
+.rq-sw::after{content:'';position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:var(--surface);transition:transform .15s}
 .rq-sw[aria-checked="true"]::after{transform:translateX(20px)}
 .rq-sw:disabled{opacity:.5;cursor:not-allowed}
 .rq-stats{display:flex;gap:10px;flex-wrap:wrap;margin:2px 0 14px}

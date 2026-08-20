@@ -3,7 +3,7 @@
    상세 페이지를 그대로 모달에 렌더하고 모달 안에서 스크롤. 태스크 팝업(.pjv-tm)과 동일한 셸.
    ============================================================ */
 body.pjv-pm-open { overflow: hidden; }
-.pjv-pm-back { position: fixed; inset: 0; background: rgba(21,35,59,.5); display: flex; align-items: center; justify-content: center; padding: 4vh 20px; z-index: 210; }
+.pjv-pm-back { position: fixed; inset: 0; background: rgba(var(--shadow-ink), .5); display: flex; align-items: center; justify-content: center; padding: 4vh 20px; z-index: 210; }
 .pjv-pm { display: flex; flex-direction: column; width: min(1100px, 96vw); height: min(90vh, 940px); background: var(--bg); border: 1px solid var(--line-net); border-radius: 14px; box-shadow: 0 24px 64px rgba(20,35,59,.28); overflow: hidden; }
 .pjv-pm-head { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 9px 12px 9px 16px; border-bottom: 1px solid var(--line); }
 .pjv-pm-x { flex: none; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; cursor: pointer; color: var(--muted); font-size: 14px; border-radius: 7px; padding: 0; }
