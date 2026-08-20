@@ -181,12 +181,12 @@
 .kn-projlink-group { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
 .kn-projlink-rel { flex: none; font-size: 11px; font-weight: 800; padding: 1px 7px; border-radius: 6px; letter-spacing: -.2px; }
 .kn-projlink-rel-required { color: var(--blue); background: var(--bg-tint-2); border: 1px solid var(--line-net-2); }
-.kn-projlink-rel-produced { color: var(--ok-2); background: var(--bg-success, var(--ok-bg)); border: 1px solid var(--ok-line-2); }
+.kn-projlink-rel-produced { color: var(--ok-2); background: var(--bg-success); border: 1px solid var(--ok-line-2); }
 .kn-projchip { gap: 6px; padding: 1px 4px 1px 9px; }
 .kn-projchip-link { color: var(--ink); text-decoration: none; max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kn-projchip-link:hover { color: var(--blue); }
 .kn-projchip-x { flex: none; width: 18px; height: 18px; border: none; background: transparent; color: var(--muted-2); cursor: pointer; border-radius: 5px; font-size: 11px; line-height: 1; }
-.kn-projchip-x:hover { background: var(--bg-danger, var(--danger-bg)); color: var(--danger, var(--danger-deep)); }
+.kn-projchip-x:hover { background: var(--bg-danger); color: var(--danger); }
 /* 선택 피커 상단 관계 토글 바 */
 .kn-projpick-bar { display: flex; align-items: center; gap: 8px; }
 .kn-projpick-rel { flex: none; }

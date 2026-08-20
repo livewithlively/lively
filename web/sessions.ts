@@ -314,7 +314,7 @@ function toolsChip(tools: Item[]): any {
   const names = [...new Set(tools.map((t) => t.tool).filter(Boolean))].slice(0, 4).join(', ');
   const detail = el('div', { style: 'display:none;margin:4px 0 4px 8px;padding:6px 10px;border-left:2px solid rgba(161,98,7,.35);background:rgba(161,98,7,.06);border-radius:4px' },
     ...tools.map((t) => el('div', { style: 'font-size:12px;padding:2px 0;font-family:ui-monospace,Menlo,monospace' },
-      el('span', { style: 'color:var(--warn-deep);font-weight:600', text: (t.tool || 'tool') + ' ' }),
+      el('span', { style: 'color:var(--warn-ink);font-weight:600', text: (t.tool || 'tool') + ' ' }),
       el('span', { style: 'opacity:.8', text: t.text || '' }))));
   const btn = el('button', { class: 'btn btn-ghost btn-sm', style: 'margin:2px 0 2px 8px;font-size:12px', text: `🔧 도구 ${tools.length}개${names ? ' · ' + names : ''} ▸` });
   btn.addEventListener('click', () => {

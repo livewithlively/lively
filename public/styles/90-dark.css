@@ -33,13 +33,14 @@
   --coral-text: #F49B91;
   --accent: #8F9AFF;
 
-  /* 텍스트 — 저휘도 모니터 기준: 본문 15:1, 보조 9:1, muted 도 6:1 확보(실측 WCAG 검산 완료) */
+  /* 텍스트 — 저휘도 모니터 기준으로 잡았다. 라이트의 muted 계열은 본문 대비가 2:1 대라 흐린 글자가 있었는데,
+     다크에선 **전부 4.5:1 이상**으로 올린다(--muted-2 는 실제로 본문 글자에 쓰인다 — 프리뷰 감사에서 확인). */
   --ink: #EAF0FA;
   --ink-sub: #B0BDD5;
   --ink-note: #C3D3F2;
-  --muted: #8D9CB8;
-  --muted-2: #6E7E9C;
-  --muted-3: #4D5B76;
+  --muted: #9AA9C4;
+  --muted-2: #8492B0;
+  --muted-3: #74839F;
   --muted-head: #97A6C2;
 
   /* 라인/보더 */
@@ -63,6 +64,7 @@
   --warn-2: #F2B04A;
   --warn-text: #E3A464;
   --warn-deep: #E0A952;
+  --danger-ink: #F6B3AB;
   --warn-ink: #F0C97E;
   --warn-bg: #33270F;
   --warn-bg-2: #302410;
@@ -92,6 +94,9 @@
   --callout-purple-bg: #262038;
   --callout-purple-line: #3B3155;
   --dmx-cross-bg: #2A2545;
+
+  /* 떠 있는 대비 바 — 다크에선 페이지보다 한 단계 밝은 판(흰 글자·흰 오버레이 그대로 유지) */
+  --chip-dark: #2E3A52;
 
   /* 코드·로그 판 — 다크에선 배경보다 더 깊게(면이 눌려 들어가 보이게) */
   --code-surface: #080C14;
@@ -135,13 +140,14 @@
   --coral-text: #F49B91;
   --accent: #8F9AFF;
 
-  /* 텍스트 — 저휘도 모니터 기준: 본문 15:1, 보조 9:1, muted 도 6:1 확보(실측 WCAG 검산 완료) */
+  /* 텍스트 — 저휘도 모니터 기준으로 잡았다. 라이트의 muted 계열은 본문 대비가 2:1 대라 흐린 글자가 있었는데,
+     다크에선 **전부 4.5:1 이상**으로 올린다(--muted-2 는 실제로 본문 글자에 쓰인다 — 프리뷰 감사에서 확인). */
   --ink: #EAF0FA;
   --ink-sub: #B0BDD5;
   --ink-note: #C3D3F2;
-  --muted: #8D9CB8;
-  --muted-2: #6E7E9C;
-  --muted-3: #4D5B76;
+  --muted: #9AA9C4;
+  --muted-2: #8492B0;
+  --muted-3: #74839F;
   --muted-head: #97A6C2;
 
   /* 라인/보더 */
@@ -165,6 +171,7 @@
   --warn-2: #F2B04A;
   --warn-text: #E3A464;
   --warn-deep: #E0A952;
+  --danger-ink: #F6B3AB;
   --warn-ink: #F0C97E;
   --warn-bg: #33270F;
   --warn-bg-2: #302410;
@@ -194,6 +201,9 @@
   --callout-purple-bg: #262038;
   --callout-purple-line: #3B3155;
   --dmx-cross-bg: #2A2545;
+
+  /* 떠 있는 대비 바 — 다크에선 페이지보다 한 단계 밝은 판(흰 글자·흰 오버레이 그대로 유지) */
+  --chip-dark: #2E3A52;
 
   /* 코드·로그 판 — 다크에선 배경보다 더 깊게(면이 눌려 들어가 보이게) */
   --code-surface: #080C14;

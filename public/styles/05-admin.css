@@ -187,11 +187,11 @@
 .ov-back.ov-confirm-back { align-items: center; }
 .ov-box.ov-confirm { max-width: 440px; padding: 20px 22px; }
 .ov-box.ov-confirm .ov-head { margin-bottom: 10px; }
-.ov-box.ov-confirm.danger .ov-head h3 { border-left: 3px solid var(--coral, var(--danger)); padding-left: 10px; }
+.ov-box.ov-confirm.danger .ov-head h3 { border-left: 3px solid var(--coral); padding-left: 10px; }
 .ov-confirm-body { display: flex; flex-direction: column; gap: 7px; }
 .ov-confirm-msg { margin: 0; font-size: 14px; line-height: 1.6; color: var(--ink); }
-.ov-confirm-line { margin: 0; font-size: 13px; line-height: 1.6; color: var(--ink-note, var(--muted)); }
-.ov-confirm-note { margin: 2px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); background: var(--bg-tint, rgba(127,127,127,.07)); border-radius: 8px; padding: 8px 10px; }
+.ov-confirm-line { margin: 0; font-size: 13px; line-height: 1.6; color: var(--ink-note); }
+.ov-confirm-note { margin: 2px 0 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); background: var(--bg-tint); border-radius: 8px; padding: 8px 10px; }
 /* 안내문 아래 보조 슬롯(#1582) — '대화록은 남는다'는 말을 그 자리에서 확인시켜 주는 링크가 들어간다.
    버튼줄과 붙어 보이지 않게 왼쪽 정렬로 한 칸 띄운다(확인/취소와 위계를 섞지 않는다). */
 .ov-confirm-extra { display: flex; justify-content: flex-start; margin-top: 2px; font-size: 12.5px; }
@@ -295,7 +295,7 @@
 /* #1291 v4 관리탭 ▸ 자료 공개범위 — 커넥터별 규칙 목록 */
 .svp-list { display: flex; flex-direction: column; gap: 2px; margin: 12px 0; }
 .svp-row { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-radius: 8px; }
-.svp-row + .svp-row { border-top: 1px solid var(--line, rgba(128,128,128,.18)); }
+.svp-row + .svp-row { border-top: 1px solid var(--line); }
 .svp-row:hover { background: rgba(var(--tint-ink), .06); }
 .svp-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .svp-scope { font-size: 13px; }
@@ -304,6 +304,6 @@
 .svp-row-actions { display: flex; gap: 6px; flex: none; }
 .svp-actions { display: flex; gap: 8px; margin-top: 14px; }
 .svp-warn { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 8px; margin-bottom: 12px;
-  background: var(--warn-bg, rgba(255,176,32,.12)); border: 1px solid var(--warn-line, rgba(255,176,32,.35)); }
+  background: var(--warn-bg); border: 1px solid var(--warn-line); }
 .svp-warn span { font-size: 13px; opacity: .85; }
 .svp-dry { margin: 12px 0; }

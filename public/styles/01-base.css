@@ -46,8 +46,14 @@
      다크 값은 90-dark.css 가 전량 재정의한다(두 파일이 쌍이며 scripts/dark-theme-contract.test.mjs 가 맞물림을 지킨다). ── */
   --surface:       #FFFFFF;   /* 카드·모달·팝오버 '떠 있는 면' — 다크에선 --bg 보다 한 층 밝다 */
   --on-fill:       #FFFFFF;   /* 채운 색(블루 버튼 등) 위 글자 — 양 테마 공통 백색 (theme-invariant) */
-  --blue-fill:     #2D6BF0;   /* 채움용 블루(버튼·배지 배경) — 다크에서도 채도 유지, --blue 는 글자·라인용으로 밝아진다 */
-  --blue-fill-deep:#1E54CC;   /* 채움 블루의 hover/눌림 */
+  --blue-fill:     #2D6BF0;   /* (theme-invariant) 채움용 블루(버튼·배지 배경) — 다크에서도 채도 유지, --blue 는 글자·라인용으로 밝아진다 */
+  --blue-fill-deep:#1E54CC;   /* (theme-invariant) 채움 블루의 hover/눌림 */
+  /* 아래 채움 토큰도 같은 이유로 (theme-invariant) — 채운 면 위에는 늘 --on-fill(백색)이 앉으므로
+     다크에서 색을 밝히면 그 글자가 죽는다. 글자·라인용 --mint/--coral/--danger/--ok 는 다크에서 밝아진다. */
+  --mint-fill:     #0FA37E;   /* (theme-invariant) 완료·성공 채움 */
+  --ok-fill:       #16A37F;   /* (theme-invariant) */
+  --danger-fill:   #E5484D;   /* (theme-invariant) */
+  --coral-fill:    #E4756B;   /* (theme-invariant) 파괴 버튼 채움 */
   --accent:        #5B6CFF;   /* 신형 화면 인디고 액센트(구 유령 --accent 정규화 — A1) */
   --danger:        #E5484D;
   --danger-deep:   #D6453C;
@@ -58,6 +64,7 @@
   --warn-2:        #F5A623;
   --warn-text:     #9A5B2E;
   --warn-deep:     #B5791E;
+  --danger-ink:    #8C2020;   /* 틴트 위 진한 오류 본문 — deep 보다 한 단계 더 어두운 '잉크' 계층 */
   --warn-ink:      #6B4E00;
   --warn-bg:       #FFF6E6;
   --warn-bg-2:     #FBF1E7;
@@ -86,6 +93,11 @@
   --dmx-cross-bg:        #EFEDF5;
 
   /* 코드·로그 판 — 라이트에서도 어두운 판이 정체성인 표면(셸 명령·실행 로그). 다크에선 더 깊어진다. */
+  /* 떠 있는 대비 바·칩(벌크바·에디터 툴바·보드 primary 그룹) — 라이트에선 '어두운 판'이 정체성이고,
+     다크에선 페이지보다 **한 단계 밝은** 판이 되어야 떠 보인다. 어느 쪽이든 위 글자는 --on-fill(백색)이고
+     반투명 흰 오버레이(호버·구분선)가 그대로 성립한다. */
+  --chip-dark:     #15233B;
+
   --code-surface:  #0D1117;
   --code-ink:      #C9D1D9;
 

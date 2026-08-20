@@ -85,7 +85,7 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 .liv-ask-note { color: var(--muted); font-size: 11px; margin-top: 6px; line-height: 1.5; }
 .liv-ask-msg:not(:empty) { font-size: 12px; margin-top: 6px; line-height: 1.5; }
 .liv-ask-ok { color: var(--mint-deep); }
-.liv-ask-err { color: var(--danger, #B4433A); }
+.liv-ask-err { color: var(--danger); }
 
 /* 객관식 — **고르는 것이 기본**이다(자유서술은 사람이 가장 오래 멈추는 자리였다).
    버튼을 세로로 쌓는다: 좁은 레일에서 가로로 흘리면 라벨이 잘리고, 잘린 선택지는 안 골라진다. */

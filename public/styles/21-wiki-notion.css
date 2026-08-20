@@ -168,7 +168,7 @@
 
 /* 크로스 블록 선택 — 블록 경계를 넘는 드래그·⌘A 2차가 만드는 '블록 범위' 하이라이트.
    선택 중에는 브라우저 문자 선택을 억눌러 두 겹으로 칠해지지 않게 한다(interactions.ts 가 range 도 걷는다). */
-.be-block.be-bsel { background: var(--node-blue-soft, rgba(45,107,240,.10)); border-radius: 6px; }
+.be-block.be-bsel { background: var(--node-blue-soft); border-radius: 6px; }
 .be.be-bselecting .be-text { user-select: none; -webkit-user-select: none; }
 .be.be-bselecting .be-text::selection { background: transparent; }
 
@@ -186,9 +186,9 @@
 .be-slash-hint { margin-left: auto; font-size: 11px; color: var(--muted-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── 인라인 서식 툴바(다크 플로팅) ── */
-.be-tools { position: fixed; z-index: 1300; display: flex; gap: 2px; background: var(--ink); border-radius: 9px;
+.be-tools { position: fixed; z-index: 1300; display: flex; gap: 2px; background: var(--chip-dark); border-radius: 9px;
   padding: 4px; box-shadow: 0 10px 30px rgba(var(--shadow-ink), .32); }
-.be-tool { border: none; background: none; color: #E7EDF7; min-width: 27px; height: 26px; border-radius: 6px;
+.be-tool { border: none; background: none; color: var(--on-fill); min-width: 27px; height: 26px; border-radius: 6px;
   cursor: pointer; font-size: 12.5px; font-family: inherit; padding: 0 6px; }
 .be-tool:hover { background: rgba(255, 255, 255, .16); }
 .be-tool-b { font-weight: 800; }
@@ -281,8 +281,8 @@ main.doc-mode .btn { border-radius: 9px; font-weight: 650; }
 main.doc-mode .btn-sm { padding: 6px 12px; font-size: 12.5px; border-radius: 8px; }
 main.doc-mode .btn-ghost { background: var(--wk-card); border-color: var(--wk-line); color: var(--wk-ink); box-shadow: 0 1px 2px rgba(27,30,39,.03); }
 main.doc-mode .btn-ghost:hover { border-color: var(--wk-living); background: var(--wk-card); }
-main.doc-mode .btn-primary { background: var(--wk-navy); box-shadow: 0 1px 2px rgba(31,58,102,.18); }
-main.doc-mode .btn-primary:hover { background: var(--wk-navy-deep); }
+main.doc-mode .btn-primary { background: var(--blue-fill); box-shadow: 0 1px 2px rgba(31,58,102,.18); }
+main.doc-mode .btn-primary:hover { background: var(--blue-fill-deep); }
 /* 삭제 — 상시 붉은 pill 대신 조용한 고스트, 위험색은 hover 에서만 */
 main.doc-mode .btn-danger { background: var(--wk-card); border: 1px solid var(--wk-line); color: var(--wk-ink-soft); }
 main.doc-mode .btn-danger:hover { border-color: var(--coral); color: var(--coral-text); background: var(--danger-bg-2); }

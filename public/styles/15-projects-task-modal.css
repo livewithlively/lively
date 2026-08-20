@@ -87,7 +87,7 @@
 .pjv-col-draggable:active { cursor: grabbing; }
 .pjv-col-drag-src { opacity: .45; }
 .pjv-col-drop-before::after, .pjv-col-drop-after::after {
-  content: ''; position: absolute; top: 2px; bottom: 2px; width: 2px; background: var(--blue, var(--blue-fill));
+  content: ''; position: absolute; top: 2px; bottom: 2px; width: 2px; background: var(--blue);
   border-radius: 2px; box-shadow: 0 0 0 1px rgba(45,107,240,.25); pointer-events: none; z-index: 2; }
 .pjv-col-drop-before::after { left: -1px; }
 .pjv-col-drop-after::after { right: -1px; }
@@ -197,7 +197,7 @@ body.pjv-tm-open { overflow: hidden; }
 .pjv-tm-valbtn.empty { color: var(--muted-3); }
 .pjv-tm-valtext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 상태 배지 — 통일 아이콘 칩(#499 후속): 라이트 배경 + 상태색 라벨 + SVG 아이콘 */
-.pjv-tm-statuspill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-net, var(--gray-line)); cursor: pointer; font-size: 12px; font-weight: 800; letter-spacing: .4px; color: var(--ink); background: var(--bg); padding: 4px 11px 4px 7px; border-radius: 7px; transition: border-color .13s ease; }
+.pjv-tm-statuspill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line-net); cursor: pointer; font-size: 12px; font-weight: 800; letter-spacing: .4px; color: var(--ink); background: var(--bg); padding: 4px 11px 4px 7px; border-radius: 7px; transition: border-color .13s ease; }
 .pjv-tm-statuspill:hover { border-color: var(--blue); }
 .pjv-tm-statuspill.todo { color: var(--muted); }
 .pjv-tm-statuspill.inprog { color: var(--blue); }
@@ -263,7 +263,7 @@ body.pjv-tm-open { overflow: hidden; }
 
 /* 태그 */
 .pjv-tm-tags { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
-.pjv-tm-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; color: var(--tag, var(--blue)); background: color-mix(in srgb, var(--tag, var(--blue)) 14%, transparent); border-radius: 6px; padding: 2px 4px 2px 8px; }
+.pjv-tm-tag { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; color: var(--tag); background: color-mix(in srgb, var(--tag) 14%, transparent); border-radius: 6px; padding: 2px 4px 2px 8px; }
 .pjv-tm-tag-x { border: none; background: none; cursor: pointer; color: inherit; opacity: .55; font-size: 10px; }
 .pjv-tm-tag-x:hover { opacity: 1; }
 .pjv-tm-tagadd { border: 1px dashed var(--line-net); background: none; cursor: pointer; color: var(--muted-2); font-size: 12px; padding: 2px 9px; border-radius: 6px; }

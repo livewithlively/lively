@@ -163,18 +163,18 @@ label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; fo
 .md-rendered > .md > :last-child { margin-bottom: 0; }
 /* 내 스킬·훅 — 라이블리 자산이 깔린 PC 칩 + sync 경고 (#893 후속) */
 .pc-chips { display: flex; flex-wrap: wrap; gap: 4px; }
-.pc-chip { display: inline-flex; align-items: center; font-size: 11.5px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint, var(--gray-bg-2)); border: 1px solid var(--line-net); border-radius: 999px; padding: 2px 9px; white-space: nowrap; }
+.pc-chip { display: inline-flex; align-items: center; font-size: 11.5px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint); border: 1px solid var(--line-net); border-radius: 999px; padding: 2px 9px; white-space: nowrap; }
 .pc-chip.warn { color: var(--warn-ink); background: var(--warn-bg); border-color: var(--warn-line); }
 .pc-chip.muted { background: transparent; border-style: dashed; opacity: .75; }
 .sync-warn { padding: 10px 12px; background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 8px; margin-bottom: 10px; font-size: 13px; color: var(--warn-ink); line-height: 1.5; }
 /* 관리탭 [스킬·훅 ▸ 대상 구성원] — 정책(전원 켬/끔/지정) + 구성원별 예외 표 (#860) */
-.tm-policy { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--bg-tint, var(--gray-bg-2)); }
+.tm-policy { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--bg-tint); }
 .tm-members-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
 /* 저장 시점이 다른 두 레이어(정책=[저장] 후 / 예외=즉시)를 각 상자 머리에 못박는 라벨 */
 .tm-when { margin-left: auto; font-size: 11.5px; font-weight: 700; color: var(--muted-2); white-space: nowrap; }
 .tm-seg { display: inline-flex; gap: 2px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 2px; }
 .tm-seg-btn { font: inherit; font-size: 12.5px; font-weight: 700; color: var(--ink-sub); background: transparent; border: 0; border-radius: 6px; padding: 5px 11px; cursor: pointer; white-space: nowrap; }
-.tm-seg-btn:hover { background: var(--bg-tint, var(--gray-bg-2)); }
+.tm-seg-btn:hover { background: var(--bg-tint); }
 .tm-seg-btn.on { background: var(--blue-fill); color: var(--on-fill); }
 .tm-hint { font-size: 12.5px; color: var(--ink-sub); line-height: 1.5; margin: 8px 0 0; }
 /* 폼에 남는 요약 한 줄 — 구성원 표 자체는 모달로 뺐다(42명을 인라인으로 깔면 [저장]이 화면 밖으로 밀린다) */
@@ -187,14 +187,14 @@ label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; fo
 /* 정책이 '저장 전'이면 아래 실효 상태는 아직 옛 정책 기준 — 흐리게 해서 화면이 거짓말하지 않게 */
 .tm-list-stale { opacity: .55; }
 .tm-row { display: flex; align-items: center; gap: 12px; padding: 7px 4px; border-top: 1px solid var(--line); }
-.tm-row.exc { background: var(--bg-tint, var(--gray-bg-2)); }
+.tm-row.exc { background: var(--bg-tint); }
 /* 비활성 구성원 — 인증부터 막혀 아무것도 못 받는다. 예외 설정은 남기되 '살아있는 대상'으로 보이지 않게. */
 .tm-row.dead .tm-name, .tm-row.dead .tm-id { color: var(--muted-2); text-decoration: line-through; }
 .tm-who { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; }
 .tm-name { font-size: 13.5px; font-weight: 700; color: var(--ink); }
 .tm-id { font-size: 11.5px; font-weight: 600; color: var(--muted-2); }
 .tm-state { flex: 0 0 116px; display: flex; flex-direction: column; gap: 2px; }
-.tm-state .pill.tm-on { color: var(--ok-2); background: var(--ok-bg); border-color: var(--ok-line-2); }
+.tm-state .pill.tm-on { color: var(--ok-ink); background: var(--ok-bg); border-color: var(--ok-line-2); }
 .tm-why { font-size: 11px; font-weight: 600; color: var(--muted-2); }
 .tm-seg-row { flex: none; }
 @media (max-width: 640px) {
@@ -202,7 +202,7 @@ label.fld { display: flex; flex-direction: column; gap: 4px; font-size: 12px; fo
   .tm-state { flex-basis: auto; flex-direction: row; align-items: center; gap: 6px; }
 }
 .harness-click { cursor: pointer; border-radius: 8px; margin: -4px -6px; padding: 4px 6px; transition: background .12s; }
-.harness-click:hover { background: var(--bg-tint, var(--gray-bg-2)); }
+.harness-click:hover { background: var(--bg-tint); }
 .harness-click:hover .mini-title { text-decoration: underline; text-decoration-color: var(--line-net-2); text-underline-offset: 3px; }
 .md-p { margin: 0 0 12px; }
 .md-h { color: var(--ink); font-weight: 800; line-height: 1.35; margin: 22px 0 8px; }
