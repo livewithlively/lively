@@ -162,7 +162,11 @@ t("F7 ★ 세션 곁칸 '웹' 도 능력이 있으면 서피스로 그린다 —
   assert.ok(at >= 0, "웹 칸이 없다");
   // ⚠ 고정 길이로 자르지 않는다 — 그 함수는 자란다(#1819 로 세션 연동·⌘R 이 붙어 2200자를 넘겼고
   //  안내문 단언이 구간 밖으로 밀려나 거짓 실패했다). **다음 함수 선언 직전까지** 자른다.
-  const end = pane.indexOf("function editorPart(", at + 1);
+  // ⚠ 뒤 함수를 **이름으로** 잡지도 않는다 — 그 이름이 바뀌면 앵커가 사라져 거짓 실패한다
+  //  (실측: editorPart 가 viewerPart 로 개명되자 이 단언이 통째로 깨졌다, #1819). 구조로 잡는다.
+  const rest = pane.slice(at + 1);
+  const nextFn = rest.search(/\nfunction \w+\(/);
+  const end = nextFn < 0 ? -1 : at + 1 + nextFn;
   assert.ok(end > at, "웹 칸 뒤에 함수가 없다 — 구간을 못 자른다");
   const seg = pane.slice(at, end);
   assert.match(seg, /hasBrowserSurface\(\)/, "★ 능력 감지를 안 한다 — 데스크톱에서도 iframe 이라 막힌 사이트가 그대로 막힌다");

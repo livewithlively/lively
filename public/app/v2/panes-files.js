@@ -10,7 +10,7 @@ import { anchoredPopover, api, apiUrl, el, relTime, toast } from '../core.js';
 import { fmtSize, openFileViewer } from '../projects/files.js';
 import { confirmDialog } from '../ui-primitives.js';
 import { upDropZone, upSend, upToast } from '../projects/files-upload.js';
-import { FV_NOTE, FV_SIZE, FV_SORT, FV_VIEW, ICON_STEPS, MACHINE_FILES, NOISE_RE, PV_MAX, PV_W, SORT_LABEL, TRASH_DIR, attachName, authHeaders, ctxMenu, freeName, kindOf, lsGet, lsSet, pnIcon, stamp } from './panes-kit.js';
+import { FV_NOTE, FV_SIZE, FV_SORT, FV_VIEW, ICON_STEPS, MACHINE_FILES, NOISE_RE, PV_MAX, PV_W, SORT_LABEL, TRASH_DIR, attachName, authHeaders, ctxMenu, folderIcon, freeName, kindOf, lsGet, lsSet, pnIcon, stamp } from './panes-kit.js';
 export function filesPart(ctx) {
     const root = el('div', { class: 'pn-part pn-files', tabindex: '0' });
     const body = el('div', { class: 'pn-fbody' }); // 격자 또는 목록이 사는 자리(스크롤 주체)
@@ -254,7 +254,7 @@ export function filesPart(ctx) {
                 return false;
             return !NOISE_RE.test('/' + nm + '/');
         })
-            .map((it) => ({ name: String(it.name), path: rel(String(it.name)), type: it.type === 'dir' ? 'dir' : 'file', size: Number(it.size || 0), mtime: Number(it.mtime || 0) }));
+            .map((it) => ({ name: String(it.name), path: rel(String(it.name)), type: it.type === 'dir' ? 'dir' : 'file', size: Number(it.size || 0), mtime: Number(it.mtime || 0), empty: !!it.empty }));
     }
     function sortItems(list) {
         const dir = sortAsc ? 1 : -1;
@@ -381,6 +381,15 @@ export function filesPart(ctx) {
         if (f) {
             rows.push({ label: many.length > 1 ? `${many.length}개 열기` : (f.type === 'dir' ? '폴더 열기' : '열기'), run: () => { for (const x of many.slice(0, 8))
                     open(x); } });
+            if (f.type !== 'dir')
+                rows.push({ label: '뷰어에서 보기', run: () => {
+                        // 같은 화면의 [뷰어] 칸이 받아 연다. 뷰어 칸이 없으면 아무도 안 받으므로 그 사실을 말해 준다.
+                        if (!document.querySelector('.pn-ed')) {
+                            toast('먼저 어느 칸에든 [뷰어]를 넣어 주세요 — 칸 위의 ＋ 에서 고릅니다.', true);
+                            return;
+                        }
+                        window.dispatchEvent(new CustomEvent('pn-viewer-open', { detail: { id: ctx.id, path: f.path } }));
+                    } });
             if (f.type !== 'dir')
                 rows.push({ label: '내려받기', run: () => { for (const x of many)
                         if (x.type !== 'dir')
@@ -620,8 +629,9 @@ export function filesPart(ctx) {
         }
     }
     function thumb(f, small) {
+        // 목록 보기(20px)에선 서류를 그리지 않는다 — 그 크기에선 뭉개져 얼룩으로만 보인다.
         if (f.type === 'dir')
-            return el('span', { class: 'pn-fic dir' + (small ? ' sm' : '') }, pnIcon('folder', 'pn-i'));
+            return el('span', { class: 'pn-fic dir' + (small ? ' sm' : '') }, folderIcon('pn-folder' + (small ? ' sm' : ''), { empty: f.empty, plain: small }));
         const k = kindOf(f.path);
         const box = el('span', { class: 'pn-fic ' + k.kind + (small ? ' sm' : ''), 'data-pv': f.path, 'data-pvk': k.kind, 'data-pvs': String(f.size || 0) }, pnIcon(k.kind === 'page' ? 'note' : k.kind === 'video' ? 'img' : 'doc', 'pn-i'));
         if (k.kind !== 'file' && !small) {
