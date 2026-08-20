@@ -72,6 +72,53 @@ const storeQuery: Capability = {
   },
 };
 
+const storeUpdate: Capability = {
+  name: "store_update",
+  title: "앱 데이터 수정",
+  description: "앱 자기 데이터 테이블의 행을 수정(app.<appId>__<table>). 앱 세션/UI 전용. match(컬럼=값 등가, 파라미터화)로 대상 지정, set(컬럼=새값). match 없으면 거부(전량 수정 방지). 반환 changed(행수).",
+  scope: null,
+  input: { table: z.string(), match: z.record(z.unknown()), set: z.record(z.unknown()) },
+  expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/store/:table/update"], parse: (req) => { const b = (req.body ?? {}) as Record<string, unknown>; return { table: (req.params as Record<string, string>)?.table, match: b.match, set: b.set }; } }] },
+  handler: async (input: Record<string, unknown>, user) => {
+    const appId = requireAppPrincipal(user);
+    const table = String(input.table ?? "");
+    await assertDeclaredTable(appId, table);
+    const set = (input.set ?? {}) as Record<string, unknown>;
+    const match = (input.match ?? {}) as Record<string, unknown>;
+    const setCols = Object.keys(set).map((c) => assertIdent("column", c));
+    const matchKeys = Object.keys(match).map((k) => assertIdent("column", k));
+    if (!setCols.length) throw new HttpError(400, "수정할 컬럼이 없습니다");
+    if (!matchKeys.length) throw new HttpError(400, "match 가 필요합니다(전량 수정 방지)");
+    const phys = physicalTableName(appId, table);
+    const params: unknown[] = [];
+    const setSql = setCols.map((c) => { params.push(set[c]); return `${qi(c)}=$${params.length}`; }).join(",");
+    const whereSql = matchKeys.map((k) => { params.push(match[k]); return `${qi(k)}=$${params.length}`; }).join(" AND ");
+    const r = await itemsPool.query(`UPDATE app.${qi(phys)} SET ${setSql} WHERE ${whereSql}`, params);
+    return { changed: r.rowCount ?? 0 };
+  },
+};
+
+const storeDelete: Capability = {
+  name: "store_delete",
+  title: "앱 데이터 삭제",
+  description: "앱 자기 데이터 테이블의 행을 삭제(app.<appId>__<table>). 앱 세션/UI 전용. match(컬럼=값 등가, 파라미터화)로 대상 지정 — match 없으면 거부(전량 삭제 방지). 반환 deleted(행수).",
+  scope: null,
+  input: { table: z.string(), match: z.record(z.unknown()) },
+  expose: { mcp: true, rest: [{ method: "POST", paths: ["/api/ui/store/:table/delete"], parse: (req) => { const b = (req.body ?? {}) as Record<string, unknown>; return { table: (req.params as Record<string, string>)?.table, match: b.match }; } }] },
+  handler: async (input: Record<string, unknown>, user) => {
+    const appId = requireAppPrincipal(user);
+    const table = String(input.table ?? "");
+    await assertDeclaredTable(appId, table);
+    const match = (input.match ?? {}) as Record<string, unknown>;
+    const keys = Object.keys(match).map((k) => assertIdent("column", k));
+    if (!keys.length) throw new HttpError(400, "match 가 필요합니다(전량 삭제 방지)");
+    const phys = physicalTableName(appId, table);
+    const where = keys.map((k, i) => `${qi(k)}=$${i + 1}`).join(" AND ");
+    const r = await itemsPool.query(`DELETE FROM app.${qi(phys)} WHERE ${where}`, keys.map((k) => match[k]));
+    return { deleted: r.rowCount ?? 0 };
+  },
+};
+
 const storeTables: Capability = {
   name: "store_tables",
   title: "앱 데이터 테이블 목록",
@@ -87,4 +134,4 @@ const storeTables: Capability = {
   },
 };
 
-export const appStoreCapabilities: Capability[] = [storeInsert, storeQuery, storeTables];
+export const appStoreCapabilities: Capability[] = [storeInsert, storeQuery, storeUpdate, storeDelete, storeTables];
