@@ -514,6 +514,27 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-sess-meta a:hover { color: var(--blue); }
 .v2-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--bg, #fff); }
 
+/* ── 브라우저 서피스(#1829, web/v2/browser-surface.ts) ──
+   남의 웹을 화면 한 칸에서 본다. 골격은 앱 프레임(.v2-app)과 같다: 머리 한 줄 고정 → 본문이 남는 높이를 다 먹는다.
+   머리가 .v2-frame-h 와 다른 이유는 여기 머리가 '이름표'가 아니라 **조작부**(주소·이동)이기 때문이다 — 입력칸 높이에 맞춘다. */
+.v2-bs-bar { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px solid var(--line); background: var(--bg, #fff); }
+.v2-bs-navs { display: inline-flex; gap: 2px; }
+.v2-bs-btn { width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 7px; background: none; font: inherit; font-size: 16px; line-height: 1; color: var(--ink-sub); cursor: pointer; }
+.v2-bs-btn:hover:not(:disabled) { background: var(--bg-tint, #F6FAFF); color: var(--ink); }
+.v2-bs-btn:disabled { color: var(--muted-2, #a6b2c8); cursor: default; }
+.v2-bs-addr { flex: 1; min-width: 0; height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg, #fff); font: inherit; font-size: 12.5px; color: var(--ink); }
+.v2-bs-addr:focus { outline: none; border-color: var(--blue); }
+.v2-bs-acts { display: inline-flex; gap: 8px; align-items: center; }
+.v2-bs-acts .btn-text { font-size: 12.5px; white-space: nowrap; }
+.v2-bs-body { flex: 1; min-height: 0; display: flex; }
+/* webview 는 교체 요소라 flex 자식으로 두면 내재 크기로 버틴다 — 명시적으로 남는 자리를 채우게 한다. */
+.v2-bs-view { flex: 1; min-width: 0; min-height: 0; width: 100%; border: 0; background: var(--bg, #fff); }
+/* 폴백(브라우저에서 연 웹 UI) — 오류 화면이 아니라 안내다. 가운데 좁은 단으로 두어 '읽을 것'으로 보이게 한다. */
+.v2-bs-fallback { margin: auto; max-width: 420px; padding: 32px 24px; text-align: center; display: flex; flex-direction: column; gap: 10px; align-items: center; }
+.v2-bs-fb-h { margin: 0; font-size: 14px; font-weight: 800; color: var(--ink); }
+.v2-bs-fb-p { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--ink-sub); }
+.v2-bs-fallback .btn { margin-top: 6px; }
+
 /* ── 우측 ── */
 /* 우패널은 사이드바가 아니라 **가운데 화면의 연장**이다(#1756, 상민님). 종전엔 좌·우가 같은 회색 판(canvas)이라
    3열이 [탐색 | 내용 | 탐색] 으로 읽혔다. 우패널이 말하는 것은 탐색이 아니라 지금 보고 있는 것의 내용이므로 판을 가운데에 붙인다.
