@@ -382,6 +382,15 @@ export function filesPart(ctx) {
             rows.push({ label: many.length > 1 ? `${many.length}개 열기` : (f.type === 'dir' ? '폴더 열기' : '열기'), run: () => { for (const x of many.slice(0, 8))
                     open(x); } });
             if (f.type !== 'dir')
+                rows.push({ label: '뷰어에서 보기', run: () => {
+                        // 같은 화면의 [뷰어] 칸이 받아 연다. 뷰어 칸이 없으면 아무도 안 받으므로 그 사실을 말해 준다.
+                        if (!document.querySelector('.pn-ed')) {
+                            toast('먼저 어느 칸에든 [뷰어]를 넣어 주세요 — 칸 위의 ＋ 에서 고릅니다.', true);
+                            return;
+                        }
+                        window.dispatchEvent(new CustomEvent('pn-viewer-open', { detail: { id: ctx.id, path: f.path } }));
+                    } });
+            if (f.type !== 'dir')
                 rows.push({ label: '내려받기', run: () => { for (const x of many)
                         if (x.type !== 'dir')
                             download(x); } });

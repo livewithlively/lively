@@ -334,7 +334,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     b.onclick = () => {
       const rest = PART_DEFS.filter((d) => !lay[zone].includes(d.type)
         && !(d.type === 'sessions' && zone !== 'main')     // 세션은 가운데 칸의 것 — 여기 넣으면 뺄 수가 없다(위 불변식)
-        && !(loose && (d.type === 'files' || d.type === 'knowledge' || d.type === 'tasks' || d.type === 'overview' || d.type === 'liv' || d.type === 'editor')));
+        && !(loose && (d.type === 'files' || d.type === 'knowledge' || d.type === 'tasks' || d.type === 'liv' || d.type === 'editor')));
       const close = anchoredPopover(b, el('div', { class: 'pn-pop' },
         el('p', { class: 'pn-pop-h', text: '이 칸에 넣을 것을 고르세요.' }),
         rest.length ? el('div', { class: 'pn-pop-list' }, ...rest.map((d) =>
@@ -456,12 +456,17 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
         el('h1', { class: 'pn-title', text: p.name || '프로젝트 #' + id })),
       el('div', { class: 'pn-door-r' },
         el('span', { class: 'pn-faces' }, ...members.slice(0, 5).map((m: any) => personFace(String(m.member_id || m), 'pn-face', String(m.display_name || m.member_id || '')))),
-        // [칸]은 뺐고(원준 2026-08-20) 이름은 '설정'이 아니라 **정보** — 창의 내용물이 동작 옵션이 아니라
-        //  프로젝트 그 자체(이름·상태·본문·할 일)라서다. '설정'은 환경설정을 기대하게 만들고, 정작
-        //  "이 프로젝트가 뭐더라"를 찾는 사람은 설정을 누를 생각을 못 한다.
-        // [＋ 세션] — 탭 줄을 없애면서 '새 세션'의 유일한 입구가 사라졌다(원준 2026-08-20). 문패로 옮긴다.
-        el('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: '이 프로젝트에서 새 세션을 엽니다', onclick: () => newSession() }, pnIcon('plus', 'pn-i sm'), el('span', { text: '세션' })),
-        loose ? null : el('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: '이름·상태·본문·할 일을 보고 고칩니다', onclick: () => openSettings() }, pnIcon('info', 'pn-i sm'), el('span', { text: '정보' }))));
+        // ── 문패의 두 버튼 (원준 2026-08-20 "거의 안 보인다") ─────────────────────────
+        //  자리는 그대로 둔다 — 대상(프로젝트)의 오른쪽 위는 그 대상에 대한 동작이 사는 관습적인 자리이고,
+        //  옮기면 시선이 제목에서 멀어질 뿐이다. 문제는 위치가 아니라 **무게**였다: 둘 다 ghost(배경·테두리 없음)라
+        //  흰 문패 위에서 회색 글자로 흩어졌고, 나란히 있으니 무엇이 주된 동작인지도 말하지 않았다.
+        //  그래서 **크기·글자크기는 그대로 두고 채움만** 바꾼다 — 이 칸에서 사람이 제일 자주 하는 일(세션 열기)은
+        //  칠한 버튼, 가끔 보는 것(상세)은 테두리 버튼. 위계가 색으로 먼저 읽힌다.
+        el('span', { class: 'pn-door-sep', 'aria-hidden': 'true' }),
+        el('button', { class: 'btn btn-primary btn-sm pn-door-btn', type: 'button', title: '이 프로젝트에서 새 세션을 엽니다', onclick: () => newSession() }, pnIcon('plus', 'pn-i sm'), el('span', { text: '세션' })),
+        // 이름은 '정보'가 아니라 **프로젝트 상세** — 개요 부품을 없앤 뒤로 본문·할 일·상태를 보는 유일한 입구다.
+        //  '정보'만 있으면 무엇에 대한 정보인지 안 말해 준다(원준 2026-08-20).
+        loose ? null : el('button', { class: 'btn btn-ghost btn-sm pn-door-btn', type: 'button', title: '본문·할 일·상태·이름을 보고 고칩니다', onclick: () => openSettings() }, pnIcon('info', 'pn-i sm'), el('span', { text: '프로젝트 상세' }))));
   }
 
   function resetLayout(): void {
