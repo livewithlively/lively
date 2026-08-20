@@ -12,6 +12,7 @@ import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame } from './apps.js';
 import { bySeen, drawSide as drawSideTree, projectOrder, sessText } from './side.js';
 import { dotCls, mergeSessions, projName, renderHome, renderInbox, renderSession, type Sess, type V2Data } from './views.js';
+import { renderConnect, renderConnectApp } from './connect.js';
 import { mountPanes } from './panes.js';   // 프로젝트 = 세션 화면(#1719 원준 2026-08-20) — 칸으로 나뉜 도킹 화면 하나뿐이다.
 import { createTimeline, type TimelineHandle } from '../timeline.js';
 import { loadSessionActivities } from '../timeline-sources.js';
@@ -255,6 +256,7 @@ function titleFor(route: string): { title: string; noAside: boolean; state?: str
   //  돌아보기는 불러오는 것 — 프로젝트 화면은 문패 [타임라인](알림 센터)이 그 자리를 맡는다.
   if (!p || p === 'dashboard') return { title: '홈', noAside: true };
   if (p === 'inbox') return { title: '확인할 것', noAside: true };
+  if (p === 'connect') return { title: segs[1] ? '앱 연결' : '외부 앱 연결', noAside: true };
   if (p === 'liv') return { title: '리브', noAside: true };
   // 실험장 v4(2026-08-19 바탕화면): 프로젝트 화면은 우패널 없이 — 판이 폭 전체를 쓴다. 타임라인은 문패 [타임라인](알림 센터),
   //  위젯·앱은 도크 ⊞(런치패드)로 옮겨 갔다(web/v2/studio.ts 머리 주석).
@@ -353,7 +355,7 @@ async function renderRoute(tab: ShellTab): Promise<void> {
   const { segs, raw } = parseRoute(tab.route);
   const page = segs[0] || '';
 
-  markActive(page === 'p' ? 'p:' + segs[1] : page === 's' ? 's:' + decodeURIComponent(segs[1] || '') : page === 'liv' ? 'liv' : page === 'inbox' ? 'inbox' : page === '' || page === 'dashboard' ? 'home' : '');
+  markActive(page === 'p' ? 'p:' + segs[1] : page === 's' ? 's:' + decodeURIComponent(segs[1] || '') : page === 'liv' ? 'liv' : page === 'inbox' ? 'inbox' : page === 'connect' ? 'connect' : page === '' || page === 'dashboard' ? 'home' : '');
   try {
     if (page === '' || page === 'dashboard') {
       renderHome(tab.center, data);
@@ -362,6 +364,13 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       markActive('inbox');
       renderInbox(tab.center, data);
       tab.aside.replaceChildren();
+    } else if (page === 'connect') {
+      markActive('connect');
+      tab.aside.replaceChildren();
+      // 목록과 앱 상세는 같은 라우트의 두 깊이 — seq 로 늦은 응답을 버린다(빠르게 오가면 옛 화면이 덮는다).
+      if (segs[1]) await renderConnectApp(tab.center, decodeURIComponent(segs[1]));
+      else await renderConnect(tab.center);
+      if (seq !== tab.seq) return;
     } else if (page === 'liv') {
       tab.center.replaceChildren();
       const host = el('div', { class: 'v2-livpage' });
@@ -442,7 +451,7 @@ function activeKey(): string {
   // 부작용 없는 조회 — 부팅 중(활성 탭 확정 전)의 drawSide 가 탭을 만들어 버리면 딥링크가 죽는다(실측).
   const t = tabsApi ? tabsApi.current() : null;
   const cur = parseRoute(t ? t.route : location.hash);
-  return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : cur.segs[0] === 'inbox' ? 'inbox' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
+  return cur.segs[0] === 'p' ? 'p:' + cur.segs[1] : cur.segs[0] === 's' ? 's:' + decodeURIComponent(cur.segs[1] || '') : cur.segs[0] === 'liv' ? 'liv' : cur.segs[0] === 'inbox' ? 'inbox' : cur.segs[0] === 'connect' ? 'connect' : (!cur.segs[0] || cur.segs[0] === 'dashboard') ? 'home' : cur.segs[0] === 'app' ? 'app:' + cur.segs[1] : 'app:' + (CLASSIC_PAGES[cur.segs[0]] || '');
 }
 // ── 좌측 사이드바는 **늘 있다**(원준 2026-08-20) ──────────────────────────────────
 //  이력: 3차(2026-08-19)에 좌측 열을 걷고 떠다니는 알약으로 여닫게 했는데, 그 알약이 ⓐ 자리를 가리고

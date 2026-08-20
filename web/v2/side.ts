@@ -185,13 +185,15 @@ let filterOpen = false;            // [필터] 팝오버 — 열림은 잠깐의
 let outsideBound = false;
 
 // 위계 아이콘 — 프로젝트는 폴더(펼치면 열린 폴더), 세션은 말풍선. 같은 24 뷰박스·현재색 스트로크(붓은 하나).
-function glyph(kind: 'folder' | 'folder-open' | 'chat' | 'home' | 'inbox', cls: string): SVGElement {
+function glyph(kind: 'folder' | 'folder-open' | 'chat' | 'home' | 'inbox' | 'link', cls: string): SVGElement {
   const D: Record<string, string[]> = {
     folder: ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'],
     // 뚜껑이 젖혀진 열린 폴더 — 카드가 열려 있다는 것을 아이콘도 함께 말한다(안 1 '방').
     'folder-open': ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1', 'M3 17l2.3-6.6A2 2 0 0 1 7.2 9H21l-2.4 7.6a2 2 0 0 1-1.9 1.4H5a2 2 0 0 1-2-1z'],
     chat: ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z'],
     inbox: ['M4.6 5h14.8L22 13v4a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-4z', 'M2 13h6a4 4 0 0 0 8 0h6'],
+    // 외부 앱 연결 — 고리 둘이 맞물린 모양(연결). 자물쇠·플러그는 '잠금'·'전원'으로 읽혀 뜻이 어긋난다.
+    link: ['M10.5 13.5a4 4 0 0 0 5.7 0l2.6-2.6a4 4 0 0 0-5.7-5.7l-1.3 1.3', 'M13.5 10.5a4 4 0 0 0-5.7 0l-2.6 2.6a4 4 0 1 0 5.7 5.7l1.3-1.3'],
     home: ['M3.5 11.2 12 4.5l8.5 6.7', 'M6 10v9h12v-9'],
   };
   return sv('svg', { viewBox: '0 0 24 24', class: cls, 'aria-hidden': 'true' }, ...D[kind].map((d) => sv('path', { d })));
@@ -250,6 +252,10 @@ function render(): void {
       el('a', { class: 'v2-nav' + (last.activeKey() === 'inbox' ? ' on' : ''), href: '#/inbox', 'data-nav': 'inbox',
         title: '확인할 것 — 내 답·확인을 기다리는 세션' }, glyph('inbox', 'v2-nav-ic'), el('span', { class: 'n', text: '확인할 것' }),
         inboxN ? el('span', { class: 'v2-nav-cnt', text: String(inboxN) }) : null),
+      // 외부 앱 연결(#1719 원준) — "AI가 내 노션·슬랙을 쓸 수 있나"는 설정이 아니라 **능력**이다. 시키기 전에
+      //  알아야 하고 안 되면 그 자리에서 켜야 해서, 관리탭 안쪽이 아니라 여기 상시 자리로 올렸다.
+      el('a', { class: 'v2-nav' + (last.activeKey() === 'connect' ? ' on' : ''), href: '#/connect', 'data-nav': 'connect',
+        title: '외부 앱 연결 — AI가 내 계정으로 쓸 수 있는 앱' }, glyph('link', 'v2-nav-ic'), el('span', { class: 'n', text: '외부 앱 연결' })),
       ...(livOn ? [el('a', { class: 'v2-nav' + (last.activeKey() === 'liv' ? ' on' : ''), href: '#/liv', 'data-nav': 'liv',
         title: '리브 — 이 워크스페이스를 맡아 보는 담당자' }, el('span', { class: 'v2-nav-lm', text: 'L' }), el('span', { class: 'n', text: '리브' }))] : [])),
     el('div', { class: 'v2-side-sec' }, countEl,
