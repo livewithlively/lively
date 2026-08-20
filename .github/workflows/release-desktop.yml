@@ -103,6 +103,15 @@ jobs:
                    APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
             if [ -z "${!v:-}" ]; then unset "$v"; fi
           done
+          # ⚠ APPLE_API_KEY 는 notarytool 에 **파일 경로**로 전달된다(@electron/notarize appleApiKey). 그런데 GitHub
+          #  시크릿에 넣는 값은 자연히 .p8 의 **내용**이다 — 내용이 오면 여기서 파일로 쓰고 경로로 바꿔 낀다.
+          #  (경로 관례는 notarytool 이 스스로 찾는 ~/private_keys/AuthKey_<KEY_ID>.p8 — 다른 도구와도 호환된다.)
+          if [ -n "${APPLE_API_KEY:-}" ] && printf '%s' "$APPLE_API_KEY" | grep -q "BEGIN PRIVATE KEY"; then
+            mkdir -p "$HOME/private_keys"
+            printf '%s' "$APPLE_API_KEY" > "$HOME/private_keys/AuthKey_${APPLE_API_KEY_ID:-key}.p8"
+            export APPLE_API_KEY="$HOME/private_keys/AuthKey_${APPLE_API_KEY_ID:-key}.p8"
+            echo "APPLE_API_KEY: 내용 감지 → 파일로 변환($APPLE_API_KEY)"
+          fi
           npm run icon
           if [ -n "${CSC_LINK:-}" ]; then
             npx electron-builder --mac --publish never          # 진짜 인증서 — package.json 의 배포 설정 그대로
