@@ -25,22 +25,39 @@
 .pn-pane[data-zone="side"] { border-left: 1px solid var(--line); }
 .pn-pane[hidden] { display: none; }
 
-/* ── 탭 줄 — 얇게, 그러나 무엇이 켜졌는지는 분명하게(활성 탭 위 파란 마디) ── */
-.pn-tabs { flex: none; display: flex; align-items: stretch; gap: 1px; height: 37px; padding: 0 6px 0 0; background: #FAFBFC; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+/* ── 탭 줄 — 얇게, 그러나 무엇이 켜졌는지는 분명하게(활성 탭 위 파란 마디) ──
+   ★ 줄은 두 조각이다: **미끄러지는 탭 띠(.pn-tabs)** + **못 박은 손잡이(.pn-tabtail — 모두 보기·＋·접기)**.
+   종전엔 셋이 한 띠 안에 있어서, 탭이 칸 폭을 넘기는 순간 ＋·접기까지 같이 밀려 화면 밖으로 나갔다
+   (원준 2026-08-20 신고 — 곁칸 기본 폭 339px 에 부품 9개면 띠가 884px, ＋는 x=1918 로 칸 밖이었다).
+   손잡이를 띠 밖에 두면 탭이 몇 개든 제자리다. 가려진 탭은 [모두 보기]에서 켜거나 거기서 뺀다. */
+.pn-tabbar { position: relative; flex: none; display: flex; align-items: stretch; height: 37px; background: #FAFBFC; border-bottom: 1px solid var(--line); }
+.pn-tabbar[hidden] { display: none; }
+.pn-tabbar.drop { background: var(--bg-punch); box-shadow: inset 0 -2px 0 var(--blue); }
+.pn-tabs { flex: 1; min-width: 0; display: flex; align-items: stretch; gap: 1px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
 .pn-tabs::-webkit-scrollbar { display: none; }
-.pn-tabs.drop { background: var(--bg-punch); box-shadow: inset 0 -2px 0 var(--blue); }
+.pn-tabtail { flex: none; display: flex; align-items: stretch; padding-right: 6px; background: inherit; }
+/* 탭 자체는 **안 줄인다**(flex: none). 부품 이름은 두세 글자라 조금만 줄여도 '할 일'이 '할 …'이 되어
+   무슨 탭인지 못 읽는다(실측 2026-08-20: 줄여서 번 자리는 탭 0.5개뿐이었다). 대신 넘치면 띠가 미끄러지고,
+   가려진 탭은 손잡이의 [모두 보기]로 간다 — 이름은 온전히 두고 통로를 따로 낸 것이 이 줄의 규칙이다. */
 .pn-tabwrap { position: relative; display: inline-flex; align-items: center; flex: none; border-right: 1px solid var(--line); }
 .pn-tabwrap.on { background: var(--bg, #fff); box-shadow: inset 0 2px 0 var(--blue); }
 .pn-tab { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 8px 0 12px; border: 0; background: none; font: inherit; font-size: 12.5px; color: var(--muted-head); cursor: pointer; white-space: nowrap; }
 .pn-tab:hover { color: var(--ink); }
 .pn-tabwrap.on .pn-tab { color: var(--ink); font-weight: 700; }
 .pn-tab.drag { opacity: .45; }
-.pn-tab-x { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 36px; padding: 0 8px 0 0; border: 0; background: none; color: var(--muted-3); cursor: pointer; }
+.pn-tab-x { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 36px; padding: 0 8px 0 0; border: 0; background: none; color: var(--muted-3); cursor: pointer; }
 .pn-tabwrap:hover .pn-tab-x { color: var(--muted); }
 .pn-tab-x:hover { color: var(--coral-text); }
-.pn-tab-add, .pn-pane-hide { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 36px; border: 0; background: none; color: var(--muted-2); cursor: pointer; }
-.pn-tab-add:hover, .pn-pane-hide:hover { color: var(--blue); background: var(--bg-punch); }
-.pn-pane-hide { margin-left: auto; }
+.pn-tab-add, .pn-pane-hide, .pn-tab-more { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 36px; border: 0; background: none; color: var(--muted-2); cursor: pointer; }
+.pn-tab-add:hover, .pn-pane-hide:hover, .pn-tab-more:hover { color: var(--blue); background: var(--bg-punch); }
+/* [모두 보기]는 **띠가 넘칠 때만** 나온다(안 넘치면 군더더기다). 아래를 가리키는 꺾쇠 = '여기 더 있다'
+   (브라우저·에디터 탭 줄의 공통 문법). ⚠ 이 두 줄은 위 공용 버튼 규칙보다 **뒤**에 있어야 한다 —
+   명시도가 같아 앞에 두면 display: inline-flex 가 이겨 늘 보인다(2026-08-20 실측). */
+.pn-tab-more { display: none; }
+.pn-tab-more svg { transform: rotate(90deg); }
+.pn-tabbar.has-more .pn-tab-more { display: inline-flex; }
+/* 손잡이 왼쪽 그늘 = 왼쪽에 가려진 탭이 더 있다는 신호 */
+.pn-tabbar.has-more .pn-tabtail { box-shadow: -9px 0 9px -7px rgba(16, 24, 40, .22); }
 
 /* 세션 탭 — 부품 탭과 한 줄에 서지만 결이 다르다: **상태점 + 이름**, 닫기(×)는 없다(세션은 '열어 둔 문서'가
    아니라 프로젝트에 속한 실체다). 이름이 길어도 탭 줄이 무너지지 않게 폭을 묶는다. */
@@ -98,6 +115,13 @@
 .pn-pop-row .n { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .pn-pop-row .n b { font-size: 12.5px; }
 .pn-pop-row svg { margin-top: 2px; color: var(--muted-head); }
+/* [모두 보기]의 한 줄 = **고르기(행) + 빼기(×)**. 띠에서 손이 안 닿는 탭도 여기선 늘 닿는다. */
+.pn-pop-line { display: flex; align-items: stretch; gap: 2px; border-radius: 8px; }
+.pn-pop-line.on { background: var(--bg-tint); }
+.pn-pop-line > .pn-pop-row { flex: 1; min-width: 0; }
+.pn-pop-line.on > .pn-pop-row b { color: var(--blue); }
+.pn-pop-x { flex: none; width: 28px; border: 0; border-radius: 8px; background: none; color: var(--muted-3); cursor: pointer; }
+.pn-pop-x:hover { background: var(--bg-punch); color: var(--coral-text); }
 .pn-pop-foot { margin-top: 6px; padding-top: 7px; border-top: 1px solid var(--line-row); display: flex; justify-content: flex-end; gap: 14px; }
 .pn-check { width: 15px; height: 15px; margin-top: 1px; border: 1.5px solid var(--muted-3); border-radius: 4px; flex: none; }
 .pn-check.on { border-color: var(--blue); background: var(--blue); position: relative; }
