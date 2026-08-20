@@ -1,7 +1,10 @@
 // v2/side.ts — 새 셸 좌측 사이드바(#1719): 워크스페이스 **전체** 프로젝트 ▸ 살아 있는 세션 트리.
 //  규칙(상민님 2026-08-18, 같은 날 재구성 지시로 갱신):
 //   · 프로젝트는 워크스페이스 전체가 보인다(내 것만이 아니다). '내 프로젝트만'은 필터 안의 토글.
-//   · 프로젝트 아래엔 **끝나지 않은 세션만**(살아 있는 박스). 끝난 것은 프로젝트 화면·세션 이력에서.
+//   · 프로젝트 아래엔 도는 세션이 먼저. **멈춘 세션도 사라지지 않는다** — 그 아래 '지난 세션 n' 한 줄로 접혀 있고
+//     펴면 그 자리에 그대로 있다(#1808, 원준님 신고: 자동회수로 멈추면 새 셸 어디에서도 못 찾겠다).
+//     ⚠ 종전 규칙("끝난 것은 프로젝트 화면·세션 이력에서")의 의도는 **가독성**이었다 — 그건 접어 두는 것으로 지키고,
+//     '사라진다'는 부작용만 없앤다. 기본 화면은 종전과 똑같다(도는 세션만 펴져 있다).
 //   · 완료 프로젝트는 기본 숨김(살아 있는 세션이 있으면 예외로 보인다). 정렬 = 마지막 작업 시각 내림차순.
 //   · **기본 화면은 목록 하나다** — 상태 칩·완료 숨김·내 프로젝트만 같은 필터는 전부 [필터] 버튼 속 팝오버로
 //     들어간다(밖에 늘어놓으면 목록보다 조작부가 먼저 읽힌다 — 번잡함의 주범이었다).
@@ -13,7 +16,7 @@
 import { el, loadPeopleAvatars, logout, navOn, personFace, profileAvatar, relTime, setUiModeOverride, state, sv } from '../core.js';
 import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
-import { dotCls, type Proj, type Sess, type V2Data } from './views.js';
+import { dotCls, isLiveSess, isPastSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
 import { switcherTop } from './switcher.js';
 
 // 기본은 **전부 접힘**(상민님 2026-08-18: 선택된 프로젝트 외에는 다 접어둔다) — 사용자가 편 것만 기억한다.
@@ -21,9 +24,11 @@ import { switcherTop } from './switcher.js';
 const OPEN_KEY = 'lively_v2_opened';
 const DONE_KEY = 'lively_v2_side_done';   // '1' = 완료 프로젝트도 보인다(필터 풀림)
 const MINE_KEY = 'lively_v2_side_mine';   // '1' = 내 프로젝트만
+const PAST_KEY = 'lively_v2_side_past';   // '지난 세션' 묶음을 펴 둔 프로젝트 키
 const MAX_SESS = 12;                      // 한 프로젝트 아래 펼쳐 보이는 세션 상한(넘치면 '외 n개' → 프로젝트 화면)
 
 let openSet = new Set<string>();
+let pastSet = new Set<string>();            // '지난 세션'을 펴 둔 프로젝트 — 브라우저에 기억(도는 세션과 따로 접힌다)
 const closedSelected = new Set<string>();   // 선택 프로젝트를 일부러 접은 것 — 세션(페이지) 수명만
 let showDone = false;
 let mineOnly = false;
@@ -42,12 +47,16 @@ function init(): void {
   if (inited) return;
   inited = true;
   openSet = loadSet(OPEN_KEY);
+  pastSet = loadSet(PAST_KEY);
   try { showDone = localStorage.getItem(DONE_KEY) === '1'; mineOnly = localStorage.getItem(MINE_KEY) === '1'; } catch (_) { /* noop */ }
   void loadPeopleAvatars().then((m) => { people = m || {}; if (last) redraw(); });
 }
 
-/** 살아 있는 세션 = 사이드바에 보이는 세션. 라이브 박스이고 끝나지 않은 것(중단됨·종료됨 제외). 기록만 남은 대화는 아니다. */
-const isLive = (s: Sess) => s.live && s.alive;
+/** 도는 세션 = tmux 에 살아 있는 박스. / 지난 세션 = 되살릴 수 있는 것 전부(중단됨·종료됨·메모리 부족·기록만). views.ts 가 정의한다. */
+const isLive = isLiveSess;
+const isPast = isPastSess;
+// 상태 key → 표시어. SESS_STATES 에 없는 'log'(중앙 기록만 남은 대화)까지 덮는다.
+const stLabel = (k: string): string => (SESS_STATES[k] ? SESS_STATES[k].label : k === 'log' ? '기록' : k);
 const norm = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase();
 // 하네스가 pane 제목에 자기 이름만 써 둔 것 — '지금 하는 일'이 아니다(정보 0).
 const HARNESS_TITLES = new Set(['claude code', 'claude', 'codex', 'opencode', 'antigravity', 'grok', 'shell', 'bash', 'zsh', 'tmux', 'node']);
@@ -81,7 +90,9 @@ function echoesProject(label: string, proj: string): boolean {
  *  이름이 따로 있는 세션(사람이 지은 것)만 두 줄이 된다. 원래 이름은 툴팁에 남는다(정보를 버리지는 않는다). */
 export function sessText(s: Sess, projName: string): { main: string; sub: string } {
   const label = String(s.label || '').trim();
-  const work = String((s.raw && s.raw.title) || '').trim();
+  //  멈춘 세션엔 pane 제목이 없다(박스가 없으니 훔쳐볼 화면도 없다) — 그 자리를 **중앙 기록의 대화 제목**
+  //  (= 그 세션에 처음 시킨 말)이 받는다. 없으면 종전대로 이름만 남는다.
+  const work = sessWork(s);
   let name = label;
   // '프로젝트명 + 꼬리'(예: "… 와이어프레임 - 3열")면 꼬리만 남기고, 그 밖의 되풀이는 통째로 지운다.
   if (projName && label.startsWith(projName)) name = label.slice(projName.length).replace(/^[\s·:\-–—_/|]+/, '').trim();
@@ -102,8 +113,8 @@ function ownerName(s: Sess): string {
   return (m && m.display_name) || id || '?';
 }
 
-// ── 프로젝트 행 하나의 재료: 살아 있는 세션 · 마지막 작업 시각 · 내 것인가 ──
-interface Row { key: string; proj: Proj | null; live: Sess[]; lastWork: number; mine: boolean; done: boolean; }
+// ── 프로젝트 행 하나의 재료: 도는 세션 · 지난 세션 · 마지막 작업 시각 · 내 것인가 ──
+interface Row { key: string; proj: Proj | null; live: Sess[]; past: Sess[]; lastWork: number; mine: boolean; done: boolean; }
 function buildRows(data: V2Data): Row[] {
   const me = String((state.me && state.me.userId) || '');
   const byProj = new Map<number, Sess[]>();
@@ -112,12 +123,16 @@ function buildRows(data: V2Data): Row[] {
   const lastOf = (arr: Sess[]) => arr.reduce((m, s) => Math.max(m, s.lastSeen || 0), 0);
   const rows: Row[] = data.projects.map((p) => {
     const all = byProj.get(p.id) || [];
-    return { key: 'p:' + p.id, proj: p, live: all.filter(isLive).sort(bySeen), lastWork: lastOf(all), done: p.status_category === 'done',
+    return { key: 'p:' + p.id, proj: p, live: all.filter(isLive).sort(bySeen), past: all.filter(isPast).sort((a, b) => b.lastSeen - a.lastSeen),
+      lastWork: lastOf(all), done: p.status_category === 'done',
       mine: !!me && (p.created_by === me || (p.member_ids || []).includes(me)) };
   });
   // 프로젝트 없는 세션 — 가짜 프로젝트 한 줄로 같은 정렬에 섞는다(맨 아래 고정이면 프로젝트 수백 개 밑에 묻힌다).
+  //  ⚠ 도는 게 하나도 없어도 이 줄은 선다(#1808) — 종전엔 loose.length 로만 세워서, 프로젝트에 안 붙은 세션이
+  //   전부 멈추는 순간 그 묶음이 통째로 사라졌다. dev 실측으로 그게 가장 큰 덩어리였다(멈춘 세션 202건 중 183건).
   const loose = noProj.filter(isLive).sort(bySeen);
-  if (loose.length) rows.push({ key: 'p:0', proj: null, live: loose, lastWork: lastOf(noProj), done: false, mine: true });
+  const loosePast = noProj.filter(isPast).sort((a, b) => b.lastSeen - a.lastSeen);
+  if (loose.length || loosePast.length) rows.push({ key: 'p:0', proj: null, live: loose, past: loosePast, lastWork: lastOf(noProj), done: false, mine: true });
   return rows;
 }
 
@@ -160,7 +175,8 @@ function render(): void {
   const me = state.me || {};
   const name = String(me.display_name || me.email || me.userId || '');
   const rows = buildRows(data);
-  const liveAll = rows.flatMap((r) => r.live);
+  // [필터]의 '세션 상태' 항목은 **트리에 있는 세션 전부**를 센다 — 지난 세션까지(중단됨만 골라 보는 렌즈가 여기서 생긴다).
+  const liveAll = rows.flatMap((r) => [...r.live, ...r.past]);
   const livOn = navOn('liv') !== false;
   // 20초 폴링마다 통째로 다시 그린다 — 스크롤 위치와 검색칸 포커스는 이어져야 한다(수백 행에서 매번 맨 위로 튀면 못 쓴다).
   const prevScroll = treeEl ? treeEl.scrollTop : 0;
@@ -275,8 +291,8 @@ function filterBtn(activeN: number, liveAll: Sess[], doneCount: number): HTMLEle
     wrap.append(el('div', { class: 'v2-flt-pop', role: 'menu', onclick: (e: Event) => e.stopPropagation() },
       el('div', { class: 'v2-flt-k', text: '세션 상태' }),
       opt(!stateFilter, '전체', '', null, () => { stateFilter = null; redraw(); }),
-      ...keys.map((k) => { const st = SESS_STATES[k]; return opt(stateFilter === k, st ? st.label : k, String(counts.get(k) || 0), dotCls(k),
-        () => { stateFilter = stateFilter === k ? null : k; redraw(); }); }),
+      ...keys.map((k) => opt(stateFilter === k, stLabel(k), String(counts.get(k) || 0), dotCls(k),
+        () => { stateFilter = stateFilter === k ? null : k; redraw(); })),
       el('div', { class: 'v2-flt-k', text: '범위' }),
       opt(mineOnly, '내 프로젝트만', '', null, () => { mineOnly = !mineOnly; saveFlag(MINE_KEY, mineOnly); redraw(); }),
       opt(showDone, '완료 프로젝트도 보기', doneCount ? String(doneCount) : '', null, () => { showDone = !showDone; saveFlag(DONE_KEY, showDone); redraw(); }),
@@ -295,7 +311,7 @@ function filterBtn(activeN: number, liveAll: Sess[], doneCount: number): HTMLEle
 // 필터가 켜져 있을 때만 나오는 한 줄 — 무엇으로 걸러 보고 있는지 + 한 번에 끄기.
 function filterSummary(n: number): HTMLElement {
   const bits: string[] = [];
-  if (stateFilter) { const st = SESS_STATES[stateFilter]; bits.push((st ? st.label : stateFilter) + ' 세션만'); }
+  if (stateFilter) bits.push(stLabel(stateFilter) + ' 세션만');
   if (mineOnly) bits.push('내 프로젝트만');
   if (showDone) bits.push('완료 포함');
   return el('div', { class: 'v2-flt-sum' }, el('span', { text: bits.join(' · ') }),
@@ -338,16 +354,17 @@ function renderTree(rowsIn?: Row[]): void {
   const q = sideFilter.trim().toLowerCase();
   const hit = (r: Row) => !q || (r.proj ? (r.proj.name.toLowerCase().includes(q) || String(r.proj.id) === q) : '프로젝트 없는 세션'.includes(q));
   const stateOf = (r: Row) => (stateFilter ? r.live.filter((s) => s.stateKey === stateFilter) : r.live);
+  const pastOf = (r: Row) => (stateFilter ? r.past.filter((s) => s.stateKey === stateFilter) : r.past);
   let hiddenDone = 0;
   const shown = rows.filter((r) => {
     if (!hit(r)) return false;
     if (mineOnly && !r.mine) return false;
-    if (stateFilter && !stateOf(r).length) return false;
+    if (stateFilter && !stateOf(r).length && !pastOf(r).length) return false;
     if (r.done && !showDone && !r.live.length) { hiddenDone++; return false; }
     return true;
   }).sort((a, b) => b.lastWork - a.lastWork || String((b.proj && b.proj.updated_at) || '').localeCompare(String((a.proj && a.proj.updated_at) || '')));
   if (countEl) countEl.textContent = `프로젝트 · ${shown.filter((r) => r.proj).length}${q || mineOnly || stateFilter ? ` / ${rows.filter((r) => r.proj && (showDone || !r.done || r.live.length)).length}` : ''}`;
-  const kids: HTMLElement[] = shown.map((r) => projRow(r, stateOf(r), activeKey, selectedPk));
+  const kids: HTMLElement[] = shown.map((r) => projRow(r, stateOf(r), pastOf(r), activeKey, selectedPk));
   if (!kids.length) {
     kids.push(!last.data.loadedAt ? el('p', { class: 'v2-tree-note', text: '불러오는 중…' }) : !last.data.projects.length
       ? el('p', { class: 'v2-tree-note', text: '아직 프로젝트가 없어요. 가운데 입력창에 무엇이든 시키면 세션이 열리고, 프로젝트는 나중에 붙일 수 있어요.' })
@@ -358,22 +375,26 @@ function renderTree(rowsIn?: Row[]): void {
   treeEl.replaceChildren(...kids);
 }
 
-function projRow(r: Row, sess: Sess[], activeKey: string, selectedPk: string): HTMLElement {
+function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selectedPk: string): HTMLElement {
   const p = r.proj;
   const pk = r.key;
   const href = p ? '#/p/' + p.id : '#/app/terminal';
   const isOn = activeKey === pk || (!p && activeKey === 'app:terminal');
   // 펼침 기본값(#1719 재구성): **선택된 프로젝트만 펼침**, 나머지는 접힘 — 사용자가 편 것만 그대로.
   //  선택을 일부러 접은 건 이 페이지 수명만 기억한다(다음 방문엔 다시 펼쳐 보인다 — 선택은 늘 보이는 게 기본).
+  //  ⚠ 상태 필터가 켜져 있으면 편다 — 걸러 놓고 접혀 있으면 "0개"로 보인다(찾으려고 건 필터가 감추는 꼴).
   const isSel = pk === selectedPk;
-  const isOpen = sess.length > 0 && (isSel ? !closedSelected.has(pk) : openSet.has(pk));
-  const caret = sess.length
+  const has = sess.length + past.length;
+  const isOpen = has > 0 && (stateFilter ? true : (isSel ? !closedSelected.has(pk) : openSet.has(pk)));
+  const caret = has
     ? el('button', { class: 'v2-car', type: 'button', 'aria-label': isOpen ? '접기' : '펼치기', 'aria-expanded': String(isOpen), text: '›', onclick: (e: Event) => {
       e.preventDefault(); e.stopPropagation();
       if (isSel) { if (isOpen) closedSelected.add(pk); else closedSelected.delete(pk); }
       if (isOpen) openSet.delete(pk); else openSet.add(pk);
       saveSet(OPEN_KEY, openSet); renderTree(); } })
     : el('span', { class: 'v2-car none', 'aria-hidden': 'true' });
+  // '지난 세션' 묶음 — 도는 세션 아래에 접힌 한 줄. 상태 필터로 지난 상태를 골랐으면 이미 그걸 보러 온 것이니 편다.
+  const pastOpen = past.length > 0 && (pastSet.has(pk) || (!!stateFilter && !sess.length));
   const tipBits = p
     ? [`#${p.id} · ${p.status_category === 'done' ? '완료' : p.status_category === 'unstarted' ? '시작 전' : '진행 중'}`, r.lastWork ? '마지막 작업 ' + when(r.lastWork) : '세션 없음', r.mine ? '내 프로젝트' : (p.created_by ? `${(people[p.created_by] && people[p.created_by].display_name) || p.created_by} 만듦` : '')]
     : ['프로젝트에 붙지 않은 세션 — AI 세션 앱에서 전부 봅니다'];
@@ -381,27 +402,48 @@ function projRow(r: Row, sess: Sess[], activeKey: string, selectedPk: string): H
   const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : ''), href, 'data-nav': p ? pk : 'app:terminal', title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') + '\n프로젝트 화면을 엽니다' },
     caret, glyph(isOpen ? 'folder-open' : 'folder', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }),
     r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null,
-    sess.length ? sumEl(sess) : (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null));
+    sumEl(sess, past) || (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null));
   const head = sess.slice(0, MAX_SESS);
-  const list = sess.length ? el('div', { class: 'v2-ss-list', role: 'group', hidden: !isOpen },
+  const pastHead = past.slice(0, MAX_SESS);
+  const list = has ? el('div', { class: 'v2-ss-list', role: 'group', hidden: !isOpen },
     ...head.map((s) => sessRow(s, activeKey, sessText(s, p ? p.name : ''))),
-    sess.length > MAX_SESS ? el('a', { class: 'v2-ss-more', href, text: `외 ${sess.length - MAX_SESS}개` }) : null) : null;
-  return el('div', { class: 'v2-pj' + (isOpen ? ' open' : ''), role: 'treeitem', 'aria-expanded': sess.length ? String(isOpen) : null }, row, list);
+    sess.length > MAX_SESS ? el('a', { class: 'v2-ss-more', href, text: `외 ${sess.length - MAX_SESS}개` }) : null,
+    past.length ? pastHead2(pk, past.length, pastOpen) : null,
+    ...(pastOpen ? pastHead.map((s) => sessRow(s, activeKey, sessText(s, p ? p.name : ''), true)) : []),
+    pastOpen && past.length > MAX_SESS ? el('a', { class: 'v2-ss-more', href, text: `외 ${past.length - MAX_SESS}개` }) : null) : null;
+  return el('div', { class: 'v2-pj' + (isOpen ? ' open' : ''), role: 'treeitem', 'aria-expanded': has ? String(isOpen) : null }, row, list);
+}
+
+// '지난 세션 n' — 멈춘 세션을 **한 줄로 접어** 둔다. 펴면 그 자리에 그대로 나온다(사라지지 않는다, #1808).
+//  도는 세션과 같은 레일·같은 들여쓰기 — 위계가 아니라 묶음이라는 뜻이다.
+function pastHead2(pk: string, n: number, open: boolean): HTMLElement {
+  return el('button', {
+    class: 'v2-ss-past' + (open ? ' open' : ''), type: 'button', 'aria-expanded': String(open),
+    title: open ? '지난 세션 접기' : `멈춘 세션 ${n}개 — 열면 그때 대화를 이어서 계속할 수 있어요`,
+    onclick: (e: Event) => {
+      e.preventDefault(); e.stopPropagation();
+      if (pastSet.has(pk)) pastSet.delete(pk); else pastSet.add(pk);
+      saveSet(PAST_KEY, pastSet); renderTree();
+    } },
+    el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '›' }),
+    el('span', { class: 'n', text: '지난 세션' }), el('span', { class: 'v2-cnt', text: String(n) }));
 }
 
 // 프로젝트 행 오른쪽 — 숫자를 늘어놓지 않는다. **볼 일이 있는 것만**: 확인 필요(호박)·작업 중(파랑).
 //  그 밖의 살아 있는 세션은 개수 하나(회색). 상태별 전체 분포는 [필터] 팝오버가 보여 준다.
-function sumEl(sess: Sess[]): HTMLElement | null {
-  if (!sess.length) return null;
+function sumEl(sess: Sess[], past: Sess[] = []): HTMLElement | null {
+  const part = (n: number, cls: string, label: string) => (n ? el('span', { class: 'v2-sum ' + cls, title: `${label} ${n}` }, el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }), String(n)) : null);
+  // 도는 게 하나도 없는 프로젝트 — 오른쪽 자리를 '지난 세션 n'이 받는다(#1808). 종전엔 시각만 떠서 **이어서 할 게
+  //  있다는 사실 자체가 화면에 없었다**. 도는 세션이 있으면 종전 그대로(급한 것만) — 숫자를 늘어놓지 않는다.
+  if (!sess.length) return past.length ? el('span', { class: 'v2-sums', 'aria-label': `지난 세션 ${past.length}` }, part(past.length, 'past', '지난 세션')) : null;
   const c = { wait: 0, busy: 0, rest: 0 };
   for (const s of sess) { if (s.stateKey === 'waiting') c.wait++; else if (s.stateKey === 'busy') c.busy++; else c.rest++; }
-  const part = (n: number, cls: string, label: string) => (n ? el('span', { class: 'v2-sum ' + cls, title: `${label} ${n}` }, el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }), String(n)) : null);
   return el('span', { class: 'v2-sums', 'aria-label': `세션 ${sess.length}` }, part(c.wait, 'wait', '확인 필요'), part(c.busy, 'busy', '작업 중'),
     (!c.wait && !c.busy && c.rest) ? el('span', { class: 'v2-sum idle', title: `살아 있는 세션 ${c.rest}` }, String(c.rest)) : null);
 }
 
 // 세션 행 — 상태점 · 세션을 실제로 구분해 주는 글(sessText) · 남의 세션이면 소유자 얼굴 · 상태어.
-function sessRow(s: Sess, activeKey: string, text: { main: string; sub: string }): HTMLElement {
+function sessRow(s: Sess, activeKey: string, text: { main: string; sub: string }, pastRow = false): HTMLElement {
   const st = SESS_STATES[s.stateKey];
   const cls = dotCls(s.stateKey);
   const raw = s.raw || {};
@@ -411,11 +453,13 @@ function sessRow(s: Sess, activeKey: string, text: { main: string; sub: string }
   const main = text.main;
   const sub = text.sub;
   const tip = [s.label, raw.title && String(raw.title) !== s.label ? String(raw.title) : '', `${st ? st.label : s.stateLabel}${s.lastSeen ? ' · ' + when(s.lastSeen) : ''}`, s.owned ? '내 세션' : `${owner}의 세션`, raw.harness ? String(raw.harness) : '', s.node ? '노드 ' + s.node : ''].filter(Boolean).join('\n');
-  return el('a', { class: 'v2-ss-row' + (activeKey === 's:' + s.id ? ' on' : '') + (s.owned ? '' : ' other'), href: '#/s/' + encodeURIComponent(s.id), 'data-nav': 's:' + s.id, title: tip + '\n세션 대화를 엽니다', role: 'treeitem' },
+  return el('a', { class: 'v2-ss-row' + (activeKey === 's:' + s.id ? ' on' : '') + (s.owned ? '' : ' other') + (pastRow ? ' past' : ''), href: '#/s/' + encodeURIComponent(s.id), 'data-nav': 's:' + s.id, title: tip + (pastRow ? '\n열면 그때 대화를 읽고 [이어서 대화하기]로 계속할 수 있어요' : '\n세션 대화를 엽니다'), role: 'treeitem' },
     el('span', { class: 'v2-dot ' + cls, 'aria-hidden': 'true' }),
     el('span', { class: 'v2-ss-main' }, el('span', { class: 't', text: main }), sub ? el('span', { class: 'sub', text: sub }) : null),
     s.owned ? null : personFace(String(raw.owner || ''), 'v2-ss-face', owner),
     // 오른쪽 끝은 **한 자리**로 고정한다 — 상태어를 조건부로 넣으면 행마다 길이가 달라 목록이 들쭉날쭉해진다(상민님 2026-08-18).
     //  상태는 왼쪽 점이, 개수는 프로젝트 행이 말한다. 여기는 '누르면 대화로 간다'는 표식만(hover 때 보인다).
-    glyph('chat', 'v2-ss-go'));
+    //  ⚠ 지난 세션 묶음은 그 한 자리를 **'언제'**가 받는다 — 멈춘 것들을 고르는 축은 시간이고(어제 것인가 3주 전 것인가),
+    //   묶음 안 모든 행이 똑같이 시각을 가지므로 '행마다 길이가 달라진다'는 그 규칙의 사유엔 걸리지 않는다.
+    pastRow ? el('span', { class: 'w', text: when(s.lastSeen) }) : glyph('chat', 'v2-ss-go'));
 }

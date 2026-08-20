@@ -16,11 +16,8 @@ export function takeFirstPrompt(sessionId: string): string | null {
   return t;
 }
 
-/** 라벨 = 첫 지시의 앞부분(문장부호·개행 정리). 서버 cleanLabel 이 한 번 더 다듬는다. */
-export function labelFromPrompt(text: string): string {
-  const one = text.replace(/\s+/g, ' ').trim().replace(/[.。!?？…]+$/, '');
-  return one.length > 28 ? one.slice(0, 27) + '…' : one;
-}
+// 이름은 **서버가 짓는다**(#1808, src/terminal/session-name.ts) — initialPrompt 를 넘기면 그 값으로 label 이 정해진다.
+//  종전엔 여기서 앞 27자를 잘라 label 로 같이 보냈는데, 그 규칙이 클라와 서버 두 곳에 있으면 반드시 갈라진다.
 
 let creating = false;
 export function isCreatingQuickSession(): boolean { return creating; }
@@ -46,7 +43,7 @@ export async function openQuickSession(text: string, opts?: { projectId?: number
     const out: any = await api('/api/ui/terminal/sessions', {
       method: 'POST',
       body: JSON.stringify({
-        label: labelFromPrompt(t), harness, flags,
+        harness, flags,
         autoApprove: !!p.autoApprove, sessionDir: true, initialPrompt: t,
         ...(node ? { node } : {}),
       }),

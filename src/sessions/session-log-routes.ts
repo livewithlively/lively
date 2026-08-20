@@ -13,16 +13,18 @@ import type { BearerVerifier } from "../auth/bearer.js";
 import type { LivelyUser } from "../context.js";
 import { wrap, HttpError } from "../http/rest-util.js";
 import { getRuntimeConfig } from "../org/store.js";
-import { appendSessionLog, sessionLogWatermark, sessionOwner, sessionParent, sessionHarness, readSessionLog, listSessionsForOwner, listSessionsForProject, listSubagentsForSession } from "../v6/session-log-store.js";
+import { appendSessionLog, firstUserPromptTitle, sessionLogWatermark, sessionOwner, sessionParent, sessionHarness, readSessionLog, listSessionsForOwner, listSessionsForProject, listSubagentsForSession } from "../v6/session-log-store.js";
 import { harnessIo } from "../terminal/harness-io/adapter.js";        // #1746 — 하네스별 파서로 공통 ChatLine
 import { readAlignedWindow } from "../terminal/harness-io/window.js";
 import { parseWindow } from "../terminal/harness-io/parse-cache.js";
 import { toNdjson } from "../terminal/harness-io/chat-line.js";
 import { sessionBoundToMemberProject, isProjectMember, recordSessionProject, latestProjectForSession } from "../v6/project-session-store.js";   // #1313 R21 — 세션 바인딩만(PM 스토어 전체 미적재)
 import { renderTranscript, firstTranscriptCwd, materializeTranscriptIfMissing } from "../terminal/terminal-transcript.js";
-import { createSession, sharedRoot } from "../terminal/terminal-sessions.js";
+import { createSession, editSession, sharedRoot } from "../terminal/terminal-sessions.js";
+import { autoNameUnnamedSession } from "./session-autoname.js";
+import { nodeRpc } from "../node/registry.js";
 import path from "node:path";
-import { getSessionState } from "./session-state.js";
+import { getSessionState, sessionStateByClaudeUuid, updateSessionStateMeta } from "./session-state.js";
 import { transcriptRange } from "./transcript-range.js";   // #1719 — 창 읽기(대화창)
 
 export const MAX_DELTA = 8 * 1024 * 1024;   // 한 번에 받는 델타 상한(8MB) — 큰 트랜스크립트도 청크로 나눠 보내게.
@@ -137,6 +139,21 @@ export function registerSessionLogRoutes(app: express.Express, verifier: BearerV
     //  (경로 휴리스틱 아님 — 구조화된 값이 정본). claude uuid 세션을 프로젝트 탭 '세션 기록'에 잇는 다리
     //  (recordSessionProject 의 tmux-id 매핑은 session_log 의 claude-uuid 와 안 붙으므로 이 경로가 필요).
     //  위조 방어: 요청자가 그 프로젝트 멤버일 때만 기록. recordSessionProject 는 멱등(재백필·중복 append 에도 안전).
+    // 세션 자동 이름(#1808) — 첫 청크에서 '처음 시킨 말'을 알아낸 순간, 아직 이름이 없는 박스에 그 이름을 붙인다.
+    //  이름을 안 주고 만든 세션(= 새 세션 폼이 프로젝트명을 프리필하지 않게 된 뒤의 기본)이 여기서 이름을 얻는다.
+    //  사람이 지은 이름은 손대지 않고(autoNameUnnamedSession 이 판정), 실패는 전부 삼킨다 — 대화 기록 저장이 먼저다.
+    if (atOffset === 0 && data.length > 0) {
+      const t = firstUserPromptTitle(data.toString("utf8"));
+      if (t) {
+        void autoNameUnnamedSession(sessionId, t, {
+          lookup: (uuid) => sessionStateByClaudeUuid(uuid),
+          renameLocal: (owner, id, label) => editSession({ userId: owner } as LivelyUser, id, { label }),
+          renameNode: (nodeId2, owner, id, label) => nodeRpc(nodeId2, "edit", { user: { userId: owner }, id, patch: { label } }).then(() => undefined),
+          saveLabel: (id, label) => updateSessionStateMeta(id, { label }),
+          warn: (msg, err) => console.warn(`[session-log] ${msg}:`, (err as Error)?.message ?? err),
+        });
+      }
+    }
     const claimProject = req.query.project !== undefined ? Number(req.query.project) : NaN;
     if (Number.isInteger(claimProject) && claimProject > 0) {
       try { if (await isProjectMember(claimProject, requester)) await recordSessionProject(sessionId, claimProject); }

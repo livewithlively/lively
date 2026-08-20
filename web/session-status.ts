@@ -73,5 +73,11 @@ export function sessRank(s: SessLike, nowMs?: number): number {
 export function sessIsDead(s: SessLike, nowMs?: number): boolean {
   const k = sessStateKey(s, nowMs);
   // 셸이 떠 있는 세션은 '끝남'이 아니다 — 들어가서 계속 쓸 수 있다. 진짜 끝난 것은 tmux 에서 사라진 것들뿐.
-  return k === 'restorable' || k === 'exited_user';
+  //  ⚠ oom_killed 도 여기 든다 — #1251 이 '중단됨'에서 갈라 낸 **같은 사실의 하위 갈래**(restorable=true, tmux 에 없음)인데
+  //   이 목록에서 빠져 있어 메모리로 죽은 세션이 화면마다 '살아 있는 것'으로 세어졌다(v2 사이드바는 그걸 라이브 행으로
+  //   그려 터미널까지 붙였다 — 없는 tmux 라 4410). 세 key 는 전부 '박스가 없다' 는 한 사실이다.
+  return k === 'restorable' || k === 'exited_user' || k === 'oom_killed';
 }
+
+/** 되살릴 수 있는(=박스가 없어 지금은 안 도는) 세션인가 — 화면들이 '지난 세션' 묶음을 만들 때 쓰는 같은 술어. */
+export const SESS_DEAD_KEYS = ['restorable', 'oom_killed', 'exited_user'] as const;

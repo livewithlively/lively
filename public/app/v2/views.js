@@ -27,6 +27,23 @@ export function dotCls(stateKey) {
     return '';
 }
 const when = (ms) => (ms ? relTime(new Date(ms).toISOString()) : '');
+// ── '지금 도는 세션' vs '지난 세션' — 화면 셋이 같은 술어를 쓴다(#1808) ───────────────
+//  · 도는 세션 = 박스가 tmux 에 살아 있는 것.
+//  · 지난 세션 = **되살릴 수 있는 것 전부** — 자동회수·재부팅으로 멈춘 박스(중단됨), 내가 끝낸 박스(종료됨),
+//    메모리 부족으로 죽은 박스(메모리 부족), 그리고 박스는 없고 중앙에 대화만 남은 것(기록).
+//    사용자에겐 넷 다 "다시 이어서 할 수 있는 지난 세션"이라 한 묶음으로 다룬다(구분은 상태점·툴팁·세션 화면이 말한다).
+export const isLiveSess = (s) => s.live && s.alive;
+export const isPastSess = (s) => !isLiveSess(s);
+/** 그 세션이 '하던 일' — 하네스 pane 제목이 정본이고, 없으면(멈춘 세션) 중앙 기록의 대화 제목(= 처음 시킨 말). */
+export const sessWork = (s) => String((s.raw && s.raw.title) || s.logTitle || '').trim();
+/** 화면에 쓸 세션 이름 — 이름이 프로젝트명 그대로면 '하던 일'이 그 자리를 받는다(같은 이름 대여섯 줄 방지). */
+export function sessDisplayName(s, projectName) {
+    const label = String(s.label || '').trim();
+    const work = sessWork(s);
+    if (work && work !== label && label === projectName)
+        return work;
+    return label || work || '이름 없는 세션';
+}
 // ── 홈 = 런처 (#1719 재설계 · #1798 행선지 제거) — 입력창이 주인공이다 ──────────
 //  · 입력은 **항상 프로젝트 없는 세션**으로 열린다(세션 전용 폴더). 종전의 행선지 자동매칭·프로젝트 드롭다운은
 //    #1798 에서 제거 — 이름 토큰 매칭의 오연결이 잦았고(무관한 프로젝트에 세션이 붙는 실측), 소속은 세션이
@@ -84,19 +101,21 @@ function nowList(data) {
     // 홈의 두 번째 존재 — 상태별 두 결(#1756): **답을 기다리는 것**은 내가 움직여야 풀리는 일이라 앰버 카드로
     //  도드라지고, 나머지는 조용한 목록이다. 종전엔 일곱 행이 같은 무게로 나열돼 급한 것이 안 보였다.
     const rank = (s) => (s.stateKey === 'waiting' ? 0 : s.stateKey === 'busy' ? 1 : 2);
-    const live = data.sessions.filter((s) => s.live && s.alive).sort((a, b) => rank(a) - rank(b) || b.lastSeen - a.lastSeen);
-    if (!live.length)
+    const live = data.sessions.filter(isLiveSess).sort((a, b) => rank(a) - rank(b) || b.lastSeen - a.lastSeen);
+    // 지난 세션(#1808) — 홈에서 **이어서 하기**로 곧장 갈 수 있어야 한다. 되살리는 건 소유자만 가능하므로(서버
+    //  restore/resume 이 owner-gated) 내 것만 올린다. 넷까지 — 그 이상은 사이드바의 '지난 세션'과 AI 세션 앱이 받는다.
+    const past = data.sessions.filter((s) => isPastSess(s) && s.owned).sort((a, b) => b.lastSeen - a.lastSeen).slice(0, 4);
+    if (!live.length && !past.length)
         return el('div', {});
     const waits = live.filter((s) => s.stateKey === 'waiting');
     const rest = live.filter((s) => s.stateKey !== 'waiting').slice(0, 7 - Math.min(waits.length, 4));
     const rowOf = (s) => {
         const pn = projName(data, s.projectId);
-        const raw = (s.raw || {});
-        const title = s.label === pn && raw.title && String(raw.title) !== s.label ? String(raw.title) : s.label;
+        const title = sessDisplayName(s, pn);
         const showProj = !!s.projectId && title !== pn;
         return el('a', { class: 'v2-now-row' + (s.stateKey === 'waiting' ? ' wait' : ''), href: '#/s/' + encodeURIComponent(s.id) }, dot(s.stateKey), el('span', { class: 'tw' }, el('span', { class: 't', text: title }), showProj ? el('span', { class: 'p', text: pn }) : null), el('span', { class: 'st', text: s.stateKey === 'waiting' ? when(s.lastSeen) : `${s.stateLabel} · ${when(s.lastSeen)}` }), s.stateKey === 'waiting' ? el('span', { class: 'go btn btn-sm', text: '답하기' }) : null);
     };
-    return el('div', { class: 'v2-now' }, waits.length ? el('section', { class: 'v2-now-wait' }, el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k wait', text: `답을 기다려요 · ${waits.length}` })), ...waits.slice(0, 4).map(rowOf)) : null, rest.length ? el('section', {}, el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: `돌고 있어요 · ${rest.length}` }), el('a', { class: 'btn-text', href: '#/app/terminal', text: '전체 →' })), ...rest.map(rowOf)) : null);
+    return el('div', { class: 'v2-now' }, waits.length ? el('section', { class: 'v2-now-wait' }, el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k wait', text: `답을 기다려요 · ${waits.length}` })), ...waits.slice(0, 4).map(rowOf)) : null, rest.length ? el('section', {}, el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: `돌고 있어요 · ${rest.length}` }), el('a', { class: 'btn-text', href: '#/app/terminal', text: '전체 →' })), ...rest.map(rowOf)) : null, past.length ? el('section', { class: 'v2-now-past' }, el('div', { class: 'v2-now-h' }, el('span', { class: 'v2-k', text: '이어서 할 수 있어요' }), el('a', { class: 'btn-text', href: '#/app/terminal', text: '전체 →' })), ...past.map(rowOf)) : null);
 }
 export function projName(data, id) {
     if (!id)
@@ -123,7 +142,7 @@ export async function renderProject(host, data, id, detailIn) {
     const done = tasks.filter((t) => t.status_category === 'done' || t.status === 'done').length;
     const sess = data.sessions.filter((s) => Number(s.projectId) === id).sort((a, b) => Number(b.live) - Number(a.live) || b.lastSeen - a.lastSeen);
     const st = pj.status_category === 'done' ? '끝남' : pj.status_category === 'unstarted' ? '시작 전' : '진행 중';
-    host.replaceChildren(el('div', { class: 'v2-center' }, el('div', { class: 'v2-eyebrow' }, el('span', { class: 'mono', text: '#' + pj.id }), el('span', { text: '·' }), el('span', { class: 'state ' + (pj.status_category === 'done' ? 'done' : 'busy'), text: st }), pj.list && pj.list.name ? [el('span', { text: '·' }), el('span', { text: pj.list.name })] : null), el('h1', { class: 'v2-title', text: pj.name }), pj.description ? el('p', { class: 'v2-desc', text: String(pj.description).slice(0, 600) }) : null, el('div', { class: 'v2-actrow' }, el('a', { class: 'btn btn-primary btn-sm', href: '#/app/terminal', text: '새 AI 세션' }), el('a', { class: 'btn btn-ghost btn-sm', href: '#/projects2/p/' + pj.id, text: '프로젝트 앱에서 열기(보드·태스크)' }), el('span', { class: 'v2-muted', text: tasks.length ? `태스크 ${tasks.length} · 끝남 ${done}` : '태스크 없음' })), el('section', { class: 'v2-sec' }, el('div', { class: 'v2-sec-h' }, el('span', { class: 'v2-k', text: `세션 · ${sess.length}` })), sess.length ? el('div', { class: 'v2-list' }, ...sess.map((s) => el('a', { class: 'v2-row', href: '#/s/' + encodeURIComponent(s.id) }, dot(s.stateKey), el('div', { class: 'v2-row-main' }, el('div', { class: 't', text: s.label }), el('div', { class: 'm', text: `${s.stateLabel}${s.live ? '' : ' · 기록만'} · ${when(s.lastSeen)}` })), el('span', { class: 'v2-row-r', text: '›' }))))
+    host.replaceChildren(el('div', { class: 'v2-center' }, el('div', { class: 'v2-eyebrow' }, el('span', { class: 'mono', text: '#' + pj.id }), el('span', { text: '·' }), el('span', { class: 'state ' + (pj.status_category === 'done' ? 'done' : 'busy'), text: st }), pj.list && pj.list.name ? [el('span', { text: '·' }), el('span', { text: pj.list.name })] : null), el('h1', { class: 'v2-title', text: pj.name }), pj.description ? el('p', { class: 'v2-desc', text: String(pj.description).slice(0, 600) }) : null, el('div', { class: 'v2-actrow' }, el('a', { class: 'btn btn-primary btn-sm', href: '#/app/terminal', text: '새 AI 세션' }), el('a', { class: 'btn btn-ghost btn-sm', href: '#/projects2/p/' + pj.id, text: '프로젝트 앱에서 열기(보드·태스크)' }), el('span', { class: 'v2-muted', text: tasks.length ? `태스크 ${tasks.length} · 끝남 ${done}` : '태스크 없음' })), el('section', { class: 'v2-sec' }, el('div', { class: 'v2-sec-h' }, el('span', { class: 'v2-k', text: `세션 · ${sess.length}` })), sess.length ? el('div', { class: 'v2-list' }, ...sess.map((s) => el('a', { class: 'v2-row', href: '#/s/' + encodeURIComponent(s.id) }, dot(s.stateKey), el('div', { class: 'v2-row-main' }, el('div', { class: 't', text: sessDisplayName(s, pj.name) }), el('div', { class: 'm', text: `${s.stateLabel} · ${when(s.lastSeen)}` })), el('span', { class: 'v2-row-r', text: '›' }))))
         : el('p', { class: 'v2-empty', text: '이 프로젝트에 붙은 세션이 아직 없어요. [새 AI 세션] 으로 시작하면 여기에 쌓입니다.' })), tasks.length ? el('section', { class: 'v2-sec' }, el('div', { class: 'v2-sec-h' }, el('span', { class: 'v2-k', text: `태스크 · ${tasks.length}` })), el('div', { class: 'v2-list' }, ...tasks.slice(0, 8).map((t) => el('a', { class: 'v2-row', href: '#/projects2/t/' + t.id }, el('span', { class: 'v2-dot ' + (t.status_category === 'done' ? 'done' : t.status_category === 'started' ? 'busy' : '') }), el('div', { class: 'v2-row-main' }, el('div', { class: 't', text: t.name }), el('div', { class: 'm', text: t.status || t.status_category || '' })), el('span', { class: 'v2-row-r', text: '›' }))), tasks.length > 8 ? el('a', { class: 'v2-more', href: '#/projects2/p/' + pj.id, text: `외 ${tasks.length - 8}개 — 프로젝트 앱에서` }) : null)) : null));
 }
 export function renderSession(host, data, id, vopts = {}) {
@@ -134,7 +153,12 @@ export function renderSession(host, data, id, vopts = {}) {
         return null;
     }
     // 프레임에 실을 터미널은 embed=1 — 그 안의 상단바·파일 탐색기는 이 화면의 상단바·우패널로 이미 합쳐졌다(#1744).
-    const termSrc = s.live ? terminalUrl(s.id, s.label, s.node, { embed: true }) : null;
+    //  ⚠ **살아 있는 박스에만** 물린다. 종전엔 `s.live`(= terminal/sessions 행이면 참, 중단된 박스도 참)만 봐서
+    //   멈춘 세션을 열면 없는 tmux 에 붙었고, terminal.html 이 4410 → **iframe 안에서 자동 복원 + location.replace**
+    //   를 해 버렸다: 셸 주소(#/s/<옛 id>)·탭 제목·사이드바는 옛 세션 그대로인데 프레임만 새 세션인 어긋난 화면이
+    //   되고, 그 뒤 [이어서 대화하기] 를 누르면 옛 desired-state 가 이미 지워져 404 가 났다. 멈춘 세션의 정답은
+    //   **읽기전용 기록 + [이어서 대화하기] 한 번**(session-chat.ts paintDeadFooter)이다.
+    const termSrc = s.live && s.alive ? terminalUrl(s.id, s.label, s.node, { embed: true }) : null;
     return mountSessionChat(host, { ...s, projectName: projName(data, s.projectId) }, {
         terminalSrc: termSrc,
         // 나가는 문: 본 화면이면 이 세션만 담은 **팝아웃 창**(같은 컴포넌트, 사이드바만 없다), 팝아웃 창이면 반대로 전체 화면.
@@ -176,6 +200,8 @@ export function mergeSessions(liveRows, logRows) {
         if (owner) { // 라이브(또는 복원 가능) 박스가 이 대화를 돌린다 — 그 카드에 접는다
             owner.logId = id;
             owner.logNode = r.node_id || '';
+            if (r.title)
+                owner.logTitle = String(r.title); // 이름 자리의 폴백(위 logTitle 주석)
             if (!owner.projectId && r.project_id != null)
                 owner.projectId = Number(r.project_id);
             continue;
