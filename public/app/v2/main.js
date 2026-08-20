@@ -102,7 +102,10 @@ async function mountProjectShell(tab, projectId, sessionId, seq) {
         onProjectChanged: () => { void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); }); },
         // 서랍에서 세션을 갈아 끼웠다 — 셸은 살려 두고 **주소·탭 제목만** 그 세션 것으로(라우터를 다시 돌리지 않는다).
         onSessionPicked: (sid) => {
-            const href = sid ? '#/s/' + encodeURIComponent(sid) : '#/p/' + projectId;
+            // 세션을 고르면 그 세션 주소, 새 세션 자리로 돌아가면 **?new=1** 을 붙인 프로젝트 주소.
+            //  쿼리를 붙이는 이유: 프로젝트 주소만 두면 새로고침·탭 복원 때 라우터가 '맨 위 세션'으로 보내 버려
+            //  열어 둔 새 세션 자리가 사라진다. routeKey 는 '?' 앞만 보므로 탭 동일성에는 영향이 없다.
+            const href = sid ? '#/s/' + encodeURIComponent(sid) : '#/p/' + projectId + '?new=1';
             tab.route = href;
             // 셸은 그대로 두고 주소·탭 제목만 바꾼다 — hashchange 를 한 번 삼켜 라우터가 다시 그리지 않게.
             //  ⚠ 값이 같으면 hashchange 가 아예 안 나므로 그때는 세지 않는다(안 그러면 다음 진짜 이동을 삼킨다).
@@ -365,7 +368,9 @@ async function onHash() {
         location.replace(location.pathname + location.search + hash);
     }
     const pk0 = routeKey(hash);
-    if (pk0.startsWith('p:')) {
+    // ⚠ ?new=1 은 **새 세션 자리를 달라**는 뜻이라 이 갈아끼우기를 건너뛴다(사이드바 프로젝트 줄의 [＋]·문패 [＋ 세션]).
+    //  routeKey 는 쿼리를 버리므로 여기서 원래 주소의 쿼리를 따로 본다 — 안 그러면 [＋]를 눌러도 맨 위 세션이 열린다(실측 2026-08-20).
+    if (pk0.startsWith('p:') && parseRoute(hash).params.get('new') !== '1') {
         const top = topSessionOf(Number(pk0.slice(2)));
         if (top) {
             hash = '#/s/' + encodeURIComponent(top.id);
@@ -429,7 +434,7 @@ function bindAltOpen() {
 }
 async function renderRoute(tab) {
     const seq = ++tab.seq;
-    const { segs, raw } = parseRoute(tab.route);
+    const { segs, raw, params } = parseRoute(tab.route);
     const page = segs[0] || '';
     markActive(page === 'p' ? 'p:' + segs[1] : page === 's' ? 's:' + decodeURIComponent(segs[1] || '') : page === 'liv' ? 'liv' : page === 'inbox' ? 'inbox' : page === '' || page === 'dashboard' ? 'home' : '');
     try {
@@ -454,7 +459,8 @@ async function renderRoute(tab) {
             //  그 프로젝트의 **맨 위 세션**(사이드바와 같은 정렬)으로 보낸다. 세션이 하나도 없으면 그때만 이 주소가
             //  '새 세션 자리'로 열린다(갈 세션이 없으니 폴백이 필요하다).
             const id = Number(segs[1]);
-            const first = topSessionOf(id);
+            // ?new=1 = **새 세션 자리를 달라**는 뜻(사이드바 [＋]·문패 [＋ 세션]). 그때는 맨 위 세션으로 보내지 않는다.
+            const first = params.get('new') === '1' ? null : topSessionOf(id);
             if (first) {
                 goSession(first.id, tab);
                 return;
@@ -559,7 +565,49 @@ function drawSide() {
         return;
     const treeHost = el('div', { class: 'stu-panel-tree' });
     sideEl.replaceChildren(el('div', { class: 'stu-panel' }, treeHost));
-    drawSideTree(treeHost, data, activeKey);
+    drawSideTree(treeHost, data, activeKey, { onNewSession: newSessionFor });
+}
+/** 이 탭이 보고 있는 프로젝트 — 프로젝트 주소면 그 id, 세션 주소면 그 세션이 붙은 프로젝트. 아니면 -1. */
+function tabProject(t) {
+    const k = routeKey(t.route);
+    if (k.startsWith('p:'))
+        return Number(k.slice(2)) || 0;
+    if (k.startsWith('s:')) {
+        const s = findSess(k.slice(2));
+        return s && s.projectId ? Number(s.projectId) : -1;
+    }
+    return -1;
+}
+/** 사이드바 프로젝트 줄의 [＋] — 그 프로젝트를 '새 세션 자리'로 연다(#1719 원준 2026-08-20).
+ *  그 프로젝트를 이미 보고 있는 탭이 있으면 **그 탭 안에서** 자리만 바꾼다(탭을 늘리지 않는다 — 프로젝트 하나 = 탭 하나).
+ *  없으면 ?new=1 주소로 새 탭을 연다(그 쿼리가 '맨 위 세션으로 보내기'를 건너뛰게 한다). */
+function newSessionFor(projectId) {
+    if (!(projectId > 0))
+        return;
+    const href = '#/p/' + projectId + '?new=1';
+    const hit = tabsApi?.tabs.find((t) => tabProject(t) === projectId);
+    if (!tabsApi || !hit) {
+        location.hash = href;
+        return;
+    } // 그 프로젝트를 보는 탭이 없다 — 새 탭에서 연다
+    const pv = projViews.get(hit);
+    // 셸이 이미 살아 있으면 **그 셸 안에서** 자리만 바꾼다(대화·터미널·배치가 그대로 산다).
+    if (pv?.newSession) {
+        tabsApi.activate(hit);
+        pv.newSession();
+        return;
+    }
+    // ⚠ 아직 안 그려진(또는 그리는 중인) 탭이면 셸 핸들이 없다 — 여기서 activate 만 하면 그 탭이 **옛 주소로**
+    //  그려져(세션 화면) 방금 연 새 세션 자리를 덮는다(실측 2026-08-20). 그래서 주소를 먼저 새 세션 자리로 바꾼다.
+    hit.route = href;
+    if (tabsApi.current() === hit) { // 이미 활성 탭이면 activate 는 아무 일도 하지 않으므로 직접 그린다
+        suppressHash++;
+        location.hash = href;
+        void renderRoute(hit);
+        tabsApi.paint();
+    }
+    else
+        tabsApi.activate(hit);
 }
 function paintAsidePanes(host) {
     if (host.__trail)

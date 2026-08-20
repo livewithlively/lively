@@ -45,7 +45,11 @@ export interface PanesOpts {
   /** 세션 탭에서 고친 이름 — main.ts 의 renameSession 이 서버·사이드바·셸 탭·세션 머리줄까지 한 번에 갱신한다. */
   onRenameSession?: (id: string, name: string) => Promise<void>;
 }
-export interface PanesHandle { destroy(): void }
+export interface PanesHandle {
+  destroy(): void;
+  /** 이 셸을 '새 세션 자리'로 돌린다 — 사이드바 [＋]와 문패 [＋ 세션]이 같은 곳을 부른다(#1719 원준 2026-08-20). */
+  newSession(): void;
+}
 
 // ── 배치 ────────────────────────────────────────────────────────────────────
 type Zone = 'main' | 'side' | 'bottom';
@@ -453,6 +457,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   window.addEventListener('pn:sessions-view', onViewChanged);
 
   return {
+    newSession,
     destroy(): void {
       dead = true;
       window.removeEventListener('pn:sessions-view', onViewChanged);
