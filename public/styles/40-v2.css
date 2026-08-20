@@ -5,14 +5,14 @@
    ───────────────────────────────────────────────────────────────────────────── */
 
 /* ── 임베드 모드: 새 셸이 클래식 화면을 iframe 에 실을 때. 크롬만 걷고 화면 코드는 그대로. ── */
-body.embed #org-banner, body.embed header.topbar, body.embed footer.app-foot, body.embed #skip-link { display: none !important; }
+body.embed #org-banner, body.embed #desktop-update, body.embed header.topbar, body.embed footer.app-foot, body.embed #skip-link { display: none !important; }
 body.embed #view { padding-top: 12px; }
 body.embed .liv-head { display: none; } /* 리브 페이지도 임베드되면 '← 라이블리'가 이중이 된다 */
 
 /* ── 새 셸 켜짐: 클래식 크롬 숨김, 뿌리 전체 화면 ── */
 body[data-ui="v2"] { height: 100vh; overflow: hidden; margin: 0; }
 body[data-ui="v2"] #app { display: block !important; height: 100vh; }
-body[data-ui="v2"] #org-banner, body[data-ui="v2"] header.topbar, body[data-ui="v2"] main#view, body[data-ui="v2"] footer.app-foot, body[data-ui="v2"] #skip-link { display: none !important; }
+body[data-ui="v2"] #org-banner, body[data-ui="v2"] #desktop-update, body[data-ui="v2"] header.topbar, body[data-ui="v2"] main#view, body[data-ui="v2"] footer.app-foot, body[data-ui="v2"] #skip-link { display: none !important; }
 /* 세 칸 + 사이 손잡이 둘(v2/split.ts) — 너비는 변수, 손잡이가 바꾼다(기억됨). no-aside 면 우패널·그 손잡이는 0. */
 #v2-root { --v2-side-w: 292px; --v2-aside-w: 316px; height: 100vh; display: grid; grid-template-columns: var(--v2-side-w) 6px minmax(0, 1fr) 6px var(--v2-aside-w); background: var(--bg); color: var(--ink); }
 #v2-root.no-aside { grid-template-columns: var(--v2-side-w) 6px minmax(0, 1fr) 0 0; }
@@ -325,7 +325,11 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-tab:hover { background: rgba(255,255,255,.62); color: var(--ink); }
 .v2-tab.on { background: var(--bg); box-shadow: inset 0 2px 0 var(--blue); color: var(--ink); font-weight: 700; }
 .v2-tab.on:hover { background: var(--bg); }
-.v2-tab .t { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* 이름은 **남는 폭을 다 먹는다**(flex:1) — 안 그러면 글자 폭만큼만 차지해서, 이름이 짧은 탭은 닫기 ×가
+   글자 바로 뒤에 붙는다(상민님 2026-08-20: "탭 네모의 오른쪽 고정 위치에 있는 게 맞지 않나"). 탭 폭이
+   1/n 로 고정되면서 드러난 것 — 종전엔 탭이 내용만큼 좁아져 그 빈 자리가 안 보였다.
+   ×의 자리는 이제 탭마다 같은 곳(오른쪽 끝)이라 눈이 그 자리를 외운다. min-width:0 은 말줄임(…)의 전제다. */
+.v2-tab .t { flex: 1; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .v2-tab-ic { width: 15px; height: 15px; stroke: currentColor; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 /* 상태는 아이콘 색으로 — 도는 중 파랑 · 확인 필요 앰버 · 끝남 민트. 글자색은 '켜짐/꺼짐'만 말한다(두 축을 섞지 않는다). */
 .v2-tab-ic.st-busy { stroke: var(--blue); }

@@ -26,6 +26,7 @@ import { endTour } from './tour.js';
 import { installGlobalUndo } from './undo.js';
 import { setUnauthorizedHandler } from './lib/net.js';
 import { uiMode } from './lib/state.js';
+import { mountDesktopUpdate } from './desktop-update.js'; // 데스크톱 앱이 받아 둔 업데이트 — 클래식 셸 상단 띠(#1838)
 import { bootV2 } from './v2/main.js'; // #1719 새 1탭 셸 — boot() 가 ui_mode 로 고른다. 정적 import(스탬프 경로 단일화), 부르기 전엔 아무 일도 안 함.
 import { applyTheme, nextTheme, setThemePref, themeIconSvg, themePref, themeTitle, watchTheme } from './theme.js'; // #1683 다크모드 — 3단 테마
 // ── 401(세션 만료) 처리 배선(R29a) — **이 파일에서 가장 먼저 실행되는 문장이어야 한다.** ──
@@ -416,6 +417,13 @@ async function boot() {
             banner.hidden = true; // 재부팅(재로그인) 시 내려간 공지가 남지 않게 — 대칭 처리
         }
     }
+    // 데스크톱 앱 업데이트(#1838) — 앱이 뒤에서 받아 둔 새 버전이 있으면 여기서 알리고 **그 자리에서** 반영한다.
+    //  종전엔 트레이·설치 마법사에만 입구가 있어, 이 화면을 띄워 두고 일하는 사람에게는 아무 신호도 가지 않았다.
+    //  브라우저에서 연 웹 UI 에는 다리가 없어 접힌 채로 남는다. 임베드(런치패드가 클래식 페이지를 iframe 으로 실은 것)는
+    //  크롬을 걷은 화면이라 띄우지 않는다 — 새 셸의 사이드바가 이미 같은 것을 들고 있다(v2/side.ts).
+    const deskUp = document.getElementById('desktop-update');
+    if (deskUp && !embedded)
+        mountDesktopUpdate(deskUp, 'bar');
     // 사용량 칩(#1454 S5) — usage_url 설정 시에만 상단바에 노출(기본 null = 종전 그대로 칩 없음).
     const usageChip = document.getElementById('usage-chip');
     if (usageChip) {

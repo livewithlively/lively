@@ -28,6 +28,7 @@ import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls, isLiveSess, isPastSess, sessWork, type Proj, type Sess, type V2Data } from './views.js';
 import { switcherTop } from './switcher.js';
+import { mountDesktopUpdate } from '../desktop-update.js';   // 데스크톱 앱이 받아 둔 업데이트 — 있을 때만 발치에 뜬다(#1838)
 import { THEME_ORDER, setThemePref, themePref, type ThemePref } from '../theme.js'; // #1683 다크모드 — 사이드바 3단 토글
 
 // 기본은 **전부 접힘**(상민님 2026-08-18: 선택된 프로젝트 외에는 다 접어둔다) — 사용자가 편 것만 기억한다.
@@ -321,6 +322,10 @@ function render(): void {
     ...(fltN ? [filterSummary(fltN)] : []),
     treeEl!,
     el('div', { class: 'v2-side-foot' },
+      // 앱 업데이트(#1838) — 데스크톱 앱이 받아 둔 새 버전이 있을 때만 뜬다(브라우저에선 늘 접혀 있다).
+      //  발치에 두는 이유: 이 줄은 '보고 있는 것'이 아니라 **이 앱 자체**에 관한 일이라, 계정·클래식 전환과
+      //  같은 층이다. 그리고 사이드바는 접히지 않으므로(v2 규약) 어떤 화면을 보고 있어도 늘 눈에 닿는다.
+      updateSlot(),
       // 「도구」 — 앱(런치패드)은 콘텐츠가 아니라 도구다. 계정(신원)과 결을 갈라, 푸터가 잡동사니로 읽히지 않게 한다.
       el('div', { class: 'v2-foot-k', text: '도구' }),
       el('button', { class: 'v2-apps-btn', type: 'button', onclick: () => openLaunchpad(), title: '앱 — 아직 새 화면으로 옮기지 않은 것들' }, appIcon('proj', 'v2-apps-ic'), el('span', { text: '앱' }), el('span', { class: 'v2-cnt', text: String(visibleApps().length) })),
@@ -335,6 +340,14 @@ function render(): void {
   if (findHad) { findIn.focus(); if (findSel && findSel[0] != null) findIn.setSelectionRange(findSel[0], findSel[1]); }
   else if (findFocusWanted) { findFocusWanted = false; findIn.focus(); }
   bindFindKey();
+}
+
+/** 사이드바 발치의 업데이트 칸 — 자리만 만들고 내용은 desktop-update 가 채운다(받아 둔 게 없으면 접혀 있다).
+ *  drawSide 는 사이드바를 통째로 다시 그리므로 이 자리도 매번 새로 난다 — 모듈이 옛 자리를 스스로 정리한다. */
+function updateSlot(): HTMLElement {
+  const host = el('div', { hidden: true }) as HTMLElement;
+  mountDesktopUpdate(host, 'row');
+  return host;
 }
 
 // ── 돋보기 = 검색칸 여닫기 (#1067 의 방식을 되살리되 #1154 의 반려 사유 둘을 설계로 막는다) ──
