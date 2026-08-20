@@ -27,6 +27,7 @@ const ICON_PATHS: Record<string, string> = {
   undo: '<path d="M4 9h11a5 5 0 0 1 0 10h-6"/><path d="M8 5L4 9l4 4"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/>',
   pencil: '<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/><path d="M14 6l4 4"/>',
+  eye: '<path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6z"/><circle cx="12" cy="12" r="2.6"/>',
   save: '<path d="M5 4h11l3 3v13H5z"/><path d="M9 4v5h6V4"/><path d="M8 20v-6h8v6"/>',
   ext: '<path d="M14 4h6v6"/><path d="M20 4l-8 8"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
 };
@@ -129,4 +130,35 @@ export function attachName(f: File, taken: string[]): string {
   const sub = (f.type || '').split('/')[1] || 'png';
   const ext = (sub.split('+')[0].replace(/[^a-z0-9]/gi, '') || 'png').toLowerCase();   // image/svg+xml → svg
   return freeName(new Set(taken), `붙여넣은 그림 ${stamp()}.${ext}`);
+}
+
+// ── 칸 머리의 안내 한 줄 (#1819) ─────────────────────────────────────────────
+//  칸이 "무엇을 담는 곳인지"가 아니라 **그래서 나에게 무슨 이득인지**를 말한다. 자료·지식처럼 계약이
+//  눈에 안 보이는 칸은 이걸 모르면 덜 쓰게 된다(자료를 '이 세션 첨부'로 오해해 딱 한 개만 올리는 식).
+//  접으면 그 선택을 기억한다 — 한 번 읽은 사람에게 같은 문장을 계속 보일 이유는 없다.
+export function pnNote(key: string, text: string): HTMLElement {
+  const note = el('div', { class: 'pn-fnote' },
+    pnIcon('spark', 'pn-i sm'),
+    el('p', { text }),
+    el('button', {
+      class: 'pn-fnote-x', type: 'button', title: '안내 접기', 'aria-label': '안내 접기', text: '✕',
+      onclick: () => { lsSet(key, '0'); note.hidden = true; },
+    })) as HTMLElement;
+  note.hidden = lsGet(key, '1') === '0';
+  return note;
+}
+
+// ── 지식 제목을 사람이 한눈에 읽는 한 줄로 (#1819) ───────────────────────────
+//  위키 제목은 「짧은 이름 — 긴 설명」 규약을 따른다(실측: 표본 18건 중 15건이 ' — ' 를 가졌고 앞머리는
+//  11~44자). 곁칸은 폭이 300px 남짓이라 전문을 그대로 걸면 슬러그처럼 읽히는 글자 덩어리가 된다.
+//  그래서 **앞머리만** 남기고 이슈번호 같은 기계용 표식을 턴다. 전문은 title 속성과 상세 창이 갖는다.
+//  ⚠ 저장된 제목을 바꾸지 않는다 — 화면에서만 줄인다(위키·검색·외부 미러의 정본은 그대로여야 한다).
+export function knTitle(raw: string, name: string): string {
+  let t = String(raw || '').trim();
+  if (!t) t = String(name || '').replace(/[-_]+/g, ' ');       // 제목이 없으면 슬러그를 말처럼 편다
+  t = t.split(/\s+[—–]\s+/)[0];                                // 「이름 — 설명」의 이름만
+  t = t.replace(/\(?#\d+[^)]*\)?/g, ' ');                      // (#1819) · #1819 같은 표식은 사람에게 뜻이 없다
+  t = t.replace(/^(as-built|as built)\s*[::]\s*/i, '');         // 문서 종류 접두어는 아래 배지가 말한다
+  t = t.replace(/\s{2,}/g, ' ').replace(/[\s·,:;]+$/, '').trim();
+  return t || String(name || '');
 }

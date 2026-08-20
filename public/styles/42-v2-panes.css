@@ -84,6 +84,7 @@
 .pn-head.end { justify-content: flex-end; border-top: 1px solid var(--line-row); }
 .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ell2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ell1 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
 /* ── 팝오버(칸 고르기·보기 메뉴) ──
    ⚠ anchoredPopover 는 **위치만** 잡는다(.dash-pop = position:fixed·z-index). 배경·테두리·그림자는 패널이
@@ -249,7 +250,7 @@
 
 /* ══ 지식 · 할 일 · 개요 · 타임라인 ══════════════════════════════════════════ */
 .pn-knlist, .pn-tlist { flex: 1; min-height: 0; overflow: auto; padding: 0 10px 14px; display: flex; flex-direction: column; gap: 1px; }
-.pn-knrow { display: flex; align-items: center; gap: 8px; padding: 8px 9px; border-radius: 8px; text-decoration: none; color: var(--ink); font-size: 12.5px; }
+.pn-knrow { display: flex; align-items: center; gap: 8px; padding: 8px 9px; border: 0; border-radius: 8px; width: 100%; text-align: left; background: none; font: inherit; font-size: 12.5px; text-decoration: none; color: var(--ink); cursor: pointer; }
 .pn-knrow:hover { background: var(--bg-punch); }
 .pn-knrow svg { color: var(--muted-2); }
 .pn-knrow .n { min-width: 0; flex: 1; }
@@ -270,6 +271,10 @@
 .pn-md h1 { font-size: 18px; } .pn-md h2 { font-size: 15.5px; } .pn-md h3 { font-size: 14px; }
 .pn-md p, .pn-md ul, .pn-md ol { margin: 0 0 10px; }
 .pn-md code { font-size: 12px; background: #F4F6FA; padding: 1px 4px; border-radius: 4px; }
+/* 코드·표는 제 안에서 가로로 흐른다 — 칸(또는 창)을 밀어 본문 글줄이 잘리지 않게. */
+.pn-md pre { margin: 0 0 10px; padding: 10px 12px; border-radius: 8px; background: #F4F6FA; overflow-x: auto; }
+.pn-md pre code { background: none; padding: 0; }
+.pn-md table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
 /* 타임라인 칸 = 그 세션의 발자취 위젯(web/timeline.ts) 통째. 위젯이 [머리 바 + 자기 스크롤]을 이미 갖고 있으니
    여기서는 높이만 내주고 스크롤은 겹치지 않게 둔다 — 겉과 속이 둘 다 스크롤하면 휠이 어디로 갈지 사람이 못 읽는다. */
 .pn-tl { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
@@ -361,14 +366,18 @@
 /* 데스크톱 앱(#1829)에서는 이 칸이 <webview> 다 — 교체 요소라 내재 크기로 버티므로 flex 자식임을 명시한다. */
 webview.pn-webframe { display: flex; }
 .pn-web-note { flex: none; padding: 6px 10px 8px; border-top: 1px solid var(--line); }
-.pn-ed-pick { max-width: 46%; height: 28px; border: 1px solid var(--line-net); border-radius: 8px; font: inherit; font-size: 12.5px; background: var(--bg, #fff); color: var(--ink); }
-.pn-ed-body { flex: 1; min-height: 0; display: flex; }
-.pn-ed-split { flex: 1; min-height: 0; display: grid; grid-template-rows: 1fr 1fr; }
-.pn-ed-ta { flex: 1; min-height: 0; width: 100%; border: 0; padding: 10px 12px; resize: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6; color: var(--ink); background: var(--bg, #fff); }
-.pn-ed-ta:focus { outline: none; }
-.pn-ed-split .pn-ed-ta { border-bottom: 1px solid var(--line); }
+.pn-ed-body { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.pn-ed-name { flex: 1; min-width: 0; font-size: 12.5px; }
 .pn-ed-pv { width: 100%; height: 100%; border: 0; background: #fff; }
 .pn-ed-img { width: 100%; height: 100%; object-fit: contain; background: #F7F9FC; }
+.pn-ed-pre { flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 12px 14px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.6; color: var(--ink); white-space: pre-wrap; word-break: break-word; }
+/* 뷰어의 '무엇을 열까' 화면 — 드롭다운을 대신하는 목록(검색 + 종류·크기·시각) */
+.pn-ed-pick2 { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pn-ed-find { flex: none; margin: 9px 12px 7px; height: 30px; padding: 0 10px; border: 1px solid var(--line-net); border-radius: 9px; font: inherit; font-size: 12.5px; background: var(--bg, #fff); color: var(--ink); }
+.pn-ed-find:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px rgba(45,107,240,.10); }
+.pn-ed-pick2 .pn-flist { flex: 1; min-height: 0; overflow: auto; padding: 0 8px 12px; }
+.pn-ed-pick2 .pn-frow2 { width: 100%; border: 1px solid transparent; background: none; font: inherit; text-align: left; cursor: pointer; }
+.pn-ed-pick2 .pn-frow2:hover { border-color: var(--line-net); background: #FBFCFE; }
 
 /* ── 앱 부품(#1780 panes 정합) — 설치된 앱을 곁칸에서 목록·열기 ── */
 .pn-apps { display: flex; flex-direction: column; overflow: hidden; }
@@ -381,3 +390,25 @@ webview.pn-webframe { display: flex; }
 .pn-apps-bar { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: #FAFBFC; }
 .pn-apps-cur { font-size: 12.5px; }
 .pn-apps .v2-appui-frame { flex: 1; width: 100%; border: 0; background: #fff; }
+
+/* ══ 지식 상세 창 — 위키로 튀지 않고 그 자리에서 먼저 본다 (#1819) ═══════════ */
+.pn-knm { width: min(680px, 96vw); }
+.pn-knm .pn-modal-h h2 { font-size: 17px; line-height: 1.35; }
+.pn-knm-full { margin: 0 0 10px; font-size: 12.5px; line-height: 1.55; color: var(--muted-head); }
+.pn-knm-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; }
+.pn-knm-tag { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: #EEF2F8; color: var(--muted-head); }
+.pn-knm-sum { margin: 0 0 12px; padding: 10px 12px; border-left: 3px solid var(--blue); border-radius: 0 8px 8px 0; background: #F4F8FF; font-size: 13px; line-height: 1.6; color: var(--ink); }
+.pn-knm-body .pn-md { padding: 0; }
+.pn-knm .pn-modal-f .pn-fine { min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+
+/* ══ 문패 버튼 — 크기·글자는 그대로 두고 '무게'만 준다 (#1819 원준) ═══════════ */
+/*  ghost 둘이 나란히 있으면 어느 것이 주된 동작인지 색이 말해 주지 않는다. 주된 동작만 칠한다. */
+.pn-door-sep { width: 1px; height: 20px; margin: 0 2px; background: var(--line); }
+.pn-door-btn { gap: 6px; }
+.pn-door-btn svg { width: 15px; height: 15px; }
+.pn-door-r .btn-primary.pn-door-btn { box-shadow: 0 1px 2px rgba(45,107,240,.30), 0 2px 8px rgba(45,107,240,.16); }
+.pn-door-r .btn-primary.pn-door-btn:hover { box-shadow: 0 1px 2px rgba(45,107,240,.34), 0 4px 12px rgba(45,107,240,.22); }
+.pn-door-r .btn-ghost.pn-door-btn { border-color: var(--line-net); color: var(--ink); font-weight: 600; }
+.pn-door-r .btn-ghost.pn-door-btn svg { color: var(--muted-2); }
+.pn-door-r .btn-ghost.pn-door-btn:hover { border-color: var(--blue); color: var(--blue); background: #F6F9FF; }
+.pn-door-r .btn-ghost.pn-door-btn:hover svg { color: var(--blue); }
