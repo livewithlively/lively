@@ -284,21 +284,31 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-main { position: relative; min-width: 0; min-height: 0; overflow: hidden; display: flex; flex-direction: column; background: var(--bg, #fff); }   /* relative: 타임라인 서랍 버튼(.v2-tl-btn)의 기준 */
 
 /* ── 셸 탭(#1719) — 가운데 열 맨 위 한 줄. 탭 = 화면(홈·프로젝트·세션·앱) 하나, 전환은 숨겼다 보였다(재렌더 없음). ── */
-.v2-tabs { display: flex; align-items: center; gap: 3px; padding: 6px 8px 6px; border-bottom: 1px solid var(--line); background: var(--canvas, #F4F7FC); flex: none; overflow-x: auto; scrollbar-width: none; }
+/* ══ 최상단 탭 = 폐지한 세션 탭 줄의 문법(원준 2026-08-20) ══════════════════════════════
+   종전엔 회색 바탕 위의 **둥근 알약**이라 탭이 아니라 배지로 읽혔다("탭 같지가 않아서 별로"). 브라우저·에디터의
+   탭 문법으로 바꾼다 — 줄은 한 톤 낮은 띠(#FAFBFC), 켜진 탭만 **흰 종이로 올라오고 위쪽에 파란 밑줄**이 그어진다.
+   테두리·그림자를 걷어 낸 자리를 '면의 높낮이'가 대신하므로 탭이 몇 개든 줄이 조용하다.
+   아이콘(집·말풍선·폴더)은 그대로 두되 **아이콘 색이 곧 상태**다(.st-busy/wait/done). */
+.v2-tabs { display: flex; align-items: stretch; gap: 1px; height: 37px; padding: 0; border-bottom: 1px solid var(--line); background: #FAFBFC; flex: none; overflow-x: auto; scrollbar-width: none; }
 .v2-tabs::-webkit-scrollbar { display: none; }
-.v2-tab { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 9px; border: 1px solid transparent; border-radius: 7px; font-size: 12.5px; color: var(--ink-sub); cursor: pointer; max-width: 200px; min-width: 0; white-space: nowrap; flex: 0 1 auto; user-select: none; }
-.v2-tab:hover { background: var(--bg-tint); color: var(--ink); }
-.v2-tab.on { background: var(--bg, #fff); border-color: var(--line); color: var(--ink); font-weight: 700; box-shadow: 0 1px 2px rgba(16, 24, 40, .05); }
+.v2-tab { display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 9px 0 13px; border: 0; border-radius: 0; background: none; font-size: 12.5px; color: var(--muted-head, #7A88A3); cursor: pointer; max-width: 210px; min-width: 0; white-space: nowrap; flex: 0 1 auto; user-select: none; }
+.v2-tab:hover { background: rgba(255,255,255,.62); color: var(--ink); }
+.v2-tab.on { background: var(--bg, #fff); box-shadow: inset 0 2px 0 var(--blue); color: var(--ink); font-weight: 700; }
+.v2-tab.on:hover { background: var(--bg, #fff); }
 .v2-tab .t { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.v2-tab-ic { width: 14px; height: 14px; stroke: currentColor; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; flex: none; }
-.v2-tab .x { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 5px; color: var(--muted-2, #a6b2c8); flex: none; visibility: hidden; }
+.v2-tab-ic { width: 15px; height: 15px; stroke: currentColor; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+/* 상태는 아이콘 색으로 — 도는 중 파랑 · 확인 필요 앰버 · 끝남 민트. 글자색은 '켜짐/꺼짐'만 말한다(두 축을 섞지 않는다). */
+.v2-tab-ic.st-busy { stroke: var(--blue); }
+.v2-tab-ic.st-wait { stroke: var(--amber, #C98A16); }
+.v2-tab-ic.st-done { stroke: var(--mint-deep, #0FA37E); }
+.v2-tab .x { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 5px; color: var(--muted-2, #a6b2c8); flex: none; visibility: hidden; }
 .v2-tab:hover .x, .v2-tab.on .x { visibility: visible; }
 .v2-tab .x:hover { background: var(--bg-punch); color: var(--ink); }
 .v2-tab-xic { width: 10px; height: 10px; stroke: currentColor; stroke-width: 2.2; fill: none; stroke-linecap: round; }
-.v2-tab-add { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 7px; color: var(--ink-sub); flex: none; }
+.v2-tab-add { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 36px; border-radius: 0; color: var(--muted-head, #7A88A3); flex: none; }
 /* 탭의 × · ＋ 는 <button> — 브라우저 기본 버튼 테두리·회색 바탕을 벗긴다(안 벗기면 탭 안에 상자가 하나 더 그려진다, 모바일 크롬에서 두드러졌다 #1777). */
 .v2-tab .x, .v2-tab-add { border: 0; background: none; padding: 0; font: inherit; cursor: pointer; appearance: none; -webkit-appearance: none; }
-.v2-tab-add:hover { background: var(--bg-tint); color: var(--ink); }
+.v2-tab-add:hover { background: rgba(255,255,255,.62); color: var(--blue); }
 /* 탭 패널 — 탭마다 한 벌(가운데·우패널). 숨긴 것은 자리도 차지하지 않는다. 스크롤은 패널 자기 것(탭마다 보존). */
 .v2-tabpane { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
 .v2-tabpane[hidden] { display: none; }
@@ -794,7 +804,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
   .v2-mbar-slot { flex: 1; min-width: 0; align-self: stretch; display: flex; align-items: center; }
   /* 탭 줄이 바 가운데에 산다 — 제 테두리·바탕은 벗고 가로로만 굴린다. 탭은 조금 크게(손가락). 닫기 × 는 활성 탭에만(호버가 없다). */
   .v2-mbar .v2-tabs { flex: 1; min-width: 0; height: 100%; padding: 0 2px; border: 0; background: none; gap: 2px; }
-  .v2-mbar .v2-tab { max-width: 172px; min-height: 34px; padding: 5px 6px 5px 9px; font-size: 13px; }
+  .v2-mbar .v2-tab { max-width: 172px; height: 100%; min-height: 34px; padding: 0 8px 0 11px; font-size: 13px; }
   .v2-mbar .v2-tab .x { width: 22px; height: 22px; }
   .v2-mbar .v2-tab-xic { width: 12px; height: 12px; }
   .v2-mbar .v2-tab-add { width: 32px; height: 32px; }
@@ -920,12 +930,12 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 /* ── 탭 끌어 옮기기 + 고정 홈 + 이름 고치기(원준 2026-08-20) ── */
 .v2-tab { position: relative; }
 /* 잡은 탭이 이웃 위로 떠야 한다(z-index) */
-.v2-tab.fixed { padding-right: 9px; }
+.v2-tab.fixed { padding-right: 13px; }
 /* 닫기 단추가 없으니 오른쪽 여백을 글자 쪽으로 되돌린다 */
 /* 이웃이 미끄러지는 건 **끄는 동안만** — 평상시엔 탭이 움직일 일이 없다(transition 을 상시로 두면 첫 렌더가 흐른다). */
 .v2-tabs.dnd .v2-tab { transition: transform .16s cubic-bezier(.2,.7,.3,1); }
 .v2-tabs.dnd .v2-tab.dragging { transition: none; z-index: 5; cursor: grabbing;
-  background: var(--bg, #fff); border-color: var(--line); box-shadow: 0 6px 16px rgba(16, 24, 40, .16); }
+  background: var(--bg, #fff); box-shadow: inset 0 2px 0 var(--blue), 0 6px 16px rgba(16, 24, 40, .16); }
 .v2-tab-in { width: 150px; max-width: 46vw; min-width: 90px; height: 20px; border: 1px solid var(--blue); border-radius: 5px;
   padding: 0 5px; font: inherit; font-size: 12.5px; background: var(--bg, #fff); color: var(--ink); }
 .v2-tab-in:focus { outline: none; box-shadow: 0 0 0 3px rgba(45, 107, 240, .12); }

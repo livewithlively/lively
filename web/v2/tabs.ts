@@ -31,8 +31,8 @@ export interface ShellTab {
 }
 
 export interface TabsHooks {
-  /** 라우트 → 표시 제목·우패널 유무. 데이터가 늦게 와도 paint() 때마다 다시 묻는다. */
-  titleFor(route: string): { title: string; noAside: boolean };
+  /** 라우트 → 표시 제목·우패널 유무·상태(아이콘 색). 데이터가 늦게 와도 paint() 때마다 다시 묻는다. */
+  titleFor(route: string): { title: string; noAside: boolean; state?: string };
   /** 탭이 활성화됐다 — fresh 면 아직 안 그린 탭(렌더 필요). hash 반영·no-aside 토글은 호출자가 한다. */
   onActivate(tab: ShellTab, fresh: boolean): void;
   onClose(tab: ShellTab): void;
@@ -132,13 +132,16 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
   }
 
   // 탭 아이콘 — 사이드바와 같은 붓(24 뷰박스·현재색 스트로크). 홈/프로젝트/세션/앱이 모양으로 갈린다.
-  function icon(route: string): SVGElement {
+  function icon(route: string, state?: string): SVGElement {
     const k = routeKey(route);
     const d = k === 'home' ? ['M4 11l8-7 8 7', 'M6 9.5V20h12V9.5']
       : k.startsWith('p:') ? ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z']
       : k.startsWith('s:') ? ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z']
       : ['M4 5h16v12H4z', 'M4 9h16'];
-    return sv('svg', { viewBox: '0 0 24 24', class: 'v2-tab-ic', 'aria-hidden': 'true' }, ...d.map((p) => sv('path', { d: p })));
+    // 상태는 **아이콘 색**으로 말한다(원준 2026-08-20) — 도는 중 파랑 · 확인 필요 앰버 · 끝남 민트.
+    //  글자·바탕은 '켜진 탭인가'만 말하므로 두 축이 섞이지 않는다.
+    const st = state === 'busy' || state === 'wait' || state === 'done' ? ' st-' + state : '';
+    return sv('svg', { viewBox: '0 0 24 24', class: 'v2-tab-ic' + st, 'aria-hidden': 'true' }, ...d.map((p) => sv('path', { d: p })));
   }
 
   // ── 끌어 옮기기 — 크롬 탭 문법(원준 2026-08-20 "지금 모션이 부자연스럽다") ──
@@ -292,7 +295,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
         // 가운데 클릭 = 닫기(브라우저 탭 문법)
         onauxclick: (e: MouseEvent) => { if (e.button === 1) { e.preventDefault(); close(t); } },
       },
-        icon(t.route),
+        icon(t.route, info.state),
         el('span', { class: 't', text: t.title }),
         // 홈은 닫기 단추가 없다 — 지울 수 없는 자리라는 걸 생김새가 먼저 말한다.
         ...(t.fixed ? [] : [el('button', {

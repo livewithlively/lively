@@ -294,7 +294,8 @@ function titleFor(route) {
         if (!s)
             return { title: '세션', noAside: !SOLO };
         const t = sessText(s, projName(data, s.projectId));
-        return { title: t.main || t.sub || String(s.raw?.harness || '세션'), noAside: !SOLO };
+        // 아이콘 색이 될 상태 — 사이드바 점과 같은 판정(dotCls): 도는 중·확인 필요·끝남만 색을 갖는다.
+        return { title: t.main || t.sub || String(s.raw?.harness || '세션'), noAside: !SOLO, state: dotCls(s.stateKey) };
     }
     if (p === 'app') {
         const a = appByKey(segs[1]);

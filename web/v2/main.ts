@@ -230,7 +230,7 @@ function parseRoute(route: string): { segs: string[]; params: URLSearchParams; r
   return { segs: path.split('/').filter(Boolean), params: new URLSearchParams(q >= 0 ? h.slice(q + 1) : ''), raw: h };
 }
 /** 라우트 → 탭 제목·우패널 유무(탭 줄이 매 paint 마다 묻는다 — 데이터가 늦게 와도 이름이 따라잡는다). */
-function titleFor(route: string): { title: string; noAside: boolean } {
+function titleFor(route: string): { title: string; noAside: boolean; state?: string } {
   const { segs, raw } = parseRoute(route);
   const p = segs[0] || '';
   // 실험장: **어느 화면에도 상시 타임라인 열은 없다**(원준 2026-08-19 "메인 홈에도 리브에도 떠 있는데 둘 다 없애줘").
@@ -251,7 +251,8 @@ function titleFor(route: string): { title: string; noAside: boolean } {
     const s = findSess(decodeURIComponent(segs[1] || ''));
     if (!s) return { title: '세션', noAside: !SOLO };
     const t = sessText(s, projName(data, s.projectId));
-    return { title: t.main || t.sub || String(s.raw?.harness || '세션'), noAside: !SOLO };
+    // 아이콘 색이 될 상태 — 사이드바 점과 같은 판정(dotCls): 도는 중·확인 필요·끝남만 색을 갖는다.
+    return { title: t.main || t.sub || String(s.raw?.harness || '세션'), noAside: !SOLO, state: dotCls(s.stateKey) };
   }
   if (p === 'app') { const a = appByKey(segs[1]); return { title: a ? a.title : segs[1], noAside: true }; }
   if (CLASSIC_PAGES[p]) { const a = appByKey(CLASSIC_PAGES[p]); return { title: a ? a.title : raw, noAside: true }; }
