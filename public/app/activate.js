@@ -28,7 +28,7 @@ export async function renderActivate(view) {
     } });
     view.replaceChildren(el('div', { class: 'card', style: 'max-width:560px;margin:24px auto' }, el('div', { class: 'card-head' }, el('h2', { text: '터미널 로그인 승인' })), el('p', { class: 'guide-lead', text: '내 컴퓨터 터미널에서 lively 로그인을 시작하면 코드가 표시됩니다. 그 코드를 아래에 넣고 승인하세요.' }), 
     // ⚠ 피싱 경고 — 양방향.
-    el('div', { class: 'callout', style: 'border-left:3px solid #d9822b;padding:8px 12px;margin:8px 0;background:rgba(217,130,43,.08)' }, el('p', { style: 'margin:0 0 4px;font-weight:600', text: '⚠ 본인이 방금 자기 기기에서 시작한 로그인만 승인하세요.' }), el('ul', { style: 'margin:0;padding-left:18px' }, el('li', { text: '남이 준 코드를 입력·승인하지 마세요 — 당신 계정이 그 사람에게 넘어갑니다.' }), el('li', { text: '남의 코드를 대신 승인하지 마세요 — 그 기기가 당신 이름으로 로그인됩니다.' }))), el('div', { class: 'install-minter', style: 'display:flex;gap:8px;align-items:center' }, codeInput, goBtn), slot));
+    el('div', { class: 'callout', style: 'border-left:3px solid var(--warn-deep);padding:8px 12px;margin:8px 0;background:rgba(217,130,43,.08)' }, el('p', { style: 'margin:0 0 4px;font-weight:600', text: '⚠ 본인이 방금 자기 기기에서 시작한 로그인만 승인하세요.' }), el('ul', { style: 'margin:0;padding-left:18px' }, el('li', { text: '남이 준 코드를 입력·승인하지 마세요 — 당신 계정이 그 사람에게 넘어갑니다.' }), el('li', { text: '남의 코드를 대신 승인하지 마세요 — 그 기기가 당신 이름으로 로그인됩니다.' }))), el('div', { class: 'install-minter', style: 'display:flex;gap:8px;align-items:center' }, codeInput, goBtn), slot));
     if (prefill)
         look();
 }

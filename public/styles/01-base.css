@@ -42,11 +42,81 @@
   --node-blue-soft:#9DBDF2;
   --node-mint-soft:#7FE0C4;
 
+  /* ── 시맨틱 토큰(#1683 다크모드) — 흩어져 있던 리터럴을 계열로 정규화. 라이트 값 = 종전 리터럴 그대로(픽셀 불변).
+     다크 값은 90-dark.css 가 전량 재정의한다(두 파일이 쌍이며 scripts/dark-theme-contract.test.mjs 가 맞물림을 지킨다). ── */
+  --surface:       #FFFFFF;   /* 카드·모달·팝오버 '떠 있는 면' — 다크에선 --bg 보다 한 층 밝다 */
+  --on-fill:       #FFFFFF;   /* 채운 색(블루 버튼 등) 위 글자 — 양 테마 공통 백색 (theme-invariant) */
+  --blue-fill:     #2D6BF0;   /* (theme-invariant) 채움용 블루(버튼·배지 배경) — 다크에서도 채도 유지, --blue 는 글자·라인용으로 밝아진다 */
+  --blue-fill-deep:#1E54CC;   /* (theme-invariant) 채움 블루의 hover/눌림 */
+  /* 아래 채움 토큰도 같은 이유로 (theme-invariant) — 채운 면 위에는 늘 --on-fill(백색)이 앉으므로
+     다크에서 색을 밝히면 그 글자가 죽는다. 글자·라인용 --mint/--coral/--danger/--ok 는 다크에서 밝아진다. */
+  --mint-fill:     #0FA37E;   /* (theme-invariant) 완료·성공 채움 */
+  --ok-fill:       #16A37F;   /* (theme-invariant) */
+  --danger-fill:   #E5484D;   /* (theme-invariant) */
+  --coral-fill:    #E4756B;   /* (theme-invariant) 파괴 버튼 채움 */
+  --accent:        #5B6CFF;   /* 신형 화면 인디고 액센트(구 유령 --accent 정규화 — A1) */
+  --danger:        #E5484D;
+  --danger-deep:   #D6453C;
+  --danger-bg:     #FDECEC;
+  --danger-bg-2:   #FDF3F2;
+  --danger-line:   #F5C6C6;
+  --warn:          #F59E0B;
+  --warn-2:        #F5A623;
+  --warn-text:     #9A5B2E;
+  --warn-deep:     #B5791E;
+  --danger-ink:    #8C2020;   /* 틴트 위 진한 오류 본문 — deep 보다 한 단계 더 어두운 '잉크' 계층 */
+  --warn-ink:      #6B4E00;
+  --warn-bg:       #FFF6E6;
+  --warn-bg-2:     #FBF1E7;
+  --warn-line:     #F0D59A;
+  --warn-line-2:   #F0DCC4;
+  --ok:            #16A37F;
+  --ok-2:          #1F9D6B;
+  --ok-bg:         #F2FBF8;
+  --ok-line:       #DCEFE8;
+  --ok-line-2:     #CDEFE3;
+  --gray-text:     #6B7A90;
+  --gray-muted:    #AAB1BD;
+  --gray-line:     #D9DEE6;
+  --gray-line-2:   #D5DDEA;
+  --gray-bg:       #F4F7FC;
+  --gray-bg-2:     #F1F5FC;
+  --purple:        #8B7BD8;
+  --purple-text:   #6C6483;
+  --teal-deep:     #12797B;
+  --ok-ink:        #14532D;
+
+  /* 컴포넌트 토큰 — 전역 팔레트에 없는 계열(보라·하이라이트)의 자리 토큰 */
+  --md-mark-bg:          #FFF3C4;
+  --callout-purple-bg:   #FAF6FD;
+  --callout-purple-line: #EDE4F6;
+  --dmx-cross-bg:        #EFEDF5;
+
+  /* 코드·로그 판 — 라이트에서도 어두운 판이 정체성인 표면(셸 명령·실행 로그). 다크에선 더 깊어진다. */
+  /* 떠 있는 대비 바·칩(벌크바·에디터 툴바·보드 primary 그룹) — 라이트에선 '어두운 판'이 정체성이고,
+     다크에선 페이지보다 **한 단계 밝은** 판이 되어야 떠 보인다. 어느 쪽이든 위 글자는 --on-fill(백색)이고
+     반투명 흰 오버레이(호버·구분선)가 그대로 성립한다. */
+  --chip-dark:     #15233B;
+
+  --code-surface:  #0D1117;
+  --code-ink:      #C9D1D9;
+
+  /* 콘텐츠(커버 아트·다이어그램) 위에 얹는 반투명 판 — 아래 그림과 무관하게 글자가 읽혀야 하므로 테마를 탄다 */
+  --overlay-pill:    rgba(255, 255, 255, .92);
+  --overlay-pill-2:  rgba(255, 255, 255, .75);
+  --overlay-ring:    rgba(255, 255, 255, .95);
+
+  /* 채널 토큰 — rgba(var(--x), α) 꼴로 α 를 자리마다 유지한 채 색만 테마를 탄다 */
+  --shadow-ink:    21, 35, 59;    /* 그림자·스크림 — 다크에선 순흑 */
+  --tint-ink:      21, 35, 59;    /* 잉크 틴트 배경(호버 등) — 다크에선 밝은 잉크로 뒤집혀 '밝아지는' 호버가 된다 */
+
+  color-scheme: light;            /* 폼 컨트롤·내장 스크롤바 기본 팔레트(#1683) — 90-dark.css 가 dark 로 뒤집는다 */
+
   /* 다크(클로징/푸터 액센트 전용 — 기본 배경 금지) */
-  --dark-1:        #15233B;
-  --dark-2:        #1C3962;
-  --dark-sub:      #AEBFD8;
-  --dark-foot:     #7C8DA8;
+  --dark-1:        #15233B;  /* (theme-invariant) 클로징 밴드는 다크에서도 이 어두운 면이 정체성이다 */
+  --dark-2:        #1C3962;  /* (theme-invariant) 위와 한 쌍 */
+  --dark-sub:      #AEBFD8;  /* (theme-invariant) 위 어두운 면 **위의 글자** — 면이 안 변하니 글자도 안 변한다 */
+  --dark-foot:     #7C8DA8;  /* (theme-invariant) 위와 한 쌍 */
 }
 
 /* ── §2 베이스 타이포 ── */
@@ -62,11 +132,11 @@ html::-webkit-scrollbar, body::-webkit-scrollbar { width: 0; height: 0; display:
 /* 오버레이 스크롤바 — 우측 끝에 겹쳐 뜨는 얇은 막대. 스크롤 가능할 때만(.on) 은은히, 스크롤 중·호버 시(.act) 진하게. */
 .page-scroll { position: fixed; right: 2px; width: 12px; z-index: 60; pointer-events: none; }
 .page-scroll-thumb { position: absolute; right: 2px; top: 0; width: 6px; border-radius: 999px;
-  background: var(--muted-3, #aab3c0); opacity: 0; pointer-events: auto; cursor: default;
+  background: var(--muted-3); opacity: 0; pointer-events: auto; cursor: default;
   transition: opacity .35s ease, width .12s ease, background .12s ease; }
 .page-scroll.on .page-scroll-thumb { opacity: .26; }
 .page-scroll.on.act .page-scroll-thumb { opacity: .82; }
-.page-scroll-thumb:hover, .page-scroll-thumb:active { width: 9px; background: var(--muted-2, #8a94a4); opacity: .95; }
+.page-scroll-thumb:hover, .page-scroll-thumb:active { width: 9px; background: var(--muted-2); opacity: .95; }
 body {
   font-family: "Pretendard", -apple-system, "Apple SD Gothic Neo", sans-serif;
   -webkit-font-smoothing: antialiased;

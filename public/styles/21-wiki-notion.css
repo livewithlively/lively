@@ -29,12 +29,12 @@
 .kn-side-search-box.has-q .kn-side-search-clear { display: inline-flex; }
 
 /* ── 빠른 검색(⌘K) 오버레이 ── */
-.qk-back { position: fixed; inset: 0; background: rgba(13, 22, 40, .32); z-index: 1400;
+.qk-back { position: fixed; inset: 0; background: rgba(var(--shadow-ink), .32); z-index: 1400;
   display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh;
   opacity: 0; transition: opacity .14s ease; }
 .qk-back.open { opacity: 1; }
 .qk-panel { width: 640px; max-width: 92vw; background: var(--bg); border-radius: 14px;
-  box-shadow: 0 24px 60px rgba(13, 22, 40, .3); overflow: hidden; }
+  box-shadow: 0 24px 60px rgba(var(--shadow-ink), .3); overflow: hidden; }
 .qk-inrow { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
 .qk-glass { font-size: 15px; }
 .qk-input { flex: 1; border: none; outline: none; font-size: 16px; color: var(--ink); background: transparent; font-family: inherit; }
@@ -51,11 +51,11 @@
 
 /* ── 페이지 꾸미기 팝오버(이모지/커버) ── */
 .pd-emoji-pop, .pd-cover-pop { z-index: 1500; background: var(--bg); border: 1px solid var(--line);
-  border-radius: 12px; box-shadow: 0 18px 44px rgba(13, 22, 40, .18); padding: 10px; width: 308px; box-sizing: border-box; }
+  border-radius: 12px; box-shadow: 0 18px 44px rgba(var(--shadow-ink), .18); padding: 10px; width: 308px; box-sizing: border-box; }
 .pd-pop-head { display: flex; justify-content: space-between; align-items: center;
   font-size: 12.5px; font-weight: 700; color: var(--ink-sub); padding: 0 2px 8px; }
 .pd-pop-clear { border: none; background: none; color: var(--coral-text); font-size: 12px; cursor: pointer; border-radius: 5px; padding: 2px 6px; }
-.pd-pop-clear:hover { background: #FDF3F2; }
+.pd-pop-clear:hover { background: var(--danger-bg-2); }
 .pd-emoji-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; max-height: 208px; overflow: auto; }
 .pd-emoji-btn { border: none; background: none; font-size: 18px; padding: 4px 2px; cursor: pointer; border-radius: 6px; line-height: 1.2; }
 .pd-emoji-btn:hover { background: var(--bg-sel); }
@@ -116,13 +116,13 @@
   padding: 12px 14px; margin: 6px 0; position: relative; }
 .be-callout-ic { flex: none; font-size: 16px; line-height: 1.5; background: none; border: none; cursor: pointer;
   padding: 0 3px; border-radius: 6px; }
-.be-callout-ic:hover { background: rgba(21, 35, 59, .07); }
+.be-callout-ic:hover { background: rgba(var(--tint-ink), .07); }
 .be-ctext { flex: 1; min-width: 0; }
 .be-callout-paint { flex: none; opacity: 0; border: none; background: none; cursor: pointer; font-size: 12px;
   border-radius: 5px; padding: 2px 4px; transition: opacity .12s; }
 .be-callout:hover .be-callout-paint { opacity: .65; }
 .be-colorpop { position: absolute; right: 10px; top: 40px; display: flex; gap: 6px; background: var(--bg);
-  border: 1px solid var(--line); border-radius: 8px; padding: 6px; box-shadow: 0 10px 26px rgba(13, 22, 40, .14); z-index: 30; }
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px; box-shadow: 0 10px 26px rgba(var(--shadow-ink), .14); z-index: 30; }
 .be-colordot { width: 20px; height: 20px; border-radius: 6px; border: 1px solid var(--line); cursor: pointer; padding: 0; }
 .be-codewrap { position: relative; margin: 6px 0; }
 .be-code { font: 13px/1.55 ui-monospace, Menlo, monospace; background: var(--bg-tint); border: 1px solid var(--line);
@@ -168,13 +168,13 @@
 
 /* 크로스 블록 선택 — 블록 경계를 넘는 드래그·⌘A 2차가 만드는 '블록 범위' 하이라이트.
    선택 중에는 브라우저 문자 선택을 억눌러 두 겹으로 칠해지지 않게 한다(interactions.ts 가 range 도 걷는다). */
-.be-block.be-bsel { background: var(--node-blue-soft, rgba(45,107,240,.10)); border-radius: 6px; }
+.be-block.be-bsel { background: var(--node-blue-soft); border-radius: 6px; }
 .be.be-bselecting .be-text { user-select: none; -webkit-user-select: none; }
 .be.be-bselecting .be-text::selection { background: transparent; }
 
 /* ── 슬래시 메뉴 ── */
 .be-slash { position: fixed; z-index: 1300; width: 304px; max-height: 320px; overflow: auto; background: var(--bg);
-  border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 18px 44px rgba(13, 22, 40, .16); padding: 6px; }
+  border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 18px 44px rgba(var(--shadow-ink), .16); padding: 6px; }
 .be-slash-head { font-size: 11px; color: var(--muted-2); padding: 6px 10px 4px; font-weight: 700; letter-spacing: .4px; }
 .be-slash-empty { font-size: 12.5px; color: var(--muted-2); padding: 8px 10px 10px; }
 .be-slash-item { display: flex; gap: 10px; align-items: center; width: 100%; text-align: left; border: none;
@@ -186,9 +186,9 @@
 .be-slash-hint { margin-left: auto; font-size: 11px; color: var(--muted-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── 인라인 서식 툴바(다크 플로팅) ── */
-.be-tools { position: fixed; z-index: 1300; display: flex; gap: 2px; background: var(--ink); border-radius: 9px;
-  padding: 4px; box-shadow: 0 10px 30px rgba(13, 22, 40, .32); }
-.be-tool { border: none; background: none; color: #E7EDF7; min-width: 27px; height: 26px; border-radius: 6px;
+.be-tools { position: fixed; z-index: 1300; display: flex; gap: 2px; background: var(--chip-dark); border-radius: 9px;
+  padding: 4px; box-shadow: 0 10px 30px rgba(var(--shadow-ink), .32); }
+.be-tool { border: none; background: none; color: var(--on-fill); min-width: 27px; height: 26px; border-radius: 6px;
   cursor: pointer; font-size: 12.5px; font-family: inherit; padding: 0 6px; }
 .be-tool:hover { background: rgba(255, 255, 255, .16); }
 .be-tool-b { font-weight: 800; }
@@ -281,11 +281,11 @@ main.doc-mode .btn { border-radius: 9px; font-weight: 650; }
 main.doc-mode .btn-sm { padding: 6px 12px; font-size: 12.5px; border-radius: 8px; }
 main.doc-mode .btn-ghost { background: var(--wk-card); border-color: var(--wk-line); color: var(--wk-ink); box-shadow: 0 1px 2px rgba(27,30,39,.03); }
 main.doc-mode .btn-ghost:hover { border-color: var(--wk-living); background: var(--wk-card); }
-main.doc-mode .btn-primary { background: var(--wk-navy); box-shadow: 0 1px 2px rgba(31,58,102,.18); }
-main.doc-mode .btn-primary:hover { background: var(--wk-navy-deep); }
+main.doc-mode .btn-primary { background: var(--blue-fill); box-shadow: 0 1px 2px rgba(31,58,102,.18); }
+main.doc-mode .btn-primary:hover { background: var(--blue-fill-deep); }
 /* 삭제 — 상시 붉은 pill 대신 조용한 고스트, 위험색은 hover 에서만 */
 main.doc-mode .btn-danger { background: var(--wk-card); border: 1px solid var(--wk-line); color: var(--wk-ink-soft); }
-main.doc-mode .btn-danger:hover { border-color: var(--coral); color: var(--coral-text); background: #FDF4F2; }
+main.doc-mode .btn-danger:hover { border-color: var(--coral); color: var(--coral-text); background: var(--danger-bg-2); }
 
 /* ── 입력·필터 ── */
 main.doc-mode input[type="text"], main.doc-mode input[type="search"], main.doc-mode input[type="password"],
@@ -329,11 +329,11 @@ main.doc-mode .sec-label { font-family: var(--wk-mono); font-size: 12px; font-we
 .qk-panel { border-radius: 16px; box-shadow: 0 30px 70px rgba(27,30,39,.28); }
 .qk-input { font-size: 17px; }
 .qk-esc { font-family: 'D2Coding', ui-monospace, Menlo, monospace; font-size: 10px; }
-.qk-hint { font-family: 'D2Coding', ui-monospace, Menlo, monospace; font-size: 11.5px; color: #9A9AA3; letter-spacing: .1px; }
-.qk-row.on, .qk-row:hover { background: #F4F8FF; }
+.qk-hint { font-family: 'D2Coding', ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--muted); letter-spacing: .1px; }
+.qk-row.on, .qk-row:hover { background: var(--bg-sel); }
 .qk-row-title { font-weight: 600; }
 /* 스니펫은 사람 산문 미리보기 — mono(색인 목소리) 대신 sans 로 가독(#657r). mono 는 esc/hint 등 기계 데이터에만. */
-.qk-row-snip { font-size: 12px; color: #8B8B93; }
+.qk-row-snip { font-size: 12px; color: var(--muted); }
 
 /* ── 작성/편집 페이지 ── */   /* (#req) 편집창 속성 라벨 — 작은 mono 대신 읽히게 */
 
@@ -390,11 +390,11 @@ main.doc-mode .kn-side-tools .kn-side-toolitem:hover { background: var(--bg-tint
 .be-col { flex: 1 1 0; min-width: 0; }
 @media (max-width: 760px) { .be-cols { flex-direction: column; gap: 4px; } .be-col { width: 100%; } }
 .be-col .be-gutter, .be-togglekids .be-gutter { left: -14px; background: var(--bg); border: 1px solid var(--line);
-  border-radius: 7px; box-shadow: 0 2px 8px rgba(21, 35, 59, .12); padding: 1px; z-index: 8; }
+  border-radius: 7px; box-shadow: 0 2px 8px rgba(var(--shadow-ink), .12); padding: 1px; z-index: 8; }
 .be-drop-left { box-shadow: inset 3px 0 0 var(--blue); }
 .be-drop-right { box-shadow: inset -3px 0 0 var(--blue); }
 .be-blockmenu { position: fixed; z-index: 1350; width: 232px; background: var(--bg); border: 1px solid var(--line);
-  border-radius: 12px; box-shadow: 0 18px 44px rgba(21, 35, 59, .18); padding: 6px; }
+  border-radius: 12px; box-shadow: 0 18px 44px rgba(var(--shadow-ink), .18); padding: 6px; }
 .be-bm-head { font-size: 10.5px; font-weight: 700; letter-spacing: .5px; color: var(--muted-2); padding: 4px 8px 3px; }
 .be-bm-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 3px; padding: 1px 3px 4px; }
 .be-bm-turn { border: 1px solid var(--line); background: var(--bg); border-radius: 7px; height: 30px; cursor: pointer;
@@ -404,7 +404,7 @@ main.doc-mode .kn-side-tools .kn-side-toolitem:hover { background: var(--bg-tint
 .be-bm-item { display: flex; align-items: center; gap: 9px; width: 100%; border: none; background: none; text-align: left;
   padding: 7px 9px; border-radius: 8px; cursor: pointer; font-size: 13px; color: var(--ink); font-family: inherit; }
 .be-bm-item:hover { background: var(--bg-sel); }
-.be-bm-item.danger:hover { background: #FDF3F2; color: var(--coral-text); }
+.be-bm-item.danger:hover { background: var(--danger-bg-2); color: var(--coral-text); }
 .be-bm-ic { width: 18px; text-align: center; font-size: 12px; color: var(--ink-sub); flex: none; }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -447,7 +447,7 @@ main.doc-mode .kn-side-tools .kn-side-toolitem:hover { background: var(--bg-tint
 
 /* ── 셀렉션 툴바 — 다크 pill → 노션형 라이트 카드(전환 ∨ · 활성 상태 · 구분선) ── */
 .be-tools { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 3px;
-  box-shadow: 0 6px 24px rgba(21, 35, 59, .14), 0 1px 3px rgba(21, 35, 59, .08); gap: 1px; align-items: center; }
+  box-shadow: 0 6px 24px rgba(var(--shadow-ink), .14), 0 1px 3px rgba(var(--shadow-ink), .08); gap: 1px; align-items: center; }
 .be-tool { color: var(--ink-sub); min-width: 30px; height: 30px; border-radius: 7px; font-size: 13px; }
 .be-tool:hover { background: var(--bg-tint); color: var(--ink); }
 .be-tool.on { color: var(--blue); background: var(--bg-sel); }
@@ -464,7 +464,7 @@ main.doc-mode .kn-side-tools .kn-side-toolitem:hover { background: var(--bg-tint
 
 /* 전환 드롭다운 */
 .be-turnpop { position: fixed; z-index: 1360; width: 200px; max-height: 320px; overflow: auto; background: var(--bg);
-  border: 1px solid var(--line); border-radius: 11px; box-shadow: 0 16px 40px rgba(21, 35, 59, .16); padding: 5px; }
+  border: 1px solid var(--line); border-radius: 11px; box-shadow: 0 16px 40px rgba(var(--shadow-ink), .16); padding: 5px; }
 .be-turnpop-item { display: flex; align-items: center; gap: 9px; width: 100%; border: none; background: none;
   text-align: left; padding: 6px 8px; border-radius: 7px; cursor: pointer; font-size: 13px; color: var(--ink); font-family: inherit; }
 .be-turnpop-item:hover, .be-turnpop-item.on { background: var(--bg-sel); }
@@ -473,12 +473,12 @@ main.doc-mode .kn-side-tools .kn-side-toolitem:hover { background: var(--bg-tint
 
 /* 링크 팝오버 */
 .be-linkpop { position: fixed; z-index: 1360; display: flex; gap: 6px; align-items: center; background: var(--bg);
-  border: 1px solid var(--line); border-radius: 10px; padding: 7px; box-shadow: 0 16px 40px rgba(21, 35, 59, .16); }
+  border: 1px solid var(--line); border-radius: 10px; padding: 7px; box-shadow: 0 16px 40px rgba(var(--shadow-ink), .16); }
 .be-linkpop-in { width: 240px; border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px; font-size: 13px; font-family: inherit; }
 .be-linkpop-in:focus { outline: none; border-color: var(--blue); }
-.be-linkpop-btn { border: none; background: var(--blue); color: #fff; border-radius: 7px; padding: 6px 11px;
+.be-linkpop-btn { border: none; background: var(--blue-fill); color: var(--on-fill); border-radius: 7px; padding: 6px 11px;
   font-size: 12.5px; font-weight: 700; cursor: pointer; font-family: inherit; }
-.be-linkpop-btn:hover { background: var(--blue-deep); }
+.be-linkpop-btn:hover { background: var(--blue-fill-deep); }
 .be-linkpop-un { background: var(--bg); color: var(--ink-sub); border: 1px solid var(--line); }
 .be-linkpop-un:hover { background: var(--bg-tint); color: var(--ink); }
 
@@ -487,7 +487,7 @@ main.doc-mode .kn-side-tools .kn-side-toolitem:hover { background: var(--bg-tint
 
 /* ── 문서 액션 ⋯ 메뉴 ── */
 .kn-morepop, .kn-metapop { position: fixed; z-index: 1300; width: 208px; background: var(--bg); border: 1px solid var(--line);
-  border-radius: 11px; box-shadow: 0 16px 40px rgba(21, 35, 59, .16); padding: 5px; }
+  border-radius: 11px; box-shadow: 0 16px 40px rgba(var(--shadow-ink), .16); padding: 5px; }
 .kn-metapop { width: 232px; max-height: 320px; overflow: auto; }
 .kn-morepop-item, .kn-metapop-item { display: flex; align-items: center; gap: 9px; width: 100%; border: none; background: none;
   text-align: left; padding: 7px 9px; border-radius: 7px; cursor: pointer; font-size: 13px; color: var(--ink); font-family: inherit; }
@@ -509,7 +509,7 @@ main.doc-mode .kn-side-tools .kn-side-toolitem:hover { background: var(--bg-tint
 .md-pagecard { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 10px;
   padding: 11px 14px; margin: 6px 0; background: var(--bg); text-decoration: none; color: var(--ink);
   transition: border-color .12s ease, box-shadow .12s ease; }
-.md-pagecard:hover { border-color: var(--blue); box-shadow: 0 3px 12px rgba(21, 35, 59, .07); }
+.md-pagecard:hover { border-color: var(--blue); box-shadow: 0 3px 12px rgba(var(--shadow-ink), .07); }
 .md-pagecard-ic { flex: none; font-size: 16px; }
 .md-pagecard-title { flex: 1; min-width: 0; font-size: 14.5px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .md-pagecard-arrow { flex: none; font-size: 12px; color: var(--muted-2); }
@@ -530,7 +530,7 @@ main.doc-mode .kn-side-tools .kn-side-toolitem:hover { background: var(--bg-tint
 .md-coll-card { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--line); border-radius: 11px;
   padding: 12px 13px; text-decoration: none; color: var(--ink); background: var(--bg);
   transition: border-color .12s ease, box-shadow .12s ease; }
-.md-coll-card:hover { border-color: var(--blue); box-shadow: 0 4px 14px rgba(21, 35, 59, .07); }
+.md-coll-card:hover { border-color: var(--blue); box-shadow: 0 4px 14px rgba(var(--shadow-ink), .07); }
 .md-coll-card .md-coll-ic { font-size: 17px; }
 .md-coll-card .md-coll-title { font-size: 13.5px; font-weight: 650; line-height: 1.4;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
@@ -547,7 +547,7 @@ main.doc-mode .kn-side-tools .kn-side-toolitem:hover { background: var(--bg-tint
   border-radius: 6px; padding: 3px 7px; font-family: inherit; flex: none; }
 .be-coll-gear:hover { background: var(--bg-tint); color: var(--ink); }
 .be-collpop { position: fixed; z-index: 1360; width: 260px; background: var(--bg); border: 1px solid var(--line);
-  border-radius: 11px; box-shadow: 0 16px 40px rgba(21, 35, 59, .16); padding: 10px; display: flex; flex-direction: column; gap: 7px; }
+  border-radius: 11px; box-shadow: 0 16px 40px rgba(var(--shadow-ink), .16); padding: 10px; display: flex; flex-direction: column; gap: 7px; }
 .be-collpop-row { display: flex; align-items: center; gap: 8px; }
 .be-collpop-k { flex: none; width: 42px; font-size: 11.5px; color: var(--muted-2); }
 .be-collpop-sel { flex: 1; min-width: 0; font-size: 12.5px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 7px; font-family: inherit; }

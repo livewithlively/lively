@@ -124,9 +124,9 @@
 .pjv-gt-arrow { fill: var(--muted-3); }
 
 /* 오늘 — 세로선 + 배지. 좌측 시트(z-index 3)보다 아래로 깔려 시트를 뚫지 않는다. */
-.pjv-gt-todayline { position: absolute; top: 44px; bottom: 0; width: 1px; background: var(--blue); opacity: .5; z-index: 2; }
+.pjv-gt-todayline { position: absolute; top: 44px; bottom: 0; width: 1px; background: var(--blue-fill); opacity: .5; z-index: 2; }
 .pjv-gt-todaybadge { position: absolute; top: 26px; transform: translateX(-1px); z-index: 7;
-  background: var(--blue); color: #fff; font-size: 10px; font-weight: 700; line-height: 1;
+  background: var(--blue-fill); color: var(--on-fill); font-size: 10px; font-weight: 700; line-height: 1;
   padding: 3px 5px; border-radius: 3px; white-space: nowrap; }
 
 /* ── 간트: 계획을 '만드는' 부분 (#1067) ── */
@@ -138,10 +138,10 @@
 
 /* 바 = 끌 수 있는 것. 잡는 순간 커서와 그림자로 '움직인다'를 알린다. */
 .pjv-gt-bar { cursor: grab; touch-action: none; }
-.pjv-gt-bar.dragging { cursor: grabbing; box-shadow: 0 2px 8px rgba(21, 35, 59, .18); opacity: .9; }
+.pjv-gt-bar.dragging { cursor: grabbing; box-shadow: 0 2px 8px rgba(var(--shadow-ink), .18); opacity: .9; }
 /* 양 끝 리사이즈 핸들 — 바 안쪽에 얇게. 평소엔 숨고 호버 때만 드러난다(ClickUp Gen-C 동일). */
 .pjv-gt-handle { position: absolute; top: 4px; bottom: 4px; width: 7px; cursor: ew-resize;
-  border-radius: 2px; background: rgba(255, 255, 255, .75); opacity: 0; transition: opacity .1s;
+  border-radius: 2px; background: var(--overlay-pill-2); opacity: 0; transition: opacity .1s;
   touch-action: none; }
 .pjv-gt-handle.l { left: 2px; }
 .pjv-gt-handle.r { right: 2px; }
@@ -151,7 +151,7 @@
 .pjv-gt-dragtip { position: absolute; top: 50%; transform: translate(-50%, -50%); z-index: 8;
   pointer-events: none; background: var(--ink); color: var(--bg); font-size: 11px; font-weight: 700;
   line-height: 1; padding: 4px 7px; border-radius: 4px; white-space: nowrap;
-  font-variant-numeric: tabular-nums; box-shadow: 0 2px 8px rgba(21, 35, 59, .22); }
+  font-variant-numeric: tabular-nums; box-shadow: 0 2px 8px rgba(var(--shadow-ink), .22); }
 
 /* 우클릭 메뉴 앵커 — 커서 자리를 잡아주는 1px 자리표시자(보이지 않고 잡히지도 않는다). */
 .pjv-cursor-spot { position: fixed; width: 1px; height: 1px; pointer-events: none; opacity: 0; }
@@ -247,27 +247,27 @@
 
 /* 공개범위 모달 — 대상 경로(어느 폴더를 잠그는지 오해 없게 전체 경로를 보여 준다) + 안내 노트. */
 .dash-fbvis-path { font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 12px;
-  color: var(--muted); background: var(--bg-2, var(--bg)); border: 1px solid var(--line); border-radius: 6px;
+  color: var(--muted); background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
   padding: 6px 8px; word-break: break-all; }
 /* 상속·프로젝트 상속 안내 — 경고가 아니라 '왜 여기선 이렇게 되나'의 설명이라 무채 톤으로 조용히. */
 .dash-fbvis-note { margin-top: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px;
-  background: var(--bg-2, var(--bg)); display: flex; flex-direction: column; gap: 3px; }
+  background: var(--bg); display: flex; flex-direction: column; gap: 3px; }
 .dash-fbvis-note > b { font-size: 12.5px; color: var(--ink); font-weight: 600; }
 .dash-fbvis-note > span { font-size: 12px; color: var(--muted); line-height: 1.5; }
 
 /* #1291 관리탭 ▸ 맥락 공개범위 — 유형별 켜기/끄기 */
 .vax-list { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; }
 .vax-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 8px; }
-.vax-row + .vax-row { border-top: 1px solid var(--line, rgba(128,128,128,.18)); }
-.vax-row:hover { background: var(--hover, rgba(128,128,128,.06)); }
+.vax-row + .vax-row { border-top: 1px solid var(--line); }
+.vax-row:hover { background: rgba(var(--tint-ink), .06); }
 .vax-row.off .vax-label { opacity: .6; }
 .vax-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .vax-label { font-weight: 600; }
-.vax-locked { font-size: 12px; color: var(--warn-fg, #b26a00); }
+.vax-locked { font-size: 12px; color: var(--warn-deep); }
 .vax-none, .vax-off { font-size: 12px; opacity: .6; }
 /* 끄기 확인 — 경고는 눈에 띄어야 하지만 겁주는 색만으로는 부족해 무엇이 열리는지 이름을 함께 준다. */
 .vax-warn { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 8px;
-  background: var(--warn-bg, rgba(255,176,32,.12)); border: 1px solid var(--warn-line, rgba(255,176,32,.35)); }
+  background: var(--warn-bg); border: 1px solid var(--warn-line); }
 .vax-warn span { font-size: 13px; opacity: .85; }
 .vax-samples { margin: 10px 0 0; padding-left: 20px; font-size: 13px; max-height: 180px; overflow-y: auto; }
 .vax-samples li { margin: 2px 0; }

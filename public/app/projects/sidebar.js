@@ -68,7 +68,7 @@ function pjvListGroup(g, reload, canDelete, fields, anchorId, meId, taskCtx, nes
     const list = g.list; // null = 미분류('기타')
     const isUn = !list;
     const name = isUn ? '기타 (미분류)' : list.name;
-    const color = isUn ? 'var(--line, #2a2a33)' : pjvHarmonizeColor(list.color || pjvListAutoColor(list.id));
+    const color = isUn ? 'var(--line)' : pjvHarmonizeColor(list.color || pjvListAutoColor(list.id));
     const members = isUn ? [] : (list.members || []);
     const listIdForAdd = isUn ? null : list.id;
     const emptyText = pjvBoardMineOnly.on ? '내가 할당된 프로젝트가 없습니다.' : '아직 프로젝트가 없습니다.';

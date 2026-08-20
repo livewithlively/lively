@@ -70,7 +70,7 @@ function pjvSideSearchIcon() {
 function pjvBundleIcon(color, kind?) {
   const FOLDER = 'M3 6.7C3 5.8 3.72 5.1 4.6 5.1h3.55c.46 0 .9.22 1.18.58l.86 1.1h8.2c.88 0 1.6.72 1.6 1.6v8.42c0 .88-.72 1.6-1.6 1.6H4.6C3.72 18.9 3 18.2 3 17.3V6.7z';
   const n = sv('svg', { class: 'pjv-bundle-ic' + (kind ? ' ' + kind : ''), viewBox: '0 0 24 24', width: 17, height: 17, 'aria-hidden': 'true' });
-  if (kind === 'none') n.append(sv('path', { d: FOLDER, fill: 'none', stroke: 'var(--muted-3, #aab1bd)', 'stroke-width': 1.5, 'stroke-dasharray': '3 2.4', 'stroke-linejoin': 'round' }));
+  if (kind === 'none') n.append(sv('path', { d: FOLDER, fill: 'none', stroke: 'var(--muted-3)', 'stroke-width': 1.5, 'stroke-dasharray': '3 2.4', 'stroke-linejoin': 'round' }));
   else n.append(sv('path', { d: FOLDER, fill: color || 'var(--muted-2)' }));
   return n;
 }

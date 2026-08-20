@@ -7,16 +7,16 @@
       --svc-brand 는 svc-icons.ts 가 서비스마다 인라인으로 넣는다(외부 브랜드 자산 예외). ── */
 .svc-tile { flex: none; width: 40px; height: 40px; border-radius: 12px;
   display: inline-flex; align-items: center; justify-content: center;
-  background: color-mix(in srgb, var(--svc-brand, var(--muted-3)) 12%, var(--bg));
-  color: var(--svc-brand, var(--muted));
+  background: color-mix(in srgb, var(--svc-brand) 12%, var(--bg));
+  color: var(--svc-brand);
   transition: background-color 140ms ease, color 140ms ease; }
 .svc-tile svg { display: block; width: 23px; height: 23px; }
 .svc-tile-ini { font-size: 17px; font-weight: 800; line-height: 1; }
 /* 미연결 — 무채색으로 잠들어 있다가, 카드에 손을 올리면 그 서비스의 색으로 깨어난다(켤 수 있다는 어포던스). */
 .svc-tile.off { background: var(--bg-tint-2); color: var(--muted-2); }
 .svc-card:hover .svc-tile.off, .svc-card:focus-visible .svc-tile.off {
-  background: color-mix(in srgb, var(--svc-brand, var(--muted-3)) 12%, var(--bg));
-  color: var(--svc-brand, var(--muted)); }
+  background: color-mix(in srgb, var(--svc-brand) 12%, var(--bg));
+  color: var(--svc-brand); }
 
 /* ── 연결된 서비스 — 전폭 행(관리 동작이 붙고, 슬랙은 아래로 펼쳐진다) ── */
 .svc-conn-list { display: flex; flex-direction: column; gap: 10px; }
