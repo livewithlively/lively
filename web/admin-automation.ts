@@ -55,8 +55,21 @@ async function cronPanel(detail, data) {
             : el('span', { class: 'wikicat-owner', text: owner.label }),
           '이 잡의 전용 화면입니다. ' + owner.why)
         : null,
-      el('span', { class: 'dm-tag', text: j.enabled ? sched : '꺼짐' }),
-      el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '최근' }), last));
+      // #1675 ③④ — 스스로 멈춘 잡은 **사람이 끈 것과 구분해서** 보여준다. 구분이 없으면 "왜 꺼져 있지?"를
+      //  추측해야 하고, 자동 정지를 모른 채 그냥 켜면 원인이 그대로라 다시 꺼진다.
+      j.enabled
+        ? el('span', { class: 'dm-tag', text: sched })
+        : (j.auto_disabled_at
+          ? withTip(el('span', { class: 'pill pill-warn', text: '자동 중지됨' }),
+            (j.auto_disabled_reason || '연속 실패로 자동 중지되었습니다.')
+            + ' 원인을 고친 뒤 [켜기]를 누르면 재개되고 실패 카운터도 0으로 초기화됩니다.')
+          : el('span', { class: 'dm-tag', text: '꺼짐' })),
+      el('span', { class: 'wikicat-should' }, el('span', { class: 'wikicat-should-label', text: '최근' }), last),
+      // 연속 실패가 쌓이는 중이면 그 자리에서 보이게 — 임계에 닿기 전에 사람이 손 쓸 수 있는 유일한 신호다.
+      (j.enabled && Number(j.fail_streak) > 0)
+        ? withTip(el('span', { class: 'pill', text: '연속 실패 ' + j.fail_streak + '회' }),
+          '연속 실패가 ' + (j.max_fail_streak || 5) + '회에 닿으면 이 잡은 스스로 멈추고 알림을 보냅니다. 성공 1회로 0이 됩니다.')
+        : null);
     const acts = el('div', { class: 'wikicat-row-acts' },
       el('button', { class: 'btn btn-ghost btn-sm', text: '지금 실행', onclick: () => cronRunNow(j.id, reload) }),
       el('button', { class: 'btn btn-ghost btn-sm', text: j.enabled ? '끄기' : '켜기', onclick: () => cronToggle(j, reload) }),

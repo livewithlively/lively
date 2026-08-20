@@ -66,8 +66,8 @@ async function validInvites(ids: unknown, ownerUid: string): Promise<string[]> {
   return out;
 }
 
-export async function listSessions(user: LivelyUser): Promise<SessionInfo[]> {
-  return collectSessions(ownerId(user));
+export async function listSessions(user: LivelyUser, opts?: { strict?: boolean }): Promise<SessionInfo[]> {
+  return collectSessions(ownerId(user), opts?.strict === true);
 }
 
 // 복원 가능(restorable) 세션(#1059 E) — DB desired-state 에는 있으나 지금 tmux 에 **없는** 이 사용자 소유 세션.
@@ -135,13 +135,22 @@ export async function listSessionsRaw(): Promise<SessionInfo[]> {
 //   ② box-* 만이 아니라 **어떤 세션이든** 있으면 빈 서버가 아니다. 사용자의 개인 tmux 세션이 같은 서버에 있으면
 //      그건 무손실이 아니고, Windows psmux 는 소켓 격리가 없어 kill-server 가 곧 'PC 의 모든 세션 종료'다
 //      (2026-08-18 실측 — 테스트 한 줄의 kill-server 로 그 PC 의 라이블리 세션 5개가 한 번에 죽었다).
+/**
+ * tmux 실패가 **'서버가 없다'(정상 — 세션 0개)** 인가, **'못 봤다'(장애)** 인가.
+ *  이 구분이 곧 "없다"와 "모른다"의 구분이다. 섞으면 모르는 상태를 '없음'으로 단정해 파괴적 결정을 내린다
+ *  (#1675 ⑥ 실측: 상시세션 ensure 가 조회 실패를 '세션 없음'으로 읽고 2분마다 새 세션을 만들어 30개까지 쌓였다).
+ */
+export function isNoTmuxServer(e: unknown): boolean {
+  const stderr = String((e as { stderr?: unknown })?.stderr ?? "");
+  return /no server running|error connecting/i.test(stderr);
+}
+
 export async function killEmptyTmuxServer(): Promise<void> {
   let raw: string;
   try { raw = await tmux(["list-sessions", "-F", "#{session_name}"]); }
   catch (e) {   // 못 봤다 ≠ 비었다
     // 서버가 없는 건 정상(부팅 직후 대부분) — 조용히. 그 밖의 실패(타임아웃·과부하)는 '왜 자가치유가 안 됐나'의 단서라 남긴다.
-    const stderr = String((e as { stderr?: unknown })?.stderr ?? "");
-    if (!/no server running|error connecting/i.test(stderr)) console.warn(`[terminal] 빈 tmux 서버 판정 보류 — list-sessions 실패(죽이지 않는다): ${(e as Error)?.message}`);
+    if (!isNoTmuxServer(e)) console.warn(`[terminal] 빈 tmux 서버 판정 보류 — list-sessions 실패(죽이지 않는다): ${(e as Error)?.message}`);
     return;
   }
   if (raw.split("\n").some((line) => line.trim() !== "")) return;   // 무엇이든 살아 있으면 보존
@@ -149,9 +158,18 @@ export async function killEmptyTmuxServer(): Promise<void> {
 }
 
 // me=null 이면 필터 없이 전부(owned=false 고정 — 뷰어별 owned 는 소비자가 재계산).
-async function collectSessions(me: string | null): Promise<SessionInfo[]> {
+/**
+ * @param strict true 면 **tmux 를 못 본 것**(서버 없음이 아닌 실패)을 삼키지 않고 throw 한다.
+ *  기본(false)은 종전 동작 — 화면 목록은 빈 목록으로 떨어지는 편이 낫다. 반면 "없으면 만든다" 류의
+ *  **파괴적/생성적 결정**을 내리는 호출부는 반드시 strict 여야 한다(모르는 상태를 '없음'으로 읽으면 안 된다).
+ */
+async function collectSessions(me: string | null, strict = false): Promise<SessionInfo[]> {
   let out = "";
-  try { out = await tmux(["list-sessions", "-F", LIST_FMT]); } catch { return []; }
+  try { out = await tmux(["list-sessions", "-F", LIST_FMT]); }
+  catch (e) {
+    if (strict && !isNoTmuxServer(e)) throw e;   // 못 봤다 — 호출부가 '없음'으로 오해하면 안 된다
+    return [];
+  }
   // 가려진 프로젝트 집합을 **한 번** 조회(#1291) — 세션 수와 무관하게 쿼리 1회, 15초 캐시.
   //  조회조차 실패하면(DB 다운) 프로젝트 세션을 통째로 감춘다(fail-closed): 개인 세션은 tmux 만으로 판정되므로 그대로 뜬다.
   let hidden: HiddenProjects | undefined;
