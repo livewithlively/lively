@@ -15,7 +15,7 @@
 //  · **홈 탭은 하나뿐, 늘 맨 왼쪽, 못 닫는다**(원준 2026-08-20). 홈에서 무언가를 열면 홈이 그리로 가는 게 아니라
 //    **새 탭**이 생긴다 — 그래서 홈은 언제 돌아와도 홈이고, '＋ 눌러 빈 탭부터 만들기'가 필요 없다.
 //  · **탭 끌어 순서 바꾸기** — 홈은 제자리(0번)에 고정이라 끌리지도, 그 앞에 놓이지도 않는다.
-import { el, sv } from '../core.js';
+import { anchoredPopover, el, sv } from '../core.js';
 const STORE_KEY = 'lively_v2_tabs';
 /** 라우트 정규화 키 — 같은 화면인지 비교(홈의 '', '#/', '#/dashboard' 는 한 화면). */
 export function routeKey(route) {
@@ -289,6 +289,9 @@ export function createTabs(centerHost, asideHost, hooks) {
             const info = hooks.titleFor(t.route);
             t.title = info.title;
             t.noAside = info.noAside;
+            // 줄에 눕는 이름은 **짧게** — 세션 이름이 한 문단인 경우가 흔하다(첫 지시가 그대로 이름이 된다).
+            //  전문은 툴팁과 [모든 탭] 목록이 갖는다(정보를 버리지 않는다).
+            const short = t.title.length > 26 ? t.title.slice(0, 26).trimEnd() + '…' : t.title;
             const on = t === activeTab;
             const node = el('div', {
                 class: 'v2-tab' + (on ? ' on' : '') + (t.fixed ? ' fixed' : ''), role: 'tab', 'aria-selected': String(on),
@@ -304,7 +307,7 @@ export function createTabs(centerHost, asideHost, hooks) {
                     e.preventDefault();
                     close(t);
                 } },
-            }, icon(t.route, info.state, info.kind), el('span', { class: 't', text: t.title }), 
+            }, icon(t.route, info.state, info.kind), el('span', { class: 't', text: short }), 
             // 홈은 닫기 단추가 없다 — 지울 수 없는 자리라는 걸 생김새가 먼저 말한다.
             ...(t.fixed ? [] : [el('button', {
                     class: 'x', type: 'button', 'aria-label': `「${t.title}」 탭 닫기`, title: '탭 닫기',
@@ -314,12 +317,56 @@ export function createTabs(centerHost, asideHost, hooks) {
         });
         // ＋(새 빈 탭)는 없앴다 — 홈이 하나뿐이라 ＋ 는 홈 복제밖에 못 하고, 세션은 이제 저절로 제 탭에서 열린다.
         //  '새 탭에서 시작하기'는 홈 탭(맨 왼쪽)에서 무엇이든 열면 된다(홈은 늘 홈으로 남고 새 탭이 생긴다).
-        strip.replaceChildren(...kids);
+        // ── 탭이 많아지면(원준 2026-08-20 "이름이 제대로 안 보인다") ──────────────────
+        //  ① 탭은 일정 폭 아래로는 줄지 않는다(CSS min-width) → 글자가 뭉개지는 대신 **줄이 굴러간다**.
+        //  ② 활성 탭은 더 넓게 — 지금 보고 있는 것만은 늘 읽혀야 한다.
+        //  ③ 그래도 다 안 보이므로 오른쪽 끝에 **[모든 탭]** 을 둔다: 전문 이름·상태로 찾아 누르고 거기서 닫을 수도 있다.
+        //     (브라우저 탭의 ⌄ 목록과 같은 문법 — 줄 밖으로 밀린 탭이 사라진 것처럼 보이지 않게 하는 장치다.)
+        const menuBtn = el('button', {
+            class: 'v2-tab-menu', type: 'button', title: '열린 탭 전체를 목록으로 봅니다',
+            'aria-label': `열린 탭 ${tabs.length}개 — 목록`,
+            onclick: (e) => openTabMenu(e.currentTarget),
+        }, el('span', { class: 'n', text: String(tabs.length) }), sv('svg', { viewBox: '0 0 24 24', class: 'v2-tab-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M6 9l6 6 6-6' })));
+        strip.replaceChildren(...kids, menuBtn);
         // 탭이 줄 폭을 넘치면(모바일 상단 바·좁은 창) 활성 탭이 보이게 가로로만 굴린다 — 세로는 건드리지 않는다(nearest = 이미 보이면 0).
         const on = strip.querySelector('.v2-tab.on');
         if (on && strip.scrollWidth > strip.clientWidth)
             on.scrollIntoView({ inline: 'nearest', block: 'nearest' });
     }
+    /** [모든 탭] — 전문 이름으로 찾아가는 목록. 줄에서 잘린 이름을 여기서는 통째로 본다. */
+    function openTabMenu(anchor) {
+        const list = el('div', { class: 'v2-tabpop-list' });
+        const rows = [];
+        let closePop = null;
+        for (const t of tabs) {
+            const info = hooks.titleFor(t.route);
+            const row = el('div', { class: 'v2-tabpop-row' + (t === activeTab ? ' on' : '') }, el('button', { class: 'go', type: 'button', title: info.title,
+                onclick: () => { closePop?.(); activate(t); } }, icon(t.route, info.state, info.kind), el('span', { class: 'n', text: info.title })), ...(t.fixed ? [] : [el('button', {
+                    class: 'x', type: 'button', 'aria-label': `「${info.title}」 닫기`, title: '이 탭 닫기',
+                    onclick: () => { closePop?.(); close(t); }
+                }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-tab-xic', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' })))]));
+            rows.push({ tab: t, node: row });
+            list.append(row);
+        }
+        const find = el('input', { class: 'v2-tabpop-find', type: 'search', placeholder: '탭 찾기 — 이름 일부', 'aria-label': '탭 찾기' });
+        find.addEventListener('input', () => {
+            const q = find.value.trim().toLowerCase();
+            for (const r of rows)
+                r.node.hidden = !!q && !r.tab.title.toLowerCase().includes(q);
+        });
+        closePop = anchoredPopover(anchor, el('div', { class: 'v2-tabpop' }, el('p', { class: 'v2-tabpop-h', text: `열린 탭 ${tabs.length}개` }), ...(tabs.length > 8 ? [find] : []), list));
+        if (tabs.length > 8)
+            window.setTimeout(() => find.focus(), 0);
+    }
+    // 가로 줄에서 세로 휠은 쓸모가 없다 — 트랙패드·마우스 어느 쪽으로도 줄이 굴러가게 바꿔 준다.
+    strip.addEventListener('wheel', (e) => {
+        if (e.deltaY === 0 || Math.abs(e.deltaX) > Math.abs(e.deltaY))
+            return;
+        if (strip.scrollWidth <= strip.clientWidth)
+            return;
+        e.preventDefault();
+        strip.scrollLeft += e.deltaY;
+    }, { passive: false });
     // 저장된 탭 복원 — 라우트·제목만(내용은 처음 누를 때 그린다). 못 읽으면 빈 채로 시작.
     let restoredActive = 0;
     try {
