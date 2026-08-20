@@ -472,10 +472,14 @@ export async function createProject(
   if (made.deduped) return made.row;
   const row = made.row;
   // 팀원 초기 등록(project_member).
+  //  ⚠ ON CONFLICT 에 tenant_id 를 넣지 마라 — 이 PK 는 (tenant_id, …) 로 **재작성되지 않는다**
+  //   (project_id 가 project.id 대리키를 가리키는 FK 라 이미 전역 유일 — db/tenant-column.ts isNaturalKey ⓑ).
+  //   넣으면 컬럼은 있는데 제약이 없어 42P10 으로 members 동반 생성이 전부 죽는다(#1821 실측).
+  //   회귀 방어: db/tenant-column.test.ts 의 "재작성 제외 테이블" 테스트.
   for (const memberId of input.members ?? []) {
     await itemsPool.query(
       `INSERT INTO project_member(project_id, member_id, role, added_at)
-       VALUES($1,$2,'member',now()) ON CONFLICT (tenant_id, project_id, member_id) DO NOTHING`,
+       VALUES($1,$2,'member',now()) ON CONFLICT (project_id, member_id) DO NOTHING`,
       [row.id, memberId]);
   }
   await auditProject(String(row.id), "insert", null, row, ctx);
@@ -500,7 +504,7 @@ export async function setProjectMemberStatus(projectId: number, memberId: string
   const msg = (message ?? '').trim() || null;
   await itemsPool.query(
     `INSERT INTO project_member(project_id, member_id, status_message) VALUES($1,$2,$3)
-     ON CONFLICT (tenant_id, project_id, member_id) DO UPDATE SET status_message=EXCLUDED.status_message`,
+     ON CONFLICT (project_id, member_id) DO UPDATE SET status_message=EXCLUDED.status_message`,
     [projectId, memberId, msg]);
   return msg;
 }
