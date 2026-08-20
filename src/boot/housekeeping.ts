@@ -22,7 +22,7 @@ import { runAutoBackfillSweep } from "../v6/embedding-backfill.js";
 import { registerTerminal } from "../terminal/routes.js";
 import { liveAttachCount, scanAttachProcs } from "../terminal/terminal-pty.js";
 import { selfPtmxFdCount } from "../terminal/host-pty.js";
-import { setupNodeUpgrade } from "../node/registry.js";
+import { setupNodeUpgrade, hydrateNodeStates } from "../node/registry.js";
 import { setupPreviewWsUpgrade } from "../preview/ws-proxy.js";
 import { startTaskScheduler } from "../node/task-scheduler.js";
 import { backfillMarkerSync, backfillSharedGroupWrite } from "../project/project-fs.js";
@@ -134,6 +134,11 @@ export const DB_BOOT_STEPS: BootStep[] = [
   //  실패해도 부팅을 막지 않는다(그 경우 self 는 v2 처럼 '잠긴 맥락이 있으면 닫힘'으로 폴백).
   //  registry 모드에선 자식(schema-init-child)이 소유자로 이미 돌렸다 — 여기서 또 하면 DDL 권한 오류만 난다.
   { name: "self-rls", gate: "always", run: () => registryModeActive() ? Promise.resolve() : ensureSelfRls().then((ok) => logger.info({ rowLevel: ok }, "self 소스 공개범위 준비됨")) },
+  // 노드 세션 스냅샷 복구(#1834) — 정본(org_node_state)에서 메모리 캐시를 채운다. **재배포가 목록에 보이지 않게
+  //  하는 자리**다: 종전엔 이 캐시가 유일한 저장소라 재배포마다 노드 세션이 통째로 사라졌고, 노드가 다시 붙을
+  //  때까지(최악 33초) 살아 있는 세션이 화면에서 빠졌다. 스키마 체인 **직후**여야 표가 있고, 세션 목록 API 가
+  //  처음 불리기 전에 끝나도록 시딩·스케줄러보다 앞에 둔다. 비치명 — 실패해도 노드가 붙으면 3초 뒤 채워진다.
+  { name: "node-state-hydrate", gate: "always", run: () => hydrateNodeStates().catch((err) => logger.warn({ err }, "노드 스냅샷 복구 실패(비치명 — 노드 재연결 시 채워짐)")) },
   // ── 다중 워크스페이스 자동 활성화(#1750 후속) — **사람 손 0.** 단일 모드 부팅이 여기서 스스로 활성화하고
   //  1회 재기동한다(앱 role 재배선은 첫 import 시점이라 살아 있는 프로세스에선 불가). 신규 설치는 첫 부팅에,
   //  기존 박스는 다음 업데이트에 자동으로 넘어온다 — 설치·업데이트 스크립트는 이 존재를 몰라도 된다.
