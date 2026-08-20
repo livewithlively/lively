@@ -1,8 +1,9 @@
-// v2/proj-settings.ts — **프로젝트 설정** 창(#1719 원준 2026-08-20).
+// v2/proj-settings.ts — **프로젝트 정보** 창(#1719 원준 2026-08-20).
 //
 //  왜 따로인가: 이름·상태·본문·할 일은 **자주 고치는 것이 아니다**. 그런데 종전 화면들은 그걸 늘 펼쳐 두느라
 //  정작 매일 보는 것(세션·자료)의 자리를 빼앗았다. 그래서 기본 뷰는 그것들을 화면에서 빼고 여기 한곳에 모은다 —
-//  문패 [설정]과 개요 부품의 [프로젝트 설정에서 고치기]가 같은 창을 연다.
+//  문패 [정보]와 개요 부품의 [프로젝트 정보에서 고치기]가 같은 창을 연다.
+//  이름은 '설정'이 아니라 **정보**(원준 2026-08-20) — 내용물이 동작 옵션이 아니라 프로젝트 그 자체라서다.
 //
 //  저장은 칸을 떠날 때(blur)·[저장]에서 곧바로 — '적용' 단계를 따로 두지 않는다(사람이 잊는다).
 import { api, el, toast } from '../core.js';
@@ -17,7 +18,7 @@ export function openProjSettings(opts) {
     const p = (opts.detail && opts.detail.project) || {};
     let closed = false;
     const back = el('div', { class: 'pn-modal-back' });
-    const panel = el('section', { class: 'pn-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': '프로젝트 설정' });
+    const panel = el('section', { class: 'pn-modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': '프로젝트 정보' });
     const close = () => {
         if (closed)
             return;
@@ -113,7 +114,7 @@ export function openProjSettings(opts) {
         catch (_) { /* 목록만 못 갱신한 것이라 창은 그대로 둔다 */ }
     }
     const sec = (title, hint, ...kids) => el('section', { class: 'pn-set-sec' }, el('h3', { text: title }), el('p', { class: 'pn-fine', text: hint }), ...kids);
-    panel.replaceChildren(el('header', { class: 'pn-modal-h' }, el('h2', { text: '프로젝트 설정' }), el('button', { class: 'pn-modal-x', type: 'button', title: '닫습니다', 'aria-label': '닫기', onclick: close }, pnIcon('x', 'pn-i'))), el('div', { class: 'pn-modal-b' }, sec('이름', '사이드바·탭에 보이는 이름입니다.', nameIn), sec('상태', '프로젝트가 지금 어느 단계인지 알려 줍니다.', stateRow), sec('본문', '무엇을 하는 프로젝트인지 적어 둡니다. 세션과 리브가 이 글을 읽고 일합니다.', desc, el('div', { class: 'pn-set-foot' }, descSave)), sec('할 일', '큰 덩어리만 적어 두면 충분합니다. 자세한 것은 세션이 만들어 줍니다.', taskIn, taskList)), el('footer', { class: 'pn-modal-f' }, el('a', { class: 'btn-text', href: '#/projects/' + id, onclick: () => close(), text: '전체 프로젝트 화면 열기 ↗' }), el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기', onclick: close })));
+    panel.replaceChildren(el('header', { class: 'pn-modal-h' }, el('h2', { text: '프로젝트 정보' }), el('button', { class: 'pn-modal-x', type: 'button', title: '닫습니다', 'aria-label': '닫기', onclick: close }, pnIcon('x', 'pn-i'))), el('div', { class: 'pn-modal-b' }, sec('이름', '사이드바·탭에 보이는 이름입니다.', nameIn), sec('상태', '프로젝트가 지금 어느 단계인지 알려 줍니다.', stateRow), sec('본문', '무엇을 하는 프로젝트인지 적어 둡니다. 세션과 리브가 이 글을 읽고 일합니다.', desc, el('div', { class: 'pn-set-foot' }, descSave)), sec('할 일', '큰 덩어리만 적어 두면 충분합니다. 자세한 것은 세션이 만들어 줍니다.', taskIn, taskList)), el('footer', { class: 'pn-modal-f' }, el('a', { class: 'btn-text', href: '#/projects/' + id, onclick: () => close(), text: '전체 프로젝트 화면 열기 ↗' }), el('button', { class: 'btn btn-ghost btn-sm', type: 'button', text: '닫기', onclick: close })));
     document.body.append(back, panel);
     window.setTimeout(() => nameIn.focus(), 0);
 }
