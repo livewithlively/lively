@@ -356,6 +356,8 @@ export {
   LOGIN_SERVICES,
   channelRuleExplainer,
   myLoginsSection,
+  partition,          // #1719 새 셸 [외부 앱 연결](v2/connect.ts)이 **같은 판정**을 쓴다 — 표도 술어도 두 벌이 되면 어긋난다
   renderServices,
   slackChannelPolicyCard,
 };
+export type { SvcView };
