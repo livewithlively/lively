@@ -22,7 +22,7 @@ async function renderWiki(view, sub, params) {
         return;
     } // 구 링크 보존
     if (sub === 'sources')
-        return renderSources(view);
+        return renderSources(view, params);
     if (sub === 'review')
         return renderReviewQueue(view); // #837 검토 대기 — 구 #/system/review-queue
     if (sub === 'classifications')
@@ -296,12 +296,16 @@ async function renderWikiTrash(view) {
 // ════════════════════════════════════════════
 // 자료 #/knowledge/sources — 정제 전 원본(회의록·이메일·슬랙). 지식의 보조 입력층.
 // ════════════════════════════════════════════
-async function renderSources(view) {
+//  ?q=<검색어>&src=<id> — 통합검색(web/v2/omni.ts)이 자료 결과를 여는 자리. 자료엔 단독 주소가 없어(상세는 오버레이)
+//  '그 검색어로 연 목록 + 그 자료를 펴 둔 상태'가 곧 자료 하나의 딥링크다. 사람이 뒤로 가면 목록이 그대로 남는다.
+async function renderSources(view, params) {
+    const seedQ = (params && params.get('q')) || '';
+    const seedSrc = (params && params.get('src')) || '';
     const kindSel = selectFilter([['', '전체 종류'], ...Object.entries(SOURCE_KIND_LABEL)], '');
     kindSel.setAttribute('aria-label', '종류');
     const provSel = selectFilter([['', '전체 출처'], ['authored', '캡처'], ['observed', '외부 미러']], '');
     provSel.setAttribute('aria-label', '출처');
-    const qIn = el('input', { type: 'search', class: 'wk-src-q', placeholder: '제목·본문 검색', 'aria-label': '검색' });
+    const qIn = el('input', { type: 'search', class: 'wk-src-q', placeholder: '제목·본문 검색', 'aria-label': '검색', value: seedQ });
     const listBox = el('div', { class: 'wk-sec-body' });
     const sec = wkSection('자료', {
         hint: '아직 정리하기 전의 원본 — 여기서 다듬으면 지식이 됩니다',
@@ -385,5 +389,9 @@ async function renderSources(view) {
     kindSel.addEventListener('change', () => loadPage(true));
     provSel.addEventListener('change', () => loadPage(true));
     loadPage(true);
+    // 통합검색이 자료 하나를 지목해 왔으면 그 상세를 바로 편다 — 목록에서 다시 찾게 만들지 않는다.
+    //  목록 로딩과 독립이다(상세는 자기 API 로 읽는다) — 그래서 기다리지 않고 곧바로 연다.
+    if (seedSrc)
+        openSourceDetail(seedSrc);
 }
 export { renderWiki, renderWikiTrash };
