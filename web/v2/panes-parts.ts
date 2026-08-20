@@ -8,16 +8,15 @@
 //   · root  — 칸 본문에 그대로 붙는 요소.
 //   · tick() — 8초 틱. **서명이 같으면 DOM 을 건드리지 않는다**(스크롤·입력 중인 글자 보호).
 //   · destroy() — 폴링·구독 정리.
-import { TOKEN_KEY, api, apiUrl, el, relTime, renderMarkdown, sv, toast } from '../core.js';
+import { TOKEN_KEY, api, apiUrl, el, renderMarkdown, sv, toast } from '../core.js';
 import { fmtSize, openFileViewer } from '../projects/files.js';
 import { upDropZone, upSend, upToast, type UpItem } from '../projects/files-upload.js';
 import { mountProjectChat, type ProjectChatHandle } from '../project-chat.js';
 import { createTimeline } from '../timeline.js';
 import { loadProjectTimeline } from '../timeline-sources.js';
-import { makeSplitter } from './split.js';
 import { runPrefs } from './run-picker.js';
 import { sessText } from './side.js';
-import { dotCls, type Sess, type V2Data } from './views.js';
+import { type Sess, type V2Data } from './views.js';
 
 export type PartType = 'sessions' | 'files' | 'knowledge' | 'tasks' | 'timeline' | 'overview' | 'liv';
 
@@ -40,6 +39,10 @@ export interface Part {
   root: HTMLElement;
   tick?: () => void;
   destroy?: () => void;
+  /** 세션 부품만 — 칸의 탭 줄이 '어느 세션을 보나'를 이걸로 갈아 끼운다(null = 새 세션 자리). */
+  selectSession?: (sid: string | null) => void;
+  /** 세션 부품만 — 지금 보는 세션 id(탭 줄이 어느 탭을 켤지 안다). null = 새 세션 자리. */
+  currentSession?: () => string | null;
 }
 
 export interface PartDef { type: PartType; name: string; icon: string; hint: string }
@@ -85,7 +88,6 @@ const authHeaders = (): Record<string, string> => {
   const t = ((): string => { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (_) { return ''; } })();
   return t ? { authorization: 'Bearer ' + t } : {};
 };
-const when = (ms: number): string => (ms ? relTime(new Date(ms).toISOString()) : '');
 const base = (p: string): string => String(p).split('/').pop() || String(p);
 
 // ══ 세션 — 카드가 세로로 쌓인다(원준 2026-08-20 선택) ════════════════════════════
@@ -143,29 +145,61 @@ const rank = (s: Sess): number => (s.stateKey === 'waiting' ? 0 : s.stateKey ===
 
 const norm = (v: string): string => String(v || '').toLowerCase().replace(/\s+/g, ' ').trim();
 
+// ── 세션 이름 (탭 줄이 쓴다) ──────────────────────────────────────────────────
+//  세션 이름이 프로젝트명으로 자동 생성되는 일이 잦아, 그대로 쓰면 **탭이 전부 같은 글자**가 된다. 그래서
+//   ① 사이드바와 같은 규칙(side.ts sessText)으로 프로젝트명 되풀이를 걷어내고,
+//   ② 그래도 비면 **마지막으로 시킨 말**을 쓰고(대화 꼬리에서 한 번만 찾아 캐시),
+//   ③ 그것도 없으면 세션 꼬리(`세션 f561ce49`) — 시각으로 쓰면 같은 날 것끼리 또 똑같아진다.
+const nameCache = new Map<string, string>();
+const askedName = new Set<string>();
+
+export function sessTitle(s: Sess, projectName: string): string {
+  const t = sessText(s, projectName);
+  const dup = !!projectName && norm(t.main) === norm(projectName);
+  const tailId = String(s.id).split('-').pop() || String(s.id);
+  return nameCache.get(s.id) || (dup ? '' : t.main) || ('세션 ' + tailId.slice(0, 8));
+}
+
+/** 되풀이 이름을 가진 세션의 '마지막으로 시킨 말'을 한 번씩만 찾아 온다. 하나라도 찾으면 onFound 로 알린다. */
+export async function lookupSessNames(list: Sess[], projectName: string, onFound: () => void): Promise<void> {
+  if (!projectName) return;
+  let got = false;
+  for (const s of list) {
+    if (askedName.has(s.id) || nameCache.has(s.id)) continue;
+    if (norm(sessText(s, projectName).main) !== norm(projectName)) continue;
+    askedName.add(s.id);
+    const turns = await fetchTurns(s, 30000);
+    const last = [...turns].reverse().find((x) => x.who === 'me');
+    if (!last) continue;
+    nameCache.set(s.id, last.text.replace(/\s+/g, ' ').slice(0, 46));
+    got = true;
+  }
+  if (got) onFound();
+}
+
+/** 새 세션을 막 열었을 때 — 첫 지시를 이름으로 미리 넣어 둔다(대화 꼬리를 다시 찾지 않게). */
+export function seedSessName(sid: string, text: string): void {
+  nameCache.set(sid, text.replace(/\s+/g, ' ').slice(0, 46));
+}
+
 
 // ── 세션 부품 ────────────────────────────────────────────────────────────────
-//  구도(원준 2026-08-20):
-//    위 = **지금 보는 세션의 화면 그 자체**(대화창·터미널·세션 상단바 — main.ts 가 mountSession 으로 붙인다).
-//    아래 = **세션 서랍** — 곁칸 자료 서랍과 같은 문법의 타일. 누르면 그 세션이 위로 올라오고 주소도 그 세션 것이 된다.
-//  ★ 프로젝트 화면과 세션 화면은 더 이상 다른 화면이 아니다 — 같은 셸에서 세션만 갈아 끼운다.
-//    그래서 서랍에서 세션을 고를 때 셸(문패·곁칸 자료·지식)은 다시 그리지 않는다. 주소만 바뀐다.
+//  이 부품은 **지금 보는 세션의 화면 그 자체**다(대화창·터미널·세션 상단바 — main.ts 가 mountSession 으로 붙인다).
+//  ★ 어느 세션을 보나는 **칸의 탭 줄**이 정한다(원준 2026-08-20) — 세션 하나 = 탭 하나, VS Code 에서 파일이
+//    탭으로 열리는 것과 같은 문법이다. 종전의 하단 '세션 서랍'은 그 탭 줄로 흡수돼 사라졌다.
+//  ★ 프로젝트 화면과 세션 화면은 다른 화면이 아니다 — 같은 셸에서 세션만 갈아 끼운다(셸은 다시 그리지 않는다).
 function sessionsPart(ctx: PartCtx): Part {
   const root = el('div', { class: 'pn-part pn-sessions' });
-  //  이름이 프로젝트명과 같은 세션(자동 이름)은 타일이 전부 같은 글자가 된다 — 그럴 땐 **마지막으로 시킨 말**을
-  //  이름 자리에 쓴다. 그게 '이 세션이 무엇이었나'의 답이다. 한 번 찾으면 캐시해 두고 다시 묻지 않는다.
-  const askedName = new Set<string>();
-  const nameCache = new Map<string, string>();
   let sel: string | null = ctx.sessionId || null;
-  let composing = !sel;                               // 세션이 지정되지 않았다 = 새 세션 자리
+  let composing = !sel;                               // 새 세션 자리(탭 줄의 [＋ 새 세션])
   let sending = false;
   let mounted: { sid: string; h: { destroy(): void } | null } | null = null;
-  let drawerSig = '';
 
-  // ── 위: 세션 화면이 통째로 들어오는 자리 ──
+  // 위(그리고 전부) — 세션 화면이 통째로 들어오는 자리
   const stage = el('div', { class: 'pn-stage' });
+  root.append(stage);
 
-  // ── 새 세션 자리(세션이 없거나 [＋]를 눌렀을 때만 쓴다) ──
+  // 새 세션 자리 — 세션이 없거나 [＋ 새 세션]을 골랐을 때만
   const ta = el('textarea', { class: 'pn-new-in', rows: '1', placeholder: '무엇이든 시켜 보세요 — 새 세션이 열립니다.', 'aria-label': '새 세션에 시킬 일' }) as HTMLTextAreaElement;
   const sendBtn = el('button', { class: 'pn-new-send', type: 'button', title: '새 세션을 열고 시킵니다', 'aria-label': '보내기', onclick: () => void spawn() }, pnIcon('send', 'pn-i')) as HTMLButtonElement;
   ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(180, ta.scrollHeight) + 'px'; });
@@ -177,28 +211,12 @@ function sessionsPart(ctx: PartCtx): Part {
     el('div', { class: 'pn-empty' },
       pnIcon('chat', 'pn-i big'),
       el('b', { text: '새 세션을 엽니다.' }),
-      el('p', { class: 'pn-fine', text: '시킬 일을 적으면 이 프로젝트에 붙은 AI 세션이 열리고, 아래 서랍에 타일로 쌓입니다.' })),
+      el('p', { class: 'pn-fine', text: '시킬 일을 적으면 이 프로젝트에 붙은 AI 세션이 열리고, 위 탭 줄에 그 세션 탭이 생깁니다.' })),
     el('div', { class: 'pn-sfoot' }, el('div', { class: 'pn-new' }, ta, sendBtn)));
-
-  // ── 아래: 서랍 ──
-  const drawerHead = el('div', { class: 'pn-drw-h' });
-  const tiles = el('div', { class: 'pn-drw-grid', role: 'listbox', 'aria-label': '이 프로젝트의 세션' });
-  const drawer = el('section', { class: 'pn-drw' }, drawerHead, tiles);
-  const split = makeSplitter({ axis: 'y', key: 'panes_sessdrawer', cssVar: '--pn-drw-h', target: root, def: 176, min: 104, max: 460, grow: -1, label: '세션 서랍 높이' });
-  root.append(stage, split, drawer);
 
   const mine = (): Sess[] => ctx.data().sessions
     .filter((s) => Number(s.projectId) === ctx.id)
     .sort((a, b) => rank(a) - rank(b) || (b.lastSeen || 0) - (a.lastSeen || 0));
-
-  /** 이 세션을 뭐라고 부를까 — 자동 이름(프로젝트명 되풀이)이면 마지막 지시, 그것도 없으면 세션 꼬리. */
-  function titleOf(s: Sess): string {
-    const pname = String((ctx.detail()?.project || {}).name || '');
-    const t = sessText(s, pname);
-    const dup = !!pname && norm(t.main) === norm(pname);
-    const tailId = String(s.id).split('-').pop() || String(s.id);
-    return nameCache.get(s.id) || (dup ? '' : t.main) || ('세션 ' + tailId.slice(0, 8));
-  }
 
   /** 위 자리를 이 세션으로 채운다. 같은 세션이면 아무것도 하지 않는다(대화·스크롤·터미널 보존). */
   function mountStage(): void {
@@ -220,12 +238,9 @@ function sessionsPart(ctx: PartCtx): Part {
     if (id === sel && composing === (id == null)) return;
     sel = id; composing = id == null;
     ctx.onSessionPicked?.(id);            // 주소만 갈아 끼운다 — 셸은 그대로 산다
-    drawerSig = '';
     mountStage();
-    paintDrawer(mine());
   }
 
-  // ── 새 세션 만들기 ──
   async function spawn(): Promise<void> {
     const text = ta.value.trim();
     if (!text || sending) return;
@@ -247,7 +262,7 @@ function sessionsPart(ctx: PartCtx): Part {
         try { await api('/api/ui/terminal/sessions/' + encodeURIComponent(sid) + '/project', { method: 'POST', body: JSON.stringify({ projectId: ctx.id }) }); }
         catch (_) { toast('세션은 열렸는데 이 프로젝트에 붙이지 못했어요 — 세션 상단바에서 다시 연결할 수 있어요.', true); }
       }
-      nameCache.set(sid, text.replace(/\s+/g, ' ').slice(0, 46));
+      seedSessName(sid, text);
       ta.value = ''; ta.style.height = 'auto';
       ctx.onChanged?.();
       select(sid);
@@ -257,73 +272,12 @@ function sessionsPart(ctx: PartCtx): Part {
     } finally { sending = false; sendBtn.disabled = false; ta.disabled = false; }
   }
 
-  // ── 아래 서랍 그리기 ──
-  function tile(s: Sess): HTMLElement {
-    const on = !composing && s.id === sel;
-    const t = titleOf(s);
-    return el('button', {
-      class: 'pn-stile' + (on ? ' on' : '') + (s.stateKey === 'waiting' ? ' wait' : ''),
-      type: 'button', role: 'option', 'aria-selected': String(on),
-      title: t + ' — ' + s.stateLabel + (on ? ' (지금 보는 세션)' : ''),
-      onclick: () => select(s.id),
-    },
-      el('span', { class: 'pn-stile-ic' }, pnIcon('chat', 'pn-i'), el('span', { class: 'pn-stile-dot v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' })),
-      el('b', { class: 'pn-stile-n ell2', text: t }),
-      el('span', { class: 'pn-stile-m', text: when(s.lastSeen) }));
-  }
-
-  // 서랍에 한 번에 눕히는 타일 상한 — 프로젝트 없는 세션 화면은 수백 개가 몰린다(실측 188개). 정렬이 '답 기다림 →
-  //  도는 중 → 최근' 순이라 앞쪽이 늘 중요한 것들이고, 나머지는 세는 것으로 충분하다(사이드바가 전체 목록을 쥔다).
-  const DRAWER_MAX = 60;
-  function paintDrawer(ss: Sess[]): void {
-    const live = ss.filter((s) => s.live && s.alive).length;
-    const shown = ss.slice(0, DRAWER_MAX);
-    const hidden = ss.length - shown.length;
-    const sig = (composing ? 'new|' : sel + '|') + shown.map((s) => s.id + s.stateKey + titleOf(s)).join(',');
-    if (sig === drawerSig) return;
-    drawerSig = sig;
-    drawerHead.replaceChildren(
-      el('span', { class: 'pn-fine', text: ss.length ? `세션 ${ss.length}` + (live ? ` · 지금 ${live}` : '') : '세션이 아직 없어요' }),
-      hidden > 0 ? el('span', { class: 'pn-fine', text: `최근 ${DRAWER_MAX}개만 놓았어요 — 나머지 ${hidden}개는 왼쪽 목록에 있습니다.` }) : null,
-      el('span', { class: 'pn-drw-hint pn-fine', text: '타일을 누르면 위에서 그 세션을 봅니다.' }));
-    // 지금 보는 세션이 상한 밖이면 그 타일만은 끼워 넣는다 — 켜진 것이 안 보이면 어디 있는지 알 수 없다.
-    const selOut = !composing && sel && !shown.some((s) => s.id === sel) ? ss.find((s) => s.id === sel) : null;
-    tiles.replaceChildren(...[
-      el('button', {
-        class: 'pn-stile new' + (composing ? ' on' : ''), type: 'button', title: '새 세션을 엽니다',
-        onclick: () => select(null),
-      }, el('span', { class: 'pn-stile-ic new' }, pnIcon('plus', 'pn-i')), el('b', { class: 'pn-stile-n', text: '새 세션' })),
-      selOut ? tile(selOut) : null,
-      ...shown.map(tile),
-    ].filter(Boolean) as HTMLElement[]);
-  }
-
-  /** 되풀이 이름을 가진 세션의 '마지막으로 시킨 말'을 한 번씩만 찾아 온다. 찾으면 그 타일을 다시 그린다. */
-  async function nameLookup(ss: Sess[]): Promise<void> {
-    const pname = String((ctx.detail()?.project || {}).name || '');
-    if (!pname) return;
-    let got = false;
-    for (const s of ss) {
-      if (askedName.has(s.id) || nameCache.has(s.id)) continue;
-      if (norm(sessText(s, pname).main) !== norm(pname)) continue;
-      askedName.add(s.id);
-      const turns = await fetchTurns(s, 30000);
-      if (ctx.dead()) return;
-      const last = [...turns].reverse().find((x) => x.who === 'me');
-      if (!last) continue;
-      nameCache.set(s.id, last.text.replace(/\s+/g, ' ').slice(0, 46));
-      got = true;
-    }
-    if (got && !ctx.dead()) { drawerSig = ''; paintDrawer(mine()); }
-  }
-
   function paint(): void {
     const ss = mine();
-    // 지정된 세션이 이 프로젝트에 없으면(다른 프로젝트로 옮겼거나 사라졌다) 맨 위 세션으로.
+    // 지정된 세션이 이 프로젝트에 없으면(옮겼거나 사라졌다) 맨 위 세션으로.
     if (!composing && sel && !ss.some((s) => s.id === sel)) { sel = ss.length ? ss[0].id : null; composing = !sel; }
-    paintDrawer(ss);
+    if (!ss.length && !composing) composing = true;
     mountStage();
-    void nameLookup(ss.slice(0, 10));
   }
 
   paint();
@@ -331,9 +285,10 @@ function sessionsPart(ctx: PartCtx): Part {
     root,
     tick: () => paint(),
     destroy: () => { if (mounted) { mounted.h?.destroy(); mounted = null; } },
+    selectSession: (sid) => select(sid),
+    currentSession: () => (composing ? null : sel),
   };
 }
-
 
 // ══ 자료 — 공유 폴더에 쌓인 것. 끌어다 놓으면 올라간다 ═══════════════════════════
 type AssetFile = { path: string; size: number; mtime: number };
