@@ -24,6 +24,7 @@ import { trayMenuModel } from "./tray-menu.mjs";
 import { IPC, IPC_WEB, RUN_KINDS, RETRYABLE_KINDS, argvFor } from "./ipc-contract.mjs";
 import { appReady, webUiUrl, webOrigin, openTargetFor, startupWindow, startedHiddenFrom, AUTOLAUNCH_ARGS, isTokenRejection, tokenWatchFilter, webBootPayload, APP_WINDOW_DEFAULT, APP_WINDOW_MIN, frameOptions, framelessOn, titlebarOverlayPatch, nextAfterSetup } from "./web-shell.mjs";
 import { BROWSER_SURFACE_VERSION, BROWSER_SURFACE_PARTITION, WEBVIEW_FORCED_PREFS, WEBVIEW_DROPPED_PREFS, surfaceNavTarget, cleanUserAgent, webviewAttachDecision, surfacePermissionAllowed } from "./browser-surface.mjs";
+import { EXTENSIONS_DIRNAME, INSTALLED_FILE, RULESET_SHIM_PAGE, RULESET_SHIM_HTML, enableRulesetsScript, manifestRulesets, parseInstalled, serializeInstalled, crxZipOffset, readZipEntries, readZipEntryData, safeExtensionId } from "./browser-extensions.mjs";
 import { TRAY_ICON_1X, TRAY_ICON_2X } from "./tray-icon.mjs";
 import { shouldCheckForUpdates, updateFailureNote, updateStatusNote, updateReadyNote, shouldAutoApplyUpdate, downloadProgressNote, AUTO_APPLY_DELAY_MS, PROGRESS_NOTE_MIN_MS, UPDATE_INTERVAL_MS, UPDATE_OPT_OUT_ENV } from "./update-policy.mjs";
 import { normalizeBounds, pickBounds } from "./window-bounds.mjs";
@@ -545,8 +546,147 @@ function browserSurfaceSession() {
     // 요구를 조용히 삼키지 않고 거부한다. 사람이 허용하는 흐름이 생기면 surfacePermissionAllowed 를 그때 넓힌다.
     try { s.setPermissionRequestHandler((_wc, permission, cb) => cb(surfacePermissionAllowed(permission))); } catch { /* 비치명 */ }
     try { s.setPermissionCheckHandler((_wc, permission) => surfacePermissionAllowed(permission)); } catch { /* 비치명 */ }
+    void reloadInstalledExtensions(s);   // ③ 저장해 둔 확장을 다시 건다 — Electron 은 확장을 기억하지 않는다
   }
   return s;
+}
+
+// ── 브라우저 확장(애드온) (#1829) ────────────────────────────────────────────
+// 확장은 **서피스 세션에만** 건다. 게이트웨이 UI 세션(우리 토큰이 있는 곳)에 걸면 남의 확장 코드가 그 문맥에서 돈다.
+//  실측: 순정 loadExtension 으로 MV3 content script·service worker·declarativeNetRequest 차단이 다 된다.
+//  우리가 메우는 건 셋뿐 — 정적 룰셋 활성화 · .crx 해제 · 재시작 후 재로드(browser-extensions.mjs 머리말).
+const EXT_DIR = join(LIVELY_DIR, EXTENSIONS_DIRNAME);
+const EXT_LIST_FILE = join(EXT_DIR, INSTALLED_FILE);
+
+function readInstalledExtensions() {
+  try { return parseInstalled(readFileSync(EXT_LIST_FILE, "utf8")); } catch { return []; }
+}
+function writeInstalledExtensions(list) {
+  try { mkdirSync(EXT_DIR, { recursive: true }); writeFileSync(EXT_LIST_FILE, serializeInstalled(list)); return true; }
+  catch { return false; }
+}
+
+/**
+ * 확장 하나를 세션에 건다 — 그리고 **정적 룰셋을 켠다**.
+ *  ⚠ 이 두 번째 줄이 이 함수의 존재 이유다. Electron 은 매니페스트의 `"enabled": true` 를 반영하지 않아
+ *   `getEnabledRulesets()` 가 빈 채로 남는다 → 광고차단 확장이 "설치는 됐는데 아무것도 안 막는" 상태가 된다.
+ *   실측으로 확인: updateEnabledRulesets 를 부른 뒤에야 실제 차단이 시작된다.
+ */
+async function loadExtensionInto(sess, dir) {
+  // 룰셋 shim 페이지를 먼저 심는다(멱등) — 로드 뒤에 쓰면 확장 오리진에서 못 읽는다.
+  try { writeFileSync(join(dir, RULESET_SHIM_PAGE), RULESET_SHIM_HTML); } catch { /* 못 심으면 아래에서 로그만 남는다 */ }
+  const ext = await sess.loadExtension(dir, { allowFileAccess: false });
+  const ids = manifestRulesets(ext && ext.manifest);
+  if (ids.length) {
+    try {
+      const on = await enableRulesetsFor(sess, ext, ids);
+      if (!on.length) throw new Error("활성화 후에도 켜진 룰셋이 없습니다");
+    } catch (e) {
+      // ⚠ 조용히 넘기면 안 된다 — 사용자 눈엔 "설치됨" 인데 아무것도 안 막히는 상태가 된다.
+      send(IPC.LOG, { stream: "raw", line: `확장 '${ext.name}' 의 차단 규칙을 켜지 못했습니다 — ${e && e.message ? e.message : e}` });
+    }
+  }
+  return ext;
+}
+
+/**
+ * 정적 룰셋을 켠다 — **확장 오리진의 숨은 창**에서 `chrome.declarativeNetRequest` 를 부른다.
+ *  ⚠ 다른 길은 없다(실측 43.4.1): `session.serviceWorkers` 엔 실행 API 가 없고 `ServiceWorkerMain` 도
+ *   `send`/`ipc`/`startTask` 뿐이라 남의 확장 워커에 코드를 넣을 수 없다. 그래서 우리가 심은 페이지를 띄운다.
+ *  창은 서피스 파티션으로 띄운다 — 확장이 걸린 세션이 거기이기 때문이다.
+ * @returns {Promise<string[]>} 실제로 켜진 룰셋 id 목록(빈 배열이면 안 켜진 것이다)
+ */
+async function enableRulesetsFor(sess, ext, ids) {
+  const w = new BrowserWindow({
+    show: false,
+    webPreferences: { partition: BROWSER_SURFACE_PARTITION, contextIsolation: true, nodeIntegration: false },
+  });
+  try {
+    await w.loadURL(`chrome-extension://${ext.id}/${RULESET_SHIM_PAGE}`);
+    const out = await w.webContents.executeJavaScript(enableRulesetsScript(ids));
+    return Array.isArray(out) ? out : [];
+  } finally {
+    if (!w.isDestroyed()) w.destroy();
+  }
+}
+
+/**
+ * `.crx`·`.zip` 을 설치 폴더에 푼다. **경로는 전부 safeEntryPath 를 통과한 것만** 쓴다 —
+ *  남의 압축이라 `../` 로 설치 폴더 밖을 노릴 수 있다(zip slip). 통과 못 한 엔트리는 세고 버린다.
+ * @returns {{written: number, dropped: number, skipped: number}}
+ */
+function unpackExtension(buf, destDir) {
+  const zip = buf.subarray(crxZipOffset(buf));
+  const { entries, dropped } = readZipEntries(zip);
+  let written = 0, skipped = 0;
+  for (const e of entries) {
+    const target = join(destDir, e.path);
+    if (e.dir) { mkdirSync(target, { recursive: true }); continue; }
+    const data = readZipEntryData(zip, e);
+    if (data == null) { skipped++; continue; }        // 모르는 압축 방식 — 억지로 풀지 않는다
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, data);
+    written++;
+  }
+  return { written, dropped, skipped };
+}
+
+/**
+ * 사람이 고른 확장 파일을 설치한다. **경로를 페이지가 정하지 못한다** — 여기서 네이티브 선택창을 띄운다.
+ *  풀고 → 세션에 걸고 → 룰셋을 켜고 → 목록에 남긴다. 어디서 실패하든 푼 폴더를 지워 반쯤 설치된 상태를 남기지 않는다.
+ */
+async function installExtensionInteractive() {
+  const sess = browserSurfaceSession();
+  const r = await dialog.showOpenDialog({
+    title: "확장 파일 고르기",
+    properties: ["openFile"],
+    filters: [{ name: "브라우저 확장", extensions: ["crx", "zip"] }],
+  });
+  if (r.canceled || !r.filePaths.length) return { ok: false, canceled: true };
+  const file = r.filePaths[0];
+
+  // 폴더 이름은 파일 이름에서 만든다(확장 id 는 로드해 봐야 안다) — 형태를 좁게 강제한다.
+  const base = safeExtensionId(String(file.split(/[\\/]/).pop() || "").replace(/\.(crx|zip)$/i, "")) || "ext";
+  const dir = join(EXT_DIR, `${base}-${Date.now().toString(36)}`);
+  try {
+    mkdirSync(dir, { recursive: true });
+    const stats = unpackExtension(readFileSync(file), dir);
+    if (!stats.written) throw new Error("압축 안에 파일이 없습니다");
+    if (stats.dropped) send(IPC.LOG, { stream: "raw", line: `확장 압축에서 안전하지 않은 경로 ${stats.dropped}건을 버렸습니다.` });
+    const ext = await loadExtensionInto(sess, dir);
+    const list = readInstalledExtensions().filter((it) => it.id !== ext.id);
+    list.push({ id: ext.id, dir, name: ext.name, version: ext.version || "" });
+    writeInstalledExtensions(list);
+    return { ok: true, id: ext.id, name: ext.name, version: ext.version || "" };
+  } catch (e) {
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* 지우기 실패는 비치명 */ }
+    return { ok: false, error: e && e.message ? e.message : String(e) };
+  }
+}
+
+/** 확장 제거 — **우리 목록에 있는 id 만.** 페이지가 임의 경로를 지우게 하지 않는다. */
+function removeExtension(id) {
+  const wanted = safeExtensionId(id);
+  if (!wanted) return { ok: false, error: "확장 id 형식이 올바르지 않습니다." };
+  const list = readInstalledExtensions();
+  const hit = list.find((it) => it.id === wanted);
+  if (!hit) return { ok: false, error: "설치 목록에 없습니다." };
+  try { browserSurfaceSession().removeExtension(wanted); } catch { /* 안 걸려 있었을 수 있다 — 목록에서 빼는 게 본질 */ }
+  try { rmSync(hit.dir, { recursive: true, force: true }); } catch { /* 폴더가 이미 없을 수 있다 */ }
+  writeInstalledExtensions(list.filter((it) => it.id !== wanted));
+  return { ok: true };
+}
+
+async function reloadInstalledExtensions(sess) {
+  const list = readInstalledExtensions();
+  const alive = [];
+  for (const it of list) {
+    if (!existsSync(it.dir)) continue;                     // 지워진 건 조용히 뺀다 — 죽은 항목이 부팅을 막으면 안 된다
+    try { await loadExtensionInto(sess, it.dir); alive.push(it); }
+    catch (e) { send(IPC.LOG, { stream: "raw", line: `확장 '${it.name || it.id}' 을 불러오지 못했습니다 — ${e && e.message ? e.message : e}` }); }
+  }
+  if (alive.length !== list.length) writeInstalledExtensions(alive);
+  return alive;
 }
 
 // 웹이 새 창을 열려 할 때(`window.open`·`target=_blank`)와 최상위 이동 — **두 규칙이 산다**:
@@ -781,6 +921,19 @@ ipcMain.handle(IPC_WEB.TITLEBAR, (e, t) => {
   if (!patch) return { ok: false };
   try { BrowserWindow.fromWebContents(e.sender)?.setTitleBarOverlay(patch); return { ok: true }; }
   catch { return { ok: false }; }
+});
+// 브라우저 서피스 확장(#1829) — 게이트웨이 출처에서 온 요청만. 설치는 **경로 인자를 받지 않는다**(메인이 선택창을 띄운다).
+ipcMain.handle(IPC_WEB.EXT_LIST, (e) => {
+  if (!fromGateway(e)) return { ok: false, error: "허용되지 않은 출처입니다." };
+  return { ok: true, items: readInstalledExtensions().map((it) => ({ id: it.id, name: it.name, version: it.version })) };
+});
+ipcMain.handle(IPC_WEB.EXT_INSTALL, async (e) => {
+  if (!fromGateway(e)) return { ok: false, error: "허용되지 않은 출처입니다." };
+  return installExtensionInteractive();
+});
+ipcMain.handle(IPC_WEB.EXT_REMOVE, (e, arg) => {
+  if (!fromGateway(e)) return { ok: false, error: "허용되지 않은 출처입니다." };
+  return removeExtension(arg && arg.id);
 });
 ipcMain.handle(IPC_WEB.LOGOUT, async (e) => {
   if (!fromGateway(e)) return { ok: false, error: "허용되지 않은 출처입니다." };

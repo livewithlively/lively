@@ -37,6 +37,15 @@ contextBridge.exposeInMainWorld("livelyDesktop", {
   //  ⚠ 여긴 `<webview>` 를 **만드는 함수가 없다**. 태그는 페이지가 직접 만든다 — 우리는 만들 권한만 열어 두고,
   //   붙는 순간의 안전(preload 제거·node 차단·파티션 격리)은 메인의 will-attach-webview 가 강제한다.
   browserSurface: boot.browserSurface || null,
+  // 확장(애드온) (#1829) — 서피스 세션에만 걸리는 확장의 목록·설치·제거.
+  //  ⚠ **install 은 인자를 받지 않는다.** 경로를 페이지가 정할 수 있으면 웹 UI 의 XSS 한 방이 임의 파일을
+  //   확장으로 심는다(그 확장은 서피스에서 도는 코드다). 메인이 네이티브 선택창을 띄우고 사람이 고른 것만 받는다.
+  //  능력이 없으면(브라우저에서 연 웹 UI) 이 객체 자체가 null 이라 화면이 확장 UI 를 안 그린다.
+  browserExtensions: boot.browserSurface ? {
+    list: () => ipcRenderer.invoke("lively-web:ext-list"),
+    install: () => ipcRenderer.invoke("lively-web:ext-install"),
+    remove: (id) => ipcRenderer.invoke("lively-web:ext-remove", { id: String(id || "") }),
+  } : null,
 });
 
 // ── ③ 커스텀 타이틀바 — frameless 창에서만(리눅스는 네이티브 프레임 그대로 → boot.frameless=false) ──────────
