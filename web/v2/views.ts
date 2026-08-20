@@ -203,6 +203,10 @@ export interface SessionViewOpts {
   solo?: boolean;
   /** [⋯ ▸ 이 세션 보관] — 세션 탭 줄 폐지(원준 2026-08-20)로 보관의 입구가 이 메뉴로 모였다. */
   onArchive?: () => void;
+  /** 이 탭이 지금 활성인가 — 자동 복원은 보이는 탭에서만(session-chat.ts isVisible 주석). */
+  isVisible?: () => boolean;
+  /** 복원으로 새 세션이 생겼다 — 그 탭만 새 세션으로 옮긴다(전역 주소를 건드리지 않는다). */
+  onResumed?: (newId: string) => void;
 }
 export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts: SessionViewOpts = {}): SessionChatHandle | null {
   // 기록(uuid) 링크로 들어왔는데 그 대화를 도는 박스가 있으면 그 박스가 정본이다(mergeSessions 가 기록을 박스에 접었다) — 옛 링크가 산다.
@@ -232,6 +236,8 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts
     //  내 세션 219건 중 복원 가능 198건). 어긋남의 원인은 '자동'이 아니라 **프레임이 몰래 갈아탄 것**이었으므로,
     //  셸이 라우팅까지 쥐고 되살리면 둘 다 만족한다. 실패하면 그 기록 화면과 버튼이 그대로 남는다.
     autoResume: shouldRestoreOnOpen({ restorable: !!s.raw?.restorable, owned: s.owned }),
+    isVisible: vopts.isVisible,
+    onResumed: vopts.onResumed,
   });
 }
 

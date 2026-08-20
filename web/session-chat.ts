@@ -99,6 +99,16 @@ export interface SessionChatOpts {
    *  `shouldRestoreOnOpen`(web/session-status.ts)으로 한다. 실패하면 기록 화면 + [이어서 대화하기]로 되돌아간다.
    */
   autoResume?: boolean;
+  /** 이 화면이 지금 사람 눈에 보이나(#1834 후속) — **자동** 복원은 보이는 화면에서만 한다.
+   *  셸의 탭은 숨어도 DOM 이 살아 있어(v2/tabs.ts 'DOM 유지형') 프레임이 계속 돈다. 숨은 탭이 스스로
+   *  세션을 되살리면 사람이 보지도 않은 채 새 세션이 생기고, 아래 onResumed 가 없던 시절엔 지금 보고 있는
+   *  탭의 주소까지 그리로 끌려갔다. 사람이 그 탭을 열 때 되살리면 된다(그때 renderSession 이 다시 판정한다).
+   *  미지정이면 종전대로(항상 허용) — 팝아웃 창·단독 페이지는 그 화면이 곧 보이는 화면이다. */
+  isVisible?: () => boolean;
+  /** 복원으로 **새 세션**이 생겼다 — 라우팅은 호출자(탭)가 한다(#1834 후속).
+   *  ⚠ 미지정이면 이 화면이 전역 주소를 바꾼다. 셸 안에서는 그게 곧 **활성 탭의 주소**라, 숨은 탭에서 일어난
+   *   복원이 지금 보고 있는 탭을 남의 새 세션으로 끌고 갔다. 셸(v2/main.ts)은 이 콜백으로 **그 탭만** 옮긴다. */
+  onResumed?: (newId: string) => void;
 }
 export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, opts: SessionChatOpts): SessionChatHandle {
   let target = first;
@@ -419,7 +429,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     // ★ #1820 — 열면 되살린다. 이 화면에 온 것 자체가 "이 세션을 쓰겠다"는 뜻이라, 버튼을 한 번 더 누르게 하지
     //  않는다. 되살아나면 새 id 로 주소가 옮겨 가고(셸이 라우팅을 쥔다 — 프레임이 몰래 갈아타지 않는다, #1808),
     //  실패하면 이 기록 화면과 버튼이 그대로 남는다(자동이 막다른 길을 만들지 않는다).
-    if (opts.autoResume && !resumeAuto) {
+    if (opts.autoResume && !resumeAuto && visibleNow()) {
       resumeAuto = true;
       view.setNote('세션을 이어서 여는 중…');
       void resumeSession(btn);
@@ -455,6 +465,8 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   let termReady = false;                       // 프레임이 첫 신호(상태)를 보냈나 — 그 전에 보낸 명령은 사라진다
   let termQueue: string[] = [];
   let resumeAuto = false;                      // #1820 — 자동 복원을 이미 걸었나(한 화면에서 한 번만)
+  /** 지금 이 화면이 보이나 — **자동** 복원의 전제(opts.isVisible 주석). 사람이 버튼을 누른 복원은 이걸 안 본다. */
+  const visibleNow = (): boolean => !opts.isVisible || opts.isVisible();
   function termSend(cmd: string): void {
     if (!termFrame || !termFrame.contentWindow) return;
     try { termFrame.contentWindow.postMessage({ type: TERM_MSG, cmd }, location.origin); } catch { /* 프레임이 닫혔다 */ }
@@ -472,7 +484,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     //  자기 주소만 갈아타면 셸 주소·탭 제목·사이드바는 옛 세션 그대로인 어긋난 화면이 된다(#1808 사고).
     //  여기서 부르는 resumeSession 은 [이어서 대화하기]와 같은 경로라 주소(#/s/<새 id>)까지 함께 옮긴다.
     if (m && m.type === 'lively-term-gone' && String(m.id || '') === target.id) {
-      if (m.canRestore && !resumeAuto) { resumeAuto = true; view.setNote('세션을 이어서 여는 중…'); void resumeSession(); }
+      if (m.canRestore && !resumeAuto && visibleNow()) { resumeAuto = true; view.setNote('세션을 이어서 여는 중…'); void resumeSession(); }
       return;
     }
     if (!m || m.type !== 'lively-term-status') return;
@@ -1155,11 +1167,14 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       }
       if (!nextId) throw new Error('새 세션 id 를 받지 못했습니다.');
       toast('이어받기 세션을 열었어요.');
-      location.hash = '#/s/' + encodeURIComponent(nextId);
+      // 라우팅은 호출자(탭)에게 — 전역 주소를 여기서 바꾸면 숨은 탭의 복원이 활성 탭을 끌고 간다(opts.onResumed 주석).
+      if (opts.onResumed) opts.onResumed(nextId);
+      else location.hash = '#/s/' + encodeURIComponent(nextId);
     } catch (e: any) {
       toast(e?.message || '이어받기 세션을 만들지 못했습니다.');
-      resumeAuto = false;                       // 자동 복원이 실패했으면 다시 시도할 수 있게 푼다(버튼은 그대로 있다)
-      if (btn) { btn.disabled = false; btn.textContent = orig || '이어서 대화하기'; }
+      // ⚠ **자동** 복원 실패는 잠근 채로 둔다(#1834 후속) — 종전엔 여기서 풀어 줘, 실패가 반복되는 동안
+      //  (노드가 잠깐 오프라인인 때 등) 같은 화면이 계속 되살리기를 시도했다. 사람이 버튼을 누르면 다시 된다.
+      if (btn) { resumeAuto = false; btn.disabled = false; btn.textContent = orig || '이어서 대화하기'; }
     }
   }
 
