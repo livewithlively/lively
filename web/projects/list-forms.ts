@@ -223,7 +223,7 @@ function pjvMoveProjectList(anchor, p, reload) {
     const mkItem = (label, listId, color) => {
       const cur = (p.list_id == null ? listId == null : String(p.list_id) === String(listId));
       const item = el('button', { class: 'pjv-menu-item' + (cur ? ' sel' : ''), type: 'button' },
-        el('span', { class: 'pjv-list-dot sm', style: 'background:' + (color || 'var(--line, #2a2a33)') }),
+        el('span', { class: 'pjv-list-dot sm', style: 'background:' + (color || 'var(--line)') }),
         el('span', { class: 'pjv-asg-mname', text: label }),
         el('span', { class: 'pjv-asg-check', text: cur ? '✓' : '' }));
       item.onclick = async (e) => {
