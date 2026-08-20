@@ -296,8 +296,18 @@ function render() {
     const inboxN = data.sessions.filter((s) => isLive(s) && (s.stateKey === 'waiting' || (s.stateKey === 'done' && s.owned))).length;
     host.replaceChildren(switcherTop({ people, faces: faceOwners }), // 좌상단 워크스페이스 **문패 카드**(#1750 메뉴 + 얼굴 스택) — 여기가 어느 집인지 말하는 자리
     // ⚠ replaceChildren 은 null 을 글자 "null" 로 그린다(el() 과 다르다) — 조건부 자식은 스프레드로.
-    el('nav', { class: 'v2-fixed', 'aria-label': '바로 가기' }, el('a', { class: 'v2-nav' + (last.activeKey() === 'home' ? ' on' : ''), href: '#/', 'data-nav': 'home',
-        title: '홈 — 무엇이든 시켜서 세션을 여는 자리' }, glyph('home', 'v2-nav-ic'), el('span', { class: 'n', text: '홈 — 새로 시키기' })), 
+    el('nav', { class: 'v2-fixed', 'aria-label': '바로 가기' }, 
+    // [새 작업](원준 2026-08-20) — 홈은 이제 **고정 탭이 아니라 새 탭으로 여는 화면**이다. 그래서 이 줄은
+    //  '홈으로 돌아가기'가 아니라 '새 일을 벌이는 자리'이고, 누를 때마다 빈 탭이 하나 열린다(브라우저 ⌘T 문법).
+    //  Alt+클릭·가운데클릭과 결이 어긋나지 않도록 href 는 그대로 두고(주소는 여전히 #/), 기본 이동만 가로챈다.
+    el('a', { class: 'v2-nav' + (last.activeKey() === 'home' ? ' on' : ''), href: '#/', 'data-nav': 'home',
+        title: '새 작업 — 새 탭을 열어 무엇이든 시킵니다.',
+        onclick: (e) => {
+            if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || !hooks.onNewTask)
+                return; // 새 브라우저 탭·셸 새 탭은 원래 동작 그대로
+            e.preventDefault();
+            hooks.onNewTask();
+        } }, glyph('home', 'v2-nav-ic'), el('span', { class: 'n', text: '새 작업' })), 
     // 확인할 것(#1719 사이드바 개편 안2) — 답을 기다리는 세션 + 끝났는데 아직 안 본 세션. **사이드바에서 유일하게
     //  숫자 배지를 가진 행**이라 눈이 먼저 간다(슬랙 읽지 않음 문법). 우리 제품의 루프는 시키다→기다리다→확인이고,
     //  그 병목(확인)이 상시 자리를 가져야 "세션은 받은 편지함"(셀프서브 설계)과 화면이 일치한다. 0건이어도 행은

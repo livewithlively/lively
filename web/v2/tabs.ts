@@ -12,9 +12,10 @@
 //    같은 세션 터미널을 두 번 붙이지 않는다).
 //  · 탭 목록(라우트·제목)은 브라우저에 기억되고, 다시 열면 **게으르게**(처음 눌렀을 때) 그린다.
 //  · 마지막 탭은 닫으면 홈으로 바뀐다(빈 셸을 만들지 않는다).
-//  · **홈 탭은 하나뿐, 늘 맨 왼쪽, 못 닫는다**(원준 2026-08-20). 홈에서 무언가를 열면 홈이 그리로 가는 게 아니라
-//    **새 탭**이 생긴다 — 그래서 홈은 언제 돌아와도 홈이고, '＋ 눌러 빈 탭부터 만들기'가 필요 없다.
-//  · **탭 끌어 순서 바꾸기** — 홈은 제자리(0번)에 고정이라 끌리지도, 그 앞에 놓이지도 않는다.
+//  · **홈은 고정 탭이 아니다**(상민님 2026-08-20). 맨 왼쪽에 못 닫는 홈을 박아 두면 늘 켜 두는 화면 하나가
+//    자리를 먹고, 그 탭만 규칙이 달라(못 닫힘·못 끌림) 줄 전체가 두 문법이 된다. 홈은 사이드바 [새 작업]이
+//    **새 탭으로** 여는 여느 화면이고, 그 탭에서 세션을 열면 그 자리가 곧 그 세션이 된다(브라우저 새 탭 문법).
+//  · **탭 끌어 순서 바꾸기** — 모든 탭이 같은 자격이라 어느 것이든 끌어 옮긴다.
 import { anchoredPopover, el, sv } from '../core.js';
 
 export interface ShellTab {
@@ -27,7 +28,6 @@ export interface ShellTab {
   noAside: boolean;            // 앱 프레임 탭은 우패널이 없다
   chat: { destroy(): void; update(t: any): void; setFilesOn(on: boolean): void } | null;   // 세션 탭의 대화창 핸들(views.renderSession)
   seq: number;                 // 이 탭의 렌더 순번(늦게 온 비동기 렌더 무시)
-  fixed: boolean;              // 홈 탭 — 맨 왼쪽 고정 · 닫기 없음 · 끌기 없음(늘 홈 화면)
 }
 
 export interface TabsHooks {
@@ -85,7 +85,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
       route, title: title || hooks.titleFor(route).title, noAside: hooks.titleFor(route).noAside,
       center: el('div', { class: 'v2-tabpane', hidden: true }),
       aside: el('div', { class: 'v2-aside-pane', hidden: true }),
-      rendered: false, chat: null, seq: 0, fixed: false,
+      rendered: false, chat: null, seq: 0,
     };
     centerHost.append(t.center);
     asideHost.append(t.aside);
@@ -113,7 +113,6 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
   }
 
   function close(tab: ShellTab): void {
-    if (tab.fixed) return;             // 홈은 닫히지 않는다(닫기 버튼도 안 그린다 — 여기는 가운데클릭·단축키 대비 이중 잠금)
     const i = tabs.indexOf(tab);
     if (i < 0) return;
     tabs.splice(i, 1);
@@ -167,16 +166,15 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
     strip.classList.remove('dnd');
   }
   function beginDrag(t: ShellTab, node: HTMLElement, e: PointerEvent): void {
-    if (drag || editLocked() || t.fixed || e.button !== 0 || e.pointerType === 'touch') return;
+    if (drag || editLocked() || e.button !== 0 || e.pointerType === 'touch') return;
     // ⚠ 탭 안의 단추(닫기 ×) 위에서 누른 것은 **끌기가 아니다**. 여기서 걸러 내지 않으면 pointerdown 이 탭으로
     //  버블링해 끌기가 시작되고, `setPointerCapture` 가 그 뒤의 click 을 탭 노드로 가져간다 — 그래서 ×의 onclick 이
     //  영영 안 불리고 **눌러도 탭이 안 닫혔다**(원준 2026-08-20 신고: 지식 탭 × 가 먹지 않음). 이름 편집칸이
     //  `onpointerdown: stopPropagation` 으로 자기를 지키는 것과 같은 방어를, 단추 쪽은 여기 한 곳에서 한다.
     if ((e.target as HTMLElement | null)?.closest('button')) return;
-    const movable = tabs.filter((x) => !x.fixed);
-    const els = movable.map((x) => (strip as HTMLElement).querySelector('[data-tab="' + x.id + '"]') as HTMLElement);
+    const els = tabs.map((x) => (strip as HTMLElement).querySelector('[data-tab="' + x.id + '"]') as HTMLElement);
     if (els.some((n) => !n)) return;
-    const from = movable.indexOf(t);
+    const from = tabs.indexOf(t);
     if (from < 0) return;
     const rects = els.map((n) => n.getBoundingClientRect());
     // 이웃이 비켜 줄 거리 = 잡은 탭의 폭 + 탭 사이 간격(줄에서 실측 — 폭이 제각각이라 상수로 두면 어긋난다).
@@ -226,7 +224,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
       const cur = tabs.indexOf(d.tab);
       if (cur >= 0 && d.to !== d.from) {
         tabs.splice(cur, 1);
-        tabs.splice(Math.max(1, Math.min(1 + d.to, tabs.length)), 0, d.tab);   // 0번(홈) 앞자리는 없다
+        tabs.splice(Math.max(0, Math.min(d.to, tabs.length)), 0, d.tab);
         save();
       }
       clearDragStyles(d);
@@ -292,10 +290,9 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
       const short = t.title.length > 26 ? t.title.slice(0, 26).trimEnd() + '…' : t.title;
       const on = t === activeTab;
       const node = el('div', {
-        class: 'v2-tab' + (on ? ' on' : '') + (t.fixed ? ' fixed' : ''), role: 'tab', 'aria-selected': String(on),
+        class: 'v2-tab' + (on ? ' on' : ''), role: 'tab', 'aria-selected': String(on),
         'data-tab': t.id,
-        title: t.fixed ? t.title + ' — 늘 여기 있어요'
-          : (hooks.canRename && hooks.canRename(t) ? t.title + ' — 두 번 누르면 이름을 바꿉니다' : t.title),
+        title: hooks.canRename && hooks.canRename(t) ? t.title + ' — 두 번 누르면 이름을 바꿉니다' : t.title,
         onclick: () => { if (dragJustMoved) return; activate(t); },
         ondblclick: () => startRename(t, node),
         onpointerdown: (e: PointerEvent) => beginDrag(t, node, e),
@@ -304,15 +301,14 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
       },
         icon(t.route, info.state, info.kind),
         el('span', { class: 't', text: short }),
-        // 홈은 닫기 단추가 없다 — 지울 수 없는 자리라는 걸 생김새가 먼저 말한다.
-        ...(t.fixed ? [] : [el('button', {
+        el('button', {
           class: 'x', type: 'button', 'aria-label': `「${t.title}」 탭 닫기`, title: '탭 닫기',
           onclick: (e: Event) => { e.stopPropagation(); close(t); },
-        }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-tab-xic', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' })))]));
+        }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-tab-xic', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))));
       return node;
     });
-    // ＋(새 빈 탭)는 없앴다 — 홈이 하나뿐이라 ＋ 는 홈 복제밖에 못 하고, 세션은 이제 저절로 제 탭에서 열린다.
-    //  '새 탭에서 시작하기'는 홈 탭(맨 왼쪽)에서 무엇이든 열면 된다(홈은 늘 홈으로 남고 새 탭이 생긴다).
+    // ＋(새 빈 탭)는 줄에 두지 않는다 — 새 탭을 여는 자리는 사이드바 맨 위 [새 작업] 하나다(같은 일을 두 곳에
+    //  두면 어느 쪽이 정본인지 흐려진다). 세션은 그와 별개로 저절로 제 탭에서 열린다.
     // ── 탭이 많아지면(원준 2026-08-20 "이름이 제대로 안 보인다") ──────────────────
     //  ① 탭은 일정 폭 아래로는 줄지 않는다(CSS min-width) → 글자가 뭉개지는 대신 **줄이 굴러간다**.
     //  ② 활성 탭은 더 넓게 — 지금 보고 있는 것만은 늘 읽혀야 한다.
@@ -341,10 +337,10 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
         el('button', { class: 'go', type: 'button', title: info.title,
           onclick: () => { closePop?.(); activate(t); } },
           icon(t.route, info.state, info.kind), el('span', { class: 'n', text: info.title })),
-        ...(t.fixed ? [] : [el('button', {
+        el('button', {
           class: 'x', type: 'button', 'aria-label': `「${info.title}」 닫기`, title: '이 탭 닫기',
           onclick: () => { closePop?.(); close(t); } },
-        sv('svg', { viewBox: '0 0 24 24', class: 'v2-tab-xic', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' })))]));
+        sv('svg', { viewBox: '0 0 24 24', class: 'v2-tab-xic', 'aria-hidden': 'true' }, sv('path', { d: 'M6 6l12 12M18 6L6 18' }))));
       rows.push({ tab: t, node: row });
       list.append(row);
     }
@@ -389,18 +385,6 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
       restoredActive = Math.min(Math.max(0, want >= 0 ? want : 0), Math.max(0, tabs.length - 1));
     }
   } catch (_) { /* noop */ }
-
-  // 홈 탭 보장 — 하나만, 맨 왼쪽, 고정. 저장본이 홈을 여러 개 들고 있어도 하나로 접는다.
-  {
-    const want = tabs[restoredActive] || null;
-    const homes = tabs.filter((t) => routeKey(t.route) === 'home');
-    let home = homes[0];
-    for (const dup of homes.slice(1)) { const i = tabs.indexOf(dup); if (i >= 0) tabs.splice(i, 1); dup.center.remove(); dup.aside.remove(); }
-    if (home) { const i = tabs.indexOf(home); if (i >= 0) tabs.splice(i, 1); } else { home = mkTab('#/'); tabs.pop(); }
-    home.route = '#/'; home.fixed = true;
-    tabs.unshift(home);
-    restoredActive = want && tabs.indexOf(want) >= 0 ? tabs.indexOf(want) : 0;
-  }
 
   const api: TabsApi = {
     strip, tabs,
