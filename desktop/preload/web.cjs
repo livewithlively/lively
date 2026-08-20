@@ -31,6 +31,12 @@ contextBridge.exposeInMainWorld("livelyDesktop", {
   appVersion: boot.appVersion || null,
   // 웹의 logout() 이 데스크톱 안이면 이걸 부른다(web/core.ts) — 메인이 CLI 로그아웃을 돌리고 창을 마법사로 바꾼다.
   logout: () => ipcRenderer.invoke("lively-web:logout"),
+  // 브라우저 서피스(#1829) — **능력 선언**이다. 웹은 이게 있으면 `<webview>` 로 남의 사이트를 앱 안에 띄우고,
+  //  없으면(=브라우저에서 연 웹 UI) '새 탭으로 열기' 폴백을 그린다(web/v2/browser-surface.ts).
+  //  값은 메인이 준다 — preload 가 스스로 "된다" 고 말하면 게이트웨이 출처가 아닐 때도 능력이 새어 나간다.
+  //  ⚠ 여긴 `<webview>` 를 **만드는 함수가 없다**. 태그는 페이지가 직접 만든다 — 우리는 만들 권한만 열어 두고,
+  //   붙는 순간의 안전(preload 제거·node 차단·파티션 격리)은 메인의 will-attach-webview 가 강제한다.
+  browserSurface: boot.browserSurface || null,
 });
 
 // ── ③ 커스텀 타이틀바 — frameless 창에서만(리눅스는 네이티브 프레임 그대로 → boot.frameless=false) ──────────
