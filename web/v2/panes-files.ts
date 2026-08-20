@@ -10,7 +10,7 @@ import { anchoredPopover, api, apiUrl, el, relTime, toast } from '../core.js';
 import { fmtSize, openFileViewer } from '../projects/files.js';
 import { confirmDialog } from '../ui-primitives.js';
 import { upDropZone, upSend, upToast, type UpItem } from '../projects/files-upload.js';
-import { FV_NOTE, FV_SIZE, FV_SORT, FV_VIEW, ICON_STEPS, MACHINE_FILES, NOISE_RE, PV_MAX, PV_W, SORT_LABEL, TRASH_DIR, attachName, authHeaders, ctxMenu, freeName, kindOf, lsGet, lsSet, pnIcon, stamp, type FileItem, type SortKey } from './panes-kit.js';
+import { FV_NOTE, FV_SIZE, FV_SORT, FV_VIEW, ICON_STEPS, MACHINE_FILES, NOISE_RE, PV_MAX, PV_W, SORT_LABEL, TRASH_DIR, attachName, authHeaders, ctxMenu, folderIcon, freeName, kindOf, lsGet, lsSet, pnIcon, stamp, type FileItem, type SortKey } from './panes-kit.js';
 import type { Part, PartCtx } from './panes-parts.js';
 
 export function filesPart(ctx: PartCtx): Part {
@@ -482,7 +482,7 @@ export function filesPart(ctx: PartCtx): Part {
   }
 
   function thumb(f: FileItem, small: boolean): HTMLElement {
-    if (f.type === 'dir') return el('span', { class: 'pn-fic dir' + (small ? ' sm' : '') }, pnIcon('folder', 'pn-i')) as HTMLElement;
+    if (f.type === 'dir') return el('span', { class: 'pn-fic dir' + (small ? ' sm' : '') }, folderIcon('pn-folder' + (small ? ' sm' : ''))) as HTMLElement;
     const k = kindOf(f.path);
     const box = el('span', { class: 'pn-fic ' + k.kind + (small ? ' sm' : ''), 'data-pv': f.path, 'data-pvk': k.kind, 'data-pvs': String(f.size || 0) },
       pnIcon(k.kind === 'page' ? 'note' : k.kind === 'video' ? 'img' : 'doc', 'pn-i')) as HTMLElement;

@@ -186,3 +186,30 @@ export function knTitle(raw, name) {
     t = t.replace(/\s{2,}/g, ' ').replace(/[\s·,:;]+$/, '').trim();
     return t || String(name || '');
 }
+// ── 폴더 아이콘 — 맥 파인더 결 (#1819 원준 "노란 평면 아이콘 별로") ───────────────
+//  다른 아이콘은 전부 선(stroke)이지만 폴더만은 **채운 그림**이다. 이유가 있다: 자료 격자에서 폴더는
+//  '아이콘'이 아니라 파일 미리보기와 나란히 서는 **한 장의 그림**이라, 선 하나로 그리면 옆 카드의
+//  실제 내용(그림·문서 미리보기)에 눌려 빈 칸처럼 보인다. 파인더도 같은 이유로 폴더만 입체다.
+//  구성: 뒤판(짙은 남색 계열) + 앞판(위에서 아래로 밝아지는 파랑) + 앞판 윗면 하이라이트 한 줄.
+//  ⚠ 그라디언트 id 는 문서에 유일해야 한다 — 같은 id 가 여러 개면 브라우저가 첫 것만 쓴다(색이 굳는다).
+let folderSeq = 0;
+export function folderIcon(cls = 'pn-folder') {
+    const n = ++folderSeq;
+    const back = `pnf-b${n}`, front = `pnf-f${n}`, gloss = `pnf-g${n}`;
+    const svg = sv('svg', { viewBox: '0 0 48 40', class: cls, 'aria-hidden': 'true' });
+    svg.innerHTML = `<defs>
+      <linearGradient id="${back}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#7FB6EC"/><stop offset="1" stop-color="#4E8FD6"/>
+      </linearGradient>
+      <linearGradient id="${front}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#8FC6F5"/><stop offset="1" stop-color="#5C9BE0"/>
+      </linearGradient>
+      <linearGradient id="${gloss}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#FFFFFF" stop-opacity=".55"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    <path d="M2 9.5A3.5 3.5 0 0 1 5.5 6h11.2c.9 0 1.8.35 2.45.98L22 9.5h20.5A3.5 3.5 0 0 1 46 13v20.5A3.5 3.5 0 0 1 42.5 37h-37A3.5 3.5 0 0 1 2 33.5z" fill="url(#${back})"/>
+    <path d="M2 15.5A3.5 3.5 0 0 1 5.5 12h37a3.5 3.5 0 0 1 3.5 3.5v18A3.5 3.5 0 0 1 42.5 37h-37A3.5 3.5 0 0 1 2 33.5z" fill="url(#${front})"/>
+    <path d="M2 15.5A3.5 3.5 0 0 1 5.5 12h37a3.5 3.5 0 0 1 3.5 3.5v3.2c0 .5-.4.8-.9.7-4-.9-8.6-1.4-21.6-1.4S6.9 18.5 2.9 19.4c-.5.1-.9-.2-.9-.7z" fill="url(#${gloss})"/>`;
+    return svg;
+}
