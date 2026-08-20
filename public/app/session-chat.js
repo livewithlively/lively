@@ -494,6 +494,9 @@ export function mountSessionChat(host, first, opts) {
         // 이름은 상단바에 상시로 두지 않는다(위 제목 주석) — 고칠 일이 있을 때만 여기서 연다.
         if (canRename())
             rows.push(row('세션 이름 바꾸기', idLabel(titleText) ? '아직 이름이 없어요' : titleText, () => startRename()));
+        // 보관 — 터미널만 내려놓고 대화·설정은 남긴다. 살아 있는 내 세션에만(내릴 것이 있어야 보관이다).
+        if (opts.onArchive && target.owned && target.live && !target.raw?.restorable)
+            rows.push(row('이 세션 보관', '터미널을 내려놓고 대화·설정은 남겨요 — [보관한 세션]에서 되살립니다', () => opts.onArchive()));
         rows.push(row('링크 복사', '지금 보고 있는 이 화면의 주소', async () => {
             try {
                 await navigator.clipboard.writeText(location.href);

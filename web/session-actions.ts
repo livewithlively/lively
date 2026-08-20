@@ -116,27 +116,6 @@ export async function confirmSessionArchive(opts: { title: string; working: bool
   });
 }
 
-// ── 탭에서 치우기 ── 서버를 부르지 않는 **보기 변경**이다(끝난 세션·남의 세션). 잃는 것이 없다.
-//  그런데도 확인창을 두는 이유: ×를 '영영 지우는 것'으로 읽어 아무도 정리하지 않는 일이 실제로 있었다(#1582).
-//  그래서 처음 한 번은 '무엇이 일어나는지'를 보여 주고, 그 뒤로는 조용히 치운다.
-const HIDE_NOTE_KEY = 'pn_hide_tab_noted';
-export async function confirmSessionHideTab(opts: { title: string }): Promise<boolean> {
-  let noted = false;
-  try { noted = localStorage.getItem(HIDE_NOTE_KEY) === '1'; } catch (_) { /* noop */ }
-  if (noted) return true;
-  const ok = await confirmDialog({
-    title: opts.title, confirmText: '치우기', cancelText: '취소',
-    message: '탭 줄에서만 치웁니다 — 세션은 그대로 있어요.',
-    lines: [
-      '[보관한 세션]에 남아 있고, 거기서 [탭에 꺼내기]로 언제든 다시 세웁니다.',
-      '그 자리에서 대화를 보거나 이어서 열 수도 있어요.',
-    ],
-    note: '이 안내는 처음 한 번만 보여 드려요.',
-  });
-  if (ok) { try { localStorage.setItem(HIDE_NOTE_KEY, '1'); } catch (_) { /* noop */ } }
-  return ok;
-}
-
 // 종료·제거 뒤 토스트 — '어디서 다시 볼 수 있는지'를 결과 메시지에서도 한 번 더 말한다(확인창을 읽지 않고
 //  누른 사람에게 남는 유일한 안내라서). 중앙에 안 남는 경우엔 그 약속을 하지 않는다.
 export async function endedToast(n: number, sessions?: Array<{ harness?: string }>): Promise<string> {

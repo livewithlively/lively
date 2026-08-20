@@ -63,24 +63,6 @@ export const PART_DEFS: PartDef[] = [
 
 export const partDef = (t: PartType): PartDef => PART_DEFS.find((d) => d.type === t) || PART_DEFS[0];
 
-// ── 치운 세션 탭(원준 2026-08-20 "탭을 닫을 수가 없음") ────────────────────────────
-//  끝난 세션은 **보관할 터미널이 없다** — 그래서 ×가 서버를 부를 일도 없다. 그래도 탭 줄에서는 치워야 한다
-//  (프로젝트 하나에 세션이 수십 개 쌓인다 — 실측 186). 그 '치움'은 데이터가 아니라 **보기**라서
-//  이 브라우저에만 기억한다(칸 배치를 기억하는 방식과 같다). 치운 것은 사라지지 않고 [보관한 세션]에 그대로 있고,
-//  거기서 [탭에 꺼내기]로 되돌린다 — 무엇도 지워지지 않는다.
-const HIDE_KEY = 'pn_tab_hidden';
-export function hiddenSessions(): Set<string> {
-  try { const a = JSON.parse(localStorage.getItem(HIDE_KEY) || '[]'); return new Set(Array.isArray(a) ? a.map(String) : []); }
-  catch (_) { return new Set(); }
-}
-function saveHidden(set: Set<string>): void {
-  try { localStorage.setItem(HIDE_KEY, JSON.stringify([...set].slice(-800))); } catch (_) { /* noop */ }
-}
-export function hideSession(id: string): void { const s = hiddenSessions(); s.add(id); saveHidden(s); }
-export function unhideSession(id: string): void { const s = hiddenSessions(); s.delete(id); saveHidden(s); }
-/** 탭 줄을 쥔 쪽(panes.ts)에 '세션 보기가 바뀌었다'를 알린다 — 8초 틱을 기다리지 않고 그 자리에서 다시 그리게. */
-export function sessionsViewChanged(): void { window.dispatchEvent(new Event('pn:sessions-view')); }
-
 // ── 아이콘(스트로크 SVG) ──────────────────────────────────────────────────────
 const ICON_PATHS: Record<string, string> = {
   chat: '<path d="M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z"/>',
@@ -539,14 +521,10 @@ function archivePart(ctx: PartCtx): Part {
   const root = el('div', { class: 'pn-part pn-arch' });
   let sig = '';
   let workingId = '';
-  const mine = (): Sess[] => {
-    const hid = hiddenSessions();
-    return ctx.data().sessions
-      .filter((s) => (ctx.id > 0 ? Number(s.projectId) === ctx.id : !s.projectId))
-      // 끝난 세션 + **탭에서 치운 것**(살아 있어도) — 치운 것을 여기서도 못 보면 되돌릴 길이 없다.
-      .filter((s) => !(s.live && s.alive) || hid.has(s.id))
-      .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
-  };
+  const mine = (): Sess[] => ctx.data().sessions
+    .filter((s) => (ctx.id > 0 ? Number(s.projectId) === ctx.id : !s.projectId))
+    .filter((s) => !(s.live && s.alive))
+    .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
   const canRestore = (s: Sess): boolean => !!(s.raw && s.raw.restorable);
 
   async function restore(s: Sess): Promise<void> {
@@ -577,33 +555,26 @@ function archivePart(ctx: PartCtx): Part {
 
   function paint(): void {
     const ss = mine();
-    const hid0 = hiddenSessions();
-    const s2 = ss.map((s) => s.id + ':' + (canRestore(s) ? 'r' : '-') + (hid0.has(s.id) ? 'h' : '') + ':' + (s.lastSeen || 0)).join('|') + '#' + workingId;
+    const s2 = ss.map((s) => s.id + ':' + (canRestore(s) ? 'r' : '-') + ':' + (s.lastSeen || 0)).join('|') + '#' + workingId;
     if (s2 === sig) return;
     sig = s2;
     if (!ss.length) {
       root.replaceChildren(el('div', { class: 'pn-empty' },
         pnIcon('box', 'pn-i big'),
         el('b', { text: '보관한 세션이 아직 없어요.' }),
-        el('p', { class: 'pn-fine', text: '세션 탭의 ×를 누르면 여기에 담깁니다 — 대화는 그대로 남고, 언제든 되살릴 수 있어요.' })));
+        el('p', { class: 'pn-fine', text: '세션 머리줄 [⋯ ▸ 이 세션 보관]으로 담깁니다 — 대화는 그대로 남고, 언제든 되살릴 수 있어요.' })));
       return;
     }
-    const hid = hiddenSessions();
     const rows = ss.map((s) => {
       const t = sessText(s, '').main || s.id;
       const busy = workingId === s.id;
       const keep = canRestore(s);
-      const live = s.live && s.alive;
       return el('div', { class: 'pn-arow' + (busy ? ' busy' : '') },
-        el('span', { class: 'v2-dot ' + (live ? 'idle' : keep ? 'idle' : ''), 'aria-hidden': 'true' }),
+        el('span', { class: 'v2-dot ' + (keep ? 'idle' : ''), 'aria-hidden': 'true' }),
         el('a', { class: 'n ell', href: '#/s/' + encodeURIComponent(s.id), title: t + ' — 대화를 봅니다' , text: t }),
-        el('span', { class: 'pn-fine w', text: live ? '치운 탭 · 도는 중' : keep ? '보관됨' : '끝난 세션' }),
-        ...(hid.has(s.id) ? [el('button', {
-          class: 'btn-text', type: 'button', text: '탭에 꺼내기', title: '세션 탭 줄에 다시 세웁니다.',
-          onclick: () => { unhideSession(s.id); sessionsViewChanged(); sig = ''; paint(); },
-        })] : []),
+        el('span', { class: 'pn-fine w', text: keep ? '보관됨' : '끝난 세션' }),
         ...(s.lastSeen ? [el('span', { class: 'pn-fine w', text: relTime(new Date(s.lastSeen).toISOString()) })] : []),
-        ...(keep && !live ? [el('button', {
+        ...(keep ? [el('button', {
           class: 'btn-text', type: 'button', disabled: busy, text: busy ? '되살리는 중…' : '되살리기',
           title: '저장해 둔 설정 그대로 다시 열고, 대화를 이어 붙입니다.', onclick: () => void restore(s),
         })] : [el('a', { class: 'btn-text', href: '#/s/' + encodeURIComponent(s.id), text: '대화 보기' })]),

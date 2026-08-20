@@ -199,6 +199,8 @@ export interface SessionViewOpts {
   onToggleFiles?: () => boolean;
   /** 팝아웃 창(?solo=1) — 왼쪽 사이드바 없이 이 화면만 띄운 창(#1744). */
   solo?: boolean;
+  /** [⋯ ▸ 이 세션 보관] — 세션 탭 줄 폐지(원준 2026-08-20)로 보관의 입구가 이 메뉴로 모였다. */
+  onArchive?: () => void;
 }
 export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts: SessionViewOpts = {}): SessionChatHandle | null {
   // 기록(uuid) 링크로 들어왔는데 그 대화를 도는 박스가 있으면 그 박스가 정본이다(mergeSessions 가 기록을 박스에 접었다) — 옛 링크가 산다.
@@ -220,6 +222,7 @@ export function renderSession(host: HTMLElement, data: V2Data, id: string, vopts
     trail: vopts.trail || null,
     onPickProject: vopts.onPickProject,   // 상단바 [프로젝트 연결] 드롭다운(#1749)
     onRename: vopts.onRename,             // 제목 = 세션 이름(#1719) — 고치면 사이드바·목록이 그 이름으로 바뀐다
+    onArchive: vopts.onArchive,
     onToggleFiles: vopts.onToggleFiles,   // 상단바 [파일] → 우패널 파일 탐색기(#1744)
     solo: vopts.solo,
   });

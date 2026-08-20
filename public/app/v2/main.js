@@ -18,6 +18,7 @@ import { loadSessionActivities } from '../timeline-sources.js';
 import { makeSplitter } from './split.js';
 import { createSessionFiles } from './files.js';
 import { createTabs, routeKey } from './tabs.js';
+import { confirmSessionArchive } from '../session-actions.js';
 import { mountMobileChrome } from './mobile.js';
 import { takeCreated } from './created-cache.js';
 // 팝아웃 창(#1744) — 세션 화면 [⋯ ▸ 새 창]이 `?solo=1` 로 여는 같은 앱. **좌측(과 탭 줄)만 없다**:
@@ -90,8 +91,6 @@ async function mountProjectShell(tab, projectId, sessionId, seq) {
         detail,
         sessionId,
         onProjectChanged: () => { void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); }); },
-        // 세션 탭에서 두 번 눌러 고친 이름 — 같은 renameSession 을 태워 **사이드바·셸 탭·세션 머리줄까지 한 번에** 갱신한다.
-        onRenameSession: (sid, name) => renameSession(sid, name, tab),
         // 서랍에서 세션을 갈아 끼웠다 — 셸은 살려 두고 **주소·탭 제목만** 그 세션 것으로(라우터를 다시 돌리지 않는다).
         onSessionPicked: (sid) => {
             const href = sid ? '#/s/' + encodeURIComponent(sid) : '#/p/' + projectId;
@@ -110,6 +109,7 @@ async function mountProjectShell(tab, projectId, sessionId, seq) {
             const h = renderSession(host, data, sid, {
                 onPickProject: (anchor) => openProjectPicker(anchor, sid, tab),
                 onRename: (label) => renameSession(sid, label, tab),
+                onArchive: () => void archiveSession(sid),
             });
             tab.chat = h; // 20초 목록 갱신이 이 핸들로 상태를 흘려보낸다
             return h;
@@ -570,6 +570,25 @@ function drawAsideSession(tab, s) {
 //  tmux @box_label 과 복원용 desired-state 를 함께 바꾼다. 소유자만(서버가 403 으로 강제 — 화면도 내 세션에서만 연다).
 //  ⚠ 바꾼 뒤 **좌측 사이드바·우패널·탭 제목이 곧바로 그 이름**이어야 한다 — 20초 폴링을 기다리게 하면 "안 바뀌었다"로 읽힌다.
 //   그래서 손에 든 목록을 먼저 고쳐 다시 그리고(낙관), 서버 목록은 뒤따라 당겨 사실로 덮는다.
+/** 세션 보관(#1719) — 터미널만 내리고 좌표·대화는 DB 에 남긴다(DELETE ?reclaim=1 = restorable).
+ *  세션 탭 줄을 없애면서 입구가 [⋯ ▸ 이 세션 보관] 하나로 모였다. 확인창 정의는 session-actions.ts(#1582 규약). */
+async function archiveSession(sessionId) {
+    const s = findSess(sessionId);
+    const name = s ? (sessText(s, projName(data, s.projectId)).main || sessionId) : sessionId;
+    const working = !!s && (s.stateKey === 'busy' || s.stateKey === 'waiting');
+    if (!await confirmSessionArchive({ title: `「${name}」 세션을 보관할까요?`, working }))
+        return;
+    try {
+        await api('/api/ui/terminal/sessions/' + encodeURIComponent(sessionId) + '?reclaim=1' + (s && s.node ? '&node=' + encodeURIComponent(s.node) : ''), { method: 'DELETE' });
+        toast('세션을 보관했어요 — [보관한 세션]에서 되살릴 수 있어요.');
+        await loadData();
+        drawSide();
+        tabsApi?.paint();
+    }
+    catch (e) {
+        toast('보관하지 못했어요 — ' + (e && e.message ? e.message : e), true);
+    }
+}
 async function renameSession(sessionId, label, tab) {
     const s = findSess(sessionId); // 기록(uuid) 링크로 열린 세션도 같은 박스를 가리키게
     const body = { label };
