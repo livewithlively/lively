@@ -24,8 +24,9 @@
 //  이 파일이 모르는 것: 각 칸에 들어가는 내용(v2/panes-parts.ts) · 프로젝트 설정 창(v2/proj-settings.ts).
 import { anchoredPopover, api, el, personFace, toast } from '../core.js';
 import { makeSplitter } from './split.js';
-import { PART_DEFS, makePart, partDef, pnIcon } from './panes-parts.js';
+import { PART_DEFS, lookupSessNames, makePart, partDef, pnIcon, sessTitle } from './panes-parts.js';
 import { openProjSettings } from './proj-settings.js';
+import { dotCls } from './views.js';
 const LAYOUT_KEY = 'lively_panes_layout_v1';
 const DEF_LAYOUT = () => ({
     main: ['sessions'], side: ['files', 'knowledge'], bottom: ['timeline'],
@@ -216,6 +217,45 @@ export function mountPanes(host, opts) {
         };
         return b;
     }
+    /** 이 프로젝트의 세션 — 탭 줄에 눕히는 순서(답 기다림 → 도는 중 → 최근). */
+    const mySessions = () => {
+        const rank = (s) => (s.stateKey === 'waiting' ? 0 : s.stateKey === 'busy' ? 1 : s.live && s.alive ? 2 : 3);
+        return opts.data().sessions
+            .filter((s) => (loose ? !s.projectId : Number(s.projectId) === id))
+            .sort((a, b) => rank(a) - rank(b) || (b.lastSeen || 0) - (a.lastSeen || 0));
+    };
+    const SESS_TAB_MAX = 40; // 탭 줄에 눕히는 상한 — 프로젝트 없는 세션 화면엔 수백 개가 몰린다(실측 188개)
+    /** 세션 탭 하나 — 상태점 + 이름. 닫기(×)는 없다: 세션은 '열어 둔 문서'가 아니라 프로젝트에 속한 실체다. */
+    function sessTab(s, on, part) {
+        const t = sessTitle(s, String(pj().name || ''));
+        const b = el('button', {
+            class: 'pn-tab pn-stab' + (on ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': String(on),
+            title: t + ' — ' + s.stateLabel, onclick: () => { part.selectSession?.(s.id); paintPane('main'); },
+        }, el('span', { class: 'v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' }), el('span', { class: 'ell', text: t }));
+        return el('span', { class: 'pn-tabwrap' + (on ? ' on' : '') }, b);
+    }
+    /** 가운데 칸의 탭 줄에 세션 탭들을 그린다(원준 2026-08-20 — 하단 서랍을 이 줄로 옮겼다). */
+    function sessTabs(pane, act) {
+        const part = pane.parts.get('sessions');
+        if (!part || !part.selectSession)
+            return [];
+        const cur = part.currentSession?.() ?? null;
+        const ss = mySessions();
+        const shown = ss.slice(0, SESS_TAB_MAX);
+        // 지금 보는 세션이 상한 밖이면 그 탭만은 끼워 넣는다 — 켜진 것이 안 보이면 어디 있는지 알 수 없다.
+        const out = ss.find((s) => s.id === cur && !shown.some((x) => x.id === s.id));
+        const on = act === 'sessions';
+        void lookupSessNames(shown.slice(0, 12), String(pj().name || ''), () => { if (!dead)
+            paintPane('main'); });
+        return [
+            el('span', { class: 'pn-tabwrap' + (on && cur == null ? ' on' : '') }, el('button', {
+                class: 'pn-tab pn-stab new' + (on && cur == null ? ' on' : ''), type: 'button',
+                title: '새 세션을 엽니다', onclick: () => { activate('main', 'sessions'); part.selectSession?.(null); paintPane('main'); },
+            }, pnIcon('plus', 'pn-i sm'), el('span', { text: '새 세션' }))),
+            ...(out ? [sessTab(out, on, part)] : []),
+            ...shown.map((s) => sessTab(s, on && s.id === cur, part)),
+        ];
+    }
     function paintPane(zone) {
         const pane = panes.get(zone);
         const list = lay[zone];
@@ -230,8 +270,15 @@ export function mountPanes(host, opts) {
             : zone === 'bottom'
                 ? el('button', { class: 'pn-pane-hide', type: 'button', title: '아래 칸을 닫습니다', 'aria-label': '아래 칸 닫기', onclick: () => { lay.bottomOn = false; saveLayout(); paintAll(); } }, pnIcon('x', 'pn-i sm'))
                 : null;
+        // 'sessions' 는 탭 하나가 아니라 **세션마다 탭 하나**로 펼친다(그 부품이 살아 있어야 하므로 먼저 만든다).
+        const tabsOf = (t) => {
+            if (t !== 'sessions')
+                return [tabEl(zone, t, t === act)];
+            ensurePart(pane, 'sessions');
+            return sessTabs(pane, act);
+        };
         // ⚠ replaceChildren 은 el() 과 달리 null 을 걸러 주지 않는다 — 넣으면 'null' 이 글자로 찍힌다.
-        pane.tabs.replaceChildren(...[...list.map((t) => tabEl(zone, t, t === act)), addBtn(zone), hideBtn].filter(Boolean));
+        pane.tabs.replaceChildren(...[...list.flatMap(tabsOf), addBtn(zone), hideBtn].filter(Boolean));
         // 켜진 부품만 보이게(나머지는 살려 둔 채 숨긴다 — 탭을 오가도 대화·스크롤이 그대로다).
         if (act)
             ensurePart(pane, act);

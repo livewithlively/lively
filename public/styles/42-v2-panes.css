@@ -36,6 +36,14 @@
 .pn-tab-add, .pn-pane-hide { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 36px; border: 0; background: none; color: var(--muted-2); cursor: pointer; }
 .pn-tab-add:hover, .pn-pane-hide:hover { color: var(--blue); background: var(--bg-punch); }
 .pn-pane-hide { margin-left: auto; }
+
+/* 세션 탭 — 부품 탭과 한 줄에 서지만 결이 다르다: **상태점 + 이름**, 닫기(×)는 없다(세션은 '열어 둔 문서'가
+   아니라 프로젝트에 속한 실체다). 이름이 길어도 탭 줄이 무너지지 않게 폭을 묶는다. */
+.pn-stab { max-width: 190px; padding-right: 12px; }
+.pn-stab .ell { min-width: 0; }
+.pn-stab .v2-dot { flex: none; }
+.pn-stab.new { color: var(--muted-head); }
+.pn-stab.new:hover, .pn-tabwrap.on .pn-stab.new { color: var(--blue); }
 .pn-pane[data-zone="side"] .pn-pane-hide svg { transform: rotate(0deg); }
 
 .pn-pane-body { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
@@ -94,7 +102,7 @@
    (원준 2026-08-20 "한 열에 여러 개가 동시에 보여서 정신이 하나도 없음")
    서랍 타일은 곁칸 자료 카드(.pn-fcard)와 **같은 문법**이다 — 아이콘 면 + 이름 + 잔글씨. 두 서랍이
    같은 모양이라 '여기 담겨 있는 것들'이라는 뜻이 한 번에 읽힌다. */
-.pn-sessions { --pn-drw-h: 176px; overflow: hidden; }
+.pn-sessions { overflow: hidden; }
 .pn-stage { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .pn-stage > * { min-height: 0; }
 .pn-stage-h { flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 20px 10px; border-bottom: 1px solid var(--line-row); }
@@ -127,24 +135,6 @@
 .pn-new-send { flex: none; width: 30px; height: 30px; border: 0; border-radius: 9px; background: var(--blue); color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; }
 .pn-new-send:hover { background: var(--blue-deep); }
 .pn-new-send:disabled { background: var(--muted-3); cursor: default; }
-
-/* 서랍 — 판(흰 대화판)과 다른 바닥색으로 '아래에 눕혀 둔 것'임을 말한다. */
-.pn-drw { height: var(--pn-drw-h); flex: none; display: flex; flex-direction: column; background: #FAFBFC; border-top: 1px solid var(--line); }
-.pn-drw-h { flex: none; display: flex; align-items: baseline; gap: 10px; padding: 9px 14px 5px; }
-.pn-drw-hint { margin-left: auto; }
-.pn-drw-grid { flex: 1; min-height: 0; overflow: auto; padding: 2px 12px 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; align-content: start; }
-.pn-stile { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 7px 5px 8px; border: 1px solid transparent; border-radius: 10px; background: none; font: inherit; color: var(--ink); cursor: pointer; }
-.pn-stile:hover { border-color: var(--line-net); background: var(--bg, #fff); }
-.pn-stile.on { border-color: var(--blue); background: var(--bg, #fff); box-shadow: 0 1px 2px rgba(21,35,59,.07); }
-.pn-stile-ic { position: relative; width: 100%; aspect-ratio: 1 / .8; border: 1px solid var(--line); border-radius: 8px; background: var(--bg, #fff); display: flex; align-items: center; justify-content: center; color: var(--muted-2); }
-.pn-stile.on .pn-stile-ic { border-color: var(--line-net-2); color: var(--blue); }
-.pn-stile.wait .pn-stile-ic { border-color: #E8CE93; background: #FFFCF4; }
-.pn-stile-ic.new { border-style: dashed; color: var(--muted); }
-.pn-stile.new:hover .pn-stile-ic, .pn-stile.new.on .pn-stile-ic { border-color: var(--blue); color: var(--blue); }
-.pn-stile-dot { position: absolute; right: 6px; top: 6px; }
-.pn-stile-n { font-size: 11px; font-weight: 600; line-height: 1.32; text-align: center; word-break: break-all; }
-.pn-stile.on .pn-stile-n { color: var(--ink); }
-.pn-stile-m { font-size: 10px; color: var(--muted-2); }
 
 /* ══ 자료 — 좁은 칸에서도 읽히는 격자 ══════════════════════════════════════ */
 .pn-files { overflow: hidden; }
