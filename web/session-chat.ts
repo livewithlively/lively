@@ -224,6 +224,12 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     filesBtn.classList.toggle('sc-act-on', on);
   } }) as HTMLButtonElement;
   const termStatusEl = el('span', { class: 'sc-termstat', hidden: true });
+  // 지금 무엇으로 돌고 있나(모델·추론강도) — 터미널을 보고 있을 땐 입력창 아래 바가 통째로 숨어서
+  //  그 사실이 화면에서 사라진다(원준님 2026-08-20). 하네스 이름('claude') 옆이 그 자리다 — 이미 '어느 CLI로
+  //  떠 있나'를 말하는 칸이라, 같은 축의 나머지 두 값이 붙는 게 자연스럽다.
+  //  ⚠ 여기 것은 **읽기 전용**이다. 바꾸는 자리는 입력창 아래 드롭다운 하나로 둔다 — 같은 조작을 두 자리에 두면
+  //   어느 쪽이 진짜인지 묻게 된다(막다른 컨트롤 금지의 뒷면).
+  const runEl = el('span', { class: 'sc-run', hidden: true });
   const moreBtn = el('button', { class: 'btn-text sc-act', type: 'button', text: '⋯', title: '이 세션에 할 수 있는 것들', 'aria-label': '더 보기', onclick: () => openMore() }) as HTMLButtonElement;
   // 프로젝트 소속(#1749) — 붙었으면 프로젝트 링크 + [▾](바꾸기), 아니면 [프로젝트 연결] 버튼(검색 드롭다운). 내 세션에서만 바꿀 수 있다.
   //  update() 가 되그린다(소속은 화면이 열린 뒤에도 바뀐다).
@@ -250,6 +256,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
         stateEl, el('span', { class: 'sc-sep', text: '·' }),
         projEl,
         target.raw?.harness ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { class: 'mono', text: String(target.raw.harness) })] : null,
+        runEl,
         target.node ? [el('span', { class: 'sc-sep', text: '·' }), el('span', { text: String(target.node) })] : null)),
     el('div', { class: 'sc-head-r' },
       termStatusEl,
@@ -346,6 +353,16 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     if (hcat) chipProv.title = `이 세션은 ${providerLabel(hcat)} 의 ${hcat.label} 로 떠 있어요 — 제공자는 새 세션에서만 고를 수 있어요.`;
     paintAxis('model', selModel, chipModel, obsModel, (v) => v, prettyModel);
     paintAxis('effort', selEffort, chipEffort, obsEffort, effortKo, effortKo);
+    paintRunHead();
+  }
+  //  머리줄(하네스 이름 옆) 표시 — **관측된 값만** 적는다. 아직 한 턴도 안 돌아 모르는 세션은 빈칸으로 둔다:
+  //   빈 자리가 틀린 값보다 낫다(카탈로그 기본값을 적으면 실제로 도는 것과 어긋난다).
+  //  보이는 조건은 termStatusEl 과 같다 — 터미널을 보고 있을 때만(대화 모드는 입력창 아래 바가 같은 사실을 이미 말한다).
+  function paintRunHead(): void {
+    const vals = [obsModel ? prettyModel(obsModel) : '', obsEffort ? effortKo(obsEffort) : ''].filter(Boolean);
+    runEl.replaceChildren(...vals.flatMap((v) => [el('span', { class: 'sc-sep', text: '·' }), el('span', { class: 'mono', text: v })]));
+    if (vals.length) runEl.title = '이 세션이 지금 쓰는 모델·추론강도예요 — 바꾸려면 [대화]에서 입력창 아래 칸으로 고르거나, 터미널에서 /model · /effort 를 치세요.';
+    runEl.hidden = termHost.hidden || !vals.length;
   }
   //  tip = 칩에 걸 원문(줄인 모델 이름의 전체). 드롭다운이 서는 세션에선 칩이 숨으므로 안 쓰인다.
   function setObserved(a: Axis, v: string, tip?: string): void {
@@ -440,6 +457,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
     chatBadge.hidden = m !== 'chat';
     fixBtn.hidden = m !== 'term'; setBtn.hidden = m !== 'term';        // 터미널 조작은 터미널을 보고 있을 때만 겉에 둔다
     termStatusEl.hidden = m !== 'term' || !termStatusEl.textContent;   // 연결 상태도 마찬가지(#1744)
+    paintRunHead();                                                   // 모델·추론강도도 마찬가지 — 터미널을 볼 때만 머리줄에 선다
     if (m === 'chat') { view.scrollToBottom(); view.input.focus(); }
   }
 
