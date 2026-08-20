@@ -14,11 +14,8 @@ export function takeFirstPrompt(sessionId) {
     firstPrompts.delete(sessionId);
     return t;
 }
-/** 라벨 = 첫 지시의 앞부분(문장부호·개행 정리). 서버 cleanLabel 이 한 번 더 다듬는다. */
-export function labelFromPrompt(text) {
-    const one = text.replace(/\s+/g, ' ').trim().replace(/[.。!?？…]+$/, '');
-    return one.length > 28 ? one.slice(0, 27) + '…' : one;
-}
+// 이름은 **서버가 짓는다**(#1808, src/terminal/session-name.ts) — initialPrompt 를 넘기면 그 값으로 label 이 정해진다.
+//  종전엔 여기서 앞 27자를 잘라 label 로 같이 보냈는데, 그 규칙이 클라와 서버 두 곳에 있으면 반드시 갈라진다.
 let creating = false;
 export function isCreatingQuickSession() { return creating; }
 /**
@@ -43,7 +40,7 @@ export async function openQuickSession(text, opts) {
         const out = await api('/api/ui/terminal/sessions', {
             method: 'POST',
             body: JSON.stringify({
-                label: labelFromPrompt(t), harness, flags,
+                harness, flags,
                 autoApprove: !!p.autoApprove, sessionDir: true, initialPrompt: t,
                 ...(node ? { node } : {}),
             }),
@@ -87,7 +84,11 @@ export async function openProjectSession(projectId, projectName) {
         const harness = p.harness && p.harness !== 'shell' ? p.harness : 'claude';
         const out = await api('/api/ui/terminal/sessions', {
             method: 'POST',
-            body: JSON.stringify({ label: labelFromPrompt(projectName || '새 세션'), harness, flags: p.flags && typeof p.flags === 'object' ? p.flags : {}, autoApprove: !!p.autoApprove, sessionDir: true }),
+            // ⚠ label 을 넘기지 않는다(#1808) — 여기에 프로젝트명을 박으면 그 프로젝트의 세션이 전부 같은 이름이 된다
+            //  (실측 2026-08-20: 그 경로로 프로젝트 세션 147건 중 104건이 이름이 프로젝트명 그대로였다). 이름은 서버가
+            //  **처음 시킨 말**로 짓는다 — 여기선 지시를 세션 화면에서 치므로 중앙 기록이 첫 발화를 알아내는 순간 붙는다
+            //  (src/terminal/session-name.ts · src/sessions/session-autoname.ts). 프로젝트는 소속으로만 붙인다(아래 /project).
+            body: JSON.stringify({ harness, flags: p.flags && typeof p.flags === 'object' ? p.flags : {}, autoApprove: !!p.autoApprove, sessionDir: true }),
         });
         const id = out && out.session && out.session.id ? String(out.session.id) : '';
         if (!id)

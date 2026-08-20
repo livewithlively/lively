@@ -335,7 +335,7 @@ function startTerminalTour(firstStep?, opts?) {
     {
       target: '[data-tour="label"]',
       title: '② 세션 이름 정하기',
-      body: [el('p', { class: 'tour-p' }, '나중에 알아보기 쉽게 이름을 적어요. 예: ', el('b', { text: '랜딩 카피 수정' }), '.')],
+      body: [el('p', { class: 'tour-p' }, '나중에 알아보기 쉽게 이름을 적어요. 예: ', el('b', { text: '랜딩 카피 수정' }), '. 비워 두면 처음 시킨 말로 지어집니다.')],
       placement: 'right', scrollIntoView: true,
     },
     {

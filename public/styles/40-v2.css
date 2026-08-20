@@ -218,6 +218,16 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-ss-row .w.busy { color: var(--blue); }
 .v2-ss-row .w.done { color: var(--mint-deep, #0FA37E); }
 .v2-ss-more { display: block; padding: 6px 9px 6px 47px; font-size: 12px; color: var(--muted); text-decoration: none; }
+/* '지난 세션 n' — 멈춘 세션을 접어 두는 묶음 머리(#1808). 캐럿·글자 시작점을 **세션 행과 같은 안쪽 기둥**에
+   맞춘다(--nest 포함) — 위계를 한 단 더 들이는 게 아니라 그 방 안의 묶음이라는 뜻이다. */
+.v2-ss-past { display: flex; align-items: center; gap: 4px; width: calc(100% - 9px); margin-top: 2px; padding: 5px 9px 5px calc(27px + var(--nest, 14px)); border: 0; background: none; font: inherit; font-size: 12px; font-weight: 600; line-height: 1.4; color: var(--muted); cursor: pointer; border-radius: 7px; text-align: left; }
+.v2-ss-past:hover { background: var(--bg-tint, #F6FAFF); color: var(--ink); }
+.v2-ss-past .n { flex: none; }
+.v2-ss-past .v2-cnt { flex: none; }
+.v2-ss-past .v2-car { transition: transform .15s ease; }
+.v2-ss-past.open .v2-car { transform: rotate(90deg); }
+/* 지난 세션 행 — 이름은 같은 잉크색이다(흐린 회색 본문 금지). 굵기만 한 급 낮춰 '지금 도는 것'과 결을 가른다. */
+.v2-ss-row.past .t { font-weight: 450; }
 .v2-tree-note { margin: 10px var(--side-x, 8px) 0 0; padding: 10px 12px; border: 1px dashed var(--line-net, #DCE6F5); border-radius: 9px; font-size: 13px; color: var(--muted); line-height: 1.55; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
 .v2-tree-note .btn-text { font-size: 13px; padding: 0; }
 .v2-tree-more { display: block; width: calc(100% - var(--side-x, 8px)); margin-top: 10px; padding: 8px 10px; border: 1px dashed var(--line-net, #DCE6F5); border-radius: 8px; background: none; font: inherit; font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer; text-align: left; }
@@ -366,6 +376,9 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 .v2-now-row .p { font-size: 11.5px; color: var(--muted-2, #A6B2C8); flex: none; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .v2-now-row .st { font-size: 12px; color: var(--muted); flex: none; font-variant-numeric: tabular-nums; }
 .v2-now-row .go { flex: none; }
+/* 홈 '이어서 할 수 있어요'(#1808) — 도는 세션 아래, 가는 선 하나로 갈라 둔 조용한 묶음. */
+.v2-now-past { border-top: 1px solid var(--line-net, #DCE6F5); padding-top: 16px; }
+.v2-now-past .v2-now-row .t { font-weight: 550; }
 
 /* 리브 페이지(클래식 renderLiv 를 이 칸에) — 35-liv 의 body[data-route=liv] main 규칙은 여기 안 닿는다(main 태그 안 씀) */
 /* 리브도 다른 중앙 화면과 같은 흰 판(#1756) — 리브만 회색이면 3열 셸에서 그 화면만 딴 세계로 읽힌다.

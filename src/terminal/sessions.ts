@@ -42,6 +42,7 @@ import { ensureMemberKitSeeded } from "./member-kit-seed.js";
 import { logger } from "../log.js";
 import { canSeeSession } from "./write-cap.js";
 import { loadDesiredMap, loadDesiredOne, resolveDesired, resolveSessionDir } from "../sessions/session-desired.js";
+import { sessionNameFromPrompt } from "./session-name.js";
 
 export const sessionPrefix = (u: LivelyUser): string => `box-${userSlug(u)}-`;
 const ID_RE = SESSION_ID_RE;   // 세션 id 형식의 단일 진실원천 — 게이트웨이가 헤더로 받은 세션도 같은 자로 잰다(#852)
@@ -495,7 +496,10 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
   //  강제, 비격리(프로젝트·managed)는 여기 default-terminal 로. 서버 전역이나 '새 pane' 에만 적용=기존 세션 무영향, 멱등).
   await tmuxQuiet(["set-option", "-g", "default-terminal", "xterm-256color"]);
   await tmux(args);
-  const label = cleanLabel(input.label) || id;
+  // 이름(#1808) — ① 사람이 준 이름 ② 없으면 **첫 지시**로 짓는다 ③ 그것도 없으면 id(= '아직 이름 없음' 표식.
+  //  화면은 그때 pane 제목·중앙 기록 첫 지시로 이름 자리를 채우고, 대화가 시작되면 session-autoname 이 진짜 이름을 박는다).
+  //  ⚠ 여기에 '프로젝트명'은 없다 — 한 프로젝트 아래 세션이 전부 같은 이름이 되던 뿌리였다(실측 71%).
+  const label = cleanLabel(input.label) || cleanLabel(sessionNameFromPrompt(input.initialPrompt || "")) || id;
   await tmux(["set-option", "-t", id, "@box_owner", ownerId(user)]);
   await tmux(["set-option", "-t", id, "@box_label", label]);
   await tmux(["set-option", "-t", id, "@box_harness", harness.key]);

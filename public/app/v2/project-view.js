@@ -224,7 +224,8 @@ export function mountProjectView(host, opts) {
             const tx = sessText(s, pname); // 사이드바와 같은 규칙 — 프로젝트명 되풀이 제거·'지금 하는 일' 승격
             const owner = !s.owned && (raw.owner_name || raw.owner) ? String(raw.owner_name || raw.owner) : '';
             const acc = s.live && s.alive && (s.stateKey === 'busy' || s.stateKey === 'waiting') ? ' acc-' + s.stateKey : '';
-            return el('a', { class: 'pv-row' + (s.live && s.alive ? '' : ' dim') + acc, href: '#/s/' + encodeURIComponent(s.id), title: s.label }, el('span', { class: 'v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' }), el('span', { class: 'pv-row-main' }, el('span', { class: 't', text: tx.main }), el('span', { class: 'm' }, el('span', { class: 'st-' + s.stateKey, text: s.stateLabel + (s.live ? '' : ' · 기록만') }), el('span', { text: [' · ' + when(s.lastSeen), owner ? ' · ' + owner : '', tx.sub ? ' · ' + tx.sub : ''].join('') }))), el('span', { class: 'pv-row-go', 'aria-hidden': 'true', text: '›' }));
+            return el('a', { class: 'pv-row' + (s.live && s.alive ? '' : ' dim') + acc, href: '#/s/' + encodeURIComponent(s.id), title: s.label }, el('span', { class: 'v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' }), el('span', { class: 'pv-row-main' }, el('span', { class: 't', text: tx.main }), el('span', { class: 'm' }, el('span', { class: 'st-' + s.stateKey, text: s.stateLabel }), // #1808 stateLabel 이 이미 '기록'이다 — ' · 기록만'을 덧붙이면 "기록 · 기록만"
+            el('span', { text: [' · ' + when(s.lastSeen), owner ? ' · ' + owner : '', tx.sub ? ' · ' + tx.sub : ''].join('') }))), el('span', { class: 'pv-row-go', 'aria-hidden': 'true', text: '›' }));
         }));
     }
     room.replaceChildren(bz.root, cz.root, sz.root);

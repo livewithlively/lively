@@ -176,6 +176,16 @@ export async function claudeSessionIdsFor(ids: string[]): Promise<Map<string, st
   return out;
 }
 
+/** 대화 uuid → 그 대화를 돌린(돌리는) 박스의 desired-state. 훅이 보고한 매핑을 거꾸로 탄다(session-autoname #1808).
+ *  같은 uuid 가 여러 박스에 붙어 있으면(복원으로 승계) **가장 최근에 본 것**이 정본이다. 없으면 undefined. */
+export async function sessionStateByClaudeUuid(uuid: string): Promise<SessionState | undefined> {
+  const u = String(uuid || "").trim();
+  if (!u) return undefined;
+  const r = await itemsPool.query(
+    "SELECT * FROM org_session_state WHERE claude_session_id=$1 ORDER BY COALESCE(last_busy, created, 0) DESC LIMIT 1", [u]);
+  return r.rows[0] ? rowToState(r.rows[0]) : undefined;
+}
+
 export async function getSessionState(id: string): Promise<SessionState | undefined> {
   const r = await itemsPool.query("SELECT * FROM org_session_state WHERE id=$1", [id]);
   return r.rows[0] ? rowToState(r.rows[0]) : undefined;

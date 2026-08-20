@@ -357,7 +357,9 @@ export function openProjectV2Form(reload, prefill) {
             // #758 '만들고 AI세션 실행' — 생성 직후 이 프로젝트에 내 세션을 열고 새 탭으로 입장. 실행 기본값은 pjvBulkRunDefaultsModal(__new__ 전역).
             if (withRun && np && np.id) {
                 const rd = pjvRunDefaults('__new__', []);
-                const sbody = { label: name, harness: rd.harness || 'claude', autoApprove: rd.autoApprove === true }; // #782 기본 꺼짐
+                // 이름은 넘기지 않는다(#1808) — 프로젝트명을 세션 이름으로 박으면 그 프로젝트의 모든 세션이 같은 이름이 된다.
+                //  서버가 처음 시킨 말로 짓는다(session-autoname.ts). #782 자동승인 기본 꺼짐.
+                const sbody = { harness: rd.harness || 'claude', autoApprove: rd.autoApprove === true };
                 // 모델·추론강도는 고른 것만 — 빈 값은 '지난번 그대로'라 안 넘기는 게 그 뜻이다(#1758, selection.ts 와 같은 규칙).
                 const rdFlags = {};
                 if (rd.model)

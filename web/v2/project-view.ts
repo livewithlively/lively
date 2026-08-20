@@ -252,7 +252,7 @@ export function mountProjectView(host: HTMLElement, opts: ProjectViewOpts): Proj
         el('span', { class: 'pv-row-main' },
           el('span', { class: 't', text: tx.main }),
           el('span', { class: 'm' },
-            el('span', { class: 'st-' + s.stateKey, text: s.stateLabel + (s.live ? '' : ' · 기록만') }),
+            el('span', { class: 'st-' + s.stateKey, text: s.stateLabel }),   // #1808 stateLabel 이 이미 '기록'이다 — ' · 기록만'을 덧붙이면 "기록 · 기록만"
             el('span', { text: [' · ' + when(s.lastSeen), owner ? ' · ' + owner : '', tx.sub ? ' · ' + tx.sub : ''].join('') }))),
         el('span', { class: 'pv-row-go', 'aria-hidden': 'true', text: '›' }));
     }));
