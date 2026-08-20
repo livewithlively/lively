@@ -16,8 +16,10 @@ const name = process.env.BOOTSTRAP_ADMIN_NAME || "Admin";
 const forcedPw = process.env.BOOTSTRAP_ADMIN_PASSWORD || "";
 
 await upsertMember(
+  // 첫 관리자 = 조직의 유일한 전권 계정 → 전 scope(#248). memory/code 가 빠지면 지식·코드 도구가
+  //  Forbidden 인데 설치·healthz 는 초록이라 조용히 실패한다 — scope 누락은 여기가 아니라 웹 관리에서 좁힌다.
   { id, kind: "human", display_name: name, email,
-    scopes: ["admin", "runtime", "context", "db", "items"], state: "active" },
+    scopes: ["admin", "runtime", "context", "db", "items", "memory", "code"], state: "active" },
   "bootstrap", "deploy/bootstrap-admin",
 );
 
