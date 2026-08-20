@@ -36,6 +36,12 @@ export const IPC_WEB = {
   // 커스텀 타이틀바(#1541) — preload 가 페이지의 실제 배경/글자색을 읽어 보고하면, 메인이 Windows 의
   //  네이티브 창 버튼(WCO overlay) 색을 거기 맞춘다. 페이지(웹 UI)는 이 채널을 모른다 — preload 전용.
   TITLEBAR: "lively-web:titlebar",
+  // 브라우저 서피스 확장(#1829) — 목록·설치·제거. **경로를 페이지가 정하지 못한다**:
+  //  설치는 메인이 네이티브 파일 선택창을 띄우고 사람이 고른 파일만 받는다(위 머리말의 원칙 그대로 —
+  //  웹 UI 의 XSS 한 방이 임의 파일을 확장으로 심을 수 있으면 안 된다). 제거는 우리 목록에 있는 id 만.
+  EXT_LIST: "lively-web:ext-list",
+  EXT_INSTALL: "lively-web:ext-install",
+  EXT_REMOVE: "lively-web:ext-remove",
 };
 
 /** 렌더러가 요청할 수 있는 작업 — 화이트리스트. 임의 argv 를 렌더러가 만들지 못하게 한다. */

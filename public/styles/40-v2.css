@@ -534,6 +534,12 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-bs-fb-h { margin: 0; font-size: 14px; font-weight: 800; color: var(--ink); }
 .v2-bs-fb-p { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--ink-sub); }
 .v2-bs-fallback .btn { margin-top: 6px; }
+/* 확장(애드온) 팝오버 — 앵커 팝오버(.dash-pop) 위에 얹는 목록. 행은 이름 + 제거 한 쌍뿐이다. */
+.v2-bs-ext { display: flex; flex-direction: column; gap: 8px; min-width: 260px; padding: 4px 2px; }
+.v2-bs-ext-h { margin: 0; font-size: 12px; font-weight: 800; color: var(--muted); letter-spacing: .02em; }
+.v2-bs-ext-p { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--ink-sub); }
+.v2-bs-ext-row { display: flex; align-items: center; gap: 10px; }
+.v2-bs-ext-nm { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── 우측 ── */
 /* 우패널은 사이드바가 아니라 **가운데 화면의 연장**이다(#1756, 상민님). 종전엔 좌·우가 같은 회색 판(canvas)이라
