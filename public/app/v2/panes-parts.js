@@ -15,6 +15,7 @@ import { upDropZone } from '../projects/files-upload.js';
 import { mountProjectChat } from '../project-chat.js';
 import { createTimeline } from '../timeline.js';
 import { loadProjectTimeline } from '../timeline-sources.js';
+import { hasBrowserSurface } from './browser-surface.js';
 import { filesPart } from './panes-files.js';
 import { NOISE_RE, TRASH_DIR, attachName, authHeaders, kindOf, knTitle, pnIcon, pnNote } from './panes-kit.js';
 import { createRunPicker } from './run-picker.js';
@@ -602,14 +603,19 @@ function webPart(ctx) {
             return 'https://' + t;
         return 'https://www.google.com/search?q=' + encodeURIComponent(t); // 주소가 아니면 검색으로 — 막다른 입력칸을 만들지 않는다
     };
-    const frame = el('iframe', { class: 'pn-webframe', referrerpolicy: 'no-referrer-when-downgrade' });
+    // 데스크톱 앱(#1829)에서는 <webview> 로 그린다 — 별도 WebContents 라 X-Frame-Options 검사의 대상이 아니다.
+    //  능력 감지로 가른다(UA/플랫폼 추측 금지). 없으면 종전 iframe 그대로.
+    const live = hasBrowserSurface();
+    const frame = (live
+        ? el('webview', { class: 'pn-webframe' })
+        : el('iframe', { class: 'pn-webframe', referrerpolicy: 'no-referrer-when-downgrade' }));
     const input = el('input', { class: 'pn-web-in', type: 'text', placeholder: '주소 또는 검색어 — 예: docs.google.com', 'aria-label': '주소' });
     const go = (raw) => {
         const u = norm(raw ?? input.value);
         if (!u)
             return;
         input.value = u;
-        frame.src = u;
+        frame.setAttribute('src', u);
         const m = store();
         m[keyOf()] = u;
         try {
@@ -626,11 +632,11 @@ function webPart(ctx) {
         e.preventDefault();
         return;
     } openTab.href = u; };
-    root.append(el('div', { class: 'pn-web-bar' }, el('button', { class: 'pn-web-btn', type: 'button', title: '다시 불러오기', onclick: () => go() }, pnIcon('undo', 'pn-i sm')), input, el('button', { class: 'pn-web-btn', type: 'button', text: '열기', onclick: () => go() }), openTab), frame, el('p', { class: 'pn-web-note pn-fine', text: '빈 화면인가요? 그 사이트가 창 안에 뜨는 걸 막은 거예요 — 오른쪽 ↗ 로 새 탭에서 여세요.' }));
+    root.append(el('div', { class: 'pn-web-bar' }, el('button', { class: 'pn-web-btn', type: 'button', title: '다시 불러오기', onclick: () => go() }, pnIcon('undo', 'pn-i sm')), input, el('button', { class: 'pn-web-btn', type: 'button', text: '열기', onclick: () => go() }), openTab), frame, live ? null : el('p', { class: 'pn-web-note pn-fine', text: '빈 화면인가요? 그 사이트가 창 안에 뜨는 걸 막은 거예요 — 오른쪽 ↗ 로 새 탭에서 여세요. 데스크톱 앱에서는 이 칸 안에 그대로 뜹니다.' }));
     const saved = store()[keyOf()];
     if (saved) {
         input.value = saved;
-        frame.src = saved;
+        frame.setAttribute('src', saved);
     }
     return { root };
 }

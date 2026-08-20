@@ -156,4 +156,26 @@ t("F6 웹은 **기능 감지**로 능력을 본다 — 플랫폼·UA 추측 금�
   assert.match(WEBSURF, /'webview'/, "폴백만 있고 실제 서피스를 안 만든다");
 });
 
+t("F7 ★ 세션 곁칸 '웹' 도 능력이 있으면 서피스로 그린다 — 원래 신고가 난 자리다", () => {
+  const pane = readFileSync(fileURLToPath(new URL("../../web/v2/panes-parts.ts", import.meta.url)), "utf8");
+  const at = pane.indexOf("function webPart(");
+  assert.ok(at >= 0, "웹 칸이 없다");
+  // ⚠ 고정 길이로 자르지 않는다 — 그 함수는 자란다(#1819 로 세션 연동·⌘R 이 붙어 2200자를 넘겼고
+  //  안내문 단언이 구간 밖으로 밀려나 거짓 실패했다). **다음 함수 선언 직전까지** 자른다.
+  const end = pane.indexOf("function editorPart(", at + 1);
+  assert.ok(end > at, "웹 칸 뒤에 함수가 없다 — 구간을 못 자른다");
+  const seg = pane.slice(at, end);
+  assert.match(seg, /hasBrowserSurface\(\)/, "★ 능력 감지를 안 한다 — 데스크톱에서도 iframe 이라 막힌 사이트가 그대로 막힌다");
+  assert.match(seg, /el\('webview', \{ class: 'pn-webframe' \}\)/, "★ 능력이 있어도 webview 로 안 그린다");
+  // src 는 프로퍼티 대입이 아니라 **속성**으로 — webview 는 부착 전 프로퍼티 대입이 안 먹는다
+  //  ⚠ `frame.src` 형태만 보면 `(frame as any).src = u` 를 놓친다 — **어떤 형태의 `.src` 대입도** 잡는다.
+  assert.ok(!/\.src\s*=[^=]/.test(seg), "★ .src 프로퍼티 대입 — webview 는 부착 전 대입이 안 먹는다");
+  assert.match(seg, /frame\.setAttribute\('src', /, "속성으로 안 넣는다");
+  // 데스크톱에선 "막혀서 빈 화면" 안내가 거짓말이 된다
+  assert.match(seg, /live \? null : el\('p', \{ class: 'pn-web-note/, "★ 서피스에서도 '막혔다' 안내를 띄운다 — 거짓 안내다");
+  // ★ #1819 가 들여온 reload() 는 iframe 전용이다 — webview 엔 contentWindow 가 없어 `?.` 가 조용히 빠지고
+  //  그대로 return 된다. 즉 '다시 불러오기'가 **아무 일도 안 한다**(무동작은 오동작보다 찾기 어렵다).
+  assert.match(seg, /if \(live\) \{ try \{ \(frame as any\)\.reload\(\); return; \}/, "★ reload 에 webview 분기가 없다");
+});
+
 console.log(`\n${pass} passed`);
