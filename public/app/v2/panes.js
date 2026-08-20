@@ -497,13 +497,15 @@ export function mountPanes(host, opts) {
         const on = act === 'sessions';
         void lookupSessNames(shown.slice(0, 12), String(pj().name || ''), () => { if (!dead)
             paintPane('main'); });
+        // [+ 새 세션]은 **줄 끝**이다(원준 2026-08-20). 브라우저 탭과 같은 자리 — 열려 있는 것들이 먼저 읽히고,
+        //  '하나 더 열기'는 그 뒤에 온다. 종전엔 맨 앞이라 세션 목록보다 '만들기'가 먼저 읽혔다.
         return [
+            ...(out ? [sessTab(out, on, part)] : []),
+            ...shown.map((s) => sessTab(s, on && s.id === cur, part)),
             el('span', { class: 'pn-tabwrap' + (on && cur == null ? ' on' : '') }, el('button', {
                 class: 'pn-tab pn-stab new' + (on && cur == null ? ' on' : ''), type: 'button',
                 title: '새 세션을 엽니다', onclick: () => { activate('main', 'sessions'); part.selectSession?.(null); paintPane('main'); },
             }, pnIcon('plus', 'pn-i sm'), el('span', { text: '새 세션' }))),
-            ...(out ? [sessTab(out, on, part)] : []),
-            ...shown.map((s) => sessTab(s, on && s.id === cur, part)),
         ];
     }
     function paintPane(zone) {
@@ -530,8 +532,12 @@ export function mountPanes(host, opts) {
             ensurePart(pane, 'sessions');
             return sessTabs(pane, act);
         };
+        // '＋'가 한 줄에 둘이면 무엇이 열리는지 읽히지 않는다(원준 2026-08-20). 이 칸이 **세션 전용**이면
+        //  일반 [+](칸에 내용 더하기)를 빼고 [+ 새 세션] 하나만 둔다 — 다른 것을 넣고 싶으면 곁칸·아래 칸의 [+]로 넣거나
+        //  그 탭을 이 칸으로 끌어오면 된다(탭 끌어 옮기기는 그대로 산다).
+        const sessionOnly = list.length === 1 && list[0] === 'sessions';
         // ⚠ replaceChildren 은 el() 과 달리 null 을 걸러 주지 않는다 — 넣으면 'null' 이 글자로 찍힌다.
-        pane.tabs.replaceChildren(...[...list.flatMap(tabsOf), addBtn(zone), hideBtn].filter(Boolean));
+        pane.tabs.replaceChildren(...[...list.flatMap(tabsOf), sessionOnly ? null : addBtn(zone), hideBtn].filter(Boolean));
         // 켜진 부품만 보이게(나머지는 살려 둔 채 숨긴다 — 탭을 오가도 대화·스크롤이 그대로다).
         if (act)
             ensurePart(pane, act);
