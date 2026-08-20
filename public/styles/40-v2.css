@@ -310,7 +310,10 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
    탭 문법으로 바꾼다 — 줄은 한 톤 낮은 띠(#FAFBFC), 켜진 탭만 **흰 종이로 올라오고 위쪽에 파란 밑줄**이 그어진다.
    테두리·그림자를 걷어 낸 자리를 '면의 높낮이'가 대신하므로 탭이 몇 개든 줄이 조용하다.
    아이콘(집·말풍선·폴더)은 그대로 두되 **아이콘 색이 곧 상태**다(.st-busy/wait/done). */
-.v2-tabs { display: flex; align-items: stretch; gap: 1px; height: 37px; padding: 0; border-bottom: 1px solid var(--line); background: #FAFBFC; flex: none; overflow-x: auto; scrollbar-width: none; }
+.v2-tabs { display: flex; align-items: stretch; gap: 0; height: 37px; padding: 0; border-bottom: 1px solid var(--line); background: #FAFBFC; flex: none; overflow: hidden; }
+/* 굴러가는 건 안쪽 줄뿐 — [모든 탭] 끝막이는 그 바깥에 있어 지나가는 탭을 덮지 않는다. */
+.v2-tabs-scroll { flex: 1; min-width: 0; display: flex; align-items: stretch; gap: 1px; overflow-x: auto; scrollbar-width: none; }
+.v2-tabs-scroll::-webkit-scrollbar { display: none; }
 .v2-tabs::-webkit-scrollbar { display: none; }
 /* 탭이 많아도 글자가 뭉개지지 않게 — **바닥 폭**을 두고 그 아래로는 줄이 굴러간다(원준 2026-08-20).
    활성 탭만 더 넓다: 지금 보고 있는 것 하나는 언제나 읽혀야 한다. */
@@ -807,7 +810,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
   .v2-tl-btn:hover { color: var(--ink, #15233B); border-color: var(--line-strong, #C9D4E4); }
   .v2-tl-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
   #v2-root:not(.no-aside) .v2-tl-btn, #v2-root.no-tl .v2-tl-btn { display: none; }
-  #v2-root.no-aside:not(.no-tl) .v2-tabs { padding-right: 112px; }   /* 탭이 많아도 서랍 버튼 밑으로 안 숨게 */
+  #v2-root.no-aside:not(.no-tl) .v2-tabs { padding-right: 112px; }   /* 탭도 [모든 탭] 끝막이도 서랍 버튼 밑으로 안 숨게 */
   #v2-root.d-aside .v2-tl-btn { color: var(--ink, #15233B); background: var(--canvas, #F4F7FC); }
   #v2-root.d-aside .v2-aside { display: flex; position: fixed; top: 44px; right: 10px; bottom: 10px; z-index: 45;
     width: clamp(300px, var(--v2-aside-w, 316px), 420px); border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
@@ -896,7 +899,9 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
   .v2-mbar-ic { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
   .v2-mbar-slot { flex: 1; min-width: 0; align-self: stretch; display: flex; align-items: center; }
   /* 탭 줄이 바 가운데에 산다 — 제 테두리·바탕은 벗고 가로로만 굴린다. 탭은 조금 크게(손가락). 닫기 × 는 활성 탭에만(호버가 없다). */
-  .v2-mbar .v2-tabs { flex: 1; min-width: 0; height: 100%; padding: 0 2px; border: 0; background: none; gap: 2px; }
+  .v2-mbar .v2-tabs { flex: 1; min-width: 0; height: 100%; padding: 0 2px; border: 0; background: none; }
+  .v2-mbar .v2-tabs-scroll { gap: 2px; }
+  .v2-mbar .v2-tab-menu { background: none; border-left: 0; }
   .v2-mbar .v2-tab { max-width: 172px; height: 100%; min-height: 34px; padding: 0 8px 0 11px; font-size: 13px; }
   .v2-mbar .v2-tab .x { width: 22px; height: 22px; }
   .v2-mbar .v2-tab-xic { width: 12px; height: 12px; }
@@ -1032,7 +1037,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
 .v2-tab-in:focus { outline: none; box-shadow: 0 0 0 3px rgba(45, 107, 240, .12); }
 
 /* [모든 탭] — 줄 오른쪽 끝에 붙어 있는 목록 단추(줄이 굴러가도 늘 보이게 sticky). */
-.v2-tab-menu { position: sticky; right: 0; z-index: 3; display: inline-flex; align-items: center; gap: 3px; height: 36px; padding: 0 9px; border: 0; border-left: 1px solid var(--line); background: #FAFBFC; font: inherit; font-size: 11.5px; color: var(--muted-head, #7A88A3); cursor: pointer; flex: none; }
+.v2-tab-menu { display: inline-flex; align-items: center; gap: 3px; height: 36px; padding: 0 9px; border: 0; border-left: 1px solid var(--line); background: #FAFBFC; font: inherit; font-size: 11.5px; color: var(--muted-head, #7A88A3); cursor: pointer; flex: none; }
 .v2-tab-menu:hover { color: var(--blue); }
 .v2-tab-menu .n { font-variant-numeric: tabular-nums; font-weight: 600; }
 .v2-tabpop { width: 320px; max-width: 86vw; padding: 8px; }
