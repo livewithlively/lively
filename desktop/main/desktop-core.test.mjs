@@ -1485,4 +1485,28 @@ t("V5 업데이트 상태 문구 — reason 마다 다르고, '구조적 불가'
   });
 }
 
+// ── N. 설치 후 노드 자동 시작 (#1541 · web-shell.nextAfterSetup) — 설치의 끝은 '노드가 돈다'까지 ─────────
+{
+  const { nextAfterSetup } = await import("./web-shell.mjs");
+  t("N1 판정 — 노드가 돌고 있으면 null(재시작 금지), 아니면·모르면 node-start(daemon 은 멱등)", () => {
+    assert.equal(nextAfterSetup({ nodeRunning: true }), null, "멀쩡한 노드를 재시작하려 한다");
+    assert.equal(nextAfterSetup({ nodeRunning: false }), "node-start");
+    assert.equal(nextAfterSetup({ nodeRunning: null }), "node-start", "모름(null)은 시작 쪽 — 안 돌면 시작이 맞고 돌면 멱등");
+    assert.equal(nextAfterSetup({}), "node-start");
+    assert.equal(nextAfterSetup(null), "node-start");
+  });
+  t("N2 배선 — onboard 가 setup **성공 후에만** node-start 를 잇고, 실패면 setup 결과를 그대로 돌려준다", () => {
+    const main = readFileSync(fileURLToPath(new URL("./main.mjs", import.meta.url)), "utf8");
+    const fn = main.slice(main.indexOf("async function onboard("), main.indexOf("function askUser("));
+    const setupAt = fn.indexOf('await start("setup"');
+    assert.ok(setupAt >= 0, "onboard 가 setup 을 부르지 않는다");
+    const rest = fn.slice(setupAt);
+    assert.ok(/if\s*\(!r\.ok\)\s*return r;/.test(rest), "setup 실패에서 멈추지 않는다 — 실패한 설치 위에 노드를 올리면 안 된다");
+    const chainAt = rest.indexOf("nextAfterSetup");
+    assert.ok(chainAt >= 0, "노드 자동 시작 판정(nextAfterSetup)이 배선되지 않았다");
+    assert.ok(rest.slice(chainAt).includes('start("node-start"'), "판정이 참일 때 node-start 를 잇지 않는다");
+    assert.ok(rest.indexOf("!r.ok") < chainAt, "실패 가드보다 먼저 노드를 시작하려 한다");
+  });
+}
+
 console.log(`\n${pass} passed`);
