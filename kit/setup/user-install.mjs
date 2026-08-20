@@ -103,7 +103,14 @@ function userLevelHooksBlock() {
       //  호출마다 훅이 스폰된다(실측 46ms/회 — playwright 200콜이면 ~9s). 그래서 확대는 보류하고, 넓힐 땐 matcher 를
       //  pull_tools 에서 파생해 '관리자가 적은 서버만' 뜨게 하는 게 맞다(후속 태스크 — 매처 회수 설계 동반 필요).
       { matcher: "mcp__lively__.*", hooks: [{ type: "command", command: hookCmd("work-flag.mjs") }] },
-      { matcher: "Edit|Write|MultiEdit|NotebookEdit", hooks: [{ type: "command", command: hookCmd("work-flag.mjs") }] },
+      // ★ 셸(Bash)을 함께 본다(원준 2026-08-20 신고: "돌아가고 있는데 파란불이 안 들어온다").
+      //  왜 필요했나 — 실측: 세션이 16분 동안 Bash·남의 MCP(playwright)만 쓰는 구간에서 이 훅이 **한 번도 안 돌아**
+      //  마지막 busy 보고가 만료(PHASE_TTL_SEC 10분)되고 세션이 '대기 중'(회색)으로 떨어졌다. 실제로는 쉬지 않고 일하는 중이었다.
+      //  예비 수단(pane 제목 스피너 훔쳐보기)도 지금 죽어 있다 — 요즘 클로드코드는 **일하든 말든** 제목이 `✳ …` 라
+      //  isSpinning(점자 스피너 판정)에 안 걸린다(실측: 도는 세션·쉬는 세션 14개 전부 ✳). 그러니 훅이 유일한 진실이다.
+      //  비용: 툴 호출마다 훅 스폰 46ms. Bash 는 MCP 처럼 한 턴에 수백 번 불리지 않아 감당할 만하고, 네트워크 왕복은
+      //  work-flag 자체의 60초 스로틀이 막는다(같은 상태 반복은 안 보낸다).
+      { matcher: "Edit|Write|MultiEdit|NotebookEdit|Bash", hooks: [{ type: "command", command: hookCmd("work-flag.mjs") }] },
     ],
     // #1221 세션 실행 단계 보고 — 턴 시작(UserPromptSubmit)·확인 필요(Notification)·턴 종료(Stop). 이 셋이 붙어야
     //  게이트웨이가 화면 스크래핑(스피너 유니코드·capture-pane 패턴)을 안 하고도 '작업 중/확인 필요/대기 중'을 안다.
@@ -561,7 +568,7 @@ function codexManagedBlock(mcpUrl) {
     ...cdxHook("SessionStart", wf, 5, "startup|resume|clear"),
     ...cdxHook("UserPromptSubmit", wf, 5),
     ...cdxHook("PostToolUse", wf, 5, "mcp__lively__.*"),
-    ...cdxHook("PostToolUse", wf, 5, "Edit|Write|MultiEdit|NotebookEdit|apply_patch"),
+    ...cdxHook("PostToolUse", wf, 5, "Edit|Write|MultiEdit|NotebookEdit|apply_patch|Bash"),   // 셸도 — 위 claude 쪽 주석과 같은 이유
     ...cdxHook("PermissionRequest", wf, 5),
     ...cdxHook("Stop", codexHookCmd("stop-writeback-gate.mjs"), 10),
     ...cdxHook("Stop", wf, 5),

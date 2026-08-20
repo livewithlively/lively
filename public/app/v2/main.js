@@ -131,8 +131,11 @@ async function mountProjectShell(tab, projectId, sessionId, seq) {
             void loadData().then(() => { drawSide(); tabsApi?.paint(); }); // 곧바로 진짜 목록으로 대체(이 낙관 행은 임시다)
         },
         // 세션 화면 자체 — 우패널이 없는 셸이라 발자취·파일은 넘기지 않는다(맥락은 곁칸이 쥔다).
-        mountSession: (host, sid) => {
+        //  발자취(trail)는 넘긴다: 곁칸 [타임라인]이 **그 세션의** 발자취를 그리는데 그 재료가 여기서 읽히는 대화다.
+        //  그릇은 셸(panes.ts)이 세션마다 쥐고 여기로 건네준다.
+        mountSession: (host, sid, o) => {
             const h = renderSession(host, data, sid, {
+                trail: (o && o.trail) || null,
                 onPickProject: (anchor) => openProjectPicker(anchor, sid, tab),
                 onRename: (label) => renameSession(sid, label, tab),
                 onArchive: () => void archiveSession(sid),
