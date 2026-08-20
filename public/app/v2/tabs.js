@@ -33,7 +33,13 @@ export function createTabs(centerHost, asideHost, hooks) {
     const tabs = [];
     let activeTab = null;
     let seq = 0;
-    const strip = el('div', { class: 'v2-tabs', role: 'tablist', 'aria-label': '열린 화면' });
+    // 줄은 두 겹이다(원준 2026-08-20 "[모든 탭] 단추가 다른 탭을 가린다"):
+    //  · strip(.v2-tabs) — 자리만 잡는 바깥 틀. 모바일 상단 바가 통째로 옮겨 가는 것도 이 요소다.
+    //  · scroll(.v2-tabs-scroll) — 탭이 눕고 **여기만 굴러간다**.
+    //  · [모든 탭] 은 그 바깥에 붙는 **끝막이** — 종전엔 굴러가는 줄 안에 sticky 로 얹혀 있어 지나가는 탭을 덮었고,
+    //    no-aside 모드의 오른쪽 여백(112px) 때문에 줄 끝이 아니라 어중간한 자리에 떠 있었다(실측: 1336px, 줄 끝 1500px).
+    const strip = el('div', { class: 'v2-tabs' });
+    const scroll = el('div', { class: 'v2-tabs-scroll', role: 'tablist', 'aria-label': '열린 화면' });
     function mkTab(route, title) {
         const t = {
             id: 'tab' + (++seq),
@@ -135,7 +141,7 @@ export function createTabs(centerHost, asideHost, hooks) {
         if (e.target?.closest('button'))
             return;
         const movable = tabs.filter((x) => !x.fixed);
-        const els = movable.map((x) => strip.querySelector('[data-tab="' + x.id + '"]'));
+        const els = movable.map((x) => scroll.querySelector('[data-tab="' + x.id + '"]'));
         if (els.some((n) => !n))
             return;
         const from = movable.indexOf(t);
@@ -327,10 +333,11 @@ export function createTabs(centerHost, asideHost, hooks) {
             'aria-label': `열린 탭 ${tabs.length}개 — 목록`,
             onclick: (e) => openTabMenu(e.currentTarget),
         }, el('span', { class: 'n', text: String(tabs.length) }), sv('svg', { viewBox: '0 0 24 24', class: 'v2-tab-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M6 9l6 6 6-6' })));
-        strip.replaceChildren(...kids, menuBtn);
+        scroll.replaceChildren(...kids);
+        strip.replaceChildren(scroll, menuBtn);
         // 탭이 줄 폭을 넘치면(모바일 상단 바·좁은 창) 활성 탭이 보이게 가로로만 굴린다 — 세로는 건드리지 않는다(nearest = 이미 보이면 0).
-        const on = strip.querySelector('.v2-tab.on');
-        if (on && strip.scrollWidth > strip.clientWidth)
+        const on = scroll.querySelector('.v2-tab.on');
+        if (on && scroll.scrollWidth > scroll.clientWidth)
             on.scrollIntoView({ inline: 'nearest', block: 'nearest' });
     }
     /** [모든 탭] — 전문 이름으로 찾아가는 목록. 줄에서 잘린 이름을 여기서는 통째로 본다. */
@@ -359,13 +366,13 @@ export function createTabs(centerHost, asideHost, hooks) {
             window.setTimeout(() => find.focus(), 0);
     }
     // 가로 줄에서 세로 휠은 쓸모가 없다 — 트랙패드·마우스 어느 쪽으로도 줄이 굴러가게 바꿔 준다.
-    strip.addEventListener('wheel', (e) => {
+    scroll.addEventListener('wheel', (e) => {
         if (e.deltaY === 0 || Math.abs(e.deltaX) > Math.abs(e.deltaY))
             return;
-        if (strip.scrollWidth <= strip.clientWidth)
+        if (scroll.scrollWidth <= scroll.clientWidth)
             return;
         e.preventDefault();
-        strip.scrollLeft += e.deltaY;
+        scroll.scrollLeft += e.deltaY;
     }, { passive: false });
     // 저장된 탭 복원 — 라우트·제목만(내용은 처음 누를 때 그린다). 못 읽으면 빈 채로 시작.
     let restoredActive = 0;
