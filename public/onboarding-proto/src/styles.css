@@ -176,8 +176,11 @@ input.in:focus-visible, textarea.in:focus-visible { outline:2px solid var(--blue
    둘이 따로 논다. 세로 위치는 이 격자가 통째로 잡는다(safe center — 내용이 길어지면 위에서 시작해 안 잘린다). */
 .room-body { flex:1; min-height:0; overflow-y:auto; display:grid;
   grid-template-columns:minmax(0,1fr) minmax(272px,316px); gap:28px;
-  width:100%; max-width:var(--room-w); margin:0 auto; padding:0 24px 20px;
-  align-content:safe start; align-items:start; padding-top:clamp(16px,6vh,54px); }
+  width:100%; max-width:var(--room-w); margin:0 auto;
+  padding:clamp(16px,4vh,40px) 24px clamp(44px,10vh,92px);
+  align-content:safe center; align-items:start; }
+  /* 세로는 **광학 중앙** — 아래 여백을 위보다 크게 잡아 살짝 위에 앉힌다(정확한 정중앙은 처져 보인다).
+     safe center 라 내용이 길어지면 위에서 시작해 잘리지 않는다. */
 
 /* 대화(작업 일지) — #/liv 페이지가 쓴다 */
 .journal { min-height:0; display:flex; flex-direction:column; border:1px solid var(--line); border-radius:14px; overflow:hidden; background:var(--bg); }
