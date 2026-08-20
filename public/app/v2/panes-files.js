@@ -254,7 +254,7 @@ export function filesPart(ctx) {
                 return false;
             return !NOISE_RE.test('/' + nm + '/');
         })
-            .map((it) => ({ name: String(it.name), path: rel(String(it.name)), type: it.type === 'dir' ? 'dir' : 'file', size: Number(it.size || 0), mtime: Number(it.mtime || 0) }));
+            .map((it) => ({ name: String(it.name), path: rel(String(it.name)), type: it.type === 'dir' ? 'dir' : 'file', size: Number(it.size || 0), mtime: Number(it.mtime || 0), empty: !!it.empty }));
     }
     function sortItems(list) {
         const dir = sortAsc ? 1 : -1;
@@ -629,8 +629,9 @@ export function filesPart(ctx) {
         }
     }
     function thumb(f, small) {
+        // 목록 보기(20px)에선 서류를 그리지 않는다 — 그 크기에선 뭉개져 얼룩으로만 보인다.
         if (f.type === 'dir')
-            return el('span', { class: 'pn-fic dir' + (small ? ' sm' : '') }, folderIcon('pn-folder' + (small ? ' sm' : '')));
+            return el('span', { class: 'pn-fic dir' + (small ? ' sm' : '') }, folderIcon('pn-folder' + (small ? ' sm' : ''), { empty: f.empty, plain: small }));
         const k = kindOf(f.path);
         const box = el('span', { class: 'pn-fic ' + k.kind + (small ? ' sm' : ''), 'data-pv': f.path, 'data-pvk': k.kind, 'data-pvs': String(f.size || 0) }, pnIcon(k.kind === 'page' ? 'note' : k.kind === 'video' ? 'img' : 'doc', 'pn-i'));
         if (k.kind !== 'file' && !small) {
