@@ -3,7 +3,7 @@
 //   → 앱 UI 는 **오리진 격리(불투명)**: 부모(라이블리 셸)의 토큰·localStorage 에 못 닿는다. 주입한 CSP 로 네트워크도 막는다
 //     (default-src 'none' … connect-src 'none') — 앱 UI 는 인라인 스크립트/스타일 + postMessage 만 쓸 수 있다.
 //  부작용 있는 tools/call 은 postMessage 로 **호스트가 중개**한다. v1(PR5a)은 ui/initialize 핸드셰이크만 응답하고
-//   tools/call 은 "아직 미지원"으로 답한다 — 앱 grant 로 제약하는 브리지는 principal 결정 후 PR5b.
+//   tools/call 은 호스트가 /api/ui/apps/:id/tool-call 로 넘겨 서버가 앱 grant 로 제약해 실행한다(PR5b).
 import { api, el, toast } from '../core.js';
 
 // 앱 UI iframe 이 쓸 수 있는 것: 인라인 스크립트·스타일, data: 이미지/폰트, postMessage. **네트워크 없음**(connect/img/media/frame 차단).
@@ -45,16 +45,22 @@ function mount(appId: string, data: AppUiData): void {
   }) as HTMLIFrameElement;
 
   // 브리지 — 이 iframe(불투명 오리진)에서 온 메시지만 처리. 불투명 오리진이라 응답 target 은 '*'(이 iframe 만 받는다).
+  //  tools/call 은 호스트가 **멤버 토큰**으로 /api/ui/apps/:id/tool-call 에 넘기고(서버가 앱 principal 로 재판정 실행),
+  //  결과를 iframe 으로 되돌린다. 앱 UI 는 네트워크가 막혀 있으므로(CSP) 이 postMessage 브리지가 유일한 능력 통로다.
   msgHandler = (ev: MessageEvent): void => {
     if (ev.source !== frame.contentWindow) return;
-    const msg = ev.data as { method?: string; id?: unknown } | null;
+    const msg = ev.data as { method?: string; id?: unknown; params?: { name?: string; arguments?: unknown } } | null;
     if (!msg || typeof msg !== 'object' || typeof msg.method !== 'string') return;
     const reply = (payload: unknown): void => frame.contentWindow?.postMessage(payload, '*');
     if (msg.method === 'ui/initialize') {
-      // 앱 UI 에게 호스트 컨텍스트를 알린다. v1: tools 미지원(핸드셰이크만).
-      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, page: data.page_key ?? null, capabilities: { tools: false } } });
+      reply({ jsonrpc: '2.0', id: msg.id ?? null, result: { host: 'lively', app: appId, page: data.page_key ?? null, capabilities: { tools: true } } });
     } else if (msg.method === 'tools/call') {
-      reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32601, message: 'tools/call 은 아직 지원되지 않습니다(PR5b 브리지 예정)' } });
+      const name = String(msg.params?.name ?? '');
+      const args = (msg.params?.arguments ?? {}) as Record<string, unknown>;
+      if (!name) { reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32602, message: 'params.name 이 필요합니다' } }); return; }
+      void api('/api/ui/apps/' + encodeURIComponent(appId) + '/tool-call', { method: 'POST', body: JSON.stringify({ name, arguments: args }) })
+        .then((out: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, result: out?.result ?? out }))
+        .catch((e: any) => reply({ jsonrpc: '2.0', id: msg.id ?? null, error: { code: e?.status === 403 ? -32001 : -32000, message: (e && e.message ? e.message : String(e)) } }));
     }
     // 그 밖(ui/message 등)은 v1 에선 무시.
   };

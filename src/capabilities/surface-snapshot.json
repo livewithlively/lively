@@ -3916,5 +3916,15 @@
    "GET /api/ui/apps/:id/ui/:page"
   ],
   "input_hash": "f48e51524b8110f6"
+ },
+ {
+  "name": "org_app_tool_call",
+  "scope": null,
+  "mcp": false,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/apps/:id/tool-call"
+  ],
+  "input_hash": "05e07fe981720e97"
  }
 ]
