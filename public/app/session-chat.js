@@ -579,6 +579,33 @@ export function mountSessionChat(host, first, opts) {
         const dot = ln.search(/[.?!。]\s/);
         return (dot > 8 ? ln.slice(0, dot + 1) : ln).trim();
     };
+    const cut = (t, n) => (t.length > n ? t.slice(0, n - 1).replace(/[\s·,]+$/, '') + '…' : t);
+    // 마크다운 부호는 화면 말이 아니다 — 답 한 줄은 '## 결론' 이 아니라 '결론' 이어야 한다.
+    const plain = (t) => t.replace(/^\s*(?:[#>]+|[*\-•]\s)\s*/, '').replace(/\*\*|`|~~/g, '').trim();
+    // ── 붙여넣은 덩어리 가리기(#1819 원준 2026-08-21) ────────────────────────────
+    //  "질문에 내가 복붙한 헤비한 텍스트가 있으면 그건 너무 길게 보이지 않게 적당히 가려서."
+    //  로그·문서를 통째로 붙여넣은 지시가 제목이 되면 그 한 장이 타임라인을 다 먹는다. 그래서 **사람이 친 한 줄**만
+    //  제목으로 세우고, 나머지는 '붙여넣은 글 N줄' 칩으로 접는다(전문은 항목을 눌러서).
+    //  어느 줄이 사람 말인가 — 첫 줄이 짧으면 그것(지시가 앞), 첫 줄부터 길면 짧은 끝 줄(로그를 먼저 붙여넣은 꼴).
+    const PASTE_LINES = 8; // 이 줄 수를 넘으면 '붙여넣었다'로 본다
+    const PASTE_CHARS = 400;
+    const HUMAN_LINE = 120; // 사람이 한 줄로 치는 말의 현실적 최대
+    function sayParts(raw) {
+        const text = String(raw || '');
+        const lines = text.split('\n').map((x) => x.trim()).filter((x) => x.length > 0);
+        const heavy = lines.length > PASTE_LINES || text.length > PASTE_CHARS;
+        const head = lines[0] || '';
+        const tail = lines[lines.length - 1] || '';
+        const pick = !heavy ? text : (head.length <= HUMAN_LINE ? head : tail.length <= HUMAN_LINE ? tail : head);
+        const label = cut(firstLine(pick), 110);
+        const rest = lines.length - 1;
+        return {
+            label: label || '(빈 지시)',
+            pasteLines: heavy && rest > 0 ? rest : undefined,
+            // 전문은 눌러서 본다. 무한정 들고 있지 않는다 — 여긴 읽는 자리지 원문 보관소가 아니다(원문은 가운데 대화창).
+            full: text.trim().length > label.length ? text.slice(0, 4000) : undefined,
+        };
+    }
     function userText(o) {
         const c = o?.message?.content;
         if (typeof c === 'string')
@@ -648,7 +675,10 @@ export function mountSessionChat(host, first, opts) {
             cur = newRec(text, o.timestamp);
             running = true;
             // 타임라인(우패널)의 장(章) 머리 — 이 지시 아래로 그동안의 일이 묶인다(#1719 C안).
-            trail?.add({ id: 'turn:' + String(o.uuid || o.timestamp || text.slice(0, 40)), kind: 'say', verb: '지시', label: firstLine(text), key: 'turn|' + String(o.uuid || o.timestamp), ts: o.timestamp }, 'end');
+            const q = sayParts(text);
+            trail?.add({ id: 'turn:' + String(o.uuid || o.timestamp || text.slice(0, 40)), kind: 'say', verb: '지시',
+                label: q.label, full: q.full, pasteLines: q.pasteLines,
+                key: 'turn|' + String(o.uuid || o.timestamp), ts: o.timestamp }, 'end');
             return;
         }
         if (o.type === 'assistant') {
@@ -661,7 +691,7 @@ export function mountSessionChat(host, first, opts) {
             cur.evs.push(o);
             view.event(cur.t, o);
             running = true;
-            trailUses(o, 'end');
+            trailMsg(o, 'end');
             return;
         }
         if (o.type === 'system') {
@@ -689,19 +719,36 @@ export function mountSessionChat(host, first, opts) {
     const trail = opts.trail || null;
     const trailOut = (b) => typeof b.content === 'string' ? b.content
         : Array.isArray(b.content) ? b.content.map((c) => (c && c.type === 'text' ? String(c.text ?? '') : '')).join('\n') : '';
-    function trailUses(o, at) {
-        if (!trail)
+    /** AI 한 줄(assistant) → 타임라인. 도구 사용은 그 장에 **남은 것**으로, 텍스트는 그 장의 **답**으로 간다(#1819).
+     *  ⚠ at='start'(되그리기)는 앞으로 밀어 넣으므로 블록을 거꾸로 넣어야 원래 순서가 산다. */
+    function trailMsg(o, at) {
+        const w = trail;
+        if (!w)
             return;
         const c = o?.message?.content;
-        if (!Array.isArray(c))
-            return;
-        for (const b of c) {
-            if (!b || b.type !== 'tool_use' || !b.id)
-                continue;
-            const cls = classifyToolUse(String(b.name ?? ''), b.input);
-            if (cls)
-                trail.add({ ...cls, id: String(b.id), ts: o.timestamp }, at);
-        }
+        const blocks = Array.isArray(c) ? c : (typeof c === 'string' && c.trim() ? [{ type: 'text', text: c }] : []);
+        const emit = (b, i) => {
+            if (b && b.type === 'tool_use' && b.id) {
+                const cls = classifyToolUse(String(b.name ?? ''), b.input);
+                if (cls)
+                    w.add({ ...cls, id: String(b.id), ts: o.timestamp }, at);
+                return;
+            }
+            if (!b || b.type !== 'text')
+                return;
+            const t = plain(String(b.text ?? '')).trim();
+            if (!t)
+                return;
+            // 한 장에 답은 여러 번 온다("확인하겠습니다" → 도구 → … → 최종 답). 렌더러가 **마지막 것**만 세우므로
+            //  열쇠를 고유하게 둔다 — 합치면 첫 마디가 굳어 최종 답이 영영 안 보인다.
+            const id = 'ans:' + String(o.uuid || o.timestamp || '') + '#' + i;
+            w.add({ id, kind: 'reply', verb: '답함', label: cut(firstLine(t), 96), key: id, ts: o.timestamp }, at);
+        };
+        if (at === 'start')
+            for (let i = blocks.length - 1; i >= 0; i--)
+                emit(blocks[i], i);
+        else
+            blocks.forEach(emit);
     }
     function trailResults(results) {
         if (!trail)
@@ -1192,18 +1239,23 @@ export function mountSessionChat(host, first, opts) {
                 b.lines.push(o);
             }
         }
-        // 발자취 — 이 창의 도구 사용을 시간순으로 모았다가 **위에**(오래된 쪽) 끼운다(가장 최신 것부터 거꾸로 add 해야 순서가 맞다).
-        const olderUses = [];
+        // 발자취 — 이 창의 **지시·답·도구 사용을 한 줄로** 모았다가 위(오래된 쪽)에 거꾸로 끼운다.
+        //  ⚠ #1819 — 종전엔 도구 사용을 전부 넣은 뒤 지시를 그 앞에 몰아넣었다. 결과 목록에선 안 보이던 고장이지만
+        //   질문·대답 장(章)에서는 치명적이다: 되그린 창의 지시가 죄다 맨 위로 몰려 묶음이 통째로 깨진다.
+        const olderOps = [];
         const olderResults = [];
-        const olderTurns = []; // 되그린 창의 지시 = 타임라인 장 머리
         for (const bd of bundles) {
             if (bd.text && bd.text.trim()) {
                 const head = bd.lines.find((x) => x && x.type === 'user') || {};
-                olderTurns.push({ uuid: String(head.uuid || head.timestamp || bd.text.slice(0, 40)), ts: String(head.timestamp || ''), text: bd.text });
+                const uuid = String(head.uuid || head.timestamp || bd.text.slice(0, 40));
+                const ts = String(head.timestamp || '');
+                const q = sayParts(String(bd.text));
+                olderOps.push(() => trail?.add({ id: 'turn:' + uuid, kind: 'say', verb: '지시',
+                    label: q.label, full: q.full, pasteLines: q.pasteLines, key: 'turn|' + uuid, ts }, 'start'));
             }
             for (const o of bd.lines) {
                 if (o.type === 'assistant')
-                    olderUses.push(o);
+                    olderOps.push(() => trailMsg(o, 'start'));
                 else if (o.type === 'user') {
                     const { results } = userText(o);
                     if (results.length)
@@ -1260,13 +1312,9 @@ export function mountSessionChat(host, first, opts) {
             loadedFrom = chunk.from; // 서버가 맞춘 경계(요청한 from 이 줄 중간이면 다음 줄부터)
             olderBar();
         });
-        for (let i = olderUses.length - 1; i >= 0; i--)
-            trailUses(olderUses[i], 'start');
-        for (let i = olderTurns.length - 1; i >= 0; i--) {
-            const o = olderTurns[i];
-            trail?.add({ id: 'turn:' + String(o.uuid || o.ts), kind: 'say', verb: '지시', label: firstLine(o.text), key: 'turn|' + String(o.uuid || o.ts), ts: o.ts }, 'start');
-        }
-        trailResults(olderResults);
+        for (let i = olderOps.length - 1; i >= 0; i--)
+            olderOps[i]();
+        trailResults(olderResults); // 오류 표시는 **항목이 다 들어간 뒤** 얹는다(id 로 찾으므로 순서가 뒤집히면 못 찾는다)
         titleFromFirstAsk();
     }
     // 폴링 — 도는 중이면 촘촘히, 아니면 느슨히. 탭이 숨어 있으면 건너뛴다.
