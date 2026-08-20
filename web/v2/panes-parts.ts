@@ -18,9 +18,11 @@ import { loadProjectTimeline } from '../timeline-sources.js';
 import { createRunPicker } from './run-picker.js';
 import { spawnSession } from './quick-session.js';
 import { sessText } from './side.js';
+import { listSessionApps, openAppSession, type SessionApp } from './app-session.js';
+import { mountAppUiFrame, type AppUiFrame } from './app-ui.js';
 import { type Sess, type V2Data } from './views.js';
 
-export type PartType = 'sessions' | 'files' | 'knowledge' | 'tasks' | 'timeline' | 'overview' | 'liv' | 'archive' | 'web' | 'editor';
+export type PartType = 'sessions' | 'files' | 'knowledge' | 'tasks' | 'timeline' | 'overview' | 'liv' | 'archive' | 'web' | 'editor' | 'apps';
 
 export interface PartCtx {
   id: number;
@@ -65,6 +67,7 @@ export const PART_DEFS: PartDef[] = [
   { type: 'archive', name: '보관한 세션', icon: 'box', hint: '닫아 둔 AI 세션입니다. 대화 그대로 다시 살릴 수 있어요.' },
   { type: 'web', name: '웹', icon: 'globe', hint: '주소를 넣으면 이 칸에서 그 페이지를 봅니다. 문서·레퍼런스를 옆에 띄워 두세요.' },
   { type: 'editor', name: '파일 편집', icon: 'pencil', hint: '자료의 파일을 이 칸에 띄워 놓고 고칩니다. 글 파일은 그 자리에서 저장돼요.' },
+  { type: 'apps', name: '앱', icon: 'grid', hint: '설치된 앱을 이 칸에서 엽니다 — 화면 있는 앱은 여기 바로, 세션 앱은 새 세션으로.' },
 ];
 
 export const partDef = (t: PartType): PartDef => PART_DEFS.find((d) => d.type === t) || PART_DEFS[0];
@@ -90,6 +93,7 @@ const ICON_PATHS: Record<string, string> = {
   box: '<path d="M3 7h18v4H3z"/><path d="M5 11v8h14v-8"/><path d="M10 15h4"/>',
   undo: '<path d="M4 9h11a5 5 0 0 1 0 10h-6"/><path d="M8 5L4 9l4 4"/>',
   globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/>',
+  grid: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
   pencil: '<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/><path d="M14 6l4 4"/>',
   save: '<path d="M5 4h11l3 3v13H5z"/><path d="M9 4v5h6V4"/><path d="M8 20v-6h8v6"/>',
   ext: '<path d="M14 4h6v6"/><path d="M20 4l-8 8"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
@@ -922,6 +926,55 @@ function editorPart(ctx: PartCtx): Part {
   };
 }
 
+// ══ 앱 — 설치된 앱을 이 칸에서 연다 (#1780 panes 정합) ═══════════════════════════
+//  화면 있는 앱(ui.pages)은 **이 칸 안에** 샌드박스 iframe 으로 연다(모달 아님 — panes 탭 문법). 세션 앱은 새 세션으로.
+//  브리지·격리는 app-ui.mountAppUiFrame 이 그대로 — 여러 칸에 앱을 열어도 프레임별 핸들러라 안전.
+function appsPart(ctx: PartCtx): Part {
+  const root = el('div', { class: 'pn-part pn-apps' });
+  let frame: AppUiFrame | null = null;
+  const drop = (): void => { if (frame) { frame.destroy(); frame = null; } };
+
+  const openInPane = async (a: SessionApp): Promise<void> => {
+    drop();
+    root.replaceChildren(el('p', { class: 'pn-fine', text: '여는 중…' }));
+    try {
+      const f = await mountAppUiFrame(a.id, { title: a.title });
+      if (ctx.dead()) { f.destroy(); return; }
+      frame = f;
+      root.replaceChildren(
+        el('div', { class: 'pn-apps-bar' },
+          el('button', { class: 'btn-text', type: 'button', text: '← 앱 목록', onclick: () => void list() }),
+          el('b', { class: 'pn-apps-cur', text: a.title })),
+        f.root);
+    } catch (e: any) { root.replaceChildren(el('p', { class: 'pn-fine', text: '앱을 열지 못했어요 — ' + (e?.message || e) })); }
+  };
+
+  const list = async (): Promise<void> => {
+    drop();
+    root.replaceChildren(el('p', { class: 'pn-fine', text: '불러오는 중…' }));
+    const apps = await listSessionApps();
+    if (ctx.dead()) return;
+    if (!apps.length) {
+      root.replaceChildren(el('div', { class: 'pn-empty' },
+        el('b', { text: '설치된 앱이 없어요.' }),
+        el('p', { class: 'pn-fine', text: '관리자가 앱을 설치하면 여기서 열 수 있어요.' })));
+      return;
+    }
+    root.replaceChildren(el('div', { class: 'pn-apps-grid' }, ...apps.map((a) => {
+      const hasUi = a.pages.length > 0;
+      return el('button', { class: 'pn-app', type: 'button',
+        title: hasUi ? '이 칸에서 앱 화면을 엽니다' : '이 앱 전용 AI 세션을 엽니다',
+        onclick: () => { if (hasUi) void openInPane(a); else void openAppSession(a.id, { title: a.title }); } },
+        el('span', { class: 'pn-app-ic' }, pnIcon(hasUi ? 'grid' : 'chat', 'pn-i')),
+        el('b', { text: a.title }),
+        el('span', { class: 'pn-fine', text: hasUi ? '앱 화면' : '앱 세션' }));
+    })));
+  };
+
+  void list();
+  return { root, destroy: drop };
+}
+
 export function makePart(type: PartType, ctx: PartCtx): Part {
   if (type === 'sessions') return sessionsPart(ctx);
   if (type === 'archive') return archivePart(ctx);
@@ -932,5 +985,6 @@ export function makePart(type: PartType, ctx: PartCtx): Part {
   if (type === 'tasks') return tasksPart(ctx);
   if (type === 'timeline') return timelinePart(ctx);
   if (type === 'overview') return overviewPart(ctx);
+  if (type === 'apps') return appsPart(ctx);
   return livPart(ctx);
 }

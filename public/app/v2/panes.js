@@ -29,7 +29,7 @@ import { PART_DEFS, makePart, partDef, pnIcon } from './panes-parts.js';
 import { openProjSettings } from './proj-settings.js';
 const LAYOUT_KEY = 'lively_panes_layout_v1';
 const DEF_LAYOUT = () => ({
-    main: ['sessions'], side: ['files', 'knowledge'], bottom: ['timeline'],
+    main: ['sessions'], side: ['files', 'knowledge', 'apps'], bottom: ['timeline'],
     act: { main: 'sessions', side: 'files', bottom: 'timeline' },
     sideOn: true, bottomOn: false,
 });

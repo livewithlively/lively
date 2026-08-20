@@ -1,5 +1,5 @@
 // web/v2/app-session.ts — 설치된 '세션 앱'(org_app)을 연다 (#1780 PR4b).
-//  런치패드(전역 side-rail 의 ⊞ 앱)·studio 도크 앱서랍(⊞ 런치패드)이 **공유**하는 단 하나의 진입점이다.
+//  전역 런치패드(side-rail 의 ⊞ 앱)·세션 화면 곁칸 [앱] 부품(panes-parts appsPart)이 **공유**하는 진입점이다.
 //  세션 앱 = 매니페스트로 스킬·persona·MCP·UI 를 묶은 앱. 열면 그 앱의 하네스 자산이 물질화된 tmux 세션이 뜨고
 //  (서버 createSession 이 appId 를 받아 grant 재검·앱 토큰 발급·세션폴더 앱홈/자산 물질화를 한다 — sessions.ts D3·D4),
 //  사용자는 그 세션과 대화한다. 일반 세션(quick-session)과 다른 점은 **appId 를 실어 보낸다**는 것 하나 —
@@ -34,8 +34,8 @@ let spawning = false;
 export function isSpawningApp() { return spawning; }
 /**
  * 앱 세션을 만든다. 성공하면 { id }, 사용자가 동의를 취소했거나 실패하면 null(이유는 toast).
- *  UI 중립 — **행선지는 호출자가 정한다**: 런치패드는 openAppSession 으로 #/s/<id> 로 가고, studio 는 이 id 로
- *  캔버스에 세션 카드를 올린다. opts.projectId 를 주면 만든 뒤 그 프로젝트에 붙인다(studio 캔버스에서 열 때).
+ *  UI 중립 — **행선지는 호출자가 정한다**: 런치패드는 openAppSession 으로 #/s/<id> 로 간다.
+ *  opts.projectId 를 주면 만든 뒤 그 프로젝트에 붙인다.
  */
 export async function spawnAppSession(appId, opts) {
     if (spawning)
