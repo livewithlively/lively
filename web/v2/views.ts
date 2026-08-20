@@ -14,6 +14,8 @@ export interface Proj {
   id: number; name: string; status?: string | null; status_category?: string | null; description?: string | null; list_id?: number | null; updated_at?: string | null;
   // 사이드바 '내 프로젝트만'(side.ts) — 만든 사람 + 팀원 id. 서버 mine=1 과 같은 술어(생성자이거나 팀원)를 프론트에서 그대로 판정한다.
   created_by?: string | null; member_ids?: string[];
+  // 사이드바 '방금 만든 것 잠깐 맨 위'(side.ts freshMs) — 서버 목록이 늘 싣는 값(PROJECT_COLS).
+  created_at?: string | null;
 }
 export interface Sess {
   id: string; label: string; projectId: number | null; node: string | null;
