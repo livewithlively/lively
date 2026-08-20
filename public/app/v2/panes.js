@@ -408,6 +408,7 @@ export function mountPanes(host, opts) {
         paintPane('main'); };
     window.addEventListener('pn:sessions-view', onViewChanged);
     return {
+        newSession,
         destroy() {
             dead = true;
             window.removeEventListener('pn:sessions-view', onViewChanged);

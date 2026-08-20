@@ -163,8 +163,12 @@ export function projectOrder(data: V2Data): Array<{ proj: Proj; done: boolean; m
 }
 
 // ── 그리기 ──
-export function drawSide(host: HTMLElement, data: V2Data, activeKey: () => string): void {
+/** 셸이 주는 배선 — 트리 안에서 셸의 일(탭·화면)을 해야 할 때만 쓴다(지금은 [＋ 새 세션] 하나). */
+export interface SideHooks { onNewSession?: (projectId: number) => void }
+let hooks: SideHooks = {};
+export function drawSide(host: HTMLElement, data: V2Data, activeKey: () => string, h?: SideHooks): void {
   init();
+  hooks = h || hooks;
   last = { host, data, activeKey };
   render();
 }
@@ -495,6 +499,7 @@ function projRow(r: Row, sess: Sess[], past: Sess[], activeKey: string, selected
     caret, glyph(isOpen ? 'folder-open' : 'folder', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }),
     r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null,
     sumEl(sess, past) || (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null),
+    p ? newSessBtn(p.id) : null,
     p ? pinBtn(pk) : null);
   const head = sess.slice(0, MAX_SESS);
   const pastHead = past.slice(0, MAX_SESS);
@@ -520,6 +525,18 @@ function pastHead2(pk: string, n: number, open: boolean): HTMLElement {
     } },
     el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '›' }),
     el('span', { class: 'n', text: '지난 세션' }), el('span', { class: 'v2-cnt', text: String(n) }));
+}
+
+// ＋ 새 세션 — 프로젝트 이름 줄에 손을 얹으면 나타난다(원준 2026-08-20).
+//  종전엔 새 세션을 열려면 **먼저 그 프로젝트로 들어가** 문패의 [＋ 세션]을 눌러야 했다. 목록에서 곧장 시작하는 길을
+//  하나 더 둔다 — 누르면 그 프로젝트 화면이 '새 세션 자리'로 열린다(들어가서 누르는 것과 같은 자리로 간다).
+//  자리는 늘 차지하고 보이기만 토글한다(핀과 같은 규칙 — 나타나며 행을 밀면 목록 전체가 흔들린다).
+function newSessBtn(projectId: number): HTMLElement {
+  return el('button', {
+    class: 'v2-newb', type: 'button', 'aria-label': '이 프로젝트에서 새 세션 열기',
+    title: '새 세션 — 이 프로젝트에 붙은 AI 세션을 엽니다',
+    onclick: (e: Event) => { e.preventDefault(); e.stopPropagation(); hooks.onNewSession?.(projectId); } },
+    sv('svg', { viewBox: '0 0 24 24', class: 'v2-newb-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' })));
 }
 
 // 고정 단추 — 자리는 늘 차지한다(눌러야 보이는 것이 나타나며 행을 밀면 목록 전체가 흔들린다).

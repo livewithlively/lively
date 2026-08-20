@@ -202,9 +202,10 @@ export function projectOrder(data) {
         .sort((a, b) => Number(a.done) - Number(b.done) || byWork(a, b))
         .map((r) => ({ proj: r.proj, done: r.done, mine: r.mine, lastWork: r.lastWork }));
 }
-// ── 그리기 ──
-export function drawSide(host, data, activeKey) {
+let hooks = {};
+export function drawSide(host, data, activeKey, h) {
     init();
+    hooks = h || hooks;
     last = { host, data, activeKey };
     render();
 }
@@ -559,7 +560,7 @@ function projRow(r, sess, past, activeKey, selectedPk) {
         ? [`#${p.id} · ${p.status_category === 'done' ? '완료' : p.status_category === 'unstarted' ? '시작 전' : '진행 중'}`, r.lastWork ? '마지막 작업 ' + when(r.lastWork) : '세션 없음', r.mine ? '내 프로젝트' : (p.created_by ? `${(people[p.created_by] && people[p.created_by].display_name) || p.created_by} 만듦` : '')]
         : ['프로젝트에 붙지 않은 세션 — 이 세션들의 작업대를 엽니다'];
     // 이름은 언제나 같은 잉크색이다 — 완료·조용함은 태그·시각이 말한다(연회색 본문이 목록 절반이면 전체가 바래 보인다).
-    const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : ''), href, 'data-nav': pk, title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') + '\n프로젝트 화면을 엽니다' }, caret, glyph(isOpen ? 'folder-open' : 'folder', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }), r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null, sumEl(sess, past) || (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null), p ? pinBtn(pk) : null);
+    const row = el('a', { class: 'v2-pj-row' + (isOn ? ' on' : ''), href, 'data-nav': pk, title: (p ? p.name + '\n' : '') + tipBits.filter(Boolean).join(' · ') + '\n프로젝트 화면을 엽니다' }, caret, glyph(isOpen ? 'folder-open' : 'folder', 'v2-pj-ic'), el('span', { class: 'n', text: p ? p.name : '프로젝트 없는 세션' }), r.done ? el('span', { class: 'v2-tag', text: '완료' }) : null, sumEl(sess, past) || (r.lastWork ? el('span', { class: 'v2-pj-when', text: when(r.lastWork) }) : null), p ? newSessBtn(p.id) : null, p ? pinBtn(pk) : null);
     const head = sess.slice(0, MAX_SESS);
     const pastHead = past.slice(0, MAX_SESS);
     const list = has ? el('div', { class: 'v2-ss-list', role: 'group', hidden: !isOpen }, ...head.map((s) => sessRow(s, activeKey, sessText(s, p ? p.name : ''))), sess.length > MAX_SESS ? el('a', { class: 'v2-ss-more', href, text: `외 ${sess.length - MAX_SESS}개` }) : null, past.length ? pastHead2(pk, past.length, pastOpen) : null, ...(pastOpen ? pastHead.map((s) => sessRow(s, activeKey, sessText(s, p ? p.name : ''), true)) : []), pastOpen && past.length > MAX_SESS ? el('a', { class: 'v2-ss-more', href, text: `외 ${past.length - MAX_SESS}개` }) : null) : null;
@@ -582,6 +583,17 @@ function pastHead2(pk, n, open) {
             renderTree();
         }
     }, el('span', { class: 'v2-car', 'aria-hidden': 'true', text: '›' }), el('span', { class: 'n', text: '지난 세션' }), el('span', { class: 'v2-cnt', text: String(n) }));
+}
+// ＋ 새 세션 — 프로젝트 이름 줄에 손을 얹으면 나타난다(원준 2026-08-20).
+//  종전엔 새 세션을 열려면 **먼저 그 프로젝트로 들어가** 문패의 [＋ 세션]을 눌러야 했다. 목록에서 곧장 시작하는 길을
+//  하나 더 둔다 — 누르면 그 프로젝트 화면이 '새 세션 자리'로 열린다(들어가서 누르는 것과 같은 자리로 간다).
+//  자리는 늘 차지하고 보이기만 토글한다(핀과 같은 규칙 — 나타나며 행을 밀면 목록 전체가 흔들린다).
+function newSessBtn(projectId) {
+    return el('button', {
+        class: 'v2-newb', type: 'button', 'aria-label': '이 프로젝트에서 새 세션 열기',
+        title: '새 세션 — 이 프로젝트에 붙은 AI 세션을 엽니다',
+        onclick: (e) => { e.preventDefault(); e.stopPropagation(); hooks.onNewSession?.(projectId); }
+    }, sv('svg', { viewBox: '0 0 24 24', class: 'v2-newb-ic', 'aria-hidden': 'true' }, sv('path', { d: 'M12 5v14M5 12h14' })));
 }
 // 고정 단추 — 자리는 늘 차지한다(눌러야 보이는 것이 나타나며 행을 밀면 목록 전체가 흔들린다).
 //  고정된 것은 늘 보이고, 아닌 것은 그 행에 손을 얹었을 때만 보인다.
