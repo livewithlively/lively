@@ -96,8 +96,12 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
       프로젝트 62.5(펼치면 65.5) · 세션 41 · 내 이름 48 로 다섯 갈래였고, 특히 자식(세션 41)이 부모(62.5)보다
       **왼쪽**에서 시작해 위계가 뒤집혀 읽혔다. 세션의 상태점은 프로젝트의 폴더 아이콘 칸에 앉혀 기둥을 맞춘다.
    ② **4px 격자**: 한 줄 행은 모두 --row-h(34px). 이전엔 38.5 / 36.5 / 30.2 로 행마다 달랐다.
-   ③ **글자 크기 넷**: 14(이름) · 13(세션·버튼) · 12(부제) · 11(시각·개수·라벨). 이전엔 9.5~15 사이 열한 가지였다. */
-.v2-side { --side-x: 8px; --rail: 56px; --row-h: 34px; background: var(--canvas, #F4F7FC); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+   ③ **글자 크기 넷**: 14(이름) · 13(세션·버튼) · 12(부제) · 11(시각·개수·라벨). 이전엔 9.5~15 사이 열한 가지였다.
+   ⚠ 단, 기둥 규칙은 **최상위 행(홈·리브·프로젝트)에만** 적용한다. 세션까지 같은 기둥에 세웠더니 부모와 자식이
+      같은 x(실측 56·56)에 서서 '프로젝트 안에 세션이 있다'가 화면에서 사라졌다 — 원준님 2026-08-20 반려
+      ("프로젝트 아래 방처럼 있는 게 다 없어졌다"). 자식은 --nest 만큼 안쪽에 선다(56 → 70).
+      ①의 원래 사유(자식 41 < 부모 62.5 로 위계가 **뒤집혀** 읽힘)는 그대로 지켜진다 — 이제 자식이 더 안쪽이다. */
+.v2-side { --side-x: 8px; --rail: 56px; --nest: 14px; --row-h: 34px; background: var(--canvas, #F4F7FC); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
 /* 좌상단 한 줄 = **워크스페이스 머리글**. 워드마크 줄을 따로 두면 조직명이 'Lively' 일 때 같은 글자가
    두 번 나오고 머리만 196px 를 먹었다(실측) → 한 줄로. 브랜드 네모(홈 링크)는 무엇인지 읽히지 않아
    걷었고(상민님 2026-08-19), 홈은 아래 [홈] 줄이 맡는다. */
@@ -194,14 +198,14 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 /* 세션 목록 = 카드 몸통 — 담김은 카드(면)가 말하므로 세로선 레일은 뺀다(이중 표식은 잡음).
    세션 행: 상태점 + 보통 글씨. 누르면 **그 세션의 대화**. 프로젝트 행과 생김새가 다르다(위계). */
 .v2-ss-list { padding: 0 9px 6px 0; }
-.v2-ss-row { position: relative; display: flex; align-items: center; gap: 0; padding: 7px 9px 7px 27px; border-radius: 7px; font-size: 13px; font-weight: 500; line-height: 1.4; color: var(--ink-sub); text-decoration: none; min-height: var(--row-h, 34px); }
+.v2-ss-row { position: relative; display: flex; align-items: center; gap: 0; padding: 7px 9px 7px calc(27px + var(--nest, 14px)); border-radius: 7px; font-size: 13px; font-weight: 500; line-height: 1.4; color: var(--ink-sub); text-decoration: none; min-height: var(--row-h, 34px); }
 .v2-ss-row + .v2-ss-row { margin-top: 2px; }
 /* 점은 프로젝트의 폴더 아이콘과 같은 칸(16px)의 한가운데 — 이 여백이 세션 글자를 부모와 같은 기둥에 세운다. */
 .v2-ss-row > .v2-dot { margin: 0 9px 0 5px; }
 .v2-ss-row:hover { background: var(--bg-tint, #F6FAFF); color: var(--ink); }
 .v2-ss-row.on { background: var(--bg-tint, #F6FAFF); color: var(--ink); font-weight: 700; }
 /* 지금 보고 있는 세션 — 행 왼쪽에 파란 마디. */
-.v2-ss-row.on::before { content: ''; position: absolute; left: 3px; top: 7px; bottom: 7px; width: 2.5px; border-radius: 2px; background: var(--blue); }
+.v2-ss-row.on::before { content: ''; position: absolute; left: calc(3px + var(--nest, 14px)); top: 7px; bottom: 7px; width: 2.5px; border-radius: 2px; background: var(--blue); }
 .v2-ss-go { width: 14px; height: 14px; margin-left: 6px; flex: none; fill: none; stroke: var(--muted-2, #a6b2c8); stroke-width: 1.8; stroke-linejoin: round; opacity: 0; }
 .v2-ss-row:hover .v2-ss-go { opacity: 1; }
 .v2-ss-main { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.35; }
@@ -772,7 +776,7 @@ body[data-ui="v2"][data-route="liv"] { overflow: hidden; }
   .v2-pj-row { padding: 11px 10px 11px 6px; font-size: 15px; }
   .v2-pj.open > .v2-pj-row { padding: 11px 12px 8px 8px; }
   .v2-car { width: 30px; height: 30px; font-size: 17px; }
-  .v2-ss-row { min-height: 42px; padding: 8px 10px 8px 14px; font-size: 14.5px; }
+  .v2-ss-row { min-height: 42px; padding: 8px 10px 8px calc(14px + var(--nest, 14px)); font-size: 14.5px; }
   .v2-ss-row .sub { font-size: 12.5px; }
   .v2-ss-go { opacity: 1; }                       /* 호버가 없다 — 가는 길(말풍선)은 늘 보인다 */
   .v2-ss-more, .v2-tree-more, .v2-tree-note { font-size: 14px; }
