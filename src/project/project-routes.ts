@@ -154,7 +154,20 @@ function mountProjectRoutes(app: express.Express, auth: express.RequestHandler, 
       //  파일 탐색기(v2/files.ts)는 코드를 보러 들어가는 화면이라 그대로 보여야 하고, 자료 칸만 이 표시로 가린다.
       let repo = false;
       if (isDir) { try { await fsp.stat(path.join(abs, e.name, ".git")); repo = true; } catch { /* 레포 아님 */ } }
-      items.push({ name: e.name, type: isDir ? "dir" : "file", size, mtime, ...(repo ? { repo: true } : {}) });
+      // empty — 폴더가 비었는지. 화면이 빈 폴더와 든 폴더를 **다른 그림**으로 그린다(맥 파인더 문법, #1819).
+      //  ⚠ readdir 로 전부 읽지 않는다 — 목록의 폴더마다 한 번씩 도는 자리라, 수천 개가 든 폴더가 섞이면
+      //   목록 한 번에 그 전부를 읽게 된다. opendir 로 **처음 보이는 것 하나**만 확인하고 즉시 닫는다.
+      let empty = false;
+      if (isDir && !repo) {
+        try {
+          const d = await fsp.opendir(path.join(abs, e.name));
+          try {
+            empty = true;
+            for await (const c of d) { if (!c.name.startsWith(".")) { empty = false; break; } }
+          } finally { await d.close().catch(() => { /* for-await 가 이미 닫았으면 여기서 끝 */ }); }
+        } catch { /* 못 읽으면 '비었다'고 단정하지 않는다 — 기본값 false */ }
+      }
+      items.push({ name: e.name, type: isDir ? "dir" : "file", size, mtime, ...(repo ? { repo: true } : {}), ...(empty ? { empty: true } : {}) });
     }
     items.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
     const rel = path.relative(base, abs);

@@ -44,7 +44,7 @@ export const authHeaders = (): Record<string, string> => {
 };
 
 // ══ 자료 — 공유 폴더에 쌓인 것. 끌어다 놓으면 올라간다 ═══════════════════════════
-export type FileItem = { name: string; path: string; type: 'dir' | 'file'; size: number; mtime: number };
+export type FileItem = { name: string; path: string; type: 'dir' | 'file'; size: number; mtime: number; empty?: boolean };
 export const MACHINE_FILES = new Set(['CLAUDE.md', 'AGENTS.md', '.DS_Store', 'package-lock.json', 'yarn.lock']);
 export const NOISE_RE = /\/(__pycache__|node_modules|dist|build|\.next|coverage|venv)\//;
 export const TRASH_DIR = '휴지통';
@@ -163,30 +163,40 @@ export function knTitle(raw: string, name: string): string {
   return t || String(name || '');
 }
 
-// ── 폴더 아이콘 — 맥 파인더 결 (#1819 원준 "노란 평면 아이콘 별로") ───────────────
-//  다른 아이콘은 전부 선(stroke)이지만 폴더만은 **채운 그림**이다. 이유가 있다: 자료 격자에서 폴더는
-//  '아이콘'이 아니라 파일 미리보기와 나란히 서는 **한 장의 그림**이라, 선 하나로 그리면 옆 카드의
-//  실제 내용(그림·문서 미리보기)에 눌려 빈 칸처럼 보인다. 파인더도 같은 이유로 폴더만 입체다.
-//  구성: 뒤판(짙은 남색 계열) + 앞판(위에서 아래로 밝아지는 파랑) + 앞판 윗면 하이라이트 한 줄.
+// ── 폴더 아이콘 — 맥 파인더 결 (#1819 원준) ──────────────────────────────────
+//  다른 아이콘은 전부 선(stroke)이지만 폴더만은 **채운 그림**이다. 자료 격자에서 폴더는 아이콘이 아니라
+//  파일 미리보기와 나란히 서는 한 장의 그림이라, 선 하나로 그리면 옆 카드의 실제 내용에 눌려 빈 칸이 된다.
+//
+//  ── 그라디언트를 낮게 잡는 이유 (초판이 "조잡하다"고 반려됨, 원준 2026-08-20) ──
+//   초판은 위아래 명도차를 크게 주고(밝은 하늘색→진한 파랑) 앞판 위에 곡선 광택 덩어리를 얹었다. 그 결과
+//   ⓐ 색이 아래로 갈수록 탁해져 '플라스틱' 느낌이 나고 ⓑ 광택 곡선이 어디서 왔는지 모를 얼룩으로 읽혔다.
+//   파인더 폴더는 사실 **명도차가 아주 작은 한 톤**이고, 빛은 앞판 윗변의 **가는 선 하나**로만 표현된다.
+//   그래서 여기서도: 낮은 대비 세로 그라디언트 + 윗변 1px 하이라이트. 광택 덩어리는 없앤다.
+//
+//  ── 빈 폴더 / 든 폴더 (원준: "맥은 둘이 다르다") ──
+//   든 폴더는 뒤판과 앞판 **사이로 서류가 비쳐 나온다**. 목록을 훑을 때 "여긴 뭔가 있다"가 열어보기 전에 읽힌다.
+//   서류는 흰 종이 두 장을 살짝 어긋나게 겹쳐 그린다(각도는 고정 — 무작위면 다시 그릴 때마다 흔들린다).
 //  ⚠ 그라디언트 id 는 문서에 유일해야 한다 — 같은 id 가 여러 개면 브라우저가 첫 것만 쓴다(색이 굳는다).
 let folderSeq = 0;
-export function folderIcon(cls = 'pn-folder'): SVGElement {
+export function folderIcon(cls = 'pn-folder', opts?: { empty?: boolean; plain?: boolean }): SVGElement {
   const n = ++folderSeq;
-  const back = `pnf-b${n}`, front = `pnf-f${n}`, gloss = `pnf-g${n}`;
+  const back = `pnf-b${n}`, front = `pnf-f${n}`;
+  const papers = !opts?.empty && !opts?.plain;
   const svg = sv('svg', { viewBox: '0 0 48 40', class: cls, 'aria-hidden': 'true' });
   svg.innerHTML = `<defs>
       <linearGradient id="${back}" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#7FB6EC"/><stop offset="1" stop-color="#4E8FD6"/>
+        <stop offset="0" stop-color="#8AC4F2"/><stop offset="1" stop-color="#6FB0E8"/>
       </linearGradient>
       <linearGradient id="${front}" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#8FC6F5"/><stop offset="1" stop-color="#5C9BE0"/>
-      </linearGradient>
-      <linearGradient id="${gloss}" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#FFFFFF" stop-opacity=".55"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+        <stop offset="0" stop-color="#A6D6F8"/><stop offset="1" stop-color="#7CBBEF"/>
       </linearGradient>
     </defs>
-    <path d="M2 9.5A3.5 3.5 0 0 1 5.5 6h11.2c.9 0 1.8.35 2.45.98L22 9.5h20.5A3.5 3.5 0 0 1 46 13v20.5A3.5 3.5 0 0 1 42.5 37h-37A3.5 3.5 0 0 1 2 33.5z" fill="url(#${back})"/>
-    <path d="M2 15.5A3.5 3.5 0 0 1 5.5 12h37a3.5 3.5 0 0 1 3.5 3.5v18A3.5 3.5 0 0 1 42.5 37h-37A3.5 3.5 0 0 1 2 33.5z" fill="url(#${front})"/>
-    <path d="M2 15.5A3.5 3.5 0 0 1 5.5 12h37a3.5 3.5 0 0 1 3.5 3.5v3.2c0 .5-.4.8-.9.7-4-.9-8.6-1.4-21.6-1.4S6.9 18.5 2.9 19.4c-.5.1-.9-.2-.9-.7z" fill="url(#${gloss})"/>`;
+    <path d="M2 9.6A3.6 3.6 0 0 1 5.6 6h11.5c.97 0 1.9.39 2.58 1.08l2.5 2.52H42.4A3.6 3.6 0 0 1 46 13.2v20.2a3.6 3.6 0 0 1-3.6 3.6H5.6A3.6 3.6 0 0 1 2 33.4z" fill="url(#${back})"/>
+    ${papers ? `<g>
+      <rect x="18.6" y="8.2" width="14.5" height="11" rx="1.5" fill="#EDF3FA" stroke="#D3E1F0" stroke-width=".6" transform="rotate(-6 25.8 13.7)"/>
+      <rect x="26" y="9.2" width="14.5" height="11" rx="1.5" fill="#FFFFFF" stroke="#DAE5F3" stroke-width=".6" transform="rotate(5 33.2 14.7)"/>
+    </g>` : ''}
+    <path d="M2 17.6A3.6 3.6 0 0 1 5.6 14h36.8a3.6 3.6 0 0 1 3.6 3.6v15.8a3.6 3.6 0 0 1-3.6 3.6H5.6A3.6 3.6 0 0 1 2 33.4z" fill="url(#${front})"/>
+    <path d="M5.9 14.75h36.2" stroke="#FFFFFF" stroke-opacity=".5" stroke-width="1.1" stroke-linecap="round" fill="none"/>`;
   return svg;
 }
