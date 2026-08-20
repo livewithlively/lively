@@ -74,7 +74,7 @@ function builtinToggles(data) {
     };
     enChk.addEventListener('change', save); aaChk.addEventListener('change', save); alSel.addEventListener('change', save);
     // MCP 상세 — 하네스가 보는 description + inputSchema(필드). 접힘 기본, 클릭 시 펼침.
-    const detail = el('div', { style: 'display:none; margin:2px 0 8px 14px; padding:6px 10px; border-left:2px solid var(--border, #ddd)' },
+    const detail = el('div', { style: 'display:none; margin:2px 0 8px 14px; padding:6px 10px; border-left:2px solid var(--line)' },
       cand.description ? el('p', { class: 'admin-hint', style: 'white-space:pre-wrap; margin:0 0 6px' }, ...uiText(cand.description)) : null,
       el('div', { class: 'admin-subhead', text: '입력 필드 (MCP inputSchema)' }),
       mcpFieldsEl(cand.inputSchema));

@@ -1,0 +1,239 @@
+/* ── 다크 테마(#1683) ─────────────────────────────────────────────────────────
+   01-base.css :root 라이트 토큰의 전량 다크 재정의. 두 경로로 켜진다:
+     ① <html data-theme="dark">          — 사용자가 명시적으로 '다크' 선택
+     ② @media prefers-color-scheme:dark  — 시스템 따름(선호 미저장) 상태에서 OS 가 다크
+   ⚠ 아래 두 블록의 본문은 반드시 동일해야 한다(수정 시 둘 다). CSS 중첩·변수 간접 없이
+     평문 중복으로 두는 건 빌드 없는 정적 CSS 계약(styles/README) 때문이다.
+   토큰 밖 잔여 다크 오버라이드(특정 컴포넌트 보정)는 이 파일 하단 '§보정' 에만 쌓는다.
+   터미널(10-terminal, 상시 다크)·graph(자체 다크)는 여기 대상이 아니다.
+   ───────────────────────────────────────────────────────────────────────── */
+
+:root[data-theme="dark"] {
+  /* 베이스 — 브랜드 네이비 축(#15233B 계열)의 저채도 딥 네이비. 층위: canvas < bg < tint < surface < tint-2 */
+  --bg: #111726;
+  --bg-tint: #171F31;
+  --bg-tint-2: #1C2639;
+  --bg-punch: #1D2A47;
+  --bg-note: #1A2742;
+  --bg-success: #152B26;
+  --bg-sel: #1B2843;
+  --canvas: #0C111D;
+  --surface: #1A2336;
+
+  /* 브랜드 — 글자용은 밝게(전 층 4.5:1↑), 채움용(--blue-fill)은 채도 유지 */
+  --blue: #6E9AF8;
+  --blue-deep: #8FB2FA;
+  --blue-fill: #2D6BF0;
+  --blue-fill-deep: #1E54CC;
+  --mint: #2BD3A5;
+  --mint-deep: #3DBD97;
+  --mint-bright: #43E5B0;
+  --teal: #3EC4C6;
+  --coral: #EF8A80;
+  --coral-text: #F49B91;
+  --accent: #8F9AFF;
+
+  /* 텍스트 — 저휘도 모니터 기준으로 잡았다. 라이트의 muted 계열은 본문 대비가 2:1 대라 흐린 글자가 있었는데,
+     다크에선 **전부 4.5:1 이상**으로 올린다(--muted-2 는 실제로 본문 글자에 쓰인다 — 프리뷰 감사에서 확인). */
+  --ink: #EAF0FA;
+  --ink-sub: #B0BDD5;
+  --ink-note: #C3D3F2;
+  --muted: #9AA9C4;
+  --muted-2: #8492B0;
+  --muted-3: #74839F;
+  --muted-head: #97A6C2;
+
+  /* 라인/보더 */
+  --line: #273349;
+  --line-row: #202B3E;
+  --line-net: #2B3951;
+  --line-net-2: #33425C;
+  --line-note: #2D3F62;
+
+  /* 네트워크 보조 노드 */
+  --node-blue-soft: #4C6DA8;
+  --node-mint-soft: #3E8F77;
+
+  /* 상태 계열(시맨틱) — FG 는 밝힌 값, BG 는 딥 틴트 */
+  --danger: #F07E7E;
+  --danger-deep: #F08379;
+  --danger-bg: #3A1B1E;
+  --danger-bg-2: #331B1D;
+  --danger-line: #5C2B2F;
+  --warn: #F0A32B;
+  --warn-2: #F2B04A;
+  --warn-text: #E3A464;
+  --warn-deep: #E0A952;
+  --danger-ink: #F6B3AB;
+  --warn-ink: #F0C97E;
+  --warn-bg: #33270F;
+  --warn-bg-2: #302410;
+  --warn-line: #57431A;
+  --warn-line-2: #4A3C22;
+  --ok: #37B592;
+  --ok-2: #3DB183;
+  --ok-bg: #12291F;
+  --ok-line: #24463C;
+  --ok-line-2: #284F41;
+
+  /* 중성 그레이(신형 화면 계열) */
+  --gray-text: #93A2BB;
+  --gray-muted: #76829B;
+  --gray-line: #2B3547;
+  --gray-line-2: #2E3A4F;
+  --gray-bg: #1A2233;
+  --gray-bg-2: #192132;
+
+  /* 컴포넌트 토큰(전역 팔레트에 없는 보라·하이라이트 계열 — 사용처 3곳) */
+  --purple: #A29AE8;
+  --purple-text: #A9A1C6;
+  --teal-deep: #4CC6C8;
+  --ok-ink: #7FD7B0;
+
+  --md-mark-bg: #4A3A10;
+  --callout-purple-bg: #262038;
+  --callout-purple-line: #3B3155;
+  --dmx-cross-bg: #2A2545;
+
+  /* 떠 있는 대비 바 — 다크에선 페이지보다 한 단계 밝은 판(흰 글자·흰 오버레이 그대로 유지) */
+  --chip-dark: #2E3A52;
+
+  /* 코드·로그 판 — 다크에선 배경보다 더 깊게(면이 눌려 들어가 보이게) */
+  --code-surface: #080C14;
+  --code-ink: #C7D3E6;
+
+  /* 콘텐츠 위 반투명 판 — 다크에선 딥 네이비 판(글자는 --ink 계열이 그대로 밝다) */
+  --overlay-pill: rgba(16, 22, 36, .88);
+  --overlay-pill-2: rgba(16, 22, 36, .72);
+  --overlay-ring: rgba(12, 17, 29, .95);
+
+  /* 채널 토큰 — 그림자는 순흑, 잉크 틴트는 밝은 잉크로 뒤집힘(호버가 '밝아진다') */
+  --shadow-ink: 0, 0, 0;
+  --tint-ink: 234, 240, 250;
+
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+  /* 베이스 — 브랜드 네이비 축(#15233B 계열)의 저채도 딥 네이비. 층위: canvas < bg < tint < surface < tint-2 */
+  --bg: #111726;
+  --bg-tint: #171F31;
+  --bg-tint-2: #1C2639;
+  --bg-punch: #1D2A47;
+  --bg-note: #1A2742;
+  --bg-success: #152B26;
+  --bg-sel: #1B2843;
+  --canvas: #0C111D;
+  --surface: #1A2336;
+
+  /* 브랜드 — 글자용은 밝게(전 층 4.5:1↑), 채움용(--blue-fill)은 채도 유지 */
+  --blue: #6E9AF8;
+  --blue-deep: #8FB2FA;
+  --blue-fill: #2D6BF0;
+  --blue-fill-deep: #1E54CC;
+  --mint: #2BD3A5;
+  --mint-deep: #3DBD97;
+  --mint-bright: #43E5B0;
+  --teal: #3EC4C6;
+  --coral: #EF8A80;
+  --coral-text: #F49B91;
+  --accent: #8F9AFF;
+
+  /* 텍스트 — 저휘도 모니터 기준으로 잡았다. 라이트의 muted 계열은 본문 대비가 2:1 대라 흐린 글자가 있었는데,
+     다크에선 **전부 4.5:1 이상**으로 올린다(--muted-2 는 실제로 본문 글자에 쓰인다 — 프리뷰 감사에서 확인). */
+  --ink: #EAF0FA;
+  --ink-sub: #B0BDD5;
+  --ink-note: #C3D3F2;
+  --muted: #9AA9C4;
+  --muted-2: #8492B0;
+  --muted-3: #74839F;
+  --muted-head: #97A6C2;
+
+  /* 라인/보더 */
+  --line: #273349;
+  --line-row: #202B3E;
+  --line-net: #2B3951;
+  --line-net-2: #33425C;
+  --line-note: #2D3F62;
+
+  /* 네트워크 보조 노드 */
+  --node-blue-soft: #4C6DA8;
+  --node-mint-soft: #3E8F77;
+
+  /* 상태 계열(시맨틱) — FG 는 밝힌 값, BG 는 딥 틴트 */
+  --danger: #F07E7E;
+  --danger-deep: #F08379;
+  --danger-bg: #3A1B1E;
+  --danger-bg-2: #331B1D;
+  --danger-line: #5C2B2F;
+  --warn: #F0A32B;
+  --warn-2: #F2B04A;
+  --warn-text: #E3A464;
+  --warn-deep: #E0A952;
+  --danger-ink: #F6B3AB;
+  --warn-ink: #F0C97E;
+  --warn-bg: #33270F;
+  --warn-bg-2: #302410;
+  --warn-line: #57431A;
+  --warn-line-2: #4A3C22;
+  --ok: #37B592;
+  --ok-2: #3DB183;
+  --ok-bg: #12291F;
+  --ok-line: #24463C;
+  --ok-line-2: #284F41;
+
+  /* 중성 그레이(신형 화면 계열) */
+  --gray-text: #93A2BB;
+  --gray-muted: #76829B;
+  --gray-line: #2B3547;
+  --gray-line-2: #2E3A4F;
+  --gray-bg: #1A2233;
+  --gray-bg-2: #192132;
+
+  /* 컴포넌트 토큰(전역 팔레트에 없는 보라·하이라이트 계열 — 사용처 3곳) */
+  --purple: #A29AE8;
+  --purple-text: #A9A1C6;
+  --teal-deep: #4CC6C8;
+  --ok-ink: #7FD7B0;
+
+  --md-mark-bg: #4A3A10;
+  --callout-purple-bg: #262038;
+  --callout-purple-line: #3B3155;
+  --dmx-cross-bg: #2A2545;
+
+  /* 떠 있는 대비 바 — 다크에선 페이지보다 한 단계 밝은 판(흰 글자·흰 오버레이 그대로 유지) */
+  --chip-dark: #2E3A52;
+
+  /* 코드·로그 판 — 다크에선 배경보다 더 깊게(면이 눌려 들어가 보이게) */
+  --code-surface: #080C14;
+  --code-ink: #C7D3E6;
+
+  /* 콘텐츠 위 반투명 판 — 다크에선 딥 네이비 판(글자는 --ink 계열이 그대로 밝다) */
+  --overlay-pill: rgba(16, 22, 36, .88);
+  --overlay-pill-2: rgba(16, 22, 36, .72);
+  --overlay-ring: rgba(12, 17, 29, .95);
+
+  /* 채널 토큰 — 그림자는 순흑, 잉크 틴트는 밝은 잉크로 뒤집힘(호버가 '밝아진다') */
+  --shadow-ink: 0, 0, 0;
+  --tint-ink: 234, 240, 250;
+
+  color-scheme: dark;2
+  }
+}
+
+/* ── §보정 — 토큰으로 못 푸는 자리만, 자리마다 사유 주석과 함께 ── */
+
+
+/* 오로라 커버(24-wiki-redesign §오로라) — 밝은 베이스 위에 그리는 제너레이티브 표지다. 토큰으로 못 뒤집는 이유:
+   9종 각각이 고유한 2색 베이스 + 브랜드 radial 을 겹쳐 만든 '그림' 이라, 색을 바꾸면 그 그림이 아니게 된다.
+   대신 그림 위에 딥 스크림을 한 장 덮어 밝기만 내린다 — 색상 정체성(제품 블루·사업 앰버·시스템 퍼플)은 남고
+   면은 다크 UI 에 앉는다. 워터마크(var(--ink), 다크에선 밝은 글자)는 스크림 **위**라 그대로 읽힌다. */
+:root[data-theme="dark"] .wk-aurora::after { content: ''; position: absolute; inset: 0; z-index: 0;
+  background: color-mix(in srgb, var(--canvas) 76%, transparent); pointer-events: none; }
+:root[data-theme="dark"] .wk-aurora-wm { z-index: 1; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .wk-aurora::after { content: ''; position: absolute; inset: 0; z-index: 0;
+    background: color-mix(in srgb, var(--canvas) 76%, transparent); pointer-events: none; }
+  :root:not([data-theme="light"]) .wk-aurora-wm { z-index: 1; }
+}

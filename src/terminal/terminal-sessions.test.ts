@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { detectAwaiting, modeEnvArgs, canSeeSession, resolveAgentPhase, parseReportedPhase, isPhaseFresh, isActivityProgress, PHASE_TTL_SEC } from "./terminal-sessions.js";
+import { detectAwaiting, modeEnvArgs, themeEnvArgs, normalizeTheme, canSeeSession, resolveAgentPhase, parseReportedPhase, isPhaseFresh, isActivityProgress, PHASE_TTL_SEC } from "./terminal-sessions.js";
 // 배럴(terminal-sessions.ts)엔 새 심볼을 늘리지 않는다 — 그 파일의 재수출 집합은 #1313 R15 분할의 계약이다.
 import { harnessLaunchArgv, harnessLoginArgv, harnessFailNotice, HARNESSES, RESUME_ID_RE } from "./catalog.js";
 import { SHELL_CMDS, isAgentOffline } from "./phase.js";  // E12 — 런처가 pane 포그라운드를 무엇으로 보이게 하는가(#1535)
@@ -126,6 +126,29 @@ t("modeEnvArgs: incognito → LIVELY_MODE=incognito + 구 LIVELY_INCOGNITO=1 + L
 });
 t("modeEnvArgs: 둘 다면 incognito 가 이긴다(더 강한 격리)", () => {
   assert.deepEqual(modeEnvArgs({ readOnly: true, incognito: true }), ["-e", "LIVELY_MODE=incognito", "-e", "LIVELY_INCOGNITO=1", "-e", "LIVELY_OFF=1"]);
+});
+
+// ── 화면 테마(#1683) → pane env ─────────────────────────────────────────────
+//  왜 표로 못박나: 이 값이 틀리면 증상이 **터미널 안에서만** 보인다 — 밝은 배경에 밝은 글자로 도는 하네스는
+//  화면 스크린샷으로도 잘 안 드러나고, 재현하려면 테마를 바꿔 새 세션을 띄워야 한다. 판정은 순수 함수에 두고 여기서 고정한다.
+t("themeEnvArgs: 미지정·모르는 값 → env 인자 없음(종전 동작 그대로)", () => {
+  assert.deepEqual(themeEnvArgs(undefined), []);
+  assert.deepEqual(themeEnvArgs(""), []);
+  assert.deepEqual(themeEnvArgs("auto"), []);       // 'auto' 는 브라우저가 해석해서 보내야 한다(서버는 추측하지 않는다)
+  assert.deepEqual(themeEnvArgs("DARKMODE"), []);
+});
+t("themeEnvArgs: dark → 밝은 글자 on 검정(COLORFGBG 15;0) + LIVELY_THEME", () => {
+  assert.deepEqual(themeEnvArgs("dark"), ["-e", "COLORFGBG=15;0", "-e", "LIVELY_THEME=dark"]);
+});
+t("themeEnvArgs: light → 그 반대(0;15)", () => {
+  assert.deepEqual(themeEnvArgs("light"), ["-e", "COLORFGBG=0;15", "-e", "LIVELY_THEME=light"]);
+});
+t("normalizeTheme: 대소문자·공백은 받아주고, 그 밖은 미지정으로 접는다", () => {
+  assert.equal(normalizeTheme(" Dark "), "dark");
+  assert.equal(normalizeTheme("LIGHT"), "light");
+  assert.equal(normalizeTheme("system"), undefined);   // ★ 해석되지 않은 값은 서버가 받지 않는다
+  assert.equal(normalizeTheme(null), undefined);
+  assert.equal(normalizeTheme(123), undefined);
 });
 
 console.log(`\n${pass} passed`);

@@ -599,7 +599,7 @@ function checklist(items) {
 }
 // ── 온보딩 진행상황(#/onboarding) — SoT = GET /api/ui/org/onboarding (하네스 주입과 동일 소스, 드리프트 0). ──
 function obProgress(pct) {
-    return el('div', { style: 'height:8px;background:#ececec;border-radius:4px;overflow:hidden;margin:10px 0' }, el('div', { style: `height:100%;width:${pct}%;background:#3a9d6e;transition:width .3s` }));
+    return el('div', { style: 'height:8px;background:var(--line-row);border-radius:4px;overflow:hidden;margin:10px 0' }, el('div', { style: `height:100%;width:${pct}%;background:var(--ok-2);transition:width .3s` }));
 }
 // 시작하기(랜딩) 상단 배너 — 미완일 때만(완료면 null → 안 보임). 클릭 시 #/onboarding.
 async function onboardingBanner() {
@@ -629,7 +629,7 @@ async function renderOnboarding(view) {
         s.items.forEach((it, i) => {
             // 선택 항목은 **미완이어도 경고처럼 보이면 안 된다** — 진행률에서 빠지는데 화면만 빨갛게 남으면
             //  "뭔가 덜 됐다"는 잘못된 압박이 된다. 번호 대신 '—', 배지로 '선택'을 명시한다.
-            steps.append(el('div', { class: 'card', style: 'display:flex;gap:12px;align-items:flex-start;margin-bottom:10px;opacity:' + (it.done || it.optional ? '0.65' : '1') }, el('div', { style: `flex:0 0 28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;background:${it.done ? '#3a9d6e' : it.optional ? '#d5d5d5' : '#bbb'}`, text: it.done ? '✓' : it.optional ? '–' : String(i + 1) }), el('div', { style: 'flex:1;min-width:0' }, el('div', { style: 'font-weight:600' }, it.label, it.optional ? el('span', { class: 'admin-only-badge', style: 'margin-left:6px', text: '선택' }) : null, it.count !== undefined ? el('span', { class: 'admin-hint', text: ` · 현재 ${it.count}` }) : null), el('div', { class: 'admin-hint', style: 'margin:2px 0 0', text: it.how }), it.href ? el('a', { class: 'accent', href: it.href, text: it.done ? '보기 →' : '바로가기 →', style: 'display:inline-block;margin-top:6px;text-decoration:none' }) : null)));
+            steps.append(el('div', { class: 'card', style: 'display:flex;gap:12px;align-items:flex-start;margin-bottom:10px;opacity:' + (it.done || it.optional ? '0.65' : '1') }, el('div', { style: `flex:0 0 28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--on-fill);background:${it.done ? 'var(--ok-2)' : it.optional ? 'var(--muted-3)' : 'var(--muted-2)'}`, text: it.done ? '✓' : it.optional ? '–' : String(i + 1) }), el('div', { style: 'flex:1;min-width:0' }, el('div', { style: 'font-weight:600' }, it.label, it.optional ? el('span', { class: 'admin-only-badge', style: 'margin-left:6px', text: '선택' }) : null, it.count !== undefined ? el('span', { class: 'admin-hint', text: ` · 현재 ${it.count}` }) : null), el('div', { class: 'admin-hint', style: 'margin:2px 0 0', text: it.how }), it.href ? el('a', { class: 'accent', href: it.href, text: it.done ? '보기 →' : '바로가기 →', style: 'display:inline-block;margin-top:6px;text-decoration:none' }) : null)));
         });
         slot.replaceChildren(summary, steps);
     }

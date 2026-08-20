@@ -576,7 +576,7 @@ function openNodeManager(view) {
   const body = el('div', {});
   const back = overlay('🖥 노드 관리', body);
   const gw = location.origin;
-  const codeStyle = 'background:var(--bg-subtle,#0d1117);color:#c9d1d9;padding:10px 12px;border-radius:8px;white-space:pre;overflow-x:auto;font-size:12px;line-height:1.6;margin:6px 0';
+  const codeStyle = 'background:var(--code-surface);color:#c9d1d9;padding:10px 12px;border-radius:8px;white-space:pre;overflow-x:auto;font-size:12px;line-height:1.6;margin:6px 0';
 
   async function load() {
     busy(body, el('div', { class: 'caption', text: '노드를 불러오는 중…' }));

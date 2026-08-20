@@ -3,7 +3,7 @@
    main 은 body 직계가 아니라 #app(앱 셸) 안에 있으므로 flex 체인을 #app 까지 이어야 높이가 찬다. */
 body[data-route="dashboard"] { height: 100vh; overflow: hidden; }
 body[data-route="dashboard"] #app { height: 100%; display: flex; flex-direction: column; }
-body[data-route="dashboard"] main { flex: 1; min-height: 0; max-width: none; margin: 0; padding: 14px 18px 16px; background: #F4F7FC; }
+body[data-route="dashboard"] main { flex: 1; min-height: 0; max-width: none; margin: 0; padding: 14px 18px 16px; background: var(--gray-bg); }
 body[data-route="dashboard"] .app-foot { display: none; } /* 코크핏에선 우하단 고정칩 숨김(로그 레일과 겹침) */
 
 .dash { height: 100%; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
@@ -47,7 +47,7 @@ body.dash-row-resizing { cursor: row-resize; user-select: none; }
 /* 존(위젯 카드) — 무채 카드 + 헤어라인(§0.5). 목록은 내부 스크롤 + 하단 페이드로 '더 있음' 암시. */
 .dash-zone { background: var(--bg); border: 1px solid var(--line); border-radius: 12px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 /* #req 헤더는 아무리 좁아도 항상 1행 — 줄바꿈 금지(flex-wrap:nowrap). 좁아지면 필터 칩만 가로로 줄어들며 elide(스크롤+우측 페이드), 제목·카운트·⚙·바로가기는 유지. */
-.dash-wh { flex: none; display: flex; align-items: baseline; flex-wrap: nowrap; gap: 6px 8px; padding: 12px 16px 9px; border-bottom: 1px solid var(--line-soft, var(--bg-tint-2)); }
+.dash-wh { flex: none; display: flex; align-items: baseline; flex-wrap: nowrap; gap: 6px 8px; padding: 12px 16px 9px; border-bottom: 1px solid var(--bg-tint-2); }
 .dash-wh h4 { margin: 0; font-size: 15.5px; font-weight: 800; letter-spacing: -.01em; white-space: nowrap; flex: none; }
 .dash-wh-n { font-size: 13px; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
 .dash-wh-chips { display: flex; gap: 4px; margin-left: 6px; min-width: 0; flex: 0 1 auto; overflow-x: auto; scrollbar-width: none; }
@@ -87,8 +87,8 @@ body.dash-row-resizing { cursor: row-resize; user-select: none; }
 a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .dash-dot.tn-mint { background: var(--mint-deep); } .dash-dot.tn-coral { background: var(--coral); }
-.dash-dot.tn-blue { background: var(--blue); } .dash-dot.tn-teal { background: var(--teal); }
-.dash-dot.tn-violet { background: #8B7BD8; } .dash-dot.tn-amber { background: #D9A441; }
+.dash-dot.tn-blue { background: var(--blue-fill); } .dash-dot.tn-teal { background: var(--teal); }
+.dash-dot.tn-violet { background: var(--purple); } .dash-dot.tn-amber { background: var(--warn-2); }
 .dash-dot.tn-mut { background: var(--muted-3); }
 .dash-nm { flex: 1; min-width: 0; font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dash-nm-line { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -110,7 +110,7 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 /* #req R20 개요 '+ 새 리스트' 추가 카드 — 점선 카드, 클릭 시 그 자리 입력. */
 /* 데이터 카드(dash-ov-card2)와 크기를 맞춘다: 그리드 align-items:start 라 자연 높이로 서던 것을 align-self:stretch 로
    같은 행 최고 카드(데이터 카드) 높이에 스냅. 혼자 한 행일 땐 스냅할 형제가 없으니 min-height 로 같은 높이(데이터 카드 자연 높이 ≈88px) 확보. */
-.dash-ov-addcard { border: 1px dashed var(--line-net-2, var(--line)); border-radius: 12px; padding: 13px 14px; background: none; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 88px; align-self: stretch; color: var(--muted); transition: border-color .12s, color .12s, background .12s; }
+.dash-ov-addcard { border: 1px dashed var(--line-net-2); border-radius: 12px; padding: 13px 14px; background: none; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 88px; align-self: stretch; color: var(--muted); transition: border-color .12s, color .12s, background .12s; }
 .dash-ov-addcard:hover { border-color: var(--blue); color: var(--blue); background: var(--bg-punch); }
 .dash-ov-add-plus { font-size: 17px; font-weight: 700; line-height: 1; }
 .dash-ov-add-lbl { font-size: 13px; font-weight: 700; }
@@ -126,7 +126,7 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-proj-split > .dash-ov-grid, .dash-proj-split > .dash-ov-allhidden, .dash-proj-split > .dash-projlist { min-height: 0; overflow-y: auto; scrollbar-width: thin; }
 /* #req 개요 영역을 늘려도 카드가 세로로 안 늘어나게 — 행을 위로 모으고 남는 건 여백. 카드도 자기 높이 유지. */
 .dash-proj-split > .dash-ov-grid { align-content: start; align-items: start; }
-.dash-projlist { margin-top: 6px; border-top: 1px solid var(--line-soft, var(--bg-tint-2)); }
+.dash-projlist { margin-top: 6px; border-top: 1px solid var(--bg-tint-2); }
 .dash-projlist .pjv-list-group { margin-top: 0; }
 .dash-projlist .pjv-tgroup-head.pjv-list-head { padding: 8px 6px; margin-top: 4px; }
 .dash-projrow2 { display: flex; align-items: center; min-height: 34px; padding: 3px 8px 3px 6px; border-radius: 7px; color: inherit; text-decoration: none; overflow: hidden; }
@@ -171,7 +171,7 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 /* 상태 메뉴 카드 — 기존 dashPopover 가 .dash-pop(위치만) 을 얹으므로 배경·테두리는 여기서. */
 .dash-statusmenu { background: var(--bg); border: 1px solid var(--line-net); border-radius: 10px; box-shadow: 0 8px 28px rgba(20,35,59,.16); padding: 5px; min-width: 168px; }
 /* #req 내가 할당된 프로젝트의 세션 뱃지 — 액센트 강조로 '내 프로젝트 세션' 구분. */
-.dash-badge-proj-mine { color: var(--accent, #5b6cff); border-color: color-mix(in srgb, var(--accent, #5b6cff) 45%, var(--bg)); background: color-mix(in srgb, var(--accent, #5b6cff) 9%, transparent); }
+.dash-badge-proj-mine { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, var(--bg)); background: color-mix(in srgb, var(--accent) 9%, transparent); }
 
 /* 개요 카드 — 선택(리스트 필터) 강조 + 드래그 순서 변경 표식 */
 .dash-ov-card2 { position: relative; }
@@ -180,7 +180,7 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 /* 드롭 삽입 표시 — 카드 사이 간격에 뚜렷한 세로 디바이더(어디로 들어갈지 직관적). 커서 좌/우 절반에 따라 앞·뒤. */
 .dash-ov-card2.drop-before::before, .dash-ov-card2.drop-after::after {
   content: ""; position: absolute; top: -3px; bottom: -3px; width: 4px; border-radius: 3px;
-  background: var(--blue); box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 22%, transparent);
+  background: var(--blue-fill); box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 22%, transparent);
   z-index: 3; pointer-events: none; }
 .dash-ov-card2.drop-before::before { left: -7px; }
 .dash-ov-card2.drop-after::after { right: -7px; }
@@ -189,9 +189,9 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-foldpop-grid { display: flex; flex-wrap: wrap; overflow: visible; gap: 8px; padding: 4px 2px; }
 
 /* 경량 모달 오버레이 */
-.dash-modal-ov { position: fixed; inset: 0; z-index: 70; background: rgba(21,35,59,.34); display: flex; align-items: center; justify-content: center; padding: 24px; }
-.dash-modal { width: min(560px, 92vw); max-height: 80vh; display: flex; flex-direction: column; background: var(--bg); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 18px 48px rgba(21,35,59,.28); overflow: hidden; }
-.dash-modal-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--line-soft, var(--bg-tint-2)); }
+.dash-modal-ov { position: fixed; inset: 0; z-index: 70; background: rgba(var(--shadow-ink), .34); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.dash-modal { width: min(560px, 92vw); max-height: 80vh; display: flex; flex-direction: column; background: var(--bg); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 18px 48px rgba(var(--shadow-ink), .28); overflow: hidden; }
+.dash-modal-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--bg-tint-2); }
 .dash-modal-head strong { font-size: 15px; }
 .dash-modal-x { border: none; background: none; cursor: pointer; font-size: 15px; color: var(--muted); width: 28px; height: 28px; border-radius: 7px; font-family: inherit; }
 .dash-modal-x:hover { background: var(--bg-tint); color: var(--ink); }
@@ -221,8 +221,8 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
    유형 4색(blue·mint-deep·violet·coral)은 CVD 검증 통과 조합(#1570) — coral 은 대비 2.9:1이라 라벨 병기 필수. */
 .dash-lvl { display: flex; flex-direction: column; }
 /* 유형 색 어휘 한 벌 — 점(dash-dot-s)·구성 바(dash-lvl-comp i)가 같은 클래스를 본다. violet/amber 리터럴은 tn-* 과 동일 값 */
-.dash-lvl .k-read { background: var(--blue); } .dash-lvl .k-write { background: var(--mint-deep); }
-.dash-lvl .k-work { background: #8B7BD8; } .dash-lvl .k-db { background: var(--coral); }
+.dash-lvl .k-read { background: var(--blue-fill); } .dash-lvl .k-write { background: var(--mint-deep); }
+.dash-lvl .k-work { background: var(--purple); } .dash-lvl .k-db { background: var(--coral); }
 .dash-lvl .k-etc { background: var(--muted-3); }
 .dash-dot-s { width: 7px; height: 7px; border-radius: 50%; flex: none; display: inline-block; }
 .dash-dot-s.fail { outline: 2px solid var(--coral); outline-offset: 1px; }
@@ -242,7 +242,7 @@ a.dash-row:hover, .dash-row--sess:hover { background: var(--bg-tint); }
 .dash-lvl-tile .d { font-size: 11px; color: var(--muted); margin-top: 3px; min-height: 14px; }
 /* 검토 대기 배지 — 채운 필 금지(§0.5): 텍스트 링크형. 색은 검토 톤(tn-amber 텍스트값)과 같은 어휘 */
 .dash-lvl-pend { display: block; margin-top: 3px; padding: 0; font: inherit; font-size: 11px; font-weight: 800;
-  color: #C68A2E; background: none; border: 0; cursor: pointer; text-align: left; }
+  color: var(--warn-deep); background: none; border: 0; cursor: pointer; text-align: left; }
 .dash-lvl-pend:hover { text-decoration: underline; }
 .dash-lvl-pop-row { text-decoration: none; }
 .dash-lvl-pop-go { display: block; padding: 8px 10px 6px; font-size: 12px; font-weight: 700; color: var(--blue-deep);
@@ -317,7 +317,7 @@ a.dash-lvl-erow:hover, div.dash-lvl-erow:hover { background: var(--bg-tint); }
 .dash-lay-restore:hover { border-color: var(--blue); color: var(--blue); }
 /* 삽입 지점 표시 — 요약 카드 재정렬(#671)과 같은 결의 가로 디바이더 */
 .dash-lay-card.drop-before::before, .dash-lay-card.drop-after::after { content: ''; position: absolute; left: 0; right: 0;
-  height: 2px; border-radius: 2px; background: var(--blue); }
+  height: 2px; border-radius: 2px; background: var(--blue-fill); }
 .dash-lay-card.drop-before::before { top: -5px; }
 .dash-lay-card.drop-after::after { bottom: -5px; }
 .dash-lay-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 2px; }
@@ -325,7 +325,7 @@ a.dash-lvl-erow:hover, div.dash-lvl-erow:hover { background: var(--bg-tint); }
 /* #req R10/R11 리스트 프로젝트 팝업 — 프로젝트 탭식 행(체크박스·상태·이름·메타) + 하단 어두운 벌크 바. */
 .dash-lpm { position: relative; }
 .dash-lpm-load { padding: 22px 8px; }
-.dash-lpm-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 2px 2px 8px; border-bottom: 1px solid var(--line-soft, var(--bg-tint-2)); margin-bottom: 4px; }
+.dash-lpm-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 2px 2px 8px; border-bottom: 1px solid var(--bg-tint-2); margin-bottom: 4px; }
 .dash-lpm-count { font-size: 13px; font-weight: 700; color: var(--muted); }
 .dash-lpm-list { display: flex; flex-direction: column; }
 .dash-lpm-row { display: flex; align-items: center; gap: 8px; padding: 8px 6px; border-radius: 8px; border-top: 1px solid var(--line-row); }
@@ -339,27 +339,27 @@ a.dash-lvl-erow:hover, div.dash-lvl-erow:hover { background: var(--bg-tint); }
 .dash-lpm-meta { flex: none; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 /* 어두운 벌크 플로팅 바 — 모달 하단 고정. */
 .dash-bulkbar { position: sticky; bottom: 0; margin: 10px -14px -16px; display: flex; align-items: center; gap: 8px; padding: 10px 16px;
-  background: var(--ink, #17233b); color: #fff; box-shadow: 0 -6px 18px rgba(21,35,59,.18); }
+  background: var(--chip-dark); color: var(--on-fill); box-shadow: 0 -6px 18px rgba(var(--shadow-ink), .18); }
 .dash-bulkbar[hidden] { display: none; }
 .dash-bulkbar-n { font-size: 13px; font-weight: 700; margin-right: 4px; }
-.dash-bulkbar-btn { font-size: 12.5px; font-weight: 700; font-family: inherit; color: #fff; background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.22); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+.dash-bulkbar-btn { font-size: 12.5px; font-weight: 700; font-family: inherit; color: var(--on-fill); background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.22); border-radius: 8px; padding: 6px 12px; cursor: pointer; }
 .dash-bulkbar-btn:hover { background: rgba(255,255,255,.24); }
 .dash-bulkbar-btn.danger { background: color-mix(in srgb, var(--coral) 60%, transparent); border-color: color-mix(in srgb, var(--coral) 50%, transparent); }
 .dash-bulkbar-btn.danger:hover { background: var(--coral); }
 /* #870 그리드로 열기 = 선택 모드의 주 동작 → 흰 솔리드로 강조(삭제=코랄과 구분). */
-.dash-bulkbar-btn.primary { background: #fff; border-color: #fff; color: var(--ink); }
-.dash-bulkbar-btn.primary:hover { background: #fff; filter: brightness(.94); }
-.dash-bulkbar-btn.primary:disabled { background: rgba(255,255,255,.14); border-color: rgba(255,255,255,.22); color: #fff; }
+.dash-bulkbar-btn.primary { background: var(--surface); border-color: #fff; color: var(--ink); }
+.dash-bulkbar-btn.primary:hover { background: var(--surface); filter: brightness(.94); }
+.dash-bulkbar-btn.primary:disabled { background: rgba(255,255,255,.14); border-color: rgba(255,255,255,.22); color: var(--on-fill); }
 .dash-bulkbar-push { margin-left: auto; } /* #758 삭제·완료 버튼을 우측으로 밀기 */
 .dash-bulkbar-btn:disabled { opacity: .4; cursor: default; }
-.dash-bulkbar-x { margin-left: auto; width: 28px; height: 28px; border: none; background: rgba(255,255,255,.12); color: #fff; border-radius: 7px; cursor: pointer; font-family: inherit; font-size: 13px; }
+.dash-bulkbar-x { margin-left: auto; width: 28px; height: 28px; border: none; background: rgba(255,255,255,.12); color: var(--on-fill); border-radius: 7px; cursor: pointer; font-family: inherit; font-size: 13px; }
 .dash-bulkbar-x:hover { background: rgba(255,255,255,.22); }
 /* 새 프로젝트 만들기(경량 모달) + 위젯 하단 '+ 새 프로젝트' 버튼. */
 .dash-cp { display: flex; flex-direction: column; gap: 10px; }
 .dash-cp-where { font-size: 12.5px; color: var(--muted); }
 .dash-cp-input { width: 100%; box-sizing: border-box; font-size: 14px; padding: 9px 12px; border: 1px solid var(--line-net); border-radius: 9px; color: var(--ink); font-family: inherit; outline: none; }
 .dash-cp-input:focus { border-color: var(--blue); }
-.dash-cp-err { font-size: 12px; color: var(--coral-text, var(--coral)); }
+.dash-cp-err { font-size: 12px; color: var(--coral-text); }
 .dash-cp-err:empty { display: none; }
 .dash-cp-foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .dash-cp-foot-sp { flex: 1; } /* 취소 왼쪽, 나머지 오른쪽 */
@@ -374,8 +374,8 @@ a.dash-lvl-erow:hover, div.dash-lvl-erow:hover { background: var(--bg-tint); }
 .dash-cp-task { flex: 1; min-width: 0; box-sizing: border-box; font-size: 13px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); font-family: inherit; outline: none; background: var(--bg); }
 .dash-cp-task:focus { border-color: var(--blue); }
 .dash-cp-task-x { flex: none; width: 26px; height: 26px; border: none; background: none; color: var(--muted-2); cursor: pointer; border-radius: 6px; font-family: inherit; }
-.dash-cp-task-x:hover { background: var(--bg-tint); color: var(--coral, #e5484d); }
-.dash-cp-addtask { align-self: flex-start; display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; color: var(--muted); background: none; border: 1px dashed var(--line-net-2, var(--line)); border-radius: 8px; padding: 7px 12px; cursor: pointer; font-family: inherit; }
+.dash-cp-task-x:hover { background: var(--bg-tint); color: var(--coral); }
+.dash-cp-addtask { align-self: flex-start; display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; color: var(--muted); background: none; border: 1px dashed var(--line-net-2); border-radius: 8px; padding: 7px 12px; cursor: pointer; font-family: inherit; }
 .dash-cp-addtask:hover { color: var(--blue); border-color: var(--blue); background: var(--bg-punch); }
 .dash-cp-model { flex: none; }
 .dash-cp-run { flex: none; }
@@ -402,21 +402,21 @@ a.dash-lvl-erow:hover, div.dash-lvl-erow:hover { background: var(--bg-tint); }
 .dash-sess-empty-acts { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 5px; }
 /* #req 세션 카드 — 0부터 재설계. 좌측 상태 레일(색) + 굵은 색 상태라벨로 '작업중/대기중'을 한눈에. 2줄: 제목 / 상태·프로젝트·시간, [열기]·[⋮] 우측 중앙. */
 .dash-scard { position: relative; overflow: hidden; display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 17px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); transition: border-color .12s, background .12s, box-shadow .12s; }
-.dash-scard:hover { border-color: var(--muted-2); box-shadow: 0 1px 5px rgba(21,35,59,.05); }
+.dash-scard:hover { border-color: var(--muted-2); box-shadow: 0 1px 5px rgba(var(--shadow-ink), .05); }
 .dash-scard::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--line); } /* #758 라운딩은 카드 overflow:hidden 이 클립 — 레일이 모서리 밖으로 삐져나오지 않게 */
 /* 상태별 레일 — 작업중은 살짝 주황 배경까지 줘서 목록에서 도드라지게. */
-.dash-scard.is-busy::before { background: #f59e0b; }
-.dash-scard.is-busy { background: color-mix(in srgb, #f59e0b 6%, var(--bg)); border-color: color-mix(in srgb, #f59e0b 32%, var(--line)); }
-.dash-scard.is-waiting::before { background: var(--coral, #e5484d); }
-.dash-scard.is-waiting { background: color-mix(in srgb, var(--coral, #e5484d) 7%, var(--bg)); border-color: color-mix(in srgb, var(--coral, #e5484d) 34%, var(--line)); }
+.dash-scard.is-busy::before { background: var(--warn); }
+.dash-scard.is-busy { background: color-mix(in srgb, var(--warn) 6%, var(--bg)); border-color: color-mix(in srgb, var(--warn) 32%, var(--line)); }
+.dash-scard.is-waiting::before { background: var(--coral); }
+.dash-scard.is-waiting { background: color-mix(in srgb, var(--coral) 7%, var(--bg)); border-color: color-mix(in srgb, var(--coral) 34%, var(--line)); }
 .dash-scard.is-idle::before { background: var(--mint-deep); }
 .dash-scard.is-exited::before, .dash-scard.is-offline::before { background: var(--muted-2); }
 .dash-scard.is-exited .dash-scard-name, .dash-scard.is-offline .dash-scard-name { color: var(--muted); font-weight: 600; } /* 오프라인은 덜 강조 */
 /* #1059 E — 복원 가능(restorable): 재부팅·회수로 꺼졌지만 다시 열 수 있음 → 오프라인(회색)과 달리 '되살릴 수 있다'는 accent 신호 */
-.dash-scard.is-restorable::before { background: var(--accent, #5b6cff); }
-.dash-scard.is-restorable { background: color-mix(in srgb, var(--accent, #5b6cff) 5%, var(--bg)); border-color: color-mix(in srgb, var(--accent, #5b6cff) 26%, var(--line)); }
-.dash-scard.sel, .tsess-card.sel { border-color: color-mix(in srgb, var(--accent, #5b6cff) 55%, var(--line)); background: color-mix(in srgb, var(--accent, #5b6cff) 7%, var(--bg)); }
-.dash-scard.sel::before { background: var(--accent, #5b6cff); }
+.dash-scard.is-restorable::before { background: var(--accent); }
+.dash-scard.is-restorable { background: color-mix(in srgb, var(--accent) 5%, var(--bg)); border-color: color-mix(in srgb, var(--accent) 26%, var(--line)); }
+.dash-scard.sel, .tsess-card.sel { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: color-mix(in srgb, var(--accent) 7%, var(--bg)); }
+.dash-scard.sel::before { background: var(--accent); }
 .dash-scard-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 /* #853 자세히 = [상태 · 제목] 한 줄(상태가 제목 앞에 붙어 '무슨 작업이 어떤 상태인지'를 한 눈에). */
 .dash-scard-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
@@ -431,10 +431,10 @@ a.dash-lvl-erow:hover, div.dash-lvl-erow:hover { background: var(--bg-tint); }
 /* 상태 = 카드의 주인공. 색 점(작업중은 깜빡) + 굵은 색 라벨. */
 .dash-scard-status { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 800; letter-spacing: -.01em; }
 .dash-scard-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-.dash-scard-status.is-busy { color: #d97706; }
-.dash-scard-status.is-busy .dash-scard-dot { background: #f59e0b; animation: dashPulse 1.25s ease-in-out infinite; }
-.dash-scard-status.is-waiting { color: var(--coral, #e5484d); }
-.dash-scard-status.is-waiting .dash-scard-dot { background: var(--coral, #e5484d); animation: dashPulse 1.1s ease-in-out infinite; }
+.dash-scard-status.is-busy { color: var(--warn); }
+.dash-scard-status.is-busy .dash-scard-dot { background: var(--warn); animation: dashPulse 1.25s ease-in-out infinite; }
+.dash-scard-status.is-waiting { color: var(--coral); }
+.dash-scard-status.is-waiting .dash-scard-dot { background: var(--coral); animation: dashPulse 1.1s ease-in-out infinite; }
 /* #1205 대기 중 = 이전처럼 민트(초록). #1098 에서 회색으로 낮췄던 것을 복원 — 터미널 탭 idle(민트, #760 통일)과도 다시 일치.
    '작업 완료'와는 카드 승격(배경 틴트·보더·점 글로우)으로 구분된다. 레일(::before)은 위 상태별 레일 블록의 민트가 그대로 적용. */
 .dash-scard-status.is-idle { color: var(--mint-deep); }
@@ -443,11 +443,11 @@ a.dash-lvl-erow:hover, div.dash-lvl-erow:hover { background: var(--bg-tint); }
 /* #1059 P1 — 셸(살아있는 정상 상태) · 내가 exit(복원 가능계). AI 세션 탭과 같은 위계를 쓴다. */
 .dash-scard-status.is-shell { color: var(--muted-head); }
 .dash-scard-status.is-shell .dash-scard-dot { background: var(--muted-head); }
-.dash-scard-status.is-exited-user { color: var(--accent, #5b6cff); }
-.dash-scard-status.is-exited-user .dash-scard-dot { background: transparent; box-shadow: inset 0 0 0 2px var(--accent, #5b6cff); }
+.dash-scard-status.is-exited-user { color: var(--accent); }
+.dash-scard-status.is-exited-user .dash-scard-dot { background: transparent; box-shadow: inset 0 0 0 2px var(--accent); }
 /* #1251 — 메모리 부족(OS 강제 종료). AI 세션 탭과 같은 위계·같은 경고색. */
-.dash-scard-status.is-oom-killed { color: #9A5B2E; }
-.dash-scard-status.is-oom-killed .dash-scard-dot { background: transparent; box-shadow: inset 0 0 0 2px #9A5B2E; }
+.dash-scard-status.is-oom-killed { color: var(--warn-text); }
+.dash-scard-status.is-oom-killed .dash-scard-dot { background: transparent; box-shadow: inset 0 0 0 2px var(--warn-text); }
 .dash-scard-status.is-done { color: var(--mint-deep); }
 .dash-scard-status.is-done .dash-scard-dot { background: var(--mint-deep); box-shadow: 0 0 0 3px color-mix(in srgb, var(--mint-deep) 22%, transparent); }
 /* ⚠ 왼쪽 줄은 `box-shadow: inset` 이 아니라 **카드 공통 레일(::before, 4px)** 이다. is-done 에 레일 색을 안 주면
@@ -460,12 +460,12 @@ a.dash-lvl-erow:hover, div.dash-lvl-erow:hover { background: var(--bg-tint); }
 .dash-scard.is-done .dash-scard-name { font-weight: 700; }
 .dash-scard-status.is-exited, .dash-scard-status.is-offline { color: var(--muted); }
 .dash-scard-status.is-exited .dash-scard-dot, .dash-scard-status.is-offline .dash-scard-dot { background: var(--muted-2); }
-.dash-scard-status.is-restorable { color: var(--accent, #5b6cff); } /* #1059 E 복원 가능 */
-.dash-scard-status.is-restorable .dash-scard-dot { background: var(--accent, #5b6cff); }
+.dash-scard-status.is-restorable { color: var(--accent); } /* #1059 E 복원 가능 */
+.dash-scard-status.is-restorable .dash-scard-dot { background: var(--accent); }
 /* #853 프로젝트 뱃지 = 버튼(누르면 그 프로젝트 페이지로 이동 — 팝업 아님). 링크임을 밑줄 호버로 알린다. */
 .dash-scard-proj { min-width: 0; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; font-weight: 700; color: var(--blue); background: var(--bg-punch); border: 0; border-radius: 6px; padding: 1.5px 7px; font-family: inherit; cursor: pointer; }
 .dash-scard-proj:hover { text-decoration: underline; filter: brightness(.97); }
-.dash-scard-proj.mine { color: var(--accent, #5b6cff); background: color-mix(in srgb, var(--accent, #5b6cff) 10%, transparent); }
+.dash-scard-proj.mine { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
 /* #853 리스트(영역) 뱃지 — 프로젝트 뱃지와 같은 형식, 한 톤 낮춰 종속 관계를 보인다. */
 .dash-scard-list { min-width: 0; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; font-weight: 700; color: var(--ink-sub); background: var(--bg-tint-2); border-radius: 6px; padding: 1.5px 7px; }
 .dash-scard-tag { flex: none; font-size: 11px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint-2); border-radius: 5px; padding: 1px 6px; }
@@ -503,7 +503,7 @@ a.dash-lvl-erow:hover, div.dash-lvl-erow:hover { background: var(--bg-tint); }
 .tsess-card:focus-within .tsess-checkwrap,
 .tsess-card.sel .tsess-checkwrap,
 .tsess-list.selectmode .tsess-checkwrap { width: 18px; opacity: 1; margin-right: 4px; } /* #853 폭·여백 늘리고 overflow:visible + margin:0 → 체크박스 우측 안 잘림 */
-.dash-sess-check, .tsess-check { width: 15px; height: 15px; flex: none; margin: 0; cursor: pointer; accent-color: var(--accent, #5b6cff); }
+.dash-sess-check, .tsess-check { width: 15px; height: 15px; flex: none; margin: 0; cursor: pointer; accent-color: var(--accent); }
 /* #1140 드래그 범위 선택 중 — 지나갈 행의 체크박스를 미리 다 꺼내 두고(호버한 칸만 보이면 어디까지 칠했는지 안 보인다)
    드래그 궤적이 텍스트 선택으로 새는 것을 막는다. */
 body.lv-dragselect { user-select: none; -webkit-user-select: none; }
@@ -514,17 +514,17 @@ body.lv-dragselect .tsess-checkwrap { width: 18px; opacity: 1; margin-right: 4px
 .dash-rename { display: flex; flex-direction: column; gap: 8px; min-width: 340px; }
 .dash-rename-lbl { font-size: 12px; font-weight: 700; color: var(--ink-sub); }
 .dash-rename-input { width: 100%; box-sizing: border-box; font-family: inherit; font-size: 14px; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; }
-.dash-rename-input:focus { outline: none; border-color: var(--accent, #5b6cff); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #5b6cff) 15%, transparent); }
+.dash-rename-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent); }
 .dash-rename-hint { font-size: 11.5px; color: var(--muted); line-height: 1.45; }
-.dash-rename-err { font-size: 12px; font-weight: 600; color: var(--coral, #e5484d); }
+.dash-rename-err { font-size: 12px; font-weight: 600; color: var(--coral); }
 .dash-rename-acts { display: flex; justify-content: flex-end; gap: 6px; margin-top: 2px; }
 .dash-bulkbar--sess { margin: 8px 6px 4px; bottom: 4px; border-radius: 10px; }
 /* #req 세션 목록 맨 밑 '+ 새 세션'(대시보드서 바로 생성) — 프로젝트 인라인 추가와 같은 톤. */
 .dash-sess-addrow { padding: 2px 6px 4px; }
-.dash-sess-addbtn { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 34px; padding: 5px 8px; border: 1px dashed var(--line-net-2, var(--line)); background: none; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 700; color: var(--muted); }
+.dash-sess-addbtn { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 34px; padding: 5px 8px; border: 1px dashed var(--line-net-2); background: none; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 700; color: var(--muted); }
 .dash-sess-addbtn:hover { color: var(--blue); border-color: var(--blue); background: var(--bg-punch); }
 .dash-sess-addplus { flex: none; font-size: 15px; font-weight: 700; }
-.dash-pop-opt.danger .dash-pop-name { color: var(--coral-text, var(--coral)); }
+.dash-pop-opt.danger .dash-pop-name { color: var(--coral-text); }
 .dash-pop-opt.danger:hover { background: color-mix(in srgb, var(--coral) 12%, var(--bg)); }
 
 /* 팀 작업 로그 행 — 클릭 시 전체 작업 로그 팝업(별도 페이지 폐지). */
@@ -536,7 +536,7 @@ body.lv-dragselect .tsess-checkwrap { width: 18px; opacity: 1; margin-right: 4px
    헤더 = 'N 안 읽음' 뱃지 + '모두 읽음' + ⚙(설정 아이콘). */
 .dash-wh-gear { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--bg); cursor: pointer; color: var(--muted); }
 .dash-wh-gear:hover { color: var(--ink); border-color: var(--muted-2); background: var(--bg-tint); }
-.dash-ntf-unreadn { font-size: 11.5px; font-weight: 800; color: #fff; background: var(--blue); border-radius: 999px; padding: 1.5px 8px; letter-spacing: -.01em; }
+.dash-ntf-unreadn { font-size: 11.5px; font-weight: 800; color: var(--on-fill); background: var(--blue-fill); border-radius: 999px; padding: 1.5px 8px; letter-spacing: -.01em; }
 .dash-ntf-alldone { font-size: 12px; font-weight: 600; color: var(--muted-2); }
 .dash-ntf-markall { font-size: 12px; font-weight: 700; color: var(--blue); background: none; border: none; cursor: pointer; font-family: inherit; padding: 2px 6px; border-radius: 6px; }
 .dash-ntf-markall:hover { background: var(--bg-punch); }
@@ -547,20 +547,20 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-ntf.unread:hover { background: color-mix(in srgb, var(--blue) 11%, var(--bg)); }
 /* 유형 타일 — 라운드 스퀘어 + 유형색(연한 배경 + 진한 글리프). 앱 아이콘 톤 = '알림' 신호. */
 .dash-ntf-tile { flex: none; width: 30px; height: 30px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center;
-  background: color-mix(in srgb, var(--tc, var(--muted-3)) 15%, var(--bg)); color: var(--tc, var(--muted)); }
+  background: color-mix(in srgb, var(--tc) 15%, var(--bg)); color: var(--tc); }
 .dash-ntf-tile svg { display: block; width: 16px; height: 16px; }
 .dash-ntf-glyph { font-size: 15px; font-weight: 800; line-height: 1; }
 .dash-ntf-tile.t-blue { --tc: var(--blue); }
 .dash-ntf-tile.t-teal { --tc: var(--teal); }
 .dash-ntf-tile.t-mint { --tc: var(--mint-deep); }
-.dash-ntf-tile.t-indigo { --tc: #6366f1; }
-.dash-ntf-tile.t-violet { --tc: #8B7BD8; }
+.dash-ntf-tile.t-indigo { --tc: var(--accent); }
+.dash-ntf-tile.t-violet { --tc: var(--purple); }
 .dash-ntf-tile.t-slate { --tc: var(--muted); }
-.dash-ntf-tile.t-amber { --tc: #C68A2E; }
+.dash-ntf-tile.t-amber { --tc: var(--warn-deep); }
 .dash-ntf-tile.t-coral { --tc: var(--coral); }
 .dash-ntf-tile.tn-mint { --tc: var(--mint-deep); } .dash-ntf-tile.tn-coral { --tc: var(--coral); }
 .dash-ntf-tile.tn-blue { --tc: var(--blue); } .dash-ntf-tile.tn-teal { --tc: var(--teal); }
-.dash-ntf-tile.tn-violet { --tc: #8B7BD8; } .dash-ntf-tile.tn-amber { --tc: #C68A2E; }
+.dash-ntf-tile.tn-violet { --tc: var(--purple); } .dash-ntf-tile.tn-amber { --tc: var(--warn-deep); }
 .dash-ntf-tile.tn-mut { --tc: var(--muted-3); }
 /* 본문 — 1행: 누가+동사(왼) · 시간(오). 2행: 프로젝트·스니펫. */
 .dash-ntf-main { flex: 1; min-width: 0; }
@@ -571,14 +571,14 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-ntf-time { flex: none; font-size: 11.5px; color: var(--muted-2); font-variant-numeric: tabular-nums; }
 .dash-ntf-sub { display: block; margin-top: 1px; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* 안읽음 점 — 우측 세로 중앙. */
-.dash-ntf-udot { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); width: 8px; height: 8px; border-radius: 50%; background: var(--blue); flex: none; }
+.dash-ntf-udot { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); width: 8px; height: 8px; border-radius: 50%; background: var(--blue-fill); flex: none; }
 .dash-ntf-dbadge { flex: none; font-size: 12px; font-weight: 800; color: var(--muted); font-variant-numeric: tabular-nums; }
 .dash-ntf-dbadge.overdue { color: var(--coral-text); }
 
 /* 알림 설정 팝오버 */
 .dash-pop { position: fixed; z-index: 80; } /* 모달(z-70) 안에서 열리는 팝오버가 모달 위로(#req 상태 메뉴·리스트 이동 등). */
 .dash-pop-panel { width: 264px; max-height: 70vh; overflow-y: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
-  box-shadow: 0 8px 28px rgba(21,35,59,.16); padding: 6px; scrollbar-width: thin; }
+  box-shadow: 0 8px 28px rgba(var(--shadow-ink), .16); padding: 6px; scrollbar-width: thin; }
 .dash-pop-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 8px 8px 6px; }
 .dash-pop-head strong { font-size: 13.5px; }
 .dash-pop-sub { font-size: 10.5px; color: var(--muted-2); }
@@ -591,16 +591,16 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-pop-opt--all .dash-pop-name { font-weight: 800; }
 .dash-pop-opt.zero .dash-pop-name, .dash-pop-opt.zero .dash-pop-cnt { color: var(--muted-2); }
 .dash-pop-box { flex: none; width: 15px; height: 15px; border-radius: 4px; border: 1.5px solid var(--muted-2); display: grid; place-items: center;
-  font-size: 10px; line-height: 1; color: #fff; font-weight: 800; }
+  font-size: 10px; line-height: 1; color: var(--on-fill); font-weight: 800; }
 /* #1238 AI 세션 탭 축 드롭다운도 같은 체크박스를 쓴다 — 두 화면이 갈라지지 않게 셀렉터만 더한다(새 규칙 X). */
-.dash-pop-opt.sel .dash-pop-box, .tsess-projfilter-opt.active .dash-pop-box { background: var(--blue); border-color: var(--blue); }
+.dash-pop-opt.sel .dash-pop-box, .tsess-projfilter-opt.active .dash-pop-box { background: var(--blue-fill); border-color: var(--blue); }
 .dash-pop-opt .dash-pop-name { flex: 1; }
 .dash-pop-cnt { flex: none; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 /* #req ⚙ 팝오버 리스트 검색 + 즐겨찾기 상단 + 스크롤 */
 .dash-pop-search { width: 100%; box-sizing: border-box; margin: 2px 0 3px; padding: 6px 9px; font-family: inherit; font-size: 13px; color: var(--ink); background: var(--bg-tint); border: 1px solid var(--line); border-radius: 7px; outline: none; }
 .dash-pop-search:focus { border-color: var(--blue); }
 .dash-pop-listrows { max-height: 240px; overflow-y: auto; scrollbar-width: thin; }
-.dash-pop-fav { color: #f5a623; }
+.dash-pop-fav { color: var(--warn-2); }
 .dash-pop-row { display: flex; align-items: flex-start; gap: 9px; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
 .dash-pop-row:hover { background: var(--bg-tint); }
 .dash-pop-row input { margin-top: 2px; width: 15px; height: 15px; accent-color: var(--blue); cursor: pointer; flex: none; }
@@ -615,7 +615,7 @@ a.dash-ntf:hover { background: var(--bg-tint); }
   line-height: 1; display: grid; place-items: center; cursor: pointer; padding: 0;
 }
 .dash-pop-i:hover { color: var(--blue); border-color: var(--blue); }
-.dash-pop-i.on { color: #fff; background: var(--blue); border-color: var(--blue); }
+.dash-pop-i.on { color: var(--on-fill); background: var(--blue-fill); border-color: var(--blue); }
 .dash-pop-i:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
 /* #req 설정 팝오버 세그먼트(라디오 한 줄) — 태스크 수 표시·기본 필터 등. */
 .dash-pop-seg { display: flex; gap: 4px; padding: 2px 8px 6px; }
@@ -649,11 +649,11 @@ a.dash-ntf:hover { background: var(--bg-tint); }
   border: none; border-radius: 6px; background: var(--bg-tint); color: var(--muted); font-size: 11px; line-height: 1; cursor: pointer; font-family: inherit;
   opacity: 0; transition: opacity .12s, background .12s, color .12s; }
 .dash-ov-card2:hover .dash-ov-hide, .dash-ov-card2:focus-within .dash-ov-hide { opacity: 1; }
-.dash-ov-hide:hover { background: color-mix(in srgb, var(--coral) 16%, var(--bg)); color: var(--coral-text, var(--coral)); }
+.dash-ov-hide:hover { background: color-mix(in srgb, var(--coral) 16%, var(--bg)); color: var(--coral-text); }
 .dash-ov-allhidden { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 14px 10px; font-size: 12.5px; color: var(--muted-2); }
 .dash-ov-restore { font-size: 12.5px; font-weight: 700; color: var(--blue); background: none; border: 1px solid color-mix(in srgb, var(--blue) 32%, var(--bg)); border-radius: 7px; padding: 4px 11px; cursor: pointer; font-family: inherit; }
 .dash-ov-restore:hover { background: var(--bg-punch); }
-.dash-pop-foot { display: flex; justify-content: flex-end; gap: 2px; padding: 6px 4px 2px; margin-top: 4px; border-top: 1px solid var(--line-soft, var(--bg-tint-2)); }
+.dash-pop-foot { display: flex; justify-content: flex-end; gap: 2px; padding: 6px 4px 2px; margin-top: 4px; border-top: 1px solid var(--bg-tint-2); }
 .dash-pop-foot:empty { display: none; } /* 되돌릴 게 없으면 구분선까지 없앤다 */
 .dash-pop-reset { font-size: 12px; font-weight: 700; color: var(--blue); background: none; border: none; cursor: pointer; font-family: inherit; padding: 4px 8px; border-radius: 6px; }
 .dash-pop-reset:hover { background: var(--bg-punch); }
@@ -668,7 +668,7 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-pop-caret { flex: none; width: 11px; font-size: 9px; color: var(--muted-2); text-align: center; }
 .dash-pop-foldico { flex: none; display: inline-flex; align-items: center; }
 .dash-pop-foldico .ft-folder { width: 17px; height: auto; }
-.dash-pop-spaceav { flex: none; width: 17px; height: 17px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; font-size: 9.5px; font-weight: 800; color: #fff; }
+.dash-pop-spaceav { flex: none; width: 17px; height: 17px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; font-size: 9.5px; font-weight: 800; color: var(--on-fill); }
 .dash-pop-fcount { margin-left: auto; flex: none; font-size: 10.5px; font-weight: 700; color: var(--muted-2); font-variant-numeric: tabular-nums; }
 .dash-pop-lrow .dash-pop-name { font-weight: 600; }
 .dash-pop-treegh { padding-top: 10px; }
@@ -703,7 +703,7 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-fb-seg:last-child { color: var(--ink); }
 .dash-fb-seg:hover { background: var(--bg-tint); color: var(--ink); }
 .dash-fb-sep { color: var(--muted-3); font-size: 12px; }
-.dash-fb-tools { display: flex; align-items: center; gap: 6px; padding: 2px 0 6px; border-bottom: 1px solid var(--line-soft, var(--bg-tint-2)); }
+.dash-fb-tools { display: flex; align-items: center; gap: 6px; padding: 2px 0 6px; border-bottom: 1px solid var(--bg-tint-2); }
 .dash-fb-spacer { flex: 1; }
 .dash-fb-btn { font-size: 12.5px; font-weight: 700; font-family: inherit; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 5px 11px; cursor: pointer; }
 .dash-fb-btn:hover { background: var(--bg-tint); border-color: var(--muted-2); }
@@ -716,7 +716,7 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-fb-card:hover .dash-fb-actions, .dash-fb-card:focus-within .dash-fb-actions { opacity: 1; }
 .dash-fb-act { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--muted); cursor: pointer; font-family: inherit; padding: 0; }
 .dash-fb-act:hover { color: var(--ink); border-color: var(--muted-2); background: var(--bg-tint); }
-.dash-fb-act.danger:hover { color: var(--coral-text, var(--coral)); border-color: color-mix(in srgb, var(--coral) 40%, var(--bg)); background: color-mix(in srgb, var(--coral) 12%, var(--bg)); }
+.dash-fb-act.danger:hover { color: var(--coral-text); border-color: color-mix(in srgb, var(--coral) 40%, var(--bg)); background: color-mix(in srgb, var(--coral) 12%, var(--bg)); }
 .dash-fb-act svg { display: block; }
 .dash-fb[aria-busy="true"] { opacity: .5; pointer-events: none; }
 /* R1 폴더 브라우저 — 뷰 토글(아이콘/목록) + 목록(Finder 리스트) 뷰. */
@@ -767,17 +767,17 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 .dash-fold-list { display: flex; flex-direction: column; padding: 2px 2px 4px; }
 .dash-fold-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 9px; cursor: pointer; transition: background .12s; }
 .dash-fold-row:hover, .dash-fold-row:focus-visible { background: var(--bg-sel); outline: none; }
-.dash-fold-row + .dash-fold-row { box-shadow: 0 -1px 0 var(--line-soft, var(--bg-tint-2)); } /* 행 사이 얇은 구분선(hover 배경이 덮음) */
+.dash-fold-row + .dash-fold-row { box-shadow: 0 -1px 0 var(--bg-tint-2); } /* 행 사이 얇은 구분선(hover 배경이 덮음) */
 .dash-fold-row-ic { flex: none; width: 28px; display: inline-flex; align-items: center; justify-content: center; }
 .dash-fold-row-ic .ft-folder { width: 27px; height: auto; }
 .dash-fold-row-nm { flex: 1; min-width: 0; font-size: 13.5px; font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* 파일 미리보기(#672 후속) — 브라우저 안 제자리 렌더: 상단 바(뒤로·이름·다운로드) + 스테이지(이미지·PDF·코드). */
-.dash-fp-bar { display: flex; align-items: center; gap: 10px; padding: 0 0 8px; border-bottom: 1px solid var(--line-soft, var(--bg-tint-2)); }
+.dash-fp-bar { display: flex; align-items: center; gap: 10px; padding: 0 0 8px; border-bottom: 1px solid var(--bg-tint-2); }
 .dash-fp-name { font-size: 13px; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .dash-fp-stage { display: flex; align-items: center; justify-content: center; min-height: 200px; max-height: 72vh; overflow: auto; padding: 12px 2px 2px; scrollbar-width: thin; }
 .dash-fp-load { padding: 28px; }
-.dash-fp-img { display: block; max-width: 100%; max-height: 70vh; border-radius: 8px; box-shadow: 0 2px 12px rgba(21,35,59,.12); }
+.dash-fp-img { display: block; max-width: 100%; max-height: 70vh; border-radius: 8px; box-shadow: 0 2px 12px rgba(var(--shadow-ink), .12); }
 .dash-fp-pdf { width: 100%; height: 70vh; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
 .dash-fp-code { margin: 0; width: 100%; box-sizing: border-box; max-height: 70vh; overflow: auto; background: var(--bg-tint); border: 1px solid var(--line); border-radius: 8px;
   padding: 12px 14px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.55; color: var(--ink); white-space: pre; scrollbar-width: thin; }
@@ -790,14 +790,14 @@ a.dash-ntf:hover { background: var(--bg-tint); }
 /* CSV/TSV 표 미리보기 — 헤더·첫열 고정(sticky), 가로/세로 스크롤. */
 .dash-fp-tablewrap { flex: 1 1 100%; min-width: 0; width: 100%; max-height: 100%; align-self: stretch; overflow: auto; border: 1px solid var(--line); border-radius: 8px; scrollbar-width: thin; }
 .dash-fp-table { border-collapse: collapse; font-size: 12.5px; width: max-content; min-width: 100%; }
-.dash-fp-table th, .dash-fp-table td { border: 1px solid var(--line-soft, var(--bg-tint-2)); padding: 5px 9px; text-align: left; white-space: nowrap; max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
+.dash-fp-table th, .dash-fp-table td { border: 1px solid var(--bg-tint-2); padding: 5px 9px; text-align: left; white-space: nowrap; max-width: 340px; overflow: hidden; text-overflow: ellipsis; }
 .dash-fp-table thead th { position: sticky; top: 0; background: var(--bg-tint); font-weight: 700; color: var(--ink); z-index: 1; }
-.dash-fp-table tbody tr:nth-child(even) { background: var(--bg-tint-2, rgba(21,35,59,.03)); }
+.dash-fp-table tbody tr:nth-child(even) { background: var(--bg-tint-2, rgba(var(--tint-ink), .03)); }
 .dash-fp-table .dash-fp-cn { position: sticky; left: 0; background: var(--bg-tint); color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; z-index: 1; }
 .dash-fp-table thead .dash-fp-cn { z-index: 2; }
 .dash-fp-tablemore { flex: none; padding: 8px 4px; font-size: 12px; color: var(--muted); text-align: center; }
 /* 음성·영상 미리보기 */
-.dash-fp-video { display: block; max-width: 100%; max-height: 72vh; border-radius: 8px; background: #000; box-shadow: 0 2px 12px rgba(21,35,59,.16); }
+.dash-fp-video { display: block; max-width: 100%; max-height: 72vh; border-radius: 8px; background: #000; box-shadow: 0 2px 12px rgba(var(--shadow-ink), .16); }
 .dash-fp-audio { width: min(460px, 100%); }
 
 /* #req 공유 폴더 모달: 크게 + 우하단 드래그로 크기조절, 바깥클릭엔 안 닫힘(persistent) — 오래 머무는 창의 오조작 방지. */

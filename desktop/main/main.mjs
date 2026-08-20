@@ -150,6 +150,27 @@ function launchSpecFor(cli, args) {
 function safeAppVersion() { try { return app.getVersion(); } catch { return null; } }
 /** OS 다크모드 — frameless 창의 초기 타이틀바 색(마법사는 이 값이 전부, 웹 창은 페이지 보고가 곧 덮는다). */
 function osTheme() { try { return nativeTheme.shouldUseDarkColors ? "dark" : "light"; } catch { return "light"; } }
+// ── 창 배경색(#1683 다크모드) ────────────────────────────────────────────────
+// 왜 필요한가: 창은 첫 그림보다 **먼저** 뜬다. 배경색을 안 주면 Electron 기본이 흰색이라, 다크로 보는 사람은
+//  창을 열 때마다 흰 판이 번쩍인다(웹이 다 그려질 때까지). 그래서 '그릴 내용' 과 같은 색을 창에 미리 깔아 둔다.
+// 무엇을 깔 것인가: 웹 창의 진짜 배경은 **웹의 테마 선택**(localStorage lv:theme)이지 OS 설정이 아니다 —
+//  그 값은 게이트웨이 출처의 스토리지에 있어 창을 만들 때는 읽을 수 없다. 대신 preload ③ 이 페이지의 실제
+//  배경색을 이미 보고하고 있으므로(IPC_WEB.TITLEBAR), 그 마지막 관측값을 적어 두었다가 다음에 깐다.
+//  한 번도 연 적 없으면 OS 설정으로 시작한다(그게 '시스템 따름' 기본값과 같은 판단이다).
+const THEME_BG = { dark: "#111726", light: "#FFFFFF" };   // public/styles/90-dark.css --bg / 01-base.css --bg
+const WEBBG_FILE = join(LIVELY_DIR, "desktop-web-bg.json");
+function osThemeBg() { return THEME_BG[osTheme()] || THEME_BG.light; }
+function loadWebBg() {
+  try {
+    const v = JSON.parse(readFileSync(WEBBG_FILE, "utf8"));
+    return /^#[0-9a-fA-F]{6}$/.test(v && v.bg) ? v.bg : osThemeBg();
+  } catch { return osThemeBg(); }
+}
+function saveWebBg(bg) {
+  if (!/^#[0-9a-fA-F]{6}$/.test(String(bg || ""))) return;
+  try { mkdirSync(LIVELY_DIR, { recursive: true }); writeFileSync(WEBBG_FILE, JSON.stringify({ bg })); }
+  catch { /* 저장 실패는 치명이 아니다 — 다음 실행이 OS 설정으로 시작할 뿐 */ }
+}
 // OS 테마가 바뀌면(라이트↔다크) 마법사 창의 Windows 창 버튼 색을 따라 바꾼다 — 마법사 CSS 는 prefers-color-scheme 로
 //  이미 스스로 바뀌므로, 안 맞추면 버튼 자리만 옛 색으로 남는다. 웹 창은 페이지가 관찰·보고하므로 여기서 안 건드린다.
 try {
@@ -409,6 +430,7 @@ function showWindow() {
   const b = loadBounds();
   win = new BrowserWindow({
     ...b, ...frameOptions(process.platform, osTheme()), minWidth: 560, minHeight: 420, title: "라이블리", show: false,
+    backgroundColor: osThemeBg(),   // #1683 — 첫 그림 전 흰 번쩍임 방지(마법사는 OS 설정을 따른다)
     autoHideMenuBar: true,   // frameless 에서 메뉴 막대가 남으면 그게 곧 '이상한 바' 다 — Alt 로는 나온다
     webPreferences: {
       preload: join(HERE, "..", "preload", "preload.cjs"),
@@ -445,6 +467,7 @@ function showApp() {
     const b = loadAppBounds();
     appWin = new BrowserWindow({
       ...b, ...frameOptions(process.platform, osTheme()), minWidth: APP_WINDOW_MIN.width, minHeight: APP_WINDOW_MIN.height, title: "라이블리", show: false,
+      backgroundColor: loadWebBg(),   // #1683 — 지난번 웹 화면의 실제 배경색(테마 선택 반영)으로 시작한다
       autoHideMenuBar: true,   // Windows·Linux: 메뉴 막대를 숨긴다(Alt 로 나온다) — 웹 화면 위에 File/Edit 줄이 얹히면 웹이 아니다
       webPreferences: {
         preload: WEB_PRELOAD,
@@ -916,6 +939,13 @@ ipcMain.on(IPC_WEB.BOOT, (e) => {
 });
 // 타이틀바 색 보고(preload ③) — Windows 에서만 뜻이 있다(WCO 버튼 색). 값은 titlebarOverlayPatch 가 #RRGGBB 로 강제한다.
 ipcMain.handle(IPC_WEB.TITLEBAR, (e, t) => {
+  // 페이지의 실제 배경색 관측(#1683) — 창 배경을 같은 색으로 맞추고(리사이즈·재로드 중 흰 틈 방지) 다음 실행을 위해 적어 둔다.
+  //  ⚠ Windows 전용 조기 반환보다 **앞**이어야 한다 — 흰 번쩍임은 모든 OS 에서 나므로.
+  const pageBg = t && typeof t.color === "string" && /^#[0-9a-fA-F]{6}$/.test(t.color) ? t.color : null;
+  if (pageBg) {
+    try { BrowserWindow.fromWebContents(e.sender)?.setBackgroundColor(pageBg); } catch { /* 창이 이미 닫혔다 */ }
+    if (fromGateway(e)) saveWebBg(pageBg);   // 게이트웨이 화면일 때만 — 남의 페이지 색을 기억하지 않는다
+  }
   if (process.platform !== "win32") return { ok: false };
   const patch = titlebarOverlayPatch(t);
   if (!patch) return { ok: false };

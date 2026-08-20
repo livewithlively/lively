@@ -7,7 +7,9 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%231e1e2e'/%3E%3Crect x='3' y='3' width='4.5' height='4.5' rx='1' fill='%2316C79A'/%3E%3Crect x='8.5' y='3' width='4.5' height='4.5' rx='1' fill='%2316C79A'/%3E%3Crect x='3' y='8.5' width='4.5' height='4.5' rx='1' fill='%2316C79A'/%3E%3Crect x='8.5' y='8.5' width='4.5' height='4.5' rx='1' fill='%2316C79A'/%3E%3C/svg%3E">
 <style>
   :root { --bg:#e6ebf3; --bar:#ffffff; --fg:#15233b; --fg-dim:#5a6b85; --border:#d8e0ee; --accent:#16a37f; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#11131a; --bar:#181825; --fg:#cdd6f4; --fg-dim:#9399b2; --border:#2a2c3a; } }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111726; --bar:#1A2336; --fg:#EAF0FA; --fg-dim:#B0BDD5; --border:#273349; } }
+  /* 명시 선택(앱 토글)도 따른다(#1683) — 이 페이지는 셸 밖이라 값을 옮겨 적는다. data-theme 은 아래 스크립트가 찍는다. */
+  html[data-theme="dark"] { --bg:#111726; --bar:#1A2336; --fg:#EAF0FA; --fg-dim:#B0BDD5; --border:#273349; }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
   body { font-family: Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--fg); overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
@@ -41,7 +43,7 @@
   .cell-head .spacer { flex: 1; }
   .cell-head a { color: var(--fg-dim); text-decoration: none; font-size: 11.5px; white-space: nowrap; }
   .cell-head a:hover { color: var(--accent); }
-  .cell iframe { flex: 1; width: 100%; border: 0; min-height: 0; background: #1e1e2e; }
+  .cell iframe { flex: 1; width: 100%; border: 0; min-height: 0; background: var(--bg); }
   .cell.active { box-shadow: inset 0 0 0 2px var(--accent); }        /* 지금 입력 중인 세션 강조 */
   /* 셀 코너 도구모음 — 드래그 손잡이·전체화면·새 탭. 세션명은 iframe(터미널) 자체 툴바가 이미 표시하므로 제목 중복 안 함. */
   /* 셀 하단 우측 — iframe 자체 상단 툴바(파일 탐색기·환경 설정·사용법 안내)와 안 겹치게 아래로 뺀다. */
@@ -95,6 +97,9 @@
   @keyframes qflash { 0%,100% { box-shadow: inset 0 0 0 2px var(--accent); } 30%,70% { box-shadow: inset 0 0 0 4px var(--accent), 0 0 0 4px rgba(22,163,127,.45); } }
   .cell.qflash { animation: qflash 1.3s ease; }
 </style>
+<!-- 테마 pre-paint(#1683) — 저장된 앱 테마(lv:theme)를 CSS 로드 전에 찍는다. 이 페이지는 앱 셸 밖이지만
+     같은 출처라 그 키가 보인다. 키 없음 = 시스템 따름(@media 가 받는다). 그리드 크롬만 담당한다 — 각 셀(터미널)은 자기 문서에서 같은 규칙으로 따라간다. -->
+<script>(function(){try{var t=localStorage.getItem('lv:theme');if(t==='dark'||t==='light')document.documentElement.setAttribute('data-theme',t)}catch(e){}})();</script>
 </head>
 <body>
 <div id="bar">
@@ -494,6 +499,15 @@
     ov.addEventListener('keydown', function (e) { if (e.key === 'Escape') { e.stopPropagation(); closeHelp(); } });
     document.getElementById('help-close').focus();
   }
+})();
+</script>
+<script>
+// 앱 테마 동기화(#1683) — 다른 문서(앱 셸·설정 토글)가 lv:theme 를 바꾸면 이 크롬도 따라간다.
+(function(){
+  function apply(){ try { var t = localStorage.getItem('lv:theme');
+    if (t === 'dark' || t === 'light') document.documentElement.setAttribute('data-theme', t);
+    else document.documentElement.removeAttribute('data-theme'); } catch (e) { /* 스토리지 차단 */ } }
+  window.addEventListener('storage', function (e) { if (!e.key || e.key === 'lv:theme') apply(); });
 })();
 </script>
 </body>

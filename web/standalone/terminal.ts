@@ -91,7 +91,32 @@ const FONTS = [
   { v: "Monaco, 'D2Coding', monospace", label: 'Monaco' },
   { v: "Consolas, 'D2Coding', monospace", label: 'Consolas' },
 ];
+// ── 테마 ────────────────────────────────────────────────────────────────────
+// 기본은 **앱 테마 따름(auto)** 이다(#1683). 웹 앱이 라이트/다크를 바꾸면 터미널도 같이 바뀐다 —
+//  같은 출처의 localStorage['lv:theme'] 를 보고(앱과 같은 키·같은 규칙: 값 없음 = 시스템 따름),
+//  storage 이벤트로 즉시 따라간다(다른 탭이든, 앱 안 iframe 이든 같은 출처면 온다).
+//  Dracula·Nord 처럼 이름 있는 테마를 고르면 그 순간 sync 를 벗어난다(사람이 정한 게 이긴다).
+//
+// auto 의 색은 **앱 팔레트에서 따왔다** — 배경은 앱의 --bg(다크 #111726 / 라이트 #FFFFFF), 글자는 --ink.
+//  ANSI 16색도 브랜드 계열로 맞추되 각 배경 위에서 4.5:1 이상을 실측해 정했다(저휘도 모니터 가독).
+//  예외는 ANSI black 하나 — 다크 배경 위에서 흐린 게 맞다(그 슬롯의 뜻이 '가장 어두운 색'이다).
+const ANSI_DARK = {
+  black: '#2B3549', red: '#F07E7E', green: '#37B592', yellow: '#F0A32B',
+  blue: '#6E9AF8', magenta: '#A29AE8', cyan: '#3EC4C6', white: '#B0BDD5',
+  brightBlack: '#74839F', brightRed: '#F6B3AB', brightGreen: '#43E5B0', brightYellow: '#F0C97E',
+  brightBlue: '#8FB2FA', brightMagenta: '#C0B8FF', brightCyan: '#6FE0E2', brightWhite: '#EAF0FA',
+};
+const ANSI_LIGHT = {
+  black: '#15233B', red: '#C7443F', green: '#0F7A5F', yellow: '#8A5A00',
+  blue: '#2453C7', magenta: '#6C4FB8', cyan: '#0E6E70', white: '#5A6B85',
+  brightBlack: '#64728A', brightRed: '#B84E44', brightGreen: '#0A805F', brightYellow: '#6B4E00',
+  brightBlue: '#2D6BF0', brightMagenta: '#5B4FA8', brightCyan: '#12797B', brightWhite: '#15233B',
+};
+const APP_DARK = Object.assign({ background: '#111726', foreground: '#EAF0FA', cursor: '#43E5B0', selectionBackground: '#2B3B5C' }, ANSI_DARK);
+const APP_LIGHT = Object.assign({ background: '#FFFFFF', foreground: '#15233B', cursor: '#2D6BF0', selectionBackground: '#CFE0F7' }, ANSI_LIGHT);
+
 const THEMES = {
+  auto:      { name: '앱 테마 따름', auto: true },
   dark:      { name: '다크', dark: true,  theme: { background: '#1e1e2e', foreground: '#cdd6f4', cursor: '#f5e0dc', selectionBackground: '#585b70' } },
   light:     { name: '라이트', dark: false, theme: { background: '#fdfdfd', foreground: '#2a2a2a', cursor: '#5566ff', selectionBackground: '#cfe3ff' } },
   dracula:   { name: 'Dracula', dark: true, theme: { background: '#282a36', foreground: '#f8f8f2', cursor: '#ff79c6', selectionBackground: '#44475a' } },
@@ -99,6 +124,27 @@ const THEMES = {
   nord:      { name: 'Nord', dark: true, theme: { background: '#2e3440', foreground: '#d8dee9', cursor: '#88c0d0', selectionBackground: '#434c5e' } },
   github:    { name: 'GitHub Light', dark: false, theme: { background: '#ffffff', foreground: '#24292f', cursor: '#0969da', selectionBackground: '#b6e3ff' } },
 };
+
+/** 앱이 지금 보고 있는 테마 — web/theme.ts 와 같은 키·같은 규칙(없음 = 시스템 따름). */
+function appIsDark() {
+  try {
+    const p = localStorage.getItem('lv:theme');
+    if (p === 'dark') return true;
+    if (p === 'light') return false;
+  } catch (_) { /* 스토리지 차단 */ }
+  return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+}
+/** 테마 키 → xterm 에 실을 실제 색 묶음. auto 는 호출 시점의 앱 테마로 해석된다. */
+function resolveTheme(key) {
+  const t = THEMES[key] || THEMES.auto;
+  if (t.auto) return appIsDark() ? APP_DARK : APP_LIGHT;
+  return t.theme;
+}
+/** 그 테마가 어두운 판인가(문서 크롬 data-theme 용). */
+function themeIsDark(key) {
+  const t = THEMES[key] || THEMES.auto;
+  return t.auto ? appIsDark() : !!t.dark;
+}
 
 // 저장된 글꼴에 한글 폴백(D2Coding)이 없으면 끼워 넣는다 — 옛 prefs 사용자도 새로고침만으로 한글 가독성 확보(#279).
 function withKR(ff) {
@@ -108,18 +154,46 @@ function withKR(ff) {
   return ff + ", 'D2Coding', monospace";
 }
 function prefs() {
-  let p = {};
+  let p: any = {};
   try { p = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}'); } catch (_) { /* default */ }
-  const browserDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-  const merged = Object.assign({ fontFamily: FONTS[0].v, fontSize: IS_MOBILE ? 12 : 14, theme: browserDark ? 'dark' : 'light', cursorStyle: 'bar', scrollSpeed: 3, padGain: 3, mobileDock: true }, p);
+  // 폰트 기본값·mobileDock 은 main 의 모바일 대응(IS_MOBILE), theme 기본값 'auto' 는 #1683 — 둘 다 살린다.
+  const merged: any = Object.assign({ fontFamily: FONTS[0].v, fontSize: IS_MOBILE ? 12 : 14, theme: 'auto', cursorStyle: 'bar', scrollSpeed: 3, padGain: 3, mobileDock: true }, p);
+  // 옛 저장값 1회 이관(#1683) — 종전 기본은 '브라우저가 다크면 dark, 아니면 light' 였다. 그 두 값은 사람이
+  //  고른 게 아니라 **자동 판정 결과가 굳은 것**이라, 앱 테마 따름(auto)으로 옮겨야 지금 기대(앱과 함께 바뀐다)에 맞는다.
+  //  Dracula·Nord 처럼 이름 있는 테마는 사람이 고른 것이므로 건드리지 않는다. 이관 표시를 남겨 한 번만 한다 —
+  //  이관 뒤에 다시 dark/light 를 고른 사람의 선택을 나중에 또 뒤집으면 그게 버그다.
+  if (!merged.themeAutoMigrated && (merged.theme === 'dark' || merged.theme === 'light')) {
+    merged.theme = 'auto';
+    merged.themeAutoMigrated = true;
+    savePrefs(merged);
+  }
   merged.fontFamily = withKR(merged.fontFamily);
   return merged;
 }
 function savePrefs(p) { try { localStorage.setItem(PREFS_KEY, JSON.stringify(p)); } catch (_) { /* noop */ } }
 function applyChrome(themeKey) {
-  const t = THEMES[themeKey] || THEMES.dark;
-  document.documentElement.dataset.theme = t.dark ? 'dark' : 'light';
-  document.documentElement.style.setProperty('--term-bg', t.theme.background);
+  const th = resolveTheme(themeKey);
+  document.documentElement.dataset.theme = themeIsDark(themeKey) ? 'dark' : 'light';
+  document.documentElement.style.setProperty('--term-bg', th.background);
+}
+
+// ── 앱 테마 따라가기(#1683) ─────────────────────────────────────────────────
+//  auto 일 때만 반응한다. 두 신호를 듣는다 —
+//   · storage: 같은 출처의 다른 문서(앱 셸·다른 탭·이 페이지를 실은 iframe)가 lv:theme 를 바꿨다.
+//   · matchMedia: 앱이 '시스템 따름' 인 채로 OS 설정이 바뀌었다.
+//  xterm 의 배경색을 바꾸면 **OSC 11 질의에 답하는 값도 함께 바뀐다** — 그래서 이 뒤에 새로 뜨는 TUI 는
+//  물어보기만 해도 맞는 색을 고른다. 이미 도는 하네스는 자기가 시작할 때 고른 색 그대로다(재시작해야 바뀐다).
+function syncAppTheme() {
+  const p = prefs();
+  if (p.theme !== 'auto') return;                 // 이름 있는 테마를 고른 사람의 선택이 이긴다
+  const th = resolveTheme('auto');
+  try { if (term) term.options.theme = th; } catch (_) { /* 아직 term 이 없다 */ }
+  applyChrome('auto');
+  try { doResize(); } catch (_) { /* 레이아웃 준비 전 */ }
+}
+function watchAppTheme() {
+  window.addEventListener('storage', (e) => { if (!e.key || e.key === 'lv:theme') syncAppTheme(); });
+  try { window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', syncAppTheme); } catch (_) { /* 구형 */ }
 }
 
 // ── API 베이스(#1091·#1169 를 이 페이지에도) — 프리뷰 서브패스(/preview/<id>/)에서 뜬 화면은 API 도 그 프리뷰로 가야 한다. ──
@@ -1813,7 +1887,7 @@ function openSettings() {
   const apply = () => {
     const np = { fontFamily: fontSel.value, fontSize: Number(sizeI.value) || 14, theme: themeSel.value, cursorStyle: cursorSel.value, scrollSpeed: Math.max(1, Math.min(12, Number(speedI.value) || 1)), padGain: Math.max(0.5, Math.min(6, Number(gainI.value) || 3)), mobileDock: !!dockI.checked };
     term.options.fontFamily = np.fontFamily; term.options.fontSize = np.fontSize; term.options.cursorStyle = np.cursorStyle;
-    term.options.theme = (THEMES[np.theme] || THEMES.dark).theme;
+    term.options.theme = resolveTheme(np.theme);
     scrollSpeed = np.scrollSpeed; padGain = np.padGain;
     savePrefs(np); applyChrome(np.theme); doResize();
     // 처음 고르는 글꼴은 아직 로드 전이라 같은 race 를 탄다 — 명시 로드 후 실제 준비 시점에 재측정.
@@ -2149,6 +2223,7 @@ export async function boot() {
   scrollSpeed = Math.max(1, Math.min(12, Number(p.scrollSpeed) || 3));
   padGain = Math.max(0.5, Math.min(6, Number(p.padGain) || 3));
   applyChrome(p.theme);
+  watchAppTheme();   // #1683 — 앱이 테마를 바꾸면 따라간다(auto 일 때만)
   if (!SESSION_ID) { gate('세션이 지정되지 않았습니다. 세션 목록에서 "열기"로 진입하세요.'); return; }
   if (!window.Terminal || !window.FitAddon) { gate('터미널 라이브러리(xterm) 로드 실패.'); return; }
   // 인증은 '토큰 유무'가 아니라 서버에 물어 확인한다 — 세션 쿠키(웹 로그인)·bearer(에이전트) 모두 /api/ui/me 가 수용.
@@ -2219,7 +2294,7 @@ export async function boot() {
   //  tmux 전체 재그림이 아니라 pane 출력만 받으므로 구조적으로 발생하지 않는다. 렌더러는 WebGL(폴백 Canvas).
   term = new Terminal({
     fontFamily: p.fontFamily, fontSize: p.fontSize, cursorStyle: p.cursorStyle, cursorBlink: true,
-    theme: (THEMES[p.theme] || THEMES.dark).theme, scrollback: 10000, allowProposedApi: true,
+    theme: resolveTheme(p.theme), scrollback: 10000, allowProposedApi: true,
     // OSC 8 하이퍼링크(#1541) — TUI(claude 등)가 표시 텍스트와 별개의 URI 를 심는 형식. 핸들러가 없으면 xterm 은
     //  아무것도 안 한다(죽은 링크). 열기 규칙은 한 곳(openLinkFromTerminal) — 트래킹 pane 에선 클릭이 pty 로 가서
     //  이 핸들러까지 안 오는 경우가 있는데, 그 축은 아래 캡처 경로(urlAtColumn)가 표시 텍스트로 커버한다.

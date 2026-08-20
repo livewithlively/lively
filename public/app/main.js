@@ -27,6 +27,7 @@ import { installGlobalUndo } from './undo.js';
 import { setUnauthorizedHandler } from './lib/net.js';
 import { uiMode } from './lib/state.js';
 import { bootV2 } from './v2/main.js'; // #1719 새 1탭 셸 — boot() 가 ui_mode 로 고른다. 정적 import(스탬프 경로 단일화), 부르기 전엔 아무 일도 안 함.
+import { applyTheme, nextTheme, setThemePref, themeIconSvg, themePref, themeTitle, watchTheme } from './theme.js'; // #1683 다크모드 — 3단 테마
 // ── 401(세션 만료) 처리 배선(R29a) — **이 파일에서 가장 먼저 실행되는 문장이어야 한다.** ──
 //  lib/net.ts 의 api() 는 401 을 만나면 토큰만 지우고 여기 등록된 처리기를 부른다(미배선이면 아무것도 안 하고
 //  401 을 throw — 즉 배선이 늦으면 '만료됐는데 로그인 화면이 안 뜬다'가 된다). 첫 api() 호출은 이 파일 맨 끝
@@ -37,6 +38,24 @@ setUnauthorizedHandler(() => {
     state.me = null;
     showGate('세션이 만료되었습니다. 다시 로그인하세요.');
 });
+// ── 테마(#1683) — 로그인 게이트까지 포함해 문서 전체에 적용되므로 인증과 무관하게 여기서 배선한다. ──
+//  pre-paint(index.html)가 이미 첫 페인트 전에 data-theme 을 찍었고, 여기는 런타임 전환·다른 탭 동기화 담당.
+applyTheme();
+watchTheme();
+{
+    // 클래식 상단바 순환 버튼(시스템→라이트→다크). v2 셸은 사이드바에 자체 토글(web/v2/side.ts).
+    const tb = document.getElementById('theme-btn');
+    const paintThemeBtn = () => {
+        if (!tb)
+            return;
+        const p = themePref();
+        tb.innerHTML = themeIconSvg(p);
+        tb.title = themeTitle(p);
+    };
+    if (tb)
+        tb.addEventListener('click', () => { setThemePref(nextTheme(themePref())); paintThemeBtn(); });
+    paintThemeBtn();
+}
 // ── 라우터 ──
 function parseHash() {
     const h = location.hash.replace(/^#\/?/, '');

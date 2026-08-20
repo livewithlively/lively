@@ -1,16 +1,16 @@
 /* ── 파일 미리보기(.ft) — 문서 색 아이콘 · 이미지 썸네일 · 폴더 ── */
 .ft { display: block; }
-.ft-page { fill: #fff; stroke: var(--line-net); stroke-width: 1; }
+.ft-page { fill: var(--on-fill); stroke: var(--line-net); stroke-width: 1; }
 .ft-fold { fill: var(--line-net-2); }
 .ft-band { fill: var(--muted); }
-.ft-label { fill: #fff; font-size: 8.5px; font-weight: 800; letter-spacing: .2px; font-family: ui-sans-serif, system-ui, sans-serif; }
-.ft-pdf .ft-band { fill: #E5484D; }
+.ft-label { fill: var(--on-fill); font-size: 8.5px; font-weight: 800; letter-spacing: .2px; font-family: ui-sans-serif, system-ui, sans-serif; }
+.ft-pdf .ft-band { fill: var(--danger); }
 .ft-word .ft-band { fill: #2B6CB0; }
 .ft-ppt .ft-band { fill: #E2683C; }
 .ft-xls .ft-band { fill: #1F9D63; }
 .ft-zip .ft-band { fill: #8A6BB0; }
-.ft-av .ft-band { fill: #5A6B85; }
-.ft-txt .ft-band { fill: #7A88A3; }
+.ft-av .ft-band { fill: var(--ink-sub); }
+.ft-txt .ft-band { fill: var(--muted-head); }
 .ft-folder-tab { fill: #7FA8E8; }
 .ft-folder-body { fill: #A9C6F2; }
 .ft-img { overflow: hidden; border-radius: 7px; background: var(--bg-tint); border: 1px solid var(--line); box-sizing: border-box; }
@@ -26,7 +26,7 @@
 .proj-up-overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
 .proj-up-pct { font-size: 14px; font-weight: 800; color: var(--ink); }
 .proj-up-bar { width: 100%; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; margin-top: 4px; }
-.proj-up-bar-fill { height: 100%; width: 0; background: var(--blue); transition: width .15s ease; }
+.proj-up-bar-fill { height: 100%; width: 0; background: var(--blue-fill); transition: width .15s ease; }
 /* ── 업로드 진행 + 취소 바(#797) — 세 화면(공유 폴더 카드 · '전체 보기' 모달 · 대시보드 팀 공유 폴더) 공통. ──
    배치 하나당 한 줄. 동시에 여러 배치가 돌면 줄도 여러 개 = '어느 업로드를 끊는지' 헷갈리지 않는다. */
 .up-prog-box:empty { display: none; }
@@ -34,7 +34,7 @@
 .up-prog-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
 .up-prog-label { font-size: 13px; color: var(--ink-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .up-prog-bar { height: 6px; border-radius: 999px; background: var(--bg-tint-2); overflow: hidden; }
-.up-prog-fill { height: 100%; width: 0; border-radius: 999px; background: var(--blue); transition: width .12s linear; }
+.up-prog-fill { height: 100%; width: 0; border-radius: 999px; background: var(--blue-fill); transition: width .12s linear; }
 .up-prog-cancel { flex-shrink: 0; }
 /* '전체 보기' 팝업 — 넓은 모달 + 여러 행 그리드(횡스크롤 없이 다 보임). */
 .ov-box-wide { max-width: 920px; }
@@ -68,20 +68,20 @@
 .fic { display: block; stroke-width: 1.6px; }
 .proj-file-iconbtn { width: 28px; height: 28px; border: none; background: none; border-radius: 7px; cursor: pointer; color: var(--muted); font-size: 14px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
 .proj-file-iconbtn:hover { background: var(--line); color: var(--ink); }
-.proj-file-iconbtn.danger:hover { background: #FDEAE6; color: #D14A32; }
+.proj-file-iconbtn.danger:hover { background: var(--danger-bg); color: var(--danger-deep); }
 .proj-file-edit { width: 100%; min-height: 52vh; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 1.5; resize: vertical; }
 /* #req 프로젝트 공유 폴더 — 마크다운 렌더 미리보기(원문 대신 문서처럼). */
 .proj-file-mdwrap { width: 100%; }
 .proj-file-md { max-height: 68vh; overflow: auto; box-sizing: border-box; padding: 20px 24px; text-align: left;
   background: var(--bg-tint); border: 1px solid var(--line); border-radius: 8px; scrollbar-width: thin; }
 .proj-file-img { max-width: 100%; max-height: 64vh; display: block; margin: 0 auto; border-radius: 8px; }
-.proj-file-pdf { width: 100%; height: 74vh; border: none; border-radius: 8px; background: #fff; }
+.proj-file-pdf { width: 100%; height: 74vh; border: none; border-radius: 8px; background: var(--surface); }
 /* 상세 ② 터미널 세션 */
 .proj-sess-list { display: flex; flex-direction: column; gap: 8px; }
 .proj-sess-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
 .proj-sess-main { min-width: 0; }
 .proj-sess-name { font-size: 14px; font-weight: 700; color: var(--ink); display: flex; align-items: center; gap: 8px; }
-.proj-sess-live { font-size: 11.5px; font-weight: 600; color: #3DBE94; }
+.proj-sess-live { font-size: 11.5px; font-weight: 600; color: var(--mint); }
 .proj-sess-meta { margin-top: 3px; font-size: 12px; color: var(--muted-2); }
 .proj-sess-acts { display: flex; gap: 6px; flex: none; align-items: center; }
 /* 팀원 프로필 그리드(아바타 폴더) */
@@ -92,8 +92,8 @@
 .proj-person.active { background: var(--bg-tint-2); }
 .proj-person.dragging { opacity: .4; }
 .proj-person.drop-target { background: var(--bg-tint-2); outline: 2px dashed var(--line-net-2); outline-offset: -2px; }
-.proj-avatar { position: relative; width: 76px; height: 76px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 27px; font-weight: 700; box-shadow: 0 2px 5px rgba(21, 35, 59, .2); }
-.proj-avatar-badge { position: absolute; top: -2px; right: -2px; min-width: 21px; height: 21px; padding: 0 5px; border-radius: 11px; background: var(--ink); color: #fff; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; border: 2.5px solid var(--bg); box-sizing: border-box; }
+.proj-avatar { position: relative; width: 76px; height: 76px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--on-fill); font-size: 27px; font-weight: 700; box-shadow: 0 2px 5px rgba(var(--shadow-ink), .2); }
+.proj-avatar-badge { position: absolute; top: -2px; right: -2px; min-width: 21px; height: 21px; padding: 0 5px; border-radius: 11px; background: var(--ink); color: var(--bg); font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; border: 2.5px solid var(--bg); box-sizing: border-box; }
 .proj-person-name { font-size: 12.5px; font-weight: 600; color: var(--ink); text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .proj-person-status { font-size: 12.5px; line-height: 1.35; text-align: center; max-width: 112px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; box-sizing: border-box; }
 .proj-person-status:empty { display: none; } /* 상태 안 적은 사람 — 빈 칸이 높이 차지하지 않게 */
@@ -120,10 +120,10 @@
 .proj-tl-row { display: flex; gap: 10px; padding: 9px 2px; border-top: 1px solid var(--line-row); }
 .proj-tl-row:first-child { border-top: none; }
 .proj-tl-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; margin-top: 6px; background: var(--muted-2); }
-.proj-tl-dot.tone-mint { background: #3DBE94; }
-.proj-tl-dot.tone-blue { background: var(--blue); }
-.proj-tl-dot.tone-coral { background: #E8826B; }
-.proj-tl-dot.tone-teal { background: #2BA6A6; }
+.proj-tl-dot.tone-mint { background: var(--mint); }
+.proj-tl-dot.tone-blue { background: var(--blue-fill); }
+.proj-tl-dot.tone-coral { background: var(--coral); }
+.proj-tl-dot.tone-teal { background: var(--teal); }
 .proj-tl-main { min-width: 0; flex: 1; }
 .proj-tl-summary { font-size: 13.5px; color: var(--ink); word-break: break-word; }
 .proj-tl-meta { margin-top: 3px; font-size: 12px; color: var(--muted-2); }
@@ -147,7 +147,7 @@
 /* 공유 폴더 카드 — 선택(일괄삭제) 모드 체크박스 + 선택 강조. */
 .proj-file-card { position: relative; }
 .proj-file-card.select-mode { cursor: pointer; }
-.proj-file-check { position: absolute; top: 6px; right: 10px; width: 18px; height: 18px; border-radius: 6px; border: 1.5px solid var(--line-net-2); background: var(--bg); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; color: #fff; line-height: 1; }
+.proj-file-check { position: absolute; top: 6px; right: 10px; width: 18px; height: 18px; border-radius: 6px; border: 1.5px solid var(--line-net-2); background: var(--bg); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; color: var(--on-fill); line-height: 1; }
 .proj-file-card.selected { background: var(--bg-sel); box-shadow: inset 0 0 0 1.5px var(--blue); }
-.proj-file-card.selected .proj-file-check { background: var(--blue); border-color: var(--blue); }
+.proj-file-card.selected .proj-file-check { background: var(--blue-fill); border-color: var(--blue); }
 
