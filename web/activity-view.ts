@@ -7,7 +7,8 @@
 //   홈 대시보드의 팀 작업 로그 위젯(dash/widget-tasks-review-log.ts).
 //  import 방향: core(프리미티브) ← 이 모듈. projects.ts 에서 fmtDateTime 하나를 되받는 역엣지가 남아 있다
 //   (check-imports 의 ALLOWED_CYCLES 등재 — 그 심볼이 내려오면 사라진다). 새 역엣지를 늘리지 마라.
-import { appUrl, ACTIVITY_TYPE_LABEL, api, el, fmtNum, relTime, renderMarkdown, sv } from './core.js';
+import { ACTIVITY_TYPE_LABEL, api, el, fmtNum, relTime, renderMarkdown, sv } from './core.js';
+import { sessionTermUrl } from './lib/session-open.js';   // #1820 — 세션 주소는 한 곳에서만 만든다
 import { fmtDateTime } from './projects.js';
 
 
@@ -166,7 +167,7 @@ async function attachSessionLink(addLink, sessionId) {
   try { s = await api('/api/ui/terminal/sessions/' + encodeURIComponent(sessionId)); }
   catch { return; }   // 비공개(403) 또는 종료됨 → 들어갈 수 없으니 항목 없음
   if (!s || !s.id) return;
-  const url = appUrl('/ui/terminal.html?session=') + encodeURIComponent(s.id) + '&label=' + encodeURIComponent(s.label || '');
+  const url = sessionTermUrl(s.id, { label: s.label });
   addLink(actLinkRow('session', '이 작업을 한 AI 세션', s.label || s.id, '새 탭에서 세션에 들어갑니다.', url, true));
 }
 

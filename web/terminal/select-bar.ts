@@ -2,13 +2,14 @@
 //  소비자: terminal/{session-form,session-list,routes}.ts + 대시보드 '내 AI 세션'(배럴 terminal.ts 경유 — 두 벌 만들지 않는다).
 //  import 방향: status-filter(아래층)만 본다 — session-form·session-list·routes 는 보지 않는다.
 import { anchoredPopover, appUrl, el, toast } from '../core.js';
+import { sessionTermUrl } from '../lib/session-open.js';
 import { overlay } from '../admin.js';
 import { sessAgeDays, sessDead, sessSinceMidnight, sessState } from './status-filter.js';
 
 // 단독 터미널 페이지 URL — 노드 세션(#869)은 &node= 로 WS 릴레이 대상을 지정한다.
-function termUrl(id, label, nodeId?, extra?) {
-  return appUrl('/ui/terminal.html?session=') + encodeURIComponent(id) + '&label=' + encodeURIComponent(label || '')
-    + (nodeId ? '&node=' + encodeURIComponent(nodeId) : '') + (extra || '');
+//  #1820 — 주소 조립은 web/lib/session-open.ts 한 곳뿐이다(그 도착지가 복원을 책임진다). 여기는 옛 시그니처 어댑터.
+function termUrl(id, label, nodeId?, extra?: { welcome?: boolean }) {
+  return sessionTermUrl(id, { label, node: nodeId, welcome: extra?.welcome });
 }
 
 // 여러 세션을 한 탭 그리드로(#745) — n개에 맞는 배치 후보(격자·가로·세로·2열·3열). cols*rows>=n 인 것만.

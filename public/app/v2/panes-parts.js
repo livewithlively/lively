@@ -17,6 +17,7 @@ import { createTimeline } from '../timeline.js';
 import { loadProjectTimeline } from '../timeline-sources.js';
 import { createRunPicker } from './run-picker.js';
 import { spawnSession } from './quick-session.js';
+import { rememberCreated } from './created-cache.js'; // #1820 — 되살린 세션을 라우트가 곧바로 그릴 수 있게
 import { sessText } from './side.js';
 import { listSessionApps, openAppSession } from './app-session.js';
 import { mountAppUiFrame } from './app-ui.js';
@@ -687,9 +688,18 @@ function archivePart(ctx) {
         sig = '';
         paint();
         try {
-            await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/restore', { method: 'POST' });
+            const r = await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '/restore', { method: 'POST' });
             toast('세션을 되살렸어요 — 대화가 이어집니다.');
             ctx.onChanged?.();
+            // #1820 — 되살린 세션은 **새 id** 를 받는다. 그 화면으로 데려가지 않으면 "되살렸다는데 어디 있지?"가 된다
+            //  (이 목록에서는 사라지고, 사용자는 사이드바를 뒤져야 했다). 생성 응답을 캐시에 남겨 라우트가 곧바로 그린다.
+            const ns = r && r.session;
+            if (ns && ns.id) {
+                rememberCreated(ns);
+                location.hash = '#/s/' + encodeURIComponent(String(ns.id));
+            }
+            else if (r && r.already)
+                location.hash = '#/s/' + encodeURIComponent(s.id);
         }
         catch (e) {
             toast('되살리지 못했어요 — ' + (e && e.message ? e.message : e), true);
