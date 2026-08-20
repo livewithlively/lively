@@ -4,49 +4,104 @@
 :root {
   /* 베이스 */
   --bg:            #FFFFFF;
-  --bg-tint:       #F6FAFF;
+  --bg-tint:       var(--bg-tint);
   --bg-tint-2:     #EEF5FF;
-  --bg-punch:      #EEF4FF;
-  --bg-note:       #F0F5FF;
-  --bg-success:    #F3FBF8;
-  --bg-sel:        #F4F8FF;  /* 선택/키보드 커서 행 배경 (가이드 §4 강조 열) */
-  --canvas:        #E6EBF3;
+  --bg-punch:      var(--bg-punch);
+  --bg-note:       var(--bg-note);
+  --bg-success:    var(--bg-success);
+  --bg-sel:        var(--bg-sel);  /* 선택/키보드 커서 행 배경 (가이드 §4 강조 열) */
+  --canvas:        var(--canvas);
 
   /* 브랜드 */
-  --blue:          #2D6BF0;
-  --blue-deep:     #1E54CC;
-  --mint:          #16C79A;
-  --mint-deep:     #0FA37E;
-  --mint-bright:   #36E0A8;
-  --teal:          #1BAEB0;
-  --coral:         #E4756B;
-  --coral-text:    #B84E44; /* 텍스트 전용 코랄 — 백색/틴트 위 4.5:1 이상(에러 카피 가독) */
+  --blue:          var(--blue);
+  --blue-deep:     var(--blue-deep);
+  --mint:          var(--mint);
+  --mint-deep:     var(--mint-deep);
+  --mint-bright:   var(--mint-bright);
+  --teal:          var(--teal);
+  --coral:         var(--coral);
+  --coral-text:    var(--coral-text); /* 텍스트 전용 코랄 — 백색/틴트 위 4.5:1 이상(에러 카피 가독) */
 
   /* 텍스트 */
-  --ink:           #15233B;
-  --ink-sub:       #5A6B85;
-  --ink-note:      #2D4A7A;
-  --muted:         #8A99B5;
+  --ink:           var(--ink);
+  --ink-sub:       var(--ink-sub);
+  --ink-note:      var(--ink-note);
+  --muted:         var(--muted);
   --muted-2:       #A6B2C8;
   --muted-3:       #C2CCDD;
-  --muted-head:    #7A88A3;
+  --muted-head:    var(--muted-head);
 
   /* 라인/보더 */
-  --line:          #E6ECF5;
-  --line-row:      #EDF1F8;
-  --line-net:      #DCE6F5;
+  --line:          var(--line);
+  --line-row:      var(--line-row);
+  --line-net:      var(--line-net);
   --line-net-2:    #CFE0F7;
-  --line-note:     #D6E4FF;
+  --line-note:     var(--line-note);
 
   /* 네트워크 보조 노드 */
-  --node-blue-soft:#9DBDF2;
-  --node-mint-soft:#7FE0C4;
+  --node-blue-soft:var(--node-blue-soft);
+  --node-mint-soft:var(--node-mint-soft);
+
+  /* ── 시맨틱 토큰(#1683 다크모드) — 흩어져 있던 리터럴을 계열로 정규화. 라이트 값 = 종전 리터럴 그대로(픽셀 불변).
+     다크 값은 90-dark.css 가 전량 재정의한다(두 파일이 쌍). ── */
+  --surface:       #FFFFFF;   /* 카드·모달·팝오버 '떠 있는 면' — 다크에선 --bg 보다 한 층 밝다 */
+  --on-fill:       #FFFFFF;   /* 채운 색(블루 버튼 등) 위 글자 — 양 테마 공통 백색 */
+  --blue-fill:     var(--blue);   /* 채움용 블루(버튼·배지 배경) — 다크에서도 채도 유지, --blue 는 글자·라인용으로 밝아진다 */
+  --blue-fill-deep:var(--blue-deep);   /* 채움 블루의 hover/눌림 */
+  --accent:        var(--accent);   /* 신형 화면 인디고 액센트(구 유령 --accent 정규화 — A1) */
+  --danger:        var(--danger);
+  --danger-deep:   var(--danger-deep);
+  --danger-bg:     var(--danger-bg);
+  --danger-bg-2:   #FDF3F2;
+  --danger-line:   var(--danger-line);
+  --warn:          var(--warn);
+  --warn-2:        #F5A623;
+  --warn-text:     var(--warn-text);
+  --warn-deep:     var(--warn-deep);
+  --warn-ink:      var(--warn-ink);
+  --warn-bg:       var(--warn-bg);
+  --warn-bg-2:     #FBF1E7;
+  --warn-line:     var(--warn-line);
+  --warn-line-2:   #F0DCC4;
+  --ok:            var(--ok);
+  --ok-2:          #1F9D6B;
+  --ok-bg:         var(--ok-bg);
+  --ok-line:       var(--ok-line);
+  --ok-line-2:     #CDEFE3;
+  --gray-text:     var(--gray-text);
+  --gray-muted:    var(--gray-muted);
+  --gray-line:     var(--gray-line);
+  --gray-line-2:   #D5DDEA;
+  --gray-bg:       var(--gray-bg);
+  --gray-bg-2:     #F1F5FC;
+  /* 컴포넌트 토큰 — 전역 팔레트에 없는 계열(보라·하이라이트)의 자리 토큰 */
+  --purple:        #8B7BD8;
+  --purple-text:   #6C6483;
+  --teal-deep:     #12797B;
+  --ok-ink:        #14532D;
+
+  --md-mark-bg:    #FFF3C4;
+  --callout-purple-bg:   #FAF6FD;
+  --callout-purple-line: #EDE4F6;
+  --dmx-cross-bg:  #EFEDF5;
+
+  /* 코드·로그 판 — 라이트에서도 어두운 판이 정체성인 표면(셸 명령·실행 로그). 다크에선 더 깊어진다. */
+  --code-surface:  #0D1117;
+  --code-ink:      #C9D1D9;
+  /* 콘텐츠(커버 아트·다이어그램) 위에 얹는 반투명 판 — 아래 그림과 무관하게 글자가 읽혀야 하므로 테마를 탄다 */
+  --overlay-pill:    rgba(255, 255, 255, .92);
+  --overlay-pill-2:  rgba(255, 255, 255, .75);
+  --overlay-ring:    rgba(255, 255, 255, .95);
+  /* 채널 토큰 — rgba(var(--x), α) 꼴로 α 를 자리마다 유지한 채 색만 테마를 탄다 */
+  --shadow-ink:    21, 35, 59;    /* 그림자·스크림 — 다크에선 순흑 */
+  --tint-ink:      21, 35, 59;    /* 잉크 틴트 배경(호버 등) — 다크에선 밝은 잉크로 뒤집혀 '밝아지는' 호버가 된다 */
+  color-scheme: light;            /* 폼 컨트롤·내장 스크롤바 기본 팔레트(#1683) — 다크 블록이 dark 로 뒤집는다 */
 
   /* 다크(클로징/푸터 액센트 전용 — 기본 배경 금지) */
   --dark-1:        #15233B;
   --dark-2:        #1C3962;
-  --dark-sub:      #AEBFD8;
-  --dark-foot:     #7C8DA8;
+  --dark-sub:      var(--dark-sub);
+  --dark-foot:     var(--dark-foot);
 }
 
 /* ── §2 베이스 타이포 ── */

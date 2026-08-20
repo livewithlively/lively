@@ -4,7 +4,10 @@
   --card: #f8fafc; --accent: #2563eb; --ok: #16a34a; --warn: #d97706; --off: #9ca3af; --bad: #dc2626;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #14161a; --fg: #e8eaed; --muted: #9aa1ab; --line: #2a2e35; --card: #1b1e24; --accent: #60a5fa; }
+  /* 웹 UI 다크 팔레트(public/styles/90-dark.css)와 같은 브랜드 네이비 축 — 앱과 웹이 한 제품으로 보이게(#1683).
+     마법사는 OS 설정만 따른다(웹의 3단 선택은 게이트웨이 출처의 저장값이라 이 창에선 읽히지 않는다). */
+  :root { --bg: #111726; --fg: #EAF0FA; --muted: #8D9CB8; --line: #273349; --card: #1A2336; --accent: #6E9AF8;
+          --ok: #37B592; --warn: #F0A32B; --off: #6E7E9C; --bad: #F07E7E; }
 }
 * { box-sizing: border-box; }
 body {

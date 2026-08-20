@@ -13,7 +13,7 @@ body[data-route="liv"] { height: 100vh; overflow: hidden; }
 body[data-route="liv"] #app { height: 100%; display: flex; flex-direction: column; }
 body[data-route="liv"] .topbar,
 body[data-route="liv"] .app-foot { display: none; }
-body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0; padding: 14px 18px 16px; background: #F4F7FC; }
+body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0; padding: 14px 18px 16px; background: var(--gray-bg); }
 
 /* 상단 내비의 [리브] 버튼 — 탭이 아니라 오른쪽 보조 버튼(축이 다르다: 탭=무엇을 보는가 / 리브=누구에게 맡기는가). */
 .liv-nav { display: inline-flex; align-items: center; gap: 5px; }
@@ -60,7 +60,7 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
 .liv-note { border: 1px dashed var(--line-net); border-radius: 10px; padding: 12px; color: var(--ink-sub); font-size: 13px; background: var(--bg); }
 .liv-toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 9999;
   background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px;
-  font-size: 13px; box-shadow: 0 4px 16px rgba(21, 35, 59, .18); }
+  font-size: 13px; box-shadow: 0 4px 16px rgba(var(--shadow-ink), .18); }
 
 /* 좁은 화면 — 무스크롤 코크핏은 데스크톱 계약이다(대시보드와 같은 폴백). 세로로 쌓고 스크롤을 허용한다. */
 @media (max-width: 900px), (max-height: 640px) {
@@ -252,7 +252,7 @@ body[data-route="liv"] main { flex: 1; min-height: 0; max-width: none; margin: 0
   z-index: 2; font-family: inherit; font-size: 12px; line-height: 1;
   padding: 8px 14px; border-radius: 999px; cursor: pointer;
   color: var(--ink); background: var(--bg); border: 1px solid var(--line-net);
-  box-shadow: 0 2px 10px rgba(21, 35, 59, .12); }
+  box-shadow: 0 2px 10px rgba(var(--shadow-ink), .12); }
 .livc-jump:hover { border-color: var(--mint-deep); }
 .livc-jump:focus-visible { outline: 2px solid var(--mint-deep); outline-offset: 2px; }
 .livc-jump[hidden] { display: none; }

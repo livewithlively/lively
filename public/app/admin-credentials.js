@@ -149,7 +149,7 @@ function catalogStatusCard(catalog, servers) {
             hint = 'MCP 서버 ▸ 프리셋에서 추가(DCR — client 불필요)';
         }
         else {
-            chip = el('span', { class: 'pill', style: 'background:#faefdd;color:#b45309', text: '⚙ 설정 필요' });
+            chip = el('span', { class: 'pill', style: 'background:var(--warn-bg-2);color:var(--warn-deep)', text: '⚙ 설정 필요' });
             hint = 'OAuth client 를 만들어 사전 등록한 뒤 프리셋으로 추가하세요.';
         }
         rows.push(el('div', { class: 'card', style: 'padding:9px 12px;margin:6px 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap' }, el('span', { style: 'font-weight:650;min-width:150px', text: c.label }), chip, el('span', { class: 'mini-meta' }, ...uiText(hint))));

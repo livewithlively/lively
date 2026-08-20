@@ -33,10 +33,10 @@
 .umeta-v-info { display: inline-flex; align-items: center; gap: 5px; }
 .info-dot { position: relative; flex: none; width: 15px; height: 15px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: none; border-radius: 50%; background: none; color: var(--muted-2); font-size: 12px; line-height: 1; cursor: pointer; }
 .info-dot:hover, .info-dot.open { color: var(--blue); }
-.info-pop { position: absolute; left: 0; top: calc(100% + 6px); z-index: 50; display: none; width: max-content; max-width: 260px; padding: 7px 10px; text-align: left; white-space: normal; font-size: 12px; font-weight: 500; line-height: 1.45; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line-net); border-radius: 8px; box-shadow: 0 4px 16px rgba(21, 35, 59, .12); pointer-events: none; }
+.info-pop { position: absolute; left: 0; top: calc(100% + 6px); z-index: 50; display: none; width: max-content; max-width: 260px; padding: 7px 10px; text-align: left; white-space: normal; font-size: 12px; font-weight: 500; line-height: 1.45; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line-net); border-radius: 8px; box-shadow: 0 4px 16px rgba(var(--shadow-ink), .12); pointer-events: none; }
 .info-dot:hover .info-pop, .info-dot:focus-visible .info-pop, .info-dot.open .info-pop { display: block; }
 /* withTip — fixed 포지션 즉시 호버 툴팁(overflow:hidden 카드에도 안 잘림). .info-pop 과 같은 톤. body 에 직접 붙는다. */
-.hover-tip { position: fixed; z-index: 200; width: max-content; max-width: 260px; padding: 7px 10px; text-align: left; white-space: normal; font-size: 12px; font-weight: 500; line-height: 1.45; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line-net); border-radius: 8px; box-shadow: 0 4px 16px rgba(21, 35, 59, .12); pointer-events: none; }
+.hover-tip { position: fixed; z-index: 200; width: max-content; max-width: 260px; padding: 7px 10px; text-align: left; white-space: normal; font-size: 12px; font-weight: 500; line-height: 1.45; color: var(--ink-sub); background: var(--bg); border: 1px solid var(--line-net); border-radius: 8px; box-shadow: 0 4px 16px rgba(var(--shadow-ink), .12); pointer-events: none; }
 .unit-meta-details, .unit-history-details { width: 100%; margin: 8px 0; border-top: 1px solid var(--line); padding-top: 8px; }
 .unit-meta-summary { cursor: pointer; font-size: 12px; font-weight: 700; color: var(--muted-head); list-style: none; padding: 2px 0; }
 .unit-meta-summary::-webkit-details-marker { display: none; }

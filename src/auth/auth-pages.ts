@@ -9,47 +9,70 @@ export const esc = (s: unknown): string =>
   String(s ?? "").replace(/[<>&"']/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&#39;" }[c] as string));
 
 const STYLE = `
-  :root{color-scheme:light dark}
+  /* 색은 토큰 한 벌로 두고 테마별로 값만 뒤집는다(#1683) — 웹 앱(public/styles/01-base.css·90-dark.css)과 같은
+     브랜드 네이비 축이라, 로그인 전 화면과 로그인 후 화면이 한 제품으로 보인다. */
+  :root{
+    color-scheme:light;
+    --p-bg:#F6F7F9; --p-surface:#FFFFFF; --p-ink:#16181D; --p-sub:#5B6270; --p-foot:#79808D;
+    --p-line:#E3E6EA; --p-line-2:#E8EBEF; --p-field-line:#D5D9DF; --p-box:#F6F7F9;
+    --p-blue:#1F6FEB; --p-ghost-ink:#3A4150;
+    --p-warn-bg:#FFF8E6; --p-warn-line:#F2E2B5; --p-warn-ink:#6B5518;
+    --p-err-bg:#FDECEC; --p-err-line:#F3C9C9; --p-err-ink:#8C2020;
+  }
+  /* 다크 값 — 명시 선택(data-theme)과 시스템 설정 두 경로. 본문 대비 15:1, 보조 9:1(웹 앱과 같은 기준). */
+  :root[data-theme=dark]{
+    color-scheme:dark;
+    --p-bg:#0C111D; --p-surface:#1A2336; --p-ink:#EAF0FA; --p-sub:#B0BDD5; --p-foot:#8D9CB8;
+    --p-line:#273349; --p-line-2:#202B3E; --p-field-line:#33425C; --p-box:#111726;
+    --p-blue:#6E9AF8; --p-ghost-ink:#B0BDD5;
+    --p-warn-bg:#33270F; --p-warn-line:#57431A; --p-warn-ink:#F0C97E;
+    --p-err-bg:#3A1B1E; --p-err-line:#5C2B2F; --p-err-ink:#F49B91;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme=light]){
+      color-scheme:dark;
+      --p-bg:#0C111D; --p-surface:#1A2336; --p-ink:#EAF0FA; --p-sub:#B0BDD5; --p-foot:#8D9CB8;
+      --p-line:#273349; --p-line-2:#202B3E; --p-field-line:#33425C; --p-box:#111726;
+      --p-blue:#6E9AF8; --p-ghost-ink:#B0BDD5;
+      --p-warn-bg:#33270F; --p-warn-line:#57431A; --p-warn-ink:#F0C97E;
+      --p-err-bg:#3A1B1E; --p-err-line:#5C2B2F; --p-err-ink:#F49B91;
+    }
+  }
   *{box-sizing:border-box}
   body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;margin:0;padding:2.5rem 1rem;
-       background:#f6f7f9;color:#16181d;line-height:1.6}
-  main{max-width:30rem;margin:0 auto;background:#fff;border:1px solid #e3e6ea;border-radius:14px;padding:1.75rem}
+       background:var(--p-bg);color:var(--p-ink);line-height:1.6}
+  main{max-width:30rem;margin:0 auto;background:var(--p-surface);border:1px solid var(--p-line);border-radius:14px;padding:1.75rem}
   h1{font-size:1.15rem;margin:0 0 .25rem}
-  .sub{color:#5b6270;font-size:.875rem;margin:0 0 1.25rem}
-  .box{background:#f6f7f9;border:1px solid #e8ebef;border-radius:10px;padding:.85rem 1rem;margin:0 0 1rem;font-size:.875rem}
-  .box dt{color:#5b6270;font-size:.78rem;margin-top:.55rem}
+  .sub{color:var(--p-sub);font-size:.875rem;margin:0 0 1.25rem}
+  .box{background:var(--p-box);border:1px solid var(--p-line-2);border-radius:10px;padding:.85rem 1rem;margin:0 0 1rem;font-size:.875rem}
+  .box dt{color:var(--p-sub);font-size:.78rem;margin-top:.55rem}
   .box dt:first-child{margin-top:0}
   .box dd{margin:.1rem 0 0;word-break:break-all}
   ul.scopes{margin:.35rem 0 0;padding-left:1.1rem}
   ul.scopes li{margin:.15rem 0}
-  .warn{background:#fff8e6;border-color:#f2e2b5;color:#6b5518}
-  .err{background:#fdecec;border-color:#f3c9c9;color:#8c2020}
-  label{display:block;font-size:.8rem;color:#5b6270;margin:.75rem 0 .25rem}
-  input[type=email],input[type=password]{width:100%;padding:.6rem .7rem;border:1px solid #d5d9df;border-radius:8px;
-       font-size:.95rem;background:#fff;color:inherit}
+  .warn{background:var(--p-warn-bg);border-color:var(--p-warn-line);color:var(--p-warn-ink)}
+  .err{background:var(--p-err-bg);border-color:var(--p-err-line);color:var(--p-err-ink)}
+  label{display:block;font-size:.8rem;color:var(--p-sub);margin:.75rem 0 .25rem}
+  input[type=email],input[type=password]{width:100%;padding:.6rem .7rem;border:1px solid var(--p-field-line);border-radius:8px;
+       font-size:.95rem;background:var(--p-surface);color:inherit}
   .row{display:flex;gap:.6rem;margin-top:1.25rem}
   button{flex:1;padding:.65rem 1rem;border-radius:8px;border:1px solid transparent;font-size:.925rem;
        font-weight:600;cursor:pointer}
-  button.primary{background:#1f6feb;color:#fff}
-  button.ghost{background:#fff;border-color:#d5d9df;color:#3a4150}
-  .foot{margin-top:1.1rem;font-size:.78rem;color:#79808d}
-  a{color:#1f6feb}
-  @media (prefers-color-scheme:dark){
-    body{background:#0f1115;color:#e6e8ec}
-    main{background:#171a20;border-color:#272b33}
-    .box{background:#12141a;border-color:#272b33}
-    .box dt,.sub,.foot{color:#9aa1ad}
-    input[type=email],input[type=password]{background:#0f1115;border-color:#333946;color:#e6e8ec}
-    button.ghost{background:#171a20;border-color:#333946;color:#c8ccd4}
-    .warn{background:#2a2413;border-color:#4a3f1c;color:#e3cd8a}
-    .err{background:#2b1616;border-color:#4d2222;color:#f0b4b4}
-  }`;
+  button.primary{background:#1F6FEB;color:#fff}
+  button.ghost{background:var(--p-surface);border-color:var(--p-field-line);color:var(--p-ghost-ink)}
+  .foot{margin-top:1.1rem;font-size:.78rem;color:var(--p-foot)}
+  a{color:var(--p-blue)}`;
+
+// 테마 pre-paint — 웹 앱이 저장한 선택(localStorage lv:theme)을 첫 페인트 전에 반영한다(#1683).
+//  같은 출처라 그 키가 그대로 보인다. 없으면 속성을 안 붙이고 시스템 설정을 따른다(종전 동작 그대로).
+//  ⚠ 이 페이지는 세션 이전에 뜨므로 프런트 번들에 기대지 않는다 — 키 이름 하나만 공유하는 얕은 결합이다.
+const THEME_BOOT = `<script>try{var t=localStorage.getItem('lv:theme');if(t==='dark'||t==='light')document.documentElement.setAttribute('data-theme',t)}catch(e){}</script>`;
 
 export const page = (title: string, body: string): string =>
   `<!doctype html><html lang="ko"><head><meta charset="utf-8">` +
   `<meta name="viewport" content="width=device-width,initial-scale=1">` +
   `<meta name="referrer" content="no-referrer">` + // rid·연결코드가 외부로 새지 않게(이 페이지의 링크·리다이렉트 모두)
-  `<title>${esc(title)}</title><style>${STYLE}</style></head><body><main>${body}</main></body></html>`;
+  `<title>${esc(title)}</title><style>${STYLE}</style>${THEME_BOOT}</head><body><main>${body}</main></body></html>`;
 
 // 흐름별 제목을 받되 본문 형식은 공통 — '무엇을 할 수 없다'를 먼저 말하고 다음 행동을 알려준다.
 export const errorPage = (msg: string, title = "연결 승인 — Lively", foot = "이 창을 닫고 연결을 처음부터 다시 시도해 주세요."): string =>

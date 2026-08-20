@@ -50,7 +50,7 @@
 .dot-static { width: 6px; height: 6px; border-radius: 50%; background: var(--mint); }
 /* 마지막 갱신(liveness) — 헤더 우측에서 빼 화면 좌하단 구석에 조용히. 우하단 toasts 와 안 겹침, 클릭은 통과(pointer-events:none). */
 .app-foot { position: fixed; left: 16px; bottom: 12px; z-index: 10; pointer-events: none; }
-.app-foot .sync-chip { font-size: 11.5px; color: var(--muted-2); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px 3px 9px; box-shadow: 0 2px 8px rgba(21, 35, 59, .05); }
+.app-foot .sync-chip { font-size: 11.5px; color: var(--muted-2); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px 3px 9px; box-shadow: 0 2px 8px rgba(var(--shadow-ink), .05); }
 /* 우측 상단 보조 유틸 3종 통일 — 같은 알약형(헤어라인 + 무채): [사용 가이드] · [내 프로필] · [로그아웃] */
 .help-link, .user-email, .logout-btn {
   display: inline-flex; align-items: center; height: 30px; box-sizing: border-box;
@@ -67,7 +67,7 @@
 /* 상단바 아바타 — 작은 원형 이니셜(#361). .pava(28px) 를 이기도록 .pava.topbar-ava 로 특이도 확보 —
    30px 알약 안에 22px 원이 위아래 4px 여백으로 정확히 들어간다(이전엔 .pava 28px 가 이겨 알약을 꽉 채움). */
 .pava.topbar-ava { width: 22px; height: 22px; flex: none; border-radius: 999px; display: inline-flex;
-  align-items: center; justify-content: center; font-size: 11px; font-weight: 700; line-height: 1; color: #fff; overflow: hidden; }
+  align-items: center; justify-content: center; font-size: 11px; font-weight: 700; line-height: 1; color: var(--on-fill); overflow: hidden; }
 .topbar-ava img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
 /* ── 조직 공지 배너(#1454 S3) — #app 첫 자식, sticky topbar 위의 일반 블록(스크롤 시 말려 올라감). ──
@@ -85,3 +85,7 @@
 /* ── 본문 셸 ── */
 main { max-width: 1200px; margin: 0 auto; padding: 32px 24px 64px; }
 
+
+/* ── 테마 순환 버튼(#1683) — 상단바 우측, help-link 알약 문법 공유. 아이콘·title 은 main.ts 가 채운다. ── */
+.theme-btn { display: inline-flex; align-items: center; justify-content: center; padding: 0 9px; cursor: pointer; }
+.theme-btn svg { display: block; }

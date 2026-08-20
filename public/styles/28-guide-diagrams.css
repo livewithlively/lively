@@ -10,23 +10,23 @@
 
 /* 정점 — 카테고리(지식·프로젝트를 담는 분류 컨테이너) */
 .md-axes-apex { display: inline-flex; align-items: center; gap: 8px; padding: 9px 16px; border-radius: 999px;
-  background: var(--bg-tint); border: 1.5px solid var(--line-net, #d9dee6); }
+  background: var(--bg-tint); border: 1.5px solid var(--line-net, var(--gray-line)); }
 .md-axes-apex .md-axes-ic { font-size: 18px; }
 .md-axes-apex .md-axes-nm { font-size: 14.5px; }
 .md-axes-apex-hint { font-size: 12px; font-weight: 700; color: var(--muted-2); }
-.md-axes-stem { width: 2px; height: 20px; background: var(--line-net, #d9dee6); }
+.md-axes-stem { width: 2px; height: 20px; background: var(--line-net, var(--gray-line)); }
 
 /* 흐름 — 여러 필요 지식 → 프로젝트 → 여러 산출 지식 (정적 → 동적 → 정적) */
 .md-axes-flow { display: flex; align-items: stretch; justify-content: center; gap: 16px; flex-wrap: wrap; width: 100%; }
 .md-axes-fnode { flex: 1 1 0; min-width: 150px; max-width: 235px; display: flex; flex-direction: column; gap: 6px;
-  padding: 15px 16px; border-radius: 14px; background: var(--bg); border: 1px solid var(--line); box-shadow: 0 1px 2px rgba(21,35,59,.04); }
+  padding: 15px 16px; border-radius: 14px; background: var(--bg); border: 1px solid var(--line); box-shadow: 0 1px 2px rgba(var(--shadow-ink), .04); }
 .md-axes-fnode .md-axes-ic { font-size: 22px; }
 .md-axes-fnode .md-axes-nm { font-size: 14.5px; }
 .md-axes-fnode .md-axes-sub { font-size: 12px; line-height: 1.55; }
 /* 지식 = 정적(민트) · 프로젝트 = 동적(파랑). 필요 지식은 선택이라 점선으로 '없어도 됨'을 표시. */
-.md-axes-fnode.is-req  { border-style: dashed; border-color: color-mix(in srgb, var(--mint, #46c8a0) 50%, var(--line));
-  background: color-mix(in srgb, var(--mint, #46c8a0) 5%, var(--bg)); }
-.md-axes-fnode.is-prod { border-top: 3px solid var(--mint, #46c8a0); }
+.md-axes-fnode.is-req  { border-style: dashed; border-color: color-mix(in srgb, var(--mint, var(--mint)) 50%, var(--line));
+  background: color-mix(in srgb, var(--mint, var(--mint)) 5%, var(--bg)); }
+.md-axes-fnode.is-prod { border-top: 3px solid var(--mint, var(--mint)); }
 .md-axes-fnode.is-dynamic { border-top: 3px solid var(--blue); background: color-mix(in srgb, var(--blue) 4%, var(--bg)); }
 /* 스택 — 지식 노드 뒤로 카드 두 장이 비껴 보여 '여러 개'임을 드러낸다(필요/산출 둘 다). */
 .md-axes-fnode.is-stack { position: relative; }
@@ -36,7 +36,7 @@
 .md-axes-fnode.is-stack::before { transform: translate(5px, 6px); }
 .md-axes-fnode.is-stack::after  { transform: translate(10px, 12px); opacity: .55; }
 .md-axes-fnode.is-req.is-stack::before, .md-axes-fnode.is-req.is-stack::after {
-  border-style: dashed; border-color: color-mix(in srgb, var(--mint, #46c8a0) 50%, var(--line)); }
+  border-style: dashed; border-color: color-mix(in srgb, var(--mint, var(--mint)) 50%, var(--line)); }
 .md-axes-arrow { flex: none; align-self: center; font-size: 20px; font-weight: 800; color: var(--muted-2); }
 
 /* 좁은 화면 — 세로 스택, 화살표 90° 회전 */
@@ -52,26 +52,26 @@
 .md-fig-row { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; }
 .md-fig-box { display: inline-flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 0;
   padding: 8px 13px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
-  box-shadow: 0 1px 2px rgba(21,35,59,.04); }
+  box-shadow: 0 1px 2px rgba(var(--shadow-ink), .04); }
 .md-fig-nm { font-size: 13.5px; font-weight: 700; color: var(--ink); line-height: 1.4; }
-.md-fig-sub { font-size: 11.5px; color: var(--muted, #6b7a90); line-height: 1.45; }
+.md-fig-sub { font-size: 11.5px; color: var(--muted, var(--gray-text)); line-height: 1.45; }
 .md-fig-ar { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
   min-width: 46px; flex: 0 1 auto; padding: 0 2px; align-self: center; }
-.md-fig-arlab { font-size: 11px; color: var(--muted, #6b7a90); line-height: 1.35; text-align: center; max-width: 180px; }
+.md-fig-arlab { font-size: 11px; color: var(--muted, var(--gray-text)); line-height: 1.35; text-align: center; max-width: 180px; }
 .md-fig-arline { display: inline-flex; align-items: center; width: 100%; min-width: 38px; height: 0;
-  border-top: 2px solid var(--muted-2, #a6b2c8); position: relative; }
+  border-top: 2px solid var(--muted-2, var(--muted-2)); position: relative; }
 /* 화살촉 — 폰트 독립 CSS 삼각형(선 중심 정렬). 옛 ▸ 글리프+top:-0.72em 은 폰트 메트릭 따라 선 아래로 처졌다(#1013). */
 .md-fig-arhead { position: absolute; right: -5px; top: 50%; transform: translateY(-50%);
-  width: 0; height: 0; font-size: 0; line-height: 0; color: var(--muted-2, #a6b2c8);
+  width: 0; height: 0; font-size: 0; line-height: 0; color: var(--muted-2, var(--muted-2));
   border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 9px solid currentColor; }
 /* 화살표 의미색 — 도메인맵 범례와 동일(ok=일치·긍정 파랑 / viol=빨강 / should=주황 점선 / pend=회색 점선 / x=차단) */
 .md-fig-ar.is-ok .md-fig-arline { border-top-color: var(--blue); } .md-fig-ar.is-ok .md-fig-arhead { color: var(--blue); }
-.md-fig-ar.is-viol .md-fig-arline { border-top-color: #b0503f; } .md-fig-ar.is-viol .md-fig-arhead { color: #b0503f; }
-.md-fig-ar.is-should .md-fig-arline { border-top-style: dashed; border-top-color: #c2822f; } .md-fig-ar.is-should .md-fig-arhead { color: #c2822f; }
+.md-fig-ar.is-viol .md-fig-arline { border-top-color: var(--coral-text); } .md-fig-ar.is-viol .md-fig-arhead { color: var(--coral-text); }
+.md-fig-ar.is-should .md-fig-arline { border-top-style: dashed; border-top-color: var(--warn-deep); } .md-fig-ar.is-should .md-fig-arhead { color: var(--warn-deep); }
 .md-fig-ar.is-pend .md-fig-arline { border-top-style: dashed; } 
-.md-fig-ar.is-x .md-fig-arline { border-top-style: dashed; border-top-color: #b0503f; }
-.md-fig-ar.is-x .md-fig-arhead { color: #b0503f; }
-.md-fig-cap { font-size: 12px; color: var(--muted, #6b7a90); margin-top: 2px; }
+.md-fig-ar.is-x .md-fig-arline { border-top-style: dashed; border-top-color: var(--coral-text); }
+.md-fig-ar.is-x .md-fig-arhead { color: var(--coral-text); }
+.md-fig-cap { font-size: 12px; color: var(--muted, var(--gray-text)); margin-top: 2px; }
 /* fan — 소스 스택 → 공통 화살표 → 타깃 하나 */
 .md-fig-fan { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .md-fig-fansrcs { display: flex; flex-direction: column; gap: 6px; flex: 0 1 auto; min-width: 0; }
@@ -88,7 +88,7 @@
 .md-wire-box { border: 1px solid var(--line); border-radius: 9px; background: var(--bg); padding: 8px 11px;
   display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .md-wire-nm { font-size: 12.5px; font-weight: 700; color: var(--ink); line-height: 1.4; }
-.md-wire-sub { font-size: 11px; color: var(--muted, #6b7a90); line-height: 1.4; }
+.md-wire-sub { font-size: 11px; color: var(--muted, var(--gray-text)); line-height: 1.4; }
 .md-wire-box.is-hl { border-color: var(--blue); background: color-mix(in srgb, var(--blue) 6%, var(--bg));
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--blue) 35%, transparent); }
 .md-wire-box > .md-wire-row { margin-top: 2px; }
@@ -105,7 +105,7 @@
 .ob-banner-sub a, .guide-lead a { text-decoration: underline; text-underline-offset: 2px; }
 
 /* fix: 21 미선택 모드 카드 라디오 가시성 + hover 어포던스 (기존 .mode-card-radio 규칙(styles.css:1023) 뒤에 배치) */
-.mode-card-radio { border-color: #AEB6C2; }
+.mode-card-radio { border-color: var(--gray-muted); }
 .mode-card:hover .mode-card-radio { border-color: var(--blue); }
 
 /* fix: 30 docs-quickstart 탭 3중 테두리 축소 — 내부 흰 패널의 테두리·둥근 모서리 제거, 탭 줄 아래 1px 구분선만 (기존 .md-tabs-body 규칙(styles.css:6874) 뒤에 배치) */
@@ -113,7 +113,7 @@
 .md-tabs-bar { border-bottom: 1px solid var(--line-net); }
 
 /* fix: 105 (review.ts #5) — 게이트 카드 통계 줄을 주의색 인포 스트립으로 승격(13px·건수 굵게, 상태문 바로 아래 배치) */
-.rq-gate-note { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; padding: 8px 12px; font-size: 13px; color: #6b4e00; background: #fff6e6; border: 1px solid #f0d59a; border-radius: 8px; }
+.rq-gate-note { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; padding: 8px 12px; font-size: 13px; color: var(--warn-ink); background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 8px; }
 .rq-gate-note b { font-weight: 700; }
 
 /* fix: 108 (review.ts #8) — 게이트 꺼짐 시 드롭다운 라벨 흐림 + '게이트를 켜면 아래 선택이 적용됩니다' 캡션 */
@@ -154,8 +154,8 @@
 .admin-two-cols .admin-sublist::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
 
 /* fix: 94 레포 '삭제'(hard delete) 버튼 danger 톤 + '폐기'와 분리 간격 */
-.repo-del-btn { color: var(--danger, #D6453C); margin-left: 10px; }
-.repo-del-btn:hover { background: var(--bg-danger, #FDECEC); border-color: var(--danger, #D6453C); color: var(--danger, #D6453C); }
+.repo-del-btn { color: var(--danger, var(--danger-deep)); margin-left: 10px; }
+.repo-del-btn:hover { background: var(--bg-danger, var(--danger-bg)); border-color: var(--danger, var(--danger-deep)); color: var(--danger, var(--danger-deep)); }
 
 /* fix: 102 btn-danger disabled 시 채도 낮춰 활성 버튼처럼 보이지 않게 (미설정 시 테스트/해제는 렌더 자체를 생략하도록 코드도 수정) */
 .btn-danger:disabled { background: var(--line); border-color: var(--line); color: var(--muted-2, #888); cursor: default; }
@@ -184,24 +184,24 @@ input.emb-num { width: 120px; flex: none; }
 /* ── #853 axes 재설계 — 지식 ⇄ 프로젝트 양방향 흐름(필요/산출을 흐름 이름으로) ── */
 .md-axes-biflow { display: flex; flex-direction: column; gap: 10px; align-self: center; min-width: 150px; flex: 0 1 auto; }
 .md-axes-bi { display: flex; flex-direction: column; align-items: center; gap: 1px; }
-.md-axes-bilab { font-size: 11px; color: var(--muted, #6b7a90); white-space: nowrap; }
+.md-axes-bilab { font-size: 11px; color: var(--muted, var(--gray-text)); white-space: nowrap; }
 .md-axes-biar { font-size: 18px; font-weight: 800; line-height: 1; }
-.md-axes-biar.to-r { color: var(--mint-deep, #0FA37E); }
+.md-axes-biar.to-r { color: var(--mint-deep, var(--mint-deep)); }
 .md-axes-biar.to-l { color: var(--blue); }
-.md-axes-fnode.is-static { border-top: 3px solid var(--mint, #16C79A); }
+.md-axes-fnode.is-static { border-top: 3px solid var(--mint, var(--mint)); }
 @media (max-width: 700px) { .md-axes-biflow { transform: none; } .md-axes-bilab { white-space: normal; text-align: center; } }
 
 /* ── #1107 :::shot v2 — 쉼: 깨끗한 화면 + 파란 번호 마커 / 짚음: 그 영역만 스포트라이트(나머지 딤).
    제품의 둘러보기(guide-tour) 스포트라이트와 같은 시각언어. 색은 블루 단색(§0.5 컬러 예산). ── */
 .md-shot { margin: 20px 0 24px; display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 100%; }
 .md-shot-stage { position: relative; border: 1px solid var(--line-net); border-radius: 12px; overflow: hidden;
-  background: var(--canvas); box-shadow: 0 1px 2px rgba(21,35,59,.04); line-height: 0; }
+  background: var(--canvas); box-shadow: 0 1px 2px rgba(var(--shadow-ink), .04); line-height: 0; }
 .md-shot-img { width: 100%; height: auto; display: block; }
 /* 스포트라이트 — 영역 링(블루 2px) + 바깥 전체 딤(대형 box-shadow 한 장, overflow 로 클립).
    구멍은 스테이지당 하나(v2.2): 구역을 오가면 딤은 그대로 두고 구멍이 미끄러진다 — 꺼짐/켜짐
    번쩍임 없이 시선만 이동(guide-tour 글라이드와 동일). 좌표 전환은 JS(setOn)가 넣는다. */
 .md-shot-hl { position: absolute; z-index: 1; border-radius: 10px; opacity: 0; pointer-events: none;
-  box-shadow: 0 0 0 2px var(--blue), 0 0 0 9999px rgba(21, 35, 59, .38);
+  box-shadow: 0 0 0 2px var(--blue), 0 0 0 9999px rgba(var(--shadow-ink), .38);
   transition: opacity var(--dur-base, 150ms) ease, left var(--dur-slow, 250ms) ease, top var(--dur-slow, 250ms) ease,
     width var(--dur-slow, 250ms) ease, height var(--dur-slow, 250ms) ease; }
 .md-shot-hl.is-on { opacity: 1; }
@@ -211,13 +211,13 @@ input.emb-num { width: 120px; flex: none; }
    화면을 스크린샷 그대로 두고, 이미지를 만지거나 범례를 짚거나 첫 시연(is-demo)일 때만 떠오른다.
    터치(hover 없음)는 탭 표적이라 항상 노출 — 유령 톤이라 화면을 덜 가린다. */
 .md-shot-marker { position: absolute; z-index: 2; transform: translate(-42%, -42%); width: 23px; height: 23px;
-  padding: 0; border: 0; border-radius: 999px; background: rgba(255, 255, 255, .94); color: var(--blue); cursor: pointer;
+  padding: 0; border: 0; border-radius: 999px; background: var(--overlay-pill); color: var(--blue); cursor: pointer;
   font-family: inherit; font-size: 12px; font-weight: 800; line-height: 23px; text-align: center;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--blue) 42%, transparent), 0 1px 5px rgba(21, 35, 59, .2);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--blue) 42%, transparent), 0 1px 5px rgba(var(--shadow-ink), .2);
   transition: opacity var(--dur-base, 150ms) ease, transform var(--dur-base, 150ms) ease,
     background-color var(--dur-base, 150ms) ease, color var(--dur-base, 150ms) ease; }
-.md-shot-marker.is-on { background: var(--blue); color: #fff;
-  box-shadow: 0 0 0 2px #fff, 0 1px 6px rgba(21, 35, 59, .28); }
+.md-shot-marker.is-on { background: var(--blue-fill); color: var(--on-fill);
+  box-shadow: 0 0 0 2px var(--surface), 0 1px 6px rgba(var(--shadow-ink), .28); }
 @media (hover: hover) {
   .md-shot-marker { opacity: 0; pointer-events: none; }
   .md-shot-stage:hover .md-shot-marker, .md-shot-stage.has-on .md-shot-marker,
@@ -243,7 +243,7 @@ input.emb-num { width: 120px; flex: none; }
 .md-shot-pnum { flex: none; width: 20px; height: 20px; margin-top: 1px; border-radius: 999px;
   background: var(--bg-punch); color: var(--blue); font-size: 11.5px; font-weight: 800; line-height: 20px;
   text-align: center; transition: background-color var(--dur-base, 150ms) ease, color var(--dur-base, 150ms) ease; }
-.md-shot-part:hover .md-shot-pnum, .md-shot-part.is-on .md-shot-pnum { background: var(--blue); color: #fff; }
+.md-shot-part:hover .md-shot-pnum, .md-shot-part.is-on .md-shot-pnum { background: var(--blue-fill); color: var(--on-fill); }
 .md-shot-pbody { min-width: 0; display: block; }
 .md-shot-ptitle { display: block; font-size: 14px; font-weight: 700; color: var(--ink); line-height: 1.5; }
 .md-shot-pdesc { display: block; font-size: 13px; font-weight: 500; color: var(--ink-sub); line-height: 1.55; margin-top: 2px; }
@@ -269,7 +269,7 @@ input.emb-num { width: 120px; flex: none; }
 .md-shotx-tab.is-on { color: var(--blue); border-bottom-color: var(--blue); font-weight: 700; }
 .md-shotx-tno { display: inline-grid; place-items: center; width: 17px; height: 17px; border-radius: 999px;
   font-size: 10.5px; font-weight: 700; box-shadow: inset 0 0 0 1.2px currentColor; opacity: .72; }
-.md-shotx-tab.is-on .md-shotx-tno { background: var(--blue); color: #fff; box-shadow: none; opacity: 1; }
+.md-shotx-tab.is-on .md-shotx-tno { background: var(--blue-fill); color: var(--on-fill); box-shadow: none; opacity: 1; }
 .md-shotx-panel { padding: 16px 2px 4px; }
 .md-shotx-lead { margin: 0 0 16px; font-size: 14px; line-height: 1.65; color: var(--ink-sub); }
 .md-shotx-body { position: relative; }
@@ -282,20 +282,20 @@ input.emb-num { width: 120px; flex: none; }
 .md-shotx-col .md-shotx-bl { width: 100%; }
 /* 확대 크롭 — 같은 스크린샷을 background-position 으로 오려낸다(추가 자산 없음) */
 .md-shotx-crop { position: relative; border: 1px solid var(--line); border-radius: 9px; background-repeat: no-repeat;
-  background-color: #fff; box-shadow: 0 1px 4px rgba(21, 35, 59, .06); }
+  background-color: var(--surface); box-shadow: 0 1px 4px rgba(var(--shadow-ink), .06); }
 .md-shotx-body.is-wide .md-shotx-crop { width: 100%; }
 .md-shotx-body.is-tall .md-shotx-crop { height: 400px; max-height: 52vh; }
 /* 지점 표시는 속이 빈 고리 — 짚은 자리를 가리지 않고 테두리만 두른다(작은 버튼·글자 위에 놓여도 읽힌다). */
 .md-shotx-dot { position: absolute; width: 13px; height: 13px; border-radius: 999px; background: transparent;
-  border: 2.5px solid var(--blue); box-shadow: 0 0 0 1.5px rgba(255, 255, 255, .95), 0 0 0 3.5px rgba(45, 107, 240, .16);
+  border: 2.5px solid var(--blue); box-shadow: 0 0 0 1.5px var(--overlay-ring), 0 0 0 3.5px rgba(45, 107, 240, .16);
   transform: translate(-50%, -50%); cursor: default; transition: transform .15s ease, box-shadow .15s ease; z-index: 2; }
 .md-shotx-dot.is-hot { transform: translate(-50%, -50%) scale(1.3);
-  box-shadow: 0 0 0 1.5px rgba(255, 255, 255, .95), 0 0 0 5px rgba(45, 107, 240, .28); }
+  box-shadow: 0 0 0 1.5px var(--overlay-ring), 0 0 0 5px rgba(45, 107, 240, .28); }
 /* 말풍선 — 이름(굵게) + 한두 문장. 짝 지점을 짚으면 함께 밝아진다 */
 .md-shotx-bl { position: relative; padding: 10px 13px 11px 27px; border: 1px solid var(--line); border-radius: 9px;
-  background: #fff; box-shadow: 0 1px 3px rgba(21, 35, 59, .05); transition: border-color .15s ease, box-shadow .15s ease; }
+  background: var(--surface); box-shadow: 0 1px 3px rgba(var(--shadow-ink), .05); transition: border-color .15s ease, box-shadow .15s ease; }
 .md-shotx-bl.is-hot { border-color: rgba(45, 107, 240, .55); box-shadow: 0 2px 10px rgba(45, 107, 240, .14); }
-.md-shotx-bn { position: absolute; left: 12px; top: 16.5px; width: 7px; height: 7px; border-radius: 999px; background: var(--blue); }
+.md-shotx-bn { position: absolute; left: 12px; top: 16.5px; width: 7px; height: 7px; border-radius: 999px; background: var(--blue-fill); }
 .md-shotx-bt { display: block; font-size: 13px; font-weight: 700; color: var(--ink); line-height: 1.5; }
 .md-shotx-bd { display: block; font-size: 12.5px; font-weight: 500; color: var(--ink-sub); line-height: 1.58; margin-top: 2px; }
 /* 안내선 — 말풍선 변에서 화면 속 지점까지, 겹치지 않게 순서 정렬된 직선 */
@@ -339,7 +339,7 @@ input.emb-num { width: 120px; flex: none; }
 .ob-block-head { display: flex; align-items: center; gap: 10px; }
 .ob-block-badge { flex: none; font-size: 10.5px; font-weight: 800; border-radius: 999px; padding: 2px 9px; letter-spacing: -.01em; color: var(--ink-sub); background: var(--bg-tint); }
 .ob-block-badge.req { color: var(--blue); background: var(--bg-punch); }
-.ob-block-badge.is-done { color: var(--mint-deep, #16a37f); background: rgba(58,157,110,.10); }
+.ob-block-badge.is-done { color: var(--mint-deep, var(--ok)); background: rgba(58,157,110,.10); }
 /* ② 상황별 설정 카드 — '이런 분께 / 안 해도 되는 경우'로 스스로 판단하게 한다 */
 .setup-cards { display: flex; flex-direction: column; gap: 12px; margin-top: 4px; }
 .setup-card { border: 1.5px solid var(--line-net); border-radius: 14px; padding: 15px 17px; background: var(--bg); transition: border-color .14s ease, background-color .14s ease; }

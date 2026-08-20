@@ -47,8 +47,8 @@ body[data-route="context"] main { max-width: none; }   /* 관리탭과 같다 �
 .ctx-side .ctx-stage.is-done .ctx-side-step,
 .ctx-side .ctx-stage.is-idle .ctx-side-step { border-color: var(--muted-2); color: var(--ink-sub); }
 /* 현재 단계 — 채운 원 + 굵은 블루 레일. 좌측에서 눈이 먼저 닿는 유일한 지점이다. */
-.ctx-side .ctx-stage.is-current::before { background: var(--blue); width: 3px; left: 7px; }
-.ctx-side .ctx-stage.is-current .ctx-side-step { background: var(--blue); border-color: var(--blue); color: #fff; }
+.ctx-side .ctx-stage.is-current::before { background: var(--blue-fill); width: 3px; left: 7px; }
+.ctx-side .ctx-stage.is-current .ctx-side-step { background: var(--blue-fill); border-color: var(--blue); color: var(--on-fill); }
 .ctx-side .ctx-stage.is-current > .docs-side-title { color: var(--blue); }
 /* 아직 오지 않은 단계 — 머리글까지 흐리게(레일 기본값 그대로). */
 .ctx-side .ctx-stage.is-todo > .docs-side-title { color: var(--muted-head); }
@@ -88,7 +88,7 @@ body[data-route="context"] main { max-width: none; }   /* 관리탭과 같다 �
 .ctx-crumb-step {
   display: inline-flex; align-items: center; justify-content: center;
   width: 16px; height: 16px; border-radius: 999px; flex: none;
-  background: var(--blue); color: #fff; font-size: 10px; font-weight: 700; line-height: 1;
+  background: var(--blue-fill); color: var(--on-fill); font-size: 10px; font-weight: 700; line-height: 1;
 }
 .ctx-crumb-sep { color: var(--muted-2); }
 

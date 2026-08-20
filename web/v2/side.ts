@@ -15,6 +15,7 @@ import { SESS_STATES } from '../session-status.js';
 import { appIcon, openLaunchpad, visibleApps } from './apps.js';
 import { dotCls, type Proj, type Sess, type V2Data } from './views.js';
 import { switcherTop } from './switcher.js';
+import { THEME_ORDER, setThemePref, themePref, type ThemePref } from '../theme.js'; // #1683 다크모드 — 사이드바 3단 토글
 
 // 기본은 **전부 접힘**(상민님 2026-08-18: 선택된 프로젝트 외에는 다 접어둔다) — 사용자가 편 것만 기억한다.
 //  지금 보는 프로젝트(선택)는 늘 펼침이 기본이고, 그걸 접은 건 잠깐의 상태라 기억하지 않는다(다음 방문엔 다시 펼쳐 보인다).
@@ -208,6 +209,7 @@ function render(): void {
         profileAvatar(me.avatar, name, me.userId, 'v2-ava', { char: me.avatar_char, color: me.avatar_color }),
         el('span', { class: 'v2-me-name', text: name }),
         el('button', { class: 'btn-text', type: 'button', text: '로그아웃', onclick: () => void logout() })),
+      themeSeg(),
       el('button', { class: 'v2-classic-link', type: 'button', text: '클래식 화면으로 (이 브라우저)', title: '이 브라우저에서만 옛 화면으로 봅니다. 관리탭 [화면] 에서 되돌릴 수 있어요.', onclick: () => { setUiModeOverride('classic'); location.replace(location.pathname + '#/dashboard'); location.reload(); } })));
   renderTree(rows);
   treeEl!.scrollTop = prevScroll;
@@ -418,4 +420,17 @@ function sessRow(s: Sess, activeKey: string, text: { main: string; sub: string }
     // 오른쪽 끝은 **한 자리**로 고정한다 — 상태어를 조건부로 넣으면 행마다 길이가 달라 목록이 들쭉날쭉해진다(상민님 2026-08-18).
     //  상태는 왼쪽 점이, 개수는 프로젝트 행이 말한다. 여기는 '누르면 대화로 간다'는 표식만(hover 때 보인다).
     glyph('chat', 'v2-ss-go'));
+}
+
+
+// ── 테마 3단 토글(#1683) — 사이드바 하단. 시스템/라이트/다크 세그먼트, 저장·적용은 theme.ts. ──
+function themeSeg(): HTMLElement {
+  const cur = themePref();
+  const lab: Record<ThemePref, string> = { system: '시스템', light: '라이트', dark: '다크' };
+  return el('div', { class: 'v2-theme', role: 'group', 'aria-label': '테마' },
+    ...THEME_ORDER.map((k) => el('button', {
+      class: 'v2-theme-opt' + (cur === k ? ' on' : ''), type: 'button', text: lab[k],
+      title: k === 'system' ? '시스템 설정을 따릅니다' : `${lab[k]} 테마로 봅니다`,
+      'aria-pressed': String(cur === k),
+      onclick: () => { setThemePref(k); redraw(); } })));
 }

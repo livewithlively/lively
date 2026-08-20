@@ -1,8 +1,8 @@
 /* ════ 도메인 맵 (#/domainmap) — 회사맥락 하위. should(의도)·is(구조) 2열 + 괴리/변경이력. ════ */
 /* 준비중 안내 배너 — 탭 최상단(프로젝트 #342). 아직 불완전한 기능임을 알린다(warn 앰버 톤: warn-badge·dm-debt 팔레트 재사용). */
-.dm-wip { border: 1px solid #F0DBB0; border-left: 3px solid #C9742E; border-radius: 12px; padding: 12px 14px; background: #FFF6E9; }
-.dm-wip-title { font-size: 13.5px; font-weight: 800; color: #9A5B2E; }
-.dm-wip-sub { font-size: 12.5px; line-height: 1.55; color: #8A6A3A; margin-top: 4px; }
+.dm-wip { border: 1px solid var(--warn-line); border-left: 3px solid var(--warn-deep); border-radius: 12px; padding: 12px 14px; background: var(--warn-bg); }
+.dm-wip-title { font-size: 13.5px; font-weight: 800; color: var(--warn-text); }
+.dm-wip-sub { font-size: 12.5px; line-height: 1.55; color: var(--warn-text); margin-top: 4px; }
 .dm-section { margin-top: 16px; }
 .dm-section-hint { font-size: 12.5px; font-weight: 600; color: var(--ink-sub); }
 .dm-list { display: flex; flex-direction: column; gap: 10px; }
@@ -14,11 +14,11 @@
 .dm-dom-key { font-size: 13px; font-weight: 700; color: var(--ink); }
 .dm-dom-name { font-size: 13.5px; color: var(--ink-sub); }
 .dm-tag { font-size: 10.5px; font-weight: 700; color: var(--ink-sub); border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; }
-.dm-debt-chip { margin-left: auto; font-size: 11.5px; font-weight: 700; color: #9A5B2E; background: #FBF1E7; border: 1px solid #F0DCC4; border-radius: 999px; padding: 1px 9px; }
+.dm-debt-chip { margin-left: auto; font-size: 11.5px; font-weight: 700; color: var(--warn-text); background: var(--warn-bg-2); border: 1px solid var(--warn-line-2); border-radius: 999px; padding: 1px 9px; }
 .dm-axes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; }
 @media (max-width: 720px) { .dm-axes { grid-template-columns: 1fr; } }
 .dm-axis { display: flex; flex-direction: column; gap: 5px; padding: 9px 11px; border-radius: 9px; background: var(--bg-tint); border: 1px solid var(--line); }
-.dm-should { background: #F2FBF8; border-color: #DCEFE8; }   /* 의도 = 민트 계열(서비스 포인트 컬러) */
+.dm-should { background: var(--ok-bg); border-color: var(--ok-line); }   /* 의도 = 민트 계열(서비스 포인트 컬러) */
 .dm-axis-label { font-size: 10.5px; font-weight: 700; letter-spacing: 0.03em; color: var(--ink-sub); text-transform: uppercase; }
 .dm-axis-val { font-size: 13px; color: var(--ink); line-height: 1.5; }
 .dm-axis-empty { font-size: 12.5px; color: var(--muted-2); font-style: italic; }
@@ -26,9 +26,9 @@
 
 /* 괴리(debt) — should↔is 괴리는 좌측 색띠 강조 */
 .dm-debt { border: 1px solid var(--line); border-left: 3px solid var(--line-net-2); border-radius: 9px; padding: 10px 12px; background: var(--bg); }
-.dm-sev-should_no_is { border-left-color: #C9742E; background: #FCF6EF; }
-.dm-sev-vanished { border-left-color: #B5534A; }
-.dm-sev-eroded { border-left-color: #C2A23E; }
+.dm-sev-should_no_is { border-left-color: var(--warn-deep); background: var(--warn-bg-2); }
+.dm-sev-vanished { border-left-color: var(--coral-text); }
+.dm-sev-eroded { border-left-color: var(--warn-deep); }
 .dm-debt-top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .dm-sev-tag { font-size: 10.5px; font-weight: 700; color: var(--ink-sub); white-space: nowrap; }
 .dm-debt-title { font-size: 13px; font-weight: 600; color: var(--ink); }
@@ -42,7 +42,7 @@
 .dm-change-when { margin-left: auto; font-size: 12px; color: var(--muted-2); }
 .dm-diff { display: flex; align-items: stretch; gap: 8px; margin: 8px 0; flex-wrap: wrap; }
 .dm-diff-side { flex: 1; min-width: 180px; display: flex; flex-direction: column; gap: 3px; padding: 7px 10px; border-radius: 8px; background: var(--bg-tint); border: 1px solid var(--line); }
-.dm-after { background: #F2FBF8; border-color: #DCEFE8; }
+.dm-after { background: var(--ok-bg); border-color: var(--ok-line); }
 .dm-diff-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--muted-2); }
 .dm-diff-val { font-size: 12.5px; color: var(--ink); line-height: 1.45; white-space: pre-wrap; }
 .dm-diff-arrow { align-self: center; color: var(--ink-sub); font-weight: 700; }
