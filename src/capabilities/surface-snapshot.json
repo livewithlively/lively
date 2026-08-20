@@ -3936,5 +3936,35 @@
    "POST /api/ui/apps/:id/tool-call"
   ],
   "input_hash": "05e07fe981720e97"
+ },
+ {
+  "name": "store_insert",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/store/:table/insert"
+  ],
+  "input_hash": "eb39712646846947"
+ },
+ {
+  "name": "store_query",
+  "scope": null,
+  "mcp": true,
+  "mutates": true,
+  "rest": [
+   "POST /api/ui/store/:table/query"
+  ],
+  "input_hash": "3eb09fbb3f75ec14"
+ },
+ {
+  "name": "store_tables",
+  "scope": null,
+  "mcp": true,
+  "mutates": false,
+  "rest": [
+   "GET /api/ui/store/tables"
+  ],
+  "input_hash": "6c9f16e97bc4049d"
  }
 ]
