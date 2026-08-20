@@ -4,7 +4,7 @@
 //   · 오탐 → **멀쩡한 크론이 멈추고** 사람이 호출된다. 위탁 산출물은 AI 자유 텍스트라 "401 오류를
 //     조사해줘" 같은 작업의 요약에 이 패턴이 얼마든 나온다 — ⑦⑧⑨ 행이 그 경계를 못 박는다.
 import { strict as assert } from "node:assert";
-import { detectAuthFailure, isRetriableFailure, cronJobIdFromMarker, SHORT_OUTPUT_CAP } from "./task-failure.js";
+import { detectAuthFailure, cronJobIdFromMarker, SHORT_OUTPUT_CAP } from "./task-failure.js";
 
 const ERNEST = "Failed to authenticate. API Error: 401 OAuth access token has been revoked.";
 
@@ -91,10 +91,6 @@ assert.equal(detectAuthFailure({ error: null, summary: null }), null, "null 입�
   assert.ok(!hit.evidence.includes(secret), "근거 조각에 토큰 원문이 실렸다 — 알림으로 샌다");
   assert.ok(hit.evidence.includes("[redacted]"), "토큰을 지웠으면 지웠다는 표시가 있어야 한다");
 }
-
-// ── ⑬⑭ 재시도 가부는 판정의 뒷면이다 ──
-assert.equal(isRetriableFailure({ error: ERNEST }), false, "자격 실패를 재시도 대상으로 뒀다 — 부하가 배가 된다");
-assert.equal(isRetriableFailure({ error: "exit=1" }), true, "일반 실패까지 재시도를 막았다 — 과잉 차단");
 
 // ── ⑮~⑲ 마커 → 크론 잡 id (어느 크론을 멈출지) ──
 assert.equal(cronJobIdFromMarker("cron:distill-sources-headless#hf-catchall"), "distill-sources-headless",

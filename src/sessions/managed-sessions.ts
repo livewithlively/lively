@@ -94,7 +94,9 @@ export async function ensureManagedSession(m: ManagedSession): Promise<{ id: str
   //  돌므로 그 오판 하나가 곧 세션 하나이고, 그렇게 30개까지 늘었다. 모르면 **아무것도 하지 않는다.**
   let live: Array<{ id: string; dir?: string; created?: number }>;
   try {
-    live = await listSessions(user);
+    // strict — tmux 를 **못 본 것**은 예외로 받는다. 기본 모드는 그걸 빈 목록으로 돌려주는데,
+    //  이 호출부는 "없으면 만든다"라서 그 오해가 곧 세션 하나다(2분마다 반복 → 30개).
+    live = await listSessions(user, { strict: true });
   } catch (e) {
     logger.warn({ err: (e as Error)?.message, managed: m.id }, "상시세션 목록 조회 실패 — 이번 tick 은 생성하지 않는다");
     return { id: m.id, session_id: m.session_id ?? undefined, action: "unknown", reaped: 0 };

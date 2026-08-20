@@ -80,9 +80,19 @@ export async function markFinished(id: number, ok: boolean, result: Record<strin
     catch { /* 테이블 없음 등 — 무해 */ }
   }
 }
-export async function requeue(id: number): Promise<void> {
+/**
+ * 재큐 — 노드 유실 등으로 다른 노드에 다시 배정한다.
+ *
+ * ⚠ `session_id` 를 비우므로 **직전 시도의 세션 좌표가 사라진다.** 그 노드가 돌아왔을 때 세션이 살아 있으면
+ *  아무도 그것을 그 태스크와 잇지 못한다(영구 고아). 중앙은 오프라인 노드의 세션을 지울 수단이 없으므로
+ *  최소한 **좌표를 결과에 남겨** 나중에 추적할 수 있게 한다(#1675 리뷰 후속).
+ */
+export async function requeue(id: number, orphan?: { node: string | null; session: string | null }): Promise<void> {
+  const mark = orphan?.session ? JSON.stringify({ orphan_session: { node: orphan.node, session: orphan.session } }) : null;
   await itemsPool.query(
-    `UPDATE org_task SET status='queued', node_id=NULL, session_id=NULL, task_dir=NULL, node_lost_at=NULL, updated_at=now() WHERE id=$1`, [id]);
+    `UPDATE org_task SET status='queued', node_id=NULL, session_id=NULL, task_dir=NULL, node_lost_at=NULL,
+        result = CASE WHEN $2::text IS NULL THEN result ELSE COALESCE(result,'{}'::jsonb) || $2::jsonb END,
+        updated_at=now() WHERE id=$1`, [id, mark]);
 }
 export async function markCanceled(id: number): Promise<void> {
   await itemsPool.query(`UPDATE org_task SET status='canceled', finished_at=now(), updated_at=now() WHERE id=$1`, [id]);

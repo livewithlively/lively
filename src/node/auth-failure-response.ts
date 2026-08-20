@@ -74,11 +74,13 @@ async function stopCron(jobId: string, reason: string): Promise<boolean> {
  * 실행 중(running)은 건드리지 않는다 — 이미 워커가 붙어 있고, 곧 자기 경로로 종결된다.
  */
 async function cancelQueuedForCron(jobId: string): Promise<number> {
+  // ⚠ LIKE 패턴이 아니라 **접두 일치**로 판정한다. 잡 id 에는 `_`(refresh_all·map_unmapped …)가 흔한데
+  //  LIKE 에서 `_` 는 임의 1글자 와일드카드라, `cron:map_unmapped#…` 패턴이 `cron:mapXunmapped#…` 까지 잡는다
+  //  — **남의 크론이 낸 대기 위탁을 취소할 수 있다**(#1675 리뷰). split_part 로 레인을 떼고 정확히 비교한다.
   const r = await itemsPool.query(
     `UPDATE org_task SET status='canceled', finished_at=now(), updated_at=now(),
             error=COALESCE(error,'') || $2
-      WHERE status='queued'
-        AND (requester_session = $1 OR requester_session LIKE $1 || '#%')`,
+      WHERE status='queued' AND split_part(requester_session, '#', 1) = $1`,
     [`cron:${jobId}`, "자격(인증) 실패로 해당 크론이 정지되어 취소됨(#1675)"]);
   return r.rowCount ?? 0;
 }
@@ -115,7 +117,6 @@ export async function handleAuthFailure(
 
   // 알림은 크론 정지 **뒤에** — 사람이 알림을 읽는 시점에 이미 멈춰 있어야 한다.
   if (shouldAlertNow(lastAlertAt.get(ctx.requester), now)) {
-    lastAlertAt.set(ctx.requester, now);
     const what = ctx.cronJobId
       ? (out.cronStopped
         ? `크론 '${ctx.cronJobId}' 를 자동으로 정지했습니다(대기 중이던 위탁 ${out.queuedCanceled}건도 취소).`
@@ -137,6 +138,10 @@ export async function handleAuthFailure(
         },
       });
       out.alerted = r.sent;
+      // ⚠ 쿨다운은 **실제로 나갔을 때만** 찍는다(#1675 리뷰). 종전엔 보내기 전에 찍어서, 웹훅 복호화 실패처럼
+      //  회복 가능한 사유로 전송이 실패해도 30분간 침묵했다 — 사고의 '아무도 몰랐다' 모드를 그대로 재현한다.
+      //  단 '미설정'·'임계 미만'은 재시도해도 결과가 같으므로 찍어서 로그 폭주를 막는다.
+      if (r.sent || r.reason === "웹훅 미설정" || r.reason === "임계 미만(min_severity)") lastAlertAt.set(ctx.requester, now);
       if (!r.sent) logger.warn({ reason: r.reason, task: ctx.taskId }, "자격 실패 알림 미발송");
     } catch (e) {
       logger.warn({ err: (e as Error)?.message, task: ctx.taskId }, "자격 실패 알림 실패");

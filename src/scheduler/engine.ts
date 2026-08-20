@@ -86,10 +86,16 @@ async function executeAndRecord(job: CronJob): Promise<{ status: string; summary
     });
     try {
       await itemsPool.query(
-        `UPDATE org_cron SET last_run_at=$2, last_status=$3, last_summary=$4, next_run_at=$5, fail_streak=$6, updated_at=now() WHERE id=$1`,
-        [job.id, startedIso, res.status, JSON.stringify(res.summary), nextIso, brk.nextStreak]);
+        `UPDATE org_cron SET last_run_at=$2, last_status=$3, last_summary=$4, next_run_at=$5, updated_at=now() WHERE id=$1`,
+        [job.id, startedIso, res.status, JSON.stringify(res.summary), nextIso]);
       if (job.run_once) await itemsPool.query(`UPDATE org_cron SET enabled=false, updated_at=now() WHERE id=$1`, [job.id]); // 1회성: 실행 후 자동 비활성(반복 방지)
     } catch (e) { logger.warn({ err: e, job: job.id }, "org_cron 상태 갱신 실패"); }
+    // ⚠ 서킷 브레이커 카운터는 **따로** 쓴다(#1675 리뷰). 위 UPDATE 에 fail_streak 를 끼워 넣으면 그 컬럼이 없는 DB
+    //  (마이그레이션 미실행·롤백)에서 **문 전체가 실패**해 last_run_at 이 안 써지고, 그러면 isDue 가 매 틱 due 로 읽어
+    //  잡이 30초마다 돈다 — 고장을 막으려던 장치가 폭주를 만든다. 기록(위)과 보호(아래)는 서로를 깨뜨리면 안 된다.
+    try {
+      await itemsPool.query(`UPDATE org_cron SET fail_streak=$2 WHERE id=$1`, [job.id, brk.nextStreak]);
+    } catch (e) { logger.warn({ err: (e as Error)?.message, job: job.id }, "연속 실패 카운터 갱신 실패(브레이커만 비활성)"); }
     logger.info({ job: job.id, action: job.action, status: res.status, streak: brk.nextStreak }, "cron job done");
     if (brk.disable && !job.run_once) await tripBreaker(job, brk.nextStreak);
     return res;

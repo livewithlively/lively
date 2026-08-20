@@ -84,6 +84,9 @@ async function listUnreapedFailed(): Promise<FailedTaskRow[]> {
         AND (result->>'session_reaped') IS NULL
       ORDER BY finished_at DESC NULLS LAST, id DESC
       LIMIT 5000`);
+  // ⚠ 이 LIMIT 은 **tick 당 처리량 상한**이지 '여기까지만 본다'가 아니다. 걷은 행은 session_reaped 로 표시돼
+  //  다음 조회에서 빠지므로, 백로그가 이보다 커도 다음 tick 이 그 다음 묶음을 가져가 **수렴한다**(5초 tick).
+  //  정렬이 최신순인 건 의도다 — plan 이 '최신 keep 건'을 남겨야 하는데 오래된 것부터 가져오면 그 판정이 깨진다.
   return r.rows as FailedTaskRow[];
 }
 

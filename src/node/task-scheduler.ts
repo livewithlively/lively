@@ -83,12 +83,28 @@ async function progressBytes(t: DelegateTask): Promise<number> {
 //  ⚠ 세션 좌표(node_id·session_id·requester)만 쓴다 — 실패 세션 회수기도 같은 함수를 쓰기 위해
 //   DelegateTask 전체가 아니라 그 세 칸만 요구한다(회수기는 DB 에서 그 칸만 읽어온다).
 type SessionCoords = Pick<DelegateTask, "node_id" | "session_id" | "requester">;
-async function killTaskAnywhere(t: SessionCoords): Promise<void> {
-  if (!t.session_id) return;
-  if (t.node_id === CENTRAL_NODE_ID) await killTaskSession(t.session_id).catch(() => { /* noop */ });
-  else if (t.node_id && nodeOnline(t.node_id)) {
-    await nodeRpc(t.node_id, "kill", { user: { userId: t.requester }, id: t.session_id }).catch(() => { /* noop */ });
+/**
+ * 반환값 = **그 세션이 지금 확실히 없어졌나**(회수기가 '걷었다'고 기록해도 되는가).
+ *
+ * ⚠ 이 구분이 없으면 회수기가 거짓 성공을 기록한다(#1675 리뷰에서 잡힌 결함): 종전 구현은 오프라인 노드에서
+ *  **아무 일도 안 하고 정상 반환**했고, 호출부는 그걸 성공으로 보고 `session_reaped` 를 찍었다. 그러면 그 세션은
+ *  다음 조회에서 영구 제외되는데 노드가 돌아오면 멀쩡히 살아 있다 — ① 이 없애려던 바로 그 영구 누수다.
+ *
+ *  · 중앙(로컬 tmux): kill 이 실패해도 **true**. 로컬에서 실패하는 사유는 사실상 '이미 없음'이고,
+ *    그걸 미완으로 두면 존재하지도 않는 세션에 영원히 재시도한다.
+ *  · 원격: 노드에 **닿았을 때만** true. 오프라인·RPC 실패는 false → 다음 tick 에 다시 시도한다.
+ */
+async function killTaskAnywhere(t: SessionCoords): Promise<boolean> {
+  if (!t.session_id) return true;                       // 걷을 세션이 애초에 없다 = 완료
+  if (t.node_id === CENTRAL_NODE_ID) {
+    await killTaskSession(t.session_id).catch(() => { /* 이미 없음 */ });
+    return true;
   }
+  if (!t.node_id || !nodeOnline(t.node_id)) return false;   // 노드에 못 닿았다 — 아직 안 걷혔다
+  try {
+    await nodeRpc(t.node_id, "kill", { user: { userId: t.requester }, id: t.session_id });
+    return true;
+  } catch { return false; }
 }
 
 // 실패 세션 회수 tick(#1675 ①) — 보존 상한(개수·TTL) 밖의 실패 세션을 걷는다.
@@ -97,7 +113,10 @@ async function reapFailedSessions(): Promise<void> {
   try {
     const p = await effectiveDelegatePolicy(loadDelegatePolicy);
     await reapFailedTaskSessions(
-      (t: FailedTaskRow) => killTaskAnywhere(t),
+      async (t: FailedTaskRow) => {
+        // 못 걷었으면 **던진다** — 회수기는 그때만 '다음 tick 재시도'로 남긴다(마킹하지 않는다).
+        if (!(await killTaskAnywhere(t))) throw new Error(`세션 회수 미완(노드 ${t.node_id ?? "?"} 에 닿지 못함)`);
+      },
       { keep: p.keep_failed_sessions, ttlMin: p.failed_session_ttl_min },
     );
   } catch (err) {
@@ -304,10 +323,12 @@ async function watchRunning(): Promise<void> {
         if (!t.node_lost_at) { await setNodeLost(t.id, true); logger.info({ task: t.id, node: t.node_id }, "노드 연결 끊김 — 복귀 대기"); continue; }
         if (now - new Date(t.node_lost_at).getTime() > OFFLINE_GRACE_MS) {
           if (t.attempt < t.max_attempts) {
-            // 재큐하면 session_id 가 NULL 이 되어 **그 세션을 다시는 못 찾는다**. 노드가 돌아왔을 때
-            //  남아 있으면 영구 고아다 — 지우고 나서 재큐한다(오프라인이면 no-op, 무해).
-            await killTaskAnywhere(t);
-            await requeue(t.id);
+            // ⚠ 여기서 kill 을 시도해도 소용없다 — 이 분기는 `!online` 이라 원격 kill 이 구조적으로 닿지 않는다.
+            //  (최초 구현이 그 자리에 kill 을 넣었다가 리뷰에서 no-op 임이 드러났다.)
+            //  재큐하면 session_id 가 NULL 이 되어 **그 세션을 다시는 못 찾는다** — 노드가 돌아왔을 때 남아 있으면
+            //  영구 고아다. 그래서 좌표를 결과에 남겨 노드 복귀 후 추적할 수 있게 한다(회수는 노드 자체의
+            //  부팅 스윕/사람 정리 몫 — 중앙이 닿지 못하는 남의 머신을 장부만으로 지웠다고 할 수는 없다).
+            await requeue(t.id, { node: t.node_id, session: t.session_id });
             logger.warn({ task: t.id, node: t.node_id, attempt: t.attempt }, "노드 유실 — 재큐");
           } else {
             await finish(t, false, null, undefined, `node-lost(${t.node_id})`);

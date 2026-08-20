@@ -8,7 +8,7 @@ const AUTH: AuthFailure = { label: "토큰 폐기(revoked)", evidence: "… has 
 const T0 = new Date("2026-08-13T00:00:00.000Z").getTime();
 
 /** 호출을 기록하는 스텁 묶음 — '무엇이 실제로 불렸나'로 단언한다(문구 매칭 아님). */
-function spies(o: { stopResult?: boolean; stopThrows?: boolean; alertThrows?: boolean } = {}) {
+function spies(o: { stopResult?: boolean; stopThrows?: boolean; alertThrows?: boolean; sendFails?: string } = {}) {
   const stopped: string[] = [], canceled: string[] = [];
   const alerts: Array<{ severity: string; title: string; text: string; detail: Record<string, unknown> }> = [];
   return {
@@ -23,7 +23,7 @@ function spies(o: { stopResult?: boolean; stopThrows?: boolean; alertThrows?: bo
       alert: async (a: { severity: string; title: string; text: string; detail: Record<string, unknown> }) => {
         if (o.alertThrows) throw new Error("웹훅 오류");
         alerts.push(a);
-        return { sent: true };
+        return o.sendFails ? { sent: false, reason: o.sendFails } : { sent: true };
       },
       now: () => T0,
     } as never,
@@ -120,6 +120,30 @@ function spies(o: { stopResult?: boolean; stopThrows?: boolean; alertThrows?: bo
   assert.ok(a.text.includes(AUTH.evidence), "판정 근거가 없다 — 오탐을 뒤집을 수 없다");
   assert.equal(a.detail.task_id, 2809);
   assert.equal(a.detail.cron_job, "distill-sources-headless");
+}
+
+// ── ★전송이 실패했으면 쿨다운을 찍지 않는다(#1675 리뷰) ──
+//  종전엔 보내기 **전에** 찍어서, 웹훅 복호화 실패처럼 회복 가능한 사유로 못 보내도 30분간 침묵했다 —
+//  사고의 '아무도 몰랐다' 모드를 그대로 재현하는 자리다.
+{
+  resetAuthAlertCooldown();
+  const s = spies({ sendFails: "웹훅 설정을 읽지 못했습니다" });
+  const first = await handleAuthFailure(
+    { taskId: 20, requester: "lively1", cronJobId: null, auth: AUTH }, { stopCron: true }, s.deps);
+  assert.equal(first.alerted, false, "전송 실패인데 보냈다고 보고했다");
+  const second = await handleAuthFailure(
+    { taskId: 21, requester: "lively1", cronJobId: null, auth: AUTH }, { stopCron: true }, s.deps);
+  assert.equal(s.alerts.length, 2,
+    "전송이 실패했는데 쿨다운이 찍혀 다음 실패에서 재시도조차 안 했다 — 30분간 아무도 모른다");
+  void second;
+}
+// 반면 '미설정'은 재시도해도 결과가 같다 — 그건 찍어서 로그 폭주를 막는다.
+{
+  resetAuthAlertCooldown();
+  const s = spies({ sendFails: "웹훅 미설정" });
+  await handleAuthFailure({ taskId: 22, requester: "lively1", cronJobId: null, auth: AUTH }, { stopCron: true }, s.deps);
+  await handleAuthFailure({ taskId: 23, requester: "lively1", cronJobId: null, auth: AUTH }, { stopCron: true }, s.deps);
+  assert.equal(s.alerts.length, 1, "웹훅 미설정인데 매번 재시도했다 — 결과가 같은 시도로 로그가 찬다");
 }
 
 // ── 쿨다운 판정(순수) ──
