@@ -23,7 +23,7 @@
 //
 //  이 파일이 모르는 것: 각 칸에 들어가는 내용(v2/panes-parts.ts) · 프로젝트 설정 창(v2/proj-settings.ts).
 import { anchoredPopover, api, el, personFace, toast } from '../core.js';
-import { confirmDialog } from '../ui-primitives.js';
+import { confirmSessionArchive, confirmSessionHideTab } from '../session-actions.js';
 import { makeSplitter } from './split.js';
 import { PART_DEFS, hiddenSessions, hideSession, lookupSessNames, makePart, partDef, pnIcon, sessTitle } from './panes-parts.js';
 import { openProjSettings } from './proj-settings.js';
@@ -226,15 +226,211 @@ export function mountPanes(host, opts) {
             .sort((a, b) => rank(a) - rank(b) || (b.lastSeen || 0) - (a.lastSeen || 0));
     };
     const SESS_TAB_MAX = 40; // 탭 줄에 눕히는 상한 — 프로젝트 없는 세션 화면엔 수백 개가 몰린다(실측 188개)
+    // ── 세션 탭 순서(원준 2026-08-20) ──────────────────────────────────────────
+    //  기본 정렬은 상태순(답 기다림 → 도는 중 → 최근)이지만, 사람이 끌어 옮기면 **그 순서가 이긴다**.
+    //  칸 배치와 마찬가지로 보기 취향이라 이 브라우저에 기억한다(프로젝트별 — 프로젝트마다 쓰는 세션이 다르다).
+    const ORDER_KEY = 'pn_sess_order';
+    const orderKeyOf = () => (loose ? 'loose' : String(id));
+    function savedOrder() {
+        try {
+            const m = JSON.parse(localStorage.getItem(ORDER_KEY) || '{}');
+            const a = m && m[orderKeyOf()];
+            return Array.isArray(a) ? a.map(String) : [];
+        }
+        catch (_) {
+            return [];
+        }
+    }
+    function saveOrder(ids) {
+        try {
+            const m = JSON.parse(localStorage.getItem(ORDER_KEY) || '{}') || {};
+            m[orderKeyOf()] = ids.slice(0, 200);
+            localStorage.setItem(ORDER_KEY, JSON.stringify(m));
+        }
+        catch (_) { /* noop */ }
+    }
+    /** 저장된 순서를 앞에, 나머지(새로 생긴 세션)는 기존 규칙대로 뒤에. */
+    function applyOrder(ss) {
+        const ord = savedOrder();
+        if (!ord.length)
+            return ss;
+        const rank = new Map(ord.map((x, i) => [x, i]));
+        const placed = ss.filter((s) => rank.has(s.id)).sort((a, b) => rank.get(a.id) - rank.get(b.id));
+        return [...placed, ...ss.filter((s) => !rank.has(s.id))];
+    }
+    // 끌어 옮기기 — 셸 탭(tabs.ts)과 같은 크롬 문법: 잡은 탭은 커서를 따라오고 이웃은 그 폭만큼 미끄러진다.
+    let sdrag = null;
+    let sdragJustMoved = false;
+    let sEditing = null;
+    let sEditEl = null;
+    const sEditLocked = () => {
+        if (!sEditing)
+            return false;
+        if (sEditEl && sEditEl.isConnected)
+            return true;
+        sEditing = null;
+        sEditEl = null;
+        return false;
+    };
+    function clearSDrag(d) {
+        for (const n of d.els) {
+            n.style.transform = '';
+            n.style.transition = '';
+        }
+        d.el.classList.remove('dragging');
+        const strip = d.el.closest('.pn-tabs');
+        if (strip)
+            strip.classList.remove('dnd');
+    }
+    function beginSDrag(node, e) {
+        if (sdrag || sEditLocked() || e.button !== 0 || e.pointerType === 'touch')
+            return;
+        const strip = node.closest('.pn-tabs');
+        if (!strip)
+            return;
+        const els = Array.from(strip.querySelectorAll('[data-sess]'));
+        const from = els.indexOf(node);
+        if (from < 0 || els.length < 2)
+            return;
+        const rects = els.map((n) => n.getBoundingClientRect());
+        const gap = rects.length > 1 ? Math.max(0, Math.round(rects[1].left - rects[0].right)) : 3;
+        sdrag = { el: node, startX: e.clientX, pointerId: e.pointerId, moved: false, from, to: from, els, rects, step: rects[from].width + gap };
+        try {
+            node.setPointerCapture(e.pointerId);
+        }
+        catch (_) { /* noop */ }
+    }
+    function onSDragMove(e) {
+        const d = sdrag;
+        if (!d || e.pointerId !== d.pointerId)
+            return;
+        const dx = e.clientX - d.startX;
+        if (!d.moved) {
+            if (Math.abs(dx) < 4)
+                return; // 손떨림은 클릭이다
+            d.moved = true;
+            d.el.classList.add('dragging');
+            const strip = d.el.closest('.pn-tabs');
+            if (strip)
+                strip.classList.add('dnd');
+        }
+        d.el.style.transform = 'translateX(' + dx + 'px)';
+        const c = d.rects[d.from].left + d.rects[d.from].width / 2 + dx;
+        let to = d.from;
+        for (let i = 0; i < d.rects.length; i++) {
+            if (i === d.from)
+                continue;
+            const mid = d.rects[i].left + d.rects[i].width / 2;
+            if (i > d.from && c > mid)
+                to = Math.max(to, i);
+            if (i < d.from && c < mid)
+                to = Math.min(to, i);
+        }
+        d.to = to;
+        for (let i = 0; i < d.els.length; i++) {
+            if (i === d.from)
+                continue;
+            const shift = (i > d.from && i <= to) ? -d.step : (i < d.from && i >= to) ? d.step : 0;
+            d.els[i].style.transform = shift ? 'translateX(' + shift + 'px)' : '';
+        }
+    }
+    function endSDrag(e) {
+        const d = sdrag;
+        if (!d || (e && e.pointerId !== d.pointerId))
+            return;
+        sdrag = null;
+        try {
+            d.el.releasePointerCapture(d.pointerId);
+        }
+        catch (_) { /* noop */ }
+        if (!d.moved) {
+            clearSDrag(d);
+            return;
+        }
+        sdragJustMoved = true;
+        const land = d.to === d.from ? 0
+            : d.to > d.from ? (d.rects[d.to].right - d.rects[d.from].right)
+                : (d.rects[d.to].left - d.rects[d.from].left);
+        d.el.style.transition = 'transform .16s ease';
+        d.el.style.transform = 'translateX(' + land + 'px)';
+        window.setTimeout(() => {
+            const ids = d.els.map((n) => String(n.dataset.sess || ''));
+            const moved = ids.splice(d.from, 1)[0];
+            ids.splice(Math.max(0, Math.min(d.to, ids.length)), 0, moved);
+            saveOrder(ids);
+            clearSDrag(d);
+            paintPane('main');
+            window.setTimeout(() => { sdragJustMoved = false; }, 0);
+        }, d.to === d.from ? 0 : 170);
+    }
+    window.addEventListener('pointermove', onSDragMove);
+    window.addEventListener('pointerup', endSDrag);
+    window.addEventListener('pointercancel', endSDrag);
+    /** 세션 탭 이름 고치기 — 여기서 고치면 서버에 저장되어 사이드바·셸 탭·세션 머리줄이 함께 바뀐다. */
+    function startSessRename(s, wrap, shown) {
+        if (sEditLocked() || sdrag || !opts.onRenameSession || !s.owned || !wrap.isConnected)
+            return;
+        const label = wrap.querySelector('.ell');
+        if (!label)
+            return;
+        sEditing = s.id;
+        const input = el('input', { class: 'pn-stab-in', type: 'text', maxlength: '80', value: String(s.label || shown), 'aria-label': '세션 이름', spellcheck: 'false' });
+        let closed = false;
+        const done = () => { sEditing = null; sEditEl = null; paintPane('main'); };
+        const cancel = () => { if (closed)
+            return; closed = true; done(); };
+        const commit = async () => {
+            if (closed)
+                return;
+            const to = input.value.replace(/\s+/g, ' ').trim();
+            if (!to || to === s.label) {
+                cancel();
+                return;
+            }
+            closed = true;
+            input.disabled = true;
+            try {
+                await opts.onRenameSession(s.id, to);
+                toast('세션 이름을 바꿨어요.');
+            }
+            catch (e) {
+                toast('이름을 바꾸지 못했어요 — ' + (e && e.message ? e.message : e), true);
+            }
+            done();
+        };
+        input.onkeydown = (ev) => {
+            if (ev.isComposing)
+                return; // 한글 조합 중 Enter 는 확정이지 저장이 아니다
+            if (ev.key === 'Enter') {
+                ev.preventDefault();
+                void commit();
+            }
+            else if (ev.key === 'Escape') {
+                ev.preventDefault();
+                cancel();
+            }
+        };
+        input.onblur = () => { void commit(); };
+        input.onpointerdown = (ev) => ev.stopPropagation();
+        input.onclick = (ev) => ev.stopPropagation();
+        sEditEl = input;
+        label.replaceWith(input);
+        input.focus();
+        input.select();
+    }
     /** 세션 탭 하나 — 상태점 + 이름 + ×(보관).
      *  ⚠ ×는 '화면 닫기'가 아니라 **세션 보관**이다(원준 2026-08-20): 돌던 터미널을 내리고 대화·설정은 남겨
      *   [보관한 세션]에서 되살릴 수 있게 한다. 돌고 있는 AI 를 멈추는 동작이라 확인창을 반드시 거친다.
      *   내 세션이고 살아 있을 때만 보인다 — 남의 세션은 못 내리고, 이미 끝난 세션은 보관할 것이 없다. */
     function sessTab(s, on, part) {
         const t = sessTitle(s, String(pj().name || ''));
+        const wrap = el('span', { class: 'pn-tabwrap' + (on ? ' on' : ''), 'data-sess': s.id });
         const b = el('button', {
             class: 'pn-tab pn-stab' + (on ? ' on' : ''), type: 'button', role: 'tab', 'aria-selected': String(on),
-            title: t + ' — ' + s.stateLabel, onclick: () => { part.selectSession?.(s.id); paintPane('main'); },
+            title: t + ' — ' + s.stateLabel + (s.owned ? ' · 두 번 누르면 이름을 바꿉니다' : ''),
+            onclick: () => { if (sdragJustMoved)
+                return; part.selectSession?.(s.id); paintPane('main'); },
+            ondblclick: () => startSessRename(s, wrap, t),
         }, el('span', { class: 'v2-dot ' + dotCls(s.stateKey), 'aria-hidden': 'true' }), el('span', { class: 'ell', text: t }));
         // ×는 **모든 세션 탭**에 있다(원준 2026-08-20 "탭을 닫을 수가 없음"). 하는 일이 상태에 따라 갈릴 뿐이다:
         //  · 살아 있는 내 세션 → 확인창 뒤 **보관**(터미널을 내리고 대화·설정은 남긴다) + 탭에서 치움.
@@ -247,7 +443,9 @@ export function mountPanes(host, opts) {
             'aria-label': canArchive ? `「${t}」 세션 보관` : `「${t}」 탭 치우기`,
             onclick: (e) => { e.stopPropagation(); void closeSessTab(s, t, part); },
         }, pnIcon('x', 'pn-i xs'));
-        return el('span', { class: 'pn-tabwrap' + (on ? ' on' : '') }, b, x);
+        wrap.addEventListener('pointerdown', (e) => beginSDrag(wrap, e));
+        wrap.append(b, x);
+        return wrap;
     }
     /** 탭 × — 살아 있는 내 세션이면 보관까지, 아니면 보기에서만 치운다. 치운 뒤 보던 탭이면 옆 탭으로 옮겨 준다. */
     async function closeSessTab(s, name, part) {
@@ -255,6 +453,9 @@ export function mountPanes(host, opts) {
             if (!await archiveSess(s, name))
                 return;
         }
+        // 끝난 세션·남의 세션 — 잃는 것이 없지만, ×를 '영영 지움'으로 읽는 사람이 많아 처음 한 번은 무슨 일이 일어나는지 보여 준다.
+        else if (!await confirmSessionHideTab({ title: `「${name}」 탭을 치울까요?` }))
+            return;
         hideSession(s.id);
         if (part.currentSession?.() === s.id) {
             const next = mySessions().find((x) => x.id !== s.id && !hiddenSessions().has(x.id));
@@ -267,13 +468,8 @@ export function mountPanes(host, opts) {
     /** 세션 보관 — 터미널만 내리고 좌표·대화는 DB 에 남긴다(DELETE ?reclaim=1 = restorable). 성공하면 true. */
     async function archiveSess(s, name) {
         const working = s.stateKey === 'busy' || s.stateKey === 'waiting';
-        const ok = await confirmDialog({
-            title: `「${name}」 세션을 보관할까요?`,
-            message: working ? '지금 일하는 중이라, 보관하면 그 자리에서 멈춥니다.' : '돌고 있는 터미널을 내려놓습니다.',
-            lines: ['대화와 설정은 그대로 남습니다 — [보관한 세션]에서 언제든 되살릴 수 있어요.'],
-            confirmText: '보관', danger: working,
-        });
-        if (!ok)
+        // 확인창 정의는 web/session-actions.ts 한 곳에 둔다(#1582 — 같은 동작이 화면마다 다른 말을 하면 한쪽이 거짓말이 된다).
+        if (!await confirmSessionArchive({ title: `「${name}」 세션을 보관할까요?`, working }))
             return false;
         try {
             await api('/api/ui/terminal/sessions/' + encodeURIComponent(s.id) + '?reclaim=1' + (s.node ? '&node=' + encodeURIComponent(s.node) : ''), { method: 'DELETE' });
@@ -294,7 +490,7 @@ export function mountPanes(host, opts) {
         const cur = part.currentSession?.() ?? null;
         const hid = hiddenSessions();
         // 치운 탭은 줄에서 빠진다 — 단 **지금 보고 있는 세션은 예외**(보는 화면의 탭이 없으면 어디 있는지 알 수 없다).
-        const ss = mySessions().filter((s) => !hid.has(s.id) || s.id === cur);
+        const ss = applyOrder(mySessions().filter((s) => !hid.has(s.id) || s.id === cur));
         const shown = ss.slice(0, SESS_TAB_MAX);
         // 지금 보는 세션이 상한 밖이면 그 탭만은 끼워 넣는다 — 켜진 것이 안 보이면 어디 있는지 알 수 없다.
         const out = ss.find((s) => s.id === cur && !shown.some((x) => x.id === s.id));
@@ -311,6 +507,9 @@ export function mountPanes(host, opts) {
         ];
     }
     function paintPane(zone) {
+        // 세션 탭을 끌거나 이름을 고치는 중에는 그 줄을 다시 그리지 않는다(8초 틱이 그 동작을 끊는다).
+        if (zone === 'main' && (sdrag || sEditLocked()))
+            return;
         const pane = panes.get(zone);
         const list = lay[zone];
         let act = lay.act[zone];

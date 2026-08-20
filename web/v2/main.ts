@@ -70,6 +70,8 @@ async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: st
     detail,
     sessionId,
     onProjectChanged: () => { void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); }); },
+    // 세션 탭에서 두 번 눌러 고친 이름 — 같은 renameSession 을 태워 **사이드바·셸 탭·세션 머리줄까지 한 번에** 갱신한다.
+    onRenameSession: (sid, name) => renameSession(sid, name, tab),
     // 서랍에서 세션을 갈아 끼웠다 — 셸은 살려 두고 **주소·탭 제목만** 그 세션 것으로(라우터를 다시 돌리지 않는다).
     onSessionPicked: (sid) => {
       const href = sid ? '#/s/' + encodeURIComponent(sid) : '#/p/' + projectId;
