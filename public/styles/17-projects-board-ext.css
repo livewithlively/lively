@@ -131,14 +131,14 @@
 /* 인메모리 할일 입력·편집 textarea — 한 줄 넘으면 세로로 자동 성장. */
 .np-grow-input { flex: 1 1 auto; min-width: 0; width: 100%; box-sizing: border-box; resize: none; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; line-height: 1.45; font-family: inherit; display: block; }
 .np-trow-sub { padding-left: 30px; }
-.np-trow-sub .np-trow-title { font-size: 13px; color: var(--ink-sub, var(--ink)); }
+.np-trow-sub .np-trow-title { font-size: 13px; color: var(--ink-sub); }
 .np-trow-acts { display: flex; align-items: center; gap: 3px; opacity: 0; transition: opacity .12s; }
 .np-trow:hover .np-trow-acts, .np-trow:focus-within .np-trow-acts { opacity: 1; }
 .np-trow-act { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted-2); background: none; border: none; border-radius: 7px; padding: 3px 7px; cursor: pointer; }
 .np-trow-act:hover { background: var(--bg-tint); color: var(--ink); }
 .np-trow-act .pjv-subtask-ic { width: 14px; height: 14px; }
 .np-trow-del { flex: 0 0 auto; width: 22px; height: 22px; line-height: 1; font-size: 15px; color: var(--muted-2); background: none; border: none; border-radius: 6px; cursor: pointer; }
-.np-trow-del:hover { background: var(--bg-danger, var(--danger-bg)); color: var(--danger, var(--danger-deep)); }
+.np-trow-del:hover { background: var(--bg-danger); color: var(--danger); }
 .np-tasks-tree .pjv-addrow-input { font-size: 13.5px; font-weight: 500; padding: 0; }
 .np-add-trigger { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 11px; background: none; border: none; color: var(--muted-2); font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
 .np-add-trigger:hover { color: var(--ink); }
@@ -210,7 +210,7 @@ body.pjv-side-dragging, body.pjv-side-dragging .pjv-side-navitem { cursor: grabb
 .pjv-side-navfolder[draggable="true"], .pjv-side-navlist[draggable="true"] { user-select: none; }
 .pjv-side-listglyph { flex: none; width: 16px; height: 16px; display: block; }
 .pjv-side-listemoji { flex: none; width: 18px; text-align: center; font-size: 14px; line-height: 1; }
-.pjv-side-folder-empty { display: inline-flex; align-items: center; gap: 5px; margin: 1px 0 4px 30px; border: 1px dashed var(--line-net, var(--gray-line)); background: none; cursor: pointer; padding: 4px 9px; border-radius: 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.pjv-side-folder-empty { display: inline-flex; align-items: center; gap: 5px; margin: 1px 0 4px 30px; border: 1px dashed var(--line-net); background: none; cursor: pointer; padding: 4px 9px; border-radius: 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
 .pjv-side-folder-empty:hover { border-color: var(--blue); color: var(--blue); background: var(--bg-tint); }
 .pjv-side-newrow { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
 .pjv-side-newrow .pjv-side-newlist { margin-top: 0; }
@@ -218,14 +218,14 @@ body.pjv-side-dragging, body.pjv-side-dragging .pjv-side-navitem { cursor: grabb
 .pjv-side-raildot .pjv-side-listemoji { width: 20px; font-size: 15px; }
 
 /* 커스텀 상태 동그라미 — inline 색(--sc) */
-.pjv-status-dot.pjv-status-custom { border-color: var(--sc, var(--muted-3)); color: var(--sc, var(--muted-3)); }
+.pjv-status-dot.pjv-status-custom { border-color: var(--sc); color: var(--sc); }
 .pjv-status-dot.pjv-status-custom.todo { border-style: dashed; background: var(--bg); }
 .pjv-status-dot.pjv-status-custom.inprog { border-style: solid; }
 .pjv-status-dot.pjv-status-custom.done { background: var(--sc); border-color: var(--sc); color: var(--on-fill); }
 .pjv-status-dot.pjv-status-custom:hover { filter: brightness(1.08); }
 
 /* 상태 그룹 헤더 — 커스텀 상태는 색 pill 로(스크린샷) */
-.pjv-tgroup-label.pjv-status-pill { display: inline-flex; align-items: center; font-size: 12.5px; font-weight: 700; color: var(--on-fill); background: var(--sc, var(--muted-2)); padding: 2px 11px; border-radius: 999px; letter-spacing: -.1px; }
+.pjv-tgroup-label.pjv-status-pill { display: inline-flex; align-items: center; font-size: 12.5px; font-weight: 700; color: var(--on-fill); background: var(--sc); padding: 2px 11px; border-radius: 999px; letter-spacing: -.1px; }
 
 /* 리스트/폴더 설정 메뉴 */
 .pjv-listset-menu { min-width: 172px; }
@@ -246,7 +246,7 @@ body.pjv-side-dragging, body.pjv-side-dragging .pjv-side-navitem { cursor: grabb
 .pjv-statused-left { flex: 0 0 188px; }
 .pjv-statused-right { flex: 1 1 auto; min-width: 0; }
 .pjv-statused-radios { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
-.pjv-statused-radio { display: flex; gap: 9px; align-items: flex-start; text-align: left; border: 1px solid var(--line-net, var(--gray-line)); background: none; border-radius: 8px; padding: 9px 11px; cursor: pointer; }
+.pjv-statused-radio { display: flex; gap: 9px; align-items: flex-start; text-align: left; border: 1px solid var(--line-net); background: none; border-radius: 8px; padding: 9px 11px; cursor: pointer; }
 .pjv-statused-radio:hover { border-color: var(--blue); }
 .pjv-statused-radio.on { border-color: var(--blue); background: var(--bg-tint); }
 .pjv-statused-radio-mark { flex: none; width: 15px; height: 15px; border-radius: 50%; border: 2px solid var(--muted-3); margin-top: 2px; box-sizing: border-box; }
@@ -259,13 +259,13 @@ body.pjv-side-dragging, body.pjv-side-dragging .pjv-side-navitem { cursor: grabb
 .pjv-statused-cat { margin-bottom: 16px; }
 .pjv-statused-cat-h { font-size: 12px; font-weight: 800; letter-spacing: .3px; color: var(--muted); margin-bottom: 7px; }
 .pjv-statused-rows { display: flex; flex-direction: column; gap: 6px; }
-.pjv-statused-row { display: flex; align-items: center; gap: 9px; border: 1px solid var(--line-net, var(--gray-line)); border-radius: 8px; padding: 7px 9px; background: var(--bg); }
+.pjv-statused-row { display: flex; align-items: center; gap: 9px; border: 1px solid var(--line-net); border-radius: 8px; padding: 7px 9px; background: var(--bg); }
 .pjv-statused-grip { flex: none; color: var(--muted-3); font-size: 12px; cursor: grab; }
 .pjv-statused-name { flex: 1 1 auto; min-width: 0; border: none; background: none; font-size: 13.5px; font-weight: 600; color: var(--ink); padding: 2px 0; }
 .pjv-statused-name:focus { outline: none; }
 .pjv-statused-name:disabled { color: var(--ink); } /* 기본 상태 라벨도 커스텀처럼 선명하게(#617) — 흐리게 두지 않음 */
 .pjv-statused-row .pjv-trow-more { position: static; opacity: 1; transform: none; }
-.pjv-statused-add { display: inline-flex; align-items: center; gap: 6px; margin-top: 7px; border: 1px dashed var(--line-net, var(--gray-line)); background: none; cursor: pointer; padding: 6px 10px; border-radius: 7px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.pjv-statused-add { display: inline-flex; align-items: center; gap: 6px; margin-top: 7px; border: 1px dashed var(--line-net); background: none; cursor: pointer; padding: 6px 10px; border-radius: 7px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
 .pjv-statused-add:hover { border-color: var(--blue); color: var(--blue); }
 .pjv-color-pop .pjv-color-swatches { padding: 4px; }
 
@@ -286,7 +286,7 @@ body.pjv-side-dragging, body.pjv-side-dragging .pjv-side-navitem { cursor: grabb
 .pjv-statused-cat-add:hover { background: var(--bg-tint); color: var(--blue); }
 
 /* 공개범위 카드형 토글(#500) — 폼 필드 톤에 맞춘 바른 경계·강조 */
-.pjv-visrow { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; border: 1px solid var(--line-net, var(--gray-line)); background: var(--bg); border-radius: 8px; padding: 11px 13px; cursor: pointer; box-sizing: border-box; transition: border-color .13s ease, background-color .13s ease; }
+.pjv-visrow { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; border: 1px solid var(--line-net); background: var(--bg); border-radius: 8px; padding: 11px 13px; cursor: pointer; box-sizing: border-box; transition: border-color .13s ease, background-color .13s ease; }
 .pjv-visrow:hover { border-color: var(--blue); }
 .pjv-visrow.on { border-color: var(--blue); background: var(--bg-tint); }
 .pjv-visrow:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
@@ -304,7 +304,7 @@ body.pjv-side-dragging, body.pjv-side-dragging .pjv-side-navitem { cursor: grabb
 
 /* 멤버 선택(#500) — 참여 인원 요약 + 체크 표시(＋추가/✓선택됨 텍스트 대체) */
 .proj-mp-count { font-size: 12px; font-weight: 600; color: var(--muted); padding: 0 2px; }
-.proj-mp-check { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1.6px solid var(--line-net, var(--gray-line)); display: inline-flex; align-items: center; justify-content: center; color: transparent; font-size: 11px; font-weight: 800; box-sizing: border-box; transition: background-color .12s ease, border-color .12s ease; }
+.proj-mp-check { flex: none; width: 18px; height: 18px; border-radius: 50%; border: 1.6px solid var(--line-net); display: inline-flex; align-items: center; justify-content: center; color: transparent; font-size: 11px; font-weight: 800; box-sizing: border-box; transition: background-color .12s ease, border-color .12s ease; }
 .proj-mp-row:hover .proj-mp-check { border-color: var(--blue); }
 .proj-mp-row.on .proj-mp-check { background: var(--blue-fill); border-color: var(--blue); color: var(--on-fill); }
 
@@ -341,18 +341,18 @@ body.pjv-side-dragging, body.pjv-side-dragging .pjv-side-navitem { cursor: grabb
 
 /* ══ 도메인 맵 재설계 (#185): 의존 흐름 그래프 + 드릴다운 (dmx-*) ══ */
 :root{
-  --dmx-surface:var(--bg); --dmx-line:var(--line); --dmx-line2:var(--line-row,#edf1f8);
-  --dmx-ok:var(--blue,var(--blue)); --dmx-warn:var(--warn-deep); --dmx-viol:var(--coral-text); --dmx-pending:var(--muted-2,var(--muted-2));
-  --dmx-sp-product:var(--blue,var(--blue)); --dmx-sp-cross:var(--purple-text);
+  --dmx-surface:var(--bg); --dmx-line:var(--line); --dmx-line2:var(--line-row);
+  --dmx-ok:var(--blue); --dmx-warn:var(--warn-deep); --dmx-viol:var(--coral-text); --dmx-pending:var(--muted-2);
+  --dmx-sp-product:var(--blue); --dmx-sp-cross:var(--purple-text);
 }
 .dmx-controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;margin:14px 0;}
-.dmx-seg{display:inline-flex;background:var(--bg-tint,var(--bg-tint));border:1px solid var(--line);border-radius:9px;padding:3px;gap:2px;}
+.dmx-seg{display:inline-flex;background:var(--bg-tint);border:1px solid var(--line);border-radius:9px;padding:3px;gap:2px;}
 .dmx-seg button{appearance:none;border:0;background:transparent;color:var(--muted);font:inherit;font-size:12.5px;font-weight:600;padding:5px 12px;border-radius:7px;cursor:pointer;}
 .dmx-seg button[aria-pressed="true"]{background:var(--bg);color:var(--ink);box-shadow:0 1px 3px rgba(var(--shadow-ink), .1);}
 .dmx-seg button:focus-visible{outline:2px solid var(--blue);outline-offset:2px;}
 .dmx-toggle{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;color:var(--ink-sub);cursor:pointer;user-select:none;}
 .dmx-toggle input{position:absolute;opacity:0;width:0;height:0;}
-.dmx-switch{width:34px;height:19px;border-radius:11px;background:var(--muted-3,var(--muted-3));position:relative;transition:background .18s;flex:0 0 auto;}
+.dmx-switch{width:34px;height:19px;border-radius:11px;background:var(--muted-3);position:relative;transition:background .18s;flex:0 0 auto;}
 .dmx-switch::after{content:"";position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:var(--surface);box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .18s;}
 .dmx-toggle input:checked + .dmx-switch{background:var(--dmx-sp-cross);}
 .dmx-toggle input:checked + .dmx-switch::after{transform:translateX(15px);}
@@ -369,12 +369,12 @@ body.pjv-side-dragging, body.pjv-side-dragging .pjv-side-navitem { cursor: grabb
 .dmx-repo{font:inherit;font-size:13px;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);}
 
 .dmx-canvas{position:relative;background:var(--bg);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column;height:min(680px,72vh);}
-.dmx-canvas-head{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:11px 15px;border-bottom:1px solid var(--line-row,var(--line-row));}
+.dmx-canvas-head{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:11px 15px;border-bottom:1px solid var(--line-row);}
 .dmx-ch-t{font-size:12.5px;font-weight:700;color:var(--ink-sub);}
 .dmx-ch-s{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;}
-.dmx-note{margin:12px 15px 0;padding:9px 12px;background:var(--bg-note,var(--bg-note));border:1px solid var(--line-note,var(--line-note));border-radius:9px;font-size:12px;color:var(--ink-note,var(--ink-note));line-height:1.5;}
+.dmx-note{margin:12px 15px 0;padding:9px 12px;background:var(--bg-note);border:1px solid var(--line-note);border-radius:9px;font-size:12px;color:var(--ink-note);line-height:1.5;}
 .dmx-note strong{color:var(--ink);}
-.dmx-stage-inner{position:relative;flex:1;overflow:hidden;cursor:grab;touch-action:none;-webkit-user-select:none;user-select:none;background:linear-gradient(0deg,var(--bg-tint,var(--bg-tint)) 0%,var(--bg) 62%);}
+.dmx-stage-inner{position:relative;flex:1;overflow:hidden;cursor:grab;touch-action:none;-webkit-user-select:none;user-select:none;background:linear-gradient(0deg,var(--bg-tint) 0%,var(--bg) 62%);}
 .dmx-stage-inner.dragging{cursor:grabbing;}
 /* 도메인 맵 = 홈·관리처럼 한 화면 고정(페이지 스크롤 없음) — 그래프 캔버스가 남는 높이를 채운다(#756).
    기존엔 캔버스가 min(680px,72vh) 고정이라 그 위 헤더·컨트롤 + main 상하패딩(96px)이 더해져 페이지가
@@ -401,9 +401,9 @@ body[data-route="domainmap"] .app-foot { display: none; }   /* 캔버스가 하�
 .dmx-zbtn:hover{border-color:var(--blue);color:var(--blue);}
 .dmx-zbtn:focus-visible{outline:2px solid var(--blue);outline-offset:2px;}
 .dmx-node{cursor:pointer;}
-.dmx-box{fill:var(--bg);stroke:var(--line-net,var(--line-net));stroke-width:1.2;}
+.dmx-box{fill:var(--bg);stroke:var(--line-net);stroke-width:1.2;}
 .dmx-node:hover .dmx-box{stroke:var(--blue);}
-.dmx-node.cross .dmx-box{stroke-dasharray:4 3;fill:var(--bg-tint,var(--bg-tint));}
+.dmx-node.cross .dmx-box{stroke-dasharray:4 3;fill:var(--bg-tint);}
 .dmx-node.active .dmx-box{stroke:var(--blue);stroke-width:2.2;}
 .dmx-node:focus{outline:none;}
 .dmx-node:focus-visible .dmx-box{stroke:var(--blue);stroke-width:2.2;}
@@ -438,31 +438,31 @@ body[data-route="domainmap"] .app-foot { display: none; }   /* 캔버스가 하�
 .dmx-h4-hint{font-size:9.5px;letter-spacing:0;text-transform:none;color:var(--gray-muted);font-weight:600;}
 .dmx-dep-row{display:flex;align-items:center;gap:7px;margin-top:7px;}
 .dmx-dep-to{font-size:12px;font-weight:600;color:var(--ink-sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto;max-width:44%;}
-.dmx-dep-rel{flex:1;min-width:0;text-align:left;font:inherit;font-size:11px;color:var(--ink-sub);background:var(--bg-tint,var(--bg-tint));border:1px solid var(--line-row,var(--line-row));border-radius:6px;padding:3px 8px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dmx-dep-rel{flex:1;min-width:0;text-align:left;font:inherit;font-size:11px;color:var(--ink-sub);background:var(--bg-tint);border:1px solid var(--line-row);border-radius:6px;padding:3px 8px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .dmx-dep-rel:hover{border-color:var(--blue);color:var(--blue);}
 .dmx-dep-del{flex:0 0 auto;width:22px;height:22px;border:1px solid var(--line);background:var(--bg);border-radius:6px;color:var(--muted);cursor:pointer;font-size:11px;line-height:1;}
 .dmx-dep-del:hover{color:var(--dmx-viol);border-color:var(--dmx-viol);}
-.dmx-add-form{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;padding-top:10px;border-top:1px dashed var(--line-row,var(--line-row));}
+.dmx-add-form{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;padding-top:10px;border-top:1px dashed var(--line-row);}
 .dmx-add-to{flex:1 1 46%;min-width:0;font:inherit;font-size:11.5px;padding:5px 7px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);}
 .dmx-add-rel{flex:1 1 46%;min-width:0;font:inherit;font-size:11.5px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);}
-.dmx-add-btn{flex:1 1 100%;font:inherit;font-size:11.5px;font-weight:700;padding:6px;border:1px solid var(--blue);background:var(--bg-tint-2,var(--bg-tint-2));color:var(--blue);border-radius:6px;cursor:pointer;}
+.dmx-add-btn{flex:1 1 100%;font:inherit;font-size:11.5px;font-weight:700;padding:6px;border:1px solid var(--blue);background:var(--bg-tint-2);color:var(--blue);border-radius:6px;cursor:pointer;}
 .dmx-add-btn:hover{background:var(--blue-fill);color:var(--on-fill);}
-.dmx-ph{padding:14px 16px 12px;border-bottom:1px solid var(--line-row,var(--line-row));}
+.dmx-ph{padding:14px 16px 12px;border-bottom:1px solid var(--line-row);}
 .dmx-pk{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--muted);}
 .dmx-pn{font-size:16px;font-weight:800;color:var(--ink);margin-top:3px;}
 .dmx-ptags{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap;}
 .dmx-tag{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:999px;}
-.dmx-tag.sp{background:var(--bg-tint-2,var(--bg-tint-2));color:var(--blue);}
+.dmx-tag.sp{background:var(--bg-tint-2);color:var(--blue);}
 .dmx-tag.cross{background:var(--dmx-cross-bg);color:var(--dmx-sp-cross);}
 .dmx-tag.debt{background:var(--warn-bg-2);color:var(--dmx-warn);}
-.dmx-axis{padding:13px 16px;border-bottom:1px solid var(--line-row,var(--line-row));}
+.dmx-axis{padding:13px 16px;border-bottom:1px solid var(--line-row);}
 .dmx-axis:last-child{border-bottom:0;}
 .dmx-axis h4{margin:0 0 7px;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);}
 .dmx-axis p{margin:0;font-size:12.5px;color:var(--ink-sub);line-height:1.55;}
 .dmx-bd{margin-top:8px;font-size:11.5px;color:var(--muted);line-height:1.5;}
 .dmx-muted{font-size:12px;color:var(--muted);line-height:1.5;}
 .dmx-repos{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:3px;}
-.dmx-repos li{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--ink-sub);background:var(--bg-tint,var(--bg-tint));border:1px solid var(--line-row,var(--line-row));border-radius:6px;padding:3px 7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dmx-repos li{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--ink-sub);background:var(--bg-tint);border:1px solid var(--line-row);border-radius:6px;padding:3px 7px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .dmx-metric{display:flex;gap:16px;margin-top:4px;}
 .dmx-metric b{font-family:ui-monospace,Menlo,monospace;font-size:15px;font-weight:700;color:var(--ink);display:block;}
 .dmx-metric span{font-size:10.5px;color:var(--muted);}

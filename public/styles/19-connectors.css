@@ -30,11 +30,11 @@ body[data-route="domainmap"] main { max-width: none; margin: 0; }
 .pjv-groupby-btn .pjv-view-btn-label { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pjv-thcol-name.pjv-sortable { cursor: pointer; }
 .pjv-thcol-name.pjv-sortable:hover { color: var(--ink); }
-.pjv-sort-ind { font-size: 10px; margin-left: 2px; color: var(--accent, var(--accent)); font-weight: 800; }
-.pjv-menu-check { margin-left: auto; font-weight: 800; color: var(--accent, var(--accent)); }
+.pjv-sort-ind { font-size: 10px; margin-left: 2px; color: var(--accent); font-weight: 800; }
+.pjv-menu-check { margin-left: auto; font-weight: 800; color: var(--accent); }
 
 /* ── #541 그룹 내 수동 재정렬 삽입선 ── */
-.pjv-proj-insert-marker { height: 0; border-top: 2px solid var(--accent, var(--accent)); margin: -1px 0; pointer-events: none; }
+.pjv-proj-insert-marker { height: 0; border-top: 2px solid var(--accent); margin: -1px 0; pointer-events: none; }
 
 /* ── #541 개요(Overview) 뷰 — 폴더/스페이스 진입 기본. 하위 폴더·리스트 요약 카드. ── */
 .pjv-overview { padding: 4px 2px 24px; }
@@ -47,10 +47,10 @@ body[data-route="domainmap"] main { max-width: none; margin: 0; }
 /* 개요 통계 칩 '진행/완료'를 리스트 상태 보드의 상태 알약과 같은 톤(꽉 찬 색·흰 글자)으로 통일(#762).
    statRow 순서 고정: 1=전체(합계, 중립 유지)·2=진행·3=완료. 색은 개요 미니바(prog=파랑·done=민트)와 동일. */
 .pjv-ov-stat:nth-child(2) { color: var(--on-fill); background: var(--blue-fill); border-color: transparent; }
-.pjv-ov-stat:nth-child(3) { color: var(--on-fill); background: var(--mint); border-color: transparent; }
+.pjv-ov-stat:nth-child(3) { color: var(--on-fill); background: var(--mint-fill); border-color: transparent; }
 .pjv-ov-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(164px, 1fr)); gap: 10px; } /* 최소 폭 220→164(#req) — 열 폭을 줄여 1행당 카드 수 증가 */
 .pjv-ov-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px 13px; background: var(--bg); cursor: pointer; transition: border-color .12s, box-shadow .12s, transform .06s; display: flex; flex-direction: column; gap: 8px; }
-.pjv-ov-card:hover { border-color: var(--accent, var(--accent)); box-shadow: 0 3px 12px rgba(var(--shadow-ink), .08); }
+.pjv-ov-card:hover { border-color: var(--accent); box-shadow: 0 3px 12px rgba(var(--shadow-ink), .08); }
 .pjv-ov-card:active { transform: translateY(1px); }
 .pjv-ov-card-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .pjv-ov-card-name { font-size: 14px; font-weight: 700; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
@@ -58,9 +58,9 @@ body[data-route="domainmap"] main { max-width: none; margin: 0; }
 .pjv-ov-card-count { font-size: 12px; color: var(--ink-sub); }
 .pjv-ov-bar { display: flex; height: 6px; border-radius: 4px; overflow: hidden; background: var(--bg-tint); }
 .pjv-ov-bar-seg { display: block; height: 100%; }
-.pjv-ov-bar-seg.todo { background: var(--muted-3, #94a3b8); }
-.pjv-ov-bar-seg.prog { background: var(--blue, var(--warn)); }
-.pjv-ov-bar-seg.done { background: var(--mint, #22c55e); }
+.pjv-ov-bar-seg.todo { background: var(--muted-3); }
+.pjv-ov-bar-seg.prog { background: var(--blue); }
+.pjv-ov-bar-seg.done { background: var(--mint); }
 .pjv-ov-bar-seg.empty { flex: 1; background: transparent; }
 /* ── #592 지식 문서 UI ── */
 /* doc-mode — 지식 계열 라우트에서 main 을 전폭 캔버스로. 셸(.kn-shell)이 자체 패딩·사이드바 폭을 소유. */
@@ -76,7 +76,7 @@ main.doc-mode { max-width: none; padding: 0; }
    비스크롤 셸(.kn-shell)의 자식으로 두고 사이드바 우측 경계(left=--pjv-side-w)에 얹는다. */
 .kn-side-resize { position: absolute; top: 0; left: var(--pjv-side-w, 240px); margin-left: -4px; width: 8px; height: 100%; cursor: col-resize; z-index: 6; }
 .kn-side-resize::after { content: ''; position: absolute; top: 0; left: 3px; width: 2px; height: 100%; background: transparent; transition: background .12s; }
-.kn-side-resize:hover::after, body.pjv-side-resizing .kn-side-resize::after { background: var(--accent, var(--accent)); }
+.kn-side-resize:hover::after, body.pjv-side-resizing .kn-side-resize::after { background: var(--accent); }
 .kn-shell.side-off > .kn-side-resize { display: none; }
 .kn-main { flex: 1; min-width: 0; padding: 28px 40px 64px; }
 .kn-side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -252,12 +252,12 @@ main.doc-mode { max-width: none; padding: 0; }
    폭이 넓으면 긴 태그('AI 워크플로우 표준화' 등)도 max 170px 까지 다 보인다(옛 92px 캡이 항상 ... 되던 문제). */
 .pjv-side-cat { flex: 0 1000 auto; min-width: 0; max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 6px; margin-left: 4px;
-  background: color-mix(in srgb, var(--accent, var(--accent)) 14%, transparent); color: var(--accent, var(--accent)); }
+  background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
 /* #req: 사이드바가 좁으면(≤ 240px) 카테고리 태그 숨김 — 더 중요한 이름에 폭 전부 양보. 사이드바 폭 컨테이너 쿼리. */
 .pjv-side-nav { container-type: inline-size; container-name: pjvside; }
 @container pjvside (max-width: 240px) { .pjv-side-navlist .pjv-side-cat { display: none; } }
 .pjv-side-cat.none { background: transparent; color: var(--muted-3); font-weight: 500; border: 1px dashed var(--line); }
-.pjv-side-navitem.active .pjv-side-cat { background: color-mix(in srgb, var(--accent, var(--accent)) 24%, transparent); }
+.pjv-side-navitem.active .pjv-side-cat { background: color-mix(in srgb, var(--accent) 24%, transparent); }
 .pjv-cat-select { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 14px; color: var(--ink); }
 .field-hint { font-size: 11.5px; color: var(--muted-2); margin-top: 5px; }
 .ps-cat-inherit { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

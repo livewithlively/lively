@@ -351,7 +351,7 @@ a.tabguide-card:hover .tabguide-go-arrow { transform: translateX(3px); }
 .svc-tab-body { padding: 16px 18px; border: 1px solid var(--line-row); border-radius: 12px; background: var(--bg-tint); }
 .svc-tab { gap: 6px; }
 .svc-tab-ic { font-size: 15px; line-height: 1; }
-.svc-tab-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--mint, var(--mint)); }
+.svc-tab-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--mint); }
 .chip.on .svc-tab-dot { background: var(--surface); }
 .svc-panel-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .svc-panel-ic { font-size: 22px; line-height: 1; flex: none; }

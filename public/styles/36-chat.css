@@ -24,8 +24,8 @@
 .livc-live { font-family: var(--livc-mono); font-size: 11px; color: var(--muted); letter-spacing: .02em; margin-top: 4px; }
 .livc-live::before { content: '● '; color: var(--mint-deep); animation: livc-pulse 1.1s ease-in-out infinite; }
 .livc-mark { font-family: var(--livc-mono); font-size: 11px; color: var(--coral-text); margin-top: 2px; }
-.livc-dur { margin-left: 8px; font-weight: 400; color: var(--muted-2, var(--muted-2)); }
-.livc-ts { margin-left: 8px; font-weight: 400; color: var(--muted-2, var(--muted-2)); letter-spacing: 0; }
+.livc-dur { margin-left: 8px; font-weight: 400; color: var(--muted-2); }
+.livc-ts { margin-left: 8px; font-weight: 400; color: var(--muted-2); letter-spacing: 0; }
 .livc-turn-cont > .livc-work { margin-top: 0; }
 .livc-work > .livc-who { display: flex; align-items: baseline; }
 
@@ -51,7 +51,7 @@ details.livc-divider > summary::before, details.livc-divider > summary::after { 
 .livc-foot form[hidden] { display: none; }
 
 /* ── 세션 화면 ───────────────────────────────────────────────────────────── */
-.sc-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg, var(--surface)); }
+.sc-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
 /* 우패널 머리(.v2-aside-h)와 **같은 높이**여야 두 열의 아래선이 한 줄로 이어진다(#1756) — 둘 다 38px. */
 .sc-head { display: flex; align-items: center; gap: 12px; min-height: 38px; padding: 9px 16px 8px; border-bottom: 1px solid var(--line); flex: none; }
 .sc-head-l { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
@@ -64,11 +64,11 @@ button.sc-title { display: inline-flex; align-items: center; gap: 5px; font: inh
 button.sc-title .sc-title-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .sc-title-pen { width: 13px; height: 13px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.8; stroke-linejoin: round;
   opacity: 0; transition: opacity .12s ease; }
-button.sc-title:hover { background: var(--bg-punch); box-shadow: inset 0 0 0 1px var(--line-net, var(--line)); }
+button.sc-title:hover { background: var(--bg-punch); box-shadow: inset 0 0 0 1px var(--line-net); }
 button.sc-title:hover .sc-title-pen, button.sc-title:focus-visible .sc-title-pen { opacity: 1; }
 button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
 .sc-title-in { font: inherit; font-size: 13.5px; font-weight: 800; width: min(46ch, 38vw); margin-left: -6px; padding: 2px 6px;
-  border: 1px solid var(--blue); border-radius: 6px; background: var(--bg, var(--surface)); color: var(--ink); }
+  border: 1px solid var(--blue); border-radius: 6px; background: var(--bg); color: var(--ink); }
 .sc-title-in:focus { outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue-fill) 18%, transparent); }
 .sc-title-in:disabled { opacity: .6; }
 .sc-meta { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-sub); white-space: nowrap; }
@@ -130,7 +130,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 }
 .sc-meta a { color: var(--ink-sub); text-decoration: none; }
 .sc-meta a:hover { color: var(--blue); }
-.sc-sep { color: var(--muted-2, var(--muted-2)); }
+.sc-sep { color: var(--muted-2); }
 .sc-head-r { display: inline-flex; align-items: center; gap: 4px; flex: none; }
 .sc-act { font-size: 12.5px; padding: 4px 8px; border-radius: 6px; color: var(--ink-sub); }
 .sc-act:hover { background: var(--bg-tint); color: var(--ink); }
@@ -138,14 +138,14 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 /* 터미널 연결 상태(#1744) — 상단바를 합치며 터미널 툴바에 있던 한 줄이 여기로 왔다. 터미널이 열려 있을 때만 뜬다. */
 .sc-termstat { font-size: 11.5px; color: var(--muted); white-space: nowrap; margin-right: 2px; }
 .sc-termstat[hidden] { display: none; }
-.sc-termstat.ok { color: var(--mint-deep, var(--mint-deep)); }
-.sc-termstat.err { color: var(--coral, var(--danger)); }
+.sc-termstat.ok { color: var(--mint-deep); }
+.sc-termstat.err { color: var(--coral); }
 .sc-termstat.end { color: var(--ink-sub); font-weight: 700; }
 /* [⋯] — 터미널 툴바에 흩어져 있던 것들이 한 메뉴로 모였다(화면 복구·환경 설정·사용법 + 링크·새 창). */
 .sc-more { min-width: 250px; max-width: 320px; padding: 5px; display: flex; flex-direction: column; gap: 1px; }
-.sc-more-sec { font-family: var(--mono, ui-monospace, monospace); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted-2, var(--muted-2)); padding: 8px 8px 3px; }
+.sc-more-sec { font-family: var(--mono, ui-monospace, monospace); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted-2); padding: 8px 8px 3px; }
 .sc-more-row { display: flex; flex-direction: column; gap: 1px; align-items: flex-start; text-align: left; width: 100%; padding: 7px 8px; border: 0; background: none; font: inherit; border-radius: 8px; cursor: pointer; text-decoration: none; color: inherit; }
-.sc-more-row:hover { background: var(--bg-tint, var(--bg-tint)); }
+.sc-more-row:hover { background: var(--bg-tint); }
 .sc-more-row .n { font-size: 12.5px; font-weight: 700; color: var(--ink); }
 .sc-more-row .m { font-size: 11px; color: var(--muted); line-height: 1.45; }
 .sc-chat { flex: 1; min-height: 0; display: flex; }
@@ -155,7 +155,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .sc-term { flex: none; height: var(--sc-term-h); min-height: 0; display: flex; border-top: 1px solid var(--line); }
 .sc-term[hidden] { display: none; }
 .sc-wrap > .v2-split-y[hidden] { display: none; }
-.sc-term-frame { flex: 1; width: 100%; border: 0; background: var(--bg, var(--surface)); }
+.sc-term-frame { flex: 1; width: 100%; border: 0; background: var(--bg); }
 /* 터미널 기본 모드(상민님 지시 2026-08-18) — 대화는 숨고 터미널이 본문을 다 차지한다. */
 .sc-mode-term .sc-term { flex: 1; height: auto; border-top: 0; }
 /* '베타' 뱃지 — 대화 인터페이스가 아직 다듬는 중임을 알리는 칩(버튼 안·제목 옆 공용). */
@@ -199,7 +199,7 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .livc-desktop .livc-work-busy > .livc-who::after { content: none; }
 .livc-desktop .dt-user { display: flex; justify-content: flex-end; margin: 22px 0 6px; }
 .livc-desktop .dt-bubble { max-width: 76%; font-size: 14px; font-weight: 400; line-height: 1.6; color: var(--ink);
-  background: var(--canvas, #E9EEF6); border-radius: 14px; padding: 9px 14px; white-space: pre-wrap; word-break: break-word; }
+  background: var(--canvas); border-radius: 14px; padding: 9px 14px; white-space: pre-wrap; word-break: break-word; }
 .livc-desktop .livc-said { font-size: 14px; line-height: 1.75; margin: 6px 0; }
 .livc-desktop .livc-said + .livc-said { margin-top: 10px; }
 .livc-desktop .livc-mark { margin: 6px 0 0; }
@@ -212,12 +212,12 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 .dt-tools > summary::-webkit-details-marker { display: none; }
 .dt-tools > summary:hover { color: var(--ink); }
 .dt-tools > summary:focus-visible { outline: 2px solid var(--mint-deep); outline-offset: 2px; }
-.dt-tools-mark { font-family: var(--livc-mono); font-size: 10px; color: var(--muted-2, var(--muted-2)); }
+.dt-tools-mark { font-family: var(--livc-mono); font-size: 10px; color: var(--muted-2); }
 .dt-tools-mark.ok { color: var(--mint-deep); }
 .dt-tools-mark.err { color: var(--coral-text); }
 .dt-tools-mark.run { color: var(--mint-deep); animation: livc-pulse 1.1s ease-in-out infinite; }
 .dt-tools-t { font-family: var(--livc-mono); font-size: 12px; letter-spacing: .01em; }
-.dt-tools-chev { font-size: 13px; color: var(--muted-2, var(--muted-2)); transition: transform .12s; display: inline-block; }
+.dt-tools-chev { font-size: 13px; color: var(--muted-2); transition: transform .12s; display: inline-block; }
 .dt-tools[open] > summary .dt-tools-chev { transform: rotate(90deg); }
 .dt-tools-body { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 4px 2px; padding-left: 12px; border-left: 2px solid var(--line-net); }
 
@@ -249,9 +249,9 @@ button.sc-title:focus-visible { outline: 2px solid var(--blue); outline-offset: 
 /* 바꿀 수 있는 칩(#1758 모델·추론강도) — 읽기 전용 칩과 같은 크기·색이되 눌러도 된다는 표시(캐럿·호버)를 준다. */
 .dt-chip-sel { appearance: none; -webkit-appearance: none; border: 1px solid transparent; border-radius: 999px; background: transparent;
   font: inherit; font-size: 12px; color: var(--ink-sub); padding: 1px 16px 1px 7px; max-width: 190px; cursor: pointer;
-  background-image: linear-gradient(45deg, transparent 50%, var(--muted, var(--gray-text)) 50%), linear-gradient(135deg, var(--muted, var(--gray-text)) 50%, transparent 50%);
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
   background-position: calc(100% - 8px) 52%, calc(100% - 4px) 52%; background-size: 4px 4px, 4px 4px; background-repeat: no-repeat; }
-.dt-chip-sel:hover:not(:disabled) { border-color: var(--line-net, var(--gray-line-2)); color: var(--blue); }
+.dt-chip-sel:hover:not(:disabled) { border-color: var(--line-net); color: var(--blue); }
 .dt-chip-sel:disabled { opacity: .55; cursor: default; }
 .livc-desktop .livc-note:not(:empty) { padding: 2px 30px 0; }
 .livc-desktop .livc-jump { bottom: 10px; }

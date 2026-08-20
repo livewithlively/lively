@@ -53,12 +53,12 @@
 .pjv-trow-subcount { flex: none; font-size: 11px; font-weight: 700; color: var(--muted-2); background: var(--bg-tint-2); border-radius: 8px; padding: 0 6px; line-height: 16px; }
 /* 리스트 행 태그 칩(클릭업식) — 이름 옆 작은 색칩, 최대 2 + "+N". */
 .pjv-trow-tags { flex: none; display: inline-flex; align-items: center; gap: 5px; margin-left: 4px; }
-.pjv-trow-tag { display: inline-flex; align-items: center; gap: 2px; font-size: 13px; font-weight: 600; line-height: 18px; padding: 1px 8px; border-radius: 10px; color: var(--tag, var(--muted)); background: color-mix(in srgb, var(--tag, var(--muted-3)) 16%, transparent); white-space: nowrap; max-width: 170px; }
+.pjv-trow-tag { display: inline-flex; align-items: center; gap: 2px; font-size: 13px; font-weight: 600; line-height: 18px; padding: 1px 8px; border-radius: 10px; color: var(--tag); background: color-mix(in srgb, var(--tag) 16%, transparent); white-space: nowrap; max-width: 170px; }
 .pjv-trow-tag-name { overflow: hidden; text-overflow: ellipsis; }
 /* 호버 시 우측 × — 평소엔 폭 0(접힘), 칩 호버 시 펼쳐짐(클릭업식). 클릭=태그 제거. */
 .pjv-trow-tag-x { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 0; height: 15px; overflow: hidden; border: none; background: none; padding: 0; margin: 0; color: inherit; opacity: 0; font-size: 11px; line-height: 1; cursor: pointer; border-radius: 50%; transition: width .12s ease, opacity .12s ease; }
 .pjv-trow-tag:hover .pjv-trow-tag-x { width: 15px; opacity: .7; }
-.pjv-trow-tag-x:hover { opacity: 1; background: color-mix(in srgb, var(--tag, var(--muted)) 28%, transparent); }
+.pjv-trow-tag-x:hover { opacity: 1; background: color-mix(in srgb, var(--tag) 28%, transparent); }
 .pjv-trow-tag-more { font-size: 13px; font-weight: 600; color: var(--muted-2); }
 .pjv-trow-caret { flex: none; width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center; border: none; background: none; cursor: pointer; color: var(--muted); font-size: 10px; padding: 0; border-radius: 4px; }
 .pjv-trow-caret:hover { color: var(--ink); background: var(--bg-tint-2); }
@@ -72,7 +72,7 @@
 /* 할 일 = 점선 원(클릭업식). 진행 중·완료는 실선으로 되돌린다. */
 .pjv-status-dot.inprog, .pjv-status-dot.done { border-style: solid; }
 .pjv-status-dot.inprog { border-color: var(--blue); color: var(--blue); }
-.pjv-status-dot.done { background: var(--mint); border-color: var(--mint); color: var(--on-fill); }
+.pjv-status-dot.done { background: var(--mint-fill); border-color: var(--mint-fill); color: var(--on-fill); }
 .pjv-status-glyph { display: inline-flex; }
 
 /* 컬럼 셀 + 인라인 편집 버튼 */
@@ -211,7 +211,7 @@
 .term-checks .term-auto { display: flex; gap: 8px; align-items: flex-start; margin: 0; font-size: 13.5px; color: var(--ink); cursor: pointer; }
 .term-checks .term-auto input { margin-top: 2.5px; flex: none; }
 /* 자동 승인 = 위험 옵션이라 글자를 danger 색으로 강조(#673). */
-.term-checks .term-auto-danger { color: var(--danger, var(--danger-deep)); }
+.term-checks .term-auto-danger { color: var(--danger); }
 .proj-member-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .proj-chip { font-size: 12.5px; font-weight: 600; color: var(--ink-sub); background: var(--bg-tint); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; }
 /* 팀원 한 줄(제목 아래, 박스 없이) — 작은 아바타 + 이름 칩. 액션 버튼과 분리(높이 불일치 제거). */
@@ -465,7 +465,7 @@
 .pjk-row-title:hover { color: var(--blue); }
 .pjk-row-meta { flex: none; display: flex; align-items: center; }
 .pjk-row-x { flex: none; width: 22px; height: 22px; border: none; background: transparent; color: var(--muted-2); cursor: pointer; border-radius: 6px; font-size: 12px; line-height: 1; }
-.pjk-row-x:hover { background: var(--bg-danger, var(--danger-bg)); color: var(--danger, var(--danger-deep)); }
+.pjk-row-x:hover { background: var(--bg-danger); color: var(--danger); }
 .pjk-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .pjk-arrow { flex: none; align-self: center; color: var(--muted-3); font-size: 22px; font-weight: 700; user-select: none; }
 .pjk-node { flex: none; align-self: center; display: flex; flex-direction: column; align-items: center; gap: 4px; max-width: 160px; padding: 12px 14px; border: 1.5px solid var(--line-net-2); border-radius: 12px; background: var(--bg-punch); text-align: center; }
@@ -528,7 +528,7 @@
 .project-tile.not-selectable { opacity: .5; cursor: default; }
 .project-tile.not-selectable:hover { border-color: var(--line); box-shadow: none; transform: none; }
 .project-tile-mine-no { font-size: 11.5px; color: var(--muted-2); font-weight: 600; }
-.btn-danger { background: var(--coral); color: var(--on-fill); border: 1px solid var(--coral); }
+.btn-danger { background: var(--coral-fill); color: var(--on-fill); border: 1px solid var(--coral-fill); }
 .btn-danger:hover { background: var(--coral-text); border-color: var(--coral-text); }
 .proj-team-chip { display: inline-flex; align-items: center; gap: 7px; padding: 3px 13px 3px 4px; background: var(--bg-tint); border: 1px solid var(--line); border-radius: 999px; font-size: 13px; font-weight: 600; color: var(--ink); }
 .proj-team-ava { width: 24px; height: 24px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; color: var(--on-fill); font-size: 11px; font-weight: 700; flex: none; }

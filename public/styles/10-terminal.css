@@ -198,9 +198,9 @@
 /* 카드 = 좌측 상태색 바 + 정보(2행) + 우측 액션. 오프라인은 옅게(흰 배경). 접속중은 민트 인셋. */
 .tsess-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--muted-3); border-radius: 12px; background: var(--bg-tint); }
 .tsess-card.tsess-busy { border-left-color: var(--warn); }
-.tsess-card.tsess-waiting { border-left-color: var(--coral, var(--danger)); }
+.tsess-card.tsess-waiting { border-left-color: var(--coral); }
 .tsess-card.tsess-idle { border-left-color: var(--mint-deep); }
-.tsess-card.tsess-restorable { border-left-color: var(--accent, var(--accent)); background: color-mix(in srgb, var(--accent, var(--accent)) 4%, var(--bg)); } /* #1059 E 복원 가능 */
+.tsess-card.tsess-restorable { border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 4%, var(--bg)); } /* #1059 E 복원 가능 */
 .tsess-card.tsess-offline, .tsess-card.tsess-exited { border-left-color: var(--muted-2); background: var(--bg); }
 .tsess-card.attached { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--mint-deep) 22%, transparent); }
 /* 구 선택 UI(카드 전체를 label 로 감싸고 span.tsess-check 안에 체크박스) 잔재 제거 —
@@ -212,9 +212,9 @@
 .tsess-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--muted-2); }
 /* 상태 포인트 컬러 = 대시보드 '내 AI 세션'(dash-scard)과 통일: busy=주황·waiting=코랄·idle=민트·offline=회색. */
 .tsess-dot-busy { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent); }
-.tsess-dot-waiting { background: var(--coral, var(--danger)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--coral, var(--danger)) 22%, transparent); }
+.tsess-dot-waiting { background: var(--coral); box-shadow: 0 0 0 3px color-mix(in srgb, var(--coral) 22%, transparent); }
 .tsess-dot-idle { background: var(--mint-deep); }
-.tsess-dot-restorable { background: var(--accent, var(--accent)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, var(--accent)) 20%, transparent); } /* #1059 E */
+.tsess-dot-restorable { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); } /* #1059 E */
 .tsess-dot-offline { background: var(--muted-2); }
 /* 회색 계열 둘 — 오프라인(아무도 안 보는 중) = 꽉 찬 회색 점 · 종료됨(하네스가 끝나 셸만 남음) = 속 빈 회색 점.
    살아있고 누군가 보고 있는 상태색(민트·주황·코랄)은 그대로. */
@@ -222,12 +222,12 @@
 /* #1059 P1 — 셸 세션: '종료됨'(회색 빈 점)과 달리 **살아 있는 정상 상태**라 채운 중립색을 준다. */
 .tsess-dot-shell { background: var(--muted-head); }
 /* 내가 exit 한 세션: 복원 가능계(강조색)와 같은 뿌리지만 테두리만 — '내가 끝냈다'를 조용히 표시. */
-.tsess-dot-exited-user { background: transparent; box-shadow: inset 0 0 0 2px var(--accent, var(--accent)); }
+.tsess-dot-exited-user { background: transparent; box-shadow: inset 0 0 0 2px var(--accent); }
 /* #1251 — 메모리 부족: 빈 점(복원 가능계와 같은 형태)이되 경고색으로 구분. */
 .tsess-dot-oom-killed { background: transparent; box-shadow: inset 0 0 0 2px var(--warn-text); }
 .tsess-dot-offline { background: var(--muted-2); }   /* 오프라인(아무도 안 보는 중·노드 미연결) = 회색 점 */
 .tsess-proj { display: inline-flex; align-items: center; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; font-weight: 700; color: var(--blue); background: var(--bg-punch); border: 1px solid color-mix(in srgb, var(--blue) 28%, var(--bg)); border-radius: 999px; padding: 2px 9px; }
-.tsess-proj.mine { color: var(--accent, var(--accent)); border-color: color-mix(in srgb, var(--accent, var(--accent)) 42%, var(--bg)); background: color-mix(in srgb, var(--accent, var(--accent)) 9%, transparent); }
+.tsess-proj.mine { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 42%, var(--bg)); background: color-mix(in srgb, var(--accent) 9%, transparent); }
 .tsess-badge { flex: none; font-size: 11px; font-weight: 700; color: var(--ink-sub); background: var(--bg-tint-2); border: 1px solid var(--line); border-radius: 999px; padding: 1.5px 8px; white-space: nowrap; }
 .tsess-badge.live { color: var(--mint-deep); background: var(--bg-success); border-color: color-mix(in srgb, var(--mint-deep) 35%, var(--bg)); }
 .tsess-badge.live::before { content: "●"; font-size: 8px; margin-right: 3px; vertical-align: 1px; }
@@ -237,12 +237,12 @@
 .tsess-sep { color: var(--muted-3); }
 .tsess-stat { font-weight: 800; }
 .tsess-stat-busy { color: var(--warn); }
-.tsess-stat-waiting { color: var(--coral, var(--danger)); }
+.tsess-stat-waiting { color: var(--coral); }
 .tsess-stat-idle { color: var(--mint-deep); }
-.tsess-stat-restorable { color: var(--accent, var(--accent)); } /* #1059 E */
+.tsess-stat-restorable { color: var(--accent); } /* #1059 E */
 .tsess-stat-offline { color: var(--muted); }
 .tsess-stat-shell { color: var(--muted-head); }        /* #1059 P1 셸 = 중립(죽음 아님) */
-.tsess-stat-exited-user { color: var(--accent, var(--accent)); }      /* 내가 exit = 복원 가능계 */
+.tsess-stat-exited-user { color: var(--accent); }      /* 내가 exit = 복원 가능계 */
 /* #1251 — 메모리 부족(OS 강제 종료). '중단됨'(재부팅·회수, 강조색)과 **다른 사실**이라 색을 가른다:
    저건 시스템 사정이고 이건 사용자가 당한 사고다. danger 배지와 같은 경고 톤을 쓴다. */
 .tsess-stat-oom-killed { color: var(--warn-text); }

@@ -93,7 +93,7 @@
 .proj-person.dragging { opacity: .4; }
 .proj-person.drop-target { background: var(--bg-tint-2); outline: 2px dashed var(--line-net-2); outline-offset: -2px; }
 .proj-avatar { position: relative; width: 76px; height: 76px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--on-fill); font-size: 27px; font-weight: 700; box-shadow: 0 2px 5px rgba(var(--shadow-ink), .2); }
-.proj-avatar-badge { position: absolute; top: -2px; right: -2px; min-width: 21px; height: 21px; padding: 0 5px; border-radius: 11px; background: var(--ink); color: var(--on-fill); font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; border: 2.5px solid var(--bg); box-sizing: border-box; }
+.proj-avatar-badge { position: absolute; top: -2px; right: -2px; min-width: 21px; height: 21px; padding: 0 5px; border-radius: 11px; background: var(--ink); color: var(--bg); font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; border: 2.5px solid var(--bg); box-sizing: border-box; }
 .proj-person-name { font-size: 12.5px; font-weight: 600; color: var(--ink); text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .proj-person-status { font-size: 12.5px; line-height: 1.35; text-align: center; max-width: 112px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; box-sizing: border-box; }
 .proj-person-status:empty { display: none; } /* 상태 안 적은 사람 — 빈 칸이 높이 차지하지 않게 */

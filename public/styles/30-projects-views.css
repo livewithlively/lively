@@ -258,7 +258,7 @@
 /* #1291 관리탭 ▸ 맥락 공개범위 — 유형별 켜기/끄기 */
 .vax-list { display: flex; flex-direction: column; gap: 2px; margin-top: 10px; }
 .vax-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 8px; }
-.vax-row + .vax-row { border-top: 1px solid var(--line, rgba(128,128,128,.18)); }
+.vax-row + .vax-row { border-top: 1px solid var(--line); }
 .vax-row:hover { background: rgba(var(--tint-ink), .06); }
 .vax-row.off .vax-label { opacity: .6; }
 .vax-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
@@ -267,7 +267,7 @@
 .vax-none, .vax-off { font-size: 12px; opacity: .6; }
 /* 끄기 확인 — 경고는 눈에 띄어야 하지만 겁주는 색만으로는 부족해 무엇이 열리는지 이름을 함께 준다. */
 .vax-warn { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 8px;
-  background: var(--warn-bg, rgba(255,176,32,.12)); border: 1px solid var(--warn-line, rgba(255,176,32,.35)); }
+  background: var(--warn-bg); border: 1px solid var(--warn-line); }
 .vax-warn span { font-size: 13px; opacity: .85; }
 .vax-samples { margin: 10px 0 0; padding-left: 20px; font-size: 13px; max-height: 180px; overflow-y: auto; }
 .vax-samples li { margin: 2px 0; }

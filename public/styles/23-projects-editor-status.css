@@ -20,7 +20,7 @@
    ══════════════════════════════════════════════════════════════════════════ */
 .pjv-statused-tmplbar { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
 .pjv-statused-tmplrow { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
-.pjv-statused-tmpl, .pjv-newlist-tmpl { flex: 1; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--line-net, var(--gray-line)); border-radius: 8px; background: var(--bg); color: var(--ink); font-size: 13.5px; cursor: pointer; }
+.pjv-statused-tmpl, .pjv-newlist-tmpl { flex: 1; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--line-net); border-radius: 8px; background: var(--bg); color: var(--ink); font-size: 13.5px; cursor: pointer; }
 .pjv-statused-tmpl:focus, .pjv-newlist-tmpl:focus { outline: none; border-color: var(--blue); }
 .pjv-statused-tmplbar .pjv-statused-tmplrow .btn { flex: none; white-space: nowrap; }
 /* '스페이스 기본으로 지정' 체크 행 (템플릿 저장 다이얼로그) */

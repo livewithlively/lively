@@ -15,7 +15,7 @@
 .pjv-crumb-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: -.1px; }
 .pjv-crumb.is-leaf { color: var(--ink); font-weight: 800; font-size: 15.5px; letter-spacing: -.3px; }
 .pjv-crumb > svg, .pjv-crumb > span.pjv-side-space-avatar { flex: none; }
-.pjv-crumb-sep { color: var(--muted-3, var(--gray-muted)); font-size: 13px; padding: 0 2px; user-select: none; }
+.pjv-crumb-sep { color: var(--muted-3); font-size: 13px; padding: 0 2px; user-select: none; }
 .pjv-crumb-menu, .pjv-crumb-fav { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex: none; border: none; background: none; border-radius: 7px; cursor: pointer; color: var(--muted-2); padding: 0; margin-left: 1px; }
 .pjv-crumb-menu:hover, .pjv-crumb-fav:hover { background: var(--bg-tint-2); color: var(--ink); }
 .pjv-crumb-fav.on { color: #f0b429; }
@@ -58,7 +58,7 @@
 .pjv-mine-btn.active .pjv-mine-btn-label { display: inline; }
 /* 구분선 + 톱니·＋프로젝트 */
 .pjv-tb-sep { width: 1px; height: 20px; background: var(--line); margin: 0 6px; flex: none; }
-.pjv-tb-primary-group { display: inline-flex; align-items: stretch; flex: none; margin-left: 5px; border-radius: 8px; overflow: hidden; background: var(--ink); }
+.pjv-tb-primary-group { display: inline-flex; align-items: stretch; flex: none; margin-left: 5px; border-radius: 8px; overflow: hidden; background: var(--chip-dark); }
 .pjv-tb-primary, .pjv-tb-primary-more { display: inline-flex; align-items: center; gap: 6px; border: none; background: transparent; color: var(--on-fill); cursor: pointer; font-size: 13px; font-weight: 700; padding: 0 13px; height: 30px; letter-spacing: -.2px; }
 .pjv-tb-primary-more { padding: 0 7px; border-left: 1px solid rgba(255,255,255,.22); }
 .pjv-tb-primary:hover, .pjv-tb-primary-more:hover { background: rgba(255,255,255,.14); }
@@ -73,13 +73,13 @@
 .pjv-filter-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 5px 6px 3px; }
 .pjv-filter-title { font-size: 12.5px; font-weight: 800; color: var(--ink); }
 .pjv-filter-clear { border: none; background: none; cursor: pointer; font-size: 11.5px; font-weight: 700; color: var(--muted-2); padding: 2px 5px; border-radius: 6px; }
-.pjv-filter-clear:hover { background: var(--bg-tint-2); color: var(--coral-text, var(--ink)); }
+.pjv-filter-clear:hover { background: var(--bg-tint-2); color: var(--coral-text); }
 .pjv-filter-rows { display: flex; flex-direction: column; gap: 5px; }
 .pjv-filter-row { display: flex; align-items: center; gap: 5px; flex-wrap: nowrap; }
 .pjv-filter-lead { font-size: 11.5px; font-weight: 700; color: var(--muted-2); min-width: 54px; padding-left: 4px; }
 .pjv-filter-match { min-width: 54px; }
 .pjv-filter-sel { display: inline-flex; align-items: center; justify-content: space-between; gap: 5px; height: 30px; box-sizing: border-box; padding: 0 7px 0 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--ink); }
-.pjv-filter-sel:hover { border-color: var(--muted-3, var(--gray-muted)); }
+.pjv-filter-sel:hover { border-color: var(--muted-3); }
 .pjv-filter-sel-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
 .pjv-filter-sel .pjv-tb-ic { color: var(--muted-2); }
 .pjv-filter-field { min-width: 88px; }
@@ -88,7 +88,7 @@
 .pjv-filter-text, .pjv-filter-date { flex: 1 1 110px; min-width: 96px; height: 30px; box-sizing: border-box; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 12.5px; color: var(--ink); }
 .pjv-filter-text:focus, .pjv-filter-date:focus { outline: none; border-color: var(--blue); }
 .pjv-filter-del { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex: none; border: none; background: none; border-radius: 7px; cursor: pointer; color: var(--muted-2); padding: 0; }
-.pjv-filter-del:hover { background: color-mix(in srgb, var(--coral-text, #d9534f) 10%, transparent); color: var(--coral-text, #d9534f); }
+.pjv-filter-del:hover { background: color-mix(in srgb, var(--coral-text) 10%, transparent); color: var(--coral-text); }
 .pjv-filter-add { display: flex; align-items: center; gap: 6px; width: 100%; border: none; background: none; cursor: pointer; padding: 8px 8px; border-radius: 8px; font-size: 12.5px; font-weight: 700; color: var(--blue); margin-top: 2px; }
 .pjv-filter-add:hover { background: var(--bg-tint-2); }
 .pjv-filter-empty { padding: 10px 8px; font-size: 12.5px; color: var(--muted-2); }
@@ -100,23 +100,23 @@
 .pjv-multipick .pjv-multipick-search, .pjv-fieldpick .pjv-multipick-search { flex: 1; min-width: 0; height: 100%; padding: 0; border: none; box-shadow: none; background: transparent; font-size: 12.5px; color: var(--ink); }
 .pjv-multipick .pjv-multipick-search:focus, .pjv-fieldpick .pjv-multipick-search:focus { outline: none; border: none; box-shadow: none; }
 /* 보기 설정 라디오 — 선택된 항목에 파란 점(라벨 색만으로는 '고를 수 있는 것'인지 안 보인다). */
-.pjv-view-radio { flex: none; width: 15px; height: 15px; border-radius: 50%; border: 1.6px solid var(--muted-3, var(--gray-muted)); box-sizing: border-box; }
+.pjv-view-radio { flex: none; width: 15px; height: 15px; border-radius: 50%; border: 1.6px solid var(--muted-3); box-sizing: border-box; }
 .pjv-view-item.on .pjv-view-radio { border-color: var(--blue); border-width: 4.5px; }
 .pjv-multipick-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 3px 8px 4px; }
 .pjv-multipick-title { font-size: 11.5px; font-weight: 800; color: var(--muted-2); letter-spacing: .2px; }
 .pjv-multipick-all { border: none; background: none; cursor: pointer; font-size: 11.5px; font-weight: 700; color: var(--blue); padding: 2px 5px; border-radius: 6px; }
 .pjv-multipick-all:hover { background: var(--bg-tint-2); }
 .pjv-multipick-list { display: flex; flex-direction: column; gap: 1px; max-height: 260px; overflow: auto; }
-.pjv-multipick-group { font-size: 11px; font-weight: 800; color: var(--muted-3, var(--gray-muted)); padding: 6px 9px 3px; letter-spacing: .2px; }
+.pjv-multipick-group { font-size: 11px; font-weight: 800; color: var(--muted-3); padding: 6px 9px 3px; letter-spacing: .2px; }
 .pjv-multipick-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: none; background: none; cursor: pointer; padding: 6px 9px; border-radius: 7px; font-size: 13px; color: var(--ink); }
 .pjv-multipick-row:hover { background: var(--bg-tint-2); }
 .pjv-multipick-row.on { background: var(--bg-sel); font-weight: 600; }
 .pjv-multipick-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pjv-multipick-count { font-size: 11.5px; color: var(--muted-2); font-weight: 700; }
 .pjv-multipick-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--muted-2); }
-.pjv-multipick-dot.none { background: transparent; border: 1.5px dashed var(--muted-3, var(--gray-muted)); }
+.pjv-multipick-dot.none { background: transparent; border: 1.5px dashed var(--muted-3); }
 .pjv-multipick-row > .pjv-ava, .pjv-multipick-row > svg { flex: none; }
-.pjv-multipick-row .pjv-check-mini { width: 16px; height: 16px; flex: none; color: var(--muted-3, var(--gray-muted)); }
+.pjv-multipick-row .pjv-check-mini { width: 16px; height: 16px; flex: none; color: var(--muted-3); }
 .pjv-multipick-row .pjv-check-mini.on { color: var(--blue); }
 
 /* ── 팝오버: 완료 표시 · 컬럼 · 보기 설정 · 그룹 ── */
@@ -124,7 +124,7 @@
 .pjv-closed-pop-head { font-size: 11.5px; font-weight: 800; color: var(--muted-2); padding: 6px 9px 5px; letter-spacing: .2px; }
 .pjv-cols-pop { min-width: 240px; max-height: 400px; overflow: auto; padding: 5px; }
 .pjv-set-pop { min-width: 288px; padding: 5px; }
-.pjv-set-sec { font-size: 11px; font-weight: 800; color: var(--muted-3, var(--gray-muted)); padding: 8px 9px 3px; letter-spacing: .2px; }
+.pjv-set-sec { font-size: 11px; font-weight: 800; color: var(--muted-3); padding: 8px 9px 3px; letter-spacing: .2px; }
 .pjv-groupby-pop { min-width: 320px; padding: 6px; }
 .pjv-groupby-line { display: flex; align-items: center; gap: 5px; padding: 2px 2px 4px; }
 .pjv-groupby-field { flex: 1 1 auto; }
@@ -144,10 +144,10 @@
    보라·분홍이어도 같은 가족으로 묶인다) ② 배경 쪽으로 한 번 더 섞어 밝기를 낮춘다. 폭도 3px.
    결과: 리스트 구분은 되지만 진행 중(앰버)·할 일(슬레이트) 칩보다 뒤로 물러난다. */
 .pjv-list-box::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
-  background: color-mix(in srgb, color-mix(in srgb, var(--list-color, var(--line)) 62%, var(--gray-muted)) 88%, var(--bg)); }
+  background: color-mix(in srgb, color-mix(in srgb, var(--list-color) 62%, var(--gray-muted)) 88%, var(--bg)); }
 .pjv-list-box:last-child { margin-bottom: 4px; }
 /* 박스 안 경로 — '어느 스페이스 / 어느 폴더의 리스트인지'. 이름만으론 같은 이름의 리스트를 구분 못 한다. */
-.pjv-list-box-crumb { padding: 0 16px 1px 17px; font-size: 11.5px; font-weight: 600; color: var(--muted-3, var(--gray-muted)); letter-spacing: -.1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pjv-list-box-crumb { padding: 0 16px 1px 17px; font-size: 11.5px; font-weight: 600; color: var(--muted-3); letter-spacing: -.1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pjv-list-box > .pjv-list-head { padding: 2px 16px 6px 17px; }
 .pjv-list-box > .pjv-list-head .pjv-tgroup-label { font-size: 15px; font-weight: 800; color: var(--ink); letter-spacing: -.2px; }
 /* 박스 안 그룹 헤더·행은 박스 안쪽 여백에 맞춘다(박스 밖 표와 같은 좌측 기준선). */
