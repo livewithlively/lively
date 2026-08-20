@@ -128,7 +128,11 @@ body.v2-splitting-x iframe, body.v2-splitting-y iframe { pointer-events: none; }
 /* 늘 있는 곳(홈·리브) — 프로젝트 행과 **같은 모양**이다. 알약(테두리·큰 글씨)으로 만들면 목록보다 먼저
    읽혀 위계가 뒤집힌다(상민님 2026-08-19). 아이콘도 프로젝트 폴더와 같은 칸에 앉아 글자가 기둥 56px 에 선다. */
 .v2-fixed { padding: 0 var(--side-x, 8px) 6px; margin-bottom: 4px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
-.v2-nav { display: flex; align-items: center; padding: 7px 10px 7px 28px; min-height: var(--row-h, 34px); border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--ink-sub); text-decoration: none; }
+/* ⚠ 고정 행(새 작업·확인할 것·외부 앱 연결·리브)은 **프로젝트 행과 같은 무게**여야 한다(원준 2026-08-20:
+   "존재가 너무 없고 안 중요한 버튼 같다"). 자리는 이미 같았다 — 아이콘 36 · 글자 56 · 높이 34 로 프로젝트와
+   동일. 다른 건 **크기·굵기·색 셋뿐**이었고(13/600/ink-sub vs 14/700/ink) 그 셋이 "덜 중요한 것"으로 읽히게
+   만들었다. 이 줄들은 목록의 항목이 아니라 **목록과 같은 급의 갈 곳**이므로 같은 잉크·같은 굵기로 세운다. */
+.v2-nav { display: flex; align-items: center; padding: 7px 10px 7px 28px; min-height: var(--row-h, 34px); border-radius: 8px; font-size: 14px; font-weight: 700; line-height: 1.4; color: var(--ink); text-decoration: none; }
 .v2-nav:hover { background: var(--bg, #fff); color: var(--ink); }
 .v2-nav.on { background: var(--bg, #fff); color: var(--ink); font-weight: 700; box-shadow: inset 0 0 0 1px var(--line-net, #DCE6F5); }
 .v2-nav .n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
