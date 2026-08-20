@@ -5,14 +5,18 @@
    라벨은 11px/700 평문(모노·대문자 폐지), 칩은 알약, 카드는 헤어라인 12~14px,
    상태는 점+글자, 리브 = 민트 점(.lmark). 캐릭터 일러스트 없음.
    ───────────────────────────────────────────────────────────────────────────── */
+/* ⚠ 색·선·잉크 토큰은 **여기서 선언하지 않는다** — 제품 디자인 시스템(public/styles/01-base.css)이
+   유일한 출처다(index.html 이 먼저 링크한다). 값을 베껴 오면 제품이 색을 바꿔도 이 화면만 옛 값에 남는다.
+   아래는 그 시스템에 아직 없어서 이 프로토타입이 스스로 두는 것들뿐이다.
+   DS-EXCEPTION: --amber 계열 — 제품이 '확인 필요' 상태에 앰버를 쓰면서도(40-v2.css) 토큰으로 선언한 적이
+   없어 var(--amber, #C98A16) 폴백으로 흩어져 있다(anti-pattern A3). 여기서는 폴백 없이 한 곳에 세워 둔다.
+   → 시스템에 --amber/--amber-text/--amber-soft/--line-success 를 정식 토큰으로 올릴 것을 제안한다. 2026-08-20, #1813 */
 :root {
-  --bg:#FFFFFF; --bg-tint:#F6FAFF; --bg-tint-2:#EEF5FF; --bg-punch:#EEF4FF; --bg-note:#F0F5FF; --bg-success:#F3FBF8; --bg-sel:#F4F8FF;
-  --canvas:#F4F7FC; --strip:#FAFBFC;
-  --blue:#2D6BF0; --blue-deep:#1E54CC; --mint:#16C79A; --mint-deep:#0FA37E; --teal:#1BAEB0; --coral:#E4756B; --coral-text:#B84E44;
-  --amber:#C98A16; --amber-text:#B7791F; --amber-soft:#FFF7E6;
-  --ink:#15233B; --ink-sub:#5A6B85; --ink-note:#2D4A7A; --muted:#8A99B5; --muted-2:#A6B2C8; --muted-3:#C2CCDD; --muted-head:#7A88A3;
-  --line:#E6ECF5; --line-row:#EDF1F8; --line-net:#DCE6F5; --line-net-2:#CFE0F7; --line-note:#D6E4FF; --line-success:#CDEFE3;
-  --dark-1:#15233B; --dark-2:#1C3962;
+  --strip:#FAFBFC;
+  --amber:#C98A16;
+  --amber-text:#B7791F;
+  --amber-soft:#FFF7E6;
+  --line-success:#CDEFE3;
   --font:"Pretendard Variable","Pretendard",-apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;
   --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
   --ease:cubic-bezier(.16,1,.3,1);
@@ -142,6 +146,12 @@ input.in:focus-visible, textarea.in:focus-visible { outline:2px solid var(--blue
 .start-invite .code { font-family:var(--mono); font-size:13px; color:var(--ink); flex:1; }
 .start-fine { margin-top:16px; font-size:12px; color:var(--muted); line-height:1.6; }
 .start-fine label { display:flex; gap:8px; align-items:flex-start; margin-top:8px; color:var(--ink-sub); cursor:pointer; }
+/* 동의 문구 안의 문서 링크 — 눌러서 실제 약관·방침으로 간다(#1813). 밑줄로 '읽을 것'임을 말한다. */
+.start-fine label a { color:var(--blue); text-decoration:underline; text-underline-offset:2px; }
+.start-fine label a:hover { color:var(--blue-deep); }
+/* 동의 없이 진행하려 하면 그 줄을 짚어 준다 — 어디를 봐야 하는지 말없이 알린다. */
+.start-fine label.need { color:var(--coral-text); }
+.start-fine label.need input { outline:2px solid var(--coral); outline-offset:2px; border-radius:3px; }
 .start-fine input { margin-top:3px; }
 .start-foot { margin-top:18px; text-align:center; font-size:12px; color:var(--muted-2); }
 

@@ -20,7 +20,9 @@
     { id: 'clickup', label: '클릭업', live: true, logo: 'C' }, { id: 'folder', label: '내 컴퓨터 폴더', live: false, logo: '📁' },
     { id: 'git', label: '깃 저장소', live: false, logo: 'G' }, { id: 'none', label: '딱히 없어요 — 대화로 시작', live: false, logo: '·', none: true },
   ];
-  const AIS = ['Claude', 'ChatGPT', 'Gemini', '여러 개', '아직 없어요'];
+  // 선택지는 코어 하네스 카탈로그(src/terminal/catalog.ts)의 제공자와 맞춘다 — Claude Code(Anthropic)·
+  //  Codex(OpenAI)·Antigravity(Google)·Grok Build(xAI)·OpenCode(그 밖). 사람에게는 CLI 이름 대신 아는 이름으로 묻는다.
+  const AIS = ['Claude', 'ChatGPT', 'Gemini', 'Grok', '여러 개', '아직 없어요'];
 
   /* ═════ 페르소나 — 직업 8종 전수(폴백 없음) ═════
      Q1 직업 → Q2 세부 → Q3 그 세부의 업무 → Q4 리브의 진단(맞혀보기) → 자료에서 병목 3개.
@@ -317,13 +319,23 @@
       <div class="start-or">또는 이메일로 계속하기</div>
       <input class="in start-email" type="email" placeholder="you@example.com" aria-label="이메일">
       <div class="start-invite"><span class="k">초대 코드</span><span class="code">lvi-8f2k-q7m3-xn1p</span><span class="tag mint">확인됨</span></div>
-      <div class="start-fine">지금은 무료 · 초대제 베타입니다. 정식 출시 때 유료 플랜으로 바뀝니다. AI 세션 실행에는 본인 Claude 구독이 필요합니다.
-        <label><input type="checkbox" id="agree"> 이용약관과 개인정보 처리방침에 동의합니다.</label></div>
+      <div class="start-fine">지금은 무료 · 초대제 베타입니다. 정식 출시 때 유료 플랜으로 바뀝니다. AI 세션은 <b>쓰시던 AI 계정을 연결해</b> 돌아가고, 라이블리가 대신 결제하지 않습니다. 베타 기간에는 Claude로 실행되며 Codex·Gemini·Grok은 준비 중입니다.
+        <label><input type="checkbox" id="agree"> <span><a href="terms.html" target="_blank" rel="noopener">이용약관</a>과 <a href="privacy.html" target="_blank" rel="noopener">개인정보 처리방침</a>에 동의합니다.</span></label></div>
       <div class="start-foot">초대 코드가 없으면 <a href="#" data-act="wait">대기자 등록</a>으로 남길 수 있습니다.</div>
     </div></div>`;
   }
   function bindStart() {
+    // 동의는 **실제로 막는다**(#1813) — 종전엔 체크박스를 아예 읽지 않아 동의 없이도 그냥 지나갔다.
+    //  문구만 있고 검사도 문서도 없으면 그건 동의를 받은 것이 아니라 받은 척한 것이다.
     $('[data-act="google"]').addEventListener('click', (e) => {
+      const agree = $('#agree');
+      if (agree && !agree.checked) {
+        const lb = agree.closest('label');
+        if (lb) { lb.classList.add('need'); setTimeout(() => lb.classList.remove('need'), 1400); }
+        agree.focus();
+        toast('이용약관과 개인정보 처리방침에 동의해 주세요.');
+        return;
+      }
       const b = e.currentTarget; b.classList.add('is-busy');
       setTimeout(() => { S = Object.assign(fresh(), { name: '상민' }); S.ob.started = true; S.ob.startedAt = Date.now(); save(); go('#/welcome'); }, 900);
     });
