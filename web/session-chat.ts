@@ -122,21 +122,45 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   //  그건 이름이 아니므로 화면에 쓰지 않는다 — 사이드바(side.ts isIdLabel)와 같은 판정.
   const idLabel = (x: string): boolean => /^box-|^[0-9a-f-]{20,}$/i.test(String(x || '').trim());
   const shownName = (): string => (idLabel(titleText) ? '' : titleText) || String(target.raw?.harness || '') || '(이름 없음)';
+  const normTxt = (x: string): string => String(x || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  // 사람이 지은 이름만 남긴다 — 프로젝트명 되풀이(dev 실측 58%)·id 꼴은 이름이 아니다(사이드바 side.ts sessText 와 같은 규칙).
+  function cleanName(): string {
+    let n = String(titleText || '').trim();
+    const proj = String((target as any).projectName || '').trim();
+    if (proj && n.startsWith(proj)) n = n.slice(proj.length).replace(/^[\s·:\-–—_/|]+/, '').trim();
+    if (proj && n && normTxt(n) === normTxt(proj)) n = '';
+    if (idLabel(n)) n = '';
+    return n;
+  }
+  const penIc = (): SVGElement => sv('svg', { viewBox: '0 0 24 24', class: 'sc-title-pen', 'aria-hidden': 'true' }, sv('path', { d: 'M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z' }));
+  const penBtn = (): HTMLElement => el('button', {
+    class: 'sc-title-penbtn', type: 'button', 'aria-label': '세션 이름 바꾸기',
+    title: '세션 이름 바꾸기 — 지금 제목은 이 세션이 하는 일이에요', onclick: () => startRename(),
+  }, penIc());
   function paintTitle(): void {
     if (renaming) return;                    // 고치는 중엔 손대지 않는다(20초 폴링이 입력 중인 칸을 지우면 안 된다)
-    const pane = paneTitle();
     const tip = [titleText, target.id].filter(Boolean).join(' · ');
-    if (pane) {
-      // 제목 자리는 '지금 하는 일'(pane 이름)이 차지한다(#1744). 그래도 **이름은 이 줄에서 고친다**(원준 2026-08-20)
-      //  — 두 번 누르거나, 손을 올리면 나오는 연필로. 종전엔 [⋯ ▸ 세션 이름 바꾸기] 한 길뿐이라 아무도 못 찾았다.
-      const b = el('b', { class: 'sc-title', title: canRename() ? tip + ' — 두 번 누르면 세션 이름을 바꿉니다' : tip, text: pane });
+    const name = cleanName();
+    const pane = paneTitle();
+    const job = pane && normTxt(pane) !== normTxt(name) ? pane : '';
+    // ★굵은 자리의 임자 — **사람이 지은 이름이 있으면 그 이름**, 없으면 '지금 하는 일'(pane 제목, #1744).
+    //  종전엔 pane 제목이 늘 이겨서, 이름을 고쳐도 이 줄이 그대로였다(원준 2026-08-20 "탭에서 고쳤는데 여기는 반영이 안 된다").
+    //  #1744 가 막으려던 건 **자동 생성 이름**이 이 자리를 먹는 것이고, cleanName 이 그것들을 그대로 걷어낸다.
+    if (name) {
+      titleHost.replaceChildren(
+        canRename()
+          ? el('button', { class: 'sc-title sc-title-btn', type: 'button', title: '세션 이름 — 눌러서 바꿉니다', onclick: () => startRename() },
+            el('span', { class: 'sc-title-t', text: name }), penIc())
+          : el('b', { class: 'sc-title', title: tip, text: name }),
+        // 하는 일은 이름 옆에 조용히 — 사이드바가 이름(굵게) + 하는 일(부제)로 쓰는 것과 같은 문법이다.
+        ...(job ? [el('span', { class: 'sc-title-job', title: '이 세션이 지금 하는 일', text: job })] : []));
+      return;
+    }
+    if (job) {
+      const b = el('b', { class: 'sc-title', title: canRename() ? tip + ' — 두 번 누르면 세션 이름을 바꿉니다' : tip, text: job });
       if (!canRename()) { titleHost.replaceChildren(b); return; }
       b.addEventListener('dblclick', () => startRename());
-      titleHost.replaceChildren(b, el('button', {
-        class: 'sc-title-penbtn', type: 'button', 'aria-label': '세션 이름 바꾸기',
-        title: '세션 이름 바꾸기 — 지금 제목은 이 세션이 하는 일이에요',
-        onclick: () => startRename(),
-      }, sv('svg', { viewBox: '0 0 24 24', class: 'sc-title-pen', 'aria-hidden': 'true' }, sv('path', { d: 'M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z' }))));
+      titleHost.replaceChildren(b, penBtn());
       return;
     }
     const t = shownName();
@@ -144,7 +168,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
       ? el('button', { class: 'sc-title sc-title-btn', type: 'button', title: '세션 이름 — 눌러서 바꿉니다', onclick: () => startRename() },
         el('span', { class: 'sc-title-t', text: t }),
         // 연필은 손을 올렸을 때만 나타난다 — 늘 보이면 머리줄의 조작부가 하나 늘고, 아예 없으면 고칠 수 있다는 걸 아무도 모른다.
-        sv('svg', { viewBox: '0 0 24 24', class: 'sc-title-pen', 'aria-hidden': 'true' }, sv('path', { d: 'M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z' })))
+        penIc())
       : el('b', { class: 'sc-title', title: tip, text: t }));
   }
   function startRename(): void {
