@@ -83,6 +83,9 @@ export async function deleteNode(id: string, actor?: string): Promise<{ deleted:
   const node = await getNode(id);
   if (!node) return { deleted: false };
   if (node.token_hash) await revokeToken(node.token_hash, actor, "node-store").catch(() => { /* best-effort */ });
+  // 세션 스냅샷 정본(#1834)도 함께 — FK CASCADE 를 안 걸었으므로(org/schema/node-state.ts 주석) 여기서 지운다.
+  //  남아도 읽는 쪽 JOIN 이 걸러 보이지는 않지만, 지워진 노드의 세션 목록을 DB 에 남겨 둘 이유가 없다.
+  await itemsPool.query(`DELETE FROM org_node_state WHERE node_id=$1`, [id]).catch(() => { /* best-effort */ });
   const r = await itemsPool.query(`DELETE FROM org_node WHERE id=$1`, [id]);
   return { deleted: (r.rowCount ?? 0) > 0 };
 }

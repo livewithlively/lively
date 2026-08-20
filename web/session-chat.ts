@@ -32,6 +32,10 @@ export interface SessionChatTarget {
   logId?: string | null; logNode?: string | null;   // 중앙 기록 좌표(대화 uuid) — 라이브 행에 접힌 기록
 }
 export interface SessionChatHandle {
+  /** 이 화면(터미널 프레임 포함)이 붙어 있는 **세션 id** — 마운트 시점에 고정된다.
+   *  겉(주소·탭 제목)과 속(프레임)이 어긋난 상태에서 목록 갱신이 남의 세션 정보를 상단바에 덧칠하지 않도록,
+   *  update 를 부르는 쪽이 이 값으로 대상을 확인한다(v2/main.ts). */
+  id: string;
   update(t: SessionChatTarget): void;
   /** 우패널이 스스로 파일 탐색기를 닫았을 때 상단바 [파일] 불을 맞춘다(#1744 — 토글은 하나여야 한다). */
   setFilesOn(on: boolean): void;
@@ -1175,6 +1179,7 @@ export function mountSessionChat(host: HTMLElement, first: SessionChatTarget, op
   void open();
 
   return {
+    id: first.id,
     setFilesOn(on) { filesBtn.classList.toggle('sc-act-on', !!on); },
     update(t) {
       const wasDead = dead();
