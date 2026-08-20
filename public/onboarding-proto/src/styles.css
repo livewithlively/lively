@@ -182,14 +182,13 @@ input.in:focus-visible, textarea.in:focus-visible { outline:2px solid var(--blue
 .room-body { flex:1; min-height:0; overflow-y:auto; display:grid;
   grid-template-columns:minmax(0,1fr) minmax(272px,316px); gap:28px;
   width:100%; max-width:var(--room-w); margin:0 auto;
-  padding:clamp(24px,15vh,165px) 24px clamp(32px,7vh,72px);
-  align-content:start; align-items:start; }
-  /* ★ 세로는 **고정 앵커**다(중앙 정렬이 아니다). 장면마다 내용 높이가 달라서 가운데로 맞추면
-     화면을 넘길 때 질문 줄이 위아래로 튄다 — 실측 334 → 338 → 230 → 345 (원준님 2026-08-20).
-     시작점을 붙박아 두면 질문이 늘 같은 자리에 서고, 길어진 내용은 아래로만 자란다.
-     ★ 앵커는 위 띠(처음 한 번·3분 / 나중에 하기)와 **말이 통하는 거리**여야 한다. 19.5vh 로 두었더니
-     띠만 화면 꼭대기에 홀로 떨어져 보여서(원준님) 15vh 로 당기고 .room 위 여백을 20 으로 올렸다.
-     길어진 내용은 아래로만 자라고, 그래도 넘치면 .room-body 가 스크롤한다(위가 잘리지 않는다). */
+  padding:clamp(20px,4vh,44px) 24px;
+  align-content:safe center; align-items:start; }
+  /* ★ 세로는 **화면 가운데**다. 위에서 고정 거리로 매달면 화면이 커질수록 아래만 비어
+     덩어리가 천장에 붙어 보인다 — 1100 높이에서 위 165 / 아래 289 로 벌어졌다(원준님 2026-08-21).
+     가운데 정렬은 장면 높이가 다르면 질문 줄이 튀는 게 문제였는데(334→230), 그건 .scene 의
+     min-height 로 막는다: 짧은 장면도 같은 크기의 자리를 잡으므로 가운데가 흔들리지 않는다.
+     safe center — 내용이 칸보다 길어지면 가운데가 아니라 위에서 시작해 머리가 잘리지 않는다. */
 
 /* 대화(작업 일지) — #/liv 페이지가 쓴다 */
 .journal { min-height:0; display:flex; flex-direction:column; border:1px solid var(--line); border-radius:14px; overflow:hidden; background:var(--bg); }
@@ -268,23 +267,23 @@ input.in:focus-visible, textarea.in:focus-visible { outline:2px solid var(--blue
 .src-grid { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr); gap:10px; align-items:stretch; }
 .src-grid.solo { grid-template-columns:minmax(0,1fr); }   /* 지금 연결할 게 없으면 드롭존이 폭을 다 쓴다 */
 .src-col { display:flex; flex-direction:column; gap:8px; }
-.up-body > * + * { margin-top:10px; }
+.up-body > * + * { margin-top:8px; }
 
 /* '나중에' 는 **한 장으로 묶는다**(원준님 2026-08-20). 앱마다 카드를 세우면 같은 문장이 열 번 반복되고,
    앞 화면에서 고른 개수만큼 페이지가 세로로 자라 질문·버튼 위치가 화면마다 달라진다.
    묶어 두면 1곳이든 9곳이든 이 칸의 높이가 거의 변하지 않는다 — 배치가 개수에 휘둘리지 않는다. */
-.later-box { border:1px dashed var(--line-net); border-radius:12px; padding:12px 14px; background:var(--bg); display:flex; flex-direction:column; gap:9px; }
-.lb-h { display:flex; align-items:center; gap:8px; }
-.lb-h b { font-size:13.5px; font-weight:700; }
-.lb-h .state { margin-left:auto; }
+.later-box { border:1px dashed var(--line-net); border-radius:12px; padding:10px 13px; background:var(--bg); display:flex; flex-direction:column; gap:8px; }
+.lb-h { display:flex; align-items:baseline; gap:7px; }
+.lb-h b { font-size:13.5px; font-weight:700; flex:none; }
+.lb-h .state { margin-left:auto; align-self:center; flex:none; }
 .lb-apps { display:flex; flex-wrap:wrap; gap:6px; }
-.lb-app { display:inline-flex; align-items:center; gap:6px; height:28px; padding:0 11px; border-radius:999px; background:var(--bg-tint); border:1px solid var(--line); font-size:12.5px; font-weight:600; color:var(--ink-sub); }
+.lb-app { display:inline-flex; align-items:center; gap:6px; height:27px; padding:0 11px; border-radius:999px; background:var(--bg-tint); border:1px solid var(--line); font-size:12.5px; font-weight:600; color:var(--ink-sub); }
 .lb-app .blogo, .lb-app .ic { width:14px; height:14px; flex:none; }
-.lb-s { margin:0; font-size:12px; line-height:1.6; color:var(--muted); }
-.lb-s b { color:var(--ink-sub); }
+.lb-s { min-width:0; font-size:12px; line-height:1.5; color:var(--muted); word-break:keep-all; }
+.lb-s b { color:var(--ink-sub); font-weight:600; }
 /* 연결 카드 — 이름·행동은 같은 줄, 설명은 카드 폭을 다 쓴다.
    한 줄 flex 로 두면 좁은 칸(355)에서 설명이 버튼 폭만큼 깎여 두 글자만 다음 줄로 떨어진다. */
-.conn { border:1px solid var(--line); border-radius:10px; padding:10px 12px; background:var(--bg);
+.conn { border:1px solid var(--line); border-radius:10px; padding:8px 12px; background:var(--bg);
   display:grid; grid-template-columns:auto minmax(0,1fr) auto;
   grid-template-areas:"logo title act" "logo desc desc"; column-gap:10px; row-gap:2px; align-items:center; }
 .conn .logo { grid-area:logo; width:28px; height:28px; border-radius:8px; display:grid; place-items:center; background:var(--bg); border:1px solid var(--line); }
@@ -306,7 +305,11 @@ input.in:focus-visible, textarea.in:focus-visible { outline:2px solid var(--blue
 .compose textarea:focus-visible { outline:2px solid var(--mint-deep); outline-offset:1px; border-color:transparent; }
 
 /* 오른쪽 — 만들어지는 내 워크스페이스 (답할수록 채워지는 장부) */
-.build { display:flex; flex-direction:column; gap:8px; }   /* 내용만큼만 — 빈 칸이 세로로 늘어지지 않게 */
+/* 장부는 질문 칸과 **같은 줄에서 시작해 같은 줄에서 끝난다**. 카드 수만큼만 세우면 왼쪽은 길고
+   오른쪽은 중간에 뚝 끊겨 오른쪽 아래가 통째로 비었다(원준님 2026-08-21).
+   칸 높이만큼 늘리고 맺음말을 바닥에 붙여 두 기둥이 한 덩어리로 읽히게 한다. */
+.build { align-self:stretch; display:flex; flex-direction:column; gap:8px; }
+.build-foot { margin-top:auto; }
 .build-h { display:flex; align-items:center; gap:8px; padding:2px 4px 0; }
 .build-h b { display:inline-flex; align-items:center; gap:7px; font-size:13px; font-weight:700; letter-spacing:-.01em; }
 .build-h .k { margin-left:auto; }
@@ -534,7 +537,10 @@ main.page { flex:1; width:100%; max-width:1160px; margin:0 auto; padding:26px 28
    align-items:center 는 위쪽을 잘라 먹지만(스크롤로 못 올라간다) margin:auto 는 자연히 위에서 시작한다. */
 /* 스테이지는 더 이상 스크롤·세로정렬을 맡지 않는다 — 그 몫은 .room-body 로 올라갔다. */
 .stage { min-width:0; display:flex; justify-content:center; padding:0; }
-.scene { margin:0 auto; width:100%; max-width:600px; display:flex; flex-direction:column; align-items:center; text-align:center; animation:sc-in .36s cubic-bezier(.16,.84,.32,1) both; }
+/* min-height 는 **가운데 정렬을 붙박아 두는 장치**다. 장면마다 내용 높이가 다르면(무대 293 · 자료 출처 476)
+   가운데를 맞출 때마다 질문 줄이 위아래로 튄다. 짧은 장면도 이만한 자리를 미리 잡아 두면
+   화면을 넘겨도 질문이 거의 같은 높이에 선다 — 남는 자리는 내용 아래에 조용히 남는다. */
+.scene { margin:0 auto; width:100%; max-width:600px; min-height:470px; display:flex; flex-direction:column; align-items:center; text-align:center; animation:sc-in .36s cubic-bezier(.16,.84,.32,1) both; }
 .scene.wide { max-width:min(780px, 100%); }   /* 룸이 가운데 기둥으로 좁아졌다 — 칸을 넘지 않게 100% 로 잠근다 */
 .scene.left { align-items:stretch; text-align:left; }
 @keyframes sc-in { from { opacity:0; transform:translateY(16px); } }
@@ -558,10 +564,10 @@ main.page { flex:1; width:100%; max-width:1160px; margin:0 auto; padding:26px 28
 .sc-go .btn, .sc-actions .btn { height:42px; padding:0 24px; font-size:14.5px; border-radius:11px; }
 .sc-write { display:flex; gap:8px; margin-top:20px; width:min(430px,100%); }
 .sc-write .in { flex:1; height:42px; font-size:14.5px; }
-.sc-skip { margin-top:28px; }
+.sc-skip { margin-top:20px; }
 .sc-skip .btn-text { color:var(--muted); font-size:13px; }
 .sc-skip .btn-text:hover { color:var(--ink-sub); }
-.sc-body { width:100%; margin-top:26px; text-align:left; }
+.sc-body { width:100%; margin-top:22px; text-align:left; }
 .sc-actions { margin-top:26px; }
 .sc-fine { margin:14px 0 0; font-size:12px; color:var(--muted); line-height:1.6; }
 .sc-read { margin-top:32px; width:min(430px,100%); }

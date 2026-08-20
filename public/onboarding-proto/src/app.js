@@ -26,18 +26,16 @@
       { id: 'gdrive', label: 'Google Drive', logo: 'googledrive', live: true },
       { id: 'figma', label: 'Figma', logo: 'figma', live: true },
     ] },
-    { k: '메신저', items: [
+    // 줄 수가 곧 이 화면의 세로 길이다. 한 줄에 칩 하나만 놓이면(메신저=Slack) 줄만 늘고 눈에는 빈칸만 남는다.
+    // 성격이 붙는 것끼리 합쳐 일곱 줄 → 다섯 줄. 오른쪽 장부와 길이가 비슷해진다(원준님 2026-08-21).
+    { k: '메신저·메일·일정', items: [
       { id: 'slack', label: 'Slack', logo: 'slack', live: true },
-    ] },
-    { k: '메일·일정', items: [
       { id: 'gmail', label: 'Gmail', logo: 'gmail', live: true, admin: true },
       { id: 'gcal', label: 'Google 캘린더', logo: 'googlecalendar', live: true, admin: true },
     ] },
-    { k: '일감·이슈', items: [
+    { k: '일감·코드', items: [
       { id: 'linear', label: 'Linear', logo: 'linear', live: true },
       { id: 'clickup', label: 'ClickUp', logo: 'clickup', live: true },
-    ] },
-    { k: '코드', items: [
       { id: 'github', label: 'GitHub', logo: 'github', live: true },
       { id: 'gitlab', label: 'GitLab', logo: 'gitlab', live: true },
     ] },
@@ -588,9 +586,8 @@
             <div class="src-grid${oauth.length ? '' : ' solo'}">${files}${oauth.length ? `<div class="src-col">${oauth.map(conn).join('')}</div>` : ''}</div>
             ${local ? `<div class="conn ghost"><span class="logo">${ic('term')}</span><div class="t">내 컴퓨터 폴더</div><button type="button" class="btn btn-ghost btn-sm" data-copy>명령 복사</button><div class="s">한 줄만 실행하면 리브가 그 폴더를 읽습니다.</div></div>` : ''}
             ${later.length ? `<div class="later-box">
-              <div class="lb-h"><b>앱 발급이 한 번 필요한 곳</b><span class="state wait">나중에</span></div>
+              <div class="lb-h"><b>앱 발급이 한 번 필요한 곳</b><span class="lb-s">— ${later.length}곳 모두 <b>홈에서 리브가</b> 안내합니다</span><span class="state wait">나중에</span></div>
               <div class="lb-apps">${later.map((s) => `<span class="lb-app">${s.logo ? brandLogo(s.logo) : ic(s.ic || 'folder', 'ic-sm')}${esc(s.label)}</span>`).join('')}</div>
-              <p class="lb-s">${later.length}곳 모두 <b>홈에서 리브가 한 걸음씩</b> 안내해 드립니다 — 지금 하지 않으셔도 됩니다.</p>
             </div>` : ''}
           </div>
           <div class="sc-actions">${has ? `<button type="button" class="btn btn-primary" data-done>다 넣었어요 — 계속</button>` : ''}</div>
