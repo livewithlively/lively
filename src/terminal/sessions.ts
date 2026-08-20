@@ -32,7 +32,7 @@ import { mintAppToken } from "../apps/principal.js";
 import { writeAppHome, materializeAppAssets, directFsWriter, type AppFsWriter } from "../apps/session-assets.js";
 import { gatewayUrl } from "../gateway-url.js";
 import { roots, sharedRoot, tenantSlug, HARNESSES, PANE_LOCALE, RESUME_ID_RE, modeEnvArgs, harnessLaunchArgv, harnessLoginArgv, type SessionInfo, type CreateInput } from "./catalog.js";
-import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, encodeOptJson, decodeOptJson } from "./tmux-exec.js";
+import { tmux, tmuxQuiet, getOpt, LIST_FMT, getLastBusy, setLastBusy, sessionDir, getSessionLabel, encodeOptJson, decodeOptJson } from "./tmux-exec.js";
 import {
   sessionActivityTitle, SHELL_CMDS, isSpinning, r_harnessIsAgent, isAgentOffline,
   paneAwaitingInput, parseReportedPhase, isPhaseFresh, resolveAgentPhase,
@@ -43,6 +43,7 @@ import { logger } from "../log.js";
 import { canSeeSession } from "./write-cap.js";
 import { loadDesiredMap, loadDesiredOne, resolveDesired, resolveSessionDir } from "../sessions/session-desired.js";
 import { sessionNameFromPrompt } from "./session-name.js";
+import { aiNamingEnabled, aiSessionName } from "./session-name-ai.js";
 
 export const sessionPrefix = (u: LivelyUser): string => `box-${userSlug(u)}-`;
 const ID_RE = SESSION_ID_RE;   // 세션 id 형식의 단일 진실원천 — 게이트웨이가 헤더로 받은 세션도 같은 자로 잰다(#852)
@@ -549,6 +550,22 @@ export async function createSession(user: LivelyUser, input: CreateInput): Promi
         created: createdSec, last_busy: null,
       });
     } catch (e) { console.warn(`[terminal] 세션 desired-state 미러 실패(${id}) — 세션은 계속:`, (e as Error)?.message ?? e); }
+  }
+  // 이름을 **AI 가 다시 짓는다**(#1719 원준 2026-08-20) — 위 label 은 첫 지시 앞 28자(규칙)라 대개 조사로 채워진다.
+  //  응답을 막지 않는다: 이름은 몇 초 뒤에 붙어도 되고(화면이 폴링으로 받아 간다), 실패하면 규칙 이름 그대로 산다.
+  //  사람이 준 이름(input.label)은 손대지 않는다 — 여기 들어오는 건 '이름을 안 주고 첫 지시만 준' 경로뿐이다.
+  //  덮기 전에 지금 이름을 다시 읽어 **그 사이 사람이 고쳤으면 물러난다**(짓는 데 몇 초가 걸린다).
+  if (aiNamingEnabled() && !cleanLabel(input.label) && input.initialPrompt && String(input.initialPrompt).trim() && harness.key !== "shell" && !input.loginFor) {
+    const seed = String(input.initialPrompt);
+    const ruleName = label;
+    const cfgDir = process.env.LIVELY_MULTIPROFILE !== "0" && !input.hostProfile ? profileConfigDir(user) : null;
+    void (async () => {
+      const nice = cleanLabel(await aiSessionName(seed, { configDir: cfgDir }));
+      if (!nice || nice === ruleName) return;
+      const now = await getSessionLabel(id).catch(() => "");
+      if (now && now !== ruleName) return;                 // 사람이 그 사이 이름을 고쳤다 — 그 이름이 정본이다
+      await editSession(user, id, { label: nice });
+    })().catch((e) => console.warn(`[terminal] 세션 AI 이름 실패(${id}) — 규칙 이름으로 남는다:`, (e as Error)?.message ?? e));
   }
   // 첫 지시(#1719 홈 입력창) — 응답을 막지 않고 백그라운드에서 하네스 입력창이 뜨길 기다렸다 넣는다.
   //  ⚠ 응답을 기다리게 하면 안 된다: 하네스 부팅(수 초)+신뢰 대화상자 동안 화면이 멈추고, 실패해도 세션은 이미 살아 있다.

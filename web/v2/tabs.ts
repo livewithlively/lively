@@ -31,8 +31,9 @@ export interface ShellTab {
 }
 
 export interface TabsHooks {
-  /** 라우트 → 표시 제목·우패널 유무·상태(아이콘 색). 데이터가 늦게 와도 paint() 때마다 다시 묻는다. */
-  titleFor(route: string): { title: string; noAside: boolean; state?: string };
+  /** 라우트 → 표시 제목·우패널 유무·상태(아이콘 색)·아이콘 종류. 데이터가 늦게 와도 paint() 때마다 다시 묻는다.
+   *  kind 는 라우트만으로는 안 갈리는 아이콘을 정한다 — 지금은 '새 세션 자리'(프로젝트 주소인데 아직 세션이 없다). */
+  titleFor(route: string): { title: string; noAside: boolean; state?: string; kind?: string };
   /** 탭이 활성화됐다 — fresh 면 아직 안 그린 탭(렌더 필요). hash 반영·no-aside 토글은 호출자가 한다. */
   onActivate(tab: ShellTab, fresh: boolean): void;
   onClose(tab: ShellTab): void;
@@ -132,9 +133,12 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
   }
 
   // 탭 아이콘 — 사이드바와 같은 붓(24 뷰박스·현재색 스트로크). 홈/프로젝트/세션/앱이 모양으로 갈린다.
-  function icon(route: string, state?: string): SVGElement {
+  //  '새 세션 자리'(kind='new')는 프로젝트 주소를 쓰지만 폴더가 아니라 **말풍선에 ＋** 다 — 그 탭에서 사람이 보는
+  //  것은 프로젝트가 아니라 곧 열릴 세션이다(원준 2026-08-20).
+  function icon(route: string, state?: string, kind?: string): SVGElement {
     const k = routeKey(route);
-    const d = k === 'home' ? ['M4 11l8-7 8 7', 'M6 9.5V20h12V9.5']
+    const d = kind === 'new' ? ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z', 'M12 9v5M9.5 11.5h5']
+      : k === 'home' ? ['M4 11l8-7 8 7', 'M6 9.5V20h12V9.5']
       : k.startsWith('p:') ? ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z']
       : k.startsWith('s:') ? ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z']
       : ['M4 5h16v12H4z', 'M4 9h16'];
@@ -295,7 +299,7 @@ export function createTabs(centerHost: HTMLElement, asideHost: HTMLElement, hook
         // 가운데 클릭 = 닫기(브라우저 탭 문법)
         onauxclick: (e: MouseEvent) => { if (e.button === 1) { e.preventDefault(); close(t); } },
       },
-        icon(t.route, info.state),
+        icon(t.route, info.state, info.kind),
         el('span', { class: 't', text: t.title }),
         // 홈은 닫기 단추가 없다 — 지울 수 없는 자리라는 걸 생김새가 먼저 말한다.
         ...(t.fixed ? [] : [el('button', {

@@ -109,6 +109,7 @@ export function mountPanes(host, opts) {
         sessionId: opts.sessionId || null,
         onSessionPicked: (sid) => { opts.onSessionPicked?.(sid); paintDoor(); },
         mountSession: opts.mountSession,
+        onSessionCreated: (row) => { opts.onSessionCreated?.(row); paintDoor(); },
     };
     // ── 골격 ──
     const door = el('header', { class: 'pn-door' });

@@ -19,15 +19,18 @@ export function takeFirstPrompt(sessionId) {
 let creating = false;
 export function isCreatingQuickSession() { return creating; }
 /**
- * 세션을 열고 그 화면으로 간다. 실패하면 toast 로 이유를 말하고 false(입력은 호출자가 돌려준다).
- *  opts.projectId — 홈 런처가 고른 행선지(#1719). 생성 API 는 프로젝트를 받지 않으므로(catalog 계약: 소속은 나중에)
- *  만들고 나서 POST /sessions/:id/project 로 붙인다. 붙이기가 실패해도 세션은 유효하다 — 말하고 계속 간다.
- *  opts.run — 입력창 옆 세 칸(제공자·모델·추론강도)이 고른 값(#1758). 없으면 저장된 직전 설정 그대로 연다.
+ * 세션을 **만들기만** 한다 — 생성 전문 캐시(created-cache)·첫 지시 낙관 렌더 등록·프로젝트 붙이기까지.
+ *  화면을 어디로 옮길지는 **호출자가** 정한다: 홈(openQuickSession)은 주소를 그 세션으로 옮기고,
+ *  프로젝트 셸의 새 세션 자리(v2/panes-parts.ts)는 셸을 살린 채 그 칸만 갈아 끼운다.
+ *  ⚠ 이 세 가지(캐시·낙관 렌더·프로젝트 붙이기)를 생성처마다 따로 하면 반드시 한 곳이 빠진다 —
+ *   실제로 프로젝트 쪽 생성에는 캐시가 빠져 있어 방금 만든 세션이 "찾을 수 없어요"로 떨어졌다(원준 2026-08-20 신고:
+ *   "엔터 친 다음에 클로드 미러링이 새로고침 안 하면 안 나온다"). 그래서 생성은 여기 한 곳만 남긴다.
+ *  @returns 만든 세션 id, 실패면 null(이유는 toast 로 이미 말했다).
  */
-export async function openQuickSession(text, opts) {
+export async function spawnSession(text, opts) {
     const t = String(text || '').trim();
     if (!t || creating)
-        return false;
+        return null;
     creating = true;
     try {
         const p = runPrefs();
@@ -56,19 +59,31 @@ export async function openQuickSession(text, opts) {
                 await api('/api/ui/terminal/sessions/' + encodeURIComponent(id) + '/project', { method: 'POST', body: JSON.stringify({ projectId: pid }) });
             }
             catch (e) {
-                toast(`세션은 열렸는데 「${opts?.projectName || '프로젝트'}」에 붙이지 못했어요 — 우측 '이 세션'에서 다시 붙일 수 있어요. (${e && e.message ? e.message : e})`, true);
+                toast(`세션은 열렸는데 「${opts?.projectName || '프로젝트'}」에 붙이지 못했어요 — 세션 상단바 [프로젝트 연결]로 다시 붙일 수 있어요. (${e && e.message ? e.message : e})`, true);
             }
         }
-        location.hash = '#/s/' + encodeURIComponent(id);
-        return true;
+        return { id, session: out.session };
     }
     catch (e) {
         toast('세션을 열지 못했습니다 — ' + (e && e.message ? e.message : e), true);
-        return false;
+        return null;
     }
     finally {
         creating = false;
     }
+}
+/**
+ * 세션을 열고 그 화면으로 간다. 실패하면 toast 로 이유를 말하고 false(입력은 호출자가 돌려준다).
+ *  opts.projectId — 홈 런처가 고른 행선지(#1719). 생성 API 는 프로젝트를 받지 않으므로(catalog 계약: 소속은 나중에)
+ *  만들고 나서 POST /sessions/:id/project 로 붙인다. 붙이기가 실패해도 세션은 유효하다 — 말하고 계속 간다.
+ *  opts.run — 입력창 옆 세 칸(제공자·모델·추론강도)이 고른 값(#1758). 없으면 저장된 직전 설정 그대로 연다.
+ */
+export async function openQuickSession(text, opts) {
+    const made = await spawnSession(text, opts);
+    if (!made)
+        return false;
+    location.hash = '#/s/' + encodeURIComponent(made.id);
+    return true;
 }
 /**
  * 프로젝트 화면의 [새 세션](#1757) — 첫 지시 없이 이 프로젝트에 붙은 세션을 열고 그 화면으로 간다(지시는 거기서 친다).

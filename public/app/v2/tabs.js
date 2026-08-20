@@ -101,12 +101,15 @@ export function createTabs(centerHost, asideHost, hooks) {
         return t;
     }
     // 탭 아이콘 — 사이드바와 같은 붓(24 뷰박스·현재색 스트로크). 홈/프로젝트/세션/앱이 모양으로 갈린다.
-    function icon(route, state) {
+    //  '새 세션 자리'(kind='new')는 프로젝트 주소를 쓰지만 폴더가 아니라 **말풍선에 ＋** 다 — 그 탭에서 사람이 보는
+    //  것은 프로젝트가 아니라 곧 열릴 세션이다(원준 2026-08-20).
+    function icon(route, state, kind) {
         const k = routeKey(route);
-        const d = k === 'home' ? ['M4 11l8-7 8 7', 'M6 9.5V20h12V9.5']
-            : k.startsWith('p:') ? ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z']
-                : k.startsWith('s:') ? ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z']
-                    : ['M4 5h16v12H4z', 'M4 9h16'];
+        const d = kind === 'new' ? ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z', 'M12 9v5M9.5 11.5h5']
+            : k === 'home' ? ['M4 11l8-7 8 7', 'M6 9.5V20h12V9.5']
+                : k.startsWith('p:') ? ['M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z']
+                    : k.startsWith('s:') ? ['M21 12a8 8 0 0 1-8 8H4l2.4-2.9A8 8 0 1 1 21 12z']
+                        : ['M4 5h16v12H4z', 'M4 9h16'];
         // 상태는 **아이콘 색**으로 말한다(원준 2026-08-20) — 도는 중 파랑 · 확인 필요 앰버 · 끝남 민트.
         //  글자·바탕은 '켜진 탭인가'만 말하므로 두 축이 섞이지 않는다.
         const st = state === 'busy' || state === 'wait' || state === 'done' ? ' st-' + state : '';
@@ -301,7 +304,7 @@ export function createTabs(centerHost, asideHost, hooks) {
                     e.preventDefault();
                     close(t);
                 } },
-            }, icon(t.route, info.state), el('span', { class: 't', text: t.title }), 
+            }, icon(t.route, info.state, info.kind), el('span', { class: 't', text: t.title }), 
             // 홈은 닫기 단추가 없다 — 지울 수 없는 자리라는 걸 생김새가 먼저 말한다.
             ...(t.fixed ? [] : [el('button', {
                     class: 'x', type: 'button', 'aria-label': `「${t.title}」 탭 닫기`, title: '탭 닫기',

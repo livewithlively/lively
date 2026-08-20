@@ -15,7 +15,8 @@ import { upDropZone, upSend, upToast } from '../projects/files-upload.js';
 import { mountProjectChat } from '../project-chat.js';
 import { createTimeline } from '../timeline.js';
 import { loadProjectTimeline } from '../timeline-sources.js';
-import { runPrefs } from './run-picker.js';
+import { createRunPicker } from './run-picker.js';
+import { spawnSession } from './quick-session.js';
 import { sessText } from './side.js';
 /** 칸에 넣을 수 있는 것들 — [+] 고르기 목록의 정본. */
 export const PART_DEFS = [
@@ -146,7 +147,13 @@ export function sessTitle(s, projectName) {
     const t = sessText(s, projectName);
     const dup = !!projectName && norm(t.main) === norm(projectName);
     const tailId = String(s.id).split('-').pop() || String(s.id);
-    return nameCache.get(s.id) || (dup ? '' : t.main) || ('세션 ' + tailId.slice(0, 8));
+    // ★ 서버가 들고 있는 이름이 **정본**이다 — 아래 nameCache 보다 먼저 본다(원준 2026-08-20).
+    //  새 세션은 첫 지시를 이름 자리에 임시로 넣어 두는데(seedSessName), 잠시 뒤 서버가 그 지시를 보고
+    //  **짧은 이름**을 지어 붙인다(src/terminal/session-name-ai.ts). 캐시를 먼저 보면 그 이름이 도착해도
+    //  화면은 영영 첫 지시 앞부분을 그대로 달고 있게 된다.
+    if (!dup && t.main)
+        return t.main;
+    return nameCache.get(s.id) || ('세션 ' + tailId.slice(0, 8));
 }
 /** 되풀이 이름을 가진 세션의 '마지막으로 시킨 말'을 한 번씩만 찾아 온다. 하나라도 찾으면 onFound 로 알린다. */
 export async function lookupSessNames(list, projectName, onFound) {
@@ -181,23 +188,45 @@ export function seedSessName(sid, text) {
 function sessionsPart(ctx) {
     const root = el('div', { class: 'pn-part pn-sessions' });
     let sel = ctx.sessionId || null;
-    let composing = !sel; // 새 세션 자리(탭 줄의 [＋ 새 세션])
+    let composing = !sel; // 새 세션 자리(문패의 [＋ 세션])
     let sending = false;
     let mounted = null;
+    let retry = 0; // 방금 만든 세션이 목록에 아직 없을 때 다시 붙여 보는 횟수
+    let retryTimer = 0;
     // 위(그리고 전부) — 세션 화면이 통째로 들어오는 자리
     const stage = el('div', { class: 'pn-stage' });
     root.append(stage);
-    // 새 세션 자리 — 세션이 없거나 [＋ 새 세션]을 골랐을 때만
-    const ta = el('textarea', { class: 'pn-new-in', rows: '1', placeholder: '무엇이든 시켜 보세요 — 새 세션이 열립니다.', 'aria-label': '새 세션에 시킬 일' });
-    const sendBtn = el('button', { class: 'pn-new-send', type: 'button', title: '새 세션을 열고 시킵니다', 'aria-label': '보내기', onclick: () => void spawn() }, pnIcon('send', 'pn-i'));
-    ta.addEventListener('input', () => { ta.style.height = 'auto'; ta.style.height = Math.min(180, ta.scrollHeight) + 'px'; });
+    // ── 새 세션 자리 = **홈 입력창과 같은 컴포저**(원준 2026-08-20) ──────────────────
+    //  종전엔 칸 맨 아래에 붙은 한 줄짜리 입력칸이었다. 같은 '새 세션을 여는 자리'인데 홈과 생김새가 전혀 달라
+    //  거기서 그냥 시키면 되는 곳으로 읽히지 않았고, 제공자·모델·추론강도(#1758)를 여기서는 고를 수 없었다.
+    //  그래서 홈(v2/views.ts renderHome)의 카드를 **같은 클래스로** 쓴다 — 다른 것은 문구뿐이다(이 프로젝트에 붙는다).
+    //  ⚠ 클래스를 베껴 새로 정의하지 않는다: v2-launch* 를 그대로 쓰므로 홈이 바뀌면 여기도 같이 바뀐다.
+    const projectName = () => {
+        const d = ctx.detail();
+        return String((d && d.name) || '') || (ctx.id > 0 ? '프로젝트 #' + ctx.id : '');
+    };
+    const ta = el('textarea', {
+        class: 'v2-launch-in', rows: '2', 'aria-label': '새 세션에 시킬 일',
+        placeholder: ctx.id > 0 ? '무엇이든 시키세요 — 이 프로젝트에 붙은 새 세션이 열려요.' : '무엇이든 시키세요 — 새 세션이 열려요.',
+    });
+    const send = el('button', { class: 'btn btn-primary v2-launch-send', type: 'button', onclick: () => void spawn() }, el('span', { text: '시키기' }), el('kbd', { text: '⏎' }));
+    // 제공자·모델·추론강도·실행 노드 — 홈과 같은 부품이고 **같은 기억**을 쓴다(여기서 고른 값이 다음 기본이 된다).
+    //  새 세션 자리를 처음 그릴 때만 만든다(서버 /terminal/config 를 한 번 부른다 — 세션을 보고 있을 뿐인 칸이 부를 이유가 없다).
+    let runPicker = null;
+    const idle = () => { send.disabled = false; ta.disabled = false; runPicker?.disable(false); send.replaceChildren(el('span', { text: '시키기' }), el('kbd', { text: '⏎' })); };
+    const grow = () => { ta.style.height = 'auto'; ta.style.height = Math.min(220, ta.scrollHeight) + 'px'; };
+    ta.addEventListener('input', grow);
     ta.addEventListener('keydown', (e) => {
         if (e.key !== 'Enter' || e.shiftKey || e.isComposing)
             return;
         e.preventDefault();
         void spawn();
     });
-    const newPane = () => el('div', { class: 'pn-newpane' }, el('div', { class: 'pn-empty' }, pnIcon('chat', 'pn-i big'), el('b', { text: '새 세션을 엽니다.' }), el('p', { class: 'pn-fine', text: '시킬 일을 적으면 이 프로젝트에 붙은 AI 세션이 열리고, 위 탭 줄에 그 세션 탭이 생깁니다.' })), el('div', { class: 'pn-sfoot' }, el('div', { class: 'pn-new' }, ta, sendBtn)));
+    function newPane() {
+        if (!runPicker)
+            runPicker = createRunPicker();
+        return el('div', { class: 'pn-newpane' }, el('div', { class: 'pn-launch' }, el('h1', { class: 'v2-h1', text: '무엇을 할까요?' }), el('p', { class: 'v2-home-sub', text: ctx.id > 0 ? '새 세션이 열려요.' : '프로젝트 없이 새 세션이 열려요.' }), el('div', { class: 'v2-launch' }, ta, el('div', { class: 'v2-launch-row' }, el('div', { class: 'v2-launch-ctl' }, runPicker.el), send))));
+    }
     const mine = () => ctx.data().sessions
         .filter((s) => Number(s.projectId) === ctx.id)
         .sort((a, b) => rank(a) - rank(b) || (b.lastSeen || 0) - (a.lastSeen || 0));
@@ -210,10 +239,10 @@ function sessionsPart(ctx) {
             }
             if (!stage.querySelector('.pn-newpane'))
                 stage.replaceChildren(newPane());
-            window.setTimeout(() => ta.focus(), 0);
+            window.setTimeout(() => { grow(); ta.focus(); }, 0);
             return;
         }
-        if (mounted && mounted.sid === sel)
+        if (mounted && mounted.sid === sel && mounted.ok)
             return;
         if (mounted) {
             mounted.h?.destroy();
@@ -221,15 +250,40 @@ function sessionsPart(ctx) {
         }
         stage.replaceChildren();
         const h = ctx.mountSession ? ctx.mountSession(stage, sel) : null;
-        if (!ctx.mountSession)
+        if (!ctx.mountSession) {
             stage.replaceChildren(el('p', { class: 'pn-fine', style: 'padding:20px', text: '세션 화면을 붙일 수 없어요.' }));
-        mounted = { sid: sel, h };
+            return;
+        }
+        // ⚠ 못 붙었다(h === null) = 그 세션이 아직 목록에 없다 — 방금 만든 세션에서 늘 그렇다(목록 폴링은 20초).
+        //  종전엔 여기서 "찾을 수 없어요"가 그려진 채 **그대로 굳었다**: 다음 틱은 `mounted.sid === sel` 이라 다시
+        //  그리지 않으므로, 목록이 도착해도 화면이 바뀌지 않아 사람이 새로고침을 해야 했다(원준 2026-08-20 신고).
+        //  이제 붙었는지(ok)를 기억하고, 못 붙었으면 짧은 간격으로 다시 붙인다.
+        mounted = { sid: sel, h, ok: !!h };
+        if (!h) {
+            stage.replaceChildren(el('div', { class: 'pn-empty' }, el('b', { text: '세션을 여는 중이에요.' }), el('p', { class: 'pn-fine', text: '곧 대화가 여기에 나타나요.' })));
+            scheduleRetry();
+        }
+        else {
+            retry = 0;
+        }
+    }
+    /** 목록에 아직 안 온 세션을 1초 간격으로 다시 붙여 본다(최대 12초). 붙는 순간 대화창이 그대로 살아난다. */
+    function scheduleRetry() {
+        if (retryTimer || retry >= 12)
+            return;
+        retryTimer = window.setTimeout(() => {
+            retryTimer = 0;
+            retry++;
+            if (!composing && sel)
+                mountStage();
+        }, 1000);
     }
     function select(id) {
         if (id === sel && composing === (id == null))
             return;
         sel = id;
         composing = id == null;
+        retry = 0;
         ctx.onSessionPicked?.(id); // 주소만 갈아 끼운다 — 셸은 그대로 산다
         mountStage();
     }
@@ -238,54 +292,38 @@ function sessionsPart(ctx) {
         if (!text || sending)
             return;
         sending = true;
-        sendBtn.disabled = true;
+        send.disabled = true;
         ta.disabled = true;
-        try {
-            const p = runPrefs();
-            const out = await api('/api/ui/terminal/sessions', {
-                method: 'POST',
-                body: JSON.stringify({
-                    label: text.replace(/\s+/g, ' ').slice(0, 28),
-                    harness: p.harness && p.harness !== 'shell' ? p.harness : 'claude',
-                    flags: p.flags && typeof p.flags === 'object' ? p.flags : {},
-                    autoApprove: !!p.autoApprove, sessionDir: true, initialPrompt: text,
-                }),
-            });
-            const sid = out?.session?.id ? String(out.session.id) : '';
-            if (!sid)
-                throw new Error('세션 id 를 받지 못했습니다');
-            if (ctx.id > 0) {
-                try {
-                    await api('/api/ui/terminal/sessions/' + encodeURIComponent(sid) + '/project', { method: 'POST', body: JSON.stringify({ projectId: ctx.id }) });
-                }
-                catch (_) {
-                    toast('세션은 열렸는데 이 프로젝트에 붙이지 못했어요 — 세션 상단바에서 다시 연결할 수 있어요.', true);
-                }
-            }
-            seedSessName(sid, text);
-            ta.value = '';
-            ta.style.height = 'auto';
-            ctx.onChanged?.();
-            select(sid);
-            toast('새 세션을 열었어요.');
+        runPicker?.disable(true);
+        send.replaceChildren(el('span', { text: '여는 중…' }));
+        // 생성은 **한 곳**에서만 한다(v2/quick-session.ts spawnSession) — 생성 전문 캐시·첫 지시 낙관 렌더·프로젝트
+        //  붙이기가 거기 묶여 있다. 여기서 fetch 를 다시 짜면 그 중 하나가 빠진다(실제로 캐시가 빠져 있었다).
+        const made = await spawnSession(text, { projectId: ctx.id > 0 ? ctx.id : null, projectName: projectName(), run: runPicker?.value() || null });
+        sending = false;
+        idle();
+        if (!made) {
+            ta.focus();
+            return;
         }
-        catch (e) {
-            toast('세션을 열지 못했어요 — ' + (e?.message || e), true);
-        }
-        finally {
-            sending = false;
-            sendBtn.disabled = false;
-            ta.disabled = false;
-        }
+        seedSessName(made.id, text);
+        // 목록에 **지금** 끼워 넣는다 — 20초 폴링을 기다리면 그 사이 세션 화면이 빈 채로 있는다.
+        ctx.onSessionCreated?.(made.session);
+        ta.value = '';
+        ta.style.height = 'auto';
+        ctx.onChanged?.();
+        select(made.id);
     }
     function paint() {
         const ss = mine();
         // 지정된 세션이 이 프로젝트에 없으면(옮겼거나 사라졌다) 맨 위 세션으로.
-        if (!composing && sel && !ss.some((s) => s.id === sel)) {
+        //  ⚠ 방금 만들어 아직 목록에 안 온 세션(mounted.ok === false)은 예외다 — 여기서 다른 세션으로 튕기면
+        //   사람이 방금 연 세션을 잃는다.
+        const pending = !!mounted && mounted.sid === sel && !mounted.ok;
+        if (!composing && sel && !pending && !ss.some((s) => s.id === sel)) {
             sel = ss.length ? ss[0].id : null;
             composing = !sel;
         }
-        if (!ss.length && !composing)
+        if (!ss.length && !composing && !pending && !sel)
             composing = true;
         mountStage();
     }
@@ -293,10 +331,16 @@ function sessionsPart(ctx) {
     return {
         root,
         tick: () => paint(),
-        destroy: () => { if (mounted) {
-            mounted.h?.destroy();
-            mounted = null;
-        } },
+        destroy: () => {
+            if (retryTimer) {
+                window.clearTimeout(retryTimer);
+                retryTimer = 0;
+            }
+            if (mounted) {
+                mounted.h?.destroy();
+                mounted = null;
+            }
+        },
         selectSession: (sid) => select(sid),
         currentSession: () => (composing ? null : sel),
     };

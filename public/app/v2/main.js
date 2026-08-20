@@ -113,6 +113,18 @@ async function mountProjectShell(tab, projectId, sessionId, seq) {
             tabsApi?.routed(tab);
             drawSide();
         },
+        // 새 세션 자리에서 방금 만든 세션 — 그 전문을 **지금** 목록에 끼워 넣는다(#1719 원준 2026-08-20 신고:
+        //  "엔터 친 다음에 클로드 미러링이 새로고침 안 하면 안 나온다"). 20초 폴링을 기다리면 그 사이 세션 화면이
+        //  붙을 세션을 못 찾아 빈 채로 굳었다. 홈 입력창은 라우트가 created-cache 로 같은 일을 한다 — 여기는 셸이 산 채로
+        //  칸만 갈아 끼우는 경로라 라우트를 거치지 않으므로 그 자리를 이 훅이 맡는다.
+        onSessionCreated: (row) => {
+            if (!row || !row.id)
+                return;
+            data.sessions = mergeSessions([row], []).concat(data.sessions.filter((x) => x.id !== String(row.id)));
+            drawSide();
+            tabsApi?.paint();
+            void loadData().then(() => { drawSide(); tabsApi?.paint(); }); // 곧바로 진짜 목록으로 대체(이 낙관 행은 임시다)
+        },
         // 세션 화면 자체 — 우패널이 없는 셸이라 발자취·파일은 넘기지 않는다(맥락은 곁칸이 쥔다).
         mountSession: (host, sid) => {
             const h = renderSession(host, data, sid, {
@@ -289,10 +301,13 @@ function titleFor(route) {
     // 실험장 v4(2026-08-19 바탕화면): 프로젝트 화면은 우패널 없이 — 판이 폭 전체를 쓴다. 타임라인은 문패 [타임라인](알림 센터),
     //  위젯·앱은 도크 ⊞(런치패드)로 옮겨 갔다(web/v2/studio.ts 머리 주석).
     //  #/p/0 = 프로젝트 없는 세션들의 작업대(사이드바의 그 폴더) — 프로젝트가 아니라 '자투리 묶음'이다.
-    if (p === 'p') {
-        const id = Number(segs[1]);
-        return { title: id === 0 ? '프로젝트 없는 세션' : projName(data, id), noAside: true };
-    }
+    // 프로젝트 주소로 남아 있는 탭 = **새 세션 자리**다(세션이 하나라도 있으면 라우터가 맨 위 세션으로 보낸다 —
+    //  이 주소가 그대로 살아 있는 경우는 '＋ 세션'을 눌러 새 세션을 여는 중일 때뿐이다). 그래서 탭에는
+    //  폴더+프로젝트명이 아니라 **새 세션**이라고 쓴다(원준 2026-08-20) — 프로젝트 이름은 바로 아래 문패가 말하고 있고,
+    //  탭이 프로젝트명을 달고 있으면 '무엇을 하는 탭인지'가 아니라 '어디 있는지'만 되풀이된다.
+    //  이름은 첫 지시를 넣는 순간 그 세션의 이름으로 바뀐다(서버가 지어 붙인다 — src/terminal/session-name-ai.ts).
+    if (p === 'p')
+        return { title: '새 세션', noAside: true, kind: 'new' };
     if (p === 's') {
         // 탭 제목도 사이드바와 **같은 규칙**(side.ts sessText)을 쓴다(#1744) — 종전엔 s.label 을 날것으로 써서
         //  탭에 `box-yoon-…`·`위탁 #41`·프로젝트명 반복이 그대로 떴다(dev 실측: 자동 생성 이름이 죽은 세션의 83%).

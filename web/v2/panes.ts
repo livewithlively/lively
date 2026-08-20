@@ -40,6 +40,8 @@ export interface PanesOpts {
   onSessionPicked?: (sid: string | null) => void;
   /** 세션 화면(대화창·터미널·상단바) 통째를 붙이는 배선 — main.ts 가 준다. */
   mountSession?: (host: HTMLElement, sid: string) => { destroy(): void } | null;
+  /** 새 세션 자리에서 세션을 방금 만들었다 — 셸이 그 전문을 세션 목록에 즉시 끼워 넣는다(v2/panes-parts spawn). */
+  onSessionCreated?: (row: any) => void;
   /** 세션 탭에서 고친 이름 — main.ts 의 renameSession 이 서버·사이드바·셸 탭·세션 머리줄까지 한 번에 갱신한다. */
   onRenameSession?: (id: string, name: string) => Promise<void>;
 }
@@ -125,6 +127,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     sessionId: opts.sessionId || null,
     onSessionPicked: (sid) => { opts.onSessionPicked?.(sid); paintDoor(); },
     mountSession: opts.mountSession,
+    onSessionCreated: (row) => { opts.onSessionCreated?.(row); paintDoor(); },
   };
 
   // ── 골격 ──
