@@ -55,14 +55,6 @@
 .pn-faces { display: inline-flex; margin-right: 4px; }
 .pn-face { width: 26px; height: 26px; border-radius: 13px; border: 2px solid var(--bg, #fff); margin-left: -6px; }
 
-/* [기본|캔버스] — 문패 오른쪽 **맨 끝**에 둔다. 두 뷰의 나머지 단추 개수가 달라도(캔버스 4개·기본 2개)
-   오른쪽 끝은 같은 자리라, 오갈 때 마우스가 움직이지 않는다(원준 2026-08-20). 앞에 구분선으로 갈라 둔다. */
-.pn-vtwrap { display: inline-flex; align-items: center; margin-left: 4px; padding-left: 12px; border-left: 1px solid var(--line); }
-.pn-vt { display: inline-flex; align-items: center; padding: 2px; border: 1px solid var(--line-net); border-radius: 9px; background: #F4F6FA; }
-.pn-vt-b { height: 24px; padding: 0 11px; border: 0; border-radius: 7px; background: none; font: inherit; font-size: 12px; color: var(--muted-head); cursor: pointer; }
-.pn-vt-b:hover { color: var(--ink); }
-.pn-vt-b.on { background: var(--bg, #fff); color: var(--ink); font-weight: 700; box-shadow: 0 1px 2px rgba(21,35,59,.10); }
-
 /* ── 아이콘·잔글씨 ── */
 .pn-i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 .pn-i.sm { width: 13px; height: 13px; }

@@ -10,10 +10,9 @@
 import { $view, anchoredPopover, api, el, toast } from '../core.js';
 import { renderLiv } from '../liv.js';
 import { CLASSIC_PAGES, appByKey, appFrame } from './apps.js';
-import { drawSide as drawSideTree, projectOrder, sessText } from './side.js';
+import { bySeen, drawSide as drawSideTree, projectOrder, sessText } from './side.js';
 import { dotCls, mergeSessions, projName, renderHome, renderSession, type Sess, type V2Data } from './views.js';
-import { mountStudio } from './studio.js';                     // 캔버스 뷰(#1719 원준) — 위젯을 자유롭게 놓는 작업대
-import { mountPanes, projMode, setProjMode, type ProjMode } from './panes.js';   // 기본 뷰(#1719 원준 2026-08-20) — 칸으로 나뉜 도킹 화면. 둘은 문패의 [기본|캔버스]로 오간다.
+import { mountPanes } from './panes.js';   // 프로젝트 = 세션 화면(#1719 원준 2026-08-20) — 칸으로 나뉜 도킹 화면 하나뿐이다.
 import { createTimeline, type TimelineHandle } from '../timeline.js';
 import { loadSessionActivities } from '../timeline-sources.js';
 import { makeSplitter } from './split.js';
@@ -40,6 +39,59 @@ let suppressHash = 0;                    // 탭 전환이 만든 hashchange 를 
 //  뷰가 둘(기본·캔버스)이라 핸들은 공통 계약 하나로만 본다 — 셸이 아는 것은 '언젠가 정리해야 한다'뿐이다.
 const projViews = new Map<ShellTab, { destroy(): void }>();
 function dropProjView(tab: ShellTab): void { const pv = projViews.get(tab); if (pv) { pv.destroy(); projViews.delete(tab); } }
+
+// ── 프로젝트 = 세션이 놓인 방(원준 2026-08-20) ────────────────────────────────
+/** 그 프로젝트의 **맨 위 세션** — 사이드바에서 보이는 순서와 같은 정의(side.ts bySeen). */
+function topSessionOf(projectId: number): Sess | null {
+  if (!(projectId > 0)) return null;
+  const list = data.sessions.filter((s) => Number(s.projectId) === projectId).sort(bySeen);
+  return list[0] || null;
+}
+/** 주소를 그 세션 것으로 바꾼다 — 라우터가 다시 돌아 셸을 그린다(프로젝트 주소는 거쳐 가는 문일 뿐이다).
+ *  ⚠ replace 로 바꾼다 — push 로 남기면 '뒤로'가 프로젝트 주소로 돌아왔다가 다시 세션으로 튕겨 뒤로가기가 먹지 않는다. */
+function goSession(sid: string, tab: ShellTab): void {
+  const href = '#/s/' + encodeURIComponent(sid);
+  // ⚠ tab.route 를 **미리 바꾸지 않는다** — 라우터는 '탭 라우트와 새 해시가 같으면 다시 그리지 않는다'로 동작하므로,
+  //  먼저 바꿔 두면 이 이동이 통째로 삼켜져 화면이 비어 버린다(실측 2026-08-20).
+  location.replace(location.pathname + location.search + href);
+}
+
+/** 프로젝트 셸(문패 + 칸 + 세션 서랍)을 이 탭에 마운트한다. 세션 화면은 그 안 '세션' 칸에 통째로 들어간다. */
+async function mountProjectShell(tab: ShellTab, projectId: number, sessionId: string | null, seq: number): Promise<void> {
+  let detail: any = null;
+  if (projectId > 0) { try { detail = await api('/api/ui/v6/projects/' + projectId); } catch (_) { detail = null; } }
+  if (seq !== tab.seq) return;
+  if (detail && !data.projects.some((p) => p.id === projectId)) void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); });
+  dropProjView(tab);
+  if (tab.chat) { tab.chat.destroy(); tab.chat = null; }
+  projViews.set(tab, mountPanes(tab.center, {
+    data: () => data,
+    id: projectId,
+    detail,
+    sessionId,
+    onProjectChanged: () => { void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); }); },
+    // 서랍에서 세션을 갈아 끼웠다 — 셸은 살려 두고 **주소·탭 제목만** 그 세션 것으로(라우터를 다시 돌리지 않는다).
+    onSessionPicked: (sid) => {
+      const href = sid ? '#/s/' + encodeURIComponent(sid) : '#/p/' + projectId;
+      tab.route = href;
+      // 셸은 그대로 두고 주소·탭 제목만 바꾼다 — hashchange 를 한 번 삼켜 라우터가 다시 그리지 않게.
+      //  ⚠ 값이 같으면 hashchange 가 아예 안 나므로 그때는 세지 않는다(안 그러면 다음 진짜 이동을 삼킨다).
+      if (location.hash !== href) { suppressHash++; location.hash = href; }
+      tabsApi?.routed(tab);
+      drawSide();
+    },
+    // 세션 화면 자체 — 우패널이 없는 셸이라 발자취·파일은 넘기지 않는다(맥락은 곁칸이 쥔다).
+    mountSession: (host, sid) => {
+      const h = renderSession(host, data, sid, {
+        onPickProject: (anchor) => openProjectPicker(anchor, sid, tab),
+        onRename: (label) => renameSession(sid, label, tab),
+      });
+      tab.chat = h;      // 20초 목록 갱신이 이 핸들로 상태를 흘려보낸다
+      return h;
+    },
+  }));
+  tab.aside.replaceChildren();   // 우패널 없음 — 맥락은 화면 안(칸)에서 산다
+}
 // 프로젝트 목록은 워크스페이스 전체(수백 건·설명 포함이라 1MB 를 넘는다) — 세션처럼 20초마다 당기지 않는다.
 const PROJ_TTL_MS = 5 * 60 * 1000;
 
@@ -166,10 +218,12 @@ function titleFor(route: string): { title: string; noAside: boolean } {
     // 탭 제목도 사이드바와 **같은 규칙**(side.ts sessText)을 쓴다(#1744) — 종전엔 s.label 을 날것으로 써서
     //  탭에 `box-yoon-…`·`위탁 #41`·프로젝트명 반복이 그대로 떴다(dev 실측: 자동 생성 이름이 죽은 세션의 83%).
     //  sessText 는 그런 이름을 걷어내고 pane 제목('지금 하는 일')을 그 자리에 올린다.
+    //  ★ 우패널 없음 — 세션 화면은 프로젝트 셸(v2/panes.ts) 안에서 열리고, 맥락(자료·지식·타임라인)은 그 셸의
+    //   곁칸이 쥔다(2026-08-20 통합). 팝아웃 창(?solo=1)만 종전대로 세션 하나 + 발자취 우패널이다.
     const s = findSess(decodeURIComponent(segs[1] || ''));
-    if (!s) return { title: '세션', noAside: false };
+    if (!s) return { title: '세션', noAside: !SOLO };
     const t = sessText(s, projName(data, s.projectId));
-    return { title: t.main || t.sub || String(s.raw?.harness || '세션'), noAside: false };
+    return { title: t.main || t.sub || String(s.raw?.harness || '세션'), noAside: !SOLO };
   }
   if (p === 'app') { const a = appByKey(segs[1]); return { title: a ? a.title : segs[1], noAside: true }; }
   if (CLASSIC_PAGES[p]) { const a = appByKey(CLASSIC_PAGES[p]); return { title: a ? a.title : raw, noAside: true }; }
@@ -237,21 +291,13 @@ async function renderRoute(tab: ShellTab): Promise<void> {
       tab.aside.replaceChildren();
       await renderLiv(host, { rail: null, embedded: true });   // rail 없음 = 카드·편지는 본문에(종전 drawAsideLiv 도 null 을 돌려줬다)
     } else if (page === 'p' && segs[1]) {
+      // ★ 프로젝트 전용 화면은 없앴다(원준 2026-08-20) — 프로젝트는 세션이 놓인 방이고, 주소는 늘 세션이다.
+      //  그 프로젝트의 **맨 위 세션**(사이드바와 같은 정렬)으로 보낸다. 세션이 하나도 없으면 그때만 이 주소가
+      //  '새 세션 자리'로 열린다(갈 세션이 없으니 폴백이 필요하다).
       const id = Number(segs[1]);
-      let detail: any = null;
-      if (id) { try { detail = await api('/api/ui/v6/projects/' + id); } catch (_) { detail = null; } }   // id 0 = 프로젝트 없는 묶음(조회할 프로젝트가 없다)
-      if (seq !== tab.seq) return;
-      if (detail && !data.projects.some((p) => p.id === id)) void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); });
-      // 프로젝트 화면 — 보기 방식(기본·캔버스)에 따라 다른 뷰를 이 탭에 마운트한다. 고른 것은 전역으로 기억한다
-      //  (프로젝트마다 다르면 그 자체가 또 '프로젝트마다 하는 설정'이 된다 — 기본 뷰가 없애려던 바로 그것).
-      const changed = (): void => { void loadData({ projects: true }).then(() => { drawSide(); tabsApi?.paint(); }); };
-      const mountProj = (): void => {
-        dropProjView(tab);
-        const o = { data: () => data, id, detail, onProjectChanged: changed, onSwitchView: (m: ProjMode) => { setProjMode(m); mountProj(); } };
-        projViews.set(tab, projMode() === 'canvas' ? mountStudio(tab.center, o) : mountPanes(tab.center, o));
-      };
-      mountProj();
-      tab.aside.replaceChildren();   // 우패널 없음 — 맥락은 화면 안(칸·런치패드)에서 산다
+      const first = topSessionOf(id);
+      if (first) { goSession(first.id, tab); return; }
+      await mountProjectShell(tab, id, null, seq);
     } else if (page === 's' && segs[1]) {
       const id = decodeURIComponent(segs[1]);
       let s = findSess(id);
@@ -273,15 +319,19 @@ async function renderRoute(tab: ShellTab): Promise<void> {
         drawSide();
       }
       if (seq !== tab.seq) return;
-      // 우패널(발자취)을 먼저 — 세션 화면이 대화 파일을 읽으며 거기로 흘려보낸다.
-      const trail = drawAsideSession(tab, s || null);
-      tab.chat = renderSession(tab.center, data, id, {
-        trail,
-        onPickProject: (anchor) => openProjectPicker(anchor, id, tab),
-        onRename: (label) => renameSession(s ? s.id : id, label, tab),
-        onToggleFiles: () => toggleAsideFiles(tab, id),   // 상단바 [파일] → 이 탭 우패널을 파일 탐색기로(#1744)
-        solo: SOLO,   // 팝아웃 창(#1744) — 좌측 없이 이 화면만
-      });
+      // 팝아웃 창(?solo=1)은 **세션 하나만 담은 창**이다 — 프로젝트 셸을 두르지 않는다(그게 이 창의 정의).
+      if (SOLO) {
+        const trail = drawAsideSession(tab, s || null);
+        tab.chat = renderSession(tab.center, data, id, {
+          trail,
+          onPickProject: (anchor) => openProjectPicker(anchor, id, tab),
+          onRename: (label) => renameSession(s ? s.id : id, label, tab),
+          onToggleFiles: () => toggleAsideFiles(tab, id),
+          solo: true,
+        });
+        return;
+      }
+      await mountProjectShell(tab, s && s.projectId ? Number(s.projectId) : 0, id, seq);
     } else if (page === 'app' && segs[1]) {
       const a = appByKey(segs[1]);
       const rest = segs.slice(2).join('/');

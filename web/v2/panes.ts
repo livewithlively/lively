@@ -1,8 +1,9 @@
-// v2/panes.ts — 프로젝트 화면의 **기본 뷰**(#1719 원준 2026-08-20). 캔버스(studio.ts)와 토글로 오간다.
+// v2/panes.ts — **프로젝트 화면 = 세션 화면**(#1719 원준 2026-08-20). 새 셸의 유일한 작업 화면이다.
 //
-//  ── 왜 또 하나인가 ──
-//  캔버스는 **빈 판에서 시작해 사람이 위젯을 올려야** 채워진다. 그게 처음 보는 사람에게는 "프로젝트마다 설정할 게 너무
-//  많고, 공간은 텅 비어 있다"로 읽혔다(원준 2026-08-20). 그래서 기본 뷰의 규칙은 정확히 그 반대다:
+//  ── 왜 이 모양인가 ──
+//  앞선 캔버스(v2/studio.ts, 2026-08-20 폐기 — 지식 canvas-view-retired-1719)는 **빈 판에서 시작해 사람이 위젯을
+//  올려야** 채워졌다. 그게 처음 보는 사람에게는 "프로젝트마다 설정할 게 너무 많고, 공간은 텅 비어 있다"로 읽혔다.
+//  이 화면의 규칙은 정확히 그 반대다:
 //   ① **들어오면 이미 채워져 있다** — 왼쪽은 세션, 오른쪽은 자료·지식. 아무것도 안 해도 일이 보인다.
 //   ② **배치는 프로젝트마다가 아니라 한 벌뿐이다**(localStorage 전역) — 한 번 맞춰 두면 모든 프로젝트가 그 모양이다.
 //      캔버스는 프로젝트마다 판을 따로 기억한다. 그 차이가 '설정할 게 많다'의 실체였다.
@@ -10,10 +11,15 @@
 //      아무 데나 놓을 수 없다는 제약이 곧 '아무것도 안 해도 되는' 기본값을 가능하게 한다.
 //
 //  ── 구도 ──
-//   문패(door) — 이름·요약, 오른쪽에 [기본|캔버스] · [칸] · [설정].
-//   가운데 칸(main) — 기본 [세션]. 세로로 넓게 쓴다.
+//   문패(door) — 프로젝트 이름·요약, 오른쪽에 [칸] · [설정].
+//   가운데 칸(main) — 기본 [세션]. 위는 **지금 보는 세션의 화면 그 자체**, 아래는 세션 서랍.
 //   아래 칸(bottom) — 기본 닫힘. 열면 main 아래에 붙는다(타임라인·할 일 자리).
 //   곁칸(side) — 기본 [자료][지식] 탭. 경계를 끌어 폭 조절, [칸]에서 접을 수 있다.
+//
+//  ── ★ 프로젝트 화면과 세션 화면은 하나다(원준 2026-08-20) ──
+//  종전엔 `#/p/<id>`(프로젝트)와 `#/s/<sid>`(세션)가 서로 다른 화면이었다. 이제 **주소는 늘 세션**이고,
+//  프로젝트는 그 세션이 놓인 방일 뿐이다 — `#/p/<id>` 로 들어오면 라우터가 그 프로젝트 맨 위 세션으로 보낸다.
+//  서랍에서 세션을 갈아 끼울 때 이 셸은 다시 그리지 않는다(자료·지식·문패가 그대로 산다) — 주소만 바뀐다.
 //
 //  이 파일이 모르는 것: 각 칸에 들어가는 내용(v2/panes-parts.ts) · 프로젝트 설정 창(v2/proj-settings.ts).
 import { anchoredPopover, api, el, personFace, toast } from '../core.js';
@@ -27,34 +33,14 @@ export interface PanesOpts {
   id: number;
   detail: any;
   onProjectChanged?: () => void;
-  /** 뷰를 갈아탄다 — main.ts 가 그 탭을 다시 마운트한다. */
-  onSwitchView?: (mode: ProjMode) => void;
+  /** 라우트가 지정한 '지금 보는 세션'(#/s/<sid>). 없으면 새 세션 자리로 연다. */
+  sessionId?: string | null;
+  /** 서랍에서 세션을 갈아 끼웠다 — 셸을 다시 그리지 않고 주소만 그 세션 것으로. */
+  onSessionPicked?: (sid: string | null) => void;
+  /** 세션 화면(대화창·터미널·상단바) 통째를 붙이는 배선 — main.ts 가 준다. */
+  mountSession?: (host: HTMLElement, sid: string) => { destroy(): void } | null;
 }
 export interface PanesHandle { destroy(): void }
-
-// ── 뷰 모드 — 프로젝트 화면을 무엇으로 볼 것인가(전역 하나. 프로젝트마다 다르면 그게 또 '설정'이 된다) ──
-export type ProjMode = 'panes' | 'canvas';
-const MODE_KEY = 'lively_proj_view_mode';
-export function projMode(): ProjMode {
-  try { return localStorage.getItem(MODE_KEY) === 'canvas' ? 'canvas' : 'panes'; } catch (_) { return 'panes'; }
-}
-export function setProjMode(m: ProjMode): void {
-  try { localStorage.setItem(MODE_KEY, m); } catch (_) { /* 저장 못 해도 이번 화면은 된다 */ }
-}
-/** [기본|캔버스] 세그먼트 — 두 뷰가 **문패 오른쪽 맨 끝, 같은 자리에** 두는 단추(캔버스 문패도 이걸 쓴다).
- *  자리가 어긋나면 두 뷰를 오갈 때마다 마우스가 좌우로 뛴다 — 그래서 '맨 끝'이 규칙이다(원준 2026-08-20). */
-export function viewToggle(cur: ProjMode, onPick: (m: ProjMode) => void): HTMLElement {
-  const mk = (m: ProjMode, label: string, title: string): HTMLElement =>
-    el('button', {
-      class: 'pn-vt-b' + (cur === m ? ' on' : ''), type: 'button', title,
-      'aria-pressed': String(cur === m),
-      onclick: () => { if (cur !== m) onPick(m); },
-    }, el('span', { text: label }));
-  return el('div', { class: 'pn-vtwrap' },
-    el('div', { class: 'pn-vt', role: 'group', 'aria-label': '화면 보기 방식' },
-      mk('panes', '기본', '칸으로 나뉜 기본 화면입니다.'),
-      mk('canvas', '캔버스', '위젯을 자유롭게 놓는 작업대입니다.')));
-}
 
 // ── 배치 ────────────────────────────────────────────────────────────────────
 type Zone = 'main' | 'side' | 'bottom';
@@ -97,7 +83,8 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
   let detail: any = opts.detail;
   let dead = false;
   let lay = loadLayout();
-  if (loose) { lay = { ...lay, side: lay.side.filter((t) => t === 'timeline'), bottom: [], bottomOn: false }; }
+  // 프로젝트 없는 세션 화면 — 공유 폴더·지식·할 일이 없으니 곁칸에 넣을 것도 없다. 빈 칸을 보여 주느니 접어 둔다.
+  if (loose) { lay = { ...lay, side: lay.side.filter((t) => t === 'timeline'), bottom: [], bottomOn: false, sideOn: false }; }
 
   function saveLayout(): void {
     if (loose) return;                          // 자투리 화면의 임시 배치를 정본으로 굳히지 않는다
@@ -113,6 +100,9 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
     dead: () => dead,
     onChanged: () => { void refreshDetail(); opts.onProjectChanged?.(); },
     openSettings: () => openSettings(),
+    sessionId: opts.sessionId || null,
+    onSessionPicked: (sid) => { opts.onSessionPicked?.(sid); paintDoor(); },
+    mountSession: opts.mountSession,
   };
 
   // ── 골격 ──
@@ -303,9 +293,7 @@ export function mountPanes(host: HTMLElement, opts: PanesOpts): PanesHandle {
       el('div', { class: 'pn-door-r' },
         el('span', { class: 'pn-faces' }, ...members.slice(0, 5).map((m: any) => personFace(String(m.member_id || m), 'pn-face', String(m.display_name || m.member_id || '')))),
         zonesBtn(),
-        loose ? null : el('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: '이름·상태·본문·할 일을 고칩니다', onclick: () => openSettings() }, pnIcon('gear', 'pn-i sm'), el('span', { text: '설정' })),
-        // 맨 끝 — 캔버스 문패도 같은 자리에 둔다(오갈 때 마우스가 안 움직이게).
-        viewToggle('panes', (m) => { if (m !== 'panes') { setProjMode(m); opts.onSwitchView?.(m); } })));
+        loose ? null : el('button', { class: 'btn btn-ghost btn-sm', type: 'button', title: '이름·상태·본문·할 일을 고칩니다', onclick: () => openSettings() }, pnIcon('gear', 'pn-i sm'), el('span', { text: '설정' }))));
   }
 
   /** [칸] — 어떤 칸을 보일지, 배치를 되돌릴지. VS Code 의 보기 메뉴 자리다. */

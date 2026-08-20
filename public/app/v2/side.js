@@ -137,7 +137,9 @@ export function sessText(s, projName) {
     return { main: (isIdLabel(label) ? '' : label) || String((s.raw && s.raw.harness) || '') || '이름 없는 세션', sub: '' };
 }
 const rankOf = (k) => (SESS_STATES[k] ? SESS_STATES[k].rank : 9);
-const bySeen = (a, b) => rankOf(a.stateKey) - rankOf(b.stateKey) || b.lastSeen - a.lastSeen;
+/** 사이드바 세션 정렬 — 상태 순위(답 기다림이 위) 다음 최근 순. **'맨 위 세션'의 정의는 여기 하나뿐**이다
+ *  (라우터가 프로젝트 → 세션으로 보낼 때도 이걸 쓴다 — 사이드바에서 보이는 순서와 어긋나면 안 된다). */
+export const bySeen = (a, b) => rankOf(a.stateKey) - rankOf(b.stateKey) || b.lastSeen - a.lastSeen;
 const when = (ms) => (ms ? relTime(new Date(ms).toISOString()) : '');
 function ownerName(s) {
     if (s.owned)
